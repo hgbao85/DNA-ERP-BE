@@ -1,0 +1,752 @@
+<title>DNA-ERP — Lộ trình triển khai Backend</title>
+<style>
+:root{
+  --paper:#f3f1ea; --paper-raised:#ffffff; --ink:#1e2530; --ink-soft:#54606f;
+  --steel:#3d6d8c; --steel-ink:#2b5674; --steel-soft:#e6edf1;
+  --line:#dbd6c8; --line-strong:#c7c1af;
+  --ready:#3f7a5c; --ready-bg:#e2efe6;
+  --risk:#a06423; --risk-bg:#f5e7d2;
+  --blocked:#a8432e; --blocked-bg:#f8ded6;
+  --low:#767f8c; --low-bg:#eae7de;
+  --shadow: 0 1px 2px rgba(30,37,48,.07), 0 10px 28px rgba(30,37,48,.07);
+  --mono: ui-monospace,"Cascadia Code","SF Mono",Consolas,"Liberation Mono",monospace;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#12161d; --paper-raised:#181d26; --ink:#e7e4da; --ink-soft:#9aa4b2;
+    --steel:#7fb0d1; --steel-ink:#a7cbe2; --steel-soft:#1c2b36;
+    --line:#2a313c; --line-strong:#394251;
+    --ready:#6cb896; --ready-bg:#16281f;
+    --risk:#d9a35c; --risk-bg:#33260f;
+    --blocked:#e08770; --blocked-bg:#391f17;
+    --low:#8b96a3; --low-bg:#1b2029;
+    --shadow: 0 1px 2px rgba(0,0,0,.35), 0 10px 28px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#12161d; --paper-raised:#181d26; --ink:#e7e4da; --ink-soft:#9aa4b2;
+  --steel:#7fb0d1; --steel-ink:#a7cbe2; --steel-soft:#1c2b36;
+  --line:#2a313c; --line-strong:#394251;
+  --ready:#6cb896; --ready-bg:#16281f;
+  --risk:#d9a35c; --risk-bg:#33260f;
+  --blocked:#e08770; --blocked-bg:#391f17;
+  --low:#8b96a3; --low-bg:#1b2029;
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 10px 28px rgba(0,0,0,.4);
+}
+:root[data-theme="light"]{
+  --paper:#f3f1ea; --paper-raised:#ffffff; --ink:#1e2530; --ink-soft:#54606f;
+  --steel:#3d6d8c; --steel-ink:#2b5674; --steel-soft:#e6edf1;
+  --line:#dbd6c8; --line-strong:#c7c1af;
+  --ready:#3f7a5c; --ready-bg:#e2efe6;
+  --risk:#a06423; --risk-bg:#f5e7d2;
+  --blocked:#a8432e; --blocked-bg:#f8ded6;
+  --low:#767f8c; --low-bg:#eae7de;
+  --shadow: 0 1px 2px rgba(30,37,48,.07), 0 10px 28px rgba(30,37,48,.07);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--paper); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:16px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--steel-soft)}
+a{color:var(--steel-ink)}
+.skip{position:absolute;left:-999px}
+.skip:focus{left:1rem;top:1rem;z-index:100;background:var(--paper-raised);padding:.5rem 1rem;border-radius:6px}
+
+/* ---------- topbar ---------- */
+.topbar{
+  position:sticky; top:0; z-index:20; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.65rem 1.4rem; background:var(--paper-raised); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-weight:800; letter-spacing:-.01em; font-size:.95rem; color:var(--ink); display:flex; align-items:baseline; gap:.5rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.74rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.4rem .75rem; font-size:.82rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--steel-soft)}
+.topbar button:focus-visible{outline:2px solid var(--steel); outline-offset:1px}
+
+/* ---------- shell ---------- */
+.shell{display:grid; grid-template-columns:15.5rem 1fr; max-width:78rem; margin:0 auto}
+@media (max-width:920px){ .shell{grid-template-columns:1fr} }
+
+/* ---------- rail ---------- */
+.rail{
+  position:sticky; top:var(--topbar-h,3.1rem); align-self:start; height:calc(100vh - var(--topbar-h,3.1rem)); overflow-y:auto;
+  padding:1.6rem 1rem 2rem 1.4rem; border-right:1px solid var(--line);
+  scrollbar-width:thin;
+}
+@media (max-width:920px){
+  .rail{position:static; height:auto; border-right:none; border-bottom:1px solid var(--line);
+    padding:1rem 1.2rem; overflow-x:auto}
+}
+.rail-brand{font-family:var(--mono); font-size:.72rem; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:.15rem}
+.rail-title{font-weight:800; font-size:1.02rem; margin:0 0 1.3rem; letter-spacing:-.01em}
+.rail nav{display:flex; flex-direction:column; gap:.15rem}
+@media (max-width:920px){ .rail nav{flex-direction:row; flex-wrap:nowrap; gap:.4rem} }
+.rail a{
+  display:flex; align-items:baseline; gap:.55rem; text-decoration:none; color:var(--ink-soft);
+  font-size:.86rem; padding:.32rem .5rem; border-radius:6px; white-space:nowrap;
+}
+.rail a:hover{background:var(--steel-soft); color:var(--ink)}
+.rail a.active{background:var(--steel-soft); color:var(--steel-ink); font-weight:600}
+.rail .dot{width:.5rem;height:.5rem;border-radius:50%;flex:none;background:var(--low)}
+.rail .dot.done{background:var(--ready)}
+.rail .dot.next{background:var(--steel)}
+.rail .dot.blocked{background:var(--blocked)}
+.rail .sep{border:none; border-top:1px solid var(--line); margin:.7rem .3rem}
+
+/* ---------- main ---------- */
+main{padding:2.2rem 2.6rem 6rem; min-width:0}
+@media (max-width:640px){ main{padding:1.6rem 1.1rem 4rem} }
+.masthead{max-width:44rem; margin-bottom:2.4rem}
+.eyebrow{font-family:var(--mono); font-size:.74rem; letter-spacing:.11em; text-transform:uppercase; color:var(--steel-ink)}
+h1{font-size:1.9rem; font-weight:800; letter-spacing:-.015em; margin:.4rem 0 .6rem; text-wrap:balance}
+.lede{color:var(--ink-soft); font-size:1.03rem; max-width:62ch}
+.lede code{font-family:var(--mono); font-size:.86em; background:var(--steel-soft); padding:.1em .35em; border-radius:4px}
+
+section{margin-top:3rem; scroll-margin-top:1.2rem}
+h2{font-size:1.32rem; font-weight:800; letter-spacing:-.01em; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem}
+h2 .num{font-family:var(--mono); color:var(--steel-ink); font-weight:600; font-size:.95rem}
+.section-note{color:var(--ink-soft); max-width:66ch; margin:.3rem 0 1.3rem; font-size:.95rem}
+
+/* ---------- mermaid host ---------- */
+.diagram{
+  background:var(--paper-raised); border:1px solid var(--line); border-radius:12px;
+  padding:1.2rem; box-shadow:var(--shadow); overflow-x:auto; margin-bottom:1rem;
+}
+.diagram pre.mermaid{margin:0}
+
+/* ---------- badges ---------- */
+.badge{
+  display:inline-flex; align-items:center; gap:.35rem; font-family:var(--mono); font-size:.72rem;
+  letter-spacing:.03em; padding:.22rem .55rem; border-radius:20px; font-weight:600; white-space:nowrap;
+}
+.b-ready{background:var(--ready-bg); color:var(--ready)}
+.b-steel{background:var(--steel-soft); color:var(--steel-ink)}
+.b-risk{background:var(--risk-bg); color:var(--risk)}
+.b-blocked{background:var(--blocked-bg); color:var(--blocked)}
+.b-low{background:var(--low-bg); color:var(--low)}
+
+/* ---------- tables ---------- */
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:10px; margin:1rem 0; box-shadow:var(--shadow)}
+table{border-collapse:collapse; width:100%; font-size:.87rem; background:var(--paper-raised)}
+th,td{padding:.6rem .75rem; text-align:left; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{background:var(--steel-soft); font-weight:700; font-size:.76rem; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-soft); white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--steel-soft)}
+td code, .lede code{font-family:var(--mono)}
+.num-cell{font-family:var(--mono); font-variant-numeric:tabular-nums; color:var(--ink-soft)}
+
+/* ---------- phase cards ---------- */
+.phase{
+  background:var(--paper-raised); border:1px solid var(--line); border-radius:14px;
+  margin:1.1rem 0 1.6rem; box-shadow:var(--shadow); overflow:hidden;
+}
+.phase-head{
+  display:flex; flex-wrap:wrap; align-items:center; gap:.7rem; padding:1.1rem 1.4rem;
+  border-bottom:1px solid var(--line); background:linear-gradient(180deg, var(--steel-soft), transparent);
+}
+.phase-id{font-family:var(--mono); font-weight:700; color:var(--steel-ink); font-size:.95rem}
+.phase-name{font-weight:800; font-size:1.08rem; letter-spacing:-.01em; margin-right:auto}
+.phase-body{padding:1.2rem 1.4rem 1.4rem; display:grid; gap:1rem; grid-template-columns:1fr 1fr}
+@media (max-width:760px){ .phase-body{grid-template-columns:1fr} }
+.phase-body .full{grid-column:1/-1}
+.field-label{font-family:var(--mono); font-size:.7rem; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:.35rem}
+.field p{margin:0; font-size:.92rem}
+.field ul{margin:.1rem 0 0; padding-left:1.15rem; font-size:.92rem}
+.field li{margin:.28rem 0}
+.field li::marker{color:var(--steel)}
+.tables-chip-row{display:flex; flex-wrap:wrap; gap:.35rem}
+.chip{font-family:var(--mono); font-size:.74rem; background:var(--low-bg); color:var(--ink-soft); padding:.15rem .5rem; border-radius:6px}
+.callout{
+  border-left:3px solid var(--risk); background:var(--risk-bg); color:var(--ink);
+  padding:.7rem .9rem; border-radius:0 8px 8px 0; font-size:.88rem;
+}
+.callout.crit{border-color:var(--blocked); background:var(--blocked-bg)}
+.callout b{color:inherit}
+.dod{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.4rem}
+.dod li{display:flex; gap:.55rem; align-items:flex-start; font-size:.89rem}
+.dod li::before{content:"";flex:none;width:.85rem;height:.85rem;margin-top:.2rem;border-radius:3px;border:1.5px solid var(--line-strong)}
+
+/* ---------- track legend ---------- */
+.track-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(15.5rem,1fr)); gap:1rem; margin:1rem 0}
+.track-card{background:var(--paper-raised); border:1px solid var(--line); border-radius:12px; padding:1.1rem 1.2rem; box-shadow:var(--shadow)}
+.track-card h3{margin:0 0 .3rem; font-size:.98rem; display:flex; align-items:center; gap:.5rem}
+.track-swatch{width:.7rem;height:.7rem;border-radius:2px}
+.track-card p{margin:.2rem 0 0; font-size:.87rem; color:var(--ink-soft)}
+.track-card ol,.track-card ul{margin:.5rem 0 0; padding-left:1.2rem; font-size:.87rem}
+.track-card li{margin:.18rem 0}
+
+/* ---------- ordered build list ---------- */
+.build-order{counter-reset:step; list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0}
+.build-order li{
+  counter-increment:step; position:relative; padding:.7rem 0 .7rem 2.6rem; border-bottom:1px solid var(--line);
+  font-size:.92rem;
+}
+.build-order li:last-child{border-bottom:none}
+.build-order li::before{
+  content:counter(step); position:absolute; left:0; top:.62rem; font-family:var(--mono); font-weight:700;
+  font-size:.76rem; color:var(--steel-ink); background:var(--steel-soft); width:1.7rem; height:1.7rem;
+  border-radius:50%; display:flex; align-items:center; justify-content:center;
+}
+.build-order .sub{color:var(--ink-soft); font-size:.85rem; display:block; margin-top:.15rem}
+.parallel-tag{font-family:var(--mono); font-size:.68rem; color:var(--steel-ink); background:var(--steel-soft); padding:.05rem .4rem; border-radius:5px; margin-left:.4rem}
+
+footer{max-width:66ch; margin-top:3rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem}
+footer code{font-family:var(--mono)}
+</style>
+
+<a class="skip" href="#main-content">Bỏ qua điều hướng</a>
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>Lộ trình triển khai Backend</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+<div class="shell">
+  <aside class="rail">
+    <div class="rail-brand">DNA-ERP · Backend</div>
+    <div class="rail-title">Lộ trình triển khai</div>
+    <nav id="rail-nav">
+      <a href="#roadmap"><span class="dot next"></span>Roadmap tổng thể</a>
+      <a href="#build-order"><span class="dot next"></span>Thứ tự code</a>
+      <a href="#parallel"><span class="dot next"></span>Song song hoá</a>
+      <hr class="sep">
+      <a href="#phase-0"><span class="dot done"></span>P0 · Nền tảng</a>
+      <a href="#phase-1"><span class="dot next"></span>P1 · Mở rộng nền tảng</a>
+      <a href="#phase-2"><span class="dot next"></span>P2 · Danh mục / BOM</a>
+      <a href="#phase-3"><span class="dot next"></span>P3 · Ledger Core</a>
+      <a href="#phase-4"><span class="dot next"></span>P4 · Bán hàng</a>
+      <a href="#phase-5"><span class="dot next"></span>P5 · PlanForm</a>
+      <a href="#phase-6"><span class="dot next"></span>P6 · Production Invoice</a>
+      <a href="#phase-7"><span class="dot next"></span>P7 · MES-A / cat_sat</a>
+      <a href="#phase-8"><span class="dot next"></span>P8 · Mua hàng</a>
+      <a href="#phase-9"><span class="dot next"></span>P9 · MES-B thực thi</a>
+      <a href="#phase-10"><span class="dot next"></span>P10 · Đan (Weaving)</a>
+      <a href="#phase-11"><span class="dot blocked"></span>P11 · Chuyền kiểm ⚠</a>
+      <a href="#phase-12"><span class="dot next"></span>P12 · Reporting</a>
+      <a href="#phase-13"><span class="dot next"></span>P13 · Admin/Hardening</a>
+      <hr class="sep">
+      <a href="#risks"><span class="dot blocked"></span>Rủi ro &amp; Blocker</a>
+      <a href="#checklist"><span class="dot next"></span>Checklist kickoff</a>
+    </nav>
+  </aside>
+
+  <main id="main-content">
+    <div class="masthead">
+      <div class="eyebrow">Kế hoạch triển khai · Tech Lead view</div>
+      <h1>DNA-ERP — Lộ trình Backend theo dependency</h1>
+      <p class="lede">Tổng hợp lại từ <code>dna-erp-db-schema.html</code> (67 bảng / 9 domain) và <code>dna-erp-backend-implementation-plan.html</code> (API chi tiết theo phase) thành một roadmap thi công: phase nào chặn phase nào, việc gì làm song song được, và checklist Definition-of-Done cho từng phase. Chi tiết API/DTO đầy đủ vẫn tra ở tài liệu backend plan — tài liệu này chỉ trả lời "code cái gì trước, cái gì sau, tại sao".</p>
+    </div>
+
+    <!-- ================= ROADMAP ================= -->
+    <section id="roadmap">
+      <h2><span class="num">01</span>Roadmap tổng thể</h2>
+      <p class="section-note">14 phase (P0–P13), 3 nhánh chính: <b>chuỗi nghiệp vụ lõi</b> (Bán hàng → PlanForm → PI/MES → Purchasing → MES thực thi), <b>Ledger kho vận</b> (nền tảng ghi/đọc tồn cho mọi domain sau), và <b>Đan</b> (nhánh độc lập, chỉ cần Bán hàng + PlanForm).</p>
+
+      <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+  subgraph N["Nền tảng — bắt buộc tuần tự"]
+    direction LR
+    P0["P0 · Nền tảng (đã có)"] --> P1["P1 · Mở rộng nền tảng"] --> P2["P2 · Danh mục / BOM"]
+  end
+
+  subgraph CORE["Track A — chuỗi nghiệp vụ chính"]
+    direction TB
+    P4["P4 · Bán hàng"] --> P5["P5 · PlanForm"]
+    P5 --> P6["P6 · Production Invoice"]
+    P5 --> P7["P7 · MES-A (PO + cat_sat)"]
+    P7 --> P8["P8 · Mua hàng &amp; Kiểm vật tư"]
+    P8 --> P9["P9 · MES-B (Phôi/Hàn/Sơn/KCS)"]
+  end
+
+  subgraph SIDE["Track song song"]
+    direction TB
+    P3["P3 · Kho vận lõi (Ledger)"]
+    P10["P10 · Đan (Weaving)"]
+  end
+
+  P11["P11 · Chuyền kiểm &amp; Đóng gói"]
+  P12["P12 · Reporting"]
+  P13["P13 · Admin / Hardening"]
+
+  P2 --> P3
+  P2 --> P4
+  P3 -.->|ghi/đọc tồn| P8
+  P3 -.->|ghi/đọc tồn| P9
+  P3 -.->|đọc tồn| P10
+  P5 -.->|BOM đã duyệt| P10
+  P9 --> P11
+  P10 --> P11
+  P2 -.->|nền danh mục, liên tục| P12
+  P2 -.->|xuyên suốt| P13
+
+  classDef blocked fill:#f3b8a8,stroke:#a8432e,color:#5c2013,stroke-width:2px,stroke-dasharray: 4 3;
+  class P11 blocked;
+</pre>
+      </div>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Phase</th><th>Domain</th><th>Bảng mới</th><th>Phụ thuộc</th><th>Song song với</th><th>Độ phức tạp</th><th>Ưu tiên</th></tr></thead>
+          <tbody>
+            <tr><td class="num-cell">P0</td><td>Core/Auth (đã có)</td><td class="num-cell">5</td><td>—</td><td>—</td><td><span class="badge b-ready">DONE</span></td><td>—</td></tr>
+            <tr><td class="num-cell">P1</td><td>Mở rộng nền tảng</td><td class="num-cell">3</td><td>P0</td><td>—</td><td><span class="badge b-ready">Low</span></td><td><span class="badge b-blocked">Critical</span></td></tr>
+            <tr><td class="num-cell">P2</td><td>Danh mục / BOM</td><td class="num-cell">20</td><td>P1</td><td>—</td><td><span class="badge b-risk">Medium-High</span></td><td><span class="badge b-blocked">Critical</span></td></tr>
+            <tr><td class="num-cell">P3</td><td>Ledger Core</td><td class="num-cell">5</td><td>P2</td><td>P4, P5</td><td><span class="badge b-blocked">High</span></td><td><span class="badge b-blocked">Critical</span></td></tr>
+            <tr><td class="num-cell">P4</td><td>Bán hàng</td><td class="num-cell">2</td><td>P2</td><td>P3</td><td><span class="badge b-steel">Medium</span></td><td><span class="badge b-risk">High</span></td></tr>
+            <tr><td class="num-cell">P5</td><td>PlanForm</td><td class="num-cell">6</td><td>P4, P2(BOM)</td><td>—</td><td><span class="badge b-blocked">High</span></td><td><span class="badge b-blocked">Critical</span></td></tr>
+            <tr><td class="num-cell">P6</td><td>Production Invoice</td><td class="num-cell">4</td><td>P4</td><td>P7 <span class="parallel-tag">đề xuất TL</span></td><td><span class="badge b-steel">Medium</span></td><td><span class="badge b-risk">High</span></td></tr>
+            <tr><td class="num-cell">P7</td><td>MES-A (PO + cat_sat)</td><td class="num-cell">5</td><td>P5, P3</td><td>P6 <span class="parallel-tag">đề xuất TL</span></td><td><span class="badge b-blocked">High</span></td><td><span class="badge b-risk">High</span></td></tr>
+            <tr><td class="num-cell">P8</td><td>Mua hàng &amp; Kiểm vật tư</td><td class="num-cell">6</td><td>P5, P3, P7</td><td>—</td><td><span class="badge b-risk">Medium-High</span></td><td><span class="badge b-risk">High</span></td></tr>
+            <tr><td class="num-cell">P9</td><td>MES-B (thực thi)</td><td class="num-cell">8</td><td>P7, P3, P8</td><td>P10</td><td><span class="badge b-blocked">High</span></td><td><span class="badge b-blocked">Critical</span></td></tr>
+            <tr><td class="num-cell">P10</td><td>Đan (Weaving)</td><td class="num-cell">3</td><td>P4, P5, P3(đọc)</td><td>P6, P7, P8, P9</td><td><span class="badge b-steel">Medium</span></td><td><span class="badge b-steel">Medium</span></td></tr>
+            <tr><td class="num-cell">P11</td><td>Chuyền kiểm &amp; Đóng gói</td><td class="num-cell">3</td><td>P9, P10</td><td>—</td><td><span class="badge b-blocked">BLOCKED</span></td><td><span class="badge b-low">On-hold</span></td></tr>
+            <tr><td class="num-cell">P12</td><td>Reporting</td><td class="num-cell">0 (view)</td><td>luỹ tiến</td><td>tất cả, làm dần</td><td><span class="badge b-steel">Medium</span></td><td><span class="badge b-steel">Medium</span></td></tr>
+            <tr><td class="num-cell">P13</td><td>Admin / Hardening</td><td class="num-cell">0-1</td><td>toàn bộ</td><td>xuyên suốt</td><td><span class="badge b-ready">Low-Medium</span></td><td><span class="badge b-blocked">Critical (go-live)</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="section-note" style="margin-top:.4rem">Nguồn phụ thuộc P0–P2, P3‖P4-5, P10 độc lập với P7-9: mục 7 tài liệu backend plan. Các ô đánh dấu <span class="parallel-tag">đề xuất TL</span> là suy luận bổ sung (P6/P7 không phụ thuộc lẫn nhau trong đồ thị nguồn) — xác nhận với team trước khi chia 2 dev làm song song.</p>
+    </section>
+
+    <!-- ================= BUILD ORDER ================= -->
+    <section id="build-order">
+      <h2><span class="num">02</span>Thứ tự module nên code</h2>
+      <p class="section-note">Gộp cả thứ tự giữa các phase lẫn thứ tự nội bộ trong 1 phase (vd BOM Revision luôn code sau cùng trong P2 vì phụ thuộc Material/Piece/Part/SegmentSpec). Dùng như checklist tuần tự cho 1 dev/sub-team đi theo track chính.</p>
+      <ol class="build-order">
+        <li><b>User mở rộng + Notifications + SystemConfig</b> <span class="parallel-tag">P1</span><span class="sub">Thêm mfgRole/phoiOperation/warehouseScope lên User trước — mọi guard @RequireMfgRole/@RequireWarehouseScope từ P2 trở đi phụ thuộc cột này.</span></li>
+        <li><b>7 module CRUD danh mục thuần</b> — material-groups, suppliers, defect-reasons, weaving-points, warehouses, customers, products <span class="parallel-tag">P2 · song song được</span><span class="sub">Cùng 1 khuôn CRUD, không phụ thuộc lẫn nhau — chia đều cho nhiều dev.</span></li>
+        <li><b>Materials + MaterialSuppliers</b> <span class="parallel-tag">P2</span><span class="sub">Cần trước SegmentSpec (validate kind=STEEL_BAR).</span></li>
+        <li><b>ProductVariant / Piece / Part</b> (nested dưới MfgProduct) <span class="parallel-tag">P2</span></li>
+        <li><b>SegmentSpec</b> <span class="parallel-tag">P2</span><span class="sub">Phụ thuộc Materials (bước 3).</span></li>
+        <li><b>BomRevision + bom_piece/bom_part/piece_bom/part_bom/consumable_bom</b> <span class="parallel-tag">P2 · critical path</span><span class="sub">Module phức tạp nhất P2 — giao dev senior nhất, làm song song với bước 2-5 của các dev khác, hoàn thành sau cùng trong phase vì cần composite-FK tới Piece/Part/SegmentSpec.</span></li>
+        <li><b>StockLedger + trigger fn_sync_stock_quant() + StockQuant</b> <span class="parallel-tag">P3</span><span class="sub">Viết và test concurrency trigger trước khi bất kỳ domain nào (P8/P9) dựa vào số dư tồn kho.</span></li>
+        <li><b>WarehouseTransfer (+ items, reservations)</b> <span class="parallel-tag">P3</span></li>
+        <li><b>ExportOrder + ExportOrderItem</b> <span class="parallel-tag">P4</span></li>
+        <li><b>PlanForm → manh-rows/detail-items → group review → boss-approve</b> <span class="parallel-tag">P5 · critical path</span><span class="sub">boss-approve chứa logic materialize BOM revision — phức tạp nhất toàn hệ thống, viết unit test đối chiếu dữ liệu mock trước khi bật UQ ràng buộc thật.</span></li>
+        <li><b>ProductionInvoice + stages + ProductionApproval</b> <span class="parallel-tag">P6</span></li>
+        <li><b>ManhOrder / ManhLine / ManhAllocation (Đan)</b> <span class="parallel-tag">P10 · tách team song song với bước 11-15</span></li>
+        <li><b>ProductionOrder → CuttingProposal (tích hợp cat_sat)</b> <span class="parallel-tag">P7</span></li>
+        <li><b>InspectionRequest/KhoState/Item → PurchaseProposal + Quote</b> <span class="parallel-tag">P8</span></li>
+        <li><b>SteelIssue/CutBundle → QcReview/ReplenishRequest → ProductionBatch/MaterialIssue/WorkSession</b> <span class="parallel-tag">P9</span></li>
+        <li><b>Chuyền kiểm &amp; Đóng gói</b> <span class="parallel-tag">P11 · BLOCKED</span><span class="sub">Không code cho tới khi có buổi xác nhận nghiệp vụ riêng.</span></li>
+        <li><b>7 SQL VIEW báo cáo</b> <span class="parallel-tag">P12 · làm dần</span><span class="sub">Mở view ngay khi phase nguồn dữ liệu tương ứng xong, không cần chờ hết toàn bộ.</span></li>
+        <li><b>File storage, audit rà soát, backfill UQ, rate-limit cat_sat</b> <span class="parallel-tag">P13 · trước go-live</span></li>
+      </ol>
+    </section>
+
+    <!-- ================= PARALLEL ================= -->
+    <section id="parallel">
+      <h2><span class="num">03</span>Module phát triển song song được</h2>
+      <p class="section-note">Áp dụng khi có ≥ 2 sub-team. Track B và Track C chỉ cần đúng 1 điều kiện chặn (nêu dưới), không phụ thuộc chuỗi MES.</p>
+      <div class="track-grid">
+        <div class="track-card">
+          <h3><span class="track-swatch" style="background:var(--steel)"></span>Track A — Chuỗi chính</h3>
+          <p>P4 → P5 → P6 / P7 → P8 → P9. Đi tuần tự, đây là xương sống nghiệp vụ và cũng là track dài nhất — ưu tiên nhân lực mạnh nhất, không tách nhỏ hơn nữa vì mỗi phase ghim dữ liệu (bomRevisionId, planFormId...) cho phase sau.</p>
+        </div>
+        <div class="track-card">
+          <h3><span class="track-swatch" style="background:var(--ready)"></span>Track B — Ledger kho vận (P3)</h3>
+          <p>Chỉ cần P2 xong. Có thể giao 1 sub-team làm song song với P4/P5, miễn <b>xong trước khi P8/P9 cần ghi ledger thật</b>. Rủi ro nếu trễ: P8/P9 phải mock stock_quant tạm rồi refactor lại.</p>
+        </div>
+        <div class="track-card">
+          <h3><span class="track-swatch" style="background:var(--ink-soft)"></span>Track C — Đan / Weaving (P10)</h3>
+          <p>Chỉ cần P4 + P5 xong, không đụng tới P3 (ghi), P6, P7, P8, P9. Bắt đầu ngay sau P5 song song với toàn bộ P6→P9 — track "rẻ" nhất để lấp nhân lực dư.</p>
+        </div>
+        <div class="track-card">
+          <h3><span class="track-swatch" style="background:var(--low)"></span>Track D — Reporting (P12)</h3>
+          <p>Không có bảng ghi riêng (chỉ SQL VIEW). Mở dần theo từng domain đã xong — vd <code>v_warehouse_stock</code> làm được ngay sau P3, không cần chờ P9. Phù hợp giao dev junior hoặc làm xen kẽ giữa các sprint.</p>
+        </div>
+      </div>
+      <div class="callout" style="margin-top:.2rem"><b>Trong nội bộ P2:</b> 7 module CRUD thuần (2.1) không phụ thuộc nhau → chia song song. BOM Revision (2.5) là điểm hội tụ — nên bắt đầu thiết kế service <code>materializeBomRevision()</code> sớm (dùng lại ở P5) dù code sau cùng trong phase.</div>
+    </section>
+
+    <!-- ================= PHASES ================= -->
+    <section id="phases">
+      <h2><span class="num">04</span>Backlog chi tiết theo Phase</h2>
+      <p class="section-note">Mỗi phase: Mục tiêu · Công việc · Prerequisite · Deliverable · Rủi ro riêng (nếu có) · Checklist Definition-of-Done. Chi tiết API/DTO đầy đủ tra tại mục 6 của <code>dna-erp-backend-implementation-plan.html</code>.</p>
+
+      <!-- PHASE 0 -->
+      <article class="phase" id="phase-0">
+        <header class="phase-head">
+          <span class="phase-id">P0</span><span class="phase-name">Nền tảng (đã có)</span>
+          <span class="badge b-ready">DONE</span>
+        </header>
+        <div class="phase-body">
+          <div class="field full"><div class="field-label">Trạng thái</div><p>Đã triển khai đúng chuẩn: <code>auth</code>, <code>users</code>, <code>roles</code>, <code>audit-log</code>, <code>external</code>, <code>health</code>. Không có việc phải làm — liệt kê để thấy toàn cảnh và vì <code>users</code> sẽ được <b>mở rộng</b> (không viết lại) ở P1.</p></div>
+          <div class="field full"><div class="tables-chip-row"><span class="chip">User</span><span class="chip">Role</span><span class="chip">Permission</span><span class="chip">RolePermission</span><span class="chip">AuditLog</span></div></div>
+        </div>
+      </article>
+
+      <!-- PHASE 1 -->
+      <article class="phase" id="phase-1">
+        <header class="phase-head">
+          <span class="phase-id">P1</span><span class="phase-name">Mở rộng nền tảng</span>
+          <span class="badge b-ready">Low</span><span class="badge b-blocked">Critical</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>Gắn thuộc tính nghiệp vụ MES lên User + dựng RBAC mở rộng (mfgRole/warehouseScope) làm nền cho <b>mọi</b> guard từ P2 trở đi.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>P0 xong. Đã chốt D0.1–D0.5 (khoá chính UUID, giữ RBAC N-N, cơ chế stock_quant, audit/soft-delete list, mapping PermissionAction) trong 1 buổi kỹ thuật.</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li>Thêm cột <code>mfgRole/phoiOperation/warehouseScope/isPurchaser/isProductPlanner/isSale</code> vào <code>User</code> + enum <code>MfgRole</code>, <code>PhoiOperation</code>.</li>
+            <li>Model mới: <code>Notification</code>, <code>NotificationRead</code>, <code>SystemConfig</code> (singleton, CHECK id=1).</li>
+            <li>2 decorator mới: <code>@RequireMfgRole()</code>, <code>@RequireWarehouseScope()</code>.</li>
+            <li>Mở rộng <code>PERMISSION_MODULES</code>: <code>NOTIFICATION</code>, <code>SYSTEM_CONFIG</code>.</li>
+            <li>Seed 12 role nghiệp vụ (khung), gán permission dần theo phase sau — không seed hết permission 1 lần.</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p>Endpoint <code>PATCH /users/:id/mfg-attributes</code>, module <code>notifications</code>, <code>system-config</code> hoạt động; guard mới sẵn sàng dùng ở P2+.</p></div>
+          <div class="field"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>Migration chạy được, không phá vỡ endpoint <code>PATCH /users/:id</code> cũ.</li>
+            <li>2 decorator có unit test riêng.</li>
+            <li>Seed role nghiệp vụ chạy lại được (idempotent).</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 2 -->
+      <article class="phase" id="phase-2">
+        <header class="phase-head">
+          <span class="phase-id">P2</span><span class="phase-name">Danh mục / Master Data</span>
+          <span class="badge b-risk">Medium-High</span><span class="badge b-blocked">Critical</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>Dựng toàn bộ 20 bảng danh mục dùng chung + BOM Revision có versioning — nền dữ liệu mà <b>9 phase còn lại đều tham chiếu tới</b>.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>P1 xong (RBAC module mới sẵn sàng).</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li>7 module CRUD thuần (material-groups, suppliers, defect-reasons, weaving-points, warehouses, customers, products) — 1 khuôn dùng chung.</li>
+            <li><code>Material</code> (+ <code>MaterialSupplier</code>), <code>ProductVariant/Piece/Part</code>, <code>SegmentSpec</code>.</li>
+            <li><code>BomRevision</code> + 5 bảng dòng con — state machine DRAFT→ACTIVE→RETIRED, composite-unique <code>(id, mfgProductId)</code> phục vụ composite-FK ở P5/P7.</li>
+            <li>Service <code>materializeBomRevision()</code> — thiết kế khung sớm dù dùng thật ở P5.</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p>20 bảng danh mục hoạt động đầy đủ CRUD + BOM Revision có <code>activate</code>/versioning, seed dữ liệu mẫu để P3+ dùng ngay.</p></div>
+          <div class="field full"><div class="callout"><b>Rủi ro riêng:</b> Warehouses có 6 kho vật lý + 3 kho ảo phải <b>seed sẵn</b>, không cho xoá — dễ bị coder mới bỏ sót nếu không đọc kỹ business rule.</div></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>7 module CRUD thuần pass CRUD + soft-delete + pagination.</li>
+            <li>BOM Revision: không sửa được dòng con khi status ≠ DRAFT (test 409).</li>
+            <li><code>activate()</code> đảm bảo đúng 1 revision ACTIVE/mfgProductId dưới tải song song (test lock).</li>
+            <li>6+3 kho seed đúng, DELETE bị chặn theo code cố định.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 3 -->
+      <article class="phase" id="phase-3">
+        <header class="phase-head">
+          <span class="phase-id">P3</span><span class="phase-name">Kho vận lõi (Ledger Core)</span>
+          <span class="badge b-blocked">High</span><span class="badge b-blocked">Critical</span>
+          <span class="badge b-steel">‖ song song với P4/P5</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>Sổ cái kép <code>stock_ledger</code> + cache <code>stock_quant</code> tự động qua trigger DB — hạ tầng ghi/đọc tồn dùng chung cho toàn bộ domain ghi kho sau này (Sales/Purchasing/MES/Weaving).</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>P2 xong (materials, segmentSpec, piece, productVariant, warehouses). Đã chốt D0.3 (trigger DB, không ghi kép ở app).</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li><code>StockLedger</code>, <code>StockQuant</code>, <code>WarehouseTransfer</code> (+ items, reservations).</li>
+            <li>Viết <code>prisma/sql/00X_stock_quant_sync_trigger.sql</code> — hàm <code>fn_sync_stock_quant()</code> UPSERT theo 4 chân XOR, trigger <code>AFTER INSERT ON stock_ledger</code>.</li>
+            <li><code>StockLedgerService.postEntry()</code> dùng chung cho mọi module ghi ledger về sau.</li>
+            <li>4 CHECK constraint XOR + 4 partial unique index cho <code>stock_quant</code>.</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p><code>GET /stock-ledger</code>, <code>GET /stock-quant</code>, <code>warehouse-transfers</code> hoạt động; <code>postEntry()</code> sẵn sàng để P8/P9/P10 gọi.</p></div>
+          <div class="field full"><div class="callout crit"><b>Blocker go/no-go:</b> phải test concurrency (2 request ghi <code>stock_ledger</code> cùng lúc cho cùng 1 dòng <code>stock_quant</code>) <b>trước khi</b> P8/P9 bắt đầu — sai ở đây thì toàn bộ business logic dựa trên số dư phải viết lại.</div></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>Trigger cập nhật đúng <code>stock_quant</code> sau mọi INSERT vào <code>stock_ledger</code>, kể cả qua raw SQL ngoài Prisma Client.</li>
+            <li>Test race-condition 2 request ghi đồng thời không lệch số dư.</li>
+            <li>Không có service nào tự tính lại <code>stock_quant</code> bằng tay (code review riêng điểm này).</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 4 -->
+      <article class="phase" id="phase-4">
+        <header class="phase-head">
+          <span class="phase-id">P4</span><span class="phase-name">Bán hàng</span>
+          <span class="badge b-steel">Medium</span><span class="badge b-risk">High</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>PO khách hàng dùng chung 2 kênh DOMESTIC/EXPORT (đã hợp nhất theo quyết định M12) — điểm khởi đầu của toàn bộ chuỗi PlanForm → PI → MES.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>P2 xong (customers, productVariants, products).</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li><code>ExportOrder</code> + <code>ExportOrderItem</code>, enum <code>OrderChannel</code>, <code>SalesPoStatus</code>.</li>
+            <li>Endpoint ship (<code>shipped_qty += qty</code>, lock cộng dồn) và cập nhật status 7 bước (chỉ có ý nghĩa đầy đủ ở DOMESTIC).</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p>CRUD <code>export-orders</code> đầy đủ 2 kênh, sẵn sàng làm nguồn cho <code>plan-forms</code> (P5) và <code>production-invoices</code> (P6).</p></div>
+          <div class="field full"><div class="callout"><b>Quyết định mở:</b> <code>status</code>/<code>paymentStatus</code> giữ kiểu text tự do — <b>không tự enum hoá</b> tới khi nghiệp vụ xác nhận. Tiến độ EXPORT không đồng bộ 2 chiều với <code>production_invoice_item_stages</code>.</div></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li><code>poNumber</code> unique toàn hệ thống (không phân biệt kênh).</li>
+            <li><code>customerId</code> bắt buộc ở cả 2 kênh.</li>
+            <li>Ship item có lock cộng dồn, không lost-update khi gọi song song.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 5 -->
+      <article class="phase" id="phase-5">
+        <header class="phase-head">
+          <span class="phase-id">P5</span><span class="phase-name">Kế hoạch sản xuất (PlanForm)</span>
+          <span class="badge b-blocked">High</span><span class="badge b-blocked">Critical</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>Workflow 8 trạng thái, 2 vòng nhập định mức song song, 2 vòng duyệt theo nhóm, kết thúc bằng <b>materialize BOM Revision mới</b> — logic nghiệp vụ phức tạp nhất toàn hệ thống.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>P4 (export_orders) và P2 (BOM — đích materialize) xong.</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li><code>PlanForm</code> + <code>PlanFormManhRow/Child</code> + <code>PlanFormManhReview</code> + <code>PlanFormDetailItem/Review</code>.</li>
+            <li>Bulk upsert 2 vòng nhập định mức (nhóm <code>sat</code>/<code>day_son</code> và <code>day_son</code>/<code>vat_tu_phu_kien</code>/<code>bao_bi_dong_goi</code>).</li>
+            <li>Duyệt theo nhóm (QLSX) + <code>qlsx-final-review</code> + <code>boss-approve</code>/<code>boss-reject</code>.</li>
+            <li><b><code>PlanFormApprovalService.materializeBomRevision()</code></b>: copy <code>manh_rows/children</code> + <code>detail_items</code> sang <code>bom_piece/piece_bom/consumable_bom</code>, tạo revision mới với <code>source_plan_form_id</code>.</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p><code>boss-approve</code> chạy atomic, sinh đúng 1 <code>bom_revision</code> ACTIVE mới; PlanForm sẵn sàng làm nguồn cho <code>production-orders</code> (P7).</p></div>
+          <div class="field full"><div class="callout crit"><b>Rủi ro cao nhất hệ thống:</b> viết unit test <code>materializeBomRevision()</code> đối chiếu dữ liệu mẫu tương đương <code>seedPlanForms</code> <b>trước khi</b> bật UQ <code>(exportOrderId, mfgProductId)</code> thật trên môi trường có dữ liệu demo cũ. <code>boss-reject</code> set về <code>APPROVED_DETAIL</code>, không set <code>REJECTED</code> (bám đúng hành vi gốc).</div></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>UQ 1 SKU/PO ⇔ 1 PlanForm hoạt động đúng.</li>
+            <li>Upsert theo nhóm là idempotent (nộp lại sau reject → ghi đè, không tạo trùng).</li>
+            <li><code>boss-approve</code> có Idempotency-Key, transaction all-or-nothing, có test rollback khi materialize lỗi giữa chừng.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 6 -->
+      <article class="phase" id="phase-6">
+        <header class="phase-head">
+          <span class="phase-id">P6</span><span class="phase-name">Lệnh sản xuất (Production Invoice / PI)</span>
+          <span class="badge b-steel">Medium</span><span class="badge b-risk">High</span>
+          <span class="badge b-steel">‖ song song với P7 (đề xuất)</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>PI theo PO xuất khẩu, workflow duyệt 2 cấp (QLSX → Sếp) theo từng SKU, chọn kho thành phẩm đích.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>P4 (export_orders) và P2 (productVariants) xong. Không phụ thuộc P5/P7 — có thể code song song với P7 nếu team đủ người.</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li><code>ProductionInvoice</code> + <code>ProductionInvoiceItem</code> + <code>ProductionInvoiceItemStage</code> (PHOI/HAN/WEAVING/SON) + <code>ProductionApproval</code>.</li>
+            <li>Tự tạo stage + approval <code>WAITING_QLSX</code> khi tạo PI.</li>
+            <li><code>request-approval</code> → <code>boss-decide</code>: khi mọi item APPROVED → <code>status=PRODUCING</code>.</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p>PI hoạt động đầy đủ vòng đời, mã <code>PI-2026-{id}</code> tự sinh.</p></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>Tạo PI tự động sinh đủ 4 stage/item + approval khởi tạo.</li>
+            <li>Lịch sử vòng duyệt trước tra qua audit_logs, không tạo bảng lịch sử riêng.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 7 -->
+      <article class="phase" id="phase-7">
+        <header class="phase-head">
+          <span class="phase-id">P7</span><span class="phase-name">MES-A: Production Order &amp; Cutting Proposal (cat_sat)</span>
+          <span class="badge b-blocked">High</span><span class="badge b-risk">High</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>Lệnh SX tại xưởng ghim đúng 1 <code>bomRevisionId</code>, tích hợp hệ ngoài <code>cat_sat</code> để lấy đề xuất cắt sắt tối ưu.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>P5 (bom_revision ACTIVE + plan_forms APPROVED). P3 cần xong trước khi P9 dùng, chưa cần ở P7.</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li><code>ProductionOrder</code> — <code>mfgProductId</code>/<code>bomRevisionId</code> suy tự động từ PlanForm, không nhận từ client.</li>
+            <li><code>release()</code> → gọi <code>cat_sat</code> qua <code>ExternalApiService</code> (timeout + retry + circuit breaker có sẵn).</li>
+            <li>4 bảng <code>cutting_proposal*</code> lưu nguyên cây kết quả + <code>raw_response</code> jsonb để audit.</li>
+            <li><code>approve()</code>: tự động SUPERSEDED các đề xuất DRAFT/APPROVED trước đó cùng PO.</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p>Cutting proposal hoạt động end-to-end với cat_sat thật, <code>bar_count</code> sẵn sàng làm input cho P8.</p></div>
+          <div class="field full"><div class="callout"><b>Rủi ro tích hợp ngoài:</b> Idempotency-Key <b>bắt buộc</b> cho call cat_sat — retry mạng dễ tạo DRAFT trùng. Rate-limit riêng cho endpoint này nên rà lại ở P13 tránh spam hệ ngoài.</div></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>Input gửi cat_sat tự tính từ <code>piece_bom × bom_piece × quantity</code>, không nhận trực tiếp từ client.</li>
+            <li>Gọi lại (idempotent) không tạo cutting_proposal trùng.</li>
+            <li>Circuit breaker + timeout có test giả lập cat_sat down.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 8 -->
+      <article class="phase" id="phase-8">
+        <header class="phase-head">
+          <span class="phase-id">P8</span><span class="phase-name">Mua hàng &amp; Kiểm vật tư</span>
+          <span class="badge b-risk">Medium-High</span><span class="badge b-risk">High</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>Kiểm tồn 3 kho trước sản xuất + tách đề xuất mua hàng theo kho thiếu, routing đúng Purchaser theo <code>warehouseScope</code>.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>P5 (PlanForm), P3 (stock_quant), P7 (cutting_proposal.bar_count cho vật tư sắt).</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li><code>InspectionRequest</code> + <code>InspectionKhoState</code> (3 dòng/request) + <code>InspectionItem</code>.</li>
+            <li><code>required</code>: vật tư sắt đã có cutting proposal → lấy <code>bar_count</code> (chính xác); còn lại → tính qua BOM.</li>
+            <li><code>PurchaseProposal</code> + <code>Item</code> + <code>Quote</code>: submit → GĐ duyệt/từ chối → receive (ghi <code>stock_ledger PURCHASE</code>).</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p>Vòng đời mua hàng đầy đủ từ kiểm tồn tới nhận hàng, ghi ledger đúng.</p></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>required ưu tiên bar_count cho vật tư sắt khi đã có cutting proposal — có test riêng, không rơi về ước lượng BOM thô.</li>
+            <li>receive() có lock cộng dồn + Idempotency-Key, tự set purchased_at khi đủ received_qty.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 9 -->
+      <article class="phase" id="phase-9">
+        <header class="phase-head">
+          <span class="phase-id">P9</span><span class="phase-name">MES-B: Thực thi Phôi / Hàn / Sơn / KCS</span>
+          <span class="badge b-blocked">High</span><span class="badge b-blocked">Critical</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>Thực thi thật ở xưởng: xuất/cắt sắt, KCS duyệt (XOR polymorphic 3 công đoạn), báo sản lượng Hàn/Sơn, cấp vật tư tiêu hao, quản lý ca làm việc.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>P7 (cutting proposal đã duyệt), P3 (ledger), P8 (vật tư đã đủ).</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li><code>SteelIssue</code> + <code>CutBundle</code> (+ <code>rework</code>) — ghi <code>stock_ledger STEEL_ISSUE</code>.</li>
+            <li><code>QcReview</code> dùng chung 3 công đoạn qua FK XOR (<code>steel_issue_id</code> xor <code>production_batch_id</code>).</li>
+            <li><code>ReplenishRequest</code> — <b>chỉ implement <code>fulfill</code> cho Phôi</b>; Hàn/Sơn dừng ở OPEN/reject (xem mục Rủi ro).</li>
+            <li><code>ProductionBatch</code>, <code>MaterialIssue</code>, <code>WorkSession</code> (Hàn/Sơn).</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p>Toàn bộ vòng lặp thực thi MES hoạt động, sản lượng/phế phẩm ghi nhận đúng qua ledger.</p></div>
+          <div class="field full"><div class="callout crit"><b>Blocker nghiệp vụ:</b> "Hàn/Sơn cấp lại bán-thành-phẩm" nghĩa là gì — <b>chưa có quy trình xác nhận</b>. Không mở endpoint <code>fulfill</code> cho HAN/SON tới khi hỏi nghiệp vụ trực tiếp. Tương tự, không tạo <code>POST /production-batches/:id/rework</code> — cột <code>rework_of</code> chỉ dự phòng schema.</div></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>QcReview validate CHECK <code>scrapQty ≤ failedQty</code> ở service.</li>
+            <li><code>cut_bundle.proposalPatternId = null</code> (cắt ngoài đề xuất) trả về <code>isOffPlan: true</code>, không chặn cứng.</li>
+            <li>Mọi endpoint ghi ledger có Idempotency-Key.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 10 -->
+      <article class="phase" id="phase-10">
+        <header class="phase-head">
+          <span class="phase-id">P10</span><span class="phase-name">Đan (Weaving)</span>
+          <span class="badge b-steel">Medium</span><span class="badge b-steel">Medium</span>
+          <span class="badge b-ready">‖ độc lập với chuỗi MES</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>Nhóm mảnh chờ đan gia công ngoài theo PO, sổ luỹ kế xuất/nhập riêng theo từng điểm đan — tách biệt hoàn toàn khỏi <code>stock_ledger</code>.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>P4 (export_orders), P5 (plan_forms), P3 chỉ cần cho đọc tồn (không ghi). <b>Không phụ thuộc P7-P9</b> — bắt đầu được ngay sau P5.</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li><code>ManhOrder</code> (1 PO ⇔ 1 manh_order), <code>ManhLine</code>, <code>ManhAllocation</code>.</li>
+            <li>2 endpoint <code>xuat</code>/<code>nhap</code> upsert-and-increment theo từng điểm đan, lock cộng dồn.</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p>Vòng đời đan hoàn chỉnh, sổ riêng không ảnh hưởng ledger chính.</p></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>CHECK <code>nhap_qty ≤ xuat_qty</code> validate ở service trước khi cộng.</li>
+            <li>UQ <code>(manhLineId, weavingPointId)</code> giữ đúng — không tạo dòng trùng khi gọi lại.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 11 -->
+      <article class="phase" id="phase-11">
+        <header class="phase-head">
+          <span class="phase-id">P11</span><span class="phase-name">Chuyền kiểm &amp; Đóng gói</span>
+          <span class="badge b-blocked">BLOCKED</span><span class="badge b-low">On-hold</span>
+        </header>
+        <div class="phase-body">
+          <div class="field full">
+            <div class="callout crit"><b>Không đưa vào lịch triển khai chính thức.</b> 3 bảng (<code>inspection_batches</code>, <code>inspection_batch_defects</code>, <code>packaging_records</code>) là 3/67 bảng duy nhất không bám theo service/type thật — UI hiện sinh số liệu giả từ hash chuỗi, không có entity DB thật đứng sau.</div>
+          </div>
+          <div class="field"><div class="field-label">Điều kiện mở phase</div><p>1 buổi làm việc với nghiệp vụ xác nhận quy tắc tính "chờ thực thi"/"tổng thùng". Chỉ sau đó mới đưa vào sprint planning.</p></div>
+          <div class="field"><div class="field-label">Nếu unblock</div><p>Ưu tiên dự kiến: <b>High</b> (đây là bước cuối trước xuất kho thành phẩm). Cấu trúc bảng tối thiểu đã có sẵn ở schema doc — dùng làm điểm khởi đầu, không phải bản chốt.</p></div>
+        </div>
+      </article>
+
+      <!-- PHASE 12 -->
+      <article class="phase" id="phase-12">
+        <header class="phase-head">
+          <span class="phase-id">P12</span><span class="phase-name">Reporting / Dashboards</span>
+          <span class="badge b-steel">Medium</span><span class="badge b-steel">Medium</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>7 SQL VIEW dẫn xuất — nguyên tắc "sự kiện là gốc, số tổng hợp là dẫn xuất". Không ghi dữ liệu, rủi ro thấp.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>Phụ thuộc luỹ tiến — mở view nào ngay khi domain nguồn của view đó xong, không chờ hết mọi phase.</p></div>
+          <div class="field full"><div class="field-label">Công việc</div><ul>
+            <li><code>v_warehouse_stock</code> (sau P3), <code>v_segment_cut/consumed/stock/surplus</code> (sau P7/P9), <code>v_po_progress</code>, <code>v_work_session_output</code> (sau P9).</li>
+            <li><code>POST /production-orders/:id/post-surplus</code> — thuộc P9 nhưng "chốt sổ đoạn thừa" là input cho view surplus, cần code cùng lúc.</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p>5 endpoint report chỉ đọc, đúng như tên gọi các VIEW.</p></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>Mỗi view có test đối chiếu số liệu với dữ liệu seed đã biết trước.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <!-- PHASE 13 -->
+      <article class="phase" id="phase-13">
+        <header class="phase-head">
+          <span class="phase-id">P13</span><span class="phase-name">Admin / Hardening</span>
+          <span class="badge b-ready">Low-Medium</span><span class="badge b-blocked">Critical (go-live)</span>
+        </header>
+        <div class="phase-body">
+          <div class="field"><div class="field-label">Mục tiêu</div><p>Không phải "nice-to-have" — là điều kiện go-live. Từng mục nhỏ nhưng bỏ sót thì không được release.</p></div>
+          <div class="field"><div class="field-label">Prerequisite</div><p>Toàn bộ phase trước, làm xuyên suốt + chốt ngay trước go-live.</p></div>
+          <div class="field full"><div class="field-label">Công việc bắt buộc trước go-live</div><ul>
+            <li>File storage thật (S3-compatible) thay <code>attachmentUrl</code> blob tạm — <b>bắt buộc nếu còn dùng production</b>.</li>
+            <li>Rà lại <code>AUDITED_MODELS</code>/<code>SOFT_DELETE_MODELS</code> đầy đủ theo D0.4 sau khi mọi model đã tạo.</li>
+            <li>Data backfill trước khi bật UQ <code>(plan_forms.exportOrderId, mfgProductId)</code> thật trên môi trường có seed cũ.</li>
+            <li>Rà rate-limit riêng cho endpoint gọi cat_sat (P7).</li>
+          </ul></div>
+          <div class="field full"><div class="callout"><b>Chưa quyết — không code:</b> <code>labor_cost</code> theo PI có trong mock nhưng không có trong 67 bảng — chờ nghiệp vụ xác nhận có đưa vào schema vận hành hay để hệ kế toán riêng.</div></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================= RISKS ================= -->
+    <section id="risks">
+      <h2><span class="num">05</span>Rủi ro, Blocker &amp; đề xuất xử lý</h2>
+      <p class="section-note">Không tự chốt thay nghiệp vụ — chỉ định vị đúng API/Phase bị ảnh hưởng để hỏi trước khi code đúng phần đó, không chặn toàn dự án.</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Vấn đề</th><th>Phase ảnh hưởng</th><th>Rủi ro nếu bỏ qua</th><th>Xử lý đề xuất</th></tr></thead>
+          <tbody>
+            <tr><td class="num-cell">1</td><td>Cơ chế đồng bộ <code>stock_quant</code></td><td>P3 (toàn bộ)</td><td>Chọn nhầm phải viết lại toàn bộ đường ghi kho</td><td><span class="badge b-ready">Đã chốt</span> trigger DB (D0.3)</td></tr>
+            <tr><td class="num-cell">2</td><td>Hàn/Sơn "cấp lại" bán-thành-phẩm nghĩa là gì</td><td>P9.2 (fulfill HAN/SON)</td><td>API sai hoàn toàn nếu hiểu nhầm quy trình</td><td><span class="badge b-blocked">Hỏi nghiệp vụ</span> trước khi mở fulfill</td></tr>
+            <tr><td class="num-cell">3</td><td><code>export_order_items.status</code> có đồng bộ với PI stages không</td><td>P4, P6</td><td>Sai lệch hiển thị tiến độ EXPORT — sửa sau vẫn rẻ</td><td><span class="badge b-ready">Đã chốt</span> để trống ở EXPORT</td></tr>
+            <tr><td class="num-cell">4</td><td><code>cutting_proposal_line.bar_count</code> có ưu tiên tính required mua sắt</td><td>P8.1</td><td>Sai số liệu đề xuất mua sắt</td><td><span class="badge b-ready">Đã chốt</span> có, áp dụng ở P8</td></tr>
+            <tr><td class="num-cell">5</td><td>3 bảng Chuyền kiểm &amp; Đóng gói — quy tắc "chờ thực thi"/"tổng thùng"</td><td>P11 (toàn bộ)</td><td>Rủi ro làm lại cao nhất toàn hệ thống</td><td><span class="badge b-blocked">BLOCKED</span> — 1 buổi xác nhận nghiệp vụ riêng</td></tr>
+            <tr><td class="num-cell">6</td><td><code>production_order.export_order_id</code> cache trực tiếp hay suy gián tiếp</td><td>P7.1</td><td>Chỉ ảnh hưởng hiệu năng, không ảnh hưởng đúng-sai</td><td>Suy gián tiếp trước, thêm cột cache sau nếu query chậm thật</td></tr>
+            <tr><td class="num-cell">7</td><td><code>laborCost</code> theo PI — đưa vào schema vận hành?</td><td>Không phase nào code endpoint này</td><td>Thiếu khái niệm chi phí nếu nghiệp vụ cần</td><td>Không code — chờ xác nhận, có thể thuộc hệ kế toán riêng</td></tr>
+            <tr><td class="num-cell">8</td><td><code>warehouse_transfer_items.material_id</code> NOT NULL trước go-live</td><td>P3.3</td><td>Rủi ro trùng/lệch tên vật tư nếu vẫn cho null</td><td>Ép NOT NULL ngay từ P3, không kế thừa hạn chế của mock</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= CHECKLIST ================= -->
+    <section id="checklist">
+      <h2><span class="num">06</span>Checklist kickoff trước khi code</h2>
+      <ul class="dod" style="max-width:56ch">
+        <li>Chốt D0.1–D0.5 (khoá chính, RBAC, stock_quant, audit/soft-delete, PermissionAction) trong 1 buổi kỹ thuật — đặc biệt D0.2 vì ảnh hưởng guard ở <b>mọi</b> endpoint từ P1 trở đi.</li>
+        <li>Chốt 4 quyết định nghiệp vụ #1–#4 ở bảng rủi ro trên (không chặn toàn dự án, nhưng chặn đúng P3/P8/P9 nếu bỏ qua).</li>
+        <li>Lên lịch 1 buổi riêng với nghiệp vụ cho P11 — không đưa vào sprint planning tới khi có kết quả.</li>
+        <li>Cập nhật <code>PERMISSION_MODULES</code> + seed role nghiệp vụ <b>trước</b> P2, để mọi PR từ P2 trở đi có permission đúng ngay, tránh sửa guard hàng loạt sau.</li>
+        <li>Viết trigger <code>fn_sync_stock_quant()</code> + test concurrency <b>trước khi</b> P8/P9 viết business logic dựa trên số dư.</li>
+        <li>Viết unit test <code>materializeBomRevision()</code> (P5.3) đối chiếu dữ liệu mẫu <b>trước khi</b> bật UQ thật trên môi trường có dữ liệu demo cũ.</li>
+        <li>Xác nhận danh sách <code>TRANSFER_ROUTES</code> hợp lệ (P3.3) với nghiệp vụ trước khi hardcode.</li>
+      </ul>
+    </section>
+
+    <footer>
+      Nguồn: <code>docs/dna-erp-db-schema.html</code> (67 bảng / 9 domain) &amp; <code>docs/dna-erp-backend-implementation-plan.html</code> (API/DTO chi tiết theo phase). Tài liệu này là lớp tổng hợp điều phối — mọi chi tiết field/validation tra ngược 2 file gốc.
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('#rail-nav a'));
+  var targets = links.map(function(a){ return document.querySelector(a.getAttribute('href')); }).filter(Boolean);
+  if(!('IntersectionObserver' in window) || !targets.length) return;
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(entry){
+      if(!entry.isIntersecting) return;
+      var id = '#' + entry.target.id;
+      links.forEach(function(a){ a.classList.toggle('active', a.getAttribute('href') === id); });
+    });
+  }, { rootMargin: '-10% 0px -75% 0px' });
+  targets.forEach(function(t){ io.observe(t); });
+})();
+</script>
