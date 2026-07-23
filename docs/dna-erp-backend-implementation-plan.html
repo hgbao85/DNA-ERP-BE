@@ -1,0 +1,2287 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Kế hoạch Backend Implementation Plan</title>
+<style>
+:root{
+  --bg:#ffffff; --bg-alt:#f6f7f9; --fg:#1c2128; --fg-muted:#57606a;
+  --border:#d8dee4; --accent:#0969da; --accent-bg:#ddf4ff;
+  --code-bg:#f0f1f3; --code-fg:#b3261e; --blockquote-border:#0969da;
+  --table-head-bg:#eef1f4; --table-stripe:#fafbfc; --hr:#d8dee4;
+  --shadow: 0 1px 2px rgba(0,0,0,.06);
+}
+:root[data-theme="dark"]{
+  --bg:#0d1117; --bg-alt:#161b22; --fg:#e6edf3; --fg-muted:#9198a1;
+  --border:#30363d; --accent:#4493f8; --accent-bg:#0c2d6b;
+  --code-bg:#1b2129; --code-fg:#ff9492; --blockquote-border:#4493f8;
+  --table-head-bg:#1b2129; --table-stripe:#12161d; --hr:#30363d;
+  --shadow: 0 1px 2px rgba(0,0,0,.4);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0d1117; --bg-alt:#161b22; --fg:#e6edf3; --fg-muted:#9198a1;
+    --border:#30363d; --accent:#4493f8; --accent-bg:#0c2d6b;
+    --code-bg:#1b2129; --code-fg:#ff9492; --blockquote-border:#4493f8;
+    --table-head-bg:#1b2129; --table-stripe:#12161d; --hr:#30363d;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font-family: -apple-system, "Segoe UI", Roboto, "Inter", Helvetica, Arial, sans-serif;
+  line-height:1.6; font-size:16px;
+}
+.topbar{
+  position:sticky; top:0; z-index:10; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.25rem; background:var(--bg-alt); border-bottom:1px solid var(--border);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-weight:700; letter-spacing:.02em; font-size:.95rem; color:var(--fg)}
+.topbar .brand small{display:block; font-weight:400; color:var(--fg-muted); font-size:.78rem}
+.topbar button{
+  border:1px solid var(--border); background:var(--bg); color:var(--fg); border-radius:6px;
+  padding:.4rem .7rem; font-size:.85rem; cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg)}
+main{max-width:980px; margin:0 auto; padding:2rem 1.5rem 6rem}
+h1,h2,h3,h4{scroll-margin-top:4.2rem; line-height:1.3}
+h1{font-size:1.85rem; border-bottom:1px solid var(--hr); padding-bottom:.6rem; margin-top:0}
+h2{font-size:1.4rem; margin-top:2.6rem; padding-bottom:.35rem; border-bottom:1px solid var(--hr)}
+h3{font-size:1.15rem; margin-top:2rem; color:var(--fg)}
+h4{font-size:1rem; margin-top:1.5rem}
+p{margin:.8rem 0}
+a{color:var(--accent); text-decoration:none}
+a:hover{text-decoration:underline}
+code{
+  background:var(--code-bg); color:var(--code-fg); border-radius:4px; padding:.12em .4em;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size:.87em;
+}
+pre{
+  background:var(--code-bg); border:1px solid var(--border); border-radius:8px; padding:1rem;
+  overflow-x:auto; font-size:.85rem;
+}
+pre code{background:none; padding:0; color:var(--fg)}
+blockquote{
+  margin:1.2rem 0; padding:.2rem 1rem; border-left:3px solid var(--blockquote-border);
+  background:var(--bg-alt); color:var(--fg-muted); border-radius:0 6px 6px 0;
+}
+blockquote p{margin:.6rem 0}
+hr{border:none; border-top:1px solid var(--hr); margin:2.4rem 0}
+ul,ol{padding-left:1.5rem}
+li{margin:.3rem 0}
+li input[type=checkbox]{margin-right:.4rem}
+.table-wrap{overflow-x:auto; margin:1.2rem 0; border:1px solid var(--border); border-radius:8px}
+table{border-collapse:collapse; width:100%; font-size:.86rem}
+th,td{border-bottom:1px solid var(--border); border-right:1px solid var(--border); padding:.55rem .7rem; text-align:left; vertical-align:top}
+th:last-child,td:last-child{border-right:none}
+thead th{background:var(--table-head-bg); font-weight:600; white-space:nowrap}
+tbody tr:nth-child(even){background:var(--table-stripe)}
+tbody tr:last-child td{border-bottom:none}
+strong{color:var(--fg)}
+#mục-lục + hr, #mục-lục{margin-top:1.4rem}
+.back-to-top{
+  position:fixed; right:1.4rem; bottom:1.4rem; border:1px solid var(--border); background:var(--bg-alt);
+  color:var(--fg); border-radius:50%; width:2.6rem; height:2.6rem; display:flex; align-items:center;
+  justify-content:center; box-shadow:var(--shadow); cursor:pointer; font-size:1.1rem; opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>Kế hoạch Backend Implementation Plan</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+<main>
+<div id="top"></div>
+<h1>DNA-ERP — Kế hoạch cấu hình lại ERD, Prisma Schema, Workflow &amp; Xây dựng API</h1>
+<blockquote>
+<p>Tài liệu lập kế hoạch cho đội Backend. Nguồn nghiệp vụ duy nhất: <a href="./dna-erp-db-schema.html"><code>docs/dna-erp-db-schema.html</code></a> (67 bảng / 9 domain, đã đối chiếu với source thật). Tài liệu này <strong>không tự thêm nghiệp vụ</strong> — mọi API bên dưới bám theo entity, quan hệ, state machine và luồng nghiệp vụ (mục 0, 3.8) đã mô tả trong file trên. Những chỗ nguồn còn đánh dấu ⚠ (chưa có persistence thật) hoặc còn &quot;câu hỏi mở&quot; đều được giữ nguyên trạng thái mở ở đây, không suy diễn thêm.</p>
+<p>Codebase hiện tại (<code>d:\DNA-ERP-BE</code>, NestJS 11 + Prisma + PostgreSQL) đã có sẵn nền tảng Core: <code>auth</code>, <code>users</code>, <code>roles</code>, <code>audit-log</code>, <code>external</code>, <code>health</code> — xem mục 2 (Quyết định kiến trúc) để biết cách 62 bảng còn lại ghép vào nền tảng này mà không phá vỡ những gì đã chạy.</p>
+</blockquote>
+<hr>
+<h2 id="mục-lục">Mục lục</h2>
+<ol>
+<li><a href="#1-t%E1%BB%95ng-quan--ph%E1%BA%A1m-vi">Tổng quan &amp; phạm vi</a></li>
+<li><a href="#2-quy%E1%BA%BFt-%C4%91%E1%BB%8Bnh-ki%E1%BA%BFn-tr%C3%BAc-n%E1%BB%81n-t%E1%BA%A3ng-c%E1%BA%A7n-ch%E1%BB%91t-tr%C6%B0%E1%BB%9Bc-d0x">Quyết định kiến trúc nền tảng cần chốt trước (D0.x)</a></li>
+<li><a href="#3-nguy%C3%AAn-t%E1%BA%AFc-thi%E1%BA%BFt-k%E1%BA%BF-api-%C3%A1p-d%E1%BB%A5ng-cho-to%C3%A0n-h%E1%BB%87-th%E1%BB%91ng">Nguyên tắc thiết kế API áp dụng cho toàn hệ thống</a></li>
+<li><a href="#4-k%E1%BA%BF-ho%E1%BA%A1ch-c%E1%BA%A5u-tr%C3%BAc-l%E1%BA%A1i-prisma-schema">Kế hoạch cấu trúc lại Prisma Schema</a></li>
+<li><a href="#5-rbac--m%E1%BB%9F-r%E1%BB%99ng-permission-module">RBAC — mở rộng Permission Module</a></li>
+<li><a href="#6-danh-s%C3%A1ch-module--api-chi-ti%E1%BA%BFt-theo-phase">Danh sách Module &amp; API chi tiết theo Phase</a><ul>
+<li><a href="#phase-0--n%E1%BB%81n-t%E1%BA%A3ng-%C4%91%C3%A3-c%C3%B3">Phase 0 — Nền tảng (đã có)</a></li>
+<li><a href="#phase-1--m%E1%BB%9F-r%E1%BB%99ng-n%E1%BB%81n-t%E1%BA%A3ng">Phase 1 — Mở rộng nền tảng</a></li>
+<li><a href="#phase-2--danh-m%E1%BB%A5c--master-data">Phase 2 — Danh mục / Master Data</a></li>
+<li><a href="#phase-3--kho-v%E1%BA%ADn-l%C3%B5i-ledger-core">Phase 3 — Kho vận lõi (Ledger Core)</a></li>
+<li><a href="#phase-4--b%C3%A1n-h%C3%A0ng">Phase 4 — Bán hàng</a></li>
+<li><a href="#phase-5--k%E1%BA%BF-ho%E1%BA%A1ch-s%E1%BA%A3n-xu%E1%BA%A5t-planform">Phase 5 — Kế hoạch sản xuất (PlanForm)</a></li>
+<li><a href="#phase-6--l%E1%BB%87nh-s%E1%BA%A3n-xu%E1%BA%A5t-production-invoice--pi">Phase 6 — Lệnh sản xuất (Production Invoice / PI)</a></li>
+<li><a href="#phase-7--mes-a-production-order--cutting-proposal-cat_sat">Phase 7 — MES-A: Production Order &amp; Cutting Proposal (cat_sat)</a></li>
+<li><a href="#phase-8--mua-h%C3%A0ng--ki%E1%BB%83m-v%E1%BA%ADt-t%C6%B0">Phase 8 — Mua hàng &amp; Kiểm vật tư</a></li>
+<li><a href="#phase-9--mes-b-th%E1%BB%B1c-thi-ph%C3%B4i--h%C3%A0n--s%C6%A1n--kcs">Phase 9 — MES-B: Thực thi Phôi / Hàn / Sơn / KCS</a></li>
+<li><a href="#phase-10--%C4%91an-weaving">Phase 10 — Đan (Weaving)</a></li>
+<li><a href="#phase-11--chuy%E1%BB%81n-ki%E1%BB%83m--%C4%91%C3%B3ng-g%C3%B3i--blocked">Phase 11 — Chuyền kiểm &amp; Đóng gói (⚠ blocked)</a></li>
+<li><a href="#phase-12--reporting--dashboards">Phase 12 — Reporting / Dashboards</a></li>
+<li><a href="#phase-13--admin--hardening">Phase 13 — Admin / Hardening</a></li>
+</ul>
+</li>
+<li><a href="#7-ma-tr%E1%BA%ADn-ph%E1%BB%A5-thu%E1%BB%99c--%C4%91%E1%BB%99-ph%E1%BB%A9c-t%E1%BA%A1p-t%E1%BB%95ng-h%E1%BB%A3p">Ma trận phụ thuộc &amp; độ phức tạp tổng hợp</a></li>
+<li><a href="#8-r%E1%BB%A7i-ro-n%E1%BB%A3-k%E1%BB%B9-thu%E1%BA%ADt--quy%E1%BA%BFt-%C4%91%E1%BB%8Bnh-nghi%E1%BB%87p-v%E1%BB%A5-c%C3%B2n-m%E1%BB%9F">Rủi ro, nợ kỹ thuật &amp; quyết định nghiệp vụ còn mở</a></li>
+<li><a href="#9-checklist-kickoff-tr%C6%B0%E1%BB%9Bc-khi-code">Checklist kickoff trước khi code</a></li>
+</ol>
+<hr>
+<h2 id="1-tổng-quan--phạm-vi">1. Tổng quan &amp; phạm vi</h2>
+<p><strong>Nguồn:</strong> <code>docs/dna-erp-db-schema.html</code> — 67 bảng, 9 domain, đã hợp nhất từ source <code>src/</code> (Next.js mock) + <code>docs/thietke.md</code> (MES). Schema đã qua rà soát 3NF và đối chiếu trực tiếp với code thật (không phải suy đoán).</p>
+<p><strong>9 domain nghiệp vụ (mục 1 của schema doc):</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Domain</th>
+<th>Số bảng</th>
+<th>Trạng thái sẵn sàng (mục 5.1 schema doc)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1.1</td>
+<td>Core / Auth / Hệ thống</td>
+<td>5</td>
+<td>Sẵn sàng — <strong>đã code 3/5</strong> (users, audit_logs qua AuditLog ext; thiếu notifications, notification_reads, system_config)</td>
+</tr>
+<tr>
+<td>1.2</td>
+<td>Danh mục dùng chung (BOM, vật tư, NCC...)</td>
+<td>20</td>
+<td>Sẵn sàng</td>
+</tr>
+<tr>
+<td>1.3</td>
+<td>Bán hàng</td>
+<td>2</td>
+<td>Sẵn sàng (vừa hợp nhất M12)</td>
+</tr>
+<tr>
+<td>1.4</td>
+<td>Kế hoạch sản xuất (PlanForm)</td>
+<td>6</td>
+<td>Sẵn sàng — workflow 8 trạng thái + 2 vòng duyệt đã rõ</td>
+</tr>
+<tr>
+<td>1.5</td>
+<td>Lệnh sản xuất (Production Invoice)</td>
+<td>4</td>
+<td>Sẵn sàng</td>
+</tr>
+<tr>
+<td>1.6</td>
+<td>MES — Phôi/Hàn/Sơn/KCS (+ tích hợp cat_sat)</td>
+<td>13</td>
+<td>Sẵn sàng ở mức schema — 1 quyết định nghiệp vụ treo (replenish Hàn/Sơn)</td>
+</tr>
+<tr>
+<td>1.7</td>
+<td>Đan (Weaving)</td>
+<td>3</td>
+<td>Sẵn sàng</td>
+</tr>
+<tr>
+<td>1.8</td>
+<td>Kho (sổ cái kép + stock_quant)</td>
+<td>5</td>
+<td>Schema sẵn sàng — cơ chế sync stock_quant cần chốt (D0.5)</td>
+</tr>
+<tr>
+<td>1.9</td>
+<td>Mua hàng &amp; Kiểm vật tư</td>
+<td>9</td>
+<td>6/9 sẵn sàng; 3 bảng (inspection_batches, inspection_batch_defects, packaging_records) <strong>⚠ chưa nên code</strong> — suy ra thuần từ UI, chưa xác nhận nghiệp vụ</td>
+</tr>
+</tbody></table></div>
+<p><strong>Nguyên tắc của tài liệu này:</strong></p>
+<ul>
+<li>Mỗi API đề xuất bám 1-1 vào entity/workflow đã có trong schema doc — không thêm tính năng ngoài phạm vi.</li>
+<li>Với 3 bảng ⚠ ở domain 1.9 (Chuyền kiểm &amp; Đóng gói), tài liệu chỉ phác thảo API ở mức tối thiểu và đánh dấu <strong>BLOCKED chờ xác nhận nghiệp vụ</strong> — không đưa vào phase triển khai chính thức (xem Phase 11).</li>
+<li>Toàn bộ DTO liệt kê ở mức &quot;field chính + validation trọng yếu&quot;, không lặp lại toàn bộ cột đã có sẵn trong schema doc — khi cần đầy đủ cột/kiểu/ràng buộc DB, tham chiếu ngược <code>docs/dna-erp-db-schema.html</code> mục 1.x tương ứng (đã dẫn link ở đầu mỗi module).</li>
+</ul>
+<hr>
+<h2 id="2-quyết-định-kiến-trúc-nền-tảng-cần-chốt-trước-d0x">2. Quyết định kiến trúc nền tảng cần chốt trước (D0.x)</h2>
+<p>Đây là các điểm <strong>xung đột giữa schema doc (to-be, viết độc lập với code) và codebase NestJS hiện tại (đã chạy)</strong>. Phải chốt trước khi viết migration đầu tiên của Phase 1, vì ảnh hưởng xuyên suốt 62 bảng còn lại.</p>
+<h3 id="d01--khoá-chính--naming-convention">D0.1 — Khoá chính &amp; naming convention</h3>
+<p>Schema doc dùng <code>bigserial</code> PK + tên cột <code>snake_case</code> cho toàn bộ 67 bảng. Codebase hiện tại dùng <code>String @id @default(uuid())</code> cho <code>User/Role/Permission/...</code> và field Prisma <code>camelCase</code> <strong>không có <code>@map</code></strong> (cột DB thực tế cũng là camelCase, xem <code>prisma/schema.prisma:24-33</code>).</p>
+<p><strong>Đề xuất (khuyến nghị áp dụng):</strong></p>
+<ul>
+<li>Giữ <strong>UUID</strong> cho toàn bộ 62 bảng mới — nhất quán với 5 bảng đã có, tránh lộ số lượng bản ghi/tốc độ tăng trưởng qua ID tuần tự khi ID xuất hiện trực tiếp trên URL REST (<code>GET /materials/:id</code>), và tránh phải trộn 2 kiểu PK trong cùng 1 schema.</li>
+<li>Giữ <strong>camelCase, không <code>@map</code></strong> cho field Prisma — nhất quán với 5 model đã có. Tên cột trong schema doc (<code>material_group_id</code>...) chỉ dùng làm tham chiếu ý nghĩa nghiệp vụ, không phải tên cột DB bắt buộc.</li>
+<li>Ngoại lệ: <code>bigserial</code>/số nguyên tăng dần <strong>không</strong> áp dụng ở đâu cả, kể cả các bảng thuần sự kiện (audit-like) như <code>stock_ledger</code>, <code>steel_issue</code> — vẫn dùng UUID để nhất quán và vì các bảng này cũng lộ qua API (audit trail, list theo <code>production_order_id</code>).</li>
+</ul>
+<h3 id="d02--mô-hình-phân-quyền-rbac-cho-vai-trò-nghiệp-vụ-mes">D0.2 — Mô hình phân quyền (RBAC) cho vai trò nghiệp vụ MES</h3>
+<p>Schema doc mô tả <code>users</code> là 1 bảng phẳng với cột <code>role</code> (enum 3 giá trị: ADMIN/BOSS/WAREHOUSE_STAFF) + <code>mfg_role</code> (12 giá trị: PRODUCTION_MANAGER, PHOI, HAN, SON, KCS...) + <code>phoi_operation</code> + 3 cờ boolean (<code>is_purchaser</code>, <code>is_product_planner</code>, <code>is_sale</code>) — <strong>không có bảng Role/Permission N-N</strong> (lý do: mục 3.3 schema doc — nghiệp vụ hiện tại không có multi-role thật).</p>
+<p>Codebase hiện tại đã có sẵn RBAC tổng quát mạnh hơn: <code>Role</code> ↔ <code>Permission</code> (N-N qua <code>RolePermission</code>), <code>Permission.module</code> là string tự do (đã có comment &quot;future ERP modules can register permissions without a migration&quot; — <code>permission-modules.constant.ts:3-4</code>), guard <code>PermissionsGuard</code> check <code>MODULE:ACTION</code>.</p>
+<p><strong>Đề xuất (khuyến nghị áp dụng — không thay bằng model phẳng của schema doc):</strong></p>
+<ul>
+<li><strong>Giữ nguyên</strong> hệ Role/Permission N-N đã build — không hạ cấp về flat-role. Đây là superset: 1 role nghiệp vụ (vd &quot;PHOI_OPERATOR&quot;) = 1 <code>Role</code> được seed sẵn với đúng tập <code>Permission</code> (<code>STEEL_ISSUE:UPDATE</code>, <code>QC_REVIEW:CREATE</code>...) tương đương 1 giá trị <code>mfg_role</code> trong schema doc.</li>
+<li><strong>Thêm</strong> các cột thuộc tính nghiệp vụ (không phải cột phân quyền chính) vào model <code>User</code>: <code>mfgRole</code> (enum <code>MfgRole</code>, nullable), <code>phoiOperation</code> (enum <code>PhoiOperation</code>, nullable), <code>warehouseScope</code> (string, nullable — cố ý <strong>không FK</strong> cứng tới <code>warehouses.code</code>, giữ đúng quyết định gốc ở schema doc mục 1.1 vì 1 scope có thể phủ nhiều kho), <code>isPurchaser</code>/<code>isProductPlanner</code>/<code>isSale</code> (boolean, default false).</li>
+<li>Các cột này dùng cho: (a) <strong>row-level scoping</strong> (vd lọc <code>purchase_proposals</code> theo <code>warehouseScope</code> của người gọi), (b) <strong>guard bổ sung</strong> ngoài <code>PermissionsGuard</code> cho các thao tác chỉ 1 công đoạn cụ thể được làm (vd chỉ user có <code>mfgRole=PHOI</code> mới được xác nhận <code>steel_issue.actual_bar_count</code>) — cần 2 decorator mới, viết ở Phase 1: <code>@RequireMfgRole(...roles)</code> và <code>@RequireWarehouseScope()</code> (đọc <code>warehouseScope</code> từ <code>@CurrentUser()</code>, so với <code>warehouse_code</code>/<code>warehouse_scope</code> trên resource).</li>
+<li>Seed roles nghiệp vụ tương ứng 12 giá trị <code>mfg_role</code> + 3 giá trị <code>role</code> hệ thống làm <code>Role</code> mẫu trong <code>prisma/seed.ts</code>, mỗi role gán đúng tập permission theo module của phase tương ứng khi phase đó triển khai (không seed hết 1 lần).</li>
+</ul>
+<h3 id="d03--cơ-chế-đồng-bộ-stock_quant-mục-52-1-của-schema-doc">D0.3 — Cơ chế đồng bộ <code>stock_quant</code> (mục 5.2 #1 của schema doc)</h3>
+<p>Schema doc đề xuất mặc định &quot;trigger DB AFTER INSERT trên <code>stock_ledger</code>&quot;. Codebase đã có tiền lệ dùng raw SQL migration (<code>prisma/sql/</code>, migration <code>20260723021500_add_check_constraints</code>) nên <strong>viết trigger là khả thi và nhất quán với pattern đã có</strong>.</p>
+<p><strong>Đề xuất:</strong> Dùng <strong>trigger DB</strong> (không phải ghi kép ở tầng ứng dụng) — đúng theo mặc định của schema doc, vì:</p>
+<ul>
+<li>Không phụ thuộc dev nhớ ghi đúng 2 nơi ở mọi service tương lai có động tới <code>stock_ledger</code> (steel_issue, material_issue, warehouse_transfer, purchase receiving, packaging FINISHED...).</li>
+<li>Nhất quán tuyệt đối kể cả khi có raw SQL/script chạy ngoài Prisma Client (batch fix dữ liệu, seed).</li>
+<li>Triển khai ở Phase 3 dưới dạng file <code>prisma/sql/00X_stock_quant_sync_trigger.sql</code>, áp dụng qua <code>prisma migrate</code> (custom SQL migration) — hàm <code>fn_sync_stock_quant()</code> UPSERT vào <code>stock_quant</code> theo 4 chân XOR (<code>material_id</code>/<code>segment_spec_id</code>/<code>piece_id</code>/<code>product_variant_id</code>), trigger <code>AFTER INSERT ON stock_ledger FOR EACH ROW</code>.</li>
+<li>Ứng dụng (NestJS) <strong>không tự viết logic cộng/trừ <code>stock_quant</code></strong> ở bất kỳ service nào — chỉ INSERT vào <code>stock_ledger</code> trong transaction, để trigger lo phần cache. Điều này cũng đơn giản hoá đáng kể toàn bộ Phase 7-10 (MES, Purchasing, Weaving) vì mọi service chỉ cần biết ghi ledger đúng, không cần biết <code>stock_quant</code>.</li>
+</ul>
+<h3 id="d04--audit-log--soft-delete--mở-rộng-danh-sách-model">D0.4 — Audit log &amp; soft delete — mở rộng danh sách model</h3>
+<p><code>AUDITED_MODELS</code> hiện chỉ có <code>User/Role/UserRole/RolePermission</code> (<code>audit-log.extension.ts:13</code>); <code>SOFT_DELETE_MODELS</code> chỉ có <code>User/Role</code>. Khi thêm model mới, <strong>phải cập nhật 2 constant này theo đúng phân loại đã nêu ở schema doc mục 3.7</strong>:</p>
+<ul>
+<li>Soft-delete (thêm <code>deletedAt</code>, dùng <code>is_active</code>/<code>deleted_at</code> theo schema doc): <code>Material</code>, <code>Supplier</code>, <code>Warehouse</code>, <code>WeavingPoint</code>, <code>MfgProduct</code>, <code>SalesCustomer</code>, <code>ProductVariant</code> — danh mục hay bị tham chiếu ngược.</li>
+<li>Audit-log opt-in (ghi qua <code>logAction()</code>/extension khi có ý nghĩa nghiệp vụ — không phải mọi bảng): ưu tiên các bảng có workflow duyệt/từ chối hoặc ảnh hưởng tài chính — <code>ExportOrder</code>, <code>PlanForm</code> (+ *_review), <code>ProductionInvoice</code>, <code>ProductionApproval</code>, <code>ProductionOrder</code>, <code>PurchaseProposal</code>, <code>WarehouseTransfer</code>. Các bảng sự kiện thuần append-only (<code>QcReview</code>, <code>StockLedger</code>, <code>SteelIssue</code>, <code>ProductionBatch</code>...) <strong>không cần</strong> audit log riêng — bản thân chúng đã là log (đúng theo mục 3.7 schema doc), tránh audit-log-of-an-audit-log.</li>
+</ul>
+<h3 id="d05--enum-permissionaction-giữ-nguyên-quy-ước-ánh-xạ-hành-động-nghiệp-vụ">D0.5 — Enum <code>PermissionAction</code> giữ nguyên, quy ước ánh xạ hành động nghiệp vụ</h3>
+<p>Không thêm giá trị enum mới vào <code>PermissionAction</code> (<code>VIEW/CREATE/UPDATE/DELETE/APPROVE</code>). Mọi hành động nghiệp vụ (issue, confirm, release, submit, reject...) ánh xạ vào 1 trong 5 giá trị theo quy ước dùng xuyên suốt tài liệu này:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Loại hành động nghiệp vụ</th>
+<th>PermissionAction</th>
+<th>Ví dụ</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Tạo mới / nộp lần đầu</td>
+<td><code>CREATE</code></td>
+<td>tạo PO, nộp định mức mảnh</td>
+</tr>
+<tr>
+<td>Xem / liệt kê / xuất báo cáo</td>
+<td><code>VIEW</code></td>
+<td>list, get detail, view reports</td>
+</tr>
+<tr>
+<td>Đổi trạng thái vận hành thông thường (không phải cổng duyệt)</td>
+<td><code>UPDATE</code></td>
+<td>issue thép, confirm nhận, start/end ca, cancel</td>
+</tr>
+<tr>
+<td>Duyệt hoặc từ chối ở bất kỳ cổng workflow nào (QLSX/Sếp/KCS/GĐ)</td>
+<td><code>APPROVE</code></td>
+<td>Sếp duyệt PI, KCS duyệt lô, GĐ duyệt báo giá</td>
+</tr>
+<tr>
+<td>Xoá mềm danh mục</td>
+<td><code>DELETE</code></td>
+<td>vô hiệu hoá material/supplier</td>
+</tr>
+</tbody></table></div>
+<hr>
+<h2 id="3-nguyên-tắc-thiết-kế-api-áp-dụng-cho-toàn-hệ-thống">3. Nguyên tắc thiết kế API áp dụng cho toàn hệ thống</h2>
+<p>Áp dụng cho <strong>mọi</strong> endpoint liệt kê ở mục 6 — không nhắc lại ở từng bảng con để tránh trùng lặp.</p>
+<p><strong>Versioning &amp; routing</strong></p>
+<ul>
+<li>Prefix <code>/api/v1/...</code>, URI versioning (đã có trong <code>main.ts</code>). Controller <code>@Controller({ path: &#39;&lt;kebab-plural&gt;&#39;, version: &#39;1&#39; })</code>.</li>
+<li>Resource lồng nhau tối đa 2 cấp (<code>/plan-forms/:id/manh-rows</code>), không quá sâu — cấp 3 trở lên trả về qua field lồng trong response của cấp cha (vd <code>cutting_proposal_pattern_segment</code> không có URL riêng, luôn trả kèm trong <code>GET /cutting-proposals/:id</code>).</li>
+</ul>
+<p><strong>Response envelope</strong> (đã có sẵn qua <code>ResponseInterceptor</code>, không khai báo lại)</p>
+<ul>
+<li>Thành công: <code>{ success: true, data, timestamp, path, statusCode }</code>. List có phân trang: <code>data</code> là <code>Paginated&lt;T&gt; = { data: T[], meta: { page, limit, total, totalPages } }</code> (dùng <code>paginate()</code> util có sẵn).</li>
+<li>Lỗi: <code>{ success: false, statusCode, message, error, correlationId, timestamp, path }</code> qua <code>AllExceptionsFilter</code> — map <code>P2002→409</code>, <code>P2025→404</code>, <code>P2003→400</code> tự động cho mọi model mới, không cần code thêm.</li>
+</ul>
+<p><strong>Authentication &amp; Authorization</strong></p>
+<ul>
+<li>Mọi endpoint yêu cầu <code>@ApiBearerAuth()</code> + JWT hợp lệ, trừ khi đánh dấu <code>@Public()</code> (không có endpoint nghiệp vụ nào trong 62 bảng mới là public).</li>
+<li>Permission check 2 lớp: (1) <code>@RequirePermissions({ module, action })</code> (bắt buộc, theo mục 5 &amp; D0.5); (2) khi endpoint đụng tới dữ liệu có phạm vi theo vai trò MES, thêm <code>@RequireMfgRole()</code>/<code>@RequireWarehouseScope()</code> (D0.2) — nêu rõ trong cột &quot;Permission&quot; của từng bảng endpoint ở mục 6 bằng ký hiệu <code>+ scope</code>.</li>
+</ul>
+<p><strong>Validation</strong></p>
+<ul>
+<li><code>ValidationPipe</code> global đã bật <code>whitelist/forbidNonWhitelisted/transform</code> — mọi DTO mới bắt buộc dùng <code>class-validator</code> + <code>@ApiProperty(Optional)</code> đúng pattern <code>CreateUserDto</code> hiện có.</li>
+<li>Validation nghiệp vụ (không diễn đạt được bằng decorator, vd XOR 4 chân của <code>stock_ledger</code>, unique-per-group của <code>plan_form_manh_review</code>) thực hiện ở tầng Service <strong>trong cùng transaction</strong> với thao tác ghi, ném <code>BadRequestException</code>/<code>ConflictException</code> — không dựa vào CHECK constraint DB làm validation chính (constraint DB là lưới an toàn cuối, không phải nơi trả lỗi thân thiện cho FE).</li>
+</ul>
+<p><strong>Transaction, Lock &amp; Idempotency — quy ước ký hiệu dùng ở mục 6</strong></p>
+<ul>
+<li><code>TX: có</code> — bắt buộc bọc <code>this.prisma.$transaction(async (tx) =&gt; {...})</code>, dùng khi ghi ≥ 2 bảng cùng lúc hoặc thao tác phải all-or-nothing (vd duyệt PlanForm → materialize <code>bom_revision</code> + toàn bộ dòng con).</li>
+<li><code>Lock: FOR UPDATE</code> — cần <code>SELECT ... FOR UPDATE</code> (Prisma: <code>tx.$queryRaw</code> hoặc <code>tx.&lt;model&gt;.update</code> với điều kiện WHERE bao gồm giá trị cũ để tận dụng row lock ngầm của Postgres) trên dòng bị cập nhật cộng dồn để tránh lost-update khi nhiều request chạy song song — áp dụng cho mọi bảng có cột luỹ kế (<code>stock_quant.qty</code>, <code>manh_allocations.xuat_qty/nhap_qty</code>, <code>purchase_proposal_items.received_qty</code>, <code>warehouse_transfer_reservations</code>).</li>
+<li><code>Idempotency: Idempotency-Key</code> — bắt buộc header <code>Idempotency-Key</code> (lưu vào bảng phụ hoặc cột riêng, kiểm tra trước khi xử lý) cho POST có side-effect không tự nhiên idempotent và có rủi ro bị gọi lại do lỗi mạng: gọi API ngoài (<code>cat_sat</code>), mọi endpoint tạo bút toán <code>stock_ledger</code>, mọi endpoint tạo <code>production_batch</code>/<code>steel_issue</code>/<code>material_issue</code>.</li>
+<li>Các POST còn lại (tạo danh mục, tạo PO nháp...) không bắt buộc idempotency key nhưng vẫn nên có unique constraint nghiệp vụ (vd <code>po_number</code> UQ) để lần gọi lại lộ ra lỗi 409 rõ ràng thay vì tạo trùng.</li>
+</ul>
+<p><strong>Audit log</strong></p>
+<ul>
+<li>Ghi qua Prisma Client Extension đã có, chỉ cần thêm model vào <code>AUDITED_MODELS</code> (D0.4) — không gọi <code>logAction()</code> thủ công trong service trừ khi cần ghi <code>note</code> nghiệp vụ cụ thể (vd lý do từ chối) mà cơ chế tự động không bắt được, lúc đó dùng lại đúng pattern <code>logAction()</code> đã có.</li>
+</ul>
+<p><strong>Error handling</strong></p>
+<ul>
+<li>Không tạo filter/exception mới — tái dùng <code>BadRequestException</code> (400, validation/business rule), <code>ForbiddenException</code> (403, sai quyền/scope), <code>NotFoundException</code> (404), <code>ConflictException</code> (409, vi phạm unique/trạng thái không hợp lệ cho transition). State-machine transition sai (vd duyệt PO đã <code>CANCELLED</code>) luôn trả <code>409 Conflict</code>, không phải <code>400</code>.</li>
+</ul>
+<hr>
+<h2 id="4-kế-hoạch-cấu-trúc-lại-prisma-schema">4. Kế hoạch cấu trúc lại Prisma Schema</h2>
+<p><strong>Nguyên tắc chung:</strong> 1 file <code>prisma/schema.prisma</code> duy nhất (giữ nguyên, không tách file — Prisma multi-file cần preview feature, dự án chưa bật), models nhóm theo domain bằng comment header <code>// ===== Domain X.Y ... =====</code>, migration tách theo Phase (mỗi Phase = 1 hoặc vài migration có tên <code>&lt;phase&gt;_&lt;domain&gt;</code>).</p>
+<p><strong>Việc cần làm theo Phase (song song mục 6):</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Migration nội dung chính</th>
+<th>Enum mới cần thêm</th>
+<th>Ghi chú DB đặc biệt</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td><code>User</code> thêm cột <code>mfgRole/phoiOperation/warehouseScope/isPurchaser/isProductPlanner/isSale</code>; model <code>Notification</code>, <code>NotificationRead</code>, <code>SystemConfig</code></td>
+<td><code>MfgRole</code>, <code>PhoiOperation</code>, <code>NotificationAudience</code></td>
+<td><code>SystemConfig</code> ép singleton bằng <code>CHECK (id = 1)</code> — dùng raw SQL migration như <code>add_check_constraints</code> đã có tiền lệ</td>
+</tr>
+<tr>
+<td>2</td>
+<td>15 model danh mục + BOM (<code>MaterialGroup</code>, <code>Material</code>, <code>Supplier</code>, <code>MaterialSupplier</code>, <code>DefectReason</code>, <code>WeavingPoint</code>, <code>Warehouse</code>, <code>SalesCustomer</code>, <code>MfgProduct</code>, <code>ProductVariant</code>, <code>Piece</code>, <code>Part</code>, <code>SegmentSpec</code>, <code>BomRevision</code>, <code>BomPiece</code>, <code>BomPart</code>, <code>PieceBom</code>, <code>PartBom</code>, <code>ConsumableBom</code>, <code>PackagingBom</code>)</td>
+<td><code>MaterialKind</code>, <code>PhoiOperation</code> (đã thêm ở Phase 1, tái dùng), <code>BomRevisionStatus</code></td>
+<td>Composite-unique <code>BomRevision(id, mfgProductId)</code> để phục vụ composite-FK ở Phase 5/7 (<code>piece_bom</code>/<code>production_order</code> phải cùng <code>mfg_product_id</code>)</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>StockLedger</code>, <code>StockQuant</code>, <code>WarehouseTransfer</code>, <code>WarehouseTransferItem</code>, <code>WarehouseTransferReservation</code> + <strong>trigger SQL</strong> (D0.3)</td>
+<td><code>StockLedgerRefType</code>, <code>TransferStatus</code>, <code>ReservationStatus</code></td>
+<td>4 CHECK: XOR 4 chân <code>stock_ledger</code>/<code>stock_quant</code>, <code>from ≠ to</code>; 4 partial unique index cho <code>stock_quant</code> (theo từng chân, vì Postgres coi NULL là phân biệt — đúng ghi chú schema doc mục 1.8)</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>ExportOrder</code>, <code>ExportOrderItem</code></td>
+<td><code>OrderChannel</code>, <code>SalesPoStatus</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>PlanForm</code>, <code>PlanFormManhRow</code>, <code>PlanFormManhChild</code>, <code>PlanFormManhReview</code>, <code>PlanFormDetailItem</code>, <code>PlanFormDetailReview</code></td>
+<td><code>PlanFormStatus</code>, <code>QuotaGroupManh</code>, <code>QuotaGroupDetail</code>, <code>QuotaReviewStatus</code></td>
+<td>FK <code>plan_forms.production_invoice_id</code> là <strong>forward reference</strong> tới model của Phase 6 — khai báo quan hệ 2 chiều nhưng tạo bảng <code>production_invoices</code> trước (đảo thứ tự migration Phase 5/6 nếu cần, hoặc tạo cột nullable trước rồi thêm FK ở Phase 6)</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>ProductionInvoice</code>, <code>ProductionInvoiceItem</code>, <code>ProductionInvoiceItemStage</code>, <code>ProductionApproval</code></td>
+<td><code>ProductionInvoiceStatus</code>, <code>PiStageType</code> (gồm <code>PHOI</code> — đã sửa theo schema doc), <code>PiItemStageStatus</code>, <code>ProdApprovalStatus</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>ProductionOrder</code>, <code>CuttingProposal</code>, <code>CuttingProposalLine</code>, <code>CuttingProposalPattern</code>, <code>CuttingProposalPatternSegment</code></td>
+<td><code>ProductionOrderStatus</code>, <code>CuttingProposalStatus</code></td>
+<td>Composite-FK <code>production_order(bom_revision_id, mfg_product_id) → bom_revision(id, mfg_product_id)</code></td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>InspectionRequest</code>, <code>InspectionKhoState</code>, <code>InspectionItem</code>, <code>PurchaseProposal</code>, <code>PurchaseProposalItem</code>, <code>PurchaseProposalQuote</code></td>
+<td><code>KhoKey</code>, <code>KhoStateStatus</code>, <code>PurchaseProposalStatus</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>SteelIssue</code>, <code>CutBundle</code>, <code>CutPatternSegment</code>, <code>QcReview</code>, <code>ReplenishRequest</code>, <code>ProductionBatch</code>, <code>MaterialIssue</code>, <code>WorkSession</code></td>
+<td><code>SteelIssueStatus</code>, <code>ProductionBatchStatus</code>, <code>MaterialIssueStatus</code>, <code>ReplenishRequestStatus</code>, <code>MfgStage</code></td>
+<td>CHECK XOR <code>qc_review</code> (<code>steel_issue_id</code> xor <code>production_batch_id</code>); composite-FK <code>cut_pattern_segment</code>/<code>cutting_proposal_pattern_segment</code> cùng loại sắt</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>ManhOrder</code>, <code>ManhLine</code>, <code>ManhAllocation</code></td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>11</td>
+<td><em>(blocked — xem Phase 11)</em></td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>12</td>
+<td>7 SQL VIEW (không phải Prisma model — dùng <code>prisma db execute</code>/raw SQL migration, đọc qua <code>$queryRaw</code> trong Reporting service, hoặc khai báo <code>view</code> Prisma nếu bật preview feature <code>views</code>)</td>
+<td>—</td>
+<td>Xem công thức đầy đủ ở schema doc mục 3.8</td>
+</tr>
+<tr>
+<td>13</td>
+<td>Bảng <code>files</code>/object storage metadata (nếu chốt làm)</td>
+<td>—</td>
+<td>Ngoài phạm vi 67 bảng gốc — chỉ làm nếu nghiệp vụ xác nhận (mục 4 schema doc)</td>
+</tr>
+</tbody></table></div>
+<p><strong>Không tạo migration cho 3 bảng ⚠ ở Phase 11</strong> cho tới khi có xác nhận nghiệp vụ (xem mục 8).</p>
+<hr>
+<h2 id="5-rbac--mở-rộng-permission-module">5. RBAC — mở rộng Permission Module</h2>
+<p>Mở rộng <code>PERMISSION_MODULES</code> (<code>src/common/constants/permission-modules.constant.ts</code>) — thuần thêm key, không cần migration (đã thiết kế cho việc này). Danh sách module theo Phase, seed permission (5 action × N module) trong <code>prisma/seed.ts</code> giống pattern <code>ALL_MODULES.flatMap(...)</code> đã có:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Module thêm vào <code>PERMISSION_MODULES</code></th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td><code>NOTIFICATION</code>, <code>SYSTEM_CONFIG</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>MATERIAL</code>, <code>SUPPLIER</code>, <code>DEFECT_REASON</code>, <code>WEAVING_POINT</code>, <code>WAREHOUSE</code>, <code>CUSTOMER</code>, <code>PRODUCT</code>, <code>PRODUCT_VARIANT</code>, <code>BOM</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>STOCK</code>, <code>WAREHOUSE_TRANSFER</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>SALES_ORDER</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>PLAN_FORM</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>PRODUCTION_INVOICE</code></td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>PRODUCTION_ORDER</code>, <code>CUTTING_PROPOSAL</code></td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>INSPECTION_REQUEST</code>, <code>PURCHASE_PROPOSAL</code></td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>STEEL_ISSUE</code>, <code>QC_REVIEW</code>, <code>PRODUCTION_BATCH</code>, <code>MATERIAL_ISSUE</code>, <code>WORK_SESSION</code></td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>WEAVING</code></td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>INSPECTION_BATCH</code>, <code>PACKAGING</code> <em>(chỉ thêm khi Phase 11 unblock)</em></td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>REPORT</code></td>
+</tr>
+</tbody></table></div>
+<p><strong>Role nghiệp vụ đề xuất seed</strong> (D0.2), gán permission theo module ở trên khi phase tương ứng lên: <code>ADMIN</code> (đã có, full), <code>BOSS</code> (approve xuyên suốt + view toàn bộ), <code>SALES_STAFF</code> (<code>SALES_ORDER</code>, <code>CUSTOMER</code>, <code>PRODUCT_VARIANT:VIEW</code>), <code>PRODUCTION_MANAGER</code>/QLSX (<code>PLAN_FORM</code>, <code>PRODUCTION_ORDER</code>, <code>INSPECTION_REQUEST</code>), <code>PHOI_STAFF</code>/<code>HAN_STAFF</code>/<code>SON_STAFF</code> (<code>STEEL_ISSUE</code>|<code>PRODUCTION_BATCH</code>, <code>MATERIAL_ISSUE</code>, <code>WORK_SESSION</code> theo đúng <code>mfgRole</code>), <code>KCS_STAFF</code> (<code>QC_REVIEW</code>, <code>REPLENISH_REQUEST</code>), <code>WEAVING_MANAGER</code> (<code>WEAVING</code>), <code>WAREHOUSE_STAFF</code> (<code>STOCK:VIEW</code>, <code>WAREHOUSE_TRANSFER</code>, phạm vi theo <code>warehouseScope</code>), <code>PURCHASER</code> (<code>PURCHASE_PROPOSAL</code>, <code>SUPPLIER</code>).</p>
+<hr>
+<h2 id="6-danh-sách-module--api-chi-tiết-theo-phase">6. Danh sách Module &amp; API chi tiết theo Phase</h2>
+<blockquote>
+<p>Quy ước đọc bảng endpoint: <strong>Permission</strong> viết tắt <code>MODULE:ACTION</code>; <code>+ scope</code> nghĩa là cần thêm <code>@RequireMfgRole</code>/<code>@RequireWarehouseScope</code> (D0.2). <strong>TX/Lock/Idem</strong> dùng ký hiệu đã định nghĩa ở mục 3. Response DTO mặc định là entity tương ứng dạng <code>&lt;Entity&gt;ResponseDto</code>, bọc <code>Paginated&lt;T&gt;</code> khi là list — không nhắc lại &quot;bọc trong envelope chuẩn&quot;.</p>
+</blockquote>
+<h3 id="phase-0--nền-tảng-đã-có">Phase 0 — Nền tảng (đã có)</h3>
+<p>Không có việc phải làm, chỉ liệt kê để thấy bức tranh đầy đủ. Module <code>auth</code>, <code>users</code>, <code>roles</code>, <code>audit-log</code>, <code>health</code> đã triển khai đúng chuẩn ở mục 3. <code>users</code> sẽ được <strong>mở rộng</strong> (không viết lại) ở Phase 1 theo D0.2.</p>
+<hr>
+<h3 id="phase-1--mở-rộng-nền-tảng">Phase 1 — Mở rộng nền tảng</h3>
+<p><strong>Phụ thuộc:</strong> Phase 0. <strong>Độ phức tạp:</strong> Low. <strong>Bảng:</strong> <code>User</code> (mở rộng), <code>Notification</code>, <code>NotificationRead</code>, <code>SystemConfig</code>. Nguồn: schema doc mục 1.1.</p>
+<h4 id="11-users--mở-rộng-thuộc-tính-nghiệp-vụ">1.1 Users — mở rộng thuộc tính nghiệp vụ</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>PATCH</td>
+<td><code>/users/:id/mfg-attributes</code></td>
+<td>Gán <code>mfgRole/phoiOperation/warehouseScope/isPurchaser/isProductPlanner/isSale</code> cho user</td>
+<td><code>USER:UPDATE</code></td>
+<td><code>UpdateUserMfgAttributesDto { mfgRole?, phoiOperation?, warehouseScope?, isPurchaser?, isProductPlanner?, isSale? }</code></td>
+<td><code>UserResponseDto</code></td>
+<td>TX: không cần</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>phoiOperation</code> chỉ có nghĩa khi <code>mfgRole=PHOI</code> — validate ở service, không chặn cứng ở DB (đúng nguyên tắc schema doc mục 1.1). Không xoá/thay endpoint <code>PATCH /users/:id</code> hiện có — đây là endpoint bổ sung tách riêng để không phá payload cũ.</p>
+<h4 id="12-notifications">1.2 Notifications</h4>
+<p>Nguồn: schema doc mục 1.1 (<code>notifications</code>, <code>notification_reads</code>).</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/notifications</code></td>
+<td>Admin broadcast thông báo</td>
+<td><code>NOTIFICATION:CREATE</code></td>
+<td><code>CreateNotificationDto { title, message, audience: all|boss|warehouse_staff }</code></td>
+<td><code>NotificationResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/notifications</code></td>
+<td>List thông báo theo <code>audience</code> khớp user hiện tại, kèm <code>isRead</code></td>
+<td><code>NOTIFICATION:VIEW</code></td>
+<td><code>ListNotificationsQueryDto extends PaginationQueryDto</code></td>
+<td><code>Paginated&lt;NotificationResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/notifications/:id/read</code></td>
+<td>Đánh dấu đã đọc (upsert <code>notification_reads</code>)</td>
+<td><code>NOTIFICATION:VIEW</code> (tự đánh dấu cho chính mình, không cần quyền cao hơn)</td>
+<td>—</td>
+<td><code>NotificationReadResponseDto</code></td>
+<td>Idem: tự nhiên idempotent (upsert theo PK kép)</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>GET /notifications</code> chỉ trả thông báo có <code>audience</code> khớp <code>role</code> của user gọi (<code>all</code> luôn khớp). Đây là bảng mới hoàn toàn (đề xuất trong schema doc mục 1.1, chưa có trong code mock) — implement đúng như thiết kế, không mở rộng thêm cơ chế đọc theo nhóm/kênh khác.</p>
+<h4 id="13-system-config">1.3 System Config</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>GET</td>
+<td><code>/system-config</code></td>
+<td>Đọc cấu hình công ty (singleton)</td>
+<td><code>SYSTEM_CONFIG:VIEW</code></td>
+<td>—</td>
+<td><code>SystemConfigResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td><code>/system-config</code></td>
+<td>Cập nhật cấu hình (không có &quot;tạo mới&quot; — luôn có sẵn 1 dòng từ seed)</td>
+<td><code>SYSTEM_CONFIG:UPDATE</code></td>
+<td><code>UpdateSystemConfigDto { companyName, companyAddress?, companyPhone?, companyEmail?, taxCode?, defaultCurrency? }</code></td>
+<td><code>SystemConfigResponseDto</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> Không có <code>POST</code> — dòng <code>id=1</code> được seed sẵn (đúng thiết kế singleton <code>CHECK(id=1)</code>). <code>PUT</code> luôn update dòng <code>id=1</code>, 404 nếu seed thiếu (không tự tạo ngầm — tránh che lỗi thiếu seed).</p>
+<hr>
+<h3 id="phase-2--danh-mục--master-data">Phase 2 — Danh mục / Master Data</h3>
+<p><strong>Phụ thuộc:</strong> Phase 1 (RBAC module mới). <strong>Độ phức tạp:</strong> Medium-High (BOM revision có state machine + composite-FK). <strong>Bảng:</strong> 20 bảng domain 1.2. Nguồn: schema doc mục 1.2.</p>
+<p>Các bảng danh mục thuần (<code>MaterialGroup</code>, <code>Supplier</code>, <code>DefectReason</code>, <code>WeavingPoint</code>, <code>Warehouse</code>, <code>SalesCustomer</code>, <code>MfgProduct</code>) dùng <strong>chung 1 khuôn CRUD</strong> — liệt kê gộp để tránh lặp 7 lần cùng 1 bảng:</p>
+<h4 id="21-crud-danh-mục-thuần-7-module-material-groups-suppliers-defect-reasons-weaving-points-warehouses-customers-products">2.1 CRUD danh mục thuần (7 module: material-groups, suppliers, defect-reasons, weaving-points, warehouses, customers, products)</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL mẫu</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/&lt;resource&gt;</code></td>
+<td>Tạo mới</td>
+<td><code>&lt;MODULE&gt;:CREATE</code></td>
+<td><code>Create&lt;Entity&gt;Dto</code> (đúng field bắt buộc theo schema doc)</td>
+<td><code>&lt;Entity&gt;ResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/&lt;resource&gt;</code></td>
+<td>List có filter + search + phân trang</td>
+<td><code>&lt;MODULE&gt;:VIEW</code></td>
+<td><code>List&lt;Entity&gt;QueryDto extends PaginationQueryDto</code> (+ filter riêng, vd <code>materialGroupId</code>, <code>kind</code>)</td>
+<td><code>Paginated&lt;&lt;Entity&gt;ResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/&lt;resource&gt;/:id</code></td>
+<td>Chi tiết</td>
+<td><code>&lt;MODULE&gt;:VIEW</code></td>
+<td>—</td>
+<td><code>&lt;Entity&gt;ResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>/&lt;resource&gt;/:id</code></td>
+<td>Cập nhật</td>
+<td><code>&lt;MODULE&gt;:UPDATE</code></td>
+<td><code>Update&lt;Entity&gt;Dto</code> (partial)</td>
+<td><code>&lt;Entity&gt;ResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/&lt;resource&gt;/:id</code></td>
+<td>Soft-delete (<code>isActive=false</code>/<code>deletedAt</code>)</td>
+<td><code>&lt;MODULE&gt;:DELETE</code></td>
+<td>—</td>
+<td><code>204 No Content</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p>Áp dụng cho: <code>material-groups</code> (<code>MATERIAL</code> module dùng chung với <code>materials</code>), <code>suppliers</code> (<code>SUPPLIER</code>), <code>defect-reasons</code> (<code>DEFECT_REASON</code>), <code>weaving-points</code> (<code>WEAVING_POINT</code>), <code>warehouses</code> (<code>WAREHOUSE</code> — xem ràng buộc riêng bên dưới), <code>customers</code> (<code>CUSTOMER</code>), <code>products</code> (<code>PRODUCT</code>).</p>
+<p><strong>Business rules riêng từng bảng:</strong></p>
+<ul>
+<li><code>warehouses</code>: 6 kho vật lý + 3 kho ảo (<code>SUPPLIER/PRODUCTION/SCRAP</code>) được <strong>seed sẵn</strong>, không xoá được (<code>DELETE</code> chặn nếu <code>code</code> thuộc danh sách seed cố định — trả <code>409</code>). <code>POST</code> chỉ dùng để thêm kho thành phẩm phụ động (<code>thanh-pham-2</code>...) theo đúng ghi chú schema doc mục 1.2. Field <code>isVirtual</code> chỉ set được lúc tạo, không cho sửa qua <code>PATCH</code>.</li>
+<li><code>customers</code>: field <code>country/market/contactName</code> optional, chỉ có ý nghĩa khi khách hàng xuất hiện trên <code>export_orders.channel=EXPORT</code> — không validate bắt buộc ở tầng tạo customer (đúng thiết kế 1 bảng khách hàng dùng chung 2 kênh).</li>
+<li><code>products</code> (<code>mfg_products</code>): <code>factoryCode</code> UQ. <code>DELETE</code> (soft) chặn nếu còn <code>product_variants</code> active tham chiếu — trả <code>409</code>.</li>
+</ul>
+<h4 id="22-materials--material-suppliers">2.2 Materials (+ material-suppliers)</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/materials</code></td>
+<td>Tạo vật tư/nguyên liệu</td>
+<td><code>MATERIAL:CREATE</code></td>
+<td><code>CreateMaterialDto { code, name, kind, unit, materialGroupId?, khoUnitFactor? }</code></td>
+<td><code>MaterialResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/materials</code></td>
+<td>List (filter <code>kind</code>, <code>materialGroupId</code>)</td>
+<td><code>MATERIAL:VIEW</code></td>
+<td><code>ListMaterialsQueryDto</code></td>
+<td><code>Paginated&lt;MaterialResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/materials/:id</code></td>
+<td>Chi tiết + danh sách NCC kèm giá</td>
+<td><code>MATERIAL:VIEW</code></td>
+<td>—</td>
+<td><code>MaterialDetailResponseDto</code> (nested <code>suppliers: MaterialSupplierResponseDto[]</code>)</td>
+<td>—</td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>/materials/:id</code></td>
+<td>Cập nhật</td>
+<td><code>MATERIAL:UPDATE</code></td>
+<td><code>UpdateMaterialDto</code></td>
+<td><code>MaterialResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/materials/:id</code></td>
+<td>Soft-delete (<code>isActive=false</code>)</td>
+<td><code>MATERIAL:DELETE</code></td>
+<td>—</td>
+<td><code>204</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td><code>/materials/:id/suppliers/:supplierId</code></td>
+<td>Gán/cập nhật giá NCC cho vật tư (upsert <code>material_suppliers</code>)</td>
+<td><code>MATERIAL:UPDATE</code></td>
+<td><code>UpsertMaterialSupplierDto { price, leadTimeDays? }</code></td>
+<td><code>MaterialSupplierResponseDto</code></td>
+<td>Idem: upsert theo UQ(materialId, supplierId), tự nhiên idempotent</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/materials/:id/suppliers/:supplierId</code></td>
+<td>Gỡ liên kết NCC</td>
+<td><code>MATERIAL:UPDATE</code></td>
+<td>—</td>
+<td><code>204</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>kind=STEEL_BAR</code> là điều kiện bắt buộc để vật tư được chọn khi tạo <code>segment_spec</code> (Phase 2.4) — validate chéo ở service tạo <code>segment_spec</code>, không validate ở đây.</p>
+<h4 id="23-products--variants--piece--part-nested-dưới-mfg_products">2.3 Products — Variants / Piece / Part (nested dưới <code>mfg_products</code>)</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/products/:productId/variants</code></td>
+<td>Tạo biến thể màu/khách</td>
+<td><code>PRODUCT_VARIANT:CREATE</code></td>
+<td><code>CreateProductVariantDto { customerId?, colorCode?, description? }</code></td>
+<td><code>ProductVariantResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/products/:productId/variants</code></td>
+<td>List biến thể</td>
+<td><code>PRODUCT_VARIANT:VIEW</code></td>
+<td><code>PaginationQueryDto</code></td>
+<td><code>Paginated&lt;ProductVariantResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>/products/:productId/variants/:id</code></td>
+<td>Cập nhật biến thể</td>
+<td><code>PRODUCT_VARIANT:UPDATE</code></td>
+<td><code>UpdateProductVariantDto</code></td>
+<td><code>ProductVariantResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/products/:productId/pieces</code></td>
+<td>Tạo mảnh khung (định danh, không mang số liệu định mức)</td>
+<td><code>PRODUCT:UPDATE</code></td>
+<td><code>CreatePieceDto { code, groupNumber, pieceNumber?, name, isWoven?, weavingPrice? }</code></td>
+<td><code>PieceResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/products/:productId/pieces</code></td>
+<td>List mảnh của sản phẩm</td>
+<td><code>PRODUCT:VIEW</code></td>
+<td><code>PaginationQueryDto</code></td>
+<td><code>Paginated&lt;PieceResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/products/:productId/parts</code></td>
+<td>Tạo chi tiết hàn</td>
+<td><code>PRODUCT:UPDATE</code></td>
+<td><code>CreatePartDto { code, name }</code></td>
+<td><code>PartResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/products/:productId/parts</code></td>
+<td>List chi tiết hàn</td>
+<td><code>PRODUCT:VIEW</code></td>
+<td><code>PaginationQueryDto</code></td>
+<td><code>Paginated&lt;PartResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/products/variants/:variantId/packaging-bom</code></td>
+<td>Thêm dòng BOM đóng gói</td>
+<td><code>BOM:CREATE</code></td>
+<td><code>CreatePackagingBomDto { itemName, unit, qtyPerSet }</code></td>
+<td><code>PackagingBomResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/products/variants/:variantId/packaging-bom</code></td>
+<td>List BOM đóng gói</td>
+<td><code>BOM:VIEW</code></td>
+<td>—</td>
+<td><code>PackagingBomResponseDto[]</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>piece.code</code>/<code>part.code</code> UQ theo <code>(mfgProductId, code)</code>. <code>piece</code>/<code>part</code> <strong>chỉ là định danh</strong> — không có field số lượng (đã chuyển hẳn sang <code>bom_piece</code>/<code>bom_part</code> theo revision, đúng fix chuẩn hoá của schema doc mục 1.2 &quot;Fix lỗi chuẩn hoá... đổi định mức không versioning được&quot;). Không thêm field số lượng ngược trở lại <code>piece</code>/<code>part</code> dù có API riêng.</p>
+<h4 id="24-segment-spec">2.4 Segment Spec</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/segment-specs</code></td>
+<td>Tạo đoạn sắt = material + chiều dài cắt</td>
+<td><code>MATERIAL:CREATE</code></td>
+<td><code>CreateSegmentSpecDto { materialId, cutLengthMm }</code></td>
+<td><code>SegmentSpecResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/segment-specs</code></td>
+<td>List (filter <code>materialId</code>)</td>
+<td><code>MATERIAL:VIEW</code></td>
+<td><code>ListSegmentSpecsQueryDto</code></td>
+<td><code>Paginated&lt;SegmentSpecResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> Service validate <code>material.kind === &#39;STEEL_BAR&#39;</code> trước khi tạo — 400 nếu sai. UQ <code>(materialId, cutLengthMm)</code> → 409 nếu trùng.</p>
+<h4 id="25-bom-revision--module-phức-tạp-nhất-domain-12">2.5 BOM Revision — module phức tạp nhất domain 1.2</h4>
+<p>Trung tâm: <code>production_order</code> ghim đúng 1 <code>bom_revision_id</code> tại thời điểm tạo; revision <code>ACTIVE</code> không sửa được, chỉ tạo revision mới (schema doc mục 1.2). Ở Phase 5, <code>bom_revision</code> mới còn được <strong>tự động tạo</strong> khi <code>plan_forms.status → APPROVED</code> (materialize) — endpoint tạo thủ công dưới đây dùng cho trường hợp BOM_MANAGER tạo/soạn BOM trực tiếp (setup ban đầu, vòng ① trong sơ đồ mục 0 schema doc), độc lập với luồng materialize tự động của Phase 5.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/products/:productId/bom-revisions</code></td>
+<td>Tạo revision DRAFT mới (tăng <code>revNo</code> tự động)</td>
+<td><code>BOM:CREATE</code></td>
+<td><code>CreateBomRevisionDto {}</code> (không cần field — revision rỗng, thêm dòng qua endpoint con)</td>
+<td><code>BomRevisionResponseDto</code></td>
+<td>TX: có (đọc <code>MAX(revNo)</code> + insert phải atomic) · Lock: <code>FOR UPDATE</code> trên khoá logic <code>(mfgProductId)</code> khi tính <code>revNo</code> kế tiếp để tránh 2 request tạo trùng <code>revNo</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/products/:productId/bom-revisions</code></td>
+<td>List revision (kèm <code>status</code>)</td>
+<td><code>BOM:VIEW</code></td>
+<td><code>PaginationQueryDto</code></td>
+<td><code>Paginated&lt;BomRevisionResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/bom-revisions/:id</code></td>
+<td>Chi tiết đầy đủ 1 revision (nested: <code>bomPieces[]</code>, <code>bomParts[]</code>, <code>pieceBoms[]</code>, <code>partBoms[]</code>, <code>consumableBoms[]</code>)</td>
+<td><code>BOM:VIEW</code></td>
+<td>—</td>
+<td><code>BomRevisionDetailResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td><code>/bom-revisions/:id/pieces/:pieceId</code></td>
+<td>Upsert số lượng mảnh/SKU (<code>bom_piece</code>) — chỉ khi <code>status=DRAFT</code></td>
+<td><code>BOM:UPDATE</code></td>
+<td><code>UpsertBomPieceDto { qtyPerUnit }</code></td>
+<td><code>BomPieceResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td><code>/bom-revisions/:id/pieces/:pieceId/segments/:segmentSpecId</code></td>
+<td>Upsert đoạn cấu thành 1 mảnh (<code>piece_bom</code>)</td>
+<td><code>BOM:UPDATE</code></td>
+<td><code>UpsertPieceBomDto { qtyPerPiece, operations?, needsHan?, needsSon? }</code></td>
+<td><code>PieceBomResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td><code>/bom-revisions/:id/parts/:partId</code></td>
+<td>Upsert số lượng chi tiết/SKU (<code>bom_part</code>)</td>
+<td><code>BOM:UPDATE</code></td>
+<td><code>UpsertBomPartDto { qtyPerUnit }</code></td>
+<td><code>BomPartResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td><code>/bom-revisions/:id/parts/:partId/segments/:segmentSpecId</code></td>
+<td>Upsert đoạn cấu thành 1 chi tiết (<code>part_bom</code>)</td>
+<td><code>BOM:UPDATE</code></td>
+<td><code>UpsertPartBomDto { qtyPerPart }</code></td>
+<td><code>PartBomResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td><code>/bom-revisions/:id/consumables/:materialId</code></td>
+<td>Upsert định mức tiêu hao Hàn/Sơn (<code>consumable_bom</code>)</td>
+<td><code>BOM:UPDATE</code></td>
+<td><code>UpsertConsumableBomDto { stage: HAN|SON, qtyPerUnit }</code></td>
+<td><code>ConsumableBomResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/bom-revisions/:id/activate</code></td>
+<td>DRAFT → ACTIVE, tự động RETIRE revision ACTIVE cũ (nếu có)</td>
+<td><code>BOM:APPROVE</code></td>
+<td>—</td>
+<td><code>BomRevisionResponseDto</code></td>
+<td>TX: có · Lock: <code>FOR UPDATE</code> trên revision ACTIVE hiện tại của cùng <code>mfgProductId</code> trước khi retire, tránh race 2 revision cùng ACTIVE</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong></p>
+<ul>
+<li>Mọi <code>PUT</code> dòng con <strong>chặn 409</strong> nếu <code>bom_revision.status !== &#39;DRAFT&#39;</code> — &quot;ACTIVE không được sửa, chỉ tạo rev mới&quot; (nguyên văn schema doc).</li>
+<li><code>piece_id</code>/<code>part_id</code> dùng trong dòng con phải cùng <code>mfgProductId</code> với revision — validate service (tương đương composite-FK <code>bom_revision(id, mfg_product_id)</code> ở DB, xem mục 4).</li>
+<li><code>activate</code>: đúng 1 revision <code>ACTIVE</code> tại 1 thời điểm cho 1 <code>mfgProductId</code> — bọc transaction để tránh 2 revision cùng ACTIVE khi gọi song song.</li>
+<li>Không có endpoint xoá dòng BOM con khỏi revision <code>ACTIVE</code>/<code>RETIRED</code> (immutable sau khi rời DRAFT) — chỉ xoá được khi còn DRAFT (<code>DELETE</code> riêng, không liệt kê ở trên vì ít dùng — thêm nếu BOM_MANAGER cần sửa nháp).</li>
+</ul>
+<hr>
+<h3 id="phase-3--kho-vận-lõi-ledger-core">Phase 3 — Kho vận lõi (Ledger Core)</h3>
+<p><strong>Phụ thuộc:</strong> Phase 2 (<code>materials</code>, <code>segmentSpec</code>, <code>piece</code>, <code>productVariant</code>, <code>warehouses</code>). <strong>Độ phức tạp:</strong> High (concurrency, sổ cái kép, là nền cho mọi domain ghi/đọc tồn kho sau này). <strong>Bảng:</strong> <code>stock_ledger</code>, <code>stock_quant</code>, <code>warehouse_transfers</code> + 2 bảng con. Nguồn: schema doc mục 1.8, 3.8.</p>
+<h4 id="31-stock-ledger--chỉ-đọc-qua-api-ghi-qua-internal-service">3.1 Stock Ledger — chỉ đọc qua API, ghi qua internal service</h4>
+<p><code>stock_ledger</code> <strong>không có endpoint POST công khai tự do</strong> — mọi bút toán được ghi bởi service nghiệp vụ tương ứng (Purchasing nhận hàng, Phôi xuất sắt, KCS chấm phế, Đóng gói nhập kho...) ở các Phase sau, gọi 1 <code>StockLedgerService.postEntry()</code> dùng chung. Ngoại lệ duy nhất: điều chỉnh thủ công.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>GET</td>
+<td><code>/stock-ledger</code></td>
+<td>Tra cứu lịch sử bút toán (filter <code>warehouseId</code>, <code>refType</code>, <code>materialId</code>/<code>segmentSpecId</code>/<code>pieceId</code>/<code>productVariantId</code>, khoảng thời gian)</td>
+<td><code>STOCK:VIEW</code></td>
+<td><code>ListStockLedgerQueryDto extends PaginationQueryDto</code></td>
+<td><code>Paginated&lt;StockLedgerResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/stock-ledger/adjust</code></td>
+<td>Điều chỉnh thủ công (<code>ref_type=ADJUST</code>) — chỉ Admin/Kho trưởng</td>
+<td><code>STOCK:UPDATE</code> + scope</td>
+<td><code>CreateStockAdjustmentDto { fromWarehouseId, toWarehouseId, &lt;1 trong 4 chân hàng&gt;, qty, note }</code></td>
+<td><code>StockLedgerResponseDto</code></td>
+<td>TX: có · Idem: <code>Idempotency-Key</code> bắt buộc</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>postEntry()</code> (internal, dùng lại bởi mọi module khác) validate: đúng 1 trong 4 chân hàng khác null (XOR), <code>fromWarehouseId ≠ toWarehouseId</code>, <code>qty &gt; 0</code>. Ghi xong, <strong>trigger DB tự động</strong> cập nhật <code>stock_quant</code> (D0.3) — service không tự tính lại số dư.</p>
+<h4 id="32-stock-quant--chỉ-đọc">3.2 Stock Quant — chỉ đọc</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>GET</td>
+<td><code>/stock-quant</code></td>
+<td>Tồn kho hiện tại theo kho/loại hàng (đọc nhanh, dùng bởi bước &quot;KHSX kiểm tra vật tư&quot;)</td>
+<td><code>STOCK:VIEW</code></td>
+<td><code>ListStockQuantQueryDto { warehouseId?, materialId?, segmentSpecId?, pieceId?, productVariantId? }</code></td>
+<td><code>StockQuantResponseDto[]</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<h4 id="33-warehouse-transfers">3.3 Warehouse Transfers</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/warehouse-transfers</code></td>
+<td>Tạo phiếu chuyển kho nội bộ (kho nguồn tạo)</td>
+<td><code>WAREHOUSE_TRANSFER:CREATE</code> + scope</td>
+<td><code>CreateWarehouseTransferDto { fromWarehouseId, toWarehouseId, planFormId?, note?, items: [{ materialId?, materialName, unit, quantity, note? }] }</code></td>
+<td><code>WarehouseTransferResponseDto</code></td>
+<td>TX: có (tạo phiếu + items + reservation cùng lúc) · Lock: <code>FOR UPDATE</code> trên <code>stock_quant</code> liên quan khi tạo reservation, để &quot;clamp theo tồn khả dụng&quot; đúng thời điểm tạo (đúng ghi chú schema doc)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/warehouse-transfers</code></td>
+<td>List (filter <code>status</code>, <code>toWarehouseId</code> — hộp thư chờ nhận)</td>
+<td><code>WAREHOUSE_TRANSFER:VIEW</code> + scope</td>
+<td><code>ListWarehouseTransfersQueryDto</code></td>
+<td><code>Paginated&lt;WarehouseTransferResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/warehouse-transfers/:id</code></td>
+<td>Chi tiết (kèm items)</td>
+<td><code>WAREHOUSE_TRANSFER:VIEW</code> + scope</td>
+<td>—</td>
+<td><code>WarehouseTransferDetailResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/warehouse-transfers/:id/confirm</code></td>
+<td>Kho đích xác nhận — ghi N bút toán <code>stock_ledger</code> (<code>WAREHOUSE_TRANSFER</code>), giải phóng reservation</td>
+<td><code>WAREHOUSE_TRANSFER:APPROVE</code> + scope</td>
+<td>—</td>
+<td><code>WarehouseTransferResponseDto</code></td>
+<td>TX: có · Idem: chặn theo <code>status</code> hiện tại (chỉ <code>PENDING→CONFIRMED</code>, gọi lại trả 409)</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/warehouse-transfers/:id/reject</code></td>
+<td>Kho đích từ chối — không đụng tồn, giải phóng reservation</td>
+<td><code>WAREHOUSE_TRANSFER:APPROVE</code> + scope</td>
+<td><code>RejectWarehouseTransferDto { rejectionReason }</code></td>
+<td><code>WarehouseTransferResponseDto</code></td>
+<td>TX: có</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> State machine 1 chiều <code>PENDING → CONFIRMED | REJECTED</code>, không quay lại (đúng schema doc mục 3.8). Cặp <code>(from, to)</code> phải khớp <code>TRANSFER_ROUTES</code> ở tầng ứng dụng (danh sách route hợp lệ — cấu hình cứng theo nghiệp vụ hiện có, <strong>không</strong> đoán thêm route mới ngoài route đã quan sát được trong mock). <code>confirm</code> là nơi duy nhất ghi <code>stock_ledger</code> cho luồng transfer.</p>
+<hr>
+<h3 id="phase-4--bán-hàng">Phase 4 — Bán hàng</h3>
+<p><strong>Phụ thuộc:</strong> Phase 2 (<code>customers</code>, <code>productVariants</code>, <code>products</code>). <strong>Độ phức tạp:</strong> Medium. <strong>Bảng:</strong> <code>export_orders</code>, <code>export_order_items</code>. Nguồn: schema doc mục 1.3, quyết định M12.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/export-orders</code></td>
+<td>Tạo PO (kênh DOMESTIC hoặc EXPORT) kèm items</td>
+<td><code>SALES_ORDER:CREATE</code> + scope (<code>isSale</code>)</td>
+<td><code>CreateExportOrderDto { poNumber, customerId, channel, orderDate, deliveryDate?, note?, attachmentUrl?, items: [{ productVariantId?, mfgProductId?, skuCode?, skuName?, quantity, boxesPerSet?, materialDeadline?, deliveryDeadline? }] }</code></td>
+<td><code>ExportOrderResponseDto</code></td>
+<td>TX: có (order + items)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/export-orders</code></td>
+<td>List (filter <code>channel</code>, <code>customerId</code>, <code>status</code>)</td>
+<td><code>SALES_ORDER:VIEW</code></td>
+<td><code>ListExportOrdersQueryDto</code></td>
+<td><code>Paginated&lt;ExportOrderResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/export-orders/:id</code></td>
+<td>Chi tiết kèm items</td>
+<td><code>SALES_ORDER:VIEW</code></td>
+<td>—</td>
+<td><code>ExportOrderDetailResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>/export-orders/:id</code></td>
+<td>Cập nhật thông tin PO (trước khi phát sinh PlanForm)</td>
+<td><code>SALES_ORDER:UPDATE</code> + scope</td>
+<td><code>UpdateExportOrderDto</code> (partial, không gồm <code>channel</code>/<code>customerId</code>)</td>
+<td><code>ExportOrderResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>/export-orders/:id/items/:itemId</code></td>
+<td>Cập nhật 1 dòng SKU (số lượng, deadline...)</td>
+<td><code>SALES_ORDER:UPDATE</code> + scope</td>
+<td><code>UpdateExportOrderItemDto</code></td>
+<td><code>ExportOrderItemResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>/export-orders/:id/items/:itemId/status</code></td>
+<td>Cập nhật <code>status</code> 7 bước (chỉ có ý nghĩa đầy đủ ở <code>channel=DOMESTIC</code>, theo mục 3.9 câu hỏi mở #4)</td>
+<td><code>SALES_ORDER:UPDATE</code></td>
+<td><code>UpdateExportOrderItemStatusDto { status: SalesPoStatus }</code></td>
+<td><code>ExportOrderItemResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/export-orders/:id/items/:itemId/ship</code></td>
+<td>Ghi nhận đã giao (<code>shipped_qty += qty</code>)</td>
+<td><code>SALES_ORDER:UPDATE</code> + scope</td>
+<td><code>ShipExportOrderItemDto { qty }</code></td>
+<td><code>ExportOrderItemResponseDto</code></td>
+<td>Lock: <code>FOR UPDATE</code> trên item (cộng dồn)</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>poNumber</code> UQ toàn hệ thống (không phân biệt kênh — đúng thiết kế hợp nhất M12). <code>customerId</code> bắt buộc ở mọi kênh (không còn nullable như nhánh export cũ). Trường <code>status</code>/<code>paymentStatus</code> giữ kiểu <code>text</code> tự do như schema doc ghi nhận &quot;chưa đủ dữ liệu để chốt enum&quot; — <strong>không tự enum hoá</strong> cho tới khi nghiệp vụ xác nhận (mục 8, câu hỏi mở). <code>PATCH /items/:itemId/status</code>: theo đề xuất mặc định của schema doc mục 5.2 #3, để trống/bỏ qua khi <code>channel=EXPORT</code> — tiến độ EXPORT lấy từ <code>production_invoice_item_stages</code> (Phase 6), <strong>không đồng bộ 2 chiều</strong> cho tới khi có quyết định nghiệp vụ khác.</p>
+<hr>
+<h3 id="phase-5--kế-hoạch-sản-xuất-planform">Phase 5 — Kế hoạch sản xuất (PlanForm)</h3>
+<p><strong>Phụ thuộc:</strong> Phase 4 (<code>export_orders</code>), Phase 2 (BOM — đích materialize). <strong>Độ phức tạp:</strong> High (workflow 8 trạng thái, 2 vòng nhập định mức song song, 2 vòng duyệt theo nhóm, kích hoạt tạo <code>bom_revision</code> mới). <strong>Bảng:</strong> 6 bảng domain 1.4. Nguồn: schema doc mục 1.4, quyết định M1.</p>
+<h4 id="51-planforms">5.1 PlanForms</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/plan-forms</code></td>
+<td>KHSX tạo hồ sơ định mức cho 1 SKU/1 PO</td>
+<td><code>PLAN_FORM:CREATE</code> + scope (<code>isProductPlanner</code>)</td>
+<td><code>CreatePlanFormDto { exportOrderId, mfgProductId, note? }</code></td>
+<td><code>PlanFormResponseDto</code></td>
+<td>TX: không cần, nhưng UQ <code>(exportOrderId, mfgProductId)</code> → 409 nếu trùng (ràng buộc &quot;1 SKU/PO ⇔ 1 PlanForm&quot;)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/plan-forms</code></td>
+<td>List (filter <code>status</code>, <code>exportOrderId</code>, <code>productionInvoiceId</code>)</td>
+<td><code>PLAN_FORM:VIEW</code></td>
+<td><code>ListPlanFormsQueryDto</code></td>
+<td><code>Paginated&lt;PlanFormResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/plan-forms/:id</code></td>
+<td>Chi tiết đầy đủ (nested: <code>manhRows[]</code> kèm <code>children[]</code>, <code>manhReview[]</code>, <code>detailItems[]</code>, <code>detailReview[]</code>)</td>
+<td><code>PLAN_FORM:VIEW</code></td>
+<td>—</td>
+<td><code>PlanFormDetailResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>/plan-forms/:id</code></td>
+<td>Sửa <code>note</code></td>
+<td><code>PLAN_FORM:UPDATE</code></td>
+<td><code>UpdatePlanFormDto { note? }</code></td>
+<td><code>PlanFormResponseDto</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<h4 id="52-nhập-định-mức-theo-nhóm-2-vòng-song-song">5.2 Nhập định mức theo nhóm (2 vòng song song)</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>PUT</td>
+<td><code>/plan-forms/:id/manh-rows</code></td>
+<td>Nộp/thay toàn bộ định mức mảnh nhóm <code>group_key</code> (bulk upsert <code>manh_rows</code> + <code>manh_children</code>)</td>
+<td><code>PLAN_FORM:UPDATE</code> (người nộp = <code>BOM_MANAGER</code>/<code>SPEC_STEEL</code>/<code>SPEC_WIRE_PAINT</code> theo <code>mfgRole</code>)</td>
+<td><code>UpsertManhRowsDto { groupKey: sat|day_son, rows: [{ name, qtyPerSku?, children?: [{ name, specs?, length?, qty? }] }] }</code></td>
+<td><code>PlanFormManhRow[]</code></td>
+<td>TX: có (xoá-ghi lại toàn bộ nhóm trong 1 transaction)</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td><code>/plan-forms/:id/detail-items</code></td>
+<td>Nộp/thay toàn bộ định mức chi tiết nhóm <code>group_key</code></td>
+<td><code>PLAN_FORM:UPDATE</code> (<code>SPEC_WIRE_PAINT</code>/<code>SPEC_ACCESSORY</code>/<code>SPEC_PACKAGING</code>)</td>
+<td><code>UpsertDetailItemsDto { groupKey: day_son|vat_tu_phu_kien|bao_bi_dong_goi, items: [{ name, specifications?, unit?, quantity?, kg?, imageUrl? }] }</code></td>
+<td><code>PlanFormDetailItem[]</code></td>
+<td>TX: có</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> Nộp 1 trong N nhóm đủ thì đổi <code>plan_forms.status</code> theo pipeline (<code>DRAFT → WAITING_PARTS → ... </code>) — logic transition chi tiết implement theo đúng state machine mô tả ở schema doc mục 1.4 (8 giá trị <code>PlanFormStatus</code>), không tự thêm trạng thái trung gian mới.</p>
+<h4 id="53-duyệt-theo-nhóm-qlsx">5.3 Duyệt theo nhóm (QLSX)</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/plan-forms/:id/manh-review/:groupKey</code></td>
+<td>QLSX duyệt/từ chối 1 nhóm mảnh</td>
+<td><code>PLAN_FORM:APPROVE</code> + scope (<code>isProductPlanner</code>)</td>
+<td><code>ReviewGroupDto { status: APPROVED|REJECTED, reason? }</code></td>
+<td><code>PlanFormManhReviewResponseDto</code></td>
+<td>TX: có · Idem: UPSERT theo UQ(planFormId, groupKey) — nộp lại sau khi bị từ chối thì ghi đè (đúng ghi chú &quot;nộp lại thì UPSERT&quot; trong schema doc)</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/plan-forms/:id/detail-review/:groupKey</code></td>
+<td>QLSX duyệt/từ chối 1 nhóm chi tiết</td>
+<td><code>PLAN_FORM:APPROVE</code> + scope</td>
+<td><code>ReviewGroupDto</code></td>
+<td><code>PlanFormDetailReviewResponseDto</code></td>
+<td>TX: có, cùng cơ chế upsert</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/plan-forms/:id/qlsx-final-review</code></td>
+<td>QLSX chốt duyệt tổng (set <code>qlsx_review_status</code>)</td>
+<td><code>PLAN_FORM:APPROVE</code> + scope</td>
+<td><code>ReviewGroupDto</code></td>
+<td><code>PlanFormResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/plan-forms/:id/boss-approve</code></td>
+<td>Sếp duyệt cuối → <code>status=APPROVED</code>, <strong>kích hoạt materialize <code>bom_revision</code> mới</strong></td>
+<td><code>PLAN_FORM:APPROVE</code> (role <code>BOSS</code>)</td>
+<td><code>BossApprovePlanFormDto { note? }</code></td>
+<td><code>PlanFormResponseDto</code> (kèm <code>bomRevisionId</code> mới)</td>
+<td>TX: có, <strong>bắt buộc</strong> — ghi <code>bom_revision</code> DRAFT→ACTIVE-ngay (materialize từ <code>manh_rows/children</code> + <code>detail_items</code> sang <code>bom_piece/piece_bom/consumable_bom</code>) + set <code>plan_forms.status=APPROVED</code> phải all-or-nothing. Idem: <code>Idempotency-Key</code> bắt buộc (tránh materialize 2 lần nếu gọi lại)</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/plan-forms/:id/boss-reject</code></td>
+<td>Sếp từ chối</td>
+<td><code>PLAN_FORM:APPROVE</code></td>
+<td><code>RejectPlanFormDto { reason }</code></td>
+<td><code>PlanFormResponseDto</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules quan trọng nhất module này (M1, schema doc mục 1.2 + 1.4):</strong></p>
+<ul>
+<li><code>boss-approve</code> là điểm nối 2 chiều duy nhất giữa domain &quot;Kế hoạch SX&quot; và domain &quot;Danh mục/BOM&quot;: tạo <code>bom_revision</code> mới với <code>source_plan_form_id</code> trỏ ngược, <code>rev_no = MAX(rev_no theo mfgProductId) + 1</code>, rồi copy dữ liệu từ <code>plan_form_manh_rows/children</code> (nhóm <code>sat</code>) sang <code>bom_piece</code>/<code>piece_bom</code>, nhóm <code>day_son</code> (mảnh) + <code>detail_items</code> nhóm <code>day_son</code>/<code>vat_tu_phu_kien</code> sang <code>consumable_bom</code>. Đây là logic nghiệp vụ phức tạp nhất trong toàn bộ 62 bảng — cần thiết kế chi tiết riêng (function/service <code>PlanFormApprovalService.materializeBomRevision()</code>) trước khi code, viết unit test đối chiếu dữ liệu mock thật (<code>seedPlanForms</code>) trước khi bật ràng buộc <code>UQ(exportOrderId, mfgProductId)</code> thật (xem rủi ro dữ liệu demo ở mục 8).</li>
+<li><code>REJECTED</code> khai báo trong enum nhưng schema doc ghi nhận &quot;không thấy dùng thực tế (reject luôn quay về APPROVED_DETAIL)&quot; — giữ đúng hành vi này, <strong>không</strong> để <code>boss-reject</code> set <code>status=REJECTED</code> mà set về <code>APPROVED_DETAIL</code> (bám đúng code gốc, không suy diễn thêm state mới).</li>
+</ul>
+<hr>
+<h3 id="phase-6--lệnh-sản-xuất-production-invoice--pi">Phase 6 — Lệnh sản xuất (Production Invoice / PI)</h3>
+<p><strong>Phụ thuộc:</strong> Phase 4 (<code>export_orders</code>), Phase 2 (<code>productVariants</code>). <strong>Độ phức tạp:</strong> Medium. <strong>Bảng:</strong> 4 bảng domain 1.5. Nguồn: schema doc mục 1.5.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/production-invoices</code></td>
+<td>Tạo PI theo PO xuất khẩu</td>
+<td><code>PRODUCTION_INVOICE:CREATE</code></td>
+<td><code>CreateProductionInvoiceDto { exportOrderId, deadline?, items: [{ productVariantId, quantity, boxesPerSet?, materialDeadline?, deliveryDeadline? }] }</code></td>
+<td><code>ProductionInvoiceResponseDto</code></td>
+<td>TX: có (PI + items + tự tạo <code>production_invoice_item_stages</code> PHOI/HAN/WEAVING/SON cho mỗi item, <code>production_approvals</code> khởi tạo <code>WAITING_QLSX</code>)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/production-invoices</code></td>
+<td>List (filter <code>status</code>, <code>exportOrderId</code>)</td>
+<td><code>PRODUCTION_INVOICE:VIEW</code></td>
+<td><code>ListProductionInvoicesQueryDto</code></td>
+<td><code>Paginated&lt;ProductionInvoiceResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/production-invoices/:id</code></td>
+<td>Chi tiết (nested items + stages + approval)</td>
+<td><code>PRODUCTION_INVOICE:VIEW</code></td>
+<td>—</td>
+<td><code>ProductionInvoiceDetailResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>/production-invoices/:id/items/:itemId/stages/:stageType</code></td>
+<td>Cập nhật tiến độ 1 công đoạn (<code>deadline</code>, <code>progressPercent</code>, <code>status</code>)</td>
+<td><code>PRODUCTION_INVOICE:UPDATE</code> + scope (đúng <code>mfgRole</code> khớp <code>stageType</code>)</td>
+<td><code>UpdateStageDto { deadline?, progressPercent?, status? }</code></td>
+<td><code>ProductionInvoiceItemStageResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/production-invoices/:id/items/:itemId/request-approval</code></td>
+<td>QLSX gửi yêu cầu duyệt SKU (chọn kho thành phẩm đích)</td>
+<td><code>PRODUCTION_INVOICE:UPDATE</code> + scope (<code>isProductPlanner</code>)</td>
+<td><code>RequestApprovalDto { warehouseCode }</code></td>
+<td><code>ProductionApprovalResponseDto</code></td>
+<td>— status <code>WAITING_QLSX → WAITING_BOSS</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/production-invoices/:id/items/:itemId/boss-decide</code></td>
+<td>Sếp duyệt/từ chối SKU</td>
+<td><code>PRODUCTION_INVOICE:APPROVE</code> (role <code>BOSS</code>)</td>
+<td><code>DecideApprovalDto { status: APPROVED|REJECTED, reason? }</code></td>
+<td><code>ProductionApprovalResponseDto</code></td>
+<td>— khi mọi item <code>APPROVED</code> → <code>production_invoices.status = PRODUCING</code> (đúng ghi chú schema doc)</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/production-invoices/:id/cancel</code></td>
+<td>Huỷ PI</td>
+<td><code>PRODUCTION_INVOICE:UPDATE</code></td>
+<td><code>CancelProductionInvoiceDto { reason? }</code></td>
+<td><code>ProductionInvoiceResponseDto</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>code</code> PI sinh tự động dạng <code>PI-2026-{id}</code> (giữ đúng format schema doc). <code>pi_stage_type</code> gồm cả <code>PHOI</code> (đã sửa theo đối chiếu <code>seed.ts</code>, xem D4 mục 4). <code>pi_item_stage_status</code> enum hoá đủ 3 giá trị <code>PENDING/IN_PROGRESS/DONE</code>. Lịch sử các vòng duyệt trước (nếu SKU bị từ chối rồi gửi lại) tra qua <code>audit_logs</code>, <code>production_approvals</code> chỉ giữ trạng thái hiện hành — <strong>không</strong> tạo bảng lịch sử riêng.</p>
+<hr>
+<h3 id="phase-7--mes-a-production-order--cutting-proposal-cat_sat">Phase 7 — MES-A: Production Order &amp; Cutting Proposal (cat_sat)</h3>
+<p><strong>Phụ thuộc:</strong> Phase 5 (<code>bom_revision</code> ACTIVE + <code>plan_forms.status=APPROVED</code>), Phase 3 (ledger — dùng ở Phase 9, chưa dùng ở đây). <strong>Độ phức tạp:</strong> High (tích hợp hệ ngoài <code>cat_sat</code> qua <code>ExternalApiService</code> đã có sẵn circuit breaker). <strong>Bảng:</strong> <code>production_order</code> + 4 bảng <code>cutting_proposal*</code>. Nguồn: schema doc mục 1.6, mục 0, quyết định M10.</p>
+<h4 id="71-production-order">7.1 Production Order</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/production-orders</code></td>
+<td>Tạo lệnh SX tại xưởng từ 1 PlanForm đã <code>APPROVED</code></td>
+<td><code>PRODUCTION_ORDER:CREATE</code> + scope (<code>isProductPlanner</code>)</td>
+<td><code>CreateProductionOrderDto { planFormId, quantity, deadline?, sequence? }</code></td>
+<td><code>ProductionOrderResponseDto</code></td>
+<td>TX: có · <code>mfgProductId</code>/<code>bomRevisionId</code> <strong>suy tự động</strong> từ <code>plan_forms → bom_revision ACTIVE</code> tại thời điểm tạo (ghim revision — &quot;PO ghim đúng 1 bom_revision_id tại thời điểm tạo&quot;, không cho client truyền tay)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/production-orders</code></td>
+<td>List (filter <code>status</code>, <code>mfgProductId</code>)</td>
+<td><code>PRODUCTION_ORDER:VIEW</code></td>
+<td><code>ListProductionOrdersQueryDto</code></td>
+<td><code>Paginated&lt;ProductionOrderResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/production-orders/:id</code></td>
+<td>Chi tiết</td>
+<td><code>PRODUCTION_ORDER:VIEW</code></td>
+<td>—</td>
+<td><code>ProductionOrderDetailResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/production-orders/:id/release</code></td>
+<td>Sếp duyệt → <code>RELEASED</code>, <strong>trigger gọi cat_sat</strong> (xem 7.2)</td>
+<td><code>PRODUCTION_ORDER:APPROVE</code> (role <code>BOSS</code>)</td>
+<td>—</td>
+<td><code>ProductionOrderResponseDto</code></td>
+<td>TX: có · Idem: chặn theo status (chỉ <code>DRAFT→RELEASED</code>)</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/production-orders/:id/cancel</code></td>
+<td>Huỷ</td>
+<td><code>PRODUCTION_ORDER:UPDATE</code></td>
+<td><code>CancelProductionOrderDto { reason? }</code></td>
+<td><code>ProductionOrderResponseDto</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>sequence</code> dùng để xác định PO nào chạy trước (&quot;PO sau chỉ mở khi PO trước đạt 100%&quot;) — validate ở service khi các API MES (Phase 9) cố thao tác trên 1 PO có <code>sequence</code> chưa tới lượt (nếu nghiệp vụ có bật ràng buộc tuần tự — <strong>giữ nguyên là field lưu trữ, chỉ enforce nếu xác nhận đang enforce trong code gốc</strong>; nếu không chắc, chỉ lưu field và cảnh báo ở FE, tránh chặn cứng BE khi chưa xác nhận).</p>
+<h4 id="72-cutting-proposal--tích-hợp-cat_sat">7.2 Cutting Proposal — tích hợp <code>cat_sat</code></h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/production-orders/:id/cutting-proposals</code></td>
+<td>Gọi <code>POST .../de_xuat/propose</code> của <code>cat_sat</code> (qua <code>ExternalApiService</code> — timeout+retry+circuit breaker có sẵn), lưu kết quả về 4 bảng con</td>
+<td><code>CUTTING_PROPOSAL:CREATE</code></td>
+<td><code>RequestCuttingProposalDto { params?: { kerf?, wastePctAllowed?, ... } }</code></td>
+<td><code>CuttingProposalResponseDto</code> (nested <code>lines[].patterns[].segments[]</code>)</td>
+<td>TX: có (lưu toàn bộ cây kết quả atomic sau khi nhận response) · Idem: <strong>bắt buộc</strong> <code>Idempotency-Key</code> — gọi hệ ngoài, retry mạng dễ tạo <code>DRAFT</code> trùng</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/production-orders/:id/cutting-proposals</code></td>
+<td>List các lần gọi (1 PO có thể gọi lại nhiều lần — bản cũ chuyển <code>SUPERSEDED</code>)</td>
+<td><code>CUTTING_PROPOSAL:VIEW</code></td>
+<td><code>PaginationQueryDto</code></td>
+<td><code>Paginated&lt;CuttingProposalResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/cutting-proposals/:id</code></td>
+<td>Chi tiết đầy đủ</td>
+<td><code>CUTTING_PROPOSAL:VIEW</code></td>
+<td>—</td>
+<td><code>CuttingProposalDetailResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/cutting-proposals/:id/approve</code></td>
+<td>Duyệt đề xuất — trở thành pattern chính thức để Phôi cắt theo (7.2, <code>cut_bundle.proposal_pattern_id</code> trỏ tới)</td>
+<td><code>CUTTING_PROPOSAL:APPROVE</code></td>
+<td>—</td>
+<td><code>CuttingProposalResponseDto</code></td>
+<td>TX: có · khi approve, <strong>tự động chuyển các đề xuất <code>DRAFT</code>/<code>APPROVED</code> trước đó của cùng PO sang <code>SUPERSEDED</code></strong></td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> Input gửi <code>cat_sat</code> = nhu cầu đoạn tính từ <code>piece_bom × bom_piece × production_order.quantity</code> (đúng bomRevision đã ghim) — service tự tính, không nhận từ client. Lưu nguyên văn response (<code>raw_response</code> jsonb) để audit/debug khi kết quả bất thường (đúng thiết kế). <code>cutting_proposal_line.bar_count</code> — theo quyết định mặc định mục 5.2 #4 của schema doc — <strong>được ưu tiên tự động</strong> làm nguồn <code>required</code> khi Purchasing (Phase 8) tính nhu cầu mua sắt, thay vì ước lượng thô qua BOM.</p>
+<hr>
+<h3 id="phase-8--mua-hàng--kiểm-vật-tư">Phase 8 — Mua hàng &amp; Kiểm vật tư</h3>
+<p><strong>Phụ thuộc:</strong> Phase 5 (PlanForm), Phase 3 (<code>stock_quant</code>), Phase 7 (<code>cutting_proposal.bar_count</code> cho vật tư sắt — theo quyết định 5.2 #4). <strong>Độ phức tạp:</strong> Medium-High. <strong>Bảng:</strong> 6/9 bảng &quot;sẵn sàng&quot; của domain 1.9 (3 bảng ⚠ Chuyền kiểm/Đóng gói xem Phase 11). Nguồn: schema doc mục 1.9.</p>
+<h4 id="81-inspection-kiểm-tồn-3-kho">8.1 Inspection (kiểm tồn 3 kho)</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/plan-forms/:id/inspection-requests</code></td>
+<td>KHSX gửi yêu cầu kiểm tồn 3 kho cho 1 SKU</td>
+<td><code>INSPECTION_REQUEST:CREATE</code> + scope</td>
+<td><code>CreateInspectionRequestDto { deadline? }</code></td>
+<td><code>InspectionRequestResponseDto</code> (tự tạo 3 dòng <code>inspection_kho_states</code> PHOI_SON_HAN/VAT_TU_TP/THANH_PHAM)</td>
+<td>TX: có · UQ <code>planFormId</code> → 409 nếu đã có yêu cầu hiện hành</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/inspection-requests/:id</code></td>
+<td>Chi tiết (nested <code>khoStates[].items[]</code>)</td>
+<td><code>INSPECTION_REQUEST:VIEW</code> + scope</td>
+<td>—</td>
+<td><code>InspectionRequestDetailResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>PUT</td>
+<td><code>/inspection-requests/:id/kho-states/:khoKey/items</code></td>
+<td>Thủ kho điền <code>actual_stock</code> cho từng dòng vật tư của 1 kho</td>
+<td><code>INSPECTION_REQUEST:UPDATE</code> + scope (<code>warehouseScope</code> khớp <code>khoKey</code>)</td>
+<td><code>SubmitKhoStateItemsDto { items: [{ itemId, actualStock }] }</code></td>
+<td><code>InspectionKhoStateResponseDto</code></td>
+<td>TX: có</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>inspection_items.required</code> — với <code>material.kind=&#39;STEEL_BAR&#39;</code> <strong>và</strong> PO đã có <code>cutting_proposal</code>: lấy từ <code>cutting_proposal_line.bar_count</code> (chính xác); các vật tư khác: tính qua BOM (<code>piece_bom</code>/<code>part_bom</code>/<code>consumable_bom</code> × <code>production_order.quantity</code>). Đây là quy tắc nghiệp vụ trọng yếu đã chốt ở schema doc mục 0/M10 — implement đúng, không rơi về ước lượng thô cho vật tư sắt khi đã có cutting proposal.</p>
+<h4 id="82-purchase-proposals">8.2 Purchase Proposals</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/inspection-requests/:id/purchase-proposals</code></td>
+<td>Hệ thống tách đề xuất mua hàng theo kho thiếu (dựa <code>inspection_items.actualStock &lt; required</code>)</td>
+<td><code>PURCHASE_PROPOSAL:CREATE</code> (internal — có thể tự động sau khi đủ 3 kho <code>submitted</code>, hoặc thủ công)</td>
+<td><code>CreatePurchaseProposalsDto {}</code></td>
+<td><code>PurchaseProposalResponseDto[]</code></td>
+<td>TX: có (tách theo <code>kho_key</code>, mỗi kho 1 <code>purchase_proposal</code> riêng + items)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/purchase-proposals</code></td>
+<td>List theo <code>warehouseScope</code> của Purchaser (routing đúng nhân viên phụ trách)</td>
+<td><code>PURCHASE_PROPOSAL:VIEW</code> + scope</td>
+<td><code>ListPurchaseProposalsQueryDto { status? }</code></td>
+<td><code>Paginated&lt;PurchaseProposalResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/purchase-proposals/:id</code></td>
+<td>Chi tiết (nested items + quotes)</td>
+<td><code>PURCHASE_PROPOSAL:VIEW</code> + scope</td>
+<td>—</td>
+<td><code>PurchaseProposalDetailResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/purchase-proposals/:id/items/:itemId/quotes</code></td>
+<td>Purchaser thêm báo giá NCC</td>
+<td><code>PURCHASE_PROPOSAL:UPDATE</code> + scope</td>
+<td><code>CreateQuoteDto { supplierId?, supplierName, unitPrice?, expectedDate?, note? }</code></td>
+<td><code>PurchaseProposalQuoteResponseDto</code></td>
+<td>— status <code>new → quoting</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/purchase-proposals/:id/items/:itemId/quotes/:quoteId/choose</code></td>
+<td>GĐ/Purchaser chọn báo giá</td>
+<td><code>PURCHASE_PROPOSAL:APPROVE</code></td>
+<td>—</td>
+<td><code>PurchaseProposalQuoteResponseDto</code></td>
+<td>TX: có (set <code>is_chosen=true</code>, bỏ chọn các quote khác cùng item)</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/purchase-proposals/:id/submit</code></td>
+<td>Gửi đề xuất lên GĐ duyệt mua</td>
+<td><code>PURCHASE_PROPOSAL:UPDATE</code> + scope</td>
+<td>—</td>
+<td><code>PurchaseProposalResponseDto</code></td>
+<td>— status <code>quoting → submitted</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/purchase-proposals/:id/approve</code></td>
+<td>GĐ duyệt mua</td>
+<td><code>PURCHASE_PROPOSAL:APPROVE</code></td>
+<td>—</td>
+<td><code>PurchaseProposalResponseDto</code></td>
+<td>— status <code>submitted → purchasing</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/purchase-proposals/:id/reject</code></td>
+<td>GĐ từ chối</td>
+<td><code>PURCHASE_PROPOSAL:APPROVE</code></td>
+<td><code>RejectPurchaseProposalDto { rejectionReason }</code></td>
+<td><code>PurchaseProposalResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/purchase-proposals/:id/items/:itemId/receive</code></td>
+<td>Thủ kho xác nhận nhận hàng — <strong>ghi <code>stock_ledger</code> (<code>PURCHASE</code>)</strong></td>
+<td><code>PURCHASE_PROPOSAL:UPDATE</code> + scope</td>
+<td><code>ReceiveItemDto { receivedQty }</code></td>
+<td><code>PurchaseProposalItemResponseDto</code></td>
+<td>TX: có · Lock: <code>FOR UPDATE</code> trên item (cộng dồn <code>received_qty</code>, check <code>≤ buy_qty</code>) · Idem: <code>Idempotency-Key</code></td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>purchased_at</code> set tự động khi mọi item <code>received_qty ≥ buy_qty</code> (kiểm tra sau mỗi lần <code>receive</code>, cùng transaction). <code>purchase_proposal_quotes.supplierId</code> nên <strong>khuyến khích</strong> chọn từ danh mục (đề xuất cải thiện #4 schema doc) nhưng <strong>vẫn cho phép <code>supplierName</code> tự do</strong> — không chặn cứng, đúng hành vi hiện tại, chỉ thêm autocomplete ở FE.</p>
+<hr>
+<h3 id="phase-9--mes-b-thực-thi-phôi--hàn--sơn--kcs">Phase 9 — MES-B: Thực thi Phôi / Hàn / Sơn / KCS</h3>
+<p><strong>Phụ thuộc:</strong> Phase 7 (cutting proposal đã duyệt), Phase 3 (ledger), Phase 8 (vật tư đã đủ). <strong>Độ phức tạp:</strong> High (nhiều state machine song song, XOR polymorphic <code>qc_review</code>). <strong>Bảng:</strong> 8 bảng còn lại của domain 1.6. Nguồn: schema doc mục 1.6, 3.8.</p>
+<h4 id="91-steel-issue--cut-bundle-phôi">9.1 Steel Issue &amp; Cut Bundle (Phôi)</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/production-orders/:id/steel-issues</code></td>
+<td>Kho xuất sắt cho 1 đợt cắt</td>
+<td><code>STEEL_ISSUE:CREATE</code> + scope (<code>warehouseScope</code>)</td>
+<td><code>CreateSteelIssueDto { pieceId, barLengthMm }</code> (<code>materialId</code> suy từ pattern đã duyệt)</td>
+<td><code>SteelIssueResponseDto</code></td>
+<td>TX: có · Idem: <code>Idempotency-Key</code> (ghi <code>stock_ledger STEEL_ISSUE</code>)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/production-orders/:id/steel-issues</code></td>
+<td>List theo PO</td>
+<td><code>STEEL_ISSUE:VIEW</code></td>
+<td><code>PaginationQueryDto</code></td>
+<td><code>Paginated&lt;SteelIssueResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/steel-issues/:id/receive</code></td>
+<td>Phôi xác nhận đã nhận</td>
+<td><code>STEEL_ISSUE:UPDATE</code> + scope (<code>mfgRole=PHOI</code>)</td>
+<td>—</td>
+<td><code>SteelIssueResponseDto</code></td>
+<td>— <code>ISSUED→RECEIVED</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/steel-issues/:id/complete-cutting</code></td>
+<td>Phôi báo cắt xong, kèm chi tiết <code>cut_bundle[]</code> theo pattern đã duyệt</td>
+<td><code>STEEL_ISSUE:UPDATE</code> + scope (<code>mfgRole=PHOI</code>)</td>
+<td><code>CompleteCuttingDto { actualBarCount?, bundles: [{ proposalPatternId?, barCount, wastePerBarMm?, segments: [{ segmentSpecId, countPerBar }] }] }</code></td>
+<td><code>SteelIssueResponseDto</code> (nested <code>bundles[]</code>)</td>
+<td>TX: có · <code>RECEIVED→AWAITING_QC</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/steel-issues/:id/bundles</code></td>
+<td>Xem các bó đã cắt (kèm pattern đề xuất tham chiếu)</td>
+<td><code>STEEL_ISSUE:VIEW</code></td>
+<td>—</td>
+<td><code>CutBundleResponseDto[]</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>cut_bundle.proposalPatternId = null</code> nghĩa là &quot;cắt ngoài đề xuất&quot; — <strong>cho phép nhưng phải cảnh báo</strong> rõ trong response (field <code>isOffPlan: boolean</code>), đúng ghi chú &quot;⚠ cần đối chiếu lại vì lệch khỏi kế hoạch đã tính tối ưu&quot; — không chặn cứng (nghiệp vụ vẫn cho phép Phôi linh hoạt). <code>rework_of</code> self-reference dùng khi KCS trả về sửa (9.2) — có endpoint tạo đợt rework riêng: <code>POST /steel-issues/:id/rework</code> (tương tự <code>complete-cutting</code>, gắn <code>reworkOf</code>).</p>
+<h4 id="92-qc-review--replenish-request-dùng-chung-3-công-đoạn-qua-xor">9.2 QC Review &amp; Replenish Request (dùng chung 3 công đoạn qua XOR)</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/steel-issues/:id/qc-review</code></td>
+<td>KCS duyệt lô Phôi</td>
+<td><code>QC_REVIEW:CREATE</code> + scope (<code>mfgRole=KCS</code>)</td>
+<td><code>CreateQcReviewDto { failedQty, scrapQty?, defectReasonId?, reason?, photoUrl? }</code></td>
+<td><code>QcReviewResponseDto</code></td>
+<td>TX: có · CHECK <code>scrapQty ≤ failedQty</code> (validate service) · <code>AWAITING_QC → QC_PASSED</code> hoặc <code>→ RECEIVED</code> (trả sửa) tuỳ <code>failedQty</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/production-batches/:id/qc-review</code></td>
+<td>KCS duyệt lô Hàn/Sơn</td>
+<td><code>QC_REVIEW:CREATE</code> + scope</td>
+<td><code>CreateQcReviewDto</code> (cùng shape)</td>
+<td><code>QcReviewResponseDto</code></td>
+<td>TX: có · <code>AWAITING_QC → QC_DONE</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/qc-reviews</code></td>
+<td>List (filter theo <code>steelIssueId</code>/<code>productionBatchId</code>, <code>defectReasonId</code>)</td>
+<td><code>QC_REVIEW:VIEW</code></td>
+<td><code>ListQcReviewsQueryDto</code></td>
+<td><code>Paginated&lt;QcReviewResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/qc-reviews/:id/replenish-requests</code></td>
+<td>Tạo đề xuất cấp lại khi có <code>scrapQty</code></td>
+<td><code>QC_REVIEW:UPDATE</code></td>
+<td><code>CreateReplenishRequestDto { qty }</code> (CHECK <code>qty ≤ qcReview.scrapQty</code>)</td>
+<td><code>ReplenishRequestResponseDto</code></td>
+<td>— status mặc định <code>OPEN</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/replenish-requests/:id/fulfill</code></td>
+<td>Cấp bù bằng 1 đợt <code>steel_issue</code> mới (chỉ áp dụng Phôi)</td>
+<td><code>QC_REVIEW:UPDATE</code> + scope (<code>warehouseScope</code>)</td>
+<td><code>FulfillReplenishRequestDto { steelIssueId }</code></td>
+<td><code>ReplenishRequestResponseDto</code></td>
+<td>— <code>OPEN → FULFILLED</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/replenish-requests/:id/reject</code></td>
+<td>Từ chối cấp lại</td>
+<td><code>QC_REVIEW:UPDATE</code></td>
+<td><code>RejectReplenishRequestDto { reason? }</code></td>
+<td><code>ReplenishRequestResponseDto</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> Router <code>POST /steel-issues/:id/qc-review</code> và <code>POST /production-batches/:id/qc-review</code> <strong>đều ghi vào cùng bảng <code>qc_review</code></strong>, set đúng 1 trong 2 FK (<code>steel_issue_id</code> xor <code>production_batch_id</code>) — 2 endpoint riêng ở tầng REST chỉ để URL rõ ràng, service dùng chung logic. <code>passed = SL gốc − failed_qty</code> là <strong>dẫn xuất</strong>, không lưu cột riêng (đúng nguyên tắc &quot;sự kiện là gốc&quot;). <strong><code>fulfill-replenish-request</code> cho Hàn/Sơn: BLOCKED</strong> — schema doc mục 4/5.2#2 xác nhận rõ &quot;Hàn/Sơn hiện chưa có quy trình tiêu thụ đề xuất cấp lại tương tự Phôi&quot;, cần hỏi nghiệp vụ trước khi code endpoint fulfill cho 2 công đoạn này (xem mục 8 tài liệu này) — <strong>chỉ implement <code>fulfill</code> cho Phôi ở Phase 9</strong>, <code>replenish_request</code> của Hàn/Sơn dừng ở <code>OPEN</code>/<code>reject</code>, không có <code>fulfill</code> cho tới khi có quyết định.</p>
+<h4 id="93-production-batch-material-issue-work-session-hànsơn">9.3 Production Batch, Material Issue, Work Session (Hàn/Sơn)</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/production-orders/:id/production-batches</code></td>
+<td>Tổ Hàn/Sơn báo sản lượng</td>
+<td><code>PRODUCTION_BATCH:CREATE</code> + scope (<code>mfgRole=HAN|SON</code>)</td>
+<td><code>CreateProductionBatchDto { stage: HAN|SON, partId, reportedQty }</code></td>
+<td><code>ProductionBatchResponseDto</code></td>
+<td>TX: có · Idem: <code>Idempotency-Key</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/production-orders/:id/production-batches</code></td>
+<td>List theo PO (filter <code>stage</code>, <code>status</code>)</td>
+<td><code>PRODUCTION_BATCH:VIEW</code></td>
+<td><code>ListProductionBatchesQueryDto</code></td>
+<td><code>Paginated&lt;ProductionBatchResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/production-orders/:id/material-issues</code></td>
+<td>Kho cấp vật tư tiêu hao (CO₂, dây hàn, bột sơn...)</td>
+<td><code>MATERIAL_ISSUE:CREATE</code> + scope</td>
+<td><code>CreateMaterialIssueDto { stage: HAN|SON, materialId, issuedQty }</code></td>
+<td><code>MaterialIssueResponseDto</code></td>
+<td>TX: có · Idem: <code>Idempotency-Key</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/material-issues/:id/receive</code></td>
+<td>Tổ xác nhận nhận (có thể thiếu)</td>
+<td><code>MATERIAL_ISSUE:UPDATE</code> + scope</td>
+<td><code>ReceiveMaterialIssueDto { receivedQty }</code></td>
+<td><code>MaterialIssueResponseDto</code></td>
+<td>— <code>ISSUED → RECEIVED</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/production-orders/:id/work-sessions/start</code></td>
+<td>Bắt đầu ca làm việc</td>
+<td><code>WORK_SESSION:UPDATE</code> + scope</td>
+<td><code>StartWorkSessionDto { stage: HAN|SON }</code></td>
+<td><code>WorkSessionResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/work-sessions/:id/end</code></td>
+<td>Kết thúc ca</td>
+<td><code>WORK_SESSION:UPDATE</code> + scope</td>
+<td>—</td>
+<td><code>WorkSessionResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/production-orders/:id/work-sessions</code></td>
+<td>List lịch sử ca (nhiều ca, có <code>endedAt IS NULL</code> = đang chạy)</td>
+<td><code>WORK_SESSION:VIEW</code></td>
+<td><code>PaginationQueryDto</code></td>
+<td><code>Paginated&lt;WorkSessionResponseDto&gt;</code></td>
+<td>—</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>production_batch.rework_of</code> — schema doc ghi rõ &quot;Mock hiện KHÔNG tạo lô rework mới cho Hàn/Sơn — cột dự phòng để chuẩn hoá hành vi&quot; → <strong>không tạo endpoint <code>POST /production-batches/:id/rework</code></strong> ở Phase 9 (cột tồn tại trong schema cho tương lai nhưng không có API tương ứng cho tới khi nghiệp vụ xác nhận, nhất quán với quyết định BLOCKED ở 9.2).</p>
+<hr>
+<h3 id="phase-10--đan-weaving">Phase 10 — Đan (Weaving)</h3>
+<p><strong>Phụ thuộc:</strong> Phase 4 (<code>export_orders</code>), Phase 5 (<code>plan_forms</code>), Phase 3 (đọc tồn — không ghi <code>stock_ledger</code>, đây là sổ riêng theo schema doc mục 1.7). <strong>Độ phức tạp:</strong> Medium. <strong>Bảng:</strong> 3 bảng domain 1.7. Nguồn: schema doc mục 1.7.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>Request DTO</th>
+<th>Response DTO</th>
+<th>TX/Lock/Idem</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/export-orders/:id/manh-order</code></td>
+<td>Tạo nhóm mảnh chờ đan cho 1 PO (1 PO ⇔ 1 manh_order)</td>
+<td><code>WEAVING:CREATE</code></td>
+<td>—</td>
+<td><code>ManhOrderResponseDto</code></td>
+<td>UQ <code>exportOrderId</code> → 409 nếu đã có</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/manh-orders/:id</code></td>
+<td>Chi tiết (nested <code>lines[].allocations[]</code>)</td>
+<td><code>WEAVING:VIEW</code></td>
+<td>—</td>
+<td><code>ManhOrderDetailResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/manh-orders/:id/lines</code></td>
+<td>Thêm dòng mảnh cần đan trong 1 SKU</td>
+<td><code>WEAVING:CREATE</code></td>
+<td><code>CreateManhLineDto { planFormId, pieceId?, name, unit, totalQty, tonThuc? }</code></td>
+<td><code>ManhLineResponseDto</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/manh-lines/:id/allocations/:weavingPointId/xuat</code></td>
+<td>Ghi nhận xuất mảnh cho 1 điểm đan (luỹ kế)</td>
+<td><code>WEAVING:UPDATE</code> + scope (<code>mfgRole=WEAVING_EXPORT</code>)</td>
+<td><code>AllocationQtyDto { qty }</code></td>
+<td><code>ManhAllocationResponseDto</code></td>
+<td>TX: có · Lock: <code>FOR UPDATE</code> (luỹ kế <code>xuat_qty</code>)</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/manh-lines/:id/allocations/:weavingPointId/nhap</code></td>
+<td>Ghi nhận nhập về từ điểm đan (luỹ kế)</td>
+<td><code>WEAVING:UPDATE</code> + scope</td>
+<td><code>AllocationQtyDto { qty }</code></td>
+<td><code>ManhAllocationResponseDto</code></td>
+<td>TX: có · Lock: <code>FOR UPDATE</code> · CHECK <code>nhap_qty ≤ xuat_qty</code> (service validate trước khi cộng)</td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> <code>manh_allocations</code> là junction UQ <code>(manhLineId, weavingPointId)</code> — 2 endpoint <code>xuat</code>/<code>nhap</code> đều <strong>upsert-and-increment</strong> (tạo dòng nếu chưa có, cộng dồn nếu đã có), không phải overwrite. Tách biệt hoàn toàn khỏi <code>stock_ledger</code> (đúng thiết kế — &quot;sổ riêng&quot;).</p>
+<hr>
+<h3 id="phase-11--chuyền-kiểm--đóng-gói--blocked">Phase 11 — Chuyền kiểm &amp; Đóng gói (⚠ blocked)</h3>
+<p><strong>Phụ thuộc:</strong> Phase 5, Phase 10. <strong>Độ phức tạp:</strong> không ước lượng — <strong>BLOCKED</strong>. <strong>Bảng:</strong> <code>inspection_batches</code>, <code>inspection_batch_defects</code>, <code>packaging_records</code>. Nguồn: schema doc mục 1.9 (3 bảng duy nhất tự đánh dấu ⚠), mục 5.3.</p>
+<blockquote>
+<p><strong>Không đưa vào lịch triển khai chính thức.</strong> Nguyên văn schema doc: <em>&quot;Trang KhoChuyenKiemPage.tsx hiện sinh toàn bộ số liệu giả từ hash chuỗi, state chỉ tồn tại trong React cục bộ — không có entity DB thật đứng sau&quot;</em>. Đây là 3/67 bảng duy nhất không bám theo service/type thật hay quyết định thiết kế có căn cứ (khác toàn bộ 64 bảng còn lại, đều đối chiếu trực tiếp source hoặc có quyết định M1–M12 rõ ràng).</p>
+</blockquote>
+<p><strong>Việc cần làm trước khi mở Phase này:</strong> 1 buổi làm việc với nghiệp vụ xác nhận quy tắc tính &quot;chờ thực thi&quot;/&quot;tổng thùng&quot; (nguyên văn mục 5.3 schema doc). Sau khi xác nhận, cấu trúc bảng đề xuất tối thiểu đã có sẵn ở schema doc mục 1.9 (<code>inspection_batches: planFormId, pieceName, checkedQty, checkedBy</code>; <code>packaging_records: planFormId, boxesPacked, packedBy</code>) — dùng làm điểm khởi đầu, <strong>không phải bản chốt</strong>.</p>
+<p>Draft API (chỉ dùng làm tài liệu tham khảo khi unblock, <strong>không code trước</strong>):</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>POST</td>
+<td><code>/plan-forms/:id/inspection-batches</code></td>
+<td>Ghi nhận 1 lượt chuyền kiểm</td>
+<td><code>INSPECTION_BATCH:CREATE</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/inspection-batches/:id/defects</code></td>
+<td>Ghi lỗi phát hiện</td>
+<td><code>INSPECTION_BATCH:UPDATE</code></td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/plan-forms/:id/packaging-records</code></td>
+<td>Ghi nhận đóng gói xong → <strong>ghi <code>stock_ledger</code> (<code>FINISHED</code>, hàng = <code>product_variant_id</code>)</strong></td>
+<td><code>PACKAGING:CREATE</code></td>
+</tr>
+</tbody></table></div>
+<hr>
+<h3 id="phase-12--reporting--dashboards">Phase 12 — Reporting / Dashboards</h3>
+<p><strong>Phụ thuộc:</strong> Tất cả các Phase trước (đọc dữ liệu tổng hợp). <strong>Độ phức tạp:</strong> Medium (chủ yếu là SQL VIEW + query, không có ghi). <strong>Nguồn:</strong> schema doc mục 3.8 — 7 VIEW dẫn xuất, nguyên tắc &quot;sự kiện là gốc, số tổng hợp là dẫn xuất&quot;.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>URL</th>
+<th>Mục đích</th>
+<th>Permission</th>
+<th>View nguồn</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>GET</td>
+<td><code>/reports/warehouse-stock</code></td>
+<td>Tồn kho theo kho × loại hàng</td>
+<td><code>REPORT:VIEW</code></td>
+<td><code>v_warehouse_stock</code> (thực tế đọc <code>stock_quant</code> — đã materialize, xem D0.3)</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/reports/segment-stock</code></td>
+<td>Tồn đoạn theo PO/loại đoạn (nuôi Hàn)</td>
+<td><code>REPORT:VIEW</code></td>
+<td><code>v_segment_cut</code>, <code>v_segment_consumed</code>, <code>v_segment_stock</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/reports/segment-surplus</code></td>
+<td>Đoạn thừa còn sống trong PO</td>
+<td><code>REPORT:VIEW</code></td>
+<td><code>v_segment_surplus</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/reports/po-progress</code></td>
+<td>Tiến độ từng công đoạn theo PO</td>
+<td><code>REPORT:VIEW</code></td>
+<td><code>v_po_progress</code></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/reports/work-session-output</code></td>
+<td>Sản lượng theo ca</td>
+<td><code>REPORT:VIEW</code></td>
+<td><code>v_work_session_output</code></td>
+</tr>
+</tbody></table></div>
+<p><strong>Business rules:</strong> Khi đóng PO (hoặc xác nhận thừa giữa chừng), gọi <code>POST /production-orders/:id/post-surplus</code> (thuộc Phase 9, không phải Phase 12) để ghi 1 dòng <code>stock_ledger</code> (<code>PRODUCTION → kho phôi</code>, <code>ref_type=SURPLUS_POSTING</code>) — &quot;chốt sổ đoạn thừa&quot; biến số liệu view thành tồn thật, sống xuyên PO (đúng nguyên văn schema doc mục 3.8). Nêu ở đây để không bỏ sót, nhưng thuộc phạm vi Phase 9.</p>
+<hr>
+<h3 id="phase-13--admin--hardening">Phase 13 — Admin / Hardening</h3>
+<p><strong>Phụ thuộc:</strong> Toàn bộ. <strong>Độ phức tạp:</strong> Low-Medium từng mục, nhưng <strong>là điều kiện go-live</strong>, không phải &quot;nice-to-have&quot;. Nguồn: schema doc mục 4, 5.4.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Việc</th>
+<th>Mô tả</th>
+<th>Bắt buộc trước go-live?</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>File storage thật</td>
+<td>Bảng <code>files</code>/tích hợp S3-compatible, thay <code>attachment_url</code> blob URL tạm hiện tại</td>
+<td>Có — nếu còn dùng <code>export_orders.attachmentUrl</code> production</td>
+</tr>
+<tr>
+<td><code>PermissionAction</code> audit đầy đủ</td>
+<td>Rà lại <code>AUDITED_MODELS</code> theo D0.4 sau khi tất cả model đã tạo</td>
+<td>Có</td>
+</tr>
+<tr>
+<td>Data backfill trước khi bật <code>UQ(plan_forms.exportOrderId, mfgProductId)</code></td>
+<td>Dọn dữ liệu demo có nhiều <code>PlanForm</code> cùng trỏ 1 <code>productionInvoiceId</code> trước khi bật constraint thật (rủi ro nêu ở mục 4 schema doc)</td>
+<td>Có, riêng cho môi trường có seed cũ</td>
+</tr>
+<tr>
+<td>Rate limit / pagination review</td>
+<td><code>ThrottlerGuard</code> đã global — rà lại limit riêng cho endpoint gọi <code>cat_sat</code> (Phase 7) tránh spam hệ ngoài</td>
+<td>Nên có</td>
+</tr>
+<tr>
+<td><code>labor_cost</code> (chi phí nhân công theo PI)</td>
+<td>Có trong mock, KHÔNG có trong 67 bảng — cần hỏi nghiệp vụ có đưa vào schema vận hành hay để hệ kế toán riêng</td>
+<td><strong>Chưa quyết — không code cho tới khi có câu trả lời</strong> (xem mục 8)</td>
+</tr>
+</tbody></table></div>
+<hr>
+<h2 id="7-ma-trận-phụ-thuộc--độ-phức-tạp-tổng-hợp">7. Ma trận phụ thuộc &amp; độ phức tạp tổng hợp</h2>
+<pre><code>Phase 0 (có sẵn)
+  └─▶ Phase 1 (Nền tảng mở rộng) — Low
+        └─▶ Phase 2 (Danh mục/BOM) — Medium-High  ◀── BLOCKER cho hầu hết mọi domain sau
+              ├─▶ Phase 3 (Ledger Core) — High     ◀── BLOCKER cho Sales/Purchasing/MES/Weaving (ghi kho)
+              │     └─▶ Phase 4 (Bán hàng) — Medium
+              │           └─▶ Phase 5 (PlanForm) — High   ◀── BLOCKER cho MES (materialize BOM)
+              │                 ├─▶ Phase 6 (Production Invoice) — Medium
+              │                 └─▶ Phase 7 (MES-A: PO + cat_sat) — High
+              │                       └─▶ Phase 8 (Purchasing) — Medium-High
+              │                             └─▶ Phase 9 (MES-B: thực thi) — High
+              │                                   └─▶ Phase 11 (Chuyền kiểm/Đóng gói) — BLOCKED (chờ nghiệp vụ)
+              │           └─▶ Phase 10 (Đan) — Medium (chỉ cần Phase 4 + 5, không phụ thuộc Phase 7-9)
+              └─▶ (Phase 3 độc lập với Phase 4 trở đi, có thể làm song song với Phase 2 nếu team đủ người)
+Phase 12 (Reporting) — phụ thuộc luỹ tiến từng phase đã xong (làm dần, không chờ hết tất cả)
+Phase 13 (Admin/Hardening) — xuyên suốt + chốt trước go-live
+</code></pre>
+<p><strong>Ghi chú song song hoá:</strong> Phase 3 (Ledger Core) chỉ phụ thuộc Phase 2 (không phụ thuộc Phase 4/5) — có thể giao 1 sub-team làm song song với Phase 4-5 nếu nhân lực cho phép, miễn xong trước khi Phase 8/9 cần ghi ledger thật. Phase 10 (Đan) không phụ thuộc chuỗi MES (Phase 7-9) — có thể làm song song ngay sau Phase 5.</p>
+<p><strong>Bảng tổng hợp độ phức tạp:</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Domain</th>
+<th>Số bảng mới</th>
+<th>Độ phức tạp</th>
+<th>Lý do</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>Nền tảng mở rộng</td>
+<td>3 (+ mở rộng User)</td>
+<td>Low</td>
+<td>CRUD đơn giản, singleton</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Danh mục/BOM</td>
+<td>20</td>
+<td><strong>Medium-High</strong></td>
+<td>BOM revision có state machine + composite-FK + materialize logic dùng lại ở Phase 5</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Ledger Core</td>
+<td>5</td>
+<td><strong>High</strong></td>
+<td>Sổ cái kép, trigger DB, concurrency, là hạ tầng cho 5 phase sau</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Bán hàng</td>
+<td>2</td>
+<td>Medium</td>
+<td>Model đã hợp nhất (M12), nhiều cột theo-kênh cần validate đúng ngữ cảnh</td>
+</tr>
+<tr>
+<td>5</td>
+<td>PlanForm</td>
+<td>6</td>
+<td><strong>High</strong></td>
+<td>Workflow 8 trạng thái, 2 vòng nhập song song, logic materialize BOM phức tạp nhất hệ thống</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Production Invoice</td>
+<td>4</td>
+<td>Medium</td>
+<td>Workflow duyệt 2 cấp rõ ràng</td>
+</tr>
+<tr>
+<td>7</td>
+<td>MES-A (PO+cat_sat)</td>
+<td>5</td>
+<td><strong>High</strong></td>
+<td>Tích hợp hệ ngoài, composite-FK, idempotency bắt buộc</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Purchasing</td>
+<td>6</td>
+<td>Medium-High</td>
+<td>Nhiều state machine ngắn, routing theo <code>warehouseScope</code></td>
+</tr>
+<tr>
+<td>9</td>
+<td>MES-B (thực thi)</td>
+<td>8</td>
+<td><strong>High</strong></td>
+<td>Nhiều state machine song song, XOR polymorphic, lock cộng dồn nhiều nơi</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Đan</td>
+<td>3</td>
+<td>Medium</td>
+<td>Luỹ kế 2 chiều đơn giản hơn MES</td>
+</tr>
+<tr>
+<td>11</td>
+<td>Chuyền kiểm/Đóng gói</td>
+<td>3</td>
+<td><strong>BLOCKED</strong></td>
+<td>Chưa xác nhận nghiệp vụ</td>
+</tr>
+<tr>
+<td>12</td>
+<td>Reporting</td>
+<td>0 (view)</td>
+<td>Medium</td>
+<td>Chủ yếu SQL, ít rủi ro ghi dữ liệu</td>
+</tr>
+<tr>
+<td>13</td>
+<td>Admin/Hardening</td>
+<td>0-1</td>
+<td>Low-Medium</td>
+<td>Từng mục nhỏ nhưng là điều kiện go-live</td>
+</tr>
+</tbody></table></div>
+<hr>
+<h2 id="8-rủi-ro-nợ-kỹ-thuật--quyết-định-nghiệp-vụ-còn-mở">8. Rủi ro, nợ kỹ thuật &amp; quyết định nghiệp vụ còn mở</h2>
+<p>Tổng hợp nguyên trạng từ schema doc mục 4/5.2/5.3/3.9 — <strong>không tự chốt thay nghiệp vụ</strong>, chỉ định vị API nào bị ảnh hưởng để biết cần hỏi trước khi code đúng phần đó (không chặn toàn dự án).</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Quyết định cần chốt</th>
+<th>API/Phase bị ảnh hưởng</th>
+<th>Rủi ro nếu code trước</th>
+<th>Đề xuất mặc định nếu cần chốt nhanh</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>Cơ chế đồng bộ <code>stock_quant</code> (trigger DB hay ghi kép ứng dụng)</td>
+<td>Phase 3 (toàn bộ)</td>
+<td>Chọn nhầm phải viết lại toàn bộ đường ghi kho</td>
+<td><strong>Đã đề xuất ở D0.3: trigger DB</strong></td>
+</tr>
+<tr>
+<td>2</td>
+<td>Hàn/Sơn &quot;cấp lại&quot; bán-thành-phẩm nghĩa là gì</td>
+<td>Phase 9.2 (<code>replenish_request.fulfill</code> cho HAN/SON)</td>
+<td>API sai hoàn toàn nếu hiểu nhầm quy trình</td>
+<td>Không đặt mặc định — hỏi trực tiếp nghiệp vụ trước khi mở endpoint <code>fulfill</code> cho HAN/SON</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>export_order_items.status</code> (DOMESTIC) có đồng bộ với <code>production_invoice_item_stages</code> (EXPORT) không</td>
+<td>Phase 4 (<code>PATCH .../items/:itemId/status</code>), Phase 6 (stages)</td>
+<td>Sai lệch hiển thị tiến độ EXPORT — sửa sau vẫn rẻ</td>
+<td>Để trống ở <code>channel=EXPORT</code>, chỉ dùng <code>production_invoice_item_stages</code> (đã áp dụng ở Phase 4)</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>cutting_proposal_line.bar_count</code> có tự động ưu tiên khi tính <code>required</code> mua sắt không</td>
+<td>Phase 8.1 (<code>inspection_items.required</code>)</td>
+<td>Sai số liệu đề xuất mua sắt</td>
+<td><strong>Có</strong> — đã áp dụng ở Phase 8</td>
+</tr>
+<tr>
+<td>5</td>
+<td>3 bảng Chuyền kiểm &amp; Đóng gói — quy tắc &quot;chờ thực thi&quot;/&quot;tổng thùng&quot;</td>
+<td>Phase 11 (toàn bộ)</td>
+<td>Rủi ro làm lại cao nhất toàn hệ thống</td>
+<td><strong>BLOCKED</strong> — không code, chờ 1 buổi xác nhận nghiệp vụ</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Ánh xạ 4 kho logic RAW/SEGMENT/WELDED/FINISHED (D7 thietke.md) ↔ 6 kho vật lý hiện có</td>
+<td>Không chặn API nào trực tiếp (đã quyết định giữ nguyên 6 kho, mục M3)</td>
+<td>—</td>
+<td>Không cần hỏi thêm — đã tự quyết trong schema doc (M3)</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>production_order.export_order_id</code> cache trực tiếp hay suy gián tiếp qua <code>plan_form_id</code></td>
+<td>Phase 7.1 (<code>ProductionOrderResponseDto</code>)</td>
+<td>Chỉ ảnh hưởng hiệu năng query lọc/báo cáo, không ảnh hưởng đúng-sai dữ liệu</td>
+<td>Suy gián tiếp trước (đơn giản hơn); thêm cột cache sau nếu query chậm thật</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>laborCost</code> theo PI — có đưa vào schema vận hành không</td>
+<td>Không có Phase nào code endpoint này</td>
+<td>Thiếu 1 khái niệm chi phí nếu nghiệp vụ cần</td>
+<td>Không code — chờ xác nhận, có thể thuộc hệ kế toán riêng ngoài phạm vi</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>warehouse_transfer_items.material_id</code> bắt buộc NOT NULL trước go-live</td>
+<td>Phase 3.3</td>
+<td>Rủi ro trùng/lệch tên vật tư nếu vẫn cho null</td>
+<td>Nên ép <code>NOT NULL</code> ngay từ Phase 3 (không kế thừa hạn chế của mock) — khuyến nghị áp dụng luôn, không phải &quot;sau này&quot;</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>purchase_proposal_quotes.supplierId</code> bắt buộc chọn từ danh mục</td>
+<td>Phase 8.2</td>
+<td>Thấp — chỉ ảnh hưởng chất lượng dữ liệu thống kê</td>
+<td>Giữ optional (đã áp dụng), thêm autocomplete FE, không chặn cứng BE</td>
+</tr>
+</tbody></table></div>
+<p><strong>Nợ kỹ thuật ngoài phạm vi schema (mục 5.4 schema doc, không phải &quot;chưa nghĩ tới&quot; mà là &quot;biết rõ, làm sau&quot;):</strong></p>
+<ul>
+<li>Session/token thật — <strong>đã có</strong> trong codebase hiện tại (JWT + refresh token rotation), không phải nợ kỹ thuật của dự án này.</li>
+<li>Hash mật khẩu — <strong>đã có</strong> (<code>argon2</code>, xem <code>prisma/seed.ts:47</code>), không phải nợ kỹ thuật.</li>
+<li>Server-side pagination — <strong>đã có</strong> hạ tầng (<code>PaginationQueryDto</code>/<code>paginate()</code> util) — chỉ cần áp dụng đúng ở mọi endpoint <code>GET</code> list của 62 bảng mới (đã đưa vào từng bảng endpoint ở mục 6).</li>
+</ul>
+<hr>
+<h2 id="9-checklist-kickoff-trước-khi-code">9. Checklist kickoff trước khi code</h2>
+<ol>
+<li><input disabled="" type="checkbox"> Chốt D0.1 – D0.5 (mục 2) trong 1 buổi kỹ thuật — đặc biệt D0.2 (RBAC) vì ảnh hưởng cách viết guard ở <strong>mọi</strong> endpoint từ Phase 1 trở đi.</li>
+<li><input disabled="" type="checkbox"> Chốt 4 quyết định nghiệp vụ #1–#4 ở mục 8 (không chặn dự án, nhưng chặn đúng Phase 3/8/9 nếu bỏ qua).</li>
+<li><input disabled="" type="checkbox"> Lên lịch 1 buổi riêng với nghiệp vụ cho Phase 11 (Chuyền kiểm &amp; Đóng gói) — không đưa vào sprint planning cho tới khi có kết quả buổi này.</li>
+<li><input disabled="" type="checkbox"> Cập nhật <code>PERMISSION_MODULES</code> + seed role nghiệp vụ (mục 5) <strong>trước</strong> Phase 2, để mọi PR từ Phase 2 trở đi có permission đúng ngay từ đầu, tránh phải sửa lại guard hàng loạt sau.</li>
+<li><input disabled="" type="checkbox"> Viết trigger <code>fn_sync_stock_quant()</code> (D0.3) và test concurrency (2 request ghi <code>stock_ledger</code> cùng lúc cho cùng 1 dòng <code>stock_quant</code>) <strong>trước khi</strong> Phase 8/9 bắt đầu viết business logic dựa trên số dư.</li>
+<li><input disabled="" type="checkbox"> Viết unit test cho <code>PlanFormApprovalService.materializeBomRevision()</code> (Phase 5.3) đối chiếu dữ liệu mẫu tương đương <code>seedPlanForms</code> <strong>trước khi</strong> bật <code>UQ(plan_forms.exportOrderId, mfgProductId)</code> thật trên môi trường có dữ liệu cũ (rủi ro #9 mục... schema doc mục 4).</li>
+<li><input disabled="" type="checkbox"> Xác nhận danh sách <code>TRANSFER_ROUTES</code> hợp lệ (Phase 3.3) với nghiệp vụ trước khi hardcode — tài liệu này không liệt kê route cụ thể vì schema doc không cung cấp danh sách đầy đủ.</li>
+</ol>
+
+</main>
+<a class="back-to-top" href="#top" title="Về đầu trang">↑</a>
+<script>
+(function(){
+  var KEY = 'dna-erp-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+</script>
+</body>
+</html>
