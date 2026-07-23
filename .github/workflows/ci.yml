@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  DATABASE_URL: postgresql://erp_test:erp_test@localhost:5432/dna_erp_test?schema=public
+  JWT_ACCESS_SECRET: ci-access-secret-at-least-32-characters-long
+  JWT_ACCESS_EXPIRES_IN: 15m
+  JWT_REFRESH_SECRET: ci-refresh-secret-at-least-32-characters-long
+  JWT_REFRESH_EXPIRES_IN: 7d
+  CORS_ORIGIN: '*'
+  THROTTLE_TTL: 60
+  THROTTLE_LIMIT: 1000
+  LOG_LEVEL: silent
+  API_PREFIX: api
+  PORT: 3000
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      - run: pnpm lint:check
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: erp_test
+          POSTGRES_PASSWORD: erp_test
+          POSTGRES_DB: dna_erp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U erp_test -d dna_erp_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      - run: pnpm prisma migrate deploy
+      - run: pnpm test
+      - run: pnpm test:e2e
+        env:
+          DATABASE_URL: postgresql://erp_test:erp_test@localhost:5432/dna_erp_test?schema=public
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      - run: pnpm build
+
+  # deploy:
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   if: github.ref == 'refs/heads/main'
+  #   steps:
+  #     - Fill in once a deploy target (VPS/SSH, ECS, Kubernetes, ...) is decided.
