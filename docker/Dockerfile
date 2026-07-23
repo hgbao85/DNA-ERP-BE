@@ -2,6 +2,7 @@
 
 FROM node:20-alpine AS base
 WORKDIR /app
+RUN apk add --no-cache openssl
 RUN corepack enable
 
 # ---- deps: install all dependencies (incl. dev) for building ----
@@ -17,12 +18,13 @@ COPY prisma ./prisma
 RUN pnpm prisma generate
 COPY . .
 RUN pnpm build
-RUN pnpm install --prod --frozen-lockfile
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 
 # ---- runtime: minimal image with only what's needed to run ----
 FROM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+RUN apk add --no-cache openssl
 RUN addgroup -S app && adduser -S app -G app
 
 COPY --from=build /app/node_modules ./node_modules
