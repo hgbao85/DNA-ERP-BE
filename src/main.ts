@@ -33,14 +33,16 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('DNA ERP API')
-    .setDescription('DNA ERP backend API documentation')
-    .setVersion('1.0')
-    .addBearerAuth()
-    .build();
-  const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup(`${apiPrefix}/docs`, app, swaggerDocument);
+  if (configService.get('env', { infer: true }) !== 'production') {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('DNA ERP API')
+      .setDescription('DNA ERP backend API documentation')
+      .setVersion('1.0')
+      .addBearerAuth()
+      .build();
+    const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup(`${apiPrefix}/docs`, app, swaggerDocument);
+  }
 
   app.enableShutdownHooks();
 
