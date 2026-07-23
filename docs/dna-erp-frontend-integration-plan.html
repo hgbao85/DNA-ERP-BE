@@ -1,0 +1,506 @@
+<title>DNA-ERP — Chuẩn bị Frontend theo Roadmap Backend</title>
+<style>
+:root{
+  --paper:#f3f1ea; --paper-raised:#ffffff; --ink:#1e2530; --ink-soft:#54606f;
+  --steel:#3d6d8c; --steel-ink:#2b5674; --steel-soft:#e6edf1;
+  --line:#dbd6c8; --line-strong:#c7c1af;
+  --ready:#3f7a5c; --ready-bg:#e2efe6;
+  --risk:#a06423; --risk-bg:#f5e7d2;
+  --blocked:#a8432e; --blocked-bg:#f8ded6;
+  --low:#767f8c; --low-bg:#eae7de;
+  --shadow: 0 1px 2px rgba(30,37,48,.07), 0 10px 28px rgba(30,37,48,.07);
+  --mono: ui-monospace,"Cascadia Code","SF Mono",Consolas,"Liberation Mono",monospace;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --paper:#12161d; --paper-raised:#181d26; --ink:#e7e4da; --ink-soft:#9aa4b2;
+    --steel:#7fb0d1; --steel-ink:#a7cbe2; --steel-soft:#1c2b36;
+    --line:#2a313c; --line-strong:#394251;
+    --ready:#6cb896; --ready-bg:#16281f;
+    --risk:#d9a35c; --risk-bg:#33260f;
+    --blocked:#e08770; --blocked-bg:#391f17;
+    --low:#8b96a3; --low-bg:#1b2029;
+    --shadow: 0 1px 2px rgba(0,0,0,.35), 0 10px 28px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#12161d; --paper-raised:#181d26; --ink:#e7e4da; --ink-soft:#9aa4b2;
+  --steel:#7fb0d1; --steel-ink:#a7cbe2; --steel-soft:#1c2b36;
+  --line:#2a313c; --line-strong:#394251;
+  --ready:#6cb896; --ready-bg:#16281f;
+  --risk:#d9a35c; --risk-bg:#33260f;
+  --blocked:#e08770; --blocked-bg:#391f17;
+  --low:#8b96a3; --low-bg:#1b2029;
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 10px 28px rgba(0,0,0,.4);
+}
+:root[data-theme="light"]{
+  --paper:#f3f1ea; --paper-raised:#ffffff; --ink:#1e2530; --ink-soft:#54606f;
+  --steel:#3d6d8c; --steel-ink:#2b5674; --steel-soft:#e6edf1;
+  --line:#dbd6c8; --line-strong:#c7c1af;
+  --ready:#3f7a5c; --ready-bg:#e2efe6;
+  --risk:#a06423; --risk-bg:#f5e7d2;
+  --blocked:#a8432e; --blocked-bg:#f8ded6;
+  --low:#767f8c; --low-bg:#eae7de;
+  --shadow: 0 1px 2px rgba(30,37,48,.07), 0 10px 28px rgba(30,37,48,.07);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--paper); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:16px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--steel-soft)}
+a{color:var(--steel-ink)}
+.skip{position:absolute;left:-999px}
+.skip:focus{left:1rem;top:1rem;z-index:100;background:var(--paper-raised);padding:.5rem 1rem;border-radius:6px}
+
+.topbar{
+  position:sticky; top:0; z-index:20; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.65rem 1.4rem; background:var(--paper-raised); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-weight:800; letter-spacing:-.01em; font-size:.95rem; color:var(--ink); display:flex; align-items:baseline; gap:.5rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.74rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.4rem .75rem; font-size:.82rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--steel-soft)}
+.topbar button:focus-visible{outline:2px solid var(--steel); outline-offset:1px}
+
+.shell{display:grid; grid-template-columns:15.5rem 1fr; max-width:80rem; margin:0 auto}
+@media (max-width:920px){ .shell{grid-template-columns:1fr} }
+
+.rail{
+  position:sticky; top:var(--topbar-h,3.1rem); align-self:start; height:calc(100vh - var(--topbar-h,3.1rem)); overflow-y:auto;
+  padding:1.6rem 1rem 2rem 1.4rem; border-right:1px solid var(--line);
+  scrollbar-width:thin;
+}
+@media (max-width:920px){
+  .rail{position:static; height:auto; border-right:none; border-bottom:1px solid var(--line);
+    padding:1rem 1.2rem; overflow-x:auto}
+}
+.rail-brand{font-family:var(--mono); font-size:.72rem; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:.15rem}
+.rail-title{font-weight:800; font-size:1.02rem; margin:0 0 1.3rem; letter-spacing:-.01em}
+.rail nav{display:flex; flex-direction:column; gap:.15rem}
+@media (max-width:920px){ .rail nav{flex-direction:row; flex-wrap:nowrap; gap:.4rem} }
+.rail a{
+  display:flex; align-items:baseline; gap:.55rem; text-decoration:none; color:var(--ink-soft);
+  font-size:.86rem; padding:.32rem .5rem; border-radius:6px; white-space:nowrap;
+}
+.rail a:hover{background:var(--steel-soft); color:var(--ink)}
+.rail a.active{background:var(--steel-soft); color:var(--steel-ink); font-weight:600}
+.rail .dot{width:.5rem;height:.5rem;border-radius:50%;flex:none;background:var(--low)}
+.rail .dot.done{background:var(--ready)}
+.rail .dot.next{background:var(--steel)}
+.rail .dot.blocked{background:var(--blocked)}
+.rail .sep{border:none; border-top:1px solid var(--line); margin:.7rem .3rem}
+
+main{padding:2.2rem 2.6rem 6rem; min-width:0}
+@media (max-width:640px){ main{padding:1.6rem 1.1rem 4rem} }
+.masthead{max-width:46rem; margin-bottom:2.4rem}
+.eyebrow{font-family:var(--mono); font-size:.74rem; letter-spacing:.11em; text-transform:uppercase; color:var(--steel-ink)}
+h1{font-size:1.9rem; font-weight:800; letter-spacing:-.015em; margin:.4rem 0 .6rem; text-wrap:balance}
+.lede{color:var(--ink-soft); font-size:1.03rem; max-width:64ch}
+.lede code{font-family:var(--mono); font-size:.86em; background:var(--steel-soft); padding:.1em .35em; border-radius:4px}
+
+section{margin-top:3rem; scroll-margin-top:1.2rem}
+h2{font-size:1.32rem; font-weight:800; letter-spacing:-.01em; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem}
+h2 .num{font-family:var(--mono); color:var(--steel-ink); font-weight:600; font-size:.95rem}
+.section-note{color:var(--ink-soft); max-width:68ch; margin:.3rem 0 1.3rem; font-size:.95rem}
+
+.badge{
+  display:inline-flex; align-items:center; gap:.35rem; font-family:var(--mono); font-size:.72rem;
+  letter-spacing:.03em; padding:.22rem .55rem; border-radius:20px; font-weight:600; white-space:nowrap;
+}
+.b-ready{background:var(--ready-bg); color:var(--ready)}
+.b-steel{background:var(--steel-soft); color:var(--steel-ink)}
+.b-risk{background:var(--risk-bg); color:var(--risk)}
+.b-blocked{background:var(--blocked-bg); color:var(--blocked)}
+.b-low{background:var(--low-bg); color:var(--low)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:10px; margin:1rem 0; box-shadow:var(--shadow)}
+table{border-collapse:collapse; width:100%; font-size:.86rem; background:var(--paper-raised)}
+th,td{padding:.6rem .75rem; text-align:left; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{background:var(--steel-soft); font-weight:700; font-size:.74rem; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-soft); white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--steel-soft)}
+td code{font-family:var(--mono); font-size:.92em}
+.num-cell{font-family:var(--mono); font-variant-numeric:tabular-nums; color:var(--ink-soft); white-space:nowrap}
+
+/* status compare columns */
+.status-grid{display:grid; grid-template-columns:1fr 1fr; gap:1.1rem; margin:1rem 0}
+@media (max-width:760px){ .status-grid{grid-template-columns:1fr} }
+.status-col{background:var(--paper-raised); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); overflow:hidden}
+.status-col h3{margin:0; padding:.85rem 1.1rem; font-size:.92rem; display:flex; align-items:center; gap:.5rem; border-bottom:1px solid var(--line)}
+.status-col.good h3{background:var(--ready-bg); color:var(--ready)}
+.status-col.gap h3{background:var(--risk-bg); color:var(--risk)}
+.status-col ul{list-style:none; margin:0; padding:.4rem 0}
+.status-col li{padding:.55rem 1.1rem; font-size:.87rem; border-bottom:1px solid var(--line); display:flex; gap:.5rem}
+.status-col li:last-child{border-bottom:none}
+.status-col li b{display:block; color:var(--ink)}
+.status-col li span.detail{color:var(--ink-soft); display:block; font-size:.85em; margin-top:.15rem}
+.status-col li::before{content:"";flex:none;width:.4rem;height:.4rem;border-radius:50%;margin-top:.5rem;background:var(--line-strong)}
+.status-col.good li::before{background:var(--ready)}
+.status-col.gap li::before{background:var(--risk)}
+
+/* prep item cards (infra tasks) */
+.prep{
+  background:var(--paper-raised); border:1px solid var(--line); border-radius:14px;
+  margin:1.1rem 0 1.6rem; box-shadow:var(--shadow); overflow:hidden;
+}
+.prep-head{
+  display:flex; flex-wrap:wrap; align-items:center; gap:.7rem; padding:1.1rem 1.4rem;
+  border-bottom:1px solid var(--line); background:linear-gradient(180deg, var(--steel-soft), transparent);
+}
+.prep-id{font-family:var(--mono); font-weight:700; color:var(--steel-ink); font-size:.95rem}
+.prep-name{font-weight:800; font-size:1.08rem; letter-spacing:-.01em; margin-right:auto}
+.prep-body{padding:1.2rem 1.4rem 1.4rem; display:grid; gap:1rem; grid-template-columns:1fr 1fr}
+@media (max-width:760px){ .prep-body{grid-template-columns:1fr} }
+.prep-body .full{grid-column:1/-1}
+.field-label{font-family:var(--mono); font-size:.7rem; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:.35rem}
+.field p{margin:0; font-size:.92rem}
+.field ul{margin:.1rem 0 0; padding-left:1.15rem; font-size:.92rem}
+.field li{margin:.28rem 0}
+.field li::marker{color:var(--steel)}
+.chip{font-family:var(--mono); font-size:.74rem; background:var(--low-bg); color:var(--ink-soft); padding:.15rem .5rem; border-radius:6px}
+.chip-row{display:flex; flex-wrap:wrap; gap:.35rem}
+.callout{
+  border-left:3px solid var(--risk); background:var(--risk-bg); color:var(--ink);
+  padding:.7rem .9rem; border-radius:0 8px 8px 0; font-size:.88rem;
+}
+.callout.crit{border-color:var(--blocked); background:var(--blocked-bg)}
+.callout.good{border-color:var(--ready); background:var(--ready-bg)}
+.callout b{color:inherit}
+.dod{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.4rem}
+.dod li{display:flex; gap:.55rem; align-items:flex-start; font-size:.89rem}
+.dod li::before{content:"";flex:none;width:.85rem;height:.85rem;margin-top:.2rem;border-radius:3px;border:1.5px solid var(--line-strong)}
+pre.code{
+  background:var(--steel-soft); border:1px solid var(--line); border-radius:8px; padding:.85rem 1rem;
+  overflow-x:auto; font-family:var(--mono); font-size:.8rem; line-height:1.55; margin:.3rem 0 0;
+}
+
+footer{max-width:66ch; margin-top:3rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem}
+footer code{font-family:var(--mono)}
+</style>
+
+<a class="skip" href="#main-content">Bỏ qua điều hướng</a>
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>Chuẩn bị Frontend theo Roadmap Backend</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+<div class="shell">
+  <aside class="rail">
+    <div class="rail-brand">DNA-ERP · Frontend</div>
+    <div class="rail-title">Tích hợp API thật</div>
+    <nav id="rail-nav">
+      <a href="#status"><span class="dot next"></span>Hiện trạng FE</a>
+      <a href="#principles"><span class="dot next"></span>Nguyên tắc chuyển đổi</a>
+      <a href="#infra-1"><span class="dot next"></span>Lớp gọi API</a>
+      <a href="#infra-2"><span class="dot next"></span>Env &amp; công tắc mock/real</a>
+      <a href="#infra-3"><span class="dot next"></span>Sinh type từ OpenAPI</a>
+      <a href="#infra-4"><span class="dot next"></span>React Query</a>
+      <a href="#infra-5"><span class="dot next"></span>ID: number → string</a>
+      <a href="#infra-6"><span class="dot next"></span>Idempotency-Key</a>
+      <a href="#infra-7"><span class="dot next"></span>Phân trang &amp; filter</a>
+      <a href="#infra-8"><span class="dot next"></span>RBAC trên FE</a>
+      <a href="#infra-9"><span class="dot next"></span>Path alias &amp; dọn nợ TS</a>
+      <a href="#infra-10"><span class="dot next"></span>Lưới an toàn E2E</a>
+      <hr class="sep">
+      <a href="#mapping"><span class="dot next"></span>Mapping Phase ↔ Module FE</a>
+      <a href="#switch-checklist"><span class="dot next"></span>Checklist bật API thật</a>
+      <a href="#risks"><span class="dot blocked"></span>Rủi ro riêng của FE</a>
+    </nav>
+  </aside>
+
+  <main id="main-content">
+    <div class="masthead">
+      <div class="eyebrow">Frontend Integration Readiness · Tech Lead view</div>
+      <h1>Chuẩn bị Frontend để đi theo Roadmap Backend</h1>
+      <p class="lede">Soát trực tiếp mã nguồn <code>D:\DNA-ERP</code> (Next.js 16): đây là app <b>mock-first</b> — 62 trang page đã gọi dữ liệu qua 1 facade duy nhất <code>services/api.ts</code> (re-export từ <code>lib/mock/services</code>), gần như không có trang nào đụng thẳng vào mock. Đó là điểm khởi đầu tốt: chỉ cần thay <b>ruột</b> của facade, module nào xong ở <a href="./dna-erp-backend-roadmap.html">roadmap Backend</a> thì bật module đó — không phải sửa lại 62 trang. Tài liệu này liệt kê hạ tầng cần dựng, thứ tự bật theo phase, và checklist trước khi chuyển 1 module từ mock sang thật.</p>
+    </div>
+
+    <!-- ============ STATUS ============ -->
+    <section id="status">
+      <h2><span class="num">01</span>Hiện trạng Frontend</h2>
+      <p class="section-note">Đối chiếu trực tiếp <code>src/services/api.ts</code>, <code>src/lib/mock/*</code>, <code>src/context/AuthContext.tsx</code>, <code>src/hooks/useFetch.ts</code>, <code>tsconfig.json</code>, <code>package.json</code>.</p>
+      <div class="status-grid">
+        <div class="status-col good">
+          <h3>✓ Đã sẵn sàng — tận dụng được</h3>
+          <ul>
+            <li><b>Facade tách biệt page ↔ nguồn dữ liệu</b><span class="detail">62 file <code>import * as api from '.../services/api'</code>, chỉ 3 file đụng thẳng <code>lib/mock</code>. Đổi ruột facade là đổi được cả hệ thống theo từng module.</span></li>
+            <li><b>Lỗi mock đã giả dạng đúng shape axios</b><span class="detail"><code>err.response = &#123; status, data: &#123; message &#125; &#125;</code> — khớp gần đúng envelope lỗi thật của BE (<code>&#123; success:false, message, error &#125;</code>). Đổi sang axios thật, phần lớn <code>catch</code>/<code>errMsg()</code> không cần sửa.</span></li>
+            <li><b>AuthContext đã đúng vòng đời JWT</b><span class="detail">Lưu <code>access_token</code>/<code>user_info</code> ở <code>localStorage</code>, gọi <code>getProfile()</code> khôi phục phiên lúc mount — đúng pattern cần cho JWT thật, chỉ cần thêm refresh-token.</span></li>
+            <li><b>RBAC-routing FE đã đoán đúng field BE sắp thêm</b><span class="detail"><code>resolveDefaultModule()</code> đã dùng <code>mfgRole/warehouseScope/isPurchaser/isProductPlanner/isSale</code> — đúng 100% các cột D0.2 mà BE Phase 1 sắp thêm vào <code>User</code>.</span></li>
+            <li><b>IA của FE đã map sẵn theo domain nghiệp vụ</b><span class="detail">11 module trang (<code>Admin/Boss/Han/InboundWarehouse/Kcs/Manufacturing/Phoi/ProductionPlan/Purchasing/Sales/Son</code>) đã đúng ranh giới 9 domain BE — phần lớn việc là "nối dây", không phải "vẽ lại IA".</span></li>
+            <li><b>Backend đã bật Swagger</b><span class="detail"><code>SwaggerModule</code> trong <code>main.ts</code> — sinh type/client tự động từ OpenAPI khả thi ngay, không cần BE làm thêm gì.</span></li>
+            <li><b>Playwright đã có sẵn trong devDependencies</b><span class="detail">Chưa thấy test nào dùng — hạ tầng e2e có thể bật ngay làm lưới an toàn khi swap từng module.</span></li>
+          </ul>
+        </div>
+        <div class="status-col gap">
+          <h3>✕ Còn thiếu — phải dựng trước</h3>
+          <ul>
+            <li><b>Không có HTTP client thật</b><span class="detail">Không có <code>axios</code>/wrapper <code>fetch</code> nào trong <code>package.json</code>; <code>lib/config.ts</code> ghi rõ <code>useMockData: true</code> cứng, chưa có đường gọi thật.</span></li>
+            <li><b>Không có biến môi trường</b><span class="detail">0 kết quả <code>process.env</code> trong <code>src</code>, không có <code>.env*</code> nào — chưa có chỗ cấu hình <code>API_BASE_URL</code>.</span></li>
+            <li><b>Không có lớp cache/query</b><span class="detail"><code>useFetch</code> là hook tay, không dedupe/cache/invalidate/retry — sẽ scale kém khi có 62 bảng gọi API thật.</span></li>
+            <li><b>Không phân trang bất kỳ đâu</b><span class="detail"><code>BaseService.getAll()</code> luôn trả nguyên mảng. BE bắt buộc <code>Paginated&lt;T&gt;</code> cho mọi list — 100% trang danh sách hiện tại cần thêm UI phân trang/filter.</span></li>
+            <li><b><code>id</code> kiểu <code>number</code> khắp nơi, BE dùng UUID <code>string</code></b><span class="detail">D0.1 BE giữ UUID cho 62 bảng mới; toàn bộ <code>types/*.ts</code> FE (<code>SalesCustomer.id</code>, <code>SalesPO.customerId</code>...) đang khai <code>number</code> — lệch kiểu breaking, không phải cosmetic.</span></li>
+            <li><b>Không type nào sinh từ OpenAPI</b><span class="detail">5 file trong <code>types/</code> viết tay, dễ trôi khỏi DTO thật của BE mỗi khi 1 phase mới ra field mới.</span></li>
+            <li><b>Lệch tên tài nguyên</b><span class="detail">FE gọi <code>SalesPO</code>/<code>SalesCustomer</code>, BE (sau M12) gọi <code>ExportOrder</code>/<code>SalesCustomer</code> — cần quyết định đổi tên FE hay map ở lớp API client.</span></li>
+            <li><b><code>typescript.ignoreBuildErrors: true</code></b><span class="detail">Đang che lỗi type "tạm thời" trong <code>next.config.mjs</code> — càng để lâu càng khó phát hiện lệch type khi nối API thật.</span></li>
+            <li><b>Không path alias</b><span class="detail"><code>tsconfig.json</code> không có <code>paths</code> — toàn bộ import là <code>../../../</code>, dọn dễ, nên làm sớm.</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PRINCIPLES ============ -->
+    <section id="principles">
+      <h2><span class="num">02</span>Nguyên tắc chuyển đổi</h2>
+      <p class="section-note">4 nguyên tắc chi phối mọi quyết định hạ tầng bên dưới — tối ưu cho "đổi dần theo phase BE, không big-bang".</p>
+      <div class="prep-body" style="grid-template-columns:repeat(2,1fr)">
+        <div class="field"><div class="field-label">1 · Strangler-fig theo module</div><p>Không chờ toàn bộ 13 phase BE xong mới đổi FE. Mỗi module (sales/purchasing/mes...) có công tắc mock↔thật riêng, bật đúng lúc phase BE tương ứng xong — khớp track song song ở roadmap Backend (P3/P10 độc lập).</p></div>
+        <div class="field"><div class="field-label">2 · Giữ nguyên chữ ký facade</div><p><code>services/api.ts</code> export tên hàm nào, giữ nguyên tên + shape trả về khi có thể — 62 trang gọi <code>api.getSalesCustomers()</code> không cần biết bên trong là mock hay <code>axios.get()</code>.</p></div>
+        <div class="field"><div class="field-label">3 · Một nguồn sự thật cho type</div><p>Ngừng viết tay <code>types/*.ts</code> song song với BE DTO. Sinh type (và tốt hơn là cả hook gọi API) trực tiếp từ OpenAPI — lệch field là lỗi build, không phải bug runtime phát hiện trễ.</p></div>
+        <div class="field"><div class="field-label">4 · Đổi hạ tầng trước, đổi endpoint sau</div><p>10 mục ở mục 3 dưới đây không phụ thuộc BE phase nào — dựng xong trước khi BE Phase 1 deploy, để lúc Phase 1 xong là bật được ngay, không phải vừa code hạ tầng vừa gấp deadline.</p></div>
+      </div>
+    </section>
+
+    <!-- ============ INFRA ITEMS ============ -->
+    <section id="infra">
+      <h2><span class="num">03</span>Hạ tầng cần dựng (không phụ thuộc BE phase nào)</h2>
+      <p class="section-note">Làm được ngay bây giờ, song song với BE Phase 0-1. Thứ tự dưới đây là thứ tự nên làm (mục 1-2 mở khoá mọi mục sau).</p>
+
+      <article class="prep" id="infra-1">
+        <header class="prep-head"><span class="prep-id">01</span><span class="prep-name">Lớp gọi API thật (HTTP client)</span><span class="badge b-blocked">Critical</span></header>
+        <div class="prep-body">
+          <div class="field"><div class="field-label">Vấn đề</div><p>Chưa có <code>axios</code>/fetch wrapper nào. Mọi hàm mock hiện trả thẳng payload (vd <code>&#123;accessToken, user&#125;</code>), trong khi BE bọc mọi response trong envelope <code>&#123;success, data, ...&#125;</code>.</p></div>
+          <div class="field"><div class="field-label">Việc cần làm</div><ul>
+            <li>Thêm <code>axios</code>, tạo 1 instance dùng chung <code>lib/http/client.ts</code>.</li>
+            <li>Interceptor request: gắn <code>Authorization: Bearer &lt;token&gt;</code> từ storage.</li>
+            <li>Interceptor response: <b>unwrap</b> <code>res.data.data</code> trước khi trả về caller — để hàm facade mới trả đúng shape như hàm mock cũ.</li>
+            <li>Interceptor lỗi: map lỗi axios thật về đúng shape <code>err.response.data.&#123;message,error,statusCode&#125;</code> đã tồn tại — <code>errMsg()</code> và mọi <code>catch</code> hiện có không cần sửa.</li>
+            <li>401 → thử refresh token 1 lần → thất bại thì <code>logout()</code>, thành công thì retry request gốc.</li>
+          </ul></div>
+          <div class="field full"><div class="callout good"><b>Vì sao rẻ:</b> mock đã cố tình giả lỗi theo shape axios từ trước — công sinterceptor lỗi gần như chỉ là xác nhận lại field <code>error</code> vs <code>message</code> cho khớp, không phải viết lại logic hiển thị lỗi ở 62 trang.</div></div>
+        </div>
+      </article>
+
+      <article class="prep" id="infra-2">
+        <header class="prep-head"><span class="prep-id">02</span><span class="prep-name">Biến môi trường &amp; công tắc mock/real theo từng module</span><span class="badge b-blocked">Critical</span></header>
+        <div class="prep-body">
+          <div class="field"><div class="field-label">Vấn đề</div><p><code>lib/config.ts</code> hiện chỉ có 1 cờ <code>useMockData: true</code> toàn cục — không thể bật <code>sales</code> thật trong khi <code>mes</code> vẫn mock.</p></div>
+          <div class="field"><div class="field-label">Việc cần làm</div><ul>
+            <li><code>.env.local</code>: <code>NEXT_PUBLIC_API_BASE_URL</code>.</li>
+            <li>Đổi <code>APP_CONFIG.useMockData: boolean</code> thành map theo domain: <code>dataSource: &#123; auth, sales, catalog, ledger, planForm, productionInvoice, mesA, purchasing, mesB, weaving, reporting &#125;</code>, mỗi key nhận <code>'mock' | 'real'</code>.</li>
+            <li>Mỗi file <code>services/*.ts</code> (facade) check đúng 1 key tương ứng, không phải cờ global.</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Deliverable</div><p>Bật <code>real</code> cho đúng 1 domain là 1 dòng code thay đổi + redeploy, không đụng module khác.</p></div>
+          <pre class="code">// lib/config.ts
+export const APP_CONFIG = {
+  apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? '',
+  dataSource: {
+    auth: 'real', catalog: 'mock', ledger: 'mock',
+    sales: 'mock', planForm: 'mock', mesA: 'mock',
+    purchasing: 'mock', mesB: 'mock', weaving: 'mock', reporting: 'mock',
+  } as const,
+};</pre>
+        </div>
+      </article>
+
+      <article class="prep" id="infra-3">
+        <header class="prep-head"><span class="prep-id">03</span><span class="prep-name">Sinh type &amp; client từ OpenAPI (thay viết tay <code>types/*.ts</code>)</span><span class="badge b-risk">High</span></header>
+        <div class="prep-body">
+          <div class="field"><div class="field-label">Vấn đề</div><p>BE đã lộ <code>/api/v1/docs-json</code> qua <code>SwaggerModule</code> nhưng FE chưa dùng — 5 file <code>types/*.ts</code> viết tay sẽ trôi khỏi DTO thật ngay khi BE thêm field mới ở mỗi phase.</p></div>
+          <div class="field"><div class="field-label">Việc cần làm</div><ul>
+            <li>Thêm <code>orval</code> (hoặc <code>openapi-typescript</code> nếu chỉ cần type) + script <code>"gen:api": "orval"</code>.</li>
+            <li>Cấu hình orval trỏ <code>http://localhost:PORT/api/v1/docs-json</code>, output types + hook React Query (mục 4) vào <code>src/lib/api-client/generated/</code>.</li>
+            <li>Chạy lại lệnh gen mỗi khi 1 phase BE deploy xong — bắt lệch field ngay ở build, không phải ở runtime QA.</li>
+          </ul></div>
+          <div class="field full"><div class="field-label">Definition of Done</div><ul class="dod">
+            <li>Có script <code>npm run gen:api</code> chạy 1 lệnh, không cần cấu hình tay mỗi lần.</li>
+            <li>CI có bước (hoặc ít nhất pre-commit) chạy gen + diff để phát hiện quên regenerate.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <article class="prep" id="infra-4">
+        <header class="prep-head"><span class="prep-id">04</span><span class="prep-name">Thay <code>useFetch</code> bằng React Query (TanStack Query)</span><span class="badge b-risk">High</span></header>
+        <div class="prep-body">
+          <div class="field"><div class="field-label">Vấn đề</div><p><code>useFetch</code> tự viết không cache/dedupe/invalidate — khi 1 trang vừa <code>create</code> xong phải tự gọi <code>refetch()</code> thủ công, dễ quên, và không có concept phân trang/infinite query mà BE bắt buộc.</p></div>
+          <div class="field"><div class="field-label">Việc cần làm</div><ul>
+            <li>Thêm <code>@tanstack/react-query</code> + <code>QueryClientProvider</code> ở <code>app/layout.tsx</code>.</li>
+            <li>Migrate dần: giữ <code>useFetch</code> cho trang chưa đụng tới, trang nào bật <code>real</code> API thì đổi sang <code>useQuery</code>/<code>useMutation</code> luôn (không migrate 2 lần).</li>
+            <li><code>useMutation</code> + <code>invalidateQueries</code> thay cho gọi <code>refetch()</code> tay sau mỗi create/update/delete.</li>
+          </ul></div>
+          <div class="field full"><div class="callout"><b>Không cần đổi 1 lần:</b> <code>useFetch</code> và React Query sống song song được trong lúc migrate — chỉ đổi khi module đó chuyển sang <code>real</code>, tránh 1 PR khổng lồ.</div></div>
+        </div>
+      </article>
+
+      <article class="prep" id="infra-5">
+        <header class="prep-head"><span class="prep-id">05</span><span class="prep-name">Audit &amp; migrate <code>id: number</code> → <code>string</code></span><span class="badge b-blocked">Critical</span></header>
+        <div class="prep-body">
+          <div class="field"><div class="field-label">Vấn đề</div><p>D0.1 (BE) giữ UUID cho toàn bộ 62 bảng mới. Toàn bộ <code>types/*.ts</code> hiện tại (<code>sales.ts</code>, <code>plan-form.ts</code>, <code>manh.ts</code>, <code>warehouse-transfer.ts</code>, <code>admin.ts</code>) khai <code>id</code>/<code>*Id</code> là <code>number</code>. Đây là lỗi biên dịch/runtime thật, không phải style.</p></div>
+          <div class="field"><div class="field-label">Việc cần làm</div><ul>
+            <li>Không sửa hết 1 lần — sửa đúng lúc domain đó chuyển <code>real</code> (đi cùng nhịp mục 2).</li>
+            <li>Nếu đã làm mục 3 (OpenAPI codegen): xoá type viết tay, dùng type sinh ra — id tự động đúng <code>string</code>, không cần audit tay.</li>
+            <li><code>nextId()</code> trong mock (<code>lib/mock/core/id.ts</code>) chỉ ảnh hưởng module còn mock — không đụng tới khi domain đã <code>real</code>.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <article class="prep" id="infra-6">
+        <header class="prep-head"><span class="prep-id">06</span><span class="prep-name">Helper <code>Idempotency-Key</code></span><span class="badge b-steel">Medium</span></header>
+        <div class="prep-body">
+          <div class="field"><div class="field-label">Vấn đề</div><p>BE bắt buộc header <code>Idempotency-Key</code> cho nhiều POST nhạy cảm: ghi <code>stock_ledger</code>, <code>cutting-proposals</code> (gọi cat_sat), <code>boss-approve</code>, tạo <code>steel-issue</code>/<code>production-batch</code>. FE chưa có khái niệm này.</p></div>
+          <div class="field"><div class="field-label">Việc cần làm</div><ul>
+            <li>1 helper <code>withIdempotencyKey(fn)</code> hoặc hook <code>useIdempotentMutation()</code>: sinh 1 UUID khi user bắt đầu thao tác (vd lúc mở form/bấm nút lần đầu), giữ nguyên key đó cho mọi lần retry của cùng 1 hành động, chỉ sinh key mới khi user chủ động thao tác lại từ đầu.</li>
+            <li>Áp dụng đúng danh sách endpoint đã đánh dấu <code>Idempotency: bắt buộc</code> ở tài liệu backend plan — không cần thêm cho toàn bộ POST.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <article class="prep" id="infra-7">
+        <header class="prep-head"><span class="prep-id">07</span><span class="prep-name">Bộ khung phân trang &amp; filter dùng chung</span><span class="badge b-risk">High</span></header>
+        <div class="prep-body">
+          <div class="field"><div class="field-label">Vấn đề</div><p>0 trang hiện tại có UI phân trang — tất cả gọi <code>getAll()</code> lấy hết. BE trả <code>Paginated&lt;T&gt; = &#123;data, meta:&#123;page,limit,total,totalPages&#125;&#125;</code> cho mọi list.</p></div>
+          <div class="field"><div class="field-label">Việc cần làm</div><ul>
+            <li>1 hook <code>usePaginatedQuery(key, fetchFn, &#123;page,limit,filters&#125;)</code> dựng 1 lần trên React Query, dùng lại cho toàn bộ list.</li>
+            <li>1 component <code>&lt;DataTable&gt;</code> (hoặc thanh phân trang dùng chung) gắn với hook trên — ưu tiên dựng <b>trước khi</b> BE Phase 2 xong, vì 7 module CRUD danh mục thuần (P2) đều cần y hệt UI này.</li>
+          </ul></div>
+          <div class="field full"><div class="callout"><b>Đòn bẩy lớn nhất:</b> BE Phase 2 có 7 module CRUD dùng chung 1 khuôn — FE dựng đúng 1 <code>&lt;DataTable&gt;</code> + <code>usePaginatedQuery</code> là tái dùng được cho cả 7 trang, không phải viết 7 lần.</div></div>
+        </div>
+      </article>
+
+      <article class="prep" id="infra-8">
+        <header class="prep-head"><span class="prep-id">08</span><span class="prep-name">RBAC trên FE mirror đúng quy ước BE</span><span class="badge b-steel">Medium</span></header>
+        <div class="prep-body">
+          <div class="field"><div class="field-label">Vấn đề</div><p>BE check quyền theo <code>MODULE:ACTION</code> (+ <code>mfgRole</code>/<code>warehouseScope</code> scope). FE hiện chỉ có <code>resolveDefaultModule()</code> định tuyến, chưa có cách ẩn/hiện nút theo permission chi tiết.</p></div>
+          <div class="field"><div class="field-label">Việc cần làm</div><ul>
+            <li>Hook <code>useCan('MODULE:ACTION')</code> đọc danh sách permission trả về cùng <code>getProfile()</code> — ẩn nút Create/Approve/Delete đúng như BE sẽ chặn, tránh user bấm rồi nhận 403.</li>
+            <li>Hook <code>useMfgRole()</code>/<code>useWarehouseScope()</code> tái dùng lại field đã có sẵn trong <code>User</code> (mục 1, cột ✓) — chỉ cần thêm lớp kiểm tra ở component, field đã tồn tại.</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <article class="prep" id="infra-9">
+        <header class="prep-head"><span class="prep-id">09</span><span class="prep-name">Path alias &amp; dọn nợ TypeScript</span><span class="badge b-ready">Low</span></header>
+        <div class="prep-body">
+          <div class="field"><div class="field-label">Việc cần làm</div><ul>
+            <li>Thêm <code>"paths": &#123; "@/*": ["./src/*"] &#125;</code> vào <code>tsconfig.json</code> — bỏ dần <code>../../../</code>.</li>
+            <li>Lên kế hoạch gỡ <code>typescript.ignoreBuildErrors: true</code> (<code>next.config.mjs</code>) theo từng domain khi domain đó hết mismatch — không gỡ 1 lần (sẽ vỡ build vì nợ dồn nhiều domain còn mock).</li>
+          </ul></div>
+          <div class="field"><div class="field-label">Vì sao làm sớm</div><p>Rủi ro thấp, không phụ thuộc BE — làm lúc rảnh giữa 2 phase, giảm ma sát code review về sau.</p></div>
+        </div>
+      </article>
+
+      <article class="prep" id="infra-10">
+        <header class="prep-head"><span class="prep-id">10</span><span class="prep-name">Lưới an toàn E2E trước khi swap từng module</span><span class="badge b-steel">Medium</span></header>
+        <div class="prep-body">
+          <div class="field"><div class="field-label">Vấn đề</div><p><code>playwright</code> đã nằm trong <code>devDependencies</code> nhưng chưa thấy test nào — không có gì phát hiện regression khi 1 module chuyển từ mock sang thật.</p></div>
+          <div class="field"><div class="field-label">Việc cần làm</div><ul>
+            <li>Trước khi bật <code>real</code> cho 1 domain: viết 1 test Playwright smoke ghi lại hành vi hiện tại trên mock (luồng chính: tạo/list/sửa/xoá) làm baseline.</li>
+            <li>Chạy lại đúng test đó sau khi bật <code>real</code> — lệch hành vi lộ ra ngay, không cần QA tay dò từng nút.</li>
+          </ul></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ============ MAPPING ============ -->
+    <section id="mapping">
+      <h2><span class="num">04</span>Mapping Phase Backend ↔ Module/Trang Frontend hiện có</h2>
+      <p class="section-note">Trích trực tiếp từ <code>src/modules/pages/*</code> — hầu hết trang đã tồn tại từ bản mock, việc chính là nối dây + bổ sung field/state machine còn thiếu, không phải vẽ IA mới.</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Phase BE</th><th>Trang/Module FE hiện có</th><th>Việc FE cần làm khi bật</th></tr></thead>
+          <tbody>
+            <tr><td class="num-cell">P0</td><td><code>Admin/AuditLogPage</code>, <code>Admin/SystemStatusPage</code>, <code>AuthContext</code></td><td>Chỉ đổi endpoint gọi thật (login/profile/audit log) — UI giữ nguyên.</td></tr>
+            <tr><td class="num-cell">P1</td><td><code>Admin/UsersPage</code>, <code>NotificationsPage</code>, <code>SystemConfigPage</code></td><td><code>normalizeUser</code> nhận field thật; nối chuông thông báo + cấu hình hệ thống; áp dụng mục 05 (id string) cho <code>User</code>.</td></tr>
+            <tr><td class="num-cell">P2</td><td><code>Manufacturing/MfgAllMaterialsPage</code>, <code>MfgFramePiecePage</code>, <code>MfgWarehousesPage</code>, <code>WeavingPointsPage</code>, <code>Admin/MasterDataPage</code></td><td>Áp <code>&lt;DataTable&gt;</code> (mục 07) cho toàn bộ danh mục; thêm UI state machine DRAFT/ACTIVE cho BOM Revision (rà lại <code>MfgSetupPage</code> — có thể cần trang mới).</td></tr>
+            <tr><td class="num-cell">P3</td><td><code>app/demo-ton-kho</code> (trang demo rời), <code>types/warehouse-transfer.ts</code>, <code>Manufacturing/NhapKhoPage</code>, <code>XuatKhoPage</code></td><td><b>Hợp nhất</b> <code>demo-ton-kho</code> vào luồng thật (<code>GET /stock-quant</code>) thay vì giữ 2 nơi hiển thị tồn kho song song.</td></tr>
+            <tr><td class="num-cell">P4</td><td><code>Sales/OrderManagementPage</code>, <code>CustomerManagementPage</code>, <code>PurchaseHistoryPage</code></td><td>Quyết định đổi tên nội bộ <code>SalesPO→ExportOrder</code> hay map ở lớp API client; thêm field <code>channel</code>; id/customerId sang string.</td></tr>
+            <tr><td class="num-cell">P5</td><td><code>ProductionPlan/SKUListPage</code>, <code>SKUDetail</code>, <code>SKUReviewPage</code>; <code>Manufacturing/PhoiDinhMucManhPage</code>, <code>SpecSteelPage</code>, <code>SpecWirePaintPage</code>, <code>SpecAccessoryPage</code>, <code>SpecPackagingPage</code></td><td>Module lớn nhất FE lẫn BE — đối chiếu đúng 8 trạng thái + 2 vòng duyệt nhóm thật ở <code>SKUReviewPage</code>; các trang Spec* map đúng <code>groupKey</code> (<code>sat/day_son/vat_tu_phu_kien/bao_bi_dong_goi</code>).</td></tr>
+            <tr><td class="num-cell">P6</td><td><i>Chưa thấy trang riêng rõ ràng</i></td><td>Rà lại xem PI đã nằm trong <code>Boss/BossApp</code> hay <code>ProductionPlan/LenhSXPage</code> chưa — nếu chưa, đây là trang FE <b>mới</b> cần dựng.</td></tr>
+            <tr><td class="num-cell">P7</td><td><code>Phoi/LenhSanXuatPhoi</code>, <code>ProductionPlan/LenhSXPage</code></td><td>Nối <code>cutting-proposals</code>, hiển thị cây pattern/segment từ cat_sat, cờ <code>isOffPlan</code> khi cắt ngoài đề xuất.</td></tr>
+            <tr><td class="num-cell">P8</td><td><code>Purchasing/*</code> (5 trang), <code>ProductionPlan/KiemTraVatTuPage</code>, <code>InboundWarehouse/KiemTraVatTuPage</code></td><td>2 trang cùng tên ở 2 module khác nhau — rà lại có trùng logic không trước khi nối API thật, tránh nối 2 nơi ra 2 hành vi khác nhau.</td></tr>
+            <tr><td class="num-cell">P9</td><td><code>Phoi/*</code>, <code>Han/*</code>, <code>Son/LenhSanXuatSon</code>, <code>Kcs/*</code> (4 trang)</td><td>4 trang Kcs map thẳng <code>QcReview</code> XOR (<code>steelIssueId</code>/<code>productionBatchId</code>); <code>InboundWarehouse/XuatSatPage</code>, <code>XuatVatTuTieuHaoPage</code> nối steel/material issue thật.</td></tr>
+            <tr><td class="num-cell">P10</td><td><code>Son/ManhChoDanPage</code>, <code>InboundWarehouse/KhoNhapDanPage</code>, <code>KhoXuatDanPage</code></td><td>Track song song — nối được ngay sau khi P4/P5 FE xong, không cần chờ Kcs/Phôi FE xong.</td></tr>
+            <tr><td class="num-cell">P11</td><td><code>InboundWarehouse/KhoChuyenKiemPage</code>, <code>KhoDongGoiPage</code></td><td><span class="badge b-blocked">Giữ nguyên mock</span> — 2 trang này đang 100% sinh số liệu giả từ hash chuỗi (đúng như BE ghi nhận). Không tốn effort nối API cho tới khi BE unblock Phase 11.</td></tr>
+            <tr><td class="num-cell">P12</td><td><code>Admin/DashboardPage</code>, <code>Manufacturing/ThongKePagePlan</code>, <code>ProductionPlan/VatTuDashboardPage</code></td><td>Nối 5 report endpoint thật, làm dần song song — rủi ro thấp.</td></tr>
+            <tr><td class="num-cell">P13</td><td><code>Sales/PurchaseHistoryPage</code> (attachment), <code>OrderManagementPage</code> (đính kèm)</td><td>Thay blob URL tạm bằng upload thật khi BE có endpoint file storage.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout" style="margin-top:.3rem"><b>Lưu ý riêng:</b> <code>Boss/BossApp.tsx</code> hiện là 1 file duy nhất — nhiều khả năng phải tổng hợp duyệt từ nhiều nguồn (PlanForm boss-approve P5, PI boss-decide P6, PO release P7, purchase-proposal approve P8). Nên tách 1 hook <code>usePendingApprovals()</code> gộp nhiều query lại, tránh 1 component gọi rời rạc 4 API duyệt khác nhau.</div>
+    </section>
+
+    <!-- ============ SWITCH CHECKLIST ============ -->
+    <section id="switch-checklist">
+      <h2><span class="num">05</span>Checklist: trước khi bật API thật cho 1 module</h2>
+      <p class="section-note">Dùng lại cho mọi module, mỗi lần 1 domain trong <code>dataSource</code> (mục 02) chuyển từ <code>mock</code> sang <code>real</code>.</p>
+      <ul class="dod" style="max-width:60ch">
+        <li>Domain tương ứng đã pass Definition-of-Done ở <a href="./dna-erp-backend-roadmap.html">roadmap Backend</a> (không bật sớm khi BE chưa xong).</li>
+        <li>Đã chạy <code>gen:api</code> (mục 03) lấy type/hook mới nhất cho domain này.</li>
+        <li>Đã có test Playwright baseline (mục 10) ghi lại hành vi trên mock.</li>
+        <li>Đã audit <code>id</code>/<code>*Id</code> trong type của domain này sang <code>string</code> (mục 05).</li>
+        <li>Trang list của domain đã dùng <code>&lt;DataTable&gt;</code>/<code>usePaginatedQuery</code> (mục 07), không còn gọi <code>getAll()</code> không tham số.</li>
+        <li>Mọi POST nằm trong danh sách "Idempotency bắt buộc" của domain đã bọc <code>withIdempotencyKey()</code> (mục 06).</li>
+        <li>Đổi đúng 1 dòng trong <code>dataSource</code> (mục 02) — không sửa lẻ tẻ trong từng file facade.</li>
+        <li>Chạy lại test Playwright baseline trên môi trường thật, so khớp hành vi trước khi merge.</li>
+      </ul>
+    </section>
+
+    <!-- ============ RISKS ============ -->
+    <section id="risks">
+      <h2><span class="num">06</span>Rủi ro riêng của Frontend</h2>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Rủi ro</th><th>Vì sao xảy ra</th><th>Xử lý đề xuất</th></tr></thead>
+          <tbody>
+            <tr><td>Lệch <code>id</code> type âm thầm (runtime, không lộ ở compile)</td><td><code>ignoreBuildErrors: true</code> che type error; <code>any</code>/<code>Record&lt;string, unknown&gt;</code> dùng khá nhiều trong mock services</td><td>Gỡ <code>ignoreBuildErrors</code> theo từng domain (mục 09) ngay khi domain đó hết mismatch, không chờ gỡ 1 lần cho cả app</td></tr>
+            <tr><td>2 trang <code>KiemTraVatTuPage</code> (ProductionPlan &amp; InboundWarehouse) lệch hành vi khi nối 2 API khác nhau</td><td>Trùng tên trang ở 2 module, không rõ có tách logic đúng theo vai trò gọi hay không</td><td>Rà lại trước P8: xác nhận đây là 2 view khác nhau của cùng 1 <code>InspectionRequest</code>, hay 2 luồng nghiệp vụ khác nhau bị trùng tên tình cờ</td></tr>
+            <tr><td><code>demo-ton-kho</code> tồn tại song song với luồng kho thật</td><td>Trang demo nằm ngoài <code>modules/pages</code>, dễ bị quên khi audit toàn bộ nơi hiển thị tồn kho</td><td>Hợp nhất hoặc xoá khi P3 bật thật — không để 2 nguồn hiển thị số tồn có thể lệch nhau</td></tr>
+            <tr><td>Đồng bộ đa tab bằng sự kiện <code>storage</code> (mock) biến mất khi chuyển API thật</td><td><code>mockStore</code> tự đồng bộ qua <code>window.addEventListener('storage', ...)</code> — cơ chế này không tồn tại với API thật</td><td>Không phải rủi ro cần vá — API thật vốn luôn đọc mới từ server mỗi lần fetch (đơn giản hơn mock), chỉ cần đảm bảo React Query <code>invalidateQueries</code> đúng chỗ sau mutation</td></tr>
+            <tr><td>Đổi tên tài nguyên nửa vời (còn <code>SalesPO</code> ở 1 số file, <code>ExportOrder</code> ở file khác)</td><td>62 trang gọi facade — nếu đổi tên hàm facade nửa chừng sẽ có 2 quy ước cùng tồn tại</td><td>Quyết định 1 lần: đổi tên nội bộ theo BE (rõ ràng dài hạn) hoặc giữ tên FE + map ở lớp API client (ít churn ngắn hạn) — không làm cả 2 cùng lúc ở 2 phần code khác nhau</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      Nguồn: mã nguồn <code>D:\DNA-ERP\src</code> (Next.js 16, soát trực tiếp <code>services/api.ts</code>, <code>lib/mock/*</code>, <code>context/AuthContext.tsx</code>, <code>modules/pages/*</code>) đối chiếu với <a href="./dna-erp-backend-roadmap.html">dna-erp-backend-roadmap.html</a> và <code>dna-erp-backend-implementation-plan.html</code>. Tài liệu này chỉ điều phối chuẩn bị FE — chi tiết DTO/permission từng endpoint tra tài liệu backend plan.
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('#rail-nav a'));
+  var targets = links.map(function(a){ return document.querySelector(a.getAttribute('href')); }).filter(Boolean);
+  if(!('IntersectionObserver' in window) || !targets.length) return;
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(entry){
+      if(!entry.isIntersecting) return;
+      var id = '#' + entry.target.id;
+      links.forEach(function(a){ a.classList.toggle('active', a.getAttribute('href') === id); });
+    });
+  }, { rootMargin: '-10% 0px -75% 0px' });
+  targets.forEach(function(t){ io.observe(t); });
+})();
+</script>
