@@ -14,6 +14,8 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
+import { MfgRoleGuard } from './common/guards/mfg-role.guard';
+import { WarehouseScopeGuard } from './common/guards/warehouse-scope.guard';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -21,6 +23,8 @@ import { RolesModule } from './modules/roles/roles.module';
 import { AuditLogModule } from './modules/audit-log/audit-log.module';
 import { HealthModule } from './modules/health/health.module';
 import { ExternalApiModule } from './modules/external/external-api.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { SystemConfigModule } from './modules/system-config/system-config.module';
 
 @Module({
   imports: [
@@ -64,11 +68,15 @@ import { ExternalApiModule } from './modules/external/external-api.module';
     AuditLogModule,
     HealthModule,
     ExternalApiModule,
+    NotificationsModule,
+    SystemConfigModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
+    { provide: APP_GUARD, useClass: MfgRoleGuard },
+    { provide: APP_GUARD, useClass: WarehouseScopeGuard },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
     { provide: APP_INTERCEPTOR, useClass: ClassSerializerInterceptor },

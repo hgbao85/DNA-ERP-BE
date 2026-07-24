@@ -1,7 +1,8 @@
+import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import * as argon2 from 'argon2';
 import { PERMISSION_MODULES } from '../src/common/constants/permission-modules.constant';
-import { DEFAULT_ROLES } from '../src/common/constants/roles.constant';
+import { BUSINESS_ROLES, DEFAULT_ROLES } from '../src/common/constants/roles.constant';
 import { PrismaClient, PermissionAction } from '../src/generated/prisma/client';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
@@ -29,23 +30,52 @@ async function main() {
     create: {
       name: DEFAULT_ROLES.SUPER_ADMIN,
       description: 'Full access to every module and action',
-      permissions: {
-        create: permissions.map((permission) => ({ permissionId: permission.id })),
-      },
     },
+  });
+  // Re-linked on every run (not just at role creation) so that permissions for newly
+  // added modules (e.g. Phase 1's NOTIFICATION/SYSTEM_CONFIG) get attached to an
+  // already-existing SUPER_ADMIN role instead of silently staying unassigned.
+  await prisma.rolePermission.createMany({
+    data: permissions.map((permission) => ({
+      roleId: superAdminRole.id,
+      permissionId: permission.id,
+    })),
+    skipDuplicates: true,
   });
 
   const viewOnlyPermissions = permissions.filter((p) => p.action === PermissionAction.VIEW);
-  await prisma.role.upsert({
+  const adminRole = await prisma.role.upsert({
     where: { name: DEFAULT_ROLES.ADMIN },
     update: {},
     create: {
       name: DEFAULT_ROLES.ADMIN,
       description: 'Read-only administrative access (starter role, extend as needed)',
-      permissions: {
-        create: viewOnlyPermissions.map((permission) => ({ permissionId: permission.id })),
-      },
     },
+  });
+  await prisma.rolePermission.createMany({
+    data: viewOnlyPermissions.map((permission) => ({
+      roleId: adminRole.id,
+      permissionId: permission.id,
+    })),
+    skipDuplicates: true,
+  });
+
+  // Business roles seeded as empty shells - each phase's module grants its own
+  // permissions to the relevant role as it lands (see backend roadmap doc).
+  await Promise.all(
+    Object.values(BUSINESS_ROLES).map((name) =>
+      prisma.role.upsert({
+        where: { name },
+        update: {},
+        create: { name, description: `Business role: ${name} (permissions granted per phase)` },
+      }),
+    ),
+  );
+
+  await prisma.systemConfig.upsert({
+    where: { id: 1 },
+    update: {},
+    create: { id: 1, companyName: process.env.SEED_COMPANY_NAME ?? 'DNA ERP' },
   });
 
   const adminEmail = process.env.SEED_ADMIN_EMAIL;

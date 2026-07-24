@@ -22,6 +22,40 @@ enum AuditAction {
   DELETE
 }
 
+/// MES role a warehouse-scoped user is specialized in. Only meaningful when the user
+/// is expected to act on manufacturing-floor resources (see User.mfgRole).
+enum MfgRole {
+  PRODUCTION_MANAGER
+  PHOI
+  HAN
+  SON
+  KCS
+  WEAVING_MANAGER
+  WEAVING_EXPORT
+  BOM_MANAGER
+  SPEC_STEEL
+  SPEC_WIRE_PAINT
+  SPEC_ACCESSORY
+  SPEC_PACKAGING
+}
+
+/// Phôi (billet) sub-operation a user is responsible for. Only meaningful when
+/// User.mfgRole = PHOI.
+enum PhoiOperation {
+  CAT
+  TOP_DAU
+  UON
+  DAP
+  DUC_LO
+  BAN_TAN
+}
+
+enum NotificationAudience {
+  ALL
+  BOSS
+  WAREHOUSE_STAFF
+}
+
 model User {
   id        String    @id @default(uuid())
   email     String    @unique
@@ -33,10 +67,23 @@ model User {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  roles         UserRole[]
-  refreshTokens RefreshToken[]
+  /// Business-attribute columns (not permission columns - see PermissionsGuard/RBAC
+  /// above for actual authorization). Used for row-level scoping and MES-specific
+  /// guards (@RequireMfgRole/@RequireWarehouseScope) layered on top of PermissionsGuard.
+  mfgRole          MfgRole?
+  phoiOperation    PhoiOperation?
+  warehouseScope   String?
+  isPurchaser      Boolean        @default(false)
+  isProductPlanner Boolean        @default(false)
+  isSale           Boolean        @default(false)
+
+  roles             UserRole[]
+  refreshTokens     RefreshToken[]
+  notifications     Notification[]
+  notificationReads NotificationRead[]
 
   @@index([deletedAt])
+  @@index([warehouseScope])
   @@map("users")
 }
 
@@ -56,11 +103,11 @@ model Role {
 }
 
 model Permission {
-  id          String            @id @default(uuid())
+  id          String           @id @default(uuid())
   module      String
   action      PermissionAction
   description String?
-  createdAt   DateTime          @default(now())
+  createdAt   DateTime         @default(now())
 
   roles RolePermission[]
 
@@ -128,4 +175,51 @@ model AuditLog {
   @@index([tableName, recordId])
   @@index([userId])
   @@map("audit_logs")
+}
+
+/// Admin broadcast, targeted by audience rather than individual recipients.
+/// Per-user read state lives in NotificationRead.
+model Notification {
+  id        String               @id @default(uuid())
+  title     String
+  message   String
+  audience  NotificationAudience
+  createdBy String?
+  createdAt DateTime             @default(now())
+
+  creator User?              @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  reads   NotificationRead[]
+
+  @@index([audience])
+  @@map("notifications")
+}
+
+/// Junction recording which users have read which notification. Composite PK
+/// doubles as the upsert target that makes POST /notifications/:id/read idempotent.
+model NotificationRead {
+  notificationId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, userId])
+  @@map("notification_reads")
+}
+
+/// Singleton row (id is pinned to 1 by a CHECK constraint, see
+/// prisma/migrations/.../migration.sql) holding company-wide configuration.
+/// Seeded once; there is intentionally no "create" endpoint.
+model SystemConfig {
+  id              Int      @id @default(1)
+  companyName     String
+  companyAddress  String?
+  companyPhone    String?
+  companyEmail    String?
+  taxCode         String?
+  defaultCurrency String   @default("VND")
+  updatedAt       DateTime @updatedAt
+
+  @@map("system_config")
 }

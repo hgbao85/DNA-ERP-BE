@@ -106,6 +106,8 @@ export class AuthService {
       email: user.email,
       roles: deriveRoleNames(user),
       permissions: derivePermissions(user),
+      mfgRole: user.mfgRole,
+      warehouseScope: user.warehouseScope,
     };
 
     const accessToken = await this.jwtService.signAsync(payload, {

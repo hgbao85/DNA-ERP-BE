@@ -9,6 +9,8 @@ export const PERMISSION_MODULES = {
   ROLE: 'ROLE',
   PERMISSION: 'PERMISSION',
   AUDIT_LOG: 'AUDIT_LOG',
+  NOTIFICATION: 'NOTIFICATION',
+  SYSTEM_CONFIG: 'SYSTEM_CONFIG',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

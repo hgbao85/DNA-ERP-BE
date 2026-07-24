@@ -1,11 +1,19 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import * as argon2 from 'argon2';
+import { MfgRole } from '../../generated/prisma/client';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateUserMfgAttributesDto } from './dto/update-user-mfg-attributes.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 
 const userWithRolesInclude = {
@@ -127,6 +135,35 @@ export class UsersService {
     return this.toResponseDto(user);
   }
 
+  async updateMfgAttributes(id: string, dto: UpdateUserMfgAttributesDto): Promise<UserResponseDto> {
+    const current = await this.findOneOrThrow(id);
+
+    const effectiveMfgRole = dto.mfgRole !== undefined ? dto.mfgRole : current.mfgRole;
+    if (dto.phoiOperation !== undefined && effectiveMfgRole !== MfgRole.PHOI) {
+      throw new BadRequestException('phoiOperation is only meaningful when mfgRole is PHOI');
+    }
+
+    // A role change away from PHOI leaves any previous phoiOperation without meaning -
+    // clear it rather than let it linger as stale state.
+    const phoiOperation =
+      dto.mfgRole !== undefined && dto.mfgRole !== MfgRole.PHOI ? null : dto.phoiOperation;
+
+    const user = await this.prisma.user.update({
+      where: { id },
+      data: {
+        mfgRole: dto.mfgRole,
+        phoiOperation,
+        warehouseScope: dto.warehouseScope,
+        isPurchaser: dto.isPurchaser,
+        isProductPlanner: dto.isProductPlanner,
+        isSale: dto.isSale,
+      },
+      include: userWithRolesInclude,
+    });
+
+    return this.toResponseDto(user);
+  }
+
   async remove(id: string): Promise<void> {
     await this.findOneOrThrow(id);
     // Soft delete: the Prisma extension rewrites this into an UPDATE setting deletedAt.
@@ -174,6 +211,12 @@ export class UsersService {
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
       roles: user.roles.map((r) => r.role.name),
+      mfgRole: user.mfgRole,
+      phoiOperation: user.phoiOperation,
+      warehouseScope: user.warehouseScope,
+      isPurchaser: user.isPurchaser,
+      isProductPlanner: user.isProductPlanner,
+      isSale: user.isSale,
     });
   }
 }

@@ -17,6 +17,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateUserMfgAttributesDto } from './dto/update-user-mfg-attributes.dto';
 import { UsersService } from './users.service';
 
 @ApiTags('Users')
@@ -47,6 +48,12 @@ export class UsersController {
   @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.UPDATE })
   update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
     return this.usersService.update(id, dto);
+  }
+
+  @Patch(':id/mfg-attributes')
+  @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.UPDATE })
+  updateMfgAttributes(@Param('id') id: string, @Body() dto: UpdateUserMfgAttributesDto) {
+    return this.usersService.updateMfgAttributes(id, dto);
   }
 
   @Delete(':id')
