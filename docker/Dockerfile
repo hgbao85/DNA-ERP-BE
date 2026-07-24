@@ -8,7 +8,10 @@ RUN corepack enable
 # ---- deps: install all dependencies (incl. dev) for building ----
 FROM base AS deps
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile
+# --ignore-scripts: package.json's postinstall runs `prisma generate`, but
+# prisma/schema.prisma isn't copied into this stage - the build stage below
+# does the real (schema+tsconfig-aware) generate after copying it.
+RUN pnpm install --frozen-lockfile --ignore-scripts
 
 # ---- build: compile TypeScript and generate the Prisma client ----
 FROM base AS build
