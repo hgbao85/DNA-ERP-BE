@@ -1,5 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { ClsService } from 'nestjs-cls';
+import { PrismaClient } from '../generated/prisma/client';
 import { AppClsStore } from '../common/interfaces/cls-store.interface';
 import { withAuditLog } from './extensions/audit-log.extension';
 import { withSoftDelete } from './extensions/soft-delete.extension';
@@ -12,7 +13,8 @@ import { withSoftDelete } from './extensions/soft-delete.extension';
  * that would happen if the layers were reversed.
  */
 export function createExtendedPrismaClient(cls: ClsService<AppClsStore>) {
-  const client = new PrismaClient();
+  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+  const client = new PrismaClient({ adapter });
   return client.$extends(withAuditLog(cls)).$extends(withSoftDelete());
 }
 

@@ -4,7 +4,7 @@
  * than per call-site since every unsafe-* warning here traces back to that one gap.
  */
 /* eslint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../../generated/prisma/client';
 import { SOFT_DELETE_MODELS } from '../soft-delete-models.constant';
 
 /** Minimal shape needed to dynamically call `client[modelKey].update(...)` by model name. */

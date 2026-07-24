@@ -1,6 +1,6 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { PermissionAction } from '@prisma/client';
+import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { AuditLogService } from './audit-log.service';

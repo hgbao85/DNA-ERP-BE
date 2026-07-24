@@ -1,5 +1,5 @@
 import { SetMetadata } from '@nestjs/common';
-import { PermissionAction } from '@prisma/client';
+import { PermissionAction } from '../../generated/prisma/client';
 import { PermissionModule } from '../constants/permission-modules.constant';
 
 export const PERMISSIONS_KEY = 'requiredPermissions';

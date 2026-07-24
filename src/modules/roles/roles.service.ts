@@ -1,5 +1,5 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { Permission } from '@prisma/client';
+import { Permission } from '../../generated/prisma/client';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { paginate } from '../../common/utils/paginate.util';

@@ -40,11 +40,13 @@
     "@nestjs/swagger": "^7.4.2",
     "@nestjs/terminus": "^10.2.3",
     "@nestjs/throttler": "^6.2.1",
-    "@prisma/client": "^5.22.0",
+    "@prisma/adapter-pg": "^7.9.0",
+    "@prisma/client": "^7.9.0",
     "argon2": "^0.41.1",
     "axios": "^1.7.9",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "dotenv": "^16.4.7",
     "helmet": "^8.0.0",
     "joi": "^17.13.3",
     "nestjs-cls": "^4.5.0",
@@ -52,9 +54,10 @@
     "opossum": "^8.1.4",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "pg": "^8.22.0",
     "pino-http": "^10.3.0",
     "pino-pretty": "^13.0.0",
-    "prisma": "^5.22.0",
+    "prisma": "^7.9.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "uuid": "^11.0.3"
@@ -70,6 +73,7 @@
     "@types/node": "^20.17.10",
     "@types/opossum": "^8.1.9",
     "@types/passport-jwt": "^4.0.1",
+    "@types/pg": "^8.11.10",
     "@types/supertest": "^6.0.2",
     "@types/uuid": "^10.0.0",
     "eslint": "^9.17.0",
@@ -94,9 +98,6 @@
       "eslint --fix",
       "prettier --write"
     ]
-  },
-  "prisma": {
-    "seed": "ts-node -r tsconfig-paths/register prisma/seed.ts"
   },
   "jest": {
     "moduleFileExtensions": ["js", "json", "ts"],

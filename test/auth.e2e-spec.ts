@@ -1,6 +1,7 @@
 import { INestApplication, ValidationPipe, VersioningType } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from '../src/generated/prisma/client';
 import * as argon2 from 'argon2';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
@@ -13,7 +14,9 @@ interface AuthTokens {
 
 describe('Auth (e2e)', () => {
   let app: INestApplication;
-  const prisma = new PrismaClient();
+  const prisma = new PrismaClient({
+    adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+  });
   const email = `e2e-${Date.now()}@dna-erp.local`;
   const password = 'E2ePassword123!';
 

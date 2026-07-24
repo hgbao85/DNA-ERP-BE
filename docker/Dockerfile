@@ -12,9 +12,12 @@ RUN pnpm install --frozen-lockfile
 
 # ---- build: compile TypeScript and generate the Prisma client ----
 FROM base AS build
-COPY package.json pnpm-lock.yaml* ./
+COPY package.json pnpm-lock.yaml* prisma.config.ts ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY prisma ./prisma
+# prisma.config.ts requires DATABASE_URL to be resolvable; `generate` never connects,
+# so a placeholder is enough - the real value is supplied at container runtime.
+ENV DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder"
 RUN pnpm prisma generate
 COPY . .
 RUN pnpm build
@@ -30,6 +33,7 @@ RUN addgroup -S app && adduser -S app -G app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
+COPY --from=build /app/prisma.config.ts ./
 COPY package.json ./
 
 USER app

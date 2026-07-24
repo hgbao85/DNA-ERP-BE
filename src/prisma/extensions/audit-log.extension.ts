@@ -4,7 +4,7 @@
  * than per call-site since every unsafe-* warning here traces back to that one gap.
  */
 /* eslint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
-import { AuditAction, Prisma, PrismaClient } from '@prisma/client';
+import { AuditAction, Prisma, PrismaClient } from '../../generated/prisma/client';
 import { ClsService } from 'nestjs-cls';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { SOFT_DELETE_MODELS } from '../soft-delete-models.constant';
