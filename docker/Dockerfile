@@ -12,11 +12,15 @@ RUN pnpm install --frozen-lockfile
 
 # ---- build: compile TypeScript and generate the Prisma client ----
 FROM base AS build
-COPY package.json pnpm-lock.yaml* prisma.config.ts ./
+COPY package.json pnpm-lock.yaml* prisma.config.ts tsconfig.json tsconfig.build.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY prisma ./prisma
 # prisma.config.ts requires DATABASE_URL to be resolvable; `generate` never connects,
 # so a placeholder is enough - the real value is supplied at container runtime.
+# tsconfig.json must exist before `generate` runs: Prisma's client generator reads it
+# to decide whether relative imports need explicit .ts extensions, and without it emits
+# imports like `from "./internal/class.ts"`, which tsc compiles verbatim into a
+# require() that doesn't resolve at runtime (only the compiled .js exists in dist).
 ENV DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder"
 RUN pnpm prisma generate
 COPY . .
