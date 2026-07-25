@@ -39,7 +39,7 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto, ip?: string): Promise<AuthTokensDto> {
-    const user = await this.usersService.findAuthProfileByEmail(dto.email);
+    const user = await this.usersService.findAuthProfileByUsername(dto.username);
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -103,6 +103,7 @@ export class AuthService {
   ): Promise<{ accessToken: string; refreshToken: string; refreshTokenId: string }> {
     const payload: JwtPayload = {
       sub: user.id,
+      username: user.username,
       email: user.email,
       roles: deriveRoleNames(user),
       permissions: derivePermissions(user),

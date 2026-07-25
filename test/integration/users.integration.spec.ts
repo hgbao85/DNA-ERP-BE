@@ -36,8 +36,10 @@ describe('UsersService (integration, real Postgres)', () => {
 
   it('creates a user transactionally and writes a CREATE audit-log entry', async () => {
     const email = `integration-${Date.now()}@dna-erp.local`;
+    const username = `integration-${Date.now()}`;
 
     const created = await usersService.create({
+      username,
       email,
       password: 'IntegrationTest123!',
       firstName: 'Integration',
@@ -55,8 +57,10 @@ describe('UsersService (integration, real Postgres)', () => {
 
   it('soft-deletes a user: excluded from reads, delete recorded as an audit UPDATE', async () => {
     const email = `integration-delete-${Date.now()}@dna-erp.local`;
+    const username = `integration-delete-${Date.now()}`;
 
     const created = await usersService.create({
+      username,
       email,
       password: 'IntegrationTest123!',
       firstName: 'ToDelete',

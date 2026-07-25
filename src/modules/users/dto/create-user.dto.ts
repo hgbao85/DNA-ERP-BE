@@ -1,7 +1,23 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsEmail, IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
+import {
+  IsArray,
+  IsEmail,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Matches,
+  MinLength,
+} from 'class-validator';
 
 export class CreateUserDto {
+  @ApiProperty({ description: 'Login identifier - not the email' })
+  @IsString()
+  @MinLength(3)
+  @Matches(/^[a-zA-Z0-9_.-]+$/, {
+    message: 'username may only contain letters, numbers, dot, underscore and hyphen',
+  })
+  username!: string;
+
   @ApiProperty()
   @IsEmail()
   email!: string;

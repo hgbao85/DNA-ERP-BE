@@ -14,7 +14,7 @@ import { AuthService } from './auth.service';
 describe('AuthService', () => {
   let authService: AuthService;
   let usersService: jest.Mocked<
-    Pick<UsersService, 'findAuthProfileByEmail' | 'findAuthProfileById'>
+    Pick<UsersService, 'findAuthProfileByUsername' | 'findAuthProfileById'>
   >;
   let prisma: {
     refreshToken: {
@@ -32,6 +32,7 @@ describe('AuthService', () => {
 
   const buildUser = (overrides: Partial<Record<string, unknown>> = {}) => ({
     id: 'user-1',
+    username: 'admin',
     email: 'admin@dna-erp.local',
     password: hashedPassword,
     isActive: true,
@@ -52,7 +53,7 @@ describe('AuthService', () => {
 
   beforeEach(() => {
     usersService = {
-      findAuthProfileByEmail: jest.fn(),
+      findAuthProfileByUsername: jest.fn(),
       findAuthProfileById: jest.fn(),
     };
 
@@ -89,10 +90,10 @@ describe('AuthService', () => {
 
   describe('login', () => {
     it('issues an access + refresh token pair for valid credentials', async () => {
-      usersService.findAuthProfileByEmail.mockResolvedValue(buildUser() as never);
+      usersService.findAuthProfileByUsername.mockResolvedValue(buildUser() as never);
 
       const result = await authService.login(
-        { email: 'admin@dna-erp.local', password: rawPassword },
+        { username: 'admin', password: rawPassword },
         '127.0.0.1',
       );
 
@@ -106,29 +107,29 @@ describe('AuthService', () => {
     });
 
     it('rejects an unknown email', async () => {
-      usersService.findAuthProfileByEmail.mockResolvedValue(null);
+      usersService.findAuthProfileByUsername.mockResolvedValue(null);
 
       await expect(
-        authService.login({ email: 'nobody@dna-erp.local', password: rawPassword }),
+        authService.login({ username: 'nobody', password: rawPassword }),
       ).rejects.toThrow(UnauthorizedException);
     });
 
     it('rejects a wrong password', async () => {
-      usersService.findAuthProfileByEmail.mockResolvedValue(buildUser() as never);
+      usersService.findAuthProfileByUsername.mockResolvedValue(buildUser() as never);
 
       await expect(
-        authService.login({ email: 'admin@dna-erp.local', password: 'wrong-password' }),
+        authService.login({ username: 'admin', password: 'wrong-password' }),
       ).rejects.toThrow(UnauthorizedException);
     });
 
     it('rejects an inactive user', async () => {
-      usersService.findAuthProfileByEmail.mockResolvedValue(
+      usersService.findAuthProfileByUsername.mockResolvedValue(
         buildUser({ isActive: false }) as never,
       );
 
-      await expect(
-        authService.login({ email: 'admin@dna-erp.local', password: rawPassword }),
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(authService.login({ username: 'admin', password: rawPassword })).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
   });
 

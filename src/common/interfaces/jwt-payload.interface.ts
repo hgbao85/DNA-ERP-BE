@@ -1,5 +1,6 @@
 export interface JwtPayload {
   sub: string;
+  username: string;
   email: string;
   roles: string[];
   /** Flattened "MODULE:ACTION" strings, e.g. "USER:CREATE" */
@@ -16,6 +17,7 @@ export interface RefreshTokenPayload {
 
 export interface AuthenticatedUser {
   id: string;
+  username: string;
   email: string;
   roles: string[];
   permissions: string[];

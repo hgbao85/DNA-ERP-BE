@@ -58,6 +58,9 @@ enum NotificationAudience {
 
 model User {
   id        String    @id @default(uuid())
+  /// Login identifier (replaces email as of the username migration - see D.username).
+  /// email is kept as a separate contact field, no longer used for authentication.
+  username  String    @unique
   email     String    @unique
   password  String
   firstName String

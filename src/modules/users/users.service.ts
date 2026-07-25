@@ -34,7 +34,7 @@ const authProfileInclude = {
 
 type UserWithRoles = Awaited<ReturnType<UsersService['findRawById']>>;
 export type AuthUserProfile = NonNullable<
-  Awaited<ReturnType<UsersService['findAuthProfileByEmail']>>
+  Awaited<ReturnType<UsersService['findAuthProfileByUsername']>>
 >;
 
 @Injectable()
@@ -42,9 +42,13 @@ export class UsersService {
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
 
   async create(dto: CreateUserDto): Promise<UserResponseDto> {
-    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const existing = await this.prisma.user.findFirst({
+      where: { OR: [{ email: dto.email }, { username: dto.username }] },
+    });
     if (existing) {
-      throw new ConflictException(`Email ${dto.email} is already in use`);
+      const field = existing.email === dto.email ? 'Email' : 'Username';
+      const value = existing.email === dto.email ? dto.email : dto.username;
+      throw new ConflictException(`${field} ${value} is already in use`);
     }
 
     const hashedPassword = await argon2.hash(dto.password);
@@ -55,6 +59,7 @@ export class UsersService {
     const user = await this.prisma.$transaction(async (tx) => {
       const created = await tx.user.create({
         data: {
+          username: dto.username,
           email: dto.email,
           password: hashedPassword,
           firstName: dto.firstName,
@@ -81,6 +86,7 @@ export class UsersService {
     const where = query.search
       ? {
           OR: [
+            { username: { contains: query.search, mode: 'insensitive' as const } },
             { email: { contains: query.search, mode: 'insensitive' as const } },
             { firstName: { contains: query.search, mode: 'insensitive' as const } },
             { lastName: { contains: query.search, mode: 'insensitive' as const } },
@@ -128,6 +134,7 @@ export class UsersService {
       await tx.user.update({
         where: { id },
         data: {
+          username: dto.username,
           firstName: dto.firstName,
           lastName: dto.lastName,
           isActive: dto.isActive,
@@ -219,9 +226,9 @@ export class UsersService {
   }
 
   /** Used by AuthService to validate credentials without exposing the password hash elsewhere. */
-  async findAuthProfileByEmail(email: string) {
+  async findAuthProfileByUsername(username: string) {
     return this.prisma.user.findUnique({
-      where: { email },
+      where: { username },
       include: authProfileInclude,
     });
   }
@@ -252,6 +259,7 @@ export class UsersService {
     }
     return new UserResponseDto({
       id: user.id,
+      username: user.username,
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,

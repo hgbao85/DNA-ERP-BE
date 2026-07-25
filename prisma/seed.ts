@@ -128,11 +128,20 @@ async function main() {
   if (!adminEmail || !adminPassword) {
     throw new Error('SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD must be set to seed the admin user');
   }
+  // Optional so existing deploys that haven't set this env var yet don't break;
+  // falls back to the email's local-part (e.g. "admin@dna-erp.local" -> "admin").
+  const adminUsername = process.env.SEED_ADMIN_USERNAME ?? adminEmail.split('@')[0];
   const hashedPassword = await argon2.hash(adminPassword);
   const user = await prisma.user.upsert({
     where: { email: adminEmail },
-    update: {},
-    create: { email: adminEmail, password: hashedPassword, firstName: 'Super', lastName: 'Admin' },
+    update: { username: adminUsername },
+    create: {
+      username: adminUsername,
+      email: adminEmail,
+      password: hashedPassword,
+      firstName: 'Super',
+      lastName: 'Admin',
+    },
   });
   await prisma.userRole.upsert({
     where: { userId_roleId: { userId: user.id, roleId: admin.id } },

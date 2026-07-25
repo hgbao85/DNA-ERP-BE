@@ -5,6 +5,7 @@ import { MfgRole, PhoiOperation } from '../../../generated/prisma/client';
 @Exclude()
 export class UserResponseDto {
   @Expose() @ApiProperty() id!: string;
+  @Expose() @ApiProperty() username!: string;
   @Expose() @ApiProperty() email!: string;
   @Expose() @ApiProperty() firstName!: string;
   @Expose() @ApiProperty() lastName!: string;

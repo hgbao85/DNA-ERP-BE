@@ -18,6 +18,7 @@ describe('Auth (e2e)', () => {
     adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
   });
   const email = `e2e-${Date.now()}@dna-erp.local`;
+  const username = `e2e-${Date.now()}`;
   const password = 'E2ePassword123!';
 
   beforeAll(async () => {
@@ -29,7 +30,13 @@ describe('Auth (e2e)', () => {
     await app.init();
 
     await prisma.user.create({
-      data: { email, password: await argon2.hash(password), firstName: 'E2E', lastName: 'User' },
+      data: {
+        username,
+        email,
+        password: await argon2.hash(password),
+        firstName: 'E2E',
+        lastName: 'User',
+      },
     });
   });
 
@@ -42,7 +49,7 @@ describe('Auth (e2e)', () => {
   it('logs in, rotates on refresh, then revokes on logout', async () => {
     const loginRes = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email, password })
+      .send({ username, password })
       .expect(200);
 
     const { accessToken, refreshToken } = (loginRes.body as ApiEnvelope<AuthTokens>).data;
@@ -78,7 +85,7 @@ describe('Auth (e2e)', () => {
   it('rejects login with a wrong password', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email, password: 'wrong-password' })
+      .send({ username, password: 'wrong-password' })
       .expect(401);
   });
 });
