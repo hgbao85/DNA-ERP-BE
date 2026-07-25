@@ -63,7 +63,8 @@ describe('UsersService (integration, real Postgres)', () => {
       lastName: 'User',
     });
 
-    await usersService.remove(created.id);
+    // second arg = the acting user's id; must differ from the target to pass the self-delete guard
+    await usersService.remove(created.id, 'another-admin-id');
 
     await expect(usersService.findOne(created.id)).rejects.toThrow();
 

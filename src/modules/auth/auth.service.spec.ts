@@ -38,7 +38,7 @@ describe('AuthService', () => {
     roles: [
       {
         role: {
-          name: 'SUPER_ADMIN',
+          name: 'ADMIN',
           permissions: [{ permission: { module: 'USER', action: 'CREATE' } }],
         },
       },

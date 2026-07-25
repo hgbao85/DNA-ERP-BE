@@ -1,12 +1,14 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { MfgRole } from '../../generated/prisma/client';
+import { MFG_ROLE_TO_BUSINESS_ROLE } from '../../common/constants/role-permissions.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { paginate } from '../../common/utils/paginate.util';
@@ -107,8 +109,20 @@ export class UsersService {
     return this.toResponseDto(user);
   }
 
-  async update(id: string, dto: UpdateUserDto): Promise<UserResponseDto> {
+  async update(id: string, dto: UpdateUserDto, currentUserId: string): Promise<UserResponseDto> {
     await this.findOneOrThrow(id);
+
+    // Self-protection: an admin must not be able to lock themselves out or strip their own
+    // roles (would leave the system potentially un-administerable). Enforced server-side -
+    // the FE hides these controls too, but the BE never trusts that.
+    if (id === currentUserId) {
+      if (dto.roleIds !== undefined) {
+        throw new ForbiddenException('You cannot change your own roles');
+      }
+      if (dto.isActive === false) {
+        throw new ForbiddenException('You cannot deactivate your own account');
+      }
+    }
 
     const user = await this.prisma.$transaction(async (tx) => {
       await tx.user.update({
@@ -148,23 +162,57 @@ export class UsersService {
     const phoiOperation =
       dto.mfgRole !== undefined && dto.mfgRole !== MfgRole.PHOI ? null : dto.phoiOperation;
 
-    const user = await this.prisma.user.update({
-      where: { id },
-      data: {
-        mfgRole: dto.mfgRole,
-        phoiOperation,
-        warehouseScope: dto.warehouseScope,
-        isPurchaser: dto.isPurchaser,
-        isProductPlanner: dto.isProductPlanner,
-        isSale: dto.isSale,
-      },
-      include: userWithRolesInclude,
+    const user = await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: {
+          mfgRole: dto.mfgRole,
+          phoiOperation,
+          warehouseScope: dto.warehouseScope,
+          isPurchaser: dto.isPurchaser,
+          isProductPlanner: dto.isProductPlanner,
+          isSale: dto.isSale,
+        },
+      });
+
+      // Keep the capability Role (RBAC layer 1) in lockstep with the mfgRole attribute
+      // (scope layer 2): when mfgRole changes, drop whichever mfg-managed role the user
+      // held and assign the one paired with the new mfgRole. Roles the admin assigned by
+      // hand (anything not in MFG_ROLE_TO_BUSINESS_ROLE) are never touched. Only runs when
+      // the caller actually sets mfgRole.
+      if (dto.mfgRole !== undefined) {
+        const managedRoleNames = Object.values(MFG_ROLE_TO_BUSINESS_ROLE);
+        const managedRoles = await tx.role.findMany({
+          where: { name: { in: managedRoleNames } },
+          select: { id: true, name: true },
+        });
+
+        await tx.userRole.deleteMany({
+          where: { userId: id, roleId: { in: managedRoles.map((role) => role.id) } },
+        });
+
+        const targetName = MFG_ROLE_TO_BUSINESS_ROLE[dto.mfgRole];
+        if (targetName) {
+          const target = managedRoles.find((role) => role.name === targetName);
+          if (!target) {
+            throw new Error(
+              `Business role "${targetName}" is missing - run the seed to create it.`,
+            );
+          }
+          await tx.userRole.create({ data: { userId: id, roleId: target.id } });
+        }
+      }
+
+      return tx.user.findUniqueOrThrow({ where: { id }, include: userWithRolesInclude });
     });
 
     return this.toResponseDto(user);
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, currentUserId: string): Promise<void> {
+    if (id === currentUserId) {
+      throw new ForbiddenException('You cannot delete your own account');
+    }
     await this.findOneOrThrow(id);
     // Soft delete: the Prisma extension rewrites this into an UPDATE setting deletedAt.
     await this.prisma.user.delete({ where: { id } });

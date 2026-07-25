@@ -15,6 +15,7 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserMfgAttributesDto } from './dto/update-user-mfg-attributes.dto';
@@ -46,8 +47,12 @@ export class UsersController {
 
   @Patch(':id')
   @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.UPDATE })
-  update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
-    return this.usersService.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserDto,
+    @CurrentUser('id') currentUserId: string,
+  ) {
+    return this.usersService.update(id, dto, currentUserId);
   }
 
   @Patch(':id/mfg-attributes')
@@ -59,7 +64,7 @@ export class UsersController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.DELETE })
-  remove(@Param('id') id: string) {
-    return this.usersService.remove(id);
+  remove(@Param('id') id: string, @CurrentUser('id') currentUserId: string) {
+    return this.usersService.remove(id, currentUserId);
   }
 }

@@ -1,5 +1,4 @@
 export const DEFAULT_ROLES = {
-  SUPER_ADMIN: 'SUPER_ADMIN',
   ADMIN: 'ADMIN',
 } as const;
 
@@ -14,7 +13,8 @@ export type DefaultRole = (typeof DEFAULT_ROLES)[keyof typeof DEFAULT_ROLES];
 export const BUSINESS_ROLES = {
   BOSS: 'BOSS',
   SALES_STAFF: 'SALES_STAFF',
-  PRODUCTION_MANAGER: 'PRODUCTION_MANAGER',
+  PRODUCTION_PLANNER: 'PRODUCTION_PLANNER', // KHSX - lập kế hoạch SX (isProductPlanner), khác QLSX
+  PRODUCTION_MANAGER: 'PRODUCTION_MANAGER', // QLSX - quản lý SX
   PHOI_STAFF: 'PHOI_STAFF',
   HAN_STAFF: 'HAN_STAFF',
   SON_STAFF: 'SON_STAFF',
@@ -22,6 +22,10 @@ export const BUSINESS_ROLES = {
   WEAVING_MANAGER: 'WEAVING_MANAGER',
   WAREHOUSE_STAFF: 'WAREHOUSE_STAFF',
   PURCHASER: 'PURCHASER',
+  // BOM spec editors (định mức) - đi cùng MfgRole.SPEC_* tương ứng.
+  SPEC_STEEL_STAFF: 'SPEC_STEEL_STAFF', // định mức sắt
+  SPEC_WIRE_PAINT_STAFF: 'SPEC_WIRE_PAINT_STAFF', // định mức dây/sơn/đinh
+  SPEC_ACCESSORY_PACKAGING_STAFF: 'SPEC_ACCESSORY_PACKAGING_STAFF', // định mức phụ kiện/bao bì
 } as const;
 
 export type BusinessRole = (typeof BUSINESS_ROLES)[keyof typeof BUSINESS_ROLES];

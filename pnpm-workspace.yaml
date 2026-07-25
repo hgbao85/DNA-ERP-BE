@@ -1,0 +1,21 @@
+# Cấu hình pnpm cấp project (pnpm v11 đọc setting từ file này).
+
+# Repo đơn (không phải monorepo) — nhưng pnpm v11 thấy file này thì đòi trường
+# packages, để rỗng nghĩa là không có sub-package nào.
+packages: []
+
+# Cho phép chạy build script (postinstall) của các package cần biên dịch native
+# / generate engine. pnpm mặc định chặn build script để phòng supply-chain.
+# Các package dưới đây đều tin cậy nên đặt true.
+allowBuilds:
+  '@nestjs/core': true
+  '@prisma/client': true
+  '@prisma/engines': true
+  argon2: true
+  prisma: true
+
+# Tắt cổng "minimum release age" — pnpm mặc định chặn package publish < 24h.
+# Lockfile của repo có vài package vừa publish (ts-jest, flatted,
+# @eslint-community/eslint-utils, baseline-browser-mapping) nên bị chặn.
+# Đây là các package tin cậy → đặt 0 để không chặn.
+minimumReleaseAge: 0
