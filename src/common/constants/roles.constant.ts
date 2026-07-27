@@ -19,13 +19,12 @@ export const BUSINESS_ROLES = {
   HAN_STAFF: 'HAN_STAFF',
   SON_STAFF: 'SON_STAFF',
   KCS_STAFF: 'KCS_STAFF',
-  WEAVING_MANAGER: 'WEAVING_MANAGER',
   WAREHOUSE_STAFF: 'WAREHOUSE_STAFF',
   PURCHASER: 'PURCHASER',
   // BOM spec editors (định mức) - đi cùng MfgRole.SPEC_* tương ứng.
-  SPEC_STEEL_STAFF: 'SPEC_STEEL_STAFF', // định mức sắt
-  SPEC_WIRE_PAINT_STAFF: 'SPEC_WIRE_PAINT_STAFF', // định mức dây/sơn/đinh
-  SPEC_ACCESSORY_PACKAGING_STAFF: 'SPEC_ACCESSORY_PACKAGING_STAFF', // định mức phụ kiện/bao bì
+  SPEC_STEEL_STAFF: 'SPEC_STEEL_STAFF', // định mức sắt (FE: "Sắt")
+  SPEC_WIRE_PAINT_STAFF: 'SPEC_WIRE_PAINT_STAFF', // định mức dây/sơn/đinh (FE: "Vật tư/Phụ kiện")
+  SPEC_ACCESSORY_PACKAGING_STAFF: 'SPEC_ACCESSORY_PACKAGING_STAFF', // định mức phụ kiện/bao bì (FE: "Bao bì/Đóng gói")
 } as const;
 
 export type BusinessRole = (typeof BUSINESS_ROLES)[keyof typeof BUSINESS_ROLES];

@@ -147,18 +147,20 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     mfgRole: MfgRole.SPEC_STEEL,
   },
   {
+    // FE hiển thị vị trí này là "Vật tư/Phụ kiện" (nội dung nghiệp vụ vẫn là dây/sơn/đinh).
     username: 'dinhmucdayson',
     email: 'dinhmucdayson@demo.com',
-    name: 'Định mức dây/sơn/đinh',
+    name: 'Định mức Vật tư/Phụ kiện (dây/sơn/đinh)',
     role: BUSINESS_ROLES.SPEC_WIRE_PAINT_STAFF,
     mfgRole: MfgRole.SPEC_WIRE_PAINT,
   },
   {
     // Covers both accessory + packaging; mfgRole is single-valued so we use SPEC_ACCESSORY.
     // Split into two accounts if the two spec areas must be gated separately.
+    // FE hiển thị vị trí này là "Bao bì/Đóng gói" (nội dung nghiệp vụ vẫn là phụ kiện/bao bì).
     username: 'dinhmucpkbb',
     email: 'dinhmucpkbb@demo.com',
-    name: 'Định mức phụ kiện/bao bì',
+    name: 'Định mức Bao bì/Đóng gói (phụ kiện/bao bì)',
     role: BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF,
     mfgRole: MfgRole.SPEC_ACCESSORY,
   },
