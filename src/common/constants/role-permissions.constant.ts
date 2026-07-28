@@ -91,3 +91,12 @@ export const MFG_ROLE_TO_BUSINESS_ROLE: Partial<Record<MfgRole, BusinessRole>> =
   [MfgRole.SPEC_ACCESSORY]: BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF,
   [MfgRole.SPEC_PACKAGING]: BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF,
 };
+
+/**
+ * The 4 floor operations (Phôi/Hàn/Sơn/KCS) all live in a single physical warehouse.
+ * A user assigned one of these mfgRoles must carry this exact warehouseScope - enforced
+ * server-side (see UsersService.updateMfgAttributes) rather than trusted from the caller,
+ * since any client with API access (not just the admin form) can hit this endpoint.
+ */
+export const MFG_FLOOR_WAREHOUSE_SCOPE = 'phoi-son-han';
+export const MFG_FLOOR_ROLES: MfgRole[] = [MfgRole.PHOI, MfgRole.HAN, MfgRole.SON, MfgRole.KCS];

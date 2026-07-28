@@ -1,17 +1,12 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
-import { MfgRole, PhoiOperation } from '../../../generated/prisma/client';
+import { MfgRole } from '../../../generated/prisma/client';
 
 export class UpdateUserMfgAttributesDto {
   @ApiPropertyOptional({ enum: MfgRole })
   @IsOptional()
   @IsEnum(MfgRole)
   mfgRole?: MfgRole;
-
-  @ApiPropertyOptional({ enum: PhoiOperation, description: 'Only meaningful when mfgRole=PHOI' })
-  @IsOptional()
-  @IsEnum(PhoiOperation)
-  phoiOperation?: PhoiOperation;
 
   @ApiPropertyOptional({ description: 'null = tổng kho (sees every warehouse)' })
   @IsOptional()

@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
@@ -7,8 +6,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
-import { MfgRole } from '../../generated/prisma/client';
-import { MFG_ROLE_TO_BUSINESS_ROLE } from '../../common/constants/role-permissions.constant';
+import {
+  MFG_FLOOR_ROLES,
+  MFG_FLOOR_WAREHOUSE_SCOPE,
+  MFG_ROLE_TO_BUSINESS_ROLE,
+} from '../../common/constants/role-permissions.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { paginate } from '../../common/utils/paginate.util';
@@ -159,23 +161,20 @@ export class UsersService {
   async updateMfgAttributes(id: string, dto: UpdateUserMfgAttributesDto): Promise<UserResponseDto> {
     const current = await this.findOneOrThrow(id);
 
+    // Floor roles (Phôi/Hàn/Sơn/KCS) only exist in one warehouse - force it here so the
+    // invariant holds regardless of what the caller sent (or forgot to send).
     const effectiveMfgRole = dto.mfgRole !== undefined ? dto.mfgRole : current.mfgRole;
-    if (dto.phoiOperation !== undefined && effectiveMfgRole !== MfgRole.PHOI) {
-      throw new BadRequestException('phoiOperation is only meaningful when mfgRole is PHOI');
-    }
-
-    // A role change away from PHOI leaves any previous phoiOperation without meaning -
-    // clear it rather than let it linger as stale state.
-    const phoiOperation =
-      dto.mfgRole !== undefined && dto.mfgRole !== MfgRole.PHOI ? null : dto.phoiOperation;
+    const warehouseScope =
+      effectiveMfgRole && MFG_FLOOR_ROLES.includes(effectiveMfgRole)
+        ? MFG_FLOOR_WAREHOUSE_SCOPE
+        : dto.warehouseScope;
 
     const user = await this.prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id },
         data: {
           mfgRole: dto.mfgRole,
-          phoiOperation,
-          warehouseScope: dto.warehouseScope,
+          warehouseScope,
           isPurchaser: dto.isPurchaser,
           isProductPlanner: dto.isProductPlanner,
           isSale: dto.isSale,
@@ -268,7 +267,6 @@ export class UsersService {
       updatedAt: user.updatedAt,
       roles: user.roles.map((r) => r.role.name),
       mfgRole: user.mfgRole,
-      phoiOperation: user.phoiOperation,
       warehouseScope: user.warehouseScope,
       isPurchaser: user.isPurchaser,
       isProductPlanner: user.isProductPlanner,

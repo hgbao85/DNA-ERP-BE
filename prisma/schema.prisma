@@ -36,17 +36,6 @@ enum MfgRole {
   SPEC_PACKAGING
 }
 
-/// Phôi (billet) sub-operation a user is responsible for. Only meaningful when
-/// User.mfgRole = PHOI.
-enum PhoiOperation {
-  CAT
-  TOP_DAU
-  UON
-  DAP
-  DUC_LO
-  BAN_TAN
-}
-
 enum NotificationAudience {
   ALL
   BOSS
@@ -71,7 +60,6 @@ model User {
   /// above for actual authorization). Used for row-level scoping and MES-specific
   /// guards (@RequireMfgRole/@RequireWarehouseScope) layered on top of PermissionsGuard.
   mfgRole          MfgRole?
-  phoiOperation    PhoiOperation?
   warehouseScope   String?
   isPurchaser      Boolean        @default(false)
   isProductPlanner Boolean        @default(false)
