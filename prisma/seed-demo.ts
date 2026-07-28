@@ -26,7 +26,7 @@ interface DemoAccount {
   username: string;
   email: string;
   name: string;
-  role: string;
+  roles: string[];
   mfgRole?: MfgRole;
   warehouseScope?: string;
   isPurchaser?: boolean;
@@ -34,64 +34,69 @@ interface DemoAccount {
   isSale?: boolean;
 }
 
+// Mirrors the accounts actually present in production as of 2026-07-28 (username/email/role
+// combos drift over time via the admin UI - re-check against prod before relying on this list).
 const DEMO_ACCOUNTS: DemoAccount[] = [
-  // "admin_demo" (not "admin") - the production seed's admin (prisma/seed.ts) also
-  // derives its username to "admin" by default; both scripts can run against the same
-  // local dev database, so these must not collide.
   {
-    username: 'admin_demo',
+    username: 'admin',
     email: 'admin@demo.com',
     name: 'Quản trị viên',
-    role: DEFAULT_ROLES.ADMIN,
+    roles: [DEFAULT_ROLES.ADMIN],
   },
-  { username: 'boss', email: 'boss@demo.com', name: 'Giám đốc', role: BUSINESS_ROLES.BOSS },
+  {
+    username: 'admin2',
+    email: 'admin2@demo.com',
+    name: 'Quản trị viên 2',
+    roles: [DEFAULT_ROLES.ADMIN],
+  },
+  { username: 'boss', email: 'boss@demo.com', name: 'Giám đốc', roles: [BUSINESS_ROLES.BOSS] },
   {
     username: 'sales',
     email: 'sales@demo.com',
     name: 'Sales',
-    role: BUSINESS_ROLES.SALES_STAFF,
+    roles: [BUSINESS_ROLES.WAREHOUSE_STAFF, BUSINESS_ROLES.SALES_STAFF],
     isSale: true,
   },
   {
     username: 'khsx',
     email: 'khsx@demo.com',
     name: 'Kế hoạch sản xuất',
-    role: BUSINESS_ROLES.PRODUCTION_PLANNER,
+    roles: [BUSINESS_ROLES.WAREHOUSE_STAFF, BUSINESS_ROLES.PRODUCTION_PLANNER],
     isProductPlanner: true,
   },
   {
     username: 'qlsx',
     email: 'qlsx@demo.com',
     name: 'Quản lý sản xuất',
-    role: BUSINESS_ROLES.PRODUCTION_MANAGER,
+    roles: [BUSINESS_ROLES.PRODUCTION_MANAGER],
     mfgRole: MfgRole.PRODUCTION_MANAGER,
   },
   {
     username: 'khopsh',
     email: 'khopsh@demo.com',
     name: 'Kho phôi sơn hàn',
-    role: BUSINESS_ROLES.WAREHOUSE_STAFF,
+    roles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
     warehouseScope: 'phoi-son-han',
   },
   {
     username: 'khovttp',
     email: 'khovttp@demo.com',
     name: 'Kho VTTP',
-    role: BUSINESS_ROLES.WAREHOUSE_STAFF,
+    roles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
     warehouseScope: 'vat-tu-tp',
   },
   {
     username: 'khotp',
     email: 'khotp@demo.com',
     name: 'Kho thành phẩm',
-    role: BUSINESS_ROLES.WAREHOUSE_STAFF,
+    roles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
     warehouseScope: 'thanh-pham',
   },
   {
     username: 'muapsh',
     email: 'muapsh@demo.com',
     name: 'NV mua hàng (kho phôi sơn hàn)',
-    role: BUSINESS_ROLES.PURCHASER,
+    roles: [BUSINESS_ROLES.WAREHOUSE_STAFF, BUSINESS_ROLES.PURCHASER],
     isPurchaser: true,
     warehouseScope: 'phoi-son-han',
   },
@@ -99,7 +104,7 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     username: 'muavttp',
     email: 'muavttp@demo.com',
     name: 'NV mua hàng (kho VTTP)',
-    role: BUSINESS_ROLES.PURCHASER,
+    roles: [BUSINESS_ROLES.WAREHOUSE_STAFF, BUSINESS_ROLES.PURCHASER],
     isPurchaser: true,
     warehouseScope: 'vat-tu-tp',
   },
@@ -107,7 +112,7 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     username: 'muatp',
     email: 'muatp@demo.com',
     name: 'NV mua hàng (kho thành phẩm)',
-    role: BUSINESS_ROLES.PURCHASER,
+    roles: [BUSINESS_ROLES.WAREHOUSE_STAFF, BUSINESS_ROLES.PURCHASER],
     isPurchaser: true,
     warehouseScope: 'thanh-pham',
   },
@@ -115,53 +120,57 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     username: 'phoi',
     email: 'phoi@demo.com',
     name: 'Phôi',
-    role: BUSINESS_ROLES.PHOI_STAFF,
+    roles: [BUSINESS_ROLES.PHOI_STAFF],
     mfgRole: MfgRole.PHOI,
+    warehouseScope: 'phoi-son-han',
   },
   {
     username: 'han',
     email: 'han@demo.com',
     name: 'Hàn',
-    role: BUSINESS_ROLES.HAN_STAFF,
+    roles: [BUSINESS_ROLES.HAN_STAFF],
     mfgRole: MfgRole.HAN,
+    warehouseScope: 'phoi-son-han',
   },
   {
     username: 'son',
     email: 'son@demo.com',
     name: 'Sơn',
-    role: BUSINESS_ROLES.SON_STAFF,
+    roles: [BUSINESS_ROLES.SON_STAFF],
     mfgRole: MfgRole.SON,
+    warehouseScope: 'phoi-son-han',
   },
   {
     username: 'kcs',
     email: 'kcs@demo.com',
     name: 'KCS',
-    role: BUSINESS_ROLES.KCS_STAFF,
+    roles: [BUSINESS_ROLES.KCS_STAFF],
     mfgRole: MfgRole.KCS,
+    warehouseScope: 'phoi-son-han',
   },
   {
-    username: 'dinhmucsat',
-    email: 'dinhmucsat@demo.com',
+    username: 'dms',
+    email: 'dms@demo.com',
     name: 'Định mức sắt',
-    role: BUSINESS_ROLES.SPEC_STEEL_STAFF,
+    roles: [BUSINESS_ROLES.SPEC_STEEL_STAFF],
     mfgRole: MfgRole.SPEC_STEEL,
   },
   {
     // FE hiển thị vị trí này là "Vật tư/Phụ kiện" (nội dung nghiệp vụ vẫn là dây/sơn/đinh).
-    username: 'dinhmucdayson',
-    email: 'dinhmucdayson@demo.com',
+    username: 'dmvtpk',
+    email: 'dmvtpk@demo.com',
     name: 'Định mức Vật tư/Phụ kiện (dây/sơn/đinh)',
-    role: BUSINESS_ROLES.SPEC_WIRE_PAINT_STAFF,
+    roles: [BUSINESS_ROLES.SPEC_WIRE_PAINT_STAFF],
     mfgRole: MfgRole.SPEC_WIRE_PAINT,
   },
   {
     // Covers both accessory + packaging; mfgRole is single-valued so we use SPEC_ACCESSORY.
     // Split into two accounts if the two spec areas must be gated separately.
     // FE hiển thị vị trí này là "Bao bì/Đóng gói" (nội dung nghiệp vụ vẫn là phụ kiện/bao bì).
-    username: 'dinhmucpkbb',
-    email: 'dinhmucpkbb@demo.com',
+    username: 'dmbbdg',
+    email: 'dmbbdg@demo.com',
     name: 'Định mức Bao bì/Đóng gói (phụ kiện/bao bì)',
-    role: BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF,
+    roles: [BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF],
     mfgRole: MfgRole.SPEC_ACCESSORY,
   },
 ];
@@ -174,10 +183,13 @@ async function main() {
   const roleIdByName = new Map(roles.map((r) => [r.name, r.id]));
 
   for (const acc of DEMO_ACCOUNTS) {
-    const roleId = roleIdByName.get(acc.role);
-    if (!roleId) {
-      throw new Error(`Role "${acc.role}" not found - run \`pnpm seed\` first to create roles.`);
-    }
+    const roleIds = acc.roles.map((roleName) => {
+      const roleId = roleIdByName.get(roleName);
+      if (!roleId) {
+        throw new Error(`Role "${roleName}" not found - run \`pnpm seed\` first to create roles.`);
+      }
+      return roleId;
+    });
 
     const attributes = {
       mfgRole: acc.mfgRole ?? null,
@@ -201,11 +213,13 @@ async function main() {
       },
     });
 
-    await prisma.userRole.upsert({
-      where: { userId_roleId: { userId: user.id, roleId } },
-      update: {},
-      create: { userId: user.id, roleId },
-    });
+    for (const roleId of roleIds) {
+      await prisma.userRole.upsert({
+        where: { userId_roleId: { userId: user.id, roleId } },
+        update: {},
+        create: { userId: user.id, roleId },
+      });
+    }
   }
 
   console.log(`Demo seed complete: ${DEMO_ACCOUNTS.length} accounts (password: "${password}").`);

@@ -8,6 +8,8 @@ import { resolveCorrelationId } from '../common/utils/correlation-id.util';
 export function createPinoLoggerOptions(configService: ConfigService<AppConfig, true>): Params {
   const env = configService.get('env', { infer: true });
   const logLevel = configService.get('logLevel', { infer: true });
+  const apiPrefix = configService.get('apiPrefix', { infer: true });
+  const healthCheckPath = `/${apiPrefix}/health`;
 
   return {
     pinoHttp: {
@@ -24,7 +26,9 @@ export function createPinoLoggerOptions(configService: ConfigService<AppConfig, 
               options: { singleLine: true, colorize: true },
             }
           : undefined,
-      autoLogging: true,
+      autoLogging: {
+        ignore: (req: IncomingMessage) => req.url === healthCheckPath,
+      },
       redact: ['req.headers.authorization', 'req.headers.cookie'],
       customProps: () => ({ context: 'HTTP' }),
     },
