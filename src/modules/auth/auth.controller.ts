@@ -6,6 +6,7 @@ import { UsersService } from '../users/users.service';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { AuthService } from './auth.service';
 import { AuthTokensDto } from './dto/auth-tokens.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 
@@ -46,5 +47,14 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser('id') userId: string): Promise<UserResponseDto> {
     return this.usersService.findOne(userId);
+  }
+
+  // Self-service only - a user changes their own password, verified against the
+  // current one. Admin-reset-for-another-user is a separate concern, not covered here.
+  @ApiBearerAuth()
+  @Post('change-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  changePassword(@CurrentUser('id') userId: string, @Body() dto: ChangePasswordDto): Promise<void> {
+    return this.authService.changePassword(userId, dto);
   }
 }

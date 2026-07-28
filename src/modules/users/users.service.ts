@@ -16,6 +16,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserMfgAttributesDto } from './dto/update-user-mfg-attributes.dto';
 import { UserResponseDto } from './dto/user-response.dto';
@@ -213,6 +214,25 @@ export class UsersService {
     });
 
     return this.toResponseDto(user);
+  }
+
+  async resetPassword(id: string, dto: ResetPasswordDto): Promise<void> {
+    await this.findOneOrThrow(id);
+
+    const hashedPassword = await argon2.hash(dto.newPassword);
+
+    // Admin-initiated reset (no current-password check - the admin doesn't know it).
+    // Revoke the target user's live refresh tokens so their old sessions can't keep going
+    // with the replaced credential; they must log in again with the new password. Their
+    // current access token (stateless JWT) still works until it expires - same trade-off
+    // documented in AuthService.changePassword. Audit log redacts the password field.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id }, data: { password: hashedPassword } });
+      await tx.refreshToken.updateMany({
+        where: { userId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    });
   }
 
   async remove(id: string, currentUserId: string): Promise<void> {

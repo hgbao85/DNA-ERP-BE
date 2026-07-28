@@ -9,6 +9,7 @@ import { parseDurationMs } from '../../common/utils/duration.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { AuthUserProfile, UsersService } from '../users/users.service';
 import { AuthTokensDto } from './dto/auth-tokens.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 
 const REFRESH_TOKEN_BYTES = 64;
@@ -79,6 +80,33 @@ export class AuthService {
         },
       });
       return { accessToken: issued.accessToken, refreshToken: issued.refreshToken };
+    });
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<void> {
+    const user = await this.usersService.findAuthProfileById(userId);
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const passwordMatches = await argon2.verify(user.password, dto.currentPassword);
+    if (!passwordMatches) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    const hashedPassword = await argon2.hash(dto.newPassword);
+
+    // Revoke every live refresh token so a changed password (e.g. after a suspected
+    // leak) actually logs the account out everywhere else, not just on this device.
+    // The current access token still works until it naturally expires (stateless JWT -
+    // see JwtStrategy.validate, which never re-checks the DB), which is an accepted
+    // trade-off already documented for account deletion/deactivation.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { password: hashedPassword } });
+      await tx.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
     });
   }
 

@@ -21,6 +21,10 @@ describe('AuthService', () => {
       findUnique: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
+    };
+    user: {
+      update: jest.Mock;
     };
     $transaction: jest.Mock;
   };
@@ -61,6 +65,10 @@ describe('AuthService', () => {
       refreshToken: {
         findUnique: jest.fn(),
         create: jest.fn().mockResolvedValue({ id: 'refresh-token-1' }),
+        update: jest.fn(),
+        updateMany: jest.fn(),
+      },
+      user: {
         update: jest.fn(),
       },
       $transaction: jest.fn((callback: (tx: unknown) => unknown) => callback(prisma)),
@@ -203,6 +211,58 @@ describe('AuthService', () => {
       await authService.logout('unknown-token');
 
       expect(prisma.refreshToken.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('changePassword', () => {
+    it('updates the hash and revokes every live refresh token when the current password is correct', async () => {
+      usersService.findAuthProfileById.mockResolvedValue(buildUser() as never);
+
+      await authService.changePassword('user-1', {
+        currentPassword: rawPassword,
+        newPassword: 'BrandNewPassword456!',
+      });
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'user-1' },
+          data: expect.objectContaining({ password: expect.any(String) }),
+        }),
+      );
+      const updateMock = prisma.user.update as jest.Mock<unknown, [{ data: { password: string } }]>;
+      expect(updateMock.mock.calls[0][0].data.password).not.toBe(hashedPassword);
+
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: 'user-1', revokedAt: null },
+          data: expect.objectContaining({ revokedAt: expect.any(Date) }),
+        }),
+      );
+    });
+
+    it('rejects a wrong current password and does not touch the DB', async () => {
+      usersService.findAuthProfileById.mockResolvedValue(buildUser() as never);
+
+      await expect(
+        authService.changePassword('user-1', {
+          currentPassword: 'wrong-password',
+          newPassword: 'BrandNewPassword456!',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(prisma.refreshToken.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the user no longer exists', async () => {
+      usersService.findAuthProfileById.mockResolvedValue(null);
+
+      await expect(
+        authService.changePassword('missing-user', {
+          currentPassword: rawPassword,
+          newPassword: 'BrandNewPassword456!',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 });

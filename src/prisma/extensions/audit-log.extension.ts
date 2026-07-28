@@ -29,6 +29,30 @@ function extractId(record: unknown): string {
   return 'unknown';
 }
 
+/**
+ * Strip fields that must never land in an audit-log snapshot, even hashed - audit_logs
+ * is typically readable by a wider group than raw DB access, so storing the argon2 hash
+ * there just widens the offline-brute-force attack surface for no benefit (nothing ever
+ * reads password back out of an audit entry).
+ */
+const REDACTED_FIELDS: Partial<Record<string, string[]>> = {
+  User: ['password'],
+};
+
+function redact(model: string, record: unknown): unknown {
+  const fields = REDACTED_FIELDS[model];
+  if (!fields || !record || typeof record !== 'object') {
+    return record;
+  }
+  const clone = { ...(record as Record<string, unknown>) };
+  for (const field of fields) {
+    if (field in clone) {
+      delete clone[field];
+    }
+  }
+  return clone;
+}
+
 async function writeAuditLog(
   client: Pick<PrismaClient, 'auditLog'>,
   cls: ClsService<AppClsStore>,
@@ -84,7 +108,7 @@ export function withAuditLog(cls: ClsService<AppClsStore>) {
                 action: AuditAction.CREATE,
                 tableName: model,
                 recordId: extractId(result),
-                newValue: result,
+                newValue: redact(model, result),
               });
             }
             return result;
@@ -103,8 +127,8 @@ export function withAuditLog(cls: ClsService<AppClsStore>) {
                 action: AuditAction.UPDATE,
                 tableName: model,
                 recordId: extractId(result) !== 'unknown' ? extractId(result) : extractId(before),
-                oldValue: before,
-                newValue: result,
+                oldValue: redact(model, before),
+                newValue: redact(model, result),
               });
             }
             return result;
@@ -127,7 +151,7 @@ export function withAuditLog(cls: ClsService<AppClsStore>) {
                 action: AuditAction.DELETE,
                 tableName: model,
                 recordId: extractId(before) !== 'unknown' ? extractId(before) : extractId(result),
-                oldValue: before,
+                oldValue: redact(model, before),
               });
             }
             return result;
