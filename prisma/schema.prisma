@@ -211,3 +211,357 @@ model SystemConfig {
 
   @@map("system_config")
 }
+
+// =====================================================================
+// Phase 2 — Danh mục / Master Data + BOM Revision
+// Nguồn: docs/dna-erp-db-schema.html mục 1.2. Domain này (và mọi domain
+// sau) dùng bigserial/bigint làm PK thay vì UUID của Auth/Core — quyết
+// định D0.1 (UUID) chỉ áp cho phần Auth/Core đã triển khai ở P0, không
+// mở rộng sang đây; đây là tách bạch có chủ đích theo đúng schema doc,
+// không phải sự không nhất quán.
+// =====================================================================
+
+enum MaterialKind {
+  STEEL_BAR
+  CONSUMABLE
+  PAINT
+  ACCESSORY
+  PACKAGING
+  OTHER
+}
+
+enum MfgStage {
+  PHOI
+  HAN
+  SON
+}
+
+enum BomRevisionStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+model MaterialGroup {
+  id   BigInt @id @default(autoincrement())
+  name String @unique
+
+  materials Material[]
+
+  @@map("material_groups")
+}
+
+model Material {
+  id              BigInt       @id @default(autoincrement())
+  code            String       @unique
+  name            String
+  kind            MaterialKind @default(OTHER)
+  unit            String
+  materialGroupId BigInt?
+  khoUnitFactor   Decimal?     @db.Decimal(14, 4)
+  isActive        Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  materialGroup     MaterialGroup?     @relation(fields: [materialGroupId], references: [id])
+  materialSuppliers MaterialSupplier[]
+  segmentSpecs      SegmentSpec[]
+  consumableBoms    ConsumableBom[]
+
+  @@index([materialGroupId])
+  @@index([kind])
+  @@map("materials")
+}
+
+model Supplier {
+  id        BigInt   @id @default(autoincrement())
+  name      String
+  phone     String?
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  materialSuppliers MaterialSupplier[]
+
+  @@map("suppliers")
+}
+
+/// Junction vật tư <-> NCC, kèm giá. UQ (materialId, supplierId) theo doc.
+model MaterialSupplier {
+  id           BigInt  @id @default(autoincrement())
+  materialId   BigInt
+  supplierId   BigInt
+  price        Decimal @db.Decimal(14, 2)
+  leadTimeDays Int?
+
+  material Material @relation(fields: [materialId], references: [id])
+  supplier Supplier @relation(fields: [supplierId], references: [id])
+
+  @@unique([materialId, supplierId])
+  @@map("material_suppliers")
+}
+
+model DefectReason {
+  id        BigInt    @id @default(autoincrement())
+  label     String
+  stageType MfgStage?
+
+  @@index([stageType])
+  @@map("defect_reasons")
+}
+
+model WeavingPoint {
+  id              BigInt   @id @default(autoincrement())
+  code            String   @unique
+  fullName        String?
+  aliasNote       String?
+  phone           String?
+  address         String?
+  dayDaiPercent   Decimal? @db.Decimal(5, 2)
+  ketThucPercent  Decimal? @db.Decimal(5, 2)
+  hangQuanPercent Decimal? @db.Decimal(5, 2)
+  note            String?
+  isActive        Boolean  @default(true)
+
+  @@map("weaving_points")
+}
+
+/// 6 kho vật lý + 3 kho ảo (SUPPLIER/PRODUCTION/SCRAP) — seed cố định, xem prisma/seed.ts.
+/// Không có endpoint DELETE cho các code trong PROTECTED_WAREHOUSE_CODES
+/// (src/common/constants/protected-warehouse-codes.constant.ts).
+model Warehouse {
+  id        BigInt  @id @default(autoincrement())
+  code      String  @unique
+  name      String
+  isVirtual Boolean @default(false)
+  note      String?
+  isActive  Boolean @default(true)
+
+  @@map("warehouses")
+}
+
+/// Khách hàng dùng chung nội địa lẫn xuất khẩu (hợp nhất với mfg_export_customers cũ).
+model Customer {
+  id          BigInt   @id @default(autoincrement())
+  name        String
+  phone       String?
+  email       String?
+  address     String?
+  country     String?
+  market      String?
+  contactName String?
+  note        String?
+  createdAt   DateTime @default(now())
+
+  productVariants ProductVariant[]
+
+  @@map("sales_customers")
+}
+
+model MfgProduct {
+  id          BigInt  @id @default(autoincrement())
+  factoryCode String  @unique
+  name        String
+  description String?
+
+  variants     ProductVariant[]
+  pieces       Piece[]
+  parts        Part[]
+  bomRevisions BomRevision[]
+
+  @@map("mfg_products")
+}
+
+model ProductVariant {
+  id           BigInt  @id @default(autoincrement())
+  mfgProductId BigInt
+  customerId   BigInt?
+  colorCode    String?
+  description  String?
+  isActive     Boolean @default(true)
+
+  mfgProduct    MfgProduct     @relation(fields: [mfgProductId], references: [id])
+  customer      Customer?      @relation(fields: [customerId], references: [id])
+  packagingBoms PackagingBom[]
+
+  @@index([mfgProductId])
+  @@index([customerId])
+  @@map("product_variants")
+}
+
+/// Mảnh khung — đơn vị BOM cắt bên Phôi. Chỉ là định danh; số lượng/SKU nằm ở bom_piece
+/// theo từng bom_revision (không versioning được nếu để trên master, đây là bài học từ
+/// frame_pieces cũ).
+model Piece {
+  id           BigInt   @id @default(autoincrement())
+  mfgProductId BigInt
+  code         String
+  groupNumber  Int
+  pieceNumber  Int?
+  name         String
+  isWoven      Boolean  @default(false)
+  weavingPrice Decimal? @db.Decimal(14, 2)
+
+  mfgProduct MfgProduct @relation(fields: [mfgProductId], references: [id])
+  bomPieces  BomPiece[]
+  pieceBoms  PieceBom[]
+
+  @@unique([mfgProductId, code])
+  @@index([mfgProductId])
+  @@map("piece")
+}
+
+/// Chi tiết hàn — đơn vị báo sản lượng Hàn/Sơn, trục BOM thứ 2 tách khỏi Piece.
+model Part {
+  id           BigInt @id @default(autoincrement())
+  mfgProductId BigInt
+  code         String
+  name         String
+
+  mfgProduct MfgProduct @relation(fields: [mfgProductId], references: [id])
+  bomParts   BomPart[]
+  partBoms   PartBom[]
+
+  @@unique([mfgProductId, code])
+  @@map("part")
+}
+
+/// Đoạn sắt = material (phải kind=STEEL_BAR, ràng buộc ở tầng service) + chiều dài cắt.
+model SegmentSpec {
+  id          BigInt @id @default(autoincrement())
+  materialId  BigInt
+  cutLengthMm Int
+
+  material  Material   @relation(fields: [materialId], references: [id])
+  pieceBoms PieceBom[]
+  partBoms  PartBom[]
+
+  @@unique([materialId, cutLengthMm])
+  @@map("segment_spec")
+}
+
+/// Phiên bản định mức theo sản phẩm. production_order (P7) ghim đúng 1 bomRevisionId tại
+/// thời điểm tạo. sourcePlanFormId chưa có FK thật (plan_forms chưa tồn tại tới P5) — cột
+/// để trace, ràng buộc FK sẽ thêm khi P5 dựng bảng plan_forms.
+model BomRevision {
+  id               BigInt            @id @default(autoincrement())
+  mfgProductId     BigInt
+  revNo            Int
+  status           BomRevisionStatus @default(DRAFT)
+  sourcePlanFormId BigInt?
+  createdAt        DateTime          @default(now())
+
+  mfgProduct     MfgProduct      @relation(fields: [mfgProductId], references: [id])
+  bomPieces      BomPiece[]
+  bomParts       BomPart[]
+  pieceBoms      PieceBom[]
+  partBoms       PartBom[]
+  consumableBoms ConsumableBom[]
+
+  @@unique([mfgProductId, revNo])
+  /// Composite-unique target cho FK ghép của piece_bom/part_bom (xem PieceBom/PartBom) -
+  /// cho phép Postgres tự chặn 1 dòng piece_bom/part_bom trỏ nhầm sang bom_revision của
+  /// mfg_product khác với piece/part của chính dòng đó, đúng yêu cầu "ràng buộc chéo cha"
+  /// trong dna-erp-db-schema.html mục piece_bom.
+  @@unique([id, mfgProductId])
+  @@map("bom_revision")
+}
+
+/// SL mảnh/SKU theo revision.
+model BomPiece {
+  id            BigInt @id @default(autoincrement())
+  bomRevisionId BigInt
+  pieceId       BigInt
+  qtyPerUnit    Int
+
+  bomRevision BomRevision @relation(fields: [bomRevisionId], references: [id])
+  piece       Piece       @relation(fields: [pieceId], references: [id])
+
+  @@unique([bomRevisionId, pieceId])
+  @@map("bom_piece")
+}
+
+/// SL chi tiết/SKU theo revision.
+model BomPart {
+  id            BigInt @id @default(autoincrement())
+  bomRevisionId BigInt
+  partId        BigInt
+  qtyPerUnit    Int
+
+  bomRevision BomRevision @relation(fields: [bomRevisionId], references: [id])
+  part        Part        @relation(fields: [partId], references: [id])
+
+  @@unique([bomRevisionId, partId])
+  @@map("bom_part")
+}
+
+/// Đoạn cấu thành 1 mảnh. mfgProductId denormalized để FK ghép (bomRevisionId,
+/// mfgProductId) -> BomRevision(id, mfgProductId): tầng service khi insert phải set
+/// mfgProductId = piece.mfgProductId, DB sẽ tự chặn nếu revision đó thuộc product khác.
+model PieceBom {
+  id            BigInt  @id @default(autoincrement())
+  bomRevisionId BigInt
+  mfgProductId  BigInt
+  pieceId       BigInt
+  segmentSpecId BigInt
+  qtyPerPiece   Int
+  needsHan      Boolean @default(false)
+  needsSon      Boolean @default(false)
+
+  bomRevision BomRevision @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
+  piece       Piece       @relation(fields: [pieceId], references: [id])
+  segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])
+
+  @@unique([bomRevisionId, pieceId, segmentSpecId])
+  @@map("piece_bom")
+}
+
+/// Đoạn cấu thành 1 chi tiết hàn. Cùng kiểu FK ghép mfgProductId như PieceBom — doc gốc
+/// chỉ nêu rõ yêu cầu này cho piece_bom, áp dụng thêm cho part_bom ở đây cho nhất quán vì
+/// cùng lớp rủi ro toàn vẹn dữ liệu (part thuộc sai mfg_product).
+model PartBom {
+  id            BigInt @id @default(autoincrement())
+  bomRevisionId BigInt
+  mfgProductId  BigInt
+  partId        BigInt
+  segmentSpecId BigInt
+  qtyPerPart    Int
+
+  bomRevision BomRevision @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
+  part        Part        @relation(fields: [partId], references: [id])
+  segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])
+
+  @@unique([bomRevisionId, partId, segmentSpecId])
+  @@map("part_bom")
+}
+
+/// Định mức vật tư tiêu hao Hàn/Sơn theo revision.
+model ConsumableBom {
+  id            BigInt   @id @default(autoincrement())
+  bomRevisionId BigInt
+  stage         MfgStage
+  materialId    BigInt
+  qtyPerUnit    Decimal  @db.Decimal(14, 4)
+
+  bomRevision BomRevision @relation(fields: [bomRevisionId], references: [id])
+  material    Material    @relation(fields: [materialId], references: [id])
+
+  @@unique([bomRevisionId, stage, materialId])
+  @@map("consumable_bom")
+}
+
+/// BOM đóng gói theo biến thể sản phẩm.
+model PackagingBom {
+  id               BigInt  @id @default(autoincrement())
+  productVariantId BigInt
+  itemName         String
+  unit             String
+  qtyPerSet        Decimal @db.Decimal(14, 4)
+  isActive         Boolean @default(true)
+
+  productVariant ProductVariant @relation(fields: [productVariantId], references: [id])
+
+  @@index([productVariantId])
+  @@map("packaging_bom")
+}

@@ -25,6 +25,16 @@ import { HealthModule } from './modules/health/health.module';
 import { ExternalApiModule } from './modules/external/external-api.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { SystemConfigModule } from './modules/system-config/system-config.module';
+import { MaterialGroupsModule } from './modules/material-groups/material-groups.module';
+import { SuppliersModule } from './modules/suppliers/suppliers.module';
+import { DefectReasonsModule } from './modules/defect-reasons/defect-reasons.module';
+import { WeavingPointsModule } from './modules/weaving-points/weaving-points.module';
+import { WarehousesModule } from './modules/warehouses/warehouses.module';
+import { CustomersModule } from './modules/customers/customers.module';
+import { ProductsModule } from './modules/products/products.module';
+import { MaterialsModule } from './modules/materials/materials.module';
+import { SegmentSpecsModule } from './modules/segment-specs/segment-specs.module';
+import { BomRevisionsModule } from './modules/bom-revisions/bom-revisions.module';
 
 @Module({
   imports: [
@@ -70,6 +80,16 @@ import { SystemConfigModule } from './modules/system-config/system-config.module
     ExternalApiModule,
     NotificationsModule,
     SystemConfigModule,
+    MaterialGroupsModule,
+    SuppliersModule,
+    DefectReasonsModule,
+    WeavingPointsModule,
+    WarehousesModule,
+    CustomersModule,
+    ProductsModule,
+    MaterialsModule,
+    SegmentSpecsModule,
+    BomRevisionsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

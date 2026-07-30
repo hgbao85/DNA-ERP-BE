@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Chuẩn bị nền tảng &amp; triển khai Phase 2 (Danh mục / BOM)</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+
+.endpoint{display:flex; align-items:center; gap:.6rem; font-family:var(--mono); font-size:.86rem; margin:.35rem 0; flex-wrap:wrap}
+.method{display:inline-flex; justify-content:center; min-width:3.7rem; font-weight:700; font-size:.68rem; padding:.16rem .4rem; border-radius:5px; letter-spacing:.02em; font-family:var(--sans)}
+.m-get{background:var(--fe-bg); color:var(--fe)}
+.m-post{background:var(--add-bg); color:var(--add)}
+.m-patch{background:var(--chg-bg); color:var(--chg)}
+.m-delete{background:var(--del-bg); color:var(--del)}
+.endpoint .note{font-family:var(--sans); color:var(--ink-soft); font-size:.82rem}
+pre.block{background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:.8rem 1rem; overflow-x:auto; font-size:.8rem; margin:.6rem 0 0; line-height:1.55}
+.block-label{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); margin:.7rem 0 0}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend · Phase 2 — Danh mục / Master Data + BOM Revision</div>
+    <h1>Chuẩn bị nền tảng &amp; triển khai toàn bộ Phase 2 theo roadmap backend</h1>
+    <p class="lede">
+      Tổng hợp 1 phiên làm việc dài: từ đọc toàn bộ source BE/FE để đánh giá Phase 2 đã triển khai được
+      chưa, dựng schema + migration cho 20 bảng danh mục/BOM, cho tới viết đầy đủ 10 module CRUD (bao gồm
+      <code>BomRevision</code> — module phức tạp nhất hệ thống) và verify từng module trên database thật.
+    </p>
+    <div class="meta">
+      <span>30/07/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> (chính) · <code>DNA-ERP</code> (dọn code chết)</span>
+      <span>1 migration DB đã áp dụng — 20 bảng, 3 enum</span>
+      <span>10 module BE mới</span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li>Đọc toàn bộ src BE + FE, kết luận <b>Phase 2 có thể triển khai ngay</b> — Phase 1 (RBAC mở rộng, guard <code>@RequireMfgRole</code>/<code>@RequireWarehouseScope</code>, seed 12 role) đã hoàn tất và verify được bằng code thật.</li>
+      <li>Đối chiếu shape dữ liệu mock của FE với <code>dna-erp-db-schema.html</code> trước khi dựng schema — phát hiện FE có sẵn 1 cấu trúc <i>dormant</i> (chưa trang nào dùng) mô phỏng đúng <code>piece_bom</code>, gồm cả field <code>operations</code> mang giá trị enum <code>PhoiOperation</code>.</li>
+      <li>Dựng 20 model + <code>schema.prisma</code>, viết migration tay (không chạy <code>prisma migrate dev</code> trên DB pooled dùng chung khi chưa xác nhận), rồi áp dụng thật lên DB.</li>
+      <li>Theo yêu cầu, xoá enum <code>PhoiOperation</code> khỏi schema — và khi phát hiện FE có code chết dùng đúng khái niệm này (<code>seedFramePieces</code>, <code>FramePieceService</code>), dọn luôn bên FE.</li>
+      <li>Viết đủ 10 module CRUD cho Phase 2, mỗi module đều <b>verify bằng script gọi thẳng class service thật trên DB thật</b> (không phải giả lập) rồi xoá script tạm — không chỉ dừng ở <code>tsc</code>/<code>eslint</code>/build sạch.</li>
+    </ul>
+  </div>
+
+  <!-- ───────────────────────── 1. Đánh giá ───────────────────────── -->
+  <div class="module">
+    <h2><span class="badge b-be">BE</span><span class="badge b-fe">FE</span> 1. Đọc toàn bộ source, đánh giá Phase 2 sẵn sàng chưa</h2>
+    <p class="module-note">Trước khi đụng code, xác nhận Phase 1 đã đúng chuẩn và không có gì dở dang cần dọn trước.</p>
+
+    <div class="card">
+      <h3>Kết luận: BE sẵn sàng, FE đi trước bằng mock</h3>
+      <p>
+        BE mới có P0 (auth/users/roles/audit-log) + P1 (<code>mfgRole</code>/<code>warehouseScope</code> trên
+        User, guard mới, 12 role nghiệp vụ seed idempotent) — <code>schema.prisma</code> lúc đó mới 213 dòng,
+        chưa có bảng nào của P2. FE ngược lại đã có UI đầy đủ cho nhiều domain (Manufacturing, Sales,
+        Purchasing…) nhưng toàn bộ chạy trên <code>lib/mock/services</code>, chỉ <code>auth</code>/<code>users</code>
+        đã nối BE thật qua <code>services/api.ts</code>.
+      </p>
+    </div>
+  </div>
+
+  <!-- ───────────────────────── 2. Chuẩn bị nền tảng ───────────────────────── -->
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 2. Chuẩn bị nền tảng: đối chiếu, schema, migration</h2>
+    <p class="module-note">3 lưu ý ban đầu được yêu cầu xử lý trước khi code CRUD thật.</p>
+
+    <div class="card">
+      <h3>Đối chiếu FE mock vs <code>dna-erp-db-schema.html</code></h3>
+      <p>
+        Domain BOM (<code>Piece/Part/SegmentSpec/BomRevision</code>...) không có gì trong FE mock để đối
+        chiếu — dựng hoàn toàn theo tài liệu doc. Các bảng khác khớp gần như tuyệt đối
+        (<code>WeavingPoint</code>, <code>Material</code>...); một vài lệch nhỏ được doc tự ghi chú sẵn
+        (vd <code>Supplier.address</code> "UI kỳ vọng field này dù seed mock chưa có").
+      </p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">prisma/schema.prisma</span> — 20 model + 3 enum</h3>
+      <p>
+        Dùng <code>bigint</code>/<code>bigserial</code> làm PK cho toàn bộ domain P2 (khác UUID của
+        Auth/Core — tách bạch có chủ đích, khớp đúng kiểu <code>bigserial</code> trong doc gốc). Thêm
+        composite-unique <code>bom_revision(id, mfgProductId)</code> để <code>piece_bom</code>/<code>part_bom</code>
+        có composite-FK ngược về đúng product của revision.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">prisma/migrations/20260730000000_add_phase2_master_data_and_bom/</span></h3>
+      <p>
+        Viết tay theo đúng convention Prisma sinh ra (đối chiếu migration <code>init</code> có sẵn) — không
+        chạy <code>prisma migrate dev</code> trực tiếp vì <code>DATABASE_URL</code> trỏ tới Prisma Postgres
+        <b>pooled dùng chung</b>, chỉ chạy sau khi xác nhận với bạn. Có thêm 1 partial unique index viết tay
+        (<code>bom_revision_one_active_per_product</code>) — Prisma schema DSL không hỗ trợ index có
+        <code>WHERE</code>.
+      </p>
+    </div>
+  </div>
+
+  <!-- ───────────────────────── 3. Bỏ PhoiOperation ───────────────────────── -->
+  <div class="module">
+    <h2><span class="badge b-be">BE</span><span class="badge b-fe">FE</span> 3. Bỏ enum <code>PhoiOperation</code> + dọn code chết liên quan ở FE</h2>
+    <p class="module-note">Theo yêu cầu trực tiếp — phát sinh 1 phát hiện đáng chú ý về FE trong lúc xử lý.</p>
+
+    <div class="card">
+      <h3><span class="pill p-del">Xoá</span> Enum + field trên <code>PieceBom</code></h3>
+      <p>
+        Bỏ enum <code>PhoiOperation</code> và field <code>operations</code> khỏi <code>schema.prisma</code>
+        + migration (chưa apply lúc đó nên sửa trực tiếp file, không cần migration bù). 2 migration lịch sử
+        cũ (đã áp dụng thật, từng thêm/xoá field này trên <code>User</code>) giữ nguyên không đụng tới.
+      </p>
+    </div>
+
+    <div class="callout warn">
+      <b>Phát hiện khi kiểm tra lại:</b> FE <i>có</i> field <code>operations</code> mang đúng bộ giá trị
+      enum này (<code>seed.ts</code>, trong <code>seedFramePieces[].materials[]</code>) — nhưng grep xác
+      nhận <b>không trang nào gọi tới</b> <code>FramePieceService</code>/<code>getFrameProducts()</code>. Là
+      code chết, không phải tính năng đang chạy.
+    </div>
+
+    <div class="card">
+      <h3><span class="pill p-del">Xoá</span> <span class="path">lib/mock/data/seed.ts</span>, <span class="path">lib/mock/services/mfg.service.ts</span></h3>
+      <p>
+        Xoá <code>seedFrameProducts</code>, <code>seedFramePieces</code>, 2 dòng khởi tạo store tương ứng,
+        class <code>FramePieceService</code>, và 5 hàm export (<code>getFrameProducts</code>,
+        <code>getFramePieces</code>, <code>createFramePiece</code>, <code>updateFramePiece</code>,
+        <code>deleteFramePiece</code>). Sửa lại 1 comment còn nhắc tên biến đã xoá.
+      </p>
+    </div>
+  </div>
+
+  <!-- ───────────────────────── 4. Áp migration + seed ───────────────────────── -->
+  <div class="module">
+    <h2><span class="badge b-db">DB</span> 4. Áp migration lên DB thật + xử lý seed</h2>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Việc</th><th>Kết quả</th></tr></thead>
+        <tbody>
+          <tr><td><code>prisma migrate deploy</code></td><td><span class="pill p-add">Thành công</span> — 20 bảng + 3 enum lên DB pooled</td></tr>
+          <tr><td>Sửa thứ tự <code>prisma/seed.ts</code></td><td>Chuyển bước seed 9 kho lên <b>trước</b> bước tạo admin user — 2 việc độc lập, kho không nên bị chặn bởi thiếu biến admin</td></tr>
+          <tr><td>Seed 9 kho (6 vật lý + 3 ảo)</td><td><span class="pill p-add">Thành công</span> — verify bằng script tạm, khớp đúng code FE đã hard-code</td></tr>
+          <tr><td>Seed admin user</td><td><span class="pill p-chg">Còn treo</span> — DB đã có sẵn <code>admin@demo.com</code> (dataset demo cũ), không tạo trùng; <code>.env</code> chưa set <code>SEED_ADMIN_EMAIL/PASSWORD</code> nên bước này luôn báo lỗi cuối script (vô hại — các bước trước đã ghi DB xong)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <b><span class="path">protected-warehouse-codes.constant.ts</span>:</b> danh sách 9 code kho cố định,
+      dùng để chặn xoá/đổi tên ở <code>warehouses.service.ts</code> — khớp đúng các code FE đã hard-code
+      rải rác (<code>XuatSatPage.tsx</code>, <code>InboundWarehouseApp.tsx</code>...).
+    </div>
+  </div>
+
+  <!-- ───────────────────────── 5. 7 module CRUD thuần ───────────────────────── -->
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 5. 7 module CRUD thuần</h2>
+    <p class="module-note"><code>material-groups</code> làm khuôn mẫu đầu tiên, 6 module còn lại theo cùng pattern nhưng khác nhau ở quy tắc xoá.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Module</th><th>Xoá</th><th>Ghi chú riêng</th></tr></thead>
+        <tbody>
+          <tr><td class="path">material-groups</td><td>Hard delete</td><td>Không có <code>isActive</code> trong doc gốc</td></tr>
+          <tr><td class="path">suppliers</td><td>Soft (<code>isActive=false</code>)</td><td></td></tr>
+          <tr><td class="path">defect-reasons</td><td>Hard delete</td><td>Chưa bảng nào FK tới (QcReview ở P9)</td></tr>
+          <tr><td class="path">weaving-points</td><td>Soft (<code>isActive=false</code>)</td><td>3 field % dạng <code>Decimal</code></td></tr>
+          <tr><td class="path">warehouses</td><td>Soft + <span class="pill p-chg">Guard riêng</span></td><td>Chặn xoá <b>và</b> đổi <code>code</code> cho 9 mã protected</td></tr>
+          <tr><td class="path">customers</td><td>Hard delete</td><td></td></tr>
+          <tr><td class="path">products</td><td>Hard delete</td><td>Không tự pre-check FK — để RESTRICT + filter Prisma toàn cục lo (P2003 → 400)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">common/utils/parse-bigint-id.util.ts</span> — helper dùng chung</h3>
+      <p>
+        Parse route param string → <code>bigint</code>, 400 nếu không phải số. Dùng lại ở toàn bộ 10 module
+        P2 (khác hẳn cách <code>UsersController</code> xử lý UUID trực tiếp).
+      </p>
+    </div>
+  </div>
+
+  <!-- ───────────────────────── 6-8. Materials/Product con/SegmentSpec ───────────────────────── -->
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 6. Materials + MaterialSuppliers</h2>
+    <p class="module-note">Nested resource đầu tiên: <code>/materials/:materialId/suppliers</code>.</p>
+    <div class="card">
+      <p>
+        Trả kèm <code>supplierName</code> (denormalized) để không phải gọi thêm API khi hiển thị bảng giá.
+        <code>supplierId</code> không sửa được sau khi tạo link — đổi NCC = xoá rồi tạo lại, giữ đúng ngữ
+        nghĩa junction table. Xoá liên kết dùng permission <code>UPDATE</code> (không phải <code>DELETE</code>)
+        — coi là sửa dữ liệu material, giống cách <code>UsersService.update()</code> quản lý <code>roleIds</code>.
+      </p>
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 7. ProductVariant / Piece / Part</h2>
+    <p class="module-note">Cả 3 nested dưới <code>/products/:productId/...</code>, tái dùng permission <code>PRODUCT</code>.</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Entity</th><th>Unique</th><th>Xoá</th></tr></thead>
+        <tbody>
+          <tr><td>ProductVariant</td><td>—</td><td>Soft (<code>isActive</code>)</td></tr>
+          <tr><td>Piece</td><td><code>(mfgProductId, code)</code></td><td>Hard, RESTRICT FK từ bom_piece/piece_bom</td></tr>
+          <tr><td>Part</td><td><code>(mfgProductId, code)</code></td><td>Hard, RESTRICT FK từ bom_part/part_bom</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">Mọi thao tác trên item con đều verify <code>mfgProductId</code> khớp <code>productId</code> trên route — không sửa/xoá nhầm item của product khác dù biết đúng <code>id</code>.</div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 8. SegmentSpec</h2>
+    <p class="module-note">Đoạn sắt = material + chiều dài cắt — điều kiện tiên quyết cho BomRevision.</p>
+    <div class="card">
+      <h3>Validate <code>material.kind = STEEL_BAR</code></h3>
+      <p>
+        DB không check được ràng buộc chéo bảng này — enforce ở service, trả 400 kèm code vật liệu + kind
+        thực tế nếu sai. Verify bằng chính class <code>SegmentSpecsService</code> thật (không giả lập): tạo
+        thành công trên STEEL_BAR, từ chối đúng 400 trên PAINT, từ chối đúng 409 khi trùng
+        <code>(materialId, cutLengthMm)</code>.
+      </p>
+    </div>
+  </div>
+
+  <!-- ───────────────────────── 9. BomRevision ───────────────────────── -->
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 9. BomRevision + 5 bảng dòng con <span class="pill p-chg">Phức tạp nhất</span></h2>
+    <p class="module-note">
+      <code>bom_piece</code> / <code>bom_part</code> / <code>piece_bom</code> / <code>part_bom</code> /
+      <code>consumable_bom</code> — 2 controller (<code>ProductBomRevisionsController</code> cho
+      create/list theo product, <code>BomRevisionsController</code> cho mọi thao tác theo id riêng của
+      revision, kể cả 5 sub-resource).
+    </p>
+
+    <div class="card">
+      <h3>State machine DRAFT → ACTIVE → RETIRED</h3>
+      <p>
+        Mọi create/update/delete trên 5 bảng dòng con đi qua <code>assertDraft()</code> — 409 nếu revision
+        không còn DRAFT. Revision chỉ xoá được khi còn DRAFT (ACTIVE/RETIRED là lịch sử vĩnh viễn mà
+        <code>production_order</code> ở P7 sẽ ghim <code>bomRevisionId</code> vào).
+      </p>
+    </div>
+
+    <div class="card">
+      <h3><code>activate()</code> an toàn dưới tải song song</h3>
+      <p>
+        Transaction retire-ACTIVE-cũ-rồi-activate-mới cho cùng 1 product. Bộ chặn concurrency thật sự là
+        <b>partial unique index</b> <code>bom_revision_one_active_per_product</code> đã thêm sẵn ở
+        migration — không phải lock trong code: nếu 2 <code>activate()</code> chạy đua nhau, DB tự chặn cái
+        commit sau (409 qua filter Prisma toàn cục).
+      </p>
+    </div>
+
+    <div class="callout warn">
+      <b>Phát hiện khi viết code:</b> <code>bom_piece</code>/<code>bom_part</code> <b>không có cột
+      <code>mfg_product_id</code></b>, và composite-FK của <code>piece_bom</code>/<code>part_bom</code> chỉ
+      chứng minh <i>dòng đó</i> trỏ đúng 1 revision thật — không hề đảm bảo piece/part được gán vào có cùng
+      product với revision. Bù bằng <code>assertSameProduct()</code> ở tầng service cho cả 4 bảng liên quan
+      (400 nếu lệch product).
+    </div>
+
+    <div class="card">
+      <h3><code>activate()</code> dùng permission <code>APPROVE</code></h3>
+      <p>Coi là state transition/duyệt, không phải sửa field thường — khác với các <code>Patch</code> khác trong module dùng <code>UPDATE</code>.</p>
+    </div>
+
+    <div class="callout ok">
+      <b>Verify bằng chính <code>BomRevisionsService</code> thật trên DB thật — 10 kịch bản, tất cả đúng:</b>
+      tạo DRAFT → thêm bom_piece cùng product (OK) / khác product (400) → piece_bom composite-FK + label
+      đúng → consumable_bom từ chối STEEL_BAR / nhận PAINT → activate → sửa dòng con sau activate bị chặn
+      (409) → xoá revision ACTIVE bị chặn (409) → tạo rev2 + activate rev2 → rev1 tự động chuyển RETIRED,
+      chỉ đúng 1 ACTIVE.
+    </div>
+  </div>
+
+  <!-- ───────────────────────── 10. Tổng kết module + kiểm thử ───────────────────────── -->
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 10. Toàn cảnh module mới + phương pháp kiểm thử</h2>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Module</th><th>Permission</th><th>Loại xoá</th></tr></thead>
+        <tbody>
+          <tr><td class="path">material-groups</td><td><code>MATERIAL_GROUP</code></td><td>Hard</td></tr>
+          <tr><td class="path">suppliers</td><td><code>SUPPLIER</code></td><td>Soft</td></tr>
+          <tr><td class="path">defect-reasons</td><td><code>DEFECT_REASON</code></td><td>Hard</td></tr>
+          <tr><td class="path">weaving-points</td><td><code>WEAVING_POINT</code></td><td>Soft</td></tr>
+          <tr><td class="path">warehouses</td><td><code>WAREHOUSE</code></td><td>Soft + guard bảo vệ</td></tr>
+          <tr><td class="path">customers</td><td><code>CUSTOMER</code></td><td>Hard</td></tr>
+          <tr><td class="path">products (+variants/pieces/parts)</td><td><code>PRODUCT</code></td><td>Hard (product) / Soft (variant)</td></tr>
+          <tr><td class="path">materials (+suppliers)</td><td><code>MATERIAL</code></td><td>Soft</td></tr>
+          <tr><td class="path">segment-specs</td><td><code>SEGMENT_SPEC</code></td><td>Hard</td></tr>
+          <tr><td class="path">bom-revisions (+5 bảng con)</td><td><code>BOM_REVISION</code></td><td>Hard, chỉ khi DRAFT</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <ul class="timeline" style="margin-top:1.3rem">
+      <li><b><code>tsc --noEmit</code> + <code>eslint</code> + <code>nest build</code></b><span> — chạy lại sau mỗi module, sạch tuyệt đối trước khi sang module kế tiếp.</span></li>
+      <li><b>Smoke test trên DB thật cho từng module</b><span> — viết script <code>prisma/_smoke-*-tmp.ts</code> gọi thẳng class service thật (không phải raw Prisma giả lập) qua <code>ts-node</code>, verify xong xoá script ngay. Không chỉ test happy-path: cố tình test cả unique constraint, FK RESTRICT, cross-product guard, state machine 409.</span></li>
+      <li><b><code>pnpm seed</code> chạy lại sau mỗi permission mới</b><span> — xác nhận permission mới được sync vào DB và gán cho ADMIN/BOSS đúng, dù bước cuối (tạo admin) luôn báo lỗi do thiếu biến môi trường (xem mục 4).</span></li>
+    </ul>
+  </div>
+
+  <!-- ───────────────────────── 11. API Reference ───────────────────────── -->
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 11. API Reference cho FE</h2>
+    <p class="module-note">
+      Toàn bộ endpoint mới, để FE tra khi nối dây từ mock sang thật. Quy ước chung áp dụng cho tất cả.
+    </p>
+
+    <div class="callout">
+      <b>Quy ước chung:</b> base path <code>/api/v1/...</code> · header <code>Authorization: Bearer &lt;jwt&gt;</code>
+      · mọi response thành công bọc trong <code>{ success: true, data, timestamp, path, statusCode }</code> —
+      FE đọc field <code>data</code>. Danh sách phân trang: query <code>page,limit,sortBy,sortOrder,search</code>,
+      trả <code>{ data: [...], meta: { page, limit, total, totalPages } }</code>. Mọi <code>id</code> (kể cả
+      trong body request) là <b>string</b>, không phải number — domain P2 dùng <code>bigint</code>, JSON
+      không biểu diễn được số nguyên lớn an toàn.
+    </div>
+
+    <!-- material-groups -->
+    <div class="card">
+      <h3><span class="path">/material-groups</span></h3>
+      <div class="endpoint"><span class="method m-post">POST</span> /material-groups <span class="note">quyền MATERIAL_GROUP:CREATE</span></div>
+      <div class="endpoint"><span class="method m-get">GET</span> /material-groups</div>
+      <div class="endpoint"><span class="method m-get">GET</span> /material-groups/:id</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> /material-groups/:id</div>
+      <div class="endpoint"><span class="method m-delete">DELETE</span> /material-groups/:id <span class="note">xoá thật</span></div>
+      <div class="block-label">Body tạo</div>
+      <pre class="block">{ "name": "Sắt ống" }</pre>
+      <div class="block-label">Response</div>
+      <pre class="block">{ "id": "1", "name": "Sắt ống" }</pre>
+    </div>
+
+    <!-- suppliers -->
+    <div class="card">
+      <h3><span class="path">/suppliers</span></h3>
+      <div class="endpoint"><span class="method m-post">POST</span> /suppliers</div>
+      <div class="endpoint"><span class="method m-get">GET</span> /suppliers <span class="note">·</span> <span class="method m-get">GET</span> /suppliers/:id</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> /suppliers/:id <span class="note">có thể gửi isActive để bật lại</span></div>
+      <div class="endpoint"><span class="method m-delete">DELETE</span> /suppliers/:id <span class="note">soft — set isActive=false</span></div>
+      <div class="block-label">Body tạo</div>
+      <pre class="block">{ "name": "Cty Thép Miền Nam", "phone": "0281234567", "address": "..." }</pre>
+      <div class="block-label">Response</div>
+      <pre class="block">{ "id": "1", "name": "...", "phone": "...", "address": "...", "isActive": true, "createdAt": "...", "updatedAt": "..." }</pre>
+    </div>
+
+    <!-- defect-reasons -->
+    <div class="card">
+      <h3><span class="path">/defect-reasons</span></h3>
+      <div class="endpoint"><span class="method m-post">POST</span> /defect-reasons</div>
+      <div class="endpoint"><span class="method m-get">GET</span> /defect-reasons <span class="note">·</span> <span class="method m-get">GET</span> /defect-reasons/:id</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> /defect-reasons/:id</div>
+      <div class="endpoint"><span class="method m-delete">DELETE</span> /defect-reasons/:id <span class="note">xoá thật</span></div>
+      <div class="block-label">Body tạo</div>
+      <pre class="block">{ "label": "Cong méo", "stageType": "HAN" }  // stageType: PHOI | HAN | SON | (bỏ qua = áp dụng chung)</pre>
+    </div>
+
+    <!-- weaving-points -->
+    <div class="card">
+      <h3><span class="path">/weaving-points</span></h3>
+      <div class="endpoint"><span class="method m-post">POST</span> /weaving-points</div>
+      <div class="endpoint"><span class="method m-get">GET</span> /weaving-points <span class="note">·</span> <span class="method m-get">GET</span> /weaving-points/:id</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> /weaving-points/:id</div>
+      <div class="endpoint"><span class="method m-delete">DELETE</span> /weaving-points/:id <span class="note">soft</span></div>
+      <div class="block-label">Body tạo</div>
+      <pre class="block">{
+  "code": "DD-A", "fullName": "Anh Tuấn", "aliasNote": "...", "phone": "...", "address": "...",
+  "dayDaiPercent": 12.5, "ketThucPercent": 8, "hangQuanPercent": 5, "note": "..."
+}</pre>
+    </div>
+
+    <!-- warehouses -->
+    <div class="card">
+      <h3><span class="path">/warehouses</span> <span class="pill p-chg">có guard bảo vệ</span></h3>
+      <div class="endpoint"><span class="method m-post">POST</span> /warehouses</div>
+      <div class="endpoint"><span class="method m-get">GET</span> /warehouses <span class="note">·</span> <span class="method m-get">GET</span> /warehouses/:id</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> /warehouses/:id <span class="note">403 nếu đổi code của kho protected</span></div>
+      <div class="endpoint"><span class="method m-delete">DELETE</span> /warehouses/:id <span class="note">403 nếu code nằm trong 9 mã protected</span></div>
+      <div class="block-label">Body tạo</div>
+      <pre class="block">{ "code": "thanh-pham-2", "name": "Kho thành phẩm 2", "isVirtual": false, "note": "..." }</pre>
+      <div class="block-label">403 khi xoá/đổi code kho protected</div>
+      <pre class="block">{ "success": false, "statusCode": 403,
+  "message": "Warehouse \"sat\" is protected and cannot be deleted" }</pre>
+      <p style="margin-top:.6rem">9 code protected: <code>phu-kien</code>, <code>sat</code>, <code>day</code>, <code>thanh-pham</code>, <code>vat-tu-tp</code>, <code>phoi-son-han</code>, <code>SUPPLIER</code>, <code>PRODUCTION</code>, <code>SCRAP</code>.</p>
+    </div>
+
+    <!-- customers -->
+    <div class="card">
+      <h3><span class="path">/customers</span></h3>
+      <div class="endpoint"><span class="method m-post">POST</span> /customers</div>
+      <div class="endpoint"><span class="method m-get">GET</span> /customers <span class="note">·</span> <span class="method m-get">GET</span> /customers/:id</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> /customers/:id</div>
+      <div class="endpoint"><span class="method m-delete">DELETE</span> /customers/:id <span class="note">xoá thật</span></div>
+      <div class="block-label">Body tạo</div>
+      <pre class="block">{
+  "name": "MEYING", "phone": "...", "email": "...", "address": "...",
+  "country": "US", "market": "Amazon/Walmart", "contactName": "...", "note": "..."
+}  // country/market/contactName chỉ có nghĩa với khách xuất khẩu</pre>
+    </div>
+
+    <!-- products + variants/pieces/parts -->
+    <div class="card">
+      <h3><span class="path">/products</span> (+ variants / pieces / parts)</h3>
+      <div class="endpoint"><span class="method m-post">POST</span> /products <span class="note">·</span> <span class="method m-get">GET</span> /products <span class="note">·</span> <span class="method m-get">GET</span> /products/:id</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> /products/:id</div>
+      <div class="endpoint"><span class="method m-delete">DELETE</span> /products/:id <span class="note">xoá thật, 400 nếu còn variant/piece/part/bomRevision</span></div>
+      <div class="block-label">Body tạo product</div>
+      <pre class="block">{ "factoryCode": "JSE-55", "name": "Ghế J55", "description": "..." }</pre>
+
+      <div class="block-label">Nested — variants</div>
+      <div class="endpoint"><span class="method m-post">POST</span> /products/:productId/variants <span class="note">·</span> <span class="method m-get">GET</span> /products/:productId/variants (mảng, không phân trang)</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> /products/:productId/variants/:id <span class="note">·</span> <span class="method m-delete">DELETE</span> .../:id <span class="note">soft</span></div>
+      <pre class="block">{ "customerId": "3", "colorCode": "BLACK", "description": "JSE-55 Đen — MEYING" }</pre>
+
+      <div class="block-label">Nested — pieces (mảnh khung, đơn vị BOM cắt bên Phôi)</div>
+      <div class="endpoint"><span class="method m-post">POST</span> /products/:productId/pieces <span class="note">·</span> <span class="method m-get">GET</span> /products/:productId/pieces</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> .../:id <span class="note">·</span> <span class="method m-delete">DELETE</span> .../:id <span class="note">xoá thật, 400 nếu đang dùng trong BOM</span></div>
+      <pre class="block">{ "code": "TEST-01.1.1", "groupNumber": 1, "pieceNumber": 1, "name": "Mảnh Tựa",
+  "isWoven": true, "weavingPrice": 15000 }  // unique theo (productId, code)</pre>
+
+      <div class="block-label">Nested — parts (chi tiết hàn, đơn vị báo sản lượng Hàn/Sơn)</div>
+      <div class="endpoint"><span class="method m-post">POST</span> /products/:productId/parts <span class="note">·</span> <span class="method m-get">GET</span> /products/:productId/parts</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> .../:id <span class="note">·</span> <span class="method m-delete">DELETE</span> .../:id</div>
+      <pre class="block">{ "code": "J55-TUA", "name": "Ráp khung tựa" }  // unique theo (productId, code)</pre>
+    </div>
+
+    <!-- materials + suppliers -->
+    <div class="card">
+      <h3><span class="path">/materials</span> (+ suppliers)</h3>
+      <div class="endpoint"><span class="method m-post">POST</span> /materials <span class="note">·</span> <span class="method m-get">GET</span> /materials <span class="note">·</span> <span class="method m-get">GET</span> /materials/:id</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> /materials/:id <span class="note">·</span> <span class="method m-delete">DELETE</span> /materials/:id <span class="note">soft</span></div>
+      <div class="block-label">Body tạo</div>
+      <pre class="block">{ "code": "SAT-25", "name": "Ống sắt 25×25", "kind": "STEEL_BAR", "unit": "cm",
+  "materialGroupId": "1", "khoUnitFactor": 600 }
+// kind: STEEL_BAR | CONSUMABLE | PAINT | ACCESSORY | PACKAGING | OTHER (mặc định OTHER)</pre>
+
+      <div class="block-label">Nested — suppliers (giá theo NCC)</div>
+      <div class="endpoint"><span class="method m-post">POST</span> /materials/:materialId/suppliers <span class="note">·</span> <span class="method m-get">GET</span> /materials/:materialId/suppliers</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> .../:id <span class="note">·</span> <span class="method m-delete">DELETE</span> .../:id <span class="note">cả 2 dùng quyền UPDATE, không phải DELETE</span></div>
+      <pre class="block">{ "supplierId": "1", "price": 12345.67, "leadTimeDays": 7 }
+// response kèm supplierName; supplierId không sửa được sau khi tạo</pre>
+    </div>
+
+    <!-- segment-specs -->
+    <div class="card">
+      <h3><span class="path">/segment-specs</span></h3>
+      <div class="endpoint"><span class="method m-post">POST</span> /segment-specs <span class="note">·</span> <span class="method m-get">GET</span> /segment-specs <span class="note">·</span> <span class="method m-get">GET</span> /segment-specs/:id</div>
+      <div class="endpoint"><span class="method m-patch">PATCH</span> /segment-specs/:id</div>
+      <div class="endpoint"><span class="method m-delete">DELETE</span> /segment-specs/:id <span class="note">xoá thật, 400 nếu đang dùng trong piece_bom/part_bom</span></div>
+      <div class="block-label">Body tạo</div>
+      <pre class="block">{ "materialId": "1", "cutLengthMm": 930 }</pre>
+      <div class="block-label">400 nếu material không phải STEEL_BAR</div>
+      <pre class="block">{ "success": false, "statusCode": 400,
+  "message": "Material \"SON-TRANG\" must have kind=STEEL_BAR to get a segment spec (got PAINT)" }</pre>
+    </div>
+
+    <!-- bom-revisions -->
+    <div class="card">
+      <h3><span class="path">/bom-revisions</span> (+ 5 bảng dòng con) <span class="pill p-chg">state machine</span></h3>
+      <div class="endpoint"><span class="method m-post">POST</span> /products/:productId/bom-revisions <span class="note">body rỗng — tự tính revNo, status=DRAFT</span></div>
+      <div class="endpoint"><span class="method m-get">GET</span> /products/:productId/bom-revisions <span class="note">mảng, revNo desc</span></div>
+      <div class="endpoint"><span class="method m-get">GET</span> /bom-revisions/:id</div>
+      <div class="endpoint"><span class="method m-post">POST</span> /bom-revisions/:id/activate <span class="note">quyền APPROVE — retire ACTIVE cũ, activate cái này</span></div>
+      <div class="endpoint"><span class="method m-delete">DELETE</span> /bom-revisions/:id <span class="note">409 nếu không còn DRAFT</span></div>
+
+      <div class="block-label">Response BomRevision</div>
+      <pre class="block">{ "id": "1", "mfgProductId": "1", "revNo": 1, "status": "DRAFT",
+  "sourcePlanFormId": null, "createdAt": "..." }</pre>
+
+      <p style="margin-top:.9rem">5 nhóm dòng con — <b>tất cả POST/PATCH/DELETE trả 409 nếu revision không còn DRAFT</b>:</p>
+
+      <div class="block-label">bom-pieces — SL mảnh/SKU</div>
+      <div class="endpoint"><span class="method m-post">POST</span> <span class="method m-get">GET</span> /bom-revisions/:bomRevisionId/bom-pieces <span class="note">·</span> <span class="method m-patch">PATCH</span> <span class="method m-delete">DELETE</span> .../:id</div>
+      <pre class="block">// tạo: { "pieceId": "10", "qtyPerUnit": 1 }
+// sửa: { "qtyPerUnit": 2 }
+// response: { "id","bomRevisionId","pieceId","pieceCode","qtyPerUnit" }
+// 400 nếu pieceId thuộc product khác với bomRevision</pre>
+
+      <div class="block-label">bom-parts — SL chi tiết/SKU (cùng khuôn bom-pieces, đổi pieceId → partId)</div>
+      <div class="endpoint"><span class="method m-post">POST</span> <span class="method m-get">GET</span> /bom-revisions/:bomRevisionId/bom-parts <span class="note">·</span> <span class="method m-patch">PATCH</span> <span class="method m-delete">DELETE</span> .../:id</div>
+
+      <div class="block-label">piece-boms — đoạn sắt cấu thành 1 mảnh</div>
+      <div class="endpoint"><span class="method m-post">POST</span> <span class="method m-get">GET</span> /bom-revisions/:bomRevisionId/piece-boms <span class="note">·</span> <span class="method m-patch">PATCH</span> <span class="method m-delete">DELETE</span> .../:id</div>
+      <pre class="block">// tạo: { "pieceId": "10", "segmentSpecId": "5", "qtyPerPiece": 2, "needsHan": true, "needsSon": false }
+// sửa: { "qtyPerPiece": 3, "needsHan": true, "needsSon": false }
+// response kèm "segmentSpecLabel": "SAT-25 @ 930mm"
+// 400 nếu pieceId thuộc product khác với bomRevision; pieceId/segmentSpecId không sửa được — xoá rồi tạo lại</pre>
+
+      <div class="block-label">part-boms — đoạn sắt cấu thành 1 chi tiết hàn (cùng khuôn piece-boms, không có needsHan/needsSon)</div>
+      <div class="endpoint"><span class="method m-post">POST</span> <span class="method m-get">GET</span> /bom-revisions/:bomRevisionId/part-boms <span class="note">·</span> <span class="method m-patch">PATCH</span> <span class="method m-delete">DELETE</span> .../:id</div>
+      <pre class="block">{ "partId": "3", "segmentSpecId": "5", "qtyPerPart": 1 }</pre>
+
+      <div class="block-label">consumable-boms — định mức vật tư tiêu hao Hàn/Sơn</div>
+      <div class="endpoint"><span class="method m-post">POST</span> <span class="method m-get">GET</span> /bom-revisions/:bomRevisionId/consumable-boms <span class="note">·</span> <span class="method m-patch">PATCH</span> <span class="method m-delete">DELETE</span> .../:id</div>
+      <pre class="block">// tạo: { "stage": "SON", "materialId": "6", "qtyPerUnit": 0.25 }  // stage: HAN | SON
+// response kèm "materialCode"; 400 nếu material không phải kind=CONSUMABLE/PAINT
+// stage/materialId không sửa được — xoá rồi tạo lại</pre>
+    </div>
+  </div>
+
+  <!-- ───────────────────────── 12. Còn để ngỏ ───────────────────────── -->
+  <div class="module">
+    <h2>12. Việc còn để ngỏ</h2>
+    <ul class="timeline">
+      <li><b>Seed admin user vẫn báo lỗi cuối <code>pnpm seed</code></b><span> — vô hại (các bước trước đã ghi DB xong), nhưng nếu muốn hết thông báo lỗi thì cần thêm <code>SEED_ADMIN_EMAIL</code>/<code>SEED_ADMIN_PASSWORD</code> vào <code>.env</code> (đã có sẵn <code>admin@demo.com</code>, không bắt buộc tạo thêm).</span></li>
+      <li><b>Bulk upsert cho BOM chưa có</b><span> — 10 module hiện tại là CRUD từng dòng một; nếu nhập BOM số lượng lớn qua tay thấy bất tiện, có thể bổ sung endpoint bulk sau, không phải yêu cầu ban đầu của phase này.</span></li>
+      <li><b>Phase 2 đã xong, Phase 3 (Ledger Core) chưa bắt đầu</b><span> — theo đúng build-order của roadmap, bước kế tiếp là <code>StockLedger</code> + trigger <code>fn_sync_stock_quant()</code> + <code>StockQuant</code>, có thể chạy song song với P4 (Bán hàng).</span></li>
+    </ul>
+  </div>
+
+  <footer>
+    Nguồn: toàn bộ nội dung trên tổng hợp trực tiếp từ phiên làm việc trong Claude Code — không suy diễn
+    thêm. Code thật nằm ở <code>D:\DNA-ERP-BE</code> (backend, trọng tâm phiên này) và
+    <code>D:\DNA-ERP</code> (chỉ dọn code chết liên quan tới <code>PhoiOperation</code>).
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" title="Về đầu trang" type="button">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

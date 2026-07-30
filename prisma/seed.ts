@@ -8,6 +8,7 @@ import {
   UNIVERSAL_BUSINESS_GRANTS,
 } from '../src/common/constants/role-permissions.constant';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../src/common/constants/roles.constant';
+import { PROTECTED_WAREHOUSE_CODES } from '../src/common/constants/protected-warehouse-codes.constant';
 import { PermissionAction, PrismaClient } from '../src/generated/prisma/client';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
@@ -15,6 +16,53 @@ const prisma = new PrismaClient({ adapter });
 
 const ALL_ACTIONS = Object.values(PermissionAction);
 const ALL_MODULES = Object.values(PERMISSION_MODULES);
+
+/**
+ * 6 kho vật lý + 3 kho ảo bắt buộc phải seed sẵn (docs/dna-erp-db-schema.html "warehouses").
+ * Codes phải khớp 1-1 với PROTECTED_WAREHOUSE_CODES - đây là danh sách duy nhất mà
+ * warehouses.service.ts (chưa viết) sẽ chặn xoá.
+ */
+const SEED_WAREHOUSES: { code: string; name: string; isVirtual: boolean; note?: string }[] = [
+  { code: 'phu-kien', name: 'Kho Phụ kiện', isVirtual: false },
+  { code: 'sat', name: 'Kho Sắt', isVirtual: false },
+  { code: 'day', name: 'Kho Dây', isVirtual: false },
+  {
+    code: 'thanh-pham',
+    name: 'Kho Bao bì/Thành phẩm',
+    isVirtual: false,
+    note: 'Bao bì đóng gói & thành phẩm hoàn chỉnh — cuối chuỗi chuyển kho nội bộ',
+  },
+  {
+    code: 'vat-tu-tp',
+    name: 'Kho Vật tư thành phẩm',
+    isVirtual: false,
+    note: 'Sơn, dây, vật tư tiêu hao sản xuất',
+  },
+  {
+    code: 'phoi-son-han',
+    name: 'Kho Phôi Sơn Hàn',
+    isVirtual: false,
+    note: 'Phôi kim loại, sơn, vật tư hàn — đầu chuỗi chuyển kho nội bộ',
+  },
+  {
+    code: 'SUPPLIER',
+    name: 'Nhà cung cấp (ảo)',
+    isVirtual: true,
+    note: 'Điểm xuất phát bút toán PURCHASE trên stock_ledger — không có tồn vật lý',
+  },
+  {
+    code: 'PRODUCTION',
+    name: 'Đang sản xuất (ảo)',
+    isVirtual: true,
+    note: 'Hàng đang trên chuyền — không có tồn vật lý',
+  },
+  {
+    code: 'SCRAP',
+    name: 'Phế liệu (ảo)',
+    isVirtual: true,
+    note: 'Điểm đến bút toán huỷ/phế — không có tồn vật lý',
+  },
+];
 
 /**
  * Make a role's permission set match `desiredIds` exactly: add the missing links and
@@ -122,7 +170,26 @@ async function main() {
     create: { id: 1, companyName: process.env.SEED_COMPANY_NAME ?? 'DNA ERP' },
   });
 
-  // 7. Super admin user.
+  // 7. Warehouses (Phase 2) — 6 vật lý + 3 ảo, seed cố định, không bao giờ xoá. Đặt trước
+  // bước 8 (admin user) có chủ đích: danh mục/role không được phép phụ thuộc vào việc có
+  // set SEED_ADMIN_EMAIL/PASSWORD hay không - 2 việc độc lập nhau.
+  if (SEED_WAREHOUSES.length !== PROTECTED_WAREHOUSE_CODES.length) {
+    throw new Error('SEED_WAREHOUSES phải khớp 1-1 với PROTECTED_WAREHOUSE_CODES');
+  }
+  for (const wh of SEED_WAREHOUSES) {
+    if (!(PROTECTED_WAREHOUSE_CODES as readonly string[]).includes(wh.code)) {
+      throw new Error(
+        `SEED_WAREHOUSES có code lạ, không nằm trong PROTECTED_WAREHOUSE_CODES: ${wh.code}`,
+      );
+    }
+    await prisma.warehouse.upsert({
+      where: { code: wh.code },
+      update: { name: wh.name, isVirtual: wh.isVirtual, note: wh.note },
+      create: wh,
+    });
+  }
+
+  // 8. Super admin user.
   const adminEmail = process.env.SEED_ADMIN_EMAIL;
   const adminPassword = process.env.SEED_ADMIN_PASSWORD;
   if (!adminEmail || !adminPassword) {
@@ -150,7 +217,9 @@ async function main() {
   });
 
   const roleCount = 1 + Object.values(BUSINESS_ROLES).length; // ADMIN + business
-  console.log(`Seed complete. Roles synced: ${roleCount}. Admin: ${adminEmail}`);
+  console.log(
+    `Seed complete. Roles synced: ${roleCount}. Warehouses synced: ${SEED_WAREHOUSES.length}. Admin: ${adminEmail}`,
+  );
 }
 
 main()
