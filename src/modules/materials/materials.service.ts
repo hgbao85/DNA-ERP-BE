@@ -18,9 +18,10 @@ type MaterialSupplierWithSupplier = Prisma.MaterialSupplierGetPayload<{
 
 /**
  * Materials + MaterialSuppliers (docs/dna-erp-db-schema.html "materials" / "material_suppliers").
- * `isActive` is the soft-delete column (same pattern as suppliers/weaving-points). Prereq
- * for SegmentSpec (P2 step 5, validates kind='STEEL_BAR' - not enforced here, that check
- * belongs to the SegmentSpec module that consumes this one).
+ * `remove()` is a real hard delete (as originally built) - soft-delete for this model is
+ * pending, see CONTRIBUTING.md "0. Ưu tiên". `isActive` is a separate, independent flag.
+ * Prereq for SegmentSpec (P2 step 5, validates kind='STEEL_BAR' - not enforced here, that
+ * check belongs to the SegmentSpec module that consumes this one).
  */
 @Injectable()
 export class MaterialsService {
@@ -101,7 +102,7 @@ export class MaterialsService {
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
     await this.findOneOrThrow(id);
-    await this.prisma.material.update({ where: { id: bigId }, data: { isActive: false } });
+    await this.prisma.material.delete({ where: { id: bigId } });
   }
 
   // ─── MaterialSupplier sub-resource ────────────────────────────────────────

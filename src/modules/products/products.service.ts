@@ -155,7 +155,7 @@ export class ProductsService {
   async removeVariant(productId: string, id: string): Promise<void> {
     const idBigId = parseBigIntId(id);
     await this.findVariantOrThrow(productId, id);
-    await this.prisma.productVariant.update({ where: { id: idBigId }, data: { isActive: false } });
+    await this.prisma.productVariant.delete({ where: { id: idBigId } });
   }
 
   // ─── Piece sub-resource ────────────────────────────────────────────────────

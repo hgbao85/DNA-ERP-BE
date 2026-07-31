@@ -9,7 +9,8 @@ import { CreateWeavingPointDto } from './dto/create-weaving-point.dto';
 import { UpdateWeavingPointDto } from './dto/update-weaving-point.dto';
 import { WeavingPointResponseDto } from './dto/weaving-point-response.dto';
 
-/** `isActive` is the soft-delete column (same pattern as suppliers) - remove() flips it. */
+/** `remove()` is a real hard delete (as originally built) - soft-delete for this model is
+ * pending, see CONTRIBUTING.md "0. Ưu tiên". `isActive` is a separate, independent flag. */
 @Injectable()
 export class WeavingPointsService {
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
@@ -95,7 +96,7 @@ export class WeavingPointsService {
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
     await this.findOneOrThrow(id);
-    await this.prisma.weavingPoint.update({ where: { id: bigId }, data: { isActive: false } });
+    await this.prisma.weavingPoint.delete({ where: { id: bigId } });
   }
 
   private async findOneOrThrow(id: string): Promise<WeavingPoint> {
