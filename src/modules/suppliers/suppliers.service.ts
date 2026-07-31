@@ -11,8 +11,9 @@ import { UpdateSupplierDto } from './dto/update-supplier.dto';
 
 /**
  * No name uniqueness in docs/dna-erp-db-schema.html "suppliers" - 2 NCC can legitimately
- * share a name. `isActive` IS the soft-delete column here (unlike material-groups): remove()
- * flips it instead of a real DELETE, so material_suppliers history stays intact.
+ * share a name. `remove()` is a real hard delete (as originally built) - soft-delete for
+ * this model is pending, see CONTRIBUTING.md "0. Ưu tiên". `isActive` is a separate,
+ * independent flag.
  */
 @Injectable()
 export class SuppliersService {
@@ -61,7 +62,7 @@ export class SuppliersService {
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
     await this.findOneOrThrow(id);
-    await this.prisma.supplier.update({ where: { id: bigId }, data: { isActive: false } });
+    await this.prisma.supplier.delete({ where: { id: bigId } });
   }
 
   private async findOneOrThrow(id: string): Promise<Supplier> {

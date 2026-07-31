@@ -108,7 +108,7 @@ export class WarehousesService {
       );
     }
 
-    await this.prisma.warehouse.update({ where: { id: bigId }, data: { isActive: false } });
+    await this.prisma.warehouse.delete({ where: { id: bigId } });
   }
 
   private async findOneOrThrow(id: string): Promise<Warehouse> {

@@ -61,9 +61,9 @@ model User {
   /// guards (@RequireMfgRole/@RequireWarehouseScope) layered on top of PermissionsGuard.
   mfgRole          MfgRole?
   warehouseScope   String?
-  isPurchaser      Boolean        @default(false)
-  isProductPlanner Boolean        @default(false)
-  isSale           Boolean        @default(false)
+  isPurchaser      Boolean  @default(false)
+  isProductPlanner Boolean  @default(false)
+  isSale           Boolean  @default(false)
 
   roles             UserRole[]
   refreshTokens     RefreshToken[]
@@ -260,6 +260,7 @@ model Material {
   materialGroupId BigInt?
   khoUnitFactor   Decimal?     @db.Decimal(14, 4)
   isActive        Boolean      @default(true)
+  deletedAt       DateTime?
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
@@ -274,13 +275,14 @@ model Material {
 }
 
 model Supplier {
-  id        BigInt   @id @default(autoincrement())
+  id        BigInt    @id @default(autoincrement())
   name      String
   phone     String?
   address   String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   materialSuppliers MaterialSupplier[]
 
@@ -312,17 +314,18 @@ model DefectReason {
 }
 
 model WeavingPoint {
-  id              BigInt   @id @default(autoincrement())
-  code            String   @unique
+  id              BigInt    @id @default(autoincrement())
+  code            String    @unique
   fullName        String?
   aliasNote       String?
   phone           String?
   address         String?
-  dayDaiPercent   Decimal? @db.Decimal(5, 2)
-  ketThucPercent  Decimal? @db.Decimal(5, 2)
-  hangQuanPercent Decimal? @db.Decimal(5, 2)
+  dayDaiPercent   Decimal?  @db.Decimal(5, 2)
+  ketThucPercent  Decimal?  @db.Decimal(5, 2)
+  hangQuanPercent Decimal?  @db.Decimal(5, 2)
   note            String?
-  isActive        Boolean  @default(true)
+  isActive        Boolean   @default(true)
+  deletedAt       DateTime?
 
   @@map("weaving_points")
 }
@@ -331,12 +334,13 @@ model WeavingPoint {
 /// Không có endpoint DELETE cho các code trong PROTECTED_WAREHOUSE_CODES
 /// (src/common/constants/protected-warehouse-codes.constant.ts).
 model Warehouse {
-  id        BigInt  @id @default(autoincrement())
-  code      String  @unique
+  id        BigInt    @id @default(autoincrement())
+  code      String    @unique
   name      String
-  isVirtual Boolean @default(false)
+  isVirtual Boolean   @default(false)
   note      String?
-  isActive  Boolean @default(true)
+  isActive  Boolean   @default(true)
+  deletedAt DateTime?
 
   @@map("warehouses")
 }
@@ -374,12 +378,13 @@ model MfgProduct {
 }
 
 model ProductVariant {
-  id           BigInt  @id @default(autoincrement())
+  id           BigInt    @id @default(autoincrement())
   mfgProductId BigInt
   customerId   BigInt?
   colorCode    String?
   description  String?
-  isActive     Boolean @default(true)
+  isActive     Boolean   @default(true)
+  deletedAt    DateTime?
 
   mfgProduct    MfgProduct     @relation(fields: [mfgProductId], references: [id])
   customer      Customer?      @relation(fields: [customerId], references: [id])

@@ -10,7 +10,28 @@ import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { SOFT_DELETE_MODELS } from '../soft-delete-models.constant';
 
 /** Models whose create/update/delete operations are recorded to AuditLog. */
-const AUDITED_MODELS = new Set(['User', 'Role', 'UserRole', 'RolePermission']);
+const AUDITED_MODELS = new Set([
+  'User',
+  'Role',
+  'UserRole',
+  'RolePermission',
+  // Phase 2 - independent master-data/BOM entities only, not junction/line-item rows
+  // owned by a BomRevision (those change too often while DRAFT to be worth auditing -
+  // see CONTRIBUTING.md "2. Audit log").
+  'MaterialGroup',
+  'Material',
+  'Supplier',
+  'DefectReason',
+  'WeavingPoint',
+  'Warehouse',
+  'Customer',
+  'MfgProduct',
+  'ProductVariant',
+  'Piece',
+  'Part',
+  'SegmentSpec',
+  'BomRevision',
+]);
 
 /** Minimal shape needed to dynamically call `client[modelKey].findFirst(...)` by model name. */
 interface DynamicDelegateClient {
