@@ -15,6 +15,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { MfgRoleGuard } from './common/guards/mfg-role.guard';
+import { RoleGuard } from './common/guards/role.guard';
 import { WarehouseScopeGuard } from './common/guards/warehouse-scope.guard';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -35,6 +36,9 @@ import { ProductsModule } from './modules/products/products.module';
 import { MaterialsModule } from './modules/materials/materials.module';
 import { SegmentSpecsModule } from './modules/segment-specs/segment-specs.module';
 import { BomRevisionsModule } from './modules/bom-revisions/bom-revisions.module';
+import { SalesOrdersModule } from './modules/sales-orders/sales-orders.module';
+import { PlanFormsModule } from './modules/plan-forms/plan-forms.module';
+import { ProductionInvoicesModule } from './modules/production-invoices/production-invoices.module';
 
 @Module({
   imports: [
@@ -90,12 +94,16 @@ import { BomRevisionsModule } from './modules/bom-revisions/bom-revisions.module
     MaterialsModule,
     SegmentSpecsModule,
     BomRevisionsModule,
+    SalesOrdersModule,
+    PlanFormsModule,
+    ProductionInvoicesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
     { provide: APP_GUARD, useClass: MfgRoleGuard },
+    { provide: APP_GUARD, useClass: RoleGuard },
     { provide: APP_GUARD, useClass: WarehouseScopeGuard },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },

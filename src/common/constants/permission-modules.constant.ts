@@ -22,6 +22,10 @@ export const PERMISSION_MODULES = {
   MATERIAL: 'MATERIAL',
   SEGMENT_SPEC: 'SEGMENT_SPEC',
   BOM_REVISION: 'BOM_REVISION',
+  // --- Sales Order + Production Order domain ---
+  SALES_ORDER: 'SALES_ORDER',
+  PLAN_FORM: 'PLAN_FORM',
+  PRODUCTION_INVOICE: 'PRODUCTION_INVOICE',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

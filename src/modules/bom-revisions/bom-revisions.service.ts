@@ -4,7 +4,6 @@ import {
   Inject,
   Injectable,
   NotFoundException,
-  NotImplementedException,
 } from '@nestjs/common';
 import {
   BomRevision,
@@ -14,10 +13,12 @@ import {
 } from '../../generated/prisma/client';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { BomAccessoryItemResponseDto } from './dto/bom-accessory-item-response.dto';
 import { BomPartResponseDto } from './dto/bom-part-response.dto';
 import { BomPieceResponseDto } from './dto/bom-piece-response.dto';
 import { BomRevisionResponseDto } from './dto/bom-revision-response.dto';
 import { ConsumableBomResponseDto } from './dto/consumable-bom-response.dto';
+import { CreateBomAccessoryItemDto } from './dto/create-bom-accessory-item.dto';
 import { CreateBomPartDto } from './dto/create-bom-part.dto';
 import { CreateBomPieceDto } from './dto/create-bom-piece.dto';
 import { CreateConsumableBomDto } from './dto/create-consumable-bom.dto';
@@ -25,6 +26,7 @@ import { CreatePartBomDto } from './dto/create-part-bom.dto';
 import { CreatePieceBomDto } from './dto/create-piece-bom.dto';
 import { PartBomResponseDto } from './dto/part-bom-response.dto';
 import { PieceBomResponseDto } from './dto/piece-bom-response.dto';
+import { UpdateBomAccessoryItemDto } from './dto/update-bom-accessory-item.dto';
 import { UpdateBomPartDto } from './dto/update-bom-part.dto';
 import { UpdateBomPieceDto } from './dto/update-bom-piece.dto';
 import { UpdateConsumableBomDto } from './dto/update-consumable-bom.dto';
@@ -40,22 +42,9 @@ type PartBomWithRefs = Prisma.PartBomGetPayload<{
   include: { part: true; segmentSpec: { include: { material: true } } };
 }>;
 type ConsumableBomWithMaterial = Prisma.ConsumableBomGetPayload<{ include: { material: true } }>;
-
-/**
- * Placeholder shape for what P5 will pass in once plan_forms/plan_form_manh_rows/
- * plan_form_detail_items exist (see docs/dna-erp-db-schema.html "bom_revision" +
- * dna-erp-backend-roadmap.html P5). Replace with the real Prisma types when P5 lands -
- * do not widen this interface speculatively before then.
- */
-export interface MaterializeBomRevisionInput {
-  mfgProductId: bigint;
-  sourcePlanFormId: bigint;
-}
-
-export interface MaterializeBomRevisionResult {
-  bomRevisionId: bigint;
-  revNo: number;
-}
+type BomAccessoryItemWithMaterial = Prisma.BomAccessoryItemGetPayload<{
+  include: { material: true };
+}>;
 
 /**
  * BomRevision + its 5 line-item collections (bom_piece/bom_part/piece_bom/part_bom/
@@ -76,7 +65,7 @@ export class BomRevisionsService {
 
   // ─── BomRevision ────────────────────────────────────────────────────────────
 
-  async create(productId: string): Promise<BomRevisionResponseDto> {
+  async create(productId: string, sourcePlanFormId?: string): Promise<BomRevisionResponseDto> {
     const productBigId = parseBigIntId(productId);
     const product = await this.prisma.mfgProduct.findUnique({ where: { id: productBigId } });
     if (!product) {
@@ -89,7 +78,11 @@ export class BomRevisionsService {
     });
 
     const revision = await this.prisma.bomRevision.create({
-      data: { mfgProductId: productBigId, revNo: (last?.revNo ?? 0) + 1 },
+      data: {
+        mfgProductId: productBigId,
+        revNo: (last?.revNo ?? 0) + 1,
+        sourcePlanFormId: sourcePlanFormId ? parseBigIntId(sourcePlanFormId) : undefined,
+      },
     });
     return this.toResponseDto(revision);
   }
@@ -529,14 +522,76 @@ export class BomRevisionsService {
     await this.prisma.consumableBom.delete({ where: { id: row.id } });
   }
 
-  // ─── P5 hook (still not implemented - see original comment) ─────────────────
+  // ─── BomAccessoryItem (Phụ kiện/Bao bì tiêu hao, không gắn công đoạn) ───────
 
-  materializeBomRevision(
-    input: MaterializeBomRevisionInput,
-  ): Promise<MaterializeBomRevisionResult> {
-    throw new NotImplementedException(
-      `materializeBomRevision() sẽ được cài đặt ở P5 khi plan_forms tồn tại (mfgProductId=${input.mfgProductId}, sourcePlanFormId=${input.sourcePlanFormId})`,
-    );
+  async createBomAccessoryItem(
+    bomRevisionId: string,
+    dto: CreateBomAccessoryItemDto,
+  ): Promise<BomAccessoryItemResponseDto> {
+    const revision = await this.findOneOrThrow(bomRevisionId);
+    this.assertDraft(revision);
+
+    const materialBigId = parseBigIntId(dto.materialId);
+    const material = await this.prisma.material.findUnique({ where: { id: materialBigId } });
+    if (!material) {
+      throw new NotFoundException(`Material ${dto.materialId} not found`);
+    }
+    if (material.kind !== MaterialKind.ACCESSORY && material.kind !== MaterialKind.PACKAGING) {
+      throw new BadRequestException(
+        `Material "${material.code}" must have kind=ACCESSORY or PACKAGING for bom_accessory_items (got ${material.kind})`,
+      );
+    }
+
+    const existing = await this.prisma.bomAccessoryItem.findUnique({
+      where: {
+        bomRevisionId_materialId: { bomRevisionId: revision.id, materialId: materialBigId },
+      },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `bom_accessory_items row for material ${dto.materialId} already exists on this revision`,
+      );
+    }
+
+    const row = await this.prisma.bomAccessoryItem.create({
+      data: { bomRevisionId: revision.id, materialId: materialBigId, qtyPerUnit: dto.qtyPerUnit },
+      include: { material: true },
+    });
+    return this.toBomAccessoryItemResponseDto(row);
+  }
+
+  async listBomAccessoryItems(bomRevisionId: string): Promise<BomAccessoryItemResponseDto[]> {
+    const revision = await this.findOneOrThrow(bomRevisionId);
+    const rows = await this.prisma.bomAccessoryItem.findMany({
+      where: { bomRevisionId: revision.id },
+      include: { material: true },
+      orderBy: { id: 'asc' },
+    });
+    return rows.map((r) => this.toBomAccessoryItemResponseDto(r));
+  }
+
+  async updateBomAccessoryItem(
+    bomRevisionId: string,
+    id: string,
+    dto: UpdateBomAccessoryItemDto,
+  ): Promise<BomAccessoryItemResponseDto> {
+    const revision = await this.findOneOrThrow(bomRevisionId);
+    this.assertDraft(revision);
+    const row = await this.findBomAccessoryItemOrThrow(revision.id, id);
+
+    const updated = await this.prisma.bomAccessoryItem.update({
+      where: { id: row.id },
+      data: { qtyPerUnit: dto.qtyPerUnit },
+      include: { material: true },
+    });
+    return this.toBomAccessoryItemResponseDto(updated);
+  }
+
+  async removeBomAccessoryItem(bomRevisionId: string, id: string): Promise<void> {
+    const revision = await this.findOneOrThrow(bomRevisionId);
+    this.assertDraft(revision);
+    const row = await this.findBomAccessoryItemOrThrow(revision.id, id);
+    await this.prisma.bomAccessoryItem.delete({ where: { id: row.id } });
   }
 
   // ─── Shared lookups / guards ──────────────────────────────────────────────
@@ -634,6 +689,21 @@ export class BomRevisionsService {
     return row;
   }
 
+  private async findBomAccessoryItemOrThrow(
+    revisionId: bigint,
+    id: string,
+  ): Promise<BomAccessoryItemWithMaterial> {
+    const idBigId = parseBigIntId(id);
+    const row = await this.prisma.bomAccessoryItem.findUnique({
+      where: { id: idBigId },
+      include: { material: true },
+    });
+    if (!row || row.bomRevisionId !== revisionId) {
+      throw new NotFoundException(`bom_accessory_items ${id} not found on this revision`);
+    }
+    return row;
+  }
+
   // ─── Mappers ────────────────────────────────────────────────────────────────
 
   private toResponseDto(revision: BomRevision): BomRevisionResponseDto {
@@ -698,6 +768,18 @@ export class BomRevisionsService {
       id: row.id.toString(),
       bomRevisionId: row.bomRevisionId.toString(),
       stage: row.stage,
+      materialId: row.materialId.toString(),
+      materialCode: row.material.code,
+      qtyPerUnit: row.qtyPerUnit.toNumber(),
+    });
+  }
+
+  private toBomAccessoryItemResponseDto(
+    row: BomAccessoryItemWithMaterial,
+  ): BomAccessoryItemResponseDto {
+    return new BomAccessoryItemResponseDto({
+      id: row.id.toString(),
+      bomRevisionId: row.bomRevisionId.toString(),
       materialId: row.materialId.toString(),
       materialCode: row.material.code,
       qtyPerUnit: row.qtyPerUnit.toNumber(),

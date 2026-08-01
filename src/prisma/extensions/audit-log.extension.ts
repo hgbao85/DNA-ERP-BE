@@ -31,6 +31,12 @@ const AUDITED_MODELS = new Set([
   'Part',
   'SegmentSpec',
   'BomRevision',
+  // Sales Order + Production Order domain - chỉ audit bảng cha (entity nghiệp vụ độc lập),
+  // không audit SalesOrderItem/ProductionInvoiceItem/PlanFormManhReview/PlanFormDetailReview
+  // (con, đổi liên tục theo vòng đời cha) - cùng lý do BomPiece/BomPart không được audit.
+  'SalesOrder',
+  'PlanForm',
+  'ProductionInvoice',
 ]);
 
 /** Minimal shape needed to dynamically call `client[modelKey].findFirst(...)` by model name. */
