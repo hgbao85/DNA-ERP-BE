@@ -856,6 +856,7 @@ export class SkusService {
             materialId: sg.segmentSpec.materialId.toString(),
             materialCode: sg.segmentSpec.material.code,
             materialName: sg.segmentSpec.material.name,
+            materialSpec: sg.segmentSpec.material.spec,
             cutLengthMm: sg.segmentSpec.cutLengthMm,
             qtyPerPiece: sg.qtyPerPiece,
             needsHan: sg.needsHan,

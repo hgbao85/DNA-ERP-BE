@@ -259,6 +259,7 @@ model Material {
   code            String    @unique
   name            String
   unit            String
+  spec            String?
   materialGroupId BigInt?
   khoUnitFactor   Decimal?  @db.Decimal(14, 4)
   isActive        Boolean   @default(true)

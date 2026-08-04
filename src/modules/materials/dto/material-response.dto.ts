@@ -7,6 +7,7 @@ export class MaterialResponseDto {
   @Expose() @ApiProperty() code!: string;
   @Expose() @ApiProperty() name!: string;
   @Expose() @ApiProperty() unit!: string;
+  @Expose() @ApiPropertyOptional({ nullable: true }) spec!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) materialGroupId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) khoUnitFactor!: number | null;
   @Expose() @ApiProperty() isActive!: boolean;
