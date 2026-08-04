@@ -38,15 +38,21 @@ export const UNIVERSAL_BUSINESS_GRANTS: ModuleGrant[] = [
  */
 export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // --- Sales Order + Production Order domain ---
-  // Sales tạo/sửa đơn hàng và dòng SKU của đơn. Không cần CUSTOMER: ALL riêng vì trang
-  // Admin (SalesCustomersPage) đã quản lý khách hàng; Sales chỉ cần đọc để chọn khi tạo đơn.
+  // Sales tạo/sửa đơn hàng và dòng SKU của đơn. CUSTOMER: ALL vì Sales tự quản lý khách
+  // hàng của mình (thêm/sửa/xoá) ngay trên CustomerManagementPage, không chỉ đọc để chọn.
   [BUSINESS_ROLES.SALES_STAFF]: [
     { module: PERMISSION_MODULES.SALES_ORDER, actions: 'ALL' },
-    { module: PERMISSION_MODULES.CUSTOMER, actions: [PermissionAction.VIEW] },
+    { module: PERMISSION_MODULES.CUSTOMER, actions: 'ALL' },
     // resolve-or-create sản phẩm theo mã SKU khi tạo dòng PO (xem resolveMfgProduct ở FE).
     {
       module: PERMISSION_MODULES.PRODUCT,
       actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
+    // Việc 2: ô chọn SKU khi tạo PO (OrderManagementPage) chỉ liệt kê PlanForm đã APPROVED -
+    // gọi GET /plan-forms để dựng danh sách; thiếu quyền này ô chọn SKU luôn rỗng.
+    {
+      module: PERMISSION_MODULES.PLAN_FORM,
+      actions: [PermissionAction.VIEW],
     },
   ],
   // KHSX: tạo PlanForm + tự duyệt/từ chối từng nhóm mảnh-chi tiết và 2 mốc approve-parts/
@@ -75,6 +81,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PRODUCT,
       actions: [PermissionAction.VIEW, PermissionAction.CREATE],
     },
+    // SKUReviewPage gọi getSalesCustomers (GET /customers) ngay khi mount cho MỌI role kể cả
+    // KHSX (cùng lý do đã thêm cho SALES_STAFF/PRODUCTION_MANAGER) - thiếu quyền này thì tab
+    // "Duyệt SKU mới" luôn lỗi 403.
+    {
+      module: PERMISSION_MODULES.CUSTOMER,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // QLSX: duyệt cục bộ + gửi Sếp ở cả PlanForm lẫn PI item (APPROVE) - các route tương ứng
   // (qlsx-review/request-boss-approval/reject-qlsx, send-to-boss) còn gắn thêm
@@ -90,13 +103,41 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PRODUCTION_INVOICE,
       actions: [PermissionAction.VIEW, PermissionAction.APPROVE],
     },
+    // LenhSXPage: QLSX chọn kho thành phẩm từ danh sách tài khoản thủ kho (role=WAREHOUSE_STAFF,
+    // warehouseScope=thành phẩm) trước khi gửi sếp duyệt - gọi GET /users, thiếu quyền này ô
+    // chọn kho luôn rỗng ("Không có kho thành phẩm").
+    {
+      module: PERMISSION_MODULES.USER,
+      actions: [PermissionAction.VIEW],
+    },
+    // SKUReviewPage (tab "Duyệt SKU mới") gọi getPlanFormOptions (GET /sales-orders + /products)
+    // và getSalesCustomers (GET /customers) ngay khi mount cho MỌI role kể cả QLSX, dù nút Tạo
+    // SKU (nơi tiêu thụ data này) đã ẩn với QLSX - thiếu 3 quyền VIEW này thì tab luôn lỗi 403.
+    {
+      module: PERMISSION_MODULES.SALES_ORDER,
+      actions: [PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.PRODUCT,
+      actions: [PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.CUSTOMER,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // 4 account chuyên trách nhập định mức SKU (mirror đúng mock: Sắt / Dây-Sơn / Phụ kiện-Bao
   // bì) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE (duyệt là KHSX).
+  // Cần thêm MATERIAL:VIEW (Việc 2) - MaterialPicker dùng chung ở cả 4 trang Spec gọi
+  // GET /materials để chọn vật tư theo kind/nhóm; thiếu quyền này picker luôn rỗng.
   [BUSINESS_ROLES.SPEC_STEEL_STAFF]: [
     {
       module: PERMISSION_MODULES.PLAN_FORM,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
+    },
+    {
+      module: PERMISSION_MODULES.MATERIAL,
+      actions: [PermissionAction.VIEW],
     },
   ],
   [BUSINESS_ROLES.SPEC_WIRE_PAINT_STAFF]: [
@@ -104,11 +145,25 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PLAN_FORM,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
+    {
+      module: PERMISSION_MODULES.MATERIAL,
+      actions: [PermissionAction.VIEW],
+    },
+    // Dây/Đinh phân biệt qua materialGroupId (cùng kind=CONSUMABLE) - trang Spec cần tra
+    // MaterialGroup theo tên để lọc đúng picker, thiếu quyền này picker gộp lẫn Dây/Đinh.
+    {
+      module: PERMISSION_MODULES.MATERIAL_GROUP,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   [BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF]: [
     {
       module: PERMISSION_MODULES.PLAN_FORM,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
+    },
+    {
+      module: PERMISSION_MODULES.MATERIAL,
+      actions: [PermissionAction.VIEW],
     },
   ],
   // --- Phase 9 (MES-B execution) ---
