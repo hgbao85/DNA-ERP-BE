@@ -18,46 +18,46 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
-import { CreatePlanFormDto } from './dto/create-plan-form.dto';
+import { CreateSkuDto } from './dto/create-sku.dto';
 import { ReviewQuotaDto } from './dto/review-quota.dto';
 import { UpdateQuotaDto } from './dto/update-quota.dto';
-import { PlanFormsService } from './plan-forms.service';
+import { SkusService } from './skus.service';
 
-const VIEW = { module: PERMISSION_MODULES.PLAN_FORM, action: PermissionAction.VIEW };
-const CREATE = { module: PERMISSION_MODULES.PLAN_FORM, action: PermissionAction.CREATE };
-const UPDATE = { module: PERMISSION_MODULES.PLAN_FORM, action: PermissionAction.UPDATE };
-const APPROVE = { module: PERMISSION_MODULES.PLAN_FORM, action: PermissionAction.APPROVE };
-const DELETE = { module: PERMISSION_MODULES.PLAN_FORM, action: PermissionAction.DELETE };
+const VIEW = { module: PERMISSION_MODULES.SKU, action: PermissionAction.VIEW };
+const CREATE = { module: PERMISSION_MODULES.SKU, action: PermissionAction.CREATE };
+const UPDATE = { module: PERMISSION_MODULES.SKU, action: PermissionAction.UPDATE };
+const APPROVE = { module: PERMISSION_MODULES.SKU, action: PermissionAction.APPROVE };
+const DELETE = { module: PERMISSION_MODULES.SKU, action: PermissionAction.DELETE };
 
-@ApiTags('Plan Forms')
+@ApiTags('SKU')
 @ApiBearerAuth()
-@Controller({ path: 'plan-forms', version: '1' })
-export class PlanFormsController {
-  constructor(private readonly planFormsService: PlanFormsService) {}
+@Controller({ path: 'skus', version: '1' })
+export class SkusController {
+  constructor(private readonly skusService: SkusService) {}
 
   @Post()
   @RequirePermissions(CREATE)
-  create(@Body() dto: CreatePlanFormDto, @CurrentUser('id') userId: string) {
-    return this.planFormsService.create(dto, userId);
+  create(@Body() dto: CreateSkuDto, @CurrentUser('id') userId: string) {
+    return this.skusService.create(dto, userId);
   }
 
   @Get()
   @RequirePermissions(VIEW)
   findAll(@Query() query: PaginationQueryDto) {
-    return this.planFormsService.findAll(query);
+    return this.skusService.findAll(query);
   }
 
   @Get(':id')
   @RequirePermissions(VIEW)
   findOne(@Param('id') id: string) {
-    return this.planFormsService.findOne(id);
+    return this.skusService.findOne(id);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions(DELETE)
   remove(@Param('id') id: string) {
-    return this.planFormsService.remove(id);
+    return this.skusService.remove(id);
   }
 
   // ─── Manh quota (Sắt/Dây/Đinh) - nhập bởi 4 account chuyên trách, duyệt bởi KHSX ────
@@ -69,7 +69,7 @@ export class PlanFormsController {
     @Param('group') group: ManhGroup,
     @Body() dto: UpdateQuotaDto,
   ) {
-    return this.planFormsService.updateManhQuota(id, group, dto);
+    return this.skusService.updateManhQuota(id, group, dto);
   }
 
   @Post(':id/manh-quota/:group/review')
@@ -79,13 +79,13 @@ export class PlanFormsController {
     @Param('group') group: ManhGroup,
     @Body() dto: ReviewQuotaDto,
   ) {
-    return this.planFormsService.reviewManhQuota(id, group, dto);
+    return this.skusService.reviewManhQuota(id, group, dto);
   }
 
   @Post(':id/approve-parts')
   @RequirePermissions(APPROVE)
   approveParts(@Param('id') id: string) {
-    return this.planFormsService.approveParts(id);
+    return this.skusService.approveParts(id);
   }
 
   // ─── Detail quota (Sơn/Phụ kiện/Bao bì) ─────────────────────────────────────
@@ -97,7 +97,7 @@ export class PlanFormsController {
     @Param('group') group: DetailGroup,
     @Body() dto: UpdateQuotaDto,
   ) {
-    return this.planFormsService.updateDetailQuota(id, group, dto);
+    return this.skusService.updateDetailQuota(id, group, dto);
   }
 
   @Post(':id/detail-quota/:group/review')
@@ -107,13 +107,13 @@ export class PlanFormsController {
     @Param('group') group: DetailGroup,
     @Body() dto: ReviewQuotaDto,
   ) {
-    return this.planFormsService.reviewDetailQuota(id, group, dto);
+    return this.skusService.reviewDetailQuota(id, group, dto);
   }
 
   @Post(':id/approve-detail')
   @RequirePermissions(APPROVE)
   approveDetail(@Param('id') id: string) {
-    return this.planFormsService.approveDetail(id);
+    return this.skusService.approveDetail(id);
   }
 
   // ─── QLSX (mfgRole = PRODUCTION_MANAGER) ────────────────────────────────────
@@ -122,21 +122,21 @@ export class PlanFormsController {
   @RequirePermissions(APPROVE)
   @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)
   reviewQlsx(@Param('id') id: string) {
-    return this.planFormsService.reviewQlsx(id);
+    return this.skusService.reviewQlsx(id);
   }
 
   @Post(':id/request-boss-approval')
   @RequirePermissions(APPROVE)
   @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)
   requestBossApproval(@Param('id') id: string) {
-    return this.planFormsService.requestBossApproval(id);
+    return this.skusService.requestBossApproval(id);
   }
 
   @Post(':id/reject-qlsx')
   @RequirePermissions(APPROVE)
   @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)
   rejectByQlsx(@Param('id') id: string) {
-    return this.planFormsService.rejectByQlsx(id);
+    return this.skusService.rejectByQlsx(id);
   }
 
   // ─── Sếp (role BOSS) - duyệt cuối, mirror assertBossRole() trong mock ───────
@@ -145,13 +145,13 @@ export class PlanFormsController {
   @RequirePermissions(APPROVE)
   @RequireRole(BUSINESS_ROLES.BOSS)
   approve(@Param('id') id: string) {
-    return this.planFormsService.approve(id);
+    return this.skusService.approve(id);
   }
 
   @Post(':id/reject-boss')
   @RequirePermissions(APPROVE)
   @RequireRole(BUSINESS_ROLES.BOSS)
   rejectByBoss(@Param('id') id: string) {
-    return this.planFormsService.rejectByBoss(id);
+    return this.skusService.rejectByBoss(id);
   }
 }

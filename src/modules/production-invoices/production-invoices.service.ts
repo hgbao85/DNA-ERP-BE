@@ -6,7 +6,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
-import { PlanFormsService } from '../plan-forms/plan-forms.service';
+import { SkusService } from '../skus/skus.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
 import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-response.dto';
@@ -33,7 +33,7 @@ type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
 export class ProductionInvoicesService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
-    private readonly planFormsService: PlanFormsService,
+    private readonly skusService: SkusService,
   ) {}
 
   async create(dto: CreateProductionInvoiceDto): Promise<ProductionInvoiceResponseDto> {
@@ -212,7 +212,7 @@ export class ProductionInvoicesService {
     });
 
     if (pi.salesOrderId) {
-      await this.planFormsService.ensureProductionConfirmPlanForm(
+      await this.skusService.ensureProductionConfirmPlanForm(
         pi.salesOrderId,
         item.mfgProductId,
         pi.id,

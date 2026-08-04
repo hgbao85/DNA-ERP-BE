@@ -1,40 +1,37 @@
-import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
-import { MaterialKind } from '../../../generated/prisma/client';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional } from 'class-validator';
 
+/**
+ * Không validate gì thật ở đây (theo yêu cầu) - `@IsOptional()` KHÔNG kiểm tra kiểu/độ dài/
+ * bắt buộc, chỉ đăng ký field với class-validator để ValidationPipe toàn cục (main.ts,
+ * whitelist: true + forbidNonWhitelisted: true - áp dụng chung cho MỌI DTO trong app, không
+ * được sửa riêng ở đây) không strip/reject field "lạ". Thiếu decorator hoàn toàn sẽ làm
+ * ValidationPipe báo "property X should not exist" cho chính field đó dù request có gửi.
+ *
+ * Cột code/name/unit vẫn NOT NULL ở DB nên thiếu hẳn field (không phải chuỗi rỗng) vẫn sẽ
+ * lỗi ở tầng Prisma/DB - không có cách nào né được nếu không đổi schema.
+ */
 export class CreateMaterialDto {
-  @ApiProperty({ description: "vd 'SAT-25'" })
-  @IsString()
-  @MinLength(1)
+  @ApiPropertyOptional({ description: "vd 'SAT-25'" })
+  @IsOptional()
   code!: string;
 
-  @ApiProperty({ description: 'vd "Sắt Hộp 6 zem" - spec ghép giữ nguyên dạng text' })
-  @IsString()
-  @MinLength(1)
+  @ApiPropertyOptional({ description: 'vd "Sắt Hộp 6 zem" - spec ghép giữ nguyên dạng text' })
+  @IsOptional()
   name!: string;
 
-  @ApiPropertyOptional({
-    enum: MaterialKind,
-    default: MaterialKind.OTHER,
-    description: 'Dùng lọc khi chọn cho segment_spec (chỉ STEEL_BAR) hay consumable_bom',
-  })
+  @ApiPropertyOptional({ description: 'cm, cây, kg, cuộn, bar, l, bottle...' })
   @IsOptional()
-  @IsEnum(MaterialKind)
-  kind?: MaterialKind;
-
-  @ApiProperty({ description: 'cm, cây, kg, cuộn, bar, l, bottle...' })
-  @IsString()
-  @MinLength(1)
   unit!: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Cách phân loại vật tư duy nhất - group.systemKey (6 nhóm hệ thống, xem material-group-system-keys.constant.ts) quyết định vật tư có hiện trong picker của 4 trang Spec hay không',
+  })
   @IsOptional()
-  @IsString()
   materialGroupId?: string;
 
   @ApiPropertyOptional({ description: 'Hệ số quy đổi đơn vị kho, vd 600 = mm/cây' })
   @IsOptional()
-  @IsNumber()
-  @Min(0)
   khoUnitFactor?: number;
 }

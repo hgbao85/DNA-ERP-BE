@@ -24,7 +24,7 @@ export const PERMISSION_MODULES = {
   BOM_REVISION: 'BOM_REVISION',
   // --- Sales Order + Production Order domain ---
   SALES_ORDER: 'SALES_ORDER',
-  PLAN_FORM: 'PLAN_FORM',
+  SKU: 'SKU',
   PRODUCTION_INVOICE: 'PRODUCTION_INVOICE',
 } as const;
 

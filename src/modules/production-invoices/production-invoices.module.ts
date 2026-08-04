@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
-import { PlanFormsModule } from '../plan-forms/plan-forms.module';
+import { SkusModule } from '../skus/skus.module';
 import { ProductionInvoicesController } from './production-invoices.controller';
 import { ProductionInvoicesService } from './production-invoices.service';
 
 @Module({
-  imports: [PlanFormsModule],
+  imports: [SkusModule],
   controllers: [ProductionInvoicesController],
   providers: [ProductionInvoicesService],
   exports: [ProductionInvoicesService],

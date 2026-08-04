@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { MaterialsService } from './materials.service';
 
@@ -12,7 +12,6 @@ describe('MaterialsService', () => {
     id: 1n,
     code: 'SAT-01',
     name: 'Sat cay',
-    kind: 'STEEL_BAR',
     unit: 'kg',
     materialGroupId: null,
     khoUnitFactor: null,
@@ -50,6 +49,19 @@ describe('MaterialsService', () => {
       await expect(
         service.create({ code: 'SAT-01', name: 'Trung code', unit: 'kg' } as any),
       ).rejects.toThrow(ConflictException);
+      expect(prisma.material.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing code with a clean 400 instead of crashing findUnique({ where: { code: undefined } })', async () => {
+      await expect(service.create({ name: 'Khong co ma', unit: 'kg' } as any)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.material.findUnique).not.toHaveBeenCalled();
+      expect(prisma.material.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing name/unit with a clean 400', async () => {
+      await expect(service.create({ code: 'SAT-03' } as any)).rejects.toThrow(BadRequestException);
       expect(prisma.material.create).not.toHaveBeenCalled();
     });
   });

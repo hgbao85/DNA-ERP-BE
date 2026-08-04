@@ -48,22 +48,22 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PRODUCT,
       actions: [PermissionAction.VIEW, PermissionAction.CREATE],
     },
-    // Việc 2: ô chọn SKU khi tạo PO (OrderManagementPage) chỉ liệt kê PlanForm đã APPROVED -
-    // gọi GET /plan-forms để dựng danh sách; thiếu quyền này ô chọn SKU luôn rỗng.
+    // Việc 2: ô chọn SKU khi tạo PO (OrderManagementPage) chỉ liệt kê SKU đã APPROVED -
+    // gọi GET /skus để dựng danh sách; thiếu quyền này ô chọn SKU luôn rỗng.
     {
-      module: PERMISSION_MODULES.PLAN_FORM,
+      module: PERMISSION_MODULES.SKU,
       actions: [PermissionAction.VIEW],
     },
   ],
   // KHSX: tạo PlanForm + tự duyệt/từ chối từng nhóm mảnh-chi tiết và 2 mốc approve-parts/
-  // approve-detail (APPROVE) - KHÔNG có UPDATE trên PLAN_FORM vì nhập định mức (manh-quota/
+  // approve-detail (APPROVE) - KHÔNG có UPDATE trên SKU vì nhập định mức (manh-quota/
   // detail-quota) là việc của 4 account chuyên trách (SPEC_*_STAFF, xem bên dưới), không phải
   // KHSX. Chỉ VIEW SalesOrder (không sửa đơn của Sales); tạo/sửa PI nhưng KHÔNG duyệt sản
   // xuất từng item (đó là QLSX/Sếp, xem PRODUCTION_MANAGER + RequireRole('BOSS') ở controller)
   // - PRODUCTION_INVOICE ở đây cố tình không có APPROVE.
   [BUSINESS_ROLES.PRODUCTION_PLANNER]: [
     {
-      module: PERMISSION_MODULES.PLAN_FORM,
+      module: PERMISSION_MODULES.SKU,
       actions: [
         PermissionAction.VIEW,
         PermissionAction.CREATE,
@@ -88,15 +88,22 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.CUSTOMER,
       actions: [PermissionAction.VIEW],
     },
+    // Click vào 1 SKU trong SKUReviewPage mở ThongKePagePlan ("Bảng thống kê") - trang này gọi
+    // GET /weaving-points để dựng execution stage của công đoạn Dệt (genExecutionStages), thiếu
+    // quyền này crash cả trang với lỗi "Missing required permission(s): WEAVING_POINT:VIEW".
+    {
+      module: PERMISSION_MODULES.WEAVING_POINT,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // QLSX: duyệt cục bộ + gửi Sếp ở cả PlanForm lẫn PI item (APPROVE) - các route tương ứng
   // (qlsx-review/request-boss-approval/reject-qlsx, send-to-boss) còn gắn thêm
   // @RequireMfgRole(PRODUCTION_MANAGER) để tách khỏi bước duyệt CUỐI của Sếp, vốn dùng CHÍNH
-  // action APPROVE này nhưng gắn thêm @RequireRole('BOSS') (xem plan-forms/production-invoices
+  // action APPROVE này nhưng gắn thêm @RequireRole('BOSS') (xem skus/production-invoices
   // controller) - QLSX không tự ý gọi được endpoint duyệt cuối dù permission trùng action.
   [BUSINESS_ROLES.PRODUCTION_MANAGER]: [
     {
-      module: PERMISSION_MODULES.PLAN_FORM,
+      module: PERMISSION_MODULES.SKU,
       actions: [PermissionAction.VIEW, PermissionAction.APPROVE],
     },
     {
@@ -110,7 +117,7 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.USER,
       actions: [PermissionAction.VIEW],
     },
-    // SKUReviewPage (tab "Duyệt SKU mới") gọi getPlanFormOptions (GET /sales-orders + /products)
+    // SKUReviewPage (tab "Duyệt SKU mới") gọi getSkuOptions (GET /sales-orders + /products)
     // và getSalesCustomers (GET /customers) ngay khi mount cho MỌI role kể cả QLSX, dù nút Tạo
     // SKU (nơi tiêu thụ data này) đã ẩn với QLSX - thiếu 3 quyền VIEW này thì tab luôn lỗi 403.
     {
@@ -125,32 +132,42 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.CUSTOMER,
       actions: [PermissionAction.VIEW],
     },
+    // MfgApp tab "Kế hoạch" mở ThongKePagePlan cho QLSX (isProdMgr) - cùng lý do đã thêm cho
+    // PRODUCTION_PLANNER: trang gọi GET /weaving-points, thiếu quyền này crash cả trang.
+    {
+      module: PERMISSION_MODULES.WEAVING_POINT,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // 4 account chuyên trách nhập định mức SKU (mirror đúng mock: Sắt / Dây-Sơn / Phụ kiện-Bao
   // bì) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE (duyệt là KHSX).
-  // Cần thêm MATERIAL:VIEW (Việc 2) - MaterialPicker dùng chung ở cả 4 trang Spec gọi
-  // GET /materials để chọn vật tư theo kind/nhóm; thiếu quyền này picker luôn rỗng.
+  // MATERIAL:VIEW (Việc 2) - MaterialPicker dùng chung ở cả 4 trang Spec gọi GET /materials
+  // để chọn vật tư. Từ khi bỏ Material.kind, phân loại vật tư chuyển hoàn toàn sang
+  // materialGroup.systemKey - cả 4 trang giờ đều gọi GET /material-groups để resolve id nhóm
+  // hệ thống (Sắt/Dây/Đinh/Sơn/Phụ kiện/Bao bì), nên đều cần thêm MATERIAL_GROUP:VIEW.
   [BUSINESS_ROLES.SPEC_STEEL_STAFF]: [
     {
-      module: PERMISSION_MODULES.PLAN_FORM,
+      module: PERMISSION_MODULES.SKU,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
     {
       module: PERMISSION_MODULES.MATERIAL,
+      actions: [PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.MATERIAL_GROUP,
       actions: [PermissionAction.VIEW],
     },
   ],
   [BUSINESS_ROLES.SPEC_WIRE_PAINT_STAFF]: [
     {
-      module: PERMISSION_MODULES.PLAN_FORM,
+      module: PERMISSION_MODULES.SKU,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
     {
       module: PERMISSION_MODULES.MATERIAL,
       actions: [PermissionAction.VIEW],
     },
-    // Dây/Đinh phân biệt qua materialGroupId (cùng kind=CONSUMABLE) - trang Spec cần tra
-    // MaterialGroup theo tên để lọc đúng picker, thiếu quyền này picker gộp lẫn Dây/Đinh.
     {
       module: PERMISSION_MODULES.MATERIAL_GROUP,
       actions: [PermissionAction.VIEW],
@@ -158,11 +175,15 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   ],
   [BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF]: [
     {
-      module: PERMISSION_MODULES.PLAN_FORM,
+      module: PERMISSION_MODULES.SKU,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
     {
       module: PERMISSION_MODULES.MATERIAL,
+      actions: [PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.MATERIAL_GROUP,
       actions: [PermissionAction.VIEW],
     },
   ],

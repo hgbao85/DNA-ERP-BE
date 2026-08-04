@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsNumber, IsString, Min } from 'class-validator';
 
 export class CreateBomAccessoryItemDto {
-  @ApiProperty({ description: "Phải là material.kind='ACCESSORY' hoặc 'PACKAGING'" })
+  @ApiProperty({ description: 'Phải thuộc nhóm vật tư systemKey ACCESSORY hoặc PACKAGING' })
   @IsString()
   materialId!: string;
 

@@ -225,15 +225,6 @@ model SystemConfig {
 // không phải sự không nhất quán.
 // =====================================================================
 
-enum MaterialKind {
-  STEEL_BAR
-  CONSUMABLE
-  PAINT
-  ACCESSORY
-  PACKAGING
-  OTHER
-}
-
 enum MfgStage {
   PHOI
   HAN
@@ -252,23 +243,28 @@ model MaterialGroup {
   id   BigInt @id @default(autoincrement())
   name String @unique
 
+  /// Khoá kỹ thuật cố định cho 6 nhóm hệ thống (seed sẵn ở prisma/seed.ts: STEEL_BAR/WIRE/
+  /// NAIL/PAINT/ACCESSORY/PACKAGING). Mọi logic nghiệp vụ (4 trang Spec, validate BOM) match
+  /// theo cột này, KHÔNG theo `name` - admin đổi tên nhóm thoải mái mà không làm hỏng lọc.
+  /// Nhóm do admin tự tạo thêm = null, vô hình với logic Spec.
+  systemKey String? @unique
+
   materials Material[]
 
   @@map("material_groups")
 }
 
 model Material {
-  id              BigInt       @id @default(autoincrement())
-  code            String       @unique
+  id              BigInt    @id @default(autoincrement())
+  code            String    @unique
   name            String
-  kind            MaterialKind @default(OTHER)
   unit            String
   materialGroupId BigInt?
-  khoUnitFactor   Decimal?     @db.Decimal(14, 4)
-  isActive        Boolean      @default(true)
+  khoUnitFactor   Decimal?  @db.Decimal(14, 4)
+  isActive        Boolean   @default(true)
   deletedAt       DateTime?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   materialGroup     MaterialGroup?     @relation(fields: [materialGroupId], references: [id])
   materialSuppliers MaterialSupplier[]
@@ -277,7 +273,6 @@ model Material {
   bomAccessoryItems BomAccessoryItem[]
 
   @@index([materialGroupId])
-  @@index([kind])
   @@map("materials")
 }
 
@@ -444,7 +439,8 @@ model Part {
   @@map("part")
 }
 
-/// Đoạn sắt = material (phải kind=STEEL_BAR, ràng buộc ở tầng service) + chiều dài cắt.
+/// Đoạn sắt = material (phải thuộc nhóm vật tư Sắt - materialGroup.systemKey=STEEL_BAR,
+/// ràng buộc ở tầng service) + chiều dài cắt.
 model SegmentSpec {
   id          BigInt @id @default(autoincrement())
   materialId  BigInt
@@ -559,8 +555,9 @@ model PartBom {
 }
 
 /// Định mức vật tư tiêu hao theo revision, gắn với 1 công đoạn cụ thể (Phôi/Hàn/Sơn/Đan -
-/// vd Dây/Đinh dùng ở Đan, Sơn dùng ở Sơn). Phụ kiện/Bao bì KHÔNG gắn công đoạn nên dùng
-/// bảng riêng BomAccessoryItem, không phải bảng này.
+/// vd Dây/Đinh dùng ở Đan, Sơn dùng ở Sơn). Phân biệt Dây/Đinh (cùng stage=DAN) và xác định
+/// Sơn qua material.materialGroup.systemKey (WIRE/NAIL/PAINT), ràng buộc ở tầng service.
+/// Phụ kiện/Bao bì KHÔNG gắn công đoạn nên dùng bảng riêng BomAccessoryItem, không phải bảng này.
 model ConsumableBom {
   id            BigInt   @id @default(autoincrement())
   bomRevisionId BigInt
@@ -576,10 +573,9 @@ model ConsumableBom {
 }
 
 /// Phụ kiện/Bao bì tiêu hao theo revision - không gắn công đoạn sản xuất (khác
-/// ConsumableBom). Phân biệt Phụ kiện vs Bao bì qua material.kind (ACCESSORY/PACKAGING),
-/// không cần cột nhóm riêng như Dây/Đinh ở ConsumableBom (2 kind đã tách sẵn trong enum
-/// MaterialKind). KHÔNG tái dùng PackagingBom - model đó gắn ProductVariant (theo màu),
-/// không có vòng đời DRAFT/ACTIVE, sai phạm vi.
+/// ConsumableBom). Phân biệt Phụ kiện vs Bao bì qua material.materialGroup.systemKey
+/// (ACCESSORY/PACKAGING), ràng buộc ở tầng service. KHÔNG tái dùng PackagingBom - model đó
+/// gắn ProductVariant (theo màu), không có vòng đời DRAFT/ACTIVE, sai phạm vi.
 model BomAccessoryItem {
   id            BigInt  @id @default(autoincrement())
   bomRevisionId BigInt
@@ -730,9 +726,16 @@ model SalesOrderItem {
 /// pages (không thuộc phạm vi domain này).
 model PlanForm {
   id                  BigInt         @id @default(autoincrement())
-  salesOrderId        BigInt
+  /// Optional: SKU (kế hoạch sản xuất/BOM) là định nghĩa sản phẩm độc lập, không bắt buộc
+  /// phải gắn 1 Sales Order ngay khi tạo (KHSX tạo trước, đơn hàng tham chiếu tới sau, hoặc
+  /// không bao giờ gắn). NULL cho SKU thường tạo qua "Tạo SKU mới"; luôn có giá trị cho bản
+  /// ghi origin='PRODUCTION_CONFIRM' (tạo khi Sếp duyệt 1 item PI thật).
+  salesOrderId        BigInt?
   mfgProductId        BigInt
   productionInvoiceId BigInt?
+  /// Tên khách hàng nhập tay lúc tạo SKU (không suy ra được từ salesOrder khi SKU chưa/không
+  /// gắn đơn hàng nào) - xem PlanFormsService.create.
+  customerName        String?
   status              PlanFormStatus @default(WAITING_PARTS)
   note                String?
   /// null = SKU thường; 'PRODUCTION_CONFIRM' = bản ghi tự tạo khi Sếp duyệt PI item, chỉ
@@ -745,7 +748,7 @@ model PlanForm {
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
-  salesOrder        SalesOrder             @relation(fields: [salesOrderId], references: [id])
+  salesOrder        SalesOrder?            @relation(fields: [salesOrderId], references: [id])
   mfgProduct        MfgProduct             @relation(fields: [mfgProductId], references: [id])
   productionInvoice ProductionInvoice?     @relation(fields: [productionInvoiceId], references: [id])
   createdBy         User                   @relation(fields: [createdById], references: [id])

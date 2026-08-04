@@ -37,7 +37,7 @@ import { MaterialsModule } from './modules/materials/materials.module';
 import { SegmentSpecsModule } from './modules/segment-specs/segment-specs.module';
 import { BomRevisionsModule } from './modules/bom-revisions/bom-revisions.module';
 import { SalesOrdersModule } from './modules/sales-orders/sales-orders.module';
-import { PlanFormsModule } from './modules/plan-forms/plan-forms.module';
+import { SkusModule } from './modules/skus/skus.module';
 import { ProductionInvoicesModule } from './modules/production-invoices/production-invoices.module';
 
 @Module({
@@ -95,7 +95,7 @@ import { ProductionInvoicesModule } from './modules/production-invoices/producti
     SegmentSpecsModule,
     BomRevisionsModule,
     SalesOrdersModule,
-    PlanFormsModule,
+    SkusModule,
     ProductionInvoicesModule,
   ],
   providers: [

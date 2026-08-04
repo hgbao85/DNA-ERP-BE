@@ -1,6 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { PlanFormsService } from '../plan-forms/plan-forms.service';
+import { SkusService } from '../skus/skus.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 
 describe('ProductionInvoicesService', () => {
@@ -22,7 +22,7 @@ describe('ProductionInvoicesService', () => {
     };
     mfgProduct: { findUnique: jest.Mock };
   };
-  let planFormsService: { ensureProductionConfirmPlanForm: jest.Mock };
+  let skusService: { ensureProductionConfirmPlanForm: jest.Mock };
 
   const mfgProduct = { id: 2n, factoryCode: 'SKU-01', name: 'Ghe A' };
   const pi = (overrides: Record<string, unknown> = {}) => ({
@@ -78,10 +78,10 @@ describe('ProductionInvoicesService', () => {
       },
       mfgProduct: { findUnique: jest.fn() },
     };
-    planFormsService = { ensureProductionConfirmPlanForm: jest.fn() };
+    skusService = { ensureProductionConfirmPlanForm: jest.fn() };
     service = new ProductionInvoicesService(
       prisma as unknown as PrismaServiceType,
-      planFormsService as unknown as PlanFormsService,
+      skusService as unknown as SkusService,
     );
   });
 
@@ -159,7 +159,7 @@ describe('ProductionInvoicesService', () => {
 
       await service.approveItem('7', '20', 'user-boss');
 
-      expect(planFormsService.ensureProductionConfirmPlanForm).toHaveBeenCalledWith(
+      expect(skusService.ensureProductionConfirmPlanForm).toHaveBeenCalledWith(
         1n,
         2n,
         7n,

@@ -5,7 +5,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MaterialKind, Prisma } from '../../generated/prisma/client';
+import { Prisma } from '../../generated/prisma/client';
+import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -20,9 +21,9 @@ type SegmentSpecWithMaterial = Prisma.SegmentSpecGetPayload<{ include: { materia
 /**
  * Đoạn sắt = material + chiều dài cắt (docs/dna-erp-db-schema.html "segment_spec") - the
  * 3NF fix replacing the repeated (loại sắt, quy cách, chiều dài) key that used to be
- * duplicated everywhere in mock. `materialId` must point at a material with
- * kind=STEEL_BAR - enforced here (the DB has no CHECK across two tables), not at the
- * Materials module, since only SegmentSpec cares about this constraint.
+ * duplicated everywhere in mock. `materialId` must point at a material whose
+ * materialGroup.systemKey=STEEL_BAR - enforced here (the DB has no CHECK across two
+ * tables), not at the Materials module, since only SegmentSpec cares about this constraint.
  *
  * No isActive/deletedAt - remove() is a real DELETE. piece_bom/part_bom both reference
  * segmentSpecId with ON DELETE RESTRICT, so deleting one still in use fails at the DB
@@ -34,7 +35,7 @@ export class SegmentSpecsService {
 
   async create(dto: CreateSegmentSpecDto): Promise<SegmentSpecResponseDto> {
     const materialBigId = parseBigIntId(dto.materialId);
-    await this.assertSteelBar(materialBigId);
+    await this.assertSteelGroup(materialBigId);
     await this.assertSpecFree(materialBigId, dto.cutLengthMm);
 
     const spec = await this.prisma.segmentSpec.create({
@@ -80,7 +81,7 @@ export class SegmentSpecsService {
 
     const materialBigId = dto.materialId ? parseBigIntId(dto.materialId) : current.materialId;
     if (dto.materialId) {
-      await this.assertSteelBar(materialBigId);
+      await this.assertSteelGroup(materialBigId);
     }
 
     const cutLengthMm = dto.cutLengthMm ?? current.cutLengthMm;
@@ -105,14 +106,17 @@ export class SegmentSpecsService {
     await this.prisma.segmentSpec.delete({ where: { id: bigId } });
   }
 
-  private async assertSteelBar(materialId: bigint): Promise<void> {
-    const material = await this.prisma.material.findUnique({ where: { id: materialId } });
+  private async assertSteelGroup(materialId: bigint): Promise<void> {
+    const material = await this.prisma.material.findUnique({
+      where: { id: materialId },
+      include: { materialGroup: true },
+    });
     if (!material) {
       throw new NotFoundException(`Material ${materialId} not found`);
     }
-    if (material.kind !== MaterialKind.STEEL_BAR) {
+    if (material.materialGroup?.systemKey !== MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR) {
       throw new BadRequestException(
-        `Material "${material.code}" must have kind=STEEL_BAR to get a segment spec (got ${material.kind})`,
+        `Material "${material.code}" phải thuộc nhóm vật tư Sắt (systemKey=STEEL_BAR) để tạo segment spec`,
       );
     }
   }

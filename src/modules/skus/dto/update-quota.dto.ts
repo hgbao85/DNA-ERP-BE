@@ -14,7 +14,7 @@ import {
 
 /** 1 đoạn sắt cấu thành 1 mảnh (nhóm SAT) - resolve-or-create SegmentSpec theo (materialId, cutLengthMm). */
 export class QuotaSegmentDto {
-  @ApiProperty({ description: "material.kind phải là 'STEEL_BAR'" })
+  @ApiProperty({ description: 'Material phải thuộc nhóm vật tư Sắt (systemKey=STEEL_BAR)' })
   @IsString()
   materialId!: string;
 

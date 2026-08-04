@@ -3,7 +3,7 @@ import { Exclude, Expose } from 'class-transformer';
 import { DetailGroup, ManhGroup, ReviewDecision } from '../../../generated/prisma/client';
 
 @Exclude()
-export class PlanFormManhReviewResponseDto {
+export class SkuManhReviewResponseDto {
   @Expose() @ApiProperty({ enum: ManhGroup }) group!: ManhGroup;
   @Expose()
   @ApiPropertyOptional({ enum: ReviewDecision, nullable: true })
@@ -13,13 +13,13 @@ export class PlanFormManhReviewResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) enteredAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) reviewedAt!: Date | null;
 
-  constructor(partial: Partial<PlanFormManhReviewResponseDto>) {
+  constructor(partial: Partial<SkuManhReviewResponseDto>) {
     Object.assign(this, partial);
   }
 }
 
 @Exclude()
-export class PlanFormDetailReviewResponseDto {
+export class SkuDetailReviewResponseDto {
   @Expose() @ApiProperty({ enum: DetailGroup }) group!: DetailGroup;
   @Expose()
   @ApiPropertyOptional({ enum: ReviewDecision, nullable: true })
@@ -29,7 +29,7 @@ export class PlanFormDetailReviewResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) enteredAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) reviewedAt!: Date | null;
 
-  constructor(partial: Partial<PlanFormDetailReviewResponseDto>) {
+  constructor(partial: Partial<SkuDetailReviewResponseDto>) {
     Object.assign(this, partial);
   }
 }

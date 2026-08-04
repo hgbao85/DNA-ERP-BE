@@ -1,4 +1,10 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Material, Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -20,14 +26,24 @@ type MaterialSupplierWithSupplier = Prisma.MaterialSupplierGetPayload<{
  * Materials + MaterialSuppliers (docs/dna-erp-db-schema.html "materials" / "material_suppliers").
  * `remove()` is a real hard delete (as originally built) - soft-delete for this model is
  * pending, see CONTRIBUTING.md "0. Ưu tiên". `isActive` is a separate, independent flag.
- * Prereq for SegmentSpec (P2 step 5, validates kind='STEEL_BAR' - not enforced here, that
- * check belongs to the SegmentSpec module that consumes this one).
+ * Prereq for SegmentSpec (P2 step 5, validates materialGroup.systemKey='STEEL_BAR' - not
+ * enforced here, that check belongs to the SegmentSpec module that consumes this one).
  */
 @Injectable()
 export class MaterialsService {
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
 
   async create(dto: CreateMaterialDto): Promise<MaterialResponseDto> {
+    // code/name/unit là cột NOT NULL ở DB - không thể bỏ qua được (không phải "validate form"
+    // chặn nhập liệu, chỉ là guard tránh PrismaClientValidationError raw -> 500 khó hiểu khi
+    // thiếu field mà lẽ ra DB sẽ từ chối; findUnique({ where: { code: undefined } }) bên dưới
+    // tự nó đã ném lỗi này nếu không chặn sớm ở đây).
+    if (!dto.code || !dto.name || !dto.unit) {
+      throw new BadRequestException(
+        'Thiếu Mã vật tư / Tên vật tư / Đơn vị tính - đây là 3 trường bắt buộc ở DB, không thể để trống',
+      );
+    }
+
     const existing = await this.prisma.material.findUnique({ where: { code: dto.code } });
     if (existing) {
       throw new ConflictException(`Material "${dto.code}" already exists`);
@@ -37,7 +53,6 @@ export class MaterialsService {
       data: {
         code: dto.code,
         name: dto.name,
-        kind: dto.kind,
         unit: dto.unit,
         materialGroupId: dto.materialGroupId ? parseBigIntId(dto.materialGroupId) : undefined,
         khoUnitFactor: dto.khoUnitFactor,
@@ -89,7 +104,6 @@ export class MaterialsService {
       data: {
         code: dto.code,
         name: dto.name,
-        kind: dto.kind,
         unit: dto.unit,
         materialGroupId: dto.materialGroupId ? parseBigIntId(dto.materialGroupId) : undefined,
         khoUnitFactor: dto.khoUnitFactor,
@@ -202,7 +216,6 @@ export class MaterialsService {
       id: material.id.toString(),
       code: material.code,
       name: material.name,
-      kind: material.kind,
       unit: material.unit,
       materialGroupId: material.materialGroupId?.toString() ?? null,
       khoUnitFactor: material.khoUnitFactor?.toNumber() ?? null,

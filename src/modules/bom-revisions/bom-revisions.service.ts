@@ -5,12 +5,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { BomRevision, BomRevisionStatus, Prisma } from '../../generated/prisma/client';
 import {
-  BomRevision,
-  BomRevisionStatus,
-  MaterialKind,
-  Prisma,
-} from '../../generated/prisma/client';
+  MATERIAL_GROUP_SYSTEM_KEYS,
+  MaterialGroupSystemKey,
+} from '../../common/constants/material-group-system-keys.constant';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { BomAccessoryItemResponseDto } from './dto/bom-accessory-item-response.dto';
@@ -451,15 +450,15 @@ export class BomRevisionsService {
     this.assertDraft(revision);
 
     const materialBigId = parseBigIntId(dto.materialId);
-    const material = await this.prisma.material.findUnique({ where: { id: materialBigId } });
-    if (!material) {
-      throw new NotFoundException(`Material ${dto.materialId} not found`);
-    }
-    if (material.kind !== MaterialKind.CONSUMABLE && material.kind !== MaterialKind.PAINT) {
-      throw new BadRequestException(
-        `Material "${material.code}" must have kind=CONSUMABLE or PAINT for consumable_bom (got ${material.kind})`,
-      );
-    }
+    await this.assertMaterialInSystemGroups(
+      materialBigId,
+      [
+        MATERIAL_GROUP_SYSTEM_KEYS.WIRE,
+        MATERIAL_GROUP_SYSTEM_KEYS.NAIL,
+        MATERIAL_GROUP_SYSTEM_KEYS.PAINT,
+      ],
+      'consumable_bom',
+    );
 
     const existing = await this.prisma.consumableBom.findUnique({
       where: {
@@ -532,15 +531,11 @@ export class BomRevisionsService {
     this.assertDraft(revision);
 
     const materialBigId = parseBigIntId(dto.materialId);
-    const material = await this.prisma.material.findUnique({ where: { id: materialBigId } });
-    if (!material) {
-      throw new NotFoundException(`Material ${dto.materialId} not found`);
-    }
-    if (material.kind !== MaterialKind.ACCESSORY && material.kind !== MaterialKind.PACKAGING) {
-      throw new BadRequestException(
-        `Material "${material.code}" must have kind=ACCESSORY or PACKAGING for bom_accessory_items (got ${material.kind})`,
-      );
-    }
+    await this.assertMaterialInSystemGroups(
+      materialBigId,
+      [MATERIAL_GROUP_SYSTEM_KEYS.ACCESSORY, MATERIAL_GROUP_SYSTEM_KEYS.PACKAGING],
+      'bom_accessory_items',
+    );
 
     const existing = await this.prisma.bomAccessoryItem.findUnique({
       where: {
@@ -609,6 +604,29 @@ export class BomRevisionsService {
     if (revision.status !== BomRevisionStatus.DRAFT) {
       throw new ConflictException(
         `Cannot modify line items on bom_revision ${revision.id} - status is ${revision.status}, only DRAFT is editable`,
+      );
+    }
+  }
+
+  /** Vật tư phải thuộc 1 trong các nhóm hệ thống cho phép (vd Dây/Đinh/Sơn cho
+   *  consumable_bom, Phụ kiện/Bao bì cho bom_accessory_items). Reject cứng, không tự gán
+   *  nhóm - đây là API CRUD cấp thấp, side-effect ngầm ở đây sẽ bất ngờ với người gọi. */
+  private async assertMaterialInSystemGroups(
+    materialId: bigint,
+    allowed: MaterialGroupSystemKey[],
+    label: string,
+  ): Promise<void> {
+    const material = await this.prisma.material.findUnique({
+      where: { id: materialId },
+      include: { materialGroup: true },
+    });
+    if (!material) {
+      throw new NotFoundException(`Material ${materialId} not found`);
+    }
+    const systemKey = material.materialGroup?.systemKey;
+    if (!systemKey || !allowed.includes(systemKey as MaterialGroupSystemKey)) {
+      throw new BadRequestException(
+        `Material "${material.code}" phải thuộc nhóm vật tư hệ thống [${allowed.join(', ')}] cho ${label} (đang thuộc nhóm systemKey=${systemKey ?? 'null'})`,
       );
     }
   }
