@@ -14,11 +14,13 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { BomRevisionsService } from './bom-revisions.service';
+import { CreateBomAccessoryItemDto } from './dto/create-bom-accessory-item.dto';
 import { CreateBomPartDto } from './dto/create-bom-part.dto';
 import { CreateBomPieceDto } from './dto/create-bom-piece.dto';
 import { CreateConsumableBomDto } from './dto/create-consumable-bom.dto';
 import { CreatePartBomDto } from './dto/create-part-bom.dto';
 import { CreatePieceBomDto } from './dto/create-piece-bom.dto';
+import { UpdateBomAccessoryItemDto } from './dto/update-bom-accessory-item.dto';
 import { UpdateBomPartDto } from './dto/update-bom-part.dto';
 import { UpdateBomPieceDto } from './dto/update-bom-piece.dto';
 import { UpdateConsumableBomDto } from './dto/update-consumable-bom.dto';
@@ -219,6 +221,40 @@ export class BomRevisionsController {
   @RequirePermissions(DELETE)
   removeConsumableBom(@Param('bomRevisionId') bomRevisionId: string, @Param('id') id: string) {
     return this.bomRevisionsService.removeConsumableBom(bomRevisionId, id);
+  }
+
+  // ─── Nested: BomAccessoryItem (Phụ kiện/Bao bì) ─────────────────────────────
+
+  @Post(':bomRevisionId/accessory-items')
+  @RequirePermissions(CREATE)
+  createBomAccessoryItem(
+    @Param('bomRevisionId') bomRevisionId: string,
+    @Body() dto: CreateBomAccessoryItemDto,
+  ) {
+    return this.bomRevisionsService.createBomAccessoryItem(bomRevisionId, dto);
+  }
+
+  @Get(':bomRevisionId/accessory-items')
+  @RequirePermissions(VIEW)
+  listBomAccessoryItems(@Param('bomRevisionId') bomRevisionId: string) {
+    return this.bomRevisionsService.listBomAccessoryItems(bomRevisionId);
+  }
+
+  @Patch(':bomRevisionId/accessory-items/:id')
+  @RequirePermissions(UPDATE)
+  updateBomAccessoryItem(
+    @Param('bomRevisionId') bomRevisionId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateBomAccessoryItemDto,
+  ) {
+    return this.bomRevisionsService.updateBomAccessoryItem(bomRevisionId, id, dto);
+  }
+
+  @Delete(':bomRevisionId/accessory-items/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermissions(DELETE)
+  removeBomAccessoryItem(@Param('bomRevisionId') bomRevisionId: string, @Param('id') id: string) {
+    return this.bomRevisionsService.removeBomAccessoryItem(bomRevisionId, id);
   }
 }
 

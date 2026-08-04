@@ -69,6 +69,10 @@ model User {
   refreshTokens     RefreshToken[]
   notifications     Notification[]
   notificationReads NotificationRead[]
+  planForms         PlanForm[]
+  piRequestedItems  ProductionInvoiceItem[] @relation("PIItemRequestedBy")
+  piQlsxItems       ProductionInvoiceItem[] @relation("PIItemQlsxBy")
+  piDecidedItems    ProductionInvoiceItem[] @relation("PIItemDecidedBy")
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -234,6 +238,8 @@ enum MfgStage {
   PHOI
   HAN
   SON
+  /// Xuất đan — Dây/Đinh gộp cùng khung chưa đan tại kho vật tư thành phẩm, đưa tới điểm đan.
+  DAN
 }
 
 enum BomRevisionStatus {
@@ -268,6 +274,7 @@ model Material {
   materialSuppliers MaterialSupplier[]
   segmentSpecs      SegmentSpec[]
   consumableBoms    ConsumableBom[]
+  bomAccessoryItems BomAccessoryItem[]
 
   @@index([materialGroupId])
   @@index([kind])
@@ -359,6 +366,7 @@ model Customer {
   createdAt   DateTime @default(now())
 
   productVariants ProductVariant[]
+  salesOrders     SalesOrder[]
 
   @@map("sales_customers")
 }
@@ -369,10 +377,13 @@ model MfgProduct {
   name        String
   description String?
 
-  variants     ProductVariant[]
-  pieces       Piece[]
-  parts        Part[]
-  bomRevisions BomRevision[]
+  variants               ProductVariant[]
+  pieces                 Piece[]
+  parts                  Part[]
+  bomRevisions           BomRevision[]
+  salesOrderItems        SalesOrderItem[]
+  planForms              PlanForm[]
+  productionInvoiceItems ProductionInvoiceItem[]
 
   @@map("mfg_products")
 }
@@ -386,9 +397,10 @@ model ProductVariant {
   isActive     Boolean   @default(true)
   deletedAt    DateTime?
 
-  mfgProduct    MfgProduct     @relation(fields: [mfgProductId], references: [id])
-  customer      Customer?      @relation(fields: [customerId], references: [id])
-  packagingBoms PackagingBom[]
+  mfgProduct             MfgProduct              @relation(fields: [mfgProductId], references: [id])
+  customer               Customer?               @relation(fields: [customerId], references: [id])
+  packagingBoms          PackagingBom[]
+  productionInvoiceItems ProductionInvoiceItem[]
 
   @@index([mfgProductId])
   @@index([customerId])
@@ -447,22 +459,27 @@ model SegmentSpec {
 }
 
 /// Phiên bản định mức theo sản phẩm. production_order (P7) ghim đúng 1 bomRevisionId tại
-/// thời điểm tạo. sourcePlanFormId chưa có FK thật (plan_forms chưa tồn tại tới P5) — cột
-/// để trace, ràng buộc FK sẽ thêm khi P5 dựng bảng plan_forms.
+/// thời điểm tạo. sourcePlanFormId nay đã có FK thật tới plan_forms (bảng này được dựng
+/// cùng domain Sales/Production Order — xem plan_forms bên dưới); trước đó chỉ là cột trace.
 model BomRevision {
   id               BigInt            @id @default(autoincrement())
   mfgProductId     BigInt
   revNo            Int
   status           BomRevisionStatus @default(DRAFT)
-  sourcePlanFormId BigInt?
+  /// @unique: 1 PlanForm chỉ sở hữu đúng 1 BomRevision (tạo lười ở lần ghi định mức đầu
+  /// tiên) - chặn race condition tạo trùng khi 2 request ghi gần như đồng thời cùng thấy
+  /// "chưa có revision" (xem PlanFormsService.resolveDraftBomRevision).
+  sourcePlanFormId BigInt?           @unique
   createdAt        DateTime          @default(now())
 
-  mfgProduct     MfgProduct      @relation(fields: [mfgProductId], references: [id])
-  bomPieces      BomPiece[]
-  bomParts       BomPart[]
-  pieceBoms      PieceBom[]
-  partBoms       PartBom[]
-  consumableBoms ConsumableBom[]
+  mfgProduct        MfgProduct         @relation(fields: [mfgProductId], references: [id])
+  sourcePlanForm    PlanForm?          @relation(fields: [sourcePlanFormId], references: [id])
+  bomPieces         BomPiece[]
+  bomParts          BomPart[]
+  pieceBoms         PieceBom[]
+  partBoms          PartBom[]
+  consumableBoms    ConsumableBom[]
+  bomAccessoryItems BomAccessoryItem[]
 
   @@unique([mfgProductId, revNo])
   /// Composite-unique target cho FK ghép của piece_bom/part_bom (xem PieceBom/PartBom) -
@@ -541,7 +558,9 @@ model PartBom {
   @@map("part_bom")
 }
 
-/// Định mức vật tư tiêu hao Hàn/Sơn theo revision.
+/// Định mức vật tư tiêu hao theo revision, gắn với 1 công đoạn cụ thể (Phôi/Hàn/Sơn/Đan -
+/// vd Dây/Đinh dùng ở Đan, Sơn dùng ở Sơn). Phụ kiện/Bao bì KHÔNG gắn công đoạn nên dùng
+/// bảng riêng BomAccessoryItem, không phải bảng này.
 model ConsumableBom {
   id            BigInt   @id @default(autoincrement())
   bomRevisionId BigInt
@@ -554,6 +573,24 @@ model ConsumableBom {
 
   @@unique([bomRevisionId, stage, materialId])
   @@map("consumable_bom")
+}
+
+/// Phụ kiện/Bao bì tiêu hao theo revision - không gắn công đoạn sản xuất (khác
+/// ConsumableBom). Phân biệt Phụ kiện vs Bao bì qua material.kind (ACCESSORY/PACKAGING),
+/// không cần cột nhóm riêng như Dây/Đinh ở ConsumableBom (2 kind đã tách sẵn trong enum
+/// MaterialKind). KHÔNG tái dùng PackagingBom - model đó gắn ProductVariant (theo màu),
+/// không có vòng đời DRAFT/ACTIVE, sai phạm vi.
+model BomAccessoryItem {
+  id            BigInt  @id @default(autoincrement())
+  bomRevisionId BigInt
+  materialId    BigInt
+  qtyPerUnit    Decimal @db.Decimal(14, 4)
+
+  bomRevision BomRevision @relation(fields: [bomRevisionId], references: [id])
+  material    Material    @relation(fields: [materialId], references: [id])
+
+  @@unique([bomRevisionId, materialId])
+  @@map("bom_accessory_items")
 }
 
 /// BOM đóng gói theo biến thể sản phẩm.
@@ -569,4 +606,249 @@ model PackagingBom {
 
   @@index([productVariantId])
   @@map("packaging_bom")
+}
+
+// =====================================================================
+// Sales Order + Production Order — dịch ngược từ mock FE (SalesPO + PlanForm +
+// ProductionInvoice). Hợp nhất 2 khái niệm "PO" đang trùng lặp/lệch nhau trong mock
+// (salesPOs của Sales module và exportOrders của Mfg module, chỉ khớp nhau qua so sánh
+// chuỗi poNumber/code, không FK thật) thành 1 bảng sales_orders duy nhất.
+//
+// Phạm vi cố ý KHÔNG bao gồm ở domain này (để dành phase sau, xem docs/CONTRIBUTING.md
+// "0. Ưu tiên"): thực thi Phôi/Hàn/Sơn/KCS, phân bổ đan, đề xuất mua hàng, chuyển kho/tồn
+// kho giao dịch, đóng gói. Domain này chỉ phủ đúng 2 state machine "thật" đã được mock
+// enforce role ở tầng service (assertBossRole/assertProdMgrRole): duyệt định mức SKU
+// (PlanForm) và duyệt sản xuất theo từng SKU trong lệnh sản xuất (ProductionInvoiceItem).
+// =====================================================================
+
+enum SalesOrderItemStatus {
+  LEN_KE_HOACH
+  MUA_HANG
+  KHUNG_CO_KHI
+  DAN
+  CHUYEN_KIEM
+  DONG_GOI
+  HOAN_THANH
+}
+
+/// DRAFT/REJECTED của mock đã bỏ - không service nào từng set 2 giá trị đó (rejections
+/// đều rewind về APPROVED_DETAIL, xem PlanForm.reject-qlsx/reject-boss).
+enum PlanFormStatus {
+  WAITING_PARTS
+  APPROVED_PARTS
+  WAITING_DETAIL
+  APPROVED_DETAIL
+  WAITING_QLSX_APPROVAL
+  WAITING_BOSS_APPROVAL
+  APPROVED
+}
+
+enum ManhGroup {
+  SAT
+  DAY
+  DINH
+}
+
+enum DetailGroup {
+  DAY_SON
+  VAT_TU_PHU_KIEN
+  BAO_BI_DONG_GOI
+}
+
+enum ReviewDecision {
+  APPROVED
+  REJECTED
+}
+
+enum ProductionInvoiceStatus {
+  PLANNING
+  PRODUCING
+  DONE
+  CANCELLED
+}
+
+enum ProdApprovalStatus {
+  WAITING_QLSX
+  WAITING_BOSS
+  APPROVED
+  REJECTED
+}
+
+model SalesOrder {
+  id               BigInt    @id @default(autoincrement())
+  code             String    @unique
+  customerId       BigInt
+  orderDate        DateTime
+  /// Derived tại service (max của items[].deliveryDate) khi tạo/sửa item - không nhận
+  /// trực tiếp từ client, giữ đúng hành vi mock (SalesPO.deliveryDate).
+  deliveryDate     DateTime?
+  depositAmount    Decimal   @default(0) @db.Decimal(14, 2)
+  depositConfirmed Boolean   @default(false)
+  paidAmount       Decimal   @default(0) @db.Decimal(14, 2)
+  attachmentName   String?
+  attachmentUrl    String?
+  note             String?
+  /// Tạm ngừng/huỷ đơn - tách biệt hoàn toàn khỏi deletedAt, cùng tinh thần User.isActive
+  /// (xem docs/CONTRIBUTING.md mục 1).
+  isActive         Boolean   @default(true)
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  customer           Customer            @relation(fields: [customerId], references: [id])
+  items              SalesOrderItem[]
+  planForms          PlanForm[]
+  productionInvoices ProductionInvoice[]
+
+  @@index([customerId])
+  @@index([deletedAt])
+  @@map("sales_orders")
+}
+
+model SalesOrderItem {
+  id           BigInt               @id @default(autoincrement())
+  salesOrderId BigInt
+  mfgProductId BigInt
+  skuName      String?
+  totalQty     Int
+  shippedQty   Int                  @default(0)
+  status       SalesOrderItemStatus @default(LEN_KE_HOACH)
+  deliveryDate DateTime?
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id])
+  mfgProduct MfgProduct @relation(fields: [mfgProductId], references: [id])
+
+  @@index([salesOrderId])
+  @@index([mfgProductId])
+  @@map("sales_order_items")
+}
+
+/// SKU quota-approval pipeline (KHSX tạo -> account chuyên trách nhập -> KHSX duyệt từng
+/// nhóm -> QLSX duyệt cục bộ -> Sếp duyệt cuối). manhData/detailQuota giữ tạm dạng JSON
+/// (mirror đúng shape mock PlanForm.manhData/quotaManagement.materialType) - sẽ thay bằng
+/// tham chiếu quan hệ thật tới Piece/Part/SegmentSpec/BomRevision ở phase viết lại Spec
+/// pages (không thuộc phạm vi domain này).
+model PlanForm {
+  id                  BigInt         @id @default(autoincrement())
+  salesOrderId        BigInt
+  mfgProductId        BigInt
+  productionInvoiceId BigInt?
+  status              PlanFormStatus @default(WAITING_PARTS)
+  note                String?
+  /// null = SKU thường; 'PRODUCTION_CONFIRM' = bản ghi tự tạo khi Sếp duyệt PI item, chỉ
+  /// để phục vụ Lệnh kiểm tra vật tư, ẩn khỏi mọi màn KHSX (mirror đúng hành vi mock).
+  origin              String?
+  manhData            Json?
+  detailQuota         Json?
+  qlsxReviewedAt      DateTime?
+  createdById         String
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  salesOrder        SalesOrder             @relation(fields: [salesOrderId], references: [id])
+  mfgProduct        MfgProduct             @relation(fields: [mfgProductId], references: [id])
+  productionInvoice ProductionInvoice?     @relation(fields: [productionInvoiceId], references: [id])
+  createdBy         User                   @relation(fields: [createdById], references: [id])
+  manhReviews       PlanFormManhReview[]
+  detailReviews     PlanFormDetailReview[]
+  bomRevisions      BomRevision[]
+
+  @@index([salesOrderId])
+  @@index([mfgProductId])
+  @@index([productionInvoiceId])
+  @@map("plan_forms")
+}
+
+/// Quyết định duyệt/từ chối của KHSX theo từng nhóm mảnh (Sắt/Dây/Đinh) - tách khỏi
+/// PlanForm.status vì "1 trong 3 nhóm có dữ liệu" chỉ tự flip status, không có nghĩa là
+/// KHSX đã duyệt (mirror đúng PlanForm.manhReviewStatus trong mock). Reject ở PlanForm xoá
+/// sạch bảng này (không xoá manhData) - xem PlanFormsService.rejectToDetailReview.
+model PlanFormManhReview {
+  id         BigInt          @id @default(autoincrement())
+  planFormId BigInt
+  group      ManhGroup
+  /// null = đã nhập định mức, CHƯA có quyết định duyệt (mirror manhEntryMeta tách khỏi
+  /// manhReviewStatus trong mock) - assertAllApproved() chỉ đếm APPROVED, null không tính.
+  status     ReviewDecision?
+  reason     String?
+  enteredBy  String?
+  enteredAt  DateTime?
+  reviewedAt DateTime?
+
+  planForm PlanForm @relation(fields: [planFormId], references: [id])
+
+  @@unique([planFormId, group])
+  @@map("plan_form_manh_reviews")
+}
+
+/// Tương tự PlanFormManhReview nhưng cho 3 nhóm định mức chi tiết (Sơn/Phụ kiện/Bao bì).
+model PlanFormDetailReview {
+  id         BigInt          @id @default(autoincrement())
+  planFormId BigInt
+  group      DetailGroup
+  status     ReviewDecision?
+  reason     String?
+  enteredBy  String?
+  enteredAt  DateTime?
+  reviewedAt DateTime?
+
+  planForm PlanForm @relation(fields: [planFormId], references: [id])
+
+  @@unique([planFormId, group])
+  @@map("plan_form_detail_reviews")
+}
+
+/// Lệnh sản xuất - 1 PI có nhiều SKU (ProductionInvoiceItem), mỗi SKU tự chạy state
+/// machine duyệt sản xuất riêng (prodApprovalStatus). PI tự chuyển PRODUCING khi mọi item
+/// đã APPROVED (mirror đúng ProductionInvoiceService.approveItemByBoss trong mock).
+model ProductionInvoice {
+  id           BigInt                  @id @default(autoincrement())
+  code         String                  @unique
+  salesOrderId BigInt?
+  status       ProductionInvoiceStatus @default(PLANNING)
+  deadline     DateTime?
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+
+  salesOrder SalesOrder?             @relation(fields: [salesOrderId], references: [id])
+  items      ProductionInvoiceItem[]
+  planForms  PlanForm[]
+
+  @@index([salesOrderId])
+  @@map("production_invoices")
+}
+
+model ProductionInvoiceItem {
+  id                  BigInt              @id @default(autoincrement())
+  productionInvoiceId BigInt
+  mfgProductId        BigInt
+  productVariantId    BigInt?
+  quantity            Int
+  materialDeadline    DateTime?
+  deliveryDeadline    DateTime?
+  prodApprovalStatus  ProdApprovalStatus?
+  requestedAt         DateTime?
+  requestedById       String?
+  /// Kho thành phẩm QLSX chọn làm điểm cuối trước khi gửi Sếp duyệt (sendItemToBoss trong
+  /// mock) - đây là warehouseScope (chuỗi tự do gắn trên User, vd 'thanh-pham-2'), KHÔNG phải
+  /// FK tới bảng Warehouse (vốn chỉ có các mã kho vật lý cố định, không có khái niệm
+  /// "kho thành phẩm 2/3" theo từng thủ kho) - cố ý lưu plain string, mirror đúng mock.
+  warehouseCode       String?
+  warehouseName       String?
+  qlsxAt              DateTime?
+  qlsxById            String?
+  decidedAt           DateTime?
+  decidedById         String?
+  rejectReason        String?
+
+  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id])
+  mfgProduct        MfgProduct        @relation(fields: [mfgProductId], references: [id])
+  productVariant    ProductVariant?   @relation(fields: [productVariantId], references: [id])
+  requestedBy       User?             @relation("PIItemRequestedBy", fields: [requestedById], references: [id])
+  qlsxBy            User?             @relation("PIItemQlsxBy", fields: [qlsxById], references: [id])
+  decidedBy         User?             @relation("PIItemDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([productionInvoiceId])
+  @@index([mfgProductId])
+  @@map("production_invoice_items")
 }

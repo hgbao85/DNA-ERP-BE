@@ -3,7 +3,7 @@ import { IsEnum, IsNumber, IsString, Min } from 'class-validator';
 import { MfgStage } from '../../../generated/prisma/client';
 
 export class CreateConsumableBomDto {
-  @ApiProperty({ enum: MfgStage, description: 'HAN / SON' })
+  @ApiProperty({ enum: MfgStage, description: 'PHOI / HAN / SON / DAN' })
   @IsEnum(MfgStage)
   stage!: MfgStage;
 

@@ -37,20 +37,80 @@ export const UNIVERSAL_BUSINESS_GRANTS: ModuleGrant[] = [
  * PERMISSION_MODULES first, or the grant won't compile).
  */
 export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
-  // --- Phase 4 (Sales) ---
-  // [BUSINESS_ROLES.SALES_STAFF]: [
-  //   { module: PERMISSION_MODULES.SALES_ORDER, actions: 'ALL' },
-  //   { module: PERMISSION_MODULES.CUSTOMER, actions: 'ALL' },       // Phase 2
-  //   { module: PERMISSION_MODULES.PRODUCT_VARIANT, actions: [PermissionAction.VIEW] },
-  // ],
-  // --- Phase 5/7/8 (Planning & Production Manager) ---
-  // [BUSINESS_ROLES.PRODUCTION_PLANNER]: [
-  //   { module: PERMISSION_MODULES.PLAN_FORM, actions: 'ALL' },
-  // ],
-  // [BUSINESS_ROLES.PRODUCTION_MANAGER]: [
-  //   { module: PERMISSION_MODULES.PRODUCTION_ORDER, actions: 'ALL' },
-  //   { module: PERMISSION_MODULES.INSPECTION_REQUEST, actions: 'ALL' },
-  // ],
+  // --- Sales Order + Production Order domain ---
+  // Sales tạo/sửa đơn hàng và dòng SKU của đơn. Không cần CUSTOMER: ALL riêng vì trang
+  // Admin (SalesCustomersPage) đã quản lý khách hàng; Sales chỉ cần đọc để chọn khi tạo đơn.
+  [BUSINESS_ROLES.SALES_STAFF]: [
+    { module: PERMISSION_MODULES.SALES_ORDER, actions: 'ALL' },
+    { module: PERMISSION_MODULES.CUSTOMER, actions: [PermissionAction.VIEW] },
+    // resolve-or-create sản phẩm theo mã SKU khi tạo dòng PO (xem resolveMfgProduct ở FE).
+    {
+      module: PERMISSION_MODULES.PRODUCT,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
+  ],
+  // KHSX: tạo PlanForm + tự duyệt/từ chối từng nhóm mảnh-chi tiết và 2 mốc approve-parts/
+  // approve-detail (APPROVE) - KHÔNG có UPDATE trên PLAN_FORM vì nhập định mức (manh-quota/
+  // detail-quota) là việc của 4 account chuyên trách (SPEC_*_STAFF, xem bên dưới), không phải
+  // KHSX. Chỉ VIEW SalesOrder (không sửa đơn của Sales); tạo/sửa PI nhưng KHÔNG duyệt sản
+  // xuất từng item (đó là QLSX/Sếp, xem PRODUCTION_MANAGER + RequireRole('BOSS') ở controller)
+  // - PRODUCTION_INVOICE ở đây cố tình không có APPROVE.
+  [BUSINESS_ROLES.PRODUCTION_PLANNER]: [
+    {
+      module: PERMISSION_MODULES.PLAN_FORM,
+      actions: [
+        PermissionAction.VIEW,
+        PermissionAction.CREATE,
+        PermissionAction.APPROVE,
+        PermissionAction.DELETE,
+      ],
+    },
+    { module: PERMISSION_MODULES.SALES_ORDER, actions: [PermissionAction.VIEW] },
+    {
+      module: PERMISSION_MODULES.PRODUCTION_INVOICE,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE, PermissionAction.UPDATE],
+    },
+    // tạo SKU mới khi nhập "Duyệt SKU" (SKUReviewPage) trước khi tạo PlanForm cho SKU đó.
+    {
+      module: PERMISSION_MODULES.PRODUCT,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
+  ],
+  // QLSX: duyệt cục bộ + gửi Sếp ở cả PlanForm lẫn PI item (APPROVE) - các route tương ứng
+  // (qlsx-review/request-boss-approval/reject-qlsx, send-to-boss) còn gắn thêm
+  // @RequireMfgRole(PRODUCTION_MANAGER) để tách khỏi bước duyệt CUỐI của Sếp, vốn dùng CHÍNH
+  // action APPROVE này nhưng gắn thêm @RequireRole('BOSS') (xem plan-forms/production-invoices
+  // controller) - QLSX không tự ý gọi được endpoint duyệt cuối dù permission trùng action.
+  [BUSINESS_ROLES.PRODUCTION_MANAGER]: [
+    {
+      module: PERMISSION_MODULES.PLAN_FORM,
+      actions: [PermissionAction.VIEW, PermissionAction.APPROVE],
+    },
+    {
+      module: PERMISSION_MODULES.PRODUCTION_INVOICE,
+      actions: [PermissionAction.VIEW, PermissionAction.APPROVE],
+    },
+  ],
+  // 4 account chuyên trách nhập định mức SKU (mirror đúng mock: Sắt / Dây-Sơn / Phụ kiện-Bao
+  // bì) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE (duyệt là KHSX).
+  [BUSINESS_ROLES.SPEC_STEEL_STAFF]: [
+    {
+      module: PERMISSION_MODULES.PLAN_FORM,
+      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
+    },
+  ],
+  [BUSINESS_ROLES.SPEC_WIRE_PAINT_STAFF]: [
+    {
+      module: PERMISSION_MODULES.PLAN_FORM,
+      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
+    },
+  ],
+  [BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF]: [
+    {
+      module: PERMISSION_MODULES.PLAN_FORM,
+      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
+    },
+  ],
   // --- Phase 9 (MES-B execution) ---
   // [BUSINESS_ROLES.PHOI_STAFF]: [
   //   { module: PERMISSION_MODULES.STEEL_ISSUE, actions: 'ALL' },

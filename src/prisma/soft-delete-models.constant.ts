@@ -5,4 +5,4 @@
  * `update` under the hood, which is where it gets logged instead. Without this, both
  * hooks fire for the same logical delete and produce two audit rows for one action.
  */
-export const SOFT_DELETE_MODELS = new Set(['User', 'Role']);
+export const SOFT_DELETE_MODELS = new Set(['User', 'Role', 'SalesOrder']);
