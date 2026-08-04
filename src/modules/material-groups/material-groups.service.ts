@@ -1,4 +1,10 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { MaterialGroup } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -14,7 +20,9 @@ import { UpdateMaterialGroupDto } from './dto/update-material-group.dto';
  * defect-reasons, weaving-points, warehouses, customers, products) - same shape, no
  * soft-delete: docs/dna-erp-db-schema.html defines material_groups with no `is_active`/
  * `deletedAt` column, so remove() is a real DELETE (materials.materialGroupId FK is
- * ON DELETE SET NULL, so this never blocks on an in-use group).
+ * ON DELETE SET NULL, so this never blocks on an in-use group) - EXCEPT the 6 system
+ * groups (systemKey != null, seeded in prisma/seed.ts), which remove() explicitly protects:
+ * deleting one would silently blank every material's category and empty every Spec picker.
  */
 @Injectable()
 export class MaterialGroupsService {
@@ -73,7 +81,12 @@ export class MaterialGroupsService {
 
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
-    await this.findOneOrThrow(id);
+    const group = await this.findOneOrThrow(id);
+    if (group.systemKey != null) {
+      throw new BadRequestException(
+        `Nhóm vật tư hệ thống "${group.name}" (systemKey=${group.systemKey}) không thể xoá - mọi màn hình Spec phụ thuộc vào nhóm này`,
+      );
+    }
     await this.prisma.materialGroup.delete({ where: { id: bigId } });
   }
 
@@ -87,6 +100,10 @@ export class MaterialGroupsService {
   }
 
   private toResponseDto(group: MaterialGroup): MaterialGroupResponseDto {
-    return new MaterialGroupResponseDto({ id: group.id.toString(), name: group.name });
+    return new MaterialGroupResponseDto({
+      id: group.id.toString(),
+      name: group.name,
+      systemKey: group.systemKey,
+    });
   }
 }

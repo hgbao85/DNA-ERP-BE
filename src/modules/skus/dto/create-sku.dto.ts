@@ -1,10 +1,11 @@
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
 
-export class CreatePlanFormDto {
-  @ApiProperty()
+export class CreateSkuDto {
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  salesOrderId!: string;
+  salesOrderId?: string;
 
   @ApiProperty()
   @IsString()
@@ -14,4 +15,9 @@ export class CreatePlanFormDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  customerName?: string;
 }

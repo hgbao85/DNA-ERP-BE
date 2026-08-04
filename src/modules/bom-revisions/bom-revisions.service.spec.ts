@@ -71,9 +71,13 @@ describe('BomRevisionsService', () => {
   });
 
   describe('createBomAccessoryItem', () => {
-    it('creates a row when the material is kind=ACCESSORY', async () => {
+    it('creates a row when the material belongs to the Phụ kiện (ACCESSORY) group', async () => {
       prisma.bomRevision.findUnique.mockResolvedValue(draftRevision());
-      prisma.material.findUnique.mockResolvedValue({ id: 80n, code: 'PK-01', kind: 'ACCESSORY' });
+      prisma.material.findUnique.mockResolvedValue({
+        id: 80n,
+        code: 'PK-01',
+        materialGroup: { systemKey: 'ACCESSORY' },
+      });
       prisma.bomAccessoryItem.findUnique.mockResolvedValue(null);
       prisma.bomAccessoryItem.create.mockResolvedValue({
         id: 1n,
@@ -92,18 +96,35 @@ describe('BomRevisionsService', () => {
       expect(result.qtyPerUnit).toBe(5);
     });
 
-    it('rejects a material that is neither ACCESSORY nor PACKAGING', async () => {
+    it('rejects a material that belongs to neither the Phụ kiện nor Bao bì group', async () => {
       prisma.bomRevision.findUnique.mockResolvedValue(draftRevision());
-      prisma.material.findUnique.mockResolvedValue({ id: 90n, code: 'SAT-01', kind: 'STEEL_BAR' });
+      prisma.material.findUnique.mockResolvedValue({
+        id: 90n,
+        code: 'SAT-01',
+        materialGroup: { systemKey: 'STEEL_BAR' },
+      });
 
       await expect(
         service.createBomAccessoryItem('10', { materialId: '90', qtyPerUnit: 1 }),
       ).rejects.toThrow(BadRequestException);
     });
 
+    it('rejects a material with no group at all (materialGroupId null)', async () => {
+      prisma.bomRevision.findUnique.mockResolvedValue(draftRevision());
+      prisma.material.findUnique.mockResolvedValue({ id: 91n, code: 'XX-01', materialGroup: null });
+
+      await expect(
+        service.createBomAccessoryItem('10', { materialId: '91', qtyPerUnit: 1 }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it('rejects a duplicate (bomRevisionId, materialId) row', async () => {
       prisma.bomRevision.findUnique.mockResolvedValue(draftRevision());
-      prisma.material.findUnique.mockResolvedValue({ id: 80n, code: 'PK-01', kind: 'ACCESSORY' });
+      prisma.material.findUnique.mockResolvedValue({
+        id: 80n,
+        code: 'PK-01',
+        materialGroup: { systemKey: 'ACCESSORY' },
+      });
       prisma.bomAccessoryItem.findUnique.mockResolvedValue({ id: 1n });
 
       await expect(

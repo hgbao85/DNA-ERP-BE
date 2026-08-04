@@ -9,6 +9,10 @@ import {
 } from '../src/common/constants/role-permissions.constant';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../src/common/constants/roles.constant';
 import { PROTECTED_WAREHOUSE_CODES } from '../src/common/constants/protected-warehouse-codes.constant';
+import {
+  MATERIAL_GROUP_SYSTEM_KEYS,
+  MaterialGroupSystemKey,
+} from '../src/common/constants/material-group-system-keys.constant';
 import { PermissionAction, PrismaClient } from '../src/generated/prisma/client';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
@@ -62,6 +66,21 @@ const SEED_WAREHOUSES: { code: string; name: string; isVirtual: boolean; note?: 
     isVirtual: true,
     note: 'Điểm đến bút toán huỷ/phế — không có tồn vật lý',
   },
+];
+
+/**
+ * 6 nhóm vật tư hệ thống bắt buộc phải seed sẵn - thay cho enum MaterialKind đã xoá (xem
+ * material-group-system-keys.constant.ts). 4 trang Spec (Sắt/Dây-Đinh-Sơn/Phụ kiện/Bao bì)
+ * và skus.service.ts resolve group theo `systemKey`, KHÔNG theo `name` - admin đổi
+ * tên nhóm trong Admin > Nhóm vật tư thoải mái mà logic Spec vẫn đúng.
+ */
+const SEED_MATERIAL_GROUPS: { systemKey: MaterialGroupSystemKey; name: string }[] = [
+  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR, name: 'Sắt' },
+  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.WIRE, name: 'Dây' },
+  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.NAIL, name: 'Đinh' },
+  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.PAINT, name: 'Sơn' },
+  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.ACCESSORY, name: 'Phụ kiện' },
+  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.PACKAGING, name: 'Bao bì' },
 ];
 
 /**
@@ -189,6 +208,32 @@ async function main() {
     });
   }
 
+  // 7.5. Material groups hệ thống - cùng lý do đặt trước bước 8 như warehouses. KHÔNG dùng
+  // upsert({ where: { systemKey } }) đơn giản: nếu nhóm đã tồn tại từ trước dưới đúng tên
+  // mặc định (vd tạo tay qua Admin > Nhóm vật tư trước khi có systemKey) thì ADOPT (gán
+  // systemKey vào, giữ nguyên id + mọi vật tư đang trỏ tới), không tạo trùng theo `name`
+  // @unique. Nhóm đã có systemKey thì bỏ qua hẳn - KHÔNG ghi đè `name` mỗi lần chạy như
+  // warehouse ở trên, vì sẽ xoá tác dụng nếu admin đã đổi tên hiển thị.
+  if (SEED_MATERIAL_GROUPS.length !== Object.keys(MATERIAL_GROUP_SYSTEM_KEYS).length) {
+    throw new Error('SEED_MATERIAL_GROUPS phải khớp 1-1 với MATERIAL_GROUP_SYSTEM_KEYS');
+  }
+  for (const g of SEED_MATERIAL_GROUPS) {
+    const bySystemKey = await prisma.materialGroup.findUnique({
+      where: { systemKey: g.systemKey },
+    });
+    if (bySystemKey) continue;
+
+    const byName = await prisma.materialGroup.findUnique({ where: { name: g.name } });
+    if (byName) {
+      await prisma.materialGroup.update({
+        where: { id: byName.id },
+        data: { systemKey: g.systemKey },
+      });
+    } else {
+      await prisma.materialGroup.create({ data: { name: g.name, systemKey: g.systemKey } });
+    }
+  }
+
   // 8. Super admin user.
   const adminEmail = process.env.SEED_ADMIN_EMAIL;
   const adminPassword = process.env.SEED_ADMIN_PASSWORD;
@@ -218,7 +263,7 @@ async function main() {
 
   const roleCount = 1 + Object.values(BUSINESS_ROLES).length; // ADMIN + business
   console.log(
-    `Seed complete. Roles synced: ${roleCount}. Warehouses synced: ${SEED_WAREHOUSES.length}. Admin: ${adminEmail}`,
+    `Seed complete. Roles synced: ${roleCount}. Warehouses synced: ${SEED_WAREHOUSES.length}. Material groups synced: ${SEED_MATERIAL_GROUPS.length}. Admin: ${adminEmail}`,
   );
 }
 

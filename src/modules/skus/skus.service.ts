@@ -4,30 +4,34 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import {
   BomRevisionStatus,
   DetailGroup,
   ManhGroup,
-  MaterialKind,
   MfgStage,
   PlanFormStatus,
   Prisma,
   ReviewDecision,
 } from '../../generated/prisma/client';
+import {
+  MATERIAL_GROUP_SYSTEM_KEYS,
+  MaterialGroupSystemKey,
+} from '../../common/constants/material-group-system-keys.constant';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
-import { CreatePlanFormDto } from './dto/create-plan-form.dto';
-import { PlanFormResponseDto } from './dto/plan-form-response.dto';
+import { CreateSkuDto } from './dto/create-sku.dto';
+import { SkuResponseDto } from './dto/sku-response.dto';
 import {
-  PlanFormDetailReviewResponseDto,
-  PlanFormManhReviewResponseDto,
-} from './dto/plan-form-review-response.dto';
+  SkuDetailReviewResponseDto,
+  SkuManhReviewResponseDto,
+} from './dto/sku-review-response.dto';
 import { QuotaMaterialLineDto, QuotaPieceDto, UpdateQuotaDto } from './dto/update-quota.dto';
 import { ReviewQuotaDto } from './dto/review-quota.dto';
 
@@ -51,11 +55,6 @@ const DETAIL_GROUPS: DetailGroup[] = [
   DetailGroup.VAT_TU_PHU_KIEN,
   DetailGroup.BAO_BI_DONG_GOI,
 ];
-
-/** Tên 2 MaterialGroup dùng để phân biệt Dây/Đinh - cả 2 cùng stage=DAN + kind=CONSUMABLE
- *  trên ConsumableBom nên không tự phân biệt được qua stage/kind, phải qua materialGroupId. */
-const DAY_MATERIAL_GROUP_NAME = 'Dây';
-const DINH_MATERIAL_GROUP_NAME = 'Đinh';
 
 interface ReconstructedQuota {
   manhData: unknown;
@@ -89,35 +88,44 @@ function groupBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
  * theo sau (xem plan). Sếp duyệt cuối (approve()) sẽ activate BomRevision DRAFT thành ACTIVE.
  */
 @Injectable()
-export class PlanFormsService {
+export class SkusService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly bomRevisionsService: BomRevisionsService,
   ) {}
 
-  async create(dto: CreatePlanFormDto, actorUserId: string): Promise<PlanFormResponseDto> {
-    const salesOrderBigId = parseBigIntId(dto.salesOrderId);
+  async create(dto: CreateSkuDto, actorUserId: string): Promise<SkuResponseDto> {
     const mfgProductBigId = parseBigIntId(dto.mfgProductId);
-
-    const salesOrder = await this.prisma.salesOrder.findUnique({ where: { id: salesOrderBigId } });
-    if (!salesOrder) {
-      throw new NotFoundException(`Sales order ${dto.salesOrderId} not found`);
-    }
     const product = await this.prisma.mfgProduct.findUnique({ where: { id: mfgProductBigId } });
     if (!product) {
       throw new NotFoundException(`Product ${dto.mfgProductId} not found`);
     }
 
-    const productionInvoiceId = await this.resolveProductionInvoice(
-      salesOrderBigId,
-      mfgProductBigId,
-    );
+    // SKU độc lập với Sales Order: salesOrderId chỉ được gắn khi FE thật sự truyền lên (không
+    // còn tự động mượn Sales Order đầu tiên trong hệ thống như trước - xem SKUReviewPage cũ).
+    // Chỉ khi có salesOrderId mới cần PI (Production Invoice) đi kèm.
+    let salesOrderBigId: bigint | undefined;
+    let productionInvoiceId: bigint | undefined;
+    let customerName = dto.customerName?.trim() || undefined;
+    if (dto.salesOrderId) {
+      salesOrderBigId = parseBigIntId(dto.salesOrderId);
+      const salesOrder = await this.prisma.salesOrder.findUnique({
+        where: { id: salesOrderBigId },
+        include: { customer: true },
+      });
+      if (!salesOrder) {
+        throw new NotFoundException(`Sales order ${dto.salesOrderId} not found`);
+      }
+      customerName = customerName ?? salesOrder.customer.name;
+      productionInvoiceId = await this.resolveProductionInvoice(salesOrderBigId, mfgProductBigId);
+    }
 
     const created = await this.prisma.planForm.create({
       data: {
         salesOrderId: salesOrderBigId,
         mfgProductId: mfgProductBigId,
         productionInvoiceId,
+        customerName,
         note: dto.note,
         createdById: actorUserId,
       },
@@ -126,7 +134,7 @@ export class PlanFormsService {
     return this.toResponseDtoWithQuota(created);
   }
 
-  async findAll(query: PaginationQueryDto): Promise<Paginated<PlanFormResponseDto>> {
+  async findAll(query: PaginationQueryDto): Promise<Paginated<SkuResponseDto>> {
     const result = await paginate(
       {
         findMany: (args) =>
@@ -147,7 +155,7 @@ export class PlanFormsService {
     };
   }
 
-  async findOne(id: string): Promise<PlanFormResponseDto> {
+  async findOne(id: string): Promise<SkuResponseDto> {
     return this.toResponseDtoWithQuota(await this.findOneOrThrow(id));
   }
 
@@ -167,7 +175,7 @@ export class PlanFormsService {
     id: string,
     group: ManhGroup,
     dto: UpdateQuotaDto,
-  ): Promise<PlanFormResponseDto> {
+  ): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     const revision = await this.resolveDraftBomRevision(pf);
     const enteredAt = new Date();
@@ -182,16 +190,19 @@ export class PlanFormsService {
         if (!dto.items) {
           throw new BadRequestException(`group=${group} yêu cầu field "items"`);
         }
-        const groupName =
-          group === ManhGroup.DAY ? DAY_MATERIAL_GROUP_NAME : DINH_MATERIAL_GROUP_NAME;
-        const materialGroupId = await this.resolveMaterialGroupId(tx, groupName);
+        const systemKey =
+          group === ManhGroup.DAY
+            ? MATERIAL_GROUP_SYSTEM_KEYS.WIRE
+            : MATERIAL_GROUP_SYSTEM_KEYS.NAIL;
+        const groupLabel = group === ManhGroup.DAY ? 'Dây' : 'Đinh';
+        const materialGroupId = await this.resolveSystemGroupId(tx, systemKey);
         await this.replaceConsumableLines(
           tx,
           revision.id,
           MfgStage.DAN,
           dto.items,
-          [MaterialKind.CONSUMABLE],
           materialGroupId,
+          groupLabel,
         );
       }
 
@@ -224,7 +235,7 @@ export class PlanFormsService {
     id: string,
     group: ManhGroup,
     dto: ReviewQuotaDto,
-  ): Promise<PlanFormResponseDto> {
+  ): Promise<SkuResponseDto> {
     await this.findOneOrThrow(id);
     const bigId = parseBigIntId(id);
     await this.prisma.planFormManhReview.upsert({
@@ -242,7 +253,7 @@ export class PlanFormsService {
   }
 
   /** KHSX xác nhận cả 3 nhóm mảnh đã duyệt -> chuyển bộ phận nhập định mức chi tiết. */
-  async approveParts(id: string): Promise<PlanFormResponseDto> {
+  async approveParts(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh (Sắt/Dây/Đinh)');
 
@@ -260,7 +271,7 @@ export class PlanFormsService {
     id: string,
     group: DetailGroup,
     dto: UpdateQuotaDto,
-  ): Promise<PlanFormResponseDto> {
+  ): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     const revision = await this.resolveDraftBomRevision(pf);
     const enteredAt = new Date();
@@ -270,13 +281,30 @@ export class PlanFormsService {
         throw new BadRequestException(`group=${group} yêu cầu field "items"`);
       }
       if (group === DetailGroup.DAY_SON) {
-        await this.replaceConsumableLines(tx, revision.id, MfgStage.SON, dto.items, [
-          MaterialKind.PAINT,
-        ]);
+        const materialGroupId = await this.resolveSystemGroupId(
+          tx,
+          MATERIAL_GROUP_SYSTEM_KEYS.PAINT,
+        );
+        await this.replaceConsumableLines(
+          tx,
+          revision.id,
+          MfgStage.SON,
+          dto.items,
+          materialGroupId,
+          'Sơn',
+        );
       } else if (group === DetailGroup.VAT_TU_PHU_KIEN) {
-        await this.replaceAccessoryItems(tx, revision.id, MaterialKind.ACCESSORY, dto.items);
+        const materialGroupId = await this.resolveSystemGroupId(
+          tx,
+          MATERIAL_GROUP_SYSTEM_KEYS.ACCESSORY,
+        );
+        await this.replaceAccessoryItems(tx, revision.id, materialGroupId, 'Phụ kiện', dto.items);
       } else {
-        await this.replaceAccessoryItems(tx, revision.id, MaterialKind.PACKAGING, dto.items);
+        const materialGroupId = await this.resolveSystemGroupId(
+          tx,
+          MATERIAL_GROUP_SYSTEM_KEYS.PACKAGING,
+        );
+        await this.replaceAccessoryItems(tx, revision.id, materialGroupId, 'Bao bì', dto.items);
       }
 
       await tx.planFormDetailReview.upsert({
@@ -308,7 +336,7 @@ export class PlanFormsService {
     id: string,
     group: DetailGroup,
     dto: ReviewQuotaDto,
-  ): Promise<PlanFormResponseDto> {
+  ): Promise<SkuResponseDto> {
     await this.findOneOrThrow(id);
     const bigId = parseBigIntId(id);
     await this.prisma.planFormDetailReview.upsert({
@@ -326,7 +354,7 @@ export class PlanFormsService {
   }
 
   /** KHSX xác nhận cả manh lẫn chi tiết đã duyệt -> gửi QLSX duyệt. */
-  async approveDetail(id: string): Promise<PlanFormResponseDto> {
+  async approveDetail(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh (Sắt/Dây/Đinh)');
     this.assertAllApproved(pf.detailReviews, DETAIL_GROUPS, 'chi tiết (Sơn/Phụ kiện/Bao bì)');
@@ -342,7 +370,7 @@ export class PlanFormsService {
   // ─── QLSX ───────────────────────────────────────────────────────────────────
 
   /** Duyệt cục bộ - không đổi status, chỉ mở khoá nút "Gửi sếp duyệt" (mirror mock). */
-  async reviewQlsx(id: string): Promise<PlanFormResponseDto> {
+  async reviewQlsx(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertStatus(pf, PlanFormStatus.WAITING_QLSX_APPROVAL);
     const updated = await this.prisma.planForm.update({
@@ -353,7 +381,7 @@ export class PlanFormsService {
     return this.toResponseDtoWithQuota(updated);
   }
 
-  async requestBossApproval(id: string): Promise<PlanFormResponseDto> {
+  async requestBossApproval(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertStatus(pf, PlanFormStatus.WAITING_QLSX_APPROVAL);
     const updated = await this.prisma.planForm.update({
@@ -364,7 +392,7 @@ export class PlanFormsService {
     return this.toResponseDtoWithQuota(updated);
   }
 
-  async rejectByQlsx(id: string): Promise<PlanFormResponseDto> {
+  async rejectByQlsx(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertStatus(pf, PlanFormStatus.WAITING_QLSX_APPROVAL);
     return this.rewindToDetailReview(pf.id);
@@ -374,7 +402,7 @@ export class PlanFormsService {
 
   /** Duyệt cuối - nếu PlanForm sở hữu 1 BomRevision DRAFT (đã nhập định mức), activate nó
    *  (bản ACTIVE trước đó của cùng SKU tự chuyển RETIRED, xem BomRevisionsService.activate). */
-  async approve(id: string): Promise<PlanFormResponseDto> {
+  async approve(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertStatus(pf, PlanFormStatus.WAITING_BOSS_APPROVAL);
 
@@ -393,7 +421,7 @@ export class PlanFormsService {
     return this.toResponseDtoWithQuota(updated);
   }
 
-  async rejectByBoss(id: string): Promise<PlanFormResponseDto> {
+  async rejectByBoss(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertStatus(pf, PlanFormStatus.WAITING_BOSS_APPROVAL);
     return this.rewindToDetailReview(pf.id);
@@ -404,7 +432,7 @@ export class PlanFormsService {
    * nhập - BomRevision DRAFT vẫn giữ nguyên nội dung) - KHSX phải duyệt lại từng nhóm nhưng
    * account chuyên trách không phải nhập lại gì, mirror đúng rejectToDetailReview() trong mock.
    */
-  private async rewindToDetailReview(id: bigint): Promise<PlanFormResponseDto> {
+  private async rewindToDetailReview(id: bigint): Promise<SkuResponseDto> {
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.planFormManhReview.deleteMany({ where: { planFormId: id } });
       await tx.planFormDetailReview.deleteMany({ where: { planFormId: id } });
@@ -530,21 +558,19 @@ export class PlanFormsService {
     );
   }
 
-  /** resolve-or-create SegmentSpec theo (materialId, cutLengthMm) - material phải kind=STEEL_BAR. */
+  /** resolve-or-create SegmentSpec theo (materialId, cutLengthMm) - material phải thuộc
+   *  nhóm vật tư Sắt (steelGroupId, xem resolveSystemGroupId). */
   private async resolveOrCreateSegmentSpec(
     tx: PrismaTx,
     materialId: bigint,
     cutLengthMm: number,
+    steelGroupId: bigint,
   ): Promise<{ id: bigint }> {
     const material = await tx.material.findUnique({ where: { id: materialId } });
     if (!material) {
       throw new NotFoundException(`Material ${materialId} not found`);
     }
-    if (material.kind !== MaterialKind.STEEL_BAR) {
-      throw new BadRequestException(
-        `Material "${material.code}" phải có kind=STEEL_BAR để tạo đoạn sắt (đang là ${material.kind})`,
-      );
-    }
+    await this.assertOrAssignMaterialGroup(tx, material, steelGroupId, 'Sắt');
     return tx.segmentSpec.upsert({
       where: { materialId_cutLengthMm: { materialId, cutLengthMm } },
       create: { materialId, cutLengthMm },
@@ -552,12 +578,38 @@ export class PlanFormsService {
     });
   }
 
-  /** resolve-or-create 1 MaterialGroup theo tên (dùng cho "Dây"/"Đinh" - xem module comment). */
-  private async resolveMaterialGroupId(tx: PrismaTx, name: string): Promise<bigint> {
-    const existing = await tx.materialGroup.findUnique({ where: { name } });
-    if (existing) return existing.id;
-    const created = await tx.materialGroup.create({ data: { name } });
-    return created.id;
+  /** Id của 1 nhóm vật tư hệ thống (seed sẵn ở prisma/seed.ts - xem
+   *  material-group-system-keys.constant.ts). KHÔNG tự tạo nếu thiếu như
+   *  resolveMaterialGroupId cũ (đã xoá) - thiếu nghĩa là deploy hỏng/chưa chạy seed, không
+   *  phải "lần dùng đầu tiên". */
+  private async resolveSystemGroupId(
+    tx: PrismaTx,
+    systemKey: MaterialGroupSystemKey,
+  ): Promise<bigint> {
+    const group = await tx.materialGroup.findUnique({ where: { systemKey } });
+    if (!group) {
+      throw new InternalServerErrorException(
+        `Nhóm vật tư hệ thống "${systemKey}" chưa được seed - chạy "npm run seed" ở BE`,
+      );
+    }
+    return group.id;
+  }
+
+  /** Vật tư chưa thuộc nhóm nào -> tự gán vào nhóm đang nhập (lần dùng đầu tiên); đã thuộc
+   *  nhóm khác -> từ chối (1 vật tư không thể vừa là Dây vừa là Đinh, vừa Sắt vừa Sơn...). */
+  private async assertOrAssignMaterialGroup(
+    tx: PrismaTx,
+    material: { id: bigint; code: string; materialGroupId: bigint | null },
+    materialGroupId: bigint,
+    groupLabel: string,
+  ): Promise<void> {
+    if (material.materialGroupId == null) {
+      await tx.material.update({ where: { id: material.id }, data: { materialGroupId } });
+    } else if (material.materialGroupId !== materialGroupId) {
+      throw new BadRequestException(
+        `Material "${material.code}" đã thuộc nhóm vật tư khác - không thể dùng cho nhóm ${groupLabel} này`,
+      );
+    }
   }
 
   /**
@@ -572,6 +624,7 @@ export class PlanFormsService {
     mfgProductId: bigint,
     pieces: QuotaPieceDto[],
   ): Promise<void> {
+    const steelGroupId = await this.resolveSystemGroupId(tx, MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR);
     await tx.pieceBom.deleteMany({ where: { bomRevisionId } });
     await tx.bomPiece.deleteMany({ where: { bomRevisionId } });
 
@@ -585,6 +638,7 @@ export class PlanFormsService {
           tx,
           parseBigIntId(seg.materialId),
           seg.cutLengthMm,
+          steelGroupId,
         );
         await tx.pieceBom.create({
           data: {
@@ -602,76 +656,72 @@ export class PlanFormsService {
   }
 
   /**
-   * Thay toàn bộ ConsumableBom của 1 nhóm trên revision. Khi `materialGroupId` được truyền
-   * (nhóm Dây/Đinh - cùng stage=DAN nên không tự phân biệt qua stage được), chỉ xoá/ghi đè
-   * đúng các dòng thuộc nhóm vật tư đó (không đụng nhóm còn lại cùng stage); vật tư chọn vào
-   * lần đầu sẽ tự gán vào đúng nhóm (materialGroupId hiện null), lần sau nếu material đã
-   * thuộc nhóm khác thì từ chối (tránh 1 material vừa là Dây vừa là Đinh).
+   * Thay toàn bộ ConsumableBom của 1 nhóm trên revision. `materialGroupId` (Dây/Đinh/Sơn -
+   * xem resolveSystemGroupId) quyết định chỉ xoá/ghi đè đúng các dòng thuộc nhóm vật tư đó
+   * (không đụng nhóm còn lại cùng stage, vd Dây/Đinh cùng stage=DAN); vật tư chọn vào lần
+   * đầu sẽ tự gán vào đúng nhóm (materialGroupId hiện null), lần sau nếu material đã thuộc
+   * nhóm khác thì từ chối (tránh 1 material vừa là Dây vừa là Đinh). Gán-nhóm chạy TRƯỚC
+   * deleteMany (không phải sau như trước) để dòng gửi lại của vật tư chưa có nhóm không bị
+   * xoá sót rồi đụng unique constraint (bomRevisionId, stage, materialId) khi tạo lại.
    */
   private async replaceConsumableLines(
     tx: PrismaTx,
     bomRevisionId: bigint,
     stage: MfgStage,
     items: QuotaMaterialLineDto[],
-    allowedKinds: MaterialKind[],
-    materialGroupId?: bigint,
+    materialGroupId: bigint,
+    groupLabel: string,
   ): Promise<void> {
-    await tx.consumableBom.deleteMany({
-      where: {
-        bomRevisionId,
-        stage,
-        ...(materialGroupId ? { material: { materialGroupId } } : {}),
-      },
-    });
-
+    const materialIds: bigint[] = [];
     for (const it of items) {
       const materialId = parseBigIntId(it.materialId);
       const material = await tx.material.findUnique({ where: { id: materialId } });
       if (!material) {
         throw new NotFoundException(`Material ${it.materialId} not found`);
       }
-      if (!allowedKinds.includes(material.kind)) {
-        throw new BadRequestException(
-          `Material "${material.code}" phải có kind thuộc [${allowedKinds.join(', ')}] (đang là ${material.kind})`,
-        );
-      }
-      if (materialGroupId) {
-        if (material.materialGroupId == null) {
-          await tx.material.update({ where: { id: materialId }, data: { materialGroupId } });
-        } else if (material.materialGroupId !== materialGroupId) {
-          throw new BadRequestException(
-            `Material "${material.code}" đã thuộc nhóm vật tư khác - không thể dùng cho nhóm Dây/Đinh này`,
-          );
-        }
-      }
+      await this.assertOrAssignMaterialGroup(tx, material, materialGroupId, groupLabel);
+      materialIds.push(materialId);
+    }
+
+    await tx.consumableBom.deleteMany({
+      where: { bomRevisionId, stage, material: { materialGroupId } },
+    });
+
+    for (let i = 0; i < items.length; i++) {
       await tx.consumableBom.create({
-        data: { bomRevisionId, stage, materialId, qtyPerUnit: it.qtyPerUnit },
+        data: { bomRevisionId, stage, materialId: materialIds[i], qtyPerUnit: items[i].qtyPerUnit },
       });
     }
   }
 
-  /** Thay toàn bộ BomAccessoryItem của 1 nhóm (Phụ kiện/Bao bì, phân biệt qua material.kind). */
+  /** Thay toàn bộ BomAccessoryItem của 1 nhóm (Phụ kiện/Bao bì, phân biệt qua
+   *  material.materialGroupId - xem resolveSystemGroupId). Cùng thứ tự gán-nhóm-trước-xoá-
+   *  sau như replaceConsumableLines, cùng lý do. */
   private async replaceAccessoryItems(
     tx: PrismaTx,
     bomRevisionId: bigint,
-    kind: MaterialKind,
+    materialGroupId: bigint,
+    groupLabel: string,
     items: QuotaMaterialLineDto[],
   ): Promise<void> {
-    await tx.bomAccessoryItem.deleteMany({ where: { bomRevisionId, material: { kind } } });
-
+    const materialIds: bigint[] = [];
     for (const it of items) {
       const materialId = parseBigIntId(it.materialId);
       const material = await tx.material.findUnique({ where: { id: materialId } });
       if (!material) {
         throw new NotFoundException(`Material ${it.materialId} not found`);
       }
-      if (material.kind !== kind) {
-        throw new BadRequestException(
-          `Material "${material.code}" phải có kind=${kind} (đang là ${material.kind})`,
-        );
-      }
+      await this.assertOrAssignMaterialGroup(tx, material, materialGroupId, groupLabel);
+      materialIds.push(materialId);
+    }
+
+    await tx.bomAccessoryItem.deleteMany({
+      where: { bomRevisionId, material: { materialGroupId } },
+    });
+
+    for (let i = 0; i < items.length; i++) {
       await tx.bomAccessoryItem.create({
-        data: { bomRevisionId, materialId, qtyPerUnit: it.qtyPerUnit },
+        data: { bomRevisionId, materialId: materialIds[i], qtyPerUnit: items[i].qtyPerUnit },
       });
     }
   }
@@ -733,27 +783,27 @@ export class PlanFormsService {
       return result;
     }
 
-    const [dayGroup, dinhGroup, bomPieces, pieceBoms, consumableBoms, accessoryItems] =
-      await Promise.all([
-        this.prisma.materialGroup.findUnique({ where: { name: DAY_MATERIAL_GROUP_NAME } }),
-        this.prisma.materialGroup.findUnique({ where: { name: DINH_MATERIAL_GROUP_NAME } }),
-        this.prisma.bomPiece.findMany({
-          where: { bomRevisionId: { in: revisionIds } },
-          include: { piece: true },
-        }),
-        this.prisma.pieceBom.findMany({
-          where: { bomRevisionId: { in: revisionIds } },
-          include: { segmentSpec: { include: { material: true } } },
-        }),
-        this.prisma.consumableBom.findMany({
-          where: { bomRevisionId: { in: revisionIds } },
-          include: { material: true },
-        }),
-        this.prisma.bomAccessoryItem.findMany({
-          where: { bomRevisionId: { in: revisionIds } },
-          include: { material: true },
-        }),
-      ]);
+    const [systemGroups, bomPieces, pieceBoms, consumableBoms, accessoryItems] = await Promise.all([
+      this.prisma.materialGroup.findMany({
+        where: { systemKey: { in: Object.values(MATERIAL_GROUP_SYSTEM_KEYS) } },
+      }),
+      this.prisma.bomPiece.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { piece: true },
+      }),
+      this.prisma.pieceBom.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { segmentSpec: { include: { material: true } } },
+      }),
+      this.prisma.consumableBom.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { material: true },
+      }),
+      this.prisma.bomAccessoryItem.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { material: true },
+      }),
+    ]);
 
     const bomPiecesByRev = groupBy(bomPieces, (r) => r.bomRevisionId.toString());
     const pieceBomsByRevPiece = new Map<string, typeof pieceBoms>();
@@ -765,6 +815,9 @@ export class PlanFormsService {
     }
     const consumableByRev = groupBy(consumableBoms, (r) => r.bomRevisionId.toString());
     const accessoryByRev = groupBy(accessoryItems, (r) => r.bomRevisionId.toString());
+    // Đọc lại không throw khi thiếu nhóm (khác đường ghi qua resolveSystemGroupId) - thiếu
+    // thì filter dưới đây rỗng, trang vẫn hiển thị được (không vỡ) thay vì 500 cả danh sách.
+    const groupIdByKey = new Map(systemGroups.map((g) => [g.systemKey!, g.id]));
 
     const toMaterialLine = (r: (typeof consumableBoms)[number]) => ({
       id: Number(r.id),
@@ -811,24 +864,35 @@ export class PlanFormsService {
         ),
       }));
 
+      const wireGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.WIRE);
+      const nailGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.NAIL);
+      const paintGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.PAINT);
+      const accessoryGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.ACCESSORY);
+      const packagingGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.PACKAGING);
+
       const danRows = (consumableByRev.get(revKey) ?? []).filter((r) => r.stage === MfgStage.DAN);
       const day = danRows
-        .filter((r) => dayGroup && r.material.materialGroupId === dayGroup.id)
+        .filter((r) => wireGroupId != null && r.material.materialGroupId === wireGroupId)
         .map(toMaterialLine);
       const dinh = danRows
-        .filter((r) => dinhGroup && r.material.materialGroupId === dinhGroup.id)
+        .filter((r) => nailGroupId != null && r.material.materialGroupId === nailGroupId)
         .map(toMaterialLine);
 
       const daySon = (consumableByRev.get(revKey) ?? [])
-        .filter((r) => r.stage === MfgStage.SON)
+        .filter(
+          (r) =>
+            r.stage === MfgStage.SON &&
+            paintGroupId != null &&
+            r.material.materialGroupId === paintGroupId,
+        )
         .map(toMaterialLine);
 
       const accessoryRows = accessoryByRev.get(revKey) ?? [];
       const vatTuPhuKien = accessoryRows
-        .filter((r) => r.material.kind === MaterialKind.ACCESSORY)
+        .filter((r) => accessoryGroupId != null && r.material.materialGroupId === accessoryGroupId)
         .map(toAccessoryLine);
       const baoBiDongGoi = accessoryRows
-        .filter((r) => r.material.kind === MaterialKind.PACKAGING)
+        .filter((r) => packagingGroupId != null && r.material.materialGroupId === packagingGroupId)
         .map(toAccessoryLine);
 
       result.set(pf.id.toString(), {
@@ -840,7 +904,7 @@ export class PlanFormsService {
     return result;
   }
 
-  private async toResponseDtoWithQuota(pf: PlanFormWithRefs): Promise<PlanFormResponseDto> {
+  private async toResponseDtoWithQuota(pf: PlanFormWithRefs): Promise<SkuResponseDto> {
     const quotas = await this.reconstructQuotaBatch([pf]);
     return this.toResponseDto(pf, quotas.get(pf.id.toString())!);
   }
@@ -923,14 +987,14 @@ export class PlanFormsService {
     return pi.id;
   }
 
-  private toResponseDto(pf: PlanFormWithRefs, quota: ReconstructedQuota): PlanFormResponseDto {
-    return new PlanFormResponseDto({
+  private toResponseDto(pf: PlanFormWithRefs, quota: ReconstructedQuota): SkuResponseDto {
+    return new SkuResponseDto({
       id: pf.id.toString(),
-      salesOrderId: pf.salesOrderId.toString(),
+      salesOrderId: pf.salesOrderId?.toString() ?? null,
       mfgProductId: pf.mfgProductId.toString(),
       factoryCode: pf.mfgProduct.factoryCode,
       productName: pf.mfgProduct.name,
-      customerName: pf.salesOrder.customer.name,
+      customerName: pf.customerName ?? pf.salesOrder?.customer.name ?? null,
       productionInvoiceId: pf.productionInvoiceId?.toString() ?? null,
       piCode: pf.productionInvoice?.code ?? null,
       status: pf.status,
@@ -944,7 +1008,7 @@ export class PlanFormsService {
       updatedAt: pf.updatedAt,
       manhReviews: pf.manhReviews.map(
         (r) =>
-          new PlanFormManhReviewResponseDto({
+          new SkuManhReviewResponseDto({
             group: r.group,
             status: r.status,
             reason: r.reason,
@@ -955,7 +1019,7 @@ export class PlanFormsService {
       ),
       detailReviews: pf.detailReviews.map(
         (r) =>
-          new PlanFormDetailReviewResponseDto({
+          new SkuDetailReviewResponseDto({
             group: r.group,
             status: r.status,
             reason: r.reason,

@@ -1,19 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose, Type } from 'class-transformer';
 import { PlanFormStatus } from '../../../generated/prisma/client';
-import {
-  PlanFormDetailReviewResponseDto,
-  PlanFormManhReviewResponseDto,
-} from './plan-form-review-response.dto';
+import { SkuDetailReviewResponseDto, SkuManhReviewResponseDto } from './sku-review-response.dto';
 
 @Exclude()
-export class PlanFormResponseDto {
+export class SkuResponseDto {
   @Expose() @ApiProperty() id!: string;
-  @Expose() @ApiProperty() salesOrderId!: string;
+  @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderId!: string | null;
   @Expose() @ApiProperty() mfgProductId!: string;
   @Expose() @ApiProperty() factoryCode!: string;
   @Expose() @ApiProperty() productName!: string;
-  @Expose() @ApiProperty() customerName!: string;
+  @Expose() @ApiPropertyOptional({ nullable: true }) customerName!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) piCode!: string | null;
   @Expose() @ApiProperty({ enum: PlanFormStatus }) status!: PlanFormStatus;
@@ -26,15 +23,15 @@ export class PlanFormResponseDto {
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;
   @Expose()
-  @ApiProperty({ type: [PlanFormManhReviewResponseDto] })
-  @Type(() => PlanFormManhReviewResponseDto)
-  manhReviews!: PlanFormManhReviewResponseDto[];
+  @ApiProperty({ type: [SkuManhReviewResponseDto] })
+  @Type(() => SkuManhReviewResponseDto)
+  manhReviews!: SkuManhReviewResponseDto[];
   @Expose()
-  @ApiProperty({ type: [PlanFormDetailReviewResponseDto] })
-  @Type(() => PlanFormDetailReviewResponseDto)
-  detailReviews!: PlanFormDetailReviewResponseDto[];
+  @ApiProperty({ type: [SkuDetailReviewResponseDto] })
+  @Type(() => SkuDetailReviewResponseDto)
+  detailReviews!: SkuDetailReviewResponseDto[];
 
-  constructor(partial: Partial<PlanFormResponseDto>) {
+  constructor(partial: Partial<SkuResponseDto>) {
     Object.assign(this, partial);
   }
 }
