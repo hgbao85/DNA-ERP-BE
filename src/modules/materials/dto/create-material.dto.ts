@@ -25,6 +25,12 @@ export class CreateMaterialDto {
   unit!: string;
 
   @ApiPropertyOptional({
+    description: 'vd "10x29x0.8" - quy cách vật tư, hiện ở cột "Quy cách" của định mức mảnh',
+  })
+  @IsOptional()
+  spec?: string;
+
+  @ApiPropertyOptional({
     description:
       'Cách phân loại vật tư duy nhất - group.systemKey (6 nhóm hệ thống, xem material-group-system-keys.constant.ts) quyết định vật tư có hiện trong picker của 4 trang Spec hay không',
   })
