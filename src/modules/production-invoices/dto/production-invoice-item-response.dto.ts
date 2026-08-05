@@ -1,6 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
-import { ProdApprovalStatus } from '../../../generated/prisma/client';
+import { ProdApprovalStatus, ProdItemStageType } from '../../../generated/prisma/client';
+
+class ItemStageDto {
+  @Expose() @ApiProperty({ enum: ProdItemStageType }) stageType!: ProdItemStageType;
+  @Expose() @ApiProperty() deadline!: Date;
+}
 
 @Exclude()
 export class ProductionInvoiceItemResponseDto {
@@ -26,6 +31,7 @@ export class ProductionInvoiceItemResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) decidedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) decidedById!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) rejectReason!: string | null;
+  @Expose() @ApiPropertyOptional({ type: [ItemStageDto] }) stages!: ItemStageDto[];
 
   constructor(partial: Partial<ProductionInvoiceItemResponseDto>) {
     Object.assign(this, partial);

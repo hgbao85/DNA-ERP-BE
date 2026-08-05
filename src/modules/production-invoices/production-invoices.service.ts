@@ -12,15 +12,16 @@ import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-
 import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-response.dto';
 import { ProductionInvoiceResponseDto } from './dto/production-invoice-response.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
+import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
 
 type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
   include: {
     salesOrder: true;
-    items: { include: { mfgProduct: true; productVariant: true } };
+    items: { include: { mfgProduct: true; productVariant: true; stages: true } };
   };
 }>;
 type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
-  include: { mfgProduct: true; productVariant: true };
+  include: { mfgProduct: true; productVariant: true; stages: true };
 }>;
 
 /**
@@ -56,7 +57,7 @@ export class ProductionInvoicesService {
       },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true } },
+        items: { include: { mfgProduct: true, productVariant: true, stages: true } },
       },
     });
     const withCode = await this.prisma.productionInvoice.update({
@@ -64,7 +65,7 @@ export class ProductionInvoicesService {
       data: { code: `PI-${created.id}` },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true } },
+        items: { include: { mfgProduct: true, productVariant: true, stages: true } },
       },
     });
     return this.toResponseDto(withCode);
@@ -82,7 +83,7 @@ export class ProductionInvoicesService {
             ...args,
             include: {
               salesOrder: true,
-              items: { include: { mfgProduct: true, productVariant: true } },
+              items: { include: { mfgProduct: true, productVariant: true, stages: true } },
             },
           }),
         count: (args) => this.prisma.productionInvoice.count(args),
@@ -106,7 +107,7 @@ export class ProductionInvoicesService {
       data: { deadline: dto.deadline ? new Date(dto.deadline) : undefined },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true } },
+        items: { include: { mfgProduct: true, productVariant: true, stages: true } },
       },
     });
     return this.toResponseDto(updated);
@@ -134,9 +135,55 @@ export class ProductionInvoicesService {
         materialDeadline: dto.materialDeadline ? new Date(dto.materialDeadline) : undefined,
         deliveryDeadline: dto.deliveryDeadline ? new Date(dto.deliveryDeadline) : undefined,
       },
-      include: { mfgProduct: true, productVariant: true },
+      include: { mfgProduct: true, productVariant: true, stages: true },
     });
     return this.toItemResponseDto(item);
+  }
+
+  /**
+   * KHSX sửa thời hạn kế hoạch của 1 SKU (LenhSXPage "Sửa thời hạn") - materialDeadline/
+   * deliveryDeadline ghi thẳng lên item, còn `stages` (Khung cơ khí/Đan/Đóng gói) upsert theo
+   * unique (productionInvoiceItemId, stageType) vì đây là mốc kế hoạch do KHSX đặt, không phải
+   * tiến độ thực thi Phôi/Hàn/Sơn thật (domain đó chưa tồn tại - xem ProdItemStageType).
+   */
+  async updateItem(
+    piId: string,
+    itemId: string,
+    dto: UpdateProductionInvoiceItemDto,
+  ): Promise<ProductionInvoiceItemResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const item = await this.findItemOrThrow(pi.id, itemId);
+
+    await this.prisma.$transaction(async (tx) => {
+      if (dto.materialDeadline || dto.deliveryDeadline) {
+        await tx.productionInvoiceItem.update({
+          where: { id: item.id },
+          data: {
+            materialDeadline: dto.materialDeadline ? new Date(dto.materialDeadline) : undefined,
+            deliveryDeadline: dto.deliveryDeadline ? new Date(dto.deliveryDeadline) : undefined,
+          },
+        });
+      }
+      for (const stage of dto.stages ?? []) {
+        await tx.productionInvoiceItemStage.upsert({
+          where: {
+            productionInvoiceItemId_stageType: {
+              productionInvoiceItemId: item.id,
+              stageType: stage.stageType,
+            },
+          },
+          create: {
+            productionInvoiceItemId: item.id,
+            stageType: stage.stageType,
+            deadline: new Date(stage.deadline),
+          },
+          update: { deadline: new Date(stage.deadline) },
+        });
+      }
+    });
+
+    const updated = await this.findItemOrThrow(pi.id, itemId);
+    return this.toItemResponseDto(updated);
   }
 
   /** KHSX gửi 1 SKU cho QLSX xử lý - mirror sendItemToQlsx() mock. */
@@ -157,7 +204,7 @@ export class ProductionInvoicesService {
         requestedById: actorUserId,
         rejectReason: null,
       },
-      include: { mfgProduct: true, productVariant: true },
+      include: { mfgProduct: true, productVariant: true, stages: true },
     });
     return this.toItemResponseDto(updated);
   }
@@ -183,7 +230,7 @@ export class ProductionInvoicesService {
         qlsxAt: new Date(),
         qlsxById: actorUserId,
       },
-      include: { mfgProduct: true, productVariant: true },
+      include: { mfgProduct: true, productVariant: true, stages: true },
     });
     return this.toItemResponseDto(updated);
   }
@@ -208,7 +255,7 @@ export class ProductionInvoicesService {
         decidedAt: new Date(),
         decidedById: actorUserId,
       },
-      include: { mfgProduct: true, productVariant: true },
+      include: { mfgProduct: true, productVariant: true, stages: true },
     });
 
     if (pi.salesOrderId) {
@@ -236,6 +283,34 @@ export class ProductionInvoicesService {
     return this.toItemResponseDto(updated);
   }
 
+  /**
+   * QLSX từ chối ngay ở bước chọn kho (chưa kịp gửi Sếp) - SKU quay về cho KHSX sửa thời hạn và
+   * gửi lại từ đầu, giống hệt đường Sếp từ chối (rejectItem) - cùng field `prodApprovalStatus:
+   * REJECTED`/`rejectReason`/`decidedAt`/`decidedById`, KHSX không cần phân biệt ai từ chối.
+   */
+  async rejectItemByQlsx(
+    piId: string,
+    itemId: string,
+    reason: string,
+    actorUserId: string,
+  ): Promise<ProductionInvoiceItemResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const item = await this.findItemOrThrow(pi.id, itemId);
+    this.assertItemStatus(item, ProdApprovalStatus.WAITING_QLSX);
+
+    const updated = await this.prisma.productionInvoiceItem.update({
+      where: { id: item.id },
+      data: {
+        prodApprovalStatus: ProdApprovalStatus.REJECTED,
+        rejectReason: reason,
+        decidedAt: new Date(),
+        decidedById: actorUserId,
+      },
+      include: { mfgProduct: true, productVariant: true, stages: true },
+    });
+    return this.toItemResponseDto(updated);
+  }
+
   /** Sếp từ chối - SKU quay về cho KHSX sửa thời hạn và gửi lại từ đầu. Mirror rejectItem() mock. */
   async rejectItem(
     piId: string,
@@ -255,7 +330,7 @@ export class ProductionInvoicesService {
         decidedAt: new Date(),
         decidedById: actorUserId,
       },
-      include: { mfgProduct: true, productVariant: true },
+      include: { mfgProduct: true, productVariant: true, stages: true },
     });
     return this.toItemResponseDto(updated);
   }
@@ -268,7 +343,7 @@ export class ProductionInvoicesService {
       where: { id: bigId },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true } },
+        items: { include: { mfgProduct: true, productVariant: true, stages: true } },
       },
     });
     if (!pi) {
@@ -281,7 +356,7 @@ export class ProductionInvoicesService {
     const idBigId = parseBigIntId(id);
     const item = await this.prisma.productionInvoiceItem.findUnique({
       where: { id: idBigId },
-      include: { mfgProduct: true, productVariant: true },
+      include: { mfgProduct: true, productVariant: true, stages: true },
     });
     if (!item || item.productionInvoiceId !== piId) {
       throw new NotFoundException(`Production invoice item ${id} not found on PI ${piId}`);
@@ -342,6 +417,7 @@ export class ProductionInvoicesService {
       decidedAt: item.decidedAt,
       decidedById: item.decidedById,
       rejectReason: item.rejectReason,
+      stages: item.stages.map((s) => ({ stageType: s.stageType, deadline: s.deadline })),
     });
   }
 }

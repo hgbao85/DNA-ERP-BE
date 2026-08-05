@@ -37,6 +37,11 @@ export class QuotaSegmentDto {
   @IsOptional()
   @IsBoolean()
   needsSon?: boolean;
+
+  @ApiPropertyOptional({ description: 'Ghi chú riêng cho đoạn sắt này (vd "mạ kẽm")' })
+  @IsOptional()
+  @IsString()
+  note?: string;
 }
 
 /** 1 mảnh (nhóm SAT) - resolve-or-create Piece theo tên trong phạm vi sản phẩm. */

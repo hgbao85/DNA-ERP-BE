@@ -144,7 +144,7 @@ describe('SkusService', () => {
 
   describe('create', () => {
     it('resolves an existing PI for the (salesOrder, product) pair instead of creating a new one', async () => {
-      prisma.salesOrder.findUnique.mockResolvedValue({ id: 1n });
+      prisma.salesOrder.findUnique.mockResolvedValue({ id: 1n, customer: { name: 'Khach A' } });
       prisma.mfgProduct.findUnique.mockResolvedValue(mfgProduct);
       prisma.planForm.findFirst.mockResolvedValue({ productionInvoiceId: 99n });
       prisma.planForm.create.mockResolvedValue(planForm({ productionInvoiceId: 99n }));
@@ -212,6 +212,7 @@ describe('SkusService', () => {
           qtyPerPiece: 4,
           needsHan: true,
           needsSon: true,
+          note: null,
         },
       });
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing

@@ -527,6 +527,9 @@ model PieceBom {
   qtyPerPiece   Int
   needsHan      Boolean @default(false)
   needsSon      Boolean @default(false)
+  /// Ghi chú riêng cho dòng loại sắt này (vd "mạ kẽm", "cắt vát 45°") - KHSX xem trực tiếp ở
+  /// cột Loại sắt khi duyệt định mức mảnh.
+  note          String?
 
   bomRevision BomRevision @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
   piece       Piece       @relation(fields: [pieceId], references: [id])
@@ -845,14 +848,41 @@ model ProductionInvoiceItem {
   decidedById         String?
   rejectReason        String?
 
-  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id])
-  mfgProduct        MfgProduct        @relation(fields: [mfgProductId], references: [id])
-  productVariant    ProductVariant?   @relation(fields: [productVariantId], references: [id])
-  requestedBy       User?             @relation("PIItemRequestedBy", fields: [requestedById], references: [id])
-  qlsxBy            User?             @relation("PIItemQlsxBy", fields: [qlsxById], references: [id])
-  decidedBy         User?             @relation("PIItemDecidedBy", fields: [decidedById], references: [id])
+  productionInvoice ProductionInvoice            @relation(fields: [productionInvoiceId], references: [id])
+  mfgProduct        MfgProduct                   @relation(fields: [mfgProductId], references: [id])
+  productVariant    ProductVariant?              @relation(fields: [productVariantId], references: [id])
+  requestedBy       User?                        @relation("PIItemRequestedBy", fields: [requestedById], references: [id])
+  qlsxBy            User?                        @relation("PIItemQlsxBy", fields: [qlsxById], references: [id])
+  decidedBy         User?                        @relation("PIItemDecidedBy", fields: [decidedById], references: [id])
+  stages            ProductionInvoiceItemStage[]
 
   @@index([productionInvoiceId])
   @@index([mfgProductId])
   @@map("production_invoice_items")
+}
+
+/// Mốc kế hoạch từng công đoạn do KHSX đặt riêng cho 1 SKU trong PI (LenhSXPage "Sửa thời hạn")
+/// - KHÔNG phải bảng theo dõi thực thi Phôi/Hàn/Sơn thật (domain đó chưa tồn tại, xem comment
+/// production-invoices-api.ts FE) nên KHÔNG tái dùng enum `MfgStage`. 3 mốc:
+/// - FRAME: "Khung cơ khí" - mốc hoàn tất CẢ chuỗi Phôi→Hàn→Sơn (không phải riêng công đoạn Hàn,
+///   dù field key lịch sử phía FE vẫn là `HAN` - xem toFeStageType/toBeStageType).
+/// - WEAVING: "Đan".
+/// - PACKAGING: "Đóng gói" - field FE cũ tên `SON`, dễ nhầm với `MfgStage.SON` (Sơn/painting thật,
+///   khác nghĩa) nên đặt tên rõ ràng hơn ở BE, adapter FE tự dịch qua lại.
+enum ProdItemStageType {
+  FRAME
+  WEAVING
+  PACKAGING
+}
+
+model ProductionInvoiceItemStage {
+  id                      BigInt            @id @default(autoincrement())
+  productionInvoiceItemId BigInt
+  stageType               ProdItemStageType
+  deadline                DateTime
+
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+
+  @@unique([productionInvoiceItemId, stageType])
+  @@map("production_invoice_item_stages")
 }
