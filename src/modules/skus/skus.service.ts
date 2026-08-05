@@ -649,6 +649,7 @@ export class SkusService {
             qtyPerPiece: seg.qtyPerPiece,
             needsHan: seg.needsHan ?? true,
             needsSon: seg.needsSon ?? true,
+            note: seg.note ?? null,
           },
         });
       }
@@ -857,10 +858,12 @@ export class SkusService {
             materialCode: sg.segmentSpec.material.code,
             materialName: sg.segmentSpec.material.name,
             materialSpec: sg.segmentSpec.material.spec,
+            materialUnit: sg.segmentSpec.material.unit,
             cutLengthMm: sg.segmentSpec.cutLengthMm,
             qtyPerPiece: sg.qtyPerPiece,
             needsHan: sg.needsHan,
             needsSon: sg.needsSon,
+            note: sg.note,
           }),
         ),
       }));

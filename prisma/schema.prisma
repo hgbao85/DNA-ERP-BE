@@ -527,6 +527,9 @@ model PieceBom {
   qtyPerPiece   Int
   needsHan      Boolean @default(false)
   needsSon      Boolean @default(false)
+  /// Ghi chú riêng cho dòng loại sắt này (vd "mạ kẽm", "cắt vát 45°") - KHSX xem trực tiếp ở
+  /// cột Loại sắt khi duyệt định mức mảnh.
+  note          String?
 
   bomRevision BomRevision @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
   piece       Piece       @relation(fields: [pieceId], references: [id])
