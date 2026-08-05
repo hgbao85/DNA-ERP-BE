@@ -24,4 +24,9 @@ export class CreatePieceBomDto {
   @IsOptional()
   @IsBoolean()
   needsSon?: boolean;
+
+  @ApiPropertyOptional({ description: 'vd "mạ kẽm", "cắt vát 45°"' })
+  @IsOptional()
+  @IsString()
+  note?: string;
 }
