@@ -25,10 +25,10 @@ import { UpdateProductVariantDto } from './dto/update-product-variant.dto';
  * never the request body, and they share PERMISSION_MODULES.PRODUCT rather than getting
  * their own module (same reasoning as MaterialSupplier nested under Material).
  *
- * No isActive/deletedAt on mfg_products itself - remove() is a real DELETE.
- * ProductVariant/Piece/Part/BomRevision all reference mfgProductId with ON DELETE
- * RESTRICT, so deleting a product still in use fails at the DB with P2003 - left to the
- * global Prisma exception filter (400) rather than a duplicate pre-check here.
+ * No isActive/deletedAt on mfg_products itself - remove() is a real DELETE, gated by an
+ * explicit pre-check for active variants (409, per roadmap §2.1) rather than letting the
+ * DB's ON DELETE RESTRICT surface a generic 400 - RESTRICT still catches Piece/Part/
+ * BomRevision references as a backstop (left to the global Prisma exception filter).
  */
 @Injectable()
 export class ProductsService {
@@ -98,6 +98,16 @@ export class ProductsService {
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
     await this.findOneOrThrow(id);
+
+    const activeVariantCount = await this.prisma.productVariant.count({
+      where: { mfgProductId: bigId, isActive: true },
+    });
+    if (activeVariantCount > 0) {
+      throw new ConflictException(
+        `Product ${id} still has ${activeVariantCount} active variant(s) and cannot be deleted`,
+      );
+    }
+
     await this.prisma.mfgProduct.delete({ where: { id: bigId } });
   }
 

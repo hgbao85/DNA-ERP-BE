@@ -1,5 +1,5 @@
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
-import { IsBoolean, IsInt, IsOptional, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 /** pieceId/segmentSpecId are immutable once created - delete and re-create to change either. */
 export class UpdatePieceBomDto {
@@ -17,4 +17,9 @@ export class UpdatePieceBomDto {
   @IsOptional()
   @IsBoolean()
   needsSon?: boolean;
+
+  @ApiPropertyOptional({ description: 'vd "mạ kẽm", "cắt vát 45°"' })
+  @IsOptional()
+  @IsString()
+  note?: string;
 }

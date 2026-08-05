@@ -11,6 +11,7 @@ describe('ProductsService', () => {
       create: jest.Mock;
       update: jest.Mock;
       delete: jest.Mock;
+      count: jest.Mock;
     };
   };
 
@@ -32,6 +33,7 @@ describe('ProductsService', () => {
         create: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
+        count: jest.fn(),
       },
     };
     service = new ProductsService(prisma as unknown as PrismaServiceType);
@@ -59,6 +61,7 @@ describe('ProductsService', () => {
   describe('remove (MfgProduct)', () => {
     it('is a real hard delete - MfgProduct has no soft-delete column, relies on ON DELETE RESTRICT FKs instead', async () => {
       prisma.mfgProduct.findUnique.mockResolvedValue(existingProduct);
+      prisma.productVariant.count.mockResolvedValue(0);
 
       await service.remove('1');
 
@@ -69,6 +72,26 @@ describe('ProductsService', () => {
       prisma.mfgProduct.findUnique.mockResolvedValue(null);
 
       await expect(service.remove('999')).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects with 409 when the product still has active variants, without touching the DB delete', async () => {
+      prisma.mfgProduct.findUnique.mockResolvedValue(existingProduct);
+      prisma.productVariant.count.mockResolvedValue(2);
+
+      await expect(service.remove('1')).rejects.toThrow(ConflictException);
+      expect(prisma.productVariant.count).toHaveBeenCalledWith({
+        where: { mfgProductId: 1n, isActive: true },
+      });
+      expect(prisma.mfgProduct.delete).not.toHaveBeenCalled();
+    });
+
+    it('allows deleting a product whose variants are all inactive', async () => {
+      prisma.mfgProduct.findUnique.mockResolvedValue(existingProduct);
+      prisma.productVariant.count.mockResolvedValue(0);
+
+      await service.remove('1');
+
+      expect(prisma.mfgProduct.delete).toHaveBeenCalledWith({ where: { id: 1n } });
     });
   });
 

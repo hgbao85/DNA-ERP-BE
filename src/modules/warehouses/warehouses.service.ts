@@ -90,7 +90,6 @@ export class WarehousesService {
       data: {
         code: dto.code,
         name: dto.name,
-        isVirtual: dto.isVirtual,
         note: dto.note,
         isActive: dto.isActive,
       },

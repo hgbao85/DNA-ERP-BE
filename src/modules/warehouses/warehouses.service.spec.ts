@@ -98,5 +98,22 @@ describe('WarehousesService', () => {
       await expect(service.update('1', { name: 'Kho sat moi' } as any)).resolves.toBeDefined();
       expect(prisma.warehouse.update).toHaveBeenCalled();
     });
+
+    it('never forwards isVirtual to Prisma, even if a caller smuggles it into the DTO', async () => {
+      prisma.warehouse.findUnique.mockResolvedValue(ordinaryWarehouse);
+      prisma.warehouse.update.mockResolvedValue({ ...ordinaryWarehouse, isVirtual: true });
+
+      await service.update('2', { name: 'Kho phu 1', isVirtual: true } as any);
+
+      expect(prisma.warehouse.update).toHaveBeenCalledWith({
+        where: { id: 2n },
+        data: {
+          code: undefined,
+          name: 'Kho phu 1',
+          note: undefined,
+          isActive: undefined,
+        },
+      });
+    });
   });
 });
