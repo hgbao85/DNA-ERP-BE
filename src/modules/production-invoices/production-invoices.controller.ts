@@ -13,6 +13,7 @@ import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-
 import { RejectItemDto } from './dto/reject-item.dto';
 import { SendToBossDto } from './dto/send-to-boss.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
+import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
 import { ProductionInvoicesService } from './production-invoices.service';
 
 const VIEW = { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.VIEW };
@@ -56,6 +57,16 @@ export class ProductionInvoicesController {
     return this.productionInvoicesService.addItem(id, dto);
   }
 
+  @Patch(':id/items/:itemId')
+  @RequirePermissions(UPDATE)
+  updateItem(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: UpdateProductionInvoiceItemDto,
+  ) {
+    return this.productionInvoicesService.updateItem(id, itemId, dto);
+  }
+
   // ─── KHSX (role PRODUCTION_PLANNER - đến từ User.isProductPlanner, KHÔNG phải mfgRole,
   // xem MFG_ROLE_TO_BUSINESS_ROLE) - cố ý siết hơn mock (mock không guard chỗ này) ──
 
@@ -88,6 +99,18 @@ export class ProductionInvoicesController {
       dto.warehouseName,
       userId,
     );
+  }
+
+  @Post(':id/items/:itemId/reject-by-qlsx')
+  @RequirePermissions(APPROVE)
+  @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)
+  rejectItemByQlsx(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: RejectItemDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.productionInvoicesService.rejectItemByQlsx(id, itemId, dto.reason, userId);
   }
 
   // ─── Sếp (role BOSS) - duyệt cuối, mirror assertBossRole() trong mock ───────

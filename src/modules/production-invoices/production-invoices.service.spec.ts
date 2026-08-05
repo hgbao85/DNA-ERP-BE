@@ -1,5 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { ProdItemStageType } from '../../generated/prisma/client';
 import { SkusService } from '../skus/skus.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 
@@ -20,7 +21,9 @@ describe('ProductionInvoicesService', () => {
       findUnique: jest.Mock;
       count: jest.Mock;
     };
+    productionInvoiceItemStage: { upsert: jest.Mock };
     mfgProduct: { findUnique: jest.Mock };
+    $transaction: jest.Mock;
   };
   let skusService: { ensureProductionConfirmPlanForm: jest.Mock };
 
@@ -57,6 +60,7 @@ describe('ProductionInvoicesService', () => {
     decidedAt: null,
     decidedById: null,
     rejectReason: null,
+    stages: [],
     ...overrides,
   });
 
@@ -76,7 +80,9 @@ describe('ProductionInvoicesService', () => {
         findUnique: jest.fn(),
         count: jest.fn(),
       },
+      productionInvoiceItemStage: { upsert: jest.fn() },
       mfgProduct: { findUnique: jest.fn() },
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     skusService = { ensureProductionConfirmPlanForm: jest.fn() };
     service = new ProductionInvoicesService(
@@ -146,6 +152,66 @@ describe('ProductionInvoicesService', () => {
     });
   });
 
+  describe('updateItem', () => {
+    it('updates materialDeadline/deliveryDeadline and upserts each stage deadline', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique
+        .mockResolvedValueOnce(piItem()) // findItemOrThrow trước khi ghi
+        .mockResolvedValueOnce(
+          piItem({
+            materialDeadline: new Date('2026-08-01'),
+            deliveryDeadline: new Date('2026-08-20'),
+            stages: [
+              { stageType: 'FRAME', deadline: new Date('2026-08-10') },
+              { stageType: 'WEAVING', deadline: new Date('2026-08-15') },
+            ],
+          }),
+        ); // findItemOrThrow đọc lại sau khi ghi
+
+      const result = await service.updateItem('7', '20', {
+        materialDeadline: '2026-08-01',
+        deliveryDeadline: '2026-08-20',
+        stages: [
+          { stageType: ProdItemStageType.FRAME, deadline: '2026-08-10' },
+          { stageType: ProdItemStageType.WEAVING, deadline: '2026-08-15' },
+        ],
+      });
+
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledWith({
+        where: { id: 20n },
+        data: {
+          materialDeadline: new Date('2026-08-01'),
+          deliveryDeadline: new Date('2026-08-20'),
+        },
+      });
+      expect(prisma.productionInvoiceItemStage.upsert).toHaveBeenCalledTimes(2);
+      expect(prisma.productionInvoiceItemStage.upsert).toHaveBeenCalledWith({
+        where: {
+          productionInvoiceItemId_stageType: { productionInvoiceItemId: 20n, stageType: 'FRAME' },
+        },
+        create: {
+          productionInvoiceItemId: 20n,
+          stageType: 'FRAME',
+          deadline: new Date('2026-08-10'),
+        },
+        update: { deadline: new Date('2026-08-10') },
+      });
+      expect(result.stages).toHaveLength(2);
+    });
+
+    it('does not touch item fields when only stages are sent', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+
+      await service.updateItem('7', '20', {
+        stages: [{ stageType: ProdItemStageType.PACKAGING, deadline: '2026-08-17' }],
+      });
+
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+      expect(prisma.productionInvoiceItemStage.upsert).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('approveItem', () => {
     it('seeds a PRODUCTION_CONFIRM plan form and flips PI to PRODUCING when this was the last item', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
@@ -208,6 +274,50 @@ describe('ProductionInvoicesService', () => {
 
       const result = await service.rejectItem('7', '20', 'Thiếu vật tư', 'user-boss');
       expect(result.rejectReason).toBe('Thiếu vật tư');
+    });
+  });
+
+  describe('rejectItemByQlsx', () => {
+    it('rejects an item still WAITING_QLSX, sending it back to KHSX', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'REJECTED', rejectReason: 'Không đủ kho' }),
+      );
+
+      const result = await service.rejectItemByQlsx('7', '20', 'Không đủ kho', 'user-qlsx');
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
+      const updateCall = prisma.productionInvoiceItem.update.mock.calls[0][0] as {
+        where: { id: bigint };
+        data: {
+          prodApprovalStatus: string;
+          rejectReason: string;
+          decidedAt: Date;
+          decidedById: string;
+        };
+        include: unknown;
+      };
+      expect(updateCall.where).toEqual({ id: 20n });
+      expect(updateCall.data.prodApprovalStatus).toBe('REJECTED');
+      expect(updateCall.data.rejectReason).toBe('Không đủ kho');
+      expect(updateCall.data.decidedById).toBe('user-qlsx');
+      expect(updateCall.data.decidedAt).toBeInstanceOf(Date);
+      expect(updateCall.include).toEqual({ mfgProduct: true, productVariant: true, stages: true });
+      expect(result.rejectReason).toBe('Không đủ kho');
+    });
+
+    it('rejects rejecting an item not in WAITING_QLSX', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+
+      await expect(service.rejectItemByQlsx('7', '20', 'lý do', 'user-qlsx')).rejects.toThrow(
+        ConflictException,
+      );
     });
   });
 
