@@ -1,5 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, Length, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  ArrayMinSize,
+  IsArray,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Length,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class UpdateSystemConfigDto {
   @ApiProperty()
@@ -32,4 +43,65 @@ export class UpdateSystemConfigDto {
   @IsString()
   @Length(3, 3)
   defaultCurrency?: string;
+
+  @ApiPropertyOptional({
+    type: [Number],
+    example: [5850, 6000, 7000],
+    description: 'Các chiều dài thanh sắt nguyên chuẩn (mm) dùng cho Đề xuất cắt sắt',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsInt({ each: true })
+  @Min(100, { each: true })
+  @Type(() => Number)
+  solverStockLengths?: number[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  solverTrimStartMm?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  solverBladeWidthMm?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  solverMaxWastePercentage?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  solverMaxSurplus?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(100)
+  solverMinLengthMm?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(100)
+  solverMaxLengthMm?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  solverLengthStepMm?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  solverTimeLimitSeconds?: number;
 }

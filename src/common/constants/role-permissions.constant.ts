@@ -138,6 +138,17 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.WEAVING_POINT,
       actions: [PermissionAction.VIEW],
     },
+    // Phase 7: ProductionOrder tự sinh khi Sếp duyệt PI item (không có CREATE thủ công ở bản
+    // này) - QLSX chỉ xem. CuttingProposal: QLSX xem + có thể bấm "Tính lại" (CREATE) + duyệt
+    // phương án cắt cuối cùng (APPROVE) trước khi Phôi cắt theo.
+    {
+      module: PERMISSION_MODULES.PRODUCTION_ORDER,
+      actions: [PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.CUTTING_PROPOSAL,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE, PermissionAction.APPROVE],
+    },
   ],
   // 4 account chuyên trách nhập định mức SKU (mirror đúng mock: Sắt / Dây-Sơn / Phụ kiện-Bao
   // bì) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE (duyệt là KHSX).

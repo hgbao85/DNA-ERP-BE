@@ -29,3 +29,6 @@ coverage/
 
 # prisma
 src/generated/
+
+# db backups - contains real data, never commit
+backups/

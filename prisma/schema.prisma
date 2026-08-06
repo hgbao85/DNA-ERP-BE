@@ -40,6 +40,9 @@ enum NotificationAudience {
   ALL
   BOSS
   WAREHOUSE_STAFF
+  /// QLSX - dùng để báo khi 1 CuttingProposal tính xong/thất bại (xem
+  /// CuttingProposalsService), vì đây là role sở hữu quyền CUTTING_PROPOSAL.
+  PRODUCTION_MANAGER
 }
 
 model User {
@@ -65,14 +68,16 @@ model User {
   isProductPlanner Boolean  @default(false)
   isSale           Boolean  @default(false)
 
-  roles             UserRole[]
-  refreshTokens     RefreshToken[]
-  notifications     Notification[]
-  notificationReads NotificationRead[]
-  planForms         PlanForm[]
-  piRequestedItems  ProductionInvoiceItem[] @relation("PIItemRequestedBy")
-  piQlsxItems       ProductionInvoiceItem[] @relation("PIItemQlsxBy")
-  piDecidedItems    ProductionInvoiceItem[] @relation("PIItemDecidedBy")
+  roles                     UserRole[]
+  refreshTokens             RefreshToken[]
+  notifications             Notification[]
+  notificationReads         NotificationRead[]
+  planForms                 PlanForm[]
+  piRequestedItems          ProductionInvoiceItem[] @relation("PIItemRequestedBy")
+  piQlsxItems               ProductionInvoiceItem[] @relation("PIItemQlsxBy")
+  piDecidedItems            ProductionInvoiceItem[] @relation("PIItemDecidedBy")
+  cuttingProposalsRequested CuttingProposal[]       @relation("CuttingProposalRequestedBy")
+  cuttingProposalsApproved  CuttingProposal[]       @relation("CuttingProposalApprovedBy")
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -204,14 +209,33 @@ model NotificationRead {
 /// prisma/migrations/.../migration.sql) holding company-wide configuration.
 /// Seeded once; there is intentionally no "create" endpoint.
 model SystemConfig {
-  id              Int      @id @default(1)
+  id              Int     @id @default(1)
   companyName     String
   companyAddress  String?
   companyPhone    String?
   companyEmail    String?
   taxCode         String?
-  defaultCurrency String   @default("VND")
-  updatedAt       DateTime @updatedAt
+  defaultCurrency String  @default("VND")
+
+  /// Tham số mặc định gọi solver cat_sat_iea (Phase 7 - Đề xuất cắt sắt). Toàn hệ thống dùng
+  /// chung 1 bộ, admin sửa qua PUT /system-config - KHÔNG có màn nào cho nhập tay mỗi lần vì
+  /// trigger tính đề xuất chạy tự động/ngầm khi Sếp duyệt lệnh sản xuất (không qua form).
+  /// solverStockLengths: các chiều dài thanh sắt nguyên chuẩn (mm), vd [5850, 6000, 7000].
+  solverStockLengths       Json  @default("[5850, 6000, 7000]")
+  solverTrimStartMm        Int   @default(10)
+  solverBladeWidthMm       Float @default(1.0)
+  solverMaxWastePercentage Float @default(1.0)
+  solverMaxSurplus         Int   @default(10)
+  solverMinLengthMm        Int   @default(5000)
+  solverMaxLengthMm        Int   @default(6000)
+  solverLengthStepMm       Int   @default(10)
+  /// time_limit_seconds GỬI CHO solver mỗi lần giải - KHÔNG phải timeout HTTP client (xem
+  /// SOLVER_TIMEOUT_SECONDS trong env). Số lần giải = số loại sắt x (1 + N lần vét cạn), có
+  /// thể lên tới hàng trăm lần - để thấp (docs/PHAN_TICH_HE_THONG_CatSat.md khuyến nghị 8-30s
+  /// cho production), KHÔNG dùng default 480s của chính solver.
+  solverTimeLimitSeconds   Int   @default(20)
+
+  updatedAt DateTime @updatedAt
 
   @@map("system_config")
 }
@@ -267,11 +291,12 @@ model Material {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  materialGroup     MaterialGroup?     @relation(fields: [materialGroupId], references: [id])
-  materialSuppliers MaterialSupplier[]
-  segmentSpecs      SegmentSpec[]
-  consumableBoms    ConsumableBom[]
-  bomAccessoryItems BomAccessoryItem[]
+  materialGroup        MaterialGroup?        @relation(fields: [materialGroupId], references: [id])
+  materialSuppliers    MaterialSupplier[]
+  segmentSpecs         SegmentSpec[]
+  consumableBoms       ConsumableBom[]
+  bomAccessoryItems    BomAccessoryItem[]
+  cuttingProposalLines CuttingProposalLine[]
 
   @@index([materialGroupId])
   @@map("materials")
@@ -380,6 +405,7 @@ model MfgProduct {
   salesOrderItems        SalesOrderItem[]
   planForms              PlanForm[]
   productionInvoiceItems ProductionInvoiceItem[]
+  productionOrders       ProductionOrder[]
 
   @@map("mfg_products")
 }
@@ -447,9 +473,10 @@ model SegmentSpec {
   materialId  BigInt
   cutLengthMm Int
 
-  material  Material   @relation(fields: [materialId], references: [id])
-  pieceBoms PieceBom[]
-  partBoms  PartBom[]
+  material                       Material                        @relation(fields: [materialId], references: [id])
+  pieceBoms                      PieceBom[]
+  partBoms                       PartBom[]
+  cuttingProposalPatternSegments CuttingProposalPatternSegment[]
 
   @@unique([materialId, cutLengthMm])
   @@map("segment_spec")
@@ -477,6 +504,7 @@ model BomRevision {
   partBoms          PartBom[]
   consumableBoms    ConsumableBom[]
   bomAccessoryItems BomAccessoryItem[]
+  productionOrders  ProductionOrder[]
 
   @@unique([mfgProductId, revNo])
   /// Composite-unique target cho FK ghép của piece_bom/part_bom (xem PieceBom/PartBom) -
@@ -855,6 +883,7 @@ model ProductionInvoiceItem {
   qlsxBy            User?                        @relation("PIItemQlsxBy", fields: [qlsxById], references: [id])
   decidedBy         User?                        @relation("PIItemDecidedBy", fields: [decidedById], references: [id])
   stages            ProductionInvoiceItemStage[]
+  productionOrder   ProductionOrder?
 
   @@index([productionInvoiceId])
   @@index([mfgProductId])
@@ -885,4 +914,162 @@ model ProductionInvoiceItemStage {
 
   @@unique([productionInvoiceItemId, stageType])
   @@map("production_invoice_item_stages")
+}
+
+// =====================================================================
+// Phase 7 — Production Order & Cutting Proposal (tích hợp cat_sat_iea)
+// Nguồn: docs/dna-erp-backend-implementation-plan.md mục Phase 7, điều chỉnh theo quyết
+// định thiết kế thật (2026-08-05): ProductionOrder KHÔNG có API tạo/release thủ công ở bản
+// đầu - tự động tạo + tự động release ngay trong ProductionInvoicesService.approveItem(),
+// ngay sau khi Sếp duyệt 1 SKU (không có màn hình riêng, không loading state cho Sếp chờ).
+// quantity ghim (snapshot) từ productionInvoiceItem.quantity tại thời điểm đó - giá trị này
+// do Sales tạo và KHÔNG ai được sửa sau đó (xác nhận nghiệp vụ), nên ghim là an toàn tuyệt
+// đối, không có rủi ro lệch nguồn.
+// =====================================================================
+
+enum ProductionOrderStatus {
+  DRAFT
+  RELEASED
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum CuttingProposalStatus {
+  /// Đang chờ solver trả kết quả (fire-and-forget, ngay sau khi tạo request).
+  CALCULATING
+  DRAFT
+  APPROVED
+  SUPERSEDED
+  /// Solver lỗi/timeout/không khả thi - xem errorMessage. Khác REJECTED (không tồn tại ở bản
+  /// này) vì đây là lỗi kỹ thuật, không phải quyết định nghiệp vụ từ chối phương án.
+  FAILED
+}
+
+/// Lệnh sản xuất tại xưởng - tự động sinh 1-1 từ 1 ProductionInvoiceItem khi Sếp duyệt (xem
+/// approveItem()). KHÔNG có API tạo/release thủ công ở bản này (đã có sẵn trong doc gốc,
+/// để dành khi cần tách 1 item thành nhiều PO chạy tuần tự - chưa cần tới lúc này).
+model ProductionOrder {
+  id                      BigInt                @id @default(autoincrement())
+  poNumber                String                @unique
+  /// 1-1 với item đã duyệt sinh ra PO này - chỉ để truy vết, KHÔNG dùng để đọc lại quantity
+  /// (đã ghim ở field quantity bên dưới).
+  productionInvoiceItemId BigInt                @unique
+  mfgProductId            BigInt
+  /// Ghim tại thời điểm tạo (ACTIVE BomRevision của mfgProductId lúc đó) - không suy lại mỗi
+  /// lần đọc, đúng nguyên tắc PO ghim đúng 1 bản định mức.
+  bomRevisionId           BigInt
+  /// Snapshot productionInvoiceItem.quantity tại thời điểm duyệt - xem ghi chú đầu section.
+  quantity                Int
+  status                  ProductionOrderStatus @default(RELEASED)
+  releasedAt              DateTime?             @default(now())
+  createdAt               DateTime              @default(now())
+
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+  mfgProduct            MfgProduct            @relation(fields: [mfgProductId], references: [id])
+  bomRevision           BomRevision           @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
+  cuttingProposals      CuttingProposal[]
+
+  @@index([mfgProductId])
+  @@map("production_orders")
+}
+
+/// 1 lần gọi solver cat_sat_iea cho 1 ProductionOrder. cat_sat_iea không lưu gì (stateless) -
+/// toàn bộ input/output nguyên văn lưu ở đây để audit/replay (rawResponse), còn dữ liệu cần
+/// truy vấn lại (bar_count theo material cho Phase 8 Mua hàng, pattern/segment cho Phase 9
+/// Phôi cắt theo) tách thành 3 bảng con chuẩn hoá bên dưới - KHÔNG gộp hết vào JSON.
+model CuttingProposal {
+  id                BigInt                @id @default(autoincrement())
+  productionOrderId BigInt
+  status            CuttingProposalStatus @default(CALCULATING)
+  /// Client-supplied UUID cho lần gọi thủ công (nút "Tính lại") - null cho lần tự động đầu
+  /// tiên (không cần, vì unique(productionInvoiceItemId) trên ProductionOrder đã chặn tạo
+  /// trùng PO, nên chỉ có đúng 1 lần tự động/PO).
+  idempotencyKey    String?               @unique
+  /// Toàn bộ input đã gửi solver (num_sets, bom[], stock_lengths, trim_start...) - audit/replay.
+  requestParams     Json?
+  /// Nguyên văn response solver (purchase_plan[], summary...) khi thành công.
+  rawResponse       Json?
+  totalBarsAll      Int?
+  totalWasteMm      Int?
+  wastePercentage   Decimal?              @db.Decimal(6, 3)
+  /// Lý do lỗi/timeout/không khả thi khi status=FAILED (bao gồm failing_materials nếu có).
+  errorMessage      String?
+  requestedAt       DateTime              @default(now())
+  requestedById     String?
+  completedAt       DateTime?
+  approvedAt        DateTime?
+  approvedById      String?
+
+  productionOrder ProductionOrder       @relation(fields: [productionOrderId], references: [id])
+  requestedBy     User?                 @relation("CuttingProposalRequestedBy", fields: [requestedById], references: [id])
+  approvedBy      User?                 @relation("CuttingProposalApprovedBy", fields: [approvedById], references: [id])
+  lines           CuttingProposalLine[]
+
+  @@index([productionOrderId, status])
+  @@map("cutting_proposals")
+}
+
+/// 1 dòng/loại sắt (gom theo material) trong 1 CuttingProposal - purchase_plan[] của solver.
+/// bar_count ở đây là NGUỒN CHÍNH XÁC cho Phase 8 (inspection_items.required vật tư sắt),
+/// ưu tiên hơn ước lượng thô qua BOM - xem docs/dna-erp-backend-implementation-plan.md 8.1.
+model CuttingProposalLine {
+  id                BigInt   @id @default(autoincrement())
+  cuttingProposalId BigInt
+  materialId        BigInt
+  feasible          Boolean  @default(true)
+  bestStockLengthMm Int?
+  totalBars         Int?
+  totalWasteMm      Int?
+  wastePercentage   Decimal? @db.Decimal(6, 3)
+  /// Tổng chiều dài mẩu sắt còn NGUYÊN (chưa cắt, từ cây cắt dở) của loại sắt này - nhập kho,
+  /// cắt được cỡ bất kỳ sau này. KHÔNG phải phế liệu/hao hụt. Phôi cần biết số này để nhập kho
+  /// đúng, xem thêm CuttingProposalPattern.mauNguyenMm (chi tiết cây nào cắt dở).
+  mauNguyenMm       Int?     @default(0)
+  /// So sánh hao hụt giữa các chiều dài chuẩn đã chấm (vd [{length:5850,bars:227,wastePct:9.61},
+  /// {length:6000,bars:223,wastePct:0.85}]) - thuần hiển thị/audit, không có FK nào cần tới nên
+  /// giữ JSON thay vì tách bảng.
+  lengthComparison  Json?
+
+  cuttingProposal CuttingProposal          @relation(fields: [cuttingProposalId], references: [id])
+  material        Material                 @relation(fields: [materialId], references: [id])
+  patterns        CuttingProposalPattern[]
+
+  @@index([cuttingProposalId])
+  @@index([materialId])
+  @@map("cutting_proposal_lines")
+}
+
+/// 1 kiểu cắt (cutting_patterns[] của solver, theo từng loại sắt) - Phôi cắt theo đúng
+/// pattern nào tra ngược qua bảng này (Phase 9, cut_pattern_segment FK tới đây).
+model CuttingProposalPattern {
+  id            BigInt @id @default(autoincrement())
+  lineId        BigInt
+  patternIndex  Int
+  barCount      Int
+  wastePerBarMm Int?
+  /// > 0 nghĩa là cây thuộc pattern này CẮT DỞ (dừng sớm, phần còn lại để nguyên nhập kho) -
+  /// đa số pattern có giá trị 0, chỉ pattern "cây cuối" của 1 loại sắt mới có mẩu nguyên.
+  mauNguyenMm   Int?   @default(0)
+
+  line     CuttingProposalLine             @relation(fields: [lineId], references: [id])
+  segments CuttingProposalPatternSegment[]
+
+  @@index([lineId])
+  @@map("cutting_proposal_patterns")
+}
+
+/// 1 cỡ đoạn + số lượng/cây trong 1 pattern (pieces_breakdown[] của solver).
+model CuttingProposalPatternSegment {
+  id            BigInt @id @default(autoincrement())
+  patternId     BigInt
+  segmentSpecId BigInt
+  countPerBar   Int
+
+  pattern     CuttingProposalPattern @relation(fields: [patternId], references: [id])
+  segmentSpec SegmentSpec            @relation(fields: [segmentSpecId], references: [id])
+
+  @@index([patternId])
+  @@index([segmentSpecId])
+  @@map("cutting_proposal_pattern_segments")
 }

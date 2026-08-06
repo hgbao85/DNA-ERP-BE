@@ -1,6 +1,8 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProdItemStageType } from '../../generated/prisma/client';
+import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
+import { ProductionOrdersService } from '../production-orders/production-orders.service';
 import { SkusService } from '../skus/skus.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 
@@ -26,6 +28,8 @@ describe('ProductionInvoicesService', () => {
     $transaction: jest.Mock;
   };
   let skusService: { ensureProductionConfirmPlanForm: jest.Mock };
+  let productionOrdersService: { createFromApproval: jest.Mock };
+  let cuttingProposalsService: { requestForOrder: jest.Mock };
 
   const mfgProduct = { id: 2n, factoryCode: 'SKU-01', name: 'Ghe A' };
   const pi = (overrides: Record<string, unknown> = {}) => ({
@@ -85,9 +89,15 @@ describe('ProductionInvoicesService', () => {
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     skusService = { ensureProductionConfirmPlanForm: jest.fn() };
+    productionOrdersService = {
+      createFromApproval: jest.fn().mockResolvedValue({ id: 99n }),
+    };
+    cuttingProposalsService = { requestForOrder: jest.fn().mockResolvedValue({ id: '1' }) };
     service = new ProductionInvoicesService(
       prisma as unknown as PrismaServiceType,
       skusService as unknown as SkusService,
+      productionOrdersService as unknown as ProductionOrdersService,
+      cuttingProposalsService as unknown as CuttingProposalsService,
     );
   });
 
@@ -231,10 +241,32 @@ describe('ProductionInvoicesService', () => {
         7n,
         'user-boss',
       );
+      expect(productionOrdersService.createFromApproval).toHaveBeenCalledWith(20n, 2n, 10);
+      expect(cuttingProposalsService.requestForOrder).toHaveBeenCalledWith(99n, {
+        requestedById: 'user-boss',
+      });
       expect(prisma.productionInvoice.update).toHaveBeenCalledWith({
         where: { id: 7n },
         data: { status: 'PRODUCING' },
       });
+    });
+
+    it('still approves the item even when the auto cutting-proposal trigger fails', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'APPROVED' }),
+      );
+      prisma.productionInvoiceItem.count.mockResolvedValue(2);
+      productionOrdersService.createFromApproval.mockRejectedValue(
+        new Error('no ACTIVE bom revision'),
+      );
+
+      const result = await service.approveItem('7', '20', 'user-boss');
+
+      expect(result.prodApprovalStatus).toBe('APPROVED');
     });
 
     it('does not flip PI status when other items are still pending', async () => {

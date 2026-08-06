@@ -15,7 +15,10 @@ export class SystemConfigService {
     if (!config) {
       throw new NotFoundException('System config has not been seeded');
     }
-    return new SystemConfigResponseDto(config);
+    return new SystemConfigResponseDto({
+      ...config,
+      solverStockLengths: config.solverStockLengths as number[],
+    });
   }
 
   async update(dto: UpdateSystemConfigDto): Promise<SystemConfigResponseDto> {
@@ -29,6 +32,9 @@ export class SystemConfigService {
       data: dto,
     });
 
-    return new SystemConfigResponseDto(updated);
+    return new SystemConfigResponseDto({
+      ...updated,
+      solverStockLengths: updated.solverStockLengths as number[],
+    });
   }
 }

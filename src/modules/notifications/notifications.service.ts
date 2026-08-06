@@ -37,6 +37,9 @@ export class NotificationsService {
     if (user.roles.includes(NotificationAudience.WAREHOUSE_STAFF)) {
       audiences.push(NotificationAudience.WAREHOUSE_STAFF);
     }
+    if (user.roles.includes(NotificationAudience.PRODUCTION_MANAGER)) {
+      audiences.push(NotificationAudience.PRODUCTION_MANAGER);
+    }
 
     const where: Prisma.NotificationWhereInput = { audience: { in: audiences } };
 

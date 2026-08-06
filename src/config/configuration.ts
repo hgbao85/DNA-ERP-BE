@@ -19,6 +19,11 @@ export interface AppConfig {
     limit: number;
   };
   logLevel: string;
+  solver: {
+    baseUrl: string;
+    apiKey: string;
+    timeoutSeconds: number;
+  };
 }
 
 export default (): AppConfig => ({
@@ -42,4 +47,9 @@ export default (): AppConfig => ({
     limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
   },
   logLevel: process.env.LOG_LEVEL ?? 'info',
+  solver: {
+    baseUrl: process.env.SOLVER_BASE_URL ?? '',
+    apiKey: process.env.SOLVER_API_KEY ?? '',
+    timeoutSeconds: parseInt(process.env.SOLVER_TIMEOUT_SECONDS ?? '300', 10),
+  },
 });

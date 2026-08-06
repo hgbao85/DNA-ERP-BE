@@ -26,6 +26,9 @@ export const PERMISSION_MODULES = {
   SALES_ORDER: 'SALES_ORDER',
   SKU: 'SKU',
   PRODUCTION_INVOICE: 'PRODUCTION_INVOICE',
+  // --- Phase 7 (Production Order & Cutting Proposal) ---
+  PRODUCTION_ORDER: 'PRODUCTION_ORDER',
+  CUTTING_PROPOSAL: 'CUTTING_PROPOSAL',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

@@ -1,11 +1,13 @@
 import { randomUUID } from 'crypto';
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, ProdApprovalStatus, ProductionInvoiceStatus } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
+import { ProductionOrdersService } from '../production-orders/production-orders.service';
 import { SkusService } from '../skus/skus.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
@@ -32,9 +34,13 @@ type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
  */
 @Injectable()
 export class ProductionInvoicesService {
+  private readonly logger = new Logger(ProductionInvoicesService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly skusService: SkusService,
+    private readonly productionOrdersService: ProductionOrdersService,
+    private readonly cuttingProposalsService: CuttingProposalsService,
   ) {}
 
   async create(dto: CreateProductionInvoiceDto): Promise<ProductionInvoiceResponseDto> {
@@ -264,6 +270,24 @@ export class ProductionInvoicesService {
         item.mfgProductId,
         pi.id,
         actorUserId,
+      );
+    }
+
+    // Phase 7: tạo lệnh sản xuất + tính đề xuất cắt sắt tự động/ngầm ngay khi Sếp duyệt - không
+    // có màn hình riêng, không chặn response này. Lỗi ở bước này (vd sản phẩm chưa có BomRevision
+    // ACTIVE) chỉ log lại, không làm hỏng việc duyệt SKU (business action chính của endpoint này).
+    try {
+      const productionOrder = await this.productionOrdersService.createFromApproval(
+        item.id,
+        item.mfgProductId,
+        item.quantity,
+      );
+      await this.cuttingProposalsService.requestForOrder(productionOrder.id, {
+        requestedById: actorUserId,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Auto cutting-proposal trigger failed for PI item ${item.id}: ${(error as Error).message}`,
       );
     }
 

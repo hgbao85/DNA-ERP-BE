@@ -27,4 +27,14 @@ export const envValidationSchema = Joi.object({
     .email({ tlds: { allow: false } })
     .optional(),
   SEED_ADMIN_PASSWORD: Joi.string().min(8).optional(),
+
+  // cat_sat_iea solver (Phase 7 - Đề xuất cắt sắt). Tham số TUNING của bài toán (stock_lengths,
+  // trim_start, max_waste_percentage...) nằm ở SystemConfig (admin sửa qua PUT /system-config),
+  // KHÔNG ở đây - 3 biến này chỉ là thông tin KẾT NỐI tới solver.
+  SOLVER_BASE_URL: Joi.string().uri().required(),
+  SOLVER_API_KEY: Joi.string().required(),
+  /// Timeout HTTP CLIENT (giây) - KHÁC với time_limit_seconds gửi trong body request (đó là
+  /// SystemConfig.solverTimeLimitSeconds, mỗi lần giải solver). Để dư dả vì số lần giải/request
+  /// = số loại sắt x (1 + N lần vét cạn) có thể cộng dồn khá lâu dù mỗi lần giải nhanh.
+  SOLVER_TIMEOUT_SECONDS: Joi.number().default(300),
 });
