@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -11,6 +12,12 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
+
+/** 4 nhóm vật tư "phẳng theo mảnh" (không có khái niệm cắt) có thể xuất hiện trong 1 mảnh,
+ *  cạnh Sắt (segments). Tag tường minh trên từng dòng vì 1 mảnh giờ nhận vật tư từ nhiều
+ *  nhóm cùng lúc trong 1 payload duy nhất - không còn suy nhóm từ route như DAY/DINH cũ. */
+export const PIECE_MATERIAL_LINE_GROUPS = ['WIRE', 'NAIL', 'RIVET', 'PLASTIC_BUTTON'] as const;
+export type PieceMaterialLineGroup = (typeof PIECE_MATERIAL_LINE_GROUPS)[number];
 
 /** 1 đoạn sắt cấu thành 1 mảnh (nhóm SAT) - resolve-or-create SegmentSpec theo (materialId, cutLengthMm). */
 export class QuotaSegmentDto {
@@ -44,7 +51,32 @@ export class QuotaSegmentDto {
   note?: string;
 }
 
-/** 1 mảnh (nhóm SAT) - resolve-or-create Piece theo tên trong phạm vi sản phẩm. */
+/** 1 dòng vật tư Dây/Đinh/Tán rút/Nút nhựa cấu thành 1 mảnh - resolve-or-assign nhóm vật tư
+ *  của material theo `group` (xem PieceMaterialItem, KHÔNG dùng PieceBom/SegmentSpec vì đó
+ *  là khái niệm "đoạn cắt" chỉ đúng cho Sắt). */
+export class QuotaPieceMaterialLineDto {
+  @ApiProperty({ enum: PIECE_MATERIAL_LINE_GROUPS })
+  @IsIn(PIECE_MATERIAL_LINE_GROUPS)
+  group!: PieceMaterialLineGroup;
+
+  @ApiProperty({ description: 'Material phải thuộc đúng nhóm vật tư khai báo ở `group`' })
+  @IsString()
+  materialId!: string;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(0)
+  qtyPerPiece!: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  note?: string;
+}
+
+/** 1 mảnh (nhóm SAT) - resolve-or-create Piece theo tên trong phạm vi sản phẩm. Chứa cả 5
+ *  nhóm vật tư: Sắt (`segments`, phân cấp đoạn cắt) và Dây/Đinh/Tán rút/Nút nhựa
+ *  (`materialLines`, phẳng theo mảnh, không có khái niệm cắt). */
 export class QuotaPieceDto {
   @ApiProperty({ description: 'Tên mảnh - resolve-or-create Piece theo tên (case-insensitive)' })
   @IsString()
@@ -61,9 +93,20 @@ export class QuotaPieceDto {
   @ValidateNested({ each: true })
   @Type(() => QuotaSegmentDto)
   segments!: QuotaSegmentDto[];
+
+  @ApiPropertyOptional({
+    type: [QuotaPieceMaterialLineDto],
+    description: 'Dây/Đinh/Tán rút/Nút nhựa của mảnh này',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => QuotaPieceMaterialLineDto)
+  materialLines?: QuotaPieceMaterialLineDto[];
 }
 
-/** 1 dòng vật tư phẳng (nhóm DAY/DINH/DAY_SON/VAT_TU_PHU_KIEN/BAO_BI_DONG_GOI) - materialId chọn thẳng từ catalog Material có sẵn. */
+/** 1 dòng vật tư phẳng - materialId chọn thẳng từ catalog Material có sẵn. Vẫn dùng làm shape
+ *  tham số nội bộ của replaceConsumableLines/replaceAccessoryItems (xem skus.service.ts). */
 export class QuotaMaterialLineDto {
   @ApiProperty()
   @IsString()
@@ -75,25 +118,49 @@ export class QuotaMaterialLineDto {
   qtyPerUnit!: number;
 }
 
+/** 3 nhóm định mức chi tiết - Sơn/Phụ kiện/Bao bì đều nhập/duyệt chung 1 lần (1 account, 1
+ *  trang, 1 quyết định duyệt) dù lưu ở 2 bảng khác nhau (ConsumableBom cho Sơn, BomAccessoryItem
+ *  cho Phụ kiện/Bao bì) - tag `group` tường minh trên từng dòng để service biết ghi vào bảng nào. */
+export const DETAIL_LINE_GROUPS = ['DAY_SON', 'VAT_TU_PHU_KIEN', 'BAO_BI_DONG_GOI'] as const;
+export type DetailLineGroup = (typeof DETAIL_LINE_GROUPS)[number];
+
+export class QuotaDetailLineDto {
+  @ApiProperty({ enum: DETAIL_LINE_GROUPS })
+  @IsIn(DETAIL_LINE_GROUPS)
+  group!: DetailLineGroup;
+
+  @ApiProperty()
+  @IsString()
+  materialId!: string;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(0)
+  qtyPerUnit!: number;
+}
+
 /**
- * Body của POST /:id/manh-quota/:group và /:id/detail-quota/:group. Đúng 1 trong 2 field
- * `pieces` (group=SAT, phân cấp mảnh->đoạn sắt) / `items` (mọi group phẳng còn lại) được gửi
- * theo route - service validate field nào bắt buộc theo group, không polymorphic ở tầng DTO.
+ * Body của POST /:id/manh-quota (luôn dùng `pieces` - mảnh giờ chứa cả 5 nhóm vật tư) và
+ * /:id/detail-quota (luôn dùng `detailLines` - chi tiết giờ chứa cả 3 nhóm Sơn/Phụ kiện/Bao bì) -
+ * service validate field nào bắt buộc theo endpoint, không polymorphic ở tầng DTO.
  */
 export class UpdateQuotaDto {
-  @ApiPropertyOptional({ type: [QuotaPieceDto], description: 'Chỉ dùng cho group=SAT' })
+  @ApiPropertyOptional({ type: [QuotaPieceDto], description: 'Dùng cho manh-quota' })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => QuotaPieceDto)
   pieces?: QuotaPieceDto[];
 
-  @ApiPropertyOptional({ type: [QuotaMaterialLineDto], description: 'Dùng cho mọi group trừ SAT' })
+  @ApiPropertyOptional({
+    type: [QuotaDetailLineDto],
+    description: 'Dùng cho detail-quota (Sơn/Phụ kiện/Bao bì)',
+  })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
-  @Type(() => QuotaMaterialLineDto)
-  items?: QuotaMaterialLineDto[];
+  @Type(() => QuotaDetailLineDto)
+  detailLines?: QuotaDetailLineDto[];
 
   @ApiProperty()
   @IsString()

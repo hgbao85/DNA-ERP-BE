@@ -10,7 +10,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { DetailGroup, ManhGroup, MfgRole, PermissionAction } from '../../generated/prisma/client';
+import { MfgRole, PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -60,26 +60,18 @@ export class SkusController {
     return this.skusService.remove(id);
   }
 
-  // ─── Manh quota (Sắt/Dây/Đinh) - nhập bởi 4 account chuyên trách, duyệt bởi KHSX ────
+  // ─── Manh quota (mảnh - Sắt/Dây/Đinh/Tán rút/Nút nhựa, nhập bởi acc Sắt, duyệt bởi KHSX) ──
 
-  @Post(':id/manh-quota/:group')
+  @Post(':id/manh-quota')
   @RequirePermissions(UPDATE)
-  updateManhQuota(
-    @Param('id') id: string,
-    @Param('group') group: ManhGroup,
-    @Body() dto: UpdateQuotaDto,
-  ) {
-    return this.skusService.updateManhQuota(id, group, dto);
+  updateManhQuota(@Param('id') id: string, @Body() dto: UpdateQuotaDto) {
+    return this.skusService.updateManhQuota(id, dto);
   }
 
-  @Post(':id/manh-quota/:group/review')
+  @Post(':id/manh-quota/review')
   @RequirePermissions(APPROVE)
-  reviewManhQuota(
-    @Param('id') id: string,
-    @Param('group') group: ManhGroup,
-    @Body() dto: ReviewQuotaDto,
-  ) {
-    return this.skusService.reviewManhQuota(id, group, dto);
+  reviewManhQuota(@Param('id') id: string, @Body() dto: ReviewQuotaDto) {
+    return this.skusService.reviewManhQuota(id, dto);
   }
 
   @Post(':id/approve-parts')
@@ -88,26 +80,18 @@ export class SkusController {
     return this.skusService.approveParts(id);
   }
 
-  // ─── Detail quota (Sơn/Phụ kiện/Bao bì) ─────────────────────────────────────
+  // ─── Detail quota (chi tiết - Sơn/Phụ kiện/Bao bì, nhập bởi acc chi tiết, duyệt bởi KHSX) ──
 
-  @Post(':id/detail-quota/:group')
+  @Post(':id/detail-quota')
   @RequirePermissions(UPDATE)
-  updateDetailQuota(
-    @Param('id') id: string,
-    @Param('group') group: DetailGroup,
-    @Body() dto: UpdateQuotaDto,
-  ) {
-    return this.skusService.updateDetailQuota(id, group, dto);
+  updateDetailQuota(@Param('id') id: string, @Body() dto: UpdateQuotaDto) {
+    return this.skusService.updateDetailQuota(id, dto);
   }
 
-  @Post(':id/detail-quota/:group/review')
+  @Post(':id/detail-quota/review')
   @RequirePermissions(APPROVE)
-  reviewDetailQuota(
-    @Param('id') id: string,
-    @Param('group') group: DetailGroup,
-    @Body() dto: ReviewQuotaDto,
-  ) {
-    return this.skusService.reviewDetailQuota(id, group, dto);
+  reviewDetailQuota(@Param('id') id: string, @Body() dto: ReviewQuotaDto) {
+    return this.skusService.reviewDetailQuota(id, dto);
   }
 
   @Post(':id/approve-detail')
