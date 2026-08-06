@@ -77,6 +77,7 @@ model User {
   piDecidedItems            ProductionInvoiceItem[] @relation("PIItemDecidedBy")
   cuttingProposalsRequested CuttingProposal[]       @relation("CuttingProposalRequestedBy")
   cuttingProposalsApproved  CuttingProposal[]       @relation("CuttingProposalApprovedBy")
+  stockLedgerEntries        StockLedger[]
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -374,6 +375,13 @@ model Warehouse {
   isActive  Boolean   @default(true)
   deletedAt DateTime?
 
+  fromStockLedgerEntries        StockLedger[]                  @relation("StockLedgerFromWarehouse")
+  toStockLedgerEntries          StockLedger[]                  @relation("StockLedgerToWarehouse")
+  stockQuants                   StockQuant[]
+  fromWarehouseTransfers        WarehouseTransfer[]            @relation("WarehouseTransferFromWarehouse")
+  toWarehouseTransfers          WarehouseTransfer[]            @relation("WarehouseTransferToWarehouse")
+  warehouseTransferReservations WarehouseTransferReservation[]
+
   @@map("warehouses")
 }
 
@@ -427,6 +435,8 @@ model ProductVariant {
   customer               Customer?               @relation(fields: [customerId], references: [id])
   packagingBoms          PackagingBom[]
   productionInvoiceItems ProductionInvoiceItem[]
+  stockLedgerEntries     StockLedger[]
+  stockQuants            StockQuant[]
 
   @@index([mfgProductId])
   @@index([customerId])
@@ -484,6 +494,8 @@ model SegmentSpec {
   pieceBoms                      PieceBom[]
   partBoms                       PartBom[]
   cuttingProposalPatternSegments CuttingProposalPatternSegment[]
+  stockLedgerEntries             StockLedger[]
+  stockQuants                    StockQuant[]
 
   @@unique([materialId, cutLengthMm])
   @@map("segment_spec")
@@ -811,13 +823,14 @@ model PlanForm {
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
-  salesOrder        SalesOrder?            @relation(fields: [salesOrderId], references: [id])
-  mfgProduct        MfgProduct             @relation(fields: [mfgProductId], references: [id])
-  productionInvoice ProductionInvoice?     @relation(fields: [productionInvoiceId], references: [id])
-  createdBy         User                   @relation(fields: [createdById], references: [id])
-  manhReviews       PlanFormManhReview[]
-  detailReviews     PlanFormDetailReview[]
-  bomRevisions      BomRevision[]
+  salesOrder         SalesOrder?            @relation(fields: [salesOrderId], references: [id])
+  mfgProduct         MfgProduct             @relation(fields: [mfgProductId], references: [id])
+  productionInvoice  ProductionInvoice?     @relation(fields: [productionInvoiceId], references: [id])
+  createdBy          User                   @relation(fields: [createdById], references: [id])
+  manhReviews        PlanFormManhReview[]
+  detailReviews      PlanFormDetailReview[]
+  bomRevisions       BomRevision[]
+  warehouseTransfers WarehouseTransfer[]
 
   @@index([salesOrderId])
   @@index([mfgProductId])
@@ -1103,4 +1116,169 @@ model CuttingProposalPatternSegment {
   @@index([patternId])
   @@index([segmentSpecId])
   @@map("cutting_proposal_pattern_segments")
+}
+
+// ===== Phase 3 — Kho vận lõi (Ledger Core, docs/dna-erp-db-schema.html mục 1.8) =====
+
+enum StockLedgerRefType {
+  PURCHASE
+  STEEL_ISSUE
+  QC_SCRAP
+  SURPLUS_POSTING
+  SEGMENT_CONSUME
+  FRAME_OUTPUT
+  FINISHED
+  MATERIAL_ISSUE
+  WAREHOUSE_TRANSFER
+  ADJUST
+}
+
+enum TransferStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
+enum ReservationStatus {
+  ACTIVE
+  RELEASED
+}
+
+/// Sổ cái kho bút toán kép - nguồn sự thật duy nhất của tồn kho. Append-only: không có
+/// update()/remove() nào ở service, chỉ StockLedgerService.postEntry() (dùng chung bởi mọi
+/// module ghi kho ở các Phase sau) + 1 ngoại lệ điều chỉnh thủ công (POST /stock-ledger/adjust).
+/// Mỗi dòng = 1 sự di chuyển from -> to, hàng không sinh ra/mất đi; tồn 1 kho =
+/// Σqty(to=kho) − Σqty(from=kho). stock_quant (bên dưới) cache lại số dư này qua trigger DB.
+model StockLedger {
+  id               BigInt             @id @default(autoincrement())
+  fromWarehouseId  BigInt
+  toWarehouseId    BigInt
+  /// XOR - đúng 1 trong 4 chân hàng khác NULL (CHECK ở migration, enforce lại ở service để
+  /// trả 400 rõ ràng thay vì để lộ lỗi CHECK constraint thô).
+  materialId       BigInt?
+  segmentSpecId    BigInt?
+  pieceId          BigInt?
+  productVariantId BigInt?
+  qty              Decimal            @db.Decimal(16, 4)
+  refType          StockLedgerRefType
+  /// Trỏ tới bản ghi nguồn gốc (vd warehouse_transfers.id) - không FK cứng vì đa bảng tuỳ
+  /// refType, giống audit_logs.recordId.
+  refId            String?
+  /// Chỉ có giá trị cho refType=ADJUST - HTTP layer bắt buộc header Idempotency-Key; unique để
+  /// service resolve-or-return khi client gọi lại đúng key (cùng idiom P2002 resolve-or-create
+  /// đã dùng ở SkusService.resolveDraftBomRevision).
+  idempotencyKey   String?            @unique
+  /// Không có trong bảng cột gốc ở dna-erp-db-schema.html mục 1.8, nhưng CreateStockAdjustmentDto
+  /// (mục 3.1 cùng tài liệu) có field này - thêm để không mất lý do điều chỉnh thủ công.
+  note             String?
+  createdAt        DateTime           @default(now())
+  createdById      String?
+
+  fromWarehouse  Warehouse       @relation("StockLedgerFromWarehouse", fields: [fromWarehouseId], references: [id])
+  toWarehouse    Warehouse       @relation("StockLedgerToWarehouse", fields: [toWarehouseId], references: [id])
+  material       Material?       @relation(fields: [materialId], references: [id])
+  segmentSpec    SegmentSpec?    @relation(fields: [segmentSpecId], references: [id])
+  piece          Piece?          @relation(fields: [pieceId], references: [id])
+  productVariant ProductVariant? @relation(fields: [productVariantId], references: [id])
+  createdBy      User?           @relation(fields: [createdById], references: [id])
+
+  @@index([toWarehouseId, materialId])
+  @@index([fromWarehouseId, materialId])
+  @@index([toWarehouseId, segmentSpecId])
+  @@index([fromWarehouseId, segmentSpecId])
+  @@index([toWarehouseId, pieceId])
+  @@index([fromWarehouseId, pieceId])
+  @@index([toWarehouseId, productVariantId])
+  @@index([fromWarehouseId, productVariantId])
+  @@map("stock_ledger")
+}
+
+/// Cache số dư tồn kho, materialize từ StockLedger bằng trigger DB (fn_sync_stock_quant, xem
+/// migration - AFTER INSERT ON stock_ledger) - KHÔNG phải nguồn sự thật, app không bao giờ
+/// ghi trực tiếp vào bảng này (chỉ đọc qua StockQuantService.findAll()).
+model StockQuant {
+  id               BigInt   @id @default(autoincrement())
+  warehouseId      BigInt
+  materialId       BigInt?
+  segmentSpecId    BigInt?
+  pieceId          BigInt?
+  productVariantId BigInt?
+  qty              Decimal  @default(0) @db.Decimal(16, 4)
+  updatedAt        DateTime @default(now())
+
+  warehouse      Warehouse       @relation(fields: [warehouseId], references: [id])
+  material       Material?       @relation(fields: [materialId], references: [id])
+  segmentSpec    SegmentSpec?    @relation(fields: [segmentSpecId], references: [id])
+  piece          Piece?          @relation(fields: [pieceId], references: [id])
+  productVariant ProductVariant? @relation(fields: [productVariantId], references: [id])
+
+  @@map("stock_quant")
+}
+
+/// Phiếu chuyển kho nội bộ - lớp workflow ngồi trên StockLedger. State machine 1 chiều
+/// PENDING -> CONFIRMED|REJECTED, không quay lại. confirm() là nơi duy nhất ghi StockLedger
+/// cho luồng transfer (qua StockLedgerService.postEntry(), ref_type=WAREHOUSE_TRANSFER).
+model WarehouseTransfer {
+  id              BigInt         @id @default(autoincrement())
+  code            String         @unique
+  fromWarehouseId BigInt
+  toWarehouseId   BigInt
+  status          TransferStatus @default(PENDING)
+  /// Chuẩn hoá từ pi_code (string) hiện tại ở mock.
+  planFormId      BigInt?
+  rejectionReason String?
+  note            String?
+  createdAt       DateTime       @default(now())
+  confirmedAt     DateTime?
+  rejectedAt      DateTime?
+
+  fromWarehouse Warehouse                      @relation("WarehouseTransferFromWarehouse", fields: [fromWarehouseId], references: [id])
+  toWarehouse   Warehouse                      @relation("WarehouseTransferToWarehouse", fields: [toWarehouseId], references: [id])
+  planForm      PlanForm?                      @relation(fields: [planFormId], references: [id])
+  items         WarehouseTransferItem[]
+  reservations  WarehouseTransferReservation[]
+
+  @@index([status])
+  @@index([toWarehouseId, status])
+  @@map("warehouse_transfers")
+}
+
+/// Dòng vật tư trong 1 phiếu chuyển kho.
+model WarehouseTransferItem {
+  id           BigInt  @id @default(autoincrement())
+  transferId   BigInt
+  /// Nullable - kế thừa hạn chế của mock (match theo materialName chuẩn hoá khi chưa chọn đúng
+  /// Material thật, xem dna-erp-db-schema.html mục 1.8 "câu hỏi mở"). Chỉ dòng có materialId
+  /// mới ghi được StockLedger lúc confirm() - dòng free-text không có gì để XOR vào ledger.
+  materialId   BigInt?
+  materialName String
+  unit         String
+  /// Đã clamp theo tồn khả dụng (stock_quant trừ reservation ACTIVE) tại thời điểm tạo phiếu.
+  quantity     Decimal @db.Decimal(16, 4)
+  note         String?
+
+  transfer WarehouseTransfer @relation(fields: [transferId], references: [id])
+  material Material?         @relation(fields: [materialId], references: [id])
+
+  @@index([transferId])
+  @@map("warehouse_transfer_items")
+}
+
+/// Giữ chỗ tồn kho khi phiếu đang PENDING, chặn 2 phiếu cùng lúc "double-book" cùng 1 phần
+/// tồn kho khả dụng - RELEASED khi phiếu CONFIRMED/REJECTED (xem WarehouseTransfersService).
+model WarehouseTransferReservation {
+  id          BigInt            @id @default(autoincrement())
+  transferId  BigInt
+  warehouseId BigInt
+  materialId  BigInt?
+  quantity    Decimal           @db.Decimal(16, 4)
+  status      ReservationStatus @default(ACTIVE)
+  createdAt   DateTime          @default(now())
+
+  transfer  WarehouseTransfer @relation(fields: [transferId], references: [id])
+  warehouse Warehouse         @relation(fields: [warehouseId], references: [id])
+  material  Material?         @relation(fields: [materialId], references: [id])
+
+  @@index([warehouseId, materialId])
+  @@map("warehouse_transfer_reservations")
 }
