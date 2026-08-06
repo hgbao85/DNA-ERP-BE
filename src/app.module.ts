@@ -39,6 +39,8 @@ import { BomRevisionsModule } from './modules/bom-revisions/bom-revisions.module
 import { SalesOrdersModule } from './modules/sales-orders/sales-orders.module';
 import { SkusModule } from './modules/skus/skus.module';
 import { ProductionInvoicesModule } from './modules/production-invoices/production-invoices.module';
+import { StockModule } from './modules/stock/stock.module';
+import { WarehouseTransfersModule } from './modules/warehouse-transfers/warehouse-transfers.module';
 
 @Module({
   imports: [
@@ -97,6 +99,8 @@ import { ProductionInvoicesModule } from './modules/production-invoices/producti
     SalesOrdersModule,
     SkusModule,
     ProductionInvoicesModule,
+    StockModule,
+    WarehouseTransfersModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

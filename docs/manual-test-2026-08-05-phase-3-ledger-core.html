@@ -1,0 +1,439 @@
+<title>Hướng dẫn test tay — Phase 3: Kho vận lõi (Ledger Core)</title>
+<style>
+  :root{
+    --bg:#F4F5F2; --surface:#FFFFFF; --surface-2:#EDEFEA;
+    --ink:#16211E; --ink-soft:#4B5754; --ink-faint:#7C8884;
+    --border:#DCE1DD; --border-soft:#E9ECE7;
+    --accent:#1F7A6C; --accent-ink:#0F4A40; --accent-soft:#E4F1EC; --accent-soft-border:#BFDDD3;
+    --good:#2E7D46; --good-bg:#E7F5EA; --good-border:#C3E4CB;
+    --bad:#B3261E; --bad-bg:#FBEAE8; --bad-border:#F0C6C1;
+    --warn:#96600A; --warn-bg:#FBF1DE; --warn-border:#EBD6A3;
+    --info:#4B5560; --info-bg:#EEF0F1; --info-border:#D7DBDD;
+    --role-admin:#4B5560; --role-admin-bg:#EEF0F1;
+    --role-wh:#1F7A6C; --role-wh-bg:#E4F1EC;
+    --role-khsx:#6B4FA0; --role-khsx-bg:#EDE7F6;
+    --shadow: 0 1px 2px rgba(20,30,26,.04), 0 4px 14px rgba(20,30,26,.05);
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "Noto Serif", serif;
+    --sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0F1613; --surface:#141D1A; --surface-2:#182320;
+      --ink:#E7ECE9; --ink-soft:#A9B4B0; --ink-faint:#7C8985;
+      --border:#26322D; --border-soft:#1E2925;
+      --accent:#57C9AE; --accent-ink:#8FDFCB; --accent-soft:#17332C; --accent-soft-border:#26473D;
+      --good:#74CE8C; --good-bg:#152A1B; --good-border:#25452E;
+      --bad:#FF8E83; --bad-bg:#301715; --bad-border:#4A2521;
+      --warn:#E8B463; --warn-bg:#2E2411; --warn-border:#493A1C;
+      --info:#A6B0AC; --info-bg:#1B2321; --info-border:#2B3532;
+      --role-admin:#A6B0AC; --role-admin-bg:#1B2321;
+      --role-wh:#57C9AE; --role-wh-bg:#17332C;
+      --role-khsx:#B39DDB; --role-khsx-bg:#2A2140;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 20px rgba(0,0,0,.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0F1613; --surface:#141D1A; --surface-2:#182320;
+    --ink:#E7ECE9; --ink-soft:#A9B4B0; --ink-faint:#7C8985;
+    --border:#26322D; --border-soft:#1E2925;
+    --accent:#57C9AE; --accent-ink:#8FDFCB; --accent-soft:#17332C; --accent-soft-border:#26473D;
+    --good:#74CE8C; --good-bg:#152A1B; --good-border:#25452E;
+    --bad:#FF8E83; --bad-bg:#301715; --bad-border:#4A2521;
+    --warn:#E8B463; --warn-bg:#2E2411; --warn-border:#493A1C;
+    --info:#A6B0AC; --info-bg:#1B2321; --info-border:#2B3532;
+    --role-admin:#A6B0AC; --role-admin-bg:#1B2321;
+    --role-wh:#57C9AE; --role-wh-bg:#17332C;
+    --role-khsx:#B39DDB; --role-khsx-bg:#2A2140;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 20px rgba(0,0,0,.28);
+  }
+  :root[data-theme="light"]{
+    --bg:#F4F5F2; --surface:#FFFFFF; --surface-2:#EDEFEA;
+    --ink:#16211E; --ink-soft:#4B5754; --ink-faint:#7C8884;
+    --border:#DCE1DD; --border-soft:#E9ECE7;
+    --accent:#1F7A6C; --accent-ink:#0F4A40; --accent-soft:#E4F1EC; --accent-soft-border:#BFDDD3;
+    --good:#2E7D46; --good-bg:#E7F5EA; --good-border:#C3E4CB;
+    --bad:#B3261E; --bad-bg:#FBEAE8; --bad-border:#F0C6C1;
+    --warn:#96600A; --warn-bg:#FBF1DE; --warn-border:#EBD6A3;
+    --info:#4B5560; --info-bg:#EEF0F1; --info-border:#D7DBDD;
+    --role-admin:#4B5560; --role-admin-bg:#EEF0F1;
+    --role-wh:#1F7A6C; --role-wh-bg:#E4F1EC;
+    --role-khsx:#6B4FA0; --role-khsx-bg:#EDE7F6;
+    --shadow: 0 1px 2px rgba(20,30,26,.04), 0 4px 14px rgba(20,30,26,.05);
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink); font-family:var(--sans);
+    font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  ::selection{ background:var(--accent-soft); color:var(--accent-ink); }
+  a{ color:var(--accent-ink); }
+  code{ font-family:var(--mono); font-size:.88em; background:var(--surface-2); padding:1px 6px; border-radius:4px; }
+  .wrap{ max-width:900px; margin:0 auto; padding:56px 24px 96px; }
+
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--accent-ink); font-weight:600; margin:0 0 10px;
+  }
+  h1{
+    font-family:var(--serif); font-weight:600; font-size:clamp(26px,4vw,36px);
+    line-height:1.18; margin:0 0 12px; text-wrap:balance; letter-spacing:-.01em;
+  }
+  .dek{ color:var(--ink-soft); font-size:16px; max-width:68ch; margin:0 0 28px; }
+  .meta-row{
+    display:flex; flex-wrap:wrap; gap:10px 28px; padding:18px 0; margin-bottom:8px;
+    border-top:1px solid var(--border); border-bottom:1px solid var(--border);
+  }
+  .meta-item{ display:flex; flex-direction:column; gap:3px; }
+  .meta-item .k{ font-family:var(--mono); font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-faint); }
+  .meta-item .v{ font-size:13.5px; color:var(--ink); font-weight:500; }
+
+  section{ margin-top:52px; }
+  .sec-head{ display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:16px; flex-wrap:wrap; }
+  h2{ font-family:var(--serif); font-weight:600; font-size:22px; margin:0; letter-spacing:-.01em; }
+  .sec-note{ font-size:12.5px; color:var(--ink-faint); font-family:var(--mono); }
+  p{ margin:0 0 14px; }
+  .lede{ color:var(--ink-soft); max-width:72ch; }
+
+  .role{
+    display:inline-flex; align-items:center; font-family:var(--mono); font-size:10.5px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.04em; padding:3px 9px; border-radius:5px; white-space:nowrap;
+  }
+  .role-admin{ background:var(--role-admin-bg); color:var(--role-admin); }
+  .role-wh{ background:var(--role-wh-bg); color:var(--role-wh); }
+  .role-khsx{ background:var(--role-khsx-bg); color:var(--role-khsx); }
+
+  .callout{
+    background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent);
+    border-radius:10px; padding:18px 20px; box-shadow:var(--shadow);
+  }
+  .callout.warn{ border-left-color:var(--warn); background:var(--warn-bg); }
+  .callout.warn h3{ color:var(--warn); }
+  .callout.bad{ border-left-color:var(--bad); background:var(--bad-bg); }
+  .callout.bad h3{ color:var(--bad); }
+  .callout.good{ border-left-color:var(--good); background:var(--good-bg); }
+  .callout.good h3{ color:var(--good); }
+  .callout h3{ margin:0 0 8px; font-family:var(--sans); font-size:14px; font-weight:700; }
+  .callout ul, .callout ol{ margin:8px 0 0; padding-left:20px; }
+  .callout li{ margin-bottom:6px; color:var(--ink-soft); font-size:14px; }
+  .callout li b{ color:var(--ink); }
+
+  .scenario{
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:22px 24px; margin-bottom:18px; box-shadow:var(--shadow);
+  }
+  .scenario-top{ display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:4px; flex-wrap:wrap; }
+  .scenario-id{ font-family:var(--mono); font-size:11px; color:var(--ink-faint); }
+  .scenario h3{ margin:2px 0 6px; font-family:var(--sans); font-size:16.5px; font-weight:700; letter-spacing:-.005em; }
+  .scenario .goal{ color:var(--ink-soft); font-size:13.5px; margin-bottom:14px; }
+  .scenario .pre{
+    font-size:12.5px; color:var(--ink-faint); background:var(--surface-2); border-radius:6px;
+    padding:8px 12px; margin-bottom:14px;
+  }
+  .scenario .pre b{ color:var(--ink-soft); }
+  ol.steps{ margin:0; padding-left:0; list-style:none; counter-reset:step; }
+  ol.steps li{
+    counter-increment:step; padding:10px 0 10px 34px; position:relative; font-size:14px; color:var(--ink);
+    border-top:1px solid var(--border-soft);
+  }
+  ol.steps li:first-child{ border-top:none; }
+  ol.steps li::before{
+    content:counter(step); position:absolute; left:0; top:10px; width:22px; height:22px; border-radius:50%;
+    background:var(--accent-soft); color:var(--accent-ink); font-family:var(--mono); font-size:11px; font-weight:700;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps .expect{
+    display:block; margin-top:6px; font-size:12.5px; color:var(--accent-ink); background:var(--accent-soft);
+    border-radius:6px; padding:6px 10px;
+  }
+  ol.steps .expect b{ font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:.05em; margin-right:6px; }
+
+  pre.block{
+    background:#0B1210; color:#D9E4DF; border:1px solid var(--border); border-radius:8px;
+    padding:12px 14px; overflow-x:auto; font-size:12.5px; line-height:1.6; font-family:var(--mono);
+    margin:8px 0 0;
+  }
+  :root[data-theme="light"] pre.block, :root:not([data-theme="dark"]) pre.block{
+    background:#12201C; color:#DCEAE5;
+  }
+  .block-label{ font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-faint); margin:12px 0 2px; }
+
+  .checklist{ display:flex; flex-direction:column; gap:10px; }
+  .check-row{
+    display:grid; grid-template-columns:22px 1fr; align-items:start; gap:12px;
+    background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 16px;
+  }
+  .check-row .box{
+    width:18px; height:18px; border:2px solid var(--border-soft); border-radius:4px; margin-top:1px;
+  }
+  .check-row .box.done{
+    border-color:var(--good); background:var(--good); position:relative;
+  }
+  .check-row .box.done::after{
+    content:"✓"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:var(--surface); font-size:12px; font-weight:700;
+  }
+  .check-row.done{ border-left:3px solid var(--good); }
+  .check-row .body b{ display:block; font-size:13.5px; margin-bottom:2px; }
+  .check-row .body span{ font-size:12.5px; color:var(--ink-soft); }
+
+  .tbl-scroll{ overflow-x:auto; border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow); background:var(--surface); }
+  table{ width:100%; border-collapse:collapse; min-width:640px; }
+  thead th{
+    text-align:left; font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--ink-faint); font-weight:600; padding:10px 14px; border-bottom:1px solid var(--border);
+    background:var(--surface-2);
+  }
+  tbody td{ padding:10px 14px; border-bottom:1px solid var(--border-soft); font-size:13px; vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+
+  .method{
+    display:inline-flex; justify-content:center; min-width:52px; font-weight:700; font-size:10.5px;
+    padding:3px 7px; border-radius:5px; letter-spacing:.02em; font-family:var(--sans); margin-right:8px;
+  }
+  .m-get{ background:#E3EDF7; color:#2B6CB0; }
+  .m-post{ background:var(--good-bg); color:var(--good); }
+  :root[data-theme="dark"] .m-get{ background:#1B2C3D; color:#6FA3D8; }
+
+  footer{ margin-top:64px; padding-top:20px; border-top:1px solid var(--border); font-size:12px; color:var(--ink-faint); font-family:var(--mono); }
+
+  @media (max-width:600px){
+    .wrap{ padding:36px 16px 64px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <p class="eyebrow">Hướng dẫn kiểm thử thủ công</p>
+  <h1>Phase 3 — Kho vận lõi (Ledger Core): tự test qua API</h1>
+  <p class="dek">
+    Phase 3 <b>chỉ mới có Backend</b> — chưa có màn hình FE nào nối dây sang API thật (xem callout
+    ngay dưới). Vì vậy hướng dẫn này test thẳng bằng HTTP request (curl/Postman/Swagger UI ở
+    <code>/api/docs</code>), không phải thao tác trên trình duyệt như 2 tài liệu manual-test trước.
+  </p>
+
+  <div class="meta-row">
+    <div class="meta-item"><span class="k">Phạm vi</span><span class="v">stock-ledger, stock-quant, warehouse-transfers (Phase 3)</span></div>
+    <div class="meta-item"><span class="k">Cách test</span><span class="v">HTTP trực tiếp — không qua UI</span></div>
+    <div class="meta-item"><span class="k">Trạng thái</span><span class="v">Đã smoke-test bằng service thật trên DB thật (05/08/2026) — xem changelog cùng ngày. Tài liệu này để <b>bạn</b> tự chạy lại qua HTTP thật, xác nhận layer controller/guard/DTO cũng đúng (smoke test trước đó gọi thẳng service, bỏ qua HTTP layer).</span></div>
+  </div>
+
+  <div class="callout warn">
+    <h3>⚠ Vì sao không test qua trình duyệt được</h3>
+    <p style="margin:0">
+      FE hiện có sẵn các trang <code>WarehouseTransfersPage.tsx</code> (Admin), <code>InternalTransferSections.tsx</code>,
+      <code>KhoChuyenKiemPage.tsx</code>, <code>WarehouseXuatPage.tsx</code> — nhưng tất cả vẫn đang đọc/ghi qua
+      <code>lib/mock/services/warehouse-transfer.service.ts</code> (mock cũ), <b>chưa</b> có adapter nào gọi
+      sang <code>/stock-ledger</code>/<code>/stock-quant</code>/<code>/warehouse-transfers</code> thật. Nối dây
+      FE sang BE thật là việc của lượt sau (giống cách Việc 1/2 đã làm cho Sales/SKU) — chưa nằm trong phạm vi
+      Phase 3 này.
+    </p>
+  </div>
+
+  <!-- ================= PREREQUISITES ================= -->
+  <section>
+    <div class="callout">
+      <h3>Chuẩn bị trước khi test</h3>
+      <ol>
+        <li><b>Xác nhận migration đã lên DB</b> — chạy <code>npx prisma migrate status</code> trong <code>D:\DNA-ERP-BE</code>, phải thấy "Database schema is up to date" (migration <code>20260805120000_add_stock_ledger_core</code> đã áp dụng sẵn theo changelog cùng ngày — bước này chỉ để xác nhận lại).</li>
+        <li><b>Có JWT hợp lệ cho 3 vai trò</b> — đăng nhập qua <code>POST /auth/login</code> lấy token cho: <span class="role role-admin">ADMIN</span> (tạo material/warehouse phụ nếu cần, xem toàn bộ), <span class="role role-wh">WAREHOUSE_STAFF</span> với <code>warehouseScope='phoi-son-han'</code> (tạo phiếu), 1 tài khoản <code>warehouseScope='vat-tu-tp'</code> (xác nhận/từ chối phiếu), <span class="role role-khsx">PRODUCTION_PLANNER</span> (chỉ cần <code>STOCK:VIEW</code>).</li>
+        <li><b>Có sẵn ít nhất 1 Material thật</b> ở <code>Admin &gt; Vật tư</code> (hoặc <code>POST /materials</code>) — ghi lại <code>id</code>, dùng xuyên suốt các bước dưới. Ví dụ dùng <code>code=SAT-25</code>.</li>
+        <li><b>Lấy id 3 kho</b> qua <code>GET /warehouses</code>: <code>SUPPLIER</code> (ảo), <code>phoi-son-han</code>, <code>vat-tu-tp</code> — 9 kho này đã seed sẵn từ Phase 2, không cần tạo.</li>
+      </ol>
+    </div>
+    <div class="block-label">Đăng nhập lấy token</div>
+    <pre class="block">curl -X POST http://localhost:3001/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "kho1", "password": "..."}'
+# -&gt; { "data": { "accessToken": "eyJ..." } }
+export TOKEN_WH_PSH="eyJ..."   # warehouseScope=phoi-son-han
+export TOKEN_WH_VTTP="eyJ..."  # warehouseScope=vat-tu-tp
+export TOKEN_ADMIN="eyJ..."</pre>
+  </section>
+
+  <!-- ================= KỊCH BẢN A: STOCK LEDGER ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Kịch bản A — Stock Ledger: postEntry() qua endpoint adjust</h2>
+      <span class="sec-note">/stock-ledger</span>
+    </div>
+    <p class="lede">Đây là cách duy nhất ghi <code>stock_ledger</code> qua HTTP công khai (mọi bút toán khác chỉ ghi được từ service nội bộ, vd <code>WarehouseTransfersService.confirm()</code>).</p>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">A1</span> <span class="role role-admin">ADMIN</span></div></div>
+      <h3>Nhập kho thủ công (SUPPLIER → phoi-son-han)</h3>
+      <div class="goal">Mô phỏng nhận hàng từ NCC vào thẳng kho vật lý, xác nhận trigger đồng bộ <code>stock_quant</code>.</div>
+      <div class="block-label">Request</div>
+      <pre class="block">curl -X POST http://localhost:3001/api/v1/stock-ledger/adjust \
+  -H "Authorization: Bearer $TOKEN_ADMIN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: test-a1-$(date +%s)" \
+  -d '{
+    "fromWarehouseId": "&lt;id kho SUPPLIER&gt;",
+    "toWarehouseId": "&lt;id kho phoi-son-han&gt;",
+    "materialId": "&lt;id material&gt;",
+    "qty": 100,
+    "note": "Nhập kho test A1"
+  }'</pre>
+      <ol class="steps">
+        <li>Gửi request trên.<span class="expect"><b>Kỳ vọng</b>201, trả về <code>StockLedgerResponseDto</code> với <code>refType="ADJUST"</code>, <code>qty=100</code>.</span></li>
+        <li>Gọi <code>GET /stock-quant?materialId=&lt;id material&gt;</code>.<span class="expect"><b>Kỳ vọng</b>2 dòng: kho <code>phoi-son-han</code> <code>qty=100</code>, kho <code>SUPPLIER</code> <code>qty=-100</code> — chứng minh trigger DB chạy đúng, không cần code app tự cộng trừ.</span></li>
+      </ol>
+    </div>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">A2</span> <span class="role role-admin">ADMIN</span></div></div>
+      <h3>Thiếu header Idempotency-Key</h3>
+      <div class="goal">Xác nhận endpoint từ chối rõ ràng thay vì ghi bừa.</div>
+      <ol class="steps">
+        <li>Lặp lại request A1 nhưng bỏ header <code>Idempotency-Key</code>.<span class="expect"><b>Kỳ vọng</b>400, message "Header Idempotency-Key là bắt buộc".</span></li>
+      </ol>
+    </div>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">A3</span> <span class="role role-admin">ADMIN</span></div></div>
+      <h3>Gọi lại đúng 1 Idempotency-Key — không tạo bút toán trùng</h3>
+      <ol class="steps">
+        <li>Gửi lại y hệt request A1 (cùng key, cùng qty) 2-3 lần liên tiếp.<span class="expect"><b>Kỳ vọng</b>Mỗi lần đều trả 201 với <b>cùng 1 <code>id</code></b> — không tạo dòng mới. <code>GET /stock-quant</code> vẫn giữ nguyên <code>qty=100</code>, không cộng dồn thêm.</span></li>
+      </ol>
+    </div>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">A4</span> <span class="role role-admin">ADMIN</span></div></div>
+      <h3>Vi phạm XOR — gửi 2 chân hàng cùng lúc</h3>
+      <ol class="steps">
+        <li>Gửi request A1 nhưng thêm cả <code>"pieceId": "1"</code> bên cạnh <code>materialId</code>.<span class="expect"><b>Kỳ vọng</b>400, message nêu rõ phải truyền đúng 1 trong 4 chân hàng.</span></li>
+        <li>Gửi lại nhưng bỏ hết cả <code>materialId</code> lẫn 3 chân còn lại.<span class="expect"><b>Kỳ vọng</b>400, cùng message.</span></li>
+      </ol>
+    </div>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">A5</span> <span class="role role-khsx">PRODUCTION_PLANNER</span></div></div>
+      <h3>KHSX chỉ xem được, không ghi được</h3>
+      <ol class="steps">
+        <li><code>GET /stock-ledger</code> với token KHSX.<span class="expect"><b>Kỳ vọng</b>200 — KHSX có <code>STOCK:VIEW</code>.</span></li>
+        <li><code>POST /stock-ledger/adjust</code> với token KHSX.<span class="expect"><b>Kỳ vọng</b>403 — KHSX không có <code>STOCK:UPDATE</code> (chỉ ADMIN mới có, theo thiết kế "Loại 1" đang để pending cho tới khi có "Kho trưởng").</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ================= KỊCH BẢN B: WAREHOUSE TRANSFERS ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Kịch bản B — Warehouse Transfers: tạo → xác nhận / từ chối</h2>
+      <span class="sec-note">/warehouse-transfers — trọng tâm</span>
+    </div>
+    <p class="lede">Dùng đúng vật tư và số dư đã tạo ở Kịch bản A (100 đơn vị tại <code>phoi-son-han</code>).</p>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">B1</span> <span class="role role-wh">Kho phoi-son-han</span></div></div>
+      <h3>Tạo phiếu chuyển kho hợp lệ</h3>
+      <div class="pre"><b>Lưu ý</b> Token phải có <code>warehouseScope=phoi-son-han</code> — khớp đúng <code>fromWarehouseId</code>, nếu không sẽ bị 403.</div>
+      <div class="block-label">Request</div>
+      <pre class="block">curl -X POST http://localhost:3001/api/v1/warehouse-transfers \
+  -H "Authorization: Bearer $TOKEN_WH_PSH" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fromWarehouseId": "&lt;id phoi-son-han&gt;",
+    "toWarehouseId": "&lt;id vat-tu-tp&gt;",
+    "items": [
+      { "materialId": "&lt;id material&gt;", "materialName": "SAT-25", "unit": "kg", "quantity": 40 }
+    ]
+  }'</pre>
+      <ol class="steps">
+        <li>Gửi request trên.<span class="expect"><b>Kỳ vọng</b>201, <code>status="PENDING"</code>, <code>code</code> dạng <code>CK-2026-XXX</code>.</span></li>
+        <li>Ghi lại <code>id</code> phiếu vừa tạo — dùng cho B3/B4.<span class="expect"></span></li>
+      </ol>
+    </div>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">B2</span> <span class="role role-wh">Kho phoi-son-han</span></div></div>
+      <h3>Route sai chiều bị chặn</h3>
+      <ol class="steps">
+        <li>Lặp lại B1 nhưng đảo ngược: <code>fromWarehouseId=vat-tu-tp</code>, <code>toWarehouseId=phoi-son-han</code>.<span class="expect"><b>Kỳ vọng</b>400 — không nằm trong <code>TRANSFER_ROUTES</code> (chỉ cho phép <code>phoi-son-han→vat-tu-tp</code> và <code>vat-tu-tp→thanh-pham</code>, đúng 1 chiều).</span></li>
+        <li>Thử <code>fromWarehouseId=phoi-son-han</code>, <code>toWarehouseId=thanh-pham</code> (nhảy cóc 1 bước).<span class="expect"><b>Kỳ vọng</b>400 — cùng lý do, phải đi đúng từng bước 1 trong chuỗi.</span></li>
+      </ol>
+    </div>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">B3</span> <span class="role role-wh">Kho vat-tu-tp</span></div></div>
+      <h3>Kho sai không xác nhận được phiếu của kho khác</h3>
+      <ol class="steps">
+        <li>Đăng nhập tài khoản <code>warehouseScope=vat-tu-tp</code>, gọi <code>POST /warehouse-transfers/&lt;id B1&gt;/confirm</code> — <b>đúng vai trò lẽ ra được phép</b> (kho đích).<span class="expect"><b>Kỳ vọng</b>200, không lỗi (đây là happy path thật, xem B4 nếu muốn xác nhận luôn).</span></li>
+        <li>Nếu muốn test riêng trường hợp <b>sai kho</b>: tạo phiếu B1 mới rồi gọi <code>confirm</code> bằng token <code>$TOKEN_WH_PSH</code> (kho nguồn, không phải kho đích).<span class="expect"><b>Kỳ vọng</b>403 — message nêu rõ caller bị giới hạn ở kho nào, không được xác nhận kho nào.</span></li>
+      </ol>
+    </div>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">B4</span> <span class="role role-wh">Kho vat-tu-tp</span></div></div>
+      <h3>Xác nhận phiếu — kiểm tra ledger + quant + reservation</h3>
+      <pre class="block">curl -X POST http://localhost:3001/api/v1/warehouse-transfers/&lt;id&gt;/confirm \
+  -H "Authorization: Bearer $TOKEN_WH_VTTP"</pre>
+      <ol class="steps">
+        <li>Gửi request trên (dùng phiếu tạo ở B1, nếu đã confirm ở B3 thì bỏ qua bước này).<span class="expect"><b>Kỳ vọng</b>200, <code>status="CONFIRMED"</code>, <code>confirmedAt</code> có giá trị.</span></li>
+        <li><code>GET /stock-quant?materialId=&lt;id material&gt;</code>.<span class="expect"><b>Kỳ vọng</b><code>phoi-son-han</code> còn <code>60</code> (100-40), <code>vat-tu-tp</code> có <code>40</code>.</span></li>
+        <li><code>GET /stock-ledger?refType=WAREHOUSE_TRANSFER</code>.<span class="expect"><b>Kỳ vọng</b>Có đúng 1 dòng mới, <code>refId</code> = id phiếu chuyển kho.</span></li>
+        <li>Gọi lại <code>confirm</code> lần 2 trên đúng phiếu này.<span class="expect"><b>Kỳ vọng</b>409 — "chỉ PENDING mới xác nhận được", không ghi thêm ledger.</span></li>
+      </ol>
+    </div>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">B5</span> <span class="role role-wh">Kho phoi-son-han</span> → <span class="role role-wh">Kho vat-tu-tp</span></div></div>
+      <h3>Tạo phiếu thứ 2 rồi từ chối — không đụng tồn kho</h3>
+      <ol class="steps">
+        <li>Lặp lại B1 với <code>quantity: 20</code>.<span class="expect"></span></li>
+        <li><code>POST /warehouse-transfers/&lt;id&gt;/reject</code> bằng token <code>vat-tu-tp</code>, body <code>{"rejectionReason": "test tu choi"}</code>.<span class="expect"><b>Kỳ vọng</b>200, <code>status="REJECTED"</code>, <code>rejectionReason</code> đúng như đã gửi.</span></li>
+        <li>Kiểm tra lại <code>GET /stock-quant</code>.<span class="expect"><b>Kỳ vọng</b>Số dư <b>không đổi</b> so với sau B4 (<code>phoi-son-han=60</code>) — reject() không bao giờ ghi ledger.</span></li>
+      </ol>
+    </div>
+
+    <div class="scenario">
+      <div class="scenario-top"><div><span class="scenario-id">B6</span> <span class="role role-wh">Kho phoi-son-han</span></div></div>
+      <h3>Xin nhiều hơn tồn khả dụng — bị clamp hoặc từ chối</h3>
+      <ol class="steps">
+        <li>Lặp lại B1 với <code>quantity: 999999</code> (vượt xa tồn thật).<span class="expect"><b>Kỳ vọng</b>Vẫn 201, nhưng phiếu tạo ra chỉ giữ đúng số lượng tồn khả dụng thật tại thời điểm tạo (không phải 999999) — kiểm tra qua <code>GET /warehouse-transfers/&lt;id&gt;</code> xem <code>items[0].quantity</code>.</span></li>
+        <li>Nếu tồn khả dụng lúc này bằng 0 (đã dùng hết ở các bước trước), thử lại với vật tư/kho chưa từng nhận hàng.<span class="expect"><b>Kỳ vọng</b>400 — "Không đủ tồn kho khả dụng để tạo phiếu chuyển kho cho (các) vật tư đã chọn".</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ================= DB VERIFICATION ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Đối chiếu qua Prisma Studio</h2>
+      <span class="sec-note tag" style="font-family:var(--mono); color:var(--ink-faint);">tuỳ chọn — cho ai muốn soát sâu hơn</span>
+    </div>
+    <p class="lede">Chạy <code>npx prisma studio</code> trong <code>D:\DNA-ERP-BE</code> để xem trực tiếp bảng dữ liệu.</p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>Sau bước</th><th>Bảng cần xem</th><th>Kiểm tra gì</th></tr></thead>
+        <tbody>
+          <tr><td>A1</td><td><code>stock_ledger</code></td><td>1 dòng mới, <code>refType=ADJUST</code>, <code>idempotencyKey</code> có giá trị, <code>note="Nhập kho test A1"</code>.</td></tr>
+          <tr><td>A1</td><td><code>stock_quant</code></td><td>2 dòng (SUPPLIER âm, phoi-son-han dương) — tự sinh ra hoàn toàn bởi trigger, không có code app nào insert trực tiếp.</td></tr>
+          <tr><td>B1</td><td><code>warehouse_transfers</code>, <code>warehouse_transfer_items</code></td><td><code>status=PENDING</code>; đối chiếu <code>warehouse_transfer_reservations.status=ACTIVE</code> cùng <code>transferId</code>.</td></tr>
+          <tr><td>B4 (confirm)</td><td><code>warehouse_transfer_reservations</code></td><td><code>status</code> chuyển <code>ACTIVE → RELEASED</code>.</td></tr>
+          <tr><td>B4 (confirm)</td><td><code>stock_ledger</code></td><td>1 dòng mới <code>refType=WAREHOUSE_TRANSFER</code>, <code>refId</code> = id phiếu (dạng text, không FK cứng).</td></tr>
+          <tr><td>B5 (reject)</td><td><code>stock_ledger</code></td><td><b>Không có dòng mới nào</b> liên quan tới phiếu này.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= REGRESSION ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Không cần test lại (đã smoke-test bằng service thật)</h2>
+    </div>
+    <p class="lede">Changelog cùng ngày (<code>changelog-2026-08-05-phase-3-ledger-core.html</code>) đã chạy 16 kịch bản tương đương các mục trên bằng cách gọi thẳng <code>StockLedgerService</code>/<code>WarehouseTransfersService</code> trên DB thật rồi dọn sạch — PASS toàn bộ. Tài liệu này chỉ khác ở chỗ đi qua đúng tầng HTTP thật (controller + guard + DTO validation), phần logic nghiệp vụ bên trong đã được xác nhận đúng rồi.</p>
+    <div class="checklist">
+      <div class="check-row done"><span class="box done"></span><div class="body"><b>Trigger fn_sync_stock_quant() đồng bộ đúng cả 4 loại hàng (material/segment/piece/variant)</b><span>Đã verify nhánh material trong smoke test; 3 nhánh còn lại cùng code path (chỉ khác cột), rủi ro thấp nhưng chưa có dữ liệu thật loại piece/variant để test tay — để dành khi Phase 7/11 (Phôi, Đóng gói) bắt đầu ghi các loại hàng đó.</span></div></div>
+    </div>
+  </section>
+
+  <footer>
+    dna-erp · hướng dẫn test tay · Phase 3 (Ledger Core) — API-only, chưa có UI · viết 2026-08-05
+  </footer>
+
+</div>
