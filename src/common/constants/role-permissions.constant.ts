@@ -166,17 +166,6 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, actions: 'ALL' },
   ],
-  // 4 account chuyên trách nhập định mức SKU (mirror đúng mock: Sắt / Dây-Sơn / Phụ kiện-Bao
-  // bì) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE (duyệt là KHSX).
-  // --- Phase 3 (Kho vận lõi / Ledger Core) ---
-  // WAREHOUSE_STAFF: kho nguồn tạo phiếu chuyển kho, kho đích xác nhận/từ chối (cả 2 thao tác
-  // đều dùng chung permission WAREHOUSE_TRANSFER - phân biệt kho nào được thao tác qua
-  // warehouseScope, enforce ở WarehouseTransfersService, không phải RBAC). STOCK:VIEW để tra
-  // tồn kho khả dụng trước khi tạo phiếu.
-  [BUSINESS_ROLES.WAREHOUSE_STAFF]: [
-    { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
-    { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, actions: 'ALL' },
-  ],
   // 2 account chuyên trách nhập định mức SKU (Sắt = định mức mảnh; Phụ kiện/Bao bì = định mức
   // chi tiết, gồm cả Sơn) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE
   // (duyệt là KHSX).
