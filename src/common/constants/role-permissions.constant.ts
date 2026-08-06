@@ -152,25 +152,23 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   ],
   // 4 account chuyên trách nhập định mức SKU (mirror đúng mock: Sắt / Dây-Sơn / Phụ kiện-Bao
   // bì) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE (duyệt là KHSX).
+  // --- Phase 3 (Kho vận lõi / Ledger Core) ---
+  // WAREHOUSE_STAFF: kho nguồn tạo phiếu chuyển kho, kho đích xác nhận/từ chối (cả 2 thao tác
+  // đều dùng chung permission WAREHOUSE_TRANSFER - phân biệt kho nào được thao tác qua
+  // warehouseScope, enforce ở WarehouseTransfersService, không phải RBAC). STOCK:VIEW để tra
+  // tồn kho khả dụng trước khi tạo phiếu.
+  [BUSINESS_ROLES.WAREHOUSE_STAFF]: [
+    { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
+    { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, actions: 'ALL' },
+  ],
+  // 2 account chuyên trách nhập định mức SKU (Sắt = định mức mảnh; Phụ kiện/Bao bì = định mức
+  // chi tiết, gồm cả Sơn) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE
+  // (duyệt là KHSX).
   // MATERIAL:VIEW (Việc 2) - MaterialPicker dùng chung ở cả 4 trang Spec gọi GET /materials
   // để chọn vật tư. Từ khi bỏ Material.kind, phân loại vật tư chuyển hoàn toàn sang
   // materialGroup.systemKey - cả 4 trang giờ đều gọi GET /material-groups để resolve id nhóm
   // hệ thống (Sắt/Dây/Đinh/Sơn/Phụ kiện/Bao bì), nên đều cần thêm MATERIAL_GROUP:VIEW.
   [BUSINESS_ROLES.SPEC_STEEL_STAFF]: [
-    {
-      module: PERMISSION_MODULES.SKU,
-      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
-    },
-    {
-      module: PERMISSION_MODULES.MATERIAL,
-      actions: [PermissionAction.VIEW],
-    },
-    {
-      module: PERMISSION_MODULES.MATERIAL_GROUP,
-      actions: [PermissionAction.VIEW],
-    },
-  ],
-  [BUSINESS_ROLES.SPEC_WIRE_PAINT_STAFF]: [
     {
       module: PERMISSION_MODULES.SKU,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
@@ -234,7 +232,6 @@ export const MFG_ROLE_TO_BUSINESS_ROLE: Partial<Record<MfgRole, BusinessRole>> =
   [MfgRole.SON]: BUSINESS_ROLES.SON_STAFF,
   [MfgRole.KCS]: BUSINESS_ROLES.KCS_STAFF,
   [MfgRole.SPEC_STEEL]: BUSINESS_ROLES.SPEC_STEEL_STAFF,
-  [MfgRole.SPEC_WIRE_PAINT]: BUSINESS_ROLES.SPEC_WIRE_PAINT_STAFF,
   [MfgRole.SPEC_ACCESSORY]: BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF,
   [MfgRole.SPEC_PACKAGING]: BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF,
 };

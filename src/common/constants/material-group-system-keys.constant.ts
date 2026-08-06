@@ -1,13 +1,14 @@
 /**
- * 6 khoá kỹ thuật cố định seed sẵn cho MaterialGroup.systemKey (xem prisma/seed.ts và
+ * 8 khoá kỹ thuật cố định seed sẵn cho MaterialGroup.systemKey (xem prisma/seed.ts và
  * schema.prisma MaterialGroup) - thay cho enum MaterialKind cũ đã bị xoá. Mọi logic nghiệp
- * vụ (segment-specs, bom-revisions, skus - 4 trang Spec Sắt/Dây-Đinh-Sơn/Phụ kiện/
- * Bao bì) match theo cột `systemKey` này, KHÔNG BAO GIỜ theo `MaterialGroup.name` - admin
- * đổi tên nhóm trong Admin > Nhóm vật tư thoải mái mà không làm hỏng lọc.
+ * vụ (segment-specs, bom-revisions, skus - trang Spec Sắt [Sắt/Dây/Đinh/Tán rút/Nút nhựa,
+ * đều nhập chung trong 1 mảnh]/Sơn/Phụ kiện/Bao bì) match theo cột `systemKey` này, KHÔNG
+ * BAO GIỜ theo `MaterialGroup.name` - admin đổi tên nhóm trong Admin > Nhóm vật tư thoải
+ * mái mà không làm hỏng lọc.
  *
  * Nhóm do admin tự tạo thêm có systemKey = null, vô hình với mọi logic Spec.
  *
- * QUAN TRỌNG: frontend định nghĩa lại y hệt 6 giá trị này ở
+ * QUAN TRỌNG: frontend định nghĩa lại y hệt 8 giá trị này ở
  * d:\DNA-ERP\src\constants\materialGroupSystemKeys.ts (2 repo tách rời, không import chung
  * được) - sửa ở đây thì phải sửa bên đó theo.
  */
@@ -18,6 +19,8 @@ export const MATERIAL_GROUP_SYSTEM_KEYS = {
   PAINT: 'PAINT',
   ACCESSORY: 'ACCESSORY',
   PACKAGING: 'PACKAGING',
+  RIVET: 'RIVET',
+  PLASTIC_BUTTON: 'PLASTIC_BUTTON',
 } as const;
 
 export type MaterialGroupSystemKey =

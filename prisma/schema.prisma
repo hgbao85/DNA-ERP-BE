@@ -31,7 +31,6 @@ enum MfgRole {
   SON
   KCS
   SPEC_STEEL
-  SPEC_WIRE_PAINT
   SPEC_ACCESSORY
   SPEC_PACKAGING
 }
@@ -291,12 +290,17 @@ model Material {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  materialGroup        MaterialGroup?        @relation(fields: [materialGroupId], references: [id])
-  materialSuppliers    MaterialSupplier[]
-  segmentSpecs         SegmentSpec[]
-  consumableBoms       ConsumableBom[]
-  bomAccessoryItems    BomAccessoryItem[]
-  cuttingProposalLines CuttingProposalLine[]
+  materialGroup                 MaterialGroup?                 @relation(fields: [materialGroupId], references: [id])
+  materialSuppliers             MaterialSupplier[]
+  segmentSpecs                  SegmentSpec[]
+  consumableBoms                ConsumableBom[]
+  bomAccessoryItems             BomAccessoryItem[]
+  cuttingProposalLines          CuttingProposalLine[]
+  stockLedgerEntries            StockLedger[]
+  stockQuants                   StockQuant[]
+  warehouseTransferItems        WarehouseTransferItem[]
+  warehouseTransferReservations WarehouseTransferReservation[]
+  pieceMaterialItems            PieceMaterialItem[]
 
   @@index([materialGroupId])
   @@map("materials")
@@ -442,9 +446,12 @@ model Piece {
   isWoven      Boolean  @default(false)
   weavingPrice Decimal? @db.Decimal(14, 2)
 
-  mfgProduct MfgProduct @relation(fields: [mfgProductId], references: [id])
-  bomPieces  BomPiece[]
-  pieceBoms  PieceBom[]
+  mfgProduct         MfgProduct          @relation(fields: [mfgProductId], references: [id])
+  bomPieces          BomPiece[]
+  pieceBoms          PieceBom[]
+  pieceMaterialItems PieceMaterialItem[]
+  stockLedgerEntries StockLedger[]
+  stockQuants        StockQuant[]
 
   @@unique([mfgProductId, code])
   @@index([mfgProductId])
@@ -496,15 +503,16 @@ model BomRevision {
   sourcePlanFormId BigInt?           @unique
   createdAt        DateTime          @default(now())
 
-  mfgProduct        MfgProduct         @relation(fields: [mfgProductId], references: [id])
-  sourcePlanForm    PlanForm?          @relation(fields: [sourcePlanFormId], references: [id])
-  bomPieces         BomPiece[]
-  bomParts          BomPart[]
-  pieceBoms         PieceBom[]
-  partBoms          PartBom[]
-  consumableBoms    ConsumableBom[]
-  bomAccessoryItems BomAccessoryItem[]
-  productionOrders  ProductionOrder[]
+  mfgProduct         MfgProduct          @relation(fields: [mfgProductId], references: [id])
+  sourcePlanForm     PlanForm?           @relation(fields: [sourcePlanFormId], references: [id])
+  bomPieces          BomPiece[]
+  bomParts           BomPart[]
+  pieceBoms          PieceBom[]
+  partBoms           PartBom[]
+  pieceMaterialItems PieceMaterialItem[]
+  consumableBoms     ConsumableBom[]
+  bomAccessoryItems  BomAccessoryItem[]
+  productionOrders   ProductionOrder[]
 
   @@unique([mfgProductId, revNo])
   /// Composite-unique target cho FK ghép của piece_bom/part_bom (xem PieceBom/PartBom) -
@@ -565,6 +573,29 @@ model PieceBom {
 
   @@unique([bomRevisionId, pieceId, segmentSpecId])
   @@map("piece_bom")
+}
+
+/// Vật tư phẳng cấu thành 1 mảnh (Dây/Đinh/Tán rút/Nút nhựa) - KHÔNG dùng PieceBom/SegmentSpec
+/// (khái niệm đó là "đoạn cắt", chỉ đúng cho Sắt; cutting-proposals đọc toàn bộ PieceBom không
+/// lọc nhóm vật tư nên không được lẫn Dây/Đinh vào đó, xem cutting-proposals.service.ts
+/// buildBomRows). Nhóm cụ thể (Dây/Đinh/Tán rút/Nút nhựa) suy ra từ material.materialGroup
+/// (systemKey WIRE/NAIL/RIVET/PLASTIC_BUTTON) khi đọc lại, không lưu cột group riêng - cùng
+/// pattern ConsumableBom. Cùng kiểu FK ghép mfgProductId như PieceBom.
+model PieceMaterialItem {
+  id            BigInt  @id @default(autoincrement())
+  bomRevisionId BigInt
+  mfgProductId  BigInt
+  pieceId       BigInt
+  materialId    BigInt
+  qtyPerPiece   Decimal @db.Decimal(14, 4)
+  note          String?
+
+  bomRevision BomRevision @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
+  piece       Piece       @relation(fields: [pieceId], references: [id])
+  material    Material    @relation(fields: [materialId], references: [id])
+
+  @@unique([bomRevisionId, pieceId, materialId])
+  @@map("piece_material_item")
 }
 
 /// Đoạn cấu thành 1 chi tiết hàn. Cùng kiểu FK ghép mfgProductId như PieceBom — doc gốc

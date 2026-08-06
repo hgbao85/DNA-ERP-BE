@@ -32,7 +32,13 @@ import {
   SkuDetailReviewResponseDto,
   SkuManhReviewResponseDto,
 } from './dto/sku-review-response.dto';
-import { QuotaMaterialLineDto, QuotaPieceDto, UpdateQuotaDto } from './dto/update-quota.dto';
+import {
+  DetailLineGroup,
+  QuotaMaterialLineDto,
+  QuotaPieceDto,
+  QuotaPieceMaterialLineDto,
+  UpdateQuotaDto,
+} from './dto/update-quota.dto';
 import { ReviewQuotaDto } from './dto/review-quota.dto';
 
 const PLAN_FORM_INCLUDE = {
@@ -49,12 +55,13 @@ type PlanFormWithRefs = Prisma.PlanFormGetPayload<{ include: typeof PLAN_FORM_IN
  *  gốc - suy ra đúng type từ chính $transaction của nó thay vì dùng type generated thẳng. */
 type PrismaTx = Parameters<Parameters<PrismaServiceType['$transaction']>[0]>[0];
 
-const MANH_GROUPS: ManhGroup[] = [ManhGroup.SAT, ManhGroup.DAY, ManhGroup.DINH];
-const DETAIL_GROUPS: DetailGroup[] = [
-  DetailGroup.DAY_SON,
-  DetailGroup.VAT_TU_PHU_KIEN,
-  DetailGroup.BAO_BI_DONG_GOI,
-];
+// Mảnh giờ chứa cả 5 nhóm vật tư (Sắt/Dây/Đinh/Tán rút/Nút nhựa) trong 1 lần nhập/duyệt duy
+// nhất - chỉ còn đúng 1 group SAT còn dùng, DAY/DINH (enum cũ) không còn được ghi tiếp.
+const MANH_GROUPS: ManhGroup[] = [ManhGroup.SAT];
+// Định mức chi tiết giờ chứa cả 3 nhóm (Sơn/Phụ kiện/Bao bì) trong 1 lần nhập/duyệt duy nhất -
+// chỉ còn đúng 1 group DAY_SON còn dùng (sentinel), VAT_TU_PHU_KIEN/BAO_BI_DONG_GOI (enum cũ)
+// không còn được ghi tiếp.
+const DETAIL_GROUPS: DetailGroup[] = [DetailGroup.DAY_SON];
 
 interface ReconstructedQuota {
   manhData: unknown;
@@ -169,48 +176,24 @@ export class SkusService {
     ]);
   }
 
-  // ─── Manh quota (Sắt/Dây/Đinh) ──────────────────────────────────────────────
+  // ─── Manh quota (mảnh - Sắt/Dây/Đinh/Tán rút/Nút nhựa, 1 lần nhập/duyệt duy nhất) ───────────
 
-  async updateManhQuota(
-    id: string,
-    group: ManhGroup,
-    dto: UpdateQuotaDto,
-  ): Promise<SkuResponseDto> {
+  async updateManhQuota(id: string, dto: UpdateQuotaDto): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     const revision = await this.resolveDraftBomRevision(pf);
     const enteredAt = new Date();
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      if (group === ManhGroup.SAT) {
-        if (!dto.pieces) {
-          throw new BadRequestException('group=SAT yêu cầu field "pieces"');
-        }
-        await this.replaceSteelPieces(tx, revision.id, pf.mfgProductId, dto.pieces);
-      } else {
-        if (!dto.items) {
-          throw new BadRequestException(`group=${group} yêu cầu field "items"`);
-        }
-        const systemKey =
-          group === ManhGroup.DAY
-            ? MATERIAL_GROUP_SYSTEM_KEYS.WIRE
-            : MATERIAL_GROUP_SYSTEM_KEYS.NAIL;
-        const groupLabel = group === ManhGroup.DAY ? 'Dây' : 'Đinh';
-        const materialGroupId = await this.resolveSystemGroupId(tx, systemKey);
-        await this.replaceConsumableLines(
-          tx,
-          revision.id,
-          MfgStage.DAN,
-          dto.items,
-          materialGroupId,
-          groupLabel,
-        );
+      if (!dto.pieces) {
+        throw new BadRequestException('manh-quota yêu cầu field "pieces"');
       }
+      await this.replacePieces(tx, revision.id, pf.mfgProductId, dto.pieces);
 
       // Nhập lại (kể cả sau khi bị từ chối) coi như đã sửa xong - xoá quyết định duyệt cũ
-      // của riêng nhóm này (status/reason/reviewedAt về null), giữ enteredBy/enteredAt mới.
+      // (status/reason/reviewedAt về null), giữ enteredBy/enteredAt mới.
       await tx.planFormManhReview.upsert({
-        where: { planFormId_group: { planFormId: pf.id, group } },
-        create: { planFormId: pf.id, group, enteredBy: dto.enteredBy, enteredAt },
+        where: { planFormId_group: { planFormId: pf.id, group: ManhGroup.SAT } },
+        create: { planFormId: pf.id, group: ManhGroup.SAT, enteredBy: dto.enteredBy, enteredAt },
         update: {
           enteredBy: dto.enteredBy,
           enteredAt,
@@ -231,18 +214,14 @@ export class SkusService {
     return this.toResponseDtoWithQuota(updated);
   }
 
-  async reviewManhQuota(
-    id: string,
-    group: ManhGroup,
-    dto: ReviewQuotaDto,
-  ): Promise<SkuResponseDto> {
+  async reviewManhQuota(id: string, dto: ReviewQuotaDto): Promise<SkuResponseDto> {
     await this.findOneOrThrow(id);
     const bigId = parseBigIntId(id);
     await this.prisma.planFormManhReview.upsert({
-      where: { planFormId_group: { planFormId: bigId, group } },
+      where: { planFormId_group: { planFormId: bigId, group: ManhGroup.SAT } },
       create: {
         planFormId: bigId,
-        group,
+        group: ManhGroup.SAT,
         status: dto.status,
         reason: dto.reason,
         reviewedAt: new Date(),
@@ -252,10 +231,10 @@ export class SkusService {
     return this.findOne(id);
   }
 
-  /** KHSX xác nhận cả 3 nhóm mảnh đã duyệt -> chuyển bộ phận nhập định mức chi tiết. */
+  /** KHSX xác nhận mảnh đã duyệt -> chuyển bộ phận nhập định mức chi tiết. */
   async approveParts(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
-    this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh (Sắt/Dây/Đinh)');
+    this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh');
 
     const updated = await this.prisma.planForm.update({
       where: { id: pf.id },
@@ -265,51 +244,66 @@ export class SkusService {
     return this.toResponseDtoWithQuota(updated);
   }
 
-  // ─── Detail quota (Sơn/Phụ kiện/Bao bì) ─────────────────────────────────────
+  // ─── Detail quota (chi tiết - Sơn/Phụ kiện/Bao bì, 1 lần nhập/duyệt duy nhất) ───────────────
 
-  async updateDetailQuota(
-    id: string,
-    group: DetailGroup,
-    dto: UpdateQuotaDto,
-  ): Promise<SkuResponseDto> {
+  async updateDetailQuota(id: string, dto: UpdateQuotaDto): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     const revision = await this.resolveDraftBomRevision(pf);
     const enteredAt = new Date();
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      if (!dto.items) {
-        throw new BadRequestException(`group=${group} yêu cầu field "items"`);
+      if (!dto.detailLines) {
+        throw new BadRequestException('detail-quota yêu cầu field "detailLines"');
       }
-      if (group === DetailGroup.DAY_SON) {
-        const materialGroupId = await this.resolveSystemGroupId(
-          tx,
-          MATERIAL_GROUP_SYSTEM_KEYS.PAINT,
-        );
-        await this.replaceConsumableLines(
-          tx,
-          revision.id,
-          MfgStage.SON,
-          dto.items,
-          materialGroupId,
-          'Sơn',
-        );
-      } else if (group === DetailGroup.VAT_TU_PHU_KIEN) {
-        const materialGroupId = await this.resolveSystemGroupId(
-          tx,
-          MATERIAL_GROUP_SYSTEM_KEYS.ACCESSORY,
-        );
-        await this.replaceAccessoryItems(tx, revision.id, materialGroupId, 'Phụ kiện', dto.items);
-      } else {
-        const materialGroupId = await this.resolveSystemGroupId(
-          tx,
-          MATERIAL_GROUP_SYSTEM_KEYS.PACKAGING,
-        );
-        await this.replaceAccessoryItems(tx, revision.id, materialGroupId, 'Bao bì', dto.items);
-      }
+      const linesOf = (g: DetailLineGroup): QuotaMaterialLineDto[] =>
+        dto.detailLines!
+          .filter((l) => l.group === g)
+          .map((l) => ({ materialId: l.materialId, qtyPerUnit: l.qtyPerUnit }));
 
+      const paintGroupId = await this.resolveSystemGroupId(tx, MATERIAL_GROUP_SYSTEM_KEYS.PAINT);
+      await this.replaceConsumableLines(
+        tx,
+        revision.id,
+        MfgStage.SON,
+        linesOf('DAY_SON'),
+        paintGroupId,
+        'Sơn',
+      );
+
+      const accessoryGroupId = await this.resolveSystemGroupId(
+        tx,
+        MATERIAL_GROUP_SYSTEM_KEYS.ACCESSORY,
+      );
+      await this.replaceAccessoryItems(
+        tx,
+        revision.id,
+        accessoryGroupId,
+        'Phụ kiện',
+        linesOf('VAT_TU_PHU_KIEN'),
+      );
+
+      const packagingGroupId = await this.resolveSystemGroupId(
+        tx,
+        MATERIAL_GROUP_SYSTEM_KEYS.PACKAGING,
+      );
+      await this.replaceAccessoryItems(
+        tx,
+        revision.id,
+        packagingGroupId,
+        'Bao bì',
+        linesOf('BAO_BI_DONG_GOI'),
+      );
+
+      // Nhập lại (kể cả sau khi bị từ chối) coi như đã sửa xong - xoá quyết định duyệt cũ
+      // (status/reason/reviewedAt về null), giữ enteredBy/enteredAt mới.
       await tx.planFormDetailReview.upsert({
-        where: { planFormId_group: { planFormId: pf.id, group } },
-        create: { planFormId: pf.id, group, enteredBy: dto.enteredBy, enteredAt },
+        where: { planFormId_group: { planFormId: pf.id, group: DetailGroup.DAY_SON } },
+        create: {
+          planFormId: pf.id,
+          group: DetailGroup.DAY_SON,
+          enteredBy: dto.enteredBy,
+          enteredAt,
+        },
         update: {
           enteredBy: dto.enteredBy,
           enteredAt,
@@ -332,18 +326,14 @@ export class SkusService {
     return this.toResponseDtoWithQuota(updated);
   }
 
-  async reviewDetailQuota(
-    id: string,
-    group: DetailGroup,
-    dto: ReviewQuotaDto,
-  ): Promise<SkuResponseDto> {
+  async reviewDetailQuota(id: string, dto: ReviewQuotaDto): Promise<SkuResponseDto> {
     await this.findOneOrThrow(id);
     const bigId = parseBigIntId(id);
     await this.prisma.planFormDetailReview.upsert({
-      where: { planFormId_group: { planFormId: bigId, group } },
+      where: { planFormId_group: { planFormId: bigId, group: DetailGroup.DAY_SON } },
       create: {
         planFormId: bigId,
-        group,
+        group: DetailGroup.DAY_SON,
         status: dto.status,
         reason: dto.reason,
         reviewedAt: new Date(),
@@ -356,8 +346,8 @@ export class SkusService {
   /** KHSX xác nhận cả manh lẫn chi tiết đã duyệt -> gửi QLSX duyệt. */
   async approveDetail(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
-    this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh (Sắt/Dây/Đinh)');
-    this.assertAllApproved(pf.detailReviews, DETAIL_GROUPS, 'chi tiết (Sơn/Phụ kiện/Bao bì)');
+    this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh');
+    this.assertAllApproved(pf.detailReviews, DETAIL_GROUPS, 'chi tiết');
 
     const updated = await this.prisma.planForm.update({
       where: { id: pf.id },
@@ -612,13 +602,24 @@ export class SkusService {
     }
   }
 
+  /** Id nhóm vật tư hệ thống ứng với 1 `PieceMaterialLineDto.group` (WIRE/NAIL/RIVET/PLASTIC_BUTTON). */
+  private async resolvePieceMaterialLineGroupId(
+    tx: PrismaTx,
+    group: QuotaPieceMaterialLineDto['group'],
+  ): Promise<bigint> {
+    const systemKey = MATERIAL_GROUP_SYSTEM_KEYS[group];
+    return this.resolveSystemGroupId(tx, systemKey);
+  }
+
   /**
-   * Thay toàn bộ mảnh + đoạn sắt của nhóm SAT trên revision (xoá hết rồi tạo lại theo đúng
-   * `pieces` gửi lên) - full-replace, đúng UX "gửi lại là ghi đè toàn bộ" hiện tại (không
-   * patch từng dòng). bomRevisionId đã xác định duy nhất 1 sản phẩm nên không cần lọc thêm
-   * theo mfgProductId khi xoá.
+   * Thay toàn bộ mảnh + vật tư con (5 nhóm: Sắt/Dây/Đinh/Tán rút/Nút nhựa) trên revision
+   * (xoá hết rồi tạo lại theo đúng `pieces` gửi lên) - full-replace, đúng UX "gửi lại là ghi
+   * đè toàn bộ" hiện tại (không patch từng dòng). bomRevisionId đã xác định duy nhất 1 sản
+   * phẩm nên không cần lọc thêm theo mfgProductId khi xoá. Sắt đi qua PieceBom/SegmentSpec
+   * (khái niệm "đoạn cắt", cutting-proposals phụ thuộc vào bảng này); 4 nhóm còn lại đi qua
+   * PieceMaterialItem (phẳng, không có khái niệm cắt) - KHÔNG được trộn lẫn 2 bảng này.
    */
-  private async replaceSteelPieces(
+  private async replacePieces(
     tx: PrismaTx,
     bomRevisionId: bigint,
     mfgProductId: bigint,
@@ -626,6 +627,7 @@ export class SkusService {
   ): Promise<void> {
     const steelGroupId = await this.resolveSystemGroupId(tx, MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR);
     await tx.pieceBom.deleteMany({ where: { bomRevisionId } });
+    await tx.pieceMaterialItem.deleteMany({ where: { bomRevisionId } });
     await tx.bomPiece.deleteMany({ where: { bomRevisionId } });
 
     for (const p of pieces) {
@@ -650,6 +652,25 @@ export class SkusService {
             needsHan: seg.needsHan ?? true,
             needsSon: seg.needsSon ?? true,
             note: seg.note ?? null,
+          },
+        });
+      }
+      for (const line of p.materialLines ?? []) {
+        const materialId = parseBigIntId(line.materialId);
+        const material = await tx.material.findUnique({ where: { id: materialId } });
+        if (!material) {
+          throw new NotFoundException(`Material ${line.materialId} not found`);
+        }
+        const materialGroupId = await this.resolvePieceMaterialLineGroupId(tx, line.group);
+        await this.assertOrAssignMaterialGroup(tx, material, materialGroupId, line.group);
+        await tx.pieceMaterialItem.create({
+          data: {
+            bomRevisionId,
+            mfgProductId,
+            pieceId: piece.id,
+            materialId,
+            qtyPerPiece: line.qtyPerPiece,
+            note: line.note ?? null,
           },
         });
       }
@@ -784,27 +805,32 @@ export class SkusService {
       return result;
     }
 
-    const [systemGroups, bomPieces, pieceBoms, consumableBoms, accessoryItems] = await Promise.all([
-      this.prisma.materialGroup.findMany({
-        where: { systemKey: { in: Object.values(MATERIAL_GROUP_SYSTEM_KEYS) } },
-      }),
-      this.prisma.bomPiece.findMany({
-        where: { bomRevisionId: { in: revisionIds } },
-        include: { piece: true },
-      }),
-      this.prisma.pieceBom.findMany({
-        where: { bomRevisionId: { in: revisionIds } },
-        include: { segmentSpec: { include: { material: true } } },
-      }),
-      this.prisma.consumableBom.findMany({
-        where: { bomRevisionId: { in: revisionIds } },
-        include: { material: true },
-      }),
-      this.prisma.bomAccessoryItem.findMany({
-        where: { bomRevisionId: { in: revisionIds } },
-        include: { material: true },
-      }),
-    ]);
+    const [systemGroups, bomPieces, pieceBoms, pieceMaterialItems, consumableBoms, accessoryItems] =
+      await Promise.all([
+        this.prisma.materialGroup.findMany({
+          where: { systemKey: { in: Object.values(MATERIAL_GROUP_SYSTEM_KEYS) } },
+        }),
+        this.prisma.bomPiece.findMany({
+          where: { bomRevisionId: { in: revisionIds } },
+          include: { piece: true },
+        }),
+        this.prisma.pieceBom.findMany({
+          where: { bomRevisionId: { in: revisionIds } },
+          include: { segmentSpec: { include: { material: true } } },
+        }),
+        this.prisma.pieceMaterialItem.findMany({
+          where: { bomRevisionId: { in: revisionIds } },
+          include: { material: true },
+        }),
+        this.prisma.consumableBom.findMany({
+          where: { bomRevisionId: { in: revisionIds } },
+          include: { material: true },
+        }),
+        this.prisma.bomAccessoryItem.findMany({
+          where: { bomRevisionId: { in: revisionIds } },
+          include: { material: true },
+        }),
+      ]);
 
     const bomPiecesByRev = groupBy(bomPieces, (r) => r.bomRevisionId.toString());
     const pieceBomsByRevPiece = new Map<string, typeof pieceBoms>();
@@ -813,6 +839,13 @@ export class SkusService {
       const arr = pieceBomsByRevPiece.get(key);
       if (arr) arr.push(row);
       else pieceBomsByRevPiece.set(key, [row]);
+    }
+    const pieceMaterialItemsByRevPiece = new Map<string, typeof pieceMaterialItems>();
+    for (const row of pieceMaterialItems) {
+      const key = `${row.bomRevisionId}:${row.pieceId}`;
+      const arr = pieceMaterialItemsByRevPiece.get(key);
+      if (arr) arr.push(row);
+      else pieceMaterialItemsByRevPiece.set(key, [row]);
     }
     const consumableByRev = groupBy(consumableBoms, (r) => r.bomRevisionId.toString());
     const accessoryByRev = groupBy(accessoryItems, (r) => r.bomRevisionId.toString());
@@ -825,6 +858,7 @@ export class SkusService {
       materialId: r.materialId.toString(),
       materialCode: r.material.code,
       materialName: r.material.name,
+      materialSpec: r.material.spec,
       materialUnit: r.material.unit,
       qtyPerUnit: r.qtyPerUnit.toNumber(),
     });
@@ -833,8 +867,19 @@ export class SkusService {
       materialId: r.materialId.toString(),
       materialCode: r.material.code,
       materialName: r.material.name,
+      materialSpec: r.material.spec,
       materialUnit: r.material.unit,
       qtyPerUnit: r.qtyPerUnit.toNumber(),
+    });
+    const toPieceMaterialLine = (r: (typeof pieceMaterialItems)[number]) => ({
+      id: Number(r.id),
+      materialId: r.materialId.toString(),
+      materialCode: r.material.code,
+      materialName: r.material.name,
+      materialSpec: r.material.spec,
+      materialUnit: r.material.unit,
+      qtyPerPiece: r.qtyPerPiece.toNumber(),
+      note: r.note,
     });
 
     for (const pf of pfs) {
@@ -845,13 +890,25 @@ export class SkusService {
       }
       const revKey = revision.id.toString();
 
-      const sat = (bomPiecesByRev.get(revKey) ?? []).map((bp) => ({
-        id: Number(bp.id),
-        pieceId: bp.pieceId.toString(),
-        name: bp.piece.name,
-        qtyPerUnit: bp.qtyPerUnit,
-        segments: (pieceBomsByRevPiece.get(`${bp.bomRevisionId}:${bp.pieceId}`) ?? []).map(
-          (sg) => ({
+      const wireGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.WIRE);
+      const nailGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.NAIL);
+      const rivetGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.RIVET);
+      const plasticButtonGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.PLASTIC_BUTTON);
+      const paintGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.PAINT);
+      const accessoryGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.ACCESSORY);
+      const packagingGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.PACKAGING);
+
+      // Mảnh giờ chứa cả 5 nhóm vật tư: steel (segments, phân cấp đoạn cắt - PieceBom/
+      // SegmentSpec) và wire/nail/rivet/plasticButton (phẳng theo mảnh - PieceMaterialItem),
+      // mỗi nhóm SCOPE THEO TỪNG PIECE (khác day/dinh cũ vốn phẳng toàn revision).
+      const pieces = (bomPiecesByRev.get(revKey) ?? []).map((bp) => {
+        const lineItems = pieceMaterialItemsByRevPiece.get(`${bp.bomRevisionId}:${bp.pieceId}`) ?? [];
+        return {
+          id: Number(bp.id),
+          pieceId: bp.pieceId.toString(),
+          name: bp.piece.name,
+          qtyPerUnit: bp.qtyPerUnit,
+          steel: (pieceBomsByRevPiece.get(`${bp.bomRevisionId}:${bp.pieceId}`) ?? []).map((sg) => ({
             id: Number(sg.id),
             segmentSpecId: sg.segmentSpecId.toString(),
             materialId: sg.segmentSpec.materialId.toString(),
@@ -864,23 +921,23 @@ export class SkusService {
             needsHan: sg.needsHan,
             needsSon: sg.needsSon,
             note: sg.note,
-          }),
-        ),
-      }));
-
-      const wireGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.WIRE);
-      const nailGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.NAIL);
-      const paintGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.PAINT);
-      const accessoryGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.ACCESSORY);
-      const packagingGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.PACKAGING);
-
-      const danRows = (consumableByRev.get(revKey) ?? []).filter((r) => r.stage === MfgStage.DAN);
-      const day = danRows
-        .filter((r) => wireGroupId != null && r.material.materialGroupId === wireGroupId)
-        .map(toMaterialLine);
-      const dinh = danRows
-        .filter((r) => nailGroupId != null && r.material.materialGroupId === nailGroupId)
-        .map(toMaterialLine);
+          })),
+          wire: lineItems
+            .filter((r) => wireGroupId != null && r.material.materialGroupId === wireGroupId)
+            .map(toPieceMaterialLine),
+          nail: lineItems
+            .filter((r) => nailGroupId != null && r.material.materialGroupId === nailGroupId)
+            .map(toPieceMaterialLine),
+          rivet: lineItems
+            .filter((r) => rivetGroupId != null && r.material.materialGroupId === rivetGroupId)
+            .map(toPieceMaterialLine),
+          plasticButton: lineItems
+            .filter(
+              (r) => plasticButtonGroupId != null && r.material.materialGroupId === plasticButtonGroupId,
+            )
+            .map(toPieceMaterialLine),
+        };
+      });
 
       const daySon = (consumableByRev.get(revKey) ?? [])
         .filter(
@@ -900,7 +957,7 @@ export class SkusService {
         .map(toAccessoryLine);
 
       result.set(pf.id.toString(), {
-        manhData: { sat, day, dinh },
+        manhData: { pieces },
         detailQuota: { daySon, vatTuPhuKien, baoBiDongGoi },
       });
     }
