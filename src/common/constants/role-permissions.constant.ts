@@ -95,13 +95,6 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.WEAVING_POINT,
       actions: [PermissionAction.VIEW],
     },
-    // Phase 3: "KHSX kiểm tra vật tư" (dna-erp-db-schema.html mục 0, node k2) đọc GET
-    // /stock-quant để biết tồn kho hiện tại trước khi xác nhận sản xuất - chỉ VIEW, KHSX
-    // không tự ghi/điều chỉnh kho.
-    {
-      module: PERMISSION_MODULES.STOCK,
-      actions: [PermissionAction.VIEW],
-    },
   ],
   // QLSX: duyệt cục bộ + gửi Sếp ở cả PlanForm lẫn PI item (APPROVE) - các route tương ứng
   // (qlsx-review/request-boss-approval/reject-qlsx, send-to-boss) còn gắn thêm
@@ -156,15 +149,6 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.CUTTING_PROPOSAL,
       actions: [PermissionAction.VIEW, PermissionAction.CREATE, PermissionAction.APPROVE],
     },
-  ],
-  // --- Phase 3 (Kho vận lõi / Ledger Core) ---
-  // WAREHOUSE_STAFF: kho nguồn tạo phiếu chuyển kho, kho đích xác nhận/từ chối (cả 2 thao tác
-  // đều dùng chung permission WAREHOUSE_TRANSFER - phân biệt kho nào được thao tác qua
-  // warehouseScope, enforce ở WarehouseTransfersService, không phải RBAC). STOCK:VIEW để tra
-  // tồn kho khả dụng trước khi tạo phiếu.
-  [BUSINESS_ROLES.WAREHOUSE_STAFF]: [
-    { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
-    { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, actions: 'ALL' },
   ],
   // 4 account chuyên trách nhập định mức SKU (mirror đúng mock: Sắt / Dây-Sơn / Phụ kiện-Bao
   // bì) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE (duyệt là KHSX).

@@ -37,12 +37,6 @@ const AUDITED_MODELS = new Set([
   'SalesOrder',
   'PlanForm',
   'ProductionInvoice',
-  // Phase 3 - WarehouseTransfer là entity nghiệp vụ độc lập với workflow duyệt riêng (PENDING ->
-  // CONFIRMED/REJECTED), cùng tier với SalesOrder/ProductionInvoice. Không audit StockLedger
-  // (tự nó đã là sổ ghi chép bất biến, có createdBy/createdAt riêng - audit lại là dư thừa),
-  // StockQuant (cache, được đồng bộ bởi trigger DB nên Prisma extension không thấy các lần ghi
-  // đó), hay WarehouseTransferItem/Reservation (dòng con, cùng lý do BomPiece không được audit).
-  'WarehouseTransfer',
 ]);
 
 /** Minimal shape needed to dynamically call `client[modelKey].findFirst(...)` by model name. */

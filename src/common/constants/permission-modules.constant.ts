@@ -29,9 +29,6 @@ export const PERMISSION_MODULES = {
   // --- Phase 7 (Production Order & Cutting Proposal) ---
   PRODUCTION_ORDER: 'PRODUCTION_ORDER',
   CUTTING_PROPOSAL: 'CUTTING_PROPOSAL',
-  // --- Phase 3 (Kho vận lõi / Ledger Core) ---
-  STOCK: 'STOCK',
-  WAREHOUSE_TRANSFER: 'WAREHOUSE_TRANSFER',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

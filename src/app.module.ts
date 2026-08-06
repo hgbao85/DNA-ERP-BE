@@ -41,8 +41,6 @@ import { SkusModule } from './modules/skus/skus.module';
 import { ProductionInvoicesModule } from './modules/production-invoices/production-invoices.module';
 import { ProductionOrdersModule } from './modules/production-orders/production-orders.module';
 import { CuttingProposalsModule } from './modules/cutting-proposals/cutting-proposals.module';
-import { StockModule } from './modules/stock/stock.module';
-import { WarehouseTransfersModule } from './modules/warehouse-transfers/warehouse-transfers.module';
 
 @Module({
   imports: [
@@ -103,8 +101,6 @@ import { WarehouseTransfersModule } from './modules/warehouse-transfers/warehous
     ProductionInvoicesModule,
     ProductionOrdersModule,
     CuttingProposalsModule,
-    StockModule,
-    WarehouseTransfersModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
