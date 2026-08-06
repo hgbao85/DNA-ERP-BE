@@ -30,9 +30,12 @@ export const envValidationSchema = Joi.object({
 
   // cat_sat_iea solver (Phase 7 - Đề xuất cắt sắt). Tham số TUNING của bài toán (stock_lengths,
   // trim_start, max_waste_percentage...) nằm ở SystemConfig (admin sửa qua PUT /system-config),
-  // KHÔNG ở đây - 3 biến này chỉ là thông tin KẾT NỐI tới solver.
-  SOLVER_BASE_URL: Joi.string().uri().required(),
-  SOLVER_API_KEY: Joi.string().required(),
+  // KHÔNG ở đây - 2 biến này chỉ là thông tin KẾT NỐI tới solver. Cố ý để .optional() (không
+  // .required()) dù đây là 1 tính năng thật - thiếu 2 biến này KHÔNG được phép chặn boot cả app
+  // (mọi module khác không liên quan gì tới Đề xuất cắt sắt), chỉ riêng CuttingProposalsService
+  // sẽ tự báo FAILED khi thật sự có ai gọi mà chưa cấu hình (xem runSolverAndSave).
+  SOLVER_BASE_URL: Joi.string().uri().optional(),
+  SOLVER_API_KEY: Joi.string().optional(),
   /// Timeout HTTP CLIENT (giây) - KHÁC với time_limit_seconds gửi trong body request (đó là
   /// SystemConfig.solverTimeLimitSeconds, mỗi lần giải solver). Để dư dả vì số lần giải/request
   /// = số loại sắt x (1 + N lần vét cạn) có thể cộng dồn khá lâu dù mỗi lần giải nhanh.
