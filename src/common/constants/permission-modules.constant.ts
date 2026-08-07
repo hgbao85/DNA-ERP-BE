@@ -32,6 +32,8 @@ export const PERMISSION_MODULES = {
   // --- Phase 3 (Kho vận lõi / Ledger Core) ---
   STOCK: 'STOCK',
   WAREHOUSE_TRANSFER: 'WAREHOUSE_TRANSFER',
+  // --- Phase 8 (Mua hàng) ---
+  PURCHASE_PROPOSAL: 'PURCHASE_PROPOSAL',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

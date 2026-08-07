@@ -1,17 +1,30 @@
 import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../../config/configuration';
-import { CuttingProposalStatus, NotificationAudience, Prisma } from '../../generated/prisma/client';
+import {
+  CuttingProposalStatus,
+  NotificationAudience,
+  Prisma,
+  StockLedgerRefType,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
+import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CuttingProposalResponseDto } from './dto/cutting-proposal-response.dto';
 
 const SOLVER_PROPOSE_PATH = '/api/v1/de_xuat/propose/';
 const SYSTEM_CONFIG_ID = 1;
+/// cat_sat_iea chỉ tính vật tư sắt - sắt luôn nhập/xuất tại đúng 1 kho vật lý này (xem
+/// PROTECTED_WAREHOUSE_CODES). Phase 8 (Mua hàng) rút gọn hiện chỉ có nhóm vật tư này nên
+/// hardcode thẳng, không cần suy hay tham số hoá.
+const STEEL_WAREHOUSE_CODE = 'phoi-son-han';
+/// Kho ảo cố định (protected-warehouse-codes.constant.ts) - điểm đến của bút toán "sắt xuất
+/// dùng cho sản xuất" khi tự động trừ tồn lúc duyệt phương án cắt (xem approve()).
+const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
 
 interface SolverBomRow {
   part: string;
@@ -76,6 +89,7 @@ export class CuttingProposalsService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly externalApiService: ExternalApiService,
     private readonly configService: ConfigService<AppConfig, true>,
+    private readonly stockLedgerService: StockLedgerService,
   ) {}
 
   async requestForOrder(
@@ -143,10 +157,21 @@ export class CuttingProposalsService {
     return this.toDetailResponseDto(proposal);
   }
 
-  /** Duyệt phương án cắt cuối cùng - Phôi cắt theo pattern của bản này (7.2 doc gốc). */
+  /**
+   * Duyệt phương án cắt cuối cùng - Phôi cắt theo pattern của bản này (7.2 doc gốc). Đồng thời
+   * tự sinh 1 PurchaseProposal (Phase 8 - Mua hàng, rút gọn: chỉ vật tư sắt) cho các dòng khả
+   * thi (feasible, totalBars > 0) - không có API tạo thủ công, Mua hàng chỉ tiêu thụ bản ghi
+   * này. Theo yêu cầu Sếp (2026-08-07): "trừ tồn tự động, hiện qua mua hàng, không hiện ở kho"
+   * - mỗi dòng chụp `actualStock` thật (stock_quant, có khoá FOR UPDATE chống 2 lần duyệt cùng
+   * lúc đọc trùng số dư), `buyQty` chỉ còn là phần THIẾU (totalBars - actualStock đã dùng), và
+   * phần tồn có sẵn được ghi nhận xuất dùng cho sản xuất ngay (STEEL_ISSUE, kho ảo PRODUCTION).
+   */
   async approve(id: string, actorUserId: string): Promise<CuttingProposalResponseDto> {
     const bigId = parseBigIntId(id);
-    const proposal = await this.prisma.cuttingProposal.findUnique({ where: { id: bigId } });
+    const proposal = await this.prisma.cuttingProposal.findUnique({
+      where: { id: bigId },
+      include: { lines: true },
+    });
     if (!proposal) {
       throw new NotFoundException(`Cutting proposal ${id} not found`);
     }
@@ -155,6 +180,23 @@ export class CuttingProposalsService {
         `Cutting proposal ${id} ở trạng thái ${proposal.status} - chỉ DRAFT mới duyệt được`,
       );
     }
+
+    const buyableLines = proposal.lines.filter(
+      (line) => line.feasible && line.totalBars != null && line.totalBars > 0,
+    );
+
+    let steelWarehouseId: bigint | undefined;
+    let productionWarehouseId: bigint | undefined;
+    if (buyableLines.length > 0) {
+      const [steelWarehouse, productionWarehouse] = await Promise.all([
+        this.prisma.warehouse.findUniqueOrThrow({ where: { code: STEEL_WAREHOUSE_CODE } }),
+        this.prisma.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
+      ]);
+      steelWarehouseId = steelWarehouse.id;
+      productionWarehouseId = productionWarehouse.id;
+    }
+
+    const consumptions: { materialId: bigint; consumeQty: number }[] = [];
 
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.cuttingProposal.updateMany({
@@ -165,7 +207,7 @@ export class CuttingProposalsService {
         },
         data: { status: CuttingProposalStatus.SUPERSEDED },
       });
-      return tx.cuttingProposal.update({
+      const result = await tx.cuttingProposal.update({
         where: { id: bigId },
         data: {
           status: CuttingProposalStatus.APPROVED,
@@ -173,7 +215,56 @@ export class CuttingProposalsService {
           approvedById: actorUserId,
         },
       });
+
+      if (buyableLines.length > 0) {
+        const items: { materialId: bigint; buyQty: number; actualStock: number }[] = [];
+        for (const line of buyableLines) {
+          // Khoá dòng stock_quant liên quan trong lúc tính "tồn khả dụng" - chặn 2 phương án
+          // cắt cùng vật tư được duyệt gần như đồng thời cùng đọc thấy 1 số dư (giống pattern
+          // WarehouseTransfersService.createTransfer()).
+          const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+            SELECT "qty" FROM "stock_quant"
+            WHERE "warehouseId" = ${steelWarehouseId!} AND "materialId" = ${line.materialId}
+            FOR UPDATE
+          `;
+          const actualStock = Math.floor(locked[0]?.qty.toNumber() ?? 0);
+          const totalBars = line.totalBars!;
+          const consumeQty = Math.min(totalBars, actualStock);
+          const buyQty = totalBars - consumeQty;
+
+          items.push({ materialId: line.materialId, buyQty, actualStock });
+          if (consumeQty > 0) {
+            consumptions.push({ materialId: line.materialId, consumeQty });
+          }
+        }
+
+        await tx.purchaseProposal.create({
+          data: {
+            cuttingProposalId: bigId,
+            warehouseCode: STEEL_WAREHOUSE_CODE,
+            items: { create: items },
+          },
+        });
+      }
+
+      return result;
     });
+
+    // Bút toán kho tách khỏi transaction ở trên (StockLedgerService dùng prisma riêng, không
+    // nhận tx) - idempotencyKey theo (cuttingProposalId, materialId) khiến gọi lại an toàn nếu
+    // bước này lỗi giữa chừng, đúng idiom WarehouseTransfersService.confirm().
+    for (const { materialId, consumeQty } of consumptions) {
+      await this.stockLedgerService.postEntry({
+        fromWarehouseId: steelWarehouseId!,
+        toWarehouseId: productionWarehouseId!,
+        materialId,
+        qty: consumeQty,
+        refType: StockLedgerRefType.STEEL_ISSUE,
+        refId: bigId.toString(),
+        createdById: actorUserId,
+        idempotencyKey: `cutting-proposal:${id}:steel-issue:${materialId}`,
+      });
+    }
 
     return this.toResponseDto(updated);
   }

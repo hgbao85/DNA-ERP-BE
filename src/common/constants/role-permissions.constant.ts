@@ -224,15 +224,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   //   { module: PERMISSION_MODULES.QC_REVIEW, actions: 'ALL' },
   //   { module: PERMISSION_MODULES.REPLENISH_REQUEST, actions: 'ALL' },
   // ],
-  // --- Phase 3/8 (Warehouse & Purchasing, + scope) ---
-  // [BUSINESS_ROLES.WAREHOUSE_STAFF]: [
-  //   { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
-  //   { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, actions: 'ALL' },
-  // ],
-  // [BUSINESS_ROLES.PURCHASER]: [
-  //   { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, actions: 'ALL' },
-  //   { module: PERMISSION_MODULES.SUPPLIER, actions: 'ALL' },
-  // ],
+  // --- Phase 8 (Mua hàng) ---
+  // Mua hàng: toàn quyền trên đề xuất mua (báo giá/gửi Sếp duyệt/theo dõi nhận hàng) + quản lý
+  // danh mục NCC của riêng mình (thêm NCC mới ngay lúc báo giá).
+  [BUSINESS_ROLES.PURCHASER]: [
+    { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, actions: 'ALL' },
+    { module: PERMISSION_MODULES.SUPPLIER, actions: 'ALL' },
+  ],
 };
 
 /**
