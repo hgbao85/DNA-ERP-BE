@@ -22,14 +22,13 @@ const ALL_ACTIONS = Object.values(PermissionAction);
 const ALL_MODULES = Object.values(PERMISSION_MODULES);
 
 /**
- * 6 kho vật lý + 3 kho ảo bắt buộc phải seed sẵn (docs/dna-erp-db-schema.html "warehouses").
- * Codes phải khớp 1-1 với PROTECTED_WAREHOUSE_CODES - đây là danh sách duy nhất mà
- * warehouses.service.ts (chưa viết) sẽ chặn xoá.
+ * 3 kho vật lý (chuỗi chuyển kho nội bộ gốc) + 3 kho ảo bắt buộc phải seed sẵn
+ * (docs/dna-erp-db-schema.html "warehouses"). Codes phải khớp 1-1 với
+ * PROTECTED_WAREHOUSE_CODES - đây là danh sách duy nhất mà warehouses.service.ts chặn xoá.
+ * "thanh-pham" là kho gốc duy nhất được phép có thêm instance khác (vd "thanh-pham-2") -
+ * Admin tạo qua UI Kho như bình thường, không cần đụng tới seed này.
  */
 const SEED_WAREHOUSES: { code: string; name: string; isVirtual: boolean; note?: string }[] = [
-  { code: 'phu-kien', name: 'Kho Phụ kiện', isVirtual: false },
-  { code: 'sat', name: 'Kho Sắt', isVirtual: false },
-  { code: 'day', name: 'Kho Dây', isVirtual: false },
   {
     code: 'thanh-pham',
     name: 'Kho Bao bì/Thành phẩm',

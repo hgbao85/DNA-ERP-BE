@@ -21,7 +21,7 @@ function isProtected(code: string): boolean {
 }
 
 /**
- * The 9 seeded codes in PROTECTED_WAREHOUSE_CODES (see prisma/seed.ts) can never be
+ * The 6 seeded codes in PROTECTED_WAREHOUSE_CODES (see prisma/seed.ts) can never be
  * deleted or renamed - FE hardcodes these code strings throughout Manufacturing/
  * InboundWarehouse to route materials, so losing one silently breaks those screens.
  * `isActive` is still the soft-delete column for everything else (same as suppliers).

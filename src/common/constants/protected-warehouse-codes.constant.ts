@@ -1,18 +1,16 @@
 /**
- * The 6 physical + 3 virtual warehouses seeded at Phase 2 (see prisma/seed.ts and
+ * The 3 physical + 3 virtual warehouses seeded at Phase 2 (see prisma/seed.ts and
  * docs/dna-erp-db-schema.html "warehouses"). None of these codes may ever be deleted -
- * the virtual ones are permanent posting points for stock_ledger (P3) and the physical
- * ones are the only real storage locations the rest of MES assumes exist.
+ * the virtual ones are permanent posting points for stock_ledger (P3), and the 3
+ * physical ones are the backbone internal-transfer chain phoi-son-han -> vat-tu-tp ->
+ * thanh-pham that the rest of MES assumes exists (see transfer-routes.constant.ts).
  *
- * A secondary physical warehouse an Admin creates later (e.g. "thanh-pham-2") is NOT
- * protected - only the fixed set below. The future warehouses.service.ts delete() must
- * reject any code in this list before touching the DB.
+ * "thanh-pham" is a multi-instance root: Admin may create further finished-goods
+ * warehouses later (e.g. "thanh-pham-2") - those are NOT protected, only the fixed
+ * set below is. warehouses.service.ts delete()/update() rejects any code in this list.
  */
 export const PROTECTED_WAREHOUSE_CODES = [
-  // Vật lý (6)
-  'phu-kien',
-  'sat',
-  'day',
+  // Vật lý (3) - chuỗi chuyển kho nội bộ gốc
   'thanh-pham',
   'vat-tu-tp',
   'phoi-son-han',

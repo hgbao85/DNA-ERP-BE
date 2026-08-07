@@ -9,6 +9,8 @@ export class MaterialResponseDto {
   @Expose() @ApiProperty() unit!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) spec!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) materialGroupId!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) warehouseId!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) buyerId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) khoUnitFactor!: number | null;
   @Expose() @ApiProperty() isActive!: boolean;
   @Expose() @ApiProperty() createdAt!: Date;

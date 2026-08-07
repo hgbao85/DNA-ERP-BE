@@ -40,4 +40,14 @@ export class CreateMaterialDto {
   @ApiPropertyOptional({ description: 'Hệ số quy đổi đơn vị kho, vd 600 = mm/cây' })
   @IsOptional()
   khoUnitFactor?: number;
+
+  @ApiPropertyOptional({ description: 'Kho vật tư này sẽ nằm khi được tạo' })
+  @IsOptional()
+  warehouseId?: string;
+
+  @ApiPropertyOptional({
+    description: 'User.id (uuid) của nhân viên mua hàng phụ trách vật tư này',
+  })
+  @IsOptional()
+  buyerId?: string;
 }

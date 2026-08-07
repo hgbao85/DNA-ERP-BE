@@ -78,6 +78,7 @@ model User {
   cuttingProposalsRequested CuttingProposal[]       @relation("CuttingProposalRequestedBy")
   cuttingProposalsApproved  CuttingProposal[]       @relation("CuttingProposalApprovedBy")
   stockLedgerEntries        StockLedger[]
+  materialsToBuy            Material[]
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -285,6 +286,8 @@ model Material {
   unit            String
   spec            String?
   materialGroupId BigInt?
+  warehouseId     BigInt?
+  buyerId         String?
   khoUnitFactor   Decimal?  @db.Decimal(14, 4)
   isActive        Boolean   @default(true)
   deletedAt       DateTime?
@@ -292,6 +295,8 @@ model Material {
   updatedAt       DateTime  @updatedAt
 
   materialGroup                 MaterialGroup?                 @relation(fields: [materialGroupId], references: [id])
+  warehouse                     Warehouse?                     @relation(fields: [warehouseId], references: [id])
+  buyer                         User?                          @relation(fields: [buyerId], references: [id])
   materialSuppliers             MaterialSupplier[]
   segmentSpecs                  SegmentSpec[]
   consumableBoms                ConsumableBom[]
@@ -304,6 +309,8 @@ model Material {
   pieceMaterialItems            PieceMaterialItem[]
 
   @@index([materialGroupId])
+  @@index([warehouseId])
+  @@index([buyerId])
   @@map("materials")
 }
 
@@ -381,6 +388,7 @@ model Warehouse {
   fromWarehouseTransfers        WarehouseTransfer[]            @relation("WarehouseTransferFromWarehouse")
   toWarehouseTransfers          WarehouseTransfer[]            @relation("WarehouseTransferToWarehouse")
   warehouseTransferReservations WarehouseTransferReservation[]
+  materials                     Material[]
 
   @@map("warehouses")
 }

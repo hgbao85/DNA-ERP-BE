@@ -10,8 +10,8 @@ describe('WarehousesService', () => {
 
   const protectedWarehouse = {
     id: 1n,
-    code: 'sat',
-    name: 'Kho sat',
+    code: 'phoi-son-han',
+    name: 'Kho Phoi Son Han',
     isVirtual: false,
     note: null,
     isActive: true,
@@ -85,7 +85,7 @@ describe('WarehousesService', () => {
     it('blocks renaming (changing code) of a protected warehouse with 403', async () => {
       prisma.warehouse.findUnique.mockResolvedValue(protectedWarehouse);
 
-      await expect(service.update('1', { code: 'sat-moi' } as any)).rejects.toThrow(
+      await expect(service.update('1', { code: 'phoi-son-han-moi' } as any)).rejects.toThrow(
         ForbiddenException,
       );
       expect(prisma.warehouse.update).not.toHaveBeenCalled();

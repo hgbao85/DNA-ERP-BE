@@ -156,15 +156,27 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.CUTTING_PROPOSAL,
       actions: [PermissionAction.VIEW, PermissionAction.CREATE, PermissionAction.APPROVE],
     },
+    // MfgWarehousesPage (Tổng hợp kho): QLSX xem tồn kho + tự thêm vật tư mới vào kho ngay
+    // từ màn hình này (CREATE), và xem/tạo kho thành phẩm phụ (WAREHOUSE:VIEW - CREATE riêng
+    // do isAdmin-gated ở FE, không cần cấp thêm ở đây).
+    {
+      module: PERMISSION_MODULES.MATERIAL,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
+    { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
+    { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
   ],
   // --- Phase 3 (Kho vận lõi / Ledger Core) ---
   // WAREHOUSE_STAFF: kho nguồn tạo phiếu chuyển kho, kho đích xác nhận/từ chối (cả 2 thao tác
   // đều dùng chung permission WAREHOUSE_TRANSFER - phân biệt kho nào được thao tác qua
   // warehouseScope, enforce ở WarehouseTransfersService, không phải RBAC). STOCK:VIEW để tra
-  // tồn kho khả dụng trước khi tạo phiếu.
+  // tồn kho khả dụng trước khi tạo phiếu. MATERIAL:VIEW + WAREHOUSE:VIEW để MfgWarehousesPage
+  // (Tổng hợp kho) liệt kê được vật tư/kho thật của chính kho mình phụ trách.
   [BUSINESS_ROLES.WAREHOUSE_STAFF]: [
     { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, actions: 'ALL' },
+    { module: PERMISSION_MODULES.MATERIAL, actions: [PermissionAction.VIEW] },
+    { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
   ],
   // 2 account chuyên trách nhập định mức SKU (Sắt = định mức mảnh; Phụ kiện/Bao bì = định mức
   // chi tiết, gồm cả Sơn) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE
