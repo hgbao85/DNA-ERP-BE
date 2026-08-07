@@ -29,12 +29,20 @@ export class MaterialGroupsService {
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
 
   async create(dto: CreateMaterialGroupDto): Promise<MaterialGroupResponseDto> {
-    const existing = await this.prisma.materialGroup.findUnique({ where: { name: dto.name } });
-    if (existing) {
+    const existingName = await this.prisma.materialGroup.findUnique({ where: { name: dto.name } });
+    if (existingName) {
       throw new ConflictException(`Material group "${dto.name}" already exists`);
     }
+    const existingPrefix = await this.prisma.materialGroup.findUnique({
+      where: { codePrefix: dto.codePrefix },
+    });
+    if (existingPrefix) {
+      throw new ConflictException(`Tiền tố mã "${dto.codePrefix}" đã dùng cho nhóm khác`);
+    }
 
-    const group = await this.prisma.materialGroup.create({ data: { name: dto.name } });
+    const group = await this.prisma.materialGroup.create({
+      data: { name: dto.name, codePrefix: dto.codePrefix },
+    });
     return this.toResponseDto(group);
   }
 
@@ -71,10 +79,18 @@ export class MaterialGroupsService {
         throw new ConflictException(`Material group "${dto.name}" already exists`);
       }
     }
+    if (dto.codePrefix) {
+      const existing = await this.prisma.materialGroup.findUnique({
+        where: { codePrefix: dto.codePrefix },
+      });
+      if (existing && existing.id !== bigId) {
+        throw new ConflictException(`Tiền tố mã "${dto.codePrefix}" đã dùng cho nhóm khác`);
+      }
+    }
 
     const group = await this.prisma.materialGroup.update({
       where: { id: bigId },
-      data: { name: dto.name },
+      data: { name: dto.name, codePrefix: dto.codePrefix },
     });
     return this.toResponseDto(group);
   }
@@ -104,6 +120,7 @@ export class MaterialGroupsService {
       id: group.id.toString(),
       name: group.name,
       systemKey: group.systemKey,
+      codePrefix: group.codePrefix,
     });
   }
 }

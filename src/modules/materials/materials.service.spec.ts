@@ -2,10 +2,26 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { MaterialsService } from './materials.service';
 
+/** `code` truyền cho lệnh gọi `create()`/`update()` gần nhất trên 1 jest.Mock chưa gõ kiểu
+ * (jest.Mock trần -> .mock.calls là any[][]) - cast tường minh 1 chỗ duy nhất thay vì lặp lại
+ * `expect.objectContaining` lồng nhau ở từng test (bị @typescript-eslint/no-unsafe-assignment
+ * chặn commit vì TS không suy được kiểu qua nhiều lớp objectContaining lồng nhau). */
+function createdCode(mock: jest.Mock): unknown {
+  const calls = mock.mock.calls as Array<[{ data?: { code?: unknown } }]>;
+  return calls.at(-1)?.[0]?.data?.code;
+}
+
 describe('MaterialsService', () => {
   let service: MaterialsService;
   let prisma: {
-    material: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock; delete: jest.Mock };
+    material: {
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+      delete: jest.Mock;
+    };
+    materialGroup: { findUnique: jest.Mock };
   };
 
   const existingMaterial = {
@@ -24,10 +40,12 @@ describe('MaterialsService', () => {
     prisma = {
       material: {
         findUnique: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
       },
+      materialGroup: { findUnique: jest.fn() },
     };
     service = new MaterialsService(prisma as unknown as PrismaServiceType);
   });
@@ -52,12 +70,49 @@ describe('MaterialsService', () => {
       expect(prisma.material.create).not.toHaveBeenCalled();
     });
 
-    it('rejects a missing code with a clean 400 instead of crashing findUnique({ where: { code: undefined } })', async () => {
-      await expect(service.create({ name: 'Khong co ma', unit: 'kg' } as any)).rejects.toThrow(
-        BadRequestException,
-      );
-      expect(prisma.material.findUnique).not.toHaveBeenCalled();
-      expect(prisma.material.create).not.toHaveBeenCalled();
+    it('auto-generates a code when none is given (no group -> fallback prefix VT)', async () => {
+      prisma.material.findMany.mockResolvedValue([]);
+      prisma.material.findUnique.mockResolvedValue(null);
+      prisma.material.create.mockResolvedValue({ ...existingMaterial, code: 'VT-001' });
+
+      await service.create({ name: 'Khong co ma', unit: 'kg' });
+
+      expect(prisma.materialGroup.findUnique).not.toHaveBeenCalled();
+      expect(prisma.material.findMany).toHaveBeenCalledWith({
+        where: { code: { startsWith: 'VT-' } },
+        select: { code: true },
+      });
+      expect(createdCode(prisma.material.create)).toBe('VT-001');
+    });
+
+    it('treats a whitespace-only code as absent and auto-generates instead (no blank code written)', async () => {
+      prisma.material.findMany.mockResolvedValue([]);
+      prisma.material.findUnique.mockResolvedValue(null);
+      prisma.material.create.mockResolvedValue({ ...existingMaterial, code: 'VT-001' });
+
+      await service.create({ code: '   ', name: 'Whitespace code', unit: 'kg' });
+
+      expect(createdCode(prisma.material.create)).toBe('VT-001');
+    });
+
+    it("auto-generates a code from the group's codePrefix, continuing past the highest used sequence", async () => {
+      prisma.materialGroup.findUnique.mockResolvedValue({
+        id: 7n,
+        name: 'Sắt',
+        systemKey: 'STEEL_BAR',
+        codePrefix: 'SAT',
+      });
+      prisma.material.findMany.mockResolvedValue([{ code: 'SAT-001' }, { code: 'SAT-003' }]);
+      prisma.material.findUnique.mockResolvedValue(null);
+      prisma.material.create.mockResolvedValue({ ...existingMaterial, code: 'SAT-004' });
+
+      await service.create({ name: 'Sat vuong', unit: 'cay', materialGroupId: '7' });
+
+      expect(prisma.material.findMany).toHaveBeenCalledWith({
+        where: { code: { startsWith: 'SAT-' } },
+        select: { code: true },
+      });
+      expect(createdCode(prisma.material.create)).toBe('SAT-004');
     });
 
     it('rejects a missing name/unit with a clean 400', async () => {
