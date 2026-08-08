@@ -12,9 +12,12 @@ import { IsOptional } from 'class-validator';
  * lỗi ở tầng Prisma/DB - không có cách nào né được nếu không đổi schema.
  */
 export class CreateMaterialDto {
-  @ApiPropertyOptional({ description: "vd 'SAT-25'" })
+  @ApiPropertyOptional({
+    description:
+      "vd 'SAT-25' - để trống sẽ tự sinh dạng PREFIX-NNN theo nhóm vật tư (materialGroupId), xem MaterialsService.generateMaterialCode",
+  })
   @IsOptional()
-  code!: string;
+  code?: string;
 
   @ApiPropertyOptional({ description: 'vd "Sắt Hộp 6 zem" - spec ghép giữ nguyên dạng text' })
   @IsOptional()

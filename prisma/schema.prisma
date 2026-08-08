@@ -275,6 +275,14 @@ model MaterialGroup {
   /// Nhóm do admin tự tạo thêm = null, vô hình với logic Spec.
   systemKey String? @unique
 
+  /// Tiền tố mã vật tư tự sinh khi tạo Material không nhập `code` (vd 'SAT' -> 'SAT-001',
+  /// 'SAT-002'...) - MaterialsService.resolveCodePrefix() đọc thẳng cột này, KHÔNG suy từ
+  /// `name` (2 nhóm tên khác nhau vẫn có thể trùng đoạn đầu, vd "Ống nhựa PVC" và "Ống nhôm"
+  /// đều ra "ONG" nếu suy từ tên - unique ở đây triệt tiêu hẳn rủi ro đó). 8 nhóm hệ thống
+  /// seed sẵn giá trị cố định (material-group-code-prefix.constant.ts); nhóm admin tự tạo
+  /// bắt buộc nhập lúc tạo (CreateMaterialGroupDto) - FE gợi ý sẵn từ tên, admin sửa được.
+  codePrefix String @unique
+
   materials Material[]
 
   @@map("material_groups")

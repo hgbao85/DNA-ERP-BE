@@ -8,6 +8,7 @@ import {
 import { Material, Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { MATERIAL_CODE_FALLBACK_PREFIX } from '../../common/constants/material-group-code-prefix.constant';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -34,34 +35,71 @@ export class MaterialsService {
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
 
   async create(dto: CreateMaterialDto): Promise<MaterialResponseDto> {
-    // code/name/unit là cột NOT NULL ở DB - không thể bỏ qua được (không phải "validate form"
-    // chặn nhập liệu, chỉ là guard tránh PrismaClientValidationError raw -> 500 khó hiểu khi
-    // thiếu field mà lẽ ra DB sẽ từ chối; findUnique({ where: { code: undefined } }) bên dưới
-    // tự nó đã ném lỗi này nếu không chặn sớm ở đây).
-    if (!dto.code || !dto.name || !dto.unit) {
+    // name/unit là cột NOT NULL ở DB - không thể bỏ qua được (không phải "validate form" chặn
+    // nhập liệu, chỉ là guard tránh PrismaClientValidationError raw -> 500 khó hiểu khi thiếu
+    // field mà lẽ ra DB sẽ từ chối). `code` KHÔNG còn bắt buộc - để trống thì tự sinh theo nhóm
+    // vật tư (generateMaterialCode), theo yêu cầu "đỡ phải nghĩ mã tay mà vẫn có unique".
+    if (!dto.name || !dto.unit) {
       throw new BadRequestException(
-        'Thiếu Mã vật tư / Tên vật tư / Đơn vị tính - đây là 3 trường bắt buộc ở DB, không thể để trống',
+        'Thiếu Tên vật tư / Đơn vị tính - đây là 2 trường bắt buộc ở DB, không thể để trống',
       );
     }
 
-    const existing = await this.prisma.material.findUnique({ where: { code: dto.code } });
+    const materialGroupId = dto.materialGroupId ? parseBigIntId(dto.materialGroupId) : undefined;
+    // .trim() bắt buộc trước khi coi là "có nhập code" - '   ' (chỉ khoảng trắng) là truthy
+    // trong JS, không trim thì lọt qua nhánh tự sinh và ghi thẳng chuỗi trắng vào DB.
+    const trimmedCode = dto.code?.trim();
+    const code = trimmedCode || (await this.generateMaterialCode(materialGroupId));
+
+    const existing = await this.prisma.material.findUnique({ where: { code } });
     if (existing) {
-      throw new ConflictException(`Material "${dto.code}" already exists`);
+      throw new ConflictException(`Material "${code}" already exists`);
     }
 
     const material = await this.prisma.material.create({
       data: {
-        code: dto.code,
+        code,
         name: dto.name,
         unit: dto.unit,
         spec: dto.spec,
-        materialGroupId: dto.materialGroupId ? parseBigIntId(dto.materialGroupId) : undefined,
+        materialGroupId,
         warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
         buyerId: dto.buyerId || undefined,
         khoUnitFactor: dto.khoUnitFactor,
       },
     });
     return this.toResponseDto(material);
+  }
+
+  /**
+   * Sinh mã dạng `PREFIX-NNN` khi tạo vật tư không nhập `code` - PREFIX đọc thẳng
+   * MaterialGroup.codePrefix (cột NOT NULL + unique, xem schema.prisma - mỗi nhóm luôn có
+   * đúng 1 tiền tố cố định của riêng nó, không suy từ `name` nên 2 nhóm không bao giờ đụng
+   * tiền tố dù tên gần giống nhau). Chưa chọn nhóm nào thì dùng PREFIX chung
+   * (MATERIAL_CODE_FALLBACK_PREFIX). NNN = số lớn nhất đã dùng cho đúng PREFIX đó +1 (không
+   * phải COUNT) - để không sinh trùng mã khi có vật tư ở giữa đã bị xoá (remove() là hard
+   * delete thật, xem comment class).
+   */
+  private async generateMaterialCode(materialGroupId?: bigint): Promise<string> {
+    const prefix = await this.resolveCodePrefix(materialGroupId);
+
+    const existing = await this.prisma.material.findMany({
+      where: { code: { startsWith: `${prefix}-` } },
+      select: { code: true },
+    });
+    const usedSeqs = existing
+      .map((m) => Number(m.code.slice(prefix.length + 1)))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    const nextSeq = (usedSeqs.length ? Math.max(...usedSeqs) : 0) + 1;
+
+    return `${prefix}-${String(nextSeq).padStart(3, '0')}`;
+  }
+
+  private async resolveCodePrefix(materialGroupId?: bigint): Promise<string> {
+    if (!materialGroupId) return MATERIAL_CODE_FALLBACK_PREFIX;
+
+    const group = await this.prisma.materialGroup.findUnique({ where: { id: materialGroupId } });
+    return group?.codePrefix ?? MATERIAL_CODE_FALLBACK_PREFIX;
   }
 
   async findAll(query: PaginationQueryDto): Promise<Paginated<MaterialResponseDto>> {
@@ -95,17 +133,20 @@ export class MaterialsService {
     const bigId = parseBigIntId(id);
     await this.findOneOrThrow(id);
 
-    if (dto.code) {
-      const existing = await this.prisma.material.findUnique({ where: { code: dto.code } });
+    // .trim() cùng lý do đã áp cho create() - '   ' là truthy trong JS, không trim thì ghi
+    // thẳng chuỗi trắng đè lên code cũ khi PATCH.
+    const trimmedCode = dto.code?.trim() || undefined;
+    if (trimmedCode) {
+      const existing = await this.prisma.material.findUnique({ where: { code: trimmedCode } });
       if (existing && existing.id !== bigId) {
-        throw new ConflictException(`Material "${dto.code}" already exists`);
+        throw new ConflictException(`Material "${trimmedCode}" already exists`);
       }
     }
 
     const material = await this.prisma.material.update({
       where: { id: bigId },
       data: {
-        code: dto.code,
+        code: trimmedCode,
         name: dto.name,
         unit: dto.unit,
         spec: dto.spec,

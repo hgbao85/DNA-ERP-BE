@@ -13,6 +13,7 @@ import {
   MATERIAL_GROUP_SYSTEM_KEYS,
   MaterialGroupSystemKey,
 } from '../src/common/constants/material-group-system-keys.constant';
+import { MATERIAL_GROUP_CODE_PREFIX } from '../src/common/constants/material-group-code-prefix.constant';
 import { PermissionAction, PrismaClient } from '../src/generated/prisma/client';
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
@@ -220,19 +221,29 @@ async function main() {
     throw new Error('SEED_MATERIAL_GROUPS phải khớp 1-1 với MATERIAL_GROUP_SYSTEM_KEYS');
   }
   for (const g of SEED_MATERIAL_GROUPS) {
+    const codePrefix = MATERIAL_GROUP_CODE_PREFIX[g.systemKey];
     const bySystemKey = await prisma.materialGroup.findUnique({
       where: { systemKey: g.systemKey },
     });
-    if (bySystemKey) continue;
+    if (bySystemKey) {
+      // codePrefix cố định theo systemKey, không phải thứ admin tự sửa qua UI (khác `name`) -
+      // đồng bộ lại nếu vì lý do gì đó lệch khỏi hằng số (vd sau backfill migration thủ công).
+      if (bySystemKey.codePrefix !== codePrefix) {
+        await prisma.materialGroup.update({ where: { id: bySystemKey.id }, data: { codePrefix } });
+      }
+      continue;
+    }
 
     const byName = await prisma.materialGroup.findUnique({ where: { name: g.name } });
     if (byName) {
       await prisma.materialGroup.update({
         where: { id: byName.id },
-        data: { systemKey: g.systemKey },
+        data: { systemKey: g.systemKey, codePrefix },
       });
     } else {
-      await prisma.materialGroup.create({ data: { name: g.name, systemKey: g.systemKey } });
+      await prisma.materialGroup.create({
+        data: { name: g.name, systemKey: g.systemKey, codePrefix },
+      });
     }
   }
 
