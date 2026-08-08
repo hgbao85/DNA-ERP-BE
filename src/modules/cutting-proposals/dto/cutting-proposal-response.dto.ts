@@ -40,6 +40,9 @@ export class LengthComparisonEntryResponseDto {
 @Exclude()
 export class CuttingProposalLineResponseDto {
   @Expose() @ApiProperty() materialId!: string;
+  @Expose() @ApiProperty() materialCode!: string;
+  @Expose() @ApiProperty() materialName!: string;
+  @Expose() @ApiProperty() unit!: string;
   @Expose() @ApiProperty() feasible!: boolean;
   @Expose() @ApiPropertyOptional({ nullable: true }) bestStockLengthMm!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) totalBars!: number | null;
@@ -64,6 +67,9 @@ export class CuttingProposalLineResponseDto {
 export class CuttingProposalResponseDto {
   @Expose() @ApiProperty() id!: string;
   @Expose() @ApiProperty() productionOrderId!: string;
+  @Expose() @ApiProperty() poNumber!: string;
+  @Expose() @ApiProperty() mfgProductCode!: string;
+  @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;
   @Expose() @ApiProperty({ enum: CuttingProposalStatus }) status!: CuttingProposalStatus;
   @Expose() @ApiPropertyOptional({ nullable: true }) totalBarsAll!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) totalWasteMm!: number | null;

@@ -4,6 +4,7 @@ import { PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalStatus } from '../../generated/prisma/client';
 import { AppConfig } from '../../config/configuration';
 import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
+import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CuttingProposalsService } from './cutting-proposals.service';
 
 describe('CuttingProposalsService', () => {
@@ -11,6 +12,8 @@ describe('CuttingProposalsService', () => {
   let prisma: {
     cuttingProposal: {
       findUnique: jest.Mock;
+      findMany: jest.Mock;
+      count: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
@@ -18,15 +21,27 @@ describe('CuttingProposalsService', () => {
     cuttingProposalLine: { create: jest.Mock };
     cuttingProposalPattern: { create: jest.Mock };
     cuttingProposalPatternSegment: { create: jest.Mock };
+    purchaseProposal: { create: jest.Mock };
     productionOrder: { findUniqueOrThrow: jest.Mock };
     systemConfig: { findUniqueOrThrow: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     notification: { create: jest.Mock };
+    warehouse: { findUniqueOrThrow: jest.Mock };
+    $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
   let externalApiService: { post: jest.Mock };
   let configService: { get: jest.Mock };
+  let stockLedgerService: { postEntry: jest.Mock };
+
+  /** Mô phỏng `Prisma.Decimal` tối thiểu - đủ cho `.toNumber()` mà approve() gọi. */
+  const qtyRow = (n: number) => [{ qty: { toNumber: () => n } }];
+
+  /** LIST_INCLUDE (productionOrder.mfgProduct) - mọi mock đi qua toResponseDto() cần có. */
+  const productionOrderRelation = () => ({
+    productionOrder: { poNumber: 'PO-1', mfgProduct: { factoryCode: 'SKU-1', name: 'Ghế test' } },
+  });
 
   const productionOrder = { id: 1n, poNumber: 'PO-1', bomRevisionId: 5n, quantity: 500 };
   const systemConfig = {
@@ -52,6 +67,8 @@ describe('CuttingProposalsService', () => {
     prisma = {
       cuttingProposal: {
         findUnique: jest.fn(),
+        findMany: jest.fn(),
+        count: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
@@ -59,11 +76,19 @@ describe('CuttingProposalsService', () => {
       cuttingProposalLine: { create: jest.fn() },
       cuttingProposalPattern: { create: jest.fn() },
       cuttingProposalPatternSegment: { create: jest.fn() },
+      purchaseProposal: { create: jest.fn() },
       productionOrder: { findUniqueOrThrow: jest.fn().mockResolvedValue(productionOrder) },
       systemConfig: { findUniqueOrThrow: jest.fn().mockResolvedValue(systemConfig) },
       pieceBom: { findMany: jest.fn().mockResolvedValue([pieceBomRow]) },
       bomPiece: { findMany: jest.fn().mockResolvedValue([{ pieceId: 10n, qtyPerUnit: 4 }]) },
       notification: { create: jest.fn() },
+      warehouse: {
+        findUniqueOrThrow: jest.fn(({ where }: { where: { code: string } }) =>
+          Promise.resolve(where.code === 'PRODUCTION' ? { id: 900n } : { id: 800n }),
+        ),
+      },
+      // approve() lock tồn - mặc định "hết tồn" (0), test nào cần tồn > 0 tự override.
+      $queryRaw: jest.fn().mockResolvedValue(qtyRow(0)),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     externalApiService = { post: jest.fn() };
@@ -77,10 +102,12 @@ describe('CuttingProposalsService', () => {
         return map[key];
       }),
     };
+    stockLedgerService = { postEntry: jest.fn() };
     service = new CuttingProposalsService(
       prisma as unknown as PrismaServiceType,
       externalApiService as unknown as ExternalApiService,
       configService as unknown as ConfigService<AppConfig, true>,
+      stockLedgerService as unknown as StockLedgerService,
     );
   });
 
@@ -97,6 +124,7 @@ describe('CuttingProposalsService', () => {
         requestedAt: new Date(),
         completedAt: new Date(),
         approvedAt: null,
+        ...productionOrderRelation(),
       };
       prisma.cuttingProposal.findUnique.mockResolvedValue(existing);
 
@@ -118,6 +146,7 @@ describe('CuttingProposalsService', () => {
         requestedAt: new Date(),
         completedAt: null,
         approvedAt: null,
+        ...productionOrderRelation(),
       });
       externalApiService.post.mockReturnValue(new Promise(() => {})); // never resolves
 
@@ -126,6 +155,7 @@ describe('CuttingProposalsService', () => {
       expect(result.status).toBe(CuttingProposalStatus.CALCULATING);
       expect(prisma.cuttingProposal.create).toHaveBeenCalledWith({
         data: { productionOrderId: 1n, idempotencyKey: undefined, requestedById: undefined },
+        include: { productionOrder: { include: { mfgProduct: true } } },
       });
     });
   });
@@ -289,6 +319,50 @@ describe('CuttingProposalsService', () => {
       expect(updateCall[0].data.wastePercentage).toBe(0.85);
     });
 
+    it('retries with auto_scan enabled when a line is feasible=false even though any_over_threshold=false (bug fix D1)', async () => {
+      // Solver chỉ set any_over_threshold=true cho vật tư "feasible nhưng vượt ngưỡng" - vật tư
+      // HOÀN TOÀN infeasible (như dưới đây) không được cờ này phủ tới (xem api/views.py) - service
+      // phải tự kiểm tra purchase_plan[].feasible để không bỏ sót ca này.
+      const infeasibleFixed = {
+        status: 'success',
+        summary: {
+          total_bars_all: 0,
+          total_waste_mm: 0,
+          waste_percentage: 0,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          { material: '200', feasible: false, reason: 'Không có cách cắt nào đạt ngưỡng' },
+        ],
+      };
+      const scanned = {
+        status: 'success',
+        summary: {
+          total_bars_all: 34,
+          total_waste_mm: 472,
+          waste_percentage: 0.25,
+          any_over_threshold: false,
+        },
+        purchase_plan: [{ material: '200', feasible: true, cutting_patterns: [] }],
+      };
+      externalApiService.post.mockResolvedValueOnce(infeasibleFixed).mockResolvedValueOnce(scanned);
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      expect(externalApiService.post).toHaveBeenCalledTimes(2);
+      const [firstCall, secondCall] = externalApiService.post.mock.calls as unknown as Array<
+        [string, { auto_scan: boolean }]
+      >;
+      expect(firstCall[1]).toMatchObject({ auto_scan: false });
+      expect(secondCall[1]).toMatchObject({ auto_scan: true });
+
+      const updateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
+        { data: { wastePercentage: number } },
+      ];
+      expect(updateCall[0].data.wastePercentage).toBe(0.25);
+    });
+
     it('marks the proposal FAILED with the solver error message when solver returns NO_FEASIBLE_SOLUTION', async () => {
       externalApiService.post.mockRejectedValue(
         new ExternalApiHttpError(422, {
@@ -432,6 +506,7 @@ describe('CuttingProposalsService', () => {
         id: 2n,
         productionOrderId: 1n,
         status: CuttingProposalStatus.CALCULATING,
+        lines: [],
       });
 
       await expect(service.approve('2', 'user-1')).rejects.toThrow(ConflictException);
@@ -448,6 +523,7 @@ describe('CuttingProposalsService', () => {
         id: 2n,
         productionOrderId: 1n,
         status: CuttingProposalStatus.DRAFT,
+        lines: [],
       });
       prisma.cuttingProposal.update.mockResolvedValue({
         id: 2n,
@@ -460,6 +536,7 @@ describe('CuttingProposalsService', () => {
         requestedAt: new Date(),
         completedAt: null,
         approvedAt: new Date(),
+        ...productionOrderRelation(),
       });
 
       const result = await service.approve('2', 'user-1');
@@ -473,6 +550,161 @@ describe('CuttingProposalsService', () => {
         data: { status: CuttingProposalStatus.SUPERSEDED },
       });
       expect(result.status).toBe(CuttingProposalStatus.APPROVED);
+    });
+
+    it('auto-creates a PurchaseProposal for feasible lines with bars to buy, no stock on hand (Phase 8)', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [
+          { materialId: 30n, feasible: true, totalBars: 8 },
+          { materialId: 31n, feasible: true, totalBars: 0 },
+          { materialId: 32n, feasible: false, totalBars: 5 },
+          { materialId: 33n, feasible: true, totalBars: null },
+        ],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+      // $queryRaw mặc định (beforeEach) trả tồn = 0 -> buyQty giữ nguyên = totalBars.
+
+      await service.approve('2', 'user-1');
+
+      expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
+        data: {
+          cuttingProposalId: 2n,
+          warehouseCode: 'phoi-son-han',
+          items: { create: [{ materialId: 30n, buyQty: 8, actualStock: 0 }] },
+        },
+      });
+      // Không có gì để trừ (consumeQty=0) -> không post bút toán kho.
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('trừ tồn tự động: đủ tồn thì buyQty=0 và post STEEL_ISSUE đúng số lượng (Phase 8.1)', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [{ materialId: 30n, feasible: true, totalBars: 8 }],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+      prisma.$queryRaw.mockResolvedValue(qtyRow(20)); // tồn 20 >= nhu cầu 8
+
+      await service.approve('2', 'user-1');
+
+      expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
+        data: {
+          cuttingProposalId: 2n,
+          warehouseCode: 'phoi-son-han',
+          items: { create: [{ materialId: 30n, buyQty: 0, actualStock: 20 }] },
+        },
+      });
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith({
+        fromWarehouseId: 800n,
+        toWarehouseId: 900n,
+        materialId: 30n,
+        qty: 8,
+        refType: 'STEEL_ISSUE',
+        refId: '2',
+        createdById: 'user-1',
+        idempotencyKey: 'cutting-proposal:2:steel-issue:30',
+      });
+    });
+
+    it('trừ tồn tự động: thiếu 1 phần thì split đúng giữa tồn dùng ngay và buyQty (Phase 8.1)', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [{ materialId: 30n, feasible: true, totalBars: 8 }],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+      prisma.$queryRaw.mockResolvedValue(qtyRow(3)); // tồn 3 < nhu cầu 8 -> thiếu 5
+
+      await service.approve('2', 'user-1');
+
+      expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
+        data: {
+          cuttingProposalId: 2n,
+          warehouseCode: 'phoi-son-han',
+          items: { create: [{ materialId: 30n, buyQty: 5, actualStock: 3 }] },
+        },
+      });
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ qty: 3, refType: 'STEEL_ISSUE' }),
+      );
+    });
+
+    it('does not create a PurchaseProposal when no line has bars to buy', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [{ materialId: 30n, feasible: true, totalBars: 0 }],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+
+      await service.approve('2', 'user-1');
+
+      expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findAll', () => {
+    it('lists across every production order (no where filter) with poNumber/mfgProduct joined', async () => {
+      prisma.cuttingProposal.findMany.mockResolvedValue([
+        {
+          id: 2n,
+          productionOrderId: 1n,
+          status: CuttingProposalStatus.DRAFT,
+          totalBarsAll: 34,
+          totalWasteMm: 472,
+          wastePercentage: 0.25,
+          errorMessage: null,
+          requestedAt: new Date(),
+          completedAt: new Date(),
+          approvedAt: null,
+          ...productionOrderRelation(),
+        },
+      ]);
+      prisma.cuttingProposal.count.mockResolvedValue(1);
+
+      const result = await service.findAll({
+        page: 1,
+        limit: 20,
+        sortOrder: 'desc' as never,
+        skip: 0,
+      });
+
+      expect(prisma.cuttingProposal.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: undefined,
+          include: { productionOrder: { include: { mfgProduct: true } } },
+        }),
+      );
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].poNumber).toBe('PO-1');
+      expect(result.data[0].mfgProductCode).toBe('SKU-1');
     });
   });
 });

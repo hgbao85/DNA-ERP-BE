@@ -77,6 +77,7 @@ model User {
   piDecidedItems            ProductionInvoiceItem[] @relation("PIItemDecidedBy")
   cuttingProposalsRequested CuttingProposal[]       @relation("CuttingProposalRequestedBy")
   cuttingProposalsApproved  CuttingProposal[]       @relation("CuttingProposalApprovedBy")
+  purchaseProposalsApproved PurchaseProposal[]
   stockLedgerEntries        StockLedger[]
   materialsToBuy            Material[]
 
@@ -310,6 +311,7 @@ model Material {
   consumableBoms                ConsumableBom[]
   bomAccessoryItems             BomAccessoryItem[]
   cuttingProposalLines          CuttingProposalLine[]
+  purchaseProposalItems         PurchaseProposalItem[]
   stockLedgerEntries            StockLedger[]
   stockQuants                   StockQuant[]
   warehouseTransferItems        WarehouseTransferItem[]
@@ -332,7 +334,8 @@ model Supplier {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  materialSuppliers MaterialSupplier[]
+  materialSuppliers      MaterialSupplier[]
+  purchaseProposalQuotes PurchaseProposalQuote[]
 
   @@map("suppliers")
 }
@@ -1061,10 +1064,11 @@ model CuttingProposal {
   approvedAt        DateTime?
   approvedById      String?
 
-  productionOrder ProductionOrder       @relation(fields: [productionOrderId], references: [id])
-  requestedBy     User?                 @relation("CuttingProposalRequestedBy", fields: [requestedById], references: [id])
-  approvedBy      User?                 @relation("CuttingProposalApprovedBy", fields: [approvedById], references: [id])
-  lines           CuttingProposalLine[]
+  productionOrder   ProductionOrder       @relation(fields: [productionOrderId], references: [id])
+  requestedBy       User?                 @relation("CuttingProposalRequestedBy", fields: [requestedById], references: [id])
+  approvedBy        User?                 @relation("CuttingProposalApprovedBy", fields: [approvedById], references: [id])
+  lines             CuttingProposalLine[]
+  purchaseProposals PurchaseProposal[]
 
   @@index([productionOrderId, status])
   @@map("cutting_proposals")
@@ -1132,6 +1136,88 @@ model CuttingProposalPatternSegment {
   @@index([patternId])
   @@index([segmentSpecId])
   @@map("cutting_proposal_pattern_segments")
+}
+
+// =====================================================================
+// Phase 8 — Mua hàng (rút gọn: chỉ vật tư sắt, nối thẳng từ CuttingProposal đã duyệt)
+// Quyết định nghiệp vụ (2026-08-06): CHƯA đối chiếu tồn kho thật (StockQuant) ở bản này -
+// buyQty = CuttingProposalLine.totalBars nguyên văn, không trừ tồn. Khi nào cần đối chiếu
+// tồn kho thì thêm cột/migration riêng lúc đó, không đoán trước field chưa dùng tới ở đây.
+// 1 PurchaseProposal tự sinh ngay khi CuttingProposal chuyển APPROVED (xem
+// CuttingProposalsService.approve()) - không có API tạo thủ công.
+// =====================================================================
+
+enum PurchaseProposalStatus {
+  NEW
+  QUOTING
+  SUBMITTED
+  PURCHASING
+  PURCHASED
+  REJECTED
+}
+
+/// Tự sinh 1-1 theo (cuttingProposalId, warehouseCode) ngay khi CuttingProposal được duyệt -
+/// hiện chỉ có 1 warehouseCode/proposal ('phoi-son-han', vì cat_sat_iea chỉ tính vật tư sắt),
+/// giữ cột riêng để không phải migration lại khi mở rộng nhóm vật tư khác sau này.
+model PurchaseProposal {
+  id                BigInt                 @id @default(autoincrement())
+  cuttingProposalId BigInt
+  warehouseCode     String
+  status            PurchaseProposalStatus @default(NEW)
+  createdAt         DateTime               @default(now())
+  submittedAt       DateTime?
+  approvedAt        DateTime?
+  approvedById      String?
+  rejectedAt        DateTime?
+  rejectionReason   String?
+  purchasedAt       DateTime?
+
+  cuttingProposal CuttingProposal        @relation(fields: [cuttingProposalId], references: [id])
+  approvedBy      User?                  @relation(fields: [approvedById], references: [id])
+  items           PurchaseProposalItem[]
+
+  @@unique([cuttingProposalId, warehouseCode])
+  @@index([status])
+  @@map("purchase_proposals")
+}
+
+/// 1 dòng/loại sắt cần mua - materialId tra ngược Material để lấy code/name/unit khi trả DTO
+/// (giống hệt cách CuttingProposalLine không snapshot name/unit), không lưu trùng lặp.
+model PurchaseProposalItem {
+  id          BigInt @id @default(autoincrement())
+  proposalId  BigInt
+  materialId  BigInt
+  /// Tồn thật (stock_quant, kho phoi-son-han) chụp đúng lúc CuttingProposalsService.approve()
+  /// tạo dòng này - không tính lại theo thời gian thực (giống buyQty, là số chốt).
+  actualStock Int    @default(0)
+  buyQty      Int
+  receivedQty Int    @default(0)
+
+  proposal PurchaseProposal        @relation(fields: [proposalId], references: [id])
+  material Material                @relation(fields: [materialId], references: [id])
+  quotes   PurchaseProposalQuote[]
+
+  @@index([proposalId])
+  @@map("purchase_proposal_items")
+}
+
+/// Báo giá NCC cho 1 dòng vật tư - Purchasing thêm nhiều dòng/item, Sếp chọn đúng 1
+/// (isChosen) lúc approve().
+model PurchaseProposalQuote {
+  id           BigInt    @id @default(autoincrement())
+  itemId       BigInt
+  supplierId   BigInt?
+  supplierName String
+  unitPrice    Decimal?  @db.Decimal(14, 2)
+  expectedDate DateTime?
+  note         String?
+  isChosen     Boolean   @default(false)
+
+  item     PurchaseProposalItem @relation(fields: [itemId], references: [id])
+  supplier Supplier?            @relation(fields: [supplierId], references: [id])
+
+  @@index([itemId])
+  @@map("purchase_proposal_quotes")
 }
 
 // ===== Phase 3 — Kho vận lõi (Ledger Core, docs/dna-erp-db-schema.html mục 1.8) =====

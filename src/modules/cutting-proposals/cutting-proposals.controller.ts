@@ -38,6 +38,13 @@ export class CuttingProposalsController {
     return this.cuttingProposalsService.findAllForOrder(id, query);
   }
 
+  /** List toàn hệ thống - màn Admin "Cắt sắt" (business-data). */
+  @Get('cutting-proposals')
+  @RequirePermissions(VIEW)
+  findAll(@Query() query: PaginationQueryDto) {
+    return this.cuttingProposalsService.findAll(query);
+  }
+
   @Get('cutting-proposals/:id')
   @RequirePermissions(VIEW)
   findOne(@Param('id') id: string) {

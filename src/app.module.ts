@@ -43,6 +43,7 @@ import { ProductionOrdersModule } from './modules/production-orders/production-o
 import { CuttingProposalsModule } from './modules/cutting-proposals/cutting-proposals.module';
 import { StockModule } from './modules/stock/stock.module';
 import { WarehouseTransfersModule } from './modules/warehouse-transfers/warehouse-transfers.module';
+import { PurchaseProposalsModule } from './modules/purchase-proposals/purchase-proposals.module';
 
 @Module({
   imports: [
@@ -105,6 +106,7 @@ import { WarehouseTransfersModule } from './modules/warehouse-transfers/warehous
     CuttingProposalsModule,
     StockModule,
     WarehouseTransfersModule,
+    PurchaseProposalsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
