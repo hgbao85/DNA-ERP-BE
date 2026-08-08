@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { CloudinaryService } from '../uploads/cloudinary.service';
 import { MaterialsService } from './materials.service';
 
 /** `code` truyền cho lệnh gọi `create()`/`update()` gần nhất trên 1 jest.Mock chưa gõ kiểu
@@ -23,6 +24,7 @@ describe('MaterialsService', () => {
     };
     materialGroup: { findUnique: jest.Mock };
   };
+  let cloudinary: { deleteByUrl: jest.Mock };
 
   const existingMaterial = {
     id: 1n,
@@ -47,7 +49,11 @@ describe('MaterialsService', () => {
       },
       materialGroup: { findUnique: jest.fn() },
     };
-    service = new MaterialsService(prisma as unknown as PrismaServiceType);
+    cloudinary = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
+    service = new MaterialsService(
+      prisma as unknown as PrismaServiceType,
+      cloudinary as unknown as CloudinaryService,
+    );
   });
 
   describe('create', () => {
@@ -151,6 +157,50 @@ describe('MaterialsService', () => {
         service.update('1', { code: 'SAT-01', name: 'Renamed' } as any),
       ).resolves.toBeDefined();
     });
+
+    it('deletes the old Cloudinary image when imageUrl is replaced by a different one', async () => {
+      const withImage = {
+        ...existingMaterial,
+        imageUrl: 'https://res.cloudinary.com/x/image/upload/v1/old.jpg',
+      };
+      prisma.material.findUnique.mockResolvedValueOnce(withImage);
+      prisma.material.update.mockResolvedValue({
+        ...withImage,
+        imageUrl: 'https://res.cloudinary.com/x/image/upload/v1/new.jpg',
+      });
+
+      await service.update('1', {
+        imageUrl: 'https://res.cloudinary.com/x/image/upload/v1/new.jpg',
+      });
+
+      expect(cloudinary.deleteByUrl).toHaveBeenCalledWith(
+        'https://res.cloudinary.com/x/image/upload/v1/old.jpg',
+      );
+    });
+
+    it('deletes the old Cloudinary image when imageUrl is cleared (set to null)', async () => {
+      const withImage = {
+        ...existingMaterial,
+        imageUrl: 'https://res.cloudinary.com/x/image/upload/v1/old.jpg',
+      };
+      prisma.material.findUnique.mockResolvedValueOnce(withImage);
+      prisma.material.update.mockResolvedValue({ ...withImage, imageUrl: null });
+
+      await service.update('1', { imageUrl: null } as any);
+
+      expect(cloudinary.deleteByUrl).toHaveBeenCalledWith(
+        'https://res.cloudinary.com/x/image/upload/v1/old.jpg',
+      );
+    });
+
+    it('does not touch Cloudinary when imageUrl is left untouched', async () => {
+      prisma.material.findUnique.mockResolvedValueOnce(existingMaterial);
+      prisma.material.update.mockResolvedValue(existingMaterial);
+
+      await service.update('1', { name: 'Renamed only' });
+
+      expect(cloudinary.deleteByUrl).not.toHaveBeenCalled();
+    });
   });
 
   describe('remove', () => {
@@ -161,6 +211,20 @@ describe('MaterialsService', () => {
 
       expect(prisma.material.delete).toHaveBeenCalledWith({ where: { id: 1n } });
       expect(prisma.material.update).not.toHaveBeenCalled();
+    });
+
+    it('deletes the material image from Cloudinary when it has one', async () => {
+      const withImage = {
+        ...existingMaterial,
+        imageUrl: 'https://res.cloudinary.com/x/image/upload/v1/old.jpg',
+      };
+      prisma.material.findUnique.mockResolvedValue(withImage);
+
+      await service.remove('1');
+
+      expect(cloudinary.deleteByUrl).toHaveBeenCalledWith(
+        'https://res.cloudinary.com/x/image/upload/v1/old.jpg',
+      );
     });
 
     it('throws 404 when the material does not exist', async () => {
