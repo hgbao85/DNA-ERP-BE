@@ -41,8 +41,9 @@ interface SolverProposeResponse {
     total_bars_all: number;
     total_waste_mm: number;
     waste_percentage: number;
-    /// true nếu CÓ ÍT NHẤT 1 loại sắt vượt max_waste_percentage với các stock_lengths cố định
-    /// đã chấm - dùng để quyết định có cần gọi lại với auto_scan bật hay không.
+    /// true nếu có ít nhất 1 loại sắt CẮT ĐƯỢC (feasible) nhưng vượt max_waste_percentage với
+    /// các stock_lengths cố định - KHÔNG bao phủ ca "hoàn toàn không cắt được" (feasible=false,
+    /// xem runSolverAndSave() - phải tự kiểm tra thêm purchase_plan[].feasible).
     any_over_threshold: boolean;
   };
   purchase_plan: Array<{
@@ -66,14 +67,22 @@ interface SolverProposeResponse {
   }>;
 }
 
-type CuttingProposalRow = Prisma.CuttingProposalGetPayload<object>;
-type CuttingProposalDetail = Prisma.CuttingProposalGetPayload<{
-  include: {
-    lines: {
-      include: { patterns: { include: { segments: { include: { segmentSpec: true } } } } };
-    };
-  };
-}>;
+const LIST_INCLUDE = {
+  productionOrder: { include: { mfgProduct: true } },
+} satisfies Prisma.CuttingProposalInclude;
+
+const DETAIL_INCLUDE = {
+  ...LIST_INCLUDE,
+  lines: {
+    include: {
+      material: true,
+      patterns: { include: { segments: { include: { segmentSpec: true } } } },
+    },
+  },
+} satisfies Prisma.CuttingProposalInclude;
+
+type CuttingProposalRow = Prisma.CuttingProposalGetPayload<{ include: typeof LIST_INCLUDE }>;
+type CuttingProposalDetail = Prisma.CuttingProposalGetPayload<{ include: typeof DETAIL_INCLUDE }>;
 
 /**
  * 1 lần gọi solver cat_sat_iea cho 1 ProductionOrder. Gọi tự động (fire-and-forget) ngay sau
@@ -99,6 +108,7 @@ export class CuttingProposalsService {
     if (options.idempotencyKey) {
       const existing = await this.prisma.cuttingProposal.findUnique({
         where: { idempotencyKey: options.idempotencyKey },
+        include: LIST_INCLUDE,
       });
       if (existing) {
         return this.toResponseDto(existing);
@@ -111,6 +121,7 @@ export class CuttingProposalsService {
         idempotencyKey: options.idempotencyKey,
         requestedById: options.requestedById,
       },
+      include: LIST_INCLUDE,
     });
 
     void this.runSolverAndSave(proposal.id, productionOrderId).catch((error: unknown) => {
@@ -124,6 +135,21 @@ export class CuttingProposalsService {
     return this.toResponseDto(proposal);
   }
 
+  /** List toàn hệ thống (không lọc theo PO) - dùng cho màn Admin "Quản lý cắt sắt". */
+  async findAll(query: PaginationQueryDto): Promise<Paginated<CuttingProposalResponseDto>> {
+    const result = await paginate(
+      {
+        findMany: (args) =>
+          this.prisma.cuttingProposal.findMany({ ...args, include: LIST_INCLUDE }),
+        count: (args) => this.prisma.cuttingProposal.count(args),
+      },
+      query,
+      undefined,
+      { requestedAt: 'desc' as const },
+    );
+    return { data: result.data.map((p) => this.toResponseDto(p)), meta: result.meta };
+  }
+
   async findAllForOrder(
     productionOrderId: string,
     query: PaginationQueryDto,
@@ -131,7 +157,8 @@ export class CuttingProposalsService {
     const bigId = parseBigIntId(productionOrderId);
     const result = await paginate(
       {
-        findMany: (args) => this.prisma.cuttingProposal.findMany(args),
+        findMany: (args) =>
+          this.prisma.cuttingProposal.findMany({ ...args, include: LIST_INCLUDE }),
         count: (args) => this.prisma.cuttingProposal.count(args),
       },
       query,
@@ -145,11 +172,7 @@ export class CuttingProposalsService {
     const bigId = parseBigIntId(id);
     const proposal = await this.prisma.cuttingProposal.findUnique({
       where: { id: bigId },
-      include: {
-        lines: {
-          include: { patterns: { include: { segments: { include: { segmentSpec: true } } } } },
-        },
-      },
+      include: DETAIL_INCLUDE,
     });
     if (!proposal) {
       throw new NotFoundException(`Cutting proposal ${id} not found`);
@@ -214,6 +237,7 @@ export class CuttingProposalsService {
           approvedAt: new Date(),
           approvedById: actorUserId,
         },
+        include: LIST_INCLUDE,
       });
 
       if (buyableLines.length > 0) {
@@ -312,16 +336,23 @@ export class CuttingProposalsService {
 
       // Lần 1: chỉ chấm các stock_lengths cố định (nhanh, KHÔNG vét cạn - đúng khuyến nghị của
       // chính solver "để người dùng chủ động bật, không tự chạy ngầm"). Theo yêu cầu Sếp
-      // (2026-08-06): nếu có loại sắt nào không đạt max_waste_percentage với các chiều dài cố
-      // định, tự động gọi lại LẦN 2 với auto_scan bật (dò dải solverMinLengthMm..MaxLengthMm,
-      // bước solverLengthStepMm - mặc định 5000-6000mm bước 10mm) để tìm chiều dài đặt riêng.
+      // (2026-08-06): nếu không loại sắt nào trong các chiều dài cố định đạt max_waste_percentage,
+      // tự động gọi lại LẦN 2 với auto_scan bật (dò dải solverMinLengthMm..MaxLengthMm, bước
+      // solverLengthStepMm - mặc định 5000-6000mm bước 10mm) để tìm chiều dài đặt riêng.
+      //
+      // `any_over_threshold` (solver, api/views.py) CHỈ set true cho vật tư đã "feasible" (cắt
+      // được) nhưng vượt ngưỡng - vật tư "feasible=false" hoàn toàn (không cắt được với các
+      // chiều dài cố định) không bao giờ set cờ này (solver `continue` sớm, xem views.py dòng
+      // ~210-222) dù rõ ràng cũng cần dò lại. Phải tự kiểm tra thêm `purchase_plan[].feasible`
+      // trực tiếp, không chỉ tin vào cờ tổng hợp của solver.
       let requestBody: typeof baseRequestBody & { auto_scan: boolean } = {
         ...baseRequestBody,
         auto_scan: false,
       };
       let response = await callSolver(requestBody);
 
-      if (response.summary.any_over_threshold) {
+      const hasInfeasibleLine = response.purchase_plan.some((item) => !item.feasible);
+      if (response.summary.any_over_threshold || hasInfeasibleLine) {
         requestBody = { ...baseRequestBody, auto_scan: true };
         response = await callSolver(requestBody);
       }
@@ -486,6 +517,9 @@ export class CuttingProposalsService {
     return new CuttingProposalResponseDto({
       id: proposal.id.toString(),
       productionOrderId: proposal.productionOrderId.toString(),
+      poNumber: proposal.productionOrder.poNumber,
+      mfgProductCode: proposal.productionOrder.mfgProduct.factoryCode,
+      mfgProductName: proposal.productionOrder.mfgProduct.name,
       status: proposal.status,
       totalBarsAll: proposal.totalBarsAll,
       totalWasteMm: proposal.totalWasteMm,
@@ -501,6 +535,9 @@ export class CuttingProposalsService {
     const dto = this.toResponseDto(proposal);
     dto.lines = proposal.lines.map((line) => ({
       materialId: line.materialId.toString(),
+      materialCode: line.material.code,
+      materialName: line.material.name,
+      unit: line.material.unit,
       feasible: line.feasible,
       bestStockLengthMm: line.bestStockLengthMm,
       totalBars: line.totalBars,
