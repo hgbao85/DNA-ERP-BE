@@ -12,6 +12,7 @@ import { MATERIAL_CODE_FALLBACK_PREFIX } from '../../common/constants/material-g
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { CloudinaryService } from '../uploads/cloudinary.service';
 import { CreateMaterialDto } from './dto/create-material.dto';
 import { CreateMaterialSupplierDto } from './dto/create-material-supplier.dto';
 import { MaterialResponseDto } from './dto/material-response.dto';
@@ -32,7 +33,10 @@ type MaterialSupplierWithSupplier = Prisma.MaterialSupplierGetPayload<{
  */
 @Injectable()
 export class MaterialsService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly cloudinaryService: CloudinaryService,
+  ) {}
 
   async create(dto: CreateMaterialDto): Promise<MaterialResponseDto> {
     // name/unit là cột NOT NULL ở DB - không thể bỏ qua được (không phải "validate form" chặn
@@ -66,6 +70,7 @@ export class MaterialsService {
         warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
         buyerId: dto.buyerId || undefined,
         khoUnitFactor: dto.khoUnitFactor,
+        imageUrl: dto.imageUrl,
       },
     });
     return this.toResponseDto(material);
@@ -131,7 +136,7 @@ export class MaterialsService {
 
   async update(id: string, dto: UpdateMaterialDto): Promise<MaterialResponseDto> {
     const bigId = parseBigIntId(id);
-    await this.findOneOrThrow(id);
+    const previous = await this.findOneOrThrow(id);
 
     // .trim() cùng lý do đã áp cho create() - '   ' là truthy trong JS, không trim thì ghi
     // thẳng chuỗi trắng đè lên code cũ khi PATCH.
@@ -154,16 +159,28 @@ export class MaterialsService {
         warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
         buyerId: dto.buyerId || undefined,
         khoUnitFactor: dto.khoUnitFactor,
+        imageUrl: dto.imageUrl,
         isActive: dto.isActive,
       },
     });
+
+    // dto.imageUrl === undefined nghĩa là request không đụng tới field này (giữ nguyên) - CHỈ
+    // xóa ảnh cũ trên Cloudinary khi nó thật sự bị thay/gỡ (khác giá trị mới, kể cả gỡ về null).
+    if (dto.imageUrl !== undefined && previous.imageUrl && previous.imageUrl !== dto.imageUrl) {
+      await this.cloudinaryService.deleteByUrl(previous.imageUrl);
+    }
+
     return this.toResponseDto(material);
   }
 
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
-    await this.findOneOrThrow(id);
+    const material = await this.findOneOrThrow(id);
     await this.prisma.material.delete({ where: { id: bigId } });
+
+    if (material.imageUrl) {
+      await this.cloudinaryService.deleteByUrl(material.imageUrl);
+    }
   }
 
   // ─── MaterialSupplier sub-resource ────────────────────────────────────────
@@ -269,6 +286,7 @@ export class MaterialsService {
       warehouseId: material.warehouseId?.toString() ?? null,
       buyerId: material.buyerId ?? null,
       khoUnitFactor: material.khoUnitFactor?.toNumber() ?? null,
+      imageUrl: material.imageUrl ?? null,
       isActive: material.isActive,
       createdAt: material.createdAt,
       updatedAt: material.updatedAt,

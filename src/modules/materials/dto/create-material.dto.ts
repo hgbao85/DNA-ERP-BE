@@ -53,4 +53,10 @@ export class CreateMaterialDto {
   })
   @IsOptional()
   buyerId?: string;
+
+  @ApiPropertyOptional({
+    description: 'URL ảnh vật tư (Cloudinary secure_url) - xem POST /uploads/image',
+  })
+  @IsOptional()
+  imageUrl?: string;
 }

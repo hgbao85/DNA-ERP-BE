@@ -43,6 +43,7 @@ import { ProductionOrdersModule } from './modules/production-orders/production-o
 import { CuttingProposalsModule } from './modules/cutting-proposals/cutting-proposals.module';
 import { StockModule } from './modules/stock/stock.module';
 import { WarehouseTransfersModule } from './modules/warehouse-transfers/warehouse-transfers.module';
+import { UploadsModule } from './modules/uploads/uploads.module';
 import { PurchaseProposalsModule } from './modules/purchase-proposals/purchase-proposals.module';
 
 @Module({
@@ -106,6 +107,7 @@ import { PurchaseProposalsModule } from './modules/purchase-proposals/purchase-p
     CuttingProposalsModule,
     StockModule,
     WarehouseTransfersModule,
+    UploadsModule,
     PurchaseProposalsModule,
   ],
   providers: [

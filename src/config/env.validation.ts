@@ -40,4 +40,11 @@ export const envValidationSchema = Joi.object({
   /// SystemConfig.solverTimeLimitSeconds, mỗi lần giải solver). Để dư dả vì số lần giải/request
   /// = số loại sắt x (1 + N lần vét cạn) có thể cộng dồn khá lâu dù mỗi lần giải nhanh.
   SOLVER_TIMEOUT_SECONDS: Joi.number().default(300),
+
+  // Cloudinary (upload ảnh, xem UploadsModule). .optional() cùng lý do với SOLVER_* ở trên -
+  // thiếu cấu hình không được chặn boot cả app, chỉ riêng route POST /uploads/image sẽ báo lỗi
+  // khi thật sự có ai gọi mà chưa cấu hình.
+  CLOUDINARY_CLOUD_NAME: Joi.string().optional(),
+  CLOUDINARY_API_KEY: Joi.string().optional(),
+  CLOUDINARY_API_SECRET: Joi.string().optional(),
 });

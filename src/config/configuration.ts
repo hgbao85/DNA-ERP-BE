@@ -24,6 +24,11 @@ export interface AppConfig {
     apiKey: string;
     timeoutSeconds: number;
   };
+  cloudinary: {
+    cloudName: string;
+    apiKey: string;
+    apiSecret: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -51,5 +56,10 @@ export default (): AppConfig => ({
     baseUrl: process.env.SOLVER_BASE_URL ?? '',
     apiKey: process.env.SOLVER_API_KEY ?? '',
     timeoutSeconds: parseInt(process.env.SOLVER_TIMEOUT_SECONDS ?? '300', 10),
+  },
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME ?? '',
+    apiKey: process.env.CLOUDINARY_API_KEY ?? '',
+    apiSecret: process.env.CLOUDINARY_API_SECRET ?? '',
   },
 });

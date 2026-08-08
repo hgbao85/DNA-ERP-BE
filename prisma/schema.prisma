@@ -298,6 +298,7 @@ model Material {
   warehouseId     BigInt?
   buyerId         String?
   khoUnitFactor   Decimal?  @db.Decimal(14, 4)
+  imageUrl        String?
   isActive        Boolean   @default(true)
   deletedAt       DateTime?
   createdAt       DateTime  @default(now())
