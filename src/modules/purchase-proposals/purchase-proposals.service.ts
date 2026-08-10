@@ -237,6 +237,9 @@ export class PurchaseProposalsService {
 
     const nextReceivedQty = Math.min(item.buyQty, item.receivedQty + dto.receivedQty);
     const incrementQty = nextReceivedQty - item.receivedQty;
+    const nextReceivedQtyPurchaseUnit = dto.receivedQtyPurchaseUnit
+      ? (item.receivedQtyPurchaseUnit?.toNumber() ?? 0) + dto.receivedQtyPurchaseUnit
+      : item.receivedQtyPurchaseUnit?.toNumber();
 
     // Bút toán "hàng mua về nhập kho" - post trước, ngoài transaction cập nhật receivedQty bên
     // dưới, đúng idiom WarehouseTransfersService.confirm() (idempotencyKey do client gửi, vì
@@ -261,7 +264,10 @@ export class PurchaseProposalsService {
     const updatedItem = await this.prisma.$transaction(async (tx) => {
       const saved = await tx.purchaseProposalItem.update({
         where: { id: item.id },
-        data: { receivedQty: nextReceivedQty },
+        data: {
+          receivedQty: nextReceivedQty,
+          receivedQtyPurchaseUnit: nextReceivedQtyPurchaseUnit,
+        },
         include: ITEM_INCLUDE,
       });
 
@@ -344,9 +350,12 @@ export class PurchaseProposalsService {
       materialCode: item.material.code,
       materialName: item.material.name,
       unit: item.material.unit,
+      purchaseUnit: item.material.purchaseUnit ?? null,
+      khoUnitFactor: item.material.khoUnitFactor?.toNumber() ?? null,
       actualStock: item.actualStock,
       buyQty: item.buyQty,
       receivedQty: item.receivedQty,
+      receivedQtyPurchaseUnit: item.receivedQtyPurchaseUnit?.toNumber() ?? null,
       quotes: item.quotes.map(
         (q) =>
           new PurchaseProposalQuoteResponseDto({

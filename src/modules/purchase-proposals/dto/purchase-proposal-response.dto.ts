@@ -24,11 +24,18 @@ export class PurchaseProposalItemResponseDto {
   @Expose() @ApiProperty() materialCode!: string;
   @Expose() @ApiProperty() materialName!: string;
   @Expose() @ApiProperty() unit!: string;
+  /// Đơn vị mua hàng từ NCC (vd "kg") khi khác unit - null nếu vật tư chỉ có 1 đơn vị.
+  @Expose() @ApiPropertyOptional({ nullable: true }) purchaseUnit!: string | null;
+  /// Số lượng unit / 1 purchaseUnit (vd 250 = 250 cái/kg) - FE dùng để gợi ý quy đổi lúc nhập kho.
+  @Expose() @ApiPropertyOptional({ nullable: true }) khoUnitFactor!: number | null;
   /// Tồn thật (kho phoi-son-han) chụp lúc CuttingProposalsService.approve() tạo dòng này -
   /// FE dùng để hiển thị + suy ra required = actualStock + buyQty (xem purchasing-api.ts).
   @Expose() @ApiProperty() actualStock!: number;
   @Expose() @ApiProperty() buyQty!: number;
   @Expose() @ApiProperty() receivedQty!: number;
+  /// Cộng dồn số lượng thực nhận theo purchaseUnit - chỉ để đối chiếu/audit, xem
+  /// PurchaseProposalItem.receivedQtyPurchaseUnit.
+  @Expose() @ApiPropertyOptional({ nullable: true }) receivedQtyPurchaseUnit!: number | null;
   @Expose()
   @ApiProperty({ type: [PurchaseProposalQuoteResponseDto] })
   @Type(() => PurchaseProposalQuoteResponseDto)

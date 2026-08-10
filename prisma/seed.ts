@@ -23,7 +23,7 @@ const ALL_ACTIONS = Object.values(PermissionAction);
 const ALL_MODULES = Object.values(PERMISSION_MODULES);
 
 /**
- * 3 kho vật lý (chuỗi chuyển kho nội bộ gốc) + 3 kho ảo bắt buộc phải seed sẵn
+ * 3 kho vật lý (chuỗi chuyển kho nội bộ gốc) + 4 kho ảo bắt buộc phải seed sẵn
  * (docs/dna-erp-db-schema.html "warehouses"). Codes phải khớp 1-1 với
  * PROTECTED_WAREHOUSE_CODES - đây là danh sách duy nhất mà warehouses.service.ts chặn xoá.
  * "thanh-pham" là kho gốc duy nhất được phép có thêm instance khác (vd "thanh-pham-2") -
@@ -65,6 +65,12 @@ const SEED_WAREHOUSES: { code: string; name: string; isVirtual: boolean; note?: 
     name: 'Phế liệu (ảo)',
     isVirtual: true,
     note: 'Điểm đến bút toán huỷ/phế — không có tồn vật lý',
+  },
+  {
+    code: 'OPENING_BALANCE',
+    name: 'Đối ứng tồn kho ban đầu/điều chỉnh (ảo)',
+    isVirtual: true,
+    note: 'Điểm đối ứng cho bút toán khai báo tồn kho ban đầu lúc tạo vật tư, và cho "Sửa nhanh tồn kho" ở Admin > Vật tư / trang Kho (cả tăng lẫn giảm) — không có tồn vật lý',
   },
 ];
 

@@ -311,6 +311,11 @@ model Material {
   detailKind      MaterialDetailKind?
   warehouseId     BigInt?
   buyerId         String?
+  /// Đơn vị mua hàng từ NCC khi khác với `unit` (đơn vị tồn kho/sản xuất) - vd NCC bán theo "kg"
+  /// nhưng sản xuất dùng "cái". Để trống nếu vật tư chỉ có 1 đơn vị duy nhất (unit).
+  purchaseUnit    String?
+  /// Hệ số quy đổi: số lượng `unit` tương ứng với 1 `purchaseUnit` (vd 250 = 250 cái/kg).
+  /// Chỉ có ý nghĩa khi purchaseUnit khác null.
   khoUnitFactor   Decimal?            @db.Decimal(14, 4)
   imageUrl        String?
   isActive        Boolean             @default(true)
@@ -1215,6 +1220,9 @@ model PurchaseProposalItem {
   actualStock Int    @default(0)
   buyQty      Int
   receivedQty Int    @default(0)
+  /// Cộng dồn số lượng thực nhận theo purchaseUnit của material (vd kg) - chỉ để đối chiếu/audit,
+  /// không dùng để tính tồn kho (receivedQty theo unit mới là số chốt vào StockLedger).
+  receivedQtyPurchaseUnit Decimal? @db.Decimal(14, 4)
 
   proposal PurchaseProposal        @relation(fields: [proposalId], references: [id])
   material Material                @relation(fields: [materialId], references: [id])
@@ -1256,6 +1264,7 @@ enum StockLedgerRefType {
   MATERIAL_ISSUE
   WAREHOUSE_TRANSFER
   ADJUST
+  OPENING_BALANCE
 }
 
 enum TransferStatus {

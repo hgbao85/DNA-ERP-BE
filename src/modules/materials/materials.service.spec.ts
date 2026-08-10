@@ -1,5 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { MaterialsService } from './materials.service';
 
@@ -23,8 +25,10 @@ describe('MaterialsService', () => {
       delete: jest.Mock;
     };
     materialGroup: { findUnique: jest.Mock };
+    warehouse: { findUniqueOrThrow: jest.Mock };
   };
   let cloudinary: { deleteByUrl: jest.Mock };
+  let stockLedger: { postEntry: jest.Mock };
 
   const existingMaterial = {
     id: 1n,
@@ -48,11 +52,14 @@ describe('MaterialsService', () => {
         delete: jest.fn(),
       },
       materialGroup: { findUnique: jest.fn() },
+      warehouse: { findUniqueOrThrow: jest.fn() },
     };
     cloudinary = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
+    stockLedger = { postEntry: jest.fn().mockResolvedValue(undefined) };
     service = new MaterialsService(
       prisma as unknown as PrismaServiceType,
       cloudinary as unknown as CloudinaryService,
+      stockLedger as unknown as StockLedgerService,
     );
   });
 
@@ -124,6 +131,55 @@ describe('MaterialsService', () => {
     it('rejects a missing name/unit with a clean 400', async () => {
       await expect(service.create({ code: 'SAT-03' } as any)).rejects.toThrow(BadRequestException);
       expect(prisma.material.create).not.toHaveBeenCalled();
+    });
+
+    it('posts an OPENING_BALANCE stock-ledger entry when openingQty + warehouseId are given', async () => {
+      prisma.material.findUnique.mockResolvedValue(null);
+      prisma.material.create.mockResolvedValue({ ...existingMaterial, id: 5n, warehouseId: 9n });
+      prisma.warehouse.findUniqueOrThrow.mockResolvedValue({ id: 99n, code: 'OPENING_BALANCE' });
+
+      await service.create({
+        code: 'BULONG-01',
+        name: 'Bu long',
+        unit: 'cai',
+        warehouseId: '9',
+        openingQty: 50,
+      });
+
+      expect(prisma.warehouse.findUniqueOrThrow).toHaveBeenCalledWith({
+        where: { code: 'OPENING_BALANCE' },
+      });
+      expect(stockLedger.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fromWarehouseId: 99n,
+          toWarehouseId: 9n,
+          materialId: 5n,
+          qty: 50,
+          refType: StockLedgerRefType.OPENING_BALANCE,
+        }),
+      );
+    });
+
+    it('does not post any stock-ledger entry when openingQty is absent', async () => {
+      prisma.material.findUnique.mockResolvedValue(null);
+      prisma.material.create.mockResolvedValue(existingMaterial);
+
+      await service.create({
+        code: 'SAT-01',
+        name: 'Sat cay',
+        unit: 'kg',
+        warehouseId: '9',
+      });
+
+      expect(stockLedger.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('rejects openingQty without warehouseId with a clean 400, does not write', async () => {
+      await expect(
+        service.create({ code: 'SAT-05', name: 'Sat cay', unit: 'kg', openingQty: 10 } as any),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.material.create).not.toHaveBeenCalled();
+      expect(stockLedger.postEntry).not.toHaveBeenCalled();
     });
   });
 

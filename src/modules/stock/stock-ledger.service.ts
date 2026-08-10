@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -120,7 +120,13 @@ export class StockLedgerService {
     dto: CreateStockAdjustmentDto,
     idempotencyKey: string,
     userId: string,
+    warehouseScope: string | null,
   ): Promise<StockLedgerResponseDto> {
+    await this.assertScopeTouchesWarehouses(
+      warehouseScope,
+      parseBigIntId(dto.fromWarehouseId),
+      parseBigIntId(dto.toWarehouseId),
+    );
     return this.postEntry({
       fromWarehouseId: parseBigIntId(dto.fromWarehouseId),
       toWarehouseId: parseBigIntId(dto.toWarehouseId),
@@ -169,6 +175,27 @@ export class StockLedgerService {
     );
 
     return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };
+  }
+
+  /** null = tổng kho (BOSS/ADMIN), thấy mọi kho - không có gì để chặn. Cùng pattern
+   *  WarehouseTransfersService.assertScopeTouchesTransfer() - caller bị giới hạn theo
+   *  warehouseScope phải chạm ít nhất 1 trong 2 chân kho của bút toán. */
+  private async assertScopeTouchesWarehouses(
+    warehouseScope: string | null,
+    fromWarehouseId: bigint,
+    toWarehouseId: bigint,
+  ): Promise<void> {
+    if (!warehouseScope) return;
+    const warehouses = await this.prisma.warehouse.findMany({
+      where: { id: { in: [fromWarehouseId, toWarehouseId] } },
+      select: { id: true, code: true },
+    });
+    const touchesScope = warehouses.some((w) => w.code === warehouseScope);
+    if (!touchesScope) {
+      throw new ForbiddenException(
+        `Caller bị giới hạn ở kho '${warehouseScope}', không liên quan tới bút toán này`,
+      );
+    }
   }
 
   private assertExactlyOneGoodsLeg(

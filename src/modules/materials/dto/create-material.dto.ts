@@ -49,13 +49,30 @@ export class CreateMaterialDto {
   @IsOptional()
   detailKind?: MaterialDetailKind;
 
-  @ApiPropertyOptional({ description: 'Hệ số quy đổi đơn vị kho, vd 600 = mm/cây' })
+  @ApiPropertyOptional({
+    description:
+      'Đơn vị mua hàng từ NCC khi khác với unit (đơn vị tồn kho/sản xuất), vd "kg" khi unit = "cái". Để trống nếu vật tư chỉ có 1 đơn vị.',
+  })
+  @IsOptional()
+  purchaseUnit?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Hệ số quy đổi: số lượng unit tương ứng với 1 purchaseUnit, vd 250 = 250 cái/kg. Chỉ có ý nghĩa khi purchaseUnit khác trống.',
+  })
   @IsOptional()
   khoUnitFactor?: number;
 
   @ApiPropertyOptional({ description: 'Kho vật tư này sẽ nằm khi được tạo' })
   @IsOptional()
   warehouseId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Tồn kho ban đầu (số lượng theo unit) - chỉ áp dụng lúc TẠO MỚI và khi đã chọn warehouseId, ghi 1 bút toán OPENING_BALANCE vào StockLedger. Bị bỏ qua khi sửa vật tư (UpdateMaterialDto.update() không đọc field này).',
+  })
+  @IsOptional()
+  openingQty?: number;
 
   @ApiPropertyOptional({
     description: 'User.id (uuid) của nhân viên mua hàng phụ trách vật tư này',

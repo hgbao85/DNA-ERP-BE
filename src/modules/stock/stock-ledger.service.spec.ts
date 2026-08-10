@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from './stock-ledger.service';
@@ -12,6 +12,7 @@ describe('StockLedgerService', () => {
       findMany: jest.Mock;
       count: jest.Mock;
     };
+    warehouse: { findMany: jest.Mock };
   };
 
   const fromWh = { id: 1n, code: 'phoi-son-han', name: 'Phoi Son Han' };
@@ -50,6 +51,7 @@ describe('StockLedgerService', () => {
         findMany: jest.fn(),
         count: jest.fn(),
       },
+      warehouse: { findMany: jest.fn().mockResolvedValue([fromWh, toWh]) },
     };
     service = new StockLedgerService(prisma as unknown as PrismaServiceType);
   });
@@ -211,6 +213,7 @@ describe('StockLedgerService', () => {
         { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5, note: 'kiểm kê' },
         'idem-key-1',
         'user-1',
+        null,
       );
 
       expect(prisma.stockLedger.create).toHaveBeenCalledWith(
@@ -224,6 +227,32 @@ describe('StockLedgerService', () => {
           }),
         }),
       );
+    });
+
+    it('allows a scoped caller whose warehouseScope matches one leg of the entry', async () => {
+      prisma.stockLedger.findUnique.mockResolvedValue(null);
+      prisma.stockLedger.create.mockResolvedValue(ledgerRow());
+
+      await service.adjust(
+        { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5 },
+        'idem-key-2',
+        'user-1',
+        toWh.code,
+      );
+
+      expect(prisma.stockLedger.create).toHaveBeenCalled();
+    });
+
+    it('rejects a scoped caller whose warehouseScope touches neither leg of the entry', async () => {
+      await expect(
+        service.adjust(
+          { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5 },
+          'idem-key-3',
+          'user-1',
+          'thanh-pham',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.stockLedger.create).not.toHaveBeenCalled();
     });
   });
 

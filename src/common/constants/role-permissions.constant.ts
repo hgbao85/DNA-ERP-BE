@@ -156,12 +156,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.CUTTING_PROPOSAL,
       actions: [PermissionAction.VIEW, PermissionAction.CREATE, PermissionAction.APPROVE],
     },
-    // MfgWarehousesPage (Tổng hợp kho): QLSX xem tồn kho + tự thêm vật tư mới vào kho ngay
-    // từ màn hình này (CREATE), và xem/tạo kho thành phẩm phụ (WAREHOUSE:VIEW - CREATE riêng
-    // do isAdmin-gated ở FE, không cần cấp thêm ở đây).
+    // MfgWarehousesPage (Tổng hợp kho): QLSX chỉ xem tồn kho - quyền "Thêm vật tư" (CREATE) đã
+    // chuyển cho WAREHOUSE_STAFF (thủ kho là người biết rõ tồn vật lý thực tế của kho mình khi
+    // khai báo Tồn kho ban đầu lúc tạo vật tư, xem MaterialsService.create()). WAREHOUSE:VIEW
+    // để xem/tạo kho thành phẩm phụ (CREATE riêng do isAdmin-gated ở FE, không cần cấp thêm ở đây).
     {
       module: PERMISSION_MODULES.MATERIAL,
-      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+      actions: [PermissionAction.VIEW],
     },
     { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
@@ -170,16 +171,26 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // WAREHOUSE_STAFF: kho nguồn tạo phiếu chuyển kho, kho đích xác nhận/từ chối (cả 2 thao tác
   // đều dùng chung permission WAREHOUSE_TRANSFER - phân biệt kho nào được thao tác qua
   // warehouseScope, enforce ở WarehouseTransfersService, không phải RBAC). STOCK:VIEW để tra
-  // tồn kho khả dụng trước khi tạo phiếu. MATERIAL:VIEW + WAREHOUSE:VIEW để MfgWarehousesPage
-  // (Tổng hợp kho) liệt kê được vật tư/kho thật của chính kho mình phụ trách.
+  // tồn kho khả dụng trước khi tạo phiếu; STOCK:UPDATE mở khoá đúng 1 endpoint POST
+  // /stock-ledger/adjust ("ngoại lệ duy nhất", xem stock-ledger.controller.ts:26-27) - dùng
+  // cho ô "Tồn" sửa nhanh trên bảng ở MfgWarehousesPage (thủ kho tự điền/sửa tồn kho vật tư đã
+  // tạo sẵn). Cũng bị giới hạn theo warehouseScope (enforce ở StockLedgerService.adjust(), cùng
+  // pattern WAREHOUSE_TRANSFER) để thủ kho không chỉnh được tồn kho ở kho mình không phụ trách.
+  // MATERIAL:VIEW+CREATE + WAREHOUSE:VIEW để MfgWarehousesPage (Tổng hợp kho) liệt kê được vật
+  // tư/kho thật của chính kho mình phụ trách, và tự thêm vật tư mới (kèm khai báo Tồn kho ban
+  // đầu - MaterialsService.create()) - quyền CREATE này trước đây cấp cho QLSX, đã chuyển hẳn
+  // sang thủ kho vì thủ kho mới là người biết rõ tồn vật lý thực tế của kho mình.
   // PURCHASE_PROPOSAL: VIEW+UPDATE (KHÔNG phải 'ALL') để NhapKhoPage.tsx xem đề xuất mua hàng
   // đang chờ và gọi POST .../items/:itemId/receive xác nhận đã nhận hàng - cố ý không cấp
   // APPROVE (duyệt đề xuất mua là việc của Sếp, không phải thủ kho).
   // SKU:VIEW để XuatKhoPage.tsx liệt kê SKU lúc xuất kho.
   [BUSINESS_ROLES.WAREHOUSE_STAFF]: [
-    { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
+    { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW, PermissionAction.UPDATE] },
     { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, actions: 'ALL' },
-    { module: PERMISSION_MODULES.MATERIAL, actions: [PermissionAction.VIEW] },
+    {
+      module: PERMISSION_MODULES.MATERIAL,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
     { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
     {
       module: PERMISSION_MODULES.PURCHASE_PROPOSAL,

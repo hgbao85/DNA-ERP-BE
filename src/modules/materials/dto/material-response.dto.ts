@@ -15,6 +15,7 @@ export class MaterialResponseDto {
   detailKind!: MaterialDetailKind | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) warehouseId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) buyerId!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) purchaseUnit!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) khoUnitFactor!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) imageUrl!: string | null;
   @Expose() @ApiProperty() isActive!: boolean;

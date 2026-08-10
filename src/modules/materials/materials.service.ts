@@ -5,7 +5,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Material, MaterialDetailKind, Prisma } from '../../generated/prisma/client';
+import {
+  Material,
+  MaterialDetailKind,
+  Prisma,
+  StockLedgerRefType,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { MATERIAL_CODE_FALLBACK_PREFIX } from '../../common/constants/material-group-code-prefix.constant';
@@ -13,6 +18,7 @@ import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-grou
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { CreateMaterialDto } from './dto/create-material.dto';
 import { CreateMaterialSupplierDto } from './dto/create-material-supplier.dto';
@@ -24,6 +30,10 @@ import { UpdateMaterialSupplierDto } from './dto/update-material-supplier.dto';
 type MaterialSupplierWithSupplier = Prisma.MaterialSupplierGetPayload<{
   include: { supplier: true };
 }>;
+
+/// Kho ảo cố định (protected-warehouse-codes.constant.ts) - nguồn của bút toán "khai báo tồn
+/// kho ban đầu" khi tạo vật tư kèm openingQty (xem create()).
+const OPENING_BALANCE_WAREHOUSE_CODE = 'OPENING_BALANCE';
 
 /**
  * Materials + MaterialSuppliers (docs/dna-erp-db-schema.html "materials" / "material_suppliers").
@@ -37,6 +47,7 @@ export class MaterialsService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly stockLedgerService: StockLedgerService,
   ) {}
 
   async create(dto: CreateMaterialDto): Promise<MaterialResponseDto> {
@@ -48,6 +59,9 @@ export class MaterialsService {
       throw new BadRequestException(
         'Thiếu Tên vật tư / Đơn vị tính - đây là 2 trường bắt buộc ở DB, không thể để trống',
       );
+    }
+    if (dto.openingQty && dto.openingQty > 0 && !dto.warehouseId) {
+      throw new BadRequestException('Phải chọn Kho trước khi nhập Tồn kho ban đầu');
     }
 
     const materialGroupId = dto.materialGroupId ? parseBigIntId(dto.materialGroupId) : undefined;
@@ -72,10 +86,27 @@ export class MaterialsService {
         detailKind,
         warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
         buyerId: dto.buyerId || undefined,
+        purchaseUnit: dto.purchaseUnit,
         khoUnitFactor: dto.khoUnitFactor,
         imageUrl: dto.imageUrl,
       },
     });
+
+    if (dto.openingQty && dto.openingQty > 0 && dto.warehouseId) {
+      const openingWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
+        where: { code: OPENING_BALANCE_WAREHOUSE_CODE },
+      });
+      await this.stockLedgerService.postEntry({
+        fromWarehouseId: openingWarehouse.id,
+        toWarehouseId: parseBigIntId(dto.warehouseId),
+        materialId: material.id,
+        qty: dto.openingQty,
+        refType: StockLedgerRefType.OPENING_BALANCE,
+        refId: material.id.toString(),
+        note: 'Tồn kho ban đầu lúc tạo vật tư',
+      });
+    }
+
     return this.toResponseDto(material);
   }
 
@@ -205,6 +236,7 @@ export class MaterialsService {
         detailKind,
         warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
         buyerId: dto.buyerId || undefined,
+        purchaseUnit: dto.purchaseUnit,
         khoUnitFactor: dto.khoUnitFactor,
         imageUrl: dto.imageUrl,
         isActive: dto.isActive,
@@ -333,6 +365,7 @@ export class MaterialsService {
       detailKind: material.detailKind ?? null,
       warehouseId: material.warehouseId?.toString() ?? null,
       buyerId: material.buyerId ?? null,
+      purchaseUnit: material.purchaseUnit ?? null,
       khoUnitFactor: material.khoUnitFactor?.toNumber() ?? null,
       imageUrl: material.imageUrl ?? null,
       isActive: material.isActive,

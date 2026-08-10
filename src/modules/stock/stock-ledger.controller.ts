@@ -31,10 +31,11 @@ export class StockLedgerController {
     @Body() dto: CreateStockAdjustmentDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
     @CurrentUser('id') userId: string,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
   ) {
     if (!idempotencyKey) {
       throw new BadRequestException('Header Idempotency-Key là bắt buộc');
     }
-    return this.stockLedgerService.adjust(dto, idempotencyKey, userId);
+    return this.stockLedgerService.adjust(dto, idempotencyKey, userId, warehouseScope);
   }
 }
