@@ -6,19 +6,12 @@ import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { AppConfig } from './config/configuration';
-import { PRISMA_SERVICE, PrismaServiceType } from './prisma/prisma.service';
-import { syncRbac } from './common/rbac/sync-rbac';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
 
   app.useLogger(app.get(PinoLogger));
   const configService = app.get(ConfigService<AppConfig, true>);
-
-  // Keeps Permission/Role/RolePermission in the DB always matching role-permissions.constant.ts,
-  // on every boot - so editing that file takes effect immediately without anyone needing to
-  // remember `npm run seed` (see src/common/rbac/sync-rbac.ts for the incident this fixes).
-  await syncRbac(app.get<PrismaServiceType>(PRISMA_SERVICE));
 
   const corsOrigin = configService.get('cors.origin', { infer: true });
   app.use(helmet());
