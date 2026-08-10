@@ -750,13 +750,14 @@ enum SalesOrderItemStatus {
 }
 
 /// DRAFT/REJECTED của mock đã bỏ - không service nào từng set 2 giá trị đó (rejections
-/// đều rewind về APPROVED_DETAIL, xem PlanForm.reject-qlsx/reject-boss).
+/// đều rewind về APPROVED_DETAIL, xem PlanForm.reject-boss).
+/// WAITING_QLSX_APPROVAL đã bỏ (bước QLSX duyệt cục bộ bị loại khỏi pipeline) - approveDetail()
+/// giờ chuyển thẳng WAITING_BOSS_APPROVAL, xem migration remove_qlsx_sku_approval_step.
 enum PlanFormStatus {
   WAITING_PARTS
   APPROVED_PARTS
   WAITING_DETAIL
   APPROVED_DETAIL
-  WAITING_QLSX_APPROVAL
   WAITING_BOSS_APPROVAL
   APPROVED
 }
@@ -842,7 +843,7 @@ model SalesOrderItem {
 }
 
 /// SKU quota-approval pipeline (KHSX tạo -> account chuyên trách nhập -> KHSX duyệt từng
-/// nhóm -> QLSX duyệt cục bộ -> Sếp duyệt cuối). manhData/detailQuota giữ tạm dạng JSON
+/// nhóm -> Sếp duyệt cuối). manhData/detailQuota giữ tạm dạng JSON
 /// (mirror đúng shape mock PlanForm.manhData/quotaManagement.materialType) - sẽ thay bằng
 /// tham chiếu quan hệ thật tới Piece/Part/SegmentSpec/BomRevision ở phase viết lại Spec
 /// pages (không thuộc phạm vi domain này).
@@ -865,7 +866,6 @@ model PlanForm {
   origin              String?
   manhData            Json?
   detailQuota         Json?
-  qlsxReviewedAt      DateTime?
   createdById         String
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt

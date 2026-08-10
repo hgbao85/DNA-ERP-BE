@@ -58,7 +58,6 @@ describe('SkusService', () => {
     status: 'WAITING_PARTS',
     note: null,
     origin: null,
-    qlsxReviewedAt: null,
     createdById: 'user-1',
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -438,11 +437,31 @@ describe('SkusService', () => {
     });
   });
 
-  describe('requestBossApproval', () => {
-    it('rejects when the plan form is not in WAITING_QLSX_APPROVAL', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED_DETAIL' }));
+  describe('approveDetail', () => {
+    it('rejects when manh/detail groups are not all approved yet', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ manhReviews: [], detailReviews: [] }),
+      );
 
-      await expect(service.requestBossApproval('5')).rejects.toThrow(ConflictException);
+      await expect(service.approveDetail('5')).rejects.toThrow(ConflictException);
+      expect(prisma.planForm.update).not.toHaveBeenCalled();
+    });
+
+    it('advances straight to WAITING_BOSS_APPROVAL once manh/detail groups are approved (bước QLSX đã bỏ)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({
+          manhReviews: [{ group: 'SAT', status: 'APPROVED' }],
+          detailReviews: [{ group: 'DAY_SON', status: 'APPROVED' }],
+        }),
+      );
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+
+      const result = await service.approveDetail('5');
+
+      expect(result.status).toBe('WAITING_BOSS_APPROVAL');
+      expect(prisma.planForm.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: 'WAITING_BOSS_APPROVAL' } }),
+      );
     });
   });
 

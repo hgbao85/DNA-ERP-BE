@@ -18,7 +18,6 @@ export class SkuResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) origin!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) manhData!: unknown;
   @Expose() @ApiPropertyOptional({ nullable: true }) detailQuota!: unknown;
-  @Expose() @ApiPropertyOptional({ nullable: true }) qlsxReviewedAt!: Date | null;
   @Expose() @ApiProperty() createdById!: string;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;

@@ -10,12 +10,11 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { MfgRole, PermissionAction } from '../../generated/prisma/client';
+import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { CreateSkuDto } from './dto/create-sku.dto';
@@ -100,30 +99,9 @@ export class SkusController {
     return this.skusService.approveDetail(id);
   }
 
-  // ─── QLSX (mfgRole = PRODUCTION_MANAGER) ────────────────────────────────────
-
-  @Post(':id/qlsx-review')
-  @RequirePermissions(APPROVE)
-  @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)
-  reviewQlsx(@Param('id') id: string) {
-    return this.skusService.reviewQlsx(id);
-  }
-
-  @Post(':id/request-boss-approval')
-  @RequirePermissions(APPROVE)
-  @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)
-  requestBossApproval(@Param('id') id: string) {
-    return this.skusService.requestBossApproval(id);
-  }
-
-  @Post(':id/reject-qlsx')
-  @RequirePermissions(APPROVE)
-  @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)
-  rejectByQlsx(@Param('id') id: string) {
-    return this.skusService.rejectByQlsx(id);
-  }
-
   // ─── Sếp (role BOSS) - duyệt cuối, mirror assertBossRole() trong mock ───────
+  // Bước QLSX duyệt cục bộ (qlsx-review/request-boss-approval/reject-qlsx) đã bị bỏ khỏi
+  // pipeline - approveDetail() ở trên chuyển thẳng KHSX -> Sếp.
 
   @Post(':id/approve')
   @RequirePermissions(APPROVE)

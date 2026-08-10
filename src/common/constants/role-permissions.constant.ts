@@ -103,15 +103,15 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       actions: [PermissionAction.VIEW],
     },
   ],
-  // QLSX: duyệt cục bộ + gửi Sếp ở cả PlanForm lẫn PI item (APPROVE) - các route tương ứng
-  // (qlsx-review/request-boss-approval/reject-qlsx, send-to-boss) còn gắn thêm
-  // @RequireMfgRole(PRODUCTION_MANAGER) để tách khỏi bước duyệt CUỐI của Sếp, vốn dùng CHÍNH
-  // action APPROVE này nhưng gắn thêm @RequireRole('BOSS') (xem skus/production-invoices
-  // controller) - QLSX không tự ý gọi được endpoint duyệt cuối dù permission trùng action.
+  // QLSX: bước duyệt cục bộ SKU (qlsx-review/request-boss-approval/reject-qlsx) đã bị bỏ khỏi
+  // pipeline - QLSX chỉ còn VIEW trên SKU (tab "Danh sách SKU" đọc-only). QLSX vẫn duyệt PI
+  // item (APPROVE trên PRODUCTION_INVOICE) - route đó gắn thêm @RequireMfgRole(PRODUCTION_MANAGER)
+  // để tách khỏi bước duyệt CUỐI của Sếp, vốn dùng CHÍNH action APPROVE này nhưng gắn thêm
+  // @RequireRole('BOSS') (xem production-invoices controller).
   [BUSINESS_ROLES.PRODUCTION_MANAGER]: [
     {
       module: PERMISSION_MODULES.SKU,
-      actions: [PermissionAction.VIEW, PermissionAction.APPROVE],
+      actions: [PermissionAction.VIEW],
     },
     {
       module: PERMISSION_MODULES.PRODUCTION_INVOICE,

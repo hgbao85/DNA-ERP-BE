@@ -90,10 +90,11 @@ function groupBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
 }
 
 /**
- * SKU quota-approval pipeline (dịch ngược PlanFormService trong mock FE). 8-status state
+ * SKU quota-approval pipeline (dịch ngược PlanFormService trong mock FE). 7-status state
  * machine: WAITING_PARTS -> APPROVED_PARTS -> WAITING_DETAIL -> APPROVED_DETAIL ->
- * WAITING_QLSX_APPROVAL -> WAITING_BOSS_APPROVAL -> APPROVED (hoặc rewind về
- * APPROVED_DETAIL qua reject-qlsx/reject-boss). Quy tắc "1 trong 3 nhóm có dữ liệu là đủ
+ * WAITING_BOSS_APPROVAL -> APPROVED (hoặc rewind về APPROVED_DETAIL qua reject-boss).
+ * Bước QLSX duyệt cục bộ (WAITING_QLSX_APPROVAL) đã bị loại khỏi pipeline - approveDetail()
+ * giờ chuyển thẳng KHSX -> Sếp. Quy tắc "1 trong 3 nhóm có dữ liệu là đủ
  * để tự chuyển status" và "từ chối chỉ xoá quyết định duyệt, không xoá dữ liệu đã nhập"
  * mirror đúng mock - xem plan file rippling-conjuring-cloud.md mục "Sửa luôn 2 chỗ mock".
  *
@@ -363,7 +364,8 @@ export class SkusService {
     return this.findOne(id);
   }
 
-  /** KHSX xác nhận cả manh lẫn chi tiết đã duyệt -> gửi QLSX duyệt. */
+  /** KHSX xác nhận cả manh lẫn chi tiết đã duyệt -> gửi thẳng sếp duyệt (bước QLSX duyệt cục
+   *  bộ đã bị loại khỏi pipeline). */
   async approveDetail(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh');
@@ -371,41 +373,10 @@ export class SkusService {
 
     const updated = await this.prisma.planForm.update({
       where: { id: pf.id },
-      data: { status: PlanFormStatus.WAITING_QLSX_APPROVAL },
-      include: PLAN_FORM_INCLUDE,
-    });
-    return this.toResponseDtoWithQuota(updated);
-  }
-
-  // ─── QLSX ───────────────────────────────────────────────────────────────────
-
-  /** Duyệt cục bộ - không đổi status, chỉ mở khoá nút "Gửi sếp duyệt" (mirror mock). */
-  async reviewQlsx(id: string): Promise<SkuResponseDto> {
-    const pf = await this.findOneOrThrow(id);
-    this.assertStatus(pf, PlanFormStatus.WAITING_QLSX_APPROVAL);
-    const updated = await this.prisma.planForm.update({
-      where: { id: pf.id },
-      data: { qlsxReviewedAt: new Date() },
-      include: PLAN_FORM_INCLUDE,
-    });
-    return this.toResponseDtoWithQuota(updated);
-  }
-
-  async requestBossApproval(id: string): Promise<SkuResponseDto> {
-    const pf = await this.findOneOrThrow(id);
-    this.assertStatus(pf, PlanFormStatus.WAITING_QLSX_APPROVAL);
-    const updated = await this.prisma.planForm.update({
-      where: { id: pf.id },
       data: { status: PlanFormStatus.WAITING_BOSS_APPROVAL },
       include: PLAN_FORM_INCLUDE,
     });
     return this.toResponseDtoWithQuota(updated);
-  }
-
-  async rejectByQlsx(id: string): Promise<SkuResponseDto> {
-    const pf = await this.findOneOrThrow(id);
-    this.assertStatus(pf, PlanFormStatus.WAITING_QLSX_APPROVAL);
-    return this.rewindToDetailReview(pf.id);
   }
 
   // ─── Sếp (Boss) ─────────────────────────────────────────────────────────────
@@ -448,7 +419,7 @@ export class SkusService {
       await tx.planFormDetailReview.deleteMany({ where: { planFormId: id } });
       return tx.planForm.update({
         where: { id },
-        data: { status: PlanFormStatus.APPROVED_DETAIL, qlsxReviewedAt: null },
+        data: { status: PlanFormStatus.APPROVED_DETAIL },
         include: PLAN_FORM_INCLUDE,
       });
     });
@@ -1206,7 +1177,6 @@ export class SkusService {
       origin: pf.origin,
       manhData: quota.manhData,
       detailQuota: quota.detailQuota,
-      qlsxReviewedAt: pf.qlsxReviewedAt,
       createdById: pf.createdById,
       createdAt: pf.createdAt,
       updatedAt: pf.updatedAt,
