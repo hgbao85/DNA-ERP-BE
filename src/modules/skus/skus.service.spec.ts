@@ -8,15 +8,13 @@ import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { SkusService } from './skus.service';
 
-/** Id giả lập cho 6 nhóm vật tư hệ thống (seed sẵn ở prisma/seed.ts) - dùng xuyên suốt các
- *  test dưới đây thay cho MaterialKind đã xoá. */
+/** Id giả lập cho các nhóm vật tư hệ thống (seed sẵn ở prisma/seed.ts) - dùng xuyên suốt các
+ *  test dưới đây thay cho MaterialKind đã xoá. Sơn/Phụ kiện/Bao bì đều dùng chung OTHER. */
 const SYSTEM_GROUP_IDS = {
   STEEL_BAR: 901n,
   WIRE: 902n,
   NAIL: 903n,
-  PAINT: 904n,
-  ACCESSORY: 905n,
-  PACKAGING: 906n,
+  OTHER: 904n,
 } as const;
 
 describe('SkusService', () => {
@@ -39,14 +37,15 @@ describe('SkusService', () => {
     productionInvoice: { create: jest.Mock; update: jest.Mock };
     productionInvoiceItem: { create: jest.Mock };
     bomRevision: { findFirst: jest.Mock; findMany: jest.Mock };
-    piece: { findFirst: jest.Mock; findUnique: jest.Mock; create: jest.Mock };
+    piece: { findMany: jest.Mock; create: jest.Mock };
     segmentSpec: { upsert: jest.Mock };
-    material: { findUnique: jest.Mock; update: jest.Mock };
+    material: { findMany: jest.Mock; update: jest.Mock };
     materialGroup: { findUnique: jest.Mock; findMany: jest.Mock };
-    bomPiece: { deleteMany: jest.Mock; create: jest.Mock; findMany: jest.Mock };
-    pieceBom: { deleteMany: jest.Mock; create: jest.Mock; findMany: jest.Mock };
-    consumableBom: { deleteMany: jest.Mock; create: jest.Mock; findMany: jest.Mock };
-    bomAccessoryItem: { deleteMany: jest.Mock; create: jest.Mock; findMany: jest.Mock };
+    bomPiece: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
+    pieceBom: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
+    pieceMaterialItem: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
+    consumableBom: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
+    bomAccessoryItem: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     $transaction: jest.Mock;
   };
 
@@ -94,9 +93,9 @@ describe('SkusService', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      piece: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn() },
+      piece: { findMany: jest.fn().mockResolvedValue([]), create: jest.fn() },
       segmentSpec: { upsert: jest.fn() },
-      material: { findUnique: jest.fn(), update: jest.fn() },
+      material: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
       // Mặc định: mọi lookup theo systemKey trả đúng nhóm hệ thống giả lập (mirror seed.ts
       // thật) - test nào muốn giả lập "seed chưa chạy" tự override findUnique -> null.
       materialGroup: {
@@ -115,22 +114,27 @@ describe('SkusService', () => {
       },
       bomPiece: {
         deleteMany: jest.fn(),
-        create: jest.fn(),
+        createMany: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
       },
       pieceBom: {
         deleteMany: jest.fn(),
-        create: jest.fn(),
+        createMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      pieceMaterialItem: {
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
       },
       consumableBom: {
         deleteMany: jest.fn(),
-        create: jest.fn(),
+        createMany: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
       },
       bomAccessoryItem: {
         deleteMany: jest.fn(),
-        create: jest.fn(),
+        createMany: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
       },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
@@ -164,23 +168,20 @@ describe('SkusService', () => {
     });
   });
 
-  describe('updateManhQuota (group=SAT)', () => {
+  describe('updateManhQuota (segments Sắt)', () => {
     it('resolves-or-creates Piece + SegmentSpec and writes BomPiece/PieceBom on a lazily-created DRAFT revision', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_PARTS' }));
       prisma.bomRevision.findFirst.mockResolvedValue(null); // chưa có revision nào
       bomRevisionsService.create.mockResolvedValue({ id: '10' });
-      prisma.piece.findFirst.mockResolvedValue(null); // Piece chưa tồn tại -> tạo mới
-      prisma.piece.findUnique.mockResolvedValue(null); // code chưa trùng
+      prisma.piece.findMany.mockResolvedValue([]); // Piece chưa tồn tại -> tạo mới
       prisma.piece.create.mockResolvedValue({ id: 20n });
-      prisma.material.findUnique.mockResolvedValue({
-        id: 30n,
-        code: 'SAT-25',
-        materialGroupId: null,
-      });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-25', materialGroupId: null },
+      ]);
       prisma.segmentSpec.upsert.mockResolvedValue({ id: 40n });
       prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
 
-      const result = await service.updateManhQuota('5', 'SAT', {
+      const result = await service.updateManhQuota('5', {
         pieces: [
           {
             name: 'Manh tua',
@@ -200,20 +201,22 @@ describe('SkusService', () => {
       });
       expect(prisma.pieceBom.deleteMany).toHaveBeenCalledWith({ where: { bomRevisionId: 10n } });
       expect(prisma.bomPiece.deleteMany).toHaveBeenCalledWith({ where: { bomRevisionId: 10n } });
-      expect(prisma.bomPiece.create).toHaveBeenCalledWith({
-        data: { bomRevisionId: 10n, pieceId: 20n, qtyPerUnit: 2 },
+      expect(prisma.bomPiece.createMany).toHaveBeenCalledWith({
+        data: [{ bomRevisionId: 10n, pieceId: 20n, qtyPerUnit: 2 }],
       });
-      expect(prisma.pieceBom.create).toHaveBeenCalledWith({
-        data: {
-          bomRevisionId: 10n,
-          mfgProductId: 2n,
-          pieceId: 20n,
-          segmentSpecId: 40n,
-          qtyPerPiece: 4,
-          needsHan: true,
-          needsSon: true,
-          note: null,
-        },
+      expect(prisma.pieceBom.createMany).toHaveBeenCalledWith({
+        data: [
+          {
+            bomRevisionId: 10n,
+            mfgProductId: 2n,
+            pieceId: 20n,
+            segmentSpecId: 40n,
+            qtyPerPiece: 4,
+            needsHan: true,
+            needsSon: true,
+            note: null,
+          },
+        ],
       });
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
       const upsertCall = prisma.planFormManhReview.upsert.mock.calls[0][0] as { update: unknown };
@@ -225,15 +228,13 @@ describe('SkusService', () => {
     it('rejects a segment whose material belongs to a different group', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_PARTS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
-      prisma.piece.findFirst.mockResolvedValue({ id: 20n });
-      prisma.material.findUnique.mockResolvedValue({
-        id: 30n,
-        code: 'SON-01',
-        materialGroupId: SYSTEM_GROUP_IDS.PAINT,
-      });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', code: 'MANH-TUA' }]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SON-01', materialGroupId: SYSTEM_GROUP_IDS.OTHER },
+      ]);
 
       await expect(
-        service.updateManhQuota('5', 'SAT', {
+        service.updateManhQuota('5', {
           pieces: [
             {
               name: 'Manh tua',
@@ -251,40 +252,48 @@ describe('SkusService', () => {
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
 
       await expect(
-        service.updateManhQuota('5', 'SAT', { pieces: [], enteredBy: 'NV Sat' }),
+        service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Sat' }),
       ).rejects.toThrow(ConflictException);
     });
   });
 
-  describe('updateManhQuota (group=DAY/DINH)', () => {
-    it('resolves the "Dây" system MaterialGroup and writes ConsumableBom(stage=DAN)', async () => {
+  describe('updateManhQuota (materialLines Dây/Đinh/Tán rút/Nút nhựa trong mảnh)', () => {
+    it('resolves the "Dây" system MaterialGroup and writes PieceMaterialItem for a WIRE line', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
-      prisma.material.findUnique.mockResolvedValue({
-        id: 60n,
-        code: 'DAY-2LY',
-        materialGroupId: null,
-      });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', code: 'MANH-TUA' }]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 60n, code: 'DAY-2LY', materialGroupId: null },
+      ]);
       prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
 
-      await service.updateManhQuota('5', 'DAY', {
-        items: [{ materialId: '60', qtyPerUnit: 3 }],
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Manh tua',
+            qtyPerUnit: 2,
+            segments: [],
+            materialLines: [{ group: 'WIRE', materialId: '60', qtyPerPiece: 3 }],
+          },
+        ],
         enteredBy: 'NV Day',
       });
 
-      expect(prisma.consumableBom.deleteMany).toHaveBeenCalledWith({
-        where: {
-          bomRevisionId: 10n,
-          stage: 'DAN',
-          material: { materialGroupId: SYSTEM_GROUP_IDS.WIRE },
-        },
-      });
       expect(prisma.material.update).toHaveBeenCalledWith({
         where: { id: 60n },
         data: { materialGroupId: SYSTEM_GROUP_IDS.WIRE },
       });
-      expect(prisma.consumableBom.create).toHaveBeenCalledWith({
-        data: { bomRevisionId: 10n, stage: 'DAN', materialId: 60n, qtyPerUnit: 3 },
+      expect(prisma.pieceMaterialItem.createMany).toHaveBeenCalledWith({
+        data: [
+          {
+            bomRevisionId: 10n,
+            mfgProductId: 2n,
+            pieceId: 20n,
+            materialId: 60n,
+            qtyPerPiece: 3,
+            note: null,
+          },
+        ],
       });
     });
   });
@@ -293,15 +302,13 @@ describe('SkusService', () => {
     it('rejects a DAY_SON material that belongs to a different group', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_DETAIL' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
-      prisma.material.findUnique.mockResolvedValue({
-        id: 70n,
-        code: 'DAY-01',
-        materialGroupId: SYSTEM_GROUP_IDS.WIRE,
-      });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 70n, code: 'DAY-01', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+      ]);
 
       await expect(
-        service.updateDetailQuota('5', 'DAY_SON', {
-          items: [{ materialId: '70', qtyPerUnit: 1 }],
+        service.updateDetailQuota('5', {
+          detailLines: [{ group: 'DAY_SON', materialId: '70', qtyPerUnit: 1 }],
           enteredBy: 'NV Son',
         }),
       ).rejects.toThrow(BadRequestException);
@@ -310,25 +317,49 @@ describe('SkusService', () => {
     it('writes BomAccessoryItem for VAT_TU_PHU_KIEN and auto-advances WAITING_DETAIL -> APPROVED_DETAIL', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_DETAIL' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
-      prisma.material.findUnique.mockResolvedValue({
-        id: 80n,
-        code: 'PK-01',
-        materialGroupId: SYSTEM_GROUP_IDS.ACCESSORY,
-      });
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 80n,
+          code: 'PK-01',
+          materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+          detailKind: 'ACCESSORY',
+        },
+      ]);
       prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED_DETAIL' }));
 
-      const result = await service.updateDetailQuota('5', 'VAT_TU_PHU_KIEN', {
-        items: [{ materialId: '80', qtyPerUnit: 5 }],
+      const result = await service.updateDetailQuota('5', {
+        detailLines: [{ group: 'VAT_TU_PHU_KIEN', materialId: '80', qtyPerUnit: 5 }],
         enteredBy: 'NV PK',
       });
 
       expect(result.status).toBe('APPROVED_DETAIL');
       expect(prisma.bomAccessoryItem.deleteMany).toHaveBeenCalledWith({
-        where: { bomRevisionId: 10n, material: { materialGroupId: SYSTEM_GROUP_IDS.ACCESSORY } },
+        where: { bomRevisionId: 10n, kind: 'ACCESSORY' },
       });
-      expect(prisma.bomAccessoryItem.create).toHaveBeenCalledWith({
-        data: { bomRevisionId: 10n, materialId: 80n, qtyPerUnit: 5 },
+      expect(prisma.bomAccessoryItem.createMany).toHaveBeenCalledWith({
+        data: [{ bomRevisionId: 10n, materialId: 80n, kind: 'ACCESSORY', qtyPerUnit: 5 }],
       });
+    });
+
+    it('rejects a material submitted as Bao bì whose detailKind is actually Phụ kiện (also covers "same material in both lists" - detailKind can only match one)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_DETAIL' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 80n,
+          code: 'PK-01',
+          materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+          detailKind: 'ACCESSORY',
+        },
+      ]);
+
+      await expect(
+        service.updateDetailQuota('5', {
+          detailLines: [{ group: 'BAO_BI_DONG_GOI', materialId: '80', qtyPerUnit: 2 }],
+          enteredBy: 'NV PK',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.bomAccessoryItem.createMany).not.toHaveBeenCalled();
     });
   });
 
@@ -339,16 +370,13 @@ describe('SkusService', () => {
       prisma.materialGroup.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.updateManhQuota('5', 'DAY', {
-          items: [{ materialId: '60', qtyPerUnit: 3 }],
-          enteredBy: 'NV Day',
-        }),
+        service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Day' }),
       ).rejects.toThrow(InternalServerErrorException);
     });
   });
 
   describe('reconstructQuotaBatch - Phụ kiện vs Bao bì (read-back regression guard)', () => {
-    it('tách đúng dòng nhóm ACCESSORY vào vatTuPhuKien và nhóm PACKAGING vào baoBiDongGoi', async () => {
+    it('tách đúng dòng kind ACCESSORY vào vatTuPhuKien và kind PACKAGING vào baoBiDongGoi', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ origin: null }));
       prisma.bomRevision.findMany.mockResolvedValueOnce([
         { id: 10n, mfgProductId: 2n, sourcePlanFormId: 5n, status: 'DRAFT' },
@@ -358,24 +386,26 @@ describe('SkusService', () => {
           id: 1n,
           bomRevisionId: 10n,
           materialId: 80n,
+          kind: 'ACCESSORY',
           qtyPerUnit: { toNumber: () => 5 },
           material: {
             code: 'PK-01',
             name: 'Phu kien A',
             unit: 'cai',
-            materialGroupId: SYSTEM_GROUP_IDS.ACCESSORY,
+            materialGroupId: SYSTEM_GROUP_IDS.OTHER,
           },
         },
         {
           id: 2n,
           bomRevisionId: 10n,
           materialId: 81n,
+          kind: 'PACKAGING',
           qtyPerUnit: { toNumber: () => 2 },
           material: {
             code: 'BB-01',
             name: 'Bao bi A',
             unit: 'cai',
-            materialGroupId: SYSTEM_GROUP_IDS.PACKAGING,
+            materialGroupId: SYSTEM_GROUP_IDS.OTHER,
           },
         },
       ]);
@@ -390,24 +420,16 @@ describe('SkusService', () => {
   });
 
   describe('approveParts', () => {
-    it('rejects when not all 3 manh groups are approved', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(
-        planForm({ manhReviews: [{ group: 'SAT', status: 'APPROVED' }] }),
-      );
+    it('rejects when the (single) manh group SAT is not approved yet', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ manhReviews: [] }));
 
       await expect(service.approveParts('5')).rejects.toThrow(ConflictException);
       expect(prisma.planForm.update).not.toHaveBeenCalled();
     });
 
-    it('advances to WAITING_DETAIL once all 3 groups are approved', async () => {
+    it('advances to WAITING_DETAIL once the manh group SAT is approved', async () => {
       prisma.planForm.findUnique.mockResolvedValue(
-        planForm({
-          manhReviews: [
-            { group: 'SAT', status: 'APPROVED' },
-            { group: 'DAY', status: 'APPROVED' },
-            { group: 'DINH', status: 'APPROVED' },
-          ],
-        }),
+        planForm({ manhReviews: [{ group: 'SAT', status: 'APPROVED' }] }),
       );
       prisma.planForm.update.mockResolvedValue(planForm({ status: 'WAITING_DETAIL' }));
 
@@ -485,7 +507,7 @@ describe('SkusService', () => {
 
       const result = await service.findOne('5');
 
-      expect(result.manhData).toEqual({ sat: [], day: [], dinh: [] });
+      expect(result.manhData).toEqual({ pieces: [] });
       expect(result.detailQuota).toEqual({ daySon: [], vatTuPhuKien: [], baoBiDongGoi: [] });
     });
   });

@@ -5,10 +5,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Material, Prisma } from '../../generated/prisma/client';
+import { Material, MaterialDetailKind, Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { MATERIAL_CODE_FALLBACK_PREFIX } from '../../common/constants/material-group-code-prefix.constant';
+import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -54,6 +55,7 @@ export class MaterialsService {
     // trong JS, không trim thì lọt qua nhánh tự sinh và ghi thẳng chuỗi trắng vào DB.
     const trimmedCode = dto.code?.trim();
     const code = trimmedCode || (await this.generateMaterialCode(materialGroupId));
+    const detailKind = await this.resolveDetailKind(materialGroupId, dto.detailKind, null);
 
     const existing = await this.prisma.material.findUnique({ where: { code } });
     if (existing) {
@@ -67,6 +69,7 @@ export class MaterialsService {
         unit: dto.unit,
         spec: dto.spec,
         materialGroupId,
+        detailKind,
         warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
         buyerId: dto.buyerId || undefined,
         khoUnitFactor: dto.khoUnitFactor,
@@ -74,6 +77,35 @@ export class MaterialsService {
       },
     });
     return this.toResponseDto(material);
+  }
+
+  /**
+   * Sơn/Phụ kiện/Bao bì (trang Định mức chi tiết) giờ dùng chung 1 nhóm vật tư hệ thống
+   * ("Vật tư khác", systemKey OTHER) nên không còn phân biệt được vật tư nào dành cho tab nào
+   * qua materialGroupId nữa - `detailKind` trên chính Material đảm nhận việc đó. Bắt buộc chọn
+   * khi nhóm hiệu lực (effective, tính cả trường hợp không đổi ở PATCH) là OTHER; mọi nhóm
+   * khác thì LUÔN dọn về null (kể cả nếu request có gửi) - tránh rác còn sót khi 1 vật tư từng
+   * thuộc "Vật tư khác" rồi bị đổi sang nhóm khác.
+   */
+  private async resolveDetailKind(
+    effectiveGroupId: bigint | undefined,
+    incomingDetailKind: MaterialDetailKind | undefined,
+    previousDetailKind: MaterialDetailKind | null,
+  ): Promise<MaterialDetailKind | null> {
+    const group = effectiveGroupId
+      ? await this.prisma.materialGroup.findUnique({ where: { id: effectiveGroupId } })
+      : null;
+    if (group?.systemKey !== MATERIAL_GROUP_SYSTEM_KEYS.OTHER) {
+      return null;
+    }
+
+    const candidate = incomingDetailKind !== undefined ? incomingDetailKind : previousDetailKind;
+    if (!candidate) {
+      throw new BadRequestException(
+        'Vật tư thuộc nhóm "Vật tư khác" phải chọn Phân loại (Sơn/Phụ kiện/Bao bì)',
+      );
+    }
+    return candidate;
   }
 
   /**
@@ -148,6 +180,20 @@ export class MaterialsService {
       }
     }
 
+    // materialGroupId không có trong dto (PATCH không đụng field này) -> giữ nhóm hiện tại để
+    // tính đúng "nhóm hiệu lực" cho resolveDetailKind (khác hẳn "đổi sang không nhóm nào").
+    const effectiveGroupId =
+      dto.materialGroupId !== undefined
+        ? dto.materialGroupId
+          ? parseBigIntId(dto.materialGroupId)
+          : undefined
+        : (previous.materialGroupId ?? undefined);
+    const detailKind = await this.resolveDetailKind(
+      effectiveGroupId,
+      dto.detailKind,
+      previous.detailKind,
+    );
+
     const material = await this.prisma.material.update({
       where: { id: bigId },
       data: {
@@ -156,6 +202,7 @@ export class MaterialsService {
         unit: dto.unit,
         spec: dto.spec,
         materialGroupId: dto.materialGroupId ? parseBigIntId(dto.materialGroupId) : undefined,
+        detailKind,
         warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
         buyerId: dto.buyerId || undefined,
         khoUnitFactor: dto.khoUnitFactor,
@@ -283,6 +330,7 @@ export class MaterialsService {
       unit: material.unit,
       spec: material.spec ?? null,
       materialGroupId: material.materialGroupId?.toString() ?? null,
+      detailKind: material.detailKind ?? null,
       warehouseId: material.warehouseId?.toString() ?? null,
       buyerId: material.buyerId ?? null,
       khoUnitFactor: material.khoUnitFactor?.toNumber() ?? null,

@@ -1,5 +1,6 @@
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
+import { MaterialDetailKind } from '../../../generated/prisma/client';
 
 @Exclude()
 export class MaterialResponseDto {
@@ -9,6 +10,9 @@ export class MaterialResponseDto {
   @Expose() @ApiProperty() unit!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) spec!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) materialGroupId!: string | null;
+  @Expose()
+  @ApiPropertyOptional({ enum: MaterialDetailKind, nullable: true })
+  detailKind!: MaterialDetailKind | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) warehouseId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) buyerId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) khoUnitFactor!: number | null;

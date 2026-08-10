@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional } from 'class-validator';
+import { MaterialDetailKind } from '../../../generated/prisma/client';
 
 /**
  * Không validate gì thật ở đây (theo yêu cầu) - `@IsOptional()` KHÔNG kiểm tra kiểu/độ dài/
@@ -39,6 +40,14 @@ export class CreateMaterialDto {
   })
   @IsOptional()
   materialGroupId?: string;
+
+  @ApiPropertyOptional({
+    enum: MaterialDetailKind,
+    description:
+      'Bắt buộc khi materialGroupId thuộc nhóm systemKey OTHER ("Vật tư khác") - phân biệt Sơn/Phụ kiện/Bao bì cho picker của trang Định mức chi tiết (SpecDetailQuotaPage), vì cả 3 tab đó giờ dùng chung 1 nhóm vật tư. Bị bỏ qua (ghi null) với mọi nhóm khác - xem MaterialsService.resolveDetailKind.',
+  })
+  @IsOptional()
+  detailKind?: MaterialDetailKind;
 
   @ApiPropertyOptional({ description: 'Hệ số quy đổi đơn vị kho, vd 600 = mm/cây' })
   @IsOptional()

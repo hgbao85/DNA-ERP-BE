@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { AccessoryItemKind } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { BomRevisionsService } from './bom-revisions.service';
 
@@ -71,24 +72,27 @@ describe('BomRevisionsService', () => {
   });
 
   describe('createBomAccessoryItem', () => {
-    it('creates a row when the material belongs to the Phụ kiện (ACCESSORY) group', async () => {
+    it('creates a row when the material belongs to the "Vật tư khác" (OTHER) group', async () => {
       prisma.bomRevision.findUnique.mockResolvedValue(draftRevision());
       prisma.material.findUnique.mockResolvedValue({
         id: 80n,
         code: 'PK-01',
-        materialGroup: { systemKey: 'ACCESSORY' },
+        detailKind: 'ACCESSORY',
+        materialGroup: { systemKey: 'OTHER' },
       });
       prisma.bomAccessoryItem.findUnique.mockResolvedValue(null);
       prisma.bomAccessoryItem.create.mockResolvedValue({
         id: 1n,
         bomRevisionId: 10n,
         materialId: 80n,
+        kind: 'ACCESSORY',
         qtyPerUnit: { toNumber: () => 5 },
         material: { code: 'PK-01' },
       });
 
       const result = await service.createBomAccessoryItem('10', {
         materialId: '80',
+        kind: AccessoryItemKind.ACCESSORY,
         qtyPerUnit: 5,
       });
 
@@ -96,7 +100,7 @@ describe('BomRevisionsService', () => {
       expect(result.qtyPerUnit).toBe(5);
     });
 
-    it('rejects a material that belongs to neither the Phụ kiện nor Bao bì group', async () => {
+    it('rejects a material that does not belong to the "Vật tư khác" group', async () => {
       prisma.bomRevision.findUnique.mockResolvedValue(draftRevision());
       prisma.material.findUnique.mockResolvedValue({
         id: 90n,
@@ -105,7 +109,11 @@ describe('BomRevisionsService', () => {
       });
 
       await expect(
-        service.createBomAccessoryItem('10', { materialId: '90', qtyPerUnit: 1 }),
+        service.createBomAccessoryItem('10', {
+          materialId: '90',
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: 1,
+        }),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -114,7 +122,29 @@ describe('BomRevisionsService', () => {
       prisma.material.findUnique.mockResolvedValue({ id: 91n, code: 'XX-01', materialGroup: null });
 
       await expect(
-        service.createBomAccessoryItem('10', { materialId: '91', qtyPerUnit: 1 }),
+        service.createBomAccessoryItem('10', {
+          materialId: '91',
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: 1,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a material whose detailKind does not match the requested kind (Bao bì material submitted as Phụ kiện)', async () => {
+      prisma.bomRevision.findUnique.mockResolvedValue(draftRevision());
+      prisma.material.findUnique.mockResolvedValue({
+        id: 82n,
+        code: 'BB-01',
+        detailKind: 'PACKAGING',
+        materialGroup: { systemKey: 'OTHER' },
+      });
+
+      await expect(
+        service.createBomAccessoryItem('10', {
+          materialId: '82',
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: 1,
+        }),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -123,12 +153,17 @@ describe('BomRevisionsService', () => {
       prisma.material.findUnique.mockResolvedValue({
         id: 80n,
         code: 'PK-01',
-        materialGroup: { systemKey: 'ACCESSORY' },
+        detailKind: 'ACCESSORY',
+        materialGroup: { systemKey: 'OTHER' },
       });
       prisma.bomAccessoryItem.findUnique.mockResolvedValue({ id: 1n });
 
       await expect(
-        service.createBomAccessoryItem('10', { materialId: '80', qtyPerUnit: 1 }),
+        service.createBomAccessoryItem('10', {
+          materialId: '80',
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: 1,
+        }),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -136,7 +171,11 @@ describe('BomRevisionsService', () => {
       prisma.bomRevision.findUnique.mockResolvedValue(draftRevision({ status: 'ACTIVE' }));
 
       await expect(
-        service.createBomAccessoryItem('10', { materialId: '80', qtyPerUnit: 1 }),
+        service.createBomAccessoryItem('10', {
+          materialId: '80',
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: 1,
+        }),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -145,7 +184,11 @@ describe('BomRevisionsService', () => {
       prisma.material.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.createBomAccessoryItem('10', { materialId: '999', qtyPerUnit: 1 }),
+        service.createBomAccessoryItem('10', {
+          materialId: '999',
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: 1,
+        }),
       ).rejects.toThrow(NotFoundException);
     });
   });

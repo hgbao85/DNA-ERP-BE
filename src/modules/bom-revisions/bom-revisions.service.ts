@@ -5,7 +5,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { BomRevision, BomRevisionStatus, Prisma } from '../../generated/prisma/client';
+import {
+  AccessoryItemKind,
+  BomRevision,
+  BomRevisionStatus,
+  MaterialDetailKind,
+  Prisma,
+} from '../../generated/prisma/client';
 import {
   MATERIAL_GROUP_SYSTEM_KEYS,
   MaterialGroupSystemKey,
@@ -456,15 +462,20 @@ export class BomRevisionsService {
     this.assertDraft(revision);
 
     const materialBigId = parseBigIntId(dto.materialId);
-    await this.assertMaterialInSystemGroups(
+    const material = await this.assertMaterialInSystemGroups(
       materialBigId,
       [
         MATERIAL_GROUP_SYSTEM_KEYS.WIRE,
         MATERIAL_GROUP_SYSTEM_KEYS.NAIL,
-        MATERIAL_GROUP_SYSTEM_KEYS.PAINT,
+        MATERIAL_GROUP_SYSTEM_KEYS.OTHER,
       ],
       'consumable_bom',
     );
+    // consumable_bom qua nhóm OTHER chỉ dùng cho Sơn (Dây/Đinh đi qua nhóm riêng của chúng,
+    // không cần kiểm detailKind).
+    if (material.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.OTHER) {
+      this.assertMaterialDetailKind(material, MaterialDetailKind.PAINT, 'consumable_bom (Sơn)');
+    }
 
     const existing = await this.prisma.consumableBom.findUnique({
       where: {
@@ -537,10 +548,19 @@ export class BomRevisionsService {
     this.assertDraft(revision);
 
     const materialBigId = parseBigIntId(dto.materialId);
-    await this.assertMaterialInSystemGroups(
+    const material = await this.assertMaterialInSystemGroups(
       materialBigId,
-      [MATERIAL_GROUP_SYSTEM_KEYS.ACCESSORY, MATERIAL_GROUP_SYSTEM_KEYS.PACKAGING],
+      [MATERIAL_GROUP_SYSTEM_KEYS.OTHER],
       'bom_accessory_items',
+    );
+    const expectedDetailKind =
+      dto.kind === AccessoryItemKind.ACCESSORY
+        ? MaterialDetailKind.ACCESSORY
+        : MaterialDetailKind.PACKAGING;
+    this.assertMaterialDetailKind(
+      material,
+      expectedDetailKind,
+      `bom_accessory_items (${dto.kind})`,
     );
 
     const existing = await this.prisma.bomAccessoryItem.findUnique({
@@ -555,7 +575,12 @@ export class BomRevisionsService {
     }
 
     const row = await this.prisma.bomAccessoryItem.create({
-      data: { bomRevisionId: revision.id, materialId: materialBigId, qtyPerUnit: dto.qtyPerUnit },
+      data: {
+        bomRevisionId: revision.id,
+        materialId: materialBigId,
+        kind: dto.kind,
+        qtyPerUnit: dto.qtyPerUnit,
+      },
       include: { material: true },
     });
     return this.toBomAccessoryItemResponseDto(row);
@@ -614,14 +639,17 @@ export class BomRevisionsService {
     }
   }
 
-  /** Vật tư phải thuộc 1 trong các nhóm hệ thống cho phép (vd Dây/Đinh/Sơn cho
-   *  consumable_bom, Phụ kiện/Bao bì cho bom_accessory_items). Reject cứng, không tự gán
-   *  nhóm - đây là API CRUD cấp thấp, side-effect ngầm ở đây sẽ bất ngờ với người gọi. */
+  /** Vật tư phải thuộc 1 trong các nhóm hệ thống cho phép (vd Dây/Đinh/Vật tư khác cho
+   *  consumable_bom, Vật tư khác cho bom_accessory_items - Phụ kiện vs Bao bì tách qua
+   *  `kind` chứ không phải nhóm vật tư). Reject cứng, không tự gán nhóm - đây là API CRUD
+   *  cấp thấp, side-effect ngầm ở đây sẽ bất ngờ với người gọi. Trả về material (kèm
+   *  detailKind + systemKey đã resolve) để caller tự kiểm thêm phân loại Sơn/Phụ kiện/Bao bì
+   *  khi nhóm là OTHER, không phải query lại. */
   private async assertMaterialInSystemGroups(
     materialId: bigint,
     allowed: MaterialGroupSystemKey[],
     label: string,
-  ): Promise<void> {
+  ): Promise<{ code: string; detailKind: MaterialDetailKind | null; systemKey: string }> {
     const material = await this.prisma.material.findUnique({
       where: { id: materialId },
       include: { materialGroup: true },
@@ -633,6 +661,21 @@ export class BomRevisionsService {
     if (!systemKey || !allowed.includes(systemKey as MaterialGroupSystemKey)) {
       throw new BadRequestException(
         `Material "${material.code}" phải thuộc nhóm vật tư hệ thống [${allowed.join(', ')}] cho ${label} (đang thuộc nhóm systemKey=${systemKey ?? 'null'})`,
+      );
+    }
+    return { code: material.code, detailKind: material.detailKind, systemKey };
+  }
+
+  /** Sơn/Phụ kiện/Bao bì dùng chung nhóm vật tư OTHER nên phải kiểm thêm material.detailKind
+   *  mới biết đúng vật tư đó dành cho mục đích nào (xem assertMaterialInSystemGroups). */
+  private assertMaterialDetailKind(
+    material: { code: string; detailKind: MaterialDetailKind | null },
+    expected: MaterialDetailKind,
+    label: string,
+  ): void {
+    if (material.detailKind !== expected) {
+      throw new BadRequestException(
+        `Material "${material.code}" chưa được phân loại đúng cho ${label} - vào Admin > Vật tư gán Phân loại = ${expected} cho vật tư này trước`,
       );
     }
   }
@@ -807,6 +850,7 @@ export class BomRevisionsService {
       bomRevisionId: row.bomRevisionId.toString(),
       materialId: row.materialId.toString(),
       materialCode: row.material.code,
+      kind: row.kind,
       qtyPerUnit: row.qtyPerUnit.toNumber(),
     });
   }

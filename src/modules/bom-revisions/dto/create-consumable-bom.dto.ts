@@ -7,7 +7,7 @@ export class CreateConsumableBomDto {
   @IsEnum(MfgStage)
   stage!: MfgStage;
 
-  @ApiProperty({ description: 'Phải thuộc nhóm vật tư systemKey WIRE, NAIL hoặc PAINT' })
+  @ApiProperty({ description: 'Phải thuộc nhóm vật tư systemKey WIRE, NAIL hoặc OTHER' })
   @IsString()
   materialId!: string;
 

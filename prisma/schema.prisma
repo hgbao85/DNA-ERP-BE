@@ -270,15 +270,17 @@ model MaterialGroup {
   name String @unique
 
   /// Khoá kỹ thuật cố định cho 6 nhóm hệ thống (seed sẵn ở prisma/seed.ts: STEEL_BAR/WIRE/
-  /// NAIL/PAINT/ACCESSORY/PACKAGING). Mọi logic nghiệp vụ (4 trang Spec, validate BOM) match
-  /// theo cột này, KHÔNG theo `name` - admin đổi tên nhóm thoải mái mà không làm hỏng lọc.
-  /// Nhóm do admin tự tạo thêm = null, vô hình với logic Spec.
+  /// NAIL/RIVET/PLASTIC_BUTTON/OTHER). Sơn/Phụ kiện/Bao bì đều dùng chung nhóm OTHER ("Vật
+  /// tư khác") - phân biệt Sơn (qua ConsumableBom.stage=SON) và Phụ kiện/Bao bì (qua
+  /// BomAccessoryItem.kind) không còn dựa vào nhóm vật tư nữa. Mọi logic nghiệp vụ (4 trang
+  /// Spec, validate BOM) match theo cột này, KHÔNG theo `name` - admin đổi tên nhóm thoải
+  /// mái mà không làm hỏng lọc. Nhóm do admin tự tạo thêm = null, vô hình với logic Spec.
   systemKey String? @unique
 
   /// Tiền tố mã vật tư tự sinh khi tạo Material không nhập `code` (vd 'SAT' -> 'SAT-001',
   /// 'SAT-002'...) - MaterialsService.resolveCodePrefix() đọc thẳng cột này, KHÔNG suy từ
   /// `name` (2 nhóm tên khác nhau vẫn có thể trùng đoạn đầu, vd "Ống nhựa PVC" và "Ống nhôm"
-  /// đều ra "ONG" nếu suy từ tên - unique ở đây triệt tiêu hẳn rủi ro đó). 8 nhóm hệ thống
+  /// đều ra "ONG" nếu suy từ tên - unique ở đây triệt tiêu hẳn rủi ro đó). 6 nhóm hệ thống
   /// seed sẵn giá trị cố định (material-group-code-prefix.constant.ts); nhóm admin tự tạo
   /// bắt buộc nhập lúc tạo (CreateMaterialGroupDto) - FE gợi ý sẵn từ tên, admin sửa được.
   codePrefix String @unique
@@ -288,21 +290,33 @@ model MaterialGroup {
   @@map("material_groups")
 }
 
+enum MaterialDetailKind {
+  PAINT
+  ACCESSORY
+  PACKAGING
+}
+
 model Material {
-  id              BigInt    @id @default(autoincrement())
-  code            String    @unique
+  id              BigInt              @id @default(autoincrement())
+  code            String              @unique
   name            String
   unit            String
   spec            String?
   materialGroupId BigInt?
+  /// Sơn/Phụ kiện/Bao bì (chỉ có ý nghĩa khi materialGroup.systemKey = OTHER "Vật tư khác" -
+  /// null với mọi nhóm khác) - dùng để lọc riêng từng tab trên trang Định mức chi tiết
+  /// (SpecDetailQuotaPage.tsx), vì 3 tab đó giờ dùng CHUNG 1 nhóm vật tư nên không còn phân
+  /// biệt được qua materialGroupId nữa. Bắt buộc chọn ở Admin > Vật tư khi nhóm = Vật tư khác
+  /// (MaterialsService.resolveDetailKind), tự dọn về null khi đổi sang nhóm khác.
+  detailKind      MaterialDetailKind?
   warehouseId     BigInt?
   buyerId         String?
-  khoUnitFactor   Decimal?  @db.Decimal(14, 4)
+  khoUnitFactor   Decimal?            @db.Decimal(14, 4)
   imageUrl        String?
-  isActive        Boolean   @default(true)
+  isActive        Boolean             @default(true)
   deletedAt       DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 
   materialGroup                 MaterialGroup?                 @relation(fields: [materialGroupId], references: [id])
   warehouse                     Warehouse?                     @relation(fields: [warehouseId], references: [id])
@@ -650,9 +664,10 @@ model PartBom {
 }
 
 /// Định mức vật tư tiêu hao theo revision, gắn với 1 công đoạn cụ thể (Phôi/Hàn/Sơn/Đan -
-/// vd Dây/Đinh dùng ở Đan, Sơn dùng ở Sơn). Phân biệt Dây/Đinh (cùng stage=DAN) và xác định
-/// Sơn qua material.materialGroup.systemKey (WIRE/NAIL/PAINT), ràng buộc ở tầng service.
-/// Phụ kiện/Bao bì KHÔNG gắn công đoạn nên dùng bảng riêng BomAccessoryItem, không phải bảng này.
+/// vd Dây/Đinh dùng ở Đan, Sơn dùng ở Sơn). Phân biệt Dây/Đinh (cùng stage=DAN) qua
+/// material.materialGroup.systemKey (WIRE/NAIL); Sơn xác định thẳng qua stage=SON - không
+/// nhóm vật tư nào khác dùng stage này nên không cần lọc thêm theo nhóm. Phụ kiện/Bao bì
+/// KHÔNG gắn công đoạn nên dùng bảng riêng BomAccessoryItem, không phải bảng này.
 model ConsumableBom {
   id            BigInt   @id @default(autoincrement())
   bomRevisionId BigInt
@@ -668,20 +683,27 @@ model ConsumableBom {
 }
 
 /// Phụ kiện/Bao bì tiêu hao theo revision - không gắn công đoạn sản xuất (khác
-/// ConsumableBom). Phân biệt Phụ kiện vs Bao bì qua material.materialGroup.systemKey
-/// (ACCESSORY/PACKAGING), ràng buộc ở tầng service. KHÔNG tái dùng PackagingBom - model đó
+/// ConsumableBom). Sơn/Phụ kiện/Bao bì đều dùng chung 1 nhóm vật tư hệ thống ("Vật tư khác",
+/// systemKey OTHER) nên KHÔNG còn phân biệt Phụ kiện vs Bao bì qua nhóm vật tư được nữa -
+/// cột `kind` dưới đây lưu trực tiếp đó là dòng nào. KHÔNG tái dùng PackagingBom - model đó
 /// gắn ProductVariant (theo màu), không có vòng đời DRAFT/ACTIVE, sai phạm vi.
 model BomAccessoryItem {
-  id            BigInt  @id @default(autoincrement())
+  id            BigInt            @id @default(autoincrement())
   bomRevisionId BigInt
   materialId    BigInt
-  qtyPerUnit    Decimal @db.Decimal(14, 4)
+  kind          AccessoryItemKind
+  qtyPerUnit    Decimal           @db.Decimal(14, 4)
 
   bomRevision BomRevision @relation(fields: [bomRevisionId], references: [id])
   material    Material    @relation(fields: [materialId], references: [id])
 
   @@unique([bomRevisionId, materialId])
   @@map("bom_accessory_items")
+}
+
+enum AccessoryItemKind {
+  ACCESSORY
+  PACKAGING
 }
 
 /// BOM đóng gói theo biến thể sản phẩm.

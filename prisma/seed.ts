@@ -69,21 +69,20 @@ const SEED_WAREHOUSES: { code: string; name: string; isVirtual: boolean; note?: 
 ];
 
 /**
- * 8 nhóm vật tư hệ thống bắt buộc phải seed sẵn - thay cho enum MaterialKind đã xoá (xem
+ * 6 nhóm vật tư hệ thống bắt buộc phải seed sẵn - thay cho enum MaterialKind đã xoá (xem
  * material-group-system-keys.constant.ts). Trang Spec Sắt (Sắt/Dây/Đinh/Tán rút/Nút nhựa -
- * đều nhập chung trong 1 mảnh)/Sơn/Phụ kiện/Bao bì và skus.service.ts resolve group theo
- * `systemKey`, KHÔNG theo `name` - admin đổi tên nhóm trong Admin > Nhóm vật tư thoải mái
- * mà logic Spec vẫn đúng.
+ * đều nhập chung trong 1 mảnh) và Sơn/Phụ kiện/Bao bì (3 tab này đều dùng chung nhóm OTHER
+ * "Vật tư khác", phân biệt qua ConsumableBom.stage / BomAccessoryItem.kind chứ không phải
+ * nhóm vật tư nữa) resolve group theo `systemKey`, KHÔNG theo `name` - admin đổi tên nhóm
+ * trong Admin > Nhóm vật tư thoải mái mà logic Spec vẫn đúng.
  */
 const SEED_MATERIAL_GROUPS: { systemKey: MaterialGroupSystemKey; name: string }[] = [
   { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR, name: 'Sắt' },
   { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.WIRE, name: 'Dây' },
   { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.NAIL, name: 'Đinh' },
-  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.PAINT, name: 'Sơn' },
-  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.ACCESSORY, name: 'Phụ kiện' },
-  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.PACKAGING, name: 'Bao bì' },
   { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.RIVET, name: 'Tán rút' },
   { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.PLASTIC_BUTTON, name: 'Nút nhựa' },
+  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.OTHER, name: 'Vật tư khác' },
 ];
 
 /**
