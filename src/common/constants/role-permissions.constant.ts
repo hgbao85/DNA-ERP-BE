@@ -236,9 +236,18 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // --- Phase 8 (Mua hàng) ---
   // Mua hàng: toàn quyền trên đề xuất mua (báo giá/gửi Sếp duyệt/theo dõi nhận hàng) + quản lý
   // danh mục NCC của riêng mình (thêm NCC mới ngay lúc báo giá).
+  // SUPPLIER: ALL - vừa quản lý entity Supplier (suppliers.controller.ts) vừa quản lý các route
+  // lồng POST/GET/PATCH/DELETE .../materials/:id/suppliers (gắn NCC + giá vào vật tư, xem
+  // materials.controller.ts) - cả 2 nhóm route đều gắn permission module SUPPLIER.
+  // MATERIAL: chỉ VIEW (KHÔNG UPDATE) - VatTuNCCPage.tsx chỉ cần liệt kê vật tư để chọn, không
+  // sửa vật tư gốc (tên/mã/đơn vị). Trước đây từng cấp thêm UPDATE vì route gắn NCC bị gắn nhầm
+  // module MATERIAL - đã fix (xem review rủi ro #2, materials.controller.ts) nên không cần nữa;
+  // giữ UPDATE sẽ vô tình cho phép PURCHASER gọi PATCH /materials/:id (sửa vật tư gốc) dù UI
+  // không có chỗ nào dùng tới.
   [BUSINESS_ROLES.PURCHASER]: [
     { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, actions: 'ALL' },
     { module: PERMISSION_MODULES.SUPPLIER, actions: 'ALL' },
+    { module: PERMISSION_MODULES.MATERIAL, actions: [PermissionAction.VIEW] },
   ],
 };
 

@@ -59,21 +59,25 @@ export class MaterialsController {
   }
 
   // ─── Nested: which suppliers offer this material, at what price ──────────
+  // Dữ liệu ở đây là bảng nối MaterialSupplier (giá/lead-time theo NCC), không phải entity
+  // Material - gắn permission theo module SUPPLIER (không phải MATERIAL) để tách đúng "sửa
+  // thông tin vật tư gốc" khỏi "quản lý NCC của vật tư" (2 việc khác nhau, xem review rủi ro #2:
+  // trước đây gộp chung MATERIAL:UPDATE khiến PURCHASER vô tình có luôn quyền PATCH /materials/:id).
 
   @Post(':materialId/suppliers')
-  @RequirePermissions({ module: PERMISSION_MODULES.MATERIAL, action: PermissionAction.UPDATE })
+  @RequirePermissions({ module: PERMISSION_MODULES.SUPPLIER, action: PermissionAction.CREATE })
   addSupplier(@Param('materialId') materialId: string, @Body() dto: CreateMaterialSupplierDto) {
     return this.materialsService.addSupplier(materialId, dto);
   }
 
   @Get(':materialId/suppliers')
-  @RequirePermissions({ module: PERMISSION_MODULES.MATERIAL, action: PermissionAction.VIEW })
+  @RequirePermissions({ module: PERMISSION_MODULES.SUPPLIER, action: PermissionAction.VIEW })
   listSuppliers(@Param('materialId') materialId: string) {
     return this.materialsService.listSuppliers(materialId);
   }
 
   @Patch(':materialId/suppliers/:id')
-  @RequirePermissions({ module: PERMISSION_MODULES.MATERIAL, action: PermissionAction.UPDATE })
+  @RequirePermissions({ module: PERMISSION_MODULES.SUPPLIER, action: PermissionAction.UPDATE })
   updateSupplier(
     @Param('materialId') materialId: string,
     @Param('id') id: string,
@@ -84,7 +88,7 @@ export class MaterialsController {
 
   @Delete(':materialId/suppliers/:id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermissions({ module: PERMISSION_MODULES.MATERIAL, action: PermissionAction.UPDATE })
+  @RequirePermissions({ module: PERMISSION_MODULES.SUPPLIER, action: PermissionAction.DELETE })
   removeSupplier(@Param('materialId') materialId: string, @Param('id') id: string) {
     return this.materialsService.removeSupplier(materialId, id);
   }
