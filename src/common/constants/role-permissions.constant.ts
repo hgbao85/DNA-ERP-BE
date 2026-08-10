@@ -172,11 +172,20 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // warehouseScope, enforce ở WarehouseTransfersService, không phải RBAC). STOCK:VIEW để tra
   // tồn kho khả dụng trước khi tạo phiếu. MATERIAL:VIEW + WAREHOUSE:VIEW để MfgWarehousesPage
   // (Tổng hợp kho) liệt kê được vật tư/kho thật của chính kho mình phụ trách.
+  // PURCHASE_PROPOSAL: VIEW+UPDATE (KHÔNG phải 'ALL') để NhapKhoPage.tsx xem đề xuất mua hàng
+  // đang chờ và gọi POST .../items/:itemId/receive xác nhận đã nhận hàng - cố ý không cấp
+  // APPROVE (duyệt đề xuất mua là việc của Sếp, không phải thủ kho).
+  // SKU:VIEW để XuatKhoPage.tsx liệt kê SKU lúc xuất kho.
   [BUSINESS_ROLES.WAREHOUSE_STAFF]: [
     { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, actions: 'ALL' },
     { module: PERMISSION_MODULES.MATERIAL, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
+    {
+      module: PERMISSION_MODULES.PURCHASE_PROPOSAL,
+      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
+    },
+    { module: PERMISSION_MODULES.SKU, actions: [PermissionAction.VIEW] },
   ],
   // 2 account chuyên trách nhập định mức SKU (Sắt = định mức mảnh; Phụ kiện/Bao bì = định mức
   // chi tiết, gồm cả Sơn) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE
