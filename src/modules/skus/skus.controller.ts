@@ -1,8 +1,10 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -106,8 +108,11 @@ export class SkusController {
   @Post(':id/approve')
   @RequirePermissions(APPROVE)
   @RequireRole(BUSINESS_ROLES.BOSS)
-  approve(@Param('id') id: string) {
-    return this.skusService.approve(id);
+  approve(@Param('id') id: string, @Headers('idempotency-key') idempotencyKey: string | undefined) {
+    if (!idempotencyKey) {
+      throw new BadRequestException('Header Idempotency-Key là bắt buộc');
+    }
+    return this.skusService.approve(id, idempotencyKey);
   }
 
   @Post(':id/reject-boss')

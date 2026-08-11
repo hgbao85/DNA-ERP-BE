@@ -17,6 +17,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { CreateSalesOrderItemDto } from './dto/create-sales-order-item.dto';
+import { ShipSalesOrderItemDto } from './dto/ship-sales-order-item.dto';
 import { UpdateSalesOrderDto } from './dto/update-sales-order.dto';
 import { UpdateSalesOrderItemDto } from './dto/update-sales-order-item.dto';
 import { SalesOrdersService } from './sales-orders.service';
@@ -74,5 +75,15 @@ export class SalesOrdersController {
     @Body() dto: UpdateSalesOrderItemDto,
   ) {
     return this.salesOrdersService.updateItem(id, itemId, dto);
+  }
+
+  @Post(':id/items/:itemId/ship')
+  @RequirePermissions({ module: PERMISSION_MODULES.SALES_ORDER, action: PermissionAction.UPDATE })
+  shipItem(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: ShipSalesOrderItemDto,
+  ) {
+    return this.salesOrdersService.shipItem(id, itemId, dto);
   }
 }

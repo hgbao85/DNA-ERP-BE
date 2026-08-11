@@ -848,27 +848,32 @@ model SalesOrderItem {
 /// tham chiếu quan hệ thật tới Piece/Part/SegmentSpec/BomRevision ở phase viết lại Spec
 /// pages (không thuộc phạm vi domain này).
 model PlanForm {
-  id                  BigInt         @id @default(autoincrement())
+  id                        BigInt         @id @default(autoincrement())
   /// Optional: SKU (kế hoạch sản xuất/BOM) là định nghĩa sản phẩm độc lập, không bắt buộc
   /// phải gắn 1 Sales Order ngay khi tạo (KHSX tạo trước, đơn hàng tham chiếu tới sau, hoặc
   /// không bao giờ gắn). NULL cho SKU thường tạo qua "Tạo SKU mới"; luôn có giá trị cho bản
   /// ghi origin='PRODUCTION_CONFIRM' (tạo khi Sếp duyệt 1 item PI thật).
-  salesOrderId        BigInt?
-  mfgProductId        BigInt
-  productionInvoiceId BigInt?
+  salesOrderId              BigInt?
+  mfgProductId              BigInt
+  productionInvoiceId       BigInt?
   /// Tên khách hàng nhập tay lúc tạo SKU (không suy ra được từ salesOrder khi SKU chưa/không
   /// gắn đơn hàng nào) - xem PlanFormsService.create.
-  customerName        String?
-  status              PlanFormStatus @default(WAITING_PARTS)
-  note                String?
+  customerName              String?
+  status                    PlanFormStatus @default(WAITING_PARTS)
+  note                      String?
   /// null = SKU thường; 'PRODUCTION_CONFIRM' = bản ghi tự tạo khi Sếp duyệt PI item, chỉ
   /// để phục vụ Lệnh kiểm tra vật tư, ẩn khỏi mọi màn KHSX (mirror đúng hành vi mock).
-  origin              String?
-  manhData            Json?
-  detailQuota         Json?
-  createdById         String
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
+  origin                    String?
+  manhData                  Json?
+  detailQuota               Json?
+  /// Idempotency-Key của lần gọi POST .../approve gần nhất đã commit thành công - cho phép
+  /// client retry (mất kết nối sau khi server đã commit) nhận lại đúng response cũ thay vì
+  /// 409 do status không còn WAITING_BOSS_APPROVAL. Không tái sử dụng giữa 2 PlanForm khác
+  /// nhau (unique) - trùng key ở đây luôn là lỗi client, không phải replay hợp lệ.
+  bossApproveIdempotencyKey String?        @unique
+  createdById               String
+  createdAt                 DateTime       @default(now())
+  updatedAt                 DateTime       @updatedAt
 
   salesOrder         SalesOrder?            @relation(fields: [salesOrderId], references: [id])
   mfgProduct         MfgProduct             @relation(fields: [mfgProductId], references: [id])
@@ -1212,14 +1217,14 @@ model PurchaseProposal {
 /// 1 dòng/loại sắt cần mua - materialId tra ngược Material để lấy code/name/unit khi trả DTO
 /// (giống hệt cách CuttingProposalLine không snapshot name/unit), không lưu trùng lặp.
 model PurchaseProposalItem {
-  id          BigInt @id @default(autoincrement())
-  proposalId  BigInt
-  materialId  BigInt
+  id                      BigInt   @id @default(autoincrement())
+  proposalId              BigInt
+  materialId              BigInt
   /// Tồn thật (stock_quant, kho phoi-son-han) chụp đúng lúc CuttingProposalsService.approve()
   /// tạo dòng này - không tính lại theo thời gian thực (giống buyQty, là số chốt).
-  actualStock Int    @default(0)
-  buyQty      Int
-  receivedQty Int    @default(0)
+  actualStock             Int      @default(0)
+  buyQty                  Int
+  receivedQty             Int      @default(0)
   /// Cộng dồn số lượng thực nhận theo purchaseUnit của material (vd kg) - chỉ để đối chiếu/audit,
   /// không dùng để tính tồn kho (receivedQty theo unit mới là số chốt vào StockLedger).
   receivedQtyPurchaseUnit Decimal? @db.Decimal(14, 4)

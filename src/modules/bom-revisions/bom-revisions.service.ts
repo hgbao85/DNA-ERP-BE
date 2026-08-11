@@ -51,6 +51,11 @@ type BomAccessoryItemWithMaterial = Prisma.BomAccessoryItemGetPayload<{
   include: { material: true };
 }>;
 
+/** PrismaServiceType (client mở rộng qua $extends) có shape tx callback khác Prisma.TransactionClient
+ *  gốc - suy ra đúng type từ chính $transaction của nó, đúng idiom SkusService dùng khi gọi
+ *  activateInTransaction() chung 1 transaction với PlanForm.update() (xem SkusService.approve()). */
+type PrismaTx = Parameters<Parameters<PrismaServiceType['$transaction']>[0]>[0];
+
 /**
  * BomRevision + its 5 line-item collections (bom_piece/bom_part/piece_bom/part_bom/
  * consumable_bom) - docs/dna-erp-db-schema.html mục 1.2, the last and most complex piece
@@ -114,25 +119,37 @@ export class BomRevisionsService {
    * Prisma exception filter), not a lock held here.
    */
   async activate(id: string): Promise<BomRevisionResponseDto> {
-    const revision = await this.findOneOrThrow(id);
+    const activated = await this.prisma.$transaction((tx) => this.activateInTransaction(tx, id));
+    return this.toResponseDto(activated);
+  }
+
+  /**
+   * Lõi của activate() tách riêng theo `tx` truyền vào, để SkusService.approve() chạy được
+   * chung 1 transaction với việc cập nhật PlanForm.status - boss-approve phải atomic toàn phần
+   * (activate BomRevision + PlanForm -> APPROVED cùng thành công hoặc cùng rollback), không
+   * phải 2 write rời nhau như trước (crash giữa chừng để lại BomRevision đã ACTIVE nhưng
+   * PlanForm vẫn kẹt ở WAITING_BOSS_APPROVAL).
+   */
+  async activateInTransaction(tx: PrismaTx, id: string): Promise<BomRevision> {
+    const bigId = parseBigIntId(id);
+    const revision = await tx.bomRevision.findUnique({ where: { id: bigId } });
+    if (!revision) {
+      throw new NotFoundException(`Bom revision ${id} not found`);
+    }
     if (revision.status !== BomRevisionStatus.DRAFT) {
       throw new ConflictException(
         `Only a DRAFT revision can be activated (bom_revision ${id} is ${revision.status})`,
       );
     }
 
-    const activated = await this.prisma.$transaction(async (tx) => {
-      await tx.bomRevision.updateMany({
-        where: { mfgProductId: revision.mfgProductId, status: BomRevisionStatus.ACTIVE },
-        data: { status: BomRevisionStatus.RETIRED },
-      });
-      return tx.bomRevision.update({
-        where: { id: revision.id },
-        data: { status: BomRevisionStatus.ACTIVE },
-      });
+    await tx.bomRevision.updateMany({
+      where: { mfgProductId: revision.mfgProductId, status: BomRevisionStatus.ACTIVE },
+      data: { status: BomRevisionStatus.RETIRED },
     });
-
-    return this.toResponseDto(activated);
+    return tx.bomRevision.update({
+      where: { id: revision.id },
+      data: { status: BomRevisionStatus.ACTIVE },
+    });
   }
 
   /** Only a DRAFT revision can be deleted - ACTIVE/RETIRED are permanent history. */

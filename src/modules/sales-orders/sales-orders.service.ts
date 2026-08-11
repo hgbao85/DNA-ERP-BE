@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -10,6 +10,7 @@ import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { CreateSalesOrderItemDto } from './dto/create-sales-order-item.dto';
 import { SalesOrderResponseDto } from './dto/sales-order-response.dto';
 import { SalesOrderItemResponseDto } from './dto/sales-order-item-response.dto';
+import { ShipSalesOrderItemDto } from './dto/ship-sales-order-item.dto';
 import { UpdateSalesOrderDto } from './dto/update-sales-order.dto';
 import { UpdateSalesOrderItemDto } from './dto/update-sales-order-item.dto';
 
@@ -157,7 +158,6 @@ export class SalesOrdersService {
       data: {
         skuName: dto.skuName,
         totalQty: dto.totalQty,
-        shippedQty: dto.shippedQty,
         status: dto.status,
         deliveryDate: dto.deliveryDate ? new Date(dto.deliveryDate) : undefined,
       },
@@ -165,6 +165,46 @@ export class SalesOrdersService {
     });
     if (dto.deliveryDate) await this.recomputeDeliveryDate(order.id);
     return this.toItemResponseDto(updated);
+  }
+
+  /**
+   * Ship 1 phần/toàn bộ số lượng của item - cộng dồn qua nhiều lần xuất hàng, có thể gọi song
+   * song từ nhiều thao tác ship gần như đồng thời. Trước đây updateItem() nhận shippedQty như
+   * 1 giá trị tuyệt đối do client tự tính (đọc số hiện tại + cộng rồi gửi lên) - 2 request cùng
+   * đọc 1 giá trị cũ rồi ghi đè sẽ mất mát 1 lần cộng (lost-update). Ở đây phép cộng và điều
+   * kiện trần (không vượt totalQty) nằm chung 1 câu UPDATE, Postgres khoá dòng trong lúc ghi nên
+   * không có khoảng hở giữa "đọc để kiểm tra" và "ghi" để 2 request cùng vượt trần.
+   */
+  async shipItem(
+    salesOrderId: string,
+    itemId: string,
+    dto: ShipSalesOrderItemDto,
+  ): Promise<SalesOrderItemResponseDto> {
+    const orderBigId = parseBigIntId(salesOrderId);
+    const itemBigId = parseBigIntId(itemId);
+
+    const updated = await this.prisma.$queryRaw<{ id: bigint }[]>`
+      UPDATE "sales_order_items"
+      SET "shippedQty" = "shippedQty" + ${dto.qty}
+      WHERE "id" = ${itemBigId}
+        AND "salesOrderId" = ${orderBigId}
+        AND "shippedQty" + ${dto.qty} <= "totalQty"
+      RETURNING "id"
+    `;
+
+    if (updated.length === 0) {
+      const item = await this.prisma.salesOrderItem.findUnique({ where: { id: itemBigId } });
+      if (!item || item.salesOrderId !== orderBigId) {
+        throw new NotFoundException(
+          `Sales order item ${itemId} not found on order ${salesOrderId}`,
+        );
+      }
+      throw new ConflictException(
+        `Ship ${dto.qty} vượt quá số lượng còn lại (đã ship ${item.shippedQty}/${item.totalQty})`,
+      );
+    }
+
+    return this.toItemResponseDto(await this.findItemOrThrow(orderBigId, itemId));
   }
 
   /**

@@ -381,24 +381,52 @@ export class SkusService {
 
   // ─── Sếp (Boss) ─────────────────────────────────────────────────────────────
 
-  /** Duyệt cuối - nếu PlanForm sở hữu 1 BomRevision DRAFT (đã nhập định mức), activate nó
-   *  (bản ACTIVE trước đó của cùng SKU tự chuyển RETIRED, xem BomRevisionsService.activate). */
-  async approve(id: string): Promise<SkuResponseDto> {
+  /**
+   * Duyệt cuối - nếu PlanForm sở hữu 1 BomRevision DRAFT (đã nhập định mức), activate nó (bản
+   * ACTIVE trước đó của cùng SKU tự chuyển RETIRED, xem BomRevisionsService.activateInTransaction).
+   * Toàn bộ chạy trong 1 transaction - trước đây activate() và update status là 2 write rời
+   * nhau, crash giữa chừng để lại BomRevision đã ACTIVE nhưng PlanForm vẫn kẹt ở
+   * WAITING_BOSS_APPROVAL, không cách nào tự phục hồi. Update status dùng updateMany + đếm
+   * count thay vì update() trực tiếp: WHERE guard đúng status hiện tại ngay trong câu lệnh ghi,
+   * không phải đọc-rồi-ghi (assertStatus ở trên chỉ fail-fast cho request rõ ràng sai trạng
+   * thái, không đủ chặn 2 request cùng đọc thấy WAITING_BOSS_APPROVAL rồi cùng ghi APPROVED khi
+   * PlanForm không có BomRevision DRAFT nào để tận dụng lock của activateInTransaction).
+   *
+   * idempotencyKey lưu vào bossApproveIdempotencyKey khi commit thành công - client mất kết nối
+   * ngay sau khi server đã commit, retry cùng key sẽ được trả lại đúng response cũ (short-circuit
+   * dưới) thay vì 409 do status không còn WAITING_BOSS_APPROVAL nữa. Trùng key với 1 PlanForm
+   * KHÁC là lỗi client thật (unique constraint), không phải replay hợp lệ - để nguyên cho
+   * AllExceptionsFilter map P2002 thành 409, không cần bắt riêng ở đây.
+   */
+  async approve(id: string, idempotencyKey: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
+
+    if (pf.bossApproveIdempotencyKey === idempotencyKey) {
+      return this.toResponseDtoWithQuota(pf);
+    }
     this.assertStatus(pf, PlanFormStatus.WAITING_BOSS_APPROVAL);
 
-    const draft = await this.prisma.bomRevision.findFirst({
-      where: { sourcePlanFormId: pf.id, status: BomRevisionStatus.DRAFT },
-    });
-    if (draft) {
-      await this.bomRevisionsService.activate(draft.id.toString());
-    }
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const draft = await tx.bomRevision.findFirst({
+        where: { sourcePlanFormId: pf.id, status: BomRevisionStatus.DRAFT },
+      });
+      if (draft) {
+        await this.bomRevisionsService.activateInTransaction(tx, draft.id.toString());
+      }
 
-    const updated = await this.prisma.planForm.update({
-      where: { id: pf.id },
-      data: { status: PlanFormStatus.APPROVED },
-      include: PLAN_FORM_INCLUDE,
+      const { count } = await tx.planForm.updateMany({
+        where: { id: pf.id, status: PlanFormStatus.WAITING_BOSS_APPROVAL },
+        data: { status: PlanFormStatus.APPROVED, bossApproveIdempotencyKey: idempotencyKey },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Plan form ${pf.id} đã được xử lý bởi 1 request khác trong lúc chờ duyệt - không ghi đè`,
+        );
+      }
+
+      return tx.planForm.findUniqueOrThrow({ where: { id: pf.id }, include: PLAN_FORM_INCLUDE });
     });
+
     return this.toResponseDtoWithQuota(updated);
   }
 

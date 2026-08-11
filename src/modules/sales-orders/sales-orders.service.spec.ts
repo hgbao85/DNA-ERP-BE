@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { SalesOrdersService } from './sales-orders.service';
 
@@ -21,6 +21,7 @@ describe('SalesOrdersService', () => {
       findMany: jest.Mock;
     };
     productionInvoice: { create: jest.Mock; update: jest.Mock };
+    $queryRaw: jest.Mock;
   };
 
   const customer = { id: 1n, name: 'Khach A' };
@@ -63,6 +64,7 @@ describe('SalesOrdersService', () => {
         findMany: jest.fn(),
       },
       productionInvoice: { create: jest.fn(), update: jest.fn() },
+      $queryRaw: jest.fn(),
     };
     service = new SalesOrdersService(prisma as unknown as PrismaServiceType);
   });
@@ -136,6 +138,78 @@ describe('SalesOrdersService', () => {
       await expect(service.updateItem('10', '5', { totalQty: 2 })).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('shipItem', () => {
+    it('cộng dồn shippedQty qua 1 câu UPDATE nguyên tử, không đọc-rồi-ghi', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ id: 5n }]);
+      prisma.salesOrderItem.findUnique.mockResolvedValue({
+        id: 5n,
+        salesOrderId: 10n,
+        mfgProductId: 2n,
+        skuName: 'Ghe A',
+        totalQty: 10,
+        shippedQty: 7,
+        status: 'LEN_KE_HOACH',
+        deliveryDate: null,
+        mfgProduct: product,
+      });
+
+      const result = await service.shipItem('10', '5', { qty: 3 });
+
+      expect(result.shippedQty).toBe(7);
+      // Phép cộng + điều kiện trần nằm chung 1 câu SQL - không có findUnique nào xen giữa để đọc
+      // "current" trước khi ghi, đúng thứ tự khoá dòng ở DB thay vì tính ở tầng ứng dụng.
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it('từ chối khi ship sẽ vượt totalQty, không âm thầm ghi đè', async () => {
+      prisma.$queryRaw.mockResolvedValue([]); // WHERE ...<= totalQty không khớp dòng nào
+      prisma.salesOrderItem.findUnique.mockResolvedValue({
+        id: 5n,
+        salesOrderId: 10n,
+        totalQty: 10,
+        shippedQty: 9,
+      });
+
+      await expect(service.shipItem('10', '5', { qty: 5 })).rejects.toThrow(ConflictException);
+    });
+
+    it('2 request ship gần như đồng thời không lệch số dư: request sau cộng dồn trên kết quả request trước', async () => {
+      // Mô phỏng 2 lần gọi $queryRaw tuần tự cho đúng cùng 1 dòng - lần 2 phải thấy ảnh hưởng
+      // của lần 1 (7 -> 9) vì phép cộng chạy ở DB, không phải tính trước rồi PATCH giá trị tuyệt đối.
+      prisma.$queryRaw.mockResolvedValue([{ id: 5n }]);
+      prisma.salesOrderItem.findUnique
+        .mockResolvedValueOnce({
+          id: 5n,
+          salesOrderId: 10n,
+          mfgProductId: 2n,
+          totalQty: 10,
+          shippedQty: 9, // sau request 1: 7 + 2
+          mfgProduct: product,
+        })
+        .mockResolvedValueOnce({
+          id: 5n,
+          salesOrderId: 10n,
+          mfgProductId: 2n,
+          totalQty: 10,
+          shippedQty: 10, // sau request 2: 9 + 1
+          mfgProduct: product,
+        });
+
+      const first = await service.shipItem('10', '5', { qty: 2 });
+      const second = await service.shipItem('10', '5', { qty: 1 });
+
+      expect(first.shippedQty).toBe(9);
+      expect(second.shippedQty).toBe(10);
+    });
+
+    it('throws 404 when the item does not belong to the order', async () => {
+      prisma.$queryRaw.mockResolvedValue([]);
+      prisma.salesOrderItem.findUnique.mockResolvedValue({ id: 5n, salesOrderId: 999n });
+
+      await expect(service.shipItem('10', '5', { qty: 1 })).rejects.toThrow(NotFoundException);
     });
   });
 });

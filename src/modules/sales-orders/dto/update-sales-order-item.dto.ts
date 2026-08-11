@@ -14,12 +14,6 @@ export class UpdateSalesOrderItemDto {
   @Min(1)
   totalQty?: number;
 
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  shippedQty?: number;
-
   @ApiPropertyOptional({ enum: SalesOrderItemStatus })
   @IsOptional()
   @IsEnum(SalesOrderItemStatus)

@@ -19,7 +19,7 @@ const SYSTEM_GROUP_IDS = {
 
 describe('SkusService', () => {
   let service: SkusService;
-  let bomRevisionsService: { create: jest.Mock; activate: jest.Mock };
+  let bomRevisionsService: { create: jest.Mock; activateInTransaction: jest.Mock };
   let prisma: {
     salesOrder: { findUnique: jest.Mock };
     mfgProduct: { findUnique: jest.Mock };
@@ -30,6 +30,8 @@ describe('SkusService', () => {
       findFirst: jest.Mock;
       findMany: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
       count: jest.Mock;
     };
     planFormManhReview: { upsert: jest.Mock; deleteMany: jest.Mock };
@@ -58,6 +60,7 @@ describe('SkusService', () => {
     status: 'WAITING_PARTS',
     note: null,
     origin: null,
+    bossApproveIdempotencyKey: null,
     createdById: 'user-1',
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -80,6 +83,8 @@ describe('SkusService', () => {
         findFirst: jest.fn(),
         findMany: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn(),
         count: jest.fn(),
       },
       planFormManhReview: { upsert: jest.fn(), deleteMany: jest.fn() },
@@ -138,7 +143,7 @@ describe('SkusService', () => {
       },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
-    bomRevisionsService = { create: jest.fn(), activate: jest.fn() };
+    bomRevisionsService = { create: jest.fn(), activateInTransaction: jest.fn() };
     service = new SkusService(
       prisma as unknown as PrismaServiceType,
       bomRevisionsService as unknown as BomRevisionsService,
@@ -466,25 +471,80 @@ describe('SkusService', () => {
   });
 
   describe('approve', () => {
-    it('activates the owned DRAFT revision when the boss gives final approval', async () => {
+    it('activates the owned DRAFT revision when the boss gives final approval, in 1 transaction', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED' }));
+      prisma.planForm.updateMany.mockResolvedValue({ count: 1 });
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'APPROVED' }));
 
-      const result = await service.approve('5');
+      const result = await service.approve('5', 'key-1');
 
       expect(result.status).toBe('APPROVED');
-      expect(bomRevisionsService.activate).toHaveBeenCalledWith('10');
+      expect(bomRevisionsService.activateInTransaction).toHaveBeenCalledWith(prisma, '10');
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.planForm.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          data: expect.objectContaining({ bossApproveIdempotencyKey: 'key-1' }),
+        }),
+      );
     });
 
-    it('does not call activate when the plan form never had any quota entered', async () => {
+    it('does not call activateInTransaction when the plan form never had any quota entered', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
       prisma.bomRevision.findFirst.mockResolvedValue(null);
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED' }));
+      prisma.planForm.updateMany.mockResolvedValue({ count: 1 });
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'APPROVED' }));
 
-      await service.approve('5');
+      await service.approve('5', 'key-1');
 
-      expect(bomRevisionsService.activate).not.toHaveBeenCalled();
+      expect(bomRevisionsService.activateInTransaction).not.toHaveBeenCalled();
+    });
+
+    it('rolls back the whole approve (never touches PlanForm.status) when activating the BOM revision fails midway', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      // Ví dụ lỗi giữa chừng: 1 request khác vừa activate xong đúng lúc này, draft không còn
+      // ở trạng thái DRAFT nữa - activateInTransaction() (chạy trong cùng transaction) throw.
+      bomRevisionsService.activateInTransaction.mockRejectedValue(
+        new ConflictException('bom_revision không còn DRAFT'),
+      );
+
+      await expect(service.approve('5', 'key-1')).rejects.toThrow(ConflictException);
+
+      // All-or-nothing: transaction throw trước khi chạm tới planForm.updateMany, nên PlanForm
+      // không bị kẹt nửa chừng (BomRevision lỗi nhưng PlanForm lỡ đã APPROVED) như bug cũ.
+      expect(prisma.planForm.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects when another request already moved the plan form out of WAITING_BOSS_APPROVAL mid-transaction', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      prisma.bomRevision.findFirst.mockResolvedValue(null);
+      // updateMany's WHERE guard (id + status=WAITING_BOSS_APPROVAL) không khớp dòng nào nữa.
+      prisma.planForm.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.approve('5', 'key-1')).rejects.toThrow(ConflictException);
+      expect(prisma.planForm.findUniqueOrThrow).not.toHaveBeenCalled();
+    });
+
+    it('replays the cached result on retry with the same key instead of erroring, without re-running the transaction', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ status: 'APPROVED', bossApproveIdempotencyKey: 'key-1' }),
+      );
+
+      const result = await service.approve('5', 'key-1');
+
+      expect(result.status).toBe('APPROVED');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a genuinely stale retry (different key, already approved) instead of silently no-op-ing', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ status: 'APPROVED', bossApproveIdempotencyKey: 'key-1' }),
+      );
+
+      await expect(service.approve('5', 'key-2')).rejects.toThrow(ConflictException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 
@@ -503,7 +563,7 @@ describe('SkusService', () => {
         where: { planFormId: 5n },
       });
       // rewindToDetailReview không đụng BomRevision - dữ liệu định mức giữ nguyên.
-      expect(bomRevisionsService.activate).not.toHaveBeenCalled();
+      expect(bomRevisionsService.activateInTransaction).not.toHaveBeenCalled();
     });
   });
 
