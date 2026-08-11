@@ -28,6 +28,7 @@ describe('ProductionInvoicesService', () => {
     productionOrder: { findUnique: jest.Mock };
     bomPiece: { findMany: jest.Mock; findUnique: jest.Mock };
     transferCheckResult: { findMany: jest.Mock; create: jest.Mock };
+    weavingReceipt: { groupBy: jest.Mock };
     $transaction: jest.Mock;
   };
   let skusService: { ensureProductionConfirmPlanForm: jest.Mock };
@@ -92,6 +93,7 @@ describe('ProductionInvoicesService', () => {
       productionOrder: { findUnique: jest.fn() },
       bomPiece: { findMany: jest.fn(), findUnique: jest.fn() },
       transferCheckResult: { findMany: jest.fn(), create: jest.fn() },
+      weavingReceipt: { groupBy: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     skusService = { ensureProductionConfirmPlanForm: jest.fn() };
@@ -386,6 +388,7 @@ describe('ProductionInvoicesService', () => {
           { pieceId: 30n, checkedQty: 3, defects: [{ id: 1n }] },
           { pieceId: 30n, checkedQty: 2, defects: [] },
         ]);
+        prisma.weavingReceipt.groupBy.mockResolvedValue([{ pieceId: 30n, _sum: { qty: 7 } }]);
 
         const [result] = await service.listTransferCheckPieces('7', '20');
 
@@ -393,10 +396,23 @@ describe('ProductionInvoicesService', () => {
           pieceId: '30',
           pieceName: 'Thân trên',
           totalQty: 20, // 2 qtyPerUnit × 10 quantity
-          readyQty: 0, // chưa có dữ liệu sản lượng Đan thật - cố tình không dùng số giả
+          readyQty: 7, // SUM(WeavingReceipt.qty) - xem WeavingIssuesModule
           checkedQty: 5, // 3 + 2, cộng dồn qua SUM, không phải đọc-rồi-ghi
           defectCount: 1,
         });
+      });
+
+      it('readyQty = 0 khi mảnh chưa có WeavingReceipt nào (không crash)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
+        prisma.transferCheckResult.findMany.mockResolvedValue([]);
+        prisma.weavingReceipt.groupBy.mockResolvedValue([]);
+
+        const [result] = await service.listTransferCheckPieces('7', '20');
+
+        expect(result.readyQty).toBe(0);
       });
 
       it('rejects when the item has no ProductionOrder yet (chưa được Sếp duyệt)', async () => {

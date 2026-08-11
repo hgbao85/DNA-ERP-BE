@@ -84,6 +84,8 @@ model User {
   steelIssuesIssued          SteelIssue[]            @relation("SteelIssueIssuedBy")
   qcReviewsReviewed          QcReview[]              @relation("QcReviewReviewedBy")
   replenishRequestsFulfilled ReplenishRequest[]      @relation("ReplenishRequestFulfilledBy")
+  weavingIssuesIssued        WeavingIssue[]          @relation("WeavingIssueIssuedBy")
+  weavingReceiptsReceived    WeavingReceipt[]        @relation("WeavingReceiptReceivedBy")
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -423,6 +425,9 @@ model WeavingPoint {
   isActive        Boolean   @default(true)
   deletedAt       DateTime?
 
+  weavingIssues   WeavingIssue[]
+  weavingReceipts WeavingReceipt[]
+
   @@map("weaving_points")
 }
 
@@ -528,6 +533,8 @@ model Piece {
   stockQuants          StockQuant[]
   transferCheckResults TransferCheckResult[]
   steelIssues          SteelIssue[]
+  weavingIssues        WeavingIssue[]
+  weavingReceipts      WeavingReceipt[]
 
   @@unique([mfgProductId, code])
   @@index([mfgProductId])
@@ -1051,8 +1058,8 @@ model ProductionInvoiceItemStage {
 /// totalQty của từng mảnh KHÔNG lưu ở đây - suy từ BomPiece.qtyPerUnit (theo đúng
 /// ProductionOrder.bomRevisionId đã ghim) × ProductionOrder.quantity tại thời điểm đọc, xem
 /// ProductionInvoicesService.listTransferCheckPieces(). "Chờ thực thi" (bao nhiêu đã sản xuất
-/// xong, sẵn sàng để kiểm) CHƯA có dữ liệu thật - phụ thuộc sản lượng thật của Đan, domain đó
-/// chưa xây (M2) - tạm luôn trả 0, KHÔNG dùng số giả.
+/// xong, sẵn sàng để kiểm) suy từ SUM(WeavingReceipt.qty) - xem model WeavingReceipt (M2 "Phân
+/// bổ/nhận hàng đan", đóng gap 2026-08-11).
 model TransferCheckResult {
   id                      BigInt   @id @default(autoincrement())
   productionInvoiceItemId BigInt
@@ -1138,6 +1145,8 @@ model ProductionOrder {
   bomRevision           BomRevision           @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
   cuttingProposals      CuttingProposal[]
   steelIssues           SteelIssue[]
+  weavingIssues         WeavingIssue[]
+  weavingReceipts       WeavingReceipt[]
 
   @@index([mfgProductId])
   @@map("production_orders")
@@ -1657,4 +1666,69 @@ model ReplenishRequest {
 
   @@index([status])
   @@map("replenish_requests")
+}
+
+// =====================================================================
+// Phase 9b — Đan (weaving points), M2 ưu tiên 1 (2026-08-11, xem roadmap docs/dna-erp-roadmap.html
+// mục 08). Thay manh.service.ts mock: kho vật tư-TP ("vat-tu-tp") xuất khung cho 1 điểm đan
+// ngoài ("xuất đan"), điểm đan trả lại hàng đã đan xong ("nhập đan"). Cả 2 đều append-only,
+// KHÔNG có state machine (khác SteelIssue) - mọi vi phạm nghiệp vụ là lỗi 400 (validate số
+// lượng), không phải 409 (không có transition trạng thái nào để xung đột).
+//
+// KHÔNG ghi StockLedger, cùng lý do SteelIssue không ghi: domain "Sản lượng theo công đoạn
+// Phôi/Hàn/Sơn" (nguồn tồn khung thật) chưa được xây (M2 riêng) - đây chỉ là lớp theo dõi thực
+// thi thuần, cap số lượng bằng định mức BOM (bomPiece.qtyPerUnit × productionOrder.quantity),
+// giống hệt idiom SteelIssuesService.getIssuePlan().
+// =====================================================================
+
+/// 1 đợt kho vật tư-TP xuất khung cho 1 điểm đan, theo (production_order, piece, weaving_point).
+/// Không link 1-1 tới đợt "nhập" cụ thể - WeavingReceipt cap theo tổng luỹ kế
+/// (SUM issued - SUM received) của đúng 3 khoá này, mirror allocation.xuatQty của mock
+/// (manh.service.ts). "Còn xuất được bao nhiêu" = định mức BOM trừ SUM(WeavingIssue.qty) MỌI
+/// điểm đan cho (production_order, piece) - xem WeavingIssuesService.getIssuePlan().
+model WeavingIssue {
+  id                BigInt   @id @default(autoincrement())
+  productionOrderId BigInt
+  pieceId           BigInt
+  weavingPointId    BigInt
+  qty               Int
+  /// Client-supplied key cho POST production-orders/:id/weaving-issues - resolve-or-return,
+  /// cùng idiom SteelIssue.idempotencyKey.
+  idempotencyKey    String?  @unique
+  issuedAt          DateTime @default(now())
+  issuedById        String
+
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  piece           Piece           @relation(fields: [pieceId], references: [id])
+  weavingPoint    WeavingPoint    @relation(fields: [weavingPointId], references: [id])
+  issuedBy        User            @relation("WeavingIssueIssuedBy", fields: [issuedById], references: [id])
+
+  @@index([productionOrderId, pieceId, weavingPointId])
+  @@map("weaving_issues")
+}
+
+/// 1 đợt nhận khung đã đan xong về từ 1 điểm đan cụ thể. Không link tới 1 WeavingIssue cụ thể -
+/// mirror nhapManh() ở mock (clamp theo tổng luỹ kế của allocation, không chọn batch). Đây là
+/// nguồn dữ liệu THẬT cho TransferCheckPieceResponseDto.readyQty (trước đây hardcode 0) - xem
+/// ProductionInvoicesService.listTransferCheckPieces().
+model WeavingReceipt {
+  id                BigInt   @id @default(autoincrement())
+  productionOrderId BigInt
+  pieceId           BigInt
+  weavingPointId    BigInt
+  qty               Int
+  /// Bắt buộc có cột riêng (không dùng chung WeavingIssue.idempotencyKey) - create() thuần,
+  /// không có state machine để tự chống trùng như SteelIssue.receive() (update trạng thái),
+  /// thiếu key sẽ double-count khi client retry.
+  idempotencyKey String?  @unique
+  receivedAt     DateTime @default(now())
+  receivedById   String
+
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  piece           Piece           @relation(fields: [pieceId], references: [id])
+  weavingPoint    WeavingPoint    @relation(fields: [weavingPointId], references: [id])
+  receivedBy      User            @relation("WeavingReceiptReceivedBy", fields: [receivedById], references: [id])
+
+  @@index([productionOrderId, pieceId, weavingPointId])
+  @@map("weaving_receipts")
 }

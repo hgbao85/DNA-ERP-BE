@@ -537,9 +537,11 @@
       <b>Cập nhật 2026-08-11 (cùng ngày, sau khi tài liệu này được tạo):</b> đã hoàn thành track nhỏ
       M0 + toàn bộ 4/4 patch/quyết định của M1 (production-invoices đã chốt stage + build luôn TRANSFER_CHECK
       thật; quyết định ràng buộc 1 SKU/PO ⇔ 1 PlanForm cũng đã chốt — giữ SKU độc lập với PO, thêm cảnh báo mềm
-      thay vì khoá DB). Đồng thời bắt đầu M2: hạng mục đầu tiên <b>Xuất sắt cho Phôi</b> (module
+      thay vì khoá DB). Đồng thời đã làm 2/7 hạng mục M2: <b>Xuất sắt cho Phôi</b> (module
       <span class="mono-cell">steel-issues</span> + <span class="mono-cell">qc-reviews</span>, kèm nhánh Phôi
-      của QC review) đã build xong backend, FE chưa nối. Chi tiết ở mục 02/05/06/07/08 bên dưới.
+      của QC review) và <b>Phân bổ/nhận hàng đan</b> (module <span class="mono-cell">weaving-issues</span>,
+      đóng luôn gap <span class="mono-cell">TransferCheckPieceResponseDto.readyQty</span> hardcode 0 ở
+      KhoChuyenKiemPage) đã build xong backend, FE cả 2 chưa nối. Chi tiết ở mục 05/07/08 bên dưới.
     </div>
   </div>
 </div>
@@ -559,7 +561,7 @@
   </div>
   <div class="stat-tile" style="--stat-color:var(--accent)">
     <span class="stat-num">6</span>
-    <span class="stat-label">Nghiệp vụ tại xưởng (vật tư tiêu hao, đan, sản lượng, QC Hàn/Sơn, đóng gói, kiểm tra vật tư) chưa có backend thật — Chuyền kiểm (2026-08-11) và Xuất sắt cho Phôi + QC nhánh Phôi (2026-08-11) đã xong, FE 2 mục sau chưa nối (M3)</span>
+    <span class="stat-label">Nghiệp vụ tại xưởng (vật tư tiêu hao, sản lượng, QC Hàn/Sơn, đóng gói, kiểm tra vật tư) chưa có backend thật — Chuyền kiểm, Xuất sắt cho Phôi + QC nhánh Phôi, và Phân bổ/nhận hàng đan (tất cả 2026-08-11) đã xong, FE 3 mục sau chưa nối (M3)</span>
   </div>
 </div>
 
@@ -722,7 +724,7 @@
             <tr><td class="mono">InboundWarehouse/KhoDongGoiPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">100% số liệu sinh từ hash chuỗi tên SKU; nút xác nhận chỉ lưu useState, mất khi rời trang. Chưa đụng tới lần này.</td></tr>
             <tr><td class="mono">InboundWarehouse/XuatSatPage</td><td class="status"><span class="pill pill-mock">mock (BE đã có, FE chưa nối)</span></td><td class="note"><b>BE xong 2026-08-11:</b> module <span class="mono-cell">steel-issues</span> (kho xuất → Phôi nhận → báo cắt xong, dưới 1 CuttingProposal đã duyệt) + <span class="mono-cell">qc-reviews</span> (nhánh Phôi: duyệt/rework/cấp lại sắt phế) đã build đầy đủ, đúng thay thế <span class="mono-cell">phoi-sat.service.ts</span>. Cố ý KHÔNG ghi thêm StockLedger (CuttingProposalsService.approve() đã trừ tồn 1 lần lúc duyệt phương án cắt). Trang FE vẫn gọi mock — nối API thật thuộc M3.</td></tr>
             <tr><td class="mono">InboundWarehouse/XuatVatTuTieuHaoPage · PhanPhoiNoiBoPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Mock có trạng thái thật (persist localStorage), luồng duyệt/huỷ tương đối đầy đủ — gần với "sẵn sàng chờ backend" nhất trong nhóm này.</td></tr>
-            <tr><td class="mono">InboundWarehouse/KhoXuatDanPage · KhoNhapDanPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Phân bổ/nhận hàng đan qua điểm đan — mock nhưng luồng nghiệp vụ thật.</td></tr>
+            <tr><td class="mono">InboundWarehouse/KhoXuatDanPage · KhoNhapDanPage</td><td class="status"><span class="pill pill-mock">mock (BE đã có, FE chưa nối)</span></td><td class="note"><b>BE xong 2026-08-11:</b> module <span class="mono-cell">weaving-issues</span> (kho vật tư-TP xuất khung cho điểm đan ngoài "xuất đan" + nhận lại hàng đan xong "nhập đan", cap theo định mức BOM, không ghi StockLedger — cùng lý do steel-issues không ghi) đã build đầy đủ, đúng thay thế <span class="mono-cell">manh.service.ts</span>. Đồng thời đã nối luôn <span class="mono-cell">TransferCheckPieceResponseDto.readyQty</span> (mục 05 KhoChuyenKiemPage) — không còn hardcode 0. Trang FE vẫn gọi mock — nối API thật thuộc M3.</td></tr>
             <tr><td class="mono">Phoi/LenhSanXuatPhoi · XacNhanSanLuongPage · LichSuNhanSatPage · KhoPhoiPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Lệnh SX phôi + sản lượng + KCS rework — mock có state, không phải placeholder rỗng.</td></tr>
             <tr><td class="mono">Han/LenhSanXuatHan · KhungHanPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">KhungHanPage là bảng tĩnh hoàn toàn — trang kém phát triển nhất trong toàn bộ FE, code tự ghi "chưa nối BE".</td></tr>
             <tr><td class="mono">Son/LenhSanXuatSon · ManhChoDanPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">ManhChoDanPage cũng là bảng tĩnh hoàn toàn, cùng mức độ với KhungHanPage.</td></tr>
@@ -798,6 +800,11 @@
           <h4>10 module backend chưa có 1 test nào</h4>
           <p>roles, customers, material-groups, defect-reasons, segment-specs, system-config, audit-log, notifications, uploads, external — đều "done" nhưng không có lưới an toàn khi refactor.</p>
         </div>
+        <div class="risk-card" style="--risk-color: var(--done)">
+          <span class="risk-tag">Lỗ hổng âm thầm — đã vá 2026-08-11</span>
+          <h4>KhoChuyenKiemPage: readyQty không còn hardcode 0</h4>
+          <p><span class="mono-cell">TransferCheckPieceResponseDto.readyQty</span> nay lấy SUM(WeavingReceipt.qty) thật (module <span class="mono-cell">weaving-issues</span>, mục 08 M2 ưu tiên 1) — cùng dạng rủi ro mà M1 đã ưu tiên vá (code chạy thật nhưng im lặng sai), đã đóng đúng gap này trước khi làm tiếp các hạng mục M2 còn lại.</p>
+        </div>
       </div>
     </section>
 
@@ -840,16 +847,16 @@
 
         <div class="milestone" data-m="M2">
           <div class="milestone-card">
-            <div class="milestone-head"><h4>Xây backend cho sản xuất tại xưởng — khối việc lớn nhất còn lại</h4><span class="pill pill-mixed">1/7 xong 2026-08-11</span></div>
-            <p class="milestone-why">7 nghiệp vụ dưới đây đã có UI tương đối hoàn chỉnh (mục 05) chạy trên mock có state — nghĩa là luồng nghiệp vụ đã được validate qua UI, chỉ còn thiếu backend thật để thay thế service mock 1-đổi-1.</p>
+            <div class="milestone-head"><h4>Xây backend cho sản xuất tại xưởng — khối việc lớn nhất còn lại</h4><span class="pill pill-mixed">2/7 xong 2026-08-11</span></div>
+            <p class="milestone-why">7 nghiệp vụ dưới đây đã có UI tương đối hoàn chỉnh (mục 05) chạy trên mock có state — nghĩa là luồng nghiệp vụ đã được validate qua UI, chỉ còn thiếu backend thật để thay thế service mock 1-đổi-1. <b>Thứ tự ưu tiên chốt 2026-08-11</b> (xem chi tiết lý do ở mục 07): làm trước hạng mục nào đang gây lỗ hổng âm thầm trên tính năng <i>đã chạy thật</i>, rồi mới theo đúng chuỗi phụ thuộc kỹ thuật (Đan → Sản lượng Hàn/Sơn/Phôi → QC Hàn/Sơn), phần độc lập và ít rủi ro nhất (Kiểm tra vật tư, Đóng gói) để cuối.</p>
             <ul>
               <li><span class="tag">BE ✓</span><b>Xuất sắt cho Phôi</b> — xong 2026-08-11: module <span class="mono-cell">steel-issues</span> (kho xuất → Phôi nhận → báo cắt xong, dưới 1 CuttingProposal đã APPROVED, không ghi thêm StockLedger vì CuttingProposalsService.approve() đã trừ tồn 1 lần lúc duyệt phương án cắt) + <span class="mono-cell">qc-reviews</span> (nhánh Phôi: duyệt/tự sinh rework/tự sinh đề xuất cấp lại sắt phế). Đúng thay thế <span class="mono-cell">phoi-sat.service.ts</span>. Bỏ 2 endpoint rework/replenish-request riêng so với tài liệu gốc (mâu thuẫn nội tại) - qc-review tự làm hết trong 1 lần gọi, đúng hành vi mock đã validate. <i>FE (XuatSatPage, KcsPhoiPage) chưa nối - thuộc M3.</i></li>
-              <li><span class="tag">Mới</span><b>Xuất vật tư tiêu hao</b> (Hàn/Sơn) — thay <span class="mono-cell">vat-tu-noi-bo.service.ts</span>.</li>
-              <li><span class="tag">Mới</span><b>Phân bổ/nhận hàng đan</b> — thay <span class="mono-cell">manh.service.ts</span>.</li>
-              <li><span class="tag">Mới</span><b>Sản lượng theo công đoạn</b> (Phôi/Hàn/Sơn, có rework) — thay <span class="mono-cell">san-luong.service.ts</span>, <span class="mono-cell">phoi-lenh-sx.service.ts</span>. Sản lượng Đan xong thì quay lại nối luôn <span class="mono-cell">TransferCheckPieceResponseDto.readyQty</span> (mục 05, hiện luôn trả 0 vì chưa có dữ liệu này). Cần thêm model <span class="mono-cell">ProductionBatch</span> để mở nhánh <span class="mono-cell">productionBatchId</span> còn lại của <span class="mono-cell">qc_reviews</span>.</li>
-              <li><span class="tag">1 nhánh đã xong</span><b>QC review (KCS)</b> — bảng <span class="mono-cell">qc_reviews</span>/<span class="mono-cell">replenish_requests</span> đã tạo sẵn (XOR steelIssueId/productionBatchId, CHECK DB), nhánh Phôi (steelIssueId) hoạt động đầy đủ (đi kèm Xuất sắt cho Phôi ở trên). Nhánh Hàn/Sơn (productionBatchId) chờ model ProductionBatch ở mục Sản lượng theo công đoạn.</li>
-              <li><span class="tag">Mới</span><b>Đóng gói</b> — thay số liệu hash ở KhoDongGoiPage.</li>
-              <li><span class="tag">Mới</span><b>Kiểm tra vật tư trước sản xuất</b> (3 kho) — thay <span class="mono-cell">InspectionContext.requests</span> (SEED_REQUESTS); đồng thời BE cần thêm endpoint tạo purchase-proposal thủ công để <span class="mono-cell">markProposalCreated</span> hết phải ghi state cục bộ (proposals còn lại đã real từ Phase 8, không cần đụng vào).</li>
+              <li><span class="tag">BE ✓</span><b>Phân bổ/nhận hàng đan</b> — xong 2026-08-11: module <span class="mono-cell">weaving-issues</span> (kho vật tư-TP "vat-tu-tp" xuất khung cho điểm đan ngoài "xuất đan" + nhận lại hàng đan xong "nhập đan", 2 model append-only <span class="mono-cell">WeavingIssue</span>/<span class="mono-cell">WeavingReceipt</span>, cap số lượng bằng định mức BOM trừ đã xuất — cùng idiom <span class="mono-cell">SteelIssuesService.getIssuePlan()</span>, không ghi StockLedger cùng lý do steel-issues) đã build đầy đủ, đúng thay thế <span class="mono-cell">manh.service.ts</span>. Đã đóng đúng gap rủi ro cao nhất: <span class="mono-cell">TransferCheckPieceResponseDto.readyQty</span> ở <span class="mono-cell">KhoChuyenKiemPage</span> (mục 05) không còn hardcode 0. <i>FE (KhoXuatDanPage, KhoNhapDanPage) chưa nối - thuộc M3.</i></li>
+              <li><span class="tag">Ưu tiên 2</span><b>Xuất vật tư tiêu hao</b> (Hàn/Sơn) — thay <span class="mono-cell">vat-tu-noi-bo.service.ts</span>. Nên làm cùng lúc/ngay trước sản lượng Hàn/Sơn: không ghi được sản lượng nếu chưa có vật tư tiêu hao được xuất trước theo đúng nghiệp vụ.</li>
+              <li><span class="tag">Ưu tiên 2</span><b>Sản lượng theo công đoạn</b> (Phôi/Hàn/Sơn, có rework) — thay <span class="mono-cell">san-luong.service.ts</span>, <span class="mono-cell">phoi-lenh-sx.service.ts</span>. Cần thêm model <span class="mono-cell">ProductionBatch</span> để mở nhánh <span class="mono-cell">productionBatchId</span> còn lại của <span class="mono-cell">qc_reviews</span> — làm trước vì hạng mục QC Hàn/Sơn dưới đây phụ thuộc trực tiếp vào model này.</li>
+              <li><span class="tag">Theo sau #2</span><b>QC review (KCS)</b> — bảng <span class="mono-cell">qc_reviews</span>/<span class="mono-cell">replenish_requests</span> đã tạo sẵn (XOR steelIssueId/productionBatchId, CHECK DB), nhánh Phôi (steelIssueId) hoạt động đầy đủ (đi kèm Xuất sắt cho Phôi ở trên). Nhánh Hàn/Sơn (productionBatchId) tự mở ngay khi Sản lượng theo công đoạn xong — không cần làm riêng.</li>
+              <li><span class="tag">Ưu tiên 3</span><b>Kiểm tra vật tư trước sản xuất</b> (3 kho) — thay <span class="mono-cell">InspectionContext.requests</span> (SEED_REQUESTS); đồng thời BE cần thêm endpoint tạo purchase-proposal thủ công để <span class="mono-cell">markProposalCreated</span> hết phải ghi state cục bộ (proposals còn lại đã real từ Phase 8, không cần đụng vào). Độc lập với chuỗi Phôi/Hàn/Sơn/Đan phía trên — có thể làm song song nếu có người rảnh.</li>
+              <li><span class="tag">Ưu tiên 4 (cuối)</span><b>Đóng gói</b> — thay số liệu hash ở KhoDongGoiPage. Không có mục nào phụ thuộc, và số liệu hash hiện tại không gây hiểu nhầm "đã thật" như case readyQty ở trên — an toàn để lùi cuối cùng.</li>
             </ul>
           </div>
         </div>

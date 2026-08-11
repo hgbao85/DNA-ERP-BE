@@ -37,6 +37,8 @@ export const PERMISSION_MODULES = {
   // --- Phase 9 (MES-B execution - Phôi) ---
   STEEL_ISSUE: 'STEEL_ISSUE',
   QC_REVIEW: 'QC_REVIEW',
+  // --- Phase 9b (MES-B execution - Đan) ---
+  WEAVING_ISSUE: 'WEAVING_ISSUE',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

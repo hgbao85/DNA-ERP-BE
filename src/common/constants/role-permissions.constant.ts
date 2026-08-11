@@ -190,6 +190,10 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // chưa có endpoint ở bản này.
   // QC_REVIEW: chỉ UPDATE (fulfill/reject replenish-requests) - thủ kho là người cấp bù vật lý
   // khi KCS chấm phế, nhưng KHÔNG được tạo/tự duyệt qc-review (đó là việc của KCS_STAFF).
+  // WEAVING_ISSUE: CREATE (xuất đan)+UPDATE (nhập đan)+VIEW (Phase 9b, 2026-08-11) - thủ kho
+  // vật tư-TP là người duy nhất thực hiện cả 2 chiều Đan (không có mfgRole "Đan" - việc đan
+  // diễn ra ở điểm đan NGOÀI, không phải 1 tổ trong xưởng, xem MFG_FLOOR_ROLES). Không cấp cho
+  // PHOI_STAFF/HAN_STAFF/SON_STAFF/KCS_STAFF.
   [BUSINESS_ROLES.WAREHOUSE_STAFF]: [
     { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW, PermissionAction.UPDATE] },
     { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, actions: 'ALL' },
@@ -208,6 +212,10 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       actions: [PermissionAction.CREATE, PermissionAction.VIEW],
     },
     { module: PERMISSION_MODULES.QC_REVIEW, actions: [PermissionAction.UPDATE] },
+    {
+      module: PERMISSION_MODULES.WEAVING_ISSUE,
+      actions: [PermissionAction.CREATE, PermissionAction.UPDATE, PermissionAction.VIEW],
+    },
   ],
   // 2 account chuyên trách nhập định mức SKU (Sắt = định mức mảnh; Phụ kiện/Bao bì = định mức
   // chi tiết, gồm cả Sơn) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE

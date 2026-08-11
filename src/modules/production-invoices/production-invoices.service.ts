@@ -365,9 +365,9 @@ export class ProductionInvoicesService {
 
   /**
    * Danh sách mảnh cần kiểm cho 1 item + tiến độ đã kiểm - mirror mockPieces()/pieceState ở
-   * KhoChuyenKiemPage.tsx nhưng totalQty/checkedQty/defectCount đều là số thật (totalQty suy từ
-   * BOM đã ghim ở ProductionOrder, checkedQty/defectCount SUM từ TransferCheckResult). readyQty
-   * (chờ thực thi) tạm luôn 0 - xem comment DTO.
+   * KhoChuyenKiemPage.tsx, toàn bộ số liệu đều thật (totalQty suy từ BOM đã ghim ở
+   * ProductionOrder, checkedQty/defectCount SUM từ TransferCheckResult, readyQty SUM từ
+   * WeavingReceipt - xem WeavingIssuesModule, M2 "Phân bổ/nhận hàng đan" đóng gap này 2026-08-11).
    */
   async listTransferCheckPieces(
     piId: string,
@@ -377,7 +377,7 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
 
-    const [bomPieces, results] = await Promise.all([
+    const [bomPieces, results, receiptSums] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: productionOrder.bomRevisionId },
         include: { piece: true },
@@ -386,7 +386,18 @@ export class ProductionInvoicesService {
         where: { productionInvoiceItemId: item.id },
         include: { defects: true },
       }),
+      // Nguồn thật cho readyQty - SUM WeavingReceipt.qty theo mảnh, mọi điểm đan cộng lại (đúng
+      // cách hàm này không phân biệt điểm đan). Xem WeavingIssuesModule.
+      this.prisma.weavingReceipt.groupBy({
+        by: ['pieceId'],
+        where: { productionOrderId: productionOrder.id },
+        _sum: { qty: true },
+      }),
     ]);
+
+    const readyQtyByPiece = new Map<string, number>(
+      receiptSums.map((r) => [r.pieceId.toString(), r._sum.qty ?? 0]),
+    );
 
     return bomPieces.map((bp) => {
       const pieceResults = results.filter((r) => r.pieceId === bp.pieceId);
@@ -394,7 +405,7 @@ export class ProductionInvoicesService {
         pieceId: bp.pieceId.toString(),
         pieceName: bp.piece.name,
         totalQty: bp.qtyPerUnit * productionOrder.quantity,
-        readyQty: 0,
+        readyQty: readyQtyByPiece.get(bp.pieceId.toString()) ?? 0,
         checkedQty: pieceResults.reduce((sum, r) => sum + r.checkedQty, 0),
         defectCount: pieceResults.reduce((sum, r) => sum + r.defects.length, 0),
       });

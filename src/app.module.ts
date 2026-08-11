@@ -47,6 +47,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
 import { PurchaseProposalsModule } from './modules/purchase-proposals/purchase-proposals.module';
 import { SteelIssuesModule } from './modules/steel-issues/steel-issues.module';
 import { QcReviewsModule } from './modules/qc-reviews/qc-reviews.module';
+import { WeavingIssuesModule } from './modules/weaving-issues/weaving-issues.module';
 
 @Module({
   imports: [
@@ -113,6 +114,7 @@ import { QcReviewsModule } from './modules/qc-reviews/qc-reviews.module';
     PurchaseProposalsModule,
     SteelIssuesModule,
     QcReviewsModule,
+    WeavingIssuesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
