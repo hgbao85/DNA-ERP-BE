@@ -181,6 +181,71 @@ describe('MaterialsService', () => {
       expect(prisma.material.create).not.toHaveBeenCalled();
       expect(stockLedger.postEntry).not.toHaveBeenCalled();
     });
+
+    // % hao hụt mang 2 nghĩa ngược chiều tuỳ nhóm (xem resolveWasteFields) - group STEEL_BAR
+    // giữ maxCuttingWastePercentage, ép purchaseWastePercentage về null dù dto có gửi.
+    it('vật tư nhóm Sắt (STEEL_BAR): giữ maxCuttingWastePercentage, ép purchaseWastePercentage về null (D.hao-hut-sat)', async () => {
+      prisma.materialGroup.findUnique.mockResolvedValue({
+        id: 7n,
+        systemKey: 'STEEL_BAR',
+        codePrefix: 'SAT',
+      });
+      prisma.material.findUnique.mockResolvedValue(null);
+      prisma.material.create.mockResolvedValue(existingMaterial);
+
+      await service.create({
+        code: 'SAT-01',
+        name: 'Sat cay',
+        unit: 'kg',
+        materialGroupId: '7',
+        maxCuttingWastePercentage: 2,
+        purchaseWastePercentage: 5, // gửi nhầm cho Sắt - phải bị ép null, không lọt xuống DB
+      });
+
+      const call = prisma.material.create.mock.calls[0] as unknown as [
+        {
+          data: {
+            maxCuttingWastePercentage?: number | null;
+            purchaseWastePercentage?: number | null;
+          };
+        },
+      ];
+      expect(call[0].data.maxCuttingWastePercentage).toBe(2);
+      expect(call[0].data.purchaseWastePercentage).toBeNull();
+    });
+
+    // group KHÔNG phải STEEL_BAR (dùng WIRE để né bẫy detailKind bắt buộc của nhóm OTHER,
+    // không liên quan tới field đang test) - ngược lại: giữ purchaseWastePercentage, ép
+    // maxCuttingWastePercentage về null.
+    it('vật tư nhóm khác Sắt: giữ purchaseWastePercentage, ép maxCuttingWastePercentage về null (D.hao-hut-sat)', async () => {
+      prisma.materialGroup.findUnique.mockResolvedValue({
+        id: 8n,
+        systemKey: 'WIRE',
+        codePrefix: 'DAY',
+      });
+      prisma.material.findUnique.mockResolvedValue(null);
+      prisma.material.create.mockResolvedValue(existingMaterial);
+
+      await service.create({
+        code: 'DAY-01',
+        name: 'Day thep',
+        unit: 'kg',
+        materialGroupId: '8',
+        maxCuttingWastePercentage: 2, // gửi nhầm cho vật tư khác Sắt - phải bị ép null
+        purchaseWastePercentage: 5,
+      });
+
+      const call = prisma.material.create.mock.calls[0] as unknown as [
+        {
+          data: {
+            maxCuttingWastePercentage?: number | null;
+            purchaseWastePercentage?: number | null;
+          };
+        },
+      ];
+      expect(call[0].data.maxCuttingWastePercentage).toBeNull();
+      expect(call[0].data.purchaseWastePercentage).toBe(5);
+    });
   });
 
   describe('findOne', () => {
@@ -188,6 +253,19 @@ describe('MaterialsService', () => {
       prisma.material.findUnique.mockResolvedValue(null);
 
       await expect(service.findOne('999')).rejects.toThrow(NotFoundException);
+    });
+
+    it('trả maxCuttingWastePercentage/purchaseWastePercentage dạng number (Decimal.toNumber()), null khi vật tư không có (D.hao-hut-sat)', async () => {
+      prisma.material.findUnique.mockResolvedValue({
+        ...existingMaterial,
+        maxCuttingWastePercentage: { toNumber: () => 2.5 },
+        purchaseWastePercentage: null,
+      });
+
+      const result = await service.findOne('1');
+
+      expect(result.maxCuttingWastePercentage).toBe(2.5);
+      expect(result.purchaseWastePercentage).toBeNull();
     });
   });
 
@@ -256,6 +334,43 @@ describe('MaterialsService', () => {
       await service.update('1', { name: 'Renamed only' });
 
       expect(cloudinary.deleteByUrl).not.toHaveBeenCalled();
+    });
+
+    it('đổi nhóm STEEL_BAR -> nhóm khác thì tự ép maxCuttingWastePercentage về null dù dto không nhắc tới (D.hao-hut-sat)', async () => {
+      prisma.material.findUnique.mockResolvedValueOnce({
+        ...existingMaterial,
+        materialGroupId: 7n,
+        maxCuttingWastePercentage: { toNumber: () => 2 },
+      });
+      prisma.materialGroup.findUnique.mockResolvedValue({ id: 8n, systemKey: 'WIRE' });
+      prisma.material.update.mockResolvedValue(existingMaterial);
+
+      await service.update('1', { materialGroupId: '8' });
+
+      const call = prisma.material.update.mock.calls[0] as unknown as [
+        { data: { maxCuttingWastePercentage?: number | null } },
+      ];
+      expect(call[0].data.maxCuttingWastePercentage).toBeNull();
+    });
+
+    it('sửa vật tư mà không đụng field hao hụt thì giữ nguyên giá trị cũ (không ghi đè) (D.hao-hut-sat)', async () => {
+      prisma.material.findUnique.mockResolvedValueOnce({
+        ...existingMaterial,
+        materialGroupId: 7n,
+        maxCuttingWastePercentage: { toNumber: () => 2 },
+      });
+      prisma.materialGroup.findUnique.mockResolvedValue({ id: 7n, systemKey: 'STEEL_BAR' });
+      prisma.material.update.mockResolvedValue(existingMaterial);
+
+      await service.update('1', { name: 'Renamed only' });
+
+      const call = prisma.material.update.mock.calls[0] as unknown as [
+        { data: { maxCuttingWastePercentage?: number | null } },
+      ];
+      // undefined = Prisma KHÔNG đưa field này vào SET, giá trị cũ trong DB giữ nguyên -
+      // khác hẳn ghi đè lại đúng giá trị cũ (2), vì service không có "giá trị cũ" ở dạng number
+      // sẵn để so sánh tại đây - tin tưởng Prisma bỏ qua field undefined là đủ.
+      expect(call[0].data.maxCuttingWastePercentage).toBeUndefined();
     });
   });
 

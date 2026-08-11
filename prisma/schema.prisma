@@ -224,9 +224,11 @@ model SystemConfig {
   /// chung 1 bộ, admin sửa qua PUT /system-config - KHÔNG có màn nào cho nhập tay mỗi lần vì
   /// trigger tính đề xuất chạy tự động/ngầm khi Sếp duyệt lệnh sản xuất (không qua form).
   /// solverStockLengths: các chiều dài thanh sắt nguyên chuẩn (mm), vd [5850, 6000, 7000].
-  solverStockLengths       Json  @default("[5850, 6000, 7000]")
+  solverStockLengths       Json  @default("[5850, 6000]")
   solverTrimStartMm        Int   @default(10)
   solverBladeWidthMm       Float @default(1.0)
+  /// Ngưỡng hao hụt cắt MẶC ĐỊNH, áp cho vật tư Sắt chưa được cấp ngưỡng riêng (xem
+  /// Material.maxCuttingWastePercentage - field đó ghi đè giá trị này cho đúng vật tư).
   solverMaxWastePercentage Float @default(1.0)
   solverMaxSurplus         Int   @default(10)
   solverMinLengthMm        Int   @default(5000)
@@ -318,6 +320,22 @@ model Material {
   /// Hệ số quy đổi: số lượng `unit` tương ứng với 1 `purchaseUnit` (vd 250 = 250 cái/kg).
   /// Chỉ có ý nghĩa khi purchaseUnit khác null.
   khoUnitFactor   Decimal?            @db.Decimal(14, 4)
+  /// % hao hụt Sếp cấp riêng cho vật tư này - CHỈ có ý nghĩa khi materialGroup.systemKey =
+  /// STEEL_BAR (null với mọi nhóm khác, xem MaterialsService.resolveWasteFields - mirror
+  /// resolveDetailKind ở trên). Đây là NGƯỠNG hao hụt tối đa chấp nhận được khi cắt (không
+  /// phải số đo), gửi xuống solver cắt sắt (CuttingProposalsService.runSolverAndSave) làm
+  /// max_waste_percentage riêng cho vật tư này, ghi đè SystemConfig.solverMaxWastePercentage
+  /// (vẫn là mặc định khi để trống). Đặt quá thấp có thể khiến solver KHÔNG tìm được phương án
+  /// cắt nào (vô nghiệm), không phải chỉ là "cảnh báo" - xem comment ở nơi gọi.
+  maxCuttingWastePercentage Decimal?  @db.Decimal(6, 3)
+  /// % dự trù hao hụt khi MUA vật tư này (vd bao bì rách/lỗi lúc vận chuyển) - CHỈ có ý nghĩa
+  /// khi materialGroup.systemKey KHÁC STEEL_BAR (null với Sắt, xem
+  /// MaterialsService.resolveWasteFields). Khác hẳn maxCuttingWastePercentage ở trên: đây là
+  /// ĐỆM cộng thêm vào số lượng đề xuất mua (SL cần mua thực = SL đề xuất mua gốc + % này),
+  /// không phải ràng buộc. Field sẵn sàng nhưng CHƯA nối vào luồng đề xuất mua nào (luồng đó
+  /// hiện chỉ tồn tại cho Sắt, xem cutting-proposals.service.ts) - chờ xây khi có luồng cho
+  /// vật tư khác.
+  purchaseWastePercentage   Decimal?  @db.Decimal(6, 3)
   imageUrl        String?
   isActive        Boolean             @default(true)
   deletedAt       DateTime?

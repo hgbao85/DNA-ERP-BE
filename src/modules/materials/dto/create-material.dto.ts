@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional } from 'class-validator';
+import { IsNumber, IsOptional, Max, Min } from 'class-validator';
 import { MaterialDetailKind } from '../../../generated/prisma/client';
 
 /**
@@ -85,4 +85,28 @@ export class CreateMaterialDto {
   })
   @IsOptional()
   imageUrl?: string;
+
+  // 2 field dưới đây CỐ Ý phá lệ "không validate" của file này (xem docstring class) - chúng
+  // nuôi thẳng xuống solver cắt sắt ngoài (CuttingProposalsService.runSolverAndSave), giá trị
+  // rác (vd chuỗi "2,5") lọt xuống Prisma Decimal sẽ vỡ thành 500 khó hiểu thay vì 400 rõ ràng.
+  // Chỉ 1 trong 2 field có tác dụng thật tuỳ nhóm vật tư - xem MaterialsService.resolveWasteFields.
+  @ApiPropertyOptional({
+    description:
+      'CHỈ áp dụng cho vật tư nhóm Sắt (systemKey STEEL_BAR) - ngưỡng hao hụt TỐI ĐA chấp nhận được khi cắt, gửi xuống solver ghi đè SystemConfig.solverMaxWastePercentage. Để trống = dùng mặc định hệ thống. Bị bỏ qua (ghi null) với mọi nhóm khác. Đặt quá thấp có thể khiến solver không tìm được phương án cắt nào.',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  maxCuttingWastePercentage?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'CHỈ áp dụng cho vật tư KHÔNG thuộc nhóm Sắt - % dự trù cộng thêm vào số lượng đề xuất mua (chưa nối vào luồng đề xuất mua nào, field sẵn sàng chờ luồng đó). Bị bỏ qua (ghi null) với vật tư Sắt.',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  purchaseWastePercentage?: number;
 }

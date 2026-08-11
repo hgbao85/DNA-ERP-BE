@@ -26,6 +26,7 @@ describe('CuttingProposalsService', () => {
     systemConfig: { findUniqueOrThrow: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
+    material: { findMany: jest.Mock };
     notification: { create: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $queryRaw: jest.Mock;
@@ -81,6 +82,9 @@ describe('CuttingProposalsService', () => {
       systemConfig: { findUniqueOrThrow: jest.fn().mockResolvedValue(systemConfig) },
       pieceBom: { findMany: jest.fn().mockResolvedValue([pieceBomRow]) },
       bomPiece: { findMany: jest.fn().mockResolvedValue([{ pieceId: 10n, qtyPerUnit: 4 }]) },
+      // Mặc định không vật tư nào có ngưỡng riêng -> request body không có
+      // max_waste_percentage_by_material (test riêng cho việc có ngưỡng riêng ở dưới).
+      material: { findMany: jest.fn().mockResolvedValue([]) },
       notification: { create: jest.fn() },
       warehouse: {
         findUniqueOrThrow: jest.fn(({ where }: { where: { code: string } }) =>
@@ -230,6 +234,12 @@ describe('CuttingProposalsService', () => {
         300_000,
       );
       expect(externalApiService.post).toHaveBeenCalledTimes(1); // any_over_threshold=false -> no retry
+      // Không vật tư nào có ngưỡng riêng -> KHÔNG gửi key này (giống hệt request trước khi có
+      // tính năng ngưỡng-theo-vật-tư), không phải gửi object rỗng.
+      const bodySent = (
+        externalApiService.post.mock.calls[0] as unknown as [string, Record<string, unknown>]
+      )[1];
+      expect(bodySent).not.toHaveProperty('max_waste_percentage_by_material');
       const updateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
         { where: { id: bigint }; data: { status: CuttingProposalStatus } },
       ];
@@ -267,6 +277,94 @@ describe('CuttingProposalsService', () => {
         { data: { title: string } },
       ];
       expect(notifyCall[0].data.title).toContain('PO-1');
+    });
+
+    it('gửi max_waste_percentage_by_material khi vật tư có ngưỡng riêng, bỏ qua vật tư null/<=0 (D.hao-hut-sat)', async () => {
+      prisma.pieceBom.findMany.mockResolvedValue([
+        pieceBomRow, // materialId 200n
+        {
+          pieceId: 11n,
+          segmentSpecId: 101n,
+          qtyPerPiece: 2,
+          piece: { name: 'mảnh tựa' },
+          segmentSpec: { materialId: 300n, cutLengthMm: 840 },
+        },
+      ]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { pieceId: 10n, qtyPerUnit: 4 },
+        { pieceId: 11n, qtyPerUnit: 1 },
+      ]);
+      // 200n: Sếp cấp riêng 2%. 300n: có set nhưng = 0 (bẫy vô nghiệm) -> phải bị loại, KHÔNG
+      // gửi xuống solver. 400n: không nằm trong BOM, không ảnh hưởng gì (kiểm tra where đúng).
+      prisma.material.findMany.mockResolvedValue([
+        { id: 200n, maxCuttingWastePercentage: { toNumber: () => 2 } },
+        { id: 300n, maxCuttingWastePercentage: { toNumber: () => 0 } },
+      ]);
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 10,
+          total_waste_mm: 100,
+          waste_percentage: 1,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          { material: '200', feasible: true, cutting_patterns: [] },
+          { material: '300', feasible: true, cutting_patterns: [] },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      expect(prisma.material.findMany).toHaveBeenCalledWith({
+        where: { id: { in: [200n, 300n] } },
+        select: { id: true, maxCuttingWastePercentage: true },
+      });
+      const bodySent = (
+        externalApiService.post.mock.calls[0] as unknown as [string, Record<string, unknown>]
+      )[1];
+      expect(bodySent.max_waste_percentage_by_material).toEqual({ '200': 2 });
+    });
+
+    it('retry auto_scan mang theo đúng max_waste_percentage_by_material của lần gọi đầu (D.hao-hut-sat)', async () => {
+      prisma.material.findMany.mockResolvedValue([
+        { id: 200n, maxCuttingWastePercentage: { toNumber: () => 0.3 } },
+      ]);
+      const overThreshold = {
+        status: 'success',
+        summary: {
+          total_bars_all: 227,
+          total_waste_mm: 20000,
+          waste_percentage: 9.61,
+          any_over_threshold: true,
+        },
+        purchase_plan: [
+          { material: '200', feasible: true, over_threshold: true, cutting_patterns: [] },
+        ],
+      };
+      const scanned = {
+        status: 'success',
+        summary: {
+          total_bars_all: 223,
+          total_waste_mm: 11373,
+          waste_percentage: 0.85,
+          any_over_threshold: false,
+        },
+        purchase_plan: [{ material: '200', feasible: true, cutting_patterns: [] }],
+      };
+      externalApiService.post.mockResolvedValueOnce(overThreshold).mockResolvedValueOnce(scanned);
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      expect(externalApiService.post).toHaveBeenCalledTimes(2);
+      const [firstBody, secondBody] = externalApiService.post.mock.calls.map(
+        (call) => (call as unknown as [string, Record<string, unknown>])[1],
+      );
+      expect(firstBody.max_waste_percentage_by_material).toEqual({ '200': 0.3 });
+      expect(secondBody.max_waste_percentage_by_material).toEqual({ '200': 0.3 });
+      expect(secondBody.auto_scan).toBe(true);
     });
 
     it('retries with auto_scan enabled when the first (fixed-length) call reports any_over_threshold', async () => {

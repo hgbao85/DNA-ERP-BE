@@ -69,7 +69,12 @@ export class MaterialsService {
     // trong JS, không trim thì lọt qua nhánh tự sinh và ghi thẳng chuỗi trắng vào DB.
     const trimmedCode = dto.code?.trim();
     const code = trimmedCode || (await this.generateMaterialCode(materialGroupId));
-    const detailKind = await this.resolveDetailKind(materialGroupId, dto.detailKind, null);
+    // 1 lần fetch group dùng chung cho cả resolveDetailKind lẫn resolveWasteFields (KHÔNG fetch
+    // riêng từng cái) - materials.service.spec.ts assert materialGroup.findUnique không được
+    // gọi khi tạo vật tư không chọn nhóm, thêm fetch thứ 2 sẽ vỡ assertion đó.
+    const systemKey = await this.resolveGroupSystemKey(materialGroupId);
+    const detailKind = this.resolveDetailKind(systemKey, dto.detailKind, null);
+    const wasteFields = this.resolveWasteFields(systemKey, dto);
 
     const existing = await this.prisma.material.findUnique({ where: { code } });
     if (existing) {
@@ -88,6 +93,8 @@ export class MaterialsService {
         buyerId: dto.buyerId || undefined,
         purchaseUnit: dto.purchaseUnit,
         khoUnitFactor: dto.khoUnitFactor,
+        maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,
+        purchaseWastePercentage: wasteFields.purchaseWastePercentage,
         imageUrl: dto.imageUrl,
       },
     });
@@ -110,6 +117,15 @@ export class MaterialsService {
     return this.toResponseDto(material);
   }
 
+  /** 1 lần fetch group dùng chung cho mọi resolver phụ thuộc systemKey (resolveDetailKind,
+   *  resolveWasteFields) - xem 2 hàm đó, và comment ở nơi gọi giải thích lý do KHÔNG fetch
+   *  riêng từng cái (vỡ test "không chọn nhóm thì không fetch materialGroup"). */
+  private async resolveGroupSystemKey(effectiveGroupId?: bigint): Promise<string | null> {
+    if (!effectiveGroupId) return null;
+    const group = await this.prisma.materialGroup.findUnique({ where: { id: effectiveGroupId } });
+    return group?.systemKey ?? null;
+  }
+
   /**
    * Sơn/Phụ kiện/Bao bì (trang Định mức chi tiết) giờ dùng chung 1 nhóm vật tư hệ thống
    * ("Vật tư khác", systemKey OTHER) nên không còn phân biệt được vật tư nào dành cho tab nào
@@ -118,15 +134,12 @@ export class MaterialsService {
    * khác thì LUÔN dọn về null (kể cả nếu request có gửi) - tránh rác còn sót khi 1 vật tư từng
    * thuộc "Vật tư khác" rồi bị đổi sang nhóm khác.
    */
-  private async resolveDetailKind(
-    effectiveGroupId: bigint | undefined,
+  private resolveDetailKind(
+    systemKey: string | null,
     incomingDetailKind: MaterialDetailKind | undefined,
     previousDetailKind: MaterialDetailKind | null,
-  ): Promise<MaterialDetailKind | null> {
-    const group = effectiveGroupId
-      ? await this.prisma.materialGroup.findUnique({ where: { id: effectiveGroupId } })
-      : null;
-    if (group?.systemKey !== MATERIAL_GROUP_SYSTEM_KEYS.OTHER) {
+  ): MaterialDetailKind | null {
+    if (systemKey !== MATERIAL_GROUP_SYSTEM_KEYS.OTHER) {
       return null;
     }
 
@@ -137,6 +150,30 @@ export class MaterialsService {
       );
     }
     return candidate;
+  }
+
+  /**
+   * % hao hụt mang 2 NGHĨA NGƯỢC CHIỀU tuỳ nhóm vật tư (xem comment schema.prisma) nên PHẢI
+   * tách theo đúng nhóm hiệu lực - mirror resolveDetailKind ở trên, cùng lý do "LUÔN dọn về
+   * null kể cả nếu request có gửi": đây là invariant duy nhất chặn % dự trù mua bị nuốt nhầm
+   * thành ràng buộc cắt khi runSolverAndSave() đọc maxCuttingWastePercentage mà không tự kiểm
+   * tra lại nhóm (xem cutting-proposals.service.ts). Không cần previous value như
+   * resolveDetailKind vì 2 field này KHÔNG bắt buộc - nhánh "không phải nhóm này" luôn ép
+   * null bất kể trước đó là gì, nhánh còn lại truyền thẳng dto (undefined = không đụng lúc
+   * PATCH, giữ đúng semantics update() hiện có).
+   */
+  private resolveWasteFields(
+    systemKey: string | null,
+    dto: { maxCuttingWastePercentage?: number; purchaseWastePercentage?: number },
+  ): {
+    maxCuttingWastePercentage: number | null | undefined;
+    purchaseWastePercentage: number | null | undefined;
+  } {
+    const isSteel = systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR;
+    return {
+      maxCuttingWastePercentage: isSteel ? dto.maxCuttingWastePercentage : null,
+      purchaseWastePercentage: isSteel ? null : dto.purchaseWastePercentage,
+    };
   }
 
   /**
@@ -219,11 +256,10 @@ export class MaterialsService {
           ? parseBigIntId(dto.materialGroupId)
           : undefined
         : (previous.materialGroupId ?? undefined);
-    const detailKind = await this.resolveDetailKind(
-      effectiveGroupId,
-      dto.detailKind,
-      previous.detailKind,
-    );
+    // 1 lần fetch group dùng chung - xem comment ở create().
+    const systemKey = await this.resolveGroupSystemKey(effectiveGroupId);
+    const detailKind = this.resolveDetailKind(systemKey, dto.detailKind, previous.detailKind);
+    const wasteFields = this.resolveWasteFields(systemKey, dto);
 
     const material = await this.prisma.material.update({
       where: { id: bigId },
@@ -238,6 +274,8 @@ export class MaterialsService {
         buyerId: dto.buyerId || undefined,
         purchaseUnit: dto.purchaseUnit,
         khoUnitFactor: dto.khoUnitFactor,
+        maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,
+        purchaseWastePercentage: wasteFields.purchaseWastePercentage,
         imageUrl: dto.imageUrl,
         isActive: dto.isActive,
       },
@@ -367,6 +405,8 @@ export class MaterialsService {
       buyerId: material.buyerId ?? null,
       purchaseUnit: material.purchaseUnit ?? null,
       khoUnitFactor: material.khoUnitFactor?.toNumber() ?? null,
+      maxCuttingWastePercentage: material.maxCuttingWastePercentage?.toNumber() ?? null,
+      purchaseWastePercentage: material.purchaseWastePercentage?.toNumber() ?? null,
       imageUrl: material.imageUrl ?? null,
       isActive: material.isActive,
       createdAt: material.createdAt,

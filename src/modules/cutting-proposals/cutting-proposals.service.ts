@@ -49,6 +49,10 @@ interface SolverProposeResponse {
   purchase_plan: Array<{
     material: string;
     feasible: boolean;
+    /// true nếu loại này feasible nhưng vượt max_waste_percentage của CHÍNH nó (riêng hoặc mặc
+    /// định) - chỉ dùng để log/chẩn đoán nguyên nhân trip auto_scan retry, không phải điều kiện
+    /// retry (điều kiện thật là any_over_threshold cấp response, xem comment nơi gọi).
+    over_threshold?: boolean;
     best_stock_length?: number;
     total_bars?: number;
     total_waste_mm?: number;
@@ -305,6 +309,29 @@ export class CuttingProposalsService {
       });
       const { bomRows, segmentSpecLookup } = await this.buildBomRows(order.bomRevisionId);
 
+      // Sếp cấp riêng ngưỡng hao hụt tối đa cho từng loại Sắt (Material.maxCuttingWastePercentage,
+      // xem comment schema.prisma) - solver ĐÃ lặp riêng từng loại trong 1 lần gọi (api/views.py),
+      // chỉ cần truyền thêm dict theo materialId để nó tự chọn đúng ngưỡng cho từng nhóm, KHÔNG
+      // cần tách nhiều lần gọi (xem review trước đó: gộp/lấy trung bình nhiều ngưỡng khác nhau
+      // trong 1 request duy nhất mới là vấn đề, còn để solver tự áp đúng ngưỡng theo từng vật tư
+      // trong 1 request thì không). Vật tư chưa set dùng SystemConfig.solverMaxWastePercentage
+      // làm mặc định - solver tự làm việc đó (xem docstring endpoint), ở đây chỉ cần bỏ qua
+      // null/<=0 (0 gần như luôn vô nghiệm - bắt lấp đầy cây tới từng mm, xem
+      // de_xuat_logic.py::generate_patterns) và không gửi dict rỗng để giữ request body giống
+      // hệt trước khi có tính năng này cho trường hợp chưa ai đặt ngưỡng riêng.
+      const distinctMaterialIds = [...new Set(bomRows.map((row) => BigInt(row.material)))];
+      const materialsWithThreshold = await this.prisma.material.findMany({
+        where: { id: { in: distinctMaterialIds } },
+        select: { id: true, maxCuttingWastePercentage: true },
+      });
+      const maxWastePctByMaterial: Record<string, number> = {};
+      for (const m of materialsWithThreshold) {
+        const pct = m.maxCuttingWastePercentage?.toNumber();
+        if (pct != null && pct > 0) {
+          maxWastePctByMaterial[m.id.toString()] = pct;
+        }
+      }
+
       const baseRequestBody = {
         num_sets: order.quantity,
         bom: bomRows,
@@ -315,6 +342,9 @@ export class CuttingProposalsService {
         trim_start: config.solverTrimStartMm,
         blade_width: config.solverBladeWidthMm,
         max_waste_percentage: config.solverMaxWastePercentage,
+        ...(Object.keys(maxWastePctByMaterial).length > 0
+          ? { max_waste_percentage_by_material: maxWastePctByMaterial }
+          : {}),
         max_surplus: config.solverMaxSurplus,
         min_length: config.solverMinLengthMm,
         max_length: config.solverMaxLengthMm,
@@ -345,16 +375,33 @@ export class CuttingProposalsService {
       // chiều dài cố định) không bao giờ set cờ này (solver `continue` sớm, xem views.py dòng
       // ~210-222) dù rõ ràng cũng cần dò lại. Phải tự kiểm tra thêm `purchase_plan[].feasible`
       // trực tiếp, không chỉ tin vào cờ tổng hợp của solver.
+      //
+      // Từ khi có ngưỡng riêng theo vật tư: "vượt ngưỡng" giờ nghĩa là vượt ngưỡng CỦA CHÍNH
+      // vật tư đó (riêng hoặc mặc định hệ thống), không còn gắn cứng với
+      // SystemConfig.solverMaxWastePercentage như trước. Sếp đặt ngưỡng càng chặt thì càng dễ
+      // trip nhánh retry auto_scan này (vốn quét ~(maxLen-minLen)/step chiều dài, tốn thời
+      // gian đáng kể) - log lại để có số liệu thật trước khi cần tinh chỉnh timeout.
       let requestBody: typeof baseRequestBody & { auto_scan: boolean } = {
         ...baseRequestBody,
         auto_scan: false,
       };
+      const solveStartedAt = Date.now();
       let response = await callSolver(requestBody);
 
       const hasInfeasibleLine = response.purchase_plan.some((item) => !item.feasible);
       if (response.summary.any_over_threshold || hasInfeasibleLine) {
+        const triggeringMaterials = response.purchase_plan
+          .filter((item) => !item.feasible || item.over_threshold)
+          .map((item) => item.material);
+        this.logger.warn(
+          `Cutting proposal ${proposalId}: auto_scan retry triggered by material(s) ` +
+            `[${triggeringMaterials.join(', ')}] sau ${Date.now() - solveStartedAt}ms lần gọi đầu`,
+        );
         requestBody = { ...baseRequestBody, auto_scan: true };
         response = await callSolver(requestBody);
+        this.logger.warn(
+          `Cutting proposal ${proposalId}: auto_scan retry hoàn tất sau ${Date.now() - solveStartedAt}ms tổng`,
+        );
       }
 
       await this.saveSuccess(proposalId, requestBody, response, segmentSpecLookup);
