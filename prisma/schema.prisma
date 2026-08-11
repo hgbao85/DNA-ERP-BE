@@ -77,6 +77,7 @@ model User {
   piDecidedItems            ProductionInvoiceItem[] @relation("PIItemDecidedBy")
   cuttingProposalsRequested CuttingProposal[]       @relation("CuttingProposalRequestedBy")
   cuttingProposalsApproved  CuttingProposal[]       @relation("CuttingProposalApprovedBy")
+  transferCheckResults      TransferCheckResult[]   @relation("TransferCheckCheckedBy")
   purchaseProposalsApproved PurchaseProposal[]
   stockLedgerEntries        StockLedger[]
   materialsToBuy            Material[]
@@ -495,12 +496,13 @@ model Piece {
   isWoven      Boolean  @default(false)
   weavingPrice Decimal? @db.Decimal(14, 2)
 
-  mfgProduct         MfgProduct          @relation(fields: [mfgProductId], references: [id])
-  bomPieces          BomPiece[]
-  pieceBoms          PieceBom[]
-  pieceMaterialItems PieceMaterialItem[]
-  stockLedgerEntries StockLedger[]
-  stockQuants        StockQuant[]
+  mfgProduct           MfgProduct            @relation(fields: [mfgProductId], references: [id])
+  bomPieces            BomPiece[]
+  pieceBoms            PieceBom[]
+  pieceMaterialItems   PieceMaterialItem[]
+  stockLedgerEntries   StockLedger[]
+  stockQuants          StockQuant[]
+  transferCheckResults TransferCheckResult[]
 
   @@unique([mfgProductId, code])
   @@index([mfgProductId])
@@ -972,31 +974,35 @@ model ProductionInvoiceItem {
   decidedById         String?
   rejectReason        String?
 
-  productionInvoice ProductionInvoice            @relation(fields: [productionInvoiceId], references: [id])
-  mfgProduct        MfgProduct                   @relation(fields: [mfgProductId], references: [id])
-  productVariant    ProductVariant?              @relation(fields: [productVariantId], references: [id])
-  requestedBy       User?                        @relation("PIItemRequestedBy", fields: [requestedById], references: [id])
-  qlsxBy            User?                        @relation("PIItemQlsxBy", fields: [qlsxById], references: [id])
-  decidedBy         User?                        @relation("PIItemDecidedBy", fields: [decidedById], references: [id])
-  stages            ProductionInvoiceItemStage[]
-  productionOrder   ProductionOrder?
+  productionInvoice    ProductionInvoice            @relation(fields: [productionInvoiceId], references: [id])
+  mfgProduct           MfgProduct                   @relation(fields: [mfgProductId], references: [id])
+  productVariant       ProductVariant?              @relation(fields: [productVariantId], references: [id])
+  requestedBy          User?                        @relation("PIItemRequestedBy", fields: [requestedById], references: [id])
+  qlsxBy               User?                        @relation("PIItemQlsxBy", fields: [qlsxById], references: [id])
+  decidedBy            User?                        @relation("PIItemDecidedBy", fields: [decidedById], references: [id])
+  stages               ProductionInvoiceItemStage[]
+  productionOrder      ProductionOrder?
+  transferCheckResults TransferCheckResult[]
 
   @@index([productionInvoiceId])
   @@index([mfgProductId])
   @@map("production_invoice_items")
 }
 
-/// Mốc kế hoạch từng công đoạn do KHSX đặt riêng cho 1 SKU trong PI (LenhSXPage "Sửa thời hạn")
-/// - KHÔNG phải bảng theo dõi thực thi Phôi/Hàn/Sơn thật (domain đó chưa tồn tại, xem comment
-/// production-invoices-api.ts FE) nên KHÔNG tái dùng enum `MfgStage`. 3 mốc:
+/// Mốc kế hoạch từng công đoạn do KHSX đặt riêng cho 1 SKU trong PI (LenhSXPage "Sửa thời hạn").
+/// 4 mốc, chốt 2026-08-11, đúng thứ tự dây chuyền thật:
 /// - FRAME: "Khung cơ khí" - mốc hoàn tất CẢ chuỗi Phôi→Hàn→Sơn (không phải riêng công đoạn Hàn,
-///   dù field key lịch sử phía FE vẫn là `HAN` - xem toFeStageType/toBeStageType).
+///   dù field key lịch sử phía FE vẫn là `HAN` - xem toFeStageType/toBeStageType). KHÔNG tách
+///   riêng Phôi/Hàn/Sơn ở đây vì đây chỉ là mốc kế hoạch, không phải theo dõi thực thi.
 /// - WEAVING: "Đan".
+/// - TRANSFER_CHECK: "Chuyền kiểm" - mốc DUY NHẤT trong 4 mốc có gắn dữ liệu thực thi thật
+///   (xem model TransferCheckResult bên dưới) - khác 3 mốc còn lại chỉ có deadline thuần.
 /// - PACKAGING: "Đóng gói" - field FE cũ tên `SON`, dễ nhầm với `MfgStage.SON` (Sơn/painting thật,
 ///   khác nghĩa) nên đặt tên rõ ràng hơn ở BE, adapter FE tự dịch qua lại.
 enum ProdItemStageType {
   FRAME
   WEAVING
+  TRANSFER_CHECK
   PACKAGING
 }
 
@@ -1010,6 +1016,46 @@ model ProductionInvoiceItemStage {
 
   @@unique([productionInvoiceItemId, stageType])
   @@map("production_invoice_item_stages")
+}
+
+/// Kết quả kiểm 1 mảnh tại công đoạn Chuyền kiểm (TRANSFER_CHECK) - mirror KhoChuyenKiemPage
+/// (InboundWarehouse) FE. Mỗi lần bấm "Kiểm" tạo 1 dòng MỚI (không update-in-place lên dòng cũ)
+/// nên "đã kiểm" cộng dồn qua SUM khi đọc - không có race lost-update kiểu shippedQty cũ (xem
+/// SalesOrdersService.shipItem), 2 request kiểm song song chỉ đơn giản là 2 dòng độc lập.
+/// totalQty của từng mảnh KHÔNG lưu ở đây - suy từ BomPiece.qtyPerUnit (theo đúng
+/// ProductionOrder.bomRevisionId đã ghim) × ProductionOrder.quantity tại thời điểm đọc, xem
+/// ProductionInvoicesService.listTransferCheckPieces(). "Chờ thực thi" (bao nhiêu đã sản xuất
+/// xong, sẵn sàng để kiểm) CHƯA có dữ liệu thật - phụ thuộc sản lượng thật của Đan, domain đó
+/// chưa xây (M2) - tạm luôn trả 0, KHÔNG dùng số giả.
+model TransferCheckResult {
+  id                      BigInt   @id @default(autoincrement())
+  productionInvoiceItemId BigInt
+  pieceId                 BigInt
+  checkedQty              Int
+  note                    String?
+  checkedById             String
+  checkedAt               DateTime @default(now())
+
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+  piece                 Piece                 @relation(fields: [pieceId], references: [id])
+  checkedBy             User                  @relation("TransferCheckCheckedBy", fields: [checkedById], references: [id])
+  defects               TransferCheckDefect[]
+
+  @@index([productionInvoiceItemId, pieceId])
+  @@map("transfer_check_results")
+}
+
+/// 1 lỗi phát hiện trong 1 lần kiểm - mirror loiEntries (lý do + ảnh đính kèm) ở KhoChuyenKiemPage.
+model TransferCheckDefect {
+  id                    BigInt  @id @default(autoincrement())
+  transferCheckResultId BigInt
+  reason                String
+  imageUrl              String?
+
+  transferCheckResult TransferCheckResult @relation(fields: [transferCheckResultId], references: [id])
+
+  @@index([transferCheckResultId])
+  @@map("transfer_check_defects")
 }
 
 // =====================================================================

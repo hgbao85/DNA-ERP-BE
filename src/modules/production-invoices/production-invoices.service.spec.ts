@@ -25,6 +25,9 @@ describe('ProductionInvoicesService', () => {
     };
     productionInvoiceItemStage: { upsert: jest.Mock };
     mfgProduct: { findUnique: jest.Mock };
+    productionOrder: { findUnique: jest.Mock };
+    bomPiece: { findMany: jest.Mock; findUnique: jest.Mock };
+    transferCheckResult: { findMany: jest.Mock; create: jest.Mock };
     $transaction: jest.Mock;
   };
   let skusService: { ensureProductionConfirmPlanForm: jest.Mock };
@@ -86,6 +89,9 @@ describe('ProductionInvoicesService', () => {
       },
       productionInvoiceItemStage: { upsert: jest.fn() },
       mfgProduct: { findUnique: jest.fn() },
+      productionOrder: { findUnique: jest.fn() },
+      bomPiece: { findMany: jest.fn(), findUnique: jest.fn() },
+      transferCheckResult: { findMany: jest.fn(), create: jest.fn() },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     skusService = { ensureProductionConfirmPlanForm: jest.fn() };
@@ -357,6 +363,128 @@ describe('ProductionInvoicesService', () => {
     it('throws 404 for a non-existent PI', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(null);
       await expect(service.findOne('999')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('transfer-check (Chuyền kiểm)', () => {
+    const productionOrder = { id: 99n, bomRevisionId: 5n, quantity: 10 };
+    const bomPieceRow = (overrides: Record<string, unknown> = {}) => ({
+      bomRevisionId: 5n,
+      pieceId: 30n,
+      qtyPerUnit: 2,
+      piece: { id: 30n, name: 'Thân trên' },
+      ...overrides,
+    });
+
+    describe('listTransferCheckPieces', () => {
+      it('computes totalQty from BomPiece.qtyPerUnit × ProductionOrder.quantity and sums checked results', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
+        prisma.transferCheckResult.findMany.mockResolvedValue([
+          { pieceId: 30n, checkedQty: 3, defects: [{ id: 1n }] },
+          { pieceId: 30n, checkedQty: 2, defects: [] },
+        ]);
+
+        const [result] = await service.listTransferCheckPieces('7', '20');
+
+        expect(result).toMatchObject({
+          pieceId: '30',
+          pieceName: 'Thân trên',
+          totalQty: 20, // 2 qtyPerUnit × 10 quantity
+          readyQty: 0, // chưa có dữ liệu sản lượng Đan thật - cố tình không dùng số giả
+          checkedQty: 5, // 3 + 2, cộng dồn qua SUM, không phải đọc-rồi-ghi
+          defectCount: 1,
+        });
+      });
+
+      it('rejects when the item has no ProductionOrder yet (chưa được Sếp duyệt)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(null);
+
+        await expect(service.listTransferCheckPieces('7', '20')).rejects.toThrow(ConflictException);
+      });
+    });
+
+    describe('recordTransferCheck', () => {
+      it('creates a new check row (append-only) with defects and returns the updated aggregate', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findUnique.mockResolvedValue(bomPieceRow());
+        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
+        prisma.transferCheckResult.findMany.mockResolvedValue([
+          { pieceId: 30n, checkedQty: 4, defects: [{ id: 1n }] },
+        ]);
+
+        const result = await service.recordTransferCheck(
+          '7',
+          '20',
+          { pieceId: '30', checkedQty: 4, defects: [{ reason: 'Móp góc' }] },
+          'user-kho',
+        );
+
+        expect(prisma.transferCheckResult.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+            data: expect.objectContaining({
+              productionInvoiceItemId: 20n,
+              pieceId: 30n,
+              checkedQty: 4,
+              checkedById: 'user-kho',
+
+              defects: { create: [{ reason: 'Móp góc', imageUrl: undefined }] },
+            }),
+          }),
+        );
+        expect(result.checkedQty).toBe(4);
+        expect(result.defectCount).toBe(1);
+      });
+
+      it('rejects a piece that is not part of the item BOM instead of silently recording it', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findUnique.mockResolvedValue(null);
+
+        await expect(
+          service.recordTransferCheck('7', '20', { pieceId: '999', checkedQty: 1 }, 'user-kho'),
+        ).rejects.toThrow(NotFoundException);
+        expect(prisma.transferCheckResult.create).not.toHaveBeenCalled();
+      });
+
+      it('2 lần kiểm liên tiếp cùng 1 mảnh cộng dồn đúng, không ghi đè lẫn nhau', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findUnique.mockResolvedValue(bomPieceRow());
+        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
+        prisma.transferCheckResult.findMany
+          .mockResolvedValueOnce([{ pieceId: 30n, checkedQty: 3, defects: [] }])
+          .mockResolvedValueOnce([
+            { pieceId: 30n, checkedQty: 3, defects: [] },
+            { pieceId: 30n, checkedQty: 2, defects: [] },
+          ]);
+
+        const first = await service.recordTransferCheck(
+          '7',
+          '20',
+          { pieceId: '30', checkedQty: 3 },
+          'user-kho',
+        );
+        const second = await service.recordTransferCheck(
+          '7',
+          '20',
+          { pieceId: '30', checkedQty: 2 },
+          'user-kho',
+        );
+
+        expect(first.checkedQty).toBe(3);
+        expect(second.checkedQty).toBe(5);
+        expect(prisma.transferCheckResult.create).toHaveBeenCalledTimes(2);
+      });
     });
   });
 });

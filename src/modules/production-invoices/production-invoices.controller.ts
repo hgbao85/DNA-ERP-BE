@@ -10,6 +10,7 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
+import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { RejectItemDto } from './dto/reject-item.dto';
 import { SendToBossDto } from './dto/send-to-boss.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
@@ -136,5 +137,24 @@ export class ProductionInvoicesController {
     @CurrentUser('id') userId: string,
   ) {
     return this.productionInvoicesService.rejectItem(id, itemId, dto.reason, userId);
+  }
+
+  // ─── Chuyền kiểm (TRANSFER_CHECK) - thủ kho thành phẩm, mirror KhoChuyenKiemPage ─────
+
+  @Get(':id/items/:itemId/transfer-check')
+  @RequirePermissions(VIEW)
+  listTransferCheckPieces(@Param('id') id: string, @Param('itemId') itemId: string) {
+    return this.productionInvoicesService.listTransferCheckPieces(id, itemId);
+  }
+
+  @Post(':id/items/:itemId/transfer-check')
+  @RequirePermissions(UPDATE)
+  recordTransferCheck(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: RecordTransferCheckDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.productionInvoicesService.recordTransferCheck(id, itemId, dto, userId);
   }
 }

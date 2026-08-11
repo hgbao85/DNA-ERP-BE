@@ -13,6 +13,8 @@ import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto'
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
 import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-response.dto';
 import { ProductionInvoiceResponseDto } from './dto/production-invoice-response.dto';
+import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
+import { TransferCheckPieceResponseDto } from './dto/transfer-check-piece-response.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
 import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
 
@@ -357,6 +359,105 @@ export class ProductionInvoicesService {
       include: { mfgProduct: true, productVariant: true, stages: true },
     });
     return this.toItemResponseDto(updated);
+  }
+
+  // ─── Chuyền kiểm (TRANSFER_CHECK) - xem comment model TransferCheckResult ───
+
+  /**
+   * Danh sách mảnh cần kiểm cho 1 item + tiến độ đã kiểm - mirror mockPieces()/pieceState ở
+   * KhoChuyenKiemPage.tsx nhưng totalQty/checkedQty/defectCount đều là số thật (totalQty suy từ
+   * BOM đã ghim ở ProductionOrder, checkedQty/defectCount SUM từ TransferCheckResult). readyQty
+   * (chờ thực thi) tạm luôn 0 - xem comment DTO.
+   */
+  async listTransferCheckPieces(
+    piId: string,
+    itemId: string,
+  ): Promise<TransferCheckPieceResponseDto[]> {
+    const pi = await this.findOneOrThrow(piId);
+    const item = await this.findItemOrThrow(pi.id, itemId);
+    const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
+
+    const [bomPieces, results] = await Promise.all([
+      this.prisma.bomPiece.findMany({
+        where: { bomRevisionId: productionOrder.bomRevisionId },
+        include: { piece: true },
+      }),
+      this.prisma.transferCheckResult.findMany({
+        where: { productionInvoiceItemId: item.id },
+        include: { defects: true },
+      }),
+    ]);
+
+    return bomPieces.map((bp) => {
+      const pieceResults = results.filter((r) => r.pieceId === bp.pieceId);
+      return new TransferCheckPieceResponseDto({
+        pieceId: bp.pieceId.toString(),
+        pieceName: bp.piece.name,
+        totalQty: bp.qtyPerUnit * productionOrder.quantity,
+        readyQty: 0,
+        checkedQty: pieceResults.reduce((sum, r) => sum + r.checkedQty, 0),
+        defectCount: pieceResults.reduce((sum, r) => sum + r.defects.length, 0),
+      });
+    });
+  }
+
+  /**
+   * Ghi 1 lần kiểm cho 1 mảnh - luôn tạo dòng MỚI (không update dòng cũ), nên nhiều lần kiểm
+   * cùng 1 mảnh gọi gần như đồng thời chỉ đơn giản chèn nhiều dòng độc lập, không có khoảng hở
+   * đọc-rồi-ghi để lost-update như shippedQty cũ (xem SalesOrdersService.shipItem).
+   */
+  async recordTransferCheck(
+    piId: string,
+    itemId: string,
+    dto: RecordTransferCheckDto,
+    actorUserId: string,
+  ): Promise<TransferCheckPieceResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const item = await this.findItemOrThrow(pi.id, itemId);
+    const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
+    const pieceBigId = parseBigIntId(dto.pieceId);
+
+    const bomPiece = await this.prisma.bomPiece.findUnique({
+      where: {
+        bomRevisionId_pieceId: {
+          bomRevisionId: productionOrder.bomRevisionId,
+          pieceId: pieceBigId,
+        },
+      },
+    });
+    if (!bomPiece) {
+      throw new NotFoundException(
+        `Mảnh ${dto.pieceId} không thuộc định mức (BOM) của item ${itemId}`,
+      );
+    }
+
+    await this.prisma.transferCheckResult.create({
+      data: {
+        productionInvoiceItemId: item.id,
+        pieceId: pieceBigId,
+        checkedQty: dto.checkedQty,
+        note: dto.note,
+        checkedById: actorUserId,
+        defects: dto.defects?.length
+          ? { create: dto.defects.map((d) => ({ reason: d.reason, imageUrl: d.imageUrl })) }
+          : undefined,
+      },
+    });
+
+    const pieces = await this.listTransferCheckPieces(piId, itemId);
+    return pieces.find((p) => p.pieceId === dto.pieceId)!;
+  }
+
+  private async findProductionOrderOrThrow(itemBigId: bigint, itemId: string) {
+    const productionOrder = await this.prisma.productionOrder.findUnique({
+      where: { productionInvoiceItemId: itemBigId },
+    });
+    if (!productionOrder) {
+      throw new ConflictException(
+        `Item ${itemId} chưa có ProductionOrder (chưa được Sếp duyệt) - chưa có mảnh nào để kiểm`,
+      );
+    }
+    return productionOrder;
   }
 
   // ─── Shared lookups / guards ──────────────────────────────────────────────
