@@ -535,8 +535,11 @@
     </div>
     <div class="callout" style="margin-top:14px">
       <b>Cập nhật 2026-08-11 (cùng ngày, sau khi tài liệu này được tạo):</b> đã hoàn thành track nhỏ
-      M0 + 3 patch/quyết định của M1 (production-invoices đã chốt stage + build luôn TRANSFER_CHECK
-      thật; còn 1 quyết định treo: ràng buộc 1 SKU/PO ⇔ 1 PlanForm). Chi tiết ở mục 02/05/06/07/08 bên dưới.
+      M0 + toàn bộ 4/4 patch/quyết định của M1 (production-invoices đã chốt stage + build luôn TRANSFER_CHECK
+      thật; quyết định ràng buộc 1 SKU/PO ⇔ 1 PlanForm cũng đã chốt — giữ SKU độc lập với PO, thêm cảnh báo mềm
+      thay vì khoá DB). Đồng thời bắt đầu M2: hạng mục đầu tiên <b>Xuất sắt cho Phôi</b> (module
+      <span class="mono-cell">steel-issues</span> + <span class="mono-cell">qc-reviews</span>, kèm nhánh Phôi
+      của QC review) đã build xong backend, FE chưa nối. Chi tiết ở mục 02/05/06/07/08 bên dưới.
     </div>
   </div>
 </div>
@@ -555,8 +558,8 @@
     <span class="stat-label">Module lõi còn hở quy tắc nghiệp vụ (Production-Invoices) — Sales-Orders và Skus/PlanForm đã vá xong 2026-08-11 (khoá ship, transaction+idempotency boss-approve)</span>
   </div>
   <div class="stat-tile" style="--stat-color:var(--accent)">
-    <span class="stat-num">7</span>
-    <span class="stat-label">Nghiệp vụ tại xưởng (xuất sắt, vật tư tiêu hao, đan, sản lượng, QC, đóng gói, kiểm tra vật tư) chưa có backend thật — Chuyền kiểm đã xong 2026-08-11</span>
+    <span class="stat-num">6</span>
+    <span class="stat-label">Nghiệp vụ tại xưởng (vật tư tiêu hao, đan, sản lượng, QC Hàn/Sơn, đóng gói, kiểm tra vật tư) chưa có backend thật — Chuyền kiểm (2026-08-11) và Xuất sắt cho Phôi + QC nhánh Phôi (2026-08-11) đã xong, FE 2 mục sau chưa nối (M3)</span>
   </div>
 </div>
 
@@ -635,7 +638,7 @@
           <thead><tr><th>Module</th><th>Trạng thái</th><th>Ghi chú</th></tr></thead>
           <tbody>
             <tr><td class="mono">sales-orders</td><td class="status"><span class="pill pill-done">done</span></td><td class="note"><b>Đã vá 2026-08-11:</b> thêm endpoint riêng <span class="mono-cell">POST :id/items/:itemId/ship</span> — cộng dồn + chặn vượt trần ngay trong 1 câu UPDATE nguyên tử (không còn PATCH ghi đè giá trị tuyệt đối), có test race. poNumber unique đúng. Khái niệm kênh DOMESTIC/EXPORT vẫn chưa có (chưa trong phạm vi vá lần này).</td></tr>
-            <tr><td class="mono">skus <span class="h3-note">(PlanForm)</span></td><td class="status"><span class="pill pill-gap">done, còn 1 quyết định treo</span></td><td class="note"><b>Đã vá 2026-08-11:</b> boss-approve giờ chạy trong 1 transaction (activate BomRevision + update PlanForm status), có Idempotency-Key thật (cột <span class="mono-cell">bossApproveIdempotencyKey</span>, migration đã áp), có guard chống 2 request đụng nhau + test rollback. Còn treo: ràng buộc 1 SKU/PO ⇔ 1 PlanForm vẫn chưa được quyết định chính thức có khôi phục hay không (xem M1 mục 08).</td></tr>
+            <tr><td class="mono">skus <span class="h3-note">(PlanForm)</span></td><td class="status"><span class="pill pill-done">done</span></td><td class="note"><b>Đã vá 2026-08-11:</b> boss-approve giờ chạy trong 1 transaction (activate BomRevision + update PlanForm status), có Idempotency-Key thật (cột <span class="mono-cell">bossApproveIdempotencyKey</span>, migration đã áp), có guard chống 2 request đụng nhau + test rollback. <b>Quyết định chốt cùng ngày (commit FE <span class="mono-cell">warning-messgage</span>):</b> không khôi phục ràng buộc DB 1 SKU/PO ⇔ 1 PlanForm — giữ SKU độc lập với PO, thay vào đó <span class="mono-cell">SKUReviewPage</span> cảnh báo mềm (modal confirm, không chặn) khi tạo SKU mới cho sản phẩm đã có hồ sơ định mức chưa duyệt xong.</td></tr>
             <tr><td class="mono">production-invoices</td><td class="status"><span class="pill pill-gap">done, còn 2 gap nhỏ</span></td><td class="note">State machine 2 cấp duyệt hoạt động tốt, có test. <b>Mô hình stage đã chốt chính thức 2026-08-11:</b> 4 mốc <span class="mono-cell">FRAME</span> (Khung cơ khí = gộp Phôi+Hàn+Sơn) → <span class="mono-cell">WEAVING</span> (Đan) → <span class="mono-cell">TRANSFER_CHECK</span> (Chuyền kiểm, mốc mới) → <span class="mono-cell">PACKAGING</span> (Đóng gói) — không quay lại thiết kế gốc PHÔI/HÀN/WEAVING/SƠN. TRANSFER_CHECK là mốc duy nhất có dữ liệu thực thi thật (bảng <span class="mono-cell">transfer_check_results</span>/<span class="mono-cell">transfer_check_defects</span> mới), 3 mốc còn lại vẫn chỉ là deadline, không tự sinh khi tạo PI (phải chờ KHSX gửi tay). Còn treo: mã PI-{id} chưa có năm, lịch sử duyệt theo item không tra được qua audit_logs — 2 mục nhỏ, không chặn gì.</td></tr>
             <tr><td class="mono">bom-revisions</td><td class="status"><span class="pill pill-done">done</span></td><td class="note">DRAFT→ACTIVE→RETIRED, có unique index DB đảm bảo 1 ACTIVE/sản phẩm. Test còn mỏng (10 case, activate() chưa test trực tiếp).</td></tr>
             <tr><td class="mono">cutting-proposals</td><td class="status"><span class="pill pill-done">done</span></td><td class="note">Gọi solver ngoài (cat_sat) có timeout/retry/circuit-breaker thật; approve() khoá stock_quant bằng SELECT FOR UPDATE, tách consume/buy có idempotency key xác định. 18 test case.</td></tr>
@@ -717,12 +720,14 @@
             <tr><td class="mono">Manufacturing/XacNhanVatTuPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note"><span class="mono-cell">getVatTuIssues</span> chỉ tồn tại trong service mock, không có adapter thật.</td></tr>
             <tr><td class="mono">InboundWarehouse/KhoChuyenKiemPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-11:</b> tổng cần (totalQty) suy thật từ BOM (BomPiece × ProductionOrder.quantity), "đã kiểm"/"lỗi" ghi thật qua API mới (mốc TRANSFER_CHECK), ảnh lỗi upload Cloudinary thật. Cột "chờ thực thi" đã bỏ khỏi UI (không hiển thị số giả) — phụ thuộc sản lượng thật của Đan, vẫn thuộc M2. Danh sách chỉ còn PO/SKU/hạn giao (bỏ cột tổng hợp cần N lần gọi API/dòng); bấm vào xem chi tiết mới tải số liệu thật.</td></tr>
             <tr><td class="mono">InboundWarehouse/KhoDongGoiPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">100% số liệu sinh từ hash chuỗi tên SKU; nút xác nhận chỉ lưu useState, mất khi rời trang. Chưa đụng tới lần này.</td></tr>
-            <tr><td class="mono">InboundWarehouse/XuatSatPage · XuatVatTuTieuHaoPage · PhanPhoiNoiBoPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Mock có trạng thái thật (persist localStorage), luồng duyệt/huỷ tương đối đầy đủ — gần với "sẵn sàng chờ backend" nhất trong nhóm này.</td></tr>
+            <tr><td class="mono">InboundWarehouse/XuatSatPage</td><td class="status"><span class="pill pill-mock">mock (BE đã có, FE chưa nối)</span></td><td class="note"><b>BE xong 2026-08-11:</b> module <span class="mono-cell">steel-issues</span> (kho xuất → Phôi nhận → báo cắt xong, dưới 1 CuttingProposal đã duyệt) + <span class="mono-cell">qc-reviews</span> (nhánh Phôi: duyệt/rework/cấp lại sắt phế) đã build đầy đủ, đúng thay thế <span class="mono-cell">phoi-sat.service.ts</span>. Cố ý KHÔNG ghi thêm StockLedger (CuttingProposalsService.approve() đã trừ tồn 1 lần lúc duyệt phương án cắt). Trang FE vẫn gọi mock — nối API thật thuộc M3.</td></tr>
+            <tr><td class="mono">InboundWarehouse/XuatVatTuTieuHaoPage · PhanPhoiNoiBoPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Mock có trạng thái thật (persist localStorage), luồng duyệt/huỷ tương đối đầy đủ — gần với "sẵn sàng chờ backend" nhất trong nhóm này.</td></tr>
             <tr><td class="mono">InboundWarehouse/KhoXuatDanPage · KhoNhapDanPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Phân bổ/nhận hàng đan qua điểm đan — mock nhưng luồng nghiệp vụ thật.</td></tr>
             <tr><td class="mono">Phoi/LenhSanXuatPhoi · XacNhanSanLuongPage · LichSuNhanSatPage · KhoPhoiPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Lệnh SX phôi + sản lượng + KCS rework — mock có state, không phải placeholder rỗng.</td></tr>
             <tr><td class="mono">Han/LenhSanXuatHan · KhungHanPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">KhungHanPage là bảng tĩnh hoàn toàn — trang kém phát triển nhất trong toàn bộ FE, code tự ghi "chưa nối BE".</td></tr>
             <tr><td class="mono">Son/LenhSanXuatSon · ManhChoDanPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">ManhChoDanPage cũng là bảng tĩnh hoàn toàn, cùng mức độ với KhungHanPage.</td></tr>
-            <tr><td class="mono">Kcs/KcsPhoiPage · KcsHanPage · KcsSonPage · KcsStagePage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Không có entity QcReview nào ở backend — 4 trang này duyệt/từ chối/rework hoàn toàn trên service mock.</td></tr>
+            <tr><td class="mono">Kcs/KcsPhoiPage</td><td class="status"><span class="pill pill-mock">mock (BE đã có, FE chưa nối)</span></td><td class="note"><b>BE xong 2026-08-11:</b> module <span class="mono-cell">qc-reviews</span> (nhánh <span class="mono-cell">steelIssueId</span>) đã build, đúng thay thế <span class="mono-cell">kcsDuyetPhoi</span> mock. Trang FE vẫn gọi mock — nối API thật thuộc M3.</td></tr>
+            <tr><td class="mono">Kcs/KcsHanPage · KcsSonPage · KcsStagePage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Chưa có entity ProductionBatch ở backend (nhánh <span class="mono-cell">productionBatchId</span> của bảng <span class="mono-cell">qc_reviews</span> đã có sẵn XOR nhưng chờ hạng mục "Sản lượng theo công đoạn") — 3 trang này duyệt/từ chối/rework hoàn toàn trên service mock.</td></tr>
           </tbody>
         </table>
       </div>
@@ -822,12 +827,12 @@
 
         <div class="milestone" data-m="M1">
           <div class="milestone-card">
-            <div class="milestone-head"><h4>Vá đúng 3 lỗ hổng nghiệp vụ đang chạy thật</h4><span class="pill pill-mixed">3/4 xong 2026-08-11</span></div>
+            <div class="milestone-head"><h4>Vá đúng 3 lỗ hổng nghiệp vụ đang chạy thật</h4><span class="pill pill-done">4/4 xong 2026-08-11</span></div>
             <p class="milestone-why">Đây là code đang phục vụ người dùng thật (Sales, SKU, PI) — rủi ro cao nhất vì im lặng cho tới khi có 2 người thao tác cùng lúc.</p>
             <ul>
               <li><span class="tag">BE ✓</span><b>sales-orders:</b> thêm endpoint <span class="mono-cell">POST items/:itemId/ship</span> — increment nguyên tử có ràng buộc trần trong cùng 1 câu SQL (không cần SELECT FOR UPDATE riêng), thêm test đồng thời. <i>Xong.</i></li>
               <li><span class="tag">BE ✓</span><b>skus:</b> gói <span class="mono-cell">boss-approve</span> vào 1 transaction, thêm Idempotency-Key thật (migration đã áp lên DB), thêm test rollback + test race trạng thái. <i>Xong.</i></li>
-              <li><span class="tag">Quyết định</span>Chốt chính thức: có khôi phục ràng buộc 1 SKU/PO ⇔ 1 PlanForm hay giữ nguyên như hiện tại (SKU độc lập với PO) — <i>vẫn treo, chưa quyết định.</i></li>
+              <li><span class="tag">Quyết định ✓</span>Chốt chính thức (commit FE <span class="mono-cell">warning-messgage</span>, 2026-08-11): <b>không</b> khôi phục ràng buộc DB 1 SKU/PO ⇔ 1 PlanForm — giữ SKU độc lập với PO như hiện tại. Thay vào đó, <span class="mono-cell">SKUReviewPage</span> cảnh báo mềm (modal confirm) khi tạo SKU mới cho sản phẩm đã có hồ sơ định mức chưa duyệt xong, không khoá cứng vì KHSX chỉ có 1 người phụ trách.</li>
               <li><span class="tag">Quyết định ✓</span><b>production-invoices:</b> chốt 4 mốc FRAME (Khung cơ khí, gộp Phôi/Hàn/Sơn) → WEAVING (Đan) → TRANSFER_CHECK (Chuyền kiểm, mới) → PACKAGING (Đóng gói) — không quay lại thiết kế gốc. Đã build luôn TRANSFER_CHECK làm backend thật cho KhoChuyenKiemPage (mục 05). <i>Xong — còn 2 việc nhỏ không chặn gì: PI-{id} chưa có năm, audit item-level.</i></li>
             </ul>
           </div>
@@ -835,14 +840,14 @@
 
         <div class="milestone" data-m="M2">
           <div class="milestone-card">
-            <div class="milestone-head"><h4>Xây backend cho sản xuất tại xưởng — khối việc lớn nhất còn lại</h4></div>
-            <p class="milestone-why">8 nghiệp vụ dưới đây đã có UI tương đối hoàn chỉnh (mục 05) chạy trên mock có state — nghĩa là luồng nghiệp vụ đã được validate qua UI, chỉ còn thiếu backend thật để thay thế service mock 1-đổi-1.</p>
+            <div class="milestone-head"><h4>Xây backend cho sản xuất tại xưởng — khối việc lớn nhất còn lại</h4><span class="pill pill-mixed">1/7 xong 2026-08-11</span></div>
+            <p class="milestone-why">7 nghiệp vụ dưới đây đã có UI tương đối hoàn chỉnh (mục 05) chạy trên mock có state — nghĩa là luồng nghiệp vụ đã được validate qua UI, chỉ còn thiếu backend thật để thay thế service mock 1-đổi-1.</p>
             <ul>
-              <li><span class="tag">Mới</span><b>Xuất sắt cho Phôi</b> — thay <span class="mono-cell">phoi-sat.service.ts</span>.</li>
+              <li><span class="tag">BE ✓</span><b>Xuất sắt cho Phôi</b> — xong 2026-08-11: module <span class="mono-cell">steel-issues</span> (kho xuất → Phôi nhận → báo cắt xong, dưới 1 CuttingProposal đã APPROVED, không ghi thêm StockLedger vì CuttingProposalsService.approve() đã trừ tồn 1 lần lúc duyệt phương án cắt) + <span class="mono-cell">qc-reviews</span> (nhánh Phôi: duyệt/tự sinh rework/tự sinh đề xuất cấp lại sắt phế). Đúng thay thế <span class="mono-cell">phoi-sat.service.ts</span>. Bỏ 2 endpoint rework/replenish-request riêng so với tài liệu gốc (mâu thuẫn nội tại) - qc-review tự làm hết trong 1 lần gọi, đúng hành vi mock đã validate. <i>FE (XuatSatPage, KcsPhoiPage) chưa nối - thuộc M3.</i></li>
               <li><span class="tag">Mới</span><b>Xuất vật tư tiêu hao</b> (Hàn/Sơn) — thay <span class="mono-cell">vat-tu-noi-bo.service.ts</span>.</li>
               <li><span class="tag">Mới</span><b>Phân bổ/nhận hàng đan</b> — thay <span class="mono-cell">manh.service.ts</span>.</li>
-              <li><span class="tag">Mới</span><b>Sản lượng theo công đoạn</b> (Phôi/Hàn/Sơn, có rework) — thay <span class="mono-cell">san-luong.service.ts</span>, <span class="mono-cell">phoi-lenh-sx.service.ts</span>. Sản lượng Đan xong thì quay lại nối luôn <span class="mono-cell">TransferCheckPieceResponseDto.readyQty</span> (mục 05, hiện luôn trả 0 vì chưa có dữ liệu này).</li>
-              <li><span class="tag">Mới</span><b>QC review (KCS)</b> — chưa có entity nào, cần thiết kế mới; đối chiếu XOR steelIssueId/productionBatchId như 4 trang Kcs đang giả định.</li>
+              <li><span class="tag">Mới</span><b>Sản lượng theo công đoạn</b> (Phôi/Hàn/Sơn, có rework) — thay <span class="mono-cell">san-luong.service.ts</span>, <span class="mono-cell">phoi-lenh-sx.service.ts</span>. Sản lượng Đan xong thì quay lại nối luôn <span class="mono-cell">TransferCheckPieceResponseDto.readyQty</span> (mục 05, hiện luôn trả 0 vì chưa có dữ liệu này). Cần thêm model <span class="mono-cell">ProductionBatch</span> để mở nhánh <span class="mono-cell">productionBatchId</span> còn lại của <span class="mono-cell">qc_reviews</span>.</li>
+              <li><span class="tag">1 nhánh đã xong</span><b>QC review (KCS)</b> — bảng <span class="mono-cell">qc_reviews</span>/<span class="mono-cell">replenish_requests</span> đã tạo sẵn (XOR steelIssueId/productionBatchId, CHECK DB), nhánh Phôi (steelIssueId) hoạt động đầy đủ (đi kèm Xuất sắt cho Phôi ở trên). Nhánh Hàn/Sơn (productionBatchId) chờ model ProductionBatch ở mục Sản lượng theo công đoạn.</li>
               <li><span class="tag">Mới</span><b>Đóng gói</b> — thay số liệu hash ở KhoDongGoiPage.</li>
               <li><span class="tag">Mới</span><b>Kiểm tra vật tư trước sản xuất</b> (3 kho) — thay <span class="mono-cell">InspectionContext.requests</span> (SEED_REQUESTS); đồng thời BE cần thêm endpoint tạo purchase-proposal thủ công để <span class="mono-cell">markProposalCreated</span> hết phải ghi state cục bộ (proposals còn lại đã real từ Phase 8, không cần đụng vào).</li>
             </ul>

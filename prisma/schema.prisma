@@ -67,20 +67,23 @@ model User {
   isProductPlanner Boolean  @default(false)
   isSale           Boolean  @default(false)
 
-  roles                     UserRole[]
-  refreshTokens             RefreshToken[]
-  notifications             Notification[]
-  notificationReads         NotificationRead[]
-  planForms                 PlanForm[]
-  piRequestedItems          ProductionInvoiceItem[] @relation("PIItemRequestedBy")
-  piQlsxItems               ProductionInvoiceItem[] @relation("PIItemQlsxBy")
-  piDecidedItems            ProductionInvoiceItem[] @relation("PIItemDecidedBy")
-  cuttingProposalsRequested CuttingProposal[]       @relation("CuttingProposalRequestedBy")
-  cuttingProposalsApproved  CuttingProposal[]       @relation("CuttingProposalApprovedBy")
-  transferCheckResults      TransferCheckResult[]   @relation("TransferCheckCheckedBy")
-  purchaseProposalsApproved PurchaseProposal[]
-  stockLedgerEntries        StockLedger[]
-  materialsToBuy            Material[]
+  roles                      UserRole[]
+  refreshTokens              RefreshToken[]
+  notifications              Notification[]
+  notificationReads          NotificationRead[]
+  planForms                  PlanForm[]
+  piRequestedItems           ProductionInvoiceItem[] @relation("PIItemRequestedBy")
+  piQlsxItems                ProductionInvoiceItem[] @relation("PIItemQlsxBy")
+  piDecidedItems             ProductionInvoiceItem[] @relation("PIItemDecidedBy")
+  cuttingProposalsRequested  CuttingProposal[]       @relation("CuttingProposalRequestedBy")
+  cuttingProposalsApproved   CuttingProposal[]       @relation("CuttingProposalApprovedBy")
+  transferCheckResults       TransferCheckResult[]   @relation("TransferCheckCheckedBy")
+  purchaseProposalsApproved  PurchaseProposal[]
+  stockLedgerEntries         StockLedger[]
+  materialsToBuy             Material[]
+  steelIssuesIssued          SteelIssue[]            @relation("SteelIssueIssuedBy")
+  qcReviewsReviewed          QcReview[]              @relation("QcReviewReviewedBy")
+  replenishRequestsFulfilled ReplenishRequest[]      @relation("ReplenishRequestFulfilledBy")
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -356,6 +359,7 @@ model Material {
   warehouseTransferItems        WarehouseTransferItem[]
   warehouseTransferReservations WarehouseTransferReservation[]
   pieceMaterialItems            PieceMaterialItem[]
+  steelIssues                   SteelIssue[]
 
   @@index([materialGroupId])
   @@index([warehouseId])
@@ -398,6 +402,8 @@ model DefectReason {
   id        BigInt    @id @default(autoincrement())
   label     String
   stageType MfgStage?
+
+  qcReviews QcReview[]
 
   @@index([stageType])
   @@map("defect_reasons")
@@ -521,6 +527,7 @@ model Piece {
   stockLedgerEntries   StockLedger[]
   stockQuants          StockQuant[]
   transferCheckResults TransferCheckResult[]
+  steelIssues          SteelIssue[]
 
   @@unique([mfgProductId, code])
   @@index([mfgProductId])
@@ -555,6 +562,7 @@ model SegmentSpec {
   cuttingProposalPatternSegments CuttingProposalPatternSegment[]
   stockLedgerEntries             StockLedger[]
   stockQuants                    StockQuant[]
+  cutPatternSegments             CutPatternSegment[]
 
   @@unique([materialId, cutLengthMm])
   @@map("segment_spec")
@@ -1129,6 +1137,7 @@ model ProductionOrder {
   mfgProduct            MfgProduct            @relation(fields: [mfgProductId], references: [id])
   bomRevision           BomRevision           @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
   cuttingProposals      CuttingProposal[]
+  steelIssues           SteelIssue[]
 
   @@index([mfgProductId])
   @@map("production_orders")
@@ -1213,8 +1222,9 @@ model CuttingProposalPattern {
   /// đa số pattern có giá trị 0, chỉ pattern "cây cuối" của 1 loại sắt mới có mẩu nguyên.
   mauNguyenMm   Int?   @default(0)
 
-  line     CuttingProposalLine             @relation(fields: [lineId], references: [id])
-  segments CuttingProposalPatternSegment[]
+  line       CuttingProposalLine             @relation(fields: [lineId], references: [id])
+  segments   CuttingProposalPatternSegment[]
+  cutBundles CutBundle[]
 
   @@index([lineId])
   @@map("cutting_proposal_patterns")
@@ -1484,4 +1494,167 @@ model WarehouseTransferReservation {
 
   @@index([warehouseId, materialId])
   @@map("warehouse_transfer_reservations")
+}
+
+// =====================================================================
+// Phase 9 — MES-B: Steel Issue & QC Review (Phôi) — docs/dna-erp-db-schema.html mục 1.6,
+// docs/dna-erp-backend-implementation-plan.html mục 9.1/9.2. Chỉ nhánh Phôi (steel_issue) ở
+// bản này - production_batch/material_issue/work_session (Hàn/Sơn, mục 9.3) làm ở hạng mục
+// M2 khác ("Sản lượng theo công đoạn"). QcReview/ReplenishRequest dùng chung cho cả 2 nhánh
+// (productionBatchId để trống ở bản này, chỉ khai báo cột + FK cho tương lai).
+//
+// Quyết định lệch tài liệu gốc (2026-08-11, xem roadmap M2): StockLedger (STEEL_ISSUE) đã
+// được CuttingProposalsService.approve() ghi 1 lần gộp theo materialId ngay lúc duyệt phương
+// án cắt (quyết định của Sếp 2026-08-07, sau ngày viết tài liệu gốc 2026-07-23) - SteelIssue
+// ở đây CHỈ là lớp theo dõi thực thi vật lý, KHÔNG ghi thêm StockLedger nữa (double-count).
+// =====================================================================
+
+enum SteelIssueStatus {
+  ISSUED
+  RECEIVED
+  AWAITING_QC
+  QC_PASSED
+}
+
+enum ReplenishRequestStatus {
+  OPEN
+  FULFILLED
+  REJECTED
+}
+
+/// 1 đợt kho xuất sắt cho 1 (production_order, piece) - Phôi nhận rồi báo cắt xong (ghi
+/// CutBundle[] tại lúc đó, không phải lúc xuất - Phôi có thể cắt lệch kiểu cắt đề xuất, xem
+/// CutBundle.proposalPatternId). Không có bảng "kế hoạch xuất sắt" riêng - "cần xuất bao
+/// nhiêu" là query từ piece_bom × bom_piece × production_order.quantity trừ SUM(SteelIssue
+/// gốc, loại reworkOfId != null), giống cách ProductionInvoicesService.listTransferCheckPieces
+/// tính totalQty.
+model SteelIssue {
+  id                BigInt           @id @default(autoincrement())
+  productionOrderId BigInt
+  pieceId           BigInt
+  /// Suy được từ CuttingProposalPattern đã APPROVED của PO, giữ có kiểm soát vì là bất biến
+  /// nghiệp vụ "1 đợt xuất = 1 loại sắt".
+  materialId        BigInt
+  barLengthMm       Int
+  /// Số cây kho xuất đợt này. KHÔNG có trong tài liệu gốc (docs/dna-erp-db-schema.html thiếu
+  /// field này ở steel_issue) - bổ sung vì mock (phoi-sat.service.ts xuatSatChoPhoi) và UI
+  /// (XuatSatPage ô nhập số lượng) đều xác nhận đây là input bắt buộc, không phải hằng số 1.
+  /// actualBarCount bên dưới "null = đúng như xuất" nghĩa là mặc định = giá trị này.
+  barCount          Int
+  status            SteelIssueStatus @default(ISSUED)
+  /// Client-supplied key cho POST /production-orders/:id/steel-issues - resolve-or-return
+  /// (cùng idiom CuttingProposal.idempotencyKey), chống tạo trùng đợt khi client gọi lại do
+  /// timeout/mất mạng.
+  idempotencyKey    String?          @unique
+  /// Phôi báo thực cắt (complete-cutting) - null = đúng như xuất.
+  actualBarCount    Int?
+  issuedAt          DateTime         @default(now())
+  issuedById        String
+  /// Phôi xác nhận cắt xong.
+  completedAt       DateTime?
+  /// Self-reference - đợt làm lại do KCS bắt sửa (QcReview.failedQty > scrapQty).
+  reworkOfId        BigInt?
+
+  productionOrder ProductionOrder    @relation(fields: [productionOrderId], references: [id])
+  piece           Piece              @relation(fields: [pieceId], references: [id])
+  material        Material           @relation(fields: [materialId], references: [id])
+  issuedBy        User               @relation("SteelIssueIssuedBy", fields: [issuedById], references: [id])
+  reworkOf        SteelIssue?        @relation("SteelIssueRework", fields: [reworkOfId], references: [id])
+  reworkIssues    SteelIssue[]       @relation("SteelIssueRework")
+  bundles         CutBundle[]
+  qcReviews       QcReview[]
+  replenishedBy   ReplenishRequest[] @relation("ReplenishRequestFulfilledByIssue")
+
+  @@index([productionOrderId, pieceId])
+  @@index([status])
+  @@map("steel_issues")
+}
+
+/// Các bó theo kiểu cắt THỰC TẾ của 1 đợt - ghi khi Phôi báo cắt xong (complete-cutting), chuẩn
+/// hoá thành bảng con (không JSONB) để query/aggregate SQL trực tiếp theo cỡ đoạn. Immutable
+/// sau khi tạo (output cắt của 1 đợt là dữ liệu lịch sử, không sửa lại).
+model CutBundle {
+  id                BigInt  @id @default(autoincrement())
+  steelIssueId      BigInt
+  /// NULL = cắt ngoài đề xuất (cho phép, nhưng cảnh báo isOffPlan ở response - không chặn cứng,
+  /// nghiệp vụ vẫn cho Phôi linh hoạt).
+  proposalPatternId BigInt?
+  barCount          Int
+  wastePerBarMm     Int?
+
+  steelIssue      SteelIssue              @relation(fields: [steelIssueId], references: [id])
+  proposalPattern CuttingProposalPattern? @relation(fields: [proposalPatternId], references: [id])
+  segments        CutPatternSegment[]
+
+  @@index([steelIssueId])
+  @@map("cut_bundles")
+}
+
+/// 1 cây (theo bundle) ra những đoạn nào - immutable, đúng UNIQUE (cutBundleId, segmentSpecId)
+/// giống cutting_proposal_pattern_segment.
+model CutPatternSegment {
+  id            BigInt @id @default(autoincrement())
+  cutBundleId   BigInt
+  segmentSpecId BigInt
+  countPerBar   Int
+
+  cutBundle   CutBundle   @relation(fields: [cutBundleId], references: [id])
+  segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])
+
+  @@unique([cutBundleId, segmentSpecId])
+  @@map("cut_pattern_segments")
+}
+
+/// KCS duyệt, dùng chung Phôi/Hàn/Sơn qua FK XOR (steelIssueId <> productionBatchId - CHECK
+/// constraint viết tay trong migration, cùng pattern stock_ledger_goods_xor_chk). Chỉ nhánh
+/// Phôi (steelIssueId) được dùng ở bản này - productionBatchId để trống, chờ hạng mục M2
+/// "Sản lượng theo công đoạn" (bảng production_batch chưa tồn tại). KCS duyệt cả lô, không bóc
+/// chi tiết theo cỡ đoạn - hỏng thì ghi số lượng + note. passed = SL gốc − failedQty là dẫn
+/// xuất, không lưu cột riêng.
+model QcReview {
+  id                BigInt   @id @default(autoincrement())
+  steelIssueId      BigInt?
+  /// productionBatchId để trống ở bản này (bảng production_batch chưa tồn tại) - cột giữ chỗ
+  /// cho hạng mục M2 kế tiếp, KHÔNG có FK thật cho tới khi model ProductionBatch được thêm.
+  productionBatchId BigInt?
+  failedQty         Int
+  /// CHECK scrapQty <= failedQty (validate service, giống assertExactlyOneGoodsLeg style).
+  scrapQty          Int?
+  defectReasonId    BigInt?
+  reason            String?
+  photoUrl          String?
+  reviewedAt        DateTime @default(now())
+  reviewedById      String
+
+  steelIssue        SteelIssue?        @relation(fields: [steelIssueId], references: [id])
+  defectReason      DefectReason?      @relation(fields: [defectReasonId], references: [id])
+  reviewedBy        User               @relation("QcReviewReviewedBy", fields: [reviewedById], references: [id])
+  replenishRequests ReplenishRequest[]
+
+  @@index([steelIssueId])
+  @@index([productionBatchId])
+  @@map("qc_reviews")
+}
+
+/// Đề xuất cấp lại khi KCS chấm phế (QcReview.scrapQty > 0). fulfilledByIssueId chỉ áp dụng khi
+/// qcReview thuộc Phôi (Hàn/Sơn: BLOCKED, dừng ở OPEN/REJECTED - xem tài liệu gốc mục 9.2,
+/// "Hàn/Sơn cấp lại bán-thành-phẩm nghĩa là gì" chưa có quyết định nghiệp vụ).
+model ReplenishRequest {
+  id                 BigInt                 @id @default(autoincrement())
+  qcReviewId         BigInt
+  status             ReplenishRequestStatus @default(OPEN)
+  /// Cho phép < scrapQty (cấp bù từng phần) - CHECK qty <= qcReview.scrapQty (validate service).
+  qty                Int
+  createdAt          DateTime               @default(now())
+  fulfilledByIssueId BigInt?
+  fulfilledAt        DateTime?
+  fulfilledById      String?
+  rejectionReason    String?
+
+  qcReview         QcReview    @relation(fields: [qcReviewId], references: [id])
+  fulfilledByIssue SteelIssue? @relation("ReplenishRequestFulfilledByIssue", fields: [fulfilledByIssueId], references: [id])
+  fulfilledBy      User?       @relation("ReplenishRequestFulfilledBy", fields: [fulfilledById], references: [id])
+
+  @@index([status])
+  @@map("replenish_requests")
 }

@@ -34,6 +34,9 @@ export const PERMISSION_MODULES = {
   WAREHOUSE_TRANSFER: 'WAREHOUSE_TRANSFER',
   // --- Phase 8 (Mua hàng) ---
   PURCHASE_PROPOSAL: 'PURCHASE_PROPOSAL',
+  // --- Phase 9 (MES-B execution - Phôi) ---
+  STEEL_ISSUE: 'STEEL_ISSUE',
+  QC_REVIEW: 'QC_REVIEW',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

@@ -45,6 +45,8 @@ import { StockModule } from './modules/stock/stock.module';
 import { WarehouseTransfersModule } from './modules/warehouse-transfers/warehouse-transfers.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { PurchaseProposalsModule } from './modules/purchase-proposals/purchase-proposals.module';
+import { SteelIssuesModule } from './modules/steel-issues/steel-issues.module';
+import { QcReviewsModule } from './modules/qc-reviews/qc-reviews.module';
 
 @Module({
   imports: [
@@ -109,6 +111,8 @@ import { PurchaseProposalsModule } from './modules/purchase-proposals/purchase-p
     WarehouseTransfersModule,
     UploadsModule,
     PurchaseProposalsModule,
+    SteelIssuesModule,
+    QcReviewsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
