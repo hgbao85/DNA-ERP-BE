@@ -39,6 +39,10 @@ export const PERMISSION_MODULES = {
   QC_REVIEW: 'QC_REVIEW',
   // --- Phase 9b (MES-B execution - Đan) ---
   WEAVING_ISSUE: 'WEAVING_ISSUE',
+  // --- Phase 9c (MES-B execution - vật tư tiêu hao Hàn/Sơn) ---
+  MATERIAL_ISSUE: 'MATERIAL_ISSUE',
+  // --- Phase 9d (MES-B execution - sản lượng Hàn/Sơn) ---
+  PRODUCTION_BATCH: 'PRODUCTION_BATCH',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

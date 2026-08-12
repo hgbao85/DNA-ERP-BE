@@ -48,6 +48,8 @@ import { PurchaseProposalsModule } from './modules/purchase-proposals/purchase-p
 import { SteelIssuesModule } from './modules/steel-issues/steel-issues.module';
 import { QcReviewsModule } from './modules/qc-reviews/qc-reviews.module';
 import { WeavingIssuesModule } from './modules/weaving-issues/weaving-issues.module';
+import { MaterialIssuesModule } from './modules/material-issues/material-issues.module';
+import { ProductionBatchesModule } from './modules/production-batches/production-batches.module';
 
 @Module({
   imports: [
@@ -115,6 +117,8 @@ import { WeavingIssuesModule } from './modules/weaving-issues/weaving-issues.mod
     SteelIssuesModule,
     QcReviewsModule,
     WeavingIssuesModule,
+    MaterialIssuesModule,
+    ProductionBatchesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

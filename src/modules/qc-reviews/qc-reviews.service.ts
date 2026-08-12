@@ -5,11 +5,17 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, ReplenishRequestStatus, SteelIssueStatus } from '../../generated/prisma/client';
+import {
+  Prisma,
+  ProductionBatchStatus,
+  ReplenishRequestStatus,
+  SteelIssueStatus,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CreateQcReviewDto } from './dto/create-qc-review.dto';
 import { FulfillReplenishRequestDto } from './dto/fulfill-replenish-request.dto';
@@ -30,16 +36,21 @@ type ReplenishRequestRow = Prisma.ReplenishRequestGetPayload<{
 }>;
 
 /**
- * KCS duyệt (Phôi) + đề xuất cấp lại sắt phế (M2, thay phần kcsDuyetPhoi/capLaiSat của
- * phoi-sat.service.ts mock). qc_reviews dùng chung Phôi/Hàn-Sơn qua FK XOR (CHECK DB
- * qc_reviews_goods_xor_chk) - bản này chỉ nhánh Phôi (steelIssueId), productionBatchId để
- * trống tới khi hạng mục "Sản lượng theo công đoạn" thêm model ProductionBatch.
+ * KCS duyệt (Phôi + Hàn/Sơn) + đề xuất cấp lại (M2, thay phần kcsDuyetPhoi/capLaiSat của
+ * phoi-sat.service.ts và phần kcsDuyetStage của san-luong.service.ts mock). qc_reviews dùng
+ * chung 2 nhánh qua FK XOR (CHECK DB qc_reviews_goods_xor_chk): steelIssueId (review(), Phase 9)
+ * và productionBatchId (reviewProductionBatch(), Phase 9d) - 2 endpoint REST riêng
+ * (POST steel-issues/:id/qc-review vs POST production-batches/:id/qc-review) chỉ để URL rõ
+ * ràng, đúng thiết kế gốc "service dùng chung logic" (docs/dna-erp-backend-implementation-plan.
+ * html mục 9.2) - nhưng 2 hành vi SAU KHI duyệt khác nhau thật (xem review() vs
+ * reviewProductionBatch()), nên tách 2 method thay vì 1 method rẽ nhánh nội bộ.
  */
 @Injectable()
 export class QcReviewsService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly steelIssuesService: SteelIssuesService,
+    private readonly productionBatchesService: ProductionBatchesService,
   ) {}
 
   /**
@@ -110,6 +121,70 @@ export class QcReviewsService {
     return this.toResponseDto(created);
   }
 
+  /**
+   * Duyệt 1 ProductionBatch đang AWAITING_QC. Khác review() (Phôi): KHÔNG tự sinh lô rework mới
+   * (đúng hành vi mock kcsDuyetStage() + db-schema doc "Mock hiện KHÔNG tạo lô rework mới cho
+   * Hàn/Sơn") - phần sửa được (rework) không tính done, chỉ ghi đè reportedQty = phần ĐẠT (passed)
+   * trên đúng batch gốc, công nhân tự báo lại phần rework ở 1 lô mới sau (qua
+   * ProductionBatchesService.create() bình thường, không phải rework_of).
+   */
+  async reviewProductionBatch(
+    productionBatchId: string,
+    dto: CreateQcReviewDto,
+    reviewedById: string,
+  ): Promise<QcReviewResponseDto> {
+    const batch = await this.productionBatchesService.findOneRowOrThrow(productionBatchId);
+    if (batch.status !== ProductionBatchStatus.AWAITING_QC) {
+      throw new ConflictException(
+        `Production batch ${productionBatchId} đang ở trạng thái ${batch.status} - chỉ AWAITING_QC mới duyệt KCS được`,
+      );
+    }
+
+    if (dto.failedQty > batch.reportedQty) {
+      throw new BadRequestException(
+        `failedQty (${dto.failedQty}) không được vượt số lượng đã báo (${batch.reportedQty})`,
+      );
+    }
+    const scrapQty = dto.scrapQty ?? 0;
+    if (scrapQty > dto.failedQty) {
+      throw new BadRequestException(
+        `scrapQty (${scrapQty}) không được vượt failedQty (${dto.failedQty})`,
+      );
+    }
+    const passedQty = batch.reportedQty - dto.failedQty;
+    const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const review = await tx.qcReview.create({
+        data: {
+          productionBatchId: batch.id,
+          failedQty: dto.failedQty,
+          scrapQty: dto.scrapQty,
+          defectReasonId,
+          reason: dto.reason,
+          photoUrl: dto.photoUrl,
+          reviewedById,
+        },
+        include: QC_REVIEW_INCLUDE,
+      });
+
+      await tx.productionBatch.update({
+        where: { id: batch.id },
+        data: { status: ProductionBatchStatus.QC_DONE, reportedQty: passedQty },
+      });
+
+      if (scrapQty > 0) {
+        await tx.replenishRequest.create({
+          data: { qcReviewId: review.id, qty: scrapQty },
+        });
+      }
+
+      return review;
+    });
+
+    return this.toResponseDto(created);
+  }
+
   async findAll(query: ListQcReviewsQueryDto): Promise<Paginated<QcReviewResponseDto>> {
     const where: Prisma.QcReviewWhereInput = {
       steelIssueId: query.steelIssueId ? parseBigIntId(query.steelIssueId) : undefined,
@@ -143,7 +218,13 @@ export class QcReviewsService {
     return { data: result.data.map((r) => this.toReplenishResponseDto(r)), meta: result.meta };
   }
 
-  /** Kho cấp bù bằng 1 đợt SteelIssue mới đã tạo trước đó (kho tự tạo qua endpoint xuất thường). */
+  /**
+   * Kho cấp bù bằng 1 đợt SteelIssue mới đã tạo trước đó (kho tự tạo qua endpoint xuất thường).
+   * CHỈ áp dụng cho request sinh từ nhánh Phôi (qcReview.steelIssueId) - request sinh từ nhánh
+   * Hàn/Sơn (qcReview.productionBatchId, Phase 9d) BỊ CHẶN ở đây theo đúng quyết định tài liệu
+   * gốc (dna-erp-backend-implementation-plan.html mục 9.2: "Hàn/Sơn cấp lại bán-thành-phẩm nghĩa
+   * là gì chưa có quyết định nghiệp vụ" - dừng ở OPEN/reject cho tới khi có quyết định).
+   */
   async fulfillReplenishRequest(
     id: string,
     dto: FulfillReplenishRequestDto,
@@ -153,6 +234,12 @@ export class QcReviewsService {
     if (request.status !== ReplenishRequestStatus.OPEN) {
       throw new ConflictException(
         `Replenish request ${id} đang ở trạng thái ${request.status} - chỉ OPEN mới cấp bù được`,
+      );
+    }
+    if (!request.qcReview.steelIssueId) {
+      throw new BadRequestException(
+        `Replenish request ${id} sinh từ công đoạn Hàn/Sơn - cấp bù bán-thành-phẩm cho Hàn/Sơn ` +
+          'chưa có quyết định nghiệp vụ, chỉ hỗ trợ fulfill cho nhánh Phôi',
       );
     }
 

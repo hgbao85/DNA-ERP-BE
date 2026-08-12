@@ -24,7 +24,7 @@ const UPDATE = { module: PERMISSION_MODULES.QC_REVIEW, action: PermissionAction.
 export class QcReviewsController {
   constructor(private readonly qcReviewsService: QcReviewsService) {}
 
-  // ─── KCS (mfgRole = KCS) - duyệt lô Phôi ─────────────────────────────────────
+  // ─── KCS (mfgRole = KCS) - duyệt lô Phôi / Hàn / Sơn ──────────────────────────
 
   @Post('steel-issues/:id/qc-review')
   @RequirePermissions(CREATE)
@@ -35,6 +35,17 @@ export class QcReviewsController {
     @CurrentUser('id') userId: string,
   ) {
     return this.qcReviewsService.review(id, dto, userId);
+  }
+
+  @Post('production-batches/:id/qc-review')
+  @RequirePermissions(CREATE)
+  @RequireMfgRole(MfgRole.KCS)
+  reviewProductionBatch(
+    @Param('id') id: string,
+    @Body() dto: CreateQcReviewDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.qcReviewsService.reviewProductionBatch(id, dto, userId);
   }
 
   @Get('qc-reviews')

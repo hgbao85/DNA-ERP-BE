@@ -194,6 +194,9 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // vật tư-TP là người duy nhất thực hiện cả 2 chiều Đan (không có mfgRole "Đan" - việc đan
   // diễn ra ở điểm đan NGOÀI, không phải 1 tổ trong xưởng, xem MFG_FLOOR_ROLES). Không cấp cho
   // PHOI_STAFF/HAN_STAFF/SON_STAFF/KCS_STAFF.
+  // MATERIAL_ISSUE: chỉ CREATE+VIEW (Phase 9c, 2026-08-11) - thủ kho vật tư-TP là người cấp vật
+  // tư tiêu hao (POST /production-orders/:id/material-issues), KHÔNG có UPDATE - "tổ xác nhận
+  // nhận" là việc của HAN_STAFF/SON_STAFF (xem 2 role đó bên dưới), không phải thủ kho.
   [BUSINESS_ROLES.WAREHOUSE_STAFF]: [
     { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW, PermissionAction.UPDATE] },
     { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, actions: 'ALL' },
@@ -215,6 +218,10 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     {
       module: PERMISSION_MODULES.WEAVING_ISSUE,
       actions: [PermissionAction.CREATE, PermissionAction.UPDATE, PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.MATERIAL_ISSUE,
+      actions: [PermissionAction.CREATE, PermissionAction.VIEW],
     },
   ],
   // 2 account chuyên trách nhập định mức SKU (Sắt = định mức mảnh; Phụ kiện/Bao bì = định mức
@@ -256,17 +263,47 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // PHOI_STAFF chỉ UPDATE+VIEW trên STEEL_ISSUE (receive/complete-cutting/rework) - KHÔNG có
   // CREATE (xuất đợt là việc của thủ kho, xem WAREHOUSE_STAFF ở trên). Sửa lại 2026-08-11: bản
   // scaffold cũ (actions:'ALL') SAI - đã xác nhận lại nghiệp vụ, PHOI_STAFF không tự xuất sắt
-  // cho mình. PRODUCTION_BATCH/MATERIAL_ISSUE/WORK_SESSION chưa uncomment - module chưa tồn tại
-  // (thuộc hạng mục M2 "Sản lượng theo công đoạn", chưa triển khai).
+  // cho mình. PRODUCTION_BATCH nay đã tồn tại (Phase 9d) nhưng KHÔNG cấp cho PHOI_STAFF - báo
+  // sản lượng chỉ dành cho Hàn/Sơn, Phôi báo qua LenhSanXuatPhoi (mock, chưa nối module riêng).
+  // WORK_SESSION vẫn chưa tồn tại (xem comment schema.prisma "Phase 9d" - không triển khai vì
+  // mock không có khái niệm ca làm việc để validate).
   [BUSINESS_ROLES.PHOI_STAFF]: [
     {
       module: PERMISSION_MODULES.STEEL_ISSUE,
       actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
     },
   ],
+  // HAN_STAFF/SON_STAFF (Phase 9c+9d, 2026-08-11). MATERIAL_ISSUE: chỉ UPDATE+VIEW (POST
+  // /material-issues/:id/receive, "tổ xác nhận nhận") - KHÔNG có CREATE, cấp vật tư là việc của
+  // WAREHOUSE_STAFF (xem ở trên). PRODUCTION_BATCH: CREATE+VIEW (POST
+  // /production-orders/:id/production-batches, "báo sản lượng") - KHÔNG có UPDATE, duyệt
+  // (QC_REVIEW) là việc của KCS_STAFF, không phải tự duyệt.
+  [BUSINESS_ROLES.HAN_STAFF]: [
+    {
+      module: PERMISSION_MODULES.MATERIAL_ISSUE,
+      actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.PRODUCTION_BATCH,
+      actions: [PermissionAction.CREATE, PermissionAction.VIEW],
+    },
+  ],
+  [BUSINESS_ROLES.SON_STAFF]: [
+    {
+      module: PERMISSION_MODULES.MATERIAL_ISSUE,
+      actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.PRODUCTION_BATCH,
+      actions: [PermissionAction.CREATE, PermissionAction.VIEW],
+    },
+  ],
   // KCS_STAFF toàn quyền QC_REVIEW (tạo qc-review + tạo replenish-request, đều qua action
   // CREATE/UPDATE của module này - xem QcReviewsController) - fulfill/reject request thuộc về
-  // WAREHOUSE_STAFF (cấp bù vật lý), không phải KCS. REPLENISH_REQUEST không phải module riêng -
+  // WAREHOUSE_STAFF (cấp bù vật lý), không phải KCS. Nhánh productionBatchId (Phase 9d,
+  // POST /production-batches/:id/qc-review) dùng CHUNG permission QC_REVIEW này, không cần cấp
+  // thêm gì - đúng thiết kế gốc "2 endpoint riêng ở tầng REST chỉ để URL rõ ràng, service dùng
+  // chung logic". REPLENISH_REQUEST không phải module riêng -
   // dùng chung QC_REVIEW (đúng thiết kế gốc docs/dna-erp-backend-implementation-plan.html 9.2:
   // "2 endpoint riêng ở tầng REST chỉ để URL rõ ràng, service dùng chung logic").
   [BUSINESS_ROLES.KCS_STAFF]: [

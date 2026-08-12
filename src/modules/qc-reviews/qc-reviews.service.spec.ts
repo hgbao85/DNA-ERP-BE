@@ -1,6 +1,11 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { ReplenishRequestStatus, SteelIssueStatus } from '../../generated/prisma/client';
+import {
+  ProductionBatchStatus,
+  ReplenishRequestStatus,
+  SteelIssueStatus,
+} from '../../generated/prisma/client';
+import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { QcReviewsService } from './qc-reviews.service';
 
@@ -9,6 +14,7 @@ describe('QcReviewsService', () => {
   let prisma: {
     qcReview: { create: jest.Mock; findMany: jest.Mock; count: jest.Mock };
     steelIssue: { update: jest.Mock; findUnique: jest.Mock };
+    productionBatch: { update: jest.Mock };
     replenishRequest: {
       create: jest.Mock;
       findUnique: jest.Mock;
@@ -19,6 +25,7 @@ describe('QcReviewsService', () => {
     $transaction: jest.Mock;
   };
   let steelIssuesService: { findOneRowOrThrow: jest.Mock; createReworkIssue: jest.Mock };
+  let productionBatchesService: { findOneRowOrThrow: jest.Mock };
 
   const awaitingIssue = {
     id: 100n,
@@ -46,6 +53,30 @@ describe('QcReviewsService', () => {
     reviewedById: 'user-kcs',
   };
 
+  const awaitingBatch = {
+    id: 700n,
+    stage: 'HAN',
+    productionOrderId: 1n,
+    partId: 40n,
+    reportedQty: 20,
+    status: ProductionBatchStatus.AWAITING_QC,
+    reportedById: 'user-han',
+  };
+
+  const batchQcReview = {
+    id: 501n,
+    steelIssueId: null,
+    productionBatchId: 700n,
+    failedQty: 0,
+    scrapQty: null,
+    defectReasonId: null,
+    defectReason: null,
+    reason: null,
+    photoUrl: null,
+    reviewedAt: new Date(),
+    reviewedById: 'user-kcs',
+  };
+
   beforeEach(() => {
     prisma = {
       qcReview: {
@@ -54,6 +85,7 @@ describe('QcReviewsService', () => {
         count: jest.fn(),
       },
       steelIssue: { update: jest.fn(), findUnique: jest.fn() },
+      productionBatch: { update: jest.fn() },
       replenishRequest: {
         create: jest.fn(),
         findUnique: jest.fn(),
@@ -67,9 +99,13 @@ describe('QcReviewsService', () => {
       findOneRowOrThrow: jest.fn().mockResolvedValue(awaitingIssue),
       createReworkIssue: jest.fn(),
     };
+    productionBatchesService = {
+      findOneRowOrThrow: jest.fn().mockResolvedValue(awaitingBatch),
+    };
     service = new QcReviewsService(
       prisma as unknown as PrismaServiceType,
       steelIssuesService as unknown as SteelIssuesService,
+      productionBatchesService as unknown as ProductionBatchesService,
     );
   });
 
@@ -128,6 +164,62 @@ describe('QcReviewsService', () => {
     });
   });
 
+  describe('reviewProductionBatch', () => {
+    beforeEach(() => {
+      prisma.qcReview.create.mockResolvedValue(batchQcReview);
+    });
+
+    it('duyệt ĐẠT hoàn toàn (failedQty=0) - đóng QC_DONE, reportedQty giữ nguyên', async () => {
+      const result = await service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs');
+
+      expect(prisma.productionBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 700n },
+          data: { status: ProductionBatchStatus.QC_DONE, reportedQty: 20 },
+        }),
+      );
+      expect(prisma.replenishRequest.create).not.toHaveBeenCalled();
+      expect(result.id).toBe('501');
+    });
+
+    it('có phần fail (rework + scrap) - reportedQty ghi đè = phần ĐẠT, KHÔNG tạo lô rework mới', async () => {
+      await service.reviewProductionBatch('700', { failedQty: 5, scrapQty: 2 }, 'user-kcs');
+
+      // passed = 20 - 5 = 15
+      expect(prisma.productionBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { status: ProductionBatchStatus.QC_DONE, reportedQty: 15 },
+        }),
+      );
+      expect(prisma.replenishRequest.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { qcReviewId: 501n, qty: 2 } }),
+      );
+    });
+
+    it('ném ConflictException nếu batch không ở AWAITING_QC', async () => {
+      productionBatchesService.findOneRowOrThrow.mockResolvedValue({
+        ...awaitingBatch,
+        status: ProductionBatchStatus.QC_DONE,
+      });
+
+      await expect(
+        service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs'),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('ném BadRequestException nếu failedQty vượt reportedQty', async () => {
+      await expect(
+        service.reviewProductionBatch('700', { failedQty: 999 }, 'user-kcs'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('ném BadRequestException nếu scrapQty vượt failedQty', async () => {
+      await expect(
+        service.reviewProductionBatch('700', { failedQty: 2, scrapQty: 3 }, 'user-kcs'),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe('fulfillReplenishRequest', () => {
     const openRequest = {
       id: 900n,
@@ -138,7 +230,7 @@ describe('QcReviewsService', () => {
       fulfilledAt: null,
       fulfilledById: null,
       rejectionReason: null,
-      qcReview: { steelIssue: { pieceId: 20n, materialId: 30n } },
+      qcReview: { steelIssueId: 100n, steelIssue: { pieceId: 20n, materialId: 30n } },
     };
     const newIssue = { id: 300n, pieceId: 20n, materialId: 30n };
 
@@ -169,6 +261,18 @@ describe('QcReviewsService', () => {
         }),
       );
       expect(result.status).toBe(ReplenishRequestStatus.FULFILLED);
+    });
+
+    it('ném BadRequestException nếu request sinh từ nhánh Hàn/Sơn (BLOCKED, chưa có quyết định nghiệp vụ)', async () => {
+      prisma.replenishRequest.findUnique.mockResolvedValue({
+        ...openRequest,
+        qcReview: { steelIssueId: null, steelIssue: null },
+      });
+
+      await expect(
+        service.fulfillReplenishRequest('900', { steelIssueId: '300' }, 'user-kho'),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.replenishRequest.update).not.toHaveBeenCalled();
     });
 
     it('ném ConflictException nếu request không còn OPEN', async () => {
