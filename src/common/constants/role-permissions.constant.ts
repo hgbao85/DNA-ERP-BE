@@ -321,6 +321,15 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PRODUCTION_BATCH,
       actions: [PermissionAction.CREATE, PermissionAction.VIEW],
     },
+    // Vá lỗ quyền phát hiện lúc nối FE LenhSanXuatHan (M3, báo sản lượng): trước bản vá này
+    // HAN_STAFF không có cách nào biết trước productionOrderId nào để gọi GET .../production-
+    // batch-plan (partId thật) - cùng tiền lệ đã cấp cho WAREHOUSE_STAFF (role-permissions này,
+    // "Vá lỗ quyền có sẵn từ M2 Phân bổ/nhận hàng đan"). Chỉ VIEW - HAN_STAFF không tự tạo/sửa
+    // ProductionOrder.
+    {
+      module: PERMISSION_MODULES.PRODUCTION_ORDER,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   [BUSINESS_ROLES.SON_STAFF]: [
     {
@@ -330,6 +339,11 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     {
       module: PERMISSION_MODULES.PRODUCTION_BATCH,
       actions: [PermissionAction.CREATE, PermissionAction.VIEW],
+    },
+    // Cùng lý do đã thêm cho HAN_STAFF ở trên.
+    {
+      module: PERMISSION_MODULES.PRODUCTION_ORDER,
+      actions: [PermissionAction.VIEW],
     },
   ],
   // KCS_STAFF toàn quyền QC_REVIEW (tạo qc-review + tạo replenish-request, đều qua action
@@ -344,6 +358,14 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     {
       module: PERMISSION_MODULES.QC_REVIEW,
       actions: [PermissionAction.CREATE, PermissionAction.VIEW, PermissionAction.UPDATE],
+    },
+    // Vá lỗ quyền phát hiện lúc nối FE KcsStagePage (M3): KCS_STAFF chưa từng có
+    // PRODUCTION_BATCH:VIEW nên không gọi được cả GET /production-batches (flat, mới thêm) lẫn
+    // GET production-orders/:id/production-batches cũ - không có cách nào xem lô Hàn/Sơn đang chờ
+    // duyệt. Chỉ VIEW, không CREATE (KCS không tự báo sản lượng).
+    {
+      module: PERMISSION_MODULES.PRODUCTION_BATCH,
+      actions: [PermissionAction.VIEW],
     },
   ],
   // --- Phase 8 (Mua hàng) ---

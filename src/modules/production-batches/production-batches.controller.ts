@@ -7,6 +7,8 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
+import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
+import { ProductionBatchPlanQueryDto } from './dto/production-batch-plan-query.dto';
 import { ProductionBatchesService } from './production-batches.service';
 
 const VIEW = { module: PERMISSION_MODULES.PRODUCTION_BATCH, action: PermissionAction.VIEW };
@@ -39,9 +41,25 @@ export class ProductionBatchesController {
     return this.productionBatchesService.findAllForOrder(id, query);
   }
 
+  /** Tổ Hàn/Sơn tự tra partId thật để báo sản lượng - xem ProductionBatchesService.getBatchPlan(). */
+  @Get('production-orders/:id/production-batch-plan')
+  @RequirePermissions(VIEW)
+  getBatchPlan(@Param('id') id: string, @Query() query: ProductionBatchPlanQueryDto) {
+    return this.productionBatchesService.getBatchPlan(id, query.stage);
+  }
+
   @Get('production-batches/:id')
   @RequirePermissions(VIEW)
   findOne(@Param('id') id: string) {
     return this.productionBatchesService.findOne(id);
+  }
+
+  // ─── KCS (mfgRole = KCS) - xem lô chờ duyệt không cần biết trước PO ──────────
+
+  /** Flat, không cần productionOrderId - xem ListProductionBatchesQueryDto. */
+  @Get('production-batches')
+  @RequirePermissions(VIEW)
+  findAll(@Query() query: ListProductionBatchesQueryDto) {
+    return this.productionBatchesService.findAll(query);
   }
 }

@@ -5,13 +5,22 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MfgRole, MfgStage, Prisma, ProductionOrder } from '../../generated/prisma/client';
+import {
+  MfgRole,
+  MfgStage,
+  Prisma,
+  ProductionBatchStatus,
+  ProductionOrder,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
+import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
+import { ProductionBatchPlanItemResponseDto } from './dto/production-batch-plan-item-response.dto';
+import { ProductionBatchPlanResponseDto } from './dto/production-batch-plan-response.dto';
 import { ProductionBatchResponseDto } from './dto/production-batch-response.dto';
 
 const PRODUCTION_BATCH_INCLUDE = {
@@ -94,10 +103,86 @@ export class ProductionBatchesService {
     return this.toResponseDto(await this.findOneOrThrow(id));
   }
 
+  /** Flat, KHÔNG cần productionOrderId - xem ListProductionBatchesQueryDto tại sao endpoint này
+   *  tồn tại riêng (permission KCS không đủ để tự resolve productionOrderId). */
+  async findAll(
+    query: ListProductionBatchesQueryDto,
+  ): Promise<Paginated<ProductionBatchResponseDto>> {
+    const where: Prisma.ProductionBatchWhereInput = {
+      ...(query.stage ? { stage: query.stage } : {}),
+      ...(query.status ? { status: query.status } : {}),
+    };
+    const result = await paginate(
+      {
+        findMany: (args) =>
+          this.prisma.productionBatch.findMany({ ...args, include: PRODUCTION_BATCH_INCLUDE }),
+        count: (args) => this.prisma.productionBatch.count(args),
+      },
+      query,
+      where,
+      { reportedAt: 'desc' as const },
+    );
+    return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };
+  }
+
   /** Dùng bởi QcReviewsService.reviewProductionBatch() - cùng idiom
    *  SteelIssuesService.findOneRowOrThrow(). */
   async findOneRowOrThrow(id: string): Promise<ProductionBatchRow> {
     return this.findOneOrThrow(id);
+  }
+
+  /**
+   * "Còn phải báo bao nhiêu" theo part - cho HAN_STAFF/SON_STAFF tự tra partId thật để báo sản
+   * lượng, không cần BOM_REVISION:VIEW (chỉ cần biết trước productionOrderId, xem
+   * PRODUCTION_ORDER:VIEW mới cấp cho 2 role này). BomPart không filter theo stage (không có cột
+   * này - 1 Part vật lý đi qua cả Hàn rồi Sơn) nên trả TOÀN BỘ part của BOM; awaitingQcQty/
+   * passedQty mới tính riêng theo đúng stage từ ProductionBatch, cùng idiom
+   * MaterialIssuesService.getIssuePlan().
+   */
+  async getBatchPlan(
+    productionOrderId: string,
+    stage: MfgStage,
+  ): Promise<ProductionBatchPlanResponseDto> {
+    this.assertConsumableStage(stage);
+    const order = await this.findOrderWithProductOrThrow(productionOrderId);
+
+    const [bomParts, batches] = await Promise.all([
+      this.prisma.bomPart.findMany({
+        where: { bomRevisionId: order.bomRevisionId },
+        include: { part: true },
+      }),
+      this.prisma.productionBatch.findMany({
+        where: { productionOrderId: order.id, stage },
+        select: { partId: true, status: true, reportedQty: true },
+      }),
+    ]);
+
+    const awaitingByPart = new Map<string, number>();
+    const passedByPart = new Map<string, number>();
+    for (const b of batches) {
+      const key = b.partId.toString();
+      const target = b.status === ProductionBatchStatus.AWAITING_QC ? awaitingByPart : passedByPart;
+      target.set(key, (target.get(key) ?? 0) + b.reportedQty);
+    }
+
+    const items = bomParts.map((bp) => {
+      const key = bp.partId.toString();
+      return new ProductionBatchPlanItemResponseDto({
+        partId: key,
+        partCode: bp.part.code,
+        partName: bp.part.name,
+        plannedQty: bp.qtyPerUnit * order.quantity,
+        awaitingQcQty: awaitingByPart.get(key) ?? 0,
+        passedQty: passedByPart.get(key) ?? 0,
+      });
+    });
+
+    return new ProductionBatchPlanResponseDto({
+      poNumber: order.poNumber,
+      productName: order.mfgProduct.name,
+      quantity: order.quantity,
+      items,
+    });
   }
 
   private assertConsumableStage(stage: MfgStage): void {
@@ -135,6 +220,20 @@ export class ProductionBatchesService {
   private async findOrderOrThrow(id: string): Promise<ProductionOrder> {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
+    if (!order) {
+      throw new NotFoundException(`Production order ${id} not found`);
+    }
+    return order;
+  }
+
+  /** Chỉ dùng bởi getBatchPlan() - cần thêm mfgProduct.name cho ProductionBatchPlanResponseDto,
+   *  không đụng tới findOrderOrThrow() (create() không cần include này). */
+  private async findOrderWithProductOrThrow(id: string) {
+    const bigId = parseBigIntId(id);
+    const order = await this.prisma.productionOrder.findUnique({
+      where: { id: bigId },
+      include: { mfgProduct: true },
+    });
     if (!order) {
       throw new NotFoundException(`Production order ${id} not found`);
     }
