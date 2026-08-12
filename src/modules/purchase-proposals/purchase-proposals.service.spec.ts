@@ -1,8 +1,14 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { PurchaseProposalStatus } from '../../generated/prisma/client';
+import {
+  InspectionKhoStatus,
+  PurchaseProposalSource,
+  PurchaseProposalStatus,
+} from '../../generated/prisma/client';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { PurchaseProposalsService } from './purchase-proposals.service';
+
+const decimal = (n: number) => ({ toNumber: () => n });
 
 describe('PurchaseProposalsService', () => {
   let service: PurchaseProposalsService;
@@ -12,6 +18,7 @@ describe('PurchaseProposalsService', () => {
       count: jest.Mock;
       findUnique: jest.Mock;
       update: jest.Mock;
+      create: jest.Mock;
     };
     purchaseProposalItem: {
       findFirst: jest.Mock;
@@ -24,6 +31,7 @@ describe('PurchaseProposalsService', () => {
       updateMany: jest.Mock;
       deleteMany: jest.Mock;
     };
+    inspectionKhoResult: { findUnique: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -52,17 +60,41 @@ describe('PurchaseProposalsService', () => {
     id: 400n,
     proposalId: 300n,
     materialId: 30n,
-    actualStock: 0,
-    buyQty: 8,
-    receivedQty: 0,
+    actualStock: decimal(0),
+    buyQty: decimal(8),
+    receivedQty: decimal(0),
     material: material(),
     quotes: [],
+    ...overrides,
+  });
+
+  const khoResultItem = (overrides: Record<string, unknown> = {}) => ({
+    id: 700n,
+    khoResultId: 500n,
+    materialId: 30n,
+    materialName: 'Sơn đen',
+    materialUnit: 'kg',
+    required: decimal(50),
+    actualStock: decimal(10),
+    ...overrides,
+  });
+
+  const khoResult = (overrides: Record<string, unknown> = {}) => ({
+    id: 500n,
+    requestId: 600n,
+    warehouseCode: 'vat-tu-tp',
+    status: InspectionKhoStatus.SUBMITTED,
+    purchaseProposal: null,
+    items: [khoResultItem()],
     ...overrides,
   });
 
   const proposal = (overrides: Record<string, unknown> = {}) => ({
     id: 300n,
     cuttingProposalId: 200n,
+    inspectionKhoResultId: null,
+    sourceType: PurchaseProposalSource.CUTTING_PROPOSAL,
+    idempotencyKey: null,
     warehouseCode: 'phoi-son-han',
     status: PurchaseProposalStatus.NEW,
     createdAt: new Date(),
@@ -78,6 +110,7 @@ describe('PurchaseProposalsService', () => {
         mfgProduct: { factoryCode: 'JSE-55', name: 'Ghế J55' },
       },
     },
+    inspectionKhoResult: null,
     items: [item()],
     ...overrides,
   });
@@ -89,6 +122,7 @@ describe('PurchaseProposalsService', () => {
         count: jest.fn(),
         findUnique: jest.fn(),
         update: jest.fn(),
+        create: jest.fn(),
       },
       purchaseProposalItem: {
         findFirst: jest.fn(),
@@ -101,6 +135,7 @@ describe('PurchaseProposalsService', () => {
         updateMany: jest.fn(),
         deleteMany: jest.fn(),
       },
+      inspectionKhoResult: { findUnique: jest.fn() },
       warehouse: {
         findUniqueOrThrow: jest.fn(({ where }: { where: { code: string } }) =>
           Promise.resolve(where.code === 'SUPPLIER' ? { id: 700n } : { id: 800n }),
@@ -369,11 +404,11 @@ describe('PurchaseProposalsService', () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           status: PurchaseProposalStatus.PURCHASING,
-          items: [item({ materialId: 30n, buyQty: 8, receivedQty: 3 })],
+          items: [item({ materialId: 30n, buyQty: decimal(8), receivedQty: decimal(3) })],
         }),
       );
       prisma.purchaseProposalItem.update.mockResolvedValue(
-        item({ buyQty: 8, receivedQty: 8, quotes: [] }),
+        item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
 
       const result = await service.receiveItem(
@@ -405,11 +440,11 @@ describe('PurchaseProposalsService', () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           status: PurchaseProposalStatus.PURCHASING,
-          items: [item({ buyQty: 8, receivedQty: 8 })],
+          items: [item({ buyQty: decimal(8), receivedQty: decimal(8) })],
         }),
       );
       prisma.purchaseProposalItem.update.mockResolvedValue(
-        item({ buyQty: 8, receivedQty: 8, quotes: [] }),
+        item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
 
       await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
@@ -421,11 +456,11 @@ describe('PurchaseProposalsService', () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           status: PurchaseProposalStatus.PURCHASING,
-          items: [item({ id: 400n, buyQty: 8, receivedQty: 0 })],
+          items: [item({ id: 400n, buyQty: decimal(8), receivedQty: decimal(0) })],
         }),
       );
       prisma.purchaseProposalItem.update.mockResolvedValue(
-        item({ buyQty: 8, receivedQty: 8, quotes: [] }),
+        item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
 
       await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1');
@@ -441,18 +476,157 @@ describe('PurchaseProposalsService', () => {
         proposal({
           status: PurchaseProposalStatus.PURCHASING,
           items: [
-            item({ id: 400n, buyQty: 8, receivedQty: 0 }),
-            item({ id: 401n, buyQty: 5, receivedQty: 0 }),
+            item({ id: 400n, buyQty: decimal(8), receivedQty: decimal(0) }),
+            item({ id: 401n, buyQty: decimal(5), receivedQty: decimal(0) }),
           ],
         }),
       );
       prisma.purchaseProposalItem.update.mockResolvedValue(
-        item({ id: 400n, buyQty: 8, receivedQty: 8, quotes: [] }),
+        item({ id: 400n, buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
 
       await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1');
 
       expect(prisma.purchaseProposal.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createFromInspection', () => {
+    it('creates a MATERIAL_INSPECTION proposal from a SUBMITTED kho-result and returns it mapped', async () => {
+      prisma.inspectionKhoResult.findUnique.mockResolvedValue(khoResult());
+      prisma.purchaseProposal.create.mockResolvedValue({ id: 900n });
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          id: 900n,
+          cuttingProposalId: null,
+          inspectionKhoResultId: 500n,
+          sourceType: PurchaseProposalSource.MATERIAL_INSPECTION,
+          warehouseCode: 'vat-tu-tp',
+          cuttingProposal: null,
+          inspectionKhoResult: {
+            request: {
+              productionOrder: {
+                poNumber: 'PO-9',
+                mfgProduct: { factoryCode: 'JSE-55', name: 'Ghế J55' },
+              },
+            },
+          },
+          items: [item({ materialId: 30n })],
+        }),
+      );
+
+      const result = await service.createFromInspection(
+        { inspectionKhoResultId: '500', items: [{ itemId: '700', buyQty: 40 }] },
+        undefined,
+      );
+
+      expect(prisma.purchaseProposal.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            sourceType: PurchaseProposalSource.MATERIAL_INSPECTION,
+            inspectionKhoResultId: 500n,
+            warehouseCode: 'vat-tu-tp',
+            idempotencyKey: undefined,
+            items: { create: [expect.objectContaining({ materialId: 30n, buyQty: 40 })] },
+          }) as unknown,
+        }),
+      );
+      expect(result.sourceType).toBe(PurchaseProposalSource.MATERIAL_INSPECTION);
+      expect(result.cuttingProposalId).toBeNull();
+      expect(result.poNumber).toBe('PO-9');
+    });
+
+    it('replays the existing proposal on idempotency-key retry, without creating a new one', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValueOnce({ id: 900n }).mockResolvedValueOnce(
+        proposal({
+          id: 900n,
+          cuttingProposalId: null,
+          inspectionKhoResultId: 500n,
+          sourceType: PurchaseProposalSource.MATERIAL_INSPECTION,
+          cuttingProposal: null,
+          inspectionKhoResult: {
+            request: {
+              productionOrder: {
+                poNumber: 'PO-9',
+                mfgProduct: { factoryCode: 'JSE-55', name: 'Ghế J55' },
+              },
+            },
+          },
+        }),
+      );
+
+      const result = await service.createFromInspection(
+        { inspectionKhoResultId: '500', items: [{ itemId: '700', buyQty: 40 }] },
+        'insp-key-1',
+      );
+
+      expect(prisma.inspectionKhoResult.findUnique).not.toHaveBeenCalled();
+      expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+      expect(result.id).toBe('900');
+    });
+
+    it('rejects when the kho-result does not exist', async () => {
+      prisma.inspectionKhoResult.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.createFromInspection(
+          { inspectionKhoResultId: '999', items: [{ itemId: '700', buyQty: 40 }] },
+          undefined,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects when the kho-result is not SUBMITTED yet', async () => {
+      prisma.inspectionKhoResult.findUnique.mockResolvedValue(
+        khoResult({ status: InspectionKhoStatus.PENDING }),
+      );
+
+      await expect(
+        service.createFromInspection(
+          { inspectionKhoResultId: '500', items: [{ itemId: '700', buyQty: 40 }] },
+          undefined,
+        ),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the kho-result already has a purchase proposal', async () => {
+      prisma.inspectionKhoResult.findUnique.mockResolvedValue(
+        khoResult({ purchaseProposal: { id: 800n } }),
+      );
+
+      await expect(
+        service.createFromInspection(
+          { inspectionKhoResultId: '500', items: [{ itemId: '700', buyQty: 40 }] },
+          undefined,
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('rejects an itemId that does not belong to this kho-result', async () => {
+      prisma.inspectionKhoResult.findUnique.mockResolvedValue(khoResult());
+
+      await expect(
+        service.createFromInspection(
+          { inspectionKhoResultId: '500', items: [{ itemId: '999', buyQty: 40 }] },
+          undefined,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects a line whose InspectionKhoResultItem has no materialId', async () => {
+      prisma.inspectionKhoResult.findUnique.mockResolvedValue(
+        khoResult({
+          items: [khoResultItem({ materialId: null, materialName: 'Bao bì lạ chưa gắn vật tư' })],
+        }),
+      );
+
+      await expect(
+        service.createFromInspection(
+          { inspectionKhoResultId: '500', items: [{ itemId: '700', buyQty: 4 }] },
+          undefined,
+        ),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });

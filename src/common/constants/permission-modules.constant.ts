@@ -43,6 +43,8 @@ export const PERMISSION_MODULES = {
   MATERIAL_ISSUE: 'MATERIAL_ISSUE',
   // --- Phase 9d (MES-B execution - sản lượng Hàn/Sơn) ---
   PRODUCTION_BATCH: 'PRODUCTION_BATCH',
+  // --- Phase 10 (Kiểm tra vật tư trước sản xuất) ---
+  MATERIAL_INSPECTION: 'MATERIAL_INSPECTION',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

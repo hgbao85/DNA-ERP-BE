@@ -50,6 +50,7 @@ import { QcReviewsModule } from './modules/qc-reviews/qc-reviews.module';
 import { WeavingIssuesModule } from './modules/weaving-issues/weaving-issues.module';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module';
 import { ProductionBatchesModule } from './modules/production-batches/production-batches.module';
+import { MaterialInspectionModule } from './modules/material-inspection/material-inspection.module';
 
 @Module({
   imports: [
@@ -119,6 +120,7 @@ import { ProductionBatchesModule } from './modules/production-batches/production
     WeavingIssuesModule,
     MaterialIssuesModule,
     ProductionBatchesModule,
+    MaterialInspectionModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

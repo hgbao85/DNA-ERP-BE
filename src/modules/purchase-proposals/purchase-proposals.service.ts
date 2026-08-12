@@ -5,7 +5,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, PurchaseProposalStatus, StockLedgerRefType } from '../../generated/prisma/client';
+import {
+  InspectionKhoStatus,
+  Prisma,
+  PurchaseProposalSource,
+  PurchaseProposalStatus,
+  StockLedgerRefType,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -13,6 +19,7 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { ApprovePurchaseProposalDto } from './dto/approve-purchase-proposal.dto';
+import { CreateManualPurchaseProposalDto } from './dto/create-manual-purchase-proposal.dto';
 import { CreateQuoteDto } from './dto/create-quote.dto';
 import {
   PurchaseProposalItemResponseDto,
@@ -28,6 +35,9 @@ const SUPPLIER_WAREHOUSE_CODE = 'SUPPLIER';
 
 const LIST_INCLUDE = {
   cuttingProposal: { include: { productionOrder: { include: { mfgProduct: true } } } },
+  inspectionKhoResult: {
+    include: { request: { include: { productionOrder: { include: { mfgProduct: true } } } } },
+  },
 } satisfies Prisma.PurchaseProposalInclude;
 
 const ITEM_INCLUDE = {
@@ -48,11 +58,14 @@ type PurchaseProposalItemRow = Prisma.PurchaseProposalItemGetPayload<{
 
 /**
  * Mua hàng (Phase 8, rút gọn) - tiêu thụ PurchaseProposal do CuttingProposalsService.approve()
- * tự sinh (không có API tạo thủ công). State machine 1 chiều:
- * NEW -> QUOTING -> SUBMITTED -> PURCHASING -> PURCHASED, hoặc SUBMITTED -> REJECTED -> QUOTING
- * (báo giá lại). `actualStock`/`buyQty` đã đối chiếu tồn kho thật (StockQuant) ngay lúc tạo -
- * xem CuttingProposalsService.approve(). Khi Thủ kho xác nhận nhận hàng (receiveItem), phần
- * mới nhận được ghi vào StockLedger (refType=PURCHASE) để cộng lại tồn kho vật lý.
+ * tự sinh (sourceType=CUTTING_PROPOSAL), HOẶC tạo thủ công từ Kiểm tra vật tư (sourceType=
+ * MATERIAL_INSPECTION, xem createFromInspection() - Phase 10, 2026-08-12). State machine 1
+ * chiều dùng chung cho cả 2 nguồn: NEW -> QUOTING -> SUBMITTED -> PURCHASING -> PURCHASED, hoặc
+ * SUBMITTED -> REJECTED -> QUOTING (báo giá lại). `actualStock`/`buyQty` đã đối chiếu tồn kho
+ * thật (StockQuant) ngay lúc tạo dòng - xem CuttingProposalsService.approve() /
+ * InspectionKhoResultItem.actualStock (chốt lúc submitKho). Khi Thủ kho xác nhận nhận hàng
+ * (receiveItem), phần mới nhận được ghi vào StockLedger (refType=PURCHASE) để cộng lại tồn kho
+ * vật lý.
  */
 @Injectable()
 export class PurchaseProposalsService {
@@ -246,8 +259,10 @@ export class PurchaseProposalsService {
       throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
     }
 
-    const nextReceivedQty = Math.min(item.buyQty, item.receivedQty + dto.receivedQty);
-    const incrementQty = nextReceivedQty - item.receivedQty;
+    const buyQty = item.buyQty.toNumber();
+    const currentReceivedQty = item.receivedQty.toNumber();
+    const nextReceivedQty = Math.min(buyQty, currentReceivedQty + dto.receivedQty);
+    const incrementQty = nextReceivedQty - currentReceivedQty;
     const nextReceivedQtyPurchaseUnit = dto.receivedQtyPurchaseUnit
       ? (item.receivedQtyPurchaseUnit?.toNumber() ?? 0) + dto.receivedQtyPurchaseUnit
       : item.receivedQtyPurchaseUnit?.toNumber();
@@ -283,7 +298,9 @@ export class PurchaseProposalsService {
       });
 
       const allReceived = proposal.items.every((it) =>
-        it.id === item.id ? nextReceivedQty >= it.buyQty : it.receivedQty >= it.buyQty,
+        it.id === item.id
+          ? nextReceivedQty >= buyQty
+          : it.receivedQty.toNumber() >= it.buyQty.toNumber(),
       );
       if (allReceived) {
         await tx.purchaseProposal.update({
@@ -296,6 +313,75 @@ export class PurchaseProposalsService {
     });
 
     return this.toItemResponseDto(updatedItem);
+  }
+
+  /**
+   * KHSX tạo đề xuất mua thủ công từ 1 InspectionKhoResult đã SUBMITTED, còn thiếu vật tư
+   * (markProposalCreated trong mock) - Phase 10, 2026-08-12. actualStock lấy từ chính
+   * InspectionKhoResultItem (đã chốt lúc submitKho, không nhận lại từ body). Không tự bắt P2002:
+   * @@unique(inspectionKhoResultId)/idempotencyKey đã đủ, AllExceptionsFilter map thành 409
+   * chung (cùng idiom SkusService, chỗ không cần fetch lại giá trị cũ khi đụng race).
+   */
+  async createFromInspection(
+    dto: CreateManualPurchaseProposalDto,
+    idempotencyKey?: string,
+  ): Promise<PurchaseProposalResponseDto> {
+    if (idempotencyKey) {
+      const existing = await this.prisma.purchaseProposal.findUnique({ where: { idempotencyKey } });
+      if (existing) {
+        return this.findOne(existing.id.toString());
+      }
+    }
+
+    const khoResultId = parseBigIntId(dto.inspectionKhoResultId);
+    const khoResult = await this.prisma.inspectionKhoResult.findUnique({
+      where: { id: khoResultId },
+      include: { items: true, purchaseProposal: true },
+    });
+    if (!khoResult) {
+      throw new NotFoundException(`Inspection kho result ${dto.inspectionKhoResultId} not found`);
+    }
+    if (khoResult.status !== InspectionKhoStatus.SUBMITTED) {
+      throw new ConflictException(
+        `Kho-result ${dto.inspectionKhoResultId} đang ở trạng thái ${khoResult.status} - chỉ SUBMITTED mới tạo được đề xuất mua`,
+      );
+    }
+    if (khoResult.purchaseProposal) {
+      throw new ConflictException(
+        `Kho-result ${dto.inspectionKhoResultId} đã có đề xuất mua (${khoResult.purchaseProposal.id})`,
+      );
+    }
+
+    const itemsById = new Map(khoResult.items.map((it) => [it.id.toString(), it]));
+    const createItems = dto.items.map((line) => {
+      const source = itemsById.get(line.itemId);
+      if (!source) {
+        throw new NotFoundException(
+          `Item ${line.itemId} không thuộc kho-result ${dto.inspectionKhoResultId}`,
+        );
+      }
+      if (source.materialId === null) {
+        throw new BadRequestException(
+          `Dòng '${source.materialName}' chưa gắn vật tư thật - không thể tạo đề xuất mua tự động, xử lý thủ công`,
+        );
+      }
+      return {
+        materialId: source.materialId,
+        actualStock: source.actualStock ?? 0,
+        buyQty: line.buyQty,
+      };
+    });
+
+    const created = await this.prisma.purchaseProposal.create({
+      data: {
+        sourceType: PurchaseProposalSource.MATERIAL_INSPECTION,
+        inspectionKhoResultId: khoResult.id,
+        warehouseCode: khoResult.warehouseCode,
+        idempotencyKey,
+        items: { create: createItems },
+      },
+    });
+    return this.findOne(created.id.toString());
   }
 
   private async findRawOrThrow(id: string) {
@@ -331,14 +417,24 @@ export class PurchaseProposalsService {
   }
 
   private toResponseDto(row: PurchaseProposalRow): PurchaseProposalResponseDto {
+    // sourceType quyết định nhánh đọc poNumber/mfgProduct: CUTTING_PROPOSAL luôn có
+    // row.cuttingProposal, MATERIAL_INSPECTION luôn có row.inspectionKhoResult (đối xứng, cả 2
+    // đều dẫn tới cùng shape { poNumber, mfgProduct } qua ProductionOrder - xem
+    // MaterialInspectionRequest.productionOrderId).
+    const productionOrder =
+      row.sourceType === PurchaseProposalSource.CUTTING_PROPOSAL
+        ? row.cuttingProposal!.productionOrder
+        : row.inspectionKhoResult!.request.productionOrder;
     return new PurchaseProposalResponseDto({
       id: row.id.toString(),
-      cuttingProposalId: row.cuttingProposalId.toString(),
+      cuttingProposalId: row.cuttingProposalId?.toString() ?? null,
+      inspectionKhoResultId: row.inspectionKhoResultId?.toString() ?? null,
+      sourceType: row.sourceType,
       warehouseCode: row.warehouseCode,
       status: row.status,
-      poNumber: row.cuttingProposal.productionOrder.poNumber,
-      mfgProductCode: row.cuttingProposal.productionOrder.mfgProduct.factoryCode,
-      mfgProductName: row.cuttingProposal.productionOrder.mfgProduct.name,
+      poNumber: productionOrder.poNumber,
+      mfgProductCode: productionOrder.mfgProduct.factoryCode,
+      mfgProductName: productionOrder.mfgProduct.name,
       createdAt: row.createdAt,
       submittedAt: row.submittedAt,
       approvedAt: row.approvedAt,
@@ -363,9 +459,9 @@ export class PurchaseProposalsService {
       unit: item.material.unit,
       purchaseUnit: item.material.purchaseUnit ?? null,
       khoUnitFactor: item.material.khoUnitFactor?.toNumber() ?? null,
-      actualStock: item.actualStock,
-      buyQty: item.buyQty,
-      receivedQty: item.receivedQty,
+      actualStock: item.actualStock.toNumber(),
+      buyQty: item.buyQty.toNumber(),
+      receivedQty: item.receivedQty.toNumber(),
       receivedQtyPurchaseUnit: item.receivedQtyPurchaseUnit?.toNumber() ?? null,
       quotes: item.quotes.map(
         (q) =>

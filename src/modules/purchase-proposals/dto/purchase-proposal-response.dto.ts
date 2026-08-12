@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose, Type } from 'class-transformer';
-import { PurchaseProposalStatus } from '../../../generated/prisma/client';
+import { PurchaseProposalSource, PurchaseProposalStatus } from '../../../generated/prisma/client';
 
 @Exclude()
 export class PurchaseProposalQuoteResponseDto {
@@ -49,7 +49,10 @@ export class PurchaseProposalItemResponseDto {
 @Exclude()
 export class PurchaseProposalResponseDto {
   @Expose() @ApiProperty() id!: string;
-  @Expose() @ApiProperty() cuttingProposalId!: string;
+  /// null khi sourceType=MATERIAL_INSPECTION (xem inspectionKhoResultId thay thế).
+  @Expose() @ApiPropertyOptional({ nullable: true }) cuttingProposalId!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) inspectionKhoResultId!: string | null;
+  @Expose() @ApiProperty({ enum: PurchaseProposalSource }) sourceType!: PurchaseProposalSource;
   @Expose() @ApiProperty() warehouseCode!: string;
   @Expose() @ApiProperty({ enum: PurchaseProposalStatus }) status!: PurchaseProposalStatus;
   /// PO nội bộ (ProductionOrder.poNumber, vd "PO-9") - KHÁC mã đơn hàng khách, vì đường đi rút

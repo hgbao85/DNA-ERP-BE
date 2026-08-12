@@ -1,5 +1,12 @@
 import { randomUUID } from 'crypto';
-import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma, ProdApprovalStatus, ProductionInvoiceStatus } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -11,8 +18,10 @@ import { ProductionOrdersService } from '../production-orders/production-orders.
 import { SkusService } from '../skus/skus.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
+import { PackagingResponseDto } from './dto/packaging-response.dto';
 import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-response.dto';
 import { ProductionInvoiceResponseDto } from './dto/production-invoice-response.dto';
+import { RecordPackagingDto } from './dto/record-packaging.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { TransferCheckPieceResponseDto } from './dto/transfer-check-piece-response.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
@@ -479,6 +488,60 @@ export class ProductionInvoicesService {
 
     const pieces = await this.listTransferCheckPieces(piId, itemId);
     return pieces.find((p) => p.pieceId === dto.pieceId)!;
+  }
+
+  // ─── Đóng gói (PACKAGING) - mirror TransferCheckResult (append-only, SUM-on-read) nhưng đơn
+  // giản hơn: theo ProductionInvoiceItem (không theo BomPiece), không có sub-bảng defect. Quyết
+  // định nghiệp vụ 2026-08-12: KHÔNG chặn theo số đã qua Chuyền kiểm - chỉ chặn vượt totalQty ───
+
+  async getPackaging(piId: string, itemId: string): Promise<PackagingResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const item = await this.findItemOrThrow(pi.id, itemId);
+    const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
+    const packedQty = await this.sumPacked(item.id);
+    return new PackagingResponseDto({
+      totalQty: productionOrder.quantity,
+      packedQty,
+      remainingQty: productionOrder.quantity - packedQty,
+    });
+  }
+
+  /** Luôn tạo dòng MỚI (không update-in-place) - cùng lý do TransferCheckResult làm vậy. */
+  async recordPackaging(
+    piId: string,
+    itemId: string,
+    dto: RecordPackagingDto,
+    actorUserId: string,
+  ): Promise<PackagingResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const item = await this.findItemOrThrow(pi.id, itemId);
+    const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
+    const packedSoFar = await this.sumPacked(item.id);
+    if (packedSoFar + dto.boxesPacked > productionOrder.quantity) {
+      throw new BadRequestException(
+        `Số thùng đóng (${dto.boxesPacked}) vượt quá số còn có thể đóng cho item ${itemId} ` +
+          `(tổng ${productionOrder.quantity}, đã đóng ${packedSoFar}, còn ${productionOrder.quantity - packedSoFar})`,
+      );
+    }
+
+    await this.prisma.packagingRecord.create({
+      data: {
+        productionInvoiceItemId: item.id,
+        boxesPacked: dto.boxesPacked,
+        note: dto.note,
+        packedById: actorUserId,
+      },
+    });
+
+    return this.getPackaging(piId, itemId);
+  }
+
+  private async sumPacked(productionInvoiceItemId: bigint): Promise<number> {
+    const result = await this.prisma.packagingRecord.aggregate({
+      where: { productionInvoiceItemId },
+      _sum: { boxesPacked: true },
+    });
+    return result._sum.boxesPacked ?? 0;
   }
 
   private async findProductionOrderOrThrow(itemBigId: bigint, itemId: string) {

@@ -67,28 +67,31 @@ model User {
   isProductPlanner Boolean  @default(false)
   isSale           Boolean  @default(false)
 
-  roles                      UserRole[]
-  refreshTokens              RefreshToken[]
-  notifications              Notification[]
-  notificationReads          NotificationRead[]
-  planForms                  PlanForm[]
-  piRequestedItems           ProductionInvoiceItem[] @relation("PIItemRequestedBy")
-  piQlsxItems                ProductionInvoiceItem[] @relation("PIItemQlsxBy")
-  piDecidedItems             ProductionInvoiceItem[] @relation("PIItemDecidedBy")
-  cuttingProposalsRequested  CuttingProposal[]       @relation("CuttingProposalRequestedBy")
-  cuttingProposalsApproved   CuttingProposal[]       @relation("CuttingProposalApprovedBy")
-  transferCheckResults       TransferCheckResult[]   @relation("TransferCheckCheckedBy")
-  purchaseProposalsApproved  PurchaseProposal[]
-  stockLedgerEntries         StockLedger[]
-  materialsToBuy             Material[]
-  steelIssuesIssued          SteelIssue[]            @relation("SteelIssueIssuedBy")
-  qcReviewsReviewed          QcReview[]              @relation("QcReviewReviewedBy")
-  replenishRequestsFulfilled ReplenishRequest[]      @relation("ReplenishRequestFulfilledBy")
-  weavingIssuesIssued        WeavingIssue[]          @relation("WeavingIssueIssuedBy")
-  weavingReceiptsReceived    WeavingReceipt[]        @relation("WeavingReceiptReceivedBy")
-  materialIssuesIssued       MaterialIssue[]         @relation("MaterialIssueIssuedBy")
-  materialIssuesReceived     MaterialIssue[]         @relation("MaterialIssueReceivedBy")
-  productionBatchesReported  ProductionBatch[]       @relation("ProductionBatchReportedBy")
+  roles                             UserRole[]
+  refreshTokens                     RefreshToken[]
+  notifications                     Notification[]
+  notificationReads                 NotificationRead[]
+  planForms                         PlanForm[]
+  piRequestedItems                  ProductionInvoiceItem[]     @relation("PIItemRequestedBy")
+  piQlsxItems                       ProductionInvoiceItem[]     @relation("PIItemQlsxBy")
+  piDecidedItems                    ProductionInvoiceItem[]     @relation("PIItemDecidedBy")
+  cuttingProposalsRequested         CuttingProposal[]           @relation("CuttingProposalRequestedBy")
+  cuttingProposalsApproved          CuttingProposal[]           @relation("CuttingProposalApprovedBy")
+  transferCheckResults              TransferCheckResult[]       @relation("TransferCheckCheckedBy")
+  purchaseProposalsApproved         PurchaseProposal[]
+  stockLedgerEntries                StockLedger[]
+  materialsToBuy                    Material[]
+  steelIssuesIssued                 SteelIssue[]                @relation("SteelIssueIssuedBy")
+  qcReviewsReviewed                 QcReview[]                  @relation("QcReviewReviewedBy")
+  replenishRequestsFulfilled        ReplenishRequest[]          @relation("ReplenishRequestFulfilledBy")
+  weavingIssuesIssued               WeavingIssue[]              @relation("WeavingIssueIssuedBy")
+  weavingReceiptsReceived           WeavingReceipt[]            @relation("WeavingReceiptReceivedBy")
+  materialIssuesIssued              MaterialIssue[]             @relation("MaterialIssueIssuedBy")
+  materialIssuesReceived            MaterialIssue[]             @relation("MaterialIssueReceivedBy")
+  productionBatchesReported         ProductionBatch[]           @relation("ProductionBatchReportedBy")
+  materialInspectionRequestsCreated MaterialInspectionRequest[]
+  inspectionKhoResultsSubmitted     InspectionKhoResult[]
+  packagingRecordsPacked            PackagingRecord[]
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -308,26 +311,26 @@ enum MaterialDetailKind {
 }
 
 model Material {
-  id              BigInt              @id @default(autoincrement())
-  code            String              @unique
-  name            String
-  unit            String
-  spec            String?
-  materialGroupId BigInt?
+  id                        BigInt              @id @default(autoincrement())
+  code                      String              @unique
+  name                      String
+  unit                      String
+  spec                      String?
+  materialGroupId           BigInt?
   /// Sơn/Phụ kiện/Bao bì (chỉ có ý nghĩa khi materialGroup.systemKey = OTHER "Vật tư khác" -
   /// null với mọi nhóm khác) - dùng để lọc riêng từng tab trên trang Định mức chi tiết
   /// (SpecDetailQuotaPage.tsx), vì 3 tab đó giờ dùng CHUNG 1 nhóm vật tư nên không còn phân
   /// biệt được qua materialGroupId nữa. Bắt buộc chọn ở Admin > Vật tư khi nhóm = Vật tư khác
   /// (MaterialsService.resolveDetailKind), tự dọn về null khi đổi sang nhóm khác.
-  detailKind      MaterialDetailKind?
-  warehouseId     BigInt?
-  buyerId         String?
+  detailKind                MaterialDetailKind?
+  warehouseId               BigInt?
+  buyerId                   String?
   /// Đơn vị mua hàng từ NCC khi khác với `unit` (đơn vị tồn kho/sản xuất) - vd NCC bán theo "kg"
   /// nhưng sản xuất dùng "cái". Để trống nếu vật tư chỉ có 1 đơn vị duy nhất (unit).
-  purchaseUnit    String?
+  purchaseUnit              String?
   /// Hệ số quy đổi: số lượng `unit` tương ứng với 1 `purchaseUnit` (vd 250 = 250 cái/kg).
   /// Chỉ có ý nghĩa khi purchaseUnit khác null.
-  khoUnitFactor   Decimal?            @db.Decimal(14, 4)
+  khoUnitFactor             Decimal?            @db.Decimal(14, 4)
   /// % hao hụt Sếp cấp riêng cho vật tư này - CHỈ có ý nghĩa khi materialGroup.systemKey =
   /// STEEL_BAR (null với mọi nhóm khác, xem MaterialsService.resolveWasteFields - mirror
   /// resolveDetailKind ở trên). Đây là NGƯỠNG hao hụt tối đa chấp nhận được khi cắt (không
@@ -335,7 +338,7 @@ model Material {
   /// max_waste_percentage riêng cho vật tư này, ghi đè SystemConfig.solverMaxWastePercentage
   /// (vẫn là mặc định khi để trống). Đặt quá thấp có thể khiến solver KHÔNG tìm được phương án
   /// cắt nào (vô nghiệm), không phải chỉ là "cảnh báo" - xem comment ở nơi gọi.
-  maxCuttingWastePercentage Decimal?  @db.Decimal(6, 3)
+  maxCuttingWastePercentage Decimal?            @db.Decimal(6, 3)
   /// % dự trù hao hụt khi MUA vật tư này (vd bao bì rách/lỗi lúc vận chuyển) - CHỈ có ý nghĩa
   /// khi materialGroup.systemKey KHÁC STEEL_BAR (null với Sắt, xem
   /// MaterialsService.resolveWasteFields). Khác hẳn maxCuttingWastePercentage ở trên: đây là
@@ -343,12 +346,12 @@ model Material {
   /// không phải ràng buộc. Field sẵn sàng nhưng CHƯA nối vào luồng đề xuất mua nào (luồng đó
   /// hiện chỉ tồn tại cho Sắt, xem cutting-proposals.service.ts) - chờ xây khi có luồng cho
   /// vật tư khác.
-  purchaseWastePercentage   Decimal?  @db.Decimal(6, 3)
-  imageUrl        String?
-  isActive        Boolean             @default(true)
-  deletedAt       DateTime?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  purchaseWastePercentage   Decimal?            @db.Decimal(6, 3)
+  imageUrl                  String?
+  isActive                  Boolean             @default(true)
+  deletedAt                 DateTime?
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @updatedAt
 
   materialGroup                 MaterialGroup?                 @relation(fields: [materialGroupId], references: [id])
   warehouse                     Warehouse?                     @relation(fields: [warehouseId], references: [id])
@@ -366,6 +369,7 @@ model Material {
   pieceMaterialItems            PieceMaterialItem[]
   steelIssues                   SteelIssue[]
   materialIssues                MaterialIssue[]
+  inspectionKhoResultItems      InspectionKhoResultItem[]
 
   @@index([materialGroupId])
   @@index([warehouseId])
@@ -915,14 +919,15 @@ model PlanForm {
   createdAt                 DateTime       @default(now())
   updatedAt                 DateTime       @updatedAt
 
-  salesOrder         SalesOrder?            @relation(fields: [salesOrderId], references: [id])
-  mfgProduct         MfgProduct             @relation(fields: [mfgProductId], references: [id])
-  productionInvoice  ProductionInvoice?     @relation(fields: [productionInvoiceId], references: [id])
-  createdBy          User                   @relation(fields: [createdById], references: [id])
-  manhReviews        PlanFormManhReview[]
-  detailReviews      PlanFormDetailReview[]
-  bomRevisions       BomRevision[]
-  warehouseTransfers WarehouseTransfer[]
+  salesOrder                SalesOrder?                @relation(fields: [salesOrderId], references: [id])
+  mfgProduct                MfgProduct                 @relation(fields: [mfgProductId], references: [id])
+  productionInvoice         ProductionInvoice?         @relation(fields: [productionInvoiceId], references: [id])
+  createdBy                 User                       @relation(fields: [createdById], references: [id])
+  manhReviews               PlanFormManhReview[]
+  detailReviews             PlanFormDetailReview[]
+  bomRevisions              BomRevision[]
+  warehouseTransfers        WarehouseTransfer[]
+  materialInspectionRequest MaterialInspectionRequest?
 
   @@index([salesOrderId])
   @@index([mfgProductId])
@@ -1021,6 +1026,7 @@ model ProductionInvoiceItem {
   stages               ProductionInvoiceItemStage[]
   productionOrder      ProductionOrder?
   transferCheckResults TransferCheckResult[]
+  packagingRecords     PackagingRecord[]
 
   @@index([productionInvoiceId])
   @@index([mfgProductId])
@@ -1096,6 +1102,28 @@ model TransferCheckDefect {
   @@map("transfer_check_defects")
 }
 
+/// Kết quả đóng gói tại công đoạn PACKAGING - mirror TransferCheckResult (append-only, SUM-
+/// on-read, không lost-update) NHƯNG đơn giản hơn: theo dõi theo ProductionInvoiceItem (không
+/// theo BomPiece - "Thùng thành phẩm" là 1 dòng duy nhất/SKU, không tách theo mảnh), và không
+/// có sub-bảng defect (đóng gói hiện không có khái niệm QC/lỗi). totalQty KHÔNG lưu ở đây -
+/// suy trực tiếp từ ProductionOrder.quantity tại thời điểm đọc (KHÔNG qua PackagingBom - model
+/// đó là định mức tiêu hao vật tư đóng gói, không phải "bao nhiêu thùng"). Quyết định nghiệp vụ
+/// 2026-08-12: KHÔNG chặn theo SUM(TransferCheckResult.checkedQty) - chỉ chặn vượt totalQty.
+model PackagingRecord {
+  id                      BigInt   @id @default(autoincrement())
+  productionInvoiceItemId BigInt
+  boxesPacked             Int
+  note                    String?
+  packedById              String
+  packedAt                DateTime @default(now())
+
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+  packedBy              User                  @relation(fields: [packedById], references: [id])
+
+  @@index([productionInvoiceItemId])
+  @@map("packaging_records")
+}
+
 // =====================================================================
 // Phase 7 — Production Order & Cutting Proposal (tích hợp cat_sat_iea)
 // Nguồn: docs/dna-erp-backend-implementation-plan.md mục Phase 7, điều chỉnh theo quyết
@@ -1145,15 +1173,16 @@ model ProductionOrder {
   releasedAt              DateTime?             @default(now())
   createdAt               DateTime              @default(now())
 
-  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
-  mfgProduct            MfgProduct            @relation(fields: [mfgProductId], references: [id])
-  bomRevision           BomRevision           @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
-  cuttingProposals      CuttingProposal[]
-  steelIssues           SteelIssue[]
-  weavingIssues         WeavingIssue[]
-  weavingReceipts       WeavingReceipt[]
-  materialIssues        MaterialIssue[]
-  productionBatches     ProductionBatch[]
+  productionInvoiceItem      ProductionInvoiceItem       @relation(fields: [productionInvoiceItemId], references: [id])
+  mfgProduct                 MfgProduct                  @relation(fields: [mfgProductId], references: [id])
+  bomRevision                BomRevision                 @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
+  cuttingProposals           CuttingProposal[]
+  steelIssues                SteelIssue[]
+  weavingIssues              WeavingIssue[]
+  weavingReceipts            WeavingReceipt[]
+  materialIssues             MaterialIssue[]
+  productionBatches          ProductionBatch[]
+  materialInspectionRequests MaterialInspectionRequest[]
 
   @@index([mfgProductId])
   @@map("production_orders")
@@ -1267,7 +1296,11 @@ model CuttingProposalPatternSegment {
 // buyQty = CuttingProposalLine.totalBars nguyên văn, không trừ tồn. Khi nào cần đối chiếu
 // tồn kho thì thêm cột/migration riêng lúc đó, không đoán trước field chưa dùng tới ở đây.
 // 1 PurchaseProposal tự sinh ngay khi CuttingProposal chuyển APPROVED (xem
-// CuttingProposalsService.approve()) - không có API tạo thủ công.
+// CuttingProposalsService.approve()).
+// Mở rộng Phase 10 (2026-08-12): thêm nhánh tạo thủ công từ Kiểm tra vật tư (sourceType=
+// MATERIAL_INSPECTION, cuttingProposalId nullable) - xem model InspectionKhoResult.
+// actualStock/buyQty/receivedQty đổi Int→Decimal(14,4) cùng dịp (vật tư phi-sắt như sơn có
+// số lẻ, khác sắt luôn nguyên cây - Int trước đây chỉ đủ cho nhánh CUTTING_PROPOSAL).
 // =====================================================================
 
 enum PurchaseProposalStatus {
@@ -1279,42 +1312,60 @@ enum PurchaseProposalStatus {
   REJECTED
 }
 
-/// Tự sinh 1-1 theo (cuttingProposalId, warehouseCode) ngay khi CuttingProposal được duyệt -
-/// hiện chỉ có 1 warehouseCode/proposal ('phoi-son-han', vì cat_sat_iea chỉ tính vật tư sắt),
-/// giữ cột riêng để không phải migration lại khi mở rộng nhóm vật tư khác sau này.
-model PurchaseProposal {
-  id                BigInt                 @id @default(autoincrement())
-  cuttingProposalId BigInt
-  warehouseCode     String
-  status            PurchaseProposalStatus @default(NEW)
-  createdAt         DateTime               @default(now())
-  submittedAt       DateTime?
-  approvedAt        DateTime?
-  approvedById      String?
-  rejectedAt        DateTime?
-  rejectionReason   String?
-  purchasedAt       DateTime?
+enum PurchaseProposalSource {
+  CUTTING_PROPOSAL
+  MATERIAL_INSPECTION
+}
 
-  cuttingProposal CuttingProposal        @relation(fields: [cuttingProposalId], references: [id])
-  approvedBy      User?                  @relation(fields: [approvedById], references: [id])
-  items           PurchaseProposalItem[]
+/// Tự sinh 1-1 theo (cuttingProposalId, warehouseCode) ngay khi CuttingProposal được duyệt
+/// (sourceType=CUTTING_PROPOSAL, cuttingProposalId luôn có giá trị), HOẶC tạo thủ công từ 1
+/// InspectionKhoResult đã SUBMITTED (sourceType=MATERIAL_INSPECTION, cuttingProposalId luôn
+/// null) - xem PurchaseProposalsService.createFromInspection(). inspectionKhoResultId @unique
+/// tự đảm bảo tối đa 1 đề xuất/kho-result (Postgres cho phép nhiều NULL nhưng không cho phép
+/// trùng giá trị non-null) - mạnh hơn @@unique([cuttingProposalId, warehouseCode]) cũ (vẫn giữ
+/// nguyên, chỉ còn ý nghĩa với nhánh CUTTING_PROPOSAL vì nhánh kia cuttingProposalId luôn null).
+model PurchaseProposal {
+  id                    BigInt                 @id @default(autoincrement())
+  cuttingProposalId     BigInt?
+  inspectionKhoResultId BigInt?                @unique
+  sourceType            PurchaseProposalSource @default(CUTTING_PROPOSAL)
+  /// Idempotency-Key của lần gọi tạo thủ công (createFromInspection) - cùng idiom
+  /// PlanForm.bossApproveIdempotencyKey/MaterialIssue.idempotencyKey. NULL cho mọi dòng tự
+  /// sinh từ CuttingProposal.approve() (đã tự idempotent qua unique (cuttingProposalId,
+  /// warehouseCode) sẵn có, không cần thêm).
+  idempotencyKey        String?                @unique
+  warehouseCode         String
+  status                PurchaseProposalStatus @default(NEW)
+  createdAt             DateTime               @default(now())
+  submittedAt           DateTime?
+  approvedAt            DateTime?
+  approvedById          String?
+  rejectedAt            DateTime?
+  rejectionReason       String?
+  purchasedAt           DateTime?
+
+  cuttingProposal     CuttingProposal?       @relation(fields: [cuttingProposalId], references: [id])
+  inspectionKhoResult InspectionKhoResult?   @relation(fields: [inspectionKhoResultId], references: [id])
+  approvedBy          User?                  @relation(fields: [approvedById], references: [id])
+  items               PurchaseProposalItem[]
 
   @@unique([cuttingProposalId, warehouseCode])
   @@index([status])
   @@map("purchase_proposals")
 }
 
-/// 1 dòng/loại sắt cần mua - materialId tra ngược Material để lấy code/name/unit khi trả DTO
+/// 1 dòng vật tư cần mua - materialId tra ngược Material để lấy code/name/unit khi trả DTO
 /// (giống hệt cách CuttingProposalLine không snapshot name/unit), không lưu trùng lặp.
 model PurchaseProposalItem {
   id                      BigInt   @id @default(autoincrement())
   proposalId              BigInt
   materialId              BigInt
-  /// Tồn thật (stock_quant, kho phoi-son-han) chụp đúng lúc CuttingProposalsService.approve()
-  /// tạo dòng này - không tính lại theo thời gian thực (giống buyQty, là số chốt).
-  actualStock             Int      @default(0)
-  buyQty                  Int
-  receivedQty             Int      @default(0)
+  /// Tồn thật (stock_quant) chụp đúng lúc dòng này được tạo (CuttingProposalsService.approve()
+  /// cho nhánh sắt, hoặc InspectionKhoResultItem.actualStock đã chốt lúc submitKho cho nhánh
+  /// kiểm tra vật tư) - không tính lại theo thời gian thực (giống buyQty, là số chốt).
+  actualStock             Decimal  @default(0) @db.Decimal(14, 4)
+  buyQty                  Decimal  @db.Decimal(14, 4)
+  receivedQty             Decimal  @default(0) @db.Decimal(14, 4)
   /// Cộng dồn số lượng thực nhận theo purchaseUnit của material (vd kg) - chỉ để đối chiếu/audit,
   /// không dùng để tính tồn kho (receivedQty theo unit mới là số chốt vào StockLedger).
   receivedQtyPurchaseUnit Decimal? @db.Decimal(14, 4)
@@ -1344,6 +1395,82 @@ model PurchaseProposalQuote {
 
   @@index([itemId])
   @@map("purchase_proposal_quotes")
+}
+
+// =====================================================================
+// Phase 10 — Kiểm tra vật tư trước sản xuất (mirror InspectionContext.requests/SEED_REQUESTS
+// FE, hiện 100% mock). Neo vào PlanForm(origin='PRODUCTION_CONFIRM') - bản ghi đã tự tạo sẵn
+// khi Sếp duyệt 1 PI item (xem SkusService.ensureProductionConfirmPlanForm), doc-comment trên
+// PlanForm.origin đã nói rõ mục đích duy nhất là phục vụ domain này.
+// productionOrderId chụp NGAY lúc tạo request (ProductionOrder đã tồn tại từ approveItem() -
+// xem ProductionInvoicesService.approveItem()) - cho required = rate × quantity, và cho
+// PurchaseProposalsService đọc poNumber/mfgProduct đối xứng với nhánh CUTTING_PROPOSAL.
+// =====================================================================
+
+enum InspectionKhoStatus {
+  PENDING
+  SUBMITTED
+}
+
+/// 1 "Lệnh kiểm tra vật tư" - luôn đúng 3 InspectionKhoResult con (phoi-son-han/vat-tu-tp/
+/// thanh-pham). productionStarted chỉ là cờ đánh dấu KHSX đã bấm "Bắt đầu sản xuất" sau khi
+/// đủ 3 kho SUBMITTED - không có side-effect gì khác ở BE (2 API sync định mức sắt vẫn ở FE).
+model MaterialInspectionRequest {
+  id                  BigInt    @id @default(autoincrement())
+  planFormId          BigInt    @unique
+  productionOrderId   BigInt
+  productionStarted   Boolean   @default(false)
+  productionStartedAt DateTime?
+  createdById         String
+  createdAt           DateTime  @default(now())
+
+  planForm        PlanForm              @relation(fields: [planFormId], references: [id])
+  productionOrder ProductionOrder       @relation(fields: [productionOrderId], references: [id])
+  createdBy       User                  @relation(fields: [createdById], references: [id])
+  khoResults      InspectionKhoResult[]
+
+  @@map("material_inspection_requests")
+}
+
+/// 1 dòng/kho (đúng 3: phoi-son-han/vat-tu-tp/thanh-pham) cho 1 request - warehouseCode plain
+/// string khớp Warehouse.code, KHÔNG FK cứng tới Warehouse (cùng idiom PurchaseProposal.
+/// warehouseCode/ProductionInvoiceItem.warehouseCode).
+model InspectionKhoResult {
+  id            BigInt              @id @default(autoincrement())
+  requestId     BigInt
+  warehouseCode String
+  status        InspectionKhoStatus @default(PENDING)
+  submittedAt   DateTime?
+  submittedById String?
+
+  request          MaterialInspectionRequest @relation(fields: [requestId], references: [id])
+  submittedBy      User?                     @relation(fields: [submittedById], references: [id])
+  items            InspectionKhoResultItem[]
+  purchaseProposal PurchaseProposal?
+
+  @@unique([requestId, warehouseCode])
+  @@map("inspection_kho_results")
+}
+
+/// 1 dòng vật tư trong 1 kho-result. materialId nullable + name/unit snapshot (không phải live
+/// join) - mirror PurchaseProposalItem/CuttingProposalLine, phòng dòng không map được vật tư
+/// thật (hiện tại KHÔNG xảy ra - mọi dòng dựng từ PieceBom/PieceMaterialItem/ConsumableBom/
+/// BomAccessoryItem qua SkusService.reconstructQuotaBatch đều có materialId thật). required/
+/// actualStock dùng Decimal (không phải Int) vì gồm cả đơn vị phân số (kg sơn, m dây...).
+model InspectionKhoResultItem {
+  id           BigInt   @id @default(autoincrement())
+  khoResultId  BigInt
+  materialId   BigInt?
+  materialName String
+  materialUnit String
+  required     Decimal  @db.Decimal(14, 4)
+  actualStock  Decimal? @db.Decimal(14, 4)
+
+  khoResult InspectionKhoResult @relation(fields: [khoResultId], references: [id])
+  material  Material?           @relation(fields: [materialId], references: [id])
+
+  @@index([khoResultId])
+  @@map("inspection_kho_result_items")
 }
 
 // ===== Phase 3 — Kho vận lõi (Ledger Core, docs/dna-erp-db-schema.html mục 1.8) =====
@@ -1728,9 +1855,9 @@ model WeavingReceipt {
   /// Bắt buộc có cột riêng (không dùng chung WeavingIssue.idempotencyKey) - create() thuần,
   /// không có state machine để tự chống trùng như SteelIssue.receive() (update trạng thái),
   /// thiếu key sẽ double-count khi client retry.
-  idempotencyKey String?  @unique
-  receivedAt     DateTime @default(now())
-  receivedById   String
+  idempotencyKey    String?  @unique
+  receivedAt        DateTime @default(now())
+  receivedById      String
 
   productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
   piece           Piece           @relation(fields: [pieceId], references: [id])

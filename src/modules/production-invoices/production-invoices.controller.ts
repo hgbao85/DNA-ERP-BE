@@ -10,6 +10,7 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
+import { RecordPackagingDto } from './dto/record-packaging.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { RejectItemDto } from './dto/reject-item.dto';
 import { SendToBossDto } from './dto/send-to-boss.dto';
@@ -156,5 +157,24 @@ export class ProductionInvoicesController {
     @CurrentUser('id') userId: string,
   ) {
     return this.productionInvoicesService.recordTransferCheck(id, itemId, dto, userId);
+  }
+
+  // ─── Đóng gói (PACKAGING) - thủ kho thành phẩm, mirror KhoDongGoiPage ───────────────
+
+  @Get(':id/items/:itemId/packaging')
+  @RequirePermissions(VIEW)
+  getPackaging(@Param('id') id: string, @Param('itemId') itemId: string) {
+    return this.productionInvoicesService.getPackaging(id, itemId);
+  }
+
+  @Post(':id/items/:itemId/packaging')
+  @RequirePermissions(UPDATE)
+  recordPackaging(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: RecordPackagingDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.productionInvoicesService.recordPackaging(id, itemId, dto, userId);
   }
 }

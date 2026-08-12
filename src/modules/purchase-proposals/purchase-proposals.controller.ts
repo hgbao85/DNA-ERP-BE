@@ -15,24 +15,37 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { ApprovePurchaseProposalDto } from './dto/approve-purchase-proposal.dto';
+import { CreateManualPurchaseProposalDto } from './dto/create-manual-purchase-proposal.dto';
 import { CreateQuoteDto } from './dto/create-quote.dto';
 import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
 import { RejectPurchaseProposalDto } from './dto/reject-purchase-proposal.dto';
 import { PurchaseProposalsService } from './purchase-proposals.service';
 
 const VIEW = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.VIEW };
+const CREATE = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.CREATE };
 const UPDATE = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.UPDATE };
 const APPROVE = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.APPROVE };
 
 /**
- * Không có endpoint tạo thủ công - PurchaseProposal tự sinh khi CuttingProposal được duyệt
- * (xem CuttingProposalsService.approve()).
+ * PurchaseProposal tự sinh khi CuttingProposal được duyệt (xem CuttingProposalsService.approve(),
+ * sourceType=CUTTING_PROPOSAL), HOẶC tạo thủ công qua POST / dưới đây từ 1 InspectionKhoResult đã
+ * SUBMITTED (sourceType=MATERIAL_INSPECTION - Phase 10, 2026-08-12, mirror markProposalCreated
+ * trong mock InspectionContext).
  */
 @ApiTags('Purchase Proposals')
 @ApiBearerAuth()
 @Controller({ path: 'purchase-proposals', version: '1' })
 export class PurchaseProposalsController {
   constructor(private readonly purchaseProposalsService: PurchaseProposalsService) {}
+
+  @Post()
+  @RequirePermissions(CREATE)
+  create(
+    @Body() dto: CreateManualPurchaseProposalDto,
+    @Headers('Idempotency-Key') idempotencyKey: string | undefined,
+  ) {
+    return this.purchaseProposalsService.createFromInspection(dto, idempotencyKey);
+  }
 
   @Get()
   @RequirePermissions(VIEW)

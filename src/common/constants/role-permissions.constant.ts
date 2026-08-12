@@ -102,6 +102,15 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.STOCK,
       actions: [PermissionAction.VIEW],
     },
+    // Phase 10 (2026-08-12): KHSX là người tạo Lệnh kiểm tra vật tư + bấm "Bắt đầu sản xuất"
+    // (CREATE+UPDATE), và cũng là người duy nhất tạo đề xuất mua thủ công từ kho thiếu vật tư
+    // (PURCHASE_PROPOSAL:CREATE - chỉ role này có action CREATE trên module đó, khác thủ
+    // kho/Mua hàng chỉ VIEW/UPDATE, xem PurchaseProposalsController).
+    {
+      module: PERMISSION_MODULES.MATERIAL_INSPECTION,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE, PermissionAction.UPDATE],
+    },
+    { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, actions: [PermissionAction.CREATE] },
   ],
   // QLSX: bước duyệt cục bộ SKU (qlsx-review/request-boss-approval/reject-qlsx) đã bị bỏ khỏi
   // pipeline - QLSX chỉ còn VIEW trên SKU (tab "Danh sách SKU" đọc-only). QLSX vẫn duyệt PI
@@ -222,6 +231,21 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     {
       module: PERMISSION_MODULES.MATERIAL_ISSUE,
       actions: [PermissionAction.CREATE, PermissionAction.VIEW],
+    },
+    // Phase 10 (2026-08-12): thủ kho (3 kho vật lý, scope enforce ở MaterialInspectionService.
+    // assertWarehouseScope()) xác nhận tồn kho thật cho Lệnh kiểm tra vật tư KHSX gửi tới
+    // (UPDATE = submitKho). KHÔNG có CREATE - tạo request là việc của KHSX.
+    {
+      module: PERMISSION_MODULES.MATERIAL_INSPECTION,
+      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
+    },
+    // Vá lỗ quyền có sẵn từ M2 "Chuyền kiểm" (2026-08-11, chưa từng cấp): thủ kho thành phẩm
+    // cần VIEW+UPDATE trên PRODUCTION_INVOICE để gọi được GET/POST .../transfer-check VÀ
+    // .../packaging (Đóng gói, Phase 10) - trước bản vá này chỉ QLSX/Sếp mới gọi được 2 nhóm
+    // endpoint đó dù chúng thuộc đúng nghiệp vụ của thủ kho thành phẩm.
+    {
+      module: PERMISSION_MODULES.PRODUCTION_INVOICE,
+      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
   ],
   // 2 account chuyên trách nhập định mức SKU (Sắt = định mức mảnh; Phụ kiện/Bao bì = định mức

@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProdItemStageType } from '../../generated/prisma/client';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
@@ -29,6 +29,7 @@ describe('ProductionInvoicesService', () => {
     bomPiece: { findMany: jest.Mock; findUnique: jest.Mock };
     transferCheckResult: { findMany: jest.Mock; create: jest.Mock };
     weavingReceipt: { groupBy: jest.Mock };
+    packagingRecord: { create: jest.Mock; aggregate: jest.Mock };
     $transaction: jest.Mock;
   };
   let skusService: { ensureProductionConfirmPlanForm: jest.Mock };
@@ -97,6 +98,10 @@ describe('ProductionInvoicesService', () => {
       bomPiece: { findMany: jest.fn(), findUnique: jest.fn() },
       transferCheckResult: { findMany: jest.fn(), create: jest.fn() },
       weavingReceipt: { groupBy: jest.fn().mockResolvedValue([]) },
+      packagingRecord: {
+        create: jest.fn(),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { boxesPacked: null } }),
+      },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     skusService = { ensureProductionConfirmPlanForm: jest.fn() };
@@ -525,6 +530,93 @@ describe('ProductionInvoicesService', () => {
         expect(first.checkedQty).toBe(3);
         expect(second.checkedQty).toBe(5);
         expect(prisma.transferCheckResult.create).toHaveBeenCalledTimes(2);
+      });
+    });
+  });
+
+  describe('packaging (Đóng gói)', () => {
+    const productionOrder = { id: 99n, bomRevisionId: 5n, quantity: 10 };
+
+    describe('getPackaging', () => {
+      it('computes totalQty from ProductionOrder.quantity and packedQty via SUM', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.packagingRecord.aggregate.mockResolvedValue({ _sum: { boxesPacked: 4 } });
+
+        const result = await service.getPackaging('7', '20');
+
+        expect(result).toMatchObject({ totalQty: 10, packedQty: 4, remainingQty: 6 });
+      });
+
+      it('packedQty = 0 khi chưa đóng gói lần nào (không crash)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.packagingRecord.aggregate.mockResolvedValue({ _sum: { boxesPacked: null } });
+
+        const result = await service.getPackaging('7', '20');
+
+        expect(result).toMatchObject({ totalQty: 10, packedQty: 0, remainingQty: 10 });
+      });
+
+      it('rejects when the item has no ProductionOrder yet (chưa được Sếp duyệt)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(null);
+
+        await expect(service.getPackaging('7', '20')).rejects.toThrow(ConflictException);
+      });
+    });
+
+    describe('recordPackaging', () => {
+      it('creates a new record (append-only) and returns the updated aggregate', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.packagingRecord.aggregate
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 4 } })
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 6 } });
+
+        const result = await service.recordPackaging(
+          '7',
+          '20',
+          { boxesPacked: 2, note: 'Đợt 2' },
+          'user-kho',
+        );
+
+        expect(prisma.packagingRecord.create).toHaveBeenCalledWith({
+          data: {
+            productionInvoiceItemId: 20n,
+            boxesPacked: 2,
+            note: 'Đợt 2',
+            packedById: 'user-kho',
+          },
+        });
+        expect(result).toMatchObject({ totalQty: 10, packedQty: 6, remainingQty: 4 });
+      });
+
+      it('rejects khi vượt quá totalQty (không chặn theo readyQty/checkedQty của Chuyền kiểm)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.packagingRecord.aggregate.mockResolvedValue({ _sum: { boxesPacked: 9 } });
+
+        await expect(
+          service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho'),
+        ).rejects.toThrow(BadRequestException);
+        expect(prisma.packagingRecord.create).not.toHaveBeenCalled();
+      });
+
+      it('rejects when the item has no ProductionOrder yet', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(null);
+
+        await expect(
+          service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho'),
+        ).rejects.toThrow(ConflictException);
+        expect(prisma.packagingRecord.create).not.toHaveBeenCalled();
       });
     });
   });
