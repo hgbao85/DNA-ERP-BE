@@ -7,6 +7,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CreateMaterialIssueDto } from './dto/create-material-issue.dto';
+import { ListMaterialIssuesQueryDto } from './dto/list-material-issues-query.dto';
 import { ReceiveMaterialIssueDto } from './dto/receive-material-issue.dto';
 import { MaterialIssuesService } from './material-issues.service';
 
@@ -52,7 +53,14 @@ export class MaterialIssuesController {
     return this.materialIssuesService.findOne(id);
   }
 
-  // ─── Tổ Hàn/Sơn (mfgRole = HAN|SON) - xác nhận đã nhận ───────────────────────
+  // ─── Tổ Hàn/Sơn (mfgRole = HAN|SON) - xem đợt chờ/đã nhận + xác nhận đã nhận ─
+
+  /** Flat, không cần biết productionOrderId - xem ListMaterialIssuesQueryDto. */
+  @Get('material-issues')
+  @RequirePermissions(VIEW)
+  findAll(@Query() query: ListMaterialIssuesQueryDto) {
+    return this.materialIssuesService.findAll(query);
+  }
 
   @Post('material-issues/:id/receive')
   @RequirePermissions(UPDATE)

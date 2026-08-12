@@ -429,6 +429,7 @@ export class PurchaseProposalsService {
       id: row.id.toString(),
       cuttingProposalId: row.cuttingProposalId?.toString() ?? null,
       inspectionKhoResultId: row.inspectionKhoResultId?.toString() ?? null,
+      materialInspectionRequestId: row.inspectionKhoResult?.request.id.toString() ?? null,
       sourceType: row.sourceType,
       warehouseCode: row.warehouseCode,
       status: row.status,

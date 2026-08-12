@@ -377,6 +377,7 @@ export class MaterialInspectionService {
 
   private toKhoResultResponseDto(kho: KhoResultRow): InspectionKhoResultResponseDto {
     return new InspectionKhoResultResponseDto({
+      id: kho.id.toString(),
       warehouseCode: kho.warehouseCode,
       status: kho.status,
       submittedAt: kho.submittedAt,

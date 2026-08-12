@@ -22,6 +22,9 @@ export class InspectionKhoResultItemResponseDto {
 
 @Exclude()
 export class InspectionKhoResultResponseDto {
+  /** InspectionKhoResult.id - cần lộ ra để FE gọi POST /purchase-proposals (createFromInspection)
+   *  với đúng `inspectionKhoResultId`, không suy được từ field nào khác trong DTO này. */
+  @Expose() @ApiProperty() id!: string;
   @Expose() @ApiProperty() warehouseCode!: string;
   @Expose() @ApiProperty({ enum: InspectionKhoStatus }) status!: InspectionKhoStatus;
   @Expose() @ApiPropertyOptional({ nullable: true }) submittedAt!: Date | null;

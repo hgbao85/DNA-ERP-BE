@@ -247,6 +247,16 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PRODUCTION_INVOICE,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
+    // Vá lỗ quyền có sẵn từ M2 "Phân bổ/nhận hàng đan" (2026-08-11, chưa từng cấp - phát hiện lúc
+    // nối FE material-issues 2026-08-12): FE resolveProductionOrderId() (weaving-issues-api.ts,
+    // material-issues-api.ts) phải gọi GET /production-orders?limit=100 để tra productionOrderId
+    // từ productionInvoiceItemId (không có endpoint lọc theo item) - thiếu PRODUCTION_ORDER:VIEW
+    // thì MỌI trang kho key theo productionOrderId (KhoXuatDanPage/KhoNhapDanPage,
+    // XuatVatTuTieuHaoPage) đều 403 ngay bước resolve, trước cả khi chạm tới nghiệp vụ.
+    {
+      module: PERMISSION_MODULES.PRODUCTION_ORDER,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // 2 account chuyên trách nhập định mức SKU (Sắt = định mức mảnh; Phụ kiện/Bao bì = định mức
   // chi tiết, gồm cả Sơn) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE

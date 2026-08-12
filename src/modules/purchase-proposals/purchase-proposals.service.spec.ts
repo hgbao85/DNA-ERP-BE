@@ -505,6 +505,7 @@ describe('PurchaseProposalsService', () => {
           cuttingProposal: null,
           inspectionKhoResult: {
             request: {
+              id: 600n,
               productionOrder: {
                 poNumber: 'PO-9',
                 mfgProduct: { factoryCode: 'JSE-55', name: 'Ghế J55' },
@@ -546,6 +547,7 @@ describe('PurchaseProposalsService', () => {
           cuttingProposal: null,
           inspectionKhoResult: {
             request: {
+              id: 600n,
               productionOrder: {
                 poNumber: 'PO-9',
                 mfgProduct: { factoryCode: 'JSE-55', name: 'Ghế J55' },

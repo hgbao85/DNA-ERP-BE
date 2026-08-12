@@ -52,6 +52,10 @@ export class PurchaseProposalResponseDto {
   /// null khi sourceType=MATERIAL_INSPECTION (xem inspectionKhoResultId thay thế).
   @Expose() @ApiPropertyOptional({ nullable: true }) cuttingProposalId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) inspectionKhoResultId!: string | null;
+  /// MaterialInspectionRequest.id (cha của inspectionKhoResultId) - null khi
+  /// sourceType=CUTTING_PROPOSAL. FE dùng để gộp nhiều đề xuất mua (1/kho) về đúng 1 lệnh kiểm
+  /// tra vật tư, xem InspectionContext.tsx/BossApp.tsx (group theo requestId).
+  @Expose() @ApiPropertyOptional({ nullable: true }) materialInspectionRequestId!: string | null;
   @Expose() @ApiProperty({ enum: PurchaseProposalSource }) sourceType!: PurchaseProposalSource;
   @Expose() @ApiProperty() warehouseCode!: string;
   @Expose() @ApiProperty({ enum: PurchaseProposalStatus }) status!: PurchaseProposalStatus;

@@ -21,6 +21,7 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CreateMaterialIssueDto } from './dto/create-material-issue.dto';
+import { ListMaterialIssuesQueryDto } from './dto/list-material-issues-query.dto';
 import { MaterialIssuePlanItemResponseDto } from './dto/material-issue-plan-item-response.dto';
 import { MaterialIssueResponseDto } from './dto/material-issue-response.dto';
 import { ReceiveMaterialIssueDto } from './dto/receive-material-issue.dto';
@@ -190,6 +191,26 @@ export class MaterialIssuesService {
         remainingToIssue: requiredQty - issuedQty,
       });
     });
+  }
+
+  /** Flat, KHÔNG cần productionOrderId - xem ListMaterialIssuesQueryDto tại sao endpoint này tồn
+   *  tại riêng (permission tổ Hàn/Sơn không đủ để tự resolve productionOrderId). */
+  async findAll(query: ListMaterialIssuesQueryDto): Promise<Paginated<MaterialIssueResponseDto>> {
+    const where: Prisma.MaterialIssueWhereInput = {
+      ...(query.stage ? { stage: query.stage } : {}),
+      ...(query.status ? { status: query.status } : {}),
+    };
+    const result = await paginate(
+      {
+        findMany: (args) =>
+          this.prisma.materialIssue.findMany({ ...args, include: MATERIAL_ISSUE_INCLUDE }),
+        count: (args) => this.prisma.materialIssue.count(args),
+      },
+      query,
+      where,
+      { issuedAt: 'desc' as const },
+    );
+    return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };
   }
 
   async findAllForOrder(
