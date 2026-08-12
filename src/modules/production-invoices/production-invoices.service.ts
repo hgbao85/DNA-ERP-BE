@@ -246,6 +246,8 @@ export class ProductionInvoicesService {
   /**
    * Sếp duyệt cuối - SKU bắt đầu sản xuất; tạo/tái dùng PlanForm origin=PRODUCTION_CONFIRM
    * cho SKU này; PI tự chuyển PRODUCING khi mọi item đã duyệt. Mirror approveItemByBoss() mock.
+   * Ném ConflictException NGAY (không ghi gì) nếu sản phẩm chưa có BomRevision ACTIVE - xem
+   * ProductionOrdersService.assertActiveBomRevisionExists().
    */
   async approveItem(
     piId: string,
@@ -255,6 +257,12 @@ export class ProductionInvoicesService {
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_BOSS);
+
+    // Duyệt SKU luôn kéo theo tạo ProductionOrder (xem dưới) - kiểm BOM active TRƯỚC khi ghi gì,
+    // để thiếu BOM chặn đúng hành động duyệt (409, có lý do rõ ràng) thay vì duyệt xong rồi mới
+    // âm thầm phát hiện ở bước tạo ProductionOrder - lỗ hổng đã xác nhận, xem
+    // assertActiveBomRevisionExists().
+    await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
 
     const updated = await this.prisma.productionInvoiceItem.update({
       where: { id: item.id },
@@ -275,22 +283,36 @@ export class ProductionInvoicesService {
       );
     }
 
-    // Phase 7: tạo lệnh sản xuất + tính đề xuất cắt sắt tự động/ngầm ngay khi Sếp duyệt - không
-    // có màn hình riêng, không chặn response này. Lỗi ở bước này (vd sản phẩm chưa có BomRevision
-    // ACTIVE) chỉ log lại, không làm hỏng việc duyệt SKU (business action chính của endpoint này).
+    // Phase 7: tạo lệnh sản xuất ngay khi Sếp duyệt - BOM đã được xác nhận tồn tại ở trên nên
+    // gần như chắc chắn thành công (chỉ fail nếu có race hiếm - BOM bị deactivate đúng khoảnh
+    // khắc giữa 2 lệnh); log to nếu vẫn xảy ra vì giờ đây không còn là hành vi "biết trước, chấp
+    // nhận được" như cũ nữa.
+    let productionOrder: { id: bigint } | undefined;
     try {
-      const productionOrder = await this.productionOrdersService.createFromApproval(
+      productionOrder = await this.productionOrdersService.createFromApproval(
         item.id,
         item.mfgProductId,
         item.quantity,
       );
-      await this.cuttingProposalsService.requestForOrder(productionOrder.id, {
-        requestedById: actorUserId,
-      });
     } catch (error) {
       this.logger.error(
-        `Auto cutting-proposal trigger failed for PI item ${item.id}: ${(error as Error).message}`,
+        `ProductionOrder creation failed unexpectedly for PI item ${item.id} despite BOM check: ${(error as Error).message}`,
       );
+    }
+
+    // Trigger đề xuất cắt sắt tự động/ngầm - tách try/catch riêng, best-effort thật sự (không có
+    // màn hình riêng, không được phép làm hỏng việc duyệt SKU đã ghi ở trên dù ProductionOrder
+    // đã tạo thành công).
+    if (productionOrder) {
+      try {
+        await this.cuttingProposalsService.requestForOrder(productionOrder.id, {
+          requestedById: actorUserId,
+        });
+      } catch (error) {
+        this.logger.error(
+          `Auto cutting-proposal trigger failed for PI item ${item.id}: ${(error as Error).message}`,
+        );
+      }
     }
 
     const remaining = await this.prisma.productionInvoiceItem.count({

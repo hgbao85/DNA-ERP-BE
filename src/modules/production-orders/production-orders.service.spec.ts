@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { BomRevisionStatus } from '../../generated/prisma/client';
 import { ProductionOrdersService } from './production-orders.service';
@@ -76,6 +76,23 @@ describe('ProductionOrdersService', () => {
 
       await expect(service.createFromApproval(20n, 2n, 60)).rejects.toThrow(NotFoundException);
       expect(prisma.productionOrder.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('assertActiveBomRevisionExists — D.p1-bom-check', () => {
+    it('resolves silently when an ACTIVE bom revision exists', async () => {
+      prisma.bomRevision.findFirst.mockResolvedValue(activeRevision);
+
+      await expect(service.assertActiveBomRevisionExists(2n)).resolves.toBeUndefined();
+    });
+
+    it('throws ConflictException (not NotFoundException) when no ACTIVE bom revision exists', async () => {
+      prisma.bomRevision.findFirst.mockResolvedValue(null);
+
+      await expect(service.assertActiveBomRevisionExists(2n)).rejects.toThrow(ConflictException);
+      expect(prisma.bomRevision.findFirst).toHaveBeenCalledWith({
+        where: { mfgProductId: 2n, status: BomRevisionStatus.ACTIVE },
+      });
     });
   });
 

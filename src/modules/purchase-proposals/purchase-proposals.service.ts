@@ -207,10 +207,21 @@ export class PurchaseProposalsService {
     return this.toResponseDto(updated);
   }
 
-  /** Purchasing báo giá lại sau khi bị từ chối - giữ nguyên các báo giá cũ làm lịch sử. */
+  /**
+   * Purchasing báo giá lại sau khi bị từ chối - XOÁ hết báo giá cũ trước khi mở lại QUOTING
+   * (không giữ làm lịch sử nữa - đổi 2026-08-11, xem D.p3-requote-dedup). Lý do: addQuote() luôn
+   * create() mới (không sửa/xoá), còn FE (LenhMuaNCCPage.handleSubmit) submit lại TOÀN BỘ form
+   * mỗi lần gửi Sếp duyệt, kể cả dòng không đổi - giữ báo giá cũ khiến mỗi vòng từ chối/báo giá
+   * lại nhân đôi các dòng chưa sửa trong bảng. FE đã tự seed sẵn giá trị cũ vào form TRƯỚC khi
+   * gọi API này (handleRequote), nên người dùng vẫn thấy đúng số cũ để sửa tiếp - không mất gì
+   * ở màn hình, chỉ dọn bản ghi DB thừa.
+   */
   async requote(id: string): Promise<PurchaseProposalResponseDto> {
     const proposal = await this.findRawOrThrow(id);
     this.assertStatus(proposal, PurchaseProposalStatus.REJECTED);
+    await this.prisma.purchaseProposalQuote.deleteMany({
+      where: { item: { proposalId: proposal.id } },
+    });
     const updated = await this.prisma.purchaseProposal.update({
       where: { id: proposal.id },
       data: { status: PurchaseProposalStatus.QUOTING },

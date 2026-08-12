@@ -32,7 +32,10 @@ describe('ProductionInvoicesService', () => {
     $transaction: jest.Mock;
   };
   let skusService: { ensureProductionConfirmPlanForm: jest.Mock };
-  let productionOrdersService: { createFromApproval: jest.Mock };
+  let productionOrdersService: {
+    createFromApproval: jest.Mock;
+    assertActiveBomRevisionExists: jest.Mock;
+  };
   let cuttingProposalsService: { requestForOrder: jest.Mock };
 
   const mfgProduct = { id: 2n, factoryCode: 'SKU-01', name: 'Ghe A' };
@@ -99,6 +102,7 @@ describe('ProductionInvoicesService', () => {
     skusService = { ensureProductionConfirmPlanForm: jest.fn() };
     productionOrdersService = {
       createFromApproval: jest.fn().mockResolvedValue({ id: 99n }),
+      assertActiveBomRevisionExists: jest.fn().mockResolvedValue(undefined),
     };
     cuttingProposalsService = { requestForOrder: jest.fn().mockResolvedValue({ id: '1' }) };
     service = new ProductionInvoicesService(
@@ -259,7 +263,7 @@ describe('ProductionInvoicesService', () => {
       });
     });
 
-    it('still approves the item even when the auto cutting-proposal trigger fails', async () => {
+    it('still approves the item even when ProductionOrder creation fails unexpectedly after the BOM check already passed (rare race)', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(
         piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
@@ -268,6 +272,8 @@ describe('ProductionInvoicesService', () => {
         piItem({ prodApprovalStatus: 'APPROVED' }),
       );
       prisma.productionInvoiceItem.count.mockResolvedValue(2);
+      // assertActiveBomRevisionExists (mock default) vẫn resolve OK - mô phỏng đúng ca race hiếm:
+      // BOM còn active lúc kiểm, nhưng createFromApproval tự truy vấn lại thì đã không còn.
       productionOrdersService.createFromApproval.mockRejectedValue(
         new Error('no ACTIVE bom revision'),
       );
@@ -275,6 +281,25 @@ describe('ProductionInvoicesService', () => {
       const result = await service.approveItem('7', '20', 'user-boss');
 
       expect(result.prodApprovalStatus).toBe('APPROVED');
+      // productionOrder không tạo được -> không có id để trigger solver.
+      expect(cuttingProposalsService.requestForOrder).not.toHaveBeenCalled();
+    });
+
+    it('rejects approving (ghi gì cả) khi sản phẩm chưa có BomRevision ACTIVE - D.p1-bom-check', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      productionOrdersService.assertActiveBomRevisionExists.mockRejectedValue(
+        new ConflictException('Sản phẩm 2 chưa có định mức (BOM) đang active'),
+      );
+
+      await expect(service.approveItem('7', '20', 'user-boss')).rejects.toThrow(ConflictException);
+      expect(productionOrdersService.assertActiveBomRevisionExists).toHaveBeenCalledWith(2n);
+      // Chặn TRƯỚC khi ghi - PI item không được flip APPROVED khi chưa có BOM (đây chính là
+      // hành vi lỗ hổng cũ: trước fix, item vẫn APPROVED dù ProductionOrder tạo thất bại).
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+      expect(skusService.ensureProductionConfirmPlanForm).not.toHaveBeenCalled();
     });
 
     it('does not flip PI status when other items are still pending', async () => {

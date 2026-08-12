@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { BomRevisionStatus, Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -19,6 +19,26 @@ type ProductionOrderRow = Prisma.ProductionOrderGetPayload<object>;
 @Injectable()
 export class ProductionOrdersService {
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+
+  /**
+   * Kiểm sớm trước khi ProductionInvoicesService.approveItem() ghi bất kỳ gì - để thiếu BOM
+   * active chặn đúng hành động "duyệt" (409, Sếp thấy ngay lý do) thay vì âm thầm để lại 1
+   * ProductionInvoiceItem APPROVED mồ côi ProductionOrder (lỗ hổng phát hiện 2026-08-11, xem
+   * createFromApproval - lỗi ở đó trước giờ chỉ bị log, không chặn việc duyệt).
+   * Không tái dùng để tạo ProductionOrder - createFromApproval() tự truy vấn lại BomRevision,
+   * chấp nhận 1 query thừa để 2 hàm giữ độc lập, không đổi hợp đồng NotFoundException đã có
+   * test riêng (production-orders.service.spec.ts) của createFromApproval.
+   */
+  async assertActiveBomRevisionExists(mfgProductId: bigint): Promise<void> {
+    const activeRevision = await this.prisma.bomRevision.findFirst({
+      where: { mfgProductId, status: BomRevisionStatus.ACTIVE },
+    });
+    if (!activeRevision) {
+      throw new ConflictException(
+        `Sản phẩm ${mfgProductId} chưa có định mức (BOM) đang active - không thể duyệt sản xuất. Cần kích hoạt 1 BomRevision trước.`,
+      );
+    }
+  }
 
   /**
    * Gọi bởi ProductionInvoicesService.approveItem() ngay sau khi 1 item được Sếp duyệt.

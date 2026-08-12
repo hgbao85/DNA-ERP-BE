@@ -18,7 +18,12 @@ describe('PurchaseProposalsService', () => {
       findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
     };
-    purchaseProposalQuote: { create: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
+    purchaseProposalQuote: {
+      create: jest.Mock;
+      update: jest.Mock;
+      updateMany: jest.Mock;
+      deleteMany: jest.Mock;
+    };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -90,7 +95,12 @@ describe('PurchaseProposalsService', () => {
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
       },
-      purchaseProposalQuote: { create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+      purchaseProposalQuote: {
+        create: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn(),
+        deleteMany: jest.fn(),
+      },
       warehouse: {
         findUniqueOrThrow: jest.fn(({ where }: { where: { code: string } }) =>
           Promise.resolve(where.code === 'SUPPLIER' ? { id: 700n } : { id: 800n }),
@@ -294,7 +304,7 @@ describe('PurchaseProposalsService', () => {
       expect(result.rejectionReason).toBe('Giá quá cao');
     });
 
-    it('moves REJECTED -> QUOTING on requote', async () => {
+    it('moves REJECTED -> QUOTING on requote and wipes old quotes first (D.p3-requote-dedup)', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({ status: PurchaseProposalStatus.REJECTED }),
       );
@@ -305,6 +315,11 @@ describe('PurchaseProposalsService', () => {
       const result = await service.requote('300');
 
       expect(result.status).toBe(PurchaseProposalStatus.QUOTING);
+      // Xoá TRƯỚC khi mở QUOTING - addQuote() sau đó chỉ create() mới, không có cách sửa/xoá,
+      // nên phải dọn sạch báo giá cũ ở đây để tránh nhân đôi khi FE submit lại toàn bộ form.
+      expect(prisma.purchaseProposalQuote.deleteMany).toHaveBeenCalledWith({
+        where: { item: { proposalId: 300n } },
+      });
     });
 
     it('rejects rejecting a proposal that is not SUBMITTED', async () => {
