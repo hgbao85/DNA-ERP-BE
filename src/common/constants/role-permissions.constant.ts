@@ -122,6 +122,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PURCHASE_PROPOSAL,
       actions: [PermissionAction.VIEW, PermissionAction.CREATE],
     },
+    // 2026-08-12: KHSX đọc GET /cutting-batch-suggestions (màn "Gộp đợt cắt" + badge trên menu)
+    // để biết loại sắt nào vượt ngưỡng hao hụt và gộp với đơn nào thì đạt. CHỈ VIEW - quyết định
+    // gộp/duyệt phương án cắt vẫn là của QLSX/Sếp (xem PRODUCTION_MANAGER có thêm CREATE+APPROVE).
+    {
+      module: PERMISSION_MODULES.CUTTING_PROPOSAL,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // QLSX: bước duyệt cục bộ SKU (qlsx-review/request-boss-approval/reject-qlsx) đã bị bỏ khỏi
   // pipeline - QLSX chỉ còn VIEW trên SKU (tab "Danh sách SKU" đọc-only). QLSX vẫn duyệt PI

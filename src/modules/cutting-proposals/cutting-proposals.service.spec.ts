@@ -27,6 +27,8 @@ describe('CuttingProposalsService', () => {
     pieceBom: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     material: { findMany: jest.Mock };
+    productionInvoiceItem: { findMany: jest.Mock };
+    bomRevision: { findMany: jest.Mock };
     notification: { create: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $queryRaw: jest.Mock;
@@ -85,6 +87,10 @@ describe('CuttingProposalsService', () => {
       // Mặc định không vật tư nào có ngưỡng riêng -> request body không có
       // max_waste_percentage_by_material (test riêng cho việc có ngưỡng riêng ở dưới).
       material: { findMany: jest.fn().mockResolvedValue([]) },
+      // Mặc định "không có đơn nào đang chờ" -> getBatchSuggestions trả [] mà không đụng bảng
+      // khác; các test gộp đợt cắt tự override.
+      productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([]) },
+      bomRevision: { findMany: jest.fn().mockResolvedValue([]) },
       notification: { create: jest.fn() },
       warehouse: {
         findUniqueOrThrow: jest.fn(({ where }: { where: { code: string } }) =>

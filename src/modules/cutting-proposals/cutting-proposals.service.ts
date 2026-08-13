@@ -2,10 +2,13 @@ import { ConflictException, Inject, Injectable, Logger, NotFoundException } from
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../../config/configuration';
 import {
+  BomRevisionStatus,
   CuttingProposalStatus,
   NotificationAudience,
   Prisma,
   PurchaseProposalStatus,
+  ProdApprovalStatus,
+  ProdItemStageType,
   StockLedgerRefType,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
@@ -16,6 +19,21 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CuttingProposalResponseDto } from './dto/cutting-proposal-response.dto';
+import {
+  CuttingBatchLevelDto,
+  CuttingBatchOrderDto,
+  CuttingBatchOutcome,
+  CuttingBatchSuggestionDto,
+} from './dto/cutting-batch-suggestion.dto';
+import {
+  CandidateMaterialDto,
+  CuttingBatchCandidateDto,
+  CuttingBatchCandidateListDto,
+  CuttingBatchPreviewDto,
+  CuttingBatchPreviewLineDto,
+  PreviewCuttingBatchDto,
+} from './dto/cutting-batch-candidate.dto';
+import { bestWasteAcrossStockLengths } from './best-fill.util';
 
 const SOLVER_PROPOSE_PATH = '/api/v1/de_xuat/propose/';
 const SYSTEM_CONFIG_ID = 1;
@@ -183,6 +201,354 @@ export class CuttingProposalsService {
       throw new NotFoundException(`Cutting proposal ${id} not found`);
     }
     return this.toDetailResponseDto(proposal);
+  }
+
+  /**
+   * Gợi ý gộp đợt cắt cho KHSX - CHỈ ĐỌC, không gọi solver, không ghi gì.
+   *
+   * Trả về từng LOẠI SẮT đang vượt ngưỡng hao hụt, kèm bậc thang "gộp thêm đơn thì xuống bao
+   * nhiêu". Tính bằng quy hoạch động (best-fill.util.ts, ~0,2ms/lần) chứ không gọi solver -
+   * chấm vài trăm tổ hợp vẫn dưới 100ms.
+   *
+   * Ứng viên là ProductionInvoiceItem CHƯA được Sếp duyệt. Lý do (chốt với Sếp 2026-08-12): duyệt
+   * xong là ProductionOrder ra đời và solver tự chạy riêng cho đơn đó (xem
+   * ProductionInvoicesService.approveItem) - gộp phải xong TRƯỚC thời điểm ấy mới có tác dụng.
+   *
+   * Lọc 1 CHIỀU: chỉ loại sắt vượt ngưỡng mới hiện ra, nhưng đơn được gộp VÀO thì không lọc -
+   * chính đơn đang đạt ngưỡng mới là nguồn cỡ đoạn cứu đơn đang vượt. Lọc cả 2 đầu là tính năng
+   * chết ngay vì không còn gì để gộp.
+   */
+  async getBatchSuggestions(): Promise<CuttingBatchSuggestionDto[]> {
+    const ctx = await this.loadBatchContext();
+    if (ctx === null) return [];
+    const { byMaterial, materials, config } = ctx;
+    const stockLengths = config.solverStockLengths as number[];
+    const trimMm = config.solverTrimStartMm;
+    const kerfMm = config.solverBladeWidthMm;
+
+    const suggestions: CuttingBatchSuggestionDto[] = [];
+    for (const material of materials) {
+      const entries = byMaterial.get(material.id);
+      if (!entries) continue;
+      const thresholdPct =
+        material.maxCuttingWastePercentage?.toNumber() ?? config.solverMaxWastePercentage;
+
+      // Xếp theo hạn gần nhất trước; KHÔNG có hạn thì xuống cuối (không được để dữ liệu thiếu
+      // đẩy 1 đơn lên làm mốc neo "gấp nhất").
+      const sorted = [...entries].sort((a, b) => {
+        const da = this.frameDeadlineOf(a.item);
+        const db = this.frameDeadlineOf(b.item);
+        if (da === null && db === null) return 0;
+        if (da === null) return 1;
+        if (db === null) return -1;
+        return da.getTime() - db.getTime();
+      });
+
+      // Mốc neo = đơn GẤP NHẤT trong số các đơn TỰ NÓ đã vượt ngưỡng. Không lấy đơn gấp nhất nói
+      // chung: đơn gấp nhất có thể đang đạt ngưỡng trong khi 1 đơn khác cùng loại sắt thì vượt -
+      // lấy nhầm sẽ bỏ sót đúng vấn đề cần giải.
+      const anchorIndex = sorted.findIndex(
+        (e) =>
+          (bestWasteAcrossStockLengths([...e.demand.keys()], stockLengths, trimMm, kerfMm)
+            ?.minWastePct ?? Number.POSITIVE_INFINITY) > thresholdPct,
+      );
+      if (anchorIndex === -1) continue; // mọi đơn của loại sắt này đều đã đạt -> không hiện
+
+      const anchor = sorted[anchorIndex];
+      const members = [anchor, ...sorted.filter((_, idx) => idx !== anchorIndex)];
+
+      const levels: CuttingBatchLevelDto[] = [];
+      for (let n = 1; n <= members.length; n++) {
+        const slice = members.slice(0, n);
+        const level = this.buildBatchLevel(slice, stockLengths, trimMm, kerfMm, thresholdPct);
+        if (level === null) continue;
+        levels.push(level);
+        // Dừng ngay khi đạt ngưỡng - gộp thêm chỉ tăng chi phí cắt sớm mà không cần thiết.
+        if (level.meetsThreshold) break;
+      }
+      if (levels.length === 0) continue;
+
+      suggestions.push(
+        new CuttingBatchSuggestionDto({
+          materialId: material.id.toString(),
+          materialCode: material.code,
+          materialName: material.name,
+          thresholdPct,
+          outcome: levels[levels.length - 1].meetsThreshold
+            ? CuttingBatchOutcome.FIXED_BY_MERGE
+            : CuttingBatchOutcome.UNFIXABLE_BY_MERGE,
+          anchor: this.toBatchOrderDto(anchor.item),
+          orders: members.map((m) => this.toBatchOrderDto(m.item)),
+          levels,
+        }),
+      );
+    }
+
+    // Vấn đề gấp nhất lên đầu; loại "gộp không cứu được" xuống cuối vì không phải việc KHSX làm
+    // ngay được (phải sửa thiết kế hoặc ngưỡng).
+    return suggestions.sort((a, b) => {
+      if (a.outcome !== b.outcome) {
+        return a.outcome === CuttingBatchOutcome.FIXED_BY_MERGE ? -1 : 1;
+      }
+      const da = a.anchor.deadline;
+      const db = b.anchor.deadline;
+      if (da === null && db === null) return 0;
+      if (da === null) return 1;
+      if (db === null) return -1;
+      return da.getTime() - db.getTime();
+    });
+  }
+
+  /**
+   * Bảng chọn của KHSX: MỌI SKU chưa được Sếp duyệt, kèm hao hụt từng loại sắt khi SKU đó cắt một
+   * mình và cờ vượt ngưỡng.
+   *
+   * Khác getBatchSuggestions() ở chỗ KHÔNG lọc theo ngưỡng - KHSX cần nhìn toàn cảnh để tự ghép
+   * bất kỳ SKU nào (yêu cầu Sếp 2026-08-13). Tổ hợp hệ thống tự đề xuất trả kèm ở
+   * `recommendedItemIds` để FE tick sẵn.
+   */
+  async getBatchCandidates(): Promise<CuttingBatchCandidateListDto> {
+    const ctx = await this.loadBatchContext();
+    if (ctx === null) {
+      return new CuttingBatchCandidateListDto({ items: [], recommendedItemIds: [] });
+    }
+    const { items, byMaterial, materials, config, itemsWithoutBom } = ctx;
+    const stockLengths = config.solverStockLengths as number[];
+    const trimMm = config.solverTrimStartMm;
+    const kerfMm = config.solverBladeWidthMm;
+    const materialById = new Map(materials.map((m) => [m.id, m]));
+
+    // itemId -> các loại sắt của nó (kèm nhu cầu) - đảo chiều byMaterial để dựng theo dòng SKU.
+    const materialsByItem = new Map<
+      bigint,
+      { materialId: bigint; demand: Map<number, number> }[]
+    >();
+    for (const [materialId, entries] of byMaterial) {
+      for (const e of entries) {
+        const bucket = materialsByItem.get(e.item.id) ?? [];
+        bucket.push({ materialId, demand: e.demand });
+        materialsByItem.set(e.item.id, bucket);
+      }
+    }
+
+    const dtoItems = items.map((item) => {
+      const mats = materialsByItem.get(item.id) ?? [];
+      return new CuttingBatchCandidateDto({
+        productionInvoiceItemId: item.id.toString(),
+        mfgProductCode: item.mfgProduct.factoryCode,
+        mfgProductName: item.mfgProduct.name,
+        quantity: item.quantity,
+        salesOrderCode: item.productionInvoice.salesOrder?.code ?? null,
+        productionInvoiceCode: item.productionInvoice.code,
+        deadline: this.frameDeadlineOf(item),
+        prodApprovalStatus: item.prodApprovalStatus,
+        hasActiveBom: !itemsWithoutBom.has(item.id),
+        materials: mats
+          .map(({ materialId, demand }) => {
+            const material = materialById.get(materialId);
+            if (!material) return null;
+            const thresholdPct =
+              material.maxCuttingWastePercentage?.toNumber() ?? config.solverMaxWastePercentage;
+            const best = bestWasteAcrossStockLengths(
+              [...demand.keys()],
+              stockLengths,
+              trimMm,
+              kerfMm,
+            );
+            // Không cắt nổi ở mọi chiều dài mua được -> coi như vượt ngưỡng tuyệt đối, KHÔNG ẩn đi.
+            const wastePct = best?.minWastePct ?? 100;
+            return new CandidateMaterialDto({
+              materialId: material.id.toString(),
+              materialCode: material.code,
+              materialName: material.name,
+              standaloneWastePct: wastePct,
+              thresholdPct,
+              overThreshold: wastePct > thresholdPct,
+              // Các SKU KHÁC cùng dùng loại sắt này - chính là danh sách "gộp được với ai".
+              mergeableWithSkus: (byMaterial.get(materialId) ?? [])
+                .filter((e) => e.item.id !== item.id)
+                .map((e) => e.item.mfgProduct.factoryCode),
+            });
+          })
+          .filter((m): m is CandidateMaterialDto => m !== null)
+          .sort((a, b) => b.standaloneWastePct - a.standaloneWastePct),
+      });
+    });
+
+    // Tổ hợp đề xuất = hợp của mọi SKU xuất hiện ở mức gộp cuối (mức tối thiểu đủ đạt) của các
+    // loại sắt CỨU ĐƯỢC. Loại "gộp không cứu được" không đưa vào - tick sẵn một nhóm vô ích chỉ
+    // khiến KHSX gộp nhầm.
+    const suggestions = await this.getBatchSuggestions();
+    const recommended = new Set<string>();
+    for (const s of suggestions) {
+      if (s.outcome !== CuttingBatchOutcome.FIXED_BY_MERGE) continue;
+      const last = s.levels[s.levels.length - 1];
+      if (!last?.meetsThreshold) continue;
+      for (const o of s.orders.slice(0, last.orderCount)) {
+        recommended.add(o.productionInvoiceItemId);
+      }
+    }
+
+    return new CuttingBatchCandidateListDto({
+      items: dtoItems.sort((a, b) => {
+        // SKU có loại sắt vượt ngưỡng lên đầu, rồi tới hạn gần nhất.
+        const oa = a.materials.some((m) => m.overThreshold) ? 0 : 1;
+        const ob = b.materials.some((m) => m.overThreshold) ? 0 : 1;
+        if (oa !== ob) return oa - ob;
+        if (a.deadline === null && b.deadline === null) return 0;
+        if (a.deadline === null) return 1;
+        if (b.deadline === null) return -1;
+        return a.deadline.getTime() - b.deadline.getTime();
+      }),
+      recommendedItemIds: [...recommended],
+    });
+  }
+
+  /**
+   * Tính thử cho ĐÚNG tổ hợp SKU mà KHSX đang tick - chỉ đọc, không gọi solver, không ghi gì.
+   * Mỗi loại sắt 1 dòng; loại nào chỉ 1 SKU trong tổ hợp dùng thì vẫn hiện (bớt 0 cây) để KHSX
+   * thấy gộp không giúp gì cho nó, thay vì tưởng đã tối ưu hết.
+   */
+  async previewBatch(dto: PreviewCuttingBatchDto): Promise<CuttingBatchPreviewDto> {
+    const selectedIds = new Set(dto.productionInvoiceItemIds.map((id) => parseBigIntId(id)));
+    const ctx = await this.loadBatchContext();
+    if (ctx === null) {
+      return new CuttingBatchPreviewDto({ lines: [], totalBarsSaved: 0, daysCutEarly: null });
+    }
+    const { byMaterial, materials, config } = ctx;
+    const stockLengths = config.solverStockLengths as number[];
+    const trimMm = config.solverTrimStartMm;
+    const kerfMm = config.solverBladeWidthMm;
+
+    const lines: CuttingBatchPreviewLineDto[] = [];
+    for (const material of materials) {
+      const members = (byMaterial.get(material.id) ?? []).filter((e) => selectedIds.has(e.item.id));
+      if (members.length === 0) continue;
+      const thresholdPct =
+        material.maxCuttingWastePercentage?.toNumber() ?? config.solverMaxWastePercentage;
+      const level = this.buildBatchLevel(members, stockLengths, trimMm, kerfMm, thresholdPct);
+      if (level === null) continue;
+      lines.push(
+        new CuttingBatchPreviewLineDto({
+          materialId: material.id.toString(),
+          materialCode: material.code,
+          materialName: material.name,
+          thresholdPct,
+          contributingSkus: members.map((m) => m.item.mfgProduct.factoryCode),
+          cutSizesMm: level.cutSizesMm,
+          minWastePct: level.minWastePct,
+          minBars: level.minBars,
+          barsSeparate: level.barsSeparate,
+          barsSavedVsSeparate: level.barsSavedVsSeparate,
+          meetsThreshold: level.meetsThreshold,
+          daysCutEarly: level.daysCutEarly,
+        }),
+      );
+    }
+
+    // Độ lệch hạn tính trên TOÀN tổ hợp, không phải từng loại sắt: cả đợt cắt cùng một lúc.
+    const deadlines = [...selectedIds]
+      .map((id) => ctx.items.find((i) => i.id === id))
+      .filter((i): i is (typeof ctx.items)[number] => i !== undefined)
+      .map((i) => this.frameDeadlineOf(i))
+      .filter((d): d is Date => d !== null)
+      .map((d) => d.getTime());
+
+    return new CuttingBatchPreviewDto({
+      lines: lines.sort((a, b) => b.barsSavedVsSeparate - a.barsSavedVsSeparate),
+      totalBarsSaved: lines.reduce((s, l) => s + l.barsSavedVsSeparate, 0),
+      daysCutEarly:
+        deadlines.length >= 2
+          ? Math.round((Math.max(...deadlines) - Math.min(...deadlines)) / 86_400_000)
+          : null,
+    });
+  }
+
+  /**
+   * Nạp dữ liệu nền dùng chung cho cả 3 endpoint gộp đợt cắt. Trả null khi không có SKU nào đang
+   * chờ duyệt (khỏi bắn tiếp 4 truy vấn vô ích).
+   */
+  private async loadBatchContext() {
+    const items = await this.prisma.productionInvoiceItem.findMany({
+      where: {
+        // "Sales đã tạo mà Sếp chưa duyệt" = chưa APPROVED và chưa REJECTED. PHẢI viết dạng OR có
+        // nhánh null: item vừa sinh từ đơn hàng mang prodApprovalStatus = null (KHSX chưa gửi
+        // QLSX) và `notIn` của SQL KHÔNG khớp NULL, dùng notIn sẽ loại mất đúng nhóm đơn mới nhất
+        // - tức nhóm cần gộp nhất.
+        OR: [
+          { prodApprovalStatus: null },
+          {
+            prodApprovalStatus: {
+              in: [ProdApprovalStatus.WAITING_QLSX, ProdApprovalStatus.WAITING_BOSS],
+            },
+          },
+        ],
+      },
+      include: {
+        mfgProduct: true,
+        stages: true,
+        productionInvoice: { include: { salesOrder: true } },
+      },
+    });
+    if (items.length === 0) return null;
+
+    // Chưa có ProductionOrder (chỉ sinh khi duyệt) nên chưa có bomRevisionId ghim sẵn -> lấy bản
+    // định mức đang ACTIVE tại thời điểm chấm. Sản phẩm chưa có bản ACTIVE thì không tính được,
+    // nhưng VẪN trả về dòng đó (cờ hasActiveBom=false) - im lặng bỏ sẽ khiến KHSX tưởng SKU đó
+    // không có vấn đề gì.
+    const mfgProductIds = [...new Set(items.map((i) => i.mfgProductId))];
+    const activeRevisions = await this.prisma.bomRevision.findMany({
+      where: { mfgProductId: { in: mfgProductIds }, status: BomRevisionStatus.ACTIVE },
+      select: { id: true, mfgProductId: true },
+    });
+    const revisionByProduct = new Map(activeRevisions.map((r) => [r.mfgProductId, r.id]));
+    const itemsWithoutBom = new Set(
+      items.filter((i) => !revisionByProduct.has(i.mfgProductId)).map((i) => i.id),
+    );
+    if (itemsWithoutBom.size > 0) {
+      this.logger.warn(
+        `Gộp đợt cắt: ${itemsWithoutBom.size} item chưa có BomRevision ACTIVE nên không tính được ` +
+          `(id: ${[...itemsWithoutBom].map((id) => id.toString()).join(', ')})`,
+      );
+    }
+
+    const perSetByRevision = await this.buildPerSetDemandByRevision([
+      ...revisionByProduct.values(),
+    ]);
+    const config = await this.prisma.systemConfig.findUniqueOrThrow({
+      where: { id: SYSTEM_CONFIG_ID },
+    });
+
+    // Nhu cầu TUYỆT ĐỐI theo loại sắt: materialId -> danh sách (SKU, nhu cầu theo cỡ đoạn)
+    const byMaterial = new Map<
+      bigint,
+      { item: (typeof items)[number]; demand: Map<number, number> }[]
+    >();
+    for (const item of items) {
+      const revisionId = revisionByProduct.get(item.mfgProductId);
+      if (revisionId === undefined) continue;
+      const perSet = perSetByRevision.get(revisionId);
+      if (!perSet) continue;
+      for (const [materialId, byCutLength] of perSet) {
+        const demand = new Map<number, number>();
+        for (const [cutLengthMm, qtyPerSet] of byCutLength) {
+          const total = qtyPerSet * item.quantity;
+          if (total > 0) demand.set(cutLengthMm, total);
+        }
+        if (demand.size === 0) continue;
+        const bucket = byMaterial.get(materialId) ?? [];
+        bucket.push({ item, demand });
+        byMaterial.set(materialId, bucket);
+      }
+    }
+    if (byMaterial.size === 0) return null;
+
+    const materials = await this.prisma.material.findMany({
+      where: { id: { in: [...byMaterial.keys()] } },
+      select: { id: true, code: true, name: true, maxCuttingWastePercentage: true },
+    });
+
+    return { items, byMaterial, materials, config, itemsWithoutBom };
   }
 
   /**
@@ -448,6 +814,176 @@ export class CuttingProposalsService {
    * 1 dòng bom[] / piece_bom row - nhánh "chi tiết" (bom_part/part_bom) chưa có dữ liệu (chưa
    * xây bên admin) nên chưa gộp vào đây; mở rộng khi có.
    */
+  /**
+   * Nhu cầu MỖI BỘ theo (bomRevision -> materialId -> chiều dài đoạn) cho NHIỀU bản định mức
+   * trong ĐÚNG 2 truy vấn.
+   *
+   * CỐ Ý không dùng lại buildBomRows(): hàm đó nhận 1 bomRevisionId và trả shape của solver
+   * (kèm tên mảnh + segmentSpecId). Sửa nó thành nhận mảng sẽ đổi `where` từ `{ bomRevisionId }`
+   * sang `{ in: [...] }`, mà cutting-proposals.service.spec.ts assert nguyên văn where cũ - phá
+   * test của đường solver đang chạy tốt để tiết kiệm 6 dòng query là đánh đổi tồi. Trùng lặp ở
+   * đây là có chủ ý.
+   *
+   * Gộp truy vấn là BẮT BUỘC: gọi theo vòng lặp từng đơn sẽ thành N+1 query - đây là chỗ tốn duy
+   * nhất của getBatchSuggestions (phần tính toán chỉ ~0,2ms/lần).
+   */
+  private async buildPerSetDemandByRevision(
+    bomRevisionIds: bigint[],
+  ): Promise<Map<bigint, Map<bigint, Map<number, number>>>> {
+    const result = new Map<bigint, Map<bigint, Map<number, number>>>();
+    if (bomRevisionIds.length === 0) return result;
+
+    const [pieceBoms, bomPieces] = await Promise.all([
+      this.prisma.pieceBom.findMany({
+        where: { bomRevisionId: { in: bomRevisionIds } },
+        include: { segmentSpec: true },
+      }),
+      this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: bomRevisionIds } } }),
+    ]);
+
+    const qtyPerUnitByKey = new Map(
+      bomPieces.map((bp) => [`${bp.bomRevisionId}:${bp.pieceId}`, bp.qtyPerUnit]),
+    );
+
+    for (const row of pieceBoms) {
+      const qtyPerUnit = qtyPerUnitByKey.get(`${row.bomRevisionId}:${row.pieceId}`) ?? 0;
+      const qtyPerSet = qtyPerUnit * row.qtyPerPiece;
+      if (qtyPerSet <= 0 || row.segmentSpec.cutLengthMm <= 0) continue;
+
+      const byMaterial = result.get(row.bomRevisionId) ?? new Map<bigint, Map<number, number>>();
+      const byCutLength = byMaterial.get(row.segmentSpec.materialId) ?? new Map<number, number>();
+      // Cộng dồn: nhiều mảnh khác nhau có thể cùng dùng 1 (vật tư, chiều dài đoạn) - đúng cách
+      // explode_bom của solver gom nhóm (de_xuat_logic.py: groups[key][cut_len] += demand).
+      byCutLength.set(
+        row.segmentSpec.cutLengthMm,
+        (byCutLength.get(row.segmentSpec.cutLengthMm) ?? 0) + qtyPerSet,
+      );
+      byMaterial.set(row.segmentSpec.materialId, byCutLength);
+      result.set(row.bomRevisionId, byMaterial);
+    }
+    return result;
+  }
+
+  /**
+   * Hạn dùng để xếp thứ tự gấp, theo thứ tự ưu tiên:
+   *   1. `materialDeadline` của chính item - hạn VẬT TƯ phải sẵn sàng, sát nghĩa nhất với việc
+   *      cắt sắt (cắt xong mới có phôi để làm).
+   *   2. Mốc Khung cơ khí (FRAME) - công đoạn chứa Phôi.
+   *   3. Hạn của cả phiếu sản xuất.
+   * KHÔNG rơi tiếp về SalesOrderItem.deliveryDate: SalesOrderItem không có FK tới
+   * ProductionInvoiceItem, chỉ khớp được qua mfgProductId mà 1 đơn có thể có nhiều dòng cùng sản
+   * phẩm - khớp nhầm hạn còn tệ hơn không có hạn. null = xếp CUỐI, hiện "chưa có hạn".
+   */
+  private frameDeadlineOf(item: {
+    materialDeadline: Date | null;
+    stages: { stageType: ProdItemStageType; deadline: Date }[];
+    productionInvoice: { deadline: Date | null };
+  }): Date | null {
+    const frame = item.stages.find((s) => s.stageType === ProdItemStageType.FRAME);
+    return item.materialDeadline ?? frame?.deadline ?? item.productionInvoice.deadline ?? null;
+  }
+
+  private toBatchOrderDto(item: {
+    id: bigint;
+    quantity: number;
+    prodApprovalStatus: ProdApprovalStatus | null;
+    materialDeadline: Date | null;
+    mfgProduct: { factoryCode: string; name: string | null };
+    stages: { stageType: ProdItemStageType; deadline: Date }[];
+    productionInvoice: { code: string; deadline: Date | null; salesOrder: { code: string } | null };
+  }): CuttingBatchOrderDto {
+    return new CuttingBatchOrderDto({
+      productionInvoiceItemId: item.id.toString(),
+      salesOrderCode: item.productionInvoice.salesOrder?.code ?? null,
+      productionInvoiceCode: item.productionInvoice.code,
+      mfgProductCode: item.mfgProduct.factoryCode,
+      mfgProductName: item.mfgProduct.name,
+      quantity: item.quantity,
+      prodApprovalStatus: item.prodApprovalStatus,
+      deadline: this.frameDeadlineOf(item),
+    });
+  }
+
+  /** Chấm 1 mức gộp (n đơn đầu tiên) - trả null nếu không chiều dài cây nào cắt nổi. */
+  private buildBatchLevel(
+    members: {
+      item: Parameters<CuttingProposalsService['toBatchOrderDto']>[0];
+      demand: Map<number, number>;
+    }[],
+    stockLengthsMm: number[],
+    trimMm: number,
+    kerfMm: number,
+    thresholdPct: number,
+  ): CuttingBatchLevelDto | null {
+    const merged = new Map<number, number>();
+    for (const m of members) {
+      for (const [cutLengthMm, qty] of m.demand) {
+        merged.set(cutLengthMm, (merged.get(cutLengthMm) ?? 0) + qty);
+      }
+    }
+    const cutSizesMm = [...merged.keys()].sort((a, b) => b - a);
+    const best = bestWasteAcrossStockLengths(cutSizesMm, stockLengthsMm, trimMm, kerfMm);
+    if (best === null) return null;
+
+    const minBars = this.minBarsFor(merged, stockLengthsMm, trimMm, kerfMm);
+    // Lợi ích THẬT = cùng từng ấy đơn, cắt RIÊNG tốn mấy cây so với cắt CHUNG tốn mấy cây.
+    // KHÔNG so số cây mức này với số cây mức 1: mức sau gồm nhiều đơn hơn nên đương nhiên cần
+    // nhiều cây hơn, so như vậy luôn ra số âm và vô nghĩa.
+    const barsSeparate = members.reduce(
+      (sum, m) => sum + this.minBarsFor(m.demand, stockLengthsMm, trimMm, kerfMm),
+      0,
+    );
+
+    // Cả đợt cắt cùng một lúc, và không được trễ hạn của đơn gấp nhất -> đơn có hạn xa nhất bị
+    // cắt sớm đúng bằng độ chênh. Chỉ tính khi có >= 2 đơn CÓ hạn.
+    const deadlines = members
+      .map((m) => this.frameDeadlineOf(m.item))
+      .filter((d): d is Date => d !== null)
+      .map((d) => d.getTime());
+    const daysCutEarly =
+      deadlines.length >= 2
+        ? Math.round((Math.max(...deadlines) - Math.min(...deadlines)) / 86_400_000)
+        : null;
+
+    return new CuttingBatchLevelDto({
+      orderCount: members.length,
+      // Nhãn theo MÃ SKU (factoryCode), không theo mã đơn hàng: hệ thống vận hành theo SKU, và 2
+      // SKU của cùng 1 đơn sẽ cho ra nhãn trùng nhau y hệt nếu lấy mã đơn.
+      orderLabels: members.map((m) => m.item.mfgProduct.factoryCode),
+      cutSizesMm,
+      stockLengthMm: best.stockLengthMm,
+      minWastePct: best.minWastePct,
+      minWastePerBarMm: best.minWastePerBarMm,
+      minBars,
+      barsSeparate,
+      barsSavedVsSeparate: barsSeparate - minBars,
+      daysCutEarly,
+      meetsThreshold: best.minWastePct <= thresholdPct,
+    });
+  }
+
+  /**
+   * Cận dưới số cây phải mua cho một tập nhu cầu (chiều dài đoạn -> số lượng).
+   *
+   * Dùng `bestUsed` (tổng sắt+lưỡi lớn nhất nhét vừa 1 cây) làm mẫu số chứ KHÔNG dùng `usable`:
+   * không cây nào chở nổi quá bestUsed, nên `ceil(cần / bestUsed)` vừa là cận dưới HỢP LỆ vừa
+   * CHẶT HƠN ràng buộc `ceil(cần / usable)` của solver (de_xuat_logic.py:383-386) - vốn giả định
+   * lấp đầy hoàn hảo nên không phản ánh được phần phí do không lấp kín được cây.
+   */
+  private minBarsFor(
+    demand: Map<number, number>,
+    stockLengthsMm: number[],
+    trimMm: number,
+    kerfMm: number,
+  ): number {
+    const sizes = [...demand.keys()];
+    const best = bestWasteAcrossStockLengths(sizes, stockLengthsMm, trimMm, kerfMm);
+    if (best === null || best.bestUsedMm <= 0) return 0;
+    let neededMm = 0;
+    for (const [cutLengthMm, qty] of demand) neededMm += qty * (cutLengthMm + kerfMm);
+    return Math.ceil(neededMm / best.bestUsedMm);
+  }
+
   private async buildBomRows(
     bomRevisionId: bigint,
   ): Promise<{ bomRows: SolverBomRow[]; segmentSpecLookup: Map<string, bigint> }> {
