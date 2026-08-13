@@ -110,7 +110,18 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.MATERIAL_INSPECTION,
       actions: [PermissionAction.VIEW, PermissionAction.CREATE, PermissionAction.UPDATE],
     },
-    { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, actions: [PermissionAction.CREATE] },
+    // VIEW thêm 2026-08-12 (gộp chung mục với CREATE ở trên - CỐ Ý không tách 2 mục cùng module
+    // cho 1 role, resolveGrants() gộp hết vào 1 Set nên trùng vẫn chạy đúng, nhưng để 2 mục là
+    // mời người sau "dọn trùng" và xoá mất 1 quyền): tab "Bảng thống kê" (ThongKePagePlan,
+    // ProductionPlanApp.tsx:81) có mục Mua hàng hiển thị NCC đã chọn/đơn giá/đã mua của từng vật
+    // tư - đọc từ GET /purchase-proposals. Thiếu VIEW thì mục đó TRỐNG vĩnh viễn mà không báo
+    // lỗi gì (403 bị .catch() nuốt, xem InspectionContext.tsx) - cùng loại lỗi đã gặp với
+    // SKUReviewPage ở trên, phát hiện lại khi test E2E. KHSX tạo được đề xuất nhưng KHÔNG báo
+    // giá/duyệt mua (không có UPDATE/APPROVE).
+    {
+      module: PERMISSION_MODULES.PURCHASE_PROPOSAL,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
   ],
   // QLSX: bước duyệt cục bộ SKU (qlsx-review/request-boss-approval/reject-qlsx) đã bị bỏ khỏi
   // pipeline - QLSX chỉ còn VIEW trên SKU (tab "Danh sách SKU" đọc-only). QLSX vẫn duyệt PI
@@ -175,6 +186,14 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     },
     { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
+    // Tab "Kế hoạch" của QLSX mở ThongKePagePlan (MfgApp.tsx:234) - cùng trang KHSX dùng, có
+    // mục Mua hàng đọc GET /purchase-proposals. Xem ghi chú ở PRODUCTION_PLANNER phía trên
+    // (phát hiện 2026-08-12 khi test E2E: thiếu quyền -> mục Mua hàng trống, không báo lỗi).
+    // Chỉ VIEW - QLSX không tham gia báo giá/duyệt mua.
+    {
+      module: PERMISSION_MODULES.PURCHASE_PROPOSAL,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // --- Phase 3 (Kho vận lõi / Ledger Core) ---
   // WAREHOUSE_STAFF: kho nguồn tạo phiếu chuyển kho, kho đích xác nhận/từ chối (cả 2 thao tác

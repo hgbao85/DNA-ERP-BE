@@ -46,8 +46,10 @@ export class UpdateSystemConfigDto {
 
   @ApiPropertyOptional({
     type: [Number],
-    example: [5850, 6000],
-    description: 'Các chiều dài thanh sắt nguyên chuẩn (mm) dùng cho Đề xuất cắt sắt',
+    example: [6000],
+    description:
+      'Các chiều dài thanh sắt nguyên chuẩn (mm) dùng cho Đề xuất cắt sắt. CHỈ điền chiều ' +
+      'dài NCC thực sự có sẵn hàng - xem doc comment SystemConfig.solverStockLengths.',
   })
   @IsOptional()
   @IsArray()

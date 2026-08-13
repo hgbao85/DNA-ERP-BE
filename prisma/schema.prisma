@@ -234,8 +234,13 @@ model SystemConfig {
   /// Tham số mặc định gọi solver cat_sat_iea (Phase 7 - Đề xuất cắt sắt). Toàn hệ thống dùng
   /// chung 1 bộ, admin sửa qua PUT /system-config - KHÔNG có màn nào cho nhập tay mỗi lần vì
   /// trigger tính đề xuất chạy tự động/ngầm khi Sếp duyệt lệnh sản xuất (không qua form).
-  /// solverStockLengths: các chiều dài thanh sắt nguyên chuẩn (mm), vd [5850, 6000, 7000].
-  solverStockLengths       Json  @default("[5850, 6000]")
+  /// solverStockLengths: các chiều dài thanh sắt nguyên chuẩn (mm) - CHỈ điền chiều dài NCC
+  /// THỰC SỰ CÓ SẴN HÀNG. Solver chọn phương án cắt tối ưu trong đúng danh sách này, và đề xuất
+  /// mua KHÔNG mang theo chiều dài (purchase_proposal_items chỉ có materialId + buyQty) nên
+  /// không ai phát hiện được nếu ở đây lỡ điền cỡ không mua được: Mua hàng vẫn mua cỡ chuẩn,
+  /// còn bảng hướng dẫn cắt của Phôi lại tính theo cỡ không có thật. Bỏ 5850 (2026-08-12): đã
+  /// hỏi lại NCC, hiện chỉ cung cấp 6000mm.
+  solverStockLengths       Json  @default("[6000]")
   solverTrimStartMm        Int   @default(10)
   solverBladeWidthMm       Float @default(1.0)
   /// Ngưỡng hao hụt cắt MẶC ĐỊNH, áp cho vật tư Sắt chưa được cấp ngưỡng riêng (xem
