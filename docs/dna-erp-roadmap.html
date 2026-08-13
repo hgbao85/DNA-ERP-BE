@@ -739,6 +739,78 @@
       nối.</b> Còn lại: M4 dọn nợ kỹ thuật nền (chưa bắt đầu) + KhoPhoiPage (nợ riêng, không thuộc
       M4). Chi tiết ở mục 05/07/08 bên dưới.
     </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-13 (cùng ngày, sau cập nhật trên) — M4 đạt 4/5:</b> làm liền 4/5 hạng mục
+      dọn nợ nền tảng, chỉ còn baseline Playwright.
+      <b>Test cho 10 module BE 0-test</b> — xong cả 10 (<span class="mono-cell">roles</span>,
+      <span class="mono-cell">notifications</span>, <span class="mono-cell">audit-log</span>,
+      <span class="mono-cell">customers</span>, <span class="mono-cell">material-groups</span>,
+      <span class="mono-cell">defect-reasons</span>, <span class="mono-cell">segment-specs</span>,
+      <span class="mono-cell">system-config</span>, <span class="mono-cell">uploads</span>,
+      <span class="mono-cell">external</span> — 419/419 test BE pass). Đáng chú ý:
+      <span class="mono-cell">CloudinaryService.uploadBuffer()</span> throw đồng bộ (không phải
+      async) khi thiếu cấu hình — không phải bug runtime (Nest vẫn bắt đúng qua controller async)
+      nhưng dễ viết sai test nếu gọi trực tiếp; test <span class="mono-cell">ExternalApiService</span>
+      phải tự đếm số lần subscribe (không phải số lần gọi <span class="mono-cell">httpService.get()</span>)
+      để xác nhận đúng cơ chế retry của RxJS.
+      <b><span class="mono-cell">withIdempotencyKey()</span></b> — thêm vào
+      <span class="mono-cell">services/core/http.ts</span>, thay 6 chỗ tự viết tay
+      <span class="mono-cell">{ headers: { 'Idempotency-Key': crypto.randomUUID() } }</span> và vá
+      5 chỗ đang thiếu hẳn header dù BE có đọc (<span class="mono-cell">material-issues-api.ts</span>,
+      <span class="mono-cell">production-batches-api.ts</span>,
+      <span class="mono-cell">weaving-issues-api.ts</span> ×2). Phát hiện kèm 1 <b>lỗi thật đang chạy</b>:
+      <span class="mono-cell">sku-api.ts#approveFullSku()</span> — hàm đứng sau nút "Sếp duyệt lần
+      cuối" thật ở <span class="mono-cell">SKUReviewPage.tsx</span> — gọi
+      <span class="mono-cell">POST /skus/:id/approve</span> hoàn toàn không có header, trong khi BE
+      bắt buộc (<span class="mono-cell">BadRequestException</span> nếu thiếu, vá từ 2026-08-11) →
+      nút duyệt cuối cùng của Sếp trong luồng SKU đã luôn trả 400 kể từ bản vá đó. Đã sửa.
+      <b>Đổi <span class="mono-cell">id</span>/<span class="mono-cell">customerId</span> sang
+      string</b> — làm cả 3 domain lõi roadmap liệt kê (Sales, SKU, Production Invoice) thay vì chỉ
+      Sales như dự tính ban đầu, vì SKU/PI khớp id lẫn nhau qua
+      <span class="mono-cell">piMap</span>/<span class="mono-cell">resolveProductionOrderId()</span> —
+      sửa 1 domain mà không sửa domain kia sẽ vỡ ngay biên giới đó. Domain Sales: đổi tên
+      <span class="mono-cell">SalesPO</span>→<span class="mono-cell">SalesOrder</span> (kèm
+      <span class="mono-cell">SalesPOItem</span>/<span class="mono-cell">SalesPOStatus</span>/
+      <span class="mono-cell">getSalesPOs</span>...), giữ lại hàm adapter
+      <span class="mono-cell">toSalesOrder()</span> (không xoá hẳn "lớp remap" như dự tính ban đầu —
+      rà ra <span class="mono-cell">totalValue</span> là field hoàn toàn không có ở BE và
+      <span class="mono-cell">deliveryDate</span> có fallback <span class="mono-cell">?? orderDate</span>
+      mà <span class="mono-cell">SalesPOsPage.tsx</span> (Admin) phụ thuộc thật — xoá hẳn sẽ vỡ hành
+      vi hiện có; giữ adapter, chỉ sửa kiểu, đúng pattern mọi domain khác trong repo đã dùng). Domain
+      SKU/PI/Products: sửa <span class="mono-cell">Sku.id/exportOrderId/mfgProductId/
+      productionInvoiceId</span>, <span class="mono-cell">BeProductionInvoice(Item).id</span>,
+      <span class="mono-cell">BeMfgProduct.id</span> — nhưng <b>KHÔNG đụng</b> id lồng trong
+      <span class="mono-cell">manhData</span>/<span class="mono-cell">quotaManagement</span>
+      (<span class="mono-cell">ManhRow.id</span>, <span class="mono-cell">DaySonItem.id</span>...)
+      vì BE tự ép <span class="mono-cell">Number()</span> cho các id đó (xác nhận trong
+      <span class="mono-cell">skus.service.ts</span> — an toàn, chỉ dùng nội bộ 1 response, không
+      phải PK tra chéo bảng). 41 file FE đổi, xác nhận qua 13 vòng lặp build→lỗi→sửa
+      (<span class="mono-cell">next build</span> thật, không phải <span class="mono-cell">tsc</span>
+      rời rạc — phát hiện <span class="mono-cell">next build</span> bắt lỗi mà 1 lần chạy
+      <span class="mono-cell">tsc --noEmit</span> riêng lẻ bỏ sót, nghi do cache incremental).
+      Quá trình sửa lộ thêm 3 vấn đề tồn tại từ trước, không phải do lần sửa kiểu này gây ra: (1)
+      <b>bug thật</b> — <span class="mono-cell">InspRequest.skuId</span>
+      (<span class="mono-cell">InspectionContext.tsx</span>) bị <span class="mono-cell">Number(be.planFormId)</span>
+      ép sai kiểu, khiến <span class="mono-cell">requests.find(r =&gt; r.skuId === sku.id)</span> ở
+      <span class="mono-cell">KiemTraVatTuPage.tsx</span> không bao giờ khớp (number vs string dù
+      cùng giá trị) — đã sửa, có khả năng khôi phục lại tính năng khớp Lệnh kiểm tra vật tư↔SKU
+      trong trang này; (2) dead code — <span class="mono-cell">ThongKePagePlan.tsx</span> có nhánh
+      demo cố định <span class="mono-cell">pf.id === 9 || pf.id === 10</span> đã chết từ trước (so
+      number với id-thật-là-string), sửa sang so sánh string để khôi phục đúng ý định gốc; (3)
+      <span class="mono-cell">getPurchasingRows()</span> (cùng file) lọc theo
+      <span class="mono-cell">p.skuId === pf.id</span> nhưng <span class="mono-cell">PurchaseProposal.skuId</span>
+      là placeholder không liên quan Sku thật (đã ghi rõ trong comment gốc
+      <span class="mono-cell">purchasing-api.ts</span>) — giữ nguyên hành vi cũ (luôn rỗng), chỉ sửa
+      kiểu cho biên dịch được, không tự ý sửa logic ngoài phạm vi.
+      <b>Gỡ <span class="mono-cell">ignoreBuildErrors</span></b> — xoá hẳn khỏi
+      <span class="mono-cell">next.config.mjs</span> (không phải gỡ dần theo domain như dự tính ban
+      đầu — <span class="mono-cell">tsc --noEmit</span> đã sạch sẵn nên gỡ thẳng 1 lần), xác nhận
+      <span class="mono-cell">next build</span> thật (Turbopack + type-check đầy đủ) chạy sạch.
+      Toàn bộ đã chạy lại <span class="mono-cell">next build</span> + <span class="mono-cell">vitest</span>
+      (34/34) + <span class="mono-cell">eslint .</span> (0 lỗi, chỉ còn warning có từ trước) sau mỗi
+      bước. <b>Còn lại M4: baseline Playwright cho 1 luồng tiền</b> (PO → duyệt SKU → PI → đề xuất
+      cắt sắt → mua hàng → ship) — chưa làm.
+    </div>
   </div>
 </div>
 
@@ -962,20 +1034,20 @@
           <h4>Ship PO và boss-approve PlanForm nay đã khoá đúng</h4>
           <p>Cả 2 race-condition thật đã vá (mục 02): ship dùng UPDATE nguyên tử có ràng buộc trần, boss-approve chạy trong 1 transaction + Idempotency-Key + guard trạng thái.</p>
         </div>
-        <div class="risk-card" style="--risk-color: var(--mixed)">
-          <span class="risk-tag">Idempotency</span>
-          <h4>FE chưa có helper withIdempotencyKey()</h4>
-          <p>Trong khi BE đã bắt buộc header Idempotency-Key ở nhiều endpoint (stock-ledger adjust, purchase-proposals receiveItem, cutting-proposals create), FE không có nơi tập trung để đảm bảo luôn gửi đúng — mỗi nơi gọi phải tự nhớ.</p>
+        <div class="risk-card" style="--risk-color: var(--done)">
+          <span class="risk-tag">Idempotency — đã vá 2026-08-13</span>
+          <h4>FE nay có helper withIdempotencyKey() dùng chung</h4>
+          <p>Thêm ở <span class="mono-cell">services/core/http.ts</span>, thay 6 chỗ tự viết tay + vá 5 chỗ đang thiếu hẳn header dù BE có đọc. Phát hiện kèm 1 lỗi thật đang chạy: <span class="mono-cell">sku-api.ts#approveFullSku()</span> (nút "Sếp duyệt" cuối SKU) gọi thiếu header <b>bắt buộc</b> → luôn 400 kể từ bản vá BE 2026-08-11, đã sửa.</p>
         </div>
-        <div class="risk-card" style="--risk-color: var(--mixed)">
-          <span class="risk-tag">Kiểu dữ liệu</span>
-          <h4>id/customerId vẫn number, BE dùng BigInt/string</h4>
-          <p>Lặp lại ở cả 3 domain lõi (Sales, SKU, Production Invoice) — rủi ro mất độ chính xác khi ID lớn, và là nguồn lỗi runtime không lộ ở compile-time.</p>
+        <div class="risk-card" style="--risk-color: var(--done)">
+          <span class="risk-tag">Kiểu dữ liệu — đã vá 2026-08-13</span>
+          <h4>id/customerId nay là string ở cả 3 domain lõi</h4>
+          <p>Sales, SKU, Production Invoice (kèm Products vì <span class="mono-cell">resolveMfgProduct()</span> dùng chung) — 41 file, xác nhận qua 13 vòng build→lỗi→sửa bằng <span class="mono-cell">next build</span> thật. Lộ thêm 1 bug thật đang chạy (<span class="mono-cell">InspRequest.skuId</span> bị <span class="mono-cell">Number()</span> sai kiểu khiến khớp Lệnh kiểm tra vật tư↔SKU luôn thất bại — đã sửa) và 1 dead code (nhánh demo cố định ở ThongKePagePlan). id lồng trong <span class="mono-cell">manhData</span>/<span class="mono-cell">quotaManagement</span> KHÔNG đổi — BE tự ép Number() cho nhóm đó, khác PK cấp cao. Xem callout 2026-08-13 đầu trang.</p>
         </div>
-        <div class="risk-card" style="--risk-color: var(--mixed)">
-          <span class="risk-tag">Cấu hình build</span>
-          <h4>next.config.mjs: ignoreBuildErrors = true</h4>
-          <p>Hiện tại `tsc --noEmit` sạch (0 lỗi), nhưng cờ này vẫn che lỗi kiểu dữ liệu nếu regress — nên gỡ dần theo domain thay vì gỡ 1 lần.</p>
+        <div class="risk-card" style="--risk-color: var(--done)">
+          <span class="risk-tag">Cấu hình build — đã vá 2026-08-13</span>
+          <h4>ignoreBuildErrors đã gỡ hẳn khỏi next.config.mjs</h4>
+          <p>Gỡ thẳng 1 lần (không phải dần theo domain như dự tính — <span class="mono-cell">tsc --noEmit</span> đã sạch sẵn lúc gỡ), xác nhận <span class="mono-cell">next build</span> thật (Turbopack + type-check đầy đủ) chạy sạch. Build từ nay là gate thật, không còn che lỗi kiểu dữ liệu.</p>
         </div>
         <div class="risk-card" style="--risk-color: var(--mock)">
           <span class="risk-tag">Kiểm thử</span>
@@ -992,10 +1064,10 @@
           <h4>Soft-delete và validate DTO không đồng nhất</h4>
           <p>Chỉ User/Role/SalesOrder có soft-delete dù nhiều model khác đã có sẵn cột deletedAt chưa dùng; DTO của module materials cố ý bỏ qua validate kiểu trong khi các module khác đều dùng class-validator đầy đủ.</p>
         </div>
-        <div class="risk-card" style="--risk-color: var(--mock)">
-          <span class="risk-tag">Test coverage</span>
-          <h4>10 module backend chưa có 1 test nào</h4>
-          <p>roles, customers, material-groups, defect-reasons, segment-specs, system-config, audit-log, notifications, uploads, external — đều "done" nhưng không có lưới an toàn khi refactor.</p>
+        <div class="risk-card" style="--risk-color: var(--done)">
+          <span class="risk-tag">Test coverage — đã vá 2026-08-13</span>
+          <h4>10/10 module backend 0-test nay đã có test</h4>
+          <p>roles, customers, material-groups, defect-reasons, segment-specs, system-config, audit-log, notifications, uploads, external — 419/419 test BE pass. Đáng chú ý: test <span class="mono-cell">ExternalApiService</span> phải đếm số lần <i>subscribe</i> Observable (không phải số lần gọi <span class="mono-cell">httpService.get()</span>) để xác nhận đúng retry của RxJS.</p>
         </div>
         <div class="risk-card" style="--risk-color: var(--done)">
           <span class="risk-tag">Lỗ hổng âm thầm — đã vá 2026-08-11</span>
@@ -1117,14 +1189,14 @@
 
         <div class="milestone" data-m="M4">
           <div class="milestone-card">
-            <div class="milestone-head"><h4>Dọn nợ nền tảng</h4></div>
+            <div class="milestone-head"><h4>Dọn nợ nền tảng</h4><span class="pill pill-mixed">4/5 xong 2026-08-13</span></div>
             <p class="milestone-why">Không chặn triển khai riêng lẻ, nhưng càng để lâu càng khó sửa khi hệ thống lớn thêm sau M2/M3.</p>
             <ul>
-              <li>Viết <span class="mono-cell">withIdempotencyKey()</span> dùng chung ở FE, rà lại các call site bắt buộc header này.</li>
-              <li>Đổi <span class="mono-cell">id</span>/<span class="mono-cell">customerId</span> sang string khớp BE; đổi tên SalesPO→SalesOrder, bỏ lớp remap.</li>
-              <li>Bổ sung test cho 10 module backend đang 0 test (ưu tiên roles, notifications, audit-log vì liên quan phân quyền/bảo mật).</li>
-              <li>Thêm baseline Playwright cho đúng 1 luồng tiền: PO → duyệt SKU → PI → đề xuất cắt sắt → mua hàng → ship.</li>
-              <li>Gỡ <span class="mono-cell">ignoreBuildErrors</span> theo từng domain khi hết lệch kiểu dữ liệu.</li>
+              <li><span class="tag">✓</span>Viết <span class="mono-cell">withIdempotencyKey()</span> dùng chung ở FE (<span class="mono-cell">services/core/http.ts</span>), thay 6 chỗ tự viết tay + vá 5 chỗ thiếu hẳn header. Phát hiện kèm 1 lỗi thật đang chạy: <span class="mono-cell">approveFullSku()</span> (nút "Sếp duyệt" cuối của SKU) gọi thiếu header bắt buộc → luôn 400 kể từ bản vá BE 2026-08-11, đã sửa.</li>
+              <li><span class="tag">✓</span>Đổi <span class="mono-cell">id</span>/<span class="mono-cell">customerId</span> sang string khớp BE — làm cả 3 domain lõi (Sales, SKU, Production Invoice, kèm Products vì <span class="mono-cell">resolveMfgProduct()</span> dùng chung) thay vì chỉ Sales, vì SKU/PI khớp id lẫn nhau qua <span class="mono-cell">piMap</span>. Đổi tên SalesPO→SalesOrder; <b>giữ lại</b> hàm adapter <span class="mono-cell">toSalesOrder()</span> (không xoá hẳn "lớp remap" như dự tính — <span class="mono-cell">totalValue</span>/<span class="mono-cell">deliveryDate</span> fallback là field/hành vi thật một số trang phụ thuộc, xoá sẽ vỡ). Lộ thêm 1 bug thật đang chạy (<span class="mono-cell">InspRequest.skuId</span> bị <span class="mono-cell">Number()</span> sai kiểu khiến khớp Lệnh kiểm tra vật tư↔SKU luôn thất bại) + 1 dead code (nhánh demo <span class="mono-cell">pf.id===9||10</span> ở ThongKePagePlan) — cả 2 đã sửa. Xem callout 2026-08-13 đầu trang.</li>
+              <li><span class="tag">✓</span>Bổ sung test cho 10 module backend đang 0 test — xong cả 10 (roles, notifications, audit-log, customers, material-groups, defect-reasons, segment-specs, system-config, uploads, external), 419/419 test BE pass.</li>
+              <li><span class="tag">✗ chưa làm</span>Thêm baseline Playwright cho đúng 1 luồng tiền: PO → duyệt SKU → PI → đề xuất cắt sắt → mua hàng → ship.</li>
+              <li><span class="tag">✓</span>Gỡ <span class="mono-cell">ignoreBuildErrors</span> — xoá thẳng 1 lần (không phải gỡ dần theo domain như dự tính, vì <span class="mono-cell">tsc --noEmit</span> đã sạch sẵn), xác nhận <span class="mono-cell">next build</span> thật chạy sạch.</li>
             </ul>
           </div>
         </div>
