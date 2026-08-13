@@ -811,6 +811,132 @@
       bước. <b>Còn lại M4: baseline Playwright cho 1 luồng tiền</b> (PO → duyệt SKU → PI → đề xuất
       cắt sắt → mua hàng → ship) — chưa làm.
     </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-13 (cùng ngày, sau cập nhật trên) — M4 hoàn tất 5/5:</b> làm nốt hạng mục
+      cuối, baseline Playwright thật cho đúng 1 luồng tiền. Thêm <span class="mono-cell">
+      @playwright/test</span> (devDependency <span class="mono-cell">playwright</span> cũ đã có sẵn
+      nhưng chưa từng cấu hình — gỡ luôn, thừa vì <span class="mono-cell">@playwright/test</span> tự
+      kéo theo), <span class="mono-cell">playwright.config.ts</span> (tự khởi động BE + FE + 1 solver
+      stub nếu chưa chạy sẵn, qua 3 entry <span class="mono-cell">webServer</span>, đều
+      <span class="mono-cell">reuseExistingServer: true</span>) và
+      <span class="mono-cell">e2e/golden-path.spec.ts</span> — chạy bằng
+      <span class="mono-cell">npm run test:e2e</span>. Rà kỹ trước khi viết lộ ra 2 việc không như dự
+      tính ban đầu: (1) <b>2 chặng hoàn toàn không có UI</b> — duyệt đề xuất cắt sắt
+      (<span class="mono-cell">POST cutting-proposals/:id/approve</span>, trang Admin
+      "Cắt sắt" chỉ đọc/"Tính lại") và ship hàng
+      (<span class="mono-cell">POST sales-orders/:id/items/:itemId/ship</span>, tab "Chi tiết xuất
+      hàng" chỉ hiển thị <span class="mono-cell">shippedQty</span>, không có nút) — 2 chặng này test
+      gọi thẳng API; (2) <b>đề xuất cắt sắt phụ thuộc 1 solver ngoài</b> (cat_sat,
+      <span class="mono-cell">SOLVER_BASE_URL</span>) không nằm trong repo này và không chạy sẵn trên
+      máy — thay vì phụ thuộc mạng ngoài (chậm, không xác định, timeout cấu hình tới 300s), thêm
+      <span class="mono-cell">e2e/solver-stub.js</span> (HTTP server thuần Node, không dep) trả lời
+      đúng shape <span class="mono-cell">SolverProposeResponse</span> mà
+      <span class="mono-cell">CuttingProposalsService.runSolverAndSave()</span> mong đợi —
+      deterministic, đủ để chạy hết luồng thật (tạo <span class="mono-cell">CuttingProposalLine
+      </span>/<span class="mono-cell">Pattern</span>/<span class="mono-cell">PurchaseProposal</span>
+      thật, không phải giả lập ở tầng test). Domain "mua hàng" (<span class="mono-cell">
+      LenhMuaNCCPage</span>) CÓ UI nhưng ban đầu tưởng không lái qua UI được: vật tư sắt dùng trong
+      BOM test có <span class="mono-cell">Material.buyerId</span> trỏ tới tài khoản thật
+      (<span class="mono-cell">nhan@demo.com</span>) không nằm trong danh sách
+      <span class="mono-cell">prisma/seed-demo.ts</span>. Người vận hành đặt lại mật khẩu
+      <span class="mono-cell">nhan/tram/nghi</span> về <span class="mono-cell">demo1234</span> ngay
+      trong phiên này — <b>nâng cấp lại thành công</b>: cả 3 chặng còn lại (báo giá, Sếp duyệt, thủ
+      kho nhận hàng) đều lái qua UI thật bằng <span class="mono-cell">nhan</span>/<span class="mono-cell">
+      boss</span>/<span class="mono-cell">khopsh</span> (rà <span class="mono-cell">
+      purchase-proposals.service.ts</span> xác nhận <span class="mono-cell">addQuote/submit/approve/
+      receiveItem</span> chỉ kiểm permission theo module, không enforce <span class="mono-cell">
+      buyerId</span> — chỉ là quy ước lọc hiển thị ở FE, nên <span class="mono-cell">khopsh</span> vẫn
+      dùng được cho bước nhận hàng dù không phải người mua). Việc đăng ký NCC cho vật tư (dữ liệu
+      chuẩn bị, không phải bước nghiệp vụ của luồng vàng) vẫn làm qua API cho nhanh/xác định, idempotent
+      (tái dùng đúng 1 NCC cố định "NCC E2E Test (fixture)" qua mọi lần chạy). Phát hiện thêm ngoài dự
+      tính: 3 tài khoản <span class="mono-cell">muapsh/muavttp/muatp</span> (đúng role Mua hàng theo
+      <span class="mono-cell">seed-demo.ts</span>) hiện vẫn KHÔNG đăng nhập được bằng
+      <span class="mono-cell">demo1234</span> — không phải nợ M4, không chặn gì (đã có
+      <span class="mono-cell">nhan/tram/nghi</span> thay thế đúng buyerId thật), ghi lại để biết.
+      6/8 bước lái qua browser thật (PO, xem SKU, KHSX/QLSX/Boss xử lý lệnh sản xuất, báo giá + Sếp
+      duyệt + thủ kho nhận hàng mua) — chỉ còn duyệt cắt sắt và ship gọi API (không có UI, xem đầu
+      mục). Xác nhận qua DB demo dùng chung (không phải DB test riêng — quyết định chốt trong phiên
+      làm việc này khi cân nhắc giữa Docker Postgres local và DB demo sẵn có).
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-13 (cùng ngày, sau cập nhật trên) — 2 bug thật phát hiện qua chính baseline
+      Playwright, cả 2 đã vá:</b> đúng giá trị mà 1 e2e test thật mang lại — bắt được lỗi mà việc đọc
+      code/unit test riêng lẻ không lộ ra.
+      <p style="margin:10px 0 0">
+      <b>(1) Key báo giá theo tên vật tư, không phải id thật (D.p6-quote-key-collision).</b>
+      <span class="mono-cell">LenhMuaNCCPage</span>/<span class="mono-cell">BossApp</span> "So sánh
+      giá"/<span class="mono-cell">NhapKhoPage</span>/<span class="mono-cell">TheoDoiMuaHangPage</span>/
+      <span class="mono-cell">ThongKePagePlan</span> và <span class="mono-cell">purchasing-api.ts</span>
+      đều dùng <span class="mono-cell">item.name</span> (tên hiển thị vật tư) làm key cho
+      <span class="mono-cell">quotes</span>/<span class="mono-cell">chosenSuppliers</span> và để tra
+      ngược itemId thật (<span class="mono-cell">getBeItemIdsByName()</span> dựng
+      <span class="mono-cell">Map</span> từ mảng items — 2 vật tư khác nhau cùng tên hiển thị, vd
+      nhiều loại "Sắt phi" khác đường kính (SAT-006/SAT-007), khiến item đứng trước bị item trùng tên
+      đứng sau ghi đè mất trong <span class="mono-cell">Map</span>). Hệ quả: 1 trong 2 vật tư trùng
+      tên KHÔNG BAO GIỜ gửi báo giá được dù UI trông bình thường (submit vẫn "thành công" ở FE nhưng
+      BE từ chối vì thiếu báo giá cho 1 item, lỗi chỉ hiện qua <span class="mono-cell">alert()</span>
+      dễ bị bỏ qua). <b>Đã vá:</b> đổi toàn bộ key sang <span class="mono-cell">String(materialId)</span>
+      (đã có sẵn trên type, ổn định/duy nhất trong 1 đề xuất) ở cả 6 file trên, kèm test mới cho đúng
+      kịch bản 2 vật tư trùng tên trong <span class="mono-cell">purchasing-api.test.ts</span> (3 test
+      mới, tổng 37/37 pass).
+      </p>
+      <p style="margin:10px 0 0">
+      <b>(2) Đề xuất mua kẹt vĩnh viễn ở PURCHASING khi tồn đã đủ cho mọi vật tư (D.p7-zero-buyqty-stuck).</b>
+      <span class="mono-cell">CuttingProposalsService.approve()</span> luôn tạo <span class="mono-cell">
+      PurchaseProposal</span> ở trạng thái mặc định <span class="mono-cell">NEW</span> khi có dòng khả
+      thi (<span class="mono-cell">buyableLines.length&gt;0</span>), kể cả khi tồn kho hiện có
+      (<span class="mono-cell">actualStock</span>) đã đủ dùng cho MỌI dòng nên
+      <span class="mono-cell">buyQty=0</span> khắp nơi — không có gì thật sự cần mua. Cờ "mọi item đã
+      nhận đủ → PURCHASED" chỉ được kiểm tra bên trong <span class="mono-cell">receiveItem()</span>
+      (<span class="mono-cell">PurchaseProposalsService</span>), nhưng hàm này không bao giờ được gọi
+      khi <span class="mono-cell">buyQty=0</span> khắp nơi (<span class="mono-cell">NhapKhoPage</span>
+      tự hiện "✓ Đã nhận đủ" ngay vì <span class="mono-cell">0&gt;=0</span>, không có nút "Xác nhận"
+      nào để bấm) — đề xuất kẹt vĩnh viễn ở <span class="mono-cell">PURCHASING</span>, hiện mãi trong
+      "Theo dõi mua hàng" dù chẳng còn việc gì phải làm. Phát hiện khi tồn kho demo tích luỹ đủ qua
+      nhiều lần chạy <span class="mono-cell">npm run test:e2e</span> liên tiếp (mỗi lần "nhận hàng"
+      cộng dồn tồn thật vào kho <span class="mono-cell">phoi-son-han</span>). <b>Đã vá:</b> nếu MỌI
+      dòng <span class="mono-cell">buyQty=0</span> lúc duyệt, tạo thẳng <span class="mono-cell">
+      PurchaseProposal</span> ở <span class="mono-cell">PURCHASED</span> (kèm
+      <span class="mono-cell">purchasedAt</span>) thay vì <span class="mono-cell">NEW</span>, bỏ qua
+      toàn bộ vòng báo giá/duyệt vô nghĩa. Cập nhật kèm 1 test cũ (mong đợi hành vi cũ) +
+      xác nhận qua chính e2e (1 lần chạy có tồn đủ cho mọi vật tư, đề xuất tạo thẳng
+      <span class="mono-cell">PURCHASED</span>, không qua quoting/submit/approve).
+      </p>
+      <p style="margin:10px 0 0">
+      Cả 2 bug đều được xác nhận đã sửa qua: unit test (FE <span class="mono-cell">vitest</span>
+      37/37, BE <span class="mono-cell">jest</span> module cutting-proposals/purchase-proposals),
+      <span class="mono-cell">tsc --noEmit</span> sạch cả 2 phía, <span class="mono-cell">next
+      build</span> sạch, <span class="mono-cell">eslint</span> 0 lỗi (chỉ warning có từ trước), và
+      nhiều lần chạy <span class="mono-cell">npm run test:e2e</span> đạt tới <span class="mono-cell">
+      PURCHASED</span>/<span class="mono-cell">SUBMITTED</span> thật qua UI. Vài lần chạy sau đó gặp
+      429 (rate-limit)/timeout do tự dội API quá dồn dập trong thời gian ngắn khi rà — không phải lỗi
+      logic, dữ liệu demo (vd PO-21) xác nhận luồng chạy trọn vẹn end-to-end thật khi hệ thống không
+      bị stress-test dồn dập.
+      </p>
+    </div>
+    <div class="callout" style="margin-top:14px; border-color:#ab4331">
+      <b style="color:#ab4331">⚠ Cập nhật 2026-08-13 (cuối phiên) — DB demo dùng chung (Prisma Postgres
+      pooled) hiện ĐANG DOWN:</b> <span class="mono-cell">GET /api/health</span> trả
+      <span class="mono-cell">database.status=down</span>, message
+      <span class="mono-cell">"Your account has restrictions: planLimitReached. Please contact Prisma
+      support to resolve account restrictions."</span> — khả năng cao do khối lượng request từ việc
+      chạy <span class="mono-cell">npm run test:e2e</span> lặp lại rất nhiều lần trong phiên này (mỗi
+      lần chạy tạo hàng chục request thật: 8 lượt đăng nhập vai trò, hàng loạt GET/POST nghiệp vụ).
+      <b>Cần Sếp/người phụ trách hạ tầng liên hệ Prisma support hoặc nâng gói trước khi dùng lại app
+      hoặc chạy thêm test</b> — DB down ảnh hưởng TOÀN BỘ hệ thống (không riêng gì luồng vàng), không
+      chỉ baseline Playwright. Toàn bộ xác nhận "đã pass"/"đạt PURCHASED" ở 2 callout trên đều diễn ra
+      TRƯỚC khi DB down (dữ liệu thật còn trên DB, vd PO-21 tới PO-13...), không phải suy đoán.
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Tổng kết 2026-08-13 (cuối ngày):</b> M2/M3/M4 nay đều hoàn tất — baseline Playwright thật cho
+      6/8 bước qua UI, 2 bug thật phát hiện+sửa cùng phiên. Nợ còn lại ngoài phạm vi roadmap này:
+      <span class="mono-cell">KhoPhoiPage</span> (mock, cần quy đổi đoạn chưa model), 2 gap nhỏ
+      production-invoices (mã PI-{id} chưa có năm, audit item-level), và mật khẩu 3 tài khoản
+      <span class="mono-cell">muapsh/muavttp/muatp</span> vẫn không rõ (không chặn gì, đã có
+      <span class="mono-cell">nhan/tram/nghi</span> thay thế đúng vai trò cần). <b>Chặn thật duy nhất
+      lúc này: DB demo down (xem callout ⚠ ngay trên) — không phải nợ kỹ thuật, cần xử lý hạ tầng
+      trước khi tiếp tục bất kỳ việc gì trên app.</b>
+    </div>
   </div>
 </div>
 
@@ -1189,13 +1315,13 @@
 
         <div class="milestone" data-m="M4">
           <div class="milestone-card">
-            <div class="milestone-head"><h4>Dọn nợ nền tảng</h4><span class="pill pill-mixed">4/5 xong 2026-08-13</span></div>
+            <div class="milestone-head"><h4>Dọn nợ nền tảng</h4><span class="pill pill-done">5/5 xong 2026-08-13</span></div>
             <p class="milestone-why">Không chặn triển khai riêng lẻ, nhưng càng để lâu càng khó sửa khi hệ thống lớn thêm sau M2/M3.</p>
             <ul>
               <li><span class="tag">✓</span>Viết <span class="mono-cell">withIdempotencyKey()</span> dùng chung ở FE (<span class="mono-cell">services/core/http.ts</span>), thay 6 chỗ tự viết tay + vá 5 chỗ thiếu hẳn header. Phát hiện kèm 1 lỗi thật đang chạy: <span class="mono-cell">approveFullSku()</span> (nút "Sếp duyệt" cuối của SKU) gọi thiếu header bắt buộc → luôn 400 kể từ bản vá BE 2026-08-11, đã sửa.</li>
               <li><span class="tag">✓</span>Đổi <span class="mono-cell">id</span>/<span class="mono-cell">customerId</span> sang string khớp BE — làm cả 3 domain lõi (Sales, SKU, Production Invoice, kèm Products vì <span class="mono-cell">resolveMfgProduct()</span> dùng chung) thay vì chỉ Sales, vì SKU/PI khớp id lẫn nhau qua <span class="mono-cell">piMap</span>. Đổi tên SalesPO→SalesOrder; <b>giữ lại</b> hàm adapter <span class="mono-cell">toSalesOrder()</span> (không xoá hẳn "lớp remap" như dự tính — <span class="mono-cell">totalValue</span>/<span class="mono-cell">deliveryDate</span> fallback là field/hành vi thật một số trang phụ thuộc, xoá sẽ vỡ). Lộ thêm 1 bug thật đang chạy (<span class="mono-cell">InspRequest.skuId</span> bị <span class="mono-cell">Number()</span> sai kiểu khiến khớp Lệnh kiểm tra vật tư↔SKU luôn thất bại) + 1 dead code (nhánh demo <span class="mono-cell">pf.id===9||10</span> ở ThongKePagePlan) — cả 2 đã sửa. Xem callout 2026-08-13 đầu trang.</li>
               <li><span class="tag">✓</span>Bổ sung test cho 10 module backend đang 0 test — xong cả 10 (roles, notifications, audit-log, customers, material-groups, defect-reasons, segment-specs, system-config, uploads, external), 419/419 test BE pass.</li>
-              <li><span class="tag">✗ chưa làm</span>Thêm baseline Playwright cho đúng 1 luồng tiền: PO → duyệt SKU → PI → đề xuất cắt sắt → mua hàng → ship.</li>
+              <li><span class="tag">✓</span>Baseline Playwright cho đúng 1 luồng tiền (PO → duyệt SKU → PI → đề xuất cắt sắt → mua hàng → ship) — <span class="mono-cell">D:\DNA-ERP\e2e\golden-path.spec.ts</span>, chạy <span class="mono-cell">npm run test:e2e</span>. 6/8 bước lái browser thật (PO, xem SKU, KHSX/QLSX/Boss xử lý lệnh sản xuất, báo giá + Sếp duyệt + thủ kho nhận hàng mua — tài khoản <span class="mono-cell">nhan</span> đúng buyerId, mật khẩu được đặt lại trong phiên); chỉ duyệt cắt sắt và ship gọi thẳng API vì FE thật sự chưa có nút cho 2 việc đó. Solver ngoài (cat_sat) chưa có trong repo/không chạy sẵn — thay bằng <span class="mono-cell">e2e/solver-stub.js</span> deterministic. Phát hiện kèm sửa 2 bug thật (key báo giá theo tên vật tư gây mất báo giá khi trùng tên; đề xuất mua kẹt ở PURCHASING khi tồn đã đủ). Xem 3 callout 2026-08-13 (đợt 2-4) đầu trang — <b>lưu ý: DB demo dùng chung hiện đang down (planLimitReached), xem callout ⚠ cuối phần đầu trang.</b></li>
               <li><span class="tag">✓</span>Gỡ <span class="mono-cell">ignoreBuildErrors</span> — xoá thẳng 1 lần (không phải gỡ dần theo domain như dự tính, vì <span class="mono-cell">tsc --noEmit</span> đã sạch sẵn), xác nhận <span class="mono-cell">next build</span> thật chạy sạch.</li>
             </ul>
           </div>
@@ -1242,6 +1368,23 @@
   Không dựa vào dna-erp-backend-roadmap.html /
   dna-erp-frontend-integration-plan.html — 2 tài liệu này được xác nhận đã lệch so với code hiện tại
   và bị loại khỏi lần cập nhật này.
+  <br><br>
+  Cập nhật 2026-08-13 (đợt cuối M4 — baseline Playwright): thêm <span class="mono-cell">
+  D:\DNA-ERP\playwright.config.ts</span> + <span class="mono-cell">e2e/golden-path.spec.ts</span> +
+  <span class="mono-cell">e2e/solver-stub.js</span> (thay solver cat_sat ngoài, không có trong repo,
+  không chạy sẵn máy này). Sau khi mật khẩu <span class="mono-cell">nhan/tram/nghi</span> được đặt
+  lại về demo1234 trong phiên, nâng cấp lên 6/8 bước lái qua UI thật (chỉ duyệt cắt sắt + ship còn
+  gọi API — FE thật sự chưa có nút). Rà kỹ trong lúc chạy phát hiện + vá 2 bug thật:
+  <span class="mono-cell">purchasing-api.ts</span> và 5 trang liên quan dùng
+  <span class="mono-cell">item.name</span> làm key báo giá (thay vì <span class="mono-cell">
+  materialId</span>) khiến 2 vật tư trùng tên hiển thị mất báo giá của nhau; và
+  <span class="mono-cell">CuttingProposalsService.approve()</span> để đề xuất mua kẹt vĩnh viễn ở
+  <span class="mono-cell">PURCHASING</span> khi tồn đã đủ cho mọi vật tư (buyQty=0 khắp nơi). Cả 2
+  đã vá + có test, xác nhận qua nhiều lần chạy <span class="mono-cell">npm run test:e2e</span> đạt
+  <span class="mono-cell">PURCHASED</span>/<span class="mono-cell">SUBMITTED</span> thật. <b>M2/M3/M4
+  nay đều hoàn tất</b> — xem 4 callout 2026-08-13 (đợt 2-5) đầu trang. <b>⚠ Cuối phiên: DB demo dùng
+  chung bị Prisma chặn (planLimitReached), khả năng do khối lượng test lặp lại trong phiên này — cần
+  liên hệ Prisma support/nâng gói trước khi dùng lại app hoặc chạy thêm test, xem callout ⚠ đầu trang.</b>
 </footer>
 
 </body>

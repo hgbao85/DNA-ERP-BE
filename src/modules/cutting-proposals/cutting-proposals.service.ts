@@ -5,6 +5,7 @@ import {
   CuttingProposalStatus,
   NotificationAudience,
   Prisma,
+  PurchaseProposalStatus,
   StockLedgerRefType,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
@@ -266,11 +267,22 @@ export class CuttingProposalsService {
           }
         }
 
+        // Nếu tồn hiện có đã đủ dùng cho MỌI dòng (buyQty=0 khắp nơi) thì không có gì để mua -
+        // tạo thẳng ở PURCHASED thay vì NEW, nếu không đề xuất sẽ kẹt vĩnh viễn ở PURCHASING: cờ
+        // "mọi item đã nhận đủ -> PURCHASED" chỉ được kiểm tra bên trong receiveItem() (xem dưới),
+        // nhưng receiveItem() không bao giờ được gọi khi buyQty=0 cho mọi dòng - đúng luồng đọc,
+        // NhapKhoPage tự hiện "Đã nhận đủ" ngay (receivedQty 0 >= buyQty 0) nên không có nút xác
+        // nhận nào để bấm (phát hiện qua e2e/golden-path.spec.ts khi tồn kho tích luỹ đủ qua nhiều
+        // lần chạy demo, D.p7-zero-buyqty-stuck).
+        const allCovered = items.every((it) => it.buyQty === 0);
         await tx.purchaseProposal.create({
           data: {
             cuttingProposalId: bigId,
             warehouseCode: STEEL_WAREHOUSE_CODE,
             items: { create: items },
+            ...(allCovered
+              ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
+              : {}),
           },
         });
       }

@@ -700,11 +700,17 @@ describe('CuttingProposalsService', () => {
 
       await service.approve('2', 'user-1');
 
+      // Mọi dòng buyQty=0 (tồn đã đủ, không có gì để mua) -> tạo thẳng PURCHASED, không phải NEW -
+      // nếu không đề xuất sẽ kẹt vĩnh viễn ở PURCHASING vì cờ "mọi item đã nhận đủ" chỉ được kiểm
+      // tra bên trong receiveItem(), không bao giờ được gọi khi chẳng có gì cần nhận
+      // (D.p7-zero-buyqty-stuck, phát hiện qua e2e/golden-path.spec.ts).
       expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
         data: {
           cuttingProposalId: 2n,
           warehouseCode: 'phoi-son-han',
           items: { create: [{ materialId: 30n, buyQty: 0, actualStock: 20 }] },
+          status: 'PURCHASED',
+          purchasedAt: expect.any(Date) as Date,
         },
       });
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith({
