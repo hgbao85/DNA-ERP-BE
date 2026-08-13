@@ -8,6 +8,7 @@ import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorat
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CompleteCuttingDto } from './dto/complete-cutting.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
+import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
 import { SteelIssuesService } from './steel-issues.service';
 
 const VIEW = { module: PERMISSION_MODULES.STEEL_ISSUE, action: PermissionAction.VIEW };
@@ -44,6 +45,15 @@ export class SteelIssuesController {
   @RequirePermissions(VIEW)
   getIssuePlan(@Param('id') id: string) {
     return this.steelIssuesService.getIssuePlan(id);
+  }
+
+  // ─── Tổ Phôi / KCS - xem theo trạng thái, không cần biết trước productionOrderId ─
+
+  /** Flat, không cần biết productionOrderId - xem ListSteelIssuesQueryDto. */
+  @Get('steel-issues')
+  @RequirePermissions(VIEW)
+  findAll(@Query() query: ListSteelIssuesQueryDto) {
+    return this.steelIssuesService.findAll(query);
   }
 
   @Get('steel-issues/:id')

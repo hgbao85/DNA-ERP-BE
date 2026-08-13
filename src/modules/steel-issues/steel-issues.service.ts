@@ -15,6 +15,7 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CompleteCuttingDto } from './dto/complete-cutting.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { CutBundleResponseDto, CutPatternSegmentResponseDto } from './dto/cut-bundle-response.dto';
+import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
 import { SteelIssuePlanItemResponseDto } from './dto/steel-issue-plan-item-response.dto';
 import { SteelIssueResponseDto } from './dto/steel-issue-response.dto';
 
@@ -106,6 +107,25 @@ export class SteelIssuesService {
     });
 
     return this.toResponseDto(created);
+  }
+
+  /** Flat, KHÔNG cần productionOrderId - xem ListSteelIssuesQueryDto tại sao endpoint này tồn tại
+   *  riêng (permission PHOI_STAFF/KCS_STAFF không đủ để tự resolve productionOrderId). */
+  async findAll(query: ListSteelIssuesQueryDto): Promise<Paginated<SteelIssueResponseDto>> {
+    const where: Prisma.SteelIssueWhereInput = {
+      ...(query.status ? { status: query.status } : {}),
+    };
+    const result = await paginate(
+      {
+        findMany: (args) =>
+          this.prisma.steelIssue.findMany({ ...args, include: STEEL_ISSUE_INCLUDE }),
+        count: (args) => this.prisma.steelIssue.count(args),
+      },
+      query,
+      where,
+      { issuedAt: 'desc' as const },
+    );
+    return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };
   }
 
   async findAllForOrder(

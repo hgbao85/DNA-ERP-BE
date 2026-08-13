@@ -594,6 +594,7 @@ export class CuttingProposalsService {
       lengthComparison: line.lengthComparison as
         { length: number; bars: number; wastePct: number }[] | null,
       patterns: line.patterns.map((pattern) => ({
+        id: pattern.id.toString(),
         patternIndex: pattern.patternIndex,
         barCount: pattern.barCount,
         wastePerBarMm: pattern.wastePerBarMm,

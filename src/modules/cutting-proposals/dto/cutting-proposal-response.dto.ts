@@ -15,6 +15,9 @@ export class CuttingProposalSegmentResponseDto {
 
 @Exclude()
 export class CuttingProposalPatternResponseDto {
+  /// Id thật của CuttingProposalPattern - dùng cho CompleteCuttingDto.bundles[].proposalPatternId
+  /// khi Phôi báo cắt xong theo đúng pattern đã duyệt (xem steel-issues module).
+  @Expose() @ApiProperty() id!: string;
   @Expose() @ApiProperty() patternIndex!: number;
   @Expose() @ApiProperty() barCount!: number;
   @Expose() @ApiPropertyOptional({ nullable: true }) wastePerBarMm!: number | null;

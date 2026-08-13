@@ -306,6 +306,25 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.STEEL_ISSUE,
       actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
     },
+    // Vá lỗ quyền phát hiện lúc nối FE XacNhanSanLuongPage (M3, báo cắt xong theo đúng pattern
+    // đã duyệt): completeCutting() cần proposalPatternId thật (CuttingProposalPatternResponseDto.id,
+    // vừa lộ ra) để dựng đúng segments của bundle - PHOI_STAFF trước bản vá này không có cách nào
+    // đọc CuttingProposal (GET production-orders/:id/cutting-proposals rồi GET cutting-proposals/:id)
+    // dù đã biết productionOrderId từ chính SteelIssue của mình (không cần PRODUCTION_ORDER:VIEW).
+    // Chỉ VIEW - Phôi không tự tạo/duyệt phương án cắt.
+    {
+      module: PERMISSION_MODULES.CUTTING_PROPOSAL,
+      actions: [PermissionAction.VIEW],
+    },
+    // Vá lỗ quyền phát hiện qua browser thật 2026-08-13: LenhSanXuatPhoi/XacNhanSanLuongPage gọi
+    // getQcReviewsForSteelIssues() (GET /qc-reviews?limit=100) để hiện cột "Đã KCS đạt" - PHOI_STAFF
+    // trước bản vá này không có QC_REVIEW:VIEW nên 2 trang đều 403 âm thầm ở lời gọi này (không chặn
+    // trang, chỉ mất cột). Chỉ VIEW - duyệt (QC_REVIEW ghi) vẫn là việc riêng của KCS_STAFF, xem
+    // comment ở trên.
+    {
+      module: PERMISSION_MODULES.QC_REVIEW,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // HAN_STAFF/SON_STAFF (Phase 9c+9d, 2026-08-11). MATERIAL_ISSUE: chỉ UPDATE+VIEW (POST
   // /material-issues/:id/receive, "tổ xác nhận nhận") - KHÔNG có CREATE, cấp vật tư là việc của
@@ -365,6 +384,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     // duyệt. Chỉ VIEW, không CREATE (KCS không tự báo sản lượng).
     {
       module: PERMISSION_MODULES.PRODUCTION_BATCH,
+      actions: [PermissionAction.VIEW],
+    },
+    // Vá lỗ quyền phát hiện lúc nối FE KcsPhoiPage (M3, cùng tiền lệ PRODUCTION_BATCH:VIEW ở trên):
+    // KCS_STAFF chưa từng có STEEL_ISSUE:VIEW nên không gọi được GET /steel-issues (flat, mới thêm)
+    // để xem đợt Phôi đang AWAITING_QC. Chỉ VIEW - KCS không tự xuất/nhận sắt.
+    {
+      module: PERMISSION_MODULES.STEEL_ISSUE,
       actions: [PermissionAction.VIEW],
     },
   ],
