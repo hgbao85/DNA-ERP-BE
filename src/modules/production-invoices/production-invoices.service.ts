@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto';
 import {
   BadRequestException,
   ConflictException,
@@ -7,11 +6,21 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, ProdApprovalStatus, ProductionInvoiceStatus } from '../../generated/prisma/client';
+import { ClsService } from 'nestjs-cls';
+import {
+  AuditAction,
+  Prisma,
+  PrismaClient,
+  ProdApprovalStatus,
+  ProductionInvoiceStatus,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
@@ -52,7 +61,49 @@ export class ProductionInvoicesService {
     private readonly skusService: SkusService,
     private readonly productionOrdersService: ProductionOrdersService,
     private readonly cuttingProposalsService: CuttingProposalsService,
+    private readonly cls: ClsService<AppClsStore>,
   ) {}
+
+  /**
+   * ProductionInvoiceItem bị loại khỏi AUDITED_MODELS (dòng con đổi liên tục theo vòng đời PI cha
+   * - xem audit-log.extension.ts) nên createItem/updateItem không để lại vết, nhưng riêng 5 bước
+   * chuyển trạng thái duyệt sản xuất (sendItemToQlsx/sendItemToBoss/approveItem/rejectItemByQlsx/
+   * rejectItem) đều overwrite field trên cùng 1 dòng - không có audit thì lịch sử duyệt trước đó
+   * (ai gửi/ai duyệt lúc nào) biến mất hoàn toàn khi item đổi trạng thái tiếp theo, không tra lại
+   * được qua đâu cả. Ghi thủ công bằng writeAuditLog() (bypass AUDITED_MODELS đúng như jsdoc của
+   * nó) để lịch sử duyệt vẫn tra được qua GET /audit-logs?tableName=ProductionInvoiceItem.
+   */
+  private snapshotItemApproval(item: PIItemWithRefs): Record<string, unknown> {
+    return {
+      prodApprovalStatus: item.prodApprovalStatus,
+      warehouseCode: item.warehouseCode,
+      warehouseName: item.warehouseName,
+      requestedAt: item.requestedAt,
+      requestedById: item.requestedById,
+      qlsxAt: item.qlsxAt,
+      qlsxById: item.qlsxById,
+      decidedAt: item.decidedAt,
+      decidedById: item.decidedById,
+      rejectReason: item.rejectReason,
+    };
+  }
+
+  private async auditItemApprovalTransition(
+    before: PIItemWithRefs,
+    after: PIItemWithRefs,
+  ): Promise<void> {
+    // Same cast writeAuditLog's own caller (audit-log.extension.ts) uses - the extended client's
+    // generic query-args types aren't structurally assignable to plain PrismaClient's, even though
+    // .auditLog.create is a superset at runtime.
+    const auditLogClient = this.prisma as unknown as Pick<PrismaClient, 'auditLog'>;
+    await writeAuditLog(auditLogClient, this.cls, {
+      action: AuditAction.UPDATE,
+      tableName: 'ProductionInvoiceItem',
+      recordId: after.id.toString(),
+      oldValue: this.snapshotItemApproval(before),
+      newValue: this.snapshotItemApproval(after),
+    });
+  }
 
   async create(dto: CreateProductionInvoiceDto): Promise<ProductionInvoiceResponseDto> {
     const salesOrderBigId = dto.salesOrderId ? parseBigIntId(dto.salesOrderId) : undefined;
@@ -65,10 +116,10 @@ export class ProductionInvoicesService {
       }
     }
 
-    const placeholderCode = `PI-TMP-${randomUUID()}`;
+    const code = await nextProductionInvoiceCode(this.prisma);
     const created = await this.prisma.productionInvoice.create({
       data: {
-        code: placeholderCode,
+        code,
         salesOrderId: salesOrderBigId,
         deadline: dto.deadline ? new Date(dto.deadline) : undefined,
       },
@@ -77,15 +128,7 @@ export class ProductionInvoicesService {
         items: { include: { mfgProduct: true, productVariant: true, stages: true } },
       },
     });
-    const withCode = await this.prisma.productionInvoice.update({
-      where: { id: created.id },
-      data: { code: `PI-${created.id}` },
-      include: {
-        salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true, stages: true } },
-      },
-    });
-    return this.toResponseDto(withCode);
+    return this.toResponseDto(created);
   }
 
   async findAll(query: PaginationQueryDto): Promise<Paginated<ProductionInvoiceResponseDto>> {
@@ -223,6 +266,7 @@ export class ProductionInvoicesService {
       },
       include: { mfgProduct: true, productVariant: true, stages: true },
     });
+    await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
   }
 
@@ -249,6 +293,7 @@ export class ProductionInvoicesService {
       },
       include: { mfgProduct: true, productVariant: true, stages: true },
     });
+    await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
   }
 
@@ -282,6 +327,7 @@ export class ProductionInvoicesService {
       },
       include: { mfgProduct: true, productVariant: true, stages: true },
     });
+    await this.auditItemApprovalTransition(item, updated);
 
     if (pi.salesOrderId) {
       await this.skusService.ensureProductionConfirmPlanForm(
@@ -365,6 +411,7 @@ export class ProductionInvoicesService {
       },
       include: { mfgProduct: true, productVariant: true, stages: true },
     });
+    await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
   }
 
@@ -389,6 +436,7 @@ export class ProductionInvoicesService {
       },
       include: { mfgProduct: true, productVariant: true, stages: true },
     });
+    await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
   }
 

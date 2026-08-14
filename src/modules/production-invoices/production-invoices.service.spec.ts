@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProdItemStageType } from '../../generated/prisma/client';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
 import { SkusService } from '../skus/skus.service';
@@ -30,6 +32,7 @@ describe('ProductionInvoicesService', () => {
     transferCheckResult: { findMany: jest.Mock; create: jest.Mock };
     weavingReceipt: { groupBy: jest.Mock };
     packagingRecord: { create: jest.Mock; aggregate: jest.Mock };
+    auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
   };
   let skusService: { ensureProductionConfirmPlanForm: jest.Mock };
@@ -38,6 +41,7 @@ describe('ProductionInvoicesService', () => {
     assertActiveBomRevisionExists: jest.Mock;
   };
   let cuttingProposalsService: { requestForOrder: jest.Mock };
+  let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
 
   const mfgProduct = { id: 2n, factoryCode: 'SKU-01', name: 'Ghe A' };
   const pi = (overrides: Record<string, unknown> = {}) => ({
@@ -102,6 +106,7 @@ describe('ProductionInvoicesService', () => {
         create: jest.fn(),
         aggregate: jest.fn().mockResolvedValue({ _sum: { boxesPacked: null } }),
       },
+      auditLog: { create: jest.fn() },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     skusService = { ensureProductionConfirmPlanForm: jest.fn() };
@@ -110,11 +115,13 @@ describe('ProductionInvoicesService', () => {
       assertActiveBomRevisionExists: jest.fn().mockResolvedValue(undefined),
     };
     cuttingProposalsService = { requestForOrder: jest.fn().mockResolvedValue({ id: '1' }) };
+    cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     service = new ProductionInvoicesService(
       prisma as unknown as PrismaServiceType,
       skusService as unknown as SkusService,
       productionOrdersService as unknown as ProductionOrdersService,
       cuttingProposalsService as unknown as CuttingProposalsService,
+      cls as unknown as ClsService<AppClsStore>,
     );
   });
 
@@ -128,6 +135,17 @@ describe('ProductionInvoicesService', () => {
 
       const result = await service.sendItemToQlsx('7', '20', 'user-khsx');
       expect(result.prodApprovalStatus).toBe('WAITING_QLSX');
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment -- jest matcher typing */
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          tableName: 'ProductionInvoiceItem',
+          recordId: '20',
+          action: 'UPDATE',
+          oldValue: expect.objectContaining({ prodApprovalStatus: null }),
+          newValue: expect.objectContaining({ prodApprovalStatus: 'WAITING_QLSX' }),
+        }),
+      });
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
     });
 
     it('rejects re-sending an item that is already WAITING_BOSS', async () => {

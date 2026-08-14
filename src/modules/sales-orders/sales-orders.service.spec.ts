@@ -20,7 +20,7 @@ describe('SalesOrdersService', () => {
       findUnique: jest.Mock;
       findMany: jest.Mock;
     };
-    productionInvoice: { create: jest.Mock; update: jest.Mock };
+    productionInvoice: { create: jest.Mock; update: jest.Mock; count: jest.Mock };
     $queryRaw: jest.Mock;
   };
 
@@ -63,7 +63,7 @@ describe('SalesOrdersService', () => {
         findUnique: jest.fn(),
         findMany: jest.fn(),
       },
-      productionInvoice: { create: jest.fn(), update: jest.fn() },
+      productionInvoice: { create: jest.fn(), update: jest.fn(), count: jest.fn() },
       $queryRaw: jest.fn(),
     };
     service = new SalesOrdersService(prisma as unknown as PrismaServiceType);
@@ -75,8 +75,8 @@ describe('SalesOrdersService', () => {
       prisma.mfgProduct.findUnique.mockResolvedValue(product);
       prisma.salesOrder.create.mockResolvedValue(orderWithItems({ code: 'PO-TMP-x' }));
       prisma.salesOrder.update.mockResolvedValue(orderWithItems({ code: 'PO-10' }));
+      prisma.productionInvoice.count.mockResolvedValue(0);
       prisma.productionInvoice.create.mockResolvedValue({ id: 50n });
-      prisma.productionInvoice.update.mockResolvedValue({ id: 50n, code: 'PI-50' });
 
       const result = await service.create({
         customerId: '1',
@@ -88,10 +88,16 @@ describe('SalesOrdersService', () => {
       expect(prisma.salesOrder.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: { code: 'PO-10' } }),
       );
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment -- jest matcher typing */
       expect(prisma.productionInvoice.create).toHaveBeenCalledWith(
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
-        expect.objectContaining({ data: expect.objectContaining({ salesOrderId: 10n }) }),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            salesOrderId: 10n,
+            code: expect.stringMatching(/^PI-\d{4}-001$/),
+          }),
+        }),
       );
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
     });
 
     it('rejects when the customer does not exist', async () => {

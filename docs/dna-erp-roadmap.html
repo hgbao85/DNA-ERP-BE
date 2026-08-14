@@ -969,11 +969,56 @@
       <span class="mono-cell">DoanTon</span> xoá khỏi <span class="mono-cell">phoi-sat.service.ts</span>.
       Xác nhận: BE 457/457 test pass (453 cũ + 4 mới), FE 37/37 vitest pass,
       <span class="mono-cell">next build</span> (Turbopack) + <span class="mono-cell">tsc --noEmit</span> +
-      <span class="mono-cell">eslint</span> sạch cả 2 phía. <b>Chưa xác nhận qua browser thật</b> (tài khoản
-      <span class="mono-cell">phoi</span>/<span class="mono-cell">khopsh</span>) — phụ thuộc DB demo còn
-      down hay đã xử lý (xem callout ⚠ 2026-08-13 phía trên). Luồng xử lý đầu mẩu tái dùng/bán phế liệu vẫn
+      <span class="mono-cell">eslint</span> sạch cả 2 phía. Luồng xử lý đầu mẩu tái dùng/bán phế liệu vẫn
       để sau (có nhu cầu, chưa chốt cụ thể). <b>Toàn bộ nợ riêng "sản xuất tại xưởng" liệt kê ở roadmap
-      này nay đã đóng — chỉ còn phụ thuộc hạ tầng (DB demo) để xác nhận cuối qua UI thật.</b>
+      này nay đã đóng.</b>
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-14 (đợt 2 — DB demo đã xử lý, xác nhận KhoPhoiPage qua browser thật):</b>
+      DB demo (Prisma Postgres pooled) hết <span class="mono-cell">planLimitReached</span>, <span class="mono-cell">GET /api/health</span>
+      trả <span class="mono-cell">database.status=up</span> — chặn hạ tầng nêu ở callout ⚠ 2026-08-13 đã gỡ.
+      Chạy lại BE+FE local, đăng nhập tài khoản <span class="mono-cell">phoi</span> rà <span class="mono-cell">
+      KhoPhoiPage</span>: phát hiện <span class="mono-cell">GET /stock-quant</span> 403 thật —
+      <span class="mono-cell">STOCK:VIEW</span> mới chỉ nằm trong <span class="mono-cell">
+      role-permissions.constant.ts</span> (đợt sửa code hôm qua), chưa từng chạy <span class="mono-cell">
+      npm run seed</span> để áp lên DB demo. Đã chạy seed (đồng bộ idempotent 13 role, không đụng dữ liệu
+      nghiệp vụ khác), xác nhận qua DB trực tiếp <span class="mono-cell">PHOI_STAFF</span> nay có
+      <span class="mono-cell">STOCK:VIEW</span>. Xác nhận lại qua browser thật: <b>0 request 403, 0 console
+      error</b>; 2 tab "Đoạn chuẩn"/"Đoạn thừa" hiện đúng empty-state (DB demo chưa có ai khai tồn đoạn qua
+      <span class="mono-cell">stock-ledger/adjust</span>, không phải lỗi). <b>KhoPhoiPage nay đã xác nhận
+      xong qua UI thật — không còn việc gì treo lại từ roadmap này.</b> Xem thẻ rủi ro cập nhật ở mục 07.
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-14 (đợt 3 — đóng 2 gap nhỏ còn lại của production-invoices, mục 02):</b>
+      <b>(1) Mã PI-{id} chưa có năm:</b> 3 nơi tạo PI (<span class="mono-cell">
+      production-invoices.service.ts#create()</span>, <span class="mono-cell">
+      skus.service.ts#resolveProductionInvoice()</span>, <span class="mono-cell">
+      sales-orders.service.ts#createLinkedProductionInvoice()</span>) đều tự sinh mã theo kiểu
+      "tạo placeholder <span class="mono-cell">PI-TMP-{uuid}</span> rồi update lại thành
+      <span class="mono-cell">PI-{id tự tăng}</span>" — không có năm, cũng tốn 1 lượt UPDATE thừa.
+      Gộp cả 3 nơi vào 1 helper dùng chung <span class="mono-cell">
+      common/utils/production-invoice-code.util.ts#nextProductionInvoiceCode()</span>, mirror đúng
+      idiom "đếm rồi tạo, để DB unique constraint bắt race hiếm gặp" đã dùng cho
+      <span class="mono-cell">WarehouseTransfer.code</span> (<span class="mono-cell">nextTransferCode()</span>)
+      — mã mới có dạng <span class="mono-cell">PI-2026-001</span>, tính được ngay lúc tạo (bỏ hẳn
+      bước UPDATE placeholder). <b>(2) Lịch sử duyệt theo item không tra được qua audit_logs:</b>
+      <span class="mono-cell">ProductionInvoiceItem</span> cố ý nằm ngoài <span class="mono-cell">
+      AUDITED_MODELS</span> (dòng con đổi liên tục theo vòng đời PI cha — xem
+      <span class="mono-cell">audit-log.extension.ts</span>), nên 5 bước chuyển trạng thái duyệt
+      (<span class="mono-cell">sendItemToQlsx/sendItemToBoss/approveItem/rejectItemByQlsx/rejectItem</span>)
+      chỉ ghi đè field trên cùng 1 dòng — lịch sử bước duyệt trước bị mất hẳn, không tra lại được ở
+      đâu cả (không riêng gì audit_logs). Xuất <span class="mono-cell">writeAuditLog()</span> (vốn
+      private trong extension) để service gọi thủ công, bypass <span class="mono-cell">
+      AUDITED_MODELS</span> đúng như jsdoc mới thêm — mỗi lần chuyển trạng thái ghi 1 dòng
+      <span class="mono-cell">audit_logs</span> (<span class="mono-cell">tableName=
+      ProductionInvoiceItem</span>, action UPDATE, old/newValue là snapshot các field duyệt), tra
+      được qua <span class="mono-cell">GET /audit-logs?tableName=ProductionInvoiceItem&amp;recordId=</span>
+      có sẵn, không cần thêm API mới. Không đưa <span class="mono-cell">ProductionInvoiceItem</span>
+      vào <span class="mono-cell">AUDITED_MODELS</span> (sẽ audit luôn cả <span class="mono-cell">
+      addItem/updateItem</span>, không chỉ 5 bước duyệt, đi ngược policy "không audit dòng con" đã
+      chốt). Xác nhận: 453/453 test BE pass (cập nhật fixture/mock 2 spec liên quan + thêm 1
+      assertion audit-log), <span class="mono-cell">tsc --noEmit</span> + <span class="mono-cell">
+      eslint</span> sạch. Không đổi field/DTO nào FE đang đọc nên không cần đổi gì ở FE.
     </div>
   </div>
 </div>
@@ -985,11 +1030,11 @@
   </div>
   <div class="stat-tile" style="--stat-color:var(--mock)">
     <span class="stat-num">14 / 47</span>
-    <span class="stat-label">Nhóm trang frontend vẫn chạy 100% mock — tập trung gần hết ở khối sản xuất tại xưởng. <b>M3 hoàn tất 7/7 domain 2026-08-13</b> (Đóng gói, Kiểm tra vật tư, Phân bổ/nhận hàng đan, Xuất vật tư tiêu hao, Sản lượng theo công đoạn, QC Hàn/Sơn — 2026-08-12; Xuất sắt Phôi — 2026-08-13). <b>KhoPhoiPage (nợ riêng cuối cùng) đã nối FE 2026-08-14</b> — xem callout đầu trang. Phần mock còn lại: Nhập/Xuất kho tay (Manufacturing), PhoiDinhMucManhPage, VatTuDashboardPage (mixed), AuditLogPage/SystemStatusPage (Admin, cố ý giữ)</span>
+    <span class="stat-label">Nhóm trang frontend vẫn chạy 100% mock — tập trung gần hết ở khối sản xuất tại xưởng. <b>M3 hoàn tất 7/7 domain 2026-08-13</b> (Đóng gói, Kiểm tra vật tư, Phân bổ/nhận hàng đan, Xuất vật tư tiêu hao, Sản lượng theo công đoạn, QC Hàn/Sơn — 2026-08-12; Xuất sắt Phôi — 2026-08-13). <b>KhoPhoiPage (nợ riêng cuối cùng) đã nối FE và xác nhận qua browser thật 2026-08-14</b> — xem callout đầu trang. Phần mock còn lại: Nhập/Xuất kho tay (Manufacturing), PhoiDinhMucManhPage, VatTuDashboardPage (mixed), AuditLogPage/SystemStatusPage (Admin, cố ý giữ)</span>
   </div>
-  <div class="stat-tile" style="--stat-color:var(--mixed)">
-    <span class="stat-num">1</span>
-    <span class="stat-label">Module lõi còn hở quy tắc nghiệp vụ (Production-Invoices) — Sales-Orders và Skus/PlanForm đã vá xong 2026-08-11 (khoá ship, transaction+idempotency boss-approve)</span>
+  <div class="stat-tile" style="--stat-color:var(--done)">
+    <span class="stat-num">0</span>
+    <span class="stat-label">Module lõi còn hở quy tắc nghiệp vụ — Sales-Orders và Skus/PlanForm vá xong 2026-08-11 (khoá ship, transaction+idempotency boss-approve); Production-Invoices vá nốt 2 gap nhỏ cuối (mã PI thêm năm, audit item-level) 2026-08-14</span>
   </div>
   <div class="stat-tile" style="--stat-color:var(--done)">
     <span class="stat-num">7 / 7</span>
@@ -1073,7 +1118,7 @@
           <tbody>
             <tr><td class="mono">sales-orders</td><td class="status"><span class="pill pill-done">done</span></td><td class="note"><b>Đã vá 2026-08-11:</b> thêm endpoint riêng <span class="mono-cell">POST :id/items/:itemId/ship</span> — cộng dồn + chặn vượt trần ngay trong 1 câu UPDATE nguyên tử (không còn PATCH ghi đè giá trị tuyệt đối), có test race. poNumber unique đúng. Khái niệm kênh DOMESTIC/EXPORT vẫn chưa có (chưa trong phạm vi vá lần này).</td></tr>
             <tr><td class="mono">skus <span class="h3-note">(PlanForm)</span></td><td class="status"><span class="pill pill-done">done</span></td><td class="note"><b>Đã vá 2026-08-11:</b> boss-approve giờ chạy trong 1 transaction (activate BomRevision + update PlanForm status), có Idempotency-Key thật (cột <span class="mono-cell">bossApproveIdempotencyKey</span>, migration đã áp), có guard chống 2 request đụng nhau + test rollback. <b>Quyết định chốt cùng ngày (commit FE <span class="mono-cell">warning-messgage</span>):</b> không khôi phục ràng buộc DB 1 SKU/PO ⇔ 1 PlanForm — giữ SKU độc lập với PO, thay vào đó <span class="mono-cell">SKUReviewPage</span> cảnh báo mềm (modal confirm, không chặn) khi tạo SKU mới cho sản phẩm đã có hồ sơ định mức chưa duyệt xong.</td></tr>
-            <tr><td class="mono">production-invoices</td><td class="status"><span class="pill pill-gap">done, còn 2 gap nhỏ</span></td><td class="note">State machine 2 cấp duyệt hoạt động tốt, có test. <b>Mô hình stage đã chốt chính thức 2026-08-11:</b> 4 mốc <span class="mono-cell">FRAME</span> (Khung cơ khí = gộp Phôi+Hàn+Sơn) → <span class="mono-cell">WEAVING</span> (Đan) → <span class="mono-cell">TRANSFER_CHECK</span> (Chuyền kiểm, mốc mới) → <span class="mono-cell">PACKAGING</span> (Đóng gói) — không quay lại thiết kế gốc PHÔI/HÀN/WEAVING/SƠN. TRANSFER_CHECK là mốc duy nhất có dữ liệu thực thi thật (bảng <span class="mono-cell">transfer_check_results</span>/<span class="mono-cell">transfer_check_defects</span> mới), 3 mốc còn lại vẫn chỉ là deadline, không tự sinh khi tạo PI (phải chờ KHSX gửi tay). Còn treo: mã PI-{id} chưa có năm, lịch sử duyệt theo item không tra được qua audit_logs — 2 mục nhỏ, không chặn gì.</td></tr>
+            <tr><td class="mono">production-invoices</td><td class="status"><span class="pill pill-done">done</span></td><td class="note">State machine 2 cấp duyệt hoạt động tốt, có test. <b>Mô hình stage đã chốt chính thức 2026-08-11:</b> 4 mốc <span class="mono-cell">FRAME</span> (Khung cơ khí = gộp Phôi+Hàn+Sơn) → <span class="mono-cell">WEAVING</span> (Đan) → <span class="mono-cell">TRANSFER_CHECK</span> (Chuyền kiểm, mốc mới) → <span class="mono-cell">PACKAGING</span> (Đóng gói) — không quay lại thiết kế gốc PHÔI/HÀN/WEAVING/SƠN. TRANSFER_CHECK là mốc duy nhất có dữ liệu thực thi thật (bảng <span class="mono-cell">transfer_check_results</span>/<span class="mono-cell">transfer_check_defects</span> mới), 3 mốc còn lại vẫn chỉ là deadline, không tự sinh khi tạo PI (phải chờ KHSX gửi tay). <b>Đã vá 2026-08-14:</b> 2 gap nhỏ còn treo nay đã đóng, xem callout đầu trang.</td></tr>
             <tr><td class="mono">bom-revisions</td><td class="status"><span class="pill pill-done">done</span></td><td class="note">DRAFT→ACTIVE→RETIRED, có unique index DB đảm bảo 1 ACTIVE/sản phẩm. Test còn mỏng (10 case, activate() chưa test trực tiếp).</td></tr>
             <tr><td class="mono">cutting-proposals</td><td class="status"><span class="pill pill-done">done</span></td><td class="note">Gọi solver ngoài (cat_sat) có timeout/retry/circuit-breaker thật; approve() khoá stock_quant bằng SELECT FOR UPDATE, tách consume/buy có idempotency key xác định. 18 test case.</td></tr>
             <tr><td class="mono">production-orders</td><td class="status"><span class="pill pill-done">done</span></td><td class="note">Chỉ tạo tự động khi PI item được duyệt, chưa có API tạo/huỷ tay — chủ đích, ghi rõ trong schema. 4 test case, đủ cho phạm vi nhỏ.</td></tr>
@@ -1274,7 +1319,7 @@
         <div class="risk-card" style="--risk-color: var(--done)">
           <span class="risk-tag">Lỗ hổng quyền — phát hiện &amp; vá 2026-08-14</span>
           <h4>PHOI_STAFF thiếu STOCK:VIEW — không đọc được tồn đoạn thật ở KhoPhoiPage</h4>
-          <p>Cùng tiền lệ các thẻ phía trên (mỗi domain mới nối FE lại thiếu đúng 1 quyền VIEW cần cho endpoint mới dùng). <span class="mono-cell">KhoPhoiPage.tsx</span> (nợ riêng cuối cùng ngoài M2/M3, xem callout 2026-08-14 đầu trang) đổi sang đọc thật <span class="mono-cell">GET /stock-quant</span> — <span class="mono-cell">PHOI_STAFF</span> trước bản vá này chỉ có <span class="mono-cell">STEEL_ISSUE</span>/<span class="mono-cell">CUTTING_PROPOSAL</span>/<span class="mono-cell">QC_REVIEW</span> (đều VIEW hoặc UPDATE+VIEW), không có <span class="mono-cell">STOCK:VIEW</span>. Đã thêm <span class="mono-cell">STOCK:VIEW</span> (chỉ VIEW — ghi tồn qua <span class="mono-cell">stock-ledger/adjust</span> vẫn là việc riêng của <span class="mono-cell">WAREHOUSE_STAFF</span>, đã có sẵn <span class="mono-cell">STOCK:VIEW,UPDATE</span>). Chưa xác nhận qua browser thật (phụ thuộc DB demo, xem callout ⚠ 2026-08-13) — mới xác nhận qua đọc code + build/test sạch.</p>
+          <p>Cùng tiền lệ các thẻ phía trên (mỗi domain mới nối FE lại thiếu đúng 1 quyền VIEW cần cho endpoint mới dùng). <span class="mono-cell">KhoPhoiPage.tsx</span> (nợ riêng cuối cùng ngoài M2/M3, xem callout 2026-08-14 đầu trang) đổi sang đọc thật <span class="mono-cell">GET /stock-quant</span> — <span class="mono-cell">PHOI_STAFF</span> trước bản vá này chỉ có <span class="mono-cell">STEEL_ISSUE</span>/<span class="mono-cell">CUTTING_PROPOSAL</span>/<span class="mono-cell">QC_REVIEW</span> (đều VIEW hoặc UPDATE+VIEW), không có <span class="mono-cell">STOCK:VIEW</span>. Đã thêm <span class="mono-cell">STOCK:VIEW</span> (chỉ VIEW — ghi tồn qua <span class="mono-cell">stock-ledger/adjust</span> vẫn là việc riêng của <span class="mono-cell">WAREHOUSE_STAFF</span>, đã có sẵn <span class="mono-cell">STOCK:VIEW,UPDATE</span>). <b>Xác nhận cùng ngày (đợt 2):</b> quyền chỉ nằm trong <span class="mono-cell">role-permissions.constant.ts</span>, chưa từng chạy <span class="mono-cell">npm run seed</span> để áp lên DB demo — <span class="mono-cell">GET /stock-quant</span> vẫn 403 thật khi rà qua browser (tài khoản <span class="mono-cell">phoi</span>). Đã chạy lại <span class="mono-cell">npm run seed</span>, xác nhận qua DB (role_permissions có <span class="mono-cell">PHOI_STAFF</span>+<span class="mono-cell">STOCK:VIEW</span>) và qua browser thật: <b>0 request 403, 0 console error</b>, trang hiện đúng empty-state ("Chưa có đoạn nào chờ chuyển Hàn") vì DB demo chưa có ai khai tồn đoạn qua <span class="mono-cell">stock-ledger/adjust</span>.</p>
         </div>
       </div>
     </section>
@@ -1441,8 +1486,27 @@
   thật, xoá 2 file mock chết (<span class="mono-cell">san-luong.service.ts</span>,
   <span class="mono-cell">phan-loai-doan-sat.ts</span>). BE 457/457 test, FE 37/37 vitest,
   <span class="mono-cell">next build</span>/<span class="mono-cell">tsc</span>/<span class="mono-cell">
-  eslint</span> sạch cả 2 phía — <b>chưa xác nhận qua browser thật</b> (phụ thuộc DB demo down ở trên).
-  <b>Toàn bộ nợ riêng khối sản xuất tại xưởng trong roadmap này nay đã đóng.</b>
+  eslint</span> sạch cả 2 phía.
+  <br><br>
+  Cập nhật 2026-08-14 (đợt 2 — DB demo đã xử lý, xác nhận KhoPhoiPage qua browser thật): sau khi DB demo
+  hết <span class="mono-cell">planLimitReached</span>, chạy lại BE+FE local rà bằng tài khoản
+  <span class="mono-cell">phoi</span> phát hiện <span class="mono-cell">GET /stock-quant</span> vẫn 403 —
+  <span class="mono-cell">STOCK:VIEW</span> mới chỉ nằm trong <span class="mono-cell">
+  role-permissions.constant.ts</span>, chưa từng chạy <span class="mono-cell">npm run seed</span> để áp
+  lên DB demo (cùng dạng lỗ hổng đã lặp lại nhiều lần ở M3 — xem mục 07). Đã chạy seed, xác nhận qua DB
+  trực tiếp + qua browser thật: 0 request 403, 0 console error, 2 tab "Đoạn chuẩn"/"Đoạn thừa" hiện đúng
+  empty-state (DB demo chưa có ai khai tồn đoạn qua <span class="mono-cell">stock-ledger/adjust</span>).
+  <b>Toàn bộ nợ riêng khối sản xuất tại xưởng trong roadmap này nay đã đóng và xác nhận xong qua UI thật —
+  không còn việc gì treo lại.</b>
+  <br><br>
+  Cập nhật 2026-08-14 (đợt 3 — đóng 2 gap nhỏ còn lại ở production-invoices): mã PI đổi sang
+  <span class="mono-cell">PI-{năm}-{số thứ tự}</span> (gộp 3 nơi tạo PI vào 1 helper dùng chung,
+  mirror idiom count-rồi-tạo của <span class="mono-cell">WarehouseTransfer.code</span>); lịch sử 5
+  bước duyệt/từ chối của <span class="mono-cell">ProductionInvoiceItem</span> nay ghi thủ công vào
+  <span class="mono-cell">audit_logs</span> (xuất <span class="mono-cell">writeAuditLog()</span> từ
+  extension, không đổi <span class="mono-cell">AUDITED_MODELS</span>). 453/453 test BE pass,
+  <span class="mono-cell">tsc --noEmit</span>/<span class="mono-cell">eslint</span> sạch. Không đổi
+  DTO/field FE đang đọc. <b>Cả 2 gap nhỏ nêu ở mục 02 nay đã đóng.</b>
 </footer>
 
 </body>

@@ -94,7 +94,13 @@ function redact(model: string, record: unknown): unknown {
   return clone;
 }
 
-async function writeAuditLog(
+/**
+ * Exported so callers that deliberately bypass AUDITED_MODELS (e.g. a service writing a
+ * manual entry for a model excluded from the automatic per-model dispatch above, such as
+ * ProductionInvoiceItem's approval transitions - see production-invoices.service.ts) reuse
+ * the same actor/ip/correlation-id attribution instead of re-deriving it from ClsService.
+ */
+export async function writeAuditLog(
   client: Pick<PrismaClient, 'auditLog'>,
   cls: ClsService<AppClsStore>,
   entry: {

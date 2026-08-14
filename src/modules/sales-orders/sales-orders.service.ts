@@ -3,6 +3,7 @@ import { ConflictException, Inject, Injectable, NotFoundException } from '@nestj
 import { Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -214,10 +215,10 @@ export class SalesOrdersService {
    * PRODUCTION_INVOICE:CREATE chỉ vì hệ quả phụ này.
    */
   private async createLinkedProductionInvoice(order: SalesOrderWithItems): Promise<void> {
-    const placeholderCode = `PI-TMP-${randomUUID()}`;
-    const created = await this.prisma.productionInvoice.create({
+    const code = await nextProductionInvoiceCode(this.prisma);
+    await this.prisma.productionInvoice.create({
       data: {
-        code: placeholderCode,
+        code,
         salesOrderId: order.id,
         deadline: order.deliveryDate,
         items: {
@@ -228,10 +229,6 @@ export class SalesOrdersService {
           })),
         },
       },
-    });
-    await this.prisma.productionInvoice.update({
-      where: { id: created.id },
-      data: { code: `PI-${created.id}` },
     });
   }
 

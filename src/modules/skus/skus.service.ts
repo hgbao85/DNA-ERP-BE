@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto';
 import {
   BadRequestException,
   ConflictException,
@@ -24,6 +23,7 @@ import {
 } from '../../common/constants/material-group-system-keys.constant';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -1169,13 +1169,9 @@ export class SkusService {
       where: { salesOrderId, mfgProductId },
     });
     // status bỏ qua - mặc định PLANNING qua @default trong schema (mirror mock: PI mới luôn PLANNING).
-    const placeholderCode = `PI-TMP-${randomUUID()}`;
+    const code = await nextProductionInvoiceCode(this.prisma);
     const pi = await this.prisma.productionInvoice.create({
-      data: { code: placeholderCode, salesOrderId },
-    });
-    await this.prisma.productionInvoice.update({
-      where: { id: pi.id },
-      data: { code: `PI-${pi.id}` },
+      data: { code, salesOrderId },
     });
     if (salesOrderItem) {
       await this.prisma.productionInvoiceItem.create({
