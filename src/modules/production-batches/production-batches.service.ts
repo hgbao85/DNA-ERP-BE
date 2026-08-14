@@ -11,12 +11,14 @@ import {
   Prisma,
   ProductionBatchStatus,
   ProductionOrder,
+  StockLedgerRefType,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
 import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
 import { ProductionBatchPlanItemResponseDto } from './dto/production-batch-plan-item-response.dto';
@@ -32,15 +34,33 @@ export type ProductionBatchRow = Prisma.ProductionBatchGetPayload<{
   include: typeof PRODUCTION_BATCH_INCLUDE;
 }>;
 
+/// Kho vật lý duy nhất liên quan đến đoạn sắt tồn - cùng giá trị STEEL_WAREHOUSE_CODE ở
+/// steel-issues.service.ts (đoạn Phôi cắt ra nhập vào đây, thủ kho tự đếm/tự nhập qua
+/// POST /stock-ledger/adjust - xem docs/quy-doi-doan-phoi.md, KHÔNG tự động từ CuttingProposal).
+const STEEL_WAREHOUSE_CODE = 'phoi-son-han';
+/// Kho ảo cố định (protected-warehouse-codes.constant.ts) - cùng điểm đến dùng ở
+/// MaterialIssuesService/CuttingProposalsService cho mọi luồng "tiêu hao tại xưởng".
+const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
+
 /**
  * Báo sản lượng Hàn/Sơn (M2, thay san-luong.service.ts mock - phần baoSanLuong()). Không cap
  * theo BOM lúc báo (mock không kiểm tra) - KCS mới là bước kiểm soát, xem
  * QcReviewsService.reviewProductionBatch(). Append-create, không state machine phức tạp: chỉ
  * AWAITING_QC (khởi tạo) -> QC_DONE (do QcReviewsService cập nhật, không phải service này).
+ *
+ * Từ 2026-08-14 (xem docs/quy-doi-doan-phoi.md, quyết định nghiệp vụ #4): mỗi lần báo sản lượng
+ * cũng tự động ghi StockLedger trừ tồn ĐOẠN sắt (segmentSpecId) theo PartBom.qtyPerPart của
+ * đúng part vừa báo - refType SEGMENT_CONSUME (enum value có sẵn từ đầu, chưa từng được dùng).
+ * Cố ý KHÔNG chặn khi tồn đoạn không đủ (StockQuant được phép âm) - cùng triết lý "không cap
+ * theo BOM lúc báo" đã áp dụng cho reportedQty, tránh chặn oan công nhân vì thủ kho nhập tồn
+ * trễ hơn thực tế cắt.
  */
 @Injectable()
 export class ProductionBatchesService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly stockLedgerService: StockLedgerService,
+  ) {}
 
   async create(
     productionOrderId: string,
@@ -58,6 +78,10 @@ export class ProductionBatchesService {
         include: PRODUCTION_BATCH_INCLUDE,
       });
       if (existing) {
+        await this.postSegmentConsumeEntries(
+          { ...existing, bomRevisionId: existing.productionOrder.bomRevisionId },
+          reportedById,
+        );
         return this.toResponseDto(existing);
       }
     }
@@ -78,7 +102,49 @@ export class ProductionBatchesService {
       include: PRODUCTION_BATCH_INCLUDE,
     });
 
+    await this.postSegmentConsumeEntries(
+      { ...created, bomRevisionId: order.bomRevisionId },
+      reportedById,
+    );
     return this.toResponseDto(created);
+  }
+
+  /**
+   * Trừ tồn ĐOẠN sắt (StockQuant.segmentSpecId) theo PartBom.qtyPerPart của part vừa báo sản
+   * lượng - 1 dòng StockLedger/segmentSpecId (1 Part có thể ghép từ nhiều cỡ đoạn khác nhau).
+   * idempotencyKey theo (batchId, segmentSpecId) - khác 1 key duy nhất cho cả batch, vì mỗi batch
+   * có thể sinh N dòng ledger (N segmentSpecId của part đó), cần key riêng từng dòng để
+   * postEntry() resolve-or-return đúng khi gọi lại 1 phần đã lỡ ghi. Gọi NGOÀI transaction tạo
+   * production_batch, cùng idiom MaterialIssuesService.postLedgerEntry() - retry (cùng
+   * Idempotency-Key header) sẽ tìm lại đúng batch rồi gọi lại hàm này, tự resolve-or-return theo
+   * key riêng từng dòng.
+   */
+  private async postSegmentConsumeEntries(
+    batch: { id: bigint; partId: bigint; reportedQty: number; bomRevisionId: bigint },
+    reportedById: string,
+  ): Promise<void> {
+    const partBoms = await this.prisma.partBom.findMany({
+      where: { bomRevisionId: batch.bomRevisionId, partId: batch.partId },
+    });
+    if (partBoms.length === 0) return;
+
+    const [fromWarehouse, toWarehouse] = await Promise.all([
+      this.prisma.warehouse.findUniqueOrThrow({ where: { code: STEEL_WAREHOUSE_CODE } }),
+      this.prisma.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
+    ]);
+
+    for (const pb of partBoms) {
+      await this.stockLedgerService.postEntry({
+        fromWarehouseId: fromWarehouse.id,
+        toWarehouseId: toWarehouse.id,
+        segmentSpecId: pb.segmentSpecId,
+        qty: pb.qtyPerPart * batch.reportedQty,
+        refType: StockLedgerRefType.SEGMENT_CONSUME,
+        refId: batch.id.toString(),
+        createdById: reportedById,
+        idempotencyKey: `production-batch-segment-consume:${batch.id}:${pb.segmentSpecId}`,
+      });
+    }
   }
 
   async findAllForOrder(

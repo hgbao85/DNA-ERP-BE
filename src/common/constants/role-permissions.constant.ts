@@ -332,6 +332,14 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.STEEL_ISSUE,
       actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
     },
+    // Vá lỗ quyền phát hiện lúc nối FE KhoPhoiPage (2026-08-14, xem docs/quy-doi-doan-phoi.md):
+    // trang đọc GET /stock-quant (segmentSpecId) để hiện tồn đoạn sắt thật - PHOI_STAFF trước
+    // bản vá này không có STOCK:VIEW nên 403 âm thầm ngay từ lời gọi đầu tiên. Chỉ VIEW - thủ kho
+    // (WAREHOUSE_STAFF, đã có STOCK:VIEW+UPDATE) mới là người ghi tồn qua stock-ledger/adjust.
+    {
+      module: PERMISSION_MODULES.STOCK,
+      actions: [PermissionAction.VIEW],
+    },
     // Vá lỗ quyền phát hiện lúc nối FE XacNhanSanLuongPage (M3, báo cắt xong theo đúng pattern
     // đã duyệt): completeCutting() cần proposalPatternId thật (CuttingProposalPatternResponseDto.id,
     // vừa lộ ra) để dựng đúng segments của bundle - PHOI_STAFF trước bản vá này không có cách nào

@@ -937,6 +937,44 @@
       lúc này: DB demo down (xem callout ⚠ ngay trên) — không phải nợ kỹ thuật, cần xử lý hạ tầng
       trước khi tiếp tục bất kỳ việc gì trên app.</b>
     </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-14 — KhoPhoiPage (nợ riêng cuối cùng, ngoài phạm vi M2/M3) đã nối FE thật.</b>
+      Quyết định nghiệp vụ chốt cùng ngày (xem <span class="mono-cell">docs/quy-doi-doan-phoi.md</span>,
+      file kế hoạch <span class="mono-cell">quy-doi-sat.ts</span> trỏ tới từ trước nhưng chưa từng viết):
+      <b>không</b> xây pipeline tự động quy đổi cây→đoạn từ <span class="mono-cell">
+      CuttingProposalPattern</span>/tỷ lệ KCS như dự tính ban đầu — thủ kho tự đếm và tự nhập tồn đoạn
+      qua đúng <span class="mono-cell">POST /stock-ledger/adjust</span> đã có sẵn, đơn giản hơn nhiều.
+      Tra schema xác nhận hạ tầng đã có sẵn từ trước, không cần migration: <span class="mono-cell">
+      SegmentSpec</span>/<span class="mono-cell">PartBom</span> (đoạn/chi tiết), cột
+      <span class="mono-cell">segmentSpecId</span> ở cả <span class="mono-cell">StockLedger</span>/
+      <span class="mono-cell">StockQuant</span>, và đặc biệt <span class="mono-cell">
+      StockLedgerRefType.SEGMENT_CONSUME</span> — 1 enum value có sẵn từ đầu, đúng ý nghĩa "tiêu hao
+      đoạn" nhưng chưa từng được service nào dùng tới. Việc code chỉ còn: thêm logic tự động trừ tồn
+      đoạn (join <span class="mono-cell">PartBom.qtyPerPart</span>) vào
+      <span class="mono-cell">ProductionBatchesService.create()</span> mỗi khi Hàn/Sơn báo sản lượng
+      (kho <span class="mono-cell">phoi-son-han</span> → kho ảo <span class="mono-cell">PRODUCTION</span>,
+      cùng pattern <span class="mono-cell">MaterialIssuesService.postLedgerEntry()</span>; cố ý cho phép
+      tồn âm, không chặn báo sản lượng — cùng triết lý đã áp cho <span class="mono-cell">reportedQty</span>).
+      Phát hiện kèm 1 lỗ hổng quyền cùng dạng đã lặp lại nhiều lần ở M3:
+      <span class="mono-cell">PHOI_STAFF</span> chưa từng có <span class="mono-cell">STOCK:VIEW</span> nên
+      <span class="mono-cell">KhoPhoiPage.tsx</span> gọi <span class="mono-cell">GET /stock-quant</span> sẽ
+      403 âm thầm — đã vá thêm (chỉ VIEW). FE: viết lại <span class="mono-cell">KhoPhoiPage.tsx</span> đọc
+      thẳng <span class="mono-cell">GET /stock-quant</span> (lọc theo <span class="mono-cell">
+      warehouseCode</span> client-side, tránh phải xin thêm <span class="mono-cell">WAREHOUSE:VIEW</span>);
+      2 tab "Đoạn chuẩn"/"Đoạn thừa" phân theo quy ước <span class="mono-cell">cutLengthMm=0</span> =
+      đầu mẩu (KHSX khai riêng 1 <span class="mono-cell">SegmentSpec</span>/material qua CRUD có sẵn, chưa
+      làm - tab "Đoạn thừa" sẽ rỗng cho tới khi khai báo). Dọn xong code chết:
+      <span class="mono-cell">san-luong.service.ts</span>/<span class="mono-cell">
+      phan-loai-doan-sat.ts</span> xoá hẳn, <span class="mono-cell">getDoanTonKho</span>/
+      <span class="mono-cell">DoanTon</span> xoá khỏi <span class="mono-cell">phoi-sat.service.ts</span>.
+      Xác nhận: BE 457/457 test pass (453 cũ + 4 mới), FE 37/37 vitest pass,
+      <span class="mono-cell">next build</span> (Turbopack) + <span class="mono-cell">tsc --noEmit</span> +
+      <span class="mono-cell">eslint</span> sạch cả 2 phía. <b>Chưa xác nhận qua browser thật</b> (tài khoản
+      <span class="mono-cell">phoi</span>/<span class="mono-cell">khopsh</span>) — phụ thuộc DB demo còn
+      down hay đã xử lý (xem callout ⚠ 2026-08-13 phía trên). Luồng xử lý đầu mẩu tái dùng/bán phế liệu vẫn
+      để sau (có nhu cầu, chưa chốt cụ thể). <b>Toàn bộ nợ riêng "sản xuất tại xưởng" liệt kê ở roadmap
+      này nay đã đóng — chỉ còn phụ thuộc hạ tầng (DB demo) để xác nhận cuối qua UI thật.</b>
+    </div>
   </div>
 </div>
 
@@ -946,8 +984,8 @@
     <span class="stat-label">Module backend đã có code chạy được — không module nào còn là stub (module mới nhất 2026-08-12: material-inspection — Kiểm tra vật tư trước sản xuất)</span>
   </div>
   <div class="stat-tile" style="--stat-color:var(--mock)">
-    <span class="stat-num">15 / 47</span>
-    <span class="stat-label">Nhóm trang frontend vẫn chạy 100% mock — tập trung gần hết ở khối sản xuất tại xưởng. <b>M3 hoàn tất 7/7 domain 2026-08-13</b> (Đóng gói, Kiểm tra vật tư, Phân bổ/nhận hàng đan, Xuất vật tư tiêu hao, Sản lượng theo công đoạn, QC Hàn/Sơn — 2026-08-12; Xuất sắt Phôi — 2026-08-13). Phần mock còn lại: Nhập/Xuất kho tay (Manufacturing), PhoiDinhMucManhPage, VatTuDashboardPage (mixed), AuditLogPage/SystemStatusPage (Admin, cố ý giữ), <b>KhoPhoiPage</b> (đoạn tồn kho Phôi — cần quy đổi đoạn chưa model ở BE)</span>
+    <span class="stat-num">14 / 47</span>
+    <span class="stat-label">Nhóm trang frontend vẫn chạy 100% mock — tập trung gần hết ở khối sản xuất tại xưởng. <b>M3 hoàn tất 7/7 domain 2026-08-13</b> (Đóng gói, Kiểm tra vật tư, Phân bổ/nhận hàng đan, Xuất vật tư tiêu hao, Sản lượng theo công đoạn, QC Hàn/Sơn — 2026-08-12; Xuất sắt Phôi — 2026-08-13). <b>KhoPhoiPage (nợ riêng cuối cùng) đã nối FE 2026-08-14</b> — xem callout đầu trang. Phần mock còn lại: Nhập/Xuất kho tay (Manufacturing), PhoiDinhMucManhPage, VatTuDashboardPage (mixed), AuditLogPage/SystemStatusPage (Admin, cố ý giữ)</span>
   </div>
   <div class="stat-tile" style="--stat-color:var(--mixed)">
     <span class="stat-num">1</span>
@@ -1233,6 +1271,11 @@
           <p><b>Endpoint thứ 3 (qc-reviews):</b> khác hẳn — <span class="mono-cell">LenhSanXuatPhoi.tsx</span>/<span class="mono-cell">XacNhanSanLuongPage.tsx</span> (2 trang của chính PHOI_STAFF) gọi thật <span class="mono-cell">getQcReviewsForSteelIssues()</span> để hiện cột "Đã KCS đạt" — nhu cầu đọc hợp lệ, đúng lỗ quyền thiếu cùng dạng 2 thẻ trên. Đã thêm <span class="mono-cell">QC_REVIEW:VIEW</span> cho <span class="mono-cell">PHOI_STAFF</span> (chỉ VIEW, duyệt vẫn là việc riêng của KCS_STAFF).</p>
           <p>Đã chạy lại <span class="mono-cell">npm run seed</span> (áp <span class="mono-cell">QC_REVIEW:VIEW</span> lên DB demo) và xác nhận lại qua browser thật (BE+FE local, tài khoản phoi/kcs demo1234): cả <span class="mono-cell">XacNhanSanLuongPage</span> lẫn <span class="mono-cell">KcsPhoiPage</span> nay <b>0 request 403, 0 console error</b>.</p>
         </div>
+        <div class="risk-card" style="--risk-color: var(--done)">
+          <span class="risk-tag">Lỗ hổng quyền — phát hiện &amp; vá 2026-08-14</span>
+          <h4>PHOI_STAFF thiếu STOCK:VIEW — không đọc được tồn đoạn thật ở KhoPhoiPage</h4>
+          <p>Cùng tiền lệ các thẻ phía trên (mỗi domain mới nối FE lại thiếu đúng 1 quyền VIEW cần cho endpoint mới dùng). <span class="mono-cell">KhoPhoiPage.tsx</span> (nợ riêng cuối cùng ngoài M2/M3, xem callout 2026-08-14 đầu trang) đổi sang đọc thật <span class="mono-cell">GET /stock-quant</span> — <span class="mono-cell">PHOI_STAFF</span> trước bản vá này chỉ có <span class="mono-cell">STEEL_ISSUE</span>/<span class="mono-cell">CUTTING_PROPOSAL</span>/<span class="mono-cell">QC_REVIEW</span> (đều VIEW hoặc UPDATE+VIEW), không có <span class="mono-cell">STOCK:VIEW</span>. Đã thêm <span class="mono-cell">STOCK:VIEW</span> (chỉ VIEW — ghi tồn qua <span class="mono-cell">stock-ledger/adjust</span> vẫn là việc riêng của <span class="mono-cell">WAREHOUSE_STAFF</span>, đã có sẵn <span class="mono-cell">STOCK:VIEW,UPDATE</span>). Chưa xác nhận qua browser thật (phụ thuộc DB demo, xem callout ⚠ 2026-08-13) — mới xác nhận qua đọc code + build/test sạch.</p>
+        </div>
       </div>
     </section>
 
@@ -1385,6 +1428,21 @@
   nay đều hoàn tất</b> — xem 4 callout 2026-08-13 (đợt 2-5) đầu trang. <b>⚠ Cuối phiên: DB demo dùng
   chung bị Prisma chặn (planLimitReached), khả năng do khối lượng test lặp lại trong phiên này — cần
   liên hệ Prisma support/nâng gói trước khi dùng lại app hoặc chạy thêm test, xem callout ⚠ đầu trang.</b>
+  <br><br>
+  Cập nhật 2026-08-14 (KhoPhoiPage — nợ riêng cuối cùng, ngoài phạm vi 7 domain M2/M3): quyết định
+  nghiệp vụ + kế hoạch chi tiết ở <span class="mono-cell">D:\DNA-ERP\docs\quy-doi-doan-phoi.md</span>
+  (file <span class="mono-cell">quy-doi-sat.ts</span> trỏ tới từ trước nhưng chưa từng viết). Chốt
+  hướng đơn giản hơn dự tính ban đầu: thủ kho tự đếm/tự nhập tồn đoạn qua
+  <span class="mono-cell">stock-ledger/adjust</span> có sẵn, không tự động quy đổi từ
+  CuttingProposalPattern. BE thêm logic trừ tồn đoạn (SEGMENT_CONSUME, dùng luôn enum value có sẵn
+  từ đầu nhưng chưa ai gọi) vào <span class="mono-cell">ProductionBatchesService.create()</span> +
+  vá quyền <span class="mono-cell">STOCK:VIEW</span> cho PHOI_STAFF. FE viết lại
+  <span class="mono-cell">KhoPhoiPage.tsx</span> đọc <span class="mono-cell">GET /stock-quant</span>
+  thật, xoá 2 file mock chết (<span class="mono-cell">san-luong.service.ts</span>,
+  <span class="mono-cell">phan-loai-doan-sat.ts</span>). BE 457/457 test, FE 37/37 vitest,
+  <span class="mono-cell">next build</span>/<span class="mono-cell">tsc</span>/<span class="mono-cell">
+  eslint</span> sạch cả 2 phía — <b>chưa xác nhận qua browser thật</b> (phụ thuộc DB demo down ở trên).
+  <b>Toàn bộ nợ riêng khối sản xuất tại xưởng trong roadmap này nay đã đóng.</b>
 </footer>
 
 </body>
