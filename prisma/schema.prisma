@@ -75,6 +75,7 @@ model User {
   piRequestedItems                  ProductionInvoiceItem[]     @relation("PIItemRequestedBy")
   piQlsxItems                       ProductionInvoiceItem[]     @relation("PIItemQlsxBy")
   piDecidedItems                    ProductionInvoiceItem[]     @relation("PIItemDecidedBy")
+  piMerged                          ProductionInvoice[]         @relation("PIMergedBy")
   cuttingProposalsRequested         CuttingProposal[]           @relation("CuttingProposalRequestedBy")
   cuttingProposalsApproved          CuttingProposal[]           @relation("CuttingProposalApprovedBy")
   transferCheckResults              TransferCheckResult[]       @relation("TransferCheckCheckedBy")
@@ -867,6 +868,9 @@ model SalesOrder {
   items              SalesOrderItem[]
   planForms          PlanForm[]
   productionInvoices ProductionInvoice[]
+  /// SKU của đơn này nằm rải ở các PI (kể cả PI gộp chung với đơn khác) - xem
+  /// ProductionInvoiceItem.salesOrderId.
+  productionInvoiceItems ProductionInvoiceItem[]
 
   @@index([customerId])
   @@index([deletedAt])
@@ -985,15 +989,26 @@ model PlanFormDetailReview {
 model ProductionInvoice {
   id           BigInt                  @id @default(autoincrement())
   code         String                  @unique
+  /// NULL cho PI gộp (isMerged) - các SKU bên trong có thể đến từ nhiều đơn hàng khác nhau nên
+  /// không quy về 1 đơn được. PO gốc của từng SKU đọc ở ProductionInvoiceItem.salesOrderId.
   salesOrderId BigInt?
   status       ProductionInvoiceStatus @default(PLANNING)
   deadline     DateTime?
+  /// true = KHSX tự gộp nhiều SKU lại để CẮT CHUNG một đợt (màn "Tối ưu cắt sắt"), khác hẳn PI
+  /// vỏ 1-1 Sales tự sinh theo mỗi đơn hàng (createLinkedProductionInvoice). Hai loại có luồng
+  /// duyệt KHÁC NHAU: PI gộp Sếp duyệt/từ chối CẢ CỤM một lần (approveBatch/rejectBatch, vì cả
+  /// nhóm nằm chung một cây sắt, không tách lẻ được), PI thường vẫn duyệt từng SKU như cũ.
+  isMerged     Boolean                 @default(false)
+  mergedAt     DateTime?
+  mergedById   String?
   createdAt    DateTime                @default(now())
   updatedAt    DateTime                @updatedAt
 
-  salesOrder SalesOrder?             @relation(fields: [salesOrderId], references: [id])
-  items      ProductionInvoiceItem[]
-  planForms  PlanForm[]
+  salesOrder       SalesOrder?             @relation(fields: [salesOrderId], references: [id])
+  mergedBy         User?                   @relation("PIMergedBy", fields: [mergedById], references: [id])
+  items            ProductionInvoiceItem[]
+  planForms        PlanForm[]
+  cuttingProposals CuttingProposal[]
 
   @@index([salesOrderId])
   @@map("production_invoices")
@@ -1002,6 +1017,11 @@ model ProductionInvoice {
 model ProductionInvoiceItem {
   id                  BigInt              @id @default(autoincrement())
   productionInvoiceId BigInt
+  /// PO (đơn hàng Sales) mà SKU này thuộc về. TRƯỚC ĐÂY suy ngược qua productionInvoice.salesOrder
+  /// vì 1 PI = đúng 1 PO; từ khi có PI gộp (ProductionInvoice.isMerged) thì 1 PI chứa SKU của
+  /// NHIỀU PO nên đường suy ngược đó mất dấu - phải ghim thẳng ở đây. Nullable vì SKU tạo tay qua
+  /// POST /production-invoices/:id/items không bắt buộc gắn đơn hàng nào.
+  salesOrderId        BigInt?
   mfgProductId        BigInt
   productVariantId    BigInt?
   quantity            Int
@@ -1023,6 +1043,7 @@ model ProductionInvoiceItem {
   rejectReason        String?
 
   productionInvoice    ProductionInvoice            @relation(fields: [productionInvoiceId], references: [id])
+  salesOrder           SalesOrder?                  @relation(fields: [salesOrderId], references: [id])
   mfgProduct           MfgProduct                   @relation(fields: [mfgProductId], references: [id])
   productVariant       ProductVariant?              @relation(fields: [productVariantId], references: [id])
   requestedBy          User?                        @relation("PIItemRequestedBy", fields: [requestedById], references: [id])
@@ -1035,6 +1056,7 @@ model ProductionInvoiceItem {
 
   @@index([productionInvoiceId])
   @@index([mfgProductId])
+  @@index([salesOrderId])
   @@map("production_invoice_items")
 }
 
@@ -1193,13 +1215,20 @@ model ProductionOrder {
   @@map("production_orders")
 }
 
-/// 1 lần gọi solver cat_sat_iea cho 1 ProductionOrder. cat_sat_iea không lưu gì (stateless) -
-/// toàn bộ input/output nguyên văn lưu ở đây để audit/replay (rawResponse), còn dữ liệu cần
-/// truy vấn lại (bar_count theo material cho Phase 8 Mua hàng, pattern/segment cho Phase 9
-/// Phôi cắt theo) tách thành 3 bảng con chuẩn hoá bên dưới - KHÔNG gộp hết vào JSON.
+/// 1 lần gọi solver cat_sat_iea. cat_sat_iea không lưu gì (stateless) - toàn bộ input/output
+/// nguyên văn lưu ở đây để audit/replay (rawResponse), còn dữ liệu cần truy vấn lại (bar_count
+/// theo material cho Phase 8 Mua hàng, pattern/segment cho Phase 9 Phôi cắt theo) tách thành 3
+/// bảng con chuẩn hoá bên dưới - KHÔNG gộp hết vào JSON.
+///
+/// Neo vào ĐÚNG MỘT trong hai (bất biến, enforce ở service - xem assertExactlyOneAnchor):
+/// - productionOrderId: 1 SKU cắt riêng (đường mặc định, có từ Phase 7).
+/// - productionInvoiceId: cả một PI gộp cắt CHUNG một đợt. Bắt buộc phải là 1 bản ghi duy nhất
+///   cho cả nhóm, KHÔNG phải mỗi SKU một bản: gộp chỉ tiết kiệm được sắt khi các đoạn của nhiều
+///   SKU nằm trên CÙNG một cây - tách ra tính riêng là mất sạch phần lợi.
 model CuttingProposal {
-  id                BigInt                @id @default(autoincrement())
-  productionOrderId BigInt
+  id                  BigInt              @id @default(autoincrement())
+  productionOrderId   BigInt?
+  productionInvoiceId BigInt?
   status            CuttingProposalStatus @default(CALCULATING)
   /// Client-supplied UUID cho lần gọi thủ công (nút "Tính lại") - null cho lần tự động đầu
   /// tiên (không cần, vì unique(productionInvoiceItemId) trên ProductionOrder đã chặn tạo
@@ -1220,13 +1249,15 @@ model CuttingProposal {
   approvedAt        DateTime?
   approvedById      String?
 
-  productionOrder   ProductionOrder       @relation(fields: [productionOrderId], references: [id])
+  productionOrder   ProductionOrder?      @relation(fields: [productionOrderId], references: [id])
+  productionInvoice ProductionInvoice?    @relation(fields: [productionInvoiceId], references: [id])
   requestedBy       User?                 @relation("CuttingProposalRequestedBy", fields: [requestedById], references: [id])
   approvedBy        User?                 @relation("CuttingProposalApprovedBy", fields: [approvedById], references: [id])
   lines             CuttingProposalLine[]
   purchaseProposals PurchaseProposal[]
 
   @@index([productionOrderId, status])
+  @@index([productionInvoiceId, status])
   @@map("cutting_proposals")
 }
 

@@ -10,6 +10,11 @@ export class ProductionInvoiceResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   @Expose() @ApiProperty({ enum: ProductionInvoiceStatus }) status!: ProductionInvoiceStatus;
+  /**
+   * true = KHSX gộp nhiều SKU để cắt chung một đợt. FE dùng để đổi cách hiển thị (nhóm SKU theo
+   * PO) và đổi cách duyệt (Sếp duyệt/từ chối CẢ CỤM, không duyệt lẻ từng SKU).
+   */
+  @Expose() @ApiProperty() isMerged!: boolean;
   @Expose() @ApiPropertyOptional({ nullable: true }) deadline!: Date | null;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;

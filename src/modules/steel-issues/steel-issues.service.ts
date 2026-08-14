@@ -91,7 +91,11 @@ export class SteelIssuesService {
     }
 
     const materialId = await this.resolveMaterialForPiece(order.bomRevisionId, pieceBigId);
-    await this.assertMaterialInApprovedProposal(order.id, materialId);
+    await this.assertMaterialInApprovedProposal(
+      order.id,
+      order.productionInvoiceItem?.productionInvoiceId ?? null,
+      materialId,
+    );
 
     const created = await this.prisma.steelIssue.create({
       data: {
@@ -329,14 +333,29 @@ export class SteelIssuesService {
     return [...materialIds][0];
   }
 
+  /**
+   * Phương án cắt đã duyệt phủ vật tư này chưa - tính CẢ 2 kiểu neo:
+   * - neo thẳng vào lệnh SX này (SKU cắt riêng, đường mặc định), hoặc
+   * - neo vào đợt gộp (PI.isMerged) mà SKU của lệnh SX này là thành viên.
+   *
+   * Thiếu nhánh thứ hai thì Phôi KHÔNG xuất được sắt cho mọi SKU đã gộp: phương án lúc đó nằm ở
+   * cấp nhóm, không lệnh SX riêng lẻ nào "sở hữu" nó.
+   */
   private async assertMaterialInApprovedProposal(
     productionOrderId: bigint,
+    productionInvoiceId: bigint | null,
     materialId: bigint,
   ): Promise<void> {
     const line = await this.prisma.cuttingProposalLine.findFirst({
       where: {
         materialId,
-        cuttingProposal: { productionOrderId, status: CuttingProposalStatus.APPROVED },
+        cuttingProposal: {
+          status: CuttingProposalStatus.APPROVED,
+          OR: [
+            { productionOrderId },
+            ...(productionInvoiceId !== null ? [{ productionInvoiceId }] : []),
+          ],
+        },
       },
     });
     if (!line) {
@@ -348,7 +367,12 @@ export class SteelIssuesService {
 
   private async findOrderOrThrow(id: string) {
     const bigId = parseBigIntId(id);
-    const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
+    const order = await this.prisma.productionOrder.findUnique({
+      where: { id: bigId },
+      // productionInvoiceId để biết SKU này có thuộc một đợt cắt gộp không - phương án cắt khi đó
+      // neo ở cấp nhóm chứ không ở lệnh SX (xem assertMaterialInApprovedProposal).
+      include: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+    });
     if (!order) {
       throw new NotFoundException(`Production order ${id} not found`);
     }

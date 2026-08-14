@@ -12,6 +12,7 @@ import {
   Prisma,
   PrismaClient,
   ProdApprovalStatus,
+  ProdItemStageType,
   ProductionInvoiceStatus,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
@@ -27,6 +28,7 @@ import { ProductionOrdersService } from '../production-orders/production-orders.
 import { SkusService } from '../skus/skus.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
+import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
 import { PackagingResponseDto } from './dto/packaging-response.dto';
 import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-response.dto';
 import { ProductionInvoiceResponseDto } from './dto/production-invoice-response.dto';
@@ -39,11 +41,36 @@ import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-
 type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
   include: {
     salesOrder: true;
-    items: { include: { mfgProduct: true; productVariant: true; stages: true } };
+    items: { include: { mfgProduct: true; productVariant: true; stages: true; salesOrder: true } };
   };
 }>;
 type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
-  include: { mfgProduct: true; productVariant: true; stages: true };
+  include: { mfgProduct: true; productVariant: true; stages: true; salesOrder: true };
+}>;
+
+/** PrismaServiceType (client mở rộng qua $extends) có shape tx callback khác Prisma.TransactionClient
+ *  gốc - suy ra đúng type từ chính $transaction của nó thay vì dùng type generated thẳng. */
+type PrismaTx = Parameters<Parameters<PrismaServiceType['$transaction']>[0]>[0];
+
+/** Bọc thêm CuttingProposal mới nhất - CHỈ dùng ở findAll/findOne (chỉ 2 màn thật sự cần hiện
+ *  "đang tính phương án cắt"), không lan ra include của 10+ hàm ghi khác vốn không cần dữ liệu này. */
+const PROPOSAL_STATUS_INCLUDE = {
+  salesOrder: true,
+  cuttingProposals: { orderBy: { requestedAt: 'desc' as const }, take: 1 },
+  items: {
+    include: {
+      mfgProduct: true,
+      productVariant: true,
+      stages: true,
+      salesOrder: true,
+      productionOrder: {
+        include: { cuttingProposals: { orderBy: { requestedAt: 'desc' as const }, take: 1 } },
+      },
+    },
+  },
+} satisfies Prisma.ProductionInvoiceInclude;
+type PIWithProposalStatus = Prisma.ProductionInvoiceGetPayload<{
+  include: typeof PROPOSAL_STATUS_INCLUDE;
 }>;
 
 /**
@@ -125,38 +152,58 @@ export class ProductionInvoicesService {
       },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true, stages: true } },
+        items: { include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true } },
       },
     });
+    const withCode = await this.prisma.productionInvoice.update({
+      where: { id: created.id },
+      data: { code: `PI-${created.id}` },
+      include: {
+        salesOrder: true,
+        items: { include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true } },
+      },
+    });
+    return this.toResponseDto(withCode);
     return this.toResponseDto(created);
   }
 
   async findAll(query: PaginationQueryDto): Promise<Paginated<ProductionInvoiceResponseDto>> {
-    const where: Prisma.ProductionInvoiceWhereInput | undefined = query.search
-      ? { code: { contains: query.search, mode: 'insensitive' } }
-      : undefined;
+    const where: Prisma.ProductionInvoiceWhereInput = {
+      // Ẩn PI đã bị rút sạch SKU sang một đợt gộp. KHÔNG xoá bản ghi (PlanForm.productionInvoiceId
+      // còn trỏ tới, xoá là mất truy vết) - chỉ không hiện dòng rỗng vô nghĩa cho KHSX.
+      items: { some: {} },
+      ...(query.search ? { code: { contains: query.search, mode: 'insensitive' } } : {}),
+    };
 
     const result = await paginate(
       {
         findMany: (args) =>
           this.prisma.productionInvoice.findMany({
             ...args,
-            include: {
-              salesOrder: true,
-              items: { include: { mfgProduct: true, productVariant: true, stages: true } },
-            },
-          }),
+            include: PROPOSAL_STATUS_INCLUDE,
+          }) as Promise<PIWithProposalStatus[]>,
         count: (args) => this.prisma.productionInvoice.count(args),
       },
       query,
       where,
       query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
     );
-    return { data: result.data.map((pi) => this.toResponseDto(pi)), meta: result.meta };
+    return {
+      data: result.data.map((pi) => this.toResponseDtoWithProposalStatus(pi)),
+      meta: result.meta,
+    };
   }
 
   async findOne(id: string): Promise<ProductionInvoiceResponseDto> {
-    return this.toResponseDto(await this.findOneOrThrow(id));
+    const bigId = parseBigIntId(id);
+    const pi = await this.prisma.productionInvoice.findUnique({
+      where: { id: bigId },
+      include: PROPOSAL_STATUS_INCLUDE,
+    });
+    if (!pi) {
+      throw new NotFoundException(`Production invoice ${id} not found`);
+    }
+    return this.toResponseDtoWithProposalStatus(pi);
   }
 
   async update(id: string, dto: UpdateProductionInvoiceDto): Promise<ProductionInvoiceResponseDto> {
@@ -167,10 +214,94 @@ export class ProductionInvoicesService {
       data: { deadline: dto.deadline ? new Date(dto.deadline) : undefined },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true, stages: true } },
+        items: { include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true } },
       },
     });
     return this.toResponseDto(updated);
+  }
+
+  // ─── Gộp đợt cắt (KHSX) ─────────────────────────────────────────────────────
+
+  /**
+   * Gộp nhiều SKU đang chờ duyệt thành 1 PI để CẮT CHUNG một đợt (nút "Xác nhận gộp" ở màn Tối ưu
+   * cắt sắt). Các SKU có thể đến từ nhiều đơn hàng khác nhau - đó chính là mục đích.
+   *
+   * Chỉ DI CHUYỂN item sang PI mới, KHÔNG đụng gì tới trạng thái duyệt: sau khi gộp, cả cụm vẫn đi
+   * đúng luồng cũ (KHSX đặt thời hạn → gửi QLSX → Sếp duyệt), chỉ khác là Sếp duyệt cả cụm một lần
+   * và solver chạy chung cho cả nhóm.
+   */
+  async mergeItems(
+    dto: MergeProductionInvoiceDto,
+    actorUserId: string,
+  ): Promise<ProductionInvoiceResponseDto> {
+    const ids = [...new Set(dto.productionInvoiceItemIds.map((id) => parseBigIntId(id)))];
+    // Lặp lại điều kiện của DTO (@ArrayMinSize(2)) có chủ đích: đây là bất biến nghiệp vụ (gộp 1
+    // SKU không tiết kiệm được gì) chứ không phải chuyện định dạng request, nên phải đứng vững cả
+    // khi service được gọi từ chỗ khác không đi qua ValidationPipe.
+    if (ids.length < 2) {
+      throw new BadRequestException('Cần ít nhất 2 SKU khác nhau để gộp thành một đợt cắt');
+    }
+
+    const mergedId = await this.prisma.$transaction(async (tx) => {
+      const items = await tx.productionInvoiceItem.findMany({
+        where: { id: { in: ids } },
+        include: { productionInvoice: true, stages: true },
+      });
+      if (items.length !== ids.length) {
+        const found = new Set(items.map((i) => i.id));
+        throw new NotFoundException(
+          `Không tìm thấy SKU: ${ids.filter((id) => !found.has(id)).join(', ')}`,
+        );
+      }
+
+      // Đã duyệt = đã sinh ProductionOrder và (có thể) đã chạy solver riêng - kéo vào nhóm nữa thì
+      // phần sắt của nó bị tính hai lần.
+      const approved = items.filter((i) => i.prodApprovalStatus === ProdApprovalStatus.APPROVED);
+      if (approved.length > 0) {
+        throw new ConflictException(
+          `SKU đã được Sếp duyệt thì không gộp được nữa: ${approved.map((i) => i.id).join(', ')}`,
+        );
+      }
+      // Đang nằm trong nhóm khác: rút ra âm thầm sẽ làm sai phương án cắt của nhóm kia (số đoạn
+      // hụt đi so với lúc tính). Muốn đổi tổ hợp thì để Sếp từ chối nhóm cũ trước.
+      const alreadyMerged = items.filter((i) => i.productionInvoice.isMerged);
+      if (alreadyMerged.length > 0) {
+        throw new ConflictException(
+          `SKU đang thuộc đợt gộp khác: ${alreadyMerged
+            .map((i) => `${i.id} (${i.productionInvoice.code})`)
+            .join(', ')}`,
+        );
+      }
+
+      // Cả nhóm cắt cùng lúc nên hạn của nhóm phải theo SKU GẤP NHẤT - lấy hạn muộn hơn là để đơn
+      // gấp trễ hẹn.
+      const deadlines = items
+        .map((i) => this.frameDeadlineOf(i))
+        .filter((d): d is Date => d !== null)
+        .map((d) => d.getTime());
+      const deadline = deadlines.length > 0 ? new Date(Math.min(...deadlines)) : null;
+
+      const created = await tx.productionInvoice.create({
+        data: {
+          code: await nextProductionInvoiceCode(tx as unknown as PrismaServiceType),
+          // Cố ý để null: nhóm có SKU của nhiều đơn hàng, không quy về 1 đơn được. PO gốc của từng
+          // SKU nằm ở ProductionInvoiceItem.salesOrderId.
+          salesOrderId: null,
+          isMerged: true,
+          mergedAt: new Date(),
+          mergedById: actorUserId,
+          deadline,
+        },
+      });
+      await tx.productionInvoiceItem.updateMany({
+        where: { id: { in: ids } },
+        data: { productionInvoiceId: created.id },
+      });
+
+      return created.id;
+    });
+
+    return this.toResponseDto(await this.findOneOrThrow(mergedId.toString()));
   }
 
   // ─── Items ──────────────────────────────────────────────────────────────────
@@ -195,7 +326,7 @@ export class ProductionInvoicesService {
         materialDeadline: dto.materialDeadline ? new Date(dto.materialDeadline) : undefined,
         deliveryDeadline: dto.deliveryDeadline ? new Date(dto.deliveryDeadline) : undefined,
       },
-      include: { mfgProduct: true, productVariant: true, stages: true },
+      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
     });
     return this.toItemResponseDto(item);
   }
@@ -264,7 +395,7 @@ export class ProductionInvoicesService {
         requestedById: actorUserId,
         rejectReason: null,
       },
-      include: { mfgProduct: true, productVariant: true, stages: true },
+      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
     });
     await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
@@ -291,7 +422,7 @@ export class ProductionInvoicesService {
         qlsxAt: new Date(),
         qlsxById: actorUserId,
       },
-      include: { mfgProduct: true, productVariant: true, stages: true },
+      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
     });
     await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
@@ -325,7 +456,7 @@ export class ProductionInvoicesService {
         decidedAt: new Date(),
         decidedById: actorUserId,
       },
-      include: { mfgProduct: true, productVariant: true, stages: true },
+      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
     });
     await this.auditItemApprovalTransition(item, updated);
 
@@ -409,7 +540,7 @@ export class ProductionInvoicesService {
         decidedAt: new Date(),
         decidedById: actorUserId,
       },
-      include: { mfgProduct: true, productVariant: true, stages: true },
+      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
     });
     await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
@@ -434,10 +565,178 @@ export class ProductionInvoicesService {
         decidedAt: new Date(),
         decidedById: actorUserId,
       },
-      include: { mfgProduct: true, productVariant: true, stages: true },
+      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
     });
     await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
+  }
+
+  // ─── Sếp duyệt/từ chối CẢ PI gộp ────────────────────────────────────────────
+
+  /**
+   * Sếp duyệt cả cụm gộp một lần. KHÔNG duyệt lẻ từng SKU được ở đây vì cả nhóm nằm chung một cây
+   * sắt: duyệt một nửa nhóm thì phương án cắt của nửa còn lại không còn đúng nữa.
+   *
+   * Khác approveItem() ở đúng một điểm cốt lõi: solver chạy MỘT LẦN cho cả nhóm
+   * (requestForInvoice) thay vì mỗi SKU một lần - đó chính là chỗ tiết kiệm sắt, tách ra tính
+   * riêng là mất sạch phần lợi của việc gộp.
+   */
+  async approveBatch(piId: string, actorUserId: string): Promise<ProductionInvoiceResponseDto> {
+    const pi = await this.assertMergedPi(piId);
+    for (const item of pi.items) {
+      this.assertItemStatus(item, ProdApprovalStatus.WAITING_BOSS);
+    }
+    // Kiểm BOM của MỌI SKU trước khi ghi bất cứ thứ gì: thiếu BOM 1 SKU là cả nhóm không cắt chung
+    // được, dừng sớm với 409 rõ ràng còn hơn duyệt được nửa nhóm rồi kẹt.
+    for (const item of pi.items) {
+      await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
+    }
+
+    const decidedAt = new Date();
+    await this.prisma.productionInvoiceItem.updateMany({
+      where: { productionInvoiceId: pi.id },
+      data: {
+        prodApprovalStatus: ProdApprovalStatus.APPROVED,
+        decidedAt,
+        decidedById: actorUserId,
+      },
+    });
+    // updateMany() không trả lại từng dòng như update() - tự dựng "after" từ "before" đã có sẵn
+    // trong pi.items thay vì đọc lại DB, vì đúng 3 field vừa ghi đã biết trước giá trị.
+    for (const item of pi.items) {
+      await this.auditItemApprovalTransition(item, {
+        ...item,
+        prodApprovalStatus: ProdApprovalStatus.APPROVED,
+        decidedAt,
+        decidedById: actorUserId,
+      });
+    }
+
+    for (const item of pi.items) {
+      // Đọc PO từ chính SKU, KHÔNG từ pi.salesOrderId (luôn null với PI gộp) - đọc nhầm chỗ sẽ
+      // âm thầm bỏ qua bước tạo PlanForm và làm hỏng "Lệnh kiểm tra vật tư".
+      if (item.salesOrderId) {
+        await this.skusService.ensureProductionConfirmPlanForm(
+          item.salesOrderId,
+          item.mfgProductId,
+          pi.id,
+          actorUserId,
+        );
+      }
+      try {
+        await this.productionOrdersService.createFromApproval(
+          item.id,
+          item.mfgProductId,
+          item.quantity,
+        );
+      } catch (error) {
+        this.logger.error(
+          `ProductionOrder creation failed unexpectedly for PI item ${item.id} despite BOM check: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    await this.prisma.productionInvoice.update({
+      where: { id: pi.id },
+      data: { status: ProductionInvoiceStatus.PRODUCING },
+    });
+
+    // Best-effort như trigger đơn lẻ: không được phép làm hỏng việc duyệt đã ghi ở trên.
+    try {
+      await this.cuttingProposalsService.requestForInvoice(pi.id, { requestedById: actorUserId });
+    } catch (error) {
+      this.logger.error(
+        `Auto cutting-proposal trigger failed for merged PI ${pi.id}: ${(error as Error).message}`,
+      );
+    }
+
+    return this.toResponseDto(await this.findOneOrThrow(piId));
+  }
+
+  /**
+   * Sếp từ chối cả cụm gộp: PI gộp bị XOÁ HẲN, từng SKU trả về PI của đơn hàng gốc kèm lý do, rồi
+   * xuất hiện lại ở màn "Tối ưu cắt sắt" để KHSX gộp tổ hợp khác (yêu cầu Sếp 2026-08-14).
+   */
+  async rejectBatch(
+    piId: string,
+    reason: string,
+    actorUserId: string,
+  ): Promise<{ movedItemIds: string[] }> {
+    const pi = await this.assertMergedPi(piId);
+    // Đã duyệt = đã sinh ProductionOrder/PlanForm trỏ vào PI này; xoá PI sẽ để lại rác treo.
+    const approved = pi.items.filter((i) => i.prodApprovalStatus === ProdApprovalStatus.APPROVED);
+    if (approved.length > 0) {
+      throw new ConflictException(
+        `Đợt gộp ${pi.code} đã có SKU được duyệt (${approved.map((i) => i.id).join(', ')}) - không xoá được nữa`,
+      );
+    }
+
+    // auditItemApprovalTransition ghi qua this.prisma (ngoài transaction, chủ đích best-effort như
+    // 5 chỗ gọi còn lại) - gom cặp before/after trong lúc chạy transaction, CHỈ ghi audit sau khi
+    // transaction commit thành công, tránh để lại audit log mồ côi nếu rollback giữa chừng (VD SKU
+    // sau trong vòng lặp lỗi).
+    const transitions: { before: PIItemWithRefs; after: PIItemWithRefs }[] = [];
+    await this.prisma.$transaction(async (tx) => {
+      for (const item of pi.items) {
+        const homePiId = await this.resolveHomePi(tx, item.salesOrderId);
+        const updated = await tx.productionInvoiceItem.update({
+          where: { id: item.id },
+          data: {
+            productionInvoiceId: homePiId,
+            prodApprovalStatus: ProdApprovalStatus.REJECTED,
+            rejectReason: reason,
+            decidedAt: new Date(),
+            decidedById: actorUserId,
+          },
+        });
+        transitions.push({ before: item, after: { ...item, ...updated } });
+      }
+      await tx.productionInvoice.delete({ where: { id: pi.id } });
+    });
+    for (const t of transitions) {
+      await this.auditItemApprovalTransition(t.before, t.after);
+    }
+
+    return { movedItemIds: pi.items.map((i) => i.id.toString()) };
+  }
+
+  /** PI "nhà" để trả SKU về sau khi huỷ đợt gộp: PI thường của đúng đơn hàng đó, chưa có thì tạo. */
+  private async resolveHomePi(
+    tx: PrismaTx,
+    salesOrderId: bigint | null,
+  ): Promise<bigint> {
+    if (salesOrderId !== null) {
+      const existing = await tx.productionInvoice.findFirst({
+        where: { salesOrderId, isMerged: false },
+        orderBy: { id: 'asc' },
+      });
+      if (existing) return existing.id;
+    }
+    const order =
+      salesOrderId !== null
+        ? await tx.salesOrder.findUnique({ where: { id: salesOrderId } })
+        : null;
+    const created = await tx.productionInvoice.create({
+      data: {
+        code: await nextProductionInvoiceCode(tx as unknown as PrismaServiceType),
+        salesOrderId,
+        deadline: order?.deliveryDate ?? null,
+      },
+    });
+    return created.id;
+  }
+
+  private async assertMergedPi(piId: string): Promise<PIWithRefs> {
+    const pi = await this.findOneOrThrow(piId);
+    if (!pi.isMerged) {
+      throw new ConflictException(
+        `${pi.code} không phải đợt gộp - PI thường duyệt/từ chối theo từng SKU (xem approveItem/rejectItem)`,
+      );
+    }
+    if (pi.items.length === 0) {
+      throw new ConflictException(`Đợt gộp ${pi.code} không còn SKU nào`);
+    }
+    return pi;
   }
 
   // ─── Chuyền kiểm (TRANSFER_CHECK) - xem comment model TransferCheckResult ───
@@ -612,7 +911,7 @@ export class ProductionInvoicesService {
       where: { id: bigId },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true, stages: true } },
+        items: { include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true } },
       },
     });
     if (!pi) {
@@ -625,7 +924,7 @@ export class ProductionInvoicesService {
     const idBigId = parseBigIntId(id);
     const item = await this.prisma.productionInvoiceItem.findUnique({
       where: { id: idBigId },
-      include: { mfgProduct: true, productVariant: true, stages: true },
+      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
     });
     if (!item || item.productionInvoiceId !== piId) {
       throw new NotFoundException(`Production invoice item ${id} not found on PI ${piId}`);
@@ -642,12 +941,45 @@ export class ProductionInvoicesService {
     }
   }
 
+  /**
+   * Hạn dùng để xếp/gộp đợt cắt, cùng thứ tự ưu tiên với CuttingProposalsService.frameDeadlineOf
+   * (materialDeadline → mốc Khung cơ khí → hạn cả phiếu). Cố ý nhân bản logic 3 dòng này thay vì
+   * export hàm private của module kia: 2 module không phụ thuộc nhau theo chiều đó, và đây là quy
+   * tắc nghiệp vụ đủ nhỏ để trùng lặp rẻ hơn là dựng thêm ràng buộc giữa 2 module.
+   */
+  private frameDeadlineOf(item: {
+    materialDeadline: Date | null;
+    stages: { stageType: ProdItemStageType; deadline: Date }[];
+    productionInvoice: { deadline: Date | null };
+  }): Date | null {
+    const frame = item.stages.find((s) => s.stageType === ProdItemStageType.FRAME);
+    return item.materialDeadline ?? frame?.deadline ?? item.productionInvoice.deadline ?? null;
+  }
+
   private assertItemStatus(item: PIItemWithRefs, expected: ProdApprovalStatus): void {
     if (item.prodApprovalStatus !== expected) {
       throw new ConflictException(
         `Item ${item.id} phải ở trạng thái ${expected} (đang là ${item.prodApprovalStatus ?? 'chưa gửi'})`,
       );
     }
+  }
+
+  /**
+   * findAll/findOne only - dựng DTO như toResponseDto() rồi gắn thêm trạng thái phương án cắt MỚI
+   * NHẤT của từng SKU (dùng để FE hiện "Đang tính... (đã chạy X phút)" trên màn Lệnh sản xuất mới).
+   *
+   * Đợt gộp (PI.isMerged) dùng CHUNG 1 phương án cho cả PI (proposal.productionInvoiceId); PI
+   * thường mỗi SKU tự có phương án riêng qua ProductionOrder của chính nó.
+   */
+  private toResponseDtoWithProposalStatus(pi: PIWithProposalStatus): ProductionInvoiceResponseDto {
+    const dto = this.toResponseDto(pi);
+    const piLevelProposal = pi.isMerged ? pi.cuttingProposals[0] : undefined;
+    dto.items.forEach((itemDto, i) => {
+      const proposal = piLevelProposal ?? pi.items[i].productionOrder?.cuttingProposals[0];
+      itemDto.cuttingProposalStatus = proposal?.status ?? null;
+      itemDto.cuttingProposalRequestedAt = proposal?.requestedAt ?? null;
+    });
+    return dto;
   }
 
   private toResponseDto(pi: PIWithRefs): ProductionInvoiceResponseDto {
@@ -657,6 +989,7 @@ export class ProductionInvoicesService {
       salesOrderId: pi.salesOrderId?.toString() ?? null,
       salesOrderCode: pi.salesOrder?.code ?? null,
       status: pi.status,
+      isMerged: pi.isMerged,
       deadline: pi.deadline,
       createdAt: pi.createdAt,
       updatedAt: pi.updatedAt,
@@ -668,6 +1001,8 @@ export class ProductionInvoicesService {
     return new ProductionInvoiceItemResponseDto({
       id: item.id.toString(),
       productionInvoiceId: item.productionInvoiceId.toString(),
+      salesOrderId: item.salesOrderId?.toString() ?? null,
+      salesOrderCode: item.salesOrder?.code ?? null,
       mfgProductId: item.mfgProductId.toString(),
       factoryCode: item.mfgProduct.factoryCode,
       productName: item.mfgProduct.name,

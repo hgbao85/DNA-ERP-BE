@@ -34,7 +34,13 @@ import { RejectPurchaseProposalDto } from './dto/reject-purchase-proposal.dto';
 const SUPPLIER_WAREHOUSE_CODE = 'SUPPLIER';
 
 const LIST_INCLUDE = {
-  cuttingProposal: { include: { productionOrder: { include: { mfgProduct: true } } } },
+  cuttingProposal: {
+    include: {
+      productionOrder: { include: { mfgProduct: true } },
+      // null khi phương án cắt neo vào 1 lệnh SX; có giá trị khi neo vào PI gộp - xem toResponseDto.
+      productionInvoice: { include: { items: { include: { mfgProduct: true } } } },
+    },
+  },
   inspectionKhoResult: {
     include: { request: { include: { productionOrder: { include: { mfgProduct: true } } } } },
   },
@@ -421,10 +427,17 @@ export class PurchaseProposalsService {
     // row.cuttingProposal, MATERIAL_INSPECTION luôn có row.inspectionKhoResult (đối xứng, cả 2
     // đều dẫn tới cùng shape { poNumber, mfgProduct } qua ProductionOrder - xem
     // MaterialInspectionRequest.productionOrderId).
+    // productionOrder = null khi đề xuất đến từ phương án cắt CẤP NHÓM (PI gộp nhiều SKU) - nhóm
+    // không có 1 lệnh SX đơn lẻ nào. Đây chính là ca "nhóm = đơn vị mua": 1 đề xuất mua duy nhất
+    // cho cả đợt cắt chung, thay vì mỗi lệnh SX một đề xuất rồi Mua hàng phải báo giá nhiều lần.
     const productionOrder =
       row.sourceType === PurchaseProposalSource.CUTTING_PROPOSAL
         ? row.cuttingProposal!.productionOrder
         : row.inspectionKhoResult!.request.productionOrder;
+    const mergedPi =
+      row.sourceType === PurchaseProposalSource.CUTTING_PROPOSAL
+        ? row.cuttingProposal!.productionInvoice
+        : null;
     return new PurchaseProposalResponseDto({
       id: row.id.toString(),
       cuttingProposalId: row.cuttingProposalId?.toString() ?? null,
@@ -433,9 +446,13 @@ export class PurchaseProposalsService {
       sourceType: row.sourceType,
       warehouseCode: row.warehouseCode,
       status: row.status,
-      poNumber: productionOrder.poNumber,
-      mfgProductCode: productionOrder.mfgProduct.factoryCode,
-      mfgProductName: productionOrder.mfgProduct.name,
+      poNumber: productionOrder?.poNumber ?? mergedPi?.code ?? '—',
+      mfgProductCode:
+        productionOrder?.mfgProduct.factoryCode ??
+        (mergedPi?.items ?? []).map((it) => it.mfgProduct.factoryCode).join(', '),
+      mfgProductName:
+        productionOrder?.mfgProduct.name ??
+        (mergedPi ? `${mergedPi.items.length} SKU gộp` : null),
       createdAt: row.createdAt,
       submittedAt: row.submittedAt,
       approvedAt: row.approvedAt,

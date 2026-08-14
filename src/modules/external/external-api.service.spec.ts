@@ -98,5 +98,28 @@ describe('ExternalApiService', () => {
         undefined,
       );
     });
+
+    /**
+     * Ghim đúng bug đã xảy ra thật: circuit breaker của postBreaker có timeout RIÊNG (cố định lúc
+     * khởi tạo, không đọc `timeoutMs` truyền vào từng lần gọi) - nếu ceiling đó thấp hơn timeoutMs
+     * caller yêu cầu, request bị breaker cắt sớm một cách ÂM THẦM, không có gì báo lỗi đúng
+     * nguyên nhân. Test này khoá 2 việc: timeoutMs hợp lệ (dưới ceiling) vẫn chạy bình thường, và
+     * timeoutMs vượt ceiling bị chặn NGAY LẬP TỨC với lỗi rõ ràng - không để nó âm thầm chờ rồi
+     * mới bị breaker cắt sau nhiều phút.
+     */
+    it('chấp nhận timeoutMs dưới ceiling của breaker (900s, đúng giá trị SOLVER_TIMEOUT_SECONDS đã cấu hình)', async () => {
+      httpService.post.mockReturnValue(of(okResponse({ ok: true })));
+
+      await expect(
+        service.post('https://example.com/solve', {}, undefined, 900_000),
+      ).resolves.toEqual({ ok: true });
+    });
+
+    it('chặn ngay - không gọi HttpService - khi timeoutMs vượt ceiling của breaker', async () => {
+      await expect(
+        service.post('https://example.com/solve', {}, undefined, 2_000_000),
+      ).rejects.toThrow(/POST_BREAKER_TIMEOUT_MS/);
+      expect(httpService.post).not.toHaveBeenCalled();
+    });
   });
 });

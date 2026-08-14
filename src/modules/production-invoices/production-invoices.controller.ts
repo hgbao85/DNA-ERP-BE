@@ -10,6 +10,7 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
+import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
 import { RecordPackagingDto } from './dto/record-packaging.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { RejectItemDto } from './dto/reject-item.dto';
@@ -33,6 +34,17 @@ export class ProductionInvoicesController {
   @RequirePermissions(CREATE)
   create(@Body() dto: CreateProductionInvoiceDto) {
     return this.productionInvoicesService.create(dto);
+  }
+
+  /**
+   * KHSX gộp nhiều SKU thành 1 lệnh sản xuất để cắt chung (màn "Tối ưu cắt sắt").
+   * Khai báo TRƯỚC mọi route ':id' để 'merge' không bị nuốt thành tham số id.
+   */
+  @Post('merge')
+  @RequirePermissions(CREATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER)
+  merge(@Body() dto: MergeProductionInvoiceDto, @CurrentUser('id') userId: string) {
+    return this.productionInvoicesService.mergeItems(dto, userId);
   }
 
   @Get()
@@ -138,6 +150,28 @@ export class ProductionInvoicesController {
     @CurrentUser('id') userId: string,
   ) {
     return this.productionInvoicesService.rejectItem(id, itemId, dto.reason, userId);
+  }
+
+  // ─── Sếp duyệt/từ chối CẢ đợt gộp (PI.isMerged) ────────────────────────────
+  // Tách khỏi 2 route :itemId/approve|reject có chủ đích: nhóm gộp cắt chung một cây sắt nên
+  // không duyệt lẻ được, và từ chối là XOÁ cả đợt chứ không chỉ đổi trạng thái 1 SKU.
+
+  @Post(':id/approve-batch')
+  @RequirePermissions(APPROVE)
+  @RequireRole(BUSINESS_ROLES.BOSS)
+  approveBatch(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.productionInvoicesService.approveBatch(id, userId);
+  }
+
+  @Post(':id/reject-batch')
+  @RequirePermissions(APPROVE)
+  @RequireRole(BUSINESS_ROLES.BOSS)
+  rejectBatch(
+    @Param('id') id: string,
+    @Body() dto: RejectItemDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.productionInvoicesService.rejectBatch(id, dto.reason, userId);
   }
 
   // ─── Chuyền kiểm (TRANSFER_CHECK) - thủ kho thành phẩm, mirror KhoChuyenKiemPage ─────

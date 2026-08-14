@@ -92,6 +92,9 @@ interface SolverProposeResponse {
 
 const LIST_INCLUDE = {
   productionOrder: { include: { mfgProduct: true } },
+  // Nhánh phương án cắt cấp nhóm (PI gộp): không có ProductionOrder đơn lẻ nào để lấy poNumber/
+  // tên sản phẩm - đọc từ PI và các SKU bên trong nó. Xem toResponseDto.
+  productionInvoice: { include: { items: { include: { mfgProduct: true } } } },
 } satisfies Prisma.CuttingProposalInclude;
 
 const DETAIL_INCLUDE = {
@@ -103,6 +106,18 @@ const DETAIL_INCLUDE = {
     },
   },
 } satisfies Prisma.CuttingProposalInclude;
+
+/**
+ * Đầu vào đã dựng xong của 1 lần gọi solver. Có 2 nguồn dựng ra nó (xem buildOrderJob/
+ * buildInvoiceJob) nhưng phần gọi solver + lưu kết quả dùng chung hoàn toàn.
+ */
+type SolverJob = {
+  /** Nhãn cho log/thông báo QLSX: mã lệnh SX, hoặc mã PI khi cắt chung cả nhóm. */
+  label: string;
+  numSets: number;
+  bomRows: SolverBomRow[];
+  segmentSpecLookup: Map<string, bigint>;
+};
 
 type CuttingProposalRow = Prisma.CuttingProposalGetPayload<{ include: typeof LIST_INCLUDE }>;
 type CuttingProposalDetail = Prisma.CuttingProposalGetPayload<{ include: typeof DETAIL_INCLUDE }>;
@@ -147,13 +162,45 @@ export class CuttingProposalsService {
       include: LIST_INCLUDE,
     });
 
-    void this.runSolverAndSave(proposal.id, productionOrderId).catch((error: unknown) => {
-      this.logger.error(
-        `Cutting proposal ${proposal.id} (production order ${productionOrderId}) failed: ${
-          (error as Error).message
-        }`,
-      );
+    void this.runSolverAndSave(proposal.id, () => this.buildOrderJob(productionOrderId)).catch(
+      (error: unknown) => {
+        this.logger.error(
+          `Cutting proposal ${proposal.id} (production order ${productionOrderId}) failed: ${
+            (error as Error).message
+          }`,
+        );
+      },
+    );
+
+    return this.toResponseDto(proposal);
+  }
+
+  /**
+   * Tính phương án cắt CHUNG cho cả một đợt gộp (PI.isMerged) - gọi tự động khi Sếp duyệt cả cụm
+   * (ProductionInvoicesService.approveBatch).
+   *
+   * Đây là lý do tồn tại của cả tính năng gộp: nhu cầu của mọi SKU trong nhóm được ném vào CÙNG
+   * một bài toán, nên các đoạn khác cỡ của các sản phẩm khác nhau xếp chung được lên một cây sắt.
+   * Tính riêng từng SKU rồi cộng lại cho ra kết quả y hệt lúc chưa gộp.
+   */
+  async requestForInvoice(
+    productionInvoiceId: bigint,
+    options: { requestedById?: string } = {},
+  ): Promise<CuttingProposalResponseDto> {
+    const proposal = await this.prisma.cuttingProposal.create({
+      data: { productionInvoiceId, requestedById: options.requestedById },
+      include: LIST_INCLUDE,
     });
+
+    void this.runSolverAndSave(proposal.id, () => this.buildInvoiceJob(productionInvoiceId)).catch(
+      (error: unknown) => {
+        this.logger.error(
+          `Cutting proposal ${proposal.id} (merged PI ${productionInvoiceId}) failed: ${
+            (error as Error).message
+          }`,
+        );
+      },
+    );
 
     return this.toResponseDto(proposal);
   }
@@ -342,6 +389,7 @@ export class CuttingProposalsService {
         productionInvoiceCode: item.productionInvoice.code,
         deadline: this.frameDeadlineOf(item),
         prodApprovalStatus: item.prodApprovalStatus,
+        rejectReason: item.rejectReason,
         hasActiveBom: !itemsWithoutBom.has(item.id),
         materials: mats
           .map(({ materialId, demand }) => {
@@ -471,18 +519,28 @@ export class CuttingProposalsService {
   private async loadBatchContext() {
     const items = await this.prisma.productionInvoiceItem.findMany({
       where: {
-        // "Sales đã tạo mà Sếp chưa duyệt" = chưa APPROVED và chưa REJECTED. PHẢI viết dạng OR có
-        // nhánh null: item vừa sinh từ đơn hàng mang prodApprovalStatus = null (KHSX chưa gửi
-        // QLSX) và `notIn` của SQL KHÔNG khớp NULL, dùng notIn sẽ loại mất đúng nhóm đơn mới nhất
-        // - tức nhóm cần gộp nhất.
+        // "Sếp chưa duyệt" = chưa APPROVED. PHẢI viết dạng OR có nhánh null: item vừa sinh từ đơn
+        // hàng mang prodApprovalStatus = null (KHSX chưa gửi QLSX) và `notIn` của SQL KHÔNG khớp
+        // NULL, dùng notIn sẽ loại mất đúng nhóm đơn mới nhất - tức nhóm cần gộp nhất.
+        //
+        // REJECTED nằm trong danh sách có chủ đích: Sếp từ chối một đợt gộp thì các SKU trong đó
+        // phải QUAY LẠI đây để KHSX gộp tổ hợp khác (yêu cầu Sếp 2026-08-14) - thiếu nhánh này thì
+        // SKU bị từ chối biến mất khỏi hệ thống, không ai gộp lại được.
         OR: [
           { prodApprovalStatus: null },
           {
             prodApprovalStatus: {
-              in: [ProdApprovalStatus.WAITING_QLSX, ProdApprovalStatus.WAITING_BOSS],
+              in: [
+                ProdApprovalStatus.WAITING_QLSX,
+                ProdApprovalStatus.WAITING_BOSS,
+                ProdApprovalStatus.REJECTED,
+              ],
             },
           },
         ],
+        // Đang nằm trong một đợt gộp rồi thì không hiện ra để gộp tiếp - tránh KHSX vô tình gộp
+        // chồng và làm sai phương án cắt của đợt kia.
+        productionInvoice: { isMerged: false },
       },
       include: {
         mfgProduct: true,
@@ -675,17 +733,23 @@ export class CuttingProposalsService {
     return this.toResponseDto(updated);
   }
 
-  private async runSolverAndSave(proposalId: bigint, productionOrderId: bigint): Promise<void> {
+  /**
+   * `buildJob` nhận vào dạng callback (không phải dữ liệu dựng sẵn) có chủ đích: dựng đầu vào cũng
+   * là chỗ hay hỏng nhất (thiếu BomRevision, thiếu dòng định mức) và phải nằm TRONG try/catch này
+   * để lỗi đó được ghi lại thành CuttingProposal FAILED có lý do, thay vì ném ra ngoài rồi mất dấu.
+   */
+  private async runSolverAndSave(
+    proposalId: bigint,
+    buildJob: () => Promise<SolverJob>,
+  ): Promise<void> {
     let poNumber: string | undefined;
     try {
-      const order = await this.prisma.productionOrder.findUniqueOrThrow({
-        where: { id: productionOrderId },
-      });
-      poNumber = order.poNumber;
+      const job = await buildJob();
+      poNumber = job.label;
+      const { bomRows, segmentSpecLookup } = job;
       const config = await this.prisma.systemConfig.findUniqueOrThrow({
         where: { id: SYSTEM_CONFIG_ID },
       });
-      const { bomRows, segmentSpecLookup } = await this.buildBomRows(order.bomRevisionId);
 
       // Sếp cấp riêng ngưỡng hao hụt tối đa cho từng loại Sắt (Material.maxCuttingWastePercentage,
       // xem comment schema.prisma) - solver ĐÃ lặp riêng từng loại trong 1 lần gọi (api/views.py),
@@ -711,7 +775,7 @@ export class CuttingProposalsService {
       }
 
       const baseRequestBody = {
-        num_sets: order.quantity,
+        num_sets: job.numSets,
         bom: bomRows,
         // views.py đọc stock_lengths bằng str(...).replace(",", " ").split() - PHẢI gửi chuỗi
         // cách nhau bởi khoảng trắng, gửi mảng JSON sẽ bị solver parse sai (str([5850,6000]) ->
@@ -984,6 +1048,78 @@ export class CuttingProposalsService {
     return Math.ceil(neededMm / best.bestUsedMm);
   }
 
+  /** 1 lệnh SX cắt riêng: đúng 1 định mức, số bộ để solver tự nhân - hành vi có từ Phase 7. */
+  private async buildOrderJob(productionOrderId: bigint): Promise<SolverJob> {
+    const order = await this.prisma.productionOrder.findUniqueOrThrow({
+      where: { id: productionOrderId },
+    });
+    const { bomRows, segmentSpecLookup } = await this.buildBomRows(order.bomRevisionId);
+    return { label: order.poNumber, numSets: order.quantity, bomRows, segmentSpecLookup };
+  }
+
+  /**
+   * Cả một đợt gộp: nhiều sản phẩm, mỗi cái một định mức và một số lượng khác nhau.
+   *
+   * `num_sets` của solver là hệ số nhân DÙNG CHUNG cho toàn bộ bom[] nên không diễn tả được
+   * "SKU A làm 10 bộ, SKU B làm 25 bộ". Cách duy nhất đúng là quy về NHU CẦU TUYỆT ĐỐI:
+   * nhân sẵn số lượng vào từng dòng rồi gửi `num_sets = 1`.
+   *
+   *   qty tuyệt đối = qty_per_set (số mảnh/bộ) × qty_per_part (số đoạn/mảnh) × số bộ của lệnh SX
+   *
+   * Cách này đã chạy thật và đo được trên dữ liệu J55 + Ghế tình yêu trước khi viết plan.
+   */
+  private async buildInvoiceJob(productionInvoiceId: bigint): Promise<SolverJob> {
+    const pi = await this.prisma.productionInvoice.findUniqueOrThrow({
+      where: { id: productionInvoiceId },
+      include: { items: { include: { productionOrder: true, mfgProduct: true } } },
+    });
+
+    const orders = pi.items
+      .map((it) => ({ order: it.productionOrder, code: it.mfgProduct.factoryCode }))
+      .filter((x): x is { order: NonNullable<typeof x.order>; code: string } => x.order !== null);
+    if (orders.length === 0) {
+      throw new NotFoundException(
+        `Đợt gộp ${pi.code} chưa có lệnh sản xuất nào (SKU phải được duyệt trước khi tính phương án cắt)`,
+      );
+    }
+
+    // Gom theo (materialId, cutLengthMm): 2 sản phẩm khác nhau dùng CÙNG cỡ đoạn của CÙNG loại sắt
+    // thì với solver chỉ là một nhu cầu duy nhất - đây chính là chỗ gộp sinh ra lợi ích.
+    const demand = new Map<string, SolverBomRow>();
+    const segmentSpecLookup = new Map<string, bigint>();
+    for (const { order, code } of orders) {
+      const built = await this.buildBomRows(order.bomRevisionId);
+      for (const [key, specId] of built.segmentSpecLookup) {
+        segmentSpecLookup.set(key, specId);
+      }
+      for (const row of built.bomRows) {
+        const key = `${row.material}:${row.cut_length}`;
+        const absoluteQty = row.qty_per_set * row.qty_per_part * order.quantity;
+        const existing = demand.get(key);
+        if (existing) {
+          existing.qty_per_part += absoluteQty;
+        } else {
+          demand.set(key, {
+            // Tên gộp để đọc log/rawResponse còn biết đoạn này của sản phẩm nào.
+            part: `${code}·${row.part}`,
+            qty_per_set: 1,
+            material: row.material,
+            spec: '',
+            cut_length: row.cut_length,
+            qty_per_part: absoluteQty,
+          });
+        }
+      }
+    }
+
+    return {
+      label: pi.code,
+      numSets: 1,
+      bomRows: [...demand.values()],
+      segmentSpecLookup,
+    };
+  }
+
   private async buildBomRows(
     bomRevisionId: bigint,
   ): Promise<{ bomRows: SolverBomRow[]; segmentSpecLookup: Map<string, bigint> }> {
@@ -1109,12 +1245,20 @@ export class CuttingProposalsService {
   }
 
   private toResponseDto(proposal: CuttingProposalRow): CuttingProposalResponseDto {
+    // 2 nhánh neo (xem comment model CuttingProposal): 1 lệnh SX cắt riêng, hoặc cả 1 PI gộp cắt
+    // chung. Nhánh gộp không có sản phẩm "duy nhất" nào - hiện mã PI và liệt kê các SKU trong đó
+    // thay vì cố nặn ra 1 cái tên (chọn đại 1 SKU sẽ khiến người đọc tưởng phương án chỉ cho SKU đó).
+    const order = proposal.productionOrder;
+    const pi = proposal.productionInvoice;
+    const mergedSkus = pi?.items.map((it) => it.mfgProduct.factoryCode) ?? [];
     return new CuttingProposalResponseDto({
       id: proposal.id.toString(),
-      productionOrderId: proposal.productionOrderId.toString(),
-      poNumber: proposal.productionOrder.poNumber,
-      mfgProductCode: proposal.productionOrder.mfgProduct.factoryCode,
-      mfgProductName: proposal.productionOrder.mfgProduct.name,
+      productionOrderId: proposal.productionOrderId?.toString() ?? null,
+      productionInvoiceId: proposal.productionInvoiceId?.toString() ?? null,
+      poNumber: order?.poNumber ?? pi?.code ?? '—',
+      mfgProductCode: order?.mfgProduct.factoryCode ?? mergedSkus.join(', '),
+      mfgProductName:
+        order?.mfgProduct.name ?? (mergedSkus.length > 0 ? `${mergedSkus.length} SKU gộp` : null),
       status: proposal.status,
       totalBarsAll: proposal.totalBarsAll,
       totalWasteMm: proposal.totalWasteMm,

@@ -23,6 +23,7 @@ describe('CuttingProposalsService', () => {
     cuttingProposalPatternSegment: { create: jest.Mock };
     purchaseProposal: { create: jest.Mock };
     productionOrder: { findUniqueOrThrow: jest.Mock };
+    productionInvoice: { findUniqueOrThrow: jest.Mock };
     systemConfig: { findUniqueOrThrow: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
@@ -81,6 +82,7 @@ describe('CuttingProposalsService', () => {
       cuttingProposalPatternSegment: { create: jest.fn() },
       purchaseProposal: { create: jest.fn() },
       productionOrder: { findUniqueOrThrow: jest.fn().mockResolvedValue(productionOrder) },
+      productionInvoice: { findUniqueOrThrow: jest.fn() },
       systemConfig: { findUniqueOrThrow: jest.fn().mockResolvedValue(systemConfig) },
       pieceBom: { findMany: jest.fn().mockResolvedValue([pieceBomRow]) },
       bomPiece: { findMany: jest.fn().mockResolvedValue([{ pieceId: 10n, qtyPerUnit: 4 }]) },
@@ -165,18 +167,26 @@ describe('CuttingProposalsService', () => {
       expect(result.status).toBe(CuttingProposalStatus.CALCULATING);
       expect(prisma.cuttingProposal.create).toHaveBeenCalledWith({
         data: { productionOrderId: 1n, idempotencyKey: undefined, requestedById: undefined },
-        include: { productionOrder: { include: { mfgProduct: true } } },
+        include: {
+          productionOrder: { include: { mfgProduct: true } },
+          // Nhánh phương án cấp nhóm - null với đề xuất neo vào 1 lệnh SX như ca này.
+          productionInvoice: { include: { items: { include: { mfgProduct: true } } } },
+        },
       });
     });
   });
 
   describe('runSolverAndSave (private, invoked directly)', () => {
-    const invoke = (proposalId: bigint, productionOrderId: bigint) =>
-      (
-        service as unknown as {
-          runSolverAndSave: (p: bigint, o: bigint) => Promise<void>;
-        }
-      ).runSolverAndSave(proposalId, productionOrderId);
+    // runSolverAndSave nhận callback dựng đầu vào (không nhận thẳng productionOrderId) từ khi có
+    // thêm đường cắt chung cả nhóm - nối lại qua buildOrderJob để giữ nguyên ý nghĩa các test dưới.
+    type PrivateParts = {
+      runSolverAndSave: (p: bigint, buildJob: () => Promise<unknown>) => Promise<void>;
+      buildOrderJob: (o: bigint) => Promise<unknown>;
+    };
+    const invoke = (proposalId: bigint, productionOrderId: bigint) => {
+      const priv = service as unknown as PrivateParts;
+      return priv.runSolverAndSave(proposalId, () => priv.buildOrderJob(productionOrderId));
+    };
 
     it('builds the bom[] payload from pieceBom/bomPiece and saves the mapped result on success', async () => {
       externalApiService.post.mockResolvedValue({
@@ -809,12 +819,86 @@ describe('CuttingProposalsService', () => {
       expect(prisma.cuttingProposal.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: undefined,
-          include: { productionOrder: { include: { mfgProduct: true } } },
+          include: {
+            productionOrder: { include: { mfgProduct: true } },
+            productionInvoice: { include: { items: { include: { mfgProduct: true } } } },
+          },
         }),
       );
       expect(result.data).toHaveLength(1);
       expect(result.data[0].poNumber).toBe('PO-1');
       expect(result.data[0].mfgProductCode).toBe('SKU-1');
+    });
+  });
+
+  /**
+   * Phần toán cốt lõi của việc gộp. `num_sets` của solver là hệ số nhân DÙNG CHUNG cho cả bom[]
+   * nên không diễn tả được "SKU A làm 10 bộ, SKU B làm 25 bộ" - phải quy về nhu cầu tuyệt đối rồi
+   * gửi num_sets=1. Sai chỗ này thì solver vẫn chạy và vẫn trả kết quả, chỉ là SAI SỐ LƯỢNG một
+   * cách im lặng - không có gì báo lỗi, nên phải ghim bằng test.
+   */
+  describe('buildInvoiceJob (gộp nhu cầu nhiều SKU vào 1 bài toán)', () => {
+    const buildJob = (piId: bigint) =>
+      (
+        service as unknown as {
+          buildInvoiceJob: (id: bigint) => Promise<{
+            label: string;
+            numSets: number;
+            bomRows: { part: string; qty_per_set: number; material: string; cut_length: number; qty_per_part: number }[];
+          }>;
+        }
+      ).buildInvoiceJob(piId);
+
+    /** 2 SKU, số lượng KHÁC nhau, dùng CHUNG cỡ đoạn 660mm của cùng loại sắt. */
+    const twoSkuInvoice = () => {
+      prisma.productionInvoice.findUniqueOrThrow.mockResolvedValue({
+        id: 50n,
+        code: 'PI-50',
+        items: [
+          {
+            productionOrder: { id: 1n, bomRevisionId: 5n, quantity: 10 },
+            mfgProduct: { factoryCode: 'BAN-J55' },
+          },
+          {
+            productionOrder: { id: 2n, bomRevisionId: 6n, quantity: 25 },
+            mfgProduct: { factoryCode: 'GHE-TY' },
+          },
+        ],
+      });
+      prisma.bomPiece.findMany.mockResolvedValue([{ pieceId: 10n, qtyPerUnit: 4 }]);
+      prisma.pieceBom.findMany.mockResolvedValue([pieceBomRow]);
+    };
+
+    it('cộng dồn cùng (loại sắt, cỡ đoạn) của các SKU khác nhau thành MỘT nhu cầu', async () => {
+      twoSkuInvoice();
+
+      const job = await buildJob(50n);
+
+      // 4 mảnh/bộ × 1 đoạn/mảnh × 10 bộ = 40; SKU kia = 4 × 1 × 25 = 100 -> gộp thành 140.
+      expect(job.bomRows).toHaveLength(1);
+      expect(job.bomRows[0].qty_per_part).toBe(140);
+      expect(job.bomRows[0].material).toBe('200');
+      expect(job.bomRows[0].cut_length).toBe(660);
+      // Đã nhân sẵn số lượng vào từng dòng -> solver KHÔNG được nhân thêm lần nữa.
+      expect(job.numSets).toBe(1);
+      expect(job.bomRows[0].qty_per_set).toBe(1);
+      expect(job.label).toBe('PI-50');
+    });
+
+    it('giữ dấu vết SKU trong tên đoạn để đọc lại log/rawResponse còn lần ra được', async () => {
+      twoSkuInvoice();
+      const job = await buildJob(50n);
+      expect(job.bomRows[0].part).toContain('BAN-J55');
+    });
+
+    it('báo lỗi rõ khi đợt gộp chưa có lệnh sản xuất nào (SKU chưa được duyệt)', async () => {
+      prisma.productionInvoice.findUniqueOrThrow.mockResolvedValue({
+        id: 50n,
+        code: 'PI-50',
+        items: [{ productionOrder: null, mfgProduct: { factoryCode: 'BAN-J55' } }],
+      });
+
+      await expect(buildJob(50n)).rejects.toThrow(NotFoundException);
     });
   });
 });

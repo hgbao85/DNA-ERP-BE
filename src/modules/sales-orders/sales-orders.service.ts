@@ -224,6 +224,10 @@ export class SalesOrdersService {
         items: {
           create: order.items.map((it) => ({
             mfgProductId: it.mfgProductId,
+            // Ghim PO ngay trên từng SKU: PI cha chỉ còn cho biết PO khi PI chưa bị gộp. Sau khi
+            // KHSX gộp SKU này sang một đợt cắt chung (PI.isMerged, salesOrderId=null) thì đây là
+            // đường DUY NHẤT truy ra đơn hàng gốc.
+            salesOrderId: order.id,
             quantity: it.totalQty,
             deliveryDeadline: it.deliveryDate,
           })),

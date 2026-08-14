@@ -69,8 +69,12 @@ export class CuttingProposalLineResponseDto {
 @Exclude()
 export class CuttingProposalResponseDto {
   @Expose() @ApiProperty() id!: string;
-  @Expose() @ApiProperty() productionOrderId!: string;
+  /** Neo vào ĐÚNG MỘT trong hai: 1 lệnh SX cắt riêng, hoặc cả 1 PI gộp cắt chung một đợt. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) productionOrderId!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceId!: string | null;
+  /** Mã lệnh sản xuất, hoặc mã PI khi là phương án cấp nhóm. */
   @Expose() @ApiProperty() poNumber!: string;
+  /** Mã SKU, hoặc danh sách mã SKU (ngăn bởi dấu phẩy) khi là phương án cấp nhóm. */
   @Expose() @ApiProperty() mfgProductCode!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;
   @Expose() @ApiProperty({ enum: CuttingProposalStatus }) status!: CuttingProposalStatus;

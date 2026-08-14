@@ -8,10 +8,26 @@ import { retry, timeout } from 'rxjs/operators';
 const REQUEST_TIMEOUT_MS = 5000;
 const RETRY_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 500;
-/** Ceiling for the POST breaker's own timeout tracking - actual per-call timeout is passed via
- * the `timeoutMs` param to post() (see cat_sat_iea integration, which can run minutes). This is
- * just an upper bound so the breaker itself never hangs indefinitely. */
-const POST_BREAKER_TIMEOUT_MS = 600_000;
+/**
+ * Ceiling for the POST breaker's own timeout tracking. opossum sets this ONCE at construction
+ * for the whole breaker instance - it does NOT read the per-call `timeoutMs` argument passed to
+ * post() (that one only bounds the underlying axios call). The two are independent layers
+ * wrapping the same request, and whichever is SMALLER wins.
+ *
+ * MUST stay >= the largest `timeoutMs` any caller passes to post() anywhere in the codebase, or
+ * that caller's own (larger, intentionally configured) timeout is silently overridden by this one
+ * - exactly what happened here once: SOLVER_TIMEOUT_SECONDS was raised to 900s for the cat_sat_iea
+ * integration (cutting-proposals, can legitimately run minutes under auto_scan retry) while this
+ * ceiling stayed at the old 600s, so slow-but-legitimate solves got killed at 10 minutes no matter
+ * how high SOLVER_TIMEOUT_SECONDS was set - silently, with a generic "External service unavailable"
+ * that gave no hint the real cause was this unrelated constant.
+ *
+ * Set generously above any known caller (currently: solver, up to 900s) instead of matching it
+ * exactly, so the NEXT config raise doesn't reopen the same gap - and see the assertion in post()
+ * below, which turns any future violation of this invariant into an immediate, loud error instead
+ * of a silent 10-minutes-later timeout.
+ */
+const POST_BREAKER_TIMEOUT_MS = 1_800_000; // 30 phút
 
 /** A real HTTP response with an error status (4xx/5xx) - as opposed to a network failure or
  * circuit-breaker short-circuit, which surface as ServiceUnavailableException instead. Callers
@@ -102,6 +118,15 @@ export class ExternalApiService {
     config?: AxiosRequestConfig,
     timeoutMs: number = REQUEST_TIMEOUT_MS,
   ): Promise<T> {
+    // Bảo vệ bất biến giải thích ở POST_BREAKER_TIMEOUT_MS: fail ngay và rõ ràng ở đây, thay vì
+    // để request âm thầm bị breaker cắt giữa chừng sau hàng phút chờ - lỗi đó cực khó truy ra vì
+    // không trỏ gì tới đúng nguyên nhân (đã xảy ra thật với ca merge cắt sắt).
+    if (timeoutMs > POST_BREAKER_TIMEOUT_MS) {
+      throw new Error(
+        `post() timeoutMs=${timeoutMs}ms vượt POST_BREAKER_TIMEOUT_MS=${POST_BREAKER_TIMEOUT_MS}ms - ` +
+          'nâng ceiling đó lên trước (xem comment tại khai báo hằng số).',
+      );
+    }
     try {
       return (await this.postBreaker.fire(url, body, config, timeoutMs)) as T;
     } catch (error) {

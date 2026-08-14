@@ -39,6 +39,9 @@ export class CuttingBatchCandidateDto {
   @Expose()
   @ApiPropertyOptional({ enum: ProdApprovalStatus, nullable: true })
   prodApprovalStatus!: ProdApprovalStatus | null;
+  /// Lý do bị từ chối lần gần nhất. SKU quay lại bảng này sau khi Sếp từ chối một đợt gộp - KHSX
+  /// cần thấy vì sao để không gộp lại đúng tổ hợp vừa bị bác.
+  @Expose() @ApiPropertyOptional({ nullable: true }) rejectReason!: string | null;
   /// Mọi loại sắt SKU này dùng. Rỗng = chưa có định mức ACTIVE (xem `hasActiveBom`).
   @Expose()
   @ApiProperty({ type: [CandidateMaterialDto] })

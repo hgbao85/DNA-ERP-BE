@@ -106,14 +106,17 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     build();
     await service.getBatchSuggestions();
     const calls = (prisma.productionInvoiceItem as { findMany: jest.Mock }).findMany.mock.calls as [
-      { where: { OR: unknown[] } },
+      { where: { OR: unknown[]; productionInvoice: unknown } },
     ][];
     const call = calls[0][0];
     // `notIn` của SQL không khớp NULL, dùng notIn sẽ loại mất đúng nhóm đơn mới nhất - nhóm cần gộp nhất.
+    // REJECTED có mặt để SKU bị Sếp bác quay lại được bảng chọn mà gộp tổ hợp khác.
     expect(call.where.OR).toEqual([
       { prodApprovalStatus: null },
-      { prodApprovalStatus: { in: ['WAITING_QLSX', 'WAITING_BOSS'] } },
+      { prodApprovalStatus: { in: ['WAITING_QLSX', 'WAITING_BOSS', 'REJECTED'] } },
     ]);
+    // SKU đang nằm trong một đợt gộp thì không hiện ra để gộp chồng lần nữa.
+    expect(call.where.productionInvoice).toEqual({ isMerged: false });
   });
 
   it('loại sắt đứng riêng đã đạt ngưỡng thì KHÔNG hiện ra', async () => {
