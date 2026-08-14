@@ -46,4 +46,9 @@ COPY package.json ./
 USER app
 EXPOSE 3000
 
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main"]
+# migrate deploy needs a session-scoped advisory lock; a pooled DATABASE_URL (PgBouncer-style,
+# e.g. Prisma Postgres' pooled.db.prisma.io) can silently leak that lock onto a reused physical
+# connection when a prior deploy attempt is killed mid-migrate, hanging every future deploy on
+# P1002. DIRECT_DATABASE_URL must be the non-pooled connection string for the same database;
+# falls back to DATABASE_URL so this still runs against a direct (non-pooled) DB with no changes.
+CMD ["sh", "-c", "DATABASE_URL=${DIRECT_DATABASE_URL:-$DATABASE_URL} npx prisma migrate deploy && node dist/main"]
