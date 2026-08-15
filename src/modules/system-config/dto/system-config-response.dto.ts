@@ -21,6 +21,9 @@ export class SystemConfigResponseDto {
   @Expose() @ApiProperty() solverLengthStepMm!: number;
   @Expose() @ApiProperty() solverTimeLimitSeconds!: number;
 
+  /** Dung sai giao thừa khi nhận hàng mua về (% của buyQty) - xem SystemConfig trong schema. */
+  @Expose() @ApiProperty() purchaseOverReceiptTolerancePercent!: number;
+
   @Expose() @ApiProperty() updatedAt!: Date;
 
   constructor(partial: Partial<SystemConfigResponseDto>) {

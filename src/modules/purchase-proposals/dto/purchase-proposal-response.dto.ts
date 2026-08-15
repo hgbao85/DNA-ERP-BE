@@ -66,6 +66,10 @@ export class PurchaseProposalResponseDto {
   @Expose() @ApiProperty() poNumber!: string;
   @Expose() @ApiProperty() mfgProductCode!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;
+  /// Hạn Mua hàng nên ưu tiên - nhánh lệnh SX đơn: materialDeadline -> mốc Khung cơ khí -> hạn cả
+  /// PI của chính SKU đó; nhánh PI gộp: hạn SỚM NHẤT trong cả nhóm SKU (xem
+  /// PurchaseProposalsService.frameDeadlineOf). null nếu không SKU nào trong đề xuất có hạn nào.
+  @Expose() @ApiPropertyOptional({ nullable: true }) deadline!: Date | null;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiPropertyOptional({ nullable: true }) submittedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) approvedAt!: Date | null;

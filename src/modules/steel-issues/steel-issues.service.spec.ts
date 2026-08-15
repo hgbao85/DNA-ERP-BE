@@ -158,6 +158,22 @@ describe('SteelIssuesService', () => {
         service.create('1', { pieceId: '20', barLengthMm: 6000, barCount: 20 }, 'user-1', null),
       ).rejects.toThrow(ConflictException);
     });
+
+    it('chỉ chấp nhận dòng phương án CẮT ĐƯỢC - không cho xuất sắt theo dòng feasible=false', async () => {
+      // saveSuccess() tạo CuttingProposalLine cho MỌI vật tư solver trả về, kể cả loại nó báo
+      // không cắt được (không có pattern nào để làm theo). Loại đó cũng bị approve() lọc khỏi đề
+      // xuất mua, nên còn chẳng có sắt để xuất - phải chặn ngay ở guard này.
+      prisma.steelIssue.create.mockResolvedValue(issue);
+
+      await service.create('1', { pieceId: '20', barLengthMm: 6000, barCount: 20 }, 'user-1', null);
+
+      expect(prisma.cuttingProposalLine.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+          where: expect.objectContaining({ feasible: true }),
+        }),
+      );
+    });
   });
 
   describe('receive', () => {

@@ -20,5 +20,19 @@ export function createExtendedPrismaClient(cls: ClsService<AppClsStore>) {
 
 export type PrismaServiceType = ReturnType<typeof createExtendedPrismaClient>;
 
+/**
+ * Client bên trong `$transaction(async (tx) => ...)`. Giống PrismaServiceType nhưng không có các
+ * method cấp kết nối (không lồng transaction, không đóng/mở kết nối từ trong một transaction).
+ *
+ * Có kiểu đặt tên riêng để service nào cần GHI TRONG transaction của service khác thì nhận được
+ * `tx` qua tham số - xem StockLedgerService.postEntry(). Không dùng `Prisma.TransactionClient` của
+ * Prisma sinh sẵn: client ở đây đã qua 2 lớp `$extends` (audit-log + soft-delete) nên kiểu đó
+ * KHÔNG khớp, và mất luôn 2 lớp extension khi gọi.
+ */
+export type PrismaTx = Omit<
+  PrismaServiceType,
+  '$transaction' | '$connect' | '$disconnect' | '$extends' | '$on'
+>;
+
 /** DI token for the extended Prisma client. Inject with `@Inject(PRISMA_SERVICE)`. */
 export const PRISMA_SERVICE = Symbol('PRISMA_SERVICE');

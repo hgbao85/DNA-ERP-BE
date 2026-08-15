@@ -349,6 +349,11 @@ export class SteelIssuesService {
     const line = await this.prisma.cuttingProposalLine.findFirst({
       where: {
         materialId,
+        // `feasible: true` là BẮT BUỘC, không thừa: saveSuccess() tạo dòng cho MỌI vật tư solver
+        // trả về, kể cả loại nó báo không cắt được (feasible=false, không có pattern nào). Thiếu
+        // điều kiện này thì Phôi được phép xuất sắt cho đúng loại không có phương án cắt để làm
+        // theo - mà loại đó cũng bị approve() loại khỏi đề xuất mua nên còn chẳng có sắt để xuất.
+        feasible: true,
         cuttingProposal: {
           status: CuttingProposalStatus.APPROVED,
           OR: [
@@ -360,7 +365,7 @@ export class SteelIssuesService {
     });
     if (!line) {
       throw new ConflictException(
-        `Chưa có phương án cắt (CuttingProposal) đã duyệt cho vật tư ${materialId} của lệnh sản xuất ${productionOrderId} - chưa thể xuất sắt`,
+        `Chưa có phương án cắt (CuttingProposal) đã duyệt và cắt được cho vật tư ${materialId} của lệnh sản xuất ${productionOrderId} - chưa thể xuất sắt`,
       );
     }
   }

@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   Length,
+  Max,
   Min,
   MinLength,
 } from 'class-validator';
@@ -106,4 +107,17 @@ export class UpdateSystemConfigDto {
   @IsInt()
   @Min(1)
   solverTimeLimitSeconds?: number;
+
+  @ApiPropertyOptional({
+    example: 0,
+    description:
+      'Dung sai giao THỪA khi Thủ kho nhận hàng mua về, tính theo % của số lượng đặt mua ' +
+      '(buyQty). Trong dung sai thì ghi nhận đúng số thực nhận kể cả khi vượt buyQty; vượt ' +
+      'dung sai thì chặn và báo lỗi. 0 = không cho nhận thừa dòng nào.',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  purchaseOverReceiptTolerancePercent?: number;
 }

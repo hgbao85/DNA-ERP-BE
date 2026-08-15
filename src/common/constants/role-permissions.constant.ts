@@ -204,9 +204,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // tư/kho thật của chính kho mình phụ trách, và tự thêm vật tư mới (kèm khai báo Tồn kho ban
   // đầu - MaterialsService.create()) - quyền CREATE này trước đây cấp cho QLSX, đã chuyển hẳn
   // sang thủ kho vì thủ kho mới là người biết rõ tồn vật lý thực tế của kho mình.
-  // PURCHASE_PROPOSAL: VIEW+UPDATE (KHÔNG phải 'ALL') để NhapKhoPage.tsx xem đề xuất mua hàng
-  // đang chờ và gọi POST .../items/:itemId/receive xác nhận đã nhận hàng - cố ý không cấp
-  // APPROVE (duyệt đề xuất mua là việc của Sếp, không phải thủ kho).
+  // PURCHASE_PROPOSAL: chỉ VIEW để NhapKhoPage.tsx xem đề xuất mua hàng đang chờ - CỐ Ý không có
+  // UPDATE (2026-08-15, D.c4-warehouse-can-quote): trước đó UPDATE ở module này mở khoá luôn
+  // acknowledge/quotes/submit/requote, không chỉ receive - thủ kho gọi thẳng API là tự báo giá +
+  // tự gửi Sếp duyệt được, dù UI không có nút cho việc đó. Xác nhận nhận hàng nay tách riêng ở
+  // PURCHASE_RECEIPT bên dưới - đúng phạm vi việc của thủ kho, không hơn.
+  // PURCHASE_RECEIPT: UPDATE - gọi POST .../items/:itemId/receive xác nhận đã nhận hàng. Chỉ có
+  // 1 action, không có VIEW riêng: danh sách đọc qua PURCHASE_PROPOSAL:VIEW ở trên.
   // SKU:VIEW để XuatKhoPage.tsx liệt kê SKU lúc xuất kho.
   // STEEL_ISSUE: CREATE+VIEW (Phase 9, 2026-08-11) - thủ kho trung tâm là người xuất sắt cho
   // Phôi (POST /production-orders/:id/steel-issues), KHÔNG phải PHOI_STAFF (đội Phôi chỉ
@@ -229,10 +233,8 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       actions: [PermissionAction.VIEW, PermissionAction.CREATE],
     },
     { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
-    {
-      module: PERMISSION_MODULES.PURCHASE_PROPOSAL,
-      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
-    },
+    { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, actions: [PermissionAction.VIEW] },
+    { module: PERMISSION_MODULES.PURCHASE_RECEIPT, actions: [PermissionAction.UPDATE] },
     { module: PERMISSION_MODULES.SKU, actions: [PermissionAction.VIEW] },
     {
       module: PERMISSION_MODULES.STEEL_ISSUE,

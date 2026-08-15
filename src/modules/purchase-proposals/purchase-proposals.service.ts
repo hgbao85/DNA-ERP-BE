@@ -1,16 +1,28 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, PurchaseProposalStatus, StockLedgerRefType } from '../../generated/prisma/client';
+import { ClsService } from 'nestjs-cls';
+import {
+  AuditAction,
+  Prisma,
+  PrismaClient,
+  ProdItemStageType,
+  PurchaseProposalStatus,
+  StockLedgerRefType,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { ApprovePurchaseProposalDto } from './dto/approve-purchase-proposal.dto';
 import { CreateQuoteDto } from './dto/create-quote.dto';
@@ -26,12 +38,24 @@ import { RejectPurchaseProposalDto } from './dto/reject-purchase-proposal.dto';
 /// về" khi Thủ kho xác nhận nhận hàng (xem receiveItem()).
 const SUPPLIER_WAREHOUSE_CODE = 'SUPPLIER';
 
+// stages+productionInvoiceItem.productionInvoice ở cả 2 nhánh - phục vụ deadlineOf() (A3, xem
+// dưới), cùng thứ tự ưu tiên đã dùng ở CuttingProposalsService.frameDeadlineOf/
+// ProductionInvoicesService.frameDeadlineOf (materialDeadline -> mốc FRAME -> hạn cả phiếu).
 const LIST_INCLUDE = {
   cuttingProposal: {
     include: {
-      productionOrder: { include: { mfgProduct: true } },
+      productionOrder: {
+        include: {
+          mfgProduct: true,
+          productionInvoiceItem: {
+            include: { stages: true, productionInvoice: { select: { deadline: true } } },
+          },
+        },
+      },
       // null khi phương án cắt neo vào 1 lệnh SX; có giá trị khi neo vào PI gộp - xem toResponseDto.
-      productionInvoice: { include: { items: { include: { mfgProduct: true } } } },
+      productionInvoice: {
+        include: { items: { include: { mfgProduct: true, stages: true } } },
+      },
     },
   },
 } satisfies Prisma.PurchaseProposalInclude;
@@ -65,20 +89,52 @@ export class PurchaseProposalsService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
+    private readonly cls: ClsService<AppClsStore>,
   ) {}
 
+  /**
+   * Ghi audit TAY cho các bảng con không nằm trong AUDITED_MODELS (PurchaseProposalQuote) - cùng
+   * idiom ProductionInvoicesService.auditItemApprovalTransition(). Bản thân PurchaseProposal đã
+   * được extension tự ghi mọi .update(), chỗ này chỉ bù phần quyết định về NCC/giá.
+   */
+  private async auditQuoteDecision(entry: {
+    action: AuditAction;
+    proposalId: bigint;
+    oldValue?: unknown;
+    newValue?: unknown;
+  }): Promise<void> {
+    // Cùng cast mà chính audit-log.extension.ts dùng - client đã extend không assignable về
+    // PrismaClient thuần dù runtime là superset.
+    const auditLogClient = this.prisma as unknown as Pick<PrismaClient, 'auditLog'>;
+    await writeAuditLog(auditLogClient, this.cls, {
+      action: entry.action,
+      tableName: 'PurchaseProposalQuote',
+      recordId: entry.proposalId.toString(),
+      oldValue: entry.oldValue,
+      newValue: entry.newValue,
+    });
+  }
+
+  /**
+   * Trả kèm `items` (DETAIL_INCLUDE, không phải LIST_INCLUDE) - trước 2026-08-15 (A5,
+   * D.a5-n-plus-one) FE phải gọi thêm 1 `GET :id` cho MỖI dòng chỉ để lấy items (limit 100 -> tối
+   * đa 101 request/lần tải danh sách), cộng thêm 1 lần `GET :id` nữa mỗi khi
+   * submit/approve/receiveItem cần dịch materialId -> itemId thật (xem
+   * services/purchasing-api.ts#getBeItemIdsByMaterialId). Có items sẵn trong list là đủ để bỏ cả
+   * hai.
+   */
   async findAll(query: PaginationQueryDto): Promise<Paginated<PurchaseProposalResponseDto>> {
     const result = await paginate(
       {
         findMany: (args) =>
-          this.prisma.purchaseProposal.findMany({ ...args, include: LIST_INCLUDE }),
+          this.prisma.purchaseProposal.findMany({ ...args, include: DETAIL_INCLUDE }),
         count: (args) => this.prisma.purchaseProposal.count(args),
       },
       query,
       undefined,
       query.sortBy ? { [query.sortBy]: query.sortOrder } : { createdAt: query.sortOrder },
     );
-    return { data: result.data.map((p) => this.toResponseDto(p)), meta: result.meta };
+    return { data: result.data.map((p) => this.toDetailResponseDto(p)), meta: result.meta };
   }
 
   async findOne(id: string): Promise<PurchaseProposalResponseDto> {
@@ -86,9 +142,14 @@ export class PurchaseProposalsService {
   }
 
   /** Purchasing tiếp nhận đề xuất - bắt đầu báo giá. */
-  async acknowledge(id: string): Promise<PurchaseProposalResponseDto> {
-    const proposal = await this.findRawOrThrow(id);
+  async acknowledge(
+    id: string,
+    actorUserId: string,
+    actorRoles: string[],
+  ): Promise<PurchaseProposalResponseDto> {
+    const proposal = await this.findDetailOrThrow(id);
     this.assertStatus(proposal, PurchaseProposalStatus.NEW);
+    this.assertActorMayHandle(proposal, actorUserId, actorRoles);
     const updated = await this.prisma.purchaseProposal.update({
       where: { id: proposal.id },
       data: { status: PurchaseProposalStatus.QUOTING },
@@ -101,13 +162,14 @@ export class PurchaseProposalsService {
     id: string,
     itemId: string,
     dto: CreateQuoteDto,
+    actorUserId: string,
+    actorRoles: string[],
   ): Promise<PurchaseProposalItemResponseDto> {
-    const proposal = await this.findRawOrThrow(id);
+    const proposal = await this.findDetailOrThrow(id);
     this.assertStatus(proposal, PurchaseProposalStatus.QUOTING);
+    this.assertActorMayHandle(proposal, actorUserId, actorRoles);
     const bigItemId = parseBigIntId(itemId);
-    const item = await this.prisma.purchaseProposalItem.findFirst({
-      where: { id: bigItemId, proposalId: proposal.id },
-    });
+    const item = proposal.items.find((it) => it.id === bigItemId);
     if (!item) {
       throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
     }
@@ -131,9 +193,14 @@ export class PurchaseProposalsService {
   }
 
   /** Gửi Sếp duyệt - bắt buộc mỗi vật tư có ít nhất 1 báo giá hợp lệ (đơn giá > 0). */
-  async submit(id: string): Promise<PurchaseProposalResponseDto> {
+  async submit(
+    id: string,
+    actorUserId: string,
+    actorRoles: string[],
+  ): Promise<PurchaseProposalResponseDto> {
     const proposal = await this.findDetailOrThrow(id);
     this.assertStatus(proposal, PurchaseProposalStatus.QUOTING);
+    this.assertActorMayHandle(proposal, actorUserId, actorRoles);
 
     const missing = proposal.items.filter(
       (item) => !item.quotes.some((q) => q.unitPrice != null && q.unitPrice.toNumber() > 0),
@@ -168,8 +235,18 @@ export class PurchaseProposalsService {
         throw new BadRequestException(`Thiếu NCC được chọn cho vật tư ${item.material.code}`);
       }
       const chosenQuoteId = parseBigIntId(chosen);
-      if (!item.quotes.some((q) => q.id === chosenQuoteId)) {
+      const chosenQuote = item.quotes.find((q) => q.id === chosenQuoteId);
+      if (!chosenQuote) {
         throw new BadRequestException(`Báo giá ${chosen} không thuộc vật tư ${item.material.code}`);
+      }
+      // submit() chỉ đòi mỗi vật tư có ÍT NHẤT 1 báo giá có giá - không đòi cái được chọn phải là
+      // cái đó. Vật tư có 2 báo giá (1 có giá, 1 để trống) thì bấm nhầm dòng trống là duyệt xong
+      // một lệnh mua KHÔNG CÓ GIÁ: màn Theo dõi mua hàng hiện '—' ở cột Đơn giá và không ai biết
+      // đã cam kết mua bao nhiêu tiền với NCC (D.c2-approve-without-price).
+      if (chosenQuote.unitPrice == null || chosenQuote.unitPrice.toNumber() <= 0) {
+        throw new BadRequestException(
+          `Báo giá được chọn cho vật tư ${item.material.code} (NCC ${chosenQuote.supplierName}) chưa có đơn giá - không duyệt được lệnh mua không có giá`,
+        );
       }
       chosenQuoteIdByItem.set(item.id, chosenQuoteId);
     }
@@ -193,6 +270,30 @@ export class PurchaseProposalsService {
           approvedById: actorUserId,
         },
       });
+    });
+
+    // Quyết định TIỀN của cả luồng: vật tư nào, mua của ai, giá bao nhiêu. Chuyển trạng thái
+    // SUBMITTED -> PURCHASING đã được extension tự ghi, nhưng bản thân nó không nói giá nào được
+    // chọn (quote là bảng con, không auto-audit) - mà đó mới là thứ cần khi đối chiếu với NCC.
+    await this.auditQuoteDecision({
+      action: AuditAction.UPDATE,
+      proposalId: proposal.id,
+      newValue: {
+        event: 'approve',
+        chosen: proposal.items.map((item) => {
+          const chosenId = chosenQuoteIdByItem.get(item.id);
+          const q = item.quotes.find((x) => x.id === chosenId);
+          return {
+            itemId: item.id.toString(),
+            materialCode: item.material.code,
+            quoteId: chosenId?.toString(),
+            supplierName: q?.supplierName,
+            supplierId: q?.supplierId?.toString() ?? null,
+            unitPrice: q?.unitPrice?.toNumber() ?? null,
+            buyQty: item.buyQty.toNumber(),
+          };
+        }),
+      },
     });
 
     return this.findOne(id);
@@ -222,11 +323,37 @@ export class PurchaseProposalsService {
    * gọi API này (handleRequote), nên người dùng vẫn thấy đúng số cũ để sửa tiếp - không mất gì
    * ở màn hình, chỉ dọn bản ghi DB thừa.
    */
-  async requote(id: string): Promise<PurchaseProposalResponseDto> {
-    const proposal = await this.findRawOrThrow(id);
+  async requote(
+    id: string,
+    actorUserId: string,
+    actorRoles: string[],
+  ): Promise<PurchaseProposalResponseDto> {
+    const proposal = await this.findDetailOrThrow(id);
     this.assertStatus(proposal, PurchaseProposalStatus.REJECTED);
+    this.assertActorMayHandle(proposal, actorUserId, actorRoles);
+
+    // Chụp lại TRƯỚC khi xoá: deleteMany dưới đây là thao tác duy nhất trong cả luồng huỷ hẳn dữ
+    // liệu giá đã từng gửi Sếp. Không có bản chụp này thì sau một vòng từ chối/báo giá lại, không
+    // còn cách nào biết lần trước NCC nào chào bao nhiêu (D.c1-no-audit-on-money-path).
+    const deletedQuotes = proposal.items.flatMap((item) =>
+      item.quotes.map((q) => ({
+        itemId: item.id.toString(),
+        materialCode: item.material.code,
+        quoteId: q.id.toString(),
+        supplierName: q.supplierName,
+        unitPrice: q.unitPrice?.toNumber() ?? null,
+        expectedDate: q.expectedDate,
+        isChosen: q.isChosen,
+      })),
+    );
+
     await this.prisma.purchaseProposalQuote.deleteMany({
       where: { item: { proposalId: proposal.id } },
+    });
+    await this.auditQuoteDecision({
+      action: AuditAction.DELETE,
+      proposalId: proposal.id,
+      oldValue: { event: 'requote', rejectionReason: proposal.rejectionReason, deletedQuotes },
     });
     const updated = await this.prisma.purchaseProposal.update({
       where: { id: proposal.id },
@@ -236,7 +363,22 @@ export class PurchaseProposalsService {
     return this.toResponseDto(updated);
   }
 
-  /** Thủ kho xác nhận nhận hàng - cộng dồn qua nhiều lần (hàng có thể về nhiều đợt). */
+  /**
+   * Thủ kho xác nhận nhận hàng - cộng dồn qua nhiều lần (hàng có thể về nhiều đợt).
+   *
+   * Trước 2026-08-15 (D.c3-receive-race-not-atomic, ghi chú "Lỗ 5" ở changelog): 2 lỗi chồng
+   * nhau. (1) Read-modify-write không khoá dòng - `currentReceivedQty` đọc TRƯỚC transaction,
+   * 2 lần nhận song song cùng đọc thấy số cũ, lần ghi sau đè mất lần trước trên sổ đề xuất dù
+   * CẢ HAI đều đã post bút toán kho (mỗi lần 1 Idempotency-Key riêng nên không bị chặn trùng).
+   * (2) Bút toán post NGOÀI transaction cập nhật `receivedQty` - chết giữa hai đoạn thì kho đã
+   * cộng hàng mà đề xuất vẫn ghi chưa nhận, vĩnh viễn, không cơ chế nào phát hiện.
+   *
+   * Nay: khoá đúng dòng item (FOR UPDATE) rồi đọc lại receivedQty MỚI NHẤT bên trong cùng
+   * transaction đang giữ khoá bút toán - lượt nhận thứ hai phải xếp hàng chờ lượt đầu commit
+   * xong (khoá chỉ nhả khi cả bút toán lẫn receivedQty đã ghi), đúng idiom
+   * CuttingProposalsService.approve() (Lỗ 5 gốc). `postEntry(tx)` nhận tx để bút toán và update
+   * item nằm chung 1 transaction - không còn khoảng hở giữa hai đoạn.
+   */
   async receiveItem(
     id: string,
     itemId: string,
@@ -251,69 +393,151 @@ export class PurchaseProposalsService {
     if (!item) {
       throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
     }
-
-    const buyQty = item.buyQty.toNumber();
-    const currentReceivedQty = item.receivedQty.toNumber();
-    const nextReceivedQty = Math.min(buyQty, currentReceivedQty + dto.receivedQty);
-    const incrementQty = nextReceivedQty - currentReceivedQty;
-    const nextReceivedQtyPurchaseUnit = dto.receivedQtyPurchaseUnit
-      ? (item.receivedQtyPurchaseUnit?.toNumber() ?? 0) + dto.receivedQtyPurchaseUnit
-      : item.receivedQtyPurchaseUnit?.toNumber();
-
     // Kho nhận hàng = kho đã khai CHO ĐÚNG vật tư này (Material.warehouseId, xem Admin > Vật tư),
     // KHÔNG còn theo proposal.warehouseCode (1 kho chung cho cả đề xuất) - Sếp chốt 2026-08-15
-    // mục 2: 1 đề xuất có thể gồm nhiều vật tư khác kho nhau, mỗi dòng phải về đúng kho riêng.
+    // mục 2. Bất biến theo item nên kiểm trước khi mở transaction là an toàn (không cần khoá).
     if (!item.material.warehouseId) {
       throw new BadRequestException(
         `Vật tư ${item.material.code} chưa được cấu hình Kho - không thể nhập kho tự động, vào Admin > Vật tư để gán Kho trước`,
       );
     }
+    const materialWarehouseId = item.material.warehouseId;
 
-    // Bút toán "hàng mua về nhập kho" - post trước, ngoài transaction cập nhật receivedQty bên
-    // dưới, đúng idiom WarehouseTransfersService.confirm() (idempotencyKey do client gửi, vì
-    // 1 item có thể nhận nhiều đợt nên không có key tất định như warehouse-transfer).
-    if (incrementQty > 0) {
-      const supplierWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
-        where: { code: SUPPLIER_WAREHOUSE_CODE },
-      });
-      await this.stockLedgerService.postEntry({
-        fromWarehouseId: supplierWarehouse.id,
-        toWarehouseId: item.material.warehouseId,
-        materialId: item.materialId,
-        qty: incrementQty,
-        refType: StockLedgerRefType.PURCHASE,
-        refId: proposal.id.toString(),
-        createdById: userId,
-        idempotencyKey,
-      });
-    }
+    // Dung sai đọc trước tx (business rule dùng chung, không phải state của riêng dòng item nên
+    // không cần nằm trong khoá) - xem getOverReceiptTolerancePercent().
+    const tolerancePercent = await this.getOverReceiptTolerancePercent();
+    const buyQty = item.buyQty.toNumber();
+    const maxAllowedQty = buyQty * (1 + tolerancePercent / 100);
 
-    const updatedItem = await this.prisma.$transaction(async (tx) => {
-      const saved = await tx.purchaseProposalItem.update({
-        where: { id: item.id },
-        data: {
-          receivedQty: nextReceivedQty,
-          receivedQtyPurchaseUnit: nextReceivedQtyPurchaseUnit,
-        },
-        include: ITEM_INCLUDE,
-      });
-
-      const allReceived = proposal.items.every((it) =>
-        it.id === item.id
-          ? nextReceivedQty >= buyQty
-          : it.receivedQty.toNumber() >= it.buyQty.toNumber(),
-      );
-      if (allReceived) {
-        await tx.purchaseProposal.update({
-          where: { id: proposal.id },
-          data: { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() },
-        });
-      }
-
-      return saved;
+    const supplierWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
+      where: { code: SUPPLIER_WAREHOUSE_CODE },
     });
 
+    const updatedItem = await this.prisma.$transaction(
+      async (tx) => {
+        // Khoá dòng item rồi đọc lại receivedQty MỚI NHẤT - đây là điểm sửa chính của C3. Bỏ qua
+        // giá trị `item.receivedQty` đọc ở findDetailOrThrow phía trên vì nó có thể đã cũ nếu 1
+        // lượt nhận khác đang chạy song song.
+        const [locked] = await tx.$queryRaw<
+          { receivedQty: Prisma.Decimal; receivedQtyPurchaseUnit: Prisma.Decimal | null }[]
+        >`
+          SELECT "receivedQty", "receivedQtyPurchaseUnit" FROM "purchase_proposal_items"
+          WHERE "id" = ${item.id} FOR UPDATE
+        `;
+        if (!locked) {
+          throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
+        }
+        const currentReceivedQty = locked.receivedQty.toNumber();
+        const nextReceivedQty = currentReceivedQty + dto.receivedQty;
+
+        // Nhận THỪA: ghi đúng số thật nếu còn trong dung sai, chặn hẳn nếu vượt. Tuyệt đối không
+        // cắt âm thầm về buyQty như trước (Math.min) - lựa chọn tệ nhất trong ba: hàng đã nằm
+        // trong kho vật lý mà sổ không ghi, không cảnh báo, không log, sai lệch chỉ lộ ra lúc
+        // kiểm kê cuối kỳ khi không còn truy ngược được nữa (D.b3-silent-over-receipt).
+        if (nextReceivedQty > maxAllowedQty) {
+          throw new BadRequestException(
+            `Vật tư ${item.material.code}: nhận vượt số đặt mua. Đặt ${buyQty} ${item.material.unit}, ` +
+              `đã nhận ${currentReceivedQty}, lần này nhập ${dto.receivedQty} -> tổng ${nextReceivedQty} ` +
+              `vượt mức cho phép ${maxAllowedQty} (dung sai ${tolerancePercent}%). ` +
+              `Kiểm tra lại số thực nhận, hoặc nhờ Admin nới dung sai ở Cấu hình hệ thống.`,
+          );
+        }
+
+        const incrementQty = nextReceivedQty - currentReceivedQty;
+        const nextReceivedQtyPurchaseUnit = dto.receivedQtyPurchaseUnit
+          ? (locked.receivedQtyPurchaseUnit?.toNumber() ?? 0) + dto.receivedQtyPurchaseUnit
+          : (locked.receivedQtyPurchaseUnit?.toNumber() ?? undefined);
+
+        // Bút toán "hàng mua về nhập kho" - CÙNG transaction với update receivedQty bên dưới
+        // (postEntry nhận tx), khoá chỉ nhả sau khi cả hai đã ghi xong.
+        if (incrementQty > 0) {
+          await this.stockLedgerService.postEntry(
+            {
+              fromWarehouseId: supplierWarehouse.id,
+              toWarehouseId: materialWarehouseId,
+              materialId: item.materialId,
+              qty: incrementQty,
+              refType: StockLedgerRefType.PURCHASE,
+              refId: proposal.id.toString(),
+              createdById: userId,
+              idempotencyKey,
+            },
+            tx,
+          );
+        }
+
+        const saved = await tx.purchaseProposalItem.update({
+          where: { id: item.id },
+          data: {
+            receivedQty: nextReceivedQty,
+            receivedQtyPurchaseUnit: nextReceivedQtyPurchaseUnit,
+          },
+          include: ITEM_INCLUDE,
+        });
+
+        const allReceived = proposal.items.every((it) =>
+          it.id === item.id
+            ? nextReceivedQty >= buyQty
+            : it.receivedQty.toNumber() >= it.buyQty.toNumber(),
+        );
+        if (allReceived) {
+          await tx.purchaseProposal.update({
+            where: { id: proposal.id },
+            data: { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() },
+          });
+        }
+
+        return saved;
+      },
+      { timeout: 15_000 },
+    );
+
     return this.toItemResponseDto(updatedItem);
+  }
+
+  /**
+   * Chặn Purchasing thao tác trên đề xuất của người khác - MIRROR ĐÚNG luật FE
+   * (utils/purchasingRouting.ts#canPurchaserSeeProposal), không phát minh luật mới. Trước
+   * 2026-08-15 (D.a4-purchaser-scope-not-enforced) việc "gán mua theo từng vật tư" chỉ lọc ở FE
+   * (client-side): BE không có một dòng kiểm nào, nên bất kỳ tài khoản PURCHASER nào gọi thẳng
+   * API cũng acknowledge/addQuote/submit/requote được đề xuất KHÔNG phải của mình - lọc ở FE là
+   * tiện dụng, không phải kiểm soát.
+   *
+   * BOSS/ADMIN qua hết (điều phối chung). Còn lại: phải có ÍT NHẤT 1 dòng vật tư mà
+   * `Material.buyerId` là null (chưa gán ai - không "mồ côi" cho tới khi có người nhận, đúng
+   * nguyên tắc FE) hoặc chính là actor. KHÔNG đòi actor sở hữu MỌI dòng - đề xuất có thể gộp
+   * nhiều vật tư của nhiều người mua khác nhau (Sếp chốt 2026-08-15, PurchaseProposalItem).
+   */
+  private assertActorMayHandle(
+    proposal: { items: { material: { buyerId: string | null } }[] },
+    actorUserId: string,
+    actorRoles: string[],
+  ): void {
+    if (actorRoles.includes(BUSINESS_ROLES.BOSS) || actorRoles.includes(DEFAULT_ROLES.ADMIN)) {
+      return;
+    }
+    const allowed = proposal.items.some((item) => {
+      const buyerId = item.material.buyerId;
+      return !buyerId || buyerId === actorUserId;
+    });
+    if (!allowed) {
+      throw new ForbiddenException(
+        'Bạn không được phân công mua vật tư nào trong đề xuất này - liên hệ Admin nếu cần hỗ trợ',
+      );
+    }
+  }
+
+  /**
+   * Dung sai giao thừa (%) từ System Config - singleton id=1, cùng chỗ với tham số solver.
+   * Config chưa seed -> 0 (không cho nhận thừa) chứ KHÔNG ném lỗi: thiếu cấu hình không phải lý
+   * do chính đáng để chặn Thủ kho ghi nhận một lô hàng đã về đúng số.
+   */
+  private async getOverReceiptTolerancePercent(): Promise<number> {
+    const config = await this.prisma.systemConfig.findUnique({
+      where: { id: 1 },
+      select: { purchaseOverReceiptTolerancePercent: true },
+    });
+    return config?.purchaseOverReceiptTolerancePercent ?? 0;
   }
 
   private async findRawOrThrow(id: string) {
@@ -348,12 +572,49 @@ export class PurchaseProposalsService {
     }
   }
 
+  /**
+   * Hạn dùng để Mua hàng xếp việc - CÙNG thứ tự ưu tiên với CuttingProposalsService.
+   * frameDeadlineOf/ProductionInvoicesService.frameDeadlineOf (materialDeadline -> mốc Khung cơ
+   * khí -> hạn cả phiếu). Cố ý nhân bản 3 dòng này thay vì export hàm private của 2 module kia -
+   * cùng lý do đã ghi ở 2 chỗ đó: 3 module không phụ thuộc nhau theo chiều này, quy tắc đủ nhỏ để
+   * trùng lặp rẻ hơn dựng thêm ràng buộc giữa các module (A3, D.a3-deadline-not-wired).
+   */
+  private frameDeadlineOf(item: {
+    materialDeadline: Date | null;
+    stages: { stageType: ProdItemStageType; deadline: Date }[];
+    productionInvoice: { deadline: Date | null };
+  }): Date | null {
+    const frame = item.stages.find((s) => s.stageType === ProdItemStageType.FRAME);
+    return item.materialDeadline ?? frame?.deadline ?? item.productionInvoice.deadline ?? null;
+  }
+
   private toResponseDto(row: PurchaseProposalRow): PurchaseProposalResponseDto {
     // productionOrder = null khi đề xuất đến từ phương án cắt CẤP NHÓM (PI gộp nhiều SKU) - nhóm
     // không có 1 lệnh SX đơn lẻ nào. Đây chính là ca "nhóm = đơn vị mua": 1 đề xuất mua duy nhất
     // cho cả đợt cắt chung, thay vì mỗi lệnh SX một đề xuất rồi Mua hàng phải báo giá nhiều lần.
     const productionOrder = row.cuttingProposal!.productionOrder;
     const mergedPi = row.cuttingProposal!.productionInvoice;
+
+    // Nhánh lệnh SX đơn: 1-1 với đúng 1 ProductionInvoiceItem. Nhánh PI gộp: lấy hạn SỚM NHẤT
+    // trong cả nhóm SKU - đơn nào gấp nhất trong đợt cắt chung thì Mua hàng phải ưu tiên đơn đó,
+    // trễ đơn đó là trễ cả đợt.
+    const deadline = productionOrder
+      ? this.frameDeadlineOf({
+          materialDeadline: productionOrder.productionInvoiceItem.materialDeadline,
+          stages: productionOrder.productionInvoiceItem.stages,
+          productionInvoice: productionOrder.productionInvoiceItem.productionInvoice,
+        })
+      : ((mergedPi?.items ?? [])
+          .map((it) =>
+            this.frameDeadlineOf({
+              materialDeadline: it.materialDeadline,
+              stages: it.stages,
+              productionInvoice: { deadline: mergedPi!.deadline },
+            }),
+          )
+          .filter((d): d is Date => d !== null)
+          .sort((a, b) => a.getTime() - b.getTime())[0] ?? null);
+
     return new PurchaseProposalResponseDto({
       id: row.id.toString(),
       cuttingProposalId: row.cuttingProposalId?.toString() ?? null,
@@ -365,6 +626,7 @@ export class PurchaseProposalsService {
         (mergedPi?.items ?? []).map((it) => it.mfgProduct.factoryCode).join(', '),
       mfgProductName:
         productionOrder?.mfgProduct.name ?? (mergedPi ? `${mergedPi.items.length} SKU gộp` : null),
+      deadline,
       createdAt: row.createdAt,
       submittedAt: row.submittedAt,
       approvedAt: row.approvedAt,

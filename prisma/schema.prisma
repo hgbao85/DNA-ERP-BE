@@ -257,6 +257,14 @@ model SystemConfig {
   /// cho production), KHÔNG dùng default 480s của chính solver.
   solverTimeLimitSeconds   Int   @default(20)
 
+  /// Dung sai giao THỪA cho phép khi Thủ kho nhận hàng mua về, tính theo % của buyQty (xem
+  /// PurchaseProposalsService.receiveItem). Trong dung sai -> ghi ĐÚNG số thực nhận, kể cả khi
+  /// vượt buyQty; vượt dung sai -> chặn và báo lỗi nêu rõ 3 số. Mặc định 0 = không cho nhận thừa.
+  /// Trước 2026-08-15 code cắt âm thầm bằng Math.min(buyQty, ...): NCC giao 12 trên đơn 10 thì sổ
+  /// ghi 10, hai cây kia biến mất khỏi sổ nhưng vẫn nằm trong kho thật - không cảnh báo, không
+  /// log, tồn hệ thống lệch tồn thực ngay từ lúc nhập (D.b3-silent-over-receipt).
+  purchaseOverReceiptTolerancePercent Float @default(0)
+
   updatedAt DateTime @updatedAt
 
   @@map("system_config")

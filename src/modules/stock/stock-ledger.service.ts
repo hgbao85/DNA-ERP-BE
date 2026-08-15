@@ -3,7 +3,7 @@ import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
 import { ListStockLedgerQueryDto } from './dto/list-stock-ledger-query.dto';
 import { StockLedgerResponseDto } from './dto/stock-ledger-response.dto';
@@ -57,7 +57,19 @@ export interface PostStockEntryInput {
 export class StockLedgerService {
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
 
-  async postEntry(input: PostStockEntryInput): Promise<StockLedgerResponseDto> {
+  /**
+   * `tx` = ghi bút toán TRONG transaction của caller. BẮT BUỘC dùng khi caller có bước "đọc tồn
+   * rồi quyết định" trước đó (xem CuttingProposalsService.approve): stock_quant chỉ đổi khi trigger
+   * `trg_sync_stock_quant` chạy lúc INSERT dòng này, nên nếu bút toán nằm NGOÀI transaction đã khoá
+   * `stock_quant ... FOR UPDATE` thì khoá đó nhả trước khi số dư kịp đổi - hai lượt duyệt gần nhau
+   * cùng đọc thấy một số dư và cùng tiêu một lô hàng (tồn âm, cả hai đều báo "không cần mua").
+   *
+   * Bỏ trống `tx` cho caller chỉ ghi một bút toán độc lập, không có quyết định nào phía trước dựa
+   * trên số dư (nhập tồn đầu kỳ, xuất vật tư...), và cho WarehouseTransfersService.confirm() - chỗ
+   * đó CỐ Ý để ngoài transaction để gọi lại được giữa chừng, xem comment tại đó.
+   */
+  async postEntry(input: PostStockEntryInput, tx?: PrismaTx): Promise<StockLedgerResponseDto> {
+    const db = tx ?? this.prisma;
     this.assertExactlyOneGoodsLeg(input);
     if (input.fromWarehouseId === input.toWarehouseId) {
       throw new BadRequestException('fromWarehouseId và toWarehouseId không được trùng nhau');
@@ -84,7 +96,7 @@ export class StockLedgerService {
     };
 
     if (input.idempotencyKey) {
-      const existing = await this.prisma.stockLedger.findUnique({
+      const existing = await db.stockLedger.findUnique({
         where: { idempotencyKey: input.idempotencyKey },
         include: LEDGER_INCLUDE,
       });
@@ -93,8 +105,19 @@ export class StockLedgerService {
       }
     }
 
+    // Trong transaction thì KHÔNG bọc try/catch cứu P2002: Postgres huỷ cả transaction ngay khi
+    // một câu lệnh lỗi ("current transaction is aborted, commands ignored until end of transaction
+    // block"), nên findUnique cứu vãn phía dưới cũng lỗi nốt - bọc lại chỉ nuốt mất lỗi thật rồi
+    // ném ra một lỗi khó hiểu hơn. Prisma không expose SAVEPOINT trong interactive transaction nên
+    // không có cách vá cục bộ. Đổi lại, caller truyền tx phải tự serialise (khoá dòng nghiệp vụ
+    // FOR UPDATE, xem CuttingProposalsService.approve) - lúc đó không còn ca đua nào để cứu.
+    if (tx) {
+      const row = await db.stockLedger.create({ data, include: LEDGER_INCLUDE });
+      return this.toResponseDto(row);
+    }
+
     try {
-      const row = await this.prisma.stockLedger.create({ data, include: LEDGER_INCLUDE });
+      const row = await db.stockLedger.create({ data, include: LEDGER_INCLUDE });
       return this.toResponseDto(row);
     } catch (e) {
       // Đua 2 request cùng Idempotency-Key gần như đồng thời - fetch lại thay vì để lộ 409 giả
