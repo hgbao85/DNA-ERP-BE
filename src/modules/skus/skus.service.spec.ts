@@ -59,10 +59,12 @@ describe('SkusService', () => {
     salesOrderId: 1n,
     mfgProductId: 2n,
     productionInvoiceId: null,
-    status: 'WAITING_PARTS',
+    status: 'IN_PROGRESS',
     note: null,
     origin: null,
     bossApproveIdempotencyKey: null,
+    manhForwardedAt: null,
+    detailForwardedAt: null,
     createdById: 'user-1',
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -180,7 +182,7 @@ describe('SkusService', () => {
 
   describe('updateManhQuota (segments Sắt)', () => {
     it('resolves-or-creates Piece + SegmentSpec and writes BomPiece/PieceBom on a lazily-created DRAFT revision', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_PARTS' }));
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue(null); // chưa có revision nào
       bomRevisionsService.create.mockResolvedValue({ id: '10' });
       prisma.piece.findMany.mockResolvedValue([]); // Piece chưa tồn tại -> tạo mới
@@ -189,7 +191,8 @@ describe('SkusService', () => {
         { id: 30n, code: 'SAT-25', materialGroupId: null },
       ]);
       prisma.segmentSpec.upsert.mockResolvedValue({ id: 40n });
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
+      // Không còn auto-advance status khi nhập liệu (2 nhánh giờ độc lập) - status giữ IN_PROGRESS.
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       const result = await service.updateManhQuota('5', {
         pieces: [
@@ -202,7 +205,7 @@ describe('SkusService', () => {
         enteredBy: 'NV Sat',
       });
 
-      expect(result.status).toBe('APPROVED_PARTS');
+      expect(result.status).toBe('IN_PROGRESS');
       expect(bomRevisionsService.create).toHaveBeenCalledWith('2', '5');
       // Vật tư chưa thuộc nhóm nào (materialGroupId: null) -> tự gán vào nhóm Sắt hệ thống.
       expect(prisma.material.update).toHaveBeenCalledWith({
@@ -235,8 +238,43 @@ describe('SkusService', () => {
       );
     });
 
+    it('clears manhForwardedAt (and reverts WAITING_BOSS_APPROVAL back to IN_PROGRESS) when the manh track is re-submitted after already having been forwarded', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({
+          status: 'WAITING_BOSS_APPROVAL',
+          manhForwardedAt: new Date(),
+          detailForwardedAt: new Date(),
+        }),
+      );
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([]);
+      prisma.piece.create.mockResolvedValue({ id: 20n });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-25', materialGroupId: SYSTEM_GROUP_IDS.STEEL_BAR },
+      ]);
+      prisma.segmentSpec.upsert.mockResolvedValue({ id: 40n });
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Manh tua',
+            qtyPerUnit: 2,
+            segments: [{ materialId: '30', cutLengthMm: 930, qtyPerPiece: 4 }],
+          },
+        ],
+        enteredBy: 'NV Sat',
+      });
+
+      expect(prisma.planForm.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { manhForwardedAt: null, status: 'IN_PROGRESS' },
+        }),
+      );
+    });
+
     it('rejects a segment whose material belongs to a different group', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_PARTS' }));
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', code: 'MANH-TUA' }]);
       prisma.material.findMany.mockResolvedValue([
@@ -258,7 +296,7 @@ describe('SkusService', () => {
     });
 
     it('rejects editing quota once the owned revision is no longer DRAFT (already approved)', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_PARTS' }));
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
 
       await expect(
@@ -269,13 +307,13 @@ describe('SkusService', () => {
 
   describe('updateManhQuota (materialLines Dây/Đinh/Tán rút/Nút nhựa trong mảnh)', () => {
     it('resolves the "Dây" system MaterialGroup and writes PieceMaterialItem for a WIRE line', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', code: 'MANH-TUA' }]);
       prisma.material.findMany.mockResolvedValue([
         { id: 60n, code: 'DAY-2LY', materialGroupId: null },
       ]);
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       await service.updateManhQuota('5', {
         pieces: [
@@ -308,7 +346,7 @@ describe('SkusService', () => {
     });
 
     it('sets Piece.isWoven = true once a piece has all 3 of Dây + Đinh + Nút nhựa', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.piece.findMany.mockResolvedValue([
         { id: 20n, name: 'Manh tua', code: 'MANH-TUA', isWoven: false },
@@ -318,7 +356,7 @@ describe('SkusService', () => {
         { id: 61n, code: 'DINH-01', materialGroupId: SYSTEM_GROUP_IDS.NAIL },
         { id: 62n, code: 'NN-01', materialGroupId: SYSTEM_GROUP_IDS.PLASTIC_BUTTON },
       ]);
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       await service.updateManhQuota('5', {
         pieces: [
@@ -343,7 +381,7 @@ describe('SkusService', () => {
     });
 
     it('resets Piece.isWoven = false once a previously-woven piece loses one of the 3 groups', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.piece.findMany.mockResolvedValue([
         { id: 20n, name: 'Manh tua', code: 'MANH-TUA', isWoven: true },
@@ -351,7 +389,7 @@ describe('SkusService', () => {
       prisma.material.findMany.mockResolvedValue([
         { id: 60n, code: 'DAY-2LY', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
       ]);
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       await service.updateManhQuota('5', {
         pieces: [
@@ -372,7 +410,7 @@ describe('SkusService', () => {
     });
 
     it('does not touch Piece.isWoven when the desired value already matches', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.piece.findMany.mockResolvedValue([
         { id: 20n, name: 'Manh tua', code: 'MANH-TUA', isWoven: false },
@@ -380,7 +418,7 @@ describe('SkusService', () => {
       prisma.material.findMany.mockResolvedValue([
         { id: 60n, code: 'DAY-2LY', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
       ]);
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       await service.updateManhQuota('5', {
         pieces: [
@@ -400,7 +438,7 @@ describe('SkusService', () => {
 
   describe('updateDetailQuota', () => {
     it('rejects a DAY_SON material that belongs to a different group', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_DETAIL' }));
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.material.findMany.mockResolvedValue([
         { id: 70n, code: 'DAY-01', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
@@ -414,8 +452,8 @@ describe('SkusService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('writes BomAccessoryItem for VAT_TU_PHU_KIEN and auto-advances WAITING_DETAIL -> APPROVED_DETAIL', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_DETAIL' }));
+    it('writes BomAccessoryItem for VAT_TU_PHU_KIEN without touching status (nhập liệu không còn auto-advance)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.material.findMany.mockResolvedValue([
         {
@@ -425,14 +463,14 @@ describe('SkusService', () => {
           detailKind: 'ACCESSORY',
         },
       ]);
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED_DETAIL' }));
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       const result = await service.updateDetailQuota('5', {
         detailLines: [{ group: 'VAT_TU_PHU_KIEN', materialId: '80', qtyPerUnit: 5 }],
         enteredBy: 'NV PK',
       });
 
-      expect(result.status).toBe('APPROVED_DETAIL');
+      expect(result.status).toBe('IN_PROGRESS');
       expect(prisma.bomAccessoryItem.deleteMany).toHaveBeenCalledWith({
         where: { bomRevisionId: 10n, kind: 'ACCESSORY' },
       });
@@ -441,8 +479,39 @@ describe('SkusService', () => {
       });
     });
 
+    it('clears detailForwardedAt (and reverts WAITING_BOSS_APPROVAL back to IN_PROGRESS) when the detail track is re-submitted after already having been forwarded', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({
+          status: 'WAITING_BOSS_APPROVAL',
+          manhForwardedAt: new Date(),
+          detailForwardedAt: new Date(),
+        }),
+      );
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 80n,
+          code: 'PK-01',
+          materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+          detailKind: 'ACCESSORY',
+        },
+      ]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateDetailQuota('5', {
+        detailLines: [{ group: 'VAT_TU_PHU_KIEN', materialId: '80', qtyPerUnit: 5 }],
+        enteredBy: 'NV PK',
+      });
+
+      expect(prisma.planForm.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { detailForwardedAt: null, status: 'IN_PROGRESS' },
+        }),
+      );
+    });
+
     it('rejects a material submitted as Bao bì whose detailKind is actually Phụ kiện (also covers "same material in both lists" - detailKind can only match one)', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_DETAIL' }));
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.material.findMany.mockResolvedValue([
         {
@@ -465,7 +534,7 @@ describe('SkusService', () => {
 
   describe('missing system material group (seed chưa chạy)', () => {
     it('throws 500 với thông báo rõ ràng thay vì âm thầm tạo nhóm mới (khác resolveMaterialGroupId cũ)', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED_PARTS' }));
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.materialGroup.findUnique.mockResolvedValue(null);
 
@@ -527,19 +596,45 @@ describe('SkusService', () => {
       expect(prisma.planForm.update).not.toHaveBeenCalled();
     });
 
-    it('advances to WAITING_DETAIL once the manh group SAT is approved', async () => {
+    it('sets manhForwardedAt but keeps IN_PROGRESS when detail has not been forwarded yet (2 nhánh độc lập)', async () => {
       prisma.planForm.findUnique.mockResolvedValue(
         planForm({ manhReviews: [{ group: 'SAT', status: 'APPROVED' }] }),
       );
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'WAITING_DETAIL' }));
+      prisma.planForm.update.mockResolvedValue(
+        planForm({ status: 'IN_PROGRESS', manhForwardedAt: new Date() }),
+      );
 
       const result = await service.approveParts('5');
-      expect(result.status).toBe('WAITING_DETAIL');
+
+      expect(result.status).toBe('IN_PROGRESS');
+      expect(result.manhForwardedAt).not.toBeNull();
+      expect(prisma.planForm.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { manhForwardedAt: expect.any(Date) as Date } }),
+      );
+    });
+
+    it('advances straight to WAITING_BOSS_APPROVAL when the detail track had already been forwarded earlier (thứ tự ngược: chi tiết trước, mảnh sau)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({
+          manhReviews: [{ group: 'SAT', status: 'APPROVED' }],
+          detailForwardedAt: new Date(),
+        }),
+      );
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+
+      const result = await service.approveParts('5');
+
+      expect(result.status).toBe('WAITING_BOSS_APPROVAL');
+      expect(prisma.planForm.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { manhForwardedAt: expect.any(Date) as Date, status: 'WAITING_BOSS_APPROVAL' },
+        }),
+      );
     });
   });
 
   describe('approveDetail', () => {
-    it('rejects when manh/detail groups are not all approved yet', async () => {
+    it('rejects when the (single) detail group DAY_SON is not approved yet - regardless of manh state', async () => {
       prisma.planForm.findUnique.mockResolvedValue(
         planForm({ manhReviews: [], detailReviews: [] }),
       );
@@ -548,10 +643,27 @@ describe('SkusService', () => {
       expect(prisma.planForm.update).not.toHaveBeenCalled();
     });
 
-    it('advances straight to WAITING_BOSS_APPROVAL once manh/detail groups are approved (bước QLSX đã bỏ)', async () => {
+    it('forwards the detail track even when manh has not been touched at all (order-independent - đây là hành vi chính cần thêm)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ manhReviews: [], detailReviews: [{ group: 'DAY_SON', status: 'APPROVED' }] }),
+      );
+      prisma.planForm.update.mockResolvedValue(
+        planForm({ status: 'IN_PROGRESS', detailForwardedAt: new Date() }),
+      );
+
+      const result = await service.approveDetail('5');
+
+      expect(result.status).toBe('IN_PROGRESS');
+      expect(result.detailForwardedAt).not.toBeNull();
+      expect(prisma.planForm.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { detailForwardedAt: expect.any(Date) as Date } }),
+      );
+    });
+
+    it('advances straight to WAITING_BOSS_APPROVAL once BOTH tracks have been forwarded (bước QLSX đã bỏ) - thuận thứ tự: mảnh trước, chi tiết sau', async () => {
       prisma.planForm.findUnique.mockResolvedValue(
         planForm({
-          manhReviews: [{ group: 'SAT', status: 'APPROVED' }],
+          manhForwardedAt: new Date(),
           detailReviews: [{ group: 'DAY_SON', status: 'APPROVED' }],
         }),
       );
@@ -561,7 +673,9 @@ describe('SkusService', () => {
 
       expect(result.status).toBe('WAITING_BOSS_APPROVAL');
       expect(prisma.planForm.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: 'WAITING_BOSS_APPROVAL' } }),
+        expect.objectContaining({
+          data: { detailForwardedAt: expect.any(Date) as Date, status: 'WAITING_BOSS_APPROVAL' },
+        }),
       );
     });
   });
@@ -645,13 +759,28 @@ describe('SkusService', () => {
   });
 
   describe('rejectByBoss', () => {
-    it('rewinds to APPROVED_DETAIL and wipes review decisions but not quota data', async () => {
-      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'APPROVED_DETAIL' }));
+    it('rewinds to IN_PROGRESS, clears both forwarded flags, and wipes review decisions but not quota data', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({
+          status: 'WAITING_BOSS_APPROVAL',
+          manhForwardedAt: new Date(),
+          detailForwardedAt: new Date(),
+        }),
+      );
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       const result = await service.rejectByBoss('5');
 
-      expect(result.status).toBe('APPROVED_DETAIL');
+      expect(result.status).toBe('IN_PROGRESS');
+      expect(prisma.planForm.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: {
+            status: 'IN_PROGRESS',
+            manhForwardedAt: null,
+            detailForwardedAt: null,
+          },
+        }),
+      );
       expect(prisma.planFormManhReview.deleteMany).toHaveBeenCalledWith({
         where: { planFormId: 5n },
       });

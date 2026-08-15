@@ -90,13 +90,16 @@ function groupBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
 }
 
 /**
- * SKU quota-approval pipeline (dịch ngược PlanFormService trong mock FE). 7-status state
- * machine: WAITING_PARTS -> APPROVED_PARTS -> WAITING_DETAIL -> APPROVED_DETAIL ->
- * WAITING_BOSS_APPROVAL -> APPROVED (hoặc rewind về APPROVED_DETAIL qua reject-boss).
- * Bước QLSX duyệt cục bộ (WAITING_QLSX_APPROVAL) đã bị loại khỏi pipeline - approveDetail()
- * giờ chuyển thẳng KHSX -> Sếp. Quy tắc "1 trong 3 nhóm có dữ liệu là đủ
- * để tự chuyển status" và "từ chối chỉ xoá quyết định duyệt, không xoá dữ liệu đã nhập"
- * mirror đúng mock - xem plan file rippling-conjuring-cloud.md mục "Sửa luôn 2 chỗ mock".
+ * SKU quota-approval pipeline (dịch ngược PlanFormService trong mock FE). Status rút gọn còn
+ * 3 giá trị: IN_PROGRESS -> WAITING_BOSS_APPROVAL -> APPROVED (hoặc rewind về IN_PROGRESS qua
+ * reject-boss). Mảnh và chi tiết là 2 NHÁNH ĐỘC LẬP tiến song song, không bắt buộc theo thứ
+ * tự nào - tiến độ "KHSX đã chốt xong nhánh này chưa" nằm ở manhForwardedAt/detailForwardedAt
+ * (set qua approveParts()/approveDetail()), không còn suy ra từ vị trí tuyến tính của status.
+ * Khi CẢ HAI đã forwarded, status tự chuyển WAITING_BOSS_APPROVAL (xem advanceForwardedTrack).
+ * Bước QLSX duyệt cục bộ (WAITING_QLSX_APPROVAL) đã bị loại khỏi pipeline từ trước - approveDetail()
+ * chuyển thẳng KHSX -> Sếp (khi nhánh còn lại cũng đã xong). Quy tắc "từ chối chỉ xoá quyết định
+ * duyệt, không xoá dữ liệu đã nhập" mirror đúng mock - xem plan file rippling-conjuring-cloud.md
+ * mục "Sửa luôn 2 chỗ mock".
  *
  * Việc 2: `manhData`/`detailQuota` KHÔNG còn là nguồn sự thật - dữ liệu định mức thật nằm ở
  * Piece/SegmentSpec/BomRevision (+5 bảng dòng con) quan hệ thật, mỗi PlanForm sở hữu đúng 1
@@ -214,13 +217,16 @@ export class SkusService {
             reviewedAt: null,
           },
         });
+        // Nhập lại sau khi nhánh mảnh đã forward (KHSX đã "chốt xong") coi như bung lại - KHSX
+        // phải duyệt + forward lại nhánh này. Nếu cả 2 nhánh đã từng forward xong (status đang
+        // WAITING_BOSS_APPROVAL), lùi về IN_PROGRESS - không để Sếp duyệt nhầm dữ liệu cũ.
         return tx.planForm.update({
           where: { id: pf.id },
           data: {
-            status:
-              pf.status === PlanFormStatus.WAITING_PARTS
-                ? PlanFormStatus.APPROVED_PARTS
-                : pf.status,
+            manhForwardedAt: null,
+            ...(pf.status === PlanFormStatus.WAITING_BOSS_APPROVAL
+              ? { status: PlanFormStatus.IN_PROGRESS }
+              : {}),
           },
           include: PLAN_FORM_INCLUDE,
         });
@@ -247,17 +253,11 @@ export class SkusService {
     return this.findOne(id);
   }
 
-  /** KHSX xác nhận mảnh đã duyệt -> chuyển bộ phận nhập định mức chi tiết. */
+  /** KHSX xác nhận mảnh đã duyệt xong (nhánh độc lập với chi tiết - xem advanceForwardedTrack). */
   async approveParts(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh');
-
-    const updated = await this.prisma.planForm.update({
-      where: { id: pf.id },
-      data: { status: PlanFormStatus.WAITING_DETAIL },
-      include: PLAN_FORM_INCLUDE,
-    });
-    return this.toResponseDtoWithQuota(updated);
+    return this.advanceForwardedTrack(pf, 'manh');
   }
 
   // ─── Detail quota (chi tiết - Sơn/Phụ kiện/Bao bì, 1 lần nhập/duyệt duy nhất) ───────────────
@@ -331,13 +331,15 @@ export class SkusService {
             reviewedAt: null,
           },
         });
+        // Cùng lý do với updateManhQuota - nhập lại sau khi nhánh chi tiết đã forward thì bung
+        // lại, và lùi status về IN_PROGRESS nếu cả 2 nhánh đã từng forward xong.
         return tx.planForm.update({
           where: { id: pf.id },
           data: {
-            status:
-              pf.status === PlanFormStatus.WAITING_DETAIL
-                ? PlanFormStatus.APPROVED_DETAIL
-                : pf.status,
+            detailForwardedAt: null,
+            ...(pf.status === PlanFormStatus.WAITING_BOSS_APPROVAL
+              ? { status: PlanFormStatus.IN_PROGRESS }
+              : {}),
           },
           include: PLAN_FORM_INCLUDE,
         });
@@ -364,16 +366,36 @@ export class SkusService {
     return this.findOne(id);
   }
 
-  /** KHSX xác nhận cả manh lẫn chi tiết đã duyệt -> gửi thẳng sếp duyệt (bước QLSX duyệt cục
-   *  bộ đã bị loại khỏi pipeline). */
+  /** KHSX xác nhận chi tiết đã duyệt xong (nhánh độc lập với mảnh - xem advanceForwardedTrack).
+   *  KHÔNG còn đòi hỏi mảnh phải xong trước - 2 nhánh tiến song song, ai xong trước forward
+   *  trước; khi cả 2 đã forwarded, advanceForwardedTrack tự chuyển thẳng sang Sếp duyệt (bước
+   *  QLSX duyệt cục bộ đã bị loại khỏi pipeline từ trước). */
   async approveDetail(id: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
-    this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh');
     this.assertAllApproved(pf.detailReviews, DETAIL_GROUPS, 'chi tiết');
+    return this.advanceForwardedTrack(pf, 'detail');
+  }
+
+  /**
+   * Set đúng 1 mốc forwarded (manh/detail) của nhánh vừa được KHSX xác nhận xong; nếu SAU đó cả
+   * 2 mốc đều khác null (nhánh còn lại đã forward từ trước) thì chuyển thẳng
+   * WAITING_BOSS_APPROVAL trong cùng 1 lệnh ghi - không cần biết nhánh nào forward trước.
+   */
+  private async advanceForwardedTrack(
+    pf: PlanFormWithRefs,
+    track: 'manh' | 'detail',
+  ): Promise<SkuResponseDto> {
+    const now = new Date();
+    const manhForwardedAt = track === 'manh' ? now : pf.manhForwardedAt;
+    const detailForwardedAt = track === 'detail' ? now : pf.detailForwardedAt;
+    const bothForwarded = manhForwardedAt != null && detailForwardedAt != null;
 
     const updated = await this.prisma.planForm.update({
       where: { id: pf.id },
-      data: { status: PlanFormStatus.WAITING_BOSS_APPROVAL },
+      data: {
+        ...(track === 'manh' ? { manhForwardedAt: now } : { detailForwardedAt: now }),
+        ...(bothForwarded ? { status: PlanFormStatus.WAITING_BOSS_APPROVAL } : {}),
+      },
       include: PLAN_FORM_INCLUDE,
     });
     return this.toResponseDtoWithQuota(updated);
@@ -437,9 +459,10 @@ export class SkusService {
   }
 
   /**
-   * Rewind về APPROVED_DETAIL, xoá SẠCH quyết định duyệt (không đụng dữ liệu định mức đã
-   * nhập - BomRevision DRAFT vẫn giữ nguyên nội dung) - KHSX phải duyệt lại từng nhóm nhưng
-   * account chuyên trách không phải nhập lại gì, mirror đúng rejectToDetailReview() trong mock.
+   * Rewind về IN_PROGRESS, xoá SẠCH quyết định duyệt lẫn 2 mốc forwarded (không đụng dữ liệu
+   * định mức đã nhập - BomRevision DRAFT vẫn giữ nguyên nội dung) - KHSX phải duyệt + forward lại
+   * CẢ 2 nhánh nhưng account chuyên trách không phải nhập lại gì, mirror đúng
+   * rejectToDetailReview() trong mock.
    */
   private async rewindToDetailReview(id: bigint): Promise<SkuResponseDto> {
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -447,7 +470,11 @@ export class SkusService {
       await tx.planFormDetailReview.deleteMany({ where: { planFormId: id } });
       return tx.planForm.update({
         where: { id },
-        data: { status: PlanFormStatus.APPROVED_DETAIL },
+        data: {
+          status: PlanFormStatus.IN_PROGRESS,
+          manhForwardedAt: null,
+          detailForwardedAt: null,
+        },
         include: PLAN_FORM_INCLUDE,
       });
     });
@@ -1144,16 +1171,26 @@ export class SkusService {
     }
   }
 
+  private isAllApproved(
+    reviews: { group: string; status: ReviewDecision | null }[],
+    requiredGroups: string[],
+  ): boolean {
+    const approvedGroups = new Set(
+      reviews.filter((r) => r.status === ReviewDecision.APPROVED).map((r) => r.group),
+    );
+    return requiredGroups.every((g) => approvedGroups.has(g));
+  }
+
   private assertAllApproved(
     reviews: { group: string; status: ReviewDecision | null }[],
     requiredGroups: string[],
     label: string,
   ): void {
-    const approvedGroups = new Set(
-      reviews.filter((r) => r.status === ReviewDecision.APPROVED).map((r) => r.group),
-    );
-    const missing = requiredGroups.filter((g) => !approvedGroups.has(g));
-    if (missing.length > 0) {
+    if (!this.isAllApproved(reviews, requiredGroups)) {
+      const approvedGroups = new Set(
+        reviews.filter((r) => r.status === ReviewDecision.APPROVED).map((r) => r.group),
+      );
+      const missing = requiredGroups.filter((g) => !approvedGroups.has(g));
       throw new ConflictException(`Chưa duyệt đủ nhóm ${label}: còn thiếu ${missing.join(', ')}`);
     }
   }
@@ -1211,6 +1248,8 @@ export class SkusService {
       origin: pf.origin,
       manhData: quota.manhData,
       detailQuota: quota.detailQuota,
+      manhForwardedAt: pf.manhForwardedAt,
+      detailForwardedAt: pf.detailForwardedAt,
       createdById: pf.createdById,
       createdAt: pf.createdAt,
       updatedAt: pf.updatedAt,

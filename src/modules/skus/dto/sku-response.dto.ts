@@ -18,6 +18,9 @@ export class SkuResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) origin!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) manhData!: unknown;
   @Expose() @ApiPropertyOptional({ nullable: true }) detailQuota!: unknown;
+  /** KHSX đã chốt xong nhánh mảnh/chi tiết chưa - null = chưa. 2 nhánh độc lập, xem PlanForm.status. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) manhForwardedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) detailForwardedAt!: Date | null;
   @Expose() @ApiProperty() createdById!: string;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;

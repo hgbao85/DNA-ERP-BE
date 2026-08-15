@@ -806,14 +806,14 @@ enum SalesOrderItemStatus {
 }
 
 /// DRAFT/REJECTED của mock đã bỏ - không service nào từng set 2 giá trị đó (rejections
-/// đều rewind về APPROVED_DETAIL, xem PlanForm.reject-boss).
+/// đều rewind về IN_PROGRESS, xem PlanForm.reject-boss).
 /// WAITING_QLSX_APPROVAL đã bỏ (bước QLSX duyệt cục bộ bị loại khỏi pipeline) - approveDetail()
 /// giờ chuyển thẳng WAITING_BOSS_APPROVAL, xem migration remove_qlsx_sku_approval_step.
+/// WAITING_PARTS/APPROVED_PARTS/WAITING_DETAIL/APPROVED_DETAIL đã gộp thành IN_PROGRESS (migration
+/// planform_parallel_review) - mảnh và chi tiết giờ là 2 nhánh độc lập, tiến độ từng nhánh nằm ở
+/// PlanForm.manhForwardedAt/detailForwardedAt thay vì suy ra từ vị trí tuyến tính của status.
 enum PlanFormStatus {
-  WAITING_PARTS
-  APPROVED_PARTS
-  WAITING_DETAIL
-  APPROVED_DETAIL
+  IN_PROGRESS
   WAITING_BOSS_APPROVAL
   APPROVED
 }
@@ -918,13 +918,19 @@ model PlanForm {
   /// Tên khách hàng nhập tay lúc tạo SKU (không suy ra được từ salesOrder khi SKU chưa/không
   /// gắn đơn hàng nào) - xem PlanFormsService.create.
   customerName              String?
-  status                    PlanFormStatus @default(WAITING_PARTS)
+  status                    PlanFormStatus @default(IN_PROGRESS)
   note                      String?
   /// null = SKU thường; 'PRODUCTION_CONFIRM' = bản ghi tự tạo khi Sếp duyệt PI item, chỉ
   /// để phục vụ Lệnh kiểm tra vật tư, ẩn khỏi mọi màn KHSX (mirror đúng hành vi mock).
   origin                    String?
   manhData                  Json?
   detailQuota               Json?
+  /// KHSX đã "chốt xong" nhánh mảnh/chi tiết chưa - null = chưa, 2 nhánh tiến độc lập (không còn
+  /// suy ra được từ status như trước). Khi CẢ HAI khác null, status tự chuyển WAITING_BOSS_APPROVAL
+  /// (xem SkusService.advanceForwardedTrack). Nhập lại dữ liệu của 1 nhánh sau khi đã forward sẽ
+  /// xoá field tương ứng về null (xem updateManhQuota/updateDetailQuota).
+  manhForwardedAt           DateTime?
+  detailForwardedAt         DateTime?
   /// Idempotency-Key của lần gọi POST .../approve gần nhất đã commit thành công - cho phép
   /// client retry (mất kết nối sau khi server đã commit) nhận lại đúng response cũ thay vì
   /// 409 do status không còn WAITING_BOSS_APPROVAL. Không tái sử dụng giữa 2 PlanForm khác
