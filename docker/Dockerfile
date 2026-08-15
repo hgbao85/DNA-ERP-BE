@@ -41,6 +41,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/prisma.config.ts ./
+COPY docker/entrypoint.js ./docker/entrypoint.js
 COPY package.json ./
 
 USER app
@@ -50,5 +51,6 @@ EXPOSE 3000
 # e.g. Prisma Postgres' pooled.db.prisma.io) can silently leak that lock onto a reused physical
 # connection when a prior deploy attempt is killed mid-migrate, hanging every future deploy on
 # P1002. DIRECT_DATABASE_URL must be the non-pooled connection string for the same database;
-# falls back to DATABASE_URL so this still runs against a direct (non-pooled) DB with no changes.
-CMD ["sh", "-c", "DATABASE_URL=${DIRECT_DATABASE_URL:-$DATABASE_URL} npx prisma migrate deploy && node dist/main"]
+# entrypoint.js falls back to DATABASE_URL if unset, and self-heals a stuck P1002 by clearing
+# any stale advisory-lock holder and retrying once before giving up.
+CMD ["node", "docker/entrypoint.js"]
