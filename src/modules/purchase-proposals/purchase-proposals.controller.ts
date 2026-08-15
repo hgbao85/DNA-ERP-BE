@@ -23,6 +23,12 @@ import { PurchaseProposalsService } from './purchase-proposals.service';
 const VIEW = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.VIEW };
 const UPDATE = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.UPDATE };
 const APPROVE = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.APPROVE };
+// Riêng nhận hàng (receiveItem) - TÁCH khỏi UPDATE ở trên (2026-08-15, D.c4-warehouse-can-quote).
+// Trước đó WAREHOUSE_STAFF được PURCHASE_PROPOSAL:UPDATE chỉ để gọi route này, nhưng CÙNG action
+// đó cũng mở khoá acknowledge/quotes/submit/requote bên dưới - thủ kho gọi thẳng API là tự báo
+// giá + tự gửi Sếp duyệt được, dù UI không có nút. Đúng loại lỗ mà PURCHASER đã được vá (cố ý bỏ
+// APPROVE, xem comment ở role-permissions.constant.ts) nhưng để hở ở chiều ngược lại.
+const RECEIVE = { module: PERMISSION_MODULES.PURCHASE_RECEIPT, action: PermissionAction.UPDATE };
 
 /**
  * PurchaseProposal tự sinh khi CuttingProposal được duyệt (xem CuttingProposalsService.approve(),
@@ -48,20 +54,34 @@ export class PurchaseProposalsController {
 
   @Post(':id/acknowledge')
   @RequirePermissions(UPDATE)
-  acknowledge(@Param('id') id: string) {
-    return this.purchaseProposalsService.acknowledge(id);
+  acknowledge(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.purchaseProposalsService.acknowledge(id, userId, roles);
   }
 
   @Post(':id/items/:itemId/quotes')
   @RequirePermissions(UPDATE)
-  addQuote(@Param('id') id: string, @Param('itemId') itemId: string, @Body() dto: CreateQuoteDto) {
-    return this.purchaseProposalsService.addQuote(id, itemId, dto);
+  addQuote(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: CreateQuoteDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.purchaseProposalsService.addQuote(id, itemId, dto, userId, roles);
   }
 
   @Post(':id/submit')
   @RequirePermissions(UPDATE)
-  submit(@Param('id') id: string) {
-    return this.purchaseProposalsService.submit(id);
+  submit(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.purchaseProposalsService.submit(id, userId, roles);
   }
 
   @Post(':id/approve')
@@ -82,12 +102,16 @@ export class PurchaseProposalsController {
 
   @Post(':id/requote')
   @RequirePermissions(UPDATE)
-  requote(@Param('id') id: string) {
-    return this.purchaseProposalsService.requote(id);
+  requote(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.purchaseProposalsService.requote(id, userId, roles);
   }
 
   @Post(':id/items/:itemId/receive')
-  @RequirePermissions(UPDATE)
+  @RequirePermissions(RECEIVE)
   receiveItem(
     @Param('id') id: string,
     @Param('itemId') itemId: string,

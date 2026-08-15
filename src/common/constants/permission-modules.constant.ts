@@ -34,6 +34,11 @@ export const PERMISSION_MODULES = {
   WAREHOUSE_TRANSFER: 'WAREHOUSE_TRANSFER',
   // --- Phase 8 (Mua hàng) ---
   PURCHASE_PROPOSAL: 'PURCHASE_PROPOSAL',
+  // Tách khỏi PURCHASE_PROPOSAL (2026-08-15, D.c4-warehouse-can-quote) - trước đó WAREHOUSE_STAFF
+  // được PURCHASE_PROPOSAL:UPDATE để gọi .../receive, nhưng CÙNG action đó cũng mở khoá
+  // acknowledge/quotes/submit/requote -> thủ kho gọi thẳng API là tự báo giá + tự gửi Sếp duyệt
+  // được. Chỉ gác đúng 1 route POST .../items/:itemId/receive.
+  PURCHASE_RECEIPT: 'PURCHASE_RECEIPT',
   // --- Phase 9 (MES-B execution - Phôi) ---
   STEEL_ISSUE: 'STEEL_ISSUE',
   QC_REVIEW: 'QC_REVIEW',

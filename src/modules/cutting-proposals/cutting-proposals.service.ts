@@ -686,17 +686,51 @@ export class CuttingProposalsService {
       }
     }
 
-    const consumptions: { materialId: bigint; consumeQty: number; warehouseId: bigint }[] = [];
+    // "Anh em cùng nhóm" phải bám theo ĐÚNG cái neo của chính phương án này. CuttingProposal neo
+    // vào đúng MỘT trong hai (productionOrderId cho SKU cắt riêng, productionInvoiceId cho đợt
+    // gộp) - quy ước ở tầng service, không có CHECK constraint, nên phải tự phân nhánh ở đây.
+    //
+    // Lọc thẳng `productionOrderId: proposal.productionOrderId` như trước là BUG THẬT: với phương
+    // án của PI gộp trường đó luôn null, Prisma dịch thành `WHERE "productionOrderId" IS NULL` và
+    // khớp MỌI phương án gộp khác trong hệ thống - duyệt nhóm A đá bay phương án đang chờ của
+    // nhóm B không liên quan (tái hiện được bằng 2 nhóm gộp độc lập chạy song song).
+    const siblingAnchor = proposal.productionOrderId
+      ? { productionOrderId: proposal.productionOrderId }
+      : proposal.productionInvoiceId
+        ? { productionInvoiceId: proposal.productionInvoiceId }
+        : null;
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.cuttingProposal.updateMany({
-        where: {
-          productionOrderId: proposal.productionOrderId,
-          id: { not: bigId },
-          status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.APPROVED] },
-        },
-        data: { status: CuttingProposalStatus.SUPERSEDED },
-      });
+    const updated = await this.prisma.$transaction(
+      async (tx) => {
+      // Khoá chính dòng phương án rồi ĐỌC LẠI trạng thái: kiểm tra DRAFT ở trên nằm ngoài
+      // transaction nên là đọc-rồi-ghi kinh điển - 2 request duyệt cùng lúc đều thấy DRAFT, đều đi
+      // tiếp, tạo 2 PurchaseProposal cho cùng một nhu cầu và trừ kho 2 lần. Từ đây mọi lượt duyệt
+      // cùng một phương án bị xếp hàng, và khoá chỉ nhả khi bút toán kho phía dưới đã ghi xong.
+      const [locked] = await tx.$queryRaw<{ status: CuttingProposalStatus }[]>`
+        SELECT "status" FROM "cutting_proposals" WHERE "id" = ${bigId} FOR UPDATE
+      `;
+      if (!locked) {
+        throw new NotFoundException(`Cutting proposal ${id} not found`);
+      }
+      if (locked.status !== CuttingProposalStatus.DRAFT) {
+        throw new ConflictException(
+          `Cutting proposal ${id} ở trạng thái ${locked.status} - chỉ DRAFT mới duyệt được`,
+        );
+      }
+
+      // siblingAnchor null = phương án không neo vào đâu (dữ liệu hỏng, không sinh ra được qua
+      // requestForOrder/requestForInvoice) - không có "anh em" nào để xác định, thà bỏ qua bước
+      // supersede còn hơn quét trúng toàn bộ bảng.
+      if (siblingAnchor) {
+        await tx.cuttingProposal.updateMany({
+          where: {
+            ...siblingAnchor,
+            id: { not: bigId },
+            status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.APPROVED] },
+          },
+          data: { status: CuttingProposalStatus.SUPERSEDED },
+        });
+      }
       const result = await tx.cuttingProposal.update({
         where: { id: bigId },
         data: {
@@ -707,13 +741,24 @@ export class CuttingProposalsService {
         include: LIST_INCLUDE,
       });
 
+      const consumptions: { materialId: bigint; consumeQty: number; warehouseId: bigint }[] = [];
+
       if (buyableLines.length > 0) {
         const items: { materialId: bigint; buyQty: number; actualStock: number }[] = [];
-        for (const line of buyableLines) {
+        // Khoá theo THỨ TỰ materialId tăng dần, không theo thứ tự dòng trong phương án: 2 phương
+        // án gộp chạm cùng 2 loại sắt theo thứ tự ngược nhau sẽ khoá chéo và deadlock. Thứ tự
+        // khoá nhất quán toàn hệ thống là cách chuẩn để loại hẳn ca đó.
+        const orderedLines = [...buyableLines].sort((a, b) =>
+          a.materialId < b.materialId ? -1 : a.materialId > b.materialId ? 1 : 0,
+        );
+        for (const line of orderedLines) {
           const { warehouseId } = warehouseByMaterialId.get(line.materialId)!;
           // Khoá dòng stock_quant liên quan trong lúc tính "tồn khả dụng" - chặn 2 phương án
           // cắt cùng vật tư được duyệt gần như đồng thời cùng đọc thấy 1 số dư (giống pattern
-          // WarehouseTransfersService.createTransfer()).
+          // WarehouseTransfersService.createTransfer()). Khoá này CHỈ có tác dụng vì bút toán
+          // trừ kho nằm trong cùng transaction ở dưới - trigger trg_sync_stock_quant cập nhật
+          // stock_quant lúc INSERT stock_ledger, nên nếu bút toán ra ngoài transaction thì khoá
+          // đã nhả trước khi số dư kịp đổi và lượt duyệt kế tiếp vẫn đọc thấy số cũ.
           const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
             SELECT "qty" FROM "stock_quant"
             WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${line.materialId}
@@ -757,24 +802,35 @@ export class CuttingProposalsService {
         });
       }
 
-      return result;
-    });
+      // Bút toán kho nằm TRONG cùng transaction (từ 2026-08-15, xem StockLedgerService.postEntry
+      // tham số `tx`). Trước đây khối này nằm sau commit, khiến toàn bộ FOR UPDATE ở trên thành vô
+      // nghĩa: khoá nhả lúc commit, còn stock_quant thì tới INSERT stock_ledger mới đổi - hai lượt
+      // duyệt gần nhau cùng đọc một số dư, cùng tiêu một lô sắt, tồn xuống âm và cả hai đều báo
+      // Mua hàng "không cần mua gì". Gộp vào đây thì đọc tồn - quyết định - ghi bút toán nằm trọn
+      // trong một khoá, một commit: hoặc ăn cả, hoặc huỷ sạch.
+      for (const { materialId, consumeQty, warehouseId } of consumptions) {
+        await this.stockLedgerService.postEntry(
+          {
+            fromWarehouseId: warehouseId,
+            toWarehouseId: productionWarehouseId!,
+            materialId,
+            qty: consumeQty,
+            refType: StockLedgerRefType.STEEL_ISSUE,
+            refId: bigId.toString(),
+            createdById: actorUserId ?? undefined,
+            idempotencyKey: `cutting-proposal:${id}:steel-issue:${materialId}`,
+          },
+          tx,
+        );
+      }
 
-    // Bút toán kho tách khỏi transaction ở trên (StockLedgerService dùng prisma riêng, không
-    // nhận tx) - idempotencyKey theo (cuttingProposalId, materialId) khiến gọi lại an toàn nếu
-    // bước này lỗi giữa chừng, đúng idiom WarehouseTransfersService.confirm().
-    for (const { materialId, consumeQty, warehouseId } of consumptions) {
-      await this.stockLedgerService.postEntry({
-        fromWarehouseId: warehouseId,
-        toWarehouseId: productionWarehouseId!,
-        materialId,
-        qty: consumeQty,
-        refType: StockLedgerRefType.STEEL_ISSUE,
-        refId: bigId.toString(),
-        createdById: actorUserId ?? undefined,
-        idempotencyKey: `cutting-proposal:${id}:steel-issue:${materialId}`,
-      });
-    }
+      return result;
+      },
+      // Mặc định 5s của Prisma là quá sát: FOR UPDATE có thể phải CHỜ transaction khác nhả khoá
+      // (đúng ca ta vừa dựng ra), cộng thêm N bút toán + trigger stock_quant cho phương án gộp
+      // nhiều loại sắt. Bản thân các câu lệnh chỉ tốn mili-giây, nới trần là để chờ khoá.
+      { timeout: 15_000 },
+    );
 
     return this.toResponseDto(updated);
   }
@@ -900,24 +956,46 @@ export class CuttingProposalsService {
       // Tách try/catch RIÊNG với solve/save ở trên: approve() lỗi (hiếm - vd thiếu kho ảo) không
       // được phép biến 1 lần TÍNH THÀNH CÔNG thành FAILED (saveFailure sẽ đè mất kết quả DRAFT
       // vừa lưu) - chỉ log + báo QLSX tự vào duyệt tay qua API khi rơi vào ca hiếm này.
+      //
+      // NHƯNG "không bắt người bấm duyệt" KHÁC "mọi kết quả solver đều dùng được ngay": trước khi
+      // tự duyệt phải qua cổng autoApproveBlockReason() - xem docstring hàm đó.
+      const blockReason = await this.autoApproveBlockReason(proposalId, response);
       let autoApproved = false;
-      try {
-        await this.approve(proposalId.toString(), requestedById ?? null);
-        autoApproved = true;
-      } catch (error) {
-        this.logger.error(
-          `Auto-duyệt phương án cắt ${proposalId} thất bại: ${(error as Error).message}`,
-        );
+      let approveError: string | undefined;
+      if (blockReason) {
+        this.logger.warn(`Không tự duyệt phương án cắt ${proposalId}: ${blockReason}`);
+      } else {
+        try {
+          await this.approve(proposalId.toString(), requestedById ?? null);
+          autoApproved = true;
+        } catch (error) {
+          approveError = (error as Error).message;
+          this.logger.error(`Auto-duyệt phương án cắt ${proposalId} thất bại: ${approveError}`);
+        }
       }
 
-      await this.notifyProductionManagers(
-        autoApproved
-          ? `Đề xuất cắt sắt cho ${poNumber} đã tính xong và tự động duyệt`
-          : `Đề xuất cắt sắt cho ${poNumber} đã tính xong nhưng tự động duyệt thất bại`,
-        autoApproved
-          ? `Đã tự trừ tồn kho và chuyển đề xuất mua hàng (nếu thiếu vật tư) sang Mua hàng.`
-          : `Xem chi tiết phương án cắt tại lệnh sản xuất ${poNumber} và duyệt lại thủ công.`,
-      );
+      // 3 nhánh riêng biệt, KHÔNG gộp "bị chặn" chung với "lỗi kỹ thuật": việc QLSX phải làm khác
+      // hẳn nhau (chặn = xem lại phương án/gộp tổ hợp khác; lỗi = duyệt lại tay). Nội dung cũ báo
+      // "đã tự trừ tồn kho và chuyển đề xuất mua hàng" cho MỌI ca thành công là sai sự thật khi
+      // phương án không có dòng nào mua được.
+      if (autoApproved) {
+        await this.notifyProductionManagers(
+          `Đề xuất cắt sắt cho ${poNumber} đã tính xong và tự động duyệt`,
+          `Đã tự trừ tồn kho và chuyển đề xuất mua hàng (nếu thiếu vật tư) sang Mua hàng.`,
+        );
+      } else if (blockReason) {
+        await this.notifyProductionManagers(
+          `Đề xuất cắt sắt cho ${poNumber} đã tính xong - CẦN DUYỆT TAY`,
+          `Hệ thống không tự duyệt vì ${blockReason}. Chưa trừ tồn kho, chưa tạo đề xuất mua hàng. ` +
+            `Xem phương án tại lệnh sản xuất ${poNumber} rồi quyết định duyệt tay hay tính lại.`,
+        );
+      } else {
+        await this.notifyProductionManagers(
+          `Đề xuất cắt sắt cho ${poNumber} đã tính xong nhưng tự động duyệt thất bại`,
+          `Lỗi: ${approveError ?? 'không rõ'}. Xem chi tiết phương án cắt tại lệnh sản xuất ` +
+            `${poNumber} và duyệt lại thủ công.`,
+        );
+      }
     } catch (error) {
       await this.saveFailure(proposalId, error);
       await this.notifyProductionManagers(
@@ -925,6 +1003,68 @@ export class CuttingProposalsService {
         this.extractErrorMessage(error),
       );
     }
+  }
+
+  /**
+   * Cổng chặn TỰ ĐỘNG duyệt (không chặn duyệt tay qua POST /cutting-proposals/:id/approve).
+   * Trả lý do bằng tiếng Việt để bắn thẳng vào thông báo QLSX, hoặc null nếu được phép tự duyệt.
+   *
+   * Tồn tại vì auto-duyệt (Sếp chốt 2026-08-15) đã xoá mất bước QLSX ngồi nhìn bản DRAFT - mà
+   * chính bước đó đang gánh 2 việc kiểm mà code chưa bao giờ tự làm:
+   *
+   * (a) Vật tư KHÔNG cắt được. approve() lọc buyableLines theo `feasible && totalBars > 0`, nên
+   *     dòng infeasible bị bỏ khỏi đề xuất mua KHÔNG một lời cảnh báo. Ca hỗn hợp (4 vật tư ra, 1
+   *     vật tư không) là tệ nhất: đề xuất mua trông vẫn bình thường, tới lúc Phôi ra xưởng mới lòi
+   *     ra thiếu sắt. Ca toàn bộ infeasible còn tạo ra phương án APPROVED mà không có đề xuất mua
+   *     nào cả. Lưu ý solver ĐÃ tự retry auto_scan trước khi tới đây (xem nơi gọi) - còn infeasible
+   *     ở bước này nghĩa là đã dò hết dải chiều dài mà vẫn không xếp được, cần người quyết định.
+   *
+   * (b) Nhu cầu này ĐÃ có phương án được duyệt trước đó. Nút "Tính lại" gửi Idempotency-Key mới
+   *     mỗi lần bấm nên luôn sinh CuttingProposal MỚI; tự duyệt tiếp sẽ trừ tồn kho lần thứ hai
+   *     (idempotencyKey của bút toán là `cutting-proposal:{id}:...` - khoá theo id phương án, id
+   *     mới thì trừ lại từ đầu) và tạo PurchaseProposal trùng, trong khi phương án cũ chỉ bị đánh
+   *     SUPERSEDED - trạng thái đó KHÔNG huỷ đề xuất mua cũ và KHÔNG hoàn lại tồn (grep: SUPERSEDED
+   *     được ghi đúng 1 chỗ, không nơi nào đọc). Chặn ở đây để tiền thật không bị chi 2 lần; người
+   *     thật vẫn duyệt tay được sau khi đã xử lý đề xuất mua cũ.
+   */
+  private async autoApproveBlockReason(
+    proposalId: bigint,
+    response: SolverProposeResponse,
+  ): Promise<string | null> {
+    const infeasibleIds = response.purchase_plan
+      .filter((line) => !line.feasible)
+      .map((line) => line.material);
+    if (infeasibleIds.length > 0) {
+      // Đổi id -> mã vật tư: thông báo này QLSX đọc, "vật tư 12" không giúp được gì.
+      const materials = await this.prisma.material.findMany({
+        where: { id: { in: infeasibleIds.map((id) => BigInt(id)) } },
+        select: { code: true },
+      });
+      const labels = materials.length > 0 ? materials.map((m) => m.code) : infeasibleIds;
+      return `vật tư ${labels.join(', ')} không cắt được kể cả sau khi dò hết dải chiều dài (auto_scan)`;
+    }
+
+    const proposal = await this.prisma.cuttingProposal.findUniqueOrThrow({
+      where: { id: proposalId },
+      select: { productionOrderId: true, productionInvoiceId: true },
+    });
+    const anchor = proposal.productionOrderId
+      ? { productionOrderId: proposal.productionOrderId }
+      : proposal.productionInvoiceId
+        ? { productionInvoiceId: proposal.productionInvoiceId }
+        : null;
+    if (!anchor) {
+      return 'phương án không neo vào lệnh sản xuất hay đợt gộp nào (dữ liệu hỏng)';
+    }
+
+    const priorApproved = await this.prisma.cuttingProposal.count({
+      where: { ...anchor, id: { not: proposalId }, status: CuttingProposalStatus.APPROVED },
+    });
+    if (priorApproved > 0) {
+      return 'nhu cầu này đã có phương án được duyệt trước đó (đã trừ tồn kho, đã đẩy đề xuất mua hàng) - duyệt tiếp sẽ trừ kho và mua trùng';
+    }
+
+    return null;
   }
 
   /** Báo QLSX khi 1 CuttingProposal tính xong (thành công hoặc thất bại) - im lặng, không chặn

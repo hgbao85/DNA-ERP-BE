@@ -51,6 +51,19 @@ const AUDITED_MODELS = new Set([
   'SteelIssue',
   'QcReview',
   'ReplenishRequest',
+  // Phase 8/9 - nhánh DÍNH TIỀN, bổ sung 2026-08-15 (D.c1-no-audit-on-money-path). Trước đó cả
+  // chuỗi duyệt phương án cắt -> đề xuất mua -> chọn NCC/giá -> nhận hàng KHÔNG để lại một dòng
+  // audit nào ở server: ai duyệt giá nào, lúc nào, đổi từ gì sang gì đều không truy được. Phía FE
+  // có logAction() nhưng ghi vào mockStore trong trình duyệt, mất sạch khi F5.
+  // Mọi chuyển trạng thái của 2 bảng này đều đi qua .update() nên chỉ cần khai tên ở đây là có
+  // đủ oldValue/newValue + actor + ip + correlationId, không phải sửa service nào.
+  // Bảng con (PurchaseProposalItem/Quote, CuttingProposalLine/Pattern) CỐ Ý không auto-audit -
+  // cùng lý do BomPiece/WarehouseTransferItem không có; riêng quyết định chọn NCC/giá lúc duyệt
+  // và việc xoá báo giá lúc requote được ghi TAY bằng writeAuditLog() trong
+  // PurchaseProposalsService (approve/requote) vì đó là quyết định tiền, không phải dòng con
+  // đổi liên tục.
+  'PurchaseProposal',
+  'CuttingProposal',
 ]);
 
 /** Minimal shape needed to dynamically call `client[modelKey].findFirst(...)` by model name. */

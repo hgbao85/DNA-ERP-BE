@@ -12,6 +12,7 @@ describe('CuttingProposalsService', () => {
   let prisma: {
     cuttingProposal: {
       findUnique: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
       create: jest.Mock;
@@ -42,6 +43,16 @@ describe('CuttingProposalsService', () => {
   /** Mô phỏng `Prisma.Decimal` tối thiểu - đủ cho `.toNumber()` mà approve() gọi. */
   const qtyRow = (n: number) => [{ qty: { toNumber: () => n } }];
 
+  // approve() dùng $queryRaw cho HAI việc khác nhau (xem cutting-proposals.service.ts):
+  //   1. khoá dòng phương án rồi đọc lại status  -> trả [{ status }]
+  //   2. khoá dòng stock_quant để tính tồn khả dụng -> trả [{ qty }]
+  // Một `mockResolvedValue` duy nhất không phục vụ được cả hai (đã từng làm 9 test đỏ với
+  // "trạng thái undefined"), nên mock phân nhánh theo chính câu SQL. Test điều khiển qua 2 biến
+  // dưới đây thay vì override `$queryRaw` - override lại sẽ phá nhánh còn lại.
+  let stockQty: number;
+  /** null = dòng phương án đã biến mất giữa chừng (mô phỏng ca NotFound trong transaction). */
+  let lockedProposalStatus: CuttingProposalStatus | null;
+
   /** LIST_INCLUDE (productionOrder.mfgProduct) - mọi mock đi qua toResponseDto() cần có. */
   const productionOrderRelation = () => ({
     productionOrder: { poNumber: 'PO-1', mfgProduct: { factoryCode: 'SKU-1', name: 'Ghế test' } },
@@ -68,11 +79,19 @@ describe('CuttingProposalsService', () => {
   };
 
   beforeEach(() => {
+    stockQty = 0; // mặc định "hết tồn" - test nào cần tồn > 0 tự gán lại
+    lockedProposalStatus = CuttingProposalStatus.DRAFT;
     prisma = {
       cuttingProposal: {
         findUnique: jest.fn(),
+        // Cổng chặn auto-duyệt (autoApproveBlockReason) đọc lại chính phương án để biết nó neo
+        // vào lệnh SX hay đợt gộp; mặc định "neo vào PO-1, chưa từng có phương án nào được duyệt"
+        // = ca bình thường được phép tự duyệt. Test nào cần ca bị chặn tự override.
+        findUniqueOrThrow: jest
+          .fn()
+          .mockResolvedValue({ productionOrderId: 1n, productionInvoiceId: null }),
         findMany: jest.fn(),
-        count: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
         create: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
@@ -99,8 +118,14 @@ describe('CuttingProposalsService', () => {
           Promise.resolve(where.code === 'PRODUCTION' ? { id: 900n } : { id: 800n }),
         ),
       },
-      // approve() lock tồn - mặc định "hết tồn" (0), test nào cần tồn > 0 tự override.
-      $queryRaw: jest.fn().mockResolvedValue(qtyRow(0)),
+      // Phân nhánh theo câu SQL - xem ghi chú ở stockQty/lockedProposalStatus phía trên.
+      $queryRaw: jest.fn((strings: TemplateStringsArray) => {
+        const sql = Array.isArray(strings) ? strings.join('') : String(strings);
+        if (sql.includes('cutting_proposals')) {
+          return Promise.resolve(lockedProposalStatus ? [{ status: lockedProposalStatus }] : []);
+        }
+        return Promise.resolve(qtyRow(stockQty));
+      }),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     externalApiService = { post: jest.fn() };
@@ -396,6 +421,93 @@ describe('CuttingProposalsService', () => {
         { data: { title: string } },
       ];
       expect(notifyCall[0].data.title).toContain('tự động duyệt thất bại');
+    });
+
+    it('KHÔNG tự duyệt khi còn vật tư feasible=false - không trừ kho, không tạo đề xuất mua, báo QLSX duyệt tay', async () => {
+      // approve() lọc buyableLines theo `feasible && totalBars>0`, nên dòng infeasible bị loại
+      // khỏi đề xuất mua KHÔNG một lời cảnh báo. Ca hỗn hợp (1 vật tư ra, 1 vật tư không) là ca
+      // nguy hiểm nhất: đề xuất mua trông vẫn bình thường, tới lúc Phôi ra xưởng mới lòi ra thiếu.
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 100,
+          waste_percentage: 1,
+          // any_over_threshold=false nhưng có dòng infeasible -> vẫn trip retry auto_scan (đã có
+          // test riêng); ở đây quan tâm chuyện SAU retry vẫn còn infeasible thì xử lý thế nào.
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          { material: '200', feasible: true, total_bars: 8, cutting_patterns: [] },
+          { material: '201', feasible: false, cutting_patterns: [] },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+      // Chỉ 2 lần gọi: (1) tra ngưỡng hao hụt riêng trước khi gọi solver - retry auto_scan dùng
+      // lại baseRequestBody nên KHÔNG tra lại; (2) đổi id vật tư -> mã cho thông báo QLSX.
+      prisma.material.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ code: 'SAT-201' }]);
+
+      await invoke(2n, 1n, 'user-boss');
+
+      // Kết quả tính vẫn được lưu DRAFT bình thường - chặn duyệt KHÁC với đánh hỏng lần tính.
+      const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
+        { data: { status?: CuttingProposalStatus } },
+      ][];
+      expect(
+        updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.DRAFT),
+      ).toBeDefined();
+      expect(
+        updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.APPROVED),
+      ).toBeUndefined();
+      expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+
+      const notify = prisma.notification.create.mock.calls[0] as unknown as [
+        { data: { title: string; message: string } },
+      ];
+      expect(notify[0].data.title).toContain('CẦN DUYỆT TAY');
+      // Thông báo phải gọi đúng MÃ vật tư ("SAT-201"), không phải id thô - QLSX đọc cái này.
+      expect(notify[0].data.message).toContain('SAT-201');
+      expect(notify[0].data.message).toContain('Chưa trừ tồn kho');
+    });
+
+    it('KHÔNG tự duyệt lần 2 cho cùng một nhu cầu đã có phương án APPROVED (chặn "Tính lại" trừ kho + mua trùng)', async () => {
+      // Nút "Tính lại" gửi Idempotency-Key mới mỗi lần bấm -> luôn sinh CuttingProposal MỚI. Tự
+      // duyệt tiếp sẽ trừ tồn lần 2 (idempotencyKey bút toán khoá theo id phương án) và tạo
+      // PurchaseProposal trùng, trong khi phương án cũ chỉ bị đánh SUPERSEDED - trạng thái đó
+      // KHÔNG huỷ đề xuất mua cũ và KHÔNG hoàn tồn.
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 100,
+          waste_percentage: 1,
+          any_over_threshold: false,
+        },
+        purchase_plan: [{ material: '200', feasible: true, total_bars: 8, cutting_patterns: [] }],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+      // Cùng lệnh SX đã có 1 phương án APPROVED từ lần tính trước.
+      prisma.cuttingProposal.count.mockResolvedValue(1);
+
+      await invoke(3n, 1n, 'user-khsx');
+
+      expect(prisma.cuttingProposal.count).toHaveBeenCalledWith({
+        where: {
+          productionOrderId: 1n,
+          id: { not: 3n },
+          status: CuttingProposalStatus.APPROVED,
+        },
+      });
+      expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      const notify = prisma.notification.create.mock.calls[0] as unknown as [
+        { data: { title: string; message: string } },
+      ];
+      expect(notify[0].data.title).toContain('CẦN DUYỆT TAY');
+      expect(notify[0].data.message).toContain('đã có phương án được duyệt trước đó');
     });
 
     it('gửi max_waste_percentage_by_material khi vật tư có ngưỡng riêng, bỏ qua vật tư null/<=0 (D.hao-hut-sat)', async () => {
@@ -769,6 +881,75 @@ describe('CuttingProposalsService', () => {
       expect(result.status).toBe(CuttingProposalStatus.APPROVED);
     });
 
+    it('phương án của đợt gộp chỉ supersede anh em CÙNG đợt, không quét mọi phương án gộp khác', async () => {
+      // Regression: `where` cũ lọc thẳng `productionOrderId: proposal.productionOrderId`, mà
+      // phương án của PI gộp luôn có trường đó = null -> Prisma dịch thành
+      // `WHERE "productionOrderId" IS NULL`, khớp MỌI phương án gộp trong hệ thống. Duyệt nhóm A
+      // đá bay phương án đang chờ của nhóm B (tái hiện thật bằng 2 đợt gộp độc lập chạy song song).
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: null,
+        productionInvoiceId: 7n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: null,
+        productionInvoiceId: 7n,
+        status: CuttingProposalStatus.APPROVED,
+        totalBarsAll: null,
+        totalWasteMm: null,
+        wastePercentage: null,
+        errorMessage: null,
+        requestedAt: new Date(),
+        completedAt: null,
+        approvedAt: new Date(),
+        productionOrder: null,
+        productionInvoice: { code: 'PI-2026-015', items: [] },
+      });
+
+      await service.approve('2', 'user-1');
+
+      expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+        where: {
+          productionInvoiceId: 7n,
+          id: { not: 2n },
+          status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.APPROVED] },
+        },
+        data: { status: CuttingProposalStatus.SUPERSEDED },
+      });
+      // Điều kiện quyết định: KHÔNG được lọt `productionOrderId` vào where - đó chính là chỗ
+      // biến bộ lọc thành "IS NULL" quét cả bảng.
+      const where = prisma.cuttingProposal.updateMany.mock.calls[0][0].where as Record<
+        string,
+        unknown
+      >;
+      expect(where).not.toHaveProperty('productionOrderId');
+    });
+
+    it('không supersede gì cả khi phương án không neo vào PO lẫn PI (dữ liệu hỏng, thà bỏ qua còn hơn quét cả bảng)', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: null,
+        productionInvoiceId: null,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: null,
+        productionInvoiceId: null,
+        status: CuttingProposalStatus.APPROVED,
+        productionOrder: null,
+        productionInvoice: null,
+      });
+
+      await service.approve('2', 'user-1');
+
+      expect(prisma.cuttingProposal.updateMany).not.toHaveBeenCalled();
+    });
+
     it('auto-creates a PurchaseProposal for feasible lines with bars to buy, no stock on hand (Phase 8)', async () => {
       prisma.cuttingProposal.findUnique.mockResolvedValue({
         id: 2n,
@@ -818,7 +999,7 @@ describe('CuttingProposalsService', () => {
         status: CuttingProposalStatus.APPROVED,
         ...productionOrderRelation(),
       });
-      prisma.$queryRaw.mockResolvedValue(qtyRow(20)); // tồn 20 >= nhu cầu 8
+      stockQty = 20; // tồn 20 >= nhu cầu 8
       prisma.material.findMany.mockResolvedValue([
         { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
       ]);
@@ -838,16 +1019,22 @@ describe('CuttingProposalsService', () => {
           purchasedAt: expect.any(Date) as Date,
         },
       });
-      expect(stockLedgerService.postEntry).toHaveBeenCalledWith({
-        fromWarehouseId: 800n,
-        toWarehouseId: 900n,
-        materialId: 30n,
-        qty: 8,
-        refType: 'STEEL_ISSUE',
-        refId: '2',
-        createdById: 'user-1',
-        idempotencyKey: 'cutting-proposal:2:steel-issue:30',
-      });
+      // Tham số thứ 2 là `tx` của chính transaction duyệt (Lỗ 5) - bút toán PHẢI nằm trong đó,
+      // nếu không thì khoá stock_quant ở trên nhả trước khi số dư kịp đổi. Khẳng định nó tồn tại
+      // thay vì so khớp nguyên đối tượng tx (là chính prisma mock, không có giá trị kiểm chứng).
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        {
+          fromWarehouseId: 800n,
+          toWarehouseId: 900n,
+          materialId: 30n,
+          qty: 8,
+          refType: 'STEEL_ISSUE',
+          refId: '2',
+          createdById: 'user-1',
+          idempotencyKey: 'cutting-proposal:2:steel-issue:30',
+        },
+        expect.anything(),
+      );
     });
 
     it('trừ tồn tự động: thiếu 1 phần thì split đúng giữa tồn dùng ngay và buyQty (Phase 8.1)', async () => {
@@ -863,7 +1050,7 @@ describe('CuttingProposalsService', () => {
         status: CuttingProposalStatus.APPROVED,
         ...productionOrderRelation(),
       });
-      prisma.$queryRaw.mockResolvedValue(qtyRow(3)); // tồn 3 < nhu cầu 8 -> thiếu 5
+      stockQty = 3; // tồn 3 < nhu cầu 8 -> thiếu 5
       prisma.material.findMany.mockResolvedValue([
         { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
       ]);
@@ -879,6 +1066,7 @@ describe('CuttingProposalsService', () => {
       });
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ qty: 3, refType: 'STEEL_ISSUE' }),
+        expect.anything(),
       );
     });
 
@@ -922,7 +1110,7 @@ describe('CuttingProposalsService', () => {
         { id: 40n, code: 'VTP-40', warehouseId: 810n, warehouse: { code: 'vat-tu-tp' } },
       ]);
       // Cả 2 vật tư đều có sẵn tồn đủ dùng (consumeQty > 0) để lộ ra kho xuất khác nhau.
-      prisma.$queryRaw.mockResolvedValue(qtyRow(20));
+      stockQty = 20;
 
       await service.approve('2', 'user-1');
 
@@ -935,9 +1123,11 @@ describe('CuttingProposalsService', () => {
       );
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ materialId: 30n, fromWarehouseId: 800n, qty: 8 }),
+        expect.anything(),
       );
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ materialId: 40n, fromWarehouseId: 810n, qty: 5 }),
+        expect.anything(),
       );
     });
 
@@ -954,6 +1144,47 @@ describe('CuttingProposalsService', () => {
 
       await expect(service.approve('2', 'user-1')).rejects.toThrow(BadRequestException);
       expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+    });
+
+    // ── Lỗ 5: khoá dòng + đọc lại trạng thái BÊN TRONG transaction ────────────────
+    // Kiểm tra DRAFT ở đầu approve() nằm ngoài transaction nên là đọc-rồi-ghi kinh điển. Hai
+    // test dưới mô phỏng đúng ca mà nó bỏ lọt: lượt duyệt thứ hai đi qua được cổng ngoài (vẫn
+    // đọc thấy DRAFT) rồi mới bị chặn ở lần đọc lại sau khi khoá.
+    it('chặn (409) khi lượt duyệt khác đã đổi trạng thái giữa cổng ngoài và lúc khoá được dòng', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT, // cổng NGOÀI transaction vẫn thấy DRAFT
+        lines: [{ materialId: 30n, feasible: true, totalBars: 8 }],
+      });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
+      // ...nhưng khi khoá được dòng thì lượt duyệt kia đã APPROVED xong rồi.
+      lockedProposalStatus = CuttingProposalStatus.APPROVED;
+
+      await expect(service.approve('2', 'user-1')).rejects.toThrow(ConflictException);
+      // Đây mới là điều quan trọng: không đẻ đề xuất mua thứ 2 và không trừ kho lần 2.
+      expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      expect(prisma.cuttingProposal.update).not.toHaveBeenCalled();
+    });
+
+    it('chặn (404) khi dòng phương án biến mất trước lúc khoá được', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [{ materialId: 30n, feasible: true, totalBars: 8 }],
+      });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
+      lockedProposalStatus = null; // SELECT ... FOR UPDATE không trả dòng nào
+
+      await expect(service.approve('2', 'user-1')).rejects.toThrow(NotFoundException);
+      expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
   });
 
