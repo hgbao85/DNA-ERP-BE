@@ -19,7 +19,12 @@ const APPROVE = { module: PERMISSION_MODULES.CUTTING_PROPOSAL, action: Permissio
 export class CuttingProposalsController {
   constructor(private readonly cuttingProposalsService: CuttingProposalsService) {}
 
-  /** Nút "Tính lại" thủ công - lần tính đầu tiên tự động chạy ngầm khi Sếp duyệt PI item. */
+  /**
+   * Nút "Tính lại" thủ công - lần tính đầu tiên tự động chạy ngầm khi Sếp duyệt PI item. Tính
+   * xong (đầu tiên hay tính lại) đều tự động duyệt luôn (xem CuttingProposalsService.
+   * runSolverAndSave/approve) - không cần gọi endpoint approve() dưới đây trong luồng bình
+   * thường, endpoint đó chỉ còn là lối thủ công dự phòng khi auto-duyệt lỗi.
+   */
   @Post('production-orders/:id/cutting-proposals')
   @RequirePermissions(CREATE)
   requestProposal(

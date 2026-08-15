@@ -1,4 +1,11 @@
-import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../../config/configuration';
 import {
@@ -37,10 +44,6 @@ import { bestWasteAcrossStockLengths } from './best-fill.util';
 
 const SOLVER_PROPOSE_PATH = '/api/v1/de_xuat/propose/';
 const SYSTEM_CONFIG_ID = 1;
-/// cat_sat_iea chỉ tính vật tư sắt - sắt luôn nhập/xuất tại đúng 1 kho vật lý này (xem
-/// PROTECTED_WAREHOUSE_CODES). Phase 8 (Mua hàng) rút gọn hiện chỉ có nhóm vật tư này nên
-/// hardcode thẳng, không cần suy hay tham số hoá.
-const STEEL_WAREHOUSE_CODE = 'phoi-son-han';
 /// Kho ảo cố định (protected-warehouse-codes.constant.ts) - điểm đến của bút toán "sắt xuất
 /// dùng cho sản xuất" khi tự động trừ tồn lúc duyệt phương án cắt (xem approve()).
 const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
@@ -125,8 +128,10 @@ type CuttingProposalDetail = Prisma.CuttingProposalGetPayload<{ include: typeof 
 /**
  * 1 lần gọi solver cat_sat_iea cho 1 ProductionOrder. Gọi tự động (fire-and-forget) ngay sau
  * khi ProductionOrder được tạo (xem ProductionInvoicesService.approveItem) - KHÔNG chặn
- * response, tạo ngay 1 dòng CALCULATING rồi cập nhật DRAFT/FAILED khi solver trả lời. Cũng
- * dùng lại cho nút "Tính lại" thủ công (có Idempotency-Key).
+ * response, tạo ngay 1 dòng CALCULATING rồi cập nhật DRAFT/FAILED khi solver trả lời. Tính
+ * THÀNH CÔNG là tự động duyệt (approve()) luôn ngay sau đó (Sếp chốt 2026-08-15 - không cần
+ * QLSX bấm duyệt riêng), nên chỉ cần 1 lần Sếp duyệt PI item là đi thẳng tới Mua hàng, không
+ * dừng lại chờ ai. Cũng dùng lại cho nút "Tính lại" thủ công (có Idempotency-Key).
  */
 @Injectable()
 export class CuttingProposalsService {
@@ -162,15 +167,17 @@ export class CuttingProposalsService {
       include: LIST_INCLUDE,
     });
 
-    void this.runSolverAndSave(proposal.id, () => this.buildOrderJob(productionOrderId)).catch(
-      (error: unknown) => {
-        this.logger.error(
-          `Cutting proposal ${proposal.id} (production order ${productionOrderId}) failed: ${
-            (error as Error).message
-          }`,
-        );
-      },
-    );
+    void this.runSolverAndSave(
+      proposal.id,
+      () => this.buildOrderJob(productionOrderId),
+      options.requestedById,
+    ).catch((error: unknown) => {
+      this.logger.error(
+        `Cutting proposal ${proposal.id} (production order ${productionOrderId}) failed: ${
+          (error as Error).message
+        }`,
+      );
+    });
 
     return this.toResponseDto(proposal);
   }
@@ -192,15 +199,17 @@ export class CuttingProposalsService {
       include: LIST_INCLUDE,
     });
 
-    void this.runSolverAndSave(proposal.id, () => this.buildInvoiceJob(productionInvoiceId)).catch(
-      (error: unknown) => {
-        this.logger.error(
-          `Cutting proposal ${proposal.id} (merged PI ${productionInvoiceId}) failed: ${
-            (error as Error).message
-          }`,
-        );
-      },
-    );
+    void this.runSolverAndSave(
+      proposal.id,
+      () => this.buildInvoiceJob(productionInvoiceId),
+      options.requestedById,
+    ).catch((error: unknown) => {
+      this.logger.error(
+        `Cutting proposal ${proposal.id} (merged PI ${productionInvoiceId}) failed: ${
+          (error as Error).message
+        }`,
+      );
+    });
 
     return this.toResponseDto(proposal);
   }
@@ -616,9 +625,18 @@ export class CuttingProposalsService {
    * này. Theo yêu cầu Sếp (2026-08-07): "trừ tồn tự động, hiện qua mua hàng, không hiện ở kho"
    * - mỗi dòng chụp `actualStock` thật (stock_quant, có khoá FOR UPDATE chống 2 lần duyệt cùng
    * lúc đọc trùng số dư), `buyQty` chỉ còn là phần THIẾU (totalBars - actualStock đã dùng), và
-   * phần tồn có sẵn được ghi nhận xuất dùng cho sản xuất ngay (STEEL_ISSUE, kho ảo PRODUCTION).
+   * phần tồn có sẵn được ghi nhận xuất dùng cho sản xuất ngay (STEEL_ISSUE).
+   *
+   * Kho nguồn (tồn có sẵn) và kho xuất KHÔNG còn hardcode "phoi-son-han" (Sếp chốt 2026-08-15,
+   * mục 2: mỗi vật tư nhập/xuất đúng theo Kho đã khai trên chính vật tư đó - Material.warehouseId,
+   * xem MaterialsService.create()) - tra động theo TỪNG vật tư trong buyableLines, không còn giả
+   * định cả phương án cắt chung 1 kho.
+   *
+   * `actorUserId` = null khi gọi TỰ ĐỘNG từ runSolverAndSave() (Sếp chốt 2026-08-15, mục 1: không
+   * cần QLSX bấm duyệt riêng - tính xong là duyệt luôn); vẫn nhận string thật khi gọi qua endpoint
+   * thủ công POST /:id/approve (dự phòng cho ca hiếm auto-duyệt lỗi, xem runSolverAndSave()).
    */
-  async approve(id: string, actorUserId: string): Promise<CuttingProposalResponseDto> {
+  async approve(id: string, actorUserId: string | null): Promise<CuttingProposalResponseDto> {
     const bigId = parseBigIntId(id);
     const proposal = await this.prisma.cuttingProposal.findUnique({
       where: { id: bigId },
@@ -637,18 +655,38 @@ export class CuttingProposalsService {
       (line) => line.feasible && line.totalBars != null && line.totalBars > 0,
     );
 
-    let steelWarehouseId: bigint | undefined;
+    // materialId -> kho đã khai cho chính vật tư đó (Material.warehouseId) - nguồn xác thực duy
+    // nhất cho "vật tư này tồn/nhập ở kho nào", KHÔNG còn 1 hằng số dùng chung cho cả phương án.
+    const warehouseByMaterialId = new Map<bigint, { warehouseId: bigint; warehouseCode: string }>();
     let productionWarehouseId: bigint | undefined;
     if (buyableLines.length > 0) {
-      const [steelWarehouse, productionWarehouse] = await Promise.all([
-        this.prisma.warehouse.findUniqueOrThrow({ where: { code: STEEL_WAREHOUSE_CODE } }),
+      const [materials, productionWarehouse] = await Promise.all([
+        this.prisma.material.findMany({
+          where: { id: { in: [...new Set(buyableLines.map((l) => l.materialId))] } },
+          select: {
+            id: true,
+            code: true,
+            warehouseId: true,
+            warehouse: { select: { code: true } },
+          },
+        }),
         this.prisma.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
       ]);
-      steelWarehouseId = steelWarehouse.id;
       productionWarehouseId = productionWarehouse.id;
+      for (const m of materials) {
+        if (!m.warehouseId || !m.warehouse) {
+          throw new BadRequestException(
+            `Vật tư ${m.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi duyệt phương án cắt`,
+          );
+        }
+        warehouseByMaterialId.set(m.id, {
+          warehouseId: m.warehouseId,
+          warehouseCode: m.warehouse.code,
+        });
+      }
     }
 
-    const consumptions: { materialId: bigint; consumeQty: number }[] = [];
+    const consumptions: { materialId: bigint; consumeQty: number; warehouseId: bigint }[] = [];
 
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.cuttingProposal.updateMany({
@@ -672,12 +710,13 @@ export class CuttingProposalsService {
       if (buyableLines.length > 0) {
         const items: { materialId: bigint; buyQty: number; actualStock: number }[] = [];
         for (const line of buyableLines) {
+          const { warehouseId } = warehouseByMaterialId.get(line.materialId)!;
           // Khoá dòng stock_quant liên quan trong lúc tính "tồn khả dụng" - chặn 2 phương án
           // cắt cùng vật tư được duyệt gần như đồng thời cùng đọc thấy 1 số dư (giống pattern
           // WarehouseTransfersService.createTransfer()).
           const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
             SELECT "qty" FROM "stock_quant"
-            WHERE "warehouseId" = ${steelWarehouseId!} AND "materialId" = ${line.materialId}
+            WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${line.materialId}
             FOR UPDATE
           `;
           const actualStock = Math.floor(locked[0]?.qty.toNumber() ?? 0);
@@ -687,7 +726,7 @@ export class CuttingProposalsService {
 
           items.push({ materialId: line.materialId, buyQty, actualStock });
           if (consumeQty > 0) {
-            consumptions.push({ materialId: line.materialId, consumeQty });
+            consumptions.push({ materialId: line.materialId, consumeQty, warehouseId });
           }
         }
 
@@ -699,10 +738,17 @@ export class CuttingProposalsService {
         // nhận nào để bấm (phát hiện qua e2e/golden-path.spec.ts khi tồn kho tích luỹ đủ qua nhiều
         // lần chạy demo, D.p7-zero-buyqty-stuck).
         const allCovered = items.every((it) => it.buyQty === 0);
+        // warehouseCode cấp cả đề xuất giờ CHỈ mang tính tóm tắt/hiển thị (lấy theo dòng đầu tiên)
+        // - nguồn xác thực thật để nhập hàng là PurchaseProposalItem.materialId -> Material.
+        // warehouseId, xem PurchaseProposalsService.receiveItem(). Hiện luôn trùng 1 kho vì
+        // cat_sat_iea chỉ tính vật tư sắt, nhưng KHÔNG còn là giả định cứng của code.
+        const primaryWarehouseCode = warehouseByMaterialId.get(
+          buyableLines[0].materialId,
+        )!.warehouseCode;
         await tx.purchaseProposal.create({
           data: {
             cuttingProposalId: bigId,
-            warehouseCode: STEEL_WAREHOUSE_CODE,
+            warehouseCode: primaryWarehouseCode,
             items: { create: items },
             ...(allCovered
               ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
@@ -717,15 +763,15 @@ export class CuttingProposalsService {
     // Bút toán kho tách khỏi transaction ở trên (StockLedgerService dùng prisma riêng, không
     // nhận tx) - idempotencyKey theo (cuttingProposalId, materialId) khiến gọi lại an toàn nếu
     // bước này lỗi giữa chừng, đúng idiom WarehouseTransfersService.confirm().
-    for (const { materialId, consumeQty } of consumptions) {
+    for (const { materialId, consumeQty, warehouseId } of consumptions) {
       await this.stockLedgerService.postEntry({
-        fromWarehouseId: steelWarehouseId!,
+        fromWarehouseId: warehouseId,
         toWarehouseId: productionWarehouseId!,
         materialId,
         qty: consumeQty,
         refType: StockLedgerRefType.STEEL_ISSUE,
         refId: bigId.toString(),
-        createdById: actorUserId,
+        createdById: actorUserId ?? undefined,
         idempotencyKey: `cutting-proposal:${id}:steel-issue:${materialId}`,
       });
     }
@@ -741,6 +787,7 @@ export class CuttingProposalsService {
   private async runSolverAndSave(
     proposalId: bigint,
     buildJob: () => Promise<SolverJob>,
+    requestedById?: string,
   ): Promise<void> {
     let poNumber: string | undefined;
     try {
@@ -847,9 +894,29 @@ export class CuttingProposalsService {
       }
 
       await this.saveSuccess(proposalId, requestBody, response, segmentSpecLookup);
+
+      // Sếp chốt (2026-08-15): KHÔNG cần QLSX bấm duyệt riêng nữa - tính xong là tự động duyệt
+      // luôn (approve()), tự trừ tồn + tự tạo đề xuất mua hàng ngay, không chờ ai thao tác thêm.
+      // Tách try/catch RIÊNG với solve/save ở trên: approve() lỗi (hiếm - vd thiếu kho ảo) không
+      // được phép biến 1 lần TÍNH THÀNH CÔNG thành FAILED (saveFailure sẽ đè mất kết quả DRAFT
+      // vừa lưu) - chỉ log + báo QLSX tự vào duyệt tay qua API khi rơi vào ca hiếm này.
+      let autoApproved = false;
+      try {
+        await this.approve(proposalId.toString(), requestedById ?? null);
+        autoApproved = true;
+      } catch (error) {
+        this.logger.error(
+          `Auto-duyệt phương án cắt ${proposalId} thất bại: ${(error as Error).message}`,
+        );
+      }
+
       await this.notifyProductionManagers(
-        `Đề xuất cắt sắt cho ${poNumber} đã tính xong`,
-        `Xem chi tiết phương án cắt tại lệnh sản xuất ${poNumber}.`,
+        autoApproved
+          ? `Đề xuất cắt sắt cho ${poNumber} đã tính xong và tự động duyệt`
+          : `Đề xuất cắt sắt cho ${poNumber} đã tính xong nhưng tự động duyệt thất bại`,
+        autoApproved
+          ? `Đã tự trừ tồn kho và chuyển đề xuất mua hàng (nếu thiếu vật tư) sang Mua hàng.`
+          : `Xem chi tiết phương án cắt tại lệnh sản xuất ${poNumber} và duyệt lại thủ công.`,
       );
     } catch (error) {
       await this.saveFailure(proposalId, error);

@@ -36,6 +36,8 @@ describe('PurchaseProposalsService', () => {
     code: 'SAT-25',
     name: 'Sắt hộp 25x25',
     unit: 'cây',
+    warehouseId: 800n,
+    warehouse: { code: 'phoi-son-han' },
     ...overrides,
   });
 
@@ -106,10 +108,10 @@ describe('PurchaseProposalsService', () => {
         updateMany: jest.fn(),
         deleteMany: jest.fn(),
       },
+      // Sau khi kho nhận hàng chuyển sang đọc thẳng item.material.warehouseId (không qua lookup),
+      // chỗ này chỉ còn phục vụ đúng 1 việc: tra kho ảo SUPPLIER trong receiveItem().
       warehouse: {
-        findUniqueOrThrow: jest.fn(({ where }: { where: { code: string } }) =>
-          Promise.resolve(where.code === 'SUPPLIER' ? { id: 700n } : { id: 800n }),
-        ),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 700n }),
       },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
@@ -458,6 +460,53 @@ describe('PurchaseProposalsService', () => {
       await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1');
 
       expect(prisma.purchaseProposal.update).not.toHaveBeenCalled();
+    });
+
+    it('nhập đúng vào kho RIÊNG của vật tư đang nhận (Material.warehouseId), không phải proposal.warehouseCode (Sếp chốt 2026-08-15)', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          // Kho tóm tắt cấp cả đề xuất cố tình khác kho thật của vật tư dưới đây, để chứng minh
+          // receiveItem() không còn đọc field này.
+          warehouseCode: 'phoi-son-han',
+          status: PurchaseProposalStatus.PURCHASING,
+          items: [
+            item({
+              id: 400n,
+              materialId: 40n,
+              buyQty: decimal(5),
+              receivedQty: decimal(0),
+              material: material({
+                code: 'VTP-40',
+                warehouseId: 810n,
+                warehouse: { code: 'vat-tu-tp' },
+              }),
+            }),
+          ],
+        }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ materialId: 40n, buyQty: decimal(5), receivedQty: decimal(5), quotes: [] }),
+      );
+
+      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ toWarehouseId: 810n, materialId: 40n, qty: 5 }),
+      );
+    });
+
+    it('chặn nhận hàng (400) nếu vật tư của dòng đó chưa được gán Kho', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          status: PurchaseProposalStatus.PURCHASING,
+          items: [item({ material: material({ warehouseId: null, warehouse: null }) })],
+        }),
+      );
+
+      await expect(
+        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
   });
 });

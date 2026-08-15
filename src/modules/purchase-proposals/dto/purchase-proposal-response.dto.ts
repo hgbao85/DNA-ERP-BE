@@ -28,8 +28,14 @@ export class PurchaseProposalItemResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) purchaseUnit!: string | null;
   /// Số lượng unit / 1 purchaseUnit (vd 250 = 250 cái/kg) - FE dùng để gợi ý quy đổi lúc nhập kho.
   @Expose() @ApiPropertyOptional({ nullable: true }) khoUnitFactor!: number | null;
-  /// Tồn thật (kho phoi-son-han) chụp lúc CuttingProposalsService.approve() tạo dòng này -
-  /// FE dùng để hiển thị + suy ra required = actualStock + buyQty (xem purchasing-api.ts).
+  /// Kho nhận hàng THẬT của riêng vật tư này (Material.warehouseId -> Warehouse.code) - nguồn
+  /// xác thực để Thủ kho nhận hàng (xem PurchaseProposalsService.receiveItem()). KHÔNG dùng
+  /// PurchaseProposalResponseDto.warehouseCode cấp đề xuất (nay chỉ là tóm tắt/hiển thị) - 1 đề
+  /// xuất có thể gồm nhiều vật tư khác kho nhau.
+  @Expose() @ApiPropertyOptional({ nullable: true }) warehouseCode!: string | null;
+  /// Tồn thật (kho của vật tư, xem warehouseCode ở trên) chụp lúc CuttingProposalsService.
+  /// approve() tạo dòng này - FE dùng để hiển thị + suy ra required = actualStock + buyQty
+  /// (xem purchasing-api.ts).
   @Expose() @ApiProperty() actualStock!: number;
   @Expose() @ApiProperty() buyQty!: number;
   @Expose() @ApiProperty() receivedQty!: number;
@@ -50,6 +56,9 @@ export class PurchaseProposalItemResponseDto {
 export class PurchaseProposalResponseDto {
   @Expose() @ApiProperty() id!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) cuttingProposalId!: string | null;
+  /// Kho TÓM TẮT của cả đề xuất (kho của dòng vật tư đầu tiên lúc tạo) - CHỈ để hiển thị nhanh,
+  /// KHÔNG dùng để nhận hàng. Nguồn xác thực thật là từng PurchaseProposalItem.warehouseCode ở
+  /// trên, vì 1 đề xuất có thể gồm nhiều vật tư khác kho nhau.
   @Expose() @ApiProperty() warehouseCode!: string;
   @Expose() @ApiProperty({ enum: PurchaseProposalStatus }) status!: PurchaseProposalStatus;
   /// PO nội bộ (ProductionOrder.poNumber, vd "PO-9") - KHÁC mã đơn hàng khách, vì đường đi rút

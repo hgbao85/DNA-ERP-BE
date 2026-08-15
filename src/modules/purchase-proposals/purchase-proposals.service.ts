@@ -37,7 +37,7 @@ const LIST_INCLUDE = {
 } satisfies Prisma.PurchaseProposalInclude;
 
 const ITEM_INCLUDE = {
-  material: true,
+  material: { include: { warehouse: true } },
   quotes: { include: { supplier: true } },
 } satisfies Prisma.PurchaseProposalItemInclude;
 
@@ -260,17 +260,25 @@ export class PurchaseProposalsService {
       ? (item.receivedQtyPurchaseUnit?.toNumber() ?? 0) + dto.receivedQtyPurchaseUnit
       : item.receivedQtyPurchaseUnit?.toNumber();
 
+    // Kho nhận hàng = kho đã khai CHO ĐÚNG vật tư này (Material.warehouseId, xem Admin > Vật tư),
+    // KHÔNG còn theo proposal.warehouseCode (1 kho chung cho cả đề xuất) - Sếp chốt 2026-08-15
+    // mục 2: 1 đề xuất có thể gồm nhiều vật tư khác kho nhau, mỗi dòng phải về đúng kho riêng.
+    if (!item.material.warehouseId) {
+      throw new BadRequestException(
+        `Vật tư ${item.material.code} chưa được cấu hình Kho - không thể nhập kho tự động, vào Admin > Vật tư để gán Kho trước`,
+      );
+    }
+
     // Bút toán "hàng mua về nhập kho" - post trước, ngoài transaction cập nhật receivedQty bên
     // dưới, đúng idiom WarehouseTransfersService.confirm() (idempotencyKey do client gửi, vì
     // 1 item có thể nhận nhiều đợt nên không có key tất định như warehouse-transfer).
     if (incrementQty > 0) {
-      const [supplierWarehouse, destWarehouse] = await Promise.all([
-        this.prisma.warehouse.findUniqueOrThrow({ where: { code: SUPPLIER_WAREHOUSE_CODE } }),
-        this.prisma.warehouse.findUniqueOrThrow({ where: { code: proposal.warehouseCode } }),
-      ]);
+      const supplierWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
+        where: { code: SUPPLIER_WAREHOUSE_CODE },
+      });
       await this.stockLedgerService.postEntry({
         fromWarehouseId: supplierWarehouse.id,
-        toWarehouseId: destWarehouse.id,
+        toWarehouseId: item.material.warehouseId,
         materialId: item.materialId,
         qty: incrementQty,
         refType: StockLedgerRefType.PURCHASE,
@@ -381,6 +389,9 @@ export class PurchaseProposalsService {
       unit: item.material.unit,
       purchaseUnit: item.material.purchaseUnit ?? null,
       khoUnitFactor: item.material.khoUnitFactor?.toNumber() ?? null,
+      // Kho nhận hàng THẬT của riêng dòng này (Material.warehouseId) - nguồn xác thực cho
+      // receiveItem(), KHÔNG phải PurchaseProposalResponseDto.warehouseCode (nay chỉ tóm tắt).
+      warehouseCode: item.material.warehouse?.code ?? null,
       actualStock: item.actualStock.toNumber(),
       buyQty: item.buyQty.toNumber(),
       receivedQty: item.receivedQty.toNumber(),
