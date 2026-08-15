@@ -454,37 +454,6 @@ export class SkusService {
     return this.toResponseDtoWithQuota(updated);
   }
 
-  // ─── Production-confirm PlanForm (tạo khi Sếp duyệt 1 item PI - xem ProductionInvoicesService) ──
-
-  /**
-   * Tìm hoặc tạo PlanForm origin=PRODUCTION_CONFIRM cho đúng (salesOrderId, mfgProductId) của
-   * PI item vừa được Sếp duyệt - mirror ensurePlanFormForConfirmedItem() trong mock
-   * (LenhSXPage). Không cần seed định mức ở đây nữa: PlanForm này không sở hữu BomRevision
-   * riêng, tầng đọc (reconstructQuotaBatch) tự fallback sang BomRevision ACTIVE hiện tại của
-   * sản phẩm - luôn phản ánh đúng bản đã THẬT SỰ được Sếp duyệt, không lấy nhầm bản nháp.
-   */
-  async ensureProductionConfirmPlanForm(
-    salesOrderId: bigint,
-    mfgProductId: bigint,
-    productionInvoiceId: bigint,
-    actorUserId: string,
-  ): Promise<void> {
-    const existing = await this.prisma.planForm.findFirst({
-      where: { salesOrderId, mfgProductId, origin: 'PRODUCTION_CONFIRM' },
-    });
-    if (existing) return;
-
-    await this.prisma.planForm.create({
-      data: {
-        salesOrderId,
-        mfgProductId,
-        productionInvoiceId,
-        origin: 'PRODUCTION_CONFIRM',
-        createdById: actorUserId,
-      },
-    });
-  }
-
   // ─── Ghi định mức quan hệ thật (Việc 2) ──────────────────────────────────────
 
   /**

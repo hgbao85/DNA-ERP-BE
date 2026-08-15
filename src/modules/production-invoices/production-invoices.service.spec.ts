@@ -5,7 +5,6 @@ import { ProdItemStageType } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
-import { SkusService } from '../skus/skus.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 
 describe('ProductionInvoicesService', () => {
@@ -39,7 +38,6 @@ describe('ProductionInvoicesService', () => {
     auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
   };
-  let skusService: { ensureProductionConfirmPlanForm: jest.Mock };
   let productionOrdersService: {
     createFromApproval: jest.Mock;
     assertActiveBomRevisionExists: jest.Mock;
@@ -117,7 +115,6 @@ describe('ProductionInvoicesService', () => {
       auditLog: { create: jest.fn() },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
-    skusService = { ensureProductionConfirmPlanForm: jest.fn() };
     productionOrdersService = {
       createFromApproval: jest.fn().mockResolvedValue({ id: 99n }),
       assertActiveBomRevisionExists: jest.fn().mockResolvedValue(undefined),
@@ -129,7 +126,6 @@ describe('ProductionInvoicesService', () => {
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     service = new ProductionInvoicesService(
       prisma as unknown as PrismaServiceType,
-      skusService as unknown as SkusService,
       productionOrdersService as unknown as ProductionOrdersService,
       cuttingProposalsService as unknown as CuttingProposalsService,
       cls as unknown as ClsService<AppClsStore>,
@@ -163,8 +159,14 @@ describe('ProductionInvoicesService', () => {
 
       await service.mergeItems({ productionInvoiceItemIds: ['20', '21'] }, 'user-khsx');
 
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
       const created = prisma.productionInvoice.create.mock.calls[0][0] as {
-        data: { isMerged: boolean; salesOrderId: bigint | null; deadline: Date; mergedById: string };
+        data: {
+          isMerged: boolean;
+          salesOrderId: bigint | null;
+          deadline: Date;
+          mergedById: string;
+        };
       };
       expect(created.data.isMerged).toBe(true);
       // Nhóm có SKU của 2 đơn khác nhau nên không quy về 1 đơn được.
@@ -182,6 +184,7 @@ describe('ProductionInvoicesService', () => {
 
       await service.mergeItems({ productionInvoiceItemIds: ['20', '21'] }, 'user-khsx');
 
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
       const moved = prisma.productionInvoiceItem.updateMany.mock.calls[0][0] as {
         where: { id: { in: bigint[] } };
         data: Record<string, unknown>;
@@ -258,23 +261,6 @@ describe('ProductionInvoicesService', () => {
       expect(productionOrdersService.createFromApproval).toHaveBeenCalledTimes(2);
     });
 
-    it('tạo PlanForm theo đơn hàng CỦA TỪNG SKU, không theo PI cha (PI gộp không có đơn)', async () => {
-      prisma.productionInvoice.findUnique.mockResolvedValue(
-        mergedPi([
-          piItem({ id: 20n, salesOrderId: 1n, prodApprovalStatus: 'WAITING_BOSS' }),
-          piItem({ id: 21n, salesOrderId: 2n, prodApprovalStatus: 'WAITING_BOSS' }),
-        ]),
-      );
-      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
-
-      await service.approveBatch('50', 'user-boss');
-
-      // Đọc nhầm sang pi.salesOrderId (luôn null) sẽ bỏ qua bước này trong im lặng.
-      expect(skusService.ensureProductionConfirmPlanForm).toHaveBeenCalledTimes(2);
-      expect(skusService.ensureProductionConfirmPlanForm).toHaveBeenCalledWith(1n, 2n, 50n, 'user-boss');
-      expect(skusService.ensureProductionConfirmPlanForm).toHaveBeenCalledWith(2n, 2n, 50n, 'user-boss');
-    });
-
     it('kiểm định mức của MỌI SKU trước khi ghi gì - thiếu 1 cái là dừng cả cụm', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(
         mergedPi([
@@ -322,6 +308,7 @@ describe('ProductionInvoicesService', () => {
       const result = await service.rejectBatch('50', 'Hạn quá gấp', 'user-boss');
 
       const updates = prisma.productionInvoiceItem.update.mock.calls.map(
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
         (c) => (c[0] as { data: Record<string, unknown> }).data,
       );
       expect(updates[0]).toMatchObject({
@@ -483,7 +470,7 @@ describe('ProductionInvoicesService', () => {
   });
 
   describe('approveItem', () => {
-    it('seeds a PRODUCTION_CONFIRM plan form and flips PI to PRODUCING when this was the last item', async () => {
+    it('flips PI to PRODUCING when this was the last item', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(
         piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
@@ -495,12 +482,6 @@ describe('ProductionInvoicesService', () => {
 
       await service.approveItem('7', '20', 'user-boss');
 
-      expect(skusService.ensureProductionConfirmPlanForm).toHaveBeenCalledWith(
-        1n,
-        2n,
-        7n,
-        'user-boss',
-      );
       expect(productionOrdersService.createFromApproval).toHaveBeenCalledWith(20n, 2n, 10);
       expect(cuttingProposalsService.requestForOrder).toHaveBeenCalledWith(99n, {
         requestedById: 'user-boss',
@@ -547,7 +528,6 @@ describe('ProductionInvoicesService', () => {
       // Chặn TRƯỚC khi ghi - PI item không được flip APPROVED khi chưa có BOM (đây chính là
       // hành vi lỗ hổng cũ: trước fix, item vẫn APPROVED dù ProductionOrder tạo thất bại).
       expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
-      expect(skusService.ensureProductionConfirmPlanForm).not.toHaveBeenCalled();
     });
 
     it('does not flip PI status when other items are still pending', async () => {
@@ -653,7 +633,9 @@ describe('ProductionInvoicesService', () => {
           items: [
             piItem({
               productionOrder: {
-                cuttingProposals: [{ status: 'CALCULATING', requestedAt: new Date('2026-08-14T10:00:00Z') }],
+                cuttingProposals: [
+                  { status: 'CALCULATING', requestedAt: new Date('2026-08-14T10:00:00Z') },
+                ],
               },
             }),
           ],

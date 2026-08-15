@@ -102,25 +102,14 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.STOCK,
       actions: [PermissionAction.VIEW],
     },
-    // Phase 10 (2026-08-12): KHSX là người tạo Lệnh kiểm tra vật tư + bấm "Bắt đầu sản xuất"
-    // (CREATE+UPDATE), và cũng là người duy nhất tạo đề xuất mua thủ công từ kho thiếu vật tư
-    // (PURCHASE_PROPOSAL:CREATE - chỉ role này có action CREATE trên module đó, khác thủ
-    // kho/Mua hàng chỉ VIEW/UPDATE, xem PurchaseProposalsController).
-    {
-      module: PERMISSION_MODULES.MATERIAL_INSPECTION,
-      actions: [PermissionAction.VIEW, PermissionAction.CREATE, PermissionAction.UPDATE],
-    },
-    // VIEW thêm 2026-08-12 (gộp chung mục với CREATE ở trên - CỐ Ý không tách 2 mục cùng module
-    // cho 1 role, resolveGrants() gộp hết vào 1 Set nên trùng vẫn chạy đúng, nhưng để 2 mục là
-    // mời người sau "dọn trùng" và xoá mất 1 quyền): tab "Bảng thống kê" (ThongKePagePlan,
-    // ProductionPlanApp.tsx:81) có mục Mua hàng hiển thị NCC đã chọn/đơn giá/đã mua của từng vật
-    // tư - đọc từ GET /purchase-proposals. Thiếu VIEW thì mục đó TRỐNG vĩnh viễn mà không báo
-    // lỗi gì (403 bị .catch() nuốt, xem InspectionContext.tsx) - cùng loại lỗi đã gặp với
-    // SKUReviewPage ở trên, phát hiện lại khi test E2E. KHSX tạo được đề xuất nhưng KHÔNG báo
-    // giá/duyệt mua (không có UPDATE/APPROVE).
+    // VIEW: tab "Bảng thống kê" (ThongKePagePlan, ProductionPlanApp.tsx:81) có mục Mua hàng hiển
+    // thị NCC đã chọn/đơn giá/đã mua của từng vật tư - đọc từ GET /purchase-proposals. Thiếu VIEW
+    // thì mục đó TRỐNG vĩnh viễn mà không báo lỗi gì (403 bị .catch() nuốt, xem
+    // InspectionContext.tsx) - cùng loại lỗi đã gặp với SKUReviewPage ở trên, phát hiện lại khi
+    // test E2E. KHSX chỉ xem, không báo giá/duyệt mua (không có CREATE/UPDATE/APPROVE).
     {
       module: PERMISSION_MODULES.PURCHASE_PROPOSAL,
-      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+      actions: [PermissionAction.VIEW],
     },
     // 2026-08-12: KHSX đọc GET /cutting-batch-suggestions (màn "Gộp đợt cắt" + badge trên menu)
     // để biết loại sắt nào vượt ngưỡng hao hụt và gộp với đơn nào thì đạt. CHỈ VIEW - quyết định
@@ -257,13 +246,6 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     {
       module: PERMISSION_MODULES.MATERIAL_ISSUE,
       actions: [PermissionAction.CREATE, PermissionAction.VIEW],
-    },
-    // Phase 10 (2026-08-12): thủ kho (3 kho vật lý, scope enforce ở MaterialInspectionService.
-    // assertWarehouseScope()) xác nhận tồn kho thật cho Lệnh kiểm tra vật tư KHSX gửi tới
-    // (UPDATE = submitKho). KHÔNG có CREATE - tạo request là việc của KHSX.
-    {
-      module: PERMISSION_MODULES.MATERIAL_INSPECTION,
-      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
     // Vá lỗ quyền có sẵn từ M2 "Chuyền kiểm" (2026-08-11, chưa từng cấp): thủ kho thành phẩm
     // cần VIEW+UPDATE trên PRODUCTION_INVOICE để gọi được GET/POST .../transfer-check VÀ

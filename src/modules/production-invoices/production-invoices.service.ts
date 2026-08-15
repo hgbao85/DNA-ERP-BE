@@ -25,7 +25,6 @@ import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
-import { SkusService } from '../skus/skus.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
 import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
@@ -85,7 +84,6 @@ export class ProductionInvoicesService {
 
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
-    private readonly skusService: SkusService,
     private readonly productionOrdersService: ProductionOrdersService,
     private readonly cuttingProposalsService: CuttingProposalsService,
     private readonly cls: ClsService<AppClsStore>,
@@ -152,7 +150,9 @@ export class ProductionInvoicesService {
       },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true } },
+        items: {
+          include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+        },
       },
     });
     const withCode = await this.prisma.productionInvoice.update({
@@ -160,7 +160,9 @@ export class ProductionInvoicesService {
       data: { code: `PI-${created.id}` },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true } },
+        items: {
+          include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+        },
       },
     });
     return this.toResponseDto(withCode);
@@ -214,7 +216,9 @@ export class ProductionInvoicesService {
       data: { deadline: dto.deadline ? new Date(dto.deadline) : undefined },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true } },
+        items: {
+          include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+        },
       },
     });
     return this.toResponseDto(updated);
@@ -429,10 +433,9 @@ export class ProductionInvoicesService {
   }
 
   /**
-   * Sếp duyệt cuối - SKU bắt đầu sản xuất; tạo/tái dùng PlanForm origin=PRODUCTION_CONFIRM
-   * cho SKU này; PI tự chuyển PRODUCING khi mọi item đã duyệt. Mirror approveItemByBoss() mock.
-   * Ném ConflictException NGAY (không ghi gì) nếu sản phẩm chưa có BomRevision ACTIVE - xem
-   * ProductionOrdersService.assertActiveBomRevisionExists().
+   * Sếp duyệt cuối - SKU bắt đầu sản xuất; PI tự chuyển PRODUCING khi mọi item đã duyệt. Mirror
+   * approveItemByBoss() mock. Ném ConflictException NGAY (không ghi gì) nếu sản phẩm chưa có
+   * BomRevision ACTIVE - xem ProductionOrdersService.assertActiveBomRevisionExists().
    */
   async approveItem(
     piId: string,
@@ -459,15 +462,6 @@ export class ProductionInvoicesService {
       include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
     });
     await this.auditItemApprovalTransition(item, updated);
-
-    if (pi.salesOrderId) {
-      await this.skusService.ensureProductionConfirmPlanForm(
-        pi.salesOrderId,
-        item.mfgProductId,
-        pi.id,
-        actorUserId,
-      );
-    }
 
     // Phase 7: tạo lệnh sản xuất ngay khi Sếp duyệt - BOM đã được xác nhận tồn tại ở trên nên
     // gần như chắc chắn thành công (chỉ fail nếu có race hiếm - BOM bị deactivate đúng khoảnh
@@ -613,16 +607,6 @@ export class ProductionInvoicesService {
     }
 
     for (const item of pi.items) {
-      // Đọc PO từ chính SKU, KHÔNG từ pi.salesOrderId (luôn null với PI gộp) - đọc nhầm chỗ sẽ
-      // âm thầm bỏ qua bước tạo PlanForm và làm hỏng "Lệnh kiểm tra vật tư".
-      if (item.salesOrderId) {
-        await this.skusService.ensureProductionConfirmPlanForm(
-          item.salesOrderId,
-          item.mfgProductId,
-          pi.id,
-          actorUserId,
-        );
-      }
       try {
         await this.productionOrdersService.createFromApproval(
           item.id,
@@ -701,10 +685,7 @@ export class ProductionInvoicesService {
   }
 
   /** PI "nhà" để trả SKU về sau khi huỷ đợt gộp: PI thường của đúng đơn hàng đó, chưa có thì tạo. */
-  private async resolveHomePi(
-    tx: PrismaTx,
-    salesOrderId: bigint | null,
-  ): Promise<bigint> {
+  private async resolveHomePi(tx: PrismaTx, salesOrderId: bigint | null): Promise<bigint> {
     if (salesOrderId !== null) {
       const existing = await tx.productionInvoice.findFirst({
         where: { salesOrderId, isMerged: false },
@@ -911,7 +892,9 @@ export class ProductionInvoicesService {
       where: { id: bigId },
       include: {
         salesOrder: true,
-        items: { include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true } },
+        items: {
+          include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+        },
       },
     });
     if (!pi) {
