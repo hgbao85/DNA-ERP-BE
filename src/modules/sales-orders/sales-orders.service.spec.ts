@@ -20,7 +20,7 @@ describe('SalesOrdersService', () => {
       findUnique: jest.Mock;
       findMany: jest.Mock;
     };
-    productionInvoice: { create: jest.Mock; update: jest.Mock; count: jest.Mock };
+    productionInvoice: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock };
     $queryRaw: jest.Mock;
   };
 
@@ -63,7 +63,7 @@ describe('SalesOrdersService', () => {
         findUnique: jest.fn(),
         findMany: jest.fn(),
       },
-      productionInvoice: { create: jest.fn(), update: jest.fn(), count: jest.fn() },
+      productionInvoice: { create: jest.fn(), update: jest.fn(), findMany: jest.fn() },
       $queryRaw: jest.fn(),
     };
     service = new SalesOrdersService(prisma as unknown as PrismaServiceType);
@@ -75,7 +75,7 @@ describe('SalesOrdersService', () => {
       prisma.mfgProduct.findUnique.mockResolvedValue(product);
       prisma.salesOrder.create.mockResolvedValue(orderWithItems({ code: 'PO-TMP-x' }));
       prisma.salesOrder.update.mockResolvedValue(orderWithItems({ code: 'PO-10' }));
-      prisma.productionInvoice.count.mockResolvedValue(0);
+      prisma.productionInvoice.findMany.mockResolvedValue([]);
       prisma.productionInvoice.create.mockResolvedValue({ id: 50n });
 
       const result = await service.create({

@@ -90,7 +90,9 @@ describe('ProductionInvoicesService', () => {
         update: jest.fn(),
         findUnique: jest.fn(),
         findFirst: jest.fn(),
-        findMany: jest.fn(),
+        // Mặc định rỗng cho nextProductionInvoiceCode() (đọc MAX mã hiện có) - hầu hết test không
+        // quan tâm đúng mã sinh ra, chỉ cần không throw; test nào cần mã cụ thể tự override.
+        findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn(),
         delete: jest.fn(),
       },
