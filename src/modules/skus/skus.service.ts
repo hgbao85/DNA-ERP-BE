@@ -438,7 +438,11 @@ export class SkusService {
 
       const { count } = await tx.planForm.updateMany({
         where: { id: pf.id, status: PlanFormStatus.WAITING_BOSS_APPROVAL },
-        data: { status: PlanFormStatus.APPROVED, bossApproveIdempotencyKey: idempotencyKey },
+        data: {
+          status: PlanFormStatus.APPROVED,
+          bossApproveIdempotencyKey: idempotencyKey,
+          bossRejectReason: null,
+        },
       });
       if (count === 0) {
         throw new ConflictException(
@@ -452,19 +456,21 @@ export class SkusService {
     return this.toResponseDtoWithQuota(updated);
   }
 
-  async rejectByBoss(id: string): Promise<SkuResponseDto> {
+  async rejectByBoss(id: string, reason?: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertStatus(pf, PlanFormStatus.WAITING_BOSS_APPROVAL);
-    return this.rewindToDetailReview(pf.id);
+    return this.rewindToDetailReview(pf.id, reason);
   }
 
   /**
    * Rewind về IN_PROGRESS, xoá SẠCH quyết định duyệt lẫn 2 mốc forwarded (không đụng dữ liệu
    * định mức đã nhập - BomRevision DRAFT vẫn giữ nguyên nội dung) - KHSX phải duyệt + forward lại
    * CẢ 2 nhánh nhưng account chuyên trách không phải nhập lại gì, mirror đúng
-   * rejectToDetailReview() trong mock.
+   * rejectToDetailReview() trong mock. `reason` (nếu Sếp có nhập) lưu vào
+   * PlanForm.bossRejectReason - khác lý do KHSX từ chối từng nhánh (ManhReview/DetailReview.reason,
+   * đã bị xoá ở trên) nên phải giữ riêng ở tầng PlanForm.
    */
-  private async rewindToDetailReview(id: bigint): Promise<SkuResponseDto> {
+  private async rewindToDetailReview(id: bigint, reason?: string): Promise<SkuResponseDto> {
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.planFormManhReview.deleteMany({ where: { planFormId: id } });
       await tx.planFormDetailReview.deleteMany({ where: { planFormId: id } });
@@ -474,6 +480,7 @@ export class SkusService {
           status: PlanFormStatus.IN_PROGRESS,
           manhForwardedAt: null,
           detailForwardedAt: null,
+          bossRejectReason: reason ?? null,
         },
         include: PLAN_FORM_INCLUDE,
       });
@@ -746,8 +753,6 @@ export class SkusService {
       pieceId: bigint;
       segmentSpecId: bigint;
       qtyPerPiece: number;
-      needsHan: boolean;
-      needsSon: boolean;
       note: string | null;
     }[] = [];
     const pieceMaterialRows: {
@@ -775,8 +780,6 @@ export class SkusService {
           pieceId,
           segmentSpecId: spec.id,
           qtyPerPiece: seg.qtyPerPiece,
-          needsHan: seg.needsHan ?? true,
-          needsSon: seg.needsSon ?? true,
           note: seg.note ?? null,
         });
       }
@@ -1099,8 +1102,6 @@ export class SkusService {
             materialUnit: sg.segmentSpec.material.unit,
             cutLengthMm: sg.segmentSpec.cutLengthMm,
             qtyPerPiece: sg.qtyPerPiece,
-            needsHan: sg.needsHan,
-            needsSon: sg.needsSon,
             note: sg.note,
           })),
           wire: lineItems
@@ -1250,6 +1251,7 @@ export class SkusService {
       detailQuota: quota.detailQuota,
       manhForwardedAt: pf.manhForwardedAt,
       detailForwardedAt: pf.detailForwardedAt,
+      bossRejectReason: pf.bossRejectReason,
       createdById: pf.createdById,
       createdAt: pf.createdAt,
       updatedAt: pf.updatedAt,

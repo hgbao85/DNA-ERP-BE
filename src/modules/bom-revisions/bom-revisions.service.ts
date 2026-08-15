@@ -338,8 +338,6 @@ export class BomRevisionsService {
         pieceId: pieceBigId,
         segmentSpecId: segmentSpecBigId,
         qtyPerPiece: dto.qtyPerPiece,
-        needsHan: dto.needsHan,
-        needsSon: dto.needsSon,
         note: dto.note,
       },
       include: { piece: true, segmentSpec: { include: { material: true } } },
@@ -370,8 +368,6 @@ export class BomRevisionsService {
       where: { id: row.id },
       data: {
         qtyPerPiece: dto.qtyPerPiece,
-        needsHan: dto.needsHan,
-        needsSon: dto.needsSon,
         note: dto.note,
       },
       include: { piece: true, segmentSpec: { include: { material: true } } },
@@ -830,8 +826,6 @@ export class BomRevisionsService {
       segmentSpecId: row.segmentSpecId.toString(),
       segmentSpecLabel: `${row.segmentSpec.material.code} @ ${row.segmentSpec.cutLengthMm}mm`,
       qtyPerPiece: row.qtyPerPiece,
-      needsHan: row.needsHan,
-      needsSon: row.needsSon,
       note: row.note,
     });
   }

@@ -676,8 +676,6 @@ model PieceBom {
   pieceId       BigInt
   segmentSpecId BigInt
   qtyPerPiece   Int
-  needsHan      Boolean @default(false)
-  needsSon      Boolean @default(false)
   /// Ghi chú riêng cho dòng loại sắt này (vd "mạ kẽm", "cắt vát 45°") - KHSX xem trực tiếp ở
   /// cột Loại sắt khi duyệt định mức mảnh.
   note          String?
@@ -944,6 +942,11 @@ model PlanForm {
   /// 409 do status không còn WAITING_BOSS_APPROVAL. Không tái sử dụng giữa 2 PlanForm khác
   /// nhau (unique) - trùng key ở đây luôn là lỗi client, không phải replay hợp lệ.
   bossApproveIdempotencyKey String?        @unique
+  /// Lý do Sếp từ chối ở cổng duyệt cuối - null = chưa từng bị Sếp từ chối (hoặc lần từ chối gần
+  /// nhất đã được xoá vì đã duyệt xong sau đó, xem SkusService.approve). Khác PlanFormManhReview/
+  /// PlanFormDetailReview.reason (lý do KHSX từ chối từng nhánh) - 2 bảng đó bị xoá sạch khi Sếp
+  /// từ chối (rewindToDetailReview) nên không còn chỗ giữ lý do ở tầng Sếp, phải có field riêng.
+  bossRejectReason          String?
   createdById               String
   createdAt                 DateTime       @default(now())
   updatedAt                 DateTime       @updatedAt

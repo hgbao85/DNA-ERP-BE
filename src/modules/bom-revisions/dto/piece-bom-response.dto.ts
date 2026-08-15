@@ -10,8 +10,6 @@ export class PieceBomResponseDto {
   @Expose() @ApiProperty() segmentSpecId!: string;
   @Expose() @ApiProperty() segmentSpecLabel!: string;
   @Expose() @ApiProperty() qtyPerPiece!: number;
-  @Expose() @ApiProperty() needsHan!: boolean;
-  @Expose() @ApiProperty() needsSon!: boolean;
   @Expose() @ApiProperty({ nullable: true }) note!: string | null;
 
   constructor(partial: Partial<PieceBomResponseDto>) {

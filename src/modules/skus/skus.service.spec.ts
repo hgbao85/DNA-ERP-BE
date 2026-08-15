@@ -63,6 +63,7 @@ describe('SkusService', () => {
     note: null,
     origin: null,
     bossApproveIdempotencyKey: null,
+    bossRejectReason: null,
     manhForwardedAt: null,
     detailForwardedAt: null,
     createdById: 'user-1',
@@ -225,8 +226,6 @@ describe('SkusService', () => {
             pieceId: 20n,
             segmentSpecId: 40n,
             qtyPerPiece: 4,
-            needsHan: true,
-            needsSon: true,
             note: null,
           },
         ],
@@ -778,6 +777,7 @@ describe('SkusService', () => {
             status: 'IN_PROGRESS',
             manhForwardedAt: null,
             detailForwardedAt: null,
+            bossRejectReason: null,
           },
         }),
       );
@@ -789,6 +789,28 @@ describe('SkusService', () => {
       });
       // rewindToDetailReview không đụng BomRevision - dữ liệu định mức giữ nguyên.
       expect(bomRevisionsService.activateInTransaction).not.toHaveBeenCalled();
+    });
+
+    it('stores the boss rejection reason on the plan form when provided', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({
+          status: 'WAITING_BOSS_APPROVAL',
+          manhForwardedAt: new Date(),
+          detailForwardedAt: new Date(),
+        }),
+      );
+      prisma.planForm.update.mockResolvedValue(
+        planForm({ status: 'IN_PROGRESS', bossRejectReason: 'Sai quy cách sơn' }),
+      );
+
+      const result = await service.rejectByBoss('5', 'Sai quy cách sơn');
+
+      expect(result.bossRejectReason).toBe('Sai quy cách sơn');
+      expect(prisma.planForm.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ bossRejectReason: 'Sai quy cách sơn' }) as unknown,
+        }),
+      );
     });
   });
 

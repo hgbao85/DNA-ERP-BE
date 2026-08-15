@@ -20,6 +20,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { CreateSkuDto } from './dto/create-sku.dto';
+import { RejectBossDto } from './dto/reject-boss.dto';
 import { ReviewQuotaDto } from './dto/review-quota.dto';
 import { UpdateQuotaDto } from './dto/update-quota.dto';
 import { SkusService } from './skus.service';
@@ -118,7 +119,7 @@ export class SkusController {
   @Post(':id/reject-boss')
   @RequirePermissions(APPROVE)
   @RequireRole(BUSINESS_ROLES.BOSS)
-  rejectByBoss(@Param('id') id: string) {
-    return this.skusService.rejectByBoss(id);
+  rejectByBoss(@Param('id') id: string, @Body() dto: RejectBossDto) {
+    return this.skusService.rejectByBoss(id, dto.reason);
   }
 }

@@ -21,6 +21,8 @@ export class SkuResponseDto {
   /** KHSX đã chốt xong nhánh mảnh/chi tiết chưa - null = chưa. 2 nhánh độc lập, xem PlanForm.status. */
   @Expose() @ApiPropertyOptional({ nullable: true }) manhForwardedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) detailForwardedAt!: Date | null;
+  /** Lý do Sếp từ chối ở lần gần nhất - null nếu chưa từng bị từ chối hoặc đã duyệt xong sau đó. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) bossRejectReason!: string | null;
   @Expose() @ApiProperty() createdById!: string;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;

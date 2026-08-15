@@ -2,7 +2,6 @@ import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
-  IsBoolean,
   IsIn,
   IsInt,
   IsNumber,
@@ -34,16 +33,6 @@ export class QuotaSegmentDto {
   @IsInt()
   @Min(1)
   qtyPerPiece!: number;
-
-  @ApiPropertyOptional({ default: true })
-  @IsOptional()
-  @IsBoolean()
-  needsHan?: boolean;
-
-  @ApiPropertyOptional({ default: true })
-  @IsOptional()
-  @IsBoolean()
-  needsSon?: boolean;
 
   @ApiPropertyOptional({ description: 'Ghi chú riêng cho đoạn sắt này (vd "mạ kẽm")' })
   @IsOptional()
@@ -94,7 +83,10 @@ export class QuotaPieceDto {
   @Type(() => QuotaSegmentDto)
   segments!: QuotaSegmentDto[];
 
-  @ApiPropertyOptional({ type: [QuotaPieceMaterialLineDto], description: 'Dây/Đinh/Tán rút/Nút nhựa của mảnh này' })
+  @ApiPropertyOptional({
+    type: [QuotaPieceMaterialLineDto],
+    description: 'Dây/Đinh/Tán rút/Nút nhựa của mảnh này',
+  })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
@@ -149,7 +141,10 @@ export class UpdateQuotaDto {
   @Type(() => QuotaPieceDto)
   pieces?: QuotaPieceDto[];
 
-  @ApiPropertyOptional({ type: [QuotaDetailLineDto], description: 'Dùng cho detail-quota (Sơn/Phụ kiện/Bao bì)' })
+  @ApiPropertyOptional({
+    type: [QuotaDetailLineDto],
+    description: 'Dùng cho detail-quota (Sơn/Phụ kiện/Bao bì)',
+  })
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
