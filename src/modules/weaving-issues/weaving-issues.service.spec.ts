@@ -28,7 +28,9 @@ describe('WeavingIssuesService', () => {
   const order = { id: 1n, poNumber: 'PO-1', bomRevisionId: 5n, quantity: 10 };
   const piece = { id: 20n, code: 'MANH-DAN', name: 'Mảnh Đan', isWoven: true };
   const weavingPoint = { id: 40n, code: 'DIEM-A', fullName: 'Điểm đan A', isActive: true };
-  const bomPieceRow = { id: 1n, bomRevisionId: 5n, pieceId: 20n, qtyPerUnit: 4 }; // plannedQty = 4*10 = 40
+  // isWoven ở đây là SNAPSHOT trên BomPiece (theo đúng bomRevisionId), không phải piece.isWoven
+  // (global) - xem findBomPieceOrThrow/getIssuePlan.
+  const bomPieceRow = { id: 1n, bomRevisionId: 5n, pieceId: 20n, qtyPerUnit: 4, isWoven: true }; // plannedQty = 4*10 = 40
 
   const issueRow = {
     id: 100n,
@@ -158,8 +160,8 @@ describe('WeavingIssuesService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('ném BadRequestException khi mảnh không thuộc công đoạn Đan (isWoven=false)', async () => {
-      prisma.piece.findUnique.mockResolvedValue({ ...piece, isWoven: false });
+    it('ném BadRequestException khi mảnh không thuộc công đoạn Đan (isWoven=false trên BomPiece của revision này)', async () => {
+      prisma.bomPiece.findUnique.mockResolvedValue({ ...bomPieceRow, isWoven: false });
       await expect(
         service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
       ).rejects.toThrow(BadRequestException);
@@ -321,10 +323,8 @@ describe('WeavingIssuesService', () => {
   });
 
   describe('getIssuePlan', () => {
-    it('loại bỏ mảnh không thuộc công đoạn Đan (isWoven=false)', async () => {
-      prisma.bomPiece.findMany.mockResolvedValue([
-        { ...bomPieceRow, piece: { ...piece, isWoven: false } },
-      ]);
+    it('loại bỏ mảnh không thuộc công đoạn Đan (isWoven=false trên snapshot BomPiece)', async () => {
+      prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, isWoven: false, piece }]);
 
       const result = await service.getIssuePlan('1');
       expect(result).toHaveLength(0);

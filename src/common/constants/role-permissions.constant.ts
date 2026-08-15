@@ -283,6 +283,17 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PRODUCTION_ORDER,
       actions: [PermissionAction.VIEW],
     },
+    // Vá lỗ quyền phát hiện qua browser thật 2026-08-14: InboundWarehouseApp.tsx cho đúng
+    // scope 'vat-tu-tp' tab "Quản lý điểm đan" (QuanLyDiemDanPage -> WeavingPointsPage,
+    // readOnly=false) để thủ kho vật tư-TP tự thêm/sửa/xoá điểm đan gia công ngoài - nhưng
+    // WAREHOUSE_STAFF chưa từng có WEAVING_POINT nên GET /weaving-points 403 ngay từ bước
+    // load trang ("Missing required permission(s): WEAVING_POINT:VIEW"). 'ALL' (không chỉ
+    // VIEW) vì trang có đủ nút Thêm/Sửa/Xoá, không phải chỉ xem như PRODUCTION_PLANNER/
+    // PRODUCTION_MANAGER (2 role đó chỉ đọc weaving-points để dựng execution stage).
+    {
+      module: PERMISSION_MODULES.WEAVING_POINT,
+      actions: 'ALL',
+    },
   ],
   // 2 account chuyên trách nhập định mức SKU (Sắt = định mức mảnh; Phụ kiện/Bao bì = định mức
   // chi tiết, gồm cả Sơn) - chỉ UPDATE (nhập liệu qua manh-quota/detail-quota), không APPROVE

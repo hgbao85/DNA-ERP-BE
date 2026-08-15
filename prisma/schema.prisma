@@ -626,10 +626,16 @@ model BomRevision {
 
 /// SL mảnh/SKU theo revision.
 model BomPiece {
-  id            BigInt @id @default(autoincrement())
+  id            BigInt  @id @default(autoincrement())
   bomRevisionId BigInt
   pieceId       BigInt
   qtyPerUnit    Int
+  /// Snapshot "mảnh có đan" (đủ Dây+Đinh+Nút nhựa) TẠI THỜI ĐIỂM revision này được lưu - xem
+  /// SkusService.replacePieces. KHÔNG đọc piece.isWoven (global, dùng chung tên piece giữa các
+  /// revision) để tránh 1 SKU khác sửa lại định mức cùng tên mảnh làm rớt/hiện nhầm mảnh của
+  /// production order đang chạy dở (xem trao đổi nghiệp vụ) - mỗi order tự đứng độc lập theo
+  /// đúng snapshot của bomRevisionId nó gắn.
+  isWoven Boolean @default(false)
 
   bomRevision BomRevision @relation(fields: [bomRevisionId], references: [id])
   piece       Piece       @relation(fields: [pieceId], references: [id])

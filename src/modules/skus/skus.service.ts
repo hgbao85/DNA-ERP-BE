@@ -738,6 +738,7 @@ export class SkusService {
       bomRevisionId,
       pieceId: pieceIdOf(p.name),
       qtyPerUnit: p.qtyPerUnit,
+      isWoven: this.isPieceWoven(p),
     }));
     if (bomPieceRows.length) {
       await tx.bomPiece.createMany({ data: bomPieceRows });
@@ -805,6 +806,46 @@ export class SkusService {
     if (pieceMaterialRows.length) {
       await tx.pieceMaterialItem.createMany({ data: pieceMaterialRows });
     }
+
+    await this.syncIsWoven(tx, pieces, pieceIdOf);
+  }
+
+  /** Mảnh "có đan" = có đủ cả 3 nhóm Dây + Đinh + Nút nhựa trong materialLines (RIVET/Tán rút
+   *  không tính - xem trao đổi nghiệp vụ). Nguồn sự thật CHÍNH là snapshot `BomPiece.isWoven`
+   *  (ghi theo đúng bomRevisionId ở bomPieceRows trên) - weaving-issues module đọc từ đó, không
+   *  đọc field này. */
+  private isPieceWoven(p: QuotaPieceDto): boolean {
+    const requiredGroups: QuotaPieceMaterialLineDto['group'][] = ['WIRE', 'NAIL', 'PLASTIC_BUTTON'];
+    const groups = new Set((p.materialLines ?? []).map((l) => l.group));
+    return requiredGroups.every((g) => groups.has(g));
+  }
+
+  /** Piece.isWoven là master data dùng chung giữa các revision (KHÔNG dùng để quyết định hiển
+   *  thị xuất/nhập đan - xem BomPiece.isWoven) nhưng vẫn đồng bộ lại mỗi lần replacePieces để
+   *  không lệch với snapshot mới nhất, phòng khi có consumer khác đọc field này (vd module
+   *  products cũ). Chỉ update piece thực sự đổi giá trị để không làm nhiễu AuditLog (Piece nằm
+   *  trong AUDITED_MODELS). */
+  private async syncIsWoven(
+    tx: PrismaTx,
+    pieces: QuotaPieceDto[],
+    pieceIdOf: (name: string) => bigint,
+  ): Promise<void> {
+    const desiredById = new Map<bigint, boolean>();
+    for (const p of pieces) {
+      desiredById.set(pieceIdOf(p.name), this.isPieceWoven(p));
+    }
+    if (!desiredById.size) return;
+
+    const current = await tx.piece.findMany({
+      where: { id: { in: [...desiredById.keys()] } },
+      select: { id: true, isWoven: true },
+    });
+    const toUpdate = current.filter((p) => desiredById.get(p.id) !== p.isWoven);
+    await Promise.all(
+      toUpdate.map((p) =>
+        tx.piece.update({ where: { id: p.id }, data: { isWoven: desiredById.get(p.id)! } }),
+      ),
+    );
   }
 
   /**

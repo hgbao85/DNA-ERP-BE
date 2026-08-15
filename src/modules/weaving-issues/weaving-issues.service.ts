@@ -73,12 +73,7 @@ export class WeavingIssuesService {
     const pieceBigId = parseBigIntId(dto.pieceId);
     const weavingPointBigId = parseBigIntId(dto.weavingPointId);
 
-    const piece = await this.findPieceOrThrow(pieceBigId);
-    if (!piece.isWoven) {
-      throw new BadRequestException(
-        `Mảnh ${dto.pieceId} không thuộc công đoạn Đan (isWoven=false) - không thể xuất đan mảnh này`,
-      );
-    }
+    await this.findPieceOrThrow(pieceBigId);
 
     const weavingPoint = await this.findWeavingPointOrThrow(weavingPointBigId);
     if (!weavingPoint.isActive) {
@@ -87,11 +82,18 @@ export class WeavingIssuesService {
       );
     }
 
-    const plannedQty = await this.resolvePlannedQty(
-      order.bomRevisionId,
-      pieceBigId,
-      order.quantity,
-    );
+    // isWoven đọc từ SNAPSHOT trên BomPiece của chính bomRevisionId order này (ghi lúc lưu định
+    // mức - xem SkusService.replacePieces), KHÔNG đọc piece.isWoven (global, dùng chung tên
+    // piece giữa các revision) - tránh 1 SKU khác sửa lại định mức cùng tên mảnh làm order đang
+    // xuất/nhập dở bỗng dưng bị coi là "không thuộc công đoạn Đan".
+    const bomPiece = await this.findBomPieceOrThrow(order.bomRevisionId, pieceBigId);
+    if (!bomPiece.isWoven) {
+      throw new BadRequestException(
+        `Mảnh ${dto.pieceId} không thuộc công đoạn Đan trong định mức của lệnh sản xuất này (isWoven=false) - không thể xuất đan mảnh này`,
+      );
+    }
+
+    const plannedQty = bomPiece.qtyPerUnit * order.quantity;
     const issuedSoFar = await this.sumIssuedForPiece(order.id, pieceBigId);
     const remaining = plannedQty - issuedSoFar;
     if (dto.qty > remaining) {
@@ -186,7 +188,7 @@ export class WeavingIssuesService {
       }),
     ]);
 
-    const wovenBomPieces = bomPieces.filter((bp) => bp.piece.isWoven);
+    const wovenBomPieces = bomPieces.filter((bp) => bp.isWoven);
 
     return wovenBomPieces.map((bp) => {
       const pieceKey = bp.pieceId.toString();
@@ -284,11 +286,10 @@ export class WeavingIssuesService {
     }
   }
 
-  private async resolvePlannedQty(
+  private async findBomPieceOrThrow(
     bomRevisionId: bigint,
     pieceId: bigint,
-    orderQuantity: number,
-  ): Promise<number> {
+  ): Promise<{ qtyPerUnit: number; isWoven: boolean }> {
     const bomPiece = await this.prisma.bomPiece.findUnique({
       where: { bomRevisionId_pieceId: { bomRevisionId, pieceId } },
     });
@@ -297,7 +298,7 @@ export class WeavingIssuesService {
         `Mảnh ${pieceId} không thuộc định mức (BOM) của lệnh sản xuất này`,
       );
     }
-    return bomPiece.qtyPerUnit * orderQuantity;
+    return bomPiece;
   }
 
   private async sumIssuedForPiece(productionOrderId: bigint, pieceId: bigint): Promise<number> {
