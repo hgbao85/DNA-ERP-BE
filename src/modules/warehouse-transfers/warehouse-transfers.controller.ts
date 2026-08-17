@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { CreatePieceWarehouseTransferDto } from './dto/create-piece-warehouse-transfer.dto';
 import { CreateWarehouseTransferDto } from './dto/create-warehouse-transfer.dto';
 import { ListWarehouseTransfersQueryDto } from './dto/list-warehouse-transfers-query.dto';
 import { RejectWarehouseTransferDto } from './dto/reject-warehouse-transfer.dto';
@@ -26,6 +27,32 @@ export class WarehouseTransfersController {
     @CurrentUser('warehouseScope') warehouseScope: string | null,
   ) {
     return this.warehouseTransfersService.create(dto, warehouseScope);
+  }
+
+  // Piece-only (mảnh/vật tư thành phẩm) - tách khỏi create() (vật tư tiêu hao), mục 7.5.
+  @Post('piece-transfer')
+  @RequirePermissions(CREATE)
+  createPieceTransfer(
+    @Body() dto: CreatePieceWarehouseTransferDto,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.warehouseTransfersService.createPieceTransfer(dto, warehouseScope);
+  }
+
+  // Đặt TRƯỚC @Get(':id') - "piece-transfer-plan" phải khớp route cố định này, không rơi vào :id.
+  @Get('piece-transfer-plan')
+  @RequirePermissions(VIEW)
+  getPieceTransferPlan(@Query('productionOrderIds') productionOrderIds?: string) {
+    if (!productionOrderIds) {
+      throw new BadRequestException(
+        'Query productionOrderIds là bắt buộc (phân tách bởi dấu phẩy)',
+      );
+    }
+    const ids = productionOrderIds
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    return this.warehouseTransfersService.getPieceTransferPlan(ids);
   }
 
   @Get()

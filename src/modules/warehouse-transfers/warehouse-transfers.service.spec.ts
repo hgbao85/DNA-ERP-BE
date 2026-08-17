@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import {
+  MfgStage,
   ReservationStatus,
   StockLedgerRefType,
   TransferStatus,
@@ -25,6 +26,11 @@ describe('WarehouseTransfersService', () => {
       createMany: jest.Mock;
       updateMany: jest.Mock;
     };
+    warehouseTransferPieceItem: { findMany: jest.Mock };
+    productionOrder: { findMany: jest.Mock };
+    bomPiece: { findMany: jest.Mock };
+    productionBatch: { findMany: jest.Mock };
+    steelIssue: { findMany: jest.Mock };
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
@@ -57,6 +63,7 @@ describe('WarehouseTransfersService', () => {
         note: null,
       },
     ],
+    pieceItems: [],
     ...overrides,
   });
 
@@ -75,6 +82,11 @@ describe('WarehouseTransfersService', () => {
         createMany: jest.fn(),
         updateMany: jest.fn(),
       },
+      warehouseTransferPieceItem: { findMany: jest.fn().mockResolvedValue([]) },
+      productionOrder: { findMany: jest.fn().mockResolvedValue([]) },
+      bomPiece: { findMany: jest.fn().mockResolvedValue([]) },
+      productionBatch: { findMany: jest.fn().mockResolvedValue([]) },
+      steelIssue: { findMany: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn().mockResolvedValue([]),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
@@ -252,6 +264,214 @@ describe('WarehouseTransfersService', () => {
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
       expect(prisma.warehouseTransferReservation.updateMany).toHaveBeenCalled();
+    });
+
+    it('posts a ledger entry per piece item (pieceId leg, no materialId)', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(
+        transferRow({
+          items: [],
+          pieceItems: [
+            {
+              id: 700n,
+              productionOrderId: 900n,
+              pieceId: 30n,
+              quantity: 12,
+              note: null,
+              productionOrder: { poNumber: 'PO-001' },
+              piece: { code: 'M-01', name: 'Manh 01' },
+            },
+          ],
+        }),
+      );
+      stockLedgerService.postEntry.mockResolvedValue({ id: '999' });
+      prisma.warehouseTransfer.update.mockResolvedValue(
+        transferRow({ status: TransferStatus.CONFIRMED }),
+      );
+
+      await service.confirm('50', 'user-1', 'vat-tu-tp');
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fromWarehouseId: 1n,
+          toWarehouseId: 2n,
+          pieceId: 30n,
+          qty: 12,
+          refType: StockLedgerRefType.WAREHOUSE_TRANSFER,
+          refId: '50',
+          idempotencyKey: 'warehouse-transfer:50:piece-item:700',
+        }),
+      );
+    });
+  });
+
+  describe('getPieceTransferPlan', () => {
+    const order = {
+      id: 900n,
+      poNumber: 'PO-001',
+      bomRevisionId: 80n,
+      quantity: 100,
+      mfgProduct: { name: 'San pham A' },
+    };
+    const manhPiece = { pieceId: 30n, piece: { code: 'M-01', name: 'Manh 01' } };
+    const vatTuPiece = { pieceId: 31n, piece: { code: 'V-01', name: 'Vat tu 01' } };
+
+    it('sums ProductionBatch QC_DONE at the final stage (SON when needsSon) for needsHan=true pieces', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([order]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { ...manhPiece, bomRevisionId: 80n, needsHan: true, needsSon: true },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { productionOrderId: 900n, pieceId: 30n, stage: MfgStage.SON, reportedQty: 20 },
+        { productionOrderId: 900n, pieceId: 30n, stage: MfgStage.SON, reportedQty: 5 },
+        // Bỏ qua - không phải mốc cuối (mảnh cần cả Hàn lẫn Sơn thì mốc cuối là SON, không phải HAN).
+        { productionOrderId: 900n, pieceId: 30n, stage: MfgStage.HAN, reportedQty: 100 },
+      ]);
+
+      const result = await service.getPieceTransferPlan(['900']);
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          label: 'MANH',
+          readyQty: 25,
+          transferredQty: 0,
+          suggestedQty: 25,
+        }),
+      ]);
+    });
+
+    it('sums SteelIssue QC_PASSED bar count (actualBarCount - failedQty) for needsHan=false pieces', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([order]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { ...vatTuPiece, bomRevisionId: 80n, needsHan: false, needsSon: false },
+      ]);
+      prisma.steelIssue.findMany.mockResolvedValue([
+        {
+          productionOrderId: 900n,
+          pieceId: 31n,
+          barCount: 50,
+          actualBarCount: 48,
+          qcReviews: [{ failedQty: 3 }],
+        },
+      ]);
+
+      const result = await service.getPieceTransferPlan(['900']);
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          label: 'VAT_TU_THANH_PHAM',
+          readyQty: 45, // 48 - 3
+          suggestedQty: 45,
+        }),
+      ]);
+    });
+
+    it('subtracts pieces already in a PENDING or CONFIRMED transfer, not just CONFIRMED', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([order]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { ...manhPiece, bomRevisionId: 80n, needsHan: true, needsSon: false },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { productionOrderId: 900n, pieceId: 30n, stage: MfgStage.HAN, reportedQty: 20 },
+      ]);
+      prisma.warehouseTransferPieceItem.findMany.mockResolvedValue([
+        { productionOrderId: 900n, pieceId: 30n, quantity: 6 },
+      ]);
+
+      const result = await service.getPieceTransferPlan(['900']);
+
+      expect(result).toEqual([
+        expect.objectContaining({ readyQty: 20, transferredQty: 6, suggestedQty: 14 }),
+      ]);
+      expect(prisma.warehouseTransferPieceItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          where: expect.objectContaining({
+            transfer: { status: { in: [TransferStatus.PENDING, TransferStatus.CONFIRMED] } },
+          }),
+        }),
+      );
+    });
+
+    it('skips the invalid needsHan=false/needsSon=true combination', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([order]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { ...manhPiece, bomRevisionId: 80n, needsHan: false, needsSon: true },
+      ]);
+
+      const result = await service.getPieceTransferPlan(['900']);
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('createPieceTransfer', () => {
+    const pieceDto = {
+      fromWarehouseId: '1',
+      toWarehouseId: '2',
+      pieceItems: [{ productionOrderId: '900', pieceId: '30', quantity: 50 }],
+    };
+
+    beforeEach(() => {
+      prisma.productionOrder.findMany.mockResolvedValue([
+        {
+          id: 900n,
+          poNumber: 'PO-001',
+          bomRevisionId: 80n,
+          quantity: 100,
+          mfgProduct: { name: 'San pham A' },
+        },
+      ]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        {
+          bomRevisionId: 80n,
+          pieceId: 30n,
+          needsHan: true,
+          needsSon: false,
+          piece: { code: 'M-01', name: 'Manh 01' },
+        },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { productionOrderId: 900n, pieceId: 30n, stage: MfgStage.HAN, reportedQty: 20 },
+      ]);
+    });
+
+    it('rejects when the caller is scoped to a different warehouse than fromWarehouseId', async () => {
+      await expect(service.createPieceTransfer(pieceDto, 'vat-tu-tp')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('rejects a route not in TRANSFER_ROUTES', async () => {
+      await expect(
+        service.createPieceTransfer(
+          { ...pieceDto, fromWarehouseId: '1', toWarehouseId: '3' },
+          null,
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('clamps requested quantity down to the piece transfer plan suggestedQty (20 ready, 50 requested)', async () => {
+      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
+
+      await service.createPieceTransfer(pieceDto, 'phoi-son-han');
+
+      expect(prisma.warehouseTransfer.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          data: expect.objectContaining({
+            pieceItems: { create: [expect.objectContaining({ quantity: 20 })] },
+          }),
+        }),
+      );
+    });
+
+    it('rejects with 400 when nothing is ready to transfer', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([]);
+
+      await expect(service.createPieceTransfer(pieceDto, null)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
     });
   });
 

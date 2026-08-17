@@ -14,15 +14,28 @@ describe('ProductionBatchesService', () => {
       create: jest.Mock;
     };
     productionOrder: { findUnique: jest.Mock };
-    bomPiece: { findUnique: jest.Mock };
+    bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
   };
   let stockLedgerService: { postEntry: jest.Mock };
 
-  const order = { id: 1n, poNumber: 'PO-1', bomRevisionId: 5n, quantity: 10 };
+  const order = {
+    id: 1n,
+    poNumber: 'PO-1',
+    bomRevisionId: 5n,
+    quantity: 10,
+    mfgProduct: { name: 'SP-1' },
+  };
   const piece = { id: 40n, code: 'MANH-TUA', name: 'Mảnh tựa' };
-  const bomPieceRow = { id: 1n, bomRevisionId: 5n, pieceId: 40n, qtyPerUnit: 2 };
+  const bomPieceRow = {
+    id: 1n,
+    bomRevisionId: 5n,
+    pieceId: 40n,
+    qtyPerUnit: 2,
+    needsHan: true,
+    needsSon: true,
+  };
   const steelWarehouse = { id: 90n, code: 'phoi-son-han' };
   const productionWarehouse = { id: 91n, code: 'PRODUCTION' };
 
@@ -50,7 +63,10 @@ describe('ProductionBatchesService', () => {
         create: jest.fn(),
       },
       productionOrder: { findUnique: jest.fn().mockResolvedValue(order) },
-      bomPiece: { findUnique: jest.fn().mockResolvedValue(bomPieceRow) },
+      bomPiece: {
+        findUnique: jest.fn().mockResolvedValue(bomPieceRow),
+        findMany: jest.fn().mockResolvedValue([{ ...bomPieceRow, piece }]),
+      },
       // Mặc định rỗng - đa số test case không quan tâm tới nhánh trừ tồn đoạn (mục "Trừ tồn đoạn
       // sắt (SEGMENT_CONSUME)" bên dưới mới override).
       pieceBom: { findMany: jest.fn().mockResolvedValue([]) },
@@ -134,6 +150,20 @@ describe('ProductionBatchesService', () => {
       prisma.bomPiece.findUnique.mockResolvedValue(null);
       await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(NotFoundException);
     });
+
+    it('ném BadRequestException khi mảnh không cần qua đúng stage (needsHan=false báo HAN)', async () => {
+      prisma.bomPiece.findUnique.mockResolvedValue({ ...bomPieceRow, needsHan: false });
+      await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(BadRequestException);
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('ném BadRequestException khi mảnh không cần qua đúng stage (needsSon=false báo SON)', async () => {
+      prisma.bomPiece.findUnique.mockResolvedValue({ ...bomPieceRow, needsSon: false });
+      await expect(
+        service.create('1', { ...dto, stage: MfgStage.SON }, 'user-son', null),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('create - trừ tồn đoạn sắt (SEGMENT_CONSUME)', () => {
@@ -199,5 +229,31 @@ describe('ProductionBatchesService', () => {
     // đã chứng minh điều này gián tiếp (không có nhánh throw/guard nào giữa lúc query PieceBom
     // và lúc gọi postEntry). Số dư âm thật sự chỉ quan sát được ở StockQuant sau khi trigger DB
     // materialize - thuộc phạm vi test tích hợp/E2E, không phải unit test service này.
+  });
+
+  describe('getBatchPlan', () => {
+    it('lọc bomPiece theo needsHan=true khi stage=HAN', async () => {
+      await service.getBatchPlan('1', MfgStage.HAN);
+
+      expect(prisma.bomPiece.findMany).toHaveBeenCalledWith({
+        where: { bomRevisionId: order.bomRevisionId, needsHan: true },
+        include: { piece: true },
+      });
+    });
+
+    it('lọc bomPiece theo needsSon=true khi stage=SON', async () => {
+      await service.getBatchPlan('1', MfgStage.SON);
+
+      expect(prisma.bomPiece.findMany).toHaveBeenCalledWith({
+        where: { bomRevisionId: order.bomRevisionId, needsSon: true },
+        include: { piece: true },
+      });
+    });
+
+    it('trả về đúng mảnh khi có needsHan=true (không bị lọc mất)', async () => {
+      const result = await service.getBatchPlan('1', MfgStage.HAN);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].pieceId).toBe('40');
+    });
   });
 });

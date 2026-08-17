@@ -88,7 +88,7 @@ export class ProductionBatchesService {
 
     const order = await this.findOrderOrThrow(productionOrderId);
     const pieceBigId = parseBigIntId(dto.pieceId);
-    await this.assertPieceInBom(order.bomRevisionId, pieceBigId);
+    await this.assertPieceInBom(order.bomRevisionId, pieceBigId, dto.stage);
 
     const created = await this.prisma.productionBatch.create({
       data: {
@@ -200,10 +200,10 @@ export class ProductionBatchesService {
   /**
    * "Còn phải báo bao nhiêu" theo mảnh - cho HAN_STAFF/SON_STAFF tự tra pieceId thật để báo sản
    * lượng, không cần BOM_REVISION:VIEW (chỉ cần biết trước productionOrderId, xem
-   * PRODUCTION_ORDER:VIEW mới cấp cho 2 role này). BomPiece không filter theo stage (không có cột
-   * này - 1 mảnh vật lý đi qua cả Hàn rồi Sơn rồi Đan) nên trả TOÀN BỘ mảnh của BOM; awaitingQcQty/
-   * passedQty mới tính riêng theo đúng stage từ ProductionBatch, cùng idiom
-   * MaterialIssuesService.getIssuePlan().
+   * PRODUCTION_ORDER:VIEW mới cấp cho 2 role này). Chỉ trả mảnh có needsHan/needsSon=true tương
+   * ứng đúng stage (BomPiece.needsHan/needsSon) - mảnh không cần qua công đoạn này thì không hiện
+   * ra để báo nhầm; awaitingQcQty/passedQty tính riêng theo đúng stage từ ProductionBatch, cùng
+   * idiom MaterialIssuesService.getIssuePlan().
    */
   async getBatchPlan(
     productionOrderId: string,
@@ -214,7 +214,7 @@ export class ProductionBatchesService {
 
     const [bomPieces, batches] = await Promise.all([
       this.prisma.bomPiece.findMany({
-        where: { bomRevisionId: order.bomRevisionId },
+        where: { bomRevisionId: order.bomRevisionId, ...this.stageNeedsFilter(stage) },
         include: { piece: true },
       }),
       this.prisma.productionBatch.findMany({
@@ -273,13 +273,29 @@ export class ProductionBatchesService {
     }
   }
 
-  private async assertPieceInBom(bomRevisionId: bigint, pieceId: bigint): Promise<void> {
+  /** { needsHan: true } hoặc { needsSon: true } tùy stage - dùng chung cho getBatchPlan()
+   *  (findMany where) và assertPieceInBom() (đối chiếu bomPiece đã fetch). */
+  private stageNeedsFilter(stage: MfgStage): Prisma.BomPieceWhereInput {
+    return stage === MfgStage.HAN ? { needsHan: true } : { needsSon: true };
+  }
+
+  private async assertPieceInBom(
+    bomRevisionId: bigint,
+    pieceId: bigint,
+    stage: MfgStage,
+  ): Promise<void> {
     const bomPiece = await this.prisma.bomPiece.findUnique({
       where: { bomRevisionId_pieceId: { bomRevisionId, pieceId } },
     });
     if (!bomPiece) {
       throw new NotFoundException(
         `Mảnh ${pieceId} không thuộc định mức (BOM) của lệnh sản xuất này`,
+      );
+    }
+    const needsStage = stage === MfgStage.HAN ? bomPiece.needsHan : bomPiece.needsSon;
+    if (!needsStage) {
+      throw new BadRequestException(
+        `Mảnh ${pieceId} không cần qua công đoạn ${stage} theo định mức (BOM) này`,
       );
     }
   }

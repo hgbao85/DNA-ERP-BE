@@ -547,17 +547,18 @@ model Piece {
   isWoven      Boolean  @default(false)
   weavingPrice Decimal? @db.Decimal(14, 2)
 
-  mfgProduct           MfgProduct            @relation(fields: [mfgProductId], references: [id])
-  bomPieces            BomPiece[]
-  pieceBoms            PieceBom[]
-  pieceMaterialItems   PieceMaterialItem[]
-  stockLedgerEntries   StockLedger[]
-  stockQuants          StockQuant[]
-  transferCheckResults TransferCheckResult[]
-  steelIssues          SteelIssue[]
-  weavingIssues        WeavingIssue[]
-  weavingReceipts      WeavingReceipt[]
-  productionBatches    ProductionBatch[]
+  mfgProduct                  MfgProduct                   @relation(fields: [mfgProductId], references: [id])
+  bomPieces                   BomPiece[]
+  pieceBoms                   PieceBom[]
+  pieceMaterialItems          PieceMaterialItem[]
+  stockLedgerEntries          StockLedger[]
+  stockQuants                 StockQuant[]
+  transferCheckResults        TransferCheckResult[]
+  steelIssues                 SteelIssue[]
+  weavingIssues               WeavingIssue[]
+  weavingReceipts             WeavingReceipt[]
+  productionBatches           ProductionBatch[]
+  warehouseTransferPieceItems WarehouseTransferPieceItem[]
 
   @@unique([mfgProductId, code])
   @@index([mfgProductId])
@@ -646,11 +647,11 @@ model BomPiece {
   /// revision) để tránh 1 SKU khác sửa lại định mức cùng tên mảnh làm rớt/hiện nhầm mảnh của
   /// production order đang chạy dở (xem trao đổi nghiệp vụ) - mỗi order tự đứng độc lập theo
   /// đúng snapshot của bomRevisionId nó gắn.
-  isWoven Boolean @default(false)
+  isWoven       Boolean @default(false)
   /// Mảnh này có cần routing sang Hàn/Sơn không - áp dụng cho CẢ mảnh (không phải từng thanh
   /// sắt riêng lẻ, xem PieceBom cũ trước khi dời field này lên đây).
-  needsHan Boolean @default(false)
-  needsSon Boolean @default(false)
+  needsHan      Boolean @default(false)
+  needsSon      Boolean @default(false)
 
   bomRevision BomRevision @relation(fields: [bomRevisionId], references: [id])
   piece       Piece       @relation(fields: [pieceId], references: [id])
@@ -900,10 +901,10 @@ model SalesOrder {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  customer           Customer            @relation(fields: [customerId], references: [id])
-  items              SalesOrderItem[]
-  planForms          PlanForm[]
-  productionInvoices ProductionInvoice[]
+  customer               Customer                @relation(fields: [customerId], references: [id])
+  items                  SalesOrderItem[]
+  planForms              PlanForm[]
+  productionInvoices     ProductionInvoice[]
   /// SKU của đơn này nằm rải ở các PI (kể cả PI gộp chung với đơn khác) - xem
   /// ProductionInvoiceItem.salesOrderId.
   productionInvoiceItems ProductionInvoiceItem[]
@@ -1247,16 +1248,17 @@ model ProductionOrder {
   releasedAt              DateTime?             @default(now())
   createdAt               DateTime              @default(now())
 
-  productionInvoiceItem      ProductionInvoiceItem       @relation(fields: [productionInvoiceItemId], references: [id])
-  mfgProduct                 MfgProduct                  @relation(fields: [mfgProductId], references: [id])
-  bomRevision                BomRevision                 @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
-  cuttingProposals           CuttingProposal[]
-  steelIssues                SteelIssue[]
-  weavingIssues              WeavingIssue[]
-  weavingReceipts            WeavingReceipt[]
-  materialIssues             MaterialIssue[]
-  productionBatches          ProductionBatch[]
-  materialInspectionRequests MaterialInspectionRequest[]
+  productionInvoiceItem       ProductionInvoiceItem        @relation(fields: [productionInvoiceItemId], references: [id])
+  mfgProduct                  MfgProduct                   @relation(fields: [mfgProductId], references: [id])
+  bomRevision                 BomRevision                  @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
+  cuttingProposals            CuttingProposal[]
+  steelIssues                 SteelIssue[]
+  weavingIssues               WeavingIssue[]
+  weavingReceipts             WeavingReceipt[]
+  materialIssues              MaterialIssue[]
+  productionBatches           ProductionBatch[]
+  materialInspectionRequests  MaterialInspectionRequest[]
+  warehouseTransferPieceItems WarehouseTransferPieceItem[]
 
   @@index([mfgProductId])
   @@map("production_orders")
@@ -1273,28 +1275,28 @@ model ProductionOrder {
 ///   cho cả nhóm, KHÔNG phải mỗi SKU một bản: gộp chỉ tiết kiệm được sắt khi các đoạn của nhiều
 ///   SKU nằm trên CÙNG một cây - tách ra tính riêng là mất sạch phần lợi.
 model CuttingProposal {
-  id                  BigInt              @id @default(autoincrement())
+  id                  BigInt                @id @default(autoincrement())
   productionOrderId   BigInt?
   productionInvoiceId BigInt?
-  status            CuttingProposalStatus @default(CALCULATING)
+  status              CuttingProposalStatus @default(CALCULATING)
   /// Client-supplied UUID cho lần gọi thủ công (nút "Tính lại") - null cho lần tự động đầu
   /// tiên (không cần, vì unique(productionInvoiceItemId) trên ProductionOrder đã chặn tạo
   /// trùng PO, nên chỉ có đúng 1 lần tự động/PO).
-  idempotencyKey    String?               @unique
+  idempotencyKey      String?               @unique
   /// Toàn bộ input đã gửi solver (num_sets, bom[], stock_lengths, trim_start...) - audit/replay.
-  requestParams     Json?
+  requestParams       Json?
   /// Nguyên văn response solver (purchase_plan[], summary...) khi thành công.
-  rawResponse       Json?
-  totalBarsAll      Int?
-  totalWasteMm      Int?
-  wastePercentage   Decimal?              @db.Decimal(6, 3)
+  rawResponse         Json?
+  totalBarsAll        Int?
+  totalWasteMm        Int?
+  wastePercentage     Decimal?              @db.Decimal(6, 3)
   /// Lý do lỗi/timeout/không khả thi khi status=FAILED (bao gồm failing_materials nếu có).
-  errorMessage      String?
-  requestedAt       DateTime              @default(now())
-  requestedById     String?
-  completedAt       DateTime?
-  approvedAt        DateTime?
-  approvedById      String?
+  errorMessage        String?
+  requestedAt         DateTime              @default(now())
+  requestedById       String?
+  completedAt         DateTime?
+  approvedAt          DateTime?
+  approvedById        String?
 
   productionOrder   ProductionOrder?      @relation(fields: [productionOrderId], references: [id])
   productionInvoice ProductionInvoice?    @relation(fields: [productionInvoiceId], references: [id])
@@ -1675,6 +1677,7 @@ model WarehouseTransfer {
   toWarehouse   Warehouse                      @relation("WarehouseTransferToWarehouse", fields: [toWarehouseId], references: [id])
   planForm      PlanForm?                      @relation(fields: [planFormId], references: [id])
   items         WarehouseTransferItem[]
+  pieceItems    WarehouseTransferPieceItem[]
   reservations  WarehouseTransferReservation[]
 
   @@index([status])
@@ -1701,6 +1704,32 @@ model WarehouseTransferItem {
 
   @@index([transferId])
   @@map("warehouse_transfer_items")
+}
+
+/// Dòng mảnh trong 1 phiếu chuyển kho piece-only (docs/review-2026-08-17-sanxuat-stage-v16-va-
+/// chuyen-kho-manh.md mục 7) - tách riêng khỏi WarehouseTransferItem (vật tư tiêu hao), theo
+/// quyết định "không gộp" mục 7.5: 1 WarehouseTransfer chỉ chứa items HOẶC pieceItems, không cả
+/// hai. Append-only, không update-in-place - cùng idiom TransferCheckResult, để "đã chuyển"
+/// luôn tính được bằng SUM thay vì phải theo dõi state riêng.
+model WarehouseTransferPieceItem {
+  id                BigInt  @id @default(autoincrement())
+  transferId        BigInt
+  /// Đơn vị chuyển là (productionOrder, piece), không phải PI - xem mục 6 tài liệu trên (1 PI
+  /// có thể gồm nhiều PO tiến độ khác nhau).
+  productionOrderId BigInt
+  pieceId           BigInt
+  /// Đã clamp theo GetPieceTransferPlan (đã qua KCS trừ đã chuyển trước đó) tại thời điểm tạo
+  /// phiếu - piece không có StockQuant làm nguồn khả dụng như vật tư nên clamp theo kế hoạch.
+  quantity          Int
+  note              String?
+
+  transfer        WarehouseTransfer @relation(fields: [transferId], references: [id])
+  productionOrder ProductionOrder   @relation(fields: [productionOrderId], references: [id])
+  piece           Piece             @relation(fields: [pieceId], references: [id])
+
+  @@index([transferId])
+  @@index([productionOrderId, pieceId])
+  @@map("warehouse_transfer_piece_items")
 }
 
 /// Giữ chỗ tồn kho khi phiếu đang PENDING, chặn 2 phiếu cùng lúc "double-book" cùng 1 phần
