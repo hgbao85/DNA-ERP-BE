@@ -14,15 +14,15 @@ describe('ProductionBatchesService', () => {
       create: jest.Mock;
     };
     productionOrder: { findUnique: jest.Mock };
-    bomPart: { findUnique: jest.Mock };
-    partBom: { findMany: jest.Mock };
+    bomPiece: { findUnique: jest.Mock };
+    pieceBom: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
   };
   let stockLedgerService: { postEntry: jest.Mock };
 
   const order = { id: 1n, poNumber: 'PO-1', bomRevisionId: 5n, quantity: 10 };
-  const part = { id: 40n, code: 'KHUNG-TUA', name: 'Khung tựa' };
-  const bomPartRow = { id: 1n, bomRevisionId: 5n, partId: 40n, qtyPerUnit: 2 };
+  const piece = { id: 40n, code: 'MANH-TUA', name: 'Mảnh tựa' };
+  const bomPieceRow = { id: 1n, bomRevisionId: 5n, pieceId: 40n, qtyPerUnit: 2 };
   const steelWarehouse = { id: 90n, code: 'phoi-son-han' };
   const productionWarehouse = { id: 91n, code: 'PRODUCTION' };
 
@@ -30,7 +30,7 @@ describe('ProductionBatchesService', () => {
     id: 700n,
     stage: MfgStage.HAN,
     productionOrderId: 1n,
-    partId: 40n,
+    pieceId: 40n,
     reportedQty: 20,
     status: 'AWAITING_QC',
     idempotencyKey: null,
@@ -38,7 +38,7 @@ describe('ProductionBatchesService', () => {
     reportedById: 'user-han',
     reworkOfId: null,
     productionOrder: order,
-    part,
+    piece,
   };
 
   beforeEach(() => {
@@ -50,10 +50,10 @@ describe('ProductionBatchesService', () => {
         create: jest.fn(),
       },
       productionOrder: { findUnique: jest.fn().mockResolvedValue(order) },
-      bomPart: { findUnique: jest.fn().mockResolvedValue(bomPartRow) },
+      bomPiece: { findUnique: jest.fn().mockResolvedValue(bomPieceRow) },
       // Mặc định rỗng - đa số test case không quan tâm tới nhánh trừ tồn đoạn (mục "Trừ tồn đoạn
       // sắt (SEGMENT_CONSUME)" bên dưới mới override).
-      partBom: { findMany: jest.fn().mockResolvedValue([]) },
+      pieceBom: { findMany: jest.fn().mockResolvedValue([]) },
       warehouse: {
         findUniqueOrThrow: jest
           .fn()
@@ -70,7 +70,7 @@ describe('ProductionBatchesService', () => {
   });
 
   describe('create', () => {
-    const dto = { stage: MfgStage.HAN, partId: '40', reportedQty: 20 };
+    const dto = { stage: MfgStage.HAN, pieceId: '40', reportedQty: 20 };
 
     it('happy path - mfgRole null (quản lý) tạo lô mới', async () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
@@ -83,7 +83,7 @@ describe('ProductionBatchesService', () => {
           data: expect.objectContaining({
             stage: MfgStage.HAN,
             productionOrderId: 1n,
-            partId: 40n,
+            pieceId: 40n,
             reportedQty: 20,
           }),
         }),
@@ -93,8 +93,8 @@ describe('ProductionBatchesService', () => {
 
     it('idempotency short-circuit - trả về lô cũ, không tạo mới, nhưng vẫn gọi lại postSegmentConsumeEntries (retry-safety)', async () => {
       prisma.productionBatch.findUnique.mockResolvedValue(batchRow);
-      prisma.partBom.findMany.mockResolvedValue([
-        { id: 1n, bomRevisionId: 5n, partId: 40n, segmentSpecId: 60n, qtyPerPart: 3 },
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
       ]);
 
       const result = await service.create('1', dto, 'user-han', null, 'idem-key-1');
@@ -130,32 +130,32 @@ describe('ProductionBatchesService', () => {
       await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(NotFoundException);
     });
 
-    it('ném NotFoundException khi chi tiết không thuộc BOM của lệnh sản xuất này', async () => {
-      prisma.bomPart.findUnique.mockResolvedValue(null);
+    it('ném NotFoundException khi mảnh không thuộc BOM của lệnh sản xuất này', async () => {
+      prisma.bomPiece.findUnique.mockResolvedValue(null);
       await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(NotFoundException);
     });
   });
 
   describe('create - trừ tồn đoạn sắt (SEGMENT_CONSUME)', () => {
-    const dto = { stage: MfgStage.HAN, partId: '40', reportedQty: 20 };
+    const dto = { stage: MfgStage.HAN, pieceId: '40', reportedQty: 20 };
 
-    it('không có PartBom nào cho part - không gọi postEntry, không query warehouse', async () => {
+    it('không có PieceBom nào cho mảnh - không gọi postEntry, không query warehouse', async () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
-      prisma.partBom.findMany.mockResolvedValue([]);
+      prisma.pieceBom.findMany.mockResolvedValue([]);
 
       await service.create('1', dto, 'user-han', null);
 
-      expect(prisma.partBom.findMany).toHaveBeenCalledWith({
-        where: { bomRevisionId: order.bomRevisionId, partId: 40n },
+      expect(prisma.pieceBom.findMany).toHaveBeenCalledWith({
+        where: { bomRevisionId: order.bomRevisionId, pieceId: 40n },
       });
       expect(prisma.warehouse.findUniqueOrThrow).not.toHaveBeenCalled();
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
 
-    it('1 PartBom - ghi đúng 1 dòng StockLedger, qty = qtyPerPart × reportedQty', async () => {
+    it('1 PieceBom - ghi đúng 1 dòng StockLedger, qty = qtyPerPiece × reportedQty', async () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
-      prisma.partBom.findMany.mockResolvedValue([
-        { id: 1n, bomRevisionId: 5n, partId: 40n, segmentSpecId: 60n, qtyPerPart: 3 },
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
       ]);
 
       await service.create('1', dto, 'user-han', null);
@@ -173,11 +173,11 @@ describe('ProductionBatchesService', () => {
       });
     });
 
-    it('nhiều PartBom (1 Part ghép từ nhiều cỡ đoạn) - ghi đủ N dòng StockLedger, mỗi dòng đúng segmentSpecId/qty riêng', async () => {
+    it('nhiều PieceBom (1 mảnh ghép từ nhiều cỡ đoạn) - ghi đủ N dòng StockLedger, mỗi dòng đúng segmentSpecId/qty riêng', async () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
-      prisma.partBom.findMany.mockResolvedValue([
-        { id: 1n, bomRevisionId: 5n, partId: 40n, segmentSpecId: 60n, qtyPerPart: 3 },
-        { id: 2n, bomRevisionId: 5n, partId: 40n, segmentSpecId: 61n, qtyPerPart: 1 },
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
+        { id: 2n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 61n, qtyPerPiece: 1 },
       ]);
 
       await service.create('1', dto, 'user-han', null);
@@ -195,8 +195,8 @@ describe('ProductionBatchesService', () => {
 
     // Quyết định nghiệp vụ #6 (docs/quy-doi-doan-phoi.md): tồn đoạn được phép âm khi báo sản
     // lượng vượt tồn thực tế. Không có test riêng cho "tồn không đủ" ở tầng unit vì service
-    // KHÔNG gọi StockQuant để kiểm tra số dư trước khi postEntry() - test '1 PartBom' ở trên
-    // đã chứng minh điều này gián tiếp (không có nhánh throw/guard nào giữa lúc query PartBom
+    // KHÔNG gọi StockQuant để kiểm tra số dư trước khi postEntry() - test '1 PieceBom' ở trên
+    // đã chứng minh điều này gián tiếp (không có nhánh throw/guard nào giữa lúc query PieceBom
     // và lúc gọi postEntry). Số dư âm thật sự chỉ quan sát được ở StockQuant sau khi trigger DB
     // materialize - thuộc phạm vi test tích hợp/E2E, không phải unit test service này.
   });

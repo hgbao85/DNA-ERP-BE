@@ -8,9 +8,9 @@ export class ProductionBatchResponseDto {
   @Expose() @ApiProperty() productionOrderId!: string;
   @Expose() @ApiProperty() poNumber!: string;
   @Expose() @ApiProperty({ enum: MfgStage }) stage!: MfgStage;
-  @Expose() @ApiProperty() partId!: string;
-  @Expose() @ApiProperty() partCode!: string;
-  @Expose() @ApiProperty() partName!: string;
+  @Expose() @ApiProperty() pieceId!: string;
+  @Expose() @ApiProperty() pieceCode!: string;
+  @Expose() @ApiProperty() pieceName!: string;
   @Expose() @ApiProperty() reportedQty!: number;
   @Expose() @ApiProperty({ enum: ProductionBatchStatus }) status!: ProductionBatchStatus;
   @Expose() @ApiProperty() reportedAt!: Date;

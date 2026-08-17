@@ -371,7 +371,7 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     },
     // Vá lỗ quyền phát hiện lúc nối FE LenhSanXuatHan (M3, báo sản lượng): trước bản vá này
     // HAN_STAFF không có cách nào biết trước productionOrderId nào để gọi GET .../production-
-    // batch-plan (partId thật) - cùng tiền lệ đã cấp cho WAREHOUSE_STAFF (role-permissions này,
+    // batch-plan (pieceId thật) - cùng tiền lệ đã cấp cho WAREHOUSE_STAFF (role-permissions này,
     // "Vá lỗ quyền có sẵn từ M2 Phân bổ/nhận hàng đan"). Chỉ VIEW - HAN_STAFF không tự tạo/sửa
     // ProductionOrder.
     {

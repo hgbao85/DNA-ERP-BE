@@ -11,7 +11,7 @@ export class CreateProductionBatchDto {
 
   @ApiProperty()
   @IsString()
-  partId!: string;
+  pieceId!: string;
 
   @ApiProperty()
   @IsInt()

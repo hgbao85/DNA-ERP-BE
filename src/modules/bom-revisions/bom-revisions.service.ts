@@ -189,7 +189,13 @@ export class BomRevisionsService {
     }
 
     const row = await this.prisma.bomPiece.create({
-      data: { bomRevisionId: revision.id, pieceId: pieceBigId, qtyPerUnit: dto.qtyPerUnit },
+      data: {
+        bomRevisionId: revision.id,
+        pieceId: pieceBigId,
+        qtyPerUnit: dto.qtyPerUnit,
+        needsHan: dto.needsHan,
+        needsSon: dto.needsSon,
+      },
       include: { piece: true },
     });
     return this.toBomPieceResponseDto(row);
@@ -216,7 +222,7 @@ export class BomRevisionsService {
 
     const updated = await this.prisma.bomPiece.update({
       where: { id: row.id },
-      data: { qtyPerUnit: dto.qtyPerUnit },
+      data: { qtyPerUnit: dto.qtyPerUnit, needsHan: dto.needsHan, needsSon: dto.needsSon },
       include: { piece: true },
     });
     return this.toBomPieceResponseDto(updated);
@@ -804,6 +810,8 @@ export class BomRevisionsService {
       pieceId: row.pieceId.toString(),
       pieceCode: row.piece.code,
       qtyPerUnit: row.qtyPerUnit,
+      needsHan: row.needsHan,
+      needsSon: row.needsSon,
     });
   }
 

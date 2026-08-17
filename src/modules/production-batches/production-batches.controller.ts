@@ -41,7 +41,7 @@ export class ProductionBatchesController {
     return this.productionBatchesService.findAllForOrder(id, query);
   }
 
-  /** Tổ Hàn/Sơn tự tra partId thật để báo sản lượng - xem ProductionBatchesService.getBatchPlan(). */
+  /** Tổ Hàn/Sơn tự tra pieceId thật để báo sản lượng - xem ProductionBatchesService.getBatchPlan(). */
   @Get('production-orders/:id/production-batch-plan')
   @RequirePermissions(VIEW)
   getBatchPlan(@Param('id') id: string, @Query() query: ProductionBatchPlanQueryDto) {

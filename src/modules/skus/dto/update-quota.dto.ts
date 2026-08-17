@@ -2,6 +2,7 @@ import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNumber,
@@ -17,6 +18,11 @@ import {
  *  nhóm cùng lúc trong 1 payload duy nhất - không còn suy nhóm từ route như DAY/DINH cũ. */
 export const PIECE_MATERIAL_LINE_GROUPS = ['WIRE', 'NAIL', 'RIVET', 'PLASTIC_BUTTON'] as const;
 export type PieceMaterialLineGroup = (typeof PIECE_MATERIAL_LINE_GROUPS)[number];
+
+/** 7 công đoạn phôi chi tiết có thể áp dụng cho 1 đoạn sắt - đa chọn (vd 1 thanh vừa tán vừa
+ *  dập), khớp enum ProcessStep trong schema.prisma. */
+export const PROCESS_STEPS = ['CAT', 'UON', 'DAP', 'DUC_LO', 'TAN', 'TOP_DAU', 'XE'] as const;
+export type ProcessStepValue = (typeof PROCESS_STEPS)[number];
 
 /** 1 đoạn sắt cấu thành 1 mảnh (nhóm SAT) - resolve-or-create SegmentSpec theo (materialId, cutLengthMm). */
 export class QuotaSegmentDto {
@@ -38,6 +44,16 @@ export class QuotaSegmentDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  @ApiPropertyOptional({
+    enum: PROCESS_STEPS,
+    isArray: true,
+    description: 'Công đoạn phôi chi tiết của đoạn sắt này (cắt/uốn/dập/đục lỗ/tán) - đa chọn',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsIn(PROCESS_STEPS, { each: true })
+  processSteps?: ProcessStepValue[];
 }
 
 /** 1 dòng vật tư Dây/Đinh/Tán rút/Nút nhựa cấu thành 1 mảnh - resolve-or-assign nhóm vật tư
@@ -76,6 +92,16 @@ export class QuotaPieceDto {
   @IsInt()
   @Min(1)
   qtyPerUnit!: number;
+
+  @ApiPropertyOptional({ default: true, description: 'Mảnh này có cần routing sang Hàn' })
+  @IsOptional()
+  @IsBoolean()
+  needsHan?: boolean;
+
+  @ApiPropertyOptional({ default: true, description: 'Mảnh này có cần routing sang Sơn' })
+  @IsOptional()
+  @IsBoolean()
+  needsSon?: boolean;
 
   @ApiProperty({ type: [QuotaSegmentDto] })
   @IsArray()

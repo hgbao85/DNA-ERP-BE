@@ -557,23 +557,26 @@ model Piece {
   steelIssues          SteelIssue[]
   weavingIssues        WeavingIssue[]
   weavingReceipts      WeavingReceipt[]
+  productionBatches    ProductionBatch[]
 
   @@unique([mfgProductId, code])
   @@index([mfgProductId])
   @@map("piece")
 }
 
-/// Chi tiết hàn — đơn vị báo sản lượng Hàn/Sơn, trục BOM thứ 2 tách khỏi Piece.
+/// KHÔNG còn dùng cho báo sản lượng Hàn/Sơn (đã dời sang Piece - xem ProductionBatch.piece) vì
+/// Hàn -> Sơn -> Đan đều làm việc theo mảnh (Piece), chỉ Phôi làm theo từng thanh sắt cấu thành
+/// mảnh. Giữ lại model + CRUD (bom-revisions.controller.ts) vì chưa có UI/luồng nào thật sự dùng
+/// tới (bomParts/partBoms luôn rỗng trong thực tế) - không phải đang được tham chiếu ở đâu khác.
 model Part {
   id           BigInt @id @default(autoincrement())
   mfgProductId BigInt
   code         String
   name         String
 
-  mfgProduct        MfgProduct        @relation(fields: [mfgProductId], references: [id])
-  bomParts          BomPart[]
-  partBoms          PartBom[]
-  productionBatches ProductionBatch[]
+  mfgProduct MfgProduct @relation(fields: [mfgProductId], references: [id])
+  bomParts   BomPart[]
+  partBoms   PartBom[]
 
   @@unique([mfgProductId, code])
   @@map("part")
@@ -644,6 +647,10 @@ model BomPiece {
   /// production order đang chạy dở (xem trao đổi nghiệp vụ) - mỗi order tự đứng độc lập theo
   /// đúng snapshot của bomRevisionId nó gắn.
   isWoven Boolean @default(false)
+  /// Mảnh này có cần routing sang Hàn/Sơn không - áp dụng cho CẢ mảnh (không phải từng thanh
+  /// sắt riêng lẻ, xem PieceBom cũ trước khi dời field này lên đây).
+  needsHan Boolean @default(false)
+  needsSon Boolean @default(false)
 
   bomRevision BomRevision @relation(fields: [bomRevisionId], references: [id])
   piece       Piece       @relation(fields: [pieceId], references: [id])
@@ -666,16 +673,33 @@ model BomPart {
   @@map("bom_part")
 }
 
+/// Công đoạn phôi chi tiết cho 1 đoạn sắt (PieceBom) - 1 thanh sắt có thể trải qua nhiều công
+/// đoạn cùng lúc (vd vừa tán vừa dập), nên lưu dạng mảng thay vì 1 giá trị đơn.
+enum ProcessStep {
+  CAT
+  UON
+  DAP
+  /// Đục lỗ
+  DUC_LO
+  TAN
+  /// Tóp đầu
+  TOP_DAU
+  /// Xẻ
+  XE
+}
+
 /// Đoạn cấu thành 1 mảnh. mfgProductId denormalized để FK ghép (bomRevisionId,
 /// mfgProductId) -> BomRevision(id, mfgProductId): tầng service khi insert phải set
 /// mfgProductId = piece.mfgProductId, DB sẽ tự chặn nếu revision đó thuộc product khác.
 model PieceBom {
-  id            BigInt  @id @default(autoincrement())
+  id            BigInt        @id @default(autoincrement())
   bomRevisionId BigInt
   mfgProductId  BigInt
   pieceId       BigInt
   segmentSpecId BigInt
   qtyPerPiece   Int
+  /// Công đoạn phôi chi tiết của thanh sắt này (cắt/uốn/dập/đục lỗ/tán) - đa chọn, có thể rỗng.
+  processSteps  ProcessStep[] @default([])
   /// Ghi chú riêng cho dòng loại sắt này (vd "mạ kẽm", "cắt vát 45°") - KHSX xem trực tiếp ở
   /// cột Loại sắt khi duyệt định mức mảnh.
   note          String?
@@ -2021,7 +2045,10 @@ model ProductionBatch {
   id                BigInt                @id @default(autoincrement())
   stage             MfgStage
   productionOrderId BigInt
-  partId            BigInt
+  /// Hàn/Sơn báo sản lượng theo MẢNH (Piece) - khớp Phôi (SteelIssue.pieceId) và Đan
+  /// (WeavingIssue/WeavingReceipt.pieceId), vì Hàn -> Sơn -> Đan đều làm việc theo mảnh. Trước
+  /// đây gắn Part (chi tiết) - đổi hẳn sang Piece, không phải thêm trục song song.
+  pieceId           BigInt
   /// Công nhân báo lúc tạo; QcReviewsService.reviewProductionBatch() ghi đè lại = phần ĐẠT
   /// (passed) sau khi KCS duyệt - đúng hành vi mock (b.qty = passed, "done chỉ tính phần đạt").
   reportedQty       Int
@@ -2038,13 +2065,13 @@ model ProductionBatch {
   reworkOfId        BigInt?
 
   productionOrder ProductionOrder   @relation(fields: [productionOrderId], references: [id])
-  part            Part              @relation(fields: [partId], references: [id])
+  piece           Piece             @relation(fields: [pieceId], references: [id])
   reportedBy      User              @relation("ProductionBatchReportedBy", fields: [reportedById], references: [id])
   reworkOf        ProductionBatch?  @relation("ProductionBatchRework", fields: [reworkOfId], references: [id])
   reworkBatches   ProductionBatch[] @relation("ProductionBatchRework")
   qcReviews       QcReview[]
 
-  @@index([productionOrderId, partId])
+  @@index([productionOrderId, pieceId])
   @@index([stage, status])
   @@map("production_batches")
 }

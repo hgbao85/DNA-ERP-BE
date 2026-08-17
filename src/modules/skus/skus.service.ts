@@ -15,6 +15,7 @@ import {
   MfgStage,
   PlanFormStatus,
   Prisma,
+  ProcessStep,
   ReviewDecision,
 } from '../../generated/prisma/client';
 import {
@@ -742,6 +743,8 @@ export class SkusService {
       pieceId: pieceIdOf(p.name),
       qtyPerUnit: p.qtyPerUnit,
       isWoven: this.isPieceWoven(p),
+      needsHan: p.needsHan ?? true,
+      needsSon: p.needsSon ?? true,
     }));
     if (bomPieceRows.length) {
       await tx.bomPiece.createMany({ data: bomPieceRows });
@@ -753,6 +756,7 @@ export class SkusService {
       pieceId: bigint;
       segmentSpecId: bigint;
       qtyPerPiece: number;
+      processSteps: ProcessStep[];
       note: string | null;
     }[] = [];
     const pieceMaterialRows: {
@@ -780,6 +784,7 @@ export class SkusService {
           pieceId,
           segmentSpecId: spec.id,
           qtyPerPiece: seg.qtyPerPiece,
+          processSteps: seg.processSteps ?? [],
           note: seg.note ?? null,
         });
       }
@@ -1092,6 +1097,8 @@ export class SkusService {
           pieceId: bp.pieceId.toString(),
           name: bp.piece.name,
           qtyPerUnit: bp.qtyPerUnit,
+          needsHan: bp.needsHan,
+          needsSon: bp.needsSon,
           steel: (pieceBomsByRevPiece.get(`${bp.bomRevisionId}:${bp.pieceId}`) ?? []).map((sg) => ({
             id: Number(sg.id),
             segmentSpecId: sg.segmentSpecId.toString(),
@@ -1102,6 +1109,7 @@ export class SkusService {
             materialUnit: sg.segmentSpec.material.unit,
             cutLengthMm: sg.segmentSpec.cutLengthMm,
             qtyPerPiece: sg.qtyPerPiece,
+            processSteps: sg.processSteps,
             note: sg.note,
           })),
           wire: lineItems

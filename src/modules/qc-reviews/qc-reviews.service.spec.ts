@@ -57,7 +57,7 @@ describe('QcReviewsService', () => {
     id: 700n,
     stage: 'HAN',
     productionOrderId: 1n,
-    partId: 40n,
+    pieceId: 40n,
     reportedQty: 20,
     status: ProductionBatchStatus.AWAITING_QC,
     reportedById: 'user-han',

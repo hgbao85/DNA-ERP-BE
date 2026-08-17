@@ -27,7 +27,7 @@ import { ProductionBatchResponseDto } from './dto/production-batch-response.dto'
 
 const PRODUCTION_BATCH_INCLUDE = {
   productionOrder: true,
-  part: true,
+  piece: true,
 } satisfies Prisma.ProductionBatchInclude;
 
 export type ProductionBatchRow = Prisma.ProductionBatchGetPayload<{
@@ -49,8 +49,8 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  * AWAITING_QC (khởi tạo) -> QC_DONE (do QcReviewsService cập nhật, không phải service này).
  *
  * Từ 2026-08-14 (xem docs/quy-doi-doan-phoi.md, quyết định nghiệp vụ #4): mỗi lần báo sản lượng
- * cũng tự động ghi StockLedger trừ tồn ĐOẠN sắt (segmentSpecId) theo PartBom.qtyPerPart của
- * đúng part vừa báo - refType SEGMENT_CONSUME (enum value có sẵn từ đầu, chưa từng được dùng).
+ * cũng tự động ghi StockLedger trừ tồn ĐOẠN sắt (segmentSpecId) theo PieceBom.qtyPerPiece của
+ * đúng mảnh vừa báo - refType SEGMENT_CONSUME (enum value có sẵn từ đầu, chưa từng được dùng).
  * Cố ý KHÔNG chặn khi tồn đoạn không đủ (StockQuant được phép âm) - cùng triết lý "không cap
  * theo BOM lúc báo" đã áp dụng cho reportedQty, tránh chặn oan công nhân vì thủ kho nhập tồn
  * trễ hơn thực tế cắt.
@@ -87,14 +87,14 @@ export class ProductionBatchesService {
     }
 
     const order = await this.findOrderOrThrow(productionOrderId);
-    const partBigId = parseBigIntId(dto.partId);
-    await this.assertPartInBom(order.bomRevisionId, partBigId);
+    const pieceBigId = parseBigIntId(dto.pieceId);
+    await this.assertPieceInBom(order.bomRevisionId, pieceBigId);
 
     const created = await this.prisma.productionBatch.create({
       data: {
         stage: dto.stage,
         productionOrderId: order.id,
-        partId: partBigId,
+        pieceId: pieceBigId,
         reportedQty: dto.reportedQty,
         reportedById,
         idempotencyKey,
@@ -110,35 +110,35 @@ export class ProductionBatchesService {
   }
 
   /**
-   * Trừ tồn ĐOẠN sắt (StockQuant.segmentSpecId) theo PartBom.qtyPerPart của part vừa báo sản
-   * lượng - 1 dòng StockLedger/segmentSpecId (1 Part có thể ghép từ nhiều cỡ đoạn khác nhau).
+   * Trừ tồn ĐOẠN sắt (StockQuant.segmentSpecId) theo PieceBom.qtyPerPiece của mảnh vừa báo sản
+   * lượng - 1 dòng StockLedger/segmentSpecId (1 mảnh có thể ghép từ nhiều cỡ đoạn khác nhau).
    * idempotencyKey theo (batchId, segmentSpecId) - khác 1 key duy nhất cho cả batch, vì mỗi batch
-   * có thể sinh N dòng ledger (N segmentSpecId của part đó), cần key riêng từng dòng để
+   * có thể sinh N dòng ledger (N segmentSpecId của mảnh đó), cần key riêng từng dòng để
    * postEntry() resolve-or-return đúng khi gọi lại 1 phần đã lỡ ghi. Gọi NGOÀI transaction tạo
    * production_batch, cùng idiom MaterialIssuesService.postLedgerEntry() - retry (cùng
    * Idempotency-Key header) sẽ tìm lại đúng batch rồi gọi lại hàm này, tự resolve-or-return theo
    * key riêng từng dòng.
    */
   private async postSegmentConsumeEntries(
-    batch: { id: bigint; partId: bigint; reportedQty: number; bomRevisionId: bigint },
+    batch: { id: bigint; pieceId: bigint; reportedQty: number; bomRevisionId: bigint },
     reportedById: string,
   ): Promise<void> {
-    const partBoms = await this.prisma.partBom.findMany({
-      where: { bomRevisionId: batch.bomRevisionId, partId: batch.partId },
+    const pieceBoms = await this.prisma.pieceBom.findMany({
+      where: { bomRevisionId: batch.bomRevisionId, pieceId: batch.pieceId },
     });
-    if (partBoms.length === 0) return;
+    if (pieceBoms.length === 0) return;
 
     const [fromWarehouse, toWarehouse] = await Promise.all([
       this.prisma.warehouse.findUniqueOrThrow({ where: { code: STEEL_WAREHOUSE_CODE } }),
       this.prisma.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
     ]);
 
-    for (const pb of partBoms) {
+    for (const pb of pieceBoms) {
       await this.stockLedgerService.postEntry({
         fromWarehouseId: fromWarehouse.id,
         toWarehouseId: toWarehouse.id,
         segmentSpecId: pb.segmentSpecId,
-        qty: pb.qtyPerPart * batch.reportedQty,
+        qty: pb.qtyPerPiece * batch.reportedQty,
         refType: StockLedgerRefType.SEGMENT_CONSUME,
         refId: batch.id.toString(),
         createdById: reportedById,
@@ -198,10 +198,10 @@ export class ProductionBatchesService {
   }
 
   /**
-   * "Còn phải báo bao nhiêu" theo part - cho HAN_STAFF/SON_STAFF tự tra partId thật để báo sản
+   * "Còn phải báo bao nhiêu" theo mảnh - cho HAN_STAFF/SON_STAFF tự tra pieceId thật để báo sản
    * lượng, không cần BOM_REVISION:VIEW (chỉ cần biết trước productionOrderId, xem
-   * PRODUCTION_ORDER:VIEW mới cấp cho 2 role này). BomPart không filter theo stage (không có cột
-   * này - 1 Part vật lý đi qua cả Hàn rồi Sơn) nên trả TOÀN BỘ part của BOM; awaitingQcQty/
+   * PRODUCTION_ORDER:VIEW mới cấp cho 2 role này). BomPiece không filter theo stage (không có cột
+   * này - 1 mảnh vật lý đi qua cả Hàn rồi Sơn rồi Đan) nên trả TOÀN BỘ mảnh của BOM; awaitingQcQty/
    * passedQty mới tính riêng theo đúng stage từ ProductionBatch, cùng idiom
    * MaterialIssuesService.getIssuePlan().
    */
@@ -212,34 +212,35 @@ export class ProductionBatchesService {
     this.assertConsumableStage(stage);
     const order = await this.findOrderWithProductOrThrow(productionOrderId);
 
-    const [bomParts, batches] = await Promise.all([
-      this.prisma.bomPart.findMany({
+    const [bomPieces, batches] = await Promise.all([
+      this.prisma.bomPiece.findMany({
         where: { bomRevisionId: order.bomRevisionId },
-        include: { part: true },
+        include: { piece: true },
       }),
       this.prisma.productionBatch.findMany({
         where: { productionOrderId: order.id, stage },
-        select: { partId: true, status: true, reportedQty: true },
+        select: { pieceId: true, status: true, reportedQty: true },
       }),
     ]);
 
-    const awaitingByPart = new Map<string, number>();
-    const passedByPart = new Map<string, number>();
+    const awaitingByPiece = new Map<string, number>();
+    const passedByPiece = new Map<string, number>();
     for (const b of batches) {
-      const key = b.partId.toString();
-      const target = b.status === ProductionBatchStatus.AWAITING_QC ? awaitingByPart : passedByPart;
+      const key = b.pieceId.toString();
+      const target =
+        b.status === ProductionBatchStatus.AWAITING_QC ? awaitingByPiece : passedByPiece;
       target.set(key, (target.get(key) ?? 0) + b.reportedQty);
     }
 
-    const items = bomParts.map((bp) => {
-      const key = bp.partId.toString();
+    const items = bomPieces.map((bp) => {
+      const key = bp.pieceId.toString();
       return new ProductionBatchPlanItemResponseDto({
-        partId: key,
-        partCode: bp.part.code,
-        partName: bp.part.name,
+        pieceId: key,
+        pieceCode: bp.piece.code,
+        pieceName: bp.piece.name,
         plannedQty: bp.qtyPerUnit * order.quantity,
-        awaitingQcQty: awaitingByPart.get(key) ?? 0,
-        passedQty: passedByPart.get(key) ?? 0,
+        awaitingQcQty: awaitingByPiece.get(key) ?? 0,
+        passedQty: passedByPiece.get(key) ?? 0,
       });
     });
 
@@ -272,13 +273,13 @@ export class ProductionBatchesService {
     }
   }
 
-  private async assertPartInBom(bomRevisionId: bigint, partId: bigint): Promise<void> {
-    const bomPart = await this.prisma.bomPart.findUnique({
-      where: { bomRevisionId_partId: { bomRevisionId, partId } },
+  private async assertPieceInBom(bomRevisionId: bigint, pieceId: bigint): Promise<void> {
+    const bomPiece = await this.prisma.bomPiece.findUnique({
+      where: { bomRevisionId_pieceId: { bomRevisionId, pieceId } },
     });
-    if (!bomPart) {
+    if (!bomPiece) {
       throw new NotFoundException(
-        `Chi tiết ${partId} không thuộc định mức (BOM) của lệnh sản xuất này`,
+        `Mảnh ${pieceId} không thuộc định mức (BOM) của lệnh sản xuất này`,
       );
     }
   }
@@ -324,9 +325,9 @@ export class ProductionBatchesService {
       productionOrderId: batch.productionOrderId.toString(),
       poNumber: batch.productionOrder.poNumber,
       stage: batch.stage,
-      partId: batch.partId.toString(),
-      partCode: batch.part.code,
-      partName: batch.part.name,
+      pieceId: batch.pieceId.toString(),
+      pieceCode: batch.piece.code,
+      pieceName: batch.piece.name,
       reportedQty: batch.reportedQty,
       status: batch.status,
       reportedAt: batch.reportedAt,

@@ -216,7 +216,16 @@ describe('SkusService', () => {
       expect(prisma.pieceBom.deleteMany).toHaveBeenCalledWith({ where: { bomRevisionId: 10n } });
       expect(prisma.bomPiece.deleteMany).toHaveBeenCalledWith({ where: { bomRevisionId: 10n } });
       expect(prisma.bomPiece.createMany).toHaveBeenCalledWith({
-        data: [{ bomRevisionId: 10n, pieceId: 20n, qtyPerUnit: 2, isWoven: false }],
+        data: [
+          {
+            bomRevisionId: 10n,
+            pieceId: 20n,
+            qtyPerUnit: 2,
+            isWoven: false,
+            needsHan: true,
+            needsSon: true,
+          },
+        ],
       });
       expect(prisma.pieceBom.createMany).toHaveBeenCalledWith({
         data: [
@@ -226,6 +235,7 @@ describe('SkusService', () => {
             pieceId: 20n,
             segmentSpecId: 40n,
             qtyPerPiece: 4,
+            processSteps: [],
             note: null,
           },
         ],
