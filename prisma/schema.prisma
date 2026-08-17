@@ -1767,6 +1767,9 @@ model WarehouseTransferReservation {
 enum SteelIssueStatus {
   ISSUED
   RECEIVED
+  /// Đã cắt (CAT) xong nhưng piece còn công đoạn khác (uốn/dập/...) trong processSteps chưa
+  /// đánh dấu xong - xem SteelIssue.completedSteps, SteelIssuesService.completeStep().
+  IN_PROCESS
   AWAITING_QC
   QC_PASSED
 }
@@ -1797,6 +1800,10 @@ model SteelIssue {
   /// actualBarCount bên dưới "null = đúng như xuất" nghĩa là mặc định = giá trị này.
   barCount          Int
   status            SteelIssueStatus @default(ISSUED)
+  /// Các công đoạn chi tiết (ProcessStep) đã đánh dấu xong của đợt này - luôn có CAT sau khi
+  /// completeCutting(). So với union PieceBom.processSteps của piece (+ CAT mặc định) để biết đã
+  /// đủ điều kiện chuyển AWAITING_QC chưa, xem SteelIssuesService.resolveRequiredSteps().
+  completedSteps    ProcessStep[]    @default([])
   /// Client-supplied key cho POST /production-orders/:id/steel-issues - resolve-or-return
   /// (cùng idiom CuttingProposal.idempotencyKey), chống tạo trùng đợt khi client gọi lại do
   /// timeout/mất mạng.

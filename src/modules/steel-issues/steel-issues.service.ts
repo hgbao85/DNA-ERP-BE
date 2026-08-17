@@ -6,13 +6,19 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CuttingProposalStatus, Prisma, SteelIssueStatus } from '../../generated/prisma/client';
+import {
+  CuttingProposalStatus,
+  Prisma,
+  ProcessStep,
+  SteelIssueStatus,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CompleteCuttingDto } from './dto/complete-cutting.dto';
+import { CompleteStepDto } from './dto/complete-step.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { CutBundleResponseDto, CutPatternSegmentResponseDto } from './dto/cut-bundle-response.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
@@ -79,7 +85,10 @@ export class SteelIssuesService {
         include: STEEL_ISSUE_INCLUDE,
       });
       if (existing) {
-        return this.toResponseDto(existing);
+        return this.toResponseDto(
+          existing,
+          await this.resolveRequiredSteps(existing.productionOrder.bomRevisionId, existing.pieceId),
+        );
       }
     }
 
@@ -110,7 +119,10 @@ export class SteelIssuesService {
       include: STEEL_ISSUE_INCLUDE,
     });
 
-    return this.toResponseDto(created);
+    return this.toResponseDto(
+      created,
+      await this.resolveRequiredSteps(order.bomRevisionId, pieceBigId),
+    );
   }
 
   /** Flat, KHÔNG cần productionOrderId - xem ListSteelIssuesQueryDto tại sao endpoint này tồn tại
@@ -129,7 +141,18 @@ export class SteelIssuesService {
       where,
       { issuedAt: 'desc' as const },
     );
-    return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };
+    const requiredStepsMap = await this.attachRequiredStepsMap(result.data);
+    return {
+      data: result.data.map((r) =>
+        this.toResponseDto(
+          r,
+          requiredStepsMap.get(`${r.productionOrder.bomRevisionId}:${r.pieceId}`) ?? [
+            ProcessStep.CAT,
+          ],
+        ),
+      ),
+      meta: result.meta,
+    };
   }
 
   async findAllForOrder(
@@ -147,11 +170,26 @@ export class SteelIssuesService {
       { productionOrderId: bigId },
       { issuedAt: 'desc' as const },
     );
-    return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };
+    const requiredStepsMap = await this.attachRequiredStepsMap(result.data);
+    return {
+      data: result.data.map((r) =>
+        this.toResponseDto(
+          r,
+          requiredStepsMap.get(`${r.productionOrder.bomRevisionId}:${r.pieceId}`) ?? [
+            ProcessStep.CAT,
+          ],
+        ),
+      ),
+      meta: result.meta,
+    };
   }
 
   async findOne(id: string): Promise<SteelIssueResponseDto> {
-    return this.toResponseDto(await this.findOneOrThrow(id));
+    const issue = await this.findOneOrThrow(id);
+    return this.toResponseDto(
+      issue,
+      await this.resolveRequiredSteps(issue.productionOrder.bomRevisionId, issue.pieceId),
+    );
   }
 
   async getBundles(id: string): Promise<CutBundleResponseDto[]> {
@@ -171,7 +209,10 @@ export class SteelIssuesService {
       data: { status: SteelIssueStatus.RECEIVED },
       include: STEEL_ISSUE_INCLUDE,
     });
-    return this.toResponseDto(updated);
+    return this.toResponseDto(
+      updated,
+      await this.resolveRequiredSteps(updated.productionOrder.bomRevisionId, updated.pieceId),
+    );
   }
 
   async completeCutting(id: string, dto: CompleteCuttingDto): Promise<SteelIssueResponseDto> {
@@ -184,6 +225,13 @@ export class SteelIssuesService {
     if (dto.bundles.length === 0) {
       throw new BadRequestException('Phải khai báo ít nhất 1 bundle đã cắt');
     }
+
+    const requiredSteps = await this.resolveRequiredSteps(
+      issue.productionOrder.bomRevisionId,
+      issue.pieceId,
+    );
+    const completedSteps: ProcessStep[] = [ProcessStep.CAT];
+    const done = requiredSteps.every((s) => completedSteps.includes(s));
 
     await this.prisma.$transaction(async (tx) => {
       for (const bundle of dto.bundles) {
@@ -207,14 +255,92 @@ export class SteelIssuesService {
       await tx.steelIssue.update({
         where: { id: issue.id },
         data: {
-          status: SteelIssueStatus.AWAITING_QC,
+          status: done ? SteelIssueStatus.AWAITING_QC : SteelIssueStatus.IN_PROCESS,
+          completedSteps,
           actualBarCount: dto.actualBarCount,
-          completedAt: new Date(),
+          completedAt: done ? new Date() : null,
         },
       });
     });
 
-    return this.toResponseDto(await this.findOneOrThrow(id));
+    const reloaded = await this.findOneOrThrow(id);
+    return this.toResponseDto(reloaded, requiredSteps);
+  }
+
+  /**
+   * Đánh dấu 1 công đoạn chi tiết (uốn/dập/...) xong sau khi đã cắt (IN_PROCESS) - chuyển
+   * AWAITING_QC ngay khi mọi requiredSteps đã có mặt trong completedSteps. Idempotent với step đã
+   * đánh dấu (double-click không lỗi).
+   */
+  async completeStep(id: string, dto: CompleteStepDto): Promise<SteelIssueResponseDto> {
+    const issue = await this.findOneOrThrow(id);
+    if (issue.status !== SteelIssueStatus.IN_PROCESS) {
+      throw new ConflictException(
+        `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ IN_PROCESS mới đánh dấu công đoạn được`,
+      );
+    }
+    const requiredSteps = await this.resolveRequiredSteps(
+      issue.productionOrder.bomRevisionId,
+      issue.pieceId,
+    );
+    if (!requiredSteps.includes(dto.step)) {
+      throw new BadRequestException(
+        `Công đoạn ${dto.step} không thuộc danh sách công đoạn đã chọn sẵn của mảnh này`,
+      );
+    }
+    if (issue.completedSteps.includes(dto.step)) {
+      return this.toResponseDto(issue, requiredSteps);
+    }
+
+    const completedSteps = [...issue.completedSteps, dto.step];
+    const done = requiredSteps.every((s) => completedSteps.includes(s));
+    const updated = await this.prisma.steelIssue.update({
+      where: { id: issue.id },
+      data: {
+        completedSteps,
+        status: done ? SteelIssueStatus.AWAITING_QC : SteelIssueStatus.IN_PROCESS,
+        completedAt: done ? new Date() : null,
+      },
+      include: STEEL_ISSUE_INCLUDE,
+    });
+    return this.toResponseDto(updated, requiredSteps);
+  }
+
+  /** Union processSteps của mọi PieceBom (bomRevisionId, pieceId) + CAT mặc định (công đoạn tối
+   *  thiểu bắt buộc - luôn xảy ra qua completeCutting). */
+  private async resolveRequiredSteps(
+    bomRevisionId: bigint,
+    pieceId: bigint,
+  ): Promise<ProcessStep[]> {
+    const rows = await this.prisma.pieceBom.findMany({
+      where: { bomRevisionId, pieceId },
+      select: { processSteps: true },
+    });
+    const set = new Set<ProcessStep>([ProcessStep.CAT]);
+    for (const row of rows) for (const step of row.processSteps) set.add(step);
+    return [...set];
+  }
+
+  /** Batch cho findAll/findAllForOrder - 1 query pieceBom cho cả tập bomRevisionId liên quan, gom
+   *  trong bộ nhớ (tránh N+1). Key = `${bomRevisionId}:${pieceId}`. */
+  private async attachRequiredStepsMap(
+    issues: SteelIssueRow[],
+  ): Promise<Map<string, ProcessStep[]>> {
+    const bomRevisionIds = [...new Set(issues.map((i) => i.productionOrder.bomRevisionId))];
+    const rows = await this.prisma.pieceBom.findMany({
+      where: { bomRevisionId: { in: bomRevisionIds } },
+      select: { bomRevisionId: true, pieceId: true, processSteps: true },
+    });
+    const byKey = new Map<string, Set<ProcessStep>>();
+    for (const row of rows) {
+      const key = `${row.bomRevisionId}:${row.pieceId}`;
+      const set = byKey.get(key) ?? new Set<ProcessStep>([ProcessStep.CAT]);
+      for (const step of row.processSteps) set.add(step);
+      byKey.set(key, set);
+    }
+    const result = new Map<string, ProcessStep[]>();
+    for (const [key, set] of byKey) result.set(key, [...set]);
+    return result;
   }
 
   /**
@@ -426,7 +552,7 @@ export class SteelIssuesService {
     });
   }
 
-  private toResponseDto(issue: SteelIssueRow): SteelIssueResponseDto {
+  private toResponseDto(issue: SteelIssueRow, requiredSteps: ProcessStep[]): SteelIssueResponseDto {
     return new SteelIssueResponseDto({
       id: issue.id.toString(),
       productionOrderId: issue.productionOrderId.toString(),
@@ -445,6 +571,8 @@ export class SteelIssuesService {
       issuedById: issue.issuedById,
       completedAt: issue.completedAt,
       reworkOfId: issue.reworkOfId?.toString() ?? null,
+      completedSteps: issue.completedSteps,
+      requiredSteps,
     });
   }
 }

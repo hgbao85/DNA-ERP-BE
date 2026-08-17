@@ -7,6 +7,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CompleteCuttingDto } from './dto/complete-cutting.dto';
+import { CompleteStepDto } from './dto/complete-step.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
 import { SteelIssuesService } from './steel-issues.service';
@@ -82,5 +83,12 @@ export class SteelIssuesController {
   @RequireMfgRole(MfgRole.PHOI)
   completeCutting(@Param('id') id: string, @Body() dto: CompleteCuttingDto) {
     return this.steelIssuesService.completeCutting(id, dto);
+  }
+
+  @Post('steel-issues/:id/complete-step')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  completeStep(@Param('id') id: string, @Body() dto: CompleteStepDto) {
+    return this.steelIssuesService.completeStep(id, dto);
   }
 }

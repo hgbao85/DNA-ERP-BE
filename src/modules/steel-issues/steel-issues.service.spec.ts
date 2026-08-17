@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { SteelIssueStatus } from '../../generated/prisma/client';
+import { ProcessStep, SteelIssueStatus } from '../../generated/prisma/client';
 import { SteelIssuesService } from './steel-issues.service';
 
 describe('SteelIssuesService', () => {
@@ -25,9 +25,12 @@ describe('SteelIssuesService', () => {
 
   const order = { id: 1n, poNumber: 'PO-1', bomRevisionId: 5n, quantity: 10 };
   const piece = { id: 20n, code: 'MANH-TUA', name: 'Mảnh Tựa' };
+  // processSteps mặc định chỉ [CAT] - piece "đơn giản" chỉ cần cắt là đủ điều kiện KCS ngay,
+  // đúng hành vi cũ (test step-gating multi-step override riêng ở describe('completeStep')).
   const pieceBomRow = {
     pieceId: 20n,
     qtyPerPiece: 4,
+    processSteps: [ProcessStep.CAT],
     segmentSpec: {
       materialId: 30n,
       cutLengthMm: 745,
@@ -48,6 +51,7 @@ describe('SteelIssuesService', () => {
     issuedById: 'user-1',
     completedAt: null,
     reworkOfId: null,
+    completedSteps: [] as ProcessStep[],
     productionOrder: order,
     piece,
     material: { id: 30n, code: 'ST-18', name: 'Sắt vuông 18x18' },
@@ -255,6 +259,99 @@ describe('SteelIssuesService', () => {
       await expect(service.completeCutting('100', { bundles: [] })).rejects.toThrow(
         BadRequestException,
       );
+    });
+
+    it('RECEIVED -> IN_PROCESS khi piece có công đoạn khác ngoài CAT (vd UON) chưa xong', async () => {
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { ...pieceBomRow, processSteps: [ProcessStep.CAT, ProcessStep.UON] },
+      ]);
+      prisma.steelIssue.findUnique.mockResolvedValueOnce(receivedIssue).mockResolvedValueOnce({
+        ...receivedIssue,
+        status: SteelIssueStatus.IN_PROCESS,
+        completedSteps: [ProcessStep.CAT],
+      });
+
+      const result = await service.completeCutting('100', {
+        bundles: [{ barCount: 20, segments: [{ segmentSpecId: '30', countPerBar: 8 }] }],
+      });
+
+      expect(prisma.steelIssue.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+          data: expect.objectContaining({
+            status: SteelIssueStatus.IN_PROCESS,
+            completedSteps: [ProcessStep.CAT],
+            completedAt: null,
+          }),
+        }),
+      );
+      expect(result.status).toBe(SteelIssueStatus.IN_PROCESS);
+    });
+  });
+
+  describe('completeStep', () => {
+    const inProcessIssue = {
+      ...issue,
+      status: SteelIssueStatus.IN_PROCESS,
+      completedSteps: [ProcessStep.CAT],
+    };
+
+    beforeEach(() => {
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { ...pieceBomRow, processSteps: [ProcessStep.CAT, ProcessStep.UON] },
+      ]);
+    });
+
+    it('IN_PROCESS -> AWAITING_QC khi công đoạn cuối cùng còn thiếu (UON) được đánh dấu xong', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+      prisma.steelIssue.update.mockResolvedValue({
+        ...inProcessIssue,
+        status: SteelIssueStatus.AWAITING_QC,
+        completedSteps: [ProcessStep.CAT, ProcessStep.UON],
+        completedAt: new Date(),
+      });
+
+      const result = await service.completeStep('100', { step: ProcessStep.UON });
+
+      expect(prisma.steelIssue.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+          data: expect.objectContaining({
+            status: SteelIssueStatus.AWAITING_QC,
+            completedSteps: [ProcessStep.CAT, ProcessStep.UON],
+          }),
+        }),
+      );
+      expect(result.status).toBe(SteelIssueStatus.AWAITING_QC);
+    });
+
+    it('ném ConflictException nếu không phải IN_PROCESS', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue({
+        ...issue,
+        status: SteelIssueStatus.RECEIVED,
+      });
+
+      await expect(service.completeStep('100', { step: ProcessStep.UON })).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('ném BadRequestException nếu step không thuộc requiredSteps của piece', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+
+      await expect(service.completeStep('100', { step: ProcessStep.DAP })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.steelIssue.update).not.toHaveBeenCalled();
+    });
+
+    it('idempotent - đánh dấu lại step đã xong không lỗi, không gọi update', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+
+      const result = await service.completeStep('100', { step: ProcessStep.CAT });
+
+      expect(prisma.steelIssue.update).not.toHaveBeenCalled();
+      expect(result.status).toBe(SteelIssueStatus.IN_PROCESS);
     });
   });
 

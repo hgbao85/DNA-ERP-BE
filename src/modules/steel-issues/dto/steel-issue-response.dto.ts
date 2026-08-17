@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
-import { SteelIssueStatus } from '../../../generated/prisma/client';
+import { ProcessStep, SteelIssueStatus } from '../../../generated/prisma/client';
 import { CutBundleResponseDto } from './cut-bundle-response.dto';
 
 @Exclude()
@@ -22,6 +22,11 @@ export class SteelIssueResponseDto {
   @Expose() @ApiProperty() issuedById!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) completedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) reworkOfId!: string | null;
+  /** Công đoạn đã đánh dấu xong (luôn có CAT sau completeCutting) - xem SteelIssue.completedSteps. */
+  @Expose() @ApiProperty({ enum: ProcessStep, isArray: true }) completedSteps!: ProcessStep[];
+  /** Union PieceBom.processSteps của piece này (+ CAT mặc định) - danh sách công đoạn phải xong
+   *  hết trước khi chuyển AWAITING_QC, xem SteelIssuesService.resolveRequiredSteps(). */
+  @Expose() @ApiProperty({ enum: ProcessStep, isArray: true }) requiredSteps!: ProcessStep[];
   @Expose() @ApiPropertyOptional({ type: [CutBundleResponseDto] }) bundles?: CutBundleResponseDto[];
 
   constructor(partial: Partial<SteelIssueResponseDto>) {
