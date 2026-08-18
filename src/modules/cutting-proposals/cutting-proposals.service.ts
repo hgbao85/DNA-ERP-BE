@@ -16,7 +16,7 @@ import {
   PurchaseProposalStatus,
   ProdApprovalStatus,
   ProdItemStageType,
-  StockLedgerRefType,
+  StockReservationRefType,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -24,7 +24,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
-import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CuttingProposalResponseDto } from './dto/cutting-proposal-response.dto';
 import {
   CuttingBatchLevelDto,
@@ -44,9 +44,6 @@ import { bestWasteAcrossStockLengths } from './best-fill.util';
 
 const SOLVER_PROPOSE_PATH = '/api/v1/de_xuat/propose/';
 const SYSTEM_CONFIG_ID = 1;
-/// Kho ảo cố định (protected-warehouse-codes.constant.ts) - điểm đến của bút toán "sắt xuất
-/// dùng cho sản xuất" khi tự động trừ tồn lúc duyệt phương án cắt (xem approve()).
-const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
 
 interface SolverBomRow {
   part: string;
@@ -141,7 +138,7 @@ export class CuttingProposalsService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly externalApiService: ExternalApiService,
     private readonly configService: ConfigService<AppConfig, true>,
-    private readonly stockLedgerService: StockLedgerService,
+    private readonly stockReservationsService: StockReservationsService,
   ) {}
 
   async requestForOrder(
@@ -622,10 +619,14 @@ export class CuttingProposalsService {
    * Duyệt phương án cắt cuối cùng - Phôi cắt theo pattern của bản này (7.2 doc gốc). Đồng thời
    * tự sinh 1 PurchaseProposal (Phase 8 - Mua hàng, rút gọn: chỉ vật tư sắt) cho các dòng khả
    * thi (feasible, totalBars > 0) - không có API tạo thủ công, Mua hàng chỉ tiêu thụ bản ghi
-   * này. Theo yêu cầu Sếp (2026-08-07): "trừ tồn tự động, hiện qua mua hàng, không hiện ở kho"
-   * - mỗi dòng chụp `actualStock` thật (stock_quant, có khoá FOR UPDATE chống 2 lần duyệt cùng
-   * lúc đọc trùng số dư), `buyQty` chỉ còn là phần THIẾU (totalBars - actualStock đã dùng), và
-   * phần tồn có sẵn được ghi nhận xuất dùng cho sản xuất ngay (STEEL_ISSUE).
+   * này. `buyQty` = phần THIẾU (totalBars - phần lấy được từ tồn khả dụng).
+   *
+   * B4 Đợt 2 (Sếp chốt 2026-08-17, xem changelog mục 13): bước này KHÔNG còn trừ tồn vật lý
+   * thật (StockLedger) - chỉ GIỮ CHỖ (StockReservation, qua stockReservationsService). Tồn vật
+   * lý chỉ giảm khi SteelIssuesService.create() ghi nhận Phôi thực sự lấy sắt. `actualStock` mỗi
+   * dòng vẫn chụp tồn VẬT LÝ thật (stock_quant, có khoá FOR UPDATE chống đọc trùng số dư) để
+   * hiển thị/audit - `consumeQty`/`buyQty` tính theo tồn KHẢ DỤNG (onHand trừ phần đã giữ chỗ),
+   * 2 con số khác nhau, không được lẫn.
    *
    * Kho nguồn (tồn có sẵn) và kho xuất KHÔNG còn hardcode "phoi-son-han" (Sếp chốt 2026-08-15,
    * mục 2: mỗi vật tư nhập/xuất đúng theo Kho đã khai trên chính vật tư đó - Material.warehouseId,
@@ -658,21 +659,16 @@ export class CuttingProposalsService {
     // materialId -> kho đã khai cho chính vật tư đó (Material.warehouseId) - nguồn xác thực duy
     // nhất cho "vật tư này tồn/nhập ở kho nào", KHÔNG còn 1 hằng số dùng chung cho cả phương án.
     const warehouseByMaterialId = new Map<bigint, { warehouseId: bigint; warehouseCode: string }>();
-    let productionWarehouseId: bigint | undefined;
     if (buyableLines.length > 0) {
-      const [materials, productionWarehouse] = await Promise.all([
-        this.prisma.material.findMany({
-          where: { id: { in: [...new Set(buyableLines.map((l) => l.materialId))] } },
-          select: {
-            id: true,
-            code: true,
-            warehouseId: true,
-            warehouse: { select: { code: true } },
-          },
-        }),
-        this.prisma.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
-      ]);
-      productionWarehouseId = productionWarehouse.id;
+      const materials = await this.prisma.material.findMany({
+        where: { id: { in: [...new Set(buyableLines.map((l) => l.materialId))] } },
+        select: {
+          id: true,
+          code: true,
+          warehouseId: true,
+          warehouse: { select: { code: true } },
+        },
+      });
       for (const m of materials) {
         if (!m.warehouseId || !m.warehouse) {
           throw new BadRequestException(
@@ -722,14 +718,33 @@ export class CuttingProposalsService {
       // requestForOrder/requestForInvoice) - không có "anh em" nào để xác định, thà bỏ qua bước
       // supersede còn hơn quét trúng toàn bộ bảng.
       if (siblingAnchor) {
-        await tx.cuttingProposal.updateMany({
+        // Cần biết ĐÚNG id của từng phương án bị supersede để giải phóng giữ chỗ của nó (B4 Đợt
+        // 3b, lỗ #4) - updateMany() không trả lại danh sách id đã đổi, nên tách findMany trước.
+        // Số lượng "anh em" thực tế gần như luôn 0-1, chi phí thêm 1 query không đáng kể.
+        const superseded = await tx.cuttingProposal.findMany({
           where: {
             ...siblingAnchor,
             id: { not: bigId },
             status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.APPROVED] },
           },
-          data: { status: CuttingProposalStatus.SUPERSEDED },
+          select: { id: true },
         });
+        if (superseded.length > 0) {
+          await tx.cuttingProposal.updateMany({
+            where: { id: { in: superseded.map((s) => s.id) } },
+            data: { status: CuttingProposalStatus.SUPERSEDED },
+          });
+          // PHẢI release TRƯỚC bước tính available của chính lượt duyệt đang chạy (dưới đây) -
+          // nếu không, "Tính lại" sẽ không thấy được phần tồn/hàng-đang-chờ-về mà phương án cũ
+          // đang giữ, báo thiếu và đi mua trùng oan (mục 13.4 lỗ #4). Không hoàn phần đã tiêu
+          // (consumedQty) - sắt đã rời kho vật lý thật, không có gì để trả lại.
+          for (const s of superseded) {
+            await this.stockReservationsService.releaseByRef(tx, {
+              refType: StockReservationRefType.CUTTING_PROPOSAL,
+              refId: s.id.toString(),
+            });
+          }
+        }
       }
       const result = await tx.cuttingProposal.update({
         where: { id: bigId },
@@ -764,12 +779,25 @@ export class CuttingProposalsService {
             WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${line.materialId}
             FOR UPDATE
           `;
-          const actualStock = Math.floor(locked[0]?.qty.toNumber() ?? 0);
+          const onHand = Math.floor(locked[0]?.qty.toNumber() ?? 0);
+          // B4 Đợt 2 (mục 13 changelog): available = onHand trừ phần đã giữ chỗ bởi phương án
+          // khác (kể cả từ luồng chuyển kho) - KHÔNG dùng onHand trực tiếp nữa, nếu không 2
+          // phương án cùng vật tư duyệt gần nhau sẽ lại cùng thấy tồn còn nguyên (đúng lỗ đã vá ở
+          // dưới bằng FOR UPDATE, giờ tái hiện qua đường giữ chỗ nếu quên bước này).
+          const available = await this.stockReservationsService.getAvailableQty(
+            tx,
+            warehouseId,
+            line.materialId,
+            onHand,
+          );
           const totalBars = line.totalBars!;
-          const consumeQty = Math.min(totalBars, actualStock);
+          const consumeQty = Math.min(totalBars, available);
           const buyQty = totalBars - consumeQty;
 
-          items.push({ materialId: line.materialId, buyQty, actualStock });
+          // actualStock vẫn là TỒN VẬT LÝ THẬT (onHand) - không đổi ý nghĩa field này sang
+          // "khả dụng". Đây là số hiển thị cho người xem (audit "lúc duyệt kho có bao nhiêu cây
+          // thật"); available chỉ dùng nội bộ để tính consumeQty/buyQty ở trên.
+          items.push({ materialId: line.materialId, buyQty, actualStock: onHand });
           if (consumeQty > 0) {
             consumptions.push({ materialId: line.materialId, consumeQty, warehouseId });
           }
@@ -802,23 +830,22 @@ export class CuttingProposalsService {
         });
       }
 
-      // Bút toán kho nằm TRONG cùng transaction (từ 2026-08-15, xem StockLedgerService.postEntry
-      // tham số `tx`). Trước đây khối này nằm sau commit, khiến toàn bộ FOR UPDATE ở trên thành vô
-      // nghĩa: khoá nhả lúc commit, còn stock_quant thì tới INSERT stock_ledger mới đổi - hai lượt
-      // duyệt gần nhau cùng đọc một số dư, cùng tiêu một lô sắt, tồn xuống âm và cả hai đều báo
-      // Mua hàng "không cần mua gì". Gộp vào đây thì đọc tồn - quyết định - ghi bút toán nằm trọn
-      // trong một khoá, một commit: hoặc ăn cả, hoặc huỷ sạch.
+      // B4 Đợt 2 (mục 13 changelog 2026-08-15): approve() KHÔNG còn trừ tồn thật (StockLedger) -
+      // chỉ GIỮ CHỖ. Tồn vật lý chỉ giảm khi SteelIssuesService.create() ghi nhận Phôi thực sự
+      // lấy sắt (xem STEEL_ISSUE_RESERVATION_CUTOVER ở đó cho cách xử lý phương án đã duyệt
+      // TRƯỚC mốc đổi này - những phương án đó đã bị trừ tồn theo cơ chế CŨ, không được trừ lần 2).
+      // Việc đọc tồn - quyết định consumeQty - ghi giữ chỗ vẫn nằm trọn trong 1 khoá, 1 commit như
+      // trước (lý do giữ FOR UPDATE ở trên không đổi: 2 phương án cùng vật tư duyệt gần nhau vẫn
+      // phải xếp hàng, chỉ là phần "ăn" giờ là giữ chỗ thay vì trừ tồn thẳng).
       for (const { materialId, consumeQty, warehouseId } of consumptions) {
-        await this.stockLedgerService.postEntry(
+        await this.stockReservationsService.reserve(
           {
-            fromWarehouseId: warehouseId,
-            toWarehouseId: productionWarehouseId!,
+            warehouseId,
             materialId,
             qty: consumeQty,
-            refType: StockLedgerRefType.STEEL_ISSUE,
+            refType: StockReservationRefType.CUTTING_PROPOSAL,
             refId: bigId.toString(),
             createdById: actorUserId ?? undefined,
-            idempotencyKey: `cutting-proposal:${id}:steel-issue:${materialId}`,
           },
           tx,
         );

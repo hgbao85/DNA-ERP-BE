@@ -4,7 +4,7 @@ import { PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalStatus } from '../../generated/prisma/client';
 import { AppConfig } from '../../config/configuration';
 import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
-import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CuttingProposalsService } from './cutting-proposals.service';
 
 describe('CuttingProposalsService', () => {
@@ -38,7 +38,11 @@ describe('CuttingProposalsService', () => {
   };
   let externalApiService: { post: jest.Mock };
   let configService: { get: jest.Mock };
-  let stockLedgerService: { postEntry: jest.Mock };
+  let stockReservationsService: {
+    reserve: jest.Mock;
+    getAvailableQty: jest.Mock;
+    releaseByRef: jest.Mock;
+  };
 
   /** Mô phỏng `Prisma.Decimal` tối thiểu - đủ cho `.toNumber()` mà approve() gọi. */
   const qtyRow = (n: number) => [{ qty: { toNumber: () => n } }];
@@ -90,7 +94,9 @@ describe('CuttingProposalsService', () => {
         findUniqueOrThrow: jest
           .fn()
           .mockResolvedValue({ productionOrderId: 1n, productionInvoiceId: null }),
-        findMany: jest.fn(),
+        // Mặc định "không có anh em nào" (findMany tìm phương án bị supersede, B4 Đợt 3b) - test
+        // nào thật sự cần mô phỏng supersede tự override bằng mockResolvedValueOnce.
+        findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
         create: jest.fn(),
         update: jest.fn(),
@@ -139,12 +145,21 @@ describe('CuttingProposalsService', () => {
         return map[key];
       }),
     };
-    stockLedgerService = { postEntry: jest.fn() };
+    // Mặc định "không có gì đang giữ chỗ" -> available = onHand nguyên vẹn, giữ đúng hành vi cũ
+    // cho MỌI test không nói riêng về giữ chỗ (đa số). Test cần mô phỏng có giữ chỗ tự override
+    // bằng mockResolvedValueOnce.
+    stockReservationsService = {
+      reserve: jest.fn(),
+      getAvailableQty: jest.fn((_tx: unknown, _wId: unknown, _mId: unknown, onHand: number) =>
+        Promise.resolve(onHand),
+      ),
+      releaseByRef: jest.fn(),
+    };
     service = new CuttingProposalsService(
       prisma as unknown as PrismaServiceType,
       externalApiService as unknown as ExternalApiService,
       configService as unknown as ConfigService<AppConfig, true>,
-      stockLedgerService as unknown as StockLedgerService,
+      stockReservationsService as unknown as StockReservationsService,
     );
   });
 
@@ -462,7 +477,7 @@ describe('CuttingProposalsService', () => {
         updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.APPROVED),
       ).toBeUndefined();
       expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
-      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      expect(stockReservationsService.reserve).not.toHaveBeenCalled();
 
       const notify = prisma.notification.create.mock.calls[0] as unknown as [
         { data: { title: string; message: string } },
@@ -502,7 +517,7 @@ describe('CuttingProposalsService', () => {
         },
       });
       expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
-      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      expect(stockReservationsService.reserve).not.toHaveBeenCalled();
       const notify = prisma.notification.create.mock.calls[0] as unknown as [
         { data: { title: string; message: string } },
       ];
@@ -854,6 +869,8 @@ describe('CuttingProposalsService', () => {
         status: CuttingProposalStatus.DRAFT,
         lines: [],
       });
+      // Anh em bị supersede - 1 dòng, id=99n.
+      prisma.cuttingProposal.findMany.mockResolvedValue([{ id: 99n }]);
       prisma.cuttingProposal.update.mockResolvedValue({
         id: 2n,
         productionOrderId: 1n,
@@ -870,15 +887,53 @@ describe('CuttingProposalsService', () => {
 
       const result = await service.approve('2', 'user-1');
 
-      expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+      expect(prisma.cuttingProposal.findMany).toHaveBeenCalledWith({
         where: {
           productionOrderId: 1n,
           id: { not: 2n },
           status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.APPROVED] },
         },
+        select: { id: true },
+      });
+      expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [99n] } },
         data: { status: CuttingProposalStatus.SUPERSEDED },
       });
+      // B4 Đợt 3b (lỗ #4): phải giải phóng giữ chỗ của ĐÚNG phương án bị supersede, không phải
+      // của chính phương án vừa duyệt.
+      expect(stockReservationsService.releaseByRef).toHaveBeenCalledWith(expect.anything(), {
+        refType: 'CUTTING_PROPOSAL',
+        refId: '99',
+      });
       expect(result.status).toBe(CuttingProposalStatus.APPROVED);
+    });
+
+    it('không gọi updateMany/releaseByRef nào khi không có anh em nào bị supersede', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [],
+      });
+      prisma.cuttingProposal.findMany.mockResolvedValue([]); // không anh em nào (mặc định)
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        totalBarsAll: null,
+        totalWasteMm: null,
+        wastePercentage: null,
+        errorMessage: null,
+        requestedAt: new Date(),
+        completedAt: null,
+        approvedAt: new Date(),
+        ...productionOrderRelation(),
+      });
+
+      await service.approve('2', 'user-1');
+
+      expect(prisma.cuttingProposal.updateMany).not.toHaveBeenCalled();
+      expect(stockReservationsService.releaseByRef).not.toHaveBeenCalled();
     });
 
     it('phương án của đợt gộp chỉ supersede anh em CÙNG đợt, không quét mọi phương án gộp khác', async () => {
@@ -893,6 +948,7 @@ describe('CuttingProposalsService', () => {
         status: CuttingProposalStatus.DRAFT,
         lines: [],
       });
+      prisma.cuttingProposal.findMany.mockResolvedValue([]); // không anh em nào trong test này
       prisma.cuttingProposal.update.mockResolvedValue({
         id: 2n,
         productionOrderId: null,
@@ -911,17 +967,19 @@ describe('CuttingProposalsService', () => {
 
       await service.approve('2', 'user-1');
 
-      expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+      // B4 Đợt 3b tách bước lọc "anh em" ra findMany() (cần biết id cụ thể để release giữ chỗ) -
+      // regression này giờ nằm ở where của findMany(), không phải updateMany() nữa.
+      expect(prisma.cuttingProposal.findMany).toHaveBeenCalledWith({
         where: {
           productionInvoiceId: 7n,
           id: { not: 2n },
           status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.APPROVED] },
         },
-        data: { status: CuttingProposalStatus.SUPERSEDED },
+        select: { id: true },
       });
       // Điều kiện quyết định: KHÔNG được lọt `productionOrderId` vào where - đó chính là chỗ
       // biến bộ lọc thành "IS NULL" quét cả bảng.
-      const where = prisma.cuttingProposal.updateMany.mock.calls[0][0].where as Record<
+      const where = prisma.cuttingProposal.findMany.mock.calls[0][0].where as Record<
         string,
         unknown
       >;
@@ -982,11 +1040,11 @@ describe('CuttingProposalsService', () => {
           items: { create: [{ materialId: 30n, buyQty: 8, actualStock: 0 }] },
         },
       });
-      // Không có gì để trừ (consumeQty=0) -> không post bút toán kho.
-      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      // Không có gì để giữ chỗ (consumeQty=0) -> không gọi reserve().
+      expect(stockReservationsService.reserve).not.toHaveBeenCalled();
     });
 
-    it('trừ tồn tự động: đủ tồn thì buyQty=0 và post STEEL_ISSUE đúng số lượng (Phase 8.1)', async () => {
+    it('giữ chỗ tự động (B4 Đợt 2): đủ tồn thì buyQty=0 và giữ chỗ đúng số lượng (Phase 8.1)', async () => {
       prisma.cuttingProposal.findUnique.mockResolvedValue({
         id: 2n,
         productionOrderId: 1n,
@@ -1019,25 +1077,25 @@ describe('CuttingProposalsService', () => {
           purchasedAt: expect.any(Date) as Date,
         },
       });
-      // Tham số thứ 2 là `tx` của chính transaction duyệt (Lỗ 5) - bút toán PHẢI nằm trong đó,
+      // Tham số thứ 2 là `tx` của chính transaction duyệt (Lỗ 5) - giữ chỗ PHẢI nằm trong đó,
       // nếu không thì khoá stock_quant ở trên nhả trước khi số dư kịp đổi. Khẳng định nó tồn tại
       // thay vì so khớp nguyên đối tượng tx (là chính prisma mock, không có giá trị kiểm chứng).
-      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+      // B4 Đợt 2: KHÔNG còn gọi stockLedgerService.postEntry() ở approve() nữa - chỉ giữ chỗ,
+      // tồn vật lý chỉ giảm thật lúc SteelIssuesService.create() (xem file spec đó).
+      expect(stockReservationsService.reserve).toHaveBeenCalledWith(
         {
-          fromWarehouseId: 800n,
-          toWarehouseId: 900n,
+          warehouseId: 800n,
           materialId: 30n,
           qty: 8,
-          refType: 'STEEL_ISSUE',
+          refType: 'CUTTING_PROPOSAL',
           refId: '2',
           createdById: 'user-1',
-          idempotencyKey: 'cutting-proposal:2:steel-issue:30',
         },
         expect.anything(),
       );
     });
 
-    it('trừ tồn tự động: thiếu 1 phần thì split đúng giữa tồn dùng ngay và buyQty (Phase 8.1)', async () => {
+    it('giữ chỗ tự động (B4 Đợt 2): thiếu 1 phần thì split đúng giữa tồn giữ chỗ và buyQty (Phase 8.1)', async () => {
       prisma.cuttingProposal.findUnique.mockResolvedValue({
         id: 2n,
         productionOrderId: 1n,
@@ -1064,8 +1122,8 @@ describe('CuttingProposalsService', () => {
           items: { create: [{ materialId: 30n, buyQty: 5, actualStock: 3 }] },
         },
       });
-      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
-        expect.objectContaining({ qty: 3, refType: 'STEEL_ISSUE' }),
+      expect(stockReservationsService.reserve).toHaveBeenCalledWith(
+        expect.objectContaining({ qty: 3, refType: 'CUTTING_PROPOSAL' }),
         expect.anything(),
       );
     });
@@ -1121,12 +1179,12 @@ describe('CuttingProposalsService', () => {
           data: expect.objectContaining({ warehouseCode: 'phoi-son-han' }) as unknown,
         }),
       );
-      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
-        expect.objectContaining({ materialId: 30n, fromWarehouseId: 800n, qty: 8 }),
+      expect(stockReservationsService.reserve).toHaveBeenCalledWith(
+        expect.objectContaining({ materialId: 30n, warehouseId: 800n, qty: 8 }),
         expect.anything(),
       );
-      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
-        expect.objectContaining({ materialId: 40n, fromWarehouseId: 810n, qty: 5 }),
+      expect(stockReservationsService.reserve).toHaveBeenCalledWith(
+        expect.objectContaining({ materialId: 40n, warehouseId: 810n, qty: 5 }),
         expect.anything(),
       );
     });
@@ -1166,7 +1224,7 @@ describe('CuttingProposalsService', () => {
       await expect(service.approve('2', 'user-1')).rejects.toThrow(ConflictException);
       // Đây mới là điều quan trọng: không đẻ đề xuất mua thứ 2 và không trừ kho lần 2.
       expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
-      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      expect(stockReservationsService.reserve).not.toHaveBeenCalled();
       expect(prisma.cuttingProposal.update).not.toHaveBeenCalled();
     });
 
@@ -1184,7 +1242,7 @@ describe('CuttingProposalsService', () => {
 
       await expect(service.approve('2', 'user-1')).rejects.toThrow(NotFoundException);
       expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
-      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      expect(stockReservationsService.reserve).not.toHaveBeenCalled();
     });
   });
 

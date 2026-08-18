@@ -14,6 +14,7 @@ import {
   ProdItemStageType,
   PurchaseProposalStatus,
   StockLedgerRefType,
+  StockReservationRefType,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -24,6 +25,7 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ApprovePurchaseProposalDto } from './dto/approve-purchase-proposal.dto';
 import { CreateQuoteDto } from './dto/create-quote.dto';
 import {
@@ -48,7 +50,7 @@ const LIST_INCLUDE = {
         include: {
           mfgProduct: true,
           productionInvoiceItem: {
-            include: { stages: true, productionInvoice: { select: { deadline: true } } },
+            include: { stages: true, productionInvoice: { select: { code: true, deadline: true } } },
           },
         },
       },
@@ -89,6 +91,7 @@ export class PurchaseProposalsService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
+    private readonly stockReservationsService: StockReservationsService,
     private readonly cls: ClsService<AppClsStore>,
   ) {}
 
@@ -402,6 +405,16 @@ export class PurchaseProposalsService {
       );
     }
     const materialWarehouseId = item.material.warehouseId;
+    // B4 Đợt 3 (lỗ #3): cần cuttingProposalId gốc để cộng hàng về ĐÚNG dòng giữ chỗ - kiểm trước
+    // khi mở transaction, cùng lý do bất biến như check warehouseId ở trên (không cần khoá, dữ
+    // liệu hỏng thì hỏng từ trước, không phải race). Chỉ 1 nơi tạo PurchaseProposal
+    // (CuttingProposalsService.approve()) và LUÔN set field này - thiếu nó là dữ liệu hỏng thật.
+    if (!proposal.cuttingProposalId) {
+      throw new BadRequestException(
+        `Purchase proposal ${proposal.id} không có cuttingProposalId - không xác định được phương án cắt gốc để giữ chỗ hàng vừa về`,
+      );
+    }
+    const cuttingProposalId = proposal.cuttingProposalId;
 
     // Dung sai đọc trước tx (business rule dùng chung, không phải state của riêng dòng item nên
     // không cần nằm trong khoá) - xem getOverReceiptTolerancePercent().
@@ -464,6 +477,19 @@ export class PurchaseProposalsService {
             },
             tx,
           );
+
+          // B4 Đợt 3 (lỗ #3, mục 13.4 changelog): hàng vừa về phải "có chủ" ngay - cộng thẳng vào
+          // đúng dòng giữ chỗ đã tạo lúc CuttingProposalsService.approve() (refType=
+          // CUTTING_PROPOSAL, refId=cuttingProposalId gốc), KHÔNG để rơi vào tồn chung. Thiếu bước
+          // này thì phương án cắt KHÁC được duyệt xen giữa có thể "giành" mất đúng số hàng vừa mua
+          // về cho đơn này, dù sổ đã ghi "đã mua đủ, đã về hàng" - tái hiện đúng lỗ #3.
+          await this.stockReservationsService.topUpFromReceipt(tx, {
+            refType: StockReservationRefType.CUTTING_PROPOSAL,
+            refId: cuttingProposalId.toString(),
+            materialId: item.materialId,
+            warehouseId: materialWarehouseId,
+            qty: incrementQty,
+          });
         }
 
         const saved = await tx.purchaseProposalItem.update({
@@ -620,7 +646,12 @@ export class PurchaseProposalsService {
       cuttingProposalId: row.cuttingProposalId?.toString() ?? null,
       warehouseCode: row.warehouseCode,
       status: row.status,
-      poNumber: productionOrder?.poNumber ?? mergedPi?.code ?? '—',
+      // Sếp chốt 2026-08-17: Mua hàng theo mã PI (lệnh sản xuất), KHÔNG dùng ProductionOrder.poNumber
+      // nội bộ nữa - nhánh lệnh SX đơn trước đây "mượn tạm" mã đó (PO-x) vì đường rút gọn
+      // (CuttingProposal -> ProductionOrder) không đi qua Sku/ExportOrder, gây lệch mã so với nhánh
+      // PI gộp (vốn đã đúng mergedPi.code từ đầu). Field response vẫn tên `poNumber` (đỡ đổi DTO/FE)
+      // nhưng giá trị giờ luôn là mã PI ở cả 2 nhánh.
+      poNumber: productionOrder?.productionInvoiceItem.productionInvoice.code ?? mergedPi?.code ?? '—',
       mfgProductCode:
         productionOrder?.mfgProduct.factoryCode ??
         (mergedPi?.items ?? []).map((it) => it.mfgProduct.factoryCode).join(', '),

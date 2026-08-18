@@ -2,7 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { AppConfig } from '../../config/configuration';
 import { ExternalApiService } from '../external/external-api.service';
-import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CuttingProposalsService } from './cutting-proposals.service';
 
 /**
@@ -73,7 +73,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       prisma as unknown as PrismaServiceType,
       { post: jest.fn() } as unknown as ExternalApiService,
       { get: jest.fn() } as unknown as ConfigService<AppConfig, true>,
-      { postEntry: jest.fn() } as unknown as StockLedgerService,
+      { reserve: jest.fn(), getAvailableQty: jest.fn() } as unknown as StockReservationsService,
     );
   };
 

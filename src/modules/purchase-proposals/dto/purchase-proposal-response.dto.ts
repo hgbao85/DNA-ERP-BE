@@ -61,8 +61,9 @@ export class PurchaseProposalResponseDto {
   /// trên, vì 1 đề xuất có thể gồm nhiều vật tư khác kho nhau.
   @Expose() @ApiProperty() warehouseCode!: string;
   @Expose() @ApiProperty({ enum: PurchaseProposalStatus }) status!: PurchaseProposalStatus;
-  /// PO nội bộ (ProductionOrder.poNumber, vd "PO-9") - KHÁC mã đơn hàng khách, vì đường đi rút
-  /// gọn (CuttingProposal -> ProductionOrder) không đi qua Sku/ExportOrder.
+  /// Mã PI (lệnh sản xuất, vd "PI-2026-014") - Sếp chốt 2026-08-17 mua hàng theo mã PI, không dùng
+  /// ProductionOrder.poNumber nội bộ nữa (xem PurchaseProposalsService.toResponseDto). Tên field
+  /// giữ nguyên `poNumber` để đỡ đổi FE, dù giờ không còn là "PO" theo nghĩa cũ nữa.
   @Expose() @ApiProperty() poNumber!: string;
   @Expose() @ApiProperty() mfgProductCode!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;

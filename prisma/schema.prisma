@@ -81,6 +81,7 @@ model User {
   transferCheckResults              TransferCheckResult[]       @relation("TransferCheckCheckedBy")
   purchaseProposalsApproved         PurchaseProposal[]
   stockLedgerEntries                StockLedger[]
+  stockReservations                 StockReservation[]
   materialsToBuy                    Material[]
   steelIssuesIssued                 SteelIssue[]                @relation("SteelIssueIssuedBy")
   qcReviewsReviewed                 QcReview[]                  @relation("QcReviewReviewedBy")
@@ -380,6 +381,7 @@ model Material {
   stockQuants                   StockQuant[]
   warehouseTransferItems        WarehouseTransferItem[]
   warehouseTransferReservations WarehouseTransferReservation[]
+  stockReservations             StockReservation[]
   pieceMaterialItems            PieceMaterialItem[]
   steelIssues                   SteelIssue[]
   materialIssues                MaterialIssue[]
@@ -471,6 +473,7 @@ model Warehouse {
   fromWarehouseTransfers        WarehouseTransfer[]            @relation("WarehouseTransferFromWarehouse")
   toWarehouseTransfers          WarehouseTransfer[]            @relation("WarehouseTransferToWarehouse")
   warehouseTransferReservations WarehouseTransferReservation[]
+  stockReservations             StockReservation[]
   materials                     Material[]
 
   @@map("warehouses")
@@ -1585,6 +1588,15 @@ enum ReservationStatus {
   RELEASED
 }
 
+/// Nguồn sinh ra 1 StockReservation. Mỗi giá trị ứng với 1 luồng nghiệp vụ có bước "hứa trước, lấy
+/// sau" - thêm giá trị mới khi mở luồng mới, không dùng lại giá trị của luồng khác.
+enum StockReservationRefType {
+  /// Duyệt phương án cắt sắt giữ phần tồn sẵn có cho lệnh SX/đợt gộp đó (CuttingProposalsService).
+  CUTTING_PROPOSAL
+  /// Sắt mua về đã có chủ - giữ đích danh cho đề xuất đã kích hoạt mua (PurchaseProposalsService).
+  PURCHASE_PROPOSAL
+}
+
 /// Sổ cái kho bút toán kép - nguồn sự thật duy nhất của tồn kho. Append-only: không có
 /// update()/remove() nào ở service, chỉ StockLedgerService.postEntry() (dùng chung bởi mọi
 /// module ghi kho ở các Phase sau) + 1 ngoại lệ điều chỉnh thủ công (POST /stock-ledger/adjust).
@@ -1654,6 +1666,54 @@ model StockQuant {
   productVariant ProductVariant? @relation(fields: [productVariantId], references: [id])
 
   @@map("stock_quant")
+}
+
+/// Giữ chỗ tồn kho ("đã hứa cho ai đó, chưa lấy đi") - tách khái niệm ĐẶT GIỮ khỏi TIÊU HAO, xem
+/// docs/changelog-2026-08-15-nhip-2-gop-sku-va-review-auto-duyet.md mục 13 (thiết kế B4) và
+/// DNA-ERP/docs/thiet-ke-giu-cho-khau-tru-ton-kho.md (bản logic gốc 2026-06-27).
+///
+/// KHÁC StockLedger: bảng này KHÔNG làm đổi tồn vật lý (stock_quant), chỉ làm giảm tồn KHẢ DỤNG
+/// (available = onHand - Σ giữ chỗ ACTIVE chưa tiêu thụ hết). Hàng vẫn nằm trên giá cho tới khi có
+/// bút toán StockLedger thật.
+///
+/// refType/refId đi theo đúng idiom StockLedger.refId ở trên (không FK cứng đa bảng) - 1 bảng dùng
+/// chung cho mọi luồng cần giữ chỗ, thay vì mỗi luồng một bảng riêng rồi quên cộng vào công thức
+/// available. `WarehouseTransferReservation` (bên dưới) là bảng có TRƯỚC bảng này, đang phục vụ
+/// riêng luồng chuyển kho - cố ý CHƯA migrate sang đây để không phải đụng code chuyển kho đang chạy
+/// tốt; đổi lại, mọi nơi tính available BẮT BUỘC đi qua đúng 1 hàm dùng chung
+/// (StockReservationsService.getAvailableQty) - hàm đó cộng cả HAI bảng.
+model StockReservation {
+  id          BigInt                  @id @default(autoincrement())
+  warehouseId BigInt
+  materialId  BigInt
+  /// Số lượng đã hứa. Bất biến sau khi tạo - phần đã lấy đi ghi ở consumedQty, không trừ vào đây
+  /// (giữ được "hứa bao nhiêu / lấy bao nhiêu" để đối chiếu).
+  quantity    Decimal                 @db.Decimal(16, 4)
+  /// Cộng dồn phần đã thực xuất - Phôi lấy sắt làm nhiều đợt (giữ 100 cây, xuất 30/40/30). Khi
+  /// consumedQty >= quantity thì status chuyển RELEASED, dòng hết chiếm chỗ.
+  consumedQty Decimal                 @default(0) @db.Decimal(16, 4)
+  status      ReservationStatus       @default(ACTIVE)
+  refType     StockReservationRefType
+  /// Trỏ tới bản ghi nghiệp vụ giữ chỗ này (vd cutting_proposals.id) - cùng lý do không FK cứng
+  /// như StockLedger.refId.
+  refId       String
+  /// Chống tạo trùng khi caller gọi lại (cùng idiom StockLedger.idempotencyKey). Đặt theo công
+  /// thức cố định `<refType>:<refId>:material:<materialId>` chứ không phải UUID client gửi lên -
+  /// 1 (nguồn, vật tư) chỉ được giữ chỗ đúng 1 dòng.
+  idempotencyKey String?              @unique
+  note        String?
+  createdAt   DateTime                @default(now())
+  createdById String?
+  releasedAt  DateTime?
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  material  Material  @relation(fields: [materialId], references: [id])
+  createdBy User?     @relation(fields: [createdById], references: [id])
+
+  /// Đúng chỉ mục cho câu hỏi nóng nhất: "vật tư X ở kho Y đang bị giữ bao nhiêu" (getAvailableQty).
+  @@index([warehouseId, materialId, status])
+  @@index([refType, refId])
+  @@map("stock_reservations")
 }
 
 /// Phiếu chuyển kho nội bộ - lớp workflow ngồi trên StockLedger. State machine 1 chiều

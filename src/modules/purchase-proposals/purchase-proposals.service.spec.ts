@@ -10,6 +10,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { PurchaseProposalStatus } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PurchaseProposalsService } from './purchase-proposals.service';
 
 const decimal = (n: number) => ({ toNumber: () => n });
@@ -42,6 +43,7 @@ describe('PurchaseProposalsService', () => {
     $transaction: jest.Mock;
   };
   let stockLedgerService: { postEntry: jest.Mock };
+  let stockReservationsService: { topUpFromReceipt: jest.Mock };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
 
   const material = (overrides: Record<string, unknown> = {}) => ({
@@ -99,7 +101,8 @@ describe('PurchaseProposalsService', () => {
         productionInvoiceItem: {
           materialDeadline: null,
           stages: [],
-          productionInvoice: { deadline: null },
+          // B1 (2026-08-17): poNumber hiển thị giờ đọc mã PI này, không còn đọc productionOrder.poNumber.
+          productionInvoice: { code: 'PI-2026-014', deadline: null },
         },
       },
     },
@@ -145,10 +148,12 @@ describe('PurchaseProposalsService', () => {
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     stockLedgerService = { postEntry: jest.fn() };
+    stockReservationsService = { topUpFromReceipt: jest.fn() };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     service = new PurchaseProposalsService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
+      stockReservationsService as unknown as StockReservationsService,
       cls as unknown as ClsService<AppClsStore>,
     );
   });
@@ -179,7 +184,7 @@ describe('PurchaseProposalsService', () => {
       const result = await service.findOne('300');
 
       expect(result.id).toBe('300');
-      expect(result.poNumber).toBe('PO-9');
+      expect(result.poNumber).toBe('PI-2026-014');
       expect(result.mfgProductCode).toBe('JSE-55');
       expect(result.items?.[0].materialCode).toBe('SAT-25');
       expect(result.items?.[0].quotes[0].unitPrice).toBe(45000);
@@ -202,7 +207,7 @@ describe('PurchaseProposalsService', () => {
               productionInvoiceItem: {
                 materialDeadline: new Date('2026-08-20'),
                 stages: [{ stageType: 'FRAME', deadline: new Date('2026-08-25') }],
-                productionInvoice: { deadline: new Date('2026-08-30') },
+                productionInvoice: { code: 'PI-2026-014', deadline: new Date('2026-08-30') },
               },
             },
           },
@@ -224,7 +229,7 @@ describe('PurchaseProposalsService', () => {
               productionInvoiceItem: {
                 materialDeadline: null,
                 stages: [{ stageType: 'FRAME', deadline: new Date('2026-08-25') }],
-                productionInvoice: { deadline: new Date('2026-08-30') },
+                productionInvoice: { code: 'PI-2026-014', deadline: new Date('2026-08-30') },
               },
             },
           },
@@ -720,6 +725,70 @@ describe('PurchaseProposalsService', () => {
         },
         expect.anything(),
       );
+    });
+
+    // B4 Đợt 3 (lỗ #3, mục 13.4 changelog): hàng về phải "có chủ" ngay - cộng vào đúng dòng giữ
+    // chỗ (refType=CUTTING_PROPOSAL) gốc của chính phương án cắt đã sinh ra đề xuất mua này, để
+    // phương án khác không giành mất phần vừa mua về.
+    it('B4 Đợt 3: hàng về gọi topUpFromReceipt() đúng refId=cuttingProposalId gốc, đúng số tăng', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          cuttingProposalId: 200n,
+          status: PurchaseProposalStatus.PURCHASING,
+          items: [item({ materialId: 30n, buyQty: decimal(8), receivedQty: decimal(3) })],
+        }),
+      );
+      prisma.$queryRaw.mockResolvedValue([{ receivedQty: decimal(3), receivedQtyPurchaseUnit: null }]);
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
+      );
+
+      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+
+      expect(stockReservationsService.topUpFromReceipt).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          refType: 'CUTTING_PROPOSAL',
+          refId: '200',
+          materialId: 30n,
+          warehouseId: 800n,
+          qty: 5,
+        },
+      );
+    });
+
+    it('B4 Đợt 3: không gọi topUpFromReceipt() khi không có gì tăng thật (incrementQty=0, ca hiếm nhận trùng)', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          status: PurchaseProposalStatus.PURCHASING,
+          items: [item({ materialId: 30n, buyQty: decimal(8), receivedQty: decimal(8) })],
+        }),
+      );
+      // Khoá được: đã nhận đủ 8 từ đợt trước, lần nhập này báo 0 -> incrementQty=0.
+      prisma.$queryRaw.mockResolvedValue([{ receivedQty: decimal(8), receivedQtyPurchaseUnit: null }]);
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
+      );
+
+      await service.receiveItem('300', '400', { receivedQty: 0 }, 'user-1', 'key-1');
+
+      expect(stockReservationsService.topUpFromReceipt).not.toHaveBeenCalled();
+    });
+
+    it('B4 Đợt 3: dữ liệu hỏng (thiếu cuttingProposalId) -> BadRequestException, không nhập kho im lặng', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          cuttingProposalId: null,
+          status: PurchaseProposalStatus.PURCHASING,
+          items: [item({ materialId: 30n, buyQty: decimal(8), receivedQty: decimal(0) })],
+        }),
+      );
+      prisma.$queryRaw.mockResolvedValue([{ receivedQty: decimal(0), receivedQtyPurchaseUnit: null }]);
+
+      await expect(
+        service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(stockReservationsService.topUpFromReceipt).not.toHaveBeenCalled();
     });
 
     // C3: dùng receivedQty KHOÁ ĐƯỢC bên trong transaction, KHÔNG dùng giá trị đọc trước đó ở
