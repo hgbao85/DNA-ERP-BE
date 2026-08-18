@@ -9,6 +9,16 @@ import { ProductionOrderResponseDto } from './dto/production-order-response.dto'
 
 type ProductionOrderRow = Prisma.ProductionOrderGetPayload<object>;
 
+// Chỉ cần mã đơn Sales (hiển thị cột "PO" cho người dùng) - xem toResponseDto. Include riêng
+// (không gộp vào ProductionOrderRow) vì createFromApproval() không cần tới, tránh query thừa.
+const SALES_ORDER_CODE_INCLUDE = {
+  productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+} satisfies Prisma.ProductionOrderInclude;
+
+type ProductionOrderWithSalesOrder = Prisma.ProductionOrderGetPayload<{
+  include: typeof SALES_ORDER_CODE_INCLUDE;
+}>;
+
 /**
  * Lệnh sản xuất tại xưởng (Phase 7). KHÔNG có API tạo/release thủ công ở bản này - mỗi
  * ProductionOrder tự sinh 1-1 (createFromApproval) ngay khi Sếp duyệt 1 ProductionInvoiceItem
@@ -61,25 +71,50 @@ export class ProductionOrdersService {
       );
     }
 
-    const created = await this.prisma.productionOrder.create({
+    const poNumber = await this.resolvePoNumber(productionInvoiceItemId);
+    return this.prisma.productionOrder.create({
       data: {
-        poNumber: `PENDING-${productionInvoiceItemId}`,
+        poNumber,
         productionInvoiceItemId,
         mfgProductId,
         bomRevisionId: activeRevision.id,
         quantity,
       },
     });
-    return this.prisma.productionOrder.update({
-      where: { id: created.id },
-      data: { poNumber: `PO-${created.id}` },
+  }
+
+  /**
+   * Mã lệnh SX hiển thị = mã đơn hàng Sales gốc + số thứ tự SKU trong đơn đó (vd "PO-31-2") -
+   * KHÔNG còn tự đánh số riêng theo id của chính bảng này (PO-{id} cũ), tránh 2 chuỗi "PO-"
+   * độc lập gây nhầm mã lệnh SX nội bộ với mã đơn hàng Sales thật (xem trao đổi 2026-08-18).
+   * Item không gắn Sales Order nào (tạo tay qua POST /production-invoices/:id/items, xem
+   * ProductionInvoiceItem.salesOrderId) -> "NB-{itemId}" ("Nội bộ") - itemId đã unique sẵn vì
+   * ProductionOrder.productionInvoiceItemId là @unique (1-1).
+   *
+   * Đếm trước khi tạo (không phải sau) để suy đúng "SKU thứ mấy" - chấp nhận rủi ro race hiếm
+   * (2 item CÙNG 1 đơn Sales được duyệt gần như đồng thời có thể tính trùng số thứ tự) do
+   * unique constraint trên poNumber tự chặn, ném lỗi rõ ràng thay vì âm thầm ghi trùng - đủ an
+   * toàn vì approveItem() vốn đã là thao tác bấm tay từng item một, không phải batch job.
+   */
+  private async resolvePoNumber(productionInvoiceItemId: bigint): Promise<string> {
+    const item = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
+      where: { id: productionInvoiceItemId },
+      select: { salesOrderId: true, salesOrder: { select: { code: true } } },
     });
+    if (!item.salesOrderId || !item.salesOrder) {
+      return `NB-${productionInvoiceItemId}`;
+    }
+    const existingCount = await this.prisma.productionOrder.count({
+      where: { productionInvoiceItem: { salesOrderId: item.salesOrderId } },
+    });
+    return `${item.salesOrder.code}-${existingCount + 1}`;
   }
 
   async findAll(query: PaginationQueryDto): Promise<Paginated<ProductionOrderResponseDto>> {
     const result = await paginate(
       {
-        findMany: (args) => this.prisma.productionOrder.findMany(args),
+        findMany: (args) =>
+          this.prisma.productionOrder.findMany({ ...args, include: SALES_ORDER_CODE_INCLUDE }),
         count: (args) => this.prisma.productionOrder.count(args),
       },
       query,
@@ -91,22 +126,22 @@ export class ProductionOrdersService {
   }
 
   async findOne(id: string): Promise<ProductionOrderResponseDto> {
-    return this.toResponseDto(await this.findOneOrThrow(id));
-  }
-
-  async findOneOrThrow(id: string): Promise<ProductionOrderRow> {
     const bigId = parseBigIntId(id);
-    const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
+    const order = await this.prisma.productionOrder.findUnique({
+      where: { id: bigId },
+      include: SALES_ORDER_CODE_INCLUDE,
+    });
     if (!order) {
       throw new NotFoundException(`Production order ${id} not found`);
     }
-    return order;
+    return this.toResponseDto(order);
   }
 
-  private toResponseDto(order: ProductionOrderRow): ProductionOrderResponseDto {
+  private toResponseDto(order: ProductionOrderWithSalesOrder): ProductionOrderResponseDto {
     return new ProductionOrderResponseDto({
       id: order.id.toString(),
       poNumber: order.poNumber,
+      salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
       productionInvoiceItemId: order.productionInvoiceItemId.toString(),
       mfgProductId: order.mfgProductId.toString(),
       bomRevisionId: order.bomRevisionId.toString(),

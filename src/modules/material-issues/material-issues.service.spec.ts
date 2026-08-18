@@ -32,7 +32,13 @@ describe('MaterialIssuesService', () => {
     warehouse: { findUniqueOrThrow: jest.Mock };
   };
 
-  const order = { id: 1n, poNumber: 'PO-1', bomRevisionId: 5n, quantity: 10 };
+  const order = {
+    id: 1n,
+    poNumber: 'PO-31-1',
+    bomRevisionId: 5n,
+    quantity: 10,
+    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+  };
   const material = { id: 30n, code: 'CO2-25', name: 'Khí CO₂ (bình 25kg)' };
   const consumableBomRow = {
     id: 1n,

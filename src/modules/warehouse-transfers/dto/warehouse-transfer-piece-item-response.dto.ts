@@ -6,6 +6,7 @@ export class WarehouseTransferPieceItemResponseDto {
   @Expose() @ApiProperty() id!: string;
   @Expose() @ApiProperty() productionOrderId!: string;
   @Expose() @ApiProperty() poNumber!: string;
+  @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   @Expose() @ApiProperty() pieceId!: string;
   @Expose() @ApiProperty() pieceCode!: string;
   @Expose() @ApiProperty() pieceName!: string;

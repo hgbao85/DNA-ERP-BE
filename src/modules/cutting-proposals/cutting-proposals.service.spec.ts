@@ -59,10 +59,20 @@ describe('CuttingProposalsService', () => {
 
   /** LIST_INCLUDE (productionOrder.mfgProduct) - mọi mock đi qua toResponseDto() cần có. */
   const productionOrderRelation = () => ({
-    productionOrder: { poNumber: 'PO-1', mfgProduct: { factoryCode: 'SKU-1', name: 'Ghế test' } },
+    productionOrder: {
+      poNumber: 'PO-31-1',
+      mfgProduct: { factoryCode: 'SKU-1', name: 'Ghế test' },
+      productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+    },
   });
 
-  const productionOrder = { id: 1n, poNumber: 'PO-1', bomRevisionId: 5n, quantity: 500 };
+  const productionOrder = {
+    id: 1n,
+    poNumber: 'PO-31-1',
+    bomRevisionId: 5n,
+    quantity: 500,
+    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+  };
   const systemConfig = {
     solverStockLengths: [5850, 6000],
     solverTrimStartMm: 10,
@@ -208,9 +218,18 @@ describe('CuttingProposalsService', () => {
       expect(prisma.cuttingProposal.create).toHaveBeenCalledWith({
         data: { productionOrderId: 1n, idempotencyKey: undefined, requestedById: undefined },
         include: {
-          productionOrder: { include: { mfgProduct: true } },
+          productionOrder: {
+            include: {
+              mfgProduct: true,
+              productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+            },
+          },
           // Nhánh phương án cấp nhóm - null với đề xuất neo vào 1 lệnh SX như ca này.
-          productionInvoice: { include: { items: { include: { mfgProduct: true } } } },
+          productionInvoice: {
+            include: {
+              items: { include: { mfgProduct: true, salesOrder: { select: { code: true } } } },
+            },
+          },
         },
       });
     });
@@ -340,7 +359,8 @@ describe('CuttingProposalsService', () => {
       const notifyCall = prisma.notification.create.mock.calls[0] as unknown as [
         { data: { title: string } },
       ];
-      expect(notifyCall[0].data.title).toContain('PO-1');
+      // Nhãn thông báo ưu tiên mã đơn Sales gốc (PO-31) thay vì poNumber nội bộ (xem buildOrderJob).
+      expect(notifyCall[0].data.title).toContain('PO-31');
     });
 
     it('tự động duyệt ngay sau khi tính thành công - không cần gọi approve() riêng (Sếp chốt 2026-08-15)', async () => {
@@ -917,11 +937,10 @@ describe('CuttingProposalsService', () => {
       });
       // Điều kiện quyết định: KHÔNG được lọt `productionOrderId` vào where - đó chính là chỗ
       // biến bộ lọc thành "IS NULL" quét cả bảng.
-      const where = prisma.cuttingProposal.findMany.mock.calls[0][0].where as Record<
-        string,
-        unknown
-      >;
-      expect(where).not.toHaveProperty('productionOrderId');
+      const findManyCall = prisma.cuttingProposal.findMany.mock.calls[0] as unknown as [
+        { where: Record<string, unknown> },
+      ];
+      expect(findManyCall[0].where).not.toHaveProperty('productionOrderId');
     });
 
     it('không supersede gì cả khi phương án không neo vào PO lẫn PI (dữ liệu hỏng, thà bỏ qua còn hơn quét cả bảng)', async () => {
@@ -1214,13 +1233,23 @@ describe('CuttingProposalsService', () => {
         expect.objectContaining({
           where: undefined,
           include: {
-            productionOrder: { include: { mfgProduct: true } },
-            productionInvoice: { include: { items: { include: { mfgProduct: true } } } },
+            productionOrder: {
+              include: {
+                mfgProduct: true,
+                productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+              },
+            },
+            productionInvoice: {
+              include: {
+                items: { include: { mfgProduct: true, salesOrder: { select: { code: true } } } },
+              },
+            },
           },
         }),
       );
       expect(result.data).toHaveLength(1);
-      expect(result.data[0].poNumber).toBe('PO-1');
+      expect(result.data[0].poNumber).toBe('PO-31-1');
+      expect(result.data[0].salesOrderCode).toBe('PO-31');
       expect(result.data[0].mfgProductCode).toBe('SKU-1');
     });
   });

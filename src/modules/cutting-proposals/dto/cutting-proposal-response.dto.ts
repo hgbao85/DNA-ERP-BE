@@ -72,8 +72,13 @@ export class CuttingProposalResponseDto {
   /** Neo vào ĐÚNG MỘT trong hai: 1 lệnh SX cắt riêng, hoặc cả 1 PI gộp cắt chung một đợt. */
   @Expose() @ApiPropertyOptional({ nullable: true }) productionOrderId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceId!: string | null;
-  /** Mã lệnh sản xuất, hoặc mã PI khi là phương án cấp nhóm. */
+  /** Mã lệnh sản xuất NỘI BỘ, hoặc mã PI khi là phương án cấp nhóm - chỉ hệ thống dùng, KHÔNG
+   *  hiển thị cho người dùng nữa (xem `salesOrderCode` bên dưới). */
   @Expose() @ApiProperty() poNumber!: string;
+  /** Mã đơn hàng Sales gốc - đây mới là mã "PO" người dùng cần thấy. null khi SKU không gắn đơn
+   *  Sales nào; có thể là danh sách nhiều mã nối bằng ", " khi là phương án cấp nhóm (nhiều đơn
+   *  Sales trong cùng 1 đợt cắt). */
+  @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   /** Mã SKU, hoặc danh sách mã SKU (ngăn bởi dấu phẩy) khi là phương án cấp nhóm. */
   @Expose() @ApiProperty() mfgProductCode!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;

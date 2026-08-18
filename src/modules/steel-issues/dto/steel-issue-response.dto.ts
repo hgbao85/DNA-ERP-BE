@@ -7,7 +7,11 @@ import { CutBundleResponseDto } from './cut-bundle-response.dto';
 export class SteelIssueResponseDto {
   @Expose() @ApiProperty() id!: string;
   @Expose() @ApiProperty() productionOrderId!: string;
+  /// Mã nội bộ (ProductionOrder.poNumber) - chỉ hệ thống dùng, KHÔNG hiển thị cho người dùng.
   @Expose() @ApiProperty() poNumber!: string;
+  /// Mã đơn hàng Sales gốc (SalesOrder.code) - đây mới là mã "PO" người dùng cần thấy. null khi
+  /// SKU không gắn đơn Sales nào.
+  @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   @Expose() @ApiProperty() pieceId!: string;
   @Expose() @ApiProperty() pieceCode!: string;
   @Expose() @ApiProperty() pieceName!: string;

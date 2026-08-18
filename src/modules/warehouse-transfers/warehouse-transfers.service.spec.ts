@@ -277,7 +277,10 @@ describe('WarehouseTransfersService', () => {
               pieceId: 30n,
               quantity: 12,
               note: null,
-              productionOrder: { poNumber: 'PO-001' },
+              productionOrder: {
+                poNumber: 'PO-31-1',
+                productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+              },
               piece: { code: 'M-01', name: 'Manh 01' },
             },
           ],
@@ -307,10 +310,11 @@ describe('WarehouseTransfersService', () => {
   describe('getPieceTransferPlan', () => {
     const order = {
       id: 900n,
-      poNumber: 'PO-001',
+      poNumber: 'PO-31-1',
       bomRevisionId: 80n,
       quantity: 100,
       mfgProduct: { name: 'San pham A' },
+      productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
     };
     const manhPiece = { pieceId: 30n, piece: { code: 'M-01', name: 'Manh 01' } };
     const vatTuPiece = { pieceId: 31n, piece: { code: 'V-01', name: 'Vat tu 01' } };
@@ -415,10 +419,11 @@ describe('WarehouseTransfersService', () => {
       prisma.productionOrder.findMany.mockResolvedValue([
         {
           id: 900n,
-          poNumber: 'PO-001',
+          poNumber: 'PO-31-1',
           bomRevisionId: 80n,
           quantity: 100,
           mfgProduct: { name: 'San pham A' },
+          productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
         },
       ]);
       prisma.bomPiece.findMany.mockResolvedValue([

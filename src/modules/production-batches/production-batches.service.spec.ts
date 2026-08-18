@@ -22,10 +22,11 @@ describe('ProductionBatchesService', () => {
 
   const order = {
     id: 1n,
-    poNumber: 'PO-1',
+    poNumber: 'PO-31-1',
     bomRevisionId: 5n,
     quantity: 10,
     mfgProduct: { name: 'SP-1' },
+    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
   };
   const piece = { id: 40n, code: 'MANH-TUA', name: 'Mảnh tựa' };
   const bomPieceRow = {

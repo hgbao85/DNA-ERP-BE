@@ -27,7 +27,9 @@ import { MaterialIssueResponseDto } from './dto/material-issue-response.dto';
 import { ReceiveMaterialIssueDto } from './dto/receive-material-issue.dto';
 
 const MATERIAL_ISSUE_INCLUDE = {
-  productionOrder: true,
+  productionOrder: {
+    include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+  },
   material: true,
 } satisfies Prisma.MaterialIssueInclude;
 
@@ -345,6 +347,7 @@ export class MaterialIssuesService {
       id: issue.id.toString(),
       productionOrderId: issue.productionOrderId.toString(),
       poNumber: issue.productionOrder.poNumber,
+      salesOrderCode: issue.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
       stage: issue.stage,
       materialId: issue.materialId.toString(),
       materialCode: issue.material.code,

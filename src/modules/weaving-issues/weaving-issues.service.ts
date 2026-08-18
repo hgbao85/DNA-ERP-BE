@@ -18,14 +18,19 @@ import { WeavingIssuePlanItemResponseDto } from './dto/weaving-issue-plan-item-r
 import { WeavingIssueResponseDto } from './dto/weaving-issue-response.dto';
 import { WeavingReceiptResponseDto } from './dto/weaving-receipt-response.dto';
 
+// Mã đơn Sales gốc (hiển thị cột "PO" cho người dùng) - xem toIssueResponseDto/toReceiptResponseDto.
+const PRODUCTION_ORDER_WITH_SALES_CODE = {
+  include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+} satisfies Prisma.ProductionOrderDefaultArgs;
+
 const WEAVING_ISSUE_INCLUDE = {
-  productionOrder: true,
+  productionOrder: PRODUCTION_ORDER_WITH_SALES_CODE,
   piece: true,
   weavingPoint: true,
 } satisfies Prisma.WeavingIssueInclude;
 
 const WEAVING_RECEIPT_INCLUDE = {
-  productionOrder: true,
+  productionOrder: PRODUCTION_ORDER_WITH_SALES_CODE,
   piece: true,
   weavingPoint: true,
 } satisfies Prisma.WeavingReceiptInclude;
@@ -387,6 +392,7 @@ export class WeavingIssuesService {
       id: issue.id.toString(),
       productionOrderId: issue.productionOrderId.toString(),
       poNumber: issue.productionOrder.poNumber,
+      salesOrderCode: issue.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
       pieceId: issue.pieceId.toString(),
       pieceCode: issue.piece.code,
       pieceName: issue.piece.name,
@@ -404,6 +410,7 @@ export class WeavingIssuesService {
       id: receipt.id.toString(),
       productionOrderId: receipt.productionOrderId.toString(),
       poNumber: receipt.productionOrder.poNumber,
+      salesOrderCode: receipt.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
       pieceId: receipt.pieceId.toString(),
       pieceCode: receipt.piece.code,
       pieceName: receipt.piece.name,

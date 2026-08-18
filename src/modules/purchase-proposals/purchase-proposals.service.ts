@@ -50,13 +50,21 @@ const LIST_INCLUDE = {
         include: {
           mfgProduct: true,
           productionInvoiceItem: {
-            include: { stages: true, productionInvoice: { select: { code: true, deadline: true } } },
+            include: {
+              stages: true,
+              productionInvoice: { select: { deadline: true, code: true } },
+              salesOrder: { select: { code: true } },
+            },
           },
         },
       },
       // null khi phương án cắt neo vào 1 lệnh SX; có giá trị khi neo vào PI gộp - xem toResponseDto.
       productionInvoice: {
-        include: { items: { include: { mfgProduct: true, stages: true } } },
+        include: {
+          items: {
+            include: { mfgProduct: true, stages: true, salesOrder: { select: { code: true } } },
+          },
+        },
       },
     },
   },
@@ -641,17 +649,28 @@ export class PurchaseProposalsService {
           .filter((d): d is Date => d !== null)
           .sort((a, b) => a.getTime() - b.getTime())[0] ?? null);
 
+    // Mã đơn hàng Sales gốc - đây mới là mã "PO" người dùng cần thấy (poNumber nội bộ giờ chỉ
+    // còn phục vụ hệ thống, xem trao đổi 2026-08-18). Nhánh lệnh SX đơn: 1 SalesOrder duy nhất
+    // (ProductionInvoiceItem.salesOrderId). Nhánh PI gộp: các SKU trong nhóm có thể thuộc NHIỀU
+    // đơn Sales khác nhau - gộp danh sách mã duy nhất, không có "1 mã đại diện" nào đúng cả.
+    // null khi SKU không gắn đơn Sales nào (tạo tay, xem PlanForm.customerName).
+    const salesOrderCode = productionOrder
+      ? (productionOrder.productionInvoiceItem.salesOrder?.code ?? null)
+      : (mergedPi?.items ?? [])
+          .map((it) => it.salesOrder?.code)
+          .filter((c): c is string => !!c)
+          .filter((c, i, arr) => arr.indexOf(c) === i)
+          .join(', ') || null;
+
     return new PurchaseProposalResponseDto({
       id: row.id.toString(),
       cuttingProposalId: row.cuttingProposalId?.toString() ?? null,
       warehouseCode: row.warehouseCode,
       status: row.status,
-      // Sếp chốt 2026-08-17: Mua hàng theo mã PI (lệnh sản xuất), KHÔNG dùng ProductionOrder.poNumber
-      // nội bộ nữa - nhánh lệnh SX đơn trước đây "mượn tạm" mã đó (PO-x) vì đường rút gọn
-      // (CuttingProposal -> ProductionOrder) không đi qua Sku/ExportOrder, gây lệch mã so với nhánh
-      // PI gộp (vốn đã đúng mergedPi.code từ đầu). Field response vẫn tên `poNumber` (đỡ đổi DTO/FE)
-      // nhưng giá trị giờ luôn là mã PI ở cả 2 nhánh.
-      poNumber: productionOrder?.productionInvoiceItem.productionInvoice.code ?? mergedPi?.code ?? '—',
+      poNumber: productionOrder?.poNumber ?? mergedPi?.code ?? '—',
+      salesOrderCode,
+      piCode:
+        productionOrder?.productionInvoiceItem.productionInvoice.code ?? mergedPi?.code ?? '—',
       mfgProductCode:
         productionOrder?.mfgProduct.factoryCode ??
         (mergedPi?.items ?? []).map((it) => it.mfgProduct.factoryCode).join(', '),

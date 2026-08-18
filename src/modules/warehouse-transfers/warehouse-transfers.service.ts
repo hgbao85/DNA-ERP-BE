@@ -35,7 +35,14 @@ const TRANSFER_INCLUDE = {
   fromWarehouse: true,
   toWarehouse: true,
   items: true,
-  pieceItems: { include: { productionOrder: true, piece: true } },
+  pieceItems: {
+    include: {
+      productionOrder: {
+        include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+      },
+      piece: true,
+    },
+  },
 } satisfies Prisma.WarehouseTransferInclude;
 
 type WarehouseTransferWithRefs = Prisma.WarehouseTransferGetPayload<{
@@ -256,7 +263,10 @@ export class WarehouseTransfersService {
     const orderBigIds = productionOrderIds.map((id) => parseBigIntId(id));
     const orders = await this.prisma.productionOrder.findMany({
       where: { id: { in: orderBigIds } },
-      include: { mfgProduct: true },
+      include: {
+        mfgProduct: true,
+        productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+      },
     });
     if (orders.length !== orderBigIds.length) {
       throw new NotFoundException('Một hoặc nhiều productionOrderId không tồn tại');
@@ -348,6 +358,7 @@ export class WarehouseTransfersService {
           new PieceTransferPlanItemResponseDto({
             productionOrderId: order.id.toString(),
             poNumber: order.poNumber,
+            salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
             productName: order.mfgProduct.name,
             pieceId: bp.pieceId.toString(),
             pieceCode: bp.piece.code,
@@ -600,6 +611,7 @@ export class WarehouseTransfersService {
             id: item.id.toString(),
             productionOrderId: item.productionOrderId.toString(),
             poNumber: item.productionOrder.poNumber,
+            salesOrderCode: item.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
             pieceId: item.pieceId.toString(),
             pieceCode: item.piece.code,
             pieceName: item.piece.name,

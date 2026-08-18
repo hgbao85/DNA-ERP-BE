@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
 
 /** MANH = needsHan=true (dù có needsSon hay không); VAT_TU_THANH_PHAM = needsHan=false - xem
@@ -9,6 +9,7 @@ export type PieceTransferLabel = 'MANH' | 'VAT_TU_THANH_PHAM';
 export class PieceTransferPlanItemResponseDto {
   @Expose() @ApiProperty() productionOrderId!: string;
   @Expose() @ApiProperty() poNumber!: string;
+  @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   @Expose() @ApiProperty() productName!: string;
   @Expose() @ApiProperty() pieceId!: string;
   @Expose() @ApiProperty() pieceCode!: string;

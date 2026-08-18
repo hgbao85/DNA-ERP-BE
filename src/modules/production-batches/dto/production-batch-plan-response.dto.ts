@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose, Type } from 'class-transformer';
 import { ProductionBatchPlanItemResponseDto } from './production-batch-plan-item-response.dto';
 
@@ -12,6 +12,7 @@ import { ProductionBatchPlanItemResponseDto } from './production-batch-plan-item
 @Exclude()
 export class ProductionBatchPlanResponseDto {
   @Expose() @ApiProperty() poNumber!: string;
+  @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   @Expose() @ApiProperty() productName!: string;
   @Expose() @ApiProperty() quantity!: number;
   @Expose()

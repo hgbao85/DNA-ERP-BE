@@ -26,7 +26,9 @@ import { ProductionBatchPlanResponseDto } from './dto/production-batch-plan-resp
 import { ProductionBatchResponseDto } from './dto/production-batch-response.dto';
 
 const PRODUCTION_BATCH_INCLUDE = {
-  productionOrder: true,
+  productionOrder: {
+    include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+  },
   piece: true,
 } satisfies Prisma.ProductionBatchInclude;
 
@@ -246,6 +248,7 @@ export class ProductionBatchesService {
 
     return new ProductionBatchPlanResponseDto({
       poNumber: order.poNumber,
+      salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
       productName: order.mfgProduct.name,
       quantity: order.quantity,
       items,
@@ -315,7 +318,10 @@ export class ProductionBatchesService {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({
       where: { id: bigId },
-      include: { mfgProduct: true },
+      include: {
+        mfgProduct: true,
+        productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+      },
     });
     if (!order) {
       throw new NotFoundException(`Production order ${id} not found`);
@@ -340,6 +346,7 @@ export class ProductionBatchesService {
       id: batch.id.toString(),
       productionOrderId: batch.productionOrderId.toString(),
       poNumber: batch.productionOrder.poNumber,
+      salesOrderCode: batch.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
       stage: batch.stage,
       pieceId: batch.pieceId.toString(),
       pieceCode: batch.piece.code,

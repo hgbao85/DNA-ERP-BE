@@ -25,7 +25,13 @@ describe('WeavingIssuesService', () => {
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
   };
 
-  const order = { id: 1n, poNumber: 'PO-1', bomRevisionId: 5n, quantity: 10 };
+  const order = {
+    id: 1n,
+    poNumber: 'PO-31-1',
+    bomRevisionId: 5n,
+    quantity: 10,
+    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+  };
   const piece = { id: 20n, code: 'MANH-DAN', name: 'Mảnh Đan', isWoven: true };
   const weavingPoint = { id: 40n, code: 'DIEM-A', fullName: 'Điểm đan A', isActive: true };
   // isWoven ở đây là SNAPSHOT trên BomPiece (theo đúng bomRevisionId), không phải piece.isWoven

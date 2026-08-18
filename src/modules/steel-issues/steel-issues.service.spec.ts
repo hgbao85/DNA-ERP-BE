@@ -32,7 +32,13 @@ describe('SteelIssuesService', () => {
     $transaction: jest.Mock;
   };
 
-  const order = { id: 1n, poNumber: 'PO-1', bomRevisionId: 5n, quantity: 10 };
+  const order = {
+    id: 1n,
+    poNumber: 'PO-31-1',
+    bomRevisionId: 5n,
+    quantity: 10,
+    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+  };
   const piece = { id: 20n, code: 'MANH-TUA', name: 'Mảnh Tựa' };
   // processSteps mặc định chỉ [CAT] - piece "đơn giản" chỉ cần cắt là đủ điều kiện KCS ngay,
   // đúng hành vi cũ (test step-gating multi-step override riêng ở describe('completeStep')).
@@ -71,7 +77,12 @@ describe('SteelIssuesService', () => {
   // nhánh theo SQL, cùng idiom đã dùng ở cutting-proposals.service.spec.ts. Chỉ có tác dụng cho
   // test nào set `approvedAt` của cuttingProposal SAU cutover (mặc định TRƯỚC cutover, không đụng
   // 2 câu này - xem default cuttingProposalLine.findFirst dưới).
-  let reservationRow: { id: bigint; warehouseId: bigint; quantity: number; consumedQty: number } | null;
+  let reservationRow: {
+    id: bigint;
+    warehouseId: bigint;
+    quantity: number;
+    consumedQty: number;
+  } | null;
   let physicalStockQty: number;
 
   beforeEach(() => {

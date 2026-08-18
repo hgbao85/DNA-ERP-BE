@@ -28,7 +28,9 @@ import { SteelIssuePlanItemResponseDto } from './dto/steel-issue-plan-item-respo
 import { SteelIssueResponseDto } from './dto/steel-issue-response.dto';
 
 const STEEL_ISSUE_INCLUDE = {
-  productionOrder: true,
+  productionOrder: {
+    include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+  },
   piece: true,
   material: true,
 } satisfies Prisma.SteelIssueInclude;
@@ -638,7 +640,9 @@ export class SteelIssuesService {
       lines.map((l) => [l.materialId.toString(), l.cuttingProposalId]),
     );
 
-    const refIds = [...new Set([...cuttingProposalIdByMaterial.values()].map((id) => id.toString()))];
+    const refIds = [
+      ...new Set([...cuttingProposalIdByMaterial.values()].map((id) => id.toString())),
+    ];
     const reservations =
       refIds.length > 0
         ? await this.prisma.stockReservation.findMany({
@@ -651,9 +655,7 @@ export class SteelIssuesService {
             select: { refId: true, materialId: true, quantity: true, consumedQty: true },
           })
         : [];
-    const reservationByKey = new Map(
-      reservations.map((r) => [`${r.refId}:${r.materialId}`, r]),
-    );
+    const reservationByKey = new Map(reservations.map((r) => [`${r.refId}:${r.materialId}`, r]));
 
     const warehouseIds = [
       ...new Set(materials.map((m) => m.warehouseId).filter((id): id is bigint => id != null)),
@@ -665,7 +667,9 @@ export class SteelIssuesService {
             select: { warehouseId: true, materialId: true, qty: true },
           })
         : [];
-    const quantByKey = new Map(quants.map((q) => [`${q.warehouseId}:${q.materialId}`, q.qty.toNumber()]));
+    const quantByKey = new Map(
+      quants.map((q) => [`${q.warehouseId}:${q.materialId}`, q.qty.toNumber()]),
+    );
 
     for (const materialId of materialIds) {
       const key = materialId.toString();
@@ -817,6 +821,7 @@ export class SteelIssuesService {
       id: issue.id.toString(),
       productionOrderId: issue.productionOrderId.toString(),
       poNumber: issue.productionOrder.poNumber,
+      salesOrderCode: issue.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
       pieceId: issue.pieceId.toString(),
       pieceCode: issue.piece.code,
       pieceName: issue.piece.name,

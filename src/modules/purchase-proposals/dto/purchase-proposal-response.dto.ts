@@ -61,10 +61,19 @@ export class PurchaseProposalResponseDto {
   /// trên, vì 1 đề xuất có thể gồm nhiều vật tư khác kho nhau.
   @Expose() @ApiProperty() warehouseCode!: string;
   @Expose() @ApiProperty({ enum: PurchaseProposalStatus }) status!: PurchaseProposalStatus;
-  /// Mã PI (lệnh sản xuất, vd "PI-2026-014") - Sếp chốt 2026-08-17 mua hàng theo mã PI, không dùng
-  /// ProductionOrder.poNumber nội bộ nữa (xem PurchaseProposalsService.toResponseDto). Tên field
-  /// giữ nguyên `poNumber` để đỡ đổi FE, dù giờ không còn là "PO" theo nghĩa cũ nữa.
+  /// PO nội bộ (ProductionOrder.poNumber) - CHỈ để hệ thống tra cứu/debug, không còn ý nghĩa hiển
+  /// thị cho người dùng (xem trao đổi 2026-08-18) - FE dùng `salesOrderCode` bên dưới thay thế
+  /// cho cột "PO" trên UI Mua hàng. Trước đó từng đổi sang mã PI theo chốt của Sếp (2026-08-17),
+  /// nay tách riêng thành `salesOrderCode`/`piCode` nên field này quay về vai trò tra cứu nội bộ.
   @Expose() @ApiProperty() poNumber!: string;
+  /// Mã đơn hàng Sales gốc (SalesOrder.code, vd "PO-31") - đây mới là mã "PO" người dùng cần
+  /// thấy. null khi SKU không gắn đơn Sales nào (tạo tay). Nhánh PI gộp có thể trả về NHIỀU mã
+  /// nối bằng ", " nếu các SKU trong nhóm thuộc nhiều đơn Sales khác nhau (hiếm).
+  @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
+  /// Mã ProductionInvoice ("PI-2026-001") mà lệnh SX/PI gộp phía trên thuộc về - tách riêng khỏi
+  /// poNumber vì 2 bộ đếm độc lập nhau (ProductionOrder vs ProductionInvoice), dễ nhầm là cùng 1
+  /// mã do cùng đứng cạnh nhau trên UI Mua hàng (xem LenhMuaNCCPage/TheoDoiMuaHangPage FE).
+  @Expose() @ApiProperty() piCode!: string;
   @Expose() @ApiProperty() mfgProductCode!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;
   /// Hạn Mua hàng nên ưu tiên - nhánh lệnh SX đơn: materialDeadline -> mốc Khung cơ khí -> hạn cả
