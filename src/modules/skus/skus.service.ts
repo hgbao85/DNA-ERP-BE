@@ -1246,6 +1246,8 @@ export class SkusService {
     return new SkuResponseDto({
       id: pf.id.toString(),
       salesOrderId: pf.salesOrderId?.toString() ?? null,
+      salesOrderCode: pf.salesOrder?.code ?? null,
+      salesOrderDeliveryDate: pf.salesOrder?.deliveryDate ?? null,
       mfgProductId: pf.mfgProductId.toString(),
       factoryCode: pf.mfgProduct.factoryCode,
       productName: pf.mfgProduct.name,

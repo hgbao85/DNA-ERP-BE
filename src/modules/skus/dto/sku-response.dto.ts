@@ -7,6 +7,10 @@ import { SkuDetailReviewResponseDto, SkuManhReviewResponseDto } from './sku-revi
 export class SkuResponseDto {
   @Expose() @ApiProperty() id!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderId!: string | null;
+  /** Mã PO thật (SalesOrder.code, dạng PO-{id}) — Sales tạo, khác piCode (mã PI). */
+  @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
+  /** Hạn giao thật (SalesOrder.deliveryDate) — dùng cho cột "Hạn giao" ở Bảng thống kê. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderDeliveryDate!: Date | null;
   @Expose() @ApiProperty() mfgProductId!: string;
   @Expose() @ApiProperty() factoryCode!: string;
   @Expose() @ApiProperty() productName!: string;

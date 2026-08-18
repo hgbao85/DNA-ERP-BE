@@ -118,6 +118,22 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.CUTTING_PROPOSAL,
       actions: [PermissionAction.VIEW],
     },
+    // ProductionPlanApp expose luôn MfgWarehousesPage ("Tổng hợp kho", không gate theo role ở
+    // FE) cho KHSX - trang này gọi đồng thời GET /warehouses, /materials, /material-groups lúc
+    // mount (STOCK:VIEW ở trên chỉ đủ cho /stock-quant). Thiếu 3 quyền này thì cả 3 card đầu
+    // trang luôn trống với lỗi 403 (phát hiện qua DevTools Network, không có toast báo lỗi).
+    {
+      module: PERMISSION_MODULES.WAREHOUSE,
+      actions: [PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.MATERIAL,
+      actions: [PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.MATERIAL_GROUP,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // QLSX: bước duyệt cục bộ SKU (qlsx-review/request-boss-approval/reject-qlsx) đã bị bỏ khỏi
   // pipeline - QLSX chỉ còn VIEW trên SKU (tab "Danh sách SKU" đọc-only). QLSX vẫn duyệt PI
