@@ -28,7 +28,11 @@ describe('ProductionOrdersService', () => {
     status: 'RELEASED',
     releasedAt: new Date(),
     createdAt: new Date(),
-    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+    productionInvoiceItem: {
+      salesOrder: { code: 'PO-31' },
+      productionInvoice: { code: 'PI-2026-001' },
+      deliveryDeadline: new Date('2026-09-01'),
+    },
     ...overrides,
   });
 
@@ -133,12 +137,19 @@ describe('ProductionOrdersService', () => {
       expect(result.id).toBe('9');
       expect(result.poNumber).toBe('PO-31-1');
       expect(result.salesOrderCode).toBe('PO-31');
+      expect(result.piCode).toBe('PI-2026-001');
       expect(result.mfgProductId).toBe('2');
     });
 
     it('returns null salesOrderCode when the item has no sales order', async () => {
       prisma.productionOrder.findUnique.mockResolvedValue(
-        order({ productionInvoiceItem: { salesOrder: null } }),
+        order({
+          productionInvoiceItem: {
+            salesOrder: null,
+            productionInvoice: { code: 'PI-2026-001' },
+            deliveryDeadline: null,
+          },
+        }),
       );
 
       const result = await service.findOne('9');

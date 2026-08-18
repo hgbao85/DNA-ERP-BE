@@ -119,7 +119,11 @@ export class SteelIssuesService {
       if (existing) {
         return this.toResponseDto(
           existing,
-          await this.resolveRequiredSteps(existing.productionOrder.bomRevisionId, existing.pieceId),
+          await this.resolveRequiredSteps(
+            existing.productionOrder.bomRevisionId,
+            existing.pieceId,
+            existing.materialId,
+          ),
         );
       }
     }
@@ -131,7 +135,8 @@ export class SteelIssuesService {
       throw new NotFoundException(`Piece ${dto.pieceId} not found`);
     }
 
-    const materialId = await this.resolveMaterialForPiece(order.bomRevisionId, pieceBigId);
+    const materialId = parseBigIntId(dto.materialId);
+    await this.assertMaterialBelongsToPiece(order.bomRevisionId, pieceBigId, materialId);
     const { cuttingProposalId, approvedAt } = await this.assertMaterialInApprovedProposal(
       order.id,
       order.productionInvoiceItem?.productionInvoiceId ?? null,
@@ -174,7 +179,7 @@ export class SteelIssuesService {
 
     return this.toResponseDto(
       created,
-      await this.resolveRequiredSteps(order.bomRevisionId, pieceBigId),
+      await this.resolveRequiredSteps(order.bomRevisionId, pieceBigId, materialId),
     );
   }
 
@@ -289,9 +294,9 @@ export class SteelIssuesService {
       data: result.data.map((r) =>
         this.toResponseDto(
           r,
-          requiredStepsMap.get(`${r.productionOrder.bomRevisionId}:${r.pieceId}`) ?? [
-            ProcessStep.CAT,
-          ],
+          requiredStepsMap.get(
+            `${r.productionOrder.bomRevisionId}:${r.pieceId}:${r.materialId}`,
+          ) ?? [ProcessStep.CAT],
         ),
       ),
       meta: result.meta,
@@ -318,9 +323,9 @@ export class SteelIssuesService {
       data: result.data.map((r) =>
         this.toResponseDto(
           r,
-          requiredStepsMap.get(`${r.productionOrder.bomRevisionId}:${r.pieceId}`) ?? [
-            ProcessStep.CAT,
-          ],
+          requiredStepsMap.get(
+            `${r.productionOrder.bomRevisionId}:${r.pieceId}:${r.materialId}`,
+          ) ?? [ProcessStep.CAT],
         ),
       ),
       meta: result.meta,
@@ -331,7 +336,11 @@ export class SteelIssuesService {
     const issue = await this.findOneOrThrow(id);
     return this.toResponseDto(
       issue,
-      await this.resolveRequiredSteps(issue.productionOrder.bomRevisionId, issue.pieceId),
+      await this.resolveRequiredSteps(
+        issue.productionOrder.bomRevisionId,
+        issue.pieceId,
+        issue.materialId,
+      ),
     );
   }
 
@@ -354,7 +363,11 @@ export class SteelIssuesService {
     });
     return this.toResponseDto(
       updated,
-      await this.resolveRequiredSteps(updated.productionOrder.bomRevisionId, updated.pieceId),
+      await this.resolveRequiredSteps(
+        updated.productionOrder.bomRevisionId,
+        updated.pieceId,
+        updated.materialId,
+      ),
     );
   }
 
@@ -372,6 +385,7 @@ export class SteelIssuesService {
     const requiredSteps = await this.resolveRequiredSteps(
       issue.productionOrder.bomRevisionId,
       issue.pieceId,
+      issue.materialId,
     );
     const completedSteps: ProcessStep[] = [ProcessStep.CAT];
     const done = requiredSteps.every((s) => completedSteps.includes(s));
@@ -425,6 +439,7 @@ export class SteelIssuesService {
     const requiredSteps = await this.resolveRequiredSteps(
       issue.productionOrder.bomRevisionId,
       issue.pieceId,
+      issue.materialId,
     );
     if (!requiredSteps.includes(dto.step)) {
       throw new BadRequestException(
@@ -449,14 +464,18 @@ export class SteelIssuesService {
     return this.toResponseDto(updated, requiredSteps);
   }
 
-  /** Union processSteps của mọi PieceBom (bomRevisionId, pieceId) + CAT mặc định (công đoạn tối
-   *  thiểu bắt buộc - luôn xảy ra qua completeCutting). */
+  /** Union processSteps của mọi PieceBom (bomRevisionId, pieceId, materialId) + CAT mặc định
+   *  (công đoạn tối thiểu bắt buộc - luôn xảy ra qua completeCutting). Lọc thêm theo materialId
+   *  (từ B4 hỗ trợ mảnh nhiều loại sắt) - 1 mảnh có thể dùng nhiều loại sắt, mỗi loại tự có công
+   *  đoạn riêng (vd loại A cần Uốn, loại B không), KHÔNG được gộp chung theo cả mảnh nữa - nếu
+   *  không 1 đợt xuất của loại B sẽ bị bắt chờ "Uốn" dù không liên quan gì đến loại B. */
   private async resolveRequiredSteps(
     bomRevisionId: bigint,
     pieceId: bigint,
+    materialId: bigint,
   ): Promise<ProcessStep[]> {
     const rows = await this.prisma.pieceBom.findMany({
-      where: { bomRevisionId, pieceId },
+      where: { bomRevisionId, pieceId, segmentSpec: { materialId } },
       select: { processSteps: true },
     });
     const set = new Set<ProcessStep>([ProcessStep.CAT]);
@@ -465,18 +484,24 @@ export class SteelIssuesService {
   }
 
   /** Batch cho findAll/findAllForOrder - 1 query pieceBom cho cả tập bomRevisionId liên quan, gom
-   *  trong bộ nhớ (tránh N+1). Key = `${bomRevisionId}:${pieceId}`. */
+   *  trong bộ nhớ (tránh N+1). Key = `${bomRevisionId}:${pieceId}:${materialId}` (materialId thêm
+   *  từ B4 hỗ trợ mảnh nhiều loại sắt, xem resolveRequiredSteps). */
   private async attachRequiredStepsMap(
     issues: SteelIssueRow[],
   ): Promise<Map<string, ProcessStep[]>> {
     const bomRevisionIds = [...new Set(issues.map((i) => i.productionOrder.bomRevisionId))];
     const rows = await this.prisma.pieceBom.findMany({
       where: { bomRevisionId: { in: bomRevisionIds } },
-      select: { bomRevisionId: true, pieceId: true, processSteps: true },
+      select: {
+        bomRevisionId: true,
+        pieceId: true,
+        processSteps: true,
+        segmentSpec: { select: { materialId: true } },
+      },
     });
     const byKey = new Map<string, Set<ProcessStep>>();
     for (const row of rows) {
-      const key = `${row.bomRevisionId}:${row.pieceId}`;
+      const key = `${row.bomRevisionId}:${row.pieceId}:${row.segmentSpec.materialId}`;
       const set = byKey.get(key) ?? new Set<ProcessStep>([ProcessStep.CAT]);
       for (const step of row.processSteps) set.add(step);
       byKey.set(key, set);
@@ -535,14 +560,17 @@ export class SteelIssuesService {
       // Chỉ đợt gốc (không tính rework) - đúng cách daXuatOf() bên mock cộng dồn.
       this.prisma.steelIssue.findMany({
         where: { productionOrderId: order.id, reworkOfId: null },
-        select: { pieceId: true, barCount: true },
+        select: { pieceId: true, materialId: true, barCount: true },
       }),
     ]);
 
-    const issuedByPiece = new Map<string, number>();
+    // Key = `${pieceId}:${materialId}` - từ B4 hỗ trợ mảnh nhiều loại sắt, 1 mảnh có thể sinh
+    // NHIỀU dòng kế hoạch (mỗi dòng 1 loại sắt), nên "đã xuất bao nhiêu" phải cộng dồn riêng theo
+    // từng cặp mảnh+vật tư, không còn gộp cả mảnh làm 1 như trước.
+    const issuedByPieceMaterial = new Map<string, number>();
     for (const i of issues) {
-      const key = i.pieceId.toString();
-      issuedByPiece.set(key, (issuedByPiece.get(key) ?? 0) + i.barCount);
+      const key = `${i.pieceId}:${i.materialId}`;
+      issuedByPieceMaterial.set(key, (issuedByPieceMaterial.get(key) ?? 0) + i.barCount);
     }
 
     const pieceBomsByPiece = new Map<string, typeof pieceBoms>();
@@ -553,43 +581,52 @@ export class SteelIssuesService {
       pieceBomsByPiece.set(key, arr);
     }
 
-    // B4 Đợt 3c - vật tư THẬT SỰ dùng (đã lọc mảnh nhiều loại sắt) - tính trước để tra
-    // remainingToIssue/physicalStockQty ĐÚNG 1 LẦN/vật tư, không lặp theo từng mảnh dù nhiều
-    // mảnh dùng chung 1 loại sắt (vd DOAN-DAI/DOAN-NGAN/VIEN-BAN đều dùng STL-HOP-25X50).
+    // Vật tư THẬT SỰ dùng - tính trước để tra remainingToIssue/physicalStockQty ĐÚNG 1 LẦN/vật
+    // tư, không lặp lại dù nhiều mảnh/nhiều dòng trong cùng 1 mảnh dùng chung 1 loại sắt. B4 hỗ
+    // trợ mảnh nhiều loại sắt: gom TẤT CẢ vật tư của mọi mảnh (không còn loại bỏ mảnh >1 vật tư).
     const materialIdsUsed = new Set<bigint>();
-    for (const bp of bomPieces) {
-      const rows = pieceBomsByPiece.get(bp.pieceId.toString()) ?? [];
-      const ids = new Set(rows.map((r) => r.segmentSpec.materialId));
-      if (ids.size === 1) materialIdsUsed.add([...ids][0]);
+    for (const rows of pieceBomsByPiece.values()) {
+      for (const r of rows) materialIdsUsed.add(r.segmentSpec.materialId);
     }
     const stockInfoByMaterial = await this.buildStockInfoByMaterial(order, [...materialIdsUsed]);
 
-    return bomPieces
-      .map((bp) => {
-        const key = bp.pieceId.toString();
-        const rows = pieceBomsByPiece.get(key) ?? [];
-        if (rows.length === 0) return null;
-        const materialIds = new Set(rows.map((r) => r.segmentSpec.materialId.toString()));
-        // Mảnh dùng >1 loại sắt - chưa hỗ trợ ở view này, xem resolveMaterialForPiece().
-        if (materialIds.size > 1) return null;
+    // B4 hỗ trợ mảnh nhiều loại sắt: 1 mảnh giờ sinh ra 1 DÒNG KẾ HOẠCH RIÊNG cho MỖI loại sắt nó
+    // dùng (nhóm pieceBom theo materialId trong cùng mảnh), thay vì bị loại bỏ hoàn toàn khi dùng
+    // >1 loại như trước (xem comment cũ ở assertMaterialBelongsToPiece) - mảnh thật hầu hết đều
+    // ghép nhiều loại sắt (vd khung ghế: sắt tròn + sắt hộp + sắt vuông), loại bỏ cả mảnh khiến
+    // toàn bộ kế hoạch trống rỗng dù BOM đã khai đủ.
+    return bomPieces.flatMap((bp) => {
+      const key = bp.pieceId.toString();
+      const rows = pieceBomsByPiece.get(key) ?? [];
+      if (rows.length === 0) return [];
+
+      const rowsByMaterial = new Map<string, typeof rows>();
+      for (const r of rows) {
+        const mKey = r.segmentSpec.materialId.toString();
+        const arr = rowsByMaterial.get(mKey) ?? [];
+        arr.push(r);
+        rowsByMaterial.set(mKey, arr);
+      }
+
+      return [...rowsByMaterial.entries()].map(([materialIdStr, matRows]) => {
         const requiredSegments =
-          rows.reduce((s, r) => s + r.qtyPerPiece * bp.qtyPerUnit, 0) * order.quantity;
-        const material = rows[0].segmentSpec.material;
-        const stockInfo = stockInfoByMaterial.get(material.id.toString());
+          matRows.reduce((s, r) => s + r.qtyPerPiece * bp.qtyPerUnit, 0) * order.quantity;
+        const material = matRows[0].segmentSpec.material;
+        const stockInfo = stockInfoByMaterial.get(materialIdStr);
         return new SteelIssuePlanItemResponseDto({
           pieceId: key,
           pieceCode: bp.piece.code,
           pieceName: bp.piece.name,
-          materialId: material.id.toString(),
+          materialId: materialIdStr,
           materialCode: material.code,
           materialName: material.name,
           requiredSegments,
-          issuedBarCount: issuedByPiece.get(key) ?? 0,
+          issuedBarCount: issuedByPieceMaterial.get(`${key}:${materialIdStr}`) ?? 0,
           remainingToIssue: stockInfo?.remainingToIssue ?? null,
           physicalStockQty: stockInfo?.physicalStockQty ?? null,
         });
-      })
-      .filter((x): x is SteelIssuePlanItemResponseDto => x !== null);
+      });
+    });
   }
 
   /**
@@ -690,11 +727,18 @@ export class SteelIssuesService {
   }
 
   /**
-   * 1 mảnh giả định chỉ dùng 1 loại sắt (mọi đoạn cấu thành cắt từ cùng material, chỉ khác
-   * chiều dài) - đúng dữ liệu mock thật (mỗi lineId/mảnh luôn gắn 1 loaiSat). Ném lỗi rõ ràng
-   * nếu BOM thật đi ngược giả định này, thay vì âm thầm chọn material đầu tiên.
+   * B4 hỗ trợ mảnh nhiều loại sắt: 1 mảnh giờ CÓ THỂ dùng nhiều loại sắt khác nhau (thực tế đa số
+   * mảnh thật đúng vậy - vd 1 khung ghế gồm sắt tròn + sắt hộp + sắt vuông), mỗi đợt SteelIssue
+   * vẫn chỉ ứng đúng 1 loại (bất biến "1 đợt xuất = 1 loại sắt" trên chính bảng SteelIssue) -
+   * client (FE) phải TỰ CHỌN đúng vật tư khi xuất (xem CreateSteelIssueDto.materialId, plan trả
+   * về 1 dòng/loại sắt qua getIssuePlan). Chỗ này chỉ còn XÁC THỰC vật tư client chọn thật sự
+   * thuộc định mức (BOM) của mảnh này, không tự suy ra như trước.
    */
-  private async resolveMaterialForPiece(bomRevisionId: bigint, pieceId: bigint): Promise<bigint> {
+  private async assertMaterialBelongsToPiece(
+    bomRevisionId: bigint,
+    pieceId: bigint,
+    materialId: bigint,
+  ): Promise<void> {
     const pieceBoms = await this.prisma.pieceBom.findMany({
       where: { bomRevisionId, pieceId },
       include: { segmentSpec: true },
@@ -705,12 +749,11 @@ export class SteelIssuesService {
       );
     }
     const materialIds = new Set(pieceBoms.map((pb) => pb.segmentSpec.materialId));
-    if (materialIds.size > 1) {
+    if (!materialIds.has(materialId)) {
       throw new BadRequestException(
-        `Mảnh ${pieceId} dùng nhiều hơn 1 loại sắt (${materialIds.size}) - chưa hỗ trợ xuất sắt cho mảnh ghép nhiều loại sắt trong 1 đợt`,
+        `Vật tư ${materialId} không thuộc định mức (BOM) của mảnh ${pieceId} - chọn đúng 1 trong các loại sắt của mảnh này (${[...materialIds].join(', ')})`,
       );
     }
-    return [...materialIds][0];
   }
 
   /**

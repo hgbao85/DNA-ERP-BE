@@ -9,10 +9,17 @@ import { ProductionOrderResponseDto } from './dto/production-order-response.dto'
 
 type ProductionOrderRow = Prisma.ProductionOrderGetPayload<object>;
 
-// Chỉ cần mã đơn Sales (hiển thị cột "PO" cho người dùng) - xem toResponseDto. Include riêng
-// (không gộp vào ProductionOrderRow) vì createFromApproval() không cần tới, tránh query thừa.
+// Mã đơn Sales (cột "PO") + mã PI cha (cột "PI") + hạn giao cho người dùng - xem toResponseDto.
+// Include riêng (không gộp vào ProductionOrderRow) vì createFromApproval() không cần tới, tránh
+// query thừa.
 const SALES_ORDER_CODE_INCLUDE = {
-  productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+  productionInvoiceItem: {
+    select: {
+      salesOrder: { select: { code: true } },
+      productionInvoice: { select: { code: true } },
+      deliveryDeadline: true,
+    },
+  },
 } satisfies Prisma.ProductionOrderInclude;
 
 type ProductionOrderWithSalesOrder = Prisma.ProductionOrderGetPayload<{
@@ -142,6 +149,8 @@ export class ProductionOrdersService {
       id: order.id.toString(),
       poNumber: order.poNumber,
       salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
+      piCode: order.productionInvoiceItem.productionInvoice.code,
+      deliveryDeadline: order.productionInvoiceItem.deliveryDeadline,
       productionInvoiceItemId: order.productionInvoiceItemId.toString(),
       mfgProductId: order.mfgProductId.toString(),
       bomRevisionId: order.bomRevisionId.toString(),

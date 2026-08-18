@@ -21,6 +21,7 @@ describe('SalesOrdersService', () => {
       findMany: jest.Mock;
     };
     productionInvoice: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock };
+    planForm: { findFirst: jest.Mock; update: jest.Mock };
     $queryRaw: jest.Mock;
   };
 
@@ -64,6 +65,7 @@ describe('SalesOrdersService', () => {
         findMany: jest.fn(),
       },
       productionInvoice: { create: jest.fn(), update: jest.fn(), findMany: jest.fn() },
+      planForm: { findFirst: jest.fn(), update: jest.fn() },
       $queryRaw: jest.fn(),
     };
     service = new SalesOrdersService(prisma as unknown as PrismaServiceType);
@@ -77,6 +79,7 @@ describe('SalesOrdersService', () => {
       prisma.salesOrder.update.mockResolvedValue(orderWithItems({ code: 'PO-10' }));
       prisma.productionInvoice.findMany.mockResolvedValue([]);
       prisma.productionInvoice.create.mockResolvedValue({ id: 50n });
+      prisma.planForm.findFirst.mockResolvedValue(null);
 
       const result = await service.create({
         customerId: '1',
@@ -98,6 +101,48 @@ describe('SalesOrdersService', () => {
         }),
       );
       /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+      expect(prisma.planForm.update).not.toHaveBeenCalled();
+    });
+
+    it('links an existing unlinked SKU for the same product to the new PO/PI', async () => {
+      prisma.customer.findUnique.mockResolvedValue(customer);
+      prisma.mfgProduct.findUnique.mockResolvedValue(product);
+      prisma.salesOrder.create.mockResolvedValue(orderWithItems({ code: 'PO-TMP-x' }));
+      prisma.salesOrder.update.mockResolvedValue(
+        orderWithItems({
+          code: 'PO-10',
+          items: [
+            {
+              id: 100n,
+              salesOrderId: 10n,
+              mfgProductId: 2n,
+              mfgProduct: product,
+              skuName: null,
+              totalQty: 5,
+              shippedQty: 0,
+              status: 'LEN_KE_HOACH',
+              deliveryDate: null,
+            },
+          ],
+        }),
+      );
+      prisma.productionInvoice.findMany.mockResolvedValue([]);
+      prisma.productionInvoice.create.mockResolvedValue({ id: 50n });
+      prisma.planForm.findFirst.mockResolvedValue({ id: 7n });
+
+      await service.create({
+        customerId: '1',
+        orderDate: '2026-01-01',
+        items: [{ mfgProductId: '2', totalQty: 5 }],
+      });
+
+      expect(prisma.planForm.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { mfgProductId: 2n, salesOrderId: null } }),
+      );
+      expect(prisma.planForm.update).toHaveBeenCalledWith({
+        where: { id: 7n },
+        data: { salesOrderId: 10n, productionInvoiceId: 50n },
+      });
     });
 
     it('rejects when the customer does not exist', async () => {

@@ -68,7 +68,8 @@ export class SalesOrdersService {
       include: { customer: true, items: { include: { mfgProduct: true } } },
     });
 
-    await this.createLinkedProductionInvoice(withCode);
+    const pi = await this.createLinkedProductionInvoice(withCode);
+    await this.linkExistingSkus(withCode, pi.id);
 
     return this.toResponseDto(withCode);
   }
@@ -214,9 +215,9 @@ export class SalesOrdersService {
    * Tạo ở đây (không qua ProductionInvoicesController) để SALES_STAFF không cần thêm quyền
    * PRODUCTION_INVOICE:CREATE chỉ vì hệ quả phụ này.
    */
-  private async createLinkedProductionInvoice(order: SalesOrderWithItems): Promise<void> {
+  private async createLinkedProductionInvoice(order: SalesOrderWithItems): Promise<{ id: bigint }> {
     const code = await nextProductionInvoiceCode(this.prisma);
-    await this.prisma.productionInvoice.create({
+    return this.prisma.productionInvoice.create({
       data: {
         code,
         salesOrderId: order.id,
@@ -234,6 +235,32 @@ export class SalesOrdersService {
         },
       },
     });
+  }
+
+  /**
+   * Gắn PO/PI vừa tạo vào SKU (PlanForm) đã có sẵn cho đúng sản phẩm này - trường hợp KHSX tạo
+   * SKU trước ("Tạo SKU mới"), Sales tham chiếu tới sau khi lên PO (xem PlanForm.salesOrderId
+   * doc: "KHSX tạo trước, đơn hàng tham chiếu tới sau"). Chỉ có tác dụng với SKU CHƯA gắn đơn
+   * hàng nào (salesOrderId null) - không được ghi đè PO đã gắn từ trước. Nhiều SKU cùng sản
+   * phẩm, cùng chưa gắn đơn thì lấy SKU tạo sớm nhất (id nhỏ nhất) - đơn giản, tất định, mirror
+   * "SKU độc lập với Sales Order" (skus.service.ts create) - PO chỉ gắn khi có ai đó chủ động
+   * chọn, không tự suy luận theo tên khách hàng.
+   */
+  private async linkExistingSkus(
+    order: SalesOrderWithItems,
+    productionInvoiceId: bigint,
+  ): Promise<void> {
+    for (const item of order.items) {
+      const candidate = await this.prisma.planForm.findFirst({
+        where: { mfgProductId: item.mfgProductId, salesOrderId: null },
+        orderBy: { id: 'asc' },
+      });
+      if (!candidate) continue;
+      await this.prisma.planForm.update({
+        where: { id: candidate.id },
+        data: { salesOrderId: order.id, productionInvoiceId },
+      });
+    }
   }
 
   // ─── Shared lookups ─────────────────────────────────────────────────────────
