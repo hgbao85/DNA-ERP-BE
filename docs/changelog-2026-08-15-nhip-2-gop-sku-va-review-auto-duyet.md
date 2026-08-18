@@ -17,6 +17,10 @@
 >   cho từng mục và lý do chọn cách đó.
 > - [Mục 12](#12-kết-quả-thực-thi--1115-phát-hiện-đã-sửa-2026-08-15) — **kết quả thực thi**: 11/15
 >   phát hiện đã sửa trong cùng phiên, 484/484 test pass, 3 chỗ thực tế khác kế hoạch ban đầu.
+> - [Mục 13](#13-thiết-kế-b4--tách-đặt-giữ-khỏi-tiêu-hao-cho-vật-tư-sắt-2026-08-17) — **thiết kế
+>   B4** sau khi Sếp chốt hướng (2026-08-17): tách đặt giữ khỏi tiêu hao. Gồm một cái bẫy nghiêm
+>   trọng nếu làm ẩu, 6 lỗ hổng phải vá kèm, kế hoạch 3 đợt. **Đã code xong cả 3 đợt (2026-08-18),
+>   2 câu hỏi nghiệp vụ đều đã có trả lời của Sếp** — xem [13.7](#137-câu-hỏi-treo).
 
 Repo liên quan: `DNA-ERP-BE` (nhánh `main`), `DNA-ERP` (nhánh `demo`), solver `cat_sat_iea`
 (`D:\DNA-DEXUAT`, không đổi trong phiên này).
@@ -551,6 +555,10 @@ này ở `WarehouseTransferReservation`.
 
 Không cần sửa gấp — nhưng nên là quyết định có ý thức của Sếp, không phải hệ quả phụ không ai để ý.
 
+> **Cập nhật 2026-08-17:** Sếp đã chọn hướng tách hai khái niệm. Bản thiết kế đầy đủ (kèm một cái
+> bẫy nghiêm trọng phát hiện khi review lại code) nằm ở
+> [mục 13](#13-thiết-kế-b4--tách-đặt-giữ-khỏi-tiêu-hao-cho-vật-tư-sắt-2026-08-17).
+
 #### B5 — Mẫu nguyên không được nhập lại sổ ⚪
 
 Solver trả `mau_nguyen_mm`, `saveSuccess()` lưu vào cả `CuttingProposalLine` lẫn
@@ -925,6 +933,10 @@ deploy`.
    trước khi deploy - cột mới có `@default(0)` nên an toàn, không cần backfill.
 2. **B1, B2, B4, B5** vẫn đang chờ Sếp quyết theo đúng lịch ở [Đợt 3](#đợt-3--cần-sếp-quyết-trước-khi-code)
    - không phải việc bị bỏ sót, mà là việc cố ý không code khi chưa có quyết định.
+   *(Cập nhật 2026-08-17: **B4 đã có hướng của Sếp** - bản thiết kế đầy đủ ở
+   [mục 13](#13-thiết-kế-b4--tách-đặt-giữ-khỏi-tiêu-hao-cho-vật-tư-sắt-2026-08-17), vẫn chưa code
+   vì còn 2 câu hỏi phải chốt. **B1 cũng đã có hướng** - "mua theo mã PI" - và đã sửa xong ở
+   `PurchaseProposalsService.toResponseDto()`, chưa commit.)*
 3. **Nghiệm thu qua UI thật chưa làm** trong phiên này - toàn bộ xác nhận ở trên là `tsc` +
    `jest` (unit test, prisma mock). Cần chạy `e2e-full-flow.mjs` hoặc thao tác tay qua trình
    duyệt trước khi coi các mục Đợt 1/2 là "xong" theo tiêu chuẩn đã đặt ở
@@ -935,3 +947,177 @@ deploy`.
 Đừng dựng `PurchaseOrder` / `GoodsReceipt` / đối chiếu 3 chiều / VAT / điều khoản thanh toán. Đó là
 đúng hướng ERP nhưng là **một phase riêng**, và 13 mục ở trên rẻ hơn nhiều lần mà bịt được trọn bộ
 nhóm "sai số liệu âm thầm" — vốn là rủi ro đang có thật, không phải rủi ro giả định.
+
+---
+
+## 13. Thiết kế B4 — Tách "đặt giữ" khỏi "tiêu hao" cho vật tư sắt (2026-08-17)
+
+> **Trạng thái: bản thiết kế, CHƯA code.** Phần "Cần Sếp chốt" ở cuối mục này phải có câu trả lời
+> trước khi bắt đầu Đợt 2. Đợt 1 không phụ thuộc vào các câu trả lời đó, làm trước được.
+
+### 13.1. Quyết định của Sếp
+
+Sếp chốt hướng xử lý cho [B4](#b4--ghi-nhận-tiêu-hao-ở-thời-điểm-duyệt-kế-hoạch-không-phải-lúc-xuất-thật-):
+
+> *"Event sắt từ kho sắt qua Phôi thì thủ kho Phôi Sơn Hàn nhập số lượng sắt rồi bên kia chỉ việc
+> thực hiện."*
+
+Nghĩa là: mốc ghi sổ *"sắt rời kho"* chuyển từ **lúc duyệt phương án cắt** sang **lúc thủ kho thực
+sự xuất sắt** — đúng mô hình đặt giữ/tiêu hao đã nêu ở B4.
+
+Bối cảnh cần nhớ khi đọc mục này: Kho sắt và xưởng cắt là **cùng một chỗ vật lý** (kho
+`phoi-son-han`, xem `prisma/seed.ts:45-50`) — hệ thống chỉ có 1 kho, không có bước chuyển kho nào ở
+giữa. Vì cùng một chỗ nên **không có mốc vật lý tự nhiên nào** để bám (khác nhánh mua hàng: xe giao
+tới là mốc rõ ràng), buộc phải chọn một mốc thao tác làm quy ước — và đó chính là thứ đang được
+chọn lại ở đây.
+
+### 13.2. Phát hiện quan trọng nhất — "dời chỗ trừ tồn" là một cái bẫy
+
+Việc trừ tồn ở `CuttingProposalsService.approve()` **không chỉ là ghi sổ kế toán** — nó đang kiêm
+luôn vai trò **giành chỗ (allocation)**. Nếu chỉ bê bút toán từ `approve()` sang
+`SteelIssuesService.create()`, sẽ tạo ra một bug **nặng hơn** vấn đề đang sửa:
+
+| Bước | Tồn kho | Phương án A (cần 100) | Phương án B (cần 100) |
+|---|--:|---|---|
+| Đầu | 100 | | |
+| Duyệt A | 100 (chưa trừ) | thấy 100 → dùng kho 100, **mua 0** | |
+| Duyệt B | 100 (**vẫn nguyên**) | | thấy 100 → dùng kho 100, **mua 0** |
+| Phôi lấy sắt cho A | 0 | ✅ | |
+| Phôi lấy sắt cho B | **−100** | | ❌ không có sắt — mà Mua hàng đã báo "không cần mua gì" |
+
+Đây **không phải rủi ro giả định**: chính comment ở `cutting-proposals.service.ts:805-810` mô tả
+đúng ca này như một lỗi đã gặp và đã vá (*"hai lượt duyệt gần nhau cùng đọc một số dư, cùng tiêu một
+lô sắt, tồn xuống âm và cả hai đều báo Mua hàng không cần mua gì"*). Cặp `FOR UPDATE` trên
+`stock_quant` (dòng 756-766) + bút toán nằm **trong cùng transaction** (dòng 811-825) tồn tại chính
+là để chặn nó.
+
+> **Hệ quả bắt buộc:** muốn dời mốc trừ tồn thì **phải** thay thế bằng cơ chế **đặt giữ
+> (reservation)**. Đây không phải phần "làm cho đẹp" có thể cắt bớt để tiết kiệm — bỏ nó đi là mở
+> lại đúng lỗ hổng vừa vá xong.
+
+### 13.3. Tài sản đã có sẵn — không phải làm từ đầu
+
+| Thứ đã có | Ở đâu | Dùng được gì |
+|---|---|---|
+| **Bản thiết kế logic đầy đủ** | `DNA-ERP/docs/thiet-ke-giu-cho-khau-tru-ton-kho.md` (2026-06-27, *"chưa triển khai"*) | Chốt sẵn `onHand`/`reserved`/`available`/`onOrder`, 3 phép toán, vòng đời phiếu giữ chỗ, ví dụ 4 PO. **QĐ-1 của tài liệu trùng khớp quyết định của Sếp**. Tài liệu nằm ở repo FE dù là logic BE — lịch sử để lại, không phải nhầm chỗ |
+| **Code mẫu chạy thật** | `WarehouseTransfersService.createTransfer()` dòng 104-121 | Đúng pattern `available = onHand − reserved` với `FOR UPDATE`; giải phóng ở `confirm()` (455-458) và `reject()` (487-490) |
+| **Bảng giữ chỗ** | `WarehouseTransferReservation` (`schema.prisma:1737-1752`), enum `ReservationStatus` ACTIVE/RELEASED | Khuôn mẫu cột + index `[warehouseId, materialId]` |
+| **Màn hình thủ kho xuất sắt** | FE `XuatSatPage.tsx` — đã nối BE thật từ 2026-08-12 (M3) | Thủ kho `phoi-son-han` đã nhập số cây theo từng mảnh, gọi `POST /production-orders/:id/steel-issues`. **Không cần dựng màn hình mới** |
+| **Tiền lệ trừ tồn đúng mốc** | `MaterialIssuesService.postLedgerEntry()` (238-253) | Nhánh vật tư tiêu hao (sơn/dây) **đã** trừ tồn lúc thủ kho thực xuất. Sắt đang là nhánh duy nhất lệch chuẩn này |
+
+### 13.4. Sáu lỗ hổng phải vá kèm
+
+Không vá kèm thì đổi mốc trừ tồn sẽ để lại hậu quả:
+
+| # | Vấn đề | Vị trí | Vì sao nguy hiểm sau khi đổi |
+|---|---|---|---|
+| 1 | **Không chặn xuất thừa** | `SteelIssuesService.create()` (100-113) | `barCount` không đối chiếu gì với phương án cắt. `getIssuePlan()` (254-310) có số liệu tham chiếu nhưng `create()` không dùng. Hiện tại gõ nhầm 100 thay vì 10 là vô hại; sau khi đổi sẽ **âm kho im lặng** |
+| 2 | **`postEntry()` không chặn tồn âm** | `stock-ledger.service.ts:77-79` | Chỉ kiểm `qty > 0`, không kiểm số dư sau bút toán. Không có lưới an toàn tầng dưới cho #1 |
+| 3 | **Sắt mua về không có chủ** | `PurchaseProposalsService.receiveItem()` | Hàng về vào tồn chung; phương án khác duyệt xen giữa có thể "mượn" mất phần đã mua đích danh cho đơn này (mục 3.2 tài liệu thiết kế đã tính, code chưa) |
+| 4 | **Giữ chỗ mồ côi khi SUPERSEDED** | `approve()` dòng 724-733 | Duyệt phương án mới sẽ supersede phương án cũ. Giữ chỗ của bản cũ phải được giải phóng, nếu không kho bị **khoá ảo vĩnh viễn** (available tụt mà không ai tiêu) |
+| 5 | **Dữ liệu cũ bị trừ hai lần** | migration | Phương án đã APPROVED trước mốc đổi **đã trừ tồn** theo cách cũ. Nếu Phôi chưa xuất hết, sau khi đổi mỗi lần xuất sẽ trừ **lần nữa** |
+| 6 | **Hai bảng giữ chỗ = bẫy tương lai** | thiết kế | Nếu thêm bảng mới mà công thức `available` chỉ cộng một bảng, luồng chuyển kho và luồng cắt sắt sẽ **giành nhau cùng lô hàng** mà không ai phát hiện |
+
+### 13.5. Thiết kế
+
+**Nguyên tắc: một sự kiện — một ý nghĩa.** `approve()` = *"hứa"*, `SteelIssue` = *"lấy thật"*.
+
+```
+Duyệt phương án cắt        →  reserved += min(cần, available)   [onHand KHÔNG đổi]
+                           →  phần thiếu → PurchaseProposal      [onOrder]
+Mua hàng nhận sắt về       →  onHand += q,  reserved += q        [available không đổi — hàng có chủ]
+Thủ kho xuất sắt cho Phôi  →  onHand -= q,  reserved -= q        [StockLedger STEEL_ISSUE ghi ở ĐÂY]
+Phương án supersede/huỷ    →  reserved -= phần chưa xuất         [trả hàng về available]
+```
+
+**Chọn bảng giữ chỗ.** Ba phương án đã cân nhắc:
+
+| Phương án | Đánh giá |
+|---|---|
+| Mở rộng `WarehouseTransferReservation` (cho `transferId` nullable + thêm `cuttingProposalId`) | ❌ Bảng thành đa hình nửa vời, tên bảng nói dối nội dung |
+| Bảng `StockReservation` mới, **migrate** luôn warehouse-transfer sang | ⚠ Sạch nhất về lâu dài, nhưng bắt phải sửa code chuyển kho đang chạy tốt — rủi ro không đáng lúc này |
+| ✅ **Bảng `StockReservation` mới, chưa migrate transfer** | Dùng cho cắt sắt ngay; giữ nguyên code chuyển kho. **Bắt buộc kèm điều kiện dưới đây** |
+
+> **Điều kiện bắt buộc của phương án đã chọn (vá lỗ #4 trong bảng 13.4 → #6):** công thức tính
+> available phải nằm ở **đúng một hàm dùng chung** `getAvailableQty(tx, warehouseId, materialId)`,
+> cộng tổng **cả hai bảng** giữ chỗ. Không nơi nào được tự viết lại phép trừ này. Migrate
+> warehouse-transfer sang bảng chung là việc dọn dẹp riêng, làm sau, không chặn Đợt 2.
+
+`StockReservation` đi theo idiom `refType`/`refId` sẵn có của `StockLedger` (không FK cứng đa bảng —
+xem `schema.prisma:1605-1607`), thêm `consumedQty` để hỗ trợ Phôi lấy sắt làm nhiều đợt (giữ chỗ 100
+cây, xuất 30/40/30), tự chuyển RELEASED khi `consumedQty >= quantity`.
+
+### 13.6. Phân đợt — mỗi đợt tự đứng vững
+
+**Đợt 1 — Nền giữ chỗ** *(không đổi hành vi người dùng nhìn thấy)*
+Thêm bảng `StockReservation` + hàm `getAvailableQty()` dùng chung. `approve()` vừa trừ tồn như cũ,
+**vừa** ghi giữ chỗ song song — chưa ai đọc số liệu giữ chỗ đó. Deploy an toàn tuyệt đối, để quan
+sát dữ liệu thật xem giữ chỗ có khớp thực tế không trước khi tin vào nó.
+
+**Đợt 2 — Đảo mốc trừ tồn** *(đợt thật sự đổi nghiệp vụ)*
+- `approve()`: bỏ `postEntry`, chỉ còn tạo giữ chỗ; `buyQty` tính theo `available` thay vì `onHand`.
+- `SteelIssuesService.create()`: thêm `postEntry` + giảm giữ chỗ, trong **một** transaction có
+  `FOR UPDATE` (bê nguyên pattern `approve()` đang dùng).
+- Vá lỗ #1 (chặn xuất thừa) và #2 (chặn tồn âm).
+- Vá lỗ #5: backfill dữ liệu — đánh dấu mọi phương án duyệt **trước** mốc đổi là "đã tiêu thụ",
+  không sinh giữ chỗ cho chúng.
+- Cập nhật docstring `SteelIssuesService` (42-47) và comment schema (`schema.prisma:1761-1764`) —
+  cả hai đang ghi *"cố ý KHÔNG ghi StockLedger"*, sẽ thành sai ngay khi Đợt 2 xong.
+
+**Đợt 3 — Khép vòng**
+- Vá lỗ #3 (hàng mua về gắn chủ) và #4 (giải phóng giữ chỗ khi supersede/huỷ).
+- FE: `XuatSatPage` hiện cột tồn khả dụng (hiện **không hiện tồn gì cả** — thủ kho đang nhập mù);
+  đổi nhãn cột "Tồn" ở màn Mua hàng sang `available` (đúng mục 10 tài liệu thiết kế).
+
+### 13.7. Câu hỏi treo
+
+**Cả 2 câu đã có trả lời (2026-08-18) — mục này không còn gì chặn.**
+
+1. ✅ **ĐÃ CHỐT 2026-08-18 — Đơn đã mua sắt rồi mà khách huỷ: cứ để sắt đó trong kho, thành tồn
+   chung.** Nguyên văn Sếp: *"thì cứ để đó thôi chứ sao anh, mua rồi đâu trả được"*.
+
+   Đây là OQ-1 trong tài liệu thiết kế `DNA-ERP/docs/thiet-ke-giu-cho-khau-tru-ton-kho.md` (mục 6)
+   — treo từ 2026-06-27 tới nay. Tài liệu đó nêu 3 lựa chọn (trả về tồn chung / chuyển đích danh
+   sang đơn khác / để riêng có nhãn "từ đơn huỷ"); Sếp chọn **phương án 1**, với lý do thực tế:
+   không có đường trả hàng lại NCC nên sắt chắc chắn nằm trong kho, không cần cơ chế gì phức tạp
+   hơn "ai cần thì dùng".
+
+   **Hệ quả cho code — KHÔNG phải sửa gì, hành vi hiện tại đã đúng:**
+   - `receiveItem()` gọi `postEntry(PURCHASE)` trước → sắt vào `stock_quant` thật, luôn luôn.
+   - `topUpFromReceipt()` gặp giữ chỗ `RELEASED` (phương án đã chết) → **bỏ qua**, không giữ cho
+     ai → `available` = full → đơn khác dùng được ngay. Đúng nghĩa "cứ để đó".
+   - **KHÔNG** xây: luồng trả hàng NCC, nhãn "hàng từ đơn huỷ", bảng theo dõi sắt mồ côi riêng.
+   - Truy vết vẫn còn nguyên dù không gắn nhãn: dòng `StockLedger` refType=PURCHASE giữ `refId` =
+     đề xuất mua gốc, tra ngược ra được đơn nào đã mua lô sắt đó.
+
+   **Lưu ý khi xây tính năng "huỷ đơn"** (hiện chưa có): chỉ cần `releaseByRef()` giữ chỗ của
+   phương án cắt tương ứng - đúng cùng cách supersede đang làm, không cần thêm luật mới.
+
+2. ✅ **ĐÃ CHỐT 2026-08-18 — Xuất thừa so với phương án cắt: CHẶN CỨNG, không dung sai.**
+
+   Câu hỏi này bị đặt sai ngay từ đầu (bởi Claude), do suy diễn máy móc "Mua hàng có dung sai thì
+   Xuất sắt chắc cũng cần" mà không xét lại bản chất 2 việc khác nhau. Sếp chỉ ra đúng chỗ sai:
+   **định mức sinh ra chính là để giải quyết việc này** - cho vượt định mức là tự vô hiệu hoá lý do
+   nó tồn tại, biến toàn bộ BOM/solver/hao hụt phía trước thành con số trang trí.
+
+   | | Nhận hàng NCC (`purchaseOverReceiptTolerancePercent`) | Xuất sắt cho Phôi |
+   |---|---|---|
+   | Nguồn sai số | **Bên ngoài** - NCC đóng gói theo lô/cân, không khớp tuyệt đối số đặt | **Không có** - `totalBars` từ solver đã tính sẵn cả hao hụt cắt |
+   | Kiểm soát được không | Không (không ép được NCC cân chính xác từng cây) | Có (nội bộ, định mức đã chốt) |
+   | Vượt số dự kiến nghĩa là | Chuyện bình thường của mua bán | **Có vấn đề**: gõ nhầm, cắt hỏng ngoài kế hoạch, hoặc lấy sắt cho việc khác núp bóng đơn này |
+
+   → Hai chỗ trông giống nhau ("vượt số dự kiến") nhưng khác bản chất, KHÔNG dùng chung logic dung
+   sai. Code đã đúng sẵn từ Đợt 2 (`SteelIssuesService.consumeReservationAndDeduct`), không phải
+   sửa gì - chỉ nâng từ "mặc định an toàn tạm thời" lên "nguyên tắc đã chốt".
+
+### 13.8. Nhật ký quyết định
+
+| Mã | Quyết định | Phương án khác đã cân nhắc | Lý do chọn |
+|---|---|---|---|
+| B4-1 | Tách đặt giữ khỏi tiêu hao; mốc trừ tồn = lúc thủ kho xuất sắt | Giữ nguyên trừ tồn lúc duyệt | Quyết định của Sếp 2026-08-17; đưa sổ sách khớp thực tế vật lý, hết lệch kiểm kê |
+| B4-2 | **Bắt buộc** kèm cơ chế giữ chỗ, không dời bút toán suông | Chỉ dời `postEntry` sang `SteelIssue` | Trừ tồn hiện kiêm vai trò giành chỗ — bỏ suông sẽ mở lại lỗ tồn âm/không báo mua đã vá ở mục 8 |
+| B4-3 | Bảng `StockReservation` mới, chưa migrate warehouse-transfer | Mở rộng bảng cũ; migrate luôn | Không đụng code chuyển kho đang chạy tốt; đổi lại phải gom công thức `available` vào 1 hàm dùng chung |
+| B4-4 | Chia 3 đợt, Đợt 1 ghi giữ chỗ song song mà chưa dùng | Làm một lần cho xong | Đợt 1 deploy được ngay không rủi ro, cho dữ liệu thật để đối chiếu trước khi tin vào giữ chỗ ở Đợt 2 |
+| B4-5 | Tái dùng `XuatSatPage` hiện có | Dựng màn hình xuất sắt mới | Màn hình đã nối BE thật từ 2026-08-12, thủ kho đã nhập số cây đúng như luồng cần — chỉ thiếu cột tồn khả dụng |
+| B4-6 | **Xuất sắt vượt định mức: chặn cứng, KHÔNG dung sai** (Sếp chốt 2026-08-18) | Cho vượt trong X% giống `purchaseOverReceiptTolerancePercent` bên Mua hàng | Định mức sinh ra chính là để kiểm soát việc này; `totalBars` đã gồm sẵn hao hụt cắt nên vượt = có vấn đề thật (gõ nhầm/cắt hỏng/lấy cho việc khác), phải bị chặn để hỏi. Dung sai bên Mua hàng tồn tại vì sai số **từ NCC bên ngoài** - bản chất khác, không dùng chung logic |
+| B4-7 | **Sắt đã mua mà khách huỷ đơn: để lại thành tồn chung** (Sếp chốt 2026-08-18, chốt OQ-1 treo từ 2026-06-27) | Chuyển đích danh sang đơn khác đang thiếu; để riêng có nhãn "từ đơn huỷ" | *"Mua rồi đâu trả được"* - không có đường trả NCC nên sắt chắc chắn nằm trong kho; thêm nhãn/bảng theo dõi riêng là phức tạp thừa, trong khi truy vết đã có sẵn ở `StockLedger.refId`. Code hiện tại đã đúng, không phải sửa |
