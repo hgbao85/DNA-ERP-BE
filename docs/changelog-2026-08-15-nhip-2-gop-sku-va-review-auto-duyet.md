@@ -21,6 +21,9 @@
 >   B4** sau khi Sếp chốt hướng (2026-08-17): tách đặt giữ khỏi tiêu hao. Gồm một cái bẫy nghiêm
 >   trọng nếu làm ẩu, 6 lỗ hổng phải vá kèm, kế hoạch 3 đợt. **Đã code xong cả 3 đợt (2026-08-18),
 >   2 câu hỏi nghiệp vụ đều đã có trả lời của Sếp** — xem [13.7](#137-câu-hỏi-treo).
+> - [Mục 14](#14-bỏ-auto_scan--solver-chỉ-tính-trên-cây-6000mm-2026-08-18) — **bỏ `auto_scan`**:
+>   solver chỉ tính trên cây 6000mm, không tự dò cỡ đặt riêng nữa. Đảo ngược quyết định 2026-08-06;
+>   lý do: cỡ cây tìm ra không mua được, và hao hụt báo cáo sai ~9 lần so với thực tế.
 
 Repo liên quan: `DNA-ERP-BE` (nhánh `main`), `DNA-ERP` (nhánh `demo`), solver `cat_sat_iea`
 (`D:\DNA-DEXUAT`, không đổi trong phiên này).
@@ -1121,3 +1124,49 @@ sát dữ liệu thật xem giữ chỗ có khớp thực tế không trước k
 | B4-5 | Tái dùng `XuatSatPage` hiện có | Dựng màn hình xuất sắt mới | Màn hình đã nối BE thật từ 2026-08-12, thủ kho đã nhập số cây đúng như luồng cần — chỉ thiếu cột tồn khả dụng |
 | B4-6 | **Xuất sắt vượt định mức: chặn cứng, KHÔNG dung sai** (Sếp chốt 2026-08-18) | Cho vượt trong X% giống `purchaseOverReceiptTolerancePercent` bên Mua hàng | Định mức sinh ra chính là để kiểm soát việc này; `totalBars` đã gồm sẵn hao hụt cắt nên vượt = có vấn đề thật (gõ nhầm/cắt hỏng/lấy cho việc khác), phải bị chặn để hỏi. Dung sai bên Mua hàng tồn tại vì sai số **từ NCC bên ngoài** - bản chất khác, không dùng chung logic |
 | B4-7 | **Sắt đã mua mà khách huỷ đơn: để lại thành tồn chung** (Sếp chốt 2026-08-18, chốt OQ-1 treo từ 2026-06-27) | Chuyển đích danh sang đơn khác đang thiếu; để riêng có nhãn "từ đơn huỷ" | *"Mua rồi đâu trả được"* - không có đường trả NCC nên sắt chắc chắn nằm trong kho; thêm nhãn/bảng theo dõi riêng là phức tạp thừa, trong khi truy vết đã có sẵn ở `StockLedger.refId`. Code hiện tại đã đúng, không phải sửa |
+
+---
+
+## 14. Bỏ `auto_scan` — solver chỉ tính trên cây 6000mm (2026-08-18)
+
+**ĐẢO NGƯỢC quyết định 2026-08-06** (khi đó Sếp yêu cầu tự động dò chiều dài đặt riêng). Nên báo
+lại người đã yêu cầu tính năng cũ, để không ai bất ngờ vì "mất tính năng tôi từng yêu cầu".
+
+### 14.1. Vì sao bỏ
+
+Cơ chế cũ: giải lần 1 trên `stock_lengths` cố định (6000mm); nếu có vật tư vượt ngưỡng hao hụt thì
+tự gọi solver **lần 2** với `auto_scan: true`, dò dải 5000-6000mm bước 10mm để tìm "chiều dài đặt
+riêng". Ba vấn đề, lộ ra khi truy nguyên câu hỏi *"sao solver lại chọn cây 5900?"*:
+
+| # | Vấn đề | Bằng chứng |
+|---|---|---|
+| 1 | **Cỡ cây tìm ra không mua được** | Chính `SystemConfig.solverStockLengths = [6000]` có ghi chú "NCC không bán cỡ khác". auto_scan lại trả 5900/5600/5380/5120mm |
+| 2 | **Chiều dài đó không chảy tới Mua hàng** | `PurchaseProposalItem` chỉ có `materialId` + `buyQty`; `Material.spec` chỉ là tiết diện ("20x20") - không field nào mang chiều dài. Người mua vẫn đặt cây 6000 như thường |
+| 3 | **Con số hao hụt thành không thật** | Sắt 20x20 đoạn 840mm: solver báo **0,203%** (giả định cây 5900) nhưng mua cây 6000 thì thực tế **1,88%** - chênh ~9 lần. Đo trên dữ liệu thật 2026-08-18: 23/46 dòng đang dùng chiều dài đặt riêng |
+
+Điểm thứ 4, quan trọng nhất về nghiệp vụ: auto_scan **che mất tín hiệu cần gộp SKU**. Phương án lẽ
+ra phải bị chặn tự-duyệt để QLSX đi gộp đợt cắt (cách xử lý đúng, đã có sẵn `getBatchSuggestions`)
+thì lại được "cứu" bằng một cỡ cây ảo. Nguyên văn quyết định: *"loại bỏ yêu cầu này giờ chỉ làm
+6000, vì mục đích làm gộp SKU để xử lý vấn đề này"*.
+
+### 14.2. Đã sửa gì
+
+- `runSolverAndSave()`: luôn `auto_scan: false`, **bỏ hẳn** nhánh gọi solver lần 2.
+- `autoApproveBlockReason()`: thông báo cho QLSX đổi từ *"không cắt được kể cả sau khi dò hết dải
+  chiều dài (auto_scan)"* thành *"không cắt được trong ngưỡng hao hụt với cây 6000mm - thử gộp đợt
+  cắt với SKU khác dùng chung loại sắt này"* (nói luôn hướng xử lý).
+- Doc-comment `any_over_threshold` / `over_threshold`: giờ thuần chẩn đoán, không kích hoạt gì.
+- Test: 3 test phủ nhánh retry thay bằng 2 test khẳng định "gọi solver ĐÚNG 1 lần, luôn
+  `auto_scan: false`, kể cả khi vượt ngưỡng / có dòng infeasible".
+- **Giữ nguyên** 3 cột `solverMinLengthMm/MaxLengthMm/LengthStepMm` trong `SystemConfig` và vẫn gửi
+  trong request body - solver bỏ qua khi `auto_scan: false`, không cần migration, bật lại dễ.
+
+### 14.3. Hệ quả vận hành - cần biết trước
+
+Các ca trước đây được auto_scan "cứu" giờ quay về đúng trạng thái thật (vượt ngưỡng / không cắt
+được) nên **không tự động duyệt nữa**, chuyển QLSX xử lý tay hoặc gộp đợt cắt. Đây là hành vi mong
+muốn chứ không phải hồi quy: hệ thống nói thật thay vì giấu vấn đề sau một cỡ cây không mua được.
+
+Lợi ích kèm theo: màn "Gợi ý gộp đợt cắt" (`best-fill.util.ts`, tính cận dưới trên 6000mm) và solver
+giờ **cùng chấm trên một tập chiều dài** - 2 con số khớp nhau trở lại, hết cảnh gợi ý báo 1,88% mà
+solver báo 0,203%.

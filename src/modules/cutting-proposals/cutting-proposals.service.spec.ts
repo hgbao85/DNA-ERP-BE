@@ -573,101 +573,49 @@ describe('CuttingProposalsService', () => {
       expect(bodySent.max_waste_percentage_by_material).toEqual({ '200': 2 });
     });
 
-    it('retry auto_scan mang theo đúng max_waste_percentage_by_material của lần gọi đầu (D.hao-hut-sat)', async () => {
+    // ── Bỏ auto_scan (Sếp chốt 2026-08-18) ────────────────────────────────────────
+    // Trước đây vượt ngưỡng / infeasible sẽ trip 1 lần gọi solver THỨ HAI với auto_scan=true để
+    // dò chiều dài cây đặt riêng. Bỏ hẳn vì cỡ tìm ra không mua được (NCC chỉ bán 6000mm) và
+    // chiều dài đó cũng không chảy tới Mua hàng - xem comment tại nơi gọi solver. Cách xử lý
+    // đúng cho ca vượt ngưỡng giờ là GỘP đợt cắt với SKU khác (getBatchSuggestions).
+    it('LUÔN gửi auto_scan=false và chỉ gọi solver ĐÚNG 1 LẦN, kể cả khi vượt ngưỡng', async () => {
       prisma.material.findMany.mockResolvedValue([
         { id: 200n, maxCuttingWastePercentage: { toNumber: () => 0.3 } },
       ]);
-      const overThreshold = {
+      externalApiService.post.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 227,
           total_waste_mm: 20000,
           waste_percentage: 9.61,
-          any_over_threshold: true,
+          any_over_threshold: true, // vượt ngưỡng -> TRƯỚC ĐÂY sẽ retry, giờ thì không
         },
         purchase_plan: [
           { material: '200', feasible: true, over_threshold: true, cutting_patterns: [] },
         ],
-      };
-      const scanned = {
-        status: 'success',
-        summary: {
-          total_bars_all: 223,
-          total_waste_mm: 11373,
-          waste_percentage: 0.85,
-          any_over_threshold: false,
-        },
-        purchase_plan: [{ material: '200', feasible: true, cutting_patterns: [] }],
-      };
-      externalApiService.post.mockResolvedValueOnce(overThreshold).mockResolvedValueOnce(scanned);
-      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
-
-      await invoke(2n, 1n);
-
-      expect(externalApiService.post).toHaveBeenCalledTimes(2);
-      const [firstBody, secondBody] = externalApiService.post.mock.calls.map(
-        (call) => (call as unknown as [string, Record<string, unknown>])[1],
-      );
-      expect(firstBody.max_waste_percentage_by_material).toEqual({ '200': 0.3 });
-      expect(secondBody.max_waste_percentage_by_material).toEqual({ '200': 0.3 });
-      expect(secondBody.auto_scan).toBe(true);
-    });
-
-    it('retries with auto_scan enabled when the first (fixed-length) call reports any_over_threshold', async () => {
-      const overThreshold = {
-        status: 'success',
-        summary: {
-          total_bars_all: 227,
-          total_waste_mm: 20000,
-          waste_percentage: 9.61,
-          any_over_threshold: true,
-        },
-        purchase_plan: [{ material: '200', feasible: true, cutting_patterns: [] }],
-      };
-      const scanned = {
-        status: 'success',
-        summary: {
-          total_bars_all: 223,
-          total_waste_mm: 11373,
-          waste_percentage: 0.85,
-          any_over_threshold: false,
-        },
-        purchase_plan: [{ material: '200', feasible: true, cutting_patterns: [] }],
-      };
-      externalApiService.post.mockResolvedValueOnce(overThreshold).mockResolvedValueOnce(scanned);
-      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
-
-      await invoke(2n, 1n);
-
-      expect(externalApiService.post).toHaveBeenCalledTimes(2);
-      const [firstCall, secondCall] = externalApiService.post.mock.calls as unknown as Array<
-        [
-          string,
-          { auto_scan: boolean; min_length: number; max_length: number; length_step: number },
-        ]
-      >;
-      expect(firstCall[0]).toBe('http://solver.local/api/v1/de_xuat/propose/');
-      expect(firstCall[1]).toMatchObject({ auto_scan: false });
-      expect(secondCall[0]).toBe('http://solver.local/api/v1/de_xuat/propose/');
-      expect(secondCall[1]).toMatchObject({
-        auto_scan: true,
-        min_length: 5000,
-        max_length: 6000,
-        length_step: 10,
       });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
 
-      // Kết quả LƯU phải là của lần gọi thứ 2 (đã vét cạn), không phải lần 1.
+      await invoke(2n, 1n);
+
+      expect(externalApiService.post).toHaveBeenCalledTimes(1);
+      const [url, body] = externalApiService.post.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(url).toBe('http://solver.local/api/v1/de_xuat/propose/');
+      expect(body.auto_scan).toBe(false);
+      // Ngưỡng riêng theo vật tư vẫn phải gửi đúng (D.hao-hut-sat) - không mất khi bỏ retry.
+      expect(body.max_waste_percentage_by_material).toEqual({ '200': 0.3 });
+      // Lưu ĐÚNG kết quả lần gọi duy nhất, không còn khái niệm "kết quả lần 2".
       const updateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
         { data: { wastePercentage: number } },
       ];
-      expect(updateCall[0].data.wastePercentage).toBe(0.85);
+      expect(updateCall[0].data.wastePercentage).toBe(9.61);
     });
 
-    it('retries with auto_scan enabled when a line is feasible=false even though any_over_threshold=false (bug fix D1)', async () => {
-      // Solver chỉ set any_over_threshold=true cho vật tư "feasible nhưng vượt ngưỡng" - vật tư
-      // HOÀN TOÀN infeasible (như dưới đây) không được cờ này phủ tới (xem api/views.py) - service
-      // phải tự kiểm tra purchase_plan[].feasible để không bỏ sót ca này.
-      const infeasibleFixed = {
+    it('KHÔNG gọi lại solver khi có dòng feasible=false - lưu nguyên kết quả rồi để cổng chặn tự-duyệt xử lý', async () => {
+      externalApiService.post.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 0,
@@ -678,33 +626,23 @@ describe('CuttingProposalsService', () => {
         purchase_plan: [
           { material: '200', feasible: false, reason: 'Không có cách cắt nào đạt ngưỡng' },
         ],
-      };
-      const scanned = {
-        status: 'success',
-        summary: {
-          total_bars_all: 34,
-          total_waste_mm: 472,
-          waste_percentage: 0.25,
-          any_over_threshold: false,
-        },
-        purchase_plan: [{ material: '200', feasible: true, cutting_patterns: [] }],
-      };
-      externalApiService.post.mockResolvedValueOnce(infeasibleFixed).mockResolvedValueOnce(scanned);
+      });
       prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
 
       await invoke(2n, 1n);
 
-      expect(externalApiService.post).toHaveBeenCalledTimes(2);
-      const [firstCall, secondCall] = externalApiService.post.mock.calls as unknown as Array<
-        [string, { auto_scan: boolean }]
-      >;
-      expect(firstCall[1]).toMatchObject({ auto_scan: false });
-      expect(secondCall[1]).toMatchObject({ auto_scan: true });
-
-      const updateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
-        { data: { wastePercentage: number } },
-      ];
-      expect(updateCall[0].data.wastePercentage).toBe(0.25);
+      expect(externalApiService.post).toHaveBeenCalledTimes(1);
+      // Dòng infeasible vẫn được lưu (không đánh cả phương án thành FAILED) - và
+      // autoApproveBlockReason() sẽ chặn tự duyệt, báo QLSX đi gộp đợt cắt.
+      const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
+        { data: { status?: CuttingProposalStatus } },
+      ][];
+      expect(
+        updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.DRAFT),
+      ).toBeDefined();
+      expect(
+        updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.APPROVED),
+      ).toBeUndefined();
     });
 
     it('marks the proposal FAILED with the solver error message when solver returns NO_FEASIBLE_SOLUTION', async () => {

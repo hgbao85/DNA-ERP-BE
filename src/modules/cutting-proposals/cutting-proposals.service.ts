@@ -61,16 +61,17 @@ interface SolverProposeResponse {
     total_waste_mm: number;
     waste_percentage: number;
     /// true nếu có ít nhất 1 loại sắt CẮT ĐƯỢC (feasible) nhưng vượt max_waste_percentage với
-    /// các stock_lengths cố định - KHÔNG bao phủ ca "hoàn toàn không cắt được" (feasible=false,
-    /// xem runSolverAndSave() - phải tự kiểm tra thêm purchase_plan[].feasible).
+    /// các stock_lengths cố định - KHÔNG bao phủ ca "hoàn toàn không cắt được" (feasible=false).
+    /// Từ 2026-08-18 (bỏ auto_scan) cờ này KHÔNG còn kích hoạt hành động tự động nào - chỉ để
+    /// lưu vào rawResponse cho việc chẩn đoán; cổng chặn tự-duyệt đọc purchase_plan[].feasible
+    /// trực tiếp (xem autoApproveBlockReason).
     any_over_threshold: boolean;
   };
   purchase_plan: Array<{
     material: string;
     feasible: boolean;
     /// true nếu loại này feasible nhưng vượt max_waste_percentage của CHÍNH nó (riêng hoặc mặc
-    /// định) - chỉ dùng để log/chẩn đoán nguyên nhân trip auto_scan retry, không phải điều kiện
-    /// retry (điều kiện thật là any_over_threshold cấp response, xem comment nơi gọi).
+    /// định). Thuần chẩn đoán - không kích hoạt hành động nào từ 2026-08-18 (bỏ auto_scan retry).
     over_threshold?: boolean;
     best_stock_length?: number;
     total_bars?: number;
@@ -936,45 +937,27 @@ export class CuttingProposalsService {
           timeoutSeconds * 1000,
         );
 
-      // Lần 1: chỉ chấm các stock_lengths cố định (nhanh, KHÔNG vét cạn - đúng khuyến nghị của
-      // chính solver "để người dùng chủ động bật, không tự chạy ngầm"). Theo yêu cầu Sếp
-      // (2026-08-06): nếu không loại sắt nào trong các chiều dài cố định đạt max_waste_percentage,
-      // tự động gọi lại LẦN 2 với auto_scan bật (dò dải solverMinLengthMm..MaxLengthMm, bước
-      // solverLengthStepMm - mặc định 5000-6000mm bước 10mm) để tìm chiều dài đặt riêng.
+      // CHỈ chấm các stock_lengths cố định (hiện là 6000mm - cỡ duy nhất NCC bán). `auto_scan`
+      // LUÔN false, không có nhánh gọi lần 2.
       //
-      // `any_over_threshold` (solver, api/views.py) CHỈ set true cho vật tư đã "feasible" (cắt
-      // được) nhưng vượt ngưỡng - vật tư "feasible=false" hoàn toàn (không cắt được với các
-      // chiều dài cố định) không bao giờ set cờ này (solver `continue` sớm, xem views.py dòng
-      // ~210-222) dù rõ ràng cũng cần dò lại. Phải tự kiểm tra thêm `purchase_plan[].feasible`
-      // trực tiếp, không chỉ tin vào cờ tổng hợp của solver.
-      //
-      // Từ khi có ngưỡng riêng theo vật tư: "vượt ngưỡng" giờ nghĩa là vượt ngưỡng CỦA CHÍNH
-      // vật tư đó (riêng hoặc mặc định hệ thống), không còn gắn cứng với
-      // SystemConfig.solverMaxWastePercentage như trước. Sếp đặt ngưỡng càng chặt thì càng dễ
-      // trip nhánh retry auto_scan này (vốn quét ~(maxLen-minLen)/step chiều dài, tốn thời
-      // gian đáng kể) - log lại để có số liệu thật trước khi cần tinh chỉnh timeout.
-      let requestBody: typeof baseRequestBody & { auto_scan: boolean } = {
+      // Lịch sử: 2026-08-06 Sếp yêu cầu tự động gọi lại lần 2 với auto_scan bật (dò
+      // solverMinLengthMm..MaxLengthMm bước solverLengthStepMm) khi có vật tư vượt ngưỡng, để tìm
+      // "chiều dài đặt riêng". **Bỏ hẳn 2026-08-18** vì phát hiện đường đó không đi tới đâu được:
+      //   - NCC chỉ bán cây 6000 (xem chính SystemConfig.solverStockLengths) - cỡ auto_scan tìm ra
+      //     (5900/5600/5380mm...) không đặt mua được.
+      //   - Chiều dài đó cũng KHÔNG chảy tới Mua hàng: PurchaseProposalItem chỉ có materialId +
+      //     buyQty, Material.spec chỉ là tiết diện ("20x20"), không chỗ nào mang chiều dài. Người
+      //     mua vẫn đặt cây 6000 như thường, nên % hao hụt solver báo (tính trên 5900) là con số
+      //     không thật - đo trên dữ liệu 2026-08-18: 0,203% báo cáo vs 1,88% thực tế nếu mua 6000.
+      //   - Nó còn che mất tín hiệu "SKU này cắt riêng không hiệu quả": phương án lẽ ra phải bị
+      //     chặn tự duyệt để QLSX đi GỘP SKU (cách xử lý đúng, xem getBatchSuggestions) thì lại
+      //     được auto_scan "cứu" bằng một cỡ cây ảo.
+      // Bỏ đi thì solver và màn gợi ý gộp cùng chấm trên 6000mm - 2 con số khớp nhau trở lại.
+      const requestBody: typeof baseRequestBody & { auto_scan: boolean } = {
         ...baseRequestBody,
         auto_scan: false,
       };
-      const solveStartedAt = Date.now();
-      let response = await callSolver(requestBody);
-
-      const hasInfeasibleLine = response.purchase_plan.some((item) => !item.feasible);
-      if (response.summary.any_over_threshold || hasInfeasibleLine) {
-        const triggeringMaterials = response.purchase_plan
-          .filter((item) => !item.feasible || item.over_threshold)
-          .map((item) => item.material);
-        this.logger.warn(
-          `Cutting proposal ${proposalId}: auto_scan retry triggered by material(s) ` +
-            `[${triggeringMaterials.join(', ')}] sau ${Date.now() - solveStartedAt}ms lần gọi đầu`,
-        );
-        requestBody = { ...baseRequestBody, auto_scan: true };
-        response = await callSolver(requestBody);
-        this.logger.warn(
-          `Cutting proposal ${proposalId}: auto_scan retry hoàn tất sau ${Date.now() - solveStartedAt}ms tổng`,
-        );
-      }
+      const response = await callSolver(requestBody);
 
       await this.saveSuccess(proposalId, requestBody, response, segmentSpecLookup);
 
@@ -1043,8 +1026,9 @@ export class CuttingProposalsService {
    *     dòng infeasible bị bỏ khỏi đề xuất mua KHÔNG một lời cảnh báo. Ca hỗn hợp (4 vật tư ra, 1
    *     vật tư không) là tệ nhất: đề xuất mua trông vẫn bình thường, tới lúc Phôi ra xưởng mới lòi
    *     ra thiếu sắt. Ca toàn bộ infeasible còn tạo ra phương án APPROVED mà không có đề xuất mua
-   *     nào cả. Lưu ý solver ĐÃ tự retry auto_scan trước khi tới đây (xem nơi gọi) - còn infeasible
-   *     ở bước này nghĩa là đã dò hết dải chiều dài mà vẫn không xếp được, cần người quyết định.
+   *     nào cả. Từ 2026-08-18 (bỏ auto_scan, xem nơi gọi solver): infeasible ở đây nghĩa là không
+   *     xếp nổi trong ngưỡng với cây 6000mm - hướng xử lý đúng là GỘP đợt cắt với SKU khác dùng
+   *     chung loại sắt, cần người quyết định chứ không tự đi tìm cỡ cây khác nữa.
    *
    * (b) Nhu cầu này ĐÃ có phương án được duyệt trước đó. Nút "Tính lại" gửi Idempotency-Key mới
    *     mỗi lần bấm nên luôn sinh CuttingProposal MỚI; tự duyệt tiếp sẽ trừ tồn kho lần thứ hai
@@ -1068,7 +1052,13 @@ export class CuttingProposalsService {
         select: { code: true },
       });
       const labels = materials.length > 0 ? materials.map((m) => m.code) : infeasibleIds;
-      return `vật tư ${labels.join(', ')} không cắt được kể cả sau khi dò hết dải chiều dài (auto_scan)`;
+      // Gợi ý hướng xử lý ngay trong thông báo: từ 2026-08-18 không còn auto_scan dò cỡ cây khác
+      // nữa, nên cách duy nhất để hạ hao hụt là GỘP với SKU khác dùng chung loại sắt (thêm cỡ đoạn
+      // để lấp đầy cây 6000) - xem getBatchSuggestions/màn "Gợi ý gộp đợt cắt".
+      return (
+        `vật tư ${labels.join(', ')} không cắt được trong ngưỡng hao hụt với cây 6000mm - ` +
+        `thử gộp đợt cắt với SKU khác dùng chung loại sắt này`
+      );
     }
 
     const proposal = await this.prisma.cuttingProposal.findUniqueOrThrow({
