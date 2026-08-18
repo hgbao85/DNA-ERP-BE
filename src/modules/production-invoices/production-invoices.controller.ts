@@ -14,6 +14,7 @@ import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
 import { RecordPackagingDto } from './dto/record-packaging.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { RejectItemDto } from './dto/reject-item.dto';
+import { SendBatchDto, SendBatchToBossDto } from './dto/send-batch.dto';
 import { SendToBossDto } from './dto/send-to-boss.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
 import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
@@ -95,6 +96,20 @@ export class ProductionInvoicesController {
     return this.productionInvoicesService.sendItemToQlsx(id, itemId, userId);
   }
 
+  /** Gửi CẢ phiếu (mọi SKU chưa gửi / bị QLSX trả lại) trong 1 lần - cùng quyền với route lẻ ở
+   *  trên. Xem ProductionInvoicesService.sendBatchToQlsx() cho lý do tồn tại và vì sao KHÔNG giới
+   *  hạn ở đợt gộp như approve-batch. */
+  @Post(':id/send-to-qlsx-batch')
+  @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER)
+  sendBatchToQlsx(
+    @Param('id') id: string,
+    @Body() dto: SendBatchDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.productionInvoicesService.sendBatchToQlsx(id, userId, dto.itemIds);
+  }
+
   // ─── QLSX (mfgRole = PRODUCTION_MANAGER) ────────────────────────────────────
 
   @Post(':id/items/:itemId/send-to-boss')
@@ -112,6 +127,25 @@ export class ProductionInvoicesController {
       dto.warehouseCode,
       dto.warehouseName,
       userId,
+    );
+  }
+
+  /** Gửi CẢ phiếu lên Sếp - mọi SKU đang chờ QLSX, dùng CHUNG 1 kho thành phẩm (ca hiếm cần kho
+   *  khác nhau vẫn dùng route lẻ ở trên). Xem ProductionInvoicesService.sendBatchToBoss(). */
+  @Post(':id/send-to-boss-batch')
+  @RequirePermissions(APPROVE)
+  @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)
+  sendBatchToBoss(
+    @Param('id') id: string,
+    @Body() dto: SendBatchToBossDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.productionInvoicesService.sendBatchToBoss(
+      id,
+      dto.warehouseCode,
+      dto.warehouseName,
+      userId,
+      dto.itemIds,
     );
   }
 

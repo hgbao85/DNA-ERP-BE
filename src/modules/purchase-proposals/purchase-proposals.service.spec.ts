@@ -101,7 +101,8 @@ describe('PurchaseProposalsService', () => {
         productionInvoiceItem: {
           materialDeadline: null,
           stages: [],
-          // B1 (2026-08-17): poNumber hiển thị giờ đọc mã PI này, không còn đọc productionOrder.poNumber.
+          // code này lên field piCode của DTO (2026-08-18) - productionOrder.poNumber (dòng 97)
+          // vẫn giữ nguyên vai trò tra cứu nội bộ, không còn là mã hiển thị.
           productionInvoice: { code: 'PI-2026-014', deadline: null },
         },
       },
@@ -144,7 +145,9 @@ describe('PurchaseProposalsService', () => {
       // receiveItem() khoá dòng item rồi đọc lại receivedQty MỚI NHẤT bên trong transaction (C3,
       // xem receiveItem() và ghi chú D.c3-receive-race-not-atomic) - mặc định "chưa nhận gì" (0),
       // test nào cần giá trị khác (đã nhận 1 phần/đủ) tự override bằng mockResolvedValueOnce.
-      $queryRaw: jest.fn().mockResolvedValue([{ receivedQty: decimal(0), receivedQtyPurchaseUnit: null }]),
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValue([{ receivedQty: decimal(0), receivedQtyPurchaseUnit: null }]),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     stockLedgerService = { postEntry: jest.fn() };
@@ -184,7 +187,10 @@ describe('PurchaseProposalsService', () => {
       const result = await service.findOne('300');
 
       expect(result.id).toBe('300');
-      expect(result.poNumber).toBe('PI-2026-014');
+      // 2026-08-18: poNumber quay về mã nội bộ (tra cứu), piCode mới là mã PI hiển thị - xem
+      // trao đổi cùng ngày, DTO comment tại purchase-proposal-response.dto.ts.
+      expect(result.poNumber).toBe('PO-9');
+      expect(result.piCode).toBe('PI-2026-014');
       expect(result.mfgProductCode).toBe('JSE-55');
       expect(result.items?.[0].materialCode).toBe('SAT-25');
       expect(result.items?.[0].quotes[0].unitPrice).toBe(45000);
@@ -324,9 +330,7 @@ describe('PurchaseProposalsService', () => {
         proposal({ status: PurchaseProposalStatus.QUOTING }),
       );
 
-      await expect(
-        service.acknowledge('300', 'user-1', ['PURCHASER']),
-      ).resolves.toBeDefined();
+      await expect(service.acknowledge('300', 'user-1', ['PURCHASER'])).resolves.toBeDefined();
     });
 
     it('cho phép BOSS xử lý đề xuất của bất kỳ ai', async () => {
@@ -698,7 +702,9 @@ describe('PurchaseProposalsService', () => {
         }),
       );
       // Số MỚI NHẤT tại thời điểm khoá dòng (đã nhận 3 từ đợt trước) - xem C3.
-      prisma.$queryRaw.mockResolvedValue([{ receivedQty: decimal(3), receivedQtyPurchaseUnit: null }]);
+      prisma.$queryRaw.mockResolvedValue([
+        { receivedQty: decimal(3), receivedQtyPurchaseUnit: null },
+      ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
@@ -738,23 +744,22 @@ describe('PurchaseProposalsService', () => {
           items: [item({ materialId: 30n, buyQty: decimal(8), receivedQty: decimal(3) })],
         }),
       );
-      prisma.$queryRaw.mockResolvedValue([{ receivedQty: decimal(3), receivedQtyPurchaseUnit: null }]);
+      prisma.$queryRaw.mockResolvedValue([
+        { receivedQty: decimal(3), receivedQtyPurchaseUnit: null },
+      ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
 
       await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
 
-      expect(stockReservationsService.topUpFromReceipt).toHaveBeenCalledWith(
-        expect.anything(),
-        {
-          refType: 'CUTTING_PROPOSAL',
-          refId: '200',
-          materialId: 30n,
-          warehouseId: 800n,
-          qty: 5,
-        },
-      );
+      expect(stockReservationsService.topUpFromReceipt).toHaveBeenCalledWith(expect.anything(), {
+        refType: 'CUTTING_PROPOSAL',
+        refId: '200',
+        materialId: 30n,
+        warehouseId: 800n,
+        qty: 5,
+      });
     });
 
     it('B4 Đợt 3: không gọi topUpFromReceipt() khi không có gì tăng thật (incrementQty=0, ca hiếm nhận trùng)', async () => {
@@ -765,7 +770,9 @@ describe('PurchaseProposalsService', () => {
         }),
       );
       // Khoá được: đã nhận đủ 8 từ đợt trước, lần nhập này báo 0 -> incrementQty=0.
-      prisma.$queryRaw.mockResolvedValue([{ receivedQty: decimal(8), receivedQtyPurchaseUnit: null }]);
+      prisma.$queryRaw.mockResolvedValue([
+        { receivedQty: decimal(8), receivedQtyPurchaseUnit: null },
+      ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
@@ -783,7 +790,9 @@ describe('PurchaseProposalsService', () => {
           items: [item({ materialId: 30n, buyQty: decimal(8), receivedQty: decimal(0) })],
         }),
       );
-      prisma.$queryRaw.mockResolvedValue([{ receivedQty: decimal(0), receivedQtyPurchaseUnit: null }]);
+      prisma.$queryRaw.mockResolvedValue([
+        { receivedQty: decimal(0), receivedQtyPurchaseUnit: null },
+      ]);
 
       await expect(
         service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1'),
@@ -805,7 +814,9 @@ describe('PurchaseProposalsService', () => {
         }),
       );
       // Nhưng khi khoá được dòng, DB thật đã là 3 (lượt nhận khác vừa commit song song).
-      prisma.$queryRaw.mockResolvedValue([{ receivedQty: decimal(3), receivedQtyPurchaseUnit: null }]);
+      prisma.$queryRaw.mockResolvedValue([
+        { receivedQty: decimal(3), receivedQtyPurchaseUnit: null },
+      ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
       );
@@ -833,7 +844,9 @@ describe('PurchaseProposalsService', () => {
           items: [item({ materialId: 30n, buyQty: decimal(8), receivedQty: decimal(3) })],
         }),
       );
-      prisma.$queryRaw.mockResolvedValue([{ receivedQty: decimal(3), receivedQtyPurchaseUnit: null }]);
+      prisma.$queryRaw.mockResolvedValue([
+        { receivedQty: decimal(3), receivedQtyPurchaseUnit: null },
+      ]);
 
       // 3 đã nhận + 10 nhập thêm = 13 > 8 -> chặn, KHÔNG ghi 8 rồi nuốt 5 cây còn lại.
       await expect(
@@ -850,7 +863,9 @@ describe('PurchaseProposalsService', () => {
           items: [item({ buyQty: decimal(8), receivedQty: decimal(8) })],
         }),
       );
-      prisma.$queryRaw.mockResolvedValue([{ receivedQty: decimal(8), receivedQtyPurchaseUnit: null }]);
+      prisma.$queryRaw.mockResolvedValue([
+        { receivedQty: decimal(8), receivedQtyPurchaseUnit: null },
+      ]);
 
       await expect(
         service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1'),

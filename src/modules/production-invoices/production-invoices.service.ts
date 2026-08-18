@@ -432,6 +432,113 @@ export class ProductionInvoicesService {
     return this.toItemResponseDto(updated);
   }
 
+  // ─── Gửi CẢ PHIẾU (mọi SKU đủ điều kiện) - 2026-08-18 ───────────────────────────
+  // Trước đây chỉ có route theo từng itemId. Khi 1 PI = 1 SKU (mỗi đơn Sales 1 phiếu) thì "gửi
+  // từng item" chính là "gửi cả phiếu", không ai thấy phiền. Từ khi có PI gộp (Nhịp 2) và cả PI
+  // thường của đơn Sales nhiều dòng, KHSX/QLSX phải mở hộp thoại chọn lại từng SKU - trong khi Sếp
+  // ĐÃ có approveBatch/rejectBatch từ trước. Hai hàm dưới bù đúng chỗ lệch đó.
+  //
+  // KHÁC approveBatch/rejectBatch ở một điểm CÓ CHỦ ĐÍCH: KHÔNG gọi assertMergedPi(). Ràng buộc
+  // "chỉ đợt gộp" của Sếp đến từ nghiệp vụ cắt (cả nhóm cắt chung cây sắt nên không duyệt lẻ
+  // được); còn "gửi đi xử lý" không có ràng buộc nào như vậy - PI thường nhiều SKU cũng cần gửi
+  // 1 lần. Cả hai đều BỎ QUA item không đủ điều kiện thay vì ném lỗi (khác assert* của route lẻ):
+  // gửi cả phiếu là thao tác gom, chặn cả mẻ chỉ vì 1 SKU đã gửi rồi là sai kỳ vọng người dùng.
+
+  /**
+   * KHSX gửi MỌI SKU chưa gửi (hoặc bị QLSX trả lại) của 1 phiếu sang QLSX trong 1 lần.
+   * Không nhận dữ liệu riêng theo từng SKU nên gộp là an toàn tuyệt đối - xem sendItemToQlsx().
+   */
+  async sendBatchToQlsx(
+    piId: string,
+    actorUserId: string,
+    itemIds?: string[],
+  ): Promise<ProductionInvoiceResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    // Đủ điều kiện = đúng tập mà assertNoApprovalOrRejected() của route lẻ cho qua.
+    // `itemIds` để trống = gửi hết (ca thường); có giá trị = KHSX bỏ tick vài SKU trên UI (vd SKU
+    // chưa khai xong mốc thời hạn) - lọc thêm nhưng KHÔNG nới điều kiện trạng thái.
+    const selected = itemIds ? new Set(itemIds) : null;
+    const targets = pi.items.filter(
+      (it) =>
+        (!it.prodApprovalStatus || it.prodApprovalStatus === ProdApprovalStatus.REJECTED) &&
+        (selected === null || selected.has(it.id.toString())),
+    );
+    if (targets.length === 0) {
+      throw new ConflictException(
+        `${pi.code} không còn SKU nào ở trạng thái gửi được (chưa gửi / bị QLSX trả lại)`,
+      );
+    }
+
+    const requestedAt = new Date();
+    await this.prisma.productionInvoiceItem.updateMany({
+      where: { id: { in: targets.map((it) => it.id) } },
+      data: {
+        prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX,
+        requestedAt,
+        requestedById: actorUserId,
+        rejectReason: null,
+      },
+    });
+    // updateMany() không trả từng dòng - dựng "after" từ "before" đã có, cùng cách approveBatch().
+    for (const item of targets) {
+      await this.auditItemApprovalTransition(item, {
+        ...item,
+        prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX,
+        requestedAt,
+        requestedById: actorUserId,
+        rejectReason: null,
+      });
+    }
+    return this.findOne(piId);
+  }
+
+  /**
+   * QLSX gửi MỌI SKU đang chờ mình của 1 phiếu sang Sếp duyệt, DÙNG CHUNG 1 kho thành phẩm.
+   * Chọn "chung 1 kho" (không cho chọn riêng từng SKU) vì đã gộp/cùng phiếu thì gần như luôn cùng
+   * đích đến; ca hiếm cần kho khác nhau vẫn dùng được route lẻ :itemId/send-to-boss như cũ.
+   */
+  async sendBatchToBoss(
+    piId: string,
+    warehouseCode: string,
+    warehouseName: string,
+    actorUserId: string,
+    itemIds?: string[],
+  ): Promise<ProductionInvoiceResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const selected = itemIds ? new Set(itemIds) : null;
+    const targets = pi.items.filter(
+      (it) =>
+        it.prodApprovalStatus === ProdApprovalStatus.WAITING_QLSX &&
+        (selected === null || selected.has(it.id.toString())),
+    );
+    if (targets.length === 0) {
+      throw new ConflictException(`${pi.code} không còn SKU nào đang chờ QLSX xử lý`);
+    }
+
+    const qlsxAt = new Date();
+    await this.prisma.productionInvoiceItem.updateMany({
+      where: { id: { in: targets.map((it) => it.id) } },
+      data: {
+        prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS,
+        warehouseCode,
+        warehouseName,
+        qlsxAt,
+        qlsxById: actorUserId,
+      },
+    });
+    for (const item of targets) {
+      await this.auditItemApprovalTransition(item, {
+        ...item,
+        prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS,
+        warehouseCode,
+        warehouseName,
+        qlsxAt,
+        qlsxById: actorUserId,
+      });
+    }
+    return this.findOne(piId);
+  }
+
   /**
    * Sếp duyệt cuối - SKU bắt đầu sản xuất; PI tự chuyển PRODUCING khi mọi item đã duyệt. Mirror
    * approveItemByBoss() mock. Ném ConflictException NGAY (không ghi gì) nếu sản phẩm chưa có

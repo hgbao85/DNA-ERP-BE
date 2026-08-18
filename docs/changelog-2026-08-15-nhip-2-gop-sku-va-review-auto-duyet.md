@@ -24,6 +24,11 @@
 > - [Mục 14](#14-bỏ-auto_scan--solver-chỉ-tính-trên-cây-6000mm-2026-08-18) — **bỏ `auto_scan`**:
 >   solver chỉ tính trên cây 6000mm, không tự dò cỡ đặt riêng nữa. Đảo ngược quyết định 2026-08-06;
 >   lý do: cỡ cây tìm ra không mua được, và hao hụt báo cáo sai ~9 lần so với thực tế.
+> - [Mục 15](#15-review-không-khả-thi-của-solver--trạng-thái-màn-cắt-sắt-2026-08-18--chưa-code) —
+>   **CHƯA CODE**. `feasible: false` đang gộp 3 nghĩa khác nhau và BE vứt bỏ toàn bộ lý do solver
+>   gửi kèm; 4 rủi ro của luồng gộp SKU; **1 lỗ hổng đang chạy: phương án vượt ngưỡng hao hụt vẫn
+>   được tự duyệt → trừ kho → mua, không cảnh báo** (`over_threshold` không ai kiểm). Kèm vòng
+>   review 2 tìm ra 4 lỗi trong chính phương án vòng 1.
 
 Repo liên quan: `DNA-ERP-BE` (nhánh `main`), `DNA-ERP` (nhánh `demo`), solver `cat_sat_iea`
 (`D:\DNA-DEXUAT`, không đổi trong phiên này).
@@ -1170,3 +1175,161 @@ muốn chứ không phải hồi quy: hệ thống nói thật thay vì giấu v
 Lợi ích kèm theo: màn "Gợi ý gộp đợt cắt" (`best-fill.util.ts`, tính cận dưới trên 6000mm) và solver
 giờ **cùng chấm trên một tập chiều dài** - 2 con số khớp nhau trở lại, hết cảnh gợi ý báo 1,88% mà
 solver báo 0,203%.
+
+---
+
+## 15. Review "Không khả thi" của solver + trạng thái màn Cắt sắt (2026-08-18) — **CHƯA CODE**
+
+> **Trạng thái: điều tra + thiết kế xong, chưa viết một dòng code nào.** Mục này ghi lại phát hiện
+> và phương án đã qua 2 vòng review (vòng 2 tìm ra 4 lỗi trong chính phương án của vòng 1). Cần
+> duyệt nghiệp vụ mục [15.6](#156-phương-án-đã-sửa--thứ-tự-thực-hiện)-(8) và **cho phép chạy
+> migration** trước khi bắt đầu.
+
+### 15.1. Ba câu hỏi khởi nguồn
+
+1. *"Sao bỏ status Đã duyệt rồi mà vẫn còn? Boss duyệt thì PI chuyển Đang tính ngay, tính xong 1
+   case không khả thi thì báo lỗi, tất cả khả thi thì để Đạt."*
+2. *"Tối ưu cắt sắt đã đề xuất rồi nghĩa là hao hụt <1% chứ, sao qua solve mới báo không khả thi?
+   Tối ưu cắt sắt quét ra có cắt được hay không mà phải không?"*
+3. *"Gộp 3 SKU thành 1 PI thì solver nhận thế nào, hệ thống có xử lý tốt chỗ này không?"*
+
+### 15.2. Trả lời câu 2 — "Tối ưu cắt sắt" KHÔNG quét được/không cắt được
+
+`best-fill.util.ts` tính **cận dưới**: *"nếu có vô hạn đoạn mỗi cỡ thì lấp đầy một cây tới đâu"*.
+Header file đã ghi rõ điều này và FE cũng hiện `>= 0,17%` chứ không phải `0,17%` — nên về hợp đồng
+là đúng, nhưng **nó không trả lời được câu người dùng cần trả lời**. Hai thứ nó cố ý bỏ qua:
+
+- **Số lượng nhu cầu thật** — giả định cây nào cũng cắt theo pattern đẹp nhất. Nhu cầu ít thì không
+  đủ đoạn để lặp lại pattern đó, cây cuối chi phối toàn bộ con số.
+- **`max_surplus = 10`** — solver không được dư quá 10 đoạn mỗi cỡ; pattern lấp đầy nhất thường đòi
+  dư nhiều hơn thế nên bị loại.
+
+Khoảng cách cận-dưới ↔ thực tế **lớn nhất đúng ở vật tư nhu cầu ít** — đúng ca đang gặp.
+
+### 15.3. Phát hiện chính — `feasible: false` đang gộp 3 nghĩa khác nhau
+
+Đọc `D:\DNA-DEXUAT\api\views.py:262-278` và `cat_sat\de_xuat_logic.py::_no_solution/_unsolved`:
+
+| Thực chất | Ý nghĩa | Hành động đúng | Hiện ra |
+|---|---|---|---|
+| Vượt ngưỡng 1% | **Cắt được bình thường**, solver kèm `best_achievable` = *"tốt nhất 2,4% với cây 6000 x 5 cây"* | Gộp thêm SKU / nới ngưỡng | Không khả thi |
+| `timed_out` | **Chưa kết luận được gì** — solver chưa chạy xong | Tính lại / tăng time limit | Không khả thi |
+| Vô nghiệm thật | Đoạn dài hơn cây, hoặc `max_surplus` quá chặt | Sửa thiết kế đoạn cắt | Không khả thi |
+
+**BE đang vứt bỏ toàn bộ lời giải thích.** Solver trả đủ `reason`, `best_achievable`, `timed_out`,
+`patterns_truncated`, `max_waste_pct_threshold` cho mỗi dòng hỏng — nhưng type
+`SolverProposeResponse` (`cutting-proposals.service.ts:70-91`) **không khai báo field nào trong đó**,
+`saveSuccess()` không lưu, `cutting_proposal_lines` không có cột. Solver nói rõ *"nâng ngưỡng lên
+>= 2,4% nếu chấp nhận được"* — ta ném đi rồi hiển thị một dấu gạch ngang.
+
+### 15.4. Trả lời câu 3 — solver nhận PI gộp thế nào, và 4 rủi ro
+
+`buildInvoiceJob()` (`cutting-proposals.service.ts:1308-1358`): lấy `ProductionOrder` từng SKU ->
+bung BOM -> quy về số tuyệt đối `absoluteQty = qty_per_set * qty_per_part * order.quantity` -> **gom
+theo `(materialId, cutLengthMm)`** -> gửi `num_sets: 1`, mỗi dòng `qty_per_set: 1`,
+`qty_per_part: absoluteQty`.
+
+Solver `explode_bom` tính `demand = 1 * absoluteQty * 1`. **Khớp chính xác.** Khoá gom nhóm hai bên
+cũng trùng nhau. `SegmentSpec` có `@@unique([materialId, cutLengthMm])` nên `segmentSpecLookup`
+dùng chung giữa các SKU không đụng id. **Phần tính toán đúng.**
+
+Điểm phải biết: `views.py` chạy `for group in material_groups` — **giải từng loại sắt riêng biệt**.
+Gộp SKU chỉ có tác dụng *trong phạm vi một loại sắt*; vật tư nào chỉ 1 SKU dùng thì bài toán y hệt
+lúc cắt riêng.
+
+| # | Rủi ro | Chi tiết |
+|---|---|---|
+| **1** | **Gộp càng nhiều SKU, solver càng dễ báo "không khả thi" vì lý do kỹ thuật** | `generate_patterns` phải liệt kê tổ hợp cỡ đoạn trên một cây. Thêm SKU -> thêm cỡ đoạn -> nổ tổ hợp. Chốt chặn cứng: `MAX_SIZES_PER_BAR = 4`, `ENUM_TIME_LIMIT = 30s`. Hết giờ -> `timed_out + patterns_truncated`. **Nghịch lý: gộp để chữa hao hụt, nhưng gộp lại làm solver bó tay** — rồi báo bằng đúng cái nhãn khiến người đọc tưởng sắt không cắt được |
+| **2** | **`time_limit_seconds` là ngân sách CHO MỖI LOẠI SẮT** | `views.py` truyền vào `optimize_one_material()` bên trong vòng lặp. DB đang để 60s -> phiếu 7 loại sắt = xấu nhất 420s. Env hiện tại `SOLVER_TIMEOUT_SECONDS=1700` nên an toàn, nhưng **mặc định trong code là 300s** (`configuration.ts:58`) -> deploy quên set env là phiếu gộp lớn `FAILED` oan trong khi solver vẫn chạy đúng |
+| **3** | **Không có trần số SKU gộp** | `mergeItems` chỉ chặn `< 2`. Không giới hạn trên, không cảnh báo khi tổ hợp đẩy số cỡ đoạn lên quá cao — không gì ngăn KHSX tự tạo ra ca rủi ro 1 |
+| **4** | **Nhãn `part` mất dấu vết sau khi gộp** (nhẹ) | Comment dòng 1340 nói *"tên gộp để biết đoạn này của sản phẩm nào"*, nhưng khi SKU thứ 2 cộng vào key đã có, code chỉ `existing.qty_per_part += absoluteQty` và **giữ tên SKU đầu tiên**. `rawResponse` ghi 120 đoạn thuộc SKU A trong khi thật ra là A+B+C. Chỉ ảnh hưởng audit, nhưng comment mô tả sai hành vi |
+
+### 15.5. Vòng review 2 — 4 lỗi trong chính phương án vòng 1
+
+Phương án vòng 1 (giữ enum DB, thêm `displayStatus` dẫn xuất 4 chip: Đang tính / Đạt / Cần duyệt
+tay / Lỗi) **có 4 lỗi**, trong đó 1 lỗi đủ nặng để phải sửa trước khi code:
+
+**(a) Nhãn "Đạt" sẽ nói dối.** Quy tắc *`APPROVED` + mọi dòng `feasible` -> Đạt* bỏ sót field
+`over_threshold`: **cắt được nhưng vượt ngưỡng hao hụt của chính loại sắt đó**. Comment hiện tại
+(`:73-75`) ghi *"thuần chẩn đoán — không kích hoạt hành động nào"*, và `autoApproveBlockReason()`
+**không kiểm tra nó**. Nghĩa là hôm nay hệ thống đã và đang: tự duyệt phương án vượt ngưỡng -> trừ
+kho thật -> đẩy đề xuất mua thật, không một lời cảnh báo; `saveSuccess()` cũng **không lưu
+`over_threshold`** nên dấu vết biến mất. Phương án vòng 1 sẽ tô cái đó **màu xanh** — sai nguy hiểm
+hơn hẳn cái sai hiện tại, vì dòng đỏ oan thì người ta còn mở ra xem, **dòng xanh thì không ai kiểm
+tra bao giờ**.
+
+**(b) Mục "displayStatus" và mục "lưu reason" mâu thuẫn — làm cái trước là chắc chắn đập đi làm
+lại.** Quy tắc *"có dòng `feasible=false` -> Lỗi"* tô đỏ cả ca `timed_out`, phạm đúng điều tác giả
+solver cảnh báo bằng chữ trong `_unsolved()`: *"Gộp chung hai ca này sẽ âm thầm loại bỏ những chiều
+dài TỐT chỉ vì solver chưa kịp chạy xong, mà người dùng lại đọc thành 'không dùng được' — sai hoàn
+toàn về bản chất."*
+
+**(c) Vòng 1 viết "không đụng tới `autoApproveBlockReason()`" — sai.** Thông báo hiện tại *"không
+cắt được trong ngưỡng hao hụt với cây 6000mm - thử gộp đợt cắt"* (chính là câu vừa sửa ở
+[mục 14.2](#142-đã-sửa-gì)) **sai hẳn** khi lý do thật là hết giờ — bảo người ta gộp thêm, mà gộp
+thêm chính là thứ làm solver hết giờ (rủi ro 15.4-1). Hàm này phải rẽ nhánh theo lý do, và phải
+chặn thêm ca `over_threshold`.
+
+**(d) Hai nguồn lý do.** Bản tính lại tại chỗ và bản solver gửi. Phải chốt: **luôn dùng bản solver;
+chỉ tính lại cho bản ghi cũ trước migration.**
+
+#### Rủi ro kỹ thuật về sau
+
+- **TTL chống treo `CALCULATING` — con số cứng là bẫy.** TTL phải lớn hơn `solverTimeLimitSeconds *
+  số loại sắt`. Hôm nay 60s x 7 = 420s nên TTL 25 phút ổn; nhưng nâng `solverTimeLimitSeconds` lên
+  300 với phiếu 10 loại sắt = 50 phút > TTL -> **hệ thống báo lỗi cho những lần solve đang chạy bình
+  thường**, tệ hơn bug đang chữa (người dùng bấm "Tính lại" chồng lên, nhân đôi tải, bản cũ vẫn về
+  đích và sống lại). -> **Neo TTL vào `SOLVER_TIMEOUT_SECONDS`**, vì đó chính xác là mốc mà không
+  tiến trình BE nào còn có thể đang chờ.
+- **`displayStatus` tính lúc đọc thì không lọc/phân trang được bằng SQL.** Màn hình hiện lọc
+  client-side trên 100 bản ghi đã tải nên **bộ đếm trên chip đã sai sẵn** khi vượt 100; thêm trạng
+  thái dẫn xuất sẽ khoá luôn đường sửa. -> Đằng nào cũng migration, lưu thêm cờ
+  `hasInfeasibleLine` / `hasOverThreshold` trên `cutting_proposals` (là **sự kiện**, không phải từ
+  vựng hiển thị), ghi lúc `saveSuccess`. Quan trọng vì màn này sẽ poll 20s/lần.
+- **Nháy trạng thái.** Giữa `DRAFT` và `APPROVED` có khoảng trống (approve trừ kho + tạo đề xuất mua
+  trong transaction). Poll rơi đúng đó sẽ hiện "cần xử lý" rồi 20s sau nhảy "đạt". -> Coi `DRAFT` có
+  `completedAt` trong vòng ~60s là "đang hoàn tất".
+- **Bản ghi cũ** có `reason = NULL` sau migration -> phải hiện *"bản ghi cũ, không lưu lý do"*, không
+  để trống nhìn như hỏng.
+
+#### Rủi ro lớn nhất: làm lỗi **dễ đọc hơn**, không làm lỗi **ít đi**
+
+Sau khi ship, KHSX thấy dòng cam ghi rõ *"hao hụt 2,4% > ngưỡng 1% - gộp thêm SKU"*, rồi quay lại
+màn gộp, gộp thêm, và đâm vào bức tường liệt kê pattern (rủi ro 15.4-1). **Nguy cơ xây một ngõ cụt
+rất giàu thông tin.** Đòn bẩy thật chỉ có ba: (a) nới `Material.maxCuttingWastePercentage` cho loại
+sắt mà 1% là phi thực tế, (b) gộp, (c) sửa thiết kế đoạn cắt. Solver **đã tự tính sẵn con số cho
+(a)** và gửi trong `best_achievable`.
+
+#### Đã rút lại: "siết cận dưới `bestFill` cho sát thực tế"
+
+Cho `bestFill` biết số lượng nhu cầu và `max_surplus` **chính là bài toán NP-hard mà CP-SAT đang
+giải**. Nó phá đúng tính chất khiến hàm đó tồn tại: `getBatchCandidates` gọi O(số SKU x số vật tư),
+`getBatchSuggestions` gọi O(số vật tư x số mức gộp) — mỗi lần từ ~1ms lên ~100ms là màn gộp không
+dùng được. Tệ hơn: làm sai một chút là **nó thôi không còn là cận dưới đúng**, mà toàn bộ logic
+*"loại sớm tổ hợp chắc chắn không đạt"* dựa vào tính chất đó — cận sai lên trên sẽ vứt nhầm tổ hợp
+tốt. -> Thay bằng cảnh báo rẻ và thành thật: *"nhu cầu nhỏ (< N cây) - cận dưới này không đáng tin"*
+cạnh con số `>= x%`.
+
+### 15.6. Phương án đã sửa — thứ tự thực hiện
+
+| # | Việc | Ghi chú |
+|---|---|---|
+| 1 | **Migration** + lưu đủ 6 field solver trả: `reason`, `best_achievable`, `timed_out`, `patterns_truncated`, `max_waste_pct_threshold`, **`over_threshold`** | Kèm cờ `hasInfeasibleLine`/`hasOverThreshold` trên `cutting_proposals` để lọc bằng SQL |
+| 2 | Sửa `autoApproveBlockReason()`: rẽ nhánh theo lý do + **chặn thêm ca `over_threshold`** | Đây là chỗ chặn tiền đi ra sai — xem 15.5-(a) |
+| 3 | Thiết kế hiển thị **một lần**: 3 chip (Đang tính / Đạt / Cần xử lý) + câu lý do & hành động cụ thể trên dòng | Giữ đúng "3 trạng thái" đã yêu cầu; phân biệt nằm ở chữ nên không phải nói dối. **Không build trước mục 1** |
+| 4 | Nút "Tính lại" theo trạng thái dẫn xuất + **route retry cho phiếu gộp** | Hiện gãy: FE gọi `retryCuttingProposal(p.productionOrderId)` nhưng phương án neo PI gộp có `productionOrderId = null` và BE không có route retry cho PI |
+| 5 | Poll có điều kiện (20s, tự tắt khi hết `CALCULATING`) + đồng hồ đếm phút + TTL **neo vào `SOLVER_TIMEOUT_SECONDS`** | Dùng lại pattern đã chạy ở `LenhSXPage.tsx:68-77` và component `CalculatingBadge`. **Không làm SSE/WebSocket**: BE chưa có hạ tầng nào, EventSource không gửi được Bearer header, đổi lấy độ trễ 20s->1s cho việc chạy 15 phút |
+| 6 | Trần số SKU gộp / cảnh báo số cỡ đoạn; kiểm tra `timeout > timeLimit * số loại sắt` | Chặn nguyên nhân gốc của 15.4-1 và 15.4-2 |
+| 7 | Cảnh báo "nhu cầu nhỏ, cận dưới không đáng tin" trên màn gộp | Thay cho phương án siết cận dưới đã rút lại |
+| 8 | **(cần duyệt nghiệp vụ)** Nút "nới ngưỡng vật tư này lên x%" ngay trên dòng cam, có audit | Từ chẩn đoán sang xử lý được tại chỗ; `best_achievable` đã cho sẵn con số x |
+
+**Không đụng tới:** enum `CuttingProposalStatus` (`APPROVED` đang gánh chống-trừ-kho-2-lần ở
+`autoApproveBlockReason` và tra pattern cho Phôi ở `steel-issues.service.ts:625,743`), logic
+auto-duyệt, module `steel-issues`.
+
+### 15.7. Điểm chưa xác minh — chặn mục 2
+
+`over_threshold = true` cùng `feasible = true` xảy ra trong điều kiện nào và tần suất bao nhiêu:
+**suy ra từ code, chưa quan sát được trên dữ liệu thật** (DB local là bộ dữ liệu khác — vật tư
+`STL-*`, không có `SAT-*` như trên UAT). Cần một câu query trên DB UAT trước khi làm mục 2, vì nội
+dung mục đó phụ thuộc hoàn toàn vào câu trả lời này.

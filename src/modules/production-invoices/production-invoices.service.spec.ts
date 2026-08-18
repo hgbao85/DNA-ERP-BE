@@ -374,6 +374,117 @@ describe('ProductionInvoicesService', () => {
     });
   });
 
+  // Gửi cả phiếu 1 lần (2026-08-18) - bù chỗ lệch: Sếp đã có approveBatch/rejectBatch từ trước,
+  // KHSX/QLSX thì vẫn phải mở hộp thoại chọn lại từng SKU dù PI gộp có nhiều SKU.
+  describe('sendBatchToQlsx', () => {
+    it('gửi MỌI SKU đủ điều kiện trong 1 lần (chưa gửi + bị QLSX trả lại), bỏ qua SKU đã gửi rồi', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            piItem({ id: 20n, prodApprovalStatus: null }), // chưa gửi -> gửi
+            piItem({ id: 21n, prodApprovalStatus: 'REJECTED' }), // bị trả lại -> gửi lại
+            piItem({ id: 22n, prodApprovalStatus: 'WAITING_BOSS' }), // đã đi tiếp -> BỎ QUA
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
+
+      await service.sendBatchToQlsx('7', 'user-khsx');
+
+      // Chỉ 2 SKU đủ điều kiện được đụng tới - SKU đang WAITING_BOSS không bị kéo ngược trạng thái.
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [20n, 21n] } },
+        data: expect.objectContaining({
+          prodApprovalStatus: 'WAITING_QLSX',
+          requestedById: 'user-khsx',
+          rejectReason: null,
+        }) as unknown,
+      });
+      // Audit ghi cho ĐÚNG 2 SKU vừa đổi, không phải cả 3.
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('ném ConflictException khi không còn SKU nào gửi được (không im lặng làm gì cả)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({ items: [piItem({ prodApprovalStatus: 'WAITING_BOSS' })] }),
+      );
+
+      await expect(service.sendBatchToQlsx('7', 'user-khsx')).rejects.toThrow(ConflictException);
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('itemIds THU HẸP tập gửi (người dùng bỏ tick vài SKU) nhưng KHÔNG nới điều kiện trạng thái', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            piItem({ id: 20n, prodApprovalStatus: null }),
+            piItem({ id: 21n, prodApprovalStatus: null }), // bị bỏ tick
+            piItem({ id: 22n, prodApprovalStatus: 'WAITING_BOSS' }), // có tick nhưng KHÔNG đủ điều kiện
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.sendBatchToQlsx('7', 'user-khsx', ['20', '22']);
+
+      // Chỉ 20n: 21n bị bỏ tick, 22n có tick nhưng đã WAITING_BOSS nên vẫn bị loại.
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [20n] } },
+        data: expect.objectContaining({ prodApprovalStatus: 'WAITING_QLSX' }) as unknown,
+      });
+    });
+
+    // KHÁC approveBatch có chủ đích: gửi đi xử lý không có ràng buộc "cắt chung cây sắt" nên PI
+    // thường nhiều SKU cũng phải gộp gửi được (xem comment tại service).
+    it('CHẠY ĐƯỢC trên PI thường (không phải đợt gộp) - khác approveBatch', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({ isMerged: false, items: [piItem({ id: 20n, prodApprovalStatus: null })] }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 1 });
+
+      await expect(service.sendBatchToQlsx('7', 'user-khsx')).resolves.toBeDefined();
+    });
+  });
+
+  describe('sendBatchToBoss', () => {
+    it('gửi mọi SKU đang chờ QLSX lên Sếp với CHUNG 1 kho thành phẩm', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }),
+            piItem({ id: 21n, prodApprovalStatus: 'WAITING_QLSX' }),
+            piItem({ id: 22n, prodApprovalStatus: null }), // chưa tới lượt -> BỎ QUA
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
+
+      await service.sendBatchToBoss('7', 'thanh-pham', 'Kho thành phẩm', 'user-qlsx');
+
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [20n, 21n] } },
+        data: expect.objectContaining({
+          prodApprovalStatus: 'WAITING_BOSS',
+          warehouseCode: 'thanh-pham',
+          warehouseName: 'Kho thành phẩm',
+          qlsxById: 'user-qlsx',
+        }) as unknown,
+      });
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('ném ConflictException khi không SKU nào đang chờ QLSX', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({ items: [piItem({ prodApprovalStatus: 'WAITING_BOSS' })] }),
+      );
+
+      await expect(
+        service.sendBatchToBoss('7', 'thanh-pham', 'Kho thành phẩm', 'user-qlsx'),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('sendItemToBoss', () => {
     it('rejects when the item is not WAITING_QLSX', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
