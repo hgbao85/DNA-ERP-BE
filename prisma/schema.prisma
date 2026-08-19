@@ -557,7 +557,6 @@ model Piece {
   stockLedgerEntries          StockLedger[]
   stockQuants                 StockQuant[]
   transferCheckResults        TransferCheckResult[]
-  steelIssues                 SteelIssue[]
   weavingIssues               WeavingIssue[]
   weavingReceipts             WeavingReceipt[]
   productionBatches           ProductionBatch[]
@@ -1060,6 +1059,7 @@ model ProductionInvoice {
   items            ProductionInvoiceItem[]
   planForms        PlanForm[]
   cuttingProposals CuttingProposal[]
+  steelIssues      SteelIssue[]
 
   @@index([salesOrderId])
   @@map("production_invoices")
@@ -1255,7 +1255,6 @@ model ProductionOrder {
   mfgProduct                  MfgProduct                   @relation(fields: [mfgProductId], references: [id])
   bomRevision                 BomRevision                  @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
   cuttingProposals            CuttingProposal[]
-  steelIssues                 SteelIssue[]
   weavingIssues               WeavingIssue[]
   weavingReceipts             WeavingReceipt[]
   materialIssues              MaterialIssue[]
@@ -1324,22 +1323,22 @@ model CuttingProposal {
 /// bar_count ở đây là NGUỒN CHÍNH XÁC cho Phase 8 (inspection_items.required vật tư sắt),
 /// ưu tiên hơn ước lượng thô qua BOM - xem docs/dna-erp-backend-implementation-plan.md 8.1.
 model CuttingProposalLine {
-  id                BigInt   @id @default(autoincrement())
-  cuttingProposalId BigInt
-  materialId        BigInt
-  feasible          Boolean  @default(true)
-  bestStockLengthMm Int?
-  totalBars         Int?
-  totalWasteMm      Int?
-  wastePercentage   Decimal? @db.Decimal(6, 3)
+  id                   BigInt   @id @default(autoincrement())
+  cuttingProposalId    BigInt
+  materialId           BigInt
+  feasible             Boolean  @default(true)
+  bestStockLengthMm    Int?
+  totalBars            Int?
+  totalWasteMm         Int?
+  wastePercentage      Decimal? @db.Decimal(6, 3)
   /// Tổng chiều dài mẩu sắt còn NGUYÊN (chưa cắt, từ cây cắt dở) của loại sắt này - nhập kho,
   /// cắt được cỡ bất kỳ sau này. KHÔNG phải phế liệu/hao hụt. Phôi cần biết số này để nhập kho
   /// đúng, xem thêm CuttingProposalPattern.mauNguyenMm (chi tiết cây nào cắt dở).
-  mauNguyenMm       Int?     @default(0)
+  mauNguyenMm          Int?     @default(0)
   /// So sánh hao hụt giữa các chiều dài chuẩn đã chấm (vd [{length:5850,bars:227,wastePct:9.61},
   /// {length:6000,bars:223,wastePct:0.85}]) - thuần hiển thị/audit, không có FK nào cần tới nên
   /// giữ JSON thay vì tách bảng.
-  lengthComparison  Json?
+  lengthComparison     Json?
   /// Lý do KHÔNG cắt được (feasible=false), NGUYÊN VĂN từ solver (api/views.py::_no_solution/
   /// _unsolved) - vd "Không có cách cắt nào đạt ngưỡng 1% hao hụt...". Trước 2026-08-19 field
   /// này bị vứt bỏ hoàn toàn (không lưu) - FE chỉ hiện được "Không khả thi" trơ trọi, không nói
@@ -1722,28 +1721,28 @@ model StockQuant {
 /// tốt; đổi lại, mọi nơi tính available BẮT BUỘC đi qua đúng 1 hàm dùng chung
 /// (StockReservationsService.getAvailableQty) - hàm đó cộng cả HAI bảng.
 model StockReservation {
-  id          BigInt                  @id @default(autoincrement())
-  warehouseId BigInt
-  materialId  BigInt
+  id             BigInt                  @id @default(autoincrement())
+  warehouseId    BigInt
+  materialId     BigInt
   /// Số lượng đã hứa. Bất biến sau khi tạo - phần đã lấy đi ghi ở consumedQty, không trừ vào đây
   /// (giữ được "hứa bao nhiêu / lấy bao nhiêu" để đối chiếu).
-  quantity    Decimal                 @db.Decimal(16, 4)
+  quantity       Decimal                 @db.Decimal(16, 4)
   /// Cộng dồn phần đã thực xuất - Phôi lấy sắt làm nhiều đợt (giữ 100 cây, xuất 30/40/30). Khi
   /// consumedQty >= quantity thì status chuyển RELEASED, dòng hết chiếm chỗ.
-  consumedQty Decimal                 @default(0) @db.Decimal(16, 4)
-  status      ReservationStatus       @default(ACTIVE)
-  refType     StockReservationRefType
+  consumedQty    Decimal                 @default(0) @db.Decimal(16, 4)
+  status         ReservationStatus       @default(ACTIVE)
+  refType        StockReservationRefType
   /// Trỏ tới bản ghi nghiệp vụ giữ chỗ này (vd cutting_proposals.id) - cùng lý do không FK cứng
   /// như StockLedger.refId.
-  refId       String
+  refId          String
   /// Chống tạo trùng khi caller gọi lại (cùng idiom StockLedger.idempotencyKey). Đặt theo công
   /// thức cố định `<refType>:<refId>:material:<materialId>` chứ không phải UUID client gửi lên -
   /// 1 (nguồn, vật tư) chỉ được giữ chỗ đúng 1 dòng.
-  idempotencyKey String?              @unique
-  note        String?
-  createdAt   DateTime                @default(now())
-  createdById String?
-  releasedAt  DateTime?
+  idempotencyKey String?                 @unique
+  note           String?
+  createdAt      DateTime                @default(now())
+  createdById    String?
+  releasedAt     DateTime?
 
   warehouse Warehouse @relation(fields: [warehouseId], references: [id])
   material  Material  @relation(fields: [materialId], references: [id])
@@ -1879,54 +1878,59 @@ enum ReplenishRequestStatus {
   REJECTED
 }
 
-/// 1 đợt kho xuất sắt cho 1 (production_order, piece) - Phôi nhận rồi báo cắt xong (ghi
-/// CutBundle[] tại lúc đó, không phải lúc xuất - Phôi có thể cắt lệch kiểu cắt đề xuất, xem
-/// CutBundle.proposalPatternId). Không có bảng "kế hoạch xuất sắt" riêng - "cần xuất bao
-/// nhiêu" là query từ piece_bom × bom_piece × production_order.quantity trừ SUM(SteelIssue
-/// gốc, loại reworkOfId != null), giống cách ProductionInvoicesService.listTransferCheckPieces
-/// tính totalQty.
+/// 1 đợt kho xuất sắt cho 1 (production_invoice, material) - gộp theo cả PI, không theo riêng 1
+/// mảnh/PO (đổi từ productionOrderId+pieceId sang productionInvoiceId, xem changelog
+/// 2026-08-18-xuat-sat-po-pi-vat-tu.md mục 2). Phôi tự phân bổ vật lý theo mảnh nào, hệ thống
+/// không theo dõi - Phôi nhận rồi báo cắt xong (ghi CutBundle[] tại lúc đó, không phải lúc xuất -
+/// Phôi có thể cắt lệch kiểu cắt đề xuất, xem CutBundle.proposalPatternId). Không có bảng "kế
+/// hoạch xuất sắt" riêng - "cần xuất bao nhiêu" là query gộp theo material trên toàn PI trừ
+/// SUM(SteelIssue gốc, loại reworkOfId != null).
+///
+/// LƯU Ý (2026-08-19): từ khi bỏ pieceId, KHÔNG còn cách nào đếm "đã xong bao nhiêu mảnh cụ thể"
+/// từ SteelIssue - WarehouseTransfersService.getPieceTransferPlan() CHẶN CỨNG (throw) nếu gặp
+/// mảnh needsHan=false ("vật tư thành phẩm", trước đây đếm qua SteelIssue.pieceId QC_PASSED) vì
+/// thực tế nghiệp vụ hiện tại mọi mảnh đều needsHan=true (đã xác nhận với user) - xem comment ở
+/// getPieceTransferPlan().
 model SteelIssue {
-  id                BigInt           @id @default(autoincrement())
-  productionOrderId BigInt
-  pieceId           BigInt
-  /// Suy được từ CuttingProposalPattern đã APPROVED của PO, giữ có kiểm soát vì là bất biến
-  /// nghiệp vụ "1 đợt xuất = 1 loại sắt".
-  materialId        BigInt
-  barLengthMm       Int
+  id                  BigInt           @id @default(autoincrement())
+  productionInvoiceId BigInt
+  /// Suy được từ CuttingProposalPattern đã APPROVED, giữ có kiểm soát vì là bất biến nghiệp vụ
+  /// "1 đợt xuất = 1 loại sắt".
+  materialId          BigInt
+  barLengthMm         Int
   /// Số cây kho xuất đợt này. KHÔNG có trong tài liệu gốc (docs/dna-erp-db-schema.html thiếu
   /// field này ở steel_issue) - bổ sung vì mock (phoi-sat.service.ts xuatSatChoPhoi) và UI
   /// (XuatSatPage ô nhập số lượng) đều xác nhận đây là input bắt buộc, không phải hằng số 1.
   /// actualBarCount bên dưới "null = đúng như xuất" nghĩa là mặc định = giá trị này.
-  barCount          Int
-  status            SteelIssueStatus @default(ISSUED)
+  barCount            Int
+  status              SteelIssueStatus @default(ISSUED)
   /// Các công đoạn chi tiết (ProcessStep) đã đánh dấu xong của đợt này - luôn có CAT sau khi
   /// completeCutting(). So với union PieceBom.processSteps của piece (+ CAT mặc định) để biết đã
   /// đủ điều kiện chuyển AWAITING_QC chưa, xem SteelIssuesService.resolveRequiredSteps().
-  completedSteps    ProcessStep[]    @default([])
-  /// Client-supplied key cho POST /production-orders/:id/steel-issues - resolve-or-return
+  completedSteps      ProcessStep[]    @default([])
+  /// Client-supplied key cho POST /production-invoices/:id/steel-issues - resolve-or-return
   /// (cùng idiom CuttingProposal.idempotencyKey), chống tạo trùng đợt khi client gọi lại do
   /// timeout/mất mạng.
-  idempotencyKey    String?          @unique
+  idempotencyKey      String?          @unique
   /// Phôi báo thực cắt (complete-cutting) - null = đúng như xuất.
-  actualBarCount    Int?
-  issuedAt          DateTime         @default(now())
-  issuedById        String
+  actualBarCount      Int?
+  issuedAt            DateTime         @default(now())
+  issuedById          String
   /// Phôi xác nhận cắt xong.
-  completedAt       DateTime?
+  completedAt         DateTime?
   /// Self-reference - đợt làm lại do KCS bắt sửa (QcReview.failedQty > scrapQty).
-  reworkOfId        BigInt?
+  reworkOfId          BigInt?
 
-  productionOrder ProductionOrder    @relation(fields: [productionOrderId], references: [id])
-  piece           Piece              @relation(fields: [pieceId], references: [id])
-  material        Material           @relation(fields: [materialId], references: [id])
-  issuedBy        User               @relation("SteelIssueIssuedBy", fields: [issuedById], references: [id])
-  reworkOf        SteelIssue?        @relation("SteelIssueRework", fields: [reworkOfId], references: [id])
-  reworkIssues    SteelIssue[]       @relation("SteelIssueRework")
-  bundles         CutBundle[]
-  qcReviews       QcReview[]
-  replenishedBy   ReplenishRequest[] @relation("ReplenishRequestFulfilledByIssue")
+  productionInvoice ProductionInvoice  @relation(fields: [productionInvoiceId], references: [id])
+  material          Material           @relation(fields: [materialId], references: [id])
+  issuedBy          User               @relation("SteelIssueIssuedBy", fields: [issuedById], references: [id])
+  reworkOf          SteelIssue?        @relation("SteelIssueRework", fields: [reworkOfId], references: [id])
+  reworkIssues      SteelIssue[]       @relation("SteelIssueRework")
+  bundles           CutBundle[]
+  qcReviews         QcReview[]
+  replenishedBy     ReplenishRequest[] @relation("ReplenishRequestFulfilledByIssue")
 
-  @@index([productionOrderId, pieceId])
+  @@index([productionInvoiceId, materialId])
   @@index([status])
   @@map("steel_issues")
 }

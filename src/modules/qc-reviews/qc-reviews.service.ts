@@ -249,12 +249,9 @@ export class QcReviewsService {
       throw new NotFoundException(`Steel issue ${dto.steelIssueId} not found`);
     }
     const original = request.qcReview.steelIssue;
-    if (
-      original &&
-      (steelIssue.pieceId !== original.pieceId || steelIssue.materialId !== original.materialId)
-    ) {
+    if (original && steelIssue.materialId !== original.materialId) {
       throw new BadRequestException(
-        `Đợt sắt ${dto.steelIssueId} không cùng mảnh/loại sắt với đợt cần cấp bù`,
+        `Đợt sắt ${dto.steelIssueId} không cùng loại sắt với đợt cần cấp bù`,
       );
     }
 

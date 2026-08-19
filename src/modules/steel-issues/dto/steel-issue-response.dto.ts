@@ -6,15 +6,13 @@ import { CutBundleResponseDto } from './cut-bundle-response.dto';
 @Exclude()
 export class SteelIssueResponseDto {
   @Expose() @ApiProperty() id!: string;
-  @Expose() @ApiProperty() productionOrderId!: string;
-  /// Mã nội bộ (ProductionOrder.poNumber) - chỉ hệ thống dùng, KHÔNG hiển thị cho người dùng.
-  @Expose() @ApiProperty() poNumber!: string;
-  /// Mã đơn hàng Sales gốc (SalesOrder.code) - đây mới là mã "PO" người dùng cần thấy. null khi
-  /// SKU không gắn đơn Sales nào.
+  @Expose() @ApiProperty() productionInvoiceId!: string;
+  /// Mã PI (ProductionInvoice.code) - luôn có, kể cả PI gộp (isMerged) không gắn 1 đơn Sales cụ
+  /// thể nào.
+  @Expose() @ApiProperty() piCode!: string;
+  /// Mã đơn hàng Sales gốc (SalesOrder.code) - null cho PI gộp (isMerged, xem
+  /// ProductionInvoice.salesOrderId).
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
-  @Expose() @ApiProperty() pieceId!: string;
-  @Expose() @ApiProperty() pieceCode!: string;
-  @Expose() @ApiProperty() pieceName!: string;
   @Expose() @ApiProperty() materialId!: string;
   @Expose() @ApiProperty() materialCode!: string;
   @Expose() @ApiProperty() materialName!: string;
@@ -28,8 +26,10 @@ export class SteelIssueResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) reworkOfId!: string | null;
   /** Công đoạn đã đánh dấu xong (luôn có CAT sau completeCutting) - xem SteelIssue.completedSteps. */
   @Expose() @ApiProperty({ enum: ProcessStep, isArray: true }) completedSteps!: ProcessStep[];
-  /** Union PieceBom.processSteps của piece này (+ CAT mặc định) - danh sách công đoạn phải xong
-   *  hết trước khi chuyển AWAITING_QC, xem SteelIssuesService.resolveRequiredSteps(). */
+  /** Hợp (union) PieceBom.processSteps của MỌI mảnh dùng materialId này trong cả PI (+ CAT mặc
+   *  định) - hệ thống không biết trước cây sắt xuất ra sẽ về mảnh nào nên phải giả định xấu nhất
+   *  (mảnh nào cũng có thể dùng), xem SteelIssuesService.resolveRequiredSteps(). Danh sách công
+   *  đoạn phải xong hết trước khi chuyển AWAITING_QC. */
   @Expose() @ApiProperty({ enum: ProcessStep, isArray: true }) requiredSteps!: ProcessStep[];
   @Expose() @ApiPropertyOptional({ type: [CutBundleResponseDto] }) bundles?: CutBundleResponseDto[];
 

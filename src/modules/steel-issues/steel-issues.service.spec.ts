@@ -23,8 +23,8 @@ describe('SteelIssuesService', () => {
       create: jest.Mock;
       update: jest.Mock;
     };
-    productionOrder: { findUnique: jest.Mock };
-    piece: { findUnique: jest.Mock };
+    productionInvoice: { findUnique: jest.Mock };
+    productionOrder: { findMany: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     material: { findMany: jest.Mock };
@@ -37,17 +37,12 @@ describe('SteelIssuesService', () => {
     $transaction: jest.Mock;
   };
 
-  const order = {
-    id: 1n,
-    poNumber: 'PO-31-1',
-    bomRevisionId: 5n,
-    quantity: 10,
-    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
-  };
-  const piece = { id: 20n, code: 'MANH-TUA', name: 'Mảnh Tựa' };
+  const invoice = { id: 1n, code: 'PI-31' };
+  const order = { id: 1n, bomRevisionId: 5n, quantity: 10 };
   // processSteps mặc định chỉ [CAT] - piece "đơn giản" chỉ cần cắt là đủ điều kiện KCS ngay,
   // đúng hành vi cũ (test step-gating multi-step override riêng ở describe('completeStep')).
   const pieceBomRow = {
+    bomRevisionId: 5n,
     pieceId: 20n,
     qtyPerPiece: 4,
     processSteps: [ProcessStep.CAT],
@@ -59,8 +54,7 @@ describe('SteelIssuesService', () => {
   };
   const issue = {
     id: 100n,
-    productionOrderId: 1n,
-    pieceId: 20n,
+    productionInvoiceId: 1n,
     materialId: 30n,
     barLengthMm: 6000,
     barCount: 20,
@@ -72,8 +66,7 @@ describe('SteelIssuesService', () => {
     completedAt: null,
     reworkOfId: null,
     completedSteps: [] as ProcessStep[],
-    productionOrder: order,
-    piece,
+    productionInvoice: { code: 'PI-31', salesOrder: { code: 'PO-31' } },
     material: { id: 30n, code: 'ST-18', name: 'Sắt vuông 18x18' },
   };
 
@@ -102,8 +95,8 @@ describe('SteelIssuesService', () => {
         create: jest.fn(),
         update: jest.fn(),
       },
-      productionOrder: { findUnique: jest.fn().mockResolvedValue(order) },
-      piece: { findUnique: jest.fn().mockResolvedValue(piece) },
+      productionInvoice: { findUnique: jest.fn().mockResolvedValue(invoice) },
+      productionOrder: { findMany: jest.fn().mockResolvedValue([order]) },
       pieceBom: { findMany: jest.fn().mockResolvedValue([pieceBomRow]) },
       bomPiece: { findMany: jest.fn().mockResolvedValue([]) },
       material: { findMany: jest.fn().mockResolvedValue([]) },
@@ -148,12 +141,12 @@ describe('SteelIssuesService', () => {
   });
 
   describe('create', () => {
-    it('resolves materialId từ piece BOM và tạo đợt xuất mới', async () => {
+    it('xác thực materialId thuộc BOM của PI và tạo đợt xuất mới gộp theo PI', async () => {
       prisma.steelIssue.create.mockResolvedValue(issue);
 
       const result = await service.create(
         '1',
-        { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 20 },
+        { materialId: '30', barLengthMm: 6000, barCount: 20 },
         'user-1',
         null,
       );
@@ -168,8 +161,7 @@ describe('SteelIssuesService', () => {
         expect.objectContaining({
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
           data: expect.objectContaining({
-            productionOrderId: 1n,
-            pieceId: 20n,
+            productionInvoiceId: 1n,
             materialId: 30n,
             barCount: 20,
           }),
@@ -184,7 +176,7 @@ describe('SteelIssuesService', () => {
 
       const result = await service.create(
         '1',
-        { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 20 },
+        { materialId: '30', barLengthMm: 6000, barCount: 20 },
         'user-1',
         null,
         'idem-key-1',
@@ -198,7 +190,7 @@ describe('SteelIssuesService', () => {
       await expect(
         service.create(
           '1',
-          { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 20 },
+          { materialId: '30', barLengthMm: 6000, barCount: 20 },
           'user-1',
           'thanh-pham',
         ),
@@ -209,16 +201,11 @@ describe('SteelIssuesService', () => {
     it('cho phép caller không có warehouseScope (tổng kho)', async () => {
       prisma.steelIssue.create.mockResolvedValue(issue);
       await expect(
-        service.create(
-          '1',
-          { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 20 },
-          'user-1',
-          null,
-        ),
+        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 20 }, 'user-1', null),
       ).resolves.toBeDefined();
     });
 
-    it('cho phép xuất mảnh dùng nhiều hơn 1 loại sắt, miễn client chọn đúng 1 loại thuộc mảnh đó', async () => {
+    it('cho phép chọn đúng 1 trong nhiều loại sắt đang dùng trong PI', async () => {
       prisma.pieceBom.findMany.mockResolvedValue([
         pieceBomRow,
         { ...pieceBomRow, segmentSpec: { ...pieceBomRow.segmentSpec, materialId: 999n } },
@@ -226,39 +213,24 @@ describe('SteelIssuesService', () => {
       prisma.steelIssue.create.mockResolvedValue(issue);
 
       await expect(
-        service.create(
-          '1',
-          { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 20 },
-          'user-1',
-          null,
-        ),
+        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 20 }, 'user-1', null),
       ).resolves.toBeDefined();
     });
 
-    it('ném BadRequestException khi materialId client chọn không thuộc BOM của mảnh', async () => {
-      prisma.pieceBom.findMany.mockResolvedValue([pieceBomRow]); // mảnh chỉ có material 30n
+    it('ném BadRequestException khi materialId client chọn không thuộc BOM của bất kỳ mảnh nào trong PI', async () => {
+      prisma.pieceBom.findMany.mockResolvedValue([pieceBomRow]); // PI chỉ dùng material 30n
 
       await expect(
-        service.create(
-          '1',
-          { pieceId: '20', materialId: '999', barLengthMm: 6000, barCount: 20 },
-          'user-1',
-          null,
-        ),
+        service.create('1', { materialId: '999', barLengthMm: 6000, barCount: 20 }, 'user-1', null),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.steelIssue.create).not.toHaveBeenCalled();
     });
 
-    it('ném NotFoundException khi mảnh không thuộc BOM của lệnh sản xuất này', async () => {
-      prisma.pieceBom.findMany.mockResolvedValue([]);
+    it('ném NotFoundException khi PI chưa có lệnh sản xuất nào được duyệt', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([]);
 
       await expect(
-        service.create(
-          '1',
-          { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 20 },
-          'user-1',
-          null,
-        ),
+        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 20 }, 'user-1', null),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -266,12 +238,7 @@ describe('SteelIssuesService', () => {
       prisma.cuttingProposalLine.findFirst.mockResolvedValue(null);
 
       await expect(
-        service.create(
-          '1',
-          { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 20 },
-          'user-1',
-          null,
-        ),
+        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 20 }, 'user-1', null),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -283,7 +250,7 @@ describe('SteelIssuesService', () => {
 
       await service.create(
         '1',
-        { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 20 },
+        { materialId: '30', barLengthMm: 6000, barCount: 20 },
         'user-1',
         null,
       );
@@ -314,7 +281,7 @@ describe('SteelIssuesService', () => {
 
       await service.create(
         '1',
-        { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 12 },
+        { materialId: '30', barLengthMm: 6000, barCount: 12 },
         'user-1',
         null,
       );
@@ -349,7 +316,7 @@ describe('SteelIssuesService', () => {
 
       await service.create(
         '1',
-        { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 8 },
+        { materialId: '30', barLengthMm: 6000, barCount: 8 },
         'user-1',
         null,
       );
@@ -366,12 +333,7 @@ describe('SteelIssuesService', () => {
       prisma.steelIssue.create.mockResolvedValue(issue);
 
       await expect(
-        service.create(
-          '1',
-          { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 6 },
-          'user-1',
-          null,
-        ),
+        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 6 }, 'user-1', null),
       ).rejects.toThrow(BadRequestException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
@@ -384,12 +346,7 @@ describe('SteelIssuesService', () => {
       prisma.steelIssue.create.mockResolvedValue(issue);
 
       await expect(
-        service.create(
-          '1',
-          { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 10 },
-          'user-1',
-          null,
-        ),
+        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 10 }, 'user-1', null),
       ).rejects.toThrow(ConflictException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -400,12 +357,7 @@ describe('SteelIssuesService', () => {
       prisma.steelIssue.create.mockResolvedValue(issue);
 
       await expect(
-        service.create(
-          '1',
-          { pieceId: '20', materialId: '30', barLengthMm: 6000, barCount: 5 },
-          'user-1',
-          null,
-        ),
+        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 5 }, 'user-1', null),
       ).rejects.toThrow(ConflictException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -492,7 +444,7 @@ describe('SteelIssuesService', () => {
       );
     });
 
-    it('RECEIVED -> IN_PROCESS khi piece có công đoạn khác ngoài CAT (vd UON) chưa xong', async () => {
+    it('RECEIVED -> IN_PROCESS khi PI có mảnh nào đó cần công đoạn khác ngoài CAT (vd UON) cho loại sắt này', async () => {
       prisma.pieceBom.findMany.mockResolvedValue([
         { ...pieceBomRow, processSteps: [ProcessStep.CAT, ProcessStep.UON] },
       ]);
@@ -567,7 +519,7 @@ describe('SteelIssuesService', () => {
       );
     });
 
-    it('ném BadRequestException nếu step không thuộc requiredSteps của piece', async () => {
+    it('ném BadRequestException nếu step không thuộc requiredSteps của vật tư này trong PI', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
 
       await expect(service.completeStep('100', { step: ProcessStep.DAP })).rejects.toThrow(
@@ -590,9 +542,9 @@ describe('SteelIssuesService', () => {
     it('tạo đợt rework mới khi chưa có', async () => {
       prisma.steelIssue.findFirst.mockResolvedValue(null);
 
-      // Fixture chỉ cần đúng field scalar mà createReworkIssue() thực dùng (productionOrderId/
-      // pieceId/materialId/barLengthMm/issuedById/id) - material/piece/productionOrder lồng
-      // nhau (SteelIssueRow đầy đủ) không cần thiết cho test này.
+      // Fixture chỉ cần đúng field scalar mà createReworkIssue() thực dùng
+      // (productionInvoiceId/materialId/barLengthMm/issuedById/id) - material/productionInvoice
+      // lồng nhau (SteelIssueRow đầy đủ) không cần thiết cho test này.
       await service.createReworkIssue(
         issue as unknown as Parameters<typeof service.createReworkIssue>[0],
         5,
@@ -613,9 +565,6 @@ describe('SteelIssuesService', () => {
     it('bỏ qua (không tạo trùng) nếu đợt rework đã tồn tại - an toàn khi gọi lại', async () => {
       prisma.steelIssue.findFirst.mockResolvedValue({ id: 200n, reworkOfId: 100n });
 
-      // Fixture chỉ cần đúng field scalar mà createReworkIssue() thực dùng (productionOrderId/
-      // pieceId/materialId/barLengthMm/issuedById/id) - material/piece/productionOrder lồng
-      // nhau (SteelIssueRow đầy đủ) không cần thiết cho test này.
       await service.createReworkIssue(
         issue as unknown as Parameters<typeof service.createReworkIssue>[0],
         5,
@@ -625,10 +574,11 @@ describe('SteelIssuesService', () => {
     });
   });
 
-  // B4 Đợt 3c (mục 13.6 changelog) - 2 số mới cho thủ kho: remainingToIssue (còn được xuất theo
-  // giữ chỗ) và physicalStockQty (tồn thật trong kho).
+  // B4 Đợt 3d (2026-08-19) - getIssuePlan() giờ gộp theo cả PI: 1 dòng kế hoạch/loại sắt, cộng
+  // dồn requiredSegments qua MỌI ProductionOrder (SKU) thuộc PI, không còn breakdown theo mảnh.
   describe('getIssuePlan', () => {
     const bomPieceRow = {
+      bomRevisionId: 5n,
       pieceId: 20n,
       qtyPerUnit: 2,
       piece: { code: 'MANH-TUA', name: 'Mảnh Tựa' },
@@ -678,11 +628,17 @@ describe('SteelIssuesService', () => {
     });
 
     // Chốt điều kiện hiệu năng đã nói khi review: KHÔNG được query lặp theo từng mảnh dù nhiều
-    // mảnh dùng chung 1 loại sắt.
-    it('2 mảnh dùng chung 1 loại sắt: cả 2 nhận CÙNG số liệu, chỉ tra cứu vật tư đúng 1 lần', async () => {
+    // mảnh dùng chung 1 loại sắt - và 2 mảnh dùng chung vật tư phải GỘP THÀNH 1 dòng kế hoạch duy
+    // nhất (khác trước đây tách theo mảnh).
+    it('2 mảnh dùng chung 1 loại sắt: gộp thành đúng 1 dòng kế hoạch, cộng dồn requiredSegments', async () => {
       prisma.bomPiece.findMany.mockResolvedValue([
         bomPieceRow,
-        { pieceId: 21n, qtyPerUnit: 1, piece: { code: 'MANH-KHAC', name: 'Mảnh khác' } },
+        {
+          bomRevisionId: 5n,
+          pieceId: 21n,
+          qtyPerUnit: 1,
+          piece: { code: 'MANH-KHAC', name: 'Mảnh khác' },
+        },
       ]);
       prisma.pieceBom.findMany.mockResolvedValue([
         pieceBomRow,
@@ -701,9 +657,13 @@ describe('SteelIssuesService', () => {
 
       const result = await service.getIssuePlan('1');
 
-      expect(result).toHaveLength(2);
+      // Gộp theo PI: đúng 1 dòng cho material 30n, requiredSegments cộng dồn cả 2 mảnh.
+      // Mảnh 20 (bomPieceRow): qtyPerPiece(4) × qtyPerUnit(2) × order.quantity(10) = 80.
+      // Mảnh 21 (qtyPerUnit=1): qtyPerPiece(4) × qtyPerUnit(1) × order.quantity(10) = 40.
+      expect(result).toHaveLength(1);
+      expect(result[0].materialId).toBe('30');
+      expect(result[0].requiredSegments).toBe(80 + 40);
       expect(result[0].remainingToIssue).toBe(20);
-      expect(result[1].remainingToIssue).toBe(20);
       // Đúng 1 vật tư duy nhất (30n) trong danh sách tra cứu - không lặp theo 2 mảnh.
       expect(prisma.material.findMany).toHaveBeenCalledWith({
         where: { id: { in: [30n] } },
@@ -714,6 +674,7 @@ describe('SteelIssuesService', () => {
     // B4 hỗ trợ mảnh nhiều loại sắt - trước đây mảnh này bị loại bỏ hoàn toàn khỏi kế hoạch.
     it('1 mảnh dùng 2 loại sắt: sinh 2 dòng kế hoạch riêng, mỗi dòng đúng số liệu của loại đó', async () => {
       const otherMaterialRow = {
+        bomRevisionId: 5n,
         pieceId: 20n,
         qtyPerPiece: 3,
         processSteps: [ProcessStep.CAT],
@@ -724,10 +685,8 @@ describe('SteelIssuesService', () => {
         },
       };
       prisma.pieceBom.findMany.mockResolvedValue([pieceBomRow, otherMaterialRow]);
-      // Đã xuất 5 cây cho material 30n của mảnh này - KHÔNG được lẫn sang dòng material 999n.
-      prisma.steelIssue.findMany.mockResolvedValue([
-        { pieceId: 20n, materialId: 30n, barCount: 5 },
-      ]);
+      // Đã xuất 5 cây cho material 30n trong PI này - KHÔNG được lẫn sang dòng material 999n.
+      prisma.steelIssue.findMany.mockResolvedValue([{ materialId: 30n, barCount: 5 }]);
       prisma.material.findMany.mockResolvedValue([
         { id: 30n, warehouseId: 800n },
         { id: 999n, warehouseId: null },
@@ -746,6 +705,33 @@ describe('SteelIssuesService', () => {
       expect(line999?.materialCode).toBe('ST-25');
       expect(line999?.issuedBarCount).toBe(0); // không lẫn từ material 30n
       expect(line999?.requiredSegments).toBe(3 * 2 * 10);
+    });
+
+    // 1 PI có thể có nhiều SKU/PO khác bomRevisionId (memory project_pi_multi_sku_multi_po) -
+    // mỗi order đóng góp riêng theo ĐÚNG quantity của nó vào tổng requiredSegments.
+    it('PI có 2 SKU (2 ProductionOrder khác bomRevisionId, cùng dùng 1 loại sắt): cộng dồn đúng theo quantity riêng từng order', async () => {
+      const order2 = { id: 2n, bomRevisionId: 6n, quantity: 5 };
+      prisma.productionOrder.findMany.mockResolvedValue([order, order2]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        bomPieceRow,
+        {
+          bomRevisionId: 6n,
+          pieceId: 40n,
+          qtyPerUnit: 1,
+          piece: { code: 'MANH-B', name: 'Mảnh B' },
+        },
+      ]);
+      prisma.pieceBom.findMany.mockResolvedValue([
+        pieceBomRow,
+        { ...pieceBomRow, bomRevisionId: 6n, pieceId: 40n },
+      ]);
+      prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: 800n }]);
+
+      const result = await service.getIssuePlan('1');
+
+      // order (bomRevisionId 5n): 4×2×10=80. order2 (bomRevisionId 6n): 4×1×5=20. Tổng 100.
+      expect(result).toHaveLength(1);
+      expect(result[0].requiredSegments).toBe(80 + 20);
     });
   });
 });

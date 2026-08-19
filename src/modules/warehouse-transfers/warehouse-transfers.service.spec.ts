@@ -30,7 +30,6 @@ describe('WarehouseTransfersService', () => {
     productionOrder: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     productionBatch: { findMany: jest.Mock };
-    steelIssue: { findMany: jest.Mock };
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
@@ -86,7 +85,6 @@ describe('WarehouseTransfersService', () => {
       productionOrder: { findMany: jest.fn().mockResolvedValue([]) },
       bomPiece: { findMany: jest.fn().mockResolvedValue([]) },
       productionBatch: { findMany: jest.fn().mockResolvedValue([]) },
-      steelIssue: { findMany: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn().mockResolvedValue([]),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
@@ -343,30 +341,13 @@ describe('WarehouseTransfersService', () => {
       ]);
     });
 
-    it('sums SteelIssue QC_PASSED bar count (actualBarCount - failedQty) for needsHan=false pieces', async () => {
+    it('throws for needsHan=false pieces - SteelIssue gộp theo PI không còn đếm được theo mảnh', async () => {
       prisma.productionOrder.findMany.mockResolvedValue([order]);
       prisma.bomPiece.findMany.mockResolvedValue([
         { ...vatTuPiece, bomRevisionId: 80n, needsHan: false, needsSon: false },
       ]);
-      prisma.steelIssue.findMany.mockResolvedValue([
-        {
-          productionOrderId: 900n,
-          pieceId: 31n,
-          barCount: 50,
-          actualBarCount: 48,
-          qcReviews: [{ failedQty: 3 }],
-        },
-      ]);
 
-      const result = await service.getPieceTransferPlan(['900']);
-
-      expect(result).toEqual([
-        expect.objectContaining({
-          label: 'VAT_TU_THANH_PHAM',
-          readyQty: 45, // 48 - 3
-          suggestedQty: 45,
-        }),
-      ]);
+      await expect(service.getPieceTransferPlan(['900'])).rejects.toThrow(ConflictException);
     });
 
     it('subtracts pieces already in a PENDING or CONFIRMED transfer, not just CONFIRMED', async () => {

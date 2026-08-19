@@ -2,12 +2,8 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsInt, IsString, Min } from 'class-validator';
 
 export class CreateSteelIssueDto {
-  @ApiProperty()
-  @IsString()
-  pieceId!: string;
-
-  /// Bắt buộc từ khi hỗ trợ mảnh dùng nhiều loại sắt (1 mảnh có thể sinh nhiều dòng kế hoạch,
-  /// mỗi dòng 1 vật tư) - trước đây tự suy ra vì mặc định "1 mảnh = 1 loại sắt" không còn đúng.
+  /// Client (thủ kho) tự chọn loại sắt cần xuất - gộp theo cả PI (xem changelog
+  /// 2026-08-18-xuat-sat-po-pi-vat-tu.md mục 2), không còn gắn 1 mảnh cụ thể nào.
   @ApiProperty()
   @IsString()
   materialId!: string;

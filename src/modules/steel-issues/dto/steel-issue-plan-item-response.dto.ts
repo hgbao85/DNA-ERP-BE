@@ -2,21 +2,20 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
 
 /**
- * "Cần xuất bao nhiêu" theo mảnh - suy trực tiếp từ piece_bom × bom_piece ×
- * production_order.quantity, trừ Σ SteelIssue gốc đã xuất (loại rework). Không có bảng "kế
- * hoạch xuất sắt" riêng - đúng quyết định thiết kế trong plan (xem roadmap M2).
+ * "Cần xuất bao nhiêu" theo LOẠI SẮT cho CẢ 1 PI (gộp mọi mảnh/SKU dùng chung vật tư trong PI,
+ * xem changelog 2026-08-18-xuat-sat-po-pi-vat-tu.md mục 2) - suy trực tiếp từ piece_bom ×
+ * bom_piece × production_order.quantity của MỌI ProductionOrder thuộc PI, trừ Σ SteelIssue gốc
+ * đã xuất (loại rework). Không có bảng "kế hoạch xuất sắt" riêng.
  */
 @Exclude()
 export class SteelIssuePlanItemResponseDto {
-  @Expose() @ApiProperty() pieceId!: string;
-  @Expose() @ApiProperty() pieceCode!: string;
-  @Expose() @ApiProperty() pieceName!: string;
   @Expose() @ApiProperty() materialId!: string;
   @Expose() @ApiProperty() materialCode!: string;
   @Expose() @ApiProperty() materialName!: string;
-  /** Σ qtyPerPiece (đoạn) × qtyPerUnit (mảnh/SKU) × production_order.quantity. */
+  /** Σ qtyPerPiece (đoạn) × qtyPerUnit (mảnh/SKU) × production_order.quantity, cộng dồn mọi
+   *  mảnh/PO thuộc PI dùng vật tư này. */
   @Expose() @ApiProperty() requiredSegments!: number;
-  /** Σ barCount các đợt SteelIssue gốc (không tính rework) đã xuất cho mảnh này. */
+  /** Σ barCount các đợt SteelIssue gốc (không tính rework) đã xuất cho vật tư này trong cả PI. */
   @Expose() @ApiProperty() issuedBarCount!: number;
   /// B4 Đợt 3c (mục 13.6 changelog) - phần CÒN được xuất theo giữ chỗ (quantity - consumedQty)
   /// của CuttingProposal đã duyệt cho vật tư này. `null` = phương án duyệt TRƯỚC

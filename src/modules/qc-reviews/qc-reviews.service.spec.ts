@@ -230,9 +230,9 @@ describe('QcReviewsService', () => {
       fulfilledAt: null,
       fulfilledById: null,
       rejectionReason: null,
-      qcReview: { steelIssueId: 100n, steelIssue: { pieceId: 20n, materialId: 30n } },
+      qcReview: { steelIssueId: 100n, steelIssue: { materialId: 30n } },
     };
-    const newIssue = { id: 300n, pieceId: 20n, materialId: 30n };
+    const newIssue = { id: 300n, materialId: 30n };
 
     it('cấp bù thành công - OPEN -> FULFILLED', async () => {
       prisma.replenishRequest.findUnique.mockResolvedValue(openRequest);
@@ -295,9 +295,9 @@ describe('QcReviewsService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('ném BadRequestException nếu đợt cấp bù khác mảnh/loại sắt với đợt gốc', async () => {
+    it('ném BadRequestException nếu đợt cấp bù khác loại sắt với đợt gốc', async () => {
       prisma.replenishRequest.findUnique.mockResolvedValue(openRequest);
-      prisma.steelIssue.findUnique.mockResolvedValue({ id: 300n, pieceId: 999n, materialId: 30n });
+      prisma.steelIssue.findUnique.mockResolvedValue({ id: 300n, materialId: 999n });
 
       await expect(
         service.fulfillReplenishRequest('900', { steelIssueId: '300' }, 'user-kho'),

@@ -16,7 +16,7 @@ const SALES_ORDER_CODE_INCLUDE = {
   productionInvoiceItem: {
     select: {
       salesOrder: { select: { code: true } },
-      productionInvoice: { select: { code: true } },
+      productionInvoice: { select: { id: true, code: true } },
       deliveryDeadline: true,
     },
   },
@@ -149,6 +149,7 @@ export class ProductionOrdersService {
       id: order.id.toString(),
       poNumber: order.poNumber,
       salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
+      productionInvoiceId: order.productionInvoiceItem.productionInvoice.id.toString(),
       piCode: order.productionInvoiceItem.productionInvoice.code,
       deliveryDeadline: order.productionInvoiceItem.deliveryDeadline,
       productionInvoiceItemId: order.productionInvoiceItemId.toString(),

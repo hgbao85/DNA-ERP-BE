@@ -288,6 +288,41 @@ export class CuttingProposalsService {
     return { data: result.data.map((p) => this.toResponseDto(p)), meta: result.meta };
   }
 
+  /**
+   * Mọi phương án cắt (mọi trạng thái) phủ 1 PI - gồm CẢ phương án neo thẳng vào PI (đợt gộp,
+   * productionInvoiceId) LẪN phương án neo vào từng PO thành viên (SKU cắt riêng, đường mặc
+   * định) - cùng logic OR đã dùng ở SteelIssuesService.assertMaterialInApprovedProposal (BE).
+   * Dùng cho FE tra đúng pattern đã duyệt khi Phôi báo cắt xong (steel-issues-api.ts), từ khi
+   * SteelIssue gộp theo cả PI thay vì theo 1 PO (changelog 2026-08-18-xuat-sat-po-pi-vat-tu.md).
+   */
+  async findAllForInvoice(
+    productionInvoiceId: string,
+    query: PaginationQueryDto,
+  ): Promise<Paginated<CuttingProposalResponseDto>> {
+    const bigId = parseBigIntId(productionInvoiceId);
+    const orders = await this.prisma.productionOrder.findMany({
+      where: { productionInvoiceItem: { productionInvoiceId: bigId } },
+      select: { id: true },
+    });
+    const poIds = orders.map((o) => o.id);
+    const result = await paginate(
+      {
+        findMany: (args) =>
+          this.prisma.cuttingProposal.findMany({ ...args, include: LIST_INCLUDE }),
+        count: (args) => this.prisma.cuttingProposal.count(args),
+      },
+      query,
+      {
+        OR: [
+          { productionInvoiceId: bigId },
+          ...(poIds.length > 0 ? [{ productionOrderId: { in: poIds } }] : []),
+        ],
+      },
+      { requestedAt: 'desc' as const },
+    );
+    return { data: result.data.map((p) => this.toResponseDto(p)), meta: result.meta };
+  }
+
   async findOne(id: string): Promise<CuttingProposalResponseDto> {
     const bigId = parseBigIntId(id);
     const proposal = await this.prisma.cuttingProposal.findUnique({

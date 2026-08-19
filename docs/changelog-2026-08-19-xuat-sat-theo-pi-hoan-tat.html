@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Hoàn tất "Xuất sắt theo PI" (sau 1 lần rollback)</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · Xuất sắt trong Phôi — gộp theo PI</div>
+    <h1>Hoàn tất redesign "xuất sắt theo PI" — sau khi thử code, đâm phải 1 bug nghiêm trọng, rollback sạch, rồi làm lại đúng</h1>
+    <p class="lede">
+      Nối tiếp changelog <code>2026-08-18-xuat-sat-po-pi-vat-tu.md</code> (dừng ở bước thiết kế).
+      Phiên này: (1) audit lại phạm vi thật — nhẹ hơn lo ngại ban đầu, (2) code thử, phát hiện 1 vấn
+      đề thiết kế mới (công đoạn ngoài Cắt) — giải được bằng "hợp mọi mảnh", (3) phát hiện thêm 1
+      vấn đề <b>nghiêm trọng hơn</b> ở màn "Phân phối nội bộ" — không giải được ngay, <b>rollback
+      toàn bộ về đúng trạng thái ban đầu</b> (schema, DB, code), (4) xác nhận với người dùng 1 sự
+      thật nghiệp vụ gỡ đúng nút thắt đó, (5) code lại từ đầu, lần này audit đúng và đủ — hoàn tất,
+      build/test sạch cả 2 repo.
+    </p>
+    <div class="meta">
+      <span>19/08/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>1 migration DB — <b>đã áp dụng lên DB thật</b> (sau 1 lần áp + rollback + áp lại)</span>
+      <span>562 test BE pass · <code>tsc</code>/<code>eslint</code> sạch 2 repo</span>
+      <span><b>Chưa commit</b> — chờ xem lại</span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li>Audit lại 2 màn "Phôi xác nhận"/"KCS duyệt" (lo ngại chính của changelog cũ) — hoá ra <b>không cần sửa gì</b>, chúng vốn không hoạt động theo từng mảnh.</li>
+      <li>Code thử: phát hiện <code>resolveRequiredSteps()</code> (công đoạn ngoài Cắt như Uốn/Dập) cũng dựa vào mảnh — giải bằng cách lấy <b>hợp (union)</b> mọi mảnh dùng chung vật tư trong cả PI, vì hệ thống không biết trước cây sắt về mảnh nào.</li>
+      <li><b>Giữa chừng phát hiện chặn nghiêm trọng hơn</b>: <code>WarehouseTransfersService.getPieceTransferPlan()</code> (màn "Phân phối nội bộ", <i>không nằm trong audit ban đầu</i>) đếm số mảnh "vật tư thành phẩm" (<code>needsHan=false</code>) đã xong bằng chính <code>SteelIssue.pieceId</code> — không giải được bằng "hợp", cần đúng 1 con số đếm được.</li>
+      <li>Đã <b>rollback toàn bộ</b> (đảo ngược migration DB thật bằng SQL tay, xoá bookkeeping migration, <code>git checkout</code> mọi file code) về đúng trạng thái trước phiên — xác nhận lại bằng 562 test pass + <code>prisma migrate status</code> sạch.</li>
+      <li>Người dùng xác nhận: <b>thực tế không có mảnh nào <code>needsHan=false</code></b> — nút thắt chỉ là lý thuyết trong schema, chưa từng xảy ra thật. Quyết định: chặn cứng (throw) nhánh đó thay vì xây cơ chế đếm mới cho trường hợp không tồn tại.</li>
+      <li>Code lại từ đầu — lần này grep toàn bộ 2 repo tìm mọi nơi đọc field trước khi coi là xong, vẫn sót <b>5 màn FE khác</b> (lộ ra khi chạy <code>tsc</code> toàn bộ, không phải lúc audit) — sửa nốt.</li>
+      <li>Kết quả cuối: 562 test BE pass, <code>tsc</code>/<code>eslint</code> sạch cả 2 repo, migration đã áp dụng lên DB thật — <b>chưa commit</b>, chờ xem lại.</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 0. VÌ SAO LÀM VIỆC NÀY ═══════════════════════ -->
+
+  <div class="module">
+    <h2>0. Vì sao làm việc này — giải thích không kỹ thuật</h2>
+    <p class="module-note">
+      Trước khi vào chi tiết kỹ thuật: mục này giải thích lý do đợt sửa tồn tại, không dùng thuật
+      ngữ, cho người không quen đọc code.
+    </p>
+
+    <div class="card">
+      <h3>Vấn đề thực tế trước khi sửa</h3>
+      <p>
+        Khi kho xuất sắt cho tổ Phôi, phần mềm bắt thủ kho phải chọn: xuất cây sắt này
+        <b>cho đúng mảnh nào, của đúng sản phẩm nào</b> — ví dụ "xuất 20 cây sắt tròn cho mảnh
+        Khung tựa của Ghế J55".
+      </p>
+      <p>
+        Nhưng thực tế vận hành không như vậy. Thủ kho chỉ biết "đơn hàng này cần bao nhiêu sắt
+        tròn" — họ xuất ra cả bó, đưa cho tổ Phôi. Tổ Phôi mới là người thực sự cắt và quyết định
+        cây nào thành mảnh nào, <b>lúc đang cắt</b>, không phải lúc kho xuất. Bắt thủ kho khai "cho
+        mảnh nào" ngay từ lúc xuất là hỏi 1 thông tin họ không có — họ phải đoán hoặc khai đại, vì
+        việc phân bổ thật sự xảy ra sau đó ở xưởng.
+      </p>
+      <p>
+        Thêm nữa: phần mềm tính "cần mua/cắt bao nhiêu sắt" vốn đã tính gộp cho <b>cả đơn hàng</b>
+        (nhiều sản phẩm cùng lúc, để cắt tiết kiệm nhất), không tính riêng từng mảnh. Vậy màn xuất
+        kho bắt khai theo mảnh trong khi phần tính toán phía sau lại tính theo cả đơn hàng — 2 chỗ
+        không khớp nhau.
+      </p>
+    </div>
+
+    <div class="callout ok">
+      <b>Mục đích của đợt sửa này:</b> làm cho phần mềm xuất sắt khớp với cách vận hành thật — kho
+      chỉ cần biết "loại sắt gì, bao nhiêu cây" cho cả đơn hàng, không cần biết trước sẽ thành mảnh
+      nào. Bớt 1 bước hỏi thông tin giả (thủ kho phải đoán), giảm sai sót, và khớp đúng với cách
+      phần mềm đã tính "cần mua/cắt bao nhiêu" từ trước.
+    </div>
+
+    <div class="callout warn">
+      <b>Vì sao lại phức tạp tới mức phải dừng giữa chừng rồi làm lại (xem mục 4-6):</b> vì có vài
+      màn hình khác (theo dõi tiến độ, cấp bù hàng lỗi, chuyển kho nội bộ) trước đó dựa vào đúng
+      thông tin "cây sắt này thuộc mảnh nào" để tính toán — bỏ thông tin đó đi thì mấy màn kia cũng
+      phải tính lại theo cách khác. Đó là phần việc chính của phiên làm việc này: tìm hết những chỗ
+      dựa vào thông tin cũ, sửa cho khớp, mà không làm hỏng những màn đang chạy tốt.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 1. BỐI CẢNH ═══════════════════════ -->
+
+  <div class="module">
+    <h2>1. Bối cảnh — tiếp tục từ đâu</h2>
+    <p class="module-note">
+      Phiên trước (18/08) để lại đúng 1 việc dở dang: nút "Xuất" ở kho sắt sẽ chỉ hỏi
+      <b>loại sắt + tổng số cây cho cả 1 PI</b> — không hỏi sản phẩm/mảnh nào, vì phần mềm đề xuất
+      mua/cắt sắt vốn đã tính gộp ở cấp PI và Phôi tự phân bổ vật lý lúc cắt thật. Quyết định đã
+      chốt, nhưng <b>chưa code</b> — phát hiện <code>SegmentSpec</code> (vật tư + chiều dài cắt) là
+      khái niệm dùng chung toàn hệ thống, không thuộc riêng 1 mảnh, nên "bỏ theo dõi theo mảnh"
+      không chỉ ảnh hưởng bước xuất kho mà có thể lan cả chuỗi Nhận → Báo cắt xong → KCS → Cấp bù.
+    </p>
+    <div class="callout">
+      <b>Yêu cầu đầu phiên:</b> đọc lại changelog cũ, xác định việc nào ưu tiên làm trước, rồi bắt
+      tay vào code — không lặp lại việc thiết kế từ đầu.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. AUDIT LẠI PHẠM VI ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 2. Audit lại phạm vi — nhẹ hơn lo ngại ban đầu</h2>
+    <p class="module-note">
+      Đọc kỹ 3 nơi lo ngại nhất từ changelog cũ trước khi động tới code.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Màn hình</th><th>Lo ngại ban đầu</th><th>Thực tế sau khi đọc code</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="path">XacNhanSanLuongPage.tsx (Phôi)</td>
+            <td>"Nhiều khả năng đang hiển thị/thao tác theo từng mảnh"</td>
+            <td><span class="pill p-add">Không cần sửa</span> — key theo <code>SteelIssue.id</code>, group theo PO, chưa từng đọc <code>pieceId</code></td>
+          </tr>
+          <tr>
+            <td class="path">KcsPhoiPage.tsx (KCS)</td>
+            <td>Tương tự — có thể duyệt theo mảnh</td>
+            <td><span class="pill p-add">Không cần sửa</span> — cùng cấu trúc, chỉ group theo PO để hiển thị</td>
+          </tr>
+          <tr>
+            <td class="path">qc-reviews.service.ts::fulfillReplenishRequest()</td>
+            <td>Chỗ duy nhất thật sự chặn "phải cùng mảnh" khi cấp bù</td>
+            <td><span class="pill p-chg">Đúng</span> — 1 điều kiện nhỏ, bỏ vế <code>pieceId</code> là xong</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok">
+      <b>Kết luận sau audit vòng 1:</b> phạm vi tưởng như "đụng cả chuỗi Phôi/KCS" hoá ra chỉ còn 1
+      dòng điều kiện cần sửa ở <code>qc-reviews.service.ts</code>. Quyết định bắt tay code ngay theo
+      thứ tự: schema → <code>steel-issues.service.ts</code> → <code>qc-reviews.service.ts</code> → FE.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 3. LẦN THỬ 1 — VẤN ĐỀ CÔNG ĐOẠN ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 3. Lần thử đầu tiên — vấn đề #1: công đoạn ngoài Cắt</h2>
+    <p class="module-note">
+      Ngay khi bắt đầu sửa <code>steel-issues.service.ts</code>, lộ ra: <code>resolveRequiredSteps()</code>
+      (tính "đợt xuất sắt này còn cần công đoạn gì ngoài Cắt — Uốn/Dập...") vốn tính theo
+      <b>đúng 1 mảnh cụ thể</b> (<code>bomRevisionId, pieceId, materialId</code>). Nếu 1 đợt xuất
+      giờ phủ cả PI (nhiều mảnh cùng dùng 1 loại sắt), hệ thống không còn biết đợt đó thật sự cần
+      công đoạn gì.
+    </p>
+    <div class="card">
+      <h3><span class="pill p-add">Giải pháp</span> Hợp (union) mọi mảnh dùng vật tư đó trong cả PI</h3>
+      <p>
+        Không phải giảm độ chính xác — là hệ quả <b>bắt buộc</b> của "Phôi không cần khai mảnh khi
+        xuất": vì không biết trước cây sắt về mảnh nào, phải giả định xấu nhất. Nếu <i>bất kỳ</i>
+        mảnh nào dùng loại sắt này cần Uốn, cả đợt xuất phải xác nhận Uốn trước khi qua KCS — kể cả
+        khi phần cắt thật cho 1 mảnh không cần. Tra cứu tham khảo thêm hệ thống ngoài
+        (<code>DNA-DEXUAT</code>, bộ giải bài toán cắt sắt) xác nhận độc lập: ngay cả dữ liệu cắt
+        thật cũng chỉ biết "đoạn cắt kích thước gì", không biết "đoạn đó về sản phẩm nào" —
+        không có cách nào truy ngược chính xác hơn.
+      </p>
+    </div>
+    <div class="callout warn">
+      <b>Chi tiết kỹ thuật kéo theo:</b> 1 PI có thể có nhiều SKU/PO khác <code>bomRevisionId</code>
+      (memory <code>project_pi_multi_sku_multi_po</code>) — "hợp" phải gom từ <b>mọi</b> PO thuộc PI,
+      không chỉ 1 <code>bomRevisionId</code> như code cũ.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 4. VẤN ĐỀ #2 — CHẶN NGHIÊM TRỌNG ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 4. Vấn đề #2 — chặn nghiêm trọng, không nằm trong audit ban đầu</h2>
+    <p class="module-note">
+      Chạy <code>tsc --noEmit</code> sau khi sửa xong <code>steel-issues.service.ts</code> để lộ ra
+      1 file khác tham chiếu field vừa xoá — <b>không phải màn "Phôi/KCS"</b> mà changelog gốc nói
+      tới, nên không nằm trong audit vòng 1.
+    </p>
+    <div class="card">
+      <h3><span class="path">WarehouseTransfersService.getPieceTransferPlan()</span> — màn "Phân phối nội bộ"</h3>
+      <p>
+        Với mảnh <b>"vật tư thành phẩm"</b> (<code>needsHan=false</code> — không cần Hàn/Sơn), hệ
+        thống có 1 quyết định nghiệp vụ đã chốt từ trước: <i>"cắt sắt xong (QC_PASSED) = coi như
+        mảnh đó xong, sẵn sàng chuyển kho"</i> — và đếm số mảnh xong bằng cách đếm
+        <code>SteelIssue.status=QC_PASSED</code> <b>theo đúng <code>pieceId</code></b>.
+      </p>
+      <p>
+        Khác hẳn vấn đề #1 (chỉ cần danh sách có/không) — chỗ này cần <b>con số đếm chính xác</b>.
+        Không thể suy ngược từ dữ liệu cắt (<code>CutBundle</code>/<code>SegmentSpec</code>) vì
+        <code>SegmentSpec</code> dùng chung toàn hệ thống, 2 mảnh khác nhau có thể cùng tham chiếu
+        1 <code>SegmentSpec</code>. Nếu bỏ <code>pieceId</code>, hệ thống <b>mất hẳn</b> khả năng
+        biết "đã xong bao nhiêu mảnh" cho nhóm này.
+      </p>
+    </div>
+    <div class="callout bad">
+      <b>Rà toàn repo BE xác nhận:</b> đây là chỗ <i>duy nhất</i> khác <code>steel-issues.service.ts</code>/
+      <code>qc-reviews.service.ts</code> thật sự đọc <code>SteelIssue.pieceId</code>/<code>productionOrderId</code>
+      — nhưng đủ để chặn lại, vì đây là 1 tính năng thật, đã test, đang chạy (màn "Phân phối nội bộ").
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. ROLLBACK ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-db">DB</span><span class="badge b-be">BE</span> 5. Rollback toàn bộ — về đúng trạng thái trước phiên</h2>
+    <p class="module-note">
+      Trình bày rõ vấn đề cho người dùng, đề xuất 3 hướng (rollback / khai số lượng lúc báo cắt
+      xong / tách 2 luồng theo <code>needsHan</code>) kèm khuyến nghị — người dùng chọn
+      <b>rollback</b>, vì bug quan trọng nhất (mảnh nhiều loại sắt) đã fix &amp; ship từ trước, phần
+      này chỉ là tiện hơn cho kho, chưa đủ khẩn để mạo hiểm.
+    </p>
+    <ul class="timeline stages">
+      <li class="ok"><b>1. Kiểm tra dữ liệu thật (read-only)</b><span> — script Prisma đếm <code>SteelIssue</code>: 0 dòng, an toàn xoá cột không mất dữ liệu.</span></li>
+      <li class="ok"><b>2. Đảo ngược DDL bằng tay</b><span> — viết đúng SQL nghịch đảo của migration đã áp (khôi phục <code>pieceId</code>/<code>productionOrderId</code>, xoá <code>productionInvoiceId</code>, khôi phục 2 FK + 1 index), chạy trực tiếp qua <code>$executeRawUnsafe</code>.</span></li>
+      <li class="ok"><b>3. Dọn bookkeeping migration</b><span> — xoá dòng khỏi <code>_prisma_migrations</code>, xoá thư mục migration (chưa từng commit, an toàn xoá), <code>prisma migrate status</code> xác nhận sạch — đúng 62 migration như trước.</span></li>
+      <li class="ok"><b>4. <code>git checkout</code> toàn bộ file code</b><span> — schema.prisma, 3 service, 3 DTO, controller đều về đúng HEAD.</span></li>
+      <li class="ok"><b>5. Xác nhận lại</b><span> — <code>tsc --noEmit</code> sạch, 91 test liên quan pass, <code>git status</code> chỉ còn 2 thay đổi có sẵn từ trước (không liên quan).</span></li>
+    </ul>
+    <div class="callout">
+      <b>Ghi lại đầy đủ vào memory</b> trước khi dừng: cả 2 vấn đề phát hiện (công đoạn ngoài Cắt +
+      đếm mảnh vật tư thành phẩm), dữ liệu thật (0/9 <code>BomPiece</code> là <code>needsHan=false</code>),
+      3 hướng đã bàn, và 1 bài học quy trình — để lần sau quay lại không phải dò từ đầu.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 6. GỠ NÚT THẮT ═══════════════════════ -->
+
+  <div class="module">
+    <h2>6. Gỡ nút thắt — xác nhận nghiệp vụ, làm lại</h2>
+    <p class="module-note">
+      Ở phiên sau, người dùng chủ động cho biết: <b>"Tất cả mảnh đều phải hàn hết á"</b> — tức
+      <code>needsHan=false</code> ("vật tư thành phẩm") không tồn tại trong thực tế kinh doanh,
+      khớp đúng dữ liệu thật đã kiểm tra (0/9). Hỏi lại 1 câu để chốt cách xử lý nhánh đó khi code
+      lại: <b>chặn rõ ràng (throw) nếu gặp phải</b>, thay vì âm thầm tính sai hoặc xây thêm cơ chế
+      đếm mới cho 1 trường hợp chưa từng xảy ra — đúng tinh thần "không code cho nhu cầu giả định".
+    </p>
+    <div class="callout ok">
+      Quyết định này biến vấn đề #2 (mục 4) từ "chặn cứng, không giải được" thành "an toàn bỏ qua có
+      kiểm soát" — redesign có thể tiếp tục mà không cần xây tính năng mới.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 7. BE ĐÃ ĐỔI ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-db">DB</span><span class="badge b-be">BE</span> 7. Backend — code lại từ đầu, lần này xong hẳn</h2>
+
+    <div class="stats">
+      <div class="stat"><div class="n">1</div><div class="l">migration mới</div></div>
+      <div class="stat"><div class="n">6</div><div class="l">service/controller sửa</div></div>
+      <div class="stat"><div class="n">3</div><div class="l">DTO sửa</div></div>
+      <div class="stat"><div class="n">562</div><div class="l">test BE pass</div></div>
+    </div>
+
+    <div class="card">
+      <h3><span class="pill p-chg">Sửa</span> <span class="path">schema.prisma</span> — <code>SteelIssue</code></h3>
+      <p>Bỏ <code>pieceId</code>; đổi <code>productionOrderId</code> → <code>productionInvoiceId</code> (FK tới <code>ProductionInvoice</code>). Migration <code>20260819021525_steel_issue_by_production_invoice</code>, áp dụng lên DB thật (bảng rỗng, không backfill).</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-chg">Sửa</span> <span class="path">steel-issues.service.ts</span> — viết lại toàn bộ</h3>
+      <p><code>create()</code>/<code>getIssuePlan()</code>/<code>findAll*()</code> đều thao tác theo <code>productionInvoiceId</code>. <code>getIssuePlan()</code> cộng dồn <code>requiredSegments</code> qua <b>mọi</b> <code>ProductionOrder</code> thuộc PI (mỗi order tự có <code>quantity</code> riêng). <code>resolveRequiredSteps()</code> theo hướng "hợp" ở mục 3. Route đổi từ <code>/production-orders/:id/steel-issues</code> sang <code>/production-invoices/:id/steel-issues</code> (+ <code>steel-issue-plan</code>).</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-chg">Sửa</span> <span class="path">qc-reviews.service.ts</span></h3>
+      <p><code>fulfillReplenishRequest()</code>: bỏ điều kiện cùng <code>pieceId</code>, chỉ còn bắt buộc cùng <code>materialId</code>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-chg">Sửa</span> <span class="path">warehouse-transfers.service.ts</span></h3>
+      <p><code>getPieceTransferPlan()</code>: bỏ hẳn query <code>SteelIssue</code> (và <code>SteelIssueStatus</code> import) — nếu gặp <code>bp.needsHan === false</code>, <code>throw ConflictException</code> với thông báo rõ ràng thay vì đếm sai. Đúng quyết định mục 6.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-add">Mới</span> <span class="path">production-orders.service.ts</span> + DTO</h3>
+      <p>Thêm field <code>productionInvoiceId</code> (trước chỉ có <code>piCode</code> dạng chuỗi hiển thị) — FE cần id thật để gọi endpoint gộp theo PI.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-add">Mới</span> <span class="path">cutting-proposals.service.ts</span> + controller</h3>
+      <p><code>findAllForInvoice()</code> + <code>GET /production-invoices/:id/cutting-proposals</code> — trả phương án cắt phủ 1 PI (neo thẳng PI <i>hoặc</i> qua từng PO thành viên, cùng logic OR đã dùng ở <code>assertMaterialInApprovedProposal</code>). Dùng cho FE tra pattern đã duyệt khi Phôi báo cắt xong.</p>
+    </div>
+
+    <div class="callout ok">
+      <b>Xác nhận sạch:</b> <code>tsc --noEmit</code> sạch, <code>eslint --fix</code> chỉ sửa
+      whitespace/prettier, <b>562/562 test pass</b> (42 suite, gồm toàn bộ spec viết lại cho
+      <code>steel-issues</code>/<code>qc-reviews</code>/<code>warehouse-transfers</code>/
+      <code>production-orders</code>).
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 8. FE ĐÃ ĐỔI ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 8. Frontend — 1 màn theo kế hoạch, 5 màn phát hiện thêm</h2>
+
+    <div class="card">
+      <h3><span class="pill p-chg">Viết lại</span> <span class="path">XuatSatPage.tsx</span></h3>
+      <p>Danh sách ngoài gộp SKU theo PI (không còn theo SKU). Kế hoạch phẳng theo vật tư — không breakdown theo mảnh. Nút Xuất chỉ hỏi (vật tư, dài, số cây) — đúng quyết định đã chốt từ changelog gốc.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-add">Mới</span> <span class="path">steel-issues-api.ts</span>, <span class="path">production-invoice-item.ts</span>, <span class="path">cutting-proposals-api.ts</span></h3>
+      <p><code>BeSteelIssue</code>/<code>BeSteelIssuePlanItem</code> bỏ mọi field theo mảnh, thêm <code>productionInvoiceId</code>/<code>piCode</code>. Hàm <code>getSteelIssuesForSku()</code> đổi tên thành <code>getSteelIssuesForInvoice()</code>, nhận PI thay vì <code>Sku</code>. Thêm <code>getCuttingProposalsForInvoice()</code>.</p>
+    </div>
+
+    <div class="callout warn">
+      <b>Phát hiện giữa chừng (chạy <code>tsc --noEmit</code> toàn repo, không phải lúc audit ban
+      đầu):</b> 5 màn khác cũng import <code>BeSteelIssue</code> và group theo
+      <code>pieceId</code>/<code>productionOrderId</code> cũ — không nằm trong phạm vi 2 màn
+      "Phôi/KCS" mà changelog gốc audit.
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Màn hình</th><th>Trước</th><th>Sau</th></tr></thead>
+        <tbody>
+          <tr><td class="path">XacNhanSanLuongPage.tsx</td><td colspan="2">1 chỗ gọi <code>getApprovedPatternsForMaterial(l.productionOrderId, ...)</code> → đổi sang <code>l.productionInvoiceId</code></td></tr>
+          <tr><td class="path">KcsPhoiPage.tsx</td><td>Group theo <code>productionOrderId</code></td><td>Group theo <code>productionInvoiceId</code></td></tr>
+          <tr><td class="path">LenhSanXuatPhoi.tsx</td><td>2 tầng PO → Mảnh</td><td>2 tầng PI → Loại sắt</td></tr>
+          <tr><td class="path">ThongKeCongDoanPage.tsx</td><td>Bảng PO / Mảnh / Loại sắt</td><td>Bảng PO-PI / Loại sắt (bỏ cột Mảnh)</td></tr>
+          <tr><td class="path">LichSuNhanSatPage.tsx</td><td>Group theo <code>productionOrderId</code>, nhãn "PO"</td><td>Group theo <code>productionInvoiceId</code>, nhãn PO/PI (fallback <code>piCode</code> khi PI gộp không có mã PO)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout ok">
+      <b>Xác nhận sạch:</b> <code>tsc --noEmit</code> sạch, <code>eslint</code> sạch trên mọi file
+      sửa (6 lỗi <code>react/no-unescaped-entities</code> còn lại trong repo xác nhận là nợ kỹ thuật
+      có sẵn từ trước, ở 2 file không hề đụng tới phiên này).
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 9. BÀI HỌC ═══════════════════════ -->
+
+  <div class="module">
+    <h2>9. Bài học quy trình</h2>
+    <div class="callout">
+      <b>Trước khi đổi 1 field schema đang được nhiều nơi dùng, phải <code>grep</code> toàn repo
+      (cả BE lẫn FE) trước — không chỉ audit theo tên màn hình đoán được liên quan.</b>
+      Lần đầu chỉ audit 2 màn "Phôi/KCS" (đúng theo tên changelog gốc nói tới) đã sót
+      <code>WarehouseTransfersService.getPieceTransferPlan()</code> — nằm ở màn "Phân phối nội bộ",
+      tên không gợi ý liên quan gì tới xuất sắt. Phát hiện giữa chừng khi đã migrate DB thật, phải
+      rollback toàn bộ. Lần 2 grep phía BE trước khi sửa vẫn chưa đủ — sót thêm 4 màn FE, chỉ lộ ra
+      khi chạy <code>tsc --noEmit</code> toàn bộ dự án, không phải lúc audit thủ công.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 10. CÒN ĐỂ NGỎ ═══════════════════════ -->
+
+  <div class="module">
+    <h2>10. Còn để ngỏ</h2>
+    <ul class="timeline">
+      <li><b>Chưa commit</b><span> — toàn bộ thay đổi (2 repo) vẫn nằm ở working tree, chờ người dùng xem lại trước khi <code>git add</code>/<code>commit</code>.</span></li>
+      <li><b><code>needsHan=false</code> vẫn chưa có thiết kế thật</b><span> — nếu sau này thực tế phát sinh mảnh "vật tư thành phẩm" thật, <code>getPieceTransferPlan()</code> sẽ báo lỗi rõ ràng thay vì chạy — cần quay lại thiết kế 1 trong 3 hướng đã bàn (memory <code>project_steel_issue_pi_redesign_paused.md</code>) trước khi gỡ chặn.</span></li>
+    </ul>
+  </div>
+
+  <footer>
+    Nguồn: toàn bộ nội dung trên tổng hợp trực tiếp từ phiên làm việc trong Claude Code — không suy
+    diễn thêm. Code thật nằm ở <code>D:\DNA-ERP-BE</code> (backend, trọng tâm) và
+    <code>D:\DNA-ERP</code> (frontend, 6 màn sửa ở mục 8). Xem thêm changelog gốc
+    <code>changelog-2026-08-18-xuat-sat-po-pi-vat-tu.md</code> và memory
+    <code>project_steel_issue_pi_redesign_paused.md</code> (repo memory riêng của Claude Code).
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" title="Về đầu trang" type="button">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

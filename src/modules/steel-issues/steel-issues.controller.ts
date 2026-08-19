@@ -22,9 +22,9 @@ const UPDATE = { module: PERMISSION_MODULES.STEEL_ISSUE, action: PermissionActio
 export class SteelIssuesController {
   constructor(private readonly steelIssuesService: SteelIssuesService) {}
 
-  // ─── Thủ kho trung tâm (WAREHOUSE_STAFF) - xuất sắt cho Phôi ────────────────
+  // ─── Thủ kho trung tâm (WAREHOUSE_STAFF) - xuất sắt cho Phôi, gộp theo cả PI ─
 
-  @Post('production-orders/:id/steel-issues')
+  @Post('production-invoices/:id/steel-issues')
   @RequirePermissions(CREATE)
   create(
     @Param('id') id: string,
@@ -36,19 +36,19 @@ export class SteelIssuesController {
     return this.steelIssuesService.create(id, dto, userId, warehouseScope, idempotencyKey);
   }
 
-  @Get('production-orders/:id/steel-issues')
+  @Get('production-invoices/:id/steel-issues')
   @RequirePermissions(VIEW)
-  findAllForOrder(@Param('id') id: string, @Query() query: PaginationQueryDto) {
-    return this.steelIssuesService.findAllForOrder(id, query);
+  findAllForInvoice(@Param('id') id: string, @Query() query: PaginationQueryDto) {
+    return this.steelIssuesService.findAllForInvoice(id, query);
   }
 
-  @Get('production-orders/:id/steel-issue-plan')
+  @Get('production-invoices/:id/steel-issue-plan')
   @RequirePermissions(VIEW)
   getIssuePlan(@Param('id') id: string) {
     return this.steelIssuesService.getIssuePlan(id);
   }
 
-  // ─── Tổ Phôi / KCS - xem theo trạng thái, không cần biết trước productionOrderId ─
+  // ─── Tổ Phôi / KCS - xem theo trạng thái, không cần biết trước productionInvoiceId ─
 
   /** Flat, không cần biết productionOrderId - xem ListSteelIssuesQueryDto. */
   @Get('steel-issues')

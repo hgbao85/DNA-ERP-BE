@@ -62,6 +62,12 @@ export class CuttingProposalsController {
     });
   }
 
+  @Get('production-invoices/:id/cutting-proposals')
+  @RequirePermissions(VIEW)
+  findAllForInvoice(@Param('id') id: string, @Query() query: PaginationQueryDto) {
+    return this.cuttingProposalsService.findAllForInvoice(id, query);
+  }
+
   /** List toàn hệ thống - màn Admin "Cắt sắt" (business-data). */
   @Get('cutting-proposals')
   @RequirePermissions(VIEW)

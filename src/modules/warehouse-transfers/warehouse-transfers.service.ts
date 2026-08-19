@@ -11,7 +11,6 @@ import {
   Prisma,
   ProductionBatchStatus,
   ReservationStatus,
-  SteelIssueStatus,
   StockLedgerRefType,
   TransferStatus,
   Warehouse,
@@ -245,14 +244,19 @@ export class WarehouseTransfersService {
   }
 
   /**
-   * Kế hoạch chuyển kho cho mảnh/vật tư thành phẩm theo 1 hoặc nhiều PO (không theo PI - mục 6
-   * tài liệu trên, vì 1 PI có thể gồm nhiều PO tiến độ khác nhau). Mốc "sẵn sàng" tính theo bảng
-   * mục 7.1: needsHan=true dùng ProductionBatch QC_DONE (stage=SON nếu needsSon, không thì HAN);
-   * needsHan=false dùng SteelIssue QC_PASSED (đơn vị cây sắt, quyết định (a) mục 6 - coi cắt sắt
-   * xong = mảnh xong, không chờ tín hiệu gia công nào khác). "Đã chuyển" trừ CẢ phiếu PENDING lẫn
-   * CONFIRMED (không chỉ CONFIRMED như mô tả mục 7.2) để tránh 2 phiếu PENDING cùng lúc cùng
-   * "double-book" quá số đã đạt - risk tương tự oversell vật tư nhưng piece không có StockQuant
-   * để FOR UPDATE khoá, nên chặn ở tầng đọc kế hoạch thay vì khoá dòng.
+   * Kế hoạch chuyển kho cho mảnh theo 1 hoặc nhiều PO (không theo PI - mục 6 tài liệu trên, vì 1
+   * PI có thể gồm nhiều PO tiến độ khác nhau). Mốc "sẵn sàng" tính theo bảng mục 7.1: needsHan=true
+   * dùng ProductionBatch QC_DONE (stage=SON nếu needsSon, không thì HAN). "Đã chuyển" trừ CẢ phiếu
+   * PENDING lẫn CONFIRMED (không chỉ CONFIRMED như mô tả mục 7.2) để tránh 2 phiếu PENDING cùng lúc
+   * cùng "double-book" quá số đã đạt - risk tương tự oversell vật tư nhưng piece không có
+   * StockQuant để FOR UPDATE khoá, nên chặn ở tầng đọc kế hoạch thay vì khoá dòng.
+   *
+   * needsHan=false ("vật tư thành phẩm") KHÔNG còn được hỗ trợ ở đây từ 2026-08-19 (xem changelog
+   * 2026-08-18-xuat-sat-po-pi-vat-tu.md): trước đây tính "sẵn sàng" bằng SteelIssue.QC_PASSED
+   * theo đúng `pieceId`, nhưng SteelIssue giờ gộp theo cả PI (không còn `pieceId`) nên không thể
+   * đếm theo mảnh cụ thể nữa - hệ thống không biết trước cây sắt xuất ra sẽ về mảnh nào. Thực tế
+   * nghiệp vụ hiện tại MỌI mảnh đều needsHan=true (xác nhận với user 2026-08-19) nên nhánh này
+   * CHẶN CỨNG (throw) thay vì cố suy - đừng build lại cơ chế đếm cho trường hợp chưa từng xảy ra.
    */
   async getPieceTransferPlan(
     productionOrderIds: string[],
@@ -273,7 +277,7 @@ export class WarehouseTransfersService {
     }
     const bomRevisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
 
-    const [bomPieces, batches, steelIssues, transferredItems] = await Promise.all([
+    const [bomPieces, batches, transferredItems] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: { in: bomRevisionIds } },
         include: { piece: true },
@@ -285,20 +289,6 @@ export class WarehouseTransfersService {
           stage: { in: [MfgStage.HAN, MfgStage.SON] },
         },
         select: { productionOrderId: true, pieceId: true, stage: true, reportedQty: true },
-      }),
-      this.prisma.steelIssue.findMany({
-        where: {
-          productionOrderId: { in: orderBigIds },
-          reworkOfId: null,
-          status: SteelIssueStatus.QC_PASSED,
-        },
-        select: {
-          productionOrderId: true,
-          pieceId: true,
-          barCount: true,
-          actualBarCount: true,
-          qcReviews: { select: { failedQty: true } },
-        },
       }),
       this.prisma.warehouseTransferPieceItem.findMany({
         where: {
@@ -323,15 +313,6 @@ export class WarehouseTransfersService {
       batchQtyByKey.set(key, (batchQtyByKey.get(key) ?? 0) + b.reportedQty);
     }
 
-    const steelPassedByKey = new Map<string, number>();
-    for (const s of steelIssues) {
-      const base = s.actualBarCount ?? s.barCount;
-      const failed = s.qcReviews.reduce((sum, r) => sum + r.failedQty, 0);
-      const passed = Math.max(0, base - failed);
-      const key = `${s.productionOrderId}:${s.pieceId}`;
-      steelPassedByKey.set(key, (steelPassedByKey.get(key) ?? 0) + passed);
-    }
-
     const transferredByKey = new Map<string, number>();
     for (const t of transferredItems) {
       const key = `${t.productionOrderId}:${t.pieceId}`;
@@ -346,11 +327,18 @@ export class WarehouseTransfersService {
         // bỏ qua, xem bảng mục 7.1.
         if (!bp.needsHan && bp.needsSon) continue;
 
-        const isVatTuThanhPham = !bp.needsHan;
+        if (!bp.needsHan) {
+          // Xem comment ở đầu getPieceTransferPlan() - từ khi SteelIssue gộp theo PI (không còn
+          // pieceId), không còn cách nào đếm "đã xong bao nhiêu mảnh vật tư thành phẩm" từ dữ
+          // liệu xuất sắt. Thực tế nghiệp vụ hiện tại không có mảnh nào needsHan=false nên chặn
+          // rõ ràng ở đây thay vì âm thầm trả về sai/0.
+          throw new ConflictException(
+            `Mảnh ${bp.piece.code} (needsHan=false, "vật tư thành phẩm") không còn được hỗ trợ ở kế hoạch chuyển kho nội bộ kể từ khi xuất sắt gộp theo PI - liên hệ dev nếu đây là trường hợp thật cần xử lý`,
+          );
+        }
+
         const finalStage = bp.needsSon ? MfgStage.SON : MfgStage.HAN;
-        const readyQty = isVatTuThanhPham
-          ? (steelPassedByKey.get(`${order.id}:${bp.pieceId}`) ?? 0)
-          : (batchQtyByKey.get(`${order.id}:${bp.pieceId}:${finalStage}`) ?? 0);
+        const readyQty = batchQtyByKey.get(`${order.id}:${bp.pieceId}:${finalStage}`) ?? 0;
         const transferredQty = transferredByKey.get(`${order.id}:${bp.pieceId}`) ?? 0;
         const suggestedQty = Math.max(0, readyQty - transferredQty);
 
@@ -363,7 +351,7 @@ export class WarehouseTransfersService {
             pieceId: bp.pieceId.toString(),
             pieceCode: bp.piece.code,
             pieceName: bp.piece.name,
-            label: isVatTuThanhPham ? 'VAT_TU_THANH_PHAM' : 'MANH',
+            label: 'MANH',
             readyQty,
             transferredQty,
             suggestedQty,

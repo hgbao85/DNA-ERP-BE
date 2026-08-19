@@ -1,13 +1,23 @@
 # Changelog 2026-08-18 — PO/PI thật + mảnh nhiều loại sắt + hướng gộp theo PI cho "Xuất sắt trong phôi"
 
+> **CẬP NHẬT 2026-08-19: mục 2 (redesign gộp theo PI) đã CODE XONG VÀ SHIP** — phần dưới đây mô tả
+> đúng trạng thái tại thời điểm 2026-08-18 (lúc còn "chưa code"), nay đã lỗi thời cho mục 2. Chi
+> tiết đầy đủ (schema/service/FE đã đổi gì, và vì sao `WarehouseTransfersService.
+> getPieceTransferPlan()` giờ chặn cứng `needsHan=false`) xem memory
+> `project_steel_issue_pi_redesign_paused.md`. Giữ nguyên nội dung gốc bên dưới làm tài liệu tham
+> khảo lịch sử (bối cảnh phát hiện vấn đề, các phương án đã cân nhắc).
+
 > Tổng kết phiên làm việc, xuất phát từ câu hỏi "cột PO trên màn Phân phối nội bộ là gì" — dẫn tới
 > 3 việc: (1) sửa cột PO/PI hiển thị đúng dữ liệu thật thay vì field tĩnh hay bỏ trống, (2) phát
 > hiện + sửa 1 bug khiến "Xuất sắt trong phôi" gần như không dùng được cho SKU thật (mảnh dùng
 > nhiều loại sắt bị âm thầm loại bỏ), (3) thiết kế lại hướng "gộp theo loại sắt cho cả 1 PI" —
 > **dừng ở bước thiết kế**, chưa code, vì phát hiện quy mô thật đụng tới cả luồng Phôi/KCS.
 
-Repo liên quan: `DNA-ERP-BE` (nhánh `main`), `DNA-ERP` (nhánh `demo`). **Chưa commit gì** — toàn bộ
-thay đổi dưới đây vẫn nằm ở working tree, chưa `git add`/`git commit`.
+Repo liên quan: `DNA-ERP-BE` (nhánh `main`), `DNA-ERP` (nhánh `demo`). Trạng thái commit tại thời
+điểm viết changelog này: **chưa commit gì**. Mục 1 (PO/PI thật + đa vật tư) đã được commit ngay
+sau đó (`sanxuat-stage-v20`); mục 2 (gộp theo PI) code ở phiên riêng ngày 2026-08-19, **chưa
+commit** tính đến lúc cập nhật ghi chú này — kiểm tra `git status`/`git log` để biết trạng thái
+mới nhất thay vì tin vào dòng này.
 
 ---
 
