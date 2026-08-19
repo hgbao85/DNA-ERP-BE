@@ -450,6 +450,11 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       // SKU vượt ngưỡng phải xếp lên đầu, kể cả khi hạn của nó không phải gần nhất.
       expect(res.items[0].mfgProductCode).toBe('J55');
       expect(res.items[0].materials[0].overThreshold).toBe(true);
+      // standaloneMinBars (2026-08-19) - cận dưới số cây khi CHỈ SKU này cắt một mình, để FE cảnh
+      // báo "nhu cầu nhỏ, cận dưới không đáng tin" (mục 15.6-7). Chỉ cần > 0 và có mặt trong DTO -
+      // công thức đã được kiểm bởi test riêng của minBarsFor() qua buildBatchLevel.
+      expect(res.items[0].materials[0].standaloneMinBars).toBeGreaterThan(0);
+      expect(okItem?.materials[0].standaloneMinBars).toBeGreaterThan(0);
     });
 
     it('tick sẵn đúng tổ hợp tối thiểu đủ đạt ngưỡng', async () => {

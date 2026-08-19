@@ -25,7 +25,10 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
-import { CuttingProposalResponseDto } from './dto/cutting-proposal-response.dto';
+import {
+  CuttingProposalDisplayStatus,
+  CuttingProposalResponseDto,
+} from './dto/cutting-proposal-response.dto';
 import {
   CuttingBatchLevelDto,
   CuttingBatchOrderDto,
@@ -62,17 +65,31 @@ interface SolverProposeResponse {
     waste_percentage: number;
     /// true nếu có ít nhất 1 loại sắt CẮT ĐƯỢC (feasible) nhưng vượt max_waste_percentage với
     /// các stock_lengths cố định - KHÔNG bao phủ ca "hoàn toàn không cắt được" (feasible=false).
-    /// Từ 2026-08-18 (bỏ auto_scan) cờ này KHÔNG còn kích hoạt hành động tự động nào - chỉ để
-    /// lưu vào rawResponse cho việc chẩn đoán; cổng chặn tự-duyệt đọc purchase_plan[].feasible
-    /// trực tiếp (xem autoApproveBlockReason).
+    /// Thuần tổng hợp cho hiển thị nhanh; cổng chặn tự-duyệt đọc purchase_plan[].over_threshold
+    /// (per-dòng) trực tiếp, không đọc field này (xem autoApproveBlockReason).
     any_over_threshold: boolean;
   };
   purchase_plan: Array<{
     material: string;
     feasible: boolean;
     /// true nếu loại này feasible nhưng vượt max_waste_percentage của CHÍNH nó (riêng hoặc mặc
-    /// định). Thuần chẩn đoán - không kích hoạt hành động nào từ 2026-08-18 (bỏ auto_scan retry).
+    /// định). Từ 2026-08-18 (review sau khi bỏ auto_scan): CHẶN tự-duyệt (xem
+    /// autoApproveBlockReason) - trước đó cờ này bị bỏ qua, hệ thống từng tự duyệt/trừ kho/tạo
+    /// đề xuất mua cho các phương án vượt ngưỡng mà không ai biết. Chỉ có ở dòng feasible=true
+    /// (api/views.py không gắn field này cho dòng infeasible).
     over_threshold?: boolean;
+    /// Ngưỡng hao hụt % ĐÃ ÁP DỤNG cho loại sắt này (riêng hoặc mặc định) - có ở CẢ 2 nhánh
+    /// feasible/infeasible.
+    max_waste_pct_threshold?: number | null;
+    /// CHỈ có ở dòng feasible=false. true = CP-SAT hết time_limit_seconds mà CHƯA kết luận được
+    /// (status UNKNOWN) - KHÁC hẳn infeasible THẬT (đã chứng minh vô nghiệm). Xem
+    /// cat_sat/de_xuat_logic.py::_unsolved.
+    timed_out?: boolean;
+    /// CHỈ có ở dòng feasible=false, và chỉ khi có giá trị (không phải mọi ca infeasible đều có -
+    /// xem _best_achievable/_no_solution). "Tốt nhất có thể" nếu chấp nhận nới ngưỡng.
+    best_achievable?: { length: number; waste_pct: number; bars: number } | null;
+    /// CHỈ có ở dòng feasible=false. Lý do nguyên văn từ solver.
+    reason?: string;
     best_stock_length?: number;
     total_bars?: number;
     total_waste_mm?: number;
@@ -199,10 +216,27 @@ export class CuttingProposalsService {
    */
   async requestForInvoice(
     productionInvoiceId: bigint,
-    options: { requestedById?: string } = {},
+    options: { idempotencyKey?: string; requestedById?: string } = {},
   ): Promise<CuttingProposalResponseDto> {
+    // idempotencyKey đối xứng với requestForOrder() - lời gọi tự động (duyệt cả cụm) không truyền
+    // gì (options.idempotencyKey undefined -> luôn tạo mới), còn nút "Tính lại" thủ công cho
+    // phiếu gộp (2026-08-19, xem route mới ở controller) gửi kèm để chặn double-click tạo trùng.
+    if (options.idempotencyKey) {
+      const existing = await this.prisma.cuttingProposal.findUnique({
+        where: { idempotencyKey: options.idempotencyKey },
+        include: LIST_INCLUDE,
+      });
+      if (existing) {
+        return this.toResponseDto(existing);
+      }
+    }
+
     const proposal = await this.prisma.cuttingProposal.create({
-      data: { productionInvoiceId, requestedById: options.requestedById },
+      data: {
+        productionInvoiceId,
+        idempotencyKey: options.idempotencyKey,
+        requestedById: options.requestedById,
+      },
       include: LIST_INCLUDE,
     });
 
@@ -426,6 +460,7 @@ export class CuttingProposalsService {
               materialCode: material.code,
               materialName: material.name,
               standaloneWastePct: wastePct,
+              standaloneMinBars: this.minBarsFor(demand, stockLengths, trimMm, kerfMm),
               thresholdPct,
               overThreshold: wastePct > thresholdPct,
               // Các SKU KHÁC cùng dùng loại sắt này - chính là danh sách "gộp được với ai".
@@ -938,6 +973,27 @@ export class CuttingProposalsService {
       const baseUrl = this.configService.get('solver.baseUrl', { infer: true });
       const apiKey = this.configService.get('solver.apiKey', { infer: true });
       const timeoutSeconds = this.configService.get('solver.timeoutSeconds', { infer: true });
+
+      // Ngân sách thời gian solver (`time_limit_seconds`) là CHO MỖI LOẠI SẮT, không phải cho cả
+      // request - api/views.py truyền time_limit_sec vào optimize_one_material() BÊN TRONG vòng
+      // lặp `for group in material_groups`. Ca xấu nhất của 1 request nhiều loại sắt (PI gộp) là
+      // distinctMaterialIds.length × solverTimeLimitSeconds. Không kiểm trước thì khi vượt quá
+      // timeout HTTP client, request bị ngắt NGANG CHỪNG (không phải solver kết luận vô nghiệm) -
+      // proposal vẫn bị đánh FAILED nhưng lý do là lỗi mạng chung chung, không nói được vì sao.
+      // Review 2026-08-18 phát hiện: mặc định code (SOLVER_TIMEOUT_SECONDS=300, xem
+      // configuration.ts) không đủ cho phiếu gộp nhiều loại sắt nếu ai đó quên set env production.
+      const worstCaseSeconds = distinctMaterialIds.length * config.solverTimeLimitSeconds;
+      if (worstCaseSeconds > timeoutSeconds) {
+        throw new Error(
+          `Đợt tính có ${distinctMaterialIds.length} loại sắt × time_limit ` +
+            `${config.solverTimeLimitSeconds}s/loại = tối đa ${worstCaseSeconds}s, vượt timeout ` +
+            `HTTP client hiện tại (${timeoutSeconds}s). Solver giải TUẦN TỰ từng loại sắt nên ca ` +
+            `xấu nhất sẽ bị ngắt giữa chừng. Tăng SOLVER_TIMEOUT_SECONDS hoặc giảm ` +
+            `SystemConfig.solverTimeLimitSeconds rồi thử lại - không tự giảm số SKU gộp, đó là ` +
+            `quyết định của KHSX/Sếp.`,
+        );
+      }
+
       const callSolver = (body: typeof baseRequestBody & { auto_scan: boolean }) =>
         this.externalApiService.post<SolverProposeResponse>(
           `${baseUrl}${SOLVER_PROPOSE_PATH}`,
@@ -1046,6 +1102,16 @@ export class CuttingProposalsService {
    *     SUPERSEDED - trạng thái đó KHÔNG huỷ đề xuất mua cũ và KHÔNG hoàn lại tồn (grep: SUPERSEDED
    *     được ghi đúng 1 chỗ, không nơi nào đọc). Chặn ở đây để tiền thật không bị chi 2 lần; người
    *     thật vẫn duyệt tay được sau khi đã xử lý đề xuất mua cũ.
+   *
+   * (c) Vật tư CẮT ĐƯỢC nhưng VƯỢT ngưỡng hao hụt của chính nó (`over_threshold` /
+   *     `any_over_threshold` trong response solver). Trước 2026-08-18 field này "thuần chẩn đoán,
+   *     không kích hoạt hành động nào" - nghĩa là hệ thống ĐÃ VÀ ĐANG tự duyệt, tự trừ kho, tự đẩy
+   *     đề xuất mua cho những phương án vượt ngưỡng, không một lời cảnh báo (phát hiện khi review
+   *     lại luồng theo yêu cầu Sếp). Không được "cứu" ca này bằng cách nới ngưỡng cho qua - đó
+   *     chính là việc auto_scan từng làm (che tín hiệu cần gộp bằng một con số dễ nhìn hơn, xem
+   *     lý do bỏ auto_scan ở nơi gọi solver). Hướng xử lý đúng DUY NHẤT là gộp đợt cắt với SKU
+   *     khác dùng chung loại sắt (xem getBatchSuggestions) - ngưỡng 1% là chính sách, không phải
+   *     tham số để vặn khi thấy vướng.
    */
   private async autoApproveBlockReason(
     proposalId: bigint,
@@ -1067,6 +1133,23 @@ export class CuttingProposalsService {
       return (
         `vật tư ${labels.join(', ')} không cắt được trong ngưỡng hao hụt với cây 6000mm - ` +
         `thử gộp đợt cắt với SKU khác dùng chung loại sắt này`
+      );
+    }
+
+    // (c) Xem docstring - vượt ngưỡng KHÔNG được tự duyệt, kể cả feasible=true. `over_threshold`
+    // chỉ có mặt trên dòng feasible (xem type SolverProposeResponse), nên không trùng nhánh trên.
+    const overThresholdIds = response.purchase_plan
+      .filter((line) => line.feasible && line.over_threshold)
+      .map((line) => line.material);
+    if (overThresholdIds.length > 0) {
+      const materials = await this.prisma.material.findMany({
+        where: { id: { in: overThresholdIds.map((id) => BigInt(id)) } },
+        select: { code: true },
+      });
+      const labels = materials.length > 0 ? materials.map((m) => m.code) : overThresholdIds;
+      return (
+        `vật tư ${labels.join(', ')} cắt được nhưng vượt ngưỡng hao hụt cho phép - ` +
+        `thử gộp đợt cắt với SKU khác dùng chung loại sắt này (KHÔNG tự nới ngưỡng)`
       );
     }
 
@@ -1405,6 +1488,14 @@ export class CuttingProposalsService {
     response: SolverProposeResponse,
     segmentSpecLookup: Map<string, bigint>,
   ): Promise<void> {
+    // Suy 2 cờ tổng hợp TỪ response gốc trước khi lưu - lý do tồn tại xem comment schema.prisma
+    // (hasInfeasibleLine/hasOverThreshold): để màn Cắt sắt lọc/đếm được BẰNG SQL khi poll định kỳ,
+    // không phải kéo lines[] về rồi lọc ở code (xem changelog 2026-08-15 mục 15 - đợt 2 sẽ dùng).
+    const hasInfeasibleLine = response.purchase_plan.some((item) => !item.feasible);
+    const hasOverThreshold = response.purchase_plan.some(
+      (item) => item.feasible && item.over_threshold === true,
+    );
+
     await this.prisma.$transaction(async (tx) => {
       await tx.cuttingProposal.update({
         where: { id: proposalId },
@@ -1416,6 +1507,8 @@ export class CuttingProposalsService {
           totalWasteMm: response.summary.total_waste_mm,
           wastePercentage: response.summary.waste_percentage,
           completedAt: new Date(),
+          hasInfeasibleLine,
+          hasOverThreshold,
         },
       });
 
@@ -1431,6 +1524,16 @@ export class CuttingProposalsService {
             wastePercentage: item.waste_percentage,
             mauNguyenMm: item.mau_nguyen_mm,
             lengthComparison: item.length_comparison as Prisma.InputJsonValue,
+            // 5 field mới (2026-08-19) - lưu NGUYÊN VĂN những gì solver trả, không diễn giải lại
+            // ở đây (xem lý do "luôn dùng bản solver" - changelog 2026-08-15 mục 15.5-(d)). Câu
+            // tiếng Việt hiển thị cho người dùng sẽ dựng ở tầng response DTO/FE (đợt sau), không
+            // phải ở đây.
+            reason: item.reason,
+            bestAchievable: (item.best_achievable ?? undefined) as
+              Prisma.InputJsonValue | undefined,
+            timedOut: item.timed_out,
+            maxWastePctThreshold: item.max_waste_pct_threshold,
+            overThreshold: item.over_threshold,
           },
         });
 
@@ -1481,6 +1584,122 @@ export class CuttingProposalsService {
     return error instanceof Error ? error.message : 'Unknown error';
   }
 
+  /// Cửa sổ coi 1 bản DRAFT "vừa tính xong, đang chờ tự-duyệt" là CALCULATING thay vì NEEDS_ACTION
+  /// - giữa saveSuccess() ghi DRAFT và approve() ghi APPROVED có 1 khoảng ngắn (transaction trừ
+  /// kho + tạo đề xuất mua). Không có cửa sổ này, FE poll đúng lúc đó sẽ thấy "Cần xử lý" rồi 1-2s
+  /// sau nhảy "Đạt" - xem changelog 2026-08-15 mục 15.6-5 (nháy trạng thái).
+  private static readonly FINALIZING_WINDOW_MS = 60_000;
+
+  /**
+   * Dẫn xuất `displayStatus`/`displayReason` (list-level) từ `status` + 2 cờ tổng hợp đã lưu sẵn
+   * lúc saveSuccess() - KHÔNG đọc lines[] (tốn 1 query nữa, và list response không load lines).
+   * Xem CuttingProposalDisplayStatus (dto) cho định nghĩa từng nhánh.
+   */
+  private computeDisplayStatus(proposal: {
+    status: CuttingProposalStatus;
+    hasInfeasibleLine: boolean;
+    hasOverThreshold: boolean;
+    completedAt: Date | null;
+    errorMessage: string | null;
+    requestedAt: Date;
+  }): { displayStatus: CuttingProposalDisplayStatus; displayReason: string | null } {
+    if (proposal.status === CuttingProposalStatus.CALCULATING) {
+      // Chống treo vĩnh viễn: đường DUY NHẤT kẹt CALCULATING mãi mãi là tiến trình BE chết giữa
+      // lúc solve (fire-and-forget - không cron nào quét dọn, xem phantich/page.tsx cảnh báo cũ).
+      // TTL neo vào chính cấu hình timeout HTTP client gọi solver (`solver.timeoutSeconds`) +
+      // biên an toàn - đó CHÍNH XÁC là mốc mà không tiến trình BE nào còn có thể đang thật sự chờ
+      // solver trả lời, nên không cần cron riêng: tính lại mỗi lần map response là đủ.
+      const timeoutSeconds = this.configService.get('solver.timeoutSeconds', { infer: true });
+      const ageMs = Date.now() - proposal.requestedAt.getTime();
+      if (ageMs > (timeoutSeconds + 60) * 1000) {
+        return {
+          displayStatus: 'NEEDS_ACTION',
+          displayReason:
+            'Nghi treo - đã tính quá lâu (tiến trình có thể đã dừng giữa chừng). Bấm "Tính lại".',
+        };
+      }
+      return { displayStatus: 'CALCULATING', displayReason: null };
+    }
+    if (proposal.status === CuttingProposalStatus.SUPERSEDED) {
+      return { displayStatus: 'SUPERSEDED', displayReason: null };
+    }
+    if (proposal.status === CuttingProposalStatus.FAILED) {
+      return {
+        displayStatus: 'NEEDS_ACTION',
+        displayReason: proposal.errorMessage ?? 'Lỗi kỹ thuật khi tính - xem chi tiết',
+      };
+    }
+    if (proposal.status === CuttingProposalStatus.APPROVED) {
+      return { displayStatus: 'OK', displayReason: null };
+    }
+    // status === DRAFT: đã tính xong, đang ở cổng autoApproveBlockReason() hoặc đã bị chặn.
+    if (proposal.hasInfeasibleLine) {
+      return {
+        displayStatus: 'NEEDS_ACTION',
+        displayReason: 'Có vật tư không cắt được trong ngưỡng hao hụt - xem chi tiết',
+      };
+    }
+    if (proposal.hasOverThreshold) {
+      return {
+        displayStatus: 'NEEDS_ACTION',
+        displayReason: 'Có vật tư cắt được nhưng vượt ngưỡng hao hụt - xem chi tiết',
+      };
+    }
+    const ageMs = proposal.completedAt ? Date.now() - proposal.completedAt.getTime() : Infinity;
+    if (ageMs < CuttingProposalsService.FINALIZING_WINDOW_MS) {
+      return { displayStatus: 'CALCULATING', displayReason: null };
+    }
+    // Không infeasible, không over_threshold, đã hoàn tất quá lâu để còn là "đang tự-duyệt" ->
+    // ca hiếm còn lại của autoApproveBlockReason(): nhu cầu đã có phương án APPROVED khác.
+    return {
+      displayStatus: 'NEEDS_ACTION',
+      displayReason: 'Nhu cầu này đã có phương án khác được duyệt trước đó - xem chi tiết',
+    };
+  }
+
+  /**
+   * Câu tiếng Việt cho 1 dòng vật tư trong chi tiết phương án - null nếu dòng này không cần xử lý
+   * (feasible & không vượt ngưỡng). Ưu tiên `timedOut` trước "vô nghiệm thật": 2 ca này KHÔNG được
+   * gộp chung 1 câu (xem changelog 2026-08-15 mục 15.5-(b) - lý do tách bạch).
+   */
+  private lineDisplayReason(line: {
+    feasible: boolean;
+    timedOut: boolean | null;
+    bestAchievable: unknown;
+    reason: string | null;
+    overThreshold: boolean | null;
+    maxWastePctThreshold: unknown;
+  }): string | null {
+    if (!line.feasible) {
+      if (line.timedOut) {
+        return (
+          'Chưa kết luận được - hết thời gian tính (solver chưa liệt kê xong các kiểu cắt). ' +
+          'Bấm "Tính lại" hoặc tăng SystemConfig.solverTimeLimitSeconds.'
+        );
+      }
+      const hint = line.bestAchievable as
+        { length: number; waste_pct: number; bars: number } | null | undefined;
+      if (hint) {
+        return (
+          `Không đạt ngưỡng hao hụt - tốt nhất đạt ${hint.waste_pct.toFixed(2)}% ` +
+          `(${hint.length}mm × ${hint.bars} cây). Thử gộp đợt cắt với SKU khác dùng chung loại ` +
+          `sắt này để lấp đầy cây hơn.`
+        );
+      }
+      return line.reason ?? 'Không có cách cắt nào khả thi - xem lại thiết kế đoạn cắt.';
+    }
+    if (line.overThreshold) {
+      const threshold = line.maxWastePctThreshold as number | { toNumber(): number } | null;
+      const thresholdPct =
+        threshold == null ? null : typeof threshold === 'number' ? threshold : threshold.toNumber();
+      return (
+        `Cắt được nhưng vượt ngưỡng hao hụt${thresholdPct != null ? ` (${thresholdPct}%)` : ''} - ` +
+        `thử gộp đợt cắt với SKU khác dùng chung loại sắt này (KHÔNG tự nới ngưỡng).`
+      );
+    }
+    return null;
+  }
+
   private toResponseDto(proposal: CuttingProposalRow): CuttingProposalResponseDto {
     // 2 nhánh neo (xem comment model CuttingProposal): 1 lệnh SX cắt riêng, hoặc cả 1 PI gộp cắt
     // chung. Nhánh gộp không có sản phẩm "duy nhất" nào - hiện mã PI và liệt kê các SKU trong đó
@@ -1498,6 +1717,7 @@ export class CuttingProposalsService {
           .filter((c): c is string => !!c)
           .filter((c, i, arr) => arr.indexOf(c) === i)
           .join(', ') || null;
+    const { displayStatus, displayReason } = this.computeDisplayStatus(proposal);
     return new CuttingProposalResponseDto({
       id: proposal.id.toString(),
       productionOrderId: proposal.productionOrderId?.toString() ?? null,
@@ -1508,6 +1728,8 @@ export class CuttingProposalsService {
       mfgProductName:
         order?.mfgProduct.name ?? (mergedSkus.length > 0 ? `${mergedSkus.length} SKU gộp` : null),
       status: proposal.status,
+      displayStatus,
+      displayReason,
       totalBarsAll: proposal.totalBarsAll,
       totalWasteMm: proposal.totalWasteMm,
       wastePercentage: proposal.wastePercentage ? Number(proposal.wastePercentage) : null,
@@ -1533,6 +1755,16 @@ export class CuttingProposalsService {
       mauNguyenMm: line.mauNguyenMm,
       lengthComparison: line.lengthComparison as
         { length: number; bars: number; wastePct: number }[] | null,
+      reason: line.reason,
+      bestAchievable: line.bestAchievable as {
+        length: number;
+        waste_pct: number;
+        bars: number;
+      } | null,
+      timedOut: line.timedOut,
+      maxWastePctThreshold: line.maxWastePctThreshold ? Number(line.maxWastePctThreshold) : null,
+      overThreshold: line.overThreshold,
+      displayReason: this.lineDisplayReason(line),
       patterns: line.patterns.map((pattern) => ({
         id: pattern.id.toString(),
         patternIndex: pattern.patternIndex,

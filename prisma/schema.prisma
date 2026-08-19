@@ -1300,6 +1300,13 @@ model CuttingProposal {
   completedAt         DateTime?
   approvedAt          DateTime?
   approvedById        String?
+  /// true nếu có ≥1 dòng lines[] feasible=false - suy ra lúc saveSuccess() để LỌC ĐƯỢC BẰNG SQL
+  /// (không phải kéo lines[] về rồi lọc ở code) - phục vụ màn Cắt sắt sẽ poll định kỳ, xem
+  /// mục 15 changelog-2026-08-15.
+  hasInfeasibleLine   Boolean               @default(false)
+  /// true nếu có ≥1 dòng lines[] feasible=true nhưng overThreshold=true. Cùng lý do tồn tại với
+  /// hasInfeasibleLine ở trên.
+  hasOverThreshold    Boolean               @default(false)
 
   productionOrder   ProductionOrder?      @relation(fields: [productionOrderId], references: [id])
   productionInvoice ProductionInvoice?    @relation(fields: [productionInvoiceId], references: [id])
@@ -1333,6 +1340,38 @@ model CuttingProposalLine {
   /// {length:6000,bars:223,wastePct:0.85}]) - thuần hiển thị/audit, không có FK nào cần tới nên
   /// giữ JSON thay vì tách bảng.
   lengthComparison  Json?
+  /// Lý do KHÔNG cắt được (feasible=false), NGUYÊN VĂN từ solver (api/views.py::_no_solution/
+  /// _unsolved) - vd "Không có cách cắt nào đạt ngưỡng 1% hao hụt...". Trước 2026-08-19 field
+  /// này bị vứt bỏ hoàn toàn (không lưu) - FE chỉ hiện được "Không khả thi" trơ trọi, không nói
+  /// được vì sao. Null khi feasible=true.
+  reason               String?
+  /// Chỉ có khi feasible=false NHƯNG solver vẫn tính được "tốt nhất có thể" (vd {length:6000,
+  /// waste_pct:2.4,bars:5}) - cho biết nới ngưỡng lên bao nhiêu thì đạt. KHÁC timedOut=true (chưa
+  /// kết luận được gì cả) - 2 ca này KHÔNG được gộp chung một nhãn hiển thị, xem changelog
+  /// 2026-08-15 mục 15.5-(b).
+  bestAchievable       Json?
+  /// true = CP-SAT hết time_limit_seconds mà CHƯA kết luận được (status UNKNOWN), KHÁC hẳn
+  /// infeasible THẬT (đã chứng minh vô nghiệm, status INFEASIBLE). Null/false khi feasible=true
+  /// hoặc vô nghiệm thật.
+  ///
+  /// KHÔNG có cột patternsTruncated riêng: solver TÍNH ra cờ đó nội bộ
+  /// (cat_sat/de_xuat_logic.py::optimize_material, "hết ENUM_TIME_LIMIT trước khi liệt kê xong
+  /// pattern") nhưng api/views.py KHÔNG forward field này ra JSON response - chỉ timed_out/
+  /// best_achievable/reason/max_waste_pct_threshold thật sự lọt tới client. Phát hiện khi đọc lại
+  /// nguyên văn views.py lúc code phần lưu (2026-08-19) - kế hoạch ban đầu (changelog 2026-08-15
+  /// mục 15.3/15.6) liệt kê nhầm patterns_truncated là 1 trong các field "solver gửi kèm".
+  timedOut             Boolean?
+  /// Ngưỡng hao hụt % ĐÃ ÁP DỤNG cho loại sắt này khi solver chấm (riêng theo
+  /// Material.maxCuttingWastePercentage, hoặc SystemConfig.solverMaxWastePercentage mặc định) -
+  /// có mặt ở CẢ 2 nhánh feasible/infeasible trong response. Không suy lại từ SystemConfig lúc
+  /// hiển thị vì ngưỡng có thể đã đổi kể từ khi phương án này được tính.
+  maxWastePctThreshold Decimal? @db.Decimal(6, 3)
+  /// true = feasible=true NHƯNG vượt maxWastePctThreshold của chính loại sắt này. Trước 2026-08-19
+  /// field over_threshold trong response solver bị bỏ qua hoàn toàn ở cổng chặn tự-duyệt - hệ
+  /// thống từng tự duyệt/trừ kho/tạo đề xuất mua cho các phương án vượt ngưỡng, không ai biết
+  /// (đã vá ở autoApproveBlockReason() nhánh (c), xem changelog 2026-08-15 mục 15.9). Null khi
+  /// feasible=false - field chỉ xuất hiện ở dòng feasible trong response thật (api/views.py).
+  overThreshold        Boolean?
 
   cuttingProposal CuttingProposal          @relation(fields: [cuttingProposalId], references: [id])
   material        Material                 @relation(fields: [materialId], references: [id])

@@ -11,6 +11,12 @@ export class CandidateMaterialDto {
   @Expose() @ApiProperty() materialName!: string;
   /// Hao hụt tốt nhất có thể khi CHỈ SKU này cắt loại sắt này. Hiển thị kèm dấu "≥".
   @Expose() @ApiProperty() standaloneWastePct!: number;
+  /// Cận dưới số cây khi cắt MỘT MÌNH SKU này (best-fill.util.ts - giả định nguồn đoạn vô hạn).
+  /// Nhu cầu nhỏ (ít cây) khiến cận dưới lệch xa thực tế NHẤT: pattern lý tưởng không có đủ cây để
+  /// lặp lại, cây cuối chi phối toàn bộ %. FE nên cảnh báo "cận dưới không đáng tin" khi số này
+  /// thấp thay vì trình bày standaloneWastePct như con số chắc chắn - xem changelog 2026-08-15
+  /// mục 15.6-7.
+  @Expose() @ApiProperty() standaloneMinBars!: number;
   @Expose() @ApiProperty() thresholdPct!: number;
   @Expose() @ApiProperty() overThreshold!: boolean;
   /// Mã SKU của các đơn KHÁC cũng dùng loại sắt này - tức những đơn gộp vào thì MỚI có tác dụng.

@@ -24,11 +24,15 @@
 > - [Mục 14](#14-bỏ-auto_scan--solver-chỉ-tính-trên-cây-6000mm-2026-08-18) — **bỏ `auto_scan`**:
 >   solver chỉ tính trên cây 6000mm, không tự dò cỡ đặt riêng nữa. Đảo ngược quyết định 2026-08-06;
 >   lý do: cỡ cây tìm ra không mua được, và hao hụt báo cáo sai ~9 lần so với thực tế.
-> - [Mục 15](#15-review-không-khả-thi-của-solver--trạng-thái-màn-cắt-sắt-2026-08-18--chưa-code) —
->   **CHƯA CODE**. `feasible: false` đang gộp 3 nghĩa khác nhau và BE vứt bỏ toàn bộ lý do solver
->   gửi kèm; 4 rủi ro của luồng gộp SKU; **1 lỗ hổng đang chạy: phương án vượt ngưỡng hao hụt vẫn
->   được tự duyệt → trừ kho → mua, không cảnh báo** (`over_threshold` không ai kiểm). Kèm vòng
->   review 2 tìm ra 4 lỗi trong chính phương án vòng 1.
+> - [Mục 15](#15-review-không-khả-thi-của-solver--trạng-thái-màn-cắt-sắt-2026-08-18--67-mục-xong) —
+>   **6/7 MỤC XONG**. `feasible: false` gộp 3 nghĩa khác nhau, BE vứt bỏ lý do solver gửi kèm - đã
+>   vá: chặn tự-duyệt khi vượt ngưỡng (lỗ hổng đang chạy: phương án vượt ngưỡng từng tự duyệt → trừ
+>   kho → mua, không cảnh báo), chặn sớm khi ngân sách thời gian solver vượt timeout HTTP client,
+>   migration lưu lý do solver trả về, 3 chip hiển thị (Đang tính/Đạt/Cần xử lý) thay 5 trạng thái
+>   DB, route "Tính lại" cho phiếu gộp (trước đây không tồn tại, luôn lỗi), poll có điều kiện +
+>   chống treo `CALCULATING`, cảnh báo "nhu cầu nhỏ, cận dưới không đáng tin" trên màn gộp. Rút lại
+>   đề xuất "nới ngưỡng" (vòng review 3) vì tái tạo lại đúng lỗi `auto_scan`. Còn thiếu duy nhất:
+>   trần số SKU gộp (mục 6b - cần spike dữ liệu UAT để chọn ngưỡng).
 
 Repo liên quan: `DNA-ERP-BE` (nhánh `main`), `DNA-ERP` (nhánh `demo`), solver `cat_sat_iea`
 (`D:\DNA-DEXUAT`, không đổi trong phiên này).
@@ -1178,12 +1182,19 @@ solver báo 0,203%.
 
 ---
 
-## 15. Review "Không khả thi" của solver + trạng thái màn Cắt sắt (2026-08-18) — **CHƯA CODE**
+## 15. Review "Không khả thi" của solver + trạng thái màn Cắt sắt (2026-08-18) — **6/7 MỤC XONG**
 
-> **Trạng thái: điều tra + thiết kế xong, chưa viết một dòng code nào.** Mục này ghi lại phát hiện
-> và phương án đã qua 2 vòng review (vòng 2 tìm ra 4 lỗi trong chính phương án của vòng 1). Cần
-> duyệt nghiệp vụ mục [15.6](#156-phương-án-đã-sửa--thứ-tự-thực-hiện)-(8) và **cho phép chạy
-> migration** trước khi bắt đầu.
+> **Trạng thái: Bước 0-1-2-3-4-5-6a-7 đã CODE XONG (2026-08-19), 557/557 test pass, migration đã
+> áp dụng vào DB local.** Chỉ còn **mục 6b** (trần số SKU gộp) chờ spike dữ liệu UAT - xem
+> [15.10](#1510-điểm-chưa-xác-minh--chặn-mục-1-2-migration-và-mục-6b). Mục này ghi lại phát hiện
+> và phương án đã qua 3 vòng review (vòng 2 tìm ra 4 lỗi trong phương án vòng 1; vòng 3 - Sếp phản
+> biện bằng chính ví dụ Bàn J55 trong mục 1 - **loại bỏ hẳn mục "nới ngưỡng"** vì nó tái tạo lại
+> đúng lỗi `auto_scan` vừa gỡ, xem
+> [15.8](#158-vòng-review-3--nới-ngưỡng-là-tái-tạo-lại-lỗi-auto_scan)). Kết quả thực thi ở
+> [15.9](#159-kết-quả-thực-thi-bước-0-bước-1--bước-2-2026-08-19) (Bước 0-2, migration) và
+> [15.11](#1511-kết-quả-thực-thi-bước-3-7-2026-08-19--mục-156-hoàn-tất-trừ-mục-6b) (Bước 3-7, hiển
+> thị + retry + poll + cảnh báo nhu cầu nhỏ), gồm 1 lần tự phát hiện + tự sửa migration sai giữa
+> chừng (cột `patternsTruncated` hoá ra không tồn tại trong response solver thật).
 
 ### 15.1. Ba câu hỏi khởi nguồn
 
@@ -1312,24 +1323,190 @@ cạnh con số `>= x%`.
 
 ### 15.6. Phương án đã sửa — thứ tự thực hiện
 
-| # | Việc | Ghi chú |
-|---|---|---|
-| 1 | **Migration** + lưu đủ 6 field solver trả: `reason`, `best_achievable`, `timed_out`, `patterns_truncated`, `max_waste_pct_threshold`, **`over_threshold`** | Kèm cờ `hasInfeasibleLine`/`hasOverThreshold` trên `cutting_proposals` để lọc bằng SQL |
-| 2 | Sửa `autoApproveBlockReason()`: rẽ nhánh theo lý do + **chặn thêm ca `over_threshold`** | Đây là chỗ chặn tiền đi ra sai — xem 15.5-(a) |
-| 3 | Thiết kế hiển thị **một lần**: 3 chip (Đang tính / Đạt / Cần xử lý) + câu lý do & hành động cụ thể trên dòng | Giữ đúng "3 trạng thái" đã yêu cầu; phân biệt nằm ở chữ nên không phải nói dối. **Không build trước mục 1** |
-| 4 | Nút "Tính lại" theo trạng thái dẫn xuất + **route retry cho phiếu gộp** | Hiện gãy: FE gọi `retryCuttingProposal(p.productionOrderId)` nhưng phương án neo PI gộp có `productionOrderId = null` và BE không có route retry cho PI |
-| 5 | Poll có điều kiện (20s, tự tắt khi hết `CALCULATING`) + đồng hồ đếm phút + TTL **neo vào `SOLVER_TIMEOUT_SECONDS`** | Dùng lại pattern đã chạy ở `LenhSXPage.tsx:68-77` và component `CalculatingBadge`. **Không làm SSE/WebSocket**: BE chưa có hạ tầng nào, EventSource không gửi được Bearer header, đổi lấy độ trễ 20s->1s cho việc chạy 15 phút |
-| 6 | Trần số SKU gộp / cảnh báo số cỡ đoạn; kiểm tra `timeout > timeLimit * số loại sắt` | Chặn nguyên nhân gốc của 15.4-1 và 15.4-2 |
-| 7 | Cảnh báo "nhu cầu nhỏ, cận dưới không đáng tin" trên màn gộp | Thay cho phương án siết cận dưới đã rút lại |
-| 8 | **(cần duyệt nghiệp vụ)** Nút "nới ngưỡng vật tư này lên x%" ngay trên dòng cam, có audit | Từ chẩn đoán sang xử lý được tại chỗ; `best_achievable` đã cho sẵn con số x |
+| # | Việc | Trạng thái | Ghi chú |
+|---|---|---|---|
+| 0 | Chặn tự-duyệt khi `over_threshold` | Đã code (15.9) | ~5 dòng, không cần migration - đây là chỗ chặn tiền đi ra sai, xem 15.5-(a) |
+| 1 | **Migration** + lưu 5 field solver trả (bỏ `patterns_truncated` - không thật sự có trong response, xem 15.9): `reason`, `best_achievable`, `timed_out`, `max_waste_pct_threshold`, `over_threshold` | Đã code (15.9) | Kèm cờ `hasInfeasibleLine`/`hasOverThreshold` trên `cutting_proposals` để lọc bằng SQL |
+| 2 | Rẽ nhánh `autoApproveBlockReason()` theo lý do thật (không tô đỏ ca `timed_out`) | Chưa làm | Phụ thuộc mục 1 (cần cột lưu lý do) |
+| 3 | Thiết kế hiển thị **một lần**: 3 chip (Đang tính / Đạt / Cần xử lý) + câu lý do & hành động cụ thể trên dòng | Chưa làm | Giữ đúng "3 trạng thái" đã yêu cầu. **Không build trước mục 1** |
+| 4 | Nút "Tính lại" theo trạng thái dẫn xuất + **route retry cho phiếu gộp** | Chưa làm | Hiện gãy: FE gọi `retryCuttingProposal(p.productionOrderId)` nhưng phương án neo PI gộp có `productionOrderId = null` và BE không có route retry cho PI |
+| 5 | Poll có điều kiện (20s, tự tắt khi hết `CALCULATING`) + đồng hồ đếm phút + TTL neo vào `SOLVER_TIMEOUT_SECONDS` | Chưa làm | Dùng lại pattern đã chạy ở `LenhSXPage.tsx:68-77` và component `CalculatingBadge`. **Không làm SSE/WebSocket** |
+| 6a | Chặn sớm khi timeout HTTP client < timeLimit x số loại sắt (ngân sách xấu nhất) | Đã code (15.9) | Chặn nguyên nhân gốc 15.4-2 - không cần migration, tính trực tiếp từ `distinctMaterialIds.length` đã có sẵn |
+| 6b | Trần số SKU gộp / cảnh báo số cỡ đoạn khi tổ hợp đẩy `MAX_SIZES_PER_BAR`/`ENUM_TIME_LIMIT` vào vùng nguy hiểm | Chưa làm | Cần dữ liệu thật (15.10) để chọn ngưỡng - không đoán số |
+| 7 | Cảnh báo "nhu cầu nhỏ, cận dưới không đáng tin" trên màn gộp | Chưa làm | Thay cho phương án siết cận dưới đã rút lại |
+| ~~8~~ | ~~Nút "nới ngưỡng vật tư này lên x%"~~ | Đã rút lại | Xem [15.8](#158-vòng-review-3--nới-ngưỡng-là-tái-tạo-lại-lỗi-auto_scan) - tái tạo đúng lỗi `auto_scan` vừa gỡ |
 
 **Không đụng tới:** enum `CuttingProposalStatus` (`APPROVED` đang gánh chống-trừ-kho-2-lần ở
 `autoApproveBlockReason` và tra pattern cho Phôi ở `steel-issues.service.ts:625,743`), logic
 auto-duyệt, module `steel-issues`.
 
-### 15.7. Điểm chưa xác minh — chặn mục 2
+### 15.8. Vòng review 3 — "nới ngưỡng" là tái tạo lại lỗi `auto_scan`
+
+Ví dụ ngay trong [mục 1](#1-tính-năng-làm-gì) của chính changelog này: Bàn J55 cắt một mình, 7 đoạn
+840mm/cây, thừa 113mm = **1,88%**, "và đó đã là tối ưu tuyệt đối". Sếp chỉ ra: đưa qua Tối ưu cắt
+sắt để **gộp** với SKU khác (Ghế tình yêu, đoạn 460mm) mới là đường đúng - kéo xuống được **0,53%**.
+
+Mục 8 (nút "nới ngưỡng vật tư lên x%") ở vòng review 1-2 đề xuất chính là con đường ngược lại: thay
+vì gộp, nới ngưỡng cho J55 lên ~2% để nó "đạt". Đó **đúng bằng** thứ `auto_scan` từng làm - tìm
+cách khiến con số trông chấp nhận được thay vì đi gộp (xem lý do bỏ `auto_scan` ở
+[14.1](#141-vì-sao-bỏ), và quyết định nguyên văn: *"loại bỏ yêu cầu này giờ chỉ làm 6000, vì mục
+đích làm gộp SKU để xử lý vấn đề này"*). Ngưỡng 1% là **chính sách**, không phải tham số cho người
+vận hành vặn khi thấy vướng.
+
+**Hệ quả cho phần còn lại của kế hoạch:**
+
+- Mục 0 (chặn tự-duyệt khi vượt ngưỡng) quan trọng hơn ban đầu nghĩ: nếu không chặn, hệ thống âm
+  thầm mua sắt ở 1,88% thay vì buộc đi gộp - tính năng gộp bị vô hiệu hoá trên thực tế vì không ai
+  bị bắt buộc dùng.
+- Rủi ro [15.4-1](#154-trả-lời-câu-3--solver-nhận-pi-gộp-thế-nào-và-4-rủi-ro) (gộp làm solver hết
+  giờ vì `MAX_SIZES_PER_BAR`/`ENUM_TIME_LIMIT`) lên mức ưu tiên cao hơn: nếu gộp là câu trả lời
+  **duy nhất** được phép, gộp hỏng vì lý do kỹ thuật là bế tắc hoàn toàn, không còn đường lui.
+- Ca thật sự không gộp được (loại sắt chỉ 1 SKU đang chờ, không ai để gộp cùng) vẫn tồn tại - xử lý
+  bằng quyết định của Sếp trên từng ca cụ thể (chờ đơn khác / chấp nhận hao hụt lần này / sửa thiết
+  kế đoạn cắt), **không phải một cái nút cho KHSX tự bấm**.
+
+### 15.9. Kết quả thực thi Bước 0, Bước 1 + Bước 2 (2026-08-19)
+
+**Bước 0 - chặn tự-duyệt khi vượt ngưỡng** (`cutting-proposals.service.ts`, hàm
+`autoApproveBlockReason()`):
+
+- Thêm nhánh (c): quét `purchase_plan[]` tìm dòng `feasible=true && over_threshold=true`, chặn
+  tự-duyệt nếu có - thông báo QLSX nêu đúng mã vật tư, nói rõ "KHÔNG tự nới ngưỡng".
+  `any_over_threshold`/`over_threshold` trước đó "thuần chẩn đoán, không kích hoạt hành động nào" -
+  đã sửa comment cho khớp hành vi mới.
+- 3 test mới: chặn đúng khi `over_threshold=true`, vẫn tự duyệt bình thường khi `over_threshold=false`
+  (đối trọng chống chặn nhầm), và giữ nguyên toàn bộ 34 test cũ (không phá hành vi nhánh infeasible/
+  priorApproved đã có).
+
+**Bước 1 - chặn sớm khi ngân sách thời gian solver vượt timeout HTTP client** (cùng file, ngay
+trước lời gọi solver):
+
+- `time_limit_seconds` là ngân sách **cho mỗi loại sắt** (`api/views.py` truyền vào bên trong vòng
+  lặp `material_groups`), không phải cho cả request. Tính `distinctMaterialIds.length x
+  config.solverTimeLimitSeconds`, so với `timeoutSeconds` (config `solver.timeoutSeconds`) - vượt
+  thì throw NGAY trước khi gọi solver, đánh `FAILED` với lý do cụ thể (số loại sắt, ngân sách xấu
+  nhất, timeout hiện tại) thay vì để axios tự ngắt giữa chừng rồi báo lỗi mạng không ai hiểu vì sao.
+- 1 test mới: 2 loại sắt x 200s = 400s > timeout mock 300s, chặn trước khi gọi
+  `externalApiService.post` (assert `not.toHaveBeenCalled()`), `errorMessage` chứa đủ 3 con số.
+
+**Bước 2 - migration + lưu 6 field lý do solver trả** (local DB, đã xác nhận với Sếp trước khi
+chạy):
+
+- Migration `20260819011622_cutting_proposal_line_reason_and_over_threshold`: `CuttingProposalLine`
+  += `reason` (String?), `bestAchievable` (Json?), `timedOut` (Boolean?), `maxWastePctThreshold`
+  (Decimal(6,3)?), `overThreshold` (Boolean?); `CuttingProposal` += `hasInfeasibleLine`,
+  `hasOverThreshold` (Boolean, default false) - cờ tổng hợp để LỌC ĐƯỢC BẰNG SQL khi màn Cắt sắt
+  poll định kỳ (mục 3), không phải kéo `lines[]` về rồi lọc ở code.
+- **Phát hiện + tự sửa giữa chừng**: kế hoạch ban đầu (15.3/15.6) liệt kê 6 field gồm cả
+  `patterns_truncated`, đọc từ `cat_sat/de_xuat_logic.py` (nơi solver TÍNH ra cờ này nội bộ). Đọc
+  lại nguyên văn `api/views.py` lúc code phần lưu mới phát hiện field đó **không hề được forward ra
+  JSON response** - chỉ `timed_out`/`best_achievable`/`reason`/`max_waste_pct_threshold` thật sự
+  lọt tới client. Đã xoá cột này khỏi thiết kế TRƯỚC khi tạo migration đầu tiên bị áp nhầm (revert
+  bằng SQL thủ công trên DB local + xoá dòng lịch sử migration + tạo lại migration đúng) - migration
+  cuối cùng áp dụng chỉ có 5+2 cột, không có cột thừa nào tồn tại trên DB.
+- `SolverProposeResponse` (type nội bộ): thêm `max_waste_pct_threshold` (cả 2 nhánh),
+  `timed_out`/`best_achievable`/`reason` (chỉ nhánh infeasible).
+  `saveSuccess()`: lưu NGUYÊN VĂN 5 field vào từng dòng, tính 2 cờ tổng hợp từ chính
+  `response.purchase_plan` trước khi ghi. Câu tiếng Việt hiển thị cho người dùng CHƯA dựng ở đây -
+  để dành cho mục 3 (tầng response DTO/FE), tránh trùng lặp logic diễn giải.
+- 2 test mới: dòng infeasible lưu đúng cả 4 field + `hasInfeasibleLine=true`/`hasOverThreshold=false`;
+  dòng feasible vượt ngưỡng lưu đúng `overThreshold`/`maxWastePctThreshold` + 2 cờ đảo ngược lại,
+  xác nhận không lẫn giữa 2 nhóm field.
+
+**Không làm trong đợt này:** mục 3-5, 7 (hiển thị/poll/retry - dùng dữ liệu vừa lưu được, làm sau
+khi có UI); mục 6b (trần SKU gộp) - cần dữ liệu thật để chọn ngưỡng, xem 15.10.
+
+Kết quả: `npx tsc --noEmit` sạch, `npx jest` **42/42 test suite, 541/541 test pass** (536 đầu phiên
++ 5 test mới: 2 Bước 0, 1 Bước 1, 2 Bước 2).
+
+### 15.10. Điểm chưa xác minh — chặn mục 1-2 (migration) và mục 6b
 
 `over_threshold = true` cùng `feasible = true` xảy ra trong điều kiện nào và tần suất bao nhiêu:
 **suy ra từ code, chưa quan sát được trên dữ liệu thật** (DB local là bộ dữ liệu khác — vật tư
 `STL-*`, không có `SAT-*` như trên UAT). Cần một câu query trên DB UAT trước khi làm mục 2, vì nội
 dung mục đó phụ thuộc hoàn toàn vào câu trả lời này.
+
+Tương tự cho mục 6b: cần replay `requestParams` (đã lưu nguyên văn, audit/replay - xem model
+`CuttingProposal`) của vài phiếu "không khả thi" thật trên UAT thẳng vào solver, đọc `reason` trả
+về, để biết phân bố thật giữa 3 nhóm (vượt ngưỡng / hết giờ `timed_out` / vô nghiệm thật) trước khi
+chọn ngưỡng cảnh báo số cỡ đoạn - không đoán số khi chưa có dữ liệu.
+
+---
+
+### 15.11. Kết quả thực thi Bước 3-7 (2026-08-19) — mục 15.6 hoàn tất, trừ mục 6b
+
+> **Trạng thái cuối: 6/7 mục (0, 1, 3, 4, 5, 6a, 7) đã code xong. Chỉ còn mục 6b (trần SKU gộp)
+> chờ dữ liệu UAT. Mục 8 (nới ngưỡng) đã rút hẳn - xem 15.8.**
+
+**Mục 3 - hiển thị 3 chip** (`cutting-proposal-response.dto.ts` + `cutting-proposals.service.ts`):
+
+- Thêm `CuttingProposalDisplayStatus` (`CALCULATING | OK | NEEDS_ACTION | SUPERSEDED`) + field
+  `displayStatus`/`displayReason` trên `CuttingProposalResponseDto`; line thêm 5 field raw (`reason`,
+  `bestAchievable`, `timedOut`, `maxWastePctThreshold`, `overThreshold`) + `displayReason` riêng cho
+  từng dòng.
+- `computeDisplayStatus()` dẫn xuất từ `status` + `hasInfeasibleLine`/`hasOverThreshold` (đã lưu ở
+  Bước 2, KHÔNG kéo `lines[]`) + `completedAt`/`requestedAt` - **không lưu ở DB**, tính lại mỗi lần
+  map response. `lineDisplayReason()` dựng câu tiếng Việt cho từng dòng, tách bạch `timedOut` khỏi
+  "vô nghiệm thật" đúng như 15.5-(b) yêu cầu (không gộp chung 1 câu).
+- FE (`CuttingProposalsPage.tsx`): 5 chip DB → 3 chip hiển thị (`Đang tính`/`Đạt`/`Cần xử lý`),
+  SUPERSEDED ẩn khỏi danh sách mặc định. Mỗi dòng NEEDS_ACTION hiện luôn `displayReason` (list-level
+  ở bảng, đầy đủ hơn ở panel chi tiết theo từng vật tư) - không phải mở modal mới biết lý do.
+- 15 test mới (13 cho `computeDisplayStatus`/`lineDisplayReason`, phủ đủ mọi nhánh: CALCULATING,
+  SUPERSEDED, FAILED, OK, DRAFT+infeasible, DRAFT+overThreshold, DRAFT đang hoàn tất <60s vs
+  priorApproved >60s, timedOut ưu tiên trước best_achievable, v.v).
+
+**Mục 4 - nút "Tính lại" theo trạng thái dẫn xuất + route retry cho phiếu gộp**
+(`cutting-proposals.controller.ts` + `.service.ts` + FE `cutting-proposals-api.ts`):
+
+- Route mới `POST /production-invoices/:id/cutting-proposals` (mirror route PO có sẵn) - trước đây
+  KHÔNG TỒN TẠI nên bấm "Tính lại" trên phương án neo PI gộp (`productionOrderId=null`) luôn lỗi.
+- `requestForInvoice()` thêm hỗ trợ `idempotencyKey` (đối xứng `requestForOrder`) để chặn double-click
+  tạo trùng - trước đây thiếu, chỉ nhánh PO có.
+- FE: `retryCuttingProposalForInvoice()` mới; `retryProposal()` chọn đúng route theo neo nào khác
+  null; nút "Tính lại" bám `displayStatus === 'NEEDS_ACTION'` thay vì `status === 'FAILED'` (trước
+  đây ca "DRAFT nhưng bị chặn tự-duyệt" không có nút nào bấm được).
+- 2 test mới cho `requestForInvoice` (idempotency short-circuit + tạo CALCULATING đúng anchor).
+
+**Mục 5 - poll có điều kiện + đồng hồ đếm phút + chống treo `CALCULATING`**:
+
+- FE: poll 20s khi còn dòng `CALCULATING`, tự tắt khi hết (mirror pattern đã chạy ở
+  `LenhSXPage.tsx:68-77`); `CalculatingBadge` hiện "đã chạy X phút" (mirror
+  `LenhSXPage.tsx::CalculatingBadge`, đổi tên chung chung hơn vì màn Admin này còn quản cả PI đơn lẻ
+  lẫn PI gộp).
+- BE: **chống treo vĩnh viễn** ngay trong `computeDisplayStatus()` - `CALCULATING` quá
+  `solver.timeoutSeconds + 60s` (neo vào chính config timeout HTTP client gọi solver, KHÔNG phải số
+  cứng) → tự chuyển `NEEDS_ACTION` với lý do "Nghi treo". Không cần cron riêng vì tính lại mỗi lần
+  đọc là đủ - đường DUY NHẤT kẹt `CALCULATING` mãi mãi là tiến trình BE chết giữa lúc solve (không
+  cron dọn nào tồn tại từ trước, xem `phantich/page.tsx` cảnh báo cũ).
+- 1 test mới: `requestedAt` quá `(300+60)s` (mock `solver.timeoutSeconds=300`) → `NEEDS_ACTION`.
+
+**Mục 6a - đã code ở đợt trước (Bước 1)**, không có gì thêm.
+
+**Mục 7 - cảnh báo "nhu cầu nhỏ, cận dưới không đáng tin"** (`cutting-batch-candidate.dto.ts` +
+`.service.ts` + FE `cutting-batch-api.ts` + `GomDotCatPage.tsx`):
+
+- `CandidateMaterialDto` += `standaloneMinBars` (cận dưới số cây khi SKU cắt một mình) - tính bằng
+  `minBarsFor()` đã có sẵn (dùng chung với `buildBatchLevel()`/`CuttingBatchPreviewLineDto`, vốn đã
+  có `minBars` từ trước, không cần thêm gì). Không cần migration - field tính tại chỗ, không lưu DB.
+  1 test mới xác nhận field có mặt trong response (công thức đã được kiểm bởi test của
+  `minBarsFor()` qua `buildBatchLevel`, chỉ cần bắt lỗi wiring/serialization).
+- FE: `isLowConfidence(minBars) = minBars > 0 && minBars < 3` (ngưỡng kinh nghiệm chọn, KHÔNG phải
+  số đo được - lý do: 1-2 cây thì cây cuối gần như quyết định cả %, không đủ lặp lại pattern lý
+  tưởng để cận dưới có ý nghĩa). Cảnh báo hiện ở CẢ hai bảng: `MaterialChip` (per-SKU đứng riêng) và
+  bảng "Loại sắt dùng chung" (mức đã gộp) - dấu "?" màu vàng + tooltip, kèm chú thích ở ô thông tin
+  đầu trang để không ai phải đoán ký hiệu nghĩa gì.
+
+**Đã rút gọn khỏi phạm vi mục 15.6, không làm:** mục 1-2 (migration + rẽ nhánh
+`autoApproveBlockReason` theo `timedOut`) - **đã làm ở Bước 2**, xem 15.9, chỉ còn thiếu phần rẽ
+nhánh `autoApproveBlockReason()` theo lý do thật (hiện thông báo QLSX vẫn dùng câu chung chung
+"không cắt được trong ngưỡng hao hụt" cho cả ca `timed_out` lẫn vô nghiệm thật - **CHƯA SỬA**, vẫn
+đúng như cảnh báo ở 15.5-(c); cần làm khi có dữ liệu UAT xác nhận tần suất ca `timed_out` đáng để
+ưu tiên).
+
+**Kết quả cuối:** BE `npx tsc --noEmit` sạch, `npx jest` **42/42 test suite, 557/557 test pass**
+(536 đầu phiên → 541 sau Bước 0-2 → 557 sau Bước 3-7, +21 test mới trong đợt này). FE
+`npx tsc --noEmit` sạch trên cả 2 project (`DNA-ERP-BE`, `DNA-ERP`). ESLint: 2 warning không đổi từ
+trước (`Date.now()` impure trong `CalculatingBadge` - mirror pattern có sẵn ở `LenhSXPage.tsx`;
+`setState` trong effect ở `GomDotCatPage.tsx:111,117` - code cũ, ngoài phạm vi diff của đợt này).
+
+Toàn bộ thay đổi (BE + FE) **chưa commit**. Migration đã áp dụng vào DB **local** duy nhất.

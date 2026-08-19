@@ -44,6 +44,24 @@ export class CuttingProposalsController {
     return this.cuttingProposalsService.findAllForOrder(id, query);
   }
 
+  /**
+   * Nút "Tính lại" cho phiếu GỘP (PI.isMerged) - trước 2026-08-19 KHÔNG tồn tại route này, nên FE
+   * gọi nhầm requestProposal() ở trên bằng productionOrderId=null (phương án neo PI gộp không có
+   * ProductionOrder riêng) và luôn lỗi. Mirror y hệt requestProposal() cho nhánh PO, chỉ đổi neo.
+   */
+  @Post('production-invoices/:id/cutting-proposals')
+  @RequirePermissions(CREATE)
+  requestProposalForInvoice(
+    @Param('id') id: string,
+    @Headers('Idempotency-Key') idempotencyKey: string | undefined,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.cuttingProposalsService.requestForInvoice(parseBigIntId(id), {
+      idempotencyKey,
+      requestedById: userId,
+    });
+  }
+
   /** List toàn hệ thống - màn Admin "Cắt sắt" (business-data). */
   @Get('cutting-proposals')
   @RequirePermissions(VIEW)

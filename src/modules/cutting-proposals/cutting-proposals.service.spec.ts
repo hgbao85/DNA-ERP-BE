@@ -235,6 +235,62 @@ describe('CuttingProposalsService', () => {
     });
   });
 
+  describe('requestForInvoice', () => {
+    // Đối xứng với requestForOrder ở trên - thêm idempotencyKey 2026-08-19 để nút "Tính lại" cho
+    // phiếu GỘP (route mới production-invoices/:id/cutting-proposals) chặn được double-click tạo
+    // trùng, giống hệt lý do route production-orders/:id/cutting-proposals có sẵn từ trước.
+    it('short-circuits and returns the existing proposal when the idempotency key already exists', async () => {
+      const existing = {
+        id: 1n,
+        productionOrderId: null,
+        productionInvoiceId: 5n,
+        status: CuttingProposalStatus.DRAFT,
+        totalBarsAll: 10,
+        totalWasteMm: 100,
+        wastePercentage: null,
+        errorMessage: null,
+        requestedAt: new Date(),
+        completedAt: new Date(),
+        approvedAt: null,
+        productionOrder: null,
+        productionInvoice: { code: 'PI-2026-020', items: [] },
+      };
+      prisma.cuttingProposal.findUnique.mockResolvedValue(existing);
+
+      const result = await service.requestForInvoice(5n, { idempotencyKey: 'retry-abc' });
+
+      expect(result.id).toBe('1');
+      expect(prisma.cuttingProposal.create).not.toHaveBeenCalled();
+    });
+
+    it('creates a CALCULATING row anchored to productionInvoiceId and returns immediately without awaiting the solver call', async () => {
+      prisma.cuttingProposal.create.mockResolvedValue({
+        id: 2n,
+        productionOrderId: null,
+        productionInvoiceId: 5n,
+        status: CuttingProposalStatus.CALCULATING,
+        totalBarsAll: null,
+        totalWasteMm: null,
+        wastePercentage: null,
+        errorMessage: null,
+        requestedAt: new Date(),
+        completedAt: null,
+        approvedAt: null,
+        productionOrder: null,
+        productionInvoice: { code: 'PI-2026-020', items: [] },
+      });
+      externalApiService.post.mockReturnValue(new Promise(() => {})); // never resolves
+
+      const result = await service.requestForInvoice(5n);
+
+      expect(result.status).toBe(CuttingProposalStatus.CALCULATING);
+      expect(prisma.cuttingProposal.create).toHaveBeenCalledWith({
+        data: { productionInvoiceId: 5n, idempotencyKey: undefined, requestedById: undefined },
+        include: expect.anything() as unknown,
+      });
+    });
+  });
+
   describe('runSolverAndSave (private, invoked directly)', () => {
     // runSolverAndSave nhận callback dựng đầu vào (không nhận thẳng productionOrderId) từ khi có
     // thêm đường cắt chung cả nhóm - nối lại qua buildOrderJob để giữ nguyên ý nghĩa các test dưới.
@@ -508,6 +564,109 @@ describe('CuttingProposalsService', () => {
       expect(notify[0].data.message).toContain('Chưa trừ tồn kho');
     });
 
+    it('KHÔNG tự duyệt khi vật tư feasible=true nhưng over_threshold=true - không trừ kho, không mua', async () => {
+      // Phát hiện khi review sau khi bỏ auto_scan (2026-08-18): over_threshold trước đây bị bỏ
+      // qua hoàn toàn ở cổng chặn - hệ thống ĐÃ VÀ ĐANG tự duyệt/trừ kho/tạo đề xuất mua cho các
+      // phương án vượt ngưỡng hao hụt, không một lời cảnh báo. Đây là test khẳng định lỗ đã vá.
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 400,
+          waste_percentage: 2.4,
+          any_over_threshold: true,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            over_threshold: true,
+            total_bars: 8,
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+      // 2 lần gọi material.findMany, ĐÚNG thứ tự: (1) tra ngưỡng riêng trước khi gọi solver -
+      // rỗng, không vật tư nào có ngưỡng riêng; (2) đổi id -> mã trong autoApproveBlockReason().
+      prisma.material.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ code: 'SAT-200' }]);
+
+      await invoke(2n, 1n, 'user-boss');
+
+      const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
+        { data: { status?: CuttingProposalStatus } },
+      ][];
+      expect(
+        updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.DRAFT),
+      ).toBeDefined();
+      expect(
+        updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.APPROVED),
+      ).toBeUndefined();
+      expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+      expect(stockReservationsService.reserve).not.toHaveBeenCalled();
+
+      const notify = prisma.notification.create.mock.calls[0] as unknown as [
+        { data: { title: string; message: string } },
+      ];
+      expect(notify[0].data.title).toContain('CẦN DUYỆT TAY');
+      expect(notify[0].data.message).toContain('SAT-200');
+      expect(notify[0].data.message).toContain('KHÔNG tự nới ngưỡng');
+    });
+
+    it('vẫn tự duyệt bình thường khi over_threshold=false trên mọi dòng feasible', async () => {
+      // Không được quá tay chặn cả ca hợp lệ - đối trọng với 2 test chặn ở trên, tránh regression
+      // kiểu "chặn nhầm mọi thứ". Mirror đúng mock của test "tự động duyệt ngay sau khi tính
+      // thành công" ở trên, chỉ thêm over_threshold: false tường minh.
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 50,
+          waste_percentage: 0.3,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            over_threshold: false,
+            total_bars: 8,
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [{ materialId: 200n, feasible: true, totalBars: 8 }],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+      prisma.material.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { id: 200n, code: 'SAT-200', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+        ]);
+
+      await invoke(2n, 1n, 'user-boss');
+
+      const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
+        { data: { status?: CuttingProposalStatus } },
+      ][];
+      expect(
+        updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.APPROVED),
+      ).toBeDefined();
+      expect(prisma.purchaseProposal.create).toHaveBeenCalled();
+    });
+
     it('KHÔNG tự duyệt lần 2 cho cùng một nhu cầu đã có phương án APPROVED (chặn "Tính lại" trừ kho + mua trùng)', async () => {
       // Nút "Tính lại" gửi Idempotency-Key mới mỗi lần bấm -> luôn sinh CuttingProposal MỚI. Tự
       // duyệt tiếp sẽ trừ tồn lần 2 (idempotencyKey bút toán khoá theo id phương án) và tạo
@@ -726,6 +885,42 @@ describe('CuttingProposalsService', () => {
       expect(materialIds).toEqual([200n, 300n]);
     });
 
+    it('chặn TRƯỚC khi gọi solver khi ngân sách thời gian xấu nhất vượt timeout HTTP client - đánh FAILED có lý do rõ, không để timeout mạng chung chung', async () => {
+      // Review 2026-08-18: time_limit_seconds là ngân sách CHO MỖI LOẠI SẮT (api/views.py truyền
+      // vào bên trong vòng lặp material_groups), không phải cho cả request. 2 loại sắt × 200s =
+      // 400s > timeout client 300s (mock mặc định) -> phải chặn TRƯỚC khi gọi, không để axios tự
+      // ngắt giữa chừng rồi báo lỗi mạng không ai hiểu vì sao.
+      prisma.pieceBom.findMany.mockResolvedValue([
+        pieceBomRow,
+        {
+          pieceId: 11n,
+          segmentSpecId: 101n,
+          qtyPerPiece: 2,
+          piece: { name: 'mảnh tựa' },
+          segmentSpec: { materialId: 300n, cutLengthMm: 840 },
+        },
+      ]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { pieceId: 10n, qtyPerUnit: 4 },
+        { pieceId: 11n, qtyPerUnit: 1 },
+      ]);
+      prisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
+        ...systemConfig,
+        solverTimeLimitSeconds: 200,
+      });
+
+      await invoke(2n, 1n);
+
+      expect(externalApiService.post).not.toHaveBeenCalled();
+      const failCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
+        { where: { id: bigint }; data: { status: CuttingProposalStatus; errorMessage: string } },
+      ];
+      expect(failCall[0].data.status).toBe(CuttingProposalStatus.FAILED);
+      expect(failCall[0].data.errorMessage).toContain('2 loại sắt');
+      expect(failCall[0].data.errorMessage).toContain('400s');
+      expect(failCall[0].data.errorMessage).toContain('300s');
+    });
+
     it('stores an infeasible material line without touching cutting_patterns', async () => {
       externalApiService.post.mockResolvedValue({
         status: 'success',
@@ -741,6 +936,84 @@ describe('CuttingProposalsService', () => {
       ];
       expect(lineCall[0].data.feasible).toBe(false);
       expect(prisma.cuttingProposalPattern.create).not.toHaveBeenCalled();
+    });
+
+    it('lưu NGUYÊN VĂN reason/best_achievable/timed_out/max_waste_pct_threshold cho dòng infeasible - và tính đúng hasInfeasibleLine (2026-08-19)', async () => {
+      // Trước 2026-08-19, 4 field này bị vứt bỏ hoàn toàn - FE chỉ hiện được "Không khả thi" trơ
+      // trọi, không nói được vì sao. Test này khẳng định đường lưu đã được nối.
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: { total_bars_all: 0, total_waste_mm: 0, waste_percentage: 0 },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: false,
+            timed_out: true,
+            best_achievable: { length: 6000, waste_pct: 2.4, bars: 5 },
+            reason: 'Hết 30s mà chưa liệt kê xong các kiểu cắt',
+            max_waste_pct_threshold: 1,
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      const lineCall = prisma.cuttingProposalLine.create.mock.calls[0] as unknown as [
+        {
+          data: {
+            reason?: string;
+            bestAchievable?: unknown;
+            timedOut?: boolean;
+            maxWastePctThreshold?: number;
+            overThreshold?: boolean;
+          };
+        },
+      ];
+      expect(lineCall[0].data.reason).toBe('Hết 30s mà chưa liệt kê xong các kiểu cắt');
+      expect(lineCall[0].data.bestAchievable).toEqual({ length: 6000, waste_pct: 2.4, bars: 5 });
+      expect(lineCall[0].data.timedOut).toBe(true);
+      expect(lineCall[0].data.maxWastePctThreshold).toBe(1);
+      expect(lineCall[0].data.overThreshold).toBeUndefined();
+
+      const proposalUpdateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
+        { data: { hasInfeasibleLine?: boolean; hasOverThreshold?: boolean } },
+      ];
+      expect(proposalUpdateCall[0].data.hasInfeasibleLine).toBe(true);
+      expect(proposalUpdateCall[0].data.hasOverThreshold).toBe(false);
+    });
+
+    it('lưu overThreshold/maxWastePctThreshold cho dòng feasible vượt ngưỡng - và tính đúng hasOverThreshold, KHÔNG lẫn với hasInfeasibleLine', async () => {
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: { total_bars_all: 8, total_waste_mm: 400, waste_percentage: 2.4 },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            over_threshold: true,
+            max_waste_pct_threshold: 1,
+            total_bars: 8,
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      const lineCall = prisma.cuttingProposalLine.create.mock.calls[0] as unknown as [
+        { data: { overThreshold?: boolean; maxWastePctThreshold?: number; reason?: string } },
+      ];
+      expect(lineCall[0].data.overThreshold).toBe(true);
+      expect(lineCall[0].data.maxWastePctThreshold).toBe(1);
+      expect(lineCall[0].data.reason).toBeUndefined();
+
+      const proposalUpdateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
+        { data: { hasInfeasibleLine?: boolean; hasOverThreshold?: boolean } },
+      ];
+      expect(proposalUpdateCall[0].data.hasInfeasibleLine).toBe(false);
+      expect(proposalUpdateCall[0].data.hasOverThreshold).toBe(true);
     });
 
     it('skips a pieces_breakdown segment whose size has no matching segmentSpec, without failing the rest', async () => {
@@ -1251,6 +1524,184 @@ describe('CuttingProposalsService', () => {
       expect(result.data[0].poNumber).toBe('PO-31-1');
       expect(result.data[0].salesOrderCode).toBe('PO-31');
       expect(result.data[0].mfgProductCode).toBe('SKU-1');
+    });
+  });
+
+  describe('computeDisplayStatus + lineDisplayReason (2026-08-19 - màn Cắt sắt hiển thị)', () => {
+    type DisplayParts = {
+      computeDisplayStatus: (proposal: {
+        status: CuttingProposalStatus;
+        hasInfeasibleLine: boolean;
+        hasOverThreshold: boolean;
+        completedAt: Date | null;
+        errorMessage: string | null;
+        requestedAt: Date;
+      }) => { displayStatus: string; displayReason: string | null };
+      lineDisplayReason: (line: {
+        feasible: boolean;
+        timedOut: boolean | null;
+        bestAchievable: unknown;
+        reason: string | null;
+        overThreshold: boolean | null;
+        maxWastePctThreshold: unknown;
+      }) => string | null;
+    };
+    const priv = () => service as unknown as DisplayParts;
+    const base = {
+      hasInfeasibleLine: false,
+      hasOverThreshold: false,
+      completedAt: null as Date | null,
+      errorMessage: null as string | null,
+      requestedAt: new Date(),
+    };
+
+    it('CALCULATING - status CALCULATING bất kể 2 cờ (còn trong TTL)', () => {
+      const r = priv().computeDisplayStatus({
+        ...base,
+        status: CuttingProposalStatus.CALCULATING,
+      });
+      expect(r).toEqual({ displayStatus: 'CALCULATING', displayReason: null });
+    });
+
+    it('NEEDS_ACTION - CALCULATING quá TTL (solver.timeoutSeconds=300 mock + 60s biên) -> nghi treo, KHÔNG chờ mãi', () => {
+      const r = priv().computeDisplayStatus({
+        ...base,
+        status: CuttingProposalStatus.CALCULATING,
+        requestedAt: new Date(Date.now() - 400_000), // > (300+60)s
+      });
+      expect(r.displayStatus).toBe('NEEDS_ACTION');
+      expect(r.displayReason).toContain('Nghi treo');
+    });
+
+    it('SUPERSEDED - giữ nguyên, không có displayReason', () => {
+      const r = priv().computeDisplayStatus({
+        ...base,
+        status: CuttingProposalStatus.SUPERSEDED,
+      });
+      expect(r.displayStatus).toBe('SUPERSEDED');
+    });
+
+    it('NEEDS_ACTION - FAILED dùng errorMessage đã lưu làm displayReason', () => {
+      const r = priv().computeDisplayStatus({
+        ...base,
+        status: CuttingProposalStatus.FAILED,
+        errorMessage: 'Solver timeout',
+      });
+      expect(r).toEqual({ displayStatus: 'NEEDS_ACTION', displayReason: 'Solver timeout' });
+    });
+
+    it('OK - APPROVED bất kể completedAt xa hay gần', () => {
+      const r = priv().computeDisplayStatus({
+        ...base,
+        status: CuttingProposalStatus.APPROVED,
+        completedAt: new Date(Date.now() - 999_000),
+      });
+      expect(r).toEqual({ displayStatus: 'OK', displayReason: null });
+    });
+
+    it('NEEDS_ACTION - DRAFT + hasInfeasibleLine, kể cả completedAt vừa xong (không lẫn với "đang hoàn tất")', () => {
+      const r = priv().computeDisplayStatus({
+        ...base,
+        status: CuttingProposalStatus.DRAFT,
+        hasInfeasibleLine: true,
+        completedAt: new Date(),
+      });
+      expect(r.displayStatus).toBe('NEEDS_ACTION');
+      expect(r.displayReason).toContain('không cắt được');
+    });
+
+    it('NEEDS_ACTION - DRAFT + hasOverThreshold (ưu tiên sau hasInfeasibleLine)', () => {
+      const r = priv().computeDisplayStatus({
+        ...base,
+        status: CuttingProposalStatus.DRAFT,
+        hasOverThreshold: true,
+        completedAt: new Date(),
+      });
+      expect(r.displayStatus).toBe('NEEDS_ACTION');
+      expect(r.displayReason).toContain('vượt ngưỡng');
+    });
+
+    it('CALCULATING - DRAFT, 2 cờ đều false, vừa hoàn tất <60s -> gộp vào CALCULATING chống nháy', () => {
+      const r = priv().computeDisplayStatus({
+        ...base,
+        status: CuttingProposalStatus.DRAFT,
+        completedAt: new Date(Date.now() - 5_000),
+      });
+      expect(r).toEqual({ displayStatus: 'CALCULATING', displayReason: null });
+    });
+
+    it('NEEDS_ACTION - DRAFT, 2 cờ đều false, hoàn tất đã lâu (>60s) -> ca priorApproved hiếm', () => {
+      const r = priv().computeDisplayStatus({
+        ...base,
+        status: CuttingProposalStatus.DRAFT,
+        completedAt: new Date(Date.now() - 120_000),
+      });
+      expect(r.displayStatus).toBe('NEEDS_ACTION');
+      expect(r.displayReason).toContain('đã có phương án khác được duyệt trước đó');
+    });
+
+    it('lineDisplayReason - timedOut ưu tiên trước best_achievable, KHÔNG gộp chung câu (15.5-b)', () => {
+      const msg = priv().lineDisplayReason({
+        feasible: false,
+        timedOut: true,
+        bestAchievable: { length: 6000, waste_pct: 2.4, bars: 5 },
+        reason: 'Hết giờ',
+        overThreshold: null,
+        maxWastePctThreshold: null,
+      });
+      expect(msg).toContain('Chưa kết luận được');
+      expect(msg).not.toContain('2.4');
+    });
+
+    it('lineDisplayReason - infeasible thật kèm best_achievable -> nêu con số cụ thể', () => {
+      const msg = priv().lineDisplayReason({
+        feasible: false,
+        timedOut: false,
+        bestAchievable: { length: 6000, waste_pct: 2.4, bars: 5 },
+        reason: 'Không đạt ngưỡng',
+        overThreshold: null,
+        maxWastePctThreshold: null,
+      });
+      expect(msg).toContain('2.40%');
+      expect(msg).toContain('6000mm');
+      expect(msg).toContain('5 cây');
+    });
+
+    it('lineDisplayReason - infeasible thật KHÔNG có best_achievable -> rơi về reason thô của solver', () => {
+      const msg = priv().lineDisplayReason({
+        feasible: false,
+        timedOut: false,
+        bestAchievable: null,
+        reason: 'Có đoạn dài hơn cây sắt',
+        overThreshold: null,
+        maxWastePctThreshold: null,
+      });
+      expect(msg).toBe('Có đoạn dài hơn cây sắt');
+    });
+
+    it('lineDisplayReason - feasible + overThreshold -> nêu ngưỡng, KHÔNG gợi ý nới ngưỡng', () => {
+      const msg = priv().lineDisplayReason({
+        feasible: true,
+        timedOut: null,
+        bestAchievable: null,
+        reason: null,
+        overThreshold: true,
+        maxWastePctThreshold: 1,
+      });
+      expect(msg).toContain('vượt ngưỡng hao hụt (1%)');
+      expect(msg).toContain('KHÔNG tự nới ngưỡng');
+    });
+
+    it('lineDisplayReason - feasible bình thường -> null (không cần xử lý)', () => {
+      const msg = priv().lineDisplayReason({
+        feasible: true,
+        timedOut: null,
+        bestAchievable: null,
+        reason: null,
+        overThreshold: false,
+        maxWastePctThreshold: 1,
+      });
+      expect(msg).toBeNull();
     });
   });
 
