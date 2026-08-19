@@ -16,6 +16,8 @@ import { CreateWeavingReceiptDto } from './dto/create-weaving-receipt.dto';
 import { WeavingAllocationItemResponseDto } from './dto/weaving-allocation-item-response.dto';
 import { WeavingIssuePlanItemResponseDto } from './dto/weaving-issue-plan-item-response.dto';
 import { WeavingIssueResponseDto } from './dto/weaving-issue-response.dto';
+import { WeavingPointAssignmentResponseDto } from './dto/weaving-point-assignment-response.dto';
+import { WeavingPointGroupResponseDto } from './dto/weaving-point-group-response.dto';
 import { WeavingReceiptResponseDto } from './dto/weaving-receipt-response.dto';
 
 // Mã đơn Sales gốc (hiển thị cột "PO" cho người dùng) - xem toIssueResponseDto/toReceiptResponseDto.
@@ -38,6 +40,34 @@ const WEAVING_RECEIPT_INCLUDE = {
 type WeavingIssueRow = Prisma.WeavingIssueGetPayload<{ include: typeof WEAVING_ISSUE_INCLUDE }>;
 type WeavingReceiptRow = Prisma.WeavingReceiptGetPayload<{
   include: typeof WEAVING_RECEIPT_INCLUDE;
+}>;
+
+// Cùng PRODUCTION_ORDER_WITH_SALES_CODE + tên sản phẩm (productLabel) - chỉ cần cho
+// findAllGroupedByPoint(), các hàm theo 1 PO ở trên không cần tên sản phẩm.
+const PRODUCTION_ORDER_WITH_SALES_CODE_AND_PRODUCT = {
+  include: {
+    productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+    mfgProduct: { select: { name: true } },
+  },
+} satisfies Prisma.ProductionOrderDefaultArgs;
+
+const WEAVING_ISSUE_BY_POINT_INCLUDE = {
+  productionOrder: PRODUCTION_ORDER_WITH_SALES_CODE_AND_PRODUCT,
+  piece: true,
+  weavingPoint: true,
+} satisfies Prisma.WeavingIssueInclude;
+
+const WEAVING_RECEIPT_BY_POINT_INCLUDE = {
+  productionOrder: PRODUCTION_ORDER_WITH_SALES_CODE_AND_PRODUCT,
+  piece: true,
+  weavingPoint: true,
+} satisfies Prisma.WeavingReceiptInclude;
+
+type WeavingIssueByPointRow = Prisma.WeavingIssueGetPayload<{
+  include: typeof WEAVING_ISSUE_BY_POINT_INCLUDE;
+}>;
+type WeavingReceiptByPointRow = Prisma.WeavingReceiptGetPayload<{
+  include: typeof WEAVING_RECEIPT_BY_POINT_INCLUDE;
 }>;
 
 /// Kho vật lý duy nhất liên quan - nơi khung chờ xuất/nhận về sau Đan, giữa phoi-son-han và
@@ -234,6 +264,67 @@ export class WeavingIssuesService {
         issuedQty,
         remainingToIssue: totalQty - issuedQty,
         allocations,
+      });
+    });
+  }
+
+  /** "Quản lý điểm đan" (thay WeavingService.getByPoint() mock) - gộp WeavingIssue+WeavingReceipt
+   *  theo weavingPointId qua MỌI production order, rồi theo (productionOrderId, pieceId) trong mỗi
+   *  điểm - cùng idiom in-memory group đã dùng ở getIssuePlan(), chỉ đổi trục gộp. Không paginate
+   *  (số điểm đan + số dòng đang giữ hàng còn nhỏ, cùng lý do getIssuePlan() cũng không paginate). */
+  async findAllGroupedByPoint(): Promise<WeavingPointGroupResponseDto[]> {
+    const [issues, receipts, points] = await Promise.all([
+      this.prisma.weavingIssue.findMany({ include: WEAVING_ISSUE_BY_POINT_INCLUDE }),
+      this.prisma.weavingReceipt.findMany({ include: WEAVING_RECEIPT_BY_POINT_INCLUDE }),
+      this.prisma.weavingPoint.findMany(),
+    ]);
+
+    const pointIds = new Set<string>([
+      ...issues.map((i) => i.weavingPointId.toString()),
+      ...receipts.map((r) => r.weavingPointId.toString()),
+    ]);
+
+    return [...pointIds].map((pointIdStr) => {
+      const point = points.find((p) => p.id.toString() === pointIdStr);
+      const pointIssues = issues.filter((i) => i.weavingPointId.toString() === pointIdStr);
+      const pointReceipts = receipts.filter((r) => r.weavingPointId.toString() === pointIdStr);
+
+      const assignmentKeys = new Set<string>([
+        ...pointIssues.map((i) => `${i.productionOrderId}-${i.pieceId}`),
+        ...pointReceipts.map((r) => `${r.productionOrderId}-${r.pieceId}`),
+      ]);
+
+      const assignments = [...assignmentKeys].map((key) => {
+        const assignIssues = pointIssues.filter(
+          (i) => `${i.productionOrderId}-${i.pieceId}` === key,
+        );
+        const assignReceipts = pointReceipts.filter(
+          (r) => `${r.productionOrderId}-${r.pieceId}` === key,
+        );
+        const sample: WeavingIssueByPointRow | WeavingReceiptByPointRow =
+          assignIssues[0] ?? assignReceipts[0];
+        const quantity = assignIssues.reduce((s, i) => s + i.qty, 0);
+        const completed = assignReceipts.reduce((s, r) => s + r.qty, 0);
+        return new WeavingPointAssignmentResponseDto({
+          poNumber:
+            sample.productionOrder.productionInvoiceItem.salesOrder?.code ??
+            sample.productionOrder.poNumber,
+          productLabel: sample.productionOrder.mfgProduct.name,
+          pieceCode: sample.piece.code,
+          pieceName: sample.piece.name,
+          quantity,
+          completed,
+          holding: quantity - completed,
+        });
+      });
+
+      return new WeavingPointGroupResponseDto({
+        id: pointIdStr,
+        code: point?.code ?? '',
+        fullName: point?.fullName ?? null,
+        phone: point?.phone ?? null,
+        totalHolding: assignments.reduce((s, a) => s + a.holding, 0),
+        assignments,
       });
     });
   }

@@ -21,7 +21,7 @@ describe('WeavingIssuesService', () => {
     };
     productionOrder: { findUnique: jest.Mock };
     piece: { findUnique: jest.Mock };
-    weavingPoint: { findUnique: jest.Mock };
+    weavingPoint: { findUnique: jest.Mock; findMany: jest.Mock };
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
   };
 
@@ -31,6 +31,7 @@ describe('WeavingIssuesService', () => {
     bomRevisionId: 5n,
     quantity: 10,
     productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+    mfgProduct: { name: 'Ghế xoay demo' },
   };
   const piece = { id: 20n, code: 'MANH-DAN', name: 'Mảnh Đan', isWoven: true };
   const weavingPoint = { id: 40n, code: 'DIEM-A', fullName: 'Điểm đan A', isActive: true };
@@ -84,7 +85,10 @@ describe('WeavingIssuesService', () => {
       },
       productionOrder: { findUnique: jest.fn().mockResolvedValue(order) },
       piece: { findUnique: jest.fn().mockResolvedValue(piece) },
-      weavingPoint: { findUnique: jest.fn().mockResolvedValue(weavingPoint) },
+      weavingPoint: {
+        findUnique: jest.fn().mockResolvedValue(weavingPoint),
+        findMany: jest.fn().mockResolvedValue([weavingPoint]),
+      },
       bomPiece: {
         findUnique: jest.fn().mockResolvedValue(bomPieceRow),
         findMany: jest.fn().mockResolvedValue([]),
@@ -373,6 +377,58 @@ describe('WeavingIssuesService', () => {
       expect(allocB?.issuedQty).toBe(20);
       expect(allocB?.receivedQty).toBe(0);
       expect(allocB?.remainingToReceive).toBe(20);
+    });
+  });
+
+  describe('findAllGroupedByPoint', () => {
+    it('trả về mảng rỗng khi chưa có WeavingIssue/WeavingReceipt nào', async () => {
+      const result = await service.findAllGroupedByPoint();
+      expect(result).toHaveLength(0);
+    });
+
+    it('gộp 1 (PO, mảnh) tại 1 điểm đan - quantity/completed/holding đúng', async () => {
+      prisma.weavingIssue.findMany.mockResolvedValue([{ ...issueRow, qty: 15 }]);
+      prisma.weavingReceipt.findMany.mockResolvedValue([{ ...receiptRow, qty: 5 }]);
+
+      const result = await service.findAllGroupedByPoint();
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('40');
+      expect(result[0].code).toBe('DIEM-A');
+      expect(result[0].assignments).toHaveLength(1);
+      expect(result[0].assignments[0].poNumber).toBe('PO-31'); // ưu tiên salesOrder.code
+      expect(result[0].assignments[0].productLabel).toBe('Ghế xoay demo');
+      expect(result[0].assignments[0].quantity).toBe(15);
+      expect(result[0].assignments[0].completed).toBe(5);
+      expect(result[0].assignments[0].holding).toBe(10);
+      expect(result[0].totalHolding).toBe(10);
+    });
+
+    it('tách riêng 2 điểm đan khác nhau, không lẫn assignment', async () => {
+      const pointB = { id: 41n, code: 'DIEM-B', fullName: 'Điểm đan B', phone: null };
+      prisma.weavingIssue.findMany.mockResolvedValue([
+        { ...issueRow, qty: 15 },
+        { ...issueRow, weavingPointId: 41n, weavingPoint: pointB, qty: 8 },
+      ]);
+      prisma.weavingPoint.findMany.mockResolvedValue([weavingPoint, pointB]);
+
+      const result = await service.findAllGroupedByPoint();
+      expect(result).toHaveLength(2);
+      const groupA = result.find((g) => g.id === '40')!;
+      const groupB = result.find((g) => g.id === '41')!;
+      expect(groupA.assignments).toHaveLength(1);
+      expect(groupA.totalHolding).toBe(15);
+      expect(groupB.assignments).toHaveLength(1);
+      expect(groupB.totalHolding).toBe(8);
+    });
+
+    it('fallback poNumber về ProductionOrder.poNumber khi không có salesOrder (PO gộp tự tạo)', async () => {
+      const orderNoSales = { ...order, productionInvoiceItem: { salesOrder: null } };
+      prisma.weavingIssue.findMany.mockResolvedValue([
+        { ...issueRow, productionOrder: orderNoSales },
+      ]);
+
+      const result = await service.findAllGroupedByPoint();
+      expect(result[0].assignments[0].poNumber).toBe('PO-31-1');
     });
   });
 });

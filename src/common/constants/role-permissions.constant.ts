@@ -265,6 +265,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.MATERIAL_ISSUE,
       actions: [PermissionAction.CREATE, PermissionAction.VIEW],
     },
+    // Xuất vật tư đóng gói (vat-tu-tp -> thanh-pham, 2026-08-19) - chỉ CREATE+VIEW, không có
+    // UPDATE vì không có bước "xác nhận nhận" riêng (cả kho nguồn lẫn đích đều là thủ kho, khác
+    // MATERIAL_ISSUE nơi tổ Hàn/Sơn là actor xác nhận riêng).
+    {
+      module: PERMISSION_MODULES.PACKAGING_ISSUE,
+      actions: [PermissionAction.CREATE, PermissionAction.VIEW],
+    },
     // Vá lỗ quyền có sẵn từ M2 "Chuyền kiểm" (2026-08-11, chưa từng cấp): thủ kho thành phẩm
     // cần VIEW+UPDATE trên PRODUCTION_INVOICE để gọi được GET/POST .../transfer-check VÀ
     // .../packaging (Đóng gói, Phase 10) - trước bản vá này chỉ QLSX/Sếp mới gọi được 2 nhóm
@@ -282,6 +289,16 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     {
       module: PERMISSION_MODULES.PRODUCTION_ORDER,
       actions: [PermissionAction.VIEW],
+    },
+    // 2026-08-19: WarehouseXuatPage scope 'thanh-pham' nối sang sales-orders thật (danh sách đơn
+    // hàng cần xuất + POST .../ship) thay MOCK - thủ kho thành phẩm là người xuất hàng cho khách
+    // ngoài, cần VIEW (liệt kê đơn + số lượng còn phải xuất) và UPDATE (gọi shipItem). Không có
+    // CREATE/DELETE - tạo/sửa đơn hàng vẫn là việc của SALES_STAFF, thủ kho chỉ ghi nhận đã xuất.
+    // Không scope theo warehouseScope (SalesOrdersService.shipItem() không tự enforce) - cùng mức
+    // rộng đã chấp nhận ở PURCHASE_PROPOSAL:VIEW phía trên, chưa có nhu cầu chặt hơn.
+    {
+      module: PERMISSION_MODULES.SALES_ORDER,
+      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
     // Vá lỗ quyền phát hiện qua browser thật 2026-08-14: InboundWarehouseApp.tsx cho đúng
     // scope 'vat-tu-tp' tab "Quản lý điểm đan" (QuanLyDiemDanPage -> WeavingPointsPage,
@@ -370,6 +387,14 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.QC_REVIEW,
       actions: [PermissionAction.VIEW],
     },
+    // Vá lỗ quyền phát hiện qua browser thật 2026-08-19: "Danh sách định mức mảnh"
+    // (PhoiDinhMucManhPage, đọc thật thay mock) gọi thẳng GET /skus - PHOI_STAFF/HAN_STAFF/
+    // SON_STAFF trước bản vá này không có SKU:VIEW nên 403 ngay từ lời gọi đầu (phát hiện qua
+    // Playwright, không phải chỉ đọc code). Chỉ VIEW - tạo/duyệt SKU vẫn là việc của KHSX/Sếp.
+    {
+      module: PERMISSION_MODULES.SKU,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // HAN_STAFF/SON_STAFF (Phase 9c+9d, 2026-08-11). MATERIAL_ISSUE: chỉ UPDATE+VIEW (POST
   // /material-issues/:id/receive, "tổ xác nhận nhận") - KHÔNG có CREATE, cấp vật tư là việc của
@@ -394,6 +419,11 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PRODUCTION_ORDER,
       actions: [PermissionAction.VIEW],
     },
+    // Cùng lý do đã cấp cho PHOI_STAFF - "Danh sách định mức mảnh" gọi GET /skus.
+    {
+      module: PERMISSION_MODULES.SKU,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   [BUSINESS_ROLES.SON_STAFF]: [
     {
@@ -407,6 +437,11 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     // Cùng lý do đã thêm cho HAN_STAFF ở trên.
     {
       module: PERMISSION_MODULES.PRODUCTION_ORDER,
+      actions: [PermissionAction.VIEW],
+    },
+    // Cùng lý do đã cấp cho PHOI_STAFF - "Danh sách định mức mảnh" gọi GET /skus.
+    {
+      module: PERMISSION_MODULES.SKU,
       actions: [PermissionAction.VIEW],
     },
   ],

@@ -46,6 +46,8 @@ export const PERMISSION_MODULES = {
   WEAVING_ISSUE: 'WEAVING_ISSUE',
   // --- Phase 9c (MES-B execution - vật tư tiêu hao Hàn/Sơn) ---
   MATERIAL_ISSUE: 'MATERIAL_ISSUE',
+  // --- 2026-08-19 (xuất vật tư đóng gói vat-tu-tp -> thanh-pham) ---
+  PACKAGING_ISSUE: 'PACKAGING_ISSUE',
   // --- Phase 9d (MES-B execution - sản lượng Hàn/Sơn) ---
   PRODUCTION_BATCH: 'PRODUCTION_BATCH',
 } as const;

@@ -45,6 +45,16 @@ export class WeavingIssuesController {
     return this.weavingIssuesService.getIssuePlan(id);
   }
 
+  // ─── Quản lý điểm đan - đọc gộp qua mọi PO ──────────────────────────────────
+  // Đặt TRƯỚC 'weaving-issues/:id' - route tĩnh phải khai trước route có tham số cùng tiền tố,
+  // nếu không Nest sẽ khớp "by-point" vào :id trước (findOne('by-point') sẽ 400/404 sai).
+
+  @Get('weaving-issues/by-point')
+  @RequirePermissions(VIEW)
+  findAllGroupedByPoint() {
+    return this.weavingIssuesService.findAllGroupedByPoint();
+  }
+
   @Get('weaving-issues/:id')
   @RequirePermissions(VIEW)
   findOne(@Param('id') id: string) {

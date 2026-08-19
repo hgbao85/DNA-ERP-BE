@@ -1020,6 +1020,295 @@
       assertion audit-log), <span class="mono-cell">tsc --noEmit</span> + <span class="mono-cell">
       eslint</span> sạch. Không đổi field/DTO nào FE đang đọc nên không cần đổi gì ở FE.
     </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-19 — "Xuất sắt trong phôi" (kho Phôi-Sơn-Hàn) redesign: gộp theo PI thay vì
+      theo mảnh.</b> Trước đây <span class="mono-cell">SteelIssue</span> neo theo
+      <span class="mono-cell">pieceId</span>+<span class="mono-cell">productionOrderId</span> (1 đợt xuất
+      = đúng 1 mảnh của 1 PO); nay bỏ hẳn <span class="mono-cell">pieceId</span>, đổi
+      <span class="mono-cell">productionOrderId</span>→<span class="mono-cell">productionInvoiceId</span>
+      (migration <span class="mono-cell">20260819021525_steel_issue_by_production_invoice</span>) — 1 đợt
+      xuất gộp theo <b>loại sắt + tổng số cây cho cả 1 PI</b> (1 PI có thể có nhiều SKU/PO). Lý do đổi: hệ
+      thống không biết trước cây sắt sẽ cắt cho mảnh nào, nên theo dõi "đúng 1 mảnh" là giả định sai với
+      thực tế xuất kho. <span class="mono-cell">steel-issues.service.ts::resolveRequiredSteps()</span> đổi
+      từ "công đoạn của đúng 1 mảnh" sang HỢP (union) công đoạn của mọi mảnh dùng material đó trong cả PI;
+      <span class="mono-cell">getIssuePlan()</span> cộng dồn theo mọi ProductionOrder/SKU thuộc PI.
+      <span class="mono-cell">qc-reviews.service.ts::fulfillReplenishRequest()</span> bỏ điều kiện cùng
+      <span class="mono-cell">pieceId</span>, chỉ còn cùng <span class="mono-cell">materialId</span>. Thêm
+      <span class="mono-cell">GET /production-invoices/:id/cutting-proposals</span>
+      (<span class="mono-cell">CuttingProposalsService.findAllForInvoice()</span>) để FE tra pattern đã
+      duyệt phủ cả PI khi Phôi báo cắt xong. FE viết lại <span class="mono-cell">
+      InboundWarehouse/XuatSatPage</span> (danh sách gộp SKU theo PI, kế hoạch phẳng theo vật tư, không
+      breakdown theo mảnh) qua <span class="mono-cell">steel-issues-api.ts</span> (mọi hàm đổi sang nhận
+      <span class="mono-cell">productionInvoiceId</span> thay vì <span class="mono-cell">Sku</span>/
+      <span class="mono-cell">productionOrderId</span>), và 4 màn báo cáo/theo dõi tiến độ Phôi phát hiện
+      giữa chừng khi grep toàn repo (ngoài phạm vi audit ban đầu chỉ nhắm 2 màn Phôi/KCS):
+      <span class="mono-cell">XacNhanSanLuongPage.tsx</span>, <span class="mono-cell">KcsPhoiPage.tsx</span>,
+      <span class="mono-cell">LenhSanXuatPhoi.tsx</span>, <span class="mono-cell">
+      ThongKeCongDoanPage.tsx</span>, <span class="mono-cell">LichSuNhanSatPage.tsx</span> — đổi group từ
+      <span class="mono-cell">pieceId</span>/<span class="mono-cell">productionOrderId</span> sang
+      <span class="mono-cell">materialId</span>/<span class="mono-cell">productionInvoiceId</span>.
+      <b>Đánh đổi có chủ đích:</b> <span class="mono-cell">
+      WarehouseTransfersService.getPieceTransferPlan()</span> (màn "Phân phối nội bộ" — <b>không nằm
+      trong "Phôi/KCS", suýt bị bỏ sót</b> lúc audit lần đầu) trước đây đếm số mảnh
+      <span class="mono-cell">needsHan=false</span> ("vật tư thành phẩm") đã xong bằng
+      <span class="mono-cell">SteelIssue.status=QC_PASSED</span> theo đúng <span class="mono-cell">
+      pieceId</span> — con số này không tính lại được nữa sau khi gộp theo PI. Vì dữ liệu thật xác nhận
+      <b>toàn bộ mảnh hiện có đều <span class="mono-cell">needsHan=true</span></b> (0 mảnh
+      <span class="mono-cell">needsHan=false</span> từng tồn tại), hàm này nay <b>chặn cứng bằng
+      <span class="mono-cell">ConflictException</span></b> nếu gặp mảnh loại đó thay vì âm thầm tính sai —
+      chặn an toàn cho 1 trường hợp chưa từng xảy ra, không phải mất tính năng đang dùng thật. Nếu sau này
+      có mảnh <span class="mono-cell">needsHan=false</span> thật, chỗ này phải thiết kế lại trước khi dùng.
+      562 test BE pass, <span class="mono-cell">tsc --noEmit</span> + <span class="mono-cell">eslint</span>
+      sạch cả 2 phía. Xem thẻ rủi ro mới ở mục 07 và dòng cập nhật ở mục 05 (<span class="mono-cell">
+      XuatSatPage</span>, <span class="mono-cell">LenhSanXuatPhoi</span>/<span class="mono-cell">
+      XacNhanSanLuongPage</span>/<span class="mono-cell">LichSuNhanSatPage</span>,
+      <span class="mono-cell">KcsPhoiPage</span>).
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-19 (cùng ngày, phiên riêng) — audit "còn chỗ nào mock" trên toàn FE, nối
+      thật những chỗ đủ điều kiện.</b> Xuất phát từ 1 agent quét toàn repo tìm nơi còn dùng mock,
+      đối chiếu BE đã có API tương ứng chưa — kết quả ban đầu quá lạc quan (báo "sẵn sàng nối ngay"
+      cho vài trang mà đọc kỹ mới thấy phức tạp hơn nhiều), nên mọi khu vực đều được đọc lại code
+      thật trước khi sửa, không tin thẳng báo cáo audit. 3 khu vực đã sửa xong:
+      <span class="mono-cell">WarehouseXuatPage</span> (scope <span class="mono-cell">thanh-pham</span>
+      nối <span class="mono-cell">sales-orders</span> thật qua <span class="mono-cell">shipItem()</span>,
+      kèm vá lỗ quyền <span class="mono-cell">WAREHOUSE_STAFF</span> thiếu <span class="mono-cell">
+      SALES_ORDER</span>; scope <span class="mono-cell">phoi-son-han</span> hoá ra đã thật từ trước,
+      chỉ dọn mock chết), <span class="mono-cell">XuatKhoPage</span> (phần "Xuất vật tư/thành phẩm"
+      đổi <span class="mono-cell">mockStock()</span> — hàm băm tên ra số giả — sang
+      <span class="mono-cell">stock-quant</span> thật theo <span class="mono-cell">materialId</span>),
+      <span class="mono-cell">VatTuDashboardPage</span> (bỏ hẳn cơ chế "Duyệt vật tư" giả — tự gán
+      trạng thái Đã duyệt/Từ chối theo chu kỳ cố định cho MỌI dòng kể cả dữ liệu thật, không lưu gì
+      thật — và vá 1 bug có sẵn từ trước: bấm dòng vật tư chưa từng mở được khung chi tiết). Xem
+      dòng cập nhật ở mục 04/05. Còn để ngỏ: scope <span class="mono-cell">vat-tu-tp</span>
+      (WarehouseXuatPage) và 2 mảng mock của VatTuDashboardPage — chưa xác định được nguồn thật
+      khớp 1:1; "Xuất thùng"/"Lịch sử xuất kho" (XuatKhoPage) nhiều khả năng trùng chức năng
+      <span class="mono-cell">KhoDongGoiPage</span> đã thật, chưa xác nhận. <span class="mono-cell">
+      tsc --noEmit</span> + <span class="mono-cell">eslint</span> sạch cả 2 phía sau mỗi bước.
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-19 (cùng ngày, phiên riêng thứ 3) — đóng nốt phần lớn "14/47": 6/7 khu
+      vực mock còn lại trong audit trên đã nối thật hoặc xoá hẳn, chia 3 đợt theo độ khó.</b>
+      <p style="margin:10px 0 0"><b>Đợt 1 (FE-only, API thật đã có sẵn):</b>
+      <span class="mono-cell">ThongKePagePlan.tsx</span> — bỏ hẳn <span class="mono-cell">
+      genExecutionStages()</span> hash giả, tiến độ 4 công đoạn Khung cơ khí/Đan/Chuyền kiểm/Đóng
+      gói nay đọc thật qua <span class="mono-cell">getSteelIssuesForInvoice/getProductionBatchPlan/
+      getWeavingIssuePlan/getTransferCheckPieces/getPackaging</span> (N+1 theo từng PO, chấp nhận
+      trade-off vì chưa có endpoint tổng hợp). <span class="mono-cell">XuatKhoPage.tsx</span> — bỏ
+      hẳn tab "Xuất thùng" (xác nhận đúng là bản trùng lặp yếu hơn <span class="mono-cell">
+      KhoDongGoiPage</span> như nghi ngờ ở callout trên), "Lịch sử xuất kho" đọc thật qua
+      <span class="mono-cell">GET /stock-ledger</span> (gộp 3 kho). <span class="mono-cell">
+      VatTuDashboardPage.tsx</span> — <span class="mono-cell">MOCK_THANH_PHAM</span> thay bằng
+      <span class="mono-cell">getPackaging()</span> thật (SKU có <span class="mono-cell">
+      packedQty&gt;0</span>); <span class="mono-cell">MOCK_VAT_TU_THANH_PHAM</span> vẫn còn mock
+      (xem đợt 3).</p>
+      <p style="margin:10px 0 0"><b>Đợt 2:</b> "Mục đích xuất" (Admin) — hỏi lại thì phát hiện
+      danh mục này không được form/trang nào khác trong hệ thống đọc tới (rà toàn repo xác nhận) —
+      <b>xoá hẳn</b> (trang, tab, mock service, seed) thay vì xây CRUD thật, theo đúng quyết định
+      của người vận hành. "Quản lý điểm đan" — thêm route mới
+      <span class="mono-cell">GET /weaving-issues/by-point</span> (đặt trước
+      <span class="mono-cell">weaving-issues/:id</span> để không bị route param nuốt mất), gộp
+      <span class="mono-cell">WeavingIssue</span>+<span class="mono-cell">WeavingReceipt</span>
+      in-memory theo điểm đan rồi theo (PO, mảnh) — cùng idiom
+      <span class="mono-cell">getIssuePlan()</span> đã dùng, không cần migration.</p>
+      <p style="margin:10px 0 0"><b>Đợt 3 — "Danh sách định mức mảnh" + xuất vật tư đóng gói (2
+      khu vực còn lại, người dùng thật là tổ Phôi/Hàn/Sơn/Giám đốc và thủ kho
+      <span class="mono-cell">vat-tu-tp</span>, khác "Mục đích xuất" không ai đọc):</b> định mức
+      mảnh hoá ra <b>không cần BE mới</b> — <span class="mono-cell">GET /skus</span> đã trả về
+      đúng dữ liệu thật qua <span class="mono-cell">manhData.pieces[].children</span> (sắt, gộp
+      theo mảnh) và <span class="mono-cell">quotaManagement.materialType.daySon</span> (sơn, theo
+      SKU — bỏ cột "Tên mảnh" ở tab Sơn vì định mức sơn không gắn với 1 mảnh cụ thể trong dữ liệu
+      thật, khác giả định của mock cũ), tự tái dựng từ <span class="mono-cell">PieceBom</span>+
+      <span class="mono-cell">SegmentSpec</span>/<span class="mono-cell">ConsumableBom</span> mỗi
+      lần đọc (<span class="mono-cell">skus.service.ts#reconstructQuotaBatch</span>). Xuất vật tư
+      đóng gói (<span class="mono-cell">vat-tu-tp</span>) ban đầu tưởng cần model theo dõi hoàn
+      toàn mới (agent research đầu tiên kết luận vậy, vì <span class="mono-cell">
+      WarehouseTransferItem</span> chung không có FK PO/PI và <span class="mono-cell">
+      baoBiDongGoi.materialId</span> phía FE JSON là optional) — đào sâu thêm phát hiện <b>đã có
+      sẵn bảng BOM thật</b> đúng việc này: <span class="mono-cell">BomAccessoryItem</span>
+      (<span class="mono-cell">kind=PACKAGING</span>) với <span class="mono-cell">materialId</span>
+      là FK <b>bắt buộc</b> (field optional phía FE JSON chỉ là hạn chế của kiểu dữ liệu tái dựng,
+      không phản ánh thực tế — xác nhận qua <span class="mono-cell">skus.service.ts:1056-1064</span>).
+      Vẫn cần model mới vì <span class="mono-cell">WarehouseTransferItem</span> không có cột PO/PI,
+      nhưng module <span class="mono-cell">packaging-issues</span> mới (migration
+      <span class="mono-cell">20260819072115_add_packaging_issues</span>, model
+      <span class="mono-cell">PackagingIssue</span> — không state machine ISSUED→RECEIVED khác
+      <span class="mono-cell">MaterialIssue</span>, vì cả kho nguồn <span class="mono-cell">
+      vat-tu-tp</span> lẫn đích <span class="mono-cell">thanh-pham</span> đều là thủ kho, không có
+      tổ sản xuất nào cần xác nhận nhận riêng — ghi StockLedger <span class="mono-cell">
+      PACKAGING_ISSUE</span> ngay lúc xuất) clone gần như nguyên vẹn 2 template có sẵn:
+      <span class="mono-cell">material-issues</span> (issue+ledger) và
+      <span class="mono-cell">WarehouseTransfersService.getPieceTransferPlan()</span> (endpoint
+      "plan" gộp nhiều PO 1 lần — <span class="mono-cell">GET /packaging-issues/plan?
+      productionOrderIds=</span>, đúng shape <span class="mono-cell">WarehouseXuatPage.tsx</span>
+      scope <span class="mono-cell">vat-tu-tp</span> cần, thay hẳn <span class="mono-cell">MOCK
+      </span> cũ). Quyền <span class="mono-cell">PACKAGING_ISSUE:CREATE,VIEW</span> cấp cho
+      <span class="mono-cell">WAREHOUSE_STAFF</span> (mirror đúng grant <span class="mono-cell">
+      MATERIAL_ISSUE</span> đã có).</p>
+      <p style="margin:10px 0 0"><b>Còn lại (chưa làm, ngoài phạm vi phiên này):</b>
+      <span class="mono-cell">MOCK_VAT_TU_THANH_PHAM</span> (VatTuDashboardPage) — về nguyên tắc
+      giờ có thể nối qua <span class="mono-cell">BomAccessoryItem kind=PACKAGING</span> vừa lộ ra
+      ở đợt 3, nhưng chưa làm; "Nhập kho tay" (Manufacturing, nêu ở thẻ thống kê dưới) — không rà
+      lại trong phiên này, trạng thái mock/thật chưa xác nhận; <span class="mono-cell">
+      AuditLogPage</span>/<span class="mono-cell">SystemStatusPage</span>/route
+      <span class="mono-cell">demo-ton-kho</span> — cố ý giữ mock (không đổi).</p>
+      <p style="margin:10px 0 0">Xác nhận qua: BE <span class="mono-cell">nest build</span> sạch +
+      <b>580/580 test Jest pass</b> (566 cũ + 14 test mới cho <span class="mono-cell">
+      packaging-issues</span>/<span class="mono-cell">weaving-issues.findAllGroupedByPoint</span>),
+      <span class="mono-cell">eslint</span> sạch; FE <span class="mono-cell">tsc --noEmit</span> +
+      <span class="mono-cell">eslint</span> + <span class="mono-cell">next build</span> sạch cả 3
+      đợt. <span class="mono-cell">npx vitest run</span> phát hiện <b>18 test đã fail từ trước</b>
+      (<span class="mono-cell">src/services/purchasing-api.test.ts</span>, toàn bộ liên quan
+      <span class="mono-cell">chosenQuoteIdByItemId</span>/<span class="mono-cell">
+      receiveProposalItem</span>) — xác nhận qua <span class="mono-cell">git stash</span> là <b>có
+      từ trước phiên này</b> (không phải do các thay đổi trên gây ra), khả năng liên quan tới các
+      file đã sửa dở từ phiên trước (<span class="mono-cell">sales-orders-api.ts</span>/
+      <span class="mono-cell">stock-api.ts</span> đang có thay đổi chưa commit) — <b>chưa điều
+      tra/sửa, để lại làm nợ kỹ thuật cần xử lý riêng</b>, xem thẻ rủi ro mục 07.</p>
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-19 (cùng ngày, xác nhận qua browser thật) — 2 bug thật phát hiện + vá
+      ngay, đúng giá trị của việc lái qua UI thay vì chỉ tin tsc/lint/build/test.</b> Dựng BE+FE
+      local (Playwright headless, không có <span class="mono-cell">chromium-cli</span> nên tự viết
+      script đăng nhập 5 tài khoản demo — <span class="mono-cell">khovttp/phoi/han/son/qlsx</span>,
+      demo1234), bắt console error + network ≥400 ở từng bước.
+      <p style="margin:10px 0 0"><b>(1) PHOI_STAFF/HAN_STAFF/SON_STAFF thiếu SKU:VIEW —
+      "Danh sách định mức mảnh" (Việc 6, đợt 3 callout trên) 403 ngay từ lần tải đầu.</b> Trang mới
+      gọi thẳng <span class="mono-cell">GET /skus</span> nhưng chưa từng kiểm tra 3 role này có
+      quyền hay không — đúng lỗ hổng đã lặp lại rất nhiều lần trong roadmap (mỗi domain mới nối FE
+      lại thiếu đúng 1 quyền VIEW). Đã thêm <span class="mono-cell">SKU:VIEW</span> cho cả 3 role
+      trong <span class="mono-cell">role-permissions.constant.ts</span> + chạy lại
+      <span class="mono-cell">npm run seed</span>, xác nhận lại qua browser thật: cả 3 tài khoản
+      load sạch, dữ liệu thật hiện đúng (Phôi/Hàn 35 dòng theo mảnh, Sơn 6 dòng theo SKU).</p>
+      <p style="margin:10px 0 0"><b>(2) getPackaging()/getTransferCheckPieces() dùng nhầm
+      pf.productionInvoiceId khi SKU resolve qua fallback mfgProductId — ra "/production-invoices/
+      undefined/items/…" (400).</b> Bug có từ trước (không phải do phiên này gây ra), nhưng trước
+      đây ít lộ vì 2 hàm này chỉ gọi tương tác theo đúng 1 SKU người dùng chọn (KhoDongGoiPage/
+      KhoChuyenKiemPage) — <span class="mono-cell">VatTuDashboardPage</span> (Việc 3, đợt 1) gọi
+      <span class="mono-cell">getPackaging()</span> LẶP qua MỌI SKU nên bắt trúng ngay 1 SKU tạo
+      độc lập (không gắn Sales Order lúc tạo, resolve qua fallback — xem comment đầu
+      <span class="mono-cell">production-invoice-item.ts</span>). Gốc vấn đề:
+      <span class="mono-cell">resolveProductionInvoiceItemId()</span> chỉ trả về
+      <span class="mono-cell">itemId</span>, buộc 2 file gọi phải tự ghép
+      <span class="mono-cell">pf.productionInvoiceId</span> (null ở nhánh fallback) vào URL. Đã
+      thêm <span class="mono-cell">resolveProductionInvoiceRef()</span> (trả cả
+      <span class="mono-cell">productionInvoiceId</span> thật lấy từ
+      <span class="mono-cell">ProductionOrder.productionInvoiceId</span> — vốn đã có sẵn trong
+      response <span class="mono-cell">GET /production-orders</span>, trước đó bị bỏ phí) và đổi
+      <span class="mono-cell">packaging-api.ts</span>/<span class="mono-cell">
+      transfer-check-api.ts</span> dùng hàm mới thay vì tự ghép field. Xác nhận qua browser thật:
+      hết 400, 0 console error.</p>
+      <p style="margin:10px 0 0">Xác nhận lại toàn bộ sau 2 bản vá: BE
+      <span class="mono-cell">nest build</span> sạch + <b>580/580 test Jest pass</b>; FE
+      <span class="mono-cell">tsc --noEmit</span>/<span class="mono-cell">eslint</span>/
+      <span class="mono-cell">next build</span> sạch. Đã tắt 2 server thử nghiệm và dọn script tạm
+      sau khi xác nhận xong.</p>
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-19 (cùng ngày, đợt cuối) — lái thật luồng GHI (POST) của
+      packaging-issues qua UI, không chỉ luồng đọc.</b> Đợt xác nhận trước chỉ mới bấm qua các
+      trang xem danh sách; đợt này bấm thật nút "Xác nhận" ở <span class="mono-cell">
+      WarehouseXuatPage</span> scope <span class="mono-cell">vat-tu-tp</span> (tài khoản
+      <span class="mono-cell">khovttp</span>, PO-31, vật tư <span class="mono-cell">VTK-042 — Bì
+      zipper</span>, số lượng 1) — xác nhận trọn vẹn: <span class="mono-cell">POST
+      production-orders/27/packaging-issues</span> trả <b>201</b>, dòng chuyển "Đã xong" ngay lập
+      tức (không có bước chờ riêng), 0 console error. Đối chiếu trực tiếp qua DB: bản ghi
+      <span class="mono-cell">PackagingIssue</span> #1 (<span class="mono-cell">materialCode=
+      VTK-042, issuedQty=1</span>) và <span class="mono-cell">StockLedger</span>
+      (<span class="mono-cell">vat-tu-tp → thanh-pham, refType=PACKAGING_ISSUE, refId=1</span>) đều
+      đã ghi đúng.
+      <p style="margin:10px 0 0"><b>1 bug thật phát hiện thêm, đã vá ngay:</b> banner hướng dẫn
+      phía trên bảng ("Bấm 'Xác nhận' sẽ tạo phiếu chuyển kho nội bộ... tồn kho chỉ cập nhật sau
+      khi kho nhận xác nhận") dùng chung điều kiện <span class="mono-cell">isInternalChain</span>
+      cho cả 3 scope — sai cho <span class="mono-cell">vat-tu-tp</span> vì packaging-issues KHÔNG
+      qua state machine PENDING/CONFIRMED của <span class="mono-cell">warehouse-transfers</span>
+      như 2 chặng còn lại (tồn kho đổi ngay, đã tự chứng minh qua chính lần bấm thử ở trên — "Còn
+      lại" về 0 tức thì, không có bước chờ nào). Đã tách riêng banner cho
+      <span class="mono-cell">isPackagingScope</span> ("...sẽ ghi nhận đã xuất... ngay lập tức"),
+      xác nhận lại qua browser thật: nội dung đúng, 0 console error. Bonus: cùng lần xác nhận này
+      lộ ra số lượng thập phân hiển thị đúng (<span class="mono-cell">0,006 cuộn</span> màng PE) -
+      xác nhận <span class="mono-cell">Decimal(14,4)</span> chạy đúng suốt từ BE tới UI.</p>
+      <p style="margin:10px 0 0">Xác nhận lại lần cuối: FE <span class="mono-cell">tsc --noEmit
+      </span>/<span class="mono-cell">eslint</span>/<span class="mono-cell">next build</span>
+      sạch. <b>Tới đây, packaging-issues (Việc 7) đã xác nhận đầy đủ cả đọc lẫn ghi qua UI thật +
+      DB thật — không còn phần nào của "14/47" chỉ dừng ở tsc/lint/build/unit-test.</b></p>
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-19 (cùng ngày, đợt cuối cùng) — điều tra và vá 18 test
+      purchasing-api.test.ts đã fail từ trước (nợ ghi ở thẻ rủi ro mục 07): file test cũ, không
+      phải file thật.</b> Đối chiếu lịch sử qua <span class="mono-cell">git log</span> xác nhận
+      <span class="mono-cell">purchasing-api.ts</span> (implementation) đã trải qua nhiều lần tối
+      ưu hoá thật, tài liệu đầy đủ trong chính comment đầu file (A5 "bỏ N+1 detail fetch"
+      2026-08-15, đọc <span class="mono-cell">itemId</span> thẳng từ
+      <span class="mono-cell">proposal.items</span> thay vì gọi API riêng để dịch
+      <span class="mono-cell">materialId→itemId</span>...) nhưng
+      <span class="mono-cell">purchasing-api.test.ts</span> chưa từng cập nhật theo các lần tối ưu
+      đó — mock vẫn theo đúng hành vi CŨ (list rồi fetch chi tiết từng bản ghi riêng, gọi API dịch
+      itemId trước mỗi action). Gốc thứ 2 (tinh vi hơn): fixture
+      <span class="mono-cell">feProposal()</span> thiếu hẳn field <span class="mono-cell">
+      itemId</span> trên item — khiến <span class="mono-cell">beItemIdsByMaterialId()</span> (đọc
+      thuần từ field này theo đúng thiết kế A5) luôn trả về map rỗng, mọi action
+      (submit/approve/receive) coi như "không dịch được item nào" nên bỏ qua toàn bộ thao tác thật
+      sự cần làm. Kèm theo: file dùng <span class="mono-cell">vi.clearAllMocks()</span> (chỉ xoá
+      lịch sử gọi, KHÔNG xoá hàng đợi <span class="mono-cell">mockResolvedValueOnce</span> chưa
+      tiêu thụ hết) khiến giá trị mock thừa của 1 test bị lỗi rò rỉ sang test kế tiếp, gây lỗi khó
+      hiểu ở xa nơi thật sự sai (vd 1 test đơn giản như <span class="mono-cell">rejectProposal
+      </span> báo sai status dù mock của chính nó hoàn toàn đúng).
+      <p style="margin:10px 0 0"><b>Đã vá:</b> viết lại toàn bộ 22 test theo đúng hành vi thật hiện
+      tại (list đã có sẵn <span class="mono-cell">items</span>, không cần fetch chi tiết riêng;
+      action đọc <span class="mono-cell">itemId</span> thẳng từ <span class="mono-cell">
+      proposal.items</span>, không gọi GET dịch trước) - <b>giữ nguyên toàn bộ ý định gốc</b> của
+      từng test (các bug ID <span class="mono-cell">D.p6-quote-key-collision</span>/
+      <span class="mono-cell">D.risk1-fix</span>/<span class="mono-cell">D.h3-quote-id-not-name
+      </span> vẫn còn giá trị regression thật, chỉ đổi cách dựng mock cho khớp code hiện tại,
+      không đổi cái gì test đang bảo vệ). Thêm <span class="mono-cell">itemId</span> vào fixture
+      <span class="mono-cell">feProposal()</span>. Đổi <span class="mono-cell">
+      vi.clearAllMocks()</span> → <span class="mono-cell">vi.resetAllMocks()</span> để tránh rò rỉ
+      mock giữa các test về sau. Không đụng <span class="mono-cell">purchasing-api.ts</span> (file
+      thật, đã đúng) - chỉ sửa file test.</p>
+      <p style="margin:10px 0 0">Xác nhận: <b>36/36 test vitest pass</b> (0 fail, không giảm số
+      lượng test - chỉ sửa cách mock), <span class="mono-cell">tsc --noEmit</span>/
+      <span class="mono-cell">eslint</span>/<span class="mono-cell">next build</span> sạch. Thẻ
+      rủi ro mục 07 cập nhật thành đã đóng.</p>
+    </div>
+    <div class="callout" style="margin-top:14px">
+      <b>Cập nhật 2026-08-19 (cùng ngày, phiên thứ 4) — đóng nốt 2 mục còn treo: "Nhập kho tay" và
+      <span class="mono-cell">MOCK_VAT_TU_THANH_PHAM</span>. Khu vực "Xuất kho — Tổng kho" xác định
+      không áp dụng cho nghiệp vụ thật.</b>
+      <p style="margin:10px 0 0"><b>"Nhập kho tay" (Manufacturing, còn treo từ "14/47" cũ) — đọc
+      hết <span class="mono-cell">NhapKhoPage.tsx</span>: đã thật 100%, không cần sửa.</b> Toàn bộ
+      dữ liệu đến từ <span class="mono-cell">useInspection()</span> (context bọc
+      <span class="mono-cell">PurchaseProposal</span> thật, cùng nguồn vừa vá test ở phiên trước),
+      <span class="mono-cell">getMaterials()</span>/<span class="mono-cell">getWarehouses()</span>
+      gọi API thật, hành động nhận hàng dùng thẳng <span class="mono-cell">receiveProposalItem()
+      </span> thật. Grep <span class="mono-cell">InternalTransferSections.tsx</span> (import cùng
+      trang) cũng 0 kết quả "mock". Đóng, không phải nợ kỹ thuật.</p>
+      <p style="margin:10px 0 0"><b>"Xuất kho — Tổng kho" (<span class="mono-cell">XuatKhoPage</span>
+      scope <span class="mono-cell">warehouseScope=null</span>) — hỏi lại người vận hành: hệ thống
+      thật <b>không có vai trò "thủ kho tổng"</b>.</b> <span class="mono-cell">warehouseScope</span>
+      là field tự do trên <span class="mono-cell">User</span>, khi rỗng UI hiện tiêu đề "Thủ kho
+      (tổng)" và route sang bản <span class="mono-cell">XuatKhoPage</span> gộp nhiều kho — nhưng
+      không tài khoản demo nào seed theo hướng này, và người vận hành xác nhận nghiệp vụ thật không
+      có vai trò đó. Đóng lại: không seed thêm tài khoản, không sửa code — nhánh này chỉ tin
+      <span class="mono-cell">tsc</span>/<span class="mono-cell">eslint</span>/
+      <span class="mono-cell">next build</span> (đã sạch), không có người dùng thật nào chạm tới.</p>
+      <p style="margin:10px 0 0"><b><span class="mono-cell">MOCK_VAT_TU_THANH_PHAM</span>
+      (<span class="mono-cell">VatTuDashboardPage.tsx</span>, khu vực dở dang cuối cùng) — nối thật
+      qua đúng module <span class="mono-cell">packaging-issues</span> vừa ship ở phiên trước.</b>
+      Thay mảng 7 dòng cứng bằng <span class="mono-cell">api.listProductionOrdersForStage()</span> +
+      <span class="mono-cell">api.getPackagingIssuePlan(ids)</span> (cùng cách gọi
+      <span class="mono-cell">WarehouseXuatPage.tsx</span> scope <span class="mono-cell">vat-tu-tp
+      </span> dùng để xuất), chỉ hiện dòng có <span class="mono-cell">issuedQty&gt;0</span> — đúng
+      tinh thần "Thành phẩm" (Việc 3, đợt 1) đã chuyển từ định mức sang số đã actioned thật. Xác
+      nhận qua browser thật (Playwright, tài khoản <span class="mono-cell">boss</span>): tab "Vật
+      tư thành phẩm" hiện đúng 1 dòng thật — <span class="mono-cell">Bì zipper / VTK-042 / Cái / 1
+      </span>, khớp 100% với bản ghi <span class="mono-cell">PackagingIssue</span> đã ghi ở phiên
+      xác nhận luồng GHI trước đó — 0 console error, 0 network error.</p>
+      <p style="margin:10px 0 0">Xác nhận: FE <span class="mono-cell">tsc --noEmit</span>/
+      <span class="mono-cell">eslint</span>/<span class="mono-cell">next build</span> sạch (không
+      lỗi mới, chỉ còn cảnh báo <span class="mono-cell">any</span> có từ trước). <b>Tới đây, toàn bộ
+      "14/47" gốc đã đóng — không còn mục nào ở trạng thái "chưa rõ mock hay thật".</b></p>
+    </div>
   </div>
 </div>
 
@@ -1028,9 +1317,9 @@
     <span class="stat-num">30 / 30</span>
     <span class="stat-label">Module backend đã có code chạy được — không module nào còn là stub (module mới nhất 2026-08-12: material-inspection — Kiểm tra vật tư trước sản xuất)</span>
   </div>
-  <div class="stat-tile" style="--stat-color:var(--mock)">
-    <span class="stat-num">14 / 47</span>
-    <span class="stat-label">Nhóm trang frontend vẫn chạy 100% mock — tập trung gần hết ở khối sản xuất tại xưởng. <b>M3 hoàn tất 7/7 domain 2026-08-13</b> (Đóng gói, Kiểm tra vật tư, Phân bổ/nhận hàng đan, Xuất vật tư tiêu hao, Sản lượng theo công đoạn, QC Hàn/Sơn — 2026-08-12; Xuất sắt Phôi — 2026-08-13). <b>KhoPhoiPage (nợ riêng cuối cùng) đã nối FE và xác nhận qua browser thật 2026-08-14</b> — xem callout đầu trang. Phần mock còn lại: Nhập/Xuất kho tay (Manufacturing), PhoiDinhMucManhPage, VatTuDashboardPage (mixed), AuditLogPage/SystemStatusPage (Admin, cố ý giữ)</span>
+  <div class="stat-tile" style="--stat-color:var(--done)">
+    <span class="stat-num">0 / 10</span>
+    <span class="stat-label">Nhóm trang frontend còn mock CẦN LÀM, đếm theo phương pháp audit riêng (<span class="mono-cell">docs/audit-2026-08-14-mock-data-ui.html</span>, 10 khu vực — đã thay hẳn con số "14/47" đo kiểu cũ, xem lịch sử bên dưới). <b>Cập nhật 2026-08-19 (phiên thứ 4, xem callout đầu trang):</b> 7/7 khu vực "gap" đã xong — <span class="mono-cell">ThongKePagePlan</span>, <span class="mono-cell">XuatKhoPage</span> (cả "Xuất vật tư/thành phẩm" lẫn "Lịch sử xuất kho"; "Xuất thùng" xoá hẳn vì trùng <span class="mono-cell">KhoDongGoiPage</span>), <span class="mono-cell">PhoiDinhMucManhPage</span>, "Quản lý điểm đan", <span class="mono-cell">WarehouseXuatPage</span> (cả 3 scope), "Mục đích xuất" (xoá hẳn, không ai dùng), <span class="mono-cell">VatTuDashboardPage</span> (<span class="mono-cell">MOCK_VAT_TU_THANH_PHAM</span> nối thật qua <span class="mono-cell">getPackagingIssuePlan()</span>, xác nhận qua browser thật). "Nhập kho tay" (danh sách cũ "14/47") xác nhận đã thật từ trước, không cần sửa. "Xuất kho — Tổng kho" (<span class="mono-cell">warehouseScope=null</span>) xác nhận không có vai trò "thủ kho tổng" trong nghiệp vụ thật — đóng, không seed/sửa gì. 3 khu vực còn lại của audit là <b>cố ý</b> giữ mock (không tính là nợ): <span class="mono-cell">AuditLogPage</span>/<span class="mono-cell">SystemStatusPage</span> (Admin), route <span class="mono-cell">demo-ton-kho</span> (không có trong menu).</span>
   </div>
   <div class="stat-tile" style="--stat-color:var(--done)">
     <span class="stat-num">0</span>
@@ -1146,7 +1435,7 @@
             <tr><td class="mono">ProductionPlan/SKUListPage · SKUReviewPage · SKUDetail</td><td class="status"><span class="pill pill-done">real</span></td><td class="note">Toàn bộ state machine duyệt SKU 8 bước chạy API thật, không còn mảng mock.</td></tr>
             <tr><td class="mono">ProductionPlan/LenhSXPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note">Luồng gửi KHSX→QLSX→Boss cho Lệnh sản xuất, đầy đủ và phân quyền đúng theo vai trò.</td></tr>
             <tr><td class="mono">Manufacturing/Spec* <span class="h3-note">(SteelPage, DetailQuotaPage, AccessoryCatalogPage)</span></td><td class="status"><span class="pill pill-done">real</span></td><td class="note">Nhập định mức sắt/sơn/phụ kiện/bao bì, ghi thẳng vào Sku.manhData qua sku-api.</td></tr>
-            <tr><td class="mono">ProductionPlan/VatTuDashboardPage</td><td class="status"><span class="pill pill-mixed">mixed</span></td><td class="note">Danh sách vật tư lấy từ Sku thật, nhưng có 2 mảng MOCK_THANH_PHAM/MOCK_VAT_TU_THANH_PHAM cố định luôn được cộng vào kết quả; duyệt/từ chối trong drawer chỉ lưu useState — mất khi refresh.</td></tr>
+            <tr><td class="mono">ProductionPlan/VatTuDashboardPage</td><td class="status"><span class="pill pill-mixed">mixed</span></td><td class="note">Danh sách vật tư lấy từ Sku thật; tab "Mảnh chưa đan"/"Mảnh đã đan" cũng đã thật từ trước (<span class="mono-cell">getMfgWarehouses</span>/<span class="mono-cell">getMfgWarehouseItems</span>/<span class="mono-cell">getManhOrders</span>) dù bị ép kiểu <span class="mono-cell">(api as any)</span>. Vẫn còn 2 mảng <span class="mono-cell">MOCK_THANH_PHAM</span>/<span class="mono-cell">MOCK_VAT_TU_THANH_PHAM</span> cố định — chưa xác định được nguồn thật khớp 1:1. <b>Sửa 2026-08-19:</b> phát hiện + bỏ hẳn cơ chế "Duyệt vật tư" giả — <span class="mono-cell">useEffect</span> tự gán APPROVED/PROPOSED/REJECTED theo 1 chu kỳ cố định cho MỌI dòng (kể cả dữ liệu thật) ngay lúc mount, nút Duyệt/Từ chối chỉ đổi <span class="mono-cell">useState</span> cục bộ, không gọi API, mất khi tải lại — trông như đã duyệt thật nhưng không ai duyệt gì cả. Tiện thể vá 1 bug có sẵn từ trước (không liên quan mock): bấm vào 1 dòng vật tư trong bảng chưa từng mở được khung chi tiết (thiếu <span class="mono-cell">onClick</span> gọi <span class="mono-cell">openDetail(item)</span> trên <span class="mono-cell">&lt;tr&gt;</span>).</td></tr>
             <tr><td class="mono">ProductionPlan/KiemTraVatTuPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-12:</b> module <span class="mono-cell">material-inspection</span> (tạo/xem Lệnh kiểm tra vật tư, neo vào <span class="mono-cell">PlanForm origin=PRODUCTION_CONFIRM</span>, "Bắt đầu sản xuất" chặn nếu chưa đủ 3 kho xác nhận) đúng thay thế <span class="mono-cell">InspectionContext.requests</span> (SEED_REQUESTS). Cả bản ProductionPlan lẫn <span class="mono-cell">InboundWarehouse/KiemTraVatTuPage</span> (dùng chung component qua <span class="mono-cell">inspKhoKey</span>) đều đã nối; trang kho bỏ hẳn <span class="mono-cell">mockStock()</span>, chỉ còn nhập tay tồn cho dòng không có <span class="mono-cell">materialId</span> (hiếm), còn lại BE tự đọc StockQuant. Kèm <span class="mono-cell">purchasing-api.ts#createProposalFromInspection</span> thay <span class="mono-cell">markProposalCreated</span> mock.</td></tr>
             <tr><td class="mono">Boss/BossApp</td><td class="status"><span class="pill pill-done">real</span></td><td class="note">Ghép lại các trang thật từ module khác. Tính năng "So sánh giá" NCC (approve/reject) <b>đã xác nhận là real</b> khi rà lại 2026-08-11 — <span class="mono-cell">InspectionContext.approveProposal/rejectProposal</span> gọi thẳng <span class="mono-cell">purchasing-api.ts</span> thật (Phase 8), không phải mock như đánh giá ban đầu. Phần còn mock trong InspectionContext chỉ là <span class="mono-cell">requests</span> (Lệnh kiểm tra vật tư, SEED_REQUESTS) và <span class="mono-cell">markProposalCreated</span> (tạo đề xuất thủ công từ kiểm tra vật tư) — cả 2 đúng là thiếu backend thật (BE không có endpoint tạo purchase-proposal thủ công), thuộc phạm vi M2, không phải lỗi wiring ở FE.</td></tr>
           </tbody>
@@ -1174,7 +1463,7 @@
             <tr><td class="mono">Purchasing/TheoDoiMuaHangPage · LichSuMuaHangPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note">Theo dõi/lịch sử, chỉ đọc, đúng dữ liệu thật.</td></tr>
             <tr><td class="mono">Purchasing/VatTuNCCPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note">CRUD liên kết vật tư↔NCC đầy đủ.</td></tr>
             <tr><td class="mono">InboundWarehouse/InternalTransferSections</td><td class="status"><span class="pill pill-done">real</span></td><td class="note">Nhận/duyệt/từ chối/lịch sử chuyển kho — đầy đủ qua warehouse-transfers API.</td></tr>
-            <tr><td class="mono">InboundWarehouse/WarehouseXuatPage</td><td class="status"><span class="pill pill-mixed">mixed</span></td><td class="note">Danh sách đơn cố định (MOCK dict), nhưng xác nhận với 2/3 phạm vi kho tạo transfer thật — hiệu ứng thật trên dữ liệu giả.</td></tr>
+            <tr><td class="mono">InboundWarehouse/WarehouseXuatPage</td><td class="status"><span class="pill pill-mixed">mixed</span></td><td class="note"><b>Sửa 2026-08-19:</b> đối chiếu lại code cho thấy đánh giá "mock dict" trước đó đã lỗi thời cho 2/3 scope. Scope <span class="mono-cell">phoi-son-han</span>: hoá ra đã nối thật từ trước (<span class="mono-cell">getPieceTransferPlan</span>/<span class="mono-cell">createPieceWarehouseTransfer</span>) — chỉ còn 1 cục <span class="mono-cell">MOCK['phoi-son-han']</span> chết không ai gọi tới, đã xoá. Scope <span class="mono-cell">thanh-pham</span>: nối mới sang <span class="mono-cell">sales-orders</span> thật (<span class="mono-cell">shipSalesOrderItem()</span> mới, gọi <span class="mono-cell">POST /sales-orders/:id/items/:itemId/ship</span>) — kèm vá lỗ quyền <span class="mono-cell">WAREHOUSE_STAFF</span> chưa từng có <span class="mono-cell">SALES_ORDER:VIEW+UPDATE</span> (phát hiện trước khi ship, đã <span class="mono-cell">pnpm seed</span> đồng bộ). "Thực có" = phần đơn còn lại chưa ship (BE <span class="mono-cell">shipItem()</span> không tự đối chiếu tồn kho vật lý). Scope <span class="mono-cell">vat-tu-tp</span> vẫn mock — chưa xác định được nguồn thật khớp 1:1 (không phải <span class="mono-cell">material-issues</span>, khác luồng xuất cho sản xuất).</td></tr>
             <tr><td class="mono">Admin/BusinessDataPage — PurchaseProposalsPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Sửa lại 2026-08-11:</b> đánh giá "mock" ban đầu sai — trang đọc <span class="mono-cell">proposals</span> từ InspectionContext, nhưng state đó được nạp qua <span class="mono-cell">fetchPurchaseProposals()</span> thật (Phase 8) trong <span class="mono-cell">useEffect</span> của provider, cùng nguồn dữ liệu với khối Purchasing ở trên, không phải 2 đường khác nhau.</td></tr>
           </tbody>
         </table>
@@ -1194,19 +1483,19 @@
         <table>
           <thead><tr><th>Trang / khu vực</th><th>Trạng thái</th><th>Ghi chú</th></tr></thead>
           <tbody>
-            <tr><td class="mono">Manufacturing/NhapKhoPage · XuatKhoPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Nhập/xuất kho chạy qua InspectionContext / mockStock() + mảng lịch sử cố định.</td></tr>
+            <tr><td class="mono">Manufacturing/NhapKhoPage · XuatKhoPage</td><td class="status"><span class="pill pill-mixed">mixed</span></td><td class="note">NhapKhoPage chưa đụng tới, vẫn qua InspectionContext. XuatKhoPage có 3 phần độc lập, mức sẵn sàng khác hẳn nhau — không phải "đổi 1 nguồn dữ liệu" như tưởng ban đầu: <b>Sửa 2026-08-19</b> phần "Xuất vật tư/thành phẩm" — thay <span class="mono-cell">mockStock()</span> (băm tên vật tư ra số giả, không gọi API) bằng tồn kho thật <span class="mono-cell">GET /stock-quant</span> theo <span class="mono-cell">materialId</span> (cộng dồn mọi kho); dòng chưa gắn <span class="mono-cell">materialId</span> thật thì tồn = null thay vì bịa số. Đã xoá <span class="mono-cell">utils/warehouse.ts</span> (chỉ chứa mockStock, hết người dùng). Còn nguyên mock: "Xuất thùng" (không có mảng mock, chỉ toggle <span class="mono-cell">useState</span> cục bộ, nhiều khả năng trùng chức năng <span class="mono-cell">KhoDongGoiPage</span> đã real) và "Lịch sử xuất kho" (<span class="mono-cell">MOCK_HISTORY</span> tĩnh, cần 1 cách phân loại Vật tư/Thành phẩm/Mảnh từ stock-ledger chưa có sẵn).</td></tr>
             <tr><td class="mono">Manufacturing/PhoiDinhMucManhPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Tự ghi trong code: "ĐANG DÙNG DATA MOCK — chưa nối backend/service thật".</td></tr>
             <tr><td class="mono">Manufacturing/XacNhanVatTuPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-12:</b> qua <span class="mono-cell">material-issues-api.ts</span> mới — <span class="mono-cell">POST material-issues/:id/receive</span> để xác nhận, <span class="mono-cell">GET /material-issues?stage=</span> (endpoint mới, <span class="mono-cell">ListMaterialIssuesQueryDto</span>) để liệt kê. Khác các domain M3 trước (không master-detail theo SKU/PO): <span class="mono-cell">HAN_STAFF</span>/<span class="mono-cell">SON_STAFF</span> chỉ có <span class="mono-cell">MATERIAL_ISSUE:VIEW</span>, không có <span class="mono-cell">SKU:VIEW</span>/<span class="mono-cell">PRODUCTION_ORDER:VIEW</span> (xác nhận bằng tài khoản demo thật, GET /skus trả 403) nên giữ dạng flat đúng như mock cũ.</td></tr>
             <tr><td class="mono">InboundWarehouse/KhoChuyenKiemPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-11:</b> tổng cần (totalQty) suy thật từ BOM (BomPiece × ProductionOrder.quantity), "đã kiểm"/"lỗi" ghi thật qua API mới (mốc TRANSFER_CHECK), ảnh lỗi upload Cloudinary thật. Cột "chờ thực thi" đã bỏ khỏi UI (không hiển thị số giả) — phụ thuộc sản lượng thật của Đan, vẫn thuộc M2. Danh sách chỉ còn PO/SKU/hạn giao (bỏ cột tổng hợp cần N lần gọi API/dòng); bấm vào xem chi tiết mới tải số liệu thật.</td></tr>
             <tr><td class="mono">InboundWarehouse/KhoDongGoiPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-12:</b> endpoint <span class="mono-cell">GET/POST production-invoices/:id/items/:itemId/packaging</span> (module <span class="mono-cell">production-invoices</span>, model <span class="mono-cell">PackagingRecord</span>, mirror <span class="mono-cell">TransferCheckResult</span>) qua <span class="mono-cell">packaging-api.ts</span> mới, đúng thay thế số liệu hash chuỗi tên SKU + <span class="mono-cell">useState</span> cục bộ. "Tổng thùng" = <span class="mono-cell">ProductionOrder.quantity</span>, chỉ chặn vượt tổng.</td></tr>
-            <tr><td class="mono">InboundWarehouse/XuatSatPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-13:</b> module <span class="mono-cell">steel-issues</span> (kho xuất → Phôi nhận → báo cắt xong, dưới 1 CuttingProposal đã duyệt) qua <span class="mono-cell">steel-issues-api.ts</span> mới, đúng thay thế <span class="mono-cell">phoi-sat.service.ts</span>. Master-detail theo SKU/PO như <span class="mono-cell">KhoXuatDanPage</span>. Cố ý KHÔNG ghi thêm StockLedger (CuttingProposalsService.approve() đã trừ tồn 1 lần lúc duyệt phương án cắt). Bỏ hẳn "kế hoạch xuất sắt" tự tính sẵn planCay + highlight "chưa đồng bộ" của mock cũ — không có gì tương ứng ở BE (solver chỉ tính tổng cây/vật tư cho cả PO, không chia sẵn theo mảnh); thay bằng "Σ đoạn cần (BOM)" tham chiếu từ <span class="mono-cell">steel-issue-plan</span>, thủ kho tự quyết định số cây/chiều dài xuất. "Cần cấp lại" (KCS chấm phế) đơn giản hoá thành nhập tay id đợt đã xuất bù rồi gắn vào đề xuất — BE tách "tạo đợt" và "fulfill" thành 2 bước độc lập, khác 1-click của mock cũ.</td></tr>
+            <tr><td class="mono">InboundWarehouse/XuatSatPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-13, redesign gộp theo PI 2026-08-19:</b> module <span class="mono-cell">steel-issues</span> (kho xuất → Phôi nhận → báo cắt xong, dưới 1 CuttingProposal đã duyệt) qua <span class="mono-cell">steel-issues-api.ts</span>, đúng thay thế <span class="mono-cell">phoi-sat.service.ts</span>. Cố ý KHÔNG ghi thêm StockLedger (CuttingProposalsService.approve() đã trừ tồn 1 lần lúc duyệt phương án cắt). Bỏ hẳn "kế hoạch xuất sắt" tự tính sẵn planCay + highlight "chưa đồng bộ" của mock cũ — không có gì tương ứng ở BE. <b>Kể từ 2026-08-19:</b> viết lại từ master-detail theo SKU/PO+mảnh sang gộp theo <b>PI</b> — 1 đợt xuất hỏi đúng loại sắt + tổng số cây cho cả PI (không breakdown theo mảnh nữa, vì hệ thống không biết trước cây sắt cắt cho mảnh nào), kế hoạch phẳng theo vật tư tham chiếu <span class="mono-cell">steel-issue-plan</span> (đã gộp mọi ProductionOrder/SKU thuộc PI). "Cần cấp lại" (KCS chấm phế) đơn giản hoá thành nhập tay id đợt đã xuất bù rồi gắn vào đề xuất, nay chỉ khớp theo <span class="mono-cell">materialId</span> (bỏ điều kiện <span class="mono-cell">pieceId</span>).</td></tr>
             <tr><td class="mono">InboundWarehouse/XuatVatTuTieuHaoPage · PhanPhoiNoiBoPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-12:</b> qua <span class="mono-cell">material-issues-api.ts</span> mới, đúng thay thế <span class="mono-cell">vat-tu-noi-bo.service.ts</span> (đã xoá file) — module <span class="mono-cell">material-issues</span> (CÓ ghi StockLedger <span class="mono-cell">MATERIAL_ISSUE</span>, khác steel-issues/weaving-issues). Master-detail theo SKU/PO như <span class="mono-cell">KhoXuatDanPage</span> (thủ kho có đủ <span class="mono-cell">SKU:VIEW</span>/<span class="mono-cell">PRODUCTION_ORDER:VIEW</span>). Tiện thể vá lỗ quyền <span class="mono-cell">PRODUCTION_ORDER:VIEW</span> thiếu ở <span class="mono-cell">WAREHOUSE_STAFF</span> (xem mục 07) — vốn cũng chặn ngầm cả <span class="mono-cell">KhoXuatDanPage</span>/<span class="mono-cell">KhoNhapDanPage</span> đã ship hôm qua.</td></tr>
             <tr><td class="mono">InboundWarehouse/KhoXuatDanPage · KhoNhapDanPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-12:</b> module <span class="mono-cell">weaving-issues</span> (kho vật tư-TP xuất khung cho điểm đan ngoài "xuất đan" + nhận lại hàng đan xong "nhập đan", cap theo định mức BOM, không ghi StockLedger — cùng lý do steel-issues không ghi) qua <span class="mono-cell">weaving-issues-api.ts</span> mới, đúng thay thế <span class="mono-cell">manh.service.ts</span>. Bỏ hẳn cây điều hướng 3 cấp PO→SKU→line giả (key bằng số nguyên tự sinh ở seed.ts, không liên quan BE) — chuyển sang danh sách SKU → chi tiết theo <span class="mono-cell">pieceId</span> thật, cùng pattern KhoChuyenKiemPage/KhoDongGoiPage. <span class="mono-cell">manh.service.ts</span> vẫn giữ nguyên (không xoá) vì <span class="mono-cell">ThongKePagePlan.tsx</span>/<span class="mono-cell">VatTuDashboardPage.tsx</span> còn đọc trực tiếp, ngoài phạm vi lần này. <span class="mono-cell">TransferCheckPieceResponseDto.readyQty</span> (mục KhoChuyenKiemPage) đã thật từ 2026-08-11, không còn hardcode 0.</td></tr>
-            <tr><td class="mono">Phoi/LenhSanXuatPhoi · XacNhanSanLuongPage · LichSuNhanSatPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-13:</b> qua <span class="mono-cell">steel-issues-api.ts</span>. <span class="mono-cell">XacNhanSanLuongPage</span>: BE tách thật 2 bước <span class="mono-cell">receive()</span>/<span class="mono-cell">completeCutting()</span> (khác mock cũ gộp làm 1 nút "Xác nhận") — báo cắt xong bắt buộc khai báo đúng theo 1+ kiểu cắt (pattern) đã duyệt của phương án cắt sắt, tra qua <span class="mono-cell">getApprovedPatternsForMaterial()</span> (dùng <span class="mono-cell">proposalPatternId</span> thật, xem <span class="mono-cell">CuttingProposalPatternResponseDto.id</span> mới vá ở BE), không nhập tay đoạn tự do. <span class="mono-cell">LenhSanXuatPhoi</span>/<span class="mono-cell">LichSuNhanSatPage</span> viết lại thành board đọc-only dựng thẳng từ <span class="mono-cell">GET /steel-issues</span> (flat, PHOI_STAFF không có SKU:VIEW/PRODUCTION_ORDER:VIEW để master-detail như phía kho) — bỏ tầng "Mảnh" (BOM thật nhóm theo <span class="mono-cell">piece</span>, không gộp nhiều piece thành 1 mảnh ở BE) và "Bắt đầu/Kết thúc ca" (không có gì tương ứng ở BE, cùng lý do đã bỏ ở Hàn/Sơn).</td></tr>
+            <tr><td class="mono">Phoi/LenhSanXuatPhoi · XacNhanSanLuongPage · LichSuNhanSatPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-13, redesign gộp theo PI 2026-08-19:</b> qua <span class="mono-cell">steel-issues-api.ts</span>. <span class="mono-cell">XacNhanSanLuongPage</span>: BE tách thật 2 bước <span class="mono-cell">receive()</span>/<span class="mono-cell">completeCutting()</span> — báo cắt xong bắt buộc khai báo đúng theo 1+ kiểu cắt (pattern) đã duyệt, tra qua <span class="mono-cell">getApprovedPatternsForMaterial()</span> (dùng <span class="mono-cell">proposalPatternId</span> thật). <span class="mono-cell">LenhSanXuatPhoi</span>/<span class="mono-cell">LichSuNhanSatPage</span> là board đọc-only dựng từ <span class="mono-cell">GET /steel-issues</span> (flat). <b>Kể từ 2026-08-19:</b> cả 3 trang group theo <span class="mono-cell">materialId</span>/<span class="mono-cell">productionInvoiceId</span> thay vì <span class="mono-cell">pieceId</span>/<span class="mono-cell">productionOrderId</span> (SteelIssue đã bỏ hẳn pieceId); pattern đã duyệt tra qua <span class="mono-cell">GET /production-invoices/:id/cutting-proposals</span> (mới, phủ cả PI) thay vì theo từng PO.</td></tr>
             <tr><td class="mono">Phoi/KhoPhoiPage</td><td class="status"><span class="pill pill-mock">mock</span></td><td class="note">Đoạn tồn kho Phôi (đã KCS đạt / thừa) — cần công thức quy đổi đoạn mà BE chưa model (segment-level BOM), cùng lý do tính năng "xem thanh sắt cấu thành" đã bị bỏ ở Hàn/Sơn (xem mục 07/08). <span class="mono-cell">phoi-sat.service.ts</span>/<span class="mono-cell">phoi-lenh-sx.service.ts</span> vẫn giữ nguyên (không xoá) vì trang này còn đọc trực tiếp.</td></tr>
             <tr><td class="mono">Han/LenhSanXuatHan · KhungHanPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-12:</b> module <span class="mono-cell">production-batches</span> qua <span class="mono-cell">production-batches-api.ts</span> mới, đúng thay thế phần <span class="mono-cell">baoSanLuong()</span> của <span class="mono-cell">san-luong.service.ts</span>. <span class="mono-cell">TwoTierScreen</span> (core.tsx) rebuild hẳn nguồn dữ liệu (bỏ <span class="mono-cell">hanSeed()</span>) qua endpoint mới <span class="mono-cell">GET production-orders/:id/production-batch-plan?stage=</span> (real <span class="mono-cell">partId</span>, join <span class="mono-cell">BomPart</span>+<span class="mono-cell">ProductionBatch</span>) — kèm cấp <span class="mono-cell">PRODUCTION_ORDER:VIEW</span> cho <span class="mono-cell">HAN_STAFF</span> để tự liệt kê PO đang hoạt động. Bỏ tính năng "xem thanh sắt cấu thành" (không có gì tương ứng ở BE) và tắt "làm tuần tự PO" (quy ước riêng của mock). <span class="mono-cell">KhungHanPage</span> gộp trực tiếp từ <span class="mono-cell">GET /production-batches?stage=HAN</span> (status QC_DONE) theo part, không cần endpoint tổng hợp riêng. <span class="mono-cell">hanSeed()</span> vẫn giữ (không xoá) vì <span class="mono-cell">KhoPhoiPage.tsx</span> (Phôi, còn mock) còn đọc trực tiếp.</td></tr>
             <tr><td class="mono">Son/LenhSanXuatSon · ManhChoDanPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-12:</b> cùng cơ chế Hàn ở trên (module <span class="mono-cell">production-batches</span>, endpoint <span class="mono-cell">production-batch-plan</span>, <span class="mono-cell">PRODUCTION_ORDER:VIEW</span> cấp cho <span class="mono-cell">SON_STAFF</span>). Xoá hẳn <span class="mono-cell">seed()</span> cục bộ (không ai khác dùng, khác Hàn).</td></tr>
-            <tr><td class="mono">Kcs/KcsPhoiPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-13:</b> module <span class="mono-cell">qc-reviews</span> (nhánh <span class="mono-cell">steelIssueId</span>) qua <span class="mono-cell">steel-issues-api.ts</span>, đúng thay thế <span class="mono-cell">kcsDuyetPhoi</span> mock. Giữ nguyên <span class="mono-cell">KcsTwoTierScreen</span> đã dùng cho Hàn/Sơn, chỉ đổi nguồn dữ liệu sang <span class="mono-cell">GET /steel-issues?status=</span> (flat, endpoint mới). Khác <span class="mono-cell">ProductionBatch</span>: <span class="mono-cell">SteelIssue</span> không tự ghi đè số liệu duyệt sau qc-review nên phải join thêm <span class="mono-cell">GET /qc-reviews</span> để dựng lại "đạt/lỗi" cho các đợt <span class="mono-cell">QC_PASSED</span>.</td></tr>
+            <tr><td class="mono">Kcs/KcsPhoiPage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-13, redesign gộp theo PI 2026-08-19:</b> module <span class="mono-cell">qc-reviews</span> (nhánh <span class="mono-cell">steelIssueId</span>) qua <span class="mono-cell">steel-issues-api.ts</span>, đúng thay thế <span class="mono-cell">kcsDuyetPhoi</span> mock. Giữ nguyên <span class="mono-cell">KcsTwoTierScreen</span> đã dùng cho Hàn/Sơn, chỉ đổi nguồn dữ liệu sang <span class="mono-cell">GET /steel-issues?status=</span> (flat). Khác <span class="mono-cell">ProductionBatch</span>: <span class="mono-cell">SteelIssue</span> không tự ghi đè số liệu duyệt sau qc-review nên phải join thêm <span class="mono-cell">GET /qc-reviews</span> để dựng lại "đạt/lỗi". <b>Kể từ 2026-08-19:</b> group theo <span class="mono-cell">materialId</span>/<span class="mono-cell">productionInvoiceId</span> thay vì <span class="mono-cell">pieceId</span>/<span class="mono-cell">productionOrderId</span>; cấp bù (<span class="mono-cell">fulfillReplenishRequest()</span>) chỉ còn khớp theo <span class="mono-cell">materialId</span>, bỏ điều kiện cùng mảnh.</td></tr>
             <tr><td class="mono">Kcs/KcsHanPage · KcsSonPage · KcsStagePage</td><td class="status"><span class="pill pill-done">real</span></td><td class="note"><b>Đã nối 2026-08-12:</b> qua <span class="mono-cell">production-batches-api.ts</span> mới — <span class="mono-cell">getProductionBatchesByStage()</span>/<span class="mono-cell">reviewProductionBatch()</span> thay <span class="mono-cell">getSanLuongByStage()</span>/<span class="mono-cell">kcsDuyetStage()</span>. Cần thêm endpoint flat <span class="mono-cell">GET /production-batches?stage=&amp;status=</span> (mẫu <span class="mono-cell">GET /material-issues?stage=</span>) vì KCS_STAFF chưa từng có <span class="mono-cell">PRODUCTION_BATCH:VIEW</span> (vá kèm, xem mục 07). <b>Regression chấp nhận được:</b> DTO thật không giữ <span class="mono-cell">kcsFailedQty</span>/<span class="mono-cell">kcsAt</span> sau khi duyệt (reportedQty bị ghi đè thành passed-qty) — lịch sử mỗi lô chỉ còn mốc "báo", mất mốc "duyệt: X lỗi", không chặn gì.</td></tr>
           </tbody>
         </table>
@@ -1269,6 +1558,11 @@
           <p>Xoá <span class="mono-cell">Manufacturing/WeavingPointsPage.tsx</span>, thêm <span class="mono-cell">readOnly</span>/<span class="mono-cell">embedded</span> vào <span class="mono-cell">AdminEntityPage</span> dùng chung để <span class="mono-cell">Admin/masterData/WeavingPointsPage.tsx</span> phục vụ được cả 3 nơi gọi (Admin đầy đủ CRUD, MfgApp readOnly, QuanLyDiemDanPage embedded).</p>
         </div>
         <div class="risk-card" style="--risk-color: var(--mixed)">
+          <span class="risk-tag">Đánh đổi có chủ đích — 2026-08-19</span>
+          <h4>getPieceTransferPlan() chặn cứng nếu gặp mảnh needsHan=false</h4>
+          <p>Redesign "Xuất sắt Phôi" gộp theo PI (mục 05) bỏ hẳn <span class="mono-cell">SteelIssue.pieceId</span>, khiến <span class="mono-cell">WarehouseTransfersService.getPieceTransferPlan()</span> ("Phân phối nội bộ") mất khả năng đếm số mảnh <span class="mono-cell">needsHan=false</span> ("vật tư thành phẩm") đã QC_PASSED theo đúng mảnh. Vì dữ liệu thật hiện tại 100% mảnh là <span class="mono-cell">needsHan=true</span>, hàm này nay throw <span class="mono-cell">ConflictException</span> nếu gặp <span class="mono-cell">needsHan=false</span> thay vì tính sai âm thầm — chặn an toàn cho trường hợp chưa từng xảy ra. <b>Nếu sau này có mảnh needsHan=false thật, phải thiết kế lại chỗ này trước khi dùng "Phân phối nội bộ" cho SKU đó.</b></p>
+        </div>
+        <div class="risk-card" style="--risk-color: var(--mixed)">
           <span class="risk-tag">Nhất quán BE</span>
           <h4>Soft-delete và validate DTO không đồng nhất</h4>
           <p>Chỉ User/Role/SalesOrder có soft-delete dù nhiều model khác đã có sẵn cột deletedAt chưa dùng; DTO của module materials cố ý bỏ qua validate kiểu trong khi các module khác đều dùng class-validator đầy đủ.</p>
@@ -1320,6 +1614,16 @@
           <span class="risk-tag">Lỗ hổng quyền — phát hiện &amp; vá 2026-08-14</span>
           <h4>PHOI_STAFF thiếu STOCK:VIEW — không đọc được tồn đoạn thật ở KhoPhoiPage</h4>
           <p>Cùng tiền lệ các thẻ phía trên (mỗi domain mới nối FE lại thiếu đúng 1 quyền VIEW cần cho endpoint mới dùng). <span class="mono-cell">KhoPhoiPage.tsx</span> (nợ riêng cuối cùng ngoài M2/M3, xem callout 2026-08-14 đầu trang) đổi sang đọc thật <span class="mono-cell">GET /stock-quant</span> — <span class="mono-cell">PHOI_STAFF</span> trước bản vá này chỉ có <span class="mono-cell">STEEL_ISSUE</span>/<span class="mono-cell">CUTTING_PROPOSAL</span>/<span class="mono-cell">QC_REVIEW</span> (đều VIEW hoặc UPDATE+VIEW), không có <span class="mono-cell">STOCK:VIEW</span>. Đã thêm <span class="mono-cell">STOCK:VIEW</span> (chỉ VIEW — ghi tồn qua <span class="mono-cell">stock-ledger/adjust</span> vẫn là việc riêng của <span class="mono-cell">WAREHOUSE_STAFF</span>, đã có sẵn <span class="mono-cell">STOCK:VIEW,UPDATE</span>). <b>Xác nhận cùng ngày (đợt 2):</b> quyền chỉ nằm trong <span class="mono-cell">role-permissions.constant.ts</span>, chưa từng chạy <span class="mono-cell">npm run seed</span> để áp lên DB demo — <span class="mono-cell">GET /stock-quant</span> vẫn 403 thật khi rà qua browser (tài khoản <span class="mono-cell">phoi</span>). Đã chạy lại <span class="mono-cell">npm run seed</span>, xác nhận qua DB (role_permissions có <span class="mono-cell">PHOI_STAFF</span>+<span class="mono-cell">STOCK:VIEW</span>) và qua browser thật: <b>0 request 403, 0 console error</b>, trang hiện đúng empty-state ("Chưa có đoạn nào chờ chuyển Hàn") vì DB demo chưa có ai khai tồn đoạn qua <span class="mono-cell">stock-ledger/adjust</span>.</p>
+        </div>
+        <div class="risk-card" style="--risk-color: var(--done)">
+          <span class="risk-tag">Kiểm thử — phát hiện &amp; vá 2026-08-19</span>
+          <h4>18 test FE trong purchasing-api.test.ts đã fail từ trước — file test cũ, không phải file thật</h4>
+          <p>Phát hiện khi chạy <span class="mono-cell">npx vitest run</span> để xác nhận đợt dọn mock FE (mục 08, phiên thứ 3 2026-08-19) không phá gì. Xác nhận bằng <span class="mono-cell">git stash</span> — lỗi có từ trước, không phải do các thay đổi ThongKePagePlan/XuatKhoPage/WarehouseXuatPage/VatTuDashboardPage gây ra. <b>Điều tra thêm (đợt cuối cùng cùng ngày):</b> <span class="mono-cell">purchasing-api.ts</span> đã qua nhiều lần tối ưu hoá thật (A5 2026-08-15 "bỏ N+1 detail fetch", đọc <span class="mono-cell">itemId</span> thẳng từ <span class="mono-cell">proposal.items</span> thay vì gọi API dịch riêng) nhưng <span class="mono-cell">purchasing-api.test.ts</span> chưa từng cập nhật theo — mock vẫn theo hành vi CŨ. Gốc thứ 2: fixture <span class="mono-cell">feProposal()</span> thiếu field <span class="mono-cell">itemId</span> trên item khiến <span class="mono-cell">beItemIdsByMaterialId()</span> luôn trả map rỗng. Kèm <span class="mono-cell">vi.clearAllMocks()</span> (không xoá hàng đợi <span class="mono-cell">mockResolvedValueOnce</span> chưa tiêu thụ) khiến mock rò rỉ giữa các test, gây lỗi khó hiểu ở xa nơi thật sự sai. <b>Đã vá:</b> viết lại toàn bộ 22 test theo đúng hành vi thật hiện tại, giữ nguyên ý định gốc từng test (bug ID D.p6-quote-key-collision/D.risk1-fix/D.h3-quote-id-not-name vẫn còn giá trị regression, chỉ đổi cách mock); thêm <span class="mono-cell">itemId</span> vào fixture; đổi sang <span class="mono-cell">vi.resetAllMocks()</span>. Không đụng <span class="mono-cell">purchasing-api.ts</span> (file thật, đã đúng). Xác nhận: <b>36/36 test vitest pass</b>, tsc/eslint/next build sạch.</p>
+        </div>
+        <div class="risk-card" style="--risk-color: var(--mixed)">
+          <span class="risk-tag">Dead code nhỏ — phát hiện 2026-08-19</span>
+          <h4>getStockQuants() có tham số materialId nhưng không nơi nào truyền vào</h4>
+          <p><span class="mono-cell">stock-api.ts</span> (FE) mở khoá lọc <span class="mono-cell">materialId</span> cho <span class="mono-cell">GET /stock-quant</span> — phía BE hỗ trợ thật (<span class="mono-cell">list-stock-quant-query.dto.ts</span>/<span class="mono-cell">stock-quant.service.ts</span> đã lọc theo field này từ trước), nhưng grep toàn FE xác nhận không có lời gọi nào truyền tham số này. Trang duy nhất có nhu cầu tương tự (<span class="mono-cell">XuatKhoPage.tsx#XuatKhoSection</span>) giải quyết theo cách khác — fetch hết tồn kho 1 lần rồi tự dựng map <span class="mono-cell">stockByMaterial</span> ở client, không gọi API lọc. Không gây lỗi (tham số optional), chỉ là bề mặt chưa ai dùng. Không cần xử lý gấp.</p>
         </div>
       </div>
     </section>
@@ -1507,6 +1811,39 @@
   extension, không đổi <span class="mono-cell">AUDITED_MODELS</span>). 453/453 test BE pass,
   <span class="mono-cell">tsc --noEmit</span>/<span class="mono-cell">eslint</span> sạch. Không đổi
   DTO/field FE đang đọc. <b>Cả 2 gap nhỏ nêu ở mục 02 nay đã đóng.</b>
+  <br><br>
+  Cập nhật 2026-08-19 (redesign "Xuất sắt Phôi" gộp theo PI): <span class="mono-cell">SteelIssue</span> bỏ
+  <span class="mono-cell">pieceId</span>, đổi <span class="mono-cell">productionOrderId</span>→
+  <span class="mono-cell">productionInvoiceId</span> (migration
+  <span class="mono-cell">20260819021525_steel_issue_by_production_invoice</span>). FE: viết lại
+  <span class="mono-cell">XuatSatPage</span> + 4 màn báo cáo/theo dõi Phôi (
+  <span class="mono-cell">XacNhanSanLuongPage</span>, <span class="mono-cell">KcsPhoiPage</span>,
+  <span class="mono-cell">LenhSanXuatPhoi</span>, <span class="mono-cell">ThongKeCongDoanPage</span>,
+  <span class="mono-cell">LichSuNhanSatPage</span>) sang group theo PI/vật tư. Đánh đổi có chủ đích:
+  <span class="mono-cell">WarehouseTransfersService.getPieceTransferPlan()</span> nay chặn cứng
+  (<span class="mono-cell">ConflictException</span>) cho mảnh <span class="mono-cell">needsHan=false</span> —
+  an toàn vì 0 mảnh loại đó tồn tại thật, nhưng phải thiết kế lại nếu sau này phát sinh. 562 test BE pass.
+  Xem callout đầu trang, mục 05, thẻ rủi ro mục 07.
+  <br><br>
+  Cập nhật 2026-08-19 (phiên thứ 3, đóng nốt "14/47"): 6/7 khu vực FE còn mock trong audit riêng
+  (<span class="mono-cell">docs/audit-2026-08-14-mock-data-ui.html</span>) nay đã nối thật hoặc xoá hẳn —
+  <span class="mono-cell">ThongKePagePlan</span> (tiến độ 4 công đoạn qua steel-issues/
+  production-batches/weaving-issues/transfer-check/packaging thật, bỏ hash giả),
+  <span class="mono-cell">XuatKhoPage</span> ("Lịch sử xuất kho" qua <span class="mono-cell">stock-ledger</span>
+  thật, "Xuất thùng" xoá vì trùng <span class="mono-cell">KhoDongGoiPage</span>),
+  <span class="mono-cell">PhoiDinhMucManhPage</span> (qua <span class="mono-cell">GET /skus</span>,
+  không cần BE mới — dữ liệu đã tái dựng thật từ <span class="mono-cell">PieceBom/ConsumableBom</span>),
+  "Quản lý điểm đan" (route mới <span class="mono-cell">GET /weaving-issues/by-point</span>),
+  <span class="mono-cell">WarehouseXuatPage</span> scope <span class="mono-cell">vat-tu-tp</span> (module BE
+  mới <span class="mono-cell">packaging-issues</span>, model <span class="mono-cell">PackagingIssue</span>,
+  định mức từ <span class="mono-cell">BomAccessoryItem kind=PACKAGING</span> — phát hiện bảng này đã có sẵn
+  materialId thật, không cần thiết kế model theo dõi từ số 0 như lo ngại ban đầu), "Mục đích xuất" (xoá hẳn —
+  rà toàn repo xác nhận không form nào đọc danh mục này). Còn mở:
+  <span class="mono-cell">VatTuDashboardPage</span>'s <span class="mono-cell">MOCK_VAT_TU_THANH_PHAM</span>
+  (có thể nối qua <span class="mono-cell">BomAccessoryItem</span> vừa lộ ra, chưa làm); "Nhập kho tay" chưa
+  rà lại. BE 580/580 test pass (566 cũ + 14 mới), FE <span class="mono-cell">tsc/eslint/next build</span> sạch.
+  Phát hiện kèm (chưa sửa, không phải do phiên này gây ra — xác nhận qua <span class="mono-cell">git stash</span>):
+  18 test <span class="mono-cell">purchasing-api.test.ts</span> đang fail từ trước, xem thẻ rủi ro mục 07.
 </footer>
 
 </body>

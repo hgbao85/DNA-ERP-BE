@@ -90,6 +90,7 @@ model User {
   weavingReceiptsReceived           WeavingReceipt[]            @relation("WeavingReceiptReceivedBy")
   materialIssuesIssued              MaterialIssue[]             @relation("MaterialIssueIssuedBy")
   materialIssuesReceived            MaterialIssue[]             @relation("MaterialIssueReceivedBy")
+  packagingIssuesIssued             PackagingIssue[]            @relation("PackagingIssueIssuedBy")
   productionBatchesReported         ProductionBatch[]           @relation("ProductionBatchReportedBy")
   materialInspectionRequestsCreated MaterialInspectionRequest[]
   inspectionKhoResultsSubmitted     InspectionKhoResult[]
@@ -385,6 +386,7 @@ model Material {
   pieceMaterialItems            PieceMaterialItem[]
   steelIssues                   SteelIssue[]
   materialIssues                MaterialIssue[]
+  packagingIssues               PackagingIssue[]
   inspectionKhoResultItems      InspectionKhoResultItem[]
 
   @@index([materialGroupId])
@@ -1258,6 +1260,7 @@ model ProductionOrder {
   weavingIssues               WeavingIssue[]
   weavingReceipts             WeavingReceipt[]
   materialIssues              MaterialIssue[]
+  packagingIssues             PackagingIssue[]
   productionBatches           ProductionBatch[]
   materialInspectionRequests  MaterialInspectionRequest[]
   warehouseTransferPieceItems WarehouseTransferPieceItem[]
@@ -1613,6 +1616,7 @@ enum StockLedgerRefType {
   WAREHOUSE_TRANSFER
   ADJUST
   OPENING_BALANCE
+  PACKAGING_ISSUE
 }
 
 enum TransferStatus {
@@ -2147,6 +2151,34 @@ model MaterialIssue {
   @@index([productionOrderId, stage, materialId])
   @@index([status])
   @@map("material_issues")
+}
+
+/// Xuất vật tư đóng gói (tem nhãn, màng PE, túi zip...) từ kho vat-tu-tp sang kho thanh-pham, theo
+/// PO (2026-08-19, thay MOCK ở WarehouseXuatPage.tsx scope 'vat-tu-tp'). Định mức nằm ở
+/// BomAccessoryItem (kind=PACKAGING, theo bomRevisionId của PO) - "còn xuất được bao nhiêu" =
+/// qtyPerUnit × order.quantity trừ SUM(PackagingIssue.issuedQty đã có), cùng idiom
+/// MaterialIssuesService/SteelIssuesService/WeavingIssuesService.getIssuePlan(). KHÁC MaterialIssue:
+/// không có state machine ISSUED->RECEIVED - cả kho nguồn (vat-tu-tp) lẫn kho đích (thanh-pham) đều
+/// là thủ kho, không có tổ sản xuất nào cần xác nhận nhận riêng (khác Hàn/Sơn với MaterialIssue) -
+/// ghi StockLedger (PACKAGING_ISSUE) ngay lúc tạo, giống cách MaterialIssue ghi ngay khi xuất.
+model PackagingIssue {
+  id                BigInt   @id @default(autoincrement())
+  productionOrderId BigInt
+  materialId        BigInt
+  issuedQty         Decimal  @db.Decimal(14, 4)
+  /// Client-supplied key cho POST /production-orders/:id/packaging-issues - resolve-or-return,
+  /// cùng idiom MaterialIssue.idempotencyKey.
+  idempotencyKey    String?  @unique
+  issuedAt          DateTime @default(now())
+  issuedById        String
+  note              String?
+
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  material        Material        @relation(fields: [materialId], references: [id])
+  issuedBy        User            @relation("PackagingIssueIssuedBy", fields: [issuedById], references: [id])
+
+  @@index([productionOrderId, materialId])
+  @@map("packaging_issues")
 }
 
 // =====================================================================
