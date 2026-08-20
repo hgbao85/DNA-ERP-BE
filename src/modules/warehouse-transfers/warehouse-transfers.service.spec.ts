@@ -7,11 +7,13 @@ import {
 } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WarehouseTransfersService } from './warehouse-transfers.service';
 
 describe('WarehouseTransfersService', () => {
   let service: WarehouseTransfersService;
   let stockLedgerService: { postEntry: jest.Mock };
+  let stockReservationsService: { getAvailableQty: jest.Mock };
   let prisma: {
     warehouse: { findUnique: jest.Mock };
     warehouseTransfer: {
@@ -24,7 +26,6 @@ describe('WarehouseTransfersService', () => {
       updateMany: jest.Mock;
     };
     warehouseTransferReservation: {
-      aggregate: jest.Mock;
       createMany: jest.Mock;
       updateMany: jest.Mock;
     };
@@ -81,7 +82,6 @@ describe('WarehouseTransfersService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       warehouseTransferReservation: {
-        aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: null } }),
         createMany: jest.fn(),
         updateMany: jest.fn(),
       },
@@ -93,9 +93,17 @@ describe('WarehouseTransfersService', () => {
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn() };
+    // Mặc định trả nguyên onHand (không giữ chỗ nào) - khớp hành vi cũ trước H1 fix cho các test
+    // không quan tâm tới reservation.
+    stockReservationsService = {
+      getAvailableQty: jest.fn((_tx, _warehouseId, _materialId, onHand: number) =>
+        Promise.resolve(onHand),
+      ),
+    };
     service = new WarehouseTransfersService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
+      stockReservationsService as unknown as StockReservationsService,
     );
 
     prisma.warehouse.findUnique.mockImplementation(
@@ -133,11 +141,9 @@ describe('WarehouseTransfersService', () => {
       await expect(service.create(dto, 'phoi-son-han')).resolves.toBeDefined();
     });
 
-    it('clamps requested quantity down to available stock (onHand - active reservations)', async () => {
+    it('clamps requested quantity down to available stock (onHand - reservations of both kinds, via getAvailableQty)', async () => {
       prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 40 } }]);
-      prisma.warehouseTransferReservation.aggregate.mockResolvedValue({
-        _sum: { quantity: { toNumber: () => 15 } },
-      });
+      stockReservationsService.getAvailableQty.mockResolvedValue(25); // 40 onHand - 15 reserved
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
       await service.create(dto, null);
@@ -146,10 +152,19 @@ describe('WarehouseTransfersService', () => {
         expect.objectContaining({
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
           data: expect.objectContaining({
-            items: { create: [expect.objectContaining({ quantity: 25 })] }, // 40 - 15 = 25 < 50 requested
+            items: { create: [expect.objectContaining({ quantity: 25 })] }, // 25 < 50 requested
           }),
         }),
       );
+    });
+
+    it('reads available stock through StockReservationsService.getAvailableQty (H1 fix) - never re-implements the sum locally', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
+
+      await service.create(dto, null);
+
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(prisma, 1n, 10n, 100);
     });
 
     it('rejects with 400 when clamped availability is 0 for every item', async () => {

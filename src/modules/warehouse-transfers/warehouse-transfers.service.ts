@@ -20,6 +20,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreatePieceWarehouseTransferDto } from './dto/create-piece-warehouse-transfer.dto';
 import { CreateWarehouseTransferDto } from './dto/create-warehouse-transfer.dto';
 import { ListWarehouseTransfersQueryDto } from './dto/list-warehouse-transfers-query.dto';
@@ -58,6 +59,7 @@ export class WarehouseTransfersService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
+    private readonly stockReservationsService: StockReservationsService,
   ) {}
 
   async create(
@@ -117,13 +119,16 @@ export class WarehouseTransfersService {
         `;
         const onHand = locked[0]?.qty.toNumber() ?? 0;
 
-        const reservedAgg = await tx.warehouseTransferReservation.aggregate({
-          where: { warehouseId: fromWarehouseId, materialId, status: ReservationStatus.ACTIVE },
-          _sum: { quantity: true },
-        });
-        const reserved = reservedAgg._sum.quantity?.toNumber() ?? 0;
-
-        const available = Math.max(0, onHand - reserved);
+        // Dùng ĐÚNG hàm dùng chung (H1 fix) - trước đây tự cộng riêng warehouseTransferReservation,
+        // bỏ qua StockReservation (giữ chỗ cho phương án cắt sắt đã duyệt) - 2 nghiệp vụ giành
+        // nhau cùng lô hàng mà không ai phát hiện. getAvailableQty() là hàm DUY NHẤT được phép
+        // cộng cả 2 bảng (xem comment ở đầu hàm đó).
+        const available = await this.stockReservationsService.getAvailableQty(
+          tx,
+          fromWarehouseId,
+          materialId,
+          onHand,
+        );
         const quantity = Math.max(0, Math.min(item.quantity, available));
         if (quantity > 0) {
           clampedItems.push({

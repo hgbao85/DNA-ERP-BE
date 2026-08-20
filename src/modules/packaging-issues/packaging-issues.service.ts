@@ -11,8 +11,9 @@ import {
   ProductionOrder,
   StockLedgerRefType,
 } from '../../generated/prisma/client';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CreatePackagingIssueDto } from './dto/create-packaging-issue.dto';
 import { PackagingIssuePlanItemResponseDto } from './dto/packaging-issue-plan-item-response.dto';
@@ -78,30 +79,37 @@ export class PackagingIssuesService {
     const order = await this.findOrderOrThrow(productionOrderId);
     const materialBigId = parseBigIntId(dto.materialId);
 
-    const plannedQty = await this.resolvePlannedQty(
-      order.bomRevisionId,
-      materialBigId,
-      order.quantity,
-    );
-    const issuedSoFar = await this.sumIssued(order.id, materialBigId);
-    const remaining = plannedQty - issuedSoFar;
-    if (dto.issuedQty > remaining) {
-      throw new BadRequestException(
-        `Số lượng xuất (${dto.issuedQty}) vượt quá số lượng còn có thể xuất cho vật tư ${dto.materialId} ` +
-          `(định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
-      );
-    }
+    // Khoá advisory (H3 fix, cùng lý do H2 ở MaterialIssuesService) - không có dòng có sẵn để
+    // FOR UPDATE cho lần xuất đầu tiên của 1 khoá (order, material) - xem lockBusinessKey().
+    const created = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `packaging-issue:${order.id}:${materialBigId}`);
 
-    const created = await this.prisma.packagingIssue.create({
-      data: {
-        productionOrderId: order.id,
-        materialId: materialBigId,
-        issuedQty: dto.issuedQty,
-        issuedById,
-        idempotencyKey,
-        note: dto.note,
-      },
-      include: PACKAGING_ISSUE_INCLUDE,
+      const plannedQty = await this.resolvePlannedQty(
+        tx,
+        order.bomRevisionId,
+        materialBigId,
+        order.quantity,
+      );
+      const issuedSoFar = await this.sumIssued(tx, order.id, materialBigId);
+      const remaining = plannedQty - issuedSoFar;
+      if (dto.issuedQty > remaining) {
+        throw new BadRequestException(
+          `Số lượng xuất (${dto.issuedQty}) vượt quá số lượng còn có thể xuất cho vật tư ${dto.materialId} ` +
+            `(định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
+        );
+      }
+
+      return tx.packagingIssue.create({
+        data: {
+          productionOrderId: order.id,
+          materialId: materialBigId,
+          issuedQty: dto.issuedQty,
+          issuedById,
+          idempotencyKey,
+          note: dto.note,
+        },
+        include: PACKAGING_ISSUE_INCLUDE,
+      });
     });
 
     await this.postLedgerEntry(created, issuedById);
@@ -196,11 +204,12 @@ export class PackagingIssuesService {
   }
 
   private async resolvePlannedQty(
+    tx: PrismaTx,
     bomRevisionId: bigint,
     materialId: bigint,
     orderQuantity: number,
   ): Promise<number> {
-    const item = await this.prisma.bomAccessoryItem.findUnique({
+    const item = await tx.bomAccessoryItem.findUnique({
       where: { bomRevisionId_materialId: { bomRevisionId, materialId } },
     });
     if (!item || item.kind !== AccessoryItemKind.PACKAGING) {
@@ -211,8 +220,12 @@ export class PackagingIssuesService {
     return item.qtyPerUnit.toNumber() * orderQuantity;
   }
 
-  private async sumIssued(productionOrderId: bigint, materialId: bigint): Promise<number> {
-    const result = await this.prisma.packagingIssue.aggregate({
+  private async sumIssued(
+    tx: PrismaTx,
+    productionOrderId: bigint,
+    materialId: bigint,
+  ): Promise<number> {
+    const result = await tx.packagingIssue.aggregate({
       where: { productionOrderId, materialId },
       _sum: { issuedQty: true },
     });
