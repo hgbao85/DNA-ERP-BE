@@ -19,7 +19,7 @@ export class CuttingBatchOrderDto {
   @Expose() @ApiProperty() productionInvoiceItemId!: string;
   /// Mã đơn hàng của khách (SalesOrder.code, vd "PO-4") - đây là mã người dùng gọi là "PO".
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
-  @Expose() @ApiProperty() productionInvoiceCode!: string;
+  @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceCode!: string | null;
   @Expose() @ApiProperty() mfgProductCode!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;
   @Expose() @ApiProperty() quantity!: number;

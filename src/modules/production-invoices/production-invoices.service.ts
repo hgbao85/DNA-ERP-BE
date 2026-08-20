@@ -256,12 +256,14 @@ export class ProductionInvoicesService {
         );
       }
       // Đang nằm trong nhóm khác: rút ra âm thầm sẽ làm sai phương án cắt của nhóm kia (số đoạn
-      // hụt đi so với lúc tính). Muốn đổi tổ hợp thì để Sếp từ chối nhóm cũ trước.
-      const alreadyMerged = items.filter((i) => i.productionInvoice.isMerged);
+      // hụt đi so với lúc tính). Muốn đổi tổ hợp thì để Sếp từ chối nhóm cũ trước. `?.isMerged`
+      // (2026-08-20): item chưa được gom (productionInvoiceId null - PI không còn tự sinh lúc
+      // Sales tạo PO) không có productionInvoice, coi như KHÔNG thuộc đợt gộp nào - đúng nghĩa.
+      const alreadyMerged = items.filter((i) => i.productionInvoice?.isMerged);
       if (alreadyMerged.length > 0) {
         throw new ConflictException(
           `SKU đang thuộc đợt gộp khác: ${alreadyMerged
-            .map((i) => `${i.id} (${i.productionInvoice.code})`)
+            .map((i) => `${i.id} (${i.productionInvoice?.code ?? '—'})`)
             .join(', ')}`,
         );
       }
@@ -295,6 +297,44 @@ export class ProductionInvoicesService {
     });
 
     return this.toResponseDto(await this.findOneOrThrow(mergedId.toString()));
+  }
+
+  /**
+   * "Tiến hành cắt riêng" (GomDotCatPage) - đúng 1 SKU, KHÔNG gộp gì cả (mergeItems() cố ý chặn
+   * dưới 2 SKU, xem comment tại đó - gộp 1 SKU không tiết kiệm được gì nên không dùng chung method
+   * với ý nghĩa khác hẳn). Item vừa tạo từ PO (2026-08-20: PI không còn tự sinh lúc Sales tạo PO)
+   * có `productionInvoiceId: null` - hàm này tạo cho nó 1 PI thường (isMerged=false) của riêng nó,
+   * mirror đúng PI 1-1 mà trước đây SalesOrdersService tự tạo tự động.
+   */
+  async claimSolo(itemId: string): Promise<ProductionInvoiceResponseDto> {
+    const bigId = parseBigIntId(itemId);
+    const item = await this.prisma.productionInvoiceItem.findUnique({ where: { id: bigId } });
+    if (!item) {
+      throw new NotFoundException(`Production invoice item ${itemId} not found`);
+    }
+    if (item.productionInvoiceId !== null) {
+      throw new ConflictException(
+        `SKU ${itemId} đã được gom vào phiếu sản xuất rồi - không tạo mới đè lên`,
+      );
+    }
+
+    const createdId = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.productionInvoice.create({
+        data: {
+          code: await nextProductionInvoiceCode(tx as unknown as PrismaServiceType),
+          salesOrderId: item.salesOrderId,
+          isMerged: false,
+          deadline: item.deliveryDeadline,
+        },
+      });
+      await tx.productionInvoiceItem.update({
+        where: { id: bigId },
+        data: { productionInvoiceId: created.id },
+      });
+      return created.id;
+    });
+
+    return this.toResponseDto(await this.findOneOrThrow(createdId.toString()));
   }
 
   // ─── Items ──────────────────────────────────────────────────────────────────
@@ -1069,10 +1109,10 @@ export class ProductionInvoicesService {
   private frameDeadlineOf(item: {
     materialDeadline: Date | null;
     stages: { stageType: ProdItemStageType; deadline: Date }[];
-    productionInvoice: { deadline: Date | null };
+    productionInvoice: { deadline: Date | null } | null;
   }): Date | null {
     const frame = item.stages.find((s) => s.stageType === ProdItemStageType.FRAME);
-    return item.materialDeadline ?? frame?.deadline ?? item.productionInvoice.deadline ?? null;
+    return item.materialDeadline ?? frame?.deadline ?? item.productionInvoice?.deadline ?? null;
   }
 
   private assertItemStatus(item: PIItemWithRefs, expected: ProdApprovalStatus): void {
@@ -1116,10 +1156,14 @@ export class ProductionInvoicesService {
     });
   }
 
+  /** `item.productionInvoiceId!` - hàm này chỉ được gọi với item đã thuộc 1 PI thật (qua
+   *  `pi.items.map()` hoặc các route đều đi qua `findOneOrThrow(piId)`/`findItemOrThrow(piId, ...)`
+   *  trước) - item vừa tạo từ PO, chưa được KHSX gom (productionInvoiceId null) không lọt được
+   *  vào đây, vì không route nào cho phép truy cập nó trước khi có PI. */
   private toItemResponseDto(item: PIItemWithRefs): ProductionInvoiceItemResponseDto {
     return new ProductionInvoiceItemResponseDto({
       id: item.id.toString(),
-      productionInvoiceId: item.productionInvoiceId.toString(),
+      productionInvoiceId: item.productionInvoiceId!.toString(),
       salesOrderId: item.salesOrderId?.toString() ?? null,
       salesOrderCode: item.salesOrder?.code ?? null,
       mfgProductId: item.mfgProductId.toString(),

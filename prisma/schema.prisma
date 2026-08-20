@@ -1074,7 +1074,11 @@ model ProductionInvoice {
 
 model ProductionInvoiceItem {
   id                  BigInt              @id @default(autoincrement())
-  productionInvoiceId BigInt
+  /// Nullable (2026-08-20): Sales tạo item ngay lúc lưu PO nhưng KHÔNG còn bọc sẵn trong 1 PI -
+  /// NULL nghĩa là "chưa được KHSX gom", chỉ có giá trị từ lúc KHSX bấm "Xác nhận gộp"/"Tiến hành
+  /// cắt riêng" ở GomDotCatPage. Trước đây PI tự sinh 1-1 ngay lúc tạo PO, kể cả PO chưa xác nhận
+  /// cọc - khiến "Lệnh sản xuất mới" của KHSX lộ ra cả đơn hàng chưa chắc chắn về mặt thương mại.
+  productionInvoiceId BigInt?
   /// PO (đơn hàng Sales) mà SKU này thuộc về. TRƯỚC ĐÂY suy ngược qua productionInvoice.salesOrder
   /// vì 1 PI = đúng 1 PO; từ khi có PI gộp (ProductionInvoice.isMerged) thì 1 PI chứa SKU của
   /// NHIỀU PO nên đường suy ngược đó mất dấu - phải ghim thẳng ở đây. Nullable vì SKU tạo tay qua
@@ -1100,7 +1104,7 @@ model ProductionInvoiceItem {
   decidedById         String?
   rejectReason        String?
 
-  productionInvoice    ProductionInvoice            @relation(fields: [productionInvoiceId], references: [id])
+  productionInvoice    ProductionInvoice?           @relation(fields: [productionInvoiceId], references: [id])
   salesOrder           SalesOrder?                  @relation(fields: [salesOrderId], references: [id])
   mfgProduct           MfgProduct                   @relation(fields: [mfgProductId], references: [id])
   productVariant       ProductVariant?              @relation(fields: [productVariantId], references: [id])

@@ -632,10 +632,10 @@ export class PurchaseProposalsService {
   private frameDeadlineOf(item: {
     materialDeadline: Date | null;
     stages: { stageType: ProdItemStageType; deadline: Date }[];
-    productionInvoice: { deadline: Date | null };
+    productionInvoice: { deadline: Date | null } | null;
   }): Date | null {
     const frame = item.stages.find((s) => s.stageType === ProdItemStageType.FRAME);
-    return item.materialDeadline ?? frame?.deadline ?? item.productionInvoice.deadline ?? null;
+    return item.materialDeadline ?? frame?.deadline ?? item.productionInvoice?.deadline ?? null;
   }
 
   private toResponseDto(row: PurchaseProposalRow): PurchaseProposalResponseDto {
@@ -692,8 +692,10 @@ export class PurchaseProposalsService {
       status: row.status,
       poNumber: productionOrder?.poNumber ?? mergedPi?.code ?? '—',
       salesOrderCode,
+      // `.productionInvoice!` - ProductionOrder chỉ sinh khi Sếp duyệt, item của nó luôn đã có PI
+      // thật lúc đó (cùng bất biến ghi ở ProductionOrdersService.toResponseDto()).
       piCode:
-        productionOrder?.productionInvoiceItem.productionInvoice.code ?? mergedPi?.code ?? '—',
+        productionOrder?.productionInvoiceItem.productionInvoice!.code ?? mergedPi?.code ?? '—',
       mfgProductCode:
         productionOrder?.mfgProduct.factoryCode ??
         (mergedPi?.items ?? []).map((it) => it.mfgProduct.factoryCode).join(', '),

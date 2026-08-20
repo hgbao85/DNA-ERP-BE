@@ -3,7 +3,6 @@ import { ConflictException, Inject, Injectable, NotFoundException } from '@nestj
 import { Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
-import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -68,8 +67,8 @@ export class SalesOrdersService {
       include: { customer: true, items: { include: { mfgProduct: true } } },
     });
 
-    const pi = await this.createLinkedProductionInvoice(withCode);
-    await this.linkExistingSkus(withCode, pi.id);
+    await this.createProductionInvoiceItems(withCode);
+    await this.linkExistingSkus(withCode);
 
     return this.toResponseDto(withCode);
   }
@@ -230,46 +229,37 @@ export class SalesOrdersService {
   }
 
   /**
-   * Mirror hành vi mock (OrderManagementPage tự tạo "ProductionInvoice" ngay khi tạo PO):
-   * mỗi PO sinh đúng 1 PI 1-1 (salesOrderId) để productplan@demo.com xử lý ở LenhSXPage.
-   * Tạo ở đây (không qua ProductionInvoicesController) để SALES_STAFF không cần thêm quyền
-   * PRODUCTION_INVOICE:CREATE chỉ vì hệ quả phụ này.
+   * Tạo sẵn ProductionInvoiceItem cho từng dòng PO ngay lúc Sales lưu đơn - GIỮ nguyên mọi máy
+   * theo dõi nghiệp vụ (prodApprovalStatus, stages, BOM preview ở "Tối ưu cắt sắt"...) vốn neo
+   * trên bảng này. KHÁC trước (2026-08-20): KHÔNG còn bọc sẵn trong 1 ProductionInvoice -
+   * productionInvoiceId để NULL. PI tự sinh ngay lúc tạo PO khiến "Lệnh sản xuất mới" của KHSX lộ
+   * ra cả đơn hàng chưa xác nhận cọc, chưa chắc chắn về mặt thương mại. Từ nay PI chỉ sinh khi
+   * KHSX chủ động gom qua GomDotCatPage ("Xác nhận gộp" gọi mergeItems(), "Tiến hành cắt riêng"
+   * gọi claimSolo() - xem production-invoices.service.ts).
    */
-  private async createLinkedProductionInvoice(order: SalesOrderWithItems): Promise<{ id: bigint }> {
-    const code = await nextProductionInvoiceCode(this.prisma);
-    return this.prisma.productionInvoice.create({
-      data: {
-        code,
+  private async createProductionInvoiceItems(order: SalesOrderWithItems): Promise<void> {
+    await this.prisma.productionInvoiceItem.createMany({
+      data: order.items.map((it) => ({
+        productionInvoiceId: null,
+        mfgProductId: it.mfgProductId,
         salesOrderId: order.id,
-        deadline: order.deliveryDate,
-        items: {
-          create: order.items.map((it) => ({
-            mfgProductId: it.mfgProductId,
-            // Ghim PO ngay trên từng SKU: PI cha chỉ còn cho biết PO khi PI chưa bị gộp. Sau khi
-            // KHSX gộp SKU này sang một đợt cắt chung (PI.isMerged, salesOrderId=null) thì đây là
-            // đường DUY NHẤT truy ra đơn hàng gốc.
-            salesOrderId: order.id,
-            quantity: it.totalQty,
-            deliveryDeadline: it.deliveryDate,
-          })),
-        },
-      },
+        quantity: it.totalQty,
+        deliveryDeadline: it.deliveryDate,
+      })),
     });
   }
 
   /**
-   * Gắn PO/PI vừa tạo vào SKU (PlanForm) đã có sẵn cho đúng sản phẩm này - trường hợp KHSX tạo
+   * Gắn PO vừa tạo vào SKU (PlanForm) đã có sẵn cho đúng sản phẩm này - trường hợp KHSX tạo
    * SKU trước ("Tạo SKU mới"), Sales tham chiếu tới sau khi lên PO (xem PlanForm.salesOrderId
    * doc: "KHSX tạo trước, đơn hàng tham chiếu tới sau"). Chỉ có tác dụng với SKU CHƯA gắn đơn
    * hàng nào (salesOrderId null) - không được ghi đè PO đã gắn từ trước. Nhiều SKU cùng sản
    * phẩm, cùng chưa gắn đơn thì lấy SKU tạo sớm nhất (id nhỏ nhất) - đơn giản, tất định, mirror
    * "SKU độc lập với Sales Order" (skus.service.ts create) - PO chỉ gắn khi có ai đó chủ động
-   * chọn, không tự suy luận theo tên khách hàng.
+   * chọn, không tự suy luận theo tên khách hàng. productionInvoiceId để NULL (2026-08-20, cùng
+   * lý do createProductionInvoiceItems()) - PI gắn sau, lúc KHSX gom.
    */
-  private async linkExistingSkus(
-    order: SalesOrderWithItems,
-    productionInvoiceId: bigint,
-  ): Promise<void> {
+  private async linkExistingSkus(order: SalesOrderWithItems): Promise<void> {
     for (const item of order.items) {
       const candidate = await this.prisma.planForm.findFirst({
         where: { mfgProductId: item.mfgProductId, salesOrderId: null },
@@ -278,7 +268,7 @@ export class SalesOrdersService {
       if (!candidate) continue;
       await this.prisma.planForm.update({
         where: { id: candidate.id },
-        data: { salesOrderId: order.id, productionInvoiceId },
+        data: { salesOrderId: order.id, productionInvoiceId: null },
       });
     }
   }

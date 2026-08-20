@@ -48,6 +48,20 @@ export class ProductionInvoicesController {
     return this.productionInvoicesService.mergeItems(dto, userId);
   }
 
+  /**
+   * KHSX chọn ĐÚNG 1 SKU và "Tiến hành cắt riêng" (màn "Tối ưu cắt sắt") - tạo cho nó 1 PI thường
+   * của riêng nó (item vừa tạo từ PO chưa được gom vào PI nào, xem
+   * ProductionInvoicesService.claimSolo()). Route không lồng dưới ':id' (khác addItem) vì item
+   * lúc này CHƯA thuộc PI nào để lồng vào - khai báo trước mọi route ':id' cùng lý do 'merge' ở
+   * trên.
+   */
+  @Post('items/:itemId/claim-solo')
+  @RequirePermissions(CREATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER)
+  claimSolo(@Param('itemId') itemId: string) {
+    return this.productionInvoicesService.claimSolo(itemId);
+  }
+
   @Get()
   @RequirePermissions(VIEW)
   findAll(@Query() query: PaginationQueryDto) {

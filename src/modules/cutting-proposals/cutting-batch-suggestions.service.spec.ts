@@ -31,17 +31,28 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     solverMaxWastePercentage: 1.0,
   };
 
-  const mkItem = (over: Record<string, unknown> = {}) => ({
-    id: 1n,
-    quantity: 20,
-    prodApprovalStatus: 'WAITING_BOSS',
-    materialDeadline: new Date('2026-08-20'),
-    mfgProductId: 3n,
-    mfgProduct: { factoryCode: 'J55', name: 'Bàn J55' },
-    stages: [],
-    productionInvoice: { code: 'PI-1', deadline: null, salesOrder: { code: 'PO-3' } },
-    ...over,
-  });
+  const mkItem = (over: Record<string, unknown> = {}) => {
+    const merged = {
+      id: 1n,
+      quantity: 20,
+      prodApprovalStatus: 'WAITING_BOSS',
+      materialDeadline: new Date('2026-08-20'),
+      mfgProductId: 3n,
+      mfgProduct: { factoryCode: 'J55', name: 'Bàn J55' },
+      stages: [],
+      productionInvoice: { code: 'PI-1', deadline: null, salesOrder: { code: 'PO-3' } },
+      ...over,
+    };
+    return {
+      // salesOrder đọc trực tiếp ở CẤP ITEM (2026-08-20 - item chưa gom PI vẫn phải hiện đúng PO
+      // gốc), KHÔNG còn suy qua productionInvoice.salesOrder - mặc định LẤY THEO
+      // productionInvoice.salesOrder đã merge ở trên để mọi call site override productionInvoice
+      // (PO-4, PO-GAP...) tự động khớp, khỏi phải sửa từng chỗ; override thẳng `salesOrder` vẫn
+      // thắng vì spread `...merged` đứng sau.
+      salesOrder: (merged.productionInvoice as { salesOrder: unknown } | null)?.salesOrder ?? null,
+      ...merged,
+    };
+  };
 
   /** Mô phỏng `Prisma.Decimal` tối thiểu (2026-08-19, cutLengthMm giờ Decimal(7,1)) - đủ cho cả
    *  `.toNumber()` lẫn ép kiểu `Number(x)` mà code service gọi tới. */
@@ -119,17 +130,21 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     build();
     await service.getBatchSuggestions();
     const calls = (prisma.productionInvoiceItem as { findMany: jest.Mock }).findMany.mock.calls as [
-      { where: { OR: unknown[]; productionInvoice: unknown } },
+      { where: { AND: [{ OR: unknown[] }, { OR: unknown[] }] } },
     ][];
     const call = calls[0][0];
     // `notIn` của SQL không khớp NULL, dùng notIn sẽ loại mất đúng nhóm đơn mới nhất - nhóm cần gộp nhất.
     // REJECTED có mặt để SKU bị Sếp bác quay lại được bảng chọn mà gộp tổ hợp khác.
-    expect(call.where.OR).toEqual([
+    expect(call.where.AND[0].OR).toEqual([
       { prodApprovalStatus: null },
       { prodApprovalStatus: { in: ['WAITING_QLSX', 'WAITING_BOSS', 'REJECTED'] } },
     ]);
-    // SKU đang nằm trong một đợt gộp thì không hiện ra để gộp chồng lần nữa.
-    expect(call.where.productionInvoice).toEqual({ isMerged: false });
+    // Chưa được KHSX gom (productionInvoiceId null, 2026-08-20) HOẶC đang trong PI thường chưa
+    // gộp - đều hiện ra. Đang nằm trong một đợt gộp rồi thì không hiện ra để gộp chồng lần nữa.
+    expect(call.where.AND[1].OR).toEqual([
+      { productionInvoiceId: null },
+      { productionInvoice: { isMerged: false } },
+    ]);
   });
 
   it('loại sắt đứng riêng đã đạt ngưỡng thì KHÔNG hiện ra', async () => {
