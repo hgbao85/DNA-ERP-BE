@@ -255,8 +255,16 @@ export class WarehouseTransfersService {
    * 2026-08-18-xuat-sat-po-pi-vat-tu.md): trước đây tính "sẵn sàng" bằng SteelIssue.QC_PASSED
    * theo đúng `pieceId`, nhưng SteelIssue giờ gộp theo cả PI (không còn `pieceId`) nên không thể
    * đếm theo mảnh cụ thể nữa - hệ thống không biết trước cây sắt xuất ra sẽ về mảnh nào. Thực tế
-   * nghiệp vụ hiện tại MỌI mảnh đều needsHan=true (xác nhận với user 2026-08-19) nên nhánh này
-   * CHẶN CỨNG (throw) thay vì cố suy - đừng build lại cơ chế đếm cho trường hợp chưa từng xảy ra.
+   * nghiệp vụ hiện tại MỌI mảnh đều needsHan=true (xác nhận với user 2026-08-19).
+   *
+   * (Sửa Critical C2, 2026-08-20) Trước đây nhánh này `throw ConflictException` ngay khi gặp 1
+   * mảnh needsHan=false, làm hỏng response của TOÀN BỘ batch (mọi productionOrderId truyền vào,
+   * không chỉ PO chứa mảnh đó) - vì FE gọi API này 1 lần gộp hết PO đang hoạt động
+   * (WarehouseXuatPage.tsx), 1 mảnh cấu hình sai ở bất kỳ đâu là sập toàn bộ màn Xuất kho
+   * Phôi-Sơn-Hàn cho MỌI PO. Giờ chỉ BỎ QUA đúng mảnh needsHan=false (không có cách tính đúng),
+   * các mảnh/PO khác trong cùng batch vẫn trả về bình thường - đổi "báo lỗi rõ ràng" (nhưng chặn
+   * nhầm phạm vi) thành "âm thầm thiếu 1 dòng" (đúng phạm vi, ít phá hoại hơn nhiều). Vẫn cần dev
+   * xử lý dữ liệu gốc nếu trường hợp này thật sự xảy ra - collectedWarnings ghi lại để log/theo dõi.
    */
   async getPieceTransferPlan(
     productionOrderIds: string[],
@@ -328,13 +336,14 @@ export class WarehouseTransfersService {
         if (!bp.needsHan && bp.needsSon) continue;
 
         if (!bp.needsHan) {
-          // Xem comment ở đầu getPieceTransferPlan() - từ khi SteelIssue gộp theo PI (không còn
-          // pieceId), không còn cách nào đếm "đã xong bao nhiêu mảnh vật tư thành phẩm" từ dữ
-          // liệu xuất sắt. Thực tế nghiệp vụ hiện tại không có mảnh nào needsHan=false nên chặn
-          // rõ ràng ở đây thay vì âm thầm trả về sai/0.
-          throw new ConflictException(
-            `Mảnh ${bp.piece.code} (needsHan=false, "vật tư thành phẩm") không còn được hỗ trợ ở kế hoạch chuyển kho nội bộ kể từ khi xuất sắt gộp theo PI - liên hệ dev nếu đây là trường hợp thật cần xử lý`,
+          // Xem comment ở đầu getPieceTransferPlan() (Critical C2) - không còn cách nào đếm "đã
+          // xong bao nhiêu mảnh vật tư thành phẩm" từ dữ liệu xuất sắt gộp theo PI. BỎ QUA đúng
+          // mảnh này (không đẩy vào items) thay vì throw làm hỏng cả batch - các PO/mảnh khác vẫn
+          // trả về bình thường. console.warn để lộ ra log server, không nuốt hoàn toàn.
+          console.warn(
+            `[getPieceTransferPlan] Bỏ qua mảnh ${bp.piece.code} (PO ${order.poNumber}): needsHan=false ("vật tư thành phẩm") không còn được hỗ trợ kể từ khi xuất sắt gộp theo PI - liên hệ dev nếu đây là trường hợp thật cần xử lý`,
           );
+          continue;
         }
 
         const finalStage = bp.needsSon ? MfgStage.SON : MfgStage.HAN;
@@ -421,43 +430,65 @@ export class WarehouseTransfersService {
       'xác nhận phiếu chuyển kho tới',
     );
 
-    // idempotencyKey theo (transferId, itemId) khiến việc gọi lại confirm() sau khi 1 item giữa
-    // chừng lỗi trở nên an toàn - các item đã post thành công trả về đúng dòng cũ, không tạo
-    // trùng bút toán (StockLedgerService.postEntry tự resolve-or-return theo key này).
-    for (const item of transfer.items) {
-      if (!item.materialId) continue; // dòng free-text không có gì để ghi vào ledger (XOR)
-      await this.stockLedgerService.postEntry({
-        fromWarehouseId: transfer.fromWarehouseId,
-        toWarehouseId: transfer.toWarehouseId,
-        materialId: item.materialId,
-        qty: item.quantity.toNumber(),
-        refType: StockLedgerRefType.WAREHOUSE_TRANSFER,
-        refId: transfer.id.toString(),
-        createdById: userId,
-        idempotencyKey: `warehouse-transfer:${transfer.id}:item:${item.id}`,
-      });
-    }
-    for (const pieceItem of transfer.pieceItems) {
-      await this.stockLedgerService.postEntry({
-        fromWarehouseId: transfer.fromWarehouseId,
-        toWarehouseId: transfer.toWarehouseId,
-        pieceId: pieceItem.pieceId,
-        qty: pieceItem.quantity,
-        refType: StockLedgerRefType.WAREHOUSE_TRANSFER,
-        refId: transfer.id.toString(),
-        createdById: userId,
-        idempotencyKey: `warehouse-transfer:${transfer.id}:piece-item:${pieceItem.id}`,
-      });
-    }
-
+    // Toàn bộ đọc-status -> ghi-ledger -> update-status nằm chung 1 transaction. updateMany guard
+    // theo (id, status:PENDING) chạy TRƯỚC, cùng pattern SkusService.approve(): UPDATE khoá hàng
+    // trong Postgres nên 2 request confirm/reject đồng thời cho cùng phiếu tự serialize - request
+    // thua chỉ thấy count=0 và rollback toàn bộ (kể cả các postEntry đã chạy trong cùng tx), thay
+    // vì trước đây status được ghi ở bước cuối không kèm điều kiện, khiến 2 request có thể cùng
+    // "thắng" (Critical C1 - phiếu hiện REJECTED nhưng ledger đã ghi CONFIRMED).
     const confirmed = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.warehouseTransfer.updateMany({
+        where: { id: transfer.id, status: TransferStatus.PENDING },
+        data: { status: TransferStatus.CONFIRMED, confirmedAt: new Date() },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Phiếu chuyển kho ${id} đã được xử lý bởi 1 request khác trong lúc xác nhận - không ghi đè`,
+        );
+      }
+
+      // idempotencyKey theo (transferId, itemId) khiến việc gọi lại confirm() sau khi 1 item giữa
+      // chừng lỗi trở nên an toàn - các item đã post thành công trả về đúng dòng cũ, không tạo
+      // trùng bút toán (StockLedgerService.postEntry tự resolve-or-return theo key này).
+      for (const item of transfer.items) {
+        if (!item.materialId) continue; // dòng free-text không có gì để ghi vào ledger (XOR)
+        await this.stockLedgerService.postEntry(
+          {
+            fromWarehouseId: transfer.fromWarehouseId,
+            toWarehouseId: transfer.toWarehouseId,
+            materialId: item.materialId,
+            qty: item.quantity.toNumber(),
+            refType: StockLedgerRefType.WAREHOUSE_TRANSFER,
+            refId: transfer.id.toString(),
+            createdById: userId,
+            idempotencyKey: `warehouse-transfer:${transfer.id}:item:${item.id}`,
+          },
+          tx,
+        );
+      }
+      for (const pieceItem of transfer.pieceItems) {
+        await this.stockLedgerService.postEntry(
+          {
+            fromWarehouseId: transfer.fromWarehouseId,
+            toWarehouseId: transfer.toWarehouseId,
+            pieceId: pieceItem.pieceId,
+            qty: pieceItem.quantity,
+            refType: StockLedgerRefType.WAREHOUSE_TRANSFER,
+            refId: transfer.id.toString(),
+            createdById: userId,
+            idempotencyKey: `warehouse-transfer:${transfer.id}:piece-item:${pieceItem.id}`,
+          },
+          tx,
+        );
+      }
+
       await tx.warehouseTransferReservation.updateMany({
         where: { transferId: transfer.id, status: ReservationStatus.ACTIVE },
         data: { status: ReservationStatus.RELEASED },
       });
-      return tx.warehouseTransfer.update({
+
+      return tx.warehouseTransfer.findUniqueOrThrow({
         where: { id: transfer.id },
-        data: { status: TransferStatus.CONFIRMED, confirmedAt: new Date() },
         include: TRANSFER_INCLUDE,
       });
     });
@@ -482,14 +513,26 @@ export class WarehouseTransfersService {
       'từ chối phiếu chuyển kho tới',
     );
 
+    // Cùng lý do với confirm(): updateMany guard theo (id, status:PENDING) trước, để 2 request
+    // confirm/reject đồng thời cho cùng phiếu tự serialize thay vì cùng "thắng".
     const rejected = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.warehouseTransfer.updateMany({
+        where: { id: transfer.id, status: TransferStatus.PENDING },
+        data: { status: TransferStatus.REJECTED, rejectionReason, rejectedAt: new Date() },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Phiếu chuyển kho ${id} đã được xử lý bởi 1 request khác trong lúc từ chối - không ghi đè`,
+        );
+      }
+
       await tx.warehouseTransferReservation.updateMany({
         where: { transferId: transfer.id, status: ReservationStatus.ACTIVE },
         data: { status: ReservationStatus.RELEASED },
       });
-      return tx.warehouseTransfer.update({
+
+      return tx.warehouseTransfer.findUniqueOrThrow({
         where: { id: transfer.id },
-        data: { status: TransferStatus.REJECTED, rejectionReason, rejectedAt: new Date() },
         include: TRANSFER_INCLUDE,
       });
     });
