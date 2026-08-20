@@ -30,8 +30,10 @@ export class QuotaSegmentDto {
   @IsString()
   materialId!: string;
 
-  @ApiProperty()
-  @IsInt()
+  /// Decimal(7,1) ở DB (2026-08-19) - dữ liệu thật có chiều dài lẻ 1 chữ số thập phân (vd
+  /// 590.5mm), IsInt() cũ sẽ chặn nhầm giá trị hợp lệ.
+  @ApiProperty({ description: 'vd 930 hoặc 590.5 (tối đa 1 chữ số thập phân)' })
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   cutLengthMm!: number;
 

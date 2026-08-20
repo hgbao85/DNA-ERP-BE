@@ -1107,7 +1107,11 @@ export class SkusService {
             materialName: sg.segmentSpec.material.name,
             materialSpec: sg.segmentSpec.material.spec,
             materialUnit: sg.segmentSpec.material.unit,
-            cutLengthMm: sg.segmentSpec.cutLengthMm,
+            // cutLengthMm là Decimal (2026-08-19, xem SegmentSpec) - PHẢI Number() ở đây: field
+            // này chảy vào manhData (kiểu unknown, xem ReconstructedQuota) nên tsc KHÔNG bắt được
+            // nếu bỏ sót. Không đổi thì JSON.stringify gọi Decimal.toJSON() trả về CHUỖI thay vì
+            // số, phá FE đang mong đợi number ở field này.
+            cutLengthMm: Number(sg.segmentSpec.cutLengthMm),
             qtyPerPiece: sg.qtyPerPiece,
             processSteps: sg.processSteps,
             note: sg.note,

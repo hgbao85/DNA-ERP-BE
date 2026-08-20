@@ -626,8 +626,15 @@ export class PurchaseProposalsService {
     // productionOrder = null khi đề xuất đến từ phương án cắt CẤP NHÓM (PI gộp nhiều SKU) - nhóm
     // không có 1 lệnh SX đơn lẻ nào. Đây chính là ca "nhóm = đơn vị mua": 1 đề xuất mua duy nhất
     // cho cả đợt cắt chung, thay vì mỗi lệnh SX một đề xuất rồi Mua hàng phải báo giá nhiều lần.
-    const productionOrder = row.cuttingProposal!.productionOrder;
-    const mergedPi = row.cuttingProposal!.productionInvoice;
+    //
+    // row.cuttingProposal CÓ THỂ null (2026-08-19, phát hiện khi dọn dữ liệu test): FK
+    // cuttingProposalId là ON DELETE SET NULL (xem comment schema.prisma), nên xóa CuttingProposal
+    // gốc để lại PurchaseProposal mồ côi - vẫn là hồ sơ mua hàng THẬT (đã đặt/đã mua), chỉ mất dấu
+    // vết ngược. Trước đây `!` giả định luôn có, crash 500 ngay khi gặp ca này lần đầu. Toàn bộ
+    // phần còn lại của hàm đã tự xử lý productionOrder/mergedPi null sẵn (?., ?? '—') - chỉ cần
+    // sửa đúng 2 dòng ép kiểu này.
+    const productionOrder = row.cuttingProposal?.productionOrder ?? null;
+    const mergedPi = row.cuttingProposal?.productionInvoice ?? null;
 
     // Nhánh lệnh SX đơn: 1-1 với đúng 1 ProductionInvoiceItem. Nhánh PI gộp: lấy hạn SỚM NHẤT
     // trong cả nhóm SKU - đơn nào gấp nhất trong đợt cắt chung thì Mua hàng phải ưu tiên đơn đó,

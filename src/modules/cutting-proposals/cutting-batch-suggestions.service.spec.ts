@@ -43,6 +43,14 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     ...over,
   });
 
+  /** Mô phỏng `Prisma.Decimal` tối thiểu (2026-08-19, cutLengthMm giờ Decimal(7,1)) - đủ cho cả
+   *  `.toNumber()` lẫn ép kiểu `Number(x)` mà code service gọi tới. */
+  const mockDecimal = (n: number) => ({
+    toNumber: () => n,
+    valueOf: () => n,
+    toString: () => String(n),
+  });
+
   /** 1 dòng định mức: mảnh `pieceId` cần `qtyPerPiece` đoạn cỡ `cutLengthMm` của vật tư đó. */
   const mkPieceBom = (
     bomRevisionId: bigint,
@@ -50,7 +58,12 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     materialId: bigint,
     cutLengthMm: number,
     qtyPerPiece = 1,
-  ) => ({ bomRevisionId, pieceId, qtyPerPiece, segmentSpec: { materialId, cutLengthMm } });
+  ) => ({
+    bomRevisionId,
+    pieceId,
+    qtyPerPiece,
+    segmentSpec: { materialId, cutLengthMm: mockDecimal(cutLengthMm) },
+  });
 
   const mkMaterial = (id: bigint, code: string, thresholdPct: number | null = null) => ({
     id,

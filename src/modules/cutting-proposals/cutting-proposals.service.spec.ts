@@ -46,6 +46,13 @@ describe('CuttingProposalsService', () => {
 
   /** Mô phỏng `Prisma.Decimal` tối thiểu - đủ cho `.toNumber()` mà approve() gọi. */
   const qtyRow = (n: number) => [{ qty: { toNumber: () => n } }];
+  /** Như trên, nhưng đủ CẢ cho `Number(x)` ép kiểu (dùng .valueOf) - cutLengthMm giờ Decimal(7,1)
+   *  (2026-08-19) và code service dùng cả 2 cách gọi tuỳ chỗ. */
+  const mockDecimal = (n: number) => ({
+    toNumber: () => n,
+    valueOf: () => n,
+    toString: () => String(n),
+  });
 
   // approve() dùng $queryRaw cho HAI việc khác nhau (xem cutting-proposals.service.ts):
   //   1. khoá dòng phương án rồi đọc lại status  -> trả [{ status }]
@@ -89,7 +96,7 @@ describe('CuttingProposalsService', () => {
     segmentSpecId: 100n,
     qtyPerPiece: 1,
     piece: { name: 'chân bàn' },
-    segmentSpec: { materialId: 200n, cutLengthMm: 660 },
+    segmentSpec: { materialId: 200n, cutLengthMm: mockDecimal(660) },
   };
 
   beforeEach(() => {
@@ -712,7 +719,7 @@ describe('CuttingProposalsService', () => {
           segmentSpecId: 101n,
           qtyPerPiece: 2,
           piece: { name: 'mảnh tựa' },
-          segmentSpec: { materialId: 300n, cutLengthMm: 840 },
+          segmentSpec: { materialId: 300n, cutLengthMm: mockDecimal(840) },
         },
       ]);
       prisma.bomPiece.findMany.mockResolvedValue([
@@ -859,7 +866,7 @@ describe('CuttingProposalsService', () => {
           segmentSpecId: 101n,
           qtyPerPiece: 2,
           piece: { name: 'mảnh tựa' },
-          segmentSpec: { materialId: 300n, cutLengthMm: 840 },
+          segmentSpec: { materialId: 300n, cutLengthMm: mockDecimal(840) },
         },
       ]);
       prisma.bomPiece.findMany.mockResolvedValue([
@@ -897,7 +904,7 @@ describe('CuttingProposalsService', () => {
           segmentSpecId: 101n,
           qtyPerPiece: 2,
           piece: { name: 'mảnh tựa' },
-          segmentSpec: { materialId: 300n, cutLengthMm: 840 },
+          segmentSpec: { materialId: 300n, cutLengthMm: mockDecimal(840) },
         },
       ]);
       prisma.bomPiece.findMany.mockResolvedValue([

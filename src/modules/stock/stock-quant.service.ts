@@ -58,7 +58,7 @@ export class StockQuantService {
       materialCode: row.material?.code ?? null,
       segmentSpecId: row.segmentSpecId?.toString() ?? null,
       segmentSpecLabel: row.segmentSpec
-        ? `${row.segmentSpec.material.code} @ ${row.segmentSpec.cutLengthMm}mm`
+        ? `${row.segmentSpec.material.code} @ ${Number(row.segmentSpec.cutLengthMm)}mm`
         : null,
       pieceId: row.pieceId?.toString() ?? null,
       pieceCode: row.piece?.code ?? null,

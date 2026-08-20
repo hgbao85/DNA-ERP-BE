@@ -84,7 +84,7 @@ export class SegmentSpecsService {
       await this.assertSteelGroup(materialBigId);
     }
 
-    const cutLengthMm = dto.cutLengthMm ?? current.cutLengthMm;
+    const cutLengthMm = dto.cutLengthMm ?? current.cutLengthMm.toNumber();
     if (dto.materialId || dto.cutLengthMm) {
       await this.assertSpecFree(materialBigId, cutLengthMm, bigId);
     }
@@ -153,7 +153,7 @@ export class SegmentSpecsService {
       id: spec.id.toString(),
       materialId: spec.materialId.toString(),
       materialCode: spec.material.code,
-      cutLengthMm: spec.cutLengthMm,
+      cutLengthMm: Number(spec.cutLengthMm),
     });
   }
 }

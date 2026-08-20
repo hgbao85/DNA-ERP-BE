@@ -881,7 +881,7 @@ export class SteelIssuesService {
         (s) =>
           new CutPatternSegmentResponseDto({
             segmentSpecId: s.segmentSpecId.toString(),
-            cutLengthMm: s.segmentSpec.cutLengthMm,
+            cutLengthMm: Number(s.segmentSpec.cutLengthMm),
             countPerBar: s.countPerBar,
           }),
       ),

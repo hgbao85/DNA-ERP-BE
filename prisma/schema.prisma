@@ -590,9 +590,14 @@ model Part {
 /// Đoạn sắt = material (phải thuộc nhóm vật tư Sắt - materialGroup.systemKey=STEEL_BAR,
 /// ràng buộc ở tầng service) + chiều dài cắt.
 model SegmentSpec {
-  id          BigInt @id @default(autoincrement())
+  id          BigInt  @id @default(autoincrement())
   materialId  BigInt
-  cutLengthMm Int
+  /// Decimal, KHÔNG phải Int/Float (2026-08-19). Số liệu thật có 1 chữ số thập phân (vd
+  /// 590.5mm, 452.7mm - xem cat_sat/de_xuat_views.py::PRODUCT_CATALOG "ghế tình yêu"), và chính
+  /// solver cũng CỐ Ý tránh float nhị phân (de_xuat_logic.py: "SCALING_FACTOR=10: mọi phép tính
+  /// chạy trên số nguyên đã nhân 10 -> giữ được [độ chính xác thập phân hệ 10]") - Decimal(7,1)
+  /// khớp đúng độ phân giải đó. Trước đây là Int, làm tròn mất 0.3-0.5mm mỗi lần nhập.
+  cutLengthMm Decimal @db.Decimal(7, 1)
 
   material                       Material                        @relation(fields: [materialId], references: [id])
   pieceBoms                      PieceBom[]
@@ -1293,7 +1298,9 @@ model CuttingProposal {
   /// Nguyên văn response solver (purchase_plan[], summary...) khi thành công.
   rawResponse         Json?
   totalBarsAll        Int?
-  totalWasteMm        Int?
+  /// Decimal, không Int (2026-08-19) - tổng hao hụt cộng dồn từ các dòng lines[], mỗi dòng lại
+  /// tính từ cutLengthMm (nay Decimal) nên kế thừa cùng độ chính xác thập phân, xem SegmentSpec.
+  totalWasteMm        Decimal?              @db.Decimal(8, 1)
   wastePercentage     Decimal?              @db.Decimal(6, 3)
   /// Lý do lỗi/timeout/không khả thi khi status=FAILED (bao gồm failing_materials nếu có).
   errorMessage        String?
@@ -1332,12 +1339,15 @@ model CuttingProposalLine {
   feasible             Boolean  @default(true)
   bestStockLengthMm    Int?
   totalBars            Int?
-  totalWasteMm         Int?
+  /// Decimal, không Int (2026-08-19) - kế thừa độ chính xác thập phân từ cutLengthMm, xem
+  /// SegmentSpec.
+  totalWasteMm         Decimal? @db.Decimal(7, 1)
   wastePercentage      Decimal? @db.Decimal(6, 3)
   /// Tổng chiều dài mẩu sắt còn NGUYÊN (chưa cắt, từ cây cắt dở) của loại sắt này - nhập kho,
   /// cắt được cỡ bất kỳ sau này. KHÔNG phải phế liệu/hao hụt. Phôi cần biết số này để nhập kho
-  /// đúng, xem thêm CuttingProposalPattern.mauNguyenMm (chi tiết cây nào cắt dở).
-  mauNguyenMm          Int?     @default(0)
+  /// đúng, xem thêm CuttingProposalPattern.mauNguyenMm (chi tiết cây nào cắt dở). Decimal không
+  /// Int (2026-08-19) - cùng lý do totalWasteMm ở trên.
+  mauNguyenMm          Decimal? @default(0) @db.Decimal(7, 1)
   /// So sánh hao hụt giữa các chiều dài chuẩn đã chấm (vd [{length:5850,bars:227,wastePct:9.61},
   /// {length:6000,bars:223,wastePct:0.85}]) - thuần hiển thị/audit, không có FK nào cần tới nên
   /// giữ JSON thay vì tách bảng.
@@ -1387,14 +1397,17 @@ model CuttingProposalLine {
 /// 1 kiểu cắt (cutting_patterns[] của solver, theo từng loại sắt) - Phôi cắt theo đúng
 /// pattern nào tra ngược qua bảng này (Phase 9, cut_pattern_segment FK tới đây).
 model CuttingProposalPattern {
-  id            BigInt @id @default(autoincrement())
+  id            BigInt   @id @default(autoincrement())
   lineId        BigInt
   patternIndex  Int
   barCount      Int
-  wastePerBarMm Int?
+  /// Decimal, không Int (2026-08-19) - kế thừa độ chính xác thập phân từ cutLengthMm, xem
+  /// SegmentSpec.
+  wastePerBarMm Decimal? @db.Decimal(6, 1)
   /// > 0 nghĩa là cây thuộc pattern này CẮT DỞ (dừng sớm, phần còn lại để nguyên nhập kho) -
-  /// đa số pattern có giá trị 0, chỉ pattern "cây cuối" của 1 loại sắt mới có mẩu nguyên.
-  mauNguyenMm   Int?   @default(0)
+  /// đa số pattern có giá trị 0, chỉ pattern "cây cuối" của 1 loại sắt mới có mẩu nguyên. Decimal
+  /// không Int (2026-08-19) - cùng lý do wastePerBarMm ở trên.
+  mauNguyenMm   Decimal? @default(0) @db.Decimal(7, 1)
 
   line       CuttingProposalLine             @relation(fields: [lineId], references: [id])
   segments   CuttingProposalPatternSegment[]

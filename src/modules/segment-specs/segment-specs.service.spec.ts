@@ -2,6 +2,14 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { SegmentSpecsService } from './segment-specs.service';
 
+/** Mô phỏng `Prisma.Decimal` tối thiểu (2026-08-19, cutLengthMm giờ Decimal(7,1)) - đủ cho cả
+ *  `.toNumber()` LẪN ép kiểu `Number(x)` (dùng .valueOf) mà code service gọi tới. */
+const mockDecimal = (n: number) => ({
+  toNumber: () => n,
+  valueOf: () => n,
+  toString: () => String(n),
+});
+
 describe('SegmentSpecsService', () => {
   let service: SegmentSpecsService;
   let prisma: {
@@ -23,7 +31,7 @@ describe('SegmentSpecsService', () => {
   const existingSpec = {
     id: 1n,
     materialId: 10n,
-    cutLengthMm: 930,
+    cutLengthMm: mockDecimal(930),
     material: steelMaterial,
   };
 

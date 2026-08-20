@@ -33,6 +33,17 @@
 >   chống treo `CALCULATING`, cảnh báo "nhu cầu nhỏ, cận dưới không đáng tin" trên màn gộp. Rút lại
 >   đề xuất "nới ngưỡng" (vòng review 3) vì tái tạo lại đúng lỗi `auto_scan`. Còn thiếu duy nhất:
 >   trần số SKU gộp (mục 6b - cần spike dữ liệu UAT để chọn ngưỡng).
+> - [Mục 16](#16-cutlengthmm-và-các-field-hao-hụt-phái-sinh-int---decimal-2026-08-19) — đổi
+>   `SegmentSpec.cutLengthMm` (+ 5 field hao hụt phái sinh) từ `Int` sang `Decimal(...,1)`, KHÔNG
+>   phải `Float` (solver cố ý tránh số thực nhị phân, xem 16.2). Phát hiện qua đối chiếu với BOM gốc
+>   trong code solver: 2 giá trị đã bị làm tròn mất 0,3-0,5mm. Sửa 1 rủi ro thầm lặng (khoá `Map`
+>   dựng từ `Decimal` không khớp khoá tra cứu từ số JSON thường) + 1 blind spot `tsc` không bắt được
+>   (field `unknown` khiến response trả chuỗi thay vì số). Phát hiện thêm 1 bug 500 thật (hệ quả của
+>   việc dọn `CuttingProposal` test - `purchase-proposals.service.ts` ép kiểu non-null sai), đã sửa
+>   + test hồi quy. 562/562 test pass, live-test qua trình duyệt xác nhận. **Cập nhật 2026-08-20
+>   (16.8)**: giải conflict thủ công với commit của đồng nghiệp làm schema.prisma khai trùng field -
+>   chặn prisma generate/tsc toàn repo. Đã dọn field trùng, xác nhận không có xung đột thật với phần
+>   redesign SteelIssue của đồng nghiệp. 563/563 test pass.
 
 Repo liên quan: `DNA-ERP-BE` (nhánh `main`), `DNA-ERP` (nhánh `demo`), solver `cat_sat_iea`
 (`D:\DNA-DEXUAT`, không đổi trong phiên này).
@@ -1510,3 +1521,141 @@ trước (`Date.now()` impure trong `CalculatingBadge` - mirror pattern có sẵ
 `setState` trong effect ở `GomDotCatPage.tsx:111,117` - code cũ, ngoài phạm vi diff của đợt này).
 
 Toàn bộ thay đổi (BE + FE) **chưa commit**. Migration đã áp dụng vào DB **local** duy nhất.
+
+---
+
+## 16. `cutLengthMm` và các field hao hụt phái sinh: `Int` -> `Decimal` (2026-08-19)
+
+### 16.1. Phát sinh từ đâu
+
+Khi dọn `CuttingProposal` test cũ cho SKU J55/Ghế tình yêu, Sếp gửi kèm 2 ảnh chụp màn hình định
+mức GỐC từ chính solver (`dna-dexuat.onrender.com/cat_sat/de_xuat/` - trang demo BOM của cat_sat_iea,
+KHÔNG phải dữ liệu do ai tự bịa). Đối chiếu với dữ liệu đang lưu trong `segment_spec` phát hiện lệch
+đúng 2 chỗ:
+
+| Mảnh | Vật tư | Solver gốc (`cat_sat/de_xuat_views.py::PRODUCT_CATALOG`) | DB đang lưu |
+|---|---|---|---|
+| chân ghế | sắt Fi Ø21 | **590,5mm** | 591mm |
+| tựa lớn | sắt hộp 10x20 | **452,7mm** | 453mm |
+
+Nguyên nhân: `SegmentSpec.cutLengthMm` là `Int`, không lưu được số thập phân - mỗi lần nhập giá trị
+lẻ thì bị làm tròn âm thầm, không báo lỗi gì.
+
+### 16.2. Vì sao `Decimal`, không phải `Float`
+
+Solver **cố ý tránh** số thực nhị phân. Nguyên văn `cat_sat/de_xuat_logic.py`:
+
+> `SCALING_FACTOR = 10: mọi phép tính chạy trên số nguyên đã nhân 10 -> giữ được [độ chính xác thập
+> phân hệ 10]`
+
+Toàn bộ solver quy đổi chiều dài về số nguyên nhân 10 để tính (tránh sai số tích luỹ của float nhị
+phân qua nhiều phép cộng/trừ trong bài toán tối ưu - giống lý do 0.1+0.2 ≠ 0.3 ở hầu hết ngôn ngữ).
+Đổi DB sang `Float` sẽ đưa đúng thứ solver đã né tránh có chủ đích vào tầng lưu trữ. `Decimal` là số
+thập phân cố định hệ 10, chính xác tuyệt đối, khớp đúng độ phân giải solver đang dùng (1 chữ số thập
+phân).
+
+### 16.3. Phạm vi thay đổi
+
+Không chỉ `cutLengthMm` - mọi field hao hụt/mẩu nguyên TÍNH TỪ nó cũng đổi theo, nếu không thì độ
+chính xác vừa lấy lại ở đầu vào lại mất ngay ở đầu ra:
+
+| Field | Model | Kiểu mới |
+|---|---|---|
+| `cutLengthMm` | `SegmentSpec` | `Decimal(7,1)` |
+| `totalWasteMm` | `CuttingProposal` | `Decimal(8,1)` |
+| `totalWasteMm`, `mauNguyenMm` | `CuttingProposalLine` | `Decimal(7,1)` |
+| `wastePerBarMm` | `CuttingProposalPattern` | `Decimal(6,1)` |
+| `mauNguyenMm` | `CuttingProposalPattern` | `Decimal(7,1)` |
+
+**Cố ý không đụng:** `bestStockLengthMm`, `SystemConfig.solver*LengthMm/TrimStartMm/LengthStepMm`
+(số cây/cấu hình mua hàng - luôn nguyên, NCC không bán 5850,5mm), `SteelIssue.barLengthMm` (cây đã
+mua, luôn nguyên), `CutBundle.wastePerBarMm` (Phôi tự đo báo cáo thật bằng thước sau khi cắt - khác
+bản chất với số solver TÍNH TOÁN, không phải thiếu sót).
+
+Migration `20260819025542_segment_spec_and_waste_fields_decimal` - `ALTER COLUMN ... USING
+...::numeric`, cast an toàn không mất dữ liệu hiện có (mọi Int cũ thành `X.0`). **Tạo bằng tay** vì
+`prisma migrate dev` từ chối chạy ở môi trường non-interactive khi có cảnh báo đổi kiểu cột trên bảng
+có dữ liệu - viết `migration.sql` khớp đúng nội dung Prisma đã in ra cảnh báo, áp trực tiếp, rồi
+`prisma migrate resolve --applied` để đồng bộ lịch sử.
+
+⚠️ **Migration chỉ sửa CẤU TRÚC cột, không sửa 2 giá trị đã sai từ trước** (591→590.5, 453→452.7) -
+việc đó làm bằng `UPDATE ... WHERE id = 13/29` chạy tay riêng, ID cụ thể của DB local, **không nằm
+trong migration.sql**. Áp migration này lên môi trường khác sẽ lên đúng cấu trúc, nhưng KHÔNG tự sửa
+dữ liệu sai tương ứng ở đó (ID hàng khác/dữ liệu khác) - cần soát lại thủ công riêng nếu cần đúng
+tuyệt đối.
+
+### 16.4. Sửa code theo (12 file BE) - không chỉ đổi kiểu suông
+
+- **1 rủi ro thầm lặng nghiêm trọng nhất**: `cutting-proposals.service.ts` dùng `cutLengthMm` làm
+  khoá `Map` (gom nhu cầu theo cỡ đoạn) và ghép vào chuỗi tra cứu `segmentSpecLookup`. 2 `Decimal`
+  cùng giá trị KHÔNG `===` nhau, và `Decimal.toString()` giữ số 0 ở cuối (`"930.0"`) trong khi phía
+  đọc lại JSON response solver luôn là số thường (`"930"`) - ghép sai định dạng làm 2 khoá KHÔNG
+  khớp, tra cứu miss ÂM THẦM (rơi vào nhánh `continue` tưởng là ca hiếm "shouldn't happen"). Đã
+  chuẩn hoá `.toNumber()` ở MỌI nơi dựng khoá, cả 2 đầu SET/GET.
+- **2 validator `@IsInt()` chặn nhầm input hợp lệ**: `CreateSegmentSpecDto`, `QuotaSegmentDto`
+  (module SKU/định mức - đường nhập BOM thật) đổi sang `@IsNumber({maxDecimalPlaces:1})`.
+- **1 blind spot mà `tsc` không bắt được**: `skus.service.ts` có field `manhData: unknown` (JSON
+  tái dựng cho tương thích ngược) - gán `Decimal` thẳng vào không báo lỗi biên dịch, nhưng
+  `JSON.stringify` sẽ gọi `Decimal.toJSON()` trả về CHUỖI thay vì số, phá FE đang mong đợi
+  `number`. Phát hiện bằng quét tay (`grep` toàn bộ `.cutLengthMm`/`.totalWasteMm`/...), không
+  phải nhờ `tsc` - nhắc rằng kiểu `unknown`/`any` là điểm mù thật của việc "chỉ chạy tsc là đủ".
+- 4 chỗ dựng nhãn hiển thị (`@ ${cutLengthMm}mm`) đổi sang `Number(...)` trước khi ghép chuỗi,
+  tránh hiện "@ 930.0mm" thay vì "@ 930mm".
+
+### 16.5. Bug thật phát hiện khi live-test (hệ quả của việc dọn dữ liệu ở mục trước, không phải của
+việc đổi kiểu)
+
+Sau khi xóa 14 `CuttingProposal` test của J55/Ghế tình yêu (đúng thiết kế `ON DELETE SET NULL`),
+`GET /purchase-proposals` bắt đầu trả **500** thật trên trình duyệt: `purchase-proposals.service.ts`
+có `row.cuttingProposal!.productionOrder` - ép kiểu non-null trong khi schema cho phép null
+(`PurchaseProposal.cuttingProposalId BigInt?`), và trước đây trạng thái null chưa từng xảy ra nên
+chưa ai chạm phải. Phần còn lại của hàm đã tự xử lý `productionOrder`/`mergedPi` null sẵn (`?.`, `??
+'—'`) - chỉ cần sửa đúng 2 dòng ép kiểu gốc. Thêm 1 test hồi quy khoá lại ca này.
+
+### 16.6. Kiểm tra tác động toàn hệ thống (theo yêu cầu review riêng)
+
+- Quét toàn bộ `src/modules` cho mọi file chạm `SegmentSpec`/`cutLengthMm` - không sót file nào
+  ngoài 12 file đã sửa (`materials.service.ts`, `production-batches.service.ts` chỉ chạm
+  `segmentSpecId` là khoá ngoại, không chạm `cutLengthMm`).
+- 7 file dùng `$queryRaw`/`$executeRaw` trong toàn hệ thống - chỉ 1 câu chạm bảng
+  `cutting_proposals` và chỉ `SELECT "status"`, không đụng field nào đã đổi.
+- `prisma/seed.ts`/`seed-demo.ts` không tham chiếu `cutLengthMm` trực tiếp.
+- FE: không cần sửa gì - JSON output vẫn `number` y hệt trước (đã convert `Number(...)` ở mọi DTO
+  output). Quét riêng FE tìm phép toán giả định số nguyên (`Math.floor`, bitwise, `parseInt`) trên
+  4 field liên quan - không có chỗ nào.
+- Input validation: đổi `@IsInt()` → `@IsNumber({maxDecimalPlaces:1})` là NỚI RỘNG, không siết -
+  không breaking cho input số nguyên cũ.
+
+### 16.7. Kết quả
+
+`npx tsc --noEmit` sạch (cả BE lẫn FE), `npx jest` **42/42 test suite, 562/562 test pass** (thêm 6
+test: 3 file spec cần cập nhật fixture Decimal-stub + 1 test hồi quy cho bug 16.5). Live-test qua
+trình duyệt thật (đăng nhập admin, đọc network request/response): xác nhận `GET /purchase-proposals`
+từ 500 → 200, response chứa đúng `"—"`/`null` cho các dòng mồ côi thay vì crash; giá trị 590.5/452.7
+đã lưu đúng trong DB.
+
+### 16.8. `schema.prisma` bị hỏng sau khi merge với commit của đồng nghiệp (2026-08-20)
+
+Sau khi `git stash pop` bản vá mục 16 lên trên commit `0ec2a9d` ("sanxuat-stage-v21", redesign
+`SteelIssue` theo `productionInvoiceId`) của đồng nghiệp (ohey), thao tác giải conflict thủ công qua
+Fork đã **xóa 3 cặp dấu `<<<<<<<`/`=======`/`>>>>>>>` mà không chọn bên nào** trên
+`CuttingProposalLine` - để lại đồng thời cả field `Int?` cũ (`totalWasteMm`, `wastePercentage`,
+`mauNguyenMm`) lẫn field `Decimal?` mới cùng tên. `npx prisma validate`/`generate` báo lỗi khai trùng
+field (`Validation Error Count: 3`), khiến Prisma Client không generate lại được và kéo theo ~20 lỗi
+`tsc` giả (`Property 'productionInvoiceId' does not exist...`) - xác nhận qua diff trực tiếp
+`SteelIssue` hiện tại với bản trong commit `0ec2a9d`: **giống nhau từng byte**, không phải xung đột
+thật với phần redesign của đồng nghiệp.
+
+Xóa 6 dòng field `Int?` cũ + comment trùng, giữ nguyên khối `Decimal?` (đúng quyết định mục 16.2-16.3
+- không có gì đổi ngược). Xác nhận lại toàn bộ:
+
+- `npx prisma validate` + `generate`: sạch.
+- `npx tsc --noEmit`: **0 lỗi** (20 lỗi giả biến mất hoàn toàn sau khi generate lại Client).
+- `npx jest`: **42/42 test suite, 563/563 test pass** (không đổi hành vi, chỉ dọn field trùng).
+- `eslint`: ~1.447 lỗi CRLF (`prettier/prettier`, "Delete `␍`") xuất hiện trên diện rộng nhưng xác
+  nhận **có từ trước, không liên quan thay đổi này** - `src/prisma/prisma.module.ts` (file không đụng
+  tới) đã có lỗi này từ chính commit khởi tạo repo (`fd7a858`), do line-ending Windows/`core.autocrlf`
+  chứ không phải nội dung code sai. `src/generated` (Prisma Client output) bị eslint ignore đúng như
+  cấu hình.
+
+Chưa commit - theo quy ước người dùng tự làm phần đó.

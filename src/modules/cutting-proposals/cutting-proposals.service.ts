@@ -1263,16 +1263,17 @@ export class CuttingProposalsService {
     for (const row of pieceBoms) {
       const qtyPerUnit = qtyPerUnitByKey.get(`${row.bomRevisionId}:${row.pieceId}`) ?? 0;
       const qtyPerSet = qtyPerUnit * row.qtyPerPiece;
-      if (qtyPerSet <= 0 || row.segmentSpec.cutLengthMm <= 0) continue;
+      // cutLengthMm là Decimal (2026-08-19, xem SegmentSpec) - PHẢI .toNumber() TRƯỚC khi dùng
+      // làm khoá Map: 2 Decimal cùng giá trị không === nhau, dùng thẳng làm khoá sẽ gộp/tách
+      // NHẦM các cỡ đoạn thay vì cộng dồn đúng 1 nhóm.
+      const cutLengthMm = row.segmentSpec.cutLengthMm.toNumber();
+      if (qtyPerSet <= 0 || cutLengthMm <= 0) continue;
 
       const byMaterial = result.get(row.bomRevisionId) ?? new Map<bigint, Map<number, number>>();
       const byCutLength = byMaterial.get(row.segmentSpec.materialId) ?? new Map<number, number>();
       // Cộng dồn: nhiều mảnh khác nhau có thể cùng dùng 1 (vật tư, chiều dài đoạn) - đúng cách
       // explode_bom của solver gom nhóm (de_xuat_logic.py: groups[key][cut_len] += demand).
-      byCutLength.set(
-        row.segmentSpec.cutLengthMm,
-        (byCutLength.get(row.segmentSpec.cutLengthMm) ?? 0) + qtyPerSet,
-      );
+      byCutLength.set(cutLengthMm, (byCutLength.get(cutLengthMm) ?? 0) + qtyPerSet);
       byMaterial.set(row.segmentSpec.materialId, byCutLength);
       result.set(row.bomRevisionId, byMaterial);
     }
@@ -1495,10 +1496,13 @@ export class CuttingProposalsService {
     const qtyPerUnitByPieceId = new Map(bomPieces.map((bp) => [bp.pieceId, bp.qtyPerUnit]));
     const segmentSpecLookup = new Map<string, bigint>();
     const bomRows: SolverBomRow[] = pieceBoms.map((row) => {
-      segmentSpecLookup.set(
-        `${row.segmentSpec.materialId}:${row.segmentSpec.cutLengthMm}`,
-        row.segmentSpecId,
-      );
+      // cutLengthMm là Decimal (2026-08-19, xem SegmentSpec) - .toNumber() TRƯỚC khi ghép khoá
+      // Map, KHÔNG ghép thẳng Decimal vào template string: Decimal.toString() giữ nguyên số 0
+      // ở cuối (vd "930.0"), trong khi phía tra cứu (dòng dưới, đọc segment.size từ JSON response
+      // solver) luôn là number thường ("930", không ".0") - ghép sai định dạng làm 2 khoá
+      // KHÔNG khớp nhau, tra cứu miss âm thầm (continue ở nhánh "shouldn't happen").
+      const cutLengthMm = row.segmentSpec.cutLengthMm.toNumber();
+      segmentSpecLookup.set(`${row.segmentSpec.materialId}:${cutLengthMm}`, row.segmentSpecId);
       return {
         part: row.piece.name,
         qty_per_set: qtyPerUnitByPieceId.get(row.pieceId) ?? 0,
@@ -1509,7 +1513,7 @@ export class CuttingProposalsService {
         // đúng nguyên vẹn materialId.
         material: row.segmentSpec.materialId.toString(),
         spec: '',
-        cut_length: row.segmentSpec.cutLengthMm,
+        cut_length: cutLengthMm,
         qty_per_part: row.qtyPerPiece,
       };
     });
@@ -1766,7 +1770,7 @@ export class CuttingProposalsService {
       displayStatus,
       displayReason,
       totalBarsAll: proposal.totalBarsAll,
-      totalWasteMm: proposal.totalWasteMm,
+      totalWasteMm: proposal.totalWasteMm ? Number(proposal.totalWasteMm) : null,
       wastePercentage: proposal.wastePercentage ? Number(proposal.wastePercentage) : null,
       errorMessage: proposal.errorMessage,
       requestedAt: proposal.requestedAt,
@@ -1785,9 +1789,9 @@ export class CuttingProposalsService {
       feasible: line.feasible,
       bestStockLengthMm: line.bestStockLengthMm,
       totalBars: line.totalBars,
-      totalWasteMm: line.totalWasteMm,
+      totalWasteMm: line.totalWasteMm ? Number(line.totalWasteMm) : null,
       wastePercentage: line.wastePercentage ? Number(line.wastePercentage) : null,
-      mauNguyenMm: line.mauNguyenMm,
+      mauNguyenMm: line.mauNguyenMm ? Number(line.mauNguyenMm) : null,
       lengthComparison: line.lengthComparison as
         { length: number; bars: number; wastePct: number }[] | null,
       reason: line.reason,
@@ -1804,11 +1808,11 @@ export class CuttingProposalsService {
         id: pattern.id.toString(),
         patternIndex: pattern.patternIndex,
         barCount: pattern.barCount,
-        wastePerBarMm: pattern.wastePerBarMm,
-        mauNguyenMm: pattern.mauNguyenMm,
+        wastePerBarMm: pattern.wastePerBarMm ? Number(pattern.wastePerBarMm) : null,
+        mauNguyenMm: pattern.mauNguyenMm ? Number(pattern.mauNguyenMm) : null,
         segments: pattern.segments.map((segment) => ({
           segmentSpecId: segment.segmentSpecId.toString(),
-          cutLengthMm: segment.segmentSpec.cutLengthMm,
+          cutLengthMm: Number(segment.segmentSpec.cutLengthMm),
           countPerBar: segment.countPerBar,
         })),
       })),

@@ -196,6 +196,21 @@ describe('PurchaseProposalsService', () => {
       expect(result.items?.[0].quotes[0].unitPrice).toBe(45000);
     });
 
+    it('cuttingProposal=null (CuttingProposal gốc đã bị xóa, FK ON DELETE SET NULL) - trả về "—" thay vì crash 500', async () => {
+      // Phát hiện 2026-08-19 khi dọn CuttingProposal test cho J55/Ghế tình yêu: `row.cuttingProposal!`
+      // giả định luôn tồn tại, nhưng schema cho phép NULL (PurchaseProposal.cuttingProposalId
+      // BigInt?) - hồ sơ mua hàng vẫn là dữ liệu THẬT (đã đặt/đã mua), chỉ mất dấu vết ngược.
+      prisma.purchaseProposal.findUnique.mockResolvedValue(proposal({ cuttingProposal: null }));
+
+      const result = await service.findOne('300');
+
+      expect(result.poNumber).toBe('—');
+      expect(result.piCode).toBe('—');
+      expect(result.salesOrderCode).toBeNull();
+      expect(result.deadline).toBeNull();
+      expect(result.mfgProductName).toBeNull();
+    });
+
     it('throws NotFoundException when the proposal does not exist', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(null);
 

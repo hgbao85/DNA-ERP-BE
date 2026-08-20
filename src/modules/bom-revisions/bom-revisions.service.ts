@@ -832,7 +832,7 @@ export class BomRevisionsService {
       pieceId: row.pieceId.toString(),
       pieceCode: row.piece.code,
       segmentSpecId: row.segmentSpecId.toString(),
-      segmentSpecLabel: `${row.segmentSpec.material.code} @ ${row.segmentSpec.cutLengthMm}mm`,
+      segmentSpecLabel: `${row.segmentSpec.material.code} @ ${Number(row.segmentSpec.cutLengthMm)}mm`,
       qtyPerPiece: row.qtyPerPiece,
       note: row.note,
     });
@@ -845,7 +845,7 @@ export class BomRevisionsService {
       partId: row.partId.toString(),
       partCode: row.part.code,
       segmentSpecId: row.segmentSpecId.toString(),
-      segmentSpecLabel: `${row.segmentSpec.material.code} @ ${row.segmentSpec.cutLengthMm}mm`,
+      segmentSpecLabel: `${row.segmentSpec.material.code} @ ${Number(row.segmentSpec.cutLengthMm)}mm`,
       qtyPerPart: row.qtyPerPart,
     });
   }
