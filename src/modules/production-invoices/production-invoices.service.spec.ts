@@ -238,6 +238,58 @@ describe('ProductionInvoicesService', () => {
     });
   });
 
+  // ─── "Tiến hành cắt riêng" (2026-08-20): đúng 1 SKU chưa được gom, tạo PI thường của riêng nó ──
+  describe('claimSolo', () => {
+    it('tạo PI thường (không isMerged) cho đúng SKU chưa được gom, gắn productionInvoiceId', async () => {
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue({
+        id: 20n,
+        productionInvoiceId: null,
+        salesOrderId: 1n,
+        deliveryDeadline: new Date('2026-10-10'),
+      });
+      prisma.productionInvoice.create.mockResolvedValue({ id: 60n });
+      prisma.productionInvoiceItem.update.mockResolvedValue({});
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({ id: 60n, code: 'PI-60', isMerged: false, salesOrderId: 1n }),
+      );
+
+      await service.claimSolo('20');
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
+      const created = prisma.productionInvoice.create.mock.calls[0][0] as {
+        data: { isMerged: boolean; salesOrderId: bigint | null; deadline: Date };
+      };
+      expect(created.data.isMerged).toBe(false);
+      expect(created.data.salesOrderId).toBe(1n);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
+      const updated = prisma.productionInvoiceItem.update.mock.calls[0][0] as {
+        where: { id: bigint };
+        data: { productionInvoiceId: bigint };
+      };
+      expect(updated.where.id).toBe(20n);
+      expect(updated.data.productionInvoiceId).toBe(60n);
+    });
+
+    it('chặn gọi lại cho SKU đã được gom rồi - không tạo PI mới đè lên', async () => {
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue({
+        id: 20n,
+        productionInvoiceId: 7n,
+        salesOrderId: 1n,
+        deliveryDeadline: null,
+      });
+
+      await expect(service.claimSolo('20')).rejects.toThrow(ConflictException);
+      expect(prisma.productionInvoice.create).not.toHaveBeenCalled();
+    });
+
+    it('báo 404 khi SKU không tồn tại', async () => {
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(null);
+
+      await expect(service.claimSolo('999')).rejects.toThrow(NotFoundException);
+      expect(prisma.productionInvoice.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('approveBatch', () => {
     const mergedPi = (items: unknown[]) =>
       pi({ id: 50n, code: 'PI-50', isMerged: true, salesOrderId: null, salesOrder: null, items });

@@ -134,6 +134,29 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.MATERIAL_GROUP,
       actions: [PermissionAction.VIEW],
     },
+    // Phát hiện 2026-08-20 khi live-test luồng Sales->Mua hàng: ThongKePagePlan.tsx
+    // (fetchExecutionStages, cùng trang QLSX dùng - xem PRODUCTION_MANAGER) gọi GET
+    // /production-orders/:id/production-batches ngay khi mount Bảng thống kê cho KHSX - thiếu
+    // quyền này crash cả trang (403). Chỉ VIEW - KHSX không tự báo sản lượng.
+    {
+      module: PERMISSION_MODULES.PRODUCTION_BATCH,
+      actions: [PermissionAction.VIEW],
+    },
+    // Cùng phát hiện 2026-08-20, cùng hàm fetchExecutionStages/fetchFrame: khi mục Mua hàng của
+    // item đã 100% (purchPct >= 100), trang gọi tiếp GET /production-invoices/:id/steel-issues -
+    // thiếu quyền này crash tiếp ngay khi có đơn hàng thật đạt tới bước đó (chưa từng lộ ra vì DB
+    // demo trước đó không có PO nào mua đủ 100%). Chỉ VIEW - KHSX không tự xuất sắt.
+    {
+      module: PERMISSION_MODULES.STEEL_ISSUE,
+      actions: [PermissionAction.VIEW],
+    },
+    // Cùng phát hiện 2026-08-20, sau khi STEEL_ISSUE:VIEW hết thiếu lại lộ tiếp: fetchWeaving()
+    // (cùng ThongKePagePlan) gọi GET /production-orders/:id/weaving-issue-plan. Chỉ VIEW - KHSX
+    // không tự xuất/nhập đan.
+    {
+      module: PERMISSION_MODULES.WEAVING_ISSUE,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // QLSX: bước duyệt cục bộ SKU (qlsx-review/request-boss-approval/reject-qlsx) đã bị bỏ khỏi
   // pipeline - QLSX chỉ còn VIEW trên SKU (tab "Danh sách SKU" đọc-only). QLSX vẫn duyệt PI
@@ -204,6 +227,30 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     // Chỉ VIEW - QLSX không tham gia báo giá/duyệt mua.
     {
       module: PERMISSION_MODULES.PURCHASE_PROPOSAL,
+      actions: [PermissionAction.VIEW],
+    },
+    // Phát hiện 2026-08-20 khi live-test luồng Sales->Mua hàng: ThongKePagePlan.tsx
+    // (fetchExecutionStages) gọi GET /production-orders/:id/production-batches ngay khi mount
+    // Bảng thống kê cho QLSX - thiếu quyền này crash cả trang (403), chưa từng bị lộ vì DB demo
+    // trước đó không có Production Order nào để trang thử gọi tới. Chỉ VIEW - QLSX không tự báo
+    // sản lượng (đó là việc của HAN/SON/PHOI_STAFF), chỉ xem tiến độ.
+    {
+      module: PERMISSION_MODULES.PRODUCTION_BATCH,
+      actions: [PermissionAction.VIEW],
+    },
+    // Cùng phát hiện 2026-08-20, cùng hàm fetchExecutionStages/fetchFrame: khi mục Mua hàng của
+    // item đã 100% (purchPct >= 100), trang gọi tiếp GET /production-invoices/:id/steel-issues -
+    // thiếu quyền này crash tiếp ngay khi có đơn hàng thật đạt tới bước đó. Chỉ VIEW - QLSX không
+    // tự xuất sắt.
+    {
+      module: PERMISSION_MODULES.STEEL_ISSUE,
+      actions: [PermissionAction.VIEW],
+    },
+    // Cùng phát hiện 2026-08-20, sau khi STEEL_ISSUE:VIEW hết thiếu lại lộ tiếp: fetchWeaving()
+    // (cùng ThongKePagePlan) gọi GET /production-orders/:id/weaving-issue-plan. Chỉ VIEW - QLSX
+    // không tự xuất/nhập đan.
+    {
+      module: PERMISSION_MODULES.WEAVING_ISSUE,
       actions: [PermissionAction.VIEW],
     },
   ],

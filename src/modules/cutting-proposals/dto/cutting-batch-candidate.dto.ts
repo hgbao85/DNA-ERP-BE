@@ -40,7 +40,7 @@ export class CuttingBatchCandidateDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;
   @Expose() @ApiProperty() quantity!: number;
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
-  @Expose() @ApiProperty() productionInvoiceCode!: string;
+  @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceCode!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) deadline!: Date | null;
   @Expose()
   @ApiPropertyOptional({ enum: ProdApprovalStatus, nullable: true })

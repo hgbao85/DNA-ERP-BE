@@ -144,13 +144,17 @@ export class ProductionOrdersService {
     return this.toResponseDto(order);
   }
 
+  /** `productionInvoiceItem.productionInvoice!` - ProductionOrder chỉ sinh ra khi Sếp duyệt
+   *  (approveItem/approveBatch), mà duyệt bắt buộc item đã qua sendItemToQlsx/sendItemToBoss -
+   *  cả hai route đó đều cần piId thật, nên item của 1 ProductionOrder luôn đã có PI (2026-08-20:
+   *  productionInvoiceId có thể null cho item MỚI TẠO, nhưng không thể null ở đây). */
   private toResponseDto(order: ProductionOrderWithSalesOrder): ProductionOrderResponseDto {
     return new ProductionOrderResponseDto({
       id: order.id.toString(),
       poNumber: order.poNumber,
       salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
-      productionInvoiceId: order.productionInvoiceItem.productionInvoice.id.toString(),
-      piCode: order.productionInvoiceItem.productionInvoice.code,
+      productionInvoiceId: order.productionInvoiceItem.productionInvoice!.id.toString(),
+      piCode: order.productionInvoiceItem.productionInvoice!.code,
       deliveryDeadline: order.productionInvoiceItem.deliveryDeadline,
       productionInvoiceItemId: order.productionInvoiceItemId.toString(),
       mfgProductId: order.mfgProductId.toString(),

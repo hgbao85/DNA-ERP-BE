@@ -20,7 +20,7 @@ describe('SalesOrdersService', () => {
       findUnique: jest.Mock;
       findMany: jest.Mock;
     };
-    productionInvoice: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock };
+    productionInvoiceItem: { createMany: jest.Mock };
     planForm: { findFirst: jest.Mock; update: jest.Mock };
     $queryRaw: jest.Mock;
   };
@@ -64,7 +64,7 @@ describe('SalesOrdersService', () => {
         findUnique: jest.fn(),
         findMany: jest.fn(),
       },
-      productionInvoice: { create: jest.fn(), update: jest.fn(), findMany: jest.fn() },
+      productionInvoiceItem: { createMany: jest.fn() },
       planForm: { findFirst: jest.fn(), update: jest.fn() },
       $queryRaw: jest.fn(),
     };
@@ -72,13 +72,28 @@ describe('SalesOrdersService', () => {
   });
 
   describe('create', () => {
-    it('creates an order with items and assigns a code derived from the new id', async () => {
+    it('creates an order with items, creating ProductionInvoiceItem rows with no PI yet (2026-08-20)', async () => {
       prisma.customer.findUnique.mockResolvedValue(customer);
       prisma.mfgProduct.findUnique.mockResolvedValue(product);
       prisma.salesOrder.create.mockResolvedValue(orderWithItems({ code: 'PO-TMP-x' }));
-      prisma.salesOrder.update.mockResolvedValue(orderWithItems({ code: 'PO-10' }));
-      prisma.productionInvoice.findMany.mockResolvedValue([]);
-      prisma.productionInvoice.create.mockResolvedValue({ id: 50n });
+      prisma.salesOrder.update.mockResolvedValue(
+        orderWithItems({
+          code: 'PO-10',
+          items: [
+            {
+              id: 100n,
+              salesOrderId: 10n,
+              mfgProductId: 2n,
+              mfgProduct: product,
+              totalQty: 5,
+              shippedQty: 0,
+              skuName: null,
+              deliveryDate: null,
+            },
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.createMany.mockResolvedValue({ count: 1 });
       prisma.planForm.findFirst.mockResolvedValue(null);
 
       const result = await service.create({
@@ -91,16 +106,20 @@ describe('SalesOrdersService', () => {
       expect(prisma.salesOrder.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: { code: 'PO-10' } }),
       );
-      /* eslint-disable @typescript-eslint/no-unsafe-assignment -- jest matcher typing */
-      expect(prisma.productionInvoice.create).toHaveBeenCalledWith(
+      // PI KHÔNG còn tự sinh ngay lúc tạo PO (2026-08-20) - chỉ item được tạo, productionInvoiceId
+      // để null cho tới khi KHSX chủ động gom (GomDotCatPage - "Xác nhận gộp"/"Tiến hành cắt riêng").
+      expect(prisma.productionInvoiceItem.createMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({
-            salesOrderId: 10n,
-            code: expect.stringMatching(/^PI-\d{4}-001$/),
-          }),
+          data: [
+            expect.objectContaining({
+              productionInvoiceId: null,
+              mfgProductId: 2n,
+              salesOrderId: 10n,
+              quantity: 5,
+            }),
+          ],
         }),
       );
-      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
       expect(prisma.planForm.update).not.toHaveBeenCalled();
     });
 
@@ -126,8 +145,7 @@ describe('SalesOrdersService', () => {
           ],
         }),
       );
-      prisma.productionInvoice.findMany.mockResolvedValue([]);
-      prisma.productionInvoice.create.mockResolvedValue({ id: 50n });
+      prisma.productionInvoiceItem.createMany.mockResolvedValue({ count: 1 });
       prisma.planForm.findFirst.mockResolvedValue({ id: 7n });
 
       await service.create({
@@ -139,9 +157,10 @@ describe('SalesOrdersService', () => {
       expect(prisma.planForm.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({ where: { mfgProductId: 2n, salesOrderId: null } }),
       );
+      // productionInvoiceId null (2026-08-20) - PI chưa tồn tại lúc tạo PO, gắn sau lúc KHSX gom.
       expect(prisma.planForm.update).toHaveBeenCalledWith({
         where: { id: 7n },
-        data: { salesOrderId: 10n, productionInvoiceId: 50n },
+        data: { salesOrderId: 10n, productionInvoiceId: null },
       });
     });
 

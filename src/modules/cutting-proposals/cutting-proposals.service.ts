@@ -470,8 +470,8 @@ export class CuttingProposalsService {
         mfgProductCode: item.mfgProduct.factoryCode,
         mfgProductName: item.mfgProduct.name,
         quantity: item.quantity,
-        salesOrderCode: item.productionInvoice.salesOrder?.code ?? null,
-        productionInvoiceCode: item.productionInvoice.code,
+        salesOrderCode: item.salesOrder?.code ?? null,
+        productionInvoiceCode: item.productionInvoice?.code ?? null,
         deadline: this.frameDeadlineOf(item),
         prodApprovalStatus: item.prodApprovalStatus,
         rejectReason: item.rejectReason,
@@ -605,31 +605,41 @@ export class CuttingProposalsService {
   private async loadBatchContext() {
     const items = await this.prisma.productionInvoiceItem.findMany({
       where: {
-        // "Sếp chưa duyệt" = chưa APPROVED. PHẢI viết dạng OR có nhánh null: item vừa sinh từ đơn
-        // hàng mang prodApprovalStatus = null (KHSX chưa gửi QLSX) và `notIn` của SQL KHÔNG khớp
-        // NULL, dùng notIn sẽ loại mất đúng nhóm đơn mới nhất - tức nhóm cần gộp nhất.
-        //
-        // REJECTED nằm trong danh sách có chủ đích: Sếp từ chối một đợt gộp thì các SKU trong đó
-        // phải QUAY LẠI đây để KHSX gộp tổ hợp khác (yêu cầu Sếp 2026-08-14) - thiếu nhánh này thì
-        // SKU bị từ chối biến mất khỏi hệ thống, không ai gộp lại được.
-        OR: [
-          { prodApprovalStatus: null },
+        AND: [
           {
-            prodApprovalStatus: {
-              in: [
-                ProdApprovalStatus.WAITING_QLSX,
-                ProdApprovalStatus.WAITING_BOSS,
-                ProdApprovalStatus.REJECTED,
-              ],
-            },
+            // "Sếp chưa duyệt" = chưa APPROVED. PHẢI viết dạng OR có nhánh null: item vừa sinh từ
+            // đơn hàng mang prodApprovalStatus = null (KHSX chưa gửi QLSX) và `notIn` của SQL
+            // KHÔNG khớp NULL, dùng notIn sẽ loại mất đúng nhóm đơn mới nhất - tức nhóm cần gộp
+            // nhất.
+            //
+            // REJECTED nằm trong danh sách có chủ đích: Sếp từ chối một đợt gộp thì các SKU trong
+            // đó phải QUAY LẠI đây để KHSX gộp tổ hợp khác (yêu cầu Sếp 2026-08-14) - thiếu nhánh
+            // này thì SKU bị từ chối biến mất khỏi hệ thống, không ai gộp lại được.
+            OR: [
+              { prodApprovalStatus: null },
+              {
+                prodApprovalStatus: {
+                  in: [
+                    ProdApprovalStatus.WAITING_QLSX,
+                    ProdApprovalStatus.WAITING_BOSS,
+                    ProdApprovalStatus.REJECTED,
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            // "Chưa được KHSX gom" (productionInvoiceId null, 2026-08-20 - PI không còn tự sinh
+            // lúc Sales tạo PO) HOẶC "đang nằm trong PI thường, chưa gộp" - đều hiện ra để KHSX
+            // gộp/cắt riêng. Đang nằm trong một đợt gộp rồi thì KHÔNG hiện ra để gộp tiếp - tránh
+            // KHSX vô tình gộp chồng và làm sai phương án cắt của đợt kia.
+            OR: [{ productionInvoiceId: null }, { productionInvoice: { isMerged: false } }],
           },
         ],
-        // Đang nằm trong một đợt gộp rồi thì không hiện ra để gộp tiếp - tránh KHSX vô tình gộp
-        // chồng và làm sai phương án cắt của đợt kia.
-        productionInvoice: { isMerged: false },
       },
       include: {
         mfgProduct: true,
+        salesOrder: true,
         stages: true,
         productionInvoice: { include: { salesOrder: true } },
       },
@@ -1289,29 +1299,35 @@ export class CuttingProposalsService {
    * KHÔNG rơi tiếp về SalesOrderItem.deliveryDate: SalesOrderItem không có FK tới
    * ProductionInvoiceItem, chỉ khớp được qua mfgProductId mà 1 đơn có thể có nhiều dòng cùng sản
    * phẩm - khớp nhầm hạn còn tệ hơn không có hạn. null = xếp CUỐI, hiện "chưa có hạn".
+   *
+   * `productionInvoice` nullable (2026-08-20): item vừa tạo từ PO, chưa được KHSX gom, chưa có
+   * PI để rơi về mốc 3 - lúc đó chỉ còn materialDeadline/FRAME quyết định.
    */
   private frameDeadlineOf(item: {
     materialDeadline: Date | null;
     stages: { stageType: ProdItemStageType; deadline: Date }[];
-    productionInvoice: { deadline: Date | null };
+    productionInvoice: { deadline: Date | null } | null;
   }): Date | null {
     const frame = item.stages.find((s) => s.stageType === ProdItemStageType.FRAME);
-    return item.materialDeadline ?? frame?.deadline ?? item.productionInvoice.deadline ?? null;
+    return item.materialDeadline ?? frame?.deadline ?? item.productionInvoice?.deadline ?? null;
   }
 
+  /** `salesOrder` đọc trực tiếp ở CẤP ITEM, không suy qua `productionInvoice.salesOrder` - item
+   *  chưa được gom (`productionInvoice: null`) vẫn phải hiện đúng PO gốc của nó. */
   private toBatchOrderDto(item: {
     id: bigint;
     quantity: number;
     prodApprovalStatus: ProdApprovalStatus | null;
     materialDeadline: Date | null;
     mfgProduct: { factoryCode: string; name: string | null };
+    salesOrder: { code: string } | null;
     stages: { stageType: ProdItemStageType; deadline: Date }[];
-    productionInvoice: { code: string; deadline: Date | null; salesOrder: { code: string } | null };
+    productionInvoice: { code: string; deadline: Date | null } | null;
   }): CuttingBatchOrderDto {
     return new CuttingBatchOrderDto({
       productionInvoiceItemId: item.id.toString(),
-      salesOrderCode: item.productionInvoice.salesOrder?.code ?? null,
-      productionInvoiceCode: item.productionInvoice.code,
+      salesOrderCode: item.salesOrder?.code ?? null,
+      productionInvoiceCode: item.productionInvoice?.code ?? null,
       mfgProductCode: item.mfgProduct.factoryCode,
       mfgProductName: item.mfgProduct.name,
       quantity: item.quantity,

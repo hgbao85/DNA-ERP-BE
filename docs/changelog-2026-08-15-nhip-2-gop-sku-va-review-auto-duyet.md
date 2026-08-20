@@ -44,6 +44,24 @@
 >   (16.8)**: giải conflict thủ công với commit của đồng nghiệp làm schema.prisma khai trùng field -
 >   chặn prisma generate/tsc toàn repo. Đã dọn field trùng, xác nhận không có xung đột thật với phần
 >   redesign SteelIssue của đồng nghiệp. 563/563 test pass.
+> - [Mục 17](#17-pi-chỉ-sinh-khi-khsx-chủ-động-gom-không-tự-động-lúc-sales-tạo-po-2026-08-20) — PI
+>   (`ProductionInvoice`) không còn tự sinh 1-1 ngay lúc Sales tạo PO (kể cả PO chưa xác nhận cọc) -
+>   chỉ sinh khi KHSX chủ động "gom" ở màn "Tối ưu cắt sắt" (`GomDotCatPage.tsx`, nút "Xác nhận gộp"
+>   ≥2 SKU hoặc "Tiến hành cắt riêng" 1 SKU). `ProductionInvoiceItem.productionInvoiceId` đổi
+>   nullable - Sales vẫn tạo item ngay (giữ nguyên máy theo dõi duyệt/BOM preview đã có), chỉ không
+>   bọc PI cho tới khi KHSX bấm nút. `mergeItems()` giữ nguyên không đổi; thêm method mới
+>   `claimSolo()` cho ca 1 SKU (trước đây là no-op). 586/586 test pass, live-test qua trình duyệt
+>   xác nhận cả 2 nhánh (gộp và cắt riêng) hoạt động đúng. **Cập nhật cùng ngày (17.7)**: live-test
+>   lộ tiếp 3 lỗ hổng quyền domino trên "Bảng thống kê" (dùng chung QLSX/KHSX) -
+>   `PRODUCTION_BATCH:VIEW`, `STEEL_ISSUE:VIEW`, `WEAVING_ISSUE:VIEW` đều thiếu cho cả 2 role, sửa
+>   1 cái lại lộ cái tiếp theo. Đã vá cả 3 + seed + xác nhận qua browser thật: 0 lỗi 403 còn lại.
+>   **Cập nhật cùng ngày (17.8)**: đi tiếp hết chuỗi Sales→Mua hàng qua trình duyệt thật (Sales tạo
+>   PO → KHSX gom → QLSX duyệt → Sếp duyệt cả đợt) - xác nhận DNA-DEXUAT (solver thật, Render) được
+>   gọi và trả đúng data cắt (7 loại sắt, cả 7 `feasible=true`, 82 cây, hao hụt 0,248%).
+>   PurchaseProposal tự sinh đúng (PP-12). Đo được: cold-start ~45,5s, tính phương án cắt thật đợt
+>   gộp 2 SKU/7 loại sắt mất 4 phút 11 giây (đo từ cột DB, không phải ước lượng). Phát hiện thêm 1
+>   lỗ hổng nhãn nhỏ (**chưa sửa**, chờ quyết định): modal "Duyệt sản xuất" ghi cứng "Mã PO" dù PI
+>   gộp không có 1 mã PO đại diện, nên rơi xuống hiện mã PI.
 
 Repo liên quan: `DNA-ERP-BE` (nhánh `main`), `DNA-ERP` (nhánh `demo`), solver `cat_sat_iea`
 (`D:\DNA-DEXUAT`, không đổi trong phiên này).
@@ -1657,5 +1675,159 @@ Xóa 6 dòng field `Int?` cũ + comment trùng, giữ nguyên khối `Decimal?` 
   tới) đã có lỗi này từ chính commit khởi tạo repo (`fd7a858`), do line-ending Windows/`core.autocrlf`
   chứ không phải nội dung code sai. `src/generated` (Prisma Client output) bị eslint ignore đúng như
   cấu hình.
+
+## 17. PI chỉ sinh khi KHSX chủ động gom, không tự động lúc Sales tạo PO (2026-08-20)
+
+### 17.1. Vấn đề
+
+`ProductionInvoice` (PI) trước đây tự sinh **1-1 ngay lúc Sales lưu PO** -
+`SalesOrdersService.create()` gọi thẳng `createLinkedProductionInvoice()` bất kể PO đã xác nhận cọc
+hay chưa. Hậu quả: PI lộ ra ngay trong "Lệnh sản xuất mới" của KHSX (`LenhSXPage.tsx` gọi
+`getProductionInvoices()`, không lọc theo `depositConfirmed`) cho một đơn hàng có thể chưa chắc chắn
+về mặt thương mại - KHSX có thể tốn công ước tính lịch trình, gửi QLSX, gửi Sếp duyệt cho một đơn
+khách chưa hề đặt cọc.
+
+Quyết định Sếp (2026-08-20): PI chỉ nên sinh khi KHSX chủ động "gom" - đúng nút "Xác nhận gộp"/"Tiến
+hành cắt riêng" đã có sẵn ở màn "Tối ưu cắt sắt" (`GomDotCatPage.tsx`), rồi mới nhảy sang "Lệnh sản
+xuất mới" để nhập thời hạn.
+
+### 17.2. Vì sao chọn nullable FK thay vì tách nguồn dữ liệu mới
+
+Đã cân nhắc lấy "PO chưa gom" trực tiếp từ `SalesOrderItem`, nhưng loại: `SalesOrderItem` không
+mang field theo dõi nghiệp vụ nào (`prodApprovalStatus`, `rejectReason`, `stages` theo công đoạn...)
+- toàn bộ máy theo dõi duyệt/từ chối/thời hạn đã nằm sẵn trên `ProductionInvoiceItem`, và
+`GomDotCatPage` đã tính preview hao hụt sắt theo BOM của chính item đó. Tách nguồn mới nghĩa là xây
+lại đúng cỗ máy đó lần 2.
+
+Hướng chọn: giữ nguyên `ProductionInvoiceItem` là nơi Sales tạo item ngay lúc lưu PO (bảo toàn mọi
+máy theo dõi đã có), chỉ bỏ việc bọc nó trong 1 `ProductionInvoice` ngay từ đầu -
+`productionInvoiceId` là `NULL` cho tới khi KHSX gom.
+
+### 17.3. Thay đổi schema
+
+`ProductionInvoiceItem.productionInvoiceId`: `BigInt` → `BigInt?`, quan hệ `productionInvoice`
+tương ứng thành optional. Migration viết tay
+(`20260820095837_production_invoice_item_nullable_pi`):
+```sql
+ALTER TABLE "production_invoice_items" ALTER COLUMN "productionInvoiceId" DROP NOT NULL;
+```
+An toàn với dữ liệu hiện có - mọi dòng cũ đều đã có `productionInvoiceId` thật, nới lỏng ràng buộc
+không ảnh hưởng gì, chỉ mở đường cho dòng MỚI được tạo với giá trị NULL từ nay.
+
+### 17.4. Thay đổi BE
+
+- `sales-orders.service.ts`: `createLinkedProductionInvoice()` đổi thành
+  `createProductionInvoiceItems()` - chỉ tạo các dòng `ProductionInvoiceItem`
+  (`productionInvoiceId: null`), không còn tạo `ProductionInvoice` bọc ngoài.
+  `linkExistingSkus()` bỏ tham số `productionInvoiceId` (luôn `null` từ nay).
+- `cutting-proposals.service.ts` (`loadBatchContext`, dùng bởi cả `getBatchCandidates` lẫn
+  `getBatchSuggestions`): filter `WHERE` thêm nhánh `productionInvoiceId: null` bên cạnh
+  `productionInvoice: { isMerged: false }`; thêm `salesOrder: true` ở include cấp ITEM (item
+  chưa gom không có `productionInvoice` để suy ngược PO gốc qua đường cũ).
+  `frameDeadlineOf()`/`toBatchOrderDto()`/`getBatchCandidates()`: null-safe hoá mọi chỗ đọc
+  `item.productionInvoice.*`.
+- `production-invoices.service.ts`: **không đụng `mergeItems()`** (comment tại đó nói rõ
+  `@ArrayMinSize(2)` là bất biến nghiệp vụ "gộp 1 SKU không tiết kiệm được gì", không phải ràng
+  buộc kỹ thuật - nới lỏng sẽ làm sai chính lời giải thích đó). Chỉ null-safe hoá 2 chỗ đọc
+  `i.productionInvoice.*` bên trong (item truyền vào giờ có thể chưa từng có PI). Thêm method mới
+  `claimSolo(itemId)` - đúng 1 SKU, tạo 1 PI thường (`isMerged: false`) cho riêng nó, khớp 1-1 với
+  nút "Tiến hành cắt riêng" (trước đây là no-op vì PI đã tự sinh sẵn). Route mới
+  `POST /production-invoices/items/:itemId/claim-solo`, cùng guard với route `merge` - không cần
+  thêm quyền mới, KHSX đã có sẵn `PRODUCTION_INVOICE:[VIEW,CREATE,UPDATE]`.
+- `production-orders.service.ts`, `purchase-proposals.service.ts` (bản sao thứ 3 của
+  `frameDeadlineOf`): null-safe hoá `item.productionInvoiceItem.productionInvoice.*` bằng non-null
+  assertion (`!`) kèm comment giải thích bất biến - `ProductionOrder` chỉ sinh khi Sếp duyệt, mà
+  duyệt bắt buộc item đã qua `sendItemToQlsx`/`sendItemToBoss` (cả hai cần `piId` thật trên route),
+  nên item của 1 `ProductionOrder` luôn đã có PI thật tại thời điểm đó.
+
+### 17.5. Thay đổi FE
+
+`cutting-batch-api.ts`: `productionInvoiceCode` đổi `string | null`; thêm
+`claimSoloCuttingBatch(itemId)`. `GomDotCatPage.tsx`: nhánh chọn đúng 1 SKU (trước là no-op, chỉ
+`onDone?.()`) đổi thành gọi `claimSoloCuttingBatch()` thật rồi mới `onDone?.()`; fallback hiển thị
+mã thêm `?? '—'` phòng cả `salesOrderCode` lẫn `productionInvoiceCode` đều null.
+
+### 17.6. Kiểm tra
+
+- `npx tsc --noEmit` sạch cả 2 phía (BE/FE).
+- `npx jest`: **586/586 test pass** (thêm `describe('claimSolo')` 3 test mới trong
+  `production-invoices.service.spec.ts`; sửa 2 test trong `sales-orders.service.spec.ts` theo hành
+  vi mới; sửa fixture + assertion where-clause trong `cutting-batch-suggestions.service.spec.ts`).
+- `eslint` sạch trên mọi file đã sửa (BE + FE, không tính CRLF pre-existing).
+- Live-test qua trình duyệt thật (đăng nhập `sales`/`khsx` demo1234): tạo PO-47 mới - xác nhận
+  **không** xuất hiện ngay trong "Lệnh sản xuất mới" (6 lệnh cũ, không đổi); vào "Tối ưu cắt sắt" -
+  PO-47 hiện đúng ở đây, không nhãn trạng thái (item mới). Bấm "Tiến hành cắt riêng" (đúng 1 SKU) -
+  PI tạo thật, PO-47 chuyển đúng sang "Lệnh sản xuất mới" (6→7 lệnh). Thử tiếp "Xác nhận gộp" với
+  PO-47 (vừa `claimSolo`) + PO-46 (PI cũ) - gộp thành công thành 1 PI mới ("PI-2026-046", 2 SKU),
+  `mergeItems()` không bị ảnh hưởng bởi thay đổi. 0 lỗi console mới phát sinh - chỉ còn đúng lỗ hổng
+  quyền `PRODUCTION_BATCH:VIEW` (QLSX) đã phát hiện từ trước - **đã sửa, xem 17.7**.
+
+### 17.7. Vá tiếp 3 lỗ hổng quyền domino - `PRODUCTION_BATCH`/`STEEL_ISSUE`/`WEAVING_ISSUE:VIEW`
+cho QLSX + KHSX (2026-08-20)
+
+Live-test lại "Bảng thống kê" (`ThongKePagePlan.tsx`, dùng chung bởi cả QLSX lẫn KHSX) lộ ra
+**3 lỗ hổng quyền domino** - sửa cái này lại lộ ra cái tiếp theo, vì hàm `fetchExecutionStages`
+gọi tuần tự nhiều endpoint, mỗi cái crash trang ngay ở endpoint đầu tiên bị 403 nên các endpoint
+sau chưa từng có cơ hội chạy tới:
+
+1. `PRODUCTION_MANAGER` (QLSX) thiếu hẳn module `PRODUCTION_BATCH` - **chưa từng được viết trong
+   code** (khác 6 ca cũ ở mục 07 roadmap, vốn chỉ quên seed) - trang "Bảng thống kê" crash ngay lúc
+   mount với `Missing required permission(s): PRODUCTION_BATCH:VIEW`.
+2. Vá xong (1), lộ tiếp: cả `PRODUCTION_MANAGER` lẫn `PRODUCTION_PLANNER` (KHSX) đều thiếu
+   `STEEL_ISSUE:VIEW` - `fetchFrame()` gọi `GET /production-invoices/:id/steel-issues` khi mục Mua
+   hàng của item đã đạt 100%, nhánh này DB demo trước đó chưa từng có PO nào chạm tới.
+3. Vá xong (2), lộ tiếp: cả 2 role thiếu `WEAVING_ISSUE:VIEW` - `fetchWeaving()` gọi
+   `GET /production-orders/:id/weaving-issue-plan`.
+
+Cả 3 chỉ cấp `VIEW` (không CREATE/UPDATE) - QLSX/KHSX chỉ xem tiến độ, không tự báo sản lượng/xuất
+sắt/xuất đan. Đã `npm run seed` áp lên DB local sau mỗi lần sửa. Xác nhận qua browser thật: đăng
+xuất/đăng nhập lại (JWT cũ không tự có claim mới) lần lượt sau mỗi lần vá, tài khoản `qlsx`/`khsx`
+demo1234 - "Bảng thống kê" tải đầy đủ 8 lệnh sản xuất thật, **0 lỗi 403 trong console**, chỉ còn 1
+accessibility warning không liên quan (form field thiếu id/name, pre-existing).
+
+`npx tsc --noEmit` sạch, `npx jest` **586/586 test pass** (không đổi hành vi, chỉ constant khai
+báo quyền), `npm test` full suite pass sau mỗi lần sửa.
+
+### 17.8. Live-test hết chuỗi Sales→Mua hàng qua trình duyệt thật, xác nhận DNA-DEXUAT được gọi
+thật và trả đúng data cắt (2026-08-20)
+
+Sau khi mục 17.1-17.7 xong, đi tiếp hết chuỗi để xác nhận toàn bộ tính năng (migration Decimal hôm
+trước + đổi luồng tạo PI hôm nay) hoạt động đúng đầu-cuối, không chỉ dừng ở KHSX:
+
+```
+Sales tạo PO (PO-46, PO-47)
+  → KHSX gom 2 SKU khác PO thành 1 đợt cắt chung (claimSolo + mergeItems, PI-2026-046)
+  → KHSX "Gửi QLSX" nốt phần còn thiếu (PO-47 chưa từng gửi vì gom SAU khi PO-46 đã gửi riêng)
+  → QLSX chọn kho thành phẩm, "Gửi sếp duyệt (2 SKU)"
+  → Sếp "Duyệt cả đợt" → CuttingProposalsService.requestForInvoice() gọi solver thật
+  → Solver trả kết quả → tự động APPROVED → PurchaseProposal tự sinh (PP-12, NEW)
+```
+
+**Đo thời gian gọi DNA-DEXUAT thật** (`https://dna-dexuat.onrender.com`, Render free-tier):
+- Health-check đơn giản (cold-start, server đang ngủ): **~45,5 giây**.
+- Tính phương án cắt thật (đợt gộp 2 SKU, 7 loại sắt khác nhau): **4 phút 11 giây** (251s,
+  `requestedAt` 03:51:09 → `completedAt` 03:55:20 UTC, đo trực tiếp từ cột DB, không phải ước
+  lượng). Chênh lệch lớn với health-check vì đây không chỉ đánh thức server - CP-SAT phải enumerate
+  pattern cho 7 loại sắt, khớp đúng cảnh báo tự thân trong `de_xuat_logic.py`: "9-10 cỡ thì liệt kê
+  hết mất hàng giờ".
+
+**Data cắt trả về là thật, không phải mock/lỗi** - `cutting_proposal_lines` id=28: 7 dòng, **cả 7
+`feasible=true`**, tổng 82 cây, hao hụt 0,248% chung (0,17%-0,68% từng loại sắt riêng):
+```
+STL-VUONG-50X50   4 cây   0.68%    STL-HOP-25X50    8 cây   0.18%
+STL-VUONG-20X20  23 cây   0.17%    STL-VUONG-12X12  7 cây   0.50%
+STL-HOP-10X20    25 cây   0.17%    STL-FI-21       11 cây   0.20%
+STL-VUONG-15X15   4 cây   0.55%
+```
+
+**Phát hiện thêm 1 lỗ hổng nhãn nhỏ, CHƯA SỬA** (chờ quyết định người dùng): modal "Duyệt sản
+xuất" (`LenhSXPage.tsx`, 3 chỗ dùng `getDisplayCode(pi)`) ghi cứng nhãn "Mã PO" nhưng với PI gộp
+(`isMerged=true`, `salesOrderId=null` có chủ đích - nhóm nhiều PO khác nhau, không quy về 1 đơn
+được) hàm `getDisplayCode` rơi xuống mã PI (`item.code`) làm fallback cuối. Không phải lấy sai
+field - đúng là không có "1 mã PO" nào đại diện được cho cả nhóm - chỉ là nhãn tĩnh không đổi theo
+`pi.isMerged` nên gây hiểu lầm. Đề xuất: `{pi.isMerged ? 'Mã đợt gộp' : 'Mã PO'}`.
+
+`docs/dna-erp-roadmap.html` - chưa cập nhật gì trong toàn bộ phiên này (chỉ review/phê bình ở phần
+trò chuyện, xác nhận tài liệu đó tự mâu thuẫn - xem phần chat, không phải mục changelog).
 
 Chưa commit - theo quy ước người dùng tự làm phần đó.
