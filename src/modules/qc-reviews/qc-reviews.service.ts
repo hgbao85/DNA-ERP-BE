@@ -254,6 +254,14 @@ export class QcReviewsService {
         `Đợt sắt ${dto.steelIssueId} không cùng loại sắt với đợt cần cấp bù`,
       );
     }
+    // Medium fix: trước đây chỉ so materialId, không so PI - cấp bù của PI-A có thể bị gắn nhầm
+    // vào 1 SteelIssue đã xuất trước đó cho PI-B (cùng loại sắt, khác PI), làm kế hoạch xuất sắt
+    // của cả 2 PI lệch khỏi thực tế vật lý. SteelIssue.productionInvoiceId có sẵn trực tiếp.
+    if (original && steelIssue.productionInvoiceId !== original.productionInvoiceId) {
+      throw new BadRequestException(
+        `Đợt sắt ${dto.steelIssueId} không cùng PI với đợt cần cấp bù (PI ${original.productionInvoiceId})`,
+      );
+    }
 
     const updated = await this.prisma.replenishRequest.update({
       where: { id: request.id },

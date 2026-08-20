@@ -17,6 +17,7 @@ describe('ProductionBatchesService', () => {
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
+    $transaction: jest.Mock;
   };
   let stockLedgerService: { postEntry: jest.Mock };
 
@@ -78,6 +79,7 @@ describe('ProductionBatchesService', () => {
             Promise.resolve(code === 'phoi-son-han' ? steelWarehouse : productionWarehouse),
           ),
       },
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue({}) };
     service = new ProductionBatchesService(
@@ -192,16 +194,19 @@ describe('ProductionBatchesService', () => {
       await service.create('1', dto, 'user-han', null);
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
-      expect(stockLedgerService.postEntry).toHaveBeenCalledWith({
-        fromWarehouseId: steelWarehouse.id,
-        toWarehouseId: productionWarehouse.id,
-        segmentSpecId: 60n,
-        qty: 60, // 3 × reportedQty(20)
-        refType: StockLedgerRefType.SEGMENT_CONSUME,
-        refId: '700',
-        createdById: 'user-han',
-        idempotencyKey: 'production-batch-segment-consume:700:60',
-      });
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        {
+          fromWarehouseId: steelWarehouse.id,
+          toWarehouseId: productionWarehouse.id,
+          segmentSpecId: 60n,
+          qty: 60, // 3 × reportedQty(20)
+          refType: StockLedgerRefType.SEGMENT_CONSUME,
+          refId: '700',
+          createdById: 'user-han',
+          idempotencyKey: 'production-batch-segment-consume:700:60',
+        },
+        prisma, // tx - create() + postSegmentConsumeEntries giờ chạy trong cùng $transaction
+      );
     });
 
     it('nhiều PieceBom (1 mảnh ghép từ nhiều cỡ đoạn) - ghi đủ N dòng StockLedger, mỗi dòng đúng segmentSpecId/qty riêng', async () => {
@@ -217,11 +222,32 @@ describe('ProductionBatchesService', () => {
       expect(stockLedgerService.postEntry).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({ segmentSpecId: 60n, qty: 60 }),
+        prisma,
       );
       expect(stockLedgerService.postEntry).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({ segmentSpecId: 61n, qty: 20 }),
+        prisma,
       );
+    });
+
+    it('postEntry lỗi giữa chừng (dòng 2/3) - lỗi propagate ra ngoài, không nuốt (transaction bao ngoài sẽ rollback cả productionBatch.create)', async () => {
+      prisma.productionBatch.create.mockResolvedValue(batchRow);
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
+        { id: 2n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 61n, qtyPerPiece: 1 },
+      ]);
+      stockLedgerService.postEntry
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new Error('mất kết nối DB giữa chừng'));
+
+      await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(
+        'mất kết nối DB giữa chừng',
+      );
+      // create() + postSegmentConsumeEntries chạy trong CÙNG $transaction - lỗi ở dòng ledger thứ
+      // 2 phải làm cả gọi $transaction() reject (Prisma thật sẽ rollback productionBatch.create
+      // theo cùng cơ chế), không được để lộ ra thành công một phần.
+      expect(prisma.$transaction).toHaveBeenCalled();
     });
 
     // Quyết định nghiệp vụ #6 (docs/quy-doi-doan-phoi.md): tồn đoạn được phép âm khi báo sản

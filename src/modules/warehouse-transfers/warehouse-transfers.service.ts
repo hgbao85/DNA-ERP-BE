@@ -16,9 +16,10 @@ import {
   Warehouse,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreatePieceWarehouseTransferDto } from './dto/create-piece-warehouse-transfer.dto';
@@ -203,46 +204,57 @@ export class WarehouseTransfersService {
     }
 
     const orderIds = [...new Set(dto.pieceItems.map((i) => i.productionOrderId))];
-    const plan = await this.getPieceTransferPlan(orderIds);
-    const planByKey = new Map(plan.map((p) => [`${p.productionOrderId}:${p.pieceId}`, p]));
-
-    const rows: {
-      productionOrderId: bigint;
-      pieceId: bigint;
-      quantity: number;
-      note?: string;
-    }[] = [];
-    for (const item of dto.pieceItems) {
-      const planItem = planByKey.get(`${item.productionOrderId}:${item.pieceId}`);
-      const suggestedQty = planItem?.suggestedQty ?? 0;
-      const quantity = Math.max(0, Math.min(item.quantity, suggestedQty));
-      if (quantity > 0) {
-        rows.push({
-          productionOrderId: parseBigIntId(item.productionOrderId),
-          pieceId: parseBigIntId(item.pieceId),
-          quantity,
-          note: item.note,
-        });
-      }
-    }
-
-    if (rows.length === 0) {
-      throw new BadRequestException(
-        'Không có mảnh nào đủ số lượng đã qua KCS (trừ phần đã ở trong phiếu khác) để tạo phiếu chuyển kho',
-      );
-    }
-
     const code = await this.nextTransferCode();
-    const transfer = await this.prisma.warehouseTransfer.create({
-      data: {
-        code,
-        fromWarehouseId,
-        toWarehouseId,
-        planFormId: dto.planFormId ? parseBigIntId(dto.planFormId) : undefined,
-        note: dto.note,
-        pieceItems: { create: rows },
-      },
-      include: TRANSFER_INCLUDE,
+
+    // Piece không có StockQuant để FOR UPDATE - khoá advisory theo từng productionOrderId (sort
+    // tăng dần trước khi khoá, tránh deadlock khi 2 request chạm nhiều order chung theo thứ tự
+    // khác nhau) là cách duy nhất chặn 2 request đồng thời cùng đọc 1 suggestedQty rồi cùng tạo
+    // phiếu vượt số mảnh thực đã qua KCS.
+    const transfer = await this.prisma.$transaction(async (tx) => {
+      for (const orderId of [...orderIds].sort()) {
+        await lockBusinessKey(tx, `piece-transfer:${orderId}`);
+      }
+
+      const plan = await this.getPieceTransferPlan(orderIds, tx);
+      const planByKey = new Map(plan.map((p) => [`${p.productionOrderId}:${p.pieceId}`, p]));
+
+      const rows: {
+        productionOrderId: bigint;
+        pieceId: bigint;
+        quantity: number;
+        note?: string;
+      }[] = [];
+      for (const item of dto.pieceItems) {
+        const planItem = planByKey.get(`${item.productionOrderId}:${item.pieceId}`);
+        const suggestedQty = planItem?.suggestedQty ?? 0;
+        const quantity = Math.max(0, Math.min(item.quantity, suggestedQty));
+        if (quantity > 0) {
+          rows.push({
+            productionOrderId: parseBigIntId(item.productionOrderId),
+            pieceId: parseBigIntId(item.pieceId),
+            quantity,
+            note: item.note,
+          });
+        }
+      }
+
+      if (rows.length === 0) {
+        throw new BadRequestException(
+          'Không có mảnh nào đủ số lượng đã qua KCS (trừ phần đã ở trong phiếu khác) để tạo phiếu chuyển kho',
+        );
+      }
+
+      return tx.warehouseTransfer.create({
+        data: {
+          code,
+          fromWarehouseId,
+          toWarehouseId,
+          planFormId: dto.planFormId ? parseBigIntId(dto.planFormId) : undefined,
+          note: dto.note,
+          pieceItems: { create: rows },
+        },
+        include: TRANSFER_INCLUDE,
+      });
     });
 
     return this.toResponseDto(transfer);
@@ -273,12 +285,13 @@ export class WarehouseTransfersService {
    */
   async getPieceTransferPlan(
     productionOrderIds: string[],
+    client: PrismaServiceType | PrismaTx = this.prisma,
   ): Promise<PieceTransferPlanItemResponseDto[]> {
     if (productionOrderIds.length === 0) {
       throw new BadRequestException('Phải truyền ít nhất 1 productionOrderId');
     }
     const orderBigIds = productionOrderIds.map((id) => parseBigIntId(id));
-    const orders = await this.prisma.productionOrder.findMany({
+    const orders = await client.productionOrder.findMany({
       where: { id: { in: orderBigIds } },
       include: {
         mfgProduct: true,
@@ -291,11 +304,11 @@ export class WarehouseTransfersService {
     const bomRevisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
 
     const [bomPieces, batches, transferredItems] = await Promise.all([
-      this.prisma.bomPiece.findMany({
+      client.bomPiece.findMany({
         where: { bomRevisionId: { in: bomRevisionIds } },
         include: { piece: true },
       }),
-      this.prisma.productionBatch.findMany({
+      client.productionBatch.findMany({
         where: {
           productionOrderId: { in: orderBigIds },
           status: ProductionBatchStatus.QC_DONE,
@@ -303,7 +316,7 @@ export class WarehouseTransfersService {
         },
         select: { productionOrderId: true, pieceId: true, stage: true, reportedQty: true },
       }),
-      this.prisma.warehouseTransferPieceItem.findMany({
+      client.warehouseTransferPieceItem.findMany({
         where: {
           productionOrderId: { in: orderBigIds },
           transfer: { status: { in: [TransferStatus.PENDING, TransferStatus.CONFIRMED] } },

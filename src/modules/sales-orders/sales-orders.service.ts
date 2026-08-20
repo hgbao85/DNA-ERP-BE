@@ -155,6 +155,26 @@ export class SalesOrdersService {
     const order = await this.findOneOrThrow(salesOrderId);
     const item = await this.findItemOrThrow(order.id, id);
 
+    // Medium fix: totalQty trước đây sửa được vô hạn định, kể cả sau khi đã ghim vào
+    // ProductionInvoiceItem.quantity (chỉ ghim 1 lần lúc PI được tạo, không tự đồng bộ lại) -
+    // sản xuất làm theo số cũ trong khi đơn hàng thực tế đã đổi, không ai được cảnh báo. Join
+    // qua CẢ item.salesOrderId (PI gộp, ghim thẳng) LẪN productionInvoice.salesOrderId (PI
+    // thường tạo qua resolveProductionInvoice() - xem skus.service.ts, không set field trên item)
+    // vì tuỳ đường tạo mà field nào có giá trị.
+    if (dto.totalQty !== undefined && dto.totalQty !== item.totalQty) {
+      const linked = await this.prisma.productionInvoiceItem.findFirst({
+        where: {
+          mfgProductId: item.mfgProductId,
+          OR: [{ salesOrderId: order.id }, { productionInvoice: { salesOrderId: order.id } }],
+        },
+      });
+      if (linked) {
+        throw new ConflictException(
+          `Sản phẩm ${item.mfgProduct.factoryCode} của đơn hàng ${order.id} đã ghim vào lệnh sản xuất (PI item ${linked.id}) - không thể tự sửa số lượng, liên hệ KHSX để xử lý qua quy trình khác`,
+        );
+      }
+    }
+
     const updated = await this.prisma.salesOrderItem.update({
       where: { id: item.id },
       data: {

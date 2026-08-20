@@ -99,7 +99,9 @@ describe('ProductionInvoicesService', () => {
       productionInvoiceItem: {
         create: jest.fn(),
         update: jest.fn(),
-        updateMany: jest.fn(),
+        // count:1 mặc định (updateMany+count guard, Medium fix "race điều kiện chuỗi duyệt/từ
+        // chối PI item") - test race-guard tự override count:0 để mô phỏng đã bị xử lý trước.
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUnique: jest.fn(),
         findMany: jest.fn(),
         count: jest.fn(),
@@ -132,6 +134,27 @@ describe('ProductionInvoicesService', () => {
       cuttingProposalsService as unknown as CuttingProposalsService,
       cls as unknown as ClsService<AppClsStore>,
     );
+  });
+
+  describe('create', () => {
+    // Medium fix: create() trước đây tạo xong với code đúng định dạng "PI-2026-0xx"
+    // (nextProductionInvoiceCode) rồi NGAY SAU ĐÓ update() ghi đè thành "PI-{id}" - 2 định dạng mã
+    // cùng tồn tại trong hệ thống, gây khó tra cứu/đối chiếu (regression từ commit b939b780 đè lên
+    // fix trước đó ở 127edda6). Giờ chỉ create() 1 lần, giữ nguyên mã tuần tự theo năm.
+    it('keeps the sequential "PI-{year}-0xx" code from nextProductionInvoiceCode(), does not overwrite it with "PI-{id}"', async () => {
+      prisma.productionInvoice.findMany.mockResolvedValue([{ code: 'PI-2026-005' }]);
+      prisma.productionInvoice.create.mockResolvedValue(pi({ id: 8n, code: 'PI-2026-006' }));
+
+      const result = await service.create({});
+
+      expect(prisma.productionInvoice.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ code: 'PI-2026-006' }) as unknown,
+        }),
+      );
+      expect(prisma.productionInvoice.update).not.toHaveBeenCalled();
+      expect(result.code).toBe('PI-2026-006');
+    });
   });
 
   // ─── Gộp đợt cắt: KHSX gộp SKU, Sếp quyết cả cụm ──────────────────────────────
@@ -372,6 +395,21 @@ describe('ProductionInvoicesService', () => {
         ConflictException,
       );
     });
+
+    // Medium fix "race điều kiện chuỗi duyệt/từ chối PI item" - 2 request gần như đồng thời đều
+    // pass check in-memory (assertNoApprovalOrRejected) rồi cùng update, ghi đè lẫn nhau trong
+    // audit trail. updateMany+count guard chặn: count=0 nghĩa là 1 request khác đã đổi status
+    // của dòng này TRƯỚC khi request này kịp ghi.
+    it('rejects with ConflictException when another request already moved the item away from NULL/REJECTED (race guard)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.sendItemToQlsx('7', '20', 'user-khsx')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
   });
 
   // Gửi cả phiếu 1 lần (2026-08-18) - bù chỗ lệch: Sếp đã có approveBatch/rejectBatch từ trước,
@@ -520,6 +558,18 @@ describe('ProductionInvoicesService', () => {
       expect(result.prodApprovalStatus).toBe('WAITING_BOSS');
       expect(result.warehouseCode).toBe('thanh-pham-2');
     });
+
+    it('rejects with ConflictException when another request already moved the item away from WAITING_QLSX (race guard)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.sendItemToBoss('7', '20', 'thanh-pham-2', 'Kho Thành phẩm 2', 'user-qlsx'),
+      ).rejects.toThrow(ConflictException);
+    });
   });
 
   describe('updateItem', () => {
@@ -666,6 +716,17 @@ describe('ProductionInvoicesService', () => {
 
       await expect(service.approveItem('7', '20', 'user-boss')).rejects.toThrow(ConflictException);
     });
+
+    it('rejects with ConflictException when another request already approved/moved the item away from WAITING_BOSS (race guard) - also prevents a double createFromApproval', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.approveItem('7', '20', 'user-boss')).rejects.toThrow(ConflictException);
+      expect(productionOrdersService.createFromApproval).not.toHaveBeenCalled();
+    });
   });
 
   describe('rejectItem', () => {
@@ -681,6 +742,18 @@ describe('ProductionInvoicesService', () => {
       const result = await service.rejectItem('7', '20', 'Thiếu vật tư', 'user-boss');
       expect(result.rejectReason).toBe('Thiếu vật tư');
     });
+
+    it('rejects with ConflictException when another request already moved the item away from WAITING_BOSS (race guard)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.rejectItem('7', '20', 'Thiếu vật tư', 'user-boss')).rejects.toThrow(
+        ConflictException,
+      );
+    });
   });
 
   describe('rejectItemByQlsx', () => {
@@ -689,34 +762,24 @@ describe('ProductionInvoicesService', () => {
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(
         piItem({ prodApprovalStatus: 'WAITING_QLSX' }),
       );
-      prisma.productionInvoiceItem.update.mockResolvedValue(
-        piItem({ prodApprovalStatus: 'REJECTED', rejectReason: 'Không đủ kho' }),
-      );
-
       const result = await service.rejectItemByQlsx('7', '20', 'Không đủ kho', 'user-qlsx');
 
+      // updateMany+count guard (Medium fix) thay cho update() đơn - xem sendItemToQlsx.
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
-      const updateCall = prisma.productionInvoiceItem.update.mock.calls[0][0] as {
-        where: { id: bigint };
+      const updateCall = prisma.productionInvoiceItem.updateMany.mock.calls[0][0] as {
+        where: { id: bigint; prodApprovalStatus: string };
         data: {
           prodApprovalStatus: string;
           rejectReason: string;
           decidedAt: Date;
           decidedById: string;
         };
-        include: unknown;
       };
-      expect(updateCall.where).toEqual({ id: 20n });
+      expect(updateCall.where).toEqual({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' });
       expect(updateCall.data.prodApprovalStatus).toBe('REJECTED');
       expect(updateCall.data.rejectReason).toBe('Không đủ kho');
       expect(updateCall.data.decidedById).toBe('user-qlsx');
       expect(updateCall.data.decidedAt).toBeInstanceOf(Date);
-      expect(updateCall.include).toEqual({
-        mfgProduct: true,
-        productVariant: true,
-        stages: true,
-        salesOrder: true,
-      });
       expect(result.rejectReason).toBe('Không đủ kho');
     });
 
@@ -725,6 +788,18 @@ describe('ProductionInvoicesService', () => {
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(
         piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
       );
+
+      await expect(service.rejectItemByQlsx('7', '20', 'lý do', 'user-qlsx')).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('rejects with ConflictException when another request already moved the item away from WAITING_QLSX (race guard)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(service.rejectItemByQlsx('7', '20', 'lý do', 'user-qlsx')).rejects.toThrow(
         ConflictException,

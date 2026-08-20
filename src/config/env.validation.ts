@@ -14,7 +14,17 @@ export const envValidationSchema = Joi.object({
   JWT_REFRESH_SECRET: Joi.string().min(32).required(),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
 
-  CORS_ORIGIN: Joi.string().default('*'),
+  // '*' mặc định tiện cho dev/test (main.ts đọc corsOrigin==='*' -> reflect Origin header với
+  // credentials:true). Ở production BẮT BUỘC khai rõ domain, không cho phép '*' - deploy quên
+  // set biến này trước đây âm thầm chấp nhận credentialed request từ mọi origin.
+  CORS_ORIGIN: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().disallow('*').required().messages({
+      'any.required': 'CORS_ORIGIN bắt buộc khi NODE_ENV=production - không được để mặc định "*"',
+      'any.invalid': 'CORS_ORIGIN không được là "*" khi NODE_ENV=production - khai rõ domain',
+    }),
+    otherwise: Joi.string().default('*'),
+  }),
 
   THROTTLE_TTL: Joi.number().default(60),
   THROTTLE_LIMIT: Joi.number().default(100),

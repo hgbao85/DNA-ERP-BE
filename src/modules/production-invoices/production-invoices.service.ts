@@ -155,17 +155,6 @@ export class ProductionInvoicesService {
         },
       },
     });
-    const withCode = await this.prisma.productionInvoice.update({
-      where: { id: created.id },
-      data: { code: `PI-${created.id}` },
-      include: {
-        salesOrder: true,
-        items: {
-          include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
-        },
-      },
-    });
-    return this.toResponseDto(withCode);
     return this.toResponseDto(created);
   }
 
@@ -391,16 +380,29 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertNoApprovalOrRejected(item);
 
-    const updated = await this.prisma.productionInvoiceItem.update({
-      where: { id: item.id },
-      data: {
-        prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX,
-        requestedAt: new Date(),
-        requestedById: actorUserId,
-        rejectReason: null,
+    const data = {
+      prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX,
+      requestedAt: new Date(),
+      requestedById: actorUserId,
+      rejectReason: null,
+    };
+    // updateMany+count guard (pattern SkusService.approve()) - chặn 2 request gửi lại QLSX gần
+    // như đồng thời cho cùng item cùng pass check in-memory rồi cùng ghi đè, làm mất dấu ai gửi
+    // trước trong audit trail (Medium "Race điều kiện chuỗi duyệt/từ chối PI item").
+    // assertNoApprovalOrRejected() cho qua NULL hoặc REJECTED nên where phải khớp đúng OR đó.
+    const { count } = await this.prisma.productionInvoiceItem.updateMany({
+      where: {
+        id: item.id,
+        OR: [{ prodApprovalStatus: null }, { prodApprovalStatus: ProdApprovalStatus.REJECTED }],
       },
-      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+      data,
     });
+    if (count === 0) {
+      throw new ConflictException(
+        `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc gửi QLSX - không ghi đè`,
+      );
+    }
+    const updated = { ...item, ...data };
     await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
   }
@@ -417,17 +419,23 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_QLSX);
 
-    const updated = await this.prisma.productionInvoiceItem.update({
-      where: { id: item.id },
-      data: {
-        prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS,
-        warehouseCode,
-        warehouseName,
-        qlsxAt: new Date(),
-        qlsxById: actorUserId,
-      },
-      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+    const data = {
+      prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS,
+      warehouseCode,
+      warehouseName,
+      qlsxAt: new Date(),
+      qlsxById: actorUserId,
+    };
+    const { count } = await this.prisma.productionInvoiceItem.updateMany({
+      where: { id: item.id, prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX },
+      data,
     });
+    if (count === 0) {
+      throw new ConflictException(
+        `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc gửi Sếp - không ghi đè`,
+      );
+    }
+    const updated = { ...item, ...data };
     await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
   }
@@ -559,15 +567,24 @@ export class ProductionInvoicesService {
     // assertActiveBomRevisionExists().
     await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
 
-    const updated = await this.prisma.productionInvoiceItem.update({
-      where: { id: item.id },
-      data: {
-        prodApprovalStatus: ProdApprovalStatus.APPROVED,
-        decidedAt: new Date(),
-        decidedById: actorUserId,
-      },
-      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+    const data = {
+      prodApprovalStatus: ProdApprovalStatus.APPROVED,
+      decidedAt: new Date(),
+      decidedById: actorUserId,
+    };
+    // updateMany+count guard TRƯỚC khi tạo ProductionOrder bên dưới - ngoài chặn race ghi đè
+    // audit trail (đúng lỗi Medium), còn chặn luôn 2 request duyệt đồng thời cùng kích hoạt
+    // createFromApproval() 2 lần cho cùng item.
+    const { count } = await this.prisma.productionInvoiceItem.updateMany({
+      where: { id: item.id, prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS },
+      data,
     });
+    if (count === 0) {
+      throw new ConflictException(
+        `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc Sếp duyệt - không ghi đè`,
+      );
+    }
+    const updated = { ...item, ...data };
     await this.auditItemApprovalTransition(item, updated);
 
     // Phase 7: tạo lệnh sản xuất ngay khi Sếp duyệt - BOM đã được xác nhận tồn tại ở trên nên
@@ -633,16 +650,22 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_QLSX);
 
-    const updated = await this.prisma.productionInvoiceItem.update({
-      where: { id: item.id },
-      data: {
-        prodApprovalStatus: ProdApprovalStatus.REJECTED,
-        rejectReason: reason,
-        decidedAt: new Date(),
-        decidedById: actorUserId,
-      },
-      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+    const data = {
+      prodApprovalStatus: ProdApprovalStatus.REJECTED,
+      rejectReason: reason,
+      decidedAt: new Date(),
+      decidedById: actorUserId,
+    };
+    const { count } = await this.prisma.productionInvoiceItem.updateMany({
+      where: { id: item.id, prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX },
+      data,
     });
+    if (count === 0) {
+      throw new ConflictException(
+        `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc QLSX từ chối - không ghi đè`,
+      );
+    }
+    const updated = { ...item, ...data };
     await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
   }
@@ -658,16 +681,22 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_BOSS);
 
-    const updated = await this.prisma.productionInvoiceItem.update({
-      where: { id: item.id },
-      data: {
-        prodApprovalStatus: ProdApprovalStatus.REJECTED,
-        rejectReason: reason,
-        decidedAt: new Date(),
-        decidedById: actorUserId,
-      },
-      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+    const data = {
+      prodApprovalStatus: ProdApprovalStatus.REJECTED,
+      rejectReason: reason,
+      decidedAt: new Date(),
+      decidedById: actorUserId,
+    };
+    const { count } = await this.prisma.productionInvoiceItem.updateMany({
+      where: { id: item.id, prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS },
+      data,
     });
+    if (count === 0) {
+      throw new ConflictException(
+        `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc Sếp từ chối - không ghi đè`,
+      );
+    }
+    const updated = { ...item, ...data };
     await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
   }

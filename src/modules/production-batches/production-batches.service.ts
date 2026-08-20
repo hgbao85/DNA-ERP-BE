@@ -17,7 +17,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
 import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
@@ -81,6 +81,7 @@ export class ProductionBatchesService {
       });
       if (existing) {
         await this.postSegmentConsumeEntries(
+          undefined,
           { ...existing, bomRevisionId: existing.productionOrder.bomRevisionId },
           reportedById,
         );
@@ -92,22 +93,30 @@ export class ProductionBatchesService {
     const pieceBigId = parseBigIntId(dto.pieceId);
     await this.assertPieceInBom(order.bomRevisionId, pieceBigId, dto.stage);
 
-    const created = await this.prisma.productionBatch.create({
-      data: {
-        stage: dto.stage,
-        productionOrderId: order.id,
-        pieceId: pieceBigId,
-        reportedQty: dto.reportedQty,
+    // Tạo batch + ghi toàn bộ dòng StockLedger đoạn sắt tiêu thụ trong CÙNG 1 transaction - trước
+    // đây 2 bước này chạy rời nhau, 1 dòng ledger lỗi giữa chừng (mất kết nối, timeout) để lại
+    // batch đã tồn tại nhưng tồn đoạn sắt chỉ bị trừ 1 phần, không có gì phát hiện batch "dở dang".
+    const created = await this.prisma.$transaction(async (tx) => {
+      const batch = await tx.productionBatch.create({
+        data: {
+          stage: dto.stage,
+          productionOrderId: order.id,
+          pieceId: pieceBigId,
+          reportedQty: dto.reportedQty,
+          reportedById,
+          idempotencyKey,
+        },
+        include: PRODUCTION_BATCH_INCLUDE,
+      });
+
+      await this.postSegmentConsumeEntries(
+        tx,
+        { ...batch, bomRevisionId: order.bomRevisionId },
         reportedById,
-        idempotencyKey,
-      },
-      include: PRODUCTION_BATCH_INCLUDE,
+      );
+      return batch;
     });
 
-    await this.postSegmentConsumeEntries(
-      { ...created, bomRevisionId: order.bomRevisionId },
-      reportedById,
-    );
     return this.toResponseDto(created);
   }
 
@@ -122,30 +131,35 @@ export class ProductionBatchesService {
    * key riêng từng dòng.
    */
   private async postSegmentConsumeEntries(
+    tx: PrismaTx | undefined,
     batch: { id: bigint; pieceId: bigint; reportedQty: number; bomRevisionId: bigint },
     reportedById: string,
   ): Promise<void> {
-    const pieceBoms = await this.prisma.pieceBom.findMany({
+    const db = tx ?? this.prisma;
+    const pieceBoms = await db.pieceBom.findMany({
       where: { bomRevisionId: batch.bomRevisionId, pieceId: batch.pieceId },
     });
     if (pieceBoms.length === 0) return;
 
     const [fromWarehouse, toWarehouse] = await Promise.all([
-      this.prisma.warehouse.findUniqueOrThrow({ where: { code: STEEL_WAREHOUSE_CODE } }),
-      this.prisma.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
+      db.warehouse.findUniqueOrThrow({ where: { code: STEEL_WAREHOUSE_CODE } }),
+      db.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
     ]);
 
     for (const pb of pieceBoms) {
-      await this.stockLedgerService.postEntry({
-        fromWarehouseId: fromWarehouse.id,
-        toWarehouseId: toWarehouse.id,
-        segmentSpecId: pb.segmentSpecId,
-        qty: pb.qtyPerPiece * batch.reportedQty,
-        refType: StockLedgerRefType.SEGMENT_CONSUME,
-        refId: batch.id.toString(),
-        createdById: reportedById,
-        idempotencyKey: `production-batch-segment-consume:${batch.id}:${pb.segmentSpecId}`,
-      });
+      await this.stockLedgerService.postEntry(
+        {
+          fromWarehouseId: fromWarehouse.id,
+          toWarehouseId: toWarehouse.id,
+          segmentSpecId: pb.segmentSpecId,
+          qty: pb.qtyPerPiece * batch.reportedQty,
+          refType: StockLedgerRefType.SEGMENT_CONSUME,
+          refId: batch.id.toString(),
+          createdById: reportedById,
+          idempotencyKey: `production-batch-segment-consume:${batch.id}:${pb.segmentSpecId}`,
+        },
+        tx,
+      );
     }
   }
 

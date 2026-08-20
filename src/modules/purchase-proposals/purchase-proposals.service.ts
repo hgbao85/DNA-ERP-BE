@@ -20,6 +20,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -439,6 +440,13 @@ export class PurchaseProposalsService {
         // Khoá dòng item rồi đọc lại receivedQty MỚI NHẤT - đây là điểm sửa chính của C3. Bỏ qua
         // giá trị `item.receivedQty` đọc ở findDetailOrThrow phía trên vì nó có thể đã cũ nếu 1
         // lượt nhận khác đang chạy song song.
+        // Khoá thêm ở mức CẢ PHIẾU (không chỉ dòng item) - allReceived bên dưới phải đọc
+        // receivedQty MỚI NHẤT của MỌI item khác trong phiếu, không chỉ dòng đang FOR UPDATE. Row
+        // lock trên 1 item không ngăn được 2 request nhận hàng cho 2 item KHÁC nhau của cùng phiếu
+        // chạy song song, mỗi bên đọc item còn lại theo snapshot cũ (Medium "allReceived tính từ
+        // snapshot cũ") - phiếu kẹt PURCHASING vĩnh viễn dù cả 2 item vừa nhận đủ.
+        await lockBusinessKey(tx, `purchase-proposal-received:${proposal.id}`);
+
         const [locked] = await tx.$queryRaw<
           { receivedQty: Prisma.Decimal; receivedQtyPurchaseUnit: Prisma.Decimal | null }[]
         >`
@@ -509,7 +517,15 @@ export class PurchaseProposalsService {
           include: ITEM_INCLUDE,
         });
 
-        const allReceived = proposal.items.every((it) =>
+        // Re-query TƯƠI trong transaction (không dùng snapshot proposal.items đọc trước khi mở
+        // transaction) - đúng nguyên nhân của lỗi: 2 item nhận đồng thời mỗi bên tính allReceived
+        // trên dữ liệu cũ của item còn lại. Advisory lock ở trên đảm bảo khi tới đây, mọi lượt nhận
+        // khác của CÙNG phiếu đã commit xong nên fresh items phản ánh đúng trạng thái mới nhất.
+        const freshItems = await tx.purchaseProposalItem.findMany({
+          where: { proposalId: proposal.id },
+          select: { id: true, receivedQty: true, buyQty: true },
+        });
+        const allReceived = freshItems.every((it) =>
           it.id === item.id
             ? nextReceivedQty >= buyQty
             : it.receivedQty.toNumber() >= it.buyQty.toNumber(),

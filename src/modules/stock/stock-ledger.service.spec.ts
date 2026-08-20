@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from './stock-ledger.service';
@@ -13,6 +13,8 @@ describe('StockLedgerService', () => {
       count: jest.Mock;
     };
     warehouse: { findMany: jest.Mock };
+    $queryRaw: jest.Mock;
+    $transaction: jest.Mock;
   };
 
   const fromWh = { id: 1n, code: 'phoi-son-han', name: 'Phoi Son Han' };
@@ -52,6 +54,8 @@ describe('StockLedgerService', () => {
         count: jest.fn(),
       },
       warehouse: { findMany: jest.fn().mockResolvedValue([fromWh, toWh]) },
+      $queryRaw: jest.fn().mockResolvedValue([{ qty: { toNumber: () => 100 } }]),
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     service = new StockLedgerService(prisma as unknown as PrismaServiceType);
   });
@@ -253,6 +257,112 @@ describe('StockLedgerService', () => {
         ),
       ).rejects.toThrow(ForbiddenException);
       expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+    });
+
+    // Medium fix "Sửa nhanh tồn kho" - FE nhập số tuyệt đối rồi tự tính delta từ số cũ đã đọc
+    // trước đó (client-side). Không khoá thì 2 người cùng thấy tồn=100 sửa gần như đồng thời cộng
+    // dồn sai. expectedCurrentQty là optimistic-lock: FOR UPDATE stock_quant rồi so với tồn THẬT.
+    describe('optimistic lock (expectedCurrentQty)', () => {
+      it('không truyền expectedCurrentQty - giữ nguyên hành vi cũ, không mở transaction/khoá gì thêm', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValue(null);
+        prisma.stockLedger.create.mockResolvedValue(ledgerRow());
+
+        await service.adjust(
+          { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5 },
+          'idem-key-4',
+          'user-1',
+          null,
+        );
+
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+        expect(prisma.$queryRaw).not.toHaveBeenCalled();
+        expect(prisma.stockLedger.create).toHaveBeenCalled();
+      });
+
+      it('cho qua khi tồn thật KHỚP expectedCurrentQty', async () => {
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+        prisma.stockLedger.findUnique.mockResolvedValue(null);
+        prisma.stockLedger.create.mockResolvedValue(ledgerRow());
+
+        await service.adjust(
+          {
+            fromWarehouseId: '3', // kho ảo opening-balance
+            toWarehouseId: '2', // kho thật
+            materialId: '10',
+            qty: 10,
+            expectedWarehouseId: '2',
+            expectedCurrentQty: 100,
+          },
+          'idem-key-5',
+          'user-1',
+          null,
+        );
+
+        expect(prisma.$transaction).toHaveBeenCalled();
+        expect(prisma.stockLedger.create).toHaveBeenCalled();
+      });
+
+      it('CHẶN (409) khi tồn thật LỆCH expectedCurrentQty - người khác vừa sửa xong, không được cộng dồn sai', async () => {
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 95 } }]); // ai đó vừa trừ về 95
+        prisma.stockLedger.findUnique.mockResolvedValue(null);
+
+        await expect(
+          service.adjust(
+            {
+              fromWarehouseId: '3',
+              toWarehouseId: '2',
+              materialId: '10',
+              qty: 10,
+              expectedWarehouseId: '2',
+              expectedCurrentQty: 100, // client vẫn thấy 100 (đã cũ)
+            },
+            'idem-key-6',
+            'user-1',
+            null,
+          ),
+        ).rejects.toThrow(ConflictException);
+        expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+      });
+
+      it('CHẶN (400) khi expectedWarehouseId không trùng fromWarehouseId hoặc toWarehouseId', async () => {
+        await expect(
+          service.adjust(
+            {
+              fromWarehouseId: '1',
+              toWarehouseId: '2',
+              materialId: '10',
+              qty: 10,
+              expectedWarehouseId: '999',
+              expectedCurrentQty: 100,
+            },
+            'idem-key-7',
+            'user-1',
+            null,
+          ),
+        ).rejects.toThrow(BadRequestException);
+      });
+
+      it('mặc định expectedWarehouseId = fromWarehouseId khi không truyền', async () => {
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+        prisma.stockLedger.findUnique.mockResolvedValue(null);
+        prisma.stockLedger.create.mockResolvedValue(ledgerRow());
+
+        await service.adjust(
+          {
+            fromWarehouseId: '2',
+            toWarehouseId: '3',
+            materialId: '10',
+            qty: 5,
+            expectedCurrentQty: 100,
+          },
+          'idem-key-8',
+          'user-1',
+          null,
+        );
+
+        expect(prisma.$queryRaw).toHaveBeenCalled();
+        expect(prisma.stockLedger.create).toHaveBeenCalled();
+      });
     });
   });
 
