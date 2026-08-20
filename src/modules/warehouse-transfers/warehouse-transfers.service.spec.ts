@@ -17,9 +17,11 @@ describe('WarehouseTransfersService', () => {
     warehouseTransfer: {
       create: jest.Mock;
       findUnique: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
     };
     warehouseTransferReservation: {
       aggregate: jest.Mock;
@@ -72,9 +74,11 @@ describe('WarehouseTransfersService', () => {
       warehouseTransfer: {
         create: jest.fn(),
         findUnique: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
         findMany: jest.fn(),
         count: jest.fn().mockResolvedValue(0),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       warehouseTransferReservation: {
         aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: null } }),
@@ -210,7 +214,7 @@ describe('WarehouseTransfersService', () => {
     it('posts exactly 1 ledger entry per material item with a deterministic idempotency key, then releases reservations', async () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
       stockLedgerService.postEntry.mockResolvedValue({ id: '999' });
-      prisma.warehouseTransfer.update.mockResolvedValue(
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
         transferRow({ status: TransferStatus.CONFIRMED, confirmedAt: new Date() }),
       );
 
@@ -228,13 +232,15 @@ describe('WarehouseTransfersService', () => {
           createdById: 'user-1',
           idempotencyKey: 'warehouse-transfer:50:item:500',
         }),
+        prisma,
       );
       expect(prisma.warehouseTransferReservation.updateMany).toHaveBeenCalledWith({
         where: { transferId: 50n, status: ReservationStatus.ACTIVE },
         data: { status: ReservationStatus.RELEASED },
       });
-      expect(prisma.warehouseTransfer.update).toHaveBeenCalledWith(
+      expect(prisma.warehouseTransfer.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
+          where: { id: 50n, status: TransferStatus.PENDING },
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
           data: expect.objectContaining({ status: TransferStatus.CONFIRMED }),
         }),
@@ -256,7 +262,7 @@ describe('WarehouseTransfersService', () => {
           ],
         }),
       );
-      prisma.warehouseTransfer.update.mockResolvedValue(transferRow());
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(transferRow());
 
       await service.confirm('50', 'user-1', null);
 
@@ -285,7 +291,7 @@ describe('WarehouseTransfersService', () => {
         }),
       );
       stockLedgerService.postEntry.mockResolvedValue({ id: '999' });
-      prisma.warehouseTransfer.update.mockResolvedValue(
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
         transferRow({ status: TransferStatus.CONFIRMED }),
       );
 
@@ -301,7 +307,17 @@ describe('WarehouseTransfersService', () => {
           refId: '50',
           idempotencyKey: 'warehouse-transfer:50:piece-item:700',
         }),
+        prisma,
       );
+    });
+
+    it('rejects with 409 and posts no ledger entry when another request already confirmed/rejected the transfer inside the transaction (race guard)', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      prisma.warehouseTransfer.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.confirm('50', 'user-1', 'vat-tu-tp')).rejects.toThrow(ConflictException);
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      expect(prisma.warehouseTransferReservation.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -341,13 +357,25 @@ describe('WarehouseTransfersService', () => {
       ]);
     });
 
-    it('throws for needsHan=false pieces - SteelIssue gộp theo PI không còn đếm được theo mảnh', async () => {
+    it('skips needsHan=false pieces without throwing (Critical C2 fix) - SteelIssue gộp theo PI không còn đếm được theo mảnh, nhưng 1 mảnh cấu hình sai không được phép sập cả batch', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
       prisma.productionOrder.findMany.mockResolvedValue([order]);
       prisma.bomPiece.findMany.mockResolvedValue([
         { ...vatTuPiece, bomRevisionId: 80n, needsHan: false, needsSon: false },
+        { ...manhPiece, bomRevisionId: 80n, needsHan: true, needsSon: false },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { productionOrderId: 900n, pieceId: 30n, stage: MfgStage.HAN, reportedQty: 20 },
       ]);
 
-      await expect(service.getPieceTransferPlan(['900'])).rejects.toThrow(ConflictException);
+      const result = await service.getPieceTransferPlan(['900']);
+
+      // Mảnh needsHan=false (V-01) bị bỏ qua, nhưng mảnh needsHan=true (M-01) cùng batch vẫn trả về.
+      expect(result).toEqual([
+        expect.objectContaining({ pieceCode: 'M-01', readyQty: 20, suggestedQty: 20 }),
+      ]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('V-01'));
+      warnSpy.mockRestore();
     });
 
     it('subtracts pieces already in a PENDING or CONFIRMED transfer, not just CONFIRMED', async () => {
@@ -472,7 +500,7 @@ describe('WarehouseTransfersService', () => {
 
     it('releases reservations and records the reason without touching the ledger', async () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
-      prisma.warehouseTransfer.update.mockResolvedValue(
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
         transferRow({ status: TransferStatus.REJECTED, rejectionReason: 'thieu hang' }),
       );
 
@@ -483,8 +511,9 @@ describe('WarehouseTransfersService', () => {
         where: { transferId: 50n, status: ReservationStatus.ACTIVE },
         data: { status: ReservationStatus.RELEASED },
       });
-      expect(prisma.warehouseTransfer.update).toHaveBeenCalledWith(
+      expect(prisma.warehouseTransfer.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
+          where: { id: 50n, status: TransferStatus.PENDING },
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
           data: expect.objectContaining({
             status: TransferStatus.REJECTED,
@@ -492,6 +521,16 @@ describe('WarehouseTransfersService', () => {
           }),
         }),
       );
+    });
+
+    it('rejects with 409 when another request already confirmed/rejected the transfer inside the transaction (race guard)', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      prisma.warehouseTransfer.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.reject('50', 'thieu hang', 'vat-tu-tp')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.warehouseTransferReservation.updateMany).not.toHaveBeenCalled();
     });
   });
 
