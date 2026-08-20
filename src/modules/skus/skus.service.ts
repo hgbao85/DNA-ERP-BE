@@ -1225,8 +1225,14 @@ export class SkusService {
       return existingPf.productionInvoiceId;
     }
 
+    // orderBy id asc: findFirst() không có orderBy trả dòng theo thứ tự vật lý không xác định
+    // trước - nếu 1 Sales Order có 2 dòng cùng mfgProductId (chưa có unique constraint chặn),
+    // trước đây có thể ghim số lượng/hạn giao của dòng "ngẫu nhiên". orderBy làm việc này
+    // deterministic (luôn lấy dòng tạo trước) - KHÔNG giải quyết triệt để việc nên ghim dòng nào,
+    // cần xác nhận thêm với nghiệp vụ nếu trường hợp 2 dòng cùng sản phẩm là hợp lệ thật.
     const salesOrderItem = await this.prisma.salesOrderItem.findFirst({
       where: { salesOrderId, mfgProductId },
+      orderBy: { id: 'asc' },
     });
     // status bỏ qua - mặc định PLANNING qua @default trong schema (mirror mock: PI mới luôn PLANNING).
     const code = await nextProductionInvoiceCode(this.prisma);

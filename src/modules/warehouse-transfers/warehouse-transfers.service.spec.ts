@@ -34,6 +34,7 @@ describe('WarehouseTransfersService', () => {
     bomPiece: { findMany: jest.Mock };
     productionBatch: { findMany: jest.Mock };
     $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   };
 
@@ -90,6 +91,7 @@ describe('WarehouseTransfersService', () => {
       bomPiece: { findMany: jest.fn().mockResolvedValue([]) },
       productionBatch: { findMany: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn().mockResolvedValue([]),
+      $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn() };
@@ -501,6 +503,75 @@ describe('WarehouseTransfersService', () => {
         BadRequestException,
       );
       expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    // Medium fix: piece không có StockQuant để FOR UPDATE - 2 request tạo phiếu đồng thời cho
+    // cùng PO+piece trước đây có thể cùng đọc 1 suggestedQty rồi cùng tạo phiếu vượt số mảnh
+    // thực đã qua KCS. Khoá advisory theo từng productionOrderId trong 1 $transaction chặn race
+    // này (cùng idiom material-issues/packaging-issues/weaving-issues H2-H4).
+    it('acquires an advisory lock per distinct productionOrderId, inside the transaction, before computing the plan', async () => {
+      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
+      prisma.productionOrder.findMany.mockResolvedValue([
+        {
+          id: 900n,
+          poNumber: 'PO-31-1',
+          bomRevisionId: 80n,
+          quantity: 100,
+          mfgProduct: { name: 'San pham A' },
+          productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+        },
+        {
+          id: 901n,
+          poNumber: 'PO-31-2',
+          bomRevisionId: 80n,
+          quantity: 50,
+          mfgProduct: { name: 'San pham A' },
+          productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+        },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { productionOrderId: 900n, pieceId: 30n, stage: MfgStage.HAN, reportedQty: 20 },
+        { productionOrderId: 901n, pieceId: 31n, stage: MfgStage.HAN, reportedQty: 5 },
+      ]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        {
+          bomRevisionId: 80n,
+          pieceId: 30n,
+          needsHan: true,
+          needsSon: false,
+          piece: { code: 'M-01', name: 'Manh 01' },
+        },
+        {
+          bomRevisionId: 80n,
+          pieceId: 31n,
+          needsHan: true,
+          needsSon: false,
+          piece: { code: 'M-02', name: 'Manh 02' },
+        },
+      ]);
+
+      await service.createPieceTransfer(
+        {
+          ...pieceDto,
+          pieceItems: [
+            { productionOrderId: '900', pieceId: '30', quantity: 50 },
+            { productionOrderId: '901', pieceId: '31', quantity: 10 },
+          ],
+        },
+        'phoi-son-han',
+      );
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
+
+      const lockKeys = prisma.$executeRaw.mock.calls.map(
+        (call: [TemplateStringsArray, ...unknown[]]) => String(call[1]),
+      );
+      expect(lockKeys).toEqual(['piece-transfer:900', 'piece-transfer:901']);
+      // Khoá phải chạy TRƯỚC khi đọc plan (productionOrder.findMany) - không chỉ trước khi ghi.
+      const lockCallOrder = prisma.$executeRaw.mock.invocationCallOrder[0];
+      const planReadCallOrder = prisma.productionOrder.findMany.mock.invocationCallOrder[0];
+      expect(lockCallOrder).toBeLessThan(planReadCallOrder);
     });
   });
 

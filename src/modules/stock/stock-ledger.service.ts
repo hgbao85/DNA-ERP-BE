@@ -1,4 +1,10 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+} from '@nestjs/common';
 import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -145,14 +151,13 @@ export class StockLedgerService {
     userId: string,
     warehouseScope: string | null,
   ): Promise<StockLedgerResponseDto> {
-    await this.assertScopeTouchesWarehouses(
-      warehouseScope,
-      parseBigIntId(dto.fromWarehouseId),
-      parseBigIntId(dto.toWarehouseId),
-    );
-    return this.postEntry({
-      fromWarehouseId: parseBigIntId(dto.fromWarehouseId),
-      toWarehouseId: parseBigIntId(dto.toWarehouseId),
+    const fromWarehouseId = parseBigIntId(dto.fromWarehouseId);
+    const toWarehouseId = parseBigIntId(dto.toWarehouseId);
+    await this.assertScopeTouchesWarehouses(warehouseScope, fromWarehouseId, toWarehouseId);
+
+    const input = {
+      fromWarehouseId,
+      toWarehouseId,
       materialId: dto.materialId ? parseBigIntId(dto.materialId) : undefined,
       segmentSpecId: dto.segmentSpecId ? parseBigIntId(dto.segmentSpecId) : undefined,
       pieceId: dto.pieceId ? parseBigIntId(dto.pieceId) : undefined,
@@ -162,6 +167,43 @@ export class StockLedgerService {
       note: dto.note,
       createdById: userId,
       idempotencyKey,
+    };
+
+    if (dto.expectedCurrentQty === undefined) {
+      return this.postEntry(input);
+    }
+
+    // Optimistic lock cho UI "sửa nhanh tồn kho" (MfgWarehousesPage/MaterialsPage) - client nhập
+    // số tuyệt đối rồi tự tính delta = newQty - oldQty(đọc trước đó). Không khoá thì 2 người cùng
+    // thấy tồn=100 sửa gần như đồng thời cộng dồn sai (100-10-5=85, không khớp số đếm thật của
+    // ai). FOR UPDATE + so expectedCurrentQty (đọc lúc bắt đầu sửa) với tồn THẬT tại thời điểm
+    // ghi - lệch nghĩa là ai đó vừa sửa xong, từ chối thay vì âm thầm cộng dồn sai.
+    const expectedWarehouseId = dto.expectedWarehouseId
+      ? parseBigIntId(dto.expectedWarehouseId)
+      : fromWarehouseId;
+    if (expectedWarehouseId !== fromWarehouseId && expectedWarehouseId !== toWarehouseId) {
+      throw new BadRequestException(
+        'expectedWarehouseId phải trùng fromWarehouseId hoặc toWarehouseId',
+      );
+    }
+    if (input.materialId === undefined) {
+      throw new BadRequestException('expectedCurrentQty chỉ hỗ trợ điều chỉnh theo materialId');
+    }
+    const materialId = input.materialId;
+
+    return this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+        SELECT "qty" FROM "stock_quant"
+        WHERE "warehouseId" = ${expectedWarehouseId} AND "materialId" = ${materialId}
+        FOR UPDATE
+      `;
+      const currentQty = locked[0]?.qty.toNumber() ?? 0;
+      if (Math.abs(currentQty - dto.expectedCurrentQty!) > 1e-6) {
+        throw new ConflictException(
+          `Tồn kho hiện tại đã đổi (đang là ${currentQty}, bạn thấy ${dto.expectedCurrentQty}) - tải lại trang và thử lại`,
+        );
+      }
+      return this.postEntry(input, tx);
     });
   }
 

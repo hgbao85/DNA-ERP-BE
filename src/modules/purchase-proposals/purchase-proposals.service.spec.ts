@@ -27,6 +27,7 @@ describe('PurchaseProposalsService', () => {
     };
     purchaseProposalItem: {
       findFirst: jest.Mock;
+      findMany: jest.Mock;
       findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
     };
@@ -40,6 +41,7 @@ describe('PurchaseProposalsService', () => {
     systemConfig: { findUnique: jest.Mock };
     auditLog: { create: jest.Mock };
     $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   };
   let stockLedgerService: { postEntry: jest.Mock };
@@ -122,6 +124,12 @@ describe('PurchaseProposalsService', () => {
       },
       purchaseProposalItem: {
         findFirst: jest.fn(),
+        // allReceived re-query TƯƠI trong transaction (Medium fix "allReceived tính từ snapshot
+        // cũ") - mặc định trả về đúng item mặc định của proposal() (chưa nhận gì), test nào set
+        // items khác trên proposal({items:[...]}) tự override để khớp.
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 400n, receivedQty: decimal(0), buyQty: decimal(8) }]),
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
       },
@@ -148,6 +156,7 @@ describe('PurchaseProposalsService', () => {
       $queryRaw: jest
         .fn()
         .mockResolvedValue([{ receivedQty: decimal(0), receivedQtyPurchaseUnit: null }]),
+      $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     stockLedgerService = { postEntry: jest.fn() };
@@ -921,6 +930,9 @@ describe('PurchaseProposalsService', () => {
           items: [item({ id: 400n, buyQty: decimal(8), receivedQty: decimal(0) })],
         }),
       );
+      prisma.purchaseProposalItem.findMany.mockResolvedValue([
+        { id: 400n, buyQty: decimal(8), receivedQty: decimal(0) },
+      ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
@@ -943,6 +955,12 @@ describe('PurchaseProposalsService', () => {
           ],
         }),
       );
+      // Re-query TƯƠI (Medium fix) - item 401 vẫn thiếu ở dữ liệu mới nhất, không chỉ ở snapshot
+      // đọc trước transaction.
+      prisma.purchaseProposalItem.findMany.mockResolvedValue([
+        { id: 400n, buyQty: decimal(8), receivedQty: decimal(0) },
+        { id: 401n, buyQty: decimal(5), receivedQty: decimal(0) },
+      ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ id: 400n, buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
@@ -950,6 +968,39 @@ describe('PurchaseProposalsService', () => {
       await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1');
 
       expect(prisma.purchaseProposal.update).not.toHaveBeenCalled();
+    });
+
+    // Medium fix: trước đây allReceived tính trên proposal.items đọc TRƯỚC khi mở transaction -
+    // 2 item A/B nhận đủ gần như đồng thời mỗi bên tính trên snapshot cũ của item còn lại, cả 2
+    // ra allReceived=false dù thực tế cả 2 vừa nhận đủ cùng lúc, phiếu kẹt PURCHASING vĩnh viễn.
+    it('flips to PURCHASED using the FRESH receivedQty of other items, not the stale snapshot read before the transaction opened', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          status: PurchaseProposalStatus.PURCHASING,
+          // Snapshot cũ (đọc lúc findDetailOrThrow): item 401 CHƯA nhận gì.
+          items: [
+            item({ id: 400n, buyQty: decimal(8), receivedQty: decimal(0) }),
+            item({ id: 401n, buyQty: decimal(5), receivedQty: decimal(0) }),
+          ],
+        }),
+      );
+      // Dữ liệu TƯƠI trong transaction: item 401 vừa được 1 request khác nhận đủ trong lúc
+      // request này đang chờ khoá advisory - allReceived phải đọc đúng giá trị này, không phải
+      // snapshot 0 ở trên.
+      prisma.purchaseProposalItem.findMany.mockResolvedValue([
+        { id: 400n, buyQty: decimal(8), receivedQty: decimal(0) },
+        { id: 401n, buyQty: decimal(5), receivedQty: decimal(5) },
+      ]);
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ id: 400n, buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
+      );
+
+      await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1');
+
+      expect(prisma.purchaseProposal.update).toHaveBeenCalledWith({
+        where: { id: 300n },
+        data: expect.objectContaining({ status: PurchaseProposalStatus.PURCHASED }) as unknown,
+      });
     });
 
     it('nhập đúng vào kho RIÊNG của vật tư đang nhận (Material.warehouseId), không phải proposal.warehouseCode (Sếp chốt 2026-08-15)', async () => {

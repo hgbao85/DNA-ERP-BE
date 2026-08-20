@@ -1,5 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { SalesOrderItemStatus } from '../../generated/prisma/client';
 import { SalesOrdersService } from './sales-orders.service';
 
 describe('SalesOrdersService', () => {
@@ -20,6 +21,8 @@ describe('SalesOrdersService', () => {
       findUnique: jest.Mock;
       findMany: jest.Mock;
     };
+    productionInvoice: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock };
+    productionInvoiceItem: { findFirst: jest.Mock };
     productionInvoiceItem: { createMany: jest.Mock };
     planForm: { findFirst: jest.Mock; update: jest.Mock };
     $queryRaw: jest.Mock;
@@ -64,7 +67,14 @@ describe('SalesOrdersService', () => {
         findUnique: jest.fn(),
         findMany: jest.fn(),
       },
+
+      productionInvoice: { create: jest.fn(), update: jest.fn(), findMany: jest.fn() },
+      // Medium fix "chặn sửa totalQty khi đã ghim PI/PO" - mặc định chưa ghim gì (null), test nào
+      // cần mô phỏng đã ghim PI tự override.
+      productionInvoiceItem: { findFirst: jest.fn().mockResolvedValue(null) },
+
       productionInvoiceItem: { createMany: jest.fn() },
+
       planForm: { findFirst: jest.fn(), update: jest.fn() },
       $queryRaw: jest.fn(),
     };
@@ -208,6 +218,57 @@ describe('SalesOrdersService', () => {
       await expect(service.updateItem('10', '5', { totalQty: 2 })).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    // Medium fix: totalQty trước đây sửa được vô hạn định kể cả sau khi đã ghim vào
+    // ProductionInvoiceItem.quantity (chỉ ghim 1 lần lúc PI tạo, không tự đồng bộ lại) - sản xuất
+    // làm theo số cũ trong khi đơn hàng thực tế đã đổi, không ai được cảnh báo.
+    const linkedItem = {
+      id: 5n,
+      salesOrderId: 10n,
+      mfgProductId: 2n,
+      totalQty: 10,
+      mfgProduct: product,
+    };
+
+    it('chặn sửa totalQty khi sản phẩm đã ghim vào 1 ProductionInvoiceItem (PI gộp - salesOrderId ghim thẳng trên item)', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.salesOrderItem.findUnique.mockResolvedValue(linkedItem);
+      prisma.productionInvoiceItem.findFirst.mockResolvedValue({ id: 77n });
+
+      await expect(service.updateItem('10', '5', { totalQty: 20 })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.salesOrderItem.update).not.toHaveBeenCalled();
+      expect(prisma.productionInvoiceItem.findFirst).toHaveBeenCalledWith({
+        where: {
+          mfgProductId: 2n,
+          OR: [{ salesOrderId: 10n }, { productionInvoice: { salesOrderId: 10n } }],
+        },
+      });
+    });
+
+    it('cho phép sửa totalQty khi chưa ghim PI nào', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.salesOrderItem.findUnique.mockResolvedValue(linkedItem);
+      prisma.productionInvoiceItem.findFirst.mockResolvedValue(null);
+      prisma.salesOrderItem.update.mockResolvedValue({ ...linkedItem, totalQty: 20 });
+
+      const result = await service.updateItem('10', '5', { totalQty: 20 });
+      expect(result.totalQty).toBe(20);
+    });
+
+    it('vẫn cho sửa field KHÁC (vd status) dù đã ghim PI, miễn không đổi totalQty', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.salesOrderItem.findUnique.mockResolvedValue(linkedItem);
+      prisma.productionInvoiceItem.findFirst.mockResolvedValue({ id: 77n });
+      prisma.salesOrderItem.update.mockResolvedValue({
+        ...linkedItem,
+        status: SalesOrderItemStatus.DONG_GOI,
+      });
+
+      await service.updateItem('10', '5', { status: SalesOrderItemStatus.DONG_GOI, totalQty: 10 });
+      expect(prisma.salesOrderItem.update).toHaveBeenCalled();
     });
   });
 

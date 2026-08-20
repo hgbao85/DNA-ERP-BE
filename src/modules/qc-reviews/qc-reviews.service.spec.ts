@@ -230,9 +230,12 @@ describe('QcReviewsService', () => {
       fulfilledAt: null,
       fulfilledById: null,
       rejectionReason: null,
-      qcReview: { steelIssueId: 100n, steelIssue: { materialId: 30n } },
+      qcReview: {
+        steelIssueId: 100n,
+        steelIssue: { materialId: 30n, productionInvoiceId: 7n },
+      },
     };
-    const newIssue = { id: 300n, materialId: 30n };
+    const newIssue = { id: 300n, materialId: 30n, productionInvoiceId: 7n };
 
     it('cấp bù thành công - OPEN -> FULFILLED', async () => {
       prisma.replenishRequest.findUnique.mockResolvedValue(openRequest);
@@ -302,6 +305,42 @@ describe('QcReviewsService', () => {
       await expect(
         service.fulfillReplenishRequest('900', { steelIssueId: '300' }, 'user-kho'),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    // Medium fix: trước đây điều kiện chặn chỉ so materialId, không so PI - cấp bù của PI-A có
+    // thể bị gắn nhầm vào 1 SteelIssue đã xuất trước đó cho PI-B (cùng loại sắt, khác PI), làm kế
+    // hoạch xuất sắt của cả 2 PI lệch khỏi thực tế vật lý.
+    it('ném BadRequestException nếu đợt cấp bù cùng loại sắt nhưng KHÁC PI với đợt gốc', async () => {
+      prisma.replenishRequest.findUnique.mockResolvedValue(openRequest);
+      prisma.steelIssue.findUnique.mockResolvedValue({
+        id: 300n,
+        materialId: 30n,
+        productionInvoiceId: 8n, // khác PI 7n của đợt gốc
+      });
+
+      await expect(
+        service.fulfillReplenishRequest('900', { steelIssueId: '300' }, 'user-kho'),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.replenishRequest.update).not.toHaveBeenCalled();
+    });
+
+    it('cho phép cấp bù khi cùng PI (không chặn nhầm luồng hợp lệ)', async () => {
+      prisma.replenishRequest.findUnique.mockResolvedValue(openRequest);
+      prisma.steelIssue.findUnique.mockResolvedValue(newIssue); // cùng productionInvoiceId 7n
+      prisma.replenishRequest.update.mockResolvedValue({
+        ...openRequest,
+        status: ReplenishRequestStatus.FULFILLED,
+        fulfilledByIssueId: 300n,
+        qcReview: openRequest.qcReview,
+      });
+
+      const result = await service.fulfillReplenishRequest(
+        '900',
+        { steelIssueId: '300' },
+        'user-kho',
+      );
+
+      expect(result.status).toBe(ReplenishRequestStatus.FULFILLED);
     });
   });
 

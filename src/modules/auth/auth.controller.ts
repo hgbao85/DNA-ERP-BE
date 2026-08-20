@@ -1,5 +1,6 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Ip, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { UsersService } from '../users/users.service';
@@ -18,6 +19,9 @@ export class AuthController {
     private readonly usersService: UsersService,
   ) {}
 
+  // Chặt hơn ThrottlerGuard global (100 req/60s dùng chung mọi endpoint) - brute-force mật khẩu
+  // khả thi hơn ở endpoint này vì chính sách mật khẩu chỉ yêu cầu tối thiểu 8 ký tự.
+  @Throttle({ default: { limit: 8, ttl: 60_000 } })
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)

@@ -66,7 +66,7 @@ describe('AuthService', () => {
         findUnique: jest.fn(),
         create: jest.fn().mockResolvedValue({ id: 'refresh-token-1' }),
         update: jest.fn(),
-        updateMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       user: {
         update: jest.fn(),
@@ -188,6 +188,44 @@ describe('AuthService', () => {
       });
 
       await expect(authService.refresh('expired-token')).rejects.toThrow(UnauthorizedException);
+    });
+
+    // Medium fix: token đã bị revoke BỞI CHÍNH lượt rotate trước đó (replacedByTokenId có giá
+    // trị) mà bị dùng lại - dấu hiệu đã bị lộ (kẻ tấn công đua với chủ tài khoản thật). Khác
+    // token bị revoke do logout/đổi mật khẩu (replacedByTokenId null) - đó không phải reuse.
+    it('detects reuse of an already-ROTATED token (replacedByTokenId set) and revokes every live token for that user', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        id: 'old-token-id',
+        userId: 'user-1',
+        revokedAt: new Date(),
+        replacedByTokenId: 'newer-token-id',
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+
+      await expect(authService.refresh('stolen-but-already-rotated-token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: 'user-1', revokedAt: null },
+          data: expect.objectContaining({ revokedAt: expect.any(Date) as Date }),
+        }),
+      );
+      // Không phát hành cặp token mới cho kẻ đang dùng token cũ.
+      expect(prisma.refreshToken.create).not.toHaveBeenCalled();
+    });
+
+    it('does NOT treat a logout-revoked token (replacedByTokenId null) as reuse - just rejects normally', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        id: 'old-token-id',
+        userId: 'user-1',
+        revokedAt: new Date(),
+        replacedByTokenId: null,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+
+      await expect(authService.refresh('logged-out-token')).rejects.toThrow(UnauthorizedException);
+      expect(prisma.refreshToken.updateMany).not.toHaveBeenCalled();
     });
   });
 

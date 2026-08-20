@@ -41,4 +41,22 @@ export class CreateStockAdjustmentDto {
   @IsString()
   @MinLength(1)
   note?: string;
+
+  /// Optimistic-lock cho UI "sửa nhanh tồn kho" (nhập số tuyệt đối, FE tự tính delta) - phải đi
+  /// kèm expectedCurrentQty. Phải trùng fromWarehouseId hoặc toWarehouseId của chính request này.
+  @ApiPropertyOptional({
+    description:
+      'Kho cần assert tồn hiện tại (phải trùng fromWarehouseId hoặc toWarehouseId) - đi kèm expectedCurrentQty',
+  })
+  @IsOptional()
+  @IsString()
+  expectedWarehouseId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Tồn hiện tại mà client thấy lúc bắt đầu sửa (kho expectedWarehouseId) - BE từ chối nếu tồn thật đã đổi kể từ đó (2 người sửa cùng lúc)',
+  })
+  @IsOptional()
+  @IsNumber()
+  expectedCurrentQty?: number;
 }

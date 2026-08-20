@@ -1,4 +1,4 @@
-import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
@@ -32,6 +32,8 @@ function deriveRoleNames(user: AuthUserProfile): string[] {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
@@ -58,7 +60,28 @@ export class AuthService {
     const tokenHash = this.hashToken(refreshToken);
     const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
 
-    if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
+    if (!stored) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    // Reuse detection: a token that was already rotated (revokedAt set BY the rotation itself -
+    // replacedByTokenId non-null) being presented again means it leaked and someone is racing the
+    // legitimate holder. A token revoked by logout/change-password (replacedByTokenId null) is not
+    // reuse, just a normal expired session - only the rotation case indicates compromise. Revoke
+    // every live token for this user so the thief's already-rotated session dies too, not just
+    // reject this one request (OAuth Security BCP for refresh token rotation).
+    if (stored.revokedAt && stored.replacedByTokenId) {
+      const { count } = await this.prisma.refreshToken.updateMany({
+        where: { userId: stored.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      this.logger.warn(
+        `Refresh token reuse detected for user ${stored.userId} (tokenId ${stored.id}) - revoked ${count} live token(s)`,
+      );
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (stored.revokedAt || stored.expiresAt < new Date()) {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
