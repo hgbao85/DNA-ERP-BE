@@ -23,6 +23,8 @@ describe('WeavingIssuesService', () => {
     piece: { findUnique: jest.Mock };
     weavingPoint: { findUnique: jest.Mock; findMany: jest.Mock };
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
+    $executeRaw: jest.Mock;
+    $transaction: jest.Mock;
   };
 
   const order = {
@@ -93,6 +95,8 @@ describe('WeavingIssuesService', () => {
         findUnique: jest.fn().mockResolvedValue(bomPieceRow),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     service = new WeavingIssuesService(prisma as unknown as PrismaServiceType);
   });
@@ -225,6 +229,18 @@ describe('WeavingIssuesService', () => {
         service.create('1', { pieceId: '20', weavingPointId: '41', qty: 5 }, 'user-1', null),
       ).resolves.toBeDefined();
     });
+
+    it('khoá advisory theo (order, piece) TRONG transaction trước khi đọc remaining (H4 fix - chặn race đọc-rồi-ghi)', async () => {
+      prisma.weavingIssue.create.mockResolvedValue(issueRow);
+
+      await service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null);
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
+      const rawCall = prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray;
+      expect(rawCall.join('')).toContain('pg_advisory_xact_lock');
+    });
   });
 
   describe('receive', () => {
@@ -329,6 +345,19 @@ describe('WeavingIssuesService', () => {
           where: expect.objectContaining({ weavingPointId: 41n }),
         }),
       );
+    });
+
+    it('khoá advisory theo (order, piece, weavingPoint) TRONG transaction trước khi đọc remaining (H4 fix - chặn race đọc-rồi-ghi)', async () => {
+      prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: 10 } });
+      prisma.weavingReceipt.create.mockResolvedValue(receiptRow);
+
+      await service.receive('1', { pieceId: '20', weavingPointId: '40', qty: 5 }, 'user-1', null);
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
+      const rawCall = prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray;
+      expect(rawCall.join('')).toContain('pg_advisory_xact_lock');
     });
   });
 

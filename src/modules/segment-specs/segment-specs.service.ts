@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client';
+import { BomRevisionStatus, Prisma } from '../../generated/prisma/client';
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -87,6 +87,13 @@ export class SegmentSpecsService {
     const cutLengthMm = dto.cutLengthMm ?? current.cutLengthMm.toNumber();
     if (dto.materialId || dto.cutLengthMm) {
       await this.assertSpecFree(materialBigId, cutLengthMm, bigId);
+      // H5 fix - SegmentSpec là master data dùng chung qua tham chiếu SỐNG (piece_bom/part_bom
+      // chỉ lưu segmentSpecId, không snapshot vật liệu/chiều dài); trước đây sửa 1 spec đang bị
+      // BOM ACTIVE/RETIRED tham chiếu sẽ âm thầm đổi số liệu cắt sắt của các PO/CuttingProposal/
+      // SteelIssue đã lên kế hoạch hoặc đã hoàn tất - đúng rủi ro "BOM đã duyệt phải bất biến" mà
+      // BomRevisionsService.assertDraft() đã chặn ở cấp revision nhưng chưa chặn ở cấp spec dùng
+      // chung này. Chỉ revision DRAFT còn tham chiếu spec mới cho sửa.
+      await this.assertNotReferencedByNonDraftBom(bigId);
     }
 
     const spec = await this.prisma.segmentSpec.update({
@@ -132,6 +139,25 @@ export class SegmentSpecsService {
     if (existing && existing.id !== excludeId) {
       throw new ConflictException(
         `Segment spec for material ${materialId} @ ${cutLengthMm}mm already exists`,
+      );
+    }
+  }
+
+  private async assertNotReferencedByNonDraftBom(segmentSpecId: bigint): Promise<void> {
+    const [pieceBom, partBom] = await Promise.all([
+      this.prisma.pieceBom.findFirst({
+        where: { segmentSpecId, bomRevision: { status: { not: BomRevisionStatus.DRAFT } } },
+        include: { bomRevision: true },
+      }),
+      this.prisma.partBom.findFirst({
+        where: { segmentSpecId, bomRevision: { status: { not: BomRevisionStatus.DRAFT } } },
+        include: { bomRevision: true },
+      }),
+    ]);
+    const hit = pieceBom ?? partBom;
+    if (hit) {
+      throw new ConflictException(
+        `Segment spec ${segmentSpecId} đang được BOM revision ${hit.bomRevisionId} (status=${hit.bomRevision.status}) tham chiếu - chỉ revision DRAFT còn dùng spec này mới được sửa, tạo spec mới nếu cần đổi số liệu`,
       );
     }
   }

@@ -30,6 +30,8 @@ describe('MaterialIssuesService', () => {
     material: { findUnique: jest.Mock };
     consumableBom: { findUnique: jest.Mock; findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
+    $executeRaw: jest.Mock;
+    $transaction: jest.Mock;
   };
 
   const order = {
@@ -90,6 +92,8 @@ describe('MaterialIssuesService', () => {
             Promise.resolve(where.code === 'vat-tu-tp' ? vatTuTp : production),
           ),
       },
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
     service = new MaterialIssuesService(
@@ -205,6 +209,18 @@ describe('MaterialIssuesService', () => {
       await expect(
         service.create('1', { ...dto, issuedQty: 3 }, 'user-1', null),
       ).resolves.toBeDefined();
+    });
+
+    it('khoá advisory theo (order, stage, material) TRONG transaction trước khi đọc remaining (H2 fix - chặn race đọc-rồi-ghi)', async () => {
+      prisma.materialIssue.create.mockResolvedValue(issueRow);
+
+      await service.create('1', dto, 'user-1', null);
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
+      const rawCall = prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray;
+      expect(rawCall.join('')).toContain('pg_advisory_xact_lock');
     });
   });
 

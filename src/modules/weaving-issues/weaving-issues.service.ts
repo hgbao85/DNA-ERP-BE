@@ -8,9 +8,10 @@ import {
 import { Piece, Prisma, ProductionOrder, WeavingPoint } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { CreateWeavingIssueDto } from './dto/create-weaving-issue.dto';
 import { CreateWeavingReceiptDto } from './dto/create-weaving-receipt.dto';
 import { WeavingAllocationItemResponseDto } from './dto/weaving-allocation-item-response.dto';
@@ -129,25 +130,32 @@ export class WeavingIssuesService {
     }
 
     const plannedQty = bomPiece.qtyPerUnit * order.quantity;
-    const issuedSoFar = await this.sumIssuedForPiece(order.id, pieceBigId);
-    const remaining = plannedQty - issuedSoFar;
-    if (dto.qty > remaining) {
-      throw new BadRequestException(
-        `Số lượng xuất đan (${dto.qty}) vượt quá số lượng còn có thể xuất cho mảnh ${dto.pieceId} ` +
-          `(định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
-      );
-    }
 
-    const created = await this.prisma.weavingIssue.create({
-      data: {
-        productionOrderId: order.id,
-        pieceId: pieceBigId,
-        weavingPointId: weavingPointBigId,
-        qty: dto.qty,
-        issuedById,
-        idempotencyKey,
-      },
-      include: WEAVING_ISSUE_INCLUDE,
+    // Khoá advisory (H4 fix, cùng lý do H2/H3) - không có dòng có sẵn để FOR UPDATE cho lần xuất
+    // đan đầu tiên của 1 khoá (order, piece) - xem lockBusinessKey().
+    const created = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `weaving-issue:${order.id}:${pieceBigId}`);
+
+      const issuedSoFar = await this.sumIssuedForPiece(tx, order.id, pieceBigId);
+      const remaining = plannedQty - issuedSoFar;
+      if (dto.qty > remaining) {
+        throw new BadRequestException(
+          `Số lượng xuất đan (${dto.qty}) vượt quá số lượng còn có thể xuất cho mảnh ${dto.pieceId} ` +
+            `(định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
+        );
+      }
+
+      return tx.weavingIssue.create({
+        data: {
+          productionOrderId: order.id,
+          pieceId: pieceBigId,
+          weavingPointId: weavingPointBigId,
+          qty: dto.qty,
+          issuedById,
+          idempotencyKey,
+        },
+        include: WEAVING_ISSUE_INCLUDE,
+      });
     });
 
     return this.toIssueResponseDto(created);
@@ -179,26 +187,43 @@ export class WeavingIssuesService {
     await this.findPieceOrThrow(pieceBigId);
     await this.findWeavingPointOrThrow(weavingPointBigId);
 
-    const issuedAtPoint = await this.sumIssuedForPoint(order.id, pieceBigId, weavingPointBigId);
-    const receivedAtPoint = await this.sumReceivedForPoint(order.id, pieceBigId, weavingPointBigId);
-    const remaining = issuedAtPoint - receivedAtPoint;
-    if (dto.qty > remaining) {
-      throw new BadRequestException(
-        `Số lượng nhập đan (${dto.qty}) vượt quá số lượng điểm đan ${dto.weavingPointId} còn giữ ` +
-          `cho mảnh ${dto.pieceId} (đã xuất ${issuedAtPoint}, đã nhập ${receivedAtPoint}, còn ${remaining})`,
-      );
-    }
+    // Khoá advisory (H4 fix) - cùng khoá key với create() phía trên (đủ để chặn nhập đan race với
+    // nhau; không cần chặn chéo với xuất đan vì "remaining" ở đây tính trên issuedAtPoint đã có
+    // sẵn, không đổi qtyPerUnit/plannedQty).
+    const created = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `weaving-receipt:${order.id}:${pieceBigId}:${weavingPointBigId}`);
 
-    const created = await this.prisma.weavingReceipt.create({
-      data: {
-        productionOrderId: order.id,
-        pieceId: pieceBigId,
-        weavingPointId: weavingPointBigId,
-        qty: dto.qty,
-        receivedById,
-        idempotencyKey,
-      },
-      include: WEAVING_RECEIPT_INCLUDE,
+      const issuedAtPoint = await this.sumIssuedForPoint(
+        tx,
+        order.id,
+        pieceBigId,
+        weavingPointBigId,
+      );
+      const receivedAtPoint = await this.sumReceivedForPoint(
+        tx,
+        order.id,
+        pieceBigId,
+        weavingPointBigId,
+      );
+      const remaining = issuedAtPoint - receivedAtPoint;
+      if (dto.qty > remaining) {
+        throw new BadRequestException(
+          `Số lượng nhập đan (${dto.qty}) vượt quá số lượng điểm đan ${dto.weavingPointId} còn giữ ` +
+            `cho mảnh ${dto.pieceId} (đã xuất ${issuedAtPoint}, đã nhập ${receivedAtPoint}, còn ${remaining})`,
+        );
+      }
+
+      return tx.weavingReceipt.create({
+        data: {
+          productionOrderId: order.id,
+          pieceId: pieceBigId,
+          weavingPointId: weavingPointBigId,
+          qty: dto.qty,
+          receivedById,
+          idempotencyKey,
+        },
+        include: WEAVING_RECEIPT_INCLUDE,
+      });
     });
 
     return this.toReceiptResponseDto(created);
@@ -397,8 +422,12 @@ export class WeavingIssuesService {
     return bomPiece;
   }
 
-  private async sumIssuedForPiece(productionOrderId: bigint, pieceId: bigint): Promise<number> {
-    const result = await this.prisma.weavingIssue.aggregate({
+  private async sumIssuedForPiece(
+    tx: PrismaTx,
+    productionOrderId: bigint,
+    pieceId: bigint,
+  ): Promise<number> {
+    const result = await tx.weavingIssue.aggregate({
       where: { productionOrderId, pieceId },
       _sum: { qty: true },
     });
@@ -406,11 +435,12 @@ export class WeavingIssuesService {
   }
 
   private async sumIssuedForPoint(
+    tx: PrismaTx,
     productionOrderId: bigint,
     pieceId: bigint,
     weavingPointId: bigint,
   ): Promise<number> {
-    const result = await this.prisma.weavingIssue.aggregate({
+    const result = await tx.weavingIssue.aggregate({
       where: { productionOrderId, pieceId, weavingPointId },
       _sum: { qty: true },
     });
@@ -418,11 +448,12 @@ export class WeavingIssuesService {
   }
 
   private async sumReceivedForPoint(
+    tx: PrismaTx,
     productionOrderId: bigint,
     pieceId: bigint,
     weavingPointId: bigint,
   ): Promise<number> {
-    const result = await this.prisma.weavingReceipt.aggregate({
+    const result = await tx.weavingReceipt.aggregate({
       where: { productionOrderId, pieceId, weavingPointId },
       _sum: { qty: true },
     });

@@ -16,9 +16,10 @@ import {
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CreateMaterialIssueDto } from './dto/create-material-issue.dto';
 import { ListMaterialIssuesQueryDto } from './dto/list-material-issues-query.dto';
@@ -89,31 +90,41 @@ export class MaterialIssuesService {
     const materialBigId = parseBigIntId(dto.materialId);
     await this.findMaterialOrThrow(materialBigId);
 
-    const plannedQty = await this.resolvePlannedQty(
-      order.bomRevisionId,
-      dto.stage,
-      materialBigId,
-      order.quantity,
-    );
-    const issuedSoFar = await this.sumIssued(order.id, dto.stage, materialBigId);
-    const remaining = plannedQty - issuedSoFar;
-    if (dto.issuedQty > remaining) {
-      throw new BadRequestException(
-        `Số lượng xuất (${dto.issuedQty}) vượt quá số lượng còn có thể xuất cho vật tư ${dto.materialId} ` +
-          `công đoạn ${dto.stage} (định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
-      );
-    }
+    // Khoá advisory theo (H2 fix) - resolvePlannedQty/sumIssued/create trước đây đọc-rồi-ghi
+    // không transaction/lock: 2 request gần đồng thời cùng thấy 1 `remaining` rồi cùng xuất, tổng
+    // ghi sổ vượt định mức. Không có dòng có sẵn để SELECT ... FOR UPDATE (lần xuất đầu tiên cho
+    // 1 khoá (order, stage, material) chưa từng có dòng MaterialIssue nào) nên dùng
+    // pg_advisory_xact_lock qua lockBusinessKey() - xem comment ở đó.
+    const created = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `material-issue:${order.id}:${dto.stage}:${materialBigId}`);
 
-    const created = await this.prisma.materialIssue.create({
-      data: {
-        stage: dto.stage,
-        productionOrderId: order.id,
-        materialId: materialBigId,
-        issuedQty: dto.issuedQty,
-        issuedById,
-        idempotencyKey,
-      },
-      include: MATERIAL_ISSUE_INCLUDE,
+      const plannedQty = await this.resolvePlannedQty(
+        tx,
+        order.bomRevisionId,
+        dto.stage,
+        materialBigId,
+        order.quantity,
+      );
+      const issuedSoFar = await this.sumIssued(tx, order.id, dto.stage, materialBigId);
+      const remaining = plannedQty - issuedSoFar;
+      if (dto.issuedQty > remaining) {
+        throw new BadRequestException(
+          `Số lượng xuất (${dto.issuedQty}) vượt quá số lượng còn có thể xuất cho vật tư ${dto.materialId} ` +
+            `công đoạn ${dto.stage} (định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
+        );
+      }
+
+      return tx.materialIssue.create({
+        data: {
+          stage: dto.stage,
+          productionOrderId: order.id,
+          materialId: materialBigId,
+          issuedQty: dto.issuedQty,
+          issuedById,
+          idempotencyKey,
+        },
+        include: MATERIAL_ISSUE_INCLUDE,
+      });
     });
 
     await this.postLedgerEntry(created, issuedById);
@@ -286,12 +297,13 @@ export class MaterialIssuesService {
   }
 
   private async resolvePlannedQty(
+    tx: PrismaTx,
     bomRevisionId: bigint,
     stage: MfgStage,
     materialId: bigint,
     orderQuantity: number,
   ): Promise<number> {
-    const bom = await this.prisma.consumableBom.findUnique({
+    const bom = await tx.consumableBom.findUnique({
       where: { bomRevisionId_stage_materialId: { bomRevisionId, stage, materialId } },
     });
     if (!bom) {
@@ -303,11 +315,12 @@ export class MaterialIssuesService {
   }
 
   private async sumIssued(
+    tx: PrismaTx,
     productionOrderId: bigint,
     stage: MfgStage,
     materialId: bigint,
   ): Promise<number> {
-    const result = await this.prisma.materialIssue.aggregate({
+    const result = await tx.materialIssue.aggregate({
       where: { productionOrderId, stage, materialId },
       _sum: { issuedQty: true },
     });

@@ -15,6 +15,8 @@ describe('SegmentSpecsService', () => {
   let prisma: {
     segmentSpec: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock; delete: jest.Mock };
     material: { findUnique: jest.Mock };
+    pieceBom: { findFirst: jest.Mock };
+    partBom: { findFirst: jest.Mock };
   };
 
   const steelMaterial = {
@@ -44,6 +46,8 @@ describe('SegmentSpecsService', () => {
         delete: jest.fn(),
       },
       material: { findUnique: jest.fn() },
+      pieceBom: { findFirst: jest.fn().mockResolvedValue(null) },
+      partBom: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     service = new SegmentSpecsService(prisma as unknown as PrismaServiceType);
   });
@@ -148,6 +152,56 @@ describe('SegmentSpecsService', () => {
         ConflictException,
       );
       expect(prisma.segmentSpec.update).not.toHaveBeenCalled();
+    });
+
+    it('throws 409 when the spec is referenced by a PieceBom of a non-DRAFT (ACTIVE) bom revision (H5 fix)', async () => {
+      prisma.segmentSpec.findUnique
+        .mockResolvedValueOnce(existingSpec) // findOneOrThrow
+        .mockResolvedValueOnce(null); // assertSpecFree: new length is free
+      prisma.pieceBom.findFirst.mockResolvedValue({
+        bomRevisionId: 7n,
+        bomRevision: { status: 'ACTIVE' },
+      });
+
+      await expect(service.update('1', { cutLengthMm: 1000 } as any)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.segmentSpec.update).not.toHaveBeenCalled();
+    });
+
+    it('throws 409 when the spec is referenced by a PartBom of a non-DRAFT (RETIRED) bom revision (H5 fix)', async () => {
+      prisma.segmentSpec.findUnique
+        .mockResolvedValueOnce(existingSpec) // findOneOrThrow
+        .mockResolvedValueOnce(null); // assertSpecFree: new length is free
+      prisma.partBom.findFirst.mockResolvedValue({
+        bomRevisionId: 8n,
+        bomRevision: { status: 'RETIRED' },
+      });
+
+      await expect(service.update('1', { cutLengthMm: 1000 } as any)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.segmentSpec.update).not.toHaveBeenCalled();
+    });
+
+    it('allows the edit when the spec is only referenced by DRAFT bom revisions (findFirst filters status != DRAFT at the query level)', async () => {
+      prisma.segmentSpec.findUnique
+        .mockResolvedValueOnce(existingSpec) // findOneOrThrow
+        .mockResolvedValueOnce(null); // assertSpecFree: new length is free
+      // pieceBom/partBom.findFirst default to null (mock only matches status != DRAFT) - a
+      // DRAFT-only reference never turns up here, same as production behaviour.
+      prisma.segmentSpec.update.mockResolvedValue({ ...existingSpec, cutLengthMm: 1000 });
+
+      await expect(service.update('1', { cutLengthMm: 1000 })).resolves.toBeDefined();
+      expect(prisma.pieceBom.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          where: expect.objectContaining({
+            segmentSpecId: 1n,
+            bomRevision: { status: { not: 'DRAFT' } },
+          }),
+        }),
+      );
     });
   });
 
