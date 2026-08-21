@@ -10,7 +10,9 @@ import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { memoryStorage } from 'multer';
 import { CloudinaryService } from './cloudinary.service';
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+// 4MB, không phải 5MB: request qua proxy Next.js (Vercel serverless) giờ giới hạn body ~4.5MB -
+// ảnh upload phải đi qua proxy này để mang theo cookie httpOnly xác thực (xem next.config.mjs).
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
 /**
