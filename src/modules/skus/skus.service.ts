@@ -139,7 +139,11 @@ export class SkusService {
         throw new NotFoundException(`Sales order ${dto.salesOrderId} not found`);
       }
       customerName = customerName ?? salesOrder.customer.name;
-      productionInvoiceId = await this.resolveProductionInvoice(salesOrderBigId, mfgProductBigId);
+      productionInvoiceId = await this.resolveProductionInvoice(
+        salesOrderBigId,
+        mfgProductBigId,
+        dto.salesOrderItemId,
+      );
     }
 
     const created = await this.prisma.planForm.create({
@@ -1216,6 +1220,7 @@ export class SkusService {
   private async resolveProductionInvoice(
     salesOrderId: bigint,
     mfgProductId: bigint,
+    salesOrderItemId?: string,
   ): Promise<bigint> {
     const existingPf = await this.prisma.planForm.findFirst({
       where: { salesOrderId, mfgProductId, productionInvoiceId: { not: null } },
@@ -1225,15 +1230,17 @@ export class SkusService {
       return existingPf.productionInvoiceId;
     }
 
-    // orderBy id asc: findFirst() không có orderBy trả dòng theo thứ tự vật lý không xác định
-    // trước - nếu 1 Sales Order có 2 dòng cùng mfgProductId (chưa có unique constraint chặn),
-    // trước đây có thể ghim số lượng/hạn giao của dòng "ngẫu nhiên". orderBy làm việc này
-    // deterministic (luôn lấy dòng tạo trước) - KHÔNG giải quyết triệt để việc nên ghim dòng nào,
-    // cần xác nhận thêm với nghiệp vụ nếu trường hợp 2 dòng cùng sản phẩm là hợp lệ thật.
-    const salesOrderItem = await this.prisma.salesOrderItem.findFirst({
-      where: { salesOrderId, mfgProductId },
-      orderBy: { id: 'asc' },
-    });
+    // Xác nhận với nghiệp vụ (audit 2026-08-20, mục Medium): 1 Sales Order CÓ THỂ có 2 dòng cùng
+    // mfgProductId (vd giao 2 đợt khác ngày) - tự dò theo (salesOrderId, mfgProductId) không đủ
+    // để biết đúng dòng nào. Ưu tiên salesOrderItemId nếu caller truyền tường minh (validate đúng
+    // salesOrderId + mfgProductId, không cho ghim nhầm dòng của đơn/sản phẩm khác); chỉ tự dò
+    // (orderBy id asc, deterministic nhưng KHÔNG đảm bảo đúng dòng) khi không có.
+    const salesOrderItem = salesOrderItemId
+      ? await this.findSalesOrderItemOrThrow(salesOrderId, mfgProductId, salesOrderItemId)
+      : await this.prisma.salesOrderItem.findFirst({
+          where: { salesOrderId, mfgProductId },
+          orderBy: { id: 'asc' },
+        });
     // status bỏ qua - mặc định PLANNING qua @default trong schema (mirror mock: PI mới luôn PLANNING).
     const code = await nextProductionInvoiceCode(this.prisma);
     const pi = await this.prisma.productionInvoice.create({
@@ -1250,6 +1257,24 @@ export class SkusService {
       });
     }
     return pi.id;
+  }
+
+  /** salesOrderItemId truyền tường minh PHẢI thuộc đúng salesOrderId + mfgProductId đang tạo SKU
+   *  - chặn ghim nhầm dòng của đơn hàng/sản phẩm khác qua id đoán mò. */
+  private async findSalesOrderItemOrThrow(
+    salesOrderId: bigint,
+    mfgProductId: bigint,
+    salesOrderItemId: string,
+  ) {
+    const item = await this.prisma.salesOrderItem.findUnique({
+      where: { id: parseBigIntId(salesOrderItemId) },
+    });
+    if (!item || item.salesOrderId !== salesOrderId || item.mfgProductId !== mfgProductId) {
+      throw new BadRequestException(
+        `salesOrderItemId ${salesOrderItemId} không thuộc đơn hàng/sản phẩm đang tạo SKU`,
+      );
+    }
+    return item;
   }
 
   private toResponseDto(pf: PlanFormWithRefs, quota: ReconstructedQuota): SkuResponseDto {

@@ -25,7 +25,7 @@ describe('SkusService', () => {
   let prisma: {
     salesOrder: { findUnique: jest.Mock };
     mfgProduct: { findUnique: jest.Mock };
-    salesOrderItem: { findFirst: jest.Mock };
+    salesOrderItem: { findFirst: jest.Mock; findUnique: jest.Mock };
     planForm: {
       create: jest.Mock;
       findUnique: jest.Mock;
@@ -38,7 +38,7 @@ describe('SkusService', () => {
     };
     planFormManhReview: { upsert: jest.Mock; deleteMany: jest.Mock };
     planFormDetailReview: { upsert: jest.Mock; deleteMany: jest.Mock };
-    productionInvoice: { create: jest.Mock; update: jest.Mock };
+    productionInvoice: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock };
     productionInvoiceItem: { create: jest.Mock };
     bomRevision: { findFirst: jest.Mock; findMany: jest.Mock };
     piece: { findMany: jest.Mock; create: jest.Mock; update: jest.Mock };
@@ -81,7 +81,7 @@ describe('SkusService', () => {
     prisma = {
       salesOrder: { findUnique: jest.fn() },
       mfgProduct: { findUnique: jest.fn() },
-      salesOrderItem: { findFirst: jest.fn() },
+      salesOrderItem: { findFirst: jest.fn(), findUnique: jest.fn() },
       planForm: {
         create: jest.fn(),
         findUnique: jest.fn(),
@@ -94,7 +94,11 @@ describe('SkusService', () => {
       },
       planFormManhReview: { upsert: jest.fn(), deleteMany: jest.fn() },
       planFormDetailReview: { upsert: jest.fn(), deleteMany: jest.fn() },
-      productionInvoice: { create: jest.fn(), update: jest.fn() },
+      productionInvoice: {
+        create: jest.fn(),
+        update: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       productionInvoiceItem: { create: jest.fn() },
       // Mặc định "chưa có BomRevision nào" (reconstructQuotaBatch trả manhData/detailQuota
       // null nhanh, không chạm tới các bảng dòng con) - test nào cần dữ liệu thật sẽ override.
@@ -178,6 +182,61 @@ describe('SkusService', () => {
       await expect(
         service.create({ salesOrderId: '999', mfgProductId: '2' }, 'user-1'),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    // Audit 2026-08-20 (Medium "resolveProductionInvoice lấy dòng đầu tiên") - xác nhận với
+    // nghiệp vụ: 1 Sales Order CÓ THỂ có 2 dòng cùng mfgProductId (vd giao 2 đợt khác ngày), nên
+    // tự dò findFirst không đủ tin cậy khi ghim quantity/deliveryDeadline vào PI mới. Caller biết
+    // chắc dòng nào (vd FE truyền salesOrderItemId tường minh) phải ghim ĐÚNG dòng đó, không phải
+    // dòng đầu tiên tìm thấy.
+    it('dùng đúng salesOrderItemId tường minh để ghim PI mới, không tự dò findFirst khi có sẵn', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue({ id: 1n, customer: { name: 'Khach A' } });
+      prisma.mfgProduct.findUnique.mockResolvedValue(mfgProduct);
+      prisma.planForm.findFirst.mockResolvedValue(null); // chưa có PI nào cho cặp này
+      prisma.salesOrderItem.findUnique.mockResolvedValue({
+        id: 77n,
+        salesOrderId: 1n,
+        mfgProductId: 2n,
+        totalQty: 60,
+        deliveryDate: new Date('2026-09-01'),
+      });
+      prisma.productionInvoice.create.mockResolvedValue({ id: 500n });
+      prisma.planForm.create.mockResolvedValue(planForm({ productionInvoiceId: 500n }));
+
+      await service.create(
+        { salesOrderId: '1', mfgProductId: '2', salesOrderItemId: '77' },
+        'user-1',
+      );
+
+      expect(prisma.salesOrderItem.findFirst).not.toHaveBeenCalled();
+      expect(prisma.salesOrderItem.findUnique).toHaveBeenCalledWith({ where: { id: 77n } });
+      expect(prisma.productionInvoiceItem.create).toHaveBeenCalledWith({
+        data: {
+          productionInvoiceId: 500n,
+          mfgProductId: 2n,
+          quantity: 60,
+          deliveryDeadline: new Date('2026-09-01'),
+        },
+      });
+    });
+
+    it('từ chối salesOrderItemId không thuộc đúng đơn hàng/sản phẩm đang tạo SKU', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue({ id: 1n, customer: { name: 'Khach A' } });
+      prisma.mfgProduct.findUnique.mockResolvedValue(mfgProduct);
+      prisma.planForm.findFirst.mockResolvedValue(null);
+      // Dòng này thuộc salesOrderId=2 (khác đơn đang tạo SKU, id=1) - phải bị từ chối.
+      prisma.salesOrderItem.findUnique.mockResolvedValue({
+        id: 77n,
+        salesOrderId: 2n,
+        mfgProductId: 2n,
+        totalQty: 60,
+        deliveryDate: null,
+      });
+
+      await expect(
+        service.create({ salesOrderId: '1', mfgProductId: '2', salesOrderItemId: '77' }, 'user-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.productionInvoice.create).not.toHaveBeenCalled();
     });
   });
 

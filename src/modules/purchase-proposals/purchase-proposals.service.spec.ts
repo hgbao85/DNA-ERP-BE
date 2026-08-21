@@ -185,6 +185,30 @@ describe('PurchaseProposalsService', () => {
       expect(result.data[0].items?.[0].materialCode).toBe('SAT-25');
       expect(result.data[0].items?.[0].quotes[0].unitPrice).toBe(45000);
     });
+
+    // Audit 2026-08-20 (Medium "FE hard-code limit=100"): activeOnly phải lọc where ở tầng DB
+    // (không phải client-side) để phiếu PURCHASED tích luỹ không đẩy phiếu đang xử lý khỏi trang.
+    it('activeOnly=true loại PURCHASED khỏi where, không truyền activeOnly giữ nguyên hành vi cũ', async () => {
+      prisma.purchaseProposal.findMany.mockResolvedValue([]);
+      prisma.purchaseProposal.count.mockResolvedValue(0);
+
+      const query = new PaginationQueryDto() as PaginationQueryDto & { activeOnly?: boolean };
+      query.activeOnly = true;
+      await service.findAll(query);
+
+      expect(prisma.purchaseProposal.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { status: { not: PurchaseProposalStatus.PURCHASED } } }),
+      );
+      expect(prisma.purchaseProposal.count).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { status: { not: PurchaseProposalStatus.PURCHASED } } }),
+      );
+
+      await service.findAll(new PaginationQueryDto());
+
+      expect(prisma.purchaseProposal.findMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({ where: undefined }),
+      );
+    });
   });
 
   describe('findOne', () => {
