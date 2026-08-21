@@ -22,8 +22,7 @@ describe('SalesOrdersService', () => {
       findMany: jest.Mock;
     };
     productionInvoice: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock };
-    productionInvoiceItem: { findFirst: jest.Mock };
-    productionInvoiceItem: { createMany: jest.Mock };
+    productionInvoiceItem: { findFirst: jest.Mock; createMany: jest.Mock };
     planForm: { findFirst: jest.Mock; update: jest.Mock };
     $queryRaw: jest.Mock;
   };
@@ -71,9 +70,10 @@ describe('SalesOrdersService', () => {
       productionInvoice: { create: jest.fn(), update: jest.fn(), findMany: jest.fn() },
       // Medium fix "chặn sửa totalQty khi đã ghim PI/PO" - mặc định chưa ghim gì (null), test nào
       // cần mô phỏng đã ghim PI tự override.
-      productionInvoiceItem: { findFirst: jest.fn().mockResolvedValue(null) },
-
-      productionInvoiceItem: { createMany: jest.fn() },
+      productionInvoiceItem: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        createMany: jest.fn(),
+      },
 
       planForm: { findFirst: jest.fn(), update: jest.fn() },
       $queryRaw: jest.fn(),
