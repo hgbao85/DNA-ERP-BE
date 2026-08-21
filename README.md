@@ -35,7 +35,7 @@ Các biến quan trọng trong `.env`:
 | Biến | Ý nghĩa |
 |---|---|
 | `DATABASE_URL` | Connection string tới Postgres |
-| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Secret ký JWT, tối thiểu 32 ký tự |
+| `JWT_ACCESS_SECRET` | Secret ký access token JWT, tối thiểu 32 ký tự (refresh token không ký JWT, lưu dạng hash) |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | Tài khoản admin được tạo khi chạy seed |
 | `CORS_ORIGIN` | Origin FE được phép gọi API (`*` = cho phép tất cả) |
 

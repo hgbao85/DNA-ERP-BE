@@ -23,14 +23,6 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
   const STEEL_20X20 = 200n;
   const STEEL_RIENG = 400n;
 
-  /** Cấu hình thật hiện nay: NCC chỉ bán cây 6000mm, tề đầu 10mm, lưỡi cắt 1mm. */
-  const config = {
-    solverStockLengths: [6000],
-    solverTrimStartMm: 10,
-    solverBladeWidthMm: 1.0,
-    solverMaxWastePercentage: 1.0,
-  };
-
   const mkItem = (over: Record<string, unknown> = {}) => {
     const merged = {
       id: 1n,
@@ -61,6 +53,14 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     valueOf: () => n,
     toString: () => String(n),
   });
+
+  /** Cấu hình thật hiện nay: NCC chỉ bán cây 6000mm, tề đầu 10mm, lưỡi cắt 1mm. */
+  const config = {
+    solverStockLengths: [6000],
+    solverTrimStartMm: 10,
+    solverBladeWidthMm: mockDecimal(1.0),
+    solverMaxWastePercentage: mockDecimal(1.0),
+  };
 
   /** 1 dòng định mức: mảnh `pieceId` cần `qtyPerPiece` đoạn cỡ `cutLengthMm` của vật tư đó. */
   const mkPieceBom = (

@@ -30,18 +30,9 @@ export class NotificationsService {
     query: ListNotificationsQueryDto,
     user: AuthenticatedUser,
   ): Promise<Paginated<NotificationResponseDto>> {
-    const audiences: NotificationAudience[] = [NotificationAudience.ALL];
-    if (user.roles.includes(NotificationAudience.BOSS)) {
-      audiences.push(NotificationAudience.BOSS);
-    }
-    if (user.roles.includes(NotificationAudience.WAREHOUSE_STAFF)) {
-      audiences.push(NotificationAudience.WAREHOUSE_STAFF);
-    }
-    if (user.roles.includes(NotificationAudience.PRODUCTION_MANAGER)) {
-      audiences.push(NotificationAudience.PRODUCTION_MANAGER);
-    }
-
-    const where: Prisma.NotificationWhereInput = { audience: { in: audiences } };
+    const where: Prisma.NotificationWhereInput = {
+      audience: { in: this.getAudiencesForUser(user) },
+    };
 
     const result = await paginate(
       {
@@ -63,21 +54,43 @@ export class NotificationsService {
     };
   }
 
-  async markRead(notificationId: string, userId: string): Promise<NotificationReadResponseDto> {
+  async markRead(
+    notificationId: string,
+    user: AuthenticatedUser,
+  ): Promise<NotificationReadResponseDto> {
     const notification = await this.prisma.notification.findUnique({
       where: { id: notificationId },
     });
     if (!notification) {
       throw new NotFoundException(`Notification ${notificationId} not found`);
     }
+    if (!this.getAudiencesForUser(user).includes(notification.audience)) {
+      throw new NotFoundException(`Notification ${notificationId} not found`);
+    }
 
     const read = await this.prisma.notificationRead.upsert({
-      where: { notificationId_userId: { notificationId, userId } },
+      where: { notificationId_userId: { notificationId, userId: user.id } },
       update: {},
-      create: { notificationId, userId },
+      create: { notificationId, userId: user.id },
     });
 
     return new NotificationReadResponseDto(read);
+  }
+
+  // Vai trò nào được xem thông báo nào - dùng chung cho cả list (findAllForUser) và
+  // markRead, để markRead không đánh dấu "đã đọc" được thông báo ngoài audience của mình.
+  private getAudiencesForUser(user: AuthenticatedUser): NotificationAudience[] {
+    const audiences: NotificationAudience[] = [NotificationAudience.ALL];
+    if (user.roles.includes(NotificationAudience.BOSS)) {
+      audiences.push(NotificationAudience.BOSS);
+    }
+    if (user.roles.includes(NotificationAudience.WAREHOUSE_STAFF)) {
+      audiences.push(NotificationAudience.WAREHOUSE_STAFF);
+    }
+    if (user.roles.includes(NotificationAudience.PRODUCTION_MANAGER)) {
+      audiences.push(NotificationAudience.PRODUCTION_MANAGER);
+    }
+    return audiences;
   }
 
   private toResponseDto(notification: NotificationWithReadFlag): NotificationResponseDto {

@@ -244,11 +244,11 @@ model SystemConfig {
   /// còn bảng hướng dẫn cắt của Phôi lại tính theo cỡ không có thật. Bỏ 5850 (2026-08-12): đã
   /// hỏi lại NCC, hiện chỉ cung cấp 6000mm.
   solverStockLengths       Json  @default("[6000]")
-  solverTrimStartMm        Int   @default(10)
-  solverBladeWidthMm       Float @default(1.0)
+  solverTrimStartMm        Int             @default(10)
+  solverBladeWidthMm       Decimal         @default(1.0) @db.Decimal(6, 1)
   /// Ngưỡng hao hụt cắt MẶC ĐỊNH, áp cho vật tư Sắt chưa được cấp ngưỡng riêng (xem
   /// Material.maxCuttingWastePercentage - field đó ghi đè giá trị này cho đúng vật tư).
-  solverMaxWastePercentage Float @default(1.0)
+  solverMaxWastePercentage Decimal         @default(1.0) @db.Decimal(6, 3)
   solverMaxSurplus         Int   @default(10)
   solverMinLengthMm        Int   @default(5000)
   solverMaxLengthMm        Int   @default(6000)
@@ -265,7 +265,7 @@ model SystemConfig {
   /// Trước 2026-08-15 code cắt âm thầm bằng Math.min(buyQty, ...): NCC giao 12 trên đơn 10 thì sổ
   /// ghi 10, hai cây kia biến mất khỏi sổ nhưng vẫn nằm trong kho thật - không cảnh báo, không
   /// log, tồn hệ thống lệch tồn thực ngay từ lúc nhập (D.b3-silent-over-receipt).
-  purchaseOverReceiptTolerancePercent Float @default(0)
+  purchaseOverReceiptTolerancePercent Decimal @default(0) @db.Decimal(6, 3)
 
   updatedAt DateTime @updatedAt
 

@@ -1,8 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
 
-/** MANH = needsHan=true (dù có needsSon hay không); VAT_TU_THANH_PHAM = needsHan=false - xem
- *  quyết định mục 6 docs/review-2026-08-17-sanxuat-stage-v16-va-chuyen-kho-manh.md. */
+/** MANH = needsHan=true (dù có needsSon hay không); VAT_TU_THANH_PHAM = needsHan=false - mốc
+ *  "sẵn sàng" cho VAT_TU_THANH_PHAM đọc ProductionBatch(stage=PHOI), xem WarehouseTransfersService
+ *  .getPieceTransferPlan() (khôi phục 21/08/2026 - trước đó nhánh này bị loại khỏi kế hoạch, xem
+ *  quyết định thiết kế gốc mục 6 docs/review-2026-08-17-sanxuat-stage-v16-va-chuyen-kho-manh.md). */
 export type PieceTransferLabel = 'MANH' | 'VAT_TU_THANH_PHAM';
 
 @Exclude()

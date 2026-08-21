@@ -374,25 +374,56 @@ describe('WarehouseTransfersService', () => {
       ]);
     });
 
-    it('skips needsHan=false pieces without throwing (Critical C2 fix) - SteelIssue gộp theo PI không còn đếm được theo mảnh, nhưng 1 mảnh cấu hình sai không được phép sập cả batch', async () => {
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    // Khôi phục 21/08/2026 (trước đó bị loại khỏi kế hoạch từ 2026-08-19 tới 2026-08-20, xem
+    // Critical C2) - needsHan=false ("vật tư thành phẩm", vd chân nhôm) xác nhận là nghiệp vụ
+    // thật. Mốc "sẵn sàng" giờ đọc ProductionBatch(stage=PHOI, QC_DONE) - Phôi tự báo, không còn
+    // dựa vào SteelIssue.pieceId (đã mất từ khi gộp theo PI).
+    it('sums ProductionBatch QC_DONE at stage=PHOI for needsHan=false pieces ("vật tư thành phẩm")', async () => {
       prisma.productionOrder.findMany.mockResolvedValue([order]);
       prisma.bomPiece.findMany.mockResolvedValue([
         { ...vatTuPiece, bomRevisionId: 80n, needsHan: false, needsSon: false },
         { ...manhPiece, bomRevisionId: 80n, needsHan: true, needsSon: false },
       ]);
       prisma.productionBatch.findMany.mockResolvedValue([
+        { productionOrderId: 900n, pieceId: 31n, stage: MfgStage.PHOI, reportedQty: 15 },
         { productionOrderId: 900n, pieceId: 30n, stage: MfgStage.HAN, reportedQty: 20 },
       ]);
 
       const result = await service.getPieceTransferPlan(['900']);
 
-      // Mảnh needsHan=false (V-01) bị bỏ qua, nhưng mảnh needsHan=true (M-01) cùng batch vẫn trả về.
       expect(result).toEqual([
-        expect.objectContaining({ pieceCode: 'M-01', readyQty: 20, suggestedQty: 20 }),
+        expect.objectContaining({
+          pieceCode: 'V-01',
+          label: 'VAT_TU_THANH_PHAM',
+          readyQty: 15,
+          suggestedQty: 15,
+        }),
+        expect.objectContaining({
+          pieceCode: 'M-01',
+          label: 'MANH',
+          readyQty: 20,
+          suggestedQty: 20,
+        }),
       ]);
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('V-01'));
-      warnSpy.mockRestore();
+    });
+
+    it('needsHan=false piece chưa được Phôi báo cắt xong - vẫn xuất hiện trong kế hoạch với suggestedQty=0 (không còn bị loại khỏi kế hoạch)', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([order]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { ...vatTuPiece, bomRevisionId: 80n, needsHan: false, needsSon: false },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([]);
+
+      const result = await service.getPieceTransferPlan(['900']);
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          pieceCode: 'V-01',
+          label: 'VAT_TU_THANH_PHAM',
+          readyQty: 0,
+          suggestedQty: 0,
+        }),
+      ]);
     });
 
     it('subtracts pieces already in a PENDING or CONFIRMED transfer, not just CONFIRMED', async () => {
