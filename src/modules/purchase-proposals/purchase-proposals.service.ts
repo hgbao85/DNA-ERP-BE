@@ -17,7 +17,6 @@ import {
   StockReservationRefType,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
@@ -34,6 +33,7 @@ import {
   PurchaseProposalQuoteResponseDto,
   PurchaseProposalResponseDto,
 } from './dto/purchase-proposal-response.dto';
+import { ListPurchaseProposalsQueryDto } from './dto/list-purchase-proposals-query.dto';
 import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
 import { RejectPurchaseProposalDto } from './dto/reject-purchase-proposal.dto';
 
@@ -135,7 +135,16 @@ export class PurchaseProposalsService {
    * services/purchasing-api.ts#getBeItemIdsByMaterialId). Có items sẵn trong list là đủ để bỏ cả
    * hai.
    */
-  async findAll(query: PaginationQueryDto): Promise<Paginated<PurchaseProposalResponseDto>> {
+  async findAll(
+    query: ListPurchaseProposalsQueryDto,
+  ): Promise<Paginated<PurchaseProposalResponseDto>> {
+    // activeOnly loại PURCHASED (đóng hồ sơ) - dùng cho màn hàng đợi xử lý, để phiếu cũ còn hoạt
+    // động (NEW/QUOTING/SUBMITTED/PURCHASING/REJECTED - REJECTED vẫn quay lại quy trình để requote)
+    // không bị đẩy khỏi top-`limit` bởi phiếu PURCHASED tích luỹ vô hạn theo thời gian (audit
+    // 2026-08-20, mục Medium "FE hard-code limit=100").
+    const where: Prisma.PurchaseProposalWhereInput | undefined = query.activeOnly
+      ? { status: { not: PurchaseProposalStatus.PURCHASED } }
+      : undefined;
     const result = await paginate(
       {
         findMany: (args) =>
@@ -143,7 +152,7 @@ export class PurchaseProposalsService {
         count: (args) => this.prisma.purchaseProposal.count(args),
       },
       query,
-      undefined,
+      where,
       query.sortBy ? { [query.sortBy]: query.sortOrder } : { createdAt: query.sortOrder },
     );
     return { data: result.data.map((p) => this.toDetailResponseDto(p)), meta: result.meta };

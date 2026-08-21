@@ -11,11 +11,11 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { ApprovePurchaseProposalDto } from './dto/approve-purchase-proposal.dto';
 import { CreateQuoteDto } from './dto/create-quote.dto';
+import { ListPurchaseProposalsQueryDto } from './dto/list-purchase-proposals-query.dto';
 import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
 import { RejectPurchaseProposalDto } from './dto/reject-purchase-proposal.dto';
 import { PurchaseProposalsService } from './purchase-proposals.service';
@@ -42,7 +42,7 @@ export class PurchaseProposalsController {
 
   @Get()
   @RequirePermissions(VIEW)
-  findAll(@Query() query: PaginationQueryDto) {
+  findAll(@Query() query: ListPurchaseProposalsQueryDto) {
     return this.purchaseProposalsService.findAll(query);
   }
 
