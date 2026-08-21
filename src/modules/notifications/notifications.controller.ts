@@ -30,7 +30,7 @@ export class NotificationsController {
   @Post(':id/read')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions({ module: PERMISSION_MODULES.NOTIFICATION, action: PermissionAction.VIEW })
-  markRead(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.notificationsService.markRead(id, userId);
+  markRead(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.notificationsService.markRead(id, user);
   }
 }

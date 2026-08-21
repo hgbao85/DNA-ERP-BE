@@ -10,7 +10,6 @@ env:
   DATABASE_URL: postgresql://erp_test:erp_test@localhost:5432/dna_erp_test?schema=public
   JWT_ACCESS_SECRET: ci-access-secret-at-least-32-characters-long
   JWT_ACCESS_EXPIRES_IN: 15m
-  JWT_REFRESH_SECRET: ci-refresh-secret-at-least-32-characters-long
   JWT_REFRESH_EXPIRES_IN: 7d
   CORS_ORIGIN: '*'
   THROTTLE_TTL: 60

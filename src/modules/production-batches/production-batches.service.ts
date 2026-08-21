@@ -214,12 +214,12 @@ export class ProductionBatchesService {
   }
 
   /**
-   * "Còn phải báo bao nhiêu" theo mảnh - cho HAN_STAFF/SON_STAFF tự tra pieceId thật để báo sản
-   * lượng, không cần BOM_REVISION:VIEW (chỉ cần biết trước productionOrderId, xem
-   * PRODUCTION_ORDER:VIEW mới cấp cho 2 role này). Chỉ trả mảnh có needsHan/needsSon=true tương
-   * ứng đúng stage (BomPiece.needsHan/needsSon) - mảnh không cần qua công đoạn này thì không hiện
-   * ra để báo nhầm; awaitingQcQty/passedQty tính riêng theo đúng stage từ ProductionBatch, cùng
-   * idiom MaterialIssuesService.getIssuePlan().
+   * "Còn phải báo bao nhiêu" theo mảnh - cho PHOI_STAFF/HAN_STAFF/SON_STAFF tự tra pieceId thật để
+   * báo sản lượng, không cần BOM_REVISION:VIEW (chỉ cần biết trước productionOrderId, xem
+   * PRODUCTION_ORDER:VIEW mới cấp cho các role này). Chỉ trả mảnh khớp đúng stage
+   * (stageNeedsFilter: PHOI → needsHan=false "vật tư thành phẩm", HAN/SON → needsHan/needsSon=true)
+   * - mảnh không cần qua công đoạn này thì không hiện ra để báo nhầm; awaitingQcQty/passedQty tính
+   * riêng theo đúng stage từ ProductionBatch, cùng idiom MaterialIssuesService.getIssuePlan().
    */
   async getBatchPlan(
     productionOrderId: string,
@@ -270,19 +270,22 @@ export class ProductionBatchesService {
   }
 
   private assertConsumableStage(stage: MfgStage): void {
-    if (stage !== MfgStage.HAN && stage !== MfgStage.SON) {
+    if (stage !== MfgStage.HAN && stage !== MfgStage.SON && stage !== MfgStage.PHOI) {
       throw new BadRequestException(
-        `Báo sản lượng chỉ áp dụng cho công đoạn HAN hoặc SON, nhận được '${stage}'`,
+        `Báo sản lượng chỉ áp dụng cho công đoạn PHOI, HAN hoặc SON, nhận được '${stage}'`,
       );
     }
   }
 
   /** null = quản lý/tổng (PRODUCTION_MANAGER/BOSS/ADMIN) - không có gì để chặn, cùng idiom
-   *  MaterialIssuesService.assertMfgRoleMatchesStage(). Khác null: đúng tổ Hàn/Sơn mới báo được
-   *  sản lượng công đoạn mình, HAN không báo hộ SON và ngược lại. */
+   *  MaterialIssuesService.assertMfgRoleMatchesStage(). Khác null: đúng tổ Phôi/Hàn/Sơn mới báo
+   *  được sản lượng công đoạn mình, không báo hộ nhau. PHOI ở đây là "Phôi tự báo cắt xong vật tư
+   *  thành phẩm" (needsHan=false) - khác hẳn STEEL_ISSUE:UPDATE (báo cắt sắt cho mảnh needsHan=true,
+   *  xem SteelIssuesService.completeCutting()). */
   private assertMfgRoleMatchesStage(mfgRole: string | null, stage: MfgStage): void {
     if (!mfgRole) return;
-    const expected = stage === MfgStage.HAN ? MfgRole.HAN : MfgRole.SON;
+    const expected =
+      stage === MfgStage.PHOI ? MfgRole.PHOI : stage === MfgStage.HAN ? MfgRole.HAN : MfgRole.SON;
     if (mfgRole !== expected) {
       throw new ForbiddenException(
         `Caller có mfgRole '${mfgRole}', không được báo sản lượng công đoạn ${stage}`,
@@ -290,9 +293,11 @@ export class ProductionBatchesService {
     }
   }
 
-  /** { needsHan: true } hoặc { needsSon: true } tùy stage - dùng chung cho getBatchPlan()
-   *  (findMany where) và assertPieceInBom() (đối chiếu bomPiece đã fetch). */
+  /** { needsHan: false } (PHOI - "vật tư thành phẩm" tự báo cắt xong, không qua Hàn) hoặc
+   *  { needsHan: true } (HAN) hoặc { needsSon: true } (SON) tùy stage - dùng chung cho
+   *  getBatchPlan() (findMany where) và assertPieceInBom() (đối chiếu bomPiece đã fetch). */
   private stageNeedsFilter(stage: MfgStage): Prisma.BomPieceWhereInput {
+    if (stage === MfgStage.PHOI) return { needsHan: false };
     return stage === MfgStage.HAN ? { needsHan: true } : { needsSon: true };
   }
 
@@ -309,7 +314,12 @@ export class ProductionBatchesService {
         `Mảnh ${pieceId} không thuộc định mức (BOM) của lệnh sản xuất này`,
       );
     }
-    const needsStage = stage === MfgStage.HAN ? bomPiece.needsHan : bomPiece.needsSon;
+    const needsStage =
+      stage === MfgStage.PHOI
+        ? !bomPiece.needsHan
+        : stage === MfgStage.HAN
+          ? bomPiece.needsHan
+          : bomPiece.needsSon;
     if (!needsStage) {
       throw new BadRequestException(
         `Mảnh ${pieceId} không cần qua công đoạn ${stage} theo định mức (BOM) này`,

@@ -262,26 +262,21 @@ export class WarehouseTransfersService {
 
   /**
    * Kế hoạch chuyển kho cho mảnh theo 1 hoặc nhiều PO (không theo PI - mục 6 tài liệu trên, vì 1
-   * PI có thể gồm nhiều PO tiến độ khác nhau). Mốc "sẵn sàng" tính theo bảng mục 7.1: needsHan=true
-   * dùng ProductionBatch QC_DONE (stage=SON nếu needsSon, không thì HAN). "Đã chuyển" trừ CẢ phiếu
-   * PENDING lẫn CONFIRMED (không chỉ CONFIRMED như mô tả mục 7.2) để tránh 2 phiếu PENDING cùng lúc
-   * cùng "double-book" quá số đã đạt - risk tương tự oversell vật tư nhưng piece không có
-   * StockQuant để FOR UPDATE khoá, nên chặn ở tầng đọc kế hoạch thay vì khoá dòng.
+   * PI có thể gồm nhiều PO tiến độ khác nhau). Mốc "sẵn sàng" tính theo ProductionBatch QC_DONE,
+   * stage tuỳ loại mảnh: needsHan=true → SON nếu needsSon, không thì HAN; needsHan=false ("vật tư
+   * thành phẩm", vd chân nhôm - cắt xong là hết, không hàn) → PHOI, Phôi tự báo sản lượng qua
+   * cùng ProductionBatchesService.create() (thêm 21/08/2026 - xem role-permissions PHOI_STAFF).
+   * "Đã chuyển" trừ CẢ phiếu PENDING lẫn CONFIRMED (không chỉ CONFIRMED như mô tả mục 7.2) để tránh
+   * 2 phiếu PENDING cùng lúc cùng "double-book" quá số đã đạt - risk tương tự oversell vật tư
+   * nhưng piece không có StockQuant để FOR UPDATE khoá, nên chặn ở tầng đọc kế hoạch thay vì khoá
+   * dòng.
    *
-   * needsHan=false ("vật tư thành phẩm") KHÔNG còn được hỗ trợ ở đây từ 2026-08-19 (xem changelog
-   * 2026-08-18-xuat-sat-po-pi-vat-tu.md): trước đây tính "sẵn sàng" bằng SteelIssue.QC_PASSED
-   * theo đúng `pieceId`, nhưng SteelIssue giờ gộp theo cả PI (không còn `pieceId`) nên không thể
-   * đếm theo mảnh cụ thể nữa - hệ thống không biết trước cây sắt xuất ra sẽ về mảnh nào. Thực tế
-   * nghiệp vụ hiện tại MỌI mảnh đều needsHan=true (xác nhận với user 2026-08-19).
-   *
-   * (Sửa Critical C2, 2026-08-20) Trước đây nhánh này `throw ConflictException` ngay khi gặp 1
-   * mảnh needsHan=false, làm hỏng response của TOÀN BỘ batch (mọi productionOrderId truyền vào,
-   * không chỉ PO chứa mảnh đó) - vì FE gọi API này 1 lần gộp hết PO đang hoạt động
-   * (WarehouseXuatPage.tsx), 1 mảnh cấu hình sai ở bất kỳ đâu là sập toàn bộ màn Xuất kho
-   * Phôi-Sơn-Hàn cho MỌI PO. Giờ chỉ BỎ QUA đúng mảnh needsHan=false (không có cách tính đúng),
-   * các mảnh/PO khác trong cùng batch vẫn trả về bình thường - đổi "báo lỗi rõ ràng" (nhưng chặn
-   * nhầm phạm vi) thành "âm thầm thiếu 1 dòng" (đúng phạm vi, ít phá hoại hơn nhiều). Vẫn cần dev
-   * xử lý dữ liệu gốc nếu trường hợp này thật sự xảy ra - collectedWarnings ghi lại để log/theo dõi.
+   * Lịch sử needsHan=false: từ 2026-08-19 (SteelIssue gộp theo PI, mất pieceId) tới 2026-08-20
+   * (fix Critical C2 - đổi throw làm hỏng cả batch thành BỎ QUA đúng mảnh lỗi), nhánh này hoàn
+   * toàn không tính được "sẵn sàng" nên bị loại khỏi kế hoạch. 21/08/2026: xác nhận needsHan=false
+   * LÀ nghiệp vụ thật (không phải lý thuyết) → khôi phục lại bằng nguồn dữ liệu MỚI (Phôi tự báo
+   * qua ProductionBatch, KHÔNG dựa vào SteelIssue.pieceId đã mất) thay vì SUM SteelIssue.QC_PASSED
+   * như thiết kế gốc 2026-08-17 (docs/review-2026-08-17-sanxuat-stage-v16-va-chuyen-kho-manh.md).
    */
   async getPieceTransferPlan(
     productionOrderIds: string[],
@@ -312,7 +307,7 @@ export class WarehouseTransfersService {
         where: {
           productionOrderId: { in: orderBigIds },
           status: ProductionBatchStatus.QC_DONE,
-          stage: { in: [MfgStage.HAN, MfgStage.SON] },
+          stage: { in: [MfgStage.PHOI, MfgStage.HAN, MfgStage.SON] },
         },
         select: { productionOrderId: true, pieceId: true, stage: true, reportedQty: true },
       }),
@@ -353,18 +348,9 @@ export class WarehouseTransfersService {
         // bỏ qua, xem bảng mục 7.1.
         if (!bp.needsHan && bp.needsSon) continue;
 
-        if (!bp.needsHan) {
-          // Xem comment ở đầu getPieceTransferPlan() (Critical C2) - không còn cách nào đếm "đã
-          // xong bao nhiêu mảnh vật tư thành phẩm" từ dữ liệu xuất sắt gộp theo PI. BỎ QUA đúng
-          // mảnh này (không đẩy vào items) thay vì throw làm hỏng cả batch - các PO/mảnh khác vẫn
-          // trả về bình thường. console.warn để lộ ra log server, không nuốt hoàn toàn.
-          console.warn(
-            `[getPieceTransferPlan] Bỏ qua mảnh ${bp.piece.code} (PO ${order.poNumber}): needsHan=false ("vật tư thành phẩm") không còn được hỗ trợ kể từ khi xuất sắt gộp theo PI - liên hệ dev nếu đây là trường hợp thật cần xử lý`,
-          );
-          continue;
-        }
-
-        const finalStage = bp.needsSon ? MfgStage.SON : MfgStage.HAN;
+        // needsHan=false ("vật tư thành phẩm") → PHOI (Phôi tự báo cắt xong, không qua Hàn/Sơn).
+        // needsHan=true → SON nếu needsSon, không thì HAN. Xem comment đầu hàm.
+        const finalStage = !bp.needsHan ? MfgStage.PHOI : bp.needsSon ? MfgStage.SON : MfgStage.HAN;
         const readyQty = batchQtyByKey.get(`${order.id}:${bp.pieceId}:${finalStage}`) ?? 0;
         const transferredQty = transferredByKey.get(`${order.id}:${bp.pieceId}`) ?? 0;
         const suggestedQty = Math.max(0, readyQty - transferredQty);
@@ -378,7 +364,7 @@ export class WarehouseTransfersService {
             pieceId: bp.pieceId.toString(),
             pieceCode: bp.piece.code,
             pieceName: bp.piece.name,
-            label: 'MANH',
+            label: bp.needsHan ? 'MANH' : 'VAT_TU_THANH_PHAM',
             readyQty,
             transferredQty,
             suggestedQty,

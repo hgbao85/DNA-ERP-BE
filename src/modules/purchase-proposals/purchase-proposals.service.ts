@@ -596,7 +596,7 @@ export class PurchaseProposalsService {
       where: { id: 1 },
       select: { purchaseOverReceiptTolerancePercent: true },
     });
-    return config?.purchaseOverReceiptTolerancePercent ?? 0;
+    return config?.purchaseOverReceiptTolerancePercent.toNumber() ?? 0;
   }
 
   private async findRawOrThrow(id: string) {

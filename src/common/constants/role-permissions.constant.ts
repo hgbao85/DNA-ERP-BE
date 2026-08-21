@@ -398,14 +398,28 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // PHOI_STAFF chỉ UPDATE+VIEW trên STEEL_ISSUE (receive/complete-cutting/rework) - KHÔNG có
   // CREATE (xuất đợt là việc của thủ kho, xem WAREHOUSE_STAFF ở trên). Sửa lại 2026-08-11: bản
   // scaffold cũ (actions:'ALL') SAI - đã xác nhận lại nghiệp vụ, PHOI_STAFF không tự xuất sắt
-  // cho mình. PRODUCTION_BATCH nay đã tồn tại (Phase 9d) nhưng KHÔNG cấp cho PHOI_STAFF - báo
-  // sản lượng chỉ dành cho Hàn/Sơn, Phôi báo qua LenhSanXuatPhoi (mock, chưa nối module riêng).
+  // cho mình.
   // WORK_SESSION vẫn chưa tồn tại (xem comment schema.prisma "Phase 9d" - không triển khai vì
   // mock không có khái niệm ca làm việc để validate).
   [BUSINESS_ROLES.PHOI_STAFF]: [
     {
       module: PERMISSION_MODULES.STEEL_ISSUE,
       actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
+    },
+    // Thêm 21/08/2026: Phôi tự báo cắt xong "vật tư thành phẩm" (needsHan=false, vd chân nhôm -
+    // mua thanh nhôm về cắt là xong, không qua Hàn) - trước đây needsHan=false hoàn toàn không có
+    // cách nào chuyển kho ra khỏi Phôi-Sơn-Hàn (xem getPieceTransferPlan()). Cùng permission +
+    // cùng route POST /production-orders/:id/production-batches với HAN_STAFF/SON_STAFF
+    // (ProductionBatchesService.assertMfgRoleMatchesStage() chỉ cho phép mfgRole=PHOI báo
+    // stage=PHOI, không báo hộ Hàn/Sơn được). PRODUCTION_ORDER:VIEW đi kèm - cùng lý do đã cấp
+    // cho HAN_STAFF/SON_STAFF: cần tự tra productionOrderId để gọi production-batch-plan.
+    {
+      module: PERMISSION_MODULES.PRODUCTION_BATCH,
+      actions: [PermissionAction.CREATE, PermissionAction.VIEW],
+    },
+    {
+      module: PERMISSION_MODULES.PRODUCTION_ORDER,
+      actions: [PermissionAction.VIEW],
     },
     // Vá lỗ quyền phát hiện lúc nối FE KhoPhoiPage (2026-08-14, xem docs/quy-doi-doan-phoi.md):
     // trang đọc GET /stock-quant (segmentSpecId) để hiện tồn đoạn sắt thật - PHOI_STAFF trước

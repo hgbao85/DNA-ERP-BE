@@ -6,6 +6,9 @@ describe('SystemConfigService', () => {
   let service: SystemConfigService;
   let prisma: { systemConfig: { findUnique: jest.Mock; update: jest.Mock } };
 
+  /** Mô phỏng `Prisma.Decimal` tối thiểu - đủ cho `.toNumber()` mà findOne()/update() gọi. */
+  const mockDecimal = (n: number) => ({ toNumber: () => n });
+
   const seededConfig = {
     id: 1,
     companyName: 'DNA Steel',
@@ -16,13 +19,14 @@ describe('SystemConfigService', () => {
     defaultCurrency: 'VND',
     solverStockLengths: [6000, 5800],
     solverTrimStartMm: 10,
-    solverBladeWidthMm: 3,
-    solverMaxWastePercentage: 5,
+    solverBladeWidthMm: mockDecimal(3),
+    solverMaxWastePercentage: mockDecimal(5),
     solverMaxSurplus: 2,
     solverMinLengthMm: 100,
     solverMaxLengthMm: 6000,
     solverLengthStepMm: 10,
     solverTimeLimitSeconds: 30,
+    purchaseOverReceiptTolerancePercent: mockDecimal(0),
     updatedAt: new Date('2026-01-01'),
   };
 

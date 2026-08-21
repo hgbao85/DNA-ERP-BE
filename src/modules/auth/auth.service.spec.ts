@@ -81,7 +81,6 @@ describe('AuthService', () => {
         const values: Record<string, string> = {
           'jwt.accessSecret': 'access-secret',
           'jwt.accessExpiresIn': '15m',
-          'jwt.refreshSecret': 'refresh-secret',
           'jwt.refreshExpiresIn': '7d',
         };
         return values[key];

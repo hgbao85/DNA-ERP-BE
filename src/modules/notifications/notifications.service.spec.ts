@@ -121,7 +121,7 @@ describe('NotificationsService', () => {
     it('throws 404 and never upserts when the notification does not exist', async () => {
       prisma.notification.findUnique.mockResolvedValue(null);
 
-      await expect(service.markRead('missing', 'user-1')).rejects.toThrow(NotFoundException);
+      await expect(service.markRead('missing', baseUser)).rejects.toThrow(NotFoundException);
       expect(prisma.notificationRead.upsert).not.toHaveBeenCalled();
     });
 
@@ -133,13 +133,41 @@ describe('NotificationsService', () => {
         readAt: new Date('2026-01-02'),
       });
 
-      await service.markRead('notif-1', 'user-1');
+      await service.markRead('notif-1', baseUser);
 
       expect(prisma.notificationRead.upsert).toHaveBeenCalledWith({
         where: { notificationId_userId: { notificationId: 'notif-1', userId: 'user-1' } },
         update: {},
         create: { notificationId: 'notif-1', userId: 'user-1' },
       });
+    });
+
+    it('throws 404 and never upserts when the notification is outside the caller audience', async () => {
+      prisma.notification.findUnique.mockResolvedValue({
+        ...notification,
+        audience: NotificationAudience.BOSS,
+      });
+
+      await expect(
+        service.markRead('notif-1', { ...baseUser, roles: ['KCS_STAFF'] }),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.notificationRead.upsert).not.toHaveBeenCalled();
+    });
+
+    it('allows marking read when the caller role matches the notification audience', async () => {
+      prisma.notification.findUnique.mockResolvedValue({
+        ...notification,
+        audience: NotificationAudience.BOSS,
+      });
+      prisma.notificationRead.upsert.mockResolvedValue({
+        notificationId: 'notif-1',
+        userId: 'user-1',
+        readAt: new Date('2026-01-02'),
+      });
+
+      await service.markRead('notif-1', { ...baseUser, roles: ['BOSS'] });
+
+      expect(prisma.notificationRead.upsert).toHaveBeenCalled();
     });
   });
 });

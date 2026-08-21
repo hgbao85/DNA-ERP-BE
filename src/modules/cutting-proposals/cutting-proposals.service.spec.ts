@@ -83,8 +83,8 @@ describe('CuttingProposalsService', () => {
   const systemConfig = {
     solverStockLengths: [5850, 6000],
     solverTrimStartMm: 10,
-    solverBladeWidthMm: 1.0,
-    solverMaxWastePercentage: 1.0,
+    solverBladeWidthMm: mockDecimal(1.0),
+    solverMaxWastePercentage: mockDecimal(1.0),
     solverMaxSurplus: 10,
     solverMinLengthMm: 5000,
     solverMaxLengthMm: 6000,

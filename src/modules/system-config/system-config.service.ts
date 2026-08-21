@@ -18,6 +18,9 @@ export class SystemConfigService {
     return new SystemConfigResponseDto({
       ...config,
       solverStockLengths: config.solverStockLengths as number[],
+      solverBladeWidthMm: config.solverBladeWidthMm.toNumber(),
+      solverMaxWastePercentage: config.solverMaxWastePercentage.toNumber(),
+      purchaseOverReceiptTolerancePercent: config.purchaseOverReceiptTolerancePercent.toNumber(),
     });
   }
 
@@ -35,6 +38,9 @@ export class SystemConfigService {
     return new SystemConfigResponseDto({
       ...updated,
       solverStockLengths: updated.solverStockLengths as number[],
+      solverBladeWidthMm: updated.solverBladeWidthMm.toNumber(),
+      solverMaxWastePercentage: updated.solverMaxWastePercentage.toNumber(),
+      purchaseOverReceiptTolerancePercent: updated.purchaseOverReceiptTolerancePercent.toNumber(),
     });
   }
 }

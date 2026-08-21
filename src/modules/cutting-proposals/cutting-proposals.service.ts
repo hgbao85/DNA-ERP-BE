@@ -356,14 +356,15 @@ export class CuttingProposalsService {
     const { byMaterial, materials, config } = ctx;
     const stockLengths = config.solverStockLengths as number[];
     const trimMm = config.solverTrimStartMm;
-    const kerfMm = config.solverBladeWidthMm;
+    const kerfMm = config.solverBladeWidthMm.toNumber();
 
     const suggestions: CuttingBatchSuggestionDto[] = [];
     for (const material of materials) {
       const entries = byMaterial.get(material.id);
       if (!entries) continue;
       const thresholdPct =
-        material.maxCuttingWastePercentage?.toNumber() ?? config.solverMaxWastePercentage;
+        material.maxCuttingWastePercentage?.toNumber() ??
+        config.solverMaxWastePercentage.toNumber();
 
       // Xếp theo hạn gần nhất trước; KHÔNG có hạn thì xuống cuối (không được để dữ liệu thiếu
       // đẩy 1 đơn lên làm mốc neo "gấp nhất").
@@ -447,7 +448,7 @@ export class CuttingProposalsService {
     const { items, byMaterial, materials, config, itemsWithoutBom } = ctx;
     const stockLengths = config.solverStockLengths as number[];
     const trimMm = config.solverTrimStartMm;
-    const kerfMm = config.solverBladeWidthMm;
+    const kerfMm = config.solverBladeWidthMm.toNumber();
     const materialById = new Map(materials.map((m) => [m.id, m]));
 
     // itemId -> các loại sắt của nó (kèm nhu cầu) - đảo chiều byMaterial để dựng theo dòng SKU.
@@ -481,7 +482,8 @@ export class CuttingProposalsService {
             const material = materialById.get(materialId);
             if (!material) return null;
             const thresholdPct =
-              material.maxCuttingWastePercentage?.toNumber() ?? config.solverMaxWastePercentage;
+              material.maxCuttingWastePercentage?.toNumber() ??
+              config.solverMaxWastePercentage.toNumber();
             const best = bestWasteAcrossStockLengths(
               [...demand.keys()],
               stockLengths,
@@ -552,14 +554,15 @@ export class CuttingProposalsService {
     const { byMaterial, materials, config } = ctx;
     const stockLengths = config.solverStockLengths as number[];
     const trimMm = config.solverTrimStartMm;
-    const kerfMm = config.solverBladeWidthMm;
+    const kerfMm = config.solverBladeWidthMm.toNumber();
 
     const lines: CuttingBatchPreviewLineDto[] = [];
     for (const material of materials) {
       const members = (byMaterial.get(material.id) ?? []).filter((e) => selectedIds.has(e.item.id));
       if (members.length === 0) continue;
       const thresholdPct =
-        material.maxCuttingWastePercentage?.toNumber() ?? config.solverMaxWastePercentage;
+        material.maxCuttingWastePercentage?.toNumber() ??
+        config.solverMaxWastePercentage.toNumber();
       const level = this.buildBatchLevel(members, stockLengths, trimMm, kerfMm, thresholdPct);
       if (level === null) continue;
       lines.push(
@@ -1002,8 +1005,8 @@ export class CuttingProposalsService {
         // "[5850 6000]" -> phần tử đầu/cuối dính ký tự "[" "]" và bị loại bỏ, ra 0).
         stock_lengths: (config.solverStockLengths as number[]).join(' '),
         trim_start: config.solverTrimStartMm,
-        blade_width: config.solverBladeWidthMm,
-        max_waste_percentage: config.solverMaxWastePercentage,
+        blade_width: config.solverBladeWidthMm.toNumber(),
+        max_waste_percentage: config.solverMaxWastePercentage.toNumber(),
         ...(Object.keys(maxWastePctByMaterial).length > 0
           ? { max_waste_percentage_by_material: maxWastePctByMaterial }
           : {}),

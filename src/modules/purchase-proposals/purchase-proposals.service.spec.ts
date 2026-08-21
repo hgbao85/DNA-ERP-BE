@@ -146,7 +146,9 @@ describe('PurchaseProposalsService', () => {
       },
       // Dung sai giao thừa - mặc định 0 (không cho nhận thừa), test nào cần nới tự override.
       systemConfig: {
-        findUnique: jest.fn().mockResolvedValue({ purchaseOverReceiptTolerancePercent: 0 }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ purchaseOverReceiptTolerancePercent: decimal(0) }),
       },
       // Audit ghi tay ở approve()/requote() - xem auditQuoteDecision().
       auditLog: { create: jest.fn() },
@@ -923,7 +925,7 @@ describe('PurchaseProposalsService', () => {
 
     it('CHO nhận thừa trong dung sai và ghi ĐÚNG số thật (không cắt về buyQty)', async () => {
       prisma.systemConfig.findUnique.mockResolvedValue({
-        purchaseOverReceiptTolerancePercent: 25, // đặt 8 -> cho tới 10
+        purchaseOverReceiptTolerancePercent: decimal(25), // đặt 8 -> cho tới 10
       });
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({

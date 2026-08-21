@@ -137,11 +137,65 @@ describe('ProductionBatchesService', () => {
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
     });
 
-    it('ném BadRequestException khi stage không phải HAN/SON', async () => {
+    it('ném BadRequestException khi stage không phải PHOI/HAN/SON', async () => {
       await expect(
-        service.create('1', { ...dto, stage: MfgStage.PHOI }, 'user-1', null),
+        service.create('1', { ...dto, stage: MfgStage.DAN }, 'user-1', null),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
+
+    // Thêm 21/08/2026: PHOI giờ là stage hợp lệ thứ 3, dành riêng cho mảnh needsHan=false ("vật
+    // tư thành phẩm", vd chân nhôm - cắt xong là hết, không hàn). Xem
+    // WarehouseTransfersService.getPieceTransferPlan() cho lý do cần luồng này (trước đây
+    // needsHan=false hoàn toàn không có cách nào báo/chuyển kho).
+    describe('stage PHOI - "vật tư thành phẩm" (needsHan=false)', () => {
+      const phoiDto = { stage: MfgStage.PHOI, pieceId: '40', reportedQty: 20 };
+      const phoiBatchRow = { ...batchRow, stage: MfgStage.PHOI, reportedById: 'user-phoi' };
+
+      it('ném BadRequestException khi báo PHOI cho mảnh needsHan=true (mảnh thường, phải qua Hàn)', async () => {
+        await expect(service.create('1', phoiDto, 'user-phoi', null)).rejects.toThrow(
+          BadRequestException,
+        );
+        expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+      });
+
+      it('happy path - báo PHOI cho mảnh needsHan=false thành công', async () => {
+        prisma.bomPiece.findUnique.mockResolvedValue({
+          ...bomPieceRow,
+          needsHan: false,
+          needsSon: false,
+        });
+        prisma.productionBatch.create.mockResolvedValue(phoiBatchRow);
+
+        const result = await service.create('1', phoiDto, 'user-phoi', null);
+
+        expect(prisma.productionBatch.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+            data: expect.objectContaining({ stage: MfgStage.PHOI, pieceId: 40n, reportedQty: 20 }),
+          }),
+        );
+        expect(result.id).toBe('700');
+      });
+
+      it('cho phép mfgRole khớp đúng stage (PHOI)', async () => {
+        prisma.bomPiece.findUnique.mockResolvedValue({
+          ...bomPieceRow,
+          needsHan: false,
+          needsSon: false,
+        });
+        prisma.productionBatch.create.mockResolvedValue(phoiBatchRow);
+        await expect(
+          service.create('1', phoiDto, 'user-phoi', MfgRole.PHOI),
+        ).resolves.toBeDefined();
+      });
+
+      it('ném ForbiddenException khi mfgRole không khớp stage (HAN báo hộ PHOI)', async () => {
+        await expect(service.create('1', phoiDto, 'user-han', MfgRole.HAN)).rejects.toThrow(
+          ForbiddenException,
+        );
+        expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+      });
     });
 
     it('ném NotFoundException khi production order không tồn tại', async () => {
@@ -273,6 +327,15 @@ describe('ProductionBatchesService', () => {
 
       expect(prisma.bomPiece.findMany).toHaveBeenCalledWith({
         where: { bomRevisionId: order.bomRevisionId, needsSon: true },
+        include: { piece: true },
+      });
+    });
+
+    it('lọc bomPiece theo needsHan=false khi stage=PHOI ("vật tư thành phẩm")', async () => {
+      await service.getBatchPlan('1', MfgStage.PHOI);
+
+      expect(prisma.bomPiece.findMany).toHaveBeenCalledWith({
+        where: { bomRevisionId: order.bomRevisionId, needsHan: false },
         include: { piece: true },
       });
     });

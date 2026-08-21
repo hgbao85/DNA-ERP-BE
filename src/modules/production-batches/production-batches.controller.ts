@@ -20,11 +20,13 @@ const CREATE = { module: PERMISSION_MODULES.PRODUCTION_BATCH, action: Permission
 export class ProductionBatchesController {
   constructor(private readonly productionBatchesService: ProductionBatchesService) {}
 
-  // ─── Tổ Hàn/Sơn (mfgRole = HAN|SON) - báo sản lượng ──────────────────────────
+  // ─── Tổ Phôi/Hàn/Sơn (mfgRole = PHOI|HAN|SON) - báo sản lượng ────────────────
+  // PHOI ở đây là "Phôi tự báo cắt xong vật tư thành phẩm" (needsHan=false, vd chân nhôm) - khác
+  // hẳn STEEL_ISSUE (báo cắt sắt cho mảnh needsHan=true qua SteelIssuesService.completeCutting()).
 
   @Post('production-orders/:id/production-batches')
   @RequirePermissions(CREATE)
-  @RequireMfgRole(MfgRole.HAN, MfgRole.SON)
+  @RequireMfgRole(MfgRole.PHOI, MfgRole.HAN, MfgRole.SON)
   create(
     @Param('id') id: string,
     @Body() dto: CreateProductionBatchDto,
@@ -41,7 +43,7 @@ export class ProductionBatchesController {
     return this.productionBatchesService.findAllForOrder(id, query);
   }
 
-  /** Tổ Hàn/Sơn tự tra pieceId thật để báo sản lượng - xem ProductionBatchesService.getBatchPlan(). */
+  /** Tổ Phôi/Hàn/Sơn tự tra pieceId thật để báo sản lượng - xem ProductionBatchesService.getBatchPlan(). */
   @Get('production-orders/:id/production-batch-plan')
   @RequirePermissions(VIEW)
   getBatchPlan(@Param('id') id: string, @Query() query: ProductionBatchPlanQueryDto) {

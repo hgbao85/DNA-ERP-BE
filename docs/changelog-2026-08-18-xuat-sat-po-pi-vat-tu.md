@@ -97,6 +97,12 @@ Test: `steel-issues.service.spec.ts` 31/31 pass (4 case mới: multi-material cr
 
 ### 2.2. Phát hiện quan trọng khi thiết kế — lý do dừng lại
 
+> **CẬP NHẬT 2026-08-21:** giả định "không có needsHan=false nào tồn tại thật" (và quyết định
+> rollback ở phiên 2026-08-19 dựa trên giả định đó) đã SAI — xác nhận với user: có ít nhất 1 loại
+> vật tư thành phẩm thật (chân nhôm). Đã xử lý bằng hướng KHÁC với 3 hướng bàn ở mục 2.2 gốc dưới
+> đây (không đảo ngược redesign gộp-PI) — xem
+> `changelog-2026-08-21-vat-tu-thanh-pham-needshan-false.md`.
+
 `SegmentSpec` (vật tư + chiều dài cắt, `@@unique([materialId, cutLengthMm])`) là khái niệm **dùng
 chung toàn hệ thống**, không thuộc riêng 1 mảnh — 2 mảnh khác nhau (thậm chí khác sản phẩm) có thể
 cùng tham chiếu 1 `SegmentSpec` nếu cần cùng vật tư + cùng chiều dài cắt. Hệ quả: **ngay cả sau khi
