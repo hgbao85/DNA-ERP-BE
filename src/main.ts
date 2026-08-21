@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { AppConfig } from './config/configuration';
 
@@ -15,6 +16,7 @@ async function bootstrap(): Promise<void> {
 
   const corsOrigin = configService.get('cors.origin', { infer: true });
   app.use(helmet());
+  app.use(cookieParser());
   app.enableCors({
     origin: corsOrigin === '*' ? true : corsOrigin.split(',').map((origin) => origin.trim()),
     credentials: true,
