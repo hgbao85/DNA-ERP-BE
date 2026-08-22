@@ -81,9 +81,32 @@ export class QuotaPieceMaterialLineDto {
   note?: string;
 }
 
-/** 1 mảnh (nhóm SAT) - resolve-or-create Piece theo tên trong phạm vi sản phẩm. Chứa cả 5
- *  nhóm vật tư: Sắt (`segments`, phân cấp đoạn cắt) và Dây/Đinh/Tán rút/Nút nhựa
- *  (`materialLines`, phẳng theo mảnh, không có khái niệm cắt). */
+/** 1 dòng định mức "vật tư thành phẩm" (vd thanh nhôm → chân nhôm, tấm sắt lá → "pat") -
+ *  PieceMaterialYield, KHÔNG dùng PieceBom/SegmentSpec (đó là "đoạn cắt" tối ưu hao hụt, chỉ
+ *  đúng cho Sắt) hay PieceMaterialItem (đó là tiêu hao phẳng, không có khái niệm "1 đơn vị ra N
+ *  cái"). Không ràng buộc nhóm vật tư của material (nhóm do admin tự tạo, systemKey=null - "vô
+ *  hình với logic Spec", xem comment MaterialGroup.systemKey trong schema.prisma) - khác hẳn
+ *  segments/materialLines bên dưới đều bắt buộc đúng nhóm hệ thống. KHÔNG ràng buộc needsHan (gỡ
+ *  bỏ 2026-08-22) - áp dụng cho cả piece needsHan=false (vd chân nhôm, cắt xong là hết) lẫn
+ *  needsHan=true (vd "pat", cắt xong vẫn phải báo Hàn riêng) - xem
+ *  ProductionBatchesService.findPhoiEligibleBomPieces(). */
+export class QuotaPieceMaterialYieldDto {
+  @ApiProperty()
+  @IsString()
+  materialId!: string;
+
+  @ApiProperty({
+    description: 'Số vật tư thành phẩm cắt được từ 1 đơn vị material (vd 1 cây = 12 chân)',
+  })
+  @IsInt()
+  @Min(1)
+  piecesPerBar!: number;
+}
+
+/** 1 mảnh (nhóm SAT) - resolve-or-create Piece theo tên trong phạm vi sản phẩm. Chứa cả 6
+ *  nhóm vật tư: Sắt (`segments`, phân cấp đoạn cắt), Dây/Đinh/Tán rút/Nút nhựa
+ *  (`materialLines`, phẳng theo mảnh, không có khái niệm cắt), và Vật tư thành phẩm
+ *  (`materialYields`, định mức "1 đơn vị ra N cái", áp dụng bất kể needsHan). */
 export class QuotaPieceDto {
   @ApiProperty({ description: 'Tên mảnh - resolve-or-create Piece theo tên (case-insensitive)' })
   @IsString()
@@ -120,6 +143,16 @@ export class QuotaPieceDto {
   @ValidateNested({ each: true })
   @Type(() => QuotaPieceMaterialLineDto)
   materialLines?: QuotaPieceMaterialLineDto[];
+
+  @ApiPropertyOptional({
+    type: [QuotaPieceMaterialYieldDto],
+    description: 'Định mức "vật tư thành phẩm" (áp dụng bất kể needsHan)',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => QuotaPieceMaterialYieldDto)
+  materialYields?: QuotaPieceMaterialYieldDto[];
 }
 
 /** 1 dòng vật tư phẳng - materialId chọn thẳng từ catalog Material có sẵn. Vẫn dùng làm shape

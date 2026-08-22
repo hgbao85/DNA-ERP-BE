@@ -48,6 +48,7 @@ describe('SkusService', () => {
     bomPiece: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     pieceBom: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     pieceMaterialItem: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
+    pieceMaterialYield: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     consumableBom: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     bomAccessoryItem: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     $transaction: jest.Mock;
@@ -140,6 +141,11 @@ describe('SkusService', () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       pieceMaterialItem: {
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      pieceMaterialYield: {
         deleteMany: jest.fn(),
         createMany: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
@@ -501,6 +507,73 @@ describe('SkusService', () => {
       });
 
       expect(prisma.piece.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateManhQuota (materialYields - vật tư thành phẩm, vd chân nhôm)', () => {
+    it('viết PieceMaterialYield cho piece needsHan=false, không ràng buộc nhóm vật tư của material', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Chan nhom', code: 'CHAN-NHOM' }]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 80n, code: 'NHOM-01', materialGroupId: null },
+      ]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Chan nhom',
+            qtyPerUnit: 4,
+            needsHan: false,
+            needsSon: false,
+            segments: [],
+            materialYields: [{ materialId: '80', piecesPerBar: 12 }],
+          },
+        ],
+        enteredBy: 'NV Sat',
+      });
+
+      // Khác materialLines (WIRE/NAIL/...) - KHÔNG gọi material.update gán nhóm, vì nhóm "Vật tư
+      // thành phẩm" do admin tự tạo (systemKey=null) "vô hình với logic Spec" (xem schema.prisma).
+      expect(prisma.material.update).not.toHaveBeenCalled();
+      expect(prisma.pieceMaterialYield.createMany).toHaveBeenCalledWith({
+        data: [
+          { bomRevisionId: 10n, mfgProductId: 2n, pieceId: 20n, materialId: 80n, piecesPerBar: 12 },
+        ],
+      });
+    });
+
+    // 2026-08-22: needsHan=true KHÔNG còn bị chặn - "pat" (cắt từ tấm sắt lá theo tỷ lệ cố định,
+    // vẫn cần Hàn sau khi cắt) là vd thật. needsHan chỉ còn quyết định piece có báo thêm ở HAN
+    // hay không, không còn quyết định piece có dùng materialYields được hay không.
+    it('cho phép materialYields gắn cho piece needsHan=true ("pat", cắt từ tấm sắt lá nhưng vẫn cần Hàn)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([{ id: 21n, name: 'Pat', code: 'PAT-01' }]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 81n, code: 'TAM-SAT-LA-01', materialGroupId: null },
+      ]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Pat',
+            qtyPerUnit: 2,
+            needsHan: true,
+            segments: [],
+            materialYields: [{ materialId: '81', piecesPerBar: 6 }],
+          },
+        ],
+        enteredBy: 'NV Sat',
+      });
+
+      expect(prisma.pieceMaterialYield.createMany).toHaveBeenCalledWith({
+        data: [
+          { bomRevisionId: 10n, mfgProductId: 2n, pieceId: 21n, materialId: 81n, piecesPerBar: 6 },
+        ],
+      });
     });
   });
 

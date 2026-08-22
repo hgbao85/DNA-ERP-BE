@@ -10,6 +10,7 @@ import {
   BomRevision,
   BomRevisionStatus,
   MaterialDetailKind,
+  PlanFormStatus,
   Prisma,
 } from '../../generated/prisma/client';
 import {
@@ -29,14 +30,17 @@ import { CreateBomPieceDto } from './dto/create-bom-piece.dto';
 import { CreateConsumableBomDto } from './dto/create-consumable-bom.dto';
 import { CreatePartBomDto } from './dto/create-part-bom.dto';
 import { CreatePieceBomDto } from './dto/create-piece-bom.dto';
+import { CreatePieceMaterialYieldDto } from './dto/create-piece-material-yield.dto';
 import { PartBomResponseDto } from './dto/part-bom-response.dto';
 import { PieceBomResponseDto } from './dto/piece-bom-response.dto';
+import { PieceMaterialYieldResponseDto } from './dto/piece-material-yield-response.dto';
 import { UpdateBomAccessoryItemDto } from './dto/update-bom-accessory-item.dto';
 import { UpdateBomPartDto } from './dto/update-bom-part.dto';
 import { UpdateBomPieceDto } from './dto/update-bom-piece.dto';
 import { UpdateConsumableBomDto } from './dto/update-consumable-bom.dto';
 import { UpdatePartBomDto } from './dto/update-part-bom.dto';
 import { UpdatePieceBomDto } from './dto/update-piece-bom.dto';
+import { UpdatePieceMaterialYieldDto } from './dto/update-piece-material-yield.dto';
 
 type BomPieceWithPiece = Prisma.BomPieceGetPayload<{ include: { piece: true } }>;
 type BomPartWithPart = Prisma.BomPartGetPayload<{ include: { part: true } }>;
@@ -45,6 +49,9 @@ type PieceBomWithRefs = Prisma.PieceBomGetPayload<{
 }>;
 type PartBomWithRefs = Prisma.PartBomGetPayload<{
   include: { part: true; segmentSpec: { include: { material: true } } };
+}>;
+type PieceMaterialYieldWithRefs = Prisma.PieceMaterialYieldGetPayload<{
+  include: { piece: true; material: true };
 }>;
 type ConsumableBomWithMaterial = Prisma.ConsumableBomGetPayload<{ include: { material: true } }>;
 type BomAccessoryItemWithMaterial = Prisma.BomAccessoryItemGetPayload<{
@@ -129,6 +136,16 @@ export class BomRevisionsService {
    * (activate BomRevision + PlanForm -> APPROVED cùng thành công hoặc cùng rollback), không
    * phải 2 write rời nhau như trước (crash giữa chừng để lại BomRevision đã ACTIVE nhưng
    * PlanForm vẫn kẹt ở WAITING_BOSS_APPROVAL).
+   *
+   * Bắt buộc revision phải có sourcePlanFormId trỏ tới 1 PlanForm đang WAITING_BOSS_APPROVAL -
+   * đúng bằng bất biến mà SkusService.approve() đã assert (assertStatus) NGAY TRƯỚC khi gọi
+   * hàm này, trong cùng transaction, trước khi PlanForm chuyển sang APPROVED. Sự cố thật
+   * 2026-08-22: revision không có sourcePlanFormId (tạo qua ProductBomRevisionsController.create()
+   * - route thô theo product, không qua màn sửa định mức) bị activate thẳng qua
+   * POST /bom-revisions/:id/activate, âm thầm đè lên bản định mức đầy đủ đang ACTIVE của 1 SKU
+   * khách hàng thật ("Ghế J55") mà không qua bất kỳ xác nhận nào của người dùng. Check này chặn
+   * đường vòng đó tận gốc, không chỉ ở endpoint đơn lẻ - cả 2 caller (activate() lẫn
+   * SkusService.approve()) đi qua đúng 1 chỗ.
    */
   async activateInTransaction(tx: PrismaTx, id: string): Promise<BomRevision> {
     const bigId = parseBigIntId(id);
@@ -139,6 +156,19 @@ export class BomRevisionsService {
     if (revision.status !== BomRevisionStatus.DRAFT) {
       throw new ConflictException(
         `Only a DRAFT revision can be activated (bom_revision ${id} is ${revision.status})`,
+      );
+    }
+    if (revision.sourcePlanFormId === null) {
+      throw new ConflictException(
+        `Bom revision ${id} has no source plan form - it cannot be activated directly (must be edited and approved through the SKU quota flow)`,
+      );
+    }
+    const sourcePlanForm = await tx.planForm.findUnique({
+      where: { id: revision.sourcePlanFormId },
+    });
+    if (!sourcePlanForm || sourcePlanForm.status !== PlanFormStatus.WAITING_BOSS_APPROVAL) {
+      throw new ConflictException(
+        `Bom revision ${id}'s source plan form must be WAITING_BOSS_APPROVAL to activate (is ${sourcePlanForm?.status ?? 'missing'})`,
       );
     }
 
@@ -386,6 +416,86 @@ export class BomRevisionsService {
     this.assertDraft(revision);
     const row = await this.findPieceBomOrThrow(revision.id, id);
     await this.prisma.pieceBom.delete({ where: { id: row.id } });
+  }
+
+  // ─── PieceMaterialYield (định mức "1 cây nguyên liệu cắt ra N vật tư thành phẩm", vd thanh
+  // nhôm → chân nhôm) - tách biệt PieceBom/SegmentSpec, xem doc comment model trong schema.prisma.
+
+  async createPieceMaterialYield(
+    bomRevisionId: string,
+    dto: CreatePieceMaterialYieldDto,
+  ): Promise<PieceMaterialYieldResponseDto> {
+    const revision = await this.findOneOrThrow(bomRevisionId);
+    this.assertDraft(revision);
+
+    const pieceBigId = parseBigIntId(dto.pieceId);
+    const piece = await this.prisma.piece.findUnique({ where: { id: pieceBigId } });
+    if (!piece) {
+      throw new NotFoundException(`Piece ${dto.pieceId} not found`);
+    }
+    this.assertSameProduct(piece.mfgProductId, revision.mfgProductId, 'Piece', dto.pieceId);
+    await this.assertPieceHasBomPiece(revision.id, pieceBigId, dto.pieceId);
+
+    const materialBigId = parseBigIntId(dto.materialId);
+    const material = await this.prisma.material.findUnique({ where: { id: materialBigId } });
+    if (!material) {
+      throw new NotFoundException(`Material ${dto.materialId} not found`);
+    }
+
+    const existing = await this.prisma.pieceMaterialYield.findUnique({
+      where: { bomRevisionId_pieceId: { bomRevisionId: revision.id, pieceId: pieceBigId } },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `Piece ${dto.pieceId} already has a piece_material_yield row on this revision`,
+      );
+    }
+
+    const row = await this.prisma.pieceMaterialYield.create({
+      data: {
+        bomRevisionId: revision.id,
+        mfgProductId: revision.mfgProductId,
+        pieceId: pieceBigId,
+        materialId: materialBigId,
+        piecesPerBar: dto.piecesPerBar,
+      },
+      include: { piece: true, material: true },
+    });
+    return this.toPieceMaterialYieldResponseDto(row);
+  }
+
+  async listPieceMaterialYields(bomRevisionId: string): Promise<PieceMaterialYieldResponseDto[]> {
+    const revision = await this.findOneOrThrow(bomRevisionId);
+    const rows = await this.prisma.pieceMaterialYield.findMany({
+      where: { bomRevisionId: revision.id },
+      include: { piece: true, material: true },
+      orderBy: { id: 'asc' },
+    });
+    return rows.map((r) => this.toPieceMaterialYieldResponseDto(r));
+  }
+
+  async updatePieceMaterialYield(
+    bomRevisionId: string,
+    id: string,
+    dto: UpdatePieceMaterialYieldDto,
+  ): Promise<PieceMaterialYieldResponseDto> {
+    const revision = await this.findOneOrThrow(bomRevisionId);
+    this.assertDraft(revision);
+    const row = await this.findPieceMaterialYieldOrThrow(revision.id, id);
+
+    const updated = await this.prisma.pieceMaterialYield.update({
+      where: { id: row.id },
+      data: { piecesPerBar: dto.piecesPerBar },
+      include: { piece: true, material: true },
+    });
+    return this.toPieceMaterialYieldResponseDto(updated);
+  }
+
+  async removePieceMaterialYield(bomRevisionId: string, id: string): Promise<void> {
+    const revision = await this.findOneOrThrow(bomRevisionId);
+    this.assertDraft(revision);
+    const row = await this.findPieceMaterialYieldOrThrow(revision.id, id);
+    await this.prisma.pieceMaterialYield.delete({ where: { id: row.id } });
   }
 
   // ─── PartBom (đoạn cấu thành 1 chi tiết hàn) ────────────────────────────────
@@ -748,6 +858,46 @@ export class BomRevisionsService {
     return row;
   }
 
+  /** Đòi hỏi bom_piece đã tồn tại trước (Sếp khai SL mảnh/SKU trước, rồi mới gắn định mức
+   *  nguyên liệu) - cùng thứ tự nghiệp vụ createPieceBom/createPartBom đang giả định.
+   *
+   *  KHÔNG còn ràng buộc needsHan=false (gỡ bỏ 2026-08-22): piece_material_yield áp dụng cho MỌI
+   *  piece cắt từ nguyên liệu theo tỷ lệ cố định "1 đơn vị material → N cái", bất kể có cần Hàn
+   *  sau đó hay không - vd "chân nhôm" (needsHan=false, cắt xong là hết) VÀ "pat" (needsHan=true,
+   *  cắt từ tấm sắt lá xong vẫn phải qua Hàn riêng - PHOI báo cắt, HAN báo hàn, 2 bước độc lập,
+   *  xem ProductionBatchesService.findPhoiEligibleBomPieces()). needsHan chỉ còn quyết định piece
+   *  đó có cần báo thêm ở HAN hay không, không còn quyết định piece có dùng PieceMaterialYield
+   *  được hay không. */
+  private async assertPieceHasBomPiece(
+    bomRevisionId: bigint,
+    pieceId: bigint,
+    pieceIdLabel: string,
+  ): Promise<void> {
+    const bomPiece = await this.prisma.bomPiece.findUnique({
+      where: { bomRevisionId_pieceId: { bomRevisionId, pieceId } },
+    });
+    if (!bomPiece) {
+      throw new BadRequestException(
+        `Piece ${pieceIdLabel} chưa có bom_piece trên revision này - khai SL mảnh/SKU trước khi gắn định mức nguyên liệu`,
+      );
+    }
+  }
+
+  private async findPieceMaterialYieldOrThrow(
+    revisionId: bigint,
+    id: string,
+  ): Promise<PieceMaterialYieldWithRefs> {
+    const idBigId = parseBigIntId(id);
+    const row = await this.prisma.pieceMaterialYield.findUnique({
+      where: { id: idBigId },
+      include: { piece: true, material: true },
+    });
+    if (!row || row.bomRevisionId !== revisionId) {
+      throw new NotFoundException(`piece_material_yield ${id} not found on this revision`);
+    }
+    return row;
+  }
+
   private async findPartBomOrThrow(revisionId: bigint, id: string): Promise<PartBomWithRefs> {
     const idBigId = parseBigIntId(id);
     const row = await this.prisma.partBom.findUnique({
@@ -835,6 +985,20 @@ export class BomRevisionsService {
       segmentSpecLabel: `${row.segmentSpec.material.code} @ ${Number(row.segmentSpec.cutLengthMm)}mm`,
       qtyPerPiece: row.qtyPerPiece,
       note: row.note,
+    });
+  }
+
+  private toPieceMaterialYieldResponseDto(
+    row: PieceMaterialYieldWithRefs,
+  ): PieceMaterialYieldResponseDto {
+    return new PieceMaterialYieldResponseDto({
+      id: row.id.toString(),
+      bomRevisionId: row.bomRevisionId.toString(),
+      pieceId: row.pieceId.toString(),
+      pieceCode: row.piece.code,
+      materialId: row.materialId.toString(),
+      materialCode: row.material.code,
+      piecesPerBar: row.piecesPerBar,
     });
   }
 

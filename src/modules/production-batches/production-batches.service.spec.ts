@@ -16,6 +16,9 @@ describe('ProductionBatchesService', () => {
     productionOrder: { findUnique: jest.Mock };
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
     pieceBom: { findMany: jest.Mock };
+    pieceMaterialYield: { findUnique: jest.Mock; findMany: jest.Mock };
+    stockQuant: { findMany: jest.Mock };
+    warehouseTransferPieceItem: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -72,6 +75,14 @@ describe('ProductionBatchesService', () => {
       // Mặc định rỗng - đa số test case không quan tâm tới nhánh trừ tồn đoạn (mục "Trừ tồn đoạn
       // sắt (SEGMENT_CONSUME)" bên dưới mới override).
       pieceBom: { findMany: jest.fn().mockResolvedValue([]) },
+      // Mặc định rỗng - đa số test case không quan tâm tới nhánh vật tư thành phẩm (định mức
+      // PieceMaterialYield, xem mục "trừ tồn nguyên liệu" bên dưới mới override).
+      pieceMaterialYield: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
+      warehouseTransferPieceItem: { findMany: jest.fn().mockResolvedValue([]) },
       warehouse: {
         findUniqueOrThrow: jest
           .fn()
@@ -196,6 +207,25 @@ describe('ProductionBatchesService', () => {
         );
         expect(prisma.productionBatch.create).not.toHaveBeenCalled();
       });
+
+      // 2026-08-22: "pat" - needsHan=true NHƯNG có PieceMaterialYield (cắt từ tấm sắt lá theo tỷ
+      // lệ cố định) - vẫn báo được ở PHOI (bước cắt), khác hẳn mảnh sắt bin-packing thường
+      // (needsHan=true, KHÔNG có PieceMaterialYield) vẫn bị chặn ở test đầu tiên phía trên.
+      it('cho phép báo PHOI cho piece needsHan=true CÓ PieceMaterialYield ("pat", vẫn cần Hàn sau khi cắt)', async () => {
+        prisma.bomPiece.findUnique.mockResolvedValue({ ...bomPieceRow, needsHan: true });
+        prisma.pieceMaterialYield.findUnique.mockResolvedValue({
+          id: 5n,
+          bomRevisionId: 5n,
+          pieceId: 40n,
+          materialId: 90n,
+          piecesPerBar: 6,
+          material: { warehouse: { id: 96n, code: 'kho-tam-sat-la' } },
+        });
+        prisma.productionBatch.create.mockResolvedValue(phoiBatchRow);
+
+        await expect(service.create('1', phoiDto, 'user-phoi', null)).resolves.toBeDefined();
+        expect(prisma.productionBatch.create).toHaveBeenCalled();
+      });
     });
 
     it('ném NotFoundException khi production order không tồn tại', async () => {
@@ -312,6 +342,92 @@ describe('ProductionBatchesService', () => {
     // materialize - thuộc phạm vi test tích hợp/E2E, không phải unit test service này.
   });
 
+  describe('create - trừ tồn nguyên liệu vật tư thành phẩm (MATERIAL_YIELD_CONSUME)', () => {
+    const phoiDto = { stage: MfgStage.PHOI, pieceId: '40', reportedQty: 24 };
+    const phoiBatchRow = {
+      ...batchRow,
+      stage: MfgStage.PHOI,
+      reportedById: 'user-phoi',
+      reportedQty: 24,
+    };
+    const aluminumWarehouse = { id: 95n, code: 'kho-nhom' };
+
+    beforeEach(() => {
+      prisma.bomPiece.findUnique.mockResolvedValue({
+        ...bomPieceRow,
+        needsHan: false,
+        needsSon: false,
+      });
+      prisma.pieceBom.findMany.mockResolvedValue([]); // rỗng -> rơi vào nhánh PieceMaterialYield
+      prisma.productionBatch.create.mockResolvedValue(phoiBatchRow);
+    });
+
+    it('không có PieceMaterialYield cho piece - không gọi postEntry', async () => {
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue(null);
+
+      await service.create('1', phoiDto, 'user-phoi', null);
+
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('có PieceMaterialYield - trừ tồn material theo qty = reportedQty / piecesPerBar (phân số, không làm tròn)', async () => {
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue({
+        materialId: 80n,
+        piecesPerBar: 12,
+        material: { warehouse: aluminumWarehouse },
+      });
+
+      await service.create('1', phoiDto, 'user-phoi', null);
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        {
+          fromWarehouseId: aluminumWarehouse.id,
+          toWarehouseId: productionWarehouse.id,
+          materialId: 80n,
+          qty: 2, // 24 / 12
+          refType: StockLedgerRefType.MATERIAL_YIELD_CONSUME,
+          refId: '700',
+          createdById: 'user-phoi',
+          idempotencyKey: 'production-batch-material-yield-consume:700:80',
+        },
+        prisma,
+      );
+    });
+
+    it('vật tư chưa cấu hình Kho - bỏ qua, không gọi postEntry', async () => {
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue({
+        materialId: 80n,
+        piecesPerBar: 12,
+        material: { warehouse: null },
+      });
+
+      await service.create('1', phoiDto, 'user-phoi', null);
+
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    // 2026-08-22: "pat" báo Hàn ở HAN (sau khi đã báo cắt ở PHOI, trừ tồn tấm sắt lá 1 lần rồi) -
+    // KHÔNG được trừ tồn nguyên liệu lần 2 dù cũng không có PieceBom (pat không cắt từ đoạn sắt).
+    // Trước fix này, postSegmentConsumeEntries không phân biệt stage nên sẽ trừ nhầm ở đây.
+    it('KHÔNG trừ tồn nguyên liệu khi báo HAN cho piece không có PieceBom (tránh trừ tồn 2 lần cho "pat")', async () => {
+      const hanDto = { stage: MfgStage.HAN, pieceId: '40', reportedQty: 24 };
+      const hanBatchRow = { ...batchRow, stage: MfgStage.HAN, reportedQty: 24 };
+      prisma.bomPiece.findUnique.mockResolvedValue({ ...bomPieceRow, needsHan: true });
+      prisma.productionBatch.create.mockResolvedValue(hanBatchRow);
+      // Vẫn có PieceMaterialYield hợp lệ (đã dùng ở PHOI trước đó) - nhưng KHÔNG được đụng tới ở HAN.
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue({
+        materialId: 80n,
+        piecesPerBar: 12,
+        material: { warehouse: aluminumWarehouse },
+      });
+
+      await service.create('1', hanDto, 'user-han', null);
+
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getBatchPlan', () => {
     it('lọc bomPiece theo needsHan=true khi stage=HAN', async () => {
       await service.getBatchPlan('1', MfgStage.HAN);
@@ -344,6 +460,100 @@ describe('ProductionBatchesService', () => {
       const result = await service.getBatchPlan('1', MfgStage.HAN);
       expect(result.items).toHaveLength(1);
       expect(result.items[0].pieceId).toBe('40');
+    });
+
+    it('stage=HAN không query PieceMaterialYield/StockQuant (rawMaterialOnHand luôn null)', async () => {
+      const result = await service.getBatchPlan('1', MfgStage.HAN);
+
+      expect(prisma.pieceMaterialYield.findMany).not.toHaveBeenCalled();
+      expect(prisma.stockQuant.findMany).not.toHaveBeenCalled();
+      expect(result.items[0].rawMaterialOnHand).toBeNull();
+    });
+
+    it('stage=PHOI với piece có PieceMaterialYield - trả rawMaterialOnHand = Σ StockQuant.qty của material đó', async () => {
+      prisma.pieceMaterialYield.findMany.mockResolvedValue([
+        { pieceId: 40n, materialId: 80n, piecesPerBar: 12 },
+      ]);
+      prisma.stockQuant.findMany.mockResolvedValue([
+        { materialId: 80n, qty: { toNumber: () => 5 } },
+        { materialId: 80n, qty: { toNumber: () => 3 } },
+      ]);
+
+      const result = await service.getBatchPlan('1', MfgStage.PHOI);
+
+      expect(result.items[0].rawMaterialOnHand).toBe(8);
+    });
+
+    it('stage=PHOI không có PieceMaterialYield nào - rawMaterialOnHand null, không query StockQuant', async () => {
+      prisma.pieceMaterialYield.findMany.mockResolvedValue([]);
+
+      const result = await service.getBatchPlan('1', MfgStage.PHOI);
+
+      expect(prisma.stockQuant.findMany).not.toHaveBeenCalled();
+      expect(result.items[0].rawMaterialOnHand).toBeNull();
+    });
+
+    // 2026-08-22: "pat" - piece 41 needsHan=true, KHÔNG nằm trong kết quả needsHan=false, nhưng
+    // vẫn phải xuất hiện ở danh sách báo PHOI vì có PieceMaterialYield (cắt từ tấm sắt lá).
+    it('stage=PHOI gộp thêm piece needsHan=true CÓ PieceMaterialYield ("pat") vào danh sách, cạnh piece needsHan=false', async () => {
+      const patPiece = { id: 41n, code: 'PAT-01', name: 'Pat' };
+      const patBomPiece = {
+        id: 2n,
+        bomRevisionId: 5n,
+        pieceId: 41n,
+        qtyPerUnit: 3,
+        needsHan: true,
+        needsSon: false,
+        piece: patPiece,
+      };
+      prisma.bomPiece.findMany
+        // Cuộc gọi 1: needsHan=false (mock mặc định đã trả [{...bomPieceRow, piece}] - piece 40)
+        .mockResolvedValueOnce([{ ...bomPieceRow, piece }])
+        // Cuộc gọi 2 (extra, cho pieceId có yield nhưng chưa nằm trong needsHan=false): trả pat.
+        .mockResolvedValueOnce([patBomPiece]);
+      prisma.pieceMaterialYield.findMany.mockResolvedValue([
+        { pieceId: 41n, materialId: 90n, piecesPerBar: 6 },
+      ]);
+
+      const result = await service.getBatchPlan('1', MfgStage.PHOI);
+
+      expect(result.items.map((i) => i.pieceId)).toEqual(['40', '41']);
+      expect(prisma.bomPiece.findMany).toHaveBeenNthCalledWith(2, {
+        where: { bomRevisionId: order.bomRevisionId, pieceId: { in: [41n] } },
+        include: { piece: true },
+      });
+    });
+  });
+
+  describe('getReadyPoolQty', () => {
+    it('trả Map rỗng khi truyền mảng pieceIds rỗng - không query gì', async () => {
+      const result = await service.getReadyPoolQty([]);
+
+      expect(result.size).toBe(0);
+      expect(prisma.productionBatch.findMany).not.toHaveBeenCalled();
+    });
+
+    it('gộp Σ reportedQty (QC_DONE, stage=PHOI) TOÀN HỆ THỐNG - không lọc theo productionOrderId, trừ đi phần đã chuyển kho', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { pieceId: 40n, reportedQty: 20 }, // đơn hàng A
+        { pieceId: 40n, reportedQty: 15 }, // đơn hàng B khác - vẫn cộng chung 1 pool
+      ]);
+      prisma.warehouseTransferPieceItem.findMany.mockResolvedValue([
+        { pieceId: 40n, quantity: 10 },
+      ]);
+
+      const result = await service.getReadyPoolQty([40n]);
+
+      expect(result.get('40')).toBe(25); // (20 + 15) - 10
+    });
+
+    it('không âm - qty đã chuyển vượt qty QC_DONE thì kẹp về 0', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([{ pieceId: 40n, reportedQty: 5 }]);
+      prisma.warehouseTransferPieceItem.findMany.mockResolvedValue([{ pieceId: 40n, quantity: 8 }]);
+
+      const result = await service.getReadyPoolQty([40n]);
+
+      expect(result.get('40')).toBe(0);
     });
   });
 });

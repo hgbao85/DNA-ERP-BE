@@ -18,18 +18,26 @@ import { SendBatchDto, SendBatchToBossDto } from './dto/send-batch.dto';
 import { SendToBossDto } from './dto/send-to-boss.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
 import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
+import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 
 const VIEW = { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.VIEW };
 const CREATE = { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.CREATE };
 const UPDATE = { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.UPDATE };
 const APPROVE = { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.APPROVE };
+const PURCHASE_PROPOSAL_CREATE = {
+  module: PERMISSION_MODULES.PURCHASE_PROPOSAL,
+  action: PermissionAction.CREATE,
+};
 
 @ApiTags('Production Invoices')
 @ApiBearerAuth()
 @Controller({ path: 'production-invoices', version: '1' })
 export class ProductionInvoicesController {
-  constructor(private readonly productionInvoicesService: ProductionInvoicesService) {}
+  constructor(
+    private readonly productionInvoicesService: ProductionInvoicesService,
+    private readonly pieceMaterialYieldPurchaseService: PieceMaterialYieldPurchaseService,
+  ) {}
 
   @Post()
   @RequirePermissions(CREATE)
@@ -78,6 +86,18 @@ export class ProductionInvoicesController {
   @RequirePermissions(UPDATE)
   update(@Param('id') id: string, @Body() dto: UpdateProductionInvoiceDto) {
     return this.productionInvoicesService.update(id, dto);
+  }
+
+  /**
+   * Tính (hoặc tính lại) nhu cầu mua nguyên liệu cho "vật tư thành phẩm" (needsHan=false, vd
+   * chân nhôm) của PI này theo PieceMaterialYield - kiểm tồn trước, tự tạo/refresh
+   * PurchaseProposal. Gọi lại được nhiều lần để refresh trước khi Mua hàng submit (idempotent
+   * trong khi còn NEW - xem PieceMaterialYieldPurchaseService).
+   */
+  @Post(':id/piece-material-yield-purchase-proposals')
+  @RequirePermissions(PURCHASE_PROPOSAL_CREATE)
+  computePieceMaterialYieldPurchaseProposals(@Param('id') id: string) {
+    return this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(id);
   }
 
   @Post(':id/items')

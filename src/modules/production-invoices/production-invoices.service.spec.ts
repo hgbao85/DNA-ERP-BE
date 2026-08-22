@@ -5,6 +5,8 @@ import { ProdItemStageType } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
+import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
+import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 
 describe('ProductionInvoicesService', () => {
@@ -43,6 +45,8 @@ describe('ProductionInvoicesService', () => {
     assertActiveBomRevisionExists: jest.Mock;
   };
   let cuttingProposalsService: { requestForOrder: jest.Mock; requestForInvoice: jest.Mock };
+  let pieceMaterialYieldPurchaseService: { computeAndUpsertProposals: jest.Mock };
+  let consumableMaterialPurchaseService: { computeAndUpsertProposals: jest.Mock };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
 
   const mfgProduct = { id: 2n, factoryCode: 'SKU-01', name: 'Ghe A' };
@@ -127,11 +131,19 @@ describe('ProductionInvoicesService', () => {
       requestForOrder: jest.fn().mockResolvedValue({ id: '1' }),
       requestForInvoice: jest.fn().mockResolvedValue({ id: '2' }),
     };
+    pieceMaterialYieldPurchaseService = {
+      computeAndUpsertProposals: jest.fn().mockResolvedValue([]),
+    };
+    consumableMaterialPurchaseService = {
+      computeAndUpsertProposals: jest.fn().mockResolvedValue([]),
+    };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     service = new ProductionInvoicesService(
       prisma as unknown as PrismaServiceType,
       productionOrdersService as unknown as ProductionOrdersService,
       cuttingProposalsService as unknown as CuttingProposalsService,
+      pieceMaterialYieldPurchaseService as unknown as PieceMaterialYieldPurchaseService,
+      consumableMaterialPurchaseService as unknown as ConsumableMaterialPurchaseService,
       cls as unknown as ClsService<AppClsStore>,
     );
   });
@@ -705,6 +717,52 @@ describe('ProductionInvoicesService', () => {
         where: { id: 7n },
         data: { status: 'PRODUCING' },
       });
+      // Cùng idiom trigger cắt sắt - tính lại nhu cầu mua "vật tư thành phẩm" cho CẢ PI mỗi khi
+      // có SKU được duyệt, không có nút bấm riêng (xem changelog 2026-08-22 mục 15).
+      expect(pieceMaterialYieldPurchaseService.computeAndUpsertProposals).toHaveBeenCalledWith('7');
+      // Cùng idiom - vật tư tiêu hao phẳng (Dây/Đinh/Sơn/Phụ kiện/Bao bì), thay thế "Lệnh kiểm
+      // tra vật tư" thủ công chưa từng được cài đặt (mục 15b).
+      expect(consumableMaterialPurchaseService.computeAndUpsertProposals).toHaveBeenCalledWith('7');
+    });
+
+    it('best-effort: vẫn duyệt SKU thành công dù trigger tính nhu cầu mua vật tư thành phẩm lỗi', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'APPROVED' }),
+      );
+      prisma.productionInvoiceItem.count.mockResolvedValue(2);
+      pieceMaterialYieldPurchaseService.computeAndUpsertProposals.mockRejectedValue(
+        new Error('material chưa có Kho'),
+      );
+
+      const result = await service.approveItem('7', '20', 'user-boss');
+
+      expect(result.prodApprovalStatus).toBe('APPROVED');
+      // Không bị lẫn với trigger cắt sắt - lỗi ở nhánh này không chặn nhánh kia.
+      expect(cuttingProposalsService.requestForOrder).toHaveBeenCalled();
+    });
+
+    it('best-effort: vẫn duyệt SKU thành công dù trigger tính nhu cầu mua vật tư tiêu hao phẳng lỗi', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'APPROVED' }),
+      );
+      prisma.productionInvoiceItem.count.mockResolvedValue(2);
+      consumableMaterialPurchaseService.computeAndUpsertProposals.mockRejectedValue(
+        new Error('material chưa có Kho'),
+      );
+
+      const result = await service.approveItem('7', '20', 'user-boss');
+
+      expect(result.prodApprovalStatus).toBe('APPROVED');
+      expect(cuttingProposalsService.requestForOrder).toHaveBeenCalled();
+      expect(pieceMaterialYieldPurchaseService.computeAndUpsertProposals).toHaveBeenCalled();
     });
 
     it('still approves the item even when ProductionOrder creation fails unexpectedly after the BOM check already passed (rare race)', async () => {
@@ -727,6 +785,8 @@ describe('ProductionInvoicesService', () => {
       expect(result.prodApprovalStatus).toBe('APPROVED');
       // productionOrder không tạo được -> không có id để trigger solver.
       expect(cuttingProposalsService.requestForOrder).not.toHaveBeenCalled();
+      expect(pieceMaterialYieldPurchaseService.computeAndUpsertProposals).not.toHaveBeenCalled();
+      expect(consumableMaterialPurchaseService.computeAndUpsertProposals).not.toHaveBeenCalled();
     });
 
     it('rejects approving (ghi gì cả) khi sản phẩm chưa có BomRevision ACTIVE - D.p1-bom-check', async () => {

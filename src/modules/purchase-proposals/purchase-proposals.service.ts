@@ -12,6 +12,7 @@ import {
   Prisma,
   PrismaClient,
   ProdItemStageType,
+  PurchaseProposalSource,
   PurchaseProposalStatus,
   StockLedgerRefType,
   StockReservationRefType,
@@ -69,6 +70,11 @@ const LIST_INCLUDE = {
       },
     },
   },
+  // Trực tiếp trên PurchaseProposal (2026-08-22, sourceType=PIECE_MATERIAL_YIELD) - KHÁC
+  // cuttingProposal.productionInvoice ở trên (đó là PI gộp của phương án cắt sắt). Chỉ set khi
+  // đề xuất không đi qua CuttingProposal nào cả, dùng làm fallback piCode/poNumber ở
+  // toResponseDto() để Mua hàng vẫn biết đề xuất thuộc PI nào dù không có phương án cắt gốc.
+  productionInvoice: { select: { code: true } },
 } satisfies Prisma.PurchaseProposalInclude;
 
 const ITEM_INCLUDE = {
@@ -424,10 +430,16 @@ export class PurchaseProposalsService {
     }
     const materialWarehouseId = item.material.warehouseId;
     // B4 Đợt 3 (lỗ #3): cần cuttingProposalId gốc để cộng hàng về ĐÚNG dòng giữ chỗ - kiểm trước
-    // khi mở transaction, cùng lý do bất biến như check warehouseId ở trên (không cần khoá, dữ
-    // liệu hỏng thì hỏng từ trước, không phải race). Chỉ 1 nơi tạo PurchaseProposal
-    // (CuttingProposalsService.approve()) và LUÔN set field này - thiếu nó là dữ liệu hỏng thật.
-    if (!proposal.cuttingProposalId) {
+    // khi mở transaction, cùng lý do bất biến như check warehouseId ở trên. sourceType=
+    // PIECE_MATERIAL_YIELD (2026-08-22) cố ý luôn có cuttingProposalId null - đề xuất mua nguyên
+    // liệu theo PieceMaterialYield không đi qua CuttingProposal nên không có dòng giữ chỗ nào để
+    // cộng vào (StockReservation chỉ được tạo ở CuttingProposalsService.approve()), hàng về nhập
+    // thẳng tồn chung. Mọi sourceType khác thiếu cuttingProposalId vẫn là dữ liệu hỏng thật -
+    // giữ nguyên throw như cũ.
+    if (
+      !proposal.cuttingProposalId &&
+      proposal.sourceType !== PurchaseProposalSource.PIECE_MATERIAL_YIELD
+    ) {
       throw new BadRequestException(
         `Purchase proposal ${proposal.id} không có cuttingProposalId - không xác định được phương án cắt gốc để giữ chỗ hàng vừa về`,
       );
@@ -507,14 +519,18 @@ export class PurchaseProposalsService {
           // đúng dòng giữ chỗ đã tạo lúc CuttingProposalsService.approve() (refType=
           // CUTTING_PROPOSAL, refId=cuttingProposalId gốc), KHÔNG để rơi vào tồn chung. Thiếu bước
           // này thì phương án cắt KHÁC được duyệt xen giữa có thể "giành" mất đúng số hàng vừa mua
-          // về cho đơn này, dù sổ đã ghi "đã mua đủ, đã về hàng" - tái hiện đúng lỗ #3.
-          await this.stockReservationsService.topUpFromReceipt(tx, {
-            refType: StockReservationRefType.CUTTING_PROPOSAL,
-            refId: cuttingProposalId.toString(),
-            materialId: item.materialId,
-            warehouseId: materialWarehouseId,
-            qty: incrementQty,
-          });
+          // về cho đơn này, dù sổ đã ghi "đã mua đủ, đã về hàng" - tái hiện đúng lỗ #3. CHỈ áp
+          // dụng khi có cuttingProposalId (xem comment ở check đầu hàm) - nhánh khác không có
+          // dòng giữ chỗ nào để cộng vào, cứ để hàng về rơi vào tồn chung.
+          if (cuttingProposalId) {
+            await this.stockReservationsService.topUpFromReceipt(tx, {
+              refType: StockReservationRefType.CUTTING_PROPOSAL,
+              refId: cuttingProposalId.toString(),
+              materialId: item.materialId,
+              warehouseId: materialWarehouseId,
+              qty: incrementQty,
+            });
+          }
         }
 
         const saved = await tx.purchaseProposalItem.update({
@@ -699,17 +715,29 @@ export class PurchaseProposalsService {
       cuttingProposalId: row.cuttingProposalId?.toString() ?? null,
       warehouseCode: row.warehouseCode,
       status: row.status,
-      poNumber: productionOrder?.poNumber ?? mergedPi?.code ?? '—',
+      poNumber: productionOrder?.poNumber ?? mergedPi?.code ?? row.productionInvoice?.code ?? '—',
       salesOrderCode,
       // `.productionInvoice!` - ProductionOrder chỉ sinh khi Sếp duyệt, item của nó luôn đã có PI
       // thật lúc đó (cùng bất biến ghi ở ProductionOrdersService.toResponseDto()).
+      // row.productionInvoice (không qua cuttingProposal) - fallback cho sourceType=
+      // PIECE_MATERIAL_YIELD (2026-08-22, xem PieceMaterialYieldPurchaseService): đề xuất này
+      // không có phương án cắt gốc nhưng vẫn ghim thẳng productionInvoiceId, nếu không fallback
+      // Mua hàng sẽ thấy piCode/poNumber trống trơn, không biết đề xuất thuộc PI nào.
       piCode:
-        productionOrder?.productionInvoiceItem.productionInvoice!.code ?? mergedPi?.code ?? '—',
+        productionOrder?.productionInvoiceItem.productionInvoice!.code ??
+        mergedPi?.code ??
+        row.productionInvoice?.code ??
+        '—',
       mfgProductCode:
         productionOrder?.mfgProduct.factoryCode ??
         (mergedPi?.items ?? []).map((it) => it.mfgProduct.factoryCode).join(', '),
       mfgProductName:
-        productionOrder?.mfgProduct.name ?? (mergedPi ? `${mergedPi.items.length} SKU gộp` : null),
+        productionOrder?.mfgProduct.name ??
+        (mergedPi
+          ? `${mergedPi.items.length} SKU gộp`
+          : row.productionInvoice
+            ? 'Vật tư thành phẩm'
+            : null),
       deadline,
       createdAt: row.createdAt,
       submittedAt: row.submittedAt,
