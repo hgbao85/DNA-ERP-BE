@@ -17,6 +17,10 @@ export class ProductionBatchPlanItemResponseDto {
   /** Σ ProductionBatch.reportedQty (status=QC_DONE) - đã là passed-qty sau khi KCS duyệt, không
    *  phải qty gốc đã báo. */
   @Expose() @ApiProperty() passedQty!: number;
+  /** Chỉ có giá trị cho stage=PHOI khi piece có PieceMaterialYield (vd chân nhôm) - tồn nguyên
+   *  liệu thô (vd thanh nhôm) hiện có tại kho, để FE cảnh báo "còn X cây chưa cắt hết" (chỉ hiển
+   *  thị, không chặn thao tác - quyết định nghiệp vụ 2026-08-22). Null cho mọi trường hợp khác. */
+  @Expose() @ApiProperty({ nullable: true }) rawMaterialOnHand!: number | null;
 
   constructor(partial: Partial<ProductionBatchPlanItemResponseDto>) {
     Object.assign(this, partial);

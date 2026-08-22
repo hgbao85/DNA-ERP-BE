@@ -25,6 +25,8 @@ import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
+import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
+import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
 import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
@@ -86,6 +88,8 @@ export class ProductionInvoicesService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly productionOrdersService: ProductionOrdersService,
     private readonly cuttingProposalsService: CuttingProposalsService,
+    private readonly pieceMaterialYieldPurchaseService: PieceMaterialYieldPurchaseService,
+    private readonly consumableMaterialPurchaseService: ConsumableMaterialPurchaseService,
     private readonly cls: ClsService<AppClsStore>,
   ) {}
 
@@ -655,6 +659,31 @@ export class ProductionInvoicesService {
       } catch (error) {
         this.logger.error(
           `Auto cutting-proposal trigger failed for PI item ${item.id}: ${(error as Error).message}`,
+        );
+      }
+
+      // Cùng idiom trigger cắt sắt ở trên - tính lại nhu cầu mua nguyên liệu "vật tư thành phẩm"
+      // (PieceMaterialYield, vd thanh nhôm/tấm sắt lá) cho CẢ PI mỗi khi có thêm 1 SKU được duyệt,
+      // không phải nút bấm riêng (không có màn hình riêng cho việc này, xem changelog 2026-08-22
+      // mục 15) - best-effort, tách try/catch riêng để không lẫn lỗi với trigger cắt sắt ở trên.
+      try {
+        await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(pi.id.toString());
+      } catch (error) {
+        this.logger.error(
+          `Auto piece-material-yield-purchase trigger failed for PI item ${item.id}: ${(error as Error).message}`,
+        );
+      }
+
+      // Cùng idiom 2 trigger ở trên - tính nhu cầu mua vật tư tiêu hao phẳng (Dây/Đinh/Tán rút/
+      // Nút nhựa/Sơn/Phụ kiện/Bao bì). Trước đây KHÔNG có gì tự tạo PurchaseProposal cho 3 nguồn
+      // này (chỉ có "Lệnh kiểm tra vật tư" thủ công trong schema, chưa từng cài đặt) - người mua
+      // hàng được gán (Material.buyerId) không bao giờ thấy đề xuất nào dù SKU đã duyệt. Quyết
+      // định nghiệp vụ 2026-08-22: tự động hoàn toàn, bỏ qua bước kiểm tra kho thủ công.
+      try {
+        await this.consumableMaterialPurchaseService.computeAndUpsertProposals(pi.id.toString());
+      } catch (error) {
+        this.logger.error(
+          `Auto consumable-material-purchase trigger failed for PI item ${item.id}: ${(error as Error).message}`,
         );
       }
     }

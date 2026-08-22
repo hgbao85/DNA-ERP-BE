@@ -20,12 +20,14 @@ import { CreateBomPieceDto } from './dto/create-bom-piece.dto';
 import { CreateConsumableBomDto } from './dto/create-consumable-bom.dto';
 import { CreatePartBomDto } from './dto/create-part-bom.dto';
 import { CreatePieceBomDto } from './dto/create-piece-bom.dto';
+import { CreatePieceMaterialYieldDto } from './dto/create-piece-material-yield.dto';
 import { UpdateBomAccessoryItemDto } from './dto/update-bom-accessory-item.dto';
 import { UpdateBomPartDto } from './dto/update-bom-part.dto';
 import { UpdateBomPieceDto } from './dto/update-bom-piece.dto';
 import { UpdateConsumableBomDto } from './dto/update-consumable-bom.dto';
 import { UpdatePartBomDto } from './dto/update-part-bom.dto';
 import { UpdatePieceBomDto } from './dto/update-piece-bom.dto';
+import { UpdatePieceMaterialYieldDto } from './dto/update-piece-material-yield.dto';
 
 const VIEW = { module: PERMISSION_MODULES.BOM_REVISION, action: PermissionAction.VIEW };
 const CREATE = { module: PERMISSION_MODULES.BOM_REVISION, action: PermissionAction.CREATE };
@@ -156,6 +158,40 @@ export class BomRevisionsController {
   @RequirePermissions(DELETE)
   removePieceBom(@Param('bomRevisionId') bomRevisionId: string, @Param('id') id: string) {
     return this.bomRevisionsService.removePieceBom(bomRevisionId, id);
+  }
+
+  // ─── Nested: PieceMaterialYield ─────────────────────────────────────────────
+
+  @Post(':bomRevisionId/piece-material-yields')
+  @RequirePermissions(CREATE)
+  createPieceMaterialYield(
+    @Param('bomRevisionId') bomRevisionId: string,
+    @Body() dto: CreatePieceMaterialYieldDto,
+  ) {
+    return this.bomRevisionsService.createPieceMaterialYield(bomRevisionId, dto);
+  }
+
+  @Get(':bomRevisionId/piece-material-yields')
+  @RequirePermissions(VIEW)
+  listPieceMaterialYields(@Param('bomRevisionId') bomRevisionId: string) {
+    return this.bomRevisionsService.listPieceMaterialYields(bomRevisionId);
+  }
+
+  @Patch(':bomRevisionId/piece-material-yields/:id')
+  @RequirePermissions(UPDATE)
+  updatePieceMaterialYield(
+    @Param('bomRevisionId') bomRevisionId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdatePieceMaterialYieldDto,
+  ) {
+    return this.bomRevisionsService.updatePieceMaterialYield(bomRevisionId, id, dto);
+  }
+
+  @Delete(':bomRevisionId/piece-material-yields/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermissions(DELETE)
+  removePieceMaterialYield(@Param('bomRevisionId') bomRevisionId: string, @Param('id') id: string) {
+    return this.bomRevisionsService.removePieceMaterialYield(bomRevisionId, id);
   }
 
   // ─── Nested: PartBom ────────────────────────────────────────────────────────

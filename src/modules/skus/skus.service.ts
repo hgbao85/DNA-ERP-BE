@@ -720,6 +720,7 @@ export class SkusService {
     const steelGroupId = await this.resolveSystemGroupId(tx, MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR);
     await tx.pieceBom.deleteMany({ where: { bomRevisionId } });
     await tx.pieceMaterialItem.deleteMany({ where: { bomRevisionId } });
+    await tx.pieceMaterialYield.deleteMany({ where: { bomRevisionId } });
     await tx.bomPiece.deleteMany({ where: { bomRevisionId } });
 
     // Batch trước 2 nguồn round-trip chính (Piece + Material) thay vì query lại cho từng
@@ -732,6 +733,9 @@ export class SkusService {
       }
       for (const line of p.materialLines ?? []) {
         materialRefs.push({ display: line.materialId, id: parseBigIntId(line.materialId) });
+      }
+      for (const y of p.materialYields ?? []) {
+        materialRefs.push({ display: y.materialId, id: parseBigIntId(y.materialId) });
       }
     }
     const materialsById = await this.fetchMaterialsOrThrow(tx, materialRefs);
@@ -771,6 +775,13 @@ export class SkusService {
       qtyPerPiece: number;
       note: string | null;
     }[] = [];
+    const pieceMaterialYieldRows: {
+      bomRevisionId: bigint;
+      mfgProductId: bigint;
+      pieceId: bigint;
+      materialId: bigint;
+      piecesPerBar: number;
+    }[] = [];
 
     for (const p of pieces) {
       const pieceId = pieceIdOf(p.name);
@@ -806,6 +817,16 @@ export class SkusService {
           note: line.note ?? null,
         });
       }
+      for (const y of p.materialYields ?? []) {
+        const materialId = parseBigIntId(y.materialId);
+        pieceMaterialYieldRows.push({
+          bomRevisionId,
+          mfgProductId,
+          pieceId,
+          materialId,
+          piecesPerBar: y.piecesPerBar,
+        });
+      }
     }
 
     if (pieceBomRows.length) {
@@ -813,6 +834,9 @@ export class SkusService {
     }
     if (pieceMaterialRows.length) {
       await tx.pieceMaterialItem.createMany({ data: pieceMaterialRows });
+    }
+    if (pieceMaterialYieldRows.length) {
+      await tx.pieceMaterialYield.createMany({ data: pieceMaterialYieldRows });
     }
 
     await this.syncIsWoven(tx, pieces, pieceIdOf);
@@ -1000,32 +1024,43 @@ export class SkusService {
       return result;
     }
 
-    const [systemGroups, bomPieces, pieceBoms, pieceMaterialItems, consumableBoms, accessoryItems] =
-      await Promise.all([
-        this.prisma.materialGroup.findMany({
-          where: { systemKey: { in: Object.values(MATERIAL_GROUP_SYSTEM_KEYS) } },
-        }),
-        this.prisma.bomPiece.findMany({
-          where: { bomRevisionId: { in: revisionIds } },
-          include: { piece: true },
-        }),
-        this.prisma.pieceBom.findMany({
-          where: { bomRevisionId: { in: revisionIds } },
-          include: { segmentSpec: { include: { material: true } } },
-        }),
-        this.prisma.pieceMaterialItem.findMany({
-          where: { bomRevisionId: { in: revisionIds } },
-          include: { material: true },
-        }),
-        this.prisma.consumableBom.findMany({
-          where: { bomRevisionId: { in: revisionIds } },
-          include: { material: true },
-        }),
-        this.prisma.bomAccessoryItem.findMany({
-          where: { bomRevisionId: { in: revisionIds } },
-          include: { material: true },
-        }),
-      ]);
+    const [
+      systemGroups,
+      bomPieces,
+      pieceBoms,
+      pieceMaterialItems,
+      pieceMaterialYields,
+      consumableBoms,
+      accessoryItems,
+    ] = await Promise.all([
+      this.prisma.materialGroup.findMany({
+        where: { systemKey: { in: Object.values(MATERIAL_GROUP_SYSTEM_KEYS) } },
+      }),
+      this.prisma.bomPiece.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { piece: true },
+      }),
+      this.prisma.pieceBom.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { segmentSpec: { include: { material: true } } },
+      }),
+      this.prisma.pieceMaterialItem.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { material: true },
+      }),
+      this.prisma.pieceMaterialYield.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { material: true },
+      }),
+      this.prisma.consumableBom.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { material: true },
+      }),
+      this.prisma.bomAccessoryItem.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { material: true },
+      }),
+    ]);
 
     const bomPiecesByRev = groupBy(bomPieces, (r) => r.bomRevisionId.toString());
     const pieceBomsByRevPiece = new Map<string, typeof pieceBoms>();
@@ -1041,6 +1076,13 @@ export class SkusService {
       const arr = pieceMaterialItemsByRevPiece.get(key);
       if (arr) arr.push(row);
       else pieceMaterialItemsByRevPiece.set(key, [row]);
+    }
+    const pieceMaterialYieldsByRevPiece = new Map<string, typeof pieceMaterialYields>();
+    for (const row of pieceMaterialYields) {
+      const key = `${row.bomRevisionId}:${row.pieceId}`;
+      const arr = pieceMaterialYieldsByRevPiece.get(key);
+      if (arr) arr.push(row);
+      else pieceMaterialYieldsByRevPiece.set(key, [row]);
     }
     const consumableByRev = groupBy(consumableBoms, (r) => r.bomRevisionId.toString());
     const accessoryByRev = groupBy(accessoryItems, (r) => r.bomRevisionId.toString());
@@ -1075,6 +1117,15 @@ export class SkusService {
       materialUnit: r.material.unit,
       qtyPerPiece: r.qtyPerPiece.toNumber(),
       note: r.note,
+    });
+    const toPieceMaterialYieldLine = (r: (typeof pieceMaterialYields)[number]) => ({
+      id: Number(r.id),
+      materialId: r.materialId.toString(),
+      materialCode: r.material.code,
+      materialName: r.material.name,
+      materialSpec: r.material.spec,
+      materialUnit: r.material.unit,
+      piecesPerBar: r.piecesPerBar,
     });
 
     for (const pf of pfs) {
@@ -1135,6 +1186,9 @@ export class SkusService {
                 plasticButtonGroupId != null && r.material.materialGroupId === plasticButtonGroupId,
             )
             .map(toPieceMaterialLine),
+          materialYields: (
+            pieceMaterialYieldsByRevPiece.get(`${bp.bomRevisionId}:${bp.pieceId}`) ?? []
+          ).map(toPieceMaterialYieldLine),
         };
       });
 

@@ -7,7 +7,7 @@ import {
 import { ClsService } from 'nestjs-cls';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
-import { PurchaseProposalStatus } from '../../generated/prisma/client';
+import { PurchaseProposalSource, PurchaseProposalStatus } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
@@ -250,6 +250,21 @@ describe('PurchaseProposalsService', () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(null);
 
       await expect(service.findOne('999')).rejects.toThrow(NotFoundException);
+    });
+
+    // 2026-08-22: sourceType=PIECE_MATERIAL_YIELD không đi qua CuttingProposal nào (cuttingProposal
+    // null CỐ Ý, không phải "dữ liệu hỏng" như test ở trên) nhưng vẫn ghim thẳng productionInvoiceId
+    // - Mua hàng phải vẫn thấy piCode/poNumber thay vì "—" trống trơn không biết đề xuất thuộc PI nào.
+    it('sourceType=PIECE_MATERIAL_YIELD (cuttingProposal null CỐ Ý) - lấy piCode/poNumber từ row.productionInvoice trực tiếp', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ cuttingProposal: null, productionInvoice: { code: 'PI-2026-099' } }),
+      );
+
+      const result = await service.findOne('300');
+
+      expect(result.poNumber).toBe('PI-2026-099');
+      expect(result.piCode).toBe('PI-2026-099');
+      expect(result.mfgProductName).toBe('Vật tư thành phẩm');
     });
 
     // ── A3: deadline (frameDeadlineOf) ──────────────────────────────────────────
@@ -847,6 +862,36 @@ describe('PurchaseProposalsService', () => {
       await expect(
         service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1'),
       ).rejects.toThrow(BadRequestException);
+      expect(stockReservationsService.topUpFromReceipt).not.toHaveBeenCalled();
+    });
+
+    // 2026-08-22: sourceType=PIECE_MATERIAL_YIELD (đề xuất mua thanh nhôm theo PieceMaterialYield,
+    // xem PieceMaterialYieldPurchaseService) CỐ Ý luôn có cuttingProposalId null - khác hẳn ca
+    // "dữ liệu hỏng" ở trên (không có sourceType, mặc định coi như CUTTING_PROPOSAL). Hàng về vẫn
+    // phải nhập kho thành công, chỉ bỏ qua bước cộng vào dòng giữ chỗ (không có dòng nào để cộng).
+    it('sourceType=PIECE_MATERIAL_YIELD với cuttingProposalId=null - vẫn nhập kho thành công, không gọi topUpFromReceipt', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          cuttingProposalId: null,
+          sourceType: PurchaseProposalSource.PIECE_MATERIAL_YIELD,
+          status: PurchaseProposalStatus.PURCHASING,
+          items: [item({ materialId: 30n, buyQty: decimal(8), receivedQty: decimal(0) })],
+        }),
+      );
+      prisma.$queryRaw.mockResolvedValue([
+        { receivedQty: decimal(0), receivedQtyPurchaseUnit: null },
+      ]);
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
+      );
+
+      const result = await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+
+      expect(result.receivedQty).toBe(5);
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ materialId: 30n, qty: 5, refType: 'PURCHASE' }),
+        expect.anything(),
+      );
       expect(stockReservationsService.topUpFromReceipt).not.toHaveBeenCalled();
     });
 

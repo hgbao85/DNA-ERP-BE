@@ -243,21 +243,21 @@ model SystemConfig {
   /// không ai phát hiện được nếu ở đây lỡ điền cỡ không mua được: Mua hàng vẫn mua cỡ chuẩn,
   /// còn bảng hướng dẫn cắt của Phôi lại tính theo cỡ không có thật. Bỏ 5850 (2026-08-12): đã
   /// hỏi lại NCC, hiện chỉ cung cấp 6000mm.
-  solverStockLengths       Json  @default("[6000]")
-  solverTrimStartMm        Int             @default(10)
-  solverBladeWidthMm       Decimal         @default(1.0) @db.Decimal(6, 1)
+  solverStockLengths       Json    @default("[6000]")
+  solverTrimStartMm        Int     @default(10)
+  solverBladeWidthMm       Decimal @default(1.0) @db.Decimal(6, 1)
   /// Ngưỡng hao hụt cắt MẶC ĐỊNH, áp cho vật tư Sắt chưa được cấp ngưỡng riêng (xem
   /// Material.maxCuttingWastePercentage - field đó ghi đè giá trị này cho đúng vật tư).
-  solverMaxWastePercentage Decimal         @default(1.0) @db.Decimal(6, 3)
-  solverMaxSurplus         Int   @default(10)
-  solverMinLengthMm        Int   @default(5000)
-  solverMaxLengthMm        Int   @default(6000)
-  solverLengthStepMm       Int   @default(10)
+  solverMaxWastePercentage Decimal @default(1.0) @db.Decimal(6, 3)
+  solverMaxSurplus         Int     @default(10)
+  solverMinLengthMm        Int     @default(5000)
+  solverMaxLengthMm        Int     @default(6000)
+  solverLengthStepMm       Int     @default(10)
   /// time_limit_seconds GỬI CHO solver mỗi lần giải - KHÔNG phải timeout HTTP client (xem
   /// SOLVER_TIMEOUT_SECONDS trong env). Số lần giải = số loại sắt x (1 + N lần vét cạn), có
   /// thể lên tới hàng trăm lần - để thấp (docs/PHAN_TICH_HE_THONG_CatSat.md khuyến nghị 8-30s
   /// cho production), KHÔNG dùng default 480s của chính solver.
-  solverTimeLimitSeconds   Int   @default(20)
+  solverTimeLimitSeconds   Int     @default(20)
 
   /// Dung sai giao THỪA cho phép khi Thủ kho nhận hàng mua về, tính theo % của buyQty (xem
   /// PurchaseProposalsService.receiveItem). Trong dung sai -> ghi ĐÚNG số thực nhận, kể cả khi
@@ -384,6 +384,7 @@ model Material {
   warehouseTransferReservations WarehouseTransferReservation[]
   stockReservations             StockReservation[]
   pieceMaterialItems            PieceMaterialItem[]
+  pieceMaterialYields           PieceMaterialYield[]
   steelIssues                   SteelIssue[]
   materialIssues                MaterialIssue[]
   packagingIssues               PackagingIssue[]
@@ -556,6 +557,7 @@ model Piece {
   bomPieces                   BomPiece[]
   pieceBoms                   PieceBom[]
   pieceMaterialItems          PieceMaterialItem[]
+  pieceMaterialYields         PieceMaterialYield[]
   stockLedgerEntries          StockLedger[]
   stockQuants                 StockQuant[]
   transferCheckResults        TransferCheckResult[]
@@ -625,16 +627,17 @@ model BomRevision {
   sourcePlanFormId BigInt?           @unique
   createdAt        DateTime          @default(now())
 
-  mfgProduct         MfgProduct          @relation(fields: [mfgProductId], references: [id])
-  sourcePlanForm     PlanForm?           @relation(fields: [sourcePlanFormId], references: [id])
-  bomPieces          BomPiece[]
-  bomParts           BomPart[]
-  pieceBoms          PieceBom[]
-  partBoms           PartBom[]
-  pieceMaterialItems PieceMaterialItem[]
-  consumableBoms     ConsumableBom[]
-  bomAccessoryItems  BomAccessoryItem[]
-  productionOrders   ProductionOrder[]
+  mfgProduct          MfgProduct           @relation(fields: [mfgProductId], references: [id])
+  sourcePlanForm      PlanForm?            @relation(fields: [sourcePlanFormId], references: [id])
+  bomPieces           BomPiece[]
+  bomParts            BomPart[]
+  pieceBoms           PieceBom[]
+  partBoms            PartBom[]
+  pieceMaterialItems  PieceMaterialItem[]
+  pieceMaterialYields PieceMaterialYield[]
+  consumableBoms      ConsumableBom[]
+  bomAccessoryItems   BomAccessoryItem[]
+  productionOrders    ProductionOrder[]
 
   @@unique([mfgProductId, revNo])
   /// Composite-unique target cho FK ghép của piece_bom/part_bom (xem PieceBom/PartBom) -
@@ -743,6 +746,34 @@ model PieceMaterialItem {
 
   @@unique([bomRevisionId, pieceId, materialId])
   @@map("piece_material_item")
+}
+
+/// Định mức "1 đơn vị nguyên liệu cắt ra N vật tư thành phẩm" (vd 1 thanh nhôm dài cắt ra bao
+/// nhiêu chân, hoặc 1 tấm sắt lá cắt ra bao nhiêu "pat") - KHÔNG ràng buộc BomPiece.needsHan
+/// (gỡ bỏ 2026-08-22, xem "pat": cắt từ tấm sắt lá theo tỷ lệ cố định NHƯNG vẫn cần Hàn sau khi
+/// cắt, needsHan=true). needsHan chỉ còn quyết định piece có báo thêm ở công đoạn Hàn (HAN) hay
+/// không - hoàn toàn độc lập với việc piece đó có dùng PieceMaterialYield để cắt hay không, xem
+/// ProductionBatchesService.findPhoiEligibleBomPieces(). Tách biệt hoàn toàn khỏi PieceBom/
+/// SegmentSpec: SegmentSpec khoá cứng materialId thuộc nhóm STEEL_BAR và cả pipeline
+/// CuttingProposal/SteelIssue giải bài toán bin-packing đa đoạn qua solver - sai tầm với bài toán
+/// tỷ lệ CỐ ĐỊNH 1 đơn vị→N cái này (không tối ưu hao hụt, không đa đoạn/đa kích cỡ). Luôn đúng 1
+/// material/piece (quyết định nghiệp vụ 2026-08-22) - khác mảnh sắt (PieceBom) có thể ghép nhiều
+/// loại sắt, nên @@unique theo (bomRevisionId, pieceId) chứ không kèm materialId.
+model PieceMaterialYield {
+  id            BigInt @id @default(autoincrement())
+  bomRevisionId BigInt
+  mfgProductId  BigInt
+  pieceId       BigInt
+  materialId    BigInt
+  /// Số vật tư thành phẩm cắt được từ 1 đơn vị material (vd 1 cây thanh nhôm = 12 chân).
+  piecesPerBar  Int
+
+  bomRevision BomRevision @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
+  piece       Piece       @relation(fields: [pieceId], references: [id])
+  material    Material    @relation(fields: [materialId], references: [id])
+
+  @@unique([bomRevisionId, pieceId])
+  @@map("piece_material_yield")
 }
 
 /// Đoạn cấu thành 1 chi tiết hàn. Cùng kiểu FK ghép mfgProductId như PieceBom — doc gốc
@@ -1061,12 +1092,13 @@ model ProductionInvoice {
   createdAt    DateTime                @default(now())
   updatedAt    DateTime                @updatedAt
 
-  salesOrder       SalesOrder?             @relation(fields: [salesOrderId], references: [id])
-  mergedBy         User?                   @relation("PIMergedBy", fields: [mergedById], references: [id])
-  items            ProductionInvoiceItem[]
-  planForms        PlanForm[]
-  cuttingProposals CuttingProposal[]
-  steelIssues      SteelIssue[]
+  salesOrder        SalesOrder?             @relation(fields: [salesOrderId], references: [id])
+  mergedBy          User?                   @relation("PIMergedBy", fields: [mergedById], references: [id])
+  items             ProductionInvoiceItem[]
+  planForms         PlanForm[]
+  cuttingProposals  CuttingProposal[]
+  steelIssues       SteelIssue[]
+  purchaseProposals PurchaseProposal[]
 
   @@index([salesOrderId])
   @@map("production_invoices")
@@ -1460,7 +1492,22 @@ enum PurchaseProposalStatus {
 
 enum PurchaseProposalSource {
   CUTTING_PROPOSAL
+  /// Dành cho luồng "Lệnh kiểm tra vật tư" thủ công (MaterialInspectionRequest/
+  /// InspectionKhoResult) - schema đã có sẵn từ trước NHƯNG service/controller cho luồng này
+  /// chưa từng được viết (xác nhận qua grep repo 2026-08-22, không có file nào ngoài schema
+  /// nhắc tới 2 model đó). Giữ giá trị này lại phòng khi luồng thủ công được xây sau này -
+  /// KHÔNG dùng cho CONSUMABLE_AUTO_CALC bên dưới (đó là tính tự động, bỏ qua bước kiểm tra
+  /// kho thủ công theo yêu cầu người dùng).
   MATERIAL_INSPECTION
+  /// Đề xuất mua nguyên liệu (vd thanh nhôm) tính theo PieceMaterialYield cho 1 PI -
+  /// productionInvoiceId luôn có giá trị, cuttingProposalId/inspectionKhoResultId luôn null.
+  PIECE_MATERIAL_YIELD
+  /// Đề xuất mua vật tư tiêu hao phẳng (Dây/Đinh/Tán rút/Nút nhựa qua PieceMaterialItem, Sơn qua
+  /// ConsumableBom, Phụ kiện/Bao bì qua BomAccessoryItem) cho 1 PI - tính TỰ ĐỘNG khi Sếp duyệt
+  /// SKU (quyết định nghiệp vụ 2026-08-22: bỏ qua "Lệnh kiểm tra vật tư" thủ công vì luồng đó
+  /// chưa từng được xây), cùng idiom PIECE_MATERIAL_YIELD - productionInvoiceId luôn có giá trị,
+  /// cuttingProposalId/inspectionKhoResultId luôn null. Xem ConsumableMaterialPurchaseService.
+  CONSUMABLE_AUTO_CALC
 }
 
 /// Tự sinh 1-1 theo (cuttingProposalId, warehouseCode) ngay khi CuttingProposal được duyệt
@@ -1474,6 +1521,12 @@ model PurchaseProposal {
   id                    BigInt                 @id @default(autoincrement())
   cuttingProposalId     BigInt?
   inspectionKhoResultId BigInt?                @unique
+  /// Chỉ có giá trị cho sourceType=PIECE_MATERIAL_YIELD (đề xuất mua thanh nhôm/nguyên liệu
+  /// theo định mức cắt PieceMaterialYield, tính theo từng PI) - null cho 2 nguồn còn lại. Không
+  /// có @@unique riêng: 1 PI có thể có nhiều dòng đề xuất (nhiều materialId khác nhau), và
+  /// service tự tìm-hoặc-tạo theo (productionInvoiceId, materialId, status=NEW) ở tầng ứng dụng
+  /// thay vì DB constraint (xem PieceMaterialYieldPurchaseService).
+  productionInvoiceId   BigInt?
   sourceType            PurchaseProposalSource @default(CUTTING_PROPOSAL)
   /// Idempotency-Key của lần gọi tạo thủ công (createFromInspection) - cùng idiom
   /// PlanForm.bossApproveIdempotencyKey/MaterialIssue.idempotencyKey. NULL cho mọi dòng tự
@@ -1492,6 +1545,7 @@ model PurchaseProposal {
 
   cuttingProposal     CuttingProposal?       @relation(fields: [cuttingProposalId], references: [id])
   inspectionKhoResult InspectionKhoResult?   @relation(fields: [inspectionKhoResultId], references: [id])
+  productionInvoice   ProductionInvoice?     @relation(fields: [productionInvoiceId], references: [id])
   approvedBy          User?                  @relation(fields: [approvedById], references: [id])
   items               PurchaseProposalItem[]
 
@@ -1634,6 +1688,9 @@ enum StockLedgerRefType {
   ADJUST
   OPENING_BALANCE
   PACKAGING_ISSUE
+  /// Trừ tồn nguyên liệu (vd thanh nhôm) theo PieceMaterialYield khi Phôi báo cắt vật tư thành
+  /// phẩm (ProductionBatch stage=PHOI) - tách khỏi SEGMENT_CONSUME vốn mang nghĩa "đoạn sắt".
+  MATERIAL_YIELD_CONSUME
 }
 
 enum TransferStatus {
