@@ -130,7 +130,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     build();
     await service.getBatchSuggestions();
     const calls = (prisma.productionInvoiceItem as { findMany: jest.Mock }).findMany.mock.calls as [
-      { where: { AND: [{ OR: unknown[] }, { OR: unknown[] }] } },
+      { where: { AND: [{ OR: unknown[] }, { productionInvoiceId: null }] } },
     ][];
     const call = calls[0][0];
     // `notIn` của SQL không khớp NULL, dùng notIn sẽ loại mất đúng nhóm đơn mới nhất - nhóm cần gộp nhất.
@@ -139,12 +139,9 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       { prodApprovalStatus: null },
       { prodApprovalStatus: { in: ['WAITING_QLSX', 'WAITING_BOSS', 'REJECTED'] } },
     ]);
-    // Chưa được KHSX gom (productionInvoiceId null, 2026-08-20) HOẶC đang trong PI thường chưa
-    // gộp - đều hiện ra. Đang nằm trong một đợt gộp rồi thì không hiện ra để gộp chồng lần nữa.
-    expect(call.where.AND[1].OR).toEqual([
-      { productionInvoiceId: null },
-      { productionInvoice: { isMerged: false } },
-    ]);
+    // Chỉ hiện SKU thực sự chưa gom vào PI nào (2026-08-24 - bỏ nhánh "đang trong PI cắt riêng
+    // chưa gộp" vì gây SKU hiện trùng ở cả đây lẫn "Lệnh sản xuất mới").
+    expect(call.where.AND[1]).toEqual({ productionInvoiceId: null });
   });
 
   it('loại sắt đứng riêng đã đạt ngưỡng thì KHÔNG hiện ra', async () => {

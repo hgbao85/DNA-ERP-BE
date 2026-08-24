@@ -227,7 +227,22 @@ describe('ProductionInvoicesService', () => {
         data: Record<string, unknown>;
       };
       expect(moved.where.id.in).toEqual([20n, 21n]);
-      expect(moved.data).toEqual({ productionInvoiceId: 50n });
+      // productionInvoiceId đổi + reset sạch chu kỳ duyệt cũ (2026-08-24) - xem rejectItem/
+      // claimSolo cùng lý do. salesOrderId KHÔNG được đụng tới - đó là đường duy nhất truy ra
+      // đơn gốc của từng SKU sau khi gộp.
+      expect(moved.data).toEqual({
+        productionInvoiceId: 50n,
+        prodApprovalStatus: null,
+        rejectReason: null,
+        requestedAt: null,
+        requestedById: null,
+        warehouseCode: null,
+        warehouseName: null,
+        qlsxAt: null,
+        qlsxById: null,
+        decidedAt: null,
+        decidedById: null,
+      });
       expect(moved.data).not.toHaveProperty('salesOrderId');
     });
 
@@ -379,20 +394,13 @@ describe('ProductionInvoicesService', () => {
     const mergedPi = (items: unknown[]) =>
       pi({ id: 50n, code: 'PI-50', isMerged: true, salesOrderId: null, salesOrder: null, items });
 
-    it('trả SKU về PI của đơn gốc kèm lý do rồi xoá đợt gộp', async () => {
+    it('trả SKU về trạng thái chưa gom (productionInvoiceId=null) kèm lý do rồi xoá đợt gộp', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(
         mergedPi([
           piItem({ id: 20n, salesOrderId: 1n, prodApprovalStatus: 'WAITING_BOSS' }),
           piItem({ id: 21n, salesOrderId: 2n, prodApprovalStatus: 'WAITING_BOSS' }),
         ]),
       );
-      // Đơn 1 còn PI cũ để nhận lại; đơn 2 không còn -> phải tạo mới.
-      prisma.productionInvoice.findFirst
-        .mockResolvedValueOnce({ id: 7n })
-        .mockResolvedValueOnce(null);
-      prisma.salesOrder.findUnique.mockResolvedValue({ id: 2n, deliveryDate: null });
-      prisma.productionInvoice.create.mockResolvedValue({ id: 60n });
-      prisma.productionInvoice.update.mockResolvedValue({ id: 60n, code: 'PI-60' });
 
       const result = await service.rejectBatch('50', 'Hạn quá gấp', 'user-boss');
 
@@ -401,12 +409,12 @@ describe('ProductionInvoicesService', () => {
         (c) => (c[0] as { data: Record<string, unknown> }).data,
       );
       expect(updates[0]).toMatchObject({
-        productionInvoiceId: 7n,
+        productionInvoiceId: null,
         prodApprovalStatus: 'REJECTED',
         rejectReason: 'Hạn quá gấp',
         decidedById: 'user-boss',
       });
-      expect(updates[1]).toMatchObject({ productionInvoiceId: 60n, rejectReason: 'Hạn quá gấp' });
+      expect(updates[1]).toMatchObject({ productionInvoiceId: null, rejectReason: 'Hạn quá gấp' });
       expect(prisma.productionInvoice.delete).toHaveBeenCalledWith({ where: { id: 50n } });
       expect(result.movedItemIds).toEqual(['20', '21']);
     });
@@ -865,6 +873,43 @@ describe('ProductionInvoicesService', () => {
       await expect(service.rejectItem('7', '20', 'Thiếu vật tư', 'user-boss')).rejects.toThrow(
         ConflictException,
       );
+    });
+  });
+
+  describe('rejectBatchByQlsx', () => {
+    it('từ chối mọi SKU đang chờ QLSX của cả PI trong 1 lần', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }),
+            piItem({ id: 21n, prodApprovalStatus: 'WAITING_QLSX' }),
+            piItem({ id: 22n, prodApprovalStatus: null }), // chưa tới lượt -> BỎ QUA
+          ],
+        }),
+      );
+
+      await service.rejectBatchByQlsx('7', 'Không đủ kho', 'user-qlsx');
+
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [20n, 21n] } },
+        data: expect.objectContaining({
+          prodApprovalStatus: 'REJECTED',
+          rejectReason: 'Không đủ kho',
+          decidedById: 'user-qlsx',
+        }) as unknown,
+      });
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('ném ConflictException khi không SKU nào đang chờ QLSX', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({ items: [piItem({ prodApprovalStatus: 'WAITING_BOSS' })] }),
+      );
+
+      await expect(service.rejectBatchByQlsx('7', 'lý do', 'user-qlsx')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
     });
   });
 

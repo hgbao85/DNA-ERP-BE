@@ -14,7 +14,12 @@ class ItemStageDto {
 @Exclude()
 export class ProductionInvoiceItemResponseDto {
   @Expose() @ApiProperty() id!: string;
-  @Expose() @ApiProperty() productionInvoiceId!: string;
+  /**
+   * Null = "chưa gom vào PI nào" - trạng thái ban đầu lúc Sales tạo PO, và cũng là trạng thái SKU
+   * quay về sau khi Sếp từ chối (rejectItem/rejectBatch, 2026-08-24) để hiện lại được ở "Tối ưu
+   * cắt sắt" (xem CuttingProposalsService.loadBatchContext()).
+   */
+  @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceId!: string | null;
   /**
    * PO gốc của riêng SKU này. PHẢI đọc ở đây chứ không phải ở PI cha: PI gộp chứa SKU của nhiều
    * PO khác nhau nên PI cha không có salesOrder (null) - đây là thứ duy nhất cho biết SKU thuộc

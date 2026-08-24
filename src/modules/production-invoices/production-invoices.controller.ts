@@ -195,6 +195,19 @@ export class ProductionInvoicesController {
     return this.productionInvoicesService.rejectItemByQlsx(id, itemId, dto.reason, userId);
   }
 
+  /** Từ chối CẢ phiếu ở bước QLSX - mọi SKU đang chờ QLSX xử lý. Xem ProductionInvoicesService.
+   *  rejectBatchByQlsx() - "duyệt theo PI, không theo từng SKU" (2026-08-24). */
+  @Post(':id/reject-qlsx-batch')
+  @RequirePermissions(APPROVE)
+  @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)
+  rejectBatchByQlsx(
+    @Param('id') id: string,
+    @Body() dto: RejectItemDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.productionInvoicesService.rejectBatchByQlsx(id, dto.reason, userId);
+  }
+
   // ─── Sếp (role BOSS) - duyệt cuối, mirror assertBossRole() trong mock ───────
 
   @Post(':id/items/:itemId/approve')

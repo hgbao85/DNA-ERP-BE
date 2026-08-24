@@ -632,11 +632,14 @@ export class CuttingProposalsService {
             ],
           },
           {
-            // "Chưa được KHSX gom" (productionInvoiceId null, 2026-08-20 - PI không còn tự sinh
-            // lúc Sales tạo PO) HOẶC "đang nằm trong PI thường, chưa gộp" - đều hiện ra để KHSX
-            // gộp/cắt riêng. Đang nằm trong một đợt gộp rồi thì KHÔNG hiện ra để gộp tiếp - tránh
-            // KHSX vô tình gộp chồng và làm sai phương án cắt của đợt kia.
-            OR: [{ productionInvoiceId: null }, { productionInvoice: { isMerged: false } }],
+            // Chỉ hiện SKU thực sự CHƯA được gom vào PI nào (2026-08-20 - PI không còn tự sinh
+            // lúc Sales tạo PO). Trước đây (tới 2026-08-24) còn hiện lại cả SKU đã "cắt riêng"
+            // (đang nằm trong 1 PI thường, isMerged=false) để KHSX đổi ý gộp - bỏ vì gây nhầm lẫn
+            // (SKU hiện đồng thời ở cả đây lẫn "Lệnh sản xuất mới") và khi gộp đi nơi khác sẽ để
+            // lại PI cắt riêng cũ trống rỗng không ai dọn. Muốn đổi ý sau khi đã cắt riêng thì
+            // Sếp từ chối SKU đó trước (rejectItem - tự trả về NULL + xoá PI cũ, xem
+            // production-invoices.service.ts) rồi mới gộp lại được ở đây.
+            productionInvoiceId: null,
           },
         ],
       },
