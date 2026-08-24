@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Kiểm tra pipeline VTTP + Duyệt sản xuất theo PI</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.part-divider{
+  margin-top:3.4rem; padding-top:1.4rem; border-top:2px solid var(--line-strong);
+  display:flex; align-items:baseline; gap:.7rem; flex-wrap:wrap;
+}
+.part-divider .n{font-family:var(--mono); font-size:.78rem; color:var(--accent-ink); font-weight:700; letter-spacing:.06em}
+.part-divider h2{font-family:var(--serif); font-size:1.55rem; font-weight:600; margin:0}
+.part-divider .sub{color:var(--ink-soft); font-size:.9rem; width:100%; max-width:66ch}
+
+.module{margin-top:2.4rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Cả ngày 24/08/2026 · 2 phần: kiểm tra pipeline VTTP + redesign duyệt sản xuất</div>
+    <h1>Kiểm chứng pipeline "vật tư thành phẩm" bằng SKU thật, rồi đổi cả cách Boss/QLSX duyệt sản xuất</h1>
+    <p class="lede">
+      Nhật ký gộp của trọn 1 ngày làm việc, 2 phần nối tiếp nhau: <b>Phần 1</b> — dựng 1 SKU thật
+      ("Ghế tình yêu") chạy qua API thật để kiểm chứng lại toàn bộ pipeline "vật tư thành phẩm" xây
+      hôm 22/08, cộng vài phát hiện phụ (bug UI, nhóm vật tư sai). <b>Phần 2</b> — quá trình test UI
+      thật đó lộ ra hàng loạt vấn đề thật (quyền DB lệch, dữ liệu rò rỉ giữa 2 chu kỳ duyệt), dẫn
+      tới 1 quyết định nghiệp vụ lớn: đổi hẳn cách Boss/QLSX duyệt sản xuất từ "theo từng SKU" sang
+      "theo cả PI".
+    </p>
+    <div class="meta">
+      <span>24/08/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>1 route BE mới, 1 sửa quyền DB dev thật, nhiều dữ liệu test đã dọn tay</span>
+      <span>677 test BE pass (45 suite) · <code>tsc</code> sạch cả 2 repo</span>
+      <span><b>Chưa commit</b></span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li><b>Phần 1 (kiểm tra pipeline VTTP):</b> vá UI ẩn ô "Số lượng" thừa ở nhóm "Vật tư thành phẩm"; xác nhận "Thanh nhôm" (SAT-012 cũ) đã đúng nhóm; dựng SKU "Ghế tình yêu" chạy hết chuỗi duyệt qua API thật — hao hụt cắt sắt đo được <b>0,167%</b> (mục tiêu &lt;1%), 15 đề xuất mua tự sinh khớp 100% với tính tay.</li>
+      <li><b>Phần 2 (duyệt theo PI):</b> phát hiện DB dev lệch quyền thật (403 do chưa chạy lại seed sau sự cố 22/08) — đã chạy lại, không sửa code. Phát hiện "Tối ưu cắt sắt" hiện lại SKU đã cắt riêng — chốt lại chỉ hiện SKU thực sự chưa có PI. Phát hiện bug rò rỉ dữ liệu: cắt riêng lại 1 SKU vừa bị từ chối vẫn mang nguyên lý do/kho/người duyệt của lần trước — đã vá tận gốc.</li>
+      <li><b>Quyết định lớn nhất trong ngày:</b> "tất cả duyệt theo PI, không còn từng SKU riêng nữa" — thêm route BE mới (<code>rejectBatchByQlsx</code>), đổi toàn bộ màn Boss/QLSX từ bảng phẳng từng SKU sang danh sách PI thu gọn + trang chi tiết riêng khi bấm vào, mirror đúng UX màn KHSX.</li>
+      <li>Dọn dữ liệu test theo yêu cầu người dùng ở cả 2 phần: 15 đề xuất mua test, item PI trùng lặp, PI-2026-009 + PO-39, dữ liệu chu kỳ duyệt cũ dính trên PI-2026-011.</li>
+      <li>Kết quả cuối ngày: 677 test BE pass, <code>tsc</code> sạch cả 2 repo, <b>chưa commit</b>, còn vài việc UI thật chưa kiểm chứng lại sau redesign lớn ở Phần 2.</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ PHẦN 1 ═══════════════════════════════════════════ -->
+  <div class="part-divider">
+    <span class="n">PHẦN 1</span>
+    <h2>Kiểm tra lại pipeline "vật tư thành phẩm" bằng 1 SKU thật</h2>
+    <div class="sub">Tiếp nối changelog 22/08 (xây tính năng <code>PieceMaterialYield</code>) — kiểm chứng lại bằng dữ liệu thật qua API, không viết thẳng DB.</div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 1. Vá UI: ẩn ô "Số lượng" thừa ở nhóm "Vật tư thành phẩm"</h2>
+    <p class="module-note">
+      Theo đúng đề xuất đã ghi ở changelog 22/08 (lúc đó mới dừng ở mức đề xuất, chưa code) — ô
+      "Số lượng" dùng chung cho 6 nhóm vật tư không có ý nghĩa gì với nhóm "Vật tư thành phẩm" (khái
+      niệm ở đây là <code>piecesPerBar</code>, không phải tiêu hao/mảnh), dễ khiến người nhập hiểu
+      nhầm 2 con số cùng loại.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">SpecSteelPage.tsx (form thêm/sửa dòng)</td><td>Bọc ô nhập "Số lượng" trong <code>{'{childGroup !== \'vatTuTP\' && (...)}'}</code> — cùng pattern đã dùng để ẩn "Chiều dài cắt"/"Công đoạn phôi" khi không phải nhóm Sắt.</td></tr>
+          <tr><td class="path">SpecSteelPage.tsx (bảng liệt kê)</td><td>Cột "Số lượng" đổi thành <code>c.group === 'vatTuTP' ? '—' : (c.soLuong || '—')</code>.</td></tr>
+          <tr><td class="path">SKUDetail.tsx (màn đọc-only)</td><td>Đồng bộ hiện "—" ở cột tương ứng.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-db">DB</span> 2. Xác nhận nhóm vật tư "Thanh nhôm" (trước là SAT-012) — chỉ đọc, không sửa</h2>
+    <p class="module-note">
+      Việc còn để ngỏ ở changelog 22/08: nghi ngờ "Thanh nhôm" bị lỡ gán nhầm vào nhóm Sắt. Truy vấn
+      trực tiếp DB dev (chỉ <code>SELECT</code>) để xác nhận.
+    </p>
+    <div class="callout ok">
+      <b>Kết quả: đã được sửa đúng.</b> Không còn material nào mang mã <code>SAT-012</code> — "Thanh
+      nhôm" hiện có mã <code>VTTP-002</code>, thuộc đúng nhóm "Vật tư thành phẩm".
+    </div>
+    <div class="callout warn">
+      <b>Phát hiện phụ:</b> mảnh "Chân nhôm" chưa hề được tạo, bảng <code>piece_material_yield</code>
+      vẫn rỗng hoàn toàn — sửa nhóm vật tư đã xong nhưng bước khai định mức thật vẫn chưa làm.
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 3. Test end-to-end qua API thật: SKU "Ghế tình yêu"</h2>
+    <p class="module-note">
+      Yêu cầu rõ ràng: "chạy qua API thật chứ không tự tạo dưới DB" — khởi động BE dev server local,
+      gọi tuần tự đúng chuỗi endpoint REST mà FE thật sẽ gọi bằng 1 script Node, qua 5 tài khoản demo
+      đúng vai trò (<code>sales</code> → <code>khsx</code> → <code>qlsx</code> → <code>boss</code>,
+      cộng <code>admin</code> thay 2 tài khoản chuyên trách nhập định mức do mật khẩu không khớp).
+    </p>
+    <div class="card">
+      <h3>Dữ liệu định mức — 4 mảnh, đơn hàng 50 sản phẩm</h3>
+      <p>
+        Khung chính (598mm×4, 1197mm×2 Sắt hộp · 598mm×6 Sắt vuông), Khung tay vịn ×2 (1197mm×1 ·
+        598mm×2), Đế ngồi (598mm×4, 2994mm×1), Nắp chân ×4 (598mm×1, <code>needsHan=false</code>) —
+        cộng 8 dòng định mức chi tiết (Sơn/Phụ kiện/Bao bì).
+      </p>
+    </div>
+    <div class="callout ok">
+      <b>Vì sao chọn đúng 598/1197/2994mm:</b> cây sắt chuẩn 6000mm, tề đầu 10mm, lưỡi cắt 1mm →
+      khả dụng 5990mm. Cả 3 cỡ đều là ước số đẹp của 5990 khi cộng lưỡi cắt — 1 cây cắt thuần 1 cỡ
+      gần như không dư gì ngoài phần tề đầu cố định (10/6000 = 0,167%).
+    </div>
+  </div>
+
+  <div class="module">
+    <h2>4. Kết quả đối chiếu — chính xác 100%</h2>
+    <div class="stats">
+      <div class="stat"><div class="n">0,167%</div><div class="l">hao hụt cắt sắt (mục tiêu &lt;1%)</div></div>
+      <div class="stat"><div class="n">175</div><div class="l">tổng số cây sắt cần mua</div></div>
+      <div class="stat"><div class="n">15</div><div class="l">đề xuất mua tự sinh (1 sắt + 14 tiêu hao)</div></div>
+      <div class="stat"><div class="n">100%</div><div class="l">số dòng khớp đúng tính tay</div></div>
+    </div>
+    <p class="module-note">
+      Cả 4 loại sắt đều ra đúng 0,167% hao hụt, số cây solver đề xuất khớp chính xác tính tay trước
+      khi chạy — kể cả khi solver tự trộn 2 cỡ đoạn trên cùng 1 cây. 14 dòng vật tư tiêu hao đối
+      chiếu khớp đúng công thức <code>qtyPerPiece × qtyPerUnit × soLuongDon</code>.
+    </p>
+    <div class="callout warn">
+      <b>Ghi nhận (đã xác nhận là thiết kế cố ý, không phải bug):</b> đề xuất mua sắt không trừ tồn
+      sẵn có (<code>buyQty = totalBars</code> nguyên văn) — xác nhận lại đúng comment gốc trong
+      schema: "CHƯA đối chiếu tồn kho thật ở bản này".
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-db">DB</span> 5. Dọn dữ liệu test theo yêu cầu người dùng (Phần 1)</h2>
+    <p class="module-note">
+      Giữ nguyên cả chuỗi Customer → Product → SalesOrder → SKU → ProductionOrder →
+      CuttingProposal, chỉ xoá riêng 15 đề xuất mua test sinh ra (module không có endpoint xoá, phải
+      xoá thẳng DB — đã xác nhận không cascade hỏng gì). Dừng BE dev server local sau khi xong.
+    </p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ PHẦN 2 ═══════════════════════════════════════════ -->
+  <div class="part-divider">
+    <span class="n">PHẦN 2</span>
+    <h2>Test UI thật lộ ra hàng loạt vấn đề → đổi hẳn cách duyệt sản xuất</h2>
+    <div class="sub">Bắt đầu từ 1 câu hỏi kiểm tra UI ("nút này bấm xong PI đã tạo chưa?"), kết thúc bằng 1 quyết định nghiệp vụ áp dụng cho toàn bộ màn Boss/QLSX.</div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-db">DB</span> 6. DB dev lệch quyền thật — vá bằng <code>npm run seed</code>, không sửa code</h2>
+    <p class="module-note">
+      Người dùng chụp màn thấy 2 request <code>production-batch-plan?stage=HAN</code> và
+      <code>?stage=SON</code> bị 403 ngay trên "Bảng thống kê" (KHSX). Code đã khai đúng
+      <code>PRODUCTION_BATCH:VIEW</code> cho cả <code>PRODUCTION_PLANNER</code>/
+      <code>PRODUCTION_MANAGER</code> — nhưng bảng <code>role_permissions</code> trong DB dev
+      <b>không role nào có quyền này thật</b>.
+    </p>
+    <div class="callout bad">
+      <b>Nguyên nhân:</b> hệ quả còn sót của sự cố backup–reset–khôi phục DB ngày 22/08 — bản khôi
+      phục đúng dữ liệu tại thời điểm backup, nhưng chưa ai chạy lại <code>npm run seed</code> để
+      đồng bộ quyền theo code mới nhất sau đó.
+    </div>
+    <div class="callout ok">
+      <b>Đã xử lý:</b> chạy lại <code>npm run seed</code> trên DB dev (chỉ đồng bộ
+      roles/permissions/warehouses/material-groups + upsert 1 tài khoản super-admin, không đụng
+      khách hàng/đơn hàng/SKU nào) — xác nhận quyền đã khớp code. Không sửa dòng code nào.
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 7. "Tối ưu cắt sắt" hiện lại SKU đã cắt riêng — chốt Cách 1, sửa cả 2 đường Sếp từ chối</h2>
+    <p class="module-note">
+      Bấm "Tiến hành cắt riêng" cho 1 SKU, PI tạo đúng — nhưng "Tối ưu cắt sắt" vẫn hiện lại SKU đó
+      (badge "ĐỀ XUẤT"). Không phải lỗi: code cũ CỐ Ý giữ lại để KHSX còn đổi ý gộp. Nhưng lộ 2 vấn
+      đề thật: 1 SKU hiện ở 2 màn cùng lúc (rối), và gộp đi nơi khác thì PI cắt riêng cũ bị bỏ trống
+      không ai dọn.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Việc</th><th>Trước</th><th>Sau (Cách 1)</th></tr></thead>
+        <tbody>
+          <tr><td>Bộ lọc "Tối ưu cắt sắt" (<code>loadBatchContext()</code>)</td><td>Hiện cả SKU <code>productionInvoiceId=null</code> HOẶC đang ở PI thường (<code>isMerged=false</code>)</td><td>Chỉ hiện SKU <code>productionInvoiceId=null</code> thật sự</td></tr>
+          <tr><td>Sếp từ chối 1 SKU cắt riêng (<code>rejectItem()</code>)</td><td>Chỉ đổi trạng thái REJECTED, giữ nguyên PI</td><td>Đổi REJECTED <b>+ trả về <code>null</code> + xoá PI</b> (nếu hết SKU trong đó)</td></tr>
+          <tr><td>Sếp từ chối đợt gộp (<code>rejectBatch()</code>)</td><td>Gán mỗi SKU vào 1 "PI nhà" mới tạo ngầm cho đúng đơn hàng gốc</td><td>Trả thẳng về <code>null</code> — bỏ hẳn "PI nhà", xoá hàm <code>resolveHomePi()</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <b>QLSX từ chối giữ nguyên</b> — PI vẫn còn, SKU vẫn ở lại "Lệnh sản xuất mới" để KHSX sửa và
+      gửi lại: "từ chối của QLSX là do lệch deadline, không phải huỷ phương án cắt".
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 8. Bug thật phát hiện qua ảnh chụp: dữ liệu chu kỳ duyệt cũ rò rỉ sang PI mới</h2>
+    <p class="module-note">
+      Ngay sau mục 7, "cắt riêng lại" 1 SKU vừa bị Sếp từ chối — PI mới tạo đúng, nhưng màn hình vẫn
+      hiện nguyên badge "Bị từ chối", lý do từ chối cũ, và kho thành phẩm đã chọn ở lần trước.
+    </p>
+    <div class="callout bad">
+      <b>Nguyên nhân gốc:</b> <code>claimSolo()</code>/<code>mergeItems()</code> chỉ gán lại
+      <code>productionInvoiceId</code> mới vào ĐÚNG dòng <code>ProductionInvoiceItem</code> cũ (tái
+      dùng, không tạo mới) — không dọn 10 trường còn lại thuộc chu kỳ duyệt trước.
+    </div>
+    <div class="callout ok">
+      <b>Đã vá:</b> cả 2 hàm reset sạch 10 trường (<code>prodApprovalStatus</code>,
+      <code>rejectReason</code>, <code>requestedAt/By</code>, <code>warehouseCode/Name</code>,
+      <code>qlsxAt/By</code>, <code>decidedAt/By</code>) mỗi khi gán SKU vào 1 PI mới. Lịch sử thật
+      vẫn còn nguyên trong AuditLog. Đã dọn tay dữ liệu đang dính trên PI-2026-011.
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 9. Đơn giản hoá "Gửi QLSX" — bỏ chọn từng SKU</h2>
+    <p class="module-note">
+      Bước dọn đường trước mục 10: modal "Gửi QLSX xử lý" trước đây có checkbox chọn từng SKU + nút
+      "Chọn tất cả" — đổi thành xác nhận đơn giản, 1 nút <b>"Gửi QLSX (N SKU)"</b> gửi thẳng mọi SKU
+      đủ điều kiện, không chọn lẻ được nữa. Bỏ hẳn state <code>selectedItemIds</code>.
+    </p>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span><span class="badge b-fe">FE</span> 10. Quyết định lớn nhất: "Tất cả duyệt theo PI, không còn từng SKU riêng nữa"</h2>
+    <p class="module-note">
+      Từ 1 câu hỏi kiểm tra thiết kế: PI gộp có SKU A/B đã ở bước sau còn SKU C bị QLSX từ chối
+      riêng thì màn "Gửi QLSX" hiện SKU vừa mờ vừa sáng cùng lúc — dễ hiểu nhầm. Chốt: bỏ hẳn khả
+      năng xử lý lẻ từng SKU, mọi quyết định tính theo <b>cả PI</b>.
+    </p>
+    <div class="card">
+      <h3><span class="path">rejectBatchByQlsx()</span> (service + route mới)</h3>
+      <p>
+        QLSX trước đây chỉ có đường từ chối LẺ từng SKU. Thêm
+        <code>rejectBatchByQlsx(piId, reason, actorUserId)</code>, mirror <code>sendBatchToBoss()</code>
+        đã có — từ chối MỌI SKU đang <code>WAITING_QLSX</code> của PI trong 1 lần ghi. Route mới:
+        <code>POST /production-invoices/:id/reject-qlsx-batch</code>.
+      </p>
+    </div>
+    <div class="card">
+      <h3>FE: bỏ hẳn state/handler theo từng SKU</h3>
+      <p>
+        <code>approveTarget</code>/<code>rejectTarget</code>/<code>qlsxTarget</code> đổi từ
+        <code>{'{pi, idx}'}</code> sang giữ thẳng <code>pi</code> — 3 handler đều tìm-và-xử-lý MỌI
+        SKU liên quan trong PI đó. 3 modal xác nhận đổi từ "hiện 1 SKU" sang "liệt kê mọi SKU sẽ bị
+        ảnh hưởng".
+      </p>
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 11. Màn Boss/QLSX: từ bảng phẳng sang danh sách PI thu gọn + trang chi tiết riêng</h2>
+    <p class="module-note">
+      Yêu cầu tiếp: danh sách không nên "hiển thị hết ra màn hình" — phải bấm vào 1 PI mới xem chi
+      tiết, không xổ tại chỗ (đã thử accordion trước, bị từ chối, yêu cầu chuyển hẳn trang).
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Trạng thái</th><th>Trước (bảng phẳng)</th><th>Sau (danh sách → chi tiết)</th></tr></thead>
+        <tbody>
+          <tr><td>Danh sách</td><td>1 dòng/SKU, đủ timeline + 2 nút thao tác riêng</td><td>1 dòng/PI, chỉ mã PI + hạn + số SKU — không nút, không SKU</td></tr>
+          <tr><td>Bấm vào 1 dòng</td><td>(không có, hiện sẵn hết)</td><td>Chuyển trang chi tiết riêng (mirror UX màn KHSX, có nút quay lại)</td></tr>
+          <tr><td>2 nút Duyệt/Từ chối</td><td>Trên từng dòng SKU (đợt gộp phải ẩn bớt để tránh hiểu nhầm)</td><td>Trong trang chi tiết, dưới header PI — luôn tác động cả PI</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok">Duyệt/từ chối/gửi thành công xong tự quay về danh sách.</div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 12. Ô tìm kiếm — đổi từ "tìm theo PO" sang "tìm theo PI"</h2>
+    <p class="module-note">
+      Hệ quả tự nhiên của các mục trên: danh sách chỉ còn hiện mã PI ở dòng thu gọn. Bỏ nhánh lọc
+      theo <code>exportOrder.poNumber</code>, chỉ còn lọc theo <code>p.code</code>; đổi placeholder
+      "Tìm mã PO..." → "Tìm mã PI..." — áp dụng cho cả màn KHSX lẫn Boss/QLSX (dùng chung
+      <code>filteredList</code>).
+    </p>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-db">DB</span> 13. Dọn dữ liệu test theo yêu cầu người dùng (Phần 2)</h2>
+    <p class="module-note">
+      Xoá item PI trùng lặp (id 42, do 2 đường tạo PI song song của hệ thống); xoá hẳn PI-2026-009
+      (ProductionOrder + CuttingProposal + các dòng con) và PO-39 theo yêu cầu, chỉ giữ lại SKU
+      #50 (đã duyệt, giữ nguyên BomRevision ACTIVE).
+    </p>
+  </div>
+
+  <!-- ═══════════════════════ KIEM THU ═══════════════════════ -->
+
+  <div class="module">
+    <h2>14. Kiểm thử &amp; build (cuối ngày)</h2>
+    <div class="stats">
+      <div class="stat"><div class="n">677</div><div class="l">test BE pass (45 suite)</div></div>
+      <div class="stat"><div class="n">2</div><div class="l">test mới cho <code>rejectBatchByQlsx</code></div></div>
+      <div class="stat"><div class="n">3</div><div class="l">test cũ cập nhật (rejectItem null-toString, rejectBatch không còn "PI nhà", mergeItems reset field)</div></div>
+      <div class="stat"><div class="n">2</div><div class="l">repo build sạch (BE + FE)</div></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ CON DE NGO ═══════════════════════ -->
+
+  <div class="module">
+    <h2>15. Còn để ngỏ</h2>
+    <ul class="timeline">
+      <li><b>Chưa commit</b><span> — toàn bộ thay đổi cả ngày (2 repo) vẫn ở working tree.</span></li>
+      <li><b>Chưa test qua UI trình duyệt thật sau redesign Phần 2</b><span> — cần bấm thử cả 2 vai trò Boss/QLSX, cả PI cắt riêng lẫn PI gộp, xác nhận trang chi tiết + 2 nút hoạt động đúng, và luồng "từ chối → quay lại Tối ưu cắt sắt → cắt riêng/gộp lại" chạy trơn tru đầu-cuối.</span></li>
+      <li><b>Mảnh "Chân nhôm" + <code>PieceMaterialYield</code> vẫn chưa được khai báo thật</b><span> (phát hiện ở mục 2) — nhóm vật tư đã đúng, chỉ còn thiếu bước nhập định mức piecesPerBar qua UI.</span></li>
+      <li><b>PO-35/36/37 (tồn đọng từ changelog 22/08) vẫn thiếu đề xuất mua</b><span> — chưa có quyết định xử lý bù hay bỏ qua.</span></li>
+      <li><b>2 tài khoản <code>dms</code>/<code>dmbbdg</code> không đăng nhập được bằng mật khẩu demo mặc định</b><span> — chưa xác nhận nguyên nhân, chưa cần xử lý gấp (route không khoá theo role, dùng admin thay được).</span></li>
+    </ul>
+  </div>
+
+  <footer>
+    Nguồn: toàn bộ nội dung trên tổng hợp trực tiếp từ phiên làm việc trong Claude Code — không suy
+    diễn thêm. Gộp lại từ 2 file changelog cùng ngày 24/08 theo yêu cầu người dùng. Xem thêm
+    changelog liền trước <code>changelog-2026-08-22-vat-tu-thanh-pham-dinh-muc-nhom.html</code> cho
+    bối cảnh đầy đủ về tính năng "vật tư thành phẩm" mà Phần 1 kiểm chứng lại.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" title="Về đầu trang" type="button">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

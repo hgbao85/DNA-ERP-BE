@@ -49,10 +49,6 @@ type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
   include: { mfgProduct: true; productVariant: true; stages: true; salesOrder: true };
 }>;
 
-/** PrismaServiceType (client mở rộng qua $extends) có shape tx callback khác Prisma.TransactionClient
- *  gốc - suy ra đúng type từ chính $transaction của nó thay vì dùng type generated thẳng. */
-type PrismaTx = Parameters<Parameters<PrismaServiceType['$transaction']>[0]>[0];
-
 /** Bọc thêm CuttingProposal mới nhất - CHỈ dùng ở findAll/findOne (chỉ 2 màn thật sự cần hiện
  *  "đang tính phương án cắt"), không lan ra include của 10+ hàm ghi khác vốn không cần dữ liệu này. */
 const PROPOSAL_STATUS_INCLUDE = {
@@ -292,9 +288,24 @@ export class ProductionInvoicesService {
           deadline,
         },
       });
+      // Reset sạch mọi vết của chu kỳ duyệt CŨ (2026-08-24, cùng lý do claimSolo()) - 1 trong các
+      // item được gộp có thể vừa quay về từ "chưa gom" sau khi bị Sếp từ chối, vẫn còn mang
+      // rejectReason/warehouseName/decidedBy... của lần cắt riêng trước.
       await tx.productionInvoiceItem.updateMany({
         where: { id: { in: ids } },
-        data: { productionInvoiceId: created.id },
+        data: {
+          productionInvoiceId: created.id,
+          prodApprovalStatus: null,
+          rejectReason: null,
+          requestedAt: null,
+          requestedById: null,
+          warehouseCode: null,
+          warehouseName: null,
+          qlsxAt: null,
+          qlsxById: null,
+          decidedAt: null,
+          decidedById: null,
+        },
       });
 
       return created.id;
@@ -331,9 +342,25 @@ export class ProductionInvoicesService {
           deadline: item.deliveryDeadline,
         },
       });
+      // Reset sạch mọi vết của chu kỳ duyệt CŨ (2026-08-24) - item này có thể vừa quay về từ
+      // "chưa gom" sau khi bị Sếp từ chối (rejectItem), vẫn còn mang rejectReason/warehouseName/
+      // decidedBy... của lần cắt riêng trước. PI mới = chu kỳ duyệt mới, không được lộ dữ liệu cũ
+      // (lịch sử thật đã có AuditLog lo, xem auditItemApprovalTransition).
       await tx.productionInvoiceItem.update({
         where: { id: bigId },
-        data: { productionInvoiceId: created.id },
+        data: {
+          productionInvoiceId: created.id,
+          prodApprovalStatus: null,
+          rejectReason: null,
+          requestedAt: null,
+          requestedById: null,
+          warehouseCode: null,
+          warehouseName: null,
+          qlsxAt: null,
+          qlsxById: null,
+          decidedAt: null,
+          decidedById: null,
+        },
       });
       return created.id;
     });
@@ -739,7 +766,54 @@ export class ProductionInvoicesService {
     return this.toItemResponseDto(updated);
   }
 
-  /** Sếp từ chối - SKU quay về cho KHSX sửa thời hạn và gửi lại từ đầu. Mirror rejectItem() mock. */
+  /**
+   * QLSX từ chối CẢ PHIẾU (mọi SKU đang chờ mình xử lý) trong 1 lần - "duyệt/từ chối theo PI,
+   * không theo từng SKU riêng" (2026-08-24, cùng lý do sendBatchToBoss() ở trên). Route lẻ
+   * :itemId/reject (rejectItemByQlsx) vẫn giữ ở BE cho tương thích, FE không còn gọi tới nữa.
+   */
+  async rejectBatchByQlsx(
+    piId: string,
+    reason: string,
+    actorUserId: string,
+  ): Promise<ProductionInvoiceResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const targets = pi.items.filter(
+      (it) => it.prodApprovalStatus === ProdApprovalStatus.WAITING_QLSX,
+    );
+    if (targets.length === 0) {
+      throw new ConflictException(`${pi.code} không còn SKU nào đang chờ QLSX xử lý`);
+    }
+
+    const decidedAt = new Date();
+    await this.prisma.productionInvoiceItem.updateMany({
+      where: { id: { in: targets.map((it) => it.id) } },
+      data: {
+        prodApprovalStatus: ProdApprovalStatus.REJECTED,
+        rejectReason: reason,
+        decidedAt,
+        decidedById: actorUserId,
+      },
+    });
+    for (const item of targets) {
+      await this.auditItemApprovalTransition(item, {
+        ...item,
+        prodApprovalStatus: ProdApprovalStatus.REJECTED,
+        rejectReason: reason,
+        decidedAt,
+        decidedById: actorUserId,
+      });
+    }
+    return this.findOne(piId);
+  }
+
+  /**
+   * Sếp từ chối 1 SKU cắt riêng - SKU quay về cho KHSX sửa thời hạn và gửi lại từ đầu, ĐỒNG THỜI
+   * trả về đúng trạng thái "chưa gom" (productionInvoiceId=null) như lúc Sales mới tạo - để nó
+   * hiện lại được ở "Tối ưu cắt sắt" (bộ lọc ở đó chỉ hiện SKU thực sự chưa có PI nào, xem
+   * loadBatchContext()). PI cắt riêng chỉ tồn tại để chứa đúng 1 SKU (xem claimSolo()) - hết SKU
+   * thì xoá theo, không để lại PI rỗng mồ côi. Mirror đúng cách rejectBatch() đã xử lý cho đợt
+   * gộp (2026-08-24, thống nhất 2 đường "Sếp từ chối" theo đúng yêu cầu nghiệp vụ).
+   */
   async rejectItem(
     piId: string,
     itemId: string,
@@ -751,21 +825,30 @@ export class ProductionInvoicesService {
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_BOSS);
 
     const data = {
+      productionInvoiceId: null,
       prodApprovalStatus: ProdApprovalStatus.REJECTED,
       rejectReason: reason,
       decidedAt: new Date(),
       decidedById: actorUserId,
     };
-    const { count } = await this.prisma.productionInvoiceItem.updateMany({
-      where: { id: item.id, prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS },
-      data,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.productionInvoiceItem.updateMany({
+        where: { id: item.id, prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS },
+        data,
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc Sếp từ chối - không ghi đè`,
+        );
+      }
+      const remaining = await tx.productionInvoiceItem.count({
+        where: { productionInvoiceId: pi.id },
+      });
+      if (remaining === 0) {
+        await tx.productionInvoice.delete({ where: { id: pi.id } });
+      }
+      return { ...item, ...data };
     });
-    if (count === 0) {
-      throw new ConflictException(
-        `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc Sếp từ chối - không ghi đè`,
-      );
-    }
-    const updated = { ...item, ...data };
     await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
   }
@@ -843,8 +926,12 @@ export class ProductionInvoicesService {
   }
 
   /**
-   * Sếp từ chối cả cụm gộp: PI gộp bị XOÁ HẲN, từng SKU trả về PI của đơn hàng gốc kèm lý do, rồi
-   * xuất hiện lại ở màn "Tối ưu cắt sắt" để KHSX gộp tổ hợp khác (yêu cầu Sếp 2026-08-14).
+   * Sếp từ chối cả cụm gộp: PI gộp bị XOÁ HẲN, từng SKU trả về đúng trạng thái "chưa gom"
+   * (productionInvoiceId=null) kèm lý do, rồi xuất hiện lại ở màn "Tối ưu cắt sắt" để KHSX gộp tổ
+   * hợp khác (yêu cầu Sếp 2026-08-14). Trước đây (tới 2026-08-24) gán tạm mỗi SKU vào 1 "PI nhà"
+   * mới tạo ngầm cho đúng đơn hàng gốc - đổi sang null thẳng vì bộ lọc "Tối ưu cắt sắt" giờ chỉ
+   * hiện SKU thực sự chưa có PI nào (xem loadBatchContext() bên cutting-proposals.service.ts) -
+   * giữ "PI nhà" sẽ khiến SKU bị PI mồ côi che mất, không hiện lại được.
    */
   async rejectBatch(
     piId: string,
@@ -867,11 +954,10 @@ export class ProductionInvoicesService {
     const transitions: { before: PIItemWithRefs; after: PIItemWithRefs }[] = [];
     await this.prisma.$transaction(async (tx) => {
       for (const item of pi.items) {
-        const homePiId = await this.resolveHomePi(tx, item.salesOrderId);
         const updated = await tx.productionInvoiceItem.update({
           where: { id: item.id },
           data: {
-            productionInvoiceId: homePiId,
+            productionInvoiceId: null,
             prodApprovalStatus: ProdApprovalStatus.REJECTED,
             rejectReason: reason,
             decidedAt: new Date(),
@@ -887,29 +973,6 @@ export class ProductionInvoicesService {
     }
 
     return { movedItemIds: pi.items.map((i) => i.id.toString()) };
-  }
-
-  /** PI "nhà" để trả SKU về sau khi huỷ đợt gộp: PI thường của đúng đơn hàng đó, chưa có thì tạo. */
-  private async resolveHomePi(tx: PrismaTx, salesOrderId: bigint | null): Promise<bigint> {
-    if (salesOrderId !== null) {
-      const existing = await tx.productionInvoice.findFirst({
-        where: { salesOrderId, isMerged: false },
-        orderBy: { id: 'asc' },
-      });
-      if (existing) return existing.id;
-    }
-    const order =
-      salesOrderId !== null
-        ? await tx.salesOrder.findUnique({ where: { id: salesOrderId } })
-        : null;
-    const created = await tx.productionInvoice.create({
-      data: {
-        code: await nextProductionInvoiceCode(tx as unknown as PrismaServiceType),
-        salesOrderId,
-        deadline: order?.deliveryDate ?? null,
-      },
-    });
-    return created.id;
   }
 
   private async assertMergedPi(piId: string): Promise<PIWithRefs> {
@@ -1185,14 +1248,12 @@ export class ProductionInvoicesService {
     });
   }
 
-  /** `item.productionInvoiceId!` - hàm này chỉ được gọi với item đã thuộc 1 PI thật (qua
-   *  `pi.items.map()` hoặc các route đều đi qua `findOneOrThrow(piId)`/`findItemOrThrow(piId, ...)`
-   *  trước) - item vừa tạo từ PO, chưa được KHSX gom (productionInvoiceId null) không lọt được
-   *  vào đây, vì không route nào cho phép truy cập nó trước khi có PI. */
+  /** productionInvoiceId nullable (2026-08-24) - rejectItem()/rejectBatch() trả SKU về đúng trạng
+   *  thái "chưa gom" (null) sau khi Sếp từ chối, rồi vẫn trả response qua chính hàm này. */
   private toItemResponseDto(item: PIItemWithRefs): ProductionInvoiceItemResponseDto {
     return new ProductionInvoiceItemResponseDto({
       id: item.id.toString(),
-      productionInvoiceId: item.productionInvoiceId!.toString(),
+      productionInvoiceId: item.productionInvoiceId?.toString() ?? null,
       salesOrderId: item.salesOrderId?.toString() ?? null,
       salesOrderCode: item.salesOrder?.code ?? null,
       mfgProductId: item.mfgProductId.toString(),
