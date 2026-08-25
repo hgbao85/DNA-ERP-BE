@@ -1389,6 +1389,22 @@ model CuttingProposalLine {
   /// {length:6000,bars:223,wastePct:0.85}]) - thuần hiển thị/audit, không có FK nào cần tới nên
   /// giữ JSON thay vì tách bảng.
   lengthComparison     Json?
+  /// Tổng kết theo TỪNG CỠ ĐOẠN của loại sắt này (vd [{size:660,demand:2000,produced:2007,
+  /// names:["chân bàn"]}], sort size giảm dần) - dựng bảng "TỔNG KẾT CẮT" khi in hướng dẫn cắt
+  /// cho thợ, đúng layout "In kết quả" của MC Laser (cat_laser_roi/optimization_logic.py).
+  /// Nguồn: `pieces[]` trong response solver (api/views.py) cho demand/produced, + tên mảnh lấy
+  /// từ PieceBom.piece.name của chính bomRevision đã gửi solver (xem buildBomRows).
+  ///
+  /// Ghi khoá camelCase TƯỜNG MINH, KHÔNG dump nguyên văn snake_case của solver như
+  /// lengthComparison đang làm (field đó lưu `waste_pct` rồi `as`-cast sang `wastePct` ở
+  /// toDetailResponseDto - cast dối, FE đọc ra undefined; đừng lặp lại lỗi đó ở đây).
+  ///
+  /// null khi: (a) dòng feasible=false - solver chỉ trả pieces[] ở nhánh khả thi; (b) phương án
+  /// tính TRƯỚC 2026-08-25 (cột chưa tồn tại nên số solver trả về bị vứt đi) - lấp bằng
+  /// prisma/backfill-piece-summary.ts, bung lại định mức từ bomRevisionId đã ghim, KHÔNG gọi lại
+  /// solver (gọi lại sinh phương án mới -> trừ kho lần 2 + đề xuất mua trùng, xem
+  /// autoApproveBlockReason nhánh (b)).
+  pieceSummary         Json?
   /// Lý do KHÔNG cắt được (feasible=false), NGUYÊN VĂN từ solver (api/views.py::_no_solution/
   /// _unsolved) - vd "Không có cách cắt nào đạt ngưỡng 1% hao hụt...". Trước 2026-08-19 field
   /// này bị vứt bỏ hoàn toàn (không lưu) - FE chỉ hiện được "Không khả thi" trơ trọi, không nói

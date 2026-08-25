@@ -426,6 +426,84 @@ describe('CuttingProposalsService', () => {
       expect(notifyCall[0].data.title).toContain('PO-31');
     });
 
+    /** Đọc `data` của lần cuttingProposalLine.create thứ `index` - dùng chung cho nhóm test
+     *  pieceSummary bên dưới. */
+    const lineData = (index = 0) =>
+      (
+        prisma.cuttingProposalLine.create.mock.calls[index] as unknown as [
+          { data: { pieceSummary?: unknown } },
+        ]
+      )[0].data;
+
+    it('lưu pieceSummary: ghép pieces[] của solver với tên mảnh, sort cỡ đoạn giảm dần', async () => {
+      // 2 mảnh khác nhau cùng dùng cỡ 660 (tên phải gộp lại), thêm 1 cỡ 930 để kiểm thứ tự sort.
+      prisma.pieceBom.findMany.mockResolvedValue([
+        pieceBomRow,
+        { ...pieceBomRow, pieceId: 11n, piece: { name: 'chân ghế' } },
+        {
+          ...pieceBomRow,
+          pieceId: 12n,
+          segmentSpecId: 101n,
+          piece: { name: 'đoạn dài' },
+          segmentSpec: { materialId: 200n, cutLengthMm: mockDecimal(930) },
+        },
+      ]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { pieceId: 10n, qtyPerUnit: 4 },
+        { pieceId: 11n, qtyPerUnit: 4 },
+        { pieceId: 12n, qtyPerUnit: 2 },
+      ]);
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 223,
+          total_waste_mm: 11373,
+          waste_percentage: 0.85,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            total_bars: 223,
+            // Cố tình gửi cỡ NHỎ trước để chứng minh service tự sort giảm dần (bản in phải cùng
+            // chiều với bảng cắt chi tiết ở FE - cỡ dài trước).
+            pieces: [
+              { size: 660, demand: 2000, produced: 2007, surplus: 7 },
+              { size: 930, demand: 1000, produced: 1000, surplus: 0 },
+            ],
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      expect(lineData().pieceSummary).toEqual([
+        { size: 930, demand: 1000, produced: 1000, names: ['đoạn dài'] },
+        { size: 660, demand: 2000, produced: 2007, names: ['chân bàn', 'chân ghế'] },
+      ]);
+    });
+
+    it('pieceSummary = undefined khi solver không trả pieces (dòng infeasible) - để Prisma bỏ qua cột', async () => {
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 0,
+          total_waste_mm: 0,
+          waste_percentage: 0,
+          any_over_threshold: false,
+        },
+        purchase_plan: [{ material: '200', feasible: false, reason: 'Không xếp nổi' }],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      expect(lineData().pieceSummary).toBeUndefined();
+    });
+
     it('tự động duyệt ngay sau khi tính thành công - không cần gọi approve() riêng (Sếp chốt 2026-08-15)', async () => {
       externalApiService.post.mockResolvedValue({
         status: 'success',
