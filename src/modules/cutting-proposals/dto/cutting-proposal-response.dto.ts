@@ -50,6 +50,23 @@ export class CuttingProposalPatternResponseDto {
   }
 }
 
+/**
+ * 1 dòng bảng "TỔNG KẾT CẮT" của bản in hướng dẫn cắt (layout "In kết quả" của MC Laser):
+ * mỗi cỡ đoạn cần bao nhiêu, phương án cắt ra được bao nhiêu, và đoạn đó là mảnh gì.
+ *
+ * Cột "Tồn kho" (= produced - demand) CÓ trong bản MC Laser nhưng Sếp chốt bỏ (2026-08-25) nên
+ * không lưu, không trả - cần thì FE tự trừ.
+ */
+@Exclude()
+export class CuttingProposalPieceSummaryResponseDto {
+  @Expose() @ApiProperty() size!: number;
+  @Expose() @ApiProperty() demand!: number;
+  @Expose() @ApiProperty() produced!: number;
+  /// Tên các mảnh dùng tới cỡ đoạn này (vd ["chân bàn"]) - nhiều tên khi cỡ đoạn dùng chung giữa
+  /// các mảnh/SKU trong đợt cắt gộp. Rỗng nếu không tra được tên (dữ liệu backfill cũ).
+  @Expose() @ApiProperty({ type: [String] }) names!: string[];
+}
+
 @Exclude()
 export class LengthComparisonEntryResponseDto {
   @Expose() @ApiProperty() length!: number;
@@ -73,6 +90,13 @@ export class CuttingProposalLineResponseDto {
   @Expose()
   @ApiPropertyOptional({ type: [LengthComparisonEntryResponseDto], nullable: true })
   lengthComparison!: { length: number; bars: number; wastePct: number }[] | null;
+  /// Tổng kết theo cỡ đoạn cho bản in (xem CuttingProposalPieceSummaryResponseDto). null khi dòng
+  /// không khả thi, hoặc phương án tính trước 2026-08-25 mà chưa chạy backfill - FE phải chịu
+  /// được null (hiện "—" ở cột SL cần) chứ không được coi là lỗi.
+  @Expose()
+  @ApiPropertyOptional({ type: [CuttingProposalPieceSummaryResponseDto], nullable: true })
+  @Type(() => CuttingProposalPieceSummaryResponseDto)
+  pieceSummary!: CuttingProposalPieceSummaryResponseDto[] | null;
   /// Lý do KHÔNG cắt được, NGUYÊN VĂN từ solver - null khi feasible=true. Xem
   /// `displayReason` bên dưới cho câu đã dựng sẵn tiếng Việt (ưu tiên hiển thị cái đó).
   @Expose() @ApiPropertyOptional({ nullable: true }) reason!: string | null;

@@ -27,6 +27,7 @@ import { ExternalApiHttpError, ExternalApiService } from '../external/external-a
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import {
   CuttingProposalDisplayStatus,
+  CuttingProposalPieceSummaryResponseDto,
   CuttingProposalResponseDto,
 } from './dto/cutting-proposal-response.dto';
 import {
@@ -98,6 +99,11 @@ interface SolverProposeResponse {
     mau_nguyen_mm?: number;
     /// So sánh hao hụt giữa các chiều dài chuẩn đã chấm - thuần hiển thị.
     length_comparison?: Array<{ length: number; bars: number; waste_pct: number }>;
+    /// Nhu cầu vs thực cắt theo TỪNG cỡ đoạn (api/views.py gắn `item["pieces"]`). CHỈ có ở dòng
+    /// feasible=true. `surplus` = produced - demand, không lưu lại (Sếp chốt 2026-08-25 bỏ cột
+    /// Tồn kho khỏi bản in) - cần thì suy lại được. Trước 2026-08-25 field này bị bỏ qua hoàn
+    /// toàn, "SL cần" không có chỗ nào lưu -> bản in thiếu hẳn bảng TỔNG KẾT.
+    pieces?: Array<{ size: number; demand: number; produced: number; surplus?: number }>;
     cutting_patterns?: Array<{
       pattern_id: number;
       bars: number;
@@ -144,6 +150,11 @@ type SolverJob = {
   numSets: number;
   bomRows: SolverBomRow[];
   segmentSpecLookup: Map<string, bigint>;
+  /** Tên các mảnh dùng tới từng cỡ đoạn - CÙNG khoá `"{materialId}:{cutLengthMm}"` với
+   *  segmentSpecLookup (xem buildBomRows để biết vì sao khoá phải dựng đúng kiểu đó). Chỉ để in
+   *  ra bảng TỔNG KẾT cho thợ cắt biết đoạn này là mảnh gì, không tham gia tính toán. 1 cỡ đoạn
+   *  có thể thuộc nhiều mảnh (và nhiều SKU khác nhau khi cắt gộp cả PI) nên là mảng. */
+  segmentNames: Map<string, string[]>;
 };
 
 type CuttingProposalRow = Prisma.CuttingProposalGetPayload<{ include: typeof LIST_INCLUDE }>;
@@ -972,7 +983,7 @@ export class CuttingProposalsService {
     try {
       const job = await buildJob();
       poNumber = job.label;
-      const { bomRows, segmentSpecLookup } = job;
+      const { bomRows, segmentSpecLookup, segmentNames } = job;
       const config = await this.prisma.systemConfig.findUniqueOrThrow({
         where: { id: SYSTEM_CONFIG_ID },
       });
@@ -1075,7 +1086,7 @@ export class CuttingProposalsService {
       };
       const response = await callSolver(requestBody);
 
-      await this.saveSuccess(proposalId, requestBody, response, segmentSpecLookup);
+      await this.saveSuccess(proposalId, requestBody, response, segmentSpecLookup, segmentNames);
 
       // Sếp chốt (2026-08-15): KHÔNG cần QLSX bấm duyệt riêng nữa - tính xong là tự động duyệt
       // luôn (approve()), tự trừ tồn + tự tạo đề xuất mua hàng ngay, không chờ ai thao tác thêm.
@@ -1428,11 +1439,13 @@ export class CuttingProposalsService {
       where: { id: productionOrderId },
       include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
     });
-    const { bomRows, segmentSpecLookup } = await this.buildBomRows(order.bomRevisionId);
+    const { bomRows, segmentSpecLookup, segmentNames } = await this.buildBomRows(
+      order.bomRevisionId,
+    );
     // Nhãn hiện trong thông báo cho Sếp/QLSX ("Đề xuất cắt sắt cho ... đã tính xong") - ưu tiên mã
     // đơn Sales gốc (xem trao đổi 2026-08-18), fallback poNumber nội bộ khi SKU không gắn đơn nào.
     const label = order.productionInvoiceItem.salesOrder?.code ?? order.poNumber;
-    return { label, numSets: order.quantity, bomRows, segmentSpecLookup };
+    return { label, numSets: order.quantity, bomRows, segmentSpecLookup, segmentNames };
   }
 
   /**
@@ -1465,10 +1478,22 @@ export class CuttingProposalsService {
     // thì với solver chỉ là một nhu cầu duy nhất - đây chính là chỗ gộp sinh ra lợi ích.
     const demand = new Map<string, SolverBomRow>();
     const segmentSpecLookup = new Map<string, bigint>();
+    const segmentNames = new Map<string, string[]>();
     for (const { order, code } of orders) {
       const built = await this.buildBomRows(order.bomRevisionId);
       for (const [key, specId] of built.segmentSpecLookup) {
         segmentSpecLookup.set(key, specId);
+      }
+      // Gộp tên mảnh qua CÁC SKU: cùng 1 cỡ đoạn của cùng loại sắt có thể là "chân bàn" của SKU
+      // này và "chân ghế" của SKU kia - bản in phải hiện đủ cả hai thì thợ mới biết đoạn cắt ra
+      // đi về đâu.
+      for (const [key, names] of built.segmentNames) {
+        const merged = segmentNames.get(key);
+        if (merged) {
+          for (const n of names) if (!merged.includes(n)) merged.push(n);
+        } else {
+          segmentNames.set(key, [...names]);
+        }
       }
       for (const row of built.bomRows) {
         const key = `${row.material}:${row.cut_length}`;
@@ -1495,12 +1520,15 @@ export class CuttingProposalsService {
       numSets: 1,
       bomRows: [...demand.values()],
       segmentSpecLookup,
+      segmentNames,
     };
   }
 
-  private async buildBomRows(
-    bomRevisionId: bigint,
-  ): Promise<{ bomRows: SolverBomRow[]; segmentSpecLookup: Map<string, bigint> }> {
+  private async buildBomRows(bomRevisionId: bigint): Promise<{
+    bomRows: SolverBomRow[];
+    segmentSpecLookup: Map<string, bigint>;
+    segmentNames: Map<string, string[]>;
+  }> {
     const [pieceBoms, bomPieces] = await Promise.all([
       this.prisma.pieceBom.findMany({
         where: { bomRevisionId },
@@ -1517,6 +1545,7 @@ export class CuttingProposalsService {
 
     const qtyPerUnitByPieceId = new Map(bomPieces.map((bp) => [bp.pieceId, bp.qtyPerUnit]));
     const segmentSpecLookup = new Map<string, bigint>();
+    const segmentNames = new Map<string, string[]>();
     const bomRows: SolverBomRow[] = pieceBoms.map((row) => {
       // cutLengthMm là Decimal (2026-08-19, xem SegmentSpec) - .toNumber() TRƯỚC khi ghép khoá
       // Map, KHÔNG ghép thẳng Decimal vào template string: Decimal.toString() giữ nguyên số 0
@@ -1524,7 +1553,17 @@ export class CuttingProposalsService {
       // solver) luôn là number thường ("930", không ".0") - ghép sai định dạng làm 2 khoá
       // KHÔNG khớp nhau, tra cứu miss âm thầm (continue ở nhánh "shouldn't happen").
       const cutLengthMm = row.segmentSpec.cutLengthMm.toNumber();
-      segmentSpecLookup.set(`${row.segmentSpec.materialId}:${cutLengthMm}`, row.segmentSpecId);
+      const key = `${row.segmentSpec.materialId}:${cutLengthMm}`;
+      segmentSpecLookup.set(key, row.segmentSpecId);
+      // Tên mảnh cho bảng TỔNG KẾT khi in (2026-08-25) - đọc ngay từ `piece` đã include sẵn ở
+      // query trên, KHÔNG thêm truy vấn nào. Khử trùng vì 2 dòng PieceBom khác nhau của CÙNG một
+      // mảnh vẫn có thể trỏ về cùng cỡ đoạn.
+      const names = segmentNames.get(key);
+      if (names) {
+        if (!names.includes(row.piece.name)) names.push(row.piece.name);
+      } else {
+        segmentNames.set(key, [row.piece.name]);
+      }
       return {
         part: row.piece.name,
         qty_per_set: qtyPerUnitByPieceId.get(row.pieceId) ?? 0,
@@ -1540,7 +1579,34 @@ export class CuttingProposalsService {
       };
     });
 
-    return { bomRows, segmentSpecLookup };
+    return { bomRows, segmentSpecLookup, segmentNames };
+  }
+
+  /**
+   * Tổng kết theo cỡ đoạn cho bản in "TỔNG KẾT CẮT" (layout MC Laser) - xem
+   * CuttingProposalLine.pieceSummary trong schema.prisma.
+   *
+   * Trả `undefined` khi solver không gửi `pieces` (dòng infeasible) để Prisma bỏ qua cột. Sort
+   * `size` GIẢM DẦN cho khớp thứ tự cột của bảng cắt chi tiết ở FE (buildCuttingGuideTable sắp
+   * cỡ dài trước - thợ cắt cỡ dài trước để phần đuôi còn lại đủ cho cỡ ngắn), để 2 bảng trong
+   * cùng một tờ giấy đọc cùng một chiều.
+   */
+  private buildPieceSummary(
+    item: SolverProposeResponse['purchase_plan'][number],
+    segmentNames: Map<string, string[]>,
+  ): Prisma.InputJsonValue | undefined {
+    if (!item.pieces?.length) return undefined;
+    return [...item.pieces]
+      .sort((a, b) => b.size - a.size)
+      .map((p) => ({
+        size: p.size,
+        demand: p.demand,
+        produced: p.produced,
+        // Khoá tra cứu dựng y hệt segmentSpecLookup ở dòng lưu pattern bên dưới - `item.material`
+        // là materialId thô, `p.size` là number thường từ JSON (xem buildBomRows để biết vì sao
+        // KHÔNG được ghép thẳng Decimal vào đây).
+        names: segmentNames.get(`${item.material}:${p.size}`) ?? [],
+      }));
   }
 
   private async saveSuccess(
@@ -1548,6 +1614,7 @@ export class CuttingProposalsService {
     requestBody: unknown,
     response: SolverProposeResponse,
     segmentSpecLookup: Map<string, bigint>,
+    segmentNames: Map<string, string[]>,
   ): Promise<void> {
     // Suy 2 cờ tổng hợp TỪ response gốc trước khi lưu - lý do tồn tại xem comment schema.prisma
     // (hasInfeasibleLine/hasOverThreshold): để màn Cắt sắt lọc/đếm được BẰNG SQL khi poll định kỳ,
@@ -1585,6 +1652,11 @@ export class CuttingProposalsService {
             wastePercentage: item.waste_percentage,
             mauNguyenMm: item.mau_nguyen_mm,
             lengthComparison: item.length_comparison as Prisma.InputJsonValue,
+            // Bảng TỔNG KẾT khi in hướng dẫn cắt (2026-08-25) - ghép `pieces[]` của solver với
+            // tên mảnh dựng từ chính bomRevision vừa gửi đi. undefined (không phải null) khi
+            // solver không trả pieces: dòng infeasible - để Prisma bỏ qua cột thay vì ghi JSON
+            // null, phân biệt được "không có dữ liệu" với "đã tính, rỗng".
+            pieceSummary: this.buildPieceSummary(item, segmentNames),
             // 5 field mới (2026-08-19) - lưu NGUYÊN VĂN những gì solver trả, không diễn giải lại
             // ở đây (xem lý do "luôn dùng bản solver" - changelog 2026-08-15 mục 15.5-(d)). Câu
             // tiếng Việt hiển thị cho người dùng sẽ dựng ở tầng response DTO/FE (đợt sau), không
@@ -1816,6 +1888,7 @@ export class CuttingProposalsService {
       mauNguyenMm: line.mauNguyenMm ? Number(line.mauNguyenMm) : null,
       lengthComparison: line.lengthComparison as
         { length: number; bars: number; wastePct: number }[] | null,
+      pieceSummary: line.pieceSummary as CuttingProposalPieceSummaryResponseDto[] | null,
       reason: line.reason,
       bestAchievable: line.bestAchievable as {
         length: number;
