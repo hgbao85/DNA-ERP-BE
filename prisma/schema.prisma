@@ -80,6 +80,7 @@ model User {
   cuttingProposalsApproved          CuttingProposal[]           @relation("CuttingProposalApprovedBy")
   transferCheckResults              TransferCheckResult[]       @relation("TransferCheckCheckedBy")
   purchaseProposalsApproved         PurchaseProposal[]
+  purchaseProposalItemsApproved     PurchaseProposalItem[]
   stockLedgerEntries                StockLedger[]
   stockReservations                 StockReservation[]
   materialsToBuy                    Material[]
@@ -1587,11 +1588,28 @@ model PurchaseProposalItem {
   /// không dùng để tính tồn kho (receivedQty theo unit mới là số chốt vào StockLedger).
   receivedQtyPurchaseUnit Decimal? @db.Decimal(14, 4)
 
-  proposal PurchaseProposal        @relation(fields: [proposalId], references: [id])
-  material Material                @relation(fields: [materialId], references: [id])
-  quotes   PurchaseProposalQuote[]
+  /// State machine cấp ITEM (2026-08-25, "duyệt riêng từng người mua hàng") - trước đó chỉ có
+  /// PurchaseProposal.status cho CẢ record, không tách được khi 1 đề xuất gộp nhiều người mua
+  /// (Material.buyerId khác nhau) - người này báo giá/được duyệt xong phải đợi người kia mới gửi/
+  /// duyệt được. Giờ mỗi dòng tự chuyển NEW -> QUOTING -> SUBMITTED -> PURCHASING -> PURCHASED,
+  /// hoặc SUBMITTED -> REJECTED -> QUOTING, ĐỘC LẬP theo từng dòng. PurchaseProposal.status vẫn
+  /// còn nhưng chỉ là ROLLUP suy ra từ các dòng này (xem PurchaseProposalsService.
+  /// recomputeProposalStatus()), không còn là nguồn sự thật cho gate nghiệp vụ.
+  status          PurchaseProposalStatus @default(NEW)
+  submittedAt     DateTime?
+  approvedAt      DateTime?
+  approvedById    String?
+  rejectedAt      DateTime?
+  rejectionReason String?
+  purchasedAt     DateTime?
+
+  proposal   PurchaseProposal        @relation(fields: [proposalId], references: [id])
+  material   Material                @relation(fields: [materialId], references: [id])
+  quotes     PurchaseProposalQuote[]
+  approvedBy User?                   @relation(fields: [approvedById], references: [id])
 
   @@index([proposalId])
+  @@index([status])
   @@map("purchase_proposal_items")
 }
 

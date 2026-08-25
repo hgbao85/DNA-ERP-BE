@@ -11,9 +11,15 @@ describe('PieceMaterialYieldPurchaseService', () => {
     productionOrder: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     pieceMaterialYield: { findMany: jest.Mock };
-    purchaseProposal: { findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
-    purchaseProposalItem: { update: jest.Mock };
+    purchaseProposal: {
+      findFirst: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
+    };
+    purchaseProposalItem: { update: jest.Mock; create: jest.Mock; findMany: jest.Mock };
     $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   };
   let productionBatchesService: { getReadyPoolQty: jest.Mock };
@@ -23,6 +29,7 @@ describe('PieceMaterialYieldPurchaseService', () => {
   const thanhNhom = { id: 80n, code: 'NHOM-01', warehouse: { id: 95n, code: 'kho-nhom' } };
 
   const qtyRow = (qty: number) => Promise.resolve([{ qty: { toNumber: () => qty } }]);
+  const decimal = (n: number) => ({ toNumber: () => n });
 
   beforeEach(() => {
     prisma = {
@@ -50,11 +57,50 @@ describe('PieceMaterialYieldPurchaseService', () => {
       },
       purchaseProposal: {
         findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockResolvedValue({ id: 900n, status: PurchaseProposalStatus.NEW }),
-        update: jest.fn().mockResolvedValue({ id: 900n, status: PurchaseProposalStatus.PURCHASED }),
+        // items trả về derive THẲNG từ args.data.items.create - phản ánh đúng buyQty vừa tính,
+        // để check allCovered đọc found.items ngay sau create() (không cần findUniqueOrThrow
+        // riêng ở nhánh tạo mới, khác nhánh gộp vào proposal có sẵn bên dưới).
+        create: jest.fn(
+          (args: {
+            data: {
+              items: { create: { materialId: bigint; buyQty: number; actualStock: number }[] };
+            };
+          }) =>
+            Promise.resolve({
+              id: 900n,
+              status: PurchaseProposalStatus.NEW,
+              items: args.data.items.create.map((it, i) => ({
+                id: 950n + BigInt(i),
+                materialId: it.materialId,
+                buyQty: decimal(it.buyQty),
+              })),
+            }),
+        ),
+        update: jest.fn().mockResolvedValue({
+          id: 900n,
+          status: PurchaseProposalStatus.PURCHASED,
+          items: [{ id: 950n, materialId: 80n, buyQty: decimal(0) }],
+        }),
+        // Dùng ở nhánh "đã có proposal NEW" sau khi update/create item lẻ - re-fetch để đọc
+        // allCovered trên TOÀN BỘ items mới nhất. Mặc định buyQty=7 khớp kịch bản chính (tồn
+        // 20/100, chưa đủ) - test nào cần buyQty=0 tự override.
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          id: 900n,
+          status: PurchaseProposalStatus.NEW,
+          items: [{ id: 950n, materialId: 80n, buyQty: decimal(7) }],
+        }),
       },
-      purchaseProposalItem: { update: jest.fn() },
+      purchaseProposalItem: {
+        update: jest.fn(),
+        create: jest.fn(),
+        // recomputeProposalStatus() (purchase-proposal-status.util.ts) đọc TƯƠI status của mọi
+        // item sau khi create/update xong - mặc định 1 dòng NEW, test nào cần kiểm rollup cụ thể
+        // (vd "buyQty=0 -> PURCHASED") tự override.
+        findMany: jest.fn().mockResolvedValue([{ status: PurchaseProposalStatus.NEW }]),
+      },
       $queryRaw: jest.fn(() => qtyRow(0)),
+      // lockBusinessKey() (khoá gộp theo PI, 2026-08-25) dùng $executeRaw - no-op ở test.
+      $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     productionBatchesService = { getReadyPoolQty: jest.fn().mockResolvedValue(new Map()) };
@@ -116,25 +162,50 @@ describe('PieceMaterialYieldPurchaseService', () => {
         warehouseCode: 'kho-nhom',
         items: { create: [{ materialId: 80n, buyQty: 7, actualStock: 0 }] },
       },
+      include: { items: true },
     });
   });
 
-  it('tồn nguyên liệu đã đủ (buyQty=0) - tạo proposal ở trạng thái PURCHASED ngay, không kẹt NEW', async () => {
+  it('tồn nguyên liệu đã đủ (buyQty=0) - item.status=PURCHASED ngay lúc tạo, rollup cấp proposal cũng PURCHASED', async () => {
     // required = 100, onHand pool = 0 -> net=100 -> barsNeeded = ceil(100/12) = 9.
     // actualStock (thanh nhôm) = 9 -> buyQty = 0.
     prisma.$queryRaw.mockResolvedValue(await qtyRow(9));
+    // recomputeProposalStatus() đọc TƯƠI - mô phỏng đúng item vừa tạo với buyQty=0 -> PURCHASED.
+    prisma.purchaseProposalItem.findMany.mockResolvedValue([
+      { status: PurchaseProposalStatus.PURCHASED },
+    ]);
+    // findUniqueOrThrow() re-fetch SAU recomputeProposalStatus() - phải phản ánh đúng rollup mới.
+    prisma.purchaseProposal.findUniqueOrThrow.mockResolvedValue({
+      id: 900n,
+      status: PurchaseProposalStatus.PURCHASED,
+      items: [{ id: 950n, materialId: 80n, buyQty: decimal(0) }],
+    });
 
     const result = await service.computeAndUpsertProposals('1');
 
     expect(result[0].buyQty).toBe(0);
+    // 2026-08-25: item.status=PURCHASED được set NGAY lúc create() (không còn 1 lệnh update()
+    // riêng gán thẳng status cấp cha như thiết kế cũ) - recomputeProposalStatus() mới là nơi ghi
+    // rollup cấp proposal, cùng idiom ConsumableMaterialPurchaseService.
     expect(prisma.purchaseProposal.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          status: PurchaseProposalStatus.PURCHASED,
-          purchasedAt: expect.any(Date) as Date,
+          items: {
+            create: [
+              expect.objectContaining({
+                status: PurchaseProposalStatus.PURCHASED,
+                purchasedAt: expect.any(Date) as Date,
+              }) as unknown,
+            ],
+          },
         }) as unknown,
       }),
     );
+    expect(prisma.purchaseProposal.update).toHaveBeenCalledWith({
+      where: { id: 900n },
+      data: { status: PurchaseProposalStatus.PURCHASED },
+    });
+    expect(result[0].purchaseProposalStatus).toBe(PurchaseProposalStatus.PURCHASED);
   });
 
   it('đã có proposal NEW cho đúng (PI, material) - cập nhật lại item thay vì tạo mới', async () => {
@@ -155,17 +226,22 @@ describe('PieceMaterialYieldPurchaseService', () => {
     expect(result[0].purchaseProposalId).toBe('900');
   });
 
-  it('proposal đã qua NEW (SUBMITTED) - findFirst chỉ khớp status=NEW nên tạo mới, không sửa đề xuất đã gửi duyệt', async () => {
-    // findFirst mock mặc định lọc where.status=NEW ở tầng DB thật; ở unit test findFirst luôn
-    // trả về giá trị mock bất kể where - test này xác nhận đúng where đã truyền đi.
+  // 2026-08-25: findFirst KHÔNG còn lọc theo sourceType/items.some(materialId) - đề xuất giờ
+  // gộp CHUNG theo cả PI (bất kể vật tư nào, nguồn nào), để merge được với đề xuất do
+  // CuttingProposalsService/ConsumableMaterialPurchaseService tạo cho cùng PI (xem khoá
+  // "purchase-proposal-merge:<piId>" dùng chung ở cả 3 nơi). CŨNG KHÔNG còn lọc cứng
+  // status=NEW nữa (sửa cùng lúc với chuyển state machine xuống cấp item) - rollup rời NEW
+  // ngay khi có 1 dòng bất kỳ được acknowledge, sớm hơn hẳn trước đây; lọc cứng NEW sẽ khiến
+  // nguồn này ngừng gộp được vào đề xuất đã có ai bắt đầu xử lý. Đổi sang "còn mở" (khác
+  // PURCHASED). findFirst mock mặc định trả về giá trị mock bất kể where - test này xác nhận
+  // đúng where đã truyền đi.
+  it('findFirst gộp theo PI, còn mở (khác PURCHASED) - không lọc theo sourceType/materialId/NEW riêng', async () => {
     await service.computeAndUpsertProposals('1');
 
     expect(prisma.purchaseProposal.findFirst).toHaveBeenCalledWith({
       where: {
         productionInvoiceId: 1n,
-        sourceType: PurchaseProposalSource.PIECE_MATERIAL_YIELD,
-        status: PurchaseProposalStatus.NEW,
-        items: { some: { materialId: 80n } },
+        status: { not: PurchaseProposalStatus.PURCHASED },
       },
       include: { items: true },
     });

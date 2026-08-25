@@ -42,6 +42,16 @@ export class PurchaseProposalItemResponseDto {
   /// Cộng dồn số lượng thực nhận theo purchaseUnit - chỉ để đối chiếu/audit, xem
   /// PurchaseProposalItem.receivedQtyPurchaseUnit.
   @Expose() @ApiPropertyOptional({ nullable: true }) receivedQtyPurchaseUnit!: number | null;
+  /// State machine THẬT (2026-08-25, "duyệt riêng từng người mua hàng") - NEW -> QUOTING ->
+  /// SUBMITTED -> PURCHASING -> PURCHASED, hoặc SUBMITTED -> REJECTED -> QUOTING, ĐỘC LẬP theo
+  /// từng dòng. PurchaseProposalResponseDto.status (cấp đề xuất) chỉ còn là ROLLUP suy ra từ các
+  /// dòng này, KHÔNG dùng để quyết định 1 dòng cụ thể đang làm được thao tác gì.
+  @Expose() @ApiProperty({ enum: PurchaseProposalStatus }) status!: PurchaseProposalStatus;
+  @Expose() @ApiPropertyOptional({ nullable: true }) submittedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) approvedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) rejectedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) rejectionReason!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) purchasedAt!: Date | null;
   @Expose()
   @ApiProperty({ type: [PurchaseProposalQuoteResponseDto] })
   @Type(() => PurchaseProposalQuoteResponseDto)
@@ -60,6 +70,10 @@ export class PurchaseProposalResponseDto {
   /// KHÔNG dùng để nhận hàng. Nguồn xác thực thật là từng PurchaseProposalItem.warehouseCode ở
   /// trên, vì 1 đề xuất có thể gồm nhiều vật tư khác kho nhau.
   @Expose() @ApiProperty() warehouseCode!: string;
+  /// ROLLUP (2026-08-25) - suy ra từ status của TỪNG DÒNG (PurchaseProposalItemResponseDto.status,
+  /// xem recomputeProposalStatus()), không còn là nguồn sự thật cho gate nghiệp vụ. Dùng để lọc
+  /// hàng-đợi (activeOnly) và hiển thị tổng quát (màn Admin) - KHÔNG dùng để biết 1 dòng vật tư cụ
+  /// thể đang làm được thao tác gì, vì 1 đề xuất gộp có thể có dòng PURCHASING cạnh dòng QUOTING.
   @Expose() @ApiProperty({ enum: PurchaseProposalStatus }) status!: PurchaseProposalStatus;
   /// PO nội bộ (ProductionOrder.poNumber) - CHỈ để hệ thống tra cứu/debug, không còn ý nghĩa hiển
   /// thị cho người dùng (xem trao đổi 2026-08-18) - FE dùng `salesOrderCode` bên dưới thay thế

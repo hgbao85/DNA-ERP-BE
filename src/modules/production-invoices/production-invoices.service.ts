@@ -680,37 +680,48 @@ export class ProductionInvoicesService {
     // đã tạo thành công).
     if (productionOrder) {
       try {
+        // 2 trigger đề xuất mua còn lại (VTTP + tiêu hao phẳng) CỐ Ý dồn vào onComplete - chờ
+        // đề xuất mua sắt tính xong (dù thành công/chặn/lỗi) rồi mới tính, thay vì bắn song song
+        // như trước 2026-08-24. Steel chạy nền qua solver ngoài (vài chục giây tới vài phút),
+        // 2 trigger kia lại tính ngay lập tức - Mua hàng thấy đề xuất vật tư tiêu hao hiện ra
+        // trước, đề xuất sắt "CALCULATING" mãi mới tới, rời rạc không đồng bộ. Gộp cả 3 đề xuất
+        // mua của 1 PI xuất hiện cùng lúc, sau khi phần chậm nhất (sắt) đã xong.
         await this.cuttingProposalsService.requestForOrder(productionOrder.id, {
           requestedById: actorUserId,
+          onComplete: async () => {
+            // Cùng idiom trigger cắt sắt - tính lại nhu cầu mua nguyên liệu "vật tư thành phẩm"
+            // (PieceMaterialYield, vd thanh nhôm/tấm sắt lá) cho CẢ PI mỗi khi có thêm 1 SKU được
+            // duyệt, không phải nút bấm riêng (không có màn hình riêng, xem changelog 2026-08-22
+            // mục 15) - best-effort, tách try/catch riêng để không lẫn lỗi với trigger kia.
+            try {
+              await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(
+                pi.id.toString(),
+              );
+            } catch (error) {
+              this.logger.error(
+                `Auto piece-material-yield-purchase trigger failed for PI item ${item.id}: ${(error as Error).message}`,
+              );
+            }
+
+            // Cùng idiom - tính nhu cầu mua vật tư tiêu hao phẳng (Dây/Đinh/Tán rút/Nút nhựa/
+            // Sơn/Phụ kiện/Bao bì). Trước đây KHÔNG có gì tự tạo PurchaseProposal cho 3 nguồn này
+            // (chỉ có "Lệnh kiểm tra vật tư" thủ công trong schema, chưa từng cài đặt) - người mua
+            // hàng được gán (Material.buyerId) không bao giờ thấy đề xuất nào dù SKU đã duyệt.
+            // Quyết định nghiệp vụ 2026-08-22: tự động hoàn toàn, bỏ qua bước kiểm tra kho thủ công.
+            try {
+              await this.consumableMaterialPurchaseService.computeAndUpsertProposals(
+                pi.id.toString(),
+              );
+            } catch (error) {
+              this.logger.error(
+                `Auto consumable-material-purchase trigger failed for PI item ${item.id}: ${(error as Error).message}`,
+              );
+            }
+          },
         });
       } catch (error) {
         this.logger.error(
           `Auto cutting-proposal trigger failed for PI item ${item.id}: ${(error as Error).message}`,
-        );
-      }
-
-      // Cùng idiom trigger cắt sắt ở trên - tính lại nhu cầu mua nguyên liệu "vật tư thành phẩm"
-      // (PieceMaterialYield, vd thanh nhôm/tấm sắt lá) cho CẢ PI mỗi khi có thêm 1 SKU được duyệt,
-      // không phải nút bấm riêng (không có màn hình riêng cho việc này, xem changelog 2026-08-22
-      // mục 15) - best-effort, tách try/catch riêng để không lẫn lỗi với trigger cắt sắt ở trên.
-      try {
-        await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(pi.id.toString());
-      } catch (error) {
-        this.logger.error(
-          `Auto piece-material-yield-purchase trigger failed for PI item ${item.id}: ${(error as Error).message}`,
-        );
-      }
-
-      // Cùng idiom 2 trigger ở trên - tính nhu cầu mua vật tư tiêu hao phẳng (Dây/Đinh/Tán rút/
-      // Nút nhựa/Sơn/Phụ kiện/Bao bì). Trước đây KHÔNG có gì tự tạo PurchaseProposal cho 3 nguồn
-      // này (chỉ có "Lệnh kiểm tra vật tư" thủ công trong schema, chưa từng cài đặt) - người mua
-      // hàng được gán (Material.buyerId) không bao giờ thấy đề xuất nào dù SKU đã duyệt. Quyết
-      // định nghiệp vụ 2026-08-22: tự động hoàn toàn, bỏ qua bước kiểm tra kho thủ công.
-      try {
-        await this.consumableMaterialPurchaseService.computeAndUpsertProposals(pi.id.toString());
-      } catch (error) {
-        this.logger.error(
-          `Auto consumable-material-purchase trigger failed for PI item ${item.id}: ${(error as Error).message}`,
         );
       }
     }
@@ -913,9 +924,35 @@ export class ProductionInvoicesService {
       data: { status: ProductionInvoiceStatus.PRODUCING },
     });
 
-    // Best-effort như trigger đơn lẻ: không được phép làm hỏng việc duyệt đã ghi ở trên.
+    // Best-effort như trigger đơn lẻ: không được phép làm hỏng việc duyệt đã ghi ở trên. Cùng
+    // idiom approveItem() (2026-08-24) - 2 trigger mua VTTP/tiêu hao dồn vào onComplete, chỉ chạy
+    // SAU khi đề xuất mua sắt của cả cụm gộp tính xong. Trước đây PI gộp KHÔNG có 2 trigger này
+    // (chỉ trigger sắt) - người mua hàng phụ trách VTTP/tiêu hao không bao giờ thấy đề xuất nào
+    // cho PI gộp dù SKU đã duyệt và có định mức thật.
     try {
-      await this.cuttingProposalsService.requestForInvoice(pi.id, { requestedById: actorUserId });
+      await this.cuttingProposalsService.requestForInvoice(pi.id, {
+        requestedById: actorUserId,
+        onComplete: async () => {
+          try {
+            await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(
+              pi.id.toString(),
+            );
+          } catch (error) {
+            this.logger.error(
+              `Auto piece-material-yield-purchase trigger failed for merged PI ${pi.id}: ${(error as Error).message}`,
+            );
+          }
+          try {
+            await this.consumableMaterialPurchaseService.computeAndUpsertProposals(
+              pi.id.toString(),
+            );
+          } catch (error) {
+            this.logger.error(
+              `Auto consumable-material-purchase trigger failed for merged PI ${pi.id}: ${(error as Error).message}`,
+            );
+          }
+        },
+      });
     } catch (error) {
       this.logger.error(
         `Auto cutting-proposal trigger failed for merged PI ${pi.id}: ${(error as Error).message}`,

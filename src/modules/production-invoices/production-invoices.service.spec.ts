@@ -128,8 +128,22 @@ describe('ProductionInvoicesService', () => {
       assertActiveBomRevisionExists: jest.fn().mockResolvedValue(undefined),
     };
     cuttingProposalsService = {
-      requestForOrder: jest.fn().mockResolvedValue({ id: '1' }),
-      requestForInvoice: jest.fn().mockResolvedValue({ id: '2' }),
+      // Mock gọi luôn onComplete (nếu có) để mô phỏng finally block thật của runSolverAndSave() -
+      // các test bên dưới cần pieceMaterialYieldPurchaseService/consumableMaterialPurchaseService
+      // thực sự được gọi sau requestForOrder, đúng thứ tự "Đề xuất mua hàng hiển thị sau khi Tính
+      // đề xuất mua sắt xong" (2026-08-24).
+      requestForOrder: jest.fn(
+        async (_id: bigint, options?: { onComplete?: () => void | Promise<void> }) => {
+          await options?.onComplete?.();
+          return { id: '1' };
+        },
+      ),
+      requestForInvoice: jest.fn(
+        async (_id: bigint, options?: { onComplete?: () => void | Promise<void> }) => {
+          await options?.onComplete?.();
+          return { id: '2' };
+        },
+      ),
     };
     pieceMaterialYieldPurchaseService = {
       computeAndUpsertProposals: jest.fn().mockResolvedValue([]),
@@ -359,10 +373,36 @@ describe('ProductionInvoicesService', () => {
       expect(cuttingProposalsService.requestForInvoice).toHaveBeenCalledTimes(1);
       expect(cuttingProposalsService.requestForInvoice).toHaveBeenCalledWith(50n, {
         requestedById: 'user-boss',
+        onComplete: expect.any(Function) as () => void,
       });
       expect(cuttingProposalsService.requestForOrder).not.toHaveBeenCalled();
       // Mỗi SKU vẫn có lệnh sản xuất riêng của nó (Phôi/Hàn/Sơn chạy theo SKU như cũ).
       expect(productionOrdersService.createFromApproval).toHaveBeenCalledTimes(2);
+      // Cùng idiom approveItem() (2026-08-24) - PI gộp giờ cũng trigger 2 đề xuất mua VTTP/tiêu
+      // hao, dồn vào onComplete để chạy SAU khi đề xuất mua sắt của cả cụm tính xong.
+      expect(pieceMaterialYieldPurchaseService.computeAndUpsertProposals).toHaveBeenCalledWith(
+        '50',
+      );
+      expect(consumableMaterialPurchaseService.computeAndUpsertProposals).toHaveBeenCalledWith(
+        '50',
+      );
+    });
+
+    it('best-effort: vẫn duyệt cả cụm thành công dù trigger tính nhu cầu mua vật tư thành phẩm/tiêu hao lỗi', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        mergedPi([piItem({ id: 20n, salesOrderId: 1n, prodApprovalStatus: 'WAITING_BOSS' })]),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 1 });
+      pieceMaterialYieldPurchaseService.computeAndUpsertProposals.mockRejectedValue(
+        new Error('material chưa có Kho'),
+      );
+      consumableMaterialPurchaseService.computeAndUpsertProposals.mockRejectedValue(
+        new Error('material chưa có Kho'),
+      );
+
+      await service.approveBatch('50', 'user-boss');
+
+      expect(cuttingProposalsService.requestForInvoice).toHaveBeenCalledTimes(1);
     });
 
     it('kiểm định mức của MỌI SKU trước khi ghi gì - thiếu 1 cái là dừng cả cụm', async () => {
@@ -720,6 +760,7 @@ describe('ProductionInvoicesService', () => {
       expect(productionOrdersService.createFromApproval).toHaveBeenCalledWith(20n, 2n, 10);
       expect(cuttingProposalsService.requestForOrder).toHaveBeenCalledWith(99n, {
         requestedById: 'user-boss',
+        onComplete: expect.any(Function) as () => void,
       });
       expect(prisma.productionInvoice.update).toHaveBeenCalledWith({
         where: { id: 7n },

@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Rà soát Mua hàng — phân công theo người mua + gộp đề xuất mua thành 1 form</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.part-divider{
+  margin-top:3.4rem; padding-top:1.4rem; border-top:2px solid var(--line-strong);
+  display:flex; align-items:baseline; gap:.7rem; flex-wrap:wrap;
+}
+.part-divider .n{font-family:var(--mono); font-size:.78rem; color:var(--accent-ink); font-weight:700; letter-spacing:.06em}
+.part-divider h2{font-family:var(--serif); font-size:1.55rem; font-weight:600; margin:0}
+.part-divider .sub{color:var(--ink-soft); font-size:.9rem; width:100%; max-width:66ch}
+
+.module{margin-top:2.4rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">25/08/2026 · Rà soát + sửa lỗi + tính năng mới, cả 2 repo (DNA-ERP-BE + DNA-ERP)</div>
+    <h1>Rà soát Mua hàng: phân công theo người mua đã có nhưng bị gộp nhầm, và gộp đề xuất sắt/vật tư khác thành 1 form</h1>
+    <p class="lede">
+      Xuất phát từ báo cáo thực tế trên PI-2026-012: "3 acc mua hàng đề xuất mua giống nhau" và
+      "không thấy sắt đâu cả". Điều tra ra 2 nguyên nhân khác hẳn nhau — 1 cái là bug thật (đã sửa cả
+      FE lẫn BE), 1 cái là hiểu lầm (sắt vẫn còn, chỉ nằm ở form khác) — rồi từ đó làm luôn tính năng
+      mới: gộp sắt + vật tư khác của cùng 1 PI thành ĐÚNG 1 form mua hàng duy nhất.
+    </p>
+    <div class="meta">
+      <span>25/08/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>10 file sửa · 3 test suite cập nhật · kiểm chứng bằng UI thật (đăng nhập nhiều vai trò)</span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li><b>Bug thật đã sửa:</b> 1 đề xuất mua gộp nhiều vật tư của nhiều người mua khác nhau — trước đây ai được gán ≥1 dòng cũng thấy/báo giá được TOÀN BỘ đề xuất (kể cả phần không phải của mình). Giờ mỗi người chỉ thao tác đúng phần của mình; phần còn lại hiện read-only.</li>
+      <li><b>Không phải bug:</b> "sắt biến mất" — thực ra sắt đi qua 1 đề xuất RIÊNG (nguồn <code>CUTTING_PROPOSAL</code>, tách khỏi vật tư tiêu hao), nằm ở dòng khác trong "Danh sách", không hề mất.</li>
+      <li><b>Tính năng mới:</b> làm hẳn việc gộp 3 nguồn (sắt / nguyên liệu piece / vật tư tiêu hao) của CÙNG 1 PI vào ĐÚNG 1 <code>PurchaseProposal</code> — giữ nguyên trình tự có sẵn "đợi sắt tính xong rồi mới tính phần còn lại" (2026-08-24), chỉ đổi chỗ ghi từ "mỗi nguồn 1 dòng" sang "tìm-hoặc-gộp vào dòng chung".</li>
+      <li><b>Bug phụ tìm thấy khi sửa và vá luôn:</b> nhận hàng (<code>receiveItem</code>) từng cộng nhầm StockReservation cho vật tư KHÔNG PHẢI sắt nếu đề xuất đó có gộp sắt; và đề xuất nguồn <code>CONSUMABLE_AUTO_CALC</code> trước đó KHÔNG THỂ nhận hàng được (luôn throw) do thiếu 1 ngoại lệ.</li>
+      <li><b>Đã kiểm chứng bằng UI thật:</b> tạo hẳn 1 đơn hàng mới (PO-46 → PI-2026-014), đăng nhập lần lượt Sales/KHSX/QLSX/Sếp/Mua hàng, xác nhận Mua hàng chỉ thấy đúng 1 dòng cho cả sắt lẫn vật tư khác.</li>
+      <li><b>Cập nhật tiếp theo (cùng ngày, mục 7):</b> đánh đổi ở mục 6 ("Sếp phải đợi đủ cả PI mới duyệt được") đã được gỡ bỏ — chuyển state machine (NEW→QUOTING→SUBMITTED→PURCHASING→PURCHASED) từ cấp <code>PurchaseProposal</code> xuống cấp <code>PurchaseProposalItem</code>, Sếp giờ duyệt được riêng từng người mua hàng.</li>
+      <li><b>Cập nhật tiếp theo (mục 8):</b> ô "Ngày dự kiến về" khi báo giá giờ tự điền sẵn theo deadline mua hàng KHSX đã chốt (Mua hàng vẫn sửa tay được nếu NCC hẹn khác đi).</li>
+      <li><b>Bug tiếp theo tìm thấy qua dùng thật, đã vá (mục 9):</b> màn "So sánh giá" của Sếp vẫn gộp phẳng mọi người mua vào 1 danh sách/1 cặp nút Duyệt-Từ chối — nếu 2 người CÙNG LÚC đang chờ duyệt trong 1 đơn gộp, Từ chối 1 người sẽ dính luôn người kia. Giờ Sếp bấm vào đơn sẽ thấy danh sách người đề xuất trước, chọn đúng người rồi Duyệt/Từ chối mới hiện ra bên trong.</li>
+    </ul>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span><span class="badge b-be">BE</span> 1. Bug thật: đề xuất gộp nhiều người mua bị lộ hết cho nhau</h2>
+    <p class="module-note">
+      <code>Material.buyerId</code> đã gán đúng người phụ trách cho từng vật tư từ trước — nhưng cơ
+      chế lọc (<code>purchasingRouting.ts#canPurchaserSeeProposal</code>) chỉ xét ở CẤP ĐỀ XUẤT: có
+      ≥1 dòng của mình là được vào xem/thao tác CẢ đề xuất, kể cả các dòng của đồng nghiệp khác
+      trong cùng đề xuất gộp đó. Với PI-2026-012, 3 nhân viên mua hàng (Nhàn/Trâm/Nghi) đều có dòng
+      trong cùng 1 đề xuất tiêu hao → cả 3 thấy y hệt 14 dòng như nhau.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">src/utils/purchasingRouting.ts <span class="pill p-add">FE</span></td><td>Thêm <code>isItemMine()</code>/<code>splitItemsByOwner()</code> — tách item của 1 đề xuất thành "của tôi" (thao tác được) vs "của người khác" (chỉ xem trạng thái).</td></tr>
+          <tr><td class="path">LenhMuaNCCPage.tsx <span class="pill p-chg">FE</span></td><td>Màn "chờ báo giá" và "đang báo giá" chỉ hiện/cho sửa đúng phần của người đang đăng nhập; phần còn lại hiện gọn thành 1 khối read-only "N vật tư khác do đồng nghiệp phụ trách". Thêm nút <b>"Lưu báo giá"</b> tách khỏi "Gửi Giám đốc duyệt" — cần thiết vì giờ 2 người có thể cùng báo giá 2 phần khác nhau của 1 đề xuất, không ai được submit thay khi phần kia chưa xong.</td></tr>
+          <tr><td class="path">purchasing-api.ts / InspectionContext.tsx <span class="pill p-chg">FE</span></td><td>Thêm hàm lưu báo giá không kèm submit; gửi báo giá giờ bỏ qua dòng đã lưu rồi (theo <code>quote.id</code>) để bấm Lưu/Gửi nhiều lần không tạo trùng báo giá.</td></tr>
+          <tr><td class="path">purchase-proposals.service.ts <span class="pill p-add">BE</span></td><td>Thêm <code>assertActorMayQuoteItem()</code> — <code>addQuote()</code> giờ chặn cứng ở tầng BE nếu cố báo giá vật tư đã gán cho người khác (trước chỉ chặn ở FE, gọi thẳng API là né được).</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 2. Không phải bug: "sắt biến mất" là 2 form riêng, không phải mất</h2>
+    <p class="module-note">
+      Tra thẳng DB cho PI-2026-012: đề xuất mua sắt (<code>sourceType=CUTTING_PROPOSAL</code>,
+      4 dòng: Sắt hộp/vuông/phi) tồn tại, trạng thái <code>NEW</code>, không hề bị lọc mất — chỉ là
+      nó nằm ở 1 dòng KHÁC trong "Danh sách" so với đề xuất "Vật tư thành phẩm" (14 dòng tiêu hao)
+      mà người dùng đang mở. Nguyên nhân kiến trúc: sắt phụ thuộc bộ giải bin-packing bên ngoài
+      (chậm, có thể lỗi), còn vật tư tiêu hao tính ngay lập tức — 2 luồng vốn tách nhau nên trước đây
+      luôn ra 2 dòng riêng cho cùng 1 PI. Đây chính là động lực cho mục 3 bên dưới.
+    </p>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 3. Tính năng mới: gộp sắt + vật tư khác thành 1 form</h2>
+    <p class="module-note">
+      Yêu cầu: <i>"Phải đợi tính đề xuất sắt xong rồi mới thực hiện đề xuất các vật tư sau. Sau đó
+      hiển thị ra 1 form duy nhất."</i> Trình tự "đợi sắt xong rồi mới tính tiếp" đã có sẵn từ
+      24/08 (<code>ProductionInvoicesService</code> gọi <code>onComplete</code> callback SAU khi
+      <code>CuttingProposalsService</code> xong việc). Phần còn thiếu: 3 nguồn vẫn tự tạo
+      <code>PurchaseProposal</code> RIÊNG của mình — sửa để cả 3 tìm-hoặc-gộp vào ĐÚNG 1 bản ghi.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">cutting-proposals.service.ts <span class="pill p-chg">BE</span></td><td><code>approve()</code>: thay tạo mới vô điều kiện bằng tìm đề xuất <code>NEW</code> đã có sẵn của cùng PI (khoá theo PI qua <code>lockBusinessKey</code>) — nếu có thì ghi thêm dòng sắt vào đó, set nốt <code>productionInvoiceId</code> (trước đây field này luôn bị bỏ trống ở nguồn sắt); nếu chưa có thì tạo mới như cũ.</td></tr>
+          <tr><td class="path">consumable-material-purchase.service.ts <span class="pill p-chg">BE</span></td><td>Bỏ điều kiện lọc theo <code>sourceType</code> khi tìm đề xuất <code>NEW</code> của PI — giờ tìm theo đúng PI thôi, để gộp được với đề xuất nguồn khác đã tạo trước.</td></tr>
+          <tr><td class="path">piece-material-yield-purchase.service.ts <span class="pill p-chg">BE</span></td><td>Viết lại từ "mỗi vật tư 1 transaction/1 đề xuất riêng" (tự nó cũng bị vỡ thành nhiều dòng nếu PI cần ≥2 loại nguyên liệu piece) sang 1 transaction cho CẢ PI, cùng khoá và cùng kiểu tìm-hoặc-gộp như 2 file trên.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok">
+      <b>Giới hạn phạm vi có chủ đích:</b> gộp chắc chắn đúng cho PI gộp và PI thường 1 SKU. PI
+      thường có ≥2 SKU cắt riêng (mỗi SKU tự có <code>CuttingProposal</code> neo theo
+      <code>productionOrderId</code> khác nhau) vẫn ra nhiều đề xuất sắt như cũ — muốn gộp cả case
+      này cần đổi <code>cuttingProposalId</code> từ field 1-1 cấp đề xuất sang cấp item, rủi ro/công
+      sức lớn hơn nhiều so với lợi ích vì đây không phải cách dùng phổ biến.
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 4. Bug phụ tìm thấy khi sửa mục 3 — vá luôn vì liên quan trực tiếp</h2>
+    <div class="callout bad">
+      <b>StockReservation mồ côi khi nhận hàng đề xuất gộp:</b> <code>receiveItem()</code> cũ quyết
+      định có cộng vào ô giữ chỗ (<code>topUpFromReceipt</code>) hay không dựa vào CẤP ĐỀ XUẤT (có
+      <code>cuttingProposalId</code> là cộng). Với đề xuất gộp (có cả sắt lẫn vật tư khác), nhận hàng
+      1 vật tư KHÔNG PHẢI sắt vẫn bị cộng nhầm vào giữ chỗ của phương án cắt sắt — tạo ra 1
+      <code>StockReservation</code> giả, sai lệch số liệu "còn giữ chỗ bao nhiêu cây sắt" mà
+      <code>SteelIssuesService</code> đang đọc. Đã sửa: soi đúng <code>CuttingProposalLine</code> của
+      TỪNG DÒNG đang nhận, chỉ cộng khi đúng là sắt của phương án đó.
+    </div>
+    <div class="callout bad">
+      <b>Đề xuất tiêu hao (<code>CONSUMABLE_AUTO_CALC</code>) không nhận hàng được:</b> check cũ
+      throw <code>BadRequestException</code> khi thiếu <code>cuttingProposalId</code> trừ khi
+      <code>sourceType=PIECE_MATERIAL_YIELD</code> — bỏ sót luôn cả nguồn tiêu hao (cũng không bao
+      giờ có <code>cuttingProposalId</code>). Kết quả: Thủ kho không bao giờ xác nhận nhận hàng được
+      cho bất kỳ đề xuất vật tư tiêu hao nào từ trước tới giờ. Sửa cùng lúc với fix ở trên (bỏ hẳn
+      check theo <code>sourceType</code> cấp đề xuất, chuyển hẳn xuống soi theo item).
+    </div>
+    <p class="module-note">
+      <code>purchase-proposals.service.ts</code> — cả 3 nguồn giờ đều test được qua cùng 1 test suite
+      (<code>purchase-proposals.service.spec.ts</code>), thêm 2 case mới cho đúng 2 bug trên.
+    </p>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-db">TEST</span> 5. Kiểm chứng bằng UI thật — PO-46 → PI-2026-014</h2>
+    <p class="module-note">
+      Không chỉ chạy unit test — dựng hẳn 1 đơn hàng mới từ đầu, đăng nhập lần lượt bằng tài khoản
+      thật của từng vai trò (Sales → KHSX → QLSX → Sếp → Mua hàng), đối chiếu dữ liệu Postgres thật
+      sau mỗi bước.
+    </p>
+    <ol class="timeline stages">
+      <li class="ok"><b>Sales</b><span>tạo PO-46 (GTY-E2E-01 × 8)</span></li>
+      <li class="ok"><b>KHSX</b><span>tạo PI-2026-014 (PI thường, 1 SKU) → Gửi QLSX</span></li>
+      <li class="ok"><b>QLSX</b><span>chọn kho thành phẩm → Gửi Sếp duyệt</span></li>
+      <li class="ok"><b>Sếp</b><span>Duyệt lúc 03:37:56 UTC → tự tạo ProductionOrder PO-46-1</span></li>
+      <li class="ok"><b>Hệ thống (ngầm)</b><span>CuttingProposal tự tính rồi tự duyệt lúc 03:38:07 → tạo PurchaseProposal #61 (4 dòng sắt, set sẵn productionInvoiceId)</span></li>
+      <li class="ok"><b>Hệ thống (ngầm)</b><span>Ngay sau đó tính tiếp nguyên liệu + tiêu hao → GHI THÊM 14 dòng vào ĐÚNG PurchaseProposal #61, không tạo mới</span></li>
+      <li class="ok"><b>Nhàn (Mua hàng)</b><span>"Danh sách" chỉ có đúng 1 dòng cho PI-2026-014; mở ra thấy 11 vật tư của mình (cả sắt lẫn tiêu hao trộn chung), 7 dòng của Trâm/Nghi hiện read-only</span></li>
+    </ol>
+    <div class="callout warn">
+      <b>Sự cố vận hành gặp phải giữa chừng (không phải lỗi code):</b> lần chạy thử đầu (PO-45 →
+      PI-2026-013) vẫn ra 2 đề xuất riêng — hoá ra process backend đang chạy đã khởi động TRƯỚC khi
+      sửa code xong, và không tự nạp lại (<code>nest start --watch</code> ở máy dev chỉ tự biên dịch
+      lại <code>dist/</code>, không tự restart tiến trình đang chạy). Tắt và khởi động lại process
+      thì chạy lại đúng ngay ở lượt PI-2026-014. Giữ nguyên PI-2026-013 trong DB làm đối chứng
+      "trước/sau".
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>So sánh</th><th>PI-2026-013 (server cũ)</th><th>PI-2026-014 (server mới)</th></tr></thead>
+        <tbody>
+          <tr><td>Số đề xuất mua / PI</td><td>2</td><td><b>1</b></td></tr>
+          <tr><td><code>productionInvoiceId</code> trên đề xuất sắt</td><td>NULL</td><td>có (đúng PI)</td></tr>
+          <tr><td>Mua hàng thấy ở "Danh sách"</td><td>2 dòng</td><td><b>1 dòng</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 6. Hệ quả nghiệp vụ: Sếp duyệt theo CẢ ĐỀ XUẤT, không duyệt riêng từng người mua</h2>
+    <div class="callout ok">
+      <b>ĐÃ GỠ BỎ (cùng ngày, xem mục 7):</b> đánh đổi mô tả dưới đây chỉ còn giá trị lịch sử — sau
+      khi chuyển state machine xuống cấp item, Sếp duyệt được RIÊNG từng người mua hàng, không cần
+      đợi đủ cả PI nữa. Giữ lại nguyên văn mục này để thấy rõ đây là hệ quả PHÁT SINH từ quyết định
+      gộp ở mục 3, không phải lỗi thiết kế ban đầu.
+    </div>
+    <p class="module-note">
+      Câu hỏi đặt ra sau khi gộp (mục 3): báo giá xong thì Sếp duyệt từng người mua hàng, hay đợi đủ
+      cả PI rồi mới duyệt 1 lần? Trả lời <b>lúc đó</b>: đợi đủ cả PI — đây là hệ quả trực tiếp, không
+      phải lựa chọn riêng thêm.
+    </p>
+    <div class="callout warn">
+      <b>Gửi duyệt là hành động chung, không tách theo người:</b> nút "Gửi Giám đốc duyệt" chỉ bật
+      khi <b>TẤT CẢ vật tư trong đề xuất</b> (cả phần sắt lẫn tiêu hao, cả phần của mọi người mua) đã
+      có báo giá hợp lệ — <code>PurchaseProposalsService.submit()</code> kiểm tra trên toàn bộ
+      <code>proposal.items</code>, không phân biệt <code>Material.buyerId</code>. Ai bấm gửi cũng
+      được, miễn đề xuất đã đủ hết lúc đó — không ai gửi thay được khi phần người khác chưa xong.
+    </div>
+    <div class="callout ok">
+      <b>Vì sao vẫn không bị tắc nghẽn giữa các người mua:</b> nút <b>"Lưu báo giá"</b> (mục 1) tách
+      riêng khỏi "Gửi Giám đốc duyệt" đúng vì lý do này — mỗi người lưu phần mình trước, không ai bị
+      chặn bởi người khác chưa xong; chỉ riêng bước GỬI DUYỆT là phải chờ đủ.
+    </div>
+    <p class="module-note">
+      Phía Sếp: màn "So sánh giá" hiện toàn bộ các dòng vật tư của cả đề xuất (không tách theo người
+      mua), chọn NCC cho từng dòng, bấm <b>Duyệt</b> — chuyển cả đề xuất từ <code>SUBMITTED</code>
+      sang <code>PURCHASING</code> trong 1 lần. Không có khái niệm duyệt riêng phần của người này
+      xong rồi duyệt tiếp phần người kia sau — <b>1 PI = 1 vòng duyệt duy nhất</b>.
+    </p>
+    <div class="callout bad">
+      <b>Đánh đổi cần biết:</b> trước khi gộp, sắt và tiêu hao là 2 đề xuất riêng nên có thể duyệt
+      lệch nhịp nhau (đề xuất nào xong trước gửi trước). Sau khi gộp, 1 người mua báo giá chậm/quên
+      (nghỉ, quá tải...) sẽ giữ nguyên cả đề xuất ở trạng thái "chưa gửi được", kể cả khi phần còn
+      lại đã xong từ lâu. Nếu thực tế gây chậm trễ đáng kể, cần cân nhắc thêm cơ chế nhắc/theo dõi ai
+      còn thiếu — chưa làm trong phiên này, chỉ note lại để theo dõi.
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span><span class="badge b-be">BE</span> 7. Cập nhật tiếp theo (cùng ngày): Sếp giờ duyệt được RIÊNG từng người mua hàng</h2>
+    <p class="module-note">
+      Người dùng hỏi lại ngay sau khi đọc mục 6: "Tôi muốn duyệt riêng từng người thì sao?". Trả lời
+      bằng cách chuyển hẳn state machine (<code>NEW → QUOTING → SUBMITTED → PURCHASING → PURCHASED</code>,
+      hoặc <code>SUBMITTED → REJECTED → QUOTING</code>) từ cấp <code>PurchaseProposal</code> xuống cấp
+      <code>PurchaseProposalItem</code> — mỗi DÒNG vật tư có trạng thái riêng, <code>PurchaseProposal.status</code>
+      chỉ còn là giá trị ROLLUP suy ra từ các item (dùng để lọc hàng đợi/hiển thị tổng quát, không
+      còn là nguồn sự thật cho gate nghiệp vụ).
+    </p>
+    <div class="callout warn">
+      <b>3 lỗ hổng phát hiện qua review thiết kế trước khi code (không tự thấy ngay từ đầu):</b>
+      <ul>
+        <li>3 service tạo/gộp đề xuất (sắt, nguyên liệu piece, tiêu hao — mục 3) tìm đề xuất để gộp
+          theo <code>status: NEW</code> — sẽ ngừng gộp được ngay khi rollup rời <code>NEW</code> sớm
+          hơn trước, phá luôn tính năng gộp vừa làm ở mục 3. Sửa: tìm theo <code>status: { not: PURCHASED }</code>
+          ("còn mở") thay vì "chưa ai đụng vào".</li>
+        <li><code>requote()</code> cũ xoá TOÀN BỘ báo giá của cả đề xuất
+          (<code>deleteMany({ item: { proposalId } })</code>) — 1 người mở lại báo giá
+          phần bị từ chối của mình sẽ xoá theo cả báo giá ĐÃ DUYỆT (<code>isChosen=true</code>) của
+          đồng nghiệp đang <code>PURCHASING</code>. Sửa: chỉ xoá quote của đúng các item
+          <code>REJECTED</code> thuộc người đang requote.</li>
+        <li><code>approve()</code>/<code>reject()</code> không được tự dò lại "batch SUBMITTED" từ DB
+          tại thời điểm xử lý — nếu có người khác vừa submit thêm giữa lúc Sếp đang xem màn hình sẽ
+          duyệt nhầm cả phần chưa xem. Sửa: coi tập item id trong dto Sếp gửi lên LÀ batch đang duyệt,
+          BE chỉ verify từng id đó đúng đang <code>SUBMITTED</code>.</li>
+      </ul>
+    </div>
+    <p class="module-note">
+      Khoá đồng bộ (advisory lock) cũng gộp lại: mọi thao tác ghi status (acknowledge/submit/approve/
+      reject/requote/receiveItem) giờ dùng chung 1 tên khoá <code>purchase-proposal-mutate:&lt;id&gt;</code>
+      thay vì 2 tên khác nhau như trước — tránh race giữa "nhận hàng" và "duyệt/từ chối" chạy song
+      song trên cùng 1 đề xuất.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Trước (mục 6)</th><th>Sau (mục 7)</th></tr></thead>
+        <tbody>
+          <tr><td>Gửi Sếp duyệt: chờ TẤT CẢ vật tư trong đề xuất (mọi người mua) có báo giá</td><td>Chỉ chờ vật tư CỦA MÌNH — ai xong phần mình gửi được ngay</td></tr>
+          <tr><td>1 người mua chậm/quên giữ nguyên CẢ đề xuất ở "chưa gửi được"</td><td>Phần của người khác gửi/duyệt được độc lập, không bị kẹt theo</td></tr>
+          <tr><td>Sếp duyệt 1 lần cho cả đề xuất — không tách theo người</td><td>Sếp duyệt riêng từng batch SUBMITTED, độc lập theo từng lượt gửi</td></tr>
+          <tr><td><code>PurchaseProposal.status</code> = nguồn sự thật cho mọi gate</td><td><code>PurchaseProposalItem.status</code> = nguồn sự thật; <code>PurchaseProposal.status</code> chỉ còn là rollup hiển thị</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="module-note">
+      <b>Kiểm chứng bằng UI thật (tái dùng PO-46 → PI-2026-014, đề xuất #61 ở mục 5):</b> lần này để
+      Nhàn báo giá + gửi phần của mình trước, Trâm gửi phần của Trâm sau, xác nhận Sếp duyệt được
+      từng phần độc lập.
+    </p>
+    <ol class="timeline stages">
+      <li class="ok"><b>Nhàn</b><span>báo giá 11 vật tư của mình (SAT-002/003/004/006/008, DAY-001/002, VTK-013/035, NN-001/002) → Gửi Sếp duyệt lúc 14:37 — 11 item chuyển <code>QUOTING → SUBMITTED</code>, 7 item của Trâm/Nghi giữ nguyên <code>QUOTING</code>, rollup đề xuất vẫn <code>QUOTING</code> (đúng — chưa đủ mọi item)</span></li>
+      <li class="ok"><b>Sếp</b><span>vào "So sánh giá" — đề xuất PO-46 hiện ngay với nhãn "11/18 vật tư đã gửi" dù rollup còn <code>QUOTING</code>; mở chi tiết chỉ thấy 11 dòng của Nhàn có ô chọn NCC, 7 dòng còn lại (6 của Trâm còn <code>QUOTING</code>, 1 của Nghi còn <code>QUOTING</code>) hiện ở khối "chưa tới lượt duyệt" read-only</span></li>
+      <li class="ok"><b>Sếp</b><span>bấm Duyệt lúc 14:38 — đúng 11 item của Nhàn chuyển <code>SUBMITTED → PURCHASING</code>; 7 item Trâm/Nghi KHÔNG đổi, vẫn <code>QUOTING</code>; rollup đề xuất vẫn <code>QUOTING</code> (đúng theo bảng rollup — chưa phải mọi item đều <code>PURCHASING</code>/<code>PURCHASED</code>)</span></li>
+      <li class="ok"><b>Nhàn</b><span>"Lệnh mua NCC" không còn hiện PO-46 nữa (đã xong phần mình); "Theo dõi mua hàng" hiện đúng 11 dòng của mình ở PO-46, không lẫn dòng <code>QUOTING</code> của Nghi</span></li>
+      <li class="ok"><b>Trâm</b><span>báo giá + gửi 6 vật tư của mình (VTK-004, DINH-001, VTK-018, VTK-022, VTK-027, VTK-033) lúc 14:38 — 6 item chuyển <code>SUBMITTED</code> độc lập, không đụng tới 11 item đã <code>PURCHASING</code> của Nhàn hay 1 item còn <code>QUOTING</code> của Nghi</span></li>
+      <li class="ok"><b>Sếp</b><span>"So sánh giá" hiện lượt chờ duyệt MỚI, độc lập, đúng "6/18 vật tư đã gửi"; khối "chưa tới lượt duyệt" giờ liệt kê 11 dòng <code>PURCHASING</code> (Nhàn, đã xong) + 1 dòng <code>QUOTING</code> (Nghi, chưa gửi) — duyệt tiếp, chỉ 6 item của Trâm chuyển <code>PURCHASING</code></span></li>
+      <li class="ok"><b>Kết quả cuối</b><span>đề xuất #61: 17/18 item <code>PURCHASING</code> (Nhàn + Trâm, duyệt ở 2 lượt tách biệt), đúng 1 item của Nghi vẫn <code>QUOTING</code> — rollup đề xuất vẫn <code>QUOTING</code> cho tới khi Nghi gửi + Sếp duyệt nốt lượt thứ 3</span></li>
+    </ol>
+    <div class="callout ok">
+      Xác nhận đúng thiết kế: <b>2 lượt duyệt độc lập trên CÙNG 1 đề xuất, không ai phải đợi ai</b> —
+      không còn cảnh 1 người mua chậm giữ chân cả đề xuất như mô tả ở mục 6.
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 8. Cập nhật tiếp theo: tự điền "Ngày dự kiến về" theo deadline mua hàng</h2>
+    <p class="module-note">
+      Báo cáo thật: mỗi dòng NCC trong form báo giá đều phải gõ tay "Ngày dự kiến về", kể cả khi cả
+      đơn chỉ có 1 deadline mua hàng chung (đã tính sẵn từ KHSX, đi qua bước duyệt của Sếp - xem
+      <code>frameDeadlineOf</code> ở BE, cột "Deadline" vẫn hiển thị sẵn ngay phía trên form). Gõ
+      lặp lại giá trị giống hệt nhau cho từng dòng/từng NCC là thao tác thừa.
+    </p>
+    <p class="module-note">
+      Sửa ở <code>LenhMuaNCCPage.tsx</code>: mỗi khi tạo dòng báo giá mới (tự seed theo NCC đã đăng
+      ký, hoặc dòng rỗng khi vật tư chưa có NCC nào), <code>expectedDate</code> tự điền sẵn =
+      <code>proposal.deadline</code> (quy đổi <code>yyyy-MM-dd</code> cho input date). Đây chỉ là
+      giá trị KHỞI TẠO - Mua hàng vẫn gõ tay sửa lại bình thường nếu NCC thực tế hẹn ngày khác đi.
+    </p>
+    <div class="callout ok">
+      Kiểm chứng UI thật: đơn có Deadline 15/10/2026 → mở báo giá, tiếp nhận, cả 6 ô ngày trong form
+      đều đã có sẵn giá trị <code>2026-10-15</code>, không ô nào trống.
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 9. Bug tiếp theo tìm thấy qua dùng thật: "So sánh giá" vẫn gộp phẳng nhiều người đề xuất</h2>
+    <p class="module-note">
+      Mục 7 đã tách được state machine xuống cấp item và cho Sếp duyệt độc lập theo TỪNG LƯỢT GỬI -
+      nhưng chưa xử lý ca 2 người mua hàng CÙNG LÚC đang ở trạng thái <code>SUBMITTED</code> trong
+      cùng 1 đơn gộp (vd cả Trâm lẫn Nghi cùng bấm "Gửi Giám đốc duyệt" trước khi Sếp kịp xử lý lượt
+      nào). Màn "So sánh giá" khi đó vẫn liệt kê PHẲNG mọi item đang submitted của cả 2 người vào 1
+      danh sách, với đúng 1 cặp nút Duyệt/Từ chối cho toàn bộ danh sách đó - Sếp Từ chối phần của
+      Trâm là Từ chối dính luôn cả phần của Nghi.
+    </p>
+    <div class="callout bad">
+      <b>Nguyên nhân:</b> <code>handleApprove</code>/<code>handleReject</code> (BossApp.tsx) đã lọc
+      đúng theo <code>item.status === 'submitted'</code> của CẢ ĐỀ XUẤT, nhưng chưa lọc tiếp theo
+      <code>Material.buyerId</code> — chỉ tách được "SUBMITTED hay không", chưa tách được "SUBMITTED
+      của AI".
+    </div>
+    <p class="module-note">
+      Sửa bằng cách thêm 1 cấp điều hướng: bấm vào 1 đơn trong "So sánh giá" giờ hiện DANH SÁCH
+      NGƯỜI ĐỀ XUẤT trước (mỗi người 1 dòng, kèm số vật tư + trạng thái rollup riêng của người đó -
+      tái dùng <code>rollupStatusOf</code> ở mục 7, gộp theo <code>Material.buyerId</code> qua hàm
+      mới <code>groupItemsByBuyer</code>). Bấm vào đúng người mới hiện bảng chọn NCC + nút
+      Duyệt/Từ chối - lúc này <code>handleApprove</code>/<code>handleReject</code> nhận kèm đúng tập
+      item CỦA NGƯỜI ĐÓ (so khớp theo <code>item.itemId</code>), không đụng tới người khác dù họ
+      đang cùng SUBMITTED.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Trước</th><th>Sau</th></tr></thead>
+        <tbody>
+          <tr><td>Bấm vào đơn → thấy ngay mọi item đang submitted trộn chung 1 danh sách</td><td>Bấm vào đơn → thấy danh sách người đề xuất trước (tên, số vật tư, trạng thái riêng)</td></tr>
+          <tr><td>1 cặp nút Duyệt/Từ chối cho CẢ đơn</td><td>Duyệt/Từ chối nằm bên trong từng người, chỉ tác động đúng người đó</td></tr>
+          <tr><td>2 người cùng SUBMITTED → Từ chối 1 người dính luôn người kia</td><td>2 người cùng SUBMITTED vẫn tách biệt hoàn toàn, xử lý độc lập</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="module-note">
+      <b>Kiểm chứng bằng UI thật (PO-47 → PI-2026-015):</b> dựng lại đúng tình huống lỗi - Trâm (6
+      vật tư) và Nghi (1 vật tư) cùng đang <code>SUBMITTED</code> trong 1 đơn, Nhàn (11 vật tư) vẫn
+      <code>NEW</code>.
+    </p>
+    <ol class="timeline stages">
+      <li class="ok"><b>Sếp</b><span>bấm vào đơn PO-47 - thấy 3 dòng: Nhàn (11 vật tư, "Chờ báo giá"), Nghi (1 vật tư, "Chờ duyệt"), Trâm (6 vật tư, "Chờ duyệt") - không còn danh sách item phẳng</span></li>
+      <li class="ok"><b>Sếp</b><span>bấm vào dòng Trâm - chỉ thấy đúng 6 vật tư của Trâm kèm bảng chọn NCC, không lẫn item của Nghi</span></li>
+      <li class="ok"><b>Sếp</b><span>bấm Duyệt - quay lại danh sách người đề xuất: Trâm chuyển "Đang mua hàng", <b>Nghi vẫn nguyên "Chờ duyệt" (không hề bị đụng tới)</b>, Nhàn vẫn "Chờ báo giá"</span></li>
+    </ol>
+  </div>
+
+  <div class="module">
+    <h2>10. Kết luận</h2>
+    <div class="stats">
+      <div class="stat"><div class="n">2</div><div class="l">bug thật đã sửa (đề xuất gộp lộ hết cho nhau; Từ chối 1 người dính luôn người khác)</div></div>
+      <div class="stat"><div class="n">1</div><div class="l">hiểu lầm đã làm rõ (sắt không hề mất)</div></div>
+      <div class="stat"><div class="n">3</div><div class="l">tính năng mới (gộp 3 nguồn = 1 form; duyệt riêng từng người mua; tự điền ngày dự kiến về)</div></div>
+      <div class="stat"><div class="n">2</div><div class="l">bug phụ tìm thấy &amp; vá kèm (receiveItem)</div></div>
+      <div class="stat"><div class="n">3</div><div class="l">lỗ hổng thiết kế phát hiện qua review trước khi code (mục 7)</div></div>
+      <div class="stat"><div class="n">719</div><div class="l">test backend pass sau cùng (46 suite) · 36 test frontend</div></div>
+    </div>
+    <p class="module-note">
+      Toàn bộ thay đổi đã kiểm bằng <code>tsc --noEmit</code> sạch cả 2 repo, ESLint sạch trên mọi
+      file sửa, và test end-to-end thật trên UI (không chỉ mock) như mục 5, 7 và 9. Phạm vi cố ý
+      chưa xử lý: PI thường có ≥2 SKU cắt riêng (xem callout mục 3); cơ chế nhắc/theo dõi ai còn
+      thiếu báo giá (đánh đổi từng nêu ở mục 6, nay bớt cấp thiết hơn vì đã duyệt riêng được).
+    </p>
+  </div>
+
+  <footer>
+    Nguồn: tổng hợp trực tiếp từ phiên làm việc với Claude Code ngày 25/08/2026, xuất phát từ báo cáo
+    thực tế của người dùng trên PI-2026-012 ("3 acc mua hàng đề xuất giống nhau", "không thấy sắt
+    đâu cả"), qua điều tra mã nguồn + tra DB thật + sửa code + viết/chạy lại test + kiểm chứng bằng
+    UI thật với nhiều tài khoản vai trò khác nhau.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" title="Về đầu trang" type="button">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

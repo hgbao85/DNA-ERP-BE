@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DNA-ERP — Nhật ký thay đổi: Kiểm tra pipeline VTTP + Duyệt sản xuất theo PI</title>
+<title>DNA-ERP — Nhật ký thay đổi: Kiểm tra pipeline VTTP + Duyệt sản xuất theo PI + Gộp đề xuất mua</title>
 <style>
 :root{
   --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
@@ -192,21 +192,23 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
 
 <div class="wrap">
   <div class="masthead">
-    <div class="eyebrow">Cả ngày 24/08/2026 · 2 phần: kiểm tra pipeline VTTP + redesign duyệt sản xuất</div>
-    <h1>Kiểm chứng pipeline "vật tư thành phẩm" bằng SKU thật, rồi đổi cả cách Boss/QLSX duyệt sản xuất</h1>
+    <div class="eyebrow">Cả ngày 24/08/2026 · 3 phần: kiểm tra pipeline VTTP + redesign duyệt sản xuất + gộp đề xuất mua</div>
+    <h1>Kiểm chứng pipeline "vật tư thành phẩm" bằng SKU thật, đổi cách Boss/QLSX duyệt sản xuất, rồi gộp lại đề xuất mua hàng theo PI</h1>
     <p class="lede">
-      Nhật ký gộp của trọn 1 ngày làm việc, 2 phần nối tiếp nhau: <b>Phần 1</b> — dựng 1 SKU thật
+      Nhật ký gộp của trọn 1 ngày làm việc, 3 phần nối tiếp nhau: <b>Phần 1</b> — dựng 1 SKU thật
       ("Ghế tình yêu") chạy qua API thật để kiểm chứng lại toàn bộ pipeline "vật tư thành phẩm" xây
       hôm 22/08, cộng vài phát hiện phụ (bug UI, nhóm vật tư sai). <b>Phần 2</b> — quá trình test UI
       thật đó lộ ra hàng loạt vấn đề thật (quyền DB lệch, dữ liệu rò rỉ giữa 2 chu kỳ duyệt), dẫn
       tới 1 quyết định nghiệp vụ lớn: đổi hẳn cách Boss/QLSX duyệt sản xuất từ "theo từng SKU" sang
-      "theo cả PI".
+      "theo cả PI". <b>Phần 3</b> — hệ quả phụ của Phần 2 lộ ra ở màn Mua hàng: Boss duyệt xong 1 PI
+      thì đề xuất mua vật tư tiêu hao nổ ra hàng chục dòng rời rạc, không đồng bộ với đề xuất mua
+      sắt — gộp lại thành 1 đề xuất/PI và chỉnh thứ tự hiển thị.
     </p>
     <div class="meta">
       <span>24/08/2026</span>
       <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
-      <span>1 route BE mới, 1 sửa quyền DB dev thật, nhiều dữ liệu test đã dọn tay</span>
-      <span>677 test BE pass (45 suite) · <code>tsc</code> sạch cả 2 repo</span>
+      <span>1 route BE mới, 1 sửa quyền DB dev thật, 1 service viết lại, nhiều dữ liệu test đã dọn tay</span>
+      <span>680 test BE pass (45 suite) · <code>tsc</code> sạch cả 2 repo</span>
       <span><b>Chưa commit</b></span>
     </div>
   </div>
@@ -217,8 +219,9 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
       <li><b>Phần 1 (kiểm tra pipeline VTTP):</b> vá UI ẩn ô "Số lượng" thừa ở nhóm "Vật tư thành phẩm"; xác nhận "Thanh nhôm" (SAT-012 cũ) đã đúng nhóm; dựng SKU "Ghế tình yêu" chạy hết chuỗi duyệt qua API thật — hao hụt cắt sắt đo được <b>0,167%</b> (mục tiêu &lt;1%), 15 đề xuất mua tự sinh khớp 100% với tính tay.</li>
       <li><b>Phần 2 (duyệt theo PI):</b> phát hiện DB dev lệch quyền thật (403 do chưa chạy lại seed sau sự cố 22/08) — đã chạy lại, không sửa code. Phát hiện "Tối ưu cắt sắt" hiện lại SKU đã cắt riêng — chốt lại chỉ hiện SKU thực sự chưa có PI. Phát hiện bug rò rỉ dữ liệu: cắt riêng lại 1 SKU vừa bị từ chối vẫn mang nguyên lý do/kho/người duyệt của lần trước — đã vá tận gốc.</li>
       <li><b>Quyết định lớn nhất trong ngày:</b> "tất cả duyệt theo PI, không còn từng SKU riêng nữa" — thêm route BE mới (<code>rejectBatchByQlsx</code>), đổi toàn bộ màn Boss/QLSX từ bảng phẳng từng SKU sang danh sách PI thu gọn + trang chi tiết riêng khi bấm vào, mirror đúng UX màn KHSX.</li>
-      <li>Dọn dữ liệu test theo yêu cầu người dùng ở cả 2 phần: 15 đề xuất mua test, item PI trùng lặp, PI-2026-009 + PO-39, dữ liệu chu kỳ duyệt cũ dính trên PI-2026-011.</li>
-      <li>Kết quả cuối ngày: 677 test BE pass, <code>tsc</code> sạch cả 2 repo, <b>chưa commit</b>, còn vài việc UI thật chưa kiểm chứng lại sau redesign lớn ở Phần 2.</li>
+      <li>Dọn dữ liệu test theo yêu cầu người dùng ở cả 2 phần đầu: 15 đề xuất mua test, item PI trùng lặp, PI-2026-009 + PO-39, dữ liệu chu kỳ duyệt cũ dính trên PI-2026-011.</li>
+      <li><b>Phần 3 (gộp đề xuất mua):</b> viết lại <code>ConsumableMaterialPurchaseService</code> để gộp MỌI vật tư tiêu hao của 1 PI vào đúng 1 <code>PurchaseProposal</code> (kể cả khác kho — "Khác kho vẫn gộp chung luôn, thống nhất theo 1 PI"), thay vì 1 proposal/vật tư như trước. Đồng thời hoãn cả 2 trigger tính đề xuất mua (VTTP + tiêu hao) sang chạy SAU khi đề xuất mua sắt (chạy nền qua solver ngoài) tính xong, qua callback <code>onComplete</code> mới thêm vào <code>runSolverAndSave()</code>. Rà lại phát hiện <code>approveBatch()</code> (đường duyệt PI gộp) từ trước tới giờ chưa từng trigger 2 đề xuất này — vá luôn cùng ngày cho đối xứng với <code>approveItem()</code>.</li>
+      <li>Kết quả cuối ngày: 680 test BE pass, <code>tsc</code> sạch cả 2 repo, <b>chưa commit</b>, còn vài việc UI thật chưa kiểm chứng lại sau redesign lớn ở Phần 2.</li>
     </ul>
   </div>
 
@@ -462,14 +465,91 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </p>
   </div>
 
+  <!-- ═══════════════════════════════════════════ PHẦN 3 ═══════════════════════════════════════════ -->
+  <div class="part-divider">
+    <span class="n">PHẦN 3</span>
+    <h2>Boss duyệt xong 1 PI, đề xuất mua vật tư tiêu hao lại nổ ra hàng chục dòng rời rạc</h2>
+    <div class="sub">Người dùng nhìn màn "Lệnh mua — chọn NCC &amp; báo giá" sau khi Boss duyệt, thấy 1 đống dòng không gộp gì cả — hỏi thẳng "tại sao lại không gộp cùng theo 1 PI?".</div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 16. Gộp đề xuất mua vật tư tiêu hao theo 1 PI, hoãn tính đến khi đề xuất mua sắt xong</h2>
+    <p class="module-note">
+      Đối chiếu với nhánh sắt (<code>CuttingProposalsService</code>): 1 phương án cắt luôn ra ĐÚNG 1
+      <code>PurchaseProposal</code> gộp mọi loại sắt cần mua. Nhưng
+      <code>ConsumableMaterialPurchaseService.computeAndUpsertProposals()</code> lại lặp
+      <code>for (const [materialId, required] of requiredByMaterial)</code> và tạo 1
+      <code>PurchaseProposal</code> RIÊNG cho từng vật tư — 1 PI có 14 vật tư tiêu hao thì Mua hàng
+      nhìn thấy 14 dòng đề xuất tách rời ngay khi Boss vừa duyệt xong.
+    </p>
+    <div class="callout warn">
+      <b>Ban đầu đề xuất gộp theo (PI, kho)</b> — giống hệt cách nhánh sắt tính <code>warehouseCode</code>.
+      Người dùng bác thẳng: <i>"Khác kho vẫn gộp chung luôn, Thống nhất là theo 1 PI"</i>. Kiểm tra lại
+      <code>PurchaseProposalsService.receiveItem()</code> (dòng ~424) xác nhận
+      <code>warehouseCode</code> cấp proposal CHỈ mang tính hiển thị từ quyết định 15/08 — nguồn xác
+      thực thật để nhập hàng luôn là <code>PurchaseProposalItem.materialId → Material.warehouseId</code>,
+      và <code>purchasingRouting.canPurchaserSeeProposal()</code> vốn đã dùng <code>.some()</code> (thấy
+      cả proposal nếu có ít nhất 1 dòng của mình) — nên gộp khác kho vào 1 proposal là an toàn, không
+      lẫn dữ liệu khi nhập/xem.
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">consumable-material-purchase.service.ts</td><td>Viết lại toàn bộ vòng lặp per-material thành 1 transaction duy nhất: khoá <code>stock_quant</code> mọi vật tư theo thứ tự <code>materialId</code> tăng dần (tránh deadlock, cùng idiom <code>CuttingProposalsService</code>), rồi find-or-create ĐÚNG 1 <code>PurchaseProposal</code> cho <code>{'{'}productionInvoiceId, sourceType: CONSUMABLE_AUTO_CALC, status: NEW{'}'}</code> — vật tư đã có dòng thì <code>update</code>, chưa có thì <code>create</code> thêm <code>PurchaseProposalItem</code>. <code>allCovered</code> tính lại trên TOÀN BỘ item của proposal (kể cả từ lượt gọi trước), không riêng lượt hiện tại.</td></tr>
+          <tr><td class="path">cutting-proposals.service.ts</td><td>Thêm tham số <code>onComplete?: () =&gt; void | Promise&lt;void&gt;</code> vào <code>requestForOrder()</code> và <code>runSolverAndSave()</code>, gọi trong khối <code>finally</code> (chạy dù solver thành công hay lỗi) — chỗ neo để trigger 2 service mua hàng còn lại SAU khi phần chậm nhất (solver ngoài, chạy nền) đã xong.</td></tr>
+          <tr><td class="path">production-invoices.service.ts (<code>approveItem</code>)</td><td>Chuyển 2 lệnh gọi <code>pieceMaterialYieldPurchaseService</code> và <code>consumableMaterialPurchaseService</code> (trước đây bắn song song ngay sau <code>requestForOrder()</code>) vào bên trong closure <code>onComplete</code> truyền cho <code>requestForOrder()</code> — mỗi nhánh vẫn giữ try/catch riêng, best-effort như cũ.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="module-note">
+      Lý do hoãn thứ tự: <i>"Đề xuất mua hàng của 1 PI được hiển thị sau khi Tính đề xuất mua sắt
+      xong"</i> — trước đây 3 trigger (sắt/VTTP/tiêu hao) chạy song song, nhưng sắt luôn chậm nhất
+      (solver ngoài, vài chục giây tới vài phút) nên Mua hàng thấy đề xuất tiêu hao/VTTP hiện trước,
+      đề xuất sắt "đang tính" hiện sau — rời rạc, không đồng bộ. Giờ cả 3 đề xuất của 1 PI xuất hiện
+      cùng lúc, ngay sau khi phần chậm nhất xong (dù thành công hay lỗi).
+    </p>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 16b. <code>approveBatch()</code> (PI gộp) cũng thiếu 2 trigger mua VTTP/tiêu hao — vá luôn cùng ngày</h2>
+    <p class="module-note">
+      Rà lại mục 16 lộ ra <code>approveBatch()</code> (đường duyệt PI gộp nhiều SKU) từ trước tới
+      giờ CHỈ gọi <code>cuttingProposalsService.requestForInvoice()</code> (trigger sắt) — không hề
+      gọi <code>pieceMaterialYieldPurchaseService</code> lẫn <code>consumableMaterialPurchaseService</code>
+      như <code>approveItem()</code>. Hệ quả thật: Boss duyệt 1 PI gộp (nhiều SKU cắt chung 1 đợt
+      sắt) thì đề xuất mua sắt tự tính bình thường, nhưng đề xuất mua VTTP/tiêu hao thì KHÔNG BAO
+      GIỜ tự sinh — người mua hàng phụ trách 2 nhóm vật tư đó không thấy gì dù SKU đã duyệt và có
+      định mức thật. Hành vi có sẵn từ trước (không phải lỗi mới gây ra ở Phần 3), người dùng xác
+      nhận muốn vá luôn trong cùng phiên làm việc thay vì để lại nợ kỹ thuật.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">cutting-proposals.service.ts</td><td>Thêm cùng tham số <code>onComplete</code> vào <code>requestForInvoice()</code> (dùng chung <code>runSolverAndSave()</code> với <code>requestForOrder()</code> nên chỉ cần truyền tiếp, không phải viết thêm finally block mới).</td></tr>
+          <tr><td class="path">production-invoices.service.ts (<code>approveBatch</code>)</td><td>Y hệt pattern <code>approveItem()</code>: truyền closure <code>onComplete</code> vào <code>requestForInvoice()</code>, bên trong gọi <code>pieceMaterialYieldPurchaseService</code> rồi <code>consumableMaterialPurchaseService</code> với <code>pi.id.toString()</code> (PI gộp tự nó là productionInvoiceId, không cần tra thêm) — mỗi nhánh vẫn try/catch riêng, best-effort, không chặn việc duyệt cụm đã ghi ở trên.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="module-note">
+      Từ giờ 2 đường duyệt (PI thường qua <code>approveItem()</code>, PI gộp qua
+      <code>approveBatch()</code>) đối xứng nhau hoàn toàn: cả 3 đề xuất mua (sắt/VTTP/tiêu hao)
+      luôn tự sinh, luôn xuất hiện cùng lúc sau khi đề xuất mua sắt tính xong, bất kể Boss duyệt 1
+      SKU riêng lẻ hay cả 1 cụm gộp.
+    </p>
+  </div>
+
   <!-- ═══════════════════════ KIEM THU ═══════════════════════ -->
 
   <div class="module">
-    <h2>14. Kiểm thử &amp; build (cuối ngày)</h2>
+    <h2>17. Kiểm thử &amp; build (cuối ngày)</h2>
     <div class="stats">
-      <div class="stat"><div class="n">677</div><div class="l">test BE pass (45 suite)</div></div>
+      <div class="stat"><div class="n">680</div><div class="l">test BE pass (45 suite)</div></div>
       <div class="stat"><div class="n">2</div><div class="l">test mới cho <code>rejectBatchByQlsx</code></div></div>
-      <div class="stat"><div class="n">3</div><div class="l">test cũ cập nhật (rejectItem null-toString, rejectBatch không còn "PI nhà", mergeItems reset field)</div></div>
+      <div class="stat"><div class="n">3</div><div class="l">test cũ cập nhật Phần 2 (rejectItem null-toString, rejectBatch không còn "PI nhà", mergeItems reset field)</div></div>
+      <div class="stat"><div class="n">12</div><div class="l">test viết lại cho <code>ConsumableMaterialPurchaseService</code> gộp theo PI (Phần 3)</div></div>
+      <div class="stat"><div class="n">2</div><div class="l">test mới/sửa cho <code>approveBatch()</code> trigger VTTP/tiêu hao (mục 16b)</div></div>
       <div class="stat"><div class="n">2</div><div class="l">repo build sạch (BE + FE)</div></div>
     </div>
   </div>
@@ -477,10 +557,11 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
   <!-- ═══════════════════════ CON DE NGO ═══════════════════════ -->
 
   <div class="module">
-    <h2>15. Còn để ngỏ</h2>
+    <h2>18. Còn để ngỏ</h2>
     <ul class="timeline">
       <li><b>Chưa commit</b><span> — toàn bộ thay đổi cả ngày (2 repo) vẫn ở working tree.</span></li>
       <li><b>Chưa test qua UI trình duyệt thật sau redesign Phần 2</b><span> — cần bấm thử cả 2 vai trò Boss/QLSX, cả PI cắt riêng lẫn PI gộp, xác nhận trang chi tiết + 2 nút hoạt động đúng, và luồng "từ chối → quay lại Tối ưu cắt sắt → cắt riêng/gộp lại" chạy trơn tru đầu-cuối.</span></li>
+      <li><b>Chưa test qua UI trình duyệt thật cho Phần 3</b><span> — cần Boss duyệt 1 PI thật (nhiều vật tư khác kho) rồi xem màn "Lệnh mua" chỉ còn 1 dòng đề xuất tiêu hao gộp, xuất hiện cùng lúc với đề xuất mua sắt — cả đường PI thường lẫn PI gộp (mục 16b).</span></li>
       <li><b>Mảnh "Chân nhôm" + <code>PieceMaterialYield</code> vẫn chưa được khai báo thật</b><span> (phát hiện ở mục 2) — nhóm vật tư đã đúng, chỉ còn thiếu bước nhập định mức piecesPerBar qua UI.</span></li>
       <li><b>PO-35/36/37 (tồn đọng từ changelog 22/08) vẫn thiếu đề xuất mua</b><span> — chưa có quyết định xử lý bù hay bỏ qua.</span></li>
       <li><b>2 tài khoản <code>dms</code>/<code>dmbbdg</code> không đăng nhập được bằng mật khẩu demo mặc định</b><span> — chưa xác nhận nguyên nhân, chưa cần xử lý gấp (route không khoá theo role, dùng admin thay được).</span></li>
@@ -489,9 +570,10 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
 
   <footer>
     Nguồn: toàn bộ nội dung trên tổng hợp trực tiếp từ phiên làm việc trong Claude Code — không suy
-    diễn thêm. Gộp lại từ 2 file changelog cùng ngày 24/08 theo yêu cầu người dùng. Xem thêm
-    changelog liền trước <code>changelog-2026-08-22-vat-tu-thanh-pham-dinh-muc-nhom.html</code> cho
-    bối cảnh đầy đủ về tính năng "vật tư thành phẩm" mà Phần 1 kiểm chứng lại.
+    diễn thêm. Phần 1 + Phần 2 gộp lại từ 2 file changelog cùng ngày 24/08 theo yêu cầu người dùng;
+    Phần 3 thêm cùng ngày, cùng file (append-only, không sửa các phần trước). Xem thêm changelog
+    liền trước <code>changelog-2026-08-22-vat-tu-thanh-pham-dinh-muc-nhom.html</code> cho bối cảnh
+    đầy đủ về tính năng "vật tư thành phẩm" mà Phần 1 kiểm chứng lại.
   </footer>
 </div>
 

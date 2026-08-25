@@ -4,8 +4,10 @@ import {
   PurchaseProposalSource,
   PurchaseProposalStatus,
 } from '../../generated/prisma/client';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { PieceMaterialYieldPurchaseResultDto } from './dto/piece-material-yield-purchase-result.dto';
 
@@ -115,7 +117,14 @@ export class PieceMaterialYieldPurchaseService {
       barsNeededByMaterial.set(materialKey, acc);
     }
 
-    for (const [materialIdStr, acc] of barsNeededByMaterial) {
+    if (barsNeededByMaterial.size === 0) {
+      return results;
+    }
+
+    // materialId đã khai Kho cho từng dòng - kiểm trước khi mở transaction (bất biến, không cần
+    // nằm trong khoá), cùng idiom ConsumableMaterialPurchaseService.
+    const warehouseByMaterial = new Map<string, { warehouseId: bigint; warehouseCode: string }>();
+    for (const materialIdStr of barsNeededByMaterial.keys()) {
       const materialId = BigInt(materialIdStr);
       const yieldRow = yields.find((y) => y.materialId === materialId);
       if (!yieldRow?.material.warehouse) {
@@ -123,10 +132,37 @@ export class PieceMaterialYieldPurchaseService {
           `Vật tư ${yieldRow?.material.code ?? materialIdStr} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi tính đề xuất mua`,
         );
       }
-      const warehouseId = yieldRow.material.warehouse.id;
-      const warehouseCode = yieldRow.material.warehouse.code;
+      warehouseByMaterial.set(materialIdStr, {
+        warehouseId: yieldRow.material.warehouse.id,
+        warehouseCode: yieldRow.material.warehouse.code,
+      });
+    }
 
-      const { proposal, actualStock, buyQty } = await this.prisma.$transaction(async (tx) => {
+    // MỘT transaction cho CẢ PI (2026-08-25, thay vì mỗi vật tư 1 transaction/1 proposal riêng
+    // như trước) - lý do kép: (1) tránh 1 PI có N vật tư "vật tư thành phẩm" thì tự vỡ thành N
+    // PurchaseProposal (mỗi cái chỉ 1 dòng, tìm theo `items.some({materialId})` cũ không bao giờ
+    // gộp lại được với nhau); (2) gộp chung được với đề xuất do CuttingProposalsService/
+    // ConsumableMaterialPurchaseService tạo cho cùng PI - xem khoá "purchase-proposal-merge:<piId>"
+    // dùng CHUNG ở cả 3 nơi. Khoá theo THỨ TỰ materialId tăng dần khi lock stock_quant, cùng lý do
+    // tránh deadlock đã áp dụng ở 2 service kia.
+    const orderedMaterialIds = [...barsNeededByMaterial.keys()].sort();
+
+    const computed: {
+      materialId: bigint;
+      materialIdStr: string;
+      actualStock: number;
+      buyQty: number;
+    }[] = [];
+
+    let proposal!: { id: bigint; status: PurchaseProposalStatus };
+
+    await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `purchase-proposal-merge:${piBigId}`);
+
+      for (const materialIdStr of orderedMaterialIds) {
+        const materialId = BigInt(materialIdStr);
+        const acc = barsNeededByMaterial.get(materialIdStr)!;
+        const { warehouseId } = warehouseByMaterial.get(materialIdStr)!;
         const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
           SELECT "qty" FROM "stock_quant"
           WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
@@ -134,57 +170,89 @@ export class PieceMaterialYieldPurchaseService {
         `;
         const actualStock = Math.floor(locked[0]?.qty.toNumber() ?? 0);
         const buyQty = Math.max(0, acc.bars - actualStock);
+        computed.push({ materialId, materialIdStr, actualStock, buyQty });
+      }
 
-        const existing = await tx.purchaseProposal.findFirst({
-          where: {
-            productionInvoiceId: piBigId,
-            sourceType: PurchaseProposalSource.PIECE_MATERIAL_YIELD,
-            status: PurchaseProposalStatus.NEW,
-            items: { some: { materialId } },
-          },
-          include: { items: true },
-        });
+      // Tìm đề xuất "còn mở" (khác PURCHASED) - không còn lọc NEW (2026-08-25, cùng lý do đã sửa ở
+      // CuttingProposalsService.approve()/ConsumableMaterialPurchaseService).
+      let found = await tx.purchaseProposal.findFirst({
+        where: { productionInvoiceId: piBigId, status: { not: PurchaseProposalStatus.PURCHASED } },
+        include: { items: true },
+      });
 
-        // Tồn đã đủ (buyQty=0) - đánh dấu PURCHASED ngay thay vì để kẹt ở NEW chờ duyệt vô ích,
-        // cùng idiom "allCovered" ở CuttingProposalsService.approve().
-        const coveredData =
-          buyQty === 0 ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() } : {};
-
-        if (existing) {
-          const item = existing.items.find((it) => it.materialId === materialId)!;
-          await tx.purchaseProposalItem.update({
-            where: { id: item.id },
-            data: { buyQty, actualStock },
-          });
-          const updatedProposal =
-            buyQty === 0
-              ? await tx.purchaseProposal.update({ where: { id: existing.id }, data: coveredData })
-              : existing;
-          return { proposal: updatedProposal, actualStock, buyQty };
-        }
-
-        const created = await tx.purchaseProposal.create({
+      if (!found) {
+        const firstMaterialIdStr = computed[0].materialIdStr;
+        found = await tx.purchaseProposal.create({
           data: {
             sourceType: PurchaseProposalSource.PIECE_MATERIAL_YIELD,
             productionInvoiceId: piBigId,
-            warehouseCode,
-            items: { create: [{ materialId, buyQty, actualStock }] },
-            ...coveredData,
+            warehouseCode: warehouseByMaterial.get(firstMaterialIdStr)!.warehouseCode,
+            items: {
+              create: computed.map((c) => ({
+                materialId: c.materialId,
+                buyQty: c.buyQty,
+                actualStock: c.actualStock,
+                status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
+                purchasedAt: c.buyQty === 0 ? new Date() : undefined,
+              })),
+            },
           },
+          include: { items: true },
         });
-        return { proposal: created, actualStock, buyQty };
-      });
+      } else {
+        const itemByMaterial = new Map(found.items.map((it) => [it.materialId.toString(), it]));
+        for (const c of computed) {
+          const existingItem = itemByMaterial.get(c.materialIdStr);
+          if (existingItem) {
+            // Chỉ ghi đè status khi dòng đó còn NEW - cùng idiom CuttingProposalsService.approve().
+            const nextStatus =
+              existingItem.status === PurchaseProposalStatus.NEW && c.buyQty === 0
+                ? PurchaseProposalStatus.PURCHASED
+                : undefined;
+            await tx.purchaseProposalItem.update({
+              where: { id: existingItem.id },
+              data: {
+                buyQty: c.buyQty,
+                actualStock: c.actualStock,
+                ...(nextStatus ? { status: nextStatus, purchasedAt: new Date() } : {}),
+              },
+            });
+          } else {
+            await tx.purchaseProposalItem.create({
+              data: {
+                proposalId: found.id,
+                materialId: c.materialId,
+                buyQty: c.buyQty,
+                actualStock: c.actualStock,
+                status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
+                purchasedAt: c.buyQty === 0 ? new Date() : undefined,
+              },
+            });
+          }
+        }
+      }
 
+      await recomputeProposalStatus(tx, found.id);
+      found = await tx.purchaseProposal.findUniqueOrThrow({
+        where: { id: found.id },
+        include: { items: true },
+      });
+      proposal = found;
+    });
+
+    for (const c of computed) {
+      const acc = barsNeededByMaterial.get(c.materialIdStr)!;
+      const yieldRow = yields.find((y) => y.materialId === c.materialId)!;
       results.push(
         new PieceMaterialYieldPurchaseResultDto({
-          materialId: materialIdStr,
+          materialId: c.materialIdStr,
           materialCode: yieldRow.material.code,
           requiredPieces: acc.requiredPieces,
           onHandPieces: acc.onHandPieces,
           piecesPerBar: acc.piecesPerBar,
           barsNeeded: acc.bars,
-          actualStock,
-          buyQty,
+          actualStock: c.actualStock,
+          buyQty: c.buyQty,
           purchaseProposalId: proposal.id.toString(),
           purchaseProposalStatus: proposal.status,
         }),
