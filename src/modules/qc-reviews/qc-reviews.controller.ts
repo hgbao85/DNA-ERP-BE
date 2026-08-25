@@ -8,9 +8,11 @@ import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorat
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { CreateQcReviewDto } from './dto/create-qc-review.dto';
+import { CreateSteelIssueQcReviewDto } from './dto/create-steel-issue-qc-review.dto';
 import { FulfillReplenishRequestDto } from './dto/fulfill-replenish-request.dto';
 import { ListQcReviewsQueryDto } from './dto/list-qc-reviews-query.dto';
 import { ListReplenishRequestsQueryDto } from './dto/list-replenish-requests-query.dto';
+import { QcRecheckDto } from './dto/qc-recheck.dto';
 import { RejectReplenishRequestDto } from './dto/reject-replenish-request.dto';
 import { QcReviewsService } from './qc-reviews.service';
 
@@ -31,10 +33,28 @@ export class QcReviewsController {
   @RequireMfgRole(MfgRole.KCS)
   review(
     @Param('id') id: string,
-    @Body() dto: CreateQcReviewDto,
+    @Body() dto: CreateSteelIssueQcReviewDto,
     @CurrentUser('id') userId: string,
   ) {
     return this.qcReviewsService.review(id, dto, userId);
+  }
+
+  // ─── Tổ Phôi (mfgRole = PHOI) - tự báo đã bù đủ cho cỡ đoạn không đạt ────────
+
+  @Post('steel-issues/:id/qc-segments/:segmentSpecId/report-done')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  reportSegmentDone(@Param('id') id: string, @Param('segmentSpecId') segmentSpecId: string) {
+    return this.qcReviewsService.reportSegmentDone(id, segmentSpecId);
+  }
+
+  // ─── KCS - duyệt lại các cỡ đoạn Phôi đã báo bù đủ ────────────────────────────
+
+  @Post('steel-issues/:id/qc-recheck')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.KCS)
+  recheck(@Param('id') id: string, @Body() dto: QcRecheckDto) {
+    return this.qcReviewsService.recheck(id, dto);
   }
 
   @Post('production-batches/:id/qc-review')

@@ -19,7 +19,11 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
-import { CompleteCuttingDto } from './dto/complete-cutting.dto';
+import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
+import {
+  PhoiProgressItemResponseDto,
+  PhoiProgressSegmentDto,
+} from './dto/phoi-progress-response.dto';
 import { CompleteStepDto } from './dto/complete-step.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { CutBundleResponseDto, CutPatternSegmentResponseDto } from './dto/cut-bundle-response.dto';
@@ -357,15 +361,156 @@ export class SteelIssuesService {
     );
   }
 
-  async completeCutting(id: string, dto: CompleteCuttingDto): Promise<SteelIssueResponseDto> {
+  /**
+   * Nhập MỘT đợt cắt (append-only, cộng dồn) - thay `completeCutting()` cũ (2026-08-22, làm lại
+   * lần 2 sau rollback 08-21).
+   *
+   * Khác hẳn hàm cũ ở 2 điểm nghiệp vụ:
+   *  1. Số đoạn là số Phôi ĐẾM THẬT, không còn chép từ `CuttingProposalPattern`. Hàm cũ bắt chọn
+   *     1 kiểu cắt đã duyệt rồi FE bung `pattern.segments` ra làm "số thực cắt" - tức là ghi lại
+   *     kế hoạch chứ không ghi thực tế.
+   *  2. Không còn one-shot: mỗi ca báo 1 đợt, trạng thái GIỮ NGUYÊN `RECEIVED`. Chuyển sang chờ
+   *     KCS là hành động riêng (`finishCutting`) - nút cũ vừa bịa số liệu vừa đổi trạng thái, gộp
+   *     2 việc không liên quan.
+   *
+   * Chốt cân bằng vật chất ngay tại đây (đã kiểm khớp thực tế trên PI-2026-046):
+   *   barCount × barLengthMm = barCount × trim + Σ(qty × cutLengthMm) + Σqty × kerf + mauNguyen + scrap
+   * `scrapMm` là phần dư, TỰ TÍNH - không bắt Phôi gõ vì không ai cân được đống đầu mẩu. Ra số ÂM
+   * nghĩa là cắt ra nhiều hơn lượng sắt đưa vào, bất khả về vật lý nên chặn cứng.
+   *
+   * CHỈ chạy khi RECEIVED (2026-08-24, vòng 2: gỡ nhánh cho phép QC_PASSED đã thử ở vòng 1 cùng
+   * ngày) - phần bù đoạn không đạt sau KCS giờ KHÔNG đi qua đây nữa, Phôi tự bù bằng sắt kiếm
+   * ngoài thực tế, không đụng cây sắt kho đã cấp (xem QcReviewsService.reportSegmentDone/recheck).
+   */
+  async recordCutBatch(id: string, dto: RecordCutBatchDto): Promise<CutBundleResponseDto> {
+    const issue = await this.findOneOrThrow(id);
+    if (issue.status !== SteelIssueStatus.RECEIVED) {
+      throw new ConflictException(
+        `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ RECEIVED mới nhập đợt cắt được`,
+      );
+    }
+
+    const specIds = dto.segments.map((seg) => parseBigIntId(seg.segmentSpecId));
+    if (new Set(specIds.map(String)).size !== specIds.length) {
+      throw new BadRequestException(
+        'Cùng một cỡ đoạn khai làm nhiều dòng - gộp lại thành 1 dòng (UNIQUE cutBundleId+segmentSpecId)',
+      );
+    }
+
+    const [specs, usedBars, config, allowedSpecIds] = await Promise.all([
+      this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } }),
+      this.prisma.cutBundle.aggregate({
+        where: { steelIssueId: issue.id },
+        _sum: { barCount: true },
+      }),
+      this.prisma.systemConfig.findUnique({ where: { id: 1 } }),
+      this.findBomSegmentSpecIds(issue.productionInvoiceId),
+    ]);
+
+    const specById = new Map(specs.map((sp) => [sp.id.toString(), sp]));
+    for (const seg of dto.segments) {
+      const spec = specById.get(parseBigIntId(seg.segmentSpecId).toString());
+      if (!spec) {
+        throw new NotFoundException(`Cỡ đoạn ${seg.segmentSpecId} không tồn tại`);
+      }
+      // Chặn khai nhầm cỡ của LOẠI SẮT KHÁC vào đợt này - đợt xuất gắn đúng 1 materialId, khai
+      // lẫn sang vật tư khác làm hỏng cả tiến độ lẫn cân bằng mà không lộ ra ở đâu.
+      if (spec.materialId !== issue.materialId) {
+        throw new BadRequestException(
+          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt xuất này`,
+        );
+      }
+      // Sếp chốt: Phôi chỉ được khai cỡ ĐÃ CÓ TRONG ĐỊNH MỨC. Cắt ra cỡ lạ thì phần sắt đó tự rơi
+      // vào phế liệu qua phép trừ cân bằng - đúng về kế toán (sắt không thành chi tiết theo định
+      // mức thì không phải thành phẩm).
+      if (!allowedSpecIds.has(spec.id.toString())) {
+        throw new BadRequestException(
+          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không có trong định mức của lệnh sản xuất này`,
+        );
+      }
+    }
+
+    const alreadyUsed = usedBars._sum.barCount ?? 0;
+    if (alreadyUsed + dto.barCount > issue.barCount) {
+      throw new BadRequestException(
+        `Đợt này dùng ${dto.barCount} cây, đã dùng ${alreadyUsed} cây - vượt ${issue.barCount} cây kho đã giao`,
+      );
+    }
+
+    // Tính bằng ĐƠN VỊ 1/10 mm trên số nguyên, KHÔNG dùng float: cutLengthMm là Decimal(7,1) (vd
+    // 452.7) và chính solver cũng cố ý tránh float nhị phân (SCALING_FACTOR=10 trong
+    // de_xuat_logic.py). Cộng dồn vài chục số thập phân bằng float sẽ lệch đúng ở chỗ so sánh
+    // scrap < 0, biến sai số làm tròn thành lỗi 400 vô cớ.
+    const deci = (n: number) => Math.round(n * 10);
+    const trimDeci = deci(config?.solverTrimStartMm ?? 10);
+    const kerfDeci = deci(config?.solverBladeWidthMm?.toNumber() ?? 1);
+    const mauNguyenMm = dto.mauNguyenMm ?? 0;
+
+    let segmentDeci = 0;
+    let pieceCount = 0;
+    for (const seg of dto.segments) {
+      const spec = specById.get(parseBigIntId(seg.segmentSpecId).toString())!;
+      segmentDeci += deci(spec.cutLengthMm.toNumber()) * seg.qty;
+      pieceCount += seg.qty;
+    }
+
+    const availableDeci = deci(issue.barLengthMm) * dto.barCount;
+    const consumedDeci =
+      trimDeci * dto.barCount + segmentDeci + kerfDeci * pieceCount + deci(mauNguyenMm);
+    const scrapDeci = availableDeci - consumedDeci;
+    if (scrapDeci < 0) {
+      throw new BadRequestException(
+        `Không cân đối: ${dto.barCount} cây x ${issue.barLengthMm}mm = ${availableDeci / 10}mm, ` +
+          `nhưng khai ra ${consumedDeci / 10}mm (tề đầu ${(trimDeci * dto.barCount) / 10} + đoạn ` +
+          `${segmentDeci / 10} + mạch cưa ${(kerfDeci * pieceCount) / 10} + mẩu nguyên ` +
+          `${mauNguyenMm}). Thừa ${-scrapDeci / 10}mm không lấy đâu ra - kiểm lại số đoạn hoặc số cây.`,
+      );
+    }
+
+    const created = await this.prisma.cutBundle.create({
+      data: {
+        steelIssueId: issue.id,
+        proposalPatternId: dto.proposalPatternId ? parseBigIntId(dto.proposalPatternId) : undefined,
+        barCount: dto.barCount,
+        mauNguyenMm,
+        scrapMm: Math.round(scrapDeci / 10),
+        segments: {
+          create: dto.segments.map((seg) => ({
+            segmentSpecId: parseBigIntId(seg.segmentSpecId),
+            qty: seg.qty,
+          })),
+        },
+      },
+      include: { segments: { include: { segmentSpec: true } } },
+    });
+    return this.toBundleResponseDto(created);
+  }
+
+  /**
+   * "Xong, mời KCS" - RECEIVED sang AWAITING_QC (hoặc IN_PROCESS nếu còn công đoạn chi tiết chưa
+   * đánh dấu). CỐ Ý là hành động riêng, KHÔNG tự chuyển khi "Còn lại" về 0: ca cắt thiếu vì sắt
+   * hỏng/cong là có thật và vẫn phải đi tiếp được, tự động hoá theo định mức sẽ làm những đợt đó
+   * kẹt vĩnh viễn.
+   *
+   * `actualBarCount` giờ SUY từ tổng các đợt đã nhập, không phải một ô người dùng tự gõ - hai
+   * nguồn cho cùng một con số thì kiểu gì cũng lệch.
+   */
+  async finishCutting(id: string): Promise<SteelIssueResponseDto> {
     const issue = await this.findOneOrThrow(id);
     if (issue.status !== SteelIssueStatus.RECEIVED) {
       throw new ConflictException(
         `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ RECEIVED mới báo cắt xong được`,
       );
     }
-    if (dto.bundles.length === 0) {
-      throw new BadRequestException('Phải khai báo ít nhất 1 bundle đã cắt');
+    const used = await this.prisma.cutBundle.aggregate({
+      where: { steelIssueId: issue.id },
+      _sum: { barCount: true },
+    });
+    const actualBarCount = used._sum.barCount ?? 0;
+    if (actualBarCount === 0) {
+      throw new BadRequestException(
+        'Chưa nhập đợt cắt nào cho lệnh này - nhập số đoạn đã cắt trước khi mời KCS',
+      );
     }
 
     const requiredSteps = await this.resolveRequiredSteps(
@@ -373,40 +518,192 @@ export class SteelIssuesService {
       issue.materialId,
     );
     const completedSteps: ProcessStep[] = [ProcessStep.CAT];
-    const done = requiredSteps.every((s) => completedSteps.includes(s));
+    const done = requiredSteps.every((step) => completedSteps.includes(step));
 
-    await this.prisma.$transaction(async (tx) => {
-      for (const bundle of dto.bundles) {
-        await tx.cutBundle.create({
-          data: {
-            steelIssueId: issue.id,
-            proposalPatternId: bundle.proposalPatternId
-              ? parseBigIntId(bundle.proposalPatternId)
-              : undefined,
-            barCount: bundle.barCount,
-            wastePerBarMm: bundle.wastePerBarMm,
-            segments: {
-              create: bundle.segments.map((s) => ({
-                segmentSpecId: parseBigIntId(s.segmentSpecId),
-                countPerBar: s.countPerBar,
-              })),
-            },
-          },
-        });
-      }
-      await tx.steelIssue.update({
-        where: { id: issue.id },
-        data: {
-          status: done ? SteelIssueStatus.AWAITING_QC : SteelIssueStatus.IN_PROCESS,
-          completedSteps,
-          actualBarCount: dto.actualBarCount,
-          completedAt: done ? new Date() : null,
-        },
-      });
+    await this.prisma.steelIssue.update({
+      where: { id: issue.id },
+      data: {
+        status: done ? SteelIssueStatus.AWAITING_QC : SteelIssueStatus.IN_PROCESS,
+        completedSteps,
+        actualBarCount,
+        completedAt: done ? new Date() : null,
+      },
     });
 
     const reloaded = await this.findOneOrThrow(id);
     return this.toResponseDto(reloaded, requiredSteps);
+  }
+
+  /**
+   * Tập segmentSpecId hợp lệ để khai cắt cho 1 PI = mọi cỡ đoạn xuất hiện trong định mức của mọi
+   * ProductionOrder thuộc PI. Dùng để chặn khai cỡ ngoài định mức (xem recordCutBatch).
+   */
+  private async findBomSegmentSpecIds(productionInvoiceId: bigint): Promise<Set<string>> {
+    const orders = await this.findOrdersForInvoice(productionInvoiceId);
+    if (orders.length === 0) return new Set();
+    const rows = await this.prisma.pieceBom.findMany({
+      where: { bomRevisionId: { in: [...new Set(orders.map((o) => o.bomRevisionId))] } },
+      select: { segmentSpecId: true },
+    });
+    return new Set(rows.map((r) => r.segmentSpecId.toString()));
+  }
+
+  /**
+   * Tiến độ cắt theo (LOẠI SẮT -> CỠ ĐOẠN) cho cả 1 PI - nguồn dữ liệu bảng "Cần / Đã cắt /
+   * Còn lại" ở màn Lệnh sản xuất (Phôi).
+   *
+   * `required` suy từ ĐỊNH MỨC, cố ý KHÔNG lấy từ CuttingProposalPattern: pattern là kế hoạch của
+   * solver và thường cắt DƯ (đo thật trên PI-2026-046: dư 26 đoạn ở 11/35 cỡ, vì đoạn ngắn được
+   * xếp lấp phần đuôi cây vốn cắt để lấy đoạn dài). Lấy pattern làm mốc thì "Còn lại" không bao
+   * giờ về 0 đúng lúc.
+   *
+   * `done` cộng CẢ đợt rework (không lọc reworkOfId như getIssuePlan): ở đây đang đếm SẢN LƯỢNG
+   * thực tế đã cắt ra, mọi đoạn cắt được đều là đoạn thật.
+   */
+  async getPhoiProgress(productionInvoiceId: string): Promise<PhoiProgressItemResponseDto[]> {
+    const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
+    const orders = await this.findOrdersForInvoice(invoice.id);
+    if (orders.length === 0) return [];
+
+    const bomRevisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
+    const [bomPieces, pieceBoms, issues, cutSegments, qcSegments] = await Promise.all([
+      this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: bomRevisionIds } } }),
+      this.prisma.pieceBom.findMany({
+        where: { bomRevisionId: { in: bomRevisionIds } },
+        include: { segmentSpec: { include: { material: true } } },
+      }),
+      this.prisma.steelIssue.findMany({
+        where: { productionInvoiceId: invoice.id, reworkOfId: null },
+        select: { materialId: true, barCount: true },
+      }),
+      this.prisma.cutPatternSegment.findMany({
+        where: { cutBundle: { steelIssue: { productionInvoiceId: invoice.id } } },
+        select: { segmentSpecId: true, qty: true },
+      }),
+      // KCS chấm lỗi theo cỡ đoạn (2026-08-24, vòng 2) - "Đã cắt" giữ nguyên số THÔ (không trừ
+      // gì cả, xem doc comment PhoiProgressSegmentDto.done), phần lỗi tách hẳn sang trường
+      // "failed" riêng = outstanding (failedQty - resolvedQty, chỉ phần KCS CHƯA duyệt lại đạt).
+      this.prisma.qcReviewSegment.findMany({
+        where: { qcReview: { steelIssue: { productionInvoiceId: invoice.id } } },
+        select: { segmentSpecId: true, failedQty: true, resolvedQty: true },
+      }),
+    ]);
+
+    const issuedByMaterial = new Map<string, number>();
+    for (const i of issues) {
+      const key = i.materialId.toString();
+      issuedByMaterial.set(key, (issuedByMaterial.get(key) ?? 0) + i.barCount);
+    }
+
+    const doneBySpec = new Map<string, number>();
+    for (const cs of cutSegments) {
+      const key = cs.segmentSpecId.toString();
+      doneBySpec.set(key, (doneBySpec.get(key) ?? 0) + cs.qty);
+    }
+    const failedBySpec = new Map<string, number>();
+    for (const qs of qcSegments) {
+      const key = qs.segmentSpecId.toString();
+      const outstanding = qs.failedQty - qs.resolvedQty;
+      failedBySpec.set(key, (failedBySpec.get(key) ?? 0) + outstanding);
+    }
+
+    const qtyPerUnitByKey = new Map(
+      bomPieces.map((bp) => [`${bp.bomRevisionId}:${bp.pieceId}`, bp.qtyPerUnit]),
+    );
+    const pieceBomsByRevision = new Map<string, typeof pieceBoms>();
+    for (const pb of pieceBoms) {
+      const key = pb.bomRevisionId.toString();
+      const arr = pieceBomsByRevision.get(key) ?? [];
+      arr.push(pb);
+      pieceBomsByRevision.set(key, arr);
+    }
+
+    // Khoá theo segmentSpecId (không phải cutLengthMm): cutLengthMm là Decimal, 2 Decimal cùng giá
+    // trị không === nhau nên dùng làm khoá Map sẽ tách nhầm 1 cỡ thành nhiều dòng. segmentSpecId
+    // đã @@unique([materialId, cutLengthMm]) nên khoá theo nó là tương đương mà an toàn.
+    const requiredBySpec = new Map<string, number>();
+    const specMeta = new Map<
+      string,
+      { materialId: string; materialCode: string; materialName: string; cutLengthMm: number }
+    >();
+    const registerSpec = (row: (typeof pieceBoms)[number]) => {
+      const specKey = row.segmentSpecId.toString();
+      if (!specMeta.has(specKey)) {
+        specMeta.set(specKey, {
+          materialId: row.segmentSpec.materialId.toString(),
+          materialCode: row.segmentSpec.material.code,
+          materialName: row.segmentSpec.material.name,
+          cutLengthMm: row.segmentSpec.cutLengthMm.toNumber(),
+        });
+      }
+      return specKey;
+    };
+
+    // Lặp theo TỪNG order (không phải từng bomRevisionId duy nhất) - mỗi order có quantity riêng,
+    // 1 PI gộp có thể chứa nhiều SKU khác bomRevision, mỗi cái đóng góp riêng vào tổng.
+    for (const order of orders) {
+      const bomKey = order.bomRevisionId.toString();
+      for (const row of pieceBomsByRevision.get(bomKey) ?? []) {
+        const qtyPerUnit = qtyPerUnitByKey.get(`${bomKey}:${row.pieceId}`) ?? 0;
+        const segments = row.qtyPerPiece * qtyPerUnit * order.quantity;
+        if (segments <= 0) continue;
+        const specKey = registerSpec(row);
+        requiredBySpec.set(specKey, (requiredBySpec.get(specKey) ?? 0) + segments);
+      }
+    }
+
+    // Cỡ ĐÃ cắt nhưng KHÔNG có trong định mức của PI này vẫn phải hiện ra (required = 0) - giấu đi
+    // là giấu luôn dữ liệu sai, thợ sẽ không hiểu vì sao cân đối lệch.
+    const orphanSpecIds = [...doneBySpec.keys()].filter((k) => !specMeta.has(k));
+    if (orphanSpecIds.length > 0) {
+      const orphans = await this.prisma.segmentSpec.findMany({
+        where: { id: { in: orphanSpecIds.map((k) => BigInt(k)) } },
+        include: { material: true },
+      });
+      for (const o of orphans) {
+        specMeta.set(o.id.toString(), {
+          materialId: o.materialId.toString(),
+          materialCode: o.material.code,
+          materialName: o.material.name,
+          cutLengthMm: o.cutLengthMm.toNumber(),
+        });
+      }
+    }
+
+    const byMaterial = new Map<string, PhoiProgressItemResponseDto>();
+    for (const [specKey, meta] of specMeta) {
+      let item = byMaterial.get(meta.materialId);
+      if (!item) {
+        item = new PhoiProgressItemResponseDto({
+          materialId: meta.materialId,
+          materialCode: meta.materialCode,
+          materialName: meta.materialName,
+          issuedBarCount: issuedByMaterial.get(meta.materialId) ?? 0,
+          segments: [],
+        });
+        byMaterial.set(meta.materialId, item);
+      }
+      const rawDone = doneBySpec.get(specKey) ?? 0;
+      const failed = failedBySpec.get(specKey) ?? 0;
+      item.segments.push(
+        new PhoiProgressSegmentDto({
+          segmentSpecId: specKey,
+          cutLengthMm: meta.cutLengthMm,
+          required: requiredBySpec.get(specKey) ?? 0,
+          // BẤT BIẾN - số đã cắt thật, không trừ gì vì lỗi (xem doc comment DTO). "Còn lại" ở FE
+          // tự tính required - (done - failed).
+          done: rawDone,
+          failed,
+        }),
+      );
+    }
+
+    // Cỡ dài trước - thợ cắt đoạn dài trước để phần đuôi còn lại đủ cho đoạn ngắn, đúng thứ tự
+    // solver in ra ở bảng hướng dẫn cắt.
+    for (const item of byMaterial.values()) {
+      item.segments.sort((a, b) => b.cutLengthMm - a.cutLengthMm);
+    }
+    return [...byMaterial.values()].sort((a, b) => a.materialCode.localeCompare(b.materialCode));
   }
 
   /**
@@ -876,13 +1173,14 @@ export class SteelIssuesService {
       proposalPatternId: bundle.proposalPatternId?.toString() ?? null,
       isOffPlan: bundle.proposalPatternId === null,
       barCount: bundle.barCount,
-      wastePerBarMm: bundle.wastePerBarMm,
+      mauNguyenMm: bundle.mauNguyenMm,
+      scrapMm: bundle.scrapMm,
       segments: bundle.segments.map(
         (s) =>
           new CutPatternSegmentResponseDto({
             segmentSpecId: s.segmentSpecId.toString(),
             cutLengthMm: Number(s.segmentSpec.cutLengthMm),
-            countPerBar: s.countPerBar,
+            qty: s.qty,
           }),
       ),
     });

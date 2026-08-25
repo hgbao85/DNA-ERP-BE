@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KCS Phôi — Đạt / Không đạt</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.65; font-size:16px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:54rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{margin-bottom:2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:2.05rem; font-weight:600; margin:.5rem 0 .8rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.06rem; max-width:60ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1.1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.3rem 1.5rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .8rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.55rem}
+.tldr li{font-size:.98rem}
+
+.module{margin-top:3.2rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.4rem; font-weight:600; margin:0 0 .3rem; text-wrap:balance;
+}
+.module-note{color:var(--ink-soft); font-size:.96rem; margin:.45rem 0 1.3rem; max-width:62ch}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.14rem .6rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+/* Hai kết quả — trục chính của thay đổi này */
+.verdicts{display:grid; grid-template-columns:repeat(auto-fit,minmax(16rem,1fr)); gap:.9rem; margin-top:1rem}
+.verdict{background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); padding:1.15rem 1.3rem}
+.verdict.pass{border-top:4px solid var(--add)}
+.verdict.fail{border-top:4px solid var(--del)}
+.verdict h3{margin:0 0 .5rem; font-size:1.12rem; font-family:var(--serif)}
+.verdict.pass h3{color:var(--add)}
+.verdict.fail h3{color:var(--del)}
+.verdict p{margin:0; font-size:.94rem; color:var(--ink-soft)}
+.verdict .lead{color:var(--ink); margin-bottom:.4rem; font-size:.96rem}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.15rem 1.35rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .4rem; font-size:1.03rem; display:flex; align-items:center; gap:.55rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.95rem; max-width:64ch}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.95rem 1.2rem; margin:1.1rem 0; font-size:.95rem; max-width:64ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.92rem; background:var(--paper)}
+th, td{text-align:left; padding:.7rem .9rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.num, th.num{text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap}
+tr.hl td{background:var(--accent-bg)}
+
+.formula{
+  background:var(--paper); border:1px solid var(--line-strong); border-radius:10px;
+  padding:1.1rem 1.3rem; margin:1.1rem 0; font-family:var(--mono); font-size:.95rem;
+  text-align:center; box-shadow:var(--shadow); overflow-x:auto;
+}
+.formula b{color:var(--accent-ink)}
+
+/* Luồng — mỗi bước gắn với đúng người thao tác */
+.flow{list-style:none; margin:1rem 0 0; padding:0; display:flex; flex-direction:column; gap:.6rem}
+.flow > li{
+  background:var(--paper); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow);
+  padding:.9rem 1.1rem; display:flex; gap:.9rem; align-items:flex-start; position:relative;
+}
+.flow > li::after{
+  content:''; position:absolute; left:2.75rem; bottom:-.6rem; width:1px; height:.6rem; background:var(--line-strong);
+}
+.flow > li:last-child::after{display:none}
+.who{
+  flex:none; width:3.4rem; text-align:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.25rem .3rem; border-radius:5px; text-transform:uppercase; margin-top:.15rem;
+}
+.w-phoi{background:var(--accent-bg); color:var(--accent-ink)}
+.w-kcs{background:var(--be-bg); color:var(--be)}
+.flow b{display:block; font-size:1rem; margin-bottom:.15rem}
+.flow span{color:var(--ink-soft); font-size:.92rem}
+
+.branch{display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:.6rem; margin-top:.7rem}
+.branch > div{border:1px solid var(--line); border-radius:9px; padding:.75rem 1rem; background:var(--code-bg); font-size:.92rem}
+.branch .h{font-weight:700; display:block; margin-bottom:.15rem}
+.branch .ok-b{border-left:3px solid var(--add)} .branch .ok-b .h{color:var(--add)}
+.branch .back-b{border-left:3px solid var(--chg)} .branch .back-b .h{color:var(--chg)}
+
+.screen{border:1px solid var(--line); border-radius:11px; background:var(--paper); box-shadow:var(--shadow); padding:1.15rem 1.35rem; margin-bottom:.9rem}
+.screen .name{font-family:var(--serif); font-size:1.08rem; font-weight:600; margin-bottom:.15rem}
+.screen .owner{font-family:var(--mono); font-size:.7rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:.6rem}
+.screen ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.35rem; font-size:.94rem}
+
+.confirm{list-style:none; margin:1rem 0 0; padding:0; display:flex; flex-direction:column; gap:.6rem; counter-reset:c}
+.confirm li{
+  background:var(--paper); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:9px;
+  padding:.85rem 1.1rem .85rem 2.9rem; position:relative; box-shadow:var(--shadow); font-size:.96rem;
+}
+.confirm li::before{
+  counter-increment:c; content:counter(c); position:absolute; left:1rem; top:.85rem;
+  font-family:var(--mono); font-weight:700; color:var(--accent-ink); font-size:.9rem;
+}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.88rem; max-width:62ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+.back-to-top:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+@media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto} }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>TRÌNH DUYỆT PHƯƠNG ÁN</small></div>
+  <button id="theme-toggle" type="button">◐ Nền sáng / tối</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Công đoạn Phôi · Khâu kiểm tra chất lượng</div>
+    <h1>KCS Phôi: chỉ còn Đạt / Không đạt — Phôi tự bù, KCS duyệt lại</h1>
+    <p class="lede">
+      Phương án làm gọn lại khâu KCS ở tổ Phôi. Bỏ hẳn loại "lỗi sửa được" ra khỏi phần mềm, chỉ
+      còn hai kết quả. Phần đoạn hỏng do tổ Phôi tự kiếm sắt bù ngoài thực tế, bù xong KCS kiểm lại
+      rồi mới tính là đạt. Kho không tham gia khâu này.
+    </p>
+    <div class="meta">
+      <span>24 / 08 / 2026</span>
+      <span>Phạm vi: tổ Phôi + KCS</span>
+      <span>Trạng thái: <b>đã triển khai &amp; test xong (25/08/2026)</b></span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt</h2>
+    <ul>
+      <li>KCS chỉ còn chấm <b>Đạt</b> hoặc <b>Không đạt</b>. Đoạn chỉ cần giũa, nắn lại là dùng được thì <b>xem như không phải lỗi</b>, KCS không ghi vào, lô đi tiếp bình thường.</li>
+      <li>Từ nay chữ "lỗi" chỉ mang một nghĩa duy nhất: <b>đoạn hỏng thật, phải bù bằng sắt mới</b>.</li>
+      <li>Tổ Phôi <b>tự kiếm sắt bù</b> — không dính gì tới số cây sắt Kho đã cấp, không phải xin Kho cấp thêm.</li>
+      <li>Bù xong, tổ Phôi bấm nút <b>“Bù đủ”</b>; KCS <b>kiểm lại</b> rồi mới tính là đạt.</li>
+      <li>Nhân tiện sửa một chỗ <b>hiển thị đang sai</b> trên bảng tiến độ cắt (xem mục cuối).</li>
+    </ul>
+  </div>
+
+  <section class="module">
+    <h2>Từ ba loại kết quả xuống còn hai</h2>
+    <p class="module-note">
+      Trước đây định làm ba nhánh: đạt, lỗi sửa được, lỗi không sửa được. Nhưng "lỗi sửa được" thì
+      thợ giũa lại vài phút là xong — bắt KCS liệt kê ra rồi theo dõi qua lại chỉ thêm việc mà không
+      đổi được gì. Nên gộp lại còn hai.
+    </p>
+
+    <div class="verdicts">
+      <div class="verdict pass">
+        <h3>✓ Đạt</h3>
+        <p class="lead">Lô đi tiếp bình thường sang công đoạn sau.</p>
+        <p>Bao gồm cả những đoạn hơi ba-via, hơi xước mà thợ chỉnh lại là dùng được — không tính là lỗi, không ghi vào phần mềm.</p>
+      </div>
+      <div class="verdict fail">
+        <h3>✕ Không đạt</h3>
+        <p class="lead">Đoạn hỏng thật, không cứu được, phải làm đoạn mới thay thế.</p>
+        <p>KCS ghi rõ <b>cỡ đoạn nào, bao nhiêu đoạn</b>, kèm nguyên nhân và hình ảnh như hiện tại.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="module">
+    <h2>Ai làm gì</h2>
+    <p class="module-note">Trọn vòng từ lúc cắt xong tới lúc sạch lỗi. Không có bước nào của Kho.</p>
+
+    <ol class="flow">
+      <li>
+        <span class="who w-phoi">Phôi</span>
+        <div><b>Cắt xong, bấm “Gửi KCS”</b><span>Lô chuyển sang trạng thái chờ kiểm.</span></div>
+      </li>
+      <li>
+        <span class="who w-kcs">KCS</span>
+        <div>
+          <b>Kiểm và chấm theo từng cỡ đoạn</b>
+          <span>Cỡ nào có đoạn hỏng thì nhập số lượng, kèm nguyên nhân và ảnh. Không có đoạn nào hỏng thì để trống — lô đạt.</span>
+        </div>
+      </li>
+      <li>
+        <span class="who w-phoi">Phôi</span>
+        <div>
+          <b>Thấy cột “Lỗi” báo còn thiếu bao nhiêu đoạn → tự kiếm sắt bù → bấm “Bù đủ”</b>
+          <span>Phần sắt bù này tổ Phôi tự lo ngoài thực tế, phần mềm không quản.</span>
+        </div>
+      </li>
+      <li>
+        <span class="who w-kcs">KCS</span>
+        <div>
+          <b>Thấy báo “chờ duyệt lại” → kiểm mấy đoạn vừa bù → nhập số còn hỏng</b>
+          <span>Ô này mặc định sẵn số 0. Cho nhập số chứ không chỉ có nút đạt/không đạt, để nếu bù 3 đoạn mà còn 1 đoạn chưa ổn thì không phải bắt làm lại cả 3.</span>
+          <div class="branch">
+            <div class="ok-b"><span class="h">Nhập 0 — đạt hết</span>Hết lỗi. Số liệu trở lại như chưa từng có lỗi.</div>
+            <div class="back-b"><span class="h">Nhập 1 — còn 1 đoạn hỏng</span>Cột Lỗi còn 1, nút “Bù đủ” hiện lại cho tổ Phôi.</div>
+          </div>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <section class="module">
+    <h2>Con số trên bảng chạy như thế nào</h2>
+    <p class="module-note">
+      Nguyên tắc: <b>“Đã cắt” là việc đã xảy ra rồi nên không bao giờ đổi</b> — sắt đã cắt thì không
+      rút lại được. Chỉ ô “Lỗi” lên xuống, và “Còn lại” chạy theo. Thợ nhẩm được ngay tại chỗ.
+    </p>
+
+    <div class="formula">Còn lại &nbsp;=&nbsp; Cần &nbsp;−&nbsp; ( <b>Đã cắt</b> &nbsp;−&nbsp; <b>Lỗi</b> )</div>
+
+    <p class="module-note">
+      Ví dụ một cỡ đoạn 460mm, định mức cần <b>90</b> đoạn, tổ Phôi cắt được <b>8</b> đoạn:
+    </p>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Diễn biến</th>
+            <th class="num">Đã cắt</th>
+            <th class="num">Lỗi</th>
+            <th class="num">Còn lại</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Cắt xong, chưa kiểm</td><td class="num">8</td><td class="num">—</td><td class="num">82</td></tr>
+          <tr><td>KCS chấm 3 đoạn không đạt</td><td class="num">8</td><td class="num"><b>3</b></td><td class="num"><b>85</b></td></tr>
+          <tr><td>Tổ Phôi bù xong, bấm “Bù đủ”</td><td class="num">8</td><td class="num">3 <span style="font-family:var(--sans);font-size:.82em;color:var(--ink-soft)">chờ KCS</span></td><td class="num">85</td></tr>
+          <tr class="hl"><td>KCS duyệt lại — đạt hết</td><td class="num">8</td><td class="num"><b>0</b></td><td class="num"><b>82</b></td></tr>
+          <tr><td>KCS duyệt lại — còn 1 đoạn hỏng</td><td class="num">8</td><td class="num"><b>1</b></td><td class="num"><b>83</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout ok">
+      <b>Phép thử cho thấy công thức không lệch.</b> Dòng đầu và dòng “đạt hết” đều ra <b>82</b> —
+      bù xong thì coi như chưa từng có lỗi, vì thực tế đúng là đang có đủ 8 đoạn tốt trong tay.
+    </div>
+
+    <div class="callout warn">
+      <b>Một điểm cần sếp biết trước.</b> Vì phần sắt bù do tổ Phôi tự kiếm, không đi qua Kho, nên
+      chỗ sắt đó <b>không được tính vào tỷ lệ hao hụt</b>. Nghĩa là con số hao hụt trên báo cáo sẽ
+      thấp hơn thực tế một chút. Đây là điều sếp đã chốt, ghi lại ở đây để sau này nhìn báo cáo
+      không thắc mắc.
+    </div>
+  </section>
+
+  <section class="module">
+    <h2>Màn hình thay đổi gì</h2>
+
+    <div class="screen">
+      <div class="name">Lệnh sản xuất</div>
+      <div class="owner">Tổ Phôi</div>
+      <ul>
+        <li>Bảng cắt có thêm cột <b>“Lỗi”</b> nằm giữa “Đã cắt” và “Còn lại”, chỉ rõ <b>cỡ đoạn nào</b> đang hỏng bao nhiêu đoạn.</li>
+        <li>Cạnh số lỗi có nút <b>“Bù đủ”</b>. Bấm xong nút đổi thành chữ <i>“chờ KCS”</i>.</li>
+        <li>Lô đã kiểm xong mà còn lỗi thì vẫn <b>mở ra xem được</b> bảng này, nhưng phần nhập đợt cắt bị ẩn đi — vì việc bù không dùng sắt Kho cấp.</li>
+      </ul>
+    </div>
+
+    <div class="screen">
+      <div class="name">Màn hình KCS — Công đoạn Phôi</div>
+      <div class="owner">Tổ KCS</div>
+      <ul>
+        <li>Lô nào tổ Phôi đã bù xong thì hiện nhãn <b>“chờ duyệt lại”</b> kèm số đoạn, và nút <b>“Duyệt lại”</b>.</li>
+        <li>Bấm vào mở ra bảng nhỏ liệt kê <b>đúng những cỡ đoạn vừa bù</b>, mỗi dòng một ô nhập “còn hỏng”, sẵn số 0.</li>
+        <li>Danh sách đơn hàng cộng luôn các lô chờ duyệt lại vào số việc cần làm, để không bị bỏ sót.</li>
+        <li>Phần chấm lần đầu <b>giữ nguyên như hiện tại</b> — vẫn một ô số lượng cho mỗi cỡ đoạn.</li>
+      </ul>
+    </div>
+
+    <div class="screen">
+      <div class="name">Xuất sắt cho Phôi</div>
+      <div class="owner">Kho</div>
+      <ul>
+        <li><span class="pill p-add">Không đổi gì</span> Kho không tham gia khâu này.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="module">
+    <h2>Những gì bỏ đi so với dự tính ban đầu</h2>
+    <p class="module-note">Ba việc từng định làm, nay không cần nữa — làm phần mềm gọn hơn hẳn.</p>
+
+    <div class="card">
+      <h3><span class="pill p-del">Bỏ</span> Quy trình xin Kho cấp lại sắt</h3>
+      <p>
+        Ban đầu định làm: tổ Phôi đề xuất số cây cần cấp lại, Kho duyệt rồi xuất bù. Nay bỏ hẳn vì
+        tổ Phôi tự kiếm sắt — không còn gì để Kho duyệt.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3><span class="pill p-del">Bỏ</span> Phân loại hai kiểu lỗi</h3>
+      <p>
+        Không còn ô riêng cho “lỗi sửa được”. KCS chỉ nhập một ô số lượng như hiện tại.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3><span class="pill p-del">Bỏ</span> Cắt bù bằng sắt Kho đã cấp</h3>
+      <p>
+        Lô đã kiểm xong sẽ không nhập thêm đợt cắt được nữa. Việc bù nằm ngoài phần mềm.
+      </p>
+    </div>
+  </section>
+
+  <section class="module">
+    <h2>Một chỗ hiển thị đang sai sẽ sửa luôn</h2>
+    <p class="module-note">
+      Phát hiện trong lúc làm, không liên quan tới quyết định trên nhưng sửa chung một lượt.
+    </p>
+
+    <div class="callout">
+      Hiện nay khi có lỗi, cột <b>“Đã cắt”</b> đang bị <b>trừ bớt đi</b>. Cùng một lô, phần “Lịch sử
+      đợt đã nhập” ghi rõ cắt được <b>8 đoạn</b>, nhưng bảng tiến độ phía trên lại hiện <b>Đã cắt 5</b>.
+      Hai con số cho cùng một việc, thợ nhìn không hiểu tin cái nào.
+      <br><br>
+      Sửa lại cho đúng: <b>“Đã cắt” giữ nguyên số thật là 8</b>, phần hỏng tách sang cột “Lỗi”. Nhờ
+      vậy sau này còn thống kê được tỷ lệ đạt theo ca, theo máy — chứ trộn chung thì “cắt 8 hỏng 3”
+      và “chỉ cắt được 5” nhìn y hệt nhau, dù nguyên nhân khác hẳn.
+    </div>
+  </section>
+
+  <section class="module">
+    <h2>Ba điểm đã xin xác nhận — cả ba đã chốt</h2>
+    <ol class="confirm">
+      <li>Đồng ý chỉ còn <b>hai kết quả Đạt / Không đạt</b>, đoạn giũa lại là dùng được thì không tính là lỗi. <span class="pill p-add">✓ Đã chốt</span></li>
+      <li>Đồng ý <b>bắt buộc KCS duyệt lại</b> sau khi tổ Phôi báo bù đủ, thay vì tin luôn tổ Phôi. <span class="pill p-add">✓ Đã chốt</span></li>
+      <li>Đồng ý phần sắt tổ Phôi tự bù <b>không vào sổ, không tính hao hụt</b> — chấp nhận báo cáo hao hụt thấp hơn thực tế một chút. <span class="pill p-add">✓ Đã chốt</span></li>
+    </ol>
+  </section>
+
+  <footer>
+    <b>Đã triển khai và test xong ngày 25/08/2026</b> — chạy thử trọn vòng trên đơn hàng thật
+    (cắt → KCS chấm lỗi → tổ Phôi bù → KCS duyệt lại → sạch lỗi) và thêm 9 tình huống thực tế khác
+    (nhiều cỡ đoạn lỗi cùng lúc, các trường hợp chặn thao tác sai người/sai lúc...) — toàn bộ đều
+    đúng như phương án. Chi tiết kỹ thuật xem
+    <code>changelog-2026-08-24-kcs-cham-theo-co-doan.md</code>.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" type="button" aria-label="Lên đầu trang">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-doc-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem(KEY, next); } catch (e) {}
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>
