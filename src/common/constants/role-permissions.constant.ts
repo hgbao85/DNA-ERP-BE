@@ -442,11 +442,15 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     // Vá lỗ quyền phát hiện qua browser thật 2026-08-13: LenhSanXuatPhoi/XacNhanSanLuongPage gọi
     // getQcReviewsForSteelIssues() (GET /qc-reviews?limit=100) để hiện cột "Đã KCS đạt" - PHOI_STAFF
     // trước bản vá này không có QC_REVIEW:VIEW nên 2 trang đều 403 âm thầm ở lời gọi này (không chặn
-    // trang, chỉ mất cột). Chỉ VIEW - duyệt (QC_REVIEW ghi) vẫn là việc riêng của KCS_STAFF, xem
-    // comment ở trên.
+    // trang, chỉ mất cột).
+    // UPDATE thêm lại 2026-08-24 (vòng 2, "Bù đủ"): Phôi tự báo đã bù đủ cho cỡ đoạn không đạt qua
+    // POST /steel-issues/:id/qc-segments/:segmentSpecId/report-done (QcReviewsService.
+    // reportSegmentDone) - route dùng @RequireMfgRole(PHOI), tách bạch khỏi route duyệt lần đầu
+    // (@RequireMfgRole(KCS)) và route duyệt lại (qc-recheck, cũng @RequireMfgRole(KCS)) dù chung
+    // 1 permission module - Phôi KHÔNG thể tự duyệt/tự công nhận đạt qua đường này.
     {
       module: PERMISSION_MODULES.QC_REVIEW,
-      actions: [PermissionAction.VIEW],
+      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
     // Vá lỗ quyền phát hiện qua browser thật 2026-08-19: "Danh sách định mức mảnh"
     // (PhoiDinhMucManhPage, đọc thật thay mock) gọi thẳng GET /skus - PHOI_STAFF/HAN_STAFF/

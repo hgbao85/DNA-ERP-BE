@@ -605,6 +605,7 @@ model SegmentSpec {
   pieceBoms                      PieceBom[]
   partBoms                       PartBom[]
   cuttingProposalPatternSegments CuttingProposalPatternSegment[]
+  qcReviewSegments               QcReviewSegment[]
   stockLedgerEntries             StockLedger[]
   stockQuants                    StockQuant[]
   cutPatternSegments             CutPatternSegment[]
@@ -2016,14 +2017,24 @@ model SteelIssue {
 /// Các bó theo kiểu cắt THỰC TẾ của 1 đợt - ghi khi Phôi báo cắt xong (complete-cutting), chuẩn
 /// hoá thành bảng con (không JSONB) để query/aggregate SQL trực tiếp theo cỡ đoạn. Immutable
 /// sau khi tạo (output cắt của 1 đợt là dữ liệu lịch sử, không sửa lại).
+/// 1 ĐỢT CẮT của tổ Phôi - append-only, mỗi lần báo tạo 1 dòng mới (cắt cả PI trong 1 lần là
+/// hiếm; bình thường vài đợt theo ca). Ghi ĐỦ 2 VẾ cân bằng vật chất của số cây đã dùng - xem
+/// migration 20260822030000.
 model CutBundle {
   id                BigInt  @id @default(autoincrement())
   steelIssueId      BigInt
-  /// NULL = cắt ngoài đề xuất (cho phép, nhưng cảnh báo isOffPlan ở response - không chặn cứng,
-  /// nghiệp vụ vẫn cho Phôi linh hoạt).
+  /// Kiểu cắt gợi ý đợt này bám theo - THUẦN THAM CHIẾU/audit, KHÔNG dùng để suy ra đoạn (khác
+  /// trước 2026-08-21: Phôi khai thẳng số đoạn, không còn "chọn pattern rồi FE bung ra"). NULL =
+  /// không bám kiểu nào.
   proposalPatternId BigInt?
+  /// Số CÂY đã dùng trong đợt này (không phải số cây kho đã giao - xem SteelIssue.barCount).
   barCount          Int
-  wastePerBarMm     Int?
+  /// Tổng chiều dài mẩu sắt còn NGUYÊN từ (các) cây cắt dở trong đợt - nhập lại kho, cắt được cỡ
+  /// bất kỳ sau này. KHÔNG phải phế liệu. Phôi tự đo và khai.
+  mauNguyenMm       Int     @default(0)
+  /// Phế liệu (mm) - phần dư của phương trình cân bằng, SERVICE TỰ TÍNH, không bắt Phôi gõ (không
+  /// ai cân được đống đầu mẩu).
+  scrapMm           Int     @default(0)
 
   steelIssue      SteelIssue              @relation(fields: [steelIssueId], references: [id])
   proposalPattern CuttingProposalPattern? @relation(fields: [proposalPatternId], references: [id])
@@ -2039,7 +2050,11 @@ model CutPatternSegment {
   id            BigInt @id @default(autoincrement())
   cutBundleId   BigInt
   segmentSpecId BigInt
-  countPerBar   Int
+  /// TỔNG số đoạn cỡ này trong cả đợt - KHÔNG phải "trên mỗi cây" (đổi tên từ countPerBar,
+  /// 2026-08-22). Phôi khai số THỰC cắt được: mỗi cây trong đợt có thể cắt khác nhau, "trên mỗi
+  /// cây" không còn ý nghĩa. Khác CuttingProposalPatternSegment.countPerBar bên trên - đó là KẾ
+  /// HOẠCH của solver (mỗi cây theo cùng 1 pattern), giữ nguyên tên.
+  qty           Int
 
   cutBundle   CutBundle   @relation(fields: [cutBundleId], references: [id])
   segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])
@@ -2051,9 +2066,11 @@ model CutPatternSegment {
 /// KCS duyệt, dùng chung Phôi/Hàn/Sơn qua FK XOR (steelIssueId <> productionBatchId - CHECK
 /// constraint viết tay trong migration, cùng pattern stock_ledger_goods_xor_chk). Chỉ nhánh
 /// Phôi (steelIssueId) được dùng ở bản này - productionBatchId để trống, chờ hạng mục M2
-/// "Sản lượng theo công đoạn" (bảng production_batch chưa tồn tại). KCS duyệt cả lô, không bóc
-/// chi tiết theo cỡ đoạn - hỏng thì ghi số lượng + note. passed = SL gốc − failedQty là dẫn
-/// xuất, không lưu cột riêng.
+/// "Sản lượng theo công đoạn" (bảng production_batch chưa tồn tại).
+///
+/// failedQty/scrapQty (2 cột dưới) là TỔNG dẫn xuất từ `segments[]` cho nhánh Phôi (từ
+/// 2026-08-24, xem QcReviewSegment) - giữ lại để KHÔNG đổi shape cho nhánh Hàn/Sơn (vẫn duyệt
+/// cả lô, không bóc theo cỡ đoạn - production_batch chưa có "cỡ" gì để bóc).
 model QcReview {
   id                BigInt   @id @default(autoincrement())
   steelIssueId      BigInt?
@@ -2074,10 +2091,47 @@ model QcReview {
   defectReason      DefectReason?      @relation(fields: [defectReasonId], references: [id])
   reviewedBy        User               @relation("QcReviewReviewedBy", fields: [reviewedById], references: [id])
   replenishRequests ReplenishRequest[]
+  segments          QcReviewSegment[]
 
   @@index([steelIssueId])
   @@index([productionBatchId])
   @@map("qc_reviews")
+}
+
+/// KCS chấm PHÔI theo TỪNG CỠ ĐOẠN (2026-08-24, làm lại lần 2 cùng ngày) - CHỈ 2 kết quả: Đạt
+/// hoặc Không đạt (Sếp chốt: lỗi giũa/nắn lại được xem như KHÔNG PHẢI lỗi, KCS không liệt kê -
+/// bỏ hẳn khái niệm "lỗi sửa được" đã thử ở vòng 1 cùng ngày, vì xử lý y hệt "không đạt" nên
+/// tách ra vô nghĩa). "Không đạt" nghĩa là đoạn hỏng thật, Phôi phải BÙ bằng sắt tự kiếm ngoài
+/// thực tế - KHÔNG đụng cây sắt kho đã cấp, KHÔNG qua recordCutBatch (khác vòng 1 đã gỡ).
+///
+/// failedQty BẤT BIẾN - là số KCS chấm lần đầu, không bao giờ sửa (đúng nguyên tắc ERP "số đã ghi
+/// nhận không bị sửa, chỉ được phân loại"). resolvedQty là phần KCS đã DUYỆT LẠI xác nhận đạt -
+/// chỉ KCS ghi được (không phải Phôi tự khai như fixedQty vòng 1 đã gỡ, vì sản lượng chỉ tính sau
+/// khi qua kiểm). outstanding = failedQty - resolvedQty là số đoạn còn thực sự lỗi.
+///
+/// 3 trạng thái suy từ 2 cột dưới, không cần enum riêng:
+///   outstanding > 0 && phoiReportedAt == null  → chờ Phôi bù
+///   outstanding > 0 && phoiReportedAt != null  → chờ KCS duyệt lại
+///   outstanding == 0                            → xong
+model QcReviewSegment {
+  id             BigInt    @id @default(autoincrement())
+  qcReviewId     BigInt
+  segmentSpecId  BigInt
+  /// Số đoạn KCS chấm KHÔNG ĐẠT lần đầu cho cỡ này. BẤT BIẾN - không sửa sau khi tạo.
+  failedQty      Int
+  /// Số đoạn KCS đã DUYỆT LẠI xác nhận đạt (sau khi Phôi báo bù đủ) - cộng dồn qua nhiều lượt
+  /// duyệt lại nếu còn sót. CHECK resolvedQty <= failedQty (validate service).
+  resolvedQty    Int       @default(0)
+  /// Lúc Phôi bấm "Bù đủ" - null = chưa báo hoặc KCS vừa duyệt lại thấy còn hỏng (reset về null
+  /// để Phôi báo lại lượt mới).
+  phoiReportedAt DateTime?
+
+  qcReview    QcReview    @relation(fields: [qcReviewId], references: [id])
+  segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])
+
+  @@unique([qcReviewId, segmentSpecId])
+  @@index([qcReviewId])
+  @@map("qc_review_segments")
 }
 
 /// Đề xuất cấp lại khi KCS chấm phế (QcReview.scrapQty > 0). fulfilledByIssueId chỉ áp dụng khi

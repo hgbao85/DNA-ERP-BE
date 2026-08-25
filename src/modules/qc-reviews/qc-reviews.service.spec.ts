@@ -9,10 +9,21 @@ import { ProductionBatchesService } from '../production-batches/production-batch
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { QcReviewsService } from './qc-reviews.service';
 
+const decimal = (n: number) => ({ toNumber: () => n, toString: () => String(n) });
+
 describe('QcReviewsService', () => {
   let service: QcReviewsService;
   let prisma: {
-    qcReview: { create: jest.Mock; findMany: jest.Mock; count: jest.Mock };
+    qcReview: {
+      create: jest.Mock;
+      findMany: jest.Mock;
+      count: jest.Mock;
+      findFirst: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
+    };
+    qcReviewSegment: { update: jest.Mock };
+    segmentSpec: { findMany: jest.Mock };
+    cutPatternSegment: { groupBy: jest.Mock };
     steelIssue: { update: jest.Mock; findUnique: jest.Mock };
     productionBatch: { update: jest.Mock };
     replenishRequest: {
@@ -51,7 +62,11 @@ describe('QcReviewsService', () => {
     photoUrl: null,
     reviewedAt: new Date(),
     reviewedById: 'user-kcs',
+    segments: [] as { id: bigint; segmentSpecId: bigint; failedQty: number; segmentSpec: { cutLengthMm: ReturnType<typeof decimal> } }[],
   };
+
+  // Cỡ đoạn 745mm, cùng materialId 30n với awaitingIssue - đã cắt 8 đoạn trong CHÍNH đợt 100n.
+  const segmentSpecRow = { id: 30n, materialId: 30n, cutLengthMm: decimal(745) };
 
   const awaitingBatch = {
     id: 700n,
@@ -75,6 +90,7 @@ describe('QcReviewsService', () => {
     photoUrl: null,
     reviewedAt: new Date(),
     reviewedById: 'user-kcs',
+    segments: [] as { id: bigint; segmentSpecId: bigint; failedQty: number; segmentSpec: { cutLengthMm: ReturnType<typeof decimal> } }[],
   };
 
   beforeEach(() => {
@@ -83,6 +99,13 @@ describe('QcReviewsService', () => {
         create: jest.fn().mockResolvedValue(qcReview),
         findMany: jest.fn(),
         count: jest.fn(),
+        findFirst: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
+      },
+      qcReviewSegment: { update: jest.fn() },
+      segmentSpec: { findMany: jest.fn().mockResolvedValue([segmentSpecRow]) },
+      cutPatternSegment: {
+        groupBy: jest.fn().mockResolvedValue([{ segmentSpecId: 30n, _sum: { qty: 8 } }]),
       },
       steelIssue: { update: jest.fn(), findUnique: jest.fn() },
       productionBatch: { update: jest.fn() },
@@ -110,8 +133,8 @@ describe('QcReviewsService', () => {
   });
 
   describe('review', () => {
-    it('duyệt ĐẠT hoàn toàn (failedQty=0) - đóng QC_PASSED, không rework/replenish', async () => {
-      const result = await service.review('100', { failedQty: 0 }, 'user-kcs');
+    it('duyệt ĐẠT hoàn toàn (segments=[]) - đóng QC_PASSED, failedQty tổng = 0', async () => {
+      const result = await service.review('100', { segments: [] }, 'user-kcs');
 
       expect(prisma.steelIssue.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -119,25 +142,26 @@ describe('QcReviewsService', () => {
           data: { status: SteelIssueStatus.QC_PASSED },
         }),
       );
-      expect(prisma.replenishRequest.create).not.toHaveBeenCalled();
-      expect(steelIssuesService.createReworkIssue).not.toHaveBeenCalled();
+      expect(prisma.qcReview.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+          data: expect.objectContaining({ failedQty: 0, scrapQty: 0 }),
+        }),
+      );
       expect(result.id).toBe('500');
     });
 
-    it('có phần sửa được (failedQty > scrapQty) - sinh đợt rework sau khi transaction commit', async () => {
-      await service.review('100', { failedQty: 5, scrapQty: 2 }, 'user-kcs');
+    it('chấm lỗi 1 cỡ đoạn - tạo QcReviewSegment, failedQty tổng = đúng cỡ đó', async () => {
+      await service.review('100', { segments: [{ segmentSpecId: '30', failedQty: 3 }] }, 'user-kcs');
 
-      expect(prisma.replenishRequest.create).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { qcReviewId: 500n, qty: 2 } }),
+      expect(prisma.qcReview.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            failedQty: 3,
+            segments: { create: [{ segmentSpecId: 30n, failedQty: 3 }] },
+          }),
+        }),
       );
-      expect(steelIssuesService.createReworkIssue).toHaveBeenCalledWith(awaitingIssue, 3);
-    });
-
-    it('toàn bộ phế (failedQty = scrapQty) - chỉ sinh replenish, không rework', async () => {
-      await service.review('100', { failedQty: 4, scrapQty: 4 }, 'user-kcs');
-
-      expect(prisma.replenishRequest.create).toHaveBeenCalled();
-      expect(steelIssuesService.createReworkIssue).not.toHaveBeenCalled();
     });
 
     it('ném ConflictException nếu đợt không ở AWAITING_QC', async () => {
@@ -146,21 +170,163 @@ describe('QcReviewsService', () => {
         status: SteelIssueStatus.RECEIVED,
       });
 
-      await expect(service.review('100', { failedQty: 0 }, 'user-kcs')).rejects.toThrow(
+      await expect(service.review('100', { segments: [] }, 'user-kcs')).rejects.toThrow(
         ConflictException,
       );
     });
 
-    it('ném BadRequestException nếu failedQty vượt số cây đã báo cắt', async () => {
-      await expect(service.review('100', { failedQty: 999 }, 'user-kcs')).rejects.toThrow(
-        BadRequestException,
-      );
+    it('ném BadRequestException nếu failedQty của 1 cỡ vượt số đã cắt CHÍNH ĐỢT này', async () => {
+      // đã cắt 8 đoạn cỡ 745mm (mock cutPatternSegment.groupBy), chấm lỗi 9 là vượt
+      await expect(
+        service.review('100', { segments: [{ segmentSpecId: '30', failedQty: 9 }] }, 'user-kcs'),
+      ).rejects.toThrow(BadRequestException);
     });
 
-    it('ném BadRequestException nếu scrapQty vượt failedQty', async () => {
+    it('ném BadRequestException nếu cỡ đoạn thuộc LOẠI SẮT KHÁC với đợt xuất', async () => {
+      prisma.segmentSpec.findMany.mockResolvedValue([{ ...segmentSpecRow, materialId: 999n }]);
+
       await expect(
-        service.review('100', { failedQty: 2, scrapQty: 3 }, 'user-kcs'),
+        service.review('100', { segments: [{ segmentSpecId: '30', failedQty: 1 }] }, 'user-kcs'),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('ném NotFoundException nếu segmentSpecId không tồn tại', async () => {
+      prisma.segmentSpec.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.review('100', { segments: [{ segmentSpecId: '999', failedQty: 1 }] }, 'user-kcs'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('reportSegmentDone', () => {
+    const reviewWithFailedSegment = {
+      ...qcReview,
+      segments: [
+        {
+          id: 900n,
+          segmentSpecId: 30n,
+          failedQty: 5,
+          resolvedQty: 2,
+          phoiReportedAt: null as Date | null,
+          segmentSpec: { cutLengthMm: decimal(745) },
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      prisma.qcReview.findFirst.mockResolvedValue(reviewWithFailedSegment);
+      prisma.qcReview.findUniqueOrThrow.mockResolvedValue(reviewWithFailedSegment);
+    });
+
+    it('báo bù đủ thành công - set phoiReportedAt (outstanding = 5 - 2 = 3 > 0)', async () => {
+      await service.reportSegmentDone('100', '30');
+
+      expect(prisma.qcReviewSegment.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { phoiReportedAt: expect.any(Date) as unknown as Date },
+      });
+    });
+
+    it('ném ConflictException nếu cỡ đoạn đã hết lỗi (outstanding = 0)', async () => {
+      prisma.qcReview.findFirst.mockResolvedValue({
+        ...reviewWithFailedSegment,
+        segments: [{ ...reviewWithFailedSegment.segments[0], resolvedQty: 5 }],
+      });
+
+      await expect(service.reportSegmentDone('100', '30')).rejects.toThrow(ConflictException);
+      expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
+    });
+
+    it('ném ConflictException nếu đã báo bù đủ rồi - đang chờ KCS duyệt lại', async () => {
+      prisma.qcReview.findFirst.mockResolvedValue({
+        ...reviewWithFailedSegment,
+        segments: [{ ...reviewWithFailedSegment.segments[0], phoiReportedAt: new Date() }],
+      });
+
+      await expect(service.reportSegmentDone('100', '30')).rejects.toThrow(ConflictException);
+      expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
+    });
+
+    it('ném NotFoundException nếu đợt sắt chưa có KCS chấm nào', async () => {
+      prisma.qcReview.findFirst.mockResolvedValue(null);
+
+      await expect(service.reportSegmentDone('100', '30')).rejects.toThrow(NotFoundException);
+    });
+
+    it('ném NotFoundException nếu cỡ đoạn đó không có lỗi trong lần chấm', async () => {
+      await expect(service.reportSegmentDone('100', '999')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('recheck', () => {
+    const reviewAwaitingRecheck = {
+      ...qcReview,
+      segments: [
+        {
+          id: 900n,
+          segmentSpecId: 30n,
+          failedQty: 5,
+          resolvedQty: 2,
+          phoiReportedAt: new Date('2026-08-24T00:00:00.000Z') as Date | null,
+          segmentSpec: { cutLengthMm: decimal(745) },
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      prisma.qcReview.findFirst.mockResolvedValue(reviewAwaitingRecheck);
+      prisma.qcReview.findUniqueOrThrow.mockResolvedValue(reviewAwaitingRecheck);
+    });
+
+    it('duyệt lại đạt hết (remainingFailedQty=0) - resolvedQty = failedQty, phoiReportedAt giữ nguyên', async () => {
+      await service.recheck('100', { segments: [{ segmentSpecId: '30', remainingFailedQty: 0 }] });
+
+      // outstanding = 5 - 2 = 3; resolvedQty = 2 + (3 - 0) = 5
+      expect(prisma.qcReviewSegment.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { resolvedQty: 5, phoiReportedAt: reviewAwaitingRecheck.segments[0].phoiReportedAt },
+      });
+    });
+
+    it('duyệt lại còn hỏng (remainingFailedQty=1) - cộng phần đạt, phoiReportedAt reset về null', async () => {
+      await service.recheck('100', { segments: [{ segmentSpecId: '30', remainingFailedQty: 1 }] });
+
+      // resolvedQty = 2 + (3 - 1) = 4
+      expect(prisma.qcReviewSegment.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { resolvedQty: 4, phoiReportedAt: null },
+      });
+    });
+
+    it('ném BadRequestException nếu remainingFailedQty vượt outstanding (3)', async () => {
+      await expect(
+        service.recheck('100', { segments: [{ segmentSpecId: '30', remainingFailedQty: 4 }] }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
+    });
+
+    it('ném ConflictException nếu cỡ đoạn chưa được Phôi báo "Bù đủ" (phoiReportedAt null)', async () => {
+      prisma.qcReview.findFirst.mockResolvedValue({
+        ...reviewAwaitingRecheck,
+        segments: [{ ...reviewAwaitingRecheck.segments[0], phoiReportedAt: null }],
+      });
+
+      await expect(
+        service.recheck('100', { segments: [{ segmentSpecId: '30', remainingFailedQty: 0 }] }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('ném NotFoundException nếu đợt sắt chưa có KCS chấm nào', async () => {
+      prisma.qcReview.findFirst.mockResolvedValue(null);
+
+      await expect(service.recheck('100', { segments: [] })).rejects.toThrow(NotFoundException);
+    });
+
+    it('ném NotFoundException nếu cỡ đoạn không có trong lần chấm', async () => {
+      await expect(
+        service.recheck('100', { segments: [{ segmentSpecId: '999', remainingFailedQty: 0 }] }),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 
