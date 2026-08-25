@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { CuttingProposalStatus } from '../../generated/prisma/client';
+import { CuttingProposalStatus, PurchaseProposalStatus } from '../../generated/prisma/client';
 import { AppConfig } from '../../config/configuration';
 import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
@@ -22,7 +22,8 @@ describe('CuttingProposalsService', () => {
     cuttingProposalLine: { create: jest.Mock };
     cuttingProposalPattern: { create: jest.Mock };
     cuttingProposalPatternSegment: { create: jest.Mock };
-    purchaseProposal: { create: jest.Mock };
+    purchaseProposal: { findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
+    purchaseProposalItem: { findMany: jest.Mock };
     productionOrder: { findUniqueOrThrow: jest.Mock };
     productionInvoice: { findUniqueOrThrow: jest.Mock };
     systemConfig: { findUniqueOrThrow: jest.Mock };
@@ -34,6 +35,7 @@ describe('CuttingProposalsService', () => {
     notification: { create: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   };
   let externalApiService: { post: jest.Mock };
@@ -122,7 +124,19 @@ describe('CuttingProposalsService', () => {
       cuttingProposalLine: { create: jest.fn() },
       cuttingProposalPattern: { create: jest.fn() },
       cuttingProposalPatternSegment: { create: jest.fn() },
-      purchaseProposal: { create: jest.fn() },
+      // 2026-08-25 "gộp 1 PI = 1 form": findFirst tìm đề xuất còn mở của cùng PI để gộp thêm dòng
+      // sắt vào - mặc định null (không tìm thấy) vì productionOrder fixture dưới đây KHÔNG có
+      // productionInvoiceId trên productionInvoiceItem (targetProductionInvoiceId = undefined ->
+      // findFirst thậm chí không được gọi tới) - giữ ĐÚNG hành vi cũ (luôn tạo mới) cho phần lớn
+      // test hiện có; test nào cần mô phỏng có PI + đề xuất đã tồn tại tự override cả 2.
+      purchaseProposal: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 900n }),
+        update: jest.fn(),
+      },
+      // recomputeProposalStatus() (purchase-proposal-status.util.ts) đọc TƯƠI status của mọi item
+      // sau khi approve() tạo/gộp xong - mặc định 1 dòng NEW.
+      purchaseProposalItem: { findMany: jest.fn().mockResolvedValue([{ status: 'NEW' }]) },
       productionOrder: { findUniqueOrThrow: jest.fn().mockResolvedValue(productionOrder) },
       productionInvoice: { findUniqueOrThrow: jest.fn() },
       systemConfig: { findUniqueOrThrow: jest.fn().mockResolvedValue(systemConfig) },
@@ -149,6 +163,8 @@ describe('CuttingProposalsService', () => {
         }
         return Promise.resolve(qtyRow(stockQty));
       }),
+      // lockBusinessKey() (khoá gộp theo PI, 2026-08-25) dùng $executeRaw - no-op ở test.
+      $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     externalApiService = { post: jest.fn() };
@@ -554,11 +570,20 @@ describe('CuttingProposalsService', () => {
         }),
       );
       expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           cuttingProposalId: 2n,
           warehouseCode: 'phoi-son-han',
-          items: { create: [{ materialId: 200n, buyQty: 8, actualStock: 0 }] },
-        },
+          items: {
+            create: [
+              expect.objectContaining({
+                materialId: 200n,
+                buyQty: 8,
+                actualStock: 0,
+                status: 'NEW',
+              }) as unknown,
+            ],
+          },
+        }) as unknown,
       });
       const notifyCall = prisma.notification.create.mock.calls[0] as unknown as [
         { data: { title: string } },
@@ -1349,11 +1374,21 @@ describe('CuttingProposalsService', () => {
       await service.approve('2', 'user-1');
 
       expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           cuttingProposalId: 2n,
           warehouseCode: 'phoi-son-han',
-          items: { create: [{ materialId: 30n, buyQty: 8, actualStock: 0 }] },
-        },
+          items: {
+            create: [
+              expect.objectContaining({
+                materialId: 30n,
+                buyQty: 8,
+                actualStock: 0,
+                status: 'NEW',
+                purchasedAt: undefined,
+              }),
+            ],
+          },
+        }) as unknown,
       });
       // Không có gì để giữ chỗ (consumeQty=0) -> không gọi reserve().
       expect(stockReservationsService.reserve).not.toHaveBeenCalled();
@@ -1376,21 +1411,40 @@ describe('CuttingProposalsService', () => {
       prisma.material.findMany.mockResolvedValue([
         { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
       ]);
+      // Dòng duy nhất của đề xuất được tạo thẳng PURCHASED (buyQty=0) -> rollup do
+      // recomputeProposalStatus() suy ra cũng phải là PURCHASED.
+      prisma.purchaseProposalItem.findMany.mockResolvedValueOnce([
+        { status: PurchaseProposalStatus.PURCHASED },
+      ]);
 
       await service.approve('2', 'user-1');
 
       // Mọi dòng buyQty=0 (tồn đã đủ, không có gì để mua) -> tạo thẳng PURCHASED, không phải NEW -
       // nếu không đề xuất sẽ kẹt vĩnh viễn ở PURCHASING vì cờ "mọi item đã nhận đủ" chỉ được kiểm
       // tra bên trong receiveItem(), không bao giờ được gọi khi chẳng có gì cần nhận
-      // (D.p7-zero-buyqty-stuck, phát hiện qua e2e/golden-path.spec.ts).
+      // (D.p7-zero-buyqty-stuck, phát hiện qua e2e/golden-path.spec.ts). Từ khi state machine
+      // chuyển xuống cấp item, status/purchasedAt PURCHASED nằm trên ITEM (items.create[0]),
+      // còn status cấp cha là giá trị ROLLUP ghi bằng 1 lệnh update() riêng (recomputeProposalStatus).
       expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           cuttingProposalId: 2n,
           warehouseCode: 'phoi-son-han',
-          items: { create: [{ materialId: 30n, buyQty: 0, actualStock: 20 }] },
-          status: 'PURCHASED',
-          purchasedAt: expect.any(Date) as Date,
-        },
+          items: {
+            create: [
+              expect.objectContaining({
+                materialId: 30n,
+                buyQty: 0,
+                actualStock: 20,
+                status: 'PURCHASED',
+                purchasedAt: expect.any(Date) as Date,
+              }),
+            ],
+          },
+        }) as unknown,
+      });
+      expect(prisma.purchaseProposal.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { status: 'PURCHASED' },
       });
       // Tham số thứ 2 là `tx` của chính transaction duyệt (Lỗ 5) - giữ chỗ PHẢI nằm trong đó,
       // nếu không thì khoá stock_quant ở trên nhả trước khi số dư kịp đổi. Khẳng định nó tồn tại
@@ -1431,11 +1485,21 @@ describe('CuttingProposalsService', () => {
       await service.approve('2', 'user-1');
 
       expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           cuttingProposalId: 2n,
           warehouseCode: 'phoi-son-han',
-          items: { create: [{ materialId: 30n, buyQty: 5, actualStock: 3 }] },
-        },
+          items: {
+            create: [
+              expect.objectContaining({
+                materialId: 30n,
+                buyQty: 5,
+                actualStock: 3,
+                status: 'NEW',
+                purchasedAt: undefined,
+              }),
+            ],
+          },
+        }) as unknown,
       });
       expect(stockReservationsService.reserve).toHaveBeenCalledWith(
         expect.objectContaining({ qty: 3, refType: 'CUTTING_PROPOSAL' }),

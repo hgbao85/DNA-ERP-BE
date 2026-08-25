@@ -20,6 +20,8 @@ import {
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -181,7 +183,15 @@ export class CuttingProposalsService {
 
   async requestForOrder(
     productionOrderId: bigint,
-    options: { idempotencyKey?: string; requestedById?: string } = {},
+    options: {
+      idempotencyKey?: string;
+      requestedById?: string;
+      /** Chạy SAU KHI phương án cắt tính xong (thành công/chặn/lỗi đều tính là "xong") - dùng để
+       *  hoãn các đề xuất mua khác của CÙNG PI (VTTP/tiêu hao) tới khi đề xuất mua sắt đã hiển thị
+       *  xong, thay vì bắn song song và làm Mua hàng thấy phiếu xuất hiện rải rác không đồng bộ
+       *  (2026-08-24, xem ProductionInvoicesService.approveItem()). */
+      onComplete?: () => void | Promise<void>;
+    } = {},
   ): Promise<CuttingProposalResponseDto> {
     if (options.idempotencyKey) {
       const existing = await this.prisma.cuttingProposal.findUnique({
@@ -206,6 +216,7 @@ export class CuttingProposalsService {
       proposal.id,
       () => this.buildOrderJob(productionOrderId),
       options.requestedById,
+      options.onComplete,
     ).catch((error: unknown) => {
       this.logger.error(
         `Cutting proposal ${proposal.id} (production order ${productionOrderId}) failed: ${
@@ -227,7 +238,11 @@ export class CuttingProposalsService {
    */
   async requestForInvoice(
     productionInvoiceId: bigint,
-    options: { idempotencyKey?: string; requestedById?: string } = {},
+    options: {
+      idempotencyKey?: string;
+      requestedById?: string;
+      onComplete?: () => void | Promise<void>;
+    } = {},
   ): Promise<CuttingProposalResponseDto> {
     // idempotencyKey đối xứng với requestForOrder() - lời gọi tự động (duyệt cả cụm) không truyền
     // gì (options.idempotencyKey undefined -> luôn tạo mới), còn nút "Tính lại" thủ công cho
@@ -255,6 +270,7 @@ export class CuttingProposalsService {
       proposal.id,
       () => this.buildInvoiceJob(productionInvoiceId),
       options.requestedById,
+      options.onComplete,
     ).catch((error: unknown) => {
       this.logger.error(
         `Cutting proposal ${proposal.id} (merged PI ${productionInvoiceId}) failed: ${
@@ -910,14 +926,12 @@ export class CuttingProposalsService {
             }
           }
 
-          // Nếu tồn hiện có đã đủ dùng cho MỌI dòng (buyQty=0 khắp nơi) thì không có gì để mua -
-          // tạo thẳng ở PURCHASED thay vì NEW, nếu không đề xuất sẽ kẹt vĩnh viễn ở PURCHASING: cờ
-          // "mọi item đã nhận đủ -> PURCHASED" chỉ được kiểm tra bên trong receiveItem() (xem dưới),
-          // nhưng receiveItem() không bao giờ được gọi khi buyQty=0 cho mọi dòng - đúng luồng đọc,
-          // NhapKhoPage tự hiện "Đã nhận đủ" ngay (receivedQty 0 >= buyQty 0) nên không có nút xác
-          // nhận nào để bấm (phát hiện qua e2e/golden-path.spec.ts khi tồn kho tích luỹ đủ qua nhiều
-          // lần chạy demo, D.p7-zero-buyqty-stuck).
-          const allCovered = items.every((it) => it.buyQty === 0);
+          // Nếu tồn hiện có đã đủ (buyQty=0) cho 1 dòng thì không có gì để mua dòng đó - tạo/set
+          // thẳng item.status=PURCHASED thay vì NEW ngay từ đầu (không đợi receiveItem()), nếu
+          // không dòng đó sẽ kẹt vĩnh viễn ở NEW chờ báo giá vô ích: NhapKhoPage tự hiện "Đã nhận
+          // đủ" ngay (receivedQty 0 >= buyQty 0) nên không có nút xác nhận nào để bấm mà tự
+          // receiveItem() lên PURCHASED được (phát hiện qua e2e/golden-path.spec.ts khi tồn kho
+          // tích luỹ đủ qua nhiều lần chạy demo, D.p7-zero-buyqty-stuck).
           // warehouseCode cấp cả đề xuất giờ CHỈ mang tính tóm tắt/hiển thị (lấy theo dòng đầu tiên)
           // - nguồn xác thực thật để nhập hàng là PurchaseProposalItem.materialId -> Material.
           // warehouseId, xem PurchaseProposalsService.receiveItem(). Hiện luôn trùng 1 kho vì
@@ -925,16 +939,120 @@ export class CuttingProposalsService {
           const primaryWarehouseCode = warehouseByMaterialId.get(
             buyableLines[0].materialId,
           )!.warehouseCode;
-          await tx.purchaseProposal.create({
-            data: {
-              cuttingProposalId: bigId,
-              warehouseCode: primaryWarehouseCode,
-              items: { create: items },
-              ...(allCovered
-                ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
-                : {}),
-            },
-          });
+
+          // Gộp vào ĐÚNG 1 PurchaseProposal/PI (2026-08-25, chốt lại yêu cầu thực tế "Sếp/PM"):
+          // chờ đề xuất sắt xong rồi mới tính VTTP/tiêu hao (đã có sẵn từ 2026-08-24, xem
+          // ProductionInvoicesService onComplete) - giờ đi xa hơn, để cả 3 nguồn CÙNG GHI vào 1
+          // bản ghi PurchaseProposal duy nhất thay vì mỗi nguồn tự tạo riêng, Mua hàng chỉ thấy
+          // ĐÚNG 1 form cho cả PI. Khoá theo PI (không phải theo CuttingProposal) để 3 nguồn không
+          // cùng lúc miss-tìm rồi cùng tạo trùng (race, xem ConsumableMaterialPurchaseService/
+          // PieceMaterialYieldPurchaseService dùng CHUNG khoá này).
+          const targetProductionInvoiceId =
+            proposal.productionInvoiceId ??
+            (proposal.productionOrderId
+              ? (
+                  await tx.productionOrder.findUniqueOrThrow({
+                    where: { id: proposal.productionOrderId },
+                    select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+                  })
+                ).productionInvoiceItem.productionInvoiceId
+              : null);
+
+          if (targetProductionInvoiceId) {
+            await lockBusinessKey(tx, `purchase-proposal-merge:${targetProductionInvoiceId}`);
+          }
+
+          // Tìm đề xuất "còn mở" (mọi trạng thái trừ PURCHASED) chứ không chỉ NEW (2026-08-25,
+          // sửa cùng lúc với chuyển state machine xuống cấp item) - với item-level status, rollup
+          // của proposal rời NEW ngay khi có 1 dòng bất kỳ được acknowledge/báo giá, SỚM hơn hẳn
+          // trước đây (đúng mục tiêu "duyệt riêng từng người") - nếu vẫn lọc cứng theo NEW, VTTP/
+          // tiêu hao sẽ không tìm thấy đề xuất sắt vừa tạo nữa ngay khi có người bắt đầu xử lý nó,
+          // tự tạo đề xuất THỨ 2 tách rời, phá đúng cơ chế "1 PI = 1 form" (bug tiềm ẩn phát hiện
+          // qua rà soát code khi thiết kế tính năng duyệt riêng, chưa từng biểu hiện ra ngoài vì
+          // trước đây chưa ai kịp acknowledge trước khi cả 3 nguồn tính xong trong cùng 1 lượt).
+          const existingProposal = targetProductionInvoiceId
+            ? await tx.purchaseProposal.findFirst({
+                where: {
+                  productionInvoiceId: targetProductionInvoiceId,
+                  status: { not: PurchaseProposalStatus.PURCHASED },
+                },
+                include: { items: true },
+              })
+            : null;
+
+          if (existingProposal) {
+            // Đề xuất chung đã có sẵn (do VTTP/tiêu hao tạo trước, hoặc từ 1 lượt "Tính lại" cắt
+            // sắt trước đó chưa bị Mua hàng xử lý) - GHI ĐÈ/THÊM đúng các dòng sắt vào đó, không
+            // tạo bản ghi mới. cuttingProposalId luôn trỏ về phương án cắt MỚI NHẤT vừa duyệt (ghi
+            // đè phương án cũ nếu có - phương án cũ đã bị đánh SUPERSEDED ở trên rồi).
+            for (const it of items) {
+              const existingItem = existingProposal.items.find(
+                (x) => x.materialId === it.materialId,
+              );
+              if (existingItem) {
+                // Chỉ ghi đè status khi dòng đó CHƯA ai động vào (còn NEW) - "Tính lại" đổi buyQty
+                // của 1 dòng đã QUOTING/SUBMITTED trở đi là ca hiếm/ngoài phạm vi, không tự ý huỷ
+                // tiến độ báo giá đang dở của người mua.
+                const nextStatus =
+                  existingItem.status === PurchaseProposalStatus.NEW
+                    ? it.buyQty === 0
+                      ? PurchaseProposalStatus.PURCHASED
+                      : PurchaseProposalStatus.NEW
+                    : undefined;
+                await tx.purchaseProposalItem.update({
+                  where: { id: existingItem.id },
+                  data: {
+                    buyQty: it.buyQty,
+                    actualStock: it.actualStock,
+                    ...(nextStatus ? { status: nextStatus } : {}),
+                    ...(nextStatus === PurchaseProposalStatus.PURCHASED
+                      ? { purchasedAt: new Date() }
+                      : {}),
+                  },
+                });
+              } else {
+                const isCovered = it.buyQty === 0;
+                await tx.purchaseProposalItem.create({
+                  data: {
+                    proposalId: existingProposal.id,
+                    materialId: it.materialId,
+                    buyQty: it.buyQty,
+                    actualStock: it.actualStock,
+                    status: isCovered
+                      ? PurchaseProposalStatus.PURCHASED
+                      : PurchaseProposalStatus.NEW,
+                    purchasedAt: isCovered ? new Date() : undefined,
+                  },
+                });
+              }
+            }
+            await tx.purchaseProposal.update({
+              where: { id: existingProposal.id },
+              data: { cuttingProposalId: bigId },
+            });
+            await recomputeProposalStatus(tx, existingProposal.id);
+          } else {
+            const created = await tx.purchaseProposal.create({
+              data: {
+                cuttingProposalId: bigId,
+                productionInvoiceId: targetProductionInvoiceId ?? undefined,
+                warehouseCode: primaryWarehouseCode,
+                items: {
+                  create: items.map((it) => {
+                    const isCovered = it.buyQty === 0;
+                    return {
+                      ...it,
+                      status: isCovered
+                        ? PurchaseProposalStatus.PURCHASED
+                        : PurchaseProposalStatus.NEW,
+                      purchasedAt: isCovered ? new Date() : undefined,
+                    };
+                  }),
+                },
+              },
+            });
+            await recomputeProposalStatus(tx, created.id);
+          }
         }
 
         // B4 Đợt 2 (mục 13 changelog 2026-08-15): approve() KHÔNG còn trừ tồn thật (StockLedger) -
@@ -978,6 +1096,7 @@ export class CuttingProposalsService {
     proposalId: bigint,
     buildJob: () => Promise<SolverJob>,
     requestedById?: string,
+    onComplete?: () => void | Promise<void>,
   ): Promise<void> {
     let poNumber: string | undefined;
     try {
@@ -1139,6 +1258,19 @@ export class CuttingProposalsService {
         `Tính đề xuất cắt sắt thất bại${poNumber ? ` cho ${poNumber}` : ''}`,
         this.extractErrorMessage(error),
       );
+    } finally {
+      // Chạy dù thành công/chặn/lỗi - "xong" ở đây nghĩa là đề xuất mua sắt (nếu có) đã hiển thị
+      // ổn định, không phải "tính ra kết quả tốt". Tách try/catch riêng, best-effort như mọi
+      // trigger khác trong luồng này - lỗi ở đây không được phép che mất kết quả cắt sắt vừa lưu.
+      if (onComplete) {
+        try {
+          await onComplete();
+        } catch (error) {
+          this.logger.error(
+            `onComplete sau cutting proposal ${proposalId} thất bại: ${(error as Error).message}`,
+          );
+        }
+      }
     }
   }
 
