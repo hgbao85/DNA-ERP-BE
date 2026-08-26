@@ -196,10 +196,19 @@ export class PurchaseProposalsService {
     }
     await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
-      await tx.purchaseProposalItem.updateMany({
-        where: { id: { in: myNewItems.map((i) => i.id) } },
+      // Re-check status BÊN TRONG transaction (D.p12-item-status-race, 2026-08-26): myNewItems lọc
+      // từ snapshot đọc NGOÀI transaction, có thể đã bị 1 thao tác khác đổi trạng thái giữa lúc đọc
+      // và lúc khoá kịp giữ. Điều kiện `status: NEW` trong where + so khớp count là chốt chặn cuối,
+      // cùng idiom production-invoices.service.ts#approveItem().
+      const { count } = await tx.purchaseProposalItem.updateMany({
+        where: { id: { in: myNewItems.map((i) => i.id) }, status: PurchaseProposalStatus.NEW },
         data: { status: PurchaseProposalStatus.QUOTING },
       });
+      if (count !== myNewItems.length) {
+        throw new ConflictException(
+          'Một số vật tư vừa bị thay đổi trạng thái bởi thao tác khác - tải lại trang để xem tình trạng mới nhất',
+        );
+      }
       await recomputeProposalStatus(tx, proposal.id);
     });
     return this.findOne(id);
@@ -281,10 +290,19 @@ export class PurchaseProposalsService {
 
     await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
-      await tx.purchaseProposalItem.updateMany({
-        where: { id: { in: myQuotingItems.map((i) => i.id) } },
+      // Re-check status BÊN TRONG transaction (D.p12-item-status-race, 2026-08-26) - xem acknowledge().
+      const { count } = await tx.purchaseProposalItem.updateMany({
+        where: {
+          id: { in: myQuotingItems.map((i) => i.id) },
+          status: PurchaseProposalStatus.QUOTING,
+        },
         data: { status: PurchaseProposalStatus.SUBMITTED, submittedAt: new Date() },
       });
+      if (count !== myQuotingItems.length) {
+        throw new ConflictException(
+          'Một số vật tư vừa bị thay đổi trạng thái bởi thao tác khác - tải lại trang để xem tình trạng mới nhất',
+        );
+      }
       await recomputeProposalStatus(tx, proposal.id);
     });
     return this.findOne(id);
@@ -349,6 +367,25 @@ export class PurchaseProposalsService {
     await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
       for (const item of targetItems) {
+        // Re-check status BÊN TRONG transaction (D.p12-item-status-race, 2026-08-26): `item.status`
+        // đọc ở findDetailOrThrow phía trên có thể đã cũ nếu 1 thao tác reject()/approve() khác vừa
+        // ghi đè item này giữa lúc đọc và lúc khoá kịp giữ (khoá lockBusinessKey chỉ loại trừ 2
+        // transaction chồng nhau, không tự làm dữ liệu đọc trước đó "tươi" lại). `updateMany` kèm
+        // điều kiện status hiện tại + so khớp count===1 là chốt chặn cuối, cùng idiom
+        // production-invoices.service.ts#approveItem().
+        const { count } = await tx.purchaseProposalItem.updateMany({
+          where: { id: item.id, status: PurchaseProposalStatus.SUBMITTED },
+          data: {
+            status: PurchaseProposalStatus.PURCHASING,
+            approvedAt: new Date(),
+            approvedById: actorUserId,
+          },
+        });
+        if (count === 0) {
+          throw new ConflictException(
+            `Vật tư ${item.material.code} vừa bị xử lý bởi thao tác khác - tải lại trang để xem tình trạng mới nhất`,
+          );
+        }
         await tx.purchaseProposalQuote.updateMany({
           where: { itemId: item.id },
           data: { isChosen: false },
@@ -356,14 +393,6 @@ export class PurchaseProposalsService {
         await tx.purchaseProposalQuote.update({
           where: { id: chosenQuoteIdByItem.get(item.id) },
           data: { isChosen: true },
-        });
-        await tx.purchaseProposalItem.update({
-          where: { id: item.id },
-          data: {
-            status: PurchaseProposalStatus.PURCHASING,
-            approvedAt: new Date(),
-            approvedById: actorUserId,
-          },
         });
       }
       await recomputeProposalStatus(tx, proposal.id);
@@ -428,14 +457,23 @@ export class PurchaseProposalsService {
 
     await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
-      await tx.purchaseProposalItem.updateMany({
-        where: { id: { in: targetItems.map((i) => i.id) } },
+      // Re-check status BÊN TRONG transaction (D.p12-item-status-race, 2026-08-26) - xem acknowledge().
+      const { count } = await tx.purchaseProposalItem.updateMany({
+        where: {
+          id: { in: targetItems.map((i) => i.id) },
+          status: PurchaseProposalStatus.SUBMITTED,
+        },
         data: {
           status: PurchaseProposalStatus.REJECTED,
           rejectedAt: new Date(),
           rejectionReason: dto.rejectionReason,
         },
       });
+      if (count !== targetItems.length) {
+        throw new ConflictException(
+          'Một số vật tư vừa bị thay đổi trạng thái bởi thao tác khác - tải lại trang để xem tình trạng mới nhất',
+        );
+      }
       await recomputeProposalStatus(tx, proposal.id);
     });
 
@@ -498,16 +536,28 @@ export class PurchaseProposalsService {
 
     await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
-      await tx.purchaseProposalQuote.deleteMany({
-        where: { itemId: { in: myRejectedItems.map((i) => i.id) } },
-      });
-      await tx.purchaseProposalItem.updateMany({
-        where: { id: { in: myRejectedItems.map((i) => i.id) } },
+      // Re-check status BÊN TRONG transaction (D.p12-item-status-race, 2026-08-26) - xem
+      // acknowledge(). Đổi trạng thái TRƯỚC, xoá quote SAU (đảo thứ tự so với trước): nếu count
+      // lệch (item đã bị đổi bởi thao tác khác) thì throw ngay, không kịp xoá mất báo giá cũ của
+      // item đó.
+      const { count } = await tx.purchaseProposalItem.updateMany({
+        where: {
+          id: { in: myRejectedItems.map((i) => i.id) },
+          status: PurchaseProposalStatus.REJECTED,
+        },
         data: {
           status: PurchaseProposalStatus.QUOTING,
           rejectedAt: null,
           rejectionReason: null,
         },
+      });
+      if (count !== myRejectedItems.length) {
+        throw new ConflictException(
+          'Một số vật tư vừa bị thay đổi trạng thái bởi thao tác khác - tải lại trang để xem tình trạng mới nhất',
+        );
+      }
+      await tx.purchaseProposalQuote.deleteMany({
+        where: { itemId: { in: myRejectedItems.map((i) => i.id) } },
       });
       await recomputeProposalStatus(tx, proposal.id);
     });

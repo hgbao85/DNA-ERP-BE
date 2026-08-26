@@ -185,10 +185,41 @@ export class ConsumableMaterialPurchaseService {
           include: { items: true },
         });
       } else {
-        const itemByMaterial = new Map(proposal.items.map((it) => [it.materialId.toString(), it]));
+        // Ưu tiên dòng CHƯA đóng hồ sơ (status khác PURCHASED) nếu 1 material lỡ có 2 dòng (dòng cũ
+        // đã PURCHASED + dòng mới tách ra cho phần thiếu, xem nhánh dưới) - nếu không, lượt tính lại
+        // kế tiếp có thể chọn nhầm dòng đã đóng làm "dòng đang mở" và tách thêm dòng thiếu trùng lặp.
+        const itemByMaterial = new Map<string, (typeof proposal.items)[number]>();
+        for (const it of proposal.items) {
+          const key = it.materialId.toString();
+          const current = itemByMaterial.get(key);
+          if (
+            !current ||
+            (current.status === PurchaseProposalStatus.PURCHASED &&
+              it.status !== PurchaseProposalStatus.PURCHASED)
+          ) {
+            itemByMaterial.set(key, it);
+          }
+        }
         for (const c of computed) {
           const existingItem = itemByMaterial.get(c.materialIdStr);
-          if (existingItem) {
+          if (existingItem?.status === PurchaseProposalStatus.PURCHASED) {
+            // Dòng đã đóng hồ sơ (nhận đủ hàng) - KHÔNG ghi đè buyQty lên nó (2026-08-26, lỗ #6 "ghi
+            // đè buyQty của item PURCHASED làm thiếu hụt biến mất khỏi hàng đợi vĩnh viễn"). Nếu
+            // buyQty vừa tính vẫn cao hơn receivedQty đã chốt, phần chênh lệch là nhu cầu mua THẬT -
+            // tách thành dòng NEW riêng để đi lại từ đầu quy trình báo giá, thay vì âm thầm sửa số
+            // trên hồ sơ đã đóng (không ai còn thấy nó trong hàng đợi vì activeOnly loại PURCHASED).
+            const shortfall = c.buyQty - existingItem.receivedQty.toNumber();
+            if (shortfall > 0) {
+              await tx.purchaseProposalItem.create({
+                data: {
+                  proposalId: proposal.id,
+                  materialId: c.materialId,
+                  buyQty: shortfall,
+                  actualStock: c.actualStock,
+                },
+              });
+            }
+          } else if (existingItem) {
             // Chỉ ghi đè status khi dòng đó CHƯA ai động vào (còn NEW) - không tự ý huỷ tiến độ
             // báo giá đang dở của người mua nếu lượt tính lại này đổi buyQty của 1 dòng đã QUOTING
             // trở đi (cùng idiom CuttingProposalsService.approve()).

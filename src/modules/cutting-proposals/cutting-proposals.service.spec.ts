@@ -23,7 +23,7 @@ describe('CuttingProposalsService', () => {
     cuttingProposalPattern: { create: jest.Mock };
     cuttingProposalPatternSegment: { create: jest.Mock };
     purchaseProposal: { findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
-    purchaseProposalItem: { findMany: jest.Mock };
+    purchaseProposalItem: { findMany: jest.Mock; update: jest.Mock; create: jest.Mock };
     productionOrder: { findUniqueOrThrow: jest.Mock };
     productionInvoice: { findUniqueOrThrow: jest.Mock };
     systemConfig: { findUniqueOrThrow: jest.Mock };
@@ -136,7 +136,11 @@ describe('CuttingProposalsService', () => {
       },
       // recomputeProposalStatus() (purchase-proposal-status.util.ts) đọc TƯƠI status của mọi item
       // sau khi approve() tạo/gộp xong - mặc định 1 dòng NEW.
-      purchaseProposalItem: { findMany: jest.fn().mockResolvedValue([{ status: 'NEW' }]) },
+      purchaseProposalItem: {
+        findMany: jest.fn().mockResolvedValue([{ status: 'NEW' }]),
+        update: jest.fn(),
+        create: jest.fn(),
+      },
       productionOrder: { findUniqueOrThrow: jest.fn().mockResolvedValue(productionOrder) },
       productionInvoice: { findUniqueOrThrow: jest.fn() },
       systemConfig: { findUniqueOrThrow: jest.fn().mockResolvedValue(systemConfig) },
@@ -1602,6 +1606,111 @@ describe('CuttingProposalsService', () => {
       await service.approve('2', 'user-1');
 
       expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+    });
+
+    // D.p13-merge-overwrites-buyqty (2026-08-26, phát hiện qua trao đổi với người dùng khi giải
+    // thích callout "PI thường ≥2 SKU cắt riêng" ở mục 3 changelog): khi gộp vào 1 PurchaseProposal
+    // đã có sẵn (do phương án cắt của 1 SKU KHÁC trong cùng PI tạo trước), nếu dòng vật tư trùng
+    // (2 SKU dùng chung 1 loại sắt) và dòng đó còn NEW, code cũ GHI ĐÈ buyQty bằng đúng số của SKU
+    // đang duyệt - XÓA MẤT nhu cầu mua của SKU kia thay vì CỘNG DỒN. buyQty của mỗi cutting proposal
+    // là nhu cầu THIẾU riêng của chính SKU đó (tính từ tồn vật lý còn lại, không hề biết gì về nhu
+    // cầu buyQty của SKU khác - xem StockReservationsService.getAvailableQty(), chỉ trừ theo
+    // StockReservation đã CONSUME, không trừ theo buyQty của đề xuất khác) nên 2 con số này PHẢI
+    // cộng dồn, không phải cái sau thay cái trước.
+    it('gộp vào đề xuất có sẵn: dòng vật tư trùng của 2 SKU khác nhau phải CỘNG DỒN buyQty, không ghi đè', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        // SKU B (phương án đang duyệt) tự tính ra cần mua thêm 8 cây - con số này KHÔNG biết gì về
+        // 20 cây SKU A đã ghi trước đó trên cùng vật tư.
+        lines: [{ materialId: 30n, feasible: true, totalBars: 8 }],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
+      // SKU B thuộc PI-50 (cùng PI với SKU A, nhưng KHÔNG gộp cắt - mỗi SKU tự có ProductionOrder).
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
+        productionInvoiceItem: { productionInvoiceId: 50n },
+      });
+      // Đề xuất mua #900 đã có sẵn (do SKU A tạo trước), dòng sắt hộp 30n còn NEW với buyQty=20.
+      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+        id: 900n,
+        items: [
+          {
+            id: 5000n,
+            materialId: 30n,
+            status: PurchaseProposalStatus.NEW,
+            buyQty: { toNumber: () => 20 },
+            receivedQty: { toNumber: () => 0 },
+          },
+        ],
+      });
+
+      await service.approve('2', 'user-1');
+
+      // Đúng ra phải là 20 (SKU A) + 8 (SKU B) = 28. Code cũ ghi đè thẳng 8, làm mất 20 cây của SKU A.
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
+        where: { id: 5000n },
+        data: expect.objectContaining({ buyQty: 28 }) as unknown,
+      });
+    });
+
+    // Đối xứng với test trên - "Tính lại" (cùng 1 SKU, phương án CŨ vừa bị chính lượt duyệt này
+    // supersede) vẫn phải THAY THẾ buyQty cũ (đã lỗi thời), KHÔNG cộng dồn - phân biệt bằng
+    // supersededCuttingProposalIds (existingProposal.cuttingProposalId nằm trong tập vừa supersede).
+    it('gộp vào đề xuất có sẵn: "Tính lại" cùng 1 SKU (phương án cũ vừa bị supersede) phải THAY THẾ buyQty, không cộng dồn', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        // Tính lại: totalBars mới = 8 (VD tồn/định mức đổi so với lần tính trước).
+        lines: [{ materialId: 30n, feasible: true, totalBars: 8 }],
+      });
+      // Phương án CŨ (id=77n, cùng anchor productionOrderId=1n) bị chính lượt duyệt này supersede.
+      prisma.cuttingProposal.findMany.mockResolvedValueOnce([{ id: 77n }]);
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
+        productionInvoiceItem: { productionInvoiceId: 50n },
+      });
+      // Đề xuất mua #900 đã có sẵn, dòng sắt hộp 30n còn NEW với buyQty=20 - CHÍNH LÀ do phương án
+      // 77n (vừa bị supersede ở trên) ghi ra ở lần tính trước, không phải của 1 SKU khác.
+      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+        id: 900n,
+        cuttingProposalId: 77n,
+        items: [
+          {
+            id: 5000n,
+            materialId: 30n,
+            status: PurchaseProposalStatus.NEW,
+            buyQty: { toNumber: () => 20 },
+            receivedQty: { toNumber: () => 0 },
+          },
+        ],
+      });
+
+      await service.approve('2', 'user-1');
+
+      // THAY THẾ bằng 8 (số mới tính lại) - không phải 20+8=28, vì 20 là số CŨ của ĐÚNG SKU này,
+      // đã lỗi thời sau khi tính lại, không phải nhu cầu của 1 SKU khác cần cộng thêm.
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
+        where: { id: 5000n },
+        data: expect.objectContaining({ buyQty: 8 }) as unknown,
+      });
     });
 
     it('mỗi vật tư trừ tồn/xuất kho theo ĐÚNG kho riêng của nó (Material.warehouseId), không còn dùng chung 1 kho (Sếp chốt 2026-08-15)', async () => {

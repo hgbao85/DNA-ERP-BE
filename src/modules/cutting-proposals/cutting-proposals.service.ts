@@ -842,6 +842,13 @@ export class CuttingProposalsService {
           );
         }
 
+        // Id của MỌI phương án bị lượt duyệt này supersede - dùng ở bước gộp PurchaseProposalItem
+        // bên dưới (D.p13-merge-overwrites-buyqty) để phân biệt "Tính lại" (cùng SKU, phương án cũ
+        // nằm trong tập này - buyQty mới THAY THẾ số cũ đã lỗi thời) với "SKU khác trong cùng PI"
+        // (existingItem do 1 phương án KHÔNG nằm trong tập này ghi trước đó - buyQty mới phải CỘNG
+        // DỒN, vì đó là nhu cầu mua độc lập của 1 SKU khác).
+        const supersededCuttingProposalIds = new Set<bigint>();
+
         // siblingAnchor null = phương án không neo vào đâu (dữ liệu hỏng, không sinh ra được qua
         // requestForOrder/requestForInvoice) - không có "anh em" nào để xác định, thà bỏ qua bước
         // supersede còn hơn quét trúng toàn bộ bảng.
@@ -857,6 +864,7 @@ export class CuttingProposalsService {
             },
             select: { id: true },
           });
+          superseded.forEach((s) => supersededCuttingProposalIds.add(s.id));
           if (superseded.length > 0) {
             await tx.cuttingProposal.updateMany({
               where: { id: { in: superseded.map((s) => s.id) } },
@@ -1005,23 +1013,62 @@ export class CuttingProposalsService {
             // tạo bản ghi mới. cuttingProposalId luôn trỏ về phương án cắt MỚI NHẤT vừa duyệt (ghi
             // đè phương án cũ nếu có - phương án cũ đã bị đánh SUPERSEDED ở trên rồi).
             for (const it of items) {
-              const existingItem = existingProposal.items.find(
-                (x) => x.materialId === it.materialId,
-              );
-              if (existingItem) {
+              // Ưu tiên dòng CHƯA đóng hồ sơ (status khác PURCHASED) nếu material này lỡ có 2 dòng
+              // (dòng cũ đã PURCHASED + dòng mới tách ra cho phần thiếu, xem nhánh dưới) - nếu không
+              // sẽ chọn nhầm dòng đã đóng làm "dòng đang mở" ở lượt duyệt kế tiếp.
+              const existingItem =
+                existingProposal.items.find(
+                  (x) =>
+                    x.materialId === it.materialId && x.status !== PurchaseProposalStatus.PURCHASED,
+                ) ?? existingProposal.items.find((x) => x.materialId === it.materialId);
+              if (existingItem?.status === PurchaseProposalStatus.PURCHASED) {
+                // Dòng đã đóng hồ sơ (nhận đủ hàng) - KHÔNG ghi đè buyQty lên nó (2026-08-26, lỗ #6
+                // "ghi đè buyQty của item PURCHASED làm thiếu hụt biến mất khỏi hàng đợi vĩnh viễn").
+                // Nếu buyQty vừa tính vẫn cao hơn receivedQty đã chốt, phần chênh lệch là nhu cầu mua
+                // THẬT - tách thành dòng NEW riêng để đi lại từ đầu quy trình báo giá, thay vì âm
+                // thầm sửa số trên hồ sơ đã đóng (không ai còn thấy nó trong hàng đợi vì activeOnly
+                // loại PURCHASED).
+                const shortfall = it.buyQty - existingItem.receivedQty.toNumber();
+                if (shortfall > 0) {
+                  await tx.purchaseProposalItem.create({
+                    data: {
+                      proposalId: existingProposal.id,
+                      materialId: it.materialId,
+                      buyQty: shortfall,
+                      actualStock: it.actualStock,
+                    },
+                  });
+                }
+              } else if (existingItem) {
                 // Chỉ ghi đè status khi dòng đó CHƯA ai động vào (còn NEW) - "Tính lại" đổi buyQty
                 // của 1 dòng đã QUOTING/SUBMITTED trở đi là ca hiếm/ngoài phạm vi, không tự ý huỷ
                 // tiến độ báo giá đang dở của người mua.
+                //
+                // 2026-08-26 (D.p13-merge-overwrites-buyqty, phát hiện qua trao đổi với người dùng
+                // khi giải thích callout "PI thường ≥2 SKU cắt riêng" ở dưới): dòng NEW này có thể
+                // do phương án CHÍNH lượt duyệt này vừa supersede ghi ra ("Tính lại" cùng 1 SKU -
+                // buyQty mới là số ĐẦY ĐỦ đã tính lại, phải THAY THẾ số cũ đã lỗi thời), hoặc do 1
+                // CuttingProposal của SKU KHÁC trong cùng PI ghi trước đó (không hề bị lượt duyệt
+                // này supersede - buyQty mới chỉ là nhu cầu THÊM của SKU đó, độc lập hoàn toàn với
+                // buyQty cũ vì getAvailableQty() chỉ trừ theo StockReservation đã CONSUME, không hề
+                // biết tới buyQty của đề xuất khác, xem stock-reservations.service.ts). Ghi đè cho
+                // ca thứ 2 sẽ ÂM THẦM XOÁ MẤT nhu cầu mua thật của SKU kia - phải cộng dồn.
+                const isRecomputeOfSameAnchor =
+                  existingProposal.cuttingProposalId != null &&
+                  supersededCuttingProposalIds.has(existingProposal.cuttingProposalId);
+                const nextBuyQty = isRecomputeOfSameAnchor
+                  ? it.buyQty
+                  : existingItem.buyQty.toNumber() + it.buyQty;
                 const nextStatus =
                   existingItem.status === PurchaseProposalStatus.NEW
-                    ? it.buyQty === 0
+                    ? nextBuyQty === 0
                       ? PurchaseProposalStatus.PURCHASED
                       : PurchaseProposalStatus.NEW
                     : undefined;
                 await tx.purchaseProposalItem.update({
                   where: { id: existingItem.id },
                   data: {
-                    buyQty: it.buyQty,
+                    buyQty: nextBuyQty,
                     actualStock: it.actualStock,
                     ...(nextStatus ? { status: nextStatus } : {}),
                     ...(nextStatus === PurchaseProposalStatus.PURCHASED

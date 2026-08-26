@@ -226,6 +226,54 @@ describe('PieceMaterialYieldPurchaseService', () => {
     expect(result[0].purchaseProposalId).toBe('900');
   });
 
+  // 2026-08-26 (lỗ #6, audit-2026-08-26-3-repo-review): item đã PURCHASED (nhận đủ hàng cho SKU
+  // duyệt trước) KHÔNG được ghi đè buyQty khi 1 SKU khác trong cùng PI được duyệt sau đó làm tăng
+  // tổng nhu cầu - nếu không, thiếu hụt biến mất khỏi hàng đợi (rollup vẫn PURCHASED) mà
+  // receiveItem() lại chặn cứng theo status=PURCHASING nên không có lối ghi nhận phần thiếu.
+  it('item đã PURCHASED nhưng buyQty tính lại (7) cao hơn receivedQty (3) - tách dòng NEW cho phần thiếu, không đụng dòng cũ', async () => {
+    prisma.purchaseProposal.findFirst.mockResolvedValue({
+      id: 900n,
+      status: PurchaseProposalStatus.QUOTING, // rollup còn mở vì có dòng khác chưa xong
+      items: [
+        {
+          id: 950n,
+          materialId: 80n,
+          status: PurchaseProposalStatus.PURCHASED,
+          receivedQty: decimal(3),
+        },
+      ],
+    });
+    productionBatchesService.getReadyPoolQty.mockResolvedValue(new Map([['40', 20]])); // buyQty tính lại = 7
+
+    await service.computeAndUpsertProposals('1');
+
+    expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+    expect(prisma.purchaseProposalItem.create).toHaveBeenCalledWith({
+      data: { proposalId: 900n, materialId: 80n, buyQty: 4, actualStock: 0 },
+    });
+  });
+
+  it('item đã PURCHASED và receivedQty (10) đã đủ/dư so với buyQty tính lại (7) - không tạo dòng mới, không đụng dòng cũ', async () => {
+    prisma.purchaseProposal.findFirst.mockResolvedValue({
+      id: 900n,
+      status: PurchaseProposalStatus.PURCHASED,
+      items: [
+        {
+          id: 950n,
+          materialId: 80n,
+          status: PurchaseProposalStatus.PURCHASED,
+          receivedQty: decimal(10),
+        },
+      ],
+    });
+    productionBatchesService.getReadyPoolQty.mockResolvedValue(new Map([['40', 20]])); // buyQty tính lại = 7
+
+    await service.computeAndUpsertProposals('1');
+
+    expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+    expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
+  });
+
   // 2026-08-25: findFirst KHÔNG còn lọc theo sourceType/items.some(materialId) - đề xuất giờ
   // gộp CHUNG theo cả PI (bất kể vật tư nào, nguồn nào), để merge được với đề xuất do
   // CuttingProposalsService/ConsumableMaterialPurchaseService tạo cho cùng PI (xem khoá
