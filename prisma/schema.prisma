@@ -1438,6 +1438,17 @@ model CuttingProposalLine {
   /// (đã vá ở autoApproveBlockReason() nhánh (c), xem changelog 2026-08-15 mục 15.9). Null khi
   /// feasible=false - field chỉ xuất hiện ở dòng feasible trong response thật (api/views.py).
   overThreshold        Boolean?
+  /// "fixed" = dùng đúng 1 trong các chiều dài chuẩn (SystemConfig.solverStockLengths, hiện chỉ
+  /// 6000mm - cỡ NCC bán). "scan" = KHÔNG chiều dài chuẩn nào đạt ngưỡng hao hụt, solver tự dò
+  /// (vét cạn) trong dải min_length..max_length ra 1 chiều dài ĐẶT RIÊNG (vd 5900mm) - xem
+  /// bestStockLengthMm cho con số cụ thể. null với dòng feasible=false, và null với phương án
+  /// tính TRƯỚC 2026-08-26 (cột chưa tồn tại lúc đó).
+  ///
+  /// Sếp chốt 2026-08-26: MỞ LẠI auto_scan (đã tắt hẳn 2026-08-18, xem lịch sử ở nơi gọi solver
+  /// trong cutting-proposals.service.ts) - "scan" giờ CÓ CHẢY tới Mua hàng
+  /// (PurchaseProposalItem.stockLengthMm) nên không còn là con số ảo như lần trước, và cờ này là
+  /// cách duy nhất để người xem phân biệt "cây chuẩn" với "cây phải đặt riêng theo đúng NCC".
+  lengthSource         String?
 
   cuttingProposal CuttingProposal          @relation(fields: [cuttingProposalId], references: [id])
   material        Material                 @relation(fields: [materialId], references: [id])
@@ -1587,6 +1598,12 @@ model PurchaseProposalItem {
   /// Cộng dồn số lượng thực nhận theo purchaseUnit của material (vd kg) - chỉ để đối chiếu/audit,
   /// không dùng để tính tồn kho (receivedQty theo unit mới là số chốt vào StockLedger).
   receivedQtyPurchaseUnit Decimal? @db.Decimal(14, 4)
+  /// CHỈ có ý nghĩa với vật tư sắt (nhánh CuttingProposalsService.approve() - copy nguyên văn từ
+  /// CuttingProposalLine.bestStockLengthMm lúc tạo dòng này). Cho Mua hàng biết PHẢI đặt cây dài
+  /// bao nhiêu (2026-08-26: Sếp mở lại auto_scan, chiều dài đề xuất có thể KHÁC 6000mm mặc định -
+  /// buyQty vô nghĩa nếu không kèm chiều dài, người mua sẽ đặt nhầm cây chuẩn). null cho nhánh
+  /// kiểm tra vật tư (InspectionKhoResultItem) - vật tư đó không có khái niệm "chiều dài cây".
+  stockLengthMm           Int?
 
   /// State machine cấp ITEM (2026-08-25, "duyệt riêng từng người mua hàng") - trước đó chỉ có
   /// PurchaseProposal.status cho CẢ record, không tách được khi 1 đề xuất gộp nhiều người mua

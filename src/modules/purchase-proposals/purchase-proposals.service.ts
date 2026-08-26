@@ -911,6 +911,7 @@ export class PurchaseProposalsService {
       warehouseCode: item.material.warehouse?.code ?? null,
       actualStock: item.actualStock.toNumber(),
       buyQty: item.buyQty.toNumber(),
+      stockLengthMm: item.stockLengthMm,
       receivedQty: item.receivedQty.toNumber(),
       receivedQtyPurchaseUnit: item.receivedQtyPurchaseUnit?.toNumber() ?? null,
       status: item.status,

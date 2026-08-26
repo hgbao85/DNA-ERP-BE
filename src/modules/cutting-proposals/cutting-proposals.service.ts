@@ -94,6 +94,11 @@ interface SolverProposeResponse {
     /// CHỈ có ở dòng feasible=false. Lý do nguyên văn từ solver.
     reason?: string;
     best_stock_length?: number;
+    /// "fixed" = 1 trong các chiều dài chuẩn (SystemConfig.solverStockLengths) đạt ngưỡng.
+    /// "scan" = KHÔNG chiều dài chuẩn nào đạt, solver tự dò (auto_scan) ra 1 chiều dài đặt riêng
+    /// trong dải min_length..max_length. CHỈ có ở dòng feasible=true (api/views.py::"length_source",
+    /// mặc định "fixed" nếu solver không gửi - de_xuat_logic.py luôn gửi field này khi feasible).
+    length_source?: string;
     total_bars?: number;
     total_waste_mm?: number;
     waste_percentage?: number;
@@ -882,7 +887,12 @@ export class CuttingProposalsService {
         const consumptions: { materialId: bigint; consumeQty: number; warehouseId: bigint }[] = [];
 
         if (buyableLines.length > 0) {
-          const items: { materialId: bigint; buyQty: number; actualStock: number }[] = [];
+          const items: {
+            materialId: bigint;
+            buyQty: number;
+            actualStock: number;
+            stockLengthMm: number | null;
+          }[] = [];
           // Khoá theo THỨ TỰ materialId tăng dần, không theo thứ tự dòng trong phương án: 2 phương
           // án gộp chạm cùng 2 loại sắt theo thứ tự ngược nhau sẽ khoá chéo và deadlock. Thứ tự
           // khoá nhất quán toàn hệ thống là cách chuẩn để loại hẳn ca đó.
@@ -920,7 +930,16 @@ export class CuttingProposalsService {
             // actualStock vẫn là TỒN VẬT LÝ THẬT (onHand) - không đổi ý nghĩa field này sang
             // "khả dụng". Đây là số hiển thị cho người xem (audit "lúc duyệt kho có bao nhiêu cây
             // thật"); available chỉ dùng nội bộ để tính consumeQty/buyQty ở trên.
-            items.push({ materialId: line.materialId, buyQty, actualStock: onHand });
+            //
+            // stockLengthMm copy NGUYÊN VĂN từ chính dòng phương án - Mua hàng PHẢI biết đặt cây
+            // dài bao nhiêu (2026-08-26, sau khi mở lại auto_scan: có thể ra chiều dài đặt riêng
+            // khác 6000mm, xem lengthSource trên CuttingProposalLine để phân biệt fixed/scan).
+            items.push({
+              materialId: line.materialId,
+              buyQty,
+              actualStock: onHand,
+              stockLengthMm: line.bestStockLengthMm,
+            });
             if (consumeQty > 0) {
               consumptions.push({ materialId: line.materialId, consumeQty, warehouseId });
             }
@@ -1163,6 +1182,17 @@ export class CuttingProposalsService {
       // proposal vẫn bị đánh FAILED nhưng lý do là lỗi mạng chung chung, không nói được vì sao.
       // Review 2026-08-18 phát hiện: mặc định code (SOLVER_TIMEOUT_SECONDS=300, xem
       // configuration.ts) không đủ cho phiếu gộp nhiều loại sắt nếu ai đó quên set env production.
+      //
+      // 2026-08-26 (mở lại auto_scan): công thức này KHÔNG tính phần vét cạn - 1 loại sắt cần
+      // scan gọi optimize_material() LẶP LẠI cho từng chiều dài trong dải min/max_length (mặc
+      // định ~100 lần), mỗi lần vẫn giới hạn bởi CÙNG time_limit_seconds đó. Trần lý thuyết thật
+      // sự cao hơn nhiều lần công thức dưới, nhưng KHÔNG nâng multiplier lên (100×) vì CP-SAT cho
+      // bài toán nhỏ cỡ này hầu như luôn giải xong trong mili-giây tới vài giây - nâng multiplier
+      // sẽ chặn nhầm mọi đợt gộp bình thường trước khi kịp thử. Đo thật 2026-08-26 (3 loại sắt, 1
+      // loại phải vét cạn 101 chiều dài): 47s, timeoutSeconds mặc định 1700s vẫn dư nhiều. Rủi ro
+      // còn lại là ca CP-SAT thật sự bế tắc ở MỌI chiều dài (hiếm, thường do ngưỡng % đặt sai) -
+      // khi đó request bị timeoutSeconds cắt ngang, lỗi báo ra sẽ là lỗi mạng chung chung như đã
+      // mô tả ở trên, không phải điều mới do đổi này gây ra (case đó vốn đã tệ y hệt trước đây).
       const worstCaseSeconds = distinctMaterialIds.length * config.solverTimeLimitSeconds;
       if (worstCaseSeconds > timeoutSeconds) {
         throw new Error(
@@ -1183,25 +1213,27 @@ export class CuttingProposalsService {
           timeoutSeconds * 1000,
         );
 
-      // CHỈ chấm các stock_lengths cố định (hiện là 6000mm - cỡ duy nhất NCC bán). `auto_scan`
-      // LUÔN false, không có nhánh gọi lần 2.
+      // auto_scan LUÔN true - MỘT LẦN GỌI DUY NHẤT, không có nhánh retry lần 2 (khác hẳn cơ chế
+      // "gọi lại" đã bỏ 2026-08-18 mô tả bên dưới): solver TỰ quyết fixed-hay-scan bên trong 1
+      // request (de_xuat_logic.py::optimize_one_material) - chiều dài chuẩn nào đạt ngưỡng thì
+      // CHỐT LUÔN, chỉ khi KHÔNG chiều dài chuẩn nào đạt mới vét cạn dải min/max_length. Tức là
+      // bật auto_scan không hề đụng tới các dòng đã đạt sẵn trên 6000mm (đã đo thật: 2 dòng feasible
+      // trên 6000mm ra CÙNG SỐ hệt như auto_scan=false, xem changelog 2026-08-26).
       //
-      // Lịch sử: 2026-08-06 Sếp yêu cầu tự động gọi lại lần 2 với auto_scan bật (dò
-      // solverMinLengthMm..MaxLengthMm bước solverLengthStepMm) khi có vật tư vượt ngưỡng, để tìm
-      // "chiều dài đặt riêng". **Bỏ hẳn 2026-08-18** vì phát hiện đường đó không đi tới đâu được:
-      //   - NCC chỉ bán cây 6000 (xem chính SystemConfig.solverStockLengths) - cỡ auto_scan tìm ra
-      //     (5900/5600/5380mm...) không đặt mua được.
-      //   - Chiều dài đó cũng KHÔNG chảy tới Mua hàng: PurchaseProposalItem chỉ có materialId +
-      //     buyQty, Material.spec chỉ là tiết diện ("20x20"), không chỗ nào mang chiều dài. Người
-      //     mua vẫn đặt cây 6000 như thường, nên % hao hụt solver báo (tính trên 5900) là con số
-      //     không thật - đo trên dữ liệu 2026-08-18: 0,203% báo cáo vs 1,88% thực tế nếu mua 6000.
-      //   - Nó còn che mất tín hiệu "SKU này cắt riêng không hiệu quả": phương án lẽ ra phải bị
-      //     chặn tự duyệt để QLSX đi GỘP SKU (cách xử lý đúng, xem getBatchSuggestions) thì lại
-      //     được auto_scan "cứu" bằng một cỡ cây ảo.
-      // Bỏ đi thì solver và màn gợi ý gộp cùng chấm trên 6000mm - 2 con số khớp nhau trở lại.
+      // Lịch sử: 2026-08-06 Sếp bật tính năng này (khi đó cài bằng 1 request GỌI LẦN 2 riêng, xem
+      // đoạn "Bỏ hẳn 2026-08-18" cũ). Bỏ 2026-08-18 vì 2 lý do:
+      //   (a) "Che tín hiệu cần gộp SKU" - PHẦN NÀY VẪN ĐÚNG nhưng Sếp chốt lại 2026-08-26: chỉ
+      //       chấp nhận đánh đổi này cho ca THẬT SỰ không gộp được (1 SKU đứng riêng, hoặc gộp
+      //       xong vẫn trượt ngưỡng) - những ca đó đằng nào QLSX cũng không còn đường gộp nào khác,
+      //       không có tín hiệu gì để mất.
+      //   (b) "Chiều dài KHÔNG chảy tới Mua hàng, % hao hụt hiện không thật" - ĐÃ VÁ 2026-08-26:
+      //       PurchaseProposalItem.stockLengthMm giờ copy thẳng từ bestStockLengthMm lúc approve()
+      //       (xem dưới), CuttingProposalLine.lengthSource ghi rõ "scan" để không ai đọc nhầm
+      //       5900mm là cây chuẩn. Câu hỏi "NCC có bán được cây lẻ không" là quyết định thương mại
+      //       của Sếp/Purchasing, không phải giới hạn kỹ thuật của hệ thống nữa.
       const requestBody: typeof baseRequestBody & { auto_scan: boolean } = {
         ...baseRequestBody,
-        auto_scan: false,
+        auto_scan: true,
       };
       const response = await callSolver(requestBody);
 
@@ -1779,6 +1811,9 @@ export class CuttingProposalsService {
             materialId: BigInt(item.material),
             feasible: item.feasible,
             bestStockLengthMm: item.best_stock_length,
+            // "fixed" | "scan" - null với dòng infeasible (solver không gửi length_source khi
+            // feasible=false), xem doc comment schema.prisma.
+            lengthSource: item.length_source ?? null,
             totalBars: item.total_bars,
             totalWasteMm: item.total_waste_mm,
             wastePercentage: item.waste_percentage,
@@ -2014,6 +2049,7 @@ export class CuttingProposalsService {
       unit: line.material.unit,
       feasible: line.feasible,
       bestStockLengthMm: line.bestStockLengthMm,
+      lengthSource: line.lengthSource as 'fixed' | 'scan' | null,
       totalBars: line.totalBars,
       totalWasteMm: line.totalWasteMm ? Number(line.totalWasteMm) : null,
       wastePercentage: line.wastePercentage ? Number(line.wastePercentage) : null,

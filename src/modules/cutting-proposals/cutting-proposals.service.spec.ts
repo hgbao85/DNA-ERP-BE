@@ -389,7 +389,7 @@ describe('CuttingProposalsService', () => {
             },
           ],
           stock_lengths: '5850 6000',
-          auto_scan: false,
+          auto_scan: true, // Sếp mở lại 2026-08-26, xem test riêng dưới
           stop_on_first: false,
         }),
         { headers: { Authorization: 'Bearer test-key' } },
@@ -520,6 +520,42 @@ describe('CuttingProposalsService', () => {
       expect(lineData().pieceSummary).toBeUndefined();
     });
 
+    it('lưu lengthSource nguyên văn từ solver ("fixed" hoặc "scan") - null khi infeasible hoặc solver không gửi', async () => {
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 295,
+          total_waste_mm: 0,
+          waste_percentage: 0,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            total_bars: 223,
+            length_source: 'fixed',
+            cutting_patterns: [],
+          },
+          {
+            material: '201',
+            feasible: true,
+            total_bars: 72,
+            length_source: 'scan',
+            cutting_patterns: [],
+          },
+          { material: '202', feasible: false, reason: 'Không xếp nổi' },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      expect((lineData(0) as { lengthSource?: unknown }).lengthSource).toBe('fixed');
+      expect((lineData(1) as { lengthSource?: unknown }).lengthSource).toBe('scan');
+      expect((lineData(2) as { lengthSource?: unknown }).lengthSource).toBeNull();
+    });
+
     it('tự động duyệt ngay sau khi tính thành công - không cần gọi approve() riêng (Sếp chốt 2026-08-15)', async () => {
       externalApiService.post.mockResolvedValue({
         status: 'success',
@@ -634,8 +670,6 @@ describe('CuttingProposalsService', () => {
           total_bars_all: 8,
           total_waste_mm: 100,
           waste_percentage: 1,
-          // any_over_threshold=false nhưng có dòng infeasible -> vẫn trip retry auto_scan (đã có
-          // test riêng); ở đây quan tâm chuyện SAU retry vẫn còn infeasible thì xử lý thế nào.
           any_over_threshold: false,
         },
         purchase_plan: [
@@ -644,8 +678,8 @@ describe('CuttingProposalsService', () => {
         ],
       });
       prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
-      // Chỉ 2 lần gọi: (1) tra ngưỡng hao hụt riêng trước khi gọi solver - retry auto_scan dùng
-      // lại baseRequestBody nên KHÔNG tra lại; (2) đổi id vật tư -> mã cho thông báo QLSX.
+      // Chỉ 2 lần gọi: (1) tra ngưỡng hao hụt riêng trước khi gọi solver; (2) đổi id vật tư -> mã
+      // cho thông báo QLSX.
       prisma.material.findMany
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([{ code: 'SAT-201' }]);
@@ -862,12 +896,14 @@ describe('CuttingProposalsService', () => {
       expect(bodySent.max_waste_percentage_by_material).toEqual({ '200': 2 });
     });
 
-    // ── Bỏ auto_scan (Sếp chốt 2026-08-18) ────────────────────────────────────────
-    // Trước đây vượt ngưỡng / infeasible sẽ trip 1 lần gọi solver THỨ HAI với auto_scan=true để
-    // dò chiều dài cây đặt riêng. Bỏ hẳn vì cỡ tìm ra không mua được (NCC chỉ bán 6000mm) và
-    // chiều dài đó cũng không chảy tới Mua hàng - xem comment tại nơi gọi solver. Cách xử lý
-    // đúng cho ca vượt ngưỡng giờ là GỘP đợt cắt với SKU khác (getBatchSuggestions).
-    it('LUÔN gửi auto_scan=false và chỉ gọi solver ĐÚNG 1 LẦN, kể cả khi vượt ngưỡng', async () => {
+    // ── auto_scan (bỏ 2026-08-18, MỞ LẠI 2026-08-26) ──────────────────────────────
+    // 2026-08-18: bỏ hẳn vì cỡ vét cạn không mua được (NCC chỉ bán 6000mm) và chiều dài đó không
+    // chảy tới Mua hàng. 2026-08-26 Sếp chốt mở lại: solver TỰ quyết fixed-hay-scan TRONG 1 lần
+    // gọi (không phải retry lần 2 như cơ chế cũ trước 08-18) - chuẩn nào đạt ngưỡng thì dùng
+    // luôn, không đạt mới vét cạn. Chiều dài scan giờ chảy tới Mua hàng qua
+    // PurchaseProposalItem.stockLengthMm (xem test riêng ở describe('approve')). Vẫn CHỈ 1 lần
+    // gọi solver - test này giữ tên cũ về phần "1 lần gọi", chỉ đổi kỳ vọng auto_scan.
+    it('LUÔN gửi auto_scan=true và chỉ gọi solver ĐÚNG 1 LẦN, kể cả khi vượt ngưỡng', async () => {
       prisma.material.findMany.mockResolvedValue([
         { id: 200n, maxCuttingWastePercentage: { toNumber: () => 0.3 } },
       ]);
@@ -877,7 +913,7 @@ describe('CuttingProposalsService', () => {
           total_bars_all: 227,
           total_waste_mm: 20000,
           waste_percentage: 9.61,
-          any_over_threshold: true, // vượt ngưỡng -> TRƯỚC ĐÂY sẽ retry, giờ thì không
+          any_over_threshold: true,
         },
         purchase_plan: [
           { material: '200', feasible: true, over_threshold: true, cutting_patterns: [] },
@@ -893,10 +929,10 @@ describe('CuttingProposalsService', () => {
         Record<string, unknown>,
       ];
       expect(url).toBe('http://solver.local/api/v1/de_xuat/propose/');
-      expect(body.auto_scan).toBe(false);
-      // Ngưỡng riêng theo vật tư vẫn phải gửi đúng (D.hao-hut-sat) - không mất khi bỏ retry.
+      expect(body.auto_scan).toBe(true);
+      // Ngưỡng riêng theo vật tư vẫn phải gửi đúng (D.hao-hut-sat).
       expect(body.max_waste_percentage_by_material).toEqual({ '200': 0.3 });
-      // Lưu ĐÚNG kết quả lần gọi duy nhất, không còn khái niệm "kết quả lần 2".
+      // Lưu ĐÚNG kết quả lần gọi duy nhất, không có khái niệm "kết quả lần 2".
       const updateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
         { data: { wastePercentage: number } },
       ];
@@ -1346,6 +1382,48 @@ describe('CuttingProposalsService', () => {
       await service.approve('2', 'user-1');
 
       expect(prisma.cuttingProposal.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('copy bestStockLengthMm của dòng vào PurchaseProposalItem.stockLengthMm (2026-08-26, Mua hàng cần biết đặt cây dài bao nhiêu, nhất là cỡ scan khác 6000mm)', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [{ materialId: 30n, feasible: true, totalBars: 72, bestStockLengthMm: 5900 }],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
+
+      await service.approve('2', 'user-1');
+
+      expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
+        data: {
+          cuttingProposalId: 2n,
+          warehouseCode: 'phoi-son-han',
+          // status/purchasedAt do tính năng "duyệt riêng từng người mua hàng" (2026-08-25, item-
+          // level status) gắn thêm cho MỌI item khi tạo mới - không liên quan gì stockLengthMm,
+          // chỉ khẳng định field đó vẫn chảy qua đúng (spread `...it` trong service).
+          items: {
+            create: [
+              {
+                materialId: 30n,
+                buyQty: 72,
+                actualStock: 0,
+                stockLengthMm: 5900,
+                status: 'NEW',
+                purchasedAt: undefined,
+              },
+            ],
+          },
+        },
+      });
     });
 
     it('auto-creates a PurchaseProposal for feasible lines with bars to buy, no stock on hand (Phase 8)', async () => {

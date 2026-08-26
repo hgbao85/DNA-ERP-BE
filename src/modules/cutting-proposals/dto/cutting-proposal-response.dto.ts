@@ -82,6 +82,13 @@ export class CuttingProposalLineResponseDto {
   @Expose() @ApiProperty() unit!: string;
   @Expose() @ApiProperty() feasible!: boolean;
   @Expose() @ApiPropertyOptional({ nullable: true }) bestStockLengthMm!: number | null;
+  /// "fixed" = chiều dài chuẩn (SystemConfig.solverStockLengths). "scan" = chiều dài ĐẶT RIÊNG,
+  /// solver vét cạn ra vì không cỡ chuẩn nào đạt ngưỡng hao hụt (2026-08-26, Sếp mở lại auto_scan
+  /// cho ca không gộp được nữa - xem CuttingProposalsService lịch sử tại nơi gọi solver). null =
+  /// dòng infeasible, hoặc phương án tính trước 2026-08-26.
+  @Expose()
+  @ApiPropertyOptional({ nullable: true, enum: ['fixed', 'scan'] })
+  lengthSource!: 'fixed' | 'scan' | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) totalBars!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) totalWasteMm!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) wastePercentage!: number | null;
