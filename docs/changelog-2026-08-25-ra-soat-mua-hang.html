@@ -204,6 +204,7 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
       <span>25/08/2026</span>
       <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
       <span>10 file sửa · 3 test suite cập nhật · kiểm chứng bằng UI thật (đăng nhập nhiều vai trò)</span>
+      <span>Cập nhật 26/08/2026: +2 bug thật đã sửa (mục 11, 12) + 1 khoảng phòng thủ đã vá thêm nhưng KHÔNG xác nhận reachable (mục 14, xem đính chính)</span>
     </div>
   </div>
 
@@ -218,6 +219,9 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
       <li><b>Cập nhật tiếp theo (cùng ngày, mục 7):</b> đánh đổi ở mục 6 ("Sếp phải đợi đủ cả PI mới duyệt được") đã được gỡ bỏ — chuyển state machine (NEW→QUOTING→SUBMITTED→PURCHASING→PURCHASED) từ cấp <code>PurchaseProposal</code> xuống cấp <code>PurchaseProposalItem</code>, Sếp giờ duyệt được riêng từng người mua hàng.</li>
       <li><b>Cập nhật tiếp theo (mục 8):</b> ô "Ngày dự kiến về" khi báo giá giờ tự điền sẵn theo deadline mua hàng KHSX đã chốt (Mua hàng vẫn sửa tay được nếu NCC hẹn khác đi).</li>
       <li><b>Bug tiếp theo tìm thấy qua dùng thật, đã vá (mục 9):</b> màn "So sánh giá" của Sếp vẫn gộp phẳng mọi người mua vào 1 danh sách/1 cặp nút Duyệt-Từ chối — nếu 2 người CÙNG LÚC đang chờ duyệt trong 1 đơn gộp, Từ chối 1 người sẽ dính luôn người kia. Giờ Sếp bấm vào đơn sẽ thấy danh sách người đề xuất trước, chọn đúng người rồi Duyệt/Từ chối mới hiện ra bên trong.</li>
+      <li><b>Bug thật tìm thấy qua review độc lập, đã vá (26/08/2026, mục 11):</b> 3 nguồn tự sinh đề xuất mua ghi đè <code>buyQty</code> lên dòng vật tư đã <code>PURCHASED</code> mỗi khi PI có thêm 1 SKU được duyệt — thiếu hụt biến mất khỏi hàng đợi vĩnh viễn, không có lối ghi nhận qua UI. Đã sửa cả 3 nguồn + thêm test.</li>
+      <li><b>Rủi ro tìm thấy qua rà soát, ĐÃ VÁ cùng ngày (26/08/2026, mục 12):</b> <code>acknowledge/submit/approve/reject/requote</code> đọc trạng thái item NGOÀI transaction rồi ghi thẳng theo id bên trong transaction, không re-check status hiện tại — 2 thao tác trái chiều (vd Duyệt vs Từ chối) chạy gần như đồng thời trên cùng 1 item có thể ghi đè lẫn nhau, để lại dữ liệu mâu thuẫn (vừa "đã duyệt" vừa "bị từ chối"). Đã sửa cả 5 hàm sau khi xác nhận với người dùng.</li>
+      <li><b>Đính chính (26/08/2026, mục 14):</b> mục 14 BAN ĐẦU viết là "bug thật" (2 SKU cắt riêng chung vật tư bị ghi đè buyQty) — người dùng phản biện trực tiếp, tra DB thật (PO-48) xác nhận "PI thường ≥2 SKU cắt riêng" KHÔNG xảy ra được (mọi PI thường luôn đúng 1 SKU). Đã sửa lại thành "khoảng phòng thủ", giữ code/test (vô hại, đúng logic hơn) nhưng rút lại mô tả "bug thật".</li>
     </ul>
   </div>
 
@@ -274,12 +278,18 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
         </tbody>
       </table>
     </div>
-    <div class="callout ok">
-      <b>Giới hạn phạm vi có chủ đích:</b> gộp chắc chắn đúng cho PI gộp và PI thường 1 SKU. PI
-      thường có ≥2 SKU cắt riêng (mỗi SKU tự có <code>CuttingProposal</code> neo theo
-      <code>productionOrderId</code> khác nhau) vẫn ra nhiều đề xuất sắt như cũ — muốn gộp cả case
-      này cần đổi <code>cuttingProposalId</code> từ field 1-1 cấp đề xuất sang cấp item, rủi ro/công
-      sức lớn hơn nhiều so với lợi ích vì đây không phải cách dùng phổ biến.
+    <div class="callout bad">
+      <b>Sửa lại 2 LẦN (26/08/2026, xem mục 14) - câu gốc mô tả 1 tiền đề KHÔNG CÓ THẬT:</b> câu này
+      lúc viết ra giả định "1 PI thường có thể có ≥2 SKU, mỗi SKU tự cắt riêng". Đã kiểm chứng lại
+      bằng cách tra thẳng DB thật (PO-48, 3 SKU) và đọc lại
+      <code>SalesOrdersService.createProductionInvoiceItems()</code>: tạo PO chỉ tạo ra các dòng SKU
+      RỜI RẠC, <code>productionInvoiceId = null</code> - CHƯA có PI nào cả. PI chỉ sinh ra qua ĐÚNG 1
+      trong 2 hành động chủ động của KHSX: <b>"Tiến hành cắt riêng"</b> (tạo 1 PI cho ĐÚNG 1 SKU) hoặc
+      <b>"Xác nhận gộp"</b> (tạo 1 PI cho ≥2 SKU được CHỌN CÙNG LÚC, và nhóm đó luôn cắt CHUNG 1
+      phương án duy nhất). Kết luận: <b>"PI thường" (isMerged=false) luôn luôn = đúng 1 SKU</b> - không
+      có đường nào để 1 PI thường tự nhiên có ≥2 SKU mỗi SKU tự cắt riêng. Toàn bộ mô tả gốc của
+      callout này (và bug/fix ở mục 14 dựa trên nó) áp dụng cho 1 tình huống KHÔNG XẢY RA ĐƯỢC trong
+      hệ thống hiện tại - xem lại đánh giá mức độ ở mục 14.
     </div>
   </div>
 
@@ -516,29 +526,192 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </ol>
   </div>
 
+  <div class="part-divider">
+    <span class="n">PHẦN 2</span>
+    <h2>Rà soát tiếp theo — 26/08/2026</h2>
+    <span class="sub">Review độc lập bằng agent đọc toàn bộ 3 repo (DNA-ERP, DNA-ERP-BE, DNA-DEXUAT), sau đó soi kỹ riêng luồng Mua hàng theo yêu cầu người dùng. Tìm thêm 1 bug thật (đã sửa) và 1 rủi ro race condition (đang chờ xử lý).</span>
+  </div>
+
   <div class="module">
-    <h2>10. Kết luận</h2>
+    <h2><span class="badge b-be">BE</span> 11. Bug thật đã sửa: ghi đè <code>buyQty</code> của vật tư đã <code>PURCHASED</code> khi PI có nhiều SKU duyệt lệch nhịp</h2>
+    <p class="module-note">
+      Phát hiện qua review độc lập: cả 3 nguồn tự sinh/gộp đề xuất mua (mục 3) đều tính lại nhu cầu
+      CHO CẢ PI mỗi khi có 1 SKU mới được duyệt, rồi ghi <code>buyQty</code> đè lên dòng vật tư đã có
+      sẵn — kể cả khi dòng đó đã <code>PURCHASED</code> (đã nhận đủ hàng cho SKU duyệt trước). Vì
+      <code>PurchaseProposal.status</code> chỉ là rollup theo <code>item.status</code>, dòng bị ghi
+      đè vẫn hiện <code>PURCHASED</code> dù <code>buyQty</code> mới đã cao hơn <code>receivedQty</code>
+      — thiếu hụt biến mất khỏi mọi hàng đợi xử lý, và <code>receiveItem()</code> chặn cứng theo
+      <code>status=PURCHASING</code> nên không có lối ghi nhận phần thiếu qua UI bình thường.
+    </p>
+    <div class="callout bad">
+      <b>Kịch bản thật:</b> PI có SKU A và SKU B dùng chung 1 vật tư. SKU A duyệt trước → cần 10,
+      mua/nhận đủ → dòng chuyển <code>PURCHASED</code>. Vài ngày sau SKU B (cùng PI) được duyệt →
+      tính lại tổng nhu cầu ra <code>buyQty</code> mới cao hơn <code>receivedQty</code> đã chốt → ghi
+      đè thẳng lên dòng đã đóng, không cảnh báo, không log. Đây KHÔNG phải ca hiếm — chính comment
+      sẵn có trong code (mục 3) ghi rõ "PI thường duyệt/từ chối theo từng SKU", tức duyệt lệch nhịp
+      mới là hành vi mặc định.
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">piece-material-yield-purchase.service.ts <span class="pill p-chg">BE</span></td><td>Dòng vật tư đã <code>PURCHASED</code> không còn bị ghi đè <code>buyQty</code>. Nếu nhu cầu tính lại vẫn cao hơn <code>receivedQty</code> đã chốt, phần chênh lệch tách thành 1 dòng <code>NEW</code> riêng, đi lại đúng quy trình báo giá.</td></tr>
+          <tr><td class="path">consumable-material-purchase.service.ts <span class="pill p-chg">BE</span></td><td>Cùng fix, cùng idiom.</td></tr>
+          <tr><td class="path">cutting-proposals.service.ts <span class="pill p-chg">BE</span></td><td>Cùng fix ở nhánh gộp đề xuất sắt vào đề xuất chung (mục 3).</td></tr>
+          <tr><td class="path">piece-material-yield-purchase.service.spec.ts <span class="pill p-add">TEST</span></td><td>+2 test: buyQty tính lại cao hơn receivedQty → tách dòng NEW đúng phần thiếu; buyQty tính lại đã được receivedQty phủ đủ → không đụng gì tới dòng cũ.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok">
+      Xác nhận bằng <code>tsc --noEmit</code> sạch, ESLint sạch, và toàn bộ test hiện có của 3 file
+      (78 test cũ + 2 test mới) đều pass.
+    </div>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 12. Rủi ro phát hiện qua rà soát — ĐÃ VÁ: race condition ở acknowledge/submit/approve/reject/requote</h2>
+    <p class="module-note">
+      Cả 5 hàm ghi <code>PurchaseProposalItem.status</code> (trừ <code>receiveItem()</code>) theo
+      chung 1 khuôn: đọc trạng thái item NGOÀI transaction (<code>findDetailOrThrow</code>), lọc theo
+      trạng thái đọc được, rồi bên trong transaction ghi thẳng theo <code>id</code>
+      (<code>updateMany({where: {id: {in: [...]}}, ...})</code>) — KHÔNG kèm điều kiện "status hiện
+      tại vẫn đúng như lúc đọc". Khoá đồng bộ <code>purchase-proposal-mutate:&lt;id&gt;</code> (mục 7)
+      chỉ đảm bảo 2 transaction không chạy chồng lên nhau, không đảm bảo dữ liệu đọc TRƯỚC khi vào
+      transaction vẫn còn đúng lúc transaction thật sự ghi.
+    </p>
+    <div class="callout bad">
+      <b>Kịch bản cụ thể (approve() vs reject()):</b> vật tư X đang <code>SUBMITTED</code>. Quản lý A
+      đọc thấy X = SUBMITTED, chuẩn bị Duyệt (chọn NCC Q1). Gần như đồng thời, Quản lý B (khác
+      tab/khác người — Boss/Admin bỏ qua mọi ràng buộc <code>buyerId</code> nên hoàn toàn có thể race
+      với chính người mua hàng phụ trách) đọc thấy X = SUBMITTED, bấm Từ chối. Transaction của A chạy
+      trước: X → <code>PURCHASING</code>, gán NCC/giá. Transaction của B chạy sau nhưng dùng snapshot
+      đọc TRƯỚC khi A ghi, nên vẫn ghi đè X → <code>REJECTED</code> — item X kết thúc với status
+      <code>REJECTED</code> nhưng vẫn còn nguyên <code>approvedAt</code>/<code>approvedById</code> và
+      quote <code>isChosen=true</code> từ A, dữ liệu mâu thuẫn. Chiều ngược lại (approve() ghi đè lên
+      item vừa reject()) cũng xảy ra tương tự.
+    </div>
+    <p class="module-note">
+      So sánh: <code>receiveItem()</code> trong CÙNG file làm đúng — khoá dòng <code>FOR UPDATE</code>
+      rồi đọc lại <code>receivedQty</code> mới nhất BÊN TRONG transaction trước khi quyết định.
+      <code>production-invoices.service.ts#approveItem()</code> cũng đã dùng đúng pattern phòng thủ
+      này (<code>updateMany({where: {id, status: EXPECTED}}); if (count===0) throw ConflictException</code>)
+      — 5 hàm ở trên chưa áp dụng, nhiều khả năng là thiếu sót khi tách state machine xuống cấp item
+      (mục 7), không phải cố ý.
+    </p>
+    <div class="callout ok">
+      <b>Trạng thái: ĐÃ SỬA (26/08/2026, sau khi xác nhận với người dùng).</b> Đổi
+      <code>updateMany</code>/<code>update</code> ghi thẳng theo <code>id</code> ở cả 5 hàm
+      (<code>acknowledge</code>/<code>submit</code>/<code>approve</code>/<code>reject</code>/<code>requote</code>)
+      sang <code>updateMany</code> kèm điều kiện <code>status: &lt;trạng thái mong đợi&gt;</code> + kiểm
+      <code>count</code> khớp số lượng item dự kiến, ném <code>ConflictException</code> nếu lệch (đúng
+      thông điệp đã có sẵn: "đã được xử lý hoặc chưa tới lượt duyệt, tải lại trang"). Riêng
+      <code>approve()</code> ghi từng item 1 trong vòng lặp (không phải <code>updateMany</code> theo
+      mảng id như 4 hàm kia) nên check <code>count===1</code> ngay tại từng item, chặn sớm trước khi
+      chạm tới quote. <code>requote()</code> đảo thứ tự thao tác: đổi status TRƯỚC, xoá quote SAU (trước
+      đó ngược lại) để race không kịp xoá mất báo giá cũ trước khi bị phát hiện lệch.
+    </div>
+    <p class="module-note">
+      Đã thêm 5 test race-condition mới (1 cho mỗi hàm) vào
+      <code>purchase-proposals.service.spec.ts</code>, mô phỏng <code>updateMany</code> trả về
+      <code>count: 0</code> để xác nhận đúng <code>ConflictException</code> được ném ra và không có
+      ghi/xoá nào lọt qua trước khi bị chặn. Xác nhận bằng <code>tsc --noEmit</code> sạch, ESLint sạch,
+      72/72 test của module pass (67 cũ + 5 mới).
+    </p>
+  </div>
+
+  <div class="part-divider">
+    <span class="n">PHẦN 3</span>
+    <h2>Rà soát tiếp theo, cùng ngày 26/08/2026</h2>
+    <span class="sub">Phát hiện qua trao đổi trực tiếp với người dùng khi giải thích lại callout "PI thường ≥2 SKU cắt riêng" ở mục 3 - không phải từ review agent hay báo cáo thực tế. Câu hỏi "trường hợp đó đang chỉ truyền dữ liệu của 1 SKU thôi à" dẫn tới 1 khoảng code chưa chặt, rồi tự phản biện lại bằng dữ liệu thật (PO-48) cho thấy tiền đề ban đầu không có thật.</span>
+  </div>
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 14. Khoảng phòng thủ đã vá thêm - KHÔNG phải bug đang xảy ra thật (tiền đề dựa trên đó không có thật)</h2>
+    <div class="callout warn">
+      <b>Đính chính quan trọng:</b> mục này BAN ĐẦU viết là "bug thật đã sửa", dựa trên kịch bản "PI
+      thường có ≥2 SKU, mỗi SKU tự cắt riêng, cùng dùng 1 loại vật tư". Sau khi người dùng phản biện
+      trực tiếp và tra thẳng DB thật (PO-48), xác nhận: <b>kịch bản đó không xảy ra được trong hệ
+      thống hiện tại</b> (xem callout đính chính ở mục 3). Đây thực chất là 1 <b>khoảng phòng thủ</b>
+      (defensive fix) cho 1 nhánh code trước đó có thể sai VỀ MẶT LOGIC nếu tiền đề xảy ra - không
+      phải lỗi người dùng thật sự gặp phải hay có thể gặp phải với cách PI được tạo hiện nay. Giữ lại
+      code + test vì vô hại và đúng hơn về logic, nhưng phải sửa lại mức độ mô tả cho đúng.
+    </div>
+    <p class="module-note">
+      Nhánh code gộp <code>PurchaseProposalItem</code> trùng vật tư (trong
+      <code>cutting-proposals.service.ts#approve()</code>): khi tìm thấy dòng vật tư trùng còn
+      <code>NEW</code> ở 1 phiếu mua đã có sẵn, code cũ LUÔN <b>ghi đè</b> <code>buyQty</code> bằng số
+      vừa tính, bất kể dòng đó do CHÍNH phương án đang duyệt (nhánh "Tính lại") hay do 1
+      <code>CuttingProposal</code> KHÁC ghi ra trước đó. Về logic, ghi đè chỉ đúng cho nhánh "Tính lại"
+      (số cũ đã lỗi thời); nếu có 1 <code>CuttingProposal</code> khác từng ghi vào đó, phải cộng dồn
+      thay vì xoá mất. Test đầu tiên tôi viết dựng lại đúng ca "2 CuttingProposal khác nhau cùng ghi
+      vào 1 phiếu" để chứng minh nhánh ghi-đè-vô-điều-kiện sai VỀ LOGIC - nhưng KHÔNG chứng minh được
+      ca đó xảy ra qua UI thật, vì bản thân ca "2 SKU khác nhau, không gộp, chung 1 PI" là bất khả thi
+      (mọi PI thường luôn đúng 1 SKU - xem mục 3).
+    </p>
+    <div class="callout ok">
+      <b>Đường duy nhất còn lại có thể chạm nhánh này thật (chưa xác nhận, chưa thấy xảy ra):</b> 2
+      trong 3 nguồn tự sinh đề xuất (sắt / nguyên liệu piece / vật tư tiêu hao, mục 3) cùng ghi vào 1
+      phiếu của CÙNG 1 PI (1 SKU) tình cờ trùng đúng 1 <code>materialId</code> - hẹp hơn nhiều so với
+      kịch bản "2 SKU" ban đầu, và cần cấu hình vật tư trùng giữa 2 nguồn khác loại (sắt vs tiêu hao/
+      piece) mới xảy ra được.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">cutting-proposals.service.ts <span class="pill p-chg">BE</span></td><td>Thêm <code>supersededCuttingProposalIds</code> (id các phương án bị CHÍNH lượt duyệt này supersede, đã có sẵn từ bước supersede phía trên, chỉ hoist ra ngoài để dùng lại). Nhánh gộp item trùng vật tư giờ phân biệt: nếu <code>existingProposal.cuttingProposalId</code> nằm trong tập vừa supersede → đây là "Tính lại" cùng 1 SKU, buyQty mới THAY THẾ số cũ (đúng như trước, số cũ đã lỗi thời). Nếu KHÔNG nằm trong tập đó → đây là 1 SKU KHÁC, buyQty mới CỘNG DỒN vào số cũ thay vì ghi đè.</td></tr>
+          <tr><td class="path">cutting-proposals.service.spec.ts <span class="pill p-add">TEST</span></td><td>+2 test: (1) 2 <code>CuttingProposal</code> khác nhau cùng ghi vào 1 phiếu, chung 1 vật tư → buyQty phải cộng dồn (20+8=28) - test này FAIL trước khi sửa (đúng LOGIC nhánh code, không chứng minh được đường tới đó qua UI thật), PASS sau khi sửa; (2) "Tính lại" cùng 1 phương án (phương án cũ vừa bị supersede) vẫn phải THAY THẾ buyQty, không cộng dồn - đảm bảo fix không phá hành vi đúng cũ.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok">
+      Xác nhận bằng <code>tsc --noEmit</code> sạch, ESLint sạch, 59/59 test của
+      <code>cutting-proposals.service.spec.ts</code> pass (57 cũ + 2 mới), cùng 185/185 test của toàn
+      bộ nhóm module liên quan (cutting-proposals, purchase-proposals, consumable-material-purchase,
+      piece-material-yield-purchase) pass. KHÔNG kiểm chứng qua UI thật - lý do đã nêu ở trên.
+    </div>
+  </div>
+
+  <div class="module">
+    <h2>15. Kết luận</h2>
     <div class="stats">
-      <div class="stat"><div class="n">2</div><div class="l">bug thật đã sửa (đề xuất gộp lộ hết cho nhau; Từ chối 1 người dính luôn người khác)</div></div>
-      <div class="stat"><div class="n">1</div><div class="l">hiểu lầm đã làm rõ (sắt không hề mất)</div></div>
+      <div class="stat"><div class="n">4</div><div class="l">bug thật đã sửa (đề xuất gộp lộ hết cho nhau; Từ chối 1 người dính luôn người khác; ghi đè buyQty item PURCHASED; race condition approve/reject/submit/...)</div></div>
+      <div class="stat"><div class="n">2</div><div class="l">hiểu lầm đã làm rõ (sắt không hề mất; "PI thường ≥2 SKU cắt riêng" không có thật - mọi PI thường luôn đúng 1 SKU)</div></div>
       <div class="stat"><div class="n">3</div><div class="l">tính năng mới (gộp 3 nguồn = 1 form; duyệt riêng từng người mua; tự điền ngày dự kiến về)</div></div>
       <div class="stat"><div class="n">2</div><div class="l">bug phụ tìm thấy &amp; vá kèm (receiveItem)</div></div>
       <div class="stat"><div class="n">3</div><div class="l">lỗ hổng thiết kế phát hiện qua review trước khi code (mục 7)</div></div>
-      <div class="stat"><div class="n">719</div><div class="l">test backend pass sau cùng (46 suite) · 36 test frontend</div></div>
+      <div class="stat"><div class="n">1</div><div class="l">khoảng phòng thủ đã vá thêm, KHÔNG xác nhận reachable qua UI thật (mục 14 - viết nhầm thành "bug thật" lúc đầu, đã đính chính)</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">rủi ro còn tồn đọng chưa sửa (rủi ro cuttingProposalId 1-1 nêu ở mục 3 bản đầu cũng dựa trên tiền đề sai, đã rút lại)</div></div>
+      <div class="stat"><div class="n">719+9</div><div class="l">test backend pass (46 suite gốc + 2 test mục 11 + 5 test mục 12 + 2 test mục 14) · 36 test frontend</div></div>
     </div>
     <p class="module-note">
       Toàn bộ thay đổi đã kiểm bằng <code>tsc --noEmit</code> sạch cả 2 repo, ESLint sạch trên mọi
-      file sửa, và test end-to-end thật trên UI (không chỉ mock) như mục 5, 7 và 9. Phạm vi cố ý
-      chưa xử lý: PI thường có ≥2 SKU cắt riêng (xem callout mục 3); cơ chế nhắc/theo dõi ai còn
-      thiếu báo giá (đánh đổi từng nêu ở mục 6, nay bớt cấp thiết hơn vì đã duyệt riêng được).
+      file sửa, và test end-to-end thật trên UI (không chỉ mock) như mục 5, 7 và 9 - riêng mục 14 chỉ
+      kiểm bằng unit test (mock) VÀ đã xác nhận qua truy vấn DB thật (PO-48) rằng tiền đề của nó
+      (PI thường ≥2 SKU cắt riêng) không hề xảy ra được, nên không cần/không thể kiểm chứng qua UI.
+      Phạm vi cố ý chưa xử lý: cơ chế nhắc/theo dõi ai còn thiếu báo giá (đánh đổi từng nêu ở mục 6,
+      nay bớt cấp thiết hơn vì đã duyệt riêng được).
     </p>
+    <div class="callout warn">
+      <b>Bài học rút ra từ mục 14 (tự ghi lại để nhớ):</b> 1 "bug" được viết ra và "xác nhận" chỉ bằng
+      unit test (mock tự dựng dữ liệu giả định) mà chưa đối chiếu với RÀNG BUỘC THẬT của hệ thống (ở
+      đây là cách PI/SKU thực sự được tạo) có thể mô tả đúng 1 lỗi LOGIC trong code nhưng SAI về việc
+      lỗi đó có xảy ra được trong thực tế hay không. Người dùng phát hiện ra điều này bằng 1 câu hỏi
+      đơn giản kèm 1 ví dụ thật (PO-48) - nhắc nhở nên tự hỏi "tình huống đầu vào này có tạo ra được
+      không" trước khi gọi 1 phát hiện là "bug thật", đặc biệt với case dựng thủ công nhiều bước như
+      case này (2 SKU + không gộp + chung PI + chung vật tư).
+    </div>
   </div>
 
   <footer>
     Nguồn: tổng hợp trực tiếp từ phiên làm việc với Claude Code ngày 25/08/2026, xuất phát từ báo cáo
     thực tế của người dùng trên PI-2026-012 ("3 acc mua hàng đề xuất giống nhau", "không thấy sắt
     đâu cả"), qua điều tra mã nguồn + tra DB thật + sửa code + viết/chạy lại test + kiểm chứng bằng
-    UI thật với nhiều tài khoản vai trò khác nhau.
+    UI thật với nhiều tài khoản vai trò khác nhau. Mục 11-12 bổ sung ngày 26/08/2026, từ 1 đợt review
+    độc lập toàn bộ 3 repo (<code>audit-2026-08-26-3-repo-review.html</code> ở DNA-ERP/docs) rồi soi
+    sâu riêng luồng Mua hàng theo yêu cầu người dùng. Mục 14 phát hiện cùng ngày qua trao đổi trực
+    tiếp khi giải thích lại callout mục 3 - không qua review agent, mà qua chính câu hỏi truy vấn của
+    người dùng ("trường hợp đó đang chỉ truyền dữ liệu của 1 SKU thôi à").
   </footer>
 </div>
 
