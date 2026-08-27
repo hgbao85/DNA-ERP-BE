@@ -629,6 +629,17 @@ export class ProductionInvoicesService {
     actorUserId: string,
   ): Promise<ProductionInvoiceItemResponseDto> {
     const pi = await this.findOneOrThrow(piId);
+    // L2 (2026-08-26): PI gộp PHẢI duyệt cả cụm (approveBatch), KHÔNG duyệt lẻ từng SKU. Đối
+    // xứng với assertMergedPi() ở chiều ngược lại - trước đây chỉ chặn 1 chiều nên đường này bỏ
+    // ngỏ: duyệt lẻ 1 SKU của PI gộp sinh phương án cắt neo PO cho SKU đó, rồi approveBatch (hoặc
+    // route thô POST /production-invoices/:id/cutting-proposals) vẫn tạo tiếp phương án neo PI phủ
+    // TOÀN BỘ cụm - cùng nhu cầu được lập kế hoạch 2 lần, giữ chỗ tồn 2 lần, đẩy đề xuất mua trùng.
+    // Bất biến cần giữ: mỗi SKU chỉ được phủ bởi ĐÚNG 1 phương án cắt đang hiệu lực.
+    if (pi.isMerged) {
+      throw new ConflictException(
+        `${pi.code} là đợt gộp - phải duyệt CẢ CỤM một lần (cả nhóm nằm chung một cây sắt, không tách lẻ được), xem approveBatch`,
+      );
+    }
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_BOSS);
 

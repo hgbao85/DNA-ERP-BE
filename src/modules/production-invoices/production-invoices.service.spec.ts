@@ -814,6 +814,20 @@ describe('ProductionInvoicesService', () => {
       expect(pieceMaterialYieldPurchaseService.computeAndUpsertProposals).toHaveBeenCalled();
     });
 
+    // L2 (2026-08-26): bất biến "mỗi SKU chỉ được phủ bởi ĐÚNG 1 phương án cắt". PI gộp phải duyệt
+    // CẢ CỤM (approveBatch -> requestForInvoice, 1 phương án phủ mọi SKU). Duyệt lẻ 1 SKU của PI
+    // gộp sinh thêm phương án neo PO cho riêng SKU đó -> cùng nhu cầu bị lập kế hoạch 2 lần (giữ
+    // chỗ tồn 2 lần + đề xuất mua trùng). Đây là cổng đối xứng với assertMergedPi() vốn chỉ chặn
+    // chiều ngược lại (PI thường không được duyệt cả cụm).
+    it('CHẶN duyệt lẻ 1 SKU của PI GỘP - không ghi gì, không tạo phương án cắt (L2)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ isMerged: true }));
+
+      await expect(service.approveItem('7', '20', 'user-boss')).rejects.toThrow(ConflictException);
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+      expect(productionOrdersService.createFromApproval).not.toHaveBeenCalled();
+      expect(cuttingProposalsService.requestForOrder).not.toHaveBeenCalled();
+    });
+
     it('still approves the item even when ProductionOrder creation fails unexpectedly after the BOM check already passed (rare race)', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(

@@ -1,10 +1,7 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import {
-  Prisma,
-  ReservationStatus,
-  StockReservationRefType,
-} from '../../generated/prisma/client';
+import { BadRequestException, ConflictException, Inject, Injectable } from '@nestjs/common';
+import { Prisma, ReservationStatus, StockReservationRefType } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { frameDeadlineOf } from '../../common/utils/frame-deadline.util';
 
 export interface ReserveInput {
   warehouseId: bigint;
@@ -12,8 +9,20 @@ export interface ReserveInput {
   qty: number;
   refType: StockReservationRefType;
   refId: string;
+  /// PI thật của nguồn giữ chỗ - xem doc comment field cùng tên trên model StockReservation
+  /// (L5, 2026-08-26). undefined khi nguồn không neo PI nào.
+  productionInvoiceId?: bigint;
   note?: string;
   createdById?: string;
+}
+
+interface PoolRow {
+  id: bigint;
+  refType: StockReservationRefType;
+  refId: string;
+  warehouseId: bigint;
+  quantity: Prisma.Decimal;
+  consumedQty: Prisma.Decimal;
 }
 
 /**
@@ -23,10 +32,19 @@ export interface ReserveInput {
  * Trạng thái (2026-08-18): CuttingProposalsService.approve() gọi reserve() thay vì trừ tồn thật
  * (Đợt 2) - available qua getAvailableQty() giờ là nguồn thật quyết định consumeQty/buyQty.
  * SteelIssuesService.create() tiêu giữ chỗ (consumedQty += ...) khi Phôi thực xuất, mới là nơi
- * trừ tồn thật (StockLedger). PurchaseProposalsService.receiveItem() gọi topUpFromReceipt() khi
- * hàng mua về, cộng thẳng vào ĐÚNG dòng giữ chỗ gốc (Đợt 3, lỗ #3) - không tạo dòng riêng, để
- * SteelIssue chỉ cần đọc 1 dòng/1 vật tư/1 phương án. CHƯA làm: release() khi CuttingProposal bị
- * supersede/huỷ (Đợt 3, lỗ #4) - giữ chỗ của phương án bị thay thế hiện vẫn nằm ACTIVE mãi.
+ * trừ tồn thật (StockLedger). CHƯA làm: release() khi CuttingProposal bị supersede/huỷ (Đợt 3,
+ * lỗ #4) - giữ chỗ của phương án bị thay thế hiện vẫn nằm ACTIVE mãi.
+ *
+ * L5 (2026-08-26): 1 PI có thể có NHIỀU dòng giữ chỗ CUTTING_PROPOSAL cho CÙNG 1 vật tư - mỗi SKU
+ * (approveItem riêng lẻ) tự tạo 1 dòng của riêng nó lúc duyệt (reserve(), KHÔNG đổi - vẫn 1
+ * dòng/1 cuttingProposalId, tránh mọi rủi ro idempotency khi nhiều nguồn cùng ghi 1 dòng). Nhưng
+ * "gộp vào ĐÚNG 1 PurchaseProposal/PI" (CuttingProposalsService.approve()) đã xoá mất ranh giới
+ * SKU ở TẦNG MUA HÀNG (buyQty là 1 con số cộng dồn của cả PI, không tách lại được theo SKU) - nên
+ * hàng mua về/Phôi xuất PHẢI thao tác trên CẢ POOL (mọi dòng CUTTING_PROPOSAL cùng
+ * productionInvoiceId+materialId), không phải 1 dòng cố định như trước (bug cũ: credit luôn vào
+ * dòng của SKU duyệt SAU CÙNG, dòng của SKU duyệt trước không bao giờ được cộng thêm - Phôi xuất
+ * cho SKU đó tới đâu cũng báo thiếu dù hàng đã về kho). loadPool()/creditPool()/drainPool() thay
+ * cho topUpFromReceipt() (đã gỡ) + phần lookup 1-dòng cũ trong SteelIssuesService.
  */
 @Injectable()
 export class StockReservationsService {
@@ -61,6 +79,7 @@ export class StockReservationsService {
         quantity: input.qty,
         refType: input.refType,
         refId: input.refId,
+        productionInvoiceId: input.productionInvoiceId,
         note: input.note,
         createdById: input.createdById,
         idempotencyKey,
@@ -70,66 +89,196 @@ export class StockReservationsService {
   }
 
   /**
-   * B4 Đợt 3 (mục 13.4 lỗ #3 changelog) - hàng mua về "có chủ": khi PurchaseProposalsService.
-   * receiveItem() nhận hàng cho phần `buyQty` (phần approve() KHÔNG giữ chỗ được vì lúc đó tồn
-   * chưa có), cộng thẳng số vừa về vào ĐÚNG dòng giữ chỗ (refType=CUTTING_PROPOSAL) đã tạo lúc
-   * duyệt - KHÔNG tạo dòng giữ chỗ riêng. Gộp về 1 dòng/1 vật tư/1 phương án để
-   * SteelIssuesService chỉ cần đọc đúng 1 con số "còn giữ bao nhiêu", không phải cộng nhiều nguồn.
+   * Mọi dòng giữ chỗ ACTIVE của 1 (PI, vật tư) - "pool" mà creditPool()/drainPool() thao tác lên,
+   * sắp theo hạn SKU sở hữu từng dòng TĂNG DẦN (SKU gấp nhất được ưu tiên trước, cả khi credit
+   * lẫn khi drain - Sếp chốt 2026-08-26, L5). Chỉ dòng refType=CUTTING_PROPOSAL mới có 1 SKU cụ
+   * thể để tính hạn; dòng PRODUCTION_INVOICE (fallback của creditPool khi pool rỗng) không neo
+   * SKU nào - luôn xếp CUỐI (Infinity), và trong thực tế cũng luôn là dòng DUY NHẤT của pool đó
+   * (nếu không thì đã có dòng CUTTING_PROPOSAL để credit trước rồi).
+   *
+   * 1 PI chỉ có NHIỀU dòng CUTTING_PROPOSAL cùng vật tư khi các SKU được duyệt RIÊNG LẺ
+   * (approveItem, mỗi SKU 1 CuttingProposal neo productionOrderId) - phương án neo thẳng PI (đợt
+   * gộp, approveBatch) luôn là dòng DUY NHẤT của pool nó thuộc về (2 luồng duyệt loại trừ nhau
+   * qua khoá prodApprovalStatus=WAITING_BOSS, xem rà soát L2 2026-08-26) nên không cần tính hạn
+   * cho ca đó.
+   */
+  private async loadPool(
+    tx: PrismaTx,
+    productionInvoiceId: bigint,
+    materialId: bigint,
+  ): Promise<PoolRow[]> {
+    const rows = await tx.stockReservation.findMany({
+      where: { productionInvoiceId, materialId, status: ReservationStatus.ACTIVE },
+      select: {
+        id: true,
+        refType: true,
+        refId: true,
+        warehouseId: true,
+        quantity: true,
+        consumedQty: true,
+      },
+    });
+    if (rows.length <= 1) return rows;
+
+    const cuttingProposalIds = rows
+      .filter((r) => r.refType === StockReservationRefType.CUTTING_PROPOSAL)
+      .map((r) => BigInt(r.refId));
+    const proposals =
+      cuttingProposalIds.length > 0
+        ? await tx.cuttingProposal.findMany({
+            where: { id: { in: cuttingProposalIds }, productionOrderId: { not: null } },
+            select: {
+              id: true,
+              productionOrder: {
+                select: {
+                  productionInvoiceItem: {
+                    select: {
+                      materialDeadline: true,
+                      stages: { select: { stageType: true, deadline: true } },
+                      productionInvoice: { select: { deadline: true } },
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : [];
+    const deadlineByProposalId = new Map(
+      proposals
+        .filter(
+          (p): p is typeof p & { productionOrder: NonNullable<(typeof p)['productionOrder']> } =>
+            p.productionOrder != null,
+        )
+        .map((p) => [p.id.toString(), frameDeadlineOf(p.productionOrder.productionInvoiceItem)]),
+    );
+    const priorityOf = (r: PoolRow): number => {
+      if (r.refType !== StockReservationRefType.CUTTING_PROPOSAL) return Number.POSITIVE_INFINITY;
+      const deadline = deadlineByProposalId.get(r.refId);
+      return deadline ? deadline.getTime() : Number.POSITIVE_INFINITY;
+    };
+    return [...rows].sort((a, b) => priorityOf(a) - priorityOf(b));
+  }
+
+  /**
+   * Hàng mua về "có chủ" (B4 Đợt 3, mục 13.4 lỗ #3 changelog, mở rộng thành pool ở L5 2026-08-26):
+   * PurchaseProposalsService.receiveItem() gọi khi nhận hàng cho phần `buyQty` (phần approve()
+   * KHÔNG giữ chỗ được vì lúc đó tồn chưa có) - cộng vào ĐÚNG pool của (PI, vật tư), KHÔNG còn cố
+   * đoán 1 cuttingProposalId cụ thể (PurchaseProposal.cuttingProposalId bị GHI ĐÈ thành phương án
+   * duyệt SAU CÙNG mỗi khi merge, xem CuttingProposalsService.approve() - nguồn cũ của lỗ #5).
    *
    * `tx` bắt buộc - caller (receiveItem) đã khoá dòng item liên quan FOR UPDATE trong cùng
-   * transaction, khoá thêm ở đây (FOR UPDATE trên chính dòng giữ chỗ) để an toàn nếu sau này có
-   * caller khác gọi hàm này mà không đi qua khoá đó.
+   * transaction, khoá thêm ở đây (FOR UPDATE trên dòng giữ chỗ được chọn) để an toàn nếu sau này
+   * có caller khác gọi hàm này mà không đi qua khoá đó.
    */
-  async topUpFromReceipt(
+  async creditPool(
     tx: PrismaTx,
-    input: {
-      refType: StockReservationRefType;
-      refId: string;
-      materialId: bigint;
-      warehouseId: bigint;
-      qty: number;
-    },
+    input: { productionInvoiceId: bigint; materialId: bigint; warehouseId: bigint; qty: number },
   ): Promise<void> {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty cộng thêm giữ chỗ phải lớn hơn 0');
     }
-    // Đọc CẢ status (không lọc ACTIVE ngay trong WHERE) - phải phân biệt 3 ca khác nhau, không
-    // chỉ "có/không có":
-    //   1. Có dòng, ACTIVE      -> vẫn còn nhu cầu thật, cộng thêm vào (case bình thường).
-    //   2. Có dòng, RELEASED    -> phương án gốc ĐÃ CHẾT (supersede/huỷ, Đợt 3b) TRONG LÚC hàng
-    //      đang trên đường về - không được tạo giữ chỗ MỚI dính vào 1 phương án đã chết (sẽ tái
-    //      tạo đúng lỗ #4 vừa vá, chỉ đổi hướng: giữ chỗ mồ côi từ hàng mua thay vì từ duyệt) ->
-    //      BỎ QUA, hàng đã cộng vào stock_quant qua postEntry() ở receiveItem() rồi, coi như tồn
-    //      chung tự do (thường chính là phương án đã thay thế nó sẽ dùng được ngay).
-    //   3. Không có dòng nào    -> approve() không giữ chỗ gì (consumeQty=0, mua 100% nhu cầu) nên
-    //      reserve() chưa từng chạy - tạo mới (case hiếm, phương án chắc chắn còn sống vì
-    //      receiveItem() chỉ chạy được khi PurchaseProposal đang PURCHASING).
-    const [existing] = await tx.$queryRaw<{ id: bigint; status: string }[]>`
-      SELECT "id", "status" FROM "stock_reservations"
-      WHERE "refType" = ${input.refType} AND "refId" = ${input.refId}
-        AND "materialId" = ${input.materialId}
-      FOR UPDATE
-    `;
-    if (existing?.status === 'RELEASED') {
-      return;
-    }
-    if (existing) {
-      await tx.stockReservation.update({
-        where: { id: existing.id },
-        data: { quantity: { increment: input.qty } },
+    const pool = await this.loadPool(tx, input.productionInvoiceId, input.materialId);
+    // Pool rỗng - approve() chưa từng giữ chỗ gì cho (PI, vật tư) này (buyQty = 100% nhu cầu ngay
+    // từ đầu, mọi dòng nguồn có thể cũng đã bị releaseByRef() supersede/huỷ hết) - tạo 1 dòng
+    // "thuộc về cả PI" thay vì thuộc về 1 cuttingProposalId cụ thể (case hiếm, PI chắc chắn còn
+    // sống vì receiveItem() chỉ chạy được khi PurchaseProposal đang PURCHASING).
+    if (pool.length === 0) {
+      await tx.stockReservation.create({
+        data: {
+          warehouseId: input.warehouseId,
+          materialId: input.materialId,
+          productionInvoiceId: input.productionInvoiceId,
+          quantity: input.qty,
+          refType: StockReservationRefType.PRODUCTION_INVOICE,
+          refId: input.productionInvoiceId.toString(),
+          idempotencyKey: `${StockReservationRefType.PRODUCTION_INVOICE}:${input.productionInvoiceId}:material:${input.materialId}`,
+        },
       });
       return;
     }
-    await tx.stockReservation.create({
-      data: {
-        warehouseId: input.warehouseId,
-        materialId: input.materialId,
-        quantity: input.qty,
-        refType: input.refType,
-        refId: input.refId,
-        idempotencyKey: `${input.refType}:${input.refId}:material:${input.materialId}`,
-      },
+    // Credit vào dòng ưu tiên CAO NHẤT (hạn gần nhất, xem loadPool) - KHÔNG quan trọng dòng nào
+    // cụ thể nhận credit vì drainPool() sau này rút theo TỔNG của cả pool, không theo từng dòng
+    // riêng; chọn 1 quy tắc xác định (thay vì tuỳ tiện) chỉ để dễ audit/debug khi cần soi dữ liệu.
+    const target = pool[0];
+    await tx.$queryRaw`SELECT "id" FROM "stock_reservations" WHERE "id" = ${target.id} FOR UPDATE`;
+    await tx.stockReservation.update({
+      where: { id: target.id },
+      data: { quantity: { increment: input.qty } },
     });
+  }
+
+  /**
+   * Phôi thực xuất `qty` cây cho (PI, vật tư) - rút từ pool giữ chỗ theo thứ tự ưu tiên (SKU hạn
+   * gần nhất trước, xem loadPool), có thể rút vắt qua NHIỀU dòng nếu dòng ưu tiên cao nhất không
+   * đủ (L5, 2026-08-26 - thay cho lookup 1-dòng cố định cũ ở SteelIssuesService). Trả về
+   * warehouseId để caller tự làm bút toán StockLedger (hàm này chỉ lo phần giữ chỗ, không đụng
+   * StockLedgerService - tránh phụ thuộc chéo).
+   *
+   * KHOÁ TỪNG DÒNG rồi ĐỌC LẠI (FOR UPDATE trả thẳng quantity/consumedQty MỚI NHẤT) trước khi
+   * quyết định `take` - KHÔNG dùng số đã đọc ở loadPool() (loadPool không khoá, chỉ dùng để biết
+   * TẬP dòng nào thuộc pool và THỨ TỰ ưu tiên). Sai chỗ này là tự tạo lại đúng race mà bản gốc
+   * (1 dòng, `SELECT...FOR UPDATE` khoá-và-đọc trong 1 bước) chưa từng có: 2 lượt xuất cùng
+   * (PI, vật tư) chạy gần nhau đều tính `take` từ số CŨ, lượt xuất SAU commit sau có thể ghi
+   * consumedQty vượt quá quantity thật của dòng đó dù guard tổng cả pool ở dưới cũng đã qua (guard
+   * đó tính từ CÙNG 1 snapshot cũ, không cứu được). Khoá HẾT các dòng liên quan TRƯỚC khi tính
+   * bất kỳ `take` nào thì lượt xuất thứ 2 phải xếp hàng chờ lượt đầu commit xong mới đọc được số
+   * đã cập nhật - đúng idiom CuttingProposalsService.approve() dùng cho FOR UPDATE stock_quant.
+   */
+  async drainPool(
+    tx: PrismaTx,
+    input: { productionInvoiceId: bigint; materialId: bigint; qty: number },
+  ): Promise<{ warehouseId: bigint }> {
+    if (!(input.qty > 0)) {
+      throw new BadRequestException('qty xuất phải lớn hơn 0');
+    }
+    const pool = await this.loadPool(tx, input.productionInvoiceId, input.materialId);
+    if (pool.length === 0) {
+      throw new ConflictException(
+        `Không tìm thấy giữ chỗ tồn kho cho vật tư ${input.materialId} của PI ${input.productionInvoiceId} - chưa từng giữ chỗ (tồn + hàng mua chưa đủ), hoặc mọi phương án cắt liên quan đã bị supersede/huỷ`,
+      );
+    }
+
+    // Khoá TỪNG dòng theo ĐÚNG thứ tự ưu tiên của loadPool() (nhất quán giữa các lượt gọi đồng
+    // thời - khoá lệch thứ tự là công thức deadlock kinh điển) rồi đọc lại quantity/consumedQty
+    // MỚI NHẤT ngay trong câu FOR UPDATE - xem docstring.
+    const lockedRows: { id: bigint; warehouseId: bigint; remaining: number }[] = [];
+    for (const row of pool) {
+      const [locked] = await tx.$queryRaw<
+        { warehouseId: bigint; quantity: Prisma.Decimal; consumedQty: Prisma.Decimal }[]
+      >`
+        SELECT "warehouseId", "quantity", "consumedQty" FROM "stock_reservations"
+        WHERE "id" = ${row.id} FOR UPDATE
+      `;
+      lockedRows.push({
+        id: row.id,
+        warehouseId: locked.warehouseId,
+        remaining: locked.quantity.toNumber() - locked.consumedQty.toNumber(),
+      });
+    }
+
+    const totalRemaining = lockedRows.reduce((sum, r) => sum + Math.max(0, r.remaining), 0);
+    // Chặn xuất thừa - CHẶN CỨNG, KHÔNG dung sai (Sếp chốt 2026-08-18, mục 13.7 changelog, giữ
+    // nguyên khi chuyển sang pool - tổng cả pool vẫn phải đủ, không riêng từng dòng).
+    if (input.qty > totalRemaining) {
+      throw new BadRequestException(
+        `Xuất ${input.qty} cây vượt quá phần đã giữ chỗ còn lại (${totalRemaining} cây) cho vật tư ${input.materialId} của PI ${input.productionInvoiceId} - không đủ hứa`,
+      );
+    }
+    let remainingToConsume = input.qty;
+    for (const row of lockedRows) {
+      if (remainingToConsume <= 0) break;
+      if (row.remaining <= 0) continue;
+      const take = Math.min(row.remaining, remainingToConsume);
+      // RELEASED chỉ mang ĐÚNG 1 nghĩa: "đã huỷ/bị thay thế" (xem releaseByRef(), B4 Đợt 3b) -
+      // KHÔNG dùng để đánh dấu "đã tiêu hết". Dòng tiêu hết vẫn ACTIVE (getAvailableQty() đã tự
+      // trừ về 0 qua consumedQty, không cần đổi status).
+      await tx.stockReservation.update({
+        where: { id: row.id },
+        data: { consumedQty: { increment: take } },
+      });
+      remainingToConsume -= take;
+    }
+    return { warehouseId: lockedRows[0].warehouseId };
   }
 
   /**

@@ -19,6 +19,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
 import {
   PhoiProgressItemResponseDto,
@@ -109,6 +110,7 @@ export class SteelIssuesService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
+    private readonly stockReservationsService: StockReservationsService,
   ) {}
 
   async create(
@@ -143,7 +145,7 @@ export class SteelIssuesService {
     const orders = await this.findOrdersForInvoice(invoice.id);
     await this.assertMaterialUsedInInvoice(orders, materialId, invoice.id);
     const poIds = orders.map((o) => o.id);
-    const { cuttingProposalId, approvedAt } = await this.assertMaterialInApprovedProposal(
+    const { approvedAt } = await this.assertMaterialInApprovedProposal(
       invoice.id,
       poIds,
       materialId,
@@ -169,7 +171,9 @@ export class SteelIssuesService {
 
         if (isPostCutover) {
           await this.consumeReservationAndDeduct(tx, {
-            cuttingProposalId,
+            // L5 (2026-08-26): rút từ POOL của cả PI+vật tư, không còn 1 cuttingProposalId cụ thể
+            // - xem StockReservationsService.drainPool và docstring hàm dưới đây.
+            productionInvoiceId: invoice.id,
             materialId,
             barCount: dto.barCount,
             steelIssueId: issue.id,
@@ -187,54 +191,40 @@ export class SteelIssuesService {
 
   /**
    * B4 Đợt 2 - phần "tiêu hao" thật của thiết kế đặt-giữ/tiêu-hao (changelog mục 13). Chỉ gọi cho
-   * phương án duyệt SAU STEEL_ISSUE_RESERVATION_CUTOVER (xem create()). Bê nguyên pattern khoá
-   * `FOR UPDATE` + bút toán trong CÙNG transaction đã dùng ở CuttingProposalsService.approve() -
-   * cùng lý do: đọc số dư - quyết định - ghi bút toán phải nằm trọn 1 khoá, nếu không 2 lượt xuất
-   * gần nhau cho cùng vật tư sẽ cùng đọc thấy 1 số dư còn lại và cùng "ăn" quá phần được giữ.
+   * phương án duyệt SAU STEEL_ISSUE_RESERVATION_CUTOVER (xem create()).
+   *
+   * L5 (2026-08-26): rút từ POOL giữ chỗ của (PI, vật tư) qua StockReservationsService.drainPool()
+   * - KHÔNG còn khoá cứng vào 1 cuttingProposalId cụ thể. Trước đây tra đúng 1 dòng theo
+   * cuttingProposalId do assertMaterialInApprovedProposal() TÌM NGẪU NHIÊN (findFirst không
+   * orderBy) trong số các phương án cắt riêng lẻ của từng SKU cùng PI - trong khi hàng mua về lại
+   * luôn cộng vào phương án duyệt SAU CÙNG (PurchaseProposal.cuttingProposalId bị ghi đè mỗi lần
+   * merge). 2 quy tắc lệch nhau nghĩa là: SKU nào KHÔNG trùng con số `findFirst` chọn được thì
+   * giữ chỗ của nó không bao giờ lớn lên dù hàng đã về kho, rồi kẹt cứng (ConflictException) khi
+   * Phôi xuất, dù PI đó rõ ràng đã đủ sắt. drainPool() gộp mọi dòng giữ chỗ của PI+vật tư thành 1
+   * pool và rút theo tổng - đường lệch đó không còn tồn tại.
    */
   private async consumeReservationAndDeduct(
     tx: PrismaTx,
     input: {
-      cuttingProposalId: bigint;
+      productionInvoiceId: bigint;
       materialId: bigint;
       barCount: number;
       steelIssueId: bigint;
       issuedById: string;
     },
   ): Promise<void> {
-    const [reservation] = await tx.$queryRaw<
-      { id: bigint; warehouseId: bigint; quantity: Prisma.Decimal; consumedQty: Prisma.Decimal }[]
-    >`
-      SELECT "id", "warehouseId", "quantity", "consumedQty" FROM "stock_reservations"
-      WHERE "refType" = 'CUTTING_PROPOSAL' AND "refId" = ${input.cuttingProposalId.toString()}
-        AND "materialId" = ${input.materialId} AND "status" = 'ACTIVE'
-      FOR UPDATE
-    `;
-    if (!reservation) {
-      throw new ConflictException(
-        `Không tìm thấy giữ chỗ tồn kho cho vật tư ${input.materialId} của phương án cắt ${input.cuttingProposalId} - chưa từng giữ chỗ (tồn + hàng mua chưa đủ), hoặc phương án đã bị supersede/huỷ`,
-      );
-    }
-    const remaining = reservation.quantity.toNumber() - reservation.consumedQty.toNumber();
-    // Chặn xuất thừa - CHẶN CỨNG, KHÔNG dung sai (Sếp chốt 2026-08-18, mục 13.7 changelog).
-    // KHÔNG thêm dung sai kiểu SystemConfig.purchaseOverReceiptTolerancePercent bên Mua hàng vào
-    // đây: chỗ đó có dung sai vì sai số đến TỪ NCC BÊN NGOÀI (đóng gói theo lô/cân, không ép được
-    // khớp tuyệt đối). Ở đây là nội bộ và `totalBars` từ solver ĐÃ tính sẵn cả hao hụt cắt - vượt
-    // định mức nghĩa là có vấn đề thật (gõ nhầm, cắt hỏng ngoài kế hoạch, hoặc lấy sắt cho việc
-    // khác núp bóng đơn này), phải chặn lại để hỏi chứ không cho qua êm. Định mức sinh ra chính
-    // là để kiểm soát việc này - nới lỏng ở đây là tự vô hiệu hoá BOM/solver phía trước.
-    if (input.barCount > remaining) {
-      throw new BadRequestException(
-        `Xuất ${input.barCount} cây vượt quá phần đã giữ chỗ còn lại (${remaining} cây) cho vật tư ${input.materialId} - phương án cắt ${input.cuttingProposalId} không đủ hứa`,
-      );
-    }
+    const { warehouseId } = await this.stockReservationsService.drainPool(tx, {
+      productionInvoiceId: input.productionInvoiceId,
+      materialId: input.materialId,
+      qty: input.barCount,
+    });
 
     // Chặn tồn âm cục bộ (lỗ #2, mục 13.4) - không sửa StockLedgerService.postEntry() dùng chung
     // (nhiều luồng khác hợp lệ phải cho âm, vd kho ảo SUPPLIER) - chặn ngay tại đây, cùng khoá.
     // Phòng ca hiếm: tồn vật lý bị điều chỉnh tay (Admin > Sửa nhanh tồn kho) lệch khỏi giữ chỗ.
     const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
       SELECT "qty" FROM "stock_quant"
-      WHERE "warehouseId" = ${reservation.warehouseId} AND "materialId" = ${input.materialId}
+      WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${input.materialId}
       FOR UPDATE
     `;
     const onHand = Math.floor(stockRow?.qty.toNumber() ?? 0);
@@ -249,7 +239,7 @@ export class SteelIssuesService {
     });
     await this.stockLedgerService.postEntry(
       {
-        fromWarehouseId: reservation.warehouseId,
+        fromWarehouseId: warehouseId,
         toWarehouseId: productionWarehouse.id,
         materialId: input.materialId,
         qty: input.barCount,
@@ -260,19 +250,6 @@ export class SteelIssuesService {
       },
       tx,
     );
-
-    // RELEASED chỉ mang ĐÚNG 1 nghĩa: "đã huỷ/bị thay thế" (xem
-    // StockReservationsService.releaseByRef(), B4 Đợt 3b) - KHÔNG dùng để đánh dấu "đã tiêu hết".
-    // Dòng tiêu hết vẫn ACTIVE (getAvailableQty() đã tự trừ về 0 qua consumedQty, không cần đổi
-    // status). Trước đây đánh RELEASED ở đây khi tiêu hết -> hàng về đợt sau (topUpFromReceipt)
-    // không tìm thấy dòng ACTIVE để cộng vào, tạo dòng mới cùng idempotencyKey -> P2002 500 (bug
-    // thật, phát hiện khi review lại thiết kế 3b - nhận hàng nhiều đợt là chuyện bình thường).
-    await tx.stockReservation.update({
-      where: { id: reservation.id },
-      data: {
-        consumedQty: reservation.consumedQty.toNumber() + input.barCount,
-      },
-    });
   }
 
   /** Flat, KHÔNG cần productionInvoiceId - xem ListSteelIssuesQueryDto tại sao endpoint này tồn
@@ -931,12 +908,7 @@ export class SteelIssuesService {
     }
 
     const materialIdsUsed = [...requiredSegmentsByMaterial.keys()].map((k) => BigInt(k));
-    const poIds = orders.map((o) => o.id);
-    const stockInfoByMaterial = await this.buildStockInfoByMaterial(
-      invoice.id,
-      poIds,
-      materialIdsUsed,
-    );
+    const stockInfoByMaterial = await this.buildStockInfoByMaterial(invoice.id, materialIdsUsed);
 
     return materialIdsUsed.map((materialId) => {
       const key = materialId.toString();
@@ -964,7 +936,6 @@ export class SteelIssuesService {
    */
   private async buildStockInfoByMaterial(
     productionInvoiceId: bigint,
-    productionOrderIds: bigint[],
     materialIds: bigint[],
   ): Promise<Map<string, { remainingToIssue: number | null; physicalStockQty: number | null }>> {
     const result = new Map<
@@ -973,52 +944,35 @@ export class SteelIssuesService {
     >();
     if (materialIds.length === 0) return result;
 
-    const [materials, lines] = await Promise.all([
+    // L5 (2026-08-26): TỔNG cả pool giữ chỗ ACTIVE của (PI, vật tư) - KHÔNG còn tra qua 1
+    // cuttingProposalId "đại diện" chọn bằng Map (GHI ĐÈ khi 2 SKU cùng dùng 1 loại sắt - trước
+    // đây chỉ thấy giữ chỗ của SKU nào ghi SAU trong mảng `lines`, "còn lại" hiện sai/thiếu cho
+    // SKU kia dù Phôi vẫn xuất được bình thường qua drainPool()). Không cần join qua
+    // cuttingProposalLine nữa: "không có dòng giữ chỗ ACTIVE nào" (materialId vắng mặt trong
+    // reservations) và "chưa có phương án duyệt nào" là 2 điều kiện LUÔN trùng nhau trong thực tế
+    // - reserve() chỉ chạy được từ trong CuttingProposalsService.approve() (đã APPROVED), và
+    // releaseByRef() (supersede) đánh RELEASED đúng lúc cuttingProposal đó rời khỏi APPROVED - nên
+    // giữ đúng ý nghĩa cũ (remainingToIssue=null khi "chưa có gì để biết", không phải "=0") mà
+    // không cần truy vấn cuttingProposalLine thêm 1 lần nữa.
+    const [materials, reservations] = await Promise.all([
       this.prisma.material.findMany({
         where: { id: { in: materialIds } },
         select: { id: true, warehouseId: true },
       }),
-      // Cùng điều kiện assertMaterialInApprovedProposal() - phương án đã duyệt phủ đúng PI này
-      // (trực tiếp hoặc qua từng PO thành viên).
-      this.prisma.cuttingProposalLine.findMany({
-        where: {
-          materialId: { in: materialIds },
-          feasible: true,
-          cuttingProposal: {
-            status: CuttingProposalStatus.APPROVED,
-            OR: [
-              { productionInvoiceId },
-              ...(productionOrderIds.length > 0
-                ? [{ productionOrderId: { in: productionOrderIds } }]
-                : []),
-            ],
-          },
-        },
-        select: { materialId: true, cuttingProposalId: true },
+      this.prisma.stockReservation.findMany({
+        where: { productionInvoiceId, materialId: { in: materialIds }, status: 'ACTIVE' },
+        select: { materialId: true, quantity: true, consumedQty: true },
       }),
     ]);
 
     const warehouseIdByMaterial = new Map(materials.map((m) => [m.id.toString(), m.warehouseId]));
-    const cuttingProposalIdByMaterial = new Map(
-      lines.map((l) => [l.materialId.toString(), l.cuttingProposalId]),
-    );
 
-    const refIds = [
-      ...new Set([...cuttingProposalIdByMaterial.values()].map((id) => id.toString())),
-    ];
-    const reservations =
-      refIds.length > 0
-        ? await this.prisma.stockReservation.findMany({
-            where: {
-              refType: 'CUTTING_PROPOSAL',
-              refId: { in: refIds },
-              materialId: { in: materialIds },
-              status: 'ACTIVE',
-            },
-            select: { refId: true, materialId: true, quantity: true, consumedQty: true },
-          })
-        : [];
-    const reservationByKey = new Map(reservations.map((r) => [`${r.refId}:${r.materialId}`, r]));
+    const remainingByMaterial = new Map<string, number>();
+    for (const r of reservations) {
+      const key = r.materialId.toString();
+      const remaining = Math.max(0, r.quantity.toNumber() - r.consumedQty.toNumber());
+      remainingByMaterial.set(key, (remainingByMaterial.get(key) ?? 0) + remaining);
+    }
 
     const warehouseIds = [
       ...new Set(materials.map((m) => m.warehouseId).filter((id): id is bigint => id != null)),
@@ -1037,14 +991,8 @@ export class SteelIssuesService {
     for (const materialId of materialIds) {
       const key = materialId.toString();
       const warehouseId = warehouseIdByMaterial.get(key) ?? null;
-      const cuttingProposalId = cuttingProposalIdByMaterial.get(key);
-      const reservation = cuttingProposalId
-        ? reservationByKey.get(`${cuttingProposalId}:${materialId}`)
-        : undefined;
       result.set(key, {
-        remainingToIssue: reservation
-          ? Math.max(0, reservation.quantity.toNumber() - reservation.consumedQty.toNumber())
-          : null,
+        remainingToIssue: remainingByMaterial.has(key) ? remainingByMaterial.get(key)! : null,
         physicalStockQty:
           warehouseId != null ? (quantByKey.get(`${warehouseId}:${materialId}`) ?? 0) : null,
       });
@@ -1089,11 +1037,19 @@ export class SteelIssuesService {
    * `approvedAt` để biết phương án này thuộc "trước" hay "sau" STEEL_ISSUE_RESERVATION_CUTOVER, và
    * cần `id` để tìm đúng StockReservation tương ứng (refType=CUTTING_PROPOSAL, refId=id đó).
    */
+  /**
+   * Chỉ còn vai trò GUARD (đảm bảo tồn tại ≥1 phương án cắt đã duyệt và cắt được cho vật tư này
+   * trong PI) + xác định mốc cutover - KHÔNG còn trả `cuttingProposalId` (L5, 2026-08-26): giữ
+   * chỗ giờ tra theo pool của productionInvoiceId (đã có sẵn ở caller, xem
+   * StockReservationsService.drainPool), không cần chọn ra 1 phương án cụ thể nữa - loại bỏ hẳn
+   * lựa chọn NGẪU NHIÊN cũ của `findFirst` (không orderBy) từng là nguồn gây lệch với
+   * PurchaseProposal.cuttingProposalId ở receiveItem() (lỗ #5).
+   */
   private async assertMaterialInApprovedProposal(
     productionInvoiceId: bigint,
     productionOrderIds: bigint[],
     materialId: bigint,
-  ): Promise<{ cuttingProposalId: bigint; approvedAt: Date | null }> {
+  ): Promise<{ approvedAt: Date | null }> {
     const line = await this.prisma.cuttingProposalLine.findFirst({
       where: {
         materialId,
@@ -1112,17 +1068,14 @@ export class SteelIssuesService {
           ],
         },
       },
-      select: { cuttingProposal: { select: { id: true, approvedAt: true } } },
+      select: { cuttingProposal: { select: { approvedAt: true } } },
     });
     if (!line) {
       throw new ConflictException(
         `Chưa có phương án cắt (CuttingProposal) đã duyệt và cắt được cho vật tư ${materialId} của PI ${productionInvoiceId} - chưa thể xuất sắt`,
       );
     }
-    return {
-      cuttingProposalId: line.cuttingProposal.id,
-      approvedAt: line.cuttingProposal.approvedAt,
-    };
+    return { approvedAt: line.cuttingProposal.approvedAt };
   }
 
   private async findInvoiceOrThrow(id: string) {

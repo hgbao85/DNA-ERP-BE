@@ -7,6 +7,7 @@ import {
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProcessStep, SteelIssueStatus } from '../../generated/prisma/client';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { SteelIssuesService } from './steel-issues.service';
 
 // Prisma trả Decimal cho cutLengthMm/solverBladeWidthMm (vd Decimal(7,1) = 452.7). Service gọi
@@ -42,6 +43,7 @@ describe('SteelIssuesService', () => {
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
+  let stockReservationsService: { drainPool: jest.Mock };
 
   const invoice = { id: 1n, code: 'PI-31' };
   const order = { id: 1n, bomRevisionId: 5n, quantity: 10 };
@@ -78,21 +80,15 @@ describe('SteelIssuesService', () => {
     material: { id: 30n, code: 'ST-18', name: 'Sắt vuông 18x18' },
   };
 
-  // B4 Đợt 2: reservationRow/stockQty điều khiển 2 câu $queryRaw khác nhau mà
-  // consumeReservationAndDeduct() gọi (khoá stock_reservations, rồi khoá stock_quant) - phân
-  // nhánh theo SQL, cùng idiom đã dùng ở cutting-proposals.service.spec.ts. Chỉ có tác dụng cho
-  // test nào set `approvedAt` của cuttingProposal SAU cutover (mặc định TRƯỚC cutover, không đụng
-  // 2 câu này - xem default cuttingProposalLine.findFirst dưới).
-  let reservationRow: {
-    id: bigint;
-    warehouseId: bigint;
-    quantity: number;
-    consumedQty: number;
-  } | null;
+  // B4 Đợt 2 / L5 (2026-08-26): physicalStockQty điều khiển câu $queryRaw duy nhất còn lại mà
+  // consumeReservationAndDeduct() tự gọi (khoá stock_quant) - phần khoá/rút giữ chỗ đã chuyển
+  // hẳn sang StockReservationsService.drainPool() (mock riêng, xem stockReservationsService dưới)
+  // nên $queryRaw ở đây không còn cần phân nhánh theo SQL nữa. Chỉ có tác dụng cho test nào set
+  // `approvedAt` của cuttingProposal SAU cutover (mặc định TRƯỚC cutover, không đụng tới cả
+  // drainPool lẫn $queryRaw - xem default cuttingProposalLine.findFirst dưới).
   let physicalStockQty: number;
 
   beforeEach(() => {
-    reservationRow = { id: 900n, warehouseId: 800n, quantity: 20, consumedQty: 0 };
     physicalStockQty = 100;
     prisma = {
       steelIssue: {
@@ -145,30 +141,20 @@ describe('SteelIssuesService', () => {
       stockReservation: { update: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
       warehouse: { findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 950n }) },
-      $queryRaw: jest.fn((strings: TemplateStringsArray) => {
-        const sql = Array.isArray(strings) ? strings.join('') : String(strings);
-        if (sql.includes('stock_reservations')) {
-          return Promise.resolve(
-            reservationRow
-              ? [
-                  {
-                    id: reservationRow.id,
-                    warehouseId: reservationRow.warehouseId,
-                    quantity: { toNumber: () => reservationRow!.quantity },
-                    consumedQty: { toNumber: () => reservationRow!.consumedQty },
-                  },
-                ]
-              : [],
-          );
-        }
-        return Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }]);
-      }),
+      $queryRaw: jest.fn(() => Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }])),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     stockLedgerService = { postEntry: jest.fn() };
+    // L5 (2026-08-26): drainPool() thay hẳn lookup 1-dòng cố định cũ - mặc định trả về 1 kho giả
+    // định đủ giữ chỗ, test nào cần mô phỏng "không đủ"/"pool rỗng" tự override bằng
+    // mockRejectedValueOnce (hành vi thật đã kiểm riêng ở stock-reservations.service.spec.ts).
+    stockReservationsService = {
+      drainPool: jest.fn().mockResolvedValue({ warehouseId: 800n }),
+    };
     service = new SteelIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
+      stockReservationsService as unknown as StockReservationsService,
     );
   });
 
@@ -306,10 +292,15 @@ describe('SteelIssuesService', () => {
       });
     };
 
-    it('đủ giữ chỗ, tiêu 1 phần: postEntry đúng tham số, consumedQty tăng, giữ chỗ vẫn ACTIVE', async () => {
+    // L5 (2026-08-26): việc rút giữ chỗ (đủ 1 dòng, vắt qua nhiều dòng, chặn xuất thừa, chặn pool
+    // rỗng) đã chuyển hẳn sang StockReservationsService.drainPool() - đã kiểm đầy đủ ở
+    // stock-reservations.service.spec.ts. 4 test dưới đây chỉ còn xác nhận SteelIssuesService gọi
+    // drainPool() ĐÚNG tham số (productionInvoiceId, không còn cuttingProposalId) và dùng đúng
+    // warehouseId nó trả về, cộng với phần logic CÒN LẠI thuộc về chính service này (chặn tồn âm
+    // vật lý cục bộ).
+    it('đủ giữ chỗ: gọi drainPool đúng (PI, vật tư, số cây), postEntry dùng warehouseId trả về', async () => {
       setPostCutover();
-      reservationRow = { id: 900n, warehouseId: 800n, quantity: 20, consumedQty: 0 };
-      prisma.steelIssue.create.mockResolvedValue(issue); // barCount=20 trong fixture `issue`... dùng lại dto riêng dưới
+      prisma.steelIssue.create.mockResolvedValue(issue);
 
       await service.create(
         '1',
@@ -318,6 +309,11 @@ describe('SteelIssuesService', () => {
         null,
       );
 
+      expect(stockReservationsService.drainPool).toHaveBeenCalledWith(expect.anything(), {
+        productionInvoiceId: 1n,
+        materialId: 30n,
+        qty: 12,
+      });
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         {
           fromWarehouseId: 800n,
@@ -331,19 +327,11 @@ describe('SteelIssuesService', () => {
         },
         expect.anything(),
       );
-      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
-        where: { id: 900n },
-        data: { consumedQty: 12 },
-      });
     });
 
-    // RELEASED chỉ dành cho "đã huỷ/bị thay thế" (Đợt 3b) - tiêu hết KHÔNG đổi status, vẫn
-    // ACTIVE, để hàng về đợt sau (topUpFromReceipt) còn tìm thấy dòng mà cộng vào. Trước đây đánh
-    // RELEASED ở đây gây bug P2002 khi nhận hàng nhiều đợt - xem comment ở
-    // consumeReservationAndDeduct().
-    it('xuất hết phần còn lại: consumedQty cập nhật đúng, status VẪN ACTIVE (không tự RELEASED)', async () => {
+    it('drainPool trả warehouseId khác (nhiều SKU, kho khác nhau về lý thuyết) - postEntry dùng ĐÚNG kho đó', async () => {
       setPostCutover();
-      reservationRow = { id: 900n, warehouseId: 800n, quantity: 20, consumedQty: 12 };
+      stockReservationsService.drainPool.mockResolvedValue({ warehouseId: 801n });
       prisma.steelIssue.create.mockResolvedValue(issue);
 
       await service.create(
@@ -353,28 +341,30 @@ describe('SteelIssuesService', () => {
         null,
       );
 
-      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
-        where: { id: 900n },
-        data: { consumedQty: 20 },
-      });
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ fromWarehouseId: 801n }),
+        expect.anything(),
+      );
     });
 
-    it('chặn xuất thừa - barCount vượt phần giữ chỗ còn lại (mặc định chặn cứng, chưa có dung sai)', async () => {
+    // drainPool() ném lỗi (không đủ giữ chỗ trong CẢ pool) - create() phải để lỗi đó nổi lên
+    // nguyên vẹn, KHÔNG được nuốt hay đổi loại exception.
+    it('chặn xuất thừa - propagate đúng lỗi từ drainPool(), không ghi StockLedger', async () => {
       setPostCutover();
-      reservationRow = { id: 900n, warehouseId: 800n, quantity: 20, consumedQty: 15 }; // còn 5
+      stockReservationsService.drainPool.mockRejectedValue(
+        new BadRequestException('vượt quá phần đã giữ chỗ còn lại'),
+      );
       prisma.steelIssue.create.mockResolvedValue(issue);
 
       await expect(
         service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 6 }, 'user-1', null),
       ).rejects.toThrow(BadRequestException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
-      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
     });
 
     it('chặn tồn âm cục bộ - tồn vật lý bị điều chỉnh tay lệch khỏi giữ chỗ', async () => {
       setPostCutover();
-      reservationRow = { id: 900n, warehouseId: 800n, quantity: 20, consumedQty: 0 }; // giữ chỗ đủ 20
-      physicalStockQty = 5; // nhưng tồn vật lý thật chỉ còn 5 (bị chỉnh tay)
+      physicalStockQty = 5; // giữ chỗ đủ (drainPool mặc định resolve) nhưng tồn vật lý thật chỉ còn 5 (bị chỉnh tay)
       prisma.steelIssue.create.mockResolvedValue(issue);
 
       await expect(
@@ -383,9 +373,11 @@ describe('SteelIssuesService', () => {
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
 
-    it('không tìm thấy giữ chỗ ACTIVE (đã supersede/huỷ hoặc đã tiêu hết) - ConflictException', async () => {
+    it('không tìm thấy giữ chỗ nào cho PI+vật tư (pool rỗng) - propagate ConflictException từ drainPool', async () => {
       setPostCutover();
-      reservationRow = null;
+      stockReservationsService.drainPool.mockRejectedValue(
+        new ConflictException('Không tìm thấy giữ chỗ tồn kho'),
+      );
       prisma.steelIssue.create.mockResolvedValue(issue);
 
       await expect(
@@ -760,11 +752,8 @@ describe('SteelIssuesService', () => {
 
     it('trả remainingToIssue/physicalStockQty đúng khi có phương án duyệt + giữ chỗ ACTIVE', async () => {
       prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: 800n }]);
-      prisma.cuttingProposalLine.findMany.mockResolvedValue([
-        { materialId: 30n, cuttingProposalId: 22n },
-      ]);
       prisma.stockReservation.findMany.mockResolvedValue([
-        { refId: '22', materialId: 30n, quantity: decimal(20), consumedQty: decimal(12) },
+        { materialId: 30n, quantity: decimal(20), consumedQty: decimal(12) },
       ]);
       prisma.stockQuant.findMany.mockResolvedValue([
         { warehouseId: 800n, materialId: 30n, qty: decimal(50) },
@@ -776,9 +765,27 @@ describe('SteelIssuesService', () => {
       expect(result.physicalStockQty).toBe(50);
     });
 
-    it('remainingToIssue = null khi chưa có phương án cắt đã duyệt nào cho vật tư này', async () => {
+    // L5 (2026-08-26): 2 SKU dùng chung 1 loại sắt, mỗi SKU có dòng giữ chỗ riêng (2 CuttingProposal
+    // khác nhau) - "còn lại" hiển thị cho Phôi phải là TỔNG của cả 2, không phải chỉ 1 dòng (bug cũ:
+    // Map theo materialId ghi đè, chỉ thấy giữ chỗ của SKU ghi SAU trong mảng kết quả truy vấn).
+    it('2 SKU dùng chung 1 loại sắt: remainingToIssue = TỔNG của mọi dòng giữ chỗ, không ghi đè', async () => {
       prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: 800n }]);
-      prisma.cuttingProposalLine.findMany.mockResolvedValue([]); // không phương án nào
+      prisma.stockReservation.findMany.mockResolvedValue([
+        { materialId: 30n, quantity: decimal(20), consumedQty: decimal(12) }, // SKU A: còn 8
+        { materialId: 30n, quantity: decimal(15), consumedQty: decimal(0) }, // SKU B: còn 15
+      ]);
+      prisma.stockQuant.findMany.mockResolvedValue([
+        { warehouseId: 800n, materialId: 30n, qty: decimal(50) },
+      ]);
+
+      const [result] = await service.getIssuePlan('1');
+
+      expect(result.remainingToIssue).toBe(23); // 8 + 15, không phải chỉ 1 trong 2
+    });
+
+    it('remainingToIssue = null khi chưa có phương án cắt đã duyệt nào cho vật tư này (không có dòng giữ chỗ nào)', async () => {
+      prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: 800n }]);
+      prisma.stockReservation.findMany.mockResolvedValue([]); // không phương án nào -> không giữ chỗ nào
       prisma.stockQuant.findMany.mockResolvedValue([
         { warehouseId: 800n, materialId: 30n, qty: decimal(50) },
       ]);
@@ -815,11 +822,8 @@ describe('SteelIssuesService', () => {
         { ...pieceBomRow, pieceId: 21n }, // cùng materialId 30n
       ]);
       prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: 800n }]);
-      prisma.cuttingProposalLine.findMany.mockResolvedValue([
-        { materialId: 30n, cuttingProposalId: 22n },
-      ]);
       prisma.stockReservation.findMany.mockResolvedValue([
-        { refId: '22', materialId: 30n, quantity: decimal(20), consumedQty: decimal(0) },
+        { materialId: 30n, quantity: decimal(20), consumedQty: decimal(0) },
       ]);
       prisma.stockQuant.findMany.mockResolvedValue([
         { warehouseId: 800n, materialId: 30n, qty: decimal(50) },

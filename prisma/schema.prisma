@@ -1101,6 +1101,7 @@ model ProductionInvoice {
   cuttingProposals  CuttingProposal[]
   steelIssues       SteelIssue[]
   purchaseProposals PurchaseProposal[]
+  stockReservations StockReservation[]
 
   @@index([salesOrderId])
   @@map("production_invoices")
@@ -1300,6 +1301,7 @@ model ProductionOrder {
   mfgProduct                  MfgProduct                   @relation(fields: [mfgProductId], references: [id])
   bomRevision                 BomRevision                  @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
   cuttingProposals            CuttingProposal[]
+  cuttingPlanCoverage         CuttingPlanCoverage?
   weavingIssues               WeavingIssue[]
   weavingReceipts             WeavingReceipt[]
   materialIssues              MaterialIssue[]
@@ -1361,10 +1363,43 @@ model CuttingProposal {
   approvedBy        User?                 @relation("CuttingProposalApprovedBy", fields: [approvedById], references: [id])
   lines             CuttingProposalLine[]
   purchaseProposals PurchaseProposal[]
+  coverage          CuttingPlanCoverage[]
 
   @@index([productionOrderId, status])
   @@index([productionInvoiceId, status])
   @@map("cutting_proposals")
+}
+
+/// Bất biến "mỗi SKU chỉ được phủ bởi ĐÚNG 1 phương án cắt đang hiệu lực" - ép ở tầng DỮ LIỆU
+/// (L2 mức 2, 2026-08-27), không chỉ bằng cổng chặn ở service.
+///
+/// VÌ SAO CẦN CẢ 2 LỚP: cổng ở service (ProductionInvoicesService.approveItem +
+/// CuttingProposalsService.requestForInvoice) chặn theo `ProductionInvoice.isMerged` - đủ kín cho
+/// 2 đường duyệt hiện có, nhưng là quy ước ở tầng ứng dụng: route mới / script migration / lần
+/// refactor sau đều có thể vô tình đi vòng qua nó mà không ai phát hiện cho tới lúc sổ kho lệch.
+/// Bảng này biến bất biến đó thành KHOÁ CHÍNH: 1 ProductionOrder không thể có 2 dòng phủ, dù ai
+/// gọi bằng đường nào. Vi phạm là lỗi ghi CSDL ngay tại chỗ, không phải sai số âm thầm.
+///
+/// Hậu quả nếu để 2 phương án cùng phủ 1 SKU: nhu cầu sắt của SKU đó được lập kế hoạch 2 lần -
+/// giữ chỗ tồn 2 lần (kho báo hết dù còn hàng) và đẩy đề xuất mua trùng (mua thừa tiền thật).
+///
+/// GHI KHI NÀO: trong CÙNG transaction của approve(), sau bước supersede anh em. Phương án neo PO
+/// ghi 1 dòng; phương án neo PI (đợt gộp) ghi N dòng cho N SKU thành viên. "Tính lại" là ca CHUYỂN
+/// CHỦ hợp lệ - dòng cũ trỏ tới phương án vừa bị đánh SUPERSEDED nên được phép ghi đè; trỏ tới
+/// phương án còn APPROVED thì chặn (đó đúng là ca phủ chồng).
+model CuttingPlanCoverage {
+  /// PK CHÍNH LÀ bất biến - không phải id tự tăng rồi thêm @@unique, để không thể thêm dòng thứ 2
+  /// cho cùng 1 SKU bằng bất kỳ đường nào.
+  productionOrderId BigInt   @id
+  cuttingProposalId BigInt
+  assignedAt        DateTime @default(now())
+
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  cuttingProposal CuttingProposal @relation(fields: [cuttingProposalId], references: [id], onDelete: Cascade)
+
+  /// "Phương án này đang phủ những SKU nào" - dùng khi gỡ/chuyển chủ.
+  @@index([cuttingProposalId])
+  @@map("cutting_plan_coverage")
 }
 
 /// 1 dòng/loại sắt (gom theo material) trong 1 CuttingProposal - purchase_plan[] của solver.
@@ -1377,6 +1412,22 @@ model CuttingProposalLine {
   feasible             Boolean  @default(true)
   bestStockLengthMm    Int?
   totalBars            Int?
+  /// Số cây PHẢI MUA của riêng dòng này, chốt tại thời điểm approve() (L1, 2026-08-26):
+  /// `totalBars − consumeQty`, trong đó consumeQty là phần lấy được từ tồn khả dụng lúc duyệt
+  /// (đã trừ giữ chỗ của phương án khác, xem StockReservationsService.getAvailableQty).
+  ///
+  /// LÝ DO TỒN TẠI: `PurchaseProposalItem.buyQty` là TỔNG nhu cầu của nhiều SKU dùng chung 1 loại
+  /// sắt trong cùng PI ("gộp 1 PI = 1 form", 2026-08-25). Trước đây tổng đó bị sửa TẠI CHỖ mỗi lần
+  /// duyệt và code phải ĐOÁN nên cộng dồn hay thay thế (heuristic isRecomputeOfSameAnchor) - chỉ
+  /// đúng khi dòng mới có 1 nguồn đóng góp, sai cả 2 chiều từ nguồn thứ 2 trở đi (xoá mất nhu cầu
+  /// của SKU kia, hoặc đếm 2 lần nhu cầu của chính nó). Lưu phần đóng góp của TỪNG dòng ở đây cho
+  /// phép TÍNH LẠI TOÀN PHẦN (`Σ buyBars` của mọi phương án còn hiệu lực) thay vì sửa tại chỗ -
+  /// đúng nguyên tắc regenerative planning của MRP: chạy lại bao nhiêu lần cũng ra một số, và luôn
+  /// truy được "35 cây này gồm 20 của SKU A + 15 của SKU B".
+  ///
+  /// null với dòng feasible=false (không mua gì cho loại không cắt được), và với phương án duyệt
+  /// TRƯỚC 2026-08-26 (cột chưa tồn tại) - lấp bằng prisma/backfill-buy-bars.ts.
+  buyBars              Int?
   /// Decimal, không Int (2026-08-19) - kế thừa độ chính xác thập phân từ cutLengthMm, xem
   /// SegmentSpec.
   totalWasteMm         Decimal? @db.Decimal(7, 1)
@@ -1456,6 +1507,9 @@ model CuttingProposalLine {
 
   @@index([cuttingProposalId])
   @@index([materialId])
+  /// Câu hỏi nóng của bước tính lại buyQty (L1): "mọi dòng còn hiệu lực của PI này, vật tư này,
+  /// đóng góp buyBars bao nhiêu" - luôn lọc kèm materialId nên đặt materialId trước.
+  @@index([materialId, cuttingProposalId])
   @@map("cutting_proposal_lines")
 }
 
@@ -1763,6 +1817,10 @@ enum StockReservationRefType {
   CUTTING_PROPOSAL
   /// Sắt mua về đã có chủ - giữ đích danh cho đề xuất đã kích hoạt mua (PurchaseProposalsService).
   PURCHASE_PROPOSAL
+  /// Fallback CỦA creditPool() khi PI+vật tư CHƯA từng có dòng CUTTING_PROPOSAL nào để cộng vào
+  /// (buyQty = 100% nhu cầu, approve() không giữ chỗ gì từ tồn - xem StockReservationsService.
+  /// loadPool/creditPool, L5 2026-08-26). refId = productionInvoiceId.
+  PRODUCTION_INVOICE
 }
 
 /// Sổ cái kho bút toán kép - nguồn sự thật duy nhất của tồn kho. Append-only: không có
@@ -1865,6 +1923,16 @@ model StockReservation {
   /// Trỏ tới bản ghi nghiệp vụ giữ chỗ này (vd cutting_proposals.id) - cùng lý do không FK cứng
   /// như StockLedger.refId.
   refId          String
+  /// PI thật của dòng này (L5, 2026-08-26) - TÁCH KHỎI refId cố ý: refId vẫn giữ nguyên
+  /// cuttingProposalId gốc (để releaseByRef()/idempotencyKey không đổi hành vi), cột này CHỈ để
+  /// gộp NHIỀU dòng CUTTING_PROPOSAL của các SKU khác nhau trong CÙNG 1 PI thành 1 "pool" khi
+  /// hàng mua về hoặc Phôi xuất (StockReservationsService.loadPool/creditPool/drainPool). Trước
+  /// khi có cột này, receiveItem() phải đoán 1 cuttingProposalId DUY NHẤT để cộng hàng vào (qua
+  /// PurchaseProposal.cuttingProposalId - bị GHI ĐÈ thành phương án duyệt SAU CÙNG mỗi khi merge,
+  /// xem cutting-proposals.service.ts) - hàng mua cho SKU A bị cộng nhầm vào giữ chỗ của SKU B,
+  /// khiến SKU A xuất sắt tới đâu cũng báo thiếu dù hàng đã về kho. Null cho phương án không neo
+  /// PI nào (dữ liệu hỏng, ca cực hiếm - giữ hành vi cũ, không pool được).
+  productionInvoiceId BigInt?
   /// Chống tạo trùng khi caller gọi lại (cùng idiom StockLedger.idempotencyKey). Đặt theo công
   /// thức cố định `<refType>:<refId>:material:<materialId>` chứ không phải UUID client gửi lên -
   /// 1 (nguồn, vật tư) chỉ được giữ chỗ đúng 1 dòng.
@@ -1874,13 +1942,17 @@ model StockReservation {
   createdById    String?
   releasedAt     DateTime?
 
-  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
-  material  Material  @relation(fields: [materialId], references: [id])
-  createdBy User?     @relation(fields: [createdById], references: [id])
+  warehouse         Warehouse         @relation(fields: [warehouseId], references: [id])
+  material          Material          @relation(fields: [materialId], references: [id])
+  createdBy         User?             @relation(fields: [createdById], references: [id])
+  productionInvoice ProductionInvoice? @relation(fields: [productionInvoiceId], references: [id])
 
   /// Đúng chỉ mục cho câu hỏi nóng nhất: "vật tư X ở kho Y đang bị giữ bao nhiêu" (getAvailableQty).
   @@index([warehouseId, materialId, status])
   @@index([refType, refId])
+  /// Câu hỏi thứ 2 nóng không kém từ L5: "pool giữ chỗ của PI X + vật tư Y đang có những dòng nào"
+  /// (loadPool - dùng cho CẢ credit lẫn drain).
+  @@index([productionInvoiceId, materialId, status])
   @@map("stock_reservations")
 }
 

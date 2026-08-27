@@ -47,7 +47,7 @@ describe('PurchaseProposalsService', () => {
     $transaction: jest.Mock;
   };
   let stockLedgerService: { postEntry: jest.Mock };
-  let stockReservationsService: { topUpFromReceipt: jest.Mock };
+  let stockReservationsService: { creditPool: jest.Mock };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
 
   const material = (overrides: Record<string, unknown> = {}) => ({
@@ -198,7 +198,7 @@ describe('PurchaseProposalsService', () => {
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     stockLedgerService = { postEntry: jest.fn() };
-    stockReservationsService = { topUpFromReceipt: jest.fn() };
+    stockReservationsService = { creditPool: jest.fn() };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     service = new PurchaseProposalsService(
       prisma as unknown as PrismaServiceType,
@@ -1142,13 +1142,15 @@ describe('PurchaseProposalsService', () => {
       );
     });
 
-    // B4 Đợt 3 (lỗ #3, mục 13.4 changelog): hàng về phải "có chủ" ngay - cộng vào đúng dòng giữ
-    // chỗ (refType=CUTTING_PROPOSAL) gốc của chính phương án cắt đã sinh ra đề xuất mua này, để
-    // phương án khác không giành mất phần vừa mua về.
-    it('B4 Đợt 3: hàng về gọi topUpFromReceipt() đúng refId=cuttingProposalId gốc, đúng số tăng', async () => {
+    // B4 Đợt 3 (lỗ #3, mục 13.4 changelog) / L5 (2026-08-26): hàng về phải "có chủ" ngay - cộng
+    // vào ĐÚNG pool giữ chỗ của (PI, vật tư), không phải 1 cuttingProposalId cụ thể (đã ĐỔI Ở L5:
+    // proposal.cuttingProposalId bị ghi đè khi merge nên không còn tin cậy được - nguồn xác thực
+    // giờ là proposal.productionInvoiceId, KHÔNG đổi sau khi tạo).
+    it('B4 Đợt 3 / L5: hàng về gọi creditPool() đúng (PI, vật tư, kho), đúng số tăng', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           cuttingProposalId: 200n,
+          productionInvoiceId: 50n,
           items: [
             item({
               status: PurchaseProposalStatus.PURCHASING,
@@ -1168,18 +1170,18 @@ describe('PurchaseProposalsService', () => {
 
       await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
 
-      expect(stockReservationsService.topUpFromReceipt).toHaveBeenCalledWith(expect.anything(), {
-        refType: 'CUTTING_PROPOSAL',
-        refId: '200',
+      expect(stockReservationsService.creditPool).toHaveBeenCalledWith(expect.anything(), {
+        productionInvoiceId: 50n,
         materialId: 30n,
         warehouseId: 800n,
         qty: 5,
       });
     });
 
-    it('B4 Đợt 3: không gọi topUpFromReceipt() khi không có gì tăng thật (incrementQty=0, ca hiếm nhận trùng)', async () => {
+    it('B4 Đợt 3 / L5: không gọi creditPool() khi không có gì tăng thật (incrementQty=0, ca hiếm nhận trùng)', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
+          productionInvoiceId: 50n,
           items: [
             item({
               status: PurchaseProposalStatus.PURCHASING,
@@ -1200,7 +1202,7 @@ describe('PurchaseProposalsService', () => {
 
       await service.receiveItem('300', '400', { receivedQty: 0 }, 'user-1', 'key-1');
 
-      expect(stockReservationsService.topUpFromReceipt).not.toHaveBeenCalled();
+      expect(stockReservationsService.creditPool).not.toHaveBeenCalled();
     });
 
     // 2026-08-25: trước đây thiếu cuttingProposalId + sourceType khác PIECE_MATERIAL_YIELD bị coi
@@ -1211,10 +1213,11 @@ describe('PurchaseProposalsService', () => {
     // cấp đề xuất không còn mô tả đúng nguồn của từng dòng nữa - bỏ hẳn check này, cứ thiếu
     // cuttingProposalId (hoặc có nhưng dòng đang nhận không phải sắt của đúng phương án đó) là bỏ
     // qua bước cộng giữ chỗ, nhập kho bình thường.
-    it('không có cuttingProposalId (vật tư tiêu hao/nguyên liệu, không qua CuttingProposal) - vẫn nhập kho thành công, không gọi topUpFromReceipt', async () => {
+    it('không neo PI nào (dữ liệu hỏng, ca cực hiếm) - vẫn nhập kho thành công, không gọi creditPool', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           cuttingProposalId: null,
+          productionInvoiceId: null,
           items: [
             item({
               status: PurchaseProposalStatus.PURCHASING,
@@ -1235,20 +1238,23 @@ describe('PurchaseProposalsService', () => {
       const result = await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
 
       expect(result.receivedQty).toBe(5);
+      // Short-circuit trên targetProductionInvoiceId - không có PI thì không có pool nào để soi,
+      // khỏi cần query cuttingProposalLine.
       expect(prisma.cuttingProposalLine.findFirst).not.toHaveBeenCalled();
-      expect(stockReservationsService.topUpFromReceipt).not.toHaveBeenCalled();
+      expect(stockReservationsService.creditPool).not.toHaveBeenCalled();
     });
 
-    // Đề xuất GỘP (2026-08-25): có cuttingProposalId (từ nguồn sắt) NHƯNG dòng đang nhận là vật
-    // tư KHÁC của cùng PI (VTTP/tiêu hao), không nằm trong CuttingProposalLine của phương án cắt
-    // đó. Nhận nhầm theo cấp-đề-xuất (cứ có cuttingProposalId là topUpFromReceipt) sẽ tạo
-    // StockReservation MỒ CÔI cho vật tư không phải sắt (xem StockReservationsService.
-    // topUpFromReceipt - tự tạo mới nếu chưa có dòng nào cho cặp refId/materialId đó).
-    it('đề xuất gộp: dòng đang nhận KHÔNG phải sắt của cuttingProposalId gắn trên đề xuất - không gọi topUpFromReceipt', async () => {
+    // Đề xuất GỘP (2026-08-25): proposal neo đúng 1 PI (từ nguồn sắt) NHƯNG dòng đang nhận là vật
+    // tư KHÁC của cùng PI (VTTP/tiêu hao), không nằm trong CuttingProposalLine của bất kỳ phương
+    // án cắt nào thuộc PI đó. Nhận nhầm theo cấp-đề-xuất (cứ có PI là creditPool) sẽ tạo
+    // StockReservation MỒ CÔI cho vật tư không phải sắt (xem StockReservationsService.creditPool
+    // - pool rỗng thì TỰ TẠO MỚI).
+    it('đề xuất gộp: dòng đang nhận KHÔNG phải sắt của phương án cắt nào thuộc PI này - không gọi creditPool', async () => {
       prisma.cuttingProposalLine.findFirst.mockResolvedValueOnce(null);
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           cuttingProposalId: 200n,
+          productionInvoiceId: 50n,
           items: [
             item({
               status: PurchaseProposalStatus.PURCHASING,
@@ -1270,19 +1276,33 @@ describe('PurchaseProposalsService', () => {
 
       expect(result.receivedQty).toBe(5);
       expect(prisma.cuttingProposalLine.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { cuttingProposalId: 200n, materialId: 99n } }),
+        expect.objectContaining({
+          where: {
+            materialId: 99n,
+            cuttingProposal: {
+              OR: [
+                { productionInvoiceId: 50n },
+                { productionOrder: { productionInvoiceItem: { productionInvoiceId: 50n } } },
+              ],
+            },
+          },
+        }),
       );
-      expect(stockReservationsService.topUpFromReceipt).not.toHaveBeenCalled();
+      expect(stockReservationsService.creditPool).not.toHaveBeenCalled();
     });
 
     // 2026-08-22: sourceType=PIECE_MATERIAL_YIELD (đề xuất mua thanh nhôm theo PieceMaterialYield,
     // xem PieceMaterialYieldPurchaseService) CỐ Ý luôn có cuttingProposalId null - khác hẳn ca
-    // "dữ liệu hỏng" ở trên (không có sourceType, mặc định coi như CUTTING_PROPOSAL). Hàng về vẫn
-    // phải nhập kho thành công, chỉ bỏ qua bước cộng vào dòng giữ chỗ (không có dòng nào để cộng).
-    it('sourceType=PIECE_MATERIAL_YIELD với cuttingProposalId=null - vẫn nhập kho thành công, không gọi topUpFromReceipt', async () => {
+    // "dữ liệu hỏng" ở trên (không có sourceType, mặc định coi như CUTTING_PROPOSAL). PI thì VẪN
+    // có (PieceMaterialYieldPurchaseService cũng set productionInvoiceId, xem "gộp 1 PI = 1 form")
+    // nhưng vật tư thanh nhôm này không nằm trong CuttingProposalLine nào của PI - hàng về vẫn
+    // phải nhập kho thành công, chỉ bỏ qua bước cộng vào pool giữ chỗ (không có pool nào để cộng).
+    it('sourceType=PIECE_MATERIAL_YIELD, vật tư không qua CuttingProposal - vẫn nhập kho thành công, không gọi creditPool', async () => {
+      prisma.cuttingProposalLine.findFirst.mockResolvedValueOnce(null);
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           cuttingProposalId: null,
+          productionInvoiceId: 50n,
           sourceType: PurchaseProposalSource.PIECE_MATERIAL_YIELD,
           items: [
             item({
@@ -1308,7 +1328,7 @@ describe('PurchaseProposalsService', () => {
         expect.objectContaining({ materialId: 30n, qty: 5, refType: 'PURCHASE' }),
         expect.anything(),
       );
-      expect(stockReservationsService.topUpFromReceipt).not.toHaveBeenCalled();
+      expect(stockReservationsService.creditPool).not.toHaveBeenCalled();
     });
 
     // C3: dùng receivedQty KHOÁ ĐƯỢC bên trong transaction, KHÔNG dùng giá trị đọc trước đó ở
