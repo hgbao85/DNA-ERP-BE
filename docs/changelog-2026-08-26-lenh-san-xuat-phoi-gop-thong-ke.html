@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Redesign "Lệnh sản xuất — Công đoạn Phôi" (26–27/08/2026)</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.85rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.day-divider{
+  display:flex; align-items:center; gap:.8rem; margin:3.4rem 0 0; font-family:var(--mono);
+  font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft);
+}
+.day-divider::after{content:''; flex:1; height:1px; background:var(--line-strong)}
+
+.module{margin-top:2.2rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.3rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · Phôi — Lệnh sản xuất</div>
+    <h1>Redesign "Lệnh sản xuất — Công đoạn Phôi": gộp "Thống kê công đoạn", nhập số lượng công đoạn phụ, chi tiết riêng theo loại sắt</h1>
+    <p class="lede">
+      2 ngày liên tiếp trên cùng 1 màn hình. Ngày 1 (26/08): gộp 3 màn Phôi rời rạc thành 1, xác nhận
+      PI vẫn là đơn vị lớn nhất. Ngày 2 (27/08): Uốn/Dập/Tán/... có bảng nhập số lượng thật như Cắt,
+      và UX được thử lại 4 vòng ngay trên item mẫu (browser thật) trước khi chốt thiết kế cuối.
+    </p>
+    <div class="meta">
+      <span>26–27/08/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>1 migration DB (<code>step_batches</code>/<code>step_batch_segments</code>, ngày 2)</span>
+      <span>44/44 test BE pass · <code>tsc</code>/<code>eslint</code> sạch cả 2 ngày</span>
+      <span><b>Chưa commit</b> — chờ xem lại</span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li>Xác nhận với user: <b>PI vẫn đúng là đơn vị lớn nhất</b> cho toàn chuỗi thực thi Phôi — không phải giả định sai. Gộp trang "Thống kê công đoạn" vào "Lệnh sản xuất", đổi "Đã KCS đạt" → "Đã phôi" (status CHA, xong hết công đoạn + KCS duyệt đạt).</li>
+      <li>Thêm khối "PO/SKU trong đợt này" — thuần tham khảo, không có số liệu tiến độ riêng theo SKU (dữ liệu đó không tồn tại thật ở tầng thực thi).</li>
+      <li><b>Ngày 2:</b> Uốn/Dập/Tán/Tóp đầu/Xẻ giờ có bảng "Cần/Đã.../Còn lại" + ô nhập số lượng thật (bảng mới <code>StepBatch</code>/<code>StepBatchSegment</code>, mirror <code>CutBundle</code>), không còn chỉ có nút "Xong" trần không mang số liệu.</li>
+      <li>Đổi nhãn nút <b>"Gửi KCS" → "Báo cắt xong"</b> — tên cũ gây hiểu nhầm khi vật tư còn công đoạn phụ.</li>
+      <li>UX thử lại <b>4 vòng liên tiếp</b> dựa trên phản hồi trực tiếp khi user tự bấm thử trên item mẫu, chốt ở: <b>mỗi loại sắt có màn chi tiết riêng</b> (bấm 1 dòng điều hướng sang, độc lập hoàn toàn với các loại khác trong cùng PI) + <b>lọc theo đúng tên công đoạn</b> (Cắt/Uốn/Tóp đầu/...), tab đã xong có dấu ✓.</li>
+      <li>Chạy thử qua trình duyệt thật ở cả 2 ngày (tài khoản demo <code>phoi</code>), không suy diễn từ code — kể cả các guard chặn (vượt số đã cắt, sai công đoạn) đều xác nhận báo lỗi đúng trên UI thật.</li>
+    </ul>
+  </div>
+
+  <div class="day-divider">Ngày 1 — 26/08/2026</div>
+
+  <!-- ═══════════════════════ 0. VÌ SAO ═══════════════════════ -->
+
+  <div class="module">
+    <h2>0. Vì sao làm việc này — giải thích không kỹ thuật</h2>
+    <p class="module-note">
+      Trước khi vào chi tiết kỹ thuật: mục này giải thích lý do đợt sửa tồn tại, không dùng thuật
+      ngữ, cho người không quen đọc code.
+    </p>
+    <div class="card">
+      <h3>Vấn đề thực tế trước khi sửa</h3>
+      <p>
+        Tổ Phôi có 3 màn tách rời: "Lệnh sản xuất" (báo cắt), "Thống kê công đoạn" (xem tổng hợp),
+        "Vật tư thành phẩm" (loại cắt đơn giản, tách biệt). Tài khoản dùng để nhập liệu hàng ngày lại
+        chính là tài khoản phải tự xem cả bảng thống kê để biết việc gì đang ưu tiên — nhưng 2 việc
+        đó nằm ở 2 trang riêng, phải rời màn để tra qua lại. Ngoài ra, cột "Đã cắt" đang bị hiểu lẫn
+        với "đã xong hoàn toàn", trong khi thực tế nhiều loại sắt còn phải qua Uốn/Dập sau khi cắt.
+      </p>
+    </div>
+    <div class="callout ok">
+      <b>Mục đích của đợt sửa này:</b> gộp 2 việc "nhập liệu" và "xem tổng hợp" vào đúng 1 màn cho
+      người dùng đó, và đặt tên đúng bản chất: "Đã phôi" nghĩa là xong thật sự (kể cả các bước sau
+      cắt + đã qua kiểm), khác với "Đã cắt" chỉ là một bước trong đó.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 1. XÁC NHẬN KIẾN TRÚC ═══════════════════════ -->
+
+  <div class="module">
+    <h2>1. Xác nhận trước khi thiết kế — PI có đúng là đơn vị lớn nhất?</h2>
+    <p class="module-note">
+      User đề xuất thiết kế theo PI làm gốc, kèm yêu cầu "tìm hiểu và confirm chỗ này có đúng hay
+      không" trước khi code. Đọc lại <code>schema.prisma</code> + 2 changelog cũ
+      (<code>2026-08-18-xuat-sat-po-pi-vat-tu.md</code>, <code>2026-08-19-xuat-sat-theo-pi-hoan-tat.html</code>)
+      để xác nhận thay vì đoán.
+    </p>
+    <div class="callout">
+      <b>Kết luận:</b> Đúng. Toàn bộ chuỗi thực thi (<code>SteelIssue</code>, tiến độ cắt, KCS, cấp
+      bù, mua hàng theo <code>PieceMaterialYield</code>) đều neo theo <code>productionInvoiceId</code>
+      — quyết định có chủ đích, không phải thiếu sót: kho xuất cả lô sắt cho 1 PI, Phôi tự quyết
+      định cây nào thành mảnh nào lúc đang cắt, hệ thống <b>không có cách nào</b> truy ngược "đoạn
+      này của SKU nào" sau khi đã cắt (đã xác nhận cả với công cụ giải bài toán cắt bên ngoài).
+    </div>
+    <div class="callout warn">
+      <b>Điểm cần chỉnh trong đề xuất ban đầu của user:</b> bước "PI → PO/SKU → công đoạn" chỉ nên
+      dừng ở "PI → PO/SKU" như một khối <i>tham khảo</i> — không gắn số liệu tiến độ riêng theo SKU,
+      vì con số đó không có thật (nhất là với PI gộp nhiều SKU cắt chung 1 đợt).
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. QUYẾT ĐỊNH ĐÃ CHỐT ═══════════════════════ -->
+
+  <div class="module">
+    <h2>2. Quyết định thiết kế đã chốt với user (ngày 1)</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Câu hỏi</th><th>Quyết định</th></tr></thead>
+        <tbody>
+          <tr><td>Khối "PO/SKU trong đợt này" có nên ẩn với PI 1 SKU không?</td><td>Không — <b>luôn hiện</b>, kể cả PI thường, để đồng nhất giao diện.</td></tr>
+          <tr><td>"Đã phôi" có cần tách khỏi "Đã cắt" không?</td><td>Có — "Đã phôi" là <b>status CHA</b> của các công đoạn chi tiết (Cắt/Uốn/Dập/...), không phải tên khác của "Đã cắt".</td></tr>
+          <tr><td>Đổi nhãn "Đã KCS đạt" ở đâu, tính từ mốc nào?</td><td><b>Chỉ màn Phôi</b> (không đụng <code>KcsPhoiPage.tsx</code>); số lượng cập nhật đúng lúc <b>KCS duyệt đạt</b> (<code>QC_PASSED</code>), không phải lúc vừa xong công đoạn.</td></tr>
+          <tr><td>Gộp "Thống kê công đoạn" vào "Lệnh sản xuất"?</td><td>Có — user tự nhận ra hệ quả này khi thấy bảng chi tiết PI đã trùng mục đích với trang thống kê.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 3. BE ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 3. Backend (ngày 1) — 1 endpoint mới, không đổi schema</h2>
+    <p class="module-note">
+      Vướng quyền phát hiện khi rà lại <code>role-permissions.constant.ts</code>: PHOI_STAFF có
+      <code>STEEL_ISSUE</code>/<code>PRODUCTION_BATCH</code>/<code>STOCK</code>/<code>CUTTING_PROPOSAL</code>/
+      <code>QC_REVIEW</code>/<code>SKU</code> nhưng <b>không có <code>PRODUCTION_INVOICE:VIEW</code></b>
+      nên không tự gọi <code>GET /production-invoices/:id</code> để lấy danh sách SKU/PO được. Được
+      hỏi 2 hướng, user chọn thêm endpoint hẹp thay vì mở rộng quyền — đúng pattern cũ của chính
+      <code>steel-issue-plan</code>/<code>phoi-progress</code>.
+    </p>
+    <div class="card">
+      <h3><span class="pill p-add">Mới</span> <span class="path">dto/pi-order-summary-response.dto.ts</span></h3>
+      <p>DTO phẳng: <code>poNumber</code>, <code>salesOrderCode</code> (nullable — null cho PI gộp không gắn 1 đơn), <code>productName</code>, <code>quantity</code>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-add">Mới</span> <span class="path">steel-issues.service.ts</span> — <code>getOrderSummary()</code></h3>
+      <p>Query 1 lần <code>productionOrder.findMany({ where: { productionInvoiceItem: { productionInvoiceId } } })</code>, include <code>mfgProduct.name</code> + <code>productionInvoiceItem.salesOrder.code</code> — tái dùng đúng pattern include đã có ở <code>production-invoices.service.ts</code>, không tự nghĩ ra query mới.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-add">Mới</span> <span class="path">steel-issues.controller.ts</span></h3>
+      <p><code>GET production-invoices/:id/order-summary</code>, gắn <code>@RequirePermissions(STEEL_ISSUE:VIEW)</code>, đặt cạnh <code>steel-issue-plan</code>/<code>phoi-progress</code> trong <code>SteelIssuesController</code> (không phải <code>ProductionInvoicesController</code>) — đúng lý do quyền đã nói.</p>
+    </div>
+    <div class="callout ok">
+      <b>Xác nhận sạch:</b> 2 test mới (PO/SKU đúng thứ tự + <code>salesOrderCode</code> null khi PI
+      gộp; mảng rỗng khi PI chưa có <code>ProductionOrder</code>) — <b>44/44 test</b>
+      <code>steel-issues.service.spec.ts</code> pass. <code>tsc --noEmit</code> + <code>eslint</code> sạch.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 4. FE ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 4. Frontend (ngày 1) — viết lại 1 màn, xoá 1 trang</h2>
+
+    <div class="card">
+      <h3><span class="pill p-add">Mới</span> <span class="path">services/steel-issues-api.ts</span></h3>
+      <p><code>BePiOrderSummary</code> + <code>getPiOrderSummary(productionInvoiceId)</code> gọi endpoint mới.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-chg">Sửa</span> <span class="path">modules/pages/Phoi/LenhSanXuatPhoi.tsx</span></h3>
+      <p>
+        Đổi cột/badge "Đã KCS đạt"/"đạt" → "Đã phôi"/"đã phôi" (danh sách PI + badge từng đợt sắt).
+        Thêm khối "Đợt cắt này gồm" luôn hiện trong <code>PiDetail</code> (fetch
+        <code>getPiOrderSummary</code>, không có cột số liệu). Thêm toggle "Theo PI ⇄ Theo công
+        đoạn" ở danh sách ngoài — chế độ "Theo công đoạn" (<code>CongDoanView</code>, <b>đã bỏ hẳn
+        ngày 2</b>, xem mục 8) port nguyên logic từ <code>ThongKeCongDoanPage.tsx</code> cũ nhưng
+        dùng lại CHÍNH <code>issues</code> đã fetch sẵn, bấm 1 dòng nhảy thẳng vào
+        <code>PiDetail</code> đúng PI.
+      </p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-del">Xoá</span> <span class="path">modules/pages/Phoi/ThongKeCongDoanPage.tsx</span></h3>
+      <p>Logic đã chuyển hẳn vào <code>CongDoanView</code> trong <code>LenhSanXuatPhoi.tsx</code>, không còn là trang độc lập.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-chg">Sửa</span> <span class="path">modules/pages/Manufacturing/MfgApp.tsx</span></h3>
+      <p>
+        Bỏ tab/sidebar/import <code>ThongKeCongDoanPage</code>. Thêm <code>isDirector</code> vào
+        điều kiện hiện sidebar "Lệnh sản xuất" (trước đó Director chỉ vào được qua trang
+        "Thống kê công đoạn" cũ ở sidebar riêng — nếu xoá thẳng sẽ mất quyền xem, nên gộp luôn vào
+        đây, cùng chế độ readOnly đã có sẵn).
+      </p>
+    </div>
+
+    <div class="callout ok">
+      <b>Xác nhận sạch:</b> <code>tsc --noEmit</code> + <code>eslint</code> sạch trên toàn bộ file sửa.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. QA THẬT ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 5. Kiểm thử qua trình duyệt thật (ngày 1) — 1 phát hiện phụ</h2>
+    <p class="module-note">
+      Không dừng ở <code>tsc</code>/<code>eslint</code>/unit test — dựng cả BE (<code>nest start
+      --watch</code>) lẫn FE (<code>next dev</code>) thật, dùng trình duyệt headless đăng nhập bằng
+      tài khoản demo <code>phoi</code> (mfgRole PHOI) và bấm qua đúng luồng người dùng thật.
+    </p>
+    <div class="card">
+      <h3><span class="pill p-chg">Phát hiện phụ</span> Tài khoản demo <code>phoi</code> bị soft-delete từ trước</h3>
+      <p>
+        Đăng nhập báo "Invalid credentials" dù mật khẩu đúng — tra thẳng DB xác nhận
+        <code>User.deletedAt</code> đã có giá trị (không liên quan gì tới thay đổi của phiên này).
+        Đã khôi phục (xoá <code>deletedAt</code>) để tiếp tục kiểm thử — dữ liệu demo, không phải
+        production, an toàn sửa.
+      </p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Kiểm tra</th><th>Kết quả</th></tr></thead>
+        <tbody>
+          <tr><td>Cột "Đã phôi" thay "Đã KCS đạt"</td><td><span class="pill p-add">Đạt</span></td></tr>
+          <tr><td>Toggle "Theo PI ⇄ Theo công đoạn"</td><td><span class="pill p-add">Đạt</span> — chuyển mượt, không lỗi JS (toggle này đã bỏ ngày 2, xem mục 8)</td></tr>
+          <tr><td>Sidebar hết mục "Thống kê công đoạn" riêng</td><td><span class="pill p-add">Đạt</span></td></tr>
+          <tr><td>Console errors / network lỗi</td><td><span class="pill p-add">Không có</span></td></tr>
+          <tr><td>Khối "Đợt cắt này gồm" trên PI thật</td><td><span class="pill p-add">Đạt</span> — xem mục 5.1 bên dưới</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5.1 XÁC NHẬN TRÊN DỮ LIỆU THẬT ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-db">DB</span> 5.1. Xác nhận trực quan khối "Đợt cắt này gồm" trên PI thật</h2>
+    <p class="module-note">
+      DB demo lúc kiểm thử (mục 5) chưa có <code>SteelIssue</code> nào. Theo yêu cầu user, tạo 1 đợt
+      xuất sắt thử cho 1 PI thật để xem tận mắt thay vì suy diễn qua code.
+    </p>
+    <div class="card">
+      <h3>Chọn PI</h3>
+      <p>
+        Dò DB tìm được <b><code>PI-2026-012</code></b> (id=48) — đúng case PI GỘP có thật, không
+        phải tự bịa: gồm 2 <code>ProductionOrder</code> từ 2 đơn Sales khác nhau,
+        <code>PO-44-1</code> (Ghế tình yêu, SL 42, đơn <code>PO-44</code>) và <code>PO-42-1</code>
+        (Ghế tình yêu, SL 2, đơn <code>PO-42</code>), cùng dùng chung 4 loại sắt.
+      </p>
+    </div>
+    <div class="callout warn">
+      <b>Thử đúng luồng nghiệp vụ trước, không được:</b> gọi API xuất sắt thật
+      (<code>POST /production-invoices/48/steel-issues</code>) bằng tài khoản kho
+      <code>khopsh</code> bị chặn 409 "Không tìm thấy giữ chỗ tồn kho" — <code>CuttingProposal</code>
+      của PI này đã <code>APPROVED</code> nhưng không có <code>StockReservation</code> nào đi kèm
+      (cơ chế giữ chỗ tồn kho gắn với luồng duyệt phương án cắt/mua hàng, không tái tạo được chỉ
+      bằng 1-2 lệnh gọi tay).
+    </div>
+    <div class="card">
+      <h3><span class="pill p-chg">Shortcut QA</span> Tạo thẳng 1 dòng <code>SteelIssue</code> trong DB</h3>
+      <p>
+        Vì mục tiêu CHỈ là xem giao diện hiển thị đúng, không phải kiểm lại nghiệp vụ giữ chỗ tồn
+        kho (đã có test riêng), tạo thẳng 1 bản ghi <code>SteelIssue</code>
+        (<code>productionInvoiceId=48</code>, vật tư Sắt vuông 6zem, 15 cây × 6000mm,
+        <code>status=ISSUED</code>) qua script Prisma, bỏ qua bước <code>StockReservation</code>.
+        <b>Không đi qua nghiệp vụ thật</b> (không trừ tồn, không qua duyệt phương án) — chỉ đủ để
+        FE render đúng, đã nói rõ với user để không nhầm là đã test qua đúng luồng.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Kết quả — đúng như thiết kế</h3>
+      <p>
+        Mở <code>PI-2026-012</code> trong "Lệnh sản xuất" (tài khoản <code>phoi</code>): khối
+        "Đợt cắt này gồm" hiện đúng 2 dòng <code>PO-44-1 · Ghế tình yêu · SL 42</code> và
+        <code>PO-42-1 · Ghế tình yêu · SL 2</code>, phía dưới là dòng "Sắt vuông 6zem, 15 cây ×
+        6.000mm" trạng thái "chờ nhận". Không lỗi console/network.
+      </p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5.2 HOÀN TẤT VÒNG ĐỜI DEMO ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-db">DB</span> 5.2. Hoàn tất vòng đời demo — trả lời câu hỏi mở của ngày 1</h2>
+    <p class="module-note">
+      Ngày 1 kết thúc với câu hỏi mở: "đưa tiếp <code>SteelIssue</code> demo qua Nhận → Cắt → Gửi
+      KCS → Duyệt đạt để xem badge 'đã phôi' xanh thật, hay dừng ở đây?". Đầu phiên ngày 2, user xác
+      nhận đi tiếp.
+    </p>
+    <div class="card">
+      <h3>Đi hết vòng đời qua API thật (tài khoản <code>phoi</code> rồi <code>kcs</code>)</h3>
+      <p>
+        <code>receive()</code> → ISSUED → RECEIVED. <code>recordCutBatch()</code> 2 cây × 15 đoạn
+        598mm (khớp định mức PI-2026-012, segmentSpecId=54) → phế liệu tự tính 2995mm đúng công
+        thức cân bằng. <code>finishCutting()</code> → AWAITING_QC. <code>qc-review</code> đạt hết
+        (<code>segments: []</code>) → <b>QC_PASSED</b>.
+      </p>
+    </div>
+    <div class="callout ok">
+      <b>Xác nhận qua trình duyệt thật:</b> bảng "Lệnh sản xuất" — cột "Đã phôi" = 2 (đúng
+      <code>actualBarCount</code>). Vào chi tiết PI-2026-012: khối "Đợt cắt này gồm" vẫn đúng, dòng
+      "Sắt vuông 6zem, 2 cây × 6.000mm" giờ mang badge <b>"đã phôi"</b> (trước đó "chờ nhận"). Không
+      console error, không request lỗi.
+    </div>
+  </div>
+
+  <div class="day-divider">Ngày 2 — 27/08/2026</div>
+
+  <!-- ═══════════════════════ 6. BE STEPBATCH ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-be">BE</span> 6. Backend — StepBatch, nhập số lượng thật cho công đoạn phụ</h2>
+    <p class="module-note">
+      Trước đợt này, "Xong {bước}" (<code>completeStep</code>) là đánh dấu boolean thuần cho cả đợt,
+      không có nơi nào lưu ĐÃ LÀM BAO NHIÊU cho Uốn/Dập/Tán/... - chỉ Cắt có <code>CutBundle</code>
+      theo dõi số đoạn thật theo từng cỡ. User yêu cầu thẳng: "Tôi cần nhập số lượng đã gia công cho
+      từng công đoạn".
+    </p>
+    <div class="card">
+      <h3><span class="pill p-add">Mới</span> <span class="path">prisma/schema.prisma</span> — <code>StepBatch</code> / <code>StepBatchSegment</code></h3>
+      <p>Mirror <code>CutBundle</code>/<code>CutPatternSegment</code> nhưng KHÔNG có barCount/mẩu nguyên/phế - bước sau Cắt không tác động lên cây sắt, chỉ xử lý tiếp trên các đoạn ĐÃ cắt ra. Migration <code>20260827020117_step_batches_progress</code>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-add">Mới</span> <span class="path">steel-issues.service.ts</span> — <code>getStepProgress()</code></h3>
+      <p>Cùng khuôn "Cần/Đã.../Còn lại" như <code>getPhoiProgress()</code>, khác 2 điểm: <code>required</code> CHỈ tính dòng định mức có processSteps chứa đúng bước này (khác Cắt, áp dụng mặc định cho mọi dòng); <code>done</code> đọc từ <code>StepBatchSegment</code> thay vì <code>CutPatternSegment</code>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill p-add">Mới</span> <span class="path">steel-issues.service.ts</span> — <code>recordStepBatch()</code></h3>
+      <p>Ghi 1 đợt (append-only, cộng dồn). Chặn: step=CAT (dùng route <code>cut-batches</code> riêng), status khác IN_PROCESS, step đã "Xong" rồi, cỡ đoạn ngoài định mức của đúng bước này, và <b>vượt số đã cắt thật</b> (không thể Uốn nhiều hơn số đã Cắt ra) - đã test cả 2 guard qua UI thật, báo lỗi rõ ràng.</p>
+    </div>
+    <div class="callout ok">
+      <b>Xác nhận sạch:</b> 44/44 test cũ <code>steel-issues.service.spec.ts</code> vẫn pass (không đụng nghiệp vụ CAT), <code>tsc --noEmit</code> sạch.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 7. FE - NHÃN NÚT ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 7. Đổi nhãn nút "Gửi KCS" → "Báo cắt xong"</h2>
+    <p class="module-note">
+      User hỏi thẳng khi thấy nút này ở đợt còn công đoạn phụ: "Vậy nút gửi KCS đây là tác dụng gì".
+      Nút thực chất là tín hiệu "báo Cắt xong" (<code>finish-cutting</code>) - chỉ đưa thẳng sang
+      KCS nếu vật tư CHỈ cần Cắt; còn lại chuyển "đang gia công", chưa qua KCS thật.
+    </p>
+    <div class="card">
+      <h3><span class="pill p-chg">Sửa</span> <span class="path">CutBatchPanel</span></h3>
+      <p>Đổi nhãn nút + đồng bộ comment code mô tả đúng hành vi 2 nhánh (Cắt là bước cuối → qua KCS thật / còn công đoạn phụ → chỉ chuyển "đang gia công").</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 8. UX 4 VÒNG ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 8. Thiết kế lại UX — 4 vòng phản hồi trực tiếp trên item mẫu</h2>
+    <p class="module-note">
+      Toàn bộ mục này dựa trên user tự bấm thử trên item mẫu thật (dữ liệu tạo thẳng qua API để đúng
+      kịch bản cần xem - nhiều công đoạn, nhiều loại sắt trong 1 PI) rồi phản hồi ngay, không phải
+      thiết kế trước rồi mới test. Bước này cũng bỏ hẳn toggle "Theo PI ⇄ Theo công đoạn" của ngày 1
+      (mục 4) - đưa breakdown theo công đoạn vào thẳng trong chi tiết từng loại sắt thay vì 1 view
+      riêng ở cấp PI.
+    </p>
+    <ol class="timeline">
+      <li><b>Vòng 1 — dải tab đặt ở cấp PI:</b><span> chọn 1 công đoạn ở tab trên đầu danh sách, tab đó chi phối MỌI dòng trong PI. User: "vẫn cảm thấy bị rời rạc" - 2 kiểu thao tác khác nhau cho Cắt (bấm dòng) và công đoạn phụ (bấm tab).</span></li>
+      <li><b>Vòng 2 — gộp về 1 kiểu bấm-dòng-để-xổ:</b><span> bỏ hẳn tab, bấm 1 dòng bung ra HẾT Cắt + mọi công đoạn cùng lúc. User: "vẫn không ổn về mặt UX" - xổ quá nhiều thành 1 khối dài.</span></li>
+      <li><b>Vòng 3 — thu gọn phần đã xong sau chevron:</b><span> công đoạn đã "Xong" thu lại còn 1 dòng "✓ ... — đã xong", bấm mới bung xem lại; chỉ phần còn thiếu tự hiện đầy đủ. User: "Bỏ cái xổ với dấu mũi tên đi" - vẫn muốn khác.</span></li>
+      <li class="ok"><b>Vòng 4 (chốt) — tách IssueDetail riêng + lọc theo tên công đoạn:</b><span> "1 loại sắt xem riêng, tránh ảnh hưởng loại khác" → bấm 1 dòng ĐIỀU HƯỚNG sang màn riêng (đúng pattern PI list → PiDetail, thêm 1 tầng). Trong màn đó, bỏ hẳn chevron - dải tab lọc ĐÚNG TÊN công đoạn (Cắt/Uốn/Tóp đầu/Tán/Xẻ), tab đã xong có dấu ✓, "Tất cả" xem gộp.</span></li>
+    </ol>
+    <div class="callout warn">
+      <b>2 hướng thử thêm rồi tự bỏ, KHÔNG có trong code hiện tại:</b> (1) ép "Tất cả" thành dashboard
+      chỉ-xem, chỉ tab riêng từng bước mới cho nhập; (2) thêm cột % tiến độ tính từ Cần/Đã thật. Cả
+      2 đã code xong, xác nhận chạy đúng qua UI thật, nhưng bị rewind (undo) khỏi working tree trước
+      khi chốt - mục này chỉ ghi lại để nhớ ĐÃ THỬ, không mô tả như tính năng đang có.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 9. QA THẬT NGÀY 2 ═══════════════════════ -->
+
+  <div class="module">
+    <h2><span class="badge b-fe">FE</span> 9. Kiểm thử qua trình duyệt thật ở mỗi vòng (ngày 2)</h2>
+    <p class="module-note">
+      Không suy diễn từ code - mỗi vòng thiết kế đều đăng nhập tài khoản <code>phoi</code> thật, thao
+      tác qua UI, đọc lại kết quả trước khi báo cáo.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Kiểm tra</th><th>Kết quả</th></tr></thead>
+        <tbody>
+          <tr><td>Guard <code>recordStepBatch</code>: vượt số đã cắt thật</td><td><span class="pill p-add">Đạt</span> — báo lỗi rõ ràng ngay trên UI</td></tr>
+          <tr><td>Badge "còn lại" trên tab cập nhật ngay sau "Lưu đợt" (không cần bấm "Xong")</td><td><span class="pill p-add">Đạt</span> — sửa đúng lỗi "filter đứng yên" user báo trước đó</td></tr>
+          <tr><td>Bấm 1 dòng loại sắt → điều hướng sang màn riêng, không ảnh hưởng dòng khác</td><td><span class="pill p-add">Đạt</span></td></tr>
+          <tr><td>Quay lại danh sách → các dòng khác giữ nguyên trạng thái</td><td><span class="pill p-add">Đạt</span></td></tr>
+          <tr><td>Tab lọc đúng tên công đoạn, tab đã xong có dấu ✓</td><td><span class="pill p-add">Đạt</span></td></tr>
+          <tr><td>Nút "Báo cắt xong" hiện đúng nhãn mới</td><td><span class="pill p-add">Đạt</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 10. CÒN ĐỂ NGỎ ═══════════════════════ -->
+
+  <div class="module">
+    <h2>10. Còn để ngỏ</h2>
+    <ul class="timeline">
+      <li><b>Chưa commit</b><span> — toàn bộ thay đổi 2 ngày (2 repo) vẫn nằm ở working tree, chờ người dùng xem lại trước khi <code>git add</code>/<code>commit</code>.</span></li>
+    </ul>
+  </div>
+
+  <footer>
+    Nguồn: tổng hợp trực tiếp từ 2 phiên làm việc liên tiếp trong Claude Code (26 và 27/08/2026) —
+    không suy diễn thêm. Cố ý KHÔNG mô tả 2 hướng "Tất cả = dashboard" và "% tiến độ" (mục 8) như
+    tính năng hiện có vì đã bị rewind khỏi code trước khi chốt phiên ngày 2. Code thật nằm ở
+    <code>D:\DNA-ERP-BE</code> (mục 3, 6) và
+    <code>D:\DNA-ERP\src\modules\pages\Phoi\LenhSanXuatPhoi.tsx</code> (mục 4, 7-8). Xem thêm
+    changelog nền <code>changelog-2026-08-19-xuat-sat-theo-pi-hoan-tat.html</code> cho lý do PI là
+    đơn vị lớn nhất.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" title="Về đầu trang" type="button">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

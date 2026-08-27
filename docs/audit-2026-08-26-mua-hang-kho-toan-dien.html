@@ -1,0 +1,850 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Rà soát Mua hàng &amp; Kho (bản dễ đọc, 26/08/2026)</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --crit:#9C1B1B; --crit-bg:#FBDCDC;
+  --high:#B7591B; --high-bg:#FCE6D6;
+  --med:#8A7415; --med-bg:#FBF3D6;
+  --low:#2B6CB0; --low-bg:#E3EDF7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --crit:#F0837B; --crit-bg:#3E1917;
+    --high:#F0A76E; --high-bg:#3A2710;
+    --med:#E4C965; --med-bg:#332A0E;
+    --low:#6FA3D8; --low-bg:#1B2C3D;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --crit:#F0837B; --crit-bg:#3E1917;
+  --high:#F0A76E; --high-bg:#3A2710;
+  --med:#E4C965; --med-bg:#332A0E;
+  --low:#6FA3D8; --low-bg:#1B2C3D;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --crit:#9C1B1B; --crit-bg:#FBDCDC;
+  --high:#B7591B; --high-bg:#FCE6D6;
+  --med:#8A7415; --med-bg:#FBF3D6;
+  --low:#2B6CB0; --low-bg:#E3EDF7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.65; font-size:16px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, .mono{font-family:var(--mono)}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:60rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:56rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.9rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.04rem; max-width:68ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.55rem}
+.tldr li{font-size:.98rem}
+
+.toc{background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow); padding:1.1rem 1.4rem; margin:0 0 2.6rem}
+.toc h2{margin:0 0 .6rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.toc ol{margin:0; padding-left:1.3rem; columns:2; column-gap:2rem}
+@media (max-width:640px){ .toc ol{columns:1} }
+.toc li{font-size:.92rem; margin-bottom:.3rem; break-inside:avoid}
+
+.part-divider{
+  margin-top:3.6rem; padding-top:1.4rem; border-top:2px solid var(--line-strong);
+  display:flex; align-items:baseline; gap:.7rem; flex-wrap:wrap;
+}
+.part-divider .n{font-family:var(--mono); font-size:.78rem; color:var(--accent-ink); font-weight:700; letter-spacing:.06em}
+.part-divider h2{font-family:var(--serif); font-size:1.6rem; font-weight:600; margin:0}
+.part-divider .sub{color:var(--ink-soft); font-size:.94rem; width:100%; max-width:68ch}
+
+.module{margin-top:2.2rem; scroll-margin-top:1.2rem}
+.module > h3{
+  font-family:var(--serif); font-size:1.22rem; font-weight:600; margin:0 0 .3rem;
+}
+.module-note{color:var(--ink-soft); font-size:.96rem; margin:.4rem 0 1.1rem; max-width:68ch}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.74rem; font-weight:700; padding:.15rem .6rem;
+  border-radius:20px; font-family:var(--sans); white-space:nowrap;
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+.p-crit{background:var(--crit-bg); color:var(--crit)}
+.p-high{background:var(--high-bg); color:var(--high)}
+.p-med{background:var(--med-bg); color:var(--med)}
+.p-low{background:var(--low-bg); color:var(--low)}
+
+.finding{
+  background:var(--paper); border:1px solid var(--line); border-left-width:5px; border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin-bottom:1.1rem;
+}
+.finding.crit{border-left-color:var(--crit)}
+.finding.high{border-left-color:var(--high)}
+.finding.med{border-left-color:var(--med)}
+.finding.low{border-left-color:var(--low)}
+.finding h4{margin:.15rem 0 .8rem; font-size:1.08rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; font-family:var(--serif); font-weight:600}
+.finding h4 .id{font-family:var(--mono); font-size:.72rem; color:var(--ink-soft); font-weight:400; margin-left:auto}
+.finding p{margin:.0 0 .7rem; font-size:.97rem}
+.finding p:last-of-type{margin-bottom:0}
+.finding p b{color:var(--ink)}
+.finding .tech{margin-top:.8rem; padding-top:.6rem; border-top:1px dashed var(--line); font-size:.74rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.15rem 1.35rem; margin-bottom:.9rem;
+}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.9rem 1.1rem; margin:1rem 0; font-size:.95rem; max-width:72ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.92rem; background:var(--paper)}
+th, td{text-align:left; padding:.65rem .85rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+
+.scenario{background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow); padding:1.15rem 1.4rem; margin-bottom:1rem}
+.scenario h4{margin:0 0 .6rem; font-size:1.04rem; font-family:var(--serif); font-weight:600}
+.scenario p{margin:0 0 .5rem; font-size:.95rem}
+.scenario p b{font-family:var(--mono); font-size:.68rem; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-soft); display:block; margin-bottom:.15rem}
+.scenario .verdict{display:inline-block; margin-top:.35rem; font-weight:700; font-size:.9rem}
+.v-ok{color:var(--add)}
+.v-bad{color:var(--del)}
+.v-warn{color:var(--chg)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.74rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.87rem; max-width:68ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>RÀ SOÁT NGHIỆP VỤ · BẢN DỄ ĐỌC</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">26/08/2026 · Rà soát nghiệp vụ độc lập — chỉ đọc, không sửa gì trong hệ thống</div>
+    <h1>Rà soát Mua hàng &amp; Kho — báo cáo dễ đọc cho người không chuyên kỹ thuật</h1>
+    <p class="lede">
+      Đây là bản diễn giải lại kết quả rà soát toàn bộ quy trình <b>Mua hàng</b> và <b>Kho</b> của hệ thống,
+      viết theo hướng dễ hiểu cho người không rành kỹ thuật — tập trung vào "vấn đề là gì, ảnh hưởng thế nào
+      tới công việc, nên xử lý ra sao", thay vì đi sâu vào chi tiết mã nguồn. Mỗi phát hiện vẫn giữ 1 dòng
+      tham chiếu kỹ thuật nhỏ ở cuối để đội kỹ thuật tra đúng chỗ khi cần sửa.
+    </p>
+    <div class="meta">
+      <span>26/08/2026</span>
+      <span>25 phát hiện: 4 Nghiêm trọng · 9 Cao · 7 Trung bình · 5 Thấp</span>
+      <span>Đối chiếu với 2 báo cáo rà soát ngày 25/08/2026</span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li><b>Điểm mạnh:</b> "sổ kho" ghi lại mọi biến động tồn kho một cách rất chặt chẽ — số liệu tồn kho
+        hiển thị luôn tự động khớp với sổ này, không thể bị lệch. Toàn bộ quy trình báo giá → duyệt mua hàng
+        (đã được vá lỗi hồi 25-26/08) hoạt động đúng như kỳ vọng.</li>
+      <li><b>🔴 Vấn đề nghiêm trọng nhất:</b> khi xuất vật tư tiêu hao hoặc vật tư đóng gói cho sản xuất, hệ
+        thống hoàn toàn không kiểm tra kho có còn đủ hàng hay không — tồn kho có thể tụt xuống số âm chỉ sau
+        1 lần xuất bình thường.</li>
+      <li><b>🔴 Vấn đề nghiêm trọng thứ 2:</b> màn "Xuất kho" dành cho tài khoản Tổng kho/Giám đốc chỉ là giao
+        diện giả — bấm "Xác nhận" xong trông như đã xuất kho thành công, nhưng thực chất không có gì được lưu
+        lại, tải lại trang là mất hết.</li>
+      <li><b>🔴 Vấn đề nghiêm trọng thứ 3:</b> màn "Lịch sử mua hàng" có thể hiển thị nhầm giá đã duyệt của 1
+        vật tư nếu có 2 nhà cung cấp trùng tên.</li>
+      <li><b>🔴 Khoảng trống cần quyết định:</b> hệ thống chưa có cách nào để hủy 1 lệnh sản xuất hoặc phiếu
+        chuyển kho sau khi đã được duyệt/xác nhận — kể cả khi duyệt nhầm và chưa làm gì tiếp theo.</li>
+      <li><b>Về 2 báo cáo ngày 25/08:</b> mọi nội dung "đã sửa xong" trong 2 báo cáo đó đều được kiểm tra lại
+        và xác nhận đúng với hệ thống hiện tại — không có nội dung nào bị lỗi thời hay sai. Rà soát lần này
+        đào sâu thêm và phát hiện mức độ nghiêm trọng thực tế của vấn đề "xuất vật tư tiêu hao" cao hơn nhiều
+        so với ghi nhận ban đầu.</li>
+    </ul>
+  </div>
+
+  <div class="toc">
+    <h2>Mục lục</h2>
+    <ol>
+      <li><a href="#phan-a">A. Tổng quan quy trình</a></li>
+      <li><a href="#phan-b">B. Đánh giá từng bước quy trình</a></li>
+      <li><a href="#phan-c">C. Danh sách vấn đề phát hiện được</a></li>
+      <li><a href="#phan-c2">C2. Kiểm tra các tình huống thực tế thường gặp</a></li>
+      <li><a href="#phan-d">D. Những quy tắc nghiệp vụ còn thiếu</a></li>
+      <li><a href="#phan-e">E. Thứ tự nên xử lý</a></li>
+      <li><a href="#phan-f">F. Đánh giá độ tin cậy tổng thể</a></li>
+    </ol>
+  </div>
+
+  <!-- ================= PART A ================= -->
+  <div class="part-divider" id="phan-a">
+    <span class="n">PHẦN A</span>
+    <h2>Tổng quan quy trình</h2>
+    <span class="sub">Ai làm gì, dữ liệu chảy qua những đâu — mô tả lại đúng như hệ thống đang vận hành.</span>
+  </div>
+
+  <div class="module">
+    <h3>A.1 Ai làm gì trong quy trình này</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Người dùng</th><th>Việc chính</th><th>Giới hạn quyền</th></tr></thead>
+        <tbody>
+          <tr><td><b>Sales</b></td><td>Tạo đơn hàng khách</td><td>Chỉ tạo/sửa đơn hàng, không đụng tới kho hay mua hàng</td></tr>
+          <tr><td><b>KHSX</b> (Kế hoạch sản xuất)</td><td>Gộp hoặc tách các mặt hàng thành từng lệnh sản xuất, gửi Sếp duyệt</td><td>Chỉ ở giai đoạn lên kế hoạch, chưa được mua/xuất kho</td></tr>
+          <tr><td><b>QLSX</b> (Quản lý sản xuất)</td><td>Chọn kho sản xuất, gửi tiếp lên Sếp</td><td>Bước trung gian trước khi Sếp duyệt</td></tr>
+          <tr><td><b>Sếp / Giám đốc</b></td><td>Duyệt từng mặt hàng để sản xuất, duyệt giá mua hàng</td><td>Được xem và duyệt ở mọi khu vực trong hệ thống (vai trò điều phối chung)</td></tr>
+          <tr><td><b>Nhân viên Mua hàng</b></td><td>Báo giá cho các vật tư được giao phụ trách</td><td>Chỉ được thao tác vật tư được gán cho mình, KHÔNG được tự duyệt giá của chính mình (đã chặn từ 2026-08-11)</td></tr>
+          <tr><td><b>Thủ kho</b></td><td>Nhận hàng, xuất/nhập/chuyển kho — theo đúng kho được phân công</td><td>Chỉ thao tác trong phạm vi kho của mình; việc nhận hàng mua tách riêng khỏi việc báo giá</td></tr>
+          <tr><td><b>Admin (kỹ thuật)</b></td><td>Quản trị hệ thống</td><td>Có 1 số quyền vượt giới hạn giống Sếp ở khu vực mua hàng — nên xác nhận lại có chủ đích không (xem mục Thấp #4)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="module">
+    <h3>A.2 Đường đi của 1 đơn hàng — từ lúc khách đặt tới lúc mua vật tư về</h3>
+    <p class="module-note">Mô tả đúng theo cách hệ thống thực sự vận hành hiện nay, không phải mô hình lý thuyết.</p>
+    <div class="tbl-wrap">
+      <table>
+        <tbody>
+          <tr><td style="width:11rem"><b>1. Khách đặt hàng</b></td><td>Sales tạo đơn hàng. Các mặt hàng trong đơn CHƯA được gom vào lệnh sản xuất nào — để tránh đơn hàng chưa chốt thương mại bị lọt vào hàng đợi của bộ phận kế hoạch.</td></tr>
+          <tr><td><b>2. Lên kế hoạch sản xuất</b></td><td>KHSX chọn 1 trong 2 cách: <i>"Cắt riêng"</i> (1 lệnh sản xuất cho đúng 1 mặt hàng) hoặc <i>"Xác nhận gộp"</i> (1 lệnh sản xuất cho nhiều mặt hàng cùng lúc, kể cả khi các mặt hàng đó đến từ nhiều đơn khách khác nhau — đây là mục đích thiết kế, để cắt vật tư chung 1 lần cho tiết kiệm).</td></tr>
+          <tr><td><b>3. Sếp duyệt</b></td><td>Mỗi mặt hàng được duyệt riêng, tạo ra 1 lệnh sản xuất chính thức.</td></tr>
+          <tr><td><b>4. Hệ thống tự tính vật tư cần mua</b></td><td>Ngay khi vừa duyệt xong, hệ thống TỰ ĐỘNG tính song song 3 loại nhu cầu: sắt, nguyên liệu, và vật tư tiêu hao — không cần ai bấm nút. Cả 3 được gộp chung vào 1 đề xuất mua hàng duy nhất cho mỗi lệnh sản xuất.</td></tr>
+          <tr><td><b>5. Báo giá</b></td><td>Nhân viên mua hàng phụ trách từng vật tư nhập báo giá của nhà cung cấp.</td></tr>
+          <tr><td><b>6. Sếp duyệt giá</b></td><td>Chọn đúng 1 nhà cung cấp cho mỗi vật tư, duyệt riêng theo từng người mua hàng — không cần đợi tất cả mọi người xong mới duyệt được.</td></tr>
+          <tr><td><b>7. Nhận hàng</b></td><td>Thủ kho xác nhận nhận hàng — có thể nhận nhiều đợt cho tới khi đủ số lượng đã đặt mua. Số lượng nhận được cộng dồn dần, không phải 1 phiếu nhập riêng cho mỗi lần.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn">
+      <b>Lưu ý quan trọng:</b> hệ thống KHÔNG có 1 "đơn đặt hàng gửi nhà cung cấp" hay "phiếu nhập kho" là 1
+      chứng từ riêng biệt — toàn bộ thông tin này gộp vào chính dòng vật tư trong đề xuất mua hàng (số lượng
+      đặt, số lượng đã nhận cộng dồn, báo giá đã chọn). Muốn biết chi tiết "đã nhận bao nhiêu đợt, mỗi đợt bao
+      nhiêu" cho 1 vật tư cụ thể, phải tra lại sổ kho theo thời gian.
+    </div>
+  </div>
+
+  <div class="module">
+    <h3>A.3 Kho vận hành như thế nào</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Thành phần</th><th>Vai trò</th></tr></thead>
+        <tbody>
+          <tr><td><b>Sổ kho</b></td><td>Ghi lại MỌI biến động tồn kho, không được xoá hay sửa sau khi ghi — đây là nguồn số liệu chính xác duy nhất.</td></tr>
+          <tr><td><b>Số tồn hiển thị</b></td><td>Là bản sao tự động cập nhật theo sổ kho ngay khi có biến động — về mặt kỹ thuật, không thể lệch với sổ kho.</td></tr>
+          <tr><td><b>Giữ chỗ tồn kho</b></td><td>Tách riêng "đã hứa cho ai đó" khỏi "đã thực sự lấy đi" — ví dụ duyệt 1 phương án cắt sắt sẽ "giữ chỗ" phần sắt cần dùng, nhưng số tồn thật chỉ giảm khi Phôi thực sự lấy sắt ra.</td></tr>
+          <tr><td><b>Phiếu chuyển kho nội bộ</b></td><td>Chuyển hàng giữa các kho, đi 1 chiều: Đang chờ → Đã xác nhận / Đã từ chối, không quay lại được.</td></tr>
+          <tr><td><b>Nhật ký truy vết</b></td><td>Ghi lại ai đã thay đổi gì, lúc nào — áp dụng cho phần lớn (nhưng không phải tất cả) các loại chứng từ quan trọng.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="module">
+    <h3>A.4 Hoạt động nào làm thay đổi số tồn kho, có được kiểm tra trước khi làm không</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Hoạt động</th><th>Có kiểm tra tồn kho trước khi trừ không?</th></tr></thead>
+        <tbody>
+          <tr><td>Nhận hàng mua về</td><td style="color:var(--add)">Có — kiểm chặt, không cho nhận vượt quá mức cho phép</td></tr>
+          <tr><td>Phôi lấy sắt để cắt</td><td style="color:var(--add)">Có — kiểm chặt, chặn cứng nếu không đủ</td></tr>
+          <tr><td>Chuyển kho nội bộ</td><td style="color:var(--add)">Có — chỉ cho chuyển trong giới hạn còn khả dụng</td></tr>
+          <tr><td><b>Xuất vật tư tiêu hao</b> (dây, đinh, sơn...)</td><td style="color:var(--del)"><b>Không</b> — xem vấn đề #1</td></tr>
+          <tr><td><b>Xuất vật tư đóng gói</b></td><td style="color:var(--del)"><b>Không</b> — cùng vấn đề như trên</td></tr>
+          <tr><td>Điều chỉnh tồn kho thủ công (dành cho xử lý sự cố)</td><td style="color:var(--chg)">Không áp dụng được (đây là đường sửa tay) — chỉ có 1 lớp bảo vệ tuỳ chọn để tránh 2 người sửa cùng lúc đè lên nhau</td></tr>
+          <tr><td>Ghi nhận tiêu thụ đoạn sắt trong sản xuất</td><td style="color:var(--chg)">Cố ý cho phép âm — quyết định nghiệp vụ có chủ đích (không muốn chặn công nhân vì thủ kho ghi nhận trễ)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ================= PART B ================= -->
+  <div class="part-divider" id="phan-b">
+    <span class="n">PHẦN B</span>
+    <h2>Đánh giá từng bước quy trình</h2>
+  </div>
+
+  <div class="module">
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Quy trình</th><th>Đánh giá</th><th>Ghi chú</th></tr></thead>
+        <tbody>
+          <tr><td>Tự động tính nhu cầu mua hàng</td><td><span class="pill p-chg">Có rủi ro</span></td><td>Đúng khi chạy suôn sẻ; nhưng nếu lỗi thì không ai biết (vấn đề Cao #1).</td></tr>
+          <tr><td>Báo giá → Sếp duyệt giá</td><td><span class="pill p-add">Tốt</span></td><td>Đã được vá kỹ hồi 25-26/08, kiểm tra lại thấy hoạt động đúng như thiết kế.</td></tr>
+          <tr><td>Nhận hàng mua về</td><td><span class="pill p-add">Tốt</span></td><td>Kiểm soát chặt, không cho nhận vượt mức, không có chuyện âm thầm bớt số liệu.</td></tr>
+          <tr><td>Hủy đơn mua / lệnh sản xuất sau khi đã duyệt</td><td><span class="pill p-del">Chưa có</span></td><td>Chưa từng được xây dựng, không phải "làm sai" mà là thiếu hẳn (vấn đề Nghiêm trọng #4).</td></tr>
+          <tr><td>Xuất sắt cho sản xuất</td><td><span class="pill p-add">Tốt</span></td><td>Là màn hình duy nhất hiện đúng cả "tồn thật" lẫn "còn dùng được", kiểm soát chặt chẽ.</td></tr>
+          <tr><td>Xuất vật tư tiêu hao / đóng gói</td><td><span class="pill p-del">Có lỗi</span></td><td>Không kiểm tra tồn kho — có thể gây tồn âm (vấn đề Nghiêm trọng #1).</td></tr>
+          <tr><td>Tạo phiếu chuyển kho nội bộ</td><td><span class="pill p-add">Tốt</span></td><td>Chỉ cho chuyển trong giới hạn còn khả dụng.</td></tr>
+          <tr><td>Hoàn tác phiếu chuyển kho sau khi đã xác nhận</td><td><span class="pill p-del">Chưa có</span></td><td>Không có đường quay lại — chỉ có cách sửa tay vòng qua, bỏ qua toàn bộ cơ chế giữ chỗ (vấn đề Nghiêm trọng #4).</td></tr>
+          <tr><td>Xuất kho — tài khoản Tổng kho/Giám đốc</td><td><span class="pill p-del">Có lỗi</span></td><td>Toàn bộ là giao diện giả, không lưu gì (vấn đề Nghiêm trọng #2).</td></tr>
+          <tr><td>Lịch sử mua hàng (xem giá đã duyệt)</td><td><span class="pill p-del">Có lỗi</span></td><td>Có thể hiện sai giá (vấn đề Nghiêm trọng #3).</td></tr>
+          <tr><td>Điều chỉnh tồn kho thủ công</td><td><span class="pill p-chg">Có rủi ro</span></td><td>Thiết kế cơ bản đúng (không xoá bằng chứng cũ), nhưng bỏ qua hoàn toàn phần "giữ chỗ".</td></tr>
+          <tr><td>Phân quyền sử dụng hệ thống</td><td><span class="pill p-add">Tốt</span></td><td>Không tìm thấy chức năng ghi dữ liệu nào thiếu kiểm soát quyền truy cập.</td></tr>
+          <tr><td>Ghi vết ai làm gì (tiếp nhận/gửi duyệt/từ chối báo giá)</td><td><span class="pill p-del">Chưa đủ</span></td><td>Thiếu thông tin "ai từ chối, vì sao" — mất dấu sau khi báo giá lại (vấn đề Cao #2).</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ================= PART C ================= -->
+  <div class="part-divider" id="phan-c">
+    <span class="n">PHẦN C</span>
+    <h2>Danh sách vấn đề phát hiện được</h2>
+    <span class="sub">25 vấn đề, xếp theo mức độ nghiêm trọng. Vấn đề đã có trong báo cáo 25/08 được ghi rõ "đã biết
+      từ trước"; còn lại là phát hiện MỚI qua lần rà soát này.</span>
+  </div>
+
+  <div class="module">
+    <h3>🔴 Nghiêm trọng — cần xử lý ngay</h3>
+
+    <div class="finding crit" id="C1">
+      <h4>Xuất vật tư tiêu hao/đóng gói có thể khiến tồn kho tụt xuống số âm <span class="id">Vấn đề #1 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Khi thủ kho xuất vật tư tiêu hao (dây, đinh, sơn...) hoặc vật tư đóng gói cho 1 đơn sản
+        xuất, hệ thống chỉ kiểm tra "có vượt định mức kỹ thuật cho phép hay không", chứ KHÔNG kiểm tra kho thực
+        tế còn đủ hàng để xuất hay không.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Ví dụ kho chỉ còn 0.5kg keo dán, nhưng định mức cho phép xuất tới 5kg cho đơn
+        đó — hệ thống vẫn cho xuất đủ 5kg, số tồn kho sẽ tụt xuống −4.5kg mà không có cảnh báo gì. Không cần 2
+        người thao tác cùng lúc mới xảy ra — chỉ 1 lần xuất bình thường là đủ. Về lâu dài, số liệu tồn kho sẽ
+        ngày càng sai lệch so với thực tế, và chỉ phát hiện ra khi kiểm kê cuối kỳ mà không rõ vì sao lệch.</p>
+      <p><b>Nên làm gì:</b> Thêm bước kiểm tra tồn kho thực tế trước khi cho phép xuất — giống đúng cách màn
+        "Xuất sắt" đang làm.</p>
+      <div class="tech">Tham chiếu kỹ thuật: MaterialIssuesService / PackagingIssuesService — postEntry() không kiểm getAvailableQty()</div>
+    </div>
+
+    <div class="finding crit" id="C2">
+      <h4>Màn "Xuất kho" cho Tổng kho/Giám đốc là giao diện giả, không hề lưu dữ liệu <span class="id">Vấn đề #2 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Màn "Xuất kho" chỉ dành cho tài khoản KHÔNG được gán 1 kho cụ thể (Tổng kho, Giám đốc —
+        thủ kho các kho cụ thể dùng 1 màn khác và màn đó hoạt động đúng). Khi vào màn này, chọn đơn hàng, nhập
+        số lượng và bấm "Xác nhận", giao diện hiển thị y như đã xuất thành công (đổi trạng thái, tăng số "đã
+        xuất") — nhưng thực chất KHÔNG có gì được ghi vào hệ thống. Chỉ cần tải lại trang là mất sạch, không để
+        lại dấu vết gì.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Nếu ai đó dùng màn này để xác nhận hàng thực sự đã rời kho, hệ thống sẽ
+        không hề ghi nhận việc đó — tra lại sổ kho sau này sẽ thấy như chưa từng có việc xuất hàng nào xảy ra.
+        Đây là rủi ro nghiêm trọng nếu màn này đang thực sự được dùng.</p>
+      <p><b>Nên làm gì:</b> Xác nhận ngay có tài khoản nào đang thực sự dùng màn này để xuất kho không. Nếu có
+        → phải nối vào hệ thống thật ngay lập tức. Nếu không dùng (có thể là giao diện cũ chưa gỡ) → nên gỡ bỏ
+        để tránh nhầm lẫn về sau.</p>
+      <div class="tech">Tham chiếu kỹ thuật: XuatKhoPage.tsx (XuatKhoSection.confirmLine) — không gọi API, chỉ setState local</div>
+    </div>
+
+    <div class="finding crit" id="C3">
+      <h4>Màn "Lịch sử mua hàng" có thể hiển thị sai giá đã mua <span class="id">Vấn đề #3 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Khi hiển thị giá đã chốt cho 1 vật tư, màn này so khớp theo TÊN nhà cung cấp thay vì so
+        khớp đúng theo báo giá đã được Sếp thực sự chọn. Hệ thống không cấm 2 nhà cung cấp trùng tên, nên cách
+        so khớp này có thể lấy nhầm.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Nếu 1 vật tư có 2 báo giá từ 2 nhà cung cấp trùng tên, và Sếp duyệt báo giá
+        cao hơn — màn Lịch sử có thể lại hiển thị giá THẤP HƠN (của báo giá không được chọn), kéo theo "Thành
+        tiền" trong báo cáo cũng sai theo. Ảnh hưởng trực tiếp tới số liệu chi phí dùng để đối chiếu, báo cáo.</p>
+      <p><b>Nên làm gì:</b> Sửa lại để lấy đúng báo giá đã được chọn (không so theo tên) — đúng như cách 1 màn
+        khác trong cùng khu vực Mua hàng đã làm đúng.</p>
+      <div class="tech">Tham chiếu kỹ thuật: LichSuMuaHangPage.tsx dòng 34 — offers.find(supplierName===ncc) thay vì isChosen</div>
+    </div>
+
+    <div class="finding crit" id="C4">
+      <h4>Không có cách nào để hủy 1 lệnh sản xuất/phiếu chuyển kho sau khi đã duyệt, kể cả khi duyệt nhầm <span class="id">Vấn đề #4 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Một khi Sếp đã bấm duyệt 1 mặt hàng để sản xuất, hoặc thủ kho đã xác nhận nhận 1 phiếu
+        chuyển kho, hệ thống KHÔNG có chức năng "hủy"/"hoàn tác" nào — kể cả khi duyệt nhầm và chưa có bất kỳ
+        vật tư nào được mua/nhận sau đó. Nút hủy hiện chỉ hoạt động ở giai đoạn TRƯỚC khi duyệt.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Nếu thực tế có tình huống cần hủy (khách hàng hủy đơn giữa chừng sau khi đã
+        duyệt sản xuất, hoặc Sếp bấm nhầm), người dùng sẽ không có cách xử lý qua hệ thống — phải nhờ bên kỹ
+        thuật can thiệp trực tiếp vào dữ liệu, bỏ qua mọi cơ chế kiểm soát và ghi vết đã xây dựng cho các thao
+        tác bình thường.</p>
+      <p><b>Nên làm gì:</b> Cần xác nhận với người phụ trách nghiệp vụ: đây có phải tình huống đã từng gặp
+        trong thực tế và đang phải xử lý thủ công không? Nếu có, cần thiết kế thêm chức năng hủy có kiểm soát
+        (ví dụ chỉ cho hủy khi chưa nhận hàng gì).</p>
+      <div class="tech">Tham chiếu kỹ thuật: ProductionOrderStatus.CANCELLED chưa từng được set; WarehouseTransfer 1 chiều PENDING→CONFIRMED|REJECTED</div>
+    </div>
+  </div>
+
+  <div class="module">
+    <h3>🟠 Cao — nên xử lý trong đợt tới</h3>
+
+    <div class="finding high" id="H1">
+      <h4>Nếu bước tự động tính vật tư cần mua bị lỗi, sẽ không ai biết để xử lý <span class="id">Vấn đề #5 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Ngay sau khi Sếp duyệt 1 mặt hàng để sản xuất, hệ thống tự động tính 3 loại nhu cầu mua
+        hàng (sắt, nguyên liệu, vật tư tiêu hao) song song. Nếu 1 trong 3 bước tính này gặp lỗi (ví dụ 1 vật tư
+        chưa được khai báo kho), hệ thống chỉ âm thầm ghi lỗi vào nhật ký kỹ thuật nội bộ — không hiện bất kỳ
+        cảnh báo nào cho Sếp, KHSX hay người mua hàng. Sếp vẫn thấy duyệt thành công bình thường.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Có thể xảy ra tình huống 1 loại vật tư cần mua không bao giờ xuất hiện trong
+        hàng đợi của người mua hàng phụ trách — không ai biết cần mua, cho tới khi thiếu hàng lúc sản xuất mới
+        phát hiện ra.</p>
+      <p><b>Nên làm gì:</b> Thêm cảnh báo rõ ràng khi bước này gặp lỗi, và bổ sung 1 cách để tính lại thủ công
+        khi phát hiện thiếu sót.</p>
+      <div class="tech">Tham chiếu kỹ thuật: ProductionInvoicesService.approveItem() — 3 nguồn try/catch, chỉ logger.error()</div>
+    </div>
+
+    <div class="finding high" id="H2">
+      <h4>Không lưu lại "ai đã từ chối/tiếp nhận báo giá, lúc nào, vì sao" ở cấp từng vật tư <span class="id">Vấn đề #6 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Khi Sếp từ chối 1 dòng vật tư kèm lý do, thông tin này chỉ nằm tạm trên chính dòng đó.
+        Nếu người mua hàng báo giá lại (sau khi bị từ chối), lý do từ chối cũ bị xoá luôn — không có nơi nào
+        lưu lại lịch sử "ai từ chối, khi nào, vì sao" một cách lâu dài.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Sau này nếu cần tra lại "vì sao dòng vật tư này từng bị từ chối", sẽ không
+        thể tìm được thông tin — đã mất vĩnh viễn.</p>
+      <p><b>Nên làm gì:</b> Ghi lại đầy đủ lịch sử duyệt/từ chối/tiếp nhận ở cấp từng vật tư, không chỉ ở cấp
+        đề xuất chung.</p>
+      <div class="tech">Tham chiếu kỹ thuật: purchase-proposals.service.ts — reject()/acknowledge()/submit() không gọi writeAuditLog(), không có field rejectedById</div>
+    </div>
+
+    <div class="finding high" id="H3">
+      <h4>Không biết ai đã xác nhận/từ chối 1 phiếu chuyển kho nếu chỉ tra trực tiếp trên phiếu <span class="id">Vấn đề #7 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Bản thân phiếu chuyển kho không lưu tên người xác nhận/từ chối — thông tin này chỉ nằm
+        trong 1 nhật ký hệ thống riêng, không phải ai tra cứu cũng biết tìm ở đâu.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Khi cần điều tra 1 sự cố liên quan chuyển kho, người tra cứu thông thường sẽ
+        không thấy được ai là người thao tác nếu chỉ xem trực tiếp phiếu đó.</p>
+      <p><b>Nên làm gì:</b> Lưu trực tiếp tên người xác nhận/từ chối ngay trên phiếu chuyển kho.</p>
+      <div class="tech">Tham chiếu kỹ thuật: model WarehouseTransfer không có createdById/confirmedById/rejectedById, chỉ có timestamp</div>
+    </div>
+
+    <div class="finding high" id="H4">
+      <h4>Thêm báo giá cho 1 vật tư không được bảo vệ khỏi thao tác chồng chéo <span class="id">Vấn đề #8 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Đây là bước duy nhất trong luồng báo giá/duyệt KHÔNG được áp dụng cơ chế bảo vệ chống
+        thao tác chồng chéo mà mọi bước khác (tiếp nhận, gửi duyệt, duyệt, từ chối, báo giá lại) đều đã có.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Về lý thuyết, nếu đúng lúc người mua hàng đang nhập báo giá thì có 1 thao
+        tác khác chuyển dòng đó sang bước tiếp theo, báo giá vẫn được thêm vào dù dòng đã không còn ở bước
+        "đang báo giá" — dữ liệu thừa nhưng không phá hỏng trạng thái chính.</p>
+      <p><b>Nên làm gì:</b> Áp dụng cùng cơ chế bảo vệ đã dùng ở các bước khác trong cùng luồng.</p>
+      <div class="tech">Tham chiếu kỹ thuật: addQuote() — không $transaction/lockBusinessKey/re-check status</div>
+    </div>
+
+    <div class="finding high" id="H5">
+      <h4>Khi 1 lệnh sản xuất gộp nhiều mặt hàng, số lượng vật tư cần mua có thể không cập nhật kịp <span class="id">Vấn đề #9 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Hệ thống chỉ cập nhật lại số lượng cần mua trong 2 trường hợp: dòng chưa ai đụng tới,
+        hoặc dòng đã mua xong hoàn toàn. Nếu dòng đang ở giữa (người mua hàng đã bắt đầu báo giá nhưng Sếp
+        chưa duyệt), số lượng cần mua GIỮ NGUYÊN theo số cũ dù nhu cầu thực tế đã tăng lên.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Ví dụ mặt hàng A (trong 1 lệnh gộp nhiều mặt hàng) duyệt trước cần 10kg vật
+        tư X, người mua hàng đang báo giá dở. Vài ngày sau mặt hàng B (cùng lệnh gộp) duyệt, tổng nhu cầu thực
+        ra là 18kg — nhưng hệ thống vẫn giữ 10kg vì dòng đó đang báo giá dở. Người mua hàng vẫn mua đúng 10kg
+        theo hệ thống, thiếu 8kg mà không ai biết cho tới khi sản xuất thiếu vật tư.</p>
+      <p><b>Nên làm gì:</b> Bổ sung xử lý cho trường hợp "đang báo giá dở" này — cập nhật lại số lượng, hoặc
+        tách phần chênh lệch thành 1 dòng mới kèm cảnh báo cho người mua hàng đang xử lý dòng cũ.</p>
+      <div class="tech">Tham chiếu kỹ thuật: piece-material-yield-purchase.service.ts / consumable-material-purchase.service.ts — nhánh QUOTING/SUBMITTED chưa xử lý</div>
+    </div>
+
+    <div class="finding high" id="H6">
+      <h4>Bấm 2 lần liên tiếp vào nút Lưu/Gửi/Duyệt/Từ chối có thể gửi 2 yêu cầu cùng lúc <span class="id">Vấn đề #10 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Màn báo giá (Lệnh mua NCC) và màn Sếp duyệt giá (So sánh giá) không tạm khoá nút bấm
+        trong lúc đang xử lý yêu cầu (mạng chậm, người dùng bấm thêm lần nữa vì sốt ruột) — khác với phần lớn
+        các màn kho khác trong hệ thống đã làm đúng việc này.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Hệ thống phía sau vẫn chặn được hậu quả xấu (không tạo dữ liệu sai), nhưng
+        người dùng có thể gặp thông báo lỗi khó hiểu khi bấm đúp — trải nghiệm không tốt và dễ gây nhầm lẫn.</p>
+      <p><b>Nên làm gì:</b> Thêm hiệu ứng khoá nút tạm thời trong lúc xử lý, giống các màn khác đã làm đúng.</p>
+      <div class="tech">Tham chiếu kỹ thuật: LenhMuaNCCPage.tsx (nút Lưu/Gửi), BossApp.tsx (nút Duyệt/Từ chối) — thiếu busy-state</div>
+    </div>
+
+    <div class="finding high" id="H7">
+      <h4>Cơ chế chống gửi trùng yêu cầu chưa bắt buộc ở nhiều nơi <span class="id">Vấn đề #11 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Hệ thống có sẵn cơ chế "mã chống trùng" để nhận biết 1 yêu cầu bị gửi lặp lại (do bấm
+        đúp, mất mạng rồi gửi lại...), nhưng ở phần lớn chức năng xuất kho (vật tư tiêu hao, đóng gói, sắt,
+        chuyển kho), việc gửi kèm mã này hiện chỉ là tuỳ chọn, không bắt buộc.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Nếu 1 yêu cầu bị gửi lặp mà không kèm mã chống trùng, hệ thống có thể tạo ra
+        2 bản ghi xuất kho riêng biệt thay vì nhận ra đó là 1 yêu cầu bị lặp.</p>
+      <p><b>Nên làm gì:</b> Bắt buộc gửi kèm mã chống trùng ở tất cả các chức năng ghi thay đổi vào kho.</p>
+      <div class="tech">Tham chiếu kỹ thuật: material-issues/packaging-issues/steel-issues/warehouse-transfers controller — Idempotency-Key không bắt buộc</div>
+    </div>
+
+    <div class="finding high" id="H8">
+      <h4>Một số ô nhập số lượng thiếu giới hạn tối đa <span class="id">Vấn đề #12 · MỚI</span></h4>
+      <p><b>Vấn đề:</b> Ô nhập số lượng ở màn "Kho chuyển kiểm" và "Kho đóng gói" chỉ chặn không cho nhập số
+        âm/0, nhưng không giới hạn không được vượt quá phần còn lại cần làm — khác với các màn tương tự khác
+        trong cùng khu vực đã có giới hạn rõ ràng.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Nhân viên có thể lỡ tay nhập vượt số lượng thực tế cần làm, khiến báo cáo
+        tiến độ hiện sai (âm hoặc vượt 100%).</p>
+      <p><b>Nên làm gì:</b> Thêm giới hạn tối đa cho các ô nhập này, nhất quán với các màn khác. Cần xác minh
+        thêm phía kỹ thuật xem hệ thống trung tâm có tự chặn việc này hay không.</p>
+      <div class="tech">Tham chiếu kỹ thuật: KhoChuyenKiemPage.tsx, KhoDongGoiPage.tsx — input chỉ có min, thiếu max</div>
+    </div>
+
+    <div class="finding high" id="H9">
+      <h4>Phần lớn màn xem tồn kho không phân biệt "tồn thực tế" và "tồn còn dùng được" <span class="id">Vấn đề #13 · ĐÃ BIẾT TỪ BÁO CÁO 25/08, đào sâu thêm</span></h4>
+      <p><b>Vấn đề:</b> Nhiều vật tư trong kho thực chất đã "có chủ" (đang được giữ chỗ cho 1 kế hoạch cắt sắt
+        khác) nhưng hầu hết các màn xem tồn kho vẫn chỉ hiện đúng 1 con số tồn thô, không trừ đi phần đã giữ
+        chỗ. Chỉ riêng màn "Xuất sắt" hiện đúng cả 2 con số tách bạch.</p>
+      <p><b>Ảnh hưởng thực tế:</b> Người xem màn kho tổng có thể nghĩ còn nhiều hàng khả dụng hơn thực tế, dẫn
+        tới quyết định sai (ví dụ báo hàng cho khách trong khi thực chất đã có người giữ chỗ trước).</p>
+      <p><b>Nên làm gì:</b> Mở rộng các màn xem tồn kho khác để hiển thị tách bạch "tồn thực tế" và "còn có thể
+        dùng", giống cách màn Xuất sắt đang làm.</p>
+      <div class="tech">Tham chiếu kỹ thuật: MfgWarehousesPage.tsx / BeStockQuant DTO chỉ có field qty, không có availableQty</div>
+    </div>
+  </div>
+
+  <div class="module">
+    <h3>🟡 Trung bình — nên theo dõi và lên lịch xử lý</h3>
+
+    <div class="finding med" id="M1">
+      <h4>Một số hoạt động xuất/nhập kho không được ghi vào nhật ký truy vết chung <span class="id">Vấn đề #14 · MỚI</span></h4>
+      <p>Xuất vật tư tiêu hao, xuất đóng gói, 1 số bước sản xuất, và giữ chỗ tồn kho — các hoạt động này không
+        nằm trong danh sách được tự động ghi vào nhật ký truy vết chung của hệ thống, trong khi các hoạt động
+        tương tự khác (xuất sắt, chuyển kho) thì có, không rõ lý do khác biệt. <b>Nên làm gì:</b> rà lại và bổ
+        sung nếu các hoạt động này cũng quan trọng tương đương.</p>
+      <div class="tech">Tham chiếu kỹ thuật: audit-log.extension.ts AUDITED_MODELS thiếu MaterialIssue/PackagingIssue/ProductionBatch/StockReservation</div>
+    </div>
+
+    <div class="finding med" id="M2">
+      <h4>1 quyết định "cho phép tồn kho âm có chủ đích" nên được rà lại trong bối cảnh mới <span class="id">Vấn đề #15 · MỚI</span></h4>
+      <p>Việc ghi nhận tiêu thụ đoạn sắt trong sản xuất được phép gây tồn âm — đây LÀ quyết định nghiệp vụ có
+        chủ đích từ trước (không muốn chặn công nhân sản xuất chỉ vì thủ kho ghi nhận trễ), không phải lỗi.
+        Nhưng đặt cạnh vấn đề #1 (2 nơi khác cũng gây âm nhưng KHÔNG chủ đích), nên xem lại tổng thể để tránh
+        tồn kho âm từ nhiều nguồn làm mất ý nghĩa tham chiếu của con số tồn kho. <b>Nên làm gì:</b> giữ nguyên
+        quyết định này, ưu tiên xử lý vấn đề #1 trước.</p>
+      <div class="tech">Tham chiếu kỹ thuật: ProductionBatchesService SEGMENT_CONSUME/MATERIAL_YIELD_CONSUME — cố ý không chặn âm</div>
+    </div>
+
+    <div class="finding med" id="M3">
+      <h4>1 trường hợp rất hiếm có thể khiến trạng thái đề xuất mua hiển thị sai <span class="id">Vấn đề #16 · MỚI, lý thuyết</span></h4>
+      <p>Nếu 1 đề xuất mua hàng không còn dòng vật tư nào (trường hợp cực hiếm, chưa từng xảy ra), hệ thống sẽ
+        hiển thị nhầm là "đã mua xong" thay vì báo lỗi. Chưa ghi nhận xảy ra trong thực tế — chỉ cần lưu ý nếu
+        sau này có công cụ cho xoá dòng vật tư khỏi đề xuất.</p>
+      <div class="tech">Tham chiếu kỹ thuật: purchase-proposal-status.util.ts — Array.every() trên mảng rỗng trả về true</div>
+    </div>
+
+    <div class="finding med" id="M4">
+      <h4>Số lượng quy đổi đơn vị khi nhập kho có thể bị sửa tay mà không cảnh báo <span class="id">Vấn đề #17 · MỚI</span></h4>
+      <p>Khi đơn vị mua hàng (ví dụ kg) khác đơn vị lưu kho (ví dụ cái), hệ thống tự tính sẵn số lượng gợi ý
+        nhưng cho phép sửa tay hoàn toàn tự do mà không cảnh báo nếu số nhập lệch quá nhiều so với gợi ý. Nếu
+        thủ kho gõ nhầm, có thể ghi sai số lượng nhập kho mà không ai phát hiện ngay. <b>Nên làm gì:</b> thêm
+        cảnh báo khi số nhập tay lệch đáng kể so với số hệ thống gợi ý.</p>
+      <div class="tech">Tham chiếu kỹ thuật: NhapKhoPage.tsx dòng 164-191 — khoUnitFactor conversion, sửa tay không đối chiếu</div>
+    </div>
+
+    <div class="finding med" id="M5">
+      <h4>1 ghi chú kỹ thuật nội bộ đã lỗi thời <span class="id">Vấn đề #18 · MỚI, chỉ ảnh hưởng đội kỹ thuật</span></h4>
+      <p>1 dòng giải thích trong tài liệu nội bộ không còn khớp với cách hệ thống hoạt động hiện tại (hệ thống
+        thực ra đã làm ĐÚNG hơn mô tả cũ). Không ảnh hưởng người dùng cuối, chỉ dễ gây hiểu nhầm cho đội kỹ
+        thuật khi đọc lại tài liệu — nên cập nhật khi có dịp.</p>
+      <div class="tech">Tham chiếu kỹ thuật: stock-ledger.service.ts dòng 74-75 — comment mô tả sai hành vi hiện tại của confirm()</div>
+    </div>
+
+    <div class="finding med" id="M6">
+      <h4>1 cột trong màn quản trị hiển thị theo cách phân việc cũ, không còn khớp thực tế <span class="id">Vấn đề #19 · MỚI</span></h4>
+      <p>Cột "Kho" ở màn quản trị xem danh sách đề xuất mua hàng hiện theo cách phân việc CŨ (theo kho), trong
+        khi hệ thống hiện nay phân việc cho người mua hàng theo từng vật tư cụ thể, không còn theo kho nữa.
+        Chỉ gây hiểu nhầm khi xem báo cáo quản trị, không ảnh hưởng việc mua hàng thực tế. <b>Nên làm gì:</b>
+        cập nhật lại cách hiển thị cột này.</p>
+      <div class="tech">Tham chiếu kỹ thuật: PurchaseProposalsPage.tsx dòng 21 — bind warehouseScope đã lỗi thời</div>
+    </div>
+
+    <div class="finding med" id="M7">
+      <h4>Khác biệt nhỏ trong cách xử lý giữa 3 bộ phận tự động tính nhu cầu mua hàng <span class="id">Vấn đề #20 · MỚI, rất hiếm gặp</span></h4>
+      <p>3 bộ phận tự động tính nhu cầu mua hàng (sắt/nguyên liệu/tiêu hao) được viết ở 3 thời điểm khác nhau,
+        có 1 khác biệt nhỏ trong cách chọn dòng khi có nhiều hơn 2 lần tách số lượng còn thiếu cho cùng 1 vật
+        tư — chỉ ảnh hưởng trong tình huống rất hiếm gặp (cần 2 chu kỳ mua-nhận-hết-hàng liên tiếp trên cùng
+        1 vật tư). Không cần xử lý gấp.</p>
+      <div class="tech">Tham chiếu kỹ thuật: cutting-proposals.service.ts (Array.find) vs 2 service kia (Map reducer)</div>
+    </div>
+  </div>
+
+  <div class="module">
+    <h3>🔵 Thấp — có thể dọn dẹp khi có dịp</h3>
+
+    <div class="finding low" id="L1">
+      <h4>Cùng 1 logic tính trạng thái được viết lặp lại ở giao diện và hệ thống lõi <span class="id">Vấn đề #21</span></h4>
+      <p>Không có gì đảm bảo 2 nơi luôn khớp nhau nếu sau này có thay đổi ở 1 bên — nên gộp lại thành 1 nơi khi
+        có dịp refactor.</p>
+    </div>
+
+    <div class="finding low" id="L2">
+      <h4>Màn quản lý "Nhà cung cấp theo vật tư" chưa khoá nút khi đang xử lý <span class="id">Vấn đề #22</span></h4>
+      <p>Rủi ro thấp, tương tự vấn đề #10 nhưng ở màn ít dùng hơn.</p>
+    </div>
+
+    <div class="finding low" id="L3">
+      <h4>1 chi tiết kỹ thuật nhỏ khi cập nhật số liệu giữ chỗ sắt <span class="id">Vấn đề #23</span></h4>
+      <p>An toàn, chỉ khác cách viết so với chỗ tương tự khác — không ảnh hưởng người dùng.</p>
+    </div>
+
+    <div class="finding low" id="L4">
+      <h4>Tài khoản Admin có cùng quyền "vượt giới hạn phân việc" như tài khoản Sếp <span class="id">Vấn đề #24</span></h4>
+      <p>Admin (vai trò kỹ thuật) hiện có thể thao tác vật tư của bất kỳ người mua hàng nào, giống hệt quyền
+        của Sếp (vai trò điều phối nghiệp vụ) — nên xác nhận lại đây có phải chủ đích hay không.</p>
+    </div>
+
+    <div class="finding low" id="L5">
+      <h4>Chưa xác minh việc ghi lý do khi điều chỉnh tồn kho thủ công có bắt buộc không <span class="id">Vấn đề #25</span></h4>
+      <p>Cần kiểm tra lại — nếu không bắt buộc, nên cân nhắc bắt buộc để dễ điều tra sau này.</p>
+    </div>
+  </div>
+
+  <!-- ================= PART C2 — SCENARIOS ================= -->
+  <div class="part-divider" id="phan-c2">
+    <span class="n">PHẦN C2</span>
+    <h2>Kiểm tra các tình huống thực tế thường gặp</h2>
+    <span class="sub">Từng tình huống hay gặp trong vận hành, kiểm tra trực tiếp xem hệ thống xử lý đúng hay
+      không.</span>
+  </div>
+
+  <div class="module">
+    <div class="scenario">
+      <h4>1. Đặt mua 100 → nhận 60 → nhận tiếp 40</h4>
+      <p><b>Kỳ vọng</b>Tổng nhận đúng 100, không mất dữ liệu đợt nhận nào.</p>
+      <p><b>Thực tế</b>Hệ thống cộng dồn đúng, tự động chuyển sang "đã mua xong" khi đủ số lượng.</p>
+      <span class="verdict v-ok">✓ Đúng — không phải vấn đề</span>
+    </div>
+
+    <div class="scenario">
+      <h4>2. Đặt mua 100 → nhận 120</h4>
+      <p><b>Kỳ vọng</b>Chặn hoặc cảnh báo rõ ràng, không âm thầm chấp nhận/cắt bớt.</p>
+      <p><b>Thực tế</b>Bị chặn với thông báo rõ ràng trừ khi nằm trong mức dung sai đã cấu hình sẵn (mặc định
+        là 0%, tức không cho nhận vượt).</p>
+      <span class="verdict v-ok">✓ Đúng — không phải vấn đề</span>
+    </div>
+
+    <div class="scenario">
+      <h4>3. Có 100 tồn → 60 đã được giữ chỗ → xuất 50</h4>
+      <p><b>Kỳ vọng</b>Chỉ còn 40 khả dụng (100−60), xuất 50 phải bị từ chối.</p>
+      <p><b>Thực tế</b>Tuỳ loại xuất kho. Với sắt/chuyển kho nội bộ: đúng, bị chặn. Với vật tư tiêu hao/đóng
+        gói: <b>sai</b> — không hề kiểm tra phần đã giữ chỗ hay tồn kho thật, xuất 50 vẫn được chấp nhận.</p>
+      <span class="verdict v-bad">✗ Có lỗi thật — xem vấn đề #1</span>
+    </div>
+
+    <div class="scenario">
+      <h4>4. Hai nhân viên cùng xuất một vật tư tại cùng thời điểm</h4>
+      <p><b>Kỳ vọng</b>Không được cùng lấy đi phần tồn kho không đủ cho cả 2.</p>
+      <p><b>Thực tế</b>Sắt/chuyển kho: được bảo vệ đúng. Vật tư tiêu hao/đóng gói: chỉ được bảo vệ nếu 2 người
+        cùng xuất cho ĐÚNG 1 đơn hàng — nếu 2 đơn khác nhau cùng lấy 1 vật tư, hoàn toàn không được kiểm tra
+        chéo, và dù có kiểm tra cũng không đối chiếu với tồn kho thật.</p>
+      <span class="verdict v-bad">✗ Có lỗi ở nhánh tiêu hao/đóng gói — xem vấn đề #1</span>
+    </div>
+
+    <div class="scenario">
+      <h4>5. Đơn mua bị hủy sau khi đã nhận một phần</h4>
+      <p><b>Kỳ vọng</b>Có cách hủy, phần đã nhận được xử lý rõ ràng.</p>
+      <p><b>Thực tế</b>Tình huống này <b>không thể xảy ra qua thao tác bình thường</b> — hệ thống chưa có chức
+        năng hủy nào cho lệnh sản xuất/đơn mua sau khi đã duyệt, dù đã nhận hàng hay chưa.</p>
+      <span class="verdict v-warn">⚠ Khoảng trống cần quyết định — xem vấn đề #4</span>
+    </div>
+
+    <div class="scenario">
+      <h4>6. Hàng nhập vào kho A nhưng cần chuyển sang kho B</h4>
+      <p><b>Kỳ vọng</b>Tạo phiếu chuyển, kiểm tra đủ hàng, ghi nhận đúng cả 2 đầu.</p>
+      <p><b>Thực tế</b>Đúng — chỉ cho chuyển trong giới hạn còn khả dụng, ghi nhận đồng thời cả kho gửi và kho
+        nhận.</p>
+      <span class="verdict v-ok">✓ Đúng, nhưng KHÔNG có cách hoàn tác sau khi đã xác nhận — xem vấn đề #4</span>
+    </div>
+
+    <div class="scenario">
+      <h4>7. Một nhu cầu sản xuất được cấp vật tư từ nhiều lần xuất kho</h4>
+      <p><b>Kỳ vọng</b>Cộng dồn đúng qua nhiều lần xuất, không tính trùng.</p>
+      <p><b>Thực tế</b>Cộng dồn số lượng đúng. Nhưng với vật tư tiêu hao/đóng gói, mỗi lần xuất riêng lẻ vẫn
+        không kiểm tra tồn kho thật — nhiều lần xuất nhỏ có thể cộng dồn vượt tồn thật mà không lần nào bị
+        chặn.</p>
+      <span class="verdict v-bad">✗ Cùng nguyên nhân với vấn đề #1</span>
+    </div>
+
+    <div class="scenario">
+      <h4>8. Một đơn khách hàng phục vụ nhiều nhu cầu khác nhau</h4>
+      <p><b>Kỳ vọng</b>Truy vết được nhu cầu mua vật tư về đúng đơn khách gốc khi cần.</p>
+      <p><b>Thực tế</b>Khi nhiều mặt hàng (có thể từ nhiều đơn khách khác nhau) được gộp vào 1 lệnh sản xuất, số
+        lượng cần mua tính theo TỔNG cả lệnh, không tách theo từng đơn khách gốc.</p>
+      <span class="verdict v-warn">⚠ Cần xác nhận lại: có cần truy vết chi phí/số lượng về từng đơn khách gốc không?</span>
+    </div>
+
+    <div class="scenario">
+      <h4>9. Hủy/hoàn tác một phiếu nhập hoặc xuất đã ghi vào sổ kho</h4>
+      <p><b>Kỳ vọng</b>Có cách đảo ngược rõ ràng, vẫn giữ được lịch sử.</p>
+      <p><b>Thực tế</b>Không có chức năng "hoàn tác" — đúng theo nguyên tắc sổ kho không được sửa/xoá (hợp lý).
+        Cách duy nhất là ghi thêm 1 bút toán bù trừ qua chức năng điều chỉnh thủ công, nhưng cách này KHÔNG
+        đụng tới phần "giữ chỗ" liên quan — phần giữ chỗ (nếu có) sẽ không được đồng bộ lại tương ứng.</p>
+      <span class="verdict v-warn">⚠ Đúng về nguyên tắc sổ kho, nhưng thiếu đồng bộ với phần giữ chỗ — xem vấn đề #4</span>
+    </div>
+  </div>
+
+  <!-- ================= PART D ================= -->
+  <div class="part-divider" id="phan-d">
+    <span class="n">PHẦN D</span>
+    <h2>Những quy tắc nghiệp vụ còn thiếu</h2>
+  </div>
+
+  <div class="module">
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Quy tắc còn thiếu</th><th>Liên quan</th></tr></thead>
+        <tbody>
+          <tr><td>Kiểm tra tồn kho thật trước khi xuất vật tư tiêu hao/đóng gói</td><td><a href="#C1">Vấn đề #1</a></td></tr>
+          <tr><td>Cơ chế hủy lệnh sản xuất sau khi đã duyệt (kể cả chưa nhận hàng)</td><td><a href="#C4">Vấn đề #4</a></td></tr>
+          <tr><td>Cơ chế hoàn tác phiếu chuyển kho sau khi đã xác nhận</td><td><a href="#C4">Vấn đề #4</a></td></tr>
+          <tr><td>Cảnh báo/tính lại khi bước tự động tính nhu cầu mua hàng bị lỗi</td><td><a href="#H1">Vấn đề #5</a></td></tr>
+          <tr><td>Cập nhật số lượng cần mua cho dòng đang báo giá dở khi lệnh sản xuất phát sinh thêm nhu cầu</td><td><a href="#H5">Vấn đề #9</a></td></tr>
+          <tr><td>Ghi lại ai tiếp nhận/gửi duyệt/từ chối từng dòng vật tư</td><td><a href="#H2">Vấn đề #6</a></td></tr>
+          <tr><td>Bắt buộc mã chống trùng cho mọi chức năng ghi thay đổi vào kho</td><td><a href="#H7">Vấn đề #11</a></td></tr>
+          <tr><td>Phân biệt "tồn thật" và "còn dùng được" trên mọi màn kho, không riêng Xuất sắt</td><td><a href="#H9">Vấn đề #13</a></td></tr>
+          <tr><td>Truy vết nhu cầu mua vật tư về đúng đơn khách gốc khi lệnh sản xuất gộp nhiều đơn</td><td>Tình huống #8</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ================= PART E ================= -->
+  <div class="part-divider" id="phan-e">
+    <span class="n">PHẦN E</span>
+    <h2>Thứ tự nên xử lý</h2>
+    <span class="sub">Ưu tiên: độ chính xác dữ liệu → độ chính xác tồn kho → đúng nghiệp vụ → bảo mật → hiệu
+      năng → chất lượng mã nguồn.</span>
+  </div>
+
+  <div class="module">
+    <div class="stats">
+      <div class="stat"><div class="n">4</div><div class="l">Nghiêm trọng — xử lý ngay</div></div>
+      <div class="stat"><div class="n">9</div><div class="l">Cao — đợt tới</div></div>
+      <div class="stat"><div class="n">7</div><div class="l">Trung bình — lên lịch</div></div>
+      <div class="stat"><div class="n">5</div><div class="l">Thấp — khi có dịp</div></div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Thứ tự</th><th>Việc cần làm</th><th>Vì sao ưu tiên</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Chặn xuất vật tư tiêu hao/đóng gói vượt tồn thật (Vấn đề #1)</td><td>Đang có thể xảy ra ngay bây giờ, chỉ cần 1 lần thao tác bình thường.</td></tr>
+          <tr><td>2</td><td>Xác minh và xử lý màn Xuất kho giả (Vấn đề #2)</td><td>Dữ liệu "đã xuất" có thể hoàn toàn không tồn tại trong hệ thống dù người dùng tin là đã ghi nhận.</td></tr>
+          <tr><td>3</td><td>Sửa lỗi hiển thị sai giá ở Lịch sử mua hàng (Vấn đề #3)</td><td>Ảnh hưởng số liệu tài chính, nhưng dễ sửa, rủi ro khi fix thấp.</td></tr>
+          <tr><td>4</td><td>Quyết định về cơ chế hủy/hoàn tác (Vấn đề #4)</td><td>Cần quyết định của người phụ trách nghiệp vụ trước khi làm, không chỉ là việc kỹ thuật.</td></tr>
+          <tr><td>5</td><td>Vá 2 khoảng trống còn lại trong tính nhu cầu mua hàng (Vấn đề #5, #9)</td><td>Nối tiếp trực tiếp phần đã sửa hồi 25-26/08, cùng khu vực đang được chú ý.</td></tr>
+          <tr><td>6</td><td>Bổ sung ghi vết còn thiếu (Vấn đề #6, #7)</td><td>Không chặn vận hành ngay nhưng mất dấu vĩnh viễn nếu không vá sớm.</td></tr>
+          <tr><td>7</td><td>Các cải tiến an toàn còn lại (Vấn đề #8, #10, #11, #12)</td><td>Rủi ro thấp hơn nhờ các lớp bảo vệ khác đã có, nhưng nên dọn cùng đợt cho nhất quán.</td></tr>
+          <tr><td>8</td><td>Hiển thị "khả dụng" ở các màn kho khác (Vấn đề #13)</td><td>Phạm vi rộng hơn, nên làm sau khi các việc gấp khác đã ổn định.</td></tr>
+          <tr><td>9</td><td>Các vấn đề Trung bình/Thấp còn lại (#14–#25)</td><td>Gộp vào các đợt bảo trì định kỳ, không cần gấp.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ================= PART F ================= -->
+  <div class="part-divider" id="phan-f">
+    <span class="n">PHẦN F</span>
+    <h2>Đánh giá độ tin cậy tổng thể</h2>
+  </div>
+
+  <div class="module">
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Câu hỏi</th><th>Trả lời</th></tr></thead>
+        <tbody>
+          <tr><td>Sổ kho có phải là nguồn số liệu chính xác duy nhất không?</td><td><b>Có</b>, và đây là điểm mạnh — số tồn hiển thị luôn tự động khớp với sổ kho, không thể lệch nhau về mặt kỹ thuật.</td></tr>
+          <tr><td>Số tồn hiển thị có luôn đúng với sổ kho không?</td><td>Đúng về mặt kỹ thuật. Nhưng "tồn hiển thị" (thô) có thể khác "tồn thật sự dùng được" (đã trừ phần giữ chỗ) ở phần lớn màn hình — đây là vấn đề về CÁCH HIỂN THỊ (Vấn đề #13), không phải sai lệch số liệu.</td></tr>
+          <tr><td>Các giao dịch có được xử lý trọn vẹn, không bị dở dang giữa chừng không?</td><td>Rất tốt ở luồng sắt/chuyển kho/mua hàng. <b>Chưa tốt</b> ở luồng vật tư tiêu hao/đóng gói — có cơ chế xử lý trọn vẹn nhưng lại kiểm tra sai đối tượng (định mức kỹ thuật thay vì tồn kho thật).</td></tr>
+          <tr><td>Có tránh được 2 người/2 thao tác ghi đè lẫn nhau không?</td><td>Đã làm tốt ở hầu hết nơi quan trọng. Ngoại lệ đáng lo nhất là Vấn đề #1.</td></tr>
+          <tr><td>Có tránh được thao tác bị lặp do bấm nhiều lần/mạng chậm không?</td><td>Có cơ chế, nhưng chưa bắt buộc dùng ở nhiều nơi (Vấn đề #11) — nên siết lại.</td></tr>
+          <tr><td>Trạng thái các chứng từ có rõ ràng, không nhảy lung tung không?</td><td>Rất chặt chẽ cho đề xuất mua hàng và phiếu chuyển kho. <b>Thiếu hẳn</b> bước "hủy" sau khi đã duyệt/xác nhận (Vấn đề #4).</td></tr>
+          <tr><td>Có truy được ai đã làm gì, lúc nào không?</td><td>Phần lớn có. Một số chỗ còn thiếu: từ chối/tiếp nhận báo giá (Vấn đề #6), phiếu chuyển kho (Vấn đề #7).</td></tr>
+          <tr><td>Từ 1 con số tồn kho có lần ngược được về chứng từ và người thao tác không?</td><td>Đa phần có, rất tốt cho sổ kho. Riêng các thao tác qua màn Xuất kho giả (Vấn đề #2) thì hoàn toàn không truy được gì, vì chưa từng có gì được ghi lại.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    Bản diễn giải dễ đọc, dựa trên báo cáo kỹ thuật đầy đủ thực hiện ngày 26/08/2026 — đối chiếu 2 báo cáo rà
+    soát ngày 25/08/2026 với mã nguồn hiện tại, qua rà soát trực tiếp toàn bộ quy trình Mua hàng và Kho ở cả
+    giao diện người dùng lẫn hệ thống lõi. Repo <code>DNA-DEXUAT</code> được nhắc tới trong báo cáo gốc nhưng
+    không truy cập được trong phiên rà soát này — không nằm trong phạm vi đánh giá. Không có gì trong hệ
+    thống bị thay đổi khi thực hiện rà soát này — đây thuần là tài liệu phân tích và đánh giá.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" title="Về đầu trang" type="button">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

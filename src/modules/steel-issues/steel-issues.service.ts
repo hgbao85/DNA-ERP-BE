@@ -29,8 +29,11 @@ import { CompleteStepDto } from './dto/complete-step.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { CutBundleResponseDto, CutPatternSegmentResponseDto } from './dto/cut-bundle-response.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
+import { PiOrderSummaryResponseDto } from './dto/pi-order-summary-response.dto';
+import { RecordStepBatchDto } from './dto/record-step-batch.dto';
 import { SteelIssuePlanItemResponseDto } from './dto/steel-issue-plan-item-response.dto';
 import { SteelIssueResponseDto } from './dto/steel-issue-response.dto';
+import { StepBatchResponseDto, StepBatchSegmentResponseDto } from './dto/step-batch-response.dto';
 
 const STEEL_ISSUE_INCLUDE = {
   productionInvoice: { select: { code: true, salesOrder: { select: { code: true } } } },
@@ -684,6 +687,291 @@ export class SteelIssuesService {
   }
 
   /**
+   * Tiến độ 1 công đoạn chi tiết SAU Cắt (Uốn/Dập/...) theo TỪNG cỡ đoạn cho 1 PI - cùng khuôn
+   * dạng "Cần/Đã .../Còn lại" như getPhoiProgress(), khác nguồn `done`: đọc từ StepBatchSegment
+   * (bảng mirror CutPatternSegment cho step != CAT, xem RecordStepBatchDto) thay vì
+   * CutPatternSegment. `required` CHỈ tính những dòng PieceBom có processSteps chứa đúng step
+   * này - khác getPhoiProgress (Cắt áp dụng mặc định cho MỌI dòng, không lọc processSteps, xem
+   * resolveRequiredSteps()).
+   */
+  async getStepProgress(
+    productionInvoiceId: string,
+    step: ProcessStep,
+  ): Promise<PhoiProgressItemResponseDto[]> {
+    const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
+    const orders = await this.findOrdersForInvoice(invoice.id);
+    if (orders.length === 0) return [];
+
+    const bomRevisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
+    const [bomPieces, pieceBoms, issues, stepSegments, qcSegments] = await Promise.all([
+      this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: bomRevisionIds } } }),
+      this.prisma.pieceBom.findMany({
+        where: { bomRevisionId: { in: bomRevisionIds }, processSteps: { has: step } },
+        include: { segmentSpec: { include: { material: true } } },
+      }),
+      this.prisma.steelIssue.findMany({
+        where: { productionInvoiceId: invoice.id, reworkOfId: null },
+        select: { materialId: true, barCount: true },
+      }),
+      this.prisma.stepBatchSegment.findMany({
+        where: { stepBatch: { step, steelIssue: { productionInvoiceId: invoice.id } } },
+        select: { segmentSpecId: true, qty: true },
+      }),
+      this.prisma.qcReviewSegment.findMany({
+        where: { qcReview: { steelIssue: { productionInvoiceId: invoice.id } } },
+        select: { segmentSpecId: true, failedQty: true, resolvedQty: true },
+      }),
+    ]);
+
+    const issuedByMaterial = new Map<string, number>();
+    for (const i of issues) {
+      const key = i.materialId.toString();
+      issuedByMaterial.set(key, (issuedByMaterial.get(key) ?? 0) + i.barCount);
+    }
+
+    const doneBySpec = new Map<string, number>();
+    for (const ss of stepSegments) {
+      const key = ss.segmentSpecId.toString();
+      doneBySpec.set(key, (doneBySpec.get(key) ?? 0) + ss.qty);
+    }
+    const failedBySpec = new Map<string, number>();
+    for (const qs of qcSegments) {
+      const key = qs.segmentSpecId.toString();
+      const outstanding = qs.failedQty - qs.resolvedQty;
+      failedBySpec.set(key, (failedBySpec.get(key) ?? 0) + outstanding);
+    }
+
+    const qtyPerUnitByKey = new Map(
+      bomPieces.map((bp) => [`${bp.bomRevisionId}:${bp.pieceId}`, bp.qtyPerUnit]),
+    );
+    const pieceBomsByRevision = new Map<string, typeof pieceBoms>();
+    for (const pb of pieceBoms) {
+      const key = pb.bomRevisionId.toString();
+      const arr = pieceBomsByRevision.get(key) ?? [];
+      arr.push(pb);
+      pieceBomsByRevision.set(key, arr);
+    }
+
+    const requiredBySpec = new Map<string, number>();
+    const specMeta = new Map<
+      string,
+      { materialId: string; materialCode: string; materialName: string; cutLengthMm: number }
+    >();
+    const registerSpec = (row: (typeof pieceBoms)[number]) => {
+      const specKey = row.segmentSpecId.toString();
+      if (!specMeta.has(specKey)) {
+        specMeta.set(specKey, {
+          materialId: row.segmentSpec.materialId.toString(),
+          materialCode: row.segmentSpec.material.code,
+          materialName: row.segmentSpec.material.name,
+          cutLengthMm: row.segmentSpec.cutLengthMm.toNumber(),
+        });
+      }
+      return specKey;
+    };
+
+    for (const order of orders) {
+      const bomKey = order.bomRevisionId.toString();
+      for (const row of pieceBomsByRevision.get(bomKey) ?? []) {
+        const qtyPerUnit = qtyPerUnitByKey.get(`${bomKey}:${row.pieceId}`) ?? 0;
+        const segments = row.qtyPerPiece * qtyPerUnit * order.quantity;
+        if (segments <= 0) continue;
+        const specKey = registerSpec(row);
+        requiredBySpec.set(specKey, (requiredBySpec.get(specKey) ?? 0) + segments);
+      }
+    }
+
+    const orphanSpecIds = [...doneBySpec.keys()].filter((k) => !specMeta.has(k));
+    if (orphanSpecIds.length > 0) {
+      const orphans = await this.prisma.segmentSpec.findMany({
+        where: { id: { in: orphanSpecIds.map((k) => BigInt(k)) } },
+        include: { material: true },
+      });
+      for (const o of orphans) {
+        specMeta.set(o.id.toString(), {
+          materialId: o.materialId.toString(),
+          materialCode: o.material.code,
+          materialName: o.material.name,
+          cutLengthMm: o.cutLengthMm.toNumber(),
+        });
+      }
+    }
+
+    const byMaterial = new Map<string, PhoiProgressItemResponseDto>();
+    for (const [specKey, meta] of specMeta) {
+      let item = byMaterial.get(meta.materialId);
+      if (!item) {
+        item = new PhoiProgressItemResponseDto({
+          materialId: meta.materialId,
+          materialCode: meta.materialCode,
+          materialName: meta.materialName,
+          issuedBarCount: issuedByMaterial.get(meta.materialId) ?? 0,
+          segments: [],
+        });
+        byMaterial.set(meta.materialId, item);
+      }
+      item.segments.push(
+        new PhoiProgressSegmentDto({
+          segmentSpecId: specKey,
+          cutLengthMm: meta.cutLengthMm,
+          required: requiredBySpec.get(specKey) ?? 0,
+          done: doneBySpec.get(specKey) ?? 0,
+          failed: failedBySpec.get(specKey) ?? 0,
+        }),
+      );
+    }
+
+    for (const item of byMaterial.values()) {
+      item.segments.sort((a, b) => b.cutLengthMm - a.cutLengthMm);
+    }
+    return [...byMaterial.values()].sort((a, b) => a.materialCode.localeCompare(b.materialCode));
+  }
+
+  /**
+   * Ghi 1 đợt "đã gia công" cho công đoạn chi tiết SAU Cắt (Uốn/Dập/...) - append-only, cộng dồn,
+   * mirror recordCutBatch() nhưng KHÔNG có cân bằng vật chất (bước này không tác động lên cây sắt,
+   * chỉ xử lý tiếp trên các đoạn ĐÃ cắt ra). Chặn vượt số đã cắt (catDone) - không thể gia công
+   * nhiều hơn số đoạn thực có. CHỈ chạy khi IN_PROCESS, và step chưa nằm trong completedSteps -
+   * "Xong {bước}" (completeStep) chốt lại, không nhập thêm được sau đó.
+   */
+  async recordStepBatch(id: string, dto: RecordStepBatchDto): Promise<StepBatchResponseDto> {
+    if (dto.step === ProcessStep.CAT) {
+      throw new BadRequestException('Công đoạn Cắt dùng route cut-batches riêng, không qua đây');
+    }
+    const issue = await this.findOneOrThrow(id);
+    if (issue.status !== SteelIssueStatus.IN_PROCESS) {
+      throw new ConflictException(
+        `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ IN_PROCESS mới nhập được công đoạn chi tiết`,
+      );
+    }
+    const requiredSteps = await this.resolveRequiredSteps(
+      issue.productionInvoiceId,
+      issue.materialId,
+    );
+    if (!requiredSteps.includes(dto.step)) {
+      throw new BadRequestException(
+        `Công đoạn ${dto.step} không thuộc danh sách công đoạn đã chọn sẵn của vật tư này`,
+      );
+    }
+    if (issue.completedSteps.includes(dto.step)) {
+      throw new ConflictException(
+        `Công đoạn ${dto.step} của đợt này đã báo xong - không nhập thêm được`,
+      );
+    }
+
+    const specIds = dto.segments.map((seg) => parseBigIntId(seg.segmentSpecId));
+    if (new Set(specIds.map(String)).size !== specIds.length) {
+      throw new BadRequestException('Cùng một cỡ đoạn khai làm nhiều dòng - gộp lại thành 1 dòng');
+    }
+
+    const [specs, allowedSpecIds, catDoneRows, stepDoneRows] = await Promise.all([
+      this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } }),
+      this.findStepSegmentSpecIds(issue.productionInvoiceId, dto.step),
+      this.prisma.cutPatternSegment.findMany({
+        where: {
+          segmentSpecId: { in: specIds },
+          cutBundle: { steelIssue: { productionInvoiceId: issue.productionInvoiceId } },
+        },
+        select: { segmentSpecId: true, qty: true },
+      }),
+      this.prisma.stepBatchSegment.findMany({
+        where: {
+          segmentSpecId: { in: specIds },
+          stepBatch: {
+            step: dto.step,
+            steelIssue: { productionInvoiceId: issue.productionInvoiceId },
+          },
+        },
+        select: { segmentSpecId: true, qty: true },
+      }),
+    ]);
+
+    const specById = new Map(specs.map((sp) => [sp.id.toString(), sp]));
+    const catDoneBySpec = new Map<string, number>();
+    for (const r of catDoneRows) {
+      const k = r.segmentSpecId.toString();
+      catDoneBySpec.set(k, (catDoneBySpec.get(k) ?? 0) + r.qty);
+    }
+    const stepDoneBySpec = new Map<string, number>();
+    for (const r of stepDoneRows) {
+      const k = r.segmentSpecId.toString();
+      stepDoneBySpec.set(k, (stepDoneBySpec.get(k) ?? 0) + r.qty);
+    }
+
+    for (const seg of dto.segments) {
+      const specKey = parseBigIntId(seg.segmentSpecId).toString();
+      const spec = specById.get(specKey);
+      if (!spec) {
+        throw new NotFoundException(`Cỡ đoạn ${seg.segmentSpecId} không tồn tại`);
+      }
+      if (spec.materialId !== issue.materialId) {
+        throw new BadRequestException(
+          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt xuất này`,
+        );
+      }
+      if (!allowedSpecIds.has(specKey)) {
+        throw new BadRequestException(
+          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không cần công đoạn ${dto.step} theo định mức`,
+        );
+      }
+      const catDone = catDoneBySpec.get(specKey) ?? 0;
+      const stepDoneSoFar = stepDoneBySpec.get(specKey) ?? 0;
+      if (stepDoneSoFar + seg.qty > catDone) {
+        throw new BadRequestException(
+          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm: đã cắt ${catDone} đoạn, đã báo ${dto.step} ` +
+            `${stepDoneSoFar} đoạn - không thể báo thêm ${seg.qty} (vượt số đã cắt)`,
+        );
+      }
+    }
+
+    const created = await this.prisma.stepBatch.create({
+      data: {
+        steelIssueId: issue.id,
+        step: dto.step,
+        segments: {
+          create: dto.segments.map((seg) => ({
+            segmentSpecId: parseBigIntId(seg.segmentSpecId),
+            qty: seg.qty,
+          })),
+        },
+      },
+      include: { segments: { include: { segmentSpec: true } } },
+    });
+
+    return new StepBatchResponseDto({
+      id: created.id.toString(),
+      step: created.step,
+      segments: created.segments.map(
+        (s) =>
+          new StepBatchSegmentResponseDto({
+            segmentSpecId: s.segmentSpecId.toString(),
+            cutLengthMm: s.segmentSpec.cutLengthMm.toNumber(),
+            qty: s.qty,
+          }),
+      ),
+    });
+  }
+
+  /** Tập segmentSpecId hợp lệ để khai công đoạn `step` cho 1 PI - mirror findBomSegmentSpecIds()
+   *  nhưng lọc thêm processSteps chứa đúng step, vì không phải cỡ đoạn nào cũng cần MỌI công đoạn
+   *  (khác Cắt, luôn bắt buộc cho mọi cỡ). */
+  private async findStepSegmentSpecIds(
+    productionInvoiceId: bigint,
+    step: ProcessStep,
+  ): Promise<Set<string>> {
+    const orders = await this.findOrdersForInvoice(productionInvoiceId);
+    if (orders.length === 0) return new Set();
+    const rows = await this.prisma.pieceBom.findMany({
+      where: {
+        bomRevisionId: { in: [...new Set(orders.map((o) => o.bomRevisionId))] },
+        processSteps: { has: step },
+      },
+      select: { segmentSpecId: true },
+    });
+    return new Set(rows.map((r) => r.segmentSpecId.toString()));
+  }
+
+  /**
    * Đánh dấu 1 công đoạn chi tiết (uốn/dập/...) xong sau khi đã cắt (IN_PROCESS) - chuyển
    * AWAITING_QC ngay khi mọi requiredSteps đã có mặt trong completedSteps. Idempotent với step đã
    * đánh dấu (double-click không lỗi).
@@ -835,6 +1123,34 @@ export class SteelIssuesService {
 
   async findOneRowOrThrow(id: string): Promise<SteelIssueRow> {
     return this.findOneOrThrow(id);
+  }
+
+  /**
+   * Danh sách PO/SKU (ProductionOrder) thuộc 1 PI - khối "tham khảo" cho màn Lệnh sản xuất Phôi.
+   * KHÔNG mang số liệu tiến độ (tiến độ chỉ có ở cấp PI × loại sắt, xem getPhoiProgress) - Phôi
+   * không biết trước cây sắt về SKU nào lúc cắt (xem changelog
+   * 2026-08-19-xuat-sat-theo-pi-hoan-tat.html).
+   */
+  async getOrderSummary(productionInvoiceId: string): Promise<PiOrderSummaryResponseDto[]> {
+    const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
+    const orders = await this.prisma.productionOrder.findMany({
+      where: { productionInvoiceItem: { productionInvoiceId: invoice.id } },
+      select: {
+        poNumber: true,
+        quantity: true,
+        mfgProduct: { select: { name: true } },
+        productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+      },
+    });
+    return orders.map(
+      (o) =>
+        new PiOrderSummaryResponseDto({
+          poNumber: o.poNumber,
+          salesOrderCode: o.productionInvoiceItem?.salesOrder?.code ?? null,
+          productName: o.mfgProduct.name,
+          quantity: o.quantity,
+        }),
+    );
   }
 
   /** "Cần xuất bao nhiêu" theo LOẠI SẮT cho cả PI - query trực tiếp, không có bảng cache riêng. */
