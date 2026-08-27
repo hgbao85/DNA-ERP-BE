@@ -908,4 +908,38 @@ describe('SteelIssuesService', () => {
       expect(result[0].requiredSegments).toBe(80 + 20);
     });
   });
+
+  describe('getOrderSummary', () => {
+    it('trả đúng PO/SKU của mọi ProductionOrder thuộc PI, salesOrderCode null khi PI gộp không gắn đơn nào', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([
+        {
+          poNumber: 'PO-47',
+          quantity: 20,
+          mfgProduct: { name: 'Ghế tình yêu' },
+          productionInvoiceItem: { salesOrder: { code: 'SO-47' } },
+        },
+        {
+          poNumber: 'PO-48',
+          quantity: 8,
+          mfgProduct: { name: 'Ghế J55' },
+          productionInvoiceItem: { salesOrder: null },
+        },
+      ]);
+
+      const result = await service.getOrderSummary('1');
+
+      expect(result).toEqual([
+        { poNumber: 'PO-47', salesOrderCode: 'SO-47', productName: 'Ghế tình yêu', quantity: 20 },
+        { poNumber: 'PO-48', salesOrderCode: null, productName: 'Ghế J55', quantity: 8 },
+      ]);
+    });
+
+    it('trả mảng rỗng khi PI chưa có ProductionOrder nào (chưa được Sếp duyệt)', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([]);
+
+      const result = await service.getOrderSummary('1');
+
+      expect(result).toEqual([]);
+    });
+  });
 });

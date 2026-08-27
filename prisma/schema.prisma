@@ -610,6 +610,7 @@ model SegmentSpec {
   stockLedgerEntries             StockLedger[]
   stockQuants                    StockQuant[]
   cutPatternSegments             CutPatternSegment[]
+  stepBatchSegments              StepBatchSegment[]
 
   @@unique([materialId, cutLengthMm])
   @@map("segment_spec")
@@ -2129,6 +2130,7 @@ model SteelIssue {
   reworkOf          SteelIssue?        @relation("SteelIssueRework", fields: [reworkOfId], references: [id])
   reworkIssues      SteelIssue[]       @relation("SteelIssueRework")
   bundles           CutBundle[]
+  stepBatches       StepBatch[]
   qcReviews         QcReview[]
   replenishedBy     ReplenishRequest[] @relation("ReplenishRequestFulfilledByIssue")
 
@@ -2184,6 +2186,38 @@ model CutPatternSegment {
 
   @@unique([cutBundleId, segmentSpecId])
   @@map("cut_pattern_segments")
+}
+
+/// 1 đợt báo "đã gia công" cho 1 công đoạn chi tiết SAU Cắt (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ) -
+/// append-only, cộng dồn nhiều đợt giống CutBundle (2026-08-27). Không có barCount/mauNguyên/scrap
+/// như CutBundle vì bước này không tác động lên cây sắt - chỉ xử lý tiếp trên các ĐOẠN đã cắt ra.
+/// Không áp dụng cho step=CAT (đã có CutBundle riêng, mang cả số cây + cân bằng vật chất).
+model StepBatch {
+  id           BigInt      @id @default(autoincrement())
+  steelIssueId BigInt
+  step         ProcessStep
+  createdAt    DateTime    @default(now())
+
+  steelIssue SteelIssue         @relation(fields: [steelIssueId], references: [id])
+  segments   StepBatchSegment[]
+
+  @@index([steelIssueId, step])
+  @@map("step_batches")
+}
+
+/// Số đoạn ĐÃ gia công qua step này theo từng cỡ đoạn - Phôi khai số THỰC làm được, không suy từ
+/// định mức. UNIQUE (stepBatchId, segmentSpecId) giống cut_pattern_segments.
+model StepBatchSegment {
+  id            BigInt @id @default(autoincrement())
+  stepBatchId   BigInt
+  segmentSpecId BigInt
+  qty           Int
+
+  stepBatch   StepBatch   @relation(fields: [stepBatchId], references: [id])
+  segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])
+
+  @@unique([stepBatchId, segmentSpecId])
+  @@map("step_batch_segments")
 }
 
 /// KCS duyệt, dùng chung Phôi/Hàn/Sơn qua FK XOR (steelIssueId <> productionBatchId - CHECK

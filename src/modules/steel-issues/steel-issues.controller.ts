@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { MfgRole, PermissionAction } from '../../generated/prisma/client';
+import { MfgRole, PermissionAction, ProcessStep } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -10,6 +10,7 @@ import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
 import { CompleteStepDto } from './dto/complete-step.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
+import { RecordStepBatchDto } from './dto/record-step-batch.dto';
 import { SteelIssuesService } from './steel-issues.service';
 
 const VIEW = { module: PERMISSION_MODULES.STEEL_ISSUE, action: PermissionAction.VIEW };
@@ -59,6 +60,29 @@ export class SteelIssuesController {
     return this.steelIssuesService.getPhoiProgress(id);
   }
 
+  /**
+   * Tiến độ 1 công đoạn chi tiết SAU Cắt (Uốn/Dập/...) - cùng khuôn dạng "Cần/Đã.../Còn lại" như
+   * phoi-progress, khác nguồn `done` (StepBatchSegment thay vì CutPatternSegment). `step` trong
+   * path phải khớp enum ProcessStep (vd UON/DAP/DUC_LO/TAN/TOP_DAU/XE) - không nhận CAT, dùng
+   * phoi-progress cho CAT.
+   */
+  @Get('production-invoices/:id/step-progress/:step')
+  @RequirePermissions(VIEW)
+  getStepProgress(@Param('id') id: string, @Param('step') step: ProcessStep) {
+    return this.steelIssuesService.getStepProgress(id, step);
+  }
+
+  /**
+   * Danh sách PO/SKU (ProductionOrder) thuộc 1 PI - khối "tham khảo" cho màn Lệnh sản xuất Phôi,
+   * KHÔNG mang số liệu tiến độ. Đặt ở đây (không phải ProductionInvoicesController) để dùng
+   * STEEL_ISSUE:VIEW - PHOI_STAFF không có PRODUCTION_INVOICE:VIEW.
+   */
+  @Get('production-invoices/:id/order-summary')
+  @RequirePermissions(VIEW)
+  getOrderSummary(@Param('id') id: string) {
+    return this.steelIssuesService.getOrderSummary(id);
+  }
+
   // ─── Tổ Phôi / KCS - xem theo trạng thái, không cần biết trước productionInvoiceId ─
 
   /** Flat, không cần biết productionOrderId - xem ListSteelIssuesQueryDto. */
@@ -106,6 +130,15 @@ export class SteelIssuesController {
   @RequireMfgRole(MfgRole.PHOI)
   finishCutting(@Param('id') id: string) {
     return this.steelIssuesService.finishCutting(id);
+  }
+
+  /** Nhập 1 đợt "đã gia công" cho công đoạn chi tiết SAU Cắt (cộng dồn) - mirror cut-batches,
+   *  không đổi trạng thái. Xem RecordStepBatchDto. */
+  @Post('steel-issues/:id/step-batches')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  recordStepBatch(@Param('id') id: string, @Body() dto: RecordStepBatchDto) {
+    return this.steelIssuesService.recordStepBatch(id, dto);
   }
 
   @Post('steel-issues/:id/complete-step')
