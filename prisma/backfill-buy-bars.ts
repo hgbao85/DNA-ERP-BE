@@ -22,14 +22,22 @@ import { PrismaClient } from '../src/generated/prisma/client';
  * `buyBars` = phần PHẢI MUA của riêng dòng đó = đúng con số đã ghi vào
  * `PurchaseProposalItem.buyQty` lúc approve() tạo đề xuất mua cho chính phương án ấy.
  *
- * Điều này chỉ đúng khi 1 PurchaseProposal ứng với ĐÚNG 1 CuttingProposal - tức cơ chế gộp
- * "1 PI = 1 form" (2026-08-25) CHƯA từng chạy. Script tự KIỂM điều kiện đó trước khi ghi
- * (`purchase_proposals.productionInvoiceId` phải NULL toàn bộ) và dừng ngay nếu không thoả, thay vì
- * lấp số sai âm thầm.
+ * Điều này chỉ đúng khi tra được ĐÚNG dòng `PurchaseProposalItem` mà chính phương án cắt này đã
+ * tạo ra - tức `proposal.cuttingProposalId` còn trỏ về đúng phương án của dòng. Cơ chế gộp
+ * "1 PI = 1 form" (2026-08-25) có thể GHI ĐÈ `cuttingProposalId` của 1 proposal sang phương án MỚI
+ * HƠN khi 2 phương án cùng PI lần lượt ghi vào chung 1 proposal (xem nhánh `existingProposal` ở
+ * `CuttingProposalsService.approve()`) - lúc đó buyQty đã là netted-total, không tách ngược về
+ * buyBars của phương án CŨ được nữa.
  *
- * Dòng không tìm được PurchaseProposalItem tương ứng = approve() không tạo đề xuất mua cho vật tư
- * đó. Chỉ xảy ra khi dòng bị loại khỏi `buyableLines` (feasible=false hoặc totalBars=0) - script
- * đã lọc feasible=true nên rơi vào đây nghĩa là totalBars=0, buyBars đúng bằng 0.
+ * Script KHÔNG chặn theo tín hiệu thô "có phiếu nào đã gộp chưa" (`productionInvoiceId != null`) -
+ * proposal luôn mang `productionInvoiceId` ngay từ phiếu ĐẦU TIÊN của 1 PI dù chưa có gì bị gộp
+ * (đó là khoá để lần SAU tìm ra "đề xuất còn mở" mà ghi tiếp vào, không phải bằng chứng đã gộp).
+ * Thay vào đó DÒ TRƯỚC (dry-run, không ghi) toàn bộ dòng cần lấp: dòng nào có `totalBars > 0`
+ * (nghĩa là THẬT SỰ có nhu cầu mua) mà KHÔNG tìm được `PurchaseProposalItem` khớp
+ * `(materialId, cuttingProposalId)` mới là dấu hiệu bị ghi đè - dừng ngay và liệt kê, không đoán.
+ *
+ * Dòng không tìm được PurchaseProposalItem tương ứng NHƯNG `totalBars = 0` = approve() không tạo
+ * đề xuất mua cho vật tư đó (bị loại khỏi `buyableLines`) - hợp lệ, buyBars đúng bằng 0.
  *
  * KHÔNG đụng solver, KHÔNG đụng tồn kho/giữ chỗ/trạng thái - chỉ ghi 1 cột số thuần, đọc lại từ dữ
  * liệu ĐÃ CÓ SẴN. Chạy lại nhiều lần vô hại (chỉ đụng dòng còn NULL).
@@ -39,28 +47,17 @@ const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
-  // Điều kiện an toàn: cơ chế gộp chưa chạy thì 1 phiếu mua = 1 phương án cắt, buyQty mới suy
-  // ngược về buyBars được. Nếu đã gộp, buyQty là TỔNG của nhiều phương án - không tách lại được,
-  // phải dựng lại bằng cách khác (dừng để người xử lý, không đoán).
-  const mergedCount = await prisma.purchaseProposal.count({
-    where: { productionInvoiceId: { not: null } },
-  });
-  if (mergedCount > 0) {
-    throw new Error(
-      `Có ${mergedCount} phiếu mua đã đi qua cơ chế gộp (productionInvoiceId khác NULL) - ` +
-        `buyQty của chúng là TỔNG nhiều phương án cắt, KHÔNG suy ngược về buyBars từng dòng được. ` +
-        `Dừng lại để tránh lấp số sai. Cần dựng lại buyBars bằng cách khác cho các phiếu này.`,
-    );
-  }
-
   const lines = await prisma.cuttingProposalLine.findMany({
     where: { buyBars: null, feasible: true, cuttingProposal: { status: 'APPROVED' } },
     select: { id: true, cuttingProposalId: true, materialId: true, totalBars: true },
   });
   console.log(`Tìm thấy ${lines.length} dòng phương án cắt (APPROVED) thiếu buyBars.`);
 
-  let filled = 0;
-  let zeroed = 0;
+  // Dò trước (KHÔNG ghi) - tách dòng khớp được (an toàn) khỏi dòng có nhu cầu thật (totalBars > 0)
+  // mà không tìm được PurchaseProposalItem khớp (cuttingProposalId của proposal đã bị merge ghi đè
+  // sang phương án khác) - CHẶN NGAY nếu có, không đoán số sai.
+  const resolved: { id: bigint; buyBars: number }[] = [];
+  const dangerous: (typeof lines)[number][] = [];
   for (const line of lines) {
     const purchaseItem = await prisma.purchaseProposalItem.findFirst({
       where: {
@@ -69,11 +66,30 @@ async function main() {
       },
       select: { buyQty: true },
     });
-    // Không có dòng mua tương ứng -> approve() đã loại vật tư này khỏi buyableLines (totalBars=0),
-    // không phải mua gì cả.
-    const buyBars = purchaseItem ? Math.round(purchaseItem.buyQty.toNumber()) : 0;
-    await prisma.cuttingProposalLine.update({ where: { id: line.id }, data: { buyBars } });
-    if (purchaseItem) filled += 1;
+    if (purchaseItem) {
+      resolved.push({ id: line.id, buyBars: Math.round(purchaseItem.buyQty.toNumber()) });
+    } else if (line.totalBars === 0) {
+      resolved.push({ id: line.id, buyBars: 0 });
+    } else {
+      dangerous.push(line);
+    }
+  }
+
+  if (dangerous.length > 0) {
+    throw new Error(
+      `${dangerous.length} dòng có nhu cầu thật (totalBars > 0) nhưng KHÔNG tìm được ` +
+        `PurchaseProposalItem khớp - cuttingProposalId trên phiếu mua đã bị cơ chế gộp ghi đè sang ` +
+        `phương án khác, buyQty hiện tại là netted-total, KHÔNG suy ngược về buyBars được. ` +
+        `Dừng lại để tránh lấp số sai. Dòng cần xử lý thủ công: ` +
+        `${dangerous.map((l) => `line ${l.id} (phương án ${l.cuttingProposalId}, vật tư ${l.materialId})`).join('; ')}`,
+    );
+  }
+
+  let filled = 0;
+  let zeroed = 0;
+  for (const r of resolved) {
+    await prisma.cuttingProposalLine.update({ where: { id: r.id }, data: { buyBars: r.buyBars } });
+    if (r.buyBars > 0) filled += 1;
     else zeroed += 1;
   }
   console.log(

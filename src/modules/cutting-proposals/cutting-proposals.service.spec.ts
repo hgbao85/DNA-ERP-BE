@@ -1885,6 +1885,44 @@ describe('CuttingProposalsService', () => {
       );
     };
 
+    // Cổng chặn "chưa chạy backfill" - buyBars=null nghĩa là dữ liệu duyệt trước 2026-08-27 chưa
+    // được lấp. Cộng 0 sẽ làm nhu cầu gộp tính THIẾU rồi ghi đè dòng kế hoạch bằng số hụt - tái
+    // sinh đúng lỗi L1 qua đường dữ liệu, sai ÂM THẦM bằng tiền thật. Chặn cứng, kèm hướng dẫn.
+    it('L1: CHẶN khi còn dòng buyBars=null (chưa chạy backfill) - không ghi gì', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [{ id: 77n, materialId: 30n, feasible: true, totalBars: 8 }],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
+        productionInvoiceItem: { productionInvoiceId: 50n },
+      });
+      // Dòng của phương án cũ (SKU khác trong cùng PI) duyệt trước khi có cột buyBars.
+      mockGrossLines([
+        { materialId: 30n, buyBars: null as unknown as number },
+        { materialId: 30n, buyBars: 8 },
+      ]);
+      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+        id: 900n,
+        items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.NEW }],
+      });
+
+      await expect(service.approve('2', 'user-1')).rejects.toThrow(ConflictException);
+      // Không ghi đè dòng kế hoạch bằng con số hụt, cũng không tạo dòng nào.
+      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+      expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
+    });
+
     it('L1: 2 SKU khác nhau dùng chung 1 loại sắt - buyQty = TỔNG nhu cầu cả 2, không ghi đè mất SKU kia', async () => {
       prisma.cuttingProposal.findUnique.mockResolvedValue({
         id: 2n,

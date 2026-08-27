@@ -1660,10 +1660,29 @@ export class CuttingProposalsService {
       }),
     ]);
 
+    // buyBars = null nghĩa là CHƯA CHẠY `npm run backfill:buy-bars` (phương án duyệt trước
+    // 2026-08-27, lúc đó cột chưa tồn tại). CHẶN CỨNG thay vì cộng 0:
+    //
+    // Cộng 0 sẽ làm nhu cầu gộp tính THIẾU đúng phần của phương án cũ, và lượt duyệt SKU tiếp theo
+    // ghi đè dòng kế hoạch bằng con số hụt đó - tái sinh chính lỗi L1 mà netting sinh ra để diệt,
+    // lần này qua đường dữ liệu. Sai ÂM THẦM, bằng tiền thật, không ai phát hiện cho tới lúc Phôi
+    // ra xưởng thiếu sắt.
+    //
+    // Chặn ở đây đổi lỗi-tiền-bạc-âm-thầm thành lỗi-vận-hành-nhìn-thấy-được: không duyệt được
+    // phương án cắt cho PI liên quan cho tới khi chạy backfill, kèm thông báo nói thẳng phải làm gì.
+    // Sau khi backfill xong thì nhánh này không bao giờ chạy tới nữa (approve() luôn ghi buyBars).
+    const missingBuyBars = lines.filter((l) => l.buyBars === null);
+    if (missingBuyBars.length > 0) {
+      throw new ConflictException(
+        `Không tính được nhu cầu mua cho PI ${productionInvoiceId}: ${missingBuyBars.length} dòng ` +
+          `phương án cắt chưa có buyBars (vật tư ${[...new Set(missingBuyBars.map((l) => l.materialId.toString()))].join(', ')}). ` +
+          `Đây là dữ liệu duyệt TRƯỚC 2026-08-27 - chạy "npm run backfill:buy-bars" rồi thử lại. ` +
+          `KHÔNG duyệt tiếp khi chưa backfill: nhu cầu của phương án cũ sẽ bị tính thiếu và ghi đè ` +
+          `mất số đã có trên đề xuất mua.`,
+      );
+    }
+
     for (const materialId of uniqueMaterialIds) {
-      // buyBars null = phương án duyệt TRƯỚC 2026-08-26 (cột chưa tồn tại) - phải chạy
-      // prisma/backfill-buy-bars.ts trước khi dùng tính năng này, nếu không nhu cầu của phương án
-      // cũ bị tính thiếu. Cộng 0 (không đoán bừa) và để backfill lo, xem doc comment cột buyBars.
       const gross = lines
         .filter((l) => l.materialId === materialId)
         .reduce((sum, l) => sum + (l.buyBars ?? 0), 0);
