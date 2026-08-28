@@ -32,12 +32,6 @@ describe('PurchaseProposalsService', () => {
       update: jest.Mock;
       updateMany: jest.Mock;
     };
-    purchaseProposalQuote: {
-      create: jest.Mock;
-      update: jest.Mock;
-      updateMany: jest.Mock;
-      deleteMany: jest.Mock;
-    };
     warehouse: { findUniqueOrThrow: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     auditLog: { create: jest.Mock };
@@ -74,8 +68,8 @@ describe('PurchaseProposalsService', () => {
 
   // status mặc định NEW (2026-08-25, "duyệt riêng từng người mua hàng") - state machine THẬT giờ
   // nằm ở CẤP ITEM, không còn ở proposal. material() mặc định buyerId=null (chưa gán ai) - mọi
-  // actor đều coi là "của mình" theo đúng luật assertActorMayHandle/assertActorMayQuoteItem, trừ
-  // khi test tự override buyerId để kiểm tra phân quyền.
+  // actor đều coi là "của mình" theo đúng luật assertActorMayHandle, trừ khi test tự override
+  // buyerId để kiểm tra phân quyền.
   const item = (overrides: Record<string, unknown> = {}) => ({
     id: 400n,
     proposalId: 300n,
@@ -90,7 +84,10 @@ describe('PurchaseProposalsService', () => {
     rejectedAt: null,
     rejectionReason: null,
     purchasedAt: null,
+    approvalFileUrl: null,
     material: material(),
+    // Luồng cũ (gỡ 2026-08-27) - giữ mảng rỗng vì toItemResponseDto vẫn map field này để tra cứu
+    // lịch sử; không còn đường nào ghi thêm báo giá mới.
     quotes: [],
     ...overrides,
   });
@@ -146,9 +143,9 @@ describe('PurchaseProposalsService', () => {
         findMany: jest.fn().mockResolvedValue([{ status: PurchaseProposalStatus.PURCHASING }]),
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
-        // D.p12-item-status-race (2026-08-26): acknowledge/submit/approve/reject/requote giờ đọc
-        // `count` trả về từ updateMany để phát hiện race (item đã bị đổi trạng thái bởi thao tác
-        // khác giữa lúc đọc snapshot và lúc ghi). Mặc định coi MỌI id trong where đều khớp status
+        // D.p12-item-status-race (2026-08-26): bossApprove() đọc `count` trả về từ updateMany để
+        // phát hiện race (item đã bị đổi trạng thái bởi thao tác khác giữa lúc đọc snapshot và lúc
+        // ghi). Mặc định coi MỌI id trong where đều khớp status
         // mong đợi (đúng "happy path" - không có race) bằng cách đếm chính số id được truyền vào;
         // test nào cần mô phỏng race (count lệch) tự override bằng mockResolvedValueOnce({count:...}).
         updateMany: jest.fn().mockImplementation((args: { where?: { id?: unknown } }) => {
@@ -159,12 +156,6 @@ describe('PurchaseProposalsService', () => {
               : 1;
           return Promise.resolve({ count });
         }),
-      },
-      purchaseProposalQuote: {
-        create: jest.fn(),
-        update: jest.fn(),
-        updateMany: jest.fn(),
-        deleteMany: jest.fn(),
       },
       // Sau khi kho nhận hàng chuyển sang đọc thẳng item.material.warehouseId (không qua lookup),
       // chỗ này chỉ còn phục vụ đúng 1 việc: tra kho ảo SUPPLIER trong receiveItem().
@@ -177,7 +168,7 @@ describe('PurchaseProposalsService', () => {
           .fn()
           .mockResolvedValue({ purchaseOverReceiptTolerancePercent: decimal(0) }),
       },
-      // Audit ghi tay ở approve()/requote() - xem auditQuoteDecision().
+      // Audit ghi tay ở bossApprove() - xem auditProposalDecision().
       auditLog: { create: jest.fn() },
       // receiveItem() soi CuttingProposalLine để biết dòng đang nhận có phải sắt của ĐÚNG phương
       // án cắt gắn trên đề xuất không (2026-08-25, thay cho check cấp-đề-xuất cũ theo sourceType -
@@ -389,9 +380,21 @@ describe('PurchaseProposalsService', () => {
     });
   });
 
-  // ── 2026-08-25: "duyệt riêng từng người mua hàng" - state machine chuyển xuống cấp item ────
-  describe('acknowledge', () => {
-    it('chuyển NEW -> QUOTING cho đúng các dòng của actor (hoặc chưa gán ai), không đụng dòng của người khác', async () => {
+  // ── 2026-08-27: "Sếp duyệt ngoài hệ thống" - bỏ báo giá nhiều NCC + màn So sánh giá ──────────
+  // acknowledge/addQuote/submit/approve/reject/requote đã gỡ khỏi service; toàn bộ chặng giữa gộp
+  // vào đúng 1 thao tác này.
+  describe('bossApprove', () => {
+    const FILE = 'https://res.cloudinary.com/x/image/upload/v1/dna-erp/approvals/ky.jpg';
+
+    /** Danh sách id item mà lượt updateMany đầu tiên thật sự đụng tới. */
+    const approvedItemIds = (): bigint[] => {
+      const calls = prisma.purchaseProposalItem.updateMany.mock.calls as {
+        where: { id: { in: bigint[] } };
+      }[][];
+      return calls[0][0].where.id.in;
+    };
+
+    it('chuyển NEW -> PURCHASING cho đúng dòng của actor, ghi đủ file duyệt + người duyệt', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           items: [
@@ -401,672 +404,140 @@ describe('PurchaseProposalsService', () => {
         }),
       );
 
-      await service.acknowledge('300', 'user-1', ['PURCHASER']);
+      await service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE });
 
       expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [400n] }, status: PurchaseProposalStatus.NEW },
-        data: { status: PurchaseProposalStatus.QUOTING },
+        where: {
+          id: { in: [400n] },
+          status: {
+            in: [
+              PurchaseProposalStatus.NEW,
+              PurchaseProposalStatus.QUOTING,
+              PurchaseProposalStatus.SUBMITTED,
+              PurchaseProposalStatus.REJECTED,
+            ],
+          },
+        },
+        data: {
+          status: PurchaseProposalStatus.PURCHASING,
+          approvedAt: expect.any(Date) as Date,
+          approvedById: 'user-1',
+          approvalFileUrl: FILE,
+        },
       });
     });
 
-    it('báo lỗi rõ ràng khi actor không có dòng NEW nào để tiếp nhận trong đề xuất', async () => {
+    // Ca sống-còn của đợt cắt luồng: lúc gỡ màn duyệt của Sếp, production còn 36 dòng nằm ở
+    // QUOTING/SUBMITTED (đã bấm Tiếp nhận, hoặc đã gửi Sếp theo luồng cũ). bossApprove() là đường
+    // ra DUY NHẤT của chúng - siết lại chỉ nhận NEW là treo vĩnh viễn 36 dòng hàng thật.
+    it('nhận LUÔN dòng đang QUOTING/SUBMITTED/REJECTED của luồng cũ, không chỉ NEW', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.QUOTING })] }),
+        proposal({
+          items: [
+            item({ id: 400n, status: PurchaseProposalStatus.QUOTING }),
+            item({ id: 401n, status: PurchaseProposalStatus.SUBMITTED }),
+            item({ id: 402n, status: PurchaseProposalStatus.REJECTED }),
+            item({ id: 403n, status: PurchaseProposalStatus.NEW }),
+          ],
+        }),
       );
 
-      await expect(service.acknowledge('300', 'user-1', ['PURCHASER'])).rejects.toThrow(
-        BadRequestException,
+      await service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE });
+
+      expect(approvedItemIds()).toEqual([400n, 401n, 402n, 403n]);
+    });
+
+    it('KHÔNG đụng dòng đã PURCHASING/PURCHASED (đã duyệt rồi, duyệt lại là sai)', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({ id: 400n, status: PurchaseProposalStatus.NEW }),
+            item({ id: 401n, status: PurchaseProposalStatus.PURCHASING }),
+            item({ id: 402n, status: PurchaseProposalStatus.PURCHASED }),
+          ],
+        }),
       );
+
+      await service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE });
+
+      expect(approvedItemIds()).toEqual([400n]);
+    });
+
+    it('báo lỗi rõ ràng khi actor không còn dòng nào chờ duyệt trong đề xuất', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ status: PurchaseProposalStatus.PURCHASING })] }),
+      );
+
+      await expect(
+        service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE }),
+      ).rejects.toThrow(BadRequestException);
       expect(prisma.purchaseProposalItem.updateMany).not.toHaveBeenCalled();
     });
 
-    // A4: mirror đúng luật FE (purchasingRouting.ts) - actor phải sở hữu >=1 dòng vật tư, hoặc
-    // dòng đó chưa gán ai. BOSS/ADMIN qua hết. Đây vẫn là cổng VÀO ĐỀ XUẤT (assertActorMayHandle,
-    // không đổi 2026-08-25) - khác hẳn việc CHỈ tiếp nhận đúng phần của actor ở trên.
+    // A4: cổng VÀO ĐỀ XUẤT (assertActorMayHandle) giữ nguyên như luồng cũ - actor phải sở hữu >=1
+    // dòng vật tư hoặc dòng đó chưa gán ai; BOSS/ADMIN qua hết.
     it('chặn PURCHASER không được phân công mua vật tư nào trong đề xuất', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({ items: [item({ material: material({ buyerId: 'user-2' }) })] }),
       );
 
-      await expect(service.acknowledge('300', 'user-1', ['PURCHASER'])).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(
+        service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE }),
+      ).rejects.toThrow(ForbiddenException);
       expect(prisma.purchaseProposalItem.updateMany).not.toHaveBeenCalled();
     });
 
-    it('cho phép actor đúng người được gán mua', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ material: material({ buyerId: 'user-1' }) })] }),
-      );
-
-      await expect(service.acknowledge('300', 'user-1', ['PURCHASER'])).resolves.toBeDefined();
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [400n] }, status: PurchaseProposalStatus.NEW },
-        data: { status: PurchaseProposalStatus.QUOTING },
-      });
-    });
-
-    it('cho phép BOSS tiếp nhận MỌI dòng NEW của bất kỳ ai (isPrivilegedActor)', async () => {
+    it('cho phép BOSS duyệt hộ MỌI dòng của bất kỳ ai (isPrivilegedActor)', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({ items: [item({ material: material({ buyerId: 'user-2' }) })] }),
       );
 
-      await expect(service.acknowledge('300', 'boss-1', ['BOSS'])).resolves.toBeDefined();
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [400n] }, status: PurchaseProposalStatus.NEW },
-        data: { status: PurchaseProposalStatus.QUOTING },
-      });
-    });
-
-    // D.p12-item-status-race (2026-08-26): snapshot đọc NGOÀI transaction (findDetailOrThrow) có
-    // thể đã cũ nếu 1 thao tác khác vừa đổi status của item này giữa lúc đọc và lúc transaction
-    // kịp khoá + ghi - updateMany với where.status kèm count!=length phải chặn lại, không được âm
-    // thầm coi như thành công.
-    it('ném ConflictException nếu item vừa bị đổi trạng thái bởi thao tác khác (race) - count updateMany lệch', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.NEW })] }),
-      );
-      prisma.purchaseProposalItem.updateMany.mockResolvedValueOnce({ count: 0 });
-
-      await expect(service.acknowledge('300', 'user-1', ['PURCHASER'])).rejects.toThrow(
-        ConflictException,
-      );
-    });
-  });
-
-  describe('addQuote', () => {
-    it('creates a quote row under the item and returns it mapped', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.QUOTING })] }),
-      );
-      prisma.purchaseProposalItem.findUniqueOrThrow.mockResolvedValue(
-        item({ status: PurchaseProposalStatus.QUOTING, quotes: [quote()] }),
-      );
-
-      const result = await service.addQuote(
-        '300',
-        '400',
-        { supplierName: 'Minh Thành', unitPrice: 45000 },
-        'user-1',
-        [],
-      );
-
-      expect(prisma.purchaseProposalQuote.create).toHaveBeenCalledWith({
-        data: {
-          itemId: 400n,
-          supplierId: undefined,
-          supplierName: 'Minh Thành',
-          unitPrice: 45000,
-          expectedDate: undefined,
-          note: undefined,
-        },
-      });
-      expect(result.quotes).toHaveLength(1);
-    });
-
-    // 2026-08-25: kiểm ở CẤP ITEM (item.status), không còn assertStatus(proposal, QUOTING).
-    it('rejects when the item is not QUOTING (vd chưa tiếp nhận)', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.NEW })] }),
-      );
-
       await expect(
-        service.addQuote('300', '400', { supplierName: 'X' }, 'user-1', []),
-      ).rejects.toThrow(ConflictException);
+        service.bossApprove('300', 'boss-1', ['BOSS'], { approvalFileUrl: FILE }),
+      ).resolves.toBeDefined();
+      expect(approvedItemIds()).toEqual([400n]);
     });
 
-    // item() giờ tra thẳng trong proposal.items (findDetailOrThrow, không còn findFirst riêng) -
-    // item 999 không có trong danh sách mặc định [item()] (id 400n) nên rơi vào NotFoundException.
-    it('throws NotFoundException when the item does not belong to this proposal', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.QUOTING })] }),
-      );
-
-      await expect(
-        service.addQuote('300', '999', { supplierName: 'X' }, 'user-1', []),
-      ).rejects.toThrow(NotFoundException);
-      expect(prisma.purchaseProposalQuote.create).not.toHaveBeenCalled();
-    });
-
-    it('chặn actor không được phân công mua vật tư nào trong đề xuất', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({
-              status: PurchaseProposalStatus.QUOTING,
-              material: material({ buyerId: 'user-2' }),
-            }),
-          ],
-        }),
-      );
-
-      await expect(
-        service.addQuote('300', '400', { supplierName: 'X' }, 'user-1', ['PURCHASER']),
-      ).rejects.toThrow(ForbiddenException);
-      expect(prisma.purchaseProposalQuote.create).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('submit', () => {
-    it('rejects when the actor items in QUOTING have no quote with a positive unitPrice', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.QUOTING, quotes: [] })] }),
-      );
-
-      await expect(service.submit('300', 'user-1', [])).rejects.toThrow(BadRequestException);
-      expect(prisma.purchaseProposalItem.updateMany).not.toHaveBeenCalled();
-    });
-
-    it('moves QUOTING -> SUBMITTED cho đúng các dòng của actor có báo giá hợp lệ', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [item({ status: PurchaseProposalStatus.QUOTING, quotes: [quote()] })],
-        }),
-      );
-
-      await service.submit('300', 'user-1', []);
-
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [400n] }, status: PurchaseProposalStatus.QUOTING },
-        data: { status: PurchaseProposalStatus.SUBMITTED, submittedAt: expect.any(Date) as Date },
-      });
-    });
-
-    // 2026-08-25 core: đây là chính tính năng "duyệt riêng từng người mua hàng" - trước đây
-    // submit() soi TOÀN BỘ proposal.items kể cả của người khác, 1 người báo giá xong không gửi
-    // được nếu người khác trong cùng đề xuất chưa xong.
-    it('CHỈ gửi phần vật tư của actor, KHÔNG đụng tới item QUOTING của người khác chưa xong', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({
-              id: 400n,
-              status: PurchaseProposalStatus.QUOTING,
-              quotes: [quote()],
-              material: material({ buyerId: 'user-1' }),
-            }),
-            item({
-              id: 401n,
-              status: PurchaseProposalStatus.QUOTING,
-              quotes: [], // Trâm chưa báo giá xong phần của mình
-              material: material({ buyerId: 'user-2' }),
-            }),
-          ],
-        }),
-      );
-
-      await service.submit('300', 'user-1', []);
-
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [400n] }, status: PurchaseProposalStatus.QUOTING },
-        data: { status: PurchaseProposalStatus.SUBMITTED, submittedAt: expect.any(Date) as Date },
-      });
-    });
-
-    it('báo lỗi rõ ràng khi actor không có dòng QUOTING nào để gửi', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.NEW })] }),
-      );
-
-      await expect(service.submit('300', 'user-1', [])).rejects.toThrow(BadRequestException);
-    });
-
-    it('chặn actor không được phân công mua vật tư nào trong đề xuất', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({
-              status: PurchaseProposalStatus.QUOTING,
-              quotes: [quote()],
-              material: material({ buyerId: 'user-2' }),
-            }),
-          ],
-        }),
-      );
-
-      await expect(service.submit('300', 'user-1', ['PURCHASER'])).rejects.toThrow(
-        ForbiddenException,
-      );
-    });
-
-    // D.p12-item-status-race (2026-08-26) - xem test tương tự ở acknowledge().
+    // D.p12-item-status-race (2026-08-26): snapshot đọc NGOÀI transaction có thể đã cũ nếu thao tác
+    // khác vừa đổi status giữa lúc đọc và lúc transaction kịp khoá + ghi.
     it('ném ConflictException nếu item vừa bị đổi trạng thái bởi thao tác khác (race)', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [item({ status: PurchaseProposalStatus.QUOTING, quotes: [quote()] })],
-        }),
-      );
-      prisma.purchaseProposalItem.updateMany.mockResolvedValueOnce({ count: 0 });
-
-      await expect(service.submit('300', 'user-1', [])).rejects.toThrow(ConflictException);
-    });
-  });
-
-  describe('approve', () => {
-    it('rejects when dto.chosenQuoteIdByItemId is empty', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [item({ status: PurchaseProposalStatus.SUBMITTED, quotes: [quote()] })],
-        }),
-      );
-
-      await expect(service.approve('300', 'user-1', { chosenQuoteIdByItemId: {} })).rejects.toThrow(
-        BadRequestException,
-      );
-    });
-
-    it('rejects when the chosen quote id does not belong to the item', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({ status: PurchaseProposalStatus.SUBMITTED, quotes: [quote({ id: 900n })] }),
-          ],
-        }),
-      );
-
-      await expect(
-        service.approve('300', 'user-1', { chosenQuoteIdByItemId: { '400': '999' } }),
-      ).rejects.toThrow(BadRequestException);
-      expect(prisma.purchaseProposalQuote.update).not.toHaveBeenCalled();
-    });
-
-    // C2: submit() chỉ đòi mỗi vật tư có ÍT NHẤT 1 báo giá có giá, không đòi cái ĐƯỢC CHỌN phải
-    // là cái đó - nên vẫn duyệt được một lệnh mua không có giá nếu Sếp bấm nhầm dòng để trống.
-    it('chặn khi báo giá được chọn chưa có đơn giá (dù vật tư có báo giá khác đã điền giá)', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({
-              status: PurchaseProposalStatus.SUBMITTED,
-              quotes: [
-                quote({ id: 900n, supplierName: 'Minh Thành' }), // có giá -> qua được submit()
-                quote({ id: 901n, supplierName: 'Hoà Phát', unitPrice: null }), // để trống
-              ],
-            }),
-          ],
-        }),
-      );
-
-      await expect(
-        service.approve('300', 'user-1', { chosenQuoteIdByItemId: { '400': '901' } }),
-      ).rejects.toThrow(BadRequestException);
-      expect(prisma.purchaseProposalQuote.update).not.toHaveBeenCalled();
-      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
-    });
-
-    it('chặn khi báo giá được chọn có đơn giá = 0', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({
-              status: PurchaseProposalStatus.SUBMITTED,
-              quotes: [quote({ id: 900n, unitPrice: { toNumber: () => 0 } })],
-            }),
-          ],
-        }),
-      );
-
-      await expect(
-        service.approve('300', 'user-1', { chosenQuoteIdByItemId: { '400': '900' } }),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    // 2026-08-25 core: dto.chosenQuoteIdByItemId LÀ batch đang duyệt - item KHÔNG có mặt trong
-    // dto không bị đụng tới, kể cả khi vẫn đang SUBMITTED (đợi lượt duyệt sau, độc lập).
-    it('duyệt đúng batch trong dto - không đòi phủ hết proposal.items, item khác không bị đụng', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({
-              id: 400n,
-              status: PurchaseProposalStatus.SUBMITTED,
-              quotes: [quote({ id: 900n })],
-            }),
-            item({
-              id: 401n,
-              status: PurchaseProposalStatus.QUOTING, // Trâm chưa gửi - không nằm trong dto
-              quotes: [],
-            }),
-          ],
-        }),
-      );
-
-      await service.approve('300', 'user-1', { chosenQuoteIdByItemId: { '400': '900' } });
-
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 400n, status: PurchaseProposalStatus.SUBMITTED },
-          data: expect.objectContaining({
-            status: PurchaseProposalStatus.PURCHASING,
-          }) as unknown,
-        }),
-      );
-      // item 401n (Trâm, chưa submit, không có mặt trong dto) không được update ở đây.
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledTimes(1);
-    });
-
-    // Race D.p8-approve-batch-race: item trong dto nhưng KHÔNG (còn) SUBMITTED tại thời điểm BE
-    // xử lý (vd đã được duyệt/từ chối bởi 1 request khác) - báo lỗi RÕ RÀNG khác với "thiếu NCC".
-    it('báo lỗi rõ ràng khi item trong dto không (còn) SUBMITTED', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [item({ status: PurchaseProposalStatus.QUOTING, quotes: [quote({ id: 900n })] })],
-        }),
-      );
-
-      await expect(
-        service.approve('300', 'user-1', { chosenQuoteIdByItemId: { '400': '900' } }),
-      ).rejects.toThrow(ConflictException);
-      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
-    });
-
-    it('rejects when the itemId in dto does not belong to this proposal', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [item({ status: PurchaseProposalStatus.SUBMITTED, quotes: [quote()] })],
-        }),
-      );
-
-      await expect(
-        service.approve('300', 'user-1', { chosenQuoteIdByItemId: { '999': '900' } }),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    // C1: chuyển trạng thái được extension tự audit CẤP PROPOSAL (rollup), nhưng quote là bảng
-    // con (không auto-audit) nên "mua của ai, giá bao nhiêu" phải ghi tay - đó mới là thứ cần khi
-    // đối chiếu với NCC.
-    it('ghi audit quyết định chọn NCC/giá khi duyệt', async () => {
-      const detail = proposal({
-        items: [item({ status: PurchaseProposalStatus.SUBMITTED, quotes: [quote()] })],
-      });
-      prisma.purchaseProposal.findUnique.mockResolvedValueOnce(detail).mockResolvedValueOnce(
-        proposal({
-          status: PurchaseProposalStatus.PURCHASING,
-          items: [item({ status: PurchaseProposalStatus.PURCHASING, quotes: [quote()] })],
-        }),
-      );
-
-      await service.approve('300', 'user-1', { chosenQuoteIdByItemId: { '400': '900' } });
-
-      expect(prisma.auditLog.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          action: 'UPDATE',
-          tableName: 'PurchaseProposalQuote',
-          recordId: '300',
-          newValue: {
-            event: 'approve',
-            chosen: [
-              {
-                itemId: '400',
-                materialCode: 'SAT-25',
-                quoteId: '900',
-                supplierName: 'Minh Thành',
-                supplierId: null,
-                unitPrice: 45000,
-                buyQty: 8,
-              },
-            ],
-          },
-        }) as unknown,
-      });
-    });
-
-    it('sets isChosen on the selected quote and moves SUBMITTED -> PURCHASING', async () => {
-      const detail = proposal({
-        items: [item({ status: PurchaseProposalStatus.SUBMITTED, quotes: [quote()] })],
-      });
-      prisma.purchaseProposal.findUnique
-        .mockResolvedValueOnce(detail)
-        .mockResolvedValueOnce(proposal({ status: PurchaseProposalStatus.PURCHASING }));
-
-      await service.approve('300', 'user-1', { chosenQuoteIdByItemId: { '400': '900' } });
-
-      expect(prisma.purchaseProposalQuote.updateMany).toHaveBeenCalledWith({
-        where: { itemId: 400n },
-        data: { isChosen: false },
-      });
-      expect(prisma.purchaseProposalQuote.update).toHaveBeenCalledWith({
-        where: { id: 900n },
-        data: { isChosen: true },
-      });
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 400n, status: PurchaseProposalStatus.SUBMITTED },
-          data: expect.objectContaining({
-            status: PurchaseProposalStatus.PURCHASING,
-            approvedById: 'user-1',
-          }) as unknown,
-        }),
-      );
-    });
-
-    // D.p12-item-status-race (2026-08-26): khác 4 hàm kia (updateMany theo mảng id), approve() ghi
-    // TỪNG item 1 trong vòng lặp trong CÙNG transaction - item bị race (vd Sếp khác vừa Từ chối
-    // đúng lúc) phải chặn NGAY tại item đó, không âm thầm ghi tiếp/đè lên trạng thái đã đổi.
-    it('ném ConflictException nếu item vừa bị đổi trạng thái bởi thao tác khác giữa lúc đọc và lúc transaction ghi (race)', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({ status: PurchaseProposalStatus.SUBMITTED, quotes: [quote({ id: 900n })] }),
-          ],
-        }),
-      );
-      prisma.purchaseProposalItem.updateMany.mockResolvedValueOnce({ count: 0 });
-
-      await expect(
-        service.approve('300', 'user-1', { chosenQuoteIdByItemId: { '400': '900' } }),
-      ).rejects.toThrow(ConflictException);
-      // Race chặn TRƯỚC khi chạm tới quote - isChosen không được ghi đè nhầm.
-      expect(prisma.purchaseProposalQuote.updateMany).not.toHaveBeenCalled();
-      expect(prisma.purchaseProposalQuote.update).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('reject / requote', () => {
-    it('từ chối MỌI dòng đang SUBMITTED khi không truyền itemIds (tương thích ngược)', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.SUBMITTED })] }),
-      );
-
-      await service.reject('300', { rejectionReason: 'Giá quá cao' });
-
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [400n] }, status: PurchaseProposalStatus.SUBMITTED },
-        data: {
-          status: PurchaseProposalStatus.REJECTED,
-          rejectedAt: expect.any(Date) as Date,
-          rejectionReason: 'Giá quá cao',
-        },
-      });
-    });
-
-    // 2026-08-25: itemIds tuỳ chọn - Sếp gửi kèm đúng batch đang xem trên màn hình, cùng lý do
-    // chống race D.p8-approve-batch-race đã áp dụng cho approve().
-    it('từ chối đúng batch trong dto.itemIds khi có truyền', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({ id: 400n, status: PurchaseProposalStatus.SUBMITTED }),
-            item({ id: 401n, status: PurchaseProposalStatus.SUBMITTED }),
-          ],
-        }),
-      );
-
-      await service.reject('300', { rejectionReason: 'Giá quá cao', itemIds: ['400'] });
-
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [400n] }, status: PurchaseProposalStatus.SUBMITTED },
-        data: expect.objectContaining({ status: PurchaseProposalStatus.REJECTED }) as unknown,
-      });
-    });
-
-    // D.p12-item-status-race (2026-08-26): item đọc SUBMITTED lúc findDetailOrThrow, nhưng bị 1
-    // thao tác khác (vd approve() song song) ghi đè trước khi transaction của reject() kịp chạy -
-    // count updateMany lệch phải chặn lại thay vì âm thầm coi như đã từ chối thành công.
-    it('ném ConflictException nếu item vừa bị đổi trạng thái bởi thao tác khác giữa lúc đọc và lúc transaction ghi (race)', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.SUBMITTED })] }),
-      );
-      prisma.purchaseProposalItem.updateMany.mockResolvedValueOnce({ count: 0 });
-
-      await expect(service.reject('300', { rejectionReason: 'x' })).rejects.toThrow(
-        ConflictException,
-      );
-    });
-
-    it('rejects khi itemIds trỏ tới 1 dòng KHÔNG (còn) SUBMITTED', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.QUOTING })] }),
-      );
-
-      await expect(
-        service.reject('300', { rejectionReason: 'x', itemIds: ['400'] }),
-      ).rejects.toThrow(ConflictException);
-      expect(prisma.purchaseProposalItem.updateMany).not.toHaveBeenCalled();
-    });
-
-    it('rejects khi không có dòng nào đang SUBMITTED để từ chối', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({ items: [item({ status: PurchaseProposalStatus.NEW })] }),
       );
+      prisma.purchaseProposalItem.updateMany.mockResolvedValueOnce({ count: 0 });
 
-      await expect(service.reject('300', { rejectionReason: 'x' })).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE }),
+      ).rejects.toThrow(ConflictException);
     });
 
-    it('moves REJECTED -> QUOTING on requote, wipes old quotes CỦA ĐÚNG DÒNG ĐÓ, và CHỤP LẠI trước khi xoá (D.p3-requote-dedup, D.c1-no-audit-on-money-path)', async () => {
+    // Bắt buộc: updateMany KHÔNG được extension audit tự ghi, nên nếu không ghi tay thì quyết định
+    // "đẩy lô hàng sang mua" không để lại dấu vết nào. Trước đây phần này do approve() của Sếp ghi.
+    it('ghi audit tay kèm file duyệt và trạng thái cũ của từng dòng', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({
-              status: PurchaseProposalStatus.REJECTED,
-              rejectionReason: 'Giá cao hơn thị trường',
-              quotes: [quote()],
-            }),
-          ],
-        }),
+        proposal({ items: [item({ id: 400n, status: PurchaseProposalStatus.SUBMITTED })] }),
       );
 
-      const result = await service.requote('300', 'user-1', []);
+      await service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE });
 
-      expect(result).toBeDefined();
-      // BUG FIX 2026-08-25: xoá đúng theo itemId (KHÔNG PHẢI theo proposalId cả đề xuất) - trước
-      // đây `{ item: { proposalId: 300n } }` xoá luôn báo giá của đồng nghiệp khác trong cùng đề
-      // xuất gộp, kể cả dòng đã PURCHASING (isChosen=true, đã Sếp duyệt).
-      expect(prisma.purchaseProposalQuote.deleteMany).toHaveBeenCalledWith({
-        where: { itemId: { in: [400n] } },
-      });
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [400n] }, status: PurchaseProposalStatus.REJECTED },
-        data: {
-          status: PurchaseProposalStatus.QUOTING,
-          rejectedAt: null,
-          rejectionReason: null,
-        },
-      });
-      // C1: deleteMany xoá SẠCH, không giữ lịch sử (đổi 2026-08-11) - nếu không chụp lại trước
-      // đó thì sau vòng từ chối/báo giá lại này, giá NCC đã từng chào biến mất không dấu vết.
       expect(prisma.auditLog.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
-          action: 'DELETE',
-          tableName: 'PurchaseProposalQuote',
+          tableName: 'PurchaseProposalItem',
           recordId: '300',
-          oldValue: {
-            event: 'requote',
-            rejectedItems: [
-              { itemId: '400', materialCode: 'SAT-25', rejectionReason: 'Giá cao hơn thị trường' },
-            ],
-            deletedQuotes: [
+          newValue: expect.objectContaining({
+            event: 'boss-approve',
+            approvalFileUrl: FILE,
+            items: [
               {
                 itemId: '400',
                 materialCode: 'SAT-25',
-                quoteId: '900',
-                supplierName: 'Minh Thành',
-                unitPrice: 45000,
-                expectedDate: null,
-                isChosen: false,
+                buyQty: 8,
+                previousStatus: PurchaseProposalStatus.SUBMITTED,
               },
             ],
-          },
+          }) as unknown,
         }) as unknown,
       });
-    });
-
-    // BUG FIX 2026-08-25 core: requote của 1 người KHÔNG được đụng tới quote/isChosen của item
-    // KHÔNG phải REJECTED (vd đang PURCHASING, đã Sếp duyệt) của đồng nghiệp khác trong cùng đề
-    // xuất gộp.
-    it('requote CHỈ xoá quote của dòng REJECTED thuộc actor, KHÔNG đụng dòng PURCHASING của người khác', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({
-              id: 400n,
-              status: PurchaseProposalStatus.REJECTED,
-              quotes: [quote()],
-              material: material({ buyerId: 'user-1' }),
-            }),
-            item({
-              id: 401n,
-              status: PurchaseProposalStatus.PURCHASING, // đã Sếp duyệt, isChosen=true
-              quotes: [quote({ id: 901n, isChosen: true })],
-              material: material({ buyerId: 'user-2' }),
-            }),
-          ],
-        }),
-      );
-
-      await service.requote('300', 'user-1', []);
-
-      expect(prisma.purchaseProposalQuote.deleteMany).toHaveBeenCalledWith({
-        where: { itemId: { in: [400n] } },
-      });
-      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [400n] }, status: PurchaseProposalStatus.REJECTED },
-        data: expect.objectContaining({ status: PurchaseProposalStatus.QUOTING }) as unknown,
-      });
-    });
-
-    // D.p12-item-status-race (2026-08-26): count updateMany lệch phải chặn TRƯỚC khi xoá quote -
-    // thứ tự cố ý đổi status trước, xoá quote sau (xem comment ở requote()) để race không làm mất
-    // báo giá cũ của item đó.
-    it('ném ConflictException nếu item vừa bị đổi trạng thái bởi thao tác khác (race) - không xoá quote', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [item({ status: PurchaseProposalStatus.REJECTED, quotes: [quote()] })],
-        }),
-      );
-      prisma.purchaseProposalItem.updateMany.mockResolvedValueOnce({ count: 0 });
-
-      await expect(service.requote('300', 'user-1', [])).rejects.toThrow(ConflictException);
-      expect(prisma.purchaseProposalQuote.deleteMany).not.toHaveBeenCalled();
-    });
-
-    it('rejects requoting khi actor không có dòng REJECTED nào', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({ items: [item({ status: PurchaseProposalStatus.QUOTING })] }),
-      );
-
-      await expect(service.requote('300', 'user-1', [])).rejects.toThrow(BadRequestException);
-      expect(prisma.purchaseProposalQuote.deleteMany).not.toHaveBeenCalled();
-    });
-
-    it('chặn actor không được phân công mua vật tư nào trong đề xuất khi báo giá lại', async () => {
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({
-              status: PurchaseProposalStatus.REJECTED,
-              material: material({ buyerId: 'user-2' }),
-            }),
-          ],
-        }),
-      );
-
-      await expect(service.requote('300', 'user-1', ['PURCHASER'])).rejects.toThrow(
-        ForbiddenException,
-      );
-      expect(prisma.purchaseProposalQuote.deleteMany).not.toHaveBeenCalled();
     });
   });
 

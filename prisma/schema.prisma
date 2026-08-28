@@ -1663,10 +1663,13 @@ model PurchaseProposalItem {
   /// State machine cấp ITEM (2026-08-25, "duyệt riêng từng người mua hàng") - trước đó chỉ có
   /// PurchaseProposal.status cho CẢ record, không tách được khi 1 đề xuất gộp nhiều người mua
   /// (Material.buyerId khác nhau) - người này báo giá/được duyệt xong phải đợi người kia mới gửi/
-  /// duyệt được. Giờ mỗi dòng tự chuyển NEW -> QUOTING -> SUBMITTED -> PURCHASING -> PURCHASED,
-  /// hoặc SUBMITTED -> REJECTED -> QUOTING, ĐỘC LẬP theo từng dòng. PurchaseProposal.status vẫn
-  /// còn nhưng chỉ là ROLLUP suy ra từ các dòng này (xem PurchaseProposalsService.
-  /// recomputeProposalStatus()), không còn là nguồn sự thật cho gate nghiệp vụ.
+  /// duyệt được. PurchaseProposal.status vẫn còn nhưng chỉ là ROLLUP suy ra từ các dòng này (xem
+  /// PurchaseProposalsService.recomputeProposalStatus()), không còn là nguồn sự thật cho gate.
+  ///
+  /// 2026-08-27 ("Sếp duyệt ngoài hệ thống"): luồng rút còn NEW -> PURCHASING -> PURCHASED.
+  /// QUOTING/SUBMITTED/REJECTED giờ CHỈ CÒN TRONG DỮ LIỆU CŨ - không đường nào sinh mới nữa
+  /// (báo giá nhiều NCC + màn Sếp duyệt đã gỡ, xem bossApprove()). GIỮ NGUYÊN 3 giá trị enum:
+  /// production còn 36 dòng đang nằm ở QUOTING/SUBMITTED, xoá đi là hỏng dữ liệu thật.
   status          PurchaseProposalStatus @default(NEW)
   submittedAt     DateTime?
   approvedAt      DateTime?
@@ -1674,6 +1677,13 @@ model PurchaseProposalItem {
   rejectedAt      DateTime?
   rejectionReason String?
   purchasedAt     DateTime?
+
+  /// File Sếp đã KÝ TAY duyệt lô mua này (Cloudinary secure_url - ảnh chụp/PDF scan/Excel, xem
+  /// POST /uploads/document). Từ 2026-08-27 việc so sánh giá + duyệt diễn ra NGOÀI phần mềm trên
+  /// phiếu Excel in ra, nên đây là BẰNG CHỨNG DUY NHẤT trong hệ thống cho việc "đã được duyệt
+  /// mua" - Kho chỉ nhận hàng cho dòng đã có file này. Giá và NCC nằm trong file, cố ý KHÔNG
+  /// tách ra cột riêng (Sếp chốt). NULL = dòng duyệt theo luồng cũ (trước 2026-08-27).
+  approvalFileUrl String?
 
   proposal   PurchaseProposal        @relation(fields: [proposalId], references: [id])
   material   Material                @relation(fields: [materialId], references: [id])

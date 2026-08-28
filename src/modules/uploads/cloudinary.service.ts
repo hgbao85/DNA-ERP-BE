@@ -22,7 +22,16 @@ export class CloudinaryService {
     });
   }
 
-  uploadBuffer(buffer: Buffer, folder: string): Promise<string> {
+  /**
+   * `resourceType` mặc định 'image' - giữ nguyên hành vi cũ cho mọi lời gọi sẵn có. PHẢI truyền
+   * 'raw' cho PDF/Excel (POST /uploads/document): Cloudinary mặc định đẩy buffer qua pipeline ảnh,
+   * file không phải ảnh sẽ bị từ chối hoặc hỏng.
+   */
+  uploadBuffer(
+    buffer: Buffer,
+    folder: string,
+    resourceType: 'image' | 'raw' = 'image',
+  ): Promise<string> {
     if (!this.configService.get('cloudinary.cloudName', { infer: true })) {
       throw new InternalServerErrorException(
         'Chưa cấu hình CLOUDINARY_CLOUD_NAME/CLOUDINARY_API_KEY/CLOUDINARY_API_SECRET',
@@ -30,13 +39,16 @@ export class CloudinaryService {
     }
 
     return new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream({ folder }, (error, result) => {
-        if (error || !result) {
-          reject(new InternalServerErrorException(error?.message ?? 'Upload ảnh thất bại'));
-          return;
-        }
-        resolve(result.secure_url);
-      });
+      const stream = cloudinary.uploader.upload_stream(
+        { folder, resource_type: resourceType },
+        (error, result) => {
+          if (error || !result) {
+            reject(new InternalServerErrorException(error?.message ?? 'Upload file thất bại'));
+            return;
+          }
+          resolve(result.secure_url);
+        },
+      );
       stream.end(buffer);
     });
   }
@@ -45,6 +57,13 @@ export class CloudinaryService {
    * Xóa ảnh mồ côi (bị thay/gỡ khỏi 1 bản ghi, hoặc bản ghi chứa nó bị xóa) - best-effort,
    * KHÔNG throw: lỗi ở đây (Cloudinary down, URL không thuộc Cloudinary, ảnh đã bị xóa sẵn...)
    * không được phép chặn thao tác chính (update/xóa vật tư) đang gọi hàm này.
+   *
+   * CHỈ DÙNG ĐƯỢC CHO resource_type='image'. File 'raw' (PDF/Excel qua /uploads/document) sẽ
+   * KHÔNG xoá được và thất bại IM LẶNG vì 2 lý do: (1) regex trên cắt mất phần mở rộng, mà
+   * public_id của 'raw' lại BAO GỒM nó; (2) destroy() không truyền resource_type nên SDK mặc
+   * định 'image'. Cloudinary trả { result: 'not found' } chứ không throw nên catch bên dưới
+   * cũng không log gì. Chưa vá vì hiện không có đường xoá/thay file duyệt - ai cần xoá file
+   * 'raw' sau này phải sửa cả 2 điểm trên trước.
    */
   async deleteByUrl(url: string): Promise<void> {
     const publicId = PUBLIC_ID_FROM_URL.exec(url)?.[1];

@@ -13,21 +13,18 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { ApprovePurchaseProposalDto } from './dto/approve-purchase-proposal.dto';
-import { CreateQuoteDto } from './dto/create-quote.dto';
+import { BossApprovePurchaseProposalDto } from './dto/boss-approve-purchase-proposal.dto';
 import { ListPurchaseProposalsQueryDto } from './dto/list-purchase-proposals-query.dto';
 import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
-import { RejectPurchaseProposalDto } from './dto/reject-purchase-proposal.dto';
 import { PurchaseProposalsService } from './purchase-proposals.service';
 
 const VIEW = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.VIEW };
 const UPDATE = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.UPDATE };
-const APPROVE = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.APPROVE };
 // Riêng nhận hàng (receiveItem) - TÁCH khỏi UPDATE ở trên (2026-08-15, D.c4-warehouse-can-quote).
 // Trước đó WAREHOUSE_STAFF được PURCHASE_PROPOSAL:UPDATE chỉ để gọi route này, nhưng CÙNG action
-// đó cũng mở khoá acknowledge/quotes/submit/requote bên dưới - thủ kho gọi thẳng API là tự báo
-// giá + tự gửi Sếp duyệt được, dù UI không có nút. Đúng loại lỗ mà PURCHASER đã được vá (cố ý bỏ
-// APPROVE, xem comment ở role-permissions.constant.ts) nhưng để hở ở chiều ngược lại.
+// đó cũng mở khoá các route ghi khác - thủ kho gọi thẳng API là tự đẩy đề xuất đi tiếp được, dù
+// UI không có nút. Vẫn giữ tách sau 2026-08-27: giờ UPDATE mở khoá boss-approve, còn nguy hiểm
+// hơn trước (đẩy thẳng sang PURCHASING), thủ kho tuyệt đối không được chạm tới.
 const RECEIVE = { module: PERMISSION_MODULES.PURCHASE_RECEIPT, action: PermissionAction.UPDATE };
 
 /**
@@ -52,62 +49,19 @@ export class PurchaseProposalsController {
     return this.purchaseProposalsService.findOne(id);
   }
 
-  @Post(':id/acknowledge')
+  /**
+   * Mua hàng xác nhận "Sếp đã duyệt" kèm file phiếu đã ký (2026-08-27). Quyền UPDATE, KHÔNG phải
+   * APPROVE - xem giải thích ở PurchaseProposalsService.bossApprove().
+   */
+  @Post(':id/boss-approve')
   @RequirePermissions(UPDATE)
-  acknowledge(
+  bossApprove(
     @Param('id') id: string,
+    @Body() dto: BossApprovePurchaseProposalDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('roles') roles: string[],
   ) {
-    return this.purchaseProposalsService.acknowledge(id, userId, roles);
-  }
-
-  @Post(':id/items/:itemId/quotes')
-  @RequirePermissions(UPDATE)
-  addQuote(
-    @Param('id') id: string,
-    @Param('itemId') itemId: string,
-    @Body() dto: CreateQuoteDto,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('roles') roles: string[],
-  ) {
-    return this.purchaseProposalsService.addQuote(id, itemId, dto, userId, roles);
-  }
-
-  @Post(':id/submit')
-  @RequirePermissions(UPDATE)
-  submit(
-    @Param('id') id: string,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('roles') roles: string[],
-  ) {
-    return this.purchaseProposalsService.submit(id, userId, roles);
-  }
-
-  @Post(':id/approve')
-  @RequirePermissions(APPROVE)
-  approve(
-    @Param('id') id: string,
-    @Body() dto: ApprovePurchaseProposalDto,
-    @CurrentUser('id') userId: string,
-  ) {
-    return this.purchaseProposalsService.approve(id, userId, dto);
-  }
-
-  @Post(':id/reject')
-  @RequirePermissions(APPROVE)
-  reject(@Param('id') id: string, @Body() dto: RejectPurchaseProposalDto) {
-    return this.purchaseProposalsService.reject(id, dto);
-  }
-
-  @Post(':id/requote')
-  @RequirePermissions(UPDATE)
-  requote(
-    @Param('id') id: string,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('roles') roles: string[],
-  ) {
-    return this.purchaseProposalsService.requote(id, userId, roles);
+    return this.purchaseProposalsService.bossApprove(id, userId, roles, dto);
   }
 
   @Post(':id/items/:itemId/receive')

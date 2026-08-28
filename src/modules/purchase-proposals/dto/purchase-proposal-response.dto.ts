@@ -48,16 +48,21 @@ export class PurchaseProposalItemResponseDto {
   /// Cộng dồn số lượng thực nhận theo purchaseUnit - chỉ để đối chiếu/audit, xem
   /// PurchaseProposalItem.receivedQtyPurchaseUnit.
   @Expose() @ApiPropertyOptional({ nullable: true }) receivedQtyPurchaseUnit!: number | null;
-  /// State machine THẬT (2026-08-25, "duyệt riêng từng người mua hàng") - NEW -> QUOTING ->
-  /// SUBMITTED -> PURCHASING -> PURCHASED, hoặc SUBMITTED -> REJECTED -> QUOTING, ĐỘC LẬP theo
-  /// từng dòng. PurchaseProposalResponseDto.status (cấp đề xuất) chỉ còn là ROLLUP suy ra từ các
-  /// dòng này, KHÔNG dùng để quyết định 1 dòng cụ thể đang làm được thao tác gì.
+  /// State machine THẬT, ĐỘC LẬP theo từng dòng (2026-08-25, "duyệt riêng từng người mua hàng").
+  /// Từ 2026-08-27 rút còn NEW -> PURCHASING -> PURCHASED; QUOTING/SUBMITTED/REJECTED chỉ còn
+  /// trong dữ liệu cũ. PurchaseProposalResponseDto.status (cấp đề xuất) chỉ là ROLLUP suy ra từ
+  /// các dòng này, KHÔNG dùng để quyết định 1 dòng cụ thể đang làm được thao tác gì.
   @Expose() @ApiProperty({ enum: PurchaseProposalStatus }) status!: PurchaseProposalStatus;
   @Expose() @ApiPropertyOptional({ nullable: true }) submittedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) approvedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) rejectedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) rejectionReason!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) purchasedAt!: Date | null;
+  /// File phiếu Sếp đã ký tay duyệt lô mua này (2026-08-27) - FE hiện link "Xem file Sếp duyệt"
+  /// ở màn Mua hàng và màn Nhập kho. null = dòng duyệt theo luồng cũ (qua màn So sánh giá).
+  @Expose() @ApiPropertyOptional({ nullable: true }) approvalFileUrl!: string | null;
+  /// Báo giá NCC của luồng CŨ - chỉ còn để TRA CỨU LỊCH SỬ (2026-08-27 gỡ hết đường ghi). Đơn
+  /// duyệt theo luồng mới luôn rỗng: giá và NCC nằm trong file `approvalFileUrl`.
   @Expose()
   @ApiProperty({ type: [PurchaseProposalQuoteResponseDto] })
   @Type(() => PurchaseProposalQuoteResponseDto)

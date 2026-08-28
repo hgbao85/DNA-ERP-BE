@@ -198,18 +198,42 @@ Nếu code mới lên sống trước khi backfill xong:
   nhưng không hỏng số liệu.
 - `coverage` còn rỗng → cổng chặn phủ chồng chưa có gì để soi. Không hỏng gì, chỉ mất lớp bảo vệ.
 
-Ca đầu nguy hiểm nhất vì nó sai lặng lẽ. **Đề xuất chưa làm:** đổi `l.buyBars ?? 0` thành **báo lỗi
-rõ ràng** khi gặp NULL — chặn `approve()` với thông báo "chưa chạy backfill" thay vì lặng lẽ tính ra
-số sai. Đánh đổi: trong cửa sổ chưa backfill thì không duyệt được phương án cắt cho PI đó, nhưng đó
-là *dừng lại có lý do*, tốt hơn nhiều so với âm thầm mua thiếu bằng tiền thật.
+Ca đầu nguy hiểm nhất vì nó sai lặng lẽ. **Đã sửa:** `computeNetRequirementByMaterial()` giờ chặn
+cứng — nếu còn dòng `buyBars IS NULL` trong tập đang tính, ném `ConflictException` nêu rõ vật tư nào
+thiếu và lệnh phải chạy `npm run backfill:buy-bars`, thay vì lặng lẽ cộng 0. Đánh đổi: trong cửa sổ
+chưa backfill thì không duyệt được phương án cắt cho PI liên quan, nhưng đó là *dừng lại có lý do*,
+tốt hơn nhiều so với âm thầm mua thiếu bằng tiền thật. Sau khi backfill chạy xong, nhánh này không
+bao giờ chạm tới nữa vì `approve()` luôn ghi `buyBars` cho dòng mới.
+
+## Script đối chiếu trước triển khai (chỉ đọc)
+
+`npm run audit:merge-invariants` (`prisma/audit-merge-invariants.ts`) — soi production **trước** khi
+chạy backfill, trả lời "6 lỗi đã nổ chưa" và "3 script backfill có chạy trót lọt không". Không ghi
+một byte nào. Kiểm 6 điều kiện (L2, L7, L6, L3, L5, và "BF1" — dòng phương án cắt có nhu cầu thật mà
+`buyQty` gốc đã bị cơ chế gộp ghi đè, khiến `backfill:buy-bars` không tách ngược được), in số quy mô
+và việc backfill sẽ làm, thoát mã 1 nếu có mục CHẶN. Đã tự kiểm bằng cách chèn 1 phương án APPROVED
+giả phủ chồng lên PO có sẵn — script báo đúng CHẶN kèm mã lệnh SX và 2 id phương án xung đột — rồi
+xoá dữ liệu test, chạy lại xác nhận về lại "Sạch".
+
+**Sửa lại BF1 sau khi chạy thử trên production (xem mục Đối chiếu production bên dưới):** bản đầu
+chặn theo tín hiệu thô "có phiếu mua nào `productionInvoiceId != null` không" — sai, vì cột đó được
+gán ngay từ phiếu **đầu tiên** của 1 PI (khoá để lần sau tìm "đề xuất còn mở" ghi tiếp vào), không
+phải bằng chứng đã có 2 phương án cùng ghi vào 1 phiếu. Production có 18 phiếu như vậy nhưng báo
+CHẶN giả — kiểm tay xác nhận cả 30/30 dòng cần lấp `buyBars` đều tách ngược `buyQty` đúng. Sửa cả
+`audit-merge-invariants.ts` lẫn `backfill-buy-bars.ts` dùng chung điều kiện nguy hiểm THẬT: dòng có
+nhu cầu thật (`totalBars > 0`) mà không tìm được `PurchaseProposalItem` khớp
+`(materialId, cuttingProposalId)` — đúng bằng chứng `cuttingProposalId` trên phiếu đã bị ghi đè sang
+phương án khác. `backfill-buy-bars.ts` giờ dò trước (dry-run, không ghi) toàn bộ dòng cần lấp bằng
+đúng điều kiện này rồi mới quyết định ghi hay dừng, thay vì chặn cả cụm theo tín hiệu thô.
 
 ---
 
 ## Xác minh
 
-**BE:** `npx tsc --noEmit` sạch · `npx eslint` sạch trên toàn bộ file đã đụng · **752/752 test pass**
+**BE:** `npx tsc --noEmit` sạch · `npx eslint` sạch trên toàn bộ file đã đụng · **753/753 test pass**
 (46 suite, chạy với cache sạch) · 80 migration áp dụng đủ, `prisma migrate status` up to date ·
-server thật khởi động 0 lỗi, auth guard trả 401 đúng.
+server thật khởi động 0 lỗi, auth guard trả 401 đúng · `audit:merge-invariants` chạy sạch trên máy
+dev sau backfill.
 
 **FE:** `npx tsc --noEmit` sạch · `npx eslint` sạch (chỉ còn 1 warning pre-existing không liên quan) ·
 `npx vitest run` **47/47 pass** · `npm run build` (Next.js) thành công.
@@ -227,10 +251,42 @@ server thật khởi động 0 lỗi, auth guard trả 401 đúng.
 đã chết. `buyBars` 0 dòng còn NULL, lệch 0. `stock_reservations` mọi dòng ACTIVE đều có
 `productionInvoiceId`.
 
+## Đối chiếu production (2026-08-27, chạy bằng `audit:merge-invariants`)
+
+Migration **đã được áp lên production từ trước** (cột/bảng mới đã tồn tại) nhưng backfill và code
+mới **chưa** — xác nhận `cutting_proposal_lines.buyBars` toàn NULL và `cutting_plan_coverage` rỗng
+(2 cột/bảng này chỉ được code mới ghi, nên còn trống = code cũ vẫn đang chạy, chưa ai bị chặn bởi
+cổng L1 mới).
+
+| Mục | Kết quả | Ghi chú |
+|---|---|---|
+| L2, L7, L6, L5, BF1 | **OK** — 0 dòng | Chưa lỗi nào nổ |
+| L3 (thiếu `stockLengthMm`) | LƯU Ý — 30 dòng | Dữ liệu tính TRƯỚC 2026-08-26 (trước khi có cột này), toàn bộ đều cây 6000mm chuẩn (`dongCayDatRieng: 0`) nên **chưa gây đặt sai cỡ cây thực tế** — nhưng nên chạy `backfill:length-source` (script có sẵn từ trước, chưa từng chạy trên production) cho sạch trước khi PI hai-SKU-dùng-cây-riêng đầu tiên xuất hiện |
+| Việc 3 backfill sẽ làm | `buyBarsCanLap: 30`, `giuChoCanLap: 1`, `dongPhuHienCo: 0` | Quy mô nhỏ, khớp với 9 phương án APPROVED hiện có |
+
+Kết luận: **an toàn để chạy backfill + deploy code mới**, không có số liệu lệch cần xử lý tay trước.
+
+## Đã chạy backfill trên production (2026-08-27)
+
+`db:backup` trong `package.json` trỏ tới `scripts/backup-db.sh` **chưa từng được tạo** (không có
+trong git history dù được khai báo) - phát hiện lúc chuẩn bị chạy. Bỏ qua bước tự tạo backup vì
+Prisma Postgres (hạ tầng DB production) đã có backup/point-in-time-restore tự động (xác nhận với
+Sếp trước khi chạy).
+
+| Bước | Kết quả trên production |
+|---|---|
+| `audit:merge-invariants` (đối chiếu lần cuối, ngay trước khi ghi) | Sạch - giống hệt lần đối chiếu trước, không có giao dịch mới xen giữa |
+| `backfill:buy-bars` | 30/30 dòng lấp thành công, 0 dòng đặt 0 |
+| `backfill:cutting-plan-coverage` | 9 phương án APPROVED → 12 dòng phủ, 0 xung đột |
+| `backfill:stock-reservation-pi` | 1/1 dòng lấp thành công |
+| `backfill:length-source` (tuỳ chọn, dữ liệu lịch sử thiếu cột riêng) | `lengthSource`: 25/32 lấp (7 rawResponse cũ không có field, bỏ qua an toàn) · `stockLengthMm`: 30/100 lấp (đúng bằng số L3 đã soi, 70 dòng còn lại không tra được phương án cắt gốc - không phải sắt hoặc dữ liệu quá cũ, bỏ qua an toàn) |
+| `audit:merge-invariants` (xác nhận sau backfill) | **Sạch hoàn toàn** - `buyBarsCanLap: 0`, `giuChoCanLap: 0`, L3 về 0 dòng |
+
+Toàn bộ backfill chỉ ghi vào cột/bảng mới sinh ra trong đợt sửa này, không đụng số lượng mua/tồn
+kho/trạng thái/báo giá đã có. Production sẵn sàng cho code mới - còn thiếu đúng 1 việc: **deploy
+code BE (Render) + FE**, việc này người dùng tự làm (push để Render auto-deploy).
+
 ## Việc còn lại
 
-- Chạy 3 script backfill **trên máy chủ thật** — cả ba tự kiểm điều kiện an toàn và dừng thay vì đoán
-  nếu dữ liệu production khác giả định của máy dev.
-- Chạy lại bộ truy vấn đối chiếu (chỉ đọc) trên production để xác nhận 6 lỗi cũng chưa nổ ở đó — số
-  liệu trong tài liệu này lấy từ máy dev, có cả dữ liệu chạy thử.
-- Cân nhắc đổi `buyBars ?? 0` thành báo lỗi rõ ràng (xem mục thứ tự triển khai ở trên).
+- **Deploy code BE + FE lên production** (push lên nhánh Render đã nối để auto-deploy; FE theo quy
+  trình deploy hiện có). Đây là bước DUY NHẤT còn lại trong 5 bước triển khai.

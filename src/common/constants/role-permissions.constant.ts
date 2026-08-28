@@ -268,10 +268,12 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // đầu - MaterialsService.create()) - quyền CREATE này trước đây cấp cho QLSX, đã chuyển hẳn
   // sang thủ kho vì thủ kho mới là người biết rõ tồn vật lý thực tế của kho mình.
   // PURCHASE_PROPOSAL: chỉ VIEW để NhapKhoPage.tsx xem đề xuất mua hàng đang chờ - CỐ Ý không có
-  // UPDATE (2026-08-15, D.c4-warehouse-can-quote): trước đó UPDATE ở module này mở khoá luôn
-  // acknowledge/quotes/submit/requote, không chỉ receive - thủ kho gọi thẳng API là tự báo giá +
-  // tự gửi Sếp duyệt được, dù UI không có nút cho việc đó. Xác nhận nhận hàng nay tách riêng ở
-  // PURCHASE_RECEIPT bên dưới - đúng phạm vi việc của thủ kho, không hơn.
+  // UPDATE (2026-08-15, D.c4-warehouse-can-quote): trước đó UPDATE ở module này mở khoá luôn các
+  // route ghi khác, không chỉ receive - thủ kho gọi thẳng API là tự đẩy đề xuất đi tiếp được, dù
+  // UI không có nút cho việc đó. Xác nhận nhận hàng nay tách riêng ở PURCHASE_RECEIPT bên dưới -
+  // đúng phạm vi việc của thủ kho, không hơn. Từ 2026-08-27 việc tách này còn QUAN TRỌNG HƠN:
+  // UPDATE giờ mở khoá boss-approve (đẩy thẳng sang PURCHASING kèm file Sếp ký) - thủ kho mà có
+  // UPDATE là tự duyệt mua cho chính lô hàng mình sắp nhận.
   // PURCHASE_RECEIPT: UPDATE - gọi POST .../items/:itemId/receive xác nhận đã nhận hàng. Chỉ có
   // 1 action, không có VIEW riêng: danh sách đọc qua PURCHASE_PROPOSAL:VIEW ở trên.
   // SKU:VIEW để XuatKhoPage.tsx liệt kê SKU lúc xuất kho.
@@ -540,21 +542,24 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     },
   ],
   // --- Phase 8 (Mua hàng) ---
-  // Mua hàng: báo giá/gửi Sếp duyệt/theo dõi nhận hàng trên đề xuất mua + quản lý danh mục NCC
-  // của riêng mình (thêm NCC mới ngay lúc báo giá).
-  // PURCHASE_PROPOSAL: CỐ Ý không có APPROVE (khác SUPPLIER/'ALL' ở dưới) - duyệt/từ chối đề
-  // xuất mua là việc của Sếp, cùng nguyên tắc "duyệt đề xuất mua là việc của Sếp, không phải
-  // thủ kho" đã áp cho WAREHOUSE_STAFF (xem QC_REVIEW ở trên). Trước đây cấp 'ALL' (bao gồm cả
-  // APPROVE) - chỉ bị chặn ở tầng FE (không có nút), BE vẫn cho Mua hàng tự duyệt đơn của chính
-  // mình nếu gọi thẳng API - lỗ hổng đã xác nhận, sửa 2026-08-11 (D.h4-purchaser-approve).
+  // Mua hàng: xác nhận "Sếp đã duyệt" kèm file phiếu ký tay + theo dõi nhận hàng trên đề xuất mua.
+  //
+  // PURCHASE_PROPOSAL:UPDATE giờ mở khoá POST :id/boss-approve (2026-08-27) - tức chính người mua
+  // là người bấm duyệt trong phần mềm. ĐÂY LÀ CHỦ ĐÍCH, không phải lỗ hổng: Sếp đã chuyển hẳn việc
+  // so sánh giá + phê duyệt ra ngoài phần mềm (phiếu Excel in ra, ký tay), phần mềm chỉ lưu file
+  // đã ký làm bằng chứng. Chốt chặn thật là chữ ký trên giấy.
+  //
+  // VẪN CỐ Ý không có APPROVE: action đó nay không còn route nào dùng (approve/reject của Sếp đã
+  // gỡ cùng màn So sánh giá), nhưng giữ nguyên việc KHÔNG cấp để nếu sau này có route APPROVE mới
+  // thì PURCHASER không tự động thừa hưởng. Lịch sử: trước đây cấp 'ALL' (gồm APPROVE) - chỉ chặn
+  // ở tầng FE, BE vẫn cho Mua hàng tự duyệt nếu gọi thẳng API (D.h4-purchaser-approve, sửa
+  // 2026-08-11).
+  //
   // SUPPLIER: ALL - vừa quản lý entity Supplier (suppliers.controller.ts) vừa quản lý các route
-  // lồng POST/GET/PATCH/DELETE .../materials/:id/suppliers (gắn NCC + giá vào vật tư, xem
-  // materials.controller.ts) - cả 2 nhóm route đều gắn permission module SUPPLIER.
-  // MATERIAL: chỉ VIEW (KHÔNG UPDATE) - VatTuNCCPage.tsx chỉ cần liệt kê vật tư để chọn, không
-  // sửa vật tư gốc (tên/mã/đơn vị). Trước đây từng cấp thêm UPDATE vì route gắn NCC bị gắn nhầm
-  // module MATERIAL - đã fix (xem review rủi ro #2, materials.controller.ts) nên không cần nữa;
-  // giữ UPDATE sẽ vô tình cho phép PURCHASER gọi PATCH /materials/:id (sửa vật tư gốc) dù UI
-  // không có chỗ nào dùng tới.
+  // lồng POST/GET/PATCH/DELETE .../materials/:id/suppliers. Giữ nguyên sau 2026-08-27 dù màn
+  // "Vật tư – NCC" của Mua hàng đã gỡ: Admin › Nhà cung cấp vẫn dùng, và endpoint vẫn sống.
+  // MATERIAL: chỉ VIEW (KHÔNG UPDATE) - giữ UPDATE sẽ vô tình cho phép PURCHASER gọi
+  // PATCH /materials/:id (sửa vật tư gốc) dù UI không có chỗ nào dùng tới.
   [BUSINESS_ROLES.PURCHASER]: [
     {
       module: PERMISSION_MODULES.PURCHASE_PROPOSAL,

@@ -72,7 +72,28 @@ describe('CloudinaryService', () => {
 
       expect(url).toBe('https://res.cloudinary.com/demo/image/upload/v1/dna-erp/abc.jpg');
       expect(mockedCloudinary.uploader.upload_stream).toHaveBeenCalledWith(
-        { folder: 'dna-erp' },
+        { folder: 'dna-erp', resource_type: 'image' },
+        expect.any(Function),
+      );
+    });
+
+    // PDF/Excel (POST /uploads/document, 2026-08-27) PHẢI đi resource_type='raw' - mặc định của
+    // Cloudinary là 'image' và pipeline ảnh sẽ từ chối/làm hỏng file không phải ảnh.
+    it('passes resource_type=raw through to the SDK for non-image documents', async () => {
+      mockedCloudinary.uploader.upload_stream.mockImplementation(
+        (_opts: unknown, callback: (error: unknown, result: unknown) => void) => {
+          callback(null, {
+            secure_url: 'https://res.cloudinary.com/demo/raw/upload/v1/dna-erp/approvals/ky.pdf',
+          });
+          return { end: jest.fn() };
+        },
+      );
+
+      const url = await service.uploadBuffer(Buffer.from('x'), 'dna-erp/approvals', 'raw');
+
+      expect(url).toBe('https://res.cloudinary.com/demo/raw/upload/v1/dna-erp/approvals/ky.pdf');
+      expect(mockedCloudinary.uploader.upload_stream).toHaveBeenCalledWith(
+        { folder: 'dna-erp/approvals', resource_type: 'raw' },
         expect.any(Function),
       );
     });
