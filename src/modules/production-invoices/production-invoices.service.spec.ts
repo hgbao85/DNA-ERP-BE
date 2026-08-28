@@ -932,28 +932,55 @@ describe('ProductionInvoicesService', () => {
   });
 
   describe('rejectBatchByQlsx', () => {
-    it('từ chối mọi SKU đang chờ QLSX của cả PI trong 1 lần', async () => {
+    // 2026-08-28: đổi hành vi để GIỐNG HỆT rejectBatch của Sếp - trả mọi SKU về "chưa gom"
+    // (productionInvoiceId=null) rồi xoá cả PI, thay vì chỉ đổi trạng thái và giữ SKU lại trong PI.
+    it('trả mọi SKU về "chưa gom" (productionInvoiceId=null) rồi xoá cả PI', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(
         pi({
           items: [
             piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }),
             piItem({ id: 21n, prodApprovalStatus: 'WAITING_QLSX' }),
-            piItem({ id: 22n, prodApprovalStatus: null }), // chưa tới lượt -> BỎ QUA
           ],
         }),
       );
 
-      await service.rejectBatchByQlsx('7', 'Không đủ kho', 'user-qlsx');
+      const result = await service.rejectBatchByQlsx('7', 'Không đủ kho', 'user-qlsx');
 
-      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [20n, 21n] } },
-        data: expect.objectContaining({
-          prodApprovalStatus: 'REJECTED',
-          rejectReason: 'Không đủ kho',
-          decidedById: 'user-qlsx',
-        }) as unknown,
+      const updates = prisma.productionInvoiceItem.update.mock.calls.map(
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
+        (c) => (c[0] as { data: Record<string, unknown> }).data,
+      );
+      expect(updates[0]).toMatchObject({
+        productionInvoiceId: null,
+        prodApprovalStatus: 'REJECTED',
+        rejectReason: 'Không đủ kho',
+        decidedById: 'user-qlsx',
       });
+      expect(updates[1]).toMatchObject({ productionInvoiceId: null, rejectReason: 'Không đủ kho' });
+      expect(prisma.productionInvoice.delete).toHaveBeenCalledWith({ where: { id: 7n } });
+      expect(result.movedItemIds).toEqual(['20', '21']);
       expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+    });
+
+    // Không "xoá cả PI" khi có SKU chưa tới lượt QLSX xử lý (VD còn REJECTED từ lượt trước, KHSX
+    // chưa gửi lại) - xoá PI lúc đó sẽ kéo nhầm SKU ở trạng thái khác ra theo không kiểm soát được
+    // (chốt nghiệp vụ 2026-08-28, khác Sếp: rejectBatch của Sếp không gặp ca này vì sendBatchToBoss
+    // luôn gửi cả cụm cùng lúc).
+    it('chặn nếu có SKU chưa tới lượt QLSX xử lý (trạng thái khác WAITING_QLSX)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }),
+            piItem({ id: 22n, prodApprovalStatus: 'REJECTED' }),
+          ],
+        }),
+      );
+
+      await expect(service.rejectBatchByQlsx('7', 'lý do', 'user-qlsx')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+      expect(prisma.productionInvoice.delete).not.toHaveBeenCalled();
     });
 
     it('ném ConflictException khi không SKU nào đang chờ QLSX', async () => {
@@ -964,16 +991,19 @@ describe('ProductionInvoicesService', () => {
       await expect(service.rejectBatchByQlsx('7', 'lý do', 'user-qlsx')).rejects.toThrow(
         ConflictException,
       );
-      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
     });
   });
 
   describe('rejectItemByQlsx', () => {
-    it('rejects an item still WAITING_QLSX, sending it back to KHSX', async () => {
+    // 2026-08-28: đổi hành vi để GIỐNG HỆT rejectItem của Sếp - kéo SKU RA KHỎI PI
+    // (productionInvoiceId=null), không còn để SKU ở lại PI cũ chờ gửi lại.
+    it('kéo SKU ra khỏi PI (productionInvoiceId=null), gửi về "chưa gom"', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(
         piItem({ prodApprovalStatus: 'WAITING_QLSX' }),
       );
+      prisma.productionInvoiceItem.count.mockResolvedValue(1); // còn SKU khác -> không xoá PI
       const result = await service.rejectItemByQlsx('7', '20', 'Không đủ kho', 'user-qlsx');
 
       // updateMany+count guard (Medium fix) thay cho update() đơn - xem sendItemToQlsx.
@@ -981,6 +1011,7 @@ describe('ProductionInvoicesService', () => {
       const updateCall = prisma.productionInvoiceItem.updateMany.mock.calls[0][0] as {
         where: { id: bigint; prodApprovalStatus: string };
         data: {
+          productionInvoiceId: null;
           prodApprovalStatus: string;
           rejectReason: string;
           decidedAt: Date;
@@ -988,11 +1019,27 @@ describe('ProductionInvoicesService', () => {
         };
       };
       expect(updateCall.where).toEqual({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' });
+      expect(updateCall.data.productionInvoiceId).toBeNull();
       expect(updateCall.data.prodApprovalStatus).toBe('REJECTED');
       expect(updateCall.data.rejectReason).toBe('Không đủ kho');
       expect(updateCall.data.decidedById).toBe('user-qlsx');
       expect(updateCall.data.decidedAt).toBeInstanceOf(Date);
       expect(result.rejectReason).toBe('Không đủ kho');
+      expect(prisma.productionInvoice.delete).not.toHaveBeenCalled();
+    });
+
+    // PI cắt riêng luôn chỉ chứa đúng 1 SKU (claimSolo) - kéo SKU đó ra thì PI rỗng, xoá theo
+    // (mirror rejectItem của Sếp), không để lại PI mồ côi.
+    it('xoá PI khi kéo SKU cuối cùng ra khỏi PI', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+      prisma.productionInvoiceItem.count.mockResolvedValue(0);
+
+      await service.rejectItemByQlsx('7', '20', 'Không đủ kho', 'user-qlsx');
+
+      expect(prisma.productionInvoice.delete).toHaveBeenCalledWith({ where: { id: 7n } });
     });
 
     it('rejects rejecting an item not in WAITING_QLSX', async () => {

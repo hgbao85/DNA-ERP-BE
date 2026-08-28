@@ -754,9 +754,14 @@ export class ProductionInvoicesService {
   }
 
   /**
-   * QLSX từ chối ngay ở bước chọn kho (chưa kịp gửi Sếp) - SKU quay về cho KHSX sửa thời hạn và
-   * gửi lại từ đầu, giống hệt đường Sếp từ chối (rejectItem) - cùng field `prodApprovalStatus:
-   * REJECTED`/`rejectReason`/`decidedAt`/`decidedById`, KHSX không cần phân biệt ai từ chối.
+   * QLSX từ chối 1 SKU ngay ở bước chọn kho (chưa kịp gửi Sếp) - giờ GIỐNG HỆT Sếp từ chối
+   * (rejectItem, 2026-08-28): SKU bị kéo RA KHỎI PI (`productionInvoiceId=null`), quay về đúng
+   * trạng thái "chưa gom" để hiện lại ở "Tối ưu cắt sắt" - KHSX gộp/cắt riêng lại từ đầu, không
+   * còn gửi lại được ngay trong PI cũ. PI cắt riêng (isMerged=false) luôn chỉ chứa đúng 1 SKU
+   * (xem claimSolo()) nên hết SKU là xoá theo, không để lại PI rỗng mồ côi.
+   *
+   * Route lẻ, FE không còn gọi (xem rejectBatchByQlsx - route thật đang dùng), giữ lại cho tương
+   * thích và để gọi thẳng API vẫn nhất quán với hành vi mới.
    */
   async rejectItemByQlsx(
     piId: string,
@@ -769,63 +774,91 @@ export class ProductionInvoicesService {
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_QLSX);
 
     const data = {
+      productionInvoiceId: null,
       prodApprovalStatus: ProdApprovalStatus.REJECTED,
       rejectReason: reason,
       decidedAt: new Date(),
       decidedById: actorUserId,
     };
-    const { count } = await this.prisma.productionInvoiceItem.updateMany({
-      where: { id: item.id, prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX },
-      data,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.productionInvoiceItem.updateMany({
+        where: { id: item.id, prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX },
+        data,
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc QLSX từ chối - không ghi đè`,
+        );
+      }
+      const remaining = await tx.productionInvoiceItem.count({
+        where: { productionInvoiceId: pi.id },
+      });
+      if (remaining === 0) {
+        await tx.productionInvoice.delete({ where: { id: pi.id } });
+      }
+      return { ...item, ...data };
     });
-    if (count === 0) {
-      throw new ConflictException(
-        `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc QLSX từ chối - không ghi đè`,
-      );
-    }
-    const updated = { ...item, ...data };
     await this.auditItemApprovalTransition(item, updated);
     return this.toItemResponseDto(updated);
   }
 
   /**
    * QLSX từ chối CẢ PHIẾU (mọi SKU đang chờ mình xử lý) trong 1 lần - "duyệt/từ chối theo PI,
-   * không theo từng SKU riêng" (2026-08-24, cùng lý do sendBatchToBoss() ở trên). Route lẻ
-   * :itemId/reject (rejectItemByQlsx) vẫn giữ ở BE cho tương thích, FE không còn gọi tới nữa.
+   * không theo từng SKU riêng" (2026-08-24, cùng lý do sendBatchToBoss() ở trên).
+   *
+   * 2026-08-28: đổi hành vi cho GIỐNG HỆT Sếp từ chối cả cụm gộp (rejectBatch bên dưới) - trước
+   * đây chỉ đổi trạng thái, SKU vẫn ở lại PI để KHSX gửi lại ngay; giờ PI bị XOÁ HẲN, mọi SKU trả
+   * về "chưa gom" (`productionInvoiceId=null`) để hiện lại ở "Tối ưu cắt sắt" - KHSX gộp/cắt riêng
+   * lại tổ hợp khác, không còn đường "sửa rồi gửi lại từ chính PI cũ". Áp dụng cho CẢ PI thường lẫn
+   * PI gộp (không gọi `assertMergedPi` - khác `rejectBatch` của Sếp chỉ dành riêng cho PI gộp, vì
+   * đây là bước QLSX chung cho cả 2 loại, xem sendBatchToQlsx()).
+   *
+   * Đòi MỌI SKU của PI đang WAITING_QLSX (không chỉ lọc ra rồi bỏ qua phần còn lại) - PI xoá cả
+   * cụm nên không thể chỉ xoá "một phần" PI; còn SKU nào chưa tới lượt QLSX xử lý (VD vẫn REJECTED
+   * từ 1 lượt từ chối trước, KHSX chưa gửi lại) thì chặn, tránh xoá PI mà kéo nhầm SKU ở trạng thái
+   * khác ra theo mà không ai kiểm soát được.
    */
   async rejectBatchByQlsx(
     piId: string,
     reason: string,
     actorUserId: string,
-  ): Promise<ProductionInvoiceResponseDto> {
+  ): Promise<{ movedItemIds: string[] }> {
     const pi = await this.findOneOrThrow(piId);
-    const targets = pi.items.filter(
-      (it) => it.prodApprovalStatus === ProdApprovalStatus.WAITING_QLSX,
+    const notWaiting = pi.items.filter(
+      (it) => it.prodApprovalStatus !== ProdApprovalStatus.WAITING_QLSX,
     );
-    if (targets.length === 0) {
+    if (notWaiting.length > 0) {
+      throw new ConflictException(
+        `${pi.code} có SKU không ở trạng thái chờ QLSX (${notWaiting.map((i) => i.id).join(', ')}) - không xoá cả phiếu được`,
+      );
+    }
+    if (pi.items.length === 0) {
       throw new ConflictException(`${pi.code} không còn SKU nào đang chờ QLSX xử lý`);
     }
 
     const decidedAt = new Date();
-    await this.prisma.productionInvoiceItem.updateMany({
-      where: { id: { in: targets.map((it) => it.id) } },
-      data: {
-        prodApprovalStatus: ProdApprovalStatus.REJECTED,
-        rejectReason: reason,
-        decidedAt,
-        decidedById: actorUserId,
-      },
+    const transitions: { before: PIItemWithRefs; after: PIItemWithRefs }[] = [];
+    await this.prisma.$transaction(async (tx) => {
+      for (const item of pi.items) {
+        const updated = await tx.productionInvoiceItem.update({
+          where: { id: item.id },
+          data: {
+            productionInvoiceId: null,
+            prodApprovalStatus: ProdApprovalStatus.REJECTED,
+            rejectReason: reason,
+            decidedAt,
+            decidedById: actorUserId,
+          },
+        });
+        transitions.push({ before: item, after: { ...item, ...updated } });
+      }
+      await tx.productionInvoice.delete({ where: { id: pi.id } });
     });
-    for (const item of targets) {
-      await this.auditItemApprovalTransition(item, {
-        ...item,
-        prodApprovalStatus: ProdApprovalStatus.REJECTED,
-        rejectReason: reason,
-        decidedAt,
-        decidedById: actorUserId,
-      });
+    for (const t of transitions) {
+      await this.auditItemApprovalTransition(t.before, t.after);
     }
-    return this.findOne(piId);
+
+    return { movedItemIds: pi.items.map((i) => i.id.toString()) };
   }
 
   /**
