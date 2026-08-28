@@ -66,7 +66,21 @@ export class WarehouseTransfersService {
   async create(
     dto: CreateWarehouseTransferDto,
     warehouseScope: string | null,
+    userId: string,
+    idempotencyKey?: string,
   ): Promise<WarehouseTransferResponseDto> {
+    // Vấn đề #11 audit 26/08 (phần còn thiếu) - trước đây create() không có gì để dedupe, khác
+    // material-issues/packaging-issues/steel-issues đã có. Cùng idiom resolve-or-return.
+    if (idempotencyKey) {
+      const existing = await this.prisma.warehouseTransfer.findUnique({
+        where: { idempotencyKey },
+        include: TRANSFER_INCLUDE,
+      });
+      if (existing) {
+        return this.toResponseDto(existing);
+      }
+    }
+
     const fromWarehouseId = parseBigIntId(dto.fromWarehouseId);
     const toWarehouseId = parseBigIntId(dto.toWarehouseId);
 
@@ -155,6 +169,8 @@ export class WarehouseTransfersService {
           toWarehouseId,
           planFormId,
           note: dto.note,
+          createdById: userId,
+          idempotencyKey,
           items: { create: clampedItems },
         },
         include: TRANSFER_INCLUDE,
@@ -186,7 +202,20 @@ export class WarehouseTransfersService {
   async createPieceTransfer(
     dto: CreatePieceWarehouseTransferDto,
     warehouseScope: string | null,
+    userId: string,
+    idempotencyKey?: string,
   ): Promise<WarehouseTransferResponseDto> {
+    // Vấn đề #11 audit 26/08 (phần còn thiếu) - cùng lý do create().
+    if (idempotencyKey) {
+      const existing = await this.prisma.warehouseTransfer.findUnique({
+        where: { idempotencyKey },
+        include: TRANSFER_INCLUDE,
+      });
+      if (existing) {
+        return this.toResponseDto(existing);
+      }
+    }
+
     const fromWarehouseId = parseBigIntId(dto.fromWarehouseId);
     const toWarehouseId = parseBigIntId(dto.toWarehouseId);
 
@@ -251,6 +280,8 @@ export class WarehouseTransfersService {
           toWarehouseId,
           planFormId: dto.planFormId ? parseBigIntId(dto.planFormId) : undefined,
           note: dto.note,
+          createdById: userId,
+          idempotencyKey,
           pieceItems: { create: rows },
         },
         include: TRANSFER_INCLUDE,
@@ -443,7 +474,7 @@ export class WarehouseTransfersService {
     const confirmed = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.warehouseTransfer.updateMany({
         where: { id: transfer.id, status: TransferStatus.PENDING },
-        data: { status: TransferStatus.CONFIRMED, confirmedAt: new Date() },
+        data: { status: TransferStatus.CONFIRMED, confirmedAt: new Date(), confirmedById: userId },
       });
       if (count === 0) {
         throw new ConflictException(
@@ -504,6 +535,7 @@ export class WarehouseTransfersService {
     id: string,
     rejectionReason: string,
     warehouseScope: string | null,
+    userId: string,
   ): Promise<WarehouseTransferResponseDto> {
     const transfer = await this.findOneOrThrow(id);
     if (transfer.status !== TransferStatus.PENDING) {
@@ -522,7 +554,12 @@ export class WarehouseTransfersService {
     const rejected = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.warehouseTransfer.updateMany({
         where: { id: transfer.id, status: TransferStatus.PENDING },
-        data: { status: TransferStatus.REJECTED, rejectionReason, rejectedAt: new Date() },
+        data: {
+          status: TransferStatus.REJECTED,
+          rejectionReason,
+          rejectedAt: new Date(),
+          rejectedById: userId,
+        },
       });
       if (count === 0) {
         throw new ConflictException(
@@ -623,6 +660,9 @@ export class WarehouseTransfersService {
       createdAt: row.createdAt,
       confirmedAt: row.confirmedAt,
       rejectedAt: row.rejectedAt,
+      createdById: row.createdById,
+      confirmedById: row.confirmedById,
+      rejectedById: row.rejectedById,
     });
   }
 

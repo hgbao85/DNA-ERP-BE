@@ -71,8 +71,13 @@ export class StockLedgerService {
    * cùng đọc thấy một số dư và cùng tiêu một lô hàng (tồn âm, cả hai đều báo "không cần mua").
    *
    * Bỏ trống `tx` cho caller chỉ ghi một bút toán độc lập, không có quyết định nào phía trước dựa
-   * trên số dư (nhập tồn đầu kỳ, xuất vật tư...), và cho WarehouseTransfersService.confirm() - chỗ
-   * đó CỐ Ý để ngoài transaction để gọi lại được giữa chừng, xem comment tại đó.
+   * trên số dư (nhập tồn đầu kỳ, xuất vật tư...).
+   *
+   * (M5 audit 26/08/2026 - sửa comment lỗi thời) WarehouseTransfersService.confirm() KHÔNG nằm
+   * trong ngoại lệ trên - nó gọi postEntry() TRONG transaction của chính nó (truyền `tx`), cùng
+   * nhóm với CuttingProposalsService.approve() ở trên. An toàn khi gọi lại giữa chừng đến từ
+   * idempotencyKey theo (transferId, itemId) - resolve-or-return, không phải từ việc đứng ngoài
+   * transaction (xem comment tại confirm()).
    */
   async postEntry(input: PostStockEntryInput, tx?: PrismaTx): Promise<StockLedgerResponseDto> {
     const db = tx ?? this.prisma;

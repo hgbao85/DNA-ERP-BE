@@ -21,6 +21,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreateMaterialIssueDto } from './dto/create-material-issue.dto';
 import { ListMaterialIssuesQueryDto } from './dto/list-material-issues-query.dto';
 import { MaterialIssuePlanItemResponseDto } from './dto/material-issue-plan-item-response.dto';
@@ -63,6 +64,7 @@ export class MaterialIssuesService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
+    private readonly stockReservationsService: StockReservationsService,
   ) {}
 
   async create(
@@ -89,6 +91,9 @@ export class MaterialIssuesService {
     const order = await this.findOrderOrThrow(productionOrderId);
     const materialBigId = parseBigIntId(dto.materialId);
     await this.findMaterialOrThrow(materialBigId);
+    const warehouse = await this.prisma.warehouse.findUniqueOrThrow({
+      where: { code: MATERIAL_WAREHOUSE_CODE },
+    });
 
     // Khoá advisory theo (H2 fix) - resolvePlannedQty/sumIssued/create trước đây đọc-rồi-ghi
     // không transaction/lock: 2 request gần đồng thời cùng thấy 1 `remaining` rồi cùng xuất, tổng
@@ -111,6 +116,31 @@ export class MaterialIssuesService {
         throw new BadRequestException(
           `Số lượng xuất (${dto.issuedQty}) vượt quá số lượng còn có thể xuất cho vật tư ${dto.materialId} ` +
             `công đoạn ${dto.stage} (định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
+        );
+      }
+
+      // Vấn đề #1 audit 26/08 (Nghiêm trọng) - trước đây CHỈ check định mức BOM (plannedQty) ở
+      // trên, không hề đối chiếu tồn kho vật lý - postEntry() bên dưới ghi ledger vô điều kiện
+      // (dùng chung cho nhiều luồng CỐ Ý cho âm, vd kho ảo SUPPLIER, nên không sửa ở đó được).
+      // FOR UPDATE khoá đúng dòng stock_quant, chặn cả race giữa 2 lệnh sản xuất KHÁC NHAU cùng
+      // xuất 1 vật tư (advisory lock ở trên chỉ khoá theo order+stage+material, không chặn được ca
+      // này) - cùng idiom SteelIssuesService.consumeReservationAndDeduct(). Dùng getAvailableQty()
+      // (không tự trừ tay) để không giành tồn với chuyển kho nội bộ đang giữ chỗ vật tư này.
+      const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+        SELECT "qty" FROM "stock_quant"
+        WHERE "warehouseId" = ${warehouse.id} AND "materialId" = ${materialBigId}
+        FOR UPDATE
+      `;
+      const onHand = stockRow?.qty.toNumber() ?? 0;
+      const availableQty = await this.stockReservationsService.getAvailableQty(
+        tx,
+        warehouse.id,
+        materialBigId,
+        onHand,
+      );
+      if (dto.issuedQty > availableQty) {
+        throw new ConflictException(
+          `Tồn kho khả dụng (${availableQty}) không đủ xuất ${dto.issuedQty} cho vật tư ${dto.materialId} - kiểm tra lại tồn kho thực tế trước khi xuất`,
         );
       }
 

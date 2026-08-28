@@ -36,11 +36,13 @@ export class CreateStockAdjustmentDto {
   @Min(0.0001)
   qty!: number;
 
-  @ApiPropertyOptional({ description: 'Lý do điều chỉnh - nên ghi rõ để tra soát sau này' })
-  @IsOptional()
+  /** Vấn đề #25 audit 26/08/2026 - bắt buộc để sổ kho còn tra soát được sau này. Trước đây
+   *  optional nên FE luôn gửi kèm 1 câu cố định giống hệt nhau (không mang thông tin gì) thay vì
+   *  lý do thật - đã sửa FE bắt gõ tay qua AdjustReasonModal, giờ siết luôn ở BE cho chắc. */
+  @ApiProperty({ description: 'Lý do điều chỉnh - bắt buộc, để tra soát sau này' })
   @IsString()
   @MinLength(1)
-  note?: string;
+  note!: string;
 
   /// Optimistic-lock cho UI "sửa nhanh tồn kho" (nhập số tuyệt đối, FE tự tính delta) - phải đi
   /// kèm expectedCurrentQty. Phải trùng fromWarehouseId hoặc toWarehouseId của chính request này.

@@ -19,6 +19,12 @@ export class WarehouseTransferResponseDto {
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiPropertyOptional({ nullable: true }) confirmedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) rejectedAt!: Date | null;
+  /** Vấn đề #7 audit 26/08 - trước đây phải tra AuditLog riêng mới biết ai tạo/xác nhận/từ chối.
+   *  null với phiếu tạo trước migration này (không backfill). Cùng idiom MaterialIssue.issuedById -
+   *  raw id, FE tự resolve tên qua getUsers() như các màn khác đã làm. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) createdById!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) confirmedById!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) rejectedById!: string | null;
 
   constructor(partial: Partial<WarehouseTransferResponseDto>) {
     Object.assign(this, partial);

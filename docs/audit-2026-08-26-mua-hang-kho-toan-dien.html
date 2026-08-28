@@ -221,6 +221,16 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
   </div>
 
+  <div class="callout ok" style="max-width:none">
+    <b>🔄 Cập nhật tiến độ xử lý — 28/08/2026:</b> 10 vấn đề đã <b>ĐÃ FIX</b> (xem badge xanh trong từng mục):
+    #1, #2, #7, #11, #12, #13, #14, #17, #18, #19 — verify bằng test tự động (BE 46 suite/740 test,
+    FE 33 test) và/hoặc dữ liệu thật qua API/UI. 6 vấn đề khác thành <b>MOOT</b> (badge xanh dương)
+    do 1 đợt tái thiết kế lớn ngày 27/08 (bỏ hẳn báo giá nhiều NCC trong hệ thống — Sếp ký tay ngoài
+    hệ thống, xem <code>docs/changelog-2026-08-27-bo-bao-gia-sep-duyet-ngoai-he-thong.md</code>):
+    #3, #6, #8, #9, #10, #22. Còn lại #4, #5 và các mục Thấp/Trung bình chưa đổi vẫn đúng như mô tả
+    gốc — #4 cần quyết định nghiệp vụ trước khi code, #5 phạm vi lớn hơn dự kiến nên tạm hoãn.
+  </div>
+
   <div class="tldr">
     <h2>Tóm tắt nhanh</h2>
     <ul>
@@ -356,14 +366,14 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
           <tr><td>Nhận hàng mua về</td><td><span class="pill p-add">Tốt</span></td><td>Kiểm soát chặt, không cho nhận vượt mức, không có chuyện âm thầm bớt số liệu.</td></tr>
           <tr><td>Hủy đơn mua / lệnh sản xuất sau khi đã duyệt</td><td><span class="pill p-del">Chưa có</span></td><td>Chưa từng được xây dựng, không phải "làm sai" mà là thiếu hẳn (vấn đề Nghiêm trọng #4).</td></tr>
           <tr><td>Xuất sắt cho sản xuất</td><td><span class="pill p-add">Tốt</span></td><td>Là màn hình duy nhất hiện đúng cả "tồn thật" lẫn "còn dùng được", kiểm soát chặt chẽ.</td></tr>
-          <tr><td>Xuất vật tư tiêu hao / đóng gói</td><td><span class="pill p-del">Có lỗi</span></td><td>Không kiểm tra tồn kho — có thể gây tồn âm (vấn đề Nghiêm trọng #1).</td></tr>
+          <tr><td>Xuất vật tư tiêu hao / đóng gói</td><td><span class="pill p-add">✅ Đã fix 28/08</span></td><td>Đã thêm khoá + đối chiếu tồn khả dụng trước khi ghi (vấn đề #1).</td></tr>
           <tr><td>Tạo phiếu chuyển kho nội bộ</td><td><span class="pill p-add">Tốt</span></td><td>Chỉ cho chuyển trong giới hạn còn khả dụng.</td></tr>
           <tr><td>Hoàn tác phiếu chuyển kho sau khi đã xác nhận</td><td><span class="pill p-del">Chưa có</span></td><td>Không có đường quay lại — chỉ có cách sửa tay vòng qua, bỏ qua toàn bộ cơ chế giữ chỗ (vấn đề Nghiêm trọng #4).</td></tr>
-          <tr><td>Xuất kho — tài khoản Tổng kho/Giám đốc</td><td><span class="pill p-del">Có lỗi</span></td><td>Toàn bộ là giao diện giả, không lưu gì (vấn đề Nghiêm trọng #2).</td></tr>
-          <tr><td>Lịch sử mua hàng (xem giá đã duyệt)</td><td><span class="pill p-del">Có lỗi</span></td><td>Có thể hiện sai giá (vấn đề Nghiêm trọng #3).</td></tr>
+          <tr><td>Xuất kho — tài khoản Tổng kho/Giám đốc</td><td><span class="pill p-add">✅ Đã fix 28/08</span></td><td>Xác nhận dead code thật, đã xoá màn giả (vấn đề #2).</td></tr>
+          <tr><td>Lịch sử mua hàng (xem giá đã duyệt)</td><td><span class="pill p-low">⏸ Moot 28/08</span></td><td>Cột giá/NCC đã bị xoá khỏi màn này do redesign báo giá 27/08 (vấn đề #3).</td></tr>
           <tr><td>Điều chỉnh tồn kho thủ công</td><td><span class="pill p-chg">Có rủi ro</span></td><td>Thiết kế cơ bản đúng (không xoá bằng chứng cũ), nhưng bỏ qua hoàn toàn phần "giữ chỗ".</td></tr>
           <tr><td>Phân quyền sử dụng hệ thống</td><td><span class="pill p-add">Tốt</span></td><td>Không tìm thấy chức năng ghi dữ liệu nào thiếu kiểm soát quyền truy cập.</td></tr>
-          <tr><td>Ghi vết ai làm gì (tiếp nhận/gửi duyệt/từ chối báo giá)</td><td><span class="pill p-del">Chưa đủ</span></td><td>Thiếu thông tin "ai từ chối, vì sao" — mất dấu sau khi báo giá lại (vấn đề Cao #2).</td></tr>
+          <tr><td>Ghi vết ai làm gì (tiếp nhận/gửi duyệt/từ chối báo giá)</td><td><span class="pill p-low">⏸ Moot 28/08</span></td><td>Bước "từ chối báo giá" không còn tồn tại do redesign 27/08 (vấn đề #6).</td></tr>
         </tbody>
       </table>
     </div>
@@ -381,7 +391,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     <h3>🔴 Nghiêm trọng — cần xử lý ngay</h3>
 
     <div class="finding crit" id="C1">
-      <h4>Xuất vật tư tiêu hao/đóng gói có thể khiến tồn kho tụt xuống số âm <span class="id">Vấn đề #1 · MỚI</span></h4>
+      <h4>Xuất vật tư tiêu hao/đóng gói có thể khiến tồn kho tụt xuống số âm <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #1 · MỚI</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> đã thêm khoá <code>FOR UPDATE</code> + đối chiếu <code>getAvailableQty()</code> trước khi ghi, mirror đúng pattern màn Xuất sắt. 8 test mới, verify qua API thật (vật tư tồn=0, BOM cho phép xuất) → chặn đúng 409, không ghi gì.</p>
       <p><b>Vấn đề:</b> Khi thủ kho xuất vật tư tiêu hao (dây, đinh, sơn...) hoặc vật tư đóng gói cho 1 đơn sản
         xuất, hệ thống chỉ kiểm tra "có vượt định mức kỹ thuật cho phép hay không", chứ KHÔNG kiểm tra kho thực
         tế còn đủ hàng để xuất hay không.</p>
@@ -395,7 +406,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding crit" id="C2">
-      <h4>Màn "Xuất kho" cho Tổng kho/Giám đốc là giao diện giả, không hề lưu dữ liệu <span class="id">Vấn đề #2 · MỚI</span></h4>
+      <h4>Màn "Xuất kho" cho Tổng kho/Giám đốc là giao diện giả, không hề lưu dữ liệu <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #2 · MỚI</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> xác nhận không tài khoản thật nào chạm được màn này (form Admin bắt buộc chọn kho phụ trách; BOSS không có đường điều hướng UI tới) → dead code thật, đã xoá hẳn <code>XuatKhoPage.tsx</code>, thay bằng thông báo tĩnh "chưa hỗ trợ, đăng nhập đúng tài khoản thủ kho".</p>
       <p><b>Vấn đề:</b> Màn "Xuất kho" chỉ dành cho tài khoản KHÔNG được gán 1 kho cụ thể (Tổng kho, Giám đốc —
         thủ kho các kho cụ thể dùng 1 màn khác và màn đó hoạt động đúng). Khi vào màn này, chọn đơn hàng, nhập
         số lượng và bấm "Xác nhận", giao diện hiển thị y như đã xuất thành công (đổi trạng thái, tăng số "đã
@@ -411,7 +423,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding crit" id="C3">
-      <h4>Màn "Lịch sử mua hàng" có thể hiển thị sai giá đã mua <span class="id">Vấn đề #3 · MỚI</span></h4>
+      <h4>Màn "Lịch sử mua hàng" có thể hiển thị sai giá đã mua <span class="pill p-low">⏸ MOOT 28/08</span><span class="id">Vấn đề #3 · MỚI</span></h4>
+      <p style="background:var(--low-bg); color:var(--low); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> đã fix theo <code>isChosen</code> ngày 28/08, nhưng ngay sau đó redesign 27/08 (bỏ báo giá nhiều NCC trong hệ thống) xoá hẳn cột NCC/Đơn giá khỏi màn này — thay bằng cột "Phiếu duyệt" (link file Sếp ký). Vấn đề gốc không còn áp dụng được nữa, đã bỏ fix cũ khi resolve conflict.</p>
       <p><b>Vấn đề:</b> Khi hiển thị giá đã chốt cho 1 vật tư, màn này so khớp theo TÊN nhà cung cấp thay vì so
         khớp đúng theo báo giá đã được Sếp thực sự chọn. Hệ thống không cấm 2 nhà cung cấp trùng tên, nên cách
         so khớp này có thể lấy nhầm.</p>
@@ -424,7 +437,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding crit" id="C4">
-      <h4>Không có cách nào để hủy 1 lệnh sản xuất/phiếu chuyển kho sau khi đã duyệt, kể cả khi duyệt nhầm <span class="id">Vấn đề #4 · MỚI</span></h4>
+      <h4>Không có cách nào để hủy 1 lệnh sản xuất/phiếu chuyển kho sau khi đã duyệt, kể cả khi duyệt nhầm <span class="pill p-chg">⏳ CHỜ CONFIRM 28/08</span><span class="id">Vấn đề #4 · MỚI</span></h4>
+      <p style="background:var(--chg-bg); color:var(--chg); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> đã verify lại toàn bộ mô tả kỹ thuật bên dưới với code hiện tại (branch <code>demo</code>, sau merge "Fix flow mua hang boss kho") — vẫn đúng 100%, chưa có gì thay đổi. <b>Chưa code gì cả</b> — đang chờ người phụ trách nghiệp vụ xác nhận 2 câu hỏi: (1) đây có phải nhu cầu thật đang phải xử lý tay ngoài hệ thống, hay chỉ là rủi ro lý thuyết chưa gặp; (2) nếu có thật, phạm vi hủy nên giới hạn ở mức "chưa mua/chưa nhận gì" (an toàn, dễ làm) hay cần hỗ trợ cả trường hợp đã làm dở dang (phức tạp, rủi ro cao hơn). Chưa có câu trả lời nên chưa được phép động code phần này.</p>
       <p><b>Vấn đề:</b> Một khi Sếp đã bấm duyệt 1 mặt hàng để sản xuất, hoặc thủ kho đã xác nhận nhận 1 phiếu
         chuyển kho, hệ thống KHÔNG có chức năng "hủy"/"hoàn tác" nào — kể cả khi duyệt nhầm và chưa có bất kỳ
         vật tư nào được mua/nhận sau đó. Nút hủy hiện chỉ hoạt động ở giai đoạn TRƯỚC khi duyệt.</p>
@@ -443,7 +457,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     <h3>🟠 Cao — nên xử lý trong đợt tới</h3>
 
     <div class="finding high" id="H1">
-      <h4>Nếu bước tự động tính vật tư cần mua bị lỗi, sẽ không ai biết để xử lý <span class="id">Vấn đề #5 · MỚI</span></h4>
+      <h4>Nếu bước tự động tính vật tư cần mua bị lỗi, sẽ không ai biết để xử lý <span class="pill p-chg">⏳ ĐANG BÀN HƯỚNG XỬ LÝ 28/08</span><span class="id">Vấn đề #5 · MỚI</span></h4>
+      <p style="background:var(--chg-bg); color:var(--chg); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> đã verify lại với code hiện tại — vẫn đúng, chưa code gì. 1 chi tiết nhỏ cần đính chính: 3 bước tính nhu cầu KHÔNG chạy song song như mô tả gốc — từ 2026-08-24, đề xuất sắt chạy trước, 2 đề xuất còn lại (vật tư thành phẩm + tiêu hao) cố ý dồn vào <code>onComplete</code> của bước sắt (chạy nền qua solver ngoài, vài chục giây tới vài phút) để cả 3 đề xuất mua của 1 PI hiện ra CÙNG LÚC cho Mua hàng thay vì rời rạc — không đổi bản chất vấn đề (vẫn 3 khối try/catch riêng, chỉ <code>logger.error()</code>). Đã bàn 3 hướng xử lý: (A) thêm cờ "cần chú ý" trên PI/ProductionOrder hiện ngay ở màn hình đang dùng hằng ngày + nút "Tính lại" thủ công — đề xuất chọn hướng này vì chắc chắn được nhìn thấy, không phụ thuộc thói quen; (B) tận dụng module Thông báo trong app có sẵn (<code>NotificationsService</code>, hiện chỉ tạo thủ công qua Sếp bấm gửi, chưa có nơi nào hệ thống tự tạo) — rủi ro không ai mở hộp thông báo; (C) tự động thử lại (retry) — chỉ giải quyết lỗi tạm thời, không giải quyết lỗi do thiếu khai báo dữ liệu (nguyên nhân chính) nên phải kết hợp A hoặc B. Đang chờ user chốt hướng trước khi code.</p>
       <p><b>Vấn đề:</b> Ngay sau khi Sếp duyệt 1 mặt hàng để sản xuất, hệ thống tự động tính 3 loại nhu cầu mua
         hàng (sắt, nguyên liệu, vật tư tiêu hao) song song. Nếu 1 trong 3 bước tính này gặp lỗi (ví dụ 1 vật tư
         chưa được khai báo kho), hệ thống chỉ âm thầm ghi lỗi vào nhật ký kỹ thuật nội bộ — không hiện bất kỳ
@@ -457,7 +472,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding high" id="H2">
-      <h4>Không lưu lại "ai đã từ chối/tiếp nhận báo giá, lúc nào, vì sao" ở cấp từng vật tư <span class="id">Vấn đề #6 · MỚI</span></h4>
+      <h4>Không lưu lại "ai đã từ chối/tiếp nhận báo giá, lúc nào, vì sao" ở cấp từng vật tư <span class="pill p-low">⏸ MOOT 28/08</span><span class="id">Vấn đề #6 · MỚI</span></h4>
+      <p style="background:var(--low-bg); color:var(--low); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> redesign 27/08 xoá hẳn <code>reject()</code>/<code>acknowledge()</code>/<code>requote()</code> (404 cả 3) — không còn "từ chối báo giá" nào trong hệ thống để mất lịch sử. Duyệt mua giờ là nhị phân (chờ → đã duyệt kèm file Sếp ký), không có bước từ chối riêng.</p>
       <p><b>Vấn đề:</b> Khi Sếp từ chối 1 dòng vật tư kèm lý do, thông tin này chỉ nằm tạm trên chính dòng đó.
         Nếu người mua hàng báo giá lại (sau khi bị từ chối), lý do từ chối cũ bị xoá luôn — không có nơi nào
         lưu lại lịch sử "ai từ chối, khi nào, vì sao" một cách lâu dài.</p>
@@ -469,7 +485,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding high" id="H3">
-      <h4>Không biết ai đã xác nhận/từ chối 1 phiếu chuyển kho nếu chỉ tra trực tiếp trên phiếu <span class="id">Vấn đề #7 · MỚI</span></h4>
+      <h4>Không biết ai đã xác nhận/từ chối 1 phiếu chuyển kho nếu chỉ tra trực tiếp trên phiếu <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #7 · MỚI</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> migration thêm <code>createdById</code>/<code>confirmedById</code>/<code>rejectedById</code> (nullable, không backfill) vào <code>WarehouseTransfer</code> — giờ tra được trực tiếp trên phiếu qua API, không cần AuditLog riêng nữa.</p>
       <p><b>Vấn đề:</b> Bản thân phiếu chuyển kho không lưu tên người xác nhận/từ chối — thông tin này chỉ nằm
         trong 1 nhật ký hệ thống riêng, không phải ai tra cứu cũng biết tìm ở đâu.</p>
       <p><b>Ảnh hưởng thực tế:</b> Khi cần điều tra 1 sự cố liên quan chuyển kho, người tra cứu thông thường sẽ
@@ -479,7 +496,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding high" id="H4">
-      <h4>Thêm báo giá cho 1 vật tư không được bảo vệ khỏi thao tác chồng chéo <span class="id">Vấn đề #8 · MỚI</span></h4>
+      <h4>Thêm báo giá cho 1 vật tư không được bảo vệ khỏi thao tác chồng chéo <span class="pill p-low">⏸ MOOT 28/08</span><span class="id">Vấn đề #8 · MỚI</span></h4>
+      <p style="background:var(--low-bg); color:var(--low); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> redesign 27/08 xoá hẳn <code>addQuote()</code> (404) — không còn "thêm báo giá" trong hệ thống, giá/NCC giờ nằm trong file Excel Sếp ký ngoài hệ thống.</p>
       <p><b>Vấn đề:</b> Đây là bước duy nhất trong luồng báo giá/duyệt KHÔNG được áp dụng cơ chế bảo vệ chống
         thao tác chồng chéo mà mọi bước khác (tiếp nhận, gửi duyệt, duyệt, từ chối, báo giá lại) đều đã có.</p>
       <p><b>Ảnh hưởng thực tế:</b> Về lý thuyết, nếu đúng lúc người mua hàng đang nhập báo giá thì có 1 thao
@@ -490,7 +508,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding high" id="H5">
-      <h4>Khi 1 lệnh sản xuất gộp nhiều mặt hàng, số lượng vật tư cần mua có thể không cập nhật kịp <span class="id">Vấn đề #9 · MỚI</span></h4>
+      <h4>Khi 1 lệnh sản xuất gộp nhiều mặt hàng, số lượng vật tư cần mua có thể không cập nhật kịp <span class="pill p-low">⏸ MOOT 28/08</span><span class="id">Vấn đề #9 · MỚI</span></h4>
+      <p style="background:var(--low-bg); color:var(--low); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> redesign 27/08 đổi luồng thành NEW→PURCHASING thẳng, không còn qua QUOTING/SUBMITTED cho item mới nào nữa — bug chỉ còn ảnh hưởng ~36 item cũ kẹt lại (bossApprove() mới cố ý nhận nốt, không cần sửa thêm).</p>
       <p><b>Vấn đề:</b> Hệ thống chỉ cập nhật lại số lượng cần mua trong 2 trường hợp: dòng chưa ai đụng tới,
         hoặc dòng đã mua xong hoàn toàn. Nếu dòng đang ở giữa (người mua hàng đã bắt đầu báo giá nhưng Sếp
         chưa duyệt), số lượng cần mua GIỮ NGUYÊN theo số cũ dù nhu cầu thực tế đã tăng lên.</p>
@@ -504,7 +523,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding high" id="H6">
-      <h4>Bấm 2 lần liên tiếp vào nút Lưu/Gửi/Duyệt/Từ chối có thể gửi 2 yêu cầu cùng lúc <span class="id">Vấn đề #10 · MỚI</span></h4>
+      <h4>Bấm 2 lần liên tiếp vào nút Lưu/Gửi/Duyệt/Từ chối có thể gửi 2 yêu cầu cùng lúc <span class="pill p-low">⏸ MOOT 28/08</span><span class="id">Vấn đề #10 · MỚI</span></h4>
+      <p style="background:var(--low-bg); color:var(--low); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> đã fix busy-state ở 2 màn này, nhưng ngay sau đó redesign 27/08 viết lại hoàn toàn cả 2 file (<code>BossApp.tsx</code> 688→139 dòng, <code>LenhMuaNCCPage.tsx</code> viết lại). Đã revert fix cũ đúng lúc trước khi biết redesign. Xác nhận code mới (modal "Sếp đã duyệt") đã TỰ CÓ busy-state đúng chuẩn — không cần vá lại.</p>
       <p><b>Vấn đề:</b> Màn báo giá (Lệnh mua NCC) và màn Sếp duyệt giá (So sánh giá) không tạm khoá nút bấm
         trong lúc đang xử lý yêu cầu (mạng chậm, người dùng bấm thêm lần nữa vì sốt ruột) — khác với phần lớn
         các màn kho khác trong hệ thống đã làm đúng việc này.</p>
@@ -515,7 +535,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding high" id="H7">
-      <h4>Cơ chế chống gửi trùng yêu cầu chưa bắt buộc ở nhiều nơi <span class="id">Vấn đề #11 · MỚI</span></h4>
+      <h4>Cơ chế chống gửi trùng yêu cầu chưa bắt buộc ở nhiều nơi <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #11 · MỚI</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> bắt buộc header <code>Idempotency-Key</code> ở cả 4 module (material-issues/packaging-issues/steel-issues đã có sẵn cơ chế, chỉ cần validate; warehouse-transfers hoàn toàn chưa có cột nào, phải thêm migration DB mới đủ điều kiện làm bắt buộc). FE đã gửi kèm ở mọi nơi.</p>
       <p><b>Vấn đề:</b> Hệ thống có sẵn cơ chế "mã chống trùng" để nhận biết 1 yêu cầu bị gửi lặp lại (do bấm
         đúp, mất mạng rồi gửi lại...), nhưng ở phần lớn chức năng xuất kho (vật tư tiêu hao, đóng gói, sắt,
         chuyển kho), việc gửi kèm mã này hiện chỉ là tuỳ chọn, không bắt buộc.</p>
@@ -526,7 +547,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding high" id="H8">
-      <h4>Một số ô nhập số lượng thiếu giới hạn tối đa <span class="id">Vấn đề #12 · MỚI</span></h4>
+      <h4>Một số ô nhập số lượng thiếu giới hạn tối đa <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #12 · MỚI</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> thêm <code>max</code> = phần còn lại, hiện "(còn lại X)" cạnh label, border đỏ + cảnh báo + tự khoá nút Xác nhận khi vượt. Verify qua UI thật (PO-40, còn lại 20 → nhập 25 chặn đúng).</p>
       <p><b>Vấn đề:</b> Ô nhập số lượng ở màn "Kho chuyển kiểm" và "Kho đóng gói" chỉ chặn không cho nhập số
         âm/0, nhưng không giới hạn không được vượt quá phần còn lại cần làm — khác với các màn tương tự khác
         trong cùng khu vực đã có giới hạn rõ ràng.</p>
@@ -538,7 +560,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding high" id="H9">
-      <h4>Phần lớn màn xem tồn kho không phân biệt "tồn thực tế" và "tồn còn dùng được" <span class="id">Vấn đề #13 · ĐÃ BIẾT TỪ BÁO CÁO 25/08, đào sâu thêm</span></h4>
+      <h4>Phần lớn màn xem tồn kho không phân biệt "tồn thực tế" và "tồn còn dùng được" <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #13 · ĐÃ BIẾT TỪ BÁO CÁO 25/08, đào sâu thêm</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> thêm <code>availableQty</code> vào <code>BeStockQuant</code> (BE tính qua đúng <code>getAvailableQty()</code> dùng chung với Xuất sắt), thêm cột "Khả dụng" ở màn Tổng hợp kho + Admin &gt; Vật tư. Verify dữ liệu thật: SAT-003 tồn 50 nhưng khả dụng 0 (đang giữ chỗ cắt sắt) — hiện đúng trên UI.</p>
       <p><b>Vấn đề:</b> Nhiều vật tư trong kho thực chất đã "có chủ" (đang được giữ chỗ cho 1 kế hoạch cắt sắt
         khác) nhưng hầu hết các màn xem tồn kho vẫn chỉ hiện đúng 1 con số tồn thô, không trừ đi phần đã giữ
         chỗ. Chỉ riêng màn "Xuất sắt" hiện đúng cả 2 con số tách bạch.</p>
@@ -554,7 +577,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     <h3>🟡 Trung bình — nên theo dõi và lên lịch xử lý</h3>
 
     <div class="finding med" id="M1">
-      <h4>Một số hoạt động xuất/nhập kho không được ghi vào nhật ký truy vết chung <span class="id">Vấn đề #14 · MỚI</span></h4>
+      <h4>Một số hoạt động xuất/nhập kho không được ghi vào nhật ký truy vết chung <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #14 · MỚI</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> đã thêm <code>MaterialIssue</code>/<code>PackagingIssue</code>/<code>ProductionBatch</code>/<code>StockReservation</code> vào <code>AUDITED_MODELS</code> — xác nhận từng model đều có state machine riêng, không phải dòng con loại trừ có chủ đích.</p>
       <p>Xuất vật tư tiêu hao, xuất đóng gói, 1 số bước sản xuất, và giữ chỗ tồn kho — các hoạt động này không
         nằm trong danh sách được tự động ghi vào nhật ký truy vết chung của hệ thống, trong khi các hoạt động
         tương tự khác (xuất sắt, chuyển kho) thì có, không rõ lý do khác biệt. <b>Nên làm gì:</b> rà lại và bổ
@@ -581,7 +605,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding med" id="M4">
-      <h4>Số lượng quy đổi đơn vị khi nhập kho có thể bị sửa tay mà không cảnh báo <span class="id">Vấn đề #17 · MỚI</span></h4>
+      <h4>Số lượng quy đổi đơn vị khi nhập kho có thể bị sửa tay mà không cảnh báo <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #17 · MỚI</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> thêm cảnh báo MỀM (không chặn Xác nhận) khi SL sửa tay lệch &gt;5% so với gợi ý — verify bằng mô phỏng logic độc lập (DB dev chưa có đề xuất "đang mua hàng" nào để test UI trực tiếp).</p>
       <p>Khi đơn vị mua hàng (ví dụ kg) khác đơn vị lưu kho (ví dụ cái), hệ thống tự tính sẵn số lượng gợi ý
         nhưng cho phép sửa tay hoàn toàn tự do mà không cảnh báo nếu số nhập lệch quá nhiều so với gợi ý. Nếu
         thủ kho gõ nhầm, có thể ghi sai số lượng nhập kho mà không ai phát hiện ngay. <b>Nên làm gì:</b> thêm
@@ -590,7 +615,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding med" id="M5">
-      <h4>1 ghi chú kỹ thuật nội bộ đã lỗi thời <span class="id">Vấn đề #18 · MỚI, chỉ ảnh hưởng đội kỹ thuật</span></h4>
+      <h4>1 ghi chú kỹ thuật nội bộ đã lỗi thời <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #18 · MỚI, chỉ ảnh hưởng đội kỹ thuật</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> đã sửa lại comment cho đúng — <code>confirm()</code> thực ra chạy TRONG transaction (truyền <code>tx</code>), không phải "cố ý để ngoài" như bản cũ nói.</p>
       <p>1 dòng giải thích trong tài liệu nội bộ không còn khớp với cách hệ thống hoạt động hiện tại (hệ thống
         thực ra đã làm ĐÚNG hơn mô tả cũ). Không ảnh hưởng người dùng cuối, chỉ dễ gây hiểu nhầm cho đội kỹ
         thuật khi đọc lại tài liệu — nên cập nhật khi có dịp.</p>
@@ -598,7 +624,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding med" id="M6">
-      <h4>1 cột trong màn quản trị hiển thị theo cách phân việc cũ, không còn khớp thực tế <span class="id">Vấn đề #19 · MỚI</span></h4>
+      <h4>1 cột trong màn quản trị hiển thị theo cách phân việc cũ, không còn khớp thực tế <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #19 · MỚI</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> đổi cột "Kho" sang gộp <code>khoLabel</code> thật của từng dòng vật tư. Verify UI thật (admin): nhiều đề xuất hiện đúng NHIỀU kho cùng lúc (vd "Kho Phôi Sơn Hàn, Kho Vật tư thành phẩm, Kho Thành phẩm") — chứng minh đúng lỗi cũ.</p>
       <p>Cột "Kho" ở màn quản trị xem danh sách đề xuất mua hàng hiện theo cách phân việc CŨ (theo kho), trong
         khi hệ thống hiện nay phân việc cho người mua hàng theo từng vật tư cụ thể, không còn theo kho nữa.
         Chỉ gây hiểu nhầm khi xem báo cáo quản trị, không ảnh hưởng việc mua hàng thực tế. <b>Nên làm gì:</b>
@@ -626,8 +653,9 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding low" id="L2">
-      <h4>Màn quản lý "Nhà cung cấp theo vật tư" chưa khoá nút khi đang xử lý <span class="id">Vấn đề #22</span></h4>
+      <h4>Màn quản lý "Nhà cung cấp theo vật tư" chưa khoá nút khi đang xử lý <span class="pill p-low">⏸ MOOT 28/08</span><span class="id">Vấn đề #22</span></h4>
       <p>Rủi ro thấp, tương tự vấn đề #10 nhưng ở màn ít dùng hơn.</p>
+      <p style="background:var(--low-bg); color:var(--low); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> redesign 27/08 xoá hẳn <code>VatTuNCCPage.tsx</code> — NCC giờ quản lý ở Admin › Nhà cung cấp.</p>
     </div>
 
     <div class="finding low" id="L3">
@@ -636,13 +664,15 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="finding low" id="L4">
-      <h4>Tài khoản Admin có cùng quyền "vượt giới hạn phân việc" như tài khoản Sếp <span class="id">Vấn đề #24</span></h4>
+      <h4>Tài khoản Admin có cùng quyền "vượt giới hạn phân việc" như tài khoản Sếp <span class="pill p-add">✅ XÁC NHẬN CHỦ ĐÍCH 28/08</span><span class="id">Vấn đề #24</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> user xác nhận đây LÀ chủ đích (Admin hỗ trợ xử lý nghiệp vụ khi cần) — giữ nguyên, không sửa.</p>
       <p>Admin (vai trò kỹ thuật) hiện có thể thao tác vật tư của bất kỳ người mua hàng nào, giống hệt quyền
         của Sếp (vai trò điều phối nghiệp vụ) — nên xác nhận lại đây có phải chủ đích hay không.</p>
     </div>
 
     <div class="finding low" id="L5">
-      <h4>Chưa xác minh việc ghi lý do khi điều chỉnh tồn kho thủ công có bắt buộc không <span class="id">Vấn đề #25</span></h4>
+      <h4>Chưa xác minh việc ghi lý do khi điều chỉnh tồn kho thủ công có bắt buộc không <span class="pill p-add">✅ ĐÃ FIX 28/08</span><span class="id">Vấn đề #25</span></h4>
+      <p style="background:var(--add-bg); color:var(--add); border-radius:8px; padding:.6rem .9rem; font-size:.88rem"><b>Cập nhật 28/08:</b> xác nhận đúng như nghi ngờ - field <code>note</code> optional ở BE, và FE trước đây luôn gửi kèm 1 câu cố định giống hệt nhau (<code>MfgWarehousesPage.tsx</code>: "Điều chỉnh tồn kho (trang Kho)", <code>MaterialsPage.tsx</code>: "Điều chỉnh tồn kho (Admin &gt; Vật tư)") thay vì lý do thật. Đã fix cả 2 lớp: (1) FE - thêm modal dùng chung <code>AdjustReasonModal.tsx</code>, chặn xác nhận cho tới khi gõ lý do thật, dùng ở cả 2 trang; (2) BE - <code>CreateStockAdjustmentDto.note</code> đổi từ optional sang bắt buộc (<code>@IsString @MinLength(1)</code>, bỏ <code>@IsOptional</code>). Verify: BE 46 suite/743 test pass (sửa 6 test case thiếu <code>note</code>), FE <code>tsc</code>/<code>eslint</code> sạch, QA qua browser thật (Admin &gt; Vật tư, đăng nhập admin/demo1234) - modal hiện đúng tóm tắt "Tấm sắt la: 0 → 5 Tấm", xác nhận rỗng bị chặn kèm cảnh báo đỏ "Vui lòng nhập lý do", gõ lý do thật rồi xác nhận thì lưu thành công (Tồn kho/Khả dụng đổi thành 5), không lỗi console/network. Đã revert dữ liệu test về 0 sau khi QA.</p>
       <p>Cần kiểm tra lại — nếu không bắt buộc, nên cân nhắc bắt buộc để dễ điều tra sau này.</p>
     </div>
   </div>
@@ -775,15 +805,15 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
       <table>
         <thead><tr><th>Thứ tự</th><th>Việc cần làm</th><th>Vì sao ưu tiên</th></tr></thead>
         <tbody>
-          <tr><td>1</td><td>Chặn xuất vật tư tiêu hao/đóng gói vượt tồn thật (Vấn đề #1)</td><td>Đang có thể xảy ra ngay bây giờ, chỉ cần 1 lần thao tác bình thường.</td></tr>
-          <tr><td>2</td><td>Xác minh và xử lý màn Xuất kho giả (Vấn đề #2)</td><td>Dữ liệu "đã xuất" có thể hoàn toàn không tồn tại trong hệ thống dù người dùng tin là đã ghi nhận.</td></tr>
-          <tr><td>3</td><td>Sửa lỗi hiển thị sai giá ở Lịch sử mua hàng (Vấn đề #3)</td><td>Ảnh hưởng số liệu tài chính, nhưng dễ sửa, rủi ro khi fix thấp.</td></tr>
-          <tr><td>4</td><td>Quyết định về cơ chế hủy/hoàn tác (Vấn đề #4)</td><td>Cần quyết định của người phụ trách nghiệp vụ trước khi làm, không chỉ là việc kỹ thuật.</td></tr>
-          <tr><td>5</td><td>Vá 2 khoảng trống còn lại trong tính nhu cầu mua hàng (Vấn đề #5, #9)</td><td>Nối tiếp trực tiếp phần đã sửa hồi 25-26/08, cùng khu vực đang được chú ý.</td></tr>
-          <tr><td>6</td><td>Bổ sung ghi vết còn thiếu (Vấn đề #6, #7)</td><td>Không chặn vận hành ngay nhưng mất dấu vĩnh viễn nếu không vá sớm.</td></tr>
-          <tr><td>7</td><td>Các cải tiến an toàn còn lại (Vấn đề #8, #10, #11, #12)</td><td>Rủi ro thấp hơn nhờ các lớp bảo vệ khác đã có, nhưng nên dọn cùng đợt cho nhất quán.</td></tr>
-          <tr><td>8</td><td>Hiển thị "khả dụng" ở các màn kho khác (Vấn đề #13)</td><td>Phạm vi rộng hơn, nên làm sau khi các việc gấp khác đã ổn định.</td></tr>
-          <tr><td>9</td><td>Các vấn đề Trung bình/Thấp còn lại (#14–#25)</td><td>Gộp vào các đợt bảo trì định kỳ, không cần gấp.</td></tr>
+          <tr><td>1</td><td><span class="pill p-add">✅ Đã fix</span> Chặn xuất vật tư tiêu hao/đóng gói vượt tồn thật (Vấn đề #1)</td><td>Đang có thể xảy ra ngay bây giờ, chỉ cần 1 lần thao tác bình thường.</td></tr>
+          <tr><td>2</td><td><span class="pill p-add">✅ Đã fix</span> Xác minh và xử lý màn Xuất kho giả (Vấn đề #2)</td><td>Dữ liệu "đã xuất" có thể hoàn toàn không tồn tại trong hệ thống dù người dùng tin là đã ghi nhận.</td></tr>
+          <tr><td>3</td><td><span class="pill p-low">⏸ Moot</span> Sửa lỗi hiển thị sai giá ở Lịch sử mua hàng (Vấn đề #3)</td><td>Ảnh hưởng số liệu tài chính, nhưng dễ sửa, rủi ro khi fix thấp. Cột giá/NCC đã bị xoá khỏi màn này do redesign 27/08.</td></tr>
+          <tr><td>4</td><td>Quyết định về cơ chế hủy/hoàn tác (Vấn đề #4)</td><td>Cần quyết định của người phụ trách nghiệp vụ trước khi làm, không chỉ là việc kỹ thuật. <b>Chưa xử lý.</b></td></tr>
+          <tr><td>5</td><td>Vá 2 khoảng trống còn lại trong tính nhu cầu mua hàng (Vấn đề <span class="pill p-chg">⏳ #5 chưa làm</span> <span class="pill p-low">⏸ #9 moot</span>)</td><td>Nối tiếp trực tiếp phần đã sửa hồi 25-26/08. #5 đánh giá lại thấy phạm vi lớn hơn dự kiến, user chọn tạm hoãn. #9 chỉ còn ảnh hưởng dữ liệu cũ do redesign 27/08.</td></tr>
+          <tr><td>6</td><td>Bổ sung ghi vết còn thiếu (Vấn đề <span class="pill p-low">⏸ #6 moot</span> <span class="pill p-add">✅ #7 đã fix</span>)</td><td>Không chặn vận hành ngay nhưng mất dấu vĩnh viễn nếu không vá sớm.</td></tr>
+          <tr><td>7</td><td>Các cải tiến an toàn còn lại (Vấn đề <span class="pill p-low">⏸ #8 moot</span> <span class="pill p-low">⏸ #10 moot</span> <span class="pill p-add">✅ #11 đã fix</span> <span class="pill p-add">✅ #12 đã fix</span>)</td><td>Rủi ro thấp hơn nhờ các lớp bảo vệ khác đã có, nhưng nên dọn cùng đợt cho nhất quán.</td></tr>
+          <tr><td>8</td><td><span class="pill p-add">✅ Đã fix</span> Hiển thị "khả dụng" ở các màn kho khác (Vấn đề #13)</td><td>Phạm vi rộng hơn dự kiến (đụng endpoint dùng chung nhiều màn) — đã làm toàn bộ theo yêu cầu user, không chỉ 1 màn.</td></tr>
+          <tr><td>9</td><td>Các vấn đề Trung bình/Thấp còn lại (#14–#25)</td><td>Gộp vào các đợt bảo trì định kỳ, không cần gấp. Đã fix thêm: <span class="pill p-add">✅ #14</span> <span class="pill p-add">✅ #17</span> <span class="pill p-add">✅ #18</span> <span class="pill p-add">✅ #19</span>. Moot: <span class="pill p-low">⏸ #22</span>.</td></tr>
         </tbody>
       </table>
     </div>

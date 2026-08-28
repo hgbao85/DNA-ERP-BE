@@ -21,6 +21,7 @@ export async function recomputeProposalStatus(tx: PrismaTx, proposalId: bigint):
     select: { status: true },
   });
   const statuses = items.map((i) => i.status);
+  if (statuses.length === 0) return;
 
   const rollup: PurchaseProposalStatus = statuses.every(
     (s) => s === PurchaseProposalStatus.PURCHASED,

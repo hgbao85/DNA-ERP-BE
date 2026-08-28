@@ -96,6 +96,9 @@ model User {
   materialInspectionRequestsCreated MaterialInspectionRequest[]
   inspectionKhoResultsSubmitted     InspectionKhoResult[]
   packagingRecordsPacked            PackagingRecord[]
+  warehouseTransfersCreated         WarehouseTransfer[]         @relation("WarehouseTransferCreatedBy")
+  warehouseTransfersConfirmed       WarehouseTransfer[]         @relation("WarehouseTransferConfirmedBy")
+  warehouseTransfersRejected        WarehouseTransfer[]         @relation("WarehouseTransferRejectedBy")
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -1983,10 +1986,25 @@ model WarehouseTransfer {
   createdAt       DateTime       @default(now())
   confirmedAt     DateTime?
   rejectedAt      DateTime?
+  /// Vấn đề #7 audit 26/08/2026 - trước đây phiếu không tự lưu ai tạo/xác nhận/từ chối, chỉ tra
+  /// được qua AuditLog riêng (không phải ai cũng biết tìm ở đâu). Nullable, không backfill dữ liệu
+  /// cũ (chưa từng ghi actor) - cùng idiom PurchaseProposalItem.approvalFileUrl (migration
+  /// 20260827040000). createdById để trống ở service cũ (create() chưa nhận userId) - null với
+  /// mọi phiếu tạo trước đợt sửa này, có giá trị từ đây trở đi.
+  createdById     String?
+  confirmedById   String?
+  rejectedById    String?
+  /// Vấn đề #11 audit 26/08/2026 (phần còn thiếu) - create()/createPieceTransfer() trước đây
+  /// không có cột nào để dedupe theo Idempotency-Key, khác material-issues/packaging-issues/
+  /// steel-issues đã có. Nullable + unique, cùng idiom MaterialIssue.idempotencyKey.
+  idempotencyKey  String?        @unique
 
   fromWarehouse Warehouse                      @relation("WarehouseTransferFromWarehouse", fields: [fromWarehouseId], references: [id])
   toWarehouse   Warehouse                      @relation("WarehouseTransferToWarehouse", fields: [toWarehouseId], references: [id])
   planForm      PlanForm?                      @relation(fields: [planFormId], references: [id])
+  createdBy     User?                          @relation("WarehouseTransferCreatedBy", fields: [createdById], references: [id])
+  confirmedBy   User?                          @relation("WarehouseTransferConfirmedBy", fields: [confirmedById], references: [id])
+  rejectedBy    User?                          @relation("WarehouseTransferRejectedBy", fields: [rejectedById], references: [id])
   items         WarehouseTransferItem[]
   pieceItems    WarehouseTransferPieceItem[]
   reservations  WarehouseTransferReservation[]

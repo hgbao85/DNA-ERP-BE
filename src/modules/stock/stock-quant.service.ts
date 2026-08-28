@@ -4,6 +4,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ListStockQuantQueryDto } from './dto/list-stock-quant-query.dto';
 import { StockQuantResponseDto } from './dto/stock-quant-response.dto';
+import { StockReservationsService } from './stock-reservations.service';
 
 type StockQuantWithRefs = Prisma.StockQuantGetPayload<{
   include: {
@@ -23,7 +24,10 @@ type StockQuantWithRefs = Prisma.StockQuantGetPayload<{
  */
 @Injectable()
 export class StockQuantService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly stockReservationsService: StockReservationsService,
+  ) {}
 
   async findAll(query: ListStockQuantQueryDto): Promise<StockQuantResponseDto[]> {
     const where: Prisma.StockQuantWhereInput = {
@@ -46,10 +50,23 @@ export class StockQuantService {
       orderBy: { id: 'asc' },
     });
 
-    return rows.map((r) => this.toResponseDto(r));
+    return Promise.all(rows.map((r) => this.toResponseDto(r)));
   }
 
-  private toResponseDto(row: StockQuantWithRefs): StockQuantResponseDto {
+  private async toResponseDto(row: StockQuantWithRefs): Promise<StockQuantResponseDto> {
+    const qty = row.qty.toNumber();
+    // Vấn đề #13 audit 26/08 - reservation (cắt sắt/chuyển kho nội bộ) chỉ khoá theo materialId
+    // (xem schema StockReservation/WarehouseTransferReservation), nên dòng segmentSpec/piece/
+    // productVariant KHÔNG có khái niệm "đã giữ chỗ" - available luôn === qty, không gọi
+    // getAvailableQty() (hàm này bắt buộc materialId: bigint, không nhận null).
+    const availableQty = row.materialId
+      ? await this.stockReservationsService.getAvailableQty(
+          undefined,
+          row.warehouseId,
+          row.materialId,
+          qty,
+        )
+      : qty;
     return new StockQuantResponseDto({
       id: row.id.toString(),
       warehouseId: row.warehouseId.toString(),
@@ -64,7 +81,8 @@ export class StockQuantService {
       pieceCode: row.piece?.code ?? null,
       productVariantId: row.productVariantId?.toString() ?? null,
       productVariantLabel: row.productVariant?.description ?? row.productVariant?.colorCode ?? null,
-      qty: row.qty.toNumber(),
+      qty,
+      availableQty,
       updatedAt: row.updatedAt,
     });
   }

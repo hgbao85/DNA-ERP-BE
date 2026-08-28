@@ -37,6 +37,14 @@ describe('recomputeProposalStatus', () => {
     expect(update).toHaveBeenCalledWith({ where: { id: 300n }, data: { status: expected } });
   });
 
+  it('không còn item nào (đề xuất rỗng) -> KHÔNG update, tránh Array.every() rỗng trả true giả PURCHASED', async () => {
+    const { tx, update } = makeTx([]);
+
+    await recomputeProposalStatus(tx as never, 300n);
+
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('đọc status TƯƠI qua findMany theo đúng proposalId truyền vào', async () => {
     const { tx } = makeTx([S.NEW]);
 

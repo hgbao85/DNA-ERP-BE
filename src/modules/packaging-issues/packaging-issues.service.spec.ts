@@ -1,12 +1,22 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { AccessoryItemKind, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PackagingIssuesService } from './packaging-issues.service';
 
 describe('PackagingIssuesService', () => {
   let service: PackagingIssuesService;
   let stockLedgerService: { postEntry: jest.Mock };
+  let stockReservationsService: { getAvailableQty: jest.Mock };
+  // Vấn đề #1 audit 26/08 - $queryRaw (khoá + đọc stock_quant) điều khiển bởi biến này, mặc định
+  // dư dả để không ảnh hưởng các test có sẵn (chỉ quan tâm định mức BOM).
+  let physicalStockQty: number;
   let prisma: {
     packagingIssue: {
       findUnique: jest.Mock;
@@ -18,6 +28,7 @@ describe('PackagingIssuesService', () => {
     bomAccessoryItem: { findUnique: jest.Mock; findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $executeRaw: jest.Mock;
+    $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
 
@@ -54,6 +65,7 @@ describe('PackagingIssuesService', () => {
   };
 
   beforeEach(() => {
+    physicalStockQty = 9999;
     prisma = {
       packagingIssue: {
         findUnique: jest.fn(),
@@ -77,12 +89,17 @@ describe('PackagingIssuesService', () => {
           ),
       },
       $executeRaw: jest.fn().mockResolvedValue(0),
+      $queryRaw: jest.fn(() => Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }])),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
+    stockReservationsService = {
+      getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
+    };
     service = new PackagingIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
+      stockReservationsService as unknown as StockReservationsService,
     );
   });
 
@@ -200,6 +217,49 @@ describe('PackagingIssuesService', () => {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
       const rawCall = prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray;
       expect(rawCall.join('')).toContain('pg_advisory_xact_lock');
+    });
+
+    // Vấn đề #1 audit 26/08 (Nghiêm trọng) - trước đây chỉ check định mức BOM, không đối chiếu
+    // tồn kho vật lý, nên xuất vượt tồn thật vẫn được chấp nhận.
+    it('ném ConflictException khi tồn kho thật không đủ dù trong định mức BOM (Vấn đề #1)', async () => {
+      physicalStockQty = 2;
+      await expect(service.create('1', { ...dto, issuedQty: 5 }, 'user-1', null)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.packagingIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('cho phép xuất khi tồn kho thật đủ, đúng bằng số cần xuất', async () => {
+      physicalStockQty = 5;
+      prisma.packagingIssue.create.mockResolvedValue(issueRow);
+      await expect(
+        service.create('1', { ...dto, issuedQty: 5 }, 'user-1', null),
+      ).resolves.toBeDefined();
+    });
+
+    it('khoá dòng stock_quant bằng FOR UPDATE trước khi đọc tồn (chặn race giữa 2 lệnh SX khác nhau)', async () => {
+      prisma.packagingIssue.create.mockResolvedValue(issueRow);
+      await service.create('1', dto, 'user-1', null);
+
+      expect(prisma.$queryRaw).toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
+      const rawCall = prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray;
+      expect(rawCall.join('')).toContain('FOR UPDATE');
+      expect(rawCall.join('')).toContain('stock_quant');
+    });
+
+    it('dùng getAvailableQty() (trừ giữ chỗ chuyển kho) thay vì tồn thô - vật tư đang bị giữ chỗ vẫn bị chặn dù tồn thô đủ', async () => {
+      physicalStockQty = 100;
+      stockReservationsService.getAvailableQty.mockResolvedValue(3);
+      await expect(service.create('1', { ...dto, issuedQty: 5 }, 'user-1', null)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        expect.anything(),
+        2n,
+        30n,
+        100,
+      );
     });
   });
 

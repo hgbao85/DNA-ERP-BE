@@ -1,4 +1,13 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -24,9 +33,16 @@ export class WarehouseTransfersController {
   @RequirePermissions(CREATE)
   create(
     @Body() dto: CreateWarehouseTransferDto,
+    @CurrentUser('id') userId: string,
     @CurrentUser('warehouseScope') warehouseScope: string | null,
+    @Headers('Idempotency-Key') idempotencyKey: string | undefined,
   ) {
-    return this.warehouseTransfersService.create(dto, warehouseScope);
+    // Vấn đề #7/#11 audit 26/08 - trước đây create() không nhận userId (không lưu được ai tạo)
+    // và không có Idempotency-Key nào (khác material-issues/packaging-issues/steel-issues).
+    if (!idempotencyKey) {
+      throw new BadRequestException('Header Idempotency-Key là bắt buộc');
+    }
+    return this.warehouseTransfersService.create(dto, warehouseScope, userId, idempotencyKey);
   }
 
   // Piece-only (mảnh/vật tư thành phẩm) - tách khỏi create() (vật tư tiêu hao), mục 7.5.
@@ -34,9 +50,19 @@ export class WarehouseTransfersController {
   @RequirePermissions(CREATE)
   createPieceTransfer(
     @Body() dto: CreatePieceWarehouseTransferDto,
+    @CurrentUser('id') userId: string,
     @CurrentUser('warehouseScope') warehouseScope: string | null,
+    @Headers('Idempotency-Key') idempotencyKey: string | undefined,
   ) {
-    return this.warehouseTransfersService.createPieceTransfer(dto, warehouseScope);
+    if (!idempotencyKey) {
+      throw new BadRequestException('Header Idempotency-Key là bắt buộc');
+    }
+    return this.warehouseTransfersService.createPieceTransfer(
+      dto,
+      warehouseScope,
+      userId,
+      idempotencyKey,
+    );
   }
 
   // Đặt TRƯỚC @Get(':id') - "piece-transfer-plan" phải khớp route cố định này, không rơi vào :id.
@@ -87,8 +113,9 @@ export class WarehouseTransfersController {
   reject(
     @Param('id') id: string,
     @Body() dto: RejectWarehouseTransferDto,
+    @CurrentUser('id') userId: string,
     @CurrentUser('warehouseScope') warehouseScope: string | null,
   ) {
-    return this.warehouseTransfersService.reject(id, dto.rejectionReason, warehouseScope);
+    return this.warehouseTransfersService.reject(id, dto.rejectionReason, warehouseScope, userId);
   }
 }

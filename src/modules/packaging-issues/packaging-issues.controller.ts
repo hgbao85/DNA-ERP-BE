@@ -36,6 +36,12 @@ export class PackagingIssuesController {
     @CurrentUser('warehouseScope') warehouseScope: string | null,
     @Headers('Idempotency-Key') idempotencyKey: string | undefined,
   ) {
+    // Vấn đề #11 audit 26/08 - trước đây header này chỉ tuỳ chọn dù service đã hỗ trợ dedupe theo
+    // key, nên 1 request gửi lặp (mất mạng rồi gửi lại...) mà thiếu header vẫn tạo 2 bản ghi riêng
+    // biệt. FE đã gửi kèm ở mọi lần gọi thật (xem withIdempotencyKey() trong packaging-issues-api.ts).
+    if (!idempotencyKey) {
+      throw new BadRequestException('Header Idempotency-Key là bắt buộc');
+    }
     return this.packagingIssuesService.create(id, dto, userId, warehouseScope, idempotencyKey);
   }
 

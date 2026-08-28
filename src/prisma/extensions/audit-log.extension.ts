@@ -51,6 +51,17 @@ const AUDITED_MODELS = new Set([
   'SteelIssue',
   'QcReview',
   'ReplenishRequest',
+  // Vấn đề M1 audit 26/08/2026 - MaterialIssue/PackagingIssue/ProductionBatch là anh em cùng đợt
+  // (Phase 9d, cùng idiom SteelIssue: mỗi cái có id/idempotencyKey/actor/timestamp riêng, workflow
+  // state machine riêng - MaterialIssue ISSUED->RECEIVED, ProductionBatch AWAITING_QC->QC_DONE)
+  // nhưng bị bỏ sót khi thêm SteelIssue ở trên - không có comment nào giải thích đây là loại trừ
+  // có chủ đích. StockReservation cũng thêm cùng đợt: có state machine riêng (ACTIVE->RELEASED,
+  // consumedQty cộng dồn qua nhiều lần update) - KHÁC WarehouseTransferReservation (dòng con 1-1
+  // của đúng 1 WarehouseTransfer qua transferId, cố ý loại trừ, xem comment Phase 3 ở trên).
+  'MaterialIssue',
+  'PackagingIssue',
+  'ProductionBatch',
+  'StockReservation',
   // Phase 8/9 - nhánh DÍNH TIỀN, bổ sung 2026-08-15 (D.c1-no-audit-on-money-path). Trước đó cả
   // chuỗi duyệt phương án cắt -> đề xuất mua -> chọn NCC/giá -> nhận hàng KHÔNG để lại một dòng
   // audit nào ở server: ai duyệt giá nào, lúc nào, đổi từ gì sang gì đều không truy được. Phía FE

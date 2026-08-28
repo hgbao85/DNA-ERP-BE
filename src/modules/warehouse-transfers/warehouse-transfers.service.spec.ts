@@ -127,20 +127,29 @@ describe('WarehouseTransfersService', () => {
 
     it('rejects a route not in TRANSFER_ROUTES (e.g. skipping a step in the chain)', async () => {
       await expect(
-        service.create({ ...dto, fromWarehouseId: '1', toWarehouseId: '3' }, null),
+        service.create(
+          { ...dto, fromWarehouseId: '1', toWarehouseId: '3' },
+          null,
+          'user-1',
+          'idem-key-1',
+        ),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
     });
 
     it('rejects when the caller is scoped to a different warehouse than fromWarehouseId', async () => {
-      await expect(service.create(dto, 'vat-tu-tp')).rejects.toThrow(ForbiddenException);
+      await expect(service.create(dto, 'vat-tu-tp', 'user-1', 'idem-key-1')).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('allows a caller scoped to the correct fromWarehouse', async () => {
       prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
-      await expect(service.create(dto, 'phoi-son-han')).resolves.toBeDefined();
+      await expect(
+        service.create(dto, 'phoi-son-han', 'user-1', 'idem-key-1'),
+      ).resolves.toBeDefined();
     });
 
     it('clamps requested quantity down to available stock (onHand - reservations of both kinds, via getAvailableQty)', async () => {
@@ -148,7 +157,7 @@ describe('WarehouseTransfersService', () => {
       stockReservationsService.getAvailableQty.mockResolvedValue(25); // 40 onHand - 15 reserved
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
-      await service.create(dto, null);
+      await service.create(dto, null, 'user-1', 'idem-key-1');
 
       expect(prisma.warehouseTransfer.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -164,7 +173,7 @@ describe('WarehouseTransfersService', () => {
       prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
-      await service.create(dto, null);
+      await service.create(dto, null, 'user-1', 'idem-key-1');
 
       expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(prisma, 1n, 10n, 100);
     });
@@ -172,7 +181,9 @@ describe('WarehouseTransfersService', () => {
     it('rejects with 400 when clamped availability is 0 for every item', async () => {
       prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 0 } }]);
 
-      await expect(service.create(dto, null)).rejects.toThrow(BadRequestException);
+      await expect(service.create(dto, null, 'user-1', 'idem-key-1')).rejects.toThrow(
+        BadRequestException,
+      );
       expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
     });
 
@@ -182,6 +193,8 @@ describe('WarehouseTransfersService', () => {
       await service.create(
         { ...dto, items: [{ materialName: 'Khung chua dan', unit: 'cai', quantity: 7 }] },
         null,
+        'user-1',
+        'idem-key-1',
       );
 
       expect(prisma.$queryRaw).not.toHaveBeenCalled();
@@ -193,12 +206,41 @@ describe('WarehouseTransfersService', () => {
       expect(call.data.items.create[0].materialId).toBeUndefined();
     });
 
+    // Vấn đề #7 audit 26/08 - trước đây create() không nhận userId nên không lưu được ai tạo phiếu.
+    it('records the caller as createdById', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
+
+      await service.create(dto, null, 'user-1', 'idem-key-1');
+
+      expect(prisma.warehouseTransfer.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          data: expect.objectContaining({ createdById: 'user-1', idempotencyKey: 'idem-key-1' }),
+        }),
+      );
+    });
+
+    // Vấn đề #11 audit 26/08 (phần còn thiếu) - cùng idiom material-issues/packaging-issues.
+    it('idempotency short-circuit - returns the existing transfer, does not create a duplicate', async () => {
+      const existing = transferRow();
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(existing);
+
+      const result = await service.create(dto, null, 'user-1', 'idem-key-1');
+
+      expect(prisma.warehouseTransfer.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { idempotencyKey: 'idem-key-1' } }),
+      );
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+      expect(result.id).toBe('50');
+    });
+
     it('numbers the transfer code sequentially per year, based on the existing count', async () => {
       prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
       prisma.warehouseTransfer.count.mockResolvedValue(4);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
-      await service.create(dto, null);
+      await service.create(dto, null, 'user-1', 'idem-key-1');
 
       const currentYear = new Date().getFullYear();
       expect(prisma.warehouseTransfer.create).toHaveBeenCalledWith(
@@ -259,7 +301,10 @@ describe('WarehouseTransfersService', () => {
         expect.objectContaining({
           where: { id: 50n, status: TransferStatus.PENDING },
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
-          data: expect.objectContaining({ status: TransferStatus.CONFIRMED }),
+          data: expect.objectContaining({
+            status: TransferStatus.CONFIRMED,
+            confirmedById: 'user-1', // Vấn đề #7 audit 26/08
+          }),
         }),
       );
     });
@@ -498,9 +543,9 @@ describe('WarehouseTransfersService', () => {
     });
 
     it('rejects when the caller is scoped to a different warehouse than fromWarehouseId', async () => {
-      await expect(service.createPieceTransfer(pieceDto, 'vat-tu-tp')).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(
+        service.createPieceTransfer(pieceDto, 'vat-tu-tp', 'user-1', 'idem-key-1'),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('rejects a route not in TRANSFER_ROUTES', async () => {
@@ -508,6 +553,8 @@ describe('WarehouseTransfersService', () => {
         service.createPieceTransfer(
           { ...pieceDto, fromWarehouseId: '1', toWarehouseId: '3' },
           null,
+          'user-1',
+          'idem-key-1',
         ),
       ).rejects.toThrow(BadRequestException);
     });
@@ -515,7 +562,7 @@ describe('WarehouseTransfersService', () => {
     it('clamps requested quantity down to the piece transfer plan suggestedQty (20 ready, 50 requested)', async () => {
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
-      await service.createPieceTransfer(pieceDto, 'phoi-son-han');
+      await service.createPieceTransfer(pieceDto, 'phoi-son-han', 'user-1', 'idem-key-1');
 
       expect(prisma.warehouseTransfer.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -530,9 +577,9 @@ describe('WarehouseTransfersService', () => {
     it('rejects with 400 when nothing is ready to transfer', async () => {
       prisma.productionBatch.findMany.mockResolvedValue([]);
 
-      await expect(service.createPieceTransfer(pieceDto, null)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.createPieceTransfer(pieceDto, null, 'user-1', 'idem-key-1'),
+      ).rejects.toThrow(BadRequestException);
       expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
     });
 
@@ -590,6 +637,8 @@ describe('WarehouseTransfersService', () => {
           ],
         },
         'phoi-son-han',
+        'user-1',
+        'idem-key-1',
       );
 
       expect(prisma.$transaction).toHaveBeenCalled();
@@ -612,7 +661,9 @@ describe('WarehouseTransfersService', () => {
         transferRow({ status: TransferStatus.REJECTED }),
       );
 
-      await expect(service.reject('50', 'ly do', null)).rejects.toThrow(ConflictException);
+      await expect(service.reject('50', 'ly do', null, 'user-1')).rejects.toThrow(
+        ConflictException,
+      );
     });
 
     it('releases reservations and records the reason without touching the ledger', async () => {
@@ -621,7 +672,7 @@ describe('WarehouseTransfersService', () => {
         transferRow({ status: TransferStatus.REJECTED, rejectionReason: 'thieu hang' }),
       );
 
-      await service.reject('50', 'thieu hang', 'vat-tu-tp');
+      await service.reject('50', 'thieu hang', 'vat-tu-tp', 'user-1');
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
       expect(prisma.warehouseTransferReservation.updateMany).toHaveBeenCalledWith({
@@ -635,6 +686,7 @@ describe('WarehouseTransfersService', () => {
           data: expect.objectContaining({
             status: TransferStatus.REJECTED,
             rejectionReason: 'thieu hang',
+            rejectedById: 'user-1', // Vấn đề #7 audit 26/08
           }),
         }),
       );
@@ -644,7 +696,7 @@ describe('WarehouseTransfersService', () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
       prisma.warehouseTransfer.updateMany.mockResolvedValue({ count: 0 });
 
-      await expect(service.reject('50', 'thieu hang', 'vat-tu-tp')).rejects.toThrow(
+      await expect(service.reject('50', 'thieu hang', 'vat-tu-tp', 'user-1')).rejects.toThrow(
         ConflictException,
       );
       expect(prisma.warehouseTransferReservation.updateMany).not.toHaveBeenCalled();

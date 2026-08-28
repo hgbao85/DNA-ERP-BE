@@ -238,7 +238,7 @@ describe('StockLedgerService', () => {
       prisma.stockLedger.create.mockResolvedValue(ledgerRow());
 
       await service.adjust(
-        { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5 },
+        { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5, note: 'kiểm kê' },
         'idem-key-2',
         'user-1',
         toWh.code,
@@ -250,7 +250,7 @@ describe('StockLedgerService', () => {
     it('rejects a scoped caller whose warehouseScope touches neither leg of the entry', async () => {
       await expect(
         service.adjust(
-          { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5 },
+          { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5, note: 'kiểm kê' },
           'idem-key-3',
           'user-1',
           'thanh-pham',
@@ -268,7 +268,7 @@ describe('StockLedgerService', () => {
         prisma.stockLedger.create.mockResolvedValue(ledgerRow());
 
         await service.adjust(
-          { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5 },
+          { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5, note: 'kiểm kê' },
           'idem-key-4',
           'user-1',
           null,
@@ -290,6 +290,7 @@ describe('StockLedgerService', () => {
             toWarehouseId: '2', // kho thật
             materialId: '10',
             qty: 10,
+            note: 'kiểm kê',
             expectedWarehouseId: '2',
             expectedCurrentQty: 100,
           },
@@ -313,6 +314,7 @@ describe('StockLedgerService', () => {
               toWarehouseId: '2',
               materialId: '10',
               qty: 10,
+              note: 'kiểm kê',
               expectedWarehouseId: '2',
               expectedCurrentQty: 100, // client vẫn thấy 100 (đã cũ)
             },
@@ -332,6 +334,7 @@ describe('StockLedgerService', () => {
               toWarehouseId: '2',
               materialId: '10',
               qty: 10,
+              note: 'kiểm kê',
               expectedWarehouseId: '999',
               expectedCurrentQty: 100,
             },
@@ -353,6 +356,7 @@ describe('StockLedgerService', () => {
             toWarehouseId: '3',
             materialId: '10',
             qty: 5,
+            note: 'kiểm kê',
             expectedCurrentQty: 100,
           },
           'idem-key-8',

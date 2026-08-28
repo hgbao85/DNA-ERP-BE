@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -15,6 +16,7 @@ import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreatePackagingIssueDto } from './dto/create-packaging-issue.dto';
 import { PackagingIssuePlanItemResponseDto } from './dto/packaging-issue-plan-item-response.dto';
 import { PackagingIssueResponseDto } from './dto/packaging-issue-response.dto';
@@ -54,6 +56,7 @@ export class PackagingIssuesService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
+    private readonly stockReservationsService: StockReservationsService,
   ) {}
 
   async create(
@@ -78,6 +81,9 @@ export class PackagingIssuesService {
 
     const order = await this.findOrderOrThrow(productionOrderId);
     const materialBigId = parseBigIntId(dto.materialId);
+    const sourceWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
+      where: { code: PACKAGING_SOURCE_WAREHOUSE_CODE },
+    });
 
     // Khoá advisory (H3 fix, cùng lý do H2 ở MaterialIssuesService) - không có dòng có sẵn để
     // FOR UPDATE cho lần xuất đầu tiên của 1 khoá (order, material) - xem lockBusinessKey().
@@ -96,6 +102,28 @@ export class PackagingIssuesService {
         throw new BadRequestException(
           `Số lượng xuất (${dto.issuedQty}) vượt quá số lượng còn có thể xuất cho vật tư ${dto.materialId} ` +
             `(định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
+        );
+      }
+
+      // Vấn đề #1 audit 26/08 (Nghiêm trọng) - cùng lý do MaterialIssuesService.create(): trước
+      // đây chỉ check định mức BOM, không đối chiếu tồn kho vật lý. FOR UPDATE chặn cả race giữa
+      // 2 lệnh SX khác nhau cùng xuất 1 vật tư; getAvailableQty() để không giành tồn với chuyển
+      // kho nội bộ đang giữ chỗ vật tư này.
+      const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+        SELECT "qty" FROM "stock_quant"
+        WHERE "warehouseId" = ${sourceWarehouse.id} AND "materialId" = ${materialBigId}
+        FOR UPDATE
+      `;
+      const onHand = stockRow?.qty.toNumber() ?? 0;
+      const availableQty = await this.stockReservationsService.getAvailableQty(
+        tx,
+        sourceWarehouse.id,
+        materialBigId,
+        onHand,
+      );
+      if (dto.issuedQty > availableQty) {
+        throw new ConflictException(
+          `Tồn kho khả dụng (${availableQty}) không đủ xuất ${dto.issuedQty} cho vật tư ${dto.materialId} - kiểm tra lại tồn kho thực tế trước khi xuất`,
         );
       }
 

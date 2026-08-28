@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction, ProcessStep } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -34,6 +43,12 @@ export class SteelIssuesController {
     @CurrentUser('warehouseScope') warehouseScope: string | null,
     @Headers('Idempotency-Key') idempotencyKey: string | undefined,
   ) {
+    // Vấn đề #11 audit 26/08 - trước đây header này chỉ tuỳ chọn dù service đã hỗ trợ dedupe theo
+    // key, nên 1 request gửi lặp (mất mạng rồi gửi lại...) mà thiếu header vẫn tạo 2 bản ghi riêng
+    // biệt. FE đã gửi kèm ở mọi lần gọi thật (xem withIdempotencyKey() trong steel-issues-api.ts).
+    if (!idempotencyKey) {
+      throw new BadRequestException('Header Idempotency-Key là bắt buộc');
+    }
     return this.steelIssuesService.create(id, dto, userId, warehouseScope, idempotencyKey);
   }
 
