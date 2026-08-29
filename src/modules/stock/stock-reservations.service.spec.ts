@@ -62,6 +62,7 @@ describe('StockReservationsService', () => {
         data: {
           warehouseId: 800n,
           materialId: 30n,
+          stockLengthMm: 0,
           quantity: 5,
           refType: 'CUTTING_PROPOSAL',
           refId: '22',
@@ -73,6 +74,32 @@ describe('StockReservationsService', () => {
       });
       expect(result.id).toBe(1n);
       expect(result.quantity.toNumber()).toBe(5);
+    });
+
+    // Kế hoạch "chiều dài cây sắt" 2026-08-29, Bước 3 - hậu tố `:len:N` CHỈ thêm khi khác 0, để
+    // mọi idempotencyKey lịch sử (bucket 0) giữ nguyên TỪNG BYTE (test trên đã xác nhận key bucket
+    // 0 không đổi so với trước khi có field này).
+    it('gắn hậu tố :len:N vào idempotencyKey khi stockLengthMm khác 0', async () => {
+      prisma.stockReservation.create.mockResolvedValue({ id: 2n, quantity: decimal(5) });
+
+      await service.reserve(
+        {
+          warehouseId: 800n,
+          materialId: 30n,
+          stockLengthMm: 6000,
+          qty: 5,
+          refType: 'CUTTING_PROPOSAL',
+          refId: '22',
+        },
+        prisma as unknown as PrismaTx,
+      );
+
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          stockLengthMm: 6000,
+          idempotencyKey: 'CUTTING_PROPOSAL:22:material:30:len:6000',
+        }) as unknown,
+      });
     });
 
     // L5 (2026-08-26): productionInvoiceId đi kèm dòng giữ chỗ ngay từ lúc tạo - đây là thứ
@@ -126,7 +153,7 @@ describe('StockReservationsService', () => {
 
   describe('getAvailableQty', () => {
     it('available = onHand khi không có gì đang giữ chỗ ở cả 2 bảng', async () => {
-      const result = await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 20);
+      const result = await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 0, 20);
       expect(result).toBe(20);
     });
 
@@ -135,7 +162,7 @@ describe('StockReservationsService', () => {
         { quantity: decimal(10), consumedQty: decimal(3) }, // còn giữ 7
         { quantity: decimal(5), consumedQty: decimal(5) }, // đã tiêu hết, không trừ thêm
       ]);
-      const result = await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 20);
+      const result = await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 0, 20);
       expect(result).toBe(13); // 20 - 7
     });
 
@@ -146,7 +173,7 @@ describe('StockReservationsService', () => {
         { quantity: decimal(10), consumedQty: decimal(0) },
       ]);
       prisma.warehouseTransferReservation.findMany.mockResolvedValue([{ quantity: decimal(4) }]);
-      const result = await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 20);
+      const result = await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 0, 20);
       expect(result).toBe(6); // 20 - 10 - 4
     });
 
@@ -154,8 +181,35 @@ describe('StockReservationsService', () => {
       prisma.stockReservation.findMany.mockResolvedValue([
         { quantity: decimal(30), consumedQty: decimal(0) },
       ]);
-      const result = await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 20);
+      const result = await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 0, 20);
       expect(result).toBe(0);
+    });
+
+    // Kế hoạch "chiều dài cây sắt" 2026-08-29, Bước 3 - lọc theo ĐÚNG bucket khi truyền số cụ thể.
+    it('lọc theo stockLengthMm khi truyền 1 bucket cụ thể', async () => {
+      await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 6000, 20);
+
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ stockLengthMm: 6000 }) as unknown,
+        }),
+      );
+      expect(prisma.warehouseTransferReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ stockLengthMm: 6000 }) as unknown,
+        }),
+      );
+    });
+
+    // 'ALL' - dùng cho vật tư không phân bucket (Bước 6) - KHÔNG được lọc theo stockLengthMm.
+    it("không lọc theo bucket nào khi truyền 'ALL'", async () => {
+      await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 'ALL', 20);
+
+      const calls = prisma.stockReservation.findMany.mock.calls as unknown as Array<
+        [{ where: object }]
+      >;
+      const call = calls[0][0];
+      expect(call.where).not.toHaveProperty('stockLengthMm');
     });
   });
 
@@ -177,6 +231,7 @@ describe('StockReservationsService', () => {
         materialId: 30n,
         warehouseId: 800n,
         qty: 5,
+        preferredStockLengthMm: 0,
       });
 
       expect(prisma.cuttingProposal.findMany).not.toHaveBeenCalled();
@@ -220,6 +275,7 @@ describe('StockReservationsService', () => {
         materialId: 30n,
         warehouseId: 800n,
         qty: 5,
+        preferredStockLengthMm: 0,
       });
 
       expect(prisma.stockReservation.update).toHaveBeenCalledWith({
@@ -239,12 +295,14 @@ describe('StockReservationsService', () => {
         materialId: 30n,
         warehouseId: 800n,
         qty: 5,
+        preferredStockLengthMm: 0,
       });
 
       expect(prisma.stockReservation.create).toHaveBeenCalledWith({
         data: {
           warehouseId: 800n,
           materialId: 30n,
+          stockLengthMm: 0,
           productionInvoiceId: 50n,
           quantity: 5,
           refType: 'PRODUCTION_INVOICE',
@@ -261,10 +319,105 @@ describe('StockReservationsService', () => {
           materialId: 30n,
           warehouseId: 800n,
           qty: 0,
+          preferredStockLengthMm: 0,
         }),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
       expect(prisma.stockReservation.create).not.toHaveBeenCalled();
+    });
+
+    // Kế hoạch "chiều dài cây sắt" 2026-08-29, Bước 3 - resolvePoolBucket(): 2 bucket của cùng
+    // (PI, vật tư) KHÔNG thấy nhau, mỗi bucket là 1 pool riêng biệt.
+    describe('resolvePoolBucket (bucket cỡ cây)', () => {
+      it('bucket đề nghị có pool riêng - credit đúng bucket đó, không lẫn bucket khác của cùng vật tư', async () => {
+        prisma.stockReservation.findMany.mockImplementation(
+          (args: { where: { stockLengthMm: number } }) =>
+            Promise.resolve(
+              args.where.stockLengthMm === 6000
+                ? [
+                    {
+                      id: 902n,
+                      refType: 'CUTTING_PROPOSAL',
+                      refId: '30',
+                      warehouseId: 800n,
+                      quantity: decimal(10),
+                      consumedQty: decimal(0),
+                    },
+                  ]
+                : [], // bucket 0 rỗng - không được dùng khi bucket đề nghị đã có pool
+            ),
+        );
+
+        const result = await service.creditPool(prisma as unknown as PrismaTx, {
+          productionInvoiceId: 50n,
+          materialId: 30n,
+          warehouseId: 800n,
+          qty: 5,
+          preferredStockLengthMm: 6000,
+        });
+
+        expect(result.stockLengthMm).toBe(6000);
+        expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+          where: { id: 902n },
+          data: { quantity: { increment: 5 } },
+        });
+      });
+
+      // Case D3 - PI dở dang bắc qua migration: giữ chỗ cũ vẫn ở bucket 0, phương án mới đề nghị
+      // bucket khác nhưng bucket đó chưa từng tồn tại - fallback dùng tạm bucket 0.
+      it('bucket đề nghị rỗng nhưng bucket 0 còn tồn - fallback dùng bucket 0 (PI dở dang bắc qua migration)', async () => {
+        prisma.stockReservation.findMany.mockImplementation(
+          (args: { where: { stockLengthMm: number } }) =>
+            Promise.resolve(
+              args.where.stockLengthMm === 0
+                ? [
+                    {
+                      id: 903n,
+                      refType: 'CUTTING_PROPOSAL',
+                      refId: '31',
+                      warehouseId: 800n,
+                      quantity: decimal(20),
+                      consumedQty: decimal(0),
+                    },
+                  ]
+                : [], // bucket 6000 (đề nghị) rỗng
+            ),
+        );
+
+        const result = await service.creditPool(prisma as unknown as PrismaTx, {
+          productionInvoiceId: 50n,
+          materialId: 30n,
+          warehouseId: 800n,
+          qty: 5,
+          preferredStockLengthMm: 6000,
+        });
+
+        expect(result.stockLengthMm).toBe(0);
+        expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+          where: { id: 903n },
+          data: { quantity: { increment: 5 } },
+        });
+      });
+
+      it('cả bucket đề nghị lẫn bucket 0 đều rỗng - tạo dòng mới Ở BUCKET ĐỀ NGHỊ (không fallback khi không có gì để fallback về)', async () => {
+        prisma.stockReservation.findMany.mockResolvedValue([]);
+
+        const result = await service.creditPool(prisma as unknown as PrismaTx, {
+          productionInvoiceId: 50n,
+          materialId: 30n,
+          warehouseId: 800n,
+          qty: 5,
+          preferredStockLengthMm: 6000,
+        });
+
+        expect(result.stockLengthMm).toBe(6000);
+        expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            stockLengthMm: 6000,
+            idempotencyKey: 'PRODUCTION_INVOICE:50:material:30:len:6000',
+          }) as unknown,
+        });
+      });
     });
   });
 
@@ -312,6 +465,7 @@ describe('StockReservationsService', () => {
         productionInvoiceId: 50n,
         materialId: 30n,
         qty: 5,
+        preferredStockLengthMm: 0,
       });
 
       expect(result.warehouseId).toBe(800n);
@@ -353,6 +507,7 @@ describe('StockReservationsService', () => {
         productionInvoiceId: 50n,
         materialId: 30n,
         qty: 8, // 3 (hết dòng 901) + 5 (lấy thêm từ dòng 900)
+        preferredStockLengthMm: 0,
       });
 
       expect(result.warehouseId).toBe(800n);
@@ -374,6 +529,7 @@ describe('StockReservationsService', () => {
           productionInvoiceId: 50n,
           materialId: 30n,
           qty: 5,
+          preferredStockLengthMm: 0,
         }),
       ).rejects.toThrow(ConflictException);
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
@@ -398,6 +554,7 @@ describe('StockReservationsService', () => {
           productionInvoiceId: 50n,
           materialId: 30n,
           qty: 6,
+          preferredStockLengthMm: 0,
         }),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
@@ -409,8 +566,81 @@ describe('StockReservationsService', () => {
           productionInvoiceId: 50n,
           materialId: 30n,
           qty: 0,
+          preferredStockLengthMm: 0,
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    // Kế hoạch "chiều dài cây sắt" 2026-08-29, Bước 3/4 - Phôi khai đúng cỡ khớp pool giữ chỗ.
+    it('trả về stockLengthMm ĐÚNG bucket đề nghị khi pool tồn tại ở bucket đó', async () => {
+      const rows = [
+        {
+          id: 910n,
+          refType: 'CUTTING_PROPOSAL',
+          refId: '40',
+          warehouseId: 800n,
+          quantity: decimal(10),
+          consumedQty: decimal(0),
+        },
+      ];
+      prisma.stockReservation.findMany.mockImplementation(
+        (args: { where: { stockLengthMm: number } }) =>
+          Promise.resolve(args.where.stockLengthMm === 6000 ? rows : []),
+      );
+      mockRowLocks(rows);
+
+      const result = await service.drainPool(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        qty: 5,
+        preferredStockLengthMm: 6000,
+      });
+
+      expect(result.stockLengthMm).toBe(6000);
+    });
+
+    // Case D3 - giữ chỗ cũ bắc qua migration vẫn ở bucket 0, Phôi khai xuất theo cỡ mới nhưng
+    // bucket mới chưa từng có giữ chỗ nào - fallback dùng bucket 0 (KHÔNG ConflictException).
+    it('fallback dùng bucket 0 khi bucket đề nghị rỗng nhưng bucket 0 còn giữ chỗ', async () => {
+      const rows = [
+        {
+          id: 911n,
+          refType: 'CUTTING_PROPOSAL',
+          refId: '41',
+          warehouseId: 800n,
+          quantity: decimal(10),
+          consumedQty: decimal(0),
+        },
+      ];
+      prisma.stockReservation.findMany.mockImplementation(
+        (args: { where: { stockLengthMm: number } }) =>
+          Promise.resolve(args.where.stockLengthMm === 0 ? rows : []),
+      );
+      mockRowLocks(rows);
+
+      const result = await service.drainPool(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        qty: 5,
+        preferredStockLengthMm: 6000,
+      });
+
+      expect(result.stockLengthMm).toBe(0);
+    });
+
+    // Khai sai cỡ so với phương án đã duyệt (không phải case D3 - cả bucket đề nghị lẫn bucket 0
+    // đều rỗng) phải bị chặn rõ ràng, không âm thầm trừ nhầm bucket khác.
+    it('ném ConflictException khi cả bucket đề nghị lẫn bucket 0 đều rỗng (khai sai cỡ cây)', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.drainPool(prisma as unknown as PrismaTx, {
+          productionInvoiceId: 50n,
+          materialId: 30n,
+          qty: 5,
+          preferredStockLengthMm: 6000,
+        }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 

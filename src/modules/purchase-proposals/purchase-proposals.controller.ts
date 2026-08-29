@@ -72,10 +72,18 @@ export class PurchaseProposalsController {
     @Body() dto: ReceivePurchaseProposalItemDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
     @CurrentUser('id') userId: string,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
   ) {
     if (!idempotencyKey) {
       throw new BadRequestException('Header Idempotency-Key là bắt buộc');
     }
-    return this.purchaseProposalsService.receiveItem(id, itemId, dto, userId, idempotencyKey);
+    return this.purchaseProposalsService.receiveItem(
+      id,
+      itemId,
+      dto,
+      userId,
+      idempotencyKey,
+      warehouseScope,
+    );
   }
 }

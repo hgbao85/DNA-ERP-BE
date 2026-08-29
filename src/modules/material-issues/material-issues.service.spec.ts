@@ -106,7 +106,9 @@ describe('MaterialIssuesService', () => {
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
     stockReservationsService = {
-      getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
+      getAvailableQty: jest.fn((_tx, _wh, _mat, _bucket, onHand: number) =>
+        Promise.resolve(onHand),
+      ),
     };
     service = new MaterialIssuesService(
       prisma as unknown as PrismaServiceType,
@@ -134,6 +136,8 @@ describe('MaterialIssuesService', () => {
           }),
         }),
       );
+      // Tham số thứ 2 là `tx` của chính transaction create() đang giữ khoá FOR UPDATE (đính chính
+      // 2026-08-29) - bút toán PHẢI nằm trong đó, không post sau khi transaction đã commit.
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({
           fromWarehouseId: 2n,
@@ -144,6 +148,7 @@ describe('MaterialIssuesService', () => {
           refId: '100',
           idempotencyKey: 'material-issue:100',
         }),
+        expect.anything(),
       );
       expect(result.id).toBe('100');
     });
@@ -154,8 +159,11 @@ describe('MaterialIssuesService', () => {
       const result = await service.create('1', dto, 'user-1', null, 'idem-key-1');
 
       expect(prisma.materialIssue.create).not.toHaveBeenCalled();
+      // Nhánh retry KHÔNG có transaction nào đang mở (record đã tồn tại từ lần gọi trước) - `tx`
+      // truyền vào postLedgerEntry() là undefined, postEntry() tự dùng this.prisma.
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ idempotencyKey: 'material-issue:100' }),
+        undefined,
       );
       expect(result.id).toBe('100');
     });
@@ -276,6 +284,7 @@ describe('MaterialIssuesService', () => {
         expect.anything(),
         2n,
         30n,
+        'ALL',
         100,
       );
     });

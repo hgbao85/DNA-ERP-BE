@@ -10,6 +10,7 @@ describe('StockQuantService', () => {
     id: 1n,
     warehouseId: 1n,
     materialId: 10n,
+    stockLengthMm: 0,
     segmentSpecId: null,
     pieceId: null,
     productVariantId: null,
@@ -27,7 +28,9 @@ describe('StockQuantService', () => {
     prisma = { stockQuant: { findMany: jest.fn() } };
     // available mặc định = onHand (không giữ chỗ gì) - test riêng "vấn đề #13" ghi đè khi cần.
     stockReservationsService = {
-      getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
+      getAvailableQty: jest.fn((_tx, _wh, _mat, _bucket, onHand: number) =>
+        Promise.resolve(onHand),
+      ),
     };
     service = new StockQuantService(
       prisma as unknown as PrismaServiceType,
@@ -74,7 +77,13 @@ describe('StockQuantService', () => {
 
     const result = await service.findAll({ warehouseId: '1' });
 
-    expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(undefined, 1n, 10n, 42.5);
+    expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+      undefined,
+      1n,
+      10n,
+      0,
+      42.5,
+    );
     expect(result).toEqual([expect.objectContaining({ qty: 42.5, availableQty: 10 })]);
   });
 

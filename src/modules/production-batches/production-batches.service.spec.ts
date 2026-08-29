@@ -283,6 +283,7 @@ describe('ProductionBatchesService', () => {
           fromWarehouseId: steelWarehouse.id,
           toWarehouseId: productionWarehouse.id,
           segmentSpecId: 60n,
+          stockLengthMm: 0,
           qty: 60, // 3 × reportedQty(20)
           refType: StockLedgerRefType.SEGMENT_CONSUME,
           refId: '700',
@@ -385,6 +386,7 @@ describe('ProductionBatchesService', () => {
           fromWarehouseId: aluminumWarehouse.id,
           toWarehouseId: productionWarehouse.id,
           materialId: 80n,
+          stockLengthMm: 0,
           qty: 2, // 24 / 12
           refType: StockLedgerRefType.MATERIAL_YIELD_CONSUME,
           refId: '700',

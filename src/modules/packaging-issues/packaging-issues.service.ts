@@ -50,6 +50,11 @@ const PACKAGING_DEST_WAREHOUSE_CODE = 'thanh-pham';
  * đích (thanh-pham) đều là thủ kho, WarehouseXuatPage không có màn "nhận hàng" riêng cho packaging
  * (khác KhoNhapDanPage/XacNhanVatTuPage) - ghi StockLedger ngay lúc tạo, giống MaterialIssue ghi
  * ngay khi xuất (vật tư đóng gói cũng chưa bị trừ tồn ở bước nào trước đó).
+ *
+ * (Đính chính 2026-08-29, audit độc lập 28/08 mục Nghiêm trọng #1 - cùng lỗi/cùng fix với
+ * MaterialIssuesService) postEntry() PHẢI chạy TRONG transaction tạo packaging_issue (truyền `tx`)
+ * - trước đây gọi NGOÀI transaction khiến khoá FOR UPDATE ở stock_quant nhả trước khi bút toán ghi
+ * xong, 2 lệnh SX khác nhau xuất cùng vật tư gần lúc nhau có thể cùng đọc thấy tồn cũ và cùng trừ.
  */
 @Injectable()
 export class PackagingIssuesService {
@@ -68,22 +73,26 @@ export class PackagingIssuesService {
   ): Promise<PackagingIssueResponseDto> {
     this.assertWarehouseScope(warehouseScope);
 
+    // Cả 2 kho đều là hằng số cố định - resolve 1 lần ở đây, dùng lại cho cả nhánh
+    // idempotency-retry lẫn nhánh tạo mới bên dưới (xem đính chính 2026-08-29 ở đầu file).
+    const [sourceWarehouse, destWarehouse] = await Promise.all([
+      this.prisma.warehouse.findUniqueOrThrow({ where: { code: PACKAGING_SOURCE_WAREHOUSE_CODE } }),
+      this.prisma.warehouse.findUniqueOrThrow({ where: { code: PACKAGING_DEST_WAREHOUSE_CODE } }),
+    ]);
+
     if (idempotencyKey) {
       const existing = await this.prisma.packagingIssue.findUnique({
         where: { idempotencyKey },
         include: PACKAGING_ISSUE_INCLUDE,
       });
       if (existing) {
-        await this.postLedgerEntry(existing, issuedById);
+        await this.postLedgerEntry(existing, issuedById, sourceWarehouse.id, destWarehouse.id);
         return this.toResponseDto(existing);
       }
     }
 
     const order = await this.findOrderOrThrow(productionOrderId);
     const materialBigId = parseBigIntId(dto.materialId);
-    const sourceWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
-      where: { code: PACKAGING_SOURCE_WAREHOUSE_CODE },
-    });
 
     // Khoá advisory (H3 fix, cùng lý do H2 ở MaterialIssuesService) - không có dòng có sẵn để
     // FOR UPDATE cho lần xuất đầu tiên của 1 khoá (order, material) - xem lockBusinessKey().
@@ -109,16 +118,20 @@ export class PackagingIssuesService {
       // đây chỉ check định mức BOM, không đối chiếu tồn kho vật lý. FOR UPDATE chặn cả race giữa
       // 2 lệnh SX khác nhau cùng xuất 1 vật tư; getAvailableQty() để không giành tồn với chuyển
       // kho nội bộ đang giữ chỗ vật tư này.
-      const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+      // Vật tư thường vĩnh viễn chỉ có bucket 0, nhưng KHÔNG giả định 1 dòng duy nhất - cộng dồn
+      // mọi dòng trả về (kế hoạch "chiều dài cây sắt" 2026-08-29, Bước 6). FOR UPDATE khoá TẤT CẢ
+      // bucket của vật tư đó, đúng ý "lấy tổng, đừng ai đụng vào".
+      const stockRows = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
         SELECT "qty" FROM "stock_quant"
         WHERE "warehouseId" = ${sourceWarehouse.id} AND "materialId" = ${materialBigId}
         FOR UPDATE
       `;
-      const onHand = stockRow?.qty.toNumber() ?? 0;
+      const onHand = stockRows.reduce((sum, r) => sum + r.qty.toNumber(), 0);
       const availableQty = await this.stockReservationsService.getAvailableQty(
         tx,
         sourceWarehouse.id,
         materialBigId,
+        'ALL',
         onHand,
       );
       if (dto.issuedQty > availableQty) {
@@ -127,7 +140,7 @@ export class PackagingIssuesService {
         );
       }
 
-      return tx.packagingIssue.create({
+      const issue = await tx.packagingIssue.create({
         data: {
           productionOrderId: order.id,
           materialId: materialBigId,
@@ -138,9 +151,12 @@ export class PackagingIssuesService {
         },
         include: PACKAGING_ISSUE_INCLUDE,
       });
+      // PHẢI nằm trong transaction đang giữ khoá FOR UPDATE ở trên (xem đính chính 2026-08-29 ở
+      // đầu file) - khoá chỉ nhả sau khi bút toán ghi xong, chặn được lệnh SX khác đọc trúng tồn cũ.
+      await this.postLedgerEntry(issue, issuedById, sourceWarehouse.id, destWarehouse.id, tx);
+      return issue;
     });
 
-    await this.postLedgerEntry(created, issuedById);
     return this.toResponseDto(created);
   }
 
@@ -204,21 +220,27 @@ export class PackagingIssuesService {
     return result;
   }
 
-  private async postLedgerEntry(issue: PackagingIssueRow, createdById: string): Promise<void> {
-    const [fromWarehouse, toWarehouse] = await Promise.all([
-      this.prisma.warehouse.findUniqueOrThrow({ where: { code: PACKAGING_SOURCE_WAREHOUSE_CODE } }),
-      this.prisma.warehouse.findUniqueOrThrow({ where: { code: PACKAGING_DEST_WAREHOUSE_CODE } }),
-    ]);
-    await this.stockLedgerService.postEntry({
-      fromWarehouseId: fromWarehouse.id,
-      toWarehouseId: toWarehouse.id,
-      materialId: issue.materialId,
-      qty: issue.issuedQty.toNumber(),
-      refType: StockLedgerRefType.PACKAGING_ISSUE,
-      refId: issue.id.toString(),
-      createdById,
-      idempotencyKey: `packaging-issue:${issue.id}`,
-    });
+  private async postLedgerEntry(
+    issue: PackagingIssueRow,
+    createdById: string,
+    fromWarehouseId: bigint,
+    toWarehouseId: bigint,
+    tx?: PrismaTx,
+  ): Promise<void> {
+    await this.stockLedgerService.postEntry(
+      {
+        fromWarehouseId,
+        toWarehouseId,
+        materialId: issue.materialId,
+        stockLengthMm: 0,
+        qty: issue.issuedQty.toNumber(),
+        refType: StockLedgerRefType.PACKAGING_ISSUE,
+        refId: issue.id.toString(),
+        createdById,
+        idempotencyKey: `packaging-issue:${issue.id}`,
+      },
+      tx,
+    );
   }
 
   /** null = tổng kho (BOSS/ADMIN) - không có gì để chặn, cùng idiom MaterialIssuesService/

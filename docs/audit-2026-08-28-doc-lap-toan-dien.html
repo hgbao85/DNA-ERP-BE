@@ -26,6 +26,10 @@
     --low-soft:#e1ede4;
     --moot:#727d78;
     --moot-soft:#eceeed;
+    --fixed:#1c7a4b;
+    --fixed-soft:#dcf0e4;
+    --partial:#8a6d1f;
+    --partial-soft:#f3ecd3;
     --shadow: 0 1px 2px rgba(20,30,28,0.06), 0 6px 20px -12px rgba(20,30,28,0.18);
   }
   @media (prefers-color-scheme: dark){
@@ -49,6 +53,10 @@
       --low-soft:#1f3526;
       --moot:#8ea198;
       --moot-soft:#212b28;
+      --fixed:#5fc98d;
+      --fixed-soft:#173829;
+      --partial:#d9c168;
+      --partial-soft:#38311a;
       --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 10px 30px -14px rgba(0,0,0,0.6);
     }
   }
@@ -72,6 +80,10 @@
     --low-soft:#1f3526;
     --moot:#8ea198;
     --moot-soft:#212b28;
+    --fixed:#5fc98d;
+    --fixed-soft:#173829;
+    --partial:#d9c168;
+    --partial-soft:#38311a;
     --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 10px 30px -14px rgba(0,0,0,0.6);
   }
 
@@ -245,6 +257,45 @@
   .badge.med{ background:var(--medium-soft); color:var(--medium); }
   .badge.low{ background:var(--low-soft); color:var(--low); }
   .badge.moot{ background:var(--moot-soft); color:var(--moot); }
+  .badge.fixed{ background:var(--fixed-soft); color:var(--fixed); }
+  .badge.partial{ background:var(--partial-soft); color:var(--partial); }
+
+  .fix-note{
+    border:1px solid var(--fixed);
+    background:var(--fixed-soft);
+    border-radius:6px;
+    padding:12px 14px;
+    margin-top:10px;
+    font-size:14px;
+    color:var(--text);
+  }
+  .fix-note.partial{ border-color:var(--partial); background:var(--partial-soft); }
+  .fix-note .k{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px; letter-spacing:0.05em; text-transform:uppercase;
+    display:block; margin-bottom:6px; font-weight:600;
+    color:var(--fixed);
+  }
+  .fix-note.partial .k{ color:var(--partial); }
+  .fix-note p{ margin:0 0 6px; color:var(--text); font-size:14px; }
+  .fix-note p:last-child{ margin-bottom:0; }
+
+  .update-banner{
+    border:1px solid var(--fixed);
+    background:var(--fixed-soft);
+    border-radius:8px;
+    padding:16px 20px;
+    margin:18px 0 0;
+  }
+  .update-banner .k{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase;
+    color:var(--fixed); display:block; margin-bottom:8px; font-weight:600;
+  }
+  .update-banner p{ margin:0 0 8px; font-size:14.5px; color:var(--text); }
+  .update-banner p:last-child{ margin-bottom:0; }
+  .update-banner ul{ margin:0 0 8px; padding-left:20px; }
+  .update-banner li{ margin-bottom:4px; font-size:14.5px; color:var(--text); }
 
   .loc{
     display:block;
@@ -319,15 +370,25 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><div class="n crit">3</div><div class="l">Nghiêm trọng</div></div>
-      <div class="stat"><div class="n med">5</div><div class="l">Trung bình</div></div>
-      <div class="stat"><div class="n low">8</div><div class="l">Thấp</div></div>
+      <div class="stat"><div class="n crit">3</div><div class="l">Nghiêm trọng (3 đã fix)</div></div>
+      <div class="stat"><div class="n med">5</div><div class="l">Trung bình (5 đã fix)</div></div>
+      <div class="stat"><div class="n low">8</div><div class="l">Thấp (chưa rà lại)</div></div>
       <div class="stat"><div class="n">4</div><div class="l">mảng đã soi, không thấy bug</div></div>
     </div>
 
     <div class="correction">
       <span class="k">Đính chính</span>
       <p>Báo cáo cùng ngày <code>audit-2026-08-28-tiep-noi-mua-hang-kho.html</code> kết luận "0 phát hiện Nghiêm trọng" — kết luận đó SAI, vì phạm vi hôm đó chỉ so sánh phần code mới thay đổi với báo cáo 26/08, và tin rằng các phát hiện cũ đã "ĐÃ FIX" là đúng. Đợt audit độc lập này đọc lại chính những chỗ từng được đánh dấu "đã fix" và phát hiện 1 trong số đó (xuất tiêu hao/đóng gói) chỉ được vá <b>một nửa</b>. File này là bản ghi đúng, thay thế kết luận số liệu ở báo cáo kia.</p>
+    </div>
+
+    <div class="update-banner">
+      <span class="k">Cập nhật 29/08/2026 — verify trực tiếp trên code hiện tại, không chỉ tin lại báo cáo cũ</span>
+      <p>Cả <b>3/3 mục Nghiêm trọng</b> và <b>5/5 mục Trung bình</b> bên dưới đã được sửa, kiểm tra lại từng dòng code + chạy test thật (không mock) trước khi đánh dấu "Đã fix". Mỗi mục đã sửa có khung xanh riêng ghi rõ cách sửa, vị trí, và cách đã verify.</p>
+      <ul>
+        <li>Trung bình #1 (chiều dài cây sắt) là 1 dự án riêng lớn — root-cause fix (thêm <code>stockLengthMm</code> làm 1 phần khoá tồn kho ở <code>StockLedger</code>/<code>StockQuant</code>/<code>StockReservation</code>), migration đã chạy DB dev, 787 unit + 8 integration test (Postgres thật) xanh. <b>Chưa deploy production, chưa đụng FE.</b></li>
+        <li>Trung bình #5 (thiếu test) fix xong cả 2 hàm: <code>recordStepBatch()</code>/<code>completeStep()</code> có sẵn từ đợt trước, <code>getStepProgress()</code> vừa thêm 6 test riêng (29/08).</li>
+        <li><b>8 mục Thấp (mục 03) đã được rà lại</b> — tất cả còn nguyên như audit gốc, không mục nào bị/được sửa tình cờ. Không có gì cấp bách.</li>
+      </ul>
     </div>
   </header>
 
@@ -338,31 +399,43 @@
     <article class="finding crit">
       <div class="finding-top">
         <h3 class="finding-title">Xuất tiêu hao/đóng gói vẫn có thể làm âm tồn kho — fix trước đó chỉ vá một nửa</h3>
-        <span class="badge crit">Nghiêm trọng</span>
+        <span class="badge crit">Nghiêm trọng</span><span class="badge fixed">✓ Đã fix</span>
       </div>
       <span class="loc mono">material-issues.service.ts:103–161 · packaging-issues.service.ts (cùng pattern)</span>
       <p>Kiểm tồn (<code>SELECT ... FOR UPDATE</code> + <code>getAvailableQty()</code>) chạy đúng bên trong transaction. Nhưng <code>postLedgerEntry()</code> — bút toán ghi sổ THẬT, thứ mà trigger DB dùng để cập nhật <code>stock_quant</code> — được gọi <b style="color:var(--text)">sau khi transaction đã commit</b>, không truyền <code>tx</code>. Khoá <code>FOR UPDATE</code> nhả trước khi số dư thật sự đổi.</p>
       <div class="scenario"><b>Kịch bản:</b> 2 lệnh sản xuất khác nhau cùng xin xuất hết 1 vật tư gần như đồng thời. Khoá advisory chỉ khoá theo (order, stage, material) nên không chặn được 2 order khác nhau. tx của lệnh A commit trước (ledger chưa ghi) → lệnh B đọc tồn vẫn thấy số cũ → cả hai đều "hợp lệ" tại thời điểm kiểm tra → cả hai <code>postLedgerEntry</code> chạy sau đó đều trừ kho → tồn âm thật. Trớ trêu: chính docstring của <code>StockLedgerService.postEntry()</code> mô tả đúng y hệt kịch bản này như một cảnh báo, nhưng 2 module này không làm theo — trong khi <code>WarehouseTransfersService.confirm()</code> và <code>SteelIssuesService</code> làm đúng.</div>
+      <div class="fix-note">
+        <span class="k">Đã fix — verify lại 29/08</span>
+        <p><code>postLedgerEntry()</code> giờ nhận <code>tx</code> và được gọi <b>trong</b> transaction đang giữ <code>FOR UPDATE</code> (<code>material-issues.service.ts:172</code>, <code>packaging-issues.service.ts</code> cùng pattern) — khớp đúng <code>WarehouseTransfersService.confirm()</code>. Xác nhận trực tiếp bằng cách đọc lại call site, không chỉ tin lại ghi chú cũ.</p>
+      </div>
     </article>
 
     <article class="finding crit">
       <div class="finding-top">
         <h3 class="finding-title">Nhận hàng mua về không kiểm phạm vi kho — thủ kho có thể ghi nhận vào kho không phụ trách</h3>
-        <span class="badge crit">Nghiêm trọng</span>
+        <span class="badge crit">Nghiêm trọng</span><span class="badge fixed">✓ Đã fix</span>
       </div>
       <span class="loc mono">purchase-proposals.controller.ts:67–80 · purchase-proposals.service.ts:293–468 (receiveItem)</span>
       <p>Mọi luồng ghi kho khác trong hệ thống đều gọi <code>assertWarehouseScope()</code> để chặn thủ kho thao tác ngoài kho mình phụ trách (30 file khác đã áp dụng). Endpoint này là ngoại lệ duy nhất: controller không lấy <code>warehouseScope</code> từ token, service xác định kho đích hoàn toàn từ <code>item.material.warehouseId</code> rồi ghi thẳng, không so khớp gì với phạm vi của người gọi.</p>
       <div class="scenario"><b>Kịch bản:</b> tài khoản thủ kho chỉ được UI cho thấy Kho Phôi Sơn Hàn gọi thẳng <code>POST /purchase-proposals/:id/items/:itemId/receive</code> cho 1 item thuộc Kho Thành phẩm — BE vẫn xử lý bình thường, cộng tồn sai kho, không cảnh báo gì. UI không có đường dẫn tới ca này, nhưng gọi API trực tiếp thì không gì chặn.</div>
+      <div class="fix-note">
+        <span class="k">Đã fix — verify lại 29/08</span>
+        <p>Controller nhận <code>warehouseScope</code> từ token, service gọi <code>assertWarehouseScope()</code> (<code>purchase-proposals.service.ts:331</code>) trước khi ghi — cùng pattern 30 file khác đã dùng. Cùng đợt sửa cũng thêm tái kiểm <code>status</code> ngay trong <code>FOR UPDATE</code> (xem mục Trung bình "trạng thái item không được tái kiểm" bên dưới, cùng file).</p>
+      </div>
     </article>
 
     <article class="finding crit">
       <div class="finding-top">
         <h3 class="finding-title">Duyệt/từ chối "cả cụm" thiếu khoá trạng thái mà bản "từng SKU" đã có — có thể để lại lệnh sản xuất mồ côi</h3>
-        <span class="badge crit">Nghiêm trọng</span>
+        <span class="badge crit">Nghiêm trọng</span><span class="badge fixed">✓ Đã fix</span>
       </div>
       <span class="loc mono">production-invoices.service.ts:921–964 (approveBatch) · 1017–1057 (rejectBatch) · 826–862 (rejectBatchByQlsx)</span>
       <p>Các hàm "từng SKU" (<code>approveItem</code>, <code>rejectItem</code>...) đều dùng <code>updateMany({where:{id, status: &lt;kỳ vọng&gt;}}) + so count</code> để chặn 2 request đua nhau ghi đè cùng 1 dòng. Các hàm "cả cụm" (duyệt/từ chối toàn bộ PI gộp) không có khoá này: <code>approveBatch</code> ghi <code>updateMany</code> không lọc theo status và không nằm trong transaction; <code>rejectBatch</code>/<code>rejectBatchByQlsx</code> dùng danh sách item đọc <b style="color:var(--text)">trước</b> transaction, không tái kiểm trạng thái khi ghi.</p>
       <div class="scenario"><b>Kịch bản:</b> Sếp duyệt cả cụm và từ chối cả cụm chạy gần như đồng thời trên cùng 1 PI gộp (2 tab/2 phiên — nút khoá khi đang gửi chỉ có hiệu lực trong 1 tab). Nếu duyệt commit trước (tạo <code>ProductionOrder</code> thật, giữ chỗ tồn kho sắt) rồi từ chối vẫn ghi đè bằng dữ liệu cũ → item bị đổi ngược thành từ chối, PI bị xoá, nhưng <code>ProductionOrder</code> đã tạo thật thì mồ côi — gọi lại API cho bản ghi này crash 500 (non-null assertion ở <code>production-orders.service.ts:156-157</code>), trong khi tồn kho đã bị giữ chỗ thật cho 1 đơn hàng UI đang hiển thị "đã từ chối".</div>
+      <div class="fix-note">
+        <span class="k">Đã fix — verify lại 29/08</span>
+        <p>Cả 3 hàm giờ dùng <code>updateMany</code> kèm điều kiện trạng thái kỳ vọng + so <code>count</code> trong <code>$transaction</code>, đúng idiom <code>approveItem()</code>/<code>rejectItem()</code> — request thua khớp 0 dòng và nhận <code>ConflictException</code> thay vì ghi đè. Code hiện tại tự ghi rõ trong comment: "đính chính 2026-08-29, audit độc lập 28/08 mục Nghiêm trọng #3". Đồng thời đã thêm <code>retryProductionOrder()</code> (route mới ở Admin &gt; Lệnh sản xuất) để xử lý ca <code>ProductionOrder</code> tạo thất bại còn sót — xem mục Trung bình tương ứng bên dưới.</p>
+      </div>
     </article>
   </section>
 
@@ -372,67 +445,92 @@
     <article class="finding med">
       <div class="finding-top">
         <h3 class="finding-title">Chiều dài cây sắt không được lưu trong kho — lô mua khác đợt bị coi là đồng nhất</h3>
-        <span class="badge med">Trung bình</span>
+        <span class="badge med">Trung bình</span><span class="badge fixed">✓ Đã fix tận gốc</span>
       </div>
       <span class="loc mono">schema.prisma · model StockQuant (không có trường chiều dài) · cutting-proposals.service.ts:1730–1793 (findConflictingStockLengthReason)</span>
       <p><code>StockQuant</code> chỉ theo dõi <code>(kho, vật tư, số lượng)</code> — không phân biệt cây sắt dài bao nhiêu. Solver bên ngoài luôn bật <code>auto_scan</code>, nghĩa là mỗi lần tính CÓ THỂ ra chiều dài cây tối ưu khác nhau cho cùng 1 loại sắt. Hệ thống có chặn xung đột cỡ cây (L7, 26/08) — nhưng đã xác nhận trực tiếp: cơ chế này <b style="color:var(--text)">chỉ so sánh giữa các SKU trong CÙNG 1 PI</b>, không đối chiếu với chiều dài cây thực tế đang tồn kho từ 1 PI/lần mua trước đó.</p>
       <div class="scenario"><b>Kịch bản:</b> PI-A mua vật tư X, chốt cây 6000mm, nhập kho 50 cây. PI-B (khác PI, cùng vật tư) do bộ cỡ đoạn khác, solver dò ra cây tối ưu là 6200mm. <code>approve()</code> cho PI-B thấy tồn=50, trừ thẳng — hệ thống âm thầm coi 50 cây 6000mm cũ là "50 cây 6200mm". Nếu cây thực tế ngắn hơn giả định, Phôi nhận lệnh xuất kho nhưng không cắt nổi kiểu đã duyệt từ cây thật — hụt vật tư giữa chừng sản xuất dù hệ thống báo "đủ tồn, không cần mua".</div>
+      <div class="fix-note">
+        <span class="k">Đã fix tận gốc (Phương án A) — 29/08</span>
+        <p>Thêm <code>stockLengthMm Int @default(0)</code> làm 1 phần khoá tồn kho trên <code>StockLedger</code>/<code>StockQuant</code>/<code>StockReservation</code>/<code>WarehouseTransferReservation</code> (0 = "chưa xác định cỡ cây", không backfill dữ liệu cũ). Sửa xuyên suốt: <code>StockLedgerService</code> (bắt buộc truyền bucket ở mọi bút toán), <code>StockReservationsService</code> (pool giữ chỗ là nguồn xác thực bucket, có fallback bucket-0 cho dữ liệu cũ), 3 luồng sắt (steel-issues, cutting-proposals — thêm advisory lock chống race ở bucket mới toanh, purchase-proposals), chặn cứng chuyển kho nội bộ cho vật tư đã phân bucket, và công cụ <code>rebucket()</code> cho thủ kho khai lại cỡ cây tồn cũ.</p>
+        <p><b>Verify:</b> migration đã chạy trên DB dev chung; 787 unit test + 8 integration test (Postgres thật, gồm 1 test concurrency thật bắn 2 transaction song song) đều xanh, <code>tsc --noEmit</code> sạch. <b>Chưa deploy production</b> — còn 3 quyết định vận hành/lãnh đạo (đếm số phiếu chuyển kho sắt trên production, xác nhận lãnh đạo cho quy tắc "cây dài hơn không tự thay thế", chọn lịch khai lại cỡ cây tồn cũ) và toàn bộ phần FE (<code>D:\DNA-ERP</code>) chưa động tới.</p>
+      </div>
     </article>
 
     <article class="finding med">
       <div class="finding-top">
         <h3 class="finding-title">Ghi nhận công đoạn cắt sắt — 2 race condition cùng gốc "kiểm rồi mới ghi"</h3>
-        <span class="badge med">Trung bình</span>
+        <span class="badge med">Trung bình</span><span class="badge fixed">✓ Đã fix</span>
       </div>
       <span class="loc mono">steel-issues.service.ts:365–467 (recordCutBatch) · 867–939 &amp; 841/979–1007 (recordStepBatch × completeStep)</span>
       <p>Đã phát hiện ở lượt audit tính năng "Phôi" trước đó trong ngày (giữ nguyên, không phải trùng lặp): (1) <code>recordCutBatch</code> đọc tổng đã cắt rồi kiểm "không vượt" tách rời khỏi lệnh ghi, không transaction/khoá dòng — 2 lượt báo cắt gần đồng thời có thể ghi vượt số cây đã xuất; (2) <code>recordStepBatch</code> (công đoạn sau Cắt) có cùng lỗ hổng, cộng thêm race với <code>completeStep</code> cho phép ghi thêm sau khi công đoạn đã "chốt xong". Chi tiết đầy đủ ở phần Phôi trong <code>audit-2026-08-28-tiep-noi-mua-hang-kho.html</code> (phần này KHÔNG bị đính chính, vẫn đúng).</p>
+      <div class="fix-note">
+        <span class="k">Đã fix — verify lại 29/08</span>
+        <p>Cả 3 hàm (<code>recordCutBatch</code>, <code>recordStepBatch</code>, <code>completeStep</code>) giờ bọc trong <code>$transaction</code> kèm <code>SELECT ... FOR UPDATE</code> khoá đúng dòng <code>steel_issues</code> trước khi đọc lại số liệu mới nhất và ghi — đúng idiom đã dùng ở <code>consumeReservationAndDeduct()</code>. Race guard mới có test riêng (idempotent khi gọi lại giữa lúc giữ khoá, <code>ConflictException</code> khi trạng thái đã đổi).</p>
+      </div>
     </article>
 
     <article class="finding med">
       <div class="finding-top">
         <h3 class="finding-title">Nhận hàng — trạng thái item không được tái kiểm trong transaction</h3>
-        <span class="badge med">Trung bình</span>
+        <span class="badge med">Trung bình</span><span class="badge fixed">✓ Đã fix</span>
       </div>
       <span class="loc mono">purchase-proposals.service.ts:309–313 (kiểm ban đầu) vs 364–465 (transaction)</span>
       <p><code>item.status !== PURCHASING</code> chỉ được kiểm trên snapshot đọc trước transaction; bên trong transaction (sau khoá dòng), code không đọc lại và so khớp lại <code>status</code>. Khác <code>bossApprove()</code> cùng file đã có pattern <code>updateMany</code> kèm điều kiện trạng thái + so <code>count</code>.</p>
       <div class="scenario"><b>Kịch bản:</b> 2 yêu cầu nhận hàng gần như đồng thời cho cùng 1 dòng (chia đợt hoặc double-submit) — yêu cầu đến sau vẫn được xử lý dù dòng đã đóng thành "đã mua đủ", chỉ bị chặn bởi ngưỡng dung sai chứ không phải bởi trạng thái. Hậu quả số liệu bị giới hạn nhờ dung sai, nhưng vi phạm state machine đã công bố.</div>
+      <div class="fix-note">
+        <span class="k">Đã fix — verify lại 29/08</span>
+        <p><code>SELECT ... FOR UPDATE</code> giờ đọc kèm cột <code>status</code> và tái kiểm ngay trong khoá (<code>purchase-proposals.service.ts:408</code>): <code>locked.status !== PURCHASING</code> ném <code>ConflictException</code> rõ ràng thay vì âm thầm xử lý tiếp trên trạng thái đã lỗi thời.</p>
+      </div>
     </article>
 
     <article class="finding med">
       <div class="finding-top">
         <h3 class="finding-title">SKU đã duyệt nhưng tạo lệnh sản xuất thất bại → kẹt vĩnh viễn, không có đường phục hồi</h3>
-        <span class="badge med">Trung bình</span>
+        <span class="badge med">Trung bình</span><span class="badge fixed">✓ Đã fix</span>
       </div>
       <span class="loc mono">production-invoices.service.ts:676–692 (approveItem) · 952–964 (approveBatch)</span>
       <p>Cả 2 hàm ghi <code>prodApprovalStatus = APPROVED</code> trước, rồi mới tạo <code>ProductionOrder</code> trong <code>try/catch</code> chỉ log lỗi (chính comment tự thừa nhận đây là rủi ro còn sót). Nếu tạo lệnh thất bại: khối trigger đề xuất cắt sắt bị bỏ qua hoàn toàn, và với <code>approveBatch</code>, các SKU khác trong cụm vẫn tiếp tục bình thường — 1 SKU bị âm thầm loại khỏi phương án cắt chung mà không ai biết. Không có route nào để "tạo lại lệnh sản xuất cho item đã APPROVED" — kẹt vĩnh viễn.</p>
+      <div class="fix-note">
+        <span class="k">Đã fix — verify lại 29/08</span>
+        <p>Thêm <code>retryProductionOrder()</code> (<code>production-invoices.service.ts:781</code>) + route <code>POST /production-invoices/:id/items/:itemId/retry-production-order</code>, đặt ở <b>Admin &gt; Lệnh sản xuất</b> (sự cố kỹ thuật, không phải Sếp — quyết định của team) với nút "Sự cố" trong <code>ProductionInvoicesPage.tsx</code> cho các item đã APPROVED nhưng chưa có <code>ProductionOrder</code>.</p>
+      </div>
     </article>
 
     <article class="finding med">
       <div class="finding-top">
         <h3 class="finding-title">0 test cho 2 hàm cốt lõi vừa thêm của tính năng Phôi</h3>
-        <span class="badge med">Trung bình</span>
+        <span class="badge med">Trung bình</span><span class="badge fixed">✓ Đã fix</span>
       </div>
       <span class="loc mono">steel-issues.service.spec.ts · recordStepBatch(), getStepProgress()</span>
       <p>945 dòng test nhưng không 1 <code>describe</code> nào cho 2 hàm nhiều nhánh kiểm tra nhất của tính năng mới nhất. Không có gì cảnh báo sớm khi sửa code sau này — 2 race condition ở trên chính là loại lỗi mà test biên/đồng thời sẽ giúp lộ ra.</p>
+      <div class="fix-note">
+        <span class="k">Đã fix — verify lại 29/08</span>
+        <p><code>recordStepBatch()</code> và <code>completeStep()</code> có <code>describe</code> riêng phủ happy path + 2 race-guard mới. <code>getStepProgress()</code> giờ cũng có <code>describe</code> riêng (6 test): tính đúng <code>required</code>/<code>done</code>/<code>failed</code> từ <code>StepBatchSegment</code>+<code>qcReviewSegment</code>, lọc <code>PieceBom</code> đúng theo <code>processSteps: {has: step}</code>, loại đợt rework khỏi <code>issuedBarCount</code>, trả rỗng khi PI chưa có lệnh sản xuất, và xử lý đúng ca "orphan" (đợt gia công ghi vào segmentSpec không còn thuộc BOM hiện tại).</p>
+      </div>
     </article>
   </section>
 
   <section>
     <div class="section-head"><span class="section-num">03</span><h2>Thấp</h2></div>
     <p class="section-note">Rủi ro thật nhưng hậu quả giới hạn, xác suất thấp, hoặc chỉ khai thác được khi bỏ qua UI gọi thẳng API.</p>
+    <div class="fix-note" style="margin-bottom:14px;">
+      <span class="k">Rà lại 29/08 — cả 8 mục đều còn nguyên</span>
+      <p>Đọc lại trực tiếp từng vị trí trên code hiện tại (không đoán) — không mục nào bị/được sửa tình cờ trong đợt sửa Nghiêm trọng/Trung bình vừa rồi, kể cả <code>stock-quant.service.ts</code> dù file đó có bị đụng vào (chỉ thêm cột <code>stockLengthMm</code>, không đổi cách xử lý segmentSpec/piece/productVariant). Không mục nào cấp bách — vẫn đúng "hậu quả giới hạn, xác suất thấp" như audit gốc.</p>
+    </div>
 
     <div class="table-wrap">
       <table class="low-table">
         <thead><tr><th>Vị trí</th><th>Vấn đề</th></tr></thead>
         <tbody>
-          <tr><td>warehouse-transfers.service.ts:637–644</td><td>Sinh mã phiếu chuyển kho dựa vào <code>count()</code>+UNIQUE constraint, không bắt <code>P2002</code> để retry — đụng độ hiếm gặp ra lỗi 500 thô thay vì tự thử lại.</td></tr>
-          <tr><td>stock-quant.service.ts:56–69</td><td><code>availableQty</code> chỉ trừ giữ chỗ khi dòng có <code>materialId</code>; dòng segmentSpec/piece/productVariant luôn trả bằng tồn thô — FE có thể hiển thị "khả dụng" sai cho các dòng này.</td></tr>
-          <tr><td>production-invoices.service.ts:238–269 (mergeItems)</td><td>Không kiểm <code>productionInvoiceId === null</code> trước khi gộp — gọi thẳng API có thể "cướp" 1 SKU đang dở dang ở PI khác. FE luôn lọc đúng nên chưa ai chạm phải.</td></tr>
-          <tr><td>steel-issues.controller.ts:152–157</td><td>Endpoint ghi mới (step-batch) thiếu <code>Idempotency-Key</code> bắt buộc, khác các endpoint ghi khác cùng module.</td></tr>
-          <tr><td>steel-issues.controller.ts:84–88</td><td><code>getStepProgress()</code> không validate tham số <code>:step</code> — công đoạn Cắt trả rỗng thay vì báo lỗi rõ; chuỗi lạ có thể vọt 500 thay vì 400.</td></tr>
-          <tr><td>purchase-proposals.service.ts:405–407</td><td>Dùng kiểm tra truthy thay vì <code>!= null</code> cho 1 trường chỉ phục vụ đối chiếu (không tính tồn kho) — gửi đúng số 0 bị coi như "không gửi".</td></tr>
-          <tr><td>purchase-proposals.controller.ts (findAll/findOne)</td><td>Không lọc theo <code>warehouseScope</code> — mọi thủ kho xem được đề xuất mua của mọi kho. Chỉ lộ thông tin nội bộ, không ghi sai dữ liệu.</td></tr>
-          <tr><td>DNA-DEXUAT · de_xuat_logic.py:193–194</td><td>Gộp nhóm vật tư theo tên KHÔNG chuẩn hoá hoa/thường (khác <code>spec</code> đã chuẩn hoá kỹ) — hiện KHÔNG khai thác được vì ERP luôn gửi ID số, chỉ đáng ghi nhận nếu sau này có caller khác dùng tên tự do.</td></tr>
+          <tr><td>warehouse-transfers.service.ts:656 (nextTransferCode)</td><td>Sinh mã phiếu chuyển kho dựa vào <code>count()</code>+UNIQUE constraint, không bắt <code>P2002</code> để retry — đụng độ hiếm gặp ra lỗi 500 thô thay vì tự thử lại.</td></tr>
+          <tr><td>stock-quant.service.ts (toResponseDto)</td><td><code>availableQty</code> chỉ trừ giữ chỗ khi dòng có <code>materialId</code>; dòng segmentSpec/piece/productVariant luôn trả bằng tồn thô — FE có thể hiển thị "khả dụng" sai cho các dòng này.</td></tr>
+          <tr><td>production-invoices.service.ts:226 (mergeItems)</td><td>Chỉ chặn item thuộc PI đã <code>isMerged=true</code>; item có PI riêng dở dang (<code>isMerged=false</code>, chưa gộp) vẫn gộp được — gọi thẳng API có thể "cướp" 1 SKU đang dở dang. FE luôn lọc đúng nên chưa ai chạm phải.</td></tr>
+          <tr><td>steel-issues.controller.ts:155 (recordStepBatch), tương tự cut-batches</td><td>Endpoint ghi (cut-batches/step-batches) vẫn thiếu <code>Idempotency-Key</code> bắt buộc, khác endpoint <code>create()</code> cùng module đã có.</td></tr>
+          <tr><td>steel-issues.controller.ts:86 (getStepProgress)</td><td><code>:step</code> vẫn không validate enum — chuỗi lạ có thể vọt 500 thay vì 400.</td></tr>
+          <tr><td>purchase-proposals.service.ts:430 (nextReceivedQtyPurchaseUnit)</td><td>Vẫn dùng kiểm tra truthy (<code>dto.x ? ... : ...</code>) thay vì <code>!= null</code> cho 1 trường chỉ phục vụ đối chiếu (không tính tồn kho) — gửi đúng số 0 bị coi như "không gửi" (vô hại về mặt số học vì cộng 0 không đổi giá trị, chỉ là code lỏng lẻo).</td></tr>
+          <tr><td>purchase-proposals.controller.ts (findAll/findOne)</td><td>Vẫn không lọc theo <code>warehouseScope</code> — mọi thủ kho xem được đề xuất mua của mọi kho. Chỉ lộ thông tin nội bộ, không ghi sai dữ liệu.</td></tr>
+          <tr><td>DNA-DEXUAT · de_xuat_logic.py:193–194</td><td>Không đụng file Python nào trong repo DNA-DEXUAT suốt cả phiên — chắc chắn còn nguyên như audit gốc. Gộp nhóm vật tư theo tên KHÔNG chuẩn hoá hoa/thường, hiện KHÔNG khai thác được vì ERP luôn gửi ID số.</td></tr>
         </tbody>
       </table>
     </div>
@@ -462,6 +560,8 @@
 
   <footer>
     Đợt audit độc lập 28/08/2026 — 4 subagent đọc song song, mỗi agent bị cấm đọc <code class="mono">docs/*.html</code>/<code class="mono">docs/*.md</code> và các file <code class="mono">PHAN_TICH_HE_THONG*.md</code> trong DNA-DEXUAT. Người tổng hợp đã tự đọc lại trực tiếp trên code hiện tại từng phát hiện Nghiêm trọng và phần lớn Trung bình trước khi đưa vào báo cáo này.
+    <br><br>
+    <b style="color:var(--text)">Cập nhật 29/08/2026:</b> đọc lại từng call site/test thật trên code hiện tại (không suy diễn từ ghi chú cũ) để đánh dấu trạng thái "Đã fix" cho các mục Nghiêm trọng và Trung bình, và xác nhận 8 mục Thấp (03) đều còn nguyên. Phần "Đã soi kỹ, không thấy bug" (04) chưa được rà lại lần này.
   </footer>
 </div>
 </body>

@@ -928,7 +928,12 @@ export class CuttingProposalsService {
           include: LIST_INCLUDE,
         });
 
-        const consumptions: { materialId: bigint; consumeQty: number; warehouseId: bigint }[] = [];
+        const consumptions: {
+          materialId: bigint;
+          consumeQty: number;
+          warehouseId: bigint;
+          stockLengthMm: number;
+        }[] = [];
 
         if (buyableLines.length > 0) {
           const items: {
@@ -937,14 +942,30 @@ export class CuttingProposalsService {
             actualStock: number;
             stockLengthMm: number | null;
           }[] = [];
-          // Khoá theo THỨ TỰ materialId tăng dần, không theo thứ tự dòng trong phương án: 2 phương
-          // án gộp chạm cùng 2 loại sắt theo thứ tự ngược nhau sẽ khoá chéo và deadlock. Thứ tự
-          // khoá nhất quán toàn hệ thống là cách chuẩn để loại hẳn ca đó.
-          const orderedLines = [...buyableLines].sort((a, b) =>
-            a.materialId < b.materialId ? -1 : a.materialId > b.materialId ? 1 : 0,
-          );
+          // Khoá theo THỨ TỰ (materialId, stockLengthMm) tăng dần, không theo thứ tự dòng trong
+          // phương án: 2 phương án gộp chạm cùng vật tư+bucket theo thứ tự ngược nhau sẽ khoá chéo
+          // và deadlock. Thứ tự khoá nhất quán toàn hệ thống là cách chuẩn để loại hẳn ca đó (kế
+          // hoạch "chiều dài cây sắt" 2026-08-29, Bước 4: thêm stockLengthMm vào khoá thứ tự).
+          const orderedLines = [...buyableLines].sort((a, b) => {
+            if (a.materialId !== b.materialId) return a.materialId < b.materialId ? -1 : 1;
+            const aLen = a.bestStockLengthMm ?? 0;
+            const bLen = b.bestStockLengthMm ?? 0;
+            return aLen - bLen;
+          });
           for (const line of orderedLines) {
             const { warehouseId } = warehouseByMaterialId.get(line.materialId)!;
+            const stockLengthMm = line.bestStockLengthMm ?? 0;
+            // Khoá advisory THEO BUCKET trước FOR UPDATE - bucket mới toanh (cỡ cây chưa từng
+            // nhập) chưa có dòng stock_quant nào để FOR UPDATE khoá, nên 2 lượt duyệt song song
+            // cùng bucket mới đều thấy onHand=0 mà không chờ nhau nếu thiếu khoá này (kế hoạch
+            // "chiều dài cây sắt" 2026-08-29, Bước 4 - trước fix này rủi ro gần như không xảy ra vì
+            // bucket 0 hầu như luôn có sẵn dòng). Namespace riêng `stock-bucket:` - KHÔNG trùng
+            // `purchase-proposal-mutate:` mà receiveItem() dùng, vì đây là 2 thao tác trên 2 dữ
+            // liệu khác nhau ở 2 thời điểm khác nhau, không có tình huống nào cần loại trừ lẫn nhau.
+            await lockBusinessKey(
+              tx,
+              `stock-bucket:${warehouseId}:${line.materialId}:${stockLengthMm}`,
+            );
             // Khoá dòng stock_quant liên quan trong lúc tính "tồn khả dụng" - chặn 2 phương án
             // cắt cùng vật tư được duyệt gần như đồng thời cùng đọc thấy 1 số dư (giống pattern
             // WarehouseTransfersService.createTransfer()). Khoá này CHỈ có tác dụng vì bút toán
@@ -954,6 +975,7 @@ export class CuttingProposalsService {
             const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
             SELECT "qty" FROM "stock_quant"
             WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${line.materialId}
+              AND "stockLengthMm" = ${stockLengthMm}
             FOR UPDATE
           `;
             const onHand = Math.floor(locked[0]?.qty.toNumber() ?? 0);
@@ -965,6 +987,7 @@ export class CuttingProposalsService {
               tx,
               warehouseId,
               line.materialId,
+              stockLengthMm,
               onHand,
             );
             const totalBars = line.totalBars!;
@@ -993,7 +1016,12 @@ export class CuttingProposalsService {
               data: { buyBars: buyQty },
             });
             if (consumeQty > 0) {
-              consumptions.push({ materialId: line.materialId, consumeQty, warehouseId });
+              consumptions.push({
+                materialId: line.materialId,
+                consumeQty,
+                warehouseId,
+                stockLengthMm,
+              });
             }
           }
 
@@ -1171,11 +1199,12 @@ export class CuttingProposalsService {
         // Việc đọc tồn - quyết định consumeQty - ghi giữ chỗ vẫn nằm trọn trong 1 khoá, 1 commit như
         // trước (lý do giữ FOR UPDATE ở trên không đổi: 2 phương án cùng vật tư duyệt gần nhau vẫn
         // phải xếp hàng, chỉ là phần "ăn" giờ là giữ chỗ thay vì trừ tồn thẳng).
-        for (const { materialId, consumeQty, warehouseId } of consumptions) {
+        for (const { materialId, consumeQty, warehouseId, stockLengthMm } of consumptions) {
           await this.stockReservationsService.reserve(
             {
               warehouseId,
               materialId,
+              stockLengthMm,
               qty: consumeQty,
               refType: StockReservationRefType.CUTTING_PROPOSAL,
               refId: bigId.toString(),
@@ -1726,6 +1755,13 @@ export class CuttingProposalsService {
    * Gọi từ CẢ autoApproveBlockReason() (chặn SỚM ngay khi tự-duyệt, hiện lý do rõ trên displayReason)
    * LẪN approve() (chặn cả đường thủ công POST .../approve - cổng autoApproveBlockReason() KHÔNG
    * bảo vệ đường đó, xem docstring hàm này).
+   *
+   * ⚠️ KHÔNG được nới lỏng luật "1 PI + 1 vật tư luôn chỉ chốt đúng 1 cỡ cây" ở hàm này mà không
+   * sửa lại StockReservationsService.reserve() để phát hiện tham số stockLengthMm lệch giữa 2 lần
+   * gọi cùng idempotencyKey và ném lỗi thay vì resolve-or-return - reserve() PHỤ THUỘC NGẦM vào
+   * luật này (kế hoạch "chiều dài cây sắt" 2026-08-29, quyết định thiết kế #5). Trước plan đó phá
+   * luật chỉ gây nhầm cỡ hiển thị; sau plan đó phá luật khiến 1 phiếu giữ chỗ bị âm thầm từ chối
+   * (trả về dòng cũ, không báo lỗi) thay vì tạo đúng dòng mới ở bucket khác.
    */
   private async findConflictingStockLengthReason(
     proposalId: bigint,

@@ -225,8 +225,9 @@ describe('CuttingProposalsService', () => {
     // bằng mockResolvedValueOnce.
     stockReservationsService = {
       reserve: jest.fn(),
-      getAvailableQty: jest.fn((_tx: unknown, _wId: unknown, _mId: unknown, onHand: number) =>
-        Promise.resolve(onHand),
+      getAvailableQty: jest.fn(
+        (_tx: unknown, _wId: unknown, _mId: unknown, _bucket: unknown, onHand: number) =>
+          Promise.resolve(onHand),
       ),
       releaseByRef: jest.fn(),
     };
@@ -1771,9 +1772,11 @@ describe('CuttingProposalsService', () => {
         {
           warehouseId: 800n,
           materialId: 30n,
+          stockLengthMm: 0,
           qty: 8,
           refType: 'CUTTING_PROPOSAL',
           refId: '2',
+          productionInvoiceId: undefined,
           createdById: 'user-1',
         },
         expect.anything(),

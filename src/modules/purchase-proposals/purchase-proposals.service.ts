@@ -296,6 +296,7 @@ export class PurchaseProposalsService {
     dto: ReceivePurchaseProposalItemDto,
     userId: string,
     idempotencyKey: string,
+    warehouseScope: string | null,
   ): Promise<PurchaseProposalItemResponseDto> {
     const proposal = await this.findDetailOrThrow(id);
     const bigItemId = parseBigIntId(itemId);
@@ -320,6 +321,14 @@ export class PurchaseProposalsService {
       );
     }
     const materialWarehouseId = item.material.warehouseId;
+    // Đây là chỗ ghi kho DUY NHẤT trong hệ thống từng thiếu kiểm scope (mọi chỗ ghi kho khác đều
+    // gọi assertWarehouseScope trước khi ghi) - kho đích ở trên xác định thẳng từ
+    // Material.warehouseId, không khớp gì với phạm vi của người gọi. Thủ kho chỉ được UI cho vào
+    // 1 kho vẫn gọi thẳng API nhận hộ hàng cho kho khác được nếu không chặn ở đây.
+    if (!item.material.warehouse) {
+      throw new NotFoundException(`Kho của vật tư ${item.material.code} không tồn tại`);
+    }
+    this.assertWarehouseScope(warehouseScope, item.material.warehouse.code, 'nhận hàng vào kho');
     // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26, mở rộng thành pool): cộng hàng về ĐÚNG pool giữ chỗ
     // (StockReservation, tạo ở CuttingProposalsService.approve()) - CHỈ khi đúng vật tư SẮT của
     // CuttingProposal thuộc CÙNG PI với đề xuất mua này. KHÔNG còn soi theo
@@ -376,14 +385,30 @@ export class PurchaseProposalsService {
         // nhận hàng và duyệt/từ chối có thể chen ngang nhau khi cùng ghi status cùng lúc.
         await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
 
+        // Đọc kèm "status" và tái kiểm NGAY SAU KHI khoá dòng (đính chính 2026-08-29, audit độc
+        // lập 28/08 mục Trung bình) - trước đây chỉ kiểm `item.status` trên snapshot đọc TRƯỚC
+        // transaction (dòng ~310), không tái kiểm bên trong FOR UPDATE. 2 lượt nhận hàng gần đồng
+        // thời cho cùng dòng: lượt đầu đóng PURCHASED xong, lượt sau (đang chờ khoá) vẫn tính tiếp
+        // trên `receivedQty` MỚI (đúng, nhờ FOR UPDATE) nhưng không hề biết dòng đã đóng hồ sơ -
+        // chỉ bị chặn bởi ngưỡng dung sai chứ không phải bởi trạng thái, vi phạm state machine đã
+        // công bố (PURCHASED không còn nhận thêm được).
         const [locked] = await tx.$queryRaw<
-          { receivedQty: Prisma.Decimal; receivedQtyPurchaseUnit: Prisma.Decimal | null }[]
+          {
+            receivedQty: Prisma.Decimal;
+            receivedQtyPurchaseUnit: Prisma.Decimal | null;
+            status: PurchaseProposalStatus;
+          }[]
         >`
-          SELECT "receivedQty", "receivedQtyPurchaseUnit" FROM "purchase_proposal_items"
+          SELECT "receivedQty", "receivedQtyPurchaseUnit", "status" FROM "purchase_proposal_items"
           WHERE "id" = ${item.id} FOR UPDATE
         `;
         if (!locked) {
           throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
+        }
+        if (locked.status !== PurchaseProposalStatus.PURCHASING) {
+          throw new ConflictException(
+            `Vật tư ${item.material.code} đã bị 1 request khác xử lý trong lúc nhận hàng (đang ở trạng thái ${locked.status}, không còn PURCHASING) - không ghi đè`,
+          );
         }
         const currentReceivedQty = locked.receivedQty.toNumber();
         const nextReceivedQty = currentReceivedQty + dto.receivedQty;
@@ -409,19 +434,11 @@ export class PurchaseProposalsService {
         // Bút toán "hàng mua về nhập kho" - CÙNG transaction với update receivedQty bên dưới
         // (postEntry nhận tx), khoá chỉ nhả sau khi cả hai đã ghi xong.
         if (incrementQty > 0) {
-          await this.stockLedgerService.postEntry(
-            {
-              fromWarehouseId: supplierWarehouse.id,
-              toWarehouseId: materialWarehouseId,
-              materialId: item.materialId,
-              qty: incrementQty,
-              refType: StockLedgerRefType.PURCHASE,
-              refId: proposal.id.toString(),
-              createdById: userId,
-              idempotencyKey,
-            },
-            tx,
-          );
+          // dto.stockLengthMm: thủ kho thực đo hàng NCC giao khác cỡ so với đề xuất (hiếm).
+          // item.stockLengthMm: số ĐÃ CHỐT lúc duyệt phương án cắt (bình thường). 0: vật tư không
+          // phân bucket. Đây chỉ là ĐỀ NGHỊ - bucket THẬT do creditPool()/pool giữ chỗ quyết định
+          // (nguyên tắc D3, kế hoạch "chiều dài cây sắt" 2026-08-29, Bước 4).
+          const preferredStockLengthMm = dto.stockLengthMm ?? item.stockLengthMm ?? 0;
 
           // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26): hàng vừa về phải "có chủ" ngay - cộng thẳng vào
           // pool giữ chỗ của (PI, vật tư) này, KHÔNG để rơi vào tồn chung. Thiếu bước này thì
@@ -431,14 +448,37 @@ export class PurchaseProposalsService {
           // DÒNG này là sắt của phương án cắt nào đó thuộc PI này (xem check đầu hàm) - nhánh khác
           // (VTTP/tiêu hao, kể cả khi nằm CHUNG 1 đề xuất gộp với sắt) không có pool nào để cộng
           // vào, cứ để hàng về rơi vào tồn chung.
+          //
+          // Gọi creditPool() TRƯỚC postEntry() (đảo thứ tự so với bản gốc) - bucket của bút toán
+          // StockLedger PHẢI theo bucket THẬT mà pool quyết định (có thể khác preferredStockLengthMm
+          // nếu rơi vào nhánh fallback bucket-0, xem resolvePoolBucket), không phải đoán trước. Đảo
+          // thứ tự an toàn vì cả 2 đã nằm trong cùng transaction đã khoá
+          // `purchase-proposal-mutate:` + FOR UPDATE dòng item ở trên.
+          let stockLengthMm = preferredStockLengthMm;
           if (isSteelLineOfThisPI && targetProductionInvoiceId != null) {
-            await this.stockReservationsService.creditPool(tx, {
+            ({ stockLengthMm } = await this.stockReservationsService.creditPool(tx, {
               productionInvoiceId: targetProductionInvoiceId,
               materialId: item.materialId,
               warehouseId: materialWarehouseId,
               qty: incrementQty,
-            });
+              preferredStockLengthMm,
+            }));
           }
+
+          await this.stockLedgerService.postEntry(
+            {
+              fromWarehouseId: supplierWarehouse.id,
+              toWarehouseId: materialWarehouseId,
+              materialId: item.materialId,
+              stockLengthMm,
+              qty: incrementQty,
+              refType: StockLedgerRefType.PURCHASE,
+              refId: proposal.id.toString(),
+              createdById: userId,
+              idempotencyKey,
+            },
+            tx,
+          );
         }
 
         // Nhận đủ (>=buyQty) -> ĐÚNG DÒNG này đóng hồ sơ PURCHASED ngay, độc lập với item khác
@@ -518,6 +558,19 @@ export class PurchaseProposalsService {
       select: { purchaseOverReceiptTolerancePercent: true },
     });
     return config?.purchaseOverReceiptTolerancePercent.toNumber() ?? 0;
+  }
+
+  /** null = tổng kho (BOSS/ADMIN), thấy mọi kho - không có gì để chặn. */
+  private assertWarehouseScope(
+    warehouseScope: string | null,
+    requiredCode: string,
+    actionLabel: string,
+  ): void {
+    if (warehouseScope && warehouseScope !== requiredCode) {
+      throw new ForbiddenException(
+        `Caller bị giới hạn ở kho '${warehouseScope}', không được ${actionLabel} '${requiredCode}'`,
+      );
+    }
   }
 
   private async findDetailOrThrow(id: string): Promise<PurchaseProposalDetail> {

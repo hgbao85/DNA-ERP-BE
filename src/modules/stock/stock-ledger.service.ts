@@ -7,12 +7,18 @@ import {
 } from '@nestjs/common';
 import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
+import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
 import { ListStockLedgerQueryDto } from './dto/list-stock-ledger-query.dto';
+import { RebucketStockDto } from './dto/rebucket-stock.dto';
 import { StockLedgerResponseDto } from './dto/stock-ledger-response.dto';
+import { StockReservationsService } from './stock-reservations.service';
+
+/** Cùng idiom materials.service.ts (không export dùng chung - chỉ 2 nơi cần biết code này). */
+const OPENING_BALANCE_WAREHOUSE_CODE = 'OPENING_BALANCE';
 
 type StockLedgerWithRefs = Prisma.StockLedgerGetPayload<{
   include: {
@@ -42,6 +48,12 @@ export interface PostStockEntryInput {
   segmentSpecId?: bigint;
   pieceId?: bigint;
   productVariantId?: bigint;
+  /** Cỡ cây sắt (mm), 0 = "bucket chưa xác định cỡ cây" - BẮT BUỘC (không optional) dù đa số
+   *  call site không liên quan sắt: caller phải truyền tường minh 0 - đổi lại tsc tự ép soát
+   *  MỌI call site postEntry() trong repo khi thêm field này, không sót nơi nào (xem kế hoạch
+   *  "chiều dài cây sắt" 2026-08-29, quyết định thiết kế #4 - ghi sai bucket hỏng dữ liệu vĩnh
+   *  viễn, nặng hơn nhiều so với chỉ bắt buộc phía đọc). */
+  stockLengthMm: number;
   qty: number;
   refType: StockLedgerRefType;
   refId?: string;
@@ -61,7 +73,10 @@ export interface PostStockEntryInput {
  */
 @Injectable()
 export class StockLedgerService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly stockReservationsService: StockReservationsService,
+  ) {}
 
   /**
    * `tx` = ghi bút toán TRONG transaction của caller. BẮT BUỘC dùng khi caller có bước "đọc tồn
@@ -88,6 +103,11 @@ export class StockLedgerService {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty phải lớn hơn 0');
     }
+    if (input.stockLengthMm !== 0 && input.materialId === undefined) {
+      // Mirror CHECK constraint stock_ledger_stock_length_mm_chk - trả 400 rõ ràng thay vì để lộ
+      // lỗi CHECK constraint thô, cùng idiom assertExactlyOneGoodsLeg().
+      throw new BadRequestException('stockLengthMm khác 0 chỉ hợp lệ khi có materialId');
+    }
 
     const data: Prisma.StockLedgerCreateInput = {
       fromWarehouse: { connect: { id: input.fromWarehouseId } },
@@ -98,6 +118,7 @@ export class StockLedgerService {
       productVariant: input.productVariantId
         ? { connect: { id: input.productVariantId } }
         : undefined,
+      stockLengthMm: input.stockLengthMm,
       qty: input.qty,
       refType: input.refType,
       refId: input.refId,
@@ -160,13 +181,17 @@ export class StockLedgerService {
     const toWarehouseId = parseBigIntId(dto.toWarehouseId);
     await this.assertScopeTouchesWarehouses(warehouseScope, fromWarehouseId, toWarehouseId);
 
-    const input = {
+    const materialId = dto.materialId ? parseBigIntId(dto.materialId) : undefined;
+    const stockLengthMm = await this.resolveAdjustStockLengthMm(materialId, dto.stockLengthMm);
+
+    const input: PostStockEntryInput = {
       fromWarehouseId,
       toWarehouseId,
-      materialId: dto.materialId ? parseBigIntId(dto.materialId) : undefined,
+      materialId,
       segmentSpecId: dto.segmentSpecId ? parseBigIntId(dto.segmentSpecId) : undefined,
       pieceId: dto.pieceId ? parseBigIntId(dto.pieceId) : undefined,
       productVariantId: dto.productVariantId ? parseBigIntId(dto.productVariantId) : undefined,
+      stockLengthMm,
       qty: dto.qty,
       refType: StockLedgerRefType.ADJUST,
       note: dto.note,
@@ -191,15 +216,18 @@ export class StockLedgerService {
         'expectedWarehouseId phải trùng fromWarehouseId hoặc toWarehouseId',
       );
     }
-    if (input.materialId === undefined) {
+    if (materialId === undefined) {
       throw new BadRequestException('expectedCurrentQty chỉ hỗ trợ điều chỉnh theo materialId');
     }
-    const materialId = input.materialId;
 
     return this.prisma.$transaction(async (tx) => {
+      // stockLengthMm PHẢI có trong WHERE - thiếu cột này thì so expectedCurrentQty (đọc từ 1
+      // bucket) với "qty" của MỘT bucket khác/ngẫu nhiên khi vật tư có nhiều bucket, luôn báo lệch
+      // giả (xem kế hoạch "chiều dài cây sắt" 2026-08-29, Bước 2).
       const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
         SELECT "qty" FROM "stock_quant"
         WHERE "warehouseId" = ${expectedWarehouseId} AND "materialId" = ${materialId}
+          AND "stockLengthMm" = ${stockLengthMm}
         FOR UPDATE
       `;
       const currentQty = locked[0]?.qty.toNumber() ?? 0;
@@ -212,10 +240,122 @@ export class StockLedgerService {
     });
   }
 
+  /**
+   * Bước 8 (kế hoạch "chiều dài cây sắt" 2026-08-29) - công cụ vận hành cho thủ kho kiểm kê thật
+   * rồi khai lại: "N cây bucket X thực tế là cỡ Y". KHÔNG tạo/xoá tồn - chỉ CHUYỂN tồn ĐANG CÓ từ
+   * bucket này sang bucket khác của CÙNG 1 (kho, vật tư). Cần thiết vì Bước 1 cố ý KHÔNG backfill
+   * dữ liệu lịch sử (mọi tồn cũ rơi vào bucket 0) - không có công cụ này, tồn kho sắt cũ "vô hình"
+   * vĩnh viễn với mọi phương án cắt mới cần bucket khác.
+   *
+   * Cài đặt bằng 2 bút toán postEntry() đi qua kho ảo OPENING_BALANCE (đã có sẵn trong
+   * PROTECTED_WAREHOUSE_CODES) - xuất bucket cũ ra OPENING_BALANCE, rồi nhập lại đúng kho ở bucket
+   * mới - tránh vi phạm stock_ledger_from_ne_to_chk (from≠to) và giữ đúng nguyên tắc "1 dòng ledger
+   * = 1 loại hàng, không phải 2 giá trị bucket trong 1 dòng". Dùng refType=ADJUST (không thêm enum
+   * riêng) - đây vẫn là 1 dạng điều chỉnh tay, `note` + idempotencyKey đủ để tra soát sau này.
+   *
+   * Giới hạn rút CHỈ phần CHƯA bị giữ chỗ - gọi thẳng StockReservationsService.getAvailableQty()
+   * (KHÔNG tự viết lại phép trừ, xem docstring hàm đó "ĐÚNG MỘT hàm được phép cộng 2 bảng"). Kịch
+   * bản cần chặn: 1 PI dở dang bắc qua migration đang giữ chỗ ACTIVE ở bucket nguồn (case fallback
+   * bucket-0 của StockReservationsService.resolvePoolBucket) - nếu rebucket() rút hết cả phần đã
+   * hứa, PI đó không rút được thứ đã được hứa dù trên giấy tờ vẫn "còn giữ chỗ".
+   */
+  async rebucket(
+    dto: RebucketStockDto,
+    idempotencyKey: string,
+    userId: string,
+    warehouseScope: string | null,
+  ): Promise<{ from: StockLedgerResponseDto; to: StockLedgerResponseDto }> {
+    const warehouseId = parseBigIntId(dto.warehouseId);
+    const materialId = parseBigIntId(dto.materialId);
+    await this.assertScopeTouchesWarehouses(warehouseScope, warehouseId, warehouseId);
+
+    if (dto.fromStockLengthMm === dto.toStockLengthMm) {
+      throw new BadRequestException(
+        'fromStockLengthMm và toStockLengthMm không được trùng nhau - không có gì để khai lại',
+      );
+    }
+
+    const openingBalanceWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
+      where: { code: OPENING_BALANCE_WAREHOUSE_CODE },
+    });
+
+    return this.prisma.$transaction(async (tx) => {
+      // Khoá CẢ 2 bucket liên quan theo thứ tự TĂNG DẦN - 2 lượt rebucket cùng vật tư+kho chạy
+      // ngược thứ tự bucket sẽ khoá chéo và deadlock nếu không cố định thứ tự (cùng idiom
+      // CuttingProposalsService.approve() khoá theo materialId tăng dần).
+      const [lowBucket, highBucket] = [dto.fromStockLengthMm, dto.toStockLengthMm].sort(
+        (a, b) => a - b,
+      );
+      const lowRows = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+        SELECT "qty" FROM "stock_quant"
+        WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
+          AND "stockLengthMm" = ${lowBucket}
+        FOR UPDATE
+      `;
+      const highRows = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+        SELECT "qty" FROM "stock_quant"
+        WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
+          AND "stockLengthMm" = ${highBucket}
+        FOR UPDATE
+      `;
+      const onHandOf = (bucket: number): number => {
+        const rows = bucket === lowBucket ? lowRows : highRows;
+        return rows[0]?.qty.toNumber() ?? 0;
+      };
+      const sourceOnHand = onHandOf(dto.fromStockLengthMm);
+
+      const available = await this.stockReservationsService.getAvailableQty(
+        tx,
+        warehouseId,
+        materialId,
+        dto.fromStockLengthMm,
+        sourceOnHand,
+      );
+      if (dto.qty > available) {
+        throw new ConflictException(
+          `Chỉ được khai lại tối đa ${available} cây ở bucket ${dto.fromStockLengthMm}mm (tồn vật lý ${sourceOnHand} cây, ` +
+            `đang giữ chỗ ${sourceOnHand - available} cây cho phương án khác) - kiểm tra lại số lượng thực kiểm kê`,
+        );
+      }
+
+      const note = `Khai lại cỡ cây (${dto.fromStockLengthMm}mm -> ${dto.toStockLengthMm}mm): ${dto.note}`;
+      const from = await this.postEntry(
+        {
+          fromWarehouseId: warehouseId,
+          toWarehouseId: openingBalanceWarehouse.id,
+          materialId,
+          stockLengthMm: dto.fromStockLengthMm,
+          qty: dto.qty,
+          refType: StockLedgerRefType.ADJUST,
+          note,
+          createdById: userId,
+          idempotencyKey: `${idempotencyKey}:out`,
+        },
+        tx,
+      );
+      const to = await this.postEntry(
+        {
+          fromWarehouseId: openingBalanceWarehouse.id,
+          toWarehouseId: warehouseId,
+          materialId,
+          stockLengthMm: dto.toStockLengthMm,
+          qty: dto.qty,
+          refType: StockLedgerRefType.ADJUST,
+          note,
+          createdById: userId,
+          idempotencyKey: `${idempotencyKey}:in`,
+        },
+        tx,
+      );
+      return { from, to };
+    });
+  }
+
   async findAll(query: ListStockLedgerQueryDto): Promise<Paginated<StockLedgerResponseDto>> {
     const where: Prisma.StockLedgerWhereInput = {
       refType: query.refType,
       materialId: query.materialId ? parseBigIntId(query.materialId) : undefined,
+      stockLengthMm: query.stockLengthMm,
       segmentSpecId: query.segmentSpecId ? parseBigIntId(query.segmentSpecId) : undefined,
       pieceId: query.pieceId ? parseBigIntId(query.pieceId) : undefined,
       productVariantId: query.productVariantId ? parseBigIntId(query.productVariantId) : undefined,
@@ -268,6 +408,34 @@ export class StockLedgerService {
     }
   }
 
+  /** DTO client được phép lỏng hơn nội bộ service (stockLengthMm optional) - mặc định 0 cho mọi
+   *  vật tư thường. Ngoại lệ: vật tư nhóm STEEL_BAR bị ép chọn rõ bucket, KHÔNG mặc định về 0 -
+   *  "Admin > Sửa nhanh tồn kho" hiện chưa có ô chọn cỡ cây, nếu mặc định 0 thì sau khi thủ kho
+   *  khai lại cỡ cây thật (rebucket), sửa nhanh qua màn cũ sẽ âm thầm ghi vào bucket 0 rỗng thay
+   *  vì bucket có hàng thật - GHI SAI dữ liệu vĩnh viễn (xem kế hoạch "chiều dài cây sắt"
+   *  2026-08-29, Bước 2). */
+  private async resolveAdjustStockLengthMm(
+    materialId: bigint | undefined,
+    stockLengthMm: number | undefined,
+  ): Promise<number> {
+    if (materialId === undefined) {
+      return 0;
+    }
+    if (stockLengthMm !== undefined) {
+      return stockLengthMm;
+    }
+    const material = await this.prisma.material.findUnique({
+      where: { id: materialId },
+      include: { materialGroup: true },
+    });
+    if (material?.materialGroup?.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR) {
+      throw new BadRequestException(
+        `Vật tư "${material.code}" thuộc nhóm Sắt - phải chọn rõ cỡ cây (stockLengthMm), không được để mặc định`,
+      );
+    }
+    return 0;
+  }
+
   private assertExactlyOneGoodsLeg(
     input: Pick<
       PostStockEntryInput,
@@ -300,6 +468,7 @@ export class StockLedgerService {
       pieceCode: row.piece?.code ?? null,
       productVariantId: row.productVariantId?.toString() ?? null,
       productVariantLabel: row.productVariant?.description ?? row.productVariant?.colorCode ?? null,
+      stockLengthMm: row.stockLengthMm,
       qty: row.qty.toNumber(),
       refType: row.refType,
       refId: row.refId,

@@ -672,7 +672,9 @@ export class ProductionInvoicesService {
     // Phase 7: tạo lệnh sản xuất ngay khi Sếp duyệt - BOM đã được xác nhận tồn tại ở trên nên
     // gần như chắc chắn thành công (chỉ fail nếu có race hiếm - BOM bị deactivate đúng khoảnh
     // khắc giữa 2 lệnh); log to nếu vẫn xảy ra vì giờ đây không còn là hành vi "biết trước, chấp
-    // nhận được" như cũ nữa.
+    // nhận được" như cũ nữa. Item kẹt ở APPROVED không có ProductionOrder từ đây có đường phục hồi
+    // riêng - xem retryProductionOrder() (đính chính 2026-08-29, audit độc lập 28/08 mục Trung
+    // bình "SKU đã duyệt nhưng tạo lệnh thất bại -> kẹt vĩnh viễn").
     let productionOrder: { id: bigint } | undefined;
     try {
       productionOrder = await this.productionOrdersService.createFromApproval(
@@ -686,55 +688,8 @@ export class ProductionInvoicesService {
       );
     }
 
-    // Trigger đề xuất cắt sắt tự động/ngầm - tách try/catch riêng, best-effort thật sự (không có
-    // màn hình riêng, không được phép làm hỏng việc duyệt SKU đã ghi ở trên dù ProductionOrder
-    // đã tạo thành công).
     if (productionOrder) {
-      try {
-        // 2 trigger đề xuất mua còn lại (VTTP + tiêu hao phẳng) CỐ Ý dồn vào onComplete - chờ
-        // đề xuất mua sắt tính xong (dù thành công/chặn/lỗi) rồi mới tính, thay vì bắn song song
-        // như trước 2026-08-24. Steel chạy nền qua solver ngoài (vài chục giây tới vài phút),
-        // 2 trigger kia lại tính ngay lập tức - Mua hàng thấy đề xuất vật tư tiêu hao hiện ra
-        // trước, đề xuất sắt "CALCULATING" mãi mới tới, rời rạc không đồng bộ. Gộp cả 3 đề xuất
-        // mua của 1 PI xuất hiện cùng lúc, sau khi phần chậm nhất (sắt) đã xong.
-        await this.cuttingProposalsService.requestForOrder(productionOrder.id, {
-          requestedById: actorUserId,
-          onComplete: async () => {
-            // Cùng idiom trigger cắt sắt - tính lại nhu cầu mua nguyên liệu "vật tư thành phẩm"
-            // (PieceMaterialYield, vd thanh nhôm/tấm sắt lá) cho CẢ PI mỗi khi có thêm 1 SKU được
-            // duyệt, không phải nút bấm riêng (không có màn hình riêng, xem changelog 2026-08-22
-            // mục 15) - best-effort, tách try/catch riêng để không lẫn lỗi với trigger kia.
-            try {
-              await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(
-                pi.id.toString(),
-              );
-            } catch (error) {
-              this.logger.error(
-                `Auto piece-material-yield-purchase trigger failed for PI item ${item.id}: ${(error as Error).message}`,
-              );
-            }
-
-            // Cùng idiom - tính nhu cầu mua vật tư tiêu hao phẳng (Dây/Đinh/Tán rút/Nút nhựa/
-            // Sơn/Phụ kiện/Bao bì). Trước đây KHÔNG có gì tự tạo PurchaseProposal cho 3 nguồn này
-            // (chỉ có "Lệnh kiểm tra vật tư" thủ công trong schema, chưa từng cài đặt) - người mua
-            // hàng được gán (Material.buyerId) không bao giờ thấy đề xuất nào dù SKU đã duyệt.
-            // Quyết định nghiệp vụ 2026-08-22: tự động hoàn toàn, bỏ qua bước kiểm tra kho thủ công.
-            try {
-              await this.consumableMaterialPurchaseService.computeAndUpsertProposals(
-                pi.id.toString(),
-              );
-            } catch (error) {
-              this.logger.error(
-                `Auto consumable-material-purchase trigger failed for PI item ${item.id}: ${(error as Error).message}`,
-              );
-            }
-          },
-        });
-      } catch (error) {
-        this.logger.error(
-          `Auto cutting-proposal trigger failed for PI item ${item.id}: ${(error as Error).message}`,
-        );
-      }
+      await this.triggerPostApprovalProposals(pi.id, item.id, productionOrder.id, actorUserId);
     }
 
     const remaining = await this.prisma.productionInvoiceItem.count({
@@ -751,6 +706,106 @@ export class ProductionInvoicesService {
     }
 
     return this.toItemResponseDto(updated);
+  }
+
+  /**
+   * Trigger đề xuất cắt sắt (theo ĐÚNG 1 ProductionOrder) + 2 trigger mua VTTP/tiêu hao dồn vào
+   * onComplete - tách ra dùng chung bởi approveItem() và retryProductionOrder() (đính chính
+   * 2026-08-29). Best-effort thật sự: không được phép làm hỏng việc duyệt/tạo lệnh đã ghi xong ở
+   * caller, mọi lỗi chỉ log.
+   */
+  private async triggerPostApprovalProposals(
+    piId: bigint,
+    itemId: bigint,
+    productionOrderId: bigint,
+    actorUserId: string,
+  ): Promise<void> {
+    try {
+      // 2 trigger đề xuất mua còn lại (VTTP + tiêu hao phẳng) CỐ Ý dồn vào onComplete - chờ đề
+      // xuất mua sắt tính xong (dù thành công/chặn/lỗi) rồi mới tính, thay vì bắn song song như
+      // trước 2026-08-24. Steel chạy nền qua solver ngoài (vài chục giây tới vài phút), 2 trigger
+      // kia lại tính ngay lập tức - Mua hàng thấy đề xuất vật tư tiêu hao hiện ra trước, đề xuất
+      // sắt "CALCULATING" mãi mới tới, rời rạc không đồng bộ. Gộp cả 3 đề xuất mua của 1 PI xuất
+      // hiện cùng lúc, sau khi phần chậm nhất (sắt) đã xong.
+      await this.cuttingProposalsService.requestForOrder(productionOrderId, {
+        requestedById: actorUserId,
+        onComplete: async () => {
+          // Cùng idiom trigger cắt sắt - tính lại nhu cầu mua nguyên liệu "vật tư thành phẩm"
+          // (PieceMaterialYield, vd thanh nhôm/tấm sắt lá) cho CẢ PI mỗi khi có thêm 1 SKU được
+          // duyệt, không phải nút bấm riêng (không có màn hình riêng, xem changelog 2026-08-22
+          // mục 15) - best-effort, tách try/catch riêng để không lẫn lỗi với trigger kia.
+          try {
+            await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(piId.toString());
+          } catch (error) {
+            this.logger.error(
+              `Auto piece-material-yield-purchase trigger failed for PI item ${itemId}: ${(error as Error).message}`,
+            );
+          }
+
+          // Cùng idiom - tính nhu cầu mua vật tư tiêu hao phẳng (Dây/Đinh/Tán rút/Nút nhựa/Sơn/
+          // Phụ kiện/Bao bì). Trước đây KHÔNG có gì tự tạo PurchaseProposal cho 3 nguồn này (chỉ
+          // có "Lệnh kiểm tra vật tư" thủ công trong schema, chưa từng cài đặt) - người mua hàng
+          // được gán (Material.buyerId) không bao giờ thấy đề xuất nào dù SKU đã duyệt. Quyết
+          // định nghiệp vụ 2026-08-22: tự động hoàn toàn, bỏ qua bước kiểm tra kho thủ công.
+          try {
+            await this.consumableMaterialPurchaseService.computeAndUpsertProposals(piId.toString());
+          } catch (error) {
+            this.logger.error(
+              `Auto consumable-material-purchase trigger failed for PI item ${itemId}: ${(error as Error).message}`,
+            );
+          }
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Auto cutting-proposal trigger failed for PI item ${itemId}: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Vá điểm kẹt "SKU đã APPROVED nhưng ProductionOrder tạo thất bại -> kẹt vĩnh viễn" (Trung bình,
+   * audit độc lập 28/08). `approveItem()`/`approveBatch()` ghi `prodApprovalStatus=APPROVED`
+   * TRƯỚC, tạo `ProductionOrder` trong `try/catch` chỉ log lỗi - nếu tạo thất bại (race hiếm: BOM
+   * bị deactivate đúng khoảnh khắc giữa 2 lệnh) thì trước đây KHÔNG có route nào để tạo lại, kẹt
+   * vĩnh viễn (downstream Chuyền kiểm/Đóng gói báo "chưa được duyệt" dù UI hiển thị đã duyệt).
+   *
+   * Chỉ chạy được khi item ĐÃ APPROVED và CHƯA có ProductionOrder nào -
+   * `ProductionOrder.productionInvoiceItemId` là `@unique` nên gọi lại khi đã có lệnh sẽ tự vi
+   * phạm constraint; chặn tường minh ở đây để trả lỗi rõ ràng thay vì lỗi DB thô.
+   */
+  async retryProductionOrder(
+    piId: string,
+    itemId: string,
+    actorUserId: string,
+  ): Promise<ProductionInvoiceItemResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const item = await this.findItemOrThrow(pi.id, itemId);
+    if (item.prodApprovalStatus !== ProdApprovalStatus.APPROVED) {
+      throw new ConflictException(
+        `Item ${item.id} đang ở trạng thái ${item.prodApprovalStatus ?? 'chưa gửi'} - chỉ item đã APPROVED mới cần tạo lại lệnh sản xuất`,
+      );
+    }
+    const existingOrder = await this.prisma.productionOrder.findUnique({
+      where: { productionInvoiceItemId: item.id },
+    });
+    if (existingOrder) {
+      throw new ConflictException(
+        `Item ${item.id} đã có lệnh sản xuất (PO ${existingOrder.poNumber}) - không cần tạo lại`,
+      );
+    }
+    // Kiểm lại BOM active trước khi thử - trả 409 rõ ràng nếu vẫn thiếu, thay vì để
+    // createFromApproval() ném NotFoundException khó hiểu hơn.
+    await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
+
+    const productionOrder = await this.productionOrdersService.createFromApproval(
+      item.id,
+      item.mfgProductId,
+      item.quantity,
+    );
+    await this.triggerPostApprovalProposals(pi.id, item.id, productionOrder.id, actorUserId);
+
+    return this.toItemResponseDto(item);
   }
 
   /**
@@ -836,21 +891,40 @@ export class ProductionInvoicesService {
       throw new ConflictException(`${pi.code} không còn SKU nào đang chờ QLSX xử lý`);
     }
 
+    // (Đính chính 2026-08-29, audit độc lập 28/08 mục Nghiêm trọng #3) updateMany lọc kèm đúng
+    // trạng thái kỳ vọng + so count thay vì vòng lặp `update()` không điều kiện - cùng lý do/cùng
+    // fix với rejectBatch() (Sếp) bên dưới: chặn race với sendBatchToBoss() ghi WAITING_BOSS đúng
+    // lúc request này đang chạy, tránh xoá PI mà kéo nhầm 1 item vừa được gửi tiếp sang Sếp.
+    const itemIds = pi.items.map((item) => item.id);
     const decidedAt = new Date();
-    const transitions: { before: PIItemWithRefs; after: PIItemWithRefs }[] = [];
+    const transitions: { before: PIItemWithRefs; after: PIItemWithRefs }[] = pi.items.map(
+      (item) => ({
+        before: item,
+        after: {
+          ...item,
+          productionInvoiceId: null,
+          prodApprovalStatus: ProdApprovalStatus.REJECTED,
+          rejectReason: reason,
+          decidedAt,
+          decidedById: actorUserId,
+        },
+      }),
+    );
     await this.prisma.$transaction(async (tx) => {
-      for (const item of pi.items) {
-        const updated = await tx.productionInvoiceItem.update({
-          where: { id: item.id },
-          data: {
-            productionInvoiceId: null,
-            prodApprovalStatus: ProdApprovalStatus.REJECTED,
-            rejectReason: reason,
-            decidedAt,
-            decidedById: actorUserId,
-          },
-        });
-        transitions.push({ before: item, after: { ...item, ...updated } });
+      const { count } = await tx.productionInvoiceItem.updateMany({
+        where: { id: { in: itemIds }, prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX },
+        data: {
+          productionInvoiceId: null,
+          prodApprovalStatus: ProdApprovalStatus.REJECTED,
+          rejectReason: reason,
+          decidedAt,
+          decidedById: actorUserId,
+        },
+      });
+      if (count !== itemIds.length) {
+        throw new ConflictException(
+          `${pi.code} đã bị 1 request khác xử lý một phần trong lúc QLSX từ chối cả phiếu - không ghi đè`,
+        );
       }
       await tx.productionInvoice.delete({ where: { id: pi.id } });
     });
@@ -929,14 +1003,28 @@ export class ProductionInvoicesService {
       await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
     }
 
+    // (Đính chính 2026-08-29, audit độc lập 28/08 mục Nghiêm trọng #3) updateMany PHẢI lọc kèm
+    // đúng trạng thái kỳ vọng + so count, cùng idiom approveItem()/rejectItem() - trước đây ghi vô
+    // điều kiện theo productionInvoiceId, không có gì chặn rejectBatch() ghi đè ngược lại đồng thời
+    // trên cùng PI (2 request "duyệt cả cụm" / "từ chối cả cụm" race nhau): request nào commit
+    // trước thắng, request thua khớp 0 dòng (status đã đổi) và ConflictException - không còn ca
+    // ProductionOrder mồ côi (duyệt xong rồi bị từ chối ghi đè ngay sau, hoặc ngược lại).
     const decidedAt = new Date();
-    await this.prisma.productionInvoiceItem.updateMany({
-      where: { productionInvoiceId: pi.id },
-      data: {
-        prodApprovalStatus: ProdApprovalStatus.APPROVED,
-        decidedAt,
-        decidedById: actorUserId,
-      },
+    const itemIds = pi.items.map((item) => item.id);
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.productionInvoiceItem.updateMany({
+        where: { id: { in: itemIds }, prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS },
+        data: {
+          prodApprovalStatus: ProdApprovalStatus.APPROVED,
+          decidedAt,
+          decidedById: actorUserId,
+        },
+      });
+      if (count !== itemIds.length) {
+        throw new ConflictException(
+          `${pi.code} đã bị 1 request khác xử lý (duyệt/từ chối) một phần trong lúc Sếp duyệt cả cụm - không ghi đè`,
+        );
+      }
     });
     // updateMany() không trả lại từng dòng như update() - tự dựng "after" từ "before" đã có sẵn
     // trong pi.items thay vì đọc lại DB, vì đúng 3 field vừa ghi đã biết trước giá trị.
@@ -1032,20 +1120,44 @@ export class ProductionInvoicesService {
     // 5 chỗ gọi còn lại) - gom cặp before/after trong lúc chạy transaction, CHỈ ghi audit sau khi
     // transaction commit thành công, tránh để lại audit log mồ côi nếu rollback giữa chừng (VD SKU
     // sau trong vòng lặp lỗi).
-    const transitions: { before: PIItemWithRefs; after: PIItemWithRefs }[] = [];
+    //
+    // (Đính chính 2026-08-29, audit độc lập 28/08 mục Nghiêm trọng #3) Trước đây vòng lặp gọi
+    // `update()` KHÔNG ĐIỀU KIỆN theo id - không chặn được approveBatch() ghi APPROVED xong (kèm
+    // tạo ProductionOrder thật) đúng lúc request này đang chạy: `update()` vẫn ghi đè thành REJECTED
+    // + xoá PI, để lại ProductionOrder mồ côi trỏ vào 1 item đã REJECTED. Đổi sang `updateMany` lọc
+    // kèm đúng trạng thái kỳ vọng (WAITING_BOSS - trạng thái DUY NHẤT hợp lệ cho item còn gắn PI gộp
+    // chưa xử lý, xem assertMergedPi) + so count, cùng idiom approveItem()/rejectItem(): request nào
+    // commit trước thắng, request thua khớp 0 dòng và rollback toàn bộ (kể cả xoá PI bên dưới).
+    const itemIds = pi.items.map((item) => item.id);
+    const decidedAt = new Date();
+    const transitions: { before: PIItemWithRefs; after: PIItemWithRefs }[] = pi.items.map(
+      (item) => ({
+        before: item,
+        after: {
+          ...item,
+          productionInvoiceId: null,
+          prodApprovalStatus: ProdApprovalStatus.REJECTED,
+          rejectReason: reason,
+          decidedAt,
+          decidedById: actorUserId,
+        },
+      }),
+    );
     await this.prisma.$transaction(async (tx) => {
-      for (const item of pi.items) {
-        const updated = await tx.productionInvoiceItem.update({
-          where: { id: item.id },
-          data: {
-            productionInvoiceId: null,
-            prodApprovalStatus: ProdApprovalStatus.REJECTED,
-            rejectReason: reason,
-            decidedAt: new Date(),
-            decidedById: actorUserId,
-          },
-        });
-        transitions.push({ before: item, after: { ...item, ...updated } });
+      const { count } = await tx.productionInvoiceItem.updateMany({
+        where: { id: { in: itemIds }, prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS },
+        data: {
+          productionInvoiceId: null,
+          prodApprovalStatus: ProdApprovalStatus.REJECTED,
+          rejectReason: reason,
+          decidedAt,
+          decidedById: actorUserId,
+        },
+      });
+      if (count !== itemIds.length) {
+        throw new ConflictException(
+          `${pi.code} đã bị 1 request khác xử lý (duyệt/từ chối) một phần trong lúc Sếp từ chối cả cụm - không ghi đè`,
+        );
       }
       await tx.productionInvoice.delete({ where: { id: pi.id } });
     });
@@ -1310,6 +1422,7 @@ export class ProductionInvoicesService {
       const proposal = piLevelProposal ?? pi.items[i].productionOrder?.cuttingProposals[0];
       itemDto.cuttingProposalStatus = proposal?.status ?? null;
       itemDto.cuttingProposalRequestedAt = proposal?.requestedAt ?? null;
+      itemDto.productionOrderId = pi.items[i].productionOrder?.id?.toString() ?? null;
     });
     return dto;
   }

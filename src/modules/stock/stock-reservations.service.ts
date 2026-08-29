@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
 import { Prisma, ReservationStatus, StockReservationRefType } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { frameDeadlineOf } from '../../common/utils/frame-deadline.util';
@@ -6,6 +6,8 @@ import { frameDeadlineOf } from '../../common/utils/frame-deadline.util';
 export interface ReserveInput {
   warehouseId: bigint;
   materialId: bigint;
+  /** Cỡ cây sắt (mm), mặc định 0 - xem kế hoạch "chiều dài cây sắt" 2026-08-29. */
+  stockLengthMm?: number;
   qty: number;
   refType: StockReservationRefType;
   refId: string;
@@ -48,12 +50,35 @@ interface PoolRow {
  */
 @Injectable()
 export class StockReservationsService {
+  private readonly logger = new Logger(StockReservationsService.name);
+
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+
+  /** Hậu tố `:len:N` CHỈ thêm khi khác 0 - mọi key cũ (mọi dữ liệu lịch sử, mọi vật tư không phân
+   *  bucket) giữ nguyên TỪNG BYTE, không phá idempotency dữ liệu đã có (kế hoạch "chiều dài cây
+   *  sắt" 2026-08-29, Bước 3). */
+  private buildIdempotencyKey(
+    refType: StockReservationRefType,
+    refId: string,
+    materialId: bigint,
+    stockLengthMm: number,
+  ): string {
+    const base = `${refType}:${refId}:material:${materialId}`;
+    return stockLengthMm === 0 ? base : `${base}:len:${stockLengthMm}`;
+  }
 
   /**
    * `tx` bắt buộc khi caller đã khoá `stock_quant ... FOR UPDATE` trong cùng transaction (đúng
    * pattern StockLedgerService.postEntry `tx`) - nếu không, khoảng hở giữa lúc tính available và
    * lúc ghi giữ chỗ vẫn cho 2 caller cùng đọc một số dư.
+   *
+   * ⚠️ PHỤ THUỘC NGẦM vào luật L7 (CuttingProposalsService.findConflictingStockLengthReason()):
+   * hàm này KHÔNG so khớp stockLengthMm giữa 2 lần gọi cùng idempotencyKey - nếu 1 (refType, refId,
+   * materialId) chốt 2 cỡ cây khác nhau ở 2 thời điểm, lần gọi sau sẽ ÂM THẦM trả về dòng CŨ (bucket
+   * cũ, không phải bucket lần gọi này) thay vì báo lỗi. AN TOÀN CHỈ VÌ L7 đảm bảo mỗi (PI, vật tư)
+   * luôn đúng 1 cỡ cây xuyên suốt vòng đời của nó - KHÔNG được nới lỏng L7 mà không sửa lại hàm này
+   * để phát hiện tham số lệch và ném lỗi thay vì resolve-or-return (kế hoạch "chiều dài cây sắt"
+   * 2026-08-29, quyết định thiết kế #5).
    */
   async reserve(
     input: ReserveInput,
@@ -63,10 +88,17 @@ export class StockReservationsService {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty giữ chỗ phải lớn hơn 0');
     }
+    const stockLengthMm = input.stockLengthMm ?? 0;
 
-    // Idempotent theo (refType, refId, materialId) - 1 nguồn chỉ giữ chỗ đúng 1 dòng cho 1 vật tư,
-    // gọi lại (retry mất mạng, double-click) trả về dòng đã tạo thay vì cộng dồn sai.
-    const idempotencyKey = `${input.refType}:${input.refId}:material:${input.materialId}`;
+    // Idempotent theo (refType, refId, materialId[, stockLengthMm]) - 1 nguồn chỉ giữ chỗ đúng 1
+    // dòng cho 1 vật tư (1 bucket), gọi lại (retry mất mạng, double-click) trả về dòng đã tạo thay
+    // vì cộng dồn sai.
+    const idempotencyKey = this.buildIdempotencyKey(
+      input.refType,
+      input.refId,
+      input.materialId,
+      stockLengthMm,
+    );
     const existing = await db.stockReservation.findUnique({ where: { idempotencyKey } });
     if (existing) {
       return { id: existing.id, quantity: existing.quantity };
@@ -76,6 +108,7 @@ export class StockReservationsService {
       data: {
         warehouseId: input.warehouseId,
         materialId: input.materialId,
+        stockLengthMm,
         quantity: input.qty,
         refType: input.refType,
         refId: input.refId,
@@ -106,9 +139,10 @@ export class StockReservationsService {
     tx: PrismaTx,
     productionInvoiceId: bigint,
     materialId: bigint,
+    stockLengthMm: number,
   ): Promise<PoolRow[]> {
     const rows = await tx.stockReservation.findMany({
-      where: { productionInvoiceId, materialId, status: ReservationStatus.ACTIVE },
+      where: { productionInvoiceId, materialId, stockLengthMm, status: ReservationStatus.ACTIVE },
       select: {
         id: true,
         refType: true,
@@ -160,6 +194,41 @@ export class StockReservationsService {
   }
 
   /**
+   * Quyết định BUCKET THẬT cho pool (PI, vật tư) - caller chỉ "đề nghị" (preferredStockLengthMm),
+   * hàm này chốt bucket thật dùng chung cho cả creditPool()/drainPool() (quyết định thiết kế #3,
+   * kế hoạch "chiều dài cây sắt" 2026-08-29): có pool ở bucket đề nghị -> dùng nó; pool đề nghị
+   * rỗng nhưng pool bucket 0 còn tồn tại (case PI dở dang bắc qua migration, giữ chỗ tạo TRƯỚC khi
+   * phân bucket) -> dùng bucket 0 + log cảnh báo; cả hai rỗng -> trả nguyên bucket đề nghị kèm pool
+   * rỗng, để caller tự quyết (creditPool tạo dòng mới, drainPool ném ConflictException).
+   */
+  private async resolvePoolBucket(
+    tx: PrismaTx,
+    productionInvoiceId: bigint,
+    materialId: bigint,
+    preferredStockLengthMm: number,
+  ): Promise<{ stockLengthMm: number; pool: PoolRow[] }> {
+    const preferredPool = await this.loadPool(
+      tx,
+      productionInvoiceId,
+      materialId,
+      preferredStockLengthMm,
+    );
+    if (preferredPool.length > 0) {
+      return { stockLengthMm: preferredStockLengthMm, pool: preferredPool };
+    }
+    if (preferredStockLengthMm !== 0) {
+      const fallbackPool = await this.loadPool(tx, productionInvoiceId, materialId, 0);
+      if (fallbackPool.length > 0) {
+        this.logger.warn(
+          `Pool giữ chỗ bucket ${preferredStockLengthMm}mm rỗng cho PI ${productionInvoiceId} + vật tư ${materialId} - dùng tạm bucket 0 (dữ liệu giữ chỗ cũ trước khi phân bucket cỡ cây)`,
+        );
+        return { stockLengthMm: 0, pool: fallbackPool };
+      }
+    }
+    return { stockLengthMm: preferredStockLengthMm, pool: [] };
+  }
+
+  /**
    * Hàng mua về "có chủ" (B4 Đợt 3, mục 13.4 lỗ #3 changelog, mở rộng thành pool ở L5 2026-08-26):
    * PurchaseProposalsService.receiveItem() gọi khi nhận hàng cho phần `buyQty` (phần approve()
    * KHÔNG giữ chỗ được vì lúc đó tồn chưa có) - cộng vào ĐÚNG pool của (PI, vật tư), KHÔNG còn cố
@@ -169,32 +238,53 @@ export class StockReservationsService {
    * `tx` bắt buộc - caller (receiveItem) đã khoá dòng item liên quan FOR UPDATE trong cùng
    * transaction, khoá thêm ở đây (FOR UPDATE trên dòng giữ chỗ được chọn) để an toàn nếu sau này
    * có caller khác gọi hàm này mà không đi qua khoá đó.
+   *
+   * Trả về `stockLengthMm` THẬT đã dùng (có thể khác `preferredStockLengthMm`, xem
+   * resolvePoolBucket) - caller PHẢI dùng giá trị trả về này (không phải giá trị đề nghị) để ghi
+   * bút toán StockLedger tương ứng (kế hoạch "chiều dài cây sắt" 2026-08-29, quyết định #3).
    */
   async creditPool(
     tx: PrismaTx,
-    input: { productionInvoiceId: bigint; materialId: bigint; warehouseId: bigint; qty: number },
-  ): Promise<void> {
+    input: {
+      productionInvoiceId: bigint;
+      materialId: bigint;
+      warehouseId: bigint;
+      qty: number;
+      preferredStockLengthMm: number;
+    },
+  ): Promise<{ stockLengthMm: number }> {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty cộng thêm giữ chỗ phải lớn hơn 0');
     }
-    const pool = await this.loadPool(tx, input.productionInvoiceId, input.materialId);
-    // Pool rỗng - approve() chưa từng giữ chỗ gì cho (PI, vật tư) này (buyQty = 100% nhu cầu ngay
-    // từ đầu, mọi dòng nguồn có thể cũng đã bị releaseByRef() supersede/huỷ hết) - tạo 1 dòng
-    // "thuộc về cả PI" thay vì thuộc về 1 cuttingProposalId cụ thể (case hiếm, PI chắc chắn còn
-    // sống vì receiveItem() chỉ chạy được khi PurchaseProposal đang PURCHASING).
+    const { stockLengthMm, pool } = await this.resolvePoolBucket(
+      tx,
+      input.productionInvoiceId,
+      input.materialId,
+      input.preferredStockLengthMm,
+    );
+    // Pool rỗng - approve() chưa từng giữ chỗ gì cho (PI, vật tư, bucket) này (buyQty = 100% nhu
+    // cầu ngay từ đầu, mọi dòng nguồn có thể cũng đã bị releaseByRef() supersede/huỷ hết) - tạo 1
+    // dòng "thuộc về cả PI" thay vì thuộc về 1 cuttingProposalId cụ thể (case hiếm, PI chắc chắn
+    // còn sống vì receiveItem() chỉ chạy được khi PurchaseProposal đang PURCHASING).
     if (pool.length === 0) {
       await tx.stockReservation.create({
         data: {
           warehouseId: input.warehouseId,
           materialId: input.materialId,
+          stockLengthMm,
           productionInvoiceId: input.productionInvoiceId,
           quantity: input.qty,
           refType: StockReservationRefType.PRODUCTION_INVOICE,
           refId: input.productionInvoiceId.toString(),
-          idempotencyKey: `${StockReservationRefType.PRODUCTION_INVOICE}:${input.productionInvoiceId}:material:${input.materialId}`,
+          idempotencyKey: this.buildIdempotencyKey(
+            StockReservationRefType.PRODUCTION_INVOICE,
+            input.productionInvoiceId.toString(),
+            input.materialId,
+            stockLengthMm,
+          ),
         },
       });
-      return;
+      return { stockLengthMm };
     }
     // Credit vào dòng ưu tiên CAO NHẤT (hạn gần nhất, xem loadPool) - KHÔNG quan trọng dòng nào
     // cụ thể nhận credit vì drainPool() sau này rút theo TỔNG của cả pool, không theo từng dòng
@@ -205,6 +295,7 @@ export class StockReservationsService {
       where: { id: target.id },
       data: { quantity: { increment: input.qty } },
     });
+    return { stockLengthMm };
   }
 
   /**
@@ -223,18 +314,33 @@ export class StockReservationsService {
    * đó tính từ CÙNG 1 snapshot cũ, không cứu được). Khoá HẾT các dòng liên quan TRƯỚC khi tính
    * bất kỳ `take` nào thì lượt xuất thứ 2 phải xếp hàng chờ lượt đầu commit xong mới đọc được số
    * đã cập nhật - đúng idiom CuttingProposalsService.approve() dùng cho FOR UPDATE stock_quant.
+   *
+   * Trả về `stockLengthMm` THẬT đã rút (có thể khác `preferredStockLengthMm`, xem
+   * resolvePoolBucket) CÙNG `warehouseId` - caller PHẢI dùng bucket trả về này để ghi bút toán
+   * StockLedger tương ứng, KHÔNG dùng giá trị Phôi tự khai (kế hoạch "chiều dài cây sắt"
+   * 2026-08-29, quyết định #3 - đây chính là chỗ chặn Phôi khai xuất sai cỡ so với pool giữ chỗ).
    */
   async drainPool(
     tx: PrismaTx,
-    input: { productionInvoiceId: bigint; materialId: bigint; qty: number },
-  ): Promise<{ warehouseId: bigint }> {
+    input: {
+      productionInvoiceId: bigint;
+      materialId: bigint;
+      qty: number;
+      preferredStockLengthMm: number;
+    },
+  ): Promise<{ warehouseId: bigint; stockLengthMm: number }> {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty xuất phải lớn hơn 0');
     }
-    const pool = await this.loadPool(tx, input.productionInvoiceId, input.materialId);
+    const { stockLengthMm, pool } = await this.resolvePoolBucket(
+      tx,
+      input.productionInvoiceId,
+      input.materialId,
+      input.preferredStockLengthMm,
+    );
     if (pool.length === 0) {
       throw new ConflictException(
-        `Không tìm thấy giữ chỗ tồn kho cho vật tư ${input.materialId} của PI ${input.productionInvoiceId} - chưa từng giữ chỗ (tồn + hàng mua chưa đủ), hoặc mọi phương án cắt liên quan đã bị supersede/huỷ`,
+        `Không tìm thấy giữ chỗ tồn kho cho vật tư ${input.materialId} cỡ ${input.preferredStockLengthMm}mm của PI ${input.productionInvoiceId} - chưa từng giữ chỗ (tồn + hàng mua chưa đủ), hoặc mọi phương án cắt liên quan đã bị supersede/huỷ, hoặc khai sai cỡ cây so với phương án đã duyệt`,
       );
     }
 
@@ -278,7 +384,7 @@ export class StockReservationsService {
       });
       remainingToConsume -= take;
     }
-    return { warehouseId: lockedRows[0].warehouseId };
+    return { warehouseId: lockedRows[0].warehouseId, stockLengthMm };
   }
 
   /**
@@ -293,16 +399,21 @@ export class StockReservationsService {
     tx: PrismaTx | undefined,
     warehouseId: bigint,
     materialId: bigint,
+    stockLengthMm: number | 'ALL',
     onHand: number,
   ): Promise<number> {
     const db = tx ?? this.prisma;
+    // 'ALL' = không lọc theo bucket - dùng cho vật tư vĩnh viễn không phân bucket (mọi vật tư
+    // không phải sắt cây), KHÔNG BAO GIỜ dùng cho luồng sắt (kế hoạch "chiều dài cây sắt"
+    // 2026-08-29, Bước 6).
+    const bucketFilter = stockLengthMm === 'ALL' ? {} : { stockLengthMm };
     const [stockReservations, transferReservations] = await Promise.all([
       db.stockReservation.findMany({
-        where: { warehouseId, materialId, status: ReservationStatus.ACTIVE },
+        where: { warehouseId, materialId, status: ReservationStatus.ACTIVE, ...bucketFilter },
         select: { quantity: true, consumedQty: true },
       }),
       db.warehouseTransferReservation.findMany({
-        where: { warehouseId, materialId, status: ReservationStatus.ACTIVE },
+        where: { warehouseId, materialId, status: ReservationStatus.ACTIVE, ...bucketFilter },
         select: { quantity: true },
       }),
     ]);

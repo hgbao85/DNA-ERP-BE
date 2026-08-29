@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsDateString, IsEnum, IsInt, IsOptional, IsString } from 'class-validator';
 import { StockLedgerRefType } from '../../../generated/prisma/client';
 import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
 
@@ -19,6 +20,12 @@ export class ListStockLedgerQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   materialId?: string;
+
+  @ApiPropertyOptional({ description: 'Cỡ cây sắt (mm) - chỉ có ý nghĩa kèm materialId' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  stockLengthMm?: number;
 
   @ApiPropertyOptional()
   @IsOptional()

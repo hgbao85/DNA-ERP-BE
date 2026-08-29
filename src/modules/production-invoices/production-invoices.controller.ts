@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
-import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
+import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
@@ -231,6 +231,21 @@ export class ProductionInvoicesController {
     @CurrentUser('id') userId: string,
   ) {
     return this.productionInvoicesService.rejectItem(id, itemId, dto.reason, userId);
+  }
+
+  /** Vá điểm kẹt "đã duyệt nhưng tạo lệnh sản xuất thất bại" - xem
+   *  ProductionInvoicesService.retryProductionOrder(). ADMIN xử lý (sự cố kỹ thuật, không phải
+   *  quyết định nghiệp vụ của Sếp - đính chính 2026-08-29, user chốt sau khi phát hiện Sếp chưa có
+   *  màn nào xem lại được PI đã duyệt để bấm nút này). */
+  @Post(':id/items/:itemId/retry-production-order')
+  @RequirePermissions(APPROVE)
+  @RequireRole(DEFAULT_ROLES.ADMIN)
+  retryProductionOrder(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.productionInvoicesService.retryProductionOrder(id, itemId, userId);
   }
 
   // ─── Sếp duyệt/từ chối CẢ đợt gộp (PI.isMerged) ────────────────────────────

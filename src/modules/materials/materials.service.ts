@@ -107,6 +107,7 @@ export class MaterialsService {
         fromWarehouseId: openingWarehouse.id,
         toWarehouseId: parseBigIntId(dto.warehouseId),
         materialId: material.id,
+        stockLengthMm: 0,
         qty: dto.openingQty,
         refType: StockLedgerRefType.OPENING_BALANCE,
         refId: material.id.toString(),

@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
 
 /** POST /stock-ledger/adjust - ngoại lệ duy nhất được ghi stock_ledger trực tiếp qua HTTP. */
 export class CreateStockAdjustmentDto {
@@ -35,6 +36,15 @@ export class CreateStockAdjustmentDto {
   @IsNumber()
   @Min(0.0001)
   qty!: number;
+
+  /** Chỉ có ý nghĩa khi materialId có giá trị (sắt). Để trống = mặc định bucket 0 - trừ vật tư
+   *  nhóm STEEL_BAR, BE bắt buộc phải truyền rõ (xem StockLedgerService.resolveAdjustStockLengthMm). */
+  @ApiPropertyOptional({ description: 'Cỡ cây sắt (mm) - chỉ áp dụng khi có materialId' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  stockLengthMm?: number;
 
   /** Vấn đề #25 audit 26/08/2026 - bắt buộc để sổ kho còn tra soát được sau này. Trước đây
    *  optional nên FE luôn gửi kèm 1 câu cố định giống hệt nhau (không mang thông tin gì) thay vì

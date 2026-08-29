@@ -179,6 +179,11 @@ export class SteelIssuesService {
             productionInvoiceId: invoice.id,
             materialId,
             barCount: dto.barCount,
+            // Phôi tự khai cỡ cây đang xuất - CHỈ là ĐỀ NGHỊ, drainPool()/pool giữ chỗ mới quyết
+            // bucket THẬT (nguyên tắc D3). Khai sai cỡ so với phương án đã duyệt bị chặn ở đây
+            // bằng ConflictException (pool rỗng ở cả 2 bucket), không âm thầm trừ nhầm (kế hoạch
+            // "chiều dài cây sắt" 2026-08-29, Bước 4).
+            barLengthMm: dto.barLengthMm,
             steelIssueId: issue.id,
             issuedById,
           });
@@ -212,28 +217,33 @@ export class SteelIssuesService {
       productionInvoiceId: bigint;
       materialId: bigint;
       barCount: number;
+      barLengthMm: number;
       steelIssueId: bigint;
       issuedById: string;
     },
   ): Promise<void> {
-    const { warehouseId } = await this.stockReservationsService.drainPool(tx, {
+    const { warehouseId, stockLengthMm } = await this.stockReservationsService.drainPool(tx, {
       productionInvoiceId: input.productionInvoiceId,
       materialId: input.materialId,
       qty: input.barCount,
+      preferredStockLengthMm: input.barLengthMm,
     });
 
     // Chặn tồn âm cục bộ (lỗ #2, mục 13.4) - không sửa StockLedgerService.postEntry() dùng chung
     // (nhiều luồng khác hợp lệ phải cho âm, vd kho ảo SUPPLIER) - chặn ngay tại đây, cùng khoá.
     // Phòng ca hiếm: tồn vật lý bị điều chỉnh tay (Admin > Sửa nhanh tồn kho) lệch khỏi giữ chỗ.
+    // stockLengthMm PHẢI khớp bucket THẬT drainPool() vừa rút (không phải input.barLengthMm đề
+    // nghị) - nếu không, FOR UPDATE có thể khoá nhầm 1 bucket khác/rỗng của cùng vật tư.
     const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
       SELECT "qty" FROM "stock_quant"
       WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${input.materialId}
+        AND "stockLengthMm" = ${stockLengthMm}
       FOR UPDATE
     `;
     const onHand = Math.floor(stockRow?.qty.toNumber() ?? 0);
     if (onHand < input.barCount) {
       throw new ConflictException(
-        `Tồn kho vật lý (${onHand} cây) không đủ xuất ${input.barCount} cây cho vật tư ${input.materialId} - có thể đã bị điều chỉnh tay (Admin > Sửa nhanh tồn kho), kiểm tra lại trước khi xuất`,
+        `Tồn kho vật lý (${onHand} cây, cỡ ${stockLengthMm}mm) không đủ xuất ${input.barCount} cây cho vật tư ${input.materialId} - có thể đã bị điều chỉnh tay (Admin > Sửa nhanh tồn kho), kiểm tra lại trước khi xuất`,
       );
     }
 
@@ -245,6 +255,7 @@ export class SteelIssuesService {
         fromWarehouseId: warehouseId,
         toWarehouseId: productionWarehouse.id,
         materialId: input.materialId,
+        stockLengthMm,
         qty: input.barCount,
         refType: StockLedgerRefType.STEEL_ISSUE,
         refId: input.steelIssueId.toString(),
@@ -377,12 +388,8 @@ export class SteelIssuesService {
       );
     }
 
-    const [specs, usedBars, config, allowedSpecIds] = await Promise.all([
+    const [specs, config, allowedSpecIds] = await Promise.all([
       this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } }),
-      this.prisma.cutBundle.aggregate({
-        where: { steelIssueId: issue.id },
-        _sum: { barCount: true },
-      }),
       this.prisma.systemConfig.findUnique({ where: { id: 1 } }),
       this.findBomSegmentSpecIds(issue.productionInvoiceId),
     ]);
@@ -408,13 +415,6 @@ export class SteelIssuesService {
           `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không có trong định mức của lệnh sản xuất này`,
         );
       }
-    }
-
-    const alreadyUsed = usedBars._sum.barCount ?? 0;
-    if (alreadyUsed + dto.barCount > issue.barCount) {
-      throw new BadRequestException(
-        `Đợt này dùng ${dto.barCount} cây, đã dùng ${alreadyUsed} cây - vượt ${issue.barCount} cây kho đã giao`,
-      );
     }
 
     // Tính bằng ĐƠN VỊ 1/10 mm trên số nguyên, KHÔNG dùng float: cutLengthMm là Decimal(7,1) (vd
@@ -447,21 +447,50 @@ export class SteelIssuesService {
       );
     }
 
-    const created = await this.prisma.cutBundle.create({
-      data: {
-        steelIssueId: issue.id,
-        proposalPatternId: dto.proposalPatternId ? parseBigIntId(dto.proposalPatternId) : undefined,
-        barCount: dto.barCount,
-        mauNguyenMm,
-        scrapMm: Math.round(scrapDeci / 10),
-        segments: {
-          create: dto.segments.map((seg) => ({
-            segmentSpecId: parseBigIntId(seg.segmentSpecId),
-            qty: seg.qty,
-          })),
+    // (Đính chính 2026-08-29, audit độc lập 28/08 mục Trung bình) Khoá NGUYÊN DÒNG SteelIssue (đã
+    // tồn tại - khác H2 ở material-issues.service.ts, nơi KHÔNG có dòng sẵn cho lần xuất đầu) rồi
+    // đọc lại status/tổng cây đã dùng TRONG transaction - trước đây đọc `usedBars`/so với
+    // `issue.barCount` NGOÀI transaction, không khoá gì: 2 đợt cắt báo gần đồng thời cho CÙNG đợt
+    // xuất đều thấy cùng 1 tổng cũ, cùng qua ngưỡng rồi cùng insert, tổng thật vượt số cây kho đã
+    // giao mà không có gì phát hiện. `SELECT ... FOR UPDATE` rồi đọc lại bằng client Prisma bình
+    // thường (cùng idiom StockReservationsService.creditPool()) để khỏi tự parse enum/Decimal thô.
+    const created = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "steel_issues" WHERE "id" = ${issue.id} FOR UPDATE`;
+      const locked = await tx.steelIssue.findUniqueOrThrow({ where: { id: issue.id } });
+      if (locked.status !== SteelIssueStatus.RECEIVED) {
+        throw new ConflictException(
+          `Steel issue ${id} đã đổi trạng thái (đang ${locked.status}) trong lúc nhập đợt cắt - không ghi đè`,
+        );
+      }
+      const usedBars = await tx.cutBundle.aggregate({
+        where: { steelIssueId: issue.id },
+        _sum: { barCount: true },
+      });
+      const alreadyUsed = usedBars._sum.barCount ?? 0;
+      if (alreadyUsed + dto.barCount > locked.barCount) {
+        throw new BadRequestException(
+          `Đợt này dùng ${dto.barCount} cây, đã dùng ${alreadyUsed} cây - vượt ${locked.barCount} cây kho đã giao`,
+        );
+      }
+
+      return tx.cutBundle.create({
+        data: {
+          steelIssueId: issue.id,
+          proposalPatternId: dto.proposalPatternId
+            ? parseBigIntId(dto.proposalPatternId)
+            : undefined,
+          barCount: dto.barCount,
+          mauNguyenMm,
+          scrapMm: Math.round(scrapDeci / 10),
+          segments: {
+            create: dto.segments.map((seg) => ({
+              segmentSpecId: parseBigIntId(seg.segmentSpecId),
+              qty: seg.qty,
+            })),
+          },
         },
-      },
-      include: { segments: { include: { segmentSpec: true } } },
+        include: { segments: { include: { segmentSpec: true } } },
+      });
     });
     return this.toBundleResponseDto(created);
   }
@@ -864,40 +893,14 @@ export class SteelIssuesService {
       throw new BadRequestException('Cùng một cỡ đoạn khai làm nhiều dòng - gộp lại thành 1 dòng');
     }
 
-    const [specs, allowedSpecIds, catDoneRows, stepDoneRows] = await Promise.all([
+    const [specs, allowedSpecIds] = await Promise.all([
       this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } }),
       this.findStepSegmentSpecIds(issue.productionInvoiceId, dto.step),
-      this.prisma.cutPatternSegment.findMany({
-        where: {
-          segmentSpecId: { in: specIds },
-          cutBundle: { steelIssue: { productionInvoiceId: issue.productionInvoiceId } },
-        },
-        select: { segmentSpecId: true, qty: true },
-      }),
-      this.prisma.stepBatchSegment.findMany({
-        where: {
-          segmentSpecId: { in: specIds },
-          stepBatch: {
-            step: dto.step,
-            steelIssue: { productionInvoiceId: issue.productionInvoiceId },
-          },
-        },
-        select: { segmentSpecId: true, qty: true },
-      }),
     ]);
-
     const specById = new Map(specs.map((sp) => [sp.id.toString(), sp]));
-    const catDoneBySpec = new Map<string, number>();
-    for (const r of catDoneRows) {
-      const k = r.segmentSpecId.toString();
-      catDoneBySpec.set(k, (catDoneBySpec.get(k) ?? 0) + r.qty);
-    }
-    const stepDoneBySpec = new Map<string, number>();
-    for (const r of stepDoneRows) {
-      const k = r.segmentSpecId.toString();
-      stepDoneBySpec.set(k, (stepDoneBySpec.get(k) ?? 0) + r.qty);
-    }
-
+    // Kiểm loại sắt/định mức không phụ thuộc trạng thái đồng thời (specById/allowedSpecIds là dữ
+    // liệu tham chiếu tĩnh) - an toàn kiểm trước tx, còn phần "đã cắt bao nhiêu / đã báo công đoạn
+    // bao nhiêu" (catDone/stepDoneSoFar) PHẢI đọc lại TRONG tx (xem bên dưới).
     for (const seg of dto.segments) {
       const specKey = parseBigIntId(seg.segmentSpecId).toString();
       const spec = specById.get(specKey);
@@ -914,28 +917,86 @@ export class SteelIssuesService {
           `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không cần công đoạn ${dto.step} theo định mức`,
         );
       }
-      const catDone = catDoneBySpec.get(specKey) ?? 0;
-      const stepDoneSoFar = stepDoneBySpec.get(specKey) ?? 0;
-      if (stepDoneSoFar + seg.qty > catDone) {
-        throw new BadRequestException(
-          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm: đã cắt ${catDone} đoạn, đã báo ${dto.step} ` +
-            `${stepDoneSoFar} đoạn - không thể báo thêm ${seg.qty} (vượt số đã cắt)`,
-        );
-      }
     }
 
-    const created = await this.prisma.stepBatch.create({
-      data: {
-        steelIssueId: issue.id,
-        step: dto.step,
-        segments: {
-          create: dto.segments.map((seg) => ({
-            segmentSpecId: parseBigIntId(seg.segmentSpecId),
-            qty: seg.qty,
-          })),
+    // (Đính chính 2026-08-29, audit độc lập 28/08 mục Trung bình) Khoá NGUYÊN DÒNG SteelIssue rồi
+    // đọc lại status/completedSteps + catDone/stepDoneSoFar TRONG transaction - trước đây đọc hết
+    // NGOÀI transaction/không khoá: (1) 2 lượt báo cùng cỡ đoạn gần đồng thời đều thấy cùng
+    // stepDoneSoFar cũ, cùng qua ngưỡng catDone rồi cùng insert, tổng thật vượt số đã cắt; (2)
+    // completeStep() có thể chạy xen giữa và chốt xong công đoạn này TRƯỚC khi request này ghi -
+    // dữ liệu vẫn lọt vào SAU khi đã chốt, trái bất biến "Xong {bước} thì không nhập thêm được".
+    // Khoá đúng 1 dòng SteelIssue chặn được cả 2 vì cả recordStepBatch lẫn completeStep đều phải
+    // giữ khoá này trước khi đọc/ghi bất cứ gì liên quan tới completedSteps của đợt.
+    const created = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "steel_issues" WHERE "id" = ${issue.id} FOR UPDATE`;
+      const locked = await tx.steelIssue.findUniqueOrThrow({ where: { id: issue.id } });
+      if (locked.status !== SteelIssueStatus.IN_PROCESS) {
+        throw new ConflictException(
+          `Steel issue ${id} đã đổi trạng thái (đang ${locked.status}) trong lúc ghi công đoạn - không ghi đè`,
+        );
+      }
+      if (locked.completedSteps.includes(dto.step)) {
+        throw new ConflictException(
+          `Công đoạn ${dto.step} vừa được báo xong bởi 1 request khác trong lúc ghi - không ghi đè`,
+        );
+      }
+
+      const [catDoneRows, stepDoneRows] = await Promise.all([
+        tx.cutPatternSegment.findMany({
+          where: {
+            segmentSpecId: { in: specIds },
+            cutBundle: { steelIssue: { productionInvoiceId: issue.productionInvoiceId } },
+          },
+          select: { segmentSpecId: true, qty: true },
+        }),
+        tx.stepBatchSegment.findMany({
+          where: {
+            segmentSpecId: { in: specIds },
+            stepBatch: {
+              step: dto.step,
+              steelIssue: { productionInvoiceId: issue.productionInvoiceId },
+            },
+          },
+          select: { segmentSpecId: true, qty: true },
+        }),
+      ]);
+      const catDoneBySpec = new Map<string, number>();
+      for (const r of catDoneRows) {
+        const k = r.segmentSpecId.toString();
+        catDoneBySpec.set(k, (catDoneBySpec.get(k) ?? 0) + r.qty);
+      }
+      const stepDoneBySpec = new Map<string, number>();
+      for (const r of stepDoneRows) {
+        const k = r.segmentSpecId.toString();
+        stepDoneBySpec.set(k, (stepDoneBySpec.get(k) ?? 0) + r.qty);
+      }
+
+      for (const seg of dto.segments) {
+        const specKey = parseBigIntId(seg.segmentSpecId).toString();
+        const spec = specById.get(specKey)!;
+        const catDone = catDoneBySpec.get(specKey) ?? 0;
+        const stepDoneSoFar = stepDoneBySpec.get(specKey) ?? 0;
+        if (stepDoneSoFar + seg.qty > catDone) {
+          throw new BadRequestException(
+            `Cỡ đoạn ${spec.cutLengthMm.toString()}mm: đã cắt ${catDone} đoạn, đã báo ${dto.step} ` +
+              `${stepDoneSoFar} đoạn - không thể báo thêm ${seg.qty} (vượt số đã cắt)`,
+          );
+        }
+      }
+
+      return tx.stepBatch.create({
+        data: {
+          steelIssueId: issue.id,
+          step: dto.step,
+          segments: {
+            create: dto.segments.map((seg) => ({
+              segmentSpecId: parseBigIntId(seg.segmentSpecId),
+              qty: seg.qty,
+            })),
+          },
         },
-      },
-      include: { segments: { include: { segmentSpec: true } } },
+        include: { segments: { include: { segmentSpec: true } } },
+      });
     });
 
     return new StepBatchResponseDto({
@@ -992,20 +1053,38 @@ export class SteelIssuesService {
         `Công đoạn ${dto.step} không thuộc danh sách công đoạn đã chọn sẵn của vật tư này`,
       );
     }
-    if (issue.completedSteps.includes(dto.step)) {
-      return this.toResponseDto(issue, requiredSteps);
-    }
+    // (Đính chính 2026-08-29, audit độc lập 28/08 mục Trung bình) Khoá NGUYÊN DÒNG SteelIssue -
+    // cùng khoá/cùng lý do recordStepBatch() ở trên, chặn race 2 chiều: 2 lượt completeStep() cho
+    // 2 công đoạn KHÁC nhau của CÙNG đợt chạy gần nhau (đọc-mảng-rồi-ghi-đè-cả-mảng trên
+    // `completedSteps` là race kinh điển - lượt sau ghi đè mất bước lượt trước vừa thêm nếu không
+    // khoá), và giữa completeStep() với recordStepBatch() (không cho ghi thêm dữ liệu SAU khi công
+    // đoạn vừa được chốt xong bởi request kia).
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "steel_issues" WHERE "id" = ${issue.id} FOR UPDATE`;
+      const locked = await tx.steelIssue.findUniqueOrThrow({
+        where: { id: issue.id },
+        include: STEEL_ISSUE_INCLUDE,
+      });
+      if (locked.status !== SteelIssueStatus.IN_PROCESS) {
+        throw new ConflictException(
+          `Steel issue ${id} đã đổi trạng thái (đang ${locked.status}) trong lúc đánh dấu công đoạn - không ghi đè`,
+        );
+      }
+      if (locked.completedSteps.includes(dto.step)) {
+        return locked;
+      }
 
-    const completedSteps = [...issue.completedSteps, dto.step];
-    const done = requiredSteps.every((s) => completedSteps.includes(s));
-    const updated = await this.prisma.steelIssue.update({
-      where: { id: issue.id },
-      data: {
-        completedSteps,
-        status: done ? SteelIssueStatus.AWAITING_QC : SteelIssueStatus.IN_PROCESS,
-        completedAt: done ? new Date() : null,
-      },
-      include: STEEL_ISSUE_INCLUDE,
+      const completedSteps = [...locked.completedSteps, dto.step];
+      const done = requiredSteps.every((s) => completedSteps.includes(s));
+      return tx.steelIssue.update({
+        where: { id: issue.id },
+        data: {
+          completedSteps,
+          status: done ? SteelIssueStatus.AWAITING_QC : SteelIssueStatus.IN_PROCESS,
+          completedAt: done ? new Date() : null,
+        },
+        include: STEEL_ISSUE_INCLUDE,
+      });
     });
     return this.toResponseDto(updated, requiredSteps);
   }
@@ -1300,9 +1379,15 @@ export class SteelIssuesService {
             select: { warehouseId: true, materialId: true, qty: true },
           })
         : [];
-    const quantByKey = new Map(
-      quants.map((q) => [`${q.warehouseId}:${q.materialId}`, q.qty.toNumber()]),
-    );
+    // Cộng dồn mọi bucket (stockLengthMm) của cùng (warehouseId, materialId) - `new Map()` từ
+    // mảng trước đây GHI ĐÈ, chỉ giữ dòng CUỐI khi vật tư có ≥2 bucket, làm physicalStockQty hiện
+    // thiếu (kế hoạch "chiều dài cây sắt" 2026-08-29, Bước 4). Đây chỉ là số hiển thị "tồn vật lý
+    // tổng" - không dùng để quyết định xuất được bao nhiêu (đó là remainingToIssue, đã tổng đúng).
+    const quantByKey = new Map<string, number>();
+    for (const q of quants) {
+      const key = `${q.warehouseId}:${q.materialId}`;
+      quantByKey.set(key, (quantByKey.get(key) ?? 0) + q.qty.toNumber());
+    }
 
     for (const materialId of materialIds) {
       const key = materialId.toString();

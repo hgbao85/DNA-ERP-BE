@@ -18,6 +18,7 @@ export class StockLedgerResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) pieceCode!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productVariantId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productVariantLabel!: string | null;
+  @Expose() @ApiProperty() stockLengthMm!: number;
   @Expose() @ApiProperty() qty!: number;
   @Expose() @ApiProperty({ enum: StockLedgerRefType }) refType!: StockLedgerRefType;
   @Expose() @ApiPropertyOptional({ nullable: true }) refId!: string | null;

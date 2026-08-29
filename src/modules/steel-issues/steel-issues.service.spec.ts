@@ -20,6 +20,7 @@ describe('SteelIssuesService', () => {
   let prisma: {
     steelIssue: {
       findUnique: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
       findFirst: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
@@ -34,6 +35,8 @@ describe('SteelIssuesService', () => {
     cuttingProposalLine: { findFirst: jest.Mock; findMany: jest.Mock };
     cutBundle: { create: jest.Mock; aggregate: jest.Mock };
     cutPatternSegment: { findMany: jest.Mock };
+    stepBatch: { create: jest.Mock };
+    stepBatchSegment: { findMany: jest.Mock };
     qcReviewSegment: { findMany: jest.Mock };
     segmentSpec: { findMany: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
@@ -93,6 +96,10 @@ describe('SteelIssuesService', () => {
     prisma = {
       steelIssue: {
         findUnique: jest.fn(),
+        // Đính chính 2026-08-29 (khoá FOR UPDATE + đọc lại trong tx, recordCutBatch/recordStepBatch/
+        // completeStep) - mirror đúng giá trị test đã cấu hình cho findUnique(), vì trong test cả
+        // 2 đều trỏ vào cùng 1 "issue" giả lập, không cần mock riêng.
+        findUniqueOrThrow: jest.fn(),
         findFirst: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
@@ -125,6 +132,14 @@ describe('SteelIssuesService', () => {
         aggregate: jest.fn().mockResolvedValue({ _sum: { barCount: null } }),
       },
       cutPatternSegment: { findMany: jest.fn().mockResolvedValue([]) },
+      stepBatch: {
+        create: jest.fn().mockResolvedValue({
+          id: 1n,
+          step: ProcessStep.UON,
+          segments: [],
+        }),
+      },
+      stepBatchSegment: { findMany: jest.fn().mockResolvedValue([]) },
       qcReviewSegment: { findMany: jest.fn().mockResolvedValue([]) },
       segmentSpec: {
         findMany: jest
@@ -144,12 +159,15 @@ describe('SteelIssuesService', () => {
       $queryRaw: jest.fn(() => Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }])),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
+    prisma.steelIssue.findUniqueOrThrow.mockImplementation(
+      (args: unknown) => prisma.steelIssue.findUnique(args) as unknown,
+    );
     stockLedgerService = { postEntry: jest.fn() };
     // L5 (2026-08-26): drainPool() thay hẳn lookup 1-dòng cố định cũ - mặc định trả về 1 kho giả
     // định đủ giữ chỗ, test nào cần mô phỏng "không đủ"/"pool rỗng" tự override bằng
     // mockRejectedValueOnce (hành vi thật đã kiểm riêng ở stock-reservations.service.spec.ts).
     stockReservationsService = {
-      drainPool: jest.fn().mockResolvedValue({ warehouseId: 800n }),
+      drainPool: jest.fn().mockResolvedValue({ warehouseId: 800n, stockLengthMm: 0 }),
     };
     service = new SteelIssuesService(
       prisma as unknown as PrismaServiceType,
@@ -313,12 +331,14 @@ describe('SteelIssuesService', () => {
         productionInvoiceId: 1n,
         materialId: 30n,
         qty: 12,
+        preferredStockLengthMm: 6000,
       });
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         {
           fromWarehouseId: 800n,
           toWarehouseId: 950n,
           materialId: 30n,
+          stockLengthMm: 0,
           qty: 12,
           refType: 'STEEL_ISSUE',
           refId: '100',
@@ -515,6 +535,24 @@ describe('SteelIssuesService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
+    it('rejects with ConflictException khi status đã đổi khỏi RECEIVED TRONG LÚC giữ khoá (race guard, đính chính 2026-08-29)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+      // Snapshot đọc TRƯỚC tx vẫn thấy RECEIVED - nhưng 1 request khác đã kịp finishCutting()
+      // trong lúc chờ khoá, tái kiểm bên trong FOR UPDATE phải bắt được.
+      prisma.steelIssue.findUniqueOrThrow.mockResolvedValue({
+        ...receivedIssue,
+        status: SteelIssueStatus.AWAITING_QC,
+      });
+
+      await expect(
+        service.recordCutBatch('100', {
+          barCount: 1,
+          segments: [{ segmentSpecId: '30', qty: 8 }],
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.cutBundle.create).not.toHaveBeenCalled();
+    });
+
     it('ném ConflictException nếu đã QC_PASSED - phần bù không đi qua đây nữa (2026-08-24 vòng 2)', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue({
         ...receivedIssue,
@@ -634,6 +672,262 @@ describe('SteelIssuesService', () => {
     });
   });
 
+  // 0 test cho getStepProgress() (Trung bình, audit độc lập 28/08 - mục "0 test cho 2 hàm cốt lõi
+  // Phôi"; recordStepBatch() đã có test riêng ở describe() dưới). Cùng khuôn "Cần/Đã/Còn lại" như
+  // getPhoiProgress() nhưng nguồn `done` là StepBatchSegment (không phải CutPatternSegment) và
+  // `required` CHỈ tính dòng PieceBom có processSteps chứa đúng step đang hỏi - xem docstring hàm.
+  describe('getStepProgress', () => {
+    const uonPieceBomRow = { ...pieceBomRow, processSteps: [ProcessStep.UON] };
+
+    beforeEach(() => {
+      prisma.pieceBom.findMany.mockResolvedValue([uonPieceBomRow]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { bomRevisionId: 5n, pieceId: 20n, qtyPerUnit: 3 },
+      ]);
+      prisma.steelIssue.findMany.mockResolvedValue([{ materialId: 30n, barCount: 2 }]);
+    });
+
+    it('required = qtyPerPiece × qtyPerUnit × order.quantity, done từ StepBatchSegment, failed = outstanding QC', async () => {
+      prisma.stepBatchSegment.findMany.mockResolvedValue([{ segmentSpecId: 30n, qty: 5 }]);
+      prisma.qcReviewSegment.findMany.mockResolvedValue([
+        { segmentSpecId: 30n, failedQty: 3, resolvedQty: 1 },
+      ]);
+
+      const result = await service.getStepProgress('1', ProcessStep.UON);
+
+      // required = qtyPerPiece(4) x qtyPerUnit(3) x order.quantity(10) = 120
+      expect(result[0].segments[0]).toEqual(
+        expect.objectContaining({ required: 120, done: 5, failed: 2 }),
+      );
+    });
+
+    it('issuedBarCount cộng dồn theo materialId, KHÔNG tính đợt rework (reworkOfId: null trong where)', async () => {
+      await service.getStepProgress('1', ProcessStep.UON);
+
+      expect(prisma.steelIssue.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          where: expect.objectContaining({ productionInvoiceId: 1n, reworkOfId: null }),
+        }),
+      );
+    });
+
+    it('lọc PieceBom theo ĐÚNG step đang hỏi (processSteps: { has: step }), không lấy nhầm bước khác', async () => {
+      await service.getStepProgress('1', ProcessStep.DAP);
+
+      expect(prisma.pieceBom.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          where: expect.objectContaining({ processSteps: { has: ProcessStep.DAP } }),
+        }),
+      );
+    });
+
+    it('trả mảng rỗng khi PI chưa có ProductionOrder nào (chưa được Sếp duyệt)', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([]);
+
+      const result = await service.getStepProgress('1', ProcessStep.UON);
+
+      expect(result).toEqual([]);
+      // Dừng sớm - không cần truy vấn thêm gì khi không có order nào.
+      expect(prisma.pieceBom.findMany).not.toHaveBeenCalled();
+    });
+
+    it('failed = 0 khi KCS đã duyệt lại xác nhận đạt hết (resolvedQty = failedQty)', async () => {
+      prisma.stepBatchSegment.findMany.mockResolvedValue([{ segmentSpecId: 30n, qty: 5 }]);
+      prisma.qcReviewSegment.findMany.mockResolvedValue([
+        { segmentSpecId: 30n, failedQty: 3, resolvedQty: 3 },
+      ]);
+
+      const result = await service.getStepProgress('1', ProcessStep.UON);
+
+      expect(result[0].segments[0]).toEqual(expect.objectContaining({ done: 5, failed: 0 }));
+    });
+
+    // Dữ liệu hỏng/ca hiếm: có đợt gia công ghi vào 1 segmentSpec KHÔNG thuộc BOM của PI này (vd
+    // BOM đã đổi sau khi đã ghi nhận) - vẫn phải hiện ra thay vì âm thầm mất số liệu, tự tra thêm
+    // segmentSpec đó qua nhánh orphanSpecIds thay vì rơi vào specMeta rỗng.
+    it('done ở segmentSpec không thuộc BOM hiện tại (orphan) vẫn hiện ra, tự tra thêm metadata', async () => {
+      prisma.pieceBom.findMany.mockResolvedValue([]); // BOM hiện tại không còn dòng nào cho step này
+      prisma.stepBatchSegment.findMany.mockResolvedValue([{ segmentSpecId: 99n, qty: 4 }]);
+      prisma.segmentSpec.findMany.mockResolvedValue([
+        {
+          id: 99n,
+          materialId: 30n,
+          cutLengthMm: decimal(500),
+          material: { id: 30n, code: 'ST-18', name: 'Sắt vuông 18x18' },
+        },
+      ]);
+
+      const result = await service.getStepProgress('1', ProcessStep.UON);
+
+      expect(result[0].segments[0]).toEqual(
+        expect.objectContaining({ segmentSpecId: '99', required: 0, done: 4 }),
+      );
+    });
+  });
+
+  describe('recordStepBatch', () => {
+    const inProcessIssue = {
+      ...issue,
+      status: SteelIssueStatus.IN_PROCESS,
+      completedSteps: [ProcessStep.CAT],
+    };
+
+    beforeEach(() => {
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { ...pieceBomRow, processSteps: [ProcessStep.CAT, ProcessStep.UON] },
+      ]);
+    });
+
+    it('ghi 1 đợt gia công trong giới hạn số đã cắt (catDone)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+      prisma.cutPatternSegment.findMany.mockResolvedValue([{ segmentSpecId: 30n, qty: 8 }]);
+
+      const result = await service.recordStepBatch('100', {
+        step: ProcessStep.UON,
+        segments: [{ segmentSpecId: '30', qty: 5 }],
+      });
+
+      expect(prisma.stepBatch.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+          data: expect.objectContaining({
+            steelIssueId: 100n,
+            step: ProcessStep.UON,
+          }),
+        }),
+      );
+      expect(result.step).toBe(ProcessStep.UON);
+    });
+
+    it('CHẶN khi báo vượt số đã cắt (catDone) - cộng dồn với đợt trước', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+      prisma.cutPatternSegment.findMany.mockResolvedValue([{ segmentSpecId: 30n, qty: 8 }]);
+      prisma.stepBatchSegment.findMany.mockResolvedValue([{ segmentSpecId: 30n, qty: 6 }]);
+
+      await expect(
+        service.recordStepBatch('100', {
+          step: ProcessStep.UON,
+          segments: [{ segmentSpecId: '30', qty: 5 }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.stepBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('CHẶN cỡ đoạn không cần công đoạn này theo định mức', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+      // pieceBom mặc định của beforeEach chỉ có segmentSpecId 30n cần UON - cỡ 31n không có trong
+      // định mức UON dù cùng loại sắt.
+      prisma.segmentSpec.findMany.mockResolvedValue([
+        { id: 31n, materialId: 30n, cutLengthMm: decimal(300) },
+      ]);
+
+      await expect(
+        service.recordStepBatch('100', {
+          step: ProcessStep.UON,
+          segments: [{ segmentSpecId: '31', qty: 1 }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.stepBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('CHẶN cỡ đoạn thuộc loại sắt khác', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+      prisma.segmentSpec.findMany.mockResolvedValue([
+        { id: 30n, materialId: 999n, cutLengthMm: decimal(745) },
+      ]);
+
+      await expect(
+        service.recordStepBatch('100', {
+          step: ProcessStep.UON,
+          segments: [{ segmentSpecId: '30', qty: 1 }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.stepBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('ném BadRequestException khi step=CAT (route riêng cut-batches)', async () => {
+      await expect(
+        service.recordStepBatch('100', {
+          step: ProcessStep.CAT,
+          segments: [{ segmentSpecId: '30', qty: 1 }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.steelIssue.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('ném ConflictException nếu không phải IN_PROCESS', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+
+      await expect(
+        service.recordStepBatch('100', {
+          step: ProcessStep.UON,
+          segments: [{ segmentSpecId: '30', qty: 1 }],
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('ném BadRequestException nếu step không thuộc requiredSteps của vật tư này', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+
+      await expect(
+        service.recordStepBatch('100', {
+          step: ProcessStep.DAP,
+          segments: [{ segmentSpecId: '30', qty: 1 }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('ném ConflictException nếu công đoạn đã báo xong (snapshot đọc trước tx)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue({
+        ...inProcessIssue,
+        completedSteps: [ProcessStep.CAT, ProcessStep.UON],
+      });
+
+      await expect(
+        service.recordStepBatch('100', {
+          step: ProcessStep.UON,
+          segments: [{ segmentSpecId: '30', qty: 1 }],
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('rejects with ConflictException khi 1 request khác vừa completeStep() chốt xong công đoạn này TRONG LÚC giữ khoá (race guard, đính chính 2026-08-29)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+      // Snapshot đọc TRƯỚC tx vẫn thấy UON chưa xong - nhưng completeStep() đã commit trước và
+      // tái kiểm trong khoá FOR UPDATE phải bắt được, không chỉ dựa vào check đầu hàm.
+      prisma.steelIssue.findUniqueOrThrow.mockResolvedValue({
+        ...inProcessIssue,
+        completedSteps: [ProcessStep.CAT, ProcessStep.UON],
+      });
+
+      await expect(
+        service.recordStepBatch('100', {
+          step: ProcessStep.UON,
+          segments: [{ segmentSpecId: '30', qty: 1 }],
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.stepBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects with ConflictException khi status đã đổi khỏi IN_PROCESS TRONG LÚC giữ khoá (race guard)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+      prisma.steelIssue.findUniqueOrThrow.mockResolvedValue({
+        ...inProcessIssue,
+        status: SteelIssueStatus.AWAITING_QC,
+      });
+
+      await expect(
+        service.recordStepBatch('100', {
+          step: ProcessStep.UON,
+          segments: [{ segmentSpecId: '30', qty: 1 }],
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.stepBatch.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('completeStep', () => {
     const inProcessIssue = {
       ...issue,
@@ -694,6 +988,34 @@ describe('SteelIssuesService', () => {
       prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
 
       const result = await service.completeStep('100', { step: ProcessStep.CAT });
+
+      expect(prisma.steelIssue.update).not.toHaveBeenCalled();
+      expect(result.status).toBe(SteelIssueStatus.IN_PROCESS);
+    });
+
+    it('rejects with ConflictException khi status đã đổi khỏi IN_PROCESS TRONG LÚC giữ khoá (race guard, đính chính 2026-08-29)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+      prisma.steelIssue.findUniqueOrThrow.mockResolvedValue({
+        ...inProcessIssue,
+        status: SteelIssueStatus.AWAITING_QC,
+      });
+
+      await expect(service.completeStep('100', { step: ProcessStep.UON })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.steelIssue.update).not.toHaveBeenCalled();
+    });
+
+    it('idempotent khi 1 request khác đã thêm ĐÚNG step này vào completedSteps TRONG LÚC giữ khoá - không update lần 2, không mất bước (race guard)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+      // Snapshot đọc TRƯỚC tx chưa có UON - nhưng 1 request completeStep(UON) khác đã commit
+      // trước, tái kiểm trong khoá phải nhận ra và không append/update lần 2 (double-count).
+      prisma.steelIssue.findUniqueOrThrow.mockResolvedValue({
+        ...inProcessIssue,
+        completedSteps: [ProcessStep.CAT, ProcessStep.UON],
+      });
+
+      const result = await service.completeStep('100', { step: ProcessStep.UON });
 
       expect(prisma.steelIssue.update).not.toHaveBeenCalled();
       expect(result.status).toBe(SteelIssueStatus.IN_PROCESS);

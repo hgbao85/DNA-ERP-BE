@@ -98,7 +98,7 @@ describe('WarehouseTransfersService', () => {
     // Mặc định trả nguyên onHand (không giữ chỗ nào) - khớp hành vi cũ trước H1 fix cho các test
     // không quan tâm tới reservation.
     stockReservationsService = {
-      getAvailableQty: jest.fn((_tx, _warehouseId, _materialId, onHand: number) =>
+      getAvailableQty: jest.fn((_tx, _warehouseId, _materialId, _bucket, onHand: number) =>
         Promise.resolve(onHand),
       ),
     };
@@ -144,7 +144,7 @@ describe('WarehouseTransfersService', () => {
     });
 
     it('allows a caller scoped to the correct fromWarehouse', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
       await expect(
@@ -153,7 +153,7 @@ describe('WarehouseTransfersService', () => {
     });
 
     it('clamps requested quantity down to available stock (onHand - reservations of both kinds, via getAvailableQty)', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 40 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 40 }, stockLengthMm: 0 }]);
       stockReservationsService.getAvailableQty.mockResolvedValue(25); // 40 onHand - 15 reserved
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
@@ -170,16 +170,22 @@ describe('WarehouseTransfersService', () => {
     });
 
     it('reads available stock through StockReservationsService.getAvailableQty (H1 fix) - never re-implements the sum locally', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
       await service.create(dto, null, 'user-1', 'idem-key-1');
 
-      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(prisma, 1n, 10n, 100);
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        prisma,
+        1n,
+        10n,
+        0,
+        100,
+      );
     });
 
     it('rejects with 400 when clamped availability is 0 for every item', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 0 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 0 }, stockLengthMm: 0 }]);
 
       await expect(service.create(dto, null, 'user-1', 'idem-key-1')).rejects.toThrow(
         BadRequestException,
@@ -208,7 +214,7 @@ describe('WarehouseTransfersService', () => {
 
     // Vấn đề #7 audit 26/08 - trước đây create() không nhận userId nên không lưu được ai tạo phiếu.
     it('records the caller as createdById', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
       await service.create(dto, null, 'user-1', 'idem-key-1');
@@ -236,7 +242,7 @@ describe('WarehouseTransfersService', () => {
     });
 
     it('numbers the transfer code sequentially per year, based on the existing count', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
       prisma.warehouseTransfer.count.mockResolvedValue(4);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 

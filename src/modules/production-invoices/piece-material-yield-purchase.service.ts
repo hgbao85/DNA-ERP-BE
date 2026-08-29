@@ -163,12 +163,15 @@ export class PieceMaterialYieldPurchaseService {
         const materialId = BigInt(materialIdStr);
         const acc = barsNeededByMaterial.get(materialIdStr)!;
         const { warehouseId } = warehouseByMaterial.get(materialIdStr)!;
+        // Vật tư thành phẩm (chân nhôm/"pat") vĩnh viễn chỉ có bucket 0, nhưng KHÔNG giả định 1
+        // dòng duy nhất - cộng dồn mọi dòng trả về (kế hoạch "chiều dài cây sắt" 2026-08-29,
+        // Bước 6).
         const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
           SELECT "qty" FROM "stock_quant"
           WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
           FOR UPDATE
         `;
-        const actualStock = Math.floor(locked[0]?.qty.toNumber() ?? 0);
+        const actualStock = Math.floor(locked.reduce((sum, r) => sum + r.qty.toNumber(), 0));
         const buyQty = Math.max(0, acc.bars - actualStock);
         computed.push({ materialId, materialIdStr, actualStock, buyQty });
       }

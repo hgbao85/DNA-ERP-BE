@@ -33,6 +33,7 @@ export class StockQuantService {
     const where: Prisma.StockQuantWhereInput = {
       warehouseId: query.warehouseId ? parseBigIntId(query.warehouseId) : undefined,
       materialId: query.materialId ? parseBigIntId(query.materialId) : undefined,
+      stockLengthMm: query.stockLengthMm,
       segmentSpecId: query.segmentSpecId ? parseBigIntId(query.segmentSpecId) : undefined,
       pieceId: query.pieceId ? parseBigIntId(query.pieceId) : undefined,
       productVariantId: query.productVariantId ? parseBigIntId(query.productVariantId) : undefined,
@@ -64,6 +65,7 @@ export class StockQuantService {
           undefined,
           row.warehouseId,
           row.materialId,
+          row.stockLengthMm,
           qty,
         )
       : qty;
@@ -81,6 +83,7 @@ export class StockQuantService {
       pieceCode: row.piece?.code ?? null,
       productVariantId: row.productVariantId?.toString() ?? null,
       productVariantLabel: row.productVariant?.description ?? row.productVariant?.colorCode ?? null,
+      stockLengthMm: row.stockLengthMm,
       qty,
       availableQty,
       updatedAt: row.updatedAt,
