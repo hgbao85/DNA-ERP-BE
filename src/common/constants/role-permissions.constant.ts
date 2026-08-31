@@ -203,9 +203,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     // Phase 7: ProductionOrder tự sinh khi Sếp duyệt PI item (không có CREATE thủ công ở bản
     // này) - QLSX chỉ xem. CuttingProposal: QLSX xem + có thể bấm "Tính lại" (CREATE) + duyệt
     // phương án cắt cuối cùng (APPROVE) trước khi Phôi cắt theo.
+    // UPDATE thêm 2026-08-31: nút "Bắt đầu"/"Kết thúc" ở Bảng thống kê (POST .../floor-start,
+    // .../floor-finish) - phát hiện qua browser thật, thiếu quyền này bấm nút báo lỗi 403
+    // "Missing required permission(s): PRODUCTION_ORDER:UPDATE" dù đã có @RequireRole(
+    // PRODUCTION_MANAGER) đúng ở controller (2 lớp chặn độc lập, thiếu 1 lớp vẫn chặn).
     {
       module: PERMISSION_MODULES.PRODUCTION_ORDER,
-      actions: [PermissionAction.VIEW],
+      actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
     {
       module: PERMISSION_MODULES.CUTTING_PROPOSAL,

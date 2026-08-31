@@ -65,6 +65,31 @@ export class SteelIssuesController {
   }
 
   /**
+   * Gộp nhiều PI 1 lần - "Bảng thống kê" (ThongKePagePlan.tsx) cần tiến độ Phôi cho nhiều SKU
+   * cùng lúc, nhiều SKU có thể chung 1 PI - cùng mẫu GET /packaging-issues/plan.
+   *
+   * Path 'production-invoices/steel-issues-batch' (1 segment) ĐÃ TỪNG đụng route
+   * 'production-invoices/:id' (ProductionInvoicesController.findOne, controller khác nhưng cùng
+   * tiền tố) - Nest khớp route theo THỨ TỰ ĐĂNG KÝ module (không ưu tiên route tĩnh), :id nuốt
+   * mất chuỗi "steel-issues-batch" làm id, ném 400 khi parseBigIntId (phát hiện qua browser thật
+   * 2026-08-31: cả 5 endpoint batch đều 400). Đổi sang 2 segment 'steel-issues/batch' - segment 2
+   * là 'batch', KHÔNG trùng bất kỳ literal segment-2 nào sau ':id/' đã có (vd 'steel-issues' của
+   * findAllForInvoice) nên không còn khớp nhầm route ':id/<literal>' nào, bất kể thứ tự đăng ký.
+   */
+  @Get('production-invoices/steel-issues/batch')
+  @RequirePermissions(VIEW)
+  findAllForInvoiceBatch(@Query('ids') idsParam?: string) {
+    if (!idsParam) {
+      throw new BadRequestException('Query ids là bắt buộc (phân tách bởi dấu phẩy)');
+    }
+    const ids = idsParam
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    return this.steelIssuesService.findAllForInvoiceBatch(ids);
+  }
+
+  /**
    * Tiến độ cắt theo (loại sắt -> cỡ đoạn) - bảng "Cần / Đã cắt / Còn lại" ở màn Lệnh sản xuất
    * của Phôi. Đặt ở controller này (không phải ProductionInvoicesController) để dùng đúng quyền
    * STEEL_ISSUE:VIEW mà PHOI_STAFF đã có.

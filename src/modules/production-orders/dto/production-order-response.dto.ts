@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
-import { ProductionOrderStatus } from '../../../generated/prisma/client';
+import { ProductionOrderFloorStage, ProductionOrderStatus } from '../../../generated/prisma/client';
 
 @Exclude()
 export class ProductionOrderResponseDto {
@@ -24,6 +24,13 @@ export class ProductionOrderResponseDto {
   @Expose() @ApiProperty() quantity!: number;
   @Expose() @ApiProperty({ enum: ProductionOrderStatus }) status!: ProductionOrderStatus;
   @Expose() @ApiPropertyOptional({ nullable: true }) releasedAt!: Date | null;
+  /// QLSX kiểm soát qua nút Bắt đầu/Kết thúc ở "Bảng thống kê" - ĐỘC LẬP với `status` ở trên.
+  /// Hàn/Sơn chỉ thấy lệnh này khi ACTIVE (xem ProductionOrderFloorStage).
+  @Expose()
+  @ApiProperty({ enum: ProductionOrderFloorStage })
+  floorStage!: ProductionOrderFloorStage;
+  @Expose() @ApiPropertyOptional({ nullable: true }) floorStartedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) floorFinishedAt!: Date | null;
   @Expose() @ApiProperty() createdAt!: Date;
 
   constructor(partial: Partial<ProductionOrderResponseDto>) {

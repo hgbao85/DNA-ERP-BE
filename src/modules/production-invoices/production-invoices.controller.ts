@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -257,6 +266,28 @@ export class ProductionInvoicesController {
 
   // ─── Chuyền kiểm (TRANSFER_CHECK) - thủ kho thành phẩm, mirror KhoChuyenKiemPage ─────
 
+  /**
+   * Gộp nhiều ProductionInvoiceItem 1 lần - "Bảng thống kê" (ThongKePagePlan.tsx).
+   *
+   * Path 1 segment 'transfer-check-batch' KHÔNG đụng ':id/items/:itemId/transfer-check' (4
+   * segment) như tưởng, NHƯNG lại đụng '@Get(':id')' (findOne, dòng ~88 file này, cũng 1 segment)
+   * - Nest khớp theo thứ tự đăng ký (findOne khai TRƯỚC), :id nuốt mất chuỗi làm id → 400 (phát
+   * hiện qua browser thật 2026-08-31). Đổi sang 2 segment 'transfer-check/batch' - segment 2
+   * 'batch' không trùng literal segment-2 nào sau ':id/' đã có nên hết khớp nhầm, bất kể thứ tự.
+   */
+  @Get('transfer-check/batch')
+  @RequirePermissions(VIEW)
+  listTransferCheckPiecesBatch(@Query('itemIds') itemIdsParam?: string) {
+    if (!itemIdsParam) {
+      throw new BadRequestException('Query itemIds là bắt buộc (phân tách bởi dấu phẩy)');
+    }
+    const itemIds = itemIdsParam
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    return this.productionInvoicesService.listTransferCheckPiecesBatch(itemIds);
+  }
+
   @Get(':id/items/:itemId/transfer-check')
   @RequirePermissions(VIEW)
   listTransferCheckPieces(@Param('id') id: string, @Param('itemId') itemId: string) {
@@ -275,6 +306,21 @@ export class ProductionInvoicesController {
   }
 
   // ─── Đóng gói (PACKAGING) - thủ kho thành phẩm, mirror KhoDongGoiPage ───────────────
+
+  /** Gộp nhiều ProductionInvoiceItem 1 lần - "Bảng thống kê" (ThongKePagePlan.tsx), cùng mẫu và
+   *  cùng lý do đổi sang 2 segment như transfer-check/batch ở trên (tránh đụng '@Get(':id')'). */
+  @Get('packaging/batch')
+  @RequirePermissions(VIEW)
+  getPackagingBatch(@Query('itemIds') itemIdsParam?: string) {
+    if (!itemIdsParam) {
+      throw new BadRequestException('Query itemIds là bắt buộc (phân tách bởi dấu phẩy)');
+    }
+    const itemIds = itemIdsParam
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    return this.productionInvoicesService.getPackagingBatch(itemIds);
+  }
 
   @Get(':id/items/:itemId/packaging')
   @RequirePermissions(VIEW)

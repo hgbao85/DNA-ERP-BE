@@ -8,6 +8,7 @@ import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorat
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
 import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
+import { ProductionBatchPlanBatchQueryDto } from './dto/production-batch-plan-batch-query.dto';
 import { ProductionBatchPlanQueryDto } from './dto/production-batch-plan-query.dto';
 import { ProductionBatchesService } from './production-batches.service';
 
@@ -48,6 +49,31 @@ export class ProductionBatchesController {
   @RequirePermissions(VIEW)
   getBatchPlan(@Param('id') id: string, @Query() query: ProductionBatchPlanQueryDto) {
     return this.productionBatchesService.getBatchPlan(id, query.stage);
+  }
+
+  /**
+   * Gộp nhiều ProductionOrder 1 lần, cùng stage - "Bảng thống kê" (ThongKePagePlan.tsx).
+   *
+   * Path 1 segment 'production-batch-plan-batch' ĐÃ TỪNG đụng 'production-orders/:id'
+   * (ProductionOrdersController.findOne) - Nest khớp theo thứ tự đăng ký module, không ưu tiên
+   * route tĩnh, :id nuốt mất chuỗi làm id → 400 (phát hiện qua browser thật 2026-08-31). Đổi sang
+   * 2 segment 'production-batch-plan/batch' - segment 2 'batch' không trùng literal segment-2 nào
+   * sau ':id/' đã có (vd 'production-batch-plan' của getBatchPlan) nên hết khớp nhầm.
+   *
+   * Dùng DTO riêng (ProductionBatchPlanBatchQueryDto, có khai `ids`) thay vì
+   * @Query('ids') rời + @Query() ProductionBatchPlanQueryDto (chỉ khai `stage`) - global
+   * ValidationPipe forbidNonWhitelisted:true (main.ts) chặn 400 field `ids` "lạ" dù có
+   * @Query('ids') riêng đọc đúng, vì cả 2 decorator cùng validate chung 1 req.query (phát hiện
+   * qua browser thật 2026-08-31, endpoint duy nhất trong 5 batch mới trộn kiểu này nên chỉ nó lỗi).
+   */
+  @Get('production-orders/production-batch-plan/batch')
+  @RequirePermissions(VIEW)
+  getBatchPlanBatch(@Query() query: ProductionBatchPlanBatchQueryDto) {
+    const ids = query.ids
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    return this.productionBatchesService.getBatchPlanBatch(ids, query.stage);
   }
 
   @Get('production-batches/:id')

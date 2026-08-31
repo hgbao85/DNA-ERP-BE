@@ -1121,6 +1121,81 @@ export class ProductionInvoicesService {
   }
 
   /**
+   * Gộp nhiều ProductionInvoiceItem 1 lần - "Bảng thống kê" (ThongKePagePlan.tsx) tải tiến độ
+   * Chuyền kiểm cho nhiều SKU cùng lúc. ProductionOrder có quan hệ 1-1 với
+   * productionInvoiceItemId nên chỉ cần itemId (không cần piId riêng như bản đơn) để tra ra đúng
+   * order - item nào chưa có ProductionOrder (chưa duyệt) thì trả mảng rỗng thay vì lỗi 409 như
+   * bản đơn (khớp cách buildOrderRow FE đã tự coi "chưa có gì" là an toàn).
+   */
+  async listTransferCheckPiecesBatch(
+    itemIds: string[],
+  ): Promise<Record<string, TransferCheckPieceResponseDto[]>> {
+    const result: Record<string, TransferCheckPieceResponseDto[]> = {};
+    for (const id of itemIds) result[id] = [];
+    if (itemIds.length === 0) return result;
+
+    const itemBigIds = itemIds.map((id) => parseBigIntId(id));
+    const orders = await this.prisma.productionOrder.findMany({
+      where: { productionInvoiceItemId: { in: itemBigIds } },
+    });
+    if (orders.length === 0) return result;
+    const orderByItemId = new Map(orders.map((o) => [o.productionInvoiceItemId.toString(), o]));
+    const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
+    const orderIds = orders.map((o) => o.id);
+
+    const [bomPieces, results, receiptSums] = await Promise.all([
+      this.prisma.bomPiece.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { piece: true },
+      }),
+      this.prisma.transferCheckResult.findMany({
+        where: { productionInvoiceItemId: { in: itemBigIds } },
+        include: { defects: true },
+      }),
+      // Nhóm theo CẢ pieceId lẫn productionOrderId - khác bản đơn (1 order/lần nên chỉ cần
+      // pieceId) vì ở đây nhiều order trộn chung 1 query.
+      this.prisma.weavingReceipt.groupBy({
+        by: ['pieceId', 'productionOrderId'],
+        where: { productionOrderId: { in: orderIds } },
+        _sum: { qty: true },
+      }),
+    ]);
+
+    const bomPiecesByRevision = new Map<string, typeof bomPieces>();
+    for (const bp of bomPieces) {
+      const key = bp.bomRevisionId.toString();
+      const arr = bomPiecesByRevision.get(key);
+      if (arr) arr.push(bp);
+      else bomPiecesByRevision.set(key, [bp]);
+    }
+    const readyQtyByOrderPiece = new Map<string, number>();
+    for (const r of receiptSums) {
+      readyQtyByOrderPiece.set(`${r.productionOrderId}:${r.pieceId}`, r._sum.qty ?? 0);
+    }
+
+    for (const itemId of itemIds) {
+      const order = orderByItemId.get(itemId);
+      if (!order) continue;
+      const bomPiecesForOrder = bomPiecesByRevision.get(order.bomRevisionId.toString()) ?? [];
+      const itemResults = results.filter(
+        (r) => r.productionInvoiceItemId === order.productionInvoiceItemId,
+      );
+      result[itemId] = bomPiecesForOrder.map((bp) => {
+        const pieceResults = itemResults.filter((r) => r.pieceId === bp.pieceId);
+        return new TransferCheckPieceResponseDto({
+          pieceId: bp.pieceId.toString(),
+          pieceName: bp.piece.name,
+          totalQty: bp.qtyPerUnit * order.quantity,
+          readyQty: readyQtyByOrderPiece.get(`${order.id}:${bp.pieceId}`) ?? 0,
+          checkedQty: pieceResults.reduce((sum, r) => sum + r.checkedQty, 0),
+          defectCount: pieceResults.reduce((sum, r) => sum + r.defects.length, 0),
+        });
+      });
+    }
+    return result;
+  }
+
+  /**
    * Ghi 1 lần kiểm cho 1 mảnh - luôn tạo dòng MỚI (không update dòng cũ), nên nhiều lần kiểm
    * cùng 1 mảnh gọi gần như đồng thời chỉ đơn giản chèn nhiều dòng độc lập, không có khoảng hở
    * đọc-rồi-ghi để lost-update như shippedQty cũ (xem SalesOrdersService.shipItem).
@@ -1181,6 +1256,46 @@ export class ProductionInvoicesService {
       packedQty,
       remainingQty: productionOrder.quantity - packedQty,
     });
+  }
+
+  /**
+   * Gộp nhiều ProductionInvoiceItem 1 lần - "Bảng thống kê" (ThongKePagePlan.tsx) tải tiến độ
+   * Đóng gói cho nhiều SKU cùng lúc. Cùng cách bỏ qua item chưa có ProductionOrder như
+   * listTransferCheckPiecesBatch() (trả 0/0/0 thay vì lỗi 409).
+   */
+  async getPackagingBatch(itemIds: string[]): Promise<Record<string, PackagingResponseDto>> {
+    const result: Record<string, PackagingResponseDto> = {};
+    if (itemIds.length === 0) return result;
+
+    const itemBigIds = itemIds.map((id) => parseBigIntId(id));
+    const orders = await this.prisma.productionOrder.findMany({
+      where: { productionInvoiceItemId: { in: itemBigIds } },
+    });
+    const orderByItemId = new Map(orders.map((o) => [o.productionInvoiceItemId.toString(), o]));
+
+    const packedSums = await this.prisma.packagingRecord.groupBy({
+      by: ['productionInvoiceItemId'],
+      where: { productionInvoiceItemId: { in: itemBigIds } },
+      _sum: { boxesPacked: true },
+    });
+    const packedByItem = new Map(
+      packedSums.map((p) => [p.productionInvoiceItemId.toString(), p._sum.boxesPacked ?? 0]),
+    );
+
+    for (const itemId of itemIds) {
+      const order = orderByItemId.get(itemId);
+      if (!order) {
+        result[itemId] = new PackagingResponseDto({ totalQty: 0, packedQty: 0, remainingQty: 0 });
+        continue;
+      }
+      const packedQty = packedByItem.get(itemId) ?? 0;
+      result[itemId] = new PackagingResponseDto({
+        totalQty: order.quantity,
+        packedQty,
+        remainingQty: order.quantity - packedQty,
+      });
+    }
+    return result;
   }
 
   /** Luôn tạo dòng MỚI (không update-in-place) - cùng lý do TransferCheckResult làm vậy. */
@@ -1310,6 +1425,10 @@ export class ProductionInvoicesService {
       const proposal = piLevelProposal ?? pi.items[i].productionOrder?.cuttingProposals[0];
       itemDto.cuttingProposalStatus = proposal?.status ?? null;
       itemDto.cuttingProposalRequestedAt = proposal?.requestedAt ?? null;
+      itemDto.productionOrderId = pi.items[i].productionOrder?.id?.toString() ?? null;
+      // Bảng thống kê (ThongKePagePlan.tsx) cần floorStage để hiện nút Bắt đầu/Kết thúc (QLSX) và
+      // badge trạng thái xưởng (Boss/KHSX chỉ xem) - null khi item chưa có ProductionOrder.
+      itemDto.floorStage = pi.items[i].productionOrder?.floorStage ?? null;
     });
     return dto;
   }

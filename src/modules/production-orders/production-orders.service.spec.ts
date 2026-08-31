@@ -164,4 +164,107 @@ describe('ProductionOrdersService', () => {
       await expect(service.findOne('999')).rejects.toThrow(NotFoundException);
     });
   });
+
+  // Đọc data đã truyền vào update() qua ép kiểu tường minh (không đọc thẳng .mock.calls[0][0]
+  // dạng any) - cùng idiom tránh no-unsafe-assignment/no-unsafe-member-access của eslint dự án.
+  function updateDataArg(): Record<string, unknown> {
+    const call = prisma.productionOrder.update.mock.calls[0] as [{ data: Record<string, unknown> }];
+    return call[0].data;
+  }
+
+  describe('startFloor — QLSX "Bắt đầu" (2026-08-31, floorStage độc lập với status)', () => {
+    it('moves PENDING to ACTIVE and stamps floorStartedAt the first time', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'PENDING' }));
+      prisma.productionOrder.update.mockResolvedValue(
+        order({ floorStage: 'ACTIVE', floorStartedAt: new Date() }),
+      );
+
+      const result = await service.startFloor('9');
+
+      const data = updateDataArg();
+      expect(data.floorStage).toBe('ACTIVE');
+      expect(data.floorStartedAt).toBeInstanceOf(Date);
+      expect(result.floorStage).toBe('ACTIVE');
+    });
+
+    it('is idempotent - re-starting an already ACTIVE order does not overwrite floorStartedAt', async () => {
+      const startedAt = new Date('2026-08-30T00:00:00Z');
+      prisma.productionOrder.findUnique.mockResolvedValue(
+        order({ floorStage: 'ACTIVE', floorStartedAt: startedAt }),
+      );
+      prisma.productionOrder.update.mockResolvedValue(
+        order({ floorStage: 'ACTIVE', floorStartedAt: startedAt }),
+      );
+
+      await service.startFloor('9');
+
+      const data = updateDataArg();
+      expect(data).toStrictEqual({ floorStage: 'ACTIVE' });
+    });
+
+    it('does NOT touch `status` (mua vật tư/xuất sắt vẫn phụ thuộc status, không phụ thuộc floorStage)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'PENDING' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+
+      await service.startFloor('9');
+
+      expect(updateDataArg()).not.toHaveProperty('status');
+    });
+
+    it('throws NotFoundException when the order does not exist', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(null);
+
+      await expect(service.startFloor('999')).rejects.toThrow(NotFoundException);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('finishFloor — QLSX "Kết thúc" (bấm tự do, không kiểm tra tiến độ)', () => {
+    it('moves any floorStage to FINISHED and stamps floorFinishedAt the first time', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(
+        order({ floorStage: 'ACTIVE', floorFinishedAt: null }),
+      );
+      prisma.productionOrder.update.mockResolvedValue(
+        order({ floorStage: 'FINISHED', floorFinishedAt: new Date() }),
+      );
+
+      const result = await service.finishFloor('9');
+
+      const data = updateDataArg();
+      expect(data.floorStage).toBe('FINISHED');
+      expect(data.floorFinishedAt).toBeInstanceOf(Date);
+      expect(result.floorStage).toBe('FINISHED');
+    });
+
+    it('allows finishing directly from PENDING (chưa từng Bắt đầu vẫn Kết thúc được tự do)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(
+        order({ floorStage: 'PENDING', floorFinishedAt: null }),
+      );
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+
+      await expect(service.finishFloor('9')).resolves.toBeDefined();
+    });
+
+    it('is idempotent - re-finishing does not overwrite floorFinishedAt', async () => {
+      const finishedAt = new Date('2026-08-30T00:00:00Z');
+      prisma.productionOrder.findUnique.mockResolvedValue(
+        order({ floorStage: 'FINISHED', floorFinishedAt: finishedAt }),
+      );
+      prisma.productionOrder.update.mockResolvedValue(
+        order({ floorStage: 'FINISHED', floorFinishedAt: finishedAt }),
+      );
+
+      await service.finishFloor('9');
+
+      const data = updateDataArg();
+      expect(data).toStrictEqual({ floorStage: 'FINISHED' });
+    });
+
+    it('throws NotFoundException when the order does not exist', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(null);
+
+      await expect(service.finishFloor('999')).rejects.toThrow(NotFoundException);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -162,7 +162,55 @@ export class ProductionOrdersService {
       quantity: order.quantity,
       status: order.status,
       releasedAt: order.releasedAt,
+      floorStage: order.floorStage,
+      floorStartedAt: order.floorStartedAt,
+      floorFinishedAt: order.floorFinishedAt,
       createdAt: order.createdAt,
     });
+  }
+
+  /**
+   * QLSX (BUSINESS_ROLES.PRODUCTION_MANAGER) bấm "Bắt đầu" ở "Bảng thống kê" - CHỈ đổi
+   * floorStage (PENDING/ACTIVE -> ACTIVE), KHÔNG đụng `status` (vẫn RELEASED/IN_PROGRESS như cũ,
+   * mua vật tư/xuất sắt không phụ thuộc field này). Cho phép gọi lại dù đã ACTIVE (idempotent,
+   * không throw) - tránh lỗi vặt nếu bấm 2 lần/2 tab.
+   */
+  async startFloor(id: string): Promise<ProductionOrderResponseDto> {
+    const bigId = parseBigIntId(id);
+    const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
+    if (!order) {
+      throw new NotFoundException(`Production order ${id} not found`);
+    }
+    const updated = await this.prisma.productionOrder.update({
+      where: { id: bigId },
+      data:
+        order.floorStage === 'PENDING'
+          ? { floorStage: 'ACTIVE', floorStartedAt: new Date() }
+          : { floorStage: 'ACTIVE' },
+      include: SALES_ORDER_CODE_INCLUDE,
+    });
+    return this.toResponseDto(updated);
+  }
+
+  /**
+   * QLSX bấm "Kết thúc" - đổi floorStage sang FINISHED, KHÔNG kiểm tra tiến độ Phôi/Hàn/Sơn/Đan/
+   * Đóng gói (quyết định nghiệp vụ 2026-08-31: QLSX toàn quyền, bấm tự do). Idempotent cùng lý do
+   * startFloor().
+   */
+  async finishFloor(id: string): Promise<ProductionOrderResponseDto> {
+    const bigId = parseBigIntId(id);
+    const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
+    if (!order) {
+      throw new NotFoundException(`Production order ${id} not found`);
+    }
+    const updated = await this.prisma.productionOrder.update({
+      where: { id: bigId },
+      data:
+        order.floorFinishedAt == null
+          ? { floorStage: 'FINISHED', floorFinishedAt: new Date() }
+          : { floorStage: 'FINISHED' },
+      include: SALES_ORDER_CODE_INCLUDE,
+    });
+    return this.toResponseDto(updated);
   }
 }
