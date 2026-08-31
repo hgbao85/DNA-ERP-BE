@@ -13,7 +13,6 @@ import {
   StockLedgerRefType,
 } from '../../generated/prisma/client';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
-import { assertItemPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
@@ -81,11 +80,6 @@ export class PackagingIssuesService {
     }
 
     const order = await this.findOrderOrThrow(productionOrderId);
-    await assertItemPiHasActiveFloor(
-      this.prisma,
-      order.productionInvoiceItemId,
-      'xuất vật tư đóng gói',
-    );
     const materialBigId = parseBigIntId(dto.materialId);
     const sourceWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
       where: { code: PACKAGING_SOURCE_WAREHOUSE_CODE },

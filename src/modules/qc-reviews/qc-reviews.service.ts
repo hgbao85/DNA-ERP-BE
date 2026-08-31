@@ -12,10 +12,6 @@ import {
   SteelIssueStatus,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
-import {
-  assertOrderPiHasActiveFloor,
-  assertPiHasActiveFloor,
-} from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -83,7 +79,6 @@ export class QcReviewsService {
         `Steel issue ${steelIssueId} đang ở trạng thái ${issue.status} - chỉ AWAITING_QC mới duyệt KCS được`,
       );
     }
-    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'duyệt KCS');
 
     const specIds = dto.segments.map((s) => parseBigIntId(s.segmentSpecId));
     const [specs, cutInThisIssue] = await Promise.all([
@@ -257,7 +252,6 @@ export class QcReviewsService {
         `Production batch ${productionBatchId} đang ở trạng thái ${batch.status} - chỉ AWAITING_QC mới duyệt KCS được`,
       );
     }
-    await assertOrderPiHasActiveFloor(this.prisma, batch.productionOrderId, 'duyệt KCS');
 
     if (dto.failedQty > batch.reportedQty) {
       throw new BadRequestException(

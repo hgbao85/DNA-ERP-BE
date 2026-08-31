@@ -9,7 +9,6 @@ import { Piece, Prisma, ProductionOrder, WeavingPoint } from '../../generated/pr
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
-import { assertItemPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -72,14 +71,9 @@ type WeavingReceiptByPointRow = Prisma.WeavingReceiptGetPayload<{
   include: typeof WEAVING_RECEIPT_BY_POINT_INCLUDE;
 }>;
 
-/// 2 đầu vật lý khác nhau của vòng Đan - xuất mảnh chưa đan từ kho vật tư-TP (thủ kho 'vat-tu-tp'
-/// quản), nhận lại mảnh đã đan từ điểm đan gia công về kho thành phẩm (thủ kho 'thanh-pham' quản -
-/// xem comment KhoNhapDanPage.tsx "Nhập đan = kho thành phẩm nhận..."). ĐÃ TỪNG dùng CHUNG 1 hằng
-/// số cho cả assertWarehouseScope() của create() lẫn receive() (copy nhầm) - khiến role duy nhất
-/// có UI cho "Theo dõi nhập đan" (thanh-pham) luôn bị BE từ chối 403, phát hiện qua browser thật
-/// 2026-08-31. Tách riêng 2 hằng số để mỗi hành động check đúng kho của nó.
-const WEAVING_ISSUE_WAREHOUSE_CODE = 'vat-tu-tp';
-const WEAVING_RECEIVE_WAREHOUSE_CODE = 'thanh-pham';
+/// Kho vật lý duy nhất liên quan - nơi khung chờ xuất/nhận về sau Đan, giữa phoi-son-han và
+/// thanh-pham theo TRANSFER_ROUTES (transfer-routes.constant.ts).
+const WEAVING_WAREHOUSE_CODE = 'vat-tu-tp';
 
 /**
  * Phân bổ/nhận hàng đan (M2 ưu tiên 1, thay manh.service.ts mock) - lớp theo dõi THỰC THI của
@@ -99,7 +93,7 @@ export class WeavingIssuesService {
     warehouseScope: string | null,
     idempotencyKey?: string,
   ): Promise<WeavingIssueResponseDto> {
-    this.assertWarehouseScope(warehouseScope, 'xuất đan', WEAVING_ISSUE_WAREHOUSE_CODE);
+    this.assertWarehouseScope(warehouseScope, 'xuất đan');
 
     if (idempotencyKey) {
       const existing = await this.prisma.weavingIssue.findUnique({
@@ -112,7 +106,6 @@ export class WeavingIssuesService {
     }
 
     const order = await this.findOrderOrThrow(productionOrderId);
-    await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'xuất đan');
     const pieceBigId = parseBigIntId(dto.pieceId);
     const weavingPointBigId = parseBigIntId(dto.weavingPointId);
 
@@ -175,7 +168,7 @@ export class WeavingIssuesService {
     warehouseScope: string | null,
     idempotencyKey?: string,
   ): Promise<WeavingReceiptResponseDto> {
-    this.assertWarehouseScope(warehouseScope, 'nhập đan', WEAVING_RECEIVE_WAREHOUSE_CODE);
+    this.assertWarehouseScope(warehouseScope, 'nhập đan');
 
     if (idempotencyKey) {
       const existing = await this.prisma.weavingReceipt.findUnique({
@@ -188,7 +181,6 @@ export class WeavingIssuesService {
     }
 
     const order = await this.findOrderOrThrow(productionOrderId);
-    await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'nhập đan');
     const pieceBigId = parseBigIntId(dto.pieceId);
     const weavingPointBigId = parseBigIntId(dto.weavingPointId);
 
@@ -502,15 +494,11 @@ export class WeavingIssuesService {
     return this.toReceiptResponseDto(await this.findReceiptRowOrThrow(id));
   }
 
-  private assertWarehouseScope(
-    warehouseScope: string | null,
-    action: string,
-    expectedWarehouseCode: string,
-  ): void {
+  private assertWarehouseScope(warehouseScope: string | null, action: string): void {
     // null = tổng kho (BOSS/ADMIN) - không có gì để chặn.
-    if (warehouseScope && warehouseScope !== expectedWarehouseCode) {
+    if (warehouseScope && warehouseScope !== WEAVING_WAREHOUSE_CODE) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được ${action} từ kho '${expectedWarehouseCode}'`,
+        `Caller bị giới hạn ở kho '${warehouseScope}', không được ${action} từ kho '${WEAVING_WAREHOUSE_CODE}'`,
       );
     }
   }

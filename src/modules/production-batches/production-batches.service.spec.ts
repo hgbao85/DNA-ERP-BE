@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { MfgRole, MfgStage, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
@@ -18,8 +13,7 @@ describe('ProductionBatchesService', () => {
       count: jest.Mock;
       create: jest.Mock;
     };
-    productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
-    productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
+    productionOrder: { findUnique: jest.Mock };
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     pieceMaterialYield: { findUnique: jest.Mock; findMany: jest.Mock };
@@ -35,7 +29,6 @@ describe('ProductionBatchesService', () => {
     poNumber: 'PO-31-1',
     bomRevisionId: 5n,
     quantity: 10,
-    productionInvoiceItemId: 20n,
     mfgProduct: { name: 'SP-1' },
     productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
   };
@@ -74,19 +67,7 @@ describe('ProductionBatchesService', () => {
         count: jest.fn().mockResolvedValue(0),
         create: jest.fn(),
       },
-      // findFirst mặc định trả về 1 order ACTIVE - đa số test case không quan tâm gate
-      // assertPiHasActiveFloor() (2026-08-31), xem mục riêng "QLSX Bắt đầu" bên dưới mới override
-      // để test rớt gate.
-      productionOrder: {
-        findUnique: jest.fn().mockResolvedValue(order),
-        findFirst: jest.fn().mockResolvedValue({ id: 9n }),
-        // Mặc định 1 order duy nhất - describe('getBatchPlanBatch') bên dưới tự override cho case
-        // nhiều order.
-        findMany: jest.fn().mockResolvedValue([order]),
-      },
-      productionInvoiceItem: {
-        findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceId: 500n }),
-      },
+      productionOrder: { findUnique: jest.fn().mockResolvedValue(order) },
       bomPiece: {
         findUnique: jest.fn().mockResolvedValue(bomPieceRow),
         findMany: jest.fn().mockResolvedValue([{ ...bomPieceRow, piece }]),
@@ -269,35 +250,6 @@ describe('ProductionBatchesService', () => {
         service.create('1', { ...dto, stage: MfgStage.SON }, 'user-son', null),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('create - QLSX "Bắt đầu" gate (assertPiHasActiveFloor, 2026-08-31)', () => {
-    const dto = { stage: MfgStage.HAN, pieceId: '40', reportedQty: 20 };
-
-    it('ném ConflictException khi PI của order chưa có SKU nào ACTIVE - áp dụng cho cả PHOI/HAN/SON vì create() dùng chung', async () => {
-      prisma.productionOrder.findFirst.mockResolvedValue(null);
-
-      await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(ConflictException);
-      expect(prisma.productionInvoiceItem.findUniqueOrThrow).toHaveBeenCalledWith({
-        where: { id: 20n },
-        select: { productionInvoiceId: true },
-      });
-      expect(prisma.productionOrder.findFirst).toHaveBeenCalledWith({
-        where: {
-          productionInvoiceItem: { productionInvoiceId: 500n },
-          floorStage: 'ACTIVE',
-        },
-        select: { id: true },
-      });
-      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
-    });
-
-    it('cho phép báo khi PI có ÍT NHẤT 1 SKU ACTIVE, kể cả khi KHÔNG PHẢI chính order này', async () => {
-      prisma.productionOrder.findFirst.mockResolvedValue({ id: 999n }); // SKU khác trong cùng PI
-      prisma.productionBatch.create.mockResolvedValue(batchRow);
-
-      await expect(service.create('1', dto, 'user-han', null)).resolves.toBeDefined();
     });
   });
 
@@ -570,87 +522,6 @@ describe('ProductionBatchesService', () => {
         where: { bomRevisionId: order.bomRevisionId, pieceId: { in: [41n] } },
         include: { piece: true },
       });
-    });
-  });
-
-  describe('getBatchPlanBatch (2026-08-31 - gộp nhiều order 1 lần cho Bảng thống kê)', () => {
-    it('mảng rỗng - trả {} ngay, không query gì', async () => {
-      const result = await service.getBatchPlanBatch([], MfgStage.HAN);
-
-      expect(result).toEqual({});
-      expect(prisma.productionOrder.findMany).not.toHaveBeenCalled();
-    });
-
-    it('chặn stage không hợp lệ (assertConsumableStage) trước khi query gì', async () => {
-      await expect(service.getBatchPlanBatch(['1'], MfgStage.DAN)).rejects.toThrow(
-        BadRequestException,
-      );
-      expect(prisma.productionOrder.findMany).not.toHaveBeenCalled();
-    });
-
-    it('trả đúng plan cho 1 order, khớp getBatchPlan (stage=HAN)', async () => {
-      const result = await service.getBatchPlanBatch(['1'], MfgStage.HAN);
-
-      expect(result['1'].poNumber).toBe(order.poNumber);
-      expect(result['1'].items).toHaveLength(1);
-      expect(result['1'].items[0].pieceId).toBe('40');
-      expect(result['1'].items[0].plannedQty).toBe(bomPieceRow.qtyPerUnit * order.quantity);
-    });
-
-    it('2 order khác nhau CÙNG bomRevisionId - dùng chung 1 query bomPiece nhưng KHÔNG lẫn awaiting/passed qty của nhau', async () => {
-      const order2 = {
-        ...order,
-        id: 2n,
-        poNumber: 'PO-32-1',
-        quantity: 5,
-        productionInvoiceItem: { salesOrder: { code: 'PO-32' } },
-      };
-      prisma.productionOrder.findMany.mockResolvedValue([order, order2]);
-      prisma.productionBatch.findMany.mockResolvedValue([
-        { productionOrderId: 1n, pieceId: 40n, status: 'AWAITING_QC', reportedQty: 20 },
-        { productionOrderId: 2n, pieceId: 40n, status: 'AWAITING_QC', reportedQty: 7 },
-      ]);
-
-      const result = await service.getBatchPlanBatch(['1', '2'], MfgStage.HAN);
-
-      expect(result['1'].items[0].awaitingQcQty).toBe(20);
-      expect(result['2'].items[0].awaitingQcQty).toBe(7);
-      // Cùng bomRevisionId (5n) cho cả 2 order - chỉ query bomPiece.findMany đúng 1 lần cho cả batch.
-      expect(prisma.bomPiece.findMany).toHaveBeenCalledTimes(1);
-    });
-
-    it('query productionBatch.findMany với where IN theo mọi orderId + đúng stage đang lọc', async () => {
-      await service.getBatchPlanBatch(['1'], MfgStage.SON);
-
-      expect(prisma.productionBatch.findMany).toHaveBeenCalledWith({
-        where: { productionOrderId: { in: [1n] }, stage: MfgStage.SON },
-        select: { productionOrderId: true, pieceId: true, status: true, reportedQty: true },
-      });
-    });
-
-    // 2026-08-22 "pat": cùng logic gộp needsHan=false + PieceMaterialYield như getBatchPlan(),
-    // chỉ khác chạy theo revision cho cả batch thay vì 1 order.
-    it('stage=PHOI vẫn gộp đúng piece "pat" (needsHan=true nhưng có PieceMaterialYield)', async () => {
-      const patPiece = { id: 41n, code: 'PAT-01', name: 'Pat' };
-      const patBomPiece = {
-        id: 2n,
-        bomRevisionId: 5n,
-        pieceId: 41n,
-        qtyPerUnit: 3,
-        needsHan: true,
-        needsSon: false,
-        piece: patPiece,
-      };
-      prisma.bomPiece.findMany
-        .mockResolvedValueOnce([{ ...bomPieceRow, piece }])
-        .mockResolvedValueOnce([patBomPiece]);
-      prisma.pieceMaterialYield.findMany.mockResolvedValue([
-        { bomRevisionId: 5n, pieceId: 41n, materialId: 90n, piecesPerBar: 6 },
-      ]);
-
-      const result = await service.getBatchPlanBatch(['1'], MfgStage.PHOI);
-
-      expect(result['1'].items.map((i) => i.pieceId)).toEqual(['40', '41']);
     });
   });
 

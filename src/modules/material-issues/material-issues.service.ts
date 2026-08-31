@@ -17,7 +17,6 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
-import { assertItemPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -90,7 +89,6 @@ export class MaterialIssuesService {
     }
 
     const order = await this.findOrderOrThrow(productionOrderId);
-    await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'xuất vật tư');
     const materialBigId = parseBigIntId(dto.materialId);
     await this.findMaterialOrThrow(materialBigId);
     const warehouse = await this.prisma.warehouse.findUniqueOrThrow({

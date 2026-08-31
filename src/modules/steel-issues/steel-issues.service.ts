@@ -10,7 +10,6 @@ import {
   CuttingProposalStatus,
   Prisma,
   ProcessStep,
-  ProductionOrderFloorStage,
   StockLedgerRefType,
   SteelIssueStatus,
 } from '../../generated/prisma/client';
@@ -48,12 +47,7 @@ const STEEL_ISSUE_DETAIL_INCLUDE = {
 
 type SteelIssueRow = Prisma.SteelIssueGetPayload<{ include: typeof STEEL_ISSUE_INCLUDE }>;
 type SteelIssueDetail = Prisma.SteelIssueGetPayload<{ include: typeof STEEL_ISSUE_DETAIL_INCLUDE }>;
-type OrderForBom = {
-  id: bigint;
-  bomRevisionId: bigint;
-  quantity: number;
-  floorStage: ProductionOrderFloorStage;
-};
+type OrderForBom = { id: bigint; bomRevisionId: bigint; quantity: number };
 
 /// Kho vật lý duy nhất liên quan (cat_sat_iea chỉ tính vật tư sắt) - cùng giá trị
 /// STEEL_WAREHOUSE_CODE trong cutting-proposals.service.ts, không tách file constant riêng vì
@@ -152,7 +146,6 @@ export class SteelIssuesService {
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const materialId = parseBigIntId(dto.materialId);
     const orders = await this.findOrdersForInvoice(invoice.id);
-    this.assertOrdersHaveActiveFloor(orders, invoice.id);
     await this.assertMaterialUsedInInvoice(orders, materialId, invoice.id);
     const poIds = orders.map((o) => o.id);
     const { approvedAt } = await this.assertMaterialInApprovedProposal(
@@ -1451,29 +1444,8 @@ export class SteelIssuesService {
   private async findOrdersForInvoice(productionInvoiceId: bigint): Promise<OrderForBom[]> {
     return this.prisma.productionOrder.findMany({
       where: { productionInvoiceItem: { productionInvoiceId } },
-      select: { id: true, bomRevisionId: true, quantity: true, floorStage: true },
+      select: { id: true, bomRevisionId: true, quantity: true },
     });
-  }
-
-  /**
-   * QLSX phải bấm "Bắt đầu" cho ÍT NHẤT 1 SKU trong PI trước khi kho được xuất sắt (2026-08-31,
-   * đồng bộ với luồng Hàn/Sơn/Phôi/vật tư/KCS - xem common/utils/floor-gate.util.ts). Không dùng
-   * hàm dùng chung assertPiHasActiveFloor() ở đây vì `orders` đã fetch sẵn từ
-   * findOrdersForInvoice() ngay phía trên - kiểm tra thẳng trong mảng đó rẻ hơn (và đồng bộ) so
-   * với query lại `productionOrder.findFirst` 1 lần nữa. Không bắt buộc CHÍNH SKU đang xuất sắt
-   * phải ACTIVE - PI cắt sắt CHUNG cho mọi SKU trong đó, không tách được theo từng SKU (cùng lý do
-   * PiListBoard/activeOnly gộp theo PI thay vì theo SKU).
-   */
-  private assertOrdersHaveActiveFloor(orders: OrderForBom[], productionInvoiceId: bigint): void {
-    // PI chưa có ProductionOrder nào (chưa Sếp duyệt SKU nào) - để assertMaterialUsedInInvoice()
-    // ngay sau ném NotFoundException rõ nghĩa hơn ("chưa có lệnh sản xuất nào"), không lấn sang
-    // thông báo "chưa Bắt đầu" (dễ hiểu nhầm là ĐÃ có lệnh, chỉ thiếu mỗi bước Bắt đầu).
-    if (orders.length === 0) return;
-    if (!orders.some((o) => o.floorStage === ProductionOrderFloorStage.ACTIVE)) {
-      throw new ConflictException(
-        `PI ${productionInvoiceId} chưa có SKU nào được QLSX bấm "Bắt đầu" ở Bảng thống kê - chưa thể xuất sắt`,
-      );
-    }
   }
 
   private async findOneOrThrow(id: string): Promise<SteelIssueRow> {

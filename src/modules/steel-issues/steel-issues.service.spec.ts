@@ -46,9 +46,7 @@ describe('SteelIssuesService', () => {
   let stockReservationsService: { drainPool: jest.Mock };
 
   const invoice = { id: 1n, code: 'PI-31' };
-  // floorStage ACTIVE mặc định (2026-08-31) - đa số test không quan tâm gate
-  // assertPiHasActiveFloor(), xem mục riêng "QLSX Bắt đầu" bên dưới mới override.
-  const order = { id: 1n, bomRevisionId: 5n, quantity: 10, floorStage: 'ACTIVE' as const };
+  const order = { id: 1n, bomRevisionId: 5n, quantity: 10 };
   // processSteps mặc định chỉ [CAT] - piece "đơn giản" chỉ cần cắt là đủ điều kiện KCS ngay,
   // đúng hành vi cũ (test step-gating multi-step override riêng ở describe('completeStep')).
   const pieceBomRow = {
@@ -281,29 +279,6 @@ describe('SteelIssuesService', () => {
           where: expect.objectContaining({ feasible: true }),
         }),
       );
-    });
-  });
-
-  describe('create - QLSX "Bắt đầu" gate (assertPiHasActiveFloor, 2026-08-31)', () => {
-    it('ném ConflictException khi PI có ProductionOrder nhưng KHÔNG SKU nào ACTIVE', async () => {
-      prisma.productionOrder.findMany.mockResolvedValue([{ ...order, floorStage: 'PENDING' }]);
-
-      await expect(
-        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 20 }, 'user-1', null),
-      ).rejects.toThrow(ConflictException);
-      expect(prisma.steelIssue.create).not.toHaveBeenCalled();
-    });
-
-    it('cho phép xuất khi PI có ÍT NHẤT 1 SKU ACTIVE, kể cả khi các SKU khác còn PENDING', async () => {
-      prisma.productionOrder.findMany.mockResolvedValue([
-        { ...order, id: 1n, floorStage: 'PENDING' },
-        { ...order, id: 2n, floorStage: 'ACTIVE' },
-      ]);
-      prisma.steelIssue.create.mockResolvedValue(issue);
-
-      await expect(
-        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 20 }, 'user-1', null),
-      ).resolves.toBeDefined();
     });
   });
 
@@ -965,53 +940,6 @@ describe('SteelIssuesService', () => {
       const result = await service.getOrderSummary('1');
 
       expect(result).toEqual([]);
-    });
-  });
-
-  describe('findAllForInvoiceBatch (2026-08-31 - gộp nhiều PI 1 lần cho Bảng thống kê)', () => {
-    it('mảng rỗng - trả {} ngay, không query gì', async () => {
-      const result = await service.findAllForInvoiceBatch([]);
-
-      expect(result).toEqual({});
-      expect(prisma.steelIssue.findMany).not.toHaveBeenCalled();
-    });
-
-    it('mọi id truyền vào đều pre-seed [] kể cả khi không có đợt xuất nào', async () => {
-      prisma.steelIssue.findMany.mockResolvedValue([]);
-
-      const result = await service.findAllForInvoiceBatch(['1', '2']);
-
-      expect(result).toEqual({ '1': [], '2': [] });
-    });
-
-    it('gộp đúng theo productionInvoiceId khi nhiều PI cùng có đợt xuất - không lẫn PI này sang PI khác', async () => {
-      const issuePi2 = {
-        ...issue,
-        id: 200n,
-        productionInvoiceId: 2n,
-        productionInvoice: { code: 'PI-32', salesOrder: { code: 'PO-32' } },
-      };
-      prisma.steelIssue.findMany.mockResolvedValue([issue, issuePi2]);
-
-      const result = await service.findAllForInvoiceBatch(['1', '2', '3']);
-
-      expect(Object.keys(result)).toEqual(['1', '2', '3']);
-      expect(result['1']).toHaveLength(1);
-      expect(result['1'][0].id).toBe('100');
-      expect(result['2']).toHaveLength(1);
-      expect(result['2'][0].id).toBe('200');
-      expect(result['3']).toEqual([]); // id không có đợt xuất nào vẫn phải có mặt, không throw
-    });
-
-    it('query steelIssue.findMany đúng 1 lần cho cả batch, WHERE IN theo mọi id (không lặp N lần)', async () => {
-      prisma.steelIssue.findMany.mockResolvedValue([]);
-
-      await service.findAllForInvoiceBatch(['1', '2']);
-
-      expect(prisma.steelIssue.findMany).toHaveBeenCalledTimes(1);
-      expect(prisma.steelIssue.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { productionInvoiceId: { in: [1n, 2n] } } }),
-      );
     });
   });
 });

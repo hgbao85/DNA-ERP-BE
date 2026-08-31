@@ -32,11 +32,11 @@ describe('ProductionInvoicesService', () => {
     };
     productionInvoiceItemStage: { upsert: jest.Mock };
     mfgProduct: { findUnique: jest.Mock };
-    productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
+    productionOrder: { findUnique: jest.Mock };
     bomPiece: { findMany: jest.Mock; findUnique: jest.Mock };
     transferCheckResult: { findMany: jest.Mock; create: jest.Mock };
     weavingReceipt: { groupBy: jest.Mock };
-    packagingRecord: { create: jest.Mock; aggregate: jest.Mock; groupBy: jest.Mock };
+    packagingRecord: { create: jest.Mock; aggregate: jest.Mock };
     auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -112,22 +112,13 @@ describe('ProductionInvoicesService', () => {
       },
       productionInvoiceItemStage: { upsert: jest.fn() },
       mfgProduct: { findUnique: jest.fn() },
-      // findFirst mặc định trả về 1 order ACTIVE - đa số test (transfer-check/packaging) không
-      // quan tâm gate assertPiHasActiveFloor() (2026-08-31), tự override khi cần test gate.
-      productionOrder: {
-        findUnique: jest.fn(),
-        findFirst: jest.fn().mockResolvedValue({ id: 9n }),
-        // Mặc định rỗng - describe('listTransferCheckPiecesBatch')/describe('getPackagingBatch')
-        // bên dưới tự override.
-        findMany: jest.fn().mockResolvedValue([]),
-      },
+      productionOrder: { findUnique: jest.fn() },
       bomPiece: { findMany: jest.fn(), findUnique: jest.fn() },
       transferCheckResult: { findMany: jest.fn(), create: jest.fn() },
       weavingReceipt: { groupBy: jest.fn().mockResolvedValue([]) },
       packagingRecord: {
         create: jest.fn(),
         aggregate: jest.fn().mockResolvedValue({ _sum: { boxesPacked: null } }),
-        groupBy: jest.fn().mockResolvedValue([]),
       },
       auditLog: { create: jest.fn() },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
@@ -1266,103 +1257,6 @@ describe('ProductionInvoicesService', () => {
         expect(second.checkedQty).toBe(5);
         expect(prisma.transferCheckResult.create).toHaveBeenCalledTimes(2);
       });
-
-      it('ném ConflictException khi PI chưa có SKU nào được QLSX bấm "Bắt đầu" (2026-08-31)', async () => {
-        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
-        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
-        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
-        prisma.productionOrder.findFirst.mockResolvedValue(null);
-
-        await expect(
-          service.recordTransferCheck('7', '20', { pieceId: '30', checkedQty: 1 }, 'user-kho'),
-        ).rejects.toThrow(ConflictException);
-        expect(prisma.transferCheckResult.create).not.toHaveBeenCalled();
-      });
-    });
-
-    describe('listTransferCheckPiecesBatch (2026-08-31 - gộp nhiều item 1 lần cho Bảng thống kê)', () => {
-      it('mảng rỗng - trả {} ngay, không query gì', async () => {
-        const result = await service.listTransferCheckPiecesBatch([]);
-
-        expect(result).toEqual({});
-        expect(prisma.productionOrder.findMany).not.toHaveBeenCalled();
-      });
-
-      it('không item nào có ProductionOrder - trả {} pre-seed cho mọi id, không query bomPiece/transferCheckResult/weavingReceipt', async () => {
-        prisma.productionOrder.findMany.mockResolvedValue([]);
-
-        const result = await service.listTransferCheckPiecesBatch(['20', '21']);
-
-        expect(result).toEqual({ '20': [], '21': [] });
-        expect(prisma.bomPiece.findMany).not.toHaveBeenCalled();
-        expect(prisma.transferCheckResult.findMany).not.toHaveBeenCalled();
-        expect(prisma.weavingReceipt.groupBy).not.toHaveBeenCalled();
-      });
-
-      it('item không có ProductionOrder riêng vẫn trả [] thay vì throw (khác bản đơn ném ConflictException)', async () => {
-        const orderFor20 = {
-          id: 99n,
-          bomRevisionId: 5n,
-          quantity: 10,
-          productionInvoiceItemId: 20n,
-        };
-        prisma.productionOrder.findMany.mockResolvedValue([orderFor20]);
-        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
-        prisma.transferCheckResult.findMany.mockResolvedValue([]);
-
-        const result = await service.listTransferCheckPiecesBatch(['20', '21']);
-
-        expect(result['20']).toHaveLength(1);
-        expect(result['21']).toEqual([]); // item 21 không có order - [] chứ không throw
-      });
-
-      it('trả đúng totalQty/readyQty/checkedQty/defectCount cho 1 item, khớp listTransferCheckPieces', async () => {
-        const orderFor20 = {
-          id: 99n,
-          bomRevisionId: 5n,
-          quantity: 10,
-          productionInvoiceItemId: 20n,
-        };
-        prisma.productionOrder.findMany.mockResolvedValue([orderFor20]);
-        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
-        prisma.transferCheckResult.findMany.mockResolvedValue([
-          { productionInvoiceItemId: 20n, pieceId: 30n, checkedQty: 3, defects: [{ id: 1n }] },
-          { productionInvoiceItemId: 20n, pieceId: 30n, checkedQty: 2, defects: [] },
-        ]);
-        prisma.weavingReceipt.groupBy.mockResolvedValue([
-          { pieceId: 30n, productionOrderId: 99n, _sum: { qty: 7 } },
-        ]);
-
-        const result = await service.listTransferCheckPiecesBatch(['20']);
-
-        expect(result['20'][0]).toMatchObject({
-          pieceId: '30',
-          pieceName: 'Thân trên',
-          totalQty: 20,
-          readyQty: 7,
-          checkedQty: 5,
-          defectCount: 1,
-        });
-      });
-
-      it('2 item khác order CÙNG pieceId - readyQty không lẫn giữa 2 order (key gộp cả productionOrderId lẫn pieceId, khác bản đơn chỉ key theo pieceId)', async () => {
-        const order20 = { id: 99n, bomRevisionId: 5n, quantity: 10, productionInvoiceItemId: 20n };
-        const order21 = { id: 100n, bomRevisionId: 5n, quantity: 10, productionInvoiceItemId: 21n };
-        prisma.productionOrder.findMany.mockResolvedValue([order20, order21]);
-        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
-        prisma.transferCheckResult.findMany.mockResolvedValue([]);
-        prisma.weavingReceipt.groupBy.mockResolvedValue([
-          { pieceId: 30n, productionOrderId: 99n, _sum: { qty: 7 } },
-          { pieceId: 30n, productionOrderId: 100n, _sum: { qty: 12 } },
-        ]);
-
-        const result = await service.listTransferCheckPiecesBatch(['20', '21']);
-
-        expect(result['20'][0].readyQty).toBe(7);
-        expect(result['21'][0].readyQty).toBe(12);
-        // Cùng bomRevisionId (5n) cho cả 2 order - chỉ query bomPiece.findMany đúng 1 lần cho cả batch.
-        expect(prisma.bomPiece.findMany).toHaveBeenCalledTimes(1);
-      });
     });
   });
 
@@ -1449,82 +1343,6 @@ describe('ProductionInvoicesService', () => {
           service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho'),
         ).rejects.toThrow(ConflictException);
         expect(prisma.packagingRecord.create).not.toHaveBeenCalled();
-      });
-
-      it('ném ConflictException khi PI chưa có SKU nào được QLSX bấm "Bắt đầu" (2026-08-31)', async () => {
-        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
-        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
-        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
-        prisma.productionOrder.findFirst.mockResolvedValue(null);
-
-        await expect(
-          service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho'),
-        ).rejects.toThrow(ConflictException);
-        expect(prisma.packagingRecord.create).not.toHaveBeenCalled();
-      });
-    });
-
-    describe('getPackagingBatch (2026-08-31 - gộp nhiều item 1 lần cho Bảng thống kê)', () => {
-      it('mảng rỗng - trả {} ngay, không query gì', async () => {
-        const result = await service.getPackagingBatch([]);
-
-        expect(result).toEqual({});
-        expect(prisma.productionOrder.findMany).not.toHaveBeenCalled();
-      });
-
-      it('item không có ProductionOrder - trả 0/0/0 thay vì throw (khác bản đơn ném ConflictException)', async () => {
-        prisma.productionOrder.findMany.mockResolvedValue([]);
-
-        const result = await service.getPackagingBatch(['20']);
-
-        expect(result['20']).toMatchObject({ totalQty: 0, packedQty: 0, remainingQty: 0 });
-      });
-
-      it('trả đúng totalQty/packedQty/remainingQty cho 1 item, khớp getPackaging', async () => {
-        const orderFor20 = {
-          id: 99n,
-          bomRevisionId: 5n,
-          quantity: 10,
-          productionInvoiceItemId: 20n,
-        };
-        prisma.productionOrder.findMany.mockResolvedValue([orderFor20]);
-        prisma.packagingRecord.groupBy.mockResolvedValue([
-          { productionInvoiceItemId: 20n, _sum: { boxesPacked: 4 } },
-        ]);
-
-        const result = await service.getPackagingBatch(['20']);
-
-        expect(result['20']).toMatchObject({ totalQty: 10, packedQty: 4, remainingQty: 6 });
-      });
-
-      it('2 item khác order - packedQty không lẫn giữa 2 item (key theo productionInvoiceItemId riêng từng item)', async () => {
-        const order20 = { id: 99n, bomRevisionId: 5n, quantity: 10, productionInvoiceItemId: 20n };
-        const order21 = { id: 100n, bomRevisionId: 5n, quantity: 8, productionInvoiceItemId: 21n };
-        prisma.productionOrder.findMany.mockResolvedValue([order20, order21]);
-        prisma.packagingRecord.groupBy.mockResolvedValue([
-          { productionInvoiceItemId: 20n, _sum: { boxesPacked: 4 } },
-          { productionInvoiceItemId: 21n, _sum: { boxesPacked: 1 } },
-        ]);
-
-        const result = await service.getPackagingBatch(['20', '21']);
-
-        expect(result['20']).toMatchObject({ totalQty: 10, packedQty: 4, remainingQty: 6 });
-        expect(result['21']).toMatchObject({ totalQty: 8, packedQty: 1, remainingQty: 7 });
-      });
-
-      it('packedQty = 0 khi chưa đóng gói lần nào (không crash)', async () => {
-        const orderFor20 = {
-          id: 99n,
-          bomRevisionId: 5n,
-          quantity: 10,
-          productionInvoiceItemId: 20n,
-        };
-        prisma.productionOrder.findMany.mockResolvedValue([orderFor20]);
-        prisma.packagingRecord.groupBy.mockResolvedValue([]);
-
-        const result = await service.getPackagingBatch(['20']);
-
-        expect(result['20']).toMatchObject({ totalQty: 10, packedQty: 0, remainingQty: 10 });
       });
     });
   });

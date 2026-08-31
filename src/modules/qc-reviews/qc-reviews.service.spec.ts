@@ -26,8 +26,6 @@ describe('QcReviewsService', () => {
     cutPatternSegment: { groupBy: jest.Mock };
     steelIssue: { update: jest.Mock; findUnique: jest.Mock };
     productionBatch: { update: jest.Mock };
-    productionOrder: { findFirst: jest.Mock; findUniqueOrThrow: jest.Mock };
-    productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
     replenishRequest: {
       create: jest.Mock;
       findUnique: jest.Mock;
@@ -50,7 +48,6 @@ describe('QcReviewsService', () => {
     status: SteelIssueStatus.AWAITING_QC,
     issuedById: 'user-kho',
     productionOrderId: 1n,
-    productionInvoiceId: 900n,
   };
 
   const qcReview = {
@@ -65,12 +62,7 @@ describe('QcReviewsService', () => {
     photoUrl: null,
     reviewedAt: new Date(),
     reviewedById: 'user-kcs',
-    segments: [] as {
-      id: bigint;
-      segmentSpecId: bigint;
-      failedQty: number;
-      segmentSpec: { cutLengthMm: ReturnType<typeof decimal> };
-    }[],
+    segments: [] as { id: bigint; segmentSpecId: bigint; failedQty: number; segmentSpec: { cutLengthMm: ReturnType<typeof decimal> } }[],
   };
 
   // Cỡ đoạn 745mm, cùng materialId 30n với awaitingIssue - đã cắt 8 đoạn trong CHÍNH đợt 100n.
@@ -98,12 +90,7 @@ describe('QcReviewsService', () => {
     photoUrl: null,
     reviewedAt: new Date(),
     reviewedById: 'user-kcs',
-    segments: [] as {
-      id: bigint;
-      segmentSpecId: bigint;
-      failedQty: number;
-      segmentSpec: { cutLengthMm: ReturnType<typeof decimal> };
-    }[],
+    segments: [] as { id: bigint; segmentSpecId: bigint; failedQty: number; segmentSpec: { cutLengthMm: ReturnType<typeof decimal> } }[],
   };
 
   beforeEach(() => {
@@ -122,16 +109,6 @@ describe('QcReviewsService', () => {
       },
       steelIssue: { update: jest.fn(), findUnique: jest.fn() },
       productionBatch: { update: jest.fn() },
-      // floorStage gate (2026-08-31) - mặc định PI luôn có 1 order ACTIVE, đa số test không quan
-      // tâm gate assertPiHasActiveFloorForInvoice()/assertPiHasActiveFloorForOrder(), xem mục
-      // riêng "QLSX kiểm soát" bên dưới mới override.
-      productionOrder: {
-        findFirst: jest.fn().mockResolvedValue({ id: 9n }),
-        findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceItemId: 20n }),
-      },
-      productionInvoiceItem: {
-        findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceId: 900n }),
-      },
       replenishRequest: {
         create: jest.fn(),
         findUnique: jest.fn(),
@@ -175,15 +152,10 @@ describe('QcReviewsService', () => {
     });
 
     it('chấm lỗi 1 cỡ đoạn - tạo QcReviewSegment, failedQty tổng = đúng cỡ đó', async () => {
-      await service.review(
-        '100',
-        { segments: [{ segmentSpecId: '30', failedQty: 3 }] },
-        'user-kcs',
-      );
+      await service.review('100', { segments: [{ segmentSpecId: '30', failedQty: 3 }] }, 'user-kcs');
 
       expect(prisma.qcReview.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
           data: expect.objectContaining({
             failedQty: 3,
             segments: { create: [{ segmentSpecId: 30n, failedQty: 3 }] },
@@ -225,27 +197,6 @@ describe('QcReviewsService', () => {
         service.review('100', { segments: [{ segmentSpecId: '999', failedQty: 1 }] }, 'user-kcs'),
       ).rejects.toThrow(NotFoundException);
     });
-
-    // 2026-08-31: KCS nằm trong chuỗi kiểm soát của QLSX - dừng "Bắt đầu" (hoặc đã "Kết thúc") thì
-    // KCS cũng không duyệt được nữa, dù đợt sắt đang AWAITING_QC thật.
-    it('ném ConflictException khi PI của đợt sắt chưa có SKU nào ACTIVE', async () => {
-      prisma.productionOrder.findFirst.mockResolvedValue(null);
-
-      await expect(service.review('100', { segments: [] }, 'user-kcs')).rejects.toThrow(
-        ConflictException,
-      );
-      expect(prisma.productionOrder.findFirst).toHaveBeenCalledWith({
-        where: { productionInvoiceItem: { productionInvoiceId: 900n }, floorStage: 'ACTIVE' },
-        select: { id: true },
-      });
-      expect(prisma.qcReview.create).not.toHaveBeenCalled();
-    });
-
-    it('cho phép duyệt khi PI có ÍT NHẤT 1 SKU ACTIVE, kể cả khi KHÔNG PHẢI chính SKU của đợt sắt', async () => {
-      prisma.productionOrder.findFirst.mockResolvedValue({ id: 999n }); // SKU khác trong cùng PI
-
-      await expect(service.review('100', { segments: [] }, 'user-kcs')).resolves.toBeDefined();
-    });
   });
 
   describe('reportSegmentDone', () => {
@@ -273,8 +224,7 @@ describe('QcReviewsService', () => {
 
       expect(prisma.qcReviewSegment.update).toHaveBeenCalledWith({
         where: { id: 900n },
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
-        data: { phoiReportedAt: expect.any(Date) },
+        data: { phoiReportedAt: expect.any(Date) as unknown as Date },
       });
     });
 
@@ -433,28 +383,6 @@ describe('QcReviewsService', () => {
       await expect(
         service.reviewProductionBatch('700', { failedQty: 2, scrapQty: 3 }, 'user-kcs'),
       ).rejects.toThrow(BadRequestException);
-    });
-
-    // 2026-08-31: KCS nằm trong chuỗi kiểm soát của QLSX - cùng gate đã thêm cho review() (Phôi).
-    it('ném ConflictException khi PI của order chưa có SKU nào ACTIVE', async () => {
-      prisma.productionOrder.findFirst.mockResolvedValue(null);
-
-      await expect(
-        service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs'),
-      ).rejects.toThrow(ConflictException);
-      expect(prisma.productionOrder.findUniqueOrThrow).toHaveBeenCalledWith({
-        where: { id: 1n },
-        select: { productionInvoiceItemId: true },
-      });
-      expect(prisma.productionBatch.update).not.toHaveBeenCalled();
-    });
-
-    it('cho phép duyệt khi PI có ÍT NHẤT 1 SKU ACTIVE, kể cả khi KHÔNG PHẢI chính order của batch', async () => {
-      prisma.productionOrder.findFirst.mockResolvedValue({ id: 999n });
-
-      await expect(
-        service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs'),
-      ).resolves.toBeDefined();
     });
   });
 
