@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -43,6 +52,28 @@ export class WeavingIssuesController {
   @RequirePermissions(VIEW)
   getIssuePlan(@Param('id') id: string) {
     return this.weavingIssuesService.getIssuePlan(id);
+  }
+
+  /**
+   * Gộp nhiều ProductionOrder 1 lần - "Bảng thống kê" (ThongKePagePlan.tsx).
+   *
+   * Path 1 segment 'weaving-issue-plan-batch' ĐÃ TỪNG đụng 'production-orders/:id'
+   * (ProductionOrdersController.findOne) - Nest khớp theo thứ tự đăng ký module, không ưu tiên
+   * route tĩnh, :id nuốt mất chuỗi làm id → 400 (phát hiện qua browser thật 2026-08-31). Đổi sang
+   * 2 segment 'weaving-issue-plan/batch' - segment 2 'batch' không trùng literal segment-2 nào
+   * sau ':id/' đã có (vd 'weaving-issue-plan' của getIssuePlan) nên hết khớp nhầm.
+   */
+  @Get('production-orders/weaving-issue-plan/batch')
+  @RequirePermissions(VIEW)
+  getIssuePlanBatch(@Query('ids') idsParam?: string) {
+    if (!idsParam) {
+      throw new BadRequestException('Query ids là bắt buộc (phân tách bởi dấu phẩy)');
+    }
+    const ids = idsParam
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    return this.weavingIssuesService.getIssuePlanBatch(ids);
   }
 
   // ─── Quản lý điểm đan - đọc gộp qua mọi PO ──────────────────────────────────

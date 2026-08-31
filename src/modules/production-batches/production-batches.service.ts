@@ -336,6 +336,197 @@ export class ProductionBatchesService {
   }
 
   /**
+   * Gộp nhiều ProductionOrder 1 lần, CÙNG stage - "Bảng thống kê" (ThongKePagePlan.tsx) tải tiến
+   * độ Hàn/Sơn cho nhiều SKU cùng lúc (2 lệnh gọi, 1 cho HAN 1 cho SON, thay vì 2×N). Giữ nguyên
+   * getBatchPlan() cho luồng báo sản lượng thật của tổ Hàn/Sơn/Phôi (HAN_STAFF/SON_STAFF/
+   * PHOI_STAFF chỉ tra 1 order/lần) - hàm này chỉ phục vụ nhu cầu XEM gộp nhiều order, không dùng
+   * lại logic thẳng để tránh rủi ro sửa nhầm đường thật đang chạy. Mỗi order có thể có
+   * bomRevisionId khác nhau (khác mfgProduct/khác revision tại thời điểm duyệt) nên bomPieces/
+   * rawMaterialOnHand phải nhóm theo revision, không nhóm thẳng theo order.
+   */
+  async getBatchPlanBatch(
+    productionOrderIds: string[],
+    stage: MfgStage,
+  ): Promise<Record<string, ProductionBatchPlanResponseDto>> {
+    this.assertConsumableStage(stage);
+    const result: Record<string, ProductionBatchPlanResponseDto> = {};
+    if (productionOrderIds.length === 0) return result;
+
+    const orderBigIds = productionOrderIds.map((id) => parseBigIntId(id));
+    const orders = await this.prisma.productionOrder.findMany({
+      where: { id: { in: orderBigIds } },
+      include: {
+        mfgProduct: true,
+        productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+      },
+    });
+    const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
+
+    const [bomPiecesByRevision, rawMaterialByRevision, batches] = await Promise.all([
+      stage === MfgStage.PHOI
+        ? this.findPhoiEligibleBomPiecesBatch(revisionIds)
+        : this.findBomPiecesByStageBatch(revisionIds, stage),
+      stage === MfgStage.PHOI
+        ? this.getRawMaterialOnHandByPieceBatch(revisionIds)
+        : Promise.resolve(new Map<string, Map<string, number>>()),
+      this.prisma.productionBatch.findMany({
+        where: { productionOrderId: { in: orders.map((o) => o.id) }, stage },
+        select: { productionOrderId: true, pieceId: true, status: true, reportedQty: true },
+      }),
+    ]);
+
+    const awaitingByOrderPiece = new Map<string, number>();
+    const passedByOrderPiece = new Map<string, number>();
+    for (const b of batches) {
+      const key = `${b.productionOrderId}:${b.pieceId}`;
+      const target =
+        b.status === ProductionBatchStatus.AWAITING_QC ? awaitingByOrderPiece : passedByOrderPiece;
+      target.set(key, (target.get(key) ?? 0) + b.reportedQty);
+    }
+
+    for (const order of orders) {
+      const revisionKey = order.bomRevisionId.toString();
+      const bomPieces = bomPiecesByRevision.get(revisionKey) ?? [];
+      const rawMaterialByPiece =
+        rawMaterialByRevision.get(revisionKey) ?? new Map<string, number>();
+
+      const items = bomPieces.map((bp) => {
+        const pieceKey = bp.pieceId.toString();
+        const orderPieceKey = `${order.id}:${pieceKey}`;
+        return new ProductionBatchPlanItemResponseDto({
+          pieceId: pieceKey,
+          pieceCode: bp.piece.code,
+          pieceName: bp.piece.name,
+          plannedQty: bp.qtyPerUnit * order.quantity,
+          awaitingQcQty: awaitingByOrderPiece.get(orderPieceKey) ?? 0,
+          passedQty: passedByOrderPiece.get(orderPieceKey) ?? 0,
+          rawMaterialOnHand: rawMaterialByPiece.get(pieceKey) ?? null,
+        });
+      });
+
+      result[order.id.toString()] = new ProductionBatchPlanResponseDto({
+        poNumber: order.poNumber,
+        salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
+        productName: order.mfgProduct.name,
+        quantity: order.quantity,
+        items,
+      });
+    }
+    return result;
+  }
+
+  /** Batch của stageNeedsFilter()+bomPiece.findMany() trong getBatchPlan(), nhóm theo revision -
+   *  dùng cho getBatchPlanBatch() stage HAN/SON. */
+  private async findBomPiecesByStageBatch(revisionIds: bigint[], stage: Exclude<MfgStage, 'PHOI'>) {
+    type Row = Prisma.BomPieceGetPayload<{ include: { piece: true } }>;
+    const map = new Map<string, Row[]>();
+    if (revisionIds.length === 0) return map;
+    const rows = await this.prisma.bomPiece.findMany({
+      where: { bomRevisionId: { in: revisionIds }, ...this.stageNeedsFilter(stage) },
+      include: { piece: true },
+    });
+    for (const r of rows) {
+      const key = r.bomRevisionId.toString();
+      const arr = map.get(key);
+      if (arr) arr.push(r);
+      else map.set(key, [r]);
+    }
+    return map;
+  }
+
+  /** Batch của findPhoiEligibleBomPieces(), nhóm theo revision - dùng cho getBatchPlanBatch()
+   *  stage PHOI. Cùng logic gộp needsHan=false + PieceMaterialYield như bản đơn, chỉ khác truy
+   *  vấn 1 lần cho nhiều revision rồi tách lại theo đúng revision của từng dòng (PK
+   *  bomRevisionId+pieceId nên không lẫn giữa các revision dù cùng pieceId). */
+  private async findPhoiEligibleBomPiecesBatch(revisionIds: bigint[]) {
+    type Row = Prisma.BomPieceGetPayload<{ include: { piece: true } }>;
+    const map = new Map<string, Row[]>();
+    if (revisionIds.length === 0) return map;
+
+    const [needsHanFalseRows, yieldRows] = await Promise.all([
+      this.prisma.bomPiece.findMany({
+        where: { bomRevisionId: { in: revisionIds }, needsHan: false },
+        include: { piece: true },
+      }),
+      this.prisma.pieceMaterialYield.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        select: { bomRevisionId: true, pieceId: true },
+      }),
+    ]);
+
+    const includedByRevision = new Map<string, Set<string>>();
+    for (const r of needsHanFalseRows) {
+      const key = r.bomRevisionId.toString();
+      const arr = map.get(key);
+      if (arr) arr.push(r);
+      else map.set(key, [r]);
+      const included = includedByRevision.get(key);
+      if (included) included.add(r.pieceId.toString());
+      else includedByRevision.set(key, new Set([r.pieceId.toString()]));
+    }
+
+    const extraPieceIdsByRevision = new Map<string, Set<bigint>>();
+    for (const y of yieldRows) {
+      const key = y.bomRevisionId.toString();
+      if (includedByRevision.get(key)?.has(y.pieceId.toString())) continue;
+      const extra = extraPieceIdsByRevision.get(key);
+      if (extra) extra.add(y.pieceId);
+      else extraPieceIdsByRevision.set(key, new Set([y.pieceId]));
+    }
+
+    const allExtraPieceIds = [
+      ...new Set([...extraPieceIdsByRevision.values()].flatMap((s) => [...s])),
+    ];
+    if (allExtraPieceIds.length > 0) {
+      const extraRows = await this.prisma.bomPiece.findMany({
+        where: { bomRevisionId: { in: revisionIds }, pieceId: { in: allExtraPieceIds } },
+        include: { piece: true },
+      });
+      for (const r of extraRows) {
+        const key = r.bomRevisionId.toString();
+        // Query IN không tách theo revision - chỉ giữ dòng thật sự nằm trong tập "extra" của
+        // ĐÚNG revision đó (khớp cả bomRevisionId lẫn pieceId, PK 2 cột nên không lẫn revision khác).
+        if (!extraPieceIdsByRevision.get(key)?.has(r.pieceId)) continue;
+        const arr = map.get(key);
+        if (arr) arr.push(r);
+        else map.set(key, [r]);
+      }
+    }
+    return map;
+  }
+
+  /** Batch của getRawMaterialOnHandByPiece(), nhóm theo revision - dùng cho getBatchPlanBatch()
+   *  stage PHOI. */
+  private async getRawMaterialOnHandByPieceBatch(
+    revisionIds: bigint[],
+  ): Promise<Map<string, Map<string, number>>> {
+    const result = new Map<string, Map<string, number>>();
+    if (revisionIds.length === 0) return result;
+    const yields = await this.prisma.pieceMaterialYield.findMany({
+      where: { bomRevisionId: { in: revisionIds } },
+    });
+    if (yields.length === 0) return result;
+
+    const materialIds = [...new Set(yields.map((y) => y.materialId))];
+    const quants = await this.prisma.stockQuant.findMany({
+      where: { materialId: { in: materialIds } },
+    });
+    const onHandByMaterial = new Map<string, number>();
+    for (const q of quants) {
+      const key = q.materialId!.toString();
+      onHandByMaterial.set(key, (onHandByMaterial.get(key) ?? 0) + q.qty.toNumber());
+    }
+
+    for (const y of yields) {
+      const revKey = y.bomRevisionId.toString();
+      const inner = result.get(revKey) ?? new Map<string, number>();
+      inner.set(y.pieceId.toString(), onHandByMaterial.get(y.materialId.toString()) ?? 0);
+      result.set(revKey, inner);
+    }
+    return result;
+  }
+
+  /**
    * Tổng "sẵn sàng nhưng chưa chuyển kho" của các piece báo ở PHOI (needsHan=false "vật tư thành
    * phẩm" truyền thống, HOẶC needsHan=true có PieceMaterialYield vd "pat" - đã cắt xong ở PHOI,
    * dù còn phải qua Hàn riêng), quét TOÀN BỘ ProductionBatch(stage=PHOI, status=QC_DONE) - KHÔNG lọc theo productionOrderId

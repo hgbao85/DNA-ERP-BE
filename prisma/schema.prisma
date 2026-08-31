@@ -1271,6 +1271,19 @@ enum ProductionOrderStatus {
   CANCELLED
 }
 
+/// Trạng thái QLSX kiểm soát việc "bung" 1 SKU cho xưởng thấy (Phôi/Hàn/Sơn) - ĐỘC LẬP với
+/// ProductionOrderStatus (field status không đổi ý nghĩa: vẫn tự động RELEASED ngay khi Sếp
+/// duyệt, mua vật tư/xuất sắt vẫn tự kích hoạt như cũ, KHÔNG chờ QLSX bấm Bắt đầu - nếu dùng
+/// chung 1 field, bấm Bắt đầu trễ sẽ vô tình làm trễ luôn việc mua vật tư). PENDING (mặc định
+/// lúc tạo) -> ACTIVE (QLSX bấm "Bắt đầu", Hàn/Sơn bắt đầu thấy lệnh) -> FINISHED (QLSX bấm
+/// "Kết thúc" bất kỳ lúc nào, không kiểm tra tiến độ - Hàn/Sơn hết thấy lệnh, Bảng thống kê vẫn
+/// thấy bình thường). Quyết định nghiệp vụ 2026-08-31.
+enum ProductionOrderFloorStage {
+  PENDING
+  ACTIVE
+  FINISHED
+}
+
 enum CuttingProposalStatus {
   /// Đang chờ solver trả kết quả (fire-and-forget, ngay sau khi tạo request).
   CALCULATING
@@ -1299,6 +1312,11 @@ model ProductionOrder {
   quantity                Int
   status                  ProductionOrderStatus @default(RELEASED)
   releasedAt              DateTime?             @default(now())
+  /// Xem enum ProductionOrderFloorStage - kiểm soát hiển thị bên Hàn/Sơn/Phôi, tách biệt hoàn
+  /// toàn khỏi `status` ở trên.
+  floorStage              ProductionOrderFloorStage @default(PENDING)
+  floorStartedAt          DateTime?
+  floorFinishedAt         DateTime?
   createdAt               DateTime              @default(now())
 
   productionInvoiceItem       ProductionInvoiceItem        @relation(fields: [productionInvoiceItemId], references: [id])

@@ -293,6 +293,102 @@ export class WeavingIssuesService {
     });
   }
 
+  /**
+   * Gộp nhiều ProductionOrder 1 lần - "Bảng thống kê" (ThongKePagePlan.tsx) tải tiến độ Đan cho
+   * nhiều SKU cùng lúc, trước đây mỗi SKU tự gọi getIssuePlan() riêng (N request). Cùng logic
+   * gộp allocation theo (piece, weavingPoint) như getIssuePlan(), chỉ khác nguồn dữ liệu đã lọc
+   * sẵn theo đúng order trước khi gộp.
+   */
+  async getIssuePlanBatch(
+    productionOrderIds: string[],
+  ): Promise<Record<string, WeavingIssuePlanItemResponseDto[]>> {
+    const result: Record<string, WeavingIssuePlanItemResponseDto[]> = {};
+    for (const id of productionOrderIds) result[id] = [];
+    if (productionOrderIds.length === 0) return result;
+
+    const orderBigIds = productionOrderIds.map((id) => parseBigIntId(id));
+    const orders = await this.prisma.productionOrder.findMany({
+      where: { id: { in: orderBigIds } },
+      select: { id: true, bomRevisionId: true, quantity: true },
+    });
+    const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
+    const orderIds = orders.map((o) => o.id);
+
+    const [bomPieces, issues, receipts] = await Promise.all([
+      this.prisma.bomPiece.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { piece: true },
+      }),
+      this.prisma.weavingIssue.findMany({
+        where: { productionOrderId: { in: orderIds } },
+        include: { weavingPoint: true },
+      }),
+      this.prisma.weavingReceipt.findMany({
+        where: { productionOrderId: { in: orderIds } },
+        include: { weavingPoint: true },
+      }),
+    ]);
+
+    const bomPiecesByRevision = new Map<string, typeof bomPieces>();
+    for (const bp of bomPieces) {
+      const key = bp.bomRevisionId.toString();
+      const arr = bomPiecesByRevision.get(key);
+      if (arr) arr.push(bp);
+      else bomPiecesByRevision.set(key, [bp]);
+    }
+
+    for (const order of orders) {
+      const wovenBomPieces = (bomPiecesByRevision.get(order.bomRevisionId.toString()) ?? []).filter(
+        (bp) => bp.isWoven,
+      );
+      const orderIssues = issues.filter((i) => i.productionOrderId === order.id);
+      const orderReceipts = receipts.filter((r) => r.productionOrderId === order.id);
+
+      result[order.id.toString()] = wovenBomPieces.map((bp) => {
+        const pieceKey = bp.pieceId.toString();
+        const pieceIssues = orderIssues.filter((i) => i.pieceId === bp.pieceId);
+        const pieceReceipts = orderReceipts.filter((r) => r.pieceId === bp.pieceId);
+
+        const pointIds = new Set<string>([
+          ...pieceIssues.map((i) => i.weavingPointId.toString()),
+          ...pieceReceipts.map((r) => r.weavingPointId.toString()),
+        ]);
+
+        const allocations = [...pointIds].map((pointIdStr) => {
+          const pointIssues = pieceIssues.filter((i) => i.weavingPointId.toString() === pointIdStr);
+          const pointReceipts = pieceReceipts.filter(
+            (r) => r.weavingPointId.toString() === pointIdStr,
+          );
+          const issuedQty = pointIssues.reduce((s, i) => s + i.qty, 0);
+          const receivedQty = pointReceipts.reduce((s, r) => s + r.qty, 0);
+          const point = pointIssues[0]?.weavingPoint ?? pointReceipts[0]?.weavingPoint;
+          return new WeavingAllocationItemResponseDto({
+            weavingPointId: pointIdStr,
+            weavingPointCode: point?.code ?? '',
+            weavingPointName: point?.fullName ?? null,
+            issuedQty,
+            receivedQty,
+            remainingToReceive: issuedQty - receivedQty,
+          });
+        });
+
+        const totalQty = bp.qtyPerUnit * order.quantity;
+        const issuedQty = pieceIssues.reduce((s, i) => s + i.qty, 0);
+
+        return new WeavingIssuePlanItemResponseDto({
+          pieceId: pieceKey,
+          pieceCode: bp.piece.code,
+          pieceName: bp.piece.name,
+          totalQty,
+          issuedQty,
+          remainingToIssue: totalQty - issuedQty,
+          allocations,
+        });
+      });
+    }
+    return result;
+  }
+
   /** "Quản lý điểm đan" (thay WeavingService.getByPoint() mock) - gộp WeavingIssue+WeavingReceipt
    *  theo weavingPointId qua MỌI production order, rồi theo (productionOrderId, pieceId) trong mỗi
    *  điểm - cùng idiom in-memory group đã dùng ở getIssuePlan(), chỉ đổi trục gộp. Không paginate

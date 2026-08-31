@@ -260,6 +260,11 @@ export class SteelIssuesService {
   async findAll(query: ListSteelIssuesQueryDto): Promise<Paginated<SteelIssueResponseDto>> {
     const where: Prisma.SteelIssueWhereInput = {
       ...(query.status ? { status: query.status } : {}),
+      // Xem comment ở ListSteelIssuesQueryDto.activeOnly - chỉ áp dụng khi FE chủ động truyền,
+      // không ảnh hưởng các nơi khác đang gọi chung endpoint (Xác nhận nhận sắt, KcsPhoiPage).
+      ...(query.activeOnly === 'true'
+        ? { productionInvoice: { items: { some: { productionOrder: { floorStage: 'ACTIVE' } } } } }
+        : {}),
     };
     const result = await paginate(
       {
@@ -308,6 +313,37 @@ export class SteelIssuesService {
       ),
       meta: result.meta,
     };
+  }
+
+  /**
+   * Gộp nhiều PI 1 lần, không phân trang (limit=100 FE vốn đã dùng để "lấy hết" cho 1 PI - gộp
+   * nhiều PI cùng lúc còn ít hơn) - "Bảng thống kê" (ThongKePagePlan.tsx) tải tiến độ Phôi cho
+   * nhiều SKU cùng lúc, nhiều SKU có thể chung 1 PI (đợt gộp) nên trước đây tải trùng lặp cùng 1
+   * PI nhiều lần. attachRequiredStepsMap() đã tự hỗ trợ nhiều invoiceId từ trước (không đổi gì ở
+   * đó) - cùng mẫu GET /packaging-issues/plan (PackagingIssuesService.getBulkPlan()).
+   */
+  async findAllForInvoiceBatch(
+    productionInvoiceIds: string[],
+  ): Promise<Record<string, SteelIssueResponseDto[]>> {
+    const result: Record<string, SteelIssueResponseDto[]> = {};
+    for (const id of productionInvoiceIds) result[id] = [];
+    if (productionInvoiceIds.length === 0) return result;
+
+    const bigIds = productionInvoiceIds.map((id) => parseBigIntId(id));
+    const rows = await this.prisma.steelIssue.findMany({
+      where: { productionInvoiceId: { in: bigIds } },
+      include: STEEL_ISSUE_INCLUDE,
+      orderBy: { issuedAt: 'desc' },
+    });
+    const requiredStepsMap = await this.attachRequiredStepsMap(rows);
+    for (const r of rows) {
+      const dto = this.toResponseDto(
+        r,
+        requiredStepsMap.get(`${r.productionInvoiceId}:${r.materialId}`) ?? [ProcessStep.CAT],
+      );
+      result[r.productionInvoiceId.toString()].push(dto);
+    }
+    return result;
   }
 
   async findOne(id: string): Promise<SteelIssueResponseDto> {
