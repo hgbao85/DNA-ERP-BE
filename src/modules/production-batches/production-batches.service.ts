@@ -16,6 +16,7 @@ import {
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { assertItemPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -91,32 +92,41 @@ export class ProductionBatchesService {
     }
 
     const order = await this.findOrderOrThrow(productionOrderId);
+    await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'báo sản lượng');
     const pieceBigId = parseBigIntId(dto.pieceId);
     await this.assertPieceInBom(order.bomRevisionId, pieceBigId, dto.stage);
 
     // Tạo batch + ghi toàn bộ dòng StockLedger đoạn sắt tiêu thụ trong CÙNG 1 transaction - trước
     // đây 2 bước này chạy rời nhau, 1 dòng ledger lỗi giữa chừng (mất kết nối, timeout) để lại
     // batch đã tồn tại nhưng tồn đoạn sắt chỉ bị trừ 1 phần, không có gì phát hiện batch "dở dang".
-    const created = await this.prisma.$transaction(async (tx) => {
-      const batch = await tx.productionBatch.create({
-        data: {
-          stage: dto.stage,
-          productionOrderId: order.id,
-          pieceId: pieceBigId,
-          reportedQty: dto.reportedQty,
-          reportedById,
-          idempotencyKey,
-        },
-        include: PRODUCTION_BATCH_INCLUDE,
-      });
+    // Timeout tuỳ chỉnh (mặc định Prisma chỉ 5000ms) - postSegmentConsumeEntries() ghi TUẦN TỰ 1
+    // dòng StockLedger/segmentSpecId (mảnh có thể ghép từ nhiều cỡ đoạn), đo thực tế với DB pooled
+    // remote hết ~3.7s cho 3 dòng - sát mức 5000ms mặc định, phát hiện qua browser thật 2026-08-31
+    // (báo sản lượng lỗi 500 "Database error" ngẫu nhiên - Prisma timeout transaction rơi vào
+    // nhánh default của AllExceptionsFilter.mapPrismaError(), không phải lỗi nghiệp vụ).
+    const created = await this.prisma.$transaction(
+      async (tx) => {
+        const batch = await tx.productionBatch.create({
+          data: {
+            stage: dto.stage,
+            productionOrderId: order.id,
+            pieceId: pieceBigId,
+            reportedQty: dto.reportedQty,
+            reportedById,
+            idempotencyKey,
+          },
+          include: PRODUCTION_BATCH_INCLUDE,
+        });
 
-      await this.postSegmentConsumeEntries(
-        tx,
-        { ...batch, bomRevisionId: order.bomRevisionId },
-        reportedById,
-      );
-      return batch;
-    });
+        await this.postSegmentConsumeEntries(
+          tx,
+          { ...batch, bomRevisionId: order.bomRevisionId },
+          reportedById,
+        );
+        return batch;
+      },
+      { timeout: 20_000 },
+    );
 
     return this.toResponseDto(created);
   }
