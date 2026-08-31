@@ -24,7 +24,8 @@ describe('PackagingIssuesService', () => {
       create: jest.Mock;
       aggregate: jest.Mock;
     };
-    productionOrder: { findUnique: jest.Mock; findMany: jest.Mock };
+    productionOrder: { findUnique: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
+    productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
     bomAccessoryItem: { findUnique: jest.Mock; findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $executeRaw: jest.Mock;
@@ -37,6 +38,7 @@ describe('PackagingIssuesService', () => {
     poNumber: 'PO-31-1',
     bomRevisionId: 5n,
     quantity: 10,
+    productionInvoiceItemId: 21n,
     mfgProduct: { name: 'Ghế xoay demo' },
     productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
   };
@@ -73,9 +75,15 @@ describe('PackagingIssuesService', () => {
         create: jest.fn(),
         aggregate: jest.fn().mockResolvedValue({ _sum: { issuedQty: null } }),
       },
+      // findFirst mặc định trả về 1 order ACTIVE - đa số test case không quan tâm gate
+      // assertItemPiHasActiveFloor() (2026-08-31).
       productionOrder: {
         findUnique: jest.fn().mockResolvedValue(order),
         findMany: jest.fn().mockResolvedValue([order]),
+        findFirst: jest.fn().mockResolvedValue({ id: 9n }),
+      },
+      productionInvoiceItem: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceId: 500n }),
       },
       bomAccessoryItem: {
         findUnique: jest.fn().mockResolvedValue(accessoryRow),
@@ -260,6 +268,28 @@ describe('PackagingIssuesService', () => {
         30n,
         100,
       );
+    });
+  });
+
+  describe('create - QLSX "Bắt đầu" gate (assertItemPiHasActiveFloor, 2026-08-31)', () => {
+    const dto = { materialId: '30', issuedQty: 5 };
+
+    it('ném ConflictException khi PI của order chưa có SKU nào ACTIVE', async () => {
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(service.create('1', dto, 'user-1', null)).rejects.toThrow(ConflictException);
+      expect(prisma.productionInvoiceItem.findUniqueOrThrow).toHaveBeenCalledWith({
+        where: { id: 21n },
+        select: { productionInvoiceId: true },
+      });
+      expect(prisma.packagingIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('cho phép xuất khi PI có ÍT NHẤT 1 SKU ACTIVE, kể cả khi KHÔNG PHẢI chính order này', async () => {
+      prisma.productionOrder.findFirst.mockResolvedValue({ id: 999n });
+      prisma.packagingIssue.create.mockResolvedValue(issueRow);
+
+      await expect(service.create('1', dto, 'user-1', null)).resolves.toBeDefined();
     });
   });
 

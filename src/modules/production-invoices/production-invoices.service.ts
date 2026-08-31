@@ -19,6 +19,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
+import { assertPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
@@ -1209,6 +1210,7 @@ export class ProductionInvoicesService {
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
+    await assertPiHasActiveFloor(this.prisma, pi.id, 'ghi nhận chuyền kiểm');
     const pieceBigId = parseBigIntId(dto.pieceId);
 
     const bomPiece = await this.prisma.bomPiece.findUnique({
@@ -1308,6 +1310,7 @@ export class ProductionInvoicesService {
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
+    await assertPiHasActiveFloor(this.prisma, pi.id, 'ghi nhận đóng gói');
     const packedSoFar = await this.sumPacked(item.id);
     if (packedSoFar + dto.boxesPacked > productionOrder.quantity) {
       throw new BadRequestException(
