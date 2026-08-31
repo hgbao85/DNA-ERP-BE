@@ -434,7 +434,8 @@
       <a href="#teste2e"><span class="n">10</span> Test E2E qua browser thật</a>
       <a href="#dinhchinh"><span class="n">11</span> Đính chính: 2 lỗ hổng chưa khép kín</a>
       <a href="#testbatch"><span class="n">12</span> 25 test tự động cho 5 endpoint batch</a>
-      <a href="#conlai"><span class="n">13</span> Còn tồn đọng</a>
+      <a href="#bocaphandsau"><span class="n">13</span> Bỏ "Ca Hàn/Sơn" — QLSX đã kiểm soát rồi</a>
+      <a href="#conlai"><span class="n">14</span> Còn tồn đọng</a>
     </nav>
     <div class="rail-foot">
       DNA-ERP · module Sản xuất MES<br>
@@ -990,17 +991,56 @@
     </section>
 
     <!-- 13 ───────────────────────────────────────────────────────── -->
+    <section class="block" id="bocaphandsau">
+      <div class="block-head"><span class="block-num">13</span><h2>Bỏ "Ca Hàn/Sơn" — QLSX đã kiểm soát rồi</h2></div>
+      <p class="block-intro">
+        Bạn hỏi ý kiến: cột "Ca Hàn"/"Ca Sơn" (nút Bắt đầu/Kết thúc riêng ở màn Lệnh sản xuất Hàn/
+        Sơn, khoá không cho vào form nhập sản lượng nếu chưa bấm "Bắt đầu") có còn cần thiết không,
+        vì QLSX giờ đã kiểm soát toàn chuỗi qua <code>floorStage</code> rồi.
+      </p>
+
+      <div class="entry -fix">
+        <div class="entry-top">
+          <span class="entry-title">Xác nhận: đây chỉ là state cục bộ trình duyệt, không phải dữ liệu thật</span>
+          <span class="pill -ok">Đã bỏ</span>
+        </div>
+        <p>Đọc lại code: <code>startPo</code>/<code>endPo</code> chỉ gọi <code>setRows()</code> thuần React — không gửi API nào, mất sạch khi tải lại trang. Nó đang đóng 2 vai trò: (1) khoá bắt buộc phải bấm "Bắt đầu" mới vào được form nhập sản lượng, (2) hiện "ca trước: X cái · Y phút" — số liệu năng suất tạm thời, không tính theo ca làm thật của công nhân.</p>
+        <p>Cùng lúc đó, nó tạo ra 1 cặp nút "Bắt đầu"/"Kết thúc" TRÙNG TÊN với nút thật của QLSX ở Bảng thống kê (mục 04) nhưng hoàn toàn khác nghĩa — chính người viết doc này cũng từng bấm nhầm 2 cái lúc test E2E (mục 10), xác nhận đây là nhầm lẫn có thật, không phải giả định suông.</p>
+        <div class="chips"><span class="chip">components/sanxuat/core.tsx</span></div>
+      </div>
+
+      <div class="split">
+        <div class="box">
+          <h4>Trước</h4>
+          <p>Hàn/Sơn: phải bấm "Bắt đầu" ca → mới bấm được vào SKU → mới thấy form nhập sản lượng. 3 bước.</p>
+        </div>
+        <div class="box">
+          <h4>Sau</h4>
+          <p>Hàn/Sơn: bấm thẳng vào SKU → vào ngay form nhập sản lượng. Giống hệt cách Phôi vốn đã làm từ trước.</p>
+        </div>
+      </div>
+
+      <p class="soft">Đã xoá cột "Ca", state <code>startedAt</code>/<code>cutAtStart</code>/<code>lastSession</code>, helper <code>caActions()</code>/<code>totalCut()</code>/<code>durText()</code>, và câu footer "Bấm Bắt đầu/Kết thúc để đo sản lượng theo ca." Không đụng gì tới nút "Bắt đầu"/"Kết thúc" thật của QLSX (mục 04) — 2 cơ chế độc lập hoàn toàn, chỉ trùng tên gây nhầm.</p>
+
+      <div class="verify">
+        <span><b>Kiểm chứng:</b> tsc --noEmit sạch · eslint không phát sinh warning mới (2 warning còn lại là pre-existing, xác nhận qua <code>git stash</code> đối chiếu)</span>
+        <span><b>Browser thật:</b> bấm thẳng vào SKU Hàn → vào đúng form "Ghi nhận" ngay, không còn bước phụ</span>
+      </div>
+    </section>
+
+    <!-- 14 ───────────────────────────────────────────────────────── -->
     <section class="block" id="conlai">
-      <div class="block-head"><span class="block-num">13</span><h2>Còn tồn đọng — chưa làm</h2></div>
+      <div class="block-head"><span class="block-num">14</span><h2>Còn tồn đọng — chưa làm</h2></div>
       <ul class="outcome-list">
         <li class="-open"><span class="dot"></span><span>Bug #1 (mục 10) — <code>buildProductionOrderInfoByMfgProduct()</code> gộp sai khi 1 SKU chạy nhiều PI song song — CHƯA sửa, ảnh hưởng mọi màn "Phân phối nội bộ".</span></li>
         <li class="-open"><span class="dot"></span><span>Phôi (xuất sắt/báo cắt/KCS duyệt Phôi) chưa test qua UI thật — xem mục 11.</span></li>
         <li class="-open"><span class="dot"></span><span><code>CuttingProposal</code> mới cho PI gộp bị kẹt ở <code>CALCULATING</code> — nghi là bug thứ 4, chưa điều tra nguyên nhân.</span></li>
         <li class="-open"><span class="dot"></span><span>Sơn không phụ thuộc Hàn trong code (mục 07) — nếu nghiệp vụ thực tế cần ràng buộc thứ tự, đây là việc cần làm thêm, hiện chưa có.</span></li>
         <li class="-open"><span class="dot"></span><span>Khả năng trừ tồn đoạn sắt 2 lần cho cùng 1 mảnh nếu mảnh đó vừa cần Hàn vừa cần Sơn và có định mức đoạn sắt (<code>PieceBom</code> không phân biệt theo stage) — nêu ra như một quan sát, <b>chưa xác nhận đây có phải lỗi thật hay không</b>, cần điều tra riêng nếu muốn chắc chắn.</span></li>
-        <li class="-done"><span class="dot"></span><span>Toàn bộ thay đổi backend (mục 01–12) đã qua <code>tsc --noEmit</code> sạch và 793 test xanh; frontend đã qua <code>tsc --noEmit</code> + eslint sạch.</span></li>
+        <li class="-done"><span class="dot"></span><span>Toàn bộ thay đổi backend (mục 01–12) đã qua <code>tsc --noEmit</code> sạch và 793 test xanh; frontend (mục 01–13) đã qua <code>tsc --noEmit</code> + eslint sạch.</span></li>
         <li class="-done"><span class="dot"></span><span>Đan, Chuyền kiểm, Đóng gói, Hàn, Sơn, KCS duyệt (Hàn/Sơn), Kết thúc — đã test qua UI thật và đúng (mục 10).</span></li>
         <li class="-done"><span class="dot"></span><span>5 endpoint batch mới (mục 02) đã có 25 test tự động riêng, không còn chỉ dựa vào test của hàm đơn-lẻ liên quan (mục 12).</span></li>
+        <li class="-done"><span class="dot"></span><span>"Ca Hàn/Sơn" đã bỏ, xác nhận qua browser thật Hàn/Sơn giờ bấm thẳng vào SKU như Phôi (mục 13).</span></li>
       </ul>
     </section>
 
@@ -1008,8 +1048,9 @@
       Ghi lại từ 1 phiên làm việc liên tục trên nhánh <code>han-son</code> — DNA-ERP (FE) &amp; DNA-ERP-BE.
       Mục 01–07 ghi lúc ship bản đầu; mục 08–09 bổ sung sau khi mở rộng gate ra kho/KCS rồi Đan/
       Chuyền kiểm/Đóng gói; mục 10–11 ghi lại 1 lượt test qua browser thật (7 tài khoản demo) và
-      đính chính khi bị hỏi lại; mục 12 thêm 25 test tự động cho 5 endpoint batch. Đã lưu tóm tắt
-      vào bộ nhớ dài hạn của trợ lý để phiên sau không phải điều tra lại từ đầu.
+      đính chính khi bị hỏi lại; mục 12 thêm 25 test tự động cho 5 endpoint batch; mục 13 bỏ "Ca
+      Hàn/Sơn" theo góp ý dùng thay bằng gate QLSX đã có sẵn. Đã lưu tóm tắt vào bộ nhớ dài hạn của
+      trợ lý để phiên sau không phải điều tra lại từ đầu.
     </footer>
   </main>
 </div>
