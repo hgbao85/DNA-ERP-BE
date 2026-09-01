@@ -1281,6 +1281,7 @@ enum ProductionOrderStatus {
 enum ProductionOrderFloorStage {
   PENDING
   ACTIVE
+  PAUSED
   FINISHED
 }
 
@@ -1299,25 +1300,25 @@ enum CuttingProposalStatus {
 /// approveItem()). KHÔNG có API tạo/release thủ công ở bản này (đã có sẵn trong doc gốc,
 /// để dành khi cần tách 1 item thành nhiều PO chạy tuần tự - chưa cần tới lúc này).
 model ProductionOrder {
-  id                      BigInt                @id @default(autoincrement())
-  poNumber                String                @unique
+  id                      BigInt                    @id @default(autoincrement())
+  poNumber                String                    @unique
   /// 1-1 với item đã duyệt sinh ra PO này - chỉ để truy vết, KHÔNG dùng để đọc lại quantity
   /// (đã ghim ở field quantity bên dưới).
-  productionInvoiceItemId BigInt                @unique
+  productionInvoiceItemId BigInt                    @unique
   mfgProductId            BigInt
   /// Ghim tại thời điểm tạo (ACTIVE BomRevision của mfgProductId lúc đó) - không suy lại mỗi
   /// lần đọc, đúng nguyên tắc PO ghim đúng 1 bản định mức.
   bomRevisionId           BigInt
   /// Snapshot productionInvoiceItem.quantity tại thời điểm duyệt - xem ghi chú đầu section.
   quantity                Int
-  status                  ProductionOrderStatus @default(RELEASED)
-  releasedAt              DateTime?             @default(now())
+  status                  ProductionOrderStatus     @default(RELEASED)
+  releasedAt              DateTime?                 @default(now())
   /// Xem enum ProductionOrderFloorStage - kiểm soát hiển thị bên Hàn/Sơn/Phôi, tách biệt hoàn
   /// toàn khỏi `status` ở trên.
   floorStage              ProductionOrderFloorStage @default(PENDING)
   floorStartedAt          DateTime?
   floorFinishedAt         DateTime?
-  createdAt               DateTime              @default(now())
+  createdAt               DateTime                  @default(now())
 
   productionInvoiceItem       ProductionInvoiceItem        @relation(fields: [productionInvoiceItemId], references: [id])
   mfgProduct                  MfgProduct                   @relation(fields: [mfgProductId], references: [id])
@@ -1884,6 +1885,11 @@ model StockLedger {
   note             String?
   createdAt        DateTime           @default(now())
   createdById      String?
+  /// Độ dài thanh (mm) khi materialId là sắt cây bán theo chiều dài - 0 cho mọi loại hàng khác
+  /// (CHECK stock_ledger_stock_length_mm_chk: >=0 và ==0 nếu materialId NULL). Cùng bucket-theo-
+  /// độ-dài với PurchaseProposalItem.stockLengthMm (migration 20260826010000) nhưng áp cho tồn
+  /// kho thật thay vì đề xuất mua - 1 kho có thể tồn nhiều lô cùng material khác độ dài cây.
+  stockLengthMm    Int                @default(0)
 
   fromWarehouse  Warehouse       @relation("StockLedgerFromWarehouse", fields: [fromWarehouseId], references: [id])
   toWarehouse    Warehouse       @relation("StockLedgerToWarehouse", fields: [toWarehouseId], references: [id])
@@ -1901,6 +1907,8 @@ model StockLedger {
   @@index([fromWarehouseId, pieceId])
   @@index([toWarehouseId, productVariantId])
   @@index([fromWarehouseId, productVariantId])
+  @@index([fromWarehouseId, materialId, stockLengthMm])
+  @@index([toWarehouseId, materialId, stockLengthMm])
   @@map("stock_ledger")
 }
 
@@ -1916,6 +1924,11 @@ model StockQuant {
   productVariantId BigInt?
   qty              Decimal  @default(0) @db.Decimal(16, 4)
   updatedAt        DateTime @default(now())
+  /// Cùng ý nghĩa StockLedger.stockLengthMm - phần khoá của unique "1 dòng số dư mỗi (kho, hàng,
+  /// độ dài)" nay gồm cả cột này (stock_quant_warehouseId_materialId_stockLengthMm_key), tạo trực
+  /// tiếp bằng raw SQL ở migration (cùng lý do @@unique 4 partial index bên dưới KHÔNG khai báo ở
+  /// đây - xem cảnh báo "check constraints"/index có điều kiện Prisma Client chưa hỗ trợ đầy đủ).
+  stockLengthMm    Int      @default(0)
 
   warehouse      Warehouse       @relation(fields: [warehouseId], references: [id])
   material       Material?       @relation(fields: [materialId], references: [id])
@@ -1941,20 +1954,20 @@ model StockQuant {
 /// tốt; đổi lại, mọi nơi tính available BẮT BUỘC đi qua đúng 1 hàm dùng chung
 /// (StockReservationsService.getAvailableQty) - hàm đó cộng cả HAI bảng.
 model StockReservation {
-  id             BigInt                  @id @default(autoincrement())
-  warehouseId    BigInt
-  materialId     BigInt
+  id                  BigInt                  @id @default(autoincrement())
+  warehouseId         BigInt
+  materialId          BigInt
   /// Số lượng đã hứa. Bất biến sau khi tạo - phần đã lấy đi ghi ở consumedQty, không trừ vào đây
   /// (giữ được "hứa bao nhiêu / lấy bao nhiêu" để đối chiếu).
-  quantity       Decimal                 @db.Decimal(16, 4)
+  quantity            Decimal                 @db.Decimal(16, 4)
   /// Cộng dồn phần đã thực xuất - Phôi lấy sắt làm nhiều đợt (giữ 100 cây, xuất 30/40/30). Khi
   /// consumedQty >= quantity thì status chuyển RELEASED, dòng hết chiếm chỗ.
-  consumedQty    Decimal                 @default(0) @db.Decimal(16, 4)
-  status         ReservationStatus       @default(ACTIVE)
-  refType        StockReservationRefType
+  consumedQty         Decimal                 @default(0) @db.Decimal(16, 4)
+  status              ReservationStatus       @default(ACTIVE)
+  refType             StockReservationRefType
   /// Trỏ tới bản ghi nghiệp vụ giữ chỗ này (vd cutting_proposals.id) - cùng lý do không FK cứng
   /// như StockLedger.refId.
-  refId          String
+  refId               String
   /// PI thật của dòng này (L5, 2026-08-26) - TÁCH KHỎI refId cố ý: refId vẫn giữ nguyên
   /// cuttingProposalId gốc (để releaseByRef()/idempotencyKey không đổi hành vi), cột này CHỈ để
   /// gộp NHIỀU dòng CUTTING_PROPOSAL của các SKU khác nhau trong CÙNG 1 PI thành 1 "pool" khi
@@ -1968,15 +1981,18 @@ model StockReservation {
   /// Chống tạo trùng khi caller gọi lại (cùng idiom StockLedger.idempotencyKey). Đặt theo công
   /// thức cố định `<refType>:<refId>:material:<materialId>` chứ không phải UUID client gửi lên -
   /// 1 (nguồn, vật tư) chỉ được giữ chỗ đúng 1 dòng.
-  idempotencyKey String?                 @unique
-  note           String?
-  createdAt      DateTime                @default(now())
-  createdById    String?
-  releasedAt     DateTime?
+  idempotencyKey      String?                 @unique
+  note                String?
+  createdAt           DateTime                @default(now())
+  createdById         String?
+  releasedAt          DateTime?
+  /// Cùng ý nghĩa StockLedger.stockLengthMm - giữ chỗ cũng phải khớp đúng độ dài cây đang giữ,
+  /// không thì trừ nhầm sang lô cùng material nhưng khác độ dài.
+  stockLengthMm       Int                     @default(0)
 
-  warehouse         Warehouse         @relation(fields: [warehouseId], references: [id])
-  material          Material          @relation(fields: [materialId], references: [id])
-  createdBy         User?             @relation(fields: [createdById], references: [id])
+  warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
+  material          Material           @relation(fields: [materialId], references: [id])
+  createdBy         User?              @relation(fields: [createdById], references: [id])
   productionInvoice ProductionInvoice? @relation(fields: [productionInvoiceId], references: [id])
 
   /// Đúng chỉ mục cho câu hỏi nóng nhất: "vật tư X ở kho Y đang bị giữ bao nhiêu" (getAvailableQty).
@@ -1985,6 +2001,10 @@ model StockReservation {
   /// Câu hỏi thứ 2 nóng không kém từ L5: "pool giữ chỗ của PI X + vật tư Y đang có những dòng nào"
   /// (loadPool - dùng cho CẢ credit lẫn drain).
   @@index([productionInvoiceId, materialId, status])
+  /// Tên rút gọn qua `map` - tên đầy đủ theo quy ước mặc định của Prisma vượt giới hạn định danh
+  /// 63 ký tự của Postgres, bị cắt cụt gây đụng tên với chỉ mục khác (migration
+  /// 20260829072458_fix_truncated_stock_length_index_names).
+  @@index([warehouseId, materialId, stockLengthMm, status], map: "stock_reservations_wh_mat_len_status_idx")
   @@map("stock_reservations")
 }
 
@@ -2082,19 +2102,24 @@ model WarehouseTransferPieceItem {
 /// Giữ chỗ tồn kho khi phiếu đang PENDING, chặn 2 phiếu cùng lúc "double-book" cùng 1 phần
 /// tồn kho khả dụng - RELEASED khi phiếu CONFIRMED/REJECTED (xem WarehouseTransfersService).
 model WarehouseTransferReservation {
-  id          BigInt            @id @default(autoincrement())
-  transferId  BigInt
-  warehouseId BigInt
-  materialId  BigInt?
-  quantity    Decimal           @db.Decimal(16, 4)
-  status      ReservationStatus @default(ACTIVE)
-  createdAt   DateTime          @default(now())
+  id            BigInt            @id @default(autoincrement())
+  transferId    BigInt
+  warehouseId   BigInt
+  materialId    BigInt?
+  quantity      Decimal           @db.Decimal(16, 4)
+  status        ReservationStatus @default(ACTIVE)
+  createdAt     DateTime          @default(now())
+  /// Cùng ý nghĩa StockLedger.stockLengthMm.
+  stockLengthMm Int               @default(0)
 
   transfer  WarehouseTransfer @relation(fields: [transferId], references: [id])
   warehouse Warehouse         @relation(fields: [warehouseId], references: [id])
   material  Material?         @relation(fields: [materialId], references: [id])
 
   @@index([warehouseId, materialId])
+  /// Tên rút gọn qua `map` - cùng lý do StockReservation.@@index([...stockLengthMm...]) ở trên
+  /// (tên mặc định bị Postgres cắt cụt, migration 20260829072458_fix_truncated_stock_length_index_names).
+  @@index([warehouseId, materialId, stockLengthMm], map: "warehouse_transfer_reservations_wh_mat_len_idx")
   @@map("warehouse_transfer_reservations")
 }
 
