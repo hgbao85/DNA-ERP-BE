@@ -219,6 +219,35 @@ describe('ProductionOrdersService', () => {
     });
   });
 
+  describe('pauseFloor — QLSX "Tạm dừng" (2026-09-01, bấm tự do như finishFloor)', () => {
+    it('moves ACTIVE to PAUSED', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'PAUSED' }));
+
+      const result = await service.pauseFloor('9');
+
+      const data = updateDataArg();
+      expect(data).toStrictEqual({ floorStage: 'PAUSED' });
+      expect(result.floorStage).toBe('PAUSED');
+    });
+
+    it('does NOT touch `status`', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'PAUSED' }));
+
+      await service.pauseFloor('9');
+
+      expect(updateDataArg()).not.toHaveProperty('status');
+    });
+
+    it('throws NotFoundException when the order does not exist', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(null);
+
+      await expect(service.pauseFloor('999')).rejects.toThrow(NotFoundException);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('finishFloor — QLSX "Kết thúc" (bấm tự do, không kiểm tra tiến độ)', () => {
     it('moves any floorStage to FINISHED and stamps floorFinishedAt the first time', async () => {
       prisma.productionOrder.findUnique.mockResolvedValue(

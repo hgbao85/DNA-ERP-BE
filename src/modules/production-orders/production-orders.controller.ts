@@ -34,13 +34,21 @@ export class ProductionOrdersController {
     return this.productionOrdersService.findOne(id);
   }
 
-  /** QLSX bấm "Bắt đầu" ở "Bảng thống kê" - PENDING/ACTIVE -> ACTIVE, xem
+  /** QLSX bấm "Bắt đầu" (PENDING) hoặc "Tiếp tục" (PAUSED) ở "Bảng thống kê" -> ACTIVE, xem
    *  ProductionOrdersService.startFloor(). */
   @Post(':id/floor-start')
   @RequirePermissions(UPDATE)
   @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER)
   startFloor(@Param('id') id: string) {
     return this.productionOrdersService.startFloor(id);
+  }
+
+  /** QLSX bấm "Tạm dừng" - bất kỳ trạng thái nào -> PAUSED, xem ProductionOrdersService.pauseFloor(). */
+  @Post(':id/floor-pause')
+  @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER)
+  pauseFloor(@Param('id') id: string) {
+    return this.productionOrdersService.pauseFloor(id);
   }
 
   /** QLSX bấm "Kết thúc" - bất kỳ trạng thái nào -> FINISHED, không kiểm tra tiến độ. */

@@ -1,0 +1,11 @@
+-- Reconstructed 2026-09-01 (xem migration liền trước, 20260829072018_stock_length_bucket, để biết
+-- lý do file này bị dựng lại thay vì phục hồi nguyên bản gốc).
+--
+-- Migration gốc (đã áp dụng thật trên DB, _prisma_migrations started_at=2026-08-29T07:25:22Z) đổi
+-- tên 2 chỉ mục stock_reservations/warehouse_transfer_reservations từ tên mặc định Prisma tự sinh
+-- (vượt giới hạn định danh 63 ký tự của Postgres, bị cắt cụt) sang tên rút gọn qua `map`. Migration
+-- liền trước ở đây đã dựng lại 2 chỉ mục đó THẲNG với tên rút gọn cuối cùng
+-- (stock_reservations_wh_mat_len_status_idx, warehouse_transfer_reservations_wh_mat_len_idx) nên
+-- không còn gì để đổi tên nữa - file này là no-op, giữ lại chỉ để khớp đúng tên/thứ tự migration
+-- đã ghi nhận applied trong _prisma_migrations.
+SELECT 1;

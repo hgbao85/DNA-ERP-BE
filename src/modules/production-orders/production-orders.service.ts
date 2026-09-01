@@ -170,10 +170,12 @@ export class ProductionOrdersService {
   }
 
   /**
-   * QLSX (BUSINESS_ROLES.PRODUCTION_MANAGER) bấm "Bắt đầu" ở "Bảng thống kê" - CHỈ đổi
-   * floorStage (PENDING/ACTIVE -> ACTIVE), KHÔNG đụng `status` (vẫn RELEASED/IN_PROGRESS như cũ,
-   * mua vật tư/xuất sắt không phụ thuộc field này). Cho phép gọi lại dù đã ACTIVE (idempotent,
-   * không throw) - tránh lỗi vặt nếu bấm 2 lần/2 tab.
+   * QLSX (BUSINESS_ROLES.PRODUCTION_MANAGER) bấm "Bắt đầu" (từ PENDING) hoặc "Tiếp tục" (từ
+   * PAUSED) ở "Bảng thống kê" - dùng chung route floor-start vì cùng là chuyển sang ACTIVE, chỉ
+   * khác nhãn nút bên FE (xem FloorStageCell). CHỈ đổi floorStage, KHÔNG đụng `status` (vẫn
+   * RELEASED/IN_PROGRESS như cũ, mua vật tư/xuất sắt không phụ thuộc field này). floorStartedAt chỉ
+   * set lần đầu (lúc còn PENDING) - "Tiếp tục" sau khi tạm dừng không ghi đè lại mốc bắt đầu gốc.
+   * Cho phép gọi lại dù đã ACTIVE (idempotent, không throw) - tránh lỗi vặt nếu bấm 2 lần/2 tab.
    */
   async startFloor(id: string): Promise<ProductionOrderResponseDto> {
     const bigId = parseBigIntId(id);
@@ -187,6 +189,25 @@ export class ProductionOrdersService {
         order.floorStage === 'PENDING'
           ? { floorStage: 'ACTIVE', floorStartedAt: new Date() }
           : { floorStage: 'ACTIVE' },
+      include: SALES_ORDER_CODE_INCLUDE,
+    });
+    return this.toResponseDto(updated);
+  }
+
+  /**
+   * QLSX bấm "Tạm dừng" - đổi floorStage sang PAUSED, gate assertPiHasActiveFloor() (chỉ khớp
+   * ACTIVE) sẽ chặn mọi thao tác ghi trên xưởng cho tới khi bấm lại "Bắt đầu"/"Tiếp tục" (cùng
+   * route floor-start, xem controller). Bấm tự do như finishFloor(), không kiểm tra tiến độ.
+   */
+  async pauseFloor(id: string): Promise<ProductionOrderResponseDto> {
+    const bigId = parseBigIntId(id);
+    const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
+    if (!order) {
+      throw new NotFoundException(`Production order ${id} not found`);
+    }
+    const updated = await this.prisma.productionOrder.update({
+      where: { id: bigId },
+      data: { floorStage: 'PAUSED' },
       include: SALES_ORDER_CODE_INCLUDE,
     });
     return this.toResponseDto(updated);
