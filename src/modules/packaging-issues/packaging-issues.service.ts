@@ -27,7 +27,11 @@ import { PackagingIssueResponseDto } from './dto/packaging-issue-response.dto';
 
 const PACKAGING_ISSUE_INCLUDE = {
   productionOrder: {
-    include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+    include: {
+      productionInvoiceItem: {
+        select: { salesOrder: { select: { code: true } }, warehouseCode: true },
+      },
+    },
   },
   material: true,
 } satisfies Prisma.PackagingIssueInclude;
@@ -36,11 +40,15 @@ type PackagingIssueRow = Prisma.PackagingIssueGetPayload<{
   include: typeof PACKAGING_ISSUE_INCLUDE;
 }>;
 
-/// Kho vật lý nguồn - cùng MATERIAL_WAREHOUSE_CODE ở material-issues.service.ts (2 domain dùng
-/// chung 1 kho vật lý, khác mục đích: vật tư tiêu hao Hàn/Sơn vs vật tư đóng gói).
-const PACKAGING_SOURCE_WAREHOUSE_CODE = 'vat-tu-tp';
-/// Kho vật lý đích - khác PRODUCTION_WAREHOUSE_CODE (kho ảo) ở material-issues/steel-issues: vật
-/// tư đóng gói đi thẳng tới kho thành phẩm thật, không qua kho ảo PRODUCTION.
+/// Kho vật lý nguồn KHÔNG còn hardcode 1 code (2026-09-03) - đọc động từ Material.warehouseId,
+/// mirror CuttingProposalsService.approve()/MaterialIssuesService, cho phép nhiều kho vat-tu-tp-*
+/// cùng tồn tại thay vì 1 kho gốc duy nhất.
+/// Kho vật lý đích MẶC ĐỊNH - khác PRODUCTION_WAREHOUSE_CODE (kho ảo) ở material-issues/
+/// steel-issues: vật tư đóng gói đi thẳng tới kho thành phẩm thật, không qua kho ảo PRODUCTION.
+/// Chỉ dùng khi PI item CHƯA có warehouseCode (chưa qua sendItemToBoss) - đích thật ưu tiên đọc
+/// từ ProductionInvoiceItem.warehouseCode (kho QLSX chọn lúc duyệt, có thể là 1 kho thành phẩm
+/// PHỤ dạng 'thanh-pham-{n}') - trước đây hard-code literal này bất kể QLSX chọn kho nào, khiến
+/// hàng luôn "về" kho thành phẩm gốc dù QLSX đã chọn kho phụ khi gửi Sếp duyệt.
 const PACKAGING_DEST_WAREHOUSE_CODE = 'thanh-pham';
 
 /**
@@ -70,8 +78,6 @@ export class PackagingIssuesService {
     warehouseScope: string | null,
     idempotencyKey?: string,
   ): Promise<PackagingIssueResponseDto> {
-    this.assertWarehouseScope(warehouseScope);
-
     if (idempotencyKey) {
       const existing = await this.prisma.packagingIssue.findUnique({
         where: { idempotencyKey },
@@ -90,9 +96,10 @@ export class PackagingIssuesService {
       'xuất vật tư đóng gói',
     );
     const materialBigId = parseBigIntId(dto.materialId);
-    const sourceWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
-      where: { code: PACKAGING_SOURCE_WAREHOUSE_CODE },
-    });
+    const sourceWarehouse = await this.findMaterialWarehouseOrThrow(materialBigId);
+    // Gate theo ĐÚNG instance kho vật lý của vật tư này (không chỉ cùng gia đình vat-tu-tp) - Thủ
+    // kho của vat-tu-tp-2 không được xuất vật tư đang thật sự nằm ở kho vat-tu-tp gốc và ngược lại.
+    this.assertWarehouseScope(warehouseScope, sourceWarehouse.code);
 
     // Khoá advisory (H3 fix, cùng lý do H2 ở MaterialIssuesService) - không có dòng có sẵn để
     // FOR UPDATE cho lần xuất đầu tiên của 1 khoá (order, material) - xem lockBusinessKey().
@@ -219,12 +226,21 @@ export class PackagingIssuesService {
   }
 
   private async postLedgerEntry(issue: PackagingIssueRow, createdById: string): Promise<void> {
-    const [fromWarehouse, toWarehouse] = await Promise.all([
-      this.prisma.warehouse.findUniqueOrThrow({ where: { code: PACKAGING_SOURCE_WAREHOUSE_CODE } }),
-      this.prisma.warehouse.findUniqueOrThrow({ where: { code: PACKAGING_DEST_WAREHOUSE_CODE } }),
-    ]);
+    // fromWarehouseId đọc thẳng từ Material.warehouseId (đã include ở PACKAGING_ISSUE_INCLUDE) -
+    // không còn tra theo literal code. Chỉ chưa từng null ở đây vì create() đã chặn qua
+    // findMaterialWarehouseOrThrow() trước khi tạo bản ghi.
+    if (!issue.material.warehouseId) {
+      throw new BadRequestException(
+        `Vật tư ${issue.material.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi ghi sổ`,
+      );
+    }
+    const destWarehouseCode =
+      issue.productionOrder.productionInvoiceItem.warehouseCode ?? PACKAGING_DEST_WAREHOUSE_CODE;
+    const toWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
+      where: { code: destWarehouseCode },
+    });
     await this.stockLedgerService.postEntry({
-      fromWarehouseId: fromWarehouse.id,
+      fromWarehouseId: issue.material.warehouseId,
       toWarehouseId: toWarehouse.id,
       materialId: issue.materialId,
       qty: issue.issuedQty.toNumber(),
@@ -235,12 +251,31 @@ export class PackagingIssuesService {
     });
   }
 
+  /** Kho vật lý CỤ THỂ của vật tư này, đọc từ Material.warehouseId (mirror
+   *  CuttingProposalsService.approve()) - 400 rõ ràng nếu Admin chưa cấu hình Kho cho vật tư đó. */
+  private async findMaterialWarehouseOrThrow(id: bigint): Promise<{ id: bigint; code: string }> {
+    const material = await this.prisma.material.findUnique({
+      where: { id },
+      select: { code: true, warehouseId: true, warehouse: { select: { id: true, code: true } } },
+    });
+    if (!material) {
+      throw new NotFoundException(`Material ${id} not found`);
+    }
+    if (!material.warehouseId || !material.warehouse) {
+      throw new BadRequestException(
+        `Vật tư ${material.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi xuất`,
+      );
+    }
+    return material.warehouse;
+  }
+
   /** null = tổng kho (BOSS/ADMIN) - không có gì để chặn, cùng idiom MaterialIssuesService/
-   *  SteelIssuesService/WeavingIssuesService.assertWarehouseScope(). */
-  private assertWarehouseScope(warehouseScope: string | null): void {
-    if (warehouseScope && warehouseScope !== PACKAGING_SOURCE_WAREHOUSE_CODE) {
+   *  SteelIssuesService/WeavingIssuesService.assertWarehouseScope(). Khác null: phải khớp ĐÚNG kho
+   *  vật lý cụ thể mà vật tư này đang nằm (expectedWarehouseCode, đọc từ Material.warehouseId). */
+  private assertWarehouseScope(warehouseScope: string | null, expectedWarehouseCode: string): void {
+    if (warehouseScope && warehouseScope !== expectedWarehouseCode) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được xuất vật tư đóng gói từ kho '${PACKAGING_SOURCE_WAREHOUSE_CODE}'`,
+        `Caller bị giới hạn ở kho '${warehouseScope}', không được xuất vật tư đóng gói từ kho '${expectedWarehouseCode}'`,
       );
     }
   }

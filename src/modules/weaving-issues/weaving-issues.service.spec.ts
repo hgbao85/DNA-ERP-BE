@@ -178,6 +178,18 @@ describe('WeavingIssuesService', () => {
       ).resolves.toBeDefined();
     });
 
+    it('2026-09-03: cho phép caller thuộc kho vat-tu-tp PHỤ (trước đây chỉ đúng literal kho gốc mới qua được, bất đối xứng với nhánh receive() đã vá 08/31)', async () => {
+      prisma.weavingIssue.create.mockResolvedValue(issueRow);
+      await expect(
+        service.create(
+          '1',
+          { pieceId: '20', weavingPointId: '40', qty: 10 },
+          'user-1',
+          'vat-tu-tp-2',
+        ),
+      ).resolves.toBeDefined();
+    });
+
     it('ném NotFoundException khi production order không tồn tại', async () => {
       prisma.productionOrder.findUnique.mockResolvedValue(null);
       await expect(
@@ -323,6 +335,19 @@ describe('WeavingIssuesService', () => {
           { pieceId: '20', weavingPointId: '40', qty: 5 },
           'user-1',
           'thanh-pham',
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('cho phép caller giới hạn ở kho thành phẩm PHỤ nhận đan (2026-09-03 - trước đây so literal nên chỉ đúng "thanh-pham" gốc mới qua được)', async () => {
+      prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: 10 } });
+      prisma.weavingReceipt.create.mockResolvedValue(receiptRow);
+      await expect(
+        service.receive(
+          '1',
+          { pieceId: '20', weavingPointId: '40', qty: 5 },
+          'user-1',
+          'thanh-pham-1735689000000',
         ),
       ).resolves.toBeDefined();
     });

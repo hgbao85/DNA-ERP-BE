@@ -6,6 +6,8 @@ describe('WarehousesService', () => {
   let service: WarehousesService;
   let prisma: {
     warehouse: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock; delete: jest.Mock };
+    user: { deleteMany: jest.Mock };
+    $transaction: jest.Mock;
   };
 
   const protectedWarehouse = {
@@ -34,6 +36,10 @@ describe('WarehousesService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
+      user: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      // Array-form $transaction: các promise đã được gọi (jest.fn trả sẵn) trước khi truyền vào,
+      // Promise.all là đủ để mô phỏng đúng ngữ nghĩa "chạy cùng nhau, 1 cái throw thì cả 2 reject".
+      $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
     };
     service = new WarehousesService(prisma as unknown as PrismaServiceType);
   });
@@ -78,6 +84,28 @@ describe('WarehousesService', () => {
       prisma.warehouse.findUnique.mockResolvedValue(null);
 
       await expect(service.remove('999')).rejects.toThrow(NotFoundException);
+    });
+
+    it('xoá kho kèm mọi tài khoản gắn warehouseScope đúng kho này, cùng 1 transaction (2026-09-03 - trước đây tài khoản Thủ kho sống mồ côi sau khi kho bị xoá)', async () => {
+      prisma.warehouse.findUnique.mockResolvedValue(ordinaryWarehouse);
+      prisma.user.deleteMany.mockResolvedValue({ count: 1 });
+
+      await service.remove('2');
+
+      expect(prisma.user.deleteMany).toHaveBeenCalledWith({
+        where: { warehouseScope: 'kho-phu-1' },
+      });
+      expect(prisma.$transaction).toHaveBeenCalledWith([
+        prisma.user.deleteMany.mock.results[0].value,
+        prisma.warehouse.delete.mock.results[0].value,
+      ]);
+    });
+
+    it('vẫn ném lỗi khi bản thân việc xoá kho thất bại (vd còn tồn kho/vật tư tham chiếu) - transaction đảm bảo phía Prisma không commit lẻ tài khoản đã xoá', async () => {
+      prisma.warehouse.findUnique.mockResolvedValue(ordinaryWarehouse);
+      prisma.warehouse.delete.mockRejectedValue(new Error('FK constraint violation'));
+
+      await expect(service.remove('2')).rejects.toThrow('FK constraint violation');
     });
   });
 

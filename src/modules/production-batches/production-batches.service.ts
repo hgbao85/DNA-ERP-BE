@@ -22,6 +22,7 @@ import {
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { isFamilyScope } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
@@ -41,9 +42,13 @@ export type ProductionBatchRow = Prisma.ProductionBatchGetPayload<{
   include: typeof PRODUCTION_BATCH_INCLUDE;
 }>;
 
-/// Kho vật lý duy nhất liên quan đến đoạn sắt tồn - cùng giá trị STEEL_WAREHOUSE_CODE ở
-/// steel-issues.service.ts (đoạn Phôi cắt ra nhập vào đây, thủ kho tự đếm/tự nhập qua
-/// POST /stock-ledger/adjust - xem docs/quy-doi-doan-phoi.md, KHÔNG tự động từ CuttingProposal).
+/// Kho vật lý MẶC ĐỊNH liên quan đến đoạn sắt tồn (đoạn Phôi cắt ra nhập vào đây, thủ kho tự
+/// đếm/tự nhập qua POST /stock-ledger/adjust - xem docs/quy-doi-doan-phoi.md, KHÔNG tự động từ
+/// CuttingProposal). Đoạn sắt (segmentSpecId) KHÔNG phải Material nên không có warehouseId để tra
+/// động như MaterialIssuesService/PackagingIssuesService (2026-09-03) - thay vào đó dùng chính
+/// warehouseScope của người báo sản lượng (PHOI/HAN, mỗi tài khoản chỉ gắn đúng 1 kho phoi-son-han
+/// cụ thể) làm kho nguồn, chỉ fallback về kho gốc khi caller không có scope (PRODUCTION_MANAGER/
+/// BOSS/ADMIN báo hộ, hoặc dữ liệu cũ chưa gán warehouseScope).
 const STEEL_WAREHOUSE_CODE = 'phoi-son-han';
 /// Kho ảo cố định (protected-warehouse-codes.constant.ts) - cùng điểm đến dùng ở
 /// MaterialIssuesService/CuttingProposalsService cho mọi luồng "tiêu hao tại xưởng".
@@ -74,10 +79,18 @@ export class ProductionBatchesService {
     dto: CreateProductionBatchDto,
     reportedById: string,
     callerMfgRole: string | null,
+    warehouseScope: string | null,
     idempotencyKey?: string,
   ): Promise<ProductionBatchResponseDto> {
     this.assertConsumableStage(dto.stage);
     this.assertMfgRoleMatchesStage(callerMfgRole, dto.stage);
+    // Kho phoi-son-han CỤ THỂ để trừ tồn đoạn sắt - lấy từ chính scope của người báo (mỗi tài
+    // khoản PHOI/HAN chỉ gắn đúng 1 kho), fallback về kho gốc nếu không có scope (quản lý/tổng báo
+    // hộ). Không dùng warehouseScope thẳng nếu nó KHÔNG thuộc gia đình phoi-son-han (dữ liệu bất
+    // thường) - vẫn fallback an toàn về kho gốc thay vì trừ nhầm kho khác.
+    const sourceWarehouseCode = isFamilyScope(warehouseScope, 'phoi-son-han')
+      ? warehouseScope!
+      : STEEL_WAREHOUSE_CODE;
 
     if (idempotencyKey) {
       const existing = await this.prisma.productionBatch.findUnique({
@@ -89,6 +102,7 @@ export class ProductionBatchesService {
           undefined,
           { ...existing, bomRevisionId: existing.productionOrder.bomRevisionId },
           reportedById,
+          sourceWarehouseCode,
         );
         return this.toResponseDto(existing);
       }
@@ -127,6 +141,7 @@ export class ProductionBatchesService {
           tx,
           { ...batch, bomRevisionId: order.bomRevisionId },
           reportedById,
+          sourceWarehouseCode,
         );
         return batch;
       },
@@ -156,6 +171,7 @@ export class ProductionBatchesService {
       stage: MfgStage;
     },
     reportedById: string,
+    sourceWarehouseCode: string,
   ): Promise<void> {
     const db = tx ?? this.prisma;
     const pieceBoms = await db.pieceBom.findMany({
@@ -185,7 +201,7 @@ export class ProductionBatchesService {
       if (batch.stage !== consumeStage) return;
 
       const [fromWarehouse, toWarehouse] = await Promise.all([
-        db.warehouse.findUniqueOrThrow({ where: { code: STEEL_WAREHOUSE_CODE } }),
+        db.warehouse.findUniqueOrThrow({ where: { code: sourceWarehouseCode } }),
         db.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
       ]);
 

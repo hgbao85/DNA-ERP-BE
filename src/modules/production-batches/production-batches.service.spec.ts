@@ -50,6 +50,7 @@ describe('ProductionBatchesService', () => {
     needsSon: true,
   };
   const steelWarehouse = { id: 90n, code: 'phoi-son-han' };
+  const steelWarehouse2 = { id: 95n, code: 'phoi-son-han-2' };
   const productionWarehouse = { id: 91n, code: 'PRODUCTION' };
 
   const batchRow = {
@@ -107,7 +108,13 @@ describe('ProductionBatchesService', () => {
         findUniqueOrThrow: jest
           .fn()
           .mockImplementation(({ where: { code } }: { where: { code: string } }) =>
-            Promise.resolve(code === 'phoi-son-han' ? steelWarehouse : productionWarehouse),
+            Promise.resolve(
+              code === 'phoi-son-han'
+                ? steelWarehouse
+                : code === 'phoi-son-han-2'
+                  ? steelWarehouse2
+                  : productionWarehouse,
+            ),
           ),
       },
       // assertItemPiHasActiveFloorLocked() (vá race TOCTOU, 2026-09-03) - FOR UPDATE lên
@@ -129,7 +136,7 @@ describe('ProductionBatchesService', () => {
     it('happy path - mfgRole null (quản lý) tạo lô mới', async () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
 
-      const result = await service.create('1', dto, 'user-han', null);
+      const result = await service.create('1', dto, 'user-han', null, null);
 
       expect(prisma.productionBatch.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -151,7 +158,7 @@ describe('ProductionBatchesService', () => {
         { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
       ]);
 
-      const result = await service.create('1', dto, 'user-han', null, 'idem-key-1');
+      const result = await service.create('1', dto, 'user-han', null, null, 'idem-key-1');
 
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
       expect(result.id).toBe('700');
@@ -162,11 +169,11 @@ describe('ProductionBatchesService', () => {
 
     it('cho phép mfgRole khớp đúng stage (HAN)', async () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
-      await expect(service.create('1', dto, 'user-han', MfgRole.HAN)).resolves.toBeDefined();
+      await expect(service.create('1', dto, 'user-han', MfgRole.HAN, null)).resolves.toBeDefined();
     });
 
     it('ném ForbiddenException khi mfgRole không khớp stage (SON báo hộ HAN)', async () => {
-      await expect(service.create('1', dto, 'user-son', MfgRole.SON)).rejects.toThrow(
+      await expect(service.create('1', dto, 'user-son', MfgRole.SON, null)).rejects.toThrow(
         ForbiddenException,
       );
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
@@ -174,7 +181,7 @@ describe('ProductionBatchesService', () => {
 
     it('ném BadRequestException khi stage không phải PHOI/HAN/SON', async () => {
       await expect(
-        service.create('1', { ...dto, stage: MfgStage.DAN }, 'user-1', null),
+        service.create('1', { ...dto, stage: MfgStage.DAN }, 'user-1', null, null),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
     });
@@ -188,7 +195,7 @@ describe('ProductionBatchesService', () => {
       const phoiBatchRow = { ...batchRow, stage: MfgStage.PHOI, reportedById: 'user-phoi' };
 
       it('ném BadRequestException khi báo PHOI cho mảnh needsHan=true (mảnh thường, phải qua Hàn)', async () => {
-        await expect(service.create('1', phoiDto, 'user-phoi', null)).rejects.toThrow(
+        await expect(service.create('1', phoiDto, 'user-phoi', null, null)).rejects.toThrow(
           BadRequestException,
         );
         expect(prisma.productionBatch.create).not.toHaveBeenCalled();
@@ -202,7 +209,7 @@ describe('ProductionBatchesService', () => {
         });
         prisma.productionBatch.create.mockResolvedValue(phoiBatchRow);
 
-        const result = await service.create('1', phoiDto, 'user-phoi', null);
+        const result = await service.create('1', phoiDto, 'user-phoi', null, null);
 
         expect(prisma.productionBatch.create).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -221,12 +228,12 @@ describe('ProductionBatchesService', () => {
         });
         prisma.productionBatch.create.mockResolvedValue(phoiBatchRow);
         await expect(
-          service.create('1', phoiDto, 'user-phoi', MfgRole.PHOI),
+          service.create('1', phoiDto, 'user-phoi', MfgRole.PHOI, null),
         ).resolves.toBeDefined();
       });
 
       it('ném ForbiddenException khi mfgRole không khớp stage (HAN báo hộ PHOI)', async () => {
-        await expect(service.create('1', phoiDto, 'user-han', MfgRole.HAN)).rejects.toThrow(
+        await expect(service.create('1', phoiDto, 'user-han', MfgRole.HAN, null)).rejects.toThrow(
           ForbiddenException,
         );
         expect(prisma.productionBatch.create).not.toHaveBeenCalled();
@@ -247,31 +254,37 @@ describe('ProductionBatchesService', () => {
         });
         prisma.productionBatch.create.mockResolvedValue(phoiBatchRow);
 
-        await expect(service.create('1', phoiDto, 'user-phoi', null)).resolves.toBeDefined();
+        await expect(service.create('1', phoiDto, 'user-phoi', null, null)).resolves.toBeDefined();
         expect(prisma.productionBatch.create).toHaveBeenCalled();
       });
     });
 
     it('ném NotFoundException khi production order không tồn tại', async () => {
       prisma.productionOrder.findUnique.mockResolvedValue(null);
-      await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(NotFoundException);
+      await expect(service.create('1', dto, 'user-han', null, null)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('ném NotFoundException khi mảnh không thuộc BOM của lệnh sản xuất này', async () => {
       prisma.bomPiece.findUnique.mockResolvedValue(null);
-      await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(NotFoundException);
+      await expect(service.create('1', dto, 'user-han', null, null)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('ném BadRequestException khi mảnh không cần qua đúng stage (needsHan=false báo HAN)', async () => {
       prisma.bomPiece.findUnique.mockResolvedValue({ ...bomPieceRow, needsHan: false });
-      await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(BadRequestException);
+      await expect(service.create('1', dto, 'user-han', null, null)).rejects.toThrow(
+        BadRequestException,
+      );
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
     });
 
     it('ném BadRequestException khi mảnh không cần qua đúng stage (needsSon=false báo SON)', async () => {
       prisma.bomPiece.findUnique.mockResolvedValue({ ...bomPieceRow, needsSon: false });
       await expect(
-        service.create('1', { ...dto, stage: MfgStage.SON }, 'user-son', null),
+        service.create('1', { ...dto, stage: MfgStage.SON }, 'user-son', null, null),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
     });
@@ -283,7 +296,9 @@ describe('ProductionBatchesService', () => {
     it('ném ConflictException khi PI của order chưa có SKU nào ACTIVE - áp dụng cho cả PHOI/HAN/SON vì create() dùng chung', async () => {
       prisma.productionOrder.findFirst.mockResolvedValue(null);
 
-      await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(ConflictException);
+      await expect(service.create('1', dto, 'user-han', null, null)).rejects.toThrow(
+        ConflictException,
+      );
       expect(prisma.productionInvoiceItem.findUniqueOrThrow).toHaveBeenCalledWith({
         where: { id: 20n },
         select: { productionInvoiceId: true },
@@ -302,7 +317,7 @@ describe('ProductionBatchesService', () => {
       prisma.productionOrder.findFirst.mockResolvedValue({ id: 999n }); // SKU khác trong cùng PI
       prisma.productionBatch.create.mockResolvedValue(batchRow);
 
-      await expect(service.create('1', dto, 'user-han', null)).resolves.toBeDefined();
+      await expect(service.create('1', dto, 'user-han', null, null)).resolves.toBeDefined();
     });
 
     // 2026-09-03: assertItemPiHasActiveFloor() ở trên đọc TRƯỚC khi mở transaction (fast-path) -
@@ -313,7 +328,9 @@ describe('ProductionBatchesService', () => {
     it('ném ConflictException khi race: pre-check thấy ACTIVE nhưng SELECT FOR UPDATE trong transaction đọc lại thấy PAUSED (TOCTOU)', async () => {
       prisma.$queryRaw.mockResolvedValue([{ floorStage: 'PAUSED' }]);
 
-      await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(ConflictException);
+      await expect(service.create('1', dto, 'user-han', null, null)).rejects.toThrow(
+        ConflictException,
+      );
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
     });
   });
@@ -325,7 +342,7 @@ describe('ProductionBatchesService', () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
       prisma.pieceBom.findMany.mockResolvedValue([]);
 
-      await service.create('1', dto, 'user-han', null);
+      await service.create('1', dto, 'user-han', null, null);
 
       expect(prisma.pieceBom.findMany).toHaveBeenCalledWith({
         where: { bomRevisionId: order.bomRevisionId, pieceId: 40n },
@@ -340,7 +357,7 @@ describe('ProductionBatchesService', () => {
         { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
       ]);
 
-      await service.create('1', dto, 'user-han', null);
+      await service.create('1', dto, 'user-han', null, null);
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
@@ -358,6 +375,34 @@ describe('ProductionBatchesService', () => {
       );
     });
 
+    it('2026-09-03: người báo scoped ở kho phoi-son-han PHỤ thì trừ tồn đúng kho phụ đó, không còn hardcode về kho gốc', async () => {
+      prisma.productionBatch.create.mockResolvedValue(batchRow);
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
+      ]);
+
+      await service.create('1', dto, 'user-han', null, 'phoi-son-han-2');
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ fromWarehouseId: steelWarehouse2.id }),
+        prisma,
+      );
+    });
+
+    it('2026-09-03: warehouseScope KHÔNG thuộc gia đình phoi-son-han (dữ liệu bất thường) thì fallback về kho gốc thay vì trừ nhầm kho khác', async () => {
+      prisma.productionBatch.create.mockResolvedValue(batchRow);
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
+      ]);
+
+      await service.create('1', dto, 'user-han', null, 'vat-tu-tp');
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ fromWarehouseId: steelWarehouse.id }),
+        prisma,
+      );
+    });
+
     it('nhiều PieceBom (1 mảnh ghép từ nhiều cỡ đoạn) - ghi đủ N dòng StockLedger, mỗi dòng đúng segmentSpecId/qty riêng', async () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
       prisma.pieceBom.findMany.mockResolvedValue([
@@ -365,7 +410,7 @@ describe('ProductionBatchesService', () => {
         { id: 2n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 61n, qtyPerPiece: 1 },
       ]);
 
-      await service.create('1', dto, 'user-han', null);
+      await service.create('1', dto, 'user-han', null, null);
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(2);
       expect(stockLedgerService.postEntry).toHaveBeenNthCalledWith(
@@ -390,7 +435,7 @@ describe('ProductionBatchesService', () => {
         .mockResolvedValueOnce({})
         .mockRejectedValueOnce(new Error('mất kết nối DB giữa chừng'));
 
-      await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(
+      await expect(service.create('1', dto, 'user-han', null, null)).rejects.toThrow(
         'mất kết nối DB giữa chừng',
       );
       // create() + postSegmentConsumeEntries chạy trong CÙNG $transaction - lỗi ở dòng ledger thứ
@@ -418,7 +463,7 @@ describe('ProductionBatchesService', () => {
       ]);
       // bomPieceRow mặc định (beforeEach) đã needsHan=true+needsSon=true, không cần override.
 
-      await service.create('1', sonDto, 'user-son', null);
+      await service.create('1', sonDto, 'user-son', null, null);
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -435,7 +480,7 @@ describe('ProductionBatchesService', () => {
         { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
       ]);
 
-      await service.create('1', sonDto, 'user-son', null);
+      await service.create('1', sonDto, 'user-son', null, null);
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
@@ -468,7 +513,7 @@ describe('ProductionBatchesService', () => {
     it('không có PieceMaterialYield cho piece - không gọi postEntry', async () => {
       prisma.pieceMaterialYield.findUnique.mockResolvedValue(null);
 
-      await service.create('1', phoiDto, 'user-phoi', null);
+      await service.create('1', phoiDto, 'user-phoi', null, null);
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -480,7 +525,7 @@ describe('ProductionBatchesService', () => {
         material: { warehouse: aluminumWarehouse },
       });
 
-      await service.create('1', phoiDto, 'user-phoi', null);
+      await service.create('1', phoiDto, 'user-phoi', null, null);
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
@@ -505,7 +550,7 @@ describe('ProductionBatchesService', () => {
         material: { warehouse: null },
       });
 
-      await service.create('1', phoiDto, 'user-phoi', null);
+      await service.create('1', phoiDto, 'user-phoi', null, null);
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -525,7 +570,7 @@ describe('ProductionBatchesService', () => {
         material: { warehouse: aluminumWarehouse },
       });
 
-      await service.create('1', hanDto, 'user-han', null);
+      await service.create('1', hanDto, 'user-han', null, null);
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });

@@ -41,10 +41,10 @@ const MATERIAL_ISSUE_INCLUDE = {
 
 type MaterialIssueRow = Prisma.MaterialIssueGetPayload<{ include: typeof MATERIAL_ISSUE_INCLUDE }>;
 
-/// Kho vật lý duy nhất liên quan - đúng ghi chú SEED_WAREHOUSES "Sơn, dây, vật tư tiêu hao sản
-/// xuất", cùng giá trị WEAVING_WAREHOUSE_CODE ở weaving-issues.service.ts (2 domain dùng chung
-/// 1 kho vật lý, khác mục đích).
-const MATERIAL_WAREHOUSE_CODE = 'vat-tu-tp';
+/// Kho vật lý để trừ tồn/ghi ledger KHÔNG còn hardcode 1 code - đọc động từ Material.warehouseId
+/// (2026-09-03, mirror CuttingProposalsService.approve(): mỗi vật tư xuất đúng theo kho đã khai
+/// trên chính vật tư đó, cho phép nhiều kho vat-tu-tp-* cùng tồn tại thay vì 1 kho vat-tu-tp
+/// gốc duy nhất như trước).
 /// Kho ảo cố định (protected-warehouse-codes.constant.ts) - cùng điểm đến STEEL_ISSUE dùng ở
 /// CuttingProposalsService.approve(), PRODUCTION_WAREHOUSE_CODE ở đó.
 const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
@@ -78,7 +78,6 @@ export class MaterialIssuesService {
     warehouseScope: string | null,
     idempotencyKey?: string,
   ): Promise<MaterialIssueResponseDto> {
-    this.assertWarehouseScope(warehouseScope);
     this.assertConsumableStage(dto.stage);
 
     if (idempotencyKey) {
@@ -95,10 +94,10 @@ export class MaterialIssuesService {
     const order = await this.findOrderOrThrow(productionOrderId);
     await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'xuất vật tư');
     const materialBigId = parseBigIntId(dto.materialId);
-    await this.findMaterialOrThrow(materialBigId);
-    const warehouse = await this.prisma.warehouse.findUniqueOrThrow({
-      where: { code: MATERIAL_WAREHOUSE_CODE },
-    });
+    const warehouse = await this.findMaterialWarehouseOrThrow(materialBigId);
+    // Gate theo ĐÚNG instance kho vật lý của vật tư này (không chỉ cùng gia đình vat-tu-tp) - Thủ
+    // kho của vat-tu-tp-2 không được xuất vật tư đang thật sự nằm ở kho vat-tu-tp gốc và ngược lại.
+    this.assertWarehouseScope(warehouseScope, warehouse.code);
 
     // Khoá advisory theo (H2 fix) - resolvePlannedQty/sumIssued/create trước đây đọc-rồi-ghi
     // không transaction/lock: 2 request gần đồng thời cùng thấy 1 `remaining` rồi cùng xuất, tổng
@@ -290,12 +289,19 @@ export class MaterialIssuesService {
   }
 
   private async postLedgerEntry(issue: MaterialIssueRow, createdById: string): Promise<void> {
-    const [fromWarehouse, toWarehouse] = await Promise.all([
-      this.prisma.warehouse.findUniqueOrThrow({ where: { code: MATERIAL_WAREHOUSE_CODE } }),
-      this.prisma.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
-    ]);
+    // fromWarehouseId đọc thẳng từ Material.warehouseId (đã include ở MATERIAL_ISSUE_INCLUDE) -
+    // không còn tra theo literal code, mirror CuttingProposalsService.approve(). Chỉ chưa từng null
+    // được ở đây vì create() đã chặn qua findMaterialWarehouseOrThrow() trước khi tạo bản ghi.
+    if (!issue.material.warehouseId) {
+      throw new BadRequestException(
+        `Vật tư ${issue.material.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi ghi sổ`,
+      );
+    }
+    const toWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
+      where: { code: PRODUCTION_WAREHOUSE_CODE },
+    });
     await this.stockLedgerService.postEntry({
-      fromWarehouseId: fromWarehouse.id,
+      fromWarehouseId: issue.material.warehouseId,
       toWarehouseId: toWarehouse.id,
       materialId: issue.materialId,
       qty: issue.issuedQty.toNumber(),
@@ -307,11 +313,13 @@ export class MaterialIssuesService {
   }
 
   /** null = tổng kho (BOSS/ADMIN) - không có gì để chặn, cùng idiom SteelIssuesService/
-   *  WeavingIssuesService.assertWarehouseScope(). */
-  private assertWarehouseScope(warehouseScope: string | null): void {
-    if (warehouseScope && warehouseScope !== MATERIAL_WAREHOUSE_CODE) {
+   *  WeavingIssuesService.assertWarehouseScope(). Khác null: phải khớp ĐÚNG kho vật lý cụ thể mà
+   *  vật tư này đang nằm (expectedWarehouseCode, đọc từ Material.warehouseId) - không chỉ cùng gia
+   *  đình vat-tu-tp, để Thủ kho của kho phụ không xuất nhầm vật tư đang thật sự ở kho khác. */
+  private assertWarehouseScope(warehouseScope: string | null, expectedWarehouseCode: string): void {
+    if (warehouseScope && warehouseScope !== expectedWarehouseCode) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được xuất vật tư tiêu hao từ kho '${MATERIAL_WAREHOUSE_CODE}'`,
+        `Caller bị giới hạn ở kho '${warehouseScope}', không được xuất vật tư tiêu hao từ kho '${expectedWarehouseCode}'`,
       );
     }
   }
@@ -377,11 +385,23 @@ export class MaterialIssuesService {
     return order;
   }
 
-  private async findMaterialOrThrow(id: bigint): Promise<void> {
-    const material = await this.prisma.material.findUnique({ where: { id } });
+  /** Kho vật lý CỤ THỂ của vật tư này, đọc từ Material.warehouseId (mirror
+   *  CuttingProposalsService.approve()) - 400 rõ ràng nếu Admin chưa cấu hình Kho cho vật tư đó,
+   *  thay vì âm thầm rơi vào 1 kho mặc định sai. */
+  private async findMaterialWarehouseOrThrow(id: bigint): Promise<{ id: bigint; code: string }> {
+    const material = await this.prisma.material.findUnique({
+      where: { id },
+      select: { code: true, warehouseId: true, warehouse: { select: { id: true, code: true } } },
+    });
     if (!material) {
       throw new NotFoundException(`Material ${id} not found`);
     }
+    if (!material.warehouseId || !material.warehouse) {
+      throw new BadRequestException(
+        `Vật tư ${material.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi xuất`,
+      );
+    }
+    return material.warehouse;
   }
 
   private async findOneOrThrow(id: string): Promise<MaterialIssueRow> {

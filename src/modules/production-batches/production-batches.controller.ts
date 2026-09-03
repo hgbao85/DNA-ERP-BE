@@ -33,9 +33,17 @@ export class ProductionBatchesController {
     @Body() dto: CreateProductionBatchDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('mfgRole') mfgRole: string | null,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
     @Headers('Idempotency-Key') idempotencyKey: string | undefined,
   ) {
-    return this.productionBatchesService.create(id, dto, userId, mfgRole, idempotencyKey);
+    return this.productionBatchesService.create(
+      id,
+      dto,
+      userId,
+      mfgRole,
+      warehouseScope,
+      idempotencyKey,
+    );
   }
 
   @Get('production-orders/:id/production-batches')

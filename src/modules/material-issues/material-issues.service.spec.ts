@@ -50,7 +50,15 @@ describe('MaterialIssuesService', () => {
     productionInvoiceItemId: 20n,
     productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
   };
-  const material = { id: 30n, code: 'CO2-25', name: 'Khí CO₂ (bình 25kg)' };
+  // warehouseId/warehouse (2026-09-03): findMaterialWarehouseOrThrow() giờ đọc động Kho của vật
+  // tư này thay vì hardcode literal 'vat-tu-tp' - mirror CuttingProposalsService.approve().
+  const material = {
+    id: 30n,
+    code: 'CO2-25',
+    name: 'Khí CO₂ (bình 25kg)',
+    warehouseId: 2n,
+    warehouse: { id: 2n, code: 'vat-tu-tp' },
+  };
   const consumableBomRow = {
     id: 1n,
     bomRevisionId: 5n,
@@ -187,6 +195,39 @@ describe('MaterialIssuesService', () => {
     it('cho phép caller không có warehouseScope (tổng kho)', async () => {
       prisma.materialIssue.create.mockResolvedValue(issueRow);
       await expect(service.create('1', dto, 'user-1', null)).resolves.toBeDefined();
+    });
+
+    it('2026-09-03: xuất/ghi ledger đúng kho vat-tu-tp PHỤ mà vật tư này thật sự nằm (không còn hardcode kho gốc) - đồng thời chỉ Thủ kho của ĐÚNG kho phụ đó mới xuất được, kho gốc vat-tu-tp bị chặn', async () => {
+      const materialAtSubWarehouse = {
+        ...material,
+        warehouseId: 7n,
+        warehouse: { id: 7n, code: 'vat-tu-tp-2' },
+      };
+      prisma.material.findUnique.mockResolvedValue(materialAtSubWarehouse);
+      prisma.materialIssue.create.mockResolvedValue({
+        ...issueRow,
+        material: materialAtSubWarehouse,
+      });
+
+      await expect(service.create('1', dto, 'user-1', 'vat-tu-tp')).rejects.toThrow(
+        ForbiddenException,
+      );
+
+      const result = await service.create('1', dto, 'user-1', 'vat-tu-tp-2');
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ fromWarehouseId: 7n, toWarehouseId: 9n }),
+      );
+      expect(result.id).toBe('100');
+    });
+
+    it('ném BadRequestException khi vật tư chưa được Admin cấu hình Kho (Material.warehouseId null)', async () => {
+      prisma.material.findUnique.mockResolvedValue({
+        ...material,
+        warehouseId: null,
+        warehouse: null,
+      });
+      await expect(service.create('1', dto, 'user-1', null)).rejects.toThrow(BadRequestException);
+      expect(prisma.materialIssue.create).not.toHaveBeenCalled();
     });
 
     it('ném BadRequestException khi stage không phải HAN/SON', async () => {
