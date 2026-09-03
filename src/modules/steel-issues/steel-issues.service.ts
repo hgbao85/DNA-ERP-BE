@@ -16,6 +16,10 @@ import {
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import {
+  assertPiHasActiveFloor,
+  assertPiHasActiveFloorLocked,
+} from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -167,6 +171,8 @@ export class SteelIssuesService {
 
     const created = await this.prisma.$transaction(
       async (tx) => {
+        await assertPiHasActiveFloorLocked(tx, invoice.id, 'xuất sắt');
+
         const issue = await tx.steelIssue.create({
           data: {
             productionInvoiceId: invoice.id,
@@ -373,6 +379,7 @@ export class SteelIssuesService {
         `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ ISSUED mới xác nhận nhận được`,
       );
     }
+    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'xác nhận nhận sắt');
     const updated = await this.prisma.steelIssue.update({
       where: { id: issue.id },
       data: { status: SteelIssueStatus.RECEIVED },
@@ -412,6 +419,7 @@ export class SteelIssuesService {
         `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ RECEIVED mới nhập đợt cắt được`,
       );
     }
+    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'nhập đợt cắt');
 
     const specIds = dto.segments.map((seg) => parseBigIntId(seg.segmentSpecId));
     if (new Set(specIds.map(String)).size !== specIds.length) {
@@ -525,6 +533,7 @@ export class SteelIssuesService {
         `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ RECEIVED mới báo cắt xong được`,
       );
     }
+    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'báo cắt xong');
     const used = await this.prisma.cutBundle.aggregate({
       where: { steelIssueId: issue.id },
       _sum: { barCount: true },
@@ -887,6 +896,7 @@ export class SteelIssuesService {
         `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ IN_PROCESS mới nhập được công đoạn chi tiết`,
       );
     }
+    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'nhập công đoạn chi tiết');
     const requiredSteps = await this.resolveRequiredSteps(
       issue.productionInvoiceId,
       issue.materialId,
@@ -1038,6 +1048,7 @@ export class SteelIssuesService {
     if (issue.completedSteps.includes(dto.step)) {
       return this.toResponseDto(issue, requiredSteps);
     }
+    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'đánh dấu công đoạn xong');
 
     const completedSteps = [...issue.completedSteps, dto.step];
     const done = requiredSteps.every((s) => completedSteps.includes(s));

@@ -27,7 +27,7 @@ describe('SteelIssuesService', () => {
       update: jest.Mock;
     };
     productionInvoice: { findUnique: jest.Mock };
-    productionOrder: { findMany: jest.Mock };
+    productionOrder: { findMany: jest.Mock; findFirst: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     material: { findMany: jest.Mock };
@@ -102,7 +102,13 @@ describe('SteelIssuesService', () => {
         update: jest.fn(),
       },
       productionInvoice: { findUnique: jest.fn().mockResolvedValue(invoice) },
-      productionOrder: { findMany: jest.fn().mockResolvedValue([order]) },
+      // findFirst dùng bởi assertPiHasActiveFloor() (floor-gate.util.ts) - gọi từ receive/
+      // recordCutBatch/finishCutting/recordStepBatch/completeStep (2026-09-01, vá lỗ hổng gate chỉ
+      // che create()). Mặc định trả `order` (floorStage ACTIVE) để không phá các test hiện có.
+      productionOrder: {
+        findMany: jest.fn().mockResolvedValue([order]),
+        findFirst: jest.fn().mockResolvedValue(order),
+      },
       pieceBom: { findMany: jest.fn().mockResolvedValue([pieceBomRow]) },
       bomPiece: { findMany: jest.fn().mockResolvedValue([]) },
       material: { findMany: jest.fn().mockResolvedValue([]) },
@@ -143,7 +149,14 @@ describe('SteelIssuesService', () => {
       stockReservation: { update: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
       warehouse: { findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 950n }) },
-      $queryRaw: jest.fn(() => Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }])),
+      // 2026-09-03: assertPiHasActiveFloorLocked() (vá race TOCTOU) giờ cũng dùng $queryRaw
+      // (FOR UPDATE lên production_orders) ngay dòng đầu transaction create() - phải phân nhánh
+      // theo nội dung câu SQL, không còn chỉ có 1 loại câu raw duy nhất như trước.
+      $queryRaw: jest.fn((strings: TemplateStringsArray) =>
+        strings.join('').includes('production_orders')
+          ? Promise.resolve([{ floorStage: 'ACTIVE' }])
+          : Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }]),
+      ),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     stockLedgerService = { postEntry: jest.fn() };
@@ -305,6 +318,24 @@ describe('SteelIssuesService', () => {
         service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 20 }, 'user-1', null),
       ).resolves.toBeDefined();
     });
+
+    // 2026-09-03: assertOrdersHaveActiveFloor() ở TRÊN chỉ đọc `orders` đã fetch sẵn TRƯỚC khi mở
+    // transaction (fast-path) - không tự chốt được race QLSX bấm "Tạm dừng" đúng lúc giữa đọc và
+    // ghi. assertPiHasActiveFloorLocked() (FOR UPDATE, chạy NGAY ĐẦU transaction) mới là nguồn
+    // đúng cuối cùng - test này giả lập đúng race đó: pre-check thấy ACTIVE (orders mock không đổi)
+    // nhưng câu SELECT FOR UPDATE bên trong transaction đọc lại thấy PAUSED.
+    it('ném ConflictException khi race: pre-check thấy ACTIVE nhưng SELECT FOR UPDATE trong transaction đọc lại thấy PAUSED (TOCTOU)', async () => {
+      prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) =>
+        strings.join('').includes('production_orders')
+          ? Promise.resolve([{ floorStage: 'PAUSED' }])
+          : Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }]),
+      );
+
+      await expect(
+        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 20 }, 'user-1', null),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.steelIssue.create).not.toHaveBeenCalled();
+    });
   });
 
   // B4 Đợt 2 (changelog mục 13) - phương án cắt duyệt SAU STEEL_ISSUE_RESERVATION_CUTOVER
@@ -433,6 +464,14 @@ describe('SteelIssuesService', () => {
 
       await expect(service.receive('100')).rejects.toThrow(ConflictException);
     });
+
+    it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc" (assertPiHasActiveFloor, 2026-09-01)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(issue);
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(service.receive('100')).rejects.toThrow(ConflictException);
+      expect(prisma.steelIssue.update).not.toHaveBeenCalled();
+    });
   });
 
   // Dùng chung cho recordCutBatch/finishCutting/completeStep - đợt đã được Phôi xác nhận nhận.
@@ -554,6 +593,19 @@ describe('SteelIssuesService', () => {
       ).rejects.toThrow(ConflictException);
       expect(prisma.cutBundle.create).not.toHaveBeenCalled();
     });
+
+    it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc" (assertPiHasActiveFloor, 2026-09-01)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.recordCutBatch('100', {
+          barCount: 1,
+          segments: [{ segmentSpecId: '30', qty: 8 }],
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.cutBundle.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('finishCutting', () => {
@@ -612,6 +664,15 @@ describe('SteelIssuesService', () => {
         }),
       );
       expect(result.status).toBe(SteelIssueStatus.IN_PROCESS);
+    });
+
+    it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc" (assertPiHasActiveFloor, 2026-09-01)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+      prisma.cutBundle.aggregate.mockResolvedValue({ _sum: { barCount: 19 } });
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(service.finishCutting('100')).rejects.toThrow(ConflictException);
+      expect(prisma.steelIssue.update).not.toHaveBeenCalled();
     });
   });
 
@@ -722,6 +783,16 @@ describe('SteelIssuesService', () => {
 
       expect(prisma.steelIssue.update).not.toHaveBeenCalled();
       expect(result.status).toBe(SteelIssueStatus.IN_PROCESS);
+    });
+
+    it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc" (assertPiHasActiveFloor, 2026-09-01)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(inProcessIssue);
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(service.completeStep('100', { step: ProcessStep.UON })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.steelIssue.update).not.toHaveBeenCalled();
     });
   });
 

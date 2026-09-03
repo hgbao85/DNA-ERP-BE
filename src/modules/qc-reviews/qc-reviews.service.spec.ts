@@ -307,6 +307,13 @@ describe('QcReviewsService', () => {
     it('ném NotFoundException nếu cỡ đoạn đó không có lỗi trong lần chấm', async () => {
       await expect(service.reportSegmentDone('100', '999')).rejects.toThrow(NotFoundException);
     });
+
+    it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc" (assertPiHasActiveFloor, 2026-09-01)', async () => {
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(service.reportSegmentDone('100', '30')).rejects.toThrow(ConflictException);
+      expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('recheck', () => {
@@ -377,6 +384,15 @@ describe('QcReviewsService', () => {
       await expect(
         service.recheck('100', { segments: [{ segmentSpecId: '999', remainingFailedQty: 0 }] }),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc" (assertPiHasActiveFloor, 2026-09-01)', async () => {
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.recheck('100', { segments: [{ segmentSpecId: '30', remainingFailedQty: 0 }] }),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
     });
   });
 

@@ -111,7 +111,14 @@ describe('MaterialIssuesService', () => {
           ),
       },
       $executeRaw: jest.fn().mockResolvedValue(0),
-      $queryRaw: jest.fn(() => Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }])),
+      // 2026-09-03: assertItemPiHasActiveFloorLocked() (vá race TOCTOU) giờ cũng dùng $queryRaw
+      // (FOR UPDATE lên production_orders) ngay dòng đầu transaction create() - phải phân nhánh
+      // theo nội dung câu SQL, không còn chỉ có 1 loại câu raw duy nhất như trước.
+      $queryRaw: jest.fn((strings: TemplateStringsArray) =>
+        strings.join('').includes('production_orders')
+          ? Promise.resolve([{ floorStage: 'ACTIVE' }])
+          : Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }]),
+      ),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
@@ -270,8 +277,12 @@ describe('MaterialIssuesService', () => {
       await service.create('1', dto, 'user-1', null);
 
       expect(prisma.$queryRaw).toHaveBeenCalled();
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
-      const rawCall = prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray;
+      // 2026-09-03: $queryRaw giờ cũng nhận call của assertItemPiHasActiveFloorLocked() (FOR UPDATE
+      // lên production_orders) chạy TRƯỚC - lọc đúng call chứa "stock_quant" thay vì giả định [0].
+      const rawCall = prisma.$queryRaw.mock.calls
+
+        .map(([strings]) => strings as TemplateStringsArray)
+        .find((strings) => strings.join('').includes('stock_quant'))!;
       expect(rawCall.join('')).toContain('FOR UPDATE');
       expect(rawCall.join('')).toContain('stock_quant');
     });
@@ -310,6 +321,22 @@ describe('MaterialIssuesService', () => {
       prisma.materialIssue.create.mockResolvedValue(issueRow);
 
       await expect(service.create('1', dto, 'user-1', null)).resolves.toBeDefined();
+    });
+
+    // 2026-09-03: assertItemPiHasActiveFloor() ở trên đọc TRƯỚC khi mở transaction (fast-path) -
+    // không tự chốt được race QLSX bấm "Tạm dừng" đúng lúc giữa đọc và ghi.
+    // assertItemPiHasActiveFloorLocked() (FOR UPDATE, chạy NGAY ĐẦU transaction) mới là nguồn đúng
+    // cuối cùng - test này giả lập đúng race đó: pre-check thấy ACTIVE (findFirst mock không đổi)
+    // nhưng câu SELECT FOR UPDATE bên trong transaction đọc lại thấy PAUSED.
+    it('ném ConflictException khi race: pre-check thấy ACTIVE nhưng SELECT FOR UPDATE trong transaction đọc lại thấy PAUSED (TOCTOU)', async () => {
+      prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) =>
+        strings.join('').includes('production_orders')
+          ? Promise.resolve([{ floorStage: 'PAUSED' }])
+          : Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }]),
+      );
+
+      await expect(service.create('1', dto, 'user-1', null)).rejects.toThrow(ConflictException);
+      expect(prisma.materialIssue.create).not.toHaveBeenCalled();
     });
   });
 
@@ -379,6 +406,13 @@ describe('MaterialIssuesService', () => {
       await expect(service.receive('100', { receivedQty: 6 }, 'user-2', null)).rejects.toThrow(
         BadRequestException,
       );
+      expect(prisma.materialIssue.update).not.toHaveBeenCalled();
+    });
+
+    it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc" (assertItemPiHasActiveFloor, 2026-09-01)', async () => {
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(service.receive('100', {}, 'user-2', null)).rejects.toThrow(ConflictException);
       expect(prisma.materialIssue.update).not.toHaveBeenCalled();
     });
   });

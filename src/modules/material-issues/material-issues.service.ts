@@ -17,7 +17,10 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
-import { assertItemPiHasActiveFloor } from '../../common/utils/floor-gate.util';
+import {
+  assertItemPiHasActiveFloor,
+  assertItemPiHasActiveFloorLocked,
+} from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -104,6 +107,7 @@ export class MaterialIssuesService {
     // pg_advisory_xact_lock qua lockBusinessKey() - xem comment ở đó.
     const created = await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `material-issue:${order.id}:${dto.stage}:${materialBigId}`);
+      await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, 'xuất vật tư');
 
       const plannedQty = await this.resolvePlannedQty(
         tx,
@@ -176,6 +180,11 @@ export class MaterialIssuesService {
       );
     }
     this.assertMfgRoleMatchesStage(callerMfgRole, issue.stage);
+    await assertItemPiHasActiveFloor(
+      this.prisma,
+      issue.productionOrder.productionInvoiceItemId,
+      'xác nhận nhận vật tư',
+    );
 
     const issuedQty = issue.issuedQty.toNumber();
     const receivedQty = dto.receivedQty ?? issuedQty;

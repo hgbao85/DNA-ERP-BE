@@ -174,6 +174,8 @@ export class QcReviewsService {
         `Cỡ đoạn ${segmentSpecId} của đợt sắt ${steelIssueId} đã báo bù đủ rồi, đang chờ KCS duyệt lại`,
       );
     }
+    const issue = await this.steelIssuesService.findOneRowOrThrow(steelIssueId);
+    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'báo bù đủ hàng lỗi');
 
     await this.prisma.qcReviewSegment.update({
       where: { id: segRow.id },
@@ -199,6 +201,8 @@ export class QcReviewsService {
     if (!review) {
       throw new NotFoundException(`Đợt sắt ${steelIssueId} chưa có KCS chấm nào`);
     }
+    const issue = await this.steelIssuesService.findOneRowOrThrow(steelIssueId);
+    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'duyệt lại hàng lỗi');
 
     const updates: { id: bigint; resolvedQty: number; phoiReportedAt: Date | null }[] = [];
     for (const seg of dto.segments) {
