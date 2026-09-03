@@ -537,9 +537,18 @@ describe('SkusService', () => {
       // Khác materialLines (WIRE/NAIL/...) - KHÔNG gọi material.update gán nhóm, vì nhóm "Vật tư
       // thành phẩm" do admin tự tạo (systemKey=null) "vô hình với logic Spec" (xem schema.prisma).
       expect(prisma.material.update).not.toHaveBeenCalled();
+      // qtyPerPiece không truyền -> mặc định 1, giữ nguyên hành vi trước 2026-09-03 (lúc đó
+      // PieceMaterialYieldPurchaseService ngầm định 1 piece = 1 miếng vật tư thành phẩm).
       expect(prisma.pieceMaterialYield.createMany).toHaveBeenCalledWith({
         data: [
-          { bomRevisionId: 10n, mfgProductId: 2n, pieceId: 20n, materialId: 80n, piecesPerBar: 12 },
+          {
+            bomRevisionId: 10n,
+            mfgProductId: 2n,
+            pieceId: 20n,
+            materialId: 80n,
+            piecesPerBar: 12,
+            qtyPerPiece: 1,
+          },
         ],
       });
     });
@@ -556,6 +565,8 @@ describe('SkusService', () => {
       ]);
       prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
+      // 2026-09-03: qtyPerPiece=3 - "1 pat gồm 3 miếng sắt lá" (tỷ lệ LẮP RÁP cho Sản xuất),
+      // độc lập với piecesPerBar=6 - "1 tấm sắt lá cắt được 6 miếng" (tỷ lệ CẮT cho Mua hàng).
       await service.updateManhQuota('5', {
         pieces: [
           {
@@ -563,7 +574,7 @@ describe('SkusService', () => {
             qtyPerUnit: 2,
             needsHan: true,
             segments: [],
-            materialYields: [{ materialId: '81', piecesPerBar: 6 }],
+            materialYields: [{ materialId: '81', piecesPerBar: 6, qtyPerPiece: 3 }],
           },
         ],
         enteredBy: 'NV Sat',
@@ -571,7 +582,14 @@ describe('SkusService', () => {
 
       expect(prisma.pieceMaterialYield.createMany).toHaveBeenCalledWith({
         data: [
-          { bomRevisionId: 10n, mfgProductId: 2n, pieceId: 21n, materialId: 81n, piecesPerBar: 6 },
+          {
+            bomRevisionId: 10n,
+            mfgProductId: 2n,
+            pieceId: 21n,
+            materialId: 81n,
+            piecesPerBar: 6,
+            qtyPerPiece: 3,
+          },
         ],
       });
     });

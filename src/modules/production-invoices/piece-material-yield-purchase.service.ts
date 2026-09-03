@@ -102,7 +102,13 @@ export class PieceMaterialYieldPurchaseService {
 
       const onHand = onHandPool.get(pieceKey) ?? 0;
       const net = Math.max(0, required - onHand);
-      const bars = Math.ceil(net / yieldRow.piecesPerBar);
+      // net (piece/mảnh còn thiếu) -> quy ra số miếng vật tư thành phẩm cần cắt (qtyPerPiece: số
+      // miếng lắp vào 1 mảnh, vd 1 "pat" gồm 3 miếng sắt lá - KHÔNG liên quan piecesPerBar, đó là
+      // tỷ lệ cắt để Mua hàng biết cần bao nhiêu cây/tấm). PHẢI nhân trước khi chia cho
+      // piecesPerBar - nhân sau khi chia (hoặc nhân vào `required`/`onHand` riêng rẽ trước khi trừ)
+      // làm lệch đơn vị giữa required (piece) và onHand (piece), ra kết quả sai.
+      const neededPieceMaterials = net * (yieldRow.qtyPerPiece ?? 1);
+      const bars = Math.ceil(neededPieceMaterials / yieldRow.piecesPerBar);
 
       const materialKey = yieldRow.materialId.toString();
       const acc = barsNeededByMaterial.get(materialKey) ?? {

@@ -773,6 +773,11 @@ model PieceMaterialYield {
   materialId    BigInt
   /// Số vật tư thành phẩm cắt được từ 1 đơn vị material (vd 1 cây thanh nhôm = 12 chân).
   piecesPerBar  Int
+  /// Số vật tư thành phẩm cần dùng cho 1 piece (mảnh) - vd 1 "pat" gồm 3 miếng sắt lá. Độc lập với
+  /// piecesPerBar (đó là tỷ lệ CẮT, dùng để tính số cây/tấm cần MUA; đây là tỷ lệ LẮP RÁP, dùng để
+  /// tính số miếng cần cắt). Default 1 để dữ liệu cũ giữ nguyên hành vi trước 2026-09-03 (lúc đó
+  /// code ngầm định 1 piece = 1 miếng, xem PieceMaterialYieldPurchaseService.computeAndUpsertProposals).
+  qtyPerPiece   Int    @default(1)
 
   bomRevision BomRevision @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
   piece       Piece       @relation(fields: [pieceId], references: [id])

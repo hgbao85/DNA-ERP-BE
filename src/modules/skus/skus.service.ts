@@ -781,6 +781,7 @@ export class SkusService {
       pieceId: bigint;
       materialId: bigint;
       piecesPerBar: number;
+      qtyPerPiece: number;
     }[] = [];
 
     for (const p of pieces) {
@@ -825,6 +826,7 @@ export class SkusService {
           pieceId,
           materialId,
           piecesPerBar: y.piecesPerBar,
+          qtyPerPiece: y.qtyPerPiece ?? 1,
         });
       }
     }
@@ -1126,6 +1128,7 @@ export class SkusService {
       materialSpec: r.material.spec,
       materialUnit: r.material.unit,
       piecesPerBar: r.piecesPerBar,
+      qtyPerPiece: r.qtyPerPiece,
     });
 
     for (const pf of pfs) {

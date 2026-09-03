@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: "Số lượng/mảnh" cho vật tư thành phẩm (qtyPerPiece)</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · Định mức "vật tư thành phẩm" — PieceMaterialYield.qtyPerPiece</div>
+    <h1>Tách bạch 2 tỷ lệ bị gộp làm một: "cắt được bao nhiêu" (Mua hàng) và "cần bao nhiêu" (Sản xuất)</h1>
+    <p class="lede">
+      KHSX hỏi ý nghĩa cột "Chiều dài / Số lượng/ĐVT" ở màn định mức mảnh, dẫn tới phát hiện
+      <code>piecesPerBar</code> (tỷ lệ CẮT — "1 tấm sắt lá cắt được N miếng", phục vụ Mua hàng) đang
+      bị code ngầm dùng luôn làm tỷ lệ LẮP RÁP ("1 mảnh cần bao nhiêu miếng", phục vụ Sản xuất) —
+      hai khái niệm khác hẳn nhau nhưng chỉ có 1 chỗ lưu. Hệ quả: nếu 1 mảnh (vd "pat") thật ra cần
+      nhiều hơn 1 miếng vật tư thành phẩm, công thức đề xuất mua nguyên liệu tính THIẾU. Đã xác nhận
+      lại đúng nghiệp vụ với Sếp qua 3 vòng trao đổi, thêm field <code>qtyPerPiece</code> độc lập,
+      và vá công thức mua hàng cho đúng đơn vị.
+    </p>
+    <div class="meta">
+      <span>03/09/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>1 migration DB — <b>đã áp dụng lên DB dev thật</b></span>
+      <span>810 test BE pass (46 suite) · 33 test FE (vitest) pass</span>
+      <span><b>Chưa commit</b> — chờ xem lại</span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li><code>PieceMaterialYield</code> thêm cột <code>qtyPerPiece Int @default(1)</code> — độc lập hoàn toàn với <code>piecesPerBar</code> có sẵn. Default 1 giữ nguyên 100% hành vi/số liệu của mọi SKU đã nhập trước đây.</li>
+      <li>Vá đúng 1 dòng quyết định toàn bộ độ chính xác của đề xuất mua: <code>bars = ceil(net / piecesPerBar)</code> → <code>bars = ceil(net × qtyPerPiece / piecesPerBar)</code> — nhân <b>sau</b> khi trừ tồn (<code>net</code>), không phải nhân riêng vào <code>required</code>/<code>onHand</code> trước khi trừ (sẽ lệch đơn vị, ra sai số).</li>
+      <li>FE: ô "Số lượng" ở nhóm Vật tư thành phẩm — vốn bị code ẩn cứng hoàn toàn (<code>childGroup !== 'vatTuTP'</code>) — nay hiện ra với nhãn "Số lượng/mảnh", tái dùng đúng field <code>qty</code> đã có sẵn trên <code>ManhChildRow</code> (dùng chung với Dây/Đinh/Tán rút/Nút nhựa), không cần thêm field mới ở tầng FE.</li>
+      <li>Ô <code>piecesPerBar</code> ("Số lượng/Tấm" hiện có) <b>giữ nguyên tuyệt đối</b>, không đổi 1 dòng nào theo yêu cầu tường minh — chỉ dùng cho Mua hàng, không liên quan sản xuất.</li>
+      <li>Vá kèm 1 bug đang ngủ: đổi tab nhóm vật tư con trong form không reset ô "Số lượng" — vô hại khi ô này bị ẩn cho vatTuTP, nhưng sẽ rò số liệu ngay khi ô được hiện ra nếu không vá cùng lúc.</li>
+      <li>Không đụng ràng buộc <code>@@unique([bomRevisionId, pieceId])</code> (1 mảnh vẫn chỉ khai đúng 1 loại vật tư thành phẩm) — Sếp xác nhận đúng mô hình nghiệp vụ hiện tại, không mở rộng thêm phạm vi.</li>
+      <li>Kiểm chứng Backend bằng API + DB thật (không phải mock): login → <code>POST /skus/:id/manh-quota</code> với <code>qtyPerPiece:3</code> → đọc thẳng Postgres xác nhận lưu đúng → đọc lại qua API khớp round-trip.</li>
+      <li><b>Chưa kiểm chứng được Frontend qua trình duyệt thật</b> — chrome-devtools MCP timeout kết nối suốt phiên, không tự khởi động lại được từ phía Claude Code.</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 1. BỐI CẢNH ═══════════════════════ -->
+  <div class="module" id="boicanh">
+    <h2>1. Bối cảnh — 1 cột dùng chung 2 nghĩa khác hẳn nhau</h2>
+    <p class="module-note">
+      Bắt đầu từ 1 câu hỏi đơn giản khi xem ảnh chụp màn "Quản lý định mức — Mảnh": cột
+      <i>"Chiều dài / Số lượng/ĐVT"</i> hiện số <code>10</code> cho dòng vật tư thành phẩm nghĩa là gì.
+    </p>
+
+    <div class="card">
+      <h3>3 vòng hiểu sai trước khi ra đúng nghiệp vụ</h3>
+      <p>Lần lượt đề xuất — và bị chỉnh lại — theo đúng thứ tự: (1) hiểu nhầm "PAT tự nó là 1 mảnh" (SKU cần 2 PAT → sửa "Số lượng/SKU"); (2) hiểu đúng cấu trúc ("PAT là 1 dòng vật tư nằm trong mảnh khác") nhưng đoán sai ý nghĩa con số 10 (tưởng đó là "1 tấm ra 10 mảnh"); (3) Sếp chốt chính xác: <code>piecesPerBar=10</code> là "1 tấm sắt la cắt được 10 <b>miếng</b> sắt la" (dữ liệu cho Mua hàng biết mua bao nhiêu tấm) — hoàn toàn tách biệt với "1 PAT gồm bao nhiêu miếng" (dữ liệu cho Sản xuất, <b>chưa có chỗ lưu</b>).</p>
+    </div>
+
+    <div class="callout">
+      <b>Ví dụ chốt nghiệp vụ:</b> 100 ghế, mỗi ghế 1 PAT, 1 PAT gồm 3 miếng sắt la, 1 tấm cắt được
+      10 miếng → cần mua <code>ceil(100 × 3 / 10) = 30</code> tấm. Hệ thống trước khi vá chỉ tính
+      <code>ceil(100 / 10) = 10</code> tấm — thiếu 2/3 nhu cầu thật, chỉ đủ ghép được 33/100 PAT.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. THIẾT KẾ DỮ LIỆU ═══════════════════════ -->
+  <div class="module" id="thietke">
+    <h2>2. Thiết kế dữ liệu <span class="badge b-db">DB</span></h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">prisma/schema.prisma</td><td><code>PieceMaterialYield.qtyPerPiece Int @default(1)</code> — cùng model với <code>piecesPerBar</code> có sẵn, tách bạch bằng comment ghi rõ khác nhau ở chỗ nào</td></tr>
+          <tr><td class="path">migrations/20260903080000_piece_material_yield_qty_per_piece</td><td><code>ALTER TABLE ... ADD COLUMN "qtyPerPiece" INTEGER NOT NULL DEFAULT 1;</code> — nullable-safe nhờ default, không cần backfill riêng</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok">
+      <b>Vì sao default=1 là lựa chọn đúng:</b> trước khi có field này, code đã ngầm định "1 piece =
+      1 miếng vật tư thành phẩm" ở mọi nơi tính mua hàng. Default 1 tái hiện đúng giả định ngầm đó —
+      mọi SKU đã nhập từ trước ra <b>kết quả giống hệt hôm qua</b>, chỉ SKU nào KHSX chủ động nhập
+      số khác 1 mới đổi số lượng đề xuất mua.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 3. BACKEND ═══════════════════════ -->
+  <div class="module" id="backend">
+    <h2>3. Backend <span class="badge b-be">BE</span></h2>
+
+    <div class="card">
+      <h3><span class="path">skus/dto/update-quota.dto.ts</span> — nhận field mới, optional</h3>
+      <p><code>QuotaPieceMaterialYieldDto.qtyPerPiece?: number</code> (<code>@IsInt() @Min(1)</code>) — optional để không phá request cũ chưa gửi field này.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">skus/skus.service.ts</span> — đường ghi và đường đọc</h3>
+      <p>Ghi (<code>replacePieces</code>): <code>qtyPerPiece: y.qtyPerPiece ?? 1</code>. Đọc (<code>toPieceMaterialYieldLine</code>): thêm <code>qtyPerPiece: r.qtyPerPiece</code> vào object trả về. Cả 2 đường đi qua đúng route <code>POST /skus/:id/manh-quota</code> hiện có — không thêm endpoint mới.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">production-invoices/piece-material-yield-purchase.service.ts</span> — sửa công thức, chỗ quan trọng nhất</h3>
+      <p>Trước: <code>bars = Math.ceil(net / yieldRow.piecesPerBar)</code>. Sau: nhân <code>qtyPerPiece</code> vào <code>net</code> (số piece/mảnh còn thiếu sau khi trừ tồn) <b>trước khi</b> chia cho <code>piecesPerBar</code>:</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Bước</th><th>Công thức</th><th>Đơn vị</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td class="path">required = qtyPerUnit × order.quantity</td><td>piece (mảnh)</td></tr>
+            <tr><td>2</td><td class="path">net = max(0, required − onHand)</td><td>piece (mảnh) — <b>onHand cũng đếm theo mảnh</b>, nhân qtyPerPiece ở bước này sẽ lệch đơn vị</td></tr>
+            <tr><td>3 — mới</td><td class="path">neededPieceMaterials = net × qtyPerPiece</td><td>miếng vật tư thành phẩm</td></tr>
+            <tr><td>4</td><td class="path">bars = ceil(neededPieceMaterials / piecesPerBar)</td><td>cây/tấm cần mua</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><code>PieceMaterialYieldPurchaseResultDto</code> (DTO response cho endpoint debug/thủ công) <b>không đổi</b> — vẫn đủ thông tin để trace mà không cần thêm field, việc không có FE nào tiêu thụ endpoint này ngoài side-effect tạo <code>PurchaseProposal</code>.</p>
+    </div>
+
+    <div class="callout warn">
+      <b>Phạm vi cố tình không đụng tới:</b> ràng buộc <code>@@unique([bomRevisionId, pieceId])</code>
+      (1 mảnh chỉ khai đúng 1 loại vật tư thành phẩm) và cách <code>yieldByRevisionPiece</code> gộp
+      theo <code>Map</code> đơn (nếu 2 dòng cùng piece sẽ chỉ giữ dòng cuối) — cả 2 chỉ là rủi ro
+      nếu nghiệp vụ sau này cho phép 1 mảnh nhiều loại vật tư thành phẩm. Sếp xác nhận hiện tại
+      <b>không</b> có ca đó nên không mở rộng phạm vi lần này.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 4. FRONTEND ═══════════════════════ -->
+  <div class="module" id="frontend">
+    <h2>4. Frontend <span class="badge b-fe">FE</span></h2>
+
+    <div class="card">
+      <h3><span class="path">services/sku-api.ts</span> — mắt xích còn thiếu của chuỗi map 2 chiều</h3>
+      <p><code>BePieceMaterialYieldLine</code> thêm <code>qtyPerPiece</code>; đọc (<code>yieldChildren</code>) map vào field <code>qty</code> sẵn có trên <code>ManhChildRow</code> (dùng chung với 4 nhóm còn lại); ghi (<code>updateSkuManhQuota</code>) gửi <code>qtyPerPiece: Number(c.qty) || 1</code>. <code>toManh</code>/<code>toManhRow</code> trong <code>SpecSteelPage.tsx</code> vốn đã đọc/ghi <code>qty</code> đồng nhất cho mọi nhóm từ trước — chỉ riêng lớp adapter này từng làm rớt field cho nhóm <code>vatTuTP</code>.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">Manufacturing/SpecSteelPage.tsx</span> — hiện ô, vá 1 bug đang ngủ</h3>
+      <p>Bỏ điều kiện <code>childGroup !== 'vatTuTP'</code> đang ẩn cứng ô "Số lượng" — nhãn đổi động thành <b>"Số lượng/mảnh"</b> khi ở nhóm này. Cột hiển thị trong bảng bỏ luôn override <code>'—'</code> cho nhóm vatTuTP.</p>
+      <p><b>Bug đi kèm được vá cùng lúc:</b> hàm reset khi đổi tab nhóm (<code>onClick</code> của nút chọn nhóm) thiếu <code>setChildSoLuong('')</code> — trước đây vô hại vì ô bị ẩn và API bỏ qua giá trị; giờ ô đã hiện thật, không vá thì số gõ ở tab Sắt sẽ rò sang tab Vật tư thành phẩm khi người dùng đổi tab mà chưa lưu.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">ProductionPlan/SKUDetail.tsx</span> — màn duyệt (Sếp/KHSX xem lại)</h3>
+      <p>Bỏ override <code>'—'</code> tương tự ở cột Số lượng, đồng bộ với màn nhập.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. KIỂM CHỨNG ═══════════════════════ -->
+  <div class="module" id="kiemchung">
+    <h2>5. Kiểm chứng</h2>
+
+    <div class="card">
+      <h3>Backend — tĩnh + test + API/DB thật</h3>
+      <p><code>npx prisma generate</code> · <code>tsc --noEmit</code> sạch · <code>eslint</code> sạch trên các file đã sửa · sửa 2 test có sẵn khớp field mới, thêm 1 test khoá đúng công thức (100 required, 20 onHand, qtyPerPiece=3, piecesPerBar=12 → 20 bars, không phải 7 nếu quên nhân).</p>
+      <div class="stats">
+        <div class="stat"><div class="n">810</div><div class="l">test BE pass (46 suite)</div></div>
+        <div class="stat"><div class="n">0</div><div class="l">test vỡ do thay đổi</div></div>
+        <div class="stat"><div class="n">1</div><div class="l">migration áp dụng lên DB dev</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Backend — qua HTTP thật + Postgres thật, không mock</h3>
+      <p>Dựng lại Docker (Postgres + solver) sau khi máy khởi động lại → <code>prisma migrate deploy</code> → khởi động <code>pnpm start:dev</code> → login <code>admin</code> lấy JWT thật → <code>POST /skus/22/manh-quota</code> với <code>materialYields:[{materialId:'4', piecesPerBar:10, qtyPerPiece:3}]</code> đúng kịch bản Sếp mô tả → response trả đúng <code>qtyPerPiece:3</code> → <code>psql</code> đọc thẳng bảng <code>piece_material_yield</code> xác nhận lưu đúng <code>piecesPerBar=10, qtyPerPiece=3</code> → gọi lại GET xác nhận round-trip khớp.</p>
+    </div>
+
+    <div class="card">
+      <h3>Frontend — tĩnh</h3>
+      <p><code>tsc --noEmit</code> sạch · <code>eslint</code> sạch (1 warning có sẵn từ trước, không liên quan) · <code>next build</code> thành công.</p>
+      <div class="stats">
+        <div class="stat"><div class="n">33</div><div class="l">test FE pass (vitest)</div></div>
+      </div>
+    </div>
+
+    <div class="callout bad">
+      <b>Chưa làm được — nghẽn ở hạ tầng, không phải ở code:</b> chrome-devtools MCP timeout kết nối
+      (30s) suốt phiên, không tự khởi động lại được từ phía Claude Code. Không click/gõ được vào
+      trình duyệt thật để xác nhận trực quan ô "Số lượng/mảnh" render đúng, giữ giá trị đúng khi
+      lưu/tải lại, và bug đổi-tab đã thật sự hết. BE + FE dev server (3001/3000) đang chạy sẵn kèm
+      1 SKU test (<code>TEST-BAN-A</code>, id 22) đã có dữ liệu mẫu, sẵn sàng test tay hoặc test lại
+      qua MCP ngay khi kết nối được.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 6. CÒN ĐỂ NGỎ ═══════════════════════ -->
+  <div class="module" id="conngo">
+    <h2>6. Còn để ngỏ</h2>
+    <ul class="timeline">
+      <li><b>Chưa test UI qua trình duyệt thật</b><span> — chặn bởi chrome-devtools MCP không kết nối được (xem mục 5); cần chạy lại ngay khi phiên MCP hồi phục hoặc test tay theo hướng dẫn.</span></li>
+      <li><b>Chưa commit</b><span> — toàn bộ thay đổi (2 repo + 1 migration) vẫn nằm ở working tree, chờ người dùng xem lại.</span></li>
+      <li><b><code>prisma migrate deploy</code> mới chạy trên DB dev</b><span> — chưa chạy trên staging/production; cần lặp lại bước này đúng lúc deploy.</span></li>
+      <li><b>Dữ liệu test tạo trực tiếp qua API</b><span> — SKU <code>TEST-BAN-A</code> (id 22) trên DB dev hiện có 1 dòng vật tư thành phẩm test (<code>qtyPerPiece=3</code>, vật tư mượn tạm "Ốc vít E2E" làm placeholder) — dọn lại hoặc thay bằng dữ liệu thật khi nghiệm thu chính thức.</span></li>
+      <li><b>Bug "reset ô Số lượng khi đổi tab" mới chỉ vá đúng 1 điểm phát sinh lúc hiện ô mới</b><span> — không mở rộng rà soát các trường khác trong cùng form (ngoài phạm vi báo cáo/yêu cầu lần này).</span></li>
+    </ul>
+  </div>
+
+  <footer>
+    Nguồn: toàn bộ nội dung trên tổng hợp trực tiếp từ phiên làm việc trong Claude Code — không suy
+    diễn thêm. Code thật nằm ở <code>D:\DNA-ERP-BE</code> (schema, DTO, service, công thức mua hàng)
+    và <code>D:\DNA-ERP</code> (mapping adapter, 2 màn hình định mức mảnh). Nối tiếp mạch nghiệp vụ
+    "vật tư thành phẩm" đã mở ra ở
+    <code>changelog-2026-08-22-vat-tu-thanh-pham-dinh-muc-nhom.html</code>.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" title="Về đầu trang" type="button">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

@@ -101,6 +101,16 @@ export class QuotaPieceMaterialYieldDto {
   @IsInt()
   @Min(1)
   piecesPerBar!: number;
+
+  @ApiPropertyOptional({
+    default: 1,
+    description:
+      'Số vật tư thành phẩm cần dùng cho 1 piece (mảnh) này - vd 1 "pat" gồm 3 miếng sắt lá. Độc lập với piecesPerBar (đó là tỷ lệ cắt cho Mua hàng, đây là tỷ lệ lắp ráp cho Sản xuất)',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  qtyPerPiece?: number;
 }
 
 /** 1 mảnh (nhóm SAT) - resolve-or-create Piece theo tên trong phạm vi sản phẩm. Chứa cả 6

@@ -166,6 +166,37 @@ describe('PieceMaterialYieldPurchaseService', () => {
     });
   });
 
+  // 2026-09-03: qtyPerPiece (1 piece/mảnh gồm bao nhiêu miếng vật tư thành phẩm, vd 1 "pat" gồm 3
+  // miếng sắt lá) - tỷ lệ LẮP RÁP cho Sản xuất, độc lập với piecesPerBar (tỷ lệ CẮT cho Mua hàng).
+  // PHẢI nhân vào SAU khi trừ tồn (net), không phải nhân vào required/onHand riêng rẽ trước khi trừ
+  // - nếu không sẽ lệch đơn vị giữa 2 số đó và ra kết quả sai.
+  it('qtyPerPiece > 1 - nhân đúng chỗ (sau khi trừ tồn), không lệch đơn vị required/onHand', async () => {
+    // required = qtyPerUnit(1) × quantity(100) = 100 piece (mảnh). onHand pool = 20 mảnh -> net =
+    // 80 mảnh còn thiếu. qtyPerPiece = 3 -> cần cắt 80×3 = 240 miếng sắt lá. piecesPerBar = 12 ->
+    // barsNeeded = ceil(240/12) = 20 (KHÔNG phải ceil(80/12)=7 nếu quên nhân qtyPerPiece).
+    prisma.pieceMaterialYield.findMany.mockResolvedValue([
+      {
+        bomRevisionId: 5n,
+        pieceId: chanNhom.id,
+        materialId: thanhNhom.id,
+        piecesPerBar: 12,
+        qtyPerPiece: 3,
+        material: thanhNhom,
+      },
+    ]);
+    productionBatchesService.getReadyPoolQty.mockResolvedValue(new Map([['40', 20]]));
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({
+      requiredPieces: 100,
+      onHandPieces: 20,
+      piecesPerBar: 12,
+      barsNeeded: 20,
+      buyQty: 20,
+    });
+  });
+
   it('tồn nguyên liệu đã đủ (buyQty=0) - item.status=PURCHASED ngay lúc tạo, rollup cấp proposal cũng PURCHASED', async () => {
     // required = 100, onHand pool = 0 -> net=100 -> barsNeeded = ceil(100/12) = 9.
     // actualStock (thanh nhôm) = 9 -> buyQty = 0.
