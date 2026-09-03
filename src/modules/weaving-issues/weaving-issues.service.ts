@@ -11,6 +11,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { assertItemPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { CreateWeavingIssueDto } from './dto/create-weaving-issue.dto';
@@ -507,8 +508,12 @@ export class WeavingIssuesService {
     action: string,
     expectedWarehouseCode: string,
   ): void {
-    // null = tổng kho (BOSS/ADMIN) - không có gì để chặn.
-    if (warehouseScope && warehouseScope !== expectedWarehouseCode) {
+    // null = tổng kho (BOSS/ADMIN) - không có gì để chặn. Cả 'vat-tu-tp' lẫn 'thanh-pham' đều là
+    // gốc đa-instance (Admin tạo thêm được '{gia-đình}-{n}', 2026-09-03 mở rộng cho cả vat-tu-tp)
+    // - Thủ kho của kho phụ phải được coi như đúng kho, không chỉ đúng literal gốc (xem
+    // warehouseFamilyOf, sự cố 403 2026-08-31 ở đầu file - lúc đó chỉ vá được nhánh thanh-pham).
+    const matches = warehouseFamilyOf(warehouseScope) === warehouseFamilyOf(expectedWarehouseCode);
+    if (warehouseScope && !matches) {
       throw new ForbiddenException(
         `Caller bị giới hạn ở kho '${warehouseScope}', không được ${action} từ kho '${expectedWarehouseCode}'`,
       );

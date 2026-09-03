@@ -107,7 +107,17 @@ export class WarehousesService {
       );
     }
 
-    await this.prisma.warehouse.delete({ where: { id: bigId } });
+    // Xoá kèm mọi tài khoản đang gắn warehouseScope đúng kho này (Thủ kho được tự động tạo lúc
+    // "Tạo kho thành phẩm mới" - xem MfgWarehousesPage.tsx createThanhPham(), có thể cả tài khoản
+    // mua hàng được gán tay cùng scope) - trước đây tài khoản mồ côi vẫn sống sau khi kho bị xoá,
+    // warehouseScope trỏ vào 1 code không còn tồn tại. User là SOFT_DELETE_MODELS (xem
+    // soft-delete.extension.ts) nên deleteMany() ở đây tự resolve thành updateMany set deletedAt,
+    // không mất lịch sử/audit. Gộp 1 transaction: kho không xoá được (còn tồn/vật tư tham chiếu,
+    // FK constraint) thì tài khoản cũng không bị xoá theo.
+    await this.prisma.$transaction([
+      this.prisma.user.deleteMany({ where: { warehouseScope: current.code } }),
+      this.prisma.warehouse.delete({ where: { id: bigId } }),
+    ]);
   }
 
   private async findOneOrThrow(id: string): Promise<Warehouse> {

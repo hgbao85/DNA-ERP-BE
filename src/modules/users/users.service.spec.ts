@@ -9,7 +9,7 @@ import { UsersService } from './users.service';
 describe('UsersService', () => {
   let usersService: UsersService;
   let prisma: {
-    user: { findUnique: jest.Mock; update: jest.Mock };
+    user: { findUnique: jest.Mock; findUniqueOrThrow: jest.Mock; update: jest.Mock };
     refreshToken: { updateMany: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -21,6 +21,7 @@ describe('UsersService', () => {
     prisma = {
       user: {
         findUnique: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
       },
       refreshToken: { updateMany: jest.fn() },
@@ -69,6 +70,51 @@ describe('UsersService', () => {
 
       expect(prisma.user.update).not.toHaveBeenCalled();
       expect(prisma.refreshToken.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  // 2026-09-03: trước đây warehouseScope của floor role (PHOI/HAN/SON/KCS) luôn bị ép cứng về
+  // literal 'phoi-son-han' bất kể caller gửi gì - không công nhân nào gán được vào kho phoi-son-han
+  // PHỤ dù Admin đã tạo thêm. dto.mfgRole cố ý bỏ trống (undefined) ở mọi test dưới đây để nhánh
+  // gán lại capability Role (cần mock role/userRole riêng) không chạy - chỉ test đúng phần quyết
+  // định warehouseScope.
+  describe('updateMfgAttributes', () => {
+    const floorUser = { id: 'user-1', mfgRole: 'PHOI', warehouseScope: 'phoi-son-han' };
+
+    beforeEach(() => {
+      prisma.user.findUnique.mockResolvedValue(floorUser);
+      prisma.user.findUniqueOrThrow.mockResolvedValue({ ...floorUser, roles: [] });
+    });
+
+    it('tin warehouseScope caller gửi nếu thuộc đúng gia đình phoi-son-han (kho PHỤ)', async () => {
+      await usersService.updateMfgAttributes('user-1', { warehouseScope: 'phoi-son-han-2' });
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'user-1' },
+          data: expect.objectContaining({ warehouseScope: 'phoi-son-han-2' }),
+        }),
+      );
+    });
+
+    it('fallback về kho gốc nếu caller không gửi warehouseScope nào', async () => {
+      await usersService.updateMfgAttributes('user-1', {});
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ warehouseScope: 'phoi-son-han' }),
+        }),
+      );
+    });
+
+    it('fallback về kho gốc nếu caller gửi warehouseScope KHÔNG thuộc gia đình phoi-son-han (dữ liệu bất thường, không tin mù quáng)', async () => {
+      await usersService.updateMfgAttributes('user-1', { warehouseScope: 'vat-tu-tp' });
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ warehouseScope: 'phoi-son-han' }),
+        }),
+      );
     });
   });
 });

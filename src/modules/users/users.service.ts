@@ -14,6 +14,7 @@ import {
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { paginate } from '../../common/utils/paginate.util';
+import { isFamilyScope } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -162,13 +163,19 @@ export class UsersService {
   async updateMfgAttributes(id: string, dto: UpdateUserMfgAttributesDto): Promise<UserResponseDto> {
     const current = await this.findOneOrThrow(id);
 
-    // Floor roles (Phôi/Hàn/Sơn/KCS) only exist in one warehouse - force it here so the
-    // invariant holds regardless of what the caller sent (or forgot to send).
+    // Floor roles (Phôi/Hàn/Sơn/KCS) chỉ tồn tại trong gia đình kho phoi-son-han - trước
+    // 2026-09-03 ép cứng về đúng 1 literal 'phoi-son-han' bất kể caller gửi gì, khiến không công
+    // nhân nào gán được vào kho phoi-son-han PHỤ dù Admin đã tạo thêm được kho đó. Giờ tin giá trị
+    // caller gửi MIỄN LÀ nó thuộc đúng gia đình phoi-son-han (isFamilyScope) - chỉ fallback về kho
+    // gốc khi caller không gửi hoặc gửi sai gia đình (giữ nguyên bất biến "floor role chỉ ở 1 kho
+    // phoi-son-han cụ thể", không tin mù quáng giá trị bất kỳ).
     const effectiveMfgRole = dto.mfgRole !== undefined ? dto.mfgRole : current.mfgRole;
-    const warehouseScope =
-      effectiveMfgRole && MFG_FLOOR_ROLES.includes(effectiveMfgRole)
-        ? MFG_FLOOR_WAREHOUSE_SCOPE
-        : dto.warehouseScope;
+    const isFloorRole = !!effectiveMfgRole && MFG_FLOOR_ROLES.includes(effectiveMfgRole);
+    const warehouseScope = isFloorRole
+      ? isFamilyScope(dto.warehouseScope, 'phoi-son-han')
+        ? dto.warehouseScope
+        : MFG_FLOOR_WAREHOUSE_SCOPE
+      : dto.warehouseScope;
 
     const user = await this.prisma.$transaction(async (tx) => {
       await tx.user.update({

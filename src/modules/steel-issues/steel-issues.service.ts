@@ -22,6 +22,7 @@ import {
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { isFamilyScope } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
@@ -133,8 +134,11 @@ export class SteelIssuesService {
     warehouseScope: string | null,
     idempotencyKey?: string,
   ): Promise<SteelIssueResponseDto> {
-    // null = tổng kho (BOSS/ADMIN) - không có gì để chặn.
-    if (warehouseScope && warehouseScope !== STEEL_WAREHOUSE_CODE) {
+    // null = tổng kho (BOSS/ADMIN) - không có gì để chặn. Gate theo GIA ĐÌNH phoi-son-han (không
+    // phải instance cụ thể) - trừ tồn thật đã đúng theo Material.warehouseId từ trước ở
+    // CuttingProposalsService.approve() (StockReservation), gate này chỉ xác nhận caller là nhân
+    // sự thuộc "phía Phôi", 2026-09-03 mở rộng cho cả kho phoi-son-han PHỤ (isFamilyScope).
+    if (warehouseScope && !isFamilyScope(warehouseScope, 'phoi-son-han')) {
       throw new ForbiddenException(
         `Caller bị giới hạn ở kho '${warehouseScope}', không được xuất sắt kho '${STEEL_WAREHOUSE_CODE}'`,
       );

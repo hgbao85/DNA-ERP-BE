@@ -238,6 +238,18 @@ describe('SteelIssuesService', () => {
       ).resolves.toBeDefined();
     });
 
+    it('2026-09-03: cho phép caller thuộc kho phoi-son-han PHỤ (trước đây chỉ đúng literal kho gốc mới qua được)', async () => {
+      prisma.steelIssue.create.mockResolvedValue(issue);
+      await expect(
+        service.create(
+          '1',
+          { materialId: '30', barLengthMm: 6000, barCount: 20 },
+          'user-1',
+          'phoi-son-han-2',
+        ),
+      ).resolves.toBeDefined();
+    });
+
     it('cho phép chọn đúng 1 trong nhiều loại sắt đang dùng trong PI', async () => {
       prisma.pieceBom.findMany.mockResolvedValue([
         pieceBomRow,

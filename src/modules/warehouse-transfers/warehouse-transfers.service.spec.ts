@@ -41,6 +41,9 @@ describe('WarehouseTransfersService', () => {
   const phoiSonHan = { id: 1n, code: 'phoi-son-han', name: 'Phoi Son Han' };
   const vatTuTp = { id: 2n, code: 'vat-tu-tp', name: 'Vat tu TP' };
   const thanhPham = { id: 3n, code: 'thanh-pham', name: 'Thanh pham' };
+  // Kho phụ (2026-09-03) - xác nhận routing giờ so theo GIA ĐÌNH, không còn map cứng theo đúng 1
+  // code cố định (isValidTransferRoute()).
+  const vatTuTp2 = { id: 4n, code: 'vat-tu-tp-2', name: 'Vat tu TP 2' };
 
   const transferRow = (overrides: Record<string, unknown> = {}) => ({
     id: 50n,
@@ -110,7 +113,7 @@ describe('WarehouseTransfersService', () => {
 
     prisma.warehouse.findUnique.mockImplementation(
       ({ where }: { where: { id?: bigint; code?: string } }) => {
-        const all = [phoiSonHan, vatTuTp, thanhPham];
+        const all = [phoiSonHan, vatTuTp, thanhPham, vatTuTp2];
         if (where.id !== undefined)
           return Promise.resolve(all.find((w) => w.id === where.id) ?? null);
         return Promise.resolve(all.find((w) => w.code === where.code) ?? null);
@@ -135,6 +138,18 @@ describe('WarehouseTransfersService', () => {
         ),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    it('2026-09-03: chấp nhận kho đích là kho PHỤ (vat-tu-tp-2) - đúng gia đình kế tiếp phoi-son-han, không còn đòi đúng 1 code cố định', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.warehouseTransfer.create.mockResolvedValue(
+        transferRow({ toWarehouseId: 4n, toWarehouse: vatTuTp2 }),
+      );
+
+      await expect(
+        service.create({ ...dto, toWarehouseId: '4' }, null, 'user-1', 'idem-key-1'),
+      ).resolves.toBeDefined();
+      expect(prisma.warehouseTransfer.create).toHaveBeenCalled();
     });
 
     it('rejects when the caller is scoped to a different warehouse than fromWarehouseId', async () => {
