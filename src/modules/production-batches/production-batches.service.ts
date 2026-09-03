@@ -16,7 +16,10 @@ import {
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
-import { assertItemPiHasActiveFloor } from '../../common/utils/floor-gate.util';
+import {
+  assertItemPiHasActiveFloor,
+  assertItemPiHasActiveFloorLocked,
+} from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -106,6 +109,8 @@ export class ProductionBatchesService {
     // nhánh default của AllExceptionsFilter.mapPrismaError(), không phải lỗi nghiệp vụ).
     const created = await this.prisma.$transaction(
       async (tx) => {
+        await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, 'báo sản lượng');
+
         const batch = await tx.productionBatch.create({
           data: {
             stage: dto.stage,
@@ -157,6 +162,28 @@ export class ProductionBatchesService {
       where: { bomRevisionId: batch.bomRevisionId, pieceId: batch.pieceId },
     });
     if (pieceBoms.length > 0) {
+      // Mảnh cần CẢ Hàn+Sơn (BomPiece.needsHan/needsSon) báo sản lượng ở CẢ 2 stage (chạy song
+      // song hoàn toàn từ lúc QLSX "Bắt đầu", dù vật lý Sơn luôn sau Hàn - xem floor-gate.util.ts),
+      // nhưng đoạn sắt chỉ được LẮP RÁP (tiêu thụ thật) đúng 1 LẦN lúc Hàn - Sơn chỉ sơn lên mảnh
+      // đã hàn xong, không tiêu thêm đoạn nào. Trước đây hàm này trừ tồn ở MỌI stage báo, không
+      // phân biệt - mảnh cần cả 2 công đoạn bị trừ đoạn sắt 2 LẦN cho cùng 1 lượng vật lý (phát
+      // hiện qua rà code 2026-09-03, chưa từng gặp qua vận hành thật). Trừ ĐÚNG 1 lần: ưu tiên Hàn
+      // nếu mảnh cần Hàn (đúng lúc lắp ráp), else Sơn nếu chỉ cần Sơn (mảnh 1 đoạn, không cần hàn).
+      // Mảnh không cần CẢ 2 (needsHan=false VÀ needsSon=false nhưng vẫn có PieceBom - ca hiếm, chưa
+      // xác nhận có xảy ra thật) giữ nguyên hành vi cũ, trừ ở bất kỳ stage nào báo (PHOI chẳng hạn)
+      // - không đủ dữ liệu để quyết định stage nào đúng cho ca này.
+      const bomPiece = await db.bomPiece.findUnique({
+        where: {
+          bomRevisionId_pieceId: { bomRevisionId: batch.bomRevisionId, pieceId: batch.pieceId },
+        },
+      });
+      const consumeStage = bomPiece?.needsHan
+        ? MfgStage.HAN
+        : bomPiece?.needsSon
+          ? MfgStage.SON
+          : batch.stage;
+      if (batch.stage !== consumeStage) return;
+
       const [fromWarehouse, toWarehouse] = await Promise.all([
         db.warehouse.findUniqueOrThrow({ where: { code: STEEL_WAREHOUSE_CODE } }),
         db.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),

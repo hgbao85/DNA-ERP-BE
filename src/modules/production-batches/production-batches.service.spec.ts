@@ -26,6 +26,7 @@ describe('ProductionBatchesService', () => {
     stockQuant: { findMany: jest.Mock };
     warehouseTransferPieceItem: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
+    $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
   let stockLedgerService: { postEntry: jest.Mock };
@@ -109,6 +110,10 @@ describe('ProductionBatchesService', () => {
             Promise.resolve(code === 'phoi-son-han' ? steelWarehouse : productionWarehouse),
           ),
       },
+      // assertItemPiHasActiveFloorLocked() (vá race TOCTOU, 2026-09-03) - FOR UPDATE lên
+      // production_orders ngay dòng đầu transaction create(). Mặc định ACTIVE, đa số test case
+      // không quan tâm gate.
+      $queryRaw: jest.fn(() => Promise.resolve([{ floorStage: 'ACTIVE' }])),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue({}) };
@@ -299,6 +304,18 @@ describe('ProductionBatchesService', () => {
 
       await expect(service.create('1', dto, 'user-han', null)).resolves.toBeDefined();
     });
+
+    // 2026-09-03: assertItemPiHasActiveFloor() ở trên đọc TRƯỚC khi mở transaction (fast-path) -
+    // không tự chốt được race QLSX bấm "Tạm dừng" đúng lúc giữa đọc và ghi.
+    // assertItemPiHasActiveFloorLocked() (FOR UPDATE, chạy NGAY ĐẦU transaction) mới là nguồn đúng
+    // cuối cùng - test này giả lập đúng race đó: pre-check thấy ACTIVE (findFirst mock không đổi)
+    // nhưng câu SELECT FOR UPDATE bên trong transaction đọc lại thấy PAUSED.
+    it('ném ConflictException khi race: pre-check thấy ACTIVE nhưng SELECT FOR UPDATE trong transaction đọc lại thấy PAUSED (TOCTOU)', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ floorStage: 'PAUSED' }]);
+
+      await expect(service.create('1', dto, 'user-han', null)).rejects.toThrow(ConflictException);
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('create - trừ tồn đoạn sắt (SEGMENT_CONSUME)', () => {
@@ -388,6 +405,44 @@ describe('ProductionBatchesService', () => {
     // đã chứng minh điều này gián tiếp (không có nhánh throw/guard nào giữa lúc query PieceBom
     // và lúc gọi postEntry). Số dư âm thật sự chỉ quan sát được ở StockQuant sau khi trigger DB
     // materialize - thuộc phạm vi test tích hợp/E2E, không phải unit test service này.
+
+    // 2026-09-03: mảnh cần CẢ Hàn+Sơn (bomPieceRow mặc định needsHan=true+needsSon=true) trước
+    // đây bị trừ tồn đoạn sắt 2 LẦN - 1 lần khi Hàn báo (test '1 PieceBom' ở trên, stage=HAN), 1
+    // lần khi Sơn báo lại CÙNG mảnh đó (dto ở đây). Giờ chỉ trừ đúng 1 lần ở Hàn (bước lắp ráp
+    // thật) - Sơn báo không tiêu thêm đoạn nào.
+    it('mảnh cần CẢ Hàn+Sơn - Sơn báo KHÔNG trừ tồn đoạn lần 2 (đã trừ ở Hàn)', async () => {
+      const sonDto = { stage: MfgStage.SON, pieceId: '40', reportedQty: 20 };
+      prisma.productionBatch.create.mockResolvedValue({ ...batchRow, stage: MfgStage.SON });
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
+      ]);
+      // bomPieceRow mặc định (beforeEach) đã needsHan=true+needsSon=true, không cần override.
+
+      await service.create('1', sonDto, 'user-son', null);
+
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('mảnh CHỈ cần Sơn (needsHan=false) - Sơn báo VẪN trừ tồn đoạn (không có Hàn nào trừ trước)', async () => {
+      const sonDto = { stage: MfgStage.SON, pieceId: '40', reportedQty: 20 };
+      prisma.bomPiece.findUnique.mockResolvedValue({
+        ...bomPieceRow,
+        needsHan: false,
+        needsSon: true,
+      });
+      prisma.productionBatch.create.mockResolvedValue({ ...batchRow, stage: MfgStage.SON });
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
+      ]);
+
+      await service.create('1', sonDto, 'user-son', null);
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ segmentSpecId: 60n, qty: 60 }),
+        prisma,
+      );
+    });
   });
 
   describe('create - trừ tồn nguyên liệu vật tư thành phẩm (MATERIAL_YIELD_CONSUME)', () => {

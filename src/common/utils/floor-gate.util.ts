@@ -76,3 +76,54 @@ export async function assertOrderPiHasActiveFloor(
   });
   await assertItemPiHasActiveFloor(prisma, order.productionInvoiceItemId, actionLabel);
 }
+
+/**
+ * Cùng assertPiHasActiveFloor() nhưng CHỐT được race hẹp giữa lúc đọc floorStage và lúc ghi thật
+ * (TOCTOU) mà bản trên bỏ ngỏ - review 2026-09-03: QLSX bấm "Tạm dừng"/"Kết thúc" (production-
+ * orders.service.ts pauseFloor/finishFloor/startFloor, mỗi hàm chỉ 1 UPDATE đơn) đúng lúc giữa 2
+ * bước đọc-rồi-ghi của create() vẫn lọt được 1 lần ghi, dù gate "thấy" đúng ACTIVE lúc đọc.
+ *
+ * `SELECT ... FOR UPDATE` khoá đúng các dòng ProductionOrder của PI này NGAY TRONG transaction ghi
+ * - 1 UPDATE đơn của pauseFloor/finishFloor/startFloor nhắm vào 1 trong các dòng đó sẽ tự BỊ CHẶN
+ * (Postgres row lock) cho tới khi transaction này commit/rollback, thay vì chạy xen kẽ vô hại như
+ * hiện nay. Ngược lại nếu UPDATE đó đã commit trước, câu SELECT FOR UPDATE này thấy đúng giá trị
+ * mới nên vẫn ném lỗi bình thường - không có khe hở nào giữa 2 chiều.
+ *
+ * CHỈ dùng được trong `$transaction` (nhận `tx`, không phải `prisma` top-level) - gọi làm dòng ĐẦU
+ * TIÊN trong callback, TRƯỚC bất kỳ ghi nào. Không thay thế assertPiHasActiveFloor()/
+ * assertItemPiHasActiveFloor() ở trên - giữ nguyên bản không khoá đó làm fast-path early-exit
+ * TRƯỚC khi mở transaction (khỏi tốn advisory lock/transaction cho ca đã biết chắc bị chặn), bản
+ * có khoá này bổ sung làm nguồn đúng cuối cùng ngay trước khi ghi.
+ */
+export async function assertPiHasActiveFloorLocked(
+  tx: PrismaTx,
+  productionInvoiceId: bigint,
+  actionLabel: string,
+): Promise<void> {
+  const rows = await tx.$queryRaw<{ floorStage: ProductionOrderFloorStage }[]>`
+    SELECT po."floorStage"
+    FROM "production_orders" po
+    JOIN "production_invoice_items" pii ON po."productionInvoiceItemId" = pii."id"
+    WHERE pii."productionInvoiceId" = ${productionInvoiceId}
+    FOR UPDATE OF po
+  `;
+  if (!rows.some((r) => r.floorStage === ProductionOrderFloorStage.ACTIVE)) {
+    throw new ConflictException(
+      `PI ${productionInvoiceId} chưa có SKU nào được QLSX bấm "Bắt đầu" (hoặc đã "Kết thúc") - chưa/không thể ${actionLabel}`,
+    );
+  }
+}
+
+/** Cùng assertItemPiHasActiveFloorLocked() nhưng đi từ productionInvoiceItemId - xem
+ *  assertItemPiHasActiveFloor() (bản không khoá) để biết khi nào dùng dạng nào. */
+export async function assertItemPiHasActiveFloorLocked(
+  tx: PrismaTx,
+  productionInvoiceItemId: bigint,
+  actionLabel: string,
+): Promise<void> {
+  const item = await tx.productionInvoiceItem.findUniqueOrThrow({
+    where: { id: productionInvoiceItemId },
+    select: { productionInvoiceId: true },
+  });
+  await assertPiHasActiveFloorLocked(tx, item.productionInvoiceId!, actionLabel);
+}

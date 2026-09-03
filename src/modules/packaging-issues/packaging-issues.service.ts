@@ -13,7 +13,10 @@ import {
   StockLedgerRefType,
 } from '../../generated/prisma/client';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
-import { assertItemPiHasActiveFloor } from '../../common/utils/floor-gate.util';
+import {
+  assertItemPiHasActiveFloor,
+  assertItemPiHasActiveFloorLocked,
+} from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
@@ -95,6 +98,11 @@ export class PackagingIssuesService {
     // FOR UPDATE cho lần xuất đầu tiên của 1 khoá (order, material) - xem lockBusinessKey().
     const created = await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `packaging-issue:${order.id}:${materialBigId}`);
+      await assertItemPiHasActiveFloorLocked(
+        tx,
+        order.productionInvoiceItemId,
+        'xuất vật tư đóng gói',
+      );
 
       const plannedQty = await this.resolvePlannedQty(
         tx,
