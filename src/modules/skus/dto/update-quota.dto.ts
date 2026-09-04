@@ -12,6 +12,7 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { PROCESS_STEPS, ProcessStepValue } from '../../../common/constants/process-steps.constant';
 
 /** 4 nhóm vật tư "phẳng theo mảnh" (không có khái niệm cắt) có thể xuất hiện trong 1 mảnh,
  *  cạnh Sắt (segments). Tag tường minh trên từng dòng vì 1 mảnh giờ nhận vật tư từ nhiều
@@ -19,10 +20,9 @@ import {
 export const PIECE_MATERIAL_LINE_GROUPS = ['WIRE', 'NAIL', 'RIVET', 'PLASTIC_BUTTON'] as const;
 export type PieceMaterialLineGroup = (typeof PIECE_MATERIAL_LINE_GROUPS)[number];
 
-/** 7 công đoạn phôi chi tiết có thể áp dụng cho 1 đoạn sắt - đa chọn (vd 1 thanh vừa tán vừa
- *  dập), khớp enum ProcessStep trong schema.prisma. */
-export const PROCESS_STEPS = ['CAT', 'UON', 'DAP', 'DUC_LO', 'TAN', 'TOP_DAU', 'XE'] as const;
-export type ProcessStepValue = (typeof PROCESS_STEPS)[number];
+/** Re-export từ common/constants - production-batches.service.ts (báo tiến độ công đoạn vật tư
+ *  thành phẩm) cũng cần đúng danh sách/thứ tự này, và không được phụ thuộc ngược vào module skus. */
+export { PROCESS_STEPS, ProcessStepValue };
 
 /** 1 đoạn sắt cấu thành 1 mảnh (nhóm SAT) - resolve-or-create SegmentSpec theo (materialId, cutLengthMm). */
 export class QuotaSegmentDto {
@@ -111,6 +111,17 @@ export class QuotaPieceMaterialYieldDto {
   @IsInt()
   @Min(1)
   qtyPerPiece?: number;
+
+  @ApiPropertyOptional({
+    enum: PROCESS_STEPS,
+    isArray: true,
+    description:
+      'Công đoạn phôi chi tiết của vật tư thành phẩm này (cắt/uốn/dập/đục lỗ/tán) - đa chọn',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsIn(PROCESS_STEPS, { each: true })
+  processSteps?: ProcessStepValue[];
 }
 
 /** 1 mảnh (nhóm SAT) - resolve-or-create Piece theo tên trong phạm vi sản phẩm. Chứa cả 6

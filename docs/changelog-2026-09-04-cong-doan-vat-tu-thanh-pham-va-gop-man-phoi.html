@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Công đoạn phôi cho Vật tư thành phẩm + gộp màn Phôi</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · Vật tư thành phẩm — tiến độ theo công đoạn + gộp màn Phôi</div>
+    <h1>Vật tư thành phẩm có tiến độ theo từng công đoạn như Sắt, và Phôi chỉ còn 1 màn duy nhất</h1>
+    <p class="lede">
+      Sau khi thêm ô tick "Công đoạn phôi" cho Vật tư thành phẩm ở màn Định mức, phát hiện dữ liệu
+      tick xong <b>không có nơi nào đọc</b> — công nhân Phôi báo sản lượng qua 1 màn hoàn toàn khác
+      (tab riêng "Vật tư thành phẩm", không phân biệt công đoạn), tách biệt 100% khỏi màn "Lệnh sản
+      xuất" xử lý Sắt. Đợt này: xây tiến độ theo từng bước cho Vật tư thành phẩm (mirror cơ chế Sắt
+      nhưng đơn giản hoá), và gộp 2 tab thành 1 màn duy nhất theo đúng yêu cầu người dùng.
+    </p>
+    <div class="meta">
+      <span>04/09/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>1 model mới + 1 migration — <b>đã áp dụng lên DB dev thật</b></span>
+      <span>825 test BE pass (46 suite, +15 test mới)</span>
+      <span>Live-test qua trình duyệt thật — xem mục 6</span>
+      <span><b>Chưa commit</b> — chờ xem lại</span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li>Model mới <code>PieceStepBatch</code> (bảng phẳng, append-only) ghi tiến độ theo <code>(productionOrderId, pieceId, step)</code> — <b>không</b> mirror cặp <code>StepBatch</code>+<code>StepBatchSegment</code> bên Sắt vì Vật tư thành phẩm không có <code>SegmentSpec</code> để bóc theo cỡ đoạn.</li>
+      <li>Endpoint mới <code>POST /production-orders/:id/piece-step-batches</code> — chép khuôn <code>MaterialIssuesService.create()</code> (Idempotency-Key + transaction + advisory lock), <b>không</b> chép <code>SteelIssuesService.recordStepBatch()</code> (hàm đó đang thiếu cả 3 thứ này, có khe TOCTOU thật khi 2 người báo cùng lúc — xem mục "còn để ngỏ").</li>
+      <li>Chặn "báo bước sau vượt bước liền trước" (giống Sắt chặn vượt số đã cắt); bước ĐẦU TIÊN không cap theo định mức — nhất quán triết lý "không cap theo BOM lúc báo, KCS mới là bước kiểm soát" đã lặp lại nhiều lần trong code.</li>
+      <li><b>Phát hiện quan trọng</b>: <code>processSteps</code> lưu theo thứ tự người dùng TICK checkbox, không phải thứ tự nghiệp vụ — phải chuẩn hoá lại ở BE (<code>sortProcessSteps()</code>) trước khi dùng để tính "bước nào trước bước nào".</li>
+      <li><code>ProductionBatchPlanItemResponseDto</code> (đã có sẵn cho Hàn/Sơn/Phôi) mở rộng thêm <code>processSteps/stepProgress/qtyPerPiece</code> — <b>không</b> thêm endpoint đọc mới; field mới luôn rỗng/null ngoài stage=PHOI nên Hàn/Sơn bất biến 100%.</li>
+      <li>FE: gộp tab "Vật tư thành phẩm" (trước tách riêng, dùng <code>TwoTierScreen</code>/<code>ProductionBatch</code> phẳng) vào thẳng màn "Lệnh sản xuất — Công đoạn Phôi" — danh sách item PHẲNG (mỗi mảnh × mỗi SKU 1 dòng), không đi qua <code>core.tsx</code> dùng chung Hàn/Sơn nên <b>không sửa 1 dòng nào</b> của file đó.</li>
+      <li>Mảnh <code>processSteps</code> RỖNG (đa số hiện nay) giữ NGUYÊN trải nghiệm cũ tuyệt đối — chỉ 1 ô nhập số + nút "Ghi nhận", không hiện dải tab nào. Đã live-test khoá lại hành vi này.</li>
+      <li>"Chốt & gửi KCS" không bị chặn dù chưa báo đủ công đoạn — chỉ CẢNH BÁO (quyết định nghiệp vụ, cùng triết lý đã dùng xuyên suốt module).</li>
+      <li><b>Ghi bù</b>: field <code>PieceMaterialYield.processSteps</code> (migration <code>20260904010702</code>) và fix bug ô chọn vật tư trống ở <code>SpecSteelPage.tsx</code> — làm ở lượt trước nhưng chưa từng có changelog, xem mục 2.</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 1. BỐI CẢNH ═══════════════════════ -->
+  <div class="module" id="boicanh">
+    <h2>1. Bối cảnh — 2 màn cùng việc "Phôi báo tiến độ", không liên thông</h2>
+    <p class="module-note">
+      Người dùng hỏi: "phần vật tư thành phẩm tôi cũng muốn có phần công đoạn phôi để tick" — dẫn
+      tới thêm ô tick ở màn Định mức. Khi hỏi tiếp "có cần update gì trước khi qua công đoạn phôi
+      không", rà theo đúng luồng dữ liệu mới phát hiện 2 vấn đề lồng nhau.
+    </p>
+    <div class="card">
+      <h3>Vấn đề 1 — dữ liệu tick xong nằm im</h3>
+      <p><code>findPhoiEligibleBomPieces()</code> xác nhận Vật tư thành phẩm THẬT SỰ đi qua stage PHÔI, nhưng màn Phôi tác nghiệp thật (<code>LenhSanXuatPhoi.tsx</code>) chỉ đọc <code>SteelIssue</code>/<code>StepBatch</code> (Sắt) — không đọc <code>PieceMaterialYield.processSteps</code> ở đâu cả. Công nhân tick "Cắt+Uốn" ở Định mức nhưng không thấy gì khi báo sản lượng thật.</p>
+    </div>
+    <div class="card">
+      <h3>Vấn đề 2 — 2 tab tách biệt hoàn toàn</h3>
+      <p>Vật tư thành phẩm vốn đã có 1 màn báo sản lượng riêng (<code>LenhSanXuatVatTuThanhPham.tsx</code>, dùng <code>TwoTierScreen</code>/<code>ProductionBatch</code> — hạ tầng dùng chung với Hàn/Sơn, thêm 21/08/2026) nhưng nằm ở <b>tab sidebar khác</b>, không phân biệt công đoạn, không liên thông với tab "Lệnh sản xuất" (Sắt). Người dùng làm rõ ý muốn: "đưa màn vật tư thành phẩm của màn phôi gộp vào chung trong lệnh sản xuất luôn".</p>
+    </div>
+    <div class="callout ok">
+      <b>Quyết định thiết kế đã chốt với người dùng (qua 3 vòng hỏi):</b> gom theo MẢNH (không theo loại vật tư như Sắt); không thêm bước "xuất kho" riêng; đơn vị đếm = SỐ MẢNH; danh sách hiển thị là các item PHẲNG trộn chung (Pat/Sắt/chân nhôm mỗi cái 1 dòng, không gộp theo nhóm); "chốt gửi KCS" chỉ cảnh báo, không chặn dù chưa báo đủ công đoạn.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. GHI BÙ — chưa có changelog ═══════════════════════ -->
+  <div class="module" id="ghibu">
+    <h2>2. Ghi bù — việc đã làm ở lượt trước, chưa từng có changelog</h2>
+    <p class="module-note">Đã kiểm chứng (grep toàn bộ <code>docs/changelog-*</code>) — không file nào nhắc tới 2 việc dưới đây trước khi viết changelog này.</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Việc</th><th>Chi tiết</th></tr></thead>
+        <tbody>
+          <tr><td>Field <code>PieceMaterialYield.processSteps</code></td><td>Migration <code>20260904010702_piece_material_yield_process_steps</code> — <code>ProcessStep[] @default('{}')</code>, cùng ý nghĩa <code>PieceBom.processSteps</code> (Sắt) nhưng lưu riêng vì không có <code>SegmentSpec</code> để gắn vào. Kèm DTO (<code>update-quota.dto.ts</code>), service (<code>skus.service.ts</code>), và FE nhập liệu (checkbox "Công đoạn phôi" ở tab "Vật tư thành phẩm", <code>SpecSteelPage.tsx</code>).</td></tr>
+          <tr><td>Fix bug ô chọn vật tư trống</td><td><code>SpecSteelPage.tsx</code> hàm <code>toManh()</code> — <code>Number(c.materialId)</code> ép id dạng bigint-as-string ("5") thành number thật (5), làm <code>startEditChild()</code> không bao giờ khớp lại được với <code>materials[].id</code> (vẫn là chuỗi "5") → ô chọn vật tư trống trơn + nút Lưu khoá cứng mỗi khi sửa dòng đã lưu. Cùng diff với field <code>processSteps</code> ở trên nên bị bỏ sót chung.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 3. THIẾT KẾ DỮ LIỆU ═══════════════════════ -->
+  <div class="module" id="thietke">
+    <h2>3. Thiết kế dữ liệu <span class="badge b-db">DB</span></h2>
+    <div class="card">
+      <h3>Model mới <span class="path">PieceStepBatch</span></h3>
+      <p><code>id, productionOrderId, pieceId, step, qty, idempotencyKey?, reportedAt, reportedById</code> — bảng phẳng append-only, KHÔNG có bảng con kiểu <code>StepBatchSegment</code>. Đơn vị = SỐ MẢNH (khớp <code>ProductionBatch.reportedQty</code>), không phải số miếng thực cắt ra. Khoá theo <code>productionOrderId</code> (không phải <code>productionInvoiceId</code>) vì định mức (<code>plannedQty</code>) là đại lượng theo TỪNG order.</p>
+    </div>
+    <div class="callout ok">
+      <b>Khác biệt cố ý so với <code>StepBatch</code> bên Sắt:</b> có <code>idempotencyKey</code> và <code>reportedById</code> — <code>StepBatch</code> thiếu cả hai, đó là thiếu sót của module Sắt chứ không phải mẫu để chép nguyên trạng.
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">prisma/schema.prisma</td><td>Model <code>PieceStepBatch</code> mới + quan hệ ngược trên <code>ProductionOrder</code>, <code>Piece</code>, <code>User</code></td></tr>
+          <tr><td class="path">migrations/20260904025719_piece_step_batches</td><td><code>CREATE TABLE piece_step_batches</code> + unique index <code>idempotencyKey</code> + index tra cứu <code>(productionOrderId, pieceId, step)</code> + 3 FK <code>RESTRICT/CASCADE</code></td></tr>
+          <tr><td class="path">common/constants/process-steps.constant.ts</td><td>Mới — nâng <code>PROCESS_STEPS</code> từ <code>skus/dto/update-quota.dto.ts</code> lên common (module <code>production-batches</code> không được phụ thuộc ngược module <code>skus</code>), kèm hàm <code>sortProcessSteps()</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 4. BACKEND ═══════════════════════ -->
+  <div class="module" id="backend">
+    <h2>4. Backend <span class="badge b-be">BE</span></h2>
+
+    <div class="card">
+      <h3><span class="path">production-batches.service.ts</span> — đọc tiến độ, KHÔNG thêm endpoint</h3>
+      <p><code>getBatchPlan()</code>/<code>getBatchPlanBatch()</code> (đã có sẵn cho Hàn/Sơn/Phôi) mở rộng thêm helper <code>getPieceMaterialYieldExtrasByPiece(Batch)()</code> (gộp 3 thứ trong 1 query <code>pieceMaterialYield</code>: tồn nguyên liệu, processSteps chuẩn hoá, qtyPerPiece — thay thế hàm cũ chỉ trả tồn nguyên liệu) và <code>getStepBatchDoneMap()</code> (Σ qty theo <code>(order, piece, step)</code>). <code>requiredQty</code> mọi bước = <code>plannedQty</code> (mọi mảnh đều phải qua từng bước, không có tỉ lệ riêng như <code>PieceBom.qtyPerPiece</code> bên Sắt). Chỉ chạy khi <code>stage===PHOI</code>; HAN/SON luôn nhận mảng rỗng.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">production-batches.service.ts</span> — <code>recordPieceStepBatch()</code>, hàm ghi mới</h3>
+      <p>Trình tự: chặn <code>stage!==PHOI</code> → <code>assertMfgRoleMatchesStage()</code> (tái dùng) → idempotency short-circuit → <code>assertItemPiHasActiveFloor()</code> → kiểm <code>PieceMaterialYield</code> tồn tại/<code>processSteps</code> không rỗng/step hợp lệ → <code>$transaction { lockBusinessKey() → assertItemPiHasActiveFloorLocked() → chặn "bước sau ≤ bước trước" → create }</code>.</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Ca lỗi</th><th>Message thật (đã live-test)</th></tr></thead>
+          <tbody>
+            <tr><td><code>processSteps</code> rỗng</td><td>"Mảnh ... chưa khai công đoạn nào theo định mức - báo thẳng sản lượng"</td></tr>
+            <tr><td>Báo vượt bước trước</td><td>"Mảnh 9: đã 'CAT' 2 mảnh, đã 'UON' 0 mảnh - không thể báo thêm 3 (vượt bước trước, tối đa còn 2)"</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">production-batches.controller.ts</span> — route mới</h3>
+      <p><code>POST /production-orders/:id/piece-step-batches</code>, permission <code>PRODUCTION_BATCH:CREATE</code> (đã có sẵn cho <code>PHOI_STAFF</code> — không đổi <code>role-permissions.constant.ts</code>, chỉ thêm comment), <code>@RequireMfgRole(PHOI)</code>, Idempotency-Key bắt buộc (tiền lệ <code>SteelIssuesController</code>). Đặt trên <code>@Get('production-batches/:id')</code> theo tiền lệ chặn khớp nhầm route của controller này.</p>
+    </div>
+
+    <div class="callout">
+      <b>"Chốt & gửi KCS" không bị chặn dù chưa báo đủ:</b> <code>create()</code> (tạo <code>ProductionBatch</code> thật) KHÔNG có ràng buộc mới nào — quyết định nghiệp vụ 04/09, nhất quán với 3 chỗ khác trong module đã ghi rõ triết lý này ("không cap theo BOM lúc báo", "không chặn khi tồn không đủ", "không tự động chuyển trạng thái vì ca thiếu vẫn phải đi tiếp được").
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. FRONTEND ═══════════════════════ -->
+  <div class="module" id="frontend">
+    <h2>5. Frontend <span class="badge b-fe">FE</span></h2>
+
+    <div class="card">
+      <h3><span class="path">services/production-batches-api.ts</span></h3>
+      <p><code>BeProductionBatchPlanItem</code> thêm <code>processSteps/stepProgress/qtyPerPiece</code>; hàm mới <code>recordPieceStepBatch()</code>.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">Phoi/phoiStyles.ts</span> — file mới, style dùng chung</h3>
+      <p>Tách style consts (màu, bảng, nút) ra file riêng để <code>LenhSanXuatPhoi.tsx</code> và <code>VatTuTpDetail.tsx</code> không phải import chéo lẫn nhau (tránh vòng lặp module).</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">Phoi/VatTuTpDetail.tsx</span> — file mới</h3>
+      <p>Màn chi tiết 1 mảnh Vật tư thành phẩm. <code>processSteps</code> rỗng → chỉ 1 panel "Chốt & gửi KCS" (ô nhập + nút Ghi nhận), y hệt trải nghiệm cũ. <code>processSteps</code> có giá trị → dải tab theo từng bước (mirror <code>StepBatchPanel</code> bên Sắt nhưng 1 dòng, không có cỡ đoạn) + tab "Chốt & gửi KCS" cuối cùng, hiện cảnh báo (không chặn) nếu chưa báo đủ.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">Phoi/LenhSanXuatPhoi.tsx</span> — màn gộp</h3>
+      <p>Thêm nguồn dữ liệu <code>listProductionOrdersForStage()</code> + <code>getProductionBatchPlanBatch(stage=PHOI)</code>, gộp vào <code>PiAgg.vatTuTpItems</code> (danh sách phẳng). Bảng danh sách PI thêm cột "Vật tư TP" (đơn vị mảnh, KHÔNG cộng chung với cột Sắt đơn vị cây). <code>PiDetail</code> thêm section "Vật tư thành phẩm" bên dưới danh sách Sắt, mỗi item ghi kèm mã SKU để phân biệt (2 SKU cùng PI có thể cùng tên mảnh, vd cùng "Pat").</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">Manufacturing/MfgApp.tsx</span> — bỏ tab cũ</h3>
+      <p>Xoá tab <code>phoi-vat-tu-tp</code> khỏi <code>TabId</code>/<code>TABS</code>/mount/import. Xoá file <code>Phoi/LenhSanXuatVatTuThanhPham.tsx</code>. <b>Không đụng</b> <code>components/sanxuat/core.tsx</code> (dùng chung Hàn/Sơn) — màn mới tự dựng UI riêng, không đi qua <code>TwoTierScreen</code>/<code>VatTuDetailBoard</code>.</p>
+    </div>
+
+    <div class="callout ok">
+      <b>Lợi ích phụ:</b> tab cũ vốn chỉ hiện cho role Phôi dù phần mount đã mở cho cả Giám đốc (bug nhỏ có sẵn) — gộp vào màn "Lệnh sản xuất" (đã mở cho Giám đốc từ trước) sửa luôn việc này.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 6. KIỂM CHỨNG ═══════════════════════ -->
+  <div class="module" id="kiemchung">
+    <h2>6. Kiểm chứng</h2>
+
+    <div class="card">
+      <h3>Backend — tĩnh + test</h3>
+      <p><code>prisma generate</code> · <code>tsc --noEmit</code> sạch · <code>eslint</code> sạch trên toàn bộ file đã sửa (0 error, chỉ warning có sẵn không liên quan) · 15 test mới (idempotency, chuẩn hoá thứ tự lộn xộn, chặn vượt bước trước, bước đầu không cap, tương thích ngược khi <code>processSteps</code> rỗng, Hàn/Sơn không query gì thêm, nhiều order cùng PI không lẫn <code>doneQty</code>).</p>
+      <div class="stats">
+        <div class="stat"><div class="n">825</div><div class="l">test BE pass (46 suite)</div></div>
+        <div class="stat"><div class="n">15</div><div class="l">test mới, tất cả pass</div></div>
+        <div class="stat"><div class="n">0</div><div class="l">test cũ vỡ</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Frontend — tĩnh</h3>
+      <p><code>tsc --noEmit</code> sạch · <code>eslint</code> sạch (0 warning trên file mới/đã sửa) · <code>next build</code> thành công.</p>
+    </div>
+
+    <div class="card">
+      <h3>Live-test qua trình duyệt thật — đầy đủ, không chỉ tĩnh</h3>
+      <p>Gắn tạm 1 <code>PieceMaterialYield</code> (<code>processSteps=['CAT','UON']</code>) vào 1 <code>ProductionOrder</code> RELEASED có sẵn (PO-54, cùng PI PO-53), 1 mảnh khác giữ nguyên KHÔNG khai công đoạn.</p>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Bước</th><th>Kết quả quan sát thật</th></tr></thead>
+          <tbody>
+            <tr><td>Đăng nhập Phôi</td><td>Chỉ còn <b>1 tab</b> "Lệnh sản xuất" — thấy cả Sắt lẫn 2 item Vật tư TP trong cùng danh sách phẳng, đúng tên SKU phân biệt ("bàn trà PO-54" vs "bàn trà PO-53")</td></tr>
+            <tr><td>Mảnh "bàn trà" (Cắt+Uốn) — báo Cắt 2/3</td><td>Bảng hiện đúng "Cần 3, Đã cắt 2, Còn lại 1"</td></tr>
+            <tr><td>Thử báo Uốn 3 (vượt Cắt=2)</td><td>Bị chặn đúng: "vượt bước trước, tối đa còn 2"</td></tr>
+            <tr><td>Báo Uốn 2 (đúng)</td><td>"Đã uốn 2, Còn lại 1" — thành công</td></tr>
+            <tr><td>Chốt 3 mảnh dù chưa báo đủ Cắt/Uốn</td><td><b>Không bị chặn</b> — chỉ cảnh báo tham khảo, tạo <code>ProductionBatch</code> thành công (đúng thiết kế)</td></tr>
+            <tr><td>Mảnh "chân ghế" (chưa khai công đoạn)</td><td>KHÔNG hiện dải tab nào — chỉ 1 panel chốt, y hệt trải nghiệm cũ (tương thích ngược khoá được bằng mắt)</td></tr>
+            <tr><td><code>psql</code> đọc <code>piece_step_batches</code></td><td><code>(47,9,CAT,2)</code> và <code>(47,9,UON,2)</code> — khớp chính xác thao tác UI</td></tr>
+            <tr><td>KCS duyệt cả 2 lô (tab "Vật tư TP" riêng, không đổi)</td><td>Cả 2 chuyển <code>QC_DONE</code> đúng số lượng</td></tr>
+            <tr><td><code>GET .../piece-transfer-plan</code></td><td>"chân ghế" <code>readyQty:6</code>, "bàn trà" <code>readyQty:3</code> — sẵn sàng chuyển kho đúng, xác nhận end-to-end</td></tr>
+            <tr><td>Đăng nhập Hàn (tài khoản tạo tạm)</td><td>Màn "Lệnh sản xuất — Công đoạn Hàn" hiển thị bình thường, không có gì bất thường — xác nhận <code>core.tsx</code> không bị ảnh hưởng</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Toàn bộ dữ liệu test (<code>piece_step_batches</code>, <code>production_batches</code>, <code>piece_material_yield</code> tạm, <code>floorStage</code>, tài khoản Hàn tạm) đã được dọn sạch sau khi xác nhận — DB dev quay lại đúng trạng thái trước khi test.</p>
+    </div>
+
+    <div class="callout warn">
+      <b>Phát hiện phụ (ngoài phạm vi, không sửa):</b> route <code>POST /production-orders/:id/floor-start</code> yêu cầu role <code>PRODUCTION_MANAGER</code> nhưng role này (và cả ADMIN) hiện không tự bấm "Bắt đầu" được — thiếu permission <code>PRODUCTION_ORDER:UPDATE</code> / không nằm trong whitelist role của route. Phải set <code>floorStage</code> trực tiếp qua SQL để test được. Cần báo riêng, không sửa trong đợt này.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 7. CÒN ĐỂ NGỎ ═══════════════════════ -->
+  <div class="module" id="conngo">
+    <h2>7. Còn để ngỏ / chưa làm</h2>
+    <ul class="timeline">
+      <li><b>Bug trừ tồn thiếu × qtyPerPiece</b><span> — <code>production-batches.service.ts:245</code> (<code>postMaterialYieldConsumeEntry</code>) tính <code>reportedQty / piecesPerBar</code>, thiếu nhân <code>qtyPerPiece</code>, trong khi bên tính mua (<code>piece-material-yield-purchase.service.ts:110</code>) nhân đúng. Mảnh cần nhiều hơn 1 miếng/mảnh (vd "pat" = 3 miếng) sẽ bị trừ tồn THIẾU so với thực mua → tồn kho báo dư ảo, càng chạy càng lệch. Người dùng chốt để đợt sau. Mảnh <code>qtyPerPiece=1</code> không ảnh hưởng.</span></li>
+      <li><b><code>recordCutBatch</code>/<code>recordStepBatch</code> (Sắt) còn khe TOCTOU chưa vá</b><span> — không có transaction/lock/idempotency-key, khác hẳn <code>recordPieceStepBatch()</code> mới (đã vá đúng). Không sửa lần này vì ngoài phạm vi yêu cầu.</span></li>
+      <li><b>Role <code>PRODUCTION_MANAGER</code> không tự "Bắt đầu" lệnh sản xuất được</b><span> — xem callout ở mục 6, phát hiện tình cờ lúc chuẩn bị dữ liệu test, chưa sửa.</span></li>
+      <li><b><code>VAT_TU_TP_CFG</code> và <code>PhoiScreen</code> trong <code>core.tsx</code> thành code chết</b><span> — cố ý không dọn để không chạm 1 dòng nào của file dùng chung Hàn/Sơn; <code>PhoiScreen</code> vốn đã chết từ trước đợt này.</span></li>
+      <li><b>Bảng thống kê QLSX (<code>ThongKePagePlan.tsx</code>) vẫn không theo dõi tiến độ Vật tư thành phẩm</b><span> — chỉ có Sắt/Hàn/Sơn, không nằm trong yêu cầu lần này.</span></li>
+      <li><b>KCS vẫn giữ 2 tab riêng</b><span> — "Phôi" (theo cỡ đoạn, Sắt) và "Vật tư TP" (theo lô, <code>ProductionBatch</code>) — không gộp, vì 2 luồng duyệt khác DTO/endpoint/đơn vị, người dùng không yêu cầu gộp phần KCS.</span></li>
+      <li><b>Chưa commit</b><span> — toàn bộ thay đổi (2 repo + 2 migration) vẫn nằm ở working tree, chờ người dùng xem lại.</span></li>
+    </ul>
+  </div>
+
+  <footer>
+    Nguồn: toàn bộ nội dung trên tổng hợp trực tiếp từ phiên làm việc trong Claude Code — không suy
+    diễn thêm. Code thật nằm ở <code>D:\DNA-ERP-BE</code> (schema, migration, service, controller,
+    permission) và <code>D:\DNA-ERP</code> (adapter, màn Phôi gộp, file mới <code>VatTuTpDetail.tsx</code>).
+    Nối tiếp mạch nghiệp vụ "vật tư thành phẩm" đã mở ra ở
+    <code>changelog-2026-08-22-vat-tu-thanh-pham-dinh-muc-nhom.html</code> và
+    <code>changelog-2026-09-03-qty-per-piece-vat-tu-thanh-pham.html</code>; mirror mạch "công đoạn
+    theo bước" bên Sắt ở <code>changelog-2026-08-27</code> (StepBatch/recordStepBatch).
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" title="Về đầu trang" type="button">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

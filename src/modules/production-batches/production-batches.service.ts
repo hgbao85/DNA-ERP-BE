@@ -9,6 +9,7 @@ import {
   MfgRole,
   MfgStage,
   Prisma,
+  ProcessStep,
   ProductionBatchStatus,
   ProductionOrder,
   StockLedgerRefType,
@@ -16,6 +17,8 @@ import {
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { ProcessStepValue, sortProcessSteps } from '../../common/constants/process-steps.constant';
 import {
   assertItemPiHasActiveFloor,
   assertItemPiHasActiveFloorLocked,
@@ -24,12 +27,25 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { isFamilyScope } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { CreatePieceStepBatchDto } from './dto/create-piece-step-batch.dto';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
 import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
+import { PieceStepBatchResponseDto } from './dto/piece-step-batch-response.dto';
+import { PieceStepProgressDto } from './dto/piece-step-progress.dto';
 import { ProductionBatchPlanItemResponseDto } from './dto/production-batch-plan-item-response.dto';
 import { ProductionBatchPlanResponseDto } from './dto/production-batch-plan-response.dto';
 import { ProductionBatchResponseDto } from './dto/production-batch-response.dto';
+
+/** Gộp 3 thứ cần cho mỗi piece có PieceMaterialYield ở stage=PHOI trong 1 lần tra bảng
+ *  piece_material_yield (thay vì 3 hàm rời nhân round-trip DB): tồn nguyên liệu thô, công đoạn đã
+ *  khai (chuẩn hoá thứ tự), tỉ lệ miếng/mảnh cho FE hiện phụ chú. */
+type PieceMaterialYieldExtras = {
+  rawMaterialOnHand: number;
+  processSteps: ProcessStepValue[];
+  qtyPerPiece: number | null;
+};
 
 const PRODUCTION_BATCH_INCLUDE = {
   productionOrder: {
@@ -72,6 +88,7 @@ export class ProductionBatchesService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
+    private readonly materialYieldIssuesService: MaterialYieldIssuesService,
   ) {}
 
   async create(
@@ -112,6 +129,7 @@ export class ProductionBatchesService {
     await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'báo sản lượng');
     const pieceBigId = parseBigIntId(dto.pieceId);
     await this.assertPieceInBom(order.bomRevisionId, pieceBigId, dto.stage);
+    await this.assertMaterialYieldReceived(order.bomRevisionId, pieceBigId, order.id, dto.stage);
 
     // Tạo batch + ghi toàn bộ dòng StockLedger đoạn sắt tiêu thụ trong CÙNG 1 transaction - trước
     // đây 2 bước này chạy rời nhau, 1 dòng ledger lỗi giữa chừng (mất kết nối, timeout) để lại
@@ -149,6 +167,117 @@ export class ProductionBatchesService {
     );
 
     return this.toResponseDto(created);
+  }
+
+  /**
+   * Phôi báo "vừa {step} xong N mảnh" cho vật tư thành phẩm (PieceMaterialYield.processSteps,
+   * thêm 2026-09-04) - trước khi chốt lô ProductionBatch thật qua create() để gửi KCS. Khuôn chép
+   * MaterialIssuesService.create() (Idempotency-Key + $transaction + lockBusinessKey), KHÔNG chép
+   * SteelIssuesService.recordStepBatch() (hàm đó thiếu cả 3 thứ này - khe TOCTOU thật khi 2 người
+   * báo cùng lúc, xem comment process-steps.constant.ts).
+   *
+   * Chặn "bước sau vượt bước liền trước" (giống recordStepBatch chặn vượt catDone) - bước ĐẦU
+   * TIÊN trong processSteps KHÔNG bị cap theo plannedQty, nhất quán triết lý "không cap theo BOM
+   * lúc báo, KCS mới là bước kiểm soát" (comment đầu file). Piece không có PieceMaterialYield hoặc
+   * processSteps rỗng ⇒ BadRequest, bắt buộc dùng luồng cũ (báo thẳng qua create()) - đây là biên
+   * tương thích ngược bắt buộc, KHÔNG được nới lỏng.
+   *
+   * KHÔNG chặn "chốt lô mà chưa báo đủ công đoạn" ở create() - quyết định nghiệp vụ 2026-09-04,
+   * cùng triết lý "không chặn oan công nhân, KCS mới là bước kiểm soát" đã lặp lại nhiều lần trong
+   * module này. FE tự cảnh báo (không chặn) dựa trên stepProgress trả về từ getBatchPlan().
+   */
+  async recordPieceStepBatch(
+    productionOrderId: string,
+    dto: CreatePieceStepBatchDto,
+    reportedById: string,
+    callerMfgRole: string | null,
+    idempotencyKey?: string,
+  ): Promise<PieceStepBatchResponseDto> {
+    if (dto.stage !== MfgStage.PHOI) {
+      throw new BadRequestException(
+        `Báo tiến độ công đoạn chỉ áp dụng cho PHOI, nhận được '${dto.stage}'`,
+      );
+    }
+    this.assertMfgRoleMatchesStage(callerMfgRole, dto.stage);
+
+    if (idempotencyKey) {
+      const existing = await this.prisma.pieceStepBatch.findUnique({ where: { idempotencyKey } });
+      if (existing) return this.toPieceStepBatchResponseDto(existing);
+    }
+
+    const order = await this.findOrderOrThrow(productionOrderId);
+    await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'báo công đoạn');
+    const pieceBigId = parseBigIntId(dto.pieceId);
+
+    const yieldRow = await this.prisma.pieceMaterialYield.findUnique({
+      where: { bomRevisionId_pieceId: { bomRevisionId: order.bomRevisionId, pieceId: pieceBigId } },
+    });
+    if (!yieldRow) {
+      throw new BadRequestException(
+        `Mảnh ${dto.pieceId} không có định mức vật tư thành phẩm - không báo công đoạn ở đây`,
+      );
+    }
+    const received = await this.materialYieldIssuesService.sumReceived(
+      order.id,
+      yieldRow.materialId,
+    );
+    if (received <= 0) {
+      throw new BadRequestException(
+        `Mảnh ${dto.pieceId} dùng vật tư thành phẩm chưa được xác nhận nhận từ kho - xác nhận nhận (Xác nhận nhận sắt) trước khi báo công đoạn`,
+      );
+    }
+    const orderedSteps = sortProcessSteps(yieldRow.processSteps);
+    if (orderedSteps.length === 0) {
+      throw new BadRequestException(
+        `Mảnh ${dto.pieceId} chưa khai công đoạn nào theo định mức - báo thẳng sản lượng`,
+      );
+    }
+    if (!orderedSteps.includes(dto.step)) {
+      throw new BadRequestException(
+        `Mảnh ${dto.pieceId} không có công đoạn '${dto.step}' theo định mức`,
+      );
+    }
+    const stepIndex = orderedSteps.indexOf(dto.step);
+    const prevStep = stepIndex > 0 ? orderedSteps[stepIndex - 1] : null;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `piece-step-batch:${order.id}:${pieceBigId}:${dto.step}`);
+      await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, 'báo công đoạn');
+
+      if (prevStep) {
+        const [donePrevAgg, doneThisAgg] = await Promise.all([
+          tx.pieceStepBatch.aggregate({
+            where: { productionOrderId: order.id, pieceId: pieceBigId, step: prevStep },
+            _sum: { qty: true },
+          }),
+          tx.pieceStepBatch.aggregate({
+            where: { productionOrderId: order.id, pieceId: pieceBigId, step: dto.step },
+            _sum: { qty: true },
+          }),
+        ]);
+        const donePrev = donePrevAgg._sum.qty ?? 0;
+        const doneThis = doneThisAgg._sum.qty ?? 0;
+        if (doneThis + dto.qty > donePrev) {
+          throw new BadRequestException(
+            `Mảnh ${dto.pieceId}: đã '${prevStep}' ${donePrev} mảnh, đã '${dto.step}' ${doneThis} ` +
+              `mảnh - không thể báo thêm ${dto.qty} (vượt bước trước, tối đa còn ${donePrev - doneThis})`,
+          );
+        }
+      }
+
+      return tx.pieceStepBatch.create({
+        data: {
+          productionOrderId: order.id,
+          pieceId: pieceBigId,
+          step: dto.step,
+          qty: dto.qty,
+          reportedById,
+          idempotencyKey,
+        },
+      });
+    });
+
+    return this.toPieceStepBatchResponseDto(created);
   }
 
   /**
@@ -223,49 +352,13 @@ export class ProductionBatchesService {
       return;
     }
 
-    // Không có PieceBom (không cắt từ đoạn sắt bin-packing) - kiểm định mức nguyên liệu vật tư
-    // thành phẩm (PieceMaterialYield, vd thanh nhôm → chân nhôm, hoặc tấm sắt lá → pat). CHỈ trừ
-    // tồn lúc PHOI báo cắt (tiêu thụ nguyên liệu thô) - piece có needsHan=true VÀ có
-    // PieceMaterialYield (vd "pat", cần Hàn sau khi cắt) còn báo lại ở HAN, lúc đó KHÔNG được trừ
-    // tồn nguyên liệu lần 2 (Hàn tiêu thụ output đã cắt xong, không tiêu thụ tấm sắt lá gốc).
-    // Trừ THEO PHÂN SỐ cây (reportedQty / piecesPerBar, Decimal - KHÔNG làm tròn) để nhiều lần báo
-    // nhỏ cộng dồn khớp chính xác; làm tròn số cây chỉ xảy ra lúc tính mua
-    // (PieceMaterialYieldPurchaseService).
-    if (batch.stage !== MfgStage.PHOI) return;
-    await this.postMaterialYieldConsumeEntry(db, tx, batch, reportedById);
-  }
-
-  private async postMaterialYieldConsumeEntry(
-    db: PrismaTx | PrismaServiceType,
-    tx: PrismaTx | undefined,
-    batch: { id: bigint; pieceId: bigint; reportedQty: number; bomRevisionId: bigint },
-    reportedById: string,
-  ): Promise<void> {
-    const yieldRow = await db.pieceMaterialYield.findUnique({
-      where: {
-        bomRevisionId_pieceId: { bomRevisionId: batch.bomRevisionId, pieceId: batch.pieceId },
-      },
-      include: { material: { include: { warehouse: true } } },
-    });
-    if (!yieldRow || !yieldRow.material.warehouse) return;
-
-    const toWarehouse = await db.warehouse.findUniqueOrThrow({
-      where: { code: PRODUCTION_WAREHOUSE_CODE },
-    });
-
-    await this.stockLedgerService.postEntry(
-      {
-        fromWarehouseId: yieldRow.material.warehouse.id,
-        toWarehouseId: toWarehouse.id,
-        materialId: yieldRow.materialId,
-        qty: batch.reportedQty / yieldRow.piecesPerBar,
-        refType: StockLedgerRefType.MATERIAL_YIELD_CONSUME,
-        refId: batch.id.toString(),
-        createdById: reportedById,
-        idempotencyKey: `production-batch-material-yield-consume:${batch.id}:${yieldRow.materialId}`,
-      },
-      tx,
-    );
+    // Không có PieceBom (không cắt từ đoạn sắt bin-packing) = piece dùng PieceMaterialYield (vd
+    // thanh nhôm → chân nhôm, tấm Sắt La → pat) - KHÔNG còn trừ tồn ở đây nữa (2026-09-04). Tồn
+    // nguyên liệu thô giờ trừ NGAY LÚC THỦ KHO XUẤT (MaterialYieldIssuesService.create()), không
+    // phải lúc Phôi báo sản lượng - mirror đúng cách Sắt hoạt động (SteelIssuesService.create() trừ
+    // tồn lúc xuất, recordCutBatch() báo cắt không đụng StockLedger nguyên liệu nữa). Hàm cũ
+    // postMaterialYieldConsumeEntry() đã bị XOÁ - giữ lại sẽ trừ tồn 2 LẦN cho cùng 1 lượng vật lý
+    // (đã xác nhận stock_ledger chưa có dòng MATERIAL_YIELD_CONSUME nào trong DB thật trước khi xoá).
   }
 
   async findAllForOrder(
@@ -356,26 +449,43 @@ export class ProductionBatchesService {
       target.set(key, (target.get(key) ?? 0) + b.reportedQty);
     }
 
-    // Cảnh báo "còn nguyên liệu chưa cắt hết" (chỉ hiển thị, không chặn - quyết định nghiệp vụ
-    // 2026-08-22) - chỉ tính cho stage=PHOI, chỉ cho piece có PieceMaterialYield.
-    const rawMaterialOnHandByPiece =
+    // Cảnh báo "còn nguyên liệu chưa cắt hết" + tiến độ công đoạn (chỉ hiển thị, không chặn -
+    // quyết định nghiệp vụ 2026-08-22 và 2026-09-04) - chỉ tính cho stage=PHOI, chỉ cho piece có
+    // PieceMaterialYield.
+    const [extrasByPiece, stepBatchDoneMap] =
       stage === MfgStage.PHOI
-        ? await this.getRawMaterialOnHandByPiece(
-            order.bomRevisionId,
-            bomPieces.map((bp) => bp.pieceId),
-          )
-        : new Map<string, number>();
+        ? await Promise.all([
+            this.getPieceMaterialYieldExtrasByPiece(
+              order.bomRevisionId,
+              bomPieces.map((bp) => bp.pieceId),
+            ),
+            this.getStepBatchDoneMap([order.id]),
+          ])
+        : [new Map<string, PieceMaterialYieldExtras>(), new Map<string, number>()];
 
     const items = bomPieces.map((bp) => {
       const key = bp.pieceId.toString();
+      const plannedQty = bp.qtyPerUnit * order.quantity;
+      const extras = extrasByPiece.get(key);
+      const processSteps = extras?.processSteps ?? [];
       return new ProductionBatchPlanItemResponseDto({
         pieceId: key,
         pieceCode: bp.piece.code,
         pieceName: bp.piece.name,
-        plannedQty: bp.qtyPerUnit * order.quantity,
+        plannedQty,
         awaitingQcQty: awaitingByPiece.get(key) ?? 0,
         passedQty: passedByPiece.get(key) ?? 0,
-        rawMaterialOnHand: rawMaterialOnHandByPiece.get(key) ?? null,
+        rawMaterialOnHand: extras?.rawMaterialOnHand ?? null,
+        processSteps,
+        stepProgress: processSteps.map(
+          (step) =>
+            new PieceStepProgressDto({
+              step,
+              requiredQty: plannedQty,
+              doneQty: stepBatchDoneMap.get(`${order.id}:${key}:${step}`) ?? 0,
+            }),
+        ),
+        qtyPerPiece: extras?.qtyPerPiece ?? null,
       });
     });
 
@@ -415,17 +525,20 @@ export class ProductionBatchesService {
     });
     const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
 
-    const [bomPiecesByRevision, rawMaterialByRevision, batches] = await Promise.all([
+    const [bomPiecesByRevision, extrasByRevision, batches, stepBatchDoneMap] = await Promise.all([
       stage === MfgStage.PHOI
         ? this.findPhoiEligibleBomPiecesBatch(revisionIds)
         : this.findBomPiecesByStageBatch(revisionIds, stage),
       stage === MfgStage.PHOI
-        ? this.getRawMaterialOnHandByPieceBatch(revisionIds)
-        : Promise.resolve(new Map<string, Map<string, number>>()),
+        ? this.getPieceMaterialYieldExtrasByPieceBatch(revisionIds)
+        : Promise.resolve(new Map<string, Map<string, PieceMaterialYieldExtras>>()),
       this.prisma.productionBatch.findMany({
         where: { productionOrderId: { in: orders.map((o) => o.id) }, stage },
         select: { productionOrderId: true, pieceId: true, status: true, reportedQty: true },
       }),
+      stage === MfgStage.PHOI
+        ? this.getStepBatchDoneMap(orders.map((o) => o.id))
+        : Promise.resolve(new Map<string, number>()),
     ]);
 
     const awaitingByOrderPiece = new Map<string, number>();
@@ -440,20 +553,33 @@ export class ProductionBatchesService {
     for (const order of orders) {
       const revisionKey = order.bomRevisionId.toString();
       const bomPieces = bomPiecesByRevision.get(revisionKey) ?? [];
-      const rawMaterialByPiece =
-        rawMaterialByRevision.get(revisionKey) ?? new Map<string, number>();
+      const extrasByPiece =
+        extrasByRevision.get(revisionKey) ?? new Map<string, PieceMaterialYieldExtras>();
 
       const items = bomPieces.map((bp) => {
         const pieceKey = bp.pieceId.toString();
         const orderPieceKey = `${order.id}:${pieceKey}`;
+        const plannedQty = bp.qtyPerUnit * order.quantity;
+        const extras = extrasByPiece.get(pieceKey);
+        const processSteps = extras?.processSteps ?? [];
         return new ProductionBatchPlanItemResponseDto({
           pieceId: pieceKey,
           pieceCode: bp.piece.code,
           pieceName: bp.piece.name,
-          plannedQty: bp.qtyPerUnit * order.quantity,
+          plannedQty,
           awaitingQcQty: awaitingByOrderPiece.get(orderPieceKey) ?? 0,
           passedQty: passedByOrderPiece.get(orderPieceKey) ?? 0,
-          rawMaterialOnHand: rawMaterialByPiece.get(pieceKey) ?? null,
+          rawMaterialOnHand: extras?.rawMaterialOnHand ?? null,
+          processSteps,
+          stepProgress: processSteps.map(
+            (step) =>
+              new PieceStepProgressDto({
+                step,
+                requiredQty: plannedQty,
+                doneQty: stepBatchDoneMap.get(`${orderPieceKey}:${step}`) ?? 0,
+              }),
+          ),
+          qtyPerPiece: extras?.qtyPerPiece ?? null,
         });
       });
 
@@ -548,12 +674,12 @@ export class ProductionBatchesService {
     return map;
   }
 
-  /** Batch của getRawMaterialOnHandByPiece(), nhóm theo revision - dùng cho getBatchPlanBatch()
-   *  stage PHOI. */
-  private async getRawMaterialOnHandByPieceBatch(
+  /** Batch của getPieceMaterialYieldExtrasByPiece(), nhóm theo revision - dùng cho
+   *  getBatchPlanBatch() stage PHOI. */
+  private async getPieceMaterialYieldExtrasByPieceBatch(
     revisionIds: bigint[],
-  ): Promise<Map<string, Map<string, number>>> {
-    const result = new Map<string, Map<string, number>>();
+  ): Promise<Map<string, Map<string, PieceMaterialYieldExtras>>> {
+    const result = new Map<string, Map<string, PieceMaterialYieldExtras>>();
     if (revisionIds.length === 0) return result;
     const yields = await this.prisma.pieceMaterialYield.findMany({
       where: { bomRevisionId: { in: revisionIds } },
@@ -572,9 +698,30 @@ export class ProductionBatchesService {
 
     for (const y of yields) {
       const revKey = y.bomRevisionId.toString();
-      const inner = result.get(revKey) ?? new Map<string, number>();
-      inner.set(y.pieceId.toString(), onHandByMaterial.get(y.materialId.toString()) ?? 0);
+      const inner = result.get(revKey) ?? new Map<string, PieceMaterialYieldExtras>();
+      inner.set(y.pieceId.toString(), {
+        rawMaterialOnHand: onHandByMaterial.get(y.materialId.toString()) ?? 0,
+        processSteps: sortProcessSteps(y.processSteps),
+        qtyPerPiece: y.qtyPerPiece,
+      });
       result.set(revKey, inner);
+    }
+    return result;
+  }
+
+  /** Σ PieceStepBatch.qty theo (order, piece, step) - key `${orderId}:${pieceId}:${step}`. Dùng
+   *  để build stepProgress[].doneQty ở getBatchPlan()/getBatchPlanBatch(). CHỈ gọi khi stage=PHOI
+   *  (nơi duy nhất PieceStepBatch có ý nghĩa). */
+  private async getStepBatchDoneMap(orderIds: bigint[]): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (orderIds.length === 0) return result;
+    const rows = await this.prisma.pieceStepBatch.groupBy({
+      by: ['productionOrderId', 'pieceId', 'step'],
+      where: { productionOrderId: { in: orderIds } },
+      _sum: { qty: true },
+    });
+    for (const r of rows) {
+      result.set(`${r.productionOrderId}:${r.pieceId}:${r.step}`, r._sum.qty ?? 0);
     }
     return result;
   }
@@ -626,12 +773,13 @@ export class ProductionBatchesService {
     return readyByPiece;
   }
 
-  /** Tồn material (vd thanh nhôm) hiện có tại kho của material đó, theo từng piece có
-   *  PieceMaterialYield trên revision này - dùng cho banner cảnh báo ở getBatchPlan() stage=PHOI. */
-  private async getRawMaterialOnHandByPiece(
+  /** Tồn material (vd thanh nhôm) hiện có tại kho của material đó + processSteps (chuẩn hoá thứ
+   *  tự) + qtyPerPiece, theo từng piece có PieceMaterialYield trên revision này - dùng cho banner
+   *  cảnh báo và tiến độ công đoạn ở getBatchPlan() stage=PHOI. */
+  private async getPieceMaterialYieldExtrasByPiece(
     bomRevisionId: bigint,
     pieceIds: bigint[],
-  ): Promise<Map<string, number>> {
+  ): Promise<Map<string, PieceMaterialYieldExtras>> {
     if (pieceIds.length === 0) return new Map();
     const yields = await this.prisma.pieceMaterialYield.findMany({
       where: { bomRevisionId, pieceId: { in: pieceIds } },
@@ -648,9 +796,13 @@ export class ProductionBatchesService {
       onHandByMaterial.set(key, (onHandByMaterial.get(key) ?? 0) + q.qty.toNumber());
     }
 
-    const result = new Map<string, number>();
+    const result = new Map<string, PieceMaterialYieldExtras>();
     for (const y of yields) {
-      result.set(y.pieceId.toString(), onHandByMaterial.get(y.materialId.toString()) ?? 0);
+      result.set(y.pieceId.toString(), {
+        rawMaterialOnHand: onHandByMaterial.get(y.materialId.toString()) ?? 0,
+        processSteps: sortProcessSteps(y.processSteps),
+        qtyPerPiece: y.qtyPerPiece,
+      });
     }
     return result;
   }
@@ -748,6 +900,35 @@ export class ProductionBatchesService {
     }
   }
 
+  /**
+   * Chặn "chưa nhận vật tư thành phẩm thì chưa báo được" (2026-09-04, mirror SteelIssue chặn báo
+   * cắt khi status khác RECEIVED) - CHỈ áp dụng piece có PieceMaterialYield ở stage=PHOI (piece Sắt
+   * thường/Hàn/Sơn không đụng). Áp dụng cho CẢ piece processSteps rỗng lẫn có khai, vì cả 2 đều
+   * dùng chung nguyên liệu (Sắt La/thanh nhôm) phải xuất/nhận trước khi sản xuất - không chỉ riêng
+   * piece có tick công đoạn.
+   */
+  private async assertMaterialYieldReceived(
+    bomRevisionId: bigint,
+    pieceId: bigint,
+    productionOrderId: bigint,
+    stage: MfgStage,
+  ): Promise<void> {
+    if (stage !== MfgStage.PHOI) return;
+    const yieldRow = await this.prisma.pieceMaterialYield.findUnique({
+      where: { bomRevisionId_pieceId: { bomRevisionId, pieceId } },
+    });
+    if (!yieldRow) return;
+    const received = await this.materialYieldIssuesService.sumReceived(
+      productionOrderId,
+      yieldRow.materialId,
+    );
+    if (received <= 0) {
+      throw new BadRequestException(
+        `Mảnh ${pieceId} dùng vật tư thành phẩm chưa được xác nhận nhận từ kho - xác nhận nhận (Xác nhận nhận sắt) trước khi báo sản lượng`,
+      );
+    }
+  }
+
   private async findOrderOrThrow(id: string): Promise<ProductionOrder> {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
@@ -801,6 +982,26 @@ export class ProductionBatchesService {
       reportedAt: batch.reportedAt,
       reportedById: batch.reportedById,
       reworkOfId: batch.reworkOfId?.toString() ?? null,
+    });
+  }
+
+  private toPieceStepBatchResponseDto(row: {
+    id: bigint;
+    productionOrderId: bigint;
+    pieceId: bigint;
+    step: ProcessStep;
+    qty: number;
+    reportedAt: Date;
+    reportedById: string;
+  }): PieceStepBatchResponseDto {
+    return new PieceStepBatchResponseDto({
+      id: row.id.toString(),
+      productionOrderId: row.productionOrderId.toString(),
+      pieceId: row.pieceId.toString(),
+      step: row.step,
+      qty: row.qty,
+      reportedAt: row.reportedAt,
+      reportedById: row.reportedById,
     });
   }
 }
