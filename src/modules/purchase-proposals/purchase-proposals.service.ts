@@ -313,13 +313,31 @@ export class PurchaseProposalsService {
     }
     // Kho nhận hàng = kho đã khai CHO ĐÚNG vật tư này (Material.warehouseId, xem Admin > Vật tư),
     // KHÔNG còn theo proposal.warehouseCode (1 kho chung cho cả đề xuất) - Sếp chốt 2026-08-15
-    // mục 2. Bất biến theo item nên kiểm trước khi mở transaction là an toàn (không cần khoá).
-    if (!item.material.warehouseId) {
-      throw new BadRequestException(
-        `Vật tư ${item.material.code} chưa được cấu hình Kho - không thể nhập kho tự động, vào Admin > Vật tư để gán Kho trước`,
-      );
+    // mục 2. TRỪ vật tư có kho MẶC ĐỊNH đã thuộc họ "thanh-pham" (item.receiveWarehouseCode có
+    // giá trị, xem ConsumableMaterialPurchaseService) - ưu tiên về ĐÚNG kho thành phẩm QLSX đã
+    // chọn cho PI đó thay vì kho thành phẩm gốc cố định (2026-09-04, xác nhận lại nghiệp vụ với
+    // user sau khi phát hiện qua test sống: vật tư mặc định về vat-tu-tp/phoi-son-han KHÔNG được
+    // ghi đè, bắt buộc giữ nguyên ở kho trung chuyển để bước Đóng gói lấy ra được). Bất biến theo
+    // item nên kiểm trước khi mở transaction là an toàn (không cần khoá).
+    let materialWarehouseId: bigint;
+    if (item.receiveWarehouseCode) {
+      const overrideWarehouse = await this.prisma.warehouse.findUnique({
+        where: { code: item.receiveWarehouseCode },
+      });
+      if (!overrideWarehouse) {
+        throw new BadRequestException(
+          `Kho thành phẩm "${item.receiveWarehouseCode}" (QLSX đã chọn cho PI) không còn tồn tại - báo Admin kiểm tra lại`,
+        );
+      }
+      materialWarehouseId = overrideWarehouse.id;
+    } else {
+      if (!item.material.warehouseId) {
+        throw new BadRequestException(
+          `Vật tư ${item.material.code} chưa được cấu hình Kho - không thể nhập kho tự động, vào Admin > Vật tư để gán Kho trước`,
+        );
+      }
+      materialWarehouseId = item.material.warehouseId;
     }
-    const materialWarehouseId = item.material.warehouseId;
     // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26, mở rộng thành pool): cộng hàng về ĐÚNG pool giữ chỗ
     // (StockReservation, tạo ở CuttingProposalsService.approve()) - CHỈ khi đúng vật tư SẮT của
     // CuttingProposal thuộc CÙNG PI với đề xuất mua này. KHÔNG còn soi theo
@@ -648,9 +666,11 @@ export class PurchaseProposalsService {
       unit: item.material.unit,
       purchaseUnit: item.material.purchaseUnit ?? null,
       khoUnitFactor: item.material.khoUnitFactor?.toNumber() ?? null,
-      // Kho nhận hàng THẬT của riêng dòng này (Material.warehouseId) - nguồn xác thực cho
-      // receiveItem(), KHÔNG phải PurchaseProposalResponseDto.warehouseCode (nay chỉ tóm tắt).
-      warehouseCode: item.material.warehouse?.code ?? null,
+      // Kho nhận hàng THẬT của riêng dòng này - ưu tiên item.receiveWarehouseCode (vật tư đóng
+      // gói, ghi đè về kho thành phẩm QLSX đã chọn, 2026-09-04), rơi về Material.warehouseId nếu
+      // không có override. Nguồn xác thực cho receiveItem(), KHÔNG phải
+      // PurchaseProposalResponseDto.warehouseCode cấp đề xuất (nay chỉ tóm tắt).
+      warehouseCode: item.receiveWarehouseCode ?? item.material.warehouse?.code ?? null,
       actualStock: item.actualStock.toNumber(),
       buyQty: item.buyQty.toNumber(),
       stockLengthMm: item.stockLengthMm,

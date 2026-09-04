@@ -111,18 +111,36 @@ export class PackagingIssuesService {
         'xuất vật tư đóng gói',
       );
 
-      const plannedQty = await this.resolvePlannedQty(
-        tx,
-        order.bomRevisionId,
-        materialBigId,
-        order.quantity,
-      );
+      const item = await this.resolveAccessoryItem(tx, order.bomRevisionId, materialBigId);
+      const plannedQty = item.qtyPerUnit.toNumber() * order.quantity;
       const issuedSoFar = await this.sumIssued(tx, order.id, materialBigId);
       const remaining = plannedQty - issuedSoFar;
       if (dto.issuedQty > remaining) {
         throw new BadRequestException(
           `Số lượng xuất (${dto.issuedQty}) vượt quá số lượng còn có thể xuất cho vật tư ${dto.materialId} ` +
             `(định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
+        );
+      }
+
+      // 2026-09-04 (xác nhận nghiệp vụ với user): Chuyền kiểm là gate BẮT BUỘC trước Đóng gói cho
+      // MỌI mảnh, kể cả mảnh không cần đan (needsHan/needsSon quyết định công đoạn Phôi/Hàn/Sơn
+      // cuối cùng, không liên quan gì đến việc có phải qua Chuyền kiểm hay không) - trước đây
+      // create() không hề đọc TransferCheckResult, thủ kho vat-tu-tp xuất được đóng gói dù chưa ai
+      // chuyền kiểm. checkedUnits tính "đồng bộ" (Math.min qua mọi mảnh trong BOM, mirror cách
+      // WarehouseTransfersService.getPieceTransferPlan() cap suggestedQty theo readyQty QC_DONE) -
+      // 1 sản phẩm chỉ tính "đã chuyền kiểm" khi ĐỦ mọi mảnh của nó đã được kiểm.
+      const checkedUnits = await this.resolveCheckedUnits(
+        tx,
+        order.bomRevisionId,
+        order.productionInvoiceItemId,
+      );
+      const checkedCappedQty = item.qtyPerUnit.toNumber() * checkedUnits;
+      const remainingByCheck = checkedCappedQty - issuedSoFar;
+      if (dto.issuedQty > remainingByCheck) {
+        throw new ConflictException(
+          `Chỉ ${checkedUnits}/${order.quantity} sản phẩm đã qua Chuyền kiểm (đã xuất ${issuedSoFar}, ` +
+            `còn được xuất theo Chuyền kiểm ${Math.max(0, remainingByCheck)}) - không thể xuất đóng gói cho ${dto.issuedQty} ` +
+            `vượt quá số đã chuyền kiểm`,
         );
       }
 
@@ -181,14 +199,20 @@ export class PackagingIssuesService {
     });
 
     const bomRevisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
-    const [accessoryItems, issues] = await Promise.all([
+    const [accessoryItems, issues, bomPieces, checkedSums] = await Promise.all([
       this.prisma.bomAccessoryItem.findMany({
         where: { bomRevisionId: { in: bomRevisionIds }, kind: AccessoryItemKind.PACKAGING },
-        include: { material: true },
+        include: { material: { include: { warehouse: true } } },
       }),
       this.prisma.packagingIssue.findMany({
         where: { productionOrderId: { in: orders.map((o) => o.id) } },
         select: { productionOrderId: true, materialId: true, issuedQty: true },
+      }),
+      this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: bomRevisionIds } } }),
+      this.prisma.transferCheckResult.groupBy({
+        by: ['productionInvoiceItemId', 'pieceId'],
+        where: { productionInvoiceItemId: { in: orders.map((o) => o.productionInvoiceItemId) } },
+        _sum: { checkedQty: true },
       }),
     ]);
 
@@ -198,13 +222,45 @@ export class PackagingIssuesService {
       issuedByKey.set(key, (issuedByKey.get(key) ?? 0) + i.issuedQty.toNumber());
     }
 
+    // Chuyền kiểm cap, đồng bộ theo (productionInvoiceItemId, bomRevisionId) - mirror
+    // resolveCheckedUnits() bản đơn, gộp cho nhiều order 1 lần cùng idiom hàm này.
+    const bomPiecesByRevision = new Map<string, typeof bomPieces>();
+    for (const bp of bomPieces) {
+      const key = bp.bomRevisionId.toString();
+      const arr = bomPiecesByRevision.get(key) ?? [];
+      arr.push(bp);
+      bomPiecesByRevision.set(key, arr);
+    }
+    const checkedByItemPiece = new Map<string, number>();
+    for (const r of checkedSums) {
+      checkedByItemPiece.set(`${r.productionInvoiceItemId}:${r.pieceId}`, r._sum.checkedQty ?? 0);
+    }
+    const checkedUnitsByOrder = new Map<string, number>();
+    for (const order of orders) {
+      const pieces = bomPiecesByRevision.get(order.bomRevisionId.toString()) ?? [];
+      const units =
+        pieces.length === 0
+          ? 0
+          : Math.min(
+              ...pieces.map((bp) =>
+                Math.floor(
+                  (checkedByItemPiece.get(`${order.productionInvoiceItemId}:${bp.pieceId}`) ?? 0) /
+                    bp.qtyPerUnit,
+                ),
+              ),
+            );
+      checkedUnitsByOrder.set(order.id.toString(), units);
+    }
+
     const result: PackagingIssuePlanItemResponseDto[] = [];
     for (const order of orders) {
       const items = accessoryItems.filter((a) => a.bomRevisionId === order.bomRevisionId);
+      const checkedUnits = checkedUnitsByOrder.get(order.id.toString()) ?? 0;
       for (const item of items) {
         const key = `${order.id}:${item.materialId}`;
         const requiredQty = item.qtyPerUnit.toNumber() * order.quantity;
         const issuedQty = issuedByKey.get(key) ?? 0;
+        const checkedCappedQty = item.qtyPerUnit.toNumber() * checkedUnits;
         result.push(
           new PackagingIssuePlanItemResponseDto({
             productionOrderId: order.id.toString(),
@@ -215,9 +271,13 @@ export class PackagingIssuesService {
             materialCode: item.material.code,
             materialName: item.material.name,
             materialUnit: item.material.unit,
+            materialWarehouseCode: item.material.warehouse?.code ?? null,
             requiredQty,
             issuedQty,
-            remainingToIssue: requiredQty - issuedQty,
+            // Trần thật là MIN(định mức BOM, đã qua Chuyền kiểm) - "Kế hoạch" (requiredQty) vẫn
+            // giữ nguyên tổng nhu cầu BOM để thủ kho biết đích cuối, nhưng "Còn lại" phải phản ánh
+            // đúng số HIỆN được phép xuất ngay bây giờ (2026-09-04, cùng gate với create()).
+            remainingToIssue: Math.min(requiredQty, checkedCappedQty) - issuedQty,
           }),
         );
       }
@@ -280,13 +340,12 @@ export class PackagingIssuesService {
     }
   }
 
-  private async resolvePlannedQty(
-    tx: PrismaTx,
+  private async resolveAccessoryItem(
+    client: PrismaServiceType | PrismaTx,
     bomRevisionId: bigint,
     materialId: bigint,
-    orderQuantity: number,
-  ): Promise<number> {
-    const item = await tx.bomAccessoryItem.findUnique({
+  ) {
+    const item = await client.bomAccessoryItem.findUnique({
       where: { bomRevisionId_materialId: { bomRevisionId, materialId } },
     });
     if (!item || item.kind !== AccessoryItemKind.PACKAGING) {
@@ -294,7 +353,38 @@ export class PackagingIssuesService {
         `Vật tư ${materialId} không thuộc định mức đóng gói (BomAccessoryItem kind=PACKAGING) của lệnh sản xuất này`,
       );
     }
-    return item.qtyPerUnit.toNumber() * orderQuantity;
+    return item;
+  }
+
+  /**
+   * Số sản phẩm đã qua Chuyền kiểm, ĐỒNG BỘ mọi mảnh trong BOM (1 sản phẩm chỉ tính "xong" khi đủ
+   * mọi mảnh của nó đã được kiểm - mirror WarehouseTransfersService.getPieceTransferPlan() cap
+   * suggestedQty theo readyQty QC_DONE). Áp dụng cho MỌI mảnh bất kể needsHan/needsSon/isWoven -
+   * Chuyền kiểm là bước bắt buộc trước Đóng gói theo đúng quy trình thật (xác nhận với user
+   * 2026-09-04), không phải chỉ mảnh phải đan mới cần.
+   */
+  private async resolveCheckedUnits(
+    client: PrismaServiceType | PrismaTx,
+    bomRevisionId: bigint,
+    productionInvoiceItemId: bigint,
+  ): Promise<number> {
+    const [bomPieces, checkedSums] = await Promise.all([
+      client.bomPiece.findMany({ where: { bomRevisionId } }),
+      client.transferCheckResult.groupBy({
+        by: ['pieceId'],
+        where: { productionInvoiceItemId },
+        _sum: { checkedQty: true },
+      }),
+    ]);
+    if (bomPieces.length === 0) return 0;
+    const checkedByPiece = new Map<string, number>(
+      checkedSums.map((r) => [r.pieceId.toString(), r._sum.checkedQty ?? 0]),
+    );
+    return Math.min(
+      ...bomPieces.map((bp) =>
+        Math.floor((checkedByPiece.get(bp.pieceId.toString()) ?? 0) / bp.qtyPerUnit),
+      ),
+    );
   }
 
   private async sumIssued(

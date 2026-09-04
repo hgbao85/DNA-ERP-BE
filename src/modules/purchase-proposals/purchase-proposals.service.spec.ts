@@ -32,7 +32,7 @@ describe('PurchaseProposalsService', () => {
       update: jest.Mock;
       updateMany: jest.Mock;
     };
-    warehouse: { findUniqueOrThrow: jest.Mock };
+    warehouse: { findUniqueOrThrow: jest.Mock; findUnique: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     auditLog: { create: jest.Mock };
     cuttingProposalLine: { findFirst: jest.Mock };
@@ -85,6 +85,7 @@ describe('PurchaseProposalsService', () => {
     rejectionReason: null,
     purchasedAt: null,
     approvalFileUrl: null,
+    receiveWarehouseCode: null as string | null,
     material: material(),
     // Luồng cũ (gỡ 2026-08-27) - giữ mảng rỗng vì toItemResponseDto vẫn map field này để tra cứu
     // lịch sử; không còn đường nào ghi thêm báo giá mới.
@@ -157,10 +158,12 @@ describe('PurchaseProposalsService', () => {
           return Promise.resolve({ count });
         }),
       },
-      // Sau khi kho nhận hàng chuyển sang đọc thẳng item.material.warehouseId (không qua lookup),
-      // chỗ này chỉ còn phục vụ đúng 1 việc: tra kho ảo SUPPLIER trong receiveItem().
+      // findUniqueOrThrow: tra kho ảo SUPPLIER trong receiveItem(). findUnique (2026-09-04): tra
+      // kho GHI ĐÈ khi item.receiveWarehouseCode có giá trị (vật tư đóng gói) - mặc định null vì
+      // hầu hết test không dùng nhánh này (item() factory mặc định receiveWarehouseCode=null).
       warehouse: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 700n }),
+        findUnique: jest.fn().mockResolvedValue(null),
       },
       // Dung sai giao thừa - mặc định 0 (không cho nhận thừa), test nào cần nới tự override.
       systemConfig: {
@@ -611,6 +614,58 @@ describe('PurchaseProposalsService', () => {
         },
         expect.anything(),
       );
+    });
+
+    // 2026-09-04 (xác nhận nghiệp vụ với user): vật tư đóng gói phải về ĐÚNG kho thành phẩm QLSX
+    // đã chọn cho PI, không phải kho vật tư-TP chung như sắt/nguyên liệu khác.
+    it('item.receiveWarehouseCode có giá trị -> StockLedger ghi vào kho ĐÓ, không phải Material.warehouseId', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              materialId: 90n,
+              buyQty: decimal(3),
+              receivedQty: decimal(0),
+              receiveWarehouseCode: 'thanh-pham-1788485485362', // "Kho thành phẩm 2"
+              material: material({ warehouseId: 5n, warehouse: { code: 'vat-tu-tp' } }),
+            }),
+          ],
+        }),
+      );
+      prisma.warehouse.findUnique.mockResolvedValue({ id: 212n, code: 'thanh-pham-1788485485362' });
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(3), receivedQty: decimal(3), quotes: [] }),
+      );
+
+      await service.receiveItem('300', '400', { receivedQty: 3 }, 'user-1', 'key-1');
+
+      expect(prisma.warehouse.findUnique).toHaveBeenCalledWith({
+        where: { code: 'thanh-pham-1788485485362' },
+      });
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ toWarehouseId: 212n, materialId: 90n, qty: 3 }),
+        expect.anything(),
+      );
+    });
+
+    it('ném BadRequestException khi item.receiveWarehouseCode trỏ tới kho không còn tồn tại', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              receiveWarehouseCode: 'thanh-pham-da-xoa',
+            }),
+          ],
+        }),
+      );
+      prisma.warehouse.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.receiveItem('300', '400', { receivedQty: 3 }, 'user-1', 'key-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
 
     // B4 Đợt 3 (lỗ #3, mục 13.4 changelog) / L5 (2026-08-26): hàng về phải "có chủ" ngay - cộng
