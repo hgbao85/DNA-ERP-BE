@@ -28,6 +28,8 @@ describe('PackagingIssuesService', () => {
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
     material: { findUnique: jest.Mock };
     bomAccessoryItem: { findUnique: jest.Mock; findMany: jest.Mock };
+    bomPiece: { findMany: jest.Mock };
+    transferCheckResult: { groupBy: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $executeRaw: jest.Mock;
     $queryRaw: jest.Mock;
@@ -60,6 +62,12 @@ describe('PackagingIssuesService', () => {
     kind: AccessoryItemKind.PACKAGING,
     qtyPerUnit: { toNumber: () => 3 }, // plannedQty = 3*10 = 30
   };
+  // Chuyền kiểm gate (2026-09-04) - mảnh của order (rev 5n) và order2 (rev 7n, xem describe
+  // 'getBulkPlan'). qtyPerUnit=1 để checkedUnits = checkedQty trực tiếp, dễ tính tay trong test.
+  const bomPieceRows = [
+    { bomRevisionId: 5n, pieceId: 40n, qtyPerUnit: 1 },
+    { bomRevisionId: 7n, pieceId: 41n, qtyPerUnit: 1 },
+  ];
   const vatTuTp = { id: 2n, code: 'vat-tu-tp', name: 'Kho Vật tư thành phẩm' };
   const thanhPham = { id: 6n, code: 'thanh-pham', name: 'Kho Thành phẩm' };
   const thanhPham2 = { id: 7n, code: 'thanh-pham-2', name: 'Kho thành phẩm 2' };
@@ -100,6 +108,33 @@ describe('PackagingIssuesService', () => {
       bomAccessoryItem: {
         findUnique: jest.fn().mockResolvedValue(accessoryRow),
         findMany: jest.fn().mockResolvedValue([{ ...accessoryRow, material }]),
+      },
+      // mockImplementation lọc theo where.bomRevisionId thật (thay vì trả tĩnh mọi mảnh của mọi
+      // revision) - cần thiết vì resolveCheckedUnits() gọi với 1 bomRevisionId (equality) còn
+      // getBulkPlan() gọi với { in: [...] }; trả tĩnh sẽ lẫn mảnh của order khác vào phép Math.min().
+      bomPiece: {
+        findMany: jest.fn(
+          (
+            { where }: { where: { bomRevisionId: bigint | { in: bigint[] } } } = {
+              where: { bomRevisionId: { in: [] } },
+            },
+          ) => {
+            const ids =
+              typeof where.bomRevisionId === 'bigint'
+                ? [where.bomRevisionId]
+                : where.bomRevisionId.in;
+            return Promise.resolve(bomPieceRows.filter((bp) => ids.includes(bp.bomRevisionId)));
+          },
+        ),
+      },
+      // Mặc định dư dả (999) để không ảnh hưởng các test có sẵn (chỉ quan tâm định mức BOM/tồn
+      // kho) - cùng idiom physicalStockQty ở trên. Đủ field cho cả 2 call site: resolveCheckedUnits()
+      // (group theo 1 pieceId) và getBulkPlan() (group theo cả productionInvoiceItemId+pieceId).
+      transferCheckResult: {
+        groupBy: jest.fn().mockResolvedValue([
+          { productionInvoiceItemId: 21n, pieceId: 40n, _sum: { checkedQty: 999 } },
+          { productionInvoiceItemId: 21n, pieceId: 41n, _sum: { checkedQty: 999 } },
+        ]),
       },
       warehouse: {
         findUniqueOrThrow: jest
@@ -379,6 +414,79 @@ describe('PackagingIssuesService', () => {
     });
   });
 
+  describe('create - gate Chuyền kiểm bắt buộc trước Đóng gói (2026-09-04)', () => {
+    const dto = { materialId: '30', issuedQty: 5 };
+
+    it('ném ConflictException khi CHƯA có Chuyền kiểm nào (checkedQty=0) dù đủ định mức BOM/tồn kho', async () => {
+      prisma.transferCheckResult.groupBy.mockResolvedValue([]);
+      await expect(service.create('1', dto, 'user-1', null)).rejects.toThrow(ConflictException);
+      expect(prisma.packagingIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('chặn xuất vượt quá số đã qua Chuyền kiểm dù trong định mức BOM và đủ tồn kho', async () => {
+      // qtyPerUnit=3 (accessoryRow), checkedQty=1 -> checkedUnits=floor(1/1)=1 -> checkedCappedQty=3
+      prisma.transferCheckResult.groupBy.mockResolvedValue([
+        { productionInvoiceItemId: 21n, pieceId: 40n, _sum: { checkedQty: 1 } },
+      ]);
+      await expect(service.create('1', { ...dto, issuedQty: 4 }, 'user-1', null)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.packagingIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('cho phép xuất đúng bằng trần Chuyền kiểm (biên)', async () => {
+      prisma.transferCheckResult.groupBy.mockResolvedValue([
+        { productionInvoiceItemId: 21n, pieceId: 40n, _sum: { checkedQty: 1 } },
+      ]);
+      prisma.packagingIssue.create.mockResolvedValue(issueRow);
+      // checkedUnits=1 -> checkedCappedQty=3*1=3
+      await expect(
+        service.create('1', { ...dto, issuedQty: 3 }, 'user-1', null),
+      ).resolves.toBeDefined();
+    });
+
+    it('đồng bộ: mảnh có Chuyền kiểm THẤP NHẤT quyết định checkedUnits, không phải trung bình hay mảnh cao nhất', async () => {
+      // order (rev 5n) chỉ có 1 mảnh (pieceId 40n) theo bomPieceRows mặc định - test này thêm 1
+      // mảnh thứ 2 CÙNG rev 5n để kiểm tra Math.min() qua nhiều mảnh. mockResolvedValue (không
+      // filter theo where như default) nên CHỈ liệt kê đúng 2 mảnh của rev 5n, không lẫn piece
+      // 41n (rev 7n, thuộc order2 ở describe khác) - nếu không checkedByPiece sẽ thiếu piece 41n
+      // và Math.min() sai lệch về 0.
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { bomRevisionId: 5n, pieceId: 40n, qtyPerUnit: 1 },
+        { bomRevisionId: 5n, pieceId: 42n, qtyPerUnit: 1 },
+      ]);
+      prisma.transferCheckResult.groupBy.mockResolvedValue([
+        { productionInvoiceItemId: 21n, pieceId: 40n, _sum: { checkedQty: 10 } },
+        { productionInvoiceItemId: 21n, pieceId: 42n, _sum: { checkedQty: 2 } }, // mảnh yếu nhất
+      ]);
+      // checkedUnits = min(10, 2) = 2 -> checkedCappedQty = 3*2 = 6
+      await expect(service.create('1', { ...dto, issuedQty: 7 }, 'user-1', null)).rejects.toThrow(
+        ConflictException,
+      );
+      prisma.packagingIssue.create.mockResolvedValue(issueRow);
+      await expect(
+        service.create('1', { ...dto, issuedQty: 6 }, 'user-1', null),
+      ).resolves.toBeDefined();
+    });
+
+    it('cộng dồn đã xuất trước khi tính trần Chuyền kiểm (giống cách tính trần BOM)', async () => {
+      prisma.transferCheckResult.groupBy.mockResolvedValue([
+        { productionInvoiceItemId: 21n, pieceId: 40n, _sum: { checkedQty: 2 } },
+      ]);
+      // checkedCappedQty = 3*2 = 6, đã xuất 5 (issueRow.issuedQty mặc định) -> còn 1
+      prisma.packagingIssue.aggregate.mockResolvedValue({
+        _sum: { issuedQty: { toNumber: () => 5 } },
+      });
+      await expect(service.create('1', { ...dto, issuedQty: 2 }, 'user-1', null)).rejects.toThrow(
+        ConflictException,
+      );
+      prisma.packagingIssue.create.mockResolvedValue(issueRow);
+      await expect(
+        service.create('1', { ...dto, issuedQty: 1 }, 'user-1', null),
+      ).resolves.toBeDefined();
+    });
+  });
+
   describe('getBulkPlan', () => {
     it('ném BadRequestException khi không truyền productionOrderId nào', async () => {
       await expect(service.getBulkPlan([])).rejects.toThrow(BadRequestException);
@@ -394,6 +502,28 @@ describe('PackagingIssuesService', () => {
       expect(result[0].requiredQty).toBe(30);
       expect(result[0].issuedQty).toBe(0);
       expect(result[0].remainingToIssue).toBe(30);
+    });
+
+    // 2026-09-04: materialWarehouseCode - phát hiện qua test sống PO-41 (Ghế tình yêu) rằng vật tư
+    // đóng gói KHÔNG phải lúc nào cũng mặc định về vat-tu-tp (vd VTK-009 "Thùng" lại gán kho gốc
+    // "thanh-pham") - FE cần field này để biết ĐÚNG kho nào mới thấy được dòng vật tư, không còn
+    // giả định cứng "mọi vật tư đóng gói đều ở vat-tu-tp".
+    it('materialWarehouseCode phản ánh đúng kho THẬT của vật tư (Material.warehouseId), không phải hằng số cố định', async () => {
+      const result = await service.getBulkPlan(['1']);
+      expect(result[0].materialWarehouseCode).toBe('vat-tu-tp');
+    });
+
+    it('materialWarehouseCode = kho thành phẩm khi vật tư đóng gói được gán kho mặc định khác vat-tu-tp', async () => {
+      const materialAtThanhPham = {
+        ...material,
+        warehouseId: 6n,
+        warehouse: { id: 6n, code: 'thanh-pham' },
+      };
+      prisma.bomAccessoryItem.findMany.mockResolvedValue([
+        { ...accessoryRow, material: materialAtThanhPham },
+      ]);
+      const result = await service.getBulkPlan(['1']);
+      expect(result[0].materialWarehouseCode).toBe('thanh-pham');
     });
 
     it('tính đúng issuedQty cộng dồn nhiều đợt cùng (PO, material)', async () => {
@@ -427,6 +557,29 @@ describe('PackagingIssuesService', () => {
       expect(row1.issuedQty).toBe(10);
       expect(row2.requiredQty).toBe(12); // 3 * 4
       expect(row2.issuedQty).toBe(0);
+    });
+
+    it('remainingToIssue bị chặn bởi Chuyền kiểm (2026-09-04) dù requiredQty theo BOM còn nhiều', async () => {
+      // qtyPerUnit=3, checkedQty=2 -> checkedUnits=2 -> checkedCappedQty=6 < requiredQty=30
+      prisma.transferCheckResult.groupBy.mockResolvedValue([
+        { productionInvoiceItemId: 21n, pieceId: 40n, _sum: { checkedQty: 2 } },
+      ]);
+      const result = await service.getBulkPlan(['1']);
+      expect(result[0].requiredQty).toBe(30);
+      expect(result[0].remainingToIssue).toBe(6);
+    });
+
+    it('remainingToIssue không âm khi đã xuất vượt trần Chuyền kiểm hiện tại (biên đã xuất trước khi bug này tồn tại)', async () => {
+      prisma.transferCheckResult.groupBy.mockResolvedValue([
+        { productionInvoiceItemId: 21n, pieceId: 40n, _sum: { checkedQty: 1 } },
+      ]);
+      prisma.packagingIssue.findMany.mockResolvedValue([
+        { productionOrderId: 1n, materialId: 30n, issuedQty: { toNumber: () => 5 } },
+      ]);
+      // checkedCappedQty = 3*1 = 3, đã xuất 5 -> Math.min(30,3) - 5 = -2 (không clamp về 0 ở DTO,
+      // FE tự Math.max(0,...) khi hiển thị - service chỉ trả số thật để không giấu bất thường).
+      const result = await service.getBulkPlan(['1']);
+      expect(result[0].remainingToIssue).toBe(-2);
     });
   });
 });

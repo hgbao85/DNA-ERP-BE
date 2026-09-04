@@ -1697,6 +1697,18 @@ model PurchaseProposalItem {
   /// buyQty vô nghĩa nếu không kèm chiều dài, người mua sẽ đặt nhầm cây chuẩn). null cho nhánh
   /// kiểm tra vật tư (InspectionKhoResultItem) - vật tư đó không có khái niệm "chiều dài cây".
   stockLengthMm           Int?
+  /// Kho nhận hàng GHI ĐÈ (2026-09-04, sửa lại cùng ngày sau khi phát hiện qua test sống) - CHỈ
+  /// set khi kho MẶC ĐỊNH của vật tư (Material.warehouseId) đã sẵn thuộc họ "thanh-pham" (vd Bì
+  /// zipper/Nhãn/Bao nylon - xem Admin > Vật tư, warehouseFamilyOf()) - giá trị =
+  /// ProductionInvoiceItem.warehouseCode mà QLSX đã chọn lúc gửi Sếp duyệt (chụp lại tại thời
+  /// điểm tính đề xuất, xem ConsumableMaterialPurchaseService.computeAndUpsertProposals()). null
+  /// cho vật tư mặc định thuộc kho khác (vd vat-tu-tp: Nút vặn/Dây/Đinh, hay phoi-son-han: Sắt) -
+  /// nhóm này BẮT BUỘC giữ nguyên ở đúng kho trung chuyển vật lý (KHÔNG đổi), vì bước Đóng gói
+  /// (PackagingIssuesService, do thủ kho vat-tu-tp thao tác) cần lấy chúng ra TỪ đó kết hợp với
+  /// mảnh để tạo ra thành phẩm - ghi đè nhóm này sẽ khiến Đóng gói báo thiếu tồn dù hàng đã về
+  /// công ty (đã tái hiện qua test sống 2026-09-04, xem trao đổi với user). receiveItem() ưu tiên
+  /// đọc field này trước Material.warehouseId nếu có giá trị (xem PurchaseProposalsService).
+  receiveWarehouseCode    String?
 
   /// State machine cấp ITEM (2026-08-25, "duyệt riêng từng người mua hàng") - trước đó chỉ có
   /// PurchaseProposal.status cho CẢ record, không tách được khi 1 đề xuất gộp nhiều người mua

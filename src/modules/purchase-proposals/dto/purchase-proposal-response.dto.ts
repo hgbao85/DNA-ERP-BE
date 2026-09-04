@@ -28,8 +28,12 @@ export class PurchaseProposalItemResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) purchaseUnit!: string | null;
   /// Số lượng unit / 1 purchaseUnit (vd 250 = 250 cái/kg) - FE dùng để gợi ý quy đổi lúc nhập kho.
   @Expose() @ApiPropertyOptional({ nullable: true }) khoUnitFactor!: number | null;
-  /// Kho nhận hàng THẬT của riêng vật tư này (Material.warehouseId -> Warehouse.code) - nguồn
-  /// xác thực để Thủ kho nhận hàng (xem PurchaseProposalsService.receiveItem()). KHÔNG dùng
+  /// Kho nhận hàng THẬT của riêng vật tư này - nguồn xác thực để Thủ kho nhận hàng (xem
+  /// PurchaseProposalsService.receiveItem()). Thường = Material.warehouseId -> Warehouse.code,
+  /// TRỪ vật tư có kho MẶC ĐỊNH đã thuộc họ "thanh-pham" (2026-09-04, vd Bì zipper/Nhãn): khi đó
+  /// = kho thành phẩm mà QLSX đã chọn cho PI, ghi đè (xem
+  /// PurchaseProposalItem.receiveWarehouseCode) - vật tư mặc định về vat-tu-tp/phoi-son-han (vd
+  /// Nút vặn/Sắt) KHÔNG bị ghi đè, luôn nhận vào đúng kho trung chuyển như cũ. KHÔNG dùng
   /// PurchaseProposalResponseDto.warehouseCode cấp đề xuất (nay chỉ là tóm tắt/hiển thị) - 1 đề
   /// xuất có thể gồm nhiều vật tư khác kho nhau.
   @Expose() @ApiPropertyOptional({ nullable: true }) warehouseCode!: string | null;

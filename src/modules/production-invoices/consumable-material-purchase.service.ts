@@ -7,6 +7,7 @@ import {
 } from '../../generated/prisma/client';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
 import { ConsumableMaterialPurchaseResultDto } from './dto/consumable-material-purchase-result.dto';
@@ -39,6 +40,7 @@ export class ConsumableMaterialPurchaseService {
 
     const orders = await this.prisma.productionOrder.findMany({
       where: { productionInvoiceItem: { productionInvoiceId: piBigId } },
+      include: { productionInvoiceItem: { select: { warehouseCode: true } } },
     });
     if (orders.length === 0) {
       return [];
@@ -66,6 +68,19 @@ export class ConsumableMaterialPurchaseService {
       requiredByMaterial.set(key, (requiredByMaterial.get(key) ?? 0) + qty);
     };
 
+    // Kho QLSX chọn cho PI đó, chụp lại theo TỪNG vật tư chạm tới - dùng SAU khi biết kho mặc
+    // định của vật tư (materialById, xem dưới) để quyết định có ghi đè hay không. Không quyết
+    // định được ngay tại đây (materialById chưa có).
+    const chosenWarehouseByMaterial = new Map<string, string>();
+    const trackChosenWarehouse = (materialId: bigint, order: (typeof orders)[number]) => {
+      if (order.productionInvoiceItem.warehouseCode) {
+        chosenWarehouseByMaterial.set(
+          materialId.toString(),
+          order.productionInvoiceItem.warehouseCode,
+        );
+      }
+    };
+
     for (const order of orders) {
       // Dây/Đinh/Tán rút/Nút nhựa - PHẢI nhân thêm BomPiece.qtyPerUnit (SL mảnh/SKU) vì định mức
       // này gắn theo TỪNG PIECE, khác ConsumableBom/BomAccessoryItem phẳng theo cả lệnh.
@@ -74,16 +89,19 @@ export class ConsumableMaterialPurchaseService {
         const pieceQty = pieceQtyByRevPiece.get(`${order.bomRevisionId}:${pmi.pieceId}`);
         if (!pieceQty) continue; // piece không thuộc BOM của order này - bỏ qua, không throw
         addRequired(pmi.materialId, pieceQty * order.quantity * pmi.qtyPerPiece.toNumber());
+        trackChosenWarehouse(pmi.materialId, order);
       }
       // Sơn (ConsumableBom, HAN/SON) - phẳng, không qua piece.
       for (const cb of consumableBoms) {
         if (cb.bomRevisionId !== order.bomRevisionId) continue;
         addRequired(cb.materialId, cb.qtyPerUnit.toNumber() * order.quantity);
+        trackChosenWarehouse(cb.materialId, order);
       }
       // Phụ kiện/Bao bì (BomAccessoryItem) - phẳng, không qua piece.
       for (const item of accessoryItems) {
         if (item.bomRevisionId !== order.bomRevisionId) continue;
         addRequired(item.materialId, item.qtyPerUnit.toNumber() * order.quantity);
+        trackChosenWarehouse(item.materialId, order);
       }
     }
     if (requiredByMaterial.size === 0) {
@@ -105,12 +123,31 @@ export class ConsumableMaterialPurchaseService {
       }
     }
 
+    // Kho nhận GHI ĐÈ (2026-09-04, xác nhận lại nghiệp vụ với user sau khi phát hiện qua test
+    // sống): CHỈ áp dụng cho vật tư mà kho MẶC ĐỊNH của nó (Material.warehouseId) đã sẵn thuộc họ
+    // "thanh-pham" (vd Bì zipper/Nhãn/Bao nylon - xem Admin > Vật tư, nhiều dòng gán sẵn "Kho
+    // thành phẩm" gốc) - đổi sang ĐÚNG instance QLSX đã chọn cho PI này (vd "Kho thành phẩm 2")
+    // thay vì luôn rơi về kho gốc cứng. KHÔNG áp dụng cho vật tư mặc định về vat-tu-tp/phoi-son-han
+    // (vd Nút vặn/Dây/Đinh/Sắt) - nhóm này BẮT BUỘC phải nằm ở kho trung chuyển để bước Đóng gói
+    // (PackagingIssuesService, do thủ kho vat-tu-tp thao tác) lấy ra kết hợp với mảnh - ghi đè
+    // nhóm này sẽ khiến Đóng gói không tìm thấy vật tư (đã test sống, tồn kho khả dụng báo 0/thiếu
+    // dù hàng đã về công ty, chỉ là về sai kho không ai lấy ra được).
+    const receiveWarehouseByMaterial = new Map<string, string>();
+    for (const [materialIdStr, chosenWarehouseCode] of chosenWarehouseByMaterial) {
+      const material = materialById.get(materialIdStr);
+      if (material?.warehouse && warehouseFamilyOf(material.warehouse.code) === 'thanh-pham') {
+        receiveWarehouseByMaterial.set(materialIdStr, chosenWarehouseCode);
+      }
+    }
+
     // Gộp CẢ PI vào 1 PurchaseProposal duy nhất, bất kể vật tư thuộc kho nào - quyết định nghiệp
     // vụ 2026-08-24 ("Khác kho vẫn gộp chung luôn, Thống nhất là theo 1 PI"): trước đây mỗi vật tư
     // tự có 1 proposal riêng (find-or-create per-material), Boss duyệt xong 1 PI ra hàng chục dòng
     // rời rạc ở "Lệnh mua". warehouseCode cấp proposal giờ CHỈ mang tính hiển thị (lấy theo vật tư
     // đầu tiên, xem comment PurchaseProposalsService dòng ~424) - nguồn xác thực thật để nhập hàng
-    // vẫn là PurchaseProposalItem.materialId -> Material.warehouseId, nên gộp khác kho là an toàn.
+    // vẫn là PurchaseProposalItem.materialId -> Material.warehouseId (trừ vật tư có kho mặc định
+    // đã thuộc họ thanh-pham thì bị receiveWarehouseCode ghi đè, xem receiveWarehouseByMaterial ở
+    // trên), nên gộp khác kho là an toàn.
     //
     // Khoá stock_quant theo THỨ TỰ materialId tăng dần (không theo thứ tự Map) - 2 PI chạm cùng
     // vật tư theo thứ tự ngược nhau sẽ khoá chéo và deadlock, cùng idiom CuttingProposalsService.
@@ -124,6 +161,7 @@ export class ConsumableMaterialPurchaseService {
         actualStock: number;
         buyQty: number;
         warehouseCode: string;
+        receiveWarehouseCode: string | null;
       }[] = [];
       for (const materialId of orderedMaterialIds) {
         const materialIdStr = materialId.toString();
@@ -143,6 +181,7 @@ export class ConsumableMaterialPurchaseService {
           actualStock,
           buyQty,
           warehouseCode: material.warehouse!.code,
+          receiveWarehouseCode: receiveWarehouseByMaterial.get(materialIdStr) ?? null,
         });
       }
 
@@ -177,6 +216,7 @@ export class ConsumableMaterialPurchaseService {
                 materialId: c.materialId,
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
+                receiveWarehouseCode: c.receiveWarehouseCode,
                 status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: c.buyQty === 0 ? new Date() : undefined,
               })),
@@ -216,6 +256,7 @@ export class ConsumableMaterialPurchaseService {
                   materialId: c.materialId,
                   buyQty: shortfall,
                   actualStock: c.actualStock,
+                  receiveWarehouseCode: c.receiveWarehouseCode,
                 },
               });
             }
@@ -232,6 +273,7 @@ export class ConsumableMaterialPurchaseService {
               data: {
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
+                receiveWarehouseCode: c.receiveWarehouseCode,
                 ...(nextStatus ? { status: nextStatus, purchasedAt: new Date() } : {}),
               },
             });
@@ -242,6 +284,7 @@ export class ConsumableMaterialPurchaseService {
                 materialId: c.materialId,
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
+                receiveWarehouseCode: c.receiveWarehouseCode,
                 status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: c.buyQty === 0 ? new Date() : undefined,
               },

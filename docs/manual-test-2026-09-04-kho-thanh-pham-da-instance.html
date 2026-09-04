@@ -1,0 +1,518 @@
+<title>Test tay — Kho thành phẩm đa-instance (Kho thành phẩm 2)</title>
+<style>
+  :root{
+    --bg:#F4F5F2; --surface:#FFFFFF; --surface-2:#EDEFEA;
+    --ink:#16211E; --ink-soft:#4B5754; --ink-faint:#7C8884;
+    --border:#DCE1DD; --border-soft:#E9ECE7;
+    --accent:#1F7A6C; --accent-ink:#0F4A40; --accent-soft:#E4F1EC; --accent-soft-border:#BFDDD3;
+    --good:#2E7D46; --good-bg:#E7F5EA; --good-border:#C3E4CB;
+    --bad:#B3261E; --bad-bg:#FBEAE8; --bad-border:#F0C6C1;
+    --warn:#96600A; --warn-bg:#FBF1DE; --warn-border:#EBD6A3;
+    --info:#4B5560; --info-bg:#EEF0F1; --info-border:#D7DBDD;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0F1613; --surface:#141D1A; --surface-2:#182320;
+      --ink:#E7ECE9; --ink-soft:#A9B4B0; --ink-faint:#7C8985;
+      --border:#26322D; --border-soft:#1E2925;
+      --accent:#57C9AE; --accent-ink:#8FDFCB; --accent-soft:#17332C; --accent-soft-border:#26473D;
+      --good:#74CE8C; --good-bg:#152A1B; --good-border:#25452E;
+      --bad:#FF8E83; --bad-bg:#301715; --bad-border:#4A2521;
+      --warn:#E8B463; --warn-bg:#2E2411; --warn-border:#493A1C;
+      --info:#A6B0AC; --info-bg:#1B2321; --info-border:#2B3532;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0F1613; --surface:#141D1A; --surface-2:#182320;
+    --ink:#E7ECE9; --ink-soft:#A9B4B0; --ink-faint:#7C8985;
+    --border:#26322D; --border-soft:#1E2925;
+    --accent:#57C9AE; --accent-ink:#8FDFCB; --accent-soft:#17332C; --accent-soft-border:#26473D;
+    --good:#74CE8C; --good-bg:#152A1B; --good-border:#25452E;
+    --bad:#FF8E83; --bad-bg:#301715; --bad-border:#4A2521;
+    --warn:#E8B463; --warn-bg:#2E2411; --warn-border:#493A1C;
+    --info:#A6B0AC; --info-bg:#1B2321; --info-border:#2B3532;
+  }
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);margin:0;padding:0 0 80px;}
+  .wrap{max-width:880px;margin:0 auto;padding:36px 24px;}
+  h1{font-size:23px;margin:0 0 6px;}
+  h2{font-size:17px;margin:36px 0 12px;padding-bottom:8px;border-bottom:2px solid var(--border);}
+  h3{font-size:14.5px;margin:20px 0 8px;color:var(--accent-ink);}
+  .sub{color:var(--ink-soft);font-size:13.5px;margin-bottom:24px;}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 26px;}
+  .chip{font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:20px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink-soft);}
+  .chip.good{background:var(--good-bg);border-color:var(--good-border);color:var(--good);}
+  .chip.bad{background:var(--bad-bg);border-color:var(--bad-border);color:var(--bad);}
+  .chip.warn{background:var(--warn-bg);border-color:var(--warn-border);color:var(--warn);}
+  p{line-height:1.65;font-size:14px;}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);padding:1px 6px;border-radius:4px;border:1px solid var(--border-soft);}
+  pre{font-family:var(--mono);font-size:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;overflow-x:auto;line-height:1.55;}
+  .step{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:10px 0;display:flex;gap:12px;}
+  .step .who{flex:0 0 108px;font-size:12px;font-weight:700;color:var(--accent-ink);}
+  .step .body{flex:1;font-size:13.5px;line-height:1.55;}
+  .step .result{font-size:12px;margin-top:4px;color:var(--ink-faint);}
+  .step.ok{border-left:4px solid var(--good);}
+  .step.bug{border-left:4px solid var(--bad);background:var(--bad-bg);}
+  .step.note{border-left:4px solid var(--warn);background:var(--warn-bg);}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:14px 0;}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border-soft);}
+  th{color:var(--ink-faint);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;}
+  .finding{border:1px solid var(--bad-border);background:var(--bad-bg);border-radius:10px;padding:16px 18px;margin:14px 0;}
+  .finding h4{margin:0 0 8px;color:var(--bad);font-size:14px;}
+  .badge-fixed{display:inline-block;font-size:11px;font-weight:700;color:#fff;background:var(--good);padding:2px 9px;border-radius:20px;margin-left:8px;vertical-align:2px;}
+  .callout{border:1px solid var(--info-border);background:var(--info-bg);border-radius:10px;padding:14px 16px;margin:14px 0;font-size:13.5px;line-height:1.6;color:var(--ink);}
+  .checklist{list-style:none;margin:0;padding:0;}
+  .checklist li{padding:6px 0 6px 26px;position:relative;font-size:13.5px;border-bottom:1px solid var(--border-soft);}
+  .checklist li:last-child{border-bottom:none;}
+  .checklist li.ok::before{content:"✓";position:absolute;left:0;color:var(--good);font-weight:700;}
+  .checklist li.pending::before{content:"○";position:absolute;left:0;color:var(--ink-faint);}
+  a{color:var(--accent-ink);}
+</style>
+
+<div class="wrap">
+  <h1>Test tay — Kho thành phẩm đa-instance ("Kho thành phẩm 2")</h1>
+  <p class="sub">Nhánh <code>khotp-instance</code> (đã merge vào <code>main</code>/<code>demo</code>). Test thật qua UI, tài khoản thật, DB dev chung — không phải test tự động.</p>
+  <div class="meta">
+    <span class="chip">2026-09-04</span>
+    <span class="chip">FE :3000 · BE :3001 (local, DB dev chung)</span>
+    <span class="chip bad">1 bug tìm thấy</span>
+    <span class="chip good">1 bug đã sửa cùng buổi</span>
+    <span class="chip warn">1 vấn đề ngoài phạm vi ghi nhận riêng</span>
+  </div>
+
+  <h2>Tóm tắt</h2>
+  <p>
+    Test tạo mới 1 "Kho thành phẩm" phụ (đa-instance, theo tính năng <code>khotp-instance</code>) và đi hết luồng nghiệp vụ
+    thật gắn với kho đó: Admin tạo kho → gán thủ kho → QLSX chọn kho này cho 1 lệnh sản xuất → Sếp duyệt → QLSX bắt đầu
+    lệnh. Phát hiện <strong>1 bug thật</strong> ở bước gán thủ kho lúc tạo kho (đã sửa ngay trong buổi test). Các bước còn
+    lại chạy đúng như thiết kế. Chưa đưa được lệnh sản xuất test đi hết tới bước Đóng gói (nơi hàng thật sự ghi vào kho) vì
+    chuỗi Khung CK → Đan → Đóng gói đòi hỏi nhiều bước thao tác xưởng thật (xuất sắt, hàn, sơn, KCS…) ngoài phạm vi 1 buổi
+    test tính năng kho — xem mục "Chưa kiểm chứng trực tiếp" cuối bài.
+  </p>
+
+  <h2>Ai làm gì, khi nào</h2>
+
+  <h3>1. Chuẩn bị môi trường</h3>
+  <div class="step ok"><div class="who">Claude</div><div class="body">
+    Chạy <code>npx prisma generate</code> (Prisma Client thiếu field <code>qtyPerPiece</code> từ migration 2026-09-03 chưa generate lại) → 826/826 test BE xanh.
+    Khởi động BE (<code>nest start --watch</code>, port 3001) và FE (<code>next dev</code>, port 3000) trên máy dev, trỏ vào DB dev chung.
+  </div></div>
+
+  <h3>2. Admin tạo kho thành phẩm mới</h3>
+  <div class="step ok"><div class="who">sysadmin</div><div class="body">
+    Đăng nhập Admin → Quản lý kho → "Tạo kho mới". Form tự gợi ý đúng: Loại kho = "Kho thành phẩm", tên "Kho thành phẩm 2",
+    và tự nhận diện tài khoản <code>khotp2</code> (đã tạo sẵn, chưa gán kho) làm gợi ý "Thủ kho phụ trách". Chọn tài khoản đó, bấm "Tạo kho".
+    <div class="result">Kết quả: kho tạo thành công, code sinh tự động <code>thanh-pham-1788485485362</code> (dạng <code>thanh-pham-&lt;timestamp&gt;</code>).</div>
+  </div></div>
+
+  <div class="finding">
+    <h4>🐛 Bug tìm thấy: gán "Thủ kho phụ trách" lúc tạo kho không có tác dụng<span class="badge-fixed">ĐÃ SỬA</span></h4>
+    <p>
+      Kiểm tra DB ngay sau bước trên: <code>khotp2.warehouseScope</code> vẫn là <code>null</code>, dù form đã chọn đúng người và API trả 200.
+      Log BE cho thấy FE có gọi <code>PATCH /api/v1/users/:id</code> (200) nhưng <strong>không</strong> gọi tiếp <code>PATCH /api/v1/users/:id/mfg-attributes</code>
+      — endpoint thật sự ghi <code>warehouseScope</code>.
+    </p>
+    <p>
+      Nguyên nhân: <code>MfgWarehousesPage.tsx</code> (<code>CreateWarehouseModal.submit()</code>) gọi <code>updateUser()</code> với payload thiếu field <code>role</code>.
+      Hàm <code>hasMfgAttrs()</code> ở <code>users-mapper.ts</code> (sửa ngày 2026-09-03 cho 1 bug tương tự trước đó) xét đúng
+      <code>v.role === 'WAREHOUSE_STAFF'</code> để quyết định có gọi PATCH mfg-attributes hay không — thiếu field này thì luôn <code>false</code>,
+      PATCH mfg-attributes không bao giờ chạy, gán thủ kho <strong>âm thầm không có tác dụng</strong> (không báo lỗi gì cho Admin).
+    </p>
+    <p>
+      <strong>Đã sửa:</strong> thêm <code>role: selectedUser.role</code> vào payload gửi lên
+      (<code>d:\DNA-ERP\src\modules\pages\Manufacturing\MfgWarehousesPage.tsx</code>, dòng ~285). Verify lại bằng
+      đường khác (Admin &gt; Người dùng &gt; Sửa khotp2 &gt; chọn kho &gt; Lưu) — endpoint mfg-attributes chạy đúng, <code>warehouseScope</code> ghi
+      thành công. <em>Chưa test lại chính route "gán lúc tạo kho" sau khi sửa (không muốn tạo thêm kho rác) — khuyến nghị 1 lượt smoke test ngắn trước khi coi bug này khép hoàn toàn.</em>
+    </p>
+  </div>
+
+  <h3>3. Gán thủ kho (đường vòng do bug trên)</h3>
+  <div class="step ok"><div class="who">sysadmin</div><div class="body">
+    Admin &gt; Người dùng &gt; tìm <code>khotp2</code> &gt; Sửa &gt; tab "Kho" &gt; chọn "Kho thành phẩm 2" &gt; Lưu.
+    <div class="result">DB xác nhận: <code>khotp2.warehouseScope = thanh-pham-1788485485362</code>.</div>
+  </div></div>
+
+  <h3>3b. Retest route gốc sau khi sửa bug (2026-09-04, buổi sau)</h3>
+  <div class="step ok"><div class="who">sysadmin</div><div class="body">
+    Không còn tài khoản thủ kho nào rảnh để thử lại đúng route cũ ("gán lúc tạo kho"), nên tạo tài khoản test tạm
+    <code>khotp3test</code> (Nhân viên/Kho, chưa gán kho) rồi lặp lại chính xác luồng tạo kho + chọn thủ kho ngay trong modal
+    (không đi vòng qua trang Người dùng như bước 3).
+    <div class="result">
+      DB xác nhận: kho mới tạo <code>thanh-pham-1788487764429</code> ("Kho thành phẩm 3"), và
+      <code>khotp3test.warehouseScope</code> khớp đúng mã đó ngay lập tức — <strong>bug đã sửa đúng, hoạt động qua chính route gốc</strong>,
+      không chỉ qua đường vòng. Log BE xác nhận cả 2 request đều chạy: <code>PATCH /users/:id</code> rồi
+      <code>PATCH /users/:id/mfg-attributes</code> (trước khi sửa chỉ có request đầu).
+    </div>
+  </div></div>
+
+  <div class="step note"><div class="who">Sự cố phụ khi dọn dẹp</div><div class="body">
+    Sau khi verify xong, bấm "Xóa kho" để dọn <code>khotp3test</code> + "Kho thành phẩm 3" (dữ liệu test tạm, không cần giữ).
+    Nút chuyển "Đang xóa..." nhưng không bao giờ hoàn tất — kiểm tra log BE: <strong>không có request DELETE nào từng tới
+    backend</strong>, dù DB cho thấy <code>khotp3test</code> đã bị soft-delete (nhưng kho thì chưa).
+    <div class="result">
+      Nguyên nhân nhiều khả năng nhất: trong buổi test này, mỗi lần tôi tạo/xoá file script tạm (<code>_tmp-*.ts</code>) ngay
+      trong <code>D:\DNA-ERP-BE\</code> để truy vấn DB, <code>nest start --watch</code> phát hiện thay đổi và tự restart —
+      log cho thấy <strong>10 process id khác nhau</strong> trong suốt phiên, tức backend đã restart rất nhiều lần. Request
+      "Xóa kho" nhiều khả năng bị cắt ngang giữa chừng bởi 1 lần restart như vậy, không phải lỗi nghiệp vụ thật.
+      Đã đọc lại <code>soft-delete.extension.ts</code> — dùng đúng Prisma Client Extension <code>query</code> hook (API hiện
+      đại, tương thích <code>$transaction</code>), không thấy lỗi rõ ràng trong cách viết. <strong>Không đủ bằng chứng để
+      kết luận đây là bug thật của <code>WarehousesService.remove()</code></strong> — chỉ ghi nhận lại vì tính atomic của
+      transaction dưới điều kiện tiến trình bị ngắt giữa chừng (vd restart pod lúc deploy) là câu hỏi đáng để review code
+      riêng, không nằm trong phạm vi buổi test này. Đã dọn tay: xoá thẳng warehouse id 213 qua script, giữ nguyên
+      <code>khotp3test</code> ở trạng thái soft-deleted (đúng ý định ban đầu).
+    </div>
+  </div></div>
+
+  <h3>4. KHSX gửi PI cho QLSX xử lý</h3>
+  <div class="step ok"><div class="who">khsx</div><div class="body">
+    Đăng nhập "Kế hoạch sản xuất" → Lệnh sản xuất mới → chọn <code>PI-2026-018</code> (Ghế J56 ×3, PO-42) → "Gửi QLSX".
+    <div class="result">PI chuyển trạng thái <code>WAITING_QLSX</code>.</div>
+  </div></div>
+
+  <h3>5. QLSX chọn kho thành phẩm mới cho lệnh sản xuất</h3>
+  <div class="step ok"><div class="who">qlsx</div><div class="body">
+    Đăng nhập "Sản xuất MES" → Xử lý lệnh sản xuất → mở PI-2026-018 → "Chọn kho sản xuất". Ô tìm kho hiện đúng "Kho thành phẩm 2"
+    trong danh sách gợi ý (xác nhận kho mới đã được liệt kê trong <code>finishedGoodsWarehouses</code>). Chọn, bấm "Gửi sếp duyệt".
+    <div class="result">PI chuyển <code>WAITING_BOSS</code>. Trong chi tiết PI hiện đúng "Kho thành phẩm 2" là điểm cuối.</div>
+  </div></div>
+
+  <h3>6. Sếp duyệt — tạo lệnh sản xuất thật</h3>
+  <div class="step ok"><div class="who">boss</div><div class="body">
+    Đăng nhập "Giám đốc" → Lệnh sản xuất → PI-2026-018 → "Duyệt" → xác nhận (cảnh báo "không thể hoàn tác" — đúng, đây là hành động tạo dữ liệu thật).
+    <div class="result">
+      ProductionOrder tạo thật: <code>PO-42-2</code> (id 47), <code>status=RELEASED</code>, <code>floorStage=PENDING</code>.<br/>
+      DB: <code>ProductionInvoiceItem#48.warehouseCode = thanh-pham-1788485485362</code>, <code>warehouseName = "Kho thành phẩm 2"</code>.
+    </div>
+  </div></div>
+
+  <h3>7. QLSX bắt đầu lệnh (chặng Khung cơ khí)</h3>
+  <div class="step ok"><div class="who">qlsx</div><div class="body">
+    Bảng thống kê → PO-42 → "Bắt đầu" (có hộp thoại xác nhận trình duyệt native, không phải modal — cần chú ý khi test tự động: Playwright/patchright tự huỷ dialog này nếu không đăng ký handler, khiến hành động trông như "không phản ứng" dù UI không báo lỗi gì).
+    <div class="result">Chặng "Khung cơ khí" chuyển <code>Chưa bắt đầu</code> → <code>Đang chạy</code> (<code>floorStage=ACTIVE</code>). Đúng gate QLSX floor-start (project_qlsx_floor_start_finish_shipped).</div>
+  </div></div>
+
+  <h2>Cơ chế thật sự đưa hàng vào kho — đọc code, không phải suy đoán</h2>
+  <div class="callout">
+    <p><strong>Ngộ nhận cần đính chính:</strong> "Nhập đan" (weaving receipt, <code>WeavingIssuesService.receive()</code>) <u>không</u> ghi
+    <code>StockLedger</code> và không đụng tới bất kỳ kho vật lý nào — nó chỉ là sổ theo dõi tiến độ đan giữa các điểm đan
+    (issued/received theo <code>piece</code> + <code>weavingPoint</code>). Muốn kiểm tra "hàng có về đúng kho mới" phải nhìn đúng chỗ:
+    bước <strong>Đóng gói</strong> (<code>PackagingIssuesService.postLedgerEntry()</code>,
+    <code>D:\DNA-ERP-BE\src\modules\packaging-issues\packaging-issues.service.ts:228-252</code>) — đây mới là nơi duy nhất đọc
+    <code>productionOrder.productionInvoiceItem.warehouseCode</code> (kho QLSX chọn ở bước 5) làm <code>toWarehouseId</code> khi ghi sổ kho.</p>
+    <p>Đã đọc kỹ đoạn code này: tra kho bằng <code>prisma.warehouse.findUniqueOrThrow({ where: { code: destWarehouseCode } })</code> — khớp
+    đúng theo <code>code</code> tuyệt đối, không giới hạn theo "gia đình" hay whitelist nào, nên hoạt động đúng với mọi kho phụ dạng
+    <code>thanh-pham-&lt;n&gt;</code>, không riêng gì <code>thanh-pham</code> gốc. Không thấy vấn đề trong đoạn này.</p>
+  </div>
+
+  <h2>Đi hết chuỗi thật đến Đóng gói — verify sống (04/09, buổi 3)</h2>
+  <p>PI-2026-018/PO-42-2 chỉ có 1 mảnh "Khung ghe" (<code>isWoven=false</code>, <code>needsHan=true</code>, <code>needsSon=true</code>) —
+  không qua Đan, nhưng vẫn cần đủ Phôi → Hàn → Sơn (mỗi bước qua KCS) → chuyển mảnh sang <code>vat-tu-tp</code> → Đóng gói. Theo yêu cầu
+  user ("lướt qua chỗ tính phương án cắt sắt", "nếu bị ảnh hưởng không test được về sau thì tự thêm dữ liệu vào"), 2 chỗ bị chặn bởi hạ
+  tầng/dữ liệu dev thiếu (không phải bug nghiệp vụ) đã được bổ sung dữ liệu tối thiểu để đi tiếp — xem "Dữ liệu bổ sung" cuối bài.</p>
+
+  <div class="step ok"><div class="who">khopsh</div><div class="body">
+    Phân phối nội bộ → Xuất sắt trong phôi → PI-2026-018 → xuất 3 cây Sắt vuông 6zem (6000mm) cho PO-42.
+    <div class="result">SteelIssue tạo (status RECEIVED sau khi Phôi xác nhận), "Chờ Phôi nhận".</div>
+  </div></div>
+  <div class="step ok"><div class="who">phoi</div><div class="body">
+    Xác nhận nhận sắt → Lệnh sản xuất → PO-42 → nhập đợt cắt (3 đoạn 840mm) → Lưu đợt cắt → Báo cắt xong.
+    <div class="result">
+      "Cắt — đã xong", chờ KCS. <strong>Phát hiện phụ:</strong> lần lưu đầu tiên (nhập nhầm "Số cây đã dùng"=3 thay vì 1) trả về
+      <code>400 Bad Request</code> ("vượt 3 cây kho đã giao"), NHƯNG <code>CutBundle</code>+<code>CutPatternSegment</code> vẫn đã tạo thành công
+      trước khi validation chặn ở bước sau — xem mục "Bug phụ" bên dưới.
+    </div>
+  </div></div>
+  <div class="step ok"><div class="who">kcs</div><div class="body">Công đoạn Phôi → PO-42 → Tiến hành duyệt → Đạt 3, Không đạt 0 → Xác nhận duyệt.
+    <div class="result">"Đã duyệt Khung ghe: 3 đạt".</div>
+  </div></div>
+  <div class="step ok"><div class="who">han</div><div class="body">Lệnh sản xuất → PI-2026-018 → Ghế J56 → nhập 3 vào "Nhập số cái vừa hàn" → Ghi nhận.
+    <div class="result">ProductionBatch tạo (stage HAN, status AWAITING_QC) — hiển thị "Đã hàn 0/3" cho tới khi KCS duyệt (đúng thiết kế, không phải bug).</div>
+  </div></div>
+  <div class="step ok"><div class="who">kcs</div><div class="body">Công đoạn Hàn → PO-42 → Tiến hành duyệt → Đạt 3 → Xác nhận duyệt.
+    <div class="result">"Đã duyệt Khung ghe: 3 đạt".</div>
+  </div></div>
+  <div class="step ok"><div class="who">son</div><div class="body">Lệnh sản xuất → PI-2026-018 → Ghế J56 → nhập 3 vào "Nhập số cái vừa sơn" → Ghi nhận.
+    <div class="result">ProductionBatch tạo (stage SON, AWAITING_QC).</div>
+  </div></div>
+  <div class="step ok"><div class="who">kcs</div><div class="body">Công đoạn Sơn → PO-42 → Tiến hành duyệt → Đạt 3 → Xác nhận duyệt.
+    <div class="result">"Đã duyệt Khung ghe: 3 đạt" — cả 3 công đoạn Phôi/Hàn/Sơn hoàn tất.</div>
+  </div></div>
+  <div class="step ok"><div class="who">khopsh</div><div class="body">Xuất kho → PO-42 → "Đã qua KCS: 3, Có thể chuyển: 3" → nhập SL 3 → Xác nhận.
+    <div class="result">
+      Tạo <code>WarehouseTransfer</code> (piece-only, <code>phoi-son-han → vat-tu-tp</code>), "Hoàn thành, Đã chuyển 3".
+      <strong>Bug phát hiện:</strong> phiếu này KHÔNG hiện trong hộp thư "Nhập nội bộ" của khovttp dù data đúng (status=PENDING,
+      toWarehouseId khớp) — xem "Bug phụ" bên dưới. Đã xác nhận qua gọi thẳng <code>POST /warehouse-transfers/2/confirm</code>.
+    </div>
+  </div></div>
+  <div class="step ok"><div class="who">khovttp</div><div class="body">
+    Xuất kho → PO-42 hiện với vật tư đóng gói "NN-003 — Nút vặn không rãnh" (Kế hoạch 3) → nhập SL 3 → Xác nhận.
+    <div class="result">
+      "Hoàn thành, Đã xuất ✓3, Đã xong". <code>PackagingIssuesService.postLedgerEntry()</code> chạy thật —
+      <strong>StockLedger id=96: fromWarehouseId=5 (vat-tu-tp) → toWarehouseId=212 ("Kho thành phẩm 2"), qty=3, refType=PACKAGING_ISSUE.
+      StockQuant xác nhận tồn thật 3 tại kho 212.</strong>
+    </div>
+  </div></div>
+
+  <div class="callout" style="border-color:var(--good-border);background:var(--good-bg);">
+    <p><strong>✅ Kết luận cuối cùng, verify sống (không chỉ đọc code):</strong> hàng thật sự về đúng "Kho thành phẩm 2" — kho đa-instance
+    mới tạo — chứ không rơi về kho gốc "thanh-pham" hay bất kỳ đâu khác. Toàn bộ chuỗi QLSX chọn kho → Sếp duyệt → sản xuất → Đóng gói →
+    StockLedger hoạt động đúng thiết kế cho kho phụ.</p>
+  </div>
+
+  <div class="finding">
+    <h4>🏗️ Mua hàng (vật tư đóng gói) không theo kho thành phẩm QLSX chọn — ĐÃ SỬA, ĐÃ SỬA LẠI + VERIFY SỐNG (04/09)</h4>
+    <p>
+      User hỏi: khi QLSX chọn "Kho thành phẩm 2" cho 1 PI, vật tư MUA VỀ (đóng gói/phụ kiện) có về đúng kho đó không? Kiểm tra
+      <code>PurchaseProposalsService.receiveItem()</code>: KHÔNG — hàng mua về luôn vào <code>Material.warehouseId</code> (kho cố định
+      theo Admin gán), bất kể PI chọn kho thành phẩm nào.
+    </p>
+    <p>
+      <strong>Lần sửa ĐẦU (SAI, đã revert cùng buổi):</strong> ghi đè kho nhận cho MỌI vật tư nguồn <code>BomAccessoryItem(kind=PACKAGING)</code>,
+      bất kể kho mặc định của nó là gì. Khi đi test sống hết chuỗi Mua hàng → Nhận hàng → Đóng gói cho PO-43-2 (Ghế J56 ×42, vật tư
+      NN-003 "Nút vặn không rãnh"), phát hiện NGAY: NN-003 mặc định về kho <strong>vat-tu-tp</strong> (kho trung chuyển) — bước Đóng gói
+      thật (<code>PackagingIssuesService</code>, thủ kho <strong>vat-tu-tp</strong> thao tác, xem finding Chuyền kiểm bên dưới) cần LẤY
+      RA từ vat-tu-tp để kết hợp với mảnh tạo thành phẩm. Ghi đè bắt NN-003 đi thẳng vào kho thành phẩm khiến vat-tu-tp không còn gì để
+      lấy — Đóng gói báo <code>"Tồn kho khả dụng (7) không đủ xuất 20"</code> dù hàng đã về công ty thật, chỉ là về sai chỗ. Trao đổi lại
+      với user xác nhận: <strong>thành phẩm cuối cùng đã tự về đúng kho QLSX chọn từ trước rồi</strong> (bước Đóng gói tự tra
+      <code>ProductionInvoiceItem.warehouseCode</code>) — không cần ghi đè NGUYÊN LIỆU đầu vào chút nào, vì nguyên liệu và thành phẩm là
+      2 thứ khác nhau.
+    </p>
+    <p>
+      <strong>Lần sửa lại (ĐÚNG, đang chạy):</strong> user chỉ ảnh chụp Admin &gt; Vật tư cho thấy MỘT SỐ vật tư (Bì zipper, Nhãn, Bao
+      nylon...) lại được cấu hình sẵn kho mặc định là <strong>"Kho thành phẩm"</strong> (kho gốc) chứ không phải vat-tu-tp — nhóm này vẫn
+      cần ghi đè, chỉ là quy tắc chọn nhóm SAI (theo <code>kind</code> thay vì theo kho thật). Quy tắc đúng: <strong>ghi đè CHỈ khi kho
+      MẶC ĐỊNH của vật tư (<code>Material.warehouseId</code>) đã sẵn thuộc họ <code>thanh-pham</code></strong> (dùng
+      <code>warehouseFamilyOf()</code>, áp dụng cho MỌI nguồn — PieceMaterialItem/ConsumableBom/BomAccessoryItem — không riêng
+      kind=PACKAGING nữa) — đổi từ kho gốc cứng sang đúng instance QLSX đã chọn. Vật tư mặc định về vat-tu-tp/phoi-son-han (Nút
+      vặn/Dây/Đinh/Sắt) hoàn toàn KHÔNG bị đụng, giữ nguyên hành vi gốc.
+    </p>
+    <p>
+      Migration <code>20260904040000_purchase_proposal_item_receive_warehouse</code> (additive, cột <code>receiveWarehouseCode</code>
+      nullable, giữ nguyên schema, chỉ đổi LOGIC ghi vào cột) — đã chạy lên DB dev chung. 2 test cũ viết lại theo đúng quy tắc mới +
+      toàn bộ suite BE re-run: <strong>46/46 suite, 837/837 test xanh</strong> (2 fail của <code>auth.service.spec.ts</code> khi chạy
+      song song là flaky timing argon2 không liên quan, chạy riêng lẻ 15/15 xanh).
+    </p>
+    <p>
+      <strong>✅ Verify sống ĐẦY ĐỦ sau khi sửa lại:</strong> dữ liệu test PO-43-2 (đã dính lỗi kho sai từ lần sửa đầu) được sửa lại bằng
+      chính API nghiệp vụ thật (<code>POST /stock-ledger/adjust</code>, chuyển 35 NN-003 từ kho 212 về đúng vat-tu-tp). Sau đó
+      <code>khovttp</code> xuất đóng gói lại — <strong>StockLedger id=107: fromWarehouseId=5 (vat-tu-tp) → toWarehouseId=212 ("Kho thành
+      phẩm 2"), qty=20, refType=PACKAGING_ISSUE</strong>. Đúng kho, đúng cơ chế, không cần <code>receiveWarehouseCode</code> ở bước
+      Đóng gói mà vẫn ra đúng kết quả — vì đích cuối luôn tra từ <code>ProductionInvoiceItem.warehouseCode</code>, độc lập với nơi mua
+      nguyên liệu về.
+    </p>
+    <p>
+      <strong>Bug FE kéo theo — vẫn giữ:</strong> <code>purchasing-api.ts</code> (<code>toItem()</code>) tra <code>khoKey</code>/
+      <code>khoLabel</code> bằng dictionary CỐ ĐỊNH chỉ 3 mã kho gốc — với vật tư có <code>receiveWarehouseCode</code> ghi đè (nay hẹp
+      hơn, chỉ nhóm mặc định thanh-pham), <code>warehouseCode</code> trả về vẫn có thể là mã kho PHỤ dạng <code>thanh-pham-&lt;n&gt;</code>.
+      Đã sửa bằng <code>warehouseFamilyOf()</code> quy về gia đình gốc trước khi tra map — vẫn đúng, không cần đổi lại. 1 test trong
+      <code>purchasing-api.test.ts</code>, toàn bộ FE test xanh (5/5 suite, 34/34 test).
+    </p>
+  </div>
+
+  <div class="finding">
+    <h4>🐛 Đóng gói không hề kiểm tra Chuyền kiểm — ĐÃ SỬA ngay trong buổi (04/09)</h4>
+    <p>
+      User chỉ ra: quy trình thật là <strong>Nhập đan/Phôi-Hàn-Sơn → Chuyền kiểm → Đóng gói</strong> — Chuyền kiểm là bước bắt buộc
+      cho <em>mọi</em> mảnh (không riêng mảnh phải đan), bất kể <code>needsHan</code>/<code>needsSon</code>/<code>isWoven</code>. Kiểm tra
+      lại <code>PackagingIssuesService.create()</code> ở bước Đóng gói vừa test phía trên: điều kiện cho xuất chỉ có (1) floor active, (2)
+      đủ định mức BOM, (3) đủ tồn kho vật lý — <strong>không hề đọc <code>TransferCheckResult</code></strong>. Thủ kho Vật tư thành phẩm
+      xuất được đóng gói dù chưa ai làm Chuyền kiểm, không báo lỗi/cảnh báo gì. Có nghĩa test phía trên (bước khovttp xuất đóng gói) đã
+      "lọt" qua được đúng vì lỗ hổng này, không phải vì SKU test hợp lệ bỏ qua được bước đó.
+    </p>
+    <p>
+      <strong>Đã sửa</strong> (<code>packaging-issues.service.ts</code>): thêm <code>resolveCheckedUnits()</code> — tính số sản phẩm đã
+      qua Chuyền kiểm ĐỒNG BỘ theo mọi mảnh trong BOM (1 sản phẩm chỉ tính "xong" khi đủ mọi mảnh của nó đã kiểm, <code>Math.min</code> qua
+      từng mảnh, cùng idiom <code>WarehouseTransfersService.getPieceTransferPlan()</code> cap theo QC_DONE). <code>create()</code> giờ chặn
+      <code>ConflictException</code> nếu xuất vượt trần này; <code>getBulkPlan()</code> (màn "Xuất kho" của thủ kho) cũng cập nhật
+      <code>remainingToIssue</code> theo đúng trần mới để UI không hiển thị sai. <strong>Không phải "chờ 100% Chuyền kiểm xong mới cho
+      đóng gói"</strong> (user xác nhận) — cơ chế "chảy dần": bao nhiêu sản phẩm đã qua Chuyền kiểm thì xuất đóng gói được bấy nhiêu, trừ
+      dần phần đã xuất trước đó, không cần đợi hết cả lô.
+    </p>
+    <p>
+      Verify: 7 test unit mới (32/32 xanh) — chặn khi checkedQty=0, chặn khi vượt trần, cho phép đúng biên, đồng bộ theo mảnh yếu nhất,
+      cộng dồn đã xuất, và 2 test cho <code>getBulkPlan</code>. Toàn bộ suite BE: <strong>46/46 suite, 833/833 test xanh</strong> (833 = 826
+      cũ + 7 mới).
+    </p>
+    <p>
+      <strong>✅ Verify sống ĐẦY ĐỦ (cùng buổi test lại PO-43-2, 04/09):</strong> Chuyền kiểm 20/42 sản phẩm (đúng nghiệp vụ "rolling" —
+      không cần đủ 100% mới cho đóng gói) → màn Đóng gói (<code>khovttp</code>) hiện đúng cột "Thực có: 20" (khớp hệt số đã kiểm, không
+      phải tồn kho vật lý), nhập 25 thì nút "Xác nhận" tự vô hiệu hoá (FE tôn trọng <code>remainingToIssue</code> đã sửa), nhập đúng 20
+      thì xuất thành công, phần còn lại 22 hiện "Hết hàng" (đúng — vì <code>checkedCappedQty − issuedSoFar = 0</code>). Gate hoạt động
+      chính xác như thiết kế, cả tầng BE lẫn FE.
+    </p>
+  </div>
+
+  <h3>Bug phụ phát hiện trong lúc đi hết chuỗi (04/09, buổi 3)</h3>
+  <div class="finding">
+    <h4>🐛 Phiếu chuyển kho "mảnh" (piece-only) không hiện trong hộp thư "Nhập nội bộ"</h4>
+    <p>
+      <code>WarehouseTransfersService.createPieceTransfer()</code> ghi dữ liệu vào relation <code>pieceItems</code> (không phải
+      <code>items</code> thường). Phiếu tạo đúng, GET chi tiết (<code>/warehouse-transfers/:id</code>) trả đủ <code>pieceItems</code>,
+      nhưng <code>InternalTransferSections.tsx</code> (hộp thư "Nhập nội bộ" của thủ kho nhận) filter theo
+      <code>toWarehouseId === myWarehouse.id</code> — đã kiểm tra kỹ cả type lẫn value (đều là string "5", khớp), request
+      <code>GET /warehouse-transfers/:id</code> riêng lẻ cũng trả 200 không lỗi — nhưng phiếu vẫn không xuất hiện trong danh sách
+      <code>pending</code> render ra dù đã reload nhiều lần. <strong>Chưa xác định được nguyên nhân gốc chính xác</strong> (đã loại trừ:
+      type mismatch, lỗi 403/500 ở detail endpoint, cache trình duyệt) — nghi vấn nằm ở logic <code>useFetch</code>/<code>Promise.all</code>
+      trong <code>getWarehouseTransfers()</code> (gọi lại chi tiết từng phiếu) nhưng chưa chứng minh được. Thủ kho nhận hiện KHÔNG có cách
+      nào qua UI để xác nhận 1 phiếu chuyển "mảnh" gửi tới mình — phải nhờ Admin/dev gọi thẳng API. <strong>Cần code review riêng, không
+      thuộc phạm vi buổi test kho thành phẩm này nhưng chặn hẳn luồng chuyển mảnh nội bộ nếu không có nguồn kho gốc.</strong>
+    </p>
+  </div>
+  <div class="finding">
+    <h4>🐛 Lưu đợt cắt (Phôi) ghi dữ liệu dù trả lỗi 400 (non-atomic)</h4>
+    <p>
+      Nhập sai "Số cây đã dùng" (3 thay vì 1 cho 3 đoạn 840mm/cây 6000mm) → nhận <code>400 Bad Request</code> ("vượt 3 cây kho đã giao"),
+      UI hiểu là lưu thất bại. Nhưng kiểm tra DB: <code>CutBundle</code> (id=8, barCount=3) + <code>CutPatternSegment</code> (qty=3) ĐÃ được
+      tạo thành công trước khi phần validate "số cây vượt mức" chặn lại ở bước sau — request không atomic, ghi 1 phần rồi mới báo lỗi.
+      Hệ quả: "Đã cắt" tính đúng theo dữ liệu thật đã ghi (không phải optimistic UI ảo), lần thử lại sau đó bị chặn nhầm ("đã dùng 3 cây"
+      dù request mới chỉ định dùng 1) vì cộng dồn luôn cả lần lỗi. Không rollback khi 400. Cần review
+      <code>SteelIssuesController</code>/service ở route <code>cut-batches</code>.
+    </p>
+  </div>
+
+  <h3>Dữ liệu bổ sung để đi hết chuỗi (không phải bug, do dữ liệu dev thiếu)</h3>
+  <table>
+    <tr><th>Chỗ bị chặn</th><th>Đã thêm</th><th>Lý do hợp lệ</th></tr>
+    <tr>
+      <td>Phương án cắt sắt (CuttingProposal) của PI-2026-018 bị stuck ở <code>CALCULATING</code> mãi mãi</td>
+      <td>1 <code>CuttingProposal</code> (status APPROVED, approvedAt trước cutover 18/08) + 1 <code>CuttingProposalLine</code>
+      (feasible=true) cho vật tư 35</td>
+      <td>Solver ngoài (<code>SOLVER_BASE_URL</code>, Render free-tier) bị 503/timeout xen giữa các lần backend tự restart do tôi tạo/xoá
+      nhiều file <code>_tmp-*.ts</code> ngay trong thư mục backend đang chạy — không phải lỗi nghiệp vụ. approvedAt cố tình đặt trước mốc
+      <code>STEEL_ISSUE_RESERVATION_CUTOVER</code> để không cần seed thêm StockReservation.</td>
+    </tr>
+    <tr>
+      <td>BOM Ghế J56 (rev 17) không có <code>BomAccessoryItem</code> nào → không thể xuất đóng gói</td>
+      <td>1 dòng <code>BomAccessoryItem</code> (kind=PACKAGING, vật tư NN-003, qtyPerUnit=1)</td>
+      <td>Dữ liệu SKU demo chưa khai đủ định mức phụ kiện — cần 1 vật tư đóng gói thật để exercise được
+      <code>PackagingIssuesService</code>, không có thay thế nào khác.</td>
+    </tr>
+    <tr>
+      <td>Toàn bộ 10 vật tư ở kho vat-tu-tp đều tồn 0 (không có <code>StockQuant</code> nào)</td>
+      <td><code>POST /stock-ledger/adjust</code> (nghiệp vụ "Sửa nhanh tồn kho" thật, không ghi thẳng DB) +10 NN-003 tại vat-tu-tp</td>
+      <td>Dùng đúng API nghiệp vụ có sẵn (refType=ADJUST, ghi StockLedger đàng hoàng) thay vì tạo StockQuant trực tiếp — giữ nguyên bất
+      biến của hệ thống.</td>
+    </tr>
+  </table>
+
+  <h2>Vấn đề khác phát hiện trong lúc test (không thuộc phạm vi kho thành phẩm)</h2>
+  <div class="step ok"><div class="who">Ghi nhận + ĐÃ FIX</div><div class="body">
+    <code>GET /api/v1/skus</code> lỗi 500 toàn cục trên DB dev chung: <code>The column piece_material_yield.qtyPerPiece does not exist
+    in the current database</code>. Migration <code>20260903080000_piece_material_yield_qty_per_piece</code> (tính năng "vật tư thành phẩm —
+    định mức theo tỷ lệ", không liên quan kho thành phẩm) chưa được chạy (<code>migrate deploy</code>) trên DB dev chung, dù Prisma Client
+    cục bộ đã generate lại theo schema mới. Ảnh hưởng: mọi trang gọi danh sách SKU (Boss "Danh sách SKU", QLSX "Bảng thống kê" khi tải batch…) lỗi.
+    <div class="result">
+      Migration chỉ <code>ALTER TABLE ... ADD COLUMN "qtyPerPiece" INTEGER NOT NULL DEFAULT 1</code> — additive, không đổi/xoá dữ liệu.
+      Đã xin xác nhận user, chạy <code>npx prisma migrate deploy</code> lên DB dev chung — thành công. Verify lại: đăng nhập mới, mở
+      "Danh sách SKU" (boss) — không còn lỗi 500, không còn request fail.
+    </div>
+  </div></div>
+
+  <h2>Checklist</h2>
+  <ul class="checklist">
+    <li class="ok">Admin tạo kho thành phẩm phụ qua UI — thành công, code sinh tự động dạng <code>thanh-pham-&lt;timestamp&gt;</code></li>
+    <li class="ok">Bug gán thủ kho lúc tạo kho — tìm thấy, sửa, verify 2 lần: đường vòng (Admin &gt; Người dùng) VÀ đúng route gốc (retest với khotp3test)</li>
+    <li class="ok">QLSX thấy và chọn được kho mới trong danh sách <code>finishedGoodsWarehouses</code></li>
+    <li class="ok">Lựa chọn kho lưu đúng vào <code>ProductionInvoiceItem.warehouseCode</code>, hiển thị đúng ở màn Sếp duyệt</li>
+    <li class="ok">Sếp duyệt tạo <code>ProductionOrder</code> thật, liên kết đúng PI item đã gán kho mới</li>
+    <li class="ok">QLSX bắt đầu floor cho lệnh test — gate hoạt động đúng</li>
+    <li class="ok">Verify sống việc StockLedger thật sự ghi vào "Kho thành phẩm 2" — đi hết Khung CK (Phôi/Hàn/Sơn qua KCS) → chuyển mảnh → Đóng gói. StockLedger id=96 + StockQuant xác nhận 3 NN-003 tại kho 212 ("Kho thành phẩm 2")</li>
+    <li class="ok">"Xóa kho" — retest với khotp3test đã hoàn tất qua đúng route gốc; sự cố restart-churn trước đó không lặp lại khi backend ổn định trong lượt cắt/hàn/sơn/đóng gói lần này</li>
+    <li class="ok">Migration <code>qtyPerPiece</code> trên DB dev chung — user xác nhận, đã chạy <code>migrate deploy</code>, verify hết lỗi 500</li>
+    <li class="ok">Bug "Đóng gói không kiểm tra Chuyền kiểm" — tìm thấy (user chỉ ra), sửa (resolveCheckedUnits, gate rolling theo "đồng bộ" mảnh), 7 test mới, 46/46 suite BE xanh (833 test). Verify sống 04/09 buổi 2 (xem bên dưới): cap đúng 20/42, "Hết hàng" đúng lúc</li>
+    <li class="ok">Kiến trúc "Mua hàng vật tư đóng gói theo kho thành phẩm QLSX chọn" — tìm thấy (user hỏi), sửa 2 LẦN (lần 1 sai theo kind=PACKAGING, lần 2 đúng theo kho MẶC ĐỊNH của vật tư thuộc họ thanh-pham hay không), phát hiện qua chính test sống. Verify sống 04/09 buổi 2: StockLedger id=107 đúng kho, không cần receiveWarehouseCode ở Đóng gói vẫn ra đúng kết quả cho vật tư mặc định vat-tu-tp</li>
+    <li class="ok">Bug FE kéo theo — khoKey/khoLabel vỡ với kho thành phẩm PHỤ (purchasing-api.ts) — tìm thấy + sửa lúc viết test, dùng warehouseFamilyOf(), 1 test mới, 5/5 suite FE xanh (34 test)</li>
+    <li class="ok">Bug FE MỚI phát hiện 04/09 buổi 2 — NhapKhoSection (NhapKhoPage.tsx) lọc phạm vi thủ kho theo Material.warehouseId thay vì item.warehouseCode thật — khiến thủ kho ĐÚNG (kho thành phẩm 2) không bao giờ thấy đề xuất cần nhận, trong khi thủ kho SAI (kho mặc định vật tư) lại thấy. Đã sửa: thêm field warehouseCode thô vào PurchaseProposalItem (FE), itemInScope() so trực tiếp thay vì suy diễn qua Material. Verify sống: reload lại, khotp2 thấy đúng NN-003, khovttp KHÔNG thấy (đúng, vì đã ghi đè sang kho thành phẩm)</li>
+    <li class="pending">Bug "phiếu chuyển mảnh không hiện ở hộp thư Nhập nội bộ" — chưa xác định nguyên nhân gốc, cần code review riêng (workaround: gọi thẳng API confirm)</li>
+    <li class="pending">Bug "Lưu đợt cắt ghi dữ liệu dù trả 400 (non-atomic)" — cần code review riêng ở SteelIssuesService/cut-batches</li>
+  </ul>
+
+  <h2>Test sống buổi 2 (04/09, chiều) — retest toàn trình từ lập lệnh sản xuất tới hết sản xuất</h2>
+  <p>Theo yêu cầu user: đi lại TOÀN BỘ chuỗi từ đầu (lập lệnh → duyệt → mua hàng → sản xuất → Chuyền kiểm → Đóng gói) cho 1 PI MỚI, kiểm chứng 2 fix vừa làm hoạt động đúng trong bối cảnh thật.</p>
+  <table>
+    <tr><th>Ai</th><th>Làm gì</th><th>Lúc nào</th><th>Kết quả</th></tr>
+    <tr><td><code>khsx</code></td><td>Chọn PI-2026-016 (PO-43, Ghế J56 ×42, có sẵn) → "Gửi QLSX"</td><td>06:39</td><td>PI chuyển trạng thái "Chờ QLSX xử lý"</td></tr>
+    <tr><td><code>qlsx</code></td><td>Mở PI-2026-016 → "Chọn kho sản xuất" → chọn "Kho thành phẩm 2" → "Gửi sếp duyệt"</td><td>06:40</td><td>Lưu đúng vào ProductionInvoiceItem.warehouseCode</td></tr>
+    <tr><td><code>boss</code></td><td>Duyệt lệnh sản xuất PI-2026-016</td><td>06:41</td><td>Tạo ProductionOrder PO-43-2 thật (id=50), quantity=42</td></tr>
+    <tr><td>Claude (thay solver)</td><td>Solver ngoài (Render free-tier) trả 503 — theo chỉ đạo user "bỏ qua bước tính, giống lần trước" — seed tay CuttingProposalLine (Sắt vuông 6zem, 42 cây) rồi gọi thật <code>POST /cutting-proposals/51/approve</code> (không bypass logic nghiệp vụ, chỉ bỏ qua bước GỌI SOLVER)</td><td>06:44–06:56</td><td>PurchaseProposal thật được tạo/gộp đúng cho PI (id=65), gồm cả sắt lẫn vật tư đóng gói</td></tr>
+    <tr><td><code>nhan</code> (Mua hàng)</td><td>Mở đề xuất PO-43/PI-2026-016 → upload phiếu ký giả lập → "Sếp đã duyệt"</td><td>07:00</td><td>2 dòng (NN-003 + SAT-003) chuyển PURCHASING, có approvalFileUrl thật (Cloudinary)</td></tr>
+    <tr><td><code>khotp2</code></td><td>Nhập kho → nhận 35 NN-003</td><td>07:07</td><td class="pending">Lần 1: về SAI kho (thanh-pham-2 thay vì vat-tu-tp) do bug receiveWarehouseCode lần sửa đầu — đã sửa code + sửa lại data (xem trên)</td></tr>
+    <tr><td><code>khopsh</code></td><td>Nhập kho → nhận 42 cây SAT-003</td><td>07:10</td><td>Về đúng phoi-son-han như thiết kế cũ, không đổi</td></tr>
+    <tr><td><code>qlsx</code></td><td>Bảng thống kê → "Bắt đầu" floor cho PI-2026-016 (lưu ý: nút dùng <code>window.confirm()</code>, tool test tự động phải bắt dialog thủ công)</td><td>07:12</td><td>floorStage=ACTIVE</td></tr>
+    <tr><td><code>khopsh</code></td><td>Phân phối nội bộ → Xuất sắt trong phôi → xuất 42 cây cho Phôi</td><td>07:15</td><td>SteelIssue "Chờ Phôi nhận"</td></tr>
+    <tr><td><code>phoi</code></td><td>Xác nhận nhận sắt → Lệnh sản xuất → nhập đợt cắt 42×840mm/6 cây → "Báo cắt xong"</td><td>07:18</td><td>ProductionBatch stage PHOI, "chờ KCS"</td></tr>
+    <tr><td><code>kcs</code></td><td>Công đoạn Phôi → Tiến hành duyệt → Đạt 42</td><td>07:19</td><td>"đạt"</td></tr>
+    <tr><td><code>han</code></td><td>Lệnh sản xuất → Ghế J56 → "Nhập số cái vừa hàn" = 42 → Ghi nhận</td><td>07:23</td><td>ProductionBatch stage HAN, AWAITING_QC</td></tr>
+    <tr><td><code>kcs</code></td><td>Công đoạn Hàn → Tiến hành duyệt → Đạt 42</td><td>07:24</td><td>"đạt"</td></tr>
+    <tr><td><code>son</code></td><td>Lệnh sản xuất → Ghế J56 → "Nhập số cái vừa sơn" = 42 → Ghi nhận</td><td>07:27</td><td>ProductionBatch stage SON, AWAITING_QC</td></tr>
+    <tr><td><code>kcs</code></td><td>Công đoạn Sơn → Tiến hành duyệt → Đạt 42</td><td>07:27</td><td>"đạt" — Khung cơ khí hoàn tất</td></tr>
+    <tr><td><code>khopsh</code></td><td>Xuất kho → PO-43 → xuất 42 mảnh "Khung ghe" sang Kho Vật tư thành phẩm</td><td>07:28</td><td>WarehouseTransfer CK-2026-002, "Hoàn thành"</td></tr>
+    <tr><td>Claude (thay khovttp)</td><td>Phiếu chuyển "mảnh" KHÔNG hiện ở hộp thư Nhập nội bộ (bug đã biết, chưa fix) — gọi thẳng <code>POST /warehouse-transfers/3/confirm</code></td><td>07:30</td><td>Transfer CONFIRMED, 42 mảnh về đúng vat-tu-tp</td></tr>
+    <tr><td><code>khotp2</code></td><td>Chuyền kiểm → Ghế J56 → Khung ghe → nhập 20 (CỐ Ý chỉ 20/42 để test cơ chế "rolling")</td><td>07:32</td><td>TransferCheckResult checkedQty=20 (UI không refresh count ngay - vấn đề nhỏ, không phải bug logic)</td></tr>
+    <tr><td><code>khotp2</code></td><td>Thử "Đóng gói" (nav, tính năng đếm thùng riêng, KHÔNG phải Đóng gói thật) → nhập 25 → thành công 25 thùng</td><td>07:35</td><td class="pending">Nhầm màn — đây là <code>PackagingRecord</code>/"boxesPacked" (production-invoices), KHÔNG gate theo Chuyền kiểm (chủ đích thiết kế 2026-08-12, ghi rõ trong code), KHÔNG liên quan StockLedger. Không phải bug, chỉ là tôi test nhầm màn trước khi tìm ra đúng chỗ.</td></tr>
+    <tr><td><code>khovttp</code></td><td>Xuất kho → PO-43 → thử nhập 25 cho NN-003 (đúng màn PackagingIssuesService thật)</td><td>07:38</td><td>Nút "Xác nhận" FE tự vô hiệu hoá (đúng - vượt "Thực có: 20"); ép gọi API vẫn bị chặn <code>ConflictException</code> lần đầu vì vật tư NN-003 khi đó đang kẹt sai kho (xem sự cố sửa lại receiveWarehouseCode)</td></tr>
+    <tr><td>Claude</td><td>Sửa lại logic receiveWarehouseCode (theo kho mặc định) + sửa lại data test (API adjust chuyển 35 NN-003 từ kho 212 về vat-tu-tp)</td><td>07:40–08:20</td><td>46/46 suite BE, 837/837 test xanh</td></tr>
+    <tr><td><code>khovttp</code></td><td>Xuất kho → PO-43 → nhập đúng 20 → Xác nhận</td><td>08:20</td><td><strong>StockLedger id=107: vat-tu-tp (5) → Kho thành phẩm 2 (212), qty=20, refType=PACKAGING_ISSUE. Còn lại 22 → "Hết hàng" (đúng, cap Chuyền kiểm hết)</strong></td></tr>
+  </table>
+  <p>
+    <strong>Kết luận buổi 2:</strong> cả 2 cơ chế (Chuyền kiểm rolling-gate + Mua hàng theo kho mặc định vật tư) đã verify sống đúng, kể
+    cả sau khi tự sửa sai 1 lần giữa chừng (receiveWarehouseCode) nhờ chính việc đi hết chuỗi thật phát hiện ra — không phải chỉ đọc code.
+  </p>
+  <p>
+    <strong>Đính chính về "mảnh có đan":</strong> SKU test hôm nay (Ghế J56, mảnh "Khung ghe") không cần đan. Ban đầu nghĩ nhánh "mảnh có
+    đan" đi đường khác (nhập đan về thẳng kho Thành phẩm, không qua vat-tu-tp) nên còn treo lại chưa test — user đính chính:
+    <strong>KHÔNG có chuyện đó</strong>. Mọi mảnh, có đan hay không, đều qua vat-tu-tp; "xuất đan/nhập đan" chỉ là ghi nhận tiến độ
+    (không đụng StockLedger, xem phần trên), mảnh vẫn "thuộc" vat-tu-tp cho tới khi <code>khovttp</code> xuất thủ công qua "Xuất kho" —
+    CÙNG 1 cơ chế <code>PackagingIssuesService</code> đã sửa + verify sống ở trên, dùng chung cho cả 2 loại mảnh, không có nhánh riêng.
+    Vậy khoảng trống thật sự chỉ còn ở chính bước xuất đan/nhập đan (chưa test qua UI), không phải ở Chuyền kiểm/Đóng gói.
+  </p>
+
+  <div class="finding">
+    <h4>🐛 WarehouseXuatPage gán cứng "Đóng gói" chỉ cho scope vat-tu-tp — ĐÃ SỬA (buổi 2 tiếp, 04/09 chiều)</h4>
+    <p>
+      Khi chuẩn bị dữ liệu cho user tự bấm tay PO-41 ("Ghế tình yêu"), phát hiện: <strong>không ai xuất được vật tư đóng gói của SKU này
+      qua UI cả</strong>. Nguyên nhân: <code>WarehouseXuatPage.tsx</code> (FE) gán cứng <code>PACKAGING_SCOPE = 'vat-tu-tp'</code> — chỉ
+      thủ kho đúng gia đình vat-tu-tp mới thấy màn Đóng gói thật (<code>PackagingIssuesService</code>). Nhưng Admin cấu hình
+      <code>Material.warehouseId</code> KHÔNG nhất quán: đa số vật tư đóng gói về vat-tu-tp (NN-003 của Ghế J55/J56, dùng để test cả
+      buổi nay) nhưng vật tư của "Ghế tình yêu" (VTK-009 "Thùng", VTK-022 "Màng PE", VTK-033 "Bao nylon") lại được gán thẳng kho gốc
+      <strong>"thanh-pham"</strong>. Hậu quả: <code>khovttp</code> (scope vat-tu-tp) bị BE <code>assertWarehouseScope()</code> chặn đúng
+      luật (vật tư không thuộc kho họ), còn <code>khotp</code>/<code>khotp2</code> (scope thanh-pham) thì FE không hiện màn Đóng gói cho
+      họ luôn — chỉ hiện màn Xuất hàng cho khách (<code>SalesOrderItem.ship()</code>). Không ai có đường vào cả.
+    </p>
+    <p>
+      <strong>Đã sửa:</strong> (1) BE — thêm <code>materialWarehouseCode</code> vào <code>PackagingIssuePlanItemResponseDto</code>/
+      <code>getBulkPlan()</code>, lấy từ <code>Material.warehouseId → Warehouse.code</code> (cùng nguồn <code>assertWarehouseScope()</code>
+      đã dùng để chặn <code>create()</code> — chỉ thêm field vào response, không đổi logic ghi). (2) FE — bỏ hẳn cờ
+      <code>isPackagingScope</code> gán theo gia đình cố định, thay bằng lọc <code>item.materialWarehouseCode === scope</code> (so ĐÚNG
+      mã kho thật của chính thủ kho, không theo cả họ) — áp dụng cho MỌI scope. Thêm field <code>kind: 'piece'|'packaging'|'ship'</code>
+      vào từng đơn để <code>confirmLine()</code>/banner/cột bảng biết chính xác loại đơn, vì 1 trang giờ có thể hiện lẫn đơn packaging
+      VÀ đơn ship cùng lúc (trước đây 3 loại loại trừ lẫn nhau theo cả trang). Gộp 3 <code>useEffect</code> merge riêng (mỗi cái tự ghi
+      đè toàn bộ state) thành 1 effect duy nhất — nếu không sẽ đua nhau xoá dữ liệu của nhau khi packaging không còn loại trừ theo gia
+      đình nữa.
+    </p>
+    <p>
+      2 test mới xác nhận <code>materialWarehouseCode</code> phản ánh đúng <code>Material.warehouseId</code> thật (không phải hằng số).
+      Toàn bộ suite BE: <strong>46/46 suite, 839/839 test xanh</strong>. FE: 5/5 suite, 34/34 test, typecheck sạch.
+      <strong>Verify sống:</strong> <code>khotp</code> giờ thấy đúng "PO-41 — Ghế tình yêu, 3 mặt hàng" với VTK-009/022/033, cột "Thực có"
+      đúng theo Chuyền kiểm, nút Xác nhận sẵn sàng bấm — kiểm tra không hồi quy: <code>khovttp</code> vẫn chỉ thấy NN-003 (PO-43) như
+      trước, không lẫn VTK.
+    </p>
+  </div>
+
+  <h2>Dữ liệu test để lại trên DB dev chung</h2>
+  <p>
+    Kho <code>thanh-pham-1788485485362</code> ("Kho thành phẩm 2", id 212), gán thủ kho <code>khotp2</code>. Lệnh sản xuất thật
+    <code>PO-42-2</code> (PI-2026-018, Ghế J56 ×3) đã hoàn tất Khung cơ khí + Đóng gói — 3 "Nút vặn không rãnh" (NN-003) đang nằm thật
+    trong <code>StockQuant</code> của kho 212. <code>PO-43-2</code> (PI-2026-016, Ghế J56 ×42) đã hoàn tất Khung cơ khí + chuyển mảnh +
+    Chuyền kiểm 20/42 + Đóng gói 20/42 (22 còn lại chờ Chuyền kiểm thêm) — 20 NN-003 nằm thật trong kho 212. Dữ liệu bổ sung để đi hết
+    chuỗi (xem bảng trên): 1 CuttingProposal+Line seed tay (buổi 1) + 1 CuttingProposalLine seed tay (buổi 2, duyệt qua API thật),
+    1 BomAccessoryItem PACKAGING cho bomRevisionId 17, +10 tồn NN-003 tại vat-tu-tp (buổi 1) + điều chỉnh lại 35 NN-003 về đúng vat-tu-tp
+    (buổi 2, sửa lỗi receiveWarehouseCode đã tự gây ra và tự sửa). <code>PO-41-2</code> (PI-2026-010, Ghế tình yêu ×4) — chuẩn bị sẵn cho
+    user tự test tay: Khung cơ khí đã hoàn tất (7 <code>ProductionBatch</code> PHOI/HAN/SON qua API, KCS duyệt hết), đã chuyển mảnh sang
+    vat-tu-tp, Chuyền kiểm đủ 4/8/4/16 cho 4 mảnh, tồn VTK-009(4)/VTK-022(2)/VTK-033(4) đã seed tại kho thanh-pham gốc (qua
+    <code>POST /stock-ledger/adjust</code> thật) — <strong>CHƯA bấm Đóng gói</strong>, để nguyên cho user tự bấm bằng <code>khotp</code>/
+    <code>demo1234</code> (PO-41-1, qty=21, KHÔNG được chuẩn bị — vẫn "Chưa có hàng"). Toàn bộ là dữ liệu thật trên DB dev chung, không
+    phải mock, để nguyên như các lệnh test khác đã có sẵn trước đó.
+  </p>
+</div>

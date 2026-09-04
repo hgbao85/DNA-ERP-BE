@@ -1,5 +1,9 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { PurchaseProposalSource, PurchaseProposalStatus } from '../../generated/prisma/client';
+import {
+  AccessoryItemKind,
+  PurchaseProposalSource,
+  PurchaseProposalStatus,
+} from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
 
@@ -28,6 +32,10 @@ describe('ConsumableMaterialPurchaseService', () => {
   const pi = { id: 1n };
   const day = { id: 60n, code: 'DAY-01', warehouse: { id: 91n, code: 'kho-day-dinh' } };
   const son = { id: 61n, code: 'SON-DO', warehouse: { id: 92n, code: 'kho-son' } };
+  // Kho mặc định đã thuộc họ "thanh-pham" (vd Bì zipper/Nhãn, xem Admin > Vật tư) - vật tư
+  // NHÓM NÀY mới bị receiveWarehouseCode ghi đè (2026-09-04, sửa lại sau khi phát hiện qua test
+  // sống: ghi đè theo BomAccessoryItem.kind=PACKAGING là SAI, phải theo kho MẶC ĐỊNH của vật tư).
+  const baoBi = { id: 62n, code: 'BAO-BI-01', warehouse: { id: 93n, code: 'thanh-pham' } };
 
   const qtyRow = (qty: number) => Promise.resolve([{ qty: { toNumber: () => qty } }]);
   const decimal = (n: number) => ({ toNumber: () => n });
@@ -36,7 +44,17 @@ describe('ConsumableMaterialPurchaseService', () => {
     prisma = {
       productionInvoice: { findUnique: jest.fn().mockResolvedValue(pi) },
       productionOrder: {
-        findMany: jest.fn().mockResolvedValue([{ id: 10n, bomRevisionId: 5n, quantity: 20 }]),
+        // productionInvoiceItem.warehouseCode (2026-09-04) - kho thành phẩm QLSX đã chọn cho PI,
+        // đọc để ghi đè receiveWarehouseCode cho vật tư đóng gói (BomAccessoryItem kind=PACKAGING).
+        // Mặc định về 'thanh-pham' (kho gốc) - test riêng cho việc ghi đè tự đặt giá trị khác.
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 10n,
+            bomRevisionId: 5n,
+            quantity: 20,
+            productionInvoiceItem: { warehouseCode: 'thanh-pham' },
+          },
+        ]),
       },
       bomPiece: {
         findMany: jest.fn().mockResolvedValue([
@@ -128,7 +146,18 @@ describe('ConsumableMaterialPurchaseService', () => {
         sourceType: PurchaseProposalSource.CONSUMABLE_AUTO_CALC,
         productionInvoiceId: 1n,
         warehouseCode: 'kho-day-dinh',
-        items: { create: [{ materialId: 60n, buyQty: 120, actualStock: 0 }] },
+        items: {
+          create: [
+            {
+              materialId: 60n,
+              buyQty: 120,
+              actualStock: 0,
+              receiveWarehouseCode: null,
+              status: undefined,
+              purchasedAt: undefined,
+            },
+          ],
+        },
       },
       include: { items: true },
     });
@@ -209,6 +238,78 @@ describe('ConsumableMaterialPurchaseService', () => {
     expect(result[0].required).toBe(180);
   });
 
+  it('vật tư có kho MẶC ĐỊNH đã thuộc họ "thanh-pham" (vd Bì zipper) ghi receiveWarehouseCode = kho thành phẩm QLSX đã chọn (2026-09-04)', async () => {
+    prisma.pieceMaterialItem.findMany.mockResolvedValue([]); // loại nhánh Dây/Đinh khỏi phép tính
+    prisma.bomAccessoryItem.findMany.mockResolvedValue([
+      {
+        bomRevisionId: 5n,
+        materialId: baoBi.id,
+        qtyPerUnit: { toNumber: () => 2 },
+        kind: AccessoryItemKind.PACKAGING,
+      },
+    ]);
+    prisma.material.findMany.mockResolvedValue([baoBi]);
+    prisma.productionOrder.findMany.mockResolvedValue([
+      {
+        id: 10n,
+        bomRevisionId: 5n,
+        quantity: 20,
+        productionInvoiceItem: { warehouseCode: 'thanh-pham-1788485485362' }, // "Kho thành phẩm 2"
+      },
+    ]);
+
+    await service.computeAndUpsertProposals('1');
+
+    expect(prisma.purchaseProposal.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          items: {
+            create: [
+              expect.objectContaining({
+                materialId: baoBi.id,
+                receiveWarehouseCode: 'thanh-pham-1788485485362',
+              }) as unknown,
+            ],
+          },
+        }) as unknown,
+      }),
+    );
+  });
+
+  it('vật tư có kho MẶC ĐỊNH KHÔNG thuộc họ thanh-pham (vd vat-tu-tp) - KHÔNG ghi đè receiveWarehouseCode dù kind=PACKAGING và PI đã chọn kho thành phẩm phụ - vật tư này BẮT BUỘC nằm ở kho trung chuyển để bước Đóng gói lấy ra được (2026-09-04, sửa lại sau khi phát hiện qua test sống)', async () => {
+    prisma.pieceMaterialItem.findMany.mockResolvedValue([]);
+    prisma.bomAccessoryItem.findMany.mockResolvedValue([
+      {
+        bomRevisionId: 5n,
+        materialId: day.id,
+        qtyPerUnit: { toNumber: () => 2 },
+        kind: AccessoryItemKind.PACKAGING,
+      },
+    ]);
+    prisma.productionOrder.findMany.mockResolvedValue([
+      {
+        id: 10n,
+        bomRevisionId: 5n,
+        quantity: 20,
+        productionInvoiceItem: { warehouseCode: 'thanh-pham-1788485485362' },
+      },
+    ]);
+
+    await service.computeAndUpsertProposals('1');
+
+    expect(prisma.purchaseProposal.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          items: {
+            create: [
+              expect.objectContaining({ materialId: 60n, receiveWarehouseCode: null }) as unknown,
+            ],
+          },
+        }) as unknown,
+      }),
+    );
+  });
+
   it('gộp NHIỀU vật tư khác kho vào CÙNG 1 proposal (Khác kho vẫn gộp chung theo 1 PI)', async () => {
     prisma.consumableBom.findMany.mockResolvedValue([
       { bomRevisionId: 5n, materialId: son.id, qtyPerUnit: { toNumber: () => 0.5 } },
@@ -239,7 +340,7 @@ describe('ConsumableMaterialPurchaseService', () => {
     expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
     expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
       where: { id: 950n },
-      data: { buyQty: 120, actualStock: 0 },
+      data: { buyQty: 120, actualStock: 0, receiveWarehouseCode: null },
     });
     expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
     expect(result[0].purchaseProposalId).toBe('900');
@@ -256,7 +357,15 @@ describe('ConsumableMaterialPurchaseService', () => {
 
     expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
     expect(prisma.purchaseProposalItem.create).toHaveBeenCalledWith({
-      data: { proposalId: 900n, materialId: 60n, buyQty: 120, actualStock: 0 },
+      data: {
+        proposalId: 900n,
+        materialId: 60n,
+        buyQty: 120,
+        actualStock: 0,
+        receiveWarehouseCode: null,
+        status: undefined,
+        purchasedAt: undefined,
+      },
     });
     expect(result[0].purchaseProposalId).toBe('900');
   });
