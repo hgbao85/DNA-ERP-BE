@@ -548,6 +548,7 @@ describe('SkusService', () => {
             materialId: 80n,
             piecesPerBar: 12,
             qtyPerPiece: 1,
+            processSteps: [],
           },
         ],
       });
@@ -574,7 +575,9 @@ describe('SkusService', () => {
             qtyPerUnit: 2,
             needsHan: true,
             segments: [],
-            materialYields: [{ materialId: '81', piecesPerBar: 6, qtyPerPiece: 3 }],
+            materialYields: [
+              { materialId: '81', piecesPerBar: 6, qtyPerPiece: 3, processSteps: ['CAT', 'UON'] },
+            ],
           },
         ],
         enteredBy: 'NV Sat',
@@ -589,6 +592,7 @@ describe('SkusService', () => {
             materialId: 81n,
             piecesPerBar: 6,
             qtyPerPiece: 3,
+            processSteps: ['CAT', 'UON'],
           },
         ],
       });

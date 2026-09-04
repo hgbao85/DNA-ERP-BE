@@ -318,6 +318,12 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.MATERIAL_ISSUE,
       actions: [PermissionAction.CREATE, PermissionAction.VIEW],
     },
+    // Xuất kho Sắt La/thanh nhôm cho Phôi (2026-09-04) - CREATE+VIEW, không có UPDATE (xác nhận
+    // nhận là việc của PHOI_STAFF, xem role đó bên dưới) - cùng idiom STEEL_ISSUE/MATERIAL_ISSUE.
+    {
+      module: PERMISSION_MODULES.MATERIAL_YIELD_ISSUE,
+      actions: [PermissionAction.CREATE, PermissionAction.VIEW],
+    },
     // Xuất vật tư đóng gói (vat-tu-tp -> thanh-pham, 2026-08-19) - chỉ CREATE+VIEW, không có
     // UPDATE vì không có bước "xác nhận nhận" riêng (cả kho nguồn lẫn đích đều là thủ kho, khác
     // MATERIAL_ISSUE nơi tổ Hàn/Sơn là actor xác nhận riêng).
@@ -412,6 +418,12 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.STEEL_ISSUE,
       actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
     },
+    // Xác nhận nhận Sắt La/thanh nhôm từ kho (2026-09-04) - UPDATE để gọi POST
+    // /material-yield-issues/:id/receive, cùng idiom STEEL_ISSUE ở trên (thủ kho xuất, Phôi nhận).
+    {
+      module: PERMISSION_MODULES.MATERIAL_YIELD_ISSUE,
+      actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
+    },
     // Thêm 21/08/2026: Phôi tự báo cắt xong "vật tư thành phẩm" (needsHan=false, vd chân nhôm -
     // mua thanh nhôm về cắt là xong, không qua Hàn) - trước đây needsHan=false hoàn toàn không có
     // cách nào chuyển kho ra khỏi Phôi-Sơn-Hàn (xem getPieceTransferPlan()). Cùng permission +
@@ -419,6 +431,11 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     // (ProductionBatchesService.assertMfgRoleMatchesStage() chỉ cho phép mfgRole=PHOI báo
     // stage=PHOI, không báo hộ Hàn/Sơn được). PRODUCTION_ORDER:VIEW đi kèm - cùng lý do đã cấp
     // cho HAN_STAFF/SON_STAFF: cần tự tra productionOrderId để gọi production-batch-plan.
+    // Thêm 04/09/2026: cùng permission này còn dùng cho POST /production-orders/:id/
+    // piece-step-batches (ProductionBatchesService.recordPieceStepBatch()) - Phôi báo tiến độ
+    // TỪNG công đoạn (Cắt/Uốn/Dập/...) cho vật tư thành phẩm có PieceMaterialYield.processSteps,
+    // trước khi chốt lô thật qua route production-batches ở trên. Không cần permission riêng - đây
+    // là 1 hình thức khác của "Phôi báo tiến độ", không phải nghiệp vụ mới.
     {
       module: PERMISSION_MODULES.PRODUCTION_BATCH,
       actions: [PermissionAction.CREATE, PermissionAction.VIEW],

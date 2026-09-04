@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -6,6 +15,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { CreatePieceStepBatchDto } from './dto/create-piece-step-batch.dto';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
 import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
 import { ProductionBatchPlanBatchQueryDto } from './dto/production-batch-plan-batch-query.dto';
@@ -82,6 +92,40 @@ export class ProductionBatchesController {
       .map((id) => id.trim())
       .filter((id) => id.length > 0);
     return this.productionBatchesService.getBatchPlanBatch(ids, query.stage);
+  }
+
+  /**
+   * Phôi báo "vừa {step} xong N mảnh" cho vật tư thành phẩm (PieceMaterialYield.processSteps) -
+   * trước khi chốt lô thật qua POST .../production-batches. Dùng chung permission
+   * PRODUCTION_BATCH:CREATE (PHOI_STAFF đã có, xem role-permissions.constant.ts) - đây là 1 hình
+   * thức khác của "Phôi báo tiến độ", không phải quyền mới. Idempotency-Key bắt buộc, cùng tiền lệ
+   * SteelIssuesController.create() (vấn đề #11 audit 26/08).
+   *
+   * Đặt route TRÊN @Get('production-batches/:id') - controller này đã 2 lần dính bẫy Nest khớp
+   * nhầm route tĩnh vào :id (xem comment getBatchPlanBatch() ở trên); path 2 segment cố định
+   * 'production-orders/:id/piece-step-batches' không trùng bất kỳ segment-2 nào khác nên an toàn,
+   * nhưng để tuân thủ tiền lệ vẫn khai trước route có :id.
+   */
+  @Post('production-orders/:id/piece-step-batches')
+  @RequirePermissions(CREATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  recordPieceStepBatch(
+    @Param('id') id: string,
+    @Body() dto: CreatePieceStepBatchDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('mfgRole') mfgRole: string | null,
+    @Headers('Idempotency-Key') idempotencyKey: string | undefined,
+  ) {
+    if (!idempotencyKey) {
+      throw new BadRequestException('Header Idempotency-Key là bắt buộc');
+    }
+    return this.productionBatchesService.recordPieceStepBatch(
+      id,
+      dto,
+      userId,
+      mfgRole,
+      idempotencyKey,
+    );
   }
 
   @Get('production-batches/:id')

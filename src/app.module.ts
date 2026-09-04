@@ -49,6 +49,7 @@ import { SteelIssuesModule } from './modules/steel-issues/steel-issues.module';
 import { QcReviewsModule } from './modules/qc-reviews/qc-reviews.module';
 import { WeavingIssuesModule } from './modules/weaving-issues/weaving-issues.module';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module';
+import { MaterialYieldIssuesModule } from './modules/material-yield-issues/material-yield-issues.module';
 import { PackagingIssuesModule } from './modules/packaging-issues/packaging-issues.module';
 import { ProductionBatchesModule } from './modules/production-batches/production-batches.module';
 
@@ -119,6 +120,7 @@ import { ProductionBatchesModule } from './modules/production-batches/production
     QcReviewsModule,
     WeavingIssuesModule,
     MaterialIssuesModule,
+    MaterialYieldIssuesModule,
     PackagingIssuesModule,
     ProductionBatchesModule,
   ],
