@@ -49,6 +49,12 @@ export interface PostStockEntryInput {
   createdById?: string;
   /** Chỉ set khi gọi từ POST /stock-ledger/adjust - xem StockLedgerService.adjust(). */
   idempotencyKey?: string;
+  /** Chiều dài cây (mm) - CHỈ có ý nghĩa khi materialId set (CHECK DB: =0 nếu materialId null).
+   *  Mặc định 0 nếu không truyền - giữ nguyên hành vi cũ cho mọi caller không phải sắt (packaging,
+   *  vật tư tiêu hao, chuyển kho...). Sắt (steel-issues, purchase-proposals receiveItem,
+   *  cutting-proposals approve) truyền giá trị thật để tồn kho phân biệt đúng theo từng lô chiều
+   *  dài, xem migration 20260829072018_stock_length_bucket. */
+  stockLengthMm?: number;
 }
 
 /**
@@ -104,6 +110,7 @@ export class StockLedgerService {
       note: input.note,
       createdBy: input.createdById ? { connect: { id: input.createdById } } : undefined,
       idempotencyKey: input.idempotencyKey,
+      stockLengthMm: input.stockLengthMm ?? 0,
     };
 
     if (input.idempotencyKey) {

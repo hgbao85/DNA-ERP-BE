@@ -1774,8 +1774,56 @@ describe('CuttingProposalsService', () => {
           qty: 8,
           refType: 'CUTTING_PROPOSAL',
           refId: '2',
+          productionInvoiceId: undefined,
           createdById: 'user-1',
+          stockLengthMm: 0,
         },
+        expect.anything(),
+      );
+    });
+
+    // 2026-09-05: tồn kho sắt giờ phân theo chiều dài (stockLengthMm) - khoá/đọc stock_quant lúc
+    // duyệt PHẢI lọc đúng bucket của dòng đang xét (bestStockLengthMm), không cộng lẫn tồn của
+    // chiều dài khác vào "available". reserve() cũng phải ghi lại đúng chiều dài đó.
+    it('lọc đúng bucket chiều dài khi khoá stock_quant + tính available, ghi lại lên StockReservation', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [{ materialId: 30n, feasible: true, totalBars: 8, bestStockLengthMm: 5900 }],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+      stockQty = 20;
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
+      prisma.purchaseProposalItem.findMany.mockResolvedValueOnce([
+        { status: PurchaseProposalStatus.PURCHASED },
+      ]);
+
+      await service.approve('2', 'user-1');
+
+      const stockQuantCalls = (prisma.$queryRaw.mock.calls as [TemplateStringsArray][]).filter(
+        ([strings]) => Array.isArray(strings) && strings.join('').includes('stock_quant'),
+      );
+      expect(stockQuantCalls.length).toBeGreaterThan(0);
+      for (const [, ...values] of stockQuantCalls) {
+        expect(values).toContain(5900);
+      }
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        expect.anything(),
+        800n,
+        30n,
+        20,
+        5900,
+      );
+      expect(stockReservationsService.reserve).toHaveBeenCalledWith(
+        expect.objectContaining({ stockLengthMm: 5900 }),
         expect.anything(),
       );
     });

@@ -611,7 +611,34 @@ describe('PurchaseProposalsService', () => {
           refId: '300',
           createdById: 'user-1',
           idempotencyKey: 'key-1',
+          stockLengthMm: 0,
         },
+        expect.anything(),
+      );
+    });
+
+    it('item.stockLengthMm có giá trị (mua theo phương án cắt sắt) -> postEntry ghi ĐÚNG chiều dài đó', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              materialId: 30n,
+              buyQty: decimal(8),
+              receivedQty: decimal(0),
+              stockLengthMm: 5900,
+            }),
+          ],
+        }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
+      );
+
+      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ stockLengthMm: 5900 }),
         expect.anything(),
       );
     });

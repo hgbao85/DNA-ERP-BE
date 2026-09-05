@@ -33,6 +33,7 @@
     "backfill:stock-reservation-pi": "ts-node -r tsconfig-paths/register prisma/backfill-stock-reservation-production-invoice.ts",
     "backfill:buy-bars": "ts-node -r tsconfig-paths/register prisma/backfill-buy-bars.ts",
     "backfill:cutting-plan-coverage": "ts-node -r tsconfig-paths/register prisma/backfill-cutting-plan-coverage.ts",
+    "backfill:stock-length-steel": "ts-node -r tsconfig-paths/register prisma/backfill-stock-length-steel-zero-to-6000.ts",
     "audit:merge-invariants": "ts-node -r tsconfig-paths/register prisma/audit-merge-invariants.ts",
     "db:backup": "bash scripts/backup-db.sh",
     "db:restore": "bash scripts/restore-db.sh",

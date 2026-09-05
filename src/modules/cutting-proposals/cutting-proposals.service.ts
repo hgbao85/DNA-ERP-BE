@@ -928,7 +928,12 @@ export class CuttingProposalsService {
           include: LIST_INCLUDE,
         });
 
-        const consumptions: { materialId: bigint; consumeQty: number; warehouseId: bigint }[] = [];
+        const consumptions: {
+          materialId: bigint;
+          consumeQty: number;
+          warehouseId: bigint;
+          bestStockLengthMm: number | null;
+        }[] = [];
 
         if (buyableLines.length > 0) {
           const items: {
@@ -951,9 +956,15 @@ export class CuttingProposalsService {
             // trừ kho nằm trong cùng transaction ở dưới - trigger trg_sync_stock_quant cập nhật
             // stock_quant lúc INSERT stock_ledger, nên nếu bút toán ra ngoài transaction thì khoá
             // đã nhả trước khi số dư kịp đổi và lượt duyệt kế tiếp vẫn đọc thấy số cũ.
+            // Lọc đúng bucket chiều dài của DÒNG NÀY (bestStockLengthMm) - từ 2026-09-05 tồn kho
+            // sắt phân biệt theo chiều dài (stockLengthMm), 1 material có thể có nhiều dòng
+            // stock_quant khác chiều dài (mua ở PI/thời điểm khác) - không lọc sẽ cộng lẫn tồn của
+            // chiều dài KHÁC vào available, tính buyQty/consumeQty sai.
+            const lineLengthMm = line.bestStockLengthMm ?? 0;
             const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
             SELECT "qty" FROM "stock_quant"
             WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${line.materialId}
+              AND "stockLengthMm" = ${lineLengthMm}
             FOR UPDATE
           `;
             const onHand = Math.floor(locked[0]?.qty.toNumber() ?? 0);
@@ -966,6 +977,7 @@ export class CuttingProposalsService {
               warehouseId,
               line.materialId,
               onHand,
+              lineLengthMm,
             );
             const totalBars = line.totalBars!;
             const consumeQty = Math.min(totalBars, available);
@@ -993,7 +1005,12 @@ export class CuttingProposalsService {
               data: { buyBars: buyQty },
             });
             if (consumeQty > 0) {
-              consumptions.push({ materialId: line.materialId, consumeQty, warehouseId });
+              consumptions.push({
+                materialId: line.materialId,
+                consumeQty,
+                warehouseId,
+                bestStockLengthMm: line.bestStockLengthMm,
+              });
             }
           }
 
@@ -1171,7 +1188,7 @@ export class CuttingProposalsService {
         // Việc đọc tồn - quyết định consumeQty - ghi giữ chỗ vẫn nằm trọn trong 1 khoá, 1 commit như
         // trước (lý do giữ FOR UPDATE ở trên không đổi: 2 phương án cùng vật tư duyệt gần nhau vẫn
         // phải xếp hàng, chỉ là phần "ăn" giờ là giữ chỗ thay vì trừ tồn thẳng).
-        for (const { materialId, consumeQty, warehouseId } of consumptions) {
+        for (const { materialId, consumeQty, warehouseId, bestStockLengthMm } of consumptions) {
           await this.stockReservationsService.reserve(
             {
               warehouseId,
@@ -1184,6 +1201,11 @@ export class CuttingProposalsService {
               // loadPool(). undefined khi phương án không neo PI nào (dữ liệu hỏng, ca cực hiếm).
               productionInvoiceId: targetProductionInvoiceId ?? undefined,
               createdById: actorUserId ?? undefined,
+              // Ghi lại audit chiều dài cây đã chốt cho lần giữ chỗ này (2026-09-05) - KHÔNG đổi
+              // logic pool (loadPool/drainPool/creditPool vẫn cố ý length-agnostic, xem comment ở
+              // StockReservationsService): findConflictingStockLengthReason() đã đảm bảo chỉ 1
+              // chiều dài/vật tư/PI nên rút theo tổng số cây vẫn đúng.
+              stockLengthMm: bestStockLengthMm ?? 0,
             },
             tx,
           );

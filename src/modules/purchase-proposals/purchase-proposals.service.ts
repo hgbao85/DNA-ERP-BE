@@ -437,6 +437,10 @@ export class PurchaseProposalsService {
               refId: proposal.id.toString(),
               createdById: userId,
               idempotencyKey,
+              // Chiều dài cây đã chốt lúc duyệt phương án cắt (CuttingProposalLine.bestStockLengthMm,
+              // xem CuttingProposalsService.approve()) - hàng sắt về đúng bucket chiều dài này thay
+              // vì đổ chung vào tồn không phân biệt chiều dài (sửa 2026-09-05).
+              stockLengthMm: item.stockLengthMm ?? 0,
             },
             tx,
           );

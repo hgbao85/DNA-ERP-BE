@@ -195,6 +195,7 @@ export class SteelIssuesService {
             // - xem StockReservationsService.drainPool và docstring hàm dưới đây.
             productionInvoiceId: invoice.id,
             materialId,
+            barLengthMm: dto.barLengthMm,
             barCount: dto.barCount,
             steelIssueId: issue.id,
             issuedById,
@@ -228,6 +229,7 @@ export class SteelIssuesService {
     input: {
       productionInvoiceId: bigint;
       materialId: bigint;
+      barLengthMm: number;
       barCount: number;
       steelIssueId: bigint;
       issuedById: string;
@@ -242,15 +244,18 @@ export class SteelIssuesService {
     // Chặn tồn âm cục bộ (lỗ #2, mục 13.4) - không sửa StockLedgerService.postEntry() dùng chung
     // (nhiều luồng khác hợp lệ phải cho âm, vd kho ảo SUPPLIER) - chặn ngay tại đây, cùng khoá.
     // Phòng ca hiếm: tồn vật lý bị điều chỉnh tay (Admin > Sửa nhanh tồn kho) lệch khỏi giữ chỗ.
+    // Lọc ĐÚNG bucket chiều dài đang xuất (2026-09-05) - không cộng lẫn tồn của chiều dài KHÁC
+    // (kho có thể có nhiều lô cùng vật tư khác chiều dài, mua ở PI/thời điểm khác nhau).
     const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
       SELECT "qty" FROM "stock_quant"
       WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${input.materialId}
+        AND "stockLengthMm" = ${input.barLengthMm}
       FOR UPDATE
     `;
     const onHand = Math.floor(stockRow?.qty.toNumber() ?? 0);
     if (onHand < input.barCount) {
       throw new ConflictException(
-        `Tồn kho vật lý (${onHand} cây) không đủ xuất ${input.barCount} cây cho vật tư ${input.materialId} - có thể đã bị điều chỉnh tay (Admin > Sửa nhanh tồn kho), kiểm tra lại trước khi xuất`,
+        `Tồn kho vật lý cây dài ${input.barLengthMm}mm (${onHand} cây) không đủ xuất ${input.barCount} cây cho vật tư ${input.materialId} - có thể đã bị điều chỉnh tay (Admin > Sửa nhanh tồn kho) hoặc kho chỉ còn chiều dài khác, kiểm tra lại trước khi xuất`,
       );
     }
 
@@ -267,6 +272,7 @@ export class SteelIssuesService {
         refId: input.steelIssueId.toString(),
         createdById: input.issuedById,
         idempotencyKey: `steel-issue:${input.steelIssueId}:consume`,
+        stockLengthMm: input.barLengthMm,
       },
       tx,
     );
@@ -1211,21 +1217,31 @@ export class SteelIssuesService {
     );
   }
 
-  /** "Cần xuất bao nhiêu" theo LOẠI SẮT cho cả PI - query trực tiếp, không có bảng cache riêng. */
+  /**
+   * "Cần xuất bao nhiêu" theo LOẠI SẮT cho cả PI - nguồn ĐÚNG là kết quả phần mềm tính cắt sắt
+   * (CuttingProposalLine.totalBars/bestStockLengthMm), KHÔNG phải định mức BOM (số đoạn cắt ra) -
+   * Mua hàng cũng mua theo đúng con số này nên "Cần" ở đây phải khớp, xem changelog sửa 2026-09-05.
+   * requiredBars cộng dồn qua MỌI dòng phủ vật tư này còn hiệu lực (1 PI có thể được phủ bởi 1
+   * phương án gộp cả PI, hoặc nhiều phương án riêng từng SKU/PO) - bestStockLengthMm chỉ lấy 1 giá
+   * trị vì findConflictingStockLengthReason() đã chặn từ lúc duyệt: không thể có 2 chiều dài khác
+   * nhau cho cùng 1 loại sắt trong cùng 1 PI.
+   */
   async getIssuePlan(productionInvoiceId: string): Promise<SteelIssuePlanItemResponseDto[]> {
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
-    const orders = await this.findOrdersForInvoice(invoice.id);
-    if (orders.length === 0) return [];
 
-    const bomRevisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
-    const [bomPieces, pieceBoms, issues] = await Promise.all([
-      this.prisma.bomPiece.findMany({
-        where: { bomRevisionId: { in: bomRevisionIds } },
-        include: { piece: true },
-      }),
-      this.prisma.pieceBom.findMany({
-        where: { bomRevisionId: { in: bomRevisionIds } },
-        include: { segmentSpec: { include: { material: true } } },
+    const [lines, issues] = await Promise.all([
+      this.prisma.cuttingProposalLine.findMany({
+        where: {
+          feasible: true,
+          cuttingProposal: {
+            status: CuttingProposalStatus.APPROVED,
+            OR: [
+              { productionInvoiceId: invoice.id },
+              { productionOrder: { productionInvoiceItem: { productionInvoiceId: invoice.id } } },
+            ],
+          },
+        },
+        select: { materialId: true, totalBars: true, bestStockLengthMm: true },
       }),
       // Chỉ đợt gốc (không tính rework) - đúng cách daXuatOf() bên mock cộng dồn.
       this.prisma.steelIssue.findMany({
@@ -1240,59 +1256,45 @@ export class SteelIssuesService {
       issuedByMaterial.set(key, (issuedByMaterial.get(key) ?? 0) + i.barCount);
     }
 
-    const bomPiecesByRevision = new Map<string, typeof bomPieces>();
-    for (const bp of bomPieces) {
-      const key = bp.bomRevisionId.toString();
-      const arr = bomPiecesByRevision.get(key) ?? [];
-      arr.push(bp);
-      bomPiecesByRevision.set(key, arr);
-    }
-    const pieceBomsByRevisionPiece = new Map<string, typeof pieceBoms>();
-    for (const pb of pieceBoms) {
-      const key = `${pb.bomRevisionId}:${pb.pieceId}`;
-      const arr = pieceBomsByRevisionPiece.get(key) ?? [];
-      arr.push(pb);
-      pieceBomsByRevisionPiece.set(key, arr);
+    const requiredByMaterial = new Map<
+      string,
+      { requiredBars: number; bestStockLengthMm: number | null }
+    >();
+    for (const l of lines) {
+      const key = l.materialId.toString();
+      const entry = requiredByMaterial.get(key) ?? { requiredBars: 0, bestStockLengthMm: null };
+      entry.requiredBars += l.totalBars ?? 0;
+      entry.bestStockLengthMm ??= l.bestStockLengthMm ?? null;
+      requiredByMaterial.set(key, entry);
     }
 
-    // Cộng dồn requiredSegments theo material, lặp qua TỪNG order (không phải từng bomRevisionId
-    // duy nhất) vì mỗi order có quantity riêng - 1 PI có thể có nhiều SKU/PO khác bomRevisionId
-    // (xem memory project_pi_multi_sku_multi_po), mỗi order đóng góp riêng vào tổng.
-    const requiredSegmentsByMaterial = new Map<string, number>();
-    const materialMeta = new Map<string, { code: string; name: string }>();
-    for (const order of orders) {
-      const bomKey = order.bomRevisionId.toString();
-      for (const bp of bomPiecesByRevision.get(bomKey) ?? []) {
-        for (const r of pieceBomsByRevisionPiece.get(`${bomKey}:${bp.pieceId}`) ?? []) {
-          const materialId = r.segmentSpec.materialId;
-          const mKey = materialId.toString();
-          const segments = r.qtyPerPiece * bp.qtyPerUnit * order.quantity;
-          requiredSegmentsByMaterial.set(
-            mKey,
-            (requiredSegmentsByMaterial.get(mKey) ?? 0) + segments,
-          );
-          if (!materialMeta.has(mKey)) {
-            materialMeta.set(mKey, {
-              code: r.segmentSpec.material.code,
-              name: r.segmentSpec.material.name,
-            });
-          }
-        }
-      }
-    }
+    // Hợp với vật tư chỉ còn LỊCH SỬ đã xuất (phương án cắt phủ nó đã bị tính lại/supersede) - để
+    // "Đã xuất" không biến mất khỏi màn hình dù "Cần" hiện tại của nó đã về 0.
+    const materialIdsUsed = [
+      ...new Set([...requiredByMaterial.keys(), ...issuedByMaterial.keys()]),
+    ].map((k) => BigInt(k));
+    if (materialIdsUsed.length === 0) return [];
 
-    const materialIdsUsed = [...requiredSegmentsByMaterial.keys()].map((k) => BigInt(k));
-    const stockInfoByMaterial = await this.buildStockInfoByMaterial(invoice.id, materialIdsUsed);
+    const [stockInfoByMaterial, materials] = await Promise.all([
+      this.buildStockInfoByMaterial(invoice.id, materialIdsUsed, requiredByMaterial),
+      this.prisma.material.findMany({
+        where: { id: { in: materialIdsUsed } },
+        select: { id: true, code: true, name: true },
+      }),
+    ]);
+    const materialMeta = new Map(materials.map((m) => [m.id.toString(), m]));
 
     return materialIdsUsed.map((materialId) => {
       const key = materialId.toString();
       const meta = materialMeta.get(key)!;
+      const req = requiredByMaterial.get(key);
       const stockInfo = stockInfoByMaterial.get(key);
       return new SteelIssuePlanItemResponseDto({
         materialId: key,
         materialCode: meta.code,
         materialName: meta.name,
-        requiredSegments: requiredSegmentsByMaterial.get(key) ?? 0,
+        requiredBars: req?.requiredBars ?? 0,
+        bestStockLengthMm: req?.bestStockLengthMm ?? null,
         issuedBarCount: issuedByMaterial.get(key) ?? 0,
         remainingToIssue: stockInfo?.remainingToIssue ?? null,
         physicalStockQty: stockInfo?.physicalStockQty ?? null,
@@ -1307,10 +1309,15 @@ export class SteelIssuesService {
    *     án duyệt TRƯỚC cutover (không giữ chỗ) hoặc chưa có phương án nào.
    *   - physicalStockQty: tồn vật lý thật (stock_quant) - null nếu vật tư chưa gán Kho.
    * Tính 1 LẦN cho mỗi vật tư trong `materialIds` (không lặp theo mảnh) - xem gọi ở getIssuePlan().
+   * physicalStockQty lọc ĐÚNG bucket stockLengthMm mà PI này đang cần (requiredByMaterial) - 1
+   * material có thể có nhiều dòng stock_quant khác chiều dài (mua ở PI khác, thời điểm khác), cộng
+   * lẫn vào nhau sẽ báo tồn sai (thấy "đủ" trong khi chiều dài cần lại không đủ). Không có chiều dài
+   * cụ thể (vật tư chỉ còn lịch sử, xem getIssuePlan) thì fallback cộng mọi bucket.
    */
   private async buildStockInfoByMaterial(
     productionInvoiceId: bigint,
     materialIds: bigint[],
+    requiredByMaterial: Map<string, { requiredBars: number; bestStockLengthMm: number | null }>,
   ): Promise<Map<string, { remainingToIssue: number | null; physicalStockQty: number | null }>> {
     const result = new Map<
       string,
@@ -1355,20 +1362,37 @@ export class SteelIssuesService {
       warehouseIds.length > 0
         ? await this.prisma.stockQuant.findMany({
             where: { warehouseId: { in: warehouseIds }, materialId: { in: materialIds } },
-            select: { warehouseId: true, materialId: true, qty: true },
+            select: { warehouseId: true, materialId: true, stockLengthMm: true, qty: true },
           })
         : [];
-    const quantByKey = new Map(
-      quants.map((q) => [`${q.warehouseId}:${q.materialId}`, q.qty.toNumber()]),
-    );
+    // Cộng dồn theo (warehouse, material, chiều dài) - KHÔNG ghi đè, vì 1 material có thể có nhiều
+    // dòng khác stockLengthMm (khác PI/thời điểm mua).
+    const quantByKey = new Map<string, number>();
+    for (const q of quants) {
+      const k = `${q.warehouseId}:${q.materialId}:${q.stockLengthMm}`;
+      quantByKey.set(k, (quantByKey.get(k) ?? 0) + q.qty.toNumber());
+    }
 
     for (const materialId of materialIds) {
       const key = materialId.toString();
       const warehouseId = warehouseIdByMaterial.get(key) ?? null;
+      const length = requiredByMaterial.get(key)?.bestStockLengthMm ?? null;
+      let physicalStockQty: number | null = null;
+      if (warehouseId != null) {
+        if (length != null) {
+          physicalStockQty = quantByKey.get(`${warehouseId}:${materialId}:${length}`) ?? 0;
+        } else {
+          let sum = 0;
+          const prefix = `${warehouseId}:${materialId}:`;
+          for (const [k, qty] of quantByKey) {
+            if (k.startsWith(prefix)) sum += qty;
+          }
+          physicalStockQty = sum;
+        }
+      }
       result.set(key, {
         remainingToIssue: remainingByMaterial.has(key) ? remainingByMaterial.get(key)! : null,
-        physicalStockQty:
-          warehouseId != null ? (quantByKey.get(`${warehouseId}:${materialId}`) ?? 0) : null,
+        physicalStockQty,
       });
     }
     return result;

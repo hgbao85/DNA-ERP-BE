@@ -14,6 +14,11 @@ export interface ReserveInput {
   productionInvoiceId?: bigint;
   note?: string;
   createdById?: string;
+  /** Chiều dài cây (mm) đã chốt cho lần giữ chỗ này - CHỈ để audit, KHÔNG ảnh hưởng logic pool
+   *  (loadPool/creditPool/drainPool cố ý length-agnostic, xem doc comment class: 1 (PI, vật tư) chỉ
+   *  có 1 chiều dài nhờ CuttingProposalsService.findConflictingStockLengthReason() chặn từ lúc
+   *  duyệt, nên rút theo tổng số cây vẫn đúng). Mặc định 0 khi không truyền. */
+  stockLengthMm?: number;
 }
 
 interface PoolRow {
@@ -83,6 +88,7 @@ export class StockReservationsService {
         note: input.note,
         createdById: input.createdById,
         idempotencyKey,
+        stockLengthMm: input.stockLengthMm ?? 0,
       },
     });
     return { id: created.id, quantity: created.quantity };
@@ -288,17 +294,29 @@ export class StockReservationsService {
    * (chuyển kho, bảng có TRƯỚC). Đây là ĐÚNG MỘT hàm được phép cộng 2 bảng - không nơi nào khác
    * được tự viết lại phép trừ này (xem lỗ #6, mục 13.4 changelog) - nếu không, cắt sắt và chuyển
    * kho sẽ giành nhau cùng lô hàng mà không ai phát hiện.
+   *
+   * `stockLengthMm` (2026-09-05) lọc ĐÚNG bucket chiều dài khi trừ StockReservation - `onHand` do
+   * caller truyền vào đã tự khoá/lọc đúng bucket đó rồi (xem CuttingProposalsService.approve()),
+   * nên phần trừ ở đây phải khớp, không trộn giữ chỗ của chiều dài KHÁC vào. KHÔNG lọc
+   * WarehouseTransferReservation theo chiều dài - luồng chuyển kho chưa có input chiều dài (luôn
+   * ghi 0), lọc riêng sẽ làm ẩn mất phần nó đang giữ và cho 2 luồng giành nhau cùng lô hàng vật lý.
    */
   async getAvailableQty(
     tx: PrismaTx | undefined,
     warehouseId: bigint,
     materialId: bigint,
     onHand: number,
+    stockLengthMm?: number,
   ): Promise<number> {
     const db = tx ?? this.prisma;
     const [stockReservations, transferReservations] = await Promise.all([
       db.stockReservation.findMany({
-        where: { warehouseId, materialId, status: ReservationStatus.ACTIVE },
+        where: {
+          warehouseId,
+          materialId,
+          status: ReservationStatus.ACTIVE,
+          stockLengthMm: stockLengthMm ?? 0,
+        },
         select: { quantity: true, consumedQty: true },
       }),
       db.warehouseTransferReservation.findMany({

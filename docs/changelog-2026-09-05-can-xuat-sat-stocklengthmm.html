@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: "Cần" ở Xuất sắt + chiều dài cây sắt (stockLengthMm)</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · Xuất sắt trong Phôi — Cột "Cần" + chiều dài cây sắt (stockLengthMm)</div>
+    <h1>"Cần" đổi nguồn sang phương án cắt sắt đã duyệt, tồn kho sắt phân biệt theo chiều dài cây</h1>
+    <p class="lede">
+      Thủ kho hỏi ý nghĩa cột "Cần" ở màn Xuất sắt trong phôi, dẫn tới phát hiện nó đang tính từ
+      định mức BOM (số ĐOẠN cắt ra) trong khi nghiệp vụ đúng ra phải hiển thị số CÂY + chiều dài mà
+      phần mềm tính cắt sắt đã chốt — đúng con số Mua hàng đã mua. Truy vết tiếp toàn bộ luồng Tính
+      cắt → Mua hàng → Nhập kho → Xuất sắt phát hiện thêm: cột <code>stockLengthMm</code> đã có sẵn
+      trong schema DB nhưng chưa có code nào từng ghi giá trị thật vào đó — kho có nhiều chiều dài
+      cây khác nhau bị hệ thống gộp chung thành 1 khối tồn duy nhất.
+    </p>
+    <div class="meta">
+      <span>05/09/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>Không migration mới — tái dùng cột đã ship 29/08</span>
+      <span>890 test BE pass (47 suite)</span>
+      <span>1 script backfill — <b>đã chạy thật trên DB dev chung</b></span>
+      <span><b>Đã xác nhận qua trình duyệt thật</b> (PI-2026-022)</span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li>Cột "Cần" (<code>SteelIssuesService.getIssuePlan()</code>) đổi nguồn từ định mức BOM (đơn vị "đoạn") sang <code>CuttingProposalLine.totalBars</code>/<code>bestStockLengthMm</code> (đơn vị "cây" + chiều dài, đúng số Mua hàng đã mua).</li>
+      <li>Vá kèm 1 bug ngủ sẵn: <code>physicalStockQty</code> từng ghi-đè (last-wins) khi 1 vật tư có nhiều dòng tồn khác chiều dài — nay cộng dồn đúng bucket.</li>
+      <li><code>stockLengthMm</code> được ghi thật lần đầu tiên xuyên suốt: nhận hàng (<code>receiveItem</code>), duyệt phương án cắt (<code>approve</code>), và xuất sắt cho Phôi (<code>consumeReservationAndDeduct</code>) — trước đây mọi bút toán luôn mặc định 0 dù cột đã tồn tại từ 29/08.</li>
+      <li><b>Đính chính 1 tài liệu nội bộ:</b> ghi nhận trước đó nói việc này "đã ship đầy đủ 9 bước, 787 unit + 8 integration test xanh" vào 29/08 — đối chiếu code thật + toàn bộ lịch sử git xác nhận phần code ứng dụng đó <b>không tồn tại</b>, chỉ migration còn sống. Khả năng cao bị mất trước khi commit. Bản vá lần này là thiết kế thay thế đơn giản hơn, không khôi phục nguyên bản cũ.</li>
+      <li>Cố ý giữ nguyên length-agnostic: pool giữ chỗ (<code>loadPool</code>/<code>drainPool</code>/<code>creditPool</code>) và toàn bộ luồng chuyển kho nội bộ/nhôm "chân nhôm" — xem mục 6.</li>
+      <li>Backfill 1 lần (có <code>--dry-run</code>) gán lại tồn kho sắt cũ (bucket 0) sang bucket 6000mm — đã chạy thật, xác nhận idempotent qua lần chạy thứ 2.</li>
+      <li>Vá thêm 1 bug UX đang ngủ phát hiện lúc giải thích màn hình cho thủ kho: ô nhập chiều dài luôn có sẵn giá trị nên <code>placeholder</code> không bao giờ hiện — thêm nhãn "Dài cây (mm)"/"Số cây" hiển thị cố định thay vì chỉ dựa vào tooltip hover.</li>
+      <li><b>Đã test qua trình duyệt thật</b> (đăng nhập <code>khopsh</code>, mở PI-2026-022) — "Cần" hiện đúng "755 cây · 6000mm"/"746 cây · 6000mm", khớp 100% với "Hướng dẫn cắt" (MES) của cùng PI.</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 1. BỐI CẢNH ═══════════════════════ -->
+  <div class="module" id="boicanh">
+    <h2>1. Bối cảnh — 2 con số "cần bao nhiêu" bị lẫn vào nhau</h2>
+    <p class="module-note">
+      Bắt đầu từ câu hỏi của thủ kho khi xem màn "Phân phối nội bộ &gt; Xuất sắt trong phôi": cột
+      "Cần" hiện số rất lớn (vd 7500) trong khi "Còn được xuất" lại về 0 — nhìn như hệ thống lỗi.
+    </p>
+
+    <div class="card">
+      <h3>2 nguồn dữ liệu độc lập, không liên quan trực tiếp</h3>
+      <p><b>"Cần" (trước khi sửa):</b> <code>Σ qtyPerPiece(PieceBom) × qtyPerUnit(BomPiece) × order.quantity</code> — số ĐOẠN cắt ra theo định mức kỹ thuật, tính thẳng từ BOM, không đụng gì tới phần mềm cắt sắt. <b>"Còn được xuất":</b> tính từ <code>StockReservation</code> — chỉ có giá trị khi phương án cắt đã được duyệt và giữ chỗ. Hai con số đến từ 2 hệ thống tính toán độc lập nên chênh lệch không nói lên gì về lỗi hệ thống, nhưng gây hiểu lầm nghiêm trọng cho người dùng cuối.</p>
+    </div>
+
+    <div class="callout">
+      <b>Nghiệp vụ đúng (xác nhận với business):</b> "Cần" phải hiển thị đúng số CÂY + chiều dài mà
+      phần mềm tính cắt sắt (solver) đã đề nghị mua/cắt — vì Mua hàng cũng mua theo đúng con số này
+      (<code>CuttingProposalLine.totalBars</code>/<code>bestStockLengthMm</code>). Khi có nhiều
+      chiều dài cho cùng 1 loại sắt, phải tách ra chứ không gộp mù thành 1 số.
+    </div>
+
+    <div class="callout warn">
+      <b>Phát hiện phụ khi truy luồng:</b> schema đã có <code>stockLengthMm</code> trên
+      <code>StockLedger</code>/<code>StockQuant</code>/<code>StockReservation</code> từ migration
+      <code>20260829072018_stock_length_bucket</code> (trigger sửa đúng ở
+      <code>20260904070642_fix_stock_quant_material_trigger_stock_length</code>), nhưng
+      <b>không code nào từng ghi giá trị khác 0</b> — tồn kho sắt trên thực tế chưa từng phân biệt
+      theo chiều dài dù DB đã sẵn sàng từ lâu.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. ĐÍNH CHÍNH ═══════════════════════ -->
+  <div class="module" id="dinhchinh">
+    <h2>2. Đính chính — "Phương án A" 29/08 đã mất trước khi commit</h2>
+    <p class="module-note">
+      Ghi nhận nội bộ (bộ nhớ agent phiên trước) khẳng định đúng vấn đề <code>stockLengthMm</code>
+      này "đã ship đầy đủ 9 bước + 787 unit/8 integration test xanh" vào 29/08 — gồm field bắt buộc
+      trên <code>PostStockEntryInput</code>, <code>resolvePoolBucket()</code>, route
+      <code>rebucket</code> cho thủ kho khai lại cỡ cây tồn cũ, chặn cứng chuyển kho nội bộ theo
+      chiều dài.
+    </p>
+    <div class="callout bad">
+      <b>Đối chiếu code thật + <code>git log --all</code> (mọi branch):</b> 0 kết quả cho
+      <code>resolvePoolBucket|rebucket|stockLengthMm</code> trong tên commit hay đường dẫn file
+      ngoài chính file migration; không file test tích hợp nào được nhắc tới tồn tại. Kết luận:
+      phần CODE ỨNG DỤNG của thiết kế đó chưa từng được commit và đã mất — chỉ migration/trigger
+      còn sống trên DB dev chung. Khả năng trùng dạng sự cố "backup/reset DB dev giữa phiên" đã
+      từng ghi nhận trước đó.
+    </div>
+    <p class="module-note">
+      Bản vá lần này (mục 3-4) là 1 thiết kế THAY THẾ đơn giản hơn — không khôi phục field bắt buộc,
+      <code>resolvePoolBucket()</code>, route <code>rebucket</code>, hay chặn cứng chuyển kho. Ghi
+      nhận nội bộ liên quan đã được sửa lại để phản ánh đúng trạng thái thật này.
+    </p>
+  </div>
+
+  <!-- ═══════════════════════ 3. BACKEND ═══════════════════════ -->
+  <div class="module" id="backend">
+    <h2>3. Backend <span class="badge b-be">BE</span></h2>
+
+    <div class="card">
+      <h3><span class="path">steel-issues/steel-issues.service.ts</span> — <code>getIssuePlan()</code> đổi nguồn</h3>
+      <p>Bỏ hẳn truy vấn <code>bomPiece</code>/<code>pieceBom</code>. Vật tư + số lượng cần suy từ <code>cuttingProposalLine.findMany</code> (<code>feasible=true</code>, <code>cuttingProposal.status=APPROVED</code>, join PI trực tiếp hoặc qua PO thành viên — cùng pattern <code>CuttingProposalsService.computeNetRequirementByMaterial()</code>). Cộng dồn <code>totalBars</code> theo material; <code>bestStockLengthMm</code> lấy 1 giá trị bất kỳ (đảm bảo duy nhất theo material/PI nhờ <code>findConflictingStockLengthReason()</code> chặn từ lúc duyệt). Danh sách vật tư hiển thị = hợp của (có dòng phủ hiệu lực) ∪ (có lịch sử <code>SteelIssue</code>) — không biến mất khỏi màn hình kèm "Đã xuất" khi phương án bị supersede.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">steel-issues/steel-issues.service.ts</span> — <code>buildStockInfoByMaterial()</code>, vá bug có sẵn</h3>
+      <p><code>physicalStockQty</code> trước đây dùng <code>Map</code> ghi-đè (last-wins) khi 1 material có nhiều dòng <code>StockQuant</code> khác <code>stockLengthMm</code> — nay cộng dồn đúng bucket khớp <code>bestStockLengthMm</code> đã resolve, fallback cộng mọi bucket khi vật tư không còn chiều dài cụ thể (nhánh chỉ-còn-lịch-sử).</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">steel-issues/dto/steel-issue-plan-item-response.dto.ts</span></h3>
+      <p><code>requiredSegments: number</code> → <code>requiredBars: number</code> (đơn vị CÂY) + thêm <code>bestStockLengthMm: number | null</code>.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">stock/stock-ledger.service.ts</span> — <code>postEntry()</code> nhận chiều dài</h3>
+      <p><code>PostStockEntryInput.stockLengthMm?: number</code> — optional, mặc định 0, giữ nguyên hành vi cho 7 call site không phải sắt (packaging-issues, material-issues, material-yield-issues, materials opening balance, production-batches, warehouse-transfers ×2).</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">purchase-proposals/purchase-proposals.service.ts</span> — <code>receiveItem()</code></h3>
+      <p>Truyền <code>item.stockLengthMm</code> (đã có sẵn từ lúc duyệt cắt, trước đây chỉ để hiển thị) vào <code>postEntry()</code> khi nhận hàng — mắt xích còn thiếu để hàng sắt về đúng bucket chiều dài thay vì rơi hết vào bucket 0.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">cutting-proposals/cutting-proposals.service.ts</span> — <code>approve()</code></h3>
+      <p>Raw SQL khoá/đọc <code>stock_quant</code> lọc thêm <code>AND "stockLengthMm" = bestStockLengthMm</code> (trước đây blend mọi chiều dài vào 1 số "tồn", tính buy/consume sai khi có nhiều bucket). <code>getAvailableQty()</code> nhận thêm tham số chiều dài. <code>reserve()</code> ghi <code>stockLengthMm</code> lên <code>StockReservation</code> (audit — không đổi logic pool).</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">stock/stock-reservations.service.ts</span> — <code>getAvailableQty()</code></h3>
+      <p>Lọc <code>StockReservation</code> theo <code>stockLengthMm</code> truyền vào. <b>Cố ý KHÔNG lọc</b> <code>WarehouseTransferReservation</code> theo chiều dài — bảng đó chưa có input chiều dài (luôn 0), lọc riêng sẽ ẩn mất phần chuyển kho đang giữ, cho 2 luồng giành nhau cùng lô hàng vật lý. <code>loadPool()</code>/<code>drainPool()</code>/<code>creditPool()</code> giữ nguyên length-agnostic — pool đã đảm bảo đúng 1 chiều dài/vật tư/PI nhờ <code>findConflictingStockLengthReason()</code> (L7), rút theo tổng số cây vẫn đúng.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">steel-issues/steel-issues.service.ts</span> — <code>consumeReservationAndDeduct()</code>, chỗ quan trọng nhất</h3>
+      <p>Raw SQL kiểm tồn âm lọc thêm <code>AND "stockLengthMm" = dto.barLengthMm</code>. Trước đây thủ kho xuất sắt được kiểm theo TỔNG mọi chiều dài cộng lại — có thể xuất được dù đúng bucket chiều dài đang xuất không đủ tồn thật. <code>postEntry()</code> ghi <code>stockLengthMm: barLengthMm</code> theo đúng chiều dài đã xuất.</p>
+    </div>
+
+    <div class="callout warn">
+      <b>Cố ý ngoài phạm vi</b> (chưa có input chiều dài ở DTO/UI): <code>warehouse-transfers.service.ts</code> (chuyển kho nội bộ chung) và <code>material-yield-issues.service.ts</code> (nhôm "chân nhôm"/"pat") — để dành làm sau nếu nghiệp vụ cần.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 4. FRONTEND ═══════════════════════ -->
+  <div class="module" id="frontend">
+    <h2>4. Frontend <span class="badge b-fe">FE</span></h2>
+
+    <div class="card">
+      <h3><span class="path">services/steel-issues-api.ts</span></h3>
+      <p><code>BeSteelIssuePlanItem.requiredSegments</code> → <code>requiredBars</code> + thêm <code>bestStockLengthMm: number | null</code>.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">InboundWarehouse/XuatSatPage.tsx</span></h3>
+      <p>Cột "Cần" hiện <code>requiredBars</code> cây kèm <code>bestStockLengthMm</code>mm bên dưới. <code>suggestedBarLen()</code> — trước đây hardcode 6000mm — nay gợi ý mặc định từ <code>item.bestStockLengthMm</code> cho ô nhập chiều dài lúc bấm Xuất (vẫn cho sửa tay, tự đổi theo đúng chiều dài phương án đang duyệt mỗi lần tải lại trang). Câu chữ ô trống bỏ phần nhắc BOM vì màn này không còn phụ thuộc BOM.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">InboundWarehouse/XuatSatPage.tsx</span> — vá bug UX đang ngủ: nhãn ô nhập vô hình</h3>
+      <p>Phát hiện khi giải thích màn hình cho thủ kho: ô "dài (mm)" luôn có sẵn giá trị (tự điền số gợi ý) nên <code>placeholder</code> <b>không bao giờ hiện ra</b> — tác dụng của ô chỉ lộ ra qua <code>title</code> (tooltip hover), dễ bị bỏ qua hoàn toàn, nhất là trên thiết bị cảm ứng không có hover. Thêm nhãn nhỏ hiển thị CỐ ĐỊNH phía trên mỗi ô ("Dài cây (mm)" / "Số cây"), không phụ thuộc trạng thái giá trị hay hover; giữ nguyên tooltip cho phần giải thích chi tiết hơn.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. BACKFILL ═══════════════════════ -->
+  <div class="module" id="backfill">
+    <h2>5. Backfill dữ liệu cũ <span class="badge b-db">DB</span></h2>
+    <div class="card">
+      <h3><span class="path">prisma/backfill-stock-length-steel-zero-to-6000.ts</span></h3>
+      <p>Gán lại tồn kho sắt hiện có ở bucket <code>stockLengthMm=0</code> sang bucket 6000mm (chiều dài chuẩn duy nhất từng dùng). Không sửa tay <code>StockQuant</code> (bảng cache do trigger tự tính) — ghi 2 bút toán <code>StockLedger</code> bù trừ qua kho ảo <code>OPENING_BALANCE</code>, mỗi bút toán có <code>idempotencyKey</code> riêng (resolve-or-create, chạy lại an toàn). Chủ động BỎ QUA vật tư đã có bucket ≠0 hoặc <code>PurchaseProposalItem.stockLengthMm</code> khác 6000/null. Cũng gán lại <code>StockReservation.stockLengthMm</code> ACTIVE (update trực tiếp — bảng app tự ghi, không phải cache) vì <code>getAvailableQty()</code> từ nay lọc theo bucket. Hỗ trợ cờ <code>--dry-run</code>.</p>
+      <div class="stats">
+        <div class="stat"><div class="n">7</div><div class="l">vật tư nhóm STEEL_BAR</div></div>
+        <div class="stat"><div class="n">4</div><div class="l">dòng stock_quant gán lại</div></div>
+        <div class="stat"><div class="n">4</div><div class="l">dòng StockReservation gán lại</div></div>
+        <div class="stat"><div class="n">0</div><div class="l">vật tư bị loại (điều kiện an toàn)</div></div>
+      </div>
+      <p>Chạy lại lần 2 xác nhận idempotent: 0 thay đổi, tự nhận diện 3 vật tư đã có bucket 6000mm và báo BỎ QUA.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 6. KIỂM CHỨNG ═══════════════════════ -->
+  <div class="module" id="kiemchung">
+    <h2>6. Kiểm chứng</h2>
+
+    <div class="card">
+      <h3>Backend — test + tĩnh</h3>
+      <p>Viết lại toàn bộ <code>describe('getIssuePlan', ...)</code> (mock nguồn mới), thêm test cho nhánh "chỉ còn lịch sử" và cộng dồn bucket đúng; thêm test length-scoping cho <code>postEntry</code>/<code>receiveItem</code>/<code>approve</code>/<code>getAvailableQty</code>/<code>consumeReservationAndDeduct</code>; cập nhật các assertion literal-object hiện có (không dùng <code>objectContaining</code>) khớp field mới.</p>
+      <div class="stats">
+        <div class="stat"><div class="n">890</div><div class="l">test BE pass (47 suite)</div></div>
+        <div class="stat"><div class="n">0</div><div class="l">test vỡ do thay đổi</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Frontend — tĩnh</h3>
+      <p><code>npx tsc --noEmit</code> sạch (exit 0), không lỗi kiểu ở 2 file đã sửa.</p>
+    </div>
+
+    <div class="card">
+      <h3>Backfill — chạy thật trên DB dev chung</h3>
+      <p><code>--dry-run</code> trước để soát số liệu, chạy thật ghi 8 bút toán <code>StockLedger</code> + update 4 <code>StockReservation</code>, chạy lại lần 2 xác nhận idempotent (0 thay đổi, đúng vật tư bị BỎ QUA vì đã có dữ liệu mới).</p>
+    </div>
+
+    <div class="card">
+      <h3>Frontend — qua trình duyệt thật (không mock)</h3>
+      <p>Đăng nhập thật tài khoản <code>khopsh</code> ("Thủ kho · Phôi Sơn Hàn") → Kho đầu vào → Phân phối nội bộ → Xuất sắt trong phôi → mở đúng <b>PI-2026-022 / PO-52</b> (PI dùng làm ví dụ xuyên suốt phiên trao đổi với người dùng). Cột "Cần" hiện đúng <b>"755 cây · 6000mm"</b> (Sắt vuông 6zem) và <b>"746 cây · 6000mm"</b> (Sắt hộp 6zem) — khớp CHÍNH XÁC với số "Mua 6000mm × 755/746 cây" ở màn Hướng dẫn cắt (MES) của cùng PI. Ô nhập chiều dài tự điền đúng 6000, 2 nhãn "Dài cây (mm)"/"Số cây" hiển thị cố định như thiết kế. 0 console error, 0 request lỗi liên quan (chỉ có 1 request 403 <code>/replenish-requests</code> không liên quan tới thay đổi lần này, cố ý không đụng tới).</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 7. CÒN ĐỂ NGỎ ═══════════════════════ -->
+  <div class="module" id="conngo">
+    <h2>7. Còn để ngỏ</h2>
+    <ul class="timeline stages">
+      <li class="ok"><b>Đã test UI qua trình duyệt thật</b><span> — xem mục 6, xác nhận số liệu khớp MES 100%, không lỗi console/network liên quan.</span></li>
+      <li><b>Chưa thử luồng "Xuất" thật đến cùng (bấm nút, ghi StockLedger)</b><span> — PI-2026-022 đã "Còn được xuất" = 0 (đã xuất đủ từ trước) nên không có ca hợp lệ để bấm thử trên PI này; cần chọn 1 PI khác còn hạn mức nếu muốn xác nhận trực quan bước ghi sổ qua UI (phần backend của bước này đã có test tự động riêng, xem mục 6).</span></li>
+      <li><b>Chuyển kho nội bộ (<code>warehouse-transfers</code>) vẫn length-agnostic hoàn toàn</b><span> — chưa có input chiều dài ở DTO/UI, cố ý để ngoài phạm vi lần này.</span></li>
+      <li><b>Nhôm "chân nhôm"/"pat" (<code>material-yield-issues</code>) vẫn length-agnostic</b><span> — cùng lý do trên.</span></li>
+      <li><b>Bút toán lịch sử trước 05/09 giữ nguyên bucket 0</b><span> — chỉ backfill 1 lần cho tồn kho hiện có tại thời điểm chạy script; không sửa lại lịch sử <code>StockLedger</code> (đúng nguyên tắc "sổ cái không sửa retroactive").</span></li>
+    </ul>
+  </div>
+
+  <footer>
+    Nguồn: toàn bộ nội dung trên tổng hợp trực tiếp từ phiên làm việc trong Claude Code — không suy
+    diễn thêm. Code thật nằm ở <code>D:\DNA-ERP-BE</code> (service, DTO, backfill script) và
+    <code>D:\DNA-ERP</code> (adapter, màn Xuất sắt trong phôi). Root-cause gốc của vấn đề chiều dài
+    cây sắt xem <code>changelog-2026-08-26-backfill-lengthsource-stocklengthmm.md</code> và
+    <code>changelog-2026-08-19-xuat-sat-theo-pi-hoan-tat.html</code>.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" title="Về đầu trang" type="button">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

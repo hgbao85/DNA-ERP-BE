@@ -392,7 +392,41 @@ describe('SteelIssuesService', () => {
           refId: '100',
           createdById: 'user-1',
           idempotencyKey: 'steel-issue:100:consume',
+          stockLengthMm: 6000,
         },
+        expect.anything(),
+      );
+    });
+
+    // 2026-09-05: tồn kho sắt phân theo chiều dài - chặn tồn âm phải soi ĐÚNG bucket đang xuất
+    // (barLengthMm), không phải tổng mọi chiều dài. 2 lượt xuất CÙNG vật tư nhưng KHÁC chiều dài
+    // phải soi 2 bucket khác nhau, không lẫn vào nhau.
+    it('chặn tồn âm cục bộ soi ĐÚNG bucket chiều dài đang xuất, không lẫn chiều dài khác', async () => {
+      setPostCutover();
+      prisma.steelIssue.create.mockResolvedValue(issue);
+      prisma.$queryRaw.mockImplementation(
+        (strings: TemplateStringsArray) =>
+          strings.join('').includes('production_orders')
+            ? Promise.resolve([{ floorStage: 'ACTIVE' }])
+            : Promise.resolve([{ qty: { toNumber: () => 5 } }]), // chỉ 5 cây ở ĐÚNG bucket được lọc
+      );
+
+      await service.create(
+        '1',
+        { materialId: '30', barLengthMm: 5900, barCount: 5 },
+        'user-1',
+        null,
+      );
+
+      const stockQuantCalls = (prisma.$queryRaw.mock.calls as [TemplateStringsArray][]).filter(
+        ([strings]) => Array.isArray(strings) && strings.join('').includes('stock_quant'),
+      );
+      expect(stockQuantCalls.length).toBeGreaterThan(0);
+      for (const [, ...values] of stockQuantCalls) {
+        expect(values).toContain(5900);
+      }
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ stockLengthMm: 5900 }),
         expect.anything(),
       );
     });
@@ -844,31 +878,28 @@ describe('SteelIssuesService', () => {
     });
   });
 
-  // B4 Đợt 3d (2026-08-19) - getIssuePlan() giờ gộp theo cả PI: 1 dòng kế hoạch/loại sắt, cộng
-  // dồn requiredSegments qua MỌI ProductionOrder (SKU) thuộc PI, không còn breakdown theo mảnh.
+  // Sửa 2026-09-05: getIssuePlan() giờ lấy "Cần" từ CuttingProposalLine (kết quả phần mềm tính cắt
+  // sắt đã duyệt: totalBars/bestStockLengthMm) THAY VÌ định mức BOM - Mua hàng cũng mua theo đúng
+  // số này nên "Cần" phải khớp. bomPiece/pieceBom không còn được getIssuePlan() dùng nữa.
   describe('getIssuePlan', () => {
-    const bomPieceRow = {
-      bomRevisionId: 5n,
-      pieceId: 20n,
-      qtyPerUnit: 2,
-      piece: { code: 'MANH-TUA', name: 'Mảnh Tựa' },
-    };
-
-    beforeEach(() => {
-      prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow]);
-    });
+    const lineRow = { materialId: 30n, totalBars: 100, bestStockLengthMm: 6000 };
 
     it('trả remainingToIssue/physicalStockQty đúng khi có phương án duyệt + giữ chỗ ACTIVE', async () => {
-      prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: 800n }]);
+      prisma.cuttingProposalLine.findMany.mockResolvedValue([lineRow]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, warehouseId: 800n, code: 'ST-18', name: 'Sắt vuông 18x18' },
+      ]);
       prisma.stockReservation.findMany.mockResolvedValue([
         { materialId: 30n, quantity: decimal(20), consumedQty: decimal(12) },
       ]);
       prisma.stockQuant.findMany.mockResolvedValue([
-        { warehouseId: 800n, materialId: 30n, qty: decimal(50) },
+        { warehouseId: 800n, materialId: 30n, stockLengthMm: 6000, qty: decimal(50) },
       ]);
 
       const [result] = await service.getIssuePlan('1');
 
+      expect(result.requiredBars).toBe(100);
+      expect(result.bestStockLengthMm).toBe(6000);
       expect(result.remainingToIssue).toBe(8); // 20 - 12
       expect(result.physicalStockQty).toBe(50);
     });
@@ -877,13 +908,16 @@ describe('SteelIssuesService', () => {
     // khác nhau) - "còn lại" hiển thị cho Phôi phải là TỔNG của cả 2, không phải chỉ 1 dòng (bug cũ:
     // Map theo materialId ghi đè, chỉ thấy giữ chỗ của SKU ghi SAU trong mảng kết quả truy vấn).
     it('2 SKU dùng chung 1 loại sắt: remainingToIssue = TỔNG của mọi dòng giữ chỗ, không ghi đè', async () => {
-      prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: 800n }]);
+      prisma.cuttingProposalLine.findMany.mockResolvedValue([lineRow]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, warehouseId: 800n, code: 'ST-18', name: 'Sắt vuông 18x18' },
+      ]);
       prisma.stockReservation.findMany.mockResolvedValue([
         { materialId: 30n, quantity: decimal(20), consumedQty: decimal(12) }, // SKU A: còn 8
         { materialId: 30n, quantity: decimal(15), consumedQty: decimal(0) }, // SKU B: còn 15
       ]);
       prisma.stockQuant.findMany.mockResolvedValue([
-        { warehouseId: 800n, materialId: 30n, qty: decimal(50) },
+        { warehouseId: 800n, materialId: 30n, stockLengthMm: 6000, qty: decimal(50) },
       ]);
 
       const [result] = await service.getIssuePlan('1');
@@ -891,11 +925,14 @@ describe('SteelIssuesService', () => {
       expect(result.remainingToIssue).toBe(23); // 8 + 15, không phải chỉ 1 trong 2
     });
 
-    it('remainingToIssue = null khi chưa có phương án cắt đã duyệt nào cho vật tư này (không có dòng giữ chỗ nào)', async () => {
-      prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: 800n }]);
-      prisma.stockReservation.findMany.mockResolvedValue([]); // không phương án nào -> không giữ chỗ nào
+    it('remainingToIssue = null khi không có dòng giữ chỗ ACTIVE nào cho vật tư này', async () => {
+      prisma.cuttingProposalLine.findMany.mockResolvedValue([lineRow]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, warehouseId: 800n, code: 'ST-18', name: 'Sắt vuông 18x18' },
+      ]);
+      prisma.stockReservation.findMany.mockResolvedValue([]); // không giữ chỗ nào
       prisma.stockQuant.findMany.mockResolvedValue([
-        { warehouseId: 800n, materialId: 30n, qty: decimal(50) },
+        { warehouseId: 800n, materialId: 30n, stockLengthMm: 6000, qty: decimal(50) },
       ]);
 
       const [result] = await service.getIssuePlan('1');
@@ -905,75 +942,51 @@ describe('SteelIssuesService', () => {
     });
 
     it('physicalStockQty = null khi vật tư chưa được gán Kho (Material.warehouseId trống)', async () => {
-      prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: null }]);
+      prisma.cuttingProposalLine.findMany.mockResolvedValue([lineRow]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, warehouseId: null, code: 'ST-18', name: 'Sắt vuông 18x18' },
+      ]);
 
       const [result] = await service.getIssuePlan('1');
 
       expect(result.physicalStockQty).toBeNull();
     });
 
-    // Chốt điều kiện hiệu năng đã nói khi review: KHÔNG được query lặp theo từng mảnh dù nhiều
-    // mảnh dùng chung 1 loại sắt - và 2 mảnh dùng chung vật tư phải GỘP THÀNH 1 dòng kế hoạch duy
-    // nhất (khác trước đây tách theo mảnh).
-    it('2 mảnh dùng chung 1 loại sắt: gộp thành đúng 1 dòng kế hoạch, cộng dồn requiredSegments', async () => {
-      prisma.bomPiece.findMany.mockResolvedValue([
-        bomPieceRow,
-        {
-          bomRevisionId: 5n,
-          pieceId: 21n,
-          qtyPerUnit: 1,
-          piece: { code: 'MANH-KHAC', name: 'Mảnh khác' },
-        },
+    it('2 CuttingProposalLine cùng material (PI-anchored + PO-anchored): cộng dồn requiredBars, giữ 1 bestStockLengthMm chung', async () => {
+      prisma.cuttingProposalLine.findMany.mockResolvedValue([
+        { materialId: 30n, totalBars: 80, bestStockLengthMm: 6000 },
+        { materialId: 30n, totalBars: 40, bestStockLengthMm: 6000 },
       ]);
-      prisma.pieceBom.findMany.mockResolvedValue([
-        pieceBomRow,
-        { ...pieceBomRow, pieceId: 21n }, // cùng materialId 30n
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, warehouseId: 800n, code: 'ST-18', name: 'Sắt vuông 18x18' },
       ]);
-      prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: 800n }]);
       prisma.stockReservation.findMany.mockResolvedValue([
         { materialId: 30n, quantity: decimal(20), consumedQty: decimal(0) },
       ]);
       prisma.stockQuant.findMany.mockResolvedValue([
-        { warehouseId: 800n, materialId: 30n, qty: decimal(50) },
+        { warehouseId: 800n, materialId: 30n, stockLengthMm: 6000, qty: decimal(50) },
       ]);
 
       const result = await service.getIssuePlan('1');
 
-      // Gộp theo PI: đúng 1 dòng cho material 30n, requiredSegments cộng dồn cả 2 mảnh.
-      // Mảnh 20 (bomPieceRow): qtyPerPiece(4) × qtyPerUnit(2) × order.quantity(10) = 80.
-      // Mảnh 21 (qtyPerUnit=1): qtyPerPiece(4) × qtyPerUnit(1) × order.quantity(10) = 40.
       expect(result).toHaveLength(1);
       expect(result[0].materialId).toBe('30');
-      expect(result[0].requiredSegments).toBe(80 + 40);
+      expect(result[0].requiredBars).toBe(80 + 40);
+      expect(result[0].bestStockLengthMm).toBe(6000);
       expect(result[0].remainingToIssue).toBe(20);
-      // Đúng 1 vật tư duy nhất (30n) trong danh sách tra cứu - không lặp theo 2 mảnh.
-      expect(prisma.material.findMany).toHaveBeenCalledWith({
-        where: { id: { in: [30n] } },
-        select: { id: true, warehouseId: true },
-      });
     });
 
-    // B4 hỗ trợ mảnh nhiều loại sắt - trước đây mảnh này bị loại bỏ hoàn toàn khỏi kế hoạch.
-    it('1 mảnh dùng 2 loại sắt: sinh 2 dòng kế hoạch riêng, mỗi dòng đúng số liệu của loại đó', async () => {
-      const otherMaterialRow = {
-        bomRevisionId: 5n,
-        pieceId: 20n,
-        qtyPerPiece: 3,
-        processSteps: [ProcessStep.CAT],
-        segmentSpec: {
-          materialId: 999n,
-          cutLengthMm: 300,
-          material: { id: 999n, code: 'ST-25', name: 'Sắt hộp 25x25' },
-        },
-      };
-      prisma.pieceBom.findMany.mockResolvedValue([pieceBomRow, otherMaterialRow]);
+    it('2 loại sắt khác nhau trong PI: sinh 2 dòng kế hoạch riêng, không lẫn issuedBarCount', async () => {
+      prisma.cuttingProposalLine.findMany.mockResolvedValue([
+        { materialId: 30n, totalBars: 80, bestStockLengthMm: 6000 },
+        { materialId: 999n, totalBars: 60, bestStockLengthMm: 6000 },
+      ]);
       // Đã xuất 5 cây cho material 30n trong PI này - KHÔNG được lẫn sang dòng material 999n.
       prisma.steelIssue.findMany.mockResolvedValue([{ materialId: 30n, barCount: 5 }]);
       prisma.material.findMany.mockResolvedValue([
-        { id: 30n, warehouseId: 800n },
-        { id: 999n, warehouseId: null },
+        { id: 30n, warehouseId: 800n, code: 'ST-18', name: 'Sắt vuông 18x18' },
+        { id: 999n, warehouseId: null, code: 'ST-25', name: 'Sắt hộp 25x25' },
       ]);
-      prisma.cuttingProposalLine.findMany.mockResolvedValue([]);
       prisma.stockQuant.findMany.mockResolvedValue([]);
 
       const result = await service.getIssuePlan('1');
@@ -983,37 +996,48 @@ describe('SteelIssuesService', () => {
       const line999 = result.find((r) => r.materialId === '999');
       expect(line30?.materialCode).toBe('ST-18');
       expect(line30?.issuedBarCount).toBe(5);
-      expect(line30?.requiredSegments).toBe(4 * 2 * 10); // qtyPerPiece(4) × qtyPerUnit(2) × order.quantity(10)
+      expect(line30?.requiredBars).toBe(80);
       expect(line999?.materialCode).toBe('ST-25');
       expect(line999?.issuedBarCount).toBe(0); // không lẫn từ material 30n
-      expect(line999?.requiredSegments).toBe(3 * 2 * 10);
+      expect(line999?.requiredBars).toBe(60);
     });
 
-    // 1 PI có thể có nhiều SKU/PO khác bomRevisionId (memory project_pi_multi_sku_multi_po) -
-    // mỗi order đóng góp riêng theo ĐÚNG quantity của nó vào tổng requiredSegments.
-    it('PI có 2 SKU (2 ProductionOrder khác bomRevisionId, cùng dùng 1 loại sắt): cộng dồn đúng theo quantity riêng từng order', async () => {
-      const order2 = { id: 2n, bomRevisionId: 6n, quantity: 5 };
-      prisma.productionOrder.findMany.mockResolvedValue([order, order2]);
-      prisma.bomPiece.findMany.mockResolvedValue([
-        bomPieceRow,
-        {
-          bomRevisionId: 6n,
-          pieceId: 40n,
-          qtyPerUnit: 1,
-          piece: { code: 'MANH-B', name: 'Mảnh B' },
-        },
+    // Phương án cắt phủ vật tư này đã bị tính lại/supersede (không còn dòng APPROVED nào) - vật tư
+    // vẫn phải hiện để giữ lịch sử "Đã xuất", chỉ "Cần" về 0/null thay vì biến mất khỏi màn hình.
+    it('vật tư chỉ còn lịch sử đã xuất (không còn CuttingProposalLine hiệu lực): vẫn hiện với requiredBars=0, bestStockLengthMm=null', async () => {
+      prisma.cuttingProposalLine.findMany.mockResolvedValue([]);
+      prisma.steelIssue.findMany.mockResolvedValue([{ materialId: 30n, barCount: 12 }]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, warehouseId: 800n, code: 'ST-18', name: 'Sắt vuông 18x18' },
       ]);
-      prisma.pieceBom.findMany.mockResolvedValue([
-        pieceBomRow,
-        { ...pieceBomRow, bomRevisionId: 6n, pieceId: 40n },
+      prisma.stockQuant.findMany.mockResolvedValue([
+        { warehouseId: 800n, materialId: 30n, stockLengthMm: 6000, qty: decimal(15) },
+        { warehouseId: 800n, materialId: 30n, stockLengthMm: 5900, qty: decimal(9) },
       ]);
-      prisma.material.findMany.mockResolvedValue([{ id: 30n, warehouseId: 800n }]);
 
       const result = await service.getIssuePlan('1');
 
-      // order (bomRevisionId 5n): 4×2×10=80. order2 (bomRevisionId 6n): 4×1×5=20. Tổng 100.
       expect(result).toHaveLength(1);
-      expect(result[0].requiredSegments).toBe(80 + 20);
+      expect(result[0].requiredBars).toBe(0);
+      expect(result[0].bestStockLengthMm).toBeNull();
+      expect(result[0].issuedBarCount).toBe(12);
+      // Không có bestStockLengthMm cụ thể để lọc -> fallback cộng MỌI bucket (15 + 9).
+      expect(result[0].physicalStockQty).toBe(24);
+    });
+
+    it('physicalStockQty chỉ cộng ĐÚNG bucket chiều dài đang cần, không cộng lẫn bucket khác', async () => {
+      prisma.cuttingProposalLine.findMany.mockResolvedValue([lineRow]); // bestStockLengthMm 6000
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, warehouseId: 800n, code: 'ST-18', name: 'Sắt vuông 18x18' },
+      ]);
+      prisma.stockQuant.findMany.mockResolvedValue([
+        { warehouseId: 800n, materialId: 30n, stockLengthMm: 6000, qty: decimal(50) },
+        { warehouseId: 800n, materialId: 30n, stockLengthMm: 5900, qty: decimal(30) },
+      ]);
+
+      const [result] = await service.getIssuePlan('1');
+
+      expect(result.physicalStockQty).toBe(50); // không phải 80
     });
   });
 

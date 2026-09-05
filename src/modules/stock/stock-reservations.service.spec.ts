@@ -69,10 +69,31 @@ describe('StockReservationsService', () => {
           note: undefined,
           createdById: undefined,
           idempotencyKey: 'CUTTING_PROPOSAL:22:material:30',
+          stockLengthMm: 0,
         },
       });
       expect(result.id).toBe(1n);
       expect(result.quantity.toNumber()).toBe(5);
+    });
+
+    it('lưu đúng stockLengthMm khi caller truyền vào (audit chiều dài đã chốt)', async () => {
+      prisma.stockReservation.create.mockResolvedValue({ id: 1n, quantity: decimal(5) });
+
+      await service.reserve(
+        {
+          warehouseId: 800n,
+          materialId: 30n,
+          qty: 5,
+          refType: 'CUTTING_PROPOSAL',
+          refId: '22',
+          stockLengthMm: 5900,
+        },
+        prisma as unknown as PrismaTx,
+      );
+
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ stockLengthMm: 5900 }) as unknown,
+      });
     });
 
     // L5 (2026-08-26): productionInvoiceId đi kèm dòng giữ chỗ ngay từ lúc tạo - đây là thứ
@@ -156,6 +177,46 @@ describe('StockReservationsService', () => {
       ]);
       const result = await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 20);
       expect(result).toBe(0);
+    });
+
+    // 2026-09-05: onHand do caller truyền vào đã tự khoá/lọc đúng bucket chiều dài rồi (xem
+    // CuttingProposalsService.approve()) - phần trừ StockReservation ở đây PHẢI lọc khớp chiều dài
+    // đó, không trộn giữ chỗ của chiều dài KHÁC vào (nếu không "available" sẽ bị trừ nhầm/thiếu).
+    it('lọc StockReservation ĐÚNG bucket chiều dài truyền vào, không trộn chiều dài khác', async () => {
+      await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 20, 6000);
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ stockLengthMm: 6000 }) as unknown,
+        }),
+      );
+    });
+
+    it('không truyền stockLengthMm -> mặc định lọc bucket 0 (giữ nguyên hành vi cũ)', async () => {
+      await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 20);
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ stockLengthMm: 0 }) as unknown,
+        }),
+      );
+    });
+
+    // Chủ đích: warehouse-transfers chưa có input chiều dài (luôn ghi 0) - lọc riêng theo chiều dài
+    // cụ thể sẽ làm ẩn mất phần nó đang giữ, cho cắt sắt và chuyển kho giành nhau cùng lô hàng.
+    it('KHÔNG lọc WarehouseTransferReservation theo chiều dài dù gọi với stockLengthMm cụ thể', async () => {
+      prisma.warehouseTransferReservation.findMany.mockResolvedValue([{ quantity: decimal(4) }]);
+      const result = await service.getAvailableQty(
+        prisma as unknown as PrismaTx,
+        800n,
+        30n,
+        20,
+        6000,
+      );
+      expect(result).toBe(16); // 20 - 4, vẫn trừ dù gọi với chiều dài 6000
+      expect(prisma.warehouseTransferReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { warehouseId: 800n, materialId: 30n, status: 'ACTIVE' },
+        }),
+      );
     });
   });
 
