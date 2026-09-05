@@ -28,6 +28,7 @@ export class ProductionInvoiceItemResponseDto {
    */
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) customerName!: string | null;
   @Expose() @ApiProperty() mfgProductId!: string;
   @Expose() @ApiProperty() factoryCode!: string;
   @Expose() @ApiProperty() productName!: string;

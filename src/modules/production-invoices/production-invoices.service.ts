@@ -43,11 +43,23 @@ import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-
 type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
   include: {
     salesOrder: true;
-    items: { include: { mfgProduct: true; productVariant: true; stages: true; salesOrder: true } };
+    items: {
+      include: {
+        mfgProduct: true;
+        productVariant: true;
+        stages: true;
+        salesOrder: { include: { customer: true } };
+      };
+    };
   };
 }>;
 type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
-  include: { mfgProduct: true; productVariant: true; stages: true; salesOrder: true };
+  include: {
+    mfgProduct: true;
+    productVariant: true;
+    stages: true;
+    salesOrder: { include: { customer: true } };
+  };
 }>;
 
 /** Bọc thêm CuttingProposal mới nhất - CHỈ dùng ở findAll/findOne (chỉ 2 màn thật sự cần hiện
@@ -60,7 +72,7 @@ const PROPOSAL_STATUS_INCLUDE = {
       mfgProduct: true,
       productVariant: true,
       stages: true,
-      salesOrder: true,
+      salesOrder: { include: { customer: true } },
       productionOrder: {
         include: { cuttingProposals: { orderBy: { requestedAt: 'desc' as const }, take: 1 } },
       },
@@ -152,7 +164,12 @@ export class ProductionInvoicesService {
       include: {
         salesOrder: true,
         items: {
-          include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+          include: {
+            mfgProduct: true,
+            productVariant: true,
+            stages: true,
+            salesOrder: { include: { customer: true } },
+          },
         },
       },
     });
@@ -207,7 +224,12 @@ export class ProductionInvoicesService {
       include: {
         salesOrder: true,
         items: {
-          include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+          include: {
+            mfgProduct: true,
+            productVariant: true,
+            stages: true,
+            salesOrder: { include: { customer: true } },
+          },
         },
       },
     });
@@ -391,7 +413,12 @@ export class ProductionInvoicesService {
         materialDeadline: dto.materialDeadline ? new Date(dto.materialDeadline) : undefined,
         deliveryDeadline: dto.deliveryDeadline ? new Date(dto.deliveryDeadline) : undefined,
       },
-      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+      include: {
+        mfgProduct: true,
+        productVariant: true,
+        stages: true,
+        salesOrder: { include: { customer: true } },
+      },
     });
     return this.toItemResponseDto(item);
   }
@@ -1360,7 +1387,12 @@ export class ProductionInvoicesService {
       include: {
         salesOrder: true,
         items: {
-          include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+          include: {
+            mfgProduct: true,
+            productVariant: true,
+            stages: true,
+            salesOrder: { include: { customer: true } },
+          },
         },
       },
     });
@@ -1374,7 +1406,12 @@ export class ProductionInvoicesService {
     const idBigId = parseBigIntId(id);
     const item = await this.prisma.productionInvoiceItem.findUnique({
       where: { id: idBigId },
-      include: { mfgProduct: true, productVariant: true, stages: true, salesOrder: true },
+      include: {
+        mfgProduct: true,
+        productVariant: true,
+        stages: true,
+        salesOrder: { include: { customer: true } },
+      },
     });
     if (!item || item.productionInvoiceId !== piId) {
       throw new NotFoundException(`Production invoice item ${id} not found on PI ${piId}`);
@@ -1459,6 +1496,7 @@ export class ProductionInvoicesService {
       productionInvoiceId: item.productionInvoiceId?.toString() ?? null,
       salesOrderId: item.salesOrderId?.toString() ?? null,
       salesOrderCode: item.salesOrder?.code ?? null,
+      customerName: item.salesOrder?.customer?.name ?? null,
       mfgProductId: item.mfgProductId.toString(),
       factoryCode: item.mfgProduct.factoryCode,
       productName: item.mfgProduct.name,
