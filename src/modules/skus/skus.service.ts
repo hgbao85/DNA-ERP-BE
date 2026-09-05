@@ -846,14 +846,13 @@ export class SkusService {
     await this.syncIsWoven(tx, pieces, pieceIdOf);
   }
 
-  /** Mảnh "có đan" = có đủ cả 3 nhóm Dây + Đinh + Nút nhựa trong materialLines (RIVET/Tán rút
-   *  không tính - xem trao đổi nghiệp vụ). Nguồn sự thật CHÍNH là snapshot `BomPiece.isWoven`
-   *  (ghi theo đúng bomRevisionId ở bomPieceRows trên) - weaving-issues module đọc từ đó, không
-   *  đọc field này. */
+  /** Mảnh "có đan" = có ít nhất 1 dòng vật tư nhóm Dây (WIRE) trong materialLines - CHỈ cần Dây,
+   *  KHÔNG còn bắt buộc Đinh/Nút nhựa nữa (đổi 2026-09-04, DEC-11: "chỉ cần có dây... ko cần thiết
+   *  phải có cả nút nhựa"; chốt lại 2026-09-05, bỏ luôn điều kiện Đinh - có Dây là lập tức "có
+   *  đan"). Nguồn sự thật CHÍNH là snapshot `BomPiece.isWoven` (ghi theo đúng bomRevisionId ở
+   *  bomPieceRows trên) - weaving-issues module đọc từ đó, không đọc field này. */
   private isPieceWoven(p: QuotaPieceDto): boolean {
-    const requiredGroups: QuotaPieceMaterialLineDto['group'][] = ['WIRE', 'NAIL', 'PLASTIC_BUTTON'];
-    const groups = new Set((p.materialLines ?? []).map((l) => l.group));
-    return requiredGroups.every((g) => groups.has(g));
+    return (p.materialLines ?? []).some((l) => l.group === 'WIRE');
   }
 
   /** Piece.isWoven là master data dùng chung giữa các revision (KHÔNG dùng để quyết định hiển
