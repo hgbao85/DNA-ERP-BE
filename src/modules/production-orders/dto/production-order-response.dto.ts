@@ -18,6 +18,10 @@ export class ProductionOrderResponseDto {
   /// (lệnh sản xuất nội bộ), vì 1 PO có thể ứng nhiều PI/SKU (xem PI gộp isMerged).
   @Expose() @ApiProperty() piCode!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) deliveryDeadline!: Date | null;
+  /// Kho thành phẩm QLSX chọn làm điểm cuối trước khi gửi Sếp duyệt (ProductionInvoiceItem.
+  /// warehouseCode) - warehouseScope cụ thể (vd 'thanh-pham-2'), KHÔNG phải cả gia đình. null nếu
+  /// item được duyệt qua luồng cũ chưa từng gán kho (hiếm, xem comment schema.prisma).
+  @Expose() @ApiPropertyOptional({ nullable: true }) warehouseCode!: string | null;
   @Expose() @ApiProperty() productionInvoiceItemId!: string;
   @Expose() @ApiProperty() mfgProductId!: string;
   @Expose() @ApiProperty() bomRevisionId!: string;

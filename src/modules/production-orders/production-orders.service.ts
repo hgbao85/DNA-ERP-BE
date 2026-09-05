@@ -18,6 +18,7 @@ const SALES_ORDER_CODE_INCLUDE = {
       salesOrder: { select: { code: true } },
       productionInvoice: { select: { id: true, code: true } },
       deliveryDeadline: true,
+      warehouseCode: true,
     },
   },
 } satisfies Prisma.ProductionOrderInclude;
@@ -156,6 +157,7 @@ export class ProductionOrdersService {
       productionInvoiceId: order.productionInvoiceItem.productionInvoice!.id.toString(),
       piCode: order.productionInvoiceItem.productionInvoice!.code,
       deliveryDeadline: order.productionInvoiceItem.deliveryDeadline,
+      warehouseCode: order.productionInvoiceItem.warehouseCode,
       productionInvoiceItemId: order.productionInvoiceItemId.toString(),
       mfgProductId: order.mfgProductId.toString(),
       bomRevisionId: order.bomRevisionId.toString(),
