@@ -8,6 +8,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -20,6 +21,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { CreateSkuDto } from './dto/create-sku.dto';
+import { UpdateSkuDto } from './dto/update-sku.dto';
 import { RejectBossDto } from './dto/reject-boss.dto';
 import { ReviewQuotaDto } from './dto/review-quota.dto';
 import { UpdateQuotaDto } from './dto/update-quota.dto';
@@ -53,6 +55,16 @@ export class SkusController {
   @RequirePermissions(VIEW)
   findOne(@Param('id') id: string) {
     return this.skusService.findOne(id);
+  }
+
+  // Sửa tên/mã SKU + khách hàng (KHSX) - CỐ Ý dùng CREATE, không dùng UPDATE: UPDATE trên SKU
+  // module này riêng cho manh-quota/detail-quota (nhập định mức, việc của 4 account chuyên
+  // trách - xem ghi chú PRODUCTION_PLANNER ở role-permissions.constant.ts), KHSX không có
+  // UPDATE. Sửa thông tin SKU là việc của người tạo SKU nên đi chung quyền CREATE.
+  @Patch(':id')
+  @RequirePermissions(CREATE)
+  update(@Param('id') id: string, @Body() dto: UpdateSkuDto) {
+    return this.skusService.update(id, dto);
   }
 
   @Delete(':id')

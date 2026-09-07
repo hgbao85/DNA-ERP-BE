@@ -24,8 +24,8 @@ describe('SkusService', () => {
   let bomRevisionsService: { create: jest.Mock; activateInTransaction: jest.Mock };
   let prisma: {
     salesOrder: { findUnique: jest.Mock };
-    mfgProduct: { findUnique: jest.Mock };
-    salesOrderItem: { findFirst: jest.Mock; findUnique: jest.Mock };
+    mfgProduct: { findUnique: jest.Mock; update: jest.Mock };
+    salesOrderItem: { findFirst: jest.Mock; findUnique: jest.Mock; count: jest.Mock };
     planForm: {
       create: jest.Mock;
       findUnique: jest.Mock;
@@ -39,8 +39,10 @@ describe('SkusService', () => {
     planFormManhReview: { upsert: jest.Mock; deleteMany: jest.Mock };
     planFormDetailReview: { upsert: jest.Mock; deleteMany: jest.Mock };
     productionInvoice: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock };
-    productionInvoiceItem: { create: jest.Mock };
-    bomRevision: { findFirst: jest.Mock; findMany: jest.Mock };
+    productionInvoiceItem: { create: jest.Mock; count: jest.Mock };
+    productionOrder: { count: jest.Mock };
+    productVariant: { count: jest.Mock };
+    bomRevision: { findFirst: jest.Mock; findMany: jest.Mock; count: jest.Mock };
     piece: { findMany: jest.Mock; create: jest.Mock; update: jest.Mock };
     segmentSpec: { upsert: jest.Mock };
     material: { findMany: jest.Mock; update: jest.Mock };
@@ -81,8 +83,12 @@ describe('SkusService', () => {
   beforeEach(() => {
     prisma = {
       salesOrder: { findUnique: jest.fn() },
-      mfgProduct: { findUnique: jest.fn() },
-      salesOrderItem: { findFirst: jest.fn(), findUnique: jest.fn() },
+      mfgProduct: { findUnique: jest.fn(), update: jest.fn() },
+      salesOrderItem: {
+        findFirst: jest.fn(),
+        findUnique: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
+      },
       planForm: {
         create: jest.fn(),
         findUnique: jest.fn(),
@@ -91,7 +97,7 @@ describe('SkusService', () => {
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUniqueOrThrow: jest.fn(),
-        count: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
       },
       planFormManhReview: { upsert: jest.fn(), deleteMany: jest.fn() },
       planFormDetailReview: { upsert: jest.fn(), deleteMany: jest.fn() },
@@ -100,12 +106,15 @@ describe('SkusService', () => {
         update: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      productionInvoiceItem: { create: jest.fn() },
+      productionInvoiceItem: { create: jest.fn(), count: jest.fn().mockResolvedValue(0) },
+      productionOrder: { count: jest.fn().mockResolvedValue(0) },
+      productVariant: { count: jest.fn().mockResolvedValue(0) },
       // Mặc định "chưa có BomRevision nào" (reconstructQuotaBatch trả manhData/detailQuota
       // null nhanh, không chạm tới các bảng dòng con) - test nào cần dữ liệu thật sẽ override.
       bomRevision: {
         findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
       },
       piece: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -243,6 +252,88 @@ describe('SkusService', () => {
         service.create({ salesOrderId: '1', mfgProductId: '2', salesOrderItemId: '77' }, 'user-1'),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.productionInvoice.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('update (sửa tên/mã SKU + khách hàng)', () => {
+    it('cho sửa customerName khi IN_PROGRESS, không đụng MfgProduct', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.planForm.update.mockResolvedValue(planForm({ customerName: 'Khach moi' }));
+
+      const result = await service.update('5', { customerName: 'Khach moi' });
+
+      expect(prisma.planForm.update).toHaveBeenCalledWith({
+        where: { id: 5n },
+        data: { customerName: 'Khach moi' },
+        include: expect.anything() as unknown,
+      });
+      expect(prisma.mfgProduct.update).not.toHaveBeenCalled();
+      expect(result.customerName).toBe('Khach moi');
+    });
+
+    it('từ chối sửa (kể cả customerName) khi không còn IN_PROGRESS', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+
+      await expect(service.update('5', { customerName: 'Khach moi' })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.planForm.update).not.toHaveBeenCalled();
+    });
+
+    it('cho sửa tên/mã SKU khi MfgProduct chưa bị bất kỳ bảng nào khác dùng', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.mfgProduct.findUnique.mockResolvedValue(null); // factoryCode mới chưa tồn tại
+      prisma.planForm.update.mockResolvedValue(
+        planForm({ mfgProduct: { id: 2n, factoryCode: 'SKU-02', name: 'Ghe B' } }),
+      );
+
+      await service.update('5', { factoryCode: 'SKU-02', name: 'Ghe B' });
+
+      expect(prisma.mfgProduct.update).toHaveBeenCalledWith({
+        where: { id: 2n },
+        data: { factoryCode: 'SKU-02', name: 'Ghe B' },
+      });
+    });
+
+    it.each([
+      ['SalesOrderItem (PO)', 'salesOrderItem'],
+      ['ProductionInvoiceItem (PI)', 'productionInvoiceItem'],
+      ['ProductionOrder', 'productionOrder'],
+      ['ProductVariant', 'productVariant'],
+    ] as const)('chặn sửa tên/mã khi sản phẩm đang dùng chung bởi %s', async (_label, key) => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma[key].count.mockResolvedValue(1);
+
+      await expect(service.update('5', { factoryCode: 'SKU-02' })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.mfgProduct.update).not.toHaveBeenCalled();
+    });
+
+    it('chặn sửa tên/mã khi còn PlanForm khác (khác id) dùng chung sản phẩm', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.planForm.count.mockResolvedValue(1);
+
+      await expect(service.update('5', { name: 'Ghe B' })).rejects.toThrow(ConflictException);
+      expect(prisma.mfgProduct.update).not.toHaveBeenCalled();
+    });
+
+    it('chặn sửa tên/mã khi sản phẩm có BomRevision khác (không phải revision của chính SKU này)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.count.mockResolvedValue(1);
+
+      await expect(service.update('5', { name: 'Ghe B' })).rejects.toThrow(ConflictException);
+      expect(prisma.mfgProduct.update).not.toHaveBeenCalled();
+    });
+
+    it('từ chối đổi factoryCode trùng với sản phẩm khác đã tồn tại', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.mfgProduct.findUnique.mockResolvedValue({ id: 999n, factoryCode: 'SKU-99' });
+
+      await expect(service.update('5', { factoryCode: 'SKU-99' })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.mfgProduct.update).not.toHaveBeenCalled();
     });
   });
 

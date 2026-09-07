@@ -30,6 +30,7 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
 import { CreateSkuDto } from './dto/create-sku.dto';
+import { UpdateSkuDto } from './dto/update-sku.dto';
 import { SkuResponseDto } from './dto/sku-response.dto';
 import {
   SkuDetailReviewResponseDto,
@@ -183,6 +184,83 @@ export class SkusService {
 
   async findOne(id: string): Promise<SkuResponseDto> {
     return this.toResponseDtoWithQuota(await this.findOneOrThrow(id));
+  }
+
+  /**
+   * Sửa tên/mã SKU + khách hàng - chỉ cho phép khi PlanForm còn IN_PROGRESS (chưa forward sang
+   * Sếp duyệt, chưa APPROVED) - status khác thì coi như dữ liệu đã "chốt", không cho mutate.
+   * `customerName` là field riêng trên PlanForm (an toàn, không dùng chung). `factoryCode`/`name`
+   * lại nằm trên MfgProduct - bảng DÙNG CHUNG (SalesOrderItem/ProductionInvoiceItem/
+   * ProductionOrder/ProductVariant/PlanForm khác đều tham chiếu qua mfgProductId, không copy tên),
+   * nên đổi tên chỉ được phép khi sản phẩm này CHƯA bị bất kỳ bản ghi nào khác dùng - nếu không,
+   * đổi tên sẽ "lộ" ra ở PO/PI/đơn hàng khác đang thực thi cùng sản phẩm.
+   */
+  async update(id: string, dto: UpdateSkuDto): Promise<SkuResponseDto> {
+    const pf = await this.findOneOrThrow(id);
+    if (pf.status !== PlanFormStatus.IN_PROGRESS) {
+      throw new ConflictException(
+        `Plan form ${pf.id} đang ở trạng thái ${pf.status} - chỉ có thể sửa khi đang làm định mức (chưa gửi Sếp duyệt)`,
+      );
+    }
+
+    const wantsNameChange = dto.factoryCode !== undefined || dto.name !== undefined;
+    if (wantsNameChange) {
+      await this.assertMfgProductNotSharedElsewhere(pf);
+      if (dto.factoryCode !== undefined) {
+        const existing = await this.prisma.mfgProduct.findUnique({
+          where: { factoryCode: dto.factoryCode },
+        });
+        if (existing && existing.id !== pf.mfgProductId) {
+          throw new ConflictException(`Product "${dto.factoryCode}" already exists`);
+        }
+      }
+      await this.prisma.mfgProduct.update({
+        where: { id: pf.mfgProductId },
+        data: { factoryCode: dto.factoryCode, name: dto.name },
+      });
+    }
+
+    const updated = await this.prisma.planForm.update({
+      where: { id: pf.id },
+      data: { customerName: dto.customerName },
+      include: PLAN_FORM_INCLUDE,
+    });
+    return this.toResponseDtoWithQuota(updated);
+  }
+
+  /** Chặn đổi tên/mã MfgProduct khi sản phẩm đã bị dùng ở nơi khác ngoài chính PlanForm này -
+   *  xem ghi chú ở update(). Không tính Piece/Part (tên riêng của mảnh, không phụ thuộc tên
+   *  MfgProduct) - chỉ tính các bảng mà đổi tên sẽ làm lộ ra chỗ khác đang thực thi. */
+  private async assertMfgProductNotSharedElsewhere(pf: PlanFormWithRefs): Promise<void> {
+    const [
+      otherPlanForms,
+      salesOrderItems,
+      productionInvoiceItems,
+      productionOrders,
+      otherBomRevisions,
+      productVariants,
+    ] = await Promise.all([
+      this.prisma.planForm.count({ where: { mfgProductId: pf.mfgProductId, id: { not: pf.id } } }),
+      this.prisma.salesOrderItem.count({ where: { mfgProductId: pf.mfgProductId } }),
+      this.prisma.productionInvoiceItem.count({ where: { mfgProductId: pf.mfgProductId } }),
+      this.prisma.productionOrder.count({ where: { mfgProductId: pf.mfgProductId } }),
+      this.prisma.bomRevision.count({
+        where: { mfgProductId: pf.mfgProductId, sourcePlanFormId: { not: pf.id } },
+      }),
+      this.prisma.productVariant.count({ where: { mfgProductId: pf.mfgProductId } }),
+    ]);
+    const totalOther =
+      otherPlanForms +
+      salesOrderItems +
+      productionInvoiceItems +
+      productionOrders +
+      otherBomRevisions +
+      productVariants;
+    if (totalOther > 0) {
+      throw new ConflictException(
+        `Không thể sửa tên/mã SKU vì sản phẩm này đang được dùng chung bởi dữ liệu khác (SKU/đơn hàng/PI/lệnh sản xuất khác) - đổi tên sẽ ảnh hưởng tới các nơi đó. Vẫn có thể sửa khách hàng.`,
+      );
+    }
   }
 
   /** Xoá SKU (dọn dẹp quản trị, vd tạo nhầm) - hard delete, mirror deletePlanForms() trong mock. */
