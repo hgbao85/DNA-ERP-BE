@@ -9,7 +9,12 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { MfgRole, PermissionAction, ProcessStep } from '../../generated/prisma/client';
+import {
+  CutBundleStatus,
+  MfgRole,
+  PermissionAction,
+  ProcessStep,
+} from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -20,6 +25,7 @@ import { CompleteStepDto } from './dto/complete-step.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
 import { RecordStepBatchDto } from './dto/record-step-batch.dto';
+import { UndoCutBatchDto } from './dto/undo-cut-batch.dto';
 import { SteelIssuesService } from './steel-issues.service';
 
 const VIEW = { module: PERMISSION_MODULES.STEEL_ISSUE, action: PermissionAction.VIEW };
@@ -186,5 +192,42 @@ export class SteelIssuesController {
   @RequireMfgRole(MfgRole.PHOI)
   completeStep(@Param('id') id: string, @Body() dto: CompleteStepDto) {
     return this.steelIssuesService.completeStep(id, dto);
+  }
+
+  // ─── Đợt cắt là đơn vị mang trạng thái (2026-09-05) ─────────────────────────
+  // Màn Phôi gộp mọi lần kho giao của CÙNG loại sắt thành 1 mục, nên thao tác "báo cắt xong"/
+  // "xong công đoạn" không còn gắn với 1 lô nhận cụ thể nữa mà gắn với TỪNG ĐỢT CẮT.
+
+  /** Mọi đợt cắt - lọc theo PI (màn Phôi) hoặc theo trạng thái (màn KCS lấy thẳng AWAITING_QC). */
+  @Get('cut-bundles')
+  @RequirePermissions(VIEW)
+  findAllBundles(
+    @Query('productionInvoiceId') productionInvoiceId?: string,
+    @Query('status') status?: CutBundleStatus,
+  ) {
+    return this.steelIssuesService.findAllBundles(productionInvoiceId, status);
+  }
+
+  /** "Báo cắt xong" cho ĐÚNG đợt cắt này - các đợt khác của cùng lô vẫn cắt tiếp bình thường. */
+  @Post('cut-bundles/:id/finish')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  finishCutBundle(@Param('id') id: string) {
+    return this.steelIssuesService.finishCutBundle(id);
+  }
+
+  @Post('cut-bundles/:id/complete-step')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  completeBundleStep(@Param('id') id: string, @Body() dto: CompleteStepDto) {
+    return this.steelIssuesService.completeBundleStep(id, dto.step);
+  }
+
+  /** Hoàn tác ĐÚNG lần "Lưu đợt cắt" gần nhất (2026-09-07) - xem doc comment service. */
+  @Post('cut-bundles/:id/undo-last-batch')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  undoLastCutBatch(@Param('id') id: string, @Body() dto: UndoCutBatchDto) {
+    return this.steelIssuesService.undoLastCutBatch(id, dto.segments);
   }
 }

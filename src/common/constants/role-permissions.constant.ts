@@ -561,6 +561,15 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.STEEL_ISSUE,
       actions: [PermissionAction.VIEW],
     },
+    // Vá lỗ quyền phát hiện lúc live-test lại CutBundle (2026-09-06, cùng tiền lệ 2 mục trên):
+    // DEFECT_REASON vốn là "danh mục Phase 2" chỉ cấp ADMIN/BOSS quản lý, nhưng màn duyệt KCS bắt
+    // buộc chọn nguyên nhân khi chấm "Không đạt" (kể cả tự thêm nhanh nguyên nhân mới ngay tại
+    // chỗ) - KCS_STAFF chưa từng có VIEW/CREATE nên modal duyệt không load được danh sách, KCS
+    // không thể hoàn tất chấm lỗi. Không cấp UPDATE/DELETE - sửa/xoá danh mục vẫn là việc Admin.
+    {
+      module: PERMISSION_MODULES.DEFECT_REASON,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
   ],
   // --- Phase 8 (Mua hàng) ---
   // Mua hàng: xác nhận "Sếp đã duyệt" kèm file phiếu ký tay + theo dõi nhận hàng trên đề xuất mua.

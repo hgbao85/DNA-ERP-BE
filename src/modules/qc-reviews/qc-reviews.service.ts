@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  CutBundleStatus,
   Prisma,
   ProductionBatchStatus,
   ReplenishRequestStatus,
@@ -29,6 +30,7 @@ import { ListReplenishRequestsQueryDto } from './dto/list-replenish-requests-que
 import { QcRecheckDto } from './dto/qc-recheck.dto';
 import { QcReviewResponseDto, QcReviewSegmentResponseDto } from './dto/qc-review-response.dto';
 import { RejectReplenishRequestDto } from './dto/reject-replenish-request.dto';
+import { ReportSegmentDoneDto } from './dto/report-segment-done.dto';
 import { ReplenishRequestResponseDto } from './dto/replenish-request-response.dto';
 
 const QC_REVIEW_INCLUDE = {
@@ -154,32 +156,172 @@ export class QcReviewsService {
   }
 
   /**
+   * Duyệt 1 ĐỢT CẮT đang AWAITING_QC (2026-09-05) - thay review() ở luồng mới.
+   *
+   * Khác review() đúng 2 điểm, phần chấm lỗi giữ nguyên hoàn toàn:
+   *  1. Đơn vị là đợt cắt (CutBundle), không phải cả lô nhận - "vượt số đã cắt" đối chiếu theo
+   *     ĐÚNG đợt đang chấm, không cộng dồn mọi đợt của lô.
+   *  2. Chỉ đóng đợt cắt (CutBundle.status = QC_PASSED). SteelIssue.status GIỮ NGUYÊN RECEIVED -
+   *     lô nhận từ 2026-09-05 chỉ còn 2 nấc (việc của kho), Phôi vẫn nhập đợt cắt mới cho lô đó
+   *     bình thường ngay cả khi đợt trước đang/đã qua KCS.
+   *
+   * Dòng QcReview ghi CẢ steelIssueId lẫn cutBundleId: giữ nguyên CHECK qc_reviews_goods_xor_chk
+   * và mọi truy vấn cũ theo lô (cấp bù, thống kê) vẫn chạy đúng.
+   */
+  async reviewCutBundle(
+    cutBundleId: string,
+    dto: CreateSteelIssueQcReviewDto,
+    reviewedById: string,
+  ): Promise<QcReviewResponseDto> {
+    const bundleBigId = parseBigIntId(cutBundleId);
+    const bundle = await this.prisma.cutBundle.findUnique({
+      where: { id: bundleBigId },
+      include: { steelIssue: true },
+    });
+    if (!bundle) {
+      throw new NotFoundException(`Đợt cắt ${cutBundleId} not found`);
+    }
+    if (bundle.status !== CutBundleStatus.AWAITING_QC) {
+      throw new ConflictException(
+        `Đợt cắt ${cutBundleId} đang ở trạng thái ${bundle.status} - chỉ đợt chờ KCS mới duyệt được`,
+      );
+    }
+    await assertPiHasActiveFloor(this.prisma, bundle.steelIssue.productionInvoiceId, 'duyệt KCS');
+
+    const specIds = dto.segments.map((s) => parseBigIntId(s.segmentSpecId));
+    const [specs, cutInThisBundle] = await Promise.all([
+      this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } }),
+      this.prisma.cutPatternSegment.groupBy({
+        by: ['segmentSpecId'],
+        where: { cutBundleId: bundle.id },
+        _sum: { qty: true },
+      }),
+    ]);
+    const specById = new Map(specs.map((sp) => [sp.id.toString(), sp]));
+    const doneBySpec = new Map(
+      cutInThisBundle.map((r) => [r.segmentSpecId.toString(), r._sum.qty ?? 0]),
+    );
+
+    let totalFailed = 0;
+    for (const seg of dto.segments) {
+      const spec = specById.get(parseBigIntId(seg.segmentSpecId).toString());
+      if (!spec) {
+        throw new NotFoundException(`Cỡ đoạn ${seg.segmentSpecId} không tồn tại`);
+      }
+      if (spec.materialId !== bundle.steelIssue.materialId) {
+        throw new BadRequestException(
+          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt cắt này`,
+        );
+      }
+      const doneQty = doneBySpec.get(spec.id.toString()) ?? 0;
+      if (seg.failedQty > doneQty) {
+        throw new BadRequestException(
+          `Chấm lỗi ${seg.failedQty} đoạn ${spec.cutLengthMm.toString()}mm vượt số đã cắt ` +
+            `(${doneQty}) trong chính đợt cắt này`,
+        );
+      }
+      totalFailed += seg.failedQty;
+    }
+
+    const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const review = await tx.qcReview.create({
+        data: {
+          steelIssueId: bundle.steelIssueId,
+          cutBundleId: bundle.id,
+          failedQty: totalFailed,
+          scrapQty: 0,
+          defectReasonId,
+          reason: dto.reason,
+          photoUrl: dto.photoUrl,
+          reviewedById,
+          segments: {
+            create: dto.segments.map((seg) => ({
+              segmentSpecId: parseBigIntId(seg.segmentSpecId),
+              failedQty: seg.failedQty,
+            })),
+          },
+        },
+        include: QC_REVIEW_INCLUDE,
+      });
+
+      await tx.cutBundle.update({
+        where: { id: bundle.id },
+        data: { status: CutBundleStatus.QC_PASSED },
+      });
+
+      return review;
+    });
+
+    // Ngoài transaction chính (chỉ ROLL-UP hiển thị cho các màn xem tổng quan không đổi, xem
+    // SteelIssuesService.syncIssueStatusFromBundles) - không bắt buộc phải cùng transaction với
+    // việc tạo review, lệch 1 nhịp ở đây không ảnh hưởng tính đúng đắn của review vừa tạo.
+    await this.steelIssuesService.syncIssueStatusFromBundles(bundle.steelIssueId);
+
+    return this.toResponseDto(created);
+  }
+
+  /**
    * Phôi tự báo đã bù đủ cho 1 cỡ đoạn không đạt (đã tự kiếm sắt bù ngoài thực tế) - CHỜ KCS
    * recheck() mới tính là đạt (KHÔNG tự cộng resolvedQty ở đây, sản lượng chỉ tính sau khi qua
    * kiểm). Chặn nếu cỡ đó đã hết lỗi hoặc đang chờ duyệt lại rồi (chỉ 1 lượt báo tại 1 thời điểm).
+   *
+   * `dto.qty` (2026-09-07) - số đoạn Phôi TỰ KHAI đã sửa xong, PHẢI nằm trong (0, outstanding] -
+   * lưu THUẦN THAM KHẢO (`phoiReportedQty`) cho KCS xem trước khi tự đếm lại, KHÔNG tự cộng vào
+   * resolvedQty (đúng nguyên tắc KCS là bước kiểm soát duy nhất, xem doc comment schema).
    */
   async reportSegmentDone(
     steelIssueId: string,
     segmentSpecId: string,
+    dto: ReportSegmentDoneDto,
   ): Promise<QcReviewResponseDto> {
-    const segRow = await this.findLatestReviewSegmentOrThrow(steelIssueId, segmentSpecId);
+    const segRow = await this.findLatestReviewSegmentOrThrow(segmentSpecId, { steelIssueId });
+    return this.reportSegmentDoneForRow(segRow, `đợt sắt ${steelIssueId}`, dto.qty);
+  }
+
+  /**
+   * Cùng reportSegmentDone() nhưng scope theo ĐÚNG đợt cắt (2026-09-05) - dùng cho luồng mới, nơi
+   * 1 lô nhận (SteelIssue) có thể có NHIỀU đợt cắt cùng bị lỗi cùng 1 cỡ đoạn: tra theo
+   * steelIssueId (findLatestReviewSegmentOrThrow bản cũ) sẽ lấy nhầm review MỚI NHẤT của CẢ LÔ,
+   * có thể là của đợt cắt khác. Bắt buộc lọc thêm cutBundleId để đúng đợt Phôi đang xem.
+   */
+  async reportSegmentDoneForBundle(
+    cutBundleId: string,
+    segmentSpecId: string,
+    dto: ReportSegmentDoneDto,
+  ): Promise<QcReviewResponseDto> {
+    const segRow = await this.findLatestReviewSegmentOrThrow(segmentSpecId, { cutBundleId });
+    return this.reportSegmentDoneForRow(segRow, `đợt cắt ${cutBundleId}`, dto.qty);
+  }
+
+  private async reportSegmentDoneForRow(
+    segRow: QcReviewRow['segments'][number] & { qcReviewId: bigint },
+    label: string,
+    qty: number,
+  ): Promise<QcReviewResponseDto> {
     const outstanding = segRow.failedQty - segRow.resolvedQty;
     if (outstanding <= 0) {
-      throw new ConflictException(
-        `Cỡ đoạn ${segmentSpecId} của đợt sắt ${steelIssueId} đã hết lỗi, không cần báo bù nữa`,
-      );
+      throw new ConflictException(`Cỡ đoạn của ${label} đã hết lỗi, không cần báo bù nữa`);
     }
     if (segRow.phoiReportedAt) {
-      throw new ConflictException(
-        `Cỡ đoạn ${segmentSpecId} của đợt sắt ${steelIssueId} đã báo bù đủ rồi, đang chờ KCS duyệt lại`,
+      throw new ConflictException(`Cỡ đoạn của ${label} đã báo bù đủ rồi, đang chờ KCS duyệt lại`);
+    }
+    if (qty > outstanding) {
+      throw new BadRequestException(
+        `Cỡ đoạn của ${label} chỉ còn lỗi ${outstanding} đoạn - không thể báo bù ${qty} đoạn`,
       );
     }
-    const issue = await this.steelIssuesService.findOneRowOrThrow(steelIssueId);
+    const review = await this.findReviewOrThrow(segRow.qcReviewId);
+    if (!review.steelIssueId) {
+      throw new BadRequestException(`${label} không thuộc nhánh Phôi`);
+    }
+    const issue = await this.steelIssuesService.findOneRowOrThrow(review.steelIssueId.toString());
     await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'báo bù đủ hàng lỗi');
 
     await this.prisma.qcReviewSegment.update({
       where: { id: segRow.id },
-      data: { phoiReportedAt: new Date() },
+      data: { phoiReportedAt: new Date(), phoiReportedQty: qty },
     });
 
     return this.toResponseDto(await this.findReviewOrThrow(segRow.qcReviewId));
@@ -192,26 +334,53 @@ export class QcReviewsService {
    * lại. failedQty KHÔNG đổi (bất biến) - xem doc comment QcReviewSegment.
    */
   async recheck(steelIssueId: string, dto: QcRecheckDto): Promise<QcReviewResponseDto> {
-    const issueBigId = parseBigIntId(steelIssueId);
     const review = await this.prisma.qcReview.findFirst({
-      where: { steelIssueId: issueBigId },
+      where: { steelIssueId: parseBigIntId(steelIssueId) },
       orderBy: { reviewedAt: 'desc' },
       include: QC_REVIEW_INCLUDE,
     });
     if (!review) {
       throw new NotFoundException(`Đợt sắt ${steelIssueId} chưa có KCS chấm nào`);
     }
-    const issue = await this.steelIssuesService.findOneRowOrThrow(steelIssueId);
+    return this.recheckForReview(review, dto, `đợt sắt ${steelIssueId}`);
+  }
+
+  /** Cùng recheck() nhưng scope theo ĐÚNG đợt cắt (2026-09-05) - xem lý do ở
+   *  reportSegmentDoneForBundle(). */
+  async recheckForBundle(cutBundleId: string, dto: QcRecheckDto): Promise<QcReviewResponseDto> {
+    const review = await this.prisma.qcReview.findFirst({
+      where: { cutBundleId: parseBigIntId(cutBundleId) },
+      orderBy: { reviewedAt: 'desc' },
+      include: QC_REVIEW_INCLUDE,
+    });
+    if (!review) {
+      throw new NotFoundException(`Đợt cắt ${cutBundleId} chưa có KCS chấm nào`);
+    }
+    return this.recheckForReview(review, dto, `đợt cắt ${cutBundleId}`);
+  }
+
+  private async recheckForReview(
+    review: QcReviewRow,
+    dto: QcRecheckDto,
+    label: string,
+  ): Promise<QcReviewResponseDto> {
+    if (!review.steelIssueId) {
+      throw new BadRequestException(`${label} không thuộc nhánh Phôi`);
+    }
+    const issue = await this.steelIssuesService.findOneRowOrThrow(review.steelIssueId.toString());
     await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'duyệt lại hàng lỗi');
 
-    const updates: { id: bigint; resolvedQty: number; phoiReportedAt: Date | null }[] = [];
+    const updates: {
+      id: bigint;
+      resolvedQty: number;
+      phoiReportedAt: Date | null;
+      phoiReportedQty: number | null;
+    }[] = [];
     for (const seg of dto.segments) {
       const specBigId = parseBigIntId(seg.segmentSpecId);
       const segRow = review.segments.find((s) => s.segmentSpecId === specBigId);
       if (!segRow) {
-        throw new NotFoundException(
-          `Đợt sắt ${steelIssueId} không có lỗi nào ở cỡ đoạn ${seg.segmentSpecId}`,
-        );
+        throw new NotFoundException(`${label} không có lỗi nào ở cỡ đoạn ${seg.segmentSpecId}`);
       }
       if (!segRow.phoiReportedAt) {
         throw new ConflictException(
@@ -224,10 +393,14 @@ export class QcReviewsService {
           `Còn hỏng ${seg.remainingFailedQty} vượt số đang lỗi (${outstanding}) của cỡ đoạn ${seg.segmentSpecId}`,
         );
       }
+      // Còn hỏng (remainingFailedQty > 0) → mở lại lượt báo mới: reset CẢ phoiReportedAt lẫn
+      // phoiReportedQty (lời khai cũ không còn ý nghĩa cho phần còn lại). Đạt hết → giữ nguyên cả
+      // 2 làm lịch sử (khớp hành vi cũ của phoiReportedAt).
       updates.push({
         id: segRow.id,
         resolvedQty: segRow.resolvedQty + (outstanding - seg.remainingFailedQty),
         phoiReportedAt: seg.remainingFailedQty > 0 ? null : segRow.phoiReportedAt,
+        phoiReportedQty: seg.remainingFailedQty > 0 ? null : segRow.phoiReportedQty,
       });
     }
 
@@ -235,7 +408,11 @@ export class QcReviewsService {
       for (const u of updates) {
         await tx.qcReviewSegment.update({
           where: { id: u.id },
-          data: { resolvedQty: u.resolvedQty, phoiReportedAt: u.phoiReportedAt },
+          data: {
+            resolvedQty: u.resolvedQty,
+            phoiReportedAt: u.phoiReportedAt,
+            phoiReportedQty: u.phoiReportedQty,
+          },
         });
       }
     });
@@ -429,26 +606,33 @@ export class QcReviewsService {
     return request;
   }
 
-  /** Lấy đúng segment của LƯỢT DUYỆT MỚI NHẤT cho steelIssueId - mỗi SteelIssue chỉ có đúng 1
-   *  QcReview (review() chặn không phải AWAITING_QC, và đợt không quay lại AWAITING_QC sau khi
-   *  duyệt), nên orderBy chỉ để an toàn nếu sau này có nhiều lượt. */
+  /**
+   * Lấy đúng segment của LƯỢT DUYỆT MỚI NHẤT cho 1 lô nhận HOẶC 1 đợt cắt cụ thể (2026-09-05,
+   * thêm nhánh `cutBundleId` - trước chỉ nhận steelIssueId, mỗi SteelIssue từng chỉ có đúng 1
+   * QcReview nên đủ; giờ 1 lô nhận có thể có NHIỀU đợt cắt cùng bị lỗi, PHẢI lọc thêm cutBundleId
+   * nếu không sẽ lấy nhầm review của đợt cắt khác cùng lô - xem reportSegmentDoneForBundle()).
+   */
   private async findLatestReviewSegmentOrThrow(
-    steelIssueId: string,
     segmentSpecId: string,
-  ): Promise<QcReviewRow['segments'][number]> {
-    const issueBigId = parseBigIntId(steelIssueId);
+    scope: { steelIssueId: string } | { cutBundleId: string },
+  ): Promise<QcReviewRow['segments'][number] & { qcReviewId: bigint }> {
     const specBigId = parseBigIntId(segmentSpecId);
+    const label =
+      'steelIssueId' in scope ? `đợt sắt ${scope.steelIssueId}` : `đợt cắt ${scope.cutBundleId}`;
     const review = await this.prisma.qcReview.findFirst({
-      where: { steelIssueId: issueBigId },
+      where:
+        'steelIssueId' in scope
+          ? { steelIssueId: parseBigIntId(scope.steelIssueId) }
+          : { cutBundleId: parseBigIntId(scope.cutBundleId) },
       orderBy: { reviewedAt: 'desc' },
       include: QC_REVIEW_INCLUDE,
     });
     if (!review) {
-      throw new NotFoundException(`Đợt sắt ${steelIssueId} chưa có KCS chấm nào`);
+      throw new NotFoundException(`${label} chưa có KCS chấm nào`);
     }
     const segRow = review.segments.find((s) => s.segmentSpecId === specBigId);
     if (!segRow) {
-      throw new NotFoundException(`Đợt sắt ${steelIssueId} không có lỗi nào ở cỡ đoạn này`);
+      throw new NotFoundException(`${label} không có lỗi nào ở cỡ đoạn này`);
     }
     return segRow;
   }
@@ -462,6 +646,7 @@ export class QcReviewsService {
       id: review.id.toString(),
       steelIssueId: review.steelIssueId?.toString() ?? null,
       productionBatchId: review.productionBatchId?.toString() ?? null,
+      cutBundleId: review.cutBundleId?.toString() ?? null,
       failedQty: review.failedQty,
       scrapQty: review.scrapQty,
       defectReasonId: review.defectReasonId?.toString() ?? null,
@@ -478,6 +663,7 @@ export class QcReviewsService {
             failedQty: s.failedQty,
             resolvedQty: s.resolvedQty,
             phoiReportedAt: s.phoiReportedAt,
+            phoiReportedQty: s.phoiReportedQty,
           }),
       ),
     });

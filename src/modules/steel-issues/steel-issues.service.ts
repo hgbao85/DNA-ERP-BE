@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  CutBundleStatus,
   CuttingProposalStatus,
   Prisma,
   ProcessStep,
@@ -379,7 +380,57 @@ export class SteelIssuesService {
 
   async getBundles(id: string): Promise<CutBundleResponseDto[]> {
     const detail = await this.findDetailOrThrow(id);
-    return detail.bundles.map((b) => this.toBundleResponseDto(b));
+    const requiredSteps = await this.resolveRequiredSteps(
+      detail.productionInvoiceId,
+      detail.materialId,
+    );
+    return detail.bundles.map((b) => this.toBundleResponseDto(b, requiredSteps));
+  }
+
+  /**
+   * Mọi đợt cắt của 1 PI (2026-09-05) - nguồn dữ liệu cho màn Phôi sau khi GỘP hiển thị theo loại
+   * sắt: 1 loại sắt giờ chỉ còn 1 mục dù kho giao làm nhiều lần, bên trong liệt kê các đợt cắt
+   * (mỗi đợt mang trạng thái riêng). FE tự gom theo materialId - ở đây trả phẳng kèm đủ thông tin
+   * lô cha để gom.
+   *
+   * `status` (tuỳ chọn) để màn KCS lọc thẳng AWAITING_QC mà không phải tải hết rồi lọc ở client.
+   */
+  async findAllBundles(
+    productionInvoiceId?: string,
+    status?: CutBundleStatus,
+  ): Promise<CutBundleResponseDto[]> {
+    const bundles = await this.prisma.cutBundle.findMany({
+      where: {
+        ...(status ? { status } : {}),
+        ...(productionInvoiceId
+          ? { steelIssue: { productionInvoiceId: parseBigIntId(productionInvoiceId) } }
+          : {}),
+      },
+      include: { segments: { include: { segmentSpec: true } }, steelIssue: true },
+      orderBy: { id: 'desc' },
+    });
+
+    // resolveRequiredSteps() truy vấn theo (PI, vật tư) - gom 1 lần cho mỗi cặp thay vì gọi lại
+    // cho từng đợt (1 PI thường chỉ vài loại sắt nhưng hàng chục đợt cắt).
+    const stepsByKey = new Map<string, ProcessStep[]>();
+    for (const b of bundles) {
+      const key = `${b.steelIssue.productionInvoiceId}:${b.steelIssue.materialId}`;
+      if (!stepsByKey.has(key)) {
+        stepsByKey.set(
+          key,
+          await this.resolveRequiredSteps(
+            b.steelIssue.productionInvoiceId,
+            b.steelIssue.materialId,
+          ),
+        );
+      }
+    }
+    return bundles.map((b) =>
+      this.toBundleResponseDto(
+        b,
+        stepsByKey.get(`${b.steelIssue.productionInvoiceId}:${b.steelIssue.materialId}`) ?? [],
+      ),
+    );
   }
 
   async receive(id: string): Promise<SteelIssueResponseDto> {
@@ -402,31 +453,33 @@ export class SteelIssuesService {
   }
 
   /**
-   * Nhập MỘT đợt cắt (append-only, cộng dồn) - thay `completeCutting()` cũ (2026-08-22, làm lại
-   * lần 2 sau rollback 08-21).
+   * Nhập số đoạn đã cắt cho ĐỢT ĐANG MỞ của lô - "Lưu đợt cắt" (2026-09-06).
    *
-   * Khác hẳn hàm cũ ở 2 điểm nghiệp vụ:
-   *  1. Số đoạn là số Phôi ĐẾM THẬT, không còn chép từ `CuttingProposalPattern`. Hàm cũ bắt chọn
-   *     1 kiểu cắt đã duyệt rồi FE bung `pattern.segments` ra làm "số thực cắt" - tức là ghi lại
-   *     kế hoạch chứ không ghi thực tế.
-   *  2. Không còn one-shot: mỗi ca báo 1 đợt, trạng thái GIỮ NGUYÊN `RECEIVED`. Chuyển sang chờ
-   *     KCS là hành động riêng (`finishCutting`) - nút cũ vừa bịa số liệu vừa đổi trạng thái, gộp
-   *     2 việc không liên quan.
+   * Cộng dồn vào đợt CUTTING gần nhất của CHÍNH lô này nếu có (Phôi bấm lưu nhiều lần trong ngày,
+   * mỗi lần khai thêm vài cỡ đoạn, vẫn tính là 1 đợt) - CHỈ tạo đợt mới khi không còn đợt nào đang
+   * mở (đợt trước đã "Báo cắt xong" qua `finishCutBundle()`, hoặc đây là lần khai đầu tiên của lô).
+   * Trước 2026-09-06 mỗi lần lưu luôn tạo 1 `CutBundle` mới - đúng ý người dùng khi cắt/khai 1 lần
+   * xong hẳn, nhưng bắt Phôi tạo nhiều đợt rời rạc nếu chỉ muốn khai rải trong ngày cho 1 đợt.
    *
-   * Chốt cân bằng vật chất ngay tại đây (đã kiểm khớp thực tế trên PI-2026-046):
-   *   barCount × barLengthMm = barCount × trim + Σ(qty × cutLengthMm) + Σqty × kerf + mauNguyen + scrap
-   * `scrapMm` là phần dư, TỰ TÍNH - không bắt Phôi gõ vì không ai cân được đống đầu mẩu. Ra số ÂM
-   * nghĩa là cắt ra nhiều hơn lượng sắt đưa vào, bất khả về vật lý nên chặn cứng.
+   * Số đoạn là số Phôi ĐẾM THẬT, không suy từ `CuttingProposalPattern` (kế hoạch của solver).
+   * Không còn cân bằng vật chất/chặn "vượt số cây kho giao" (bỏ cùng lúc bỏ 2 ô nhập "số cây đã
+   * dùng"/"mẩu nguyên", 2026-09-05) - kiểm soát dồn hết về KCS, duyệt theo từng đợt cắt.
    *
-   * CHỈ chạy khi RECEIVED (2026-08-24, vòng 2: gỡ nhánh cho phép QC_PASSED đã thử ở vòng 1 cùng
-   * ngày) - phần bù đoạn không đạt sau KCS giờ KHÔNG đi qua đây nữa, Phôi tự bù bằng sắt kiếm
-   * ngoài thực tế, không đụng cây sắt kho đã cấp (xem QcReviewsService.reportSegmentDone/recheck).
+   * CHỈ chạy khi lô đang RECEIVED - phần bù đoạn không đạt sau KCS đi qua
+   * `QcReviewsService.reportSegmentDone`/`recheck`, không qua đây.
    */
   async recordCutBatch(id: string, dto: RecordCutBatchDto): Promise<CutBundleResponseDto> {
     const issue = await this.findOneOrThrow(id);
-    if (issue.status !== SteelIssueStatus.RECEIVED) {
+    // CHỈ chặn khi CHƯA từng xác nhận nhận (ISSUED) - 1 lô có DUY NHẤT 1 đợt cắt thì ngay khi đợt
+    // đó "Báo cắt xong", roll-up (syncIssueStatusFromBundles) đẩy issue.status lên
+    // AWAITING_QC/QC_PASSED để 2 màn cũ hiện đúng tiến độ, NHƯNG đó chỉ là hiển thị - vẫn phải cho
+    // Phôi mở đợt cắt MỚI cho cùng lô này (vd sắt kho giao thiếu, cắt xong lại phát hiện cần bù
+    // thêm trước khi KCS kịp duyệt). Trước 2026-09-06 so `!== RECEIVED` vô tình biến giá trị
+    // ROLL-UP thành điều kiện CHẶN THẬT - đúng lỗ hổng mà việc tách CutBundle khỏi SteelIssue
+    // (2026-09-05) định giải quyết nhưng bỏ sót trường hợp lô chỉ có 1 đợt cắt.
+    if (issue.status === SteelIssueStatus.ISSUED) {
       throw new ConflictException(
-        `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ RECEIVED mới nhập đợt cắt được`,
+        `Steel issue ${id} chưa được xác nhận nhận - xác nhận ở "Xác nhận nhận sắt" trước khi nhập đợt cắt`,
       );
     }
     await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'nhập đợt cắt');
@@ -438,13 +491,8 @@ export class SteelIssuesService {
       );
     }
 
-    const [specs, usedBars, config, allowedSpecIds] = await Promise.all([
+    const [specs, allowedSpecIds] = await Promise.all([
       this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } }),
-      this.prisma.cutBundle.aggregate({
-        where: { steelIssueId: issue.id },
-        _sum: { barCount: true },
-      }),
-      this.prisma.systemConfig.findUnique({ where: { id: 1 } }),
       this.findBomSegmentSpecIds(issue.productionInvoiceId),
     ]);
 
@@ -471,60 +519,113 @@ export class SteelIssuesService {
       }
     }
 
-    const alreadyUsed = usedBars._sum.barCount ?? 0;
-    if (alreadyUsed + dto.barCount > issue.barCount) {
-      throw new BadRequestException(
-        `Đợt này dùng ${dto.barCount} cây, đã dùng ${alreadyUsed} cây - vượt ${issue.barCount} cây kho đã giao`,
-      );
-    }
-
-    // Tính bằng ĐƠN VỊ 1/10 mm trên số nguyên, KHÔNG dùng float: cutLengthMm là Decimal(7,1) (vd
-    // 452.7) và chính solver cũng cố ý tránh float nhị phân (SCALING_FACTOR=10 trong
-    // de_xuat_logic.py). Cộng dồn vài chục số thập phân bằng float sẽ lệch đúng ở chỗ so sánh
-    // scrap < 0, biến sai số làm tròn thành lỗi 400 vô cớ.
-    const deci = (n: number) => Math.round(n * 10);
-    const trimDeci = deci(config?.solverTrimStartMm ?? 10);
-    const kerfDeci = deci(config?.solverBladeWidthMm?.toNumber() ?? 1);
-    const mauNguyenMm = dto.mauNguyenMm ?? 0;
-
-    let segmentDeci = 0;
-    let pieceCount = 0;
-    for (const seg of dto.segments) {
-      const spec = specById.get(parseBigIntId(seg.segmentSpecId).toString())!;
-      segmentDeci += deci(spec.cutLengthMm.toNumber()) * seg.qty;
-      pieceCount += seg.qty;
-    }
-
-    const availableDeci = deci(issue.barLengthMm) * dto.barCount;
-    const consumedDeci =
-      trimDeci * dto.barCount + segmentDeci + kerfDeci * pieceCount + deci(mauNguyenMm);
-    const scrapDeci = availableDeci - consumedDeci;
-    if (scrapDeci < 0) {
-      throw new BadRequestException(
-        `Không cân đối: ${dto.barCount} cây x ${issue.barLengthMm}mm = ${availableDeci / 10}mm, ` +
-          `nhưng khai ra ${consumedDeci / 10}mm (tề đầu ${(trimDeci * dto.barCount) / 10} + đoạn ` +
-          `${segmentDeci / 10} + mạch cưa ${(kerfDeci * pieceCount) / 10} + mẩu nguyên ` +
-          `${mauNguyenMm}). Thừa ${-scrapDeci / 10}mm không lấy đâu ra - kiểm lại số đoạn hoặc số cây.`,
-      );
-    }
-
-    const created = await this.prisma.cutBundle.create({
-      data: {
-        steelIssueId: issue.id,
-        proposalPatternId: dto.proposalPatternId ? parseBigIntId(dto.proposalPatternId) : undefined,
-        barCount: dto.barCount,
-        mauNguyenMm,
-        scrapMm: Math.round(scrapDeci / 10),
-        segments: {
-          create: dto.segments.map((seg) => ({
-            segmentSpecId: parseBigIntId(seg.segmentSpecId),
-            qty: seg.qty,
-          })),
-        },
-      },
-      include: { segments: { include: { segmentSpec: true } } },
+    // Cân bằng vật chất (barCount × barLengthMm = tề đầu + đoạn + mạch cưa + mẩu nguyên + phế) đã
+    // BỎ từ 2026-09-05 cùng lúc bỏ 2 ô nhập "số cây đã dùng"/"mẩu nguyên": không còn vế trái thì
+    // không có gì để cân, cũng không suy ra được phế liệu. Kéo theo mất luôn chặn "khai vượt số
+    // cây kho đã giao" - đã trao đổi rõ hệ quả và được chốt: KCS là bước kiểm soát duy nhất, đúng
+    // triết lý "không cap theo định mức lúc báo" vốn có của module này. `barCount`/`mauNguyenMm`
+    // giữ lại trong model để dữ liệu CŨ không mất, dòng mới ghi 0.
+    //
+    // Đợt đang mở (CUTTING) của lô này, nếu có, nhận thêm số đoạn lần này (cộng dồn qty theo
+    // UNIQUE cutBundleId+segmentSpecId) - xem doc comment trên hàm. Không có thì mới tạo đợt mới.
+    const openBundle = await this.prisma.cutBundle.findFirst({
+      where: { steelIssueId: issue.id, status: CutBundleStatus.CUTTING },
+      orderBy: { createdAt: 'desc' },
     });
-    return this.toBundleResponseDto(created);
+
+    const bundleId = await this.prisma.$transaction(async (tx) => {
+      if (openBundle) {
+        for (const seg of dto.segments) {
+          await tx.cutPatternSegment.upsert({
+            where: {
+              cutBundleId_segmentSpecId: {
+                cutBundleId: openBundle.id,
+                segmentSpecId: parseBigIntId(seg.segmentSpecId),
+              },
+            },
+            update: { qty: { increment: seg.qty } },
+            create: {
+              cutBundleId: openBundle.id,
+              segmentSpecId: parseBigIntId(seg.segmentSpecId),
+              qty: seg.qty,
+            },
+          });
+        }
+        return openBundle.id;
+      }
+
+      const created = await tx.cutBundle.create({
+        data: {
+          steelIssueId: issue.id,
+          proposalPatternId: dto.proposalPatternId
+            ? parseBigIntId(dto.proposalPatternId)
+            : undefined,
+          barCount: dto.barCount ?? 0,
+          mauNguyenMm: dto.mauNguyenMm ?? 0,
+          // Đợt cắt mới bắt đầu vòng đời riêng của nó (2026-09-05) - CAT tính là xong ngay khi khai
+          // số đoạn; công đoạn phụ (Uốn/Dập...) đánh dấu tiếp qua completeStep().
+          status: CutBundleStatus.CUTTING,
+          completedSteps: [ProcessStep.CAT],
+          segments: {
+            create: dto.segments.map((seg) => ({
+              segmentSpecId: parseBigIntId(seg.segmentSpecId),
+              qty: seg.qty,
+            })),
+          },
+        },
+      });
+      return created.id;
+    });
+
+    return this.toBundleResponseDto(await this.findBundleOrThrow(bundleId.toString()));
+  }
+
+  /**
+   * Hoàn tác ĐÚNG lần "Lưu đợt cắt" gần nhất (2026-09-07) - Phôi lỡ tay gõ nhầm số rồi bấm Lưu thì
+   * có đường sửa ngay, không phải đợi KCS soi ra. FE gửi lại CHÍNH XÁC `segments` vừa submit ở lần
+   * `recordCutBatch` gần nhất (không phải state hiện tại của đợt) - hàm này chỉ TRỪ ĐÚNG BẤY NHIÊU,
+   * đối xứng với phép `increment` lúc ghi, không đọc lại toàn bộ lịch sử để suy luận.
+   *
+   * CHỈ 1 CẤP DUY NHẤT (không phải undo stack nhiều lượt) - FE chỉ giữ lại delta của lần lưu GẦN
+   * NHẤT, nút "Hoàn tác" biến mất ngay khi có lần lưu tiếp theo. Chỉ hoàn tác được khi đợt còn
+   * CUTTING - đợt đã "Báo cắt xong"/qua KCS thì không còn ý nghĩa "lỡ tay" nữa.
+   *
+   * Nếu trừ hết sạch số lượng của TOÀN BỘ segment (đây là lần lưu đầu tiên tạo ra đợt) thì xoá luôn
+   * cả đợt rỗng, không để lại `CutBundle` 0 đoạn treo trong danh sách.
+   *
+   * Rủi ro đã biết, chấp nhận được: nếu có người khác (hiếm, module này 1 Phôi/ca) cũng lưu thêm
+   * vào ĐÚNG segment đó giữa lúc bấm Lưu và bấm Hoàn tác, phép trừ vẫn áp dụng lên giá trị MỚI NHẤT
+   * (không dùng optimistic lock) - có thể trừ nhầm vào phần người khác vừa thêm. Không xử lý race
+   * hiếm này để giữ đơn giản, giống mức độ chấp nhận rủi ro đã có ở các hàm khác trong module.
+   */
+  async undoLastCutBatch(
+    bundleId: string,
+    segments: { segmentSpecId: string; qty: number }[],
+  ): Promise<void> {
+    const bundle = await this.findBundleOrThrow(bundleId);
+    if (bundle.status !== CutBundleStatus.CUTTING) {
+      throw new ConflictException(
+        `Đợt cắt ${bundleId} đang ở trạng thái ${bundle.status} - chỉ hoàn tác được khi đang cắt`,
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const seg of segments) {
+        const specId = parseBigIntId(seg.segmentSpecId);
+        const row = bundle.segments.find((s) => s.segmentSpecId === specId);
+        if (!row) continue; // Đã bị xoá/không còn khớp - bỏ qua an toàn, không chặn cả lượt hoàn tác.
+        const newQty = row.qty - seg.qty;
+        if (newQty <= 0) {
+          await tx.cutPatternSegment.delete({ where: { id: row.id } });
+        } else {
+          await tx.cutPatternSegment.update({ where: { id: row.id }, data: { qty: newQty } });
+        }
+      }
+      const remaining = await tx.cutPatternSegment.count({ where: { cutBundleId: bundle.id } });
+      if (remaining === 0) {
+        await tx.cutBundle.delete({ where: { id: bundle.id } });
+      }
+    });
   }
 
   /**
@@ -574,6 +675,141 @@ export class SteelIssuesService {
 
     const reloaded = await this.findOneOrThrow(id);
     return this.toResponseDto(reloaded, requiredSteps);
+  }
+
+  /**
+   * "Báo cắt xong" cho ĐÚNG 1 ĐỢT CẮT (2026-09-05) - thay finishCutting() ở luồng mới.
+   *
+   * Vì sao tách khỏi lô nhận: trạng thái đặt ở lô (SteelIssue) buộc Phôi phải cắt hết TOÀN BỘ số
+   * cây kho giao mới gửi KCS được, và sắt kho giao bù sau đó không cắt tiếp được (recordCutBatch
+   * chặn status != RECEIVED, không có đường quay lại). Giờ mỗi đợt cắt tự đi CUTTING ->
+   * AWAITING_QC, các đợt còn lại của cùng lô vẫn cắt bình thường - đúng yêu cầu nghiệp vụ
+   * "cắt xong đợt nào gửi KCS đợt đó".
+   *
+   * SteelIssue.status vẫn được cập nhật, nhưng CHỈ NHƯ ROLL-UP HIỂN THỊ (2026-09-05) - xem
+   * syncIssueStatusFromBundles(): các màn KHÔNG đổi (XacNhanNhanSatPage.tsx, ThongKePagePlan.tsx)
+   * vẫn đọc issue.status/completedAt/actualBarCount để suy tiến độ tổng quan, phải tiếp tục thấy
+   * đúng dù giờ nguồn sự thật THẬT SỰ (chặn hành động, KCS chấm) nằm ở CutBundle.status. Đợt cắt
+   * còn công đoạn phụ (Uốn/Dập...) chưa đánh dấu thì GIỮ NGUYÊN CUTTING - không có nấc IN_PROCESS
+   * riêng ở cấp bundle, tiến độ đọc qua completedSteps.
+   */
+  async finishCutBundle(bundleId: string): Promise<CutBundleResponseDto> {
+    const bundle = await this.findBundleOrThrow(bundleId);
+    if (bundle.status !== CutBundleStatus.CUTTING) {
+      throw new ConflictException(
+        `Đợt cắt ${bundleId} đang ở trạng thái ${bundle.status} - chỉ đợt đang cắt mới báo xong được`,
+      );
+    }
+    await assertPiHasActiveFloor(
+      this.prisma,
+      bundle.steelIssue.productionInvoiceId,
+      'báo cắt xong',
+    );
+
+    const requiredSteps = await this.resolveRequiredSteps(
+      bundle.steelIssue.productionInvoiceId,
+      bundle.steelIssue.materialId,
+    );
+    const missing = requiredSteps.filter((step) => !bundle.completedSteps.includes(step));
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Đợt cắt ${bundleId} còn công đoạn chưa xong: ${missing.join(', ')} - đánh dấu xong trước khi mời KCS`,
+      );
+    }
+
+    const updated = await this.prisma.cutBundle.update({
+      where: { id: bundle.id },
+      data: { status: CutBundleStatus.AWAITING_QC, completedAt: new Date() },
+      include: { segments: { include: { segmentSpec: true } } },
+    });
+    await this.syncIssueStatusFromBundles(bundle.steelIssueId);
+    return this.toBundleResponseDto(updated);
+  }
+
+  /**
+   * Cập nhật SteelIssue.status/completedAt/actualBarCount THEO ROLL-UP của mọi CutBundle thuộc
+   * lô (2026-09-05) - lô nhận không còn tự đổi trạng thái theo hành động Phôi/KCS trực tiếp (đã
+   * hạ xuống cấp đợt cắt), nhưng các màn CHỈ XEM TỔNG QUAN, không thao tác chi tiết
+   * (XacNhanNhanSatPage.tsx cột trạng thái, ThongKePagePlan.tsx tính done/in-progress theo
+   * material) vẫn hoàn toàn hợp lý khi đọc issue.status - không có lý do bắt 2 màn đó tự gộp lại
+   * từ danh sách bundle. Quy tắc gộp (ưu tiên theo thứ tự, dừng ở điều kiện đầu tiên khớp):
+   *   1. Có bundle nào AWAITING_QC → issue "đang chờ KCS" (dù bundle khác đã QC_PASSED).
+   *   2. Không bundle nào AWAITING_QC, có ÍT NHẤT 1 bundle và MỌI bundle đều QC_PASSED → "đã
+   *      xong" (completedAt = mới nhất trong các bundle).
+   *   3. Còn lại (0 bundle, hoặc có bundle đang CUTTING mà không bundle nào AWAITING_QC) → giữ
+   *      RECEIVED ("đã nhận, đang cắt" - không cần phân biệt IN_PROCESS ở cấp lô nữa).
+   * Gọi sau MỌI lần đổi CutBundle.status (finishCutBundle ở đây, reviewCutBundle ở
+   * QcReviewsService - inject ngược lại module đó sẽ tạo phụ thuộc vòng nên để QcReviewsService
+   * tự gọi qua SteelIssuesService đã có sẵn, không thêm phụ thuộc mới).
+   */
+  async syncIssueStatusFromBundles(steelIssueId: bigint): Promise<void> {
+    const bundles = await this.prisma.cutBundle.findMany({ where: { steelIssueId } });
+    if (bundles.length === 0) return;
+    const hasAwaitingQc = bundles.some((b) => b.status === CutBundleStatus.AWAITING_QC);
+    const allPassed = bundles.every((b) => b.status === CutBundleStatus.QC_PASSED);
+    const status = hasAwaitingQc
+      ? SteelIssueStatus.AWAITING_QC
+      : allPassed
+        ? SteelIssueStatus.QC_PASSED
+        : SteelIssueStatus.RECEIVED;
+    const completedAt =
+      status === SteelIssueStatus.QC_PASSED
+        ? (bundles
+            .map((b) => b.completedAt)
+            .filter((d): d is Date => d != null)
+            .sort((a, b) => b.getTime() - a.getTime())[0] ?? new Date())
+        : null;
+    await this.prisma.steelIssue.update({
+      where: { id: steelIssueId },
+      data: { status, completedAt },
+    });
+  }
+
+  /** Đánh dấu xong 1 công đoạn phụ (Uốn/Dập/...) cho ĐÚNG 1 đợt cắt - mirror completeStep() cũ
+   *  vốn đánh cho cả lô nhận. Chỉ cộng vào completedSteps, KHÔNG tự chuyển trạng thái (Phôi bấm
+   *  "Báo cắt xong" riêng, cùng lý do finishCutting cũ cố ý tách 2 hành động). */
+  async completeBundleStep(bundleId: string, step: ProcessStep): Promise<CutBundleResponseDto> {
+    const bundle = await this.findBundleOrThrow(bundleId);
+    if (bundle.status !== CutBundleStatus.CUTTING) {
+      throw new ConflictException(
+        `Đợt cắt ${bundleId} đang ở trạng thái ${bundle.status} - chỉ đợt đang cắt mới đánh dấu công đoạn được`,
+      );
+    }
+    await assertPiHasActiveFloor(
+      this.prisma,
+      bundle.steelIssue.productionInvoiceId,
+      'đánh dấu công đoạn',
+    );
+    const requiredSteps = await this.resolveRequiredSteps(
+      bundle.steelIssue.productionInvoiceId,
+      bundle.steelIssue.materialId,
+    );
+    if (!requiredSteps.includes(step)) {
+      throw new BadRequestException(
+        `Công đoạn '${step}' không có trong định mức của loại sắt này - không đánh dấu được`,
+      );
+    }
+    if (bundle.completedSteps.includes(step)) {
+      return this.toBundleResponseDto(bundle);
+    }
+
+    const updated = await this.prisma.cutBundle.update({
+      where: { id: bundle.id },
+      data: { completedSteps: { push: step } },
+      include: { segments: { include: { segmentSpec: true } } },
+    });
+    return this.toBundleResponseDto(updated);
+  }
+
+  private async findBundleOrThrow(id: string) {
+    const bundle = await this.prisma.cutBundle.findUnique({
+      where: { id: parseBigIntId(id) },
+      include: { segments: { include: { segmentSpec: true } }, steelIssue: true },
+    });
+    if (!bundle) {
+      throw new NotFoundException(`Đợt cắt ${id} not found`);
+    }
+    return bundle;
   }
 
   /**
@@ -1539,14 +1775,25 @@ export class SteelIssuesService {
     return issue;
   }
 
-  private toBundleResponseDto(bundle: SteelIssueDetail['bundles'][number]): CutBundleResponseDto {
+  /** `requiredSteps` truyền từ ngoài (suy theo PI+vật tư của lô cha, xem resolveRequiredSteps) -
+   *  bundle row không tự biết. Để trống khi caller không cần (vd lịch sử đợt đã nhập). */
+  private toBundleResponseDto(
+    bundle: SteelIssueDetail['bundles'][number],
+    requiredSteps: ProcessStep[] = [],
+  ): CutBundleResponseDto {
     return new CutBundleResponseDto({
       id: bundle.id.toString(),
+      steelIssueId: bundle.steelIssueId.toString(),
       proposalPatternId: bundle.proposalPatternId?.toString() ?? null,
       isOffPlan: bundle.proposalPatternId === null,
       barCount: bundle.barCount,
       mauNguyenMm: bundle.mauNguyenMm,
       scrapMm: bundle.scrapMm,
+      status: bundle.status,
+      completedSteps: bundle.completedSteps,
+      requiredSteps,
+      completedAt: bundle.completedAt,
+      createdAt: bundle.createdAt,
       segments: bundle.segments.map(
         (s) =>
           new CutPatternSegmentResponseDto({

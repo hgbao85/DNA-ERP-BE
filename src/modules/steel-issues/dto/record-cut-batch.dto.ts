@@ -34,15 +34,23 @@ export class CutBatchSegmentDto {
  * không phải đo.
  */
 export class RecordCutBatchDto {
-  /** Số CÂY đã dùng trong đợt này. Cộng dồn mọi đợt không được vượt số cây kho đã giao. */
-  @ApiProperty()
+  /**
+   * Số CÂY đã dùng trong đợt này - KHÔNG còn bắt buộc từ 2026-09-05 (bỏ hẳn ô nhập ở màn Phôi
+   * theo yêu cầu nghiệp vụ): 1 loại sắt giờ gộp nhiều lần kho giao thành 1 mục ở màn lệnh sản
+   * xuất, bắt Phôi tách "đợt cắt này ăn mấy cây của lần giao nào" là tuỳ tiện, không ai đếm nổi.
+   * Vắng mặt = 0. Hệ quả đã trao đổi và được chốt: mất cân bằng vật chất (không tính được phế
+   * liệu) và mất chặn "khai vượt số cây kho giao" - kiểm soát dồn hết về KCS, đúng triết lý
+   * "không cap lúc báo, KCS mới là bước kiểm soát" của module này.
+   */
+  @ApiPropertyOptional({ default: 0 })
+  @IsOptional()
   @IsInt()
-  @Min(1)
-  barCount!: number;
+  @Min(0)
+  barCount?: number;
 
   /**
-   * Tổng chiều dài mẩu sắt còn NGUYÊN từ (các) cây cắt dở trong đợt (mm) - nhập lại kho, cắt được
-   * cỡ bất kỳ sau này. KHÔNG phải phế liệu. Mặc định 0 = cắt hết cây, không còn mẩu nào.
+   * Tổng chiều dài mẩu sắt còn NGUYÊN từ (các) cây cắt dở trong đợt (mm). Cũng bỏ ô nhập cùng đợt
+   * 2026-09-05 (mẩu nguyên là mẩu VẬT LÝ ở xưởng, không thuộc riêng lần giao nào). Vắng mặt = 0.
    */
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()

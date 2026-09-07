@@ -14,6 +14,7 @@ import { ListQcReviewsQueryDto } from './dto/list-qc-reviews-query.dto';
 import { ListReplenishRequestsQueryDto } from './dto/list-replenish-requests-query.dto';
 import { QcRecheckDto } from './dto/qc-recheck.dto';
 import { RejectReplenishRequestDto } from './dto/reject-replenish-request.dto';
+import { ReportSegmentDoneDto } from './dto/report-segment-done.dto';
 import { QcReviewsService } from './qc-reviews.service';
 
 const VIEW = { module: PERMISSION_MODULES.QC_REVIEW, action: PermissionAction.VIEW };
@@ -39,13 +40,42 @@ export class QcReviewsController {
     return this.qcReviewsService.review(id, dto, userId);
   }
 
+  /** Duyệt theo TỪNG ĐỢT CẮT (2026-09-05) - thay route theo lô nhận ở trên cho luồng mới, xem
+   *  QcReviewsService.reviewCutBundle(). Route cũ giữ nguyên cho các lô đang dở trên production. */
+  @Post('cut-bundles/:id/qc-review')
+  @RequirePermissions(CREATE)
+  @RequireMfgRole(MfgRole.KCS)
+  reviewCutBundle(
+    @Param('id') id: string,
+    @Body() dto: CreateSteelIssueQcReviewDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.qcReviewsService.reviewCutBundle(id, dto, userId);
+  }
+
   // ─── Tổ Phôi (mfgRole = PHOI) - tự báo đã bù đủ cho cỡ đoạn không đạt ────────
 
   @Post('steel-issues/:id/qc-segments/:segmentSpecId/report-done')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  reportSegmentDone(@Param('id') id: string, @Param('segmentSpecId') segmentSpecId: string) {
-    return this.qcReviewsService.reportSegmentDone(id, segmentSpecId);
+  reportSegmentDone(
+    @Param('id') id: string,
+    @Param('segmentSpecId') segmentSpecId: string,
+    @Body() dto: ReportSegmentDoneDto,
+  ) {
+    return this.qcReviewsService.reportSegmentDone(id, segmentSpecId, dto);
+  }
+
+  /** Cùng report-done nhưng scope theo ĐÚNG đợt cắt (2026-09-05) - dùng cho luồng mới. */
+  @Post('cut-bundles/:id/qc-segments/:segmentSpecId/report-done')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  reportSegmentDoneForBundle(
+    @Param('id') id: string,
+    @Param('segmentSpecId') segmentSpecId: string,
+    @Body() dto: ReportSegmentDoneDto,
+  ) {
+    return this.qcReviewsService.reportSegmentDoneForBundle(id, segmentSpecId, dto);
   }
 
   // ─── KCS - duyệt lại các cỡ đoạn Phôi đã báo bù đủ ────────────────────────────
@@ -55,6 +85,14 @@ export class QcReviewsController {
   @RequireMfgRole(MfgRole.KCS)
   recheck(@Param('id') id: string, @Body() dto: QcRecheckDto) {
     return this.qcReviewsService.recheck(id, dto);
+  }
+
+  /** Cùng qc-recheck nhưng scope theo ĐÚNG đợt cắt (2026-09-05) - dùng cho luồng mới. */
+  @Post('cut-bundles/:id/qc-recheck')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.KCS)
+  recheckForBundle(@Param('id') id: string, @Body() dto: QcRecheckDto) {
+    return this.qcReviewsService.recheckForBundle(id, dto);
   }
 
   @Post('production-batches/:id/qc-review')

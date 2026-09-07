@@ -2252,20 +2252,45 @@ model CutBundle {
   /// không bám kiểu nào.
   proposalPatternId BigInt?
   /// Số CÂY đã dùng trong đợt này (không phải số cây kho đã giao - xem SteelIssue.barCount).
-  barCount          Int
+  /// KHÔNG còn bắt Phôi khai từ 2026-09-05 (default 0, xem RecordCutBatchDto): 1 loại sắt giờ gộp
+  /// nhiều lần kho giao, đếm cây theo từng đợt cắt là tuỳ tiện. Dữ liệu CŨ vẫn giữ số đã khai.
+  barCount          Int     @default(0)
   /// Tổng chiều dài mẩu sắt còn NGUYÊN từ (các) cây cắt dở trong đợt - nhập lại kho, cắt được cỡ
-  /// bất kỳ sau này. KHÔNG phải phế liệu. Phôi tự đo và khai.
+  /// bất kỳ sau này. KHÔNG phải phế liệu. KHÔNG còn bắt khai từ 2026-09-05 (cùng lý do barCount).
   mauNguyenMm       Int     @default(0)
   /// Phế liệu (mm) - phần dư của phương trình cân bằng, SERVICE TỰ TÍNH, không bắt Phôi gõ (không
-  /// ai cân được đống đầu mẩu).
+  /// ai cân được đống đầu mẩu). Luôn 0 từ 2026-09-05 (bỏ barCount thì không còn vế trái để cân).
   scrapMm           Int     @default(0)
+  /// Vòng đời RIÊNG của TỪNG đợt cắt (2026-09-05) - trước đây trạng thái nằm ở cả lô nhận
+  /// (SteelIssue.status), nên phải cắt xong TOÀN BỘ số cây kho giao mới gửi KCS được, và sắt giao
+  /// bù sau đó không cắt tiếp được (recordCutBatch chặn status != RECEIVED). Giờ mỗi đợt cắt tự đi
+  /// CUTTING -> AWAITING_QC -> QC_PASSED, các đợt khác của cùng lô vẫn cắt bình thường.
+  status            CutBundleStatus @default(CUTTING)
+  /// Công đoạn chi tiết (Uốn/Dập/...) đã đánh dấu xong CỦA ĐỢT NÀY - luôn có CAT ngay khi tạo.
+  /// Cùng vai trò SteelIssue.completedSteps cũ, hạ xuống cấp đợt cắt theo `status` trên.
+  completedSteps    ProcessStep[]   @default([])
+  /// Phôi bấm "Báo cắt xong" cho ĐỢT NÀY (chuyển sang chờ KCS).
+  completedAt       DateTime?
+  createdAt         DateTime        @default(now())
 
   steelIssue      SteelIssue              @relation(fields: [steelIssueId], references: [id])
   proposalPattern CuttingProposalPattern? @relation(fields: [proposalPatternId], references: [id])
   segments        CutPatternSegment[]
+  stepBatches     StepBatch[]
+  qcReviews       QcReview[]
 
   @@index([steelIssueId])
+  @@index([status])
   @@map("cut_bundles")
+}
+
+/// Vòng đời 1 đợt cắt (2026-09-05) - mirror SteelIssueStatus nhưng CHỈ phần sau khi đã có sắt:
+/// không có ISSUED/RECEIVED (đó là việc của lô nhận), không có IN_PROCESS riêng (công đoạn phụ
+/// chưa xong thì vẫn là CUTTING, xem CutBundle.completedSteps).
+enum CutBundleStatus {
+  CUTTING
+  AWAITING_QC
+  QC_PASSED
 }
 
 /// 1 cây (theo bundle) ra những đoạn nào - immutable, đúng UNIQUE (cutBundleId, segmentSpecId)
@@ -2294,13 +2319,19 @@ model CutPatternSegment {
 model StepBatch {
   id           BigInt      @id @default(autoincrement())
   steelIssueId BigInt
+  /// Đợt cắt cụ thể của công đoạn này (2026-09-05) - NULL = dữ liệu cũ (trước khi hạ vòng đời
+  /// xuống từng đợt cắt, lúc đó Uốn/Dập tính cho CẢ lô nhận). Dòng mới LUÔN ghi cả 2 cột:
+  /// steelIssueId giữ nguyên để mọi truy vấn cũ theo lô vẫn đúng, cutBundleId để lọc theo đợt.
+  cutBundleId  BigInt?
   step         ProcessStep
   createdAt    DateTime    @default(now())
 
   steelIssue SteelIssue         @relation(fields: [steelIssueId], references: [id])
+  cutBundle  CutBundle?         @relation(fields: [cutBundleId], references: [id])
   segments   StepBatchSegment[]
 
   @@index([steelIssueId, step])
+  @@index([cutBundleId, step])
   @@map("step_batches")
 }
 
@@ -2333,6 +2364,11 @@ model QcReview {
   /// Nhánh Hàn/Sơn (Phase 9d, 2026-08-11) - XOR với steelIssueId, CHECK DB
   /// qc_reviews_goods_xor_chk đã áp từ Phase 9, chỉ thiếu FK thật tới nay.
   productionBatchId BigInt?
+  /// Đợt cắt được chấm (2026-09-05) - KCS Phôi giờ duyệt theo TỪNG đợt cắt, không phải cả lô
+  /// nhận. KHÔNG nằm trong XOR nói trên: dòng nhánh Phôi mới ghi CẢ steelIssueId (lô cha, giữ cho
+  /// mọi truy vấn/ràng buộc cũ nguyên vẹn - kể cả CHECK qc_reviews_goods_xor_chk) LẪN cutBundleId.
+  /// NULL = dữ liệu cũ, chấm cho cả lô.
+  cutBundleId       BigInt?
   failedQty         Int
   /// CHECK scrapQty <= failedQty (validate service, giống assertExactlyOneGoodsLeg style).
   scrapQty          Int?
@@ -2344,6 +2380,7 @@ model QcReview {
 
   steelIssue        SteelIssue?        @relation(fields: [steelIssueId], references: [id])
   productionBatch   ProductionBatch?   @relation(fields: [productionBatchId], references: [id])
+  cutBundle         CutBundle?         @relation(fields: [cutBundleId], references: [id])
   defectReason      DefectReason?      @relation(fields: [defectReasonId], references: [id])
   reviewedBy        User               @relation("QcReviewReviewedBy", fields: [reviewedById], references: [id])
   replenishRequests ReplenishRequest[]
@@ -2351,6 +2388,7 @@ model QcReview {
 
   @@index([steelIssueId])
   @@index([productionBatchId])
+  @@index([cutBundleId])
   @@map("qc_reviews")
 }
 
@@ -2381,6 +2419,11 @@ model QcReviewSegment {
   /// Lúc Phôi bấm "Bù đủ" - null = chưa báo hoặc KCS vừa duyệt lại thấy còn hỏng (reset về null
   /// để Phôi báo lại lượt mới).
   phoiReportedAt DateTime?
+  /// Số đoạn Phôi TỰ KHAI đã sửa xong khi bấm "Bù đủ" (2026-09-07) - THUẦN THAM KHẢO cho KCS xem
+  /// trước khi tự đếm lại ở recheck(), KHÔNG tự động cộng vào resolvedQty (đúng nguyên tắc "KCS là
+  /// bước kiểm soát duy nhất" - Phôi tự bù ngoài hệ thống nên số này chỉ là lời khai, không phải sự
+  /// thật đã xác nhận). Reset về null cùng lúc với phoiReportedAt (xem 2 dòng trên).
+  phoiReportedQty Int?
 
   qcReview    QcReview    @relation(fields: [qcReviewId], references: [id])
   segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])

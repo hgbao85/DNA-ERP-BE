@@ -25,6 +25,7 @@ describe('QcReviewsService', () => {
     segmentSpec: { findMany: jest.Mock };
     cutPatternSegment: { groupBy: jest.Mock };
     steelIssue: { update: jest.Mock; findUnique: jest.Mock };
+    cutBundle: { findUnique: jest.Mock; update: jest.Mock };
     productionBatch: { update: jest.Mock };
     productionOrder: { findFirst: jest.Mock; findUniqueOrThrow: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
@@ -37,7 +38,11 @@ describe('QcReviewsService', () => {
     };
     $transaction: jest.Mock;
   };
-  let steelIssuesService: { findOneRowOrThrow: jest.Mock; createReworkIssue: jest.Mock };
+  let steelIssuesService: {
+    findOneRowOrThrow: jest.Mock;
+    createReworkIssue: jest.Mock;
+    syncIssueStatusFromBundles: jest.Mock;
+  };
   let productionBatchesService: { findOneRowOrThrow: jest.Mock };
 
   const awaitingIssue = {
@@ -121,6 +126,7 @@ describe('QcReviewsService', () => {
         groupBy: jest.fn().mockResolvedValue([{ segmentSpecId: 30n, _sum: { qty: 8 } }]),
       },
       steelIssue: { update: jest.fn(), findUnique: jest.fn() },
+      cutBundle: { findUnique: jest.fn(), update: jest.fn() },
       productionBatch: { update: jest.fn() },
       // floorStage gate (2026-08-31) - mặc định PI luôn có 1 order ACTIVE, đa số test không quan
       // tâm gate assertPiHasActiveFloorForInvoice()/assertPiHasActiveFloorForOrder(), xem mục
@@ -144,6 +150,7 @@ describe('QcReviewsService', () => {
     steelIssuesService = {
       findOneRowOrThrow: jest.fn().mockResolvedValue(awaitingIssue),
       createReworkIssue: jest.fn(),
+      syncIssueStatusFromBundles: jest.fn(),
     };
     productionBatchesService = {
       findOneRowOrThrow: jest.fn().mockResolvedValue(awaitingBatch),
@@ -248,6 +255,83 @@ describe('QcReviewsService', () => {
     });
   });
 
+  // 2026-09-05: chấm theo ĐỢT CẮT (CutBundle) thay vì cả lô nhận - 1 lô có thể có NHIỀU đợt cắt
+  // cùng AWAITING_QC, "vượt số đã cắt" phải đối chiếu đúng đợt đang chấm.
+  describe('reviewCutBundle', () => {
+    const awaitingBundle = {
+      id: 1n,
+      steelIssueId: 100n,
+      status: 'AWAITING_QC',
+      steelIssue: { productionInvoiceId: 900n, materialId: 30n },
+    };
+    const bundleQcReview = { ...qcReview, cutBundleId: 1n };
+
+    beforeEach(() => {
+      prisma.cutBundle.findUnique.mockResolvedValue(awaitingBundle);
+      prisma.qcReview.create.mockResolvedValue(bundleQcReview);
+    });
+
+    it('duyệt ĐẠT hoàn toàn - đóng bundle QC_PASSED, KHÔNG đụng SteelIssue.status trực tiếp (roll-up riêng)', async () => {
+      const result = await service.reviewCutBundle('1', { segments: [] }, 'user-kcs');
+
+      expect(prisma.cutBundle.update).toHaveBeenCalledWith({
+        where: { id: 1n },
+        data: { status: 'QC_PASSED' },
+      });
+      expect(prisma.qcReview.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+          data: expect.objectContaining({ steelIssueId: 100n, cutBundleId: 1n, failedQty: 0 }),
+        }),
+      );
+      expect(steelIssuesService.syncIssueStatusFromBundles).toHaveBeenCalledWith(100n);
+      expect(result.id).toBe('500');
+    });
+
+    it('vượt số đã cắt của ĐÚNG bundle này (groupBy lọc theo cutBundleId, không cộng dồn cả lô)', async () => {
+      prisma.cutPatternSegment.groupBy.mockResolvedValue([
+        { segmentSpecId: 30n, _sum: { qty: 8 } },
+      ]);
+
+      await expect(
+        service.reviewCutBundle(
+          '1',
+          { segments: [{ segmentSpecId: '30', failedQty: 9 }] },
+          'user-kcs',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.cutPatternSegment.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { cutBundleId: 1n } }),
+      );
+    });
+
+    it('ném ConflictException nếu bundle không ở AWAITING_QC', async () => {
+      prisma.cutBundle.findUnique.mockResolvedValue({ ...awaitingBundle, status: 'CUTTING' });
+
+      await expect(service.reviewCutBundle('1', { segments: [] }, 'user-kcs')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+    });
+
+    it('ném NotFoundException nếu đợt cắt không tồn tại', async () => {
+      prisma.cutBundle.findUnique.mockResolvedValue(null);
+
+      await expect(service.reviewCutBundle('999', { segments: [] }, 'user-kcs')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('ném ConflictException khi PI của đợt cắt chưa có SKU nào ACTIVE', async () => {
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(service.reviewCutBundle('1', { segments: [] }, 'user-kcs')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('reportSegmentDone', () => {
     const reviewWithFailedSegment = {
       ...qcReview,
@@ -268,14 +352,31 @@ describe('QcReviewsService', () => {
       prisma.qcReview.findUniqueOrThrow.mockResolvedValue(reviewWithFailedSegment);
     });
 
-    it('báo bù đủ thành công - set phoiReportedAt (outstanding = 5 - 2 = 3 > 0)', async () => {
-      await service.reportSegmentDone('100', '30');
+    it('báo bù đủ thành công - set phoiReportedAt + phoiReportedQty (outstanding = 5 - 2 = 3 > 0)', async () => {
+      await service.reportSegmentDone('100', '30', { qty: 3 });
 
       expect(prisma.qcReviewSegment.update).toHaveBeenCalledWith({
         where: { id: 900n },
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
-        data: { phoiReportedAt: expect.any(Date) },
+        data: { phoiReportedAt: expect.any(Date), phoiReportedQty: 3 },
       });
+    });
+
+    it('cho báo bù MỘT PHẦN outstanding (qty < outstanding) - lưu đúng qty đã khai', async () => {
+      await service.reportSegmentDone('100', '30', { qty: 1 });
+
+      expect(prisma.qcReviewSegment.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+        data: { phoiReportedAt: expect.any(Date), phoiReportedQty: 1 },
+      });
+    });
+
+    it('ném BadRequestException nếu qty vượt outstanding (3)', async () => {
+      await expect(service.reportSegmentDone('100', '30', { qty: 4 })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
     });
 
     it('ném ConflictException nếu cỡ đoạn đã hết lỗi (outstanding = 0)', async () => {
@@ -284,7 +385,9 @@ describe('QcReviewsService', () => {
         segments: [{ ...reviewWithFailedSegment.segments[0], resolvedQty: 5 }],
       });
 
-      await expect(service.reportSegmentDone('100', '30')).rejects.toThrow(ConflictException);
+      await expect(service.reportSegmentDone('100', '30', { qty: 1 })).rejects.toThrow(
+        ConflictException,
+      );
       expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
     });
 
@@ -294,24 +397,32 @@ describe('QcReviewsService', () => {
         segments: [{ ...reviewWithFailedSegment.segments[0], phoiReportedAt: new Date() }],
       });
 
-      await expect(service.reportSegmentDone('100', '30')).rejects.toThrow(ConflictException);
+      await expect(service.reportSegmentDone('100', '30', { qty: 3 })).rejects.toThrow(
+        ConflictException,
+      );
       expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
     });
 
     it('ném NotFoundException nếu đợt sắt chưa có KCS chấm nào', async () => {
       prisma.qcReview.findFirst.mockResolvedValue(null);
 
-      await expect(service.reportSegmentDone('100', '30')).rejects.toThrow(NotFoundException);
+      await expect(service.reportSegmentDone('100', '30', { qty: 3 })).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('ném NotFoundException nếu cỡ đoạn đó không có lỗi trong lần chấm', async () => {
-      await expect(service.reportSegmentDone('100', '999')).rejects.toThrow(NotFoundException);
+      await expect(service.reportSegmentDone('100', '999', { qty: 1 })).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc" (assertPiHasActiveFloor, 2026-09-01)', async () => {
       prisma.productionOrder.findFirst.mockResolvedValue(null);
 
-      await expect(service.reportSegmentDone('100', '30')).rejects.toThrow(ConflictException);
+      await expect(service.reportSegmentDone('100', '30', { qty: 3 })).rejects.toThrow(
+        ConflictException,
+      );
       expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
     });
   });
@@ -326,6 +437,7 @@ describe('QcReviewsService', () => {
           failedQty: 5,
           resolvedQty: 2,
           phoiReportedAt: new Date('2026-08-24T00:00:00.000Z') as Date | null,
+          phoiReportedQty: 3 as number | null,
           segmentSpec: { cutLengthMm: decimal(745) },
         },
       ],
@@ -336,23 +448,27 @@ describe('QcReviewsService', () => {
       prisma.qcReview.findUniqueOrThrow.mockResolvedValue(reviewAwaitingRecheck);
     });
 
-    it('duyệt lại đạt hết (remainingFailedQty=0) - resolvedQty = failedQty, phoiReportedAt giữ nguyên', async () => {
+    it('duyệt lại đạt hết (remainingFailedQty=0) - resolvedQty = failedQty, phoiReportedAt/Qty giữ nguyên làm lịch sử', async () => {
       await service.recheck('100', { segments: [{ segmentSpecId: '30', remainingFailedQty: 0 }] });
 
       // outstanding = 5 - 2 = 3; resolvedQty = 2 + (3 - 0) = 5
       expect(prisma.qcReviewSegment.update).toHaveBeenCalledWith({
         where: { id: 900n },
-        data: { resolvedQty: 5, phoiReportedAt: reviewAwaitingRecheck.segments[0].phoiReportedAt },
+        data: {
+          resolvedQty: 5,
+          phoiReportedAt: reviewAwaitingRecheck.segments[0].phoiReportedAt,
+          phoiReportedQty: 3,
+        },
       });
     });
 
-    it('duyệt lại còn hỏng (remainingFailedQty=1) - cộng phần đạt, phoiReportedAt reset về null', async () => {
+    it('duyệt lại còn hỏng (remainingFailedQty=1) - cộng phần đạt, phoiReportedAt/Qty reset về null', async () => {
       await service.recheck('100', { segments: [{ segmentSpecId: '30', remainingFailedQty: 1 }] });
 
       // resolvedQty = 2 + (3 - 1) = 4
       expect(prisma.qcReviewSegment.update).toHaveBeenCalledWith({
         where: { id: 900n },
-        data: { resolvedQty: 4, phoiReportedAt: null },
+        data: { resolvedQty: 4, phoiReportedAt: null, phoiReportedQty: null },
       });
     });
 
@@ -393,6 +509,92 @@ describe('QcReviewsService', () => {
         service.recheck('100', { segments: [{ segmentSpecId: '30', remainingFailedQty: 0 }] }),
       ).rejects.toThrow(ConflictException);
       expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // 2026-09-05: cùng report-done/recheck nhưng tra review theo cutBundleId thay vì steelIssueId -
+  // cần thiết khi 1 lô có NHIỀU đợt cắt cùng bị lỗi cùng 1 cỡ đoạn (tra theo issueId sẽ lấy nhầm
+  // review của đợt khác cùng lô).
+  describe('reportSegmentDoneForBundle / recheckForBundle', () => {
+    const reviewWithFailedSegment = {
+      ...qcReview,
+      cutBundleId: 1n,
+      segments: [
+        {
+          id: 900n,
+          segmentSpecId: 30n,
+          failedQty: 5,
+          resolvedQty: 2,
+          phoiReportedAt: null as Date | null,
+          segmentSpec: { cutLengthMm: decimal(745) },
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      prisma.qcReview.findFirst.mockResolvedValue(reviewWithFailedSegment);
+      prisma.qcReview.findUniqueOrThrow.mockResolvedValue(reviewWithFailedSegment);
+    });
+
+    it('reportSegmentDoneForBundle() tra review theo cutBundleId (không phải steelIssueId)', async () => {
+      await service.reportSegmentDoneForBundle('1', '30', { qty: 3 });
+
+      expect(prisma.qcReview.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { cutBundleId: 1n } }),
+      );
+      expect(prisma.qcReviewSegment.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+        data: { phoiReportedAt: expect.any(Date), phoiReportedQty: 3 },
+      });
+    });
+
+    it('ném BadRequestException nếu qty vượt outstanding (3) của đợt cắt', async () => {
+      await expect(service.reportSegmentDoneForBundle('1', '30', { qty: 4 })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.qcReviewSegment.update).not.toHaveBeenCalled();
+    });
+
+    it('recheckForBundle() tra review theo cutBundleId, cùng phép tính resolvedQty như recheck()', async () => {
+      const reviewAwaitingRecheck = {
+        ...reviewWithFailedSegment,
+        segments: [
+          {
+            ...reviewWithFailedSegment.segments[0],
+            phoiReportedAt: new Date(),
+            phoiReportedQty: 3,
+          },
+        ],
+      };
+      prisma.qcReview.findFirst.mockResolvedValue(reviewAwaitingRecheck);
+
+      await service.recheckForBundle('1', {
+        segments: [{ segmentSpecId: '30', remainingFailedQty: 0 }],
+      });
+
+      expect(prisma.qcReview.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { cutBundleId: 1n } }),
+      );
+      expect(prisma.qcReviewSegment.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: {
+          resolvedQty: 5,
+          phoiReportedAt: reviewAwaitingRecheck.segments[0].phoiReportedAt,
+          phoiReportedQty: 3,
+        },
+      });
+    });
+
+    it('ném NotFoundException nếu đợt cắt chưa có KCS chấm nào', async () => {
+      prisma.qcReview.findFirst.mockResolvedValue(null);
+
+      await expect(service.reportSegmentDoneForBundle('1', '30', { qty: 3 })).rejects.toThrow(
+        NotFoundException,
+      );
+      await expect(service.recheckForBundle('1', { segments: [] })).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
