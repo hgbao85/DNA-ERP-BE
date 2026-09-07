@@ -29,6 +29,15 @@ describe('ProductionBatchesService', () => {
       aggregate: jest.Mock;
       groupBy: jest.Mock;
       create: jest.Mock;
+      findMany: jest.Mock;
+      updateMany: jest.Mock;
+    };
+    pieceStepBundle: {
+      findUnique: jest.Mock;
+      groupBy: jest.Mock;
+      create: jest.Mock;
+      findMany: jest.Mock;
+      count: jest.Mock;
     };
     stockQuant: { findMany: jest.Mock };
     warehouseTransferPieceItem: { findMany: jest.Mock };
@@ -118,6 +127,17 @@ describe('ProductionBatchesService', () => {
         aggregate: jest.fn().mockResolvedValue({ _sum: { qty: null } }),
         groupBy: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn(),
+      },
+      // Mặc định rỗng - đa số test case không quan tâm tới đợt gửi KCS theo công đoạn (xem mục
+      // 'submitPieceStep' và 'stepProgress' bên dưới).
+      pieceStepBundle: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        groupBy: jest.fn().mockResolvedValue([]),
+        create: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
       },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
       warehouseTransferPieceItem: { findMany: jest.fn().mockResolvedValue([]) },
@@ -783,9 +803,39 @@ describe('ProductionBatchesService', () => {
 
       expect(result.items[0].processSteps).toEqual(['CAT', 'UON']);
       expect(result.items[0].stepProgress).toEqual([
-        { step: 'CAT', requiredQty: plannedQty, doneQty: 15 },
-        { step: 'UON', requiredQty: plannedQty, doneQty: 5 },
+        { step: 'CAT', requiredQty: plannedQty, doneQty: 15, submittedQty: 0, passedQty: 0 },
+        { step: 'UON', requiredQty: plannedQty, doneQty: 5, submittedQty: 0, passedQty: 0 },
       ]);
+    });
+
+    it('stage=PHOI, có PieceStepBundle AWAITING_QC + QC_PASSED - submittedQty gộp cả 2, passedQty CHỈ tính QC_PASSED', async () => {
+      const plannedQty = bomPieceRow.qtyPerUnit * order.quantity;
+      prisma.pieceMaterialYield.findMany.mockResolvedValue([
+        { pieceId: 40n, materialId: 80n, piecesPerBar: 12, processSteps: ['CAT'], qtyPerPiece: 1 },
+      ]);
+      prisma.pieceStepBatch.groupBy.mockResolvedValue([
+        { productionOrderId: 1n, pieceId: 40n, step: 'CAT', _sum: { qty: 20 } },
+      ]);
+      prisma.pieceStepBundle.groupBy.mockResolvedValue([
+        { productionOrderId: 1n, pieceId: 40n, step: 'CAT', status: 'QC_PASSED', _sum: { qty: 6 } },
+        {
+          productionOrderId: 1n,
+          pieceId: 40n,
+          step: 'CAT',
+          status: 'AWAITING_QC',
+          _sum: { qty: 4 },
+        },
+      ]);
+
+      const result = await service.getBatchPlan('1', MfgStage.PHOI);
+
+      expect(result.items[0].stepProgress[0]).toEqual({
+        step: 'CAT',
+        requiredQty: plannedQty,
+        doneQty: 20,
+        submittedQty: 10,
+        passedQty: 6,
+      });
     });
 
     it('nhiều order CÙNG PI cùng bomRevisionId - doneQty theo bước KHÔNG lẫn giữa 2 order (getBatchPlanBatch)', async () => {
@@ -889,11 +939,13 @@ describe('ProductionBatchesService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('báo bước SAU (UON) vượt số đã báo bước TRƯỚC (CAT) - BadRequest', async () => {
+    // 2026-09-07: BỎ ràng buộc "bước sau vượt bước liền trước" (quyết định nghiệp vụ, xem doc
+    // comment recordPieceStepBatch()) - 3 test dưới thay 3 test CŨ đã xoá (từng assert BadRequest
+    // cho đúng các case này), giờ khẳng định NGƯỢC LẠI: không còn chặn, không còn gọi
+    // pieceStepBatch.aggregate nào (code tra cứu donePrev đã bị xoá theo).
+    it('báo bước SAU (UON) vượt xa số đã báo bước TRƯỚC (CAT) - KHÔNG còn chặn, tạo bình thường', async () => {
       prisma.pieceMaterialYield.findUnique.mockResolvedValue(yieldRow);
-      prisma.pieceStepBatch.aggregate
-        .mockResolvedValueOnce({ _sum: { qty: 10 } }) // donePrev (CAT) = 10
-        .mockResolvedValueOnce({ _sum: { qty: 0 } }); // doneThis (UON) = 0
+      prisma.pieceStepBatch.create.mockResolvedValue({ ...createdRow, step: 'UON', qty: 11 });
 
       await expect(
         service.recordPieceStepBatch(
@@ -902,39 +954,16 @@ describe('ProductionBatchesService', () => {
           'user-phoi',
           'PHOI',
         ),
-      ).rejects.toThrow(BadRequestException);
-      expect(prisma.pieceStepBatch.create).not.toHaveBeenCalled();
-    });
-
-    it('báo bước SAU (UON) ĐÚNG BẰNG số còn lại của bước trước - cho qua', async () => {
-      prisma.pieceMaterialYield.findUnique.mockResolvedValue(yieldRow);
-      prisma.pieceStepBatch.aggregate
-        .mockResolvedValueOnce({ _sum: { qty: 10 } }) // donePrev (CAT) = 10
-        .mockResolvedValueOnce({ _sum: { qty: 0 } }); // doneThis (UON) = 0
-      prisma.pieceStepBatch.create.mockResolvedValue({
-        ...createdRow,
-        step: 'UON',
-        qty: 10,
-      });
-
-      await expect(
-        service.recordPieceStepBatch(
-          '1',
-          { ...dto, step: 'UON' as const, qty: 10 },
-          'user-phoi',
-          'PHOI',
-        ),
       ).resolves.toBeDefined();
+      expect(prisma.pieceStepBatch.aggregate).not.toHaveBeenCalled();
     });
 
-    it("processSteps lưu LỘN XỘN thứ tự (['UON','CAT']) - vẫn hiểu CAT là bước trước UON khi tính 'vượt bước trước'", async () => {
+    it("processSteps lưu LỘN XỘN thứ tự (['UON','CAT']) - vẫn không chặn báo UON dù CAT chưa báo gì", async () => {
       prisma.pieceMaterialYield.findUnique.mockResolvedValue({
         ...yieldRow,
         processSteps: ['UON', 'CAT'],
       });
-      prisma.pieceStepBatch.aggregate
-        .mockResolvedValueOnce({ _sum: { qty: 5 } }) // donePrev (CAT) = 5, dù lưu SAU UON trong mảng DB
-        .mockResolvedValueOnce({ _sum: { qty: 0 } });
+      prisma.pieceStepBatch.create.mockResolvedValue({ ...createdRow, step: 'UON', qty: 6 });
 
       await expect(
         service.recordPieceStepBatch(
@@ -943,7 +972,7 @@ describe('ProductionBatchesService', () => {
           'user-phoi',
           'PHOI',
         ),
-      ).rejects.toThrow(BadRequestException); // 6 > 5 (donePrev CAT) => vẫn bị chặn đúng
+      ).resolves.toBeDefined();
     });
 
     it('idempotency - cùng key gọi 2 lần chỉ tạo 1 bản ghi, lần 2 trả lại bản ghi cũ', async () => {
@@ -985,6 +1014,162 @@ describe('ProductionBatchesService', () => {
         ConflictException,
       );
       expect(prisma.pieceStepBatch.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // 2026-09-07: Phôi gom PieceStepBatch CHƯA gửi (pieceStepBundleId NULL) thành 1 "đợt gửi KCS"
+  // theo công đoạn - xem PieceStepBundle doc comment (schema.prisma) tại sao KHÔNG re-validate
+  // BOM/định mức ở đây (đã validate lúc recordPieceStepBatch() tạo từng dòng).
+  describe('submitPieceStep', () => {
+    const dto = { pieceId: '40', step: 'CAT' as const };
+    const pendingRows = [
+      {
+        id: 901n,
+        productionOrderId: 1n,
+        pieceId: 40n,
+        step: 'CAT',
+        qty: 6,
+        pieceStepBundleId: null,
+      },
+      {
+        id: 902n,
+        productionOrderId: 1n,
+        pieceId: 40n,
+        step: 'CAT',
+        qty: 4,
+        pieceStepBundleId: null,
+      },
+    ];
+    const createdBundle = {
+      id: 500n,
+      productionOrderId: 1n,
+      pieceId: 40n,
+      step: 'CAT',
+      qty: 10,
+      status: 'AWAITING_QC',
+      submittedAt: new Date(),
+      submittedById: 'user-phoi',
+      productionOrder: order,
+      piece,
+    };
+
+    it('happy path - gom 2 dòng CHƯA gửi (qty 6+4), tạo bundle qty=10, gán lại pieceStepBundleId cho cả 2 dòng', async () => {
+      prisma.pieceStepBatch.findMany.mockResolvedValue(pendingRows);
+      prisma.pieceStepBundle.create.mockResolvedValue(createdBundle);
+
+      const result = await service.submitPieceStep('1', dto, 'user-phoi', 'PHOI');
+
+      expect(result.id).toBe('500');
+      expect(result.qty).toBe(10);
+      expect(result.status).toBe('AWAITING_QC');
+      expect(prisma.pieceStepBatch.findMany).toHaveBeenCalledWith({
+        where: { productionOrderId: 1n, pieceId: 40n, step: 'CAT', pieceStepBundleId: null },
+      });
+      expect(prisma.pieceStepBundle.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: {
+            productionOrderId: 1n,
+            pieceId: 40n,
+            step: 'CAT',
+            qty: 10,
+            submittedById: 'user-phoi',
+          },
+        }),
+      );
+      expect(prisma.pieceStepBatch.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [901n, 902n] } },
+        data: { pieceStepBundleId: 500n },
+      });
+    });
+
+    it('không có dòng nào CHƯA gửi (tổng qty = 0) - BadRequest, không tạo bundle', async () => {
+      prisma.pieceStepBatch.findMany.mockResolvedValue([]);
+
+      await expect(service.submitPieceStep('1', dto, 'user-phoi', 'PHOI')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.pieceStepBundle.create).not.toHaveBeenCalled();
+    });
+
+    it('mfgRole khác PHOI (vd HAN) - ForbiddenException', async () => {
+      await expect(service.submitPieceStep('1', dto, 'user-han', 'HAN')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(prisma.pieceStepBundle.create).not.toHaveBeenCalled();
+    });
+
+    it('mfgRole null (quản lý báo hộ) - cho qua', async () => {
+      prisma.pieceStepBatch.findMany.mockResolvedValue(pendingRows);
+      prisma.pieceStepBundle.create.mockResolvedValue(createdBundle);
+
+      await expect(service.submitPieceStep('1', dto, 'user-boss', null)).resolves.toBeDefined();
+    });
+
+    it('PI không có SKU nào ACTIVE (floor-gate) - ConflictException, không tạo bundle', async () => {
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(service.submitPieceStep('1', dto, 'user-phoi', 'PHOI')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.pieceStepBundle.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findPieceStepBundlesForOrder', () => {
+    it('trả về mọi bundle của order, KHÔNG lọc status, mới nhất trước', async () => {
+      prisma.pieceStepBundle.findMany.mockResolvedValue([
+        {
+          id: 800n,
+          productionOrderId: 1n,
+          pieceId: 40n,
+          step: 'CAT',
+          qty: 10,
+          status: 'AWAITING_QC',
+          submittedAt: new Date(),
+          submittedById: 'user-phoi',
+          productionOrder: order,
+          piece,
+        },
+      ]);
+
+      const result = await service.findPieceStepBundlesForOrder('1');
+
+      expect(prisma.pieceStepBundle.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { productionOrderId: 1n } }),
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('800');
+    });
+  });
+
+  describe('findAllPieceStepBundles', () => {
+    it('lọc theo status khi truyền query.status', async () => {
+      prisma.pieceStepBundle.findMany.mockResolvedValue([]);
+      prisma.pieceStepBundle.count.mockResolvedValue(0);
+
+      await service.findAllPieceStepBundles({
+        status: 'AWAITING_QC',
+        page: 1,
+        limit: 20,
+      } as unknown as Parameters<typeof service.findAllPieceStepBundles>[0]);
+
+      expect(prisma.pieceStepBundle.count).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { status: 'AWAITING_QC' } }),
+      );
+    });
+
+    it('không lọc gì khi query.status rỗng', async () => {
+      prisma.pieceStepBundle.findMany.mockResolvedValue([]);
+      prisma.pieceStepBundle.count.mockResolvedValue(0);
+
+      await service.findAllPieceStepBundles({
+        page: 1,
+        limit: 20,
+      } as unknown as Parameters<typeof service.findAllPieceStepBundles>[0]);
+
+      expect(prisma.pieceStepBundle.count).toHaveBeenCalledWith(
+        expect.objectContaining({ where: {} }),
+      );
     });
   });
 

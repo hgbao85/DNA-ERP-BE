@@ -21,10 +21,10 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
-import { CompleteStepDto } from './dto/complete-step.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
 import { RecordStepBatchDto } from './dto/record-step-batch.dto';
+import { SubmitStepBundleDto } from './dto/submit-step-bundle.dto';
 import { UndoCutBatchDto } from './dto/undo-cut-batch.dto';
 import { SteelIssuesService } from './steel-issues.service';
 
@@ -170,33 +170,9 @@ export class SteelIssuesController {
     return this.steelIssuesService.recordCutBatch(id, dto);
   }
 
-  /** "Xong, mời KCS" - tín hiệu thuần, không mang số liệu (đã nhập ở các đợt trước đó). */
-  @Post('steel-issues/:id/finish-cutting')
-  @RequirePermissions(UPDATE)
-  @RequireMfgRole(MfgRole.PHOI)
-  finishCutting(@Param('id') id: string) {
-    return this.steelIssuesService.finishCutting(id);
-  }
-
-  /** Nhập 1 đợt "đã gia công" cho công đoạn chi tiết SAU Cắt (cộng dồn) - mirror cut-batches,
-   *  không đổi trạng thái. Xem RecordStepBatchDto. */
-  @Post('steel-issues/:id/step-batches')
-  @RequirePermissions(UPDATE)
-  @RequireMfgRole(MfgRole.PHOI)
-  recordStepBatch(@Param('id') id: string, @Body() dto: RecordStepBatchDto) {
-    return this.steelIssuesService.recordStepBatch(id, dto);
-  }
-
-  @Post('steel-issues/:id/complete-step')
-  @RequirePermissions(UPDATE)
-  @RequireMfgRole(MfgRole.PHOI)
-  completeStep(@Param('id') id: string, @Body() dto: CompleteStepDto) {
-    return this.steelIssuesService.completeStep(id, dto);
-  }
-
   // ─── Đợt cắt là đơn vị mang trạng thái (2026-09-05) ─────────────────────────
   // Màn Phôi gộp mọi lần kho giao của CÙNG loại sắt thành 1 mục, nên thao tác "báo cắt xong"/
-  // "xong công đoạn" không còn gắn với 1 lô nhận cụ thể nữa mà gắn với TỪNG ĐỢT CẮT.
+  // "gửi KCS công đoạn" không còn gắn với 1 lô nhận cụ thể nữa mà gắn với TỪNG ĐỢT CẮT.
 
   /** Mọi đợt cắt - lọc theo PI (màn Phôi) hoặc theo trạng thái (màn KCS lấy thẳng AWAITING_QC). */
   @Get('cut-bundles')
@@ -208,7 +184,8 @@ export class SteelIssuesController {
     return this.steelIssuesService.findAllBundles(productionInvoiceId, status);
   }
 
-  /** "Báo cắt xong" cho ĐÚNG đợt cắt này - các đợt khác của cùng lô vẫn cắt tiếp bình thường. */
+  /** "Báo cắt xong" cho ĐÚNG đợt cắt này - các đợt khác của cùng lô vẫn cắt tiếp bình thường. KHÔNG
+   *  còn chờ công đoạn phụ (Uốn/Dập/...) xong (2026-09-07, xem doc comment service). */
   @Post('cut-bundles/:id/finish')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
@@ -216,11 +193,27 @@ export class SteelIssuesController {
     return this.steelIssuesService.finishCutBundle(id);
   }
 
-  @Post('cut-bundles/:id/complete-step')
+  /** Nhập 1 đợt "đã gia công" cho công đoạn chi tiết SAU Cắt (cộng dồn) CỦA ĐÚNG đợt cắt này
+   *  (2026-09-07, scope lại theo cutBundleId) - mirror cut-batches, không đổi trạng thái. Xem
+   *  RecordStepBatchDto. */
+  @Post('cut-bundles/:id/step-batches')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  completeBundleStep(@Param('id') id: string, @Body() dto: CompleteStepDto) {
-    return this.steelIssuesService.completeBundleStep(id, dto.step);
+  recordStepBatch(@Param('id') id: string, @Body() dto: RecordStepBatchDto) {
+    return this.steelIssuesService.recordStepBatch(id, dto);
+  }
+
+  /** Phôi gom mọi StepBatch chưa gửi của (cutBundleId, step) thành 1 đợt gửi KCS (2026-09-07) -
+   *  KCS duyệt qua POST step-bundles/:id/qc-review (qc-reviews.controller.ts). */
+  @Post('cut-bundles/:id/step-bundles')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  submitStepBundle(
+    @Param('id') id: string,
+    @Body() dto: SubmitStepBundleDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.steelIssuesService.submitStepBundle(id, dto.step, userId);
   }
 
   /** Hoàn tác ĐÚNG lần "Lưu đợt cắt" gần nhất (2026-09-07) - xem doc comment service. */

@@ -96,6 +96,8 @@ model User {
   packagingIssuesIssued             PackagingIssue[]            @relation("PackagingIssueIssuedBy")
   productionBatchesReported         ProductionBatch[]           @relation("ProductionBatchReportedBy")
   pieceStepBatchesReported          PieceStepBatch[]            @relation("PieceStepBatchReportedBy")
+  pieceStepBundlesSubmitted         PieceStepBundle[]           @relation("PieceStepBundleSubmittedBy")
+  stepBundlesSubmitted              StepBundle[]                @relation("StepBundleSubmittedBy")
   materialInspectionRequestsCreated MaterialInspectionRequest[]
   inspectionKhoResultsSubmitted     InspectionKhoResult[]
   packagingRecordsPacked            PackagingRecord[]
@@ -573,6 +575,7 @@ model Piece {
   weavingReceipts             WeavingReceipt[]
   productionBatches           ProductionBatch[]
   pieceStepBatches            PieceStepBatch[]
+  pieceStepBundles            PieceStepBundle[]
   warehouseTransferPieceItems WarehouseTransferPieceItem[]
 
   @@unique([mfgProductId, code])
@@ -1346,6 +1349,7 @@ model ProductionOrder {
   packagingIssues             PackagingIssue[]
   productionBatches           ProductionBatch[]
   pieceStepBatches            PieceStepBatch[]
+  pieceStepBundles            PieceStepBundle[]
   materialInspectionRequests  MaterialInspectionRequest[]
   warehouseTransferPieceItems WarehouseTransferPieceItem[]
 
@@ -2277,6 +2281,7 @@ model CutBundle {
   proposalPattern CuttingProposalPattern? @relation(fields: [proposalPatternId], references: [id])
   segments        CutPatternSegment[]
   stepBatches     StepBatch[]
+  stepBundles     StepBundle[]
   qcReviews       QcReview[]
 
   @@index([steelIssueId])
@@ -2324,15 +2329,58 @@ model StepBatch {
   /// steelIssueId giữ nguyên để mọi truy vấn cũ theo lô vẫn đúng, cutBundleId để lọc theo đợt.
   cutBundleId  BigInt?
   step         ProcessStep
+  /// Đợt gửi KCS đã gom dòng này vào (2026-09-07, xem StepBundle) - NULL = đã báo nhưng CHƯA gửi
+  /// KCS. Cùng ý nghĩa PieceStepBatch.pieceStepBundleId (VTTP) nhưng ở nhánh Sắt (bóc theo cỡ đoạn
+  /// qua StepBatchSegment, không phải số lượng phẳng).
+  stepBundleId BigInt?
   createdAt    DateTime    @default(now())
 
   steelIssue SteelIssue         @relation(fields: [steelIssueId], references: [id])
   cutBundle  CutBundle?         @relation(fields: [cutBundleId], references: [id])
+  stepBundle StepBundle?        @relation(fields: [stepBundleId], references: [id])
   segments   StepBatchSegment[]
 
   @@index([steelIssueId, step])
   @@index([cutBundleId, step])
+  @@index([stepBundleId])
   @@map("step_batches")
+}
+
+enum StepBundleStatus {
+  AWAITING_QC
+  QC_PASSED
+}
+
+/// "Đợt gửi KCS" cho 1 CÔNG ĐOẠN PHỤ (Uốn/Dập/Đục lỗ/Tán/...) của 1 đợt cắt cụ thể (2026-09-07) -
+/// mirror CutBundle nhưng scope hẹp hơn (cutBundleId + step, không có barCount/mauNguyên/scrap).
+/// Trước đây công đoạn phụ chỉ là CỜ TỰ KHAI của Phôi (CutBundle.completedSteps, không qua KCS) -
+/// đổi sang gửi KCS RIÊNG cho từng công đoạn, KHÔNG chờ nhau (quyết định nghiệp vụ 2026-09-07, Sếp
+/// Trương Văn Nhân: "Cắt xong thì qua KCS, qua từng công đoạn thì đều phải qua KCS" - cùng tinh
+/// thần PieceStepBundle bên VTTP nhưng bóc theo CỠ ĐOẠN qua StepBatchSegment, không phải số lượng
+/// phẳng). Tổ Phôi gom các StepBatch CHƯA gửi (stepBundleId NULL) của (cutBundleId, step) thành 1
+/// bundle rồi gửi KCS.
+///
+/// KCS chấm qua QcReview.stepBundleId (KHÔNG nằm trong XOR qc_reviews_goods_xor_chk - CÙNG cách
+/// cutBundleId là cột lọc PHỤ, dòng review vẫn ghi steelIssueId là leg chính, xem QcReview doc
+/// comment) - chấm THEO CỠ ĐOẠN qua QcReviewSegment, CHỈ Đạt/Không đạt (mirror reviewCutBundle(),
+/// KHÔNG có khái niệm "phế/sửa được" - đúng quyết định cùng ngày cho nhánh VTTP, áp dụng luôn cho
+/// Sắt vì đây vốn là hành vi GỐC của Sắt, không phải thay đổi mới).
+model StepBundle {
+  id            BigInt           @id @default(autoincrement())
+  cutBundleId   BigInt
+  step          ProcessStep
+  status        StepBundleStatus @default(AWAITING_QC)
+  submittedAt   DateTime         @default(now())
+  submittedById String
+
+  cutBundle   CutBundle   @relation(fields: [cutBundleId], references: [id])
+  submittedBy User        @relation("StepBundleSubmittedBy", fields: [submittedById], references: [id])
+  batches     StepBatch[]
+  qcReviews   QcReview[]
+
+  @@index([cutBundleId, step])
+  @@index([status])
+  @@map("step_bundles")
 }
 
 /// Số đoạn ĐÃ gia công qua step này theo từng cỡ đoạn - Phôi khai số THỰC làm được, không suy từ
@@ -2361,14 +2409,24 @@ model StepBatchSegment {
 model QcReview {
   id                BigInt   @id @default(autoincrement())
   steelIssueId      BigInt?
-  /// Nhánh Hàn/Sơn (Phase 9d, 2026-08-11) - XOR với steelIssueId, CHECK DB
-  /// qc_reviews_goods_xor_chk đã áp từ Phase 9, chỉ thiếu FK thật tới nay.
+  /// Nhánh Hàn/Sơn (Phase 9d, 2026-08-11) - XOR với steelIssueId/pieceStepBundleId, CHECK DB
+  /// qc_reviews_goods_xor_chk (mở rộng 3 cột 2026-09-07, xem pieceStepBundleId dưới).
   productionBatchId BigInt?
   /// Đợt cắt được chấm (2026-09-05) - KCS Phôi giờ duyệt theo TỪNG đợt cắt, không phải cả lô
   /// nhận. KHÔNG nằm trong XOR nói trên: dòng nhánh Phôi mới ghi CẢ steelIssueId (lô cha, giữ cho
   /// mọi truy vấn/ràng buộc cũ nguyên vẹn - kể cả CHECK qc_reviews_goods_xor_chk) LẪN cutBundleId.
   /// NULL = dữ liệu cũ, chấm cho cả lô.
   cutBundleId       BigInt?
+  /// Đợt gửi KCS theo công đoạn PHỤ của Sắt (2026-09-07, xem StepBundle) - CÙNG vai trò cutBundleId
+  /// ở trên (cột lọc PHỤ, KHÔNG nằm trong XOR), dòng review vẫn ghi steelIssueId là leg chính.
+  stepBundleId      BigInt?
+  /// Nhánh công đoạn vật tư thành phẩm (2026-09-07, xem PieceStepBundle) - XOR CÙNG
+  /// steelIssueId/productionBatchId (CHECK qc_reviews_goods_xor_chk mở rộng 3 cột). KHÔNG phải
+  /// con của productionBatchId dù cùng "Vật tư TP" - bundle được duyệt TRƯỚC KHI ProductionBatch
+  /// tồn tại (đó là bước "Chốt & gửi KCS" cuối, xảy ra SAU mọi công đoạn). Dùng CHUNG cơ chế "Bù
+  /// đủ" resolvedQty/phoiReportedAt/phoiReportedQty bên dưới (cùng ý nghĩa nhánh productionBatchId
+  /// - 1 review = 1 đơn vị outstanding duy nhất, không có "cỡ đoạn" để bóc).
+  pieceStepBundleId BigInt?
   failedQty         Int
   /// CHECK scrapQty <= failedQty (validate service, giống assertExactlyOneGoodsLeg style).
   scrapQty          Int?
@@ -2377,10 +2435,28 @@ model QcReview {
   photoUrl          String?
   reviewedAt        DateTime @default(now())
   reviewedById      String
+  /// "Bù đủ" cho nhánh Hàn/Sơn/VTTP (2026-09-07, productionBatchId != null HOẶC pieceStepBundleId
+  /// != null - CÙNG ngữ nghĩa, dùng chung 3 cột này) - CHỈ áp dụng cho phần
+  /// SỬA ĐƯỢC (failedQty - (scrapQty ?? 0)), KHÔNG áp dụng cho phần đã cấp `scrapQty` (hàng hỏng
+  /// hẳn, xử lý qua ReplenishRequest riêng - xin nguyên liệu MỚI, không phải "sửa lại"). Cùng ngữ
+  /// nghĩa QcReviewSegment bên Sắt nhưng đặt Ở CẤP REVIEW (không phải segment) vì nhánh này không
+  /// có "cỡ đoạn" để bóc - 1 review = 1 đơn vị outstanding duy nhất. resolvedQty tăng KHÔNG chỉ để
+  /// hiển thị: recheckProductionBatch() cộng thẳng phần mới xác nhận vào
+  /// ProductionBatch.reportedQty (dù batch đã QC_DONE) để "đã đạt" tính đúng mà không cần đụng
+  /// logic tổng hợp `passedQty` dùng chung Hàn/Sơn/VTTP (xem production-batches.service.ts).
+  /// Luôn NULL/0 với nhánh steelIssueId/cutBundleId (outstanding của nhánh đó nằm ở
+  /// QcReviewSegment, không phải ở đây).
+  resolvedQty       Int      @default(0)
+  /// Lúc thợ (Phôi/Hàn/Sơn) bấm "Bù đủ" - null = chưa báo hoặc KCS vừa duyệt lại thấy còn hỏng.
+  phoiReportedAt    DateTime?
+  /// Số lượng thợ TỰ KHAI đã sửa xong - THUẦN THAM KHẢO cho KCS, không tự cộng vào resolvedQty.
+  phoiReportedQty   Int?
 
   steelIssue        SteelIssue?        @relation(fields: [steelIssueId], references: [id])
   productionBatch   ProductionBatch?   @relation(fields: [productionBatchId], references: [id])
   cutBundle         CutBundle?         @relation(fields: [cutBundleId], references: [id])
+  stepBundle        StepBundle?        @relation(fields: [stepBundleId], references: [id])
+  pieceStepBundle   PieceStepBundle?   @relation(fields: [pieceStepBundleId], references: [id])
   defectReason      DefectReason?      @relation(fields: [defectReasonId], references: [id])
   reviewedBy        User               @relation("QcReviewReviewedBy", fields: [reviewedById], references: [id])
   replenishRequests ReplenishRequest[]
@@ -2389,6 +2465,8 @@ model QcReview {
   @@index([steelIssueId])
   @@index([productionBatchId])
   @@index([cutBundleId])
+  @@index([stepBundleId])
+  @@index([pieceStepBundleId])
   @@map("qc_reviews")
 }
 
@@ -2745,16 +2823,63 @@ model PieceStepBatch {
   pieceId           BigInt
   step              ProcessStep
   qty               Int
+  /// Đợt gửi KCS đã gom dòng này vào (2026-09-07, xem PieceStepBundle) - NULL = đã báo nhưng CHƯA
+  /// gửi KCS (còn "nằm trong giỏ" chờ gom thêm hoặc gửi riêng ngay). Gán 1 lần lúc submit, không
+  /// tách/gộp lại sau đó - cùng bất biến CutPatternSegment (Sắt) "output của 1 đợt không sửa lại".
+  pieceStepBundleId BigInt?
   /// Client-supplied key cho POST /production-orders/:id/piece-step-batches - resolve-or-return,
   /// cùng idiom ProductionBatch.idempotencyKey/SteelIssue.idempotencyKey.
   idempotencyKey    String?     @unique
   reportedAt        DateTime    @default(now())
   reportedById      String
 
-  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
-  piece           Piece           @relation(fields: [pieceId], references: [id])
-  reportedBy      User            @relation("PieceStepBatchReportedBy", fields: [reportedById], references: [id])
+  productionOrder ProductionOrder  @relation(fields: [productionOrderId], references: [id])
+  piece           Piece            @relation(fields: [pieceId], references: [id])
+  pieceStepBundle PieceStepBundle? @relation(fields: [pieceStepBundleId], references: [id])
+  reportedBy      User             @relation("PieceStepBatchReportedBy", fields: [reportedById], references: [id])
 
   @@index([productionOrderId, pieceId, step])
+  @@index([pieceStepBundleId])
   @@map("piece_step_batches")
+}
+
+enum PieceStepBundleStatus {
+  AWAITING_QC
+  QC_PASSED
+}
+
+/// "Đợt gửi KCS" theo TỪNG CÔNG ĐOẠN cho vật tư thành phẩm (2026-09-07) - mirror CutBundle (Sắt)
+/// nhưng phẳng hơn (không có "cỡ đoạn" để bóc, giống PieceStepBatch: 1 review = 1 đơn vị
+/// outstanding duy nhất, dùng CHUNG cơ chế "Bù đủ" resolvedQty/phoiReportedAt/phoiReportedQty trên
+/// QcReview đã có sẵn cho nhánh productionBatchId - xem QcReview doc comment).
+///
+/// Tổ Phôi gom các PieceStepBatch CHƯA gửi (pieceStepBundleId NULL) của (order, piece, step) thành
+/// 1 bundle rồi gửi KCS - KHÔNG chờ công đoạn khác xong trước (quyết định nghiệp vụ 2026-09-07,
+/// Sếp Trương Văn Nhân qua chat nội bộ: "để cho đơn giản thì không cần ràng buộc, cứ để thoải mái"
+/// - đổi từ hành vi CŨ ở ProductionBatchesService.recordPieceStepBatch() từng chặn cứng "báo bước
+/// sau vượt bước liền trước", nay chỉ còn CẢNH BÁO không chặn, xem getBatchPlan()).
+///
+/// KHÔNG tạo/đổi ProductionBatch.reportedQty - đó vẫn là điểm DUY NHẤT sinh sản lượng thật (bước
+/// "Chốt & gửi KCS" cuối cùng, ProductionBatchesService.create() không đổi gì). Bundle này thuần
+/// là lớp kiểm tra chất lượng trung gian theo công đoạn, tách biệt hoàn toàn khỏi sản lượng.
+model PieceStepBundle {
+  id                BigInt                @id @default(autoincrement())
+  productionOrderId BigInt
+  pieceId           BigInt
+  step              ProcessStep
+  /// Σ PieceStepBatch.qty được gom vào đợt này lúc gửi - immutable sau khi tạo.
+  qty               Int
+  status            PieceStepBundleStatus @default(AWAITING_QC)
+  submittedAt       DateTime              @default(now())
+  submittedById     String
+
+  productionOrder ProductionOrder  @relation(fields: [productionOrderId], references: [id])
+  piece           Piece            @relation(fields: [pieceId], references: [id])
+  submittedBy     User             @relation("PieceStepBundleSubmittedBy", fields: [submittedById], references: [id])
+  batches         PieceStepBatch[]
+  qcReviews       QcReview[]
+
+  @@index([productionOrderId, pieceId, step])
+  @@index([status])
+  @@map("piece_step_bundles")
 }

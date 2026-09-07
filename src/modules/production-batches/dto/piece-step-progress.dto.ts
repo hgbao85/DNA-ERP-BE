@@ -12,9 +12,17 @@ import { PROCESS_STEPS } from '../../../common/constants/process-steps.constant'
 export class PieceStepProgressDto {
   @Expose() @ApiProperty({ enum: PROCESS_STEPS }) step!: ProcessStep;
   @Expose() @ApiProperty() requiredQty!: number;
-  /** Σ PieceStepBatch.qty của đúng bước này - append-only, không trừ lỗi (không có khái niệm QC
-   *  theo từng bước ở đây, chỉ có KCS duyệt lô cuối cùng qua ProductionBatch). */
+  /** Σ PieceStepBatch.qty của đúng bước này (gộp cả đã gửi KCS lẫn chưa) - append-only, không trừ
+   *  lỗi. */
   @Expose() @ApiProperty() doneQty!: number;
+  /** Σ PieceStepBundle.qty (MỌI status) của đúng bước này (2026-09-07) - "còn chưa gửi KCS" =
+   *  doneQty - submittedQty, dùng cho nút "Gửi KCS" ở FE (chỉ gửi được phần này). */
+  @Expose() @ApiProperty() submittedQty!: number;
+  /** Σ PieceStepBundle.qty đã KCS duyệt (status=QC_PASSED) của đúng bước này (2026-09-07, xem
+   *  PieceStepBundle) - dùng để FE tự hiện CẢNH BÁO (không chặn) khi doneQty của bước SAU vượt
+   *  passedQty của bước liền TRƯỚC (theo processSteps đã chuẩn hoá thứ tự), từ khi BE bỏ chặn cứng
+   *  "vượt bước trước" ở recordPieceStepBatch(). 0 khi chưa có bundle nào được duyệt. */
+  @Expose() @ApiProperty() passedQty!: number;
 
   constructor(partial: Partial<PieceStepProgressDto>) {
     Object.assign(this, partial);

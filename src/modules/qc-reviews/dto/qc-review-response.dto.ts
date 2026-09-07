@@ -30,6 +30,12 @@ export class QcReviewResponseDto {
   /** Đợt cắt được chấm (2026-09-05) - null với review CŨ (chấm cả lô, trước khi hạ vòng đời
    *  xuống đợt cắt) hoặc review nhánh Hàn/Sơn. */
   @Expose() @ApiPropertyOptional({ nullable: true }) cutBundleId!: string | null;
+  /** Đợt gửi KCS theo công đoạn PHỤ (Uốn/Dập/Tán/..., 2026-09-07, xem StepBundle) - null với mọi
+   *  nhánh khác, kể cả nhánh Cắt (cutBundleId ở trên). */
+  @Expose() @ApiPropertyOptional({ nullable: true }) stepBundleId!: string | null;
+  /** Đợt gửi KCS theo công đoạn (VTTP, 2026-09-07, xem PieceStepBundle) - null với mọi nhánh
+   *  khác. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) pieceStepBundleId!: string | null;
   /** Tổng dẫn xuất từ segments[] cho nhánh Phôi (xem QcReview doc comment) - nhánh Hàn/Sơn vẫn là
    *  số gốc người dùng nhập (segments luôn rỗng ở nhánh đó). */
   @Expose() @ApiProperty() failedQty!: number;
@@ -40,6 +46,12 @@ export class QcReviewResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) photoUrl!: string | null;
   @Expose() @ApiProperty() reviewedAt!: Date;
   @Expose() @ApiProperty() reviewedById!: string;
+  /** "Bù đủ" Ở CẤP REVIEW (2026-09-07) - CHỈ có ý nghĩa với nhánh Hàn/Sơn/VTTP
+   *  (productionBatchId != null); nhánh Phôi/Sắt dùng segments[] bên dưới, luôn 0/null ở đây.
+   *  outstanding = failedQty - (scrapQty ?? 0) - resolvedQty. */
+  @Expose() @ApiProperty() resolvedQty!: number;
+  @Expose() @ApiPropertyOptional({ nullable: true }) phoiReportedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) phoiReportedQty!: number | null;
   /** Rỗng cho nhánh Hàn/Sơn (production_batch chưa có "cỡ" gì để bóc). */
   @Expose()
   @Type(() => QcReviewSegmentResponseDto)

@@ -12,6 +12,7 @@ import {
   Prisma,
   ProcessStep,
   ProductionOrderFloorStage,
+  StepBundleStatus,
   StockLedgerRefType,
   SteelIssueStatus,
 } from '../../generated/prisma/client';
@@ -32,7 +33,6 @@ import {
   PhoiProgressItemResponseDto,
   PhoiProgressSegmentDto,
 } from './dto/phoi-progress-response.dto';
-import { CompleteStepDto } from './dto/complete-step.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { CutBundleResponseDto, CutPatternSegmentResponseDto } from './dto/cut-bundle-response.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
@@ -41,6 +41,10 @@ import { RecordStepBatchDto } from './dto/record-step-batch.dto';
 import { SteelIssuePlanItemResponseDto } from './dto/steel-issue-plan-item-response.dto';
 import { SteelIssueResponseDto } from './dto/steel-issue-response.dto';
 import { StepBatchResponseDto, StepBatchSegmentResponseDto } from './dto/step-batch-response.dto';
+import {
+  StepBundleResponseDto,
+  StepBundleSegmentResponseDto,
+} from './dto/step-bundle-response.dto';
 
 const STEEL_ISSUE_INCLUDE = {
   productionInvoice: { select: { code: true, salesOrder: { select: { code: true } } } },
@@ -380,11 +384,13 @@ export class SteelIssuesService {
 
   async getBundles(id: string): Promise<CutBundleResponseDto[]> {
     const detail = await this.findDetailOrThrow(id);
-    const requiredSteps = await this.resolveRequiredSteps(
-      detail.productionInvoiceId,
-      detail.materialId,
+    const [requiredSteps, stepBundlesByCutBundle] = await Promise.all([
+      this.resolveRequiredSteps(detail.productionInvoiceId, detail.materialId),
+      this.buildStepBundlesByCutBundle(detail.bundles.map((b) => b.id)),
+    ]);
+    return detail.bundles.map((b) =>
+      this.toBundleResponseDto(b, requiredSteps, stepBundlesByCutBundle.get(b.id.toString()) ?? []),
     );
-    return detail.bundles.map((b) => this.toBundleResponseDto(b, requiredSteps));
   }
 
   /**
@@ -425,10 +431,12 @@ export class SteelIssuesService {
         );
       }
     }
+    const stepBundlesByCutBundle = await this.buildStepBundlesByCutBundle(bundles.map((b) => b.id));
     return bundles.map((b) =>
       this.toBundleResponseDto(
         b,
         stepsByKey.get(`${b.steelIssue.productionInvoiceId}:${b.steelIssue.materialId}`) ?? [],
+        stepBundlesByCutBundle.get(b.id.toString()) ?? [],
       ),
     );
   }
@@ -629,56 +637,9 @@ export class SteelIssuesService {
   }
 
   /**
-   * "Xong, mời KCS" - RECEIVED sang AWAITING_QC (hoặc IN_PROCESS nếu còn công đoạn chi tiết chưa
-   * đánh dấu). CỐ Ý là hành động riêng, KHÔNG tự chuyển khi "Còn lại" về 0: ca cắt thiếu vì sắt
-   * hỏng/cong là có thật và vẫn phải đi tiếp được, tự động hoá theo định mức sẽ làm những đợt đó
-   * kẹt vĩnh viễn.
-   *
-   * `actualBarCount` giờ SUY từ tổng các đợt đã nhập, không phải một ô người dùng tự gõ - hai
-   * nguồn cho cùng một con số thì kiểu gì cũng lệch.
-   */
-  async finishCutting(id: string): Promise<SteelIssueResponseDto> {
-    const issue = await this.findOneOrThrow(id);
-    if (issue.status !== SteelIssueStatus.RECEIVED) {
-      throw new ConflictException(
-        `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ RECEIVED mới báo cắt xong được`,
-      );
-    }
-    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'báo cắt xong');
-    const used = await this.prisma.cutBundle.aggregate({
-      where: { steelIssueId: issue.id },
-      _sum: { barCount: true },
-    });
-    const actualBarCount = used._sum.barCount ?? 0;
-    if (actualBarCount === 0) {
-      throw new BadRequestException(
-        'Chưa nhập đợt cắt nào cho lệnh này - nhập số đoạn đã cắt trước khi mời KCS',
-      );
-    }
-
-    const requiredSteps = await this.resolveRequiredSteps(
-      issue.productionInvoiceId,
-      issue.materialId,
-    );
-    const completedSteps: ProcessStep[] = [ProcessStep.CAT];
-    const done = requiredSteps.every((step) => completedSteps.includes(step));
-
-    await this.prisma.steelIssue.update({
-      where: { id: issue.id },
-      data: {
-        status: done ? SteelIssueStatus.AWAITING_QC : SteelIssueStatus.IN_PROCESS,
-        completedSteps,
-        actualBarCount,
-        completedAt: done ? new Date() : null,
-      },
-    });
-
-    const reloaded = await this.findOneOrThrow(id);
-    return this.toResponseDto(reloaded, requiredSteps);
-  }
-
-  /**
-   * "Báo cắt xong" cho ĐÚNG 1 ĐỢT CẮT (2026-09-05) - thay finishCutting() ở luồng mới.
+   * "Báo cắt xong" cho ĐÚNG 1 ĐỢT CẮT (2026-09-05) - thay finishCutting() cũ (XOÁ 2026-09-07, dead
+   * code từ trước - gate `status === RECEIVED` không còn nơi nào set được nữa sau khi vòng đời hạ
+   * xuống CutBundle).
    *
    * Vì sao tách khỏi lô nhận: trạng thái đặt ở lô (SteelIssue) buộc Phôi phải cắt hết TOÀN BỘ số
    * cây kho giao mới gửi KCS được, và sắt kho giao bù sau đó không cắt tiếp được (recordCutBatch
@@ -689,9 +650,13 @@ export class SteelIssuesService {
    * SteelIssue.status vẫn được cập nhật, nhưng CHỈ NHƯ ROLL-UP HIỂN THỊ (2026-09-05) - xem
    * syncIssueStatusFromBundles(): các màn KHÔNG đổi (XacNhanNhanSatPage.tsx, ThongKePagePlan.tsx)
    * vẫn đọc issue.status/completedAt/actualBarCount để suy tiến độ tổng quan, phải tiếp tục thấy
-   * đúng dù giờ nguồn sự thật THẬT SỰ (chặn hành động, KCS chấm) nằm ở CutBundle.status. Đợt cắt
-   * còn công đoạn phụ (Uốn/Dập...) chưa đánh dấu thì GIỮ NGUYÊN CUTTING - không có nấc IN_PROCESS
-   * riêng ở cấp bundle, tiến độ đọc qua completedSteps.
+   * đúng dù giờ nguồn sự thật THẬT SỰ (chặn hành động, KCS chấm) nằm ở CutBundle.status.
+   *
+   * KHÔNG còn chặn theo "công đoạn phụ chưa xong" (2026-09-07, BỎ so với bản gốc 2026-09-05) -
+   * quyết định nghiệp vụ của Sếp Trương Văn Nhân: "Cắt xong thì qua KCS, qua từng công đoạn thì
+   * đều phải qua KCS" - Cắt (đợt này) tự gửi KCS ngay khi Phôi báo xong, KHÔNG chờ Uốn/Dập/Tán...
+   * xong trước. Các công đoạn phụ giờ tự gửi KCS riêng qua submitStepBundle() (xem StepBundle doc
+   * comment schema), độc lập hoàn toàn với vòng đời CutBundle này.
    */
   async finishCutBundle(bundleId: string): Promise<CutBundleResponseDto> {
     const bundle = await this.findBundleOrThrow(bundleId);
@@ -705,17 +670,6 @@ export class SteelIssuesService {
       bundle.steelIssue.productionInvoiceId,
       'báo cắt xong',
     );
-
-    const requiredSteps = await this.resolveRequiredSteps(
-      bundle.steelIssue.productionInvoiceId,
-      bundle.steelIssue.materialId,
-    );
-    const missing = requiredSteps.filter((step) => !bundle.completedSteps.includes(step));
-    if (missing.length > 0) {
-      throw new BadRequestException(
-        `Đợt cắt ${bundleId} còn công đoạn chưa xong: ${missing.join(', ')} - đánh dấu xong trước khi mời KCS`,
-      );
-    }
 
     const updated = await this.prisma.cutBundle.update({
       where: { id: bundle.id },
@@ -765,40 +719,47 @@ export class SteelIssuesService {
     });
   }
 
-  /** Đánh dấu xong 1 công đoạn phụ (Uốn/Dập/...) cho ĐÚNG 1 đợt cắt - mirror completeStep() cũ
-   *  vốn đánh cho cả lô nhận. Chỉ cộng vào completedSteps, KHÔNG tự chuyển trạng thái (Phôi bấm
-   *  "Báo cắt xong" riêng, cùng lý do finishCutting cũ cố ý tách 2 hành động). */
-  async completeBundleStep(bundleId: string, step: ProcessStep): Promise<CutBundleResponseDto> {
-    const bundle = await this.findBundleOrThrow(bundleId);
-    if (bundle.status !== CutBundleStatus.CUTTING) {
-      throw new ConflictException(
-        `Đợt cắt ${bundleId} đang ở trạng thái ${bundle.status} - chỉ đợt đang cắt mới đánh dấu công đoạn được`,
-      );
-    }
+  /**
+   * Phôi gom mọi StepBatch CHƯA gửi (stepBundleId NULL) của (cutBundleId, step) thành 1 "đợt gửi
+   * KCS" (2026-09-07, xem StepBundle doc comment schema) - thay hẳn completeBundleStep() cũ (cờ tự
+   * khai, XOÁ). KHÔNG re-validate định mức ở đây (đã validate lúc recordStepBatch() tạo từng dòng)
+   * - việc DUY NHẤT ở đây là gom + khoá lại các dòng đã gom, cùng khuôn
+   * ProductionBatchesService.submitPieceStep() (VTTP).
+   */
+  async submitStepBundle(
+    cutBundleId: string,
+    step: ProcessStep,
+    submittedById: string,
+  ): Promise<StepBundleResponseDto> {
+    const bundle = await this.findBundleOrThrow(cutBundleId);
     await assertPiHasActiveFloor(
       this.prisma,
       bundle.steelIssue.productionInvoiceId,
-      'đánh dấu công đoạn',
+      'gửi KCS công đoạn',
     );
-    const requiredSteps = await this.resolveRequiredSteps(
-      bundle.steelIssue.productionInvoiceId,
-      bundle.steelIssue.materialId,
-    );
-    if (!requiredSteps.includes(step)) {
-      throw new BadRequestException(
-        `Công đoạn '${step}' không có trong định mức của loại sắt này - không đánh dấu được`,
-      );
-    }
-    if (bundle.completedSteps.includes(step)) {
-      return this.toBundleResponseDto(bundle);
-    }
 
-    const updated = await this.prisma.cutBundle.update({
-      where: { id: bundle.id },
-      data: { completedSteps: { push: step } },
-      include: { segments: { include: { segmentSpec: true } } },
+    const created = await this.prisma.$transaction(async (tx) => {
+      const pending = await tx.stepBatch.findMany({
+        where: { cutBundleId: bundle.id, step, stepBundleId: null },
+        include: { segments: { include: { segmentSpec: true } } },
+      });
+      if (pending.length === 0 || pending.every((b) => b.segments.length === 0)) {
+        throw new BadRequestException(
+          `Đợt cắt ${cutBundleId} chưa có gì mới để gửi KCS ở công đoạn '${step}'`,
+        );
+      }
+
+      const stepBundle = await tx.stepBundle.create({
+        data: { cutBundleId: bundle.id, step, submittedById },
+      });
+      await tx.stepBatch.updateMany({
+        where: { id: { in: pending.map((b) => b.id) } },
+        data: { stepBundleId: stepBundle.id },
+      });
+      return { stepBundle, pending };
     });
-    return this.toBundleResponseDto(updated);
+
+    return this.toStepBundleResponseDto(created.stepBundle, created.pending);
   }
 
   private async findBundleOrThrow(id: string) {
@@ -910,7 +871,7 @@ export class SteelIssuesService {
         specMeta.set(specKey, {
           materialId: row.segmentSpec.materialId.toString(),
           materialCode: row.segmentSpec.material.code,
-          materialName: row.segmentSpec.material.name,
+          materialName: this.materialLabel(row.segmentSpec.material),
           cutLengthMm: row.segmentSpec.cutLengthMm.toNumber(),
         });
       }
@@ -942,7 +903,7 @@ export class SteelIssuesService {
         specMeta.set(o.id.toString(), {
           materialId: o.materialId.toString(),
           materialCode: o.material.code,
-          materialName: o.material.name,
+          materialName: this.materialLabel(o.material),
           cutLengthMm: o.cutLengthMm.toNumber(),
         });
       }
@@ -1061,7 +1022,7 @@ export class SteelIssuesService {
         specMeta.set(specKey, {
           materialId: row.segmentSpec.materialId.toString(),
           materialCode: row.segmentSpec.material.code,
-          materialName: row.segmentSpec.material.name,
+          materialName: this.materialLabel(row.segmentSpec.material),
           cutLengthMm: row.segmentSpec.cutLengthMm.toNumber(),
         });
       }
@@ -1089,7 +1050,7 @@ export class SteelIssuesService {
         specMeta.set(o.id.toString(), {
           materialId: o.materialId.toString(),
           materialCode: o.material.code,
-          materialName: o.material.name,
+          materialName: this.materialLabel(o.material),
           cutLengthMm: o.cutLengthMm.toNumber(),
         });
       }
@@ -1126,35 +1087,35 @@ export class SteelIssuesService {
   }
 
   /**
-   * Ghi 1 đợt "đã gia công" cho công đoạn chi tiết SAU Cắt (Uốn/Dập/...) - append-only, cộng dồn,
-   * mirror recordCutBatch() nhưng KHÔNG có cân bằng vật chất (bước này không tác động lên cây sắt,
-   * chỉ xử lý tiếp trên các đoạn ĐÃ cắt ra). Chặn vượt số đã cắt (catDone) - không thể gia công
-   * nhiều hơn số đoạn thực có. CHỈ chạy khi IN_PROCESS, và step chưa nằm trong completedSteps -
-   * "Xong {bước}" (completeStep) chốt lại, không nhập thêm được sau đó.
+   * Ghi 1 đợt "đã gia công" cho công đoạn chi tiết SAU Cắt (Uốn/Dập/...) CỦA ĐÚNG 1 ĐỢT CẮT
+   * (2026-09-07, scope lại theo cutBundleId - trước đây scope theo steelIssueId + gate IN_PROCESS,
+   * gate đó KHÔNG BAO GIỜ đạt được nữa sau khi vòng đời hạ xuống CutBundle 2026-09-05, thành dead
+   * code). Append-only, cộng dồn, mirror recordCutBatch() nhưng KHÔNG có cân bằng vật chất (bước
+   * này không tác động lên cây sắt, chỉ xử lý tiếp trên các đoạn ĐÃ cắt ra TRONG CHÍNH đợt này -
+   * catDone giờ tính theo `bundle.segments`, không phải PI-wide). KHÔNG còn chặn theo
+   * completedSteps (đã xoá hẳn khái niệm đó, xem StepBundle) - báo được bất kỳ lúc nào, kể cả sau
+   * khi đã gửi KCS 1 phần (StepBatch mới vẫn `stepBundleId = null`, chờ gửi đợt tiếp theo).
    */
-  async recordStepBatch(id: string, dto: RecordStepBatchDto): Promise<StepBatchResponseDto> {
+  async recordStepBatch(
+    cutBundleId: string,
+    dto: RecordStepBatchDto,
+  ): Promise<StepBatchResponseDto> {
     if (dto.step === ProcessStep.CAT) {
       throw new BadRequestException('Công đoạn Cắt dùng route cut-batches riêng, không qua đây');
     }
-    const issue = await this.findOneOrThrow(id);
-    if (issue.status !== SteelIssueStatus.IN_PROCESS) {
-      throw new ConflictException(
-        `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ IN_PROCESS mới nhập được công đoạn chi tiết`,
-      );
-    }
-    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'nhập công đoạn chi tiết');
+    const bundle = await this.findBundleOrThrow(cutBundleId);
+    await assertPiHasActiveFloor(
+      this.prisma,
+      bundle.steelIssue.productionInvoiceId,
+      'nhập công đoạn chi tiết',
+    );
     const requiredSteps = await this.resolveRequiredSteps(
-      issue.productionInvoiceId,
-      issue.materialId,
+      bundle.steelIssue.productionInvoiceId,
+      bundle.steelIssue.materialId,
     );
     if (!requiredSteps.includes(dto.step)) {
       throw new BadRequestException(
         `Công đoạn ${dto.step} không thuộc danh sách công đoạn đã chọn sẵn của vật tư này`,
-      );
-    }
-    if (issue.completedSteps.includes(dto.step)) {
-      throw new ConflictException(
-        `Công đoạn ${dto.step} của đợt này đã báo xong - không nhập thêm được`,
       );
     }
 
@@ -1163,34 +1124,18 @@ export class SteelIssuesService {
       throw new BadRequestException('Cùng một cỡ đoạn khai làm nhiều dòng - gộp lại thành 1 dòng');
     }
 
-    const [specs, allowedSpecIds, catDoneRows, stepDoneRows] = await Promise.all([
-      this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } }),
-      this.findStepSegmentSpecIds(issue.productionInvoiceId, dto.step),
-      this.prisma.cutPatternSegment.findMany({
-        where: {
-          segmentSpecId: { in: specIds },
-          cutBundle: { steelIssue: { productionInvoiceId: issue.productionInvoiceId } },
-        },
-        select: { segmentSpecId: true, qty: true },
-      }),
+    const [allowedSpecIds, stepDoneRows] = await Promise.all([
+      this.findStepSegmentSpecIds(bundle.steelIssue.productionInvoiceId, dto.step),
       this.prisma.stepBatchSegment.findMany({
         where: {
           segmentSpecId: { in: specIds },
-          stepBatch: {
-            step: dto.step,
-            steelIssue: { productionInvoiceId: issue.productionInvoiceId },
-          },
+          stepBatch: { cutBundleId: bundle.id, step: dto.step },
         },
         select: { segmentSpecId: true, qty: true },
       }),
     ]);
 
-    const specById = new Map(specs.map((sp) => [sp.id.toString(), sp]));
-    const catDoneBySpec = new Map<string, number>();
-    for (const r of catDoneRows) {
-      const k = r.segmentSpecId.toString();
-      catDoneBySpec.set(k, (catDoneBySpec.get(k) ?? 0) + r.qty);
-    }
+    const specById = new Map(bundle.segments.map((s) => [s.segmentSpecId.toString(), s]));
     const stepDoneBySpec = new Map<string, number>();
     for (const r of stepDoneRows) {
       const k = r.segmentSpecId.toString();
@@ -1201,31 +1146,29 @@ export class SteelIssuesService {
       const specKey = parseBigIntId(seg.segmentSpecId).toString();
       const spec = specById.get(specKey);
       if (!spec) {
-        throw new NotFoundException(`Cỡ đoạn ${seg.segmentSpecId} không tồn tại`);
-      }
-      if (spec.materialId !== issue.materialId) {
         throw new BadRequestException(
-          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt xuất này`,
+          `Cỡ đoạn ${seg.segmentSpecId} không nằm trong đợt cắt ${cutBundleId}`,
         );
       }
       if (!allowedSpecIds.has(specKey)) {
         throw new BadRequestException(
-          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không cần công đoạn ${dto.step} theo định mức`,
+          `Cỡ đoạn ${spec.segmentSpec.cutLengthMm.toString()}mm không cần công đoạn ${dto.step} theo định mức`,
         );
       }
-      const catDone = catDoneBySpec.get(specKey) ?? 0;
+      const catDone = spec.qty;
       const stepDoneSoFar = stepDoneBySpec.get(specKey) ?? 0;
       if (stepDoneSoFar + seg.qty > catDone) {
         throw new BadRequestException(
-          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm: đã cắt ${catDone} đoạn, đã báo ${dto.step} ` +
-            `${stepDoneSoFar} đoạn - không thể báo thêm ${seg.qty} (vượt số đã cắt)`,
+          `Cỡ đoạn ${spec.segmentSpec.cutLengthMm.toString()}mm: đợt này cắt ${catDone} đoạn, đã báo ` +
+            `${dto.step} ${stepDoneSoFar} đoạn - không thể báo thêm ${seg.qty} (vượt số đã cắt)`,
         );
       }
     }
 
     const created = await this.prisma.stepBatch.create({
       data: {
-        steelIssueId: issue.id,
+        steelIssueId: bundle.steelIssueId,
+        cutBundleId: bundle.id,
         step: dto.step,
         segments: {
           create: dto.segments.map((seg) => ({
@@ -1268,46 +1211,6 @@ export class SteelIssuesService {
       select: { segmentSpecId: true },
     });
     return new Set(rows.map((r) => r.segmentSpecId.toString()));
-  }
-
-  /**
-   * Đánh dấu 1 công đoạn chi tiết (uốn/dập/...) xong sau khi đã cắt (IN_PROCESS) - chuyển
-   * AWAITING_QC ngay khi mọi requiredSteps đã có mặt trong completedSteps. Idempotent với step đã
-   * đánh dấu (double-click không lỗi).
-   */
-  async completeStep(id: string, dto: CompleteStepDto): Promise<SteelIssueResponseDto> {
-    const issue = await this.findOneOrThrow(id);
-    if (issue.status !== SteelIssueStatus.IN_PROCESS) {
-      throw new ConflictException(
-        `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ IN_PROCESS mới đánh dấu công đoạn được`,
-      );
-    }
-    const requiredSteps = await this.resolveRequiredSteps(
-      issue.productionInvoiceId,
-      issue.materialId,
-    );
-    if (!requiredSteps.includes(dto.step)) {
-      throw new BadRequestException(
-        `Công đoạn ${dto.step} không thuộc danh sách công đoạn đã chọn sẵn của vật tư này`,
-      );
-    }
-    if (issue.completedSteps.includes(dto.step)) {
-      return this.toResponseDto(issue, requiredSteps);
-    }
-    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'đánh dấu công đoạn xong');
-
-    const completedSteps = [...issue.completedSteps, dto.step];
-    const done = requiredSteps.every((s) => completedSteps.includes(s));
-    const updated = await this.prisma.steelIssue.update({
-      where: { id: issue.id },
-      data: {
-        completedSteps,
-        status: done ? SteelIssueStatus.AWAITING_QC : SteelIssueStatus.IN_PROCESS,
-        completedAt: done ? new Date() : null,
-      },
-      include: STEEL_ISSUE_INCLUDE,
-    });
-    return this.toResponseDto(updated, requiredSteps);
   }
 
   /**
@@ -1515,7 +1418,7 @@ export class SteelIssuesService {
       this.buildStockInfoByMaterial(invoice.id, materialIdsUsed, requiredByMaterial),
       this.prisma.material.findMany({
         where: { id: { in: materialIdsUsed } },
-        select: { id: true, code: true, name: true },
+        select: { id: true, code: true, name: true, spec: true },
       }),
     ]);
     const materialMeta = new Map(materials.map((m) => [m.id.toString(), m]));
@@ -1528,7 +1431,7 @@ export class SteelIssuesService {
       return new SteelIssuePlanItemResponseDto({
         materialId: key,
         materialCode: meta.code,
-        materialName: meta.name,
+        materialName: this.materialLabel(meta),
         requiredBars: req?.requiredBars ?? 0,
         bestStockLengthMm: req?.bestStockLengthMm ?? null,
         issuedBarCount: issuedByMaterial.get(key) ?? 0,
@@ -1780,6 +1683,7 @@ export class SteelIssuesService {
   private toBundleResponseDto(
     bundle: SteelIssueDetail['bundles'][number],
     requiredSteps: ProcessStep[] = [],
+    stepBundles: StepBundleResponseDto[] = [],
   ): CutBundleResponseDto {
     return new CutBundleResponseDto({
       id: bundle.id.toString(),
@@ -1802,7 +1706,105 @@ export class SteelIssuesService {
             qty: s.qty,
           }),
       ),
+      stepBundles,
     });
+  }
+
+  /** Gộp segments của mọi StepBatch đã gom vào 1 StepBundle (Σ theo segmentSpecId) - dùng cho cả
+   *  toStepBundleResponseDto() (1 bundle, ngay sau submit) lẫn buildStepBundlesByCutBundle() (N
+   *  bundle, cho danh sách). */
+  private toStepBundleResponseDto(
+    bundle: {
+      id: bigint;
+      cutBundleId: bigint;
+      step: ProcessStep;
+      status: StepBundleStatus;
+      submittedAt: Date;
+      submittedById: string;
+    },
+    batches: {
+      segments: {
+        segmentSpecId: bigint;
+        qty: number;
+        segmentSpec: { cutLengthMm: Prisma.Decimal };
+      }[];
+    }[],
+  ): StepBundleResponseDto {
+    const bySpec = new Map<string, { cutLengthMm: number; qty: number }>();
+    for (const batch of batches) {
+      for (const seg of batch.segments) {
+        const key = seg.segmentSpecId.toString();
+        const cur = bySpec.get(key);
+        bySpec.set(key, {
+          cutLengthMm: seg.segmentSpec.cutLengthMm.toNumber(),
+          qty: (cur?.qty ?? 0) + seg.qty,
+        });
+      }
+    }
+    return new StepBundleResponseDto({
+      id: bundle.id.toString(),
+      cutBundleId: bundle.cutBundleId.toString(),
+      step: bundle.step,
+      status: bundle.status,
+      submittedAt: bundle.submittedAt,
+      submittedById: bundle.submittedById,
+      segments: [...bySpec.entries()].map(
+        ([segmentSpecId, v]) =>
+          new StepBundleSegmentResponseDto({
+            segmentSpecId,
+            cutLengthMm: v.cutLengthMm,
+            qty: v.qty,
+          }),
+      ),
+    });
+  }
+
+  /** Mọi StepBundle của 1 tập CutBundle, nhóm lại theo cutBundleId - dùng cho getBundles()/
+   *  findAllBundles() embed `stepBundles` vào từng CutBundleResponseDto. */
+  private async buildStepBundlesByCutBundle(
+    cutBundleIds: bigint[],
+  ): Promise<Map<string, StepBundleResponseDto[]>> {
+    const result = new Map<string, StepBundleResponseDto[]>();
+    if (cutBundleIds.length === 0) return result;
+    const stepBundles = await this.prisma.stepBundle.findMany({
+      where: { cutBundleId: { in: cutBundleIds } },
+      orderBy: { submittedAt: 'desc' },
+    });
+    if (stepBundles.length === 0) return result;
+
+    const stepBundleIds = stepBundles.map((b) => b.id);
+    const batches = await this.prisma.stepBatch.findMany({
+      where: { stepBundleId: { in: stepBundleIds } },
+      include: { segments: { include: { segmentSpec: true } } },
+    });
+    const batchesByStepBundle = new Map<string, typeof batches>();
+    for (const b of batches) {
+      const key = b.stepBundleId!.toString();
+      const arr = batchesByStepBundle.get(key) ?? [];
+      arr.push(b);
+      batchesByStepBundle.set(key, arr);
+    }
+
+    for (const sb of stepBundles) {
+      const dto = this.toStepBundleResponseDto(sb, batchesByStepBundle.get(sb.id.toString()) ?? []);
+      const key = sb.cutBundleId.toString();
+      const arr = result.get(key) ?? [];
+      arr.push(dto);
+      result.set(key, arr);
+    }
+    return result;
+  }
+
+  /**
+   * "Tên hiển thị" của 1 vật tư = ghép `Material.name` (tên loại, vd "Sắt hộp") với `Material.spec`
+   * (quy cách, vd "25x50") thành "Sắt hộp 25x50" (2026-09-07, theo yêu cầu người dùng) - trước đây
+   * mọi nơi chỉ hiện `material.name` suông, dữ liệu cũ phải tự nhét quy cách vào thẳng cột `name`
+   * ("Sắt hộp 25x50") mới hiện đủ, khiến `name`/`spec` tách rời vô nghĩa dù DB đã có sẵn 2 cột
+   * riêng. `spec` rỗng (vật tư không phải Sắt, vd phụ kiện) thì chỉ hiện `name`, không thêm dấu
+   * cách thừa.
+   */
+  private materialLabel(material: { name: string; spec: string | null }): string {
+    return material.spec ? `${material.name} ${material.spec}` : material.name;
   }
 
   private toResponseDto(issue: SteelIssueRow, requiredSteps: ProcessStep[]): SteelIssueResponseDto {
@@ -1813,7 +1815,7 @@ export class SteelIssuesService {
       salesOrderCode: issue.productionInvoice.salesOrder?.code ?? null,
       materialId: issue.materialId.toString(),
       materialCode: issue.material.code,
-      materialName: issue.material.name,
+      materialName: this.materialLabel(issue.material),
       barLengthMm: issue.barLengthMm,
       barCount: issue.barCount,
       status: issue.status,

@@ -17,9 +17,11 @@ import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorat
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CreatePieceStepBatchDto } from './dto/create-piece-step-batch.dto';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
+import { ListPieceStepBundlesQueryDto } from './dto/list-piece-step-bundles-query.dto';
 import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
 import { ProductionBatchPlanBatchQueryDto } from './dto/production-batch-plan-batch-query.dto';
 import { ProductionBatchPlanQueryDto } from './dto/production-batch-plan-query.dto';
+import { SubmitPieceStepDto } from './dto/submit-piece-step.dto';
 import { ProductionBatchesService } from './production-batches.service';
 
 const VIEW = { module: PERMISSION_MODULES.PRODUCTION_BATCH, action: PermissionAction.VIEW };
@@ -60,6 +62,13 @@ export class ProductionBatchesController {
   @RequirePermissions(VIEW)
   findAllForOrder(@Param('id') id: string, @Query() query: PaginationQueryDto) {
     return this.productionBatchesService.findAllForOrder(id, query);
+  }
+
+  /** Phôi xem lại bundle theo công đoạn CỦA CHÍNH order này - trạng thái + Bù đủ (VatTuTpDetail.tsx). */
+  @Get('production-orders/:id/piece-step-bundles')
+  @RequirePermissions(VIEW)
+  findPieceStepBundlesForOrder(@Param('id') id: string) {
+    return this.productionBatchesService.findPieceStepBundlesForOrder(id);
   }
 
   /** Tổ Phôi/Hàn/Sơn tự tra pieceId thật để báo sản lượng - xem ProductionBatchesService.getBatchPlan(). */
@@ -128,6 +137,24 @@ export class ProductionBatchesController {
     );
   }
 
+  /**
+   * Phôi gom mọi PieceStepBatch CHƯA gửi của (order, piece, step) thành 1 "đợt gửi KCS" (2026-09-
+   * 07, xem PieceStepBundle doc comment BE) - KCS duyệt qua POST piece-step-bundles/:id/qc-review
+   * (qc-reviews.controller.ts). Đặt route TRÊN @Get('production-batches/:id') theo đúng tiền lệ đã
+   * ghi ở getBatchPlanBatch()/recordPieceStepBatch() dù path 2 segment không trùng khớp nhầm nào.
+   */
+  @Post('production-orders/:id/piece-step-bundles')
+  @RequirePermissions(CREATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  submitPieceStep(
+    @Param('id') id: string,
+    @Body() dto: SubmitPieceStepDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('mfgRole') mfgRole: string | null,
+  ) {
+    return this.productionBatchesService.submitPieceStep(id, dto, userId, mfgRole);
+  }
+
   @Get('production-batches/:id')
   @RequirePermissions(VIEW)
   findOne(@Param('id') id: string) {
@@ -141,5 +168,12 @@ export class ProductionBatchesController {
   @RequirePermissions(VIEW)
   findAll(@Query() query: ListProductionBatchesQueryDto) {
     return this.productionBatchesService.findAll(query);
+  }
+
+  /** Flat, không cần productionOrderId - cùng lý do trên, dùng cho màn KCS lọc theo công đoạn. */
+  @Get('piece-step-bundles')
+  @RequirePermissions(VIEW)
+  findAllPieceStepBundles(@Query() query: ListPieceStepBundlesQueryDto) {
+    return this.productionBatchesService.findAllPieceStepBundles(query);
   }
 }

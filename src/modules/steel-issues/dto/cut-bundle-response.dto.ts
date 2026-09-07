@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Exclude, Expose } from 'class-transformer';
+import { Exclude, Expose, Type } from 'class-transformer';
+import { StepBundleResponseDto } from './step-bundle-response.dto';
 
 @Exclude()
 export class CutPatternSegmentResponseDto {
@@ -37,15 +38,25 @@ export class CutBundleResponseDto {
   @Expose() @ApiProperty() scrapMm!: number;
   /** CUTTING | AWAITING_QC | QC_PASSED - vòng đời riêng của đợt cắt này. */
   @Expose() @ApiProperty() status!: string;
-  /** Công đoạn đã xong của ĐỢT này (luôn có CAT ngay khi tạo). */
+  /** Công đoạn đã xong của ĐỢT này (luôn có CAT ngay khi tạo) - CHỈ CÒN Ý NGHĨA LỊCH SỬ (2026-09-
+   *  07, cờ tự khai đã bỏ) - dữ liệu CŨ có thể còn 'UON'/... nhưng KHÔNG còn nơi nào GHI thêm vào
+   *  mảng này nữa, công đoạn phụ giờ đi qua `stepBundles` bên dưới. */
   @Expose() @ApiProperty({ type: [String] }) completedSteps!: string[];
-  /** Công đoạn BẮT BUỘC theo định mức của loại sắt này - để FE biết còn thiếu bước nào. */
+  /** Công đoạn theo định mức của loại sắt này - THUẦN THAM KHẢO (không còn dùng để chặn gì, xem
+   *  finishCutBundle() doc comment BE). */
   @Expose() @ApiProperty({ type: [String] }) requiredSteps!: string[];
   @Expose() @ApiPropertyOptional({ nullable: true }) completedAt!: Date | null;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose()
   @ApiProperty({ type: [CutPatternSegmentResponseDto] })
   segments!: CutPatternSegmentResponseDto[];
+  /** Các "đợt gửi KCS" theo công đoạn PHỤ (Uốn/Dập/Tán/...) của ĐÚNG đợt cắt này (2026-09-07) -
+   *  rỗng nếu chưa gửi gì. Rỗng LUÔN ở các response KHÔNG cần đầy đủ (vd sau khi finish/submit,
+   *  FE tự refetch danh sách để lấy bản đủ) - chỉ getBundles()/findAllBundles() populate thật. */
+  @Expose()
+  @Type(() => StepBundleResponseDto)
+  @ApiProperty({ type: [StepBundleResponseDto] })
+  stepBundles!: StepBundleResponseDto[];
 
   constructor(partial: Partial<CutBundleResponseDto>) {
     Object.assign(this, partial);

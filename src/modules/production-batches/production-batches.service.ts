@@ -8,6 +8,7 @@ import {
 import {
   MfgRole,
   MfgStage,
+  PieceStepBundleStatus,
   Prisma,
   ProcessStep,
   ProductionBatchStatus,
@@ -31,12 +32,15 @@ import { MaterialYieldIssuesService } from '../material-yield-issues/material-yi
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CreatePieceStepBatchDto } from './dto/create-piece-step-batch.dto';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
+import { ListPieceStepBundlesQueryDto } from './dto/list-piece-step-bundles-query.dto';
 import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
 import { PieceStepBatchResponseDto } from './dto/piece-step-batch-response.dto';
+import { PieceStepBundleResponseDto } from './dto/piece-step-bundle-response.dto';
 import { PieceStepProgressDto } from './dto/piece-step-progress.dto';
 import { ProductionBatchPlanItemResponseDto } from './dto/production-batch-plan-item-response.dto';
 import { ProductionBatchPlanResponseDto } from './dto/production-batch-plan-response.dto';
 import { ProductionBatchResponseDto } from './dto/production-batch-response.dto';
+import { SubmitPieceStepDto } from './dto/submit-piece-step.dto';
 
 /** Gộp 3 thứ cần cho mỗi piece có PieceMaterialYield ở stage=PHOI trong 1 lần tra bảng
  *  piece_material_yield (thay vì 3 hàm rời nhân round-trip DB): tồn nguyên liệu thô, công đoạn đã
@@ -56,6 +60,17 @@ const PRODUCTION_BATCH_INCLUDE = {
 
 export type ProductionBatchRow = Prisma.ProductionBatchGetPayload<{
   include: typeof PRODUCTION_BATCH_INCLUDE;
+}>;
+
+const PIECE_STEP_BUNDLE_INCLUDE = {
+  productionOrder: {
+    include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+  },
+  piece: true,
+} satisfies Prisma.PieceStepBundleInclude;
+
+export type PieceStepBundleRow = Prisma.PieceStepBundleGetPayload<{
+  include: typeof PIECE_STEP_BUNDLE_INCLUDE;
 }>;
 
 /// Kho vật lý MẶC ĐỊNH liên quan đến đoạn sắt tồn (đoạn Phôi cắt ra nhập vào đây, thủ kho tự
@@ -176,11 +191,17 @@ export class ProductionBatchesService {
    * SteelIssuesService.recordStepBatch() (hàm đó thiếu cả 3 thứ này - khe TOCTOU thật khi 2 người
    * báo cùng lúc, xem comment process-steps.constant.ts).
    *
-   * Chặn "bước sau vượt bước liền trước" (giống recordStepBatch chặn vượt catDone) - bước ĐẦU
-   * TIÊN trong processSteps KHÔNG bị cap theo plannedQty, nhất quán triết lý "không cap theo BOM
-   * lúc báo, KCS mới là bước kiểm soát" (comment đầu file). Piece không có PieceMaterialYield hoặc
-   * processSteps rỗng ⇒ BadRequest, bắt buộc dùng luồng cũ (báo thẳng qua create()) - đây là biên
-   * tương thích ngược bắt buộc, KHÔNG được nới lỏng.
+   * KHÔNG còn chặn "bước sau vượt bước liền trước" (2026-09-07, BỎ so với bản gốc 2026-09-04) -
+   * quyết định nghiệp vụ của Sếp Trương Văn Nhân (chat nội bộ): "để cho đơn giản thì không cần
+   * ràng buộc, cứ để thoải mái, xảy ra vấn đề mình sẽ xử lí" - công đoạn nào xong trước cứ báo
+   * trước, không cần đợi công đoạn "trước" nó theo processSteps. Piece không có PieceMaterialYield
+   * hoặc processSteps rỗng vẫn ⇒ BadRequest, bắt buộc dùng luồng cũ (báo thẳng qua create()) - đây
+   * là biên tương thích ngược bắt buộc, KHÔNG được nới lỏng (khác hẳn ràng buộc thứ tự vừa bỏ).
+   *
+   * Đánh đổi đã ghi nhận (không tự dò lại được nữa sau khi bỏ chặn): mất khả năng ép "step N+1
+   * không vượt step N" tại thời điểm ghi - CHỈ còn hiện CẢNH BÁO (không chặn) ở getBatchPlan() khi
+   * doneQty của step sau > passedQty (qua PieceStepBundle đã QC_PASSED) của step liền trước, để
+   * QLSX/KCS thấy bất thường mà tự xử lý, đúng tinh thần "xảy ra vấn đề mình xử lý" của Sếp.
    *
    * KHÔNG chặn "chốt lô mà chưa báo đủ công đoạn" ở create() - quyết định nghiệp vụ 2026-09-04,
    * cùng triết lý "không chặn oan công nhân, KCS mới là bước kiểm soát" đã lặp lại nhiều lần trong
@@ -237,33 +258,9 @@ export class ProductionBatchesService {
         `Mảnh ${dto.pieceId} không có công đoạn '${dto.step}' theo định mức`,
       );
     }
-    const stepIndex = orderedSteps.indexOf(dto.step);
-    const prevStep = stepIndex > 0 ? orderedSteps[stepIndex - 1] : null;
-
     const created = await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `piece-step-batch:${order.id}:${pieceBigId}:${dto.step}`);
       await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, 'báo công đoạn');
-
-      if (prevStep) {
-        const [donePrevAgg, doneThisAgg] = await Promise.all([
-          tx.pieceStepBatch.aggregate({
-            where: { productionOrderId: order.id, pieceId: pieceBigId, step: prevStep },
-            _sum: { qty: true },
-          }),
-          tx.pieceStepBatch.aggregate({
-            where: { productionOrderId: order.id, pieceId: pieceBigId, step: dto.step },
-            _sum: { qty: true },
-          }),
-        ]);
-        const donePrev = donePrevAgg._sum.qty ?? 0;
-        const doneThis = doneThisAgg._sum.qty ?? 0;
-        if (doneThis + dto.qty > donePrev) {
-          throw new BadRequestException(
-            `Mảnh ${dto.pieceId}: đã '${prevStep}' ${donePrev} mảnh, đã '${dto.step}' ${doneThis} ` +
-              `mảnh - không thể báo thêm ${dto.qty} (vượt bước trước, tối đa còn ${donePrev - doneThis})`,
-          );
-        }
-      }
 
       return tx.pieceStepBatch.create({
         data: {
@@ -278,6 +275,142 @@ export class ProductionBatchesService {
     });
 
     return this.toPieceStepBatchResponseDto(created);
+  }
+
+  /**
+   * Phôi gom mọi PieceStepBatch CHƯA gửi (pieceStepBundleId NULL) của (order, piece, step) thành
+   * 1 "đợt gửi KCS" (2026-09-07, xem PieceStepBundle doc comment) - KCS duyệt qua
+   * QcReviewsService.reviewPieceStep(). KHÔNG re-validate BOM/định mức ở đây (đã validate lúc
+   * recordPieceStepBatch() tạo từng dòng) - việc DUY NHẤT ở đây là gom + khoá lại các dòng đã gom,
+   * cùng khuôn lockBusinessKey tránh 2 người gửi trùng lúc.
+   */
+  async submitPieceStep(
+    productionOrderId: string,
+    dto: SubmitPieceStepDto,
+    submittedById: string,
+    callerMfgRole: string | null,
+  ): Promise<PieceStepBundleResponseDto> {
+    this.assertMfgRoleMatchesStage(callerMfgRole, MfgStage.PHOI);
+    const order = await this.findOrderOrThrow(productionOrderId);
+    await assertItemPiHasActiveFloor(
+      this.prisma,
+      order.productionInvoiceItemId,
+      'gửi KCS công đoạn',
+    );
+    const pieceBigId = parseBigIntId(dto.pieceId);
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `piece-step-bundle:${order.id}:${pieceBigId}:${dto.step}`);
+      await assertItemPiHasActiveFloorLocked(
+        tx,
+        order.productionInvoiceItemId,
+        'gửi KCS công đoạn',
+      );
+
+      const pending = await tx.pieceStepBatch.findMany({
+        where: {
+          productionOrderId: order.id,
+          pieceId: pieceBigId,
+          step: dto.step,
+          pieceStepBundleId: null,
+        },
+      });
+      const qty = pending.reduce((s, b) => s + b.qty, 0);
+      if (qty <= 0) {
+        throw new BadRequestException(
+          `Mảnh ${dto.pieceId} chưa có gì mới để gửi KCS ở công đoạn '${dto.step}'`,
+        );
+      }
+
+      const bundle = await tx.pieceStepBundle.create({
+        data: {
+          productionOrderId: order.id,
+          pieceId: pieceBigId,
+          step: dto.step,
+          qty,
+          submittedById,
+        },
+        include: PIECE_STEP_BUNDLE_INCLUDE,
+      });
+      await tx.pieceStepBatch.updateMany({
+        where: { id: { in: pending.map((b) => b.id) } },
+        data: { pieceStepBundleId: bundle.id },
+      });
+      return bundle;
+    });
+
+    return this.toPieceStepBundleResponseDto(created);
+  }
+
+  /** Dùng bởi QcReviewsService.reviewPieceStep()/reportPieceStepDone()/recheckPieceStep() - cùng
+   *  idiom findOneRowOrThrow() (ProductionBatch). */
+  async findOnePieceStepBundleRowOrThrow(id: string): Promise<PieceStepBundleRow> {
+    const bigId = parseBigIntId(id);
+    const bundle = await this.prisma.pieceStepBundle.findUnique({
+      where: { id: bigId },
+      include: PIECE_STEP_BUNDLE_INCLUDE,
+    });
+    if (!bundle) {
+      throw new NotFoundException(`Đợt gửi KCS ${id} not found`);
+    }
+    return bundle;
+  }
+
+  /** Phôi xem lại bundle CỦA CHÍNH order này (mọi status) - dùng để hiện trạng thái "chờ KCS/đã
+   *  duyệt/lỗi" theo từng công đoạn + tìm đúng bundleId để gọi Bù đủ (VatTuTpDetail.tsx). Không
+   *  phân trang (1 order hiếm khi có quá vài chục bundle) - khác findAllPieceStepBundles() (KCS,
+   *  flat, có phân trang). */
+  async findPieceStepBundlesForOrder(
+    productionOrderId: string,
+  ): Promise<PieceStepBundleResponseDto[]> {
+    const bigId = parseBigIntId(productionOrderId);
+    const rows = await this.prisma.pieceStepBundle.findMany({
+      where: { productionOrderId: bigId },
+      include: PIECE_STEP_BUNDLE_INCLUDE,
+      orderBy: { submittedAt: 'desc' },
+    });
+    return rows.map((r) => this.toPieceStepBundleResponseDto(r));
+  }
+
+  /** Flat, không cần productionOrderId - cùng lý do ListProductionBatchesQueryDto tồn tại (KCS
+   *  không tự resolve productionOrderId được). */
+  async findAllPieceStepBundles(
+    query: ListPieceStepBundlesQueryDto,
+  ): Promise<Paginated<PieceStepBundleResponseDto>> {
+    const where: Prisma.PieceStepBundleWhereInput = {
+      ...(query.status ? { status: query.status } : {}),
+    };
+    const result = await paginate(
+      {
+        findMany: (args) =>
+          this.prisma.pieceStepBundle.findMany({ ...args, include: PIECE_STEP_BUNDLE_INCLUDE }),
+        count: (args) => this.prisma.pieceStepBundle.count(args),
+      },
+      query,
+      where,
+      { submittedAt: 'desc' as const },
+    );
+    return {
+      data: result.data.map((r) => this.toPieceStepBundleResponseDto(r)),
+      meta: result.meta,
+    };
+  }
+
+  private toPieceStepBundleResponseDto(bundle: PieceStepBundleRow): PieceStepBundleResponseDto {
+    return new PieceStepBundleResponseDto({
+      id: bundle.id.toString(),
+      productionOrderId: bundle.productionOrderId.toString(),
+      poNumber: bundle.productionOrder.poNumber,
+      salesOrderCode: bundle.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
+      pieceId: bundle.pieceId.toString(),
+      pieceCode: bundle.piece.code,
+      pieceName: bundle.piece.name,
+      step: bundle.step,
+      qty: bundle.qty,
+      status: bundle.status,
+      submittedAt: bundle.submittedAt,
+      submittedById: bundle.submittedById,
+    });
   }
 
   /**
@@ -452,7 +585,7 @@ export class ProductionBatchesService {
     // Cảnh báo "còn nguyên liệu chưa cắt hết" + tiến độ công đoạn (chỉ hiển thị, không chặn -
     // quyết định nghiệp vụ 2026-08-22 và 2026-09-04) - chỉ tính cho stage=PHOI, chỉ cho piece có
     // PieceMaterialYield.
-    const [extrasByPiece, stepBatchDoneMap] =
+    const [extrasByPiece, stepBatchDoneMap, stepBundleMaps] =
       stage === MfgStage.PHOI
         ? await Promise.all([
             this.getPieceMaterialYieldExtrasByPiece(
@@ -460,8 +593,13 @@ export class ProductionBatchesService {
               bomPieces.map((bp) => bp.pieceId),
             ),
             this.getStepBatchDoneMap([order.id]),
+            this.getStepBundleMaps([order.id]),
           ])
-        : [new Map<string, PieceMaterialYieldExtras>(), new Map<string, number>()];
+        : [
+            new Map<string, PieceMaterialYieldExtras>(),
+            new Map<string, number>(),
+            { submitted: new Map<string, number>(), passed: new Map<string, number>() },
+          ];
 
     const items = bomPieces.map((bp) => {
       const key = bp.pieceId.toString();
@@ -477,14 +615,16 @@ export class ProductionBatchesService {
         passedQty: passedByPiece.get(key) ?? 0,
         rawMaterialOnHand: extras?.rawMaterialOnHand ?? null,
         processSteps,
-        stepProgress: processSteps.map(
-          (step) =>
-            new PieceStepProgressDto({
-              step,
-              requiredQty: plannedQty,
-              doneQty: stepBatchDoneMap.get(`${order.id}:${key}:${step}`) ?? 0,
-            }),
-        ),
+        stepProgress: processSteps.map((step) => {
+          const stepKey = `${order.id}:${key}:${step}`;
+          return new PieceStepProgressDto({
+            step,
+            requiredQty: plannedQty,
+            doneQty: stepBatchDoneMap.get(stepKey) ?? 0,
+            submittedQty: stepBundleMaps.submitted.get(stepKey) ?? 0,
+            passedQty: stepBundleMaps.passed.get(stepKey) ?? 0,
+          });
+        }),
         qtyPerPiece: extras?.qtyPerPiece ?? null,
       });
     });
@@ -525,21 +665,28 @@ export class ProductionBatchesService {
     });
     const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
 
-    const [bomPiecesByRevision, extrasByRevision, batches, stepBatchDoneMap] = await Promise.all([
-      stage === MfgStage.PHOI
-        ? this.findPhoiEligibleBomPiecesBatch(revisionIds)
-        : this.findBomPiecesByStageBatch(revisionIds, stage),
-      stage === MfgStage.PHOI
-        ? this.getPieceMaterialYieldExtrasByPieceBatch(revisionIds)
-        : Promise.resolve(new Map<string, Map<string, PieceMaterialYieldExtras>>()),
-      this.prisma.productionBatch.findMany({
-        where: { productionOrderId: { in: orders.map((o) => o.id) }, stage },
-        select: { productionOrderId: true, pieceId: true, status: true, reportedQty: true },
-      }),
-      stage === MfgStage.PHOI
-        ? this.getStepBatchDoneMap(orders.map((o) => o.id))
-        : Promise.resolve(new Map<string, number>()),
-    ]);
+    const [bomPiecesByRevision, extrasByRevision, batches, stepBatchDoneMap, stepBundleMaps] =
+      await Promise.all([
+        stage === MfgStage.PHOI
+          ? this.findPhoiEligibleBomPiecesBatch(revisionIds)
+          : this.findBomPiecesByStageBatch(revisionIds, stage),
+        stage === MfgStage.PHOI
+          ? this.getPieceMaterialYieldExtrasByPieceBatch(revisionIds)
+          : Promise.resolve(new Map<string, Map<string, PieceMaterialYieldExtras>>()),
+        this.prisma.productionBatch.findMany({
+          where: { productionOrderId: { in: orders.map((o) => o.id) }, stage },
+          select: { productionOrderId: true, pieceId: true, status: true, reportedQty: true },
+        }),
+        stage === MfgStage.PHOI
+          ? this.getStepBatchDoneMap(orders.map((o) => o.id))
+          : Promise.resolve(new Map<string, number>()),
+        stage === MfgStage.PHOI
+          ? this.getStepBundleMaps(orders.map((o) => o.id))
+          : Promise.resolve({
+              submitted: new Map<string, number>(),
+              passed: new Map<string, number>(),
+            }),
+      ]);
 
     const awaitingByOrderPiece = new Map<string, number>();
     const passedByOrderPiece = new Map<string, number>();
@@ -571,14 +718,16 @@ export class ProductionBatchesService {
           passedQty: passedByOrderPiece.get(orderPieceKey) ?? 0,
           rawMaterialOnHand: extras?.rawMaterialOnHand ?? null,
           processSteps,
-          stepProgress: processSteps.map(
-            (step) =>
-              new PieceStepProgressDto({
-                step,
-                requiredQty: plannedQty,
-                doneQty: stepBatchDoneMap.get(`${orderPieceKey}:${step}`) ?? 0,
-              }),
-          ),
+          stepProgress: processSteps.map((step) => {
+            const stepKey = `${orderPieceKey}:${step}`;
+            return new PieceStepProgressDto({
+              step,
+              requiredQty: plannedQty,
+              doneQty: stepBatchDoneMap.get(stepKey) ?? 0,
+              submittedQty: stepBundleMaps.submitted.get(stepKey) ?? 0,
+              passedQty: stepBundleMaps.passed.get(stepKey) ?? 0,
+            });
+          }),
           qtyPerPiece: extras?.qtyPerPiece ?? null,
         });
       });
@@ -724,6 +873,32 @@ export class ProductionBatchesService {
       result.set(`${r.productionOrderId}:${r.pieceId}:${r.step}`, r._sum.qty ?? 0);
     }
     return result;
+  }
+
+  /** Σ PieceStepBundle.qty theo (order, piece, step), tách 2 map trong 1 lần groupBy(status) -
+   *  `submitted` = MỌI status (dùng để tính "còn chưa gửi KCS" = doneQty - submittedQty ở FE),
+   *  `passed` = CHỈ status=QC_PASSED (cảnh báo "vượt bước trước", xem PieceStepProgressDto doc
+   *  comment). CHỈ gọi khi stage=PHOI, cùng khuôn getStepBatchDoneMap(). */
+  private async getStepBundleMaps(
+    orderIds: bigint[],
+  ): Promise<{ submitted: Map<string, number>; passed: Map<string, number> }> {
+    const submitted = new Map<string, number>();
+    const passed = new Map<string, number>();
+    if (orderIds.length === 0) return { submitted, passed };
+    const rows = await this.prisma.pieceStepBundle.groupBy({
+      by: ['productionOrderId', 'pieceId', 'step', 'status'],
+      where: { productionOrderId: { in: orderIds } },
+      _sum: { qty: true },
+    });
+    for (const r of rows) {
+      const key = `${r.productionOrderId}:${r.pieceId}:${r.step}`;
+      const qty = r._sum.qty ?? 0;
+      submitted.set(key, (submitted.get(key) ?? 0) + qty);
+      if (r.status === PieceStepBundleStatus.QC_PASSED) {
+        passed.set(key, (passed.get(key) ?? 0) + qty);
+      }
+    }
+    return { submitted, passed };
   }
 
   /**
