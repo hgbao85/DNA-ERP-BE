@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { MfgRole, MfgStage, StockLedgerRefType } from '../../generated/prisma/client';
-import { PrismaServiceType } from '../../prisma/prisma.service';
+import { PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { ProductionBatchesService } from './production-batches.service';
@@ -1272,6 +1272,133 @@ describe('ProductionBatchesService', () => {
         BadRequestException,
       );
       expect(prisma.pieceStepBatch.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // 2026-09-08: bỏ hẳn "Chốt & gửi KCS" thủ công cho mảnh VTTP CÓ khai processSteps - gọi từ
+  // QcReviewsService.reviewPieceStep() ngay trong transaction duyệt. Xem doc comment method.
+  describe('autoFinalizePieceOutputIfLastStepComplete', () => {
+    const yieldRowTwoSteps = { processSteps: ['CAT', 'DUC_LO'] };
+
+    it('step vừa duyệt KHÔNG phải bước cuối - không tạo ProductionBatch', async () => {
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue(yieldRowTwoSteps);
+
+      await service.autoFinalizePieceOutputIfLastStepComplete(
+        prisma as unknown as PrismaTx,
+        5n,
+        1n,
+        40n,
+        'CAT',
+        'user-kcs',
+      );
+
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('mảnh không có PieceMaterialYield (yieldRow null) - không làm gì', async () => {
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue(null);
+
+      await service.autoFinalizePieceOutputIfLastStepComplete(
+        prisma as unknown as PrismaTx,
+        5n,
+        1n,
+        40n,
+        'DUC_LO',
+        'user-kcs',
+      );
+
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('bước cuối, chưa có bundle nào QC_PASSED - totalPassed=0, không tạo', async () => {
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue(yieldRowTwoSteps);
+      prisma.pieceStepBundle.findMany.mockResolvedValue([]);
+      prisma.productionBatch.findMany.mockResolvedValue([]);
+
+      await service.autoFinalizePieceOutputIfLastStepComplete(
+        prisma as unknown as PrismaTx,
+        5n,
+        1n,
+        40n,
+        'DUC_LO',
+        'user-kcs',
+      );
+
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('bước cuối, có bundle QC_PASSED lần đầu (chưa từng tạo ProductionBatch) - tạo QC_DONE, reportedQty = passed (trừ đúng failedQty)', async () => {
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue(yieldRowTwoSteps);
+      prisma.pieceStepBundle.findMany.mockResolvedValue([
+        { qty: 10, qcReviews: [{ failedQty: 3 }] },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([]);
+
+      await service.autoFinalizePieceOutputIfLastStepComplete(
+        prisma as unknown as PrismaTx,
+        5n,
+        1n,
+        40n,
+        'DUC_LO',
+        'user-kcs',
+      );
+
+      expect(prisma.productionBatch.create).toHaveBeenCalledWith({
+        data: {
+          stage: MfgStage.PHOI,
+          productionOrderId: 1n,
+          pieceId: 40n,
+          reportedQty: 7,
+          reportedById: 'user-kcs',
+          status: 'QC_DONE',
+        },
+      });
+    });
+
+    it('bước cuối, gọi LẦN 2 sau khi đã tạo đủ (delta=0) - KHÔNG tạo trùng', async () => {
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue(yieldRowTwoSteps);
+      prisma.pieceStepBundle.findMany.mockResolvedValue([{ qty: 10, qcReviews: [] }]);
+      prisma.productionBatch.findMany.mockResolvedValue([{ reportedQty: 10 }]);
+
+      await service.autoFinalizePieceOutputIfLastStepComplete(
+        prisma as unknown as PrismaTx,
+        5n,
+        1n,
+        40n,
+        'DUC_LO',
+        'user-kcs',
+      );
+
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('bước cuối, thêm 1 bundle Bù đủ mới (2 bundle QC_PASSED cộng dồn) - chỉ tạo phần CHÊNH LỆCH', async () => {
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue(yieldRowTwoSteps);
+      prisma.pieceStepBundle.findMany.mockResolvedValue([
+        { qty: 10, qcReviews: [{ failedQty: 3 }] }, // đã đạt 7, đã sinh ProductionBatch rồi
+        { qty: 3, qcReviews: [{ failedQty: 0 }] }, // bù đủ mới đạt thêm 3
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([{ reportedQty: 7 }]);
+
+      await service.autoFinalizePieceOutputIfLastStepComplete(
+        prisma as unknown as PrismaTx,
+        5n,
+        1n,
+        40n,
+        'DUC_LO',
+        'user-kcs',
+      );
+
+      expect(prisma.productionBatch.create).toHaveBeenCalledWith({
+        data: {
+          stage: MfgStage.PHOI,
+          productionOrderId: 1n,
+          pieceId: 40n,
+          reportedQty: 3,
+          reportedById: 'user-kcs',
+          status: 'QC_DONE',
+        },
+      });
     });
   });
 });

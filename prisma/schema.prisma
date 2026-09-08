@@ -2425,8 +2425,12 @@ model QcReview {
   stepBundleId      BigInt?
   /// Nhánh công đoạn vật tư thành phẩm (2026-09-07, xem PieceStepBundle) - XOR CÙNG
   /// steelIssueId/productionBatchId/stepBundleId (CHECK qc_reviews_goods_xor_chk mở rộng 4 cột).
-  /// KHÔNG phải con của productionBatchId dù cùng "Vật tư TP" - bundle được duyệt TRƯỚC KHI
-  /// ProductionBatch tồn tại (đó là bước "Chốt & gửi KCS" cuối, xảy ra SAU mọi công đoạn).
+  /// KHÔNG phải con của productionBatchId - dòng QcReview này của bundle vẫn được tạo TRƯỚC khi
+  /// ProductionBatch (nếu có) tồn tại trong CÙNG transaction. 2026-09-08 (bỏ hẳn "Chốt & gửi KCS"
+  /// thủ công cho mảnh CÓ khai processSteps): nếu bundle này là công đoạn CUỐI, duyệt xong sẽ tự
+  /// sinh thẳng ProductionBatch(QC_DONE) - xem
+  /// ProductionBatchesService.autoFinalizePieceOutputIfLastStepComplete(). Mảnh KHÔNG khai
+  /// processSteps vẫn dùng ProductionBatch.create() thủ công như cũ (không đụng nhánh này).
   pieceStepBundleId BigInt?
   failedQty         Int
   defectReasonId    BigInt?
@@ -2700,6 +2704,13 @@ model PackagingIssue {
 // =====================================================================
 
 enum ProductionBatchStatus {
+  /// 2026-09-08: CHỈ dùng cho stage=PHOI, mảnh KHÔNG khai processSteps (ChotPanel, VatTuTpDetail.tsx)
+  /// - "Lưu đợt" (ProductionBatchesService.recordProductionBatch()) tích luỹ reportedQty vào ĐÚNG 1
+  /// dòng OPEN, mirror CutBundleStatus.CUTTING - CHƯA gửi KCS, chưa tính "chờ KCS"/"sản lượng thật".
+  /// "Gửi KCS" (finishProductionBatch()) mới chuyển sang AWAITING_QC. Hàn/Sơn (VatTuDetailBoard/
+  /// core.tsx) và mảnh CÓ khai processSteps (auto-finalize) KHÔNG dùng trạng thái này - luôn tạo
+  /// thẳng AWAITING_QC (Hàn/Sơn) hoặc QC_DONE (auto-finalize).
+  OPEN
   AWAITING_QC
   QC_DONE
 }

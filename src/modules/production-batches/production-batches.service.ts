@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -199,6 +200,115 @@ export class ProductionBatchesService {
   }
 
   /**
+   * "Lưu đợt" cho ChotPanel (VTTP, CHỈ mảnh KHÔNG khai processSteps - VatTuTpDetail.tsx) - mirror
+   * NewCutBundleForm bên Sắt (2026-09-08, theo yêu cầu người dùng "giống Phôi"): tích luỹ
+   * reportedQty vào 1 ProductionBatch đang OPEN (tối đa 1 dòng OPEN tại 1 thời điểm cho đúng
+   * (order, piece), mirror "luôn tối đa 1 đợt CUTTING") thay vì tạo dòng AWAITING_QC ngay như
+   * create()/reportProductionBatch() cũ. CHỈ nhận stage PHOI - Hàn/Sơn (VatTuDetailBoard/core.tsx)
+   * giữ nguyên hành vi 1-nút "Ghi nhận" qua create(), không đụng tới hàm này. "Gửi KCS"
+   * (finishProductionBatch()) mới thật sự đóng batch + chuyển AWAITING_QC. KHÔNG cần Idempotency-
+   * Key dedup như create() - đây là hành động CỘNG DỒN (khác tạo-hoặc-trả-về), double-submit chỉ
+   * gây cộng dư số lượng (dễ nhận ra + tự sửa lại), không phải rủi ro nghiêm trọng; FE tự khoá nút
+   * lúc đang gửi (busy state) như mọi nơi khác trong module.
+   */
+  async recordProductionBatch(
+    productionOrderId: string,
+    dto: { pieceId: string; qty: number },
+    reportedById: string,
+    callerMfgRole: string | null,
+  ): Promise<ProductionBatchResponseDto> {
+    this.assertMfgRoleMatchesStage(callerMfgRole, MfgStage.PHOI);
+    const order = await this.findOrderOrThrow(productionOrderId);
+    await assertItemPiHasActiveFloor(
+      this.prisma,
+      order.productionInvoiceItemId,
+      'ghi nhận sản lượng',
+    );
+    const pieceBigId = parseBigIntId(dto.pieceId);
+    await this.assertPieceInBom(order.bomRevisionId, pieceBigId, MfgStage.PHOI);
+    await this.assertMaterialYieldReceived(
+      order.bomRevisionId,
+      pieceBigId,
+      order.id,
+      MfgStage.PHOI,
+    );
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `production-batch-open:${order.id}:${pieceBigId}:PHOI`);
+      await assertItemPiHasActiveFloorLocked(
+        tx,
+        order.productionInvoiceItemId,
+        'ghi nhận sản lượng',
+      );
+
+      const open = await tx.productionBatch.findFirst({
+        where: {
+          stage: MfgStage.PHOI,
+          productionOrderId: order.id,
+          pieceId: pieceBigId,
+          status: ProductionBatchStatus.OPEN,
+        },
+      });
+      if (open) {
+        return tx.productionBatch.update({
+          where: { id: open.id },
+          data: { reportedQty: open.reportedQty + dto.qty },
+          include: PRODUCTION_BATCH_INCLUDE,
+        });
+      }
+      return tx.productionBatch.create({
+        data: {
+          stage: MfgStage.PHOI,
+          productionOrderId: order.id,
+          pieceId: pieceBigId,
+          reportedQty: dto.qty,
+          reportedById,
+          status: ProductionBatchStatus.OPEN,
+        },
+        include: PRODUCTION_BATCH_INCLUDE,
+      });
+    });
+
+    return this.toResponseDto(updated);
+  }
+
+  /**
+   * "Gửi KCS" cho ChotPanel (VTTP, CHỈ mảnh KHÔNG khai processSteps) - đóng batch đang OPEN, chuyển
+   * AWAITING_QC (mirror finishCutBundle() bên Sắt). Sau bước này KCS duyệt qua đúng luồng cũ
+   * (QcReviewsService.reviewProductionBatch()) - không đổi gì ở đó.
+   */
+  async finishProductionBatch(
+    id: string,
+    callerMfgRole: string | null,
+  ): Promise<ProductionBatchResponseDto> {
+    this.assertMfgRoleMatchesStage(callerMfgRole, MfgStage.PHOI);
+    const batch = await this.findOneRowOrThrow(id);
+    if (batch.stage !== MfgStage.PHOI) {
+      throw new BadRequestException(`Gửi KCS kiểu này chỉ áp dụng cho stage PHOI`);
+    }
+    if (batch.status !== ProductionBatchStatus.OPEN) {
+      throw new ConflictException(
+        `Batch ${id} đang ở trạng thái ${batch.status} - chỉ OPEN mới gửi KCS được`,
+      );
+    }
+    await assertItemPiHasActiveFloor(
+      this.prisma,
+      batch.productionOrder.productionInvoiceItemId,
+      'gửi KCS',
+    );
+    if (batch.reportedQty <= 0) {
+      throw new BadRequestException(`Chưa có gì để gửi KCS`);
+    }
+
+    const updated = await this.prisma.productionBatch.update({
+      where: { id: batch.id },
+      data: { status: ProductionBatchStatus.AWAITING_QC },
+      include: PRODUCTION_BATCH_INCLUDE,
+    });
+    return this.toResponseDto(updated);
+  }
+
+  /**
    * Phôi báo "vừa {step} xong N mảnh" cho vật tư thành phẩm (PieceMaterialYield.processSteps,
    * thêm 2026-09-04) - trước khi chốt lô ProductionBatch thật qua create() để gửi KCS. Khuôn chép
    * MaterialIssuesService.create() (Idempotency-Key + $transaction + lockBusinessKey), KHÔNG chép
@@ -356,8 +466,7 @@ export class ProductionBatchesService {
     return this.toPieceStepBundleResponseDto(created);
   }
 
-  /** Dùng bởi QcReviewsService.reviewPieceStep()/reportPieceStepDone()/recheckPieceStep() - cùng
-   *  idiom findOneRowOrThrow() (ProductionBatch). */
+  /** Dùng bởi QcReviewsService.reviewPieceStep() - cùng idiom findOneRowOrThrow() (ProductionBatch). */
   async findOnePieceStepBundleRowOrThrow(id: string): Promise<PieceStepBundleRow> {
     const bigId = parseBigIntId(id);
     const bundle = await this.prisma.pieceStepBundle.findUnique({
@@ -368,6 +477,75 @@ export class ProductionBatchesService {
       throw new NotFoundException(`Đợt gửi KCS ${id} not found`);
     }
     return bundle;
+  }
+
+  /**
+   * Bỏ hẳn "Chốt & gửi KCS" thủ công cho mảnh VTTP CÓ khai processSteps (2026-09-08) - gọi từ
+   * QcReviewsService.reviewPieceStep() NGAY TRONG transaction duyệt, sau khi bundle chuyển
+   * QC_PASSED. Nếu step vừa duyệt là CÔNG ĐOẠN CUỐI theo processSteps (sortProcessSteps) của mảnh,
+   * tự sinh thẳng ProductionBatch (stage=PHOI, status=QC_DONE - KHÔNG qua AWAITING_QC/duyệt KCS lần
+   * 2 nữa) - đây là điểm sinh "sản lượng thật" DUY NHẤT cho các mảnh này (ChotPanel/reportProductionBatch
+   * đã bị chặn từ recordPieceStepBatch() nếu processSteps rỗng, và FE không còn tab "Chốt & gửi KCS"
+   * nữa cho mảnh có khai bước - xem VatTuTpDetail.tsx).
+   *
+   * Tính theo CỘNG DỒN vì công đoạn cuối có thể được gửi KCS + duyệt NHIỀU LẦN (nhiều bundle riêng,
+   * vd báo dở rồi Bù đủ sau) - so tổng ĐÃ ĐẠT (QC_PASSED, trừ đúng failedQty của mỗi bundle qua
+   * QcReview - "PASSED" ở PieceStepBundle nghĩa là "đã qua tay KCS", KHÔNG phải "0 lỗi", xem doc
+   * comment reviewPieceStep()) của bước cuối với tổng đã sinh ProductionBatch trước đó cho đúng mảnh
+   * này - chỉ sinh thêm phần CHÊNH LỆCH khi > 0, tránh sinh trùng lần gọi sau không có gì mới.
+   * postSegmentConsumeEntries() KHÔNG cần gọi ở đây - đã xác nhận luôn no-op cho mảnh dùng
+   * PieceMaterialYield (không có PieceBom), xem method đó.
+   */
+  async autoFinalizePieceOutputIfLastStepComplete(
+    tx: PrismaTx,
+    bomRevisionId: bigint,
+    productionOrderId: bigint,
+    pieceId: bigint,
+    step: ProcessStep,
+    reportedById: string,
+  ): Promise<void> {
+    const yieldRow = await tx.pieceMaterialYield.findUnique({
+      where: { bomRevisionId_pieceId: { bomRevisionId, pieceId } },
+    });
+    if (!yieldRow) return;
+    const orderedSteps = sortProcessSteps(yieldRow.processSteps);
+    if (orderedSteps.length === 0 || orderedSteps[orderedSteps.length - 1] !== step) return;
+
+    await lockBusinessKey(tx, `piece-auto-finalize:${productionOrderId}:${pieceId}`);
+
+    const [passedBundles, existingBatches] = await Promise.all([
+      tx.pieceStepBundle.findMany({
+        where: {
+          productionOrderId,
+          pieceId,
+          step,
+          status: PieceStepBundleStatus.QC_PASSED,
+        },
+        select: { qty: true, qcReviews: { select: { failedQty: true } } },
+      }),
+      tx.productionBatch.findMany({
+        where: { stage: MfgStage.PHOI, productionOrderId, pieceId },
+        select: { reportedQty: true },
+      }),
+    ]);
+    const totalPassed = passedBundles.reduce((sum, b) => {
+      const failed = b.qcReviews.reduce((fs, r) => fs + r.failedQty, 0);
+      return sum + Math.max(b.qty - failed, 0);
+    }, 0);
+    const alreadyFinalized = existingBatches.reduce((sum, b) => sum + b.reportedQty, 0);
+    const delta = totalPassed - alreadyFinalized;
+    if (delta <= 0) return;
+
+    await tx.productionBatch.create({
+      data: {
+        stage: MfgStage.PHOI,
+        productionOrderId,
+        pieceId,
+        reportedQty: delta,
+        reportedById,
+        status: ProductionBatchStatus.QC_DONE,
+      },
+    });
   }
 
   /** Phôi xem lại bundle CỦA CHÍNH order này (mọi status) - dùng để hiện trạng thái "chờ KCS/đã
@@ -591,6 +769,9 @@ export class ProductionBatchesService {
     const awaitingByPiece = new Map<string, number>();
     const passedByPiece = new Map<string, number>();
     for (const b of batches) {
+      // status OPEN (2026-09-08, ChotPanel "Lưu đợt" chưa gửi KCS) - CHƯA tính vào đâu cả, không
+      // phải "chờ KCS" (chưa gửi) cũng không phải "đã chốt" (chưa qua duyệt).
+      if (b.status === ProductionBatchStatus.OPEN) continue;
       const key = b.pieceId.toString();
       const target =
         b.status === ProductionBatchStatus.AWAITING_QC ? awaitingByPiece : passedByPiece;
@@ -712,6 +893,9 @@ export class ProductionBatchesService {
     const awaitingByOrderPiece = new Map<string, number>();
     const passedByOrderPiece = new Map<string, number>();
     for (const b of batches) {
+      // status OPEN (2026-09-08, ChotPanel "Lưu đợt" chưa gửi KCS) - CHƯA tính vào đâu, xem
+      // getBatchPlan() ở trên.
+      if (b.status === ProductionBatchStatus.OPEN) continue;
       const key = `${b.productionOrderId}:${b.pieceId}`;
       const target =
         b.status === ProductionBatchStatus.AWAITING_QC ? awaitingByOrderPiece : passedByOrderPiece;

@@ -39,6 +39,7 @@ describe('QcReviewsService', () => {
   let productionBatchesService: {
     findOneRowOrThrow: jest.Mock;
     findOnePieceStepBundleRowOrThrow: jest.Mock;
+    autoFinalizePieceOutputIfLastStepComplete: jest.Mock;
   };
 
   const awaitingIssue = {
@@ -113,6 +114,7 @@ describe('QcReviewsService', () => {
     qty: 10,
     status: 'AWAITING_QC',
     submittedById: 'user-phoi',
+    productionOrder: { bomRevisionId: 5n },
   };
 
   const bundleQcReview = {
@@ -178,6 +180,7 @@ describe('QcReviewsService', () => {
     productionBatchesService = {
       findOneRowOrThrow: jest.fn().mockResolvedValue(awaitingBatch),
       findOnePieceStepBundleRowOrThrow: jest.fn().mockResolvedValue(awaitingBundle),
+      autoFinalizePieceOutputIfLastStepComplete: jest.fn().mockResolvedValue(undefined),
     };
     service = new QcReviewsService(
       prisma as unknown as PrismaServiceType,
@@ -530,6 +533,14 @@ describe('QcReviewsService', () => {
       });
       expect(prisma.productionBatch.update).not.toHaveBeenCalled();
       expect(result.id).toBe('502');
+    });
+
+    it('2026-09-08: gọi autoFinalizePieceOutputIfLastStepComplete() trong CÙNG transaction, đúng tham số từ bundle', async () => {
+      await service.reviewPieceStep('800', { failedQty: 0 }, 'user-kcs');
+
+      expect(
+        productionBatchesService.autoFinalizePieceOutputIfLastStepComplete,
+      ).toHaveBeenCalledWith(prisma, 5n, 1n, 40n, 'CAT', 'user-kcs');
     });
 
     it('có failedQty - vẫn chuyển QC_PASSED (mirror Phôi/Sắt - không có khái niệm phế)', async () => {

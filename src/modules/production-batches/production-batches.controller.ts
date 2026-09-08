@@ -21,6 +21,7 @@ import { ListPieceStepBundlesQueryDto } from './dto/list-piece-step-bundles-quer
 import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
 import { ProductionBatchPlanBatchQueryDto } from './dto/production-batch-plan-batch-query.dto';
 import { ProductionBatchPlanQueryDto } from './dto/production-batch-plan-query.dto';
+import { RecordProductionBatchDto } from './dto/record-production-batch.dto';
 import { SubmitPieceStepDto } from './dto/submit-piece-step.dto';
 import { ProductionBatchesService } from './production-batches.service';
 
@@ -62,6 +63,32 @@ export class ProductionBatchesController {
   @RequirePermissions(VIEW)
   findAllForOrder(@Param('id') id: string, @Query() query: PaginationQueryDto) {
     return this.productionBatchesService.findAllForOrder(id, query);
+  }
+
+  /**
+   * "Lưu đợt" ChotPanel (VTTP, CHỈ mảnh không khai processSteps, 2026-09-08) - tích luỹ vào 1
+   * ProductionBatch đang OPEN thay vì tạo dòng AWAITING_QC ngay như POST .../production-batches ở
+   * trên (Hàn/Sơn vẫn dùng route đó, không đụng). Đặt route TRÊN @Get('production-batches/:id')
+   * theo đúng tiền lệ path 3 segment cố định, không trùng khớp nhầm nào.
+   */
+  @Post('production-orders/:id/production-batches/record')
+  @RequirePermissions(CREATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  recordProductionBatch(
+    @Param('id') id: string,
+    @Body() dto: RecordProductionBatchDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('mfgRole') mfgRole: string | null,
+  ) {
+    return this.productionBatchesService.recordProductionBatch(id, dto, userId, mfgRole);
+  }
+
+  /** "Gửi KCS" ChotPanel - đóng ProductionBatch đang OPEN, chuyển AWAITING_QC. */
+  @Post('production-batches/:id/finish')
+  @RequirePermissions(CREATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  finishProductionBatch(@Param('id') id: string, @CurrentUser('mfgRole') mfgRole: string | null) {
+    return this.productionBatchesService.finishProductionBatch(id, mfgRole);
   }
 
   /** Phôi xem lại bundle theo công đoạn CỦA CHÍNH order này - trạng thái + Bù đủ (VatTuTpDetail.tsx). */

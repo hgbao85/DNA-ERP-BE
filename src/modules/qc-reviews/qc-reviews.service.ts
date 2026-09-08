@@ -412,11 +412,15 @@ export class QcReviewsService {
    * Sếp Trương Văn Nhân qua chat nội bộ: "sửa được thì không tính là lỗi" - toàn bộ failedQty coi
    * như "không đạt", Phôi tự sửa rồi báo Bù đủ bằng 1 bundle MỚI, không qua cấp bù kho). Từ
    * 2026-09-08 lần 2, reviewProductionBatch() (Hàn/Sơn/VTTP chốt cuối) cũng đã quy về ĐÚNG pattern
-   * này - `CreateQcReviewDto` dùng chung shape cho cả 2 method, không tách DTO riêng. KHÔNG đụng
-   * ProductionBatch.reportedQty - bundle này không sinh sản lượng, thuần là cổng kiểm tra chất
-   * lượng theo công đoạn (xem PieceStepBundle doc comment BE). bundle.status luôn → QC_PASSED sau
-   * khi duyệt (kể cả có lỗi) - "PASSED" nghĩa là "đã qua tay KCS", không phải "0 lỗi", cùng ngữ
-   * nghĩa CutBundleStatus.QC_PASSED.
+   * này - `CreateQcReviewDto` dùng chung shape cho cả 2 method, không tách DTO riêng. bundle.status
+   * luôn → QC_PASSED sau khi duyệt (kể cả có lỗi) - "PASSED" nghĩa là "đã qua tay KCS", không phải
+   * "0 lỗi", cùng ngữ nghĩa CutBundleStatus.QC_PASSED.
+   *
+   * Cập nhật 2026-09-08 (bỏ hẳn "Chốt & gửi KCS" thủ công cho VTTP có khai processSteps): NẾU đây
+   * là công đoạn CUỐI theo processSteps của mảnh, tự sinh thẳng ProductionBatch(QC_DONE) qua
+   * ProductionBatchesService.autoFinalizePieceOutputIfLastStepComplete() trong CÙNG transaction -
+   * xem doc comment method đó. Với mọi công đoạn KHÔNG phải cuối, hành vi giữ nguyên như cũ: không
+   * đụng ProductionBatch, thuần là cổng kiểm tra chất lượng theo công đoạn.
    */
   async reviewPieceStep(
     pieceStepBundleId: string,
@@ -456,6 +460,15 @@ export class QcReviewsService {
         where: { id: bundle.id },
         data: { status: PieceStepBundleStatus.QC_PASSED },
       });
+
+      await this.productionBatchesService.autoFinalizePieceOutputIfLastStepComplete(
+        tx,
+        bundle.productionOrder.bomRevisionId,
+        bundle.productionOrderId,
+        bundle.pieceId,
+        bundle.step,
+        reviewedById,
+      );
 
       return review;
     });
