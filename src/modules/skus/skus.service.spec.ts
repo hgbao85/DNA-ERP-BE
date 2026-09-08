@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
+import { CloudinaryService } from '../uploads/cloudinary.service';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { SkusService } from './skus.service';
 
@@ -22,6 +23,7 @@ const SYSTEM_GROUP_IDS = {
 describe('SkusService', () => {
   let service: SkusService;
   let bomRevisionsService: { create: jest.Mock; activateInTransaction: jest.Mock };
+  let cloudinaryService: { deleteByUrl: jest.Mock };
   let prisma: {
     salesOrder: { findUnique: jest.Mock };
     mfgProduct: { findUnique: jest.Mock; update: jest.Mock };
@@ -172,9 +174,11 @@ describe('SkusService', () => {
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     bomRevisionsService = { create: jest.fn(), activateInTransaction: jest.fn() };
+    cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
     service = new SkusService(
       prisma as unknown as PrismaServiceType,
       bomRevisionsService as unknown as BomRevisionsService,
+      cloudinaryService as unknown as CloudinaryService,
     );
   });
 
@@ -505,9 +509,73 @@ describe('SkusService', () => {
             materialId: 60n,
             qtyPerPiece: 3,
             note: null,
+            photoUrl: null,
           },
         ],
       });
+    });
+
+    it('xoá ảnh Cloudinary mồ côi khi dòng Dây đổi sang ảnh khác (full-replace)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', code: 'MANH-TUA' }]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 60n, code: 'DAY-2LY', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+      ]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([
+        { photoUrl: 'https://res.cloudinary.com/demo/image/upload/v1/old.jpg' },
+      ]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Manh tua',
+            qtyPerUnit: 2,
+            segments: [],
+            materialLines: [
+              {
+                group: 'WIRE',
+                materialId: '60',
+                qtyPerPiece: 3,
+                photoUrl: 'https://res.cloudinary.com/demo/image/upload/v1/new.jpg',
+              },
+            ],
+          },
+        ],
+        enteredBy: 'NV Day',
+      });
+
+      expect(cloudinaryService.deleteByUrl).toHaveBeenCalledTimes(1);
+      expect(cloudinaryService.deleteByUrl).toHaveBeenCalledWith(
+        'https://res.cloudinary.com/demo/image/upload/v1/old.jpg',
+      );
+    });
+
+    it('KHÔNG xoá ảnh khi dòng Dây gửi lại đúng photoUrl cũ (không đổi)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', code: 'MANH-TUA' }]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 60n, code: 'DAY-2LY', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+      ]);
+      const sameUrl = 'https://res.cloudinary.com/demo/image/upload/v1/same.jpg';
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([{ photoUrl: sameUrl }]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Manh tua',
+            qtyPerUnit: 2,
+            segments: [],
+            materialLines: [{ group: 'WIRE', materialId: '60', qtyPerPiece: 3, photoUrl: sameUrl }],
+          },
+        ],
+        enteredBy: 'NV Day',
+      });
+
+      expect(cloudinaryService.deleteByUrl).not.toHaveBeenCalled();
     });
 
     it('sets Piece.isWoven = true once a piece has a Dây line - Đinh/Nút nhựa không bắt buộc', async () => {

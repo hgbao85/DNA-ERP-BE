@@ -79,6 +79,11 @@ export class QuotaPieceMaterialLineDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  @ApiPropertyOptional({ description: 'URL ảnh đính kèm (upload qua POST /uploads/image)' })
+  @IsOptional()
+  @IsString()
+  photoUrl?: string;
 }
 
 /** 1 dòng định mức "vật tư thành phẩm" (vd thanh nhôm → chân nhôm, tấm sắt lá → "pat") -

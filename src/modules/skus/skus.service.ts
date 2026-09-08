@@ -29,6 +29,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
+import { CloudinaryService } from '../uploads/cloudinary.service';
 import { CreateSkuDto } from './dto/create-sku.dto';
 import { UpdateSkuDto } from './dto/update-sku.dto';
 import { SkuResponseDto } from './dto/sku-response.dto';
@@ -115,6 +116,7 @@ export class SkusService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly bomRevisionsService: BomRevisionsService,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   async create(dto: CreateSkuDto, actorUserId: string): Promise<SkuResponseDto> {
@@ -279,13 +281,22 @@ export class SkusService {
     const pf = await this.findOneOrThrow(id);
     const revision = await this.resolveDraftBomRevision(pf);
     const enteredAt = new Date();
+    // Ảnh (Dây, xem PieceMaterialItem.photoUrl) bị "mồ côi" khi 1 dòng đổi/mất ảnh trong lần
+    // full-replace này - dọn best-effort SAU KHI transaction đã commit (xem cuối hàm), không
+    // được để lỗi Cloudinary chặn việc ghi định mức chính.
+    let orphanedPhotoUrls: string[] = [];
 
     const updated = await this.prisma.$transaction(
       async (tx) => {
         if (!dto.pieces) {
           throw new BadRequestException('manh-quota yêu cầu field "pieces"');
         }
-        await this.replacePieces(tx, revision.id, pf.mfgProductId, dto.pieces);
+        ({ orphanedPhotoUrls } = await this.replacePieces(
+          tx,
+          revision.id,
+          pf.mfgProductId,
+          dto.pieces,
+        ));
 
         // Nhập lại (kể cả sau khi bị từ chối) coi như đã sửa xong - xoá quyết định duyệt cũ
         // (status/reason/reviewedAt về null), giữ enteredBy/enteredAt mới.
@@ -316,6 +327,7 @@ export class SkusService {
       },
       { timeout: QUOTA_TRANSACTION_TIMEOUT_MS },
     );
+    await Promise.all(orphanedPhotoUrls.map((url) => this.cloudinaryService.deleteByUrl(url)));
     return this.toResponseDtoWithQuota(updated);
   }
 
@@ -794,8 +806,17 @@ export class SkusService {
     bomRevisionId: bigint,
     mfgProductId: bigint,
     pieces: QuotaPieceDto[],
-  ): Promise<void> {
+  ): Promise<{ orphanedPhotoUrls: string[] }> {
     const steelGroupId = await this.resolveSystemGroupId(tx, MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR);
+    // Ảnh (Dây, xem PieceMaterialItem.photoUrl) không có bảng riêng để "cascade xoá theo dõi" -
+    // full-replace bên dưới xoá sạch rồi tạo lại, nên phải chụp URL đang có TRƯỚC khi xoá để biết
+    // ảnh nào bị bỏ rơi (đổi ảnh khác/xoá dòng) sau khi so với URL còn dùng ở dữ liệu mới.
+    const oldPhotoUrls = (
+      await tx.pieceMaterialItem.findMany({
+        where: { bomRevisionId, photoUrl: { not: null } },
+        select: { photoUrl: true },
+      })
+    ).map((r) => r.photoUrl!);
     await tx.pieceBom.deleteMany({ where: { bomRevisionId } });
     await tx.pieceMaterialItem.deleteMany({ where: { bomRevisionId } });
     await tx.pieceMaterialYield.deleteMany({ where: { bomRevisionId } });
@@ -852,6 +873,7 @@ export class SkusService {
       materialId: bigint;
       qtyPerPiece: number;
       note: string | null;
+      photoUrl: string | null;
     }[] = [];
     const pieceMaterialYieldRows: {
       bomRevisionId: bigint;
@@ -895,6 +917,7 @@ export class SkusService {
           materialId,
           qtyPerPiece: line.qtyPerPiece,
           note: line.note ?? null,
+          photoUrl: line.photoUrl ?? null,
         });
       }
       for (const y of p.materialYields ?? []) {
@@ -922,6 +945,11 @@ export class SkusService {
     }
 
     await this.syncIsWoven(tx, pieces, pieceIdOf);
+
+    const newPhotoUrls = new Set(
+      pieceMaterialRows.map((r) => r.photoUrl).filter((u): u is string => !!u),
+    );
+    return { orphanedPhotoUrls: oldPhotoUrls.filter((u) => !newPhotoUrls.has(u)) };
   }
 
   /** Mảnh "có đan" = có ít nhất 1 dòng vật tư nhóm Dây (WIRE) trong materialLines - CHỈ cần Dây,
@@ -1198,6 +1226,7 @@ export class SkusService {
       materialUnit: r.material.unit,
       qtyPerPiece: r.qtyPerPiece.toNumber(),
       note: r.note,
+      photoUrl: r.photoUrl,
     });
     const toPieceMaterialYieldLine = (r: (typeof pieceMaterialYields)[number]) => ({
       id: Number(r.id),

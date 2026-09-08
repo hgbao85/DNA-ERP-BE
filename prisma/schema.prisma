@@ -753,6 +753,10 @@ model PieceMaterialItem {
   materialId    BigInt
   qtyPerPiece   Decimal @db.Decimal(14, 4)
   note          String?
+  /// Ảnh đính kèm cho dòng vật tư (vd ảnh mẫu cuộn dây) - upload qua /uploads/image (Cloudinary,
+  /// xem services/uploads-api.ts ở FE), lưu thẳng URL. Áp dụng chung cho cả 4 nhóm phẳng (Dây/
+  /// Đinh/Tán rút/Nút nhựa) dù UI hiện chỉ mở ở tab Dây (SpecSteelPage.tsx).
+  photoUrl      String?
 
   bomRevision BomRevision @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
   piece       Piece       @relation(fields: [pieceId], references: [id])
