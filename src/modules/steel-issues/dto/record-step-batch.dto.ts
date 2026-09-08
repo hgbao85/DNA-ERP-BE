@@ -30,6 +30,12 @@ export class StepBatchSegmentDto {
  * RecordCutBatchDto qua route cut-batches).
  */
 export class RecordStepBatchDto {
+  /** Loại sắt đích (2026-09-07, đổi scope lần 2 - PI có thể nhiều loại sắt, route không còn gắn
+   *  với 1 CutBundle cụ thể để suy ra material nữa). */
+  @ApiProperty()
+  @IsString()
+  materialId!: string;
+
   @ApiProperty({ enum: ProcessStep })
   @IsEnum(ProcessStep)
   step!: ProcessStep;

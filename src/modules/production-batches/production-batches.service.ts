@@ -53,7 +53,14 @@ type PieceMaterialYieldExtras = {
 
 const PRODUCTION_BATCH_INCLUDE = {
   productionOrder: {
-    include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+    include: {
+      productionInvoiceItem: {
+        select: {
+          salesOrder: { select: { code: true } },
+          productionInvoice: { select: { code: true } },
+        },
+      },
+    },
   },
   piece: true,
 } satisfies Prisma.ProductionBatchInclude;
@@ -64,7 +71,14 @@ export type ProductionBatchRow = Prisma.ProductionBatchGetPayload<{
 
 const PIECE_STEP_BUNDLE_INCLUDE = {
   productionOrder: {
-    include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+    include: {
+      productionInvoiceItem: {
+        select: {
+          salesOrder: { select: { code: true } },
+          productionInvoice: { select: { code: true } },
+        },
+      },
+    },
   },
   piece: true,
 } satisfies Prisma.PieceStepBundleInclude;
@@ -402,6 +416,7 @@ export class ProductionBatchesService {
       productionOrderId: bundle.productionOrderId.toString(),
       poNumber: bundle.productionOrder.poNumber,
       salesOrderCode: bundle.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
+      piCode: bundle.productionOrder.productionInvoiceItem.productionInvoice?.code ?? null,
       pieceId: bundle.pieceId.toString(),
       pieceCode: bundle.piece.code,
       pieceName: bundle.piece.name,
@@ -598,7 +613,11 @@ export class ProductionBatchesService {
         : [
             new Map<string, PieceMaterialYieldExtras>(),
             new Map<string, number>(),
-            { submitted: new Map<string, number>(), passed: new Map<string, number>() },
+            {
+              submitted: new Map<string, number>(),
+              passed: new Map<string, number>(),
+              failed: new Map<string, number>(),
+            },
           ];
 
     const items = bomPieces.map((bp) => {
@@ -623,6 +642,7 @@ export class ProductionBatchesService {
             doneQty: stepBatchDoneMap.get(stepKey) ?? 0,
             submittedQty: stepBundleMaps.submitted.get(stepKey) ?? 0,
             passedQty: stepBundleMaps.passed.get(stepKey) ?? 0,
+            failedQty: stepBundleMaps.failed.get(stepKey) ?? 0,
           });
         }),
         qtyPerPiece: extras?.qtyPerPiece ?? null,
@@ -685,6 +705,7 @@ export class ProductionBatchesService {
           : Promise.resolve({
               submitted: new Map<string, number>(),
               passed: new Map<string, number>(),
+              failed: new Map<string, number>(),
             }),
       ]);
 
@@ -726,6 +747,7 @@ export class ProductionBatchesService {
               doneQty: stepBatchDoneMap.get(stepKey) ?? 0,
               submittedQty: stepBundleMaps.submitted.get(stepKey) ?? 0,
               passedQty: stepBundleMaps.passed.get(stepKey) ?? 0,
+              failedQty: stepBundleMaps.failed.get(stepKey) ?? 0,
             });
           }),
           qtyPerPiece: extras?.qtyPerPiece ?? null,
@@ -878,18 +900,33 @@ export class ProductionBatchesService {
   /** Σ PieceStepBundle.qty theo (order, piece, step), tách 2 map trong 1 lần groupBy(status) -
    *  `submitted` = MỌI status (dùng để tính "còn chưa gửi KCS" = doneQty - submittedQty ở FE),
    *  `passed` = CHỈ status=QC_PASSED (cảnh báo "vượt bước trước", xem PieceStepProgressDto doc
-   *  comment). CHỈ gọi khi stage=PHOI, cùng khuôn getStepBatchDoneMap(). */
-  private async getStepBundleMaps(
-    orderIds: bigint[],
-  ): Promise<{ submitted: Map<string, number>; passed: Map<string, number> }> {
+   *  comment). `failed` (2026-09-07 lần 2, xem changelog "Bù đủ dồn về bảng tổng") = Σ
+   *  QcReview.failedQty CỘNG DỒN LỊCH SỬ (không trừ gì, mirror getStepProgress() bên Sắt) - "Lỗi"
+   *  không tự giảm, Phôi bù bằng cách báo thêm rồi gửi KCS như đợt mới. CHỈ gọi khi stage=PHOI,
+   *  cùng khuôn getStepBatchDoneMap(). */
+  private async getStepBundleMaps(orderIds: bigint[]): Promise<{
+    submitted: Map<string, number>;
+    passed: Map<string, number>;
+    failed: Map<string, number>;
+  }> {
     const submitted = new Map<string, number>();
     const passed = new Map<string, number>();
-    if (orderIds.length === 0) return { submitted, passed };
-    const rows = await this.prisma.pieceStepBundle.groupBy({
-      by: ['productionOrderId', 'pieceId', 'step', 'status'],
-      where: { productionOrderId: { in: orderIds } },
-      _sum: { qty: true },
-    });
+    const failed = new Map<string, number>();
+    if (orderIds.length === 0) return { submitted, passed, failed };
+    const [rows, failedRows] = await Promise.all([
+      this.prisma.pieceStepBundle.groupBy({
+        by: ['productionOrderId', 'pieceId', 'step', 'status'],
+        where: { productionOrderId: { in: orderIds } },
+        _sum: { qty: true },
+      }),
+      this.prisma.qcReview.findMany({
+        where: { pieceStepBundle: { productionOrderId: { in: orderIds } } },
+        select: {
+          failedQty: true,
+          pieceStepBundle: { select: { productionOrderId: true, pieceId: true, step: true } },
+        },
+      }),
+    ]);
     for (const r of rows) {
       const key = `${r.productionOrderId}:${r.pieceId}:${r.step}`;
       const qty = r._sum.qty ?? 0;
@@ -898,7 +935,12 @@ export class ProductionBatchesService {
         passed.set(key, (passed.get(key) ?? 0) + qty);
       }
     }
-    return { submitted, passed };
+    for (const r of failedRows) {
+      if (!r.pieceStepBundle) continue;
+      const key = `${r.pieceStepBundle.productionOrderId}:${r.pieceStepBundle.pieceId}:${r.pieceStepBundle.step}`;
+      failed.set(key, (failed.get(key) ?? 0) + r.failedQty);
+    }
+    return { submitted, passed, failed };
   }
 
   /**
@@ -1148,6 +1190,7 @@ export class ProductionBatchesService {
       productionOrderId: batch.productionOrderId.toString(),
       poNumber: batch.productionOrder.poNumber,
       salesOrderCode: batch.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
+      piCode: batch.productionOrder.productionInvoiceItem.productionInvoice?.code ?? null,
       stage: batch.stage,
       pieceId: batch.pieceId.toString(),
       pieceCode: batch.piece.code,

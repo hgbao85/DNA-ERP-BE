@@ -86,7 +86,6 @@ model User {
   materialsToBuy                    Material[]
   steelIssuesIssued                 SteelIssue[]                @relation("SteelIssueIssuedBy")
   qcReviewsReviewed                 QcReview[]                  @relation("QcReviewReviewedBy")
-  replenishRequestsFulfilled        ReplenishRequest[]          @relation("ReplenishRequestFulfilledBy")
   weavingIssuesIssued               WeavingIssue[]              @relation("WeavingIssueIssuedBy")
   weavingReceiptsReceived           WeavingReceipt[]            @relation("WeavingReceiptReceivedBy")
   materialIssuesIssued              MaterialIssue[]             @relation("MaterialIssueIssuedBy")
@@ -397,6 +396,8 @@ model Material {
   steelIssues                   SteelIssue[]
   materialIssues                MaterialIssue[]
   materialYieldIssues           MaterialYieldIssue[]
+  stepBatches                   StepBatch[]
+  stepBundles                   StepBundle[]
   packagingIssues               PackagingIssue[]
   inspectionKhoResultItems      InspectionKhoResultItem[]
 
@@ -1125,6 +1126,8 @@ model ProductionInvoice {
   planForms         PlanForm[]
   cuttingProposals  CuttingProposal[]
   steelIssues       SteelIssue[]
+  stepBatches       StepBatch[]
+  stepBundles       StepBundle[]
   purchaseProposals PurchaseProposal[]
   stockReservations StockReservation[]
 
@@ -2182,12 +2185,6 @@ enum SteelIssueStatus {
   QC_PASSED
 }
 
-enum ReplenishRequestStatus {
-  OPEN
-  FULFILLED
-  REJECTED
-}
-
 /// 1 đợt kho xuất sắt cho 1 (production_invoice, material) - gộp theo cả PI, không theo riêng 1
 /// mảnh/PO (đổi từ productionOrderId+pieceId sang productionInvoiceId, xem changelog
 /// 2026-08-18-xuat-sat-po-pi-vat-tu.md mục 2). Phôi tự phân bổ vật lý theo mảnh nào, hệ thống
@@ -2228,18 +2225,16 @@ model SteelIssue {
   issuedById          String
   /// Phôi xác nhận cắt xong.
   completedAt         DateTime?
-  /// Self-reference - đợt làm lại do KCS bắt sửa (QcReview.failedQty > scrapQty).
+  /// Self-reference - đợt làm lại do KCS bắt sửa.
   reworkOfId          BigInt?
 
-  productionInvoice ProductionInvoice  @relation(fields: [productionInvoiceId], references: [id])
-  material          Material           @relation(fields: [materialId], references: [id])
-  issuedBy          User               @relation("SteelIssueIssuedBy", fields: [issuedById], references: [id])
-  reworkOf          SteelIssue?        @relation("SteelIssueRework", fields: [reworkOfId], references: [id])
-  reworkIssues      SteelIssue[]       @relation("SteelIssueRework")
+  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id])
+  material          Material          @relation(fields: [materialId], references: [id])
+  issuedBy          User              @relation("SteelIssueIssuedBy", fields: [issuedById], references: [id])
+  reworkOf          SteelIssue?       @relation("SteelIssueRework", fields: [reworkOfId], references: [id])
+  reworkIssues      SteelIssue[]      @relation("SteelIssueRework")
   bundles           CutBundle[]
-  stepBatches       StepBatch[]
   qcReviews         QcReview[]
-  replenishedBy     ReplenishRequest[] @relation("ReplenishRequestFulfilledByIssue")
 
   @@index([productionInvoiceId, materialId])
   @@index([status])
@@ -2284,8 +2279,6 @@ model CutBundle {
   steelIssue      SteelIssue              @relation(fields: [steelIssueId], references: [id])
   proposalPattern CuttingProposalPattern? @relation(fields: [proposalPatternId], references: [id])
   segments        CutPatternSegment[]
-  stepBatches     StepBatch[]
-  stepBundles     StepBundle[]
   qcReviews       QcReview[]
 
   @@index([steelIssueId])
@@ -2325,27 +2318,26 @@ model CutPatternSegment {
 /// append-only, cộng dồn nhiều đợt giống CutBundle (2026-08-27). Không có barCount/mauNguyên/scrap
 /// như CutBundle vì bước này không tác động lên cây sắt - chỉ xử lý tiếp trên các ĐOẠN đã cắt ra.
 /// Không áp dụng cho step=CAT (đã có CutBundle riêng, mang cả số cây + cân bằng vật chất).
+/// 1 lần Phôi báo "đã gia công" cho 1 công đoạn phụ (2026-09-07, đổi scope lần 2) - scope theo PI +
+/// vật tư (KHÔNG còn steelIssueId/cutBundleId - Phôi làm các công đoạn song song, không cần biết
+/// đúng lô/đợt cắt nào ra đoạn đó, xem StepBundle doc comment).
 model StepBatch {
-  id           BigInt      @id @default(autoincrement())
-  steelIssueId BigInt
-  /// Đợt cắt cụ thể của công đoạn này (2026-09-05) - NULL = dữ liệu cũ (trước khi hạ vòng đời
-  /// xuống từng đợt cắt, lúc đó Uốn/Dập tính cho CẢ lô nhận). Dòng mới LUÔN ghi cả 2 cột:
-  /// steelIssueId giữ nguyên để mọi truy vấn cũ theo lô vẫn đúng, cutBundleId để lọc theo đợt.
-  cutBundleId  BigInt?
-  step         ProcessStep
+  id                  BigInt      @id @default(autoincrement())
+  productionInvoiceId BigInt
+  materialId          BigInt
+  step                ProcessStep
   /// Đợt gửi KCS đã gom dòng này vào (2026-09-07, xem StepBundle) - NULL = đã báo nhưng CHƯA gửi
   /// KCS. Cùng ý nghĩa PieceStepBatch.pieceStepBundleId (VTTP) nhưng ở nhánh Sắt (bóc theo cỡ đoạn
   /// qua StepBatchSegment, không phải số lượng phẳng).
-  stepBundleId BigInt?
-  createdAt    DateTime    @default(now())
+  stepBundleId        BigInt?
+  createdAt           DateTime    @default(now())
 
-  steelIssue SteelIssue         @relation(fields: [steelIssueId], references: [id])
-  cutBundle  CutBundle?         @relation(fields: [cutBundleId], references: [id])
-  stepBundle StepBundle?        @relation(fields: [stepBundleId], references: [id])
-  segments   StepBatchSegment[]
+  productionInvoice ProductionInvoice  @relation(fields: [productionInvoiceId], references: [id])
+  material          Material           @relation(fields: [materialId], references: [id])
+  stepBundle        StepBundle?        @relation(fields: [stepBundleId], references: [id])
+  segments          StepBatchSegment[]
 
-  @@index([steelIssueId, step])
-  @@index([cutBundleId, step])
+  @@index([productionInvoiceId, materialId, step])
   @@index([stepBundleId])
   @@map("step_batches")
 }
@@ -2355,34 +2347,34 @@ enum StepBundleStatus {
   QC_PASSED
 }
 
-/// "Đợt gửi KCS" cho 1 CÔNG ĐOẠN PHỤ (Uốn/Dập/Đục lỗ/Tán/...) của 1 đợt cắt cụ thể (2026-09-07) -
-/// mirror CutBundle nhưng scope hẹp hơn (cutBundleId + step, không có barCount/mauNguyên/scrap).
-/// Trước đây công đoạn phụ chỉ là CỜ TỰ KHAI của Phôi (CutBundle.completedSteps, không qua KCS) -
-/// đổi sang gửi KCS RIÊNG cho từng công đoạn, KHÔNG chờ nhau (quyết định nghiệp vụ 2026-09-07, Sếp
-/// Trương Văn Nhân: "Cắt xong thì qua KCS, qua từng công đoạn thì đều phải qua KCS" - cùng tinh
-/// thần PieceStepBundle bên VTTP nhưng bóc theo CỠ ĐOẠN qua StepBatchSegment, không phải số lượng
-/// phẳng). Tổ Phôi gom các StepBatch CHƯA gửi (stepBundleId NULL) của (cutBundleId, step) thành 1
-/// bundle rồi gửi KCS.
+/// "Đợt gửi KCS" cho 1 CÔNG ĐOẠN PHỤ (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ) của 1 LOẠI SẮT trong 1 PI
+/// (2026-09-07, đổi scope 2026-09-07 lần 2 theo Sếp Trương Văn Nhân - xem changelog "Bù đủ dồn về
+/// bảng tổng"): KHÔNG còn gắn với 1 CutBundle cụ thể - mirror PieceStepBundle bên VTTP (scope theo
+/// PI + vật tư, không phải theo đợt) vì Phôi làm các công đoạn SONG SONG, không tuần tự, số liệu
+/// mỗi công đoạn tính sẵn theo định mức nên không cần biết đúng đợt cắt nào tạo ra đoạn đó. Tổ Phôi
+/// gom các StepBatch CHƯA gửi (stepBundleId NULL) của (productionInvoiceId, materialId, step)
+/// thành 1 bundle rồi gửi KCS.
 ///
-/// KCS chấm qua QcReview.stepBundleId (KHÔNG nằm trong XOR qc_reviews_goods_xor_chk - CÙNG cách
-/// cutBundleId là cột lọc PHỤ, dòng review vẫn ghi steelIssueId là leg chính, xem QcReview doc
-/// comment) - chấm THEO CỠ ĐOẠN qua QcReviewSegment, CHỈ Đạt/Không đạt (mirror reviewCutBundle(),
-/// KHÔNG có khái niệm "phế/sửa được" - đúng quyết định cùng ngày cho nhánh VTTP, áp dụng luôn cho
-/// Sắt vì đây vốn là hành vi GỐC của Sắt, không phải thay đổi mới).
+/// KCS chấm qua QcReview.stepBundleId - LÀ 1 LEG THẬT trong XOR qc_reviews_goods_xor_chk (mirror
+/// pieceStepBundleId, KHÔNG còn kèm steelIssueId như bản cũ vì StepBundle không còn thuộc đúng 1
+/// SteelIssue nào nữa) - chấm THEO CỠ ĐOẠN qua QcReviewSegment, CHỈ Đạt/Không đạt (mirror
+/// reviewCutBundle(), KHÔNG có khái niệm "phế/sửa được" - hành vi GỐC của Sắt).
 model StepBundle {
-  id            BigInt           @id @default(autoincrement())
-  cutBundleId   BigInt
-  step          ProcessStep
-  status        StepBundleStatus @default(AWAITING_QC)
-  submittedAt   DateTime         @default(now())
-  submittedById String
+  id                  BigInt           @id @default(autoincrement())
+  productionInvoiceId BigInt
+  materialId          BigInt
+  step                ProcessStep
+  status              StepBundleStatus @default(AWAITING_QC)
+  submittedAt         DateTime         @default(now())
+  submittedById       String
 
-  cutBundle   CutBundle   @relation(fields: [cutBundleId], references: [id])
-  submittedBy User        @relation("StepBundleSubmittedBy", fields: [submittedById], references: [id])
-  batches     StepBatch[]
-  qcReviews   QcReview[]
+  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id])
+  material          Material          @relation(fields: [materialId], references: [id])
+  submittedBy       User              @relation("StepBundleSubmittedBy", fields: [submittedById], references: [id])
+  batches           StepBatch[]
+  qcReviews         QcReview[]
 
-  @@index([cutBundleId, step])
+  @@index([productionInvoiceId, materialId, step])
   @@index([status])
   @@map("step_bundles")
 }
@@ -2407,64 +2399,50 @@ model StepBatchSegment {
 /// Phôi (steelIssueId) được dùng ở bản này - productionBatchId để trống, chờ hạng mục M2
 /// "Sản lượng theo công đoạn" (bảng production_batch chưa tồn tại).
 ///
-/// failedQty/scrapQty (2 cột dưới) là TỔNG dẫn xuất từ `segments[]` cho nhánh Phôi (từ
-/// 2026-08-24, xem QcReviewSegment) - giữ lại để KHÔNG đổi shape cho nhánh Hàn/Sơn (vẫn duyệt
-/// cả lô, không bóc theo cỡ đoạn - production_batch chưa có "cỡ" gì để bóc).
+/// failedQty là TỔNG dẫn xuất từ `segments[]` cho nhánh Phôi (từ 2026-08-24, xem QcReviewSegment) -
+/// giữ lại để KHÔNG đổi shape cho nhánh Hàn/Sơn (vẫn duyệt cả lô, không bóc theo cỡ đoạn -
+/// production_batch chưa có "cỡ" gì để bóc). failedQty BẤT BIẾN mọi nhánh (số KCS chấm lần đầu,
+/// không sửa lại sau) - CHỐT CUỐI (productionBatchId, 2026-09-08 lần 2, xem changelog "Bù đủ dồn
+/// về bảng tổng") đã bỏ hẳn "Sửa được/Phế" (scrapQty) + cơ chế "Bù đủ -> KCS duyệt lại"
+/// (resolvedQty/phoiReportedAt/phoiReportedQty) - đồng bộ với mọi nhánh khác đã quy về cùng 1
+/// pattern: "Lỗi" là số lịch sử cộng dồn, Bù đủ = 1 ProductionBatch HOÀN TOÀN MỚI gửi duyệt lại
+/// bình thường, không sửa lại dòng review cũ.
 model QcReview {
   id                BigInt   @id @default(autoincrement())
   steelIssueId      BigInt?
-  /// Nhánh Hàn/Sơn (Phase 9d, 2026-08-11) - XOR với steelIssueId/pieceStepBundleId, CHECK DB
-  /// qc_reviews_goods_xor_chk (mở rộng 3 cột 2026-09-07, xem pieceStepBundleId dưới).
+  /// Nhánh Hàn/Sơn/VTTP "Chốt & gửi KCS" (Phase 9d, 2026-08-11) - XOR với
+  /// steelIssueId/pieceStepBundleId/stepBundleId, CHECK DB qc_reviews_goods_xor_chk (mở rộng 4 cột
+  /// 2026-09-07, xem pieceStepBundleId/stepBundleId dưới).
   productionBatchId BigInt?
   /// Đợt cắt được chấm (2026-09-05) - KCS Phôi giờ duyệt theo TỪNG đợt cắt, không phải cả lô
   /// nhận. KHÔNG nằm trong XOR nói trên: dòng nhánh Phôi mới ghi CẢ steelIssueId (lô cha, giữ cho
   /// mọi truy vấn/ràng buộc cũ nguyên vẹn - kể cả CHECK qc_reviews_goods_xor_chk) LẪN cutBundleId.
   /// NULL = dữ liệu cũ, chấm cho cả lô.
   cutBundleId       BigInt?
-  /// Đợt gửi KCS theo công đoạn PHỤ của Sắt (2026-09-07, xem StepBundle) - CÙNG vai trò cutBundleId
-  /// ở trên (cột lọc PHỤ, KHÔNG nằm trong XOR), dòng review vẫn ghi steelIssueId là leg chính.
+  /// Đợt gửi KCS theo công đoạn PHỤ của Sắt (2026-09-07, đổi scope lần 2 - StepBundle không còn
+  /// thuộc đúng 1 SteelIssue nào) - LÀ 1 LEG THẬT trong XOR qc_reviews_goods_xor_chk (mirror
+  /// pieceStepBundleId dưới, KHÔNG còn kèm steelIssueId như bản đầu).
   stepBundleId      BigInt?
   /// Nhánh công đoạn vật tư thành phẩm (2026-09-07, xem PieceStepBundle) - XOR CÙNG
-  /// steelIssueId/productionBatchId (CHECK qc_reviews_goods_xor_chk mở rộng 3 cột). KHÔNG phải
-  /// con của productionBatchId dù cùng "Vật tư TP" - bundle được duyệt TRƯỚC KHI ProductionBatch
-  /// tồn tại (đó là bước "Chốt & gửi KCS" cuối, xảy ra SAU mọi công đoạn). Dùng CHUNG cơ chế "Bù
-  /// đủ" resolvedQty/phoiReportedAt/phoiReportedQty bên dưới (cùng ý nghĩa nhánh productionBatchId
-  /// - 1 review = 1 đơn vị outstanding duy nhất, không có "cỡ đoạn" để bóc).
+  /// steelIssueId/productionBatchId/stepBundleId (CHECK qc_reviews_goods_xor_chk mở rộng 4 cột).
+  /// KHÔNG phải con của productionBatchId dù cùng "Vật tư TP" - bundle được duyệt TRƯỚC KHI
+  /// ProductionBatch tồn tại (đó là bước "Chốt & gửi KCS" cuối, xảy ra SAU mọi công đoạn).
   pieceStepBundleId BigInt?
   failedQty         Int
-  /// CHECK scrapQty <= failedQty (validate service, giống assertExactlyOneGoodsLeg style).
-  scrapQty          Int?
   defectReasonId    BigInt?
   reason            String?
   photoUrl          String?
   reviewedAt        DateTime @default(now())
   reviewedById      String
-  /// "Bù đủ" cho nhánh Hàn/Sơn/VTTP (2026-09-07, productionBatchId != null HOẶC pieceStepBundleId
-  /// != null - CÙNG ngữ nghĩa, dùng chung 3 cột này) - CHỈ áp dụng cho phần
-  /// SỬA ĐƯỢC (failedQty - (scrapQty ?? 0)), KHÔNG áp dụng cho phần đã cấp `scrapQty` (hàng hỏng
-  /// hẳn, xử lý qua ReplenishRequest riêng - xin nguyên liệu MỚI, không phải "sửa lại"). Cùng ngữ
-  /// nghĩa QcReviewSegment bên Sắt nhưng đặt Ở CẤP REVIEW (không phải segment) vì nhánh này không
-  /// có "cỡ đoạn" để bóc - 1 review = 1 đơn vị outstanding duy nhất. resolvedQty tăng KHÔNG chỉ để
-  /// hiển thị: recheckProductionBatch() cộng thẳng phần mới xác nhận vào
-  /// ProductionBatch.reportedQty (dù batch đã QC_DONE) để "đã đạt" tính đúng mà không cần đụng
-  /// logic tổng hợp `passedQty` dùng chung Hàn/Sơn/VTTP (xem production-batches.service.ts).
-  /// Luôn NULL/0 với nhánh steelIssueId/cutBundleId (outstanding của nhánh đó nằm ở
-  /// QcReviewSegment, không phải ở đây).
-  resolvedQty       Int      @default(0)
-  /// Lúc thợ (Phôi/Hàn/Sơn) bấm "Bù đủ" - null = chưa báo hoặc KCS vừa duyệt lại thấy còn hỏng.
-  phoiReportedAt    DateTime?
-  /// Số lượng thợ TỰ KHAI đã sửa xong - THUẦN THAM KHẢO cho KCS, không tự cộng vào resolvedQty.
-  phoiReportedQty   Int?
 
-  steelIssue        SteelIssue?        @relation(fields: [steelIssueId], references: [id])
-  productionBatch   ProductionBatch?   @relation(fields: [productionBatchId], references: [id])
-  cutBundle         CutBundle?         @relation(fields: [cutBundleId], references: [id])
-  stepBundle        StepBundle?        @relation(fields: [stepBundleId], references: [id])
-  pieceStepBundle   PieceStepBundle?   @relation(fields: [pieceStepBundleId], references: [id])
-  defectReason      DefectReason?      @relation(fields: [defectReasonId], references: [id])
-  reviewedBy        User               @relation("QcReviewReviewedBy", fields: [reviewedById], references: [id])
-  replenishRequests ReplenishRequest[]
-  segments          QcReviewSegment[]
+  steelIssue      SteelIssue?       @relation(fields: [steelIssueId], references: [id])
+  productionBatch ProductionBatch?  @relation(fields: [productionBatchId], references: [id])
+  cutBundle       CutBundle?        @relation(fields: [cutBundleId], references: [id])
+  stepBundle      StepBundle?       @relation(fields: [stepBundleId], references: [id])
+  pieceStepBundle PieceStepBundle?  @relation(fields: [pieceStepBundleId], references: [id])
+  defectReason    DefectReason?     @relation(fields: [defectReasonId], references: [id])
+  reviewedBy      User              @relation("QcReviewReviewedBy", fields: [reviewedById], references: [id])
+  segments        QcReviewSegment[]
 
   @@index([steelIssueId])
   @@index([productionBatchId])
@@ -2480,32 +2458,18 @@ model QcReview {
 /// tách ra vô nghĩa). "Không đạt" nghĩa là đoạn hỏng thật, Phôi phải BÙ bằng sắt tự kiếm ngoài
 /// thực tế - KHÔNG đụng cây sắt kho đã cấp, KHÔNG qua recordCutBatch (khác vòng 1 đã gỡ).
 ///
-/// failedQty BẤT BIẾN - là số KCS chấm lần đầu, không bao giờ sửa (đúng nguyên tắc ERP "số đã ghi
-/// nhận không bị sửa, chỉ được phân loại"). resolvedQty là phần KCS đã DUYỆT LẠI xác nhận đạt -
-/// chỉ KCS ghi được (không phải Phôi tự khai như fixedQty vòng 1 đã gỡ, vì sản lượng chỉ tính sau
-/// khi qua kiểm). outstanding = failedQty - resolvedQty là số đoạn còn thực sự lỗi.
-///
-/// 3 trạng thái suy từ 2 cột dưới, không cần enum riêng:
-///   outstanding > 0 && phoiReportedAt == null  → chờ Phôi bù
-///   outstanding > 0 && phoiReportedAt != null  → chờ KCS duyệt lại
-///   outstanding == 0                            → xong
+/// failedQty BẤT BIẾN - là số KCS chấm lần đầu, không bao giờ sửa. Bỏ hẳn resolvedQty/
+/// phoiReportedAt/phoiReportedQty (2026-09-07 lần 2, xem changelog "Bù đủ dồn về bảng tổng") -
+/// KHÔNG còn cơ chế "Phôi tự báo đã sửa, KCS duyệt lại ĐÚNG DÒNG NÀY" nữa. "Lỗi" hiển thị ở bảng
+/// tổng (getPhoiProgress/getStepProgress) giờ là Σ failedQty CỘNG DỒN LỊCH SỬ (không tự giảm) -
+/// khi Phôi bù đủ, chỉ cần làm thêm rồi gửi KCS như 1 đợt HOÀN TOÀN MỚI (không sửa lại dòng cũ này),
+/// "Còn lại" tự đúng vì cộng thêm "Đã làm" của đợt mới.
 model QcReviewSegment {
   id             BigInt    @id @default(autoincrement())
   qcReviewId     BigInt
   segmentSpecId  BigInt
-  /// Số đoạn KCS chấm KHÔNG ĐẠT lần đầu cho cỡ này. BẤT BIẾN - không sửa sau khi tạo.
+  /// Số đoạn KCS chấm KHÔNG ĐẠT cho cỡ này. BẤT BIẾN - không sửa sau khi tạo.
   failedQty      Int
-  /// Số đoạn KCS đã DUYỆT LẠI xác nhận đạt (sau khi Phôi báo bù đủ) - cộng dồn qua nhiều lượt
-  /// duyệt lại nếu còn sót. CHECK resolvedQty <= failedQty (validate service).
-  resolvedQty    Int       @default(0)
-  /// Lúc Phôi bấm "Bù đủ" - null = chưa báo hoặc KCS vừa duyệt lại thấy còn hỏng (reset về null
-  /// để Phôi báo lại lượt mới).
-  phoiReportedAt DateTime?
-  /// Số đoạn Phôi TỰ KHAI đã sửa xong khi bấm "Bù đủ" (2026-09-07) - THUẦN THAM KHẢO cho KCS xem
-  /// trước khi tự đếm lại ở recheck(), KHÔNG tự động cộng vào resolvedQty (đúng nguyên tắc "KCS là
-  /// bước kiểm soát duy nhất" - Phôi tự bù ngoài hệ thống nên số này chỉ là lời khai, không phải sự
-  /// thật đã xác nhận). Reset về null cùng lúc với phoiReportedAt (xem 2 dòng trên).
-  phoiReportedQty Int?
 
   qcReview    QcReview    @relation(fields: [qcReviewId], references: [id])
   segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])
@@ -2513,29 +2477,6 @@ model QcReviewSegment {
   @@unique([qcReviewId, segmentSpecId])
   @@index([qcReviewId])
   @@map("qc_review_segments")
-}
-
-/// Đề xuất cấp lại khi KCS chấm phế (QcReview.scrapQty > 0). fulfilledByIssueId chỉ áp dụng khi
-/// qcReview thuộc Phôi (Hàn/Sơn: BLOCKED, dừng ở OPEN/REJECTED - xem tài liệu gốc mục 9.2,
-/// "Hàn/Sơn cấp lại bán-thành-phẩm nghĩa là gì" chưa có quyết định nghiệp vụ).
-model ReplenishRequest {
-  id                 BigInt                 @id @default(autoincrement())
-  qcReviewId         BigInt
-  status             ReplenishRequestStatus @default(OPEN)
-  /// Cho phép < scrapQty (cấp bù từng phần) - CHECK qty <= qcReview.scrapQty (validate service).
-  qty                Int
-  createdAt          DateTime               @default(now())
-  fulfilledByIssueId BigInt?
-  fulfilledAt        DateTime?
-  fulfilledById      String?
-  rejectionReason    String?
-
-  qcReview         QcReview    @relation(fields: [qcReviewId], references: [id])
-  fulfilledByIssue SteelIssue? @relation("ReplenishRequestFulfilledByIssue", fields: [fulfilledByIssueId], references: [id])
-  fulfilledBy      User?       @relation("ReplenishRequestFulfilledBy", fields: [fulfilledById], references: [id])
-
-  @@index([status])
-  @@map("replenish_requests")
 }
 
 // =====================================================================
@@ -2853,9 +2794,9 @@ enum PieceStepBundleStatus {
 }
 
 /// "Đợt gửi KCS" theo TỪNG CÔNG ĐOẠN cho vật tư thành phẩm (2026-09-07) - mirror CutBundle (Sắt)
-/// nhưng phẳng hơn (không có "cỡ đoạn" để bóc, giống PieceStepBatch: 1 review = 1 đơn vị
-/// outstanding duy nhất, dùng CHUNG cơ chế "Bù đủ" resolvedQty/phoiReportedAt/phoiReportedQty trên
-/// QcReview đã có sẵn cho nhánh productionBatchId - xem QcReview doc comment).
+/// nhưng phẳng hơn (không có "cỡ đoạn" để bóc, giống PieceStepBatch). "Lỗi" (QcReview.failedQty)
+/// là số lịch sử cộng dồn, không tự giảm - Bù đủ = 1 bundle HOÀN TOÀN MỚI gửi duyệt lại (không có
+/// cơ chế report-done/recheck riêng, xem QcReview doc comment).
 ///
 /// Tổ Phôi gom các PieceStepBatch CHƯA gửi (pieceStepBundleId NULL) của (order, piece, step) thành
 /// 1 bundle rồi gửi KCS - KHÔNG chờ công đoạn khác xong trước (quyết định nghiệp vụ 2026-09-07,

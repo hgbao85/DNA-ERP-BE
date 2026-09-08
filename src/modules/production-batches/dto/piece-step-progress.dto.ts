@@ -23,6 +23,11 @@ export class PieceStepProgressDto {
    *  passedQty của bước liền TRƯỚC (theo processSteps đã chuẩn hoá thứ tự), từ khi BE bỏ chặn cứng
    *  "vượt bước trước" ở recordPieceStepBatch(). 0 khi chưa có bundle nào được duyệt. */
   @Expose() @ApiProperty() passedQty!: number;
+  /** Σ QcReview.failedQty CỘNG DỒN LỊCH SỬ của đúng bước này (2026-09-07 lần 2, xem changelog
+   *  "Bù đủ dồn về bảng tổng") - KHÔNG tự giảm (bỏ hẳn cơ chế report-done/recheck theo công đoạn).
+   *  FE hiện nút "Bù đủ" khi remaining > 0 && failedQty > 0, chỉ gợi ý sẵn số lượng vào ô nhập -
+   *  Phôi làm thêm rồi gửi KCS như đợt mới, "Còn lại" tự đúng vì cộng thêm doneQty. */
+  @Expose() @ApiProperty() failedQty!: number;
 
   constructor(partial: Partial<PieceStepProgressDto>) {
     Object.assign(this, partial);

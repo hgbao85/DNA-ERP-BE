@@ -24,8 +24,8 @@ export class QcReviewSegmentInputDto {
 }
 
 /** KCS chấm 1 SteelIssue (nhánh Phôi) THEO TỪNG CỠ ĐOẠN - thay CreateQcReviewDto (scalar
- *  failedQty/scrapQty) cho riêng route POST steel-issues/:id/qc-review. CreateQcReviewDto giữ
- *  nguyên cho POST production-batches/:id/qc-review (Hàn/Sơn, không đổi). */
+ *  failedQty) cho riêng route POST steel-issues/:id/qc-review. CreateQcReviewDto giữ nguyên cho
+ *  POST production-batches/:id/qc-review (Hàn/Sơn/VTTP chốt cuối). */
 export class CreateSteelIssueQcReviewDto {
   /** Rỗng = đạt hết, không cỡ nào lỗi. */
   @ApiProperty({ type: [QcReviewSegmentInputDto] })

@@ -8,6 +8,10 @@ export class ProductionBatchResponseDto {
   @Expose() @ApiProperty() productionOrderId!: string;
   @Expose() @ApiProperty() poNumber!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
+  /** Mã PI (ProductionInvoice.code) - dự phòng hiển thị "PO/PI" ở màn KCS khi salesOrderCode null
+   *  (PI gộp không gắn 1 đơn Sales cụ thể, cùng idiom SteelIssue.piCode). Null nếu
+   *  ProductionInvoiceItem chưa được KHSX gom vào PI nào (productionInvoiceId null). */
+  @Expose() @ApiPropertyOptional({ nullable: true }) piCode!: string | null;
   @Expose() @ApiProperty({ enum: MfgStage }) stage!: MfgStage;
   @Expose() @ApiProperty() pieceId!: string;
   @Expose() @ApiProperty() pieceCode!: string;

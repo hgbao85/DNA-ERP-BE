@@ -12,6 +12,9 @@ export class PieceStepBundleResponseDto {
   /** Mã nội bộ (ProductionOrder.poNumber) - chỉ hệ thống dùng, khớp shape BeProductionBatch. */
   @Expose() @ApiProperty() poNumber!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
+  /** Mã PI (ProductionInvoice.code) - dự phòng hiển thị "PO/PI" khi salesOrderCode null, khớp
+   *  shape BeProductionBatch. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) piCode!: string | null;
   @Expose() @ApiProperty() pieceId!: string;
   @Expose() @ApiProperty() pieceCode!: string;
   @Expose() @ApiProperty() pieceName!: string;

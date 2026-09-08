@@ -10,7 +10,6 @@ import {
   PieceStepBundleStatus,
   Prisma,
   ProductionBatchStatus,
-  ReplenishRequestStatus,
   StepBundleStatus,
   SteelIssueStatus,
 } from '../../generated/prisma/client';
@@ -26,16 +25,8 @@ import { ProductionBatchesService } from '../production-batches/production-batch
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CreateQcReviewDto } from './dto/create-qc-review.dto';
 import { CreateSteelIssueQcReviewDto } from './dto/create-steel-issue-qc-review.dto';
-import { FulfillReplenishRequestDto } from './dto/fulfill-replenish-request.dto';
 import { ListQcReviewsQueryDto } from './dto/list-qc-reviews-query.dto';
-import { ListReplenishRequestsQueryDto } from './dto/list-replenish-requests-query.dto';
-import { QcRecheckDto } from './dto/qc-recheck.dto';
 import { QcReviewResponseDto, QcReviewSegmentResponseDto } from './dto/qc-review-response.dto';
-import { RecheckProductionBatchDto } from './dto/recheck-production-batch.dto';
-import { RejectReplenishRequestDto } from './dto/reject-replenish-request.dto';
-import { ReportProductionBatchDoneDto } from './dto/report-production-batch-done.dto';
-import { ReportSegmentDoneDto } from './dto/report-segment-done.dto';
-import { ReplenishRequestResponseDto } from './dto/replenish-request-response.dto';
 
 const QC_REVIEW_INCLUDE = {
   defectReason: true,
@@ -43,22 +34,16 @@ const QC_REVIEW_INCLUDE = {
 } satisfies Prisma.QcReviewInclude;
 type QcReviewRow = Prisma.QcReviewGetPayload<{ include: typeof QC_REVIEW_INCLUDE }>;
 
-const REPLENISH_REQUEST_INCLUDE = {
-  qcReview: { include: { steelIssue: true } },
-} satisfies Prisma.ReplenishRequestInclude;
-type ReplenishRequestRow = Prisma.ReplenishRequestGetPayload<{
-  include: typeof REPLENISH_REQUEST_INCLUDE;
-}>;
-
 /**
- * KCS duyệt (Phôi + Hàn/Sơn) + đề xuất cấp lại (M2, thay phần kcsDuyetPhoi/capLaiSat của
- * phoi-sat.service.ts và phần kcsDuyetStage của san-luong.service.ts mock). qc_reviews dùng
- * chung 2 nhánh qua FK XOR (CHECK DB qc_reviews_goods_xor_chk): steelIssueId (review(), Phase 9)
- * và productionBatchId (reviewProductionBatch(), Phase 9d) - 2 endpoint REST riêng
- * (POST steel-issues/:id/qc-review vs POST production-batches/:id/qc-review) chỉ để URL rõ
- * ràng, đúng thiết kế gốc "service dùng chung logic" (docs/dna-erp-backend-implementation-plan.
- * html mục 9.2) - nhưng 2 hành vi SAU KHI duyệt khác nhau thật (xem review() vs
- * reviewProductionBatch()), nên tách 2 method thay vì 1 method rẽ nhánh nội bộ.
+ * KCS duyệt (Phôi + Hàn/Sơn + VTTP), thay phần kcsDuyetPhoi của phoi-sat.service.ts và
+ * kcsDuyetStage của san-luong.service.ts mock. qc_reviews dùng chung 4 nhánh qua FK XOR (CHECK DB
+ * qc_reviews_goods_xor_chk): steelIssueId (review(), Phase 9), productionBatchId
+ * (reviewProductionBatch(), Phase 9d), stepBundleId, pieceStepBundleId - mỗi nhánh 1 endpoint REST
+ * riêng chỉ để URL rõ ràng, đúng thiết kế gốc "service dùng chung logic"
+ * (docs/dna-erp-backend-implementation-plan.html mục 9.2). "Đề xuất cấp lại" (ReplenishRequest, chỉ
+ * sinh từ scrapQty ở reviewProductionBatch()) đã BỎ HẲN 2026-09-08 lần 2 cùng "Sửa được/Phế" - xem
+ * changelog "Bù đủ dồn về bảng tổng": mọi nhánh giờ chỉ Đạt/Không đạt, "Lỗi" là số lịch sử cộng
+ * dồn, Bù đủ = 1 đợt/lô HOÀN TOÀN MỚI gửi duyệt lại.
  */
 @Injectable()
 export class QcReviewsService {
@@ -133,7 +118,6 @@ export class QcReviewsService {
         data: {
           steelIssueId: issue.id,
           failedQty: totalFailed,
-          scrapQty: 0,
           defectReasonId,
           reason: dto.reason,
           photoUrl: dto.photoUrl,
@@ -235,7 +219,6 @@ export class QcReviewsService {
           steelIssueId: bundle.steelIssueId,
           cutBundleId: bundle.id,
           failedQty: totalFailed,
-          scrapQty: 0,
           defectReasonId,
           reason: dto.reason,
           photoUrl: dto.photoUrl,
@@ -276,6 +259,12 @@ export class QcReviewsService {
    * review.steelIssueId làm leg chính, không cần sửa gì thêm ở 2 hàm đó. KHÔNG đụng CutBundle.status
    * - vòng đời StepBundle hoàn toàn độc lập với vòng đời Cắt (xem StepBundle doc comment schema).
    */
+  /**
+   * Duyệt 1 StepBundle (2026-09-07, đổi scope lần 2) - StepBundle không còn thuộc đúng 1
+   * SteelIssue/CutBundle nào (scope PI + loại sắt), nên `QcReview` tạo ra CHỈ ghi `stepBundleId`
+   * (LÀ 1 LEG THẬT trong XOR qc_reviews_goods_xor_chk, mirror pieceStepBundleId) - KHÔNG còn kèm
+   * `steelIssueId` như bản đầu.
+   */
   async reviewStepBundle(
     stepBundleId: string,
     dto: CreateSteelIssueQcReviewDto,
@@ -284,7 +273,7 @@ export class QcReviewsService {
     const bundleBigId = parseBigIntId(stepBundleId);
     const bundle = await this.prisma.stepBundle.findUnique({
       where: { id: bundleBigId },
-      include: { cutBundle: { include: { steelIssue: true } } },
+      include: { material: true },
     });
     if (!bundle) {
       throw new NotFoundException(`Đợt gửi KCS ${stepBundleId} not found`);
@@ -294,11 +283,7 @@ export class QcReviewsService {
         `Đợt gửi KCS ${stepBundleId} đang ở trạng thái ${bundle.status} - chỉ đợt chờ KCS mới duyệt được`,
       );
     }
-    await assertPiHasActiveFloor(
-      this.prisma,
-      bundle.cutBundle.steelIssue.productionInvoiceId,
-      'duyệt KCS',
-    );
+    await assertPiHasActiveFloor(this.prisma, bundle.productionInvoiceId, 'duyệt KCS');
 
     const specIds = dto.segments.map((s) => parseBigIntId(s.segmentSpecId));
     const [specs, doneInThisBundle] = await Promise.all([
@@ -320,9 +305,9 @@ export class QcReviewsService {
       if (!spec) {
         throw new NotFoundException(`Cỡ đoạn ${seg.segmentSpecId} không tồn tại`);
       }
-      if (spec.materialId !== bundle.cutBundle.steelIssue.materialId) {
+      if (spec.materialId !== bundle.materialId) {
         throw new BadRequestException(
-          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt cắt này`,
+          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt gửi KCS này`,
         );
       }
       const doneQty = doneBySpec.get(spec.id.toString()) ?? 0;
@@ -340,10 +325,8 @@ export class QcReviewsService {
     const created = await this.prisma.$transaction(async (tx) => {
       const review = await tx.qcReview.create({
         data: {
-          steelIssueId: bundle.cutBundle.steelIssueId,
           stepBundleId: bundle.id,
           failedQty: totalFailed,
-          scrapQty: 0,
           defectReasonId,
           reason: dto.reason,
           photoUrl: dto.photoUrl,
@@ -370,197 +353,13 @@ export class QcReviewsService {
   }
 
   /**
-   * Phôi tự báo đã bù đủ cho 1 cỡ đoạn không đạt (đã tự kiếm sắt bù ngoài thực tế) - CHỜ KCS
-   * recheck() mới tính là đạt (KHÔNG tự cộng resolvedQty ở đây, sản lượng chỉ tính sau khi qua
-   * kiểm). Chặn nếu cỡ đó đã hết lỗi hoặc đang chờ duyệt lại rồi (chỉ 1 lượt báo tại 1 thời điểm).
-   *
-   * `dto.qty` (2026-09-07) - số đoạn Phôi TỰ KHAI đã sửa xong, PHẢI nằm trong (0, outstanding] -
-   * lưu THUẦN THAM KHẢO (`phoiReportedQty`) cho KCS xem trước khi tự đếm lại, KHÔNG tự cộng vào
-   * resolvedQty (đúng nguyên tắc KCS là bước kiểm soát duy nhất, xem doc comment schema).
-   */
-  async reportSegmentDone(
-    steelIssueId: string,
-    segmentSpecId: string,
-    dto: ReportSegmentDoneDto,
-  ): Promise<QcReviewResponseDto> {
-    const segRow = await this.findLatestReviewSegmentOrThrow(segmentSpecId, { steelIssueId });
-    return this.reportSegmentDoneForRow(segRow, `đợt sắt ${steelIssueId}`, dto.qty);
-  }
-
-  /**
-   * Cùng reportSegmentDone() nhưng scope theo ĐÚNG đợt cắt (2026-09-05) - dùng cho luồng mới, nơi
-   * 1 lô nhận (SteelIssue) có thể có NHIỀU đợt cắt cùng bị lỗi cùng 1 cỡ đoạn: tra theo
-   * steelIssueId (findLatestReviewSegmentOrThrow bản cũ) sẽ lấy nhầm review MỚI NHẤT của CẢ LÔ,
-   * có thể là của đợt cắt khác. Bắt buộc lọc thêm cutBundleId để đúng đợt Phôi đang xem.
-   */
-  async reportSegmentDoneForBundle(
-    cutBundleId: string,
-    segmentSpecId: string,
-    dto: ReportSegmentDoneDto,
-  ): Promise<QcReviewResponseDto> {
-    const segRow = await this.findLatestReviewSegmentOrThrow(segmentSpecId, { cutBundleId });
-    return this.reportSegmentDoneForRow(segRow, `đợt cắt ${cutBundleId}`, dto.qty);
-  }
-
-  /** Cùng reportSegmentDone() nhưng scope theo ĐÚNG StepBundle (2026-09-07, công đoạn phụ) - cùng
-   *  lý do reportSegmentDoneForBundle() tồn tại. */
-  async reportSegmentDoneForStepBundle(
-    stepBundleId: string,
-    segmentSpecId: string,
-    dto: ReportSegmentDoneDto,
-  ): Promise<QcReviewResponseDto> {
-    const segRow = await this.findLatestReviewSegmentOrThrow(segmentSpecId, { stepBundleId });
-    return this.reportSegmentDoneForRow(segRow, `đợt gửi KCS ${stepBundleId}`, dto.qty);
-  }
-
-  private async reportSegmentDoneForRow(
-    segRow: QcReviewRow['segments'][number] & { qcReviewId: bigint },
-    label: string,
-    qty: number,
-  ): Promise<QcReviewResponseDto> {
-    const outstanding = segRow.failedQty - segRow.resolvedQty;
-    if (outstanding <= 0) {
-      throw new ConflictException(`Cỡ đoạn của ${label} đã hết lỗi, không cần báo bù nữa`);
-    }
-    if (segRow.phoiReportedAt) {
-      throw new ConflictException(`Cỡ đoạn của ${label} đã báo bù đủ rồi, đang chờ KCS duyệt lại`);
-    }
-    if (qty > outstanding) {
-      throw new BadRequestException(
-        `Cỡ đoạn của ${label} chỉ còn lỗi ${outstanding} đoạn - không thể báo bù ${qty} đoạn`,
-      );
-    }
-    const review = await this.findReviewOrThrow(segRow.qcReviewId);
-    if (!review.steelIssueId) {
-      throw new BadRequestException(`${label} không thuộc nhánh Phôi`);
-    }
-    const issue = await this.steelIssuesService.findOneRowOrThrow(review.steelIssueId.toString());
-    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'báo bù đủ hàng lỗi');
-
-    await this.prisma.qcReviewSegment.update({
-      where: { id: segRow.id },
-      data: { phoiReportedAt: new Date(), phoiReportedQty: qty },
-    });
-
-    return this.toResponseDto(await this.findReviewOrThrow(segRow.qcReviewId));
-  }
-
-  /**
-   * KCS duyệt lại các cỡ đoạn Phôi đã báo "Bù đủ" - chỉ cho những cỡ đang phoiReportedAt != null.
-   * `remainingFailedQty = 0` → hết lỗi (resolvedQty = failedQty). `> 0` → còn hỏng, resolvedQty
-   * cộng đúng phần vừa đạt, phoiReportedAt reset về null để Phôi báo lại lượt mới cho phần còn
-   * lại. failedQty KHÔNG đổi (bất biến) - xem doc comment QcReviewSegment.
-   */
-  async recheck(steelIssueId: string, dto: QcRecheckDto): Promise<QcReviewResponseDto> {
-    const review = await this.prisma.qcReview.findFirst({
-      where: { steelIssueId: parseBigIntId(steelIssueId) },
-      orderBy: { reviewedAt: 'desc' },
-      include: QC_REVIEW_INCLUDE,
-    });
-    if (!review) {
-      throw new NotFoundException(`Đợt sắt ${steelIssueId} chưa có KCS chấm nào`);
-    }
-    return this.recheckForReview(review, dto, `đợt sắt ${steelIssueId}`);
-  }
-
-  /** Cùng recheck() nhưng scope theo ĐÚNG đợt cắt (2026-09-05) - xem lý do ở
-   *  reportSegmentDoneForBundle(). */
-  async recheckForBundle(cutBundleId: string, dto: QcRecheckDto): Promise<QcReviewResponseDto> {
-    const review = await this.prisma.qcReview.findFirst({
-      where: { cutBundleId: parseBigIntId(cutBundleId) },
-      orderBy: { reviewedAt: 'desc' },
-      include: QC_REVIEW_INCLUDE,
-    });
-    if (!review) {
-      throw new NotFoundException(`Đợt cắt ${cutBundleId} chưa có KCS chấm nào`);
-    }
-    return this.recheckForReview(review, dto, `đợt cắt ${cutBundleId}`);
-  }
-
-  /** Cùng recheck() nhưng scope theo ĐÚNG StepBundle (2026-09-07, công đoạn phụ) - cùng lý do
-   *  recheckForBundle() tồn tại. */
-  async recheckForStepBundle(
-    stepBundleId: string,
-    dto: QcRecheckDto,
-  ): Promise<QcReviewResponseDto> {
-    const review = await this.prisma.qcReview.findFirst({
-      where: { stepBundleId: parseBigIntId(stepBundleId) },
-      orderBy: { reviewedAt: 'desc' },
-      include: QC_REVIEW_INCLUDE,
-    });
-    if (!review) {
-      throw new NotFoundException(`Đợt gửi KCS ${stepBundleId} chưa có KCS chấm nào`);
-    }
-    return this.recheckForReview(review, dto, `đợt gửi KCS ${stepBundleId}`);
-  }
-
-  private async recheckForReview(
-    review: QcReviewRow,
-    dto: QcRecheckDto,
-    label: string,
-  ): Promise<QcReviewResponseDto> {
-    if (!review.steelIssueId) {
-      throw new BadRequestException(`${label} không thuộc nhánh Phôi`);
-    }
-    const issue = await this.steelIssuesService.findOneRowOrThrow(review.steelIssueId.toString());
-    await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'duyệt lại hàng lỗi');
-
-    const updates: {
-      id: bigint;
-      resolvedQty: number;
-      phoiReportedAt: Date | null;
-      phoiReportedQty: number | null;
-    }[] = [];
-    for (const seg of dto.segments) {
-      const specBigId = parseBigIntId(seg.segmentSpecId);
-      const segRow = review.segments.find((s) => s.segmentSpecId === specBigId);
-      if (!segRow) {
-        throw new NotFoundException(`${label} không có lỗi nào ở cỡ đoạn ${seg.segmentSpecId}`);
-      }
-      if (!segRow.phoiReportedAt) {
-        throw new ConflictException(
-          `Cỡ đoạn ${seg.segmentSpecId} chưa được Phôi báo "Bù đủ" - chưa tới lượt duyệt lại`,
-        );
-      }
-      const outstanding = segRow.failedQty - segRow.resolvedQty;
-      if (seg.remainingFailedQty > outstanding) {
-        throw new BadRequestException(
-          `Còn hỏng ${seg.remainingFailedQty} vượt số đang lỗi (${outstanding}) của cỡ đoạn ${seg.segmentSpecId}`,
-        );
-      }
-      // Còn hỏng (remainingFailedQty > 0) → mở lại lượt báo mới: reset CẢ phoiReportedAt lẫn
-      // phoiReportedQty (lời khai cũ không còn ý nghĩa cho phần còn lại). Đạt hết → giữ nguyên cả
-      // 2 làm lịch sử (khớp hành vi cũ của phoiReportedAt).
-      updates.push({
-        id: segRow.id,
-        resolvedQty: segRow.resolvedQty + (outstanding - seg.remainingFailedQty),
-        phoiReportedAt: seg.remainingFailedQty > 0 ? null : segRow.phoiReportedAt,
-        phoiReportedQty: seg.remainingFailedQty > 0 ? null : segRow.phoiReportedQty,
-      });
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      for (const u of updates) {
-        await tx.qcReviewSegment.update({
-          where: { id: u.id },
-          data: {
-            resolvedQty: u.resolvedQty,
-            phoiReportedAt: u.phoiReportedAt,
-            phoiReportedQty: u.phoiReportedQty,
-          },
-        });
-      }
-    });
-
-    return this.toResponseDto(await this.findReviewOrThrow(review.id));
-  }
-
-  /**
-   * Duyệt 1 ProductionBatch đang AWAITING_QC. Khác review() (Phôi): KHÔNG tự sinh lô rework mới
-   * (đúng hành vi mock kcsDuyetStage() + db-schema doc "Mock hiện KHÔNG tạo lô rework mới cho
-   * Hàn/Sơn") - phần sửa được (rework) không tính done, chỉ ghi đè reportedQty = phần ĐẠT (passed)
-   * trên đúng batch gốc, công nhân tự báo lại phần rework ở 1 lô mới sau (qua
-   * ProductionBatchesService.create() bình thường, không phải rework_of).
+   * Duyệt 1 ProductionBatch đang AWAITING_QC (bước "Chốt & gửi KCS" cuối, Hàn/Sơn/VTTP). Đơn giản
+   * hoá 2026-09-08 lần 2 (xem changelog "Bù đủ dồn về bảng tổng") - bỏ hẳn phân loại "Sửa
+   * được"/"Phế" (scrapQty, ReplenishRequest) + cơ chế report-done/recheck: CHỈ 2 kết quả Đạt/Không
+   * đạt, mirror ĐÚNG reviewPieceStep() bên dưới. failedQty không tính "đã báo" nữa (ghi đè
+   * reportedQty = phần ĐẠT), công nhân tự báo lại toàn bộ phần lỗi ở 1 lô HOÀN TOÀN MỚI sau (qua
+   * ProductionBatchesService.create() bình thường - "Bù đủ" chỉ pre-fill số lượng ở FE, không có
+   * API riêng).
    */
   async reviewProductionBatch(
     productionBatchId: string,
@@ -580,12 +379,6 @@ export class QcReviewsService {
         `failedQty (${dto.failedQty}) không được vượt số lượng đã báo (${batch.reportedQty})`,
       );
     }
-    const scrapQty = dto.scrapQty ?? 0;
-    if (scrapQty > dto.failedQty) {
-      throw new BadRequestException(
-        `scrapQty (${scrapQty}) không được vượt failedQty (${dto.failedQty})`,
-      );
-    }
     const passedQty = batch.reportedQty - dto.failedQty;
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
@@ -594,7 +387,6 @@ export class QcReviewsService {
         data: {
           productionBatchId: batch.id,
           failedQty: dto.failedQty,
-          scrapQty: dto.scrapQty,
           defectReasonId,
           reason: dto.reason,
           photoUrl: dto.photoUrl,
@@ -608,12 +400,6 @@ export class QcReviewsService {
         data: { status: ProductionBatchStatus.QC_DONE, reportedQty: passedQty },
       });
 
-      if (scrapQty > 0) {
-        await tx.replenishRequest.create({
-          data: { qcReviewId: review.id, qty: scrapQty },
-        });
-      }
-
       return review;
     });
 
@@ -622,17 +408,15 @@ export class QcReviewsService {
 
   /**
    * KCS duyệt 1 "đợt gửi KCS theo công đoạn" (PieceStepBundle, 2026-09-07) - mirror ĐÚNG cách Phôi/
-   * Sắt chấm (reviewCutBundle()): CHỈ 2 kết quả Đạt/Không đạt, KHÔNG tách "sửa được"/"phế" như
-   * reviewProductionBatch() (Hàn/Sơn) - quyết định nghiệp vụ 2026-09-07, Sếp Trương Văn Nhân qua
-   * chat nội bộ: "sửa được thì không tính là lỗi" (nghĩa là KHÔNG có khái niệm phế riêng ở nhánh
-   * này - toàn bộ failedQty coi như "không đạt", Phôi tự sửa rồi báo Bù đủ, KHÔNG qua
-   * ReplenishRequest/kho cấp mới). FE (kcsCore.tsx) tắt showFailMode riêng cho dòng công đoạn nên
-   * KHÔNG gửi scrapQty - dto.scrapQty CỐ Ý bị bỏ qua ở đây (không tạo ReplenishRequest), dù
-   * CreateQcReviewDto vẫn dùng chung shape với reviewProductionBatch() cho gọn, không tách DTO
-   * riêng. KHÔNG đụng ProductionBatch.reportedQty - bundle này không sinh sản lượng, thuần là cổng
-   * kiểm tra chất lượng theo công đoạn (xem PieceStepBundle doc comment BE). bundle.status luôn →
-   * QC_PASSED sau khi duyệt (kể cả có lỗi) - "PASSED" nghĩa là "đã qua tay KCS", không phải "0
-   * lỗi", cùng ngữ nghĩa CutBundleStatus.QC_PASSED.
+   * Sắt chấm (reviewCutBundle()): CHỈ 2 kết quả Đạt/Không đạt (quyết định nghiệp vụ 2026-09-07,
+   * Sếp Trương Văn Nhân qua chat nội bộ: "sửa được thì không tính là lỗi" - toàn bộ failedQty coi
+   * như "không đạt", Phôi tự sửa rồi báo Bù đủ bằng 1 bundle MỚI, không qua cấp bù kho). Từ
+   * 2026-09-08 lần 2, reviewProductionBatch() (Hàn/Sơn/VTTP chốt cuối) cũng đã quy về ĐÚNG pattern
+   * này - `CreateQcReviewDto` dùng chung shape cho cả 2 method, không tách DTO riêng. KHÔNG đụng
+   * ProductionBatch.reportedQty - bundle này không sinh sản lượng, thuần là cổng kiểm tra chất
+   * lượng theo công đoạn (xem PieceStepBundle doc comment BE). bundle.status luôn → QC_PASSED sau
+   * khi duyệt (kể cả có lỗi) - "PASSED" nghĩa là "đã qua tay KCS", không phải "0 lỗi", cùng ngữ
+   * nghĩa CutBundleStatus.QC_PASSED.
    */
   async reviewPieceStep(
     pieceStepBundleId: string,
@@ -679,206 +463,6 @@ export class QcReviewsService {
     return this.toResponseDto(created);
   }
 
-  /**
-   * "Bù đủ" cho đợt công đoạn (PieceStepBundle, 2026-09-07) - CÙNG khuôn reportProductionBatchDone()
-   * bên dưới, chỉ khác anchor. `review.scrapQty` LUÔN null cho nhánh này (reviewPieceStep() không
-   * còn ghi - xem doc comment ở đó) nên `reworkable` = `failedQty` nguyên vẹn, không có phần phế
-   * cần loại trừ.
-   */
-  async reportPieceStepDone(
-    pieceStepBundleId: string,
-    dto: ReportProductionBatchDoneDto,
-  ): Promise<QcReviewResponseDto> {
-    const bundle =
-      await this.productionBatchesService.findOnePieceStepBundleRowOrThrow(pieceStepBundleId);
-    await assertOrderPiHasActiveFloor(this.prisma, bundle.productionOrderId, 'báo bù đủ hàng lỗi');
-
-    const review = await this.prisma.qcReview.findFirst({
-      where: { pieceStepBundleId: bundle.id },
-      orderBy: { reviewedAt: 'desc' },
-      include: QC_REVIEW_INCLUDE,
-    });
-    if (!review) {
-      throw new NotFoundException(`Đợt ${pieceStepBundleId} chưa có KCS chấm nào`);
-    }
-    const reworkable = review.failedQty - (review.scrapQty ?? 0);
-    const outstanding = reworkable - review.resolvedQty;
-    if (outstanding <= 0) {
-      throw new ConflictException(`Đợt ${pieceStepBundleId} đã hết lỗi, không cần báo bù nữa`);
-    }
-    if (review.phoiReportedAt) {
-      throw new ConflictException(
-        `Đợt ${pieceStepBundleId} đã báo bù đủ rồi, đang chờ KCS duyệt lại`,
-      );
-    }
-    if (dto.qty > outstanding) {
-      throw new BadRequestException(
-        `Đợt ${pieceStepBundleId} chỉ còn lỗi ${outstanding} - không thể báo bù ${dto.qty}`,
-      );
-    }
-
-    await this.prisma.qcReview.update({
-      where: { id: review.id },
-      data: { phoiReportedAt: new Date(), phoiReportedQty: dto.qty },
-    });
-    return this.toResponseDto(await this.findReviewOrThrow(review.id));
-  }
-
-  /**
-   * KCS duyệt lại đợt công đoạn đã báo "Bù đủ" (PieceStepBundle, 2026-09-07) - CÙNG khuôn
-   * recheckProductionBatch() bên dưới nhưng ĐƠN GIẢN HƠN: KHÔNG cộng vào đâu cả sau khi xác nhận
-   * đạt (khác productionBatchId phải cộng ProductionBatch.reportedQty vì đó là nguồn sản lượng
-   * thật) - PieceStepBundle không sinh sản lượng, resolvedQty tăng CHỈ để hiển thị/tracking, đúng
-   * bản chất "cổng kiểm tra chất lượng" thuần tuý của bundle này.
-   */
-  async recheckPieceStep(
-    pieceStepBundleId: string,
-    dto: RecheckProductionBatchDto,
-  ): Promise<QcReviewResponseDto> {
-    const bundle =
-      await this.productionBatchesService.findOnePieceStepBundleRowOrThrow(pieceStepBundleId);
-    await assertOrderPiHasActiveFloor(this.prisma, bundle.productionOrderId, 'duyệt lại hàng lỗi');
-
-    const review = await this.prisma.qcReview.findFirst({
-      where: { pieceStepBundleId: bundle.id },
-      orderBy: { reviewedAt: 'desc' },
-      include: QC_REVIEW_INCLUDE,
-    });
-    if (!review) {
-      throw new NotFoundException(`Đợt ${pieceStepBundleId} chưa có KCS chấm nào`);
-    }
-    if (!review.phoiReportedAt) {
-      throw new ConflictException(
-        `Đợt ${pieceStepBundleId} chưa được báo "Bù đủ" - chưa tới lượt duyệt lại`,
-      );
-    }
-    const reworkable = review.failedQty - (review.scrapQty ?? 0);
-    const outstanding = reworkable - review.resolvedQty;
-    if (dto.remainingFailedQty > outstanding) {
-      throw new BadRequestException(
-        `Còn hỏng ${dto.remainingFailedQty} vượt số đang lỗi (${outstanding}) của đợt ${pieceStepBundleId}`,
-      );
-    }
-    const justResolved = outstanding - dto.remainingFailedQty;
-
-    await this.prisma.qcReview.update({
-      where: { id: review.id },
-      data: {
-        resolvedQty: review.resolvedQty + justResolved,
-        phoiReportedAt: dto.remainingFailedQty > 0 ? null : review.phoiReportedAt,
-        phoiReportedQty: dto.remainingFailedQty > 0 ? null : review.phoiReportedQty,
-      },
-    });
-
-    return this.toResponseDto(await this.findReviewOrThrow(review.id));
-  }
-
-  /**
-   * "Bù đủ" cho lô Hàn/Sơn/VTTP (2026-09-07) - THAY THẾ cách làm cũ "công nhân tự tạo 1 lô báo cáo
-   * hoàn toàn mới cho phần rework" (xem doc comment reviewProductionBatch() - vẫn đúng cho lô nào
-   * KHÔNG bấm Bù đủ, 2 cách cùng tồn tại). Chỉ áp dụng cho phần SỬA ĐƯỢC
-   * (`failedQty - (scrapQty ?? 0)`) - phần đã cấp `scrapQty` xử lý qua ReplenishRequest riêng
-   * (hàng hỏng hẳn, xin nguyên liệu MỚI, không phải "sửa lại"). Chặn nếu cỡ đã hết lỗi hoặc đang
-   * chờ duyệt lại rồi - cùng logic reportSegmentDoneForRow() bên Sắt nhưng ở CẤP REVIEW (không có
-   * "cỡ đoạn" để bóc).
-   */
-  async reportProductionBatchDone(
-    productionBatchId: string,
-    dto: ReportProductionBatchDoneDto,
-  ): Promise<QcReviewResponseDto> {
-    const batch = await this.productionBatchesService.findOneRowOrThrow(productionBatchId);
-    await assertOrderPiHasActiveFloor(this.prisma, batch.productionOrderId, 'báo bù đủ hàng lỗi');
-
-    const review = await this.prisma.qcReview.findFirst({
-      where: { productionBatchId: batch.id },
-      orderBy: { reviewedAt: 'desc' },
-      include: QC_REVIEW_INCLUDE,
-    });
-    if (!review) {
-      throw new NotFoundException(`Lô ${productionBatchId} chưa có KCS chấm nào`);
-    }
-    const reworkable = review.failedQty - (review.scrapQty ?? 0);
-    const outstanding = reworkable - review.resolvedQty;
-    if (outstanding <= 0) {
-      throw new ConflictException(`Lô ${productionBatchId} đã hết lỗi, không cần báo bù nữa`);
-    }
-    if (review.phoiReportedAt) {
-      throw new ConflictException(
-        `Lô ${productionBatchId} đã báo bù đủ rồi, đang chờ KCS duyệt lại`,
-      );
-    }
-    if (dto.qty > outstanding) {
-      throw new BadRequestException(
-        `Lô ${productionBatchId} chỉ còn lỗi ${outstanding} - không thể báo bù ${dto.qty}`,
-      );
-    }
-
-    await this.prisma.qcReview.update({
-      where: { id: review.id },
-      data: { phoiReportedAt: new Date(), phoiReportedQty: dto.qty },
-    });
-    return this.toResponseDto(await this.findReviewOrThrow(review.id));
-  }
-
-  /**
-   * KCS duyệt lại lô đã báo "Bù đủ" (2026-09-07) - `remainingFailedQty=0` → đạt hết phần sửa được,
-   * `>0` → còn hỏng bấy nhiêu (mở lại lượt báo mới, phoiReportedAt/Qty reset về null).
-   *
-   * Khác Sắt (QcReviewSegment, chỉ TRACKING hiển thị): ở đây phần MỚI XÁC NHẬN ĐẠT được CỘNG THẲNG
-   * vào `ProductionBatch.reportedQty` (dù batch đã QC_DONE) - bắt buộc phải làm vậy vì
-   * `passedQty` của 1 mảnh (production-batches.service.ts) CỘNG THẲNG `reportedQty` từ mọi batch
-   * QC_DONE, không đọc `resolvedQty` ở đâu cả. Không làm bước này thì "Bù đủ" chỉ là tracking
-   * thuần, không thay được cách làm cũ (tạo lô mới) - đã trao đổi rõ và được chốt làm THẬT.
-   */
-  async recheckProductionBatch(
-    productionBatchId: string,
-    dto: RecheckProductionBatchDto,
-  ): Promise<QcReviewResponseDto> {
-    const batch = await this.productionBatchesService.findOneRowOrThrow(productionBatchId);
-    await assertOrderPiHasActiveFloor(this.prisma, batch.productionOrderId, 'duyệt lại hàng lỗi');
-
-    const review = await this.prisma.qcReview.findFirst({
-      where: { productionBatchId: batch.id },
-      orderBy: { reviewedAt: 'desc' },
-      include: QC_REVIEW_INCLUDE,
-    });
-    if (!review) {
-      throw new NotFoundException(`Lô ${productionBatchId} chưa có KCS chấm nào`);
-    }
-    if (!review.phoiReportedAt) {
-      throw new ConflictException(
-        `Lô ${productionBatchId} chưa được báo "Bù đủ" - chưa tới lượt duyệt lại`,
-      );
-    }
-    const reworkable = review.failedQty - (review.scrapQty ?? 0);
-    const outstanding = reworkable - review.resolvedQty;
-    if (dto.remainingFailedQty > outstanding) {
-      throw new BadRequestException(
-        `Còn hỏng ${dto.remainingFailedQty} vượt số đang lỗi (${outstanding}) của lô ${productionBatchId}`,
-      );
-    }
-    const justResolved = outstanding - dto.remainingFailedQty;
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.qcReview.update({
-        where: { id: review.id },
-        data: {
-          resolvedQty: review.resolvedQty + justResolved,
-          phoiReportedAt: dto.remainingFailedQty > 0 ? null : review.phoiReportedAt,
-          phoiReportedQty: dto.remainingFailedQty > 0 ? null : review.phoiReportedQty,
-        },
-      });
-      if (justResolved > 0) {
-        await tx.productionBatch.update({
-          where: { id: batch.id },
-          data: { reportedQty: { increment: justResolved } },
-        });
-      }
-    });
-
-    return this.toResponseDto(await this.findReviewOrThrow(review.id));
-  }
-
   async findAll(query: ListQcReviewsQueryDto): Promise<Paginated<QcReviewResponseDto>> {
     const where: Prisma.QcReviewWhereInput = {
       steelIssueId: query.steelIssueId ? parseBigIntId(query.steelIssueId) : undefined,
@@ -896,151 +480,6 @@ export class QcReviewsService {
     return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };
   }
 
-  async findAllReplenishRequests(
-    query: ListReplenishRequestsQueryDto,
-  ): Promise<Paginated<ReplenishRequestResponseDto>> {
-    const result = await paginate(
-      {
-        findMany: (args) =>
-          this.prisma.replenishRequest.findMany({ ...args, include: REPLENISH_REQUEST_INCLUDE }),
-        count: (args) => this.prisma.replenishRequest.count(args),
-      },
-      query,
-      { status: query.status ?? ReplenishRequestStatus.OPEN },
-      { createdAt: 'desc' as const },
-    );
-    return { data: result.data.map((r) => this.toReplenishResponseDto(r)), meta: result.meta };
-  }
-
-  /**
-   * Kho cấp bù bằng 1 đợt SteelIssue mới đã tạo trước đó (kho tự tạo qua endpoint xuất thường).
-   * CHỈ áp dụng cho request sinh từ nhánh Phôi (qcReview.steelIssueId) - request sinh từ nhánh
-   * Hàn/Sơn (qcReview.productionBatchId, Phase 9d) BỊ CHẶN ở đây theo đúng quyết định tài liệu
-   * gốc (dna-erp-backend-implementation-plan.html mục 9.2: "Hàn/Sơn cấp lại bán-thành-phẩm nghĩa
-   * là gì chưa có quyết định nghiệp vụ" - dừng ở OPEN/reject cho tới khi có quyết định).
-   */
-  async fulfillReplenishRequest(
-    id: string,
-    dto: FulfillReplenishRequestDto,
-    actorUserId: string,
-  ): Promise<ReplenishRequestResponseDto> {
-    const request = await this.findReplenishRequestOrThrow(id);
-    if (request.status !== ReplenishRequestStatus.OPEN) {
-      throw new ConflictException(
-        `Replenish request ${id} đang ở trạng thái ${request.status} - chỉ OPEN mới cấp bù được`,
-      );
-    }
-    if (!request.qcReview.steelIssueId) {
-      throw new BadRequestException(
-        `Replenish request ${id} sinh từ công đoạn Hàn/Sơn - cấp bù bán-thành-phẩm cho Hàn/Sơn ` +
-          'chưa có quyết định nghiệp vụ, chỉ hỗ trợ fulfill cho nhánh Phôi',
-      );
-    }
-
-    const steelIssueBigId = parseBigIntId(dto.steelIssueId);
-    const steelIssue = await this.prisma.steelIssue.findUnique({ where: { id: steelIssueBigId } });
-    if (!steelIssue) {
-      throw new NotFoundException(`Steel issue ${dto.steelIssueId} not found`);
-    }
-    const original = request.qcReview.steelIssue;
-    if (original && steelIssue.materialId !== original.materialId) {
-      throw new BadRequestException(
-        `Đợt sắt ${dto.steelIssueId} không cùng loại sắt với đợt cần cấp bù`,
-      );
-    }
-    // Medium fix: trước đây chỉ so materialId, không so PI - cấp bù của PI-A có thể bị gắn nhầm
-    // vào 1 SteelIssue đã xuất trước đó cho PI-B (cùng loại sắt, khác PI), làm kế hoạch xuất sắt
-    // của cả 2 PI lệch khỏi thực tế vật lý. SteelIssue.productionInvoiceId có sẵn trực tiếp.
-    if (original && steelIssue.productionInvoiceId !== original.productionInvoiceId) {
-      throw new BadRequestException(
-        `Đợt sắt ${dto.steelIssueId} không cùng PI với đợt cần cấp bù (PI ${original.productionInvoiceId})`,
-      );
-    }
-
-    const updated = await this.prisma.replenishRequest.update({
-      where: { id: request.id },
-      data: {
-        status: ReplenishRequestStatus.FULFILLED,
-        fulfilledByIssueId: steelIssue.id,
-        fulfilledAt: new Date(),
-        fulfilledById: actorUserId,
-      },
-      include: REPLENISH_REQUEST_INCLUDE,
-    });
-    return this.toReplenishResponseDto(updated);
-  }
-
-  async rejectReplenishRequest(
-    id: string,
-    dto: RejectReplenishRequestDto,
-  ): Promise<ReplenishRequestResponseDto> {
-    const request = await this.findReplenishRequestOrThrow(id);
-    if (request.status !== ReplenishRequestStatus.OPEN) {
-      throw new ConflictException(
-        `Replenish request ${id} đang ở trạng thái ${request.status} - chỉ OPEN mới từ chối được`,
-      );
-    }
-    const updated = await this.prisma.replenishRequest.update({
-      where: { id: request.id },
-      data: { status: ReplenishRequestStatus.REJECTED, rejectionReason: dto.reason },
-      include: REPLENISH_REQUEST_INCLUDE,
-    });
-    return this.toReplenishResponseDto(updated);
-  }
-
-  private async findReplenishRequestOrThrow(id: string): Promise<ReplenishRequestRow> {
-    const bigId = parseBigIntId(id);
-    const request = await this.prisma.replenishRequest.findUnique({
-      where: { id: bigId },
-      include: REPLENISH_REQUEST_INCLUDE,
-    });
-    if (!request) {
-      throw new NotFoundException(`Replenish request ${id} not found`);
-    }
-    return request;
-  }
-
-  /**
-   * Lấy đúng segment của LƯỢT DUYỆT MỚI NHẤT cho 1 lô nhận HOẶC 1 đợt cắt cụ thể (2026-09-05,
-   * thêm nhánh `cutBundleId` - trước chỉ nhận steelIssueId, mỗi SteelIssue từng chỉ có đúng 1
-   * QcReview nên đủ; giờ 1 lô nhận có thể có NHIỀU đợt cắt cùng bị lỗi, PHẢI lọc thêm cutBundleId
-   * nếu không sẽ lấy nhầm review của đợt cắt khác cùng lô - xem reportSegmentDoneForBundle()).
-   */
-  private async findLatestReviewSegmentOrThrow(
-    segmentSpecId: string,
-    scope: { steelIssueId: string } | { cutBundleId: string } | { stepBundleId: string },
-  ): Promise<QcReviewRow['segments'][number] & { qcReviewId: bigint }> {
-    const specBigId = parseBigIntId(segmentSpecId);
-    const label =
-      'steelIssueId' in scope
-        ? `đợt sắt ${scope.steelIssueId}`
-        : 'cutBundleId' in scope
-          ? `đợt cắt ${scope.cutBundleId}`
-          : `đợt gửi KCS ${scope.stepBundleId}`;
-    const review = await this.prisma.qcReview.findFirst({
-      where:
-        'steelIssueId' in scope
-          ? { steelIssueId: parseBigIntId(scope.steelIssueId) }
-          : 'cutBundleId' in scope
-            ? { cutBundleId: parseBigIntId(scope.cutBundleId) }
-            : { stepBundleId: parseBigIntId(scope.stepBundleId) },
-      orderBy: { reviewedAt: 'desc' },
-      include: QC_REVIEW_INCLUDE,
-    });
-    if (!review) {
-      throw new NotFoundException(`${label} chưa có KCS chấm nào`);
-    }
-    const segRow = review.segments.find((s) => s.segmentSpecId === specBigId);
-    if (!segRow) {
-      throw new NotFoundException(`${label} không có lỗi nào ở cỡ đoạn này`);
-    }
-    return segRow;
-  }
-
-  private async findReviewOrThrow(id: bigint): Promise<QcReviewRow> {
-    return this.prisma.qcReview.findUniqueOrThrow({ where: { id }, include: QC_REVIEW_INCLUDE });
-  }
-
   private toResponseDto(review: QcReviewRow): QcReviewResponseDto {
     return new QcReviewResponseDto({
       id: review.id.toString(),
@@ -1050,40 +489,20 @@ export class QcReviewsService {
       stepBundleId: review.stepBundleId?.toString() ?? null,
       pieceStepBundleId: review.pieceStepBundleId?.toString() ?? null,
       failedQty: review.failedQty,
-      scrapQty: review.scrapQty,
       defectReasonId: review.defectReasonId?.toString() ?? null,
       defectReasonLabel: review.defectReason?.label ?? null,
       reason: review.reason,
       photoUrl: review.photoUrl,
       reviewedAt: review.reviewedAt,
       reviewedById: review.reviewedById,
-      resolvedQty: review.resolvedQty,
-      phoiReportedAt: review.phoiReportedAt,
-      phoiReportedQty: review.phoiReportedQty,
       segments: review.segments.map(
         (s) =>
           new QcReviewSegmentResponseDto({
             segmentSpecId: s.segmentSpecId.toString(),
             cutLengthMm: s.segmentSpec.cutLengthMm.toNumber(),
             failedQty: s.failedQty,
-            resolvedQty: s.resolvedQty,
-            phoiReportedAt: s.phoiReportedAt,
-            phoiReportedQty: s.phoiReportedQty,
           }),
       ),
-    });
-  }
-
-  private toReplenishResponseDto(request: ReplenishRequestRow): ReplenishRequestResponseDto {
-    return new ReplenishRequestResponseDto({
-      id: request.id.toString(),
-      qcReviewId: request.qcReviewId.toString(),
-      status: request.status,
-      qty: request.qty,
-      fulfilledByIssueId: request.fulfilledByIssueId?.toString() ?? null,
-      fulfilledAt: request.fulfilledAt,
-      fulfilledById: request.fulfilledById,
-      rejectionReason: request.rejectionReason,
     });
   }
 }

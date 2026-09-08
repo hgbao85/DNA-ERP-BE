@@ -39,6 +39,7 @@ describe('ProductionBatchesService', () => {
       findMany: jest.Mock;
       count: jest.Mock;
     };
+    qcReview: { findMany: jest.Mock };
     stockQuant: { findMany: jest.Mock };
     warehouseTransferPieceItem: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
@@ -139,6 +140,7 @@ describe('ProductionBatchesService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
       },
+      qcReview: { findMany: jest.fn().mockResolvedValue([]) },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
       warehouseTransferPieceItem: { findMany: jest.fn().mockResolvedValue([]) },
       warehouse: {
@@ -803,8 +805,22 @@ describe('ProductionBatchesService', () => {
 
       expect(result.items[0].processSteps).toEqual(['CAT', 'UON']);
       expect(result.items[0].stepProgress).toEqual([
-        { step: 'CAT', requiredQty: plannedQty, doneQty: 15, submittedQty: 0, passedQty: 0 },
-        { step: 'UON', requiredQty: plannedQty, doneQty: 5, submittedQty: 0, passedQty: 0 },
+        {
+          step: 'CAT',
+          requiredQty: plannedQty,
+          doneQty: 15,
+          submittedQty: 0,
+          passedQty: 0,
+          failedQty: 0,
+        },
+        {
+          step: 'UON',
+          requiredQty: plannedQty,
+          doneQty: 5,
+          submittedQty: 0,
+          passedQty: 0,
+          failedQty: 0,
+        },
       ]);
     });
 
@@ -835,6 +851,7 @@ describe('ProductionBatchesService', () => {
         doneQty: 20,
         submittedQty: 10,
         passedQty: 6,
+        failedQty: 0,
       });
     });
 

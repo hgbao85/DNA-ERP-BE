@@ -43,14 +43,12 @@ const AUDITED_MODELS = new Set([
   // StockQuant (cache, được đồng bộ bởi trigger DB nên Prisma extension không thấy các lần ghi
   // đó), hay WarehouseTransferItem/Reservation (dòng con, cùng lý do BomPiece không được audit).
   'WarehouseTransfer',
-  // Phase 9 - SteelIssue/QcReview/ReplenishRequest là entity nghiệp vụ độc lập (mỗi cái có
-  // state machine/workflow riêng: ISSUED->...->QC_PASSED, XOR steelIssueId/productionBatchId,
-  // OPEN->FULFILLED/REJECTED), cùng tier với WarehouseTransfer. Không audit CutBundle/
-  // CutPatternSegment (dòng con immutable ghi 1 lần lúc complete-cutting, cùng lý do
-  // BomPiece/WarehouseTransferItem không được audit).
+  // Phase 9 - SteelIssue/QcReview là entity nghiệp vụ độc lập (mỗi cái có state machine/workflow
+  // riêng: ISSUED->...->QC_PASSED, XOR steelIssueId/productionBatchId), cùng tier với
+  // WarehouseTransfer. Không audit CutBundle/CutPatternSegment (dòng con immutable ghi 1 lần lúc
+  // complete-cutting, cùng lý do BomPiece/WarehouseTransferItem không được audit).
   'SteelIssue',
   'QcReview',
-  'ReplenishRequest',
   // Vấn đề M1 audit 26/08/2026 - MaterialIssue/PackagingIssue/ProductionBatch là anh em cùng đợt
   // (Phase 9d, cùng idiom SteelIssue: mỗi cái có id/idempotencyKey/actor/timestamp riêng, workflow
   // state machine riêng - MaterialIssue ISSUED->RECEIVED, ProductionBatch AWAITING_QC->QC_DONE)

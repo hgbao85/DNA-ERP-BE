@@ -22,6 +22,7 @@ import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorat
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
+import { ListStepBundlesQueryDto } from './dto/list-step-bundles-query.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
 import { RecordStepBatchDto } from './dto/record-step-batch.dto';
 import { SubmitStepBundleDto } from './dto/submit-step-bundle.dto';
@@ -193,19 +194,30 @@ export class SteelIssuesController {
     return this.steelIssuesService.finishCutBundle(id);
   }
 
-  /** Nhập 1 đợt "đã gia công" cho công đoạn chi tiết SAU Cắt (cộng dồn) CỦA ĐÚNG đợt cắt này
-   *  (2026-09-07, scope lại theo cutBundleId) - mirror cut-batches, không đổi trạng thái. Xem
-   *  RecordStepBatchDto. */
-  @Post('cut-bundles/:id/step-batches')
+  /** Hoàn tác ĐÚNG lần "Lưu đợt cắt" gần nhất (2026-09-07) - xem doc comment service. */
+  @Post('cut-bundles/:id/undo-last-batch')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  undoLastCutBatch(@Param('id') id: string, @Body() dto: UndoCutBatchDto) {
+    return this.steelIssuesService.undoLastCutBatch(id, dto.segments);
+  }
+
+  // ─── Công đoạn phụ (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ) - scope PI + loại sắt (2026-09-07 lần 2) ──
+  // KHÔNG còn gắn với 1 đợt cắt cụ thể (StepBundle) - Phôi làm song song, không tuần tự, xem
+  // StepBundle doc comment (schema.prisma).
+
+  /** Nhập 1 đợt "đã gia công" cho công đoạn chi tiết SAU Cắt (cộng dồn) CHO CẢ PI + loại sắt - mirror
+   *  cut-batches, không đổi trạng thái. Xem RecordStepBatchDto. */
+  @Post('production-invoices/:id/step-batches')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
   recordStepBatch(@Param('id') id: string, @Body() dto: RecordStepBatchDto) {
     return this.steelIssuesService.recordStepBatch(id, dto);
   }
 
-  /** Phôi gom mọi StepBatch chưa gửi của (cutBundleId, step) thành 1 đợt gửi KCS (2026-09-07) -
-   *  KCS duyệt qua POST step-bundles/:id/qc-review (qc-reviews.controller.ts). */
-  @Post('cut-bundles/:id/step-bundles')
+  /** Phôi gom mọi StepBatch chưa gửi của (productionInvoiceId, materialId, step) thành 1 đợt gửi
+   *  KCS - KCS duyệt qua POST step-bundles/:id/qc-review (qc-reviews.controller.ts). */
+  @Post('production-invoices/:id/step-bundles')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
   submitStepBundle(
@@ -213,14 +225,22 @@ export class SteelIssuesController {
     @Body() dto: SubmitStepBundleDto,
     @CurrentUser('id') userId: string,
   ) {
-    return this.steelIssuesService.submitStepBundle(id, dto.step, userId);
+    return this.steelIssuesService.submitStepBundle(id, dto.materialId, dto.step, userId);
   }
 
-  /** Hoàn tác ĐÚNG lần "Lưu đợt cắt" gần nhất (2026-09-07) - xem doc comment service. */
-  @Post('cut-bundles/:id/undo-last-batch')
-  @RequirePermissions(UPDATE)
-  @RequireMfgRole(MfgRole.PHOI)
-  undoLastCutBatch(@Param('id') id: string, @Body() dto: UndoCutBatchDto) {
-    return this.steelIssuesService.undoLastCutBatch(id, dto.segments);
+  /** Lịch sử mọi StepBundle của 1 PI (mọi loại sắt/công đoạn) - màn Phôi xem thuần, không thao
+   *  tác được (2026-09-07 lần 2). */
+  @Get('production-invoices/:id/step-bundles')
+  @RequirePermissions(VIEW)
+  findStepBundlesForInvoice(@Param('id') id: string) {
+    return this.steelIssuesService.findStepBundlesForInvoice(id);
+  }
+
+  /** Flat, không cần productionInvoiceId - màn KCS lấy thẳng AWAITING_QC (xem
+   *  ListStepBundlesQueryDto tại sao endpoint này tồn tại riêng). */
+  @Get('step-bundles')
+  @RequirePermissions(VIEW)
+  findAllStepBundles(@Query() query: ListStepBundlesQueryDto) {
+    return this.steelIssuesService.findAllStepBundles(query);
   }
 }
