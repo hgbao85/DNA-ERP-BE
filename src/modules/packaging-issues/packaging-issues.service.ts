@@ -166,7 +166,7 @@ export class PackagingIssuesService {
         );
       }
 
-      return tx.packagingIssue.create({
+      const issue = await tx.packagingIssue.create({
         data: {
           productionOrderId: order.id,
           materialId: materialBigId,
@@ -177,9 +177,14 @@ export class PackagingIssuesService {
         },
         include: PACKAGING_ISSUE_INCLUDE,
       });
+      // ĐÍNH CHÍNH audit độc lập 28/08 (Nghiêm trọng): bút toán PHẢI nằm TRONG CÙNG transaction đã
+      // khoá FOR UPDATE stock_quant ở trên - cùng lý do/cùng fix MaterialIssuesService.create():
+      // gọi ngoài sau khi transaction đã commit làm khoá nhả trước khi stock_quant kịp đổi, 2 lệnh
+      // sản xuất khác nhau chạy gần đồng thời vẫn race được dù đã pass check ở trên.
+      await this.postLedgerEntry(issue, issuedById, tx);
+      return issue;
     });
 
-    await this.postLedgerEntry(created, issuedById);
     return this.toResponseDto(created);
   }
 
@@ -285,7 +290,12 @@ export class PackagingIssuesService {
     return result;
   }
 
-  private async postLedgerEntry(issue: PackagingIssueRow, createdById: string): Promise<void> {
+  private async postLedgerEntry(
+    issue: PackagingIssueRow,
+    createdById: string,
+    tx?: PrismaTx,
+  ): Promise<void> {
+    const db = tx ?? this.prisma;
     // fromWarehouseId đọc thẳng từ Material.warehouseId (đã include ở PACKAGING_ISSUE_INCLUDE) -
     // không còn tra theo literal code. Chỉ chưa từng null ở đây vì create() đã chặn qua
     // findMaterialWarehouseOrThrow() trước khi tạo bản ghi.
@@ -296,19 +306,22 @@ export class PackagingIssuesService {
     }
     const destWarehouseCode =
       issue.productionOrder.productionInvoiceItem.warehouseCode ?? PACKAGING_DEST_WAREHOUSE_CODE;
-    const toWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
+    const toWarehouse = await db.warehouse.findUniqueOrThrow({
       where: { code: destWarehouseCode },
     });
-    await this.stockLedgerService.postEntry({
-      fromWarehouseId: issue.material.warehouseId,
-      toWarehouseId: toWarehouse.id,
-      materialId: issue.materialId,
-      qty: issue.issuedQty.toNumber(),
-      refType: StockLedgerRefType.PACKAGING_ISSUE,
-      refId: issue.id.toString(),
-      createdById,
-      idempotencyKey: `packaging-issue:${issue.id}`,
-    });
+    await this.stockLedgerService.postEntry(
+      {
+        fromWarehouseId: issue.material.warehouseId,
+        toWarehouseId: toWarehouse.id,
+        materialId: issue.materialId,
+        qty: issue.issuedQty.toNumber(),
+        refType: StockLedgerRefType.PACKAGING_ISSUE,
+        refId: issue.id.toString(),
+        createdById,
+        idempotencyKey: `packaging-issue:${issue.id}`,
+      },
+      tx,
+    );
   }
 
   /** Kho vật lý CỤ THỂ của vật tư này, đọc từ Material.warehouseId (mirror

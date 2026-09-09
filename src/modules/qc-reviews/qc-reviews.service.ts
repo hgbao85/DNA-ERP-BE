@@ -114,7 +114,24 @@ export class QcReviewsService {
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
-      const review = await tx.qcReview.create({
+      // Đính chính audit độc lập 09/09 (Nghiêm trọng #5): trước đây update() ghi status vô điều
+      // kiện - 2 request duyệt gần như đồng thời (double-click, mạng chập chờn tự gửi lại) cho
+      // cùng đợt AWAITING_QC đều pass check status (đọc snapshot NGOÀI transaction ở đầu hàm),
+      // đều tạo QcReview + update status, không có gì phát hiện đợt đã bị duyệt bởi request kia -
+      // lost-update/duplicate review. updateMany lọc kèm đúng trạng thái kỳ vọng + so count, cùng
+      // idiom ProductionInvoicesService.approveItem()/WarehouseTransfersService.confirm(): request
+      // nào commit trước thắng, request thua khớp 0 dòng -> rollback toàn bộ (kể cả review vừa tạo).
+      const { count } = await tx.steelIssue.updateMany({
+        where: { id: issue.id, status: SteelIssueStatus.AWAITING_QC },
+        data: { status: SteelIssueStatus.QC_PASSED },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Steel issue ${steelIssueId} đã bị 1 request khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
+        );
+      }
+
+      return tx.qcReview.create({
         data: {
           steelIssueId: issue.id,
           failedQty: totalFailed,
@@ -131,13 +148,6 @@ export class QcReviewsService {
         },
         include: QC_REVIEW_INCLUDE,
       });
-
-      await tx.steelIssue.update({
-        where: { id: issue.id },
-        data: { status: SteelIssueStatus.QC_PASSED },
-      });
-
-      return review;
     });
 
     return this.toResponseDto(created);
@@ -214,7 +224,18 @@ export class QcReviewsService {
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
-      const review = await tx.qcReview.create({
+      // Đính chính audit độc lập 09/09 (Nghiêm trọng #5) - cùng lý do/cùng fix review() ở trên.
+      const { count } = await tx.cutBundle.updateMany({
+        where: { id: bundle.id, status: CutBundleStatus.AWAITING_QC },
+        data: { status: CutBundleStatus.QC_PASSED },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Đợt cắt ${cutBundleId} đã bị 1 request khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
+        );
+      }
+
+      return tx.qcReview.create({
         data: {
           steelIssueId: bundle.steelIssueId,
           cutBundleId: bundle.id,
@@ -232,13 +253,6 @@ export class QcReviewsService {
         },
         include: QC_REVIEW_INCLUDE,
       });
-
-      await tx.cutBundle.update({
-        where: { id: bundle.id },
-        data: { status: CutBundleStatus.QC_PASSED },
-      });
-
-      return review;
     });
 
     // Ngoài transaction chính (chỉ ROLL-UP hiển thị cho các màn xem tổng quan không đổi, xem
@@ -323,7 +337,18 @@ export class QcReviewsService {
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
-      const review = await tx.qcReview.create({
+      // Đính chính audit độc lập 09/09 (Nghiêm trọng #5) - cùng lý do/cùng fix review() ở trên.
+      const { count } = await tx.stepBundle.updateMany({
+        where: { id: bundle.id, status: StepBundleStatus.AWAITING_QC },
+        data: { status: StepBundleStatus.QC_PASSED },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Đợt gửi KCS ${stepBundleId} đã bị 1 request khác duyệt trong lúc đang xử lý - không ghi đè`,
+        );
+      }
+
+      return tx.qcReview.create({
         data: {
           stepBundleId: bundle.id,
           failedQty: totalFailed,
@@ -340,13 +365,6 @@ export class QcReviewsService {
         },
         include: QC_REVIEW_INCLUDE,
       });
-
-      await tx.stepBundle.update({
-        where: { id: bundle.id },
-        data: { status: StepBundleStatus.QC_PASSED },
-      });
-
-      return review;
     });
 
     return this.toResponseDto(created);
@@ -383,7 +401,20 @@ export class QcReviewsService {
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
-      const review = await tx.qcReview.create({
+      // Đính chính audit độc lập 09/09 (Nghiêm trọng #5) - cùng lý do/cùng fix review() ở trên.
+      // Đặc biệt quan trọng ở đây: reportedQty bị GHI ĐÈ (không cộng dồn) - 2 request duyệt trùng
+      // mà không chặn sẽ làm sản lượng đã chốt sai lệch thật (không chỉ lost-update audit trail).
+      const { count } = await tx.productionBatch.updateMany({
+        where: { id: batch.id, status: ProductionBatchStatus.AWAITING_QC },
+        data: { status: ProductionBatchStatus.QC_DONE, reportedQty: passedQty },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Production batch ${productionBatchId} đã bị 1 request khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
+        );
+      }
+
+      return tx.qcReview.create({
         data: {
           productionBatchId: batch.id,
           failedQty: dto.failedQty,
@@ -394,13 +425,6 @@ export class QcReviewsService {
         },
         include: QC_REVIEW_INCLUDE,
       });
-
-      await tx.productionBatch.update({
-        where: { id: batch.id },
-        data: { status: ProductionBatchStatus.QC_DONE, reportedQty: passedQty },
-      });
-
-      return review;
     });
 
     return this.toResponseDto(created);
@@ -444,6 +468,20 @@ export class QcReviewsService {
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
+      // Đính chính audit độc lập 09/09 (Nghiêm trọng #5) - cùng lý do/cùng fix review() ở trên.
+      // Đặc biệt quan trọng ở đây: autoFinalizePieceOutputIfLastStepComplete() bên dưới cộng
+      // failedQty từ MỌI QcReview gắn vào bundle này - 2 request duyệt trùng không chặn sẽ tạo 2
+      // dòng QcReview cùng bundleId, cộng trùng failedQty vào sản lượng đã chốt (ProductionBatch).
+      const { count } = await tx.pieceStepBundle.updateMany({
+        where: { id: bundle.id, status: PieceStepBundleStatus.AWAITING_QC },
+        data: { status: PieceStepBundleStatus.QC_PASSED },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Đợt gửi KCS ${pieceStepBundleId} đã bị 1 request khác duyệt trong lúc đang xử lý - không ghi đè`,
+        );
+      }
+
       const review = await tx.qcReview.create({
         data: {
           pieceStepBundleId: bundle.id,
@@ -454,11 +492,6 @@ export class QcReviewsService {
           reviewedById,
         },
         include: QC_REVIEW_INCLUDE,
-      });
-
-      await tx.pieceStepBundle.update({
-        where: { id: bundle.id },
-        data: { status: PieceStepBundleStatus.QC_PASSED },
       });
 
       await this.productionBatchesService.autoFinalizePieceOutputIfLastStepComplete(

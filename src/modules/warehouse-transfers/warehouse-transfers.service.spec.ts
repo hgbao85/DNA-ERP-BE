@@ -141,7 +141,7 @@ describe('WarehouseTransfersService', () => {
     });
 
     it('2026-09-03: chấp nhận kho đích là kho PHỤ (vat-tu-tp-2) - đúng gia đình kế tiếp phoi-son-han, không còn đòi đúng 1 code cố định', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
       prisma.warehouseTransfer.create.mockResolvedValue(
         transferRow({ toWarehouseId: 4n, toWarehouse: vatTuTp2 }),
       );
@@ -159,7 +159,7 @@ describe('WarehouseTransfersService', () => {
     });
 
     it('allows a caller scoped to the correct fromWarehouse', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
       await expect(
@@ -168,7 +168,7 @@ describe('WarehouseTransfersService', () => {
     });
 
     it('clamps requested quantity down to available stock (onHand - reservations of both kinds, via getAvailableQty)', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 40 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 40 }, stockLengthMm: 0 }]);
       stockReservationsService.getAvailableQty.mockResolvedValue(25); // 40 onHand - 15 reserved
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
@@ -185,21 +185,55 @@ describe('WarehouseTransfersService', () => {
     });
 
     it('reads available stock through StockReservationsService.getAvailableQty (H1 fix) - never re-implements the sum locally', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
       await service.create(dto, null, 'user-1', 'idem-key-1');
 
-      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(prisma, 1n, 10n, 100);
+      // Bucket 0 tường minh (đính chính audit độc lập 09/09) - chuyển kho nội bộ luôn ngầm định
+      // bucket 0, xem guard `nonZeroBucket` ngay phía trên trong create().
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        prisma,
+        1n,
+        10n,
+        100,
+        0,
+      );
     });
 
     it('rejects with 400 when clamped availability is 0 for every item', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 0 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 0 }, stockLengthMm: 0 }]);
 
       await expect(service.create(dto, null, 'user-1', 'idem-key-1')).rejects.toThrow(
         BadRequestException,
       );
       expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08): trước đây đọc `locked[0]` (1
+    // dòng BẤT KỲ) làm "tồn hiện có" - nếu vật tư có ≥2 bucket stockLengthMm (bucket 0 lẫn 1 bucket
+    // sắt khác), có thể tính available theo bucket SAI trong khi getAvailableQty() luôn ngầm định
+    // bucket 0 - oversell đúng bucket 0 sẽ bị trừ thật lúc confirm().
+    it('CHẶN (400) khi vật tư đã có tồn ở bucket chiều dài khác 0 - chuyển kho nội bộ chưa hỗ trợ chọn cỡ cây', async () => {
+      prisma.$queryRaw.mockResolvedValue([
+        { qty: { toNumber: () => 5 }, stockLengthMm: 0 },
+        { qty: { toNumber: () => 100 }, stockLengthMm: 5900 },
+      ]);
+
+      await expect(service.create(dto, null, 'user-1', 'idem-key-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    it('CHO PHÉP khi bucket khác 0 tồn tại nhưng qty=0 (đã rút hết, không còn tồn thật ở đó)', async () => {
+      prisma.$queryRaw.mockResolvedValue([
+        { qty: { toNumber: () => 100 }, stockLengthMm: 0 },
+        { qty: { toNumber: () => 0 }, stockLengthMm: 5900 },
+      ]);
+      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
+
+      await expect(service.create(dto, null, 'user-1', 'idem-key-1')).resolves.toBeDefined();
     });
 
     it('trusts the requested quantity as-is for items with no materialId (documented mock-parity gap)', async () => {
@@ -223,7 +257,7 @@ describe('WarehouseTransfersService', () => {
 
     // Vấn đề #7 audit 26/08 - trước đây create() không nhận userId nên không lưu được ai tạo phiếu.
     it('records the caller as createdById', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
       await service.create(dto, null, 'user-1', 'idem-key-1');
@@ -251,7 +285,7 @@ describe('WarehouseTransfersService', () => {
     });
 
     it('numbers the transfer code sequentially per year, based on the existing count', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
       prisma.warehouseTransfer.count.mockResolvedValue(4);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 

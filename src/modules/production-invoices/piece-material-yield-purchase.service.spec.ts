@@ -197,6 +197,29 @@ describe('PieceMaterialYieldPurchaseService', () => {
     });
   });
 
+  // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08): trước đây `locked[0]?.qty`
+  // chỉ lấy 1 dòng BẤT KỲ - nếu vật tư có ≥2 dòng stock_quant (nhiều bucket stockLengthMm), các
+  // dòng còn lại bị ÂM THẦM BỎ QUA, tính thiếu tồn thực có -> đề xuất mua nhiều hơn cần thiết.
+  it('cộng dồn MỌI dòng stock_quant trả về (không chỉ lấy dòng đầu) khi vật tư có nhiều bucket', async () => {
+    // required=100, barsNeeded=9 (như test dưới), actualStock=5+4=9 -> buyQty=0, khớp đúng.
+    prisma.$queryRaw.mockResolvedValue([
+      { qty: { toNumber: () => 5 } },
+      { qty: { toNumber: () => 4 } },
+    ]);
+    prisma.purchaseProposalItem.findMany.mockResolvedValue([
+      { status: PurchaseProposalStatus.PURCHASED },
+    ]);
+    prisma.purchaseProposal.findUniqueOrThrow.mockResolvedValue({
+      id: 900n,
+      status: PurchaseProposalStatus.PURCHASED,
+      items: [{ id: 950n, materialId: 80n, buyQty: decimal(0) }],
+    });
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ actualStock: 9, buyQty: 0 });
+  });
+
   it('tồn nguyên liệu đã đủ (buyQty=0) - item.status=PURCHASED ngay lúc tạo, rollup cấp proposal cũng PURCHASED', async () => {
     // required = 100, onHand pool = 0 -> net=100 -> barsNeeded = ceil(100/12) = 9.
     // actualStock (thanh nhôm) = 9 -> buyQty = 0.

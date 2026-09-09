@@ -58,10 +58,13 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  *
  * KHÁC steel_issue/weaving_issue: CÓ ghi StockLedger (ref_type=MATERIAL_ISSUE) - vật tư tiêu hao
  * chưa bị trừ tồn ở bước nào trước đó (khác sắt: CuttingProposal.approve() đã trừ tồn lúc duyệt
- * phương án cắt). postEntry() gọi NGOÀI transaction tạo material_issue (idempotencyKey riêng
- * theo id bản ghi) - cùng idiom WarehouseTransfersService.confirm(), an toàn khi gọi lại: nếu
- * postEntry() lỡ lỗi giữa chừng, retry create() với cùng Idempotency-Key sẽ tìm lại đúng bản ghi
- * rồi gọi lại postEntry() (tự resolve-or-return theo key riêng của nó).
+ * phương án cắt). postEntry() gọi TRONG CÙNG transaction đã khoá FOR UPDATE stock_quant + tạo
+ * material_issue (đính chính audit độc lập 28/08, Nghiêm trọng - trước đây gọi NGOÀI transaction,
+ * khoá nhả trước khi stock_quant kịp đổi nên 2 lệnh sản xuất khác nhau vẫn race được, xem
+ * comment tại lệnh gọi trong create()). idempotencyKey riêng theo id bản ghi vẫn giữ - an toàn khi
+ * gọi lại: nếu postEntry() lỡ lỗi giữa chừng (rollback cả transaction), retry create() với cùng
+ * Idempotency-Key sẽ tìm lại đúng bản ghi rồi gọi lại postEntry() (tự resolve-or-return theo key
+ * riêng của nó, ngoài transaction ở nhánh replay này - an toàn vì không còn quyết định tồn kho mới).
  */
 @Injectable()
 export class MaterialIssuesService {
@@ -149,7 +152,7 @@ export class MaterialIssuesService {
         );
       }
 
-      return tx.materialIssue.create({
+      const issue = await tx.materialIssue.create({
         data: {
           stage: dto.stage,
           productionOrderId: order.id,
@@ -160,9 +163,18 @@ export class MaterialIssuesService {
         },
         include: MATERIAL_ISSUE_INCLUDE,
       });
+      // ĐÍNH CHÍNH audit độc lập 28/08 (Nghiêm trọng): bút toán PHẢI nằm TRONG CÙNG transaction đã
+      // khoá FOR UPDATE stock_quant ở trên, không phải gọi ngoài sau khi transaction đã commit -
+      // trước đây khoá FOR UPDATE nhả ngay khi transaction này kết thúc, TRƯỚC KHI stock_quant kịp
+      // đổi (chỉ đổi khi StockLedger insert xong, xem StockLedgerService trigger), nên 2 lệnh sản
+      // xuất KHÁC NHAU chạy gần đồng thời vẫn có thể cùng đọc thấy tồn cũ (đã pass check ở trên)
+      // rồi cả 2 cùng ghi ledger sau khi khoá đã nhả từ lâu -> tồn âm. Comment cũ biện minh "cùng
+      // idiom WarehouseTransfersService.confirm()" đã lỗi thời - chính idiom đó đã được sửa để gọi
+      // postEntry() TRONG tx từ lâu, chỉ MaterialIssuesService/PackagingIssuesService chưa đồng bộ.
+      await this.postLedgerEntry(issue, issuedById, tx);
+      return issue;
     });
 
-    await this.postLedgerEntry(created, issuedById);
     return this.toResponseDto(created);
   }
 
@@ -288,7 +300,12 @@ export class MaterialIssuesService {
     return this.toResponseDto(await this.findOneOrThrow(id));
   }
 
-  private async postLedgerEntry(issue: MaterialIssueRow, createdById: string): Promise<void> {
+  private async postLedgerEntry(
+    issue: MaterialIssueRow,
+    createdById: string,
+    tx?: PrismaTx,
+  ): Promise<void> {
+    const db = tx ?? this.prisma;
     // fromWarehouseId đọc thẳng từ Material.warehouseId (đã include ở MATERIAL_ISSUE_INCLUDE) -
     // không còn tra theo literal code, mirror CuttingProposalsService.approve(). Chỉ chưa từng null
     // được ở đây vì create() đã chặn qua findMaterialWarehouseOrThrow() trước khi tạo bản ghi.
@@ -297,19 +314,22 @@ export class MaterialIssuesService {
         `Vật tư ${issue.material.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi ghi sổ`,
       );
     }
-    const toWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
+    const toWarehouse = await db.warehouse.findUniqueOrThrow({
       where: { code: PRODUCTION_WAREHOUSE_CODE },
     });
-    await this.stockLedgerService.postEntry({
-      fromWarehouseId: issue.material.warehouseId,
-      toWarehouseId: toWarehouse.id,
-      materialId: issue.materialId,
-      qty: issue.issuedQty.toNumber(),
-      refType: StockLedgerRefType.MATERIAL_ISSUE,
-      refId: issue.id.toString(),
-      createdById,
-      idempotencyKey: `material-issue:${issue.id}`,
-    });
+    await this.stockLedgerService.postEntry(
+      {
+        fromWarehouseId: issue.material.warehouseId,
+        toWarehouseId: toWarehouse.id,
+        materialId: issue.materialId,
+        qty: issue.issuedQty.toNumber(),
+        refType: StockLedgerRefType.MATERIAL_ISSUE,
+        refId: issue.id.toString(),
+        createdById,
+        idempotencyKey: `material-issue:${issue.id}`,
+      },
+      tx,
+    );
   }
 
   /** null = tổng kho (BOSS/ADMIN) - không có gì để chặn, cùng idiom SteelIssuesService/

@@ -124,25 +124,44 @@ export class WarehouseTransfersService {
         }
 
         const materialId = parseBigIntId(item.materialId);
-        // FOR UPDATE khoá dòng stock_quant liên quan trong lúc tính "tồn khả dụng" - chặn 2
-        // phiếu tạo gần như đồng thời cùng đọc thấy 1 số dư rồi cùng đặt cọc vượt quá tồn thật
-        // (oversell race mà unique constraint không bắt được, khác lớp race của BomRevision.revNo).
-        const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
-          SELECT "qty" FROM "stock_quant"
+        // FOR UPDATE khoá TẤT CẢ dòng stock_quant liên quan (mọi bucket chiều dài) trong lúc tính
+        // "tồn khả dụng" - chặn 2 phiếu tạo gần như đồng thời cùng đọc thấy 1 số dư rồi cùng đặt
+        // cọc vượt quá tồn thật (oversell race mà unique constraint không bắt được, khác lớp race
+        // của BomRevision.revNo).
+        const locked = await tx.$queryRaw<{ qty: Prisma.Decimal; stockLengthMm: number }[]>`
+          SELECT "qty", "stockLengthMm" FROM "stock_quant"
           WHERE "warehouseId" = ${fromWarehouseId} AND "materialId" = ${materialId}
           FOR UPDATE
         `;
-        const onHand = locked[0]?.qty.toNumber() ?? 0;
+        // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08): trước đây đọc `locked[0]`
+        // (1 dòng BẤT KỲ Postgres trả về) làm "tồn hiện có" - nếu vật tư này có ≥2 bucket chiều dài
+        // (đã có tồn ở bucket 0 lẫn 1 bucket sắt khác, vd do gán nhầm dùng chung materialId với
+        // CuttingProposal), `locked[0]` có thể trả về bucket KHÁC bucket 0 mà getAvailableQty() bên
+        // dưới đang tính (luôn ngầm định bucket 0 cho chuyển kho nội bộ) - tính sai available, có
+        // thể tạo phiếu chuyển vượt quá tồn thật của ĐÚNG bucket sẽ bị trừ lúc confirm() (luôn ghi
+        // stockLengthMm=0, xem bên dưới). Chuyển kho nội bộ CỐ Ý chưa hỗ trợ chọn cỡ cây - nếu vật
+        // tư đã có bất kỳ bucket ≠ 0 với qty ≠ 0, chặn cứng thay vì âm thầm tính sai, gợi ý dùng
+        // đúng luồng xuất sắt (Phôi) cho vật tư đó.
+        const nonZeroBucket = locked.find((r) => r.stockLengthMm !== 0 && r.qty.toNumber() !== 0);
+        if (nonZeroBucket) {
+          throw new BadRequestException(
+            `Vật tư ${materialId} đã có tồn kho phân theo cỡ cây (bucket ${nonZeroBucket.stockLengthMm}mm) - ` +
+              `chuyển kho nội bộ chưa hỗ trợ chọn cỡ cây, dùng đúng luồng xuất sắt (Phôi) cho vật tư này`,
+          );
+        }
+        const onHand = locked.reduce((sum, r) => sum + r.qty.toNumber(), 0);
 
         // Dùng ĐÚNG hàm dùng chung (H1 fix) - trước đây tự cộng riêng warehouseTransferReservation,
         // bỏ qua StockReservation (giữ chỗ cho phương án cắt sắt đã duyệt) - 2 nghiệp vụ giành
         // nhau cùng lô hàng mà không ai phát hiện. getAvailableQty() là hàm DUY NHẤT được phép
-        // cộng cả 2 bảng (xem comment ở đầu hàm đó).
+        // cộng cả 2 bảng (xem comment ở đầu hàm đó). Bucket 0 tường minh - chặn ở trên đã đảm bảo
+        // mọi tồn còn lại của vật tư này đều ở bucket 0.
         const available = await this.stockReservationsService.getAvailableQty(
           tx,
           fromWarehouseId,
           materialId,
           onHand,
+          0,
         );
         const quantity = Math.max(0, Math.min(item.quantity, available));
         if (quantity > 0) {

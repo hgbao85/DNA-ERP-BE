@@ -65,6 +65,7 @@ describe('SteelIssuesService', () => {
     stockQuant: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   };
   let stockReservationsService: { drainPool: jest.Mock };
@@ -226,6 +227,9 @@ describe('SteelIssuesService', () => {
           ? Promise.resolve([{ floorStage: 'ACTIVE' }])
           : Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }]),
       ),
+      // lockBusinessKey() (Nghiêm trọng #6, đính chính audit độc lập 09/09 - khoá race
+      // recordStepBatch()) dùng $executeRaw - no-op ở test, cùng idiom material-issues.spec.ts.
+      $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     stockLedgerService = { postEntry: jest.fn() };
@@ -1285,6 +1289,22 @@ describe('SteelIssuesService', () => {
 
       await expect(service.recordStepBatch('1', dto)).rejects.toThrow(ConflictException);
       expect(prisma.stepBatch.create).not.toHaveBeenCalled();
+    });
+
+    // Nghiêm trọng #6 (đính chính audit độc lập 09/09): trước đây `stepDoneRows` đọc NGOÀI
+    // transaction, không khoá - 2 request báo công đoạn gần đồng thời cho cùng (invoice, material,
+    // step) đều đọc cùng `stepDoneSoFar` cũ, đều pass check, đều tạo dòng -> tổng vượt số thực đã
+    // cắt. Giờ bọc $transaction + lockBusinessKey(`step-batch:...`) TRƯỚC khi đọc lại
+    // stepDoneRows, mirror ProductionBatchesService.recordPieceStepBatch() (VTTP, đã làm đúng).
+    it('khoá advisory theo (invoice, material, step) TRƯỚC khi đọc lại stepDoneRows - chặn race giữa 2 lượt báo gần đồng thời', async () => {
+      prisma.stepBatch.create.mockResolvedValue(createdRow);
+
+      await service.recordStepBatch('1', dto);
+
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      const lockCallOrder = prisma.$executeRaw.mock.invocationCallOrder[0];
+      const readStepDoneCallOrder = prisma.stepBatchSegment.findMany.mock.invocationCallOrder[0];
+      expect(lockCallOrder).toBeLessThan(readStepDoneCallOrder);
     });
 
     it('ném NotFoundException nếu PI không tồn tại', async () => {

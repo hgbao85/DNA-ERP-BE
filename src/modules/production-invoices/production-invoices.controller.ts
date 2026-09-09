@@ -11,7 +11,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
-import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
+import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
@@ -262,6 +262,23 @@ export class ProductionInvoicesController {
     @CurrentUser('id') userId: string,
   ) {
     return this.productionInvoicesService.rejectBatch(id, dto.reason, userId);
+  }
+
+  /**
+   * Vá điểm kẹt "SKU đã APPROVED nhưng ProductionOrder tạo thất bại" (race hiếm: BOM bị deactivate
+   * đúng khoảnh khắc giữa 2 lệnh) - sự cố kỹ thuật cần ADMIN xử lý, không phải quyết định nghiệp vụ
+   * của BOSS nên KHÔNG dùng permission APPROVE. FE phát hiện ca kẹt qua
+   * `prodApprovalStatus=APPROVED && productionOrderId=null` (xem ProductionInvoiceItemResponseDto).
+   */
+  @Post(':id/items/:itemId/retry-production-order')
+  @RequirePermissions(UPDATE)
+  @RequireRole(DEFAULT_ROLES.ADMIN)
+  retryProductionOrder(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.productionInvoicesService.retryProductionOrder(id, itemId, userId);
   }
 
   // ─── Chuyền kiểm (TRANSFER_CHECK) - thủ kho thành phẩm, mirror KhoChuyenKiemPage ─────

@@ -7,11 +7,18 @@ import {
 import { MaterialYieldIssueStatus, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { MaterialYieldIssuesService } from './material-yield-issues.service';
 
 describe('MaterialYieldIssuesService', () => {
   let service: MaterialYieldIssuesService;
   let stockLedgerService: { postEntry: jest.Mock };
+  let stockReservationsService: { getAvailableQty: jest.Mock };
+  // Đính chính audit độc lập 28/08 (Nghiêm trọng #4) - $queryRaw (khoá + đọc stock_quant) điều
+  // khiển bởi biến này, mặc định dư dả để không ảnh hưởng các test có sẵn (chỉ quan tâm định mức
+  // BOM); test riêng cho check tồn kho thật sự tự set lại giá trị thấp. Cùng idiom
+  // MaterialIssuesService.
+  let physicalStockQty: number;
   let prisma: {
     materialYieldIssue: {
       findUnique: jest.Mock;
@@ -105,13 +112,24 @@ describe('MaterialYieldIssuesService', () => {
           ),
       },
       $executeRaw: jest.fn().mockResolvedValue(0),
-      $queryRaw: jest.fn(() => Promise.resolve([{ floorStage: 'ACTIVE' }])),
+      // Cùng idiom MaterialIssuesService: phân nhánh theo nội dung câu SQL - assertItemPiHasActive
+      // FloorLocked() khoá production_orders, còn check tồn kho mới (Nghiêm trọng #4) khoá stock_quant.
+      $queryRaw: jest.fn((strings: TemplateStringsArray) =>
+        strings.join('').includes('production_orders')
+          ? Promise.resolve([{ floorStage: 'ACTIVE' }])
+          : Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }]),
+      ),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
+    physicalStockQty = 9999;
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
+    stockReservationsService = {
+      getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
+    };
     service = new MaterialYieldIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
+      stockReservationsService as unknown as StockReservationsService,
     );
   });
 
@@ -133,6 +151,9 @@ describe('MaterialYieldIssuesService', () => {
           }),
         }),
       );
+      // Đính chính audit độc lập 28/08 (Nghiêm trọng #4): postEntry() giờ nhận `tx` (2 tham số) -
+      // phải nằm TRONG CÙNG transaction đã khoá FOR UPDATE stock_quant, không còn gọi ngoài sau khi
+      // transaction đã commit.
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({
           fromWarehouseId: 5n, // material.warehouseId - KHÔNG phải hằng số cố định
@@ -143,6 +164,7 @@ describe('MaterialYieldIssuesService', () => {
           refId: '100',
           idempotencyKey: 'material-yield-issue:100',
         }),
+        expect.anything(),
       );
       expect(result.id).toBe('100');
     });
@@ -153,10 +175,45 @@ describe('MaterialYieldIssuesService', () => {
       const result = await service.create('1', dto, 'user-1', null, 'idem-key-1');
 
       expect(prisma.materialYieldIssue.create).not.toHaveBeenCalled();
+      // Nhánh replay KHÔNG mở transaction mới (không còn quyết định tồn kho mới) - tx là undefined.
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ idempotencyKey: 'material-yield-issue:100' }),
+        undefined,
       );
       expect(result.id).toBe('100');
+    });
+
+    // Đính chính audit độc lập 28/08 (Nghiêm trọng #4): trước đây create() chỉ so với định mức BOM
+    // (PieceMaterialYield), KHÔNG hề đọc stock_quant - chỉ cần định mức còn "chưa xuất đủ" là ghi sổ
+    // vô điều kiện dù kho vật lý = 0. Mirror đúng bộ test MaterialIssuesService đã có cho lỗi tương tự.
+    it('CHẶN (409) khi tồn kho vật lý không đủ dù định mức BOM còn cho phép xuất', async () => {
+      physicalStockQty = 2; // định mức còn cho xuất 5 (required=5, issued=0) nhưng kho chỉ còn 2
+      prisma.materialYieldIssue.create.mockResolvedValue(issueRow);
+
+      await expect(service.create('1', dto, 'user-1', null)).rejects.toThrow(ConflictException);
+      expect(prisma.materialYieldIssue.create).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('CHO PHÉP xuất khi tồn kho vật lý vừa đủ đúng số cần xuất', async () => {
+      physicalStockQty = 5;
+      prisma.materialYieldIssue.create.mockResolvedValue(issueRow);
+
+      await expect(service.create('1', dto, 'user-1', null)).resolves.toBeDefined();
+    });
+
+    it('trừ ĐÚNG phần đang bị giữ chỗ (StockReservation/WarehouseTransferReservation) khỏi tồn khả dụng, không chỉ so với tồn thô', async () => {
+      physicalStockQty = 100; // tồn thô dư dả...
+      stockReservationsService.getAvailableQty.mockResolvedValue(3); // ...nhưng phần lớn đã bị giữ chỗ
+      prisma.materialYieldIssue.create.mockResolvedValue(issueRow);
+
+      await expect(service.create('1', dto, 'user-1', null)).rejects.toThrow(ConflictException);
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        expect.anything(),
+        5n, // material.warehouseId
+        80n,
+        100,
+      );
     });
 
     it('ném BadRequestException khi material chưa gán warehouseId', async () => {

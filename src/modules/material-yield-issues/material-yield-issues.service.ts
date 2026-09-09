@@ -23,6 +23,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreateMaterialYieldIssueDto } from './dto/create-material-yield-issue.dto';
 import { ListMaterialYieldIssuesQueryDto } from './dto/list-material-yield-issues-query.dto';
 import { MaterialYieldIssuePlanItemResponseDto } from './dto/material-yield-issue-plan-item-response.dto';
@@ -63,6 +64,7 @@ export class MaterialYieldIssuesService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
+    private readonly stockReservationsService: StockReservationsService,
   ) {}
 
   async create(
@@ -98,11 +100,12 @@ export class MaterialYieldIssuesService {
     if (!material) {
       throw new NotFoundException(`Vật tư ${dto.materialId} not found`);
     }
-    if (!material.warehouse) {
+    if (!material.warehouse || !material.warehouseId) {
       throw new BadRequestException(
         `Vật tư ${material.name} chưa được gán kho (Material.warehouseId) - báo Admin cấu hình trước khi xuất`,
       );
     }
+    const materialWarehouseId = material.warehouseId;
     this.assertWarehouseScope(warehouseScope, material.warehouse.code);
 
     // Khoá advisory theo (order, material) - đọc-rồi-ghi (plannedQty/sumIssued) không transaction/
@@ -127,7 +130,31 @@ export class MaterialYieldIssuesService {
         );
       }
 
-      return tx.materialYieldIssue.create({
+      // Đính chính audit độc lập 28/08 (Nghiêm trọng #4) - trước đây hàm này chỉ so với định mức
+      // BOM (requiredQty) ở trên, KHÔNG hề đọc stock_quant: chỉ cần định mức còn "chưa xuất đủ" là
+      // ghi sổ vô điều kiện dù kho vật lý = 0 (vd hàng đặt mua chưa kịp về). Cùng lớp kiểm tra + cùng
+      // khoá FOR UPDATE mà MaterialIssuesService.create() đã có (Vấn đề #1 audit 26/08) - module này
+      // ra đời sau (2026-09-04) nhưng bị bỏ sót không mirror lại phần đó. getAvailableQty() (không
+      // tự trừ tay) để không giành tồn với chuyển kho nội bộ đang giữ chỗ vật tư này.
+      const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+        SELECT "qty" FROM "stock_quant"
+        WHERE "warehouseId" = ${materialWarehouseId} AND "materialId" = ${materialBigId}
+        FOR UPDATE
+      `;
+      const onHand = stockRow?.qty.toNumber() ?? 0;
+      const availableQty = await this.stockReservationsService.getAvailableQty(
+        tx,
+        materialWarehouseId,
+        materialBigId,
+        onHand,
+      );
+      if (dto.issuedQty > availableQty) {
+        throw new ConflictException(
+          `Tồn kho khả dụng (${availableQty}) không đủ xuất ${dto.issuedQty} cho vật tư ${material.name} - kiểm tra lại tồn kho thực tế trước khi xuất`,
+        );
+      }
+
+      const issue = await tx.materialYieldIssue.create({
         data: {
           productionOrderId: order.id,
           materialId: materialBigId,
@@ -137,27 +164,40 @@ export class MaterialYieldIssuesService {
         },
         include: MATERIAL_YIELD_ISSUE_INCLUDE,
       });
+      // Bút toán TRONG CÙNG transaction đã khoá FOR UPDATE stock_quant ở trên - mirror
+      // MaterialIssuesService/PackagingIssuesService.create() (đính chính cùng đợt audit): gọi
+      // ngoài sau khi transaction commit sẽ nhả khoá trước khi stock_quant kịp đổi, tái tạo lại
+      // đúng race đã vá ở 2 module kia.
+      await this.postLedgerEntry(issue, issuedById, tx);
+      return issue;
     });
 
-    await this.postLedgerEntry(created, issuedById);
     return this.toResponseDto(created);
   }
 
-  private async postLedgerEntry(issue: MaterialYieldIssueRow, createdById: string): Promise<void> {
+  private async postLedgerEntry(
+    issue: MaterialYieldIssueRow,
+    createdById: string,
+    tx?: PrismaTx,
+  ): Promise<void> {
     if (!issue.material.warehouseId) return;
-    const productionWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
+    const db = tx ?? this.prisma;
+    const productionWarehouse = await db.warehouse.findUniqueOrThrow({
       where: { code: PRODUCTION_WAREHOUSE_CODE },
     });
-    await this.stockLedgerService.postEntry({
-      fromWarehouseId: issue.material.warehouseId,
-      toWarehouseId: productionWarehouse.id,
-      materialId: issue.materialId,
-      qty: issue.issuedQty.toNumber(),
-      refType: StockLedgerRefType.MATERIAL_YIELD_CONSUME,
-      refId: issue.id.toString(),
-      createdById,
-      idempotencyKey: `material-yield-issue:${issue.id}`,
-    });
+    await this.stockLedgerService.postEntry(
+      {
+        fromWarehouseId: issue.material.warehouseId,
+        toWarehouseId: productionWarehouse.id,
+        materialId: issue.materialId,
+        qty: issue.issuedQty.toNumber(),
+        refType: StockLedgerRefType.MATERIAL_YIELD_CONSUME,
+        refId: issue.id.toString(),
+        createdById,
+        idempotencyKey: `material-yield-issue:${issue.id}`,
+      },
+      tx,
+    );
   }
 
   async receive(

@@ -185,6 +185,21 @@ describe('ConsumableMaterialPurchaseService', () => {
     expect(result[0].buyQty).toBe(74.5);
   });
 
+  // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08): trước đây `locked[0]?.qty` chỉ
+  // lấy 1 dòng BẤT KỲ - nếu vật tư có ≥2 dòng stock_quant (nhiều bucket stockLengthMm), các dòng
+  // còn lại bị ÂM THẦM BỎ QUA, tính thiếu tồn thực có -> đề xuất mua nhiều hơn cần thiết.
+  it('cộng dồn MỌI dòng stock_quant trả về (không chỉ lấy dòng đầu) khi vật tư có nhiều bucket', async () => {
+    prisma.$queryRaw.mockResolvedValue([
+      { qty: { toNumber: () => 30 } },
+      { qty: { toNumber: () => 15.5 } },
+    ]);
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    // required=120, actualStock=30+15.5=45.5 -> buyQty=74.5, khớp đúng test "45.5 dồn 1 dòng" ở trên.
+    expect(result[0].buyQty).toBe(74.5);
+  });
+
   it('tồn đã đủ (buyQty=0) - item.status=PURCHASED ngay lúc tạo, rollup cấp proposal cũng PURCHASED', async () => {
     prisma.$queryRaw.mockResolvedValue(await qtyRow(200));
     // recomputeProposalStatus() đọc TƯƠI - mô phỏng đúng item vừa tạo với buyQty=0 -> PURCHASED.

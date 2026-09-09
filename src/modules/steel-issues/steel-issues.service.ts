@@ -22,6 +22,7 @@ import {
   assertPiHasActiveFloor,
   assertPiHasActiveFloorLocked,
 } from '../../common/utils/floor-gate.util';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { isFamilyScope } from '../../common/utils/warehouse-family.util';
@@ -1200,39 +1201,13 @@ export class SteelIssuesService {
       throw new BadRequestException('Cùng một cỡ đoạn khai làm nhiều dòng - gộp lại thành 1 dòng');
     }
 
-    const [allowedSpecIds, specs, catRows, stepDoneRows] = await Promise.all([
+    const [allowedSpecIds, specs] = await Promise.all([
       this.findStepSegmentSpecIds(invoice.id, dto.step),
       this.prisma.segmentSpec.findMany({
         where: { id: { in: specIds }, materialId: materialBigId },
       }),
-      this.prisma.cutPatternSegment.findMany({
-        where: {
-          segmentSpecId: { in: specIds },
-          cutBundle: { steelIssue: { productionInvoiceId: invoice.id, materialId: materialBigId } },
-        },
-        select: { segmentSpecId: true, qty: true },
-      }),
-      this.prisma.stepBatchSegment.findMany({
-        where: {
-          segmentSpecId: { in: specIds },
-          stepBatch: { productionInvoiceId: invoice.id, materialId: materialBigId, step: dto.step },
-        },
-        select: { segmentSpecId: true, qty: true },
-      }),
     ]);
-
     const specById = new Map(specs.map((s) => [s.id.toString(), s]));
-    const catDoneBySpec = new Map<string, number>();
-    for (const r of catRows) {
-      const k = r.segmentSpecId.toString();
-      catDoneBySpec.set(k, (catDoneBySpec.get(k) ?? 0) + r.qty);
-    }
-    const stepDoneBySpec = new Map<string, number>();
-    for (const r of stepDoneRows) {
-      const k = r.segmentSpecId.toString();
-      stepDoneBySpec.set(k, (stepDoneBySpec.get(k) ?? 0) + r.qty);
-    }
-
     for (const seg of dto.segments) {
       const specKey = parseBigIntId(seg.segmentSpecId).toString();
       const spec = specById.get(specKey);
@@ -1244,29 +1219,81 @@ export class SteelIssuesService {
           `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không cần công đoạn ${dto.step} theo định mức`,
         );
       }
-      const catDone = catDoneBySpec.get(specKey) ?? 0;
-      const stepDoneSoFar = stepDoneBySpec.get(specKey) ?? 0;
-      if (stepDoneSoFar + seg.qty > catDone) {
-        throw new BadRequestException(
-          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm: đã cắt ${catDone} đoạn (cả PI), đã báo ` +
-            `${dto.step} ${stepDoneSoFar} đoạn - không thể báo thêm ${seg.qty} (vượt số đã cắt)`,
-        );
-      }
     }
 
-    const created = await this.prisma.stepBatch.create({
-      data: {
-        productionInvoiceId: invoice.id,
-        materialId: materialBigId,
-        step: dto.step,
-        segments: {
-          create: dto.segments.map((seg) => ({
-            segmentSpecId: parseBigIntId(seg.segmentSpecId),
-            qty: seg.qty,
-          })),
+    // Đính chính audit độc lập 09/09 (Nghiêm trọng #6) - trước đây `catRows`/`stepDoneRows` đọc
+    // NGOÀI transaction, không khoá, rồi mới create() - 2 request báo công đoạn gần như đồng thời
+    // cho cùng (invoice, material, step) đều đọc cùng `stepDoneSoFar` cũ, đều pass check "không
+    // vượt catDone", đều tạo dòng -> tổng đã báo công đoạn VƯỢT số thực đã cắt (bất biến nghiệp vụ
+    // bị phá), sai lệch không có gì tự đối chiếu lại sau đó. Mirror ĐÚNG khuôn
+    // ProductionBatchesService.recordPieceStepBatch() (đã làm đúng cho nhánh VTTP): bọc
+    // $transaction + lockBusinessKey theo (invoice, material, step) trước khi đọc lại
+    // stepDoneSoFar, giữ khoá tới khi ghi xong dòng mới.
+    const created = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `step-batch:${invoice.id}:${materialBigId}:${dto.step}`);
+      await assertPiHasActiveFloorLocked(tx, invoice.id, 'nhập công đoạn chi tiết');
+
+      const [catRows, stepDoneRows] = await Promise.all([
+        tx.cutPatternSegment.findMany({
+          where: {
+            segmentSpecId: { in: specIds },
+            cutBundle: {
+              steelIssue: { productionInvoiceId: invoice.id, materialId: materialBigId },
+            },
+          },
+          select: { segmentSpecId: true, qty: true },
+        }),
+        tx.stepBatchSegment.findMany({
+          where: {
+            segmentSpecId: { in: specIds },
+            stepBatch: {
+              productionInvoiceId: invoice.id,
+              materialId: materialBigId,
+              step: dto.step,
+            },
+          },
+          select: { segmentSpecId: true, qty: true },
+        }),
+      ]);
+
+      const catDoneBySpec = new Map<string, number>();
+      for (const r of catRows) {
+        const k = r.segmentSpecId.toString();
+        catDoneBySpec.set(k, (catDoneBySpec.get(k) ?? 0) + r.qty);
+      }
+      const stepDoneBySpec = new Map<string, number>();
+      for (const r of stepDoneRows) {
+        const k = r.segmentSpecId.toString();
+        stepDoneBySpec.set(k, (stepDoneBySpec.get(k) ?? 0) + r.qty);
+      }
+
+      for (const seg of dto.segments) {
+        const specKey = parseBigIntId(seg.segmentSpecId).toString();
+        const spec = specById.get(specKey)!;
+        const catDone = catDoneBySpec.get(specKey) ?? 0;
+        const stepDoneSoFar = stepDoneBySpec.get(specKey) ?? 0;
+        if (stepDoneSoFar + seg.qty > catDone) {
+          throw new BadRequestException(
+            `Cỡ đoạn ${spec.cutLengthMm.toString()}mm: đã cắt ${catDone} đoạn (cả PI), đã báo ` +
+              `${dto.step} ${stepDoneSoFar} đoạn - không thể báo thêm ${seg.qty} (vượt số đã cắt)`,
+          );
+        }
+      }
+
+      return tx.stepBatch.create({
+        data: {
+          productionInvoiceId: invoice.id,
+          materialId: materialBigId,
+          step: dto.step,
+          segments: {
+            create: dto.segments.map((seg) => ({
+              segmentSpecId: parseBigIntId(seg.segmentSpecId),
+              qty: seg.qty,
+            })),
+          },
         },
-      },
-      include: { segments: { include: { segmentSpec: true } } },
+        include: { segments: { include: { segmentSpec: true } } },
+      });
     });
 
     return new StepBatchResponseDto({

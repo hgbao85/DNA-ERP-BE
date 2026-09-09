@@ -296,6 +296,7 @@ export class PurchaseProposalsService {
     dto: ReceivePurchaseProposalItemDto,
     userId: string,
     idempotencyKey: string,
+    warehouseScope: string | null,
   ): Promise<PurchaseProposalItemResponseDto> {
     const proposal = await this.findDetailOrThrow(id);
     const bigItemId = parseBigIntId(itemId);
@@ -320,6 +321,7 @@ export class PurchaseProposalsService {
     // ghi đè, bắt buộc giữ nguyên ở kho trung chuyển để bước Đóng gói lấy ra được). Bất biến theo
     // item nên kiểm trước khi mở transaction là an toàn (không cần khoá).
     let materialWarehouseId: bigint;
+    let targetWarehouseCode: string;
     if (item.receiveWarehouseCode) {
       const overrideWarehouse = await this.prisma.warehouse.findUnique({
         where: { code: item.receiveWarehouseCode },
@@ -330,14 +332,22 @@ export class PurchaseProposalsService {
         );
       }
       materialWarehouseId = overrideWarehouse.id;
+      targetWarehouseCode = overrideWarehouse.code;
     } else {
-      if (!item.material.warehouseId) {
+      if (!item.material.warehouseId || !item.material.warehouse) {
         throw new BadRequestException(
           `Vật tư ${item.material.code} chưa được cấu hình Kho - không thể nhập kho tự động, vào Admin > Vật tư để gán Kho trước`,
         );
       }
       materialWarehouseId = item.material.warehouseId;
+      targetWarehouseCode = item.material.warehouse.code;
     }
+    // Đây từng là chỗ ghi kho DUY NHẤT thiếu kiểm scope trong toàn hệ thống (mọi service ghi kho
+    // khác đều gọi assertWarehouseScope trước khi ghi, xem material-issues/packaging-issues/
+    // warehouse-transfers.service.ts) - kho đích xác định thẳng từ Material.warehouseId hoặc
+    // receiveWarehouseCode, không đối chiếu gì với phạm vi của người gọi. Thủ kho chỉ được UI cho
+    // vào 1 kho vẫn gọi thẳng API nhận hộ hàng cho kho khác được nếu không chặn ở đây.
+    this.assertWarehouseScope(warehouseScope, targetWarehouseCode);
     // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26, mở rộng thành pool): cộng hàng về ĐÚNG pool giữ chỗ
     // (StockReservation, tạo ở CuttingProposalsService.approve()) - CHỈ khi đúng vật tư SẮT của
     // CuttingProposal thuộc CÙNG PI với đề xuất mua này. KHÔNG còn soi theo
@@ -394,14 +404,30 @@ export class PurchaseProposalsService {
         // nhận hàng và duyệt/từ chối có thể chen ngang nhau khi cùng ghi status cùng lúc.
         await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
 
+        // Đọc kèm "status" và tái kiểm NGAY SAU KHI khoá dòng: `item.status` ở trên là snapshot đọc
+        // TRƯỚC transaction, không phản ánh 1 lượt nhận/duyệt/từ chối khác vừa commit trong lúc
+        // request này chờ khoá. Không tái kiểm ở đây thì lượt nhận thứ hai vẫn cộng dồn bình thường
+        // trên receivedQty MỚI (đúng, nhờ FOR UPDATE) dù dòng đã đóng hồ sơ PURCHASED hoặc bị REJECTED
+        // - chỉ bị chặn bởi ngưỡng dung sai chứ không phải bởi trạng thái, vi phạm state machine đã
+        // công bố (PURCHASED/REJECTED không còn nhận thêm được).
         const [locked] = await tx.$queryRaw<
-          { receivedQty: Prisma.Decimal; receivedQtyPurchaseUnit: Prisma.Decimal | null }[]
+          {
+            receivedQty: Prisma.Decimal;
+            receivedQtyPurchaseUnit: Prisma.Decimal | null;
+            status: PurchaseProposalStatus;
+          }[]
         >`
-          SELECT "receivedQty", "receivedQtyPurchaseUnit" FROM "purchase_proposal_items"
+          SELECT "receivedQty", "receivedQtyPurchaseUnit", "status" FROM "purchase_proposal_items"
           WHERE "id" = ${item.id} FOR UPDATE
         `;
         if (!locked) {
           throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
+        }
+        if (locked.status !== PurchaseProposalStatus.PURCHASING) {
+          throw new ConflictException(
+            `Vật tư ${item.material.code} đã bị 1 request khác xử lý trong lúc chờ nhận hàng ` +
+              `(đang ở trạng thái ${locked.status}, không còn PURCHASING) - không ghi đè`,
+          );
         }
         const currentReceivedQty = locked.receivedQty.toNumber();
         const nextReceivedQty = currentReceivedQty + dto.receivedQty;
@@ -493,6 +519,17 @@ export class PurchaseProposalsService {
    *  cấp item), dùng chung ở assertActorMayHandle() và bossApprove(). */
   private isPrivilegedActor(actorRoles: string[]): boolean {
     return actorRoles.includes(BUSINESS_ROLES.BOSS) || actorRoles.includes(DEFAULT_ROLES.ADMIN);
+  }
+
+  /** null = tổng kho (BOSS/ADMIN) - thấy mọi kho, không có gì để chặn. Khác null: phải khớp ĐÚNG
+   *  kho vật lý đích của lần nhận hàng này - cùng idiom MaterialIssuesService/
+   *  WarehouseTransfersService.assertWarehouseScope(). */
+  private assertWarehouseScope(warehouseScope: string | null, targetWarehouseCode: string): void {
+    if (warehouseScope && warehouseScope !== targetWarehouseCode) {
+      throw new ForbiddenException(
+        `Caller bị giới hạn ở kho '${warehouseScope}', không được nhận hàng vào kho '${targetWarehouseCode}'`,
+      );
+    }
   }
 
   /**

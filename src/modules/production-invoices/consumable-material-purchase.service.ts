@@ -172,7 +172,13 @@ export class ConsumableMaterialPurchaseService {
           WHERE "warehouseId" = ${material.warehouse!.id} AND "materialId" = ${materialId}
           FOR UPDATE
         `;
-        const actualStock = locked[0]?.qty.toNumber() ?? 0;
+        // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08): `locked[0]` chỉ lấy 1
+        // dòng BẤT KỲ Postgres trả về - nếu vật tư này có ≥2 dòng stock_quant (nhiều bucket
+        // stockLengthMm, vd gán nhầm dùng chung materialId với CuttingProposal), các dòng còn lại
+        // bị ÂM THẦM BỎ QUA, tính thiếu tồn thực có -> đề xuất mua nhiều hơn cần thiết. Vật tư tiêu
+        // hao phẳng vĩnh viễn chỉ nên có bucket 0, nhưng KHÔNG giả định chỉ có đúng 1 dòng - cộng
+        // dồn mọi dòng trả về để đúng bất kể vi phạm giả định đó có xảy ra hay không.
+        const actualStock = locked.reduce((sum, r) => sum + r.qty.toNumber(), 0);
         const buyQty = Math.max(0, required - actualStock);
         computed.push({
           materialId,

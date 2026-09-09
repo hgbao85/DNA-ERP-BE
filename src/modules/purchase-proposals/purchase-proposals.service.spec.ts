@@ -183,9 +183,13 @@ describe('PurchaseProposalsService', () => {
       // receiveItem() khoá dòng item rồi đọc lại receivedQty MỚI NHẤT bên trong transaction (C3,
       // xem receiveItem() và ghi chú D.c3-receive-race-not-atomic) - mặc định "chưa nhận gì" (0),
       // test nào cần giá trị khác (đã nhận 1 phần/đủ) tự override bằng mockResolvedValueOnce.
-      $queryRaw: jest
-        .fn()
-        .mockResolvedValue([{ receivedQty: decimal(0), receivedQtyPurchaseUnit: null }]),
+      $queryRaw: jest.fn().mockResolvedValue([
+        {
+          receivedQty: decimal(0),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
+      ]),
       // lockBusinessKey() (khoá chung "purchase-proposal-mutate:<id>" cho MỌI method ghi status,
       // 2026-08-25) dùng $executeRaw - no-op ở test.
       $executeRaw: jest.fn().mockResolvedValue(0),
@@ -554,7 +558,7 @@ describe('PurchaseProposalsService', () => {
       );
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1'),
+        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(ConflictException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -565,7 +569,7 @@ describe('PurchaseProposalsService', () => {
       );
 
       await expect(
-        service.receiveItem('300', '999', { receivedQty: 1 }, 'user-1', 'key-1'),
+        service.receiveItem('300', '999', { receivedQty: 1 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(NotFoundException);
       expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
@@ -586,13 +590,24 @@ describe('PurchaseProposalsService', () => {
       );
       // Số MỚI NHẤT tại thời điểm khoá dòng (đã nhận 3 từ đợt trước) - xem C3.
       prisma.$queryRaw.mockResolvedValue([
-        { receivedQty: decimal(3), receivedQtyPurchaseUnit: null },
+        {
+          receivedQty: decimal(3),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
       ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
 
-      const result = await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+      const result = await service.receiveItem(
+        '300',
+        '400',
+        { receivedQty: 5 },
+        'user-1',
+        'key-1',
+        null,
+      );
 
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ receivedQty: 8 }) as unknown }),
@@ -635,7 +650,7 @@ describe('PurchaseProposalsService', () => {
         item({ buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null);
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ stockLengthMm: 5900 }),
@@ -665,7 +680,7 @@ describe('PurchaseProposalsService', () => {
         item({ buyQty: decimal(3), receivedQty: decimal(3), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 3 }, 'user-1', 'key-1');
+      await service.receiveItem('300', '400', { receivedQty: 3 }, 'user-1', 'key-1', null);
 
       expect(prisma.warehouse.findUnique).toHaveBeenCalledWith({
         where: { code: 'thanh-pham-1788485485362' },
@@ -690,7 +705,7 @@ describe('PurchaseProposalsService', () => {
       prisma.warehouse.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 3 }, 'user-1', 'key-1'),
+        service.receiveItem('300', '400', { receivedQty: 3 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(BadRequestException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -715,13 +730,17 @@ describe('PurchaseProposalsService', () => {
         }),
       );
       prisma.$queryRaw.mockResolvedValue([
-        { receivedQty: decimal(3), receivedQtyPurchaseUnit: null },
+        {
+          receivedQty: decimal(3),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
       ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null);
 
       expect(stockReservationsService.creditPool).toHaveBeenCalledWith(expect.anything(), {
         productionInvoiceId: 50n,
@@ -747,13 +766,17 @@ describe('PurchaseProposalsService', () => {
       );
       // Khoá được: đã nhận đủ 8 từ đợt trước, lần nhập này báo 0 -> incrementQty=0.
       prisma.$queryRaw.mockResolvedValue([
-        { receivedQty: decimal(8), receivedQtyPurchaseUnit: null },
+        {
+          receivedQty: decimal(8),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
       ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 0 }, 'user-1', 'key-1');
+      await service.receiveItem('300', '400', { receivedQty: 0 }, 'user-1', 'key-1', null);
 
       expect(stockReservationsService.creditPool).not.toHaveBeenCalled();
     });
@@ -782,13 +805,24 @@ describe('PurchaseProposalsService', () => {
         }),
       );
       prisma.$queryRaw.mockResolvedValue([
-        { receivedQty: decimal(0), receivedQtyPurchaseUnit: null },
+        {
+          receivedQty: decimal(0),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
       ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
       );
 
-      const result = await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+      const result = await service.receiveItem(
+        '300',
+        '400',
+        { receivedQty: 5 },
+        'user-1',
+        'key-1',
+        null,
+      );
 
       expect(result.receivedQty).toBe(5);
       // Short-circuit trên targetProductionInvoiceId - không có PI thì không có pool nào để soi,
@@ -819,13 +853,24 @@ describe('PurchaseProposalsService', () => {
         }),
       );
       prisma.$queryRaw.mockResolvedValue([
-        { receivedQty: decimal(0), receivedQtyPurchaseUnit: null },
+        {
+          receivedQty: decimal(0),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
       ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ materialId: 99n, buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
       );
 
-      const result = await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+      const result = await service.receiveItem(
+        '300',
+        '400',
+        { receivedQty: 5 },
+        'user-1',
+        'key-1',
+        null,
+      );
 
       expect(result.receivedQty).toBe(5);
       expect(prisma.cuttingProposalLine.findFirst).toHaveBeenCalledWith(
@@ -868,13 +913,24 @@ describe('PurchaseProposalsService', () => {
         }),
       );
       prisma.$queryRaw.mockResolvedValue([
-        { receivedQty: decimal(0), receivedQtyPurchaseUnit: null },
+        {
+          receivedQty: decimal(0),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
       ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
       );
 
-      const result = await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+      const result = await service.receiveItem(
+        '300',
+        '400',
+        { receivedQty: 5 },
+        'user-1',
+        'key-1',
+        null,
+      );
 
       expect(result.receivedQty).toBe(5);
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
@@ -905,13 +961,17 @@ describe('PurchaseProposalsService', () => {
       );
       // Nhưng khi khoá được dòng, DB thật đã là 3 (lượt nhận khác vừa commit song song).
       prisma.$queryRaw.mockResolvedValue([
-        { receivedQty: decimal(3), receivedQtyPurchaseUnit: null },
+        {
+          receivedQty: decimal(3),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
       ]);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({ buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 2 }, 'user-1', 'key-1');
+      await service.receiveItem('300', '400', { receivedQty: 2 }, 'user-1', 'key-1', null);
 
       // 3 (khoá được) + 2 (nhập lần này) = 5, KHÔNG PHẢI 0 + 2 = 2 (nếu lỡ dùng snapshot cũ).
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
@@ -941,12 +1001,16 @@ describe('PurchaseProposalsService', () => {
         }),
       );
       prisma.$queryRaw.mockResolvedValue([
-        { receivedQty: decimal(3), receivedQtyPurchaseUnit: null },
+        {
+          receivedQty: decimal(3),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
       ]);
 
       // 3 đã nhận + 10 nhập thêm = 13 > 8 -> chặn, KHÔNG ghi 8 rồi nuốt 5 cây còn lại.
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 10 }, 'user-1', 'key-1'),
+        service.receiveItem('300', '400', { receivedQty: 10 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
@@ -965,11 +1029,15 @@ describe('PurchaseProposalsService', () => {
         }),
       );
       prisma.$queryRaw.mockResolvedValue([
-        { receivedQty: decimal(8), receivedQtyPurchaseUnit: null },
+        {
+          receivedQty: decimal(8),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
       ]);
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1'),
+        service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(BadRequestException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -994,7 +1062,7 @@ describe('PurchaseProposalsService', () => {
         item({ buyQty: decimal(8), receivedQty: decimal(10), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 10 }, 'user-1', 'key-1');
+      await service.receiveItem('300', '400', { receivedQty: 10 }, 'user-1', 'key-1', null);
 
       // Sổ ghi 10 - đúng số vật lý trong kho, KHÔNG phải 8.
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
@@ -1030,7 +1098,7 @@ describe('PurchaseProposalsService', () => {
         { status: PurchaseProposalStatus.PURCHASED },
       ]);
 
-      await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1');
+      await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1', null);
 
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1068,7 +1136,7 @@ describe('PurchaseProposalsService', () => {
         { status: PurchaseProposalStatus.PURCHASING },
       ]);
 
-      await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1');
+      await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1', null);
 
       expect(prisma.purchaseProposal.update).toHaveBeenCalledWith({
         where: { id: 300n },
@@ -1102,7 +1170,7 @@ describe('PurchaseProposalsService', () => {
         item({ materialId: 40n, buyQty: decimal(5), receivedQty: decimal(5), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1');
+      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null);
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ toWarehouseId: 810n, materialId: 40n, qty: 5 }),
@@ -1123,8 +1191,98 @@ describe('PurchaseProposalsService', () => {
       );
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1'),
+        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(BadRequestException);
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    // Đây từng là chỗ ghi kho DUY NHẤT thiếu kiểm scope trong toàn hệ thống - Thủ kho chỉ được UI
+    // cho vào 1 kho (vd 'vat-tu-tp') vẫn gọi thẳng API nhận hộ hàng cho kho khác ('phoi-son-han')
+    // được nếu không chặn ở đây.
+    it('CHẶN (403) khi warehouseScope khác kho vật lý đích của vật tư (Material.warehouseId)', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              material: material({ warehouseId: 800n, warehouse: { code: 'phoi-son-han' } }),
+            }),
+          ],
+        }),
+      );
+
+      await expect(
+        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', 'vat-tu-tp'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('CHẶN (403) khi warehouseScope khác kho override (item.receiveWarehouseCode)', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              receiveWarehouseCode: 'thanh-pham-2',
+              material: material({ warehouseId: 5n, warehouse: { code: 'vat-tu-tp' } }),
+            }),
+          ],
+        }),
+      );
+      prisma.warehouse.findUnique.mockResolvedValue({ id: 212n, code: 'thanh-pham-2' });
+
+      await expect(
+        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', 'thanh-pham-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('CHO PHÉP khi warehouseScope khớp đúng kho đích, và null (tổng kho) luôn qua được', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              material: material({ warehouseId: 800n, warehouse: { code: 'phoi-son-han' } }),
+            }),
+          ],
+        }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(10), receivedQty: decimal(1), quotes: [] }),
+      );
+
+      await expect(
+        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', 'phoi-son-han'),
+      ).resolves.toBeDefined();
+      await expect(
+        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', null),
+      ).resolves.toBeDefined();
+    });
+
+    // Đính chính 2026-08-29 (audit độc lập 28/08 mục Trung bình): trước đây chỉ kiểm item.status
+    // TRÊN SNAPSHOT đọc TRƯỚC transaction, không tái kiểm bên trong FOR UPDATE - 2 lượt nhận hàng
+    // gần đồng thời cho cùng dòng vẫn cộng dồn được dù dòng đã đóng hồ sơ PURCHASED ở lượt trước.
+    it('CHẶN (409) khi status đã đổi (không còn PURCHASING) ngay lúc vừa khoá được dòng - race 2 lượt nhận đồng thời', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [item({ status: PurchaseProposalStatus.PURCHASING, materialId: 30n })],
+        }),
+      );
+      // Lượt nhận khác đã commit xong TRONG lúc request này chờ khoá FOR UPDATE - dòng thật trong DB
+      // giờ đã PURCHASED, khác hẳn snapshot PURCHASING đọc trước transaction.
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          receivedQty: decimal(8),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASED,
+        },
+      ]);
+
+      await expect(
+        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', null),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
   });

@@ -22,11 +22,11 @@ describe('QcReviewsService', () => {
     segmentSpec: { findMany: jest.Mock };
     cutPatternSegment: { groupBy: jest.Mock };
     stepBatchSegment: { groupBy: jest.Mock };
-    steelIssue: { update: jest.Mock; findUnique: jest.Mock };
-    cutBundle: { findUnique: jest.Mock; update: jest.Mock };
-    stepBundle: { findUnique: jest.Mock; update: jest.Mock };
-    productionBatch: { update: jest.Mock };
-    pieceStepBundle: { update: jest.Mock };
+    steelIssue: { update: jest.Mock; updateMany: jest.Mock; findUnique: jest.Mock };
+    cutBundle: { findUnique: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
+    stepBundle: { findUnique: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
+    productionBatch: { update: jest.Mock; updateMany: jest.Mock };
+    pieceStepBundle: { update: jest.Mock; updateMany: jest.Mock };
     productionOrder: { findFirst: jest.Mock; findUniqueOrThrow: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
     $transaction: jest.Mock;
@@ -155,11 +155,30 @@ describe('QcReviewsService', () => {
       stepBatchSegment: {
         groupBy: jest.fn().mockResolvedValue([{ segmentSpecId: 30n, _sum: { qty: 8 } }]),
       },
-      steelIssue: { update: jest.fn(), findUnique: jest.fn() },
-      cutBundle: { findUnique: jest.fn(), update: jest.fn() },
-      stepBundle: { findUnique: jest.fn(), update: jest.fn() },
-      productionBatch: { update: jest.fn() },
-      pieceStepBundle: { update: jest.fn() },
+      // updateMany mặc định count:1 (Nghiêm trọng #5, đính chính audit độc lập 09/09 - updateMany+
+      // count guard chống 2 request duyệt KCS trùng cho cùng đợt) - test race-guard tự override
+      // count:0 để mô phỏng đợt đã bị 1 request khác xử lý trước, cùng idiom
+      // ProductionInvoicesService.approveItem().
+      steelIssue: {
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn(),
+      },
+      cutBundle: {
+        findUnique: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      stepBundle: {
+        findUnique: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      productionBatch: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      pieceStepBundle: {
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       // floorStage gate (2026-08-31) - mặc định PI luôn có 1 order ACTIVE, đa số test không quan
       // tâm gate assertPiHasActiveFloorForInvoice()/assertPiHasActiveFloorForOrder(), xem mục
       // riêng "QLSX kiểm soát" bên dưới mới override.
@@ -193,9 +212,11 @@ describe('QcReviewsService', () => {
     it('duyệt ĐẠT hoàn toàn (segments=[]) - đóng QC_PASSED, failedQty tổng = 0', async () => {
       const result = await service.review('100', { segments: [] }, 'user-kcs');
 
-      expect(prisma.steelIssue.update).toHaveBeenCalledWith(
+      // Nghiêm trọng #5 (đính chính audit độc lập 09/09): update() vô điều kiện đổi sang
+      // updateMany() lọc kèm status AWAITING_QC + so count (chống 2 request duyệt trùng).
+      expect(prisma.steelIssue.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 100n },
+          where: { id: 100n, status: SteelIssueStatus.AWAITING_QC },
           data: { status: SteelIssueStatus.QC_PASSED },
         }),
       );
@@ -280,6 +301,18 @@ describe('QcReviewsService', () => {
 
       await expect(service.review('100', { segments: [] }, 'user-kcs')).resolves.toBeDefined();
     });
+
+    // Nghiêm trọng #5 (đính chính audit độc lập 09/09): trước đây update() vô điều kiện - 2 request
+    // duyệt gần đồng thời (double-click, mạng chập chờn tự gửi lại) cho cùng đợt đều pass check
+    // status (snapshot đọc NGOÀI transaction), đều tạo QcReview trùng.
+    it('CHẶN (409, rollback) khi đợt đã bị 1 request khác duyệt trong lúc đang xử lý', async () => {
+      prisma.steelIssue.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.review('100', { segments: [] }, 'user-kcs')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+    });
   });
 
   // 2026-09-05: chấm theo ĐỢT CẮT (CutBundle) thay vì cả lô nhận - 1 lô có thể có NHIỀU đợt cắt
@@ -301,8 +334,8 @@ describe('QcReviewsService', () => {
     it('duyệt ĐẠT hoàn toàn - đóng bundle QC_PASSED, KHÔNG đụng SteelIssue.status trực tiếp (roll-up riêng)', async () => {
       const result = await service.reviewCutBundle('1', { segments: [] }, 'user-kcs');
 
-      expect(prisma.cutBundle.update).toHaveBeenCalledWith({
-        where: { id: 1n },
+      expect(prisma.cutBundle.updateMany).toHaveBeenCalledWith({
+        where: { id: 1n, status: 'AWAITING_QC' },
         data: { status: 'QC_PASSED' },
       });
       expect(prisma.qcReview.create).toHaveBeenCalledWith(
@@ -357,6 +390,16 @@ describe('QcReviewsService', () => {
       );
       expect(prisma.qcReview.create).not.toHaveBeenCalled();
     });
+
+    // Nghiêm trọng #5 (đính chính audit độc lập 09/09) - cùng lý do/cùng fix mục 'review' ở trên.
+    it('CHẶN (409, rollback) khi đợt cắt đã bị 1 request khác duyệt trong lúc đang xử lý', async () => {
+      prisma.cutBundle.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.reviewCutBundle('1', { segments: [] }, 'user-kcs')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+    });
   });
 
   // 2026-09-07: KCS duyệt 1 "đợt gửi KCS theo công đoạn PHỤ" (StepBundle - Uốn/Dập/Tán/...) - CÙNG
@@ -381,8 +424,8 @@ describe('QcReviewsService', () => {
     it('duyệt ĐẠT hoàn toàn - đóng StepBundle QC_PASSED, KHÔNG ghi steelIssueId (leg XOR)', async () => {
       const result = await service.reviewStepBundle('800', { segments: [] }, 'user-kcs');
 
-      expect(prisma.stepBundle.update).toHaveBeenCalledWith({
-        where: { id: 800n },
+      expect(prisma.stepBundle.updateMany).toHaveBeenCalledWith({
+        where: { id: 800n, status: 'AWAITING_QC' },
         data: { status: 'QC_PASSED' },
       });
       expect(prisma.cutBundle.update).not.toHaveBeenCalled();
@@ -442,6 +485,16 @@ describe('QcReviewsService', () => {
       );
       expect(prisma.qcReview.create).not.toHaveBeenCalled();
     });
+
+    // Nghiêm trọng #5 (đính chính audit độc lập 09/09) - cùng lý do/cùng fix mục 'review' ở trên.
+    it('CHẶN (409, rollback) khi đợt gửi KCS đã bị 1 request khác duyệt trong lúc đang xử lý', async () => {
+      prisma.stepBundle.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.reviewStepBundle('800', { segments: [] }, 'user-kcs')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('reviewProductionBatch', () => {
@@ -452,9 +505,9 @@ describe('QcReviewsService', () => {
     it('duyệt ĐẠT hoàn toàn (failedQty=0) - đóng QC_DONE, reportedQty giữ nguyên', async () => {
       const result = await service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs');
 
-      expect(prisma.productionBatch.update).toHaveBeenCalledWith(
+      expect(prisma.productionBatch.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 700n },
+          where: { id: 700n, status: ProductionBatchStatus.AWAITING_QC },
           data: { status: ProductionBatchStatus.QC_DONE, reportedQty: 20 },
         }),
       );
@@ -465,7 +518,7 @@ describe('QcReviewsService', () => {
       await service.reviewProductionBatch('700', { failedQty: 5 }, 'user-kcs');
 
       // passed = 20 - 5 = 15
-      expect(prisma.productionBatch.update).toHaveBeenCalledWith(
+      expect(prisma.productionBatch.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           data: { status: ProductionBatchStatus.QC_DONE, reportedQty: 15 },
         }),
@@ -504,7 +557,7 @@ describe('QcReviewsService', () => {
         where: { id: 1n },
         select: { productionInvoiceItemId: true },
       });
-      expect(prisma.productionBatch.update).not.toHaveBeenCalled();
+      expect(prisma.productionBatch.updateMany).not.toHaveBeenCalled();
     });
 
     it('cho phép duyệt khi PI có ÍT NHẤT 1 SKU ACTIVE, kể cả khi KHÔNG PHẢI chính order của batch', async () => {
@@ -513,6 +566,18 @@ describe('QcReviewsService', () => {
       await expect(
         service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs'),
       ).resolves.toBeDefined();
+    });
+
+    // Nghiêm trọng #5 (đính chính audit độc lập 09/09): đặc biệt quan trọng ở đây vì reportedQty bị
+    // GHI ĐÈ (không cộng dồn) - 2 request duyệt trùng không chặn sẽ làm sản lượng đã chốt SAI LỆCH
+    // THẬT, không chỉ lost-update audit trail.
+    it('CHẶN (409, rollback) khi batch đã bị 1 request khác duyệt trong lúc đang xử lý - không ghi đè sai reportedQty', async () => {
+      prisma.productionBatch.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.reviewProductionBatch('700', { failedQty: 5 }, 'user-kcs'),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
     });
   });
 
@@ -527,8 +592,8 @@ describe('QcReviewsService', () => {
     it('duyệt ĐẠT hoàn toàn (failedQty=0) - bundle chuyển QC_PASSED, KHÔNG đụng ProductionBatch', async () => {
       const result = await service.reviewPieceStep('800', { failedQty: 0 }, 'user-kcs');
 
-      expect(prisma.pieceStepBundle.update).toHaveBeenCalledWith({
-        where: { id: 800n },
+      expect(prisma.pieceStepBundle.updateMany).toHaveBeenCalledWith({
+        where: { id: 800n, status: 'AWAITING_QC' },
         data: { status: 'QC_PASSED' },
       });
       expect(prisma.productionBatch.update).not.toHaveBeenCalled();
@@ -546,8 +611,8 @@ describe('QcReviewsService', () => {
     it('có failedQty - vẫn chuyển QC_PASSED (mirror Phôi/Sắt - không có khái niệm phế)', async () => {
       await service.reviewPieceStep('800', { failedQty: 5 }, 'user-kcs');
 
-      expect(prisma.pieceStepBundle.update).toHaveBeenCalledWith({
-        where: { id: 800n },
+      expect(prisma.pieceStepBundle.updateMany).toHaveBeenCalledWith({
+        where: { id: 800n, status: 'AWAITING_QC' },
         data: { status: 'QC_PASSED' },
       });
     });
@@ -575,7 +640,23 @@ describe('QcReviewsService', () => {
       await expect(service.reviewPieceStep('800', { failedQty: 0 }, 'user-kcs')).rejects.toThrow(
         ConflictException,
       );
-      expect(prisma.pieceStepBundle.update).not.toHaveBeenCalled();
+      expect(prisma.pieceStepBundle.updateMany).not.toHaveBeenCalled();
+    });
+
+    // Nghiêm trọng #5 (đính chính audit độc lập 09/09): trước đây update() vô điều kiện - 2 request
+    // duyệt gần đồng thời cho cùng bundle đều pass check status (snapshot đọc NGOÀI transaction),
+    // đều tạo QcReview -> autoFinalizePieceOutputIfLastStepComplete() cộng TRÙNG failedQty vào sản
+    // lượng đã chốt. updateMany+count guard chặn request thua ngay khi vào transaction.
+    it('CHẶN (409, rollback) nếu bundle đã bị 1 request khác duyệt trong lúc đang xử lý - không cộng trùng failedQty vào sản lượng', async () => {
+      prisma.pieceStepBundle.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.reviewPieceStep('800', { failedQty: 5 }, 'user-kcs')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+      expect(
+        productionBatchesService.autoFinalizePieceOutputIfLastStepComplete,
+      ).not.toHaveBeenCalled();
     });
   });
 });

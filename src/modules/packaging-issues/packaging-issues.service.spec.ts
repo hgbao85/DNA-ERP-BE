@@ -189,6 +189,10 @@ describe('PackagingIssuesService', () => {
           }),
         }),
       );
+      // ĐÍNH CHÍNH audit độc lập 28/08 (Nghiêm trọng): postEntry() giờ nhận `tx` (2 tham số) - phải
+      // nằm TRONG CÙNG transaction đã khoá FOR UPDATE stock_quant, không còn gọi ngoài sau khi
+      // transaction đã commit (khoá nhả trước khi stock_quant kịp đổi -> race giữa 2 lệnh SX khác
+      // nhau, xem comment tại create()).
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({
           fromWarehouseId: 2n,
@@ -199,6 +203,7 @@ describe('PackagingIssuesService', () => {
           refId: '100',
           idempotencyKey: 'packaging-issue:100',
         }),
+        expect.anything(),
       );
       expect(result.id).toBe('100');
     });
@@ -217,6 +222,7 @@ describe('PackagingIssuesService', () => {
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ fromWarehouseId: 2n, toWarehouseId: 7n }),
+        expect.anything(),
       );
     });
 
@@ -226,8 +232,11 @@ describe('PackagingIssuesService', () => {
       const result = await service.create('1', dto, 'user-1', null, 'idem-key-1');
 
       expect(prisma.packagingIssue.create).not.toHaveBeenCalled();
+      // Nhánh replay KHÔNG mở transaction mới (không còn quyết định tồn kho mới, an toàn nhờ
+      // idempotencyKey riêng của postEntry) - tx là undefined.
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ idempotencyKey: 'packaging-issue:100' }),
+        undefined,
       );
       expect(result.id).toBe('100');
     });

@@ -174,7 +174,12 @@ export class PieceMaterialYieldPurchaseService {
           WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
           FOR UPDATE
         `;
-        const actualStock = Math.floor(locked[0]?.qty.toNumber() ?? 0);
+        // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08) - cùng lý do/cùng fix
+        // ConsumableMaterialPurchaseService: `locked[0]` bỏ sót các dòng khác nếu vật tư có ≥2
+        // bucket stockLengthMm, tính thiếu tồn thực có. Vật tư thành phẩm (chân nhôm/"pat") vĩnh
+        // viễn chỉ nên có bucket 0, nhưng cộng dồn mọi dòng trả về để đúng bất kể vi phạm giả định
+        // đó có xảy ra hay không.
+        const actualStock = Math.floor(locked.reduce((sum, r) => sum + r.qty.toNumber(), 0));
         const buyQty = Math.max(0, acc.bars - actualStock);
         computed.push({ materialId, materialIdStr, actualStock, buyQty });
       }
