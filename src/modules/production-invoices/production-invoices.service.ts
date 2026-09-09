@@ -23,7 +23,7 @@ import { assertPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
@@ -38,7 +38,10 @@ import { RecordPackagingDto } from './dto/record-packaging.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { TransferCheckPieceResponseDto } from './dto/transfer-check-piece-response.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
-import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
+import {
+  ProdItemStageInputDto,
+  UpdateProductionInvoiceItemDto,
+} from './dto/update-production-invoice-item.dto';
 
 type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
   include: {
@@ -447,7 +450,9 @@ export class ProductionInvoicesService {
           },
         });
       }
+      await this.assertFrameSubStagesWithinRange(tx, item.id, dto.stages ?? []);
       for (const stage of dto.stages ?? []) {
+        const startDate = stage.startDate ? new Date(stage.startDate) : undefined;
         await tx.productionInvoiceItemStage.upsert({
           where: {
             productionInvoiceItemId_stageType: {
@@ -459,14 +464,81 @@ export class ProductionInvoicesService {
             productionInvoiceItemId: item.id,
             stageType: stage.stageType,
             deadline: new Date(stage.deadline),
+            startDate,
           },
-          update: { deadline: new Date(stage.deadline) },
+          update: { deadline: new Date(stage.deadline), startDate },
         });
       }
     });
 
     const updated = await this.findItemOrThrow(pi.id, itemId);
     return this.toItemResponseDto(updated);
+  }
+
+  /**
+   * 2026-09-09: chặn Phôi/Hàn/Sơn (FRAME_PHOI/FRAME_HAN/FRAME_SON) nằm ngoài khoảng thời gian của
+   * Khung cơ khí (FRAME) - theo yêu cầu người dùng. Không kiểm tra chồng lấn giữa 3 mốc con với
+   * nhau (được phép chồng lấn - Hàn có thể làm việc trực tiếp với Phôi ở xưởng, xem memory
+   * han-son-no-phoi-stock-check-by-design).
+   */
+  private async assertFrameSubStagesWithinRange(
+    tx: PrismaTx,
+    productionInvoiceItemId: bigint,
+    stages: ProdItemStageInputDto[],
+  ): Promise<void> {
+    const frameSubStageTypes: ProdItemStageType[] = [
+      ProdItemStageType.FRAME_PHOI,
+      ProdItemStageType.FRAME_HAN,
+      ProdItemStageType.FRAME_SON,
+    ];
+    const subStages = stages.filter((s) => frameSubStageTypes.includes(s.stageType));
+    if (subStages.length === 0) return;
+
+    const frameInPayload = stages.find((s) => s.stageType === ProdItemStageType.FRAME);
+    let frameStart: Date | null;
+    let frameEnd: Date | null;
+    if (frameInPayload) {
+      frameStart = frameInPayload.startDate ? new Date(frameInPayload.startDate) : null;
+      frameEnd = new Date(frameInPayload.deadline);
+    } else {
+      const frameRow = await tx.productionInvoiceItemStage.findFirst({
+        where: { productionInvoiceItemId, stageType: ProdItemStageType.FRAME },
+      });
+      frameStart = frameRow?.startDate ?? null;
+      frameEnd = frameRow?.deadline ?? null;
+    }
+
+    if (!frameStart || !frameEnd) {
+      throw new BadRequestException(
+        'Phải đặt khoảng thời gian Khung cơ khí (có cả ngày bắt đầu) trước khi đặt hạn Phôi/Hàn/Sơn',
+      );
+    }
+
+    const labels: Record<string, string> = {
+      [ProdItemStageType.FRAME_PHOI]: 'Phôi',
+      [ProdItemStageType.FRAME_HAN]: 'Hàn',
+      [ProdItemStageType.FRAME_SON]: 'Sơn',
+    };
+    for (const sub of subStages) {
+      if (!sub.startDate) {
+        throw new BadRequestException(
+          `Phải nhập ngày bắt đầu cho ${labels[sub.stageType]} (đi kèm hạn kết thúc)`,
+        );
+      }
+      const subStart = new Date(sub.startDate);
+      const subEnd = new Date(sub.deadline);
+      if (subStart > subEnd) {
+        throw new BadRequestException(
+          `Khoảng thời gian ${labels[sub.stageType]} không hợp lệ: ngày bắt đầu sau ngày kết thúc`,
+        );
+      }
+      if (subStart < frameStart || subEnd > frameEnd) {
+        throw new BadRequestException(
+          `Khoảng thời gian ${labels[sub.stageType]} phải nằm trong khoảng Khung cơ khí ` +
+            `(${frameStart.toISOString().slice(0, 10)} - ${frameEnd.toISOString().slice(0, 10)})`,
+        );
+      }
+    }
   }
 
   /** KHSX gửi 1 SKU cho QLSX xử lý - mirror sendItemToQlsx() mock. */
@@ -1629,7 +1701,11 @@ export class ProductionInvoicesService {
       decidedAt: item.decidedAt,
       decidedById: item.decidedById,
       rejectReason: item.rejectReason,
-      stages: item.stages.map((s) => ({ stageType: s.stageType, deadline: s.deadline })),
+      stages: item.stages.map((s) => ({
+        stageType: s.stageType,
+        deadline: s.deadline,
+        startDate: s.startDate,
+      })),
     });
   }
 }

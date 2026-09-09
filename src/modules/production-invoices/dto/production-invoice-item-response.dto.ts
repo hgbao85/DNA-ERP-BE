@@ -10,6 +10,9 @@ import {
 class ItemStageDto {
   @Expose() @ApiProperty({ enum: ProdItemStageType }) stageType!: ProdItemStageType;
   @Expose() @ApiProperty() deadline!: Date;
+  /** 2026-09-09: chỉ có giá trị cho FRAME (giờ là khoảng) và 3 mốc con FRAME_PHOI/FRAME_HAN/
+   *  FRAME_SON - xem ProdItemStageInputDto.startDate. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) startDate?: Date | null;
 }
 
 @Exclude()

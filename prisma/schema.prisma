@@ -1186,26 +1186,44 @@ model ProductionInvoiceItem {
 }
 
 /// Mốc kế hoạch từng công đoạn do KHSX đặt riêng cho 1 SKU trong PI (LenhSXPage "Sửa thời hạn").
-/// 4 mốc, chốt 2026-08-11, đúng thứ tự dây chuyền thật:
+/// 4 mốc gốc, chốt 2026-08-11, đúng thứ tự dây chuyền thật:
 /// - FRAME: "Khung cơ khí" - mốc hoàn tất CẢ chuỗi Phôi→Hàn→Sơn (không phải riêng công đoạn Hàn,
-///   dù field key lịch sử phía FE vẫn là `HAN` - xem toFeStageType/toBeStageType). KHÔNG tách
-///   riêng Phôi/Hàn/Sơn ở đây vì đây chỉ là mốc kế hoạch, không phải theo dõi thực thi.
+///   dù field key lịch sử phía FE vẫn là `HAN` - xem toFeStageType/toBeStageType).
 /// - WEAVING: "Đan".
 /// - TRANSFER_CHECK: "Chuyền kiểm" - mốc DUY NHẤT trong 4 mốc có gắn dữ liệu thực thi thật
 ///   (xem model TransferCheckResult bên dưới) - khác 3 mốc còn lại chỉ có deadline thuần.
 /// - PACKAGING: "Đóng gói" - field FE cũ tên `SON`, dễ nhầm với `MfgStage.SON` (Sơn/painting thật,
 ///   khác nghĩa) nên đặt tên rõ ràng hơn ở BE, adapter FE tự dịch qua lại.
+///
+/// 2026-09-09: thêm FRAME_PHOI/FRAME_HAN/FRAME_SON - mốc kế hoạch CON, lồng bên trong khoảng của
+/// FRAME (theo yêu cầu người dùng - trước đây doc comment ở đây từng ghi "KHÔNG tách riêng Phôi/
+/// Hàn/Sơn vì đây chỉ là mốc kế hoạch" - đã đổi ý theo yêu cầu mới). Đặt tên tiền tố `FRAME_` (CỐ Ý
+/// không dùng bare `PHOI`/`HAN`/`SON` trùng enum `MfgStage` - domain thực thi/báo sản lượng thật,
+/// KHÁC HẲN ý nghĩa, xem cảnh báo cùng kiểu ở PACKAGING phía trên) - validate + upsert vẫn dùng
+/// CHUNG `ProductionInvoiceItemStage`/`updateItem()`, không tách bảng riêng (rủi ro thấp nhất).
+/// Ràng buộc (ProductionInvoicesService.assertFrameSubStagesWithinRange()): PHẢI nằm trong khoảng
+/// [FRAME.startDate, FRAME.deadline], ĐƯỢC PHÉP chồng lấn nhau (không ràng buộc thứ tự Phôi trước
+/// Hàn sau - khớp thực tế Hàn làm việc trực tiếp với Phôi tại xưởng, xem memory
+/// han-son-no-phoi-stock-check-by-design).
 enum ProdItemStageType {
   FRAME
   WEAVING
   TRANSFER_CHECK
   PACKAGING
+  FRAME_PHOI
+  FRAME_HAN
+  FRAME_SON
 }
 
 model ProductionInvoiceItemStage {
   id                      BigInt            @id @default(autoincrement())
   productionInvoiceItemId BigInt
   stageType               ProdItemStageType
+  /// 2026-09-09: thêm - CHỈ có ý nghĩa cho FRAME (giờ dùng như khoảng, không chỉ 1 mốc nữa) và 3
+  /// mốc con FRAME_PHOI/FRAME_HAN/FRAME_SON (bắt buộc đi kèm `deadline` thành 1 cặp khoảng ngày -
+  /// xem assertFrameSubStagesWithinRange()). NULL với WEAVING/TRANSFER_CHECK/PACKAGING (giữ nguyên
+  /// ý nghĩa "1 mốc" như cũ, không đổi).
+  startDate               DateTime?
   deadline                DateTime
 
   productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])

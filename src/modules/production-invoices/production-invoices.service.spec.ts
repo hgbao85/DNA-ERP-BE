@@ -30,7 +30,7 @@ describe('ProductionInvoicesService', () => {
       findMany: jest.Mock;
       count: jest.Mock;
     };
-    productionInvoiceItemStage: { upsert: jest.Mock };
+    productionInvoiceItemStage: { upsert: jest.Mock; findFirst: jest.Mock };
     mfgProduct: { findUnique: jest.Mock };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock; findUnique: jest.Mock };
@@ -110,7 +110,10 @@ describe('ProductionInvoicesService', () => {
         findMany: jest.fn(),
         count: jest.fn(),
       },
-      productionInvoiceItemStage: { upsert: jest.fn() },
+      productionInvoiceItemStage: {
+        upsert: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       mfgProduct: { findUnique: jest.fn() },
       // findFirst mặc định trả về 1 order ACTIVE - đa số test (transfer-check/packaging) không
       // quan tâm gate assertPiHasActiveFloor() (2026-08-31), tự override khi cần test gate.
@@ -793,6 +796,136 @@ describe('ProductionInvoicesService', () => {
       });
 
       expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+      expect(prisma.productionInvoiceItemStage.upsert).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('updateItem - assertFrameSubStagesWithinRange (2026-09-09)', () => {
+    beforeEach(() => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+    });
+
+    it('chặn khi chưa có Khung cơ khí (FRAME) nào - cả trong payload lẫn DB', async () => {
+      prisma.productionInvoiceItemStage.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.updateItem('7', '20', {
+          stages: [
+            {
+              stageType: ProdItemStageType.FRAME_PHOI,
+              startDate: '2026-05-20',
+              deadline: '2026-06-20',
+            },
+          ],
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.productionInvoiceItemStage.upsert).not.toHaveBeenCalled();
+    });
+
+    it('chặn khi Khung cơ khí đã lưu trong DB nhưng chưa có startDate', async () => {
+      prisma.productionInvoiceItemStage.findFirst.mockResolvedValue({
+        stageType: 'FRAME',
+        startDate: null,
+        deadline: new Date('2026-07-15'),
+      });
+
+      await expect(
+        service.updateItem('7', '20', {
+          stages: [
+            {
+              stageType: ProdItemStageType.FRAME_PHOI,
+              startDate: '2026-05-20',
+              deadline: '2026-06-20',
+            },
+          ],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('chặn khi mốc con thiếu startDate (chỉ có deadline)', async () => {
+      await expect(
+        service.updateItem('7', '20', {
+          stages: [
+            { stageType: ProdItemStageType.FRAME, startDate: '2026-05-20', deadline: '2026-07-15' },
+            { stageType: ProdItemStageType.FRAME_PHOI, deadline: '2026-06-20' },
+          ],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('chặn khi mốc con bắt đầu trước Khung cơ khí', async () => {
+      await expect(
+        service.updateItem('7', '20', {
+          stages: [
+            { stageType: ProdItemStageType.FRAME, startDate: '2026-05-20', deadline: '2026-07-15' },
+            {
+              stageType: ProdItemStageType.FRAME_PHOI,
+              startDate: '2026-05-01',
+              deadline: '2026-06-20',
+            },
+          ],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('chặn khi mốc con kết thúc sau Khung cơ khí', async () => {
+      await expect(
+        service.updateItem('7', '20', {
+          stages: [
+            { stageType: ProdItemStageType.FRAME, startDate: '2026-05-20', deadline: '2026-07-15' },
+            {
+              stageType: ProdItemStageType.FRAME_SON,
+              startDate: '2026-06-15',
+              deadline: '2026-07-20',
+            },
+          ],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('cho phép khi cả 3 mốc con nằm trong khoảng Khung cơ khí, kể cả chồng lấn nhau', async () => {
+      await service.updateItem('7', '20', {
+        stages: [
+          { stageType: ProdItemStageType.FRAME, startDate: '2026-05-20', deadline: '2026-07-15' },
+          {
+            stageType: ProdItemStageType.FRAME_PHOI,
+            startDate: '2026-05-20',
+            deadline: '2026-06-20',
+          },
+          {
+            stageType: ProdItemStageType.FRAME_HAN,
+            startDate: '2026-06-10',
+            deadline: '2026-06-30',
+          },
+          {
+            stageType: ProdItemStageType.FRAME_SON,
+            startDate: '2026-06-15',
+            deadline: '2026-07-15',
+          },
+        ],
+      });
+
+      expect(prisma.productionInvoiceItemStage.upsert).toHaveBeenCalledTimes(4);
+    });
+
+    it('lấy khoảng Khung cơ khí từ DB khi payload không gửi kèm FRAME', async () => {
+      prisma.productionInvoiceItemStage.findFirst.mockResolvedValue({
+        stageType: 'FRAME',
+        startDate: new Date('2026-05-20'),
+        deadline: new Date('2026-07-15'),
+      });
+
+      await service.updateItem('7', '20', {
+        stages: [
+          {
+            stageType: ProdItemStageType.FRAME_HAN,
+            startDate: '2026-06-10',
+            deadline: '2026-06-30',
+          },
+        ],
+      });
+
       expect(prisma.productionInvoiceItemStage.upsert).toHaveBeenCalledTimes(1);
     });
   });

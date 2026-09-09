@@ -11,6 +11,15 @@ export class ProdItemStageInputDto {
   @ApiProperty()
   @IsDateString()
   deadline!: string;
+
+  /** 2026-09-09: ngày bắt đầu - CHỈ có ý nghĩa cho FRAME (giờ là khoảng) và 3 mốc con
+   *  FRAME_PHOI/FRAME_HAN/FRAME_SON (bắt buộc đi kèm, xem
+   *  ProductionInvoicesService.assertFrameSubStagesWithinRange()). Bỏ trống cho
+   *  WEAVING/TRANSFER_CHECK/PACKAGING (vẫn 1 mốc như cũ). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
 }
 
 export class UpdateProductionInvoiceItemDto {
