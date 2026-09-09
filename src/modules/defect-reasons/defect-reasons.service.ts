@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { DefectReason } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -11,8 +11,15 @@ import { UpdateDefectReasonDto } from './dto/update-defect-reason.dto';
 
 /**
  * No isActive/deletedAt in docs/dna-erp-db-schema.html "defect_reasons" - remove() is a
- * real DELETE, same as material-groups. Nothing references this table yet (QcReview lands
- * at P9), so there's no FK to worry about breaking on delete.
+ * real DELETE, same as material-groups.
+ *
+ * ĐÍNH CHÍNH (audit toàn diện 09/09/2026, mục Trung bình): comment gốc "nothing references this
+ * table yet" đã LỖI THỜI - QcReview.defectReasonId (từ P9, migration 20260811063513) tham chiếu
+ * bảng này với FK `ON DELETE SET NULL` (đối chiếu migration.sql thật, không phải chỉ đọc
+ * schema.prisma). Xoá 1 lý do lỗi đang được dùng trong lịch sử KCS trước đây thành công lặng lẽ và
+ * NULL hoá defectReasonId của MỌI lần duyệt KCS từng dùng lý do đó - mất khả năng tra cứu "lỗi nào
+ * xảy ra bao nhiêu lần" trong quá khứ mà không có cảnh báo gì. remove() giờ chặn (409) nếu còn
+ * QcReview nào tham chiếu, thay vì để FK âm thầm SET NULL.
  */
 @Injectable()
 export class DefectReasonsService {
@@ -60,7 +67,16 @@ export class DefectReasonsService {
 
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
-    await this.findOneOrThrow(id);
+    const reason = await this.findOneOrThrow(id);
+
+    const usageCount = await this.prisma.qcReview.count({ where: { defectReasonId: bigId } });
+    if (usageCount > 0) {
+      throw new ConflictException(
+        `Lý do lỗi "${reason.label}" đang được dùng trong ${usageCount} lượt duyệt KCS - ` +
+          `xoá sẽ làm mất dấu vết lịch sử. Đổi tên thay vì xoá-tạo-lại nếu chỉ cần sửa chính tả/trùng lặp.`,
+      );
+    }
+
     await this.prisma.defectReason.delete({ where: { id: bigId } });
   }
 

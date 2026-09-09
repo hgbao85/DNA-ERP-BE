@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { MaterialGroupsService } from './material-groups.service';
 
@@ -56,6 +57,38 @@ describe('MaterialGroupsService', () => {
       const result = await service.create({ name: 'Nhua', codePrefix: 'NHU' });
 
       expect(result.id).toBe('2');
+    });
+
+    // Trung bình, audit toàn diện 09/09/2026: 2 pre-check findUnique() (name, codePrefix) chỉ chặn
+    // trường hợp thường - 2 request tạo cùng name/codePrefix gần như đồng thời đều đọc thấy "chưa
+    // tồn tại" rồi cùng tới create(), request thua bị DB unique constraint chặn thật (P2002) -
+    // trước đây thoát thẳng ra AllExceptionsFilter thành "Duplicate value for: ..." chung chung.
+    it('race: rejects with the friendly name-conflict 409 when create() loses on `name` (P2002)', async () => {
+      prisma.materialGroup.findUnique.mockResolvedValue(null); // cả 2 pre-check đều "chưa thấy"
+      const p2002 = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '7.9.0',
+        meta: { target: ['name'] },
+      });
+      prisma.materialGroup.create.mockRejectedValue(p2002);
+
+      await expect(service.create({ name: 'Nhua', codePrefix: 'NEW' } as any)).rejects.toThrow(
+        new ConflictException('Material group "Nhua" already exists'),
+      );
+    });
+
+    it('race: rejects with the friendly codePrefix-conflict 409 when create() loses on `codePrefix` (P2002)', async () => {
+      prisma.materialGroup.findUnique.mockResolvedValue(null);
+      const p2002 = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '7.9.0',
+        meta: { target: ['codePrefix'] },
+      });
+      prisma.materialGroup.create.mockRejectedValue(p2002);
+
+      await expect(service.create({ name: 'Moi', codePrefix: 'NHU' } as any)).rejects.toThrow(
+        new ConflictException('Tiền tố mã "NHU" đã dùng cho nhóm khác'),
+      );
     });
   });
 

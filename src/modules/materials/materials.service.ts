@@ -81,23 +81,36 @@ export class MaterialsService {
       throw new ConflictException(`Material "${code}" already exists`);
     }
 
-    const material = await this.prisma.material.create({
-      data: {
-        code,
-        name: dto.name,
-        unit: dto.unit,
-        spec: dto.spec,
-        materialGroupId,
-        detailKind,
-        warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
-        buyerId: dto.buyerId || undefined,
-        purchaseUnit: dto.purchaseUnit,
-        khoUnitFactor: dto.khoUnitFactor,
-        maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,
-        purchaseWastePercentage: wasteFields.purchaseWastePercentage,
-        imageUrl: dto.imageUrl,
-      },
-    });
+    // Trung bình, audit toàn diện 09/09/2026: findUnique() ở trên chỉ chặn được trường hợp thường -
+    // 2 request tạo cùng `code` gần như đồng thời đều có thể đọc thấy "chưa tồn tại" rồi cùng tới
+    // create(), request thua bị unique constraint ở DB chặn (nguồn chặn thật, không phải check ở
+    // trên) nhưng ném ra Prisma P2002 thô, rơi vào AllExceptionsFilter thành thông báo chung chung
+    // "Duplicate value for: code" thay vì lỗi nghiệp vụ rõ ràng như nhánh pre-check phía trên.
+    let material: Material;
+    try {
+      material = await this.prisma.material.create({
+        data: {
+          code,
+          name: dto.name,
+          unit: dto.unit,
+          spec: dto.spec,
+          materialGroupId,
+          detailKind,
+          warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
+          buyerId: dto.buyerId || undefined,
+          purchaseUnit: dto.purchaseUnit,
+          khoUnitFactor: dto.khoUnitFactor,
+          maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,
+          purchaseWastePercentage: wasteFields.purchaseWastePercentage,
+          imageUrl: dto.imageUrl,
+        },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException(`Material "${code}" already exists`);
+      }
+      throw e;
+    }
 
     if (dto.openingQty && dto.openingQty > 0 && dto.warehouseId) {
       const openingWarehouse = await this.prisma.warehouse.findUniqueOrThrow({

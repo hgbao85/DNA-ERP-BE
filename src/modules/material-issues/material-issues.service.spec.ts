@@ -26,10 +26,12 @@ describe('MaterialIssuesService', () => {
   let prisma: {
     materialIssue: {
       findUnique: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
       aggregate: jest.Mock;
     };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock };
@@ -91,10 +93,12 @@ describe('MaterialIssuesService', () => {
     prisma = {
       materialIssue: {
         findUnique: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
         create: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         aggregate: jest.fn().mockResolvedValue({ _sum: { issuedQty: null } }),
       },
       // findFirst mặc định trả về 1 order ACTIVE - đa số test case không quan tâm gate
@@ -396,7 +400,7 @@ describe('MaterialIssuesService', () => {
     });
 
     it('happy path - mfgRole null (quản lý) xác nhận nhận đủ như xuất', async () => {
-      prisma.materialIssue.update.mockResolvedValue({
+      prisma.materialIssue.findUniqueOrThrow.mockResolvedValue({
         ...issueRow,
         status: MaterialIssueStatus.RECEIVED,
         receivedQty: { toNumber: () => 5 },
@@ -406,8 +410,9 @@ describe('MaterialIssuesService', () => {
 
       const result = await service.receive('100', {}, 'user-2', null);
 
-      expect(prisma.materialIssue.update).toHaveBeenCalledWith(
+      expect(prisma.materialIssue.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
+          where: { id: 100n, status: MaterialIssueStatus.ISSUED },
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
           data: expect.objectContaining({
             status: MaterialIssueStatus.RECEIVED,
@@ -420,7 +425,7 @@ describe('MaterialIssuesService', () => {
     });
 
     it('cho phép mfgRole khớp đúng stage (HAN)', async () => {
-      prisma.materialIssue.update.mockResolvedValue(issueRow);
+      prisma.materialIssue.findUniqueOrThrow.mockResolvedValue(issueRow);
       await expect(service.receive('100', {}, 'user-2', MfgRole.HAN)).resolves.toBeDefined();
     });
 
@@ -428,7 +433,7 @@ describe('MaterialIssuesService', () => {
       await expect(service.receive('100', {}, 'user-2', MfgRole.SON)).rejects.toThrow(
         ForbiddenException,
       );
-      expect(prisma.materialIssue.update).not.toHaveBeenCalled();
+      expect(prisma.materialIssue.updateMany).not.toHaveBeenCalled();
     });
 
     it('ném ConflictException khi đợt không còn ở trạng thái ISSUED', async () => {
@@ -439,12 +444,23 @@ describe('MaterialIssuesService', () => {
       await expect(service.receive('100', {}, 'user-2', null)).rejects.toThrow(ConflictException);
     });
 
+    // Trung bình, audit toàn diện 09/09/2026: trước đây update() ghi thẳng không kèm điều kiện
+    // status - 2 request receive() gần như đồng thời cho cùng 1 đợt (double-click, mạng chập chờn
+    // tự gửi lại) đều đọc thấy ISSUED rồi cùng "thắng", request sau ghi đè âm thầm receivedQty/
+    // receivedAt/receivedById của request trước. Cùng idiom WarehouseTransfersService.confirm().
+    it('ném ConflictException khi request khác đã xác nhận nhận trong lúc xử lý (race guard)', async () => {
+      prisma.materialIssue.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.receive('100', {}, 'user-2', null)).rejects.toThrow(ConflictException);
+      expect(prisma.materialIssue.findUniqueOrThrow).not.toHaveBeenCalled();
+    });
+
     it('nhận thiếu (receivedQty < issuedQty) - hợp lệ', async () => {
-      prisma.materialIssue.update.mockResolvedValue(issueRow);
+      prisma.materialIssue.findUniqueOrThrow.mockResolvedValue(issueRow);
       await expect(
         service.receive('100', { receivedQty: 3 }, 'user-2', null),
       ).resolves.toBeDefined();
-      expect(prisma.materialIssue.update).toHaveBeenCalledWith(
+      expect(prisma.materialIssue.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
           data: expect.objectContaining({ receivedQty: 3 }),
@@ -456,14 +472,14 @@ describe('MaterialIssuesService', () => {
       await expect(service.receive('100', { receivedQty: 6 }, 'user-2', null)).rejects.toThrow(
         BadRequestException,
       );
-      expect(prisma.materialIssue.update).not.toHaveBeenCalled();
+      expect(prisma.materialIssue.updateMany).not.toHaveBeenCalled();
     });
 
     it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc" (assertItemPiHasActiveFloor, 2026-09-01)', async () => {
       prisma.productionOrder.findFirst.mockResolvedValue(null);
 
       await expect(service.receive('100', {}, 'user-2', null)).rejects.toThrow(ConflictException);
-      expect(prisma.materialIssue.update).not.toHaveBeenCalled();
+      expect(prisma.materialIssue.updateMany).not.toHaveBeenCalled();
     });
   });
 

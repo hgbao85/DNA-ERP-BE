@@ -429,8 +429,15 @@ export class PurchaseProposalsService {
               `(đang ở trạng thái ${locked.status}, không còn PURCHASING) - không ghi đè`,
           );
         }
+        // Trung bình, audit toàn diện 09/09/2026: receivedQty/receivedQtyPurchaseUnit là cột
+        // Decimal ở DB nhưng trước đây bị .toNumber() rồi cộng bằng phép + của JS (binary float) -
+        // qua nhiều đợt nhận nhỏ lẻ, sai số biểu diễn nhị phân có thể tích luỹ dần rồi bị ghi
+        // ngược LẠI vào cột Decimal, tồn tại vĩnh viễn trong sổ sách. Cộng bằng Prisma.Decimal
+        // (decimal.js - cộng thập phân chính xác, không đi qua vòng chuyển binary float trung
+        // gian của JS number) rồi mới .toNumber() ở chỗ CHỈ so sánh/hiển thị, không ghi lại DB.
         const currentReceivedQty = locked.receivedQty.toNumber();
-        const nextReceivedQty = currentReceivedQty + dto.receivedQty;
+        const nextReceivedQtyDecimal = locked.receivedQty.plus(dto.receivedQty);
+        const nextReceivedQty = nextReceivedQtyDecimal.toNumber();
 
         // Nhận THỪA: ghi đúng số thật nếu còn trong dung sai, chặn hẳn nếu vượt. Tuyệt đối không
         // cắt âm thầm về buyQty như trước (Math.min) - lựa chọn tệ nhất trong ba: hàng đã nằm
@@ -445,10 +452,15 @@ export class PurchaseProposalsService {
           );
         }
 
-        const incrementQty = nextReceivedQty - currentReceivedQty;
+        // Không còn nhánh clamp (Math.min) nào giữa currentReceivedQty và nextReceivedQty - phần
+        // tăng thêm luôn đúng bằng dto.receivedQty, lấy trực tiếp thay vì trừ ngược qua 2 giá trị
+        // đã .toNumber() (tránh cộng-rồi-trừ qua binary float không cần thiết).
+        const incrementQty = dto.receivedQty;
         const nextReceivedQtyPurchaseUnit = dto.receivedQtyPurchaseUnit
-          ? (locked.receivedQtyPurchaseUnit?.toNumber() ?? 0) + dto.receivedQtyPurchaseUnit
-          : (locked.receivedQtyPurchaseUnit?.toNumber() ?? undefined);
+          ? (locked.receivedQtyPurchaseUnit ?? new Prisma.Decimal(0)).plus(
+              dto.receivedQtyPurchaseUnit,
+            )
+          : (locked.receivedQtyPurchaseUnit ?? undefined);
 
         // Bút toán "hàng mua về nhập kho" - CÙNG transaction với update receivedQty bên dưới
         // (postEntry nhận tx), khoá chỉ nhả sau khi cả hai đã ghi xong.
@@ -497,7 +509,7 @@ export class PurchaseProposalsService {
         const saved = await tx.purchaseProposalItem.update({
           where: { id: item.id },
           data: {
-            receivedQty: nextReceivedQty,
+            receivedQty: nextReceivedQtyDecimal,
             receivedQtyPurchaseUnit: nextReceivedQtyPurchaseUnit,
             ...(nowFullyReceived
               ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }

@@ -7,13 +7,20 @@ import {
 import { ClsService } from 'nestjs-cls';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
-import { PurchaseProposalSource, PurchaseProposalStatus } from '../../generated/prisma/client';
+import {
+  Prisma,
+  PurchaseProposalSource,
+  PurchaseProposalStatus,
+} from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PurchaseProposalsService } from './purchase-proposals.service';
 
-const decimal = (n: number) => ({ toNumber: () => n });
+// Prisma.Decimal thật (không phải stub { toNumber }) - Prisma trả về đúng kiểu này cho cột Decimal
+// kể cả qua $queryRaw (xem receiveItem() dùng .plus() để cộng dồn không qua binary float, audit
+// toàn diện 09/09/2026, mục Trung bình "tích luỹ sai số thập phân") - stub cũ thiếu .plus().
+const decimal = (n: number) => new Prisma.Decimal(n);
 
 describe('PurchaseProposalsService', () => {
   let service: PurchaseProposalsService;
@@ -610,7 +617,9 @@ describe('PurchaseProposalsService', () => {
       );
 
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ receivedQty: 8 }) as unknown }),
+        expect.objectContaining({
+          data: expect.objectContaining({ receivedQty: decimal(8) }) as unknown,
+        }),
       );
       expect(result.receivedQty).toBe(8);
       // Chỉ ghi đúng phần MỚI của đợt này (5), không ghi lại 3 cây đã nhận đợt trước.
@@ -630,6 +639,45 @@ describe('PurchaseProposalsService', () => {
         },
         expect.anything(),
       );
+    });
+
+    // Trung bình, audit toàn diện 09/09/2026: trước đây cộng dồn bằng .toNumber() + phép + của JS
+    // (binary float) - qua nhiều đợt nhận nhỏ lẻ, sai số nhị phân kinh điển (0.1 + 0.2 =
+    // 0.30000000000000004, KHÔNG PHẢI 0.3) có thể bị ghi thẳng vào cột Decimal, tồn tại vĩnh viễn.
+    it('cộng dồn bằng Decimal - không dính sai số nhị phân kinh điển (0.2 + 0.1 = 0.3, không phải 0.30000000000000004)', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              materialId: 30n,
+              buyQty: decimal(10),
+              receivedQty: decimal(0.2),
+            }),
+          ],
+        }),
+      );
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          receivedQty: decimal(0.2),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
+      ]);
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(10), receivedQty: decimal(0.3), quotes: [] }),
+      );
+
+      await service.receiveItem('300', '400', { receivedQty: 0.1 }, 'user-1', 'key-1', null);
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
+      const call = prisma.purchaseProposalItem.update.mock.calls[0][0];
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
+      const writtenReceivedQty = call.data.receivedQty as Prisma.Decimal;
+      // "0.3" đúng thập phân, KHÔNG PHẢI "0.30000000000000004" (kết quả nếu cộng bằng phép + của
+      // JS number thường: 0.2 + 0.1 trong JS thật sự cho ra double gần nhất với
+      // 0.30000000000000004, khác hẳn double của literal 0.3).
+      expect(writtenReceivedQty.toString()).toBe('0.3');
     });
 
     it('item.stockLengthMm có giá trị (mua theo phương án cắt sắt) -> postEntry ghi ĐÚNG chiều dài đó', async () => {
@@ -975,7 +1023,9 @@ describe('PurchaseProposalsService', () => {
 
       // 3 (khoá được) + 2 (nhập lần này) = 5, KHÔNG PHẢI 0 + 2 = 2 (nếu lỡ dùng snapshot cũ).
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ receivedQty: 5 }) as unknown }),
+        expect.objectContaining({
+          data: expect.objectContaining({ receivedQty: decimal(5) }) as unknown,
+        }),
       );
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ qty: 2 }), // tăng đúng 2 (lần nhập này), không phải 5
@@ -1066,7 +1116,9 @@ describe('PurchaseProposalsService', () => {
 
       // Sổ ghi 10 - đúng số vật lý trong kho, KHÔNG phải 8.
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ receivedQty: 10 }) as unknown }),
+        expect.objectContaining({
+          data: expect.objectContaining({ receivedQty: decimal(10) }) as unknown,
+        }),
       );
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ qty: 10 }),

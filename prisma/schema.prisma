@@ -2113,9 +2113,10 @@ model WarehouseTransfer {
 model WarehouseTransferItem {
   id           BigInt  @id @default(autoincrement())
   transferId   BigInt
-  /// Nullable - kế thừa hạn chế của mock (match theo materialName chuẩn hoá khi chưa chọn đúng
-  /// Material thật, xem dna-erp-db-schema.html mục 1.8 "câu hỏi mở"). Chỉ dòng có materialId
-  /// mới ghi được StockLedger lúc confirm() - dòng free-text không có gì để XOR vào ledger.
+  /// Nullable chỉ vì lý do lịch sử (dòng "ghi tự do" tạo trước 09/09/2026, kế thừa hạn chế của
+  /// mock cũ) - DTO tạo mới đã bắt buộc materialId từ 09/09/2026 (audit toàn diện, mục Trung bình
+  /// "phiếu ghi tự do"). confirm() vẫn giữ guard bỏ qua dòng null cho dữ liệu cũ, không ghi được
+  /// StockLedger cho các dòng đó.
   materialId   BigInt?
   materialName String
   unit         String

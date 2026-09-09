@@ -236,24 +236,10 @@ describe('WarehouseTransfersService', () => {
       await expect(service.create(dto, null, 'user-1', 'idem-key-1')).resolves.toBeDefined();
     });
 
-    it('trusts the requested quantity as-is for items with no materialId (documented mock-parity gap)', async () => {
-      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
-
-      await service.create(
-        { ...dto, items: [{ materialName: 'Khung chua dan', unit: 'cai', quantity: 7 }] },
-        null,
-        'user-1',
-        'idem-key-1',
-      );
-
-      expect(prisma.$queryRaw).not.toHaveBeenCalled();
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
-      const call = prisma.warehouseTransfer.create.mock.calls[0][0];
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
-      expect(call.data.items.create).toEqual([expect.objectContaining({ quantity: 7 })]);
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
-      expect(call.data.items.create[0].materialId).toBeUndefined();
-    });
+    // 09/09/2026 (audit toàn diện, mục Trung bình "phiếu ghi tự do"): materialId giờ bắt buộc ở
+    // DTO (CreateWarehouseTransferItemDto) - đã xoá test cũ "trusts the requested quantity as-is
+    // for items with no materialId", vì create() không còn nhánh nào chấp nhận thiếu materialId -
+    // mọi dòng đều bắt buộc đi qua đúng kiểm tra tồn kho FOR UPDATE ở trên.
 
     // Vấn đề #7 audit 26/08 - trước đây create() không nhận userId nên không lưu được ai tạo phiếu.
     it('records the caller as createdById', async () => {
@@ -358,7 +344,9 @@ describe('WarehouseTransfersService', () => {
       );
     });
 
-    it('skips items with no materialId (nothing to XOR into the ledger)', async () => {
+    // materialId=null chỉ còn xảy ra với dòng "ghi tự do" tạo TRƯỚC 09/09/2026 (DTO tạo mới đã
+    // bắt buộc field này từ ngày đó) - guard này giữ lại thuần vì lý do tương thích dữ liệu cũ.
+    it('legacy: skips items with no materialId (dòng ghi tự do tạo trước 09/09/2026, không có gì để XOR vào ledger)', async () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(
         transferRow({
           items: [
@@ -379,6 +367,51 @@ describe('WarehouseTransfersService', () => {
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
       expect(prisma.warehouseTransferReservation.updateMany).toHaveBeenCalled();
+    });
+
+    // Mục Trung bình, audit toàn diện 09/09/2026: 1 phiếu hỗn hợp (1 dòng thật + 1 dòng "ghi tự
+    // do" tạo trước khi materialId bắt buộc) vẫn lên CONFIRMED cho CẢ phiếu dù dòng ghi tự do chưa
+    // từng cộng/trừ tồn kho - status không phân biệt được dòng nào thật sự đã ghi ledger. DTO tạo
+    // mới đã chặn việc tạo thêm dòng kiểu này (09/09/2026) - test này giữ lại để xác nhận hành vi
+    // confirm() với dữ liệu CŨ còn sót lại vẫn đúng như mô tả (không tự "sửa" ngầm số liệu quá khứ).
+    it('legacy: phiếu hỗn hợp lên CONFIRMED nguyên phiếu dù dòng ghi tự do (tạo trước 09/09) không ghi ledger', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(
+        transferRow({
+          items: [
+            {
+              id: 500n,
+              materialId: 10n,
+              materialName: 'Sat 25',
+              unit: 'kg',
+              quantity: { toNumber: () => 30 },
+              note: null,
+            },
+            {
+              id: 501n,
+              materialId: null,
+              materialName: 'Khung chua dan (ghi tu do)',
+              unit: 'cai',
+              quantity: { toNumber: () => 7 },
+              note: null,
+            },
+          ],
+        }),
+      );
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
+        transferRow({ status: TransferStatus.CONFIRMED, confirmedAt: new Date() }),
+      );
+
+      const result = await service.confirm('50', 'user-1', 'vat-tu-tp');
+
+      // Chỉ dòng có materialId được ghi vào ledger - dòng free-text không đụng tồn kho chút nào.
+      expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ materialId: 10n }),
+        prisma,
+      );
+      // Nhưng response trả về CẢ phiếu là CONFIRMED - không có tín hiệu nào cho biết dòng
+      // free-text "chưa thực sự chuyển" trong kho, đúng như mô tả audit.
+      expect(result.status).toBe(TransferStatus.CONFIRMED);
     });
 
     it('posts a ledger entry per piece item (pieceId leg, no materialId)', async () => {

@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MaterialGroup } from '../../generated/prisma/client';
+import { MaterialGroup, Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -40,9 +40,26 @@ export class MaterialGroupsService {
       throw new ConflictException(`Tiền tố mã "${dto.codePrefix}" đã dùng cho nhóm khác`);
     }
 
-    const group = await this.prisma.materialGroup.create({
-      data: { name: dto.name, codePrefix: dto.codePrefix },
-    });
+    // Trung bình, audit toàn diện 09/09/2026: 2 pre-check ở trên chỉ chặn được trường hợp thường -
+    // 2 request tạo cùng name/codePrefix gần như đồng thời đều có thể đọc thấy "chưa tồn tại" rồi
+    // cùng tới create(), request thua bị unique constraint ở DB chặn (nguồn chặn thật) nhưng ném
+    // Prisma P2002 thô, rơi vào AllExceptionsFilter thành "Duplicate value for: ..." chung chung
+    // thay vì đúng lỗi nghiệp vụ rõ ràng như 2 pre-check phía trên.
+    let group: MaterialGroup;
+    try {
+      group = await this.prisma.materialGroup.create({
+        data: { name: dto.name, codePrefix: dto.codePrefix },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const target = (e.meta?.target as string[] | undefined) ?? [];
+        if (target.includes('codePrefix')) {
+          throw new ConflictException(`Tiền tố mã "${dto.codePrefix}" đã dùng cho nhóm khác`);
+        }
+        throw new ConflictException(`Material group "${dto.name}" already exists`);
+      }
+      throw e;
+    }
     return this.toResponseDto(group);
   }
 

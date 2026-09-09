@@ -103,7 +103,7 @@ export class WarehouseTransfersService {
 
     const created = await this.prisma.$transaction(async (tx) => {
       const clampedItems: {
-        materialId?: bigint;
+        materialId: bigint;
         materialName: string;
         unit: string;
         quantity: number;
@@ -111,18 +111,6 @@ export class WarehouseTransfersService {
       }[] = [];
 
       for (const item of dto.items) {
-        if (!item.materialId) {
-          // Kế thừa hạn chế của mock (materialId chưa bắt buộc) - không có gì để tra tồn kho
-          // thật, trust nguyên số lượng client gửi (xem comment ở WarehouseTransferItem).
-          clampedItems.push({
-            materialName: item.materialName,
-            unit: item.unit,
-            quantity: item.quantity,
-            note: item.note,
-          });
-          continue;
-        }
-
         const materialId = parseBigIntId(item.materialId);
         // FOR UPDATE khoá TẤT CẢ dòng stock_quant liên quan (mọi bucket chiều dài) trong lúc tính
         // "tồn khả dụng" - chặn 2 phiếu tạo gần như đồng thời cùng đọc thấy 1 số dư rồi cùng đặt
@@ -196,14 +184,12 @@ export class WarehouseTransfersService {
       });
 
       await tx.warehouseTransferReservation.createMany({
-        data: clampedItems
-          .filter((item) => item.materialId !== undefined)
-          .map((item) => ({
-            transferId: transfer.id,
-            warehouseId: fromWarehouseId,
-            materialId: item.materialId,
-            quantity: item.quantity,
-          })),
+        data: clampedItems.map((item) => ({
+          transferId: transfer.id,
+          warehouseId: fromWarehouseId,
+          materialId: item.materialId,
+          quantity: item.quantity,
+        })),
       });
 
       return transfer;
@@ -505,7 +491,9 @@ export class WarehouseTransfersService {
       // chừng lỗi trở nên an toàn - các item đã post thành công trả về đúng dòng cũ, không tạo
       // trùng bút toán (StockLedgerService.postEntry tự resolve-or-return theo key này).
       for (const item of transfer.items) {
-        if (!item.materialId) continue; // dòng free-text không có gì để ghi vào ledger (XOR)
+        // materialId bắt buộc từ 09/09/2026 (DTO không còn cho tạo dòng "ghi tự do") - guard này
+        // giờ chỉ còn là an toàn cho dữ liệu CŨ đã tạo trước ngày đó (cột DB vẫn nullable).
+        if (!item.materialId) continue;
         await this.stockLedgerService.postEntry(
           {
             fromWarehouseId: transfer.fromWarehouseId,

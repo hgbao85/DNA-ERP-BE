@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { StockLedgerRefType } from '../../generated/prisma/client';
+import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
@@ -81,6 +81,24 @@ describe('MaterialsService', () => {
         service.create({ code: 'SAT-01', name: 'Trung code', unit: 'kg' } as any),
       ).rejects.toThrow(ConflictException);
       expect(prisma.material.create).not.toHaveBeenCalled();
+    });
+
+    // Trung bình, audit toàn diện 09/09/2026: findUnique() pre-check chỉ chặn trường hợp thường -
+    // 2 request tạo cùng code gần như đồng thời đều đọc thấy "chưa tồn tại" rồi cùng tới create(),
+    // request thua bị DB unique constraint chặn thật (P2002) - trước đây lỗi này thoát thẳng ra
+    // AllExceptionsFilter thành "Duplicate value for: code" chung chung thay vì đúng lỗi nghiệp vụ
+    // 409 rõ ràng như nhánh pre-check phía trên.
+    it('race: rejects with the SAME friendly 409 when create() loses the DB unique constraint (P2002)', async () => {
+      prisma.material.findUnique.mockResolvedValue(null); // pre-check: chưa thấy (thua race)
+      const p2002 = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '7.9.0',
+      });
+      prisma.material.create.mockRejectedValue(p2002);
+
+      await expect(
+        service.create({ code: 'SAT-01', name: 'Trung code', unit: 'kg' } as any),
+      ).rejects.toThrow(new ConflictException('Material "SAT-01" already exists'));
     });
 
     it('auto-generates a code when none is given (no group -> fallback prefix VT)', async () => {

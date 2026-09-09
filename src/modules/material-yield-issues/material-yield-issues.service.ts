@@ -227,14 +227,27 @@ export class MaterialYieldIssuesService {
       );
     }
 
-    const updated = await this.prisma.materialYieldIssue.update({
-      where: { id: issue.id },
+    // updateMany guard theo (id, status:ISSUED) - cùng idiom WarehouseTransfersService.confirm() -
+    // 2 lượt xác nhận nhận gần như đồng thời (double-click, mạng chập chờn tự gửi lại) tự serialize
+    // qua khoá hàng của UPDATE trong Postgres: request thua chỉ thấy count=0, không còn ghi đè âm
+    // thầm receivedQty/receivedAt/receivedById của lượt đã "thắng" (Trung bình, audit 09/09/2026).
+    const { count } = await this.prisma.materialYieldIssue.updateMany({
+      where: { id: issue.id, status: MaterialYieldIssueStatus.ISSUED },
       data: {
         status: MaterialYieldIssueStatus.RECEIVED,
         receivedQty,
         receivedAt: new Date(),
         receivedById,
       },
+    });
+    if (count === 0) {
+      throw new ConflictException(
+        `Material yield issue ${id} đã được xác nhận nhận bởi 1 request khác trong lúc xử lý - không ghi đè`,
+      );
+    }
+
+    const updated = await this.prisma.materialYieldIssue.findUniqueOrThrow({
+      where: { id: issue.id },
       include: MATERIAL_YIELD_ISSUE_INCLUDE,
     });
     return this.toResponseDto(updated);
