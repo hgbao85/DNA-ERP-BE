@@ -336,6 +336,53 @@ describe('MaterialsService', () => {
       expect(cloudinary.deleteByUrl).not.toHaveBeenCalled();
     });
 
+    // Đính chính audit độc lập 09/09 (Cao/H1): trước đây materialGroupId/warehouseId/buyerId dùng
+    // ternary falsy (`dto.x ? ... : undefined`) - null (chủ động gỡ gán qua Admin > Vật tư, chọn
+    // "— Không —") và undefined (field không có trong body) đều bị coi như nhau, luôn ghi
+    // `undefined` (Prisma hiểu là "không đụng field") nên gỡ gán báo lưu thành công nhưng không
+    // có tác dụng gì. Giờ phải phân biệt `!== undefined` trước khi quyết định null hay giữ nguyên.
+    it('gỡ gán Nhóm vật tư/Kho/Người phụ trách khi dto gửi null tường minh (ghi NULL thật vào DB, không phải bỏ qua field)', async () => {
+      prisma.material.findUnique.mockResolvedValueOnce({
+        ...existingMaterial,
+        materialGroupId: 7n,
+        warehouseId: 3n,
+        buyerId: 'user-mua-hang',
+      });
+      prisma.material.update.mockResolvedValue(existingMaterial);
+
+      await service.update('1', {
+        materialGroupId: null,
+        warehouseId: null,
+        buyerId: null,
+      });
+
+      const call = prisma.material.update.mock.calls[0] as unknown as [
+        { data: { materialGroupId?: unknown; warehouseId?: unknown; buyerId?: unknown } },
+      ];
+      expect(call[0].data.materialGroupId).toBeNull();
+      expect(call[0].data.warehouseId).toBeNull();
+      expect(call[0].data.buyerId).toBeNull();
+    });
+
+    it('KHÔNG đụng Nhóm vật tư/Kho/Người phụ trách khi dto không gửi field đó (PATCH giữ nguyên, không phải xoá)', async () => {
+      prisma.material.findUnique.mockResolvedValueOnce({
+        ...existingMaterial,
+        materialGroupId: 7n,
+        warehouseId: 3n,
+        buyerId: 'user-mua-hang',
+      });
+      prisma.material.update.mockResolvedValue(existingMaterial);
+
+      await service.update('1', { name: 'Renamed only' });
+
+      const call = prisma.material.update.mock.calls[0] as unknown as [
+        { data: { materialGroupId?: unknown; warehouseId?: unknown; buyerId?: unknown } },
+      ];
+      expect(call[0].data.materialGroupId).toBeUndefined();
+      expect(call[0].data.warehouseId).toBeUndefined();
+      expect(call[0].data.buyerId).toBeUndefined();
+    });
+
     it('đổi nhóm STEEL_BAR -> nhóm khác thì tự ép maxCuttingWastePercentage về null dù dto không nhắc tới (D.hao-hut-sat)', async () => {
       prisma.material.findUnique.mockResolvedValueOnce({
         ...existingMaterial,

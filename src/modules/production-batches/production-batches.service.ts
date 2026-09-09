@@ -311,9 +311,31 @@ export class ProductionBatchesService {
 
     const updated = await this.prisma.$transaction(
       async (tx) => {
-        const locked = await tx.productionBatch.update({
-          where: { id: batch.id },
+        // Đính chính audit độc lập 09/09 (Cao, H3) - xác nhận có thật qua test trực tiếp trên
+        // server+DB dev đang chạy (12/13 lần tái hiện được, không phải ca hiếm): trước đây update()
+        // vô điều kiện, KHÔNG cùng khoá với recordProductionBatch() ("Lưu đợt") - nếu 1 request
+        // "Lưu đợt" đang xử lý gần như đồng thời (đã acquire lock, đã findFirst thấy OPEN, CHƯA
+        // kịp ghi) thì request "Gửi KCS" này vẫn đóng batch bình thường, rồi request "Lưu đợt" kia
+        // tiếp tục ghi tăng reportedQty lên đúng batch VỪA ĐÓNG (update theo id, không lọc status) -
+        // kết quả: batch hiển thị AWAITING_QC với reportedQty cao hơn số thực tại thời điểm gửi KCS
+        // (postSegmentConsumeEntries bên dưới đã trừ tồn theo số CŨ, thấp hơn). Khoá CÙNG key với
+        // recordProductionBatch() để 2 thao tác tự loại trừ lẫn nhau, rồi updateMany lọc kèm status
+        // OPEN + so count - cùng idiom mọi race-guard khác trong session này.
+        await lockBusinessKey(
+          tx,
+          `production-batch-open:${batch.productionOrderId}:${batch.pieceId}:${batch.stage}`,
+        );
+        const { count } = await tx.productionBatch.updateMany({
+          where: { id: batch.id, status: ProductionBatchStatus.OPEN },
           data: { status: ProductionBatchStatus.AWAITING_QC },
+        });
+        if (count === 0) {
+          throw new ConflictException(
+            `Batch ${id} đã bị 1 request khác xử lý trong lúc gửi KCS - không ghi đè`,
+          );
+        }
+        const locked = await tx.productionBatch.findUniqueOrThrow({
+          where: { id: batch.id },
           include: PRODUCTION_BATCH_INCLUDE,
         });
         await this.postSegmentConsumeEntries(

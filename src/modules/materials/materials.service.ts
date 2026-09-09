@@ -261,6 +261,13 @@ export class MaterialsService {
     const detailKind = this.resolveDetailKind(systemKey, dto.detailKind, previous.detailKind);
     const wasteFields = this.resolveWasteFields(systemKey, dto);
 
+    // Đính chính audit độc lập 09/09 (Cao/H1): PHẢI phân biệt "field không có trong body"
+    // (undefined - giữ nguyên) với "field có trong body nhưng rỗng/null" (chủ động gỡ gán - ghi
+    // null thật vào DB) - trước đây cả 2 ternary dưới đây coi null/'' cũng falsy như undefined,
+    // luôn ghi undefined (Prisma hiểu là "không đụng field") nên gỡ gán qua Admin > Vật tư không
+    // bao giờ có tác dụng dù báo lưu thành công. `!== undefined` xét ĐÚNG field có mặt trong body
+    // hay không (FE giờ gửi null tường minh khi người dùng chọn "— Không —" lúc sửa, xem
+    // AdminEntityPage.tsx).
     const material = await this.prisma.material.update({
       where: { id: bigId },
       data: {
@@ -268,10 +275,20 @@ export class MaterialsService {
         name: dto.name,
         unit: dto.unit,
         spec: dto.spec,
-        materialGroupId: dto.materialGroupId ? parseBigIntId(dto.materialGroupId) : undefined,
+        materialGroupId:
+          dto.materialGroupId !== undefined
+            ? dto.materialGroupId
+              ? parseBigIntId(dto.materialGroupId)
+              : null
+            : undefined,
         detailKind,
-        warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
-        buyerId: dto.buyerId || undefined,
+        warehouseId:
+          dto.warehouseId !== undefined
+            ? dto.warehouseId
+              ? parseBigIntId(dto.warehouseId)
+              : null
+            : undefined,
+        buyerId: dto.buyerId !== undefined ? dto.buyerId || null : undefined,
         purchaseUnit: dto.purchaseUnit,
         khoUnitFactor: dto.khoUnitFactor,
         maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,

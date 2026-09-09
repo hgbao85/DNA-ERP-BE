@@ -15,11 +15,13 @@ describe('ProductionBatchesService', () => {
   let prisma: {
     productionBatch: {
       findUnique: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
       findFirst: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
     };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
@@ -93,11 +95,16 @@ describe('ProductionBatchesService', () => {
     prisma = {
       productionBatch: {
         findUnique: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
         findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
         create: jest.fn(),
         update: jest.fn(),
+        // Nghiêm trọng/Cao H3 (đính chính audit độc lập 09/09, xác nhận thật qua test trực tiếp
+        // trên server+DB dev: 12/13 lần tái hiện được race giữa "Lưu đợt" và "Gửi KCS") - updateMany
+        // + count guard mặc định count:1 (thành công), test race-guard tự override count:0.
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       // findFirst mặc định trả về 1 order ACTIVE - đa số test case không quan tâm gate
       // assertPiHasActiveFloor() (2026-08-31), xem mục riêng "QLSX Bắt đầu" bên dưới mới override
@@ -621,7 +628,7 @@ describe('ProductionBatchesService', () => {
         status: 'OPEN',
         reportedQty: 8,
       });
-      prisma.productionBatch.update.mockResolvedValue({
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
         ...batchRow,
         status: 'AWAITING_QC',
         reportedQty: 8,
@@ -632,9 +639,10 @@ describe('ProductionBatchesService', () => {
 
       await service.finishProductionBatch('700', 'user-han', null, null);
 
-      expect(prisma.productionBatch.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 700n }, data: { status: 'AWAITING_QC' } }),
-      );
+      expect(prisma.productionBatch.updateMany).toHaveBeenCalledWith({
+        where: { id: 700n, status: 'OPEN' },
+        data: { status: 'AWAITING_QC' },
+      });
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ segmentSpecId: 60n, qty: 24 }), // 3 × reportedQty(8) CUỐI CÙNG
@@ -648,7 +656,7 @@ describe('ProductionBatchesService', () => {
         status: 'OPEN',
         reportedQty: 8,
       });
-      prisma.productionBatch.update.mockResolvedValue({
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
         ...batchRow,
         status: 'AWAITING_QC',
         reportedQty: 8,
@@ -658,6 +666,47 @@ describe('ProductionBatchesService', () => {
       await service.finishProductionBatch('700', 'user-phoi', null, null);
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    // Nghiêm trọng/Cao H3 (đính chính audit độc lập 09/09) - xác nhận có thật qua test trực tiếp
+    // trên server+DB dev đang chạy (script gọi HTTP thật, không chỉ suy luận qua đọc code): 12/13
+    // lần tái hiện được race giữa "Lưu đợt" (recordProductionBatch) và "Gửi KCS"
+    // (finishProductionBatch) cho cùng batch - batch cuối cùng hiển thị AWAITING_QC nhưng
+    // reportedQty bị "Lưu đợt" ghi tăng SAU KHI đã gửi KCS, trong khi postSegmentConsumeEntries đã
+    // trừ tồn theo số CŨ (thấp hơn) - sai lệch vĩnh viễn giữa sản lượng hiển thị và tồn kho đã trừ.
+    it('CHẶN (409, rollback) nếu batch đã bị 1 request "Lưu đợt" khác đóng/ghi đè trong lúc đang gửi KCS - không trừ tồn sai theo số cũ', async () => {
+      prisma.productionBatch.findUnique.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 8,
+      });
+      prisma.productionBatch.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.finishProductionBatch('700', 'user-han', null, null)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('khoá advisory CÙNG key với recordProductionBatch() ("Lưu đợt") - 2 thao tác tự loại trừ lẫn nhau', async () => {
+      prisma.productionBatch.findUnique.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 8,
+      });
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
+        ...batchRow,
+        status: 'AWAITING_QC',
+        reportedQty: 8,
+      });
+      prisma.pieceBom.findMany.mockResolvedValue([]);
+
+      await service.finishProductionBatch('700', 'user-han', null, null);
+
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      const lockCallOrder = prisma.$executeRaw.mock.invocationCallOrder[0];
+      const updateManyCallOrder = prisma.productionBatch.updateMany.mock.invocationCallOrder[0];
+      expect(lockCallOrder).toBeLessThan(updateManyCallOrder);
     });
   });
 
