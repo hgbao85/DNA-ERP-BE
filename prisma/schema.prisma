@@ -2704,12 +2704,13 @@ model PackagingIssue {
 // =====================================================================
 
 enum ProductionBatchStatus {
-  /// 2026-09-08: CHỈ dùng cho stage=PHOI, mảnh KHÔNG khai processSteps (ChotPanel, VatTuTpDetail.tsx)
-  /// - "Lưu đợt" (ProductionBatchesService.recordProductionBatch()) tích luỹ reportedQty vào ĐÚNG 1
+  /// 2026-09-08 (VTTP ChotPanel), mở rộng 2026-09-09 (Phôi/Hàn/Sơn - VatTuDetailBoard/core.tsx) -
+  /// "Lưu đợt" (ProductionBatchesService.recordProductionBatch()) tích luỹ reportedQty vào ĐÚNG 1
   /// dòng OPEN, mirror CutBundleStatus.CUTTING - CHƯA gửi KCS, chưa tính "chờ KCS"/"sản lượng thật".
-  /// "Gửi KCS" (finishProductionBatch()) mới chuyển sang AWAITING_QC. Hàn/Sơn (VatTuDetailBoard/
-  /// core.tsx) và mảnh CÓ khai processSteps (auto-finalize) KHÔNG dùng trạng thái này - luôn tạo
-  /// thẳng AWAITING_QC (Hàn/Sơn) hoặc QC_DONE (auto-finalize).
+  /// "Gửi KCS" (finishProductionBatch()) mới chuyển sang AWAITING_QC + trừ tồn đoạn sắt (nếu mảnh
+  /// có PieceBom - xem doc comment finishProductionBatch() lý do trừ ở ĐÓ, không phải lúc "Lưu
+  /// đợt"). Mảnh CÓ khai processSteps (auto-finalize) KHÔNG dùng trạng thái này - luôn tạo thẳng
+  /// QC_DONE.
   OPEN
   AWAITING_QC
   QC_DONE

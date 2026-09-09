@@ -66,14 +66,14 @@ export class ProductionBatchesController {
   }
 
   /**
-   * "Lưu đợt" ChotPanel (VTTP, CHỈ mảnh không khai processSteps, 2026-09-08) - tích luỹ vào 1
-   * ProductionBatch đang OPEN thay vì tạo dòng AWAITING_QC ngay như POST .../production-batches ở
-   * trên (Hàn/Sơn vẫn dùng route đó, không đụng). Đặt route TRÊN @Get('production-batches/:id')
-   * theo đúng tiền lệ path 3 segment cố định, không trùng khớp nhầm nào.
+   * "Lưu đợt" (Phôi/Hàn/Sơn, 2026-09-09 mở rộng - ban đầu 2026-09-08 CHỈ VTTP ChotPanel dùng PHOI)
+   * - tích luỹ vào 1 ProductionBatch đang OPEN thay vì tạo dòng AWAITING_QC ngay như POST
+   * .../production-batches ở trên. Đặt route TRÊN @Get('production-batches/:id') theo đúng tiền lệ
+   * path 3 segment cố định, không trùng khớp nhầm nào.
    */
   @Post('production-orders/:id/production-batches/record')
   @RequirePermissions(CREATE)
-  @RequireMfgRole(MfgRole.PHOI)
+  @RequireMfgRole(MfgRole.PHOI, MfgRole.HAN, MfgRole.SON)
   recordProductionBatch(
     @Param('id') id: string,
     @Body() dto: RecordProductionBatchDto,
@@ -83,12 +83,18 @@ export class ProductionBatchesController {
     return this.productionBatchesService.recordProductionBatch(id, dto, userId, mfgRole);
   }
 
-  /** "Gửi KCS" ChotPanel - đóng ProductionBatch đang OPEN, chuyển AWAITING_QC. */
+  /** "Gửi KCS" - đóng ProductionBatch đang OPEN, chuyển AWAITING_QC (+ trừ tồn đoạn sắt nếu có -
+   *  xem doc comment ProductionBatchesService.finishProductionBatch()). */
   @Post('production-batches/:id/finish')
   @RequirePermissions(CREATE)
-  @RequireMfgRole(MfgRole.PHOI)
-  finishProductionBatch(@Param('id') id: string, @CurrentUser('mfgRole') mfgRole: string | null) {
-    return this.productionBatchesService.finishProductionBatch(id, mfgRole);
+  @RequireMfgRole(MfgRole.PHOI, MfgRole.HAN, MfgRole.SON)
+  finishProductionBatch(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('mfgRole') mfgRole: string | null,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.productionBatchesService.finishProductionBatch(id, userId, mfgRole, warehouseScope);
   }
 
   /** Phôi xem lại bundle theo công đoạn CỦA CHÍNH order này - trạng thái + Bù đủ (VatTuTpDetail.tsx). */

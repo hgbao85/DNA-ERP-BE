@@ -200,24 +200,26 @@ export class ProductionBatchesService {
   }
 
   /**
-   * "Lưu đợt" cho ChotPanel (VTTP, CHỈ mảnh KHÔNG khai processSteps - VatTuTpDetail.tsx) - mirror
-   * NewCutBundleForm bên Sắt (2026-09-08, theo yêu cầu người dùng "giống Phôi"): tích luỹ
-   * reportedQty vào 1 ProductionBatch đang OPEN (tối đa 1 dòng OPEN tại 1 thời điểm cho đúng
-   * (order, piece), mirror "luôn tối đa 1 đợt CUTTING") thay vì tạo dòng AWAITING_QC ngay như
-   * create()/reportProductionBatch() cũ. CHỈ nhận stage PHOI - Hàn/Sơn (VatTuDetailBoard/core.tsx)
-   * giữ nguyên hành vi 1-nút "Ghi nhận" qua create(), không đụng tới hàm này. "Gửi KCS"
-   * (finishProductionBatch()) mới thật sự đóng batch + chuyển AWAITING_QC. KHÔNG cần Idempotency-
-   * Key dedup như create() - đây là hành động CỘNG DỒN (khác tạo-hoặc-trả-về), double-submit chỉ
-   * gây cộng dư số lượng (dễ nhận ra + tự sửa lại), không phải rủi ro nghiêm trọng; FE tự khoá nút
-   * lúc đang gửi (busy state) như mọi nơi khác trong module.
+   * "Lưu đợt" (2026-09-08, theo yêu cầu người dùng "giống Phôi") - mirror NewCutBundleForm bên Sắt:
+   * tích luỹ reportedQty vào 1 ProductionBatch đang OPEN (tối đa 1 dòng OPEN tại 1 thời điểm cho
+   * đúng (order, piece, stage), mirror "luôn tối đa 1 đợt CUTTING") thay vì tạo dòng AWAITING_QC
+   * ngay như create()/reportProductionBatch() cũ. Ban đầu (2026-09-08 lần 1) CHỈ nhận PHOI (VTTP
+   * ChotPanel) - mở rộng NHẬN CẢ 3 stage (2026-09-09, đồng bộ Hàn/Sơn theo yêu cầu người dùng) -
+   * validate y hệt create() (assertConsumableStage/assertMfgRoleMatchesStage/assertPieceInBom/
+   * assertMaterialYieldReceived, hàm sau tự no-op ngoài PHOI). "Gửi KCS" (finishProductionBatch())
+   * mới thật sự đóng batch + chuyển AWAITING_QC + trừ tồn đoạn sắt (KHÔNG trừ ở đây - xem doc
+   * comment finishProductionBatch() lý do). KHÔNG cần Idempotency-Key dedup như create() - đây là
+   * hành động CỘNG DỒN (khác tạo-hoặc-trả-về), double-submit chỉ gây cộng dư số lượng (dễ nhận ra +
+   * tự sửa lại), không phải rủi ro nghiêm trọng; FE tự khoá nút lúc đang gửi (busy state).
    */
   async recordProductionBatch(
     productionOrderId: string,
-    dto: { pieceId: string; qty: number },
+    dto: { pieceId: string; qty: number; stage: MfgStage },
     reportedById: string,
     callerMfgRole: string | null,
   ): Promise<ProductionBatchResponseDto> {
-    this.assertMfgRoleMatchesStage(callerMfgRole, MfgStage.PHOI);
+    this.assertConsumableStage(dto.stage);
+    this.assertMfgRoleMatchesStage(callerMfgRole, dto.stage);
     const order = await this.findOrderOrThrow(productionOrderId);
     await assertItemPiHasActiveFloor(
       this.prisma,
@@ -225,16 +227,11 @@ export class ProductionBatchesService {
       'ghi nhận sản lượng',
     );
     const pieceBigId = parseBigIntId(dto.pieceId);
-    await this.assertPieceInBom(order.bomRevisionId, pieceBigId, MfgStage.PHOI);
-    await this.assertMaterialYieldReceived(
-      order.bomRevisionId,
-      pieceBigId,
-      order.id,
-      MfgStage.PHOI,
-    );
+    await this.assertPieceInBom(order.bomRevisionId, pieceBigId, dto.stage);
+    await this.assertMaterialYieldReceived(order.bomRevisionId, pieceBigId, order.id, dto.stage);
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `production-batch-open:${order.id}:${pieceBigId}:PHOI`);
+      await lockBusinessKey(tx, `production-batch-open:${order.id}:${pieceBigId}:${dto.stage}`);
       await assertItemPiHasActiveFloorLocked(
         tx,
         order.productionInvoiceItemId,
@@ -243,7 +240,7 @@ export class ProductionBatchesService {
 
       const open = await tx.productionBatch.findFirst({
         where: {
-          stage: MfgStage.PHOI,
+          stage: dto.stage,
           productionOrderId: order.id,
           pieceId: pieceBigId,
           status: ProductionBatchStatus.OPEN,
@@ -258,7 +255,7 @@ export class ProductionBatchesService {
       }
       return tx.productionBatch.create({
         data: {
-          stage: MfgStage.PHOI,
+          stage: dto.stage,
           productionOrderId: order.id,
           pieceId: pieceBigId,
           reportedQty: dto.qty,
@@ -273,19 +270,27 @@ export class ProductionBatchesService {
   }
 
   /**
-   * "Gửi KCS" cho ChotPanel (VTTP, CHỈ mảnh KHÔNG khai processSteps) - đóng batch đang OPEN, chuyển
-   * AWAITING_QC (mirror finishCutBundle() bên Sắt). Sau bước này KCS duyệt qua đúng luồng cũ
-   * (QcReviewsService.reviewProductionBatch()) - không đổi gì ở đó.
+   * "Gửi KCS" - đóng batch đang OPEN, chuyển AWAITING_QC (mirror finishCutBundle() bên Sắt). Sau
+   * bước này KCS duyệt qua đúng luồng cũ (QcReviewsService.reviewProductionBatch()) - không đổi gì
+   * ở đó.
+   *
+   * Trừ tồn đoạn sắt (postSegmentConsumeEntries) Ở ĐÂY, KHÔNG PHẢI ở recordProductionBatch() - lý
+   * do: hàm đó dùng idempotencyKey `production-batch-segment-consume:{batch.id}:{segmentSpecId}`
+   * (CỐ ĐỊNH theo batch.id) để chống double-submit; nếu gọi lúc "Lưu đợt" (có thể bấm NHIỀU lần,
+   * mỗi lần CỘNG DỒN reportedQty vào CÙNG batch.id), lần gọi sau sẽ bị coi là trùng key với lần
+   * trước (dù reportedQty đã tăng) → chỉ trừ đúng phần đầu, không trừ theo tổng mới - âm thầm THIẾU
+   * tồn. Trừ ở finish() an toàn vì đây là điểm reportedQty trở nên BẤT BIẾN (batch chuyển AWAITING_QC,
+   * recordProductionBatch() chỉ nhận batch đang OPEN) - mỗi batch.id chỉ gọi postSegmentConsumeEntries()
+   * ĐÚNG 1 LẦN trong vòng đời, khớp giả định của idempotencyKey đó.
    */
   async finishProductionBatch(
     id: string,
+    reportedById: string,
     callerMfgRole: string | null,
+    warehouseScope: string | null,
   ): Promise<ProductionBatchResponseDto> {
-    this.assertMfgRoleMatchesStage(callerMfgRole, MfgStage.PHOI);
     const batch = await this.findOneRowOrThrow(id);
-    if (batch.stage !== MfgStage.PHOI) {
-      throw new BadRequestException(`Gửi KCS kiểu này chỉ áp dụng cho stage PHOI`);
-    }
+    this.assertMfgRoleMatchesStage(callerMfgRole, batch.stage);
     if (batch.status !== ProductionBatchStatus.OPEN) {
       throw new ConflictException(
         `Batch ${id} đang ở trạng thái ${batch.status} - chỉ OPEN mới gửi KCS được`,
@@ -299,12 +304,28 @@ export class ProductionBatchesService {
     if (batch.reportedQty <= 0) {
       throw new BadRequestException(`Chưa có gì để gửi KCS`);
     }
+    // Cùng idiom create() - kho phoi-son-han cụ thể theo scope người gửi, fallback kho gốc.
+    const sourceWarehouseCode = isFamilyScope(warehouseScope, 'phoi-son-han')
+      ? warehouseScope!
+      : STEEL_WAREHOUSE_CODE;
 
-    const updated = await this.prisma.productionBatch.update({
-      where: { id: batch.id },
-      data: { status: ProductionBatchStatus.AWAITING_QC },
-      include: PRODUCTION_BATCH_INCLUDE,
-    });
+    const updated = await this.prisma.$transaction(
+      async (tx) => {
+        const locked = await tx.productionBatch.update({
+          where: { id: batch.id },
+          data: { status: ProductionBatchStatus.AWAITING_QC },
+          include: PRODUCTION_BATCH_INCLUDE,
+        });
+        await this.postSegmentConsumeEntries(
+          tx,
+          { ...locked, bomRevisionId: batch.productionOrder.bomRevisionId },
+          reportedById,
+          sourceWarehouseCode,
+        );
+        return locked;
+      },
+      { timeout: 20_000 },
+    );
     return this.toResponseDto(updated);
   }
 

@@ -15,9 +15,11 @@ describe('ProductionBatchesService', () => {
   let prisma: {
     productionBatch: {
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
       create: jest.Mock;
+      update: jest.Mock;
     };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
@@ -91,9 +93,11 @@ describe('ProductionBatchesService', () => {
     prisma = {
       productionBatch: {
         findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
         create: jest.fn(),
+        update: jest.fn(),
       },
       // findFirst mặc định trả về 1 order ACTIVE - đa số test case không quan tâm gate
       // assertPiHasActiveFloor() (2026-08-31), xem mục riêng "QLSX Bắt đầu" bên dưới mới override
@@ -532,6 +536,128 @@ describe('ProductionBatchesService', () => {
         expect.objectContaining({ segmentSpecId: 60n, qty: 60 }),
         prisma,
       );
+    });
+  });
+
+  // "Lưu đợt"/"Gửi KCS" (2026-09-08 VTTP ChotPanel, mở rộng 2026-09-09 cho cả Phôi/Hàn/Sơn) - xem
+  // doc comment 2 method: trừ tồn đoạn sắt Ở finishProductionBatch(), KHÔNG PHẢI recordProductionBatch()
+  // (idempotencyKey cố định theo batch.id sẽ trừ THIẾU nếu gọi lúc reportedQty còn có thể tăng).
+  describe('recordProductionBatch / finishProductionBatch (Lưu đợt / Gửi KCS)', () => {
+    const recordDto = { stage: MfgStage.HAN, pieceId: '40', qty: 5 };
+
+    it('recordProductionBatch - chưa có dòng OPEN nào - tạo mới, KHÔNG trừ tồn đoạn sắt', async () => {
+      prisma.productionBatch.findFirst.mockResolvedValue(null);
+      prisma.productionBatch.create.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 5,
+      });
+
+      await service.recordProductionBatch('1', recordDto, 'user-han', null);
+
+      expect(prisma.productionBatch.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: {
+            stage: MfgStage.HAN,
+            productionOrderId: 1n,
+            pieceId: 40n,
+            reportedQty: 5,
+            reportedById: 'user-han',
+            status: 'OPEN',
+          },
+        }),
+      );
+      expect(prisma.productionBatch.update).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('recordProductionBatch - đã có dòng OPEN - CỘNG DỒN reportedQty vào đúng dòng đó, không tạo mới', async () => {
+      prisma.productionBatch.findFirst.mockResolvedValue({ id: 700n, reportedQty: 5 });
+      prisma.productionBatch.update.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 8,
+      });
+
+      await service.recordProductionBatch('1', { ...recordDto, qty: 3 }, 'user-han', null);
+
+      expect(prisma.productionBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 700n }, data: { reportedQty: 8 } }),
+      );
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('recordProductionBatch - stage DAN (không consumable) - BadRequest, không tạo/cộng dồn gì', async () => {
+      await expect(
+        service.recordProductionBatch('1', { ...recordDto, stage: 'DAN' }, 'user-han', null),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('finishProductionBatch - batch không ở OPEN - ConflictException', async () => {
+      prisma.productionBatch.findUnique.mockResolvedValue({ ...batchRow, status: 'AWAITING_QC' });
+
+      await expect(service.finishProductionBatch('700', 'user-han', null, null)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('finishProductionBatch - reportedQty = 0 - BadRequest', async () => {
+      prisma.productionBatch.findUnique.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 0,
+      });
+
+      await expect(service.finishProductionBatch('700', 'user-han', null, null)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('finishProductionBatch - OPEN + có PieceBom - chuyển AWAITING_QC VÀ trừ đúng 1 dòng StockLedger theo reportedQty CUỐI CÙNG', async () => {
+      prisma.productionBatch.findUnique.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 8,
+      });
+      prisma.productionBatch.update.mockResolvedValue({
+        ...batchRow,
+        status: 'AWAITING_QC',
+        reportedQty: 8,
+      });
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
+      ]);
+
+      await service.finishProductionBatch('700', 'user-han', null, null);
+
+      expect(prisma.productionBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 700n }, data: { status: 'AWAITING_QC' } }),
+      );
+      expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ segmentSpecId: 60n, qty: 24 }), // 3 × reportedQty(8) CUỐI CÙNG
+        prisma,
+      );
+    });
+
+    it('finishProductionBatch - không có PieceBom (VTTP) - chuyển AWAITING_QC, KHÔNG gọi postEntry', async () => {
+      prisma.productionBatch.findUnique.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 8,
+      });
+      prisma.productionBatch.update.mockResolvedValue({
+        ...batchRow,
+        status: 'AWAITING_QC',
+        reportedQty: 8,
+      });
+      prisma.pieceBom.findMany.mockResolvedValue([]);
+
+      await service.finishProductionBatch('700', 'user-phoi', null, null);
+
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
   });
 
