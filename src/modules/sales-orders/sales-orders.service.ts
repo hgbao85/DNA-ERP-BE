@@ -70,7 +70,8 @@ export class SalesOrdersService {
     await this.createProductionInvoiceItems(withCode);
     await this.linkExistingSkus(withCode);
 
-    return this.toResponseDto(withCode);
+    // Vừa tạo xong trong chính lệnh gọi này - không thể đã gộp PI/đã giao hàng, khỏi cần query.
+    return this.toResponseDto(withCode, null);
   }
 
   async findAll(query: PaginationQueryDto): Promise<Paginated<SalesOrderResponseDto>> {
@@ -92,11 +93,45 @@ export class SalesOrdersService {
       query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
     );
 
-    return { data: result.data.map((o) => this.toResponseDto(o)), meta: result.meta };
+    // Đính chính audit toàn diện 10/09 (disable nút Xoá khi biết trước sẽ bị chặn): 1 query gộp
+    // theo TOÀN BỘ orderIds của trang hiện tại thay vì count() riêng từng order (N+1) - chỉ cần
+    // biết CÓ gộp PI hay không cho danh sách, không cần đúng số lượng (số chính xác chỉ quan
+    // trọng ở remove()/findOne(), nơi đã count() riêng cho đúng 1 order).
+    const orderIds = result.data.map((o) => o.id);
+    const merged = await this.prisma.productionInvoiceItem.findMany({
+      where: {
+        productionInvoiceId: { not: null },
+        OR: [
+          { salesOrderId: { in: orderIds } },
+          { productionInvoice: { salesOrderId: { in: orderIds } } },
+        ],
+      },
+      select: { salesOrderId: true, productionInvoice: { select: { salesOrderId: true } } },
+    });
+    const mergedIds = new Set(
+      merged.flatMap((m) =>
+        [m.salesOrderId, m.productionInvoice?.salesOrderId].filter((x): x is bigint => x != null),
+      ),
+    );
+
+    return {
+      data: result.data.map((o) =>
+        this.toResponseDto(
+          o,
+          this.buildDeleteBlockReason(o.code, o.items, mergedIds.has(o.id) ? 1 : 0),
+        ),
+      ),
+      meta: result.meta,
+    };
   }
 
   async findOne(id: string): Promise<SalesOrderResponseDto> {
-    return this.toResponseDto(await this.findOneOrThrow(id));
+    const order = await this.findOneOrThrow(id);
+    const mergedCount = await this.countMergedProductionInvoiceItems(order.id);
+    return this.toResponseDto(
+      order,
+      this.buildDeleteBlockReason(order.code, order.items, mergedCount),
+    );
   }
 
   async update(id: string, dto: UpdateSalesOrderDto): Promise<SalesOrderResponseDto> {
@@ -114,13 +149,104 @@ export class SalesOrdersService {
       },
       include: { customer: true, items: { include: { mfgProduct: true } } },
     });
-    return this.toResponseDto(updated);
+    const mergedCount = await this.countMergedProductionInvoiceItems(bigId);
+    return this.toResponseDto(
+      updated,
+      this.buildDeleteBlockReason(updated.code, updated.items, mergedCount),
+    );
   }
 
+  /**
+   * Đính chính audit toàn diện 09/09 (Trung bình/Bán hàng): trước đây xoá không kiểm tra gì cả -
+   * đơn hàng "biến mất" khỏi mọi danh sách Sales (soft-delete lọc deletedAt) nhưng
+   * ProductionInvoiceItem/PlanForm/ProductionInvoice liên quan vẫn còn nguyên, mất khả năng tra
+   * "định mức/lệnh sản xuất này của khách nào" trong khi nhà máy vẫn sản xuất/giao hàng thật.
+   * Ngưỡng "đã đưa vào sản xuất" = đã gộp vào 1 PI (productionInvoiceId != null, qua
+   * mergeItems()/claimSolo()) - KHÔNG dùng "tồn tại ProductionInvoiceItem" làm mốc vì
+   * createProductionInvoiceItems() (create(), dòng ~70) đã tạo sẵn 1 dòng cho MỌI item ngay lúc
+   * Sales lưu đơn (productionInvoiceId=null lúc đầu) - dùng "tồn tại" sẽ chặn xoá mọi đơn hàng kể
+   * cả vừa tạo xong.
+   *
+   * 10/09: gom logic chặn vào buildDeleteBlockReason() (dùng chung với findAll()/findOne()/update()
+   * để hiển thị TRƯỚC qua deleteBlockedReason, cho FE disable nút Xoá thay vì để bấm rồi mới báo
+   * lỗi) - hành vi/message ném ra ở đây không đổi so với trước.
+   */
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
-    await this.findOneOrThrow(id);
-    await this.prisma.salesOrder.delete({ where: { id: bigId } }); // soft-delete (SOFT_DELETE_MODELS)
+    const order = await this.findOneOrThrow(id);
+
+    const mergedCount = await this.countMergedProductionInvoiceItems(bigId);
+    const reason = this.buildDeleteBlockReason(order.code, order.items, mergedCount);
+    if (reason) {
+      throw new ConflictException(reason);
+    }
+
+    // Guard trên đã đảm bảo MỌI ProductionInvoiceItem của đơn có productionInvoiceId = null (chưa
+    // gộp PI) - 4 bảng con của nó (stages/productionOrder/transferCheckResults/packagingRecords)
+    // đều bắt buộc PI thật mới ghi được (xem production-invoices.service.ts
+    // findItemOrThrow()/findProductionOrderOrThrow()) nên chắc chắn rỗng, xoá thẳng không vi phạm
+    // FK (Prisma default Restrict, không Cascade, cho các FK đó). Cùng lý do, bất kỳ
+    // ProductionInvoice (vỏ PI, tạo qua POST /production-invoices) nào còn salesOrderId trỏ về đơn
+    // này chắc chắn 0 item - an toàn xoá thẳng.
+    //
+    // 10/09: SalesOrder đã bỏ khỏi SOFT_DELETE_MODELS theo yêu cầu người dùng - salesOrder.delete()
+    // dưới đây giờ là hard delete THẬT (không còn tự rewrite thành update deletedAt). Vì vậy phải
+    // dọn/gỡ hết các bảng còn FK trỏ tới trước khi xoá, nếu không Postgres sẽ chặn (FK Restrict).
+    // PlanForm/Sku đã gắn qua linkExistingSkus() (nếu có) KHÔNG bị xoá - dữ liệu độc lập của KHSX
+    // (định mức, lịch sử duyệt...), có trước cả PO này - chỉ GỠ LIÊN KẾT (salesOrderId = null) để
+    // hết trỏ tới đơn sắp xoá, SKU đó vẫn còn nguyên, sẵn sàng gắn cho đơn khác sau này.
+    await this.prisma.$transaction(async (tx) => {
+      const linkedSkus = await tx.planForm.findMany({ where: { salesOrderId: bigId } });
+      for (const sku of linkedSkus) {
+        await tx.planForm.update({ where: { id: sku.id }, data: { salesOrderId: null } });
+      }
+
+      await tx.productionInvoice.deleteMany({ where: { salesOrderId: bigId } });
+      await tx.productionInvoiceItem.deleteMany({ where: { salesOrderId: bigId } });
+      await tx.salesOrderItem.deleteMany({ where: { salesOrderId: bigId } });
+      await tx.salesOrder.delete({ where: { id: bigId } }); // hard delete thật
+    });
+  }
+
+  /**
+   * OR: [{salesOrderId}, {productionInvoice:{salesOrderId}}] mirror đúng updateItem() (dòng
+   * 199-204) - ProductionInvoiceItem.salesOrderId ghim thẳng PO gốc (PI gộp), còn
+   * productionInvoice.salesOrderId phủ trường hợp PI không-gộp 1-1.
+   */
+  private async countMergedProductionInvoiceItems(bigId: bigint): Promise<number> {
+    return this.prisma.productionInvoiceItem.count({
+      where: {
+        productionInvoiceId: { not: null },
+        OR: [{ salesOrderId: bigId }, { productionInvoice: { salesOrderId: bigId } }],
+      },
+    });
+  }
+
+  /**
+   * Message lý do chặn xoá - dùng chung cho remove() (ném ConflictException) và
+   * findAll()/findOne()/update() (hiển thị TRƯỚC qua deleteBlockedReason) để không lệch nội
+   * dung/logic giữa "báo trước" và "chặn thật lúc xoá". `mergedCount` truyền `1` (không cần đúng
+   * số) khi gọi từ findAll() - xem chỗ gọi.
+   */
+  private buildDeleteBlockReason(
+    code: string,
+    items: { shippedQty: number; totalQty: number; skuName: string | null; mfgProductId: bigint }[],
+    mergedCount: number,
+  ): string | null {
+    if (mergedCount > 0) {
+      return (
+        `Đơn hàng ${code} có ${mergedCount} dòng đã được KHSX gộp vào Phiếu sản xuất - ` +
+        `không thể xoá, sẽ mất dấu vết trong khi nhà máy vẫn đang sản xuất theo đơn này.`
+      );
+    }
+    const shippedItem = items.find((it) => it.shippedQty > 0);
+    if (shippedItem) {
+      return (
+        `Đơn hàng ${code} đã giao ${shippedItem.shippedQty}/${shippedItem.totalQty} cho ` +
+        `dòng "${shippedItem.skuName ?? shippedItem.mfgProductId}" - không thể xoá đơn đã giao hàng một phần.`
+      );
+    }
+    return null;
   }
 
   // ─── Items ──────────────────────────────────────────────────────────────────
@@ -330,7 +456,10 @@ export class SalesOrdersService {
     await this.prisma.salesOrder.update({ where: { id: salesOrderId }, data: { deliveryDate } });
   }
 
-  private toResponseDto(order: SalesOrderWithItems): SalesOrderResponseDto {
+  private toResponseDto(
+    order: SalesOrderWithItems,
+    deleteBlockedReason: string | null,
+  ): SalesOrderResponseDto {
     return new SalesOrderResponseDto({
       id: order.id.toString(),
       code: order.code,
@@ -345,6 +474,7 @@ export class SalesOrdersService {
       attachmentUrl: order.attachmentUrl,
       note: order.note,
       isActive: order.isActive,
+      deleteBlockedReason,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
       items: order.items.map((it) => this.toItemResponseDto(it)),

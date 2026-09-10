@@ -11,6 +11,7 @@ describe('SalesOrdersService', () => {
     salesOrder: {
       create: jest.Mock;
       update: jest.Mock;
+      delete: jest.Mock;
       findUnique: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
@@ -20,11 +21,24 @@ describe('SalesOrdersService', () => {
       update: jest.Mock;
       findUnique: jest.Mock;
       findMany: jest.Mock;
+      deleteMany: jest.Mock;
     };
-    productionInvoice: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock };
-    productionInvoiceItem: { findFirst: jest.Mock; createMany: jest.Mock };
-    planForm: { findFirst: jest.Mock; update: jest.Mock };
+    productionInvoice: {
+      create: jest.Mock;
+      update: jest.Mock;
+      findMany: jest.Mock;
+      deleteMany: jest.Mock;
+    };
+    productionInvoiceItem: {
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+      createMany: jest.Mock;
+      count: jest.Mock;
+      deleteMany: jest.Mock;
+    };
+    planForm: { findFirst: jest.Mock; findMany: jest.Mock; update: jest.Mock };
     $queryRaw: jest.Mock;
+    $transaction: jest.Mock;
   };
 
   const customer = { id: 1n, name: 'Khach A' };
@@ -56,6 +70,7 @@ describe('SalesOrdersService', () => {
       salesOrder: {
         create: jest.fn(),
         update: jest.fn(),
+        delete: jest.fn(),
         findUnique: jest.fn(),
         findMany: jest.fn(),
         count: jest.fn(),
@@ -65,18 +80,42 @@ describe('SalesOrdersService', () => {
         update: jest.fn(),
         findUnique: jest.fn(),
         findMany: jest.fn(),
+        deleteMany: jest.fn(),
       },
 
-      productionInvoice: { create: jest.fn(), update: jest.fn(), findMany: jest.fn() },
+      productionInvoice: {
+        create: jest.fn(),
+        update: jest.fn(),
+        findMany: jest.fn(),
+        // 10/09: remove() xoá luôn vỏ PI rỗng (nếu có) gắn riêng cho đơn - mặc định không có vỏ
+        // nào để xoá (deleteMany no-op an toàn khi where không khớp gì).
+        deleteMany: jest.fn(),
+      },
       // Medium fix "chặn sửa totalQty khi đã ghim PI/PO" - mặc định chưa ghim gì (null), test nào
       // cần mô phỏng đã ghim PI tự override.
       productionInvoiceItem: {
         findFirst: jest.fn().mockResolvedValue(null),
+        // 10/09: findAll() gộp check "đã gộp PI" qua 1 query findMany duy nhất cho cả trang -
+        // mặc định chưa có order nào gộp PI (mảng rỗng), test nào cần mô phỏng đã gộp tự override.
+        findMany: jest.fn().mockResolvedValue([]),
         createMany: jest.fn(),
+        // Medium fix "chặn xoá đơn đã gộp PI" (remove()) - mặc định chưa gộp PI nào (0).
+        count: jest.fn().mockResolvedValue(0),
+        deleteMany: jest.fn(),
       },
 
-      planForm: { findFirst: jest.fn(), update: jest.fn() },
+      // 10/09: remove() gỡ liên kết (KHÔNG xoá) mọi PlanForm/SKU còn gắn vào đơn - mặc định chưa
+      // gắn SKU nào (mảng rỗng), test nào cần mô phỏng đã gắn tự override.
+      planForm: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+      },
       $queryRaw: jest.fn(),
+      // 10/09: remove() giờ bọc xoá cascade (productionInvoiceItem/salesOrderItem) +
+      // salesOrder.delete() trong 1 $transaction - test chạy callback thẳng với `prisma` (đủ vì
+      // các mock ở trên dùng chung namespace, không tách tx riêng).
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     service = new SalesOrdersService(prisma as unknown as PrismaServiceType);
   });
@@ -202,11 +241,185 @@ describe('SalesOrdersService', () => {
     });
   });
 
+  describe('update', () => {
+    // 10/09: update() cũng trả deleteBlockedReason đúng (không hardcode null) dù chỉ sửa
+    // attachmentName/note/depositConfirmed/isActive - các field này không ảnh hưởng gộp PI/giao
+    // hàng, nhưng response vẫn phải phản ánh đúng trạng thái deletable hiện tại của order.
+    it('deleteBlockedReason phản ánh đúng trạng thái đã gộp PI, không hardcode null', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.salesOrder.update.mockResolvedValue(orderWithItems());
+      prisma.productionInvoiceItem.count.mockResolvedValue(1);
+
+      const result = await service.update('10', { note: 'x' });
+      expect(result.deleteBlockedReason).toContain('gộp vào Phiếu sản xuất');
+    });
+  });
+
   describe('findOne', () => {
     it('throws 404 for a non-existent id', async () => {
       prisma.salesOrder.findUnique.mockResolvedValue(null);
 
       await expect(service.findOne('999')).rejects.toThrow(NotFoundException);
+    });
+
+    // 10/09: disable nút Xoá khi biết trước sẽ bị chặn - findOne() giờ trả deleteBlockedReason,
+    // dùng chung buildDeleteBlockReason() với remove() để không lệch nội dung/logic.
+    it('deleteBlockedReason = null khi chưa gộp PI và chưa giao hàng gì', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.productionInvoiceItem.count.mockResolvedValue(0);
+
+      const result = await service.findOne('10');
+      expect(result.deleteBlockedReason).toBeNull();
+    });
+
+    it('deleteBlockedReason có giá trị khi đã gộp vào 1 PI', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.productionInvoiceItem.count.mockResolvedValue(2);
+
+      const result = await service.findOne('10');
+      expect(result.deleteBlockedReason).toContain('gộp vào Phiếu sản xuất');
+    });
+
+    it('deleteBlockedReason có giá trị khi đã giao hàng một phần', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(
+        orderWithItems({
+          items: [
+            {
+              id: 100n,
+              salesOrderId: 10n,
+              mfgProductId: 2n,
+              mfgProduct: product,
+              skuName: 'Ghe A',
+              totalQty: 10,
+              shippedQty: 3,
+            },
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.count.mockResolvedValue(0);
+
+      const result = await service.findOne('10');
+      expect(result.deleteBlockedReason).toContain('đã giao hàng một phần');
+    });
+  });
+
+  describe('findAll', () => {
+    it('gộp deleteBlockedReason cho nhiều order qua đúng 1 query findMany, không count() riêng từng order (N+1)', async () => {
+      prisma.salesOrder.findMany.mockResolvedValue([
+        orderWithItems({ id: 10n, code: 'PO-10' }),
+        orderWithItems({ id: 20n, code: 'PO-20' }),
+      ]);
+      prisma.salesOrder.count.mockResolvedValue(2);
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        { salesOrderId: 10n, productionInvoice: null },
+      ]);
+
+      const result = await service.findAll({ page: 1, limit: 20, sortOrder: 'desc' } as never);
+
+      expect(result.data.find((o) => o.id === '10')?.deleteBlockedReason).toContain(
+        'gộp vào Phiếu sản xuất',
+      );
+      expect(result.data.find((o) => o.id === '20')?.deleteBlockedReason).toBeNull();
+      expect(prisma.productionInvoiceItem.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.productionInvoiceItem.count).not.toHaveBeenCalled();
+    });
+  });
+
+  // Đính chính audit toàn diện 09/09 (Trung bình/Bán hàng): remove() trước đây không kiểm tra gì -
+  // xoá được đơn đã gộp PI/đã giao hàng một phần, "biến mất" khỏi Sales trong khi nhà máy vẫn sản
+  // xuất/giao hàng theo đơn đó.
+  describe('remove', () => {
+    it('ném ConflictException khi đơn có dòng đã gộp vào 1 PI (productionInvoiceId != null)', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.productionInvoiceItem.count.mockResolvedValue(1);
+
+      await expect(service.remove('10')).rejects.toThrow(ConflictException);
+      expect(prisma.salesOrder.delete).not.toHaveBeenCalled();
+    });
+
+    it('ném ConflictException khi đơn có dòng đã giao hàng một phần (shippedQty > 0)', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(
+        orderWithItems({
+          items: [
+            {
+              id: 100n,
+              salesOrderId: 10n,
+              mfgProductId: 2n,
+              mfgProduct: product,
+              skuName: 'Ghe A',
+              totalQty: 10,
+              shippedQty: 3,
+            },
+          ],
+        }),
+      );
+
+      await expect(service.remove('10')).rejects.toThrow(ConflictException);
+      expect(prisma.salesOrder.delete).not.toHaveBeenCalled();
+    });
+
+    // 10/09: người dùng yêu cầu xoá PO phải cascade luôn ProductionInvoiceItem/SalesOrderItem sinh
+    // cùng lúc tạo PO - không để lại "dữ liệu sản xuất mồ côi không có PO đứng sau". An toàn vì
+    // guard ở trên đã đảm bảo productionInvoiceId = null cho mọi item (chưa gộp PI thật).
+    it('xoá bình thường: cascade xoá productionInvoiceItem + salesOrderItem + vỏ ProductionInvoice rỗng TRONG transaction trước khi hard-delete order thật', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(
+        orderWithItems({
+          items: [
+            {
+              id: 100n,
+              salesOrderId: 10n,
+              mfgProductId: 2n,
+              mfgProduct: product,
+              skuName: 'Ghe A',
+              totalQty: 10,
+              shippedQty: 0,
+            },
+          ],
+        }),
+      );
+
+      await service.remove('10');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.productionInvoice.deleteMany).toHaveBeenCalledWith({
+        where: { salesOrderId: 10n },
+      });
+      expect(prisma.productionInvoiceItem.deleteMany).toHaveBeenCalledWith({
+        where: { salesOrderId: 10n },
+      });
+      expect(prisma.salesOrderItem.deleteMany).toHaveBeenCalledWith({
+        where: { salesOrderId: 10n },
+      });
+      expect(prisma.salesOrder.delete).toHaveBeenCalledWith({ where: { id: 10n } });
+
+      // Thứ tự: mọi deleteMany PHẢI chạy trước salesOrder.delete (con trước cha).
+      const deleteOrderCallOrder = prisma.salesOrder.delete.mock.invocationCallOrder[0];
+      const piDeleteCallOrder = prisma.productionInvoice.deleteMany.mock.invocationCallOrder[0];
+      const piItemDeleteCallOrder =
+        prisma.productionInvoiceItem.deleteMany.mock.invocationCallOrder[0];
+      const orderItemDeleteCallOrder = prisma.salesOrderItem.deleteMany.mock.invocationCallOrder[0];
+      expect(piDeleteCallOrder).toBeLessThan(deleteOrderCallOrder);
+      expect(piItemDeleteCallOrder).toBeLessThan(deleteOrderCallOrder);
+      expect(orderItemDeleteCallOrder).toBeLessThan(deleteOrderCallOrder);
+    });
+
+    // 10/09: SKU (PlanForm) gắn sẵn vào đơn qua linkExistingSkus() KHÔNG bị xoá khi xoá PO - chỉ
+    // gỡ liên kết (salesOrderId = null), giữ nguyên dữ liệu độc lập của KHSX (định mức, lịch sử
+    // duyệt...). Bắt buộc phải gỡ vì SalesOrder giờ hard-delete thật - nếu không gỡ, Postgres sẽ
+    // chặn bởi lỗi khoá ngoại (PlanForm.salesOrderId vẫn trỏ về đơn sắp bị xoá).
+    it('gỡ liên kết (KHÔNG xoá) PlanForm/SKU còn gắn vào đơn trước khi hard-delete order', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.planForm.findMany.mockResolvedValue([{ id: 500n, salesOrderId: 10n }]);
+
+      await service.remove('10');
+
+      expect(prisma.planForm.update).toHaveBeenCalledWith({
+        where: { id: 500n },
+        data: { salesOrderId: null },
+      });
+      const skuUnlinkCallOrder = prisma.planForm.update.mock.invocationCallOrder[0];
+      const deleteOrderCallOrder = prisma.salesOrder.delete.mock.invocationCallOrder[0];
+      expect(skuUnlinkCallOrder).toBeLessThan(deleteOrderCallOrder);
     });
   });
 

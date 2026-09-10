@@ -17,6 +17,9 @@ export class SalesOrderResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) attachmentUrl!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) note!: string | null;
   @Expose() @ApiProperty() isActive!: boolean;
+  /** null = xoá được. Có giá trị = lý do không xoá được (đã gộp PI/đã giao hàng một phần) - dùng
+   *  thẳng làm message/tooltip, xem SalesOrdersService.buildDeleteBlockReason(). */
+  @Expose() @ApiPropertyOptional({ nullable: true }) deleteBlockedReason!: string | null;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;
   @Expose()
