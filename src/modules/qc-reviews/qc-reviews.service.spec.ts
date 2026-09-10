@@ -33,7 +33,6 @@ describe('QcReviewsService', () => {
   };
   let steelIssuesService: {
     findOneRowOrThrow: jest.Mock;
-    createReworkIssue: jest.Mock;
     syncIssueStatusFromBundles: jest.Mock;
   };
   let productionBatchesService: {
@@ -193,7 +192,6 @@ describe('QcReviewsService', () => {
     };
     steelIssuesService = {
       findOneRowOrThrow: jest.fn().mockResolvedValue(awaitingIssue),
-      createReworkIssue: jest.fn(),
       syncIssueStatusFromBundles: jest.fn(),
     };
     productionBatchesService = {

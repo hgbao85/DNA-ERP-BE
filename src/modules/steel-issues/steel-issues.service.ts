@@ -121,10 +121,16 @@ const STEEL_ISSUE_RESERVATION_CUTOVER = new Date('2026-08-18T00:00:00.000Z');
  * /steel-issues/:id/rework`, tách khỏi qc-review. Nhưng mô tả transition của chính qc-review
  * trong cùng tài liệu ("AWAITING_QC -> QC_PASSED hoặc -> RECEIVED tuỳ failedQty") mâu thuẫn với
  * việc có 1 rework issue MỚI (rework_of) - không rõ ràng dòng nào là dòng "còn dở". Đã bỏ hẳn
- * endpoint rework riêng, theo đúng hành vi mock đã validate qua UI (phoi-sat.service.ts
- * kcsDuyetPhoi): qc-review LUÔN đóng đợt gốc thành QC_PASSED, và tự sinh 1 SteelIssue con
- * (status RECEIVED, reworkOfId = đợt gốc) trong CÙNG transaction nếu có phần sửa được - xem
- * QcReviewsService.review().
+ * endpoint rework riêng.
+ *
+ * ĐÍNH CHÍNH 09/09/2026 (audit toàn diện): đoạn trên mô tả THIẾT KẾ GỐC, KHÔNG còn đúng với code
+ * hiện tại. `createReworkIssue()` (tự sinh SteelIssue con khi QC bắt sửa) đã bị bỏ khỏi
+ * QcReviewsService.review() từ commit "Fix phoi" (25/08/2026) khi luồng KCS chuyển hẳn sang chấm
+ * theo segments (QcReviewSegment + reportSegmentDone()/recheck()) - hàm đó đã bị xoá vì là code
+ * mồ côi, không còn endpoint/service nào gọi tới. Rework ở luồng hiện hành = người dùng tự tạo
+ * đợt/lô hoàn toàn mới qua API tạo bình thường, không có "rework issue" tự sinh riêng. Field
+ * `reworkOfId` trên model vẫn giữ (đang được dùng để lọc loại đợt rework cũ ra khỏi tính sản
+ * lượng/kế hoạch ở getIssuePlan() và các hàm liên quan) dù không còn ai ghi giá trị mới vào đó.
  */
 @Injectable()
 export class SteelIssuesService {
@@ -723,6 +729,12 @@ export class SteelIssuesService {
    * KHÔNG re-validate định mức ở đây (đã validate lúc recordStepBatch() tạo từng dòng) - việc DUY
    * NHẤT ở đây là gom + khoá lại các dòng đã gom, cùng khuôn
    * ProductionBatchesService.submitPieceStep() (VTTP).
+   *
+   * ĐÍNH CHÍNH 09/09/2026 (audit toàn diện, mục Thấp): trước đây thiếu lockBusinessKey nên 2 lượt
+   * "Gửi KCS" gần như đồng thời cho cùng (invoice, material, step) đều đọc cùng 1 danh sách pending
+   * rồi cùng tạo StepBundle riêng + updateMany gán stepBundleId không kiểm tra lại - đợt commit sau
+   * ghi đè đợt commit trước, để lại 1 StepBundle rỗng không có StepBatch nào. Vá bằng đúng khuôn
+   * lockBusinessKey mà submitPieceStep() (VTTP) đã làm đúng từ trước.
    */
   async submitStepBundle(
     productionInvoiceId: string,
@@ -735,6 +747,9 @@ export class SteelIssuesService {
     await assertPiHasActiveFloor(this.prisma, invoice.id, 'gửi KCS công đoạn');
 
     const created = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `step-bundle:${invoice.id}:${materialBigId}:${step}`);
+      await assertPiHasActiveFloorLocked(tx, invoice.id, 'gửi KCS công đoạn');
+
       const pending = await tx.stepBatch.findMany({
         where: {
           productionInvoiceId: invoice.id,
@@ -1410,34 +1425,6 @@ export class SteelIssuesService {
       result.set(key, [...set]);
     }
     return result;
-  }
-
-  /**
-   * Tạo đợt rework (reworkOfId = đợt gốc) - gọi từ QcReviewsService.review() SAU KHI transaction
-   * chính (tạo QcReview + đóng đợt gốc QC_PASSED) đã commit, cùng idiom
-   * WarehouseTransfersService.confirm() gọi StockLedgerService.postEntry() ngoài transaction
-   * riêng của nó (extended Prisma client không chia sẻ `tx` xuyên service gọn gàng). An toàn khi
-   * gọi lại: resolve-or-return theo reworkOfId - 1 đợt gốc chỉ sinh tối đa 1 đợt rework (đúng
-   * bất biến "KCS chỉ duyệt 1 lần/đợt", xem guard status AWAITING_QC ở review()).
-   */
-  async createReworkIssue(original: SteelIssueRow, barCount: number): Promise<void> {
-    const existing = await this.prisma.steelIssue.findFirst({
-      where: { reworkOfId: original.id },
-    });
-    if (existing) {
-      return;
-    }
-    await this.prisma.steelIssue.create({
-      data: {
-        productionInvoiceId: original.productionInvoiceId,
-        materialId: original.materialId,
-        barLengthMm: original.barLengthMm,
-        barCount,
-        status: SteelIssueStatus.RECEIVED,
-        issuedById: original.issuedById,
-        reworkOfId: original.id,
-      },
-    });
   }
 
   async findOneRowOrThrow(id: string): Promise<SteelIssueRow> {

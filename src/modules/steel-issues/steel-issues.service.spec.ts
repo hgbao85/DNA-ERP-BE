@@ -864,42 +864,6 @@ describe('SteelIssuesService', () => {
     });
   });
 
-  describe('createReworkIssue', () => {
-    it('tạo đợt rework mới khi chưa có', async () => {
-      prisma.steelIssue.findFirst.mockResolvedValue(null);
-
-      // Fixture chỉ cần đúng field scalar mà createReworkIssue() thực dùng
-      // (productionInvoiceId/materialId/barLengthMm/issuedById/id) - material/productionInvoice
-      // lồng nhau (SteelIssueRow đầy đủ) không cần thiết cho test này.
-      await service.createReworkIssue(
-        issue as unknown as Parameters<typeof service.createReworkIssue>[0],
-        5,
-      );
-
-      expect(prisma.steelIssue.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
-          data: expect.objectContaining({
-            reworkOfId: 100n,
-            barCount: 5,
-            status: SteelIssueStatus.RECEIVED,
-          }),
-        }),
-      );
-    });
-
-    it('bỏ qua (không tạo trùng) nếu đợt rework đã tồn tại - an toàn khi gọi lại', async () => {
-      prisma.steelIssue.findFirst.mockResolvedValue({ id: 200n, reworkOfId: 100n });
-
-      await service.createReworkIssue(
-        issue as unknown as Parameters<typeof service.createReworkIssue>[0],
-        5,
-      );
-
-      expect(prisma.steelIssue.create).not.toHaveBeenCalled();
-    });
-  });
-
   // Sửa 2026-09-05: getIssuePlan() giờ lấy "Cần" từ CuttingProposalLine (kết quả phần mềm tính cắt
   // sắt đã duyệt: totalBars/bestStockLengthMm) THAY VÌ định mức BOM - Mua hàng cũng mua theo đúng
   // số này nên "Cần" phải khớp. bomPiece/pieceBom không còn được getIssuePlan() dùng nữa.
@@ -1390,6 +1354,23 @@ describe('SteelIssuesService', () => {
         service.submitStepBundle('1', '30', ProcessStep.UON, 'user-phoi'),
       ).rejects.toThrow(ConflictException);
       expect(prisma.stepBundle.create).not.toHaveBeenCalled();
+    });
+
+    // Đính chính audit toàn diện 09/09 (mục Thấp): trước đây không khoá - 2 lượt "Gửi KCS" gần
+    // đồng thời cho cùng (invoice, material, step) đều đọc cùng danh sách pending, đều tạo
+    // StepBundle riêng, rồi updateMany gán stepBundleId không kiểm tra lại -> đợt commit sau ghi
+    // đè đợt commit trước, để lại 1 StepBundle rỗng. Vá bằng lockBusinessKey, mirror
+    // ProductionBatchesService.submitPieceStep() (VTTP, đã làm đúng từ trước).
+    it('khoá advisory theo (invoice, material, step) TRƯỚC khi đọc lại danh sách pending - chặn race giữa 2 lượt gửi KCS gần đồng thời', async () => {
+      prisma.stepBatch.findMany.mockResolvedValue(pendingBatches);
+      prisma.stepBundle.create.mockResolvedValue(createdStepBundle);
+
+      await service.submitStepBundle('1', '30', ProcessStep.UON, 'user-phoi');
+
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      const lockCallOrder = prisma.$executeRaw.mock.invocationCallOrder[0];
+      const readPendingCallOrder = prisma.stepBatch.findMany.mock.invocationCallOrder[0];
+      expect(lockCallOrder).toBeLessThan(readPendingCallOrder);
     });
 
     it('ném NotFoundException nếu PI không tồn tại', async () => {
