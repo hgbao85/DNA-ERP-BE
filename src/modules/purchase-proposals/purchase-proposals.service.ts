@@ -23,6 +23,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
+import { CloudinaryService } from '../uploads/cloudinary.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { recomputeProposalStatus } from './purchase-proposal-status.util';
@@ -34,6 +35,7 @@ import {
 } from './dto/purchase-proposal-response.dto';
 import { ListPurchaseProposalsQueryDto } from './dto/list-purchase-proposals-query.dto';
 import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
+import { UpdateApprovalFileDto } from './dto/update-approval-file.dto';
 
 /// Kho ảo cố định (protected-warehouse-codes.constant.ts) - nguồn của bút toán "nhập hàng mua
 /// về" khi Thủ kho xác nhận nhận hàng (xem receiveItem()).
@@ -134,6 +136,7 @@ export class PurchaseProposalsService {
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
     private readonly cls: ClsService<AppClsStore>,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   /**
@@ -276,6 +279,64 @@ export class PurchaseProposalsService {
       },
     });
     return this.findOne(id);
+  }
+
+  /**
+   * THAY hoặc XÓA HẲN `approvalFileUrl` khi lỡ upload nhầm file - 2026-09-11, sửa lại lần 2 cùng
+   * ngày (ban đầu chỉ cho thay, không cho xóa vì đọc doc comment schema "BẰNG CHỨNG DUY NHẤT" -
+   * nhưng RÀ LẠI: `receiveItem()` bên dưới KHÔNG hề đọc `approvalFileUrl` (chỉ dựa vào
+   * `item.status`), nên field này thuần là bằng chứng lịch sử, xóa không phá luồng nghiệp vụ nào).
+   * Chỉ đụng đúng `approvalFileUrl` của 1 item - không đổi status/approvedAt/approvedById (item vẫn
+   * giữ nguyên trạng thái, chỉ đổi bằng chứng đính kèm). KHÔNG nằm trong AUDITED_MODELS nên ghi tay
+   * qua `auditProposalDecision()` (đã dùng lại ở bossApprove() phía trên). Không rõ file cũ là
+   * 'image' hay 'raw' (Cloudinary) - `deleteByUrl()` best-effort, gọi cả 2 loại là an toàn
+   * (Cloudinary trả "not found" im lặng cho loại sai, không throw).
+   *
+   * 2026-09-11 lần 3 (theo Sếp Trương Văn Nhân: "cho người nhập được sửa luôn"): mở thêm cho
+   * CHÍNH người đã duyệt/đính kèm file này (`item.approvedById === actorUserId`), không chỉ
+   * ADMIN/BOSS (`isPrivilegedActor()` sẵn có) - route bỏ `@RequireRole(ADMIN)`, check chuyển vào
+   * service vì cần đọc dữ liệu record.
+   */
+  async updateApprovalFile(
+    id: string,
+    itemId: string,
+    dto: UpdateApprovalFileDto,
+    actorUserId: string,
+    actorRoles: string[],
+  ): Promise<PurchaseProposalItemResponseDto> {
+    const proposal = await this.findDetailOrThrow(id);
+    const bigItemId = parseBigIntId(itemId);
+    const item = proposal.items.find((it) => it.id === bigItemId);
+    if (!item) {
+      throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
+    }
+    if (item.approvedById !== actorUserId && !this.isPrivilegedActor(actorRoles)) {
+      throw new ForbiddenException('Chỉ người đã duyệt file này hoặc Admin/Sếp mới sửa được');
+    }
+    const oldUrl = item.approvalFileUrl;
+    // undefined (field bị bỏ qua trong body) coi như "xóa hẳn" - .update() phải luôn nhận 1 giá
+    // trị tường minh (null/string), khác Prisma vốn coi undefined = "đừng đụng field này".
+    const newUrl = dto.approvalFileUrl ?? null;
+
+    const updated = await this.prisma.purchaseProposalItem.update({
+      where: { id: bigItemId },
+      data: { approvalFileUrl: newUrl },
+      include: ITEM_INCLUDE,
+    });
+
+    await this.auditProposalDecision({
+      action: AuditAction.UPDATE,
+      proposalId: proposal.id,
+      oldValue: { itemId: itemId, approvalFileUrl: oldUrl },
+      newValue: { itemId: itemId, approvalFileUrl: newUrl },
+    });
+
+    if (oldUrl && oldUrl !== newUrl) {
+      await this.cloudinaryService.deleteByUrl(oldUrl, 'raw');
+      await this.cloudinaryService.deleteByUrl(oldUrl, 'image');
+    }
+
+    return this.toItemResponseDto(updated);
   }
 
   /**

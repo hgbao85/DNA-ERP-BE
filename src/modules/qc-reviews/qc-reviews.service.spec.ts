@@ -1,8 +1,14 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchStatus, SteelIssueStatus } from '../../generated/prisma/client';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
+import { CloudinaryService } from '../uploads/cloudinary.service';
 import { QcReviewsService } from './qc-reviews.service';
 
 const decimal = (n: number) => ({ toNumber: () => n, toString: () => String(n) });
@@ -15,6 +21,7 @@ describe('QcReviewsService', () => {
       findMany: jest.Mock;
       count: jest.Mock;
       findFirst: jest.Mock;
+      findUnique: jest.Mock;
       findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
     };
@@ -40,6 +47,7 @@ describe('QcReviewsService', () => {
     findOnePieceStepBundleRowOrThrow: jest.Mock;
     autoFinalizePieceOutputIfLastStepComplete: jest.Mock;
   };
+  let cloudinaryService: { deleteByUrl: jest.Mock };
 
   const awaitingIssue = {
     id: 100n,
@@ -143,6 +151,7 @@ describe('QcReviewsService', () => {
         findMany: jest.fn(),
         count: jest.fn(),
         findFirst: jest.fn(),
+        findUnique: jest.fn(),
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
       },
@@ -199,10 +208,12 @@ describe('QcReviewsService', () => {
       findOnePieceStepBundleRowOrThrow: jest.fn().mockResolvedValue(awaitingBundle),
       autoFinalizePieceOutputIfLastStepComplete: jest.fn().mockResolvedValue(undefined),
     };
+    cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
     service = new QcReviewsService(
       prisma as unknown as PrismaServiceType,
       steelIssuesService as unknown as SteelIssuesService,
       productionBatchesService as unknown as ProductionBatchesService,
+      cloudinaryService as unknown as CloudinaryService,
     );
   });
 
@@ -655,6 +666,103 @@ describe('QcReviewsService', () => {
       expect(
         productionBatchesService.autoFinalizePieceOutputIfLastStepComplete,
       ).not.toHaveBeenCalled();
+    });
+  });
+
+  // Sửa/xóa CHỈ photoUrl - mở cho CHÍNH người đã chấm review (reviewedById) HOẶC Admin, xem doc
+  // comment updatePhoto()/UpdateQcReviewPhotoDto (2026-09-11 lần 2, theo Sếp: "cho người nhập được
+  // sửa luôn"). actorUserId/actorRoles giờ là tham số bắt buộc.
+  describe('updatePhoto', () => {
+    it('người ĐÃ CHẤM review này tự sửa được ảnh, xóa ảnh cũ trên Cloudinary khi bị thay bằng ảnh khác', async () => {
+      prisma.qcReview.findUnique.mockResolvedValue({
+        id: 1n,
+        photoUrl: 'https://old.jpg',
+        reviewedById: 'user-kcs',
+      });
+      prisma.qcReview.update.mockResolvedValue({
+        ...qcReview,
+        photoUrl: 'https://new.jpg',
+      });
+
+      const result = await service.updatePhoto('1', { photoUrl: 'https://new.jpg' }, 'user-kcs', [
+        'KCS_STAFF',
+      ]);
+
+      expect(prisma.qcReview.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 1n },
+          data: { photoUrl: 'https://new.jpg' },
+        }),
+      );
+      expect(cloudinaryService.deleteByUrl).toHaveBeenCalledWith('https://old.jpg');
+      expect(result.photoUrl).toBe('https://new.jpg');
+    });
+
+    it('ADMIN sửa được ảnh của review do NGƯỜI KHÁC chấm', async () => {
+      prisma.qcReview.findUnique.mockResolvedValue({
+        id: 1n,
+        photoUrl: 'https://old.jpg',
+        reviewedById: 'user-kcs',
+      });
+      prisma.qcReview.update.mockResolvedValue({ ...qcReview, photoUrl: 'https://new.jpg' });
+
+      await service.updatePhoto('1', { photoUrl: 'https://new.jpg' }, 'user-admin', ['ADMIN']);
+
+      expect(prisma.qcReview.update).toHaveBeenCalled();
+    });
+
+    it('ném ForbiddenException nếu KHÔNG phải người đã chấm review này và KHÔNG phải Admin', async () => {
+      prisma.qcReview.findUnique.mockResolvedValue({
+        id: 1n,
+        photoUrl: 'https://old.jpg',
+        reviewedById: 'user-kcs',
+      });
+
+      await expect(
+        service.updatePhoto('1', { photoUrl: 'https://new.jpg' }, 'user-kcs-khac', ['KCS_STAFF']),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.qcReview.update).not.toHaveBeenCalled();
+    });
+
+    it('xóa hẳn photoUrl (null) và vẫn dọn ảnh cũ trên Cloudinary', async () => {
+      prisma.qcReview.findUnique.mockResolvedValue({
+        id: 1n,
+        photoUrl: 'https://old.jpg',
+        reviewedById: 'user-kcs',
+      });
+      prisma.qcReview.update.mockResolvedValue({ ...qcReview, photoUrl: null });
+
+      await service.updatePhoto('1', { photoUrl: null }, 'user-kcs', ['KCS_STAFF']);
+
+      expect(prisma.qcReview.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 1n },
+          data: { photoUrl: null },
+        }),
+      );
+      expect(cloudinaryService.deleteByUrl).toHaveBeenCalledWith('https://old.jpg');
+    });
+
+    it('KHÔNG gọi Cloudinary nếu chưa từng có ảnh cũ', async () => {
+      prisma.qcReview.findUnique.mockResolvedValue({
+        id: 1n,
+        photoUrl: null,
+        reviewedById: 'user-kcs',
+      });
+      prisma.qcReview.update.mockResolvedValue({ ...qcReview, photoUrl: 'https://new.jpg' });
+
+      await service.updatePhoto('1', { photoUrl: 'https://new.jpg' }, 'user-kcs', ['KCS_STAFF']);
+
+      expect(cloudinaryService.deleteByUrl).not.toHaveBeenCalled();
+    });
+
+    it('ném NotFoundException nếu review không tồn tại', async () => {
+      prisma.qcReview.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updatePhoto('999', { photoUrl: null }, 'user-admin', ['ADMIN']),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.qcReview.update).not.toHaveBeenCalled();
     });
   });
 });

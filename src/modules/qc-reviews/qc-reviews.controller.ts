@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -8,10 +8,12 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { CreateQcReviewDto } from './dto/create-qc-review.dto';
 import { CreateSteelIssueQcReviewDto } from './dto/create-steel-issue-qc-review.dto';
 import { ListQcReviewsQueryDto } from './dto/list-qc-reviews-query.dto';
+import { UpdateQcReviewPhotoDto } from './dto/update-qc-review-photo.dto';
 import { QcReviewsService } from './qc-reviews.service';
 
 const VIEW = { module: PERMISSION_MODULES.QC_REVIEW, action: PermissionAction.VIEW };
 const CREATE = { module: PERMISSION_MODULES.QC_REVIEW, action: PermissionAction.CREATE };
+const UPDATE = { module: PERMISSION_MODULES.QC_REVIEW, action: PermissionAction.UPDATE };
 
 @ApiTags('QC Reviews')
 @ApiBearerAuth()
@@ -88,5 +90,26 @@ export class QcReviewsController {
   @RequirePermissions(VIEW)
   findAll(@Query() query: ListQcReviewsQueryDto) {
     return this.qcReviewsService.findAll(query);
+  }
+
+  /**
+   * Sửa/xóa ảnh bằng chứng khi lỡ chọn nhầm - 2026-09-11 lần 2 (theo Sếp Trương Văn Nhân: "cho
+   * người nhập được sửa luôn"), mở cho CHÍNH người đã chấm review này, KHÔNG chỉ ADMIN như thiết
+   * kế ban đầu. Bỏ hẳn `@RequireRole(ADMIN)`/`@RequireMfgRole(KCS)` - quyết định "actor này có phải
+   * người nhập hay Admin không" cần đọc dữ liệu record (reviewedById) nên chuyển vào
+   * QcReviewsService.updatePhoto(), decorator tĩnh không làm được. `@RequirePermissions(UPDATE)`
+   * vẫn giữ - KCS_STAFF đã có QC_REVIEW:UPDATE sẵn (role-permissions.constant.ts), không cần cấp
+   * thêm. CHỈ sửa được photoUrl - xem doc comment QcReviewsService.updatePhoto()/
+   * UpdateQcReviewPhotoDto.
+   */
+  @Patch('qc-reviews/:id/photo')
+  @RequirePermissions(UPDATE)
+  updatePhoto(
+    @Param('id') id: string,
+    @Body() dto: UpdateQcReviewPhotoDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.qcReviewsService.updatePhoto(id, dto, userId, roles);
   }
 }

@@ -113,14 +113,32 @@ describe('CloudinaryService', () => {
   });
 
   describe('deleteByUrl - best-effort, never throws', () => {
-    it('extracts the public_id from a real Cloudinary URL and destroys it', async () => {
+    it('extracts the public_id from a real Cloudinary URL and destroys it (resource_type=image default)', async () => {
       mockedCloudinary.uploader.destroy.mockResolvedValue({ result: 'ok' });
 
       await service.deleteByUrl(
         'https://res.cloudinary.com/demo/image/upload/v1690000000/dna-erp/abc123.jpg',
       );
 
-      expect(mockedCloudinary.uploader.destroy).toHaveBeenCalledWith('dna-erp/abc123');
+      expect(mockedCloudinary.uploader.destroy).toHaveBeenCalledWith('dna-erp/abc123', {
+        resource_type: 'image',
+      });
+    });
+
+    // 2026-09-11 - trước bản vá này, public_id 'raw' bị cắt nhầm phần mở rộng (dùng chung regex
+    // 'image') và destroy() không truyền resource_type nên SDK mặc định 'image' - Cloudinary âm
+    // thầm trả { result: 'not found' }, file PDF/Excel không bao giờ bị xóa thật.
+    it('keeps the file extension in the public_id and passes resource_type=raw for raw files', async () => {
+      mockedCloudinary.uploader.destroy.mockResolvedValue({ result: 'ok' });
+
+      await service.deleteByUrl(
+        'https://res.cloudinary.com/demo/raw/upload/v1690000000/dna-erp/approvals/ky.pdf',
+        'raw',
+      );
+
+      expect(mockedCloudinary.uploader.destroy).toHaveBeenCalledWith('dna-erp/approvals/ky.pdf', {
+        resource_type: 'raw',
+      });
     });
 
     it('no-ops when the URL does not match the Cloudinary upload shape', async () => {

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
@@ -14,6 +15,7 @@ import {
   SteelIssueStatus,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
+import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import {
   assertOrderPiHasActiveFloor,
   assertPiHasActiveFloor,
@@ -23,10 +25,12 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
+import { CloudinaryService } from '../uploads/cloudinary.service';
 import { CreateQcReviewDto } from './dto/create-qc-review.dto';
 import { CreateSteelIssueQcReviewDto } from './dto/create-steel-issue-qc-review.dto';
 import { ListQcReviewsQueryDto } from './dto/list-qc-reviews-query.dto';
 import { QcReviewResponseDto, QcReviewSegmentResponseDto } from './dto/qc-review-response.dto';
+import { UpdateQcReviewPhotoDto } from './dto/update-qc-review-photo.dto';
 
 const QC_REVIEW_INCLUDE = {
   defectReason: true,
@@ -51,6 +55,7 @@ export class QcReviewsService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly steelIssuesService: SteelIssuesService,
     private readonly productionBatchesService: ProductionBatchesService,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   /**
@@ -507,6 +512,48 @@ export class QcReviewsService {
     });
 
     return this.toResponseDto(created);
+  }
+
+  /**
+   * Sửa/xóa CHỈ `photoUrl` của 1 QcReview đã tồn tại - dùng khi KCS lỡ chọn nhầm ảnh (vd bug cũ ở
+   * kcsCore.tsx upload nhầm lên URL mock, xem changelog audit-upload-file). QcReview đã nằm trong
+   * AUDITED_MODELS (audit-log.extension.ts) nên `.update()` dưới đây TỰ ghi AuditLog (before/after,
+   * actor, ip) - không cần ghi tay. failedQty/reason/defectReasonId/reviewedAt/reviewedById BẤT
+   * BIẾN, không đụng tới.
+   *
+   * 2026-09-11 lần 2 (theo Sếp Trương Văn Nhân, hỏi qua chat nội bộ "ai được quyền sửa" - trả lời
+   * "cho người nhập được sửa luôn"): mở thêm cho CHÍNH người đã tạo review này
+   * (`reviewedById === actorUserId`), KHÔNG chỉ ADMIN như thiết kế ban đầu - route bỏ
+   * `@RequireRole(ADMIN)`, actor/role check chuyển vào service vì cần đọc dữ liệu record (biết ai
+   * là người nhập) mới quyết được, decorator tĩnh không làm được.
+   */
+  async updatePhoto(
+    id: string,
+    dto: UpdateQcReviewPhotoDto,
+    actorUserId: string,
+    actorRoles: string[],
+  ): Promise<QcReviewResponseDto> {
+    const bigId = parseBigIntId(id);
+    const existing = await this.prisma.qcReview.findUnique({ where: { id: bigId } });
+    if (!existing) {
+      throw new NotFoundException(`QC review ${id} not found`);
+    }
+    if (existing.reviewedById !== actorUserId && !actorRoles.includes(DEFAULT_ROLES.ADMIN)) {
+      throw new ForbiddenException('Chỉ người đã chấm review này hoặc Admin mới sửa được ảnh');
+    }
+    const newPhotoUrl = dto.photoUrl ?? null;
+
+    const updated = await this.prisma.qcReview.update({
+      where: { id: bigId },
+      data: { photoUrl: newPhotoUrl },
+      include: QC_REVIEW_INCLUDE,
+    });
+
+    if (existing.photoUrl && existing.photoUrl !== newPhotoUrl) {
+      await this.cloudinaryService.deleteByUrl(existing.photoUrl);
+    }
+
+    return this.toResponseDto(updated);
   }
 
   async findAll(query: ListQcReviewsQueryDto): Promise<Paginated<QcReviewResponseDto>> {

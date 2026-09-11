@@ -3,8 +3,12 @@ import { ConfigService } from '@nestjs/config';
 import { v2 as cloudinary } from 'cloudinary';
 import { AppConfig } from '../../config/configuration';
 
-/** Khớp URL dạng .../upload/[v<version>/]<public_id>.<ext> mà uploadBuffer() tạo ra. */
+/** Khớp URL dạng .../upload/[v<version>/]<public_id>.<ext> mà uploadBuffer() tạo ra (resource_type
+ *  'image' - Cloudinary tự bỏ phần mở rộng khỏi public_id cho ảnh). */
 const PUBLIC_ID_FROM_URL = /\/upload\/(?:v\d+\/)?(.+)\.[a-zA-Z0-9]+$/;
+/** Cùng URL nhưng cho resource_type 'raw' (PDF/Excel) - Cloudinary GIỮ NGUYÊN phần mở rộng trong
+ *  public_id cho loại 'raw', khác hẳn 'image' ở trên - không được cắt đuôi như nhánh ảnh. */
+const PUBLIC_ID_FROM_URL_RAW = /\/upload\/(?:v\d+\/)?(.+)$/;
 
 /**
  * Upload buffer lên Cloudinary. Không cấu hình lưu tạm ra đĩa (memoryStorage ở
@@ -58,19 +62,22 @@ export class CloudinaryService {
    * KHÔNG throw: lỗi ở đây (Cloudinary down, URL không thuộc Cloudinary, ảnh đã bị xóa sẵn...)
    * không được phép chặn thao tác chính (update/xóa vật tư) đang gọi hàm này.
    *
-   * CHỈ DÙNG ĐƯỢC CHO resource_type='image'. File 'raw' (PDF/Excel qua /uploads/document) sẽ
-   * KHÔNG xoá được và thất bại IM LẶNG vì 2 lý do: (1) regex trên cắt mất phần mở rộng, mà
-   * public_id của 'raw' lại BAO GỒM nó; (2) destroy() không truyền resource_type nên SDK mặc
-   * định 'image'. Cloudinary trả { result: 'not found' } chứ không throw nên catch bên dưới
-   * cũng không log gì. Chưa vá vì hiện không có đường xoá/thay file duyệt - ai cần xoá file
-   * 'raw' sau này phải sửa cả 2 điểm trên trước.
+   * `resourceType` mặc định 'image' - giữ nguyên hành vi cũ cho mọi lời gọi sẵn có (Material/SKU/
+   * QcReview...). Truyền 'raw' cho file PDF/Excel (POST /uploads/document, vd
+   * PurchaseProposalItem.approvalFileUrl) - 2026-09-11, vá lại theo đúng 2 điểm mà bản trước tự ghi
+   * chú "chưa vá": (1) public_id của 'raw' BAO GỒM cả phần mở rộng (không cắt như nhánh 'image'),
+   * (2) destroy() giờ truyền đúng resource_type thay vì để SDK mặc định 'image' - trước đây gọi sai
+   * loại khiến Cloudinary âm thầm trả { result: 'not found' }, không xóa được gì.
    */
-  async deleteByUrl(url: string): Promise<void> {
-    const publicId = PUBLIC_ID_FROM_URL.exec(url)?.[1];
+  async deleteByUrl(url: string, resourceType: 'image' | 'raw' = 'image'): Promise<void> {
+    const publicId =
+      resourceType === 'raw'
+        ? PUBLIC_ID_FROM_URL_RAW.exec(url)?.[1]
+        : PUBLIC_ID_FROM_URL.exec(url)?.[1];
     if (!publicId) return;
 
     try {
-      await cloudinary.uploader.destroy(publicId);
+      await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Không xóa được ảnh Cloudinary "${publicId}": ${reason}`);

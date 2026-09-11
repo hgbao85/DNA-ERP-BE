@@ -13,6 +13,7 @@ import {
   PurchaseProposalStatus,
 } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { CloudinaryService } from '../uploads/cloudinary.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PurchaseProposalsService } from './purchase-proposals.service';
@@ -50,6 +51,7 @@ describe('PurchaseProposalsService', () => {
   let stockLedgerService: { postEntry: jest.Mock };
   let stockReservationsService: { creditPool: jest.Mock };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
+  let cloudinaryService: { deleteByUrl: jest.Mock };
 
   const material = (overrides: Record<string, unknown> = {}) => ({
     code: 'SAT-25',
@@ -205,11 +207,13 @@ describe('PurchaseProposalsService', () => {
     stockLedgerService = { postEntry: jest.fn() };
     stockReservationsService = { creditPool: jest.fn() };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
+    cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
     service = new PurchaseProposalsService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
       cls as unknown as ClsService<AppClsStore>,
+      cloudinaryService as unknown as CloudinaryService,
     );
   });
 
@@ -1336,6 +1340,159 @@ describe('PurchaseProposalsService', () => {
       ).rejects.toThrow(ConflictException);
       expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+  });
+
+  // Admin-override (2026-09-11, sửa lại lần 2 cùng ngày - cho phép XÓA HẲN, xem doc comment
+  // updateApprovalFile()/UpdateApprovalFileDto vì sao đổi ý) - THAY hoặc XÓA approvalFileUrl khi lỡ
+  // upload nhầm file.
+  describe('updateApprovalFile', () => {
+    const OLD_FILE = 'https://res.cloudinary.com/x/image/upload/v1/dna-erp/approvals/old.jpg';
+    const NEW_FILE = 'https://res.cloudinary.com/x/image/upload/v1/dna-erp/approvals/new.jpg';
+
+    it('cập nhật approvalFileUrl, ghi audit tay và dọn file cũ trên Cloudinary (cả 2 resourceType)', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ id: 400n, approvalFileUrl: OLD_FILE })] }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ id: 400n, approvalFileUrl: NEW_FILE }),
+      );
+
+      const result = await service.updateApprovalFile(
+        '300',
+        '400',
+        {
+          approvalFileUrl: NEW_FILE,
+        },
+        'user-admin',
+        ['ADMIN'],
+      );
+
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 400n },
+          data: { approvalFileUrl: NEW_FILE },
+        }),
+      );
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          data: expect.objectContaining({ tableName: 'PurchaseProposalItem', recordId: '300' }),
+        }),
+      );
+      expect(cloudinaryService.deleteByUrl).toHaveBeenCalledWith(OLD_FILE, 'raw');
+      expect(cloudinaryService.deleteByUrl).toHaveBeenCalledWith(OLD_FILE, 'image');
+      expect(result.approvalFileUrl).toBe(NEW_FILE);
+    });
+
+    it('KHÔNG gọi Cloudinary nếu chưa từng có file cũ', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ id: 400n, approvalFileUrl: null })] }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ id: 400n, approvalFileUrl: NEW_FILE }),
+      );
+
+      await service.updateApprovalFile('300', '400', { approvalFileUrl: NEW_FILE }, 'user-admin', [
+        'ADMIN',
+      ]);
+
+      expect(cloudinaryService.deleteByUrl).not.toHaveBeenCalled();
+    });
+
+    it('ném NotFoundException nếu item không thuộc đề xuất', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ id: 400n })] }),
+      );
+
+      await expect(
+        service.updateApprovalFile('300', '999', { approvalFileUrl: NEW_FILE }, 'user-admin', [
+          'ADMIN',
+        ]),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+    });
+
+    it('xóa hẳn (approvalFileUrl: null) - vẫn cập nhật, ghi audit và dọn file cũ trên Cloudinary', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ id: 400n, approvalFileUrl: OLD_FILE })] }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ id: 400n, approvalFileUrl: null }),
+      );
+
+      const result = await service.updateApprovalFile(
+        '300',
+        '400',
+        { approvalFileUrl: null },
+        'user-admin',
+        ['ADMIN'],
+      );
+
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 400n },
+          data: { approvalFileUrl: null },
+        }),
+      );
+      expect(cloudinaryService.deleteByUrl).toHaveBeenCalledWith(OLD_FILE, 'raw');
+      expect(cloudinaryService.deleteByUrl).toHaveBeenCalledWith(OLD_FILE, 'image');
+      expect(result.approvalFileUrl).toBeNull();
+    });
+
+    it('body không gửi approvalFileUrl (undefined) cũng coi như xóa hẳn, không phải "giữ nguyên"', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ id: 400n, approvalFileUrl: OLD_FILE })] }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ id: 400n, approvalFileUrl: null }),
+      );
+
+      await service.updateApprovalFile('300', '400', {}, 'user-admin', ['ADMIN']);
+
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { approvalFileUrl: null } }),
+      );
+    });
+
+    it('người ĐÃ DUYỆT file này tự sửa được, không cần ADMIN/BOSS', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [item({ id: 400n, approvalFileUrl: OLD_FILE, approvedById: 'user-mua-hang' })],
+        }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ id: 400n, approvalFileUrl: NEW_FILE, approvedById: 'user-mua-hang' }),
+      );
+
+      await service.updateApprovalFile(
+        '300',
+        '400',
+        { approvalFileUrl: NEW_FILE },
+        'user-mua-hang',
+        ['PURCHASER'],
+      );
+
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalled();
+    });
+
+    it('ném ForbiddenException nếu KHÔNG phải người đã duyệt file này và KHÔNG phải Admin/Sếp', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [item({ id: 400n, approvalFileUrl: OLD_FILE, approvedById: 'user-mua-hang' })],
+        }),
+      );
+
+      await expect(
+        service.updateApprovalFile(
+          '300',
+          '400',
+          { approvalFileUrl: NEW_FILE },
+          'user-mua-hang-khac',
+          ['PURCHASER'],
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
     });
   });
 });

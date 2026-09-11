@@ -4,6 +4,7 @@ import {
   Get,
   Headers,
   Param,
+  Patch,
   Post,
   Body,
   Query,
@@ -16,6 +17,7 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { BossApprovePurchaseProposalDto } from './dto/boss-approve-purchase-proposal.dto';
 import { ListPurchaseProposalsQueryDto } from './dto/list-purchase-proposals-query.dto';
 import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
+import { UpdateApprovalFileDto } from './dto/update-approval-file.dto';
 import { PurchaseProposalsService } from './purchase-proposals.service';
 
 const VIEW = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.VIEW };
@@ -62,6 +64,24 @@ export class PurchaseProposalsController {
     @CurrentUser('roles') roles: string[],
   ) {
     return this.purchaseProposalsService.bossApprove(id, userId, roles, dto);
+  }
+
+  /**
+   * THAY hoặc XÓA HẲN file duyệt của Sếp khi lỡ upload nhầm - 2026-09-11 lần 2 (theo Sếp: "cho
+   * người nhập được sửa luôn"), mở cho CHÍNH người đã duyệt file này, không chỉ ADMIN/BOSS - bỏ
+   * `@RequireRole(ADMIN)`, check chuyển vào service vì cần đọc dữ liệu record (approvedById).
+   * `@RequirePermissions(UPDATE)` giữ nguyên - PURCHASER đã có PURCHASE_PROPOSAL:UPDATE sẵn.
+   */
+  @Patch(':id/items/:itemId/approval-file')
+  @RequirePermissions(UPDATE)
+  updateApprovalFile(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: UpdateApprovalFileDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.purchaseProposalsService.updateApprovalFile(id, itemId, dto, userId, roles);
   }
 
   @Post(':id/items/:itemId/receive')

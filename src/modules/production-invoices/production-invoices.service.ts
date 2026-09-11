@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   Logger,
@@ -18,6 +19,7 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
 import { assertPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -26,6 +28,7 @@ import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
+import { CloudinaryService } from '../uploads/cloudinary.service';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
@@ -36,8 +39,10 @@ import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-
 import { ProductionInvoiceResponseDto } from './dto/production-invoice-response.dto';
 import { RecordPackagingDto } from './dto/record-packaging.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
+import { TransferCheckDefectResponseDto } from './dto/transfer-check-defect-response.dto';
 import { TransferCheckPieceResponseDto } from './dto/transfer-check-piece-response.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
+import { UpdateTransferCheckDefectPhotoDto } from './dto/update-transfer-check-defect-photo.dto';
 import {
   ProdItemStageInputDto,
   UpdateProductionInvoiceItemDto,
@@ -103,6 +108,7 @@ export class ProductionInvoicesService {
     private readonly pieceMaterialYieldPurchaseService: PieceMaterialYieldPurchaseService,
     private readonly consumableMaterialPurchaseService: ConsumableMaterialPurchaseService,
     private readonly cls: ClsService<AppClsStore>,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   /**
@@ -1455,6 +1461,111 @@ export class ProductionInvoicesService {
 
     const pieces = await this.listTransferCheckPieces(piId, itemId);
     return pieces.find((p) => p.pieceId === dto.pieceId)!;
+  }
+
+  /**
+   * Admin quản lý ảnh lỗi (2026-09-11) - liệt kê PHẲNG mọi TransferCheckDefect có ảnh, không theo
+   * từng item/PI (khác listTransferCheckPieces ở trên, dùng cho màn nghiệp vụ theo đúng 1 item).
+   * Chấp nhận trả ID thô (productionInvoiceItemId/pieceId), không join sang tên PI/SKU - xem doc
+   * comment TransferCheckDefectResponseDto.
+   */
+  async listTransferCheckDefects(
+    query: PaginationQueryDto,
+  ): Promise<Paginated<TransferCheckDefectResponseDto>> {
+    const where: Prisma.TransferCheckDefectWhereInput = { imageUrl: { not: null } };
+    const result = await paginate(
+      {
+        findMany: (args) =>
+          this.prisma.transferCheckDefect.findMany({
+            ...args,
+            include: { transferCheckResult: true },
+          }),
+        count: (args) => this.prisma.transferCheckDefect.count(args),
+      },
+      query,
+      where,
+      { id: 'desc' as const },
+    );
+    return {
+      data: result.data.map(
+        (d) =>
+          new TransferCheckDefectResponseDto({
+            id: d.id.toString(),
+            transferCheckResultId: d.transferCheckResultId.toString(),
+            productionInvoiceItemId: d.transferCheckResult.productionInvoiceItemId.toString(),
+            pieceId: d.transferCheckResult.pieceId.toString(),
+            reason: d.reason,
+            imageUrl: d.imageUrl,
+            checkedById: d.transferCheckResult.checkedById,
+            checkedAt: d.transferCheckResult.checkedAt,
+          }),
+      ),
+      meta: result.meta,
+    };
+  }
+
+  /**
+   * Sửa/xóa CHỈ `imageUrl` của 1 TransferCheckDefect - cùng lý do/cùng ràng buộc
+   * QcReviewsService.updatePhoto() (xem doc comment UpdateTransferCheckDefectPhotoDto).
+   * TransferCheckDefect KHÔNG nằm trong AUDITED_MODELS (dòng con, append-only - xem
+   * audit-log.extension.ts) nên phải tự ghi `writeAuditLog()`, cùng pattern
+   * auditItemApprovalTransition() ở trên.
+   *
+   * 2026-09-11 lần 2 (theo Sếp Trương Văn Nhân: "cho người nhập được sửa luôn"): mở thêm cho
+   * CHÍNH người đã ghi lần kiểm này (`transferCheckResult.checkedById === actorUserId`), KHÔNG chỉ
+   * ADMIN - route bỏ `@RequireRole(ADMIN)`, check chuyển vào service vì cần đọc dữ liệu record.
+   */
+  async updateTransferCheckDefectPhoto(
+    id: string,
+    dto: UpdateTransferCheckDefectPhotoDto,
+    actorUserId: string,
+    actorRoles: string[],
+  ): Promise<TransferCheckDefectResponseDto> {
+    const bigId = parseBigIntId(id);
+    const existing = await this.prisma.transferCheckDefect.findUnique({
+      where: { id: bigId },
+      include: { transferCheckResult: true },
+    });
+    if (!existing) {
+      throw new NotFoundException(`Lỗi kiểm chuyển kho ${id} not found`);
+    }
+    if (
+      existing.transferCheckResult.checkedById !== actorUserId &&
+      !actorRoles.includes(DEFAULT_ROLES.ADMIN)
+    ) {
+      throw new ForbiddenException('Chỉ người đã ghi lần kiểm này hoặc Admin mới sửa được ảnh');
+    }
+    const newImageUrl = dto.imageUrl ?? null;
+
+    const updated = await this.prisma.transferCheckDefect.update({
+      where: { id: bigId },
+      data: { imageUrl: newImageUrl },
+      include: { transferCheckResult: true },
+    });
+
+    const auditLogClient = this.prisma as unknown as Pick<PrismaClient, 'auditLog'>;
+    await writeAuditLog(auditLogClient, this.cls, {
+      action: AuditAction.UPDATE,
+      tableName: 'TransferCheckDefect',
+      recordId: id,
+      oldValue: { imageUrl: existing.imageUrl },
+      newValue: { imageUrl: newImageUrl },
+    });
+
+    if (existing.imageUrl && existing.imageUrl !== newImageUrl) {
+      await this.cloudinaryService.deleteByUrl(existing.imageUrl);
+    }
+
+    return new TransferCheckDefectResponseDto({
+      id: updated.id.toString(),
+      transferCheckResultId: updated.transferCheckResultId.toString(),
+      productionInvoiceItemId: updated.transferCheckResult.productionInvoiceItemId.toString(),
+      pieceId: updated.transferCheckResult.pieceId.toString(),
+      reason: updated.reason,
+      imageUrl: updated.imageUrl,
+      checkedById: updated.transferCheckResult.checkedById,
+      checkedAt: updated.transferCheckResult.checkedAt,
+    });
   }
 
   // ─── Đóng gói (PACKAGING) - mirror TransferCheckResult (append-only, SUM-on-read) nhưng đơn

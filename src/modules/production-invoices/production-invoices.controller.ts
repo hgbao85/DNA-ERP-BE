@@ -27,6 +27,7 @@ import { SendBatchDto, SendBatchToBossDto } from './dto/send-batch.dto';
 import { SendToBossDto } from './dto/send-to-boss.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
 import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
+import { UpdateTransferCheckDefectPhotoDto } from './dto/update-transfer-check-defect-photo.dto';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 
@@ -320,6 +321,36 @@ export class ProductionInvoicesController {
     @CurrentUser('id') userId: string,
   ) {
     return this.productionInvoicesService.recordTransferCheck(id, itemId, dto, userId);
+  }
+
+  /**
+   * Admin quản lý ảnh lỗi kiểm chuyển kho (2026-09-11) - liệt kê PHẲNG toàn hệ thống, KHÔNG theo
+   * item/PI. Path 2 segment 'transfer-check/defects' - CỐ Ý không dùng 1 segment
+   * 'transfer-check-defects': @Get(':id') (findOne, khai TRƯỚC ở trên) sẽ nuốt mất bất kỳ path 1
+   * segment nào thành id (đúng bug đã tự ghi chú ở 'transfer-check/batch' bên dưới) - 2 segment
+   * không khớp pattern ':id' nên an toàn bất kể thứ tự khai báo.
+   */
+  @Get('transfer-check/defects')
+  @RequirePermissions(VIEW)
+  listTransferCheckDefects(@Query() query: PaginationQueryDto) {
+    return this.productionInvoicesService.listTransferCheckDefects(query);
+  }
+
+  /**
+   * Sửa/xóa ảnh - 2026-09-11 lần 2 (theo Sếp: "cho người nhập được sửa luôn"), mở cho CHÍNH người
+   * đã ghi lần kiểm này, không chỉ ADMIN - bỏ `@RequireRole(ADMIN)`, check chuyển vào service vì
+   * cần đọc dữ liệu record (checkedById). `@RequirePermissions(UPDATE)` giữ nguyên - WAREHOUSE_STAFF
+   * đã có PRODUCTION_INVOICE:UPDATE sẵn.
+   */
+  @Patch('transfer-check/defects/:id/photo')
+  @RequirePermissions(UPDATE)
+  updateTransferCheckDefectPhoto(
+    @Param('id') id: string,
+    @Body() dto: UpdateTransferCheckDefectPhotoDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.productionInvoicesService.updateTransferCheckDefectPhoto(id, dto, userId, roles);
   }
 
   // ─── Đóng gói (PACKAGING) - thủ kho thành phẩm, mirror KhoDongGoiPage ───────────────

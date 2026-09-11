@@ -1,10 +1,16 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProdItemStageType } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
+import { CloudinaryService } from '../uploads/cloudinary.service';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
@@ -35,6 +41,12 @@ describe('ProductionInvoicesService', () => {
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock; findUnique: jest.Mock };
     transferCheckResult: { findMany: jest.Mock; create: jest.Mock };
+    transferCheckDefect: {
+      findUnique: jest.Mock;
+      update: jest.Mock;
+      findMany: jest.Mock;
+      count: jest.Mock;
+    };
     weavingReceipt: { groupBy: jest.Mock };
     packagingRecord: { create: jest.Mock; aggregate: jest.Mock; groupBy: jest.Mock };
     auditLog: { create: jest.Mock };
@@ -48,6 +60,7 @@ describe('ProductionInvoicesService', () => {
   let pieceMaterialYieldPurchaseService: { computeAndUpsertProposals: jest.Mock };
   let consumableMaterialPurchaseService: { computeAndUpsertProposals: jest.Mock };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
+  let cloudinaryService: { deleteByUrl: jest.Mock };
 
   const mfgProduct = { id: 2n, factoryCode: 'SKU-01', name: 'Ghe A' };
   const pi = (overrides: Record<string, unknown> = {}) => ({
@@ -126,6 +139,12 @@ describe('ProductionInvoicesService', () => {
       },
       bomPiece: { findMany: jest.fn(), findUnique: jest.fn() },
       transferCheckResult: { findMany: jest.fn(), create: jest.fn() },
+      transferCheckDefect: {
+        findUnique: jest.fn(),
+        update: jest.fn(),
+        findMany: jest.fn(),
+        count: jest.fn(),
+      },
       weavingReceipt: { groupBy: jest.fn().mockResolvedValue([]) },
       packagingRecord: {
         create: jest.fn(),
@@ -164,6 +183,7 @@ describe('ProductionInvoicesService', () => {
       computeAndUpsertProposals: jest.fn().mockResolvedValue([]),
     };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
+    cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
     service = new ProductionInvoicesService(
       prisma as unknown as PrismaServiceType,
       productionOrdersService as unknown as ProductionOrdersService,
@@ -171,6 +191,7 @@ describe('ProductionInvoicesService', () => {
       pieceMaterialYieldPurchaseService as unknown as PieceMaterialYieldPurchaseService,
       consumableMaterialPurchaseService as unknown as ConsumableMaterialPurchaseService,
       cls as unknown as ClsService<AppClsStore>,
+      cloudinaryService as unknown as CloudinaryService,
     );
   });
 
@@ -1771,6 +1792,116 @@ describe('ProductionInvoicesService', () => {
 
         expect(result['20']).toMatchObject({ totalQty: 10, packedQty: 0, remainingQty: 10 });
       });
+    });
+  });
+
+  // Admin quản lý ảnh lỗi kiểm chuyển kho (2026-09-11) - xem doc comment
+  // listTransferCheckDefects()/updateTransferCheckDefectPhoto()/UpdateTransferCheckDefectPhotoDto.
+  describe('listTransferCheckDefects / updateTransferCheckDefectPhoto', () => {
+    const defectRow = {
+      id: 5n,
+      transferCheckResultId: 50n,
+      reason: 'Rách vải',
+      imageUrl: 'https://old.jpg',
+      transferCheckResult: {
+        productionInvoiceItemId: 20n,
+        pieceId: 30n,
+        checkedById: 'user-kho',
+        checkedAt: new Date('2026-09-11T00:00:00Z'),
+      },
+    };
+
+    it('listTransferCheckDefects trả về danh sách đã dẹt phẳng, lọc sẵn có ảnh', async () => {
+      prisma.transferCheckDefect.findMany.mockResolvedValue([defectRow]);
+      prisma.transferCheckDefect.count.mockResolvedValue(1);
+
+      const result = await service.listTransferCheckDefects({ page: 1, limit: 20 } as never);
+
+      expect(prisma.transferCheckDefect.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { imageUrl: { not: null } },
+        }),
+      );
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0]).toMatchObject({
+        id: '5',
+        productionInvoiceItemId: '20',
+        pieceId: '30',
+        imageUrl: 'https://old.jpg',
+      });
+    });
+
+    it('người ĐÃ GHI lần kiểm này tự sửa được ảnh, ghi audit tay và dọn ảnh cũ trên Cloudinary', async () => {
+      prisma.transferCheckDefect.findUnique.mockResolvedValue(defectRow);
+      prisma.transferCheckDefect.update.mockResolvedValue({
+        ...defectRow,
+        imageUrl: 'https://new.jpg',
+      });
+
+      const result = await service.updateTransferCheckDefectPhoto(
+        '5',
+        { imageUrl: 'https://new.jpg' },
+        'user-kho',
+        ['WAREHOUSE_STAFF'],
+      );
+
+      expect(prisma.transferCheckDefect.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 5n },
+          data: { imageUrl: 'https://new.jpg' },
+        }),
+      );
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          data: expect.objectContaining({
+            tableName: 'TransferCheckDefect',
+            recordId: '5',
+          }),
+        }),
+      );
+      expect(cloudinaryService.deleteByUrl).toHaveBeenCalledWith('https://old.jpg');
+      expect(result.imageUrl).toBe('https://new.jpg');
+    });
+
+    it('ADMIN sửa được ảnh của lần kiểm do NGƯỜI KHÁC ghi', async () => {
+      prisma.transferCheckDefect.findUnique.mockResolvedValue(defectRow);
+      prisma.transferCheckDefect.update.mockResolvedValue({
+        ...defectRow,
+        imageUrl: 'https://new.jpg',
+      });
+
+      await service.updateTransferCheckDefectPhoto(
+        '5',
+        { imageUrl: 'https://new.jpg' },
+        'user-admin',
+        ['ADMIN'],
+      );
+
+      expect(prisma.transferCheckDefect.update).toHaveBeenCalled();
+    });
+
+    it('ném ForbiddenException nếu KHÔNG phải người đã ghi lần kiểm này và KHÔNG phải Admin', async () => {
+      prisma.transferCheckDefect.findUnique.mockResolvedValue(defectRow);
+
+      await expect(
+        service.updateTransferCheckDefectPhoto(
+          '5',
+          { imageUrl: 'https://new.jpg' },
+          'user-kho-khac',
+          ['WAREHOUSE_STAFF'],
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.transferCheckDefect.update).not.toHaveBeenCalled();
+    });
+
+    it('ném NotFoundException nếu defect không tồn tại', async () => {
+      prisma.transferCheckDefect.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updateTransferCheckDefectPhoto('999', { imageUrl: null }, 'user-admin', ['ADMIN']),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.transferCheckDefect.update).not.toHaveBeenCalled();
     });
   });
 });
