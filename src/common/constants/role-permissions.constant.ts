@@ -512,6 +512,16 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.SKU,
       actions: [PermissionAction.VIEW],
     },
+    // Vá lỗ quyền phát hiện qua browser thật 2026-09-10: "Lệnh sản xuất — Công đoạn Hàn" gọi GET
+    // /qc-reviews (core.tsx's BatchHistoryList, cột "Lỗi"/badge "đã duyệt") - HAN_STAFF trước bản
+    // vá này không có QC_REVIEW:VIEW nên 403 âm thầm ở lời gọi này (không chặn trang, chỉ mất cột
+    // Lỗi/badge). Chỉ VIEW (không UPDATE như PHOI_STAFF) - Hàn KHÔNG có route tự báo bù đủ riêng
+    // như Phôi (report-done/qc-segments), "Bù đủ" bên Hàn/Sơn chỉ là 1 lô báo sản lượng MỚI qua
+    // route PRODUCTION_BATCH:CREATE đã có sẵn ở trên, không đụng QC_REVIEW.
+    {
+      module: PERMISSION_MODULES.QC_REVIEW,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   [BUSINESS_ROLES.SON_STAFF]: [
     {
@@ -530,6 +540,11 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     // Cùng lý do đã cấp cho PHOI_STAFF - "Danh sách định mức mảnh" gọi GET /skus.
     {
       module: PERMISSION_MODULES.SKU,
+      actions: [PermissionAction.VIEW],
+    },
+    // Cùng lý do đã thêm cho HAN_STAFF ở trên (GET /qc-reviews, chỉ VIEW).
+    {
+      module: PERMISSION_MODULES.QC_REVIEW,
       actions: [PermissionAction.VIEW],
     },
   ],
