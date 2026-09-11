@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Piece, Prisma, ProductionOrder, WeavingPoint } from '../../generated/prisma/client';
+import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
@@ -19,6 +20,7 @@ import { CreateWeavingReceiptDto } from './dto/create-weaving-receipt.dto';
 import { WeavingAllocationItemResponseDto } from './dto/weaving-allocation-item-response.dto';
 import { WeavingIssuePlanItemResponseDto } from './dto/weaving-issue-plan-item-response.dto';
 import { WeavingIssueResponseDto } from './dto/weaving-issue-response.dto';
+import { WeavingPieceMaterialLineResponseDto } from './dto/weaving-piece-material-line-response.dto';
 import { WeavingPointAssignmentResponseDto } from './dto/weaving-point-assignment-response.dto';
 import { WeavingPointGroupResponseDto } from './dto/weaving-point-group-response.dto';
 import { WeavingReceiptResponseDto } from './dto/weaving-receipt-response.dto';
@@ -242,7 +244,7 @@ export class WeavingIssuesService {
   async getIssuePlan(productionOrderId: string): Promise<WeavingIssuePlanItemResponseDto[]> {
     const order = await this.findOrderOrThrow(productionOrderId);
 
-    const [bomPieces, issues, receipts] = await Promise.all([
+    const [bomPieces, issues, receipts, materialLinesByPiece] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: order.bomRevisionId },
         include: { piece: true },
@@ -255,6 +257,7 @@ export class WeavingIssuesService {
         where: { productionOrderId: order.id },
         include: { weavingPoint: true },
       }),
+      this.getWovenMaterialLinesByPiece([order.bomRevisionId]),
     ]);
 
     const wovenBomPieces = bomPieces.filter((bp) => bp.isWoven);
@@ -289,6 +292,7 @@ export class WeavingIssuesService {
 
       const totalQty = bp.qtyPerUnit * order.quantity;
       const issuedQty = pieceIssues.reduce((s, i) => s + i.qty, 0);
+      const materialLines = materialLinesByPiece.get(`${bp.bomRevisionId}:${bp.pieceId}`);
 
       return new WeavingIssuePlanItemResponseDto({
         pieceId: pieceKey,
@@ -298,8 +302,71 @@ export class WeavingIssuesService {
         issuedQty,
         remainingToIssue: totalQty - issuedQty,
         allocations,
+        wire: materialLines?.wire ?? [],
+        nail: materialLines?.nail ?? [],
       });
     });
+  }
+
+  /** Định mức Dây (WIRE) + Đinh (NAIL) /1 mảnh, gom theo `${bomRevisionId}:${pieceId}` - dùng
+   *  chung cho getIssuePlan()/getIssuePlanBatch() để hiển thị kèm mảnh trên màn hình xuất đan
+   *  (xem comment field `wire`/`nail` ở WeavingIssuePlanItemResponseDto). Cùng pattern truy vấn/
+   *  nhóm với SkusService (toPieceMaterialLine + groupIdByKey), thu hẹp lại chỉ 2 nhóm cần. */
+  private async getWovenMaterialLinesByPiece(
+    bomRevisionIds: bigint[],
+  ): Promise<
+    Map<
+      string,
+      { wire: WeavingPieceMaterialLineResponseDto[]; nail: WeavingPieceMaterialLineResponseDto[] }
+    >
+  > {
+    const result = new Map<
+      string,
+      { wire: WeavingPieceMaterialLineResponseDto[]; nail: WeavingPieceMaterialLineResponseDto[] }
+    >();
+    if (bomRevisionIds.length === 0) return result;
+
+    const [systemGroups, lineItems] = await Promise.all([
+      this.prisma.materialGroup.findMany({
+        where: {
+          systemKey: { in: [MATERIAL_GROUP_SYSTEM_KEYS.WIRE, MATERIAL_GROUP_SYSTEM_KEYS.NAIL] },
+        },
+      }),
+      this.prisma.pieceMaterialItem.findMany({
+        where: { bomRevisionId: { in: bomRevisionIds } },
+        include: { material: true },
+      }),
+    ]);
+    const wireGroupId = systemGroups.find(
+      (g) => g.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.WIRE,
+    )?.id;
+    const nailGroupId = systemGroups.find(
+      (g) => g.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.NAIL,
+    )?.id;
+
+    const toLine = (r: (typeof lineItems)[number]) =>
+      new WeavingPieceMaterialLineResponseDto({
+        materialId: r.materialId.toString(),
+        materialCode: r.material.code,
+        materialName: r.material.name,
+        materialSpec: r.material.spec,
+        materialUnit: r.material.unit,
+        qtyPerPiece: r.qtyPerPiece.toNumber(),
+      });
+
+    for (const r of lineItems) {
+      const key = `${r.bomRevisionId}:${r.pieceId}`;
+      const entry = result.get(key) ?? { wire: [], nail: [] };
+      if (wireGroupId != null && r.material.materialGroupId === wireGroupId) {
+        entry.wire.push(toLine(r));
+      } else if (nailGroupId != null && r.material.materialGroupId === nailGroupId) {
+        entry.nail.push(toLine(r));
+      } else {
+        continue;
+      }
+      result.set(key, entry);
+    }
+    return result;
   }
 
   /**
@@ -323,7 +390,7 @@ export class WeavingIssuesService {
     const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
     const orderIds = orders.map((o) => o.id);
 
-    const [bomPieces, issues, receipts] = await Promise.all([
+    const [bomPieces, issues, receipts, materialLinesByPiece] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: { in: revisionIds } },
         include: { piece: true },
@@ -336,6 +403,7 @@ export class WeavingIssuesService {
         where: { productionOrderId: { in: orderIds } },
         include: { weavingPoint: true },
       }),
+      this.getWovenMaterialLinesByPiece(revisionIds),
     ]);
 
     const bomPiecesByRevision = new Map<string, typeof bomPieces>();
@@ -383,6 +451,7 @@ export class WeavingIssuesService {
 
         const totalQty = bp.qtyPerUnit * order.quantity;
         const issuedQty = pieceIssues.reduce((s, i) => s + i.qty, 0);
+        const materialLines = materialLinesByPiece.get(`${bp.bomRevisionId}:${bp.pieceId}`);
 
         return new WeavingIssuePlanItemResponseDto({
           pieceId: pieceKey,
@@ -392,6 +461,8 @@ export class WeavingIssuesService {
           issuedQty,
           remainingToIssue: totalQty - issuedQty,
           allocations,
+          wire: materialLines?.wire ?? [],
+          nail: materialLines?.nail ?? [],
         });
       });
     }

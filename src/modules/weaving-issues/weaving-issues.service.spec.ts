@@ -29,6 +29,8 @@ describe('WeavingIssuesService', () => {
     piece: { findUnique: jest.Mock };
     weavingPoint: { findUnique: jest.Mock; findMany: jest.Mock };
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
+    materialGroup: { findMany: jest.Mock };
+    pieceMaterialItem: { findMany: jest.Mock };
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   };
@@ -113,6 +115,11 @@ describe('WeavingIssuesService', () => {
         findUnique: jest.fn().mockResolvedValue(bomPieceRow),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      // getIssuePlan()/getIssuePlanBatch() luôn truy vấn kèm định mức Dây/Đinh (xem
+      // getWovenMaterialLinesByPiece, 2026-09-11) - mặc định rỗng, các test case về wire/nail
+      // tự override.
+      materialGroup: { findMany: jest.fn().mockResolvedValue([]) },
+      pieceMaterialItem: { findMany: jest.fn().mockResolvedValue([]) },
       $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
@@ -486,6 +493,87 @@ describe('WeavingIssuesService', () => {
       expect(allocB?.issuedQty).toBe(20);
       expect(allocB?.receivedQty).toBe(0);
       expect(allocB?.remainingToReceive).toBe(20);
+    });
+
+    it('2026-09-11: trả kèm định mức Dây/Đinh của mảnh (wire/nail) đúng nhóm, không lẫn nhóm khác', async () => {
+      prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
+      prisma.materialGroup.findMany.mockResolvedValue([
+        { id: 900n, systemKey: 'WIRE' },
+        { id: 901n, systemKey: 'NAIL' },
+      ]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([
+        {
+          bomRevisionId: 5n,
+          pieceId: 20n,
+          materialId: 60n,
+          qtyPerPiece: { toNumber: () => 3 },
+          material: {
+            code: 'DAY-2LY',
+            name: 'Dây 2 ly',
+            spec: null,
+            unit: 'm',
+            materialGroupId: 900n,
+          },
+        },
+        {
+          bomRevisionId: 5n,
+          pieceId: 20n,
+          materialId: 61n,
+          qtyPerPiece: { toNumber: () => 4 },
+          material: {
+            code: 'DINH-01',
+            name: 'Đinh 01',
+            spec: null,
+            unit: 'cái',
+            materialGroupId: 901n,
+          },
+        },
+        // Nhóm khác (Tán rút/Nút nhựa) - KHÔNG được lẫn vào wire/nail.
+        {
+          bomRevisionId: 5n,
+          pieceId: 20n,
+          materialId: 62n,
+          qtyPerPiece: { toNumber: () => 1 },
+          material: {
+            code: 'TAN-01',
+            name: 'Tán rút',
+            spec: null,
+            unit: 'cái',
+            materialGroupId: 902n,
+          },
+        },
+      ]);
+
+      const result = await service.getIssuePlan('1');
+      expect(result).toHaveLength(1);
+      expect(result[0].wire).toEqual([
+        {
+          materialId: '60',
+          materialCode: 'DAY-2LY',
+          materialName: 'Dây 2 ly',
+          materialSpec: null,
+          materialUnit: 'm',
+          qtyPerPiece: 3,
+        },
+      ]);
+      expect(result[0].nail).toEqual([
+        {
+          materialId: '61',
+          materialCode: 'DINH-01',
+          materialName: 'Đinh 01',
+          materialSpec: null,
+          materialUnit: 'cái',
+          qtyPerPiece: 4,
+        },
+      ]);
+    });
+
+    it('mảnh chưa có dòng vật tư Dây/Đinh nào - wire/nail trả mảng rỗng, không throw', async () => {
+      prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
+
+      const result = await service.getIssuePlan('1');
+      expect(result[0].wire).toEqual([]);
+      expect(result[0].nail).toEqual([]);
     });
   });
 
