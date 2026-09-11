@@ -578,7 +578,7 @@ describe('SkusService', () => {
       expect(cloudinaryService.deleteByUrl).not.toHaveBeenCalled();
     });
 
-    it('sets Piece.isWoven = true once a piece has a Dây line - Đinh/Nút nhựa không bắt buộc', async () => {
+    it('sets Piece.isWoven = true once a piece has both a Dây line and a Đinh line', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.piece.findMany.mockResolvedValue([
@@ -586,6 +586,7 @@ describe('SkusService', () => {
       ]);
       prisma.material.findMany.mockResolvedValue([
         { id: 60n, code: 'DAY-2LY', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+        { id: 61n, code: 'DINH-01', materialGroupId: SYSTEM_GROUP_IDS.NAIL },
       ]);
       prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
@@ -595,7 +596,10 @@ describe('SkusService', () => {
             name: 'Manh tua',
             qtyPerUnit: 2,
             segments: [],
-            materialLines: [{ group: 'WIRE', materialId: '60', qtyPerPiece: 3 }],
+            materialLines: [
+              { group: 'WIRE', materialId: '60', qtyPerPiece: 3 },
+              { group: 'NAIL', materialId: '61', qtyPerPiece: 4 },
+            ],
           },
         ],
         enteredBy: 'NV Day',
@@ -607,7 +611,7 @@ describe('SkusService', () => {
       });
     });
 
-    it('resets Piece.isWoven = false once a previously-woven piece loses its Dây line', async () => {
+    it('resets Piece.isWoven = false once a previously-woven piece loses its Dây line, even though it still has Đinh', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.piece.findMany.mockResolvedValue([
@@ -636,7 +640,7 @@ describe('SkusService', () => {
       });
     });
 
-    it('does not touch Piece.isWoven when the desired value already matches', async () => {
+    it('resets Piece.isWoven = false once a previously-woven piece loses its Đinh line, even though it still has Dây', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.piece.findMany.mockResolvedValue([
@@ -654,6 +658,39 @@ describe('SkusService', () => {
             qtyPerUnit: 2,
             segments: [],
             materialLines: [{ group: 'WIRE', materialId: '60', qtyPerPiece: 3 }],
+          },
+        ],
+        enteredBy: 'NV Day',
+      });
+
+      expect(prisma.piece.update).toHaveBeenCalledWith({
+        where: { id: 20n },
+        data: { isWoven: false },
+      });
+    });
+
+    it('does not touch Piece.isWoven when the desired value already matches', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([
+        { id: 20n, name: 'Manh tua', code: 'MANH-TUA', isWoven: true },
+      ]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 60n, code: 'DAY-2LY', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+        { id: 61n, code: 'DINH-01', materialGroupId: SYSTEM_GROUP_IDS.NAIL },
+      ]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Manh tua',
+            qtyPerUnit: 2,
+            segments: [],
+            materialLines: [
+              { group: 'WIRE', materialId: '60', qtyPerPiece: 3 },
+              { group: 'NAIL', materialId: '61', qtyPerPiece: 4 },
+            ],
           },
         ],
         enteredBy: 'NV Day',

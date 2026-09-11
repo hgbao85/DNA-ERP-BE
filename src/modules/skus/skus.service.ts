@@ -952,13 +952,14 @@ export class SkusService {
     return { orphanedPhotoUrls: oldPhotoUrls.filter((u) => !newPhotoUrls.has(u)) };
   }
 
-  /** Mảnh "có đan" = có ít nhất 1 dòng vật tư nhóm Dây (WIRE) trong materialLines - CHỈ cần Dây,
-   *  KHÔNG còn bắt buộc Đinh/Nút nhựa nữa (đổi 2026-09-04, DEC-11: "chỉ cần có dây... ko cần thiết
-   *  phải có cả nút nhựa"; chốt lại 2026-09-05, bỏ luôn điều kiện Đinh - có Dây là lập tức "có
-   *  đan"). Nguồn sự thật CHÍNH là snapshot `BomPiece.isWoven` (ghi theo đúng bomRevisionId ở
-   *  bomPieceRows trên) - weaving-issues module đọc từ đó, không đọc field này. */
+  /** Mảnh "có đan" = có ÍT NHẤT 1 dòng vật tư nhóm Dây (WIRE) VÀ ÍT NHẤT 1 dòng nhóm Đinh (NAIL)
+   *  trong materialLines - khôi phục lại điều kiện bắt buộc cả 2 (đổi 2026-09-11, sau khi từng nới
+   *  lỏng chỉ cần Dây ở 2026-09-04/09-05, DEC-11). Nguồn sự thật CHÍNH là snapshot `BomPiece.isWoven`
+   *  (ghi theo đúng bomRevisionId ở bomPieceRows trên) - weaving-issues module đọc từ đó, không đọc
+   *  field này. */
   private isPieceWoven(p: QuotaPieceDto): boolean {
-    return (p.materialLines ?? []).some((l) => l.group === 'WIRE');
+    const lines = p.materialLines ?? [];
+    return lines.some((l) => l.group === 'WIRE') && lines.some((l) => l.group === 'NAIL');
   }
 
   /** Piece.isWoven là master data dùng chung giữa các revision (KHÔNG dùng để quyết định hiển
