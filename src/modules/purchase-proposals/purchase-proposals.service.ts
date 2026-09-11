@@ -63,7 +63,7 @@ const LIST_INCLUDE = {
             include: {
               stages: true,
               productionInvoice: { select: { deadline: true, code: true } },
-              salesOrder: { select: { code: true } },
+              salesOrder: { select: { orderCode: true } },
             },
           },
         },
@@ -72,7 +72,11 @@ const LIST_INCLUDE = {
       productionInvoice: {
         include: {
           items: {
-            include: { mfgProduct: true, stages: true, salesOrder: { select: { code: true } } },
+            include: {
+              mfgProduct: true,
+              stages: true,
+              salesOrder: { select: { orderCode: true } },
+            },
           },
         },
       },
@@ -659,9 +663,9 @@ export class PurchaseProposalsService {
     // đơn Sales khác nhau - gộp danh sách mã duy nhất, không có "1 mã đại diện" nào đúng cả.
     // null khi SKU không gắn đơn Sales nào (tạo tay, xem PlanForm.customerName).
     const salesOrderCode = productionOrder
-      ? (productionOrder.productionInvoiceItem.salesOrder?.code ?? null)
+      ? (productionOrder.productionInvoiceItem.salesOrder?.orderCode ?? null)
       : (mergedPi?.items ?? [])
-          .map((it) => it.salesOrder?.code)
+          .map((it) => it.salesOrder?.orderCode)
           .filter((c): c is string => !!c)
           .filter((c, i, arr) => arr.indexOf(c) === i)
           .join(', ') || null;

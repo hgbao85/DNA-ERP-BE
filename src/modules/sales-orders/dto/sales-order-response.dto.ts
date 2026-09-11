@@ -5,7 +5,11 @@ import { SalesOrderItemResponseDto } from './sales-order-item-response.dto';
 @Exclude()
 export class SalesOrderResponseDto {
   @Expose() @ApiProperty() id!: string;
+  /** Mã nội bộ tự sinh (PO-{id}) - chỉ để tra cứu/debug, không còn hiển thị chính cho người dùng.
+   *  Xem `orderCode` bên dưới. */
   @Expose() @ApiProperty() code!: string;
+  /** Mã đơn hàng Sales tự nhập tay - mã hiển thị CHÍNH cho người dùng khắp hệ thống. */
+  @Expose() @ApiProperty() orderCode!: string;
   @Expose() @ApiProperty() customerId!: string;
   @Expose() @ApiProperty() customerName!: string;
   @Expose() @ApiProperty() orderDate!: Date;

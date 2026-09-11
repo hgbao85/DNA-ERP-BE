@@ -43,7 +43,7 @@ describe('PackagingIssuesService', () => {
     quantity: 10,
     productionInvoiceItemId: 21n,
     mfgProduct: { name: 'Ghế xoay demo' },
-    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+    productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
   };
   // warehouseId/warehouse (2026-09-03): findMaterialWarehouseOrThrow() giờ đọc động Kho của vật
   // tư này thay vì hardcode literal 'vat-tu-tp' - mirror CuttingProposalsService.approve().
@@ -213,7 +213,10 @@ describe('PackagingIssuesService', () => {
         ...issueRow,
         productionOrder: {
           ...order,
-          productionInvoiceItem: { salesOrder: { code: 'PO-31' }, warehouseCode: 'thanh-pham-2' },
+          productionInvoiceItem: {
+            salesOrder: { orderCode: 'PO-31' },
+            warehouseCode: 'thanh-pham-2',
+          },
         },
       };
       prisma.packagingIssue.create.mockResolvedValue(issueRowWithSubWarehouse);

@@ -61,7 +61,7 @@ describe('ProductionBatchesService', () => {
     quantity: 10,
     productionInvoiceItemId: 20n,
     mfgProduct: { name: 'SP-1' },
-    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+    productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
   };
   const piece = { id: 40n, code: 'MANH-TUA', name: 'Mảnh tựa' };
   const bomPieceRow = {
@@ -845,7 +845,7 @@ describe('ProductionBatchesService', () => {
         id: 2n,
         poNumber: 'PO-32-1',
         quantity: 5,
-        productionInvoiceItem: { salesOrder: { code: 'PO-32' } },
+        productionInvoiceItem: { salesOrder: { orderCode: 'PO-32' } },
       };
       prisma.productionOrder.findMany.mockResolvedValue([order, order2]);
       prisma.productionBatch.findMany.mockResolvedValue([
@@ -1036,7 +1036,7 @@ describe('ProductionBatchesService', () => {
         id: 2n,
         poNumber: 'PO-32-1',
         quantity: 5,
-        productionInvoiceItem: { salesOrder: { code: 'PO-32' } },
+        productionInvoiceItem: { salesOrder: { orderCode: 'PO-32' } },
       };
       prisma.productionOrder.findMany.mockResolvedValue([order, order2]);
       prisma.pieceMaterialYield.findMany.mockResolvedValue([

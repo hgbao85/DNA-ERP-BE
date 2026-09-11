@@ -8,8 +8,9 @@ export class ProductionOrderResponseDto {
   /// Mã nội bộ (ProductionOrder.poNumber) - CHỈ để hệ thống tra cứu, KHÔNG hiển thị cho người
   /// dùng. FE dùng `salesOrderCode` bên dưới thay thế (xem trao đổi 2026-08-18).
   @Expose() @ApiProperty() poNumber!: string;
-  /// Mã đơn hàng Sales gốc (SalesOrder.code, vd "PO-31") - đây mới là mã "PO" người dùng cần
-  /// thấy. null khi SKU không gắn đơn Sales nào (tạo tay).
+  /// Mã đơn hàng Sales gốc (SalesOrder.orderCode, Sales tự nhập tay - 2026-09-10, trước đó là
+  /// SalesOrder.code tự sinh PO-{id}) - đây mới là mã "PO" người dùng cần thấy. null khi SKU
+  /// không gắn đơn Sales nào (tạo tay).
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   /// Id PI cha (ProductionInvoice.id) - dùng để gọi các endpoint gộp theo PI (vd
   /// POST /production-invoices/:id/steel-issues, xem changelog 2026-08-18-xuat-sat-po-pi-vat-tu.md).

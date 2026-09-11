@@ -950,7 +950,15 @@ enum ProdApprovalStatus {
 
 model SalesOrder {
   id               BigInt    @id @default(autoincrement())
+  /// Mã nội bộ tự sinh (PO-{id}) - CHỈ để hệ thống tra cứu/debug, không còn ý nghĩa hiển thị cho
+  /// người dùng (2026-09-10, cùng tinh thần đổi ProductionOrder.poNumber trước đó 2026-08-18).
+  /// `orderCode` bên dưới mới là mã "PO" người dùng cần thấy.
   code             String    @unique
+  /// Mã đơn hàng Sales tự nhập tay (vd mã PO giấy của khách) - mã hiển thị CHÍNH cho người dùng
+  /// khắp hệ thống, thay thế `code` ở mọi nơi trước đây hiển thị PO-{id} (bao gồm cả
+  /// ProductionOrder.poNumber - xem resolvePoNumber()). Bắt buộc, unique, immutable sau khi tạo
+  /// (giống code) - sửa lỗi gõ nhầm là việc riêng, chưa hỗ trợ qua update().
+  orderCode        String    @unique
   customerId       BigInt
   orderDate        DateTime
   /// Derived tại service (max của items[].deliveryDate) khi tạo/sửa item - không nhận

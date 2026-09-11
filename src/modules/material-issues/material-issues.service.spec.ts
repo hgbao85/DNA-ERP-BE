@@ -50,7 +50,7 @@ describe('MaterialIssuesService', () => {
     bomRevisionId: 5n,
     quantity: 10,
     productionInvoiceItemId: 20n,
-    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+    productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
   };
   // warehouseId/warehouse (2026-09-03): findMaterialWarehouseOrThrow() giờ đọc động Kho của vật
   // tư này thay vì hardcode literal 'vat-tu-tp' - mirror CuttingProposalsService.approve().

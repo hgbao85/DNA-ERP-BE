@@ -29,7 +29,7 @@ describe('ProductionOrdersService', () => {
     releasedAt: new Date(),
     createdAt: new Date(),
     productionInvoiceItem: {
-      salesOrder: { code: 'PO-31' },
+      salesOrder: { orderCode: 'PO-31' },
       productionInvoice: { id: 500n, code: 'PI-2026-001' },
       deliveryDeadline: new Date('2026-09-01'),
     },
@@ -56,7 +56,7 @@ describe('ProductionOrdersService', () => {
       prisma.bomRevision.findFirst.mockResolvedValue(activeRevision);
       prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue({
         salesOrderId: 31n,
-        salesOrder: { code: 'PO-31' },
+        salesOrder: { orderCode: 'PO-31' },
       });
       prisma.productionOrder.count.mockResolvedValue(1); // 1 SKU của đơn này đã có PO trước đó
       prisma.productionOrder.create.mockResolvedValue(order({ poNumber: 'PO-31-2' }));

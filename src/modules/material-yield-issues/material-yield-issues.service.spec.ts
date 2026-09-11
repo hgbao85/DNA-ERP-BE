@@ -47,7 +47,7 @@ describe('MaterialYieldIssuesService', () => {
     bomRevisionId: 5n,
     quantity: 10,
     productionInvoiceItemId: 20n,
-    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+    productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
   };
   const aluminumWarehouse = { id: 5n, code: 'vat-tu-tp' };
   const productionWarehouse = { id: 9n, code: 'PRODUCTION' };

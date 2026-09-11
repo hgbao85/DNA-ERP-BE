@@ -37,29 +37,48 @@ export class SalesOrdersService {
     }
     await this.assertProductsExist(dto.items);
 
+    const orderCode = dto.orderCode.trim();
+    const existingOrderCode = await this.prisma.salesOrder.findUnique({ where: { orderCode } });
+    if (existingOrderCode) {
+      throw new ConflictException(`Mã đơn hàng "${orderCode}" đã được dùng cho đơn khác`);
+    }
+
     const deliveryDate = this.maxDeliveryDate(dto.items);
     const placeholderCode = `PO-TMP-${randomUUID()}`;
 
-    const created = await this.prisma.salesOrder.create({
-      data: {
-        code: placeholderCode,
-        customerId: customerBigId,
-        orderDate: new Date(dto.orderDate),
-        deliveryDate,
-        attachmentName: dto.attachmentName,
-        attachmentUrl: dto.attachmentUrl,
-        note: dto.note,
-        items: {
-          create: dto.items.map((it) => ({
-            mfgProductId: parseBigIntId(it.mfgProductId),
-            skuName: it.skuName,
-            totalQty: it.totalQty,
-            deliveryDate: it.deliveryDate ? new Date(it.deliveryDate) : undefined,
-          })),
+    // Pre-check ở trên chỉ chặn được trường hợp thường - 2 request tạo cùng orderCode gần như
+    // đồng thời đều có thể đọc thấy "chưa tồn tại" rồi cùng tới create(), request thua bị unique
+    // constraint ở DB chặn (nguồn chặn thật) nhưng ném Prisma P2002 thô nếu không bắt lại - cùng
+    // mẫu material-groups.service.ts:43-62.
+    let created: SalesOrderWithItems;
+    try {
+      created = await this.prisma.salesOrder.create({
+        data: {
+          code: placeholderCode,
+          orderCode,
+          customerId: customerBigId,
+          orderDate: new Date(dto.orderDate),
+          deliveryDate,
+          attachmentName: dto.attachmentName,
+          attachmentUrl: dto.attachmentUrl,
+          note: dto.note,
+          items: {
+            create: dto.items.map((it) => ({
+              mfgProductId: parseBigIntId(it.mfgProductId),
+              skuName: it.skuName,
+              totalQty: it.totalQty,
+              deliveryDate: it.deliveryDate ? new Date(it.deliveryDate) : undefined,
+            })),
+          },
         },
-      },
-      include: { customer: true, items: { include: { mfgProduct: true } } },
-    });
+        include: { customer: true, items: { include: { mfgProduct: true } } },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException(`Mã đơn hàng "${orderCode}" đã được dùng cho đơn khác`);
+      }
+      throw e;
+    }
 
     const withCode = await this.prisma.salesOrder.update({
       where: { id: created.id },
@@ -75,8 +94,15 @@ export class SalesOrdersService {
   }
 
   async findAll(query: PaginationQueryDto): Promise<Paginated<SalesOrderResponseDto>> {
+    // orderCode (mã Sales tự nhập) là thứ người dùng thực sự gõ/nhớ - tìm cả code nội bộ cũ (PO-id)
+    // để không phá luồng ai còn quen tra theo mã cũ.
     const where: Prisma.SalesOrderWhereInput | undefined = query.search
-      ? { code: { contains: query.search, mode: 'insensitive' } }
+      ? {
+          OR: [
+            { code: { contains: query.search, mode: 'insensitive' } },
+            { orderCode: { contains: query.search, mode: 'insensitive' } },
+          ],
+        }
       : undefined;
 
     const result = await paginate(
@@ -118,7 +144,7 @@ export class SalesOrdersService {
       data: result.data.map((o) =>
         this.toResponseDto(
           o,
-          this.buildDeleteBlockReason(o.code, o.items, mergedIds.has(o.id) ? 1 : 0),
+          this.buildDeleteBlockReason(o.orderCode, o.items, mergedIds.has(o.id) ? 1 : 0),
         ),
       ),
       meta: result.meta,
@@ -130,7 +156,7 @@ export class SalesOrdersService {
     const mergedCount = await this.countMergedProductionInvoiceItems(order.id);
     return this.toResponseDto(
       order,
-      this.buildDeleteBlockReason(order.code, order.items, mergedCount),
+      this.buildDeleteBlockReason(order.orderCode, order.items, mergedCount),
     );
   }
 
@@ -152,7 +178,7 @@ export class SalesOrdersService {
     const mergedCount = await this.countMergedProductionInvoiceItems(bigId);
     return this.toResponseDto(
       updated,
-      this.buildDeleteBlockReason(updated.code, updated.items, mergedCount),
+      this.buildDeleteBlockReason(updated.orderCode, updated.items, mergedCount),
     );
   }
 
@@ -176,7 +202,7 @@ export class SalesOrdersService {
     const order = await this.findOneOrThrow(id);
 
     const mergedCount = await this.countMergedProductionInvoiceItems(bigId);
-    const reason = this.buildDeleteBlockReason(order.code, order.items, mergedCount);
+    const reason = this.buildDeleteBlockReason(order.orderCode, order.items, mergedCount);
     if (reason) {
       throw new ConflictException(reason);
     }
@@ -229,20 +255,20 @@ export class SalesOrdersService {
    * số) khi gọi từ findAll() - xem chỗ gọi.
    */
   private buildDeleteBlockReason(
-    code: string,
+    orderCode: string,
     items: { shippedQty: number; totalQty: number; skuName: string | null; mfgProductId: bigint }[],
     mergedCount: number,
   ): string | null {
     if (mergedCount > 0) {
       return (
-        `Đơn hàng ${code} có ${mergedCount} dòng đã được KHSX gộp vào Phiếu sản xuất - ` +
+        `Đơn hàng ${orderCode} có ${mergedCount} dòng đã được KHSX gộp vào Phiếu sản xuất - ` +
         `không thể xoá, sẽ mất dấu vết trong khi nhà máy vẫn đang sản xuất theo đơn này.`
       );
     }
     const shippedItem = items.find((it) => it.shippedQty > 0);
     if (shippedItem) {
       return (
-        `Đơn hàng ${code} đã giao ${shippedItem.shippedQty}/${shippedItem.totalQty} cho ` +
+        `Đơn hàng ${orderCode} đã giao ${shippedItem.shippedQty}/${shippedItem.totalQty} cho ` +
         `dòng "${shippedItem.skuName ?? shippedItem.mfgProductId}" - không thể xoá đơn đã giao hàng một phần.`
       );
     }
@@ -463,6 +489,7 @@ export class SalesOrdersService {
     return new SalesOrderResponseDto({
       id: order.id.toString(),
       code: order.code,
+      orderCode: order.orderCode,
       customerId: order.customerId.toString(),
       customerName: order.customer.name,
       orderDate: order.orderDate,

@@ -57,7 +57,7 @@ const PRODUCTION_BATCH_INCLUDE = {
     include: {
       productionInvoiceItem: {
         select: {
-          salesOrder: { select: { code: true } },
+          salesOrder: { select: { orderCode: true } },
           productionInvoice: { select: { code: true } },
         },
       },
@@ -75,7 +75,7 @@ const PIECE_STEP_BUNDLE_INCLUDE = {
     include: {
       productionInvoiceItem: {
         select: {
-          salesOrder: { select: { code: true } },
+          salesOrder: { select: { orderCode: true } },
           productionInvoice: { select: { code: true } },
         },
       },
@@ -636,7 +636,7 @@ export class ProductionBatchesService {
       id: bundle.id.toString(),
       productionOrderId: bundle.productionOrderId.toString(),
       poNumber: bundle.productionOrder.poNumber,
-      salesOrderCode: bundle.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
+      salesOrderCode: bundle.productionOrder.productionInvoiceItem.salesOrder?.orderCode ?? null,
       piCode: bundle.productionOrder.productionInvoiceItem.productionInvoice?.code ?? null,
       pieceId: bundle.pieceId.toString(),
       pieceCode: bundle.piece.code,
@@ -875,7 +875,7 @@ export class ProductionBatchesService {
 
     return new ProductionBatchPlanResponseDto({
       poNumber: order.poNumber,
-      salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
+      salesOrderCode: order.productionInvoiceItem.salesOrder?.orderCode ?? null,
       productName: order.mfgProduct.name,
       quantity: order.quantity,
       items,
@@ -904,7 +904,7 @@ export class ProductionBatchesService {
       where: { id: { in: orderBigIds } },
       include: {
         mfgProduct: true,
-        productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
       },
     });
     const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
@@ -983,7 +983,7 @@ export class ProductionBatchesService {
 
       result[order.id.toString()] = new ProductionBatchPlanResponseDto({
         poNumber: order.poNumber,
-        salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
+        salesOrderCode: order.productionInvoiceItem.salesOrder?.orderCode ?? null,
         productName: order.mfgProduct.name,
         quantity: order.quantity,
         items,
@@ -1390,7 +1390,7 @@ export class ProductionBatchesService {
       where: { id: bigId },
       include: {
         mfgProduct: true,
-        productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
       },
     });
     if (!order) {
@@ -1416,7 +1416,7 @@ export class ProductionBatchesService {
       id: batch.id.toString(),
       productionOrderId: batch.productionOrderId.toString(),
       poNumber: batch.productionOrder.poNumber,
-      salesOrderCode: batch.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
+      salesOrderCode: batch.productionOrder.productionInvoiceItem.salesOrder?.orderCode ?? null,
       piCode: batch.productionOrder.productionInvoiceItem.productionInvoice?.code ?? null,
       stage: batch.stage,
       pieceId: batch.pieceId.toString(),

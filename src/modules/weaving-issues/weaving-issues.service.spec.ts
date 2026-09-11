@@ -39,7 +39,7 @@ describe('WeavingIssuesService', () => {
     bomRevisionId: 5n,
     quantity: 10,
     productionInvoiceItemId: 21n,
-    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+    productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
     mfgProduct: { name: 'Ghế xoay demo' },
   };
   const piece = { id: 20n, code: 'MANH-DAN', name: 'Mảnh Đan', isWoven: true };
@@ -576,7 +576,7 @@ describe('WeavingIssuesService', () => {
       expect(result[0].id).toBe('40');
       expect(result[0].code).toBe('DIEM-A');
       expect(result[0].assignments).toHaveLength(1);
-      expect(result[0].assignments[0].poNumber).toBe('PO-31'); // ưu tiên salesOrder.code
+      expect(result[0].assignments[0].poNumber).toBe('PO-31'); // ưu tiên salesOrder.orderCode
       expect(result[0].assignments[0].productLabel).toBe('Ghế xoay demo');
       expect(result[0].assignments[0].quantity).toBe(15);
       expect(result[0].assignments[0].completed).toBe(5);

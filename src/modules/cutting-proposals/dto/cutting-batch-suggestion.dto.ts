@@ -17,7 +17,8 @@ export class CuttingBatchOrderDto {
   /// ProductionInvoiceItem.id - ứng viên gộp là ITEM của phiếu sản xuất, KHÔNG phải
   /// ProductionOrder (lệnh sản xuất chỉ sinh ra khi Sếp duyệt, mà gộp phải xong TRƯỚC lúc đó).
   @Expose() @ApiProperty() productionInvoiceItemId!: string;
-  /// Mã đơn hàng của khách (SalesOrder.code, vd "PO-4") - đây là mã người dùng gọi là "PO".
+  /// Mã đơn hàng của khách (SalesOrder.orderCode, Sales tự nhập tay) - đây là mã người dùng gọi
+  /// là "PO" (2026-09-10, trước đó là SalesOrder.code tự sinh PO-{id}).
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceCode!: string | null;
   @Expose() @ApiProperty() mfgProductCode!: string;

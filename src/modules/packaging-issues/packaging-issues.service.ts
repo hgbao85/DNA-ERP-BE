@@ -29,7 +29,7 @@ const PACKAGING_ISSUE_INCLUDE = {
   productionOrder: {
     include: {
       productionInvoiceItem: {
-        select: { salesOrder: { select: { code: true } }, warehouseCode: true },
+        select: { salesOrder: { select: { orderCode: true } }, warehouseCode: true },
       },
     },
   },
@@ -199,7 +199,7 @@ export class PackagingIssuesService {
       where: { id: { in: orderBigIds } },
       include: {
         mfgProduct: true,
-        productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
       },
     });
 
@@ -270,7 +270,7 @@ export class PackagingIssuesService {
           new PackagingIssuePlanItemResponseDto({
             productionOrderId: order.id.toString(),
             poNumber: order.poNumber,
-            salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
+            salesOrderCode: order.productionInvoiceItem.salesOrder?.orderCode ?? null,
             productName: order.mfgProduct.name,
             materialId: item.materialId.toString(),
             materialCode: item.material.code,
@@ -426,7 +426,7 @@ export class PackagingIssuesService {
       id: issue.id.toString(),
       productionOrderId: issue.productionOrderId.toString(),
       poNumber: issue.productionOrder.poNumber,
-      salesOrderCode: issue.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
+      salesOrderCode: issue.productionOrder.productionInvoiceItem.salesOrder?.orderCode ?? null,
       materialId: issue.materialId.toString(),
       materialCode: issue.material.code,
       materialName: issue.material.name,

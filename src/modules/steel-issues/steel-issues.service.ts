@@ -49,7 +49,7 @@ import {
 } from './dto/step-bundle-response.dto';
 
 const STEEL_ISSUE_INCLUDE = {
-  productionInvoice: { select: { code: true, salesOrder: { select: { code: true } } } },
+  productionInvoice: { select: { code: true, salesOrder: { select: { orderCode: true } } } },
   material: true,
 } satisfies Prisma.SteelIssueInclude;
 
@@ -1445,14 +1445,14 @@ export class SteelIssuesService {
         poNumber: true,
         quantity: true,
         mfgProduct: { select: { name: true } },
-        productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
       },
     });
     return orders.map(
       (o) =>
         new PiOrderSummaryResponseDto({
           poNumber: o.poNumber,
-          salesOrderCode: o.productionInvoiceItem?.salesOrder?.code ?? null,
+          salesOrderCode: o.productionInvoiceItem?.salesOrder?.orderCode ?? null,
           productName: o.mfgProduct.name,
           quantity: o.quantity,
         }),
@@ -1882,7 +1882,7 @@ export class SteelIssuesService {
       id: issue.id.toString(),
       productionInvoiceId: issue.productionInvoiceId.toString(),
       piCode: issue.productionInvoice.code,
-      salesOrderCode: issue.productionInvoice.salesOrder?.code ?? null,
+      salesOrderCode: issue.productionInvoice.salesOrder?.orderCode ?? null,
       materialId: issue.materialId.toString(),
       materialCode: issue.material.code,
       materialName: this.materialLabel(issue.material),
