@@ -103,7 +103,7 @@ describe('SteelIssuesService', () => {
     completedAt: null,
     reworkOfId: null,
     completedSteps: [] as ProcessStep[],
-    productionInvoice: { code: 'PI-31', salesOrder: { code: 'PO-31' } },
+    productionInvoice: { code: 'PI-31', salesOrder: { orderCode: 'PO-31' } },
     material: { id: 30n, code: 'ST-18', name: 'Sắt vuông 18x18' },
   };
 
@@ -1034,7 +1034,7 @@ describe('SteelIssuesService', () => {
           poNumber: 'PO-47',
           quantity: 20,
           mfgProduct: { name: 'Ghế tình yêu' },
-          productionInvoiceItem: { salesOrder: { code: 'SO-47' } },
+          productionInvoiceItem: { salesOrder: { orderCode: 'SO-47' } },
         },
         {
           poNumber: 'PO-48',
@@ -1082,7 +1082,7 @@ describe('SteelIssuesService', () => {
         ...issue,
         id: 200n,
         productionInvoiceId: 2n,
-        productionInvoice: { code: 'PI-32', salesOrder: { code: 'PO-32' } },
+        productionInvoice: { code: 'PI-32', salesOrder: { orderCode: 'PO-32' } },
       };
       prisma.steelIssue.findMany.mockResolvedValue([issue, issuePi2]);
 

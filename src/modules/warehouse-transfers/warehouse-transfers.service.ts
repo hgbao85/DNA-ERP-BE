@@ -39,7 +39,9 @@ const TRANSFER_INCLUDE = {
   pieceItems: {
     include: {
       productionOrder: {
-        include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+        include: {
+          productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
+        },
       },
       piece: true,
     },
@@ -326,7 +328,7 @@ export class WarehouseTransfersService {
       where: { id: { in: orderBigIds } },
       include: {
         mfgProduct: true,
-        productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
       },
     });
     if (orders.length !== orderBigIds.length) {
@@ -395,7 +397,7 @@ export class WarehouseTransfersService {
           new PieceTransferPlanItemResponseDto({
             productionOrderId: order.id.toString(),
             poNumber: order.poNumber,
-            salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
+            salesOrderCode: order.productionInvoiceItem.salesOrder?.orderCode ?? null,
             productName: order.mfgProduct.name,
             pieceId: bp.pieceId.toString(),
             pieceCode: bp.piece.code,
@@ -693,7 +695,8 @@ export class WarehouseTransfersService {
             id: item.id.toString(),
             productionOrderId: item.productionOrderId.toString(),
             poNumber: item.productionOrder.poNumber,
-            salesOrderCode: item.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
+            salesOrderCode:
+              item.productionOrder.productionInvoiceItem.salesOrder?.orderCode ?? null,
             pieceId: item.pieceId.toString(),
             pieceCode: item.piece.code,
             pieceName: item.piece.name,

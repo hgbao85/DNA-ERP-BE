@@ -15,7 +15,7 @@ type ProductionOrderRow = Prisma.ProductionOrderGetPayload<object>;
 const SALES_ORDER_CODE_INCLUDE = {
   productionInvoiceItem: {
     select: {
-      salesOrder: { select: { code: true } },
+      salesOrder: { select: { orderCode: true } },
       productionInvoice: { select: { id: true, code: true } },
       deliveryDeadline: true,
       warehouseCode: true,
@@ -95,6 +95,9 @@ export class ProductionOrdersService {
    * Mã lệnh SX hiển thị = mã đơn hàng Sales gốc + số thứ tự SKU trong đơn đó (vd "PO-31-2") -
    * KHÔNG còn tự đánh số riêng theo id của chính bảng này (PO-{id} cũ), tránh 2 chuỗi "PO-"
    * độc lập gây nhầm mã lệnh SX nội bộ với mã đơn hàng Sales thật (xem trao đổi 2026-08-18).
+   * 2026-09-10: "mã đơn hàng Sales gốc" ở trên đổi nguồn từ SalesOrder.code (PO-{id} tự sinh,
+   * nay chỉ còn nội bộ) sang SalesOrder.orderCode (Sales tự nhập tay) - ví dụ thực tế giờ có thể
+   * là "DH-KHACHA-01-2" thay vì "PO-31-2", tuỳ mã Sales đặt.
    * Item không gắn Sales Order nào (tạo tay qua POST /production-invoices/:id/items, xem
    * ProductionInvoiceItem.salesOrderId) -> "NB-{itemId}" ("Nội bộ") - itemId đã unique sẵn vì
    * ProductionOrder.productionInvoiceItemId là @unique (1-1).
@@ -107,7 +110,7 @@ export class ProductionOrdersService {
   private async resolvePoNumber(productionInvoiceItemId: bigint): Promise<string> {
     const item = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
       where: { id: productionInvoiceItemId },
-      select: { salesOrderId: true, salesOrder: { select: { code: true } } },
+      select: { salesOrderId: true, salesOrder: { select: { orderCode: true } } },
     });
     if (!item.salesOrderId || !item.salesOrder) {
       return `NB-${productionInvoiceItemId}`;
@@ -115,7 +118,7 @@ export class ProductionOrdersService {
     const existingCount = await this.prisma.productionOrder.count({
       where: { productionInvoiceItem: { salesOrderId: item.salesOrderId } },
     });
-    return `${item.salesOrder.code}-${existingCount + 1}`;
+    return `${item.salesOrder.orderCode}-${existingCount + 1}`;
   }
 
   async findAll(query: PaginationQueryDto): Promise<Paginated<ProductionOrderResponseDto>> {
@@ -153,7 +156,7 @@ export class ProductionOrdersService {
     return new ProductionOrderResponseDto({
       id: order.id.toString(),
       poNumber: order.poNumber,
-      salesOrderCode: order.productionInvoiceItem.salesOrder?.code ?? null,
+      salesOrderCode: order.productionInvoiceItem.salesOrder?.orderCode ?? null,
       productionInvoiceId: order.productionInvoiceItem.productionInvoice!.id.toString(),
       piCode: order.productionInvoiceItem.productionInvoice!.code,
       deliveryDeadline: order.productionInvoiceItem.deliveryDeadline,

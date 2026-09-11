@@ -95,9 +95,10 @@ export class PurchaseProposalResponseDto {
   /// cho cột "PO" trên UI Mua hàng. Trước đó từng đổi sang mã PI theo chốt của Sếp (2026-08-17),
   /// nay tách riêng thành `salesOrderCode`/`piCode` nên field này quay về vai trò tra cứu nội bộ.
   @Expose() @ApiProperty() poNumber!: string;
-  /// Mã đơn hàng Sales gốc (SalesOrder.code, vd "PO-31") - đây mới là mã "PO" người dùng cần
-  /// thấy. null khi SKU không gắn đơn Sales nào (tạo tay). Nhánh PI gộp có thể trả về NHIỀU mã
-  /// nối bằng ", " nếu các SKU trong nhóm thuộc nhiều đơn Sales khác nhau (hiếm).
+  /// Mã đơn hàng Sales gốc (SalesOrder.orderCode, Sales tự nhập tay - 2026-09-10, trước đó là
+  /// SalesOrder.code tự sinh PO-{id}) - đây mới là mã "PO" người dùng cần thấy. null khi SKU
+  /// không gắn đơn Sales nào (tạo tay). Nhánh PI gộp có thể trả về NHIỀU mã nối bằng ", " nếu
+  /// các SKU trong nhóm thuộc nhiều đơn Sales khác nhau (hiếm).
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   /// Mã ProductionInvoice ("PI-2026-001") mà lệnh SX/PI gộp phía trên thuộc về - tách riêng khỏi
   /// poNumber vì 2 bộ đếm độc lập nhau (ProductionOrder vs ProductionInvoice), dễ nhầm là cùng 1

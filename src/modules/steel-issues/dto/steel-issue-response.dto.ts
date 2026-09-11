@@ -10,8 +10,8 @@ export class SteelIssueResponseDto {
   /// Mã PI (ProductionInvoice.code) - luôn có, kể cả PI gộp (isMerged) không gắn 1 đơn Sales cụ
   /// thể nào.
   @Expose() @ApiProperty() piCode!: string;
-  /// Mã đơn hàng Sales gốc (SalesOrder.code) - null cho PI gộp (isMerged, xem
-  /// ProductionInvoice.salesOrderId).
+  /// Mã đơn hàng Sales gốc (SalesOrder.orderCode, Sales tự nhập tay) - null cho PI gộp (isMerged,
+  /// xem ProductionInvoice.salesOrderId).
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   @Expose() @ApiProperty() materialId!: string;
   @Expose() @ApiProperty() materialCode!: string;

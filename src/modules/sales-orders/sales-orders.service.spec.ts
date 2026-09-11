@@ -1,6 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { SalesOrderItemStatus } from '../../generated/prisma/client';
+import { Prisma, SalesOrderItemStatus } from '../../generated/prisma/client';
 import { SalesOrdersService } from './sales-orders.service';
 
 describe('SalesOrdersService', () => {
@@ -46,6 +46,7 @@ describe('SalesOrdersService', () => {
   const orderWithItems = (overrides: Record<string, unknown> = {}) => ({
     id: 10n,
     code: 'PO-10',
+    orderCode: 'DH-KHACH-A-01',
     customerId: 1n,
     customer,
     orderDate: new Date('2026-01-01'),
@@ -71,7 +72,10 @@ describe('SalesOrdersService', () => {
         create: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
-        findUnique: jest.fn(),
+        // Dùng chung cho cả "tìm theo id" (findOneOrThrow, các test khác tự override) LẪN pre-check
+        // "orderCode đã tồn tại chưa" trong create() (10/09) - mặc định null = orderCode chưa dùng,
+        // test tạo trùng orderCode tự override thành 1 order giả.
+        findUnique: jest.fn().mockResolvedValue(null),
         findMany: jest.fn(),
         count: jest.fn(),
       },
@@ -146,6 +150,7 @@ describe('SalesOrdersService', () => {
       prisma.planForm.findFirst.mockResolvedValue(null);
 
       const result = await service.create({
+        orderCode: 'DH-KHACH-A-01',
         customerId: '1',
         orderDate: '2026-01-01',
         items: [{ mfgProductId: '2', totalQty: 5 }],
@@ -198,6 +203,7 @@ describe('SalesOrdersService', () => {
       prisma.planForm.findFirst.mockResolvedValue({ id: 7n });
 
       await service.create({
+        orderCode: 'DH-KHACH-A-01',
         customerId: '1',
         orderDate: '2026-01-01',
         items: [{ mfgProductId: '2', totalQty: 5 }],
@@ -218,6 +224,7 @@ describe('SalesOrdersService', () => {
 
       await expect(
         service.create({
+          orderCode: 'DH-KHACH-A-01',
           customerId: '999',
           orderDate: '2026-01-01',
           items: [{ mfgProductId: '2', totalQty: 1 }],
@@ -232,12 +239,59 @@ describe('SalesOrdersService', () => {
 
       await expect(
         service.create({
+          orderCode: 'DH-KHACH-A-01',
           customerId: '1',
           orderDate: '2026-01-01',
           items: [{ mfgProductId: '999', totalQty: 1 }],
         }),
       ).rejects.toThrow(NotFoundException);
       expect(prisma.salesOrder.create).not.toHaveBeenCalled();
+    });
+
+    // 10/09: orderCode (Sales tự gõ tay) bắt buộc + unique - đây là lần đầu SalesOrder có thể
+    // trùng mã lúc tạo (code cũ luôn tự sinh, không bao giờ trùng).
+    it('rejects when orderCode is already used by another order (pre-check)', async () => {
+      prisma.customer.findUnique.mockResolvedValue(customer);
+      prisma.mfgProduct.findUnique.mockResolvedValue(product);
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems({ id: 99n }));
+
+      await expect(
+        service.create({
+          orderCode: 'DH-KHACH-A-01',
+          customerId: '1',
+          orderDate: '2026-01-01',
+          items: [{ mfgProductId: '2', totalQty: 1 }],
+        }),
+      ).rejects.toThrow(
+        new ConflictException('Mã đơn hàng "DH-KHACH-A-01" đã được dùng cho đơn khác'),
+      );
+      expect(prisma.salesOrder.create).not.toHaveBeenCalled();
+    });
+
+    // Race: 2 request tạo cùng orderCode gần như đồng thời đều qua được pre-check (đọc "chưa tồn
+    // tại"), request thua bị DB unique constraint chặn thật (P2002) - phải bắt lại thành lỗi
+    // nghiệp vụ rõ ràng, không để lọt ra AllExceptionsFilter thành "Duplicate value for: ...".
+    it('race: rejects with the friendly orderCode-conflict 409 when create() loses on unique constraint (P2002)', async () => {
+      prisma.customer.findUnique.mockResolvedValue(customer);
+      prisma.mfgProduct.findUnique.mockResolvedValue(product);
+      prisma.salesOrder.findUnique.mockResolvedValue(null); // pre-check "chưa thấy"
+      const p2002 = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '7.9.0',
+        meta: { target: ['orderCode'] },
+      });
+      prisma.salesOrder.create.mockRejectedValue(p2002);
+
+      await expect(
+        service.create({
+          orderCode: 'DH-KHACH-A-01',
+          customerId: '1',
+          orderDate: '2026-01-01',
+          items: [{ mfgProductId: '2', totalQty: 1 }],
+        }),
+      ).rejects.toThrow(
+        new ConflictException('Mã đơn hàng "DH-KHACH-A-01" đã được dùng cho đơn khác'),
+      );
     });
   });
 

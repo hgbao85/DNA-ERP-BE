@@ -54,7 +54,7 @@ describe('ProductionInvoicesService', () => {
     id: 7n,
     code: 'PI-7',
     salesOrderId: 1n,
-    salesOrder: { code: 'PO-1' },
+    salesOrder: { orderCode: 'PO-1' },
     status: 'PLANNING',
     deadline: null,
     createdAt: new Date(),

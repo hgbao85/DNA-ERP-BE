@@ -74,7 +74,7 @@ describe('CuttingProposalsService', () => {
     productionOrder: {
       poNumber: 'PO-31-1',
       mfgProduct: { factoryCode: 'SKU-1', name: 'Ghế test' },
-      productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+      productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
     },
   });
 
@@ -83,7 +83,7 @@ describe('CuttingProposalsService', () => {
     poNumber: 'PO-31-1',
     bomRevisionId: 5n,
     quantity: 500,
-    productionInvoiceItem: { salesOrder: { code: 'PO-31' } },
+    productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
   };
   const systemConfig = {
     solverStockLengths: [5850, 6000],
@@ -286,13 +286,13 @@ describe('CuttingProposalsService', () => {
           productionOrder: {
             include: {
               mfgProduct: true,
-              productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+              productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
             },
           },
           // Nhánh phương án cấp nhóm - null với đề xuất neo vào 1 lệnh SX như ca này.
           productionInvoice: {
             include: {
-              items: { include: { mfgProduct: true, salesOrder: { select: { code: true } } } },
+              items: { include: { mfgProduct: true, salesOrder: { select: { orderCode: true } } } },
             },
           },
         },
@@ -2414,12 +2414,14 @@ describe('CuttingProposalsService', () => {
             productionOrder: {
               include: {
                 mfgProduct: true,
-                productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+                productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
               },
             },
             productionInvoice: {
               include: {
-                items: { include: { mfgProduct: true, salesOrder: { select: { code: true } } } },
+                items: {
+                  include: { mfgProduct: true, salesOrder: { select: { orderCode: true } } },
+                },
               },
             },
           },

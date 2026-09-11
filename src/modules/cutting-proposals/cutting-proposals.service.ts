@@ -126,14 +126,14 @@ const LIST_INCLUDE = {
   productionOrder: {
     include: {
       mfgProduct: true,
-      productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+      productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
     },
   },
   // Nhánh phương án cắt cấp nhóm (PI gộp): không có ProductionOrder đơn lẻ nào để lấy poNumber/
   // tên sản phẩm - đọc từ PI và các SKU bên trong nó. Xem toResponseDto.
   productionInvoice: {
     include: {
-      items: { include: { mfgProduct: true, salesOrder: { select: { code: true } } } },
+      items: { include: { mfgProduct: true, salesOrder: { select: { orderCode: true } } } },
     },
   },
 } satisfies Prisma.CuttingProposalInclude;
@@ -526,7 +526,7 @@ export class CuttingProposalsService {
         mfgProductCode: item.mfgProduct.factoryCode,
         mfgProductName: item.mfgProduct.name,
         quantity: item.quantity,
-        salesOrderCode: item.salesOrder?.code ?? null,
+        salesOrderCode: item.salesOrder?.orderCode ?? null,
         productionInvoiceCode: item.productionInvoice?.code ?? null,
         deadline: frameDeadlineOf(item),
         prodApprovalStatus: item.prodApprovalStatus,
@@ -1891,13 +1891,13 @@ export class CuttingProposalsService {
     prodApprovalStatus: ProdApprovalStatus | null;
     materialDeadline: Date | null;
     mfgProduct: { factoryCode: string; name: string | null };
-    salesOrder: { code: string } | null;
+    salesOrder: { orderCode: string } | null;
     stages: { stageType: ProdItemStageType; deadline: Date }[];
     productionInvoice: { code: string; deadline: Date | null } | null;
   }): CuttingBatchOrderDto {
     return new CuttingBatchOrderDto({
       productionInvoiceItemId: item.id.toString(),
-      salesOrderCode: item.salesOrder?.code ?? null,
+      salesOrderCode: item.salesOrder?.orderCode ?? null,
       productionInvoiceCode: item.productionInvoice?.code ?? null,
       mfgProductCode: item.mfgProduct.factoryCode,
       mfgProductName: item.mfgProduct.name,
@@ -1991,14 +1991,16 @@ export class CuttingProposalsService {
   private async buildOrderJob(productionOrderId: bigint): Promise<SolverJob> {
     const order = await this.prisma.productionOrder.findUniqueOrThrow({
       where: { id: productionOrderId },
-      include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+      include: {
+        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
+      },
     });
     const { bomRows, segmentSpecLookup, segmentNames } = await this.buildBomRows(
       order.bomRevisionId,
     );
     // Nhãn hiện trong thông báo cho Sếp/QLSX ("Đề xuất cắt sắt cho ... đã tính xong") - ưu tiên mã
     // đơn Sales gốc (xem trao đổi 2026-08-18), fallback poNumber nội bộ khi SKU không gắn đơn nào.
-    const label = order.productionInvoiceItem.salesOrder?.code ?? order.poNumber;
+    const label = order.productionInvoiceItem.salesOrder?.orderCode ?? order.poNumber;
     return { label, numSets: order.quantity, bomRows, segmentSpecLookup, segmentNames };
   }
 
@@ -2401,9 +2403,9 @@ export class CuttingProposalsService {
     // tra cứu, xem trao đổi 2026-08-18). Nhánh gộp có thể trộn nhiều đơn Sales khác nhau - gộp
     // danh sách mã duy nhất, không có "1 mã đại diện" nào đúng cả.
     const salesOrderCode = order
-      ? (order.productionInvoiceItem.salesOrder?.code ?? null)
+      ? (order.productionInvoiceItem.salesOrder?.orderCode ?? null)
       : (pi?.items ?? [])
-          .map((it) => it.salesOrder?.code)
+          .map((it) => it.salesOrder?.orderCode)
           .filter((c): c is string => !!c)
           .filter((c, i, arr) => arr.indexOf(c) === i)
           .join(', ') || null;

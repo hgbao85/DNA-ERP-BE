@@ -32,7 +32,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       mfgProductId: 3n,
       mfgProduct: { factoryCode: 'J55', name: 'Bàn J55' },
       stages: [],
-      productionInvoice: { code: 'PI-1', deadline: null, salesOrder: { code: 'PO-3' } },
+      productionInvoice: { code: 'PI-1', deadline: null, salesOrder: { orderCode: 'PO-3' } },
       ...over,
     };
     return {
@@ -158,7 +158,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       mfgProductId: 4n,
       materialDeadline: new Date('2026-08-28'),
       mfgProduct: { factoryCode: 'GHE', name: 'Ghế tình yêu' },
-      productionInvoice: { code: 'PI-2', deadline: null, salesOrder: { code: 'PO-4' } },
+      productionInvoice: { code: 'PI-2', deadline: null, salesOrder: { orderCode: 'PO-4' } },
     });
     build({
       // Cố ý đưa Ghế lên trước để chắc chắn thứ tự do deadline quyết định, không do thứ tự query.
@@ -214,7 +214,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       quantity: 20,
       mfgProductId: 4n,
       materialDeadline: new Date('2026-08-28'),
-      productionInvoice: { code: 'PI-2', deadline: null, salesOrder: { code: 'PO-4' } },
+      productionInvoice: { code: 'PI-2', deadline: null, salesOrder: { orderCode: 'PO-4' } },
     });
     build({
       productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([j55, ghe]) },
@@ -256,7 +256,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       id: 2n,
       mfgProductId: 4n,
       materialDeadline: new Date('2026-08-28'),
-      productionInvoice: { code: 'PI-2', deadline: null, salesOrder: { code: 'PO-4' } },
+      productionInvoice: { code: 'PI-2', deadline: null, salesOrder: { orderCode: 'PO-4' } },
     });
     build({
       productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([j55, ghe]) },
@@ -317,13 +317,17 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     const noDeadline = mkItem({
       id: 1n,
       materialDeadline: null,
-      productionInvoice: { code: 'PI-1', deadline: null, salesOrder: { code: 'PO-KHONG-HAN' } },
+      productionInvoice: {
+        code: 'PI-1',
+        deadline: null,
+        salesOrder: { orderCode: 'PO-KHONG-HAN' },
+      },
     });
     const urgent = mkItem({
       id: 2n,
       mfgProductId: 4n,
       materialDeadline: new Date('2026-08-20'),
-      productionInvoice: { code: 'PI-2', deadline: null, salesOrder: { code: 'PO-GAP' } },
+      productionInvoice: { code: 'PI-2', deadline: null, salesOrder: { orderCode: 'PO-GAP' } },
     });
     build({
       productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([noDeadline, urgent]) },
@@ -399,7 +403,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
         mfgProductId: 4n,
         materialDeadline: new Date('2026-08-28'),
         mfgProduct: { factoryCode: 'GHE', name: 'Ghế tình yêu' },
-        productionInvoice: { code: 'PI-2', deadline: null, salesOrder: { code: 'PO-4' } },
+        productionInvoice: { code: 'PI-2', deadline: null, salesOrder: { orderCode: 'PO-4' } },
       });
       return {
         productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([j55, ghe]) },

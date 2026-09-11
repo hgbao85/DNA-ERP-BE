@@ -25,7 +25,7 @@ import { WeavingReceiptResponseDto } from './dto/weaving-receipt-response.dto';
 
 // Mã đơn Sales gốc (hiển thị cột "PO" cho người dùng) - xem toIssueResponseDto/toReceiptResponseDto.
 const PRODUCTION_ORDER_WITH_SALES_CODE = {
-  include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+  include: { productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } } },
 } satisfies Prisma.ProductionOrderDefaultArgs;
 
 const WEAVING_ISSUE_INCLUDE = {
@@ -49,7 +49,7 @@ type WeavingReceiptRow = Prisma.WeavingReceiptGetPayload<{
 // findAllGroupedByPoint(), các hàm theo 1 PO ở trên không cần tên sản phẩm.
 const PRODUCTION_ORDER_WITH_SALES_CODE_AND_PRODUCT = {
   include: {
-    productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } },
+    productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
     mfgProduct: { select: { name: true } },
   },
 } satisfies Prisma.ProductionOrderDefaultArgs;
@@ -437,7 +437,7 @@ export class WeavingIssuesService {
         const completed = assignReceipts.reduce((s, r) => s + r.qty, 0);
         return new WeavingPointAssignmentResponseDto({
           poNumber:
-            sample.productionOrder.productionInvoiceItem.salesOrder?.code ??
+            sample.productionOrder.productionInvoiceItem.salesOrder?.orderCode ??
             sample.productionOrder.poNumber,
           productLabel: sample.productionOrder.mfgProduct.name,
           pieceCode: sample.piece.code,
@@ -627,7 +627,7 @@ export class WeavingIssuesService {
       id: issue.id.toString(),
       productionOrderId: issue.productionOrderId.toString(),
       poNumber: issue.productionOrder.poNumber,
-      salesOrderCode: issue.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
+      salesOrderCode: issue.productionOrder.productionInvoiceItem.salesOrder?.orderCode ?? null,
       pieceId: issue.pieceId.toString(),
       pieceCode: issue.piece.code,
       pieceName: issue.piece.name,
@@ -645,7 +645,7 @@ export class WeavingIssuesService {
       id: receipt.id.toString(),
       productionOrderId: receipt.productionOrderId.toString(),
       poNumber: receipt.productionOrder.poNumber,
-      salesOrderCode: receipt.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
+      salesOrderCode: receipt.productionOrder.productionInvoiceItem.salesOrder?.orderCode ?? null,
       pieceId: receipt.pieceId.toString(),
       pieceCode: receipt.piece.code,
       pieceName: receipt.piece.name,

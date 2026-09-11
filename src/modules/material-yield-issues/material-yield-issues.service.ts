@@ -32,7 +32,7 @@ import { ReceiveMaterialYieldIssueDto } from './dto/receive-material-yield-issue
 
 const MATERIAL_YIELD_ISSUE_INCLUDE = {
   productionOrder: {
-    include: { productionInvoiceItem: { select: { salesOrder: { select: { code: true } } } } },
+    include: { productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } } },
   },
   material: true,
 } satisfies Prisma.MaterialYieldIssueInclude;
@@ -462,7 +462,7 @@ export class MaterialYieldIssuesService {
       id: issue.id.toString(),
       productionOrderId: issue.productionOrderId.toString(),
       poNumber: issue.productionOrder.poNumber,
-      salesOrderCode: issue.productionOrder.productionInvoiceItem.salesOrder?.code ?? null,
+      salesOrderCode: issue.productionOrder.productionInvoiceItem.salesOrder?.orderCode ?? null,
       materialId: issue.materialId.toString(),
       materialCode: issue.material.code,
       materialName: issue.material.name,
