@@ -1,11 +1,19 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Piece, Prisma, ProductionOrder, WeavingPoint } from '../../generated/prisma/client';
+import {
+  Piece,
+  Prisma,
+  ProductionOrder,
+  StockLedgerRefType,
+  TransferStatus,
+  WeavingPoint,
+} from '../../generated/prisma/client';
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -15,7 +23,9 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
-import { CreateWeavingIssueDto } from './dto/create-weaving-issue.dto';
+import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
+import { CreateWeavingIssueDto, WeavingIssueMaterialLineDto } from './dto/create-weaving-issue.dto';
 import { CreateWeavingReceiptDto } from './dto/create-weaving-receipt.dto';
 import { WeavingAllocationItemResponseDto } from './dto/weaving-allocation-item-response.dto';
 import { WeavingIssuePlanItemResponseDto } from './dto/weaving-issue-plan-item-response.dto';
@@ -84,6 +94,11 @@ type WeavingReceiptByPointRow = Prisma.WeavingReceiptGetPayload<{
 const WEAVING_ISSUE_WAREHOUSE_CODE = 'vat-tu-tp';
 const WEAVING_RECEIVE_WAREHOUSE_CODE = 'thanh-pham';
 
+/// Kho ảo cố định (protected-warehouse-codes.constant.ts) - điểm đến khi trừ tồn Dây/Đinh/Nút
+/// nhựa thật thủ kho mang kèm mảnh (WeavingIssueMaterial), mirror MaterialIssuesService
+/// (PRODUCTION_WAREHOUSE_CODE ở đó) - vật tư coi như "đã tiêu thụ vào sản xuất" khi rời kho.
+const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
+
 /**
  * Phân bổ/nhận hàng đan (M2 ưu tiên 1, thay manh.service.ts mock) - lớp theo dõi THỰC THI của
  * kho vật tư-TP xuất khung cho điểm đan ngoài ("xuất đan") và nhận lại hàng đã đan xong ("nhập
@@ -93,7 +108,11 @@ const WEAVING_RECEIVE_WAREHOUSE_CODE = 'thanh-pham';
  */
 @Injectable()
 export class WeavingIssuesService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly stockLedgerService: StockLedgerService,
+    private readonly stockReservationsService: StockReservationsService,
+  ) {}
 
   async create(
     productionOrderId: string,
@@ -141,6 +160,15 @@ export class WeavingIssuesService {
 
     const plannedQty = bomPiece.qtyPerUnit * order.quantity;
 
+    // Vật tư THẬT mang kèm (2026-09-11) - chặn trùng materialId ngay ở tầng service (unique
+    // constraint DB sẽ 500 thô nếu để lọt, còn ở đây trả 400 rõ ràng); dòng qty<=0 coi như FE gửi
+    // nhầm, loại bỏ luôn thay vì tạo dòng rác.
+    const materialLines = (dto.materials ?? []).filter((m) => m.qty > 0);
+    const materialIds = materialLines.map((m) => m.materialId);
+    if (new Set(materialIds).size !== materialIds.length) {
+      throw new BadRequestException('Danh sách vật tư mang kèm có materialId trùng lặp');
+    }
+
     // Khoá advisory (H4 fix, cùng lý do H2/H3) - không có dòng có sẵn để FOR UPDATE cho lần xuất
     // đan đầu tiên của 1 khoá (order, piece) - xem lockBusinessKey().
     const created = await this.prisma.$transaction(async (tx) => {
@@ -155,7 +183,24 @@ export class WeavingIssuesService {
         );
       }
 
-      return tx.weavingIssue.create({
+      // 2026-09-12 (theo yêu cầu trực tiếp): "còn phải xuất" theo ĐỊNH MỨC ở trên chỉ là kế hoạch
+      // trên giấy - không phản ánh kho vật tư-TP đã THỰC SỰ nhận đủ mảnh từ phôi-sơn-hàn qua Phân
+      // phối nội bộ hay chưa. Chặn thêm theo số đã nhận thật (sumReceivedForPiece, CHỈ tính đúng
+      // SKU/PO/PI này qua productionOrderId - KHÔNG gộp các lệnh sản xuất khác dù cùng tên mảnh,
+      // xem comment WarehouseTransferPieceItem "Đơn vị chuyển là (productionOrder, piece), không
+      // phải PI"). Cùng khoá advisory ở trên - đủ chặn 2 lần xuất đan gần nhau của CHÍNH mảnh này,
+      // không cần khoá chéo sang WarehouseTransfersService (confirm() chỉ CỘNG thêm nguồn, không
+      // bao giờ làm giảm receivedQty nên không tạo được race "xuất vượt" từ phía đó).
+      const receivedQty = await this.sumReceivedForPiece(tx, order.id, pieceBigId);
+      const canIssueQty = Math.max(0, receivedQty - issuedSoFar);
+      if (dto.qty > canIssueQty) {
+        throw new BadRequestException(
+          `Số lượng xuất đan (${dto.qty}) vượt quá số mảnh thực tế đã nhận từ Phân phối nội bộ cho ${dto.pieceId} ` +
+            `(đã nhận ${receivedQty}, đã xuất ${issuedSoFar}, có thể xuất ${canIssueQty}) - kho vật tư-TP chưa nhận đủ`,
+        );
+      }
+
+      const issue = await tx.weavingIssue.create({
         data: {
           productionOrderId: order.id,
           pieceId: pieceBigId,
@@ -166,9 +211,83 @@ export class WeavingIssuesService {
         },
         include: WEAVING_ISSUE_INCLUDE,
       });
+
+      if (materialLines.length > 0) {
+        await this.issueMaterialsForWeaving(tx, issue.id, materialLines, issuedById);
+      }
+
+      return issue;
     });
 
     return this.toIssueResponseDto(created);
+  }
+
+  /** Trừ tồn THẬT cho Dây/Đinh/Nút nhựa thủ kho mang kèm mảnh (2026-09-11) - mirror
+   *  MaterialIssuesService.create() (FOR UPDATE stock_quant + getAvailableQty() + postEntry()
+   *  TRONG CÙNG transaction, không tự trừ tay để không giành tồn với chuyển kho nội bộ đang giữ
+   *  chỗ). KHÁC WeavingIssue chính (không ghi StockLedger, xem "Phase 9b" đầu schema.prisma) - đây
+   *  là Material thật đã có StockQuant/StockLedger đầy đủ, không phải domain "tồn khung/mảnh" chưa
+   *  xây. Phải gọi SAU khi đã tạo `weavingIssue` (cần weavingIssueId cho FK). */
+  private async issueMaterialsForWeaving(
+    tx: PrismaTx,
+    weavingIssueId: bigint,
+    lines: WeavingIssueMaterialLineDto[],
+    createdById: string,
+  ): Promise<void> {
+    const productionWarehouse = await tx.warehouse.findUniqueOrThrow({
+      where: { code: PRODUCTION_WAREHOUSE_CODE },
+    });
+
+    for (const line of lines) {
+      const materialBigId = parseBigIntId(line.materialId);
+      const material = await tx.material.findUnique({
+        where: { id: materialBigId },
+        select: { id: true, code: true, warehouseId: true },
+      });
+      if (!material) {
+        throw new NotFoundException(`Vật tư ${line.materialId} not found`);
+      }
+      if (!material.warehouseId) {
+        throw new BadRequestException(
+          `Vật tư ${material.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi xuất`,
+        );
+      }
+
+      const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+        SELECT "qty" FROM "stock_quant"
+        WHERE "warehouseId" = ${material.warehouseId} AND "materialId" = ${materialBigId}
+        FOR UPDATE
+      `;
+      const onHand = stockRow?.qty.toNumber() ?? 0;
+      const availableQty = await this.stockReservationsService.getAvailableQty(
+        tx,
+        material.warehouseId,
+        materialBigId,
+        onHand,
+      );
+      if (line.qty > availableQty) {
+        throw new ConflictException(
+          `Tồn kho khả dụng (${availableQty}) không đủ mang kèm ${line.qty} vật tư ${material.code} - kiểm tra lại tồn kho thực tế trước khi xuất`,
+        );
+      }
+
+      await tx.weavingIssueMaterial.create({
+        data: { weavingIssueId, materialId: materialBigId, qty: line.qty },
+      });
+      await this.stockLedgerService.postEntry(
+        {
+          fromWarehouseId: material.warehouseId,
+          toWarehouseId: productionWarehouse.id,
+          materialId: materialBigId,
+          qty: line.qty,
+          refType: StockLedgerRefType.WEAVING_ISSUE_MATERIAL,
+          refId: weavingIssueId.toString(),
+          createdById,
+          idempotencyKey: `weaving-issue-material:${weavingIssueId}:${materialBigId}`,
+        },
+        tx,
+      );
+    }
   }
 
   async receive(
@@ -244,21 +363,26 @@ export class WeavingIssuesService {
   async getIssuePlan(productionOrderId: string): Promise<WeavingIssuePlanItemResponseDto[]> {
     const order = await this.findOrderOrThrow(productionOrderId);
 
-    const [bomPieces, issues, receipts, materialLinesByPiece] = await Promise.all([
+    const [bomPieces, issues, receipts, materialLinesByPiece, receivedItems] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: order.bomRevisionId },
         include: { piece: true },
       }),
       this.prisma.weavingIssue.findMany({
         where: { productionOrderId: order.id },
-        include: { weavingPoint: true },
+        include: { weavingPoint: true, materials: true },
       }),
       this.prisma.weavingReceipt.findMany({
         where: { productionOrderId: order.id },
         include: { weavingPoint: true },
       }),
       this.getWovenMaterialLinesByPiece([order.bomRevisionId]),
+      this.prisma.warehouseTransferPieceItem.findMany({
+        where: { productionOrderId: order.id, transfer: { status: TransferStatus.CONFIRMED } },
+        select: { pieceId: true, quantity: true },
+      }),
     ]);
+    const receivedByPiece = this.sumByPieceId(receivedItems);
 
     const wovenBomPieces = bomPieces.filter((bp) => bp.isWoven);
 
@@ -293,6 +417,8 @@ export class WeavingIssuesService {
       const totalQty = bp.qtyPerUnit * order.quantity;
       const issuedQty = pieceIssues.reduce((s, i) => s + i.qty, 0);
       const materialLines = materialLinesByPiece.get(`${bp.bomRevisionId}:${bp.pieceId}`);
+      const issuedMaterialQty = this.sumIssuedMaterialQty(pieceIssues);
+      const receivedQty = receivedByPiece.get(pieceKey) ?? 0;
 
       return new WeavingIssuePlanItemResponseDto({
         pieceId: pieceKey,
@@ -301,35 +427,97 @@ export class WeavingIssuesService {
         totalQty,
         issuedQty,
         remainingToIssue: totalQty - issuedQty,
+        // "Có thể xuất" (2026-09-12) = phần nhỏ hơn giữa kế hoạch định mức còn lại VÀ số mảnh
+        // THỰC TẾ đã nhận về kho vật tư-TP (qua Phân phối nội bộ, CHỈ tính đúng SKU/PO/PI này -
+        // xem sumReceivedForPiece) trừ đã xuất. Định mức cho phép nhiều hơn không có nghĩa kho đã
+        // có đủ hàng thật để xuất.
+        canIssueQty: Math.max(0, Math.min(totalQty - issuedQty, receivedQty - issuedQty)),
         allocations,
-        wire: materialLines?.wire ?? [],
-        nail: materialLines?.nail ?? [],
+        wire: this.mergeIssuedQty(materialLines?.wire, issuedMaterialQty),
+        nail: this.mergeIssuedQty(materialLines?.nail, issuedMaterialQty),
+        plasticButton: this.mergeIssuedQty(materialLines?.plasticButton, issuedMaterialQty),
       });
     });
   }
 
-  /** Định mức Dây (WIRE) + Đinh (NAIL) /1 mảnh, gom theo `${bomRevisionId}:${pieceId}` - dùng
-   *  chung cho getIssuePlan()/getIssuePlanBatch() để hiển thị kèm mảnh trên màn hình xuất đan
-   *  (xem comment field `wire`/`nail` ở WeavingIssuePlanItemResponseDto). Cùng pattern truy vấn/
-   *  nhóm với SkusService (toPieceMaterialLine + groupIdByKey), thu hẹp lại chỉ 2 nhóm cần. */
-  private async getWovenMaterialLinesByPiece(
-    bomRevisionIds: bigint[],
-  ): Promise<
+  /** Σ quantity theo pieceId - dùng cho receivedByPiece (WarehouseTransferPieceItem CONFIRMED) ở
+   *  getIssuePlan()/getIssuePlanBatch(). */
+  private sumByPieceId(rows: { pieceId: bigint; quantity: number }[]): Map<string, number> {
+    const result = new Map<string, number>();
+    for (const r of rows) {
+      const key = r.pieceId.toString();
+      result.set(key, (result.get(key) ?? 0) + r.quantity);
+    }
+    return result;
+  }
+
+  /** Σ WeavingIssueMaterial.qty theo materialId, gộp từ danh sách WeavingIssue đã kèm `materials`
+   *  (2026-09-11) - dùng chung cho getIssuePlan()/getIssuePlanBatch(). */
+  private sumIssuedMaterialQty(
+    pieceIssues: { materials?: { materialId: bigint; qty: Prisma.Decimal }[] }[],
+  ): Map<string, number> {
+    const result = new Map<string, number>();
+    for (const i of pieceIssues) {
+      for (const m of i.materials ?? []) {
+        const key = m.materialId.toString();
+        result.set(key, (result.get(key) ?? 0) + m.qty.toNumber());
+      }
+    }
+    return result;
+  }
+
+  /** Gắn đúng issuedQty theo ORDER hiện tại lên các dòng wire/nail/plasticButton (BOM-scoped, tự
+   *  mặc định 0 - xem getWovenMaterialLinesByPiece) - trả mảng DTO MỚI, không mutate map dùng
+   *  chung giữa nhiều order trong getIssuePlanBatch(). */
+  private mergeIssuedQty(
+    lines: WeavingPieceMaterialLineResponseDto[] | undefined,
+    issuedByMaterial: Map<string, number>,
+  ): WeavingPieceMaterialLineResponseDto[] {
+    return (lines ?? []).map(
+      (l) =>
+        new WeavingPieceMaterialLineResponseDto({
+          ...l,
+          issuedQty: issuedByMaterial.get(l.materialId) ?? 0,
+        }),
+    );
+  }
+
+  /** Định mức Dây (WIRE) + Đinh (NAIL), luôn đi kèm + Nút nhựa (PLASTIC_BUTTON) CÓ tick
+   *  `includeInWeaving` /1 mảnh, gom theo `${bomRevisionId}:${pieceId}` - dùng chung cho
+   *  getIssuePlan()/getIssuePlanBatch() để hiển thị kèm mảnh trên màn hình xuất đan (xem comment
+   *  field `wire`/`nail`/`plasticButton` ở WeavingIssuePlanItemResponseDto). Nút nhựa CHƯA tick
+   *  không xuất hiện ở đây (khác Dây/Đinh, không có điều kiện). Cùng pattern truy vấn/nhóm với
+   *  SkusService (toPieceMaterialLine + groupIdByKey), thu hẹp lại chỉ 3 nhóm cần. */
+  private async getWovenMaterialLinesByPiece(bomRevisionIds: bigint[]): Promise<
     Map<
       string,
-      { wire: WeavingPieceMaterialLineResponseDto[]; nail: WeavingPieceMaterialLineResponseDto[] }
+      {
+        wire: WeavingPieceMaterialLineResponseDto[];
+        nail: WeavingPieceMaterialLineResponseDto[];
+        plasticButton: WeavingPieceMaterialLineResponseDto[];
+      }
     >
   > {
     const result = new Map<
       string,
-      { wire: WeavingPieceMaterialLineResponseDto[]; nail: WeavingPieceMaterialLineResponseDto[] }
+      {
+        wire: WeavingPieceMaterialLineResponseDto[];
+        nail: WeavingPieceMaterialLineResponseDto[];
+        plasticButton: WeavingPieceMaterialLineResponseDto[];
+      }
     >();
     if (bomRevisionIds.length === 0) return result;
 
     const [systemGroups, lineItems] = await Promise.all([
       this.prisma.materialGroup.findMany({
         where: {
-          systemKey: { in: [MATERIAL_GROUP_SYSTEM_KEYS.WIRE, MATERIAL_GROUP_SYSTEM_KEYS.NAIL] },
+          systemKey: {
+            in: [
+              MATERIAL_GROUP_SYSTEM_KEYS.WIRE,
+              MATERIAL_GROUP_SYSTEM_KEYS.NAIL,
+              MATERIAL_GROUP_SYSTEM_KEYS.PLASTIC_BUTTON,
+            ],
+          },
         },
       }),
       this.prisma.pieceMaterialItem.findMany({
@@ -343,6 +531,33 @@ export class WeavingIssuesService {
     const nailGroupId = systemGroups.find(
       (g) => g.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.NAIL,
     )?.id;
+    const plasticButtonGroupId = systemGroups.find(
+      (g) => g.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.PLASTIC_BUTTON,
+    )?.id;
+
+    // Tồn kho hiện có (2026-09-11, hiển thị tham khảo cạnh ô nhập số lượng thật ở màn xuất đan) -
+    // batch 1 lần cho MỌI dòng thay vì N truy vấn riêng (getIssuePlanBatch() có thể gọi hàm này
+    // cho hàng chục PI cùng lúc). Chỉ tham khảo hiển thị, KHÔNG trừ giữ chỗ
+    // (StockReservation/WarehouseTransferReservation) - số dùng để CHẶN xuất thật nằm ở
+    // issueMaterialsForWeaving() (getAvailableQty(), tại thời điểm ghi sổ).
+    const warehouseIds = [
+      ...new Set(
+        lineItems.map((r) => r.material.warehouseId).filter((id): id is bigint => id != null),
+      ),
+    ];
+    const materialIdsForStock = [...new Set(lineItems.map((r) => r.materialId))];
+    const stockRows =
+      warehouseIds.length > 0
+        ? await this.prisma.stockQuant.findMany({
+            where: { warehouseId: { in: warehouseIds }, materialId: { in: materialIdsForStock } },
+            select: { warehouseId: true, materialId: true, qty: true },
+          })
+        : [];
+    const onHandByMaterialWarehouse = new Map<string, number>();
+    for (const s of stockRows) {
+      if (s.materialId == null) continue;
+      onHandByMaterialWarehouse.set(`${s.materialId}:${s.warehouseId}`, s.qty.toNumber());
+    }
 
     const toLine = (r: (typeof lineItems)[number]) =>
       new WeavingPieceMaterialLineResponseDto({
@@ -352,15 +567,25 @@ export class WeavingIssuesService {
         materialSpec: r.material.spec,
         materialUnit: r.material.unit,
         qtyPerPiece: r.qtyPerPiece.toNumber(),
+        // Merge lại đúng theo order ở getIssuePlan()/getIssuePlanBatch() (hàm này BOM-scoped,
+        // không biết productionOrderId) - mặc định 0 ở đây.
+        issuedQty: 0,
+        onHandQty: onHandByMaterialWarehouse.get(`${r.materialId}:${r.material.warehouseId}`) ?? 0,
       });
 
     for (const r of lineItems) {
       const key = `${r.bomRevisionId}:${r.pieceId}`;
-      const entry = result.get(key) ?? { wire: [], nail: [] };
+      const entry = result.get(key) ?? { wire: [], nail: [], plasticButton: [] };
       if (wireGroupId != null && r.material.materialGroupId === wireGroupId) {
         entry.wire.push(toLine(r));
       } else if (nailGroupId != null && r.material.materialGroupId === nailGroupId) {
         entry.nail.push(toLine(r));
+      } else if (
+        plasticButtonGroupId != null &&
+        r.material.materialGroupId === plasticButtonGroupId &&
+        r.includeInWeaving
+      ) {
+        entry.plasticButton.push(toLine(r));
       } else {
         continue;
       }
@@ -390,21 +615,36 @@ export class WeavingIssuesService {
     const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
     const orderIds = orders.map((o) => o.id);
 
-    const [bomPieces, issues, receipts, materialLinesByPiece] = await Promise.all([
+    const [bomPieces, issues, receipts, materialLinesByPiece, receivedItems] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: { in: revisionIds } },
         include: { piece: true },
       }),
       this.prisma.weavingIssue.findMany({
         where: { productionOrderId: { in: orderIds } },
-        include: { weavingPoint: true },
+        include: { weavingPoint: true, materials: true },
       }),
       this.prisma.weavingReceipt.findMany({
         where: { productionOrderId: { in: orderIds } },
         include: { weavingPoint: true },
       }),
       this.getWovenMaterialLinesByPiece(revisionIds),
+      this.prisma.warehouseTransferPieceItem.findMany({
+        where: {
+          productionOrderId: { in: orderIds },
+          transfer: { status: TransferStatus.CONFIRMED },
+        },
+        select: { productionOrderId: true, pieceId: true, quantity: true },
+      }),
     ]);
+    // Key theo CẢ productionOrderId lẫn pieceId (khác getIssuePlan() - 1 order duy nhất nên chỉ
+    // cần pieceId) - nhiều order trong cùng batch có thể dùng chung tên mảnh, không được gộp
+    // nhầm số đã nhận của order khác vào (xem comment sumReceivedForPiece).
+    const receivedByOrderPiece = new Map<string, number>();
+    for (const r of receivedItems) {
+      const key = `${r.productionOrderId}:${r.pieceId}`;
+      receivedByOrderPiece.set(key, (receivedByOrderPiece.get(key) ?? 0) + r.quantity);
+    }
 
     const bomPiecesByRevision = new Map<string, typeof bomPieces>();
     for (const bp of bomPieces) {
@@ -452,6 +692,8 @@ export class WeavingIssuesService {
         const totalQty = bp.qtyPerUnit * order.quantity;
         const issuedQty = pieceIssues.reduce((s, i) => s + i.qty, 0);
         const materialLines = materialLinesByPiece.get(`${bp.bomRevisionId}:${bp.pieceId}`);
+        const issuedMaterialQty = this.sumIssuedMaterialQty(pieceIssues);
+        const receivedQty = receivedByOrderPiece.get(`${order.id}:${bp.pieceId}`) ?? 0;
 
         return new WeavingIssuePlanItemResponseDto({
           pieceId: pieceKey,
@@ -460,9 +702,11 @@ export class WeavingIssuesService {
           totalQty,
           issuedQty,
           remainingToIssue: totalQty - issuedQty,
+          canIssueQty: Math.max(0, Math.min(totalQty - issuedQty, receivedQty - issuedQty)),
           allocations,
-          wire: materialLines?.wire ?? [],
-          nail: materialLines?.nail ?? [],
+          wire: this.mergeIssuedQty(materialLines?.wire, issuedMaterialQty),
+          nail: this.mergeIssuedQty(materialLines?.nail, issuedMaterialQty),
+          plasticButton: this.mergeIssuedQty(materialLines?.plasticButton, issuedMaterialQty),
         });
       });
     }
@@ -616,6 +860,24 @@ export class WeavingIssuesService {
       _sum: { qty: true },
     });
     return result._sum.qty ?? 0;
+  }
+
+  /** Σ WarehouseTransferPieceItem.quantity đã CONFIRMED (thực sự nhận về kho vật tư-TP, không
+   *  tính PENDING - còn đang trên đường/chưa xác nhận) cho ĐÚNG (productionOrderId, pieceId) này
+   *  - 2026-09-12. Đơn vị chuyển kho mảnh là (productionOrder, piece), không phải PI hay tên mảnh
+   *  suông (xem comment model WarehouseTransferPieceItem trong schema.prisma) - CHỈ tính đúng
+   *  SKU/PO/PI đang xét, không gộp lệnh sản xuất khác dù dùng chung tên mảnh. Dùng chung
+   *  tx.prisma trực tiếp (không qua WarehouseTransfersService) để tránh phụ thuộc module chéo. */
+  private async sumReceivedForPiece(
+    tx: PrismaTx,
+    productionOrderId: bigint,
+    pieceId: bigint,
+  ): Promise<number> {
+    const result = await tx.warehouseTransferPieceItem.aggregate({
+      where: { productionOrderId, pieceId, transfer: { status: TransferStatus.CONFIRMED } },
+      _sum: { quantity: true },
+    });
+    return result._sum.quantity ?? 0;
   }
 
   private async sumIssuedForPoint(

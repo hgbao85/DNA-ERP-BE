@@ -510,8 +510,70 @@ describe('SkusService', () => {
             qtyPerPiece: 3,
             note: null,
             photoUrl: null,
+            includeInWeaving: false,
           },
         ],
+      });
+    });
+
+    it('2026-09-11: giữ includeInWeaving=true cho dòng PLASTIC_BUTTON (Nút nhựa) khi client gửi true', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([
+        { id: 20n, name: 'Manh tua', code: 'MANH-TUA', isWoven: false },
+      ]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 62n, code: 'NUT-01', materialGroupId: SYSTEM_GROUP_IDS.PLASTIC_BUTTON },
+      ]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Manh tua',
+            qtyPerUnit: 2,
+            segments: [],
+            materialLines: [
+              { group: 'PLASTIC_BUTTON', materialId: '62', qtyPerPiece: 4, includeInWeaving: true },
+            ],
+          },
+        ],
+        enteredBy: 'NV Nut',
+      });
+
+      expect(prisma.pieceMaterialItem.createMany).toHaveBeenCalledWith({
+        data: [expect.objectContaining({ materialId: 62n, includeInWeaving: true })],
+      });
+    });
+
+    it('2026-09-11: ép includeInWeaving=false cho nhóm khác PLASTIC_BUTTON dù client gửi true (vd WIRE)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([
+        { id: 20n, name: 'Manh tua', code: 'MANH-TUA', isWoven: false },
+      ]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 60n, code: 'DAY-2LY', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+      ]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Manh tua',
+            qtyPerUnit: 2,
+            segments: [],
+            materialLines: [
+              // includeInWeaving:true không hợp lệ cho WIRE (client cũ/lạ lỡ gửi) - phải bị ép false.
+              { group: 'WIRE', materialId: '60', qtyPerPiece: 3, includeInWeaving: true },
+            ],
+          },
+        ],
+        enteredBy: 'NV Day',
+      });
+
+      expect(prisma.pieceMaterialItem.createMany).toHaveBeenCalledWith({
+        data: [expect.objectContaining({ materialId: 60n, includeInWeaving: false })],
       });
     });
 

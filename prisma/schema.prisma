@@ -400,6 +400,7 @@ model Material {
   stepBundles                   StepBundle[]
   packagingIssues               PackagingIssue[]
   inspectionKhoResultItems      InspectionKhoResultItem[]
+  weavingIssueMaterials         WeavingIssueMaterial[]
 
   @@index([materialGroupId])
   @@index([warehouseId])
@@ -758,6 +759,12 @@ model PieceMaterialItem {
   /// xem services/uploads-api.ts ở FE), lưu thẳng URL. Áp dụng chung cho cả 4 nhóm phẳng (Dây/
   /// Đinh/Tán rút/Nút nhựa) dù UI hiện chỉ mở ở tab Dây (SpecSteelPage.tsx).
   photoUrl      String?
+  /// CHỈ có ý nghĩa với nhóm Nút nhựa (PLASTIC_BUTTON, xem material.materialGroup) - đánh dấu
+  /// dòng nút nhựa này "đi kèm mảnh khi xuất đan" (2026-09-11, checkbox riêng từng dòng ở
+  /// SpecSteelPage.tsx). Dây/Đinh luôn tự động đi kèm (không cần cờ này, xem
+  /// WeavingIssuesService.getWovenMaterialLinesByPiece) - Tán rút không có checkbox, cờ này luôn
+  /// false với các nhóm khác Nút nhựa.
+  includeInWeaving Boolean @default(false)
 
   bomRevision BomRevision @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
   piece       Piece       @relation(fields: [pieceId], references: [id])
@@ -1892,6 +1899,9 @@ enum StockLedgerRefType {
   /// Trừ tồn nguyên liệu (vd thanh nhôm) theo PieceMaterialYield khi Phôi báo cắt vật tư thành
   /// phẩm (ProductionBatch stage=PHOI) - tách khỏi SEGMENT_CONSUME vốn mang nghĩa "đoạn sắt".
   MATERIAL_YIELD_CONSUME
+  /// Trừ tồn Dây/Đinh/Nút nhựa thủ kho mang kèm mảnh lúc xuất đan (WeavingIssueMaterial,
+  /// 2026-09-11) - KHÁC WeavingIssue chính (không ghi StockLedger, xem "Phase 9b").
+  WEAVING_ISSUE_MATERIAL
 }
 
 enum TransferStatus {
@@ -2541,9 +2551,30 @@ model WeavingIssue {
   piece           Piece           @relation(fields: [pieceId], references: [id])
   weavingPoint    WeavingPoint    @relation(fields: [weavingPointId], references: [id])
   issuedBy        User            @relation("WeavingIssueIssuedBy", fields: [issuedById], references: [id])
+  materials       WeavingIssueMaterial[]
 
   @@index([productionOrderId, pieceId, weavingPointId])
   @@map("weaving_issues")
+}
+
+/// Vật tư Dây/Đinh/Nút nhựa thủ kho THẬT SỰ mang kèm mảnh trong 1 lần xuất đan (2026-09-11, theo
+/// yêu cầu trực tiếp - trước đó chỉ hiển thị số THAM KHẢO tính từ PieceMaterialItem.qtyPerPiece,
+/// không lưu gì). KHÁC WeavingIssue/WeavingReceipt (append-only, KHÔNG ghi StockLedger vì domain
+/// tồn khung/mảnh chưa xây - xem "Phase 9b" phía trên): đây là vật tư THẬT (Material đã có
+/// StockQuant/StockLedger đầy đủ), nên CÓ trừ tồn ngay - cùng idiom MaterialIssue (Phase 9c bên
+/// dưới), KHÔNG mirror WeavingIssue. 1 dòng / 1 material / 1 lần xuất đan - không cộng dồn vào
+/// dòng cũ nếu xuất đan cùng mảnh nhiều lần (mỗi lần là 1 WeavingIssue riêng).
+model WeavingIssueMaterial {
+  id             BigInt  @id @default(autoincrement())
+  weavingIssueId BigInt
+  materialId     BigInt
+  qty            Decimal @db.Decimal(14, 4)
+
+  weavingIssue WeavingIssue @relation(fields: [weavingIssueId], references: [id])
+  material     Material     @relation(fields: [materialId], references: [id])
+
+  @@unique([weavingIssueId, materialId])
+  @@map("weaving_issue_materials")
 }
 
 /// 1 đợt nhận khung đã đan xong về từ 1 điểm đan cụ thể. Không link tới 1 WeavingIssue cụ thể -

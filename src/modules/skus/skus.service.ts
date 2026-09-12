@@ -874,6 +874,7 @@ export class SkusService {
       qtyPerPiece: number;
       note: string | null;
       photoUrl: string | null;
+      includeInWeaving: boolean;
     }[] = [];
     const pieceMaterialYieldRows: {
       bomRevisionId: bigint;
@@ -918,6 +919,11 @@ export class SkusService {
           qtyPerPiece: line.qtyPerPiece,
           note: line.note ?? null,
           photoUrl: line.photoUrl ?? null,
+          // Ép về false với mọi nhóm khác Nút nhựa - checkbox "đi kèm xuất đan" chỉ có ở UI của
+          // nhóm PLASTIC_BUTTON, không tin field FE gửi lên cho Dây/Đinh/Tán rút dù client cũ/lạ
+          // có lỡ gửi kèm.
+          includeInWeaving:
+            line.group === 'PLASTIC_BUTTON' ? (line.includeInWeaving ?? false) : false,
         });
       }
       for (const y of p.materialYields ?? []) {
@@ -1228,6 +1234,7 @@ export class SkusService {
       qtyPerPiece: r.qtyPerPiece.toNumber(),
       note: r.note,
       photoUrl: r.photoUrl,
+      includeInWeaving: r.includeInWeaving,
     });
     const toPieceMaterialYieldLine = (r: (typeof pieceMaterialYields)[number]) => ({
       id: Number(r.id),

@@ -312,6 +312,57 @@ describe('PurchaseProposalsService', () => {
       expect(result.poNumber).toBe('PI-2026-099');
       expect(result.piCode).toBe('PI-2026-099');
       expect(result.mfgProductName).toBe('Vật tư thành phẩm');
+      // Không có `items` (PI trực tiếp không kèm dòng SKU nào trong mock) - vẫn phải null-safe,
+      // không throw hay trả '' rỗng khó phân biệt với "có nhưng trống".
+      expect(result.salesOrderCode).toBeNull();
+      expect(result.mfgProductCode).toBe('');
+    });
+
+    // 2026-09-11: piCode/mfgProductName đã có fallback từ row.productionInvoice từ trước, nhưng
+    // salesOrderCode/mfgProductCode thì KHÔNG - cột "PO"/"SKU" trên UI Nhập kho trống trơn cho mọi
+    // đề xuất sourceType=PIECE_MATERIAL_YIELD/CONSUMABLE_MATERIAL dù đề xuất thừa dữ liệu để tính
+    // (phát hiện qua browser thật: NhapKhoPage hiện "—" ở cột PO cho PI có dòng Sơn/vật tư thành
+    // phẩm tự sinh). LIST_INCLUDE.productionInvoice giờ kèm `items.salesOrder`/`items.mfgProduct`.
+    it('sourceType=PIECE_MATERIAL_YIELD/CONSUMABLE_MATERIAL - salesOrderCode/mfgProductCode lấy từ row.productionInvoice.items, không còn trống', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          cuttingProposal: null,
+          productionInvoice: {
+            code: 'PI-2026-099',
+            items: [
+              {
+                mfgProduct: { factoryCode: 'WVTEST249311' },
+                salesOrder: { orderCode: 'PO-WVTEST249311' },
+              },
+            ],
+          },
+        }),
+      );
+
+      const result = await service.findOne('300');
+
+      expect(result.salesOrderCode).toBe('PO-WVTEST249311');
+      expect(result.mfgProductCode).toBe('WVTEST249311');
+    });
+
+    it('sourceType=PIECE_MATERIAL_YIELD - PI gộp nhiều SKU thuộc nhiều đơn Sales khác nhau: gộp mã duy nhất bằng ", "', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          cuttingProposal: null,
+          productionInvoice: {
+            code: 'PI-2026-099',
+            items: [
+              { mfgProduct: { factoryCode: 'SKU-A' }, salesOrder: { orderCode: 'PO-1' } },
+              { mfgProduct: { factoryCode: 'SKU-B' }, salesOrder: { orderCode: 'PO-2' } },
+            ],
+          },
+        }),
+      );
+
+      const result = await service.findOne('300');
+
+      expect(result.salesOrderCode).toBe('PO-1, PO-2');
+      expect(result.mfgProductCode).toBe('SKU-A, SKU-B');
     });
 
     // ── A3: deadline (frameDeadlineOf) ──────────────────────────────────────────

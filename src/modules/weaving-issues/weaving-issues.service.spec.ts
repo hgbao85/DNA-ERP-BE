@@ -31,9 +31,17 @@ describe('WeavingIssuesService', () => {
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
     materialGroup: { findMany: jest.Mock };
     pieceMaterialItem: { findMany: jest.Mock };
+    material: { findUnique: jest.Mock };
+    warehouse: { findUniqueOrThrow: jest.Mock };
+    weavingIssueMaterial: { create: jest.Mock };
+    stockQuant: { findMany: jest.Mock };
+    warehouseTransferPieceItem: { findMany: jest.Mock; aggregate: jest.Mock };
     $executeRaw: jest.Mock;
+    $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
+  let stockLedgerService: { postEntry: jest.Mock };
+  let stockReservationsService: { getAvailableQty: jest.Mock };
 
   const order = {
     id: 1n,
@@ -120,10 +128,32 @@ describe('WeavingIssuesService', () => {
       // tự override.
       materialGroup: { findMany: jest.fn().mockResolvedValue([]) },
       pieceMaterialItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // Vật tư THẬT mang kèm mảnh (2026-09-11, issueMaterialsForWeaving) - mặc định rỗng/không
+      // gọi tới, các test case về materials tự override.
+      material: { findUnique: jest.fn() },
+      warehouse: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 999n, code: 'PRODUCTION' }),
+      },
+      weavingIssueMaterial: { create: jest.fn() },
+      stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
+      // Số mảnh đã CONFIRMED từ Phân phối nội bộ (2026-09-12, sumReceivedForPiece/receivedByPiece)
+      // - create() mặc định dư dả (không chặn test case cũ không quan tâm ràng buộc mới này);
+      // getIssuePlan()/getIssuePlanBatch() mặc định rỗng (canIssueQty=0), test case riêng tự override.
+      warehouseTransferPieceItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: 1_000_000 } }),
+      },
       $executeRaw: jest.fn().mockResolvedValue(0),
+      $queryRaw: jest.fn().mockResolvedValue([]),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
-    service = new WeavingIssuesService(prisma as unknown as PrismaServiceType);
+    stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
+    stockReservationsService = { getAvailableQty: jest.fn().mockResolvedValue(1_000_000) };
+    service = new WeavingIssuesService(
+      prisma as unknown as PrismaServiceType,
+      stockLedgerService as never,
+      stockReservationsService as never,
+    );
   });
 
   describe('create', () => {
@@ -149,6 +179,129 @@ describe('WeavingIssuesService', () => {
         }),
       );
       expect(result.id).toBe('100');
+    });
+
+    it('2026-09-12: chặn xuất vượt số mảnh THỰC TẾ đã nhận từ Phân phối nội bộ (kho chưa nhận đủ), dù định mức còn cho phép nhiều hơn', async () => {
+      // plannedQty = qtyPerUnit(4) × quantity(10) = 40 -> định mức thừa sức cho qty=10, nhưng kho
+      // vật tư-TP mới CONFIRMED nhận 6 mảnh - phải chặn theo số thật này, không phải định mức.
+      prisma.warehouseTransferPieceItem.aggregate.mockResolvedValue({ _sum: { quantity: 6 } });
+
+      await expect(
+        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.weavingIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('2026-09-12: cho phép xuất đúng bằng số đã nhận thật (biên) - và tính đúng aggregate theo (productionOrderId, pieceId) CONFIRMED', async () => {
+      prisma.weavingIssue.create.mockResolvedValue(issueRow);
+      prisma.warehouseTransferPieceItem.aggregate.mockResolvedValue({ _sum: { quantity: 10 } });
+
+      await expect(
+        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
+      ).resolves.toBeDefined();
+
+      expect(prisma.warehouseTransferPieceItem.aggregate).toHaveBeenCalledWith({
+        where: { productionOrderId: 1n, pieceId: 20n, transfer: { status: 'CONFIRMED' } },
+        _sum: { quantity: true },
+      });
+    });
+
+    it('2026-09-11: có materials mang kèm - trừ tồn thật (FOR UPDATE + getAvailableQty + postEntry TRONG transaction), tạo dòng WeavingIssueMaterial', async () => {
+      prisma.weavingIssue.create.mockResolvedValue(issueRow);
+      prisma.material.findUnique.mockResolvedValue({ id: 60n, code: 'DAY-2LY', warehouseId: 900n });
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 50 } }]);
+      stockReservationsService.getAvailableQty.mockResolvedValue(45);
+
+      await service.create(
+        '1',
+        {
+          pieceId: '20',
+          weavingPointId: '40',
+          qty: 10,
+          materials: [{ materialId: '60', qty: 15 }],
+        },
+        'user-1',
+        null,
+      );
+
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        expect.anything(),
+        900n,
+        60n,
+        50,
+      );
+      expect(prisma.weavingIssueMaterial.create).toHaveBeenCalledWith({
+        data: { weavingIssueId: 100n, materialId: 60n, qty: 15 },
+      });
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fromWarehouseId: 900n,
+          toWarehouseId: 999n,
+          materialId: 60n,
+          qty: 15,
+          refType: 'WEAVING_ISSUE_MATERIAL',
+          refId: '100',
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('2026-09-11: tồn khả dụng không đủ cho vật tư mang kèm - ConflictException, không tạo WeavingIssueMaterial/ghi sổ', async () => {
+      prisma.weavingIssue.create.mockResolvedValue(issueRow);
+      prisma.material.findUnique.mockResolvedValue({ id: 60n, code: 'DAY-2LY', warehouseId: 900n });
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 5 } }]);
+      stockReservationsService.getAvailableQty.mockResolvedValue(5);
+
+      await expect(
+        service.create(
+          '1',
+          {
+            pieceId: '20',
+            weavingPointId: '40',
+            qty: 10,
+            materials: [{ materialId: '60', qty: 15 }],
+          },
+          'user-1',
+          null,
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.weavingIssueMaterial.create).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('2026-09-11: materialId trùng lặp trong danh sách mang kèm - BadRequestException, không mở transaction', async () => {
+      await expect(
+        service.create(
+          '1',
+          {
+            pieceId: '20',
+            weavingPointId: '40',
+            qty: 10,
+            materials: [
+              { materialId: '60', qty: 5 },
+              { materialId: '60', qty: 3 },
+            ],
+          },
+          'user-1',
+          null,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.weavingIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('2026-09-11: dòng qty<=0 bị lọc bỏ, không tạo WeavingIssueMaterial/gọi tồn kho', async () => {
+      prisma.weavingIssue.create.mockResolvedValue(issueRow);
+
+      await service.create(
+        '1',
+        { pieceId: '20', weavingPointId: '40', qty: 10, materials: [{ materialId: '60', qty: 0 }] },
+        'user-1',
+        null,
+      );
+
+      expect(prisma.material.findUnique).not.toHaveBeenCalled();
+      expect(prisma.weavingIssueMaterial.create).not.toHaveBeenCalled();
     });
 
     it('idempotency short-circuit - trả về đợt cũ, không tạo mới', async () => {
@@ -467,6 +620,35 @@ describe('WeavingIssuesService', () => {
       expect(result[0].allocations).toHaveLength(0);
     });
 
+    it('2026-09-12: canIssueQty = min(remainingToIssue định mức, đã nhận thật - đã xuất) - kho chưa nhận đủ thì bị chặn ở số thật, không phải định mức', async () => {
+      // plannedQty=40 (định mức thừa), nhưng kho vật tư-TP mới CONFIRMED nhận 15, đã xuất đan 5
+      // rồi -> canIssueQty phải = 15 - 5 = 10, KHÔNG phải remainingToIssue = 40 - 5 = 35.
+      prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
+      prisma.weavingIssue.findMany.mockResolvedValue([
+        { pieceId: 20n, weavingPointId: 40n, qty: 5, weavingPoint, materials: [] },
+      ]);
+      prisma.warehouseTransferPieceItem.findMany.mockResolvedValue([
+        { pieceId: 20n, quantity: 15 },
+      ]);
+
+      const result = await service.getIssuePlan('1');
+      expect(result[0].remainingToIssue).toBe(35);
+      expect(result[0].canIssueQty).toBe(10);
+    });
+
+    it('2026-09-12: canIssueQty không âm khi đã xuất vượt số đã nhận (dữ liệu lịch sử/race hiếm)', async () => {
+      prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
+      prisma.weavingIssue.findMany.mockResolvedValue([
+        { pieceId: 20n, weavingPointId: 40n, qty: 20, weavingPoint, materials: [] },
+      ]);
+      prisma.warehouseTransferPieceItem.findMany.mockResolvedValue([
+        { pieceId: 20n, quantity: 15 },
+      ]);
+
+      const result = await service.getIssuePlan('1');
+      expect(result[0].canIssueQty).toBe(0);
+    });
+
     it('allocations group đúng theo từng điểm đan khi có ≥2 điểm', async () => {
       const pointB = { id: 41n, code: 'DIEM-B', fullName: 'Điểm đan B', isActive: true };
       prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
@@ -554,6 +736,8 @@ describe('WeavingIssuesService', () => {
           materialSpec: null,
           materialUnit: 'm',
           qtyPerPiece: 3,
+          issuedQty: 0,
+          onHandQty: 0,
         },
       ]);
       expect(result[0].nail).toEqual([
@@ -564,6 +748,57 @@ describe('WeavingIssuesService', () => {
           materialSpec: null,
           materialUnit: 'cái',
           qtyPerPiece: 4,
+          issuedQty: 0,
+          onHandQty: 0,
+        },
+      ]);
+    });
+
+    it('2026-09-11: chỉ trả dòng Nút nhựa (plasticButton) đã tick includeInWeaving=true, bỏ qua dòng chưa tick', async () => {
+      prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
+      prisma.materialGroup.findMany.mockResolvedValue([{ id: 905n, systemKey: 'PLASTIC_BUTTON' }]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([
+        {
+          bomRevisionId: 5n,
+          pieceId: 20n,
+          materialId: 70n,
+          qtyPerPiece: { toNumber: () => 8 },
+          includeInWeaving: true,
+          material: {
+            code: 'NUT-01',
+            name: 'Nút nhựa đi đan',
+            spec: null,
+            unit: 'cái',
+            materialGroupId: 905n,
+          },
+        },
+        {
+          bomRevisionId: 5n,
+          pieceId: 20n,
+          materialId: 71n,
+          qtyPerPiece: { toNumber: () => 2 },
+          includeInWeaving: false,
+          material: {
+            code: 'NUT-02',
+            name: 'Nút nhựa không đan',
+            spec: null,
+            unit: 'cái',
+            materialGroupId: 905n,
+          },
+        },
+      ]);
+
+      const result = await service.getIssuePlan('1');
+      expect(result[0].plasticButton).toEqual([
+        {
+          materialId: '70',
+          materialCode: 'NUT-01',
+          materialName: 'Nút nhựa đi đan',
+          materialSpec: null,
+          materialUnit: 'cái',
+          qtyPerPiece: 8,
+          issuedQty: 0,
+          onHandQty: 0,
         },
       ]);
     });
@@ -574,6 +809,53 @@ describe('WeavingIssuesService', () => {
       const result = await service.getIssuePlan('1');
       expect(result[0].wire).toEqual([]);
       expect(result[0].nail).toEqual([]);
+      expect(result[0].plasticButton).toEqual([]);
+    });
+
+    it('2026-09-11: issuedQty = Σ WeavingIssueMaterial.qty của MỌI điểm đan cho đúng materialId, onHandQty = StockQuant.qty của đúng kho vật tư', async () => {
+      prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
+      prisma.materialGroup.findMany.mockResolvedValue([{ id: 900n, systemKey: 'WIRE' }]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([
+        {
+          bomRevisionId: 5n,
+          pieceId: 20n,
+          materialId: 60n,
+          qtyPerPiece: { toNumber: () => 3 },
+          material: {
+            code: 'DAY-2LY',
+            name: 'Dây 2 ly',
+            spec: null,
+            unit: 'm',
+            materialGroupId: 900n,
+            warehouseId: 900n,
+          },
+        },
+      ]);
+      prisma.stockQuant.findMany.mockResolvedValue([
+        { warehouseId: 900n, materialId: 60n, qty: { toNumber: () => 120 } },
+      ]);
+      // 2 lần xuất đan (2 điểm đan khác nhau) cho cùng mảnh - issuedQty phải CỘNG DỒN cả 2.
+      prisma.weavingIssue.findMany.mockResolvedValue([
+        {
+          pieceId: 20n,
+          weavingPointId: 40n,
+          qty: 5,
+          weavingPoint,
+          materials: [{ materialId: 60n, qty: { toNumber: () => 15 } }],
+        },
+        {
+          pieceId: 20n,
+          weavingPointId: 41n,
+          qty: 5,
+          weavingPoint: { id: 41n, code: 'DIEM-B', fullName: 'Điểm đan B', isActive: true },
+          materials: [{ materialId: 60n, qty: { toNumber: () => 9 } }],
+        },
+      ]);
+
+      const result = await service.getIssuePlan('1');
+      expect(result[0].wire).toEqual([
+        expect.objectContaining({ materialId: '60', issuedQty: 24, onHandQty: 120 }),
+      ]);
     });
   });
 
@@ -627,6 +909,36 @@ describe('WeavingIssuesService', () => {
         where: { bomRevisionId: { in: [5n] } },
         include: { piece: true },
       });
+    });
+
+    it('2026-09-12: canIssueQty tính RIÊNG theo từng (productionOrderId, pieceId) - 2 lệnh sản xuất khác nhau CÙNG dùng chung 1 tên mảnh (pieceId=20) KHÔNG được gộp số đã nhận/đã xuất của nhau', async () => {
+      const order2 = { ...order, id: 2n, poNumber: 'PO-32-1', quantity: 5 };
+      prisma.productionOrder.findMany.mockResolvedValue([order, order2]);
+      prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
+      // Order 1: đã nhận 15, đã xuất 5 -> canIssueQty = 10.
+      // Order 2: đã nhận 100 (nhiều hơn hẳn), đã xuất 0 -> canIssueQty phải = 20 (bị chặn bởi
+      // remainingToIssue = totalQty(20) - issuedQty(0), KHÔNG phải 100) - nếu code lỡ gộp nhầm
+      // theo pieceId toàn cục, order 1 sẽ ăn ké số 100 của order 2 và trả sai canIssueQty=35.
+      prisma.weavingIssue.findMany.mockResolvedValue([
+        {
+          productionOrderId: 1n,
+          pieceId: 20n,
+          weavingPointId: 40n,
+          qty: 5,
+          weavingPoint,
+          materials: [],
+        },
+      ]);
+      prisma.weavingReceipt.findMany.mockResolvedValue([]);
+      prisma.warehouseTransferPieceItem.findMany.mockResolvedValue([
+        { productionOrderId: 1n, pieceId: 20n, quantity: 15 },
+        { productionOrderId: 2n, pieceId: 20n, quantity: 100 },
+      ]);
+
+      const result = await service.getIssuePlanBatch(['1', '2']);
+
+      expect(result['1'][0].canIssueQty).toBe(10); // min(40-5=35, 15-5=10)
+      expect(result['2'][0].canIssueQty).toBe(20); // min(20-0=20, 100-0=100)
     });
 
     it('allocations group đúng theo từng điểm đan trong 1 order của batch, khớp getIssuePlan', async () => {

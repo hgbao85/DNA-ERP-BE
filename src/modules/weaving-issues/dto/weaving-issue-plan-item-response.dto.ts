@@ -15,6 +15,11 @@ export class WeavingIssuePlanItemResponseDto {
   @Expose() @ApiProperty() issuedQty!: number;
   /** totalQty - issuedQty. Cap dùng bởi WeavingIssuesService.create(). */
   @Expose() @ApiProperty() remainingToIssue!: number;
+  /** min(remainingToIssue, số mảnh THỰC TẾ đã nhận về kho vật tư-TP qua Phân phối nội bộ - đúng
+   *  SKU/PO/PI này - trừ đã xuất) - 2026-09-12. Cap THẬT dùng để chặn ở create() (khác
+   *  remainingToIssue chỉ là kế hoạch định mức, không phản ánh kho đã có hàng thật hay chưa). Xem
+   *  WeavingIssuesService.sumReceivedForPiece. */
+  @Expose() @ApiProperty() canIssueQty!: number;
   @Expose()
   @ApiProperty({ type: [WeavingAllocationItemResponseDto] })
   allocations!: WeavingAllocationItemResponseDto[];
@@ -29,6 +34,12 @@ export class WeavingIssuePlanItemResponseDto {
   @Expose()
   @ApiProperty({ type: [WeavingPieceMaterialLineResponseDto] })
   nail!: WeavingPieceMaterialLineResponseDto[];
+  /** Định mức Nút nhựa (PLASTIC_BUTTON) /1 mảnh - CHỈ gồm dòng đã tick `includeInWeaving` ở
+   *  SpecSteelPage.tsx ("đi kèm mảnh khi xuất đan"), khác Dây/Đinh ở trên (luôn tự động đi kèm,
+   *  không có điều kiện). Xem PieceMaterialItem.includeInWeaving. */
+  @Expose()
+  @ApiProperty({ type: [WeavingPieceMaterialLineResponseDto] })
+  plasticButton!: WeavingPieceMaterialLineResponseDto[];
 
   constructor(partial: Partial<WeavingIssuePlanItemResponseDto>) {
     Object.assign(this, partial);

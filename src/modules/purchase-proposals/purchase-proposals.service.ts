@@ -84,11 +84,24 @@ const LIST_INCLUDE = {
       },
     },
   },
-  // Trực tiếp trên PurchaseProposal (2026-08-22, sourceType=PIECE_MATERIAL_YIELD) - KHÁC
-  // cuttingProposal.productionInvoice ở trên (đó là PI gộp của phương án cắt sắt). Chỉ set khi
-  // đề xuất không đi qua CuttingProposal nào cả, dùng làm fallback piCode/poNumber ở
-  // toResponseDto() để Mua hàng vẫn biết đề xuất thuộc PI nào dù không có phương án cắt gốc.
-  productionInvoice: { select: { code: true } },
+  // Trực tiếp trên PurchaseProposal (2026-08-22, sourceType=PIECE_MATERIAL_YIELD/
+  // CONSUMABLE_MATERIAL) - KHÁC cuttingProposal.productionInvoice ở trên (đó là PI gộp của
+  // phương án cắt sắt). Chỉ set khi đề xuất không đi qua CuttingProposal nào cả, dùng làm
+  // fallback piCode/poNumber/salesOrderCode/mfgProductCode ở toResponseDto() để Mua hàng vẫn
+  // biết đề xuất thuộc PO/PI/SKU nào dù không có phương án cắt gốc - cùng shape với
+  // cuttingProposal.productionInvoice.items ở trên (trước đây chỉ select `code`, khiến
+  // salesOrderCode/mfgProductCode luôn trống rỗng cho 2 sourceType này dù piCode vẫn hiện đúng).
+  productionInvoice: {
+    select: {
+      code: true,
+      items: {
+        include: {
+          mfgProduct: true,
+          salesOrder: { select: { orderCode: true } },
+        },
+      },
+    },
+  },
 } satisfies Prisma.PurchaseProposalInclude;
 
 const ITEM_INCLUDE = {
@@ -720,12 +733,15 @@ export class PurchaseProposalsService {
 
     // Mã đơn hàng Sales gốc - đây mới là mã "PO" người dùng cần thấy (poNumber nội bộ giờ chỉ
     // còn phục vụ hệ thống, xem trao đổi 2026-08-18). Nhánh lệnh SX đơn: 1 SalesOrder duy nhất
-    // (ProductionInvoiceItem.salesOrderId). Nhánh PI gộp: các SKU trong nhóm có thể thuộc NHIỀU
-    // đơn Sales khác nhau - gộp danh sách mã duy nhất, không có "1 mã đại diện" nào đúng cả.
-    // null khi SKU không gắn đơn Sales nào (tạo tay, xem PlanForm.customerName).
+    // (ProductionInvoiceItem.salesOrderId). Nhánh PI gộp/PI trực tiếp (sourceType=
+    // PIECE_MATERIAL_YIELD/CONSUMABLE_MATERIAL, xem comment LIST_INCLUDE.productionInvoice):
+    // các SKU trong PI có thể thuộc NHIỀU đơn Sales khác nhau - gộp danh sách mã duy nhất, không
+    // có "1 mã đại diện" nào đúng cả. null khi SKU không gắn đơn Sales nào (tạo tay, xem
+    // PlanForm.customerName).
+    const piItemsForFallback = mergedPi?.items ?? row.productionInvoice?.items ?? [];
     const salesOrderCode = productionOrder
       ? (productionOrder.productionInvoiceItem.salesOrder?.orderCode ?? null)
-      : (mergedPi?.items ?? [])
+      : piItemsForFallback
           .map((it) => it.salesOrder?.orderCode)
           .filter((c): c is string => !!c)
           .filter((c, i, arr) => arr.indexOf(c) === i)
@@ -751,7 +767,7 @@ export class PurchaseProposalsService {
         '—',
       mfgProductCode:
         productionOrder?.mfgProduct.factoryCode ??
-        (mergedPi?.items ?? []).map((it) => it.mfgProduct.factoryCode).join(', '),
+        piItemsForFallback.map((it) => it.mfgProduct.factoryCode).join(', '),
       mfgProductName:
         productionOrder?.mfgProduct.name ??
         (mergedPi

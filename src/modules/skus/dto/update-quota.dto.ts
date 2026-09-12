@@ -84,6 +84,15 @@ export class QuotaPieceMaterialLineDto {
   @IsOptional()
   @IsString()
   photoUrl?: string;
+
+  @ApiPropertyOptional({
+    default: false,
+    description:
+      'CHỈ có ý nghĩa khi group=PLASTIC_BUTTON (Nút nhựa) - đánh dấu dòng này "đi kèm mảnh khi xuất đan". Nhóm khác luôn bị ép về false, xem SkusService.replacePieces.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  includeInWeaving?: boolean;
 }
 
 /** 1 dòng định mức "vật tư thành phẩm" (vd thanh nhôm → chân nhôm, tấm sắt lá → "pat") -
