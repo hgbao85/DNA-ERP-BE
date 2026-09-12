@@ -1034,21 +1034,36 @@ describe('SteelIssuesService', () => {
           poNumber: 'PO-47',
           quantity: 20,
           mfgProduct: { name: 'Ghế tình yêu' },
-          productionInvoiceItem: { salesOrder: { orderCode: 'SO-47' } },
+          productionInvoiceItem: {
+            salesOrder: { orderCode: 'SO-47' },
+            stages: [{ deadline: new Date('2026-06-20') }],
+          },
         },
         {
           poNumber: 'PO-48',
           quantity: 8,
           mfgProduct: { name: 'Ghế J55' },
-          productionInvoiceItem: { salesOrder: null },
+          productionInvoiceItem: { salesOrder: null, stages: [] },
         },
       ]);
 
       const result = await service.getOrderSummary('1');
 
       expect(result).toEqual([
-        { poNumber: 'PO-47', salesOrderCode: 'SO-47', productName: 'Ghế tình yêu', quantity: 20 },
-        { poNumber: 'PO-48', salesOrderCode: null, productName: 'Ghế J55', quantity: 8 },
+        {
+          poNumber: 'PO-47',
+          salesOrderCode: 'SO-47',
+          productName: 'Ghế tình yêu',
+          quantity: 20,
+          phoiDeadline: new Date('2026-06-20'),
+        },
+        {
+          poNumber: 'PO-48',
+          salesOrderCode: null,
+          productName: 'Ghế J55',
+          quantity: 8,
+          phoiDeadline: null,
+        },
       ]);
     });
 

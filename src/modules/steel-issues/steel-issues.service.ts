@@ -1445,7 +1445,12 @@ export class SteelIssuesService {
         poNumber: true,
         quantity: true,
         mfgProduct: { select: { name: true } },
-        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
+        productionInvoiceItem: {
+          select: {
+            salesOrder: { select: { orderCode: true } },
+            stages: { where: { stageType: 'FRAME_PHOI' }, select: { deadline: true } },
+          },
+        },
       },
     });
     return orders.map(
@@ -1455,6 +1460,7 @@ export class SteelIssuesService {
           salesOrderCode: o.productionInvoiceItem?.salesOrder?.orderCode ?? null,
           productName: o.mfgProduct.name,
           quantity: o.quantity,
+          phoiDeadline: o.productionInvoiceItem?.stages[0]?.deadline ?? null,
         }),
     );
   }

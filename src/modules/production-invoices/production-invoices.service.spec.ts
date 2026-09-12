@@ -821,133 +821,32 @@ describe('ProductionInvoicesService', () => {
     });
   });
 
-  describe('updateItem - assertFrameSubStagesWithinRange (2026-09-09)', () => {
+  // 2026-09-11 lần 2: đồng bộ lại - FRAME_PHOI/FRAME_HAN/FRAME_SON quay về CHỈ 1 mốc `deadline`
+  // như WEAVING/TRANSFER_CHECK/PACKAGING, bỏ hẳn "khoảng thời gian"/ràng buộc "nằm trong khung
+  // cha" (assertFrameSubStagesWithinRange() đã xoá - xem doc comment schema.prisma). Test cũ cho
+  // hàm đó đã xoá, thay bằng test xác nhận 3 mốc con giờ lưu/đọc như mọi stageType khác.
+  describe('updateItem - FRAME_PHOI/FRAME_HAN/FRAME_SON (2026-09-11 lần 2, chỉ còn 1 deadline)', () => {
     beforeEach(() => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
     });
 
-    it('chặn khi chưa có Khung cơ khí (FRAME) nào - cả trong payload lẫn DB', async () => {
-      prisma.productionInvoiceItemStage.findFirst.mockResolvedValue(null);
-
-      await expect(
-        service.updateItem('7', '20', {
-          stages: [
-            {
-              stageType: ProdItemStageType.FRAME_PHOI,
-              startDate: '2026-05-20',
-              deadline: '2026-06-20',
-            },
-          ],
-        }),
-      ).rejects.toThrow(BadRequestException);
-      expect(prisma.productionInvoiceItemStage.upsert).not.toHaveBeenCalled();
-    });
-
-    it('chặn khi Khung cơ khí đã lưu trong DB nhưng chưa có startDate', async () => {
-      prisma.productionInvoiceItemStage.findFirst.mockResolvedValue({
-        stageType: 'FRAME',
-        startDate: null,
-        deadline: new Date('2026-07-15'),
-      });
-
-      await expect(
-        service.updateItem('7', '20', {
-          stages: [
-            {
-              stageType: ProdItemStageType.FRAME_PHOI,
-              startDate: '2026-05-20',
-              deadline: '2026-06-20',
-            },
-          ],
-        }),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('chặn khi mốc con thiếu startDate (chỉ có deadline)', async () => {
-      await expect(
-        service.updateItem('7', '20', {
-          stages: [
-            { stageType: ProdItemStageType.FRAME, startDate: '2026-05-20', deadline: '2026-07-15' },
-            { stageType: ProdItemStageType.FRAME_PHOI, deadline: '2026-06-20' },
-          ],
-        }),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('chặn khi mốc con bắt đầu trước Khung cơ khí', async () => {
-      await expect(
-        service.updateItem('7', '20', {
-          stages: [
-            { stageType: ProdItemStageType.FRAME, startDate: '2026-05-20', deadline: '2026-07-15' },
-            {
-              stageType: ProdItemStageType.FRAME_PHOI,
-              startDate: '2026-05-01',
-              deadline: '2026-06-20',
-            },
-          ],
-        }),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('chặn khi mốc con kết thúc sau Khung cơ khí', async () => {
-      await expect(
-        service.updateItem('7', '20', {
-          stages: [
-            { stageType: ProdItemStageType.FRAME, startDate: '2026-05-20', deadline: '2026-07-15' },
-            {
-              stageType: ProdItemStageType.FRAME_SON,
-              startDate: '2026-06-15',
-              deadline: '2026-07-20',
-            },
-          ],
-        }),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('cho phép khi cả 3 mốc con nằm trong khoảng Khung cơ khí, kể cả chồng lấn nhau', async () => {
+    it('lưu được 3 mốc con Phôi/Hàn/Sơn CHỒNG LẤN nhau, không cần Khung cơ khí (FRAME) đặt trước', async () => {
       await service.updateItem('7', '20', {
         stages: [
-          { stageType: ProdItemStageType.FRAME, startDate: '2026-05-20', deadline: '2026-07-15' },
-          {
-            stageType: ProdItemStageType.FRAME_PHOI,
-            startDate: '2026-05-20',
-            deadline: '2026-06-20',
-          },
-          {
-            stageType: ProdItemStageType.FRAME_HAN,
-            startDate: '2026-06-10',
-            deadline: '2026-06-30',
-          },
-          {
-            stageType: ProdItemStageType.FRAME_SON,
-            startDate: '2026-06-15',
-            deadline: '2026-07-15',
-          },
+          { stageType: ProdItemStageType.FRAME_PHOI, deadline: '2026-06-20' },
+          { stageType: ProdItemStageType.FRAME_HAN, deadline: '2026-06-10' },
+          { stageType: ProdItemStageType.FRAME_SON, deadline: '2026-06-15' },
         ],
       });
 
-      expect(prisma.productionInvoiceItemStage.upsert).toHaveBeenCalledTimes(4);
-    });
-
-    it('lấy khoảng Khung cơ khí từ DB khi payload không gửi kèm FRAME', async () => {
-      prisma.productionInvoiceItemStage.findFirst.mockResolvedValue({
-        stageType: 'FRAME',
-        startDate: new Date('2026-05-20'),
-        deadline: new Date('2026-07-15'),
-      });
-
-      await service.updateItem('7', '20', {
-        stages: [
-          {
-            stageType: ProdItemStageType.FRAME_HAN,
-            startDate: '2026-06-10',
-            deadline: '2026-06-30',
-          },
-        ],
-      });
-
-      expect(prisma.productionInvoiceItemStage.upsert).toHaveBeenCalledTimes(1);
+      expect(prisma.productionInvoiceItemStage.upsert).toHaveBeenCalledTimes(3);
+      const calls = prisma.productionInvoiceItemStage.upsert.mock.calls as {
+        create: Record<string, unknown>;
+        update: Record<string, unknown>;
+      }[][];
+      expect(calls[0][0].update).toEqual({ deadline: new Date('2026-06-20') });
+      expect(calls[0][0].create.startDate).toBeUndefined();
     });
   });
 

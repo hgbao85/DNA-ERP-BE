@@ -1,6 +1,18 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
-import { ProductionOrderFloorStage, ProductionOrderStatus } from '../../../generated/prisma/client';
+import {
+  ProdItemStageType,
+  ProductionOrderFloorStage,
+  ProductionOrderStatus,
+} from '../../../generated/prisma/client';
+
+/// Mốc kế hoạch của SKU cha (ProductionInvoiceItem.stages, LenhSXPage "Sửa thời hạn") - lặp lại
+/// đúng shape `ItemStageDto` bên production-invoices (không import chéo module, cùng idiom DTO
+/// nội bộ từng module tự khai riêng đã dùng trong codebase).
+class ProductionOrderStageDto {
+  @Expose() @ApiProperty({ enum: ProdItemStageType }) stageType!: ProdItemStageType;
+  @Expose() @ApiProperty() deadline!: Date;
+}
 
 @Exclude()
 export class ProductionOrderResponseDto {
@@ -37,6 +49,17 @@ export class ProductionOrderResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) floorStartedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) floorFinishedAt!: Date | null;
   @Expose() @ApiProperty() createdAt!: Date;
+  /// true nếu `bomRevisionId` ở trên KHÔNG còn là bản BOM đang ACTIVE của `mfgProductId` (định
+  /// mức sản phẩm đã được sửa/duyệt lại SAU KHI lệnh này được tạo - xem changelog
+  /// 2026-09-11-bom-revision-ghim-cu-canh-bao.md). Vật tư mới khai ở bản BOM mới sẽ KHÔNG áp
+  /// dụng cho lệnh này (getIssuePlan các module xuất kho đều đọc theo bomRevisionId đã ghim) -
+  /// FE dùng cờ này để cảnh báo, KHÔNG tự động đổi bomRevisionId (rủi ro sai lệch số liệu đã
+  /// xuất/đã cắt theo định mức cũ).
+  @Expose() @ApiProperty() bomOutOfDate!: boolean;
+  /// Mốc kế hoạch của SKU cha (Khung cơ khí/Phôi/Hàn/Sơn/Đan/Đóng gói) - thêm 2026-09-12 để màn
+  /// Hàn/Sơn (core.tsx fetchHanSonRows()) hiện được "Deadline" thật thay vì hard-code '—'. Đọc
+  /// đúng `stageType` cần dùng (FRAME_HAN cho Hàn, FRAME_SON cho Sơn) ở phía FE.
+  @Expose() @ApiProperty({ type: [ProductionOrderStageDto] }) stages!: ProductionOrderStageDto[];
 
   constructor(partial: Partial<ProductionOrderResponseDto>) {
     Object.assign(this, partial);

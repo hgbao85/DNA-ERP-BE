@@ -19,6 +19,11 @@ const SALES_ORDER_CODE_INCLUDE = {
       productionInvoice: { select: { id: true, code: true } },
       deliveryDeadline: true,
       warehouseCode: true,
+      // Mốc kế hoạch Khung cơ khí/Phôi/Hàn/Sơn/Đan/Đóng gói (LenhSXPage "Sửa thời hạn") - lấy
+      // kèm cùng query, KHÔNG round-trip riêng - dùng để hiện "Deadline" thật ở màn Hàn/Sơn
+      // (core.tsx fetchHanSonRows(), trước đây hard-code '—' vì ProductionOrder tự nó không có
+      // cột deadline, xem changelog 2026-09-12-han-son-deadline-that.md).
+      stages: { select: { stageType: true, deadline: true } },
     },
   },
 } satisfies Prisma.ProductionOrderInclude;
@@ -133,7 +138,13 @@ export class ProductionOrdersService {
       query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
     );
 
-    return { data: result.data.map((o) => this.toResponseDto(o)), meta: result.meta };
+    const activeRevisionByProduct = await this.fetchActiveBomRevisionIds(
+      result.data.map((o) => o.mfgProductId),
+    );
+    return {
+      data: result.data.map((o) => this.toResponseDto(o, activeRevisionByProduct)),
+      meta: result.meta,
+    };
   }
 
   async findOne(id: string): Promise<ProductionOrderResponseDto> {
@@ -145,14 +156,33 @@ export class ProductionOrdersService {
     if (!order) {
       throw new NotFoundException(`Production order ${id} not found`);
     }
-    return this.toResponseDto(order);
+    const activeRevisionByProduct = await this.fetchActiveBomRevisionIds([order.mfgProductId]);
+    return this.toResponseDto(order, activeRevisionByProduct);
+  }
+
+  /** mfgProductId -> id của BomRevision đang ACTIVE của sản phẩm đó (tối đa 1 bản/sản phẩm, xem
+   *  unique index `bom_revision_one_active_per_product`) - dùng để so với `bomRevisionId` đã ghim
+   *  trên từng ProductionOrder (xem `bomOutOfDate` ở toResponseDto). 1 query duy nhất cho cả
+   *  batch, không lặp theo từng dòng. */
+  private async fetchActiveBomRevisionIds(mfgProductIds: bigint[]): Promise<Map<string, bigint>> {
+    const uniqueIds = [...new Set(mfgProductIds.map((id) => id.toString()))].map(BigInt);
+    if (uniqueIds.length === 0) return new Map();
+    const revisions = await this.prisma.bomRevision.findMany({
+      where: { mfgProductId: { in: uniqueIds }, status: BomRevisionStatus.ACTIVE },
+      select: { id: true, mfgProductId: true },
+    });
+    return new Map(revisions.map((r) => [r.mfgProductId.toString(), r.id]));
   }
 
   /** `productionInvoiceItem.productionInvoice!` - ProductionOrder chỉ sinh ra khi Sếp duyệt
    *  (approveItem/approveBatch), mà duyệt bắt buộc item đã qua sendItemToQlsx/sendItemToBoss -
    *  cả hai route đó đều cần piId thật, nên item của 1 ProductionOrder luôn đã có PI (2026-08-20:
    *  productionInvoiceId có thể null cho item MỚI TẠO, nhưng không thể null ở đây). */
-  private toResponseDto(order: ProductionOrderWithSalesOrder): ProductionOrderResponseDto {
+  private toResponseDto(
+    order: ProductionOrderWithSalesOrder,
+    activeRevisionByProduct: Map<string, bigint>,
+  ): ProductionOrderResponseDto {
+    const activeRevisionId = activeRevisionByProduct.get(order.mfgProductId.toString());
     return new ProductionOrderResponseDto({
       id: order.id.toString(),
       poNumber: order.poNumber,
@@ -171,6 +201,13 @@ export class ProductionOrdersService {
       floorStartedAt: order.floorStartedAt,
       floorFinishedAt: order.floorFinishedAt,
       createdAt: order.createdAt,
+      // activeRevisionId undefined (sản phẩm không còn bản ACTIVE nào, hiếm) - coi như KHÔNG
+      // out-of-date, tránh cảnh báo sai khi không có gì để so sánh.
+      bomOutOfDate: activeRevisionId != null && activeRevisionId !== order.bomRevisionId,
+      stages: order.productionInvoiceItem.stages.map((s) => ({
+        stageType: s.stageType,
+        deadline: s.deadline,
+      })),
     });
   }
 
@@ -196,7 +233,10 @@ export class ProductionOrdersService {
           : { floorStage: 'ACTIVE' },
       include: SALES_ORDER_CODE_INCLUDE,
     });
-    return this.toResponseDto(updated);
+    return this.toResponseDto(
+      updated,
+      await this.fetchActiveBomRevisionIds([updated.mfgProductId]),
+    );
   }
 
   /**
@@ -215,7 +255,10 @@ export class ProductionOrdersService {
       data: { floorStage: 'PAUSED' },
       include: SALES_ORDER_CODE_INCLUDE,
     });
-    return this.toResponseDto(updated);
+    return this.toResponseDto(
+      updated,
+      await this.fetchActiveBomRevisionIds([updated.mfgProductId]),
+    );
   }
 
   /**
@@ -237,6 +280,9 @@ export class ProductionOrdersService {
           : { floorStage: 'FINISHED' },
       include: SALES_ORDER_CODE_INCLUDE,
     });
-    return this.toResponseDto(updated);
+    return this.toResponseDto(
+      updated,
+      await this.fetchActiveBomRevisionIds([updated.mfgProductId]),
+    );
   }
 }

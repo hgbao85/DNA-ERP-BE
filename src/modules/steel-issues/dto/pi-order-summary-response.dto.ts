@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
 
 /**
@@ -15,6 +15,12 @@ export class PiOrderSummaryResponseDto {
   @Expose() @ApiProperty() productName!: string;
   /** Snapshot ProductionOrder.quantity tại thời điểm Sếp duyệt - xem comment model ProductionOrder. */
   @Expose() @ApiProperty() quantity!: number;
+  /** Mốc kế hoạch Phôi (ProdItemStageType.FRAME_PHOI, LenhSXPage "Sửa thời hạn") của đúng SKU này -
+   *  thêm 2026-09-12 để màn Lệnh sản xuất Phôi hiện được deadline (trước đây không có, vì
+   *  PHOI_STAFF không có PRODUCTION_INVOICE:VIEW để tự đọc ProductionInvoiceItem.stages - endpoint
+   *  này (STEEL_ISSUE:VIEW) là đường duy nhất Phôi đọc được thông tin PO/SKU). null nếu KHSX chưa
+   *  từng đặt mốc Phôi cho SKU này. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) phoiDeadline!: Date | null;
 
   constructor(partial: Partial<PiOrderSummaryResponseDto>) {
     Object.assign(this, partial);

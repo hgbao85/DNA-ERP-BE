@@ -1203,16 +1203,18 @@ model ProductionInvoiceItem {
 /// - PACKAGING: "Đóng gói" - field FE cũ tên `SON`, dễ nhầm với `MfgStage.SON` (Sơn/painting thật,
 ///   khác nghĩa) nên đặt tên rõ ràng hơn ở BE, adapter FE tự dịch qua lại.
 ///
-/// 2026-09-09: thêm FRAME_PHOI/FRAME_HAN/FRAME_SON - mốc kế hoạch CON, lồng bên trong khoảng của
-/// FRAME (theo yêu cầu người dùng - trước đây doc comment ở đây từng ghi "KHÔNG tách riêng Phôi/
-/// Hàn/Sơn vì đây chỉ là mốc kế hoạch" - đã đổi ý theo yêu cầu mới). Đặt tên tiền tố `FRAME_` (CỐ Ý
-/// không dùng bare `PHOI`/`HAN`/`SON` trùng enum `MfgStage` - domain thực thi/báo sản lượng thật,
-/// KHÁC HẲN ý nghĩa, xem cảnh báo cùng kiểu ở PACKAGING phía trên) - validate + upsert vẫn dùng
-/// CHUNG `ProductionInvoiceItemStage`/`updateItem()`, không tách bảng riêng (rủi ro thấp nhất).
-/// Ràng buộc (ProductionInvoicesService.assertFrameSubStagesWithinRange()): PHẢI nằm trong khoảng
-/// [FRAME.startDate, FRAME.deadline], ĐƯỢC PHÉP chồng lấn nhau (không ràng buộc thứ tự Phôi trước
-/// Hàn sau - khớp thực tế Hàn làm việc trực tiếp với Phôi tại xưởng, xem memory
-/// han-son-no-phoi-stock-check-by-design).
+/// 2026-09-09: thêm FRAME_PHOI/FRAME_HAN/FRAME_SON - mốc kế hoạch CON riêng cho Phôi/Hàn/Sơn (theo
+/// yêu cầu người dùng - trước đây doc comment ở đây từng ghi "KHÔNG tách riêng Phôi/Hàn/Sơn vì đây
+/// chỉ là mốc kế hoạch" - đã đổi ý theo yêu cầu mới). Đặt tên tiền tố `FRAME_` (CỐ Ý không dùng bare
+/// `PHOI`/`HAN`/`SON` trùng enum `MfgStage` - domain thực thi/báo sản lượng thật, KHÁC HẲN ý nghĩa,
+/// xem cảnh báo cùng kiểu ở PACKAGING phía trên) - validate + upsert vẫn dùng CHUNG
+/// `ProductionInvoiceItemStage`/`updateItem()`, không tách bảng riêng.
+///
+/// 2026-09-11 lần 2: ĐÃ THỬ cho FRAME + 3 mốc con này thành "khoảng thời gian" (thêm cột
+/// `startDate`, bắt Phôi/Hàn/Sơn nằm trong khoảng của FRAME) rồi ĐỔI Ý ĐỒNG BỘ LẠI - xác nhận qua
+/// DB thật lúc đổi: chưa PI nào từng dùng tính năng khoảng ngày đó (0 dòng), không mất dữ liệu.
+/// Quay về CHỈ 1 mốc `deadline` cho mọi giá trị enum (kể cả 3 mốc con) - giống hệt
+/// WEAVING/TRANSFER_CHECK/PACKAGING, không còn khái niệm "khoảng"/ràng buộc "nằm trong khung cha".
 enum ProdItemStageType {
   FRAME
   WEAVING
@@ -1227,11 +1229,6 @@ model ProductionInvoiceItemStage {
   id                      BigInt            @id @default(autoincrement())
   productionInvoiceItemId BigInt
   stageType               ProdItemStageType
-  /// 2026-09-09: thêm - CHỈ có ý nghĩa cho FRAME (giờ dùng như khoảng, không chỉ 1 mốc nữa) và 3
-  /// mốc con FRAME_PHOI/FRAME_HAN/FRAME_SON (bắt buộc đi kèm `deadline` thành 1 cặp khoảng ngày -
-  /// xem assertFrameSubStagesWithinRange()). NULL với WEAVING/TRANSFER_CHECK/PACKAGING (giữ nguyên
-  /// ý nghĩa "1 mốc" như cũ, không đổi).
-  startDate               DateTime?
   deadline                DateTime
 
   productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])

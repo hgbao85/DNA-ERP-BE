@@ -6,7 +6,7 @@ import { ProductionOrdersService } from './production-orders.service';
 describe('ProductionOrdersService', () => {
   let service: ProductionOrdersService;
   let prisma: {
-    bomRevision: { findFirst: jest.Mock };
+    bomRevision: { findFirst: jest.Mock; findMany: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
     productionOrder: {
       create: jest.Mock;
@@ -32,13 +32,14 @@ describe('ProductionOrdersService', () => {
       salesOrder: { orderCode: 'PO-31' },
       productionInvoice: { id: 500n, code: 'PI-2026-001' },
       deliveryDeadline: new Date('2026-09-01'),
+      stages: [],
     },
     ...overrides,
   });
 
   beforeEach(() => {
     prisma = {
-      bomRevision: { findFirst: jest.fn() },
+      bomRevision: { findFirst: jest.fn(), findMany: jest.fn() },
       productionInvoiceItem: { findUniqueOrThrow: jest.fn() },
       productionOrder: {
         create: jest.fn(),
@@ -49,6 +50,9 @@ describe('ProductionOrdersService', () => {
       },
     };
     service = new ProductionOrdersService(prisma as unknown as PrismaServiceType);
+    // Mặc định không có bản ACTIVE nào khớp -> bomOutOfDate=false, không phá các test không quan
+    // tâm field này - test riêng của bomOutOfDate tự override lại mock này.
+    prisma.bomRevision.findMany.mockResolvedValue([]);
   });
 
   describe('createFromApproval', () => {
@@ -131,6 +135,7 @@ describe('ProductionOrdersService', () => {
   describe('findOne', () => {
     it('returns the mapped response dto, including the sales order code', async () => {
       prisma.productionOrder.findUnique.mockResolvedValue(order());
+      prisma.bomRevision.findMany.mockResolvedValue([{ id: 5n, mfgProductId: 2n }]);
 
       const result = await service.findOne('9');
 
@@ -149,9 +154,11 @@ describe('ProductionOrdersService', () => {
             salesOrder: null,
             productionInvoice: { id: 500n, code: 'PI-2026-001' },
             deliveryDeadline: null,
+            stages: [],
           },
         }),
       );
+      prisma.bomRevision.findMany.mockResolvedValue([{ id: 5n, mfgProductId: 2n }]);
 
       const result = await service.findOne('9');
 
@@ -162,6 +169,64 @@ describe('ProductionOrdersService', () => {
       prisma.productionOrder.findUnique.mockResolvedValue(null);
 
       await expect(service.findOne('999')).rejects.toThrow(NotFoundException);
+    });
+
+    // 2026-09-12: FE (core.tsx fetchHanSonRows()) đọc field này để hiện "Deadline" thật ở màn
+    // Hàn/Sơn (trước đây hard-code '—' vì ProductionOrder tự nó không có cột deadline).
+    it('maps productionInvoiceItem.stages through unchanged (FE tự lọc đúng stageType cần dùng)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(
+        order({
+          productionInvoiceItem: {
+            salesOrder: { orderCode: 'PO-31' },
+            productionInvoice: { id: 500n, code: 'PI-2026-001' },
+            deliveryDeadline: new Date('2026-09-01'),
+            stages: [
+              { stageType: 'FRAME_HAN', deadline: new Date('2026-06-25') },
+              { stageType: 'FRAME_SON', deadline: new Date('2026-06-28') },
+            ],
+          },
+        }),
+      );
+      prisma.bomRevision.findMany.mockResolvedValue([{ id: 5n, mfgProductId: 2n }]);
+
+      const result = await service.findOne('9');
+
+      expect(result.stages).toEqual([
+        { stageType: 'FRAME_HAN', deadline: new Date('2026-06-25') },
+        { stageType: 'FRAME_SON', deadline: new Date('2026-06-28') },
+      ]);
+    });
+
+    // 2026-09-11: ProductionOrder.bomRevisionId ghim tại thời điểm duyệt - nếu sản phẩm có bản
+    // BOM mới hơn được duyệt SAU đó (mfgProduct dùng chung cho nhiều PlanForm/lệnh sản xuất),
+    // lệnh cũ không tự đồng bộ theo (xem changelog-2026-09-11-bom-revision-ghim-cu-canh-bao.md).
+    // `bomOutOfDate` chỉ để FE cảnh báo, KHÔNG tự đổi bomRevisionId nào.
+    it('bomOutOfDate = true khi bomRevisionId đã ghim KHÁC bản ACTIVE hiện tại của sản phẩm', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ bomRevisionId: 5n }));
+      // Bản ACTIVE hiện tại của mfgProductId=2 giờ là revision 9 (khác 5 đã ghim).
+      prisma.bomRevision.findMany.mockResolvedValue([{ id: 9n, mfgProductId: 2n }]);
+
+      const result = await service.findOne('9');
+
+      expect(result.bomOutOfDate).toBe(true);
+    });
+
+    it('bomOutOfDate = false khi bomRevisionId đã ghim vẫn đúng bản ACTIVE hiện tại', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ bomRevisionId: 5n }));
+      prisma.bomRevision.findMany.mockResolvedValue([{ id: 5n, mfgProductId: 2n }]);
+
+      const result = await service.findOne('9');
+
+      expect(result.bomOutOfDate).toBe(false);
+    });
+
+    it('bomOutOfDate = false khi sản phẩm không còn bản ACTIVE nào (không có gì để so sánh)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ bomRevisionId: 5n }));
+      prisma.bomRevision.findMany.mockResolvedValue([]);
+
+      const result = await service.findOne('9');
+
+      expect(result.bomOutOfDate).toBe(false);
     });
   });
 
