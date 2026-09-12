@@ -22,6 +22,7 @@ type StockLedgerWithRefs = Prisma.StockLedgerGetPayload<{
     segmentSpec: { include: { material: true } };
     piece: true;
     productVariant: true;
+    createdBy: { select: { firstName: true; lastName: true } };
   };
 }>;
 
@@ -32,6 +33,10 @@ const LEDGER_INCLUDE = {
   segmentSpec: { include: { material: true } },
   piece: true,
   productVariant: true,
+  // Tên người ghi bút toán - lấy thẳng ở đây thay vì để FE tự resolve qua GET /users như các màn
+  // Admin đang làm: WAREHOUSE_STAFF (thủ kho, người đọc sổ kho chính) KHÔNG có quyền USER:VIEW
+  // nên gọi /users sẽ 403 (thêm 2026-09-12, màn "Lịch sử kho").
+  createdBy: { select: { firstName: true, lastName: true } },
 } satisfies Prisma.StockLedgerInclude;
 
 /** Input to postEntry() - callers already resolved every id to a bigint/known value. */
@@ -251,7 +256,326 @@ export class StockLedgerService {
       query.sortBy ? { [query.sortBy]: query.sortOrder } : { createdAt: query.sortOrder },
     );
 
-    return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };
+    const [transferCodeById, refStageByKey, poCodeByKey, piCodeByKey] = await Promise.all([
+      this.fetchTransferCodes(result.data),
+      this.fetchRefStages(result.data),
+      this.fetchPoCodes(result.data),
+      this.fetchPiCodes(result.data),
+    ]);
+    return {
+      data: result.data.map((r) =>
+        this.toResponseDto(r, transferCodeById, refStageByKey, poCodeByKey, piCodeByKey),
+      ),
+      meta: result.meta,
+    };
+  }
+
+  /** `${refType}:${refId}` -> công đoạn (MfgStage) của bản ghi nguồn, để sổ kho ghi rõ "Tổ Phôi/Hàn/
+   *  Sơn" thay vì chung chung "Xưởng sản xuất" (xem `refStage` ở StockLedgerResponseDto). Chỉ 2
+   *  refType có cột stage thật; các loại còn lại tổ là cố định theo nghiệp vụ nên FE tự suy, không
+   *  tốn query. Mỗi bảng 1 query cho cả trang. */
+  private async fetchRefStages(rows: StockLedgerWithRefs[]): Promise<Map<string, string>> {
+    const idsOf = (refType: StockLedgerRefType) => [
+      ...new Set(rows.filter((r) => r.refType === refType && r.refId).map((r) => r.refId!)),
+    ];
+    const batchIds = idsOf(StockLedgerRefType.SEGMENT_CONSUME);
+    const materialIssueIds = idsOf(StockLedgerRefType.MATERIAL_ISSUE);
+
+    const [batches, materialIssues] = await Promise.all([
+      batchIds.length
+        ? this.prisma.productionBatch.findMany({
+            where: { id: { in: batchIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, stage: true },
+          })
+        : Promise.resolve([]),
+      materialIssueIds.length
+        ? this.prisma.materialIssue.findMany({
+            where: { id: { in: materialIssueIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, stage: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const map = new Map<string, string>();
+    for (const b of batches) {
+      map.set(`${StockLedgerRefType.SEGMENT_CONSUME}:${b.id.toString()}`, b.stage);
+    }
+    for (const m of materialIssues) {
+      map.set(`${StockLedgerRefType.MATERIAL_ISSUE}:${m.id.toString()}`, m.stage);
+    }
+    return map;
+  }
+
+  /** refId -> mã phiếu chuyển kho ("CK-2026-010") cho riêng refType=WAREHOUSE_TRANSFER. Chỉ bảng
+   *  `warehouse_transfers` có cột `code` đọc được; các nguồn khác (steel_issues, material_issues,
+   *  packaging_issues, purchase_proposals...) chỉ có id số nên không tra gì thêm - xem `refCode` ở
+   *  StockLedgerResponseDto. 1 query cho cả trang, không lặp theo từng dòng. */
+  private async fetchTransferCodes(rows: StockLedgerWithRefs[]): Promise<Map<string, string>> {
+    const ids = [
+      ...new Set(
+        rows
+          .filter((r) => r.refType === StockLedgerRefType.WAREHOUSE_TRANSFER && r.refId)
+          .map((r) => r.refId!),
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+    const transfers = await this.prisma.warehouseTransfer.findMany({
+      where: { id: { in: ids.map((id) => parseBigIntId(id)) } },
+      select: { id: true, code: true },
+    });
+    return new Map(transfers.map((t) => [t.id.toString(), t.code]));
+  }
+
+  /** `${refType}:${refId}` -> mã đơn hàng Sales (SalesOrder.orderCode) của Lệnh sản xuất gắn với
+   *  bản ghi nguồn - cột "Mã đơn hàng (PO)" ở màn Lịch sử kho (2026-09-12, theo yêu cầu Sếp). Mỗi
+   *  refType đi qua 1 chuỗi quan hệ khác nhau tới ProductionOrder/ProductionInvoice - cùng chuỗi
+   *  `productionOrder.productionInvoiceItem.salesOrder.orderCode` đã dùng ở MaterialIssuesService/
+   *  PackagingIssuesService/ProductionBatchesService/WeavingIssuesService/MaterialYieldIssuesService,
+   *  riêng STEEL_ISSUE đi thẳng `productionInvoice.salesOrder.orderCode` (không qua ProductionOrder).
+   *  refType không gắn đơn hàng nào (mua hàng, chuyển kho, KCS phế, điều chỉnh tay...) không tra gì
+   *  thêm. 1 query/loại cho cả trang, không lặp theo từng dòng - cùng pattern fetchRefStages(). */
+  private async fetchPoCodes(rows: StockLedgerWithRefs[]): Promise<Map<string, string>> {
+    const idsOf = (refType: StockLedgerRefType) => [
+      ...new Set(rows.filter((r) => r.refType === refType && r.refId).map((r) => r.refId!)),
+    ];
+    const materialIssueIds = idsOf(StockLedgerRefType.MATERIAL_ISSUE);
+    const batchIds = idsOf(StockLedgerRefType.SEGMENT_CONSUME);
+    const packagingIssueIds = idsOf(StockLedgerRefType.PACKAGING_ISSUE);
+    const materialYieldIssueIds = idsOf(StockLedgerRefType.MATERIAL_YIELD_CONSUME);
+    const weavingIssueMaterialIds = idsOf(StockLedgerRefType.WEAVING_ISSUE_MATERIAL);
+    const steelIssueIds = idsOf(StockLedgerRefType.STEEL_ISSUE);
+
+    const productionOrderSalesOrderSelect = {
+      productionOrder: {
+        select: {
+          productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
+        },
+      },
+    } as const;
+
+    const [
+      materialIssues,
+      batches,
+      packagingIssues,
+      materialYieldIssues,
+      weavingIssueMaterials,
+      steelIssues,
+    ] = await Promise.all([
+      materialIssueIds.length
+        ? this.prisma.materialIssue.findMany({
+            where: { id: { in: materialIssueIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, ...productionOrderSalesOrderSelect },
+          })
+        : Promise.resolve([]),
+      batchIds.length
+        ? this.prisma.productionBatch.findMany({
+            where: { id: { in: batchIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, ...productionOrderSalesOrderSelect },
+          })
+        : Promise.resolve([]),
+      packagingIssueIds.length
+        ? this.prisma.packagingIssue.findMany({
+            where: { id: { in: packagingIssueIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, ...productionOrderSalesOrderSelect },
+          })
+        : Promise.resolve([]),
+      materialYieldIssueIds.length
+        ? this.prisma.materialYieldIssue.findMany({
+            where: { id: { in: materialYieldIssueIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, ...productionOrderSalesOrderSelect },
+          })
+        : Promise.resolve([]),
+      weavingIssueMaterialIds.length
+        ? this.prisma.weavingIssueMaterial.findMany({
+            where: { id: { in: weavingIssueMaterialIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, weavingIssue: { select: productionOrderSalesOrderSelect } },
+          })
+        : Promise.resolve([]),
+      steelIssueIds.length
+        ? this.prisma.steelIssue.findMany({
+            where: { id: { in: steelIssueIds.map((id) => parseBigIntId(id)) } },
+            select: {
+              id: true,
+              productionInvoice: { select: { salesOrder: { select: { orderCode: true } } } },
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const map = new Map<string, string>();
+    const putIfPresent = (
+      refType: StockLedgerRefType,
+      id: bigint,
+      orderCode: string | null | undefined,
+    ) => {
+      if (orderCode) map.set(`${refType}:${id.toString()}`, orderCode);
+    };
+    for (const m of materialIssues) {
+      putIfPresent(
+        StockLedgerRefType.MATERIAL_ISSUE,
+        m.id,
+        m.productionOrder?.productionInvoiceItem?.salesOrder?.orderCode,
+      );
+    }
+    for (const b of batches) {
+      putIfPresent(
+        StockLedgerRefType.SEGMENT_CONSUME,
+        b.id,
+        b.productionOrder?.productionInvoiceItem?.salesOrder?.orderCode,
+      );
+    }
+    for (const p of packagingIssues) {
+      putIfPresent(
+        StockLedgerRefType.PACKAGING_ISSUE,
+        p.id,
+        p.productionOrder?.productionInvoiceItem?.salesOrder?.orderCode,
+      );
+    }
+    for (const y of materialYieldIssues) {
+      putIfPresent(
+        StockLedgerRefType.MATERIAL_YIELD_CONSUME,
+        y.id,
+        y.productionOrder?.productionInvoiceItem?.salesOrder?.orderCode,
+      );
+    }
+    for (const w of weavingIssueMaterials) {
+      putIfPresent(
+        StockLedgerRefType.WEAVING_ISSUE_MATERIAL,
+        w.id,
+        w.weavingIssue?.productionOrder?.productionInvoiceItem?.salesOrder?.orderCode,
+      );
+    }
+    for (const s of steelIssues) {
+      putIfPresent(
+        StockLedgerRefType.STEEL_ISSUE,
+        s.id,
+        s.productionInvoice?.salesOrder?.orderCode,
+      );
+    }
+    return map;
+  }
+
+  /** `${refType}:${refId}` -> mã Lệnh sản xuất (ProductionInvoice.code, vd "PI-2026-005") gắn với
+   *  bản ghi nguồn - cột "Lệnh sản xuất" ở màn Lịch sử kho (2026-09-12, theo yêu cầu Sếp). "Lệnh
+   *  sản xuất" trong toàn hệ thống LÀ ProductionInvoice/PI (xem nhãn "Lệnh sản xuất (PI)" ở
+   *  BusinessDataPage.tsx/ProductionInvoicesPage.tsx phía FE) - KHÔNG phải ProductionOrder.poNumber
+   *  (mã đó chỉ dùng nội bộ tra cứu, không hiển thị, xem comment refCode/fetchPoCodes ở trên).
+   *  Cùng chuỗi quan hệ với fetchPoCodes() nhưng đi tới `productionInvoice.code` thay vì
+   *  `salesOrder.orderCode` - và KHÔNG có ca null vì PI gộp (ProductionInvoice.code luôn có, chỉ
+   *  `salesOrderId` mới null khi gộp). refType không gắn Lệnh sản xuất nào (mua hàng, chuyển kho,
+   *  KCS phế, điều chỉnh tay...) không tra gì thêm. 1 query/loại cho cả trang. */
+  private async fetchPiCodes(rows: StockLedgerWithRefs[]): Promise<Map<string, string>> {
+    const idsOf = (refType: StockLedgerRefType) => [
+      ...new Set(rows.filter((r) => r.refType === refType && r.refId).map((r) => r.refId!)),
+    ];
+    const materialIssueIds = idsOf(StockLedgerRefType.MATERIAL_ISSUE);
+    const batchIds = idsOf(StockLedgerRefType.SEGMENT_CONSUME);
+    const packagingIssueIds = idsOf(StockLedgerRefType.PACKAGING_ISSUE);
+    const materialYieldIssueIds = idsOf(StockLedgerRefType.MATERIAL_YIELD_CONSUME);
+    const weavingIssueMaterialIds = idsOf(StockLedgerRefType.WEAVING_ISSUE_MATERIAL);
+    const steelIssueIds = idsOf(StockLedgerRefType.STEEL_ISSUE);
+
+    const productionOrderPiSelect = {
+      productionOrder: {
+        select: {
+          productionInvoiceItem: { select: { productionInvoice: { select: { code: true } } } },
+        },
+      },
+    } as const;
+
+    const [
+      materialIssues,
+      batches,
+      packagingIssues,
+      materialYieldIssues,
+      weavingIssueMaterials,
+      steelIssues,
+    ] = await Promise.all([
+      materialIssueIds.length
+        ? this.prisma.materialIssue.findMany({
+            where: { id: { in: materialIssueIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, ...productionOrderPiSelect },
+          })
+        : Promise.resolve([]),
+      batchIds.length
+        ? this.prisma.productionBatch.findMany({
+            where: { id: { in: batchIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, ...productionOrderPiSelect },
+          })
+        : Promise.resolve([]),
+      packagingIssueIds.length
+        ? this.prisma.packagingIssue.findMany({
+            where: { id: { in: packagingIssueIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, ...productionOrderPiSelect },
+          })
+        : Promise.resolve([]),
+      materialYieldIssueIds.length
+        ? this.prisma.materialYieldIssue.findMany({
+            where: { id: { in: materialYieldIssueIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, ...productionOrderPiSelect },
+          })
+        : Promise.resolve([]),
+      weavingIssueMaterialIds.length
+        ? this.prisma.weavingIssueMaterial.findMany({
+            where: { id: { in: weavingIssueMaterialIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, weavingIssue: { select: productionOrderPiSelect } },
+          })
+        : Promise.resolve([]),
+      steelIssueIds.length
+        ? this.prisma.steelIssue.findMany({
+            where: { id: { in: steelIssueIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, productionInvoice: { select: { code: true } } },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const map = new Map<string, string>();
+    const putIfPresent = (
+      refType: StockLedgerRefType,
+      id: bigint,
+      code: string | null | undefined,
+    ) => {
+      if (code) map.set(`${refType}:${id.toString()}`, code);
+    };
+    for (const m of materialIssues) {
+      putIfPresent(
+        StockLedgerRefType.MATERIAL_ISSUE,
+        m.id,
+        m.productionOrder?.productionInvoiceItem?.productionInvoice?.code,
+      );
+    }
+    for (const b of batches) {
+      putIfPresent(
+        StockLedgerRefType.SEGMENT_CONSUME,
+        b.id,
+        b.productionOrder?.productionInvoiceItem?.productionInvoice?.code,
+      );
+    }
+    for (const p of packagingIssues) {
+      putIfPresent(
+        StockLedgerRefType.PACKAGING_ISSUE,
+        p.id,
+        p.productionOrder?.productionInvoiceItem?.productionInvoice?.code,
+      );
+    }
+    for (const y of materialYieldIssues) {
+      putIfPresent(
+        StockLedgerRefType.MATERIAL_YIELD_CONSUME,
+        y.id,
+        y.productionOrder?.productionInvoiceItem?.productionInvoice?.code,
+      );
+    }
+    for (const w of weavingIssueMaterials) {
+      putIfPresent(
+        StockLedgerRefType.WEAVING_ISSUE_MATERIAL,
+        w.id,
+        w.weavingIssue?.productionOrder?.productionInvoiceItem?.productionInvoice?.code,
+      );
+    }
+    for (const s of steelIssues) {
+      putIfPresent(StockLedgerRefType.STEEL_ISSUE, s.id, s.productionInvoice?.code);
+    }
+    return map;
   }
 
   /** null = tổng kho (BOSS/ADMIN), thấy mọi kho - không có gì để chặn. Cùng pattern
@@ -290,15 +614,27 @@ export class StockLedgerService {
     }
   }
 
-  private toResponseDto(row: StockLedgerWithRefs): StockLedgerResponseDto {
+  /** `transferCodeById` chỉ được truyền từ findAll() (màn Lịch sử kho cần cột "Chứng từ") - các
+   *  lời gọi khác (postEntry/adjust trả về đúng 1 bút toán vừa ghi) không cần, để trống → null. */
+  private toResponseDto(
+    row: StockLedgerWithRefs,
+    transferCodeById?: Map<string, string>,
+    refStageByKey?: Map<string, string>,
+    poCodeByKey?: Map<string, string>,
+    piCodeByKey?: Map<string, string>,
+  ): StockLedgerResponseDto {
     return new StockLedgerResponseDto({
       id: row.id.toString(),
       fromWarehouseId: row.fromWarehouseId.toString(),
       fromWarehouseCode: row.fromWarehouse.code,
+      fromWarehouseName: row.fromWarehouse.name,
       toWarehouseId: row.toWarehouseId.toString(),
       toWarehouseCode: row.toWarehouse.code,
+      toWarehouseName: row.toWarehouse.name,
       materialId: row.materialId?.toString() ?? null,
       materialCode: row.material?.code ?? null,
+      materialName: row.material?.name ?? null,
+      materialUnit: row.material?.unit ?? null,
       segmentSpecId: row.segmentSpecId?.toString() ?? null,
       segmentSpecLabel: row.segmentSpec
         ? `${row.segmentSpec.material.code} @ ${Number(row.segmentSpec.cutLengthMm)}mm`
@@ -310,9 +646,17 @@ export class StockLedgerService {
       qty: row.qty.toNumber(),
       refType: row.refType,
       refId: row.refId,
+      refCode: (row.refId ? transferCodeById?.get(row.refId) : undefined) ?? null,
+      refStage: (row.refId ? refStageByKey?.get(`${row.refType}:${row.refId}`) : undefined) ?? null,
+      poCode: (row.refId ? poCodeByKey?.get(`${row.refType}:${row.refId}`) : undefined) ?? null,
+      piCode: (row.refId ? piCodeByKey?.get(`${row.refType}:${row.refId}`) : undefined) ?? null,
       note: row.note,
       createdAt: row.createdAt,
       createdById: row.createdById,
+      createdByName: row.createdBy
+        ? `${row.createdBy.firstName} ${row.createdBy.lastName}`.trim()
+        : null,
+      stockLengthMm: row.stockLengthMm,
     });
   }
 }

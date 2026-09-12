@@ -798,5 +798,22 @@ describe('WarehouseTransfersService', () => {
       await expect(service.findOne('50', 'phoi-son-han')).resolves.toBeDefined();
       await expect(service.findOne('50', 'vat-tu-tp')).resolves.toBeDefined();
     });
+
+    // 2026-09-12: trả tên đọc được thay vì để FE gọi GET /users (thủ kho không có USER:VIEW).
+    it('trả kèm tên người tạo/xác nhận/từ chối khi relation có dữ liệu', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(
+        transferRow({
+          createdBy: { firstName: 'Văn', lastName: 'Nhân' },
+          confirmedBy: { firstName: 'Thị', lastName: 'Hoa' },
+          rejectedBy: null,
+        }),
+      );
+
+      const result = await service.findOne('50', null);
+
+      expect(result.createdByName).toBe('Văn Nhân');
+      expect(result.confirmedByName).toBe('Thị Hoa');
+      expect(result.rejectedByName).toBeNull();
+    });
   });
 });

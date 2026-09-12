@@ -32,6 +32,8 @@ import { WarehouseTransferPieceItemResponseDto } from './dto/warehouse-transfer-
 import { WarehouseTransferResponseDto } from './dto/warehouse-transfer-response.dto';
 import { isValidTransferRoute } from './transfer-routes.constant';
 
+const ACTOR_NAME_SELECT = { select: { firstName: true, lastName: true } };
+
 const TRANSFER_INCLUDE = {
   fromWarehouse: true,
   toWarehouse: true,
@@ -46,6 +48,12 @@ const TRANSFER_INCLUDE = {
       piece: true,
     },
   },
+  // Tên người tạo/xác nhận/từ chối - trả sẵn thay vì để FE tự resolve qua GET /users (thủ kho
+  // không có quyền USER:VIEW nên gọi /users sẽ 403 - cùng vấn đề đã vá ở StockLedgerService, xem
+  // changelog 2026-09-12-lich-su-nhap-xuat-kho.md mục "Lịch sử kho gộp cả phiếu bị từ chối").
+  createdBy: ACTOR_NAME_SELECT,
+  confirmedBy: ACTOR_NAME_SELECT,
+  rejectedBy: ACTOR_NAME_SELECT,
 } satisfies Prisma.WarehouseTransferInclude;
 
 type WarehouseTransferWithRefs = Prisma.WarehouseTransferGetPayload<{
@@ -672,6 +680,15 @@ export class WarehouseTransfersService {
       createdById: row.createdById,
       confirmedById: row.confirmedById,
       rejectedById: row.rejectedById,
+      createdByName: row.createdBy
+        ? `${row.createdBy.firstName} ${row.createdBy.lastName}`.trim()
+        : null,
+      confirmedByName: row.confirmedBy
+        ? `${row.confirmedBy.firstName} ${row.confirmedBy.lastName}`.trim()
+        : null,
+      rejectedByName: row.rejectedBy
+        ? `${row.rejectedBy.firstName} ${row.rejectedBy.lastName}`.trim()
+        : null,
     });
   }
 

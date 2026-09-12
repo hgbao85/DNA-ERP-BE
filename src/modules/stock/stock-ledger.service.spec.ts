@@ -13,13 +13,20 @@ describe('StockLedgerService', () => {
       count: jest.Mock;
     };
     warehouse: { findMany: jest.Mock };
+    warehouseTransfer: { findMany: jest.Mock };
+    productionBatch: { findMany: jest.Mock };
+    materialIssue: { findMany: jest.Mock };
+    packagingIssue: { findMany: jest.Mock };
+    materialYieldIssue: { findMany: jest.Mock };
+    weavingIssueMaterial: { findMany: jest.Mock };
+    steelIssue: { findMany: jest.Mock };
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
 
   const fromWh = { id: 1n, code: 'phoi-son-han', name: 'Phoi Son Han' };
   const toWh = { id: 2n, code: 'vat-tu-tp', name: 'Vat tu TP' };
-  const material = { id: 10n, code: 'SAT-25' };
+  const material = { id: 10n, code: 'SAT-25', name: 'Sắt hộp 25x50', unit: 'cây' };
 
   const ledgerRow = (overrides: Record<string, unknown> = {}) => ({
     id: 100n,
@@ -36,6 +43,7 @@ describe('StockLedgerService', () => {
     note: null,
     createdAt: new Date('2026-08-05T00:00:00Z'),
     createdById: 'user-1',
+    stockLengthMm: 6000,
     fromWarehouse: fromWh,
     toWarehouse: toWh,
     material,
@@ -54,6 +62,13 @@ describe('StockLedgerService', () => {
         count: jest.fn(),
       },
       warehouse: { findMany: jest.fn().mockResolvedValue([fromWh, toWh]) },
+      warehouseTransfer: { findMany: jest.fn().mockResolvedValue([]) },
+      productionBatch: { findMany: jest.fn().mockResolvedValue([]) },
+      materialIssue: { findMany: jest.fn().mockResolvedValue([]) },
+      packagingIssue: { findMany: jest.fn().mockResolvedValue([]) },
+      materialYieldIssue: { findMany: jest.fn().mockResolvedValue([]) },
+      weavingIssueMaterial: { findMany: jest.fn().mockResolvedValue([]) },
+      steelIssue: { findMany: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn().mockResolvedValue([{ qty: { toNumber: () => 100 } }]),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
@@ -390,6 +405,138 @@ describe('StockLedgerService', () => {
           }),
         }),
       );
+    });
+
+    // 2026-09-12 (màn "Lịch sử kho"): tên/ĐVT vật tư, tên kho và chiều dài cây đã nằm sẵn trong
+    // LEDGER_INCLUDE nhưng trước đây DTO không trả ra - màn lịch sử chỉ hiện được mã trần, không
+    // biết "5" là 5 cây hay 5 kg, cũng không phân biệt được 2 lô cùng mã sắt khác chiều dài.
+    it('trả kèm tên/ĐVT vật tư, tên 2 kho và chiều dài cây', async () => {
+      prisma.stockLedger.findMany.mockResolvedValue([ledgerRow()]);
+      prisma.stockLedger.count.mockResolvedValue(1);
+
+      const result = await service.findAll({ page: 1, limit: 20, sortOrder: 'desc' } as never);
+
+      expect(result.data[0]).toEqual(
+        expect.objectContaining({
+          materialCode: 'SAT-25',
+          materialName: 'Sắt hộp 25x50',
+          materialUnit: 'cây',
+          fromWarehouseName: 'Phoi Son Han',
+          toWarehouseName: 'Vat tu TP',
+          stockLengthMm: 6000,
+        }),
+      );
+    });
+
+    // Cột "Chứng từ" ở màn Lịch sử kho: CHỈ WarehouseTransfer có `code` đọc được, nguồn khác chỉ có
+    // id số nên refCode = null (FE hiện nhãn loại chứng từ thay thế).
+    it('tra mã phiếu ("CK-2026-010") cho bút toán chuyển kho, 1 query cho cả trang', async () => {
+      prisma.stockLedger.findMany.mockResolvedValue([
+        ledgerRow({ refType: StockLedgerRefType.WAREHOUSE_TRANSFER, refId: '77' }),
+        ledgerRow({ id: 101n, refType: StockLedgerRefType.WAREHOUSE_TRANSFER, refId: '77' }),
+        ledgerRow({ id: 102n, refType: StockLedgerRefType.STEEL_ISSUE, refId: '5' }),
+      ]);
+      prisma.stockLedger.count.mockResolvedValue(3);
+      prisma.warehouseTransfer.findMany.mockResolvedValue([{ id: 77n, code: 'CK-2026-010' }]);
+
+      const result = await service.findAll({ page: 1, limit: 20, sortOrder: 'desc' } as never);
+
+      expect(result.data[0].refCode).toBe('CK-2026-010');
+      expect(result.data[1].refCode).toBe('CK-2026-010');
+      // Xuất sắt không có mã phiếu -> null, và KHÔNG bị tra nhầm sang bảng chuyển kho.
+      expect(result.data[2].refCode).toBeNull();
+      expect(prisma.warehouseTransfer.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.warehouseTransfer.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: { in: [77n] } } }),
+      );
+    });
+
+    // "Đến: Tổ Phôi" thay vì chung chung "Xưởng sản xuất" - chỉ 2 refType có cột stage thật, các
+    // loại khác tổ cố định theo nghiệp vụ nên FE tự suy (không query thừa).
+    it('tra đúng tổ (stage) cho bút toán tiêu hao đoạn sắt và xuất vật tư tiêu hao', async () => {
+      prisma.stockLedger.findMany.mockResolvedValue([
+        ledgerRow({ refType: StockLedgerRefType.SEGMENT_CONSUME, refId: '9' }),
+        ledgerRow({ id: 101n, refType: StockLedgerRefType.MATERIAL_ISSUE, refId: '4' }),
+        ledgerRow({ id: 102n, refType: StockLedgerRefType.STEEL_ISSUE, refId: '5' }),
+      ]);
+      prisma.stockLedger.count.mockResolvedValue(3);
+      prisma.productionBatch.findMany.mockResolvedValue([{ id: 9n, stage: 'HAN' }]);
+      prisma.materialIssue.findMany.mockResolvedValue([{ id: 4n, stage: 'SON' }]);
+
+      const result = await service.findAll({ page: 1, limit: 20, sortOrder: 'desc' } as never);
+
+      expect(result.data[0].refStage).toBe('HAN');
+      expect(result.data[1].refStage).toBe('SON');
+      // Xuất sắt không có cột stage -> null (FE tự suy "Tổ Phôi").
+      expect(result.data[2].refStage).toBeNull();
+    });
+
+    it('không query bảng chuyển kho khi trang không có bút toán chuyển kho nào', async () => {
+      prisma.stockLedger.findMany.mockResolvedValue([ledgerRow()]);
+      prisma.stockLedger.count.mockResolvedValue(1);
+
+      const result = await service.findAll({ page: 1, limit: 20, sortOrder: 'desc' } as never);
+
+      expect(result.data[0].refCode).toBeNull();
+      expect(prisma.warehouseTransfer.findMany).not.toHaveBeenCalled();
+    });
+
+    // Cột "Mã đơn hàng (PO)" ở màn Lịch sử kho (2026-09-12, theo yêu cầu Sếp) - tra
+    // productionOrder.productionInvoiceItem.salesOrder.orderCode cho refType đi qua 1 Lệnh sản
+    // xuất cụ thể; STEEL_ISSUE đi thẳng productionInvoice.salesOrder (không qua ProductionOrder).
+    it('tra mã đơn hàng (PO) cho bút toán gắn với 1 Lệnh sản xuất cụ thể', async () => {
+      prisma.stockLedger.findMany.mockResolvedValue([
+        ledgerRow({ refType: StockLedgerRefType.MATERIAL_ISSUE, refId: '4' }),
+        ledgerRow({ id: 101n, refType: StockLedgerRefType.STEEL_ISSUE, refId: '5' }),
+        ledgerRow({ id: 102n, refType: StockLedgerRefType.PURCHASE, refId: null }),
+      ]);
+      prisma.stockLedger.count.mockResolvedValue(3);
+      prisma.materialIssue.findMany.mockResolvedValue([
+        {
+          id: 4n,
+          productionOrder: { productionInvoiceItem: { salesOrder: { orderCode: 'PO-KH-014' } } },
+        },
+      ]);
+      prisma.steelIssue.findMany.mockResolvedValue([
+        { id: 5n, productionInvoice: { salesOrder: null } },
+      ]);
+
+      const result = await service.findAll({ page: 1, limit: 20, sortOrder: 'desc' } as never);
+
+      expect(result.data[0].poCode).toBe('PO-KH-014');
+      // PI gộp (salesOrder null ở productionInvoice) -> không tra được, trả null thay vì lỗi.
+      expect(result.data[1].poCode).toBeNull();
+      // refType không gắn Lệnh sản xuất nào (mua hàng) -> null, không query gì thêm cho nó.
+      expect(result.data[2].poCode).toBeNull();
+    });
+
+    // Cột "Lệnh sản xuất" ở màn Lịch sử kho (2026-09-12, theo yêu cầu Sếp) - "Lệnh sản xuất" LÀ
+    // ProductionInvoice/PI trong toàn hệ thống, KHÁC poCode (SalesOrder.orderCode) ở test trên.
+    it('tra mã Lệnh sản xuất (PI code) cho bút toán gắn với 1 PI cụ thể', async () => {
+      prisma.stockLedger.findMany.mockResolvedValue([
+        ledgerRow({ refType: StockLedgerRefType.MATERIAL_ISSUE, refId: '4' }),
+        ledgerRow({ id: 101n, refType: StockLedgerRefType.STEEL_ISSUE, refId: '5' }),
+        ledgerRow({ id: 102n, refType: StockLedgerRefType.PURCHASE, refId: null }),
+      ]);
+      prisma.stockLedger.count.mockResolvedValue(3);
+      prisma.materialIssue.findMany.mockResolvedValue([
+        {
+          id: 4n,
+          productionOrder: {
+            productionInvoiceItem: { productionInvoice: { code: 'PI-2026-005' } },
+          },
+        },
+      ]);
+      prisma.steelIssue.findMany.mockResolvedValue([
+        { id: 5n, productionInvoice: { code: 'PI-2026-001' } },
+      ]);
+
+      const result = await service.findAll({ page: 1, limit: 20, sortOrder: 'desc' } as never);
+
+      expect(result.data[0].piCode).toBe('PI-2026-005');
+      expect(result.data[1].piCode).toBe('PI-2026-001');
+      // refType không gắn Lệnh sản xuất nào (mua hàng) -> null.
+      expect(result.data[2].piCode).toBeNull();
     });
   });
 });
