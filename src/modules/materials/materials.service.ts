@@ -5,12 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import {
-  Material,
-  MaterialDetailKind,
-  Prisma,
-  StockLedgerRefType,
-} from '../../generated/prisma/client';
+import { MaterialDetailKind, Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { MATERIAL_CODE_FALLBACK_PREFIX } from '../../common/constants/material-group-code-prefix.constant';
@@ -30,6 +25,13 @@ import { UpdateMaterialSupplierDto } from './dto/update-material-supplier.dto';
 type MaterialSupplierWithSupplier = Prisma.MaterialSupplierGetPayload<{
   include: { supplier: true };
 }>;
+
+/** Material + tên Nhóm vật tư/Kho denormalized (xem comment MaterialResponseDto) - dùng chung
+ *  cho create/update/findAll/findOne để mọi response đều có sẵn 2 field này. */
+type MaterialWithRelations = Prisma.MaterialGetPayload<{
+  include: { materialGroup: true; warehouse: true };
+}>;
+const MATERIAL_RELATIONS_INCLUDE = { materialGroup: true, warehouse: true } as const;
 
 /// Kho ảo cố định (protected-warehouse-codes.constant.ts) - nguồn của bút toán "khai báo tồn
 /// kho ban đầu" khi tạo vật tư kèm openingQty (xem create()).
@@ -86,7 +88,7 @@ export class MaterialsService {
     // create(), request thua bị unique constraint ở DB chặn (nguồn chặn thật, không phải check ở
     // trên) nhưng ném ra Prisma P2002 thô, rơi vào AllExceptionsFilter thành thông báo chung chung
     // "Duplicate value for: code" thay vì lỗi nghiệp vụ rõ ràng như nhánh pre-check phía trên.
-    let material: Material;
+    let material: MaterialWithRelations;
     try {
       material = await this.prisma.material.create({
         data: {
@@ -104,6 +106,7 @@ export class MaterialsService {
           purchaseWastePercentage: wasteFields.purchaseWastePercentage,
           imageUrl: dto.imageUrl,
         },
+        include: MATERIAL_RELATIONS_INCLUDE,
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
@@ -232,7 +235,8 @@ export class MaterialsService {
 
     const result = await paginate(
       {
-        findMany: (args) => this.prisma.material.findMany(args),
+        findMany: (args) =>
+          this.prisma.material.findMany({ ...args, include: MATERIAL_RELATIONS_INCLUDE }),
         count: (args) => this.prisma.material.count(args),
       },
       query,
@@ -309,6 +313,7 @@ export class MaterialsService {
         imageUrl: dto.imageUrl,
         isActive: dto.isActive,
       },
+      include: MATERIAL_RELATIONS_INCLUDE,
     });
 
     // dto.imageUrl === undefined nghĩa là request không đụng tới field này (giữ nguyên) - CHỈ
@@ -413,16 +418,19 @@ export class MaterialsService {
     return link;
   }
 
-  private async findOneOrThrow(id: string): Promise<Material> {
+  private async findOneOrThrow(id: string): Promise<MaterialWithRelations> {
     const bigId = parseBigIntId(id);
-    const material = await this.prisma.material.findUnique({ where: { id: bigId } });
+    const material = await this.prisma.material.findUnique({
+      where: { id: bigId },
+      include: MATERIAL_RELATIONS_INCLUDE,
+    });
     if (!material) {
       throw new NotFoundException(`Material ${id} not found`);
     }
     return material;
   }
 
-  private toResponseDto(material: Material): MaterialResponseDto {
+  private toResponseDto(material: MaterialWithRelations): MaterialResponseDto {
     return new MaterialResponseDto({
       id: material.id.toString(),
       code: material.code,
@@ -430,8 +438,11 @@ export class MaterialsService {
       unit: material.unit,
       spec: material.spec ?? null,
       materialGroupId: material.materialGroupId?.toString() ?? null,
+      materialGroupName: material.materialGroup?.name ?? null,
       detailKind: material.detailKind ?? null,
       warehouseId: material.warehouseId?.toString() ?? null,
+      warehouseCode: material.warehouse?.code ?? null,
+      warehouseName: material.warehouse?.name ?? null,
       buyerId: material.buyerId ?? null,
       purchaseUnit: material.purchaseUnit ?? null,
       khoUnitFactor: material.khoUnitFactor?.toNumber() ?? null,

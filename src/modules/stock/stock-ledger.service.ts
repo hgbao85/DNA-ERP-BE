@@ -180,6 +180,9 @@ export class StockLedgerService {
       pieceId: dto.pieceId ? parseBigIntId(dto.pieceId) : undefined,
       productVariantId: dto.productVariantId ? parseBigIntId(dto.productVariantId) : undefined,
       qty: dto.qty,
+      // Bỏ trống -> postEntry() mặc định 0 (bucket "chung", dùng cho UI chỉ hiện 1 số tổng - xem
+      // comment CreateStockAdjustmentDto.stockLengthMm). Có giá trị -> ghi ĐÚNG bucket đó.
+      stockLengthMm: dto.stockLengthMm,
       refType: StockLedgerRefType.ADJUST,
       note: dto.note,
       createdById: userId,
@@ -209,12 +212,32 @@ export class StockLedgerService {
     const materialId = input.materialId;
 
     return this.prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
-        SELECT "qty" FROM "stock_quant"
-        WHERE "warehouseId" = ${expectedWarehouseId} AND "materialId" = ${materialId}
-        FOR UPDATE
-      `;
-      const currentQty = locked[0]?.qty.toNumber() ?? 0;
+      // dto.stockLengthMm CÓ giá trị -> caller đã tách hiển thị theo từng bucket (vd
+      // MfgWarehousesPage.tsx "Quản lý kho") và muốn sửa ĐÚNG bucket đó - lọc thêm stockLengthMm,
+      // khớp unique index 3 cột nên chỉ có ĐÚNG 1 dòng.
+      //
+      // dto.stockLengthMm BỎ TRỐNG -> caller chỉ hiện 1 số TỔNG (vd Admin > Vật tư/Tổng hợp vật tư)
+      // - CỘNG DỒN mọi dòng khớp (warehouseId, materialId), KHÔNG chỉ lấy locked[0]. Vật tư Sắt có
+      // thể có NHIỀU dòng stock_quant cho ĐÚNG 1 cặp này khi tồn ở nhiều bucket stockLengthMm khác
+      // nhau (cây 6m/4m là 2 lô riêng, unique index 3 cột). FOR UPDATE khoá TẤT CẢ các dòng trả về,
+      // không chỉ 1 dòng - đủ để chặn race 2 người sửa cùng lúc. Trước đây chỉ lấy locked[0] (thứ
+      // tự Postgres KHÔNG đảm bảo) trong khi FE đã hiển thị đúng TỔNG các bucket cho Admin xem -
+      // lệch nhau khiến "Sửa nhanh tồn kho" luôn 409 cho mọi vật tư Sắt đa-bucket (xác nhận thật
+      // qua SAT-005: hiển thị 324, locked[0] ngẫu nhiên ra 0 hoặc 324).
+      const locked =
+        dto.stockLengthMm !== undefined
+          ? await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+              SELECT "qty" FROM "stock_quant"
+              WHERE "warehouseId" = ${expectedWarehouseId} AND "materialId" = ${materialId}
+                AND "stockLengthMm" = ${dto.stockLengthMm}
+              FOR UPDATE
+            `
+          : await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+              SELECT "qty" FROM "stock_quant"
+              WHERE "warehouseId" = ${expectedWarehouseId} AND "materialId" = ${materialId}
+              FOR UPDATE
+            `;
+      const currentQty = locked.reduce((sum, row) => sum + row.qty.toNumber(), 0);
       if (Math.abs(currentQty - dto.expectedCurrentQty!) > 1e-6) {
         throw new ConflictException(
           `Tồn kho hiện tại đã đổi (đang là ${currentQty}, bạn thấy ${dto.expectedCurrentQty}) - tải lại trang và thử lại`,

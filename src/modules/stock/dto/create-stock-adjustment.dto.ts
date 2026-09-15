@@ -36,6 +36,17 @@ export class CreateStockAdjustmentDto {
   @Min(0.0001)
   qty!: number;
 
+  /** Chiều dài cây (mm) - CHỈ có ý nghĩa khi materialId là vật tư Sắt bán theo chiều dài. Bỏ trống
+   *  = điều chỉnh theo TỔNG cộng dồn mọi bucket chiều dài (ghi thẳng vào bucket 0 - dùng cho "Sửa
+   *  nhanh tồn kho" ở Admin > Vật tư, nơi chỉ hiện 1 số tổng, không phân biệt bucket). Có giá trị
+   *  = điều chỉnh ĐÚNG bucket đó (dùng cho màn hình đã tách hiển thị theo từng chiều dài, vd
+   *  MfgWarehousesPage.tsx "Quản lý kho") - optimistic-lock so khớp đúng 1 dòng, không cộng dồn. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  stockLengthMm?: number;
+
   /** Vấn đề #25 audit 26/08/2026 - bắt buộc để sổ kho còn tra soát được sau này. Trước đây
    *  optional nên FE luôn gửi kèm 1 câu cố định giống hệt nhau (không mang thông tin gì) thay vì
    *  lý do thật - đã sửa FE bắt gõ tay qua AdjustReasonModal, giờ siết luôn ở BE cho chắc. */

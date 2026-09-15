@@ -2180,78 +2180,81 @@ export class CuttingProposalsService {
       (item) => item.feasible && item.over_threshold === true,
     );
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.cuttingProposal.update({
-        where: { id: proposalId },
-        data: {
-          status: CuttingProposalStatus.DRAFT,
-          requestParams: requestBody as Prisma.InputJsonValue,
-          rawResponse: response as unknown as Prisma.InputJsonValue,
-          totalBarsAll: response.summary.total_bars_all,
-          totalWasteMm: response.summary.total_waste_mm,
-          wastePercentage: response.summary.waste_percentage,
-          completedAt: new Date(),
-          hasInfeasibleLine,
-          hasOverThreshold,
-        },
-      });
-
-      for (const item of response.purchase_plan) {
-        const line = await tx.cuttingProposalLine.create({
+    await this.prisma.$transaction(
+      async (tx) => {
+        await tx.cuttingProposal.update({
+          where: { id: proposalId },
           data: {
-            cuttingProposalId: proposalId,
-            materialId: BigInt(item.material),
-            feasible: item.feasible,
-            bestStockLengthMm: item.best_stock_length,
-            // "fixed" | "scan" - null với dòng infeasible (solver không gửi length_source khi
-            // feasible=false), xem doc comment schema.prisma.
-            lengthSource: item.length_source ?? null,
-            totalBars: item.total_bars,
-            totalWasteMm: item.total_waste_mm,
-            wastePercentage: item.waste_percentage,
-            mauNguyenMm: item.mau_nguyen_mm,
-            lengthComparison: item.length_comparison as Prisma.InputJsonValue,
-            // Bảng TỔNG KẾT khi in hướng dẫn cắt (2026-08-25) - ghép `pieces[]` của solver với
-            // tên mảnh dựng từ chính bomRevision vừa gửi đi. undefined (không phải null) khi
-            // solver không trả pieces: dòng infeasible - để Prisma bỏ qua cột thay vì ghi JSON
-            // null, phân biệt được "không có dữ liệu" với "đã tính, rỗng".
-            pieceSummary: this.buildPieceSummary(item, segmentNames),
-            // 5 field mới (2026-08-19) - lưu NGUYÊN VĂN những gì solver trả, không diễn giải lại
-            // ở đây (xem lý do "luôn dùng bản solver" - changelog 2026-08-15 mục 15.5-(d)). Câu
-            // tiếng Việt hiển thị cho người dùng sẽ dựng ở tầng response DTO/FE (đợt sau), không
-            // phải ở đây.
-            reason: item.reason,
-            bestAchievable: (item.best_achievable ?? undefined) as
-              Prisma.InputJsonValue | undefined,
-            timedOut: item.timed_out,
-            maxWastePctThreshold: item.max_waste_pct_threshold,
-            overThreshold: item.over_threshold,
+            status: CuttingProposalStatus.DRAFT,
+            requestParams: requestBody as Prisma.InputJsonValue,
+            rawResponse: response as unknown as Prisma.InputJsonValue,
+            totalBarsAll: response.summary.total_bars_all,
+            totalWasteMm: response.summary.total_waste_mm,
+            wastePercentage: response.summary.waste_percentage,
+            completedAt: new Date(),
+            hasInfeasibleLine,
+            hasOverThreshold,
           },
         });
 
-        for (const [index, pattern] of (item.cutting_patterns ?? []).entries()) {
-          const createdPattern = await tx.cuttingProposalPattern.create({
+        for (const item of response.purchase_plan) {
+          const line = await tx.cuttingProposalLine.create({
             data: {
-              lineId: line.id,
-              patternIndex: pattern.pattern_id ?? index,
-              barCount: pattern.bars,
-              wastePerBarMm: pattern.waste_per_bar,
-              mauNguyenMm: pattern.mau_nguyen_mm,
+              cuttingProposalId: proposalId,
+              materialId: BigInt(item.material),
+              feasible: item.feasible,
+              bestStockLengthMm: item.best_stock_length,
+              // "fixed" | "scan" - null với dòng infeasible (solver không gửi length_source khi
+              // feasible=false), xem doc comment schema.prisma.
+              lengthSource: item.length_source ?? null,
+              totalBars: item.total_bars,
+              totalWasteMm: item.total_waste_mm,
+              wastePercentage: item.waste_percentage,
+              mauNguyenMm: item.mau_nguyen_mm,
+              lengthComparison: item.length_comparison as Prisma.InputJsonValue,
+              // Bảng TỔNG KẾT khi in hướng dẫn cắt (2026-08-25) - ghép `pieces[]` của solver với
+              // tên mảnh dựng từ chính bomRevision vừa gửi đi. undefined (không phải null) khi
+              // solver không trả pieces: dòng infeasible - để Prisma bỏ qua cột thay vì ghi JSON
+              // null, phân biệt được "không có dữ liệu" với "đã tính, rỗng".
+              pieceSummary: this.buildPieceSummary(item, segmentNames),
+              // 5 field mới (2026-08-19) - lưu NGUYÊN VĂN những gì solver trả, không diễn giải lại
+              // ở đây (xem lý do "luôn dùng bản solver" - changelog 2026-08-15 mục 15.5-(d)). Câu
+              // tiếng Việt hiển thị cho người dùng sẽ dựng ở tầng response DTO/FE (đợt sau), không
+              // phải ở đây.
+              reason: item.reason,
+              bestAchievable: (item.best_achievable ?? undefined) as
+                Prisma.InputJsonValue | undefined,
+              timedOut: item.timed_out,
+              maxWastePctThreshold: item.max_waste_pct_threshold,
+              overThreshold: item.over_threshold,
             },
           });
 
-          for (const segment of pattern.pieces_breakdown ?? []) {
-            const segmentSpecId = segmentSpecLookup.get(`${item.material}:${segment.size}`);
-            if (!segmentSpecId) {
-              continue; // shouldn't happen - solver only ever echoes sizes we sent it
-            }
-            await tx.cuttingProposalPatternSegment.create({
-              data: { patternId: createdPattern.id, segmentSpecId, countPerBar: segment.count },
+          for (const [index, pattern] of (item.cutting_patterns ?? []).entries()) {
+            const createdPattern = await tx.cuttingProposalPattern.create({
+              data: {
+                lineId: line.id,
+                patternIndex: pattern.pattern_id ?? index,
+                barCount: pattern.bars,
+                wastePerBarMm: pattern.waste_per_bar,
+                mauNguyenMm: pattern.mau_nguyen_mm,
+              },
             });
+
+            for (const segment of pattern.pieces_breakdown ?? []) {
+              const segmentSpecId = segmentSpecLookup.get(`${item.material}:${segment.size}`);
+              if (!segmentSpecId) {
+                continue; // shouldn't happen - solver only ever echoes sizes we sent it
+              }
+              await tx.cuttingProposalPatternSegment.create({
+                data: { patternId: createdPattern.id, segmentSpecId, countPerBar: segment.count },
+              });
+            }
           }
         }
-      }
-    });
+      },
+      { timeout: 30_000 },
+    );
   }
 
   private async saveFailure(proposalId: bigint, error: unknown): Promise<void> {

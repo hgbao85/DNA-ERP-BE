@@ -81,6 +81,7 @@ export class StockQuantService {
       pieceCode: row.piece?.code ?? null,
       productVariantId: row.productVariantId?.toString() ?? null,
       productVariantLabel: row.productVariant?.description ?? row.productVariant?.colorCode ?? null,
+      stockLengthMm: row.stockLengthMm,
       qty,
       availableQty,
       updatedAt: row.updatedAt,
