@@ -23,6 +23,9 @@ export class PurchaseProposalItemResponseDto {
   @Expose() @ApiProperty() materialId!: string;
   @Expose() @ApiProperty() materialCode!: string;
   @Expose() @ApiProperty() materialName!: string;
+  /// Quy cách vật tư (Material.spec, vd "10x29x0.8") - Thủ kho đối chiếu hàng về đúng quy cách đã
+  /// đặt, nhất là vật tư trùng tên khác kích cỡ (2026-09-15).
+  @Expose() @ApiPropertyOptional({ nullable: true }) materialSpec!: string | null;
   @Expose() @ApiProperty() unit!: string;
   /// Đơn vị mua hàng từ NCC (vd "kg") khi khác unit - null nếu vật tư chỉ có 1 đơn vị.
   @Expose() @ApiPropertyOptional({ nullable: true }) purchaseUnit!: string | null;

@@ -797,6 +797,7 @@ export class PurchaseProposalsService {
       materialId: item.materialId.toString(),
       materialCode: item.material.code,
       materialName: item.material.name,
+      materialSpec: item.material.spec ?? null,
       unit: item.material.unit,
       purchaseUnit: item.material.purchaseUnit ?? null,
       khoUnitFactor: item.material.khoUnitFactor?.toNumber() ?? null,

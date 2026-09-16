@@ -20,6 +20,7 @@ import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreatePieceWarehouseTransferDto } from './dto/create-piece-warehouse-transfer.dto';
@@ -37,7 +38,11 @@ const ACTOR_NAME_SELECT = { select: { firstName: true, lastName: true } };
 const TRANSFER_INCLUDE = {
   fromWarehouse: true,
   toWarehouse: true,
-  items: true,
+  // material.spec (2026-09-15) - "Nhập nội bộ" (InternalTransferSections.tsx) cần cột Quy cách
+  // giống màn "Nhập kho" (PurchaseProposalItemResponseDto.materialSpec), để Thủ kho đối chiếu đúng
+  // quy cách khi nhận hàng chuyển kho, không chỉ tên. Dòng "ghi tự do" cũ (materialId null,
+  // trước 09/09/2026) không có Material để join -> materialSpec null.
+  items: { include: { material: { select: { spec: true } } } },
   pieceItems: {
     include: {
       productionOrder: {
@@ -99,19 +104,62 @@ export class WarehouseTransfersService {
       this.findWarehouseOrThrow(toWarehouseId),
     ]);
 
+    // Kho ẢO (OPENING_BALANCE/SCRAP/PRODUCTION/SUPPLIER) không phải điểm nguồn/đích hợp lệ cho
+    // "chuyển kho tự do" - đây là điểm đối ứng bút toán kép cho các nghiệp vụ CÓ audit riêng (mua
+    // hàng, "Sửa nhanh tồn kho" bắt buộc note + optimistic lock, KCS phế liệu...), không phải kho
+    // vật lý. Live-test 15/09/2026 xác nhận đây là lỗ hổng THẬT: gỡ isValidTransferRoute() (quyết
+    // định nghiệp vụ ở trên) vô tình gỡ luôn tác dụng phụ của nó là chặn mọi code không match
+    // warehouseFamilyOf() - vốn luôn null với code kho ảo. Test thực tế trên DB dev: OPENING_BALANCE
+    // và PRODUCTION có DÒNG DƯƠNG cho nhiều vật tư (vd PRODUCTION giữ "vật tư đang tiêu hao SX" -
+    // dương vì đã bị trừ khỏi kho thật, KHÔNG phải tồn thật) - "chuyển kho tự do" từ đó về kho thật
+    // sẽ NHÂN BẢN vật tư không tồn tại vật lý; chiều ngược lại (gửi TỚI kho ảo) né được luôn note
+    // bắt buộc + optimistic lock của adjustStock(). FE (ChuyenKhoTuDoPage.tsx) đã lọc isVirtual khỏi
+    // dropdown nên không đi qua UI được, nhưng BE phải tự chặn (defense-in-depth) vì gọi thẳng API
+    // vẫn lọt - piece-transfer (createPieceTransfer(), dùng isValidTransferRoute()) không cần thêm
+    // chặn vì warehouseFamilyOf() vốn đã loại kho ảo.
+    if (fromWarehouse.isVirtual || toWarehouse.isVirtual) {
+      const badWarehouse = fromWarehouse.isVirtual ? fromWarehouse : toWarehouse;
+      throw new BadRequestException(
+        `"${badWarehouse.name}" là kho ảo (điểm đối ứng bút toán kép) - không dùng được cho chuyển kho tự do`,
+      );
+    }
+
     // Kho nguồn tạo phiếu - scope phải khớp fromWarehouse (kho đích chỉ tham gia lúc confirm()).
     this.assertWarehouseScope(warehouseScope, fromWarehouse.code, 'tạo phiếu chuyển kho từ');
 
-    if (!isValidTransferRoute(fromWarehouse.code, toWarehouse.code)) {
+    // Quyết định nghiệp vụ: bỏ ràng buộc chuỗi kho cố định cho vật tư tiêu hao (trước đây chỉ được
+    // đi đúng 1 bước Phôi sơn hàn → Vật tư TP → Thành phẩm qua isValidTransferRoute()) - thủ kho
+    // giờ chủ động chọn kho nguồn/đích bất kỳ. Chỉ còn chặn trường hợp vô nghĩa: nguồn == đích.
+    // Luồng "mảnh"/piece-transfer (createPieceTransfer(), gắn PI/production order) KHÔNG đổi -
+    // vẫn dùng isValidTransferRoute() vì đó là nghiệp vụ khác (WIP theo lô sản xuất đã qua KCS).
+    if (fromWarehouseId === toWarehouseId) {
+      throw new BadRequestException('Kho nguồn và kho đích không được trùng nhau');
+    }
+
+    // 2026-09-15 (quyết định nghiệp vụ): Phôi Sơn Hàn không nhận chuyển kho tự do từ chặng khác -
+    // họ chỉ nhận vật tư qua mua hàng/nhập kho. Chặn cứng ở đây vì assertWarehouseScope() chỉ xét
+    // kho NGUỒN, không có gì cản 1 request hợp lệ khác (vd vat-tu-tp gửi ngược) chọn phoi-son-han
+    // làm đích qua thẳng API.
+    if (warehouseFamilyOf(toWarehouse.code) === 'phoi-son-han') {
       throw new BadRequestException(
-        `Không được chuyển trực tiếp từ "${fromWarehouse.name}" sang "${toWarehouse.name}" - chỉ được chuyển đúng 1 bước theo chuỗi Phôi sơn hàn → Vật tư thành phẩm → Thành phẩm`,
+        `Không được chuyển kho tự do tới "${toWarehouse.name}" - kho Phôi Sơn Hàn chỉ nhận vật tư qua mua hàng/nhập kho`,
       );
     }
 
     const planFormId = dto.planFormId ? parseBigIntId(dto.planFormId) : undefined;
-    const code = await this.nextTransferCode();
 
     const created = await this.prisma.$transaction(async (tx) => {
+      // Khoá advisory TRƯỚC khi đếm - live-test 15/09/2026 (2 request đồng thời) xác nhận
+      // nextTransferCode() cũ (đếm ở NGOÀI transaction, không khoá gì) cho ra cùng 1 mã ở 4/5
+      // request bắn cùng lúc, rớt 409 "Duplicate value" dù tồn kho thừa sức phục vụ cả 2 - lưới
+      // chặn "unique constraint trên code" vẫn đúng (không bao giờ ghi trùng), nhưng biến 1 race vô
+      // hại (2 thủ kho tạo phiếu cùng lúc) thành lỗi giả phải tự bấm lại. Khoá theo năm (cùng phạm
+      // vi với prefix `CK-{year}-`) serialize đúng phần đếm+tạo, cùng idiom lockBusinessKey() đã
+      // dùng ở createPieceTransfer() - tự nhả khi transaction này commit/rollback.
+      const year = new Date().getFullYear();
+      await lockBusinessKey(tx, `warehouse-transfer-code:${year}`);
+      const code = await this.nextTransferCode(tx, year);
+
       const clampedItems: {
         materialId: bigint;
         materialName: string;
@@ -120,7 +168,28 @@ export class WarehouseTransfersService {
         note?: string;
       }[] = [];
 
+      // Gộp các dòng CÙNG materialId TRƯỚC khi tính khả dụng (2026-09-15, phát hiện qua live-test:
+      // 1 request với 2 dòng cùng materialId, mỗi dòng xin 2000/2788 tồn thật - cả 2 dòng đều đọc
+      // CÙNG 1 `available` (reservation của dòng 1 chỉ ghi vào WarehouseTransferReservation SAU khi
+      // cả vòng lặp xong, xem createMany bên dưới), nên cả 2 CÙNG được clamp riêng rẽ theo 2788 →
+      // tổng 4000 lọt qua, phiếu tạo ra "giữ chỗ" vượt tồn thật. postEntry() (StockLedgerService)
+      // không tự chặn âm số dư khi confirm() ghi ledger sau này - nếu phiếu này được duyệt sẽ làm
+      // âm tồn kho thật. Gộp theo materialId để mỗi vật tư chỉ bị trừ khả dụng ĐÚNG 1 lần cho dù
+      // request có bao nhiêu dòng trùng.
+      const itemsByMaterial = new Map<
+        string,
+        { materialId: string; materialName: string; unit: string; quantity: number; note?: string }
+      >();
       for (const item of dto.items) {
+        const existing = itemsByMaterial.get(item.materialId);
+        if (existing) {
+          existing.quantity += item.quantity;
+        } else {
+          itemsByMaterial.set(item.materialId, { ...item });
+        }
+      }
+
+      for (const item of itemsByMaterial.values()) {
         const materialId = parseBigIntId(item.materialId);
         // FOR UPDATE khoá TẤT CẢ dòng stock_quant liên quan (mọi bucket chiều dài) trong lúc tính
         // "tồn khả dụng" - chặn 2 phiếu tạo gần như đồng thời cùng đọc thấy 1 số dư rồi cùng đặt
@@ -248,7 +317,6 @@ export class WarehouseTransfersService {
     }
 
     const orderIds = [...new Set(dto.pieceItems.map((i) => i.productionOrderId))];
-    const code = await this.nextTransferCode();
 
     // Piece không có StockQuant để FOR UPDATE - khoá advisory theo từng productionOrderId (sort
     // tăng dần trước khi khoá, tránh deadlock khi 2 request chạm nhiều order chung theo thứ tự
@@ -258,6 +326,12 @@ export class WarehouseTransfersService {
       for (const orderId of [...orderIds].sort()) {
         await lockBusinessKey(tx, `piece-transfer:${orderId}`);
       }
+
+      // Cùng khoá/sequence mã phiếu với create() (chung prefix CK-{year}-) - xem comment ở đó
+      // (15/09/2026, race live-test xác nhận đếm ngoài transaction gây 409 giả khi tạo đồng thời).
+      const year = new Date().getFullYear();
+      await lockBusinessKey(tx, `warehouse-transfer-code:${year}`);
+      const code = await this.nextTransferCode(tx, year);
 
       const plan = await this.getPieceTransferPlan(orderIds, tx);
       const planByKey = new Map(plan.map((p) => [`${p.productionOrderId}:${p.pieceId}`, p]));
@@ -647,14 +721,16 @@ export class WarehouseTransfersService {
   }
 
   /**
-   * DB unique constraint trên `code` là lưới chặn thật cho race hiếm gặp (2 request đếm cùng 1
-   * số rồi cùng tạo) - cùng idiom "đếm rồi tạo, để DB bắt race" đã dùng cho BomRevision.revNo,
-   * không phải lock trong code.
+   * Gọi bên trong transaction, SAU khi đã lockBusinessKey(tx, `warehouse-transfer-code:${year}`)
+   * (xem create()) - khoá advisory serialize đúng phần đếm này giữa các request đồng thời, nên
+   * nhận `tx` thay vì dùng `this.prisma` (client ngoài transaction sẽ không thấy tác dụng của
+   * khoá). Trước 15/09/2026 đếm bằng `this.prisma` NGOÀI transaction, không khoá gì - vẫn đúng dữ
+   * liệu nhờ unique constraint trên `code` chặn ghi trùng, nhưng request thua cuộc nhận thẳng lỗi
+   * 409 thay vì tự chờ rồi lấy đúng số tiếp theo.
    */
-  private async nextTransferCode(): Promise<string> {
-    const year = new Date().getFullYear();
+  private async nextTransferCode(tx: PrismaTx, year: number): Promise<string> {
     const prefix = `CK-${year}-`;
-    const count = await this.prisma.warehouseTransfer.count({
+    const count = await tx.warehouseTransfer.count({
       where: { code: { startsWith: prefix } },
     });
     return `${prefix}${String(count + 1).padStart(3, '0')}`;
@@ -701,6 +777,7 @@ export class WarehouseTransfersService {
             id: item.id.toString(),
             materialId: item.materialId?.toString() ?? null,
             materialName: item.materialName,
+            materialSpec: item.material?.spec ?? null,
             unit: item.unit,
             quantity: item.quantity.toNumber(),
             note: item.note,

@@ -44,6 +44,13 @@ describe('WarehouseTransfersService', () => {
   // Kho phụ (2026-09-03) - xác nhận routing giờ so theo GIA ĐÌNH, không còn map cứng theo đúng 1
   // code cố định (isValidTransferRoute()).
   const vatTuTp2 = { id: 4n, code: 'vat-tu-tp-2', name: 'Vat tu TP 2' };
+  // Kho ảo (2026-09-15) - điểm đối ứng bút toán kép, không phải kho vật lý.
+  const openingBalance = {
+    id: 5n,
+    code: 'OPENING_BALANCE',
+    name: 'Doi ung ton kho ban dau',
+    isVirtual: true,
+  };
 
   const transferRow = (overrides: Record<string, unknown> = {}) => ({
     id: 50n,
@@ -113,7 +120,7 @@ describe('WarehouseTransfersService', () => {
 
     prisma.warehouse.findUnique.mockImplementation(
       ({ where }: { where: { id?: bigint; code?: string } }) => {
-        const all = [phoiSonHan, vatTuTp, thanhPham, vatTuTp2];
+        const all = [phoiSonHan, vatTuTp, thanhPham, vatTuTp2, openingBalance];
         if (where.id !== undefined)
           return Promise.resolve(all.find((w) => w.id === where.id) ?? null);
         return Promise.resolve(all.find((w) => w.code === where.code) ?? null);
@@ -128,10 +135,65 @@ describe('WarehouseTransfersService', () => {
       items: [{ materialId: '10', materialName: 'Sat 25', unit: 'kg', quantity: 50 }],
     };
 
-    it('rejects a route not in TRANSFER_ROUTES (e.g. skipping a step in the chain)', async () => {
+    it('allows a route that used to skip a step in the chain (route restriction removed - chuyển kho tự do)', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
+      prisma.warehouseTransfer.create.mockResolvedValue(
+        transferRow({ toWarehouseId: 3n, toWarehouse: thanhPham }),
+      );
+
       await expect(
         service.create(
           { ...dto, fromWarehouseId: '1', toWarehouseId: '3' },
+          null,
+          'user-1',
+          'idem-key-1',
+        ),
+      ).resolves.toBeDefined();
+      expect(prisma.warehouseTransfer.create).toHaveBeenCalled();
+    });
+
+    it('rejects when fromWarehouseId === toWarehouseId', async () => {
+      await expect(
+        service.create(
+          { ...dto, fromWarehouseId: '1', toWarehouseId: '1' },
+          null,
+          'user-1',
+          'idem-key-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    it('2026-09-15: rejects when destination is phoi-son-han (quyết định nghiệp vụ - kho này không nhận chuyển kho tự do)', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
+
+      await expect(
+        service.create(
+          { ...dto, fromWarehouseId: '2', toWarehouseId: '1' },
+          null,
+          'user-1',
+          'idem-key-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    it('2026-09-15: rejects khi kho đích là kho ẢO (OPENING_BALANCE) - phát hiện qua live-test, không phải kho vật lý', async () => {
+      await expect(
+        service.create(
+          { ...dto, fromWarehouseId: '1', toWarehouseId: '5' },
+          null,
+          'user-1',
+          'idem-key-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    it('2026-09-15: rejects khi kho NGUỒN là kho ẢO (OPENING_BALANCE) - né chặn scope vì warehouseScope null (Admin)', async () => {
+      await expect(
+        service.create(
+          { ...dto, fromWarehouseId: '5', toWarehouseId: '2' },
           null,
           'user-1',
           'idem-key-1',
@@ -179,6 +241,41 @@ describe('WarehouseTransfersService', () => {
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
           data: expect.objectContaining({
             items: { create: [expect.objectContaining({ quantity: 25 })] }, // 25 < 50 requested
+          }),
+        }),
+      );
+    });
+
+    it('2026-09-15: gộp 2 dòng CÙNG materialId TRƯỚC khi tính khả dụng - không để tổng 2 dòng vượt tồn thật (phát hiện qua live-test)', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 2788 }, stockLengthMm: 0 }]);
+      stockReservationsService.getAvailableQty.mockResolvedValue(2788); // không ai giữ chỗ trước
+      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
+
+      // 2 dòng cùng materialId=10, mỗi dòng xin 2000 (tổng 4000, vượt xa tồn thật 2788) - trước fix
+      // mỗi dòng tự clamp theo CÙNG 1 `available`=2788 (đọc độc lập, reservation dòng 1 chưa kịp ghi
+      // khi tính dòng 2) nên CẢ 2 đều lọt qua với qty=2000, tổng 4000 > 2788.
+      await service.create(
+        {
+          ...dto,
+          items: [
+            { materialId: '10', materialName: 'Sat 25', unit: 'kg', quantity: 2000 },
+            { materialId: '10', materialName: 'Sat 25', unit: 'kg', quantity: 2000 },
+          ],
+        },
+        null,
+        'user-1',
+        'idem-key-1',
+      );
+
+      // Chỉ tính khả dụng ĐÚNG 1 LẦN cho materialId 10 (đã gộp trước khi vào vòng lặp) - không phải
+      // 2 lần độc lập như trước fix.
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledTimes(1);
+      expect(prisma.warehouseTransfer.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          data: expect.objectContaining({
+            // 1 dòng duy nhất, clamp đúng theo tồn thật 2788 - KHÔNG phải 2 dòng x 2000 = 4000.
+            items: { create: [expect.objectContaining({ quantity: 2788 })] },
           }),
         }),
       );
@@ -724,12 +821,18 @@ describe('WarehouseTransfersService', () => {
       );
 
       expect(prisma.$transaction).toHaveBeenCalled();
-      expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
+      // 2 khoá theo productionOrderId + 1 khoá dùng chung với create() cho sequence mã phiếu
+      // CK-{year}-xxx (15/09/2026, xem comment ở nextTransferCode()).
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(3);
 
       const lockKeys = prisma.$executeRaw.mock.calls.map(
         (call: [TemplateStringsArray, ...unknown[]]) => String(call[1]),
       );
-      expect(lockKeys).toEqual(['piece-transfer:900', 'piece-transfer:901']);
+      expect(lockKeys).toEqual([
+        'piece-transfer:900',
+        'piece-transfer:901',
+        `warehouse-transfer-code:${new Date().getFullYear()}`,
+      ]);
       // Khoá phải chạy TRƯỚC khi đọc plan (productionOrder.findMany) - không chỉ trước khi ghi.
       const lockCallOrder = prisma.$executeRaw.mock.invocationCallOrder[0];
       const planReadCallOrder = prisma.productionOrder.findMany.mock.invocationCallOrder[0];
