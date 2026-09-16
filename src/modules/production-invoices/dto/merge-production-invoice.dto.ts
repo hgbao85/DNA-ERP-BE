@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { ArrayMinSize, ArrayUnique, IsArray, IsString } from 'class-validator';
+import { SolverOverrideDto } from './solver-override.dto';
 
 /**
  * KHSX gộp nhiều SKU (đang chờ duyệt, có thể thuộc nhiều đơn hàng khác nhau) thành 1 lệnh sản
@@ -9,7 +10,7 @@ import { ArrayMinSize, ArrayUnique, IsArray, IsString } from 'class-validator';
  * duyệt bình thường), và cũng không tiết kiệm được cây sắt nào vì lợi ích chỉ đến khi đoạn của
  * nhiều SKU nằm chung một cây.
  */
-export class MergeProductionInvoiceDto {
+export class MergeProductionInvoiceDto extends SolverOverrideDto {
   @ApiProperty({ type: [String] })
   @IsArray()
   @ArrayMinSize(2)

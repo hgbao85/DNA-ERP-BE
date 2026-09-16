@@ -21,6 +21,10 @@ export class SystemConfigResponseDto {
   @Expose() @ApiProperty() solverLengthStepMm!: number;
   @Expose() @ApiProperty() solverTimeLimitSeconds!: number;
 
+  /** Mặc định toàn hệ thống: có cho solver đặt cây ngoài chiều dài chuẩn không. Từng đợt đè lại
+   *  được qua ProductionInvoice.solverAllowCustomLength (KHSX đề nghị ở "Tối ưu cắt sắt"). */
+  @Expose() @ApiProperty() solverAllowCustomLength!: boolean;
+
   /** Dung sai giao thừa khi nhận hàng mua về (% của buyQty) - xem SystemConfig trong schema. */
   @Expose() @ApiProperty() purchaseOverReceiptTolerancePercent!: number;
 

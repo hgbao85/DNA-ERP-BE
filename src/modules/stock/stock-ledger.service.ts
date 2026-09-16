@@ -669,7 +669,18 @@ export class StockLedgerService {
       qty: row.qty.toNumber(),
       refType: row.refType,
       refId: row.refId,
-      refCode: (row.refId ? transferCodeById?.get(row.refId) : undefined) ?? null,
+      // BUG đã sửa (2026-09-14, phát hiện qua test tay thật): `transferCodeById` chỉ tra
+      // WAREHOUSE_TRANSFER (đúng, xem fetchTransferCodes()) nhưng map key CHỈ LÀ refId trần (không
+      // kèm refType) - lookup ở đây trước đó KHÔNG kiểm tra row.refType, nên 1 dòng STEEL_ISSUE/
+      // SEGMENT_CONSUME có refId TRÙNG SỐ với 1 WarehouseTransfer.id (khác bảng, id trùng thuần
+      // ngẫu nhiên - vd SteelIssue id=2 và WarehouseTransfer id=2 cùng tồn tại) sẽ bị gán NHẦM mã
+      // phiếu chuyển kho của transfer đó vào cột "Lệnh sản xuất", dù 2 bản ghi không liên quan gì
+      // nhau. Thêm điều kiện refType === WAREHOUSE_TRANSFER trước khi tra, cùng cách refStage/
+      // poCode/piCode đã làm đúng ngay từ đầu (key `${refType}:${refId}`).
+      refCode:
+        (row.refId && row.refType === StockLedgerRefType.WAREHOUSE_TRANSFER
+          ? transferCodeById?.get(row.refId)
+          : undefined) ?? null,
       refStage: (row.refId ? refStageByKey?.get(`${row.refType}:${row.refId}`) : undefined) ?? null,
       poCode: (row.refId ? poCodeByKey?.get(`${row.refType}:${row.refId}`) : undefined) ?? null,
       piCode: (row.refId ? piCodeByKey?.get(`${row.refType}:${row.refId}`) : undefined) ?? null,

@@ -117,7 +117,15 @@ export class CuttingProposalLineResponseDto {
   /// true = CP-SAT hết time_limit_seconds mà CHƯA kết luận được - khác hẳn infeasible THẬT.
   @Expose() @ApiPropertyOptional({ nullable: true }) timedOut!: boolean | null;
   /// Ngưỡng hao hụt % đã áp dụng cho loại sắt này khi tính - có ở CẢ 2 nhánh feasible/infeasible.
+  /// ĐÃ BAO GỒM ngưỡng đặc cách của đợt (nếu có), tức có thể cao hơn ngưỡng thường bên dưới.
   @Expose() @ApiPropertyOptional({ nullable: true }) maxWastePctThreshold!: number | null;
+  /// Ngưỡng hao hụt THƯỜNG của loại sắt này (riêng của vật tư, hoặc mặc định hệ thống) - tức mức
+  /// đáng lẽ phải đạt nếu đợt này không xin đặc cách.
+  @Expose() @ApiProperty() normalWastePctThreshold!: number;
+  /// true = dòng này CHỈ lọt được nhờ ngưỡng đặc cách của đợt (hao hụt thật đã vượt ngưỡng thường
+  /// mà vẫn không bị chặn). Một con số đặc cách áp cho CẢ đợt có thể vô tình bao luôn loại sắt mà
+  /// người xin không nghĩ tới - FE phải chỉ đích danh để thấy tiền sắt chi thêm ở đâu.
+  @Expose() @ApiProperty() usedWasteOverride!: boolean;
   /// true = feasible NHƯNG vượt maxWastePctThreshold - null khi feasible=false.
   @Expose() @ApiPropertyOptional({ nullable: true }) overThreshold!: boolean | null;
   /// Câu tiếng Việt ĐÃ DỰNG SẴN cho dòng này (xem CuttingProposalsService.lineDisplayReason) -

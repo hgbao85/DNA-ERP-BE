@@ -521,6 +521,36 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       expect(noBom?.materials).toEqual([]);
     });
 
+    // BUG đã sửa (2026-09-12, phát hiện qua test tay thật): `loadBatchContext()` từng có
+    // `if (byMaterial.size === 0) return null` - khi ĐANG CHỜ ĐÚNG 1 SKU (case rất phổ biến: 1
+    // đơn Sales mới) và SKU đó không cần cắt sắt (BomRevision ACTIVE nhưng 0 dòng pieceBom - vd
+    // sản phẩm chỉ dùng phụ kiện/PieceMaterialYield), `byMaterial` rỗng TOÀN CỤC nên hàm trả về
+    // `null`, kéo theo getBatchCandidates() trả `items: []` - SKU biến mất khỏi "Tối ưu cắt sắt"
+    // dù nó đang chờ thật. FE không có gì để bấm "Tạo lệnh sản xuất riêng" (claimSolo() ở
+    // ProductionInvoicesService không hề phụ thuộc byMaterial) nên SKU kẹt vĩnh viễn ở bước "Sales
+    // vừa tạo". Khác test "SKU chưa có định mức ACTIVE" ở trên (item đó CHƯA có BomRevision) - ca
+    // này có BomRevision ACTIVE hẳn hoi, chỉ là 0 dòng pieceBom (đúng nghĩa "không cần cắt sắt").
+    it('1 SKU đang chờ, KHÔNG cần cắt sắt (0 dòng pieceBom) - vẫn phải hiện ra, không được rỗng cả bảng', async () => {
+      const khongCanSat = mkItem({
+        id: 1n,
+        mfgProduct: { factoryCode: 'PHU-KIEN', name: 'Sản phẩm chỉ dùng phụ kiện' },
+      });
+      build({
+        productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([khongCanSat]) },
+        bomRevision: { findMany: jest.fn().mockResolvedValue([{ id: 5n, mfgProductId: 3n }]) },
+        pieceBom: { findMany: jest.fn().mockResolvedValue([]) },
+        bomPiece: { findMany: jest.fn().mockResolvedValue([]) },
+        material: { findMany: jest.fn().mockResolvedValue([]) },
+      });
+
+      const res = await service.getBatchCandidates();
+      expect(res.items).toHaveLength(1);
+      expect(res.items[0].mfgProductCode).toBe('PHU-KIEN');
+      expect(res.items[0].hasActiveBom).toBe(true);
+      expect(res.items[0].materials).toEqual([]);
+      expect(res.recommendedItemIds).toEqual([]);
+    });
+
     it('tính thử đúng theo tổ hợp được chọn: 2 SKU -> bớt 1 cây', async () => {
       build(twoSkuSharingMaterial());
       const res = await service.previewBatch({ productionInvoiceItemIds: ['1', '2'] });
@@ -546,6 +576,72 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       build(twoSkuSharingMaterial());
       const res = await service.previewBatch({ productionInvoiceItemIds: ['1', '999'] });
       expect(res.lines[0].contributingSkus).toEqual(['J55']);
+    });
+
+    // ── chiều dài cây theo từng quy cách KHSX chọn (2026-09-16) ────────────────────────
+
+    it('đổi chiều dài cây thì CHIP "hao hụt khi cắt riêng" tính lại theo cây mới', async () => {
+      // Chính ca người dùng mô tả: ban đầu 6m ra một dãy chip, sửa sang 5850 thì phải tự tính lại.
+      // Nếu chip đứng yên thì màn hình tự mâu thuẫn - chip nói cây 6m, đợt lại cắt cây 5m85.
+      build(twoSkuSharingMaterial());
+      const mac = await service.getBatchCandidates();
+
+      build(twoSkuSharingMaterial());
+      const chon = await service.getBatchCandidates({ '200': 5850 });
+
+      const chipMac = mac.items.find((i) => i.mfgProductCode === 'J55')?.materials[0];
+      const chipChon = chon.items.find((i) => i.mfgProductCode === 'J55')?.materials[0];
+      expect(chipMac?.stockLengthMm).toBe(6000);
+      expect(chipChon?.stockLengthMm).toBe(5850);
+      expect(chipChon?.standaloneWastePct).not.toBeCloseTo(chipMac!.standaloneWastePct, 3);
+      // 840mm trên cây 5850: tề đầu 10 -> dùng được 5840, cắt 6 đoạn hết 6×(840+1)=5046, dôi 794.
+      // Hao hụt tính trên CẢ CÂY và tính cả phần tề đầu: (10+794)/5850 = 13,744%.
+      expect(chipChon?.standaloneWastePct).toBeCloseTo(13.744, 2);
+      expect(chipChon?.overThreshold).toBe(true);
+    });
+
+    it('đổi chiều dài cây đổi luôn tổ hợp hệ thống tick sẵn, không chỉ đổi con số', async () => {
+      // Chiều dài quyết định loại sắt nào BỊ COI LÀ vượt ngưỡng, mà gợi ý gộp chỉ dựng cho loại
+      // vượt ngưỡng - nên recommendedItemIds phải tính trên CÙNG chiều dài với bảng, nếu không hệ
+      // thống tick sẵn một nhóm dựa trên cây 6m trong khi bảng đang hiện số của cây 5m85.
+      build(twoSkuSharingMaterial());
+      const chon = await service.getBatchCandidates({ '200': 5850 });
+
+      // Cả 2 SKU đều dùng loại 200 nên khi ép cây xấu, gợi ý gộp vẫn phải gom đủ 2 SKU.
+      expect(chon.recommendedItemIds.length).toBeGreaterThan(0);
+    });
+
+    it('tính theo ĐÚNG cây KHSX chọn cho quy cách đó, không phải cây chuẩn của công ty', async () => {
+      // systemConfig mock chỉ có [6000]. Chọn 5850 cho đúng loại sắt này thì con số PHẢI đổi -
+      // nếu không đổi nghĩa là preview vẫn tính theo 6m trong khi đợt sẽ cắt 5m85, tức màn hình
+      // nói một đằng solver làm một nẻo.
+      build(twoSkuSharingMaterial());
+      const mac = await service.previewBatch({ productionInvoiceItemIds: ['1', '2'] });
+
+      build(twoSkuSharingMaterial());
+      const chon = await service.previewBatch({
+        productionInvoiceItemIds: ['1', '2'],
+        stockLengthsByMaterial: { '200': 5850 },
+      });
+
+      const lineMac = mac.lines.find((l) => l.materialCode === 'STL-VUONG-20X20');
+      const lineChon = chon.lines.find((l) => l.materialCode === 'STL-VUONG-20X20');
+      // Không chọn -> rơi về danh sách chuẩn của công ty, mà danh sách đó chỉ có đúng 1 cây
+      // (6000) nên vẫn nêu được tên cây đã dùng. null chỉ xảy ra khi công ty khai nhiều cỡ.
+      expect(lineMac?.stockLengthMm).toBe(6000);
+      expect(lineChon?.stockLengthMm).toBe(5850);
+      expect(lineChon?.minWastePct).not.toBeCloseTo(lineMac!.minWastePct, 3);
+    });
+
+    it('quy cách KHÔNG có trong map vẫn dùng cây chuẩn - map là ghi đè từng phần', async () => {
+      build(twoSkuSharingMaterial());
+      const res = await service.previewBatch({
+        productionInvoiceItemIds: ['1', '2'],
+        stockLengthsByMaterial: { '999': 5850 }, // id không thuộc đợt này
+      });
+      const line = res.lines.find((l) => l.materialCode === 'STL-VUONG-20X20');
+      expect(line?.stockLengthMm).toBe(6000); // vẫn là cây chuẩn, không bị khoá lạ kéo theo
+      expect(line?.minWastePct).toBeCloseTo(0.533, 3); // y hệt test "2 SKU -> bớt 1 cây" ở trên
     });
   });
 });

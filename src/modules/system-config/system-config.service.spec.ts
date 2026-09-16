@@ -26,6 +26,7 @@ describe('SystemConfigService', () => {
     solverMaxLengthMm: 6000,
     solverLengthStepMm: 10,
     solverTimeLimitSeconds: 30,
+    solverAllowCustomLength: true,
     purchaseOverReceiptTolerancePercent: mockDecimal(0),
     updatedAt: new Date('2026-01-01'),
   };
@@ -57,6 +58,14 @@ describe('SystemConfigService', () => {
 
       expect(result.solverStockLengths).toEqual([6000, 5800]);
     });
+
+    it('passes solverAllowCustomLength through untouched (mặc định công ty cho đặt cây ngoài chuẩn)', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+
+      const result = await service.findOne();
+
+      expect(result.solverAllowCustomLength).toBe(true);
+    });
   });
 
   describe('update', () => {
@@ -78,6 +87,26 @@ describe('SystemConfigService', () => {
       expect(prisma.systemConfig.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 1 } }),
       );
+    });
+
+    it('lưu được solverAllowCustomLength = false (cấm đặt cây ngoài chuẩn cho toàn hệ thống)', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        solverAllowCustomLength: false,
+      });
+
+      const result = await service.update({
+        companyName: 'DNA Steel',
+        solverAllowCustomLength: false,
+      });
+
+      expect(prisma.systemConfig.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ solverAllowCustomLength: false }) as unknown,
+        }),
+      );
+      expect(result.solverAllowCustomLength).toBe(false);
     });
   });
 });

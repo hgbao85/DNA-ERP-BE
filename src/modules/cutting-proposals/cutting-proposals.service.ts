@@ -47,6 +47,7 @@ import {
   PreviewCuttingBatchDto,
 } from './dto/cutting-batch-candidate.dto';
 import { bestWasteAcrossStockLengths } from './best-fill.util';
+import type { StockLengthsByMaterial } from '../../common/validators/stock-lengths-by-material.validator';
 import { frameDeadlineOf } from '../../common/utils/frame-deadline.util';
 
 const SOLVER_PROPOSE_PATH = '/api/v1/de_xuat/propose/';
@@ -163,6 +164,17 @@ type SolverJob = {
    *  ra bảng TỔNG KẾT cho thợ cắt biết đoạn này là mảnh gì, không tham gia tính toán. 1 cỡ đoạn
    *  có thể thuộc nhiều mảnh (và nhiều SKU khác nhau khi cắt gộp cả PI) nên là mảng. */
   segmentNames: Map<string, string[]>;
+  /** Ngưỡng hao hụt ĐẶC CÁCH (%) KHSX xin cho riêng đợt này và Sếp đã duyệt cùng lệnh sản xuất
+   *  (`ProductionInvoice.solverMaxWastePctOverride`, 2026-09-14). null = không xin, chạy ngưỡng
+   *  thường. Chỉ NÂNG ngưỡng, không bao giờ hạ - xem chỗ áp trong runSolverAndSave(). */
+  maxWastePctOverride: number | null;
+  /** `ProductionInvoice.solverAllowCustomLength` - có cho solver đặt cây ngoài chiều dài chuẩn
+   *  không. null = KHSX không chọn, rơi về mặc định SystemConfig.solverAllowCustomLength. */
+  allowCustomLength: boolean | null;
+  /** `ProductionInvoice.solverStockLengthsByMaterial` - chiều dài cây KHSX chọn cho đợt này theo
+   *  TỪNG QUY CÁCH (2026-09-16). null / thiếu khoá = loại sắt đó dùng
+   *  SystemConfig.solverStockLengths như trước. */
+  stockLengthsByMaterial: StockLengthsByMaterial | null;
 };
 
 type CuttingProposalRow = Prisma.CuttingProposalGetPayload<{ include: typeof LIST_INCLUDE }>;
@@ -387,7 +399,14 @@ export class CuttingProposalsService {
     if (!proposal) {
       throw new NotFoundException(`Cutting proposal ${id} not found`);
     }
-    return this.toDetailResponseDto(proposal);
+    // Ngưỡng hao hụt THƯỜNG của hệ thống - cần để chỉ ra dòng nào chỉ đạt được nhờ ngưỡng đặc cách
+    // của đợt (xem usedWasteOverride). KHÔNG đọc được từ chính dòng: `maxWastePctThreshold` lưu
+    // ngưỡng ĐÃ NÂNG mà solver nhận, không phải ngưỡng thường.
+    const config = await this.prisma.systemConfig.findUniqueOrThrow({
+      where: { id: SYSTEM_CONFIG_ID },
+      select: { solverMaxWastePercentage: true },
+    });
+    return this.toDetailResponseDto(proposal, config.solverMaxWastePercentage.toNumber());
   }
 
   /**
@@ -405,11 +424,13 @@ export class CuttingProposalsService {
    * chính đơn đang đạt ngưỡng mới là nguồn cỡ đoạn cứu đơn đang vượt. Lọc cả 2 đầu là tính năng
    * chết ngay vì không còn gì để gộp.
    */
-  async getBatchSuggestions(): Promise<CuttingBatchSuggestionDto[]> {
+  async getBatchSuggestions(
+    chosenStockLengths?: StockLengthsByMaterial | null,
+  ): Promise<CuttingBatchSuggestionDto[]> {
     const ctx = await this.loadBatchContext();
     if (ctx === null) return [];
     const { byMaterial, materials, config } = ctx;
-    const stockLengths = config.solverStockLengths as number[];
+    const defaultStockLengths = config.solverStockLengths as number[];
     const trimMm = config.solverTrimStartMm;
     const kerfMm = config.solverBladeWidthMm.toNumber();
 
@@ -417,6 +438,13 @@ export class CuttingProposalsService {
     for (const material of materials) {
       const entries = byMaterial.get(material.id);
       if (!entries) continue;
+      // Chiều dài KHSX đang chọn cho ĐÚNG quy cách này. Không chỉ đổi con số: nó đổi cả việc
+      // loại sắt này CÓ vượt ngưỡng hay không, tức đổi luôn danh sách gợi ý hiện ra.
+      const stockLengths = this.resolveStockLengths(
+        material.id,
+        chosenStockLengths,
+        defaultStockLengths,
+      );
       const thresholdPct =
         material.maxCuttingWastePercentage?.toNumber() ??
         config.solverMaxWastePercentage.toNumber();
@@ -495,13 +523,15 @@ export class CuttingProposalsService {
    * bất kỳ SKU nào (yêu cầu Sếp 2026-08-13). Tổ hợp hệ thống tự đề xuất trả kèm ở
    * `recommendedItemIds` để FE tick sẵn.
    */
-  async getBatchCandidates(): Promise<CuttingBatchCandidateListDto> {
+  async getBatchCandidates(
+    chosenStockLengths?: StockLengthsByMaterial | null,
+  ): Promise<CuttingBatchCandidateListDto> {
     const ctx = await this.loadBatchContext();
     if (ctx === null) {
       return new CuttingBatchCandidateListDto({ items: [], recommendedItemIds: [] });
     }
     const { items, byMaterial, materials, config, itemsWithoutBom } = ctx;
-    const stockLengths = config.solverStockLengths as number[];
+    const defaultStockLengths = config.solverStockLengths as number[];
     const trimMm = config.solverTrimStartMm;
     const kerfMm = config.solverBladeWidthMm.toNumber();
     const materialById = new Map(materials.map((m) => [m.id, m]));
@@ -539,6 +569,13 @@ export class CuttingProposalsService {
             const thresholdPct =
               material.maxCuttingWastePercentage?.toNumber() ??
               config.solverMaxWastePercentage.toNumber();
+            // Chip "hao hụt khi cắt riêng" PHẢI tính trên đúng cây KHSX đang chọn cho quy cách
+            // này - đổi ô chọn mà chip đứng yên thì màn hình tự mâu thuẫn.
+            const stockLengths = this.resolveStockLengths(
+              materialId,
+              chosenStockLengths,
+              defaultStockLengths,
+            );
             const best = bestWasteAcrossStockLengths(
               [...demand.keys()],
               stockLengths,
@@ -552,6 +589,7 @@ export class CuttingProposalsService {
               materialCode: material.code,
               materialName: material.name,
               standaloneWastePct: wastePct,
+              stockLengthMm: stockLengths.length === 1 ? stockLengths[0] : null,
               standaloneMinBars: this.minBarsFor(demand, stockLengths, trimMm, kerfMm),
               thresholdPct,
               overThreshold: wastePct > thresholdPct,
@@ -569,7 +607,9 @@ export class CuttingProposalsService {
     // Tổ hợp đề xuất = hợp của mọi SKU xuất hiện ở mức gộp cuối (mức tối thiểu đủ đạt) của các
     // loại sắt CỨU ĐƯỢC. Loại "gộp không cứu được" không đưa vào - tick sẵn một nhóm vô ích chỉ
     // khiến KHSX gộp nhầm.
-    const suggestions = await this.getBatchSuggestions();
+    // Truyền tiếp lựa chọn: tổ hợp tick sẵn phải tính trên CÙNG chiều dài với bảng bên trên,
+    // nếu không hệ thống tick một nhóm dựa trên cây 6m trong khi bảng đang hiện số của cây 5m85.
+    const suggestions = await this.getBatchSuggestions(chosenStockLengths);
     const recommended = new Set<string>();
     for (const s of suggestions) {
       if (s.outcome !== CuttingBatchOutcome.FIXED_BY_MERGE) continue;
@@ -607,7 +647,7 @@ export class CuttingProposalsService {
       return new CuttingBatchPreviewDto({ lines: [], totalBarsSaved: 0, daysCutEarly: null });
     }
     const { byMaterial, materials, config } = ctx;
-    const stockLengths = config.solverStockLengths as number[];
+    const defaultStockLengths = config.solverStockLengths as number[];
     const trimMm = config.solverTrimStartMm;
     const kerfMm = config.solverBladeWidthMm.toNumber();
 
@@ -618,11 +658,22 @@ export class CuttingProposalsService {
       const thresholdPct =
         material.maxCuttingWastePercentage?.toNumber() ??
         config.solverMaxWastePercentage.toNumber();
+      // Chiều dài KHSX đang chọn cho ĐÚNG quy cách này - phải dùng ở đây, nếu vẫn tính theo cây
+      // chuẩn thì con số "Nếu gộp N SKU" nói 6m trong khi đợt sẽ thật sự cắt 5m85: lệch nhau
+      // ngay trên cùng một màn.
+      const stockLengths = this.resolveStockLengths(
+        material.id,
+        dto.stockLengthsByMaterial,
+        defaultStockLengths,
+      );
       const level = this.buildBatchLevel(members, stockLengths, trimMm, kerfMm, thresholdPct);
       if (level === null) continue;
       lines.push(
         new CuttingBatchPreviewLineDto({
           materialId: material.id.toString(),
+          // Chiều dài THỰC SỰ dùng để tính dòng này - FE hiện lại để KHSX thấy con số đang nói
+          // về cây nào (null = đang dò trong nhiều chiều dài chuẩn, không có 1 cây duy nhất).
+          stockLengthMm: stockLengths.length === 1 ? stockLengths[0] : null,
           materialCode: material.code,
           materialName: material.name,
           thresholdPct,
@@ -756,8 +807,18 @@ export class CuttingProposalsService {
         byMaterial.set(materialId, bucket);
       }
     }
-    if (byMaterial.size === 0) return null;
-
+    // BUG đã sửa (2026-09-12, phát hiện qua test tay thật khi tạo 1 PO mới cho SKU không cần cắt
+    // sắt - vd sản phẩm chỉ dùng PieceMaterialYield/phụ kiện, BomRevision không có dòng pieceBom
+    // nào): trước đây có `if (byMaterial.size === 0) return null` ở đây - khiến TOÀN BỘ danh sách
+    // ứng viên (kể cả các SKU không liên quan gì tới sắt) biến mất khỏi "Tối ưu cắt sắt" bất cứ khi
+    // nào KHÔNG CÓ item nào đang chờ có nhu cầu cắt sắt (case rất phổ biến: 1 đơn mới đang chờ,
+    // đúng SKU đó không cần cắt sắt). FE getBatchCandidates() là ĐƯỜNG DUY NHẤT hiện checkbox cho
+    // KHSX bấm "Tạo lệnh sản xuất riêng" (claimSolo) hay "Xác nhận gộp" - claimSolo() ở
+    // ProductionInvoicesService KHÔNG hề phụ thuộc byMaterial, nên khi danh sách rỗng, SKU đó bị
+    // kẹt VĨNH VIỄN ở bước "Sales vừa tạo", không ai gộp/tạo lệnh sản xuất riêng được, dù BE có API
+    // xử lý được - chỉ vì FE không có gì để bấm. `items` (đã build dtoItems từ đây, materials rỗng
+    // -> mats rỗng -> DTO materials: [] - FE tự hiện đúng "không cần cắt sắt") vẫn cần trả về đầy
+    // đủ bất kể byMaterial rỗng hay không - KHÔNG được thêm lại early-return này.
     const materials = await this.prisma.material.findMany({
       where: { id: { in: [...byMaterial.keys()] } },
       select: { id: true, code: true, name: true, maxCuttingWastePercentage: true },
@@ -1241,6 +1302,15 @@ export class CuttingProposalsService {
       const config = await this.prisma.systemConfig.findUniqueOrThrow({
         where: { id: SYSTEM_CONFIG_ID },
       });
+      // 2 trục ĐỘC LẬP KHSX đề nghị cho riêng đợt này lúc "Xác nhận gộp"/"Tiến hành cắt riêng",
+      // Sếp chấp thuận bằng chính nút Duyệt lệnh sản xuất (2026-09-14). Tách đôi vì tổ hợp hay
+      // dùng nhất của đơn gấp - "chỉ mua cây chuẩn 6m NHƯNG chịu hao vượt ngưỡng" - không diễn đạt
+      // nổi bằng một thang leo tuyến tính (thiết kế enum 3 mức trước đó, đã bỏ):
+      //   - allowCustomLength: có cho ĐẶT CÂY ngoài chiều dài chuẩn không (cây riêng phải chờ NCC
+      //     cán, đơn gấp không chờ được). null = rơi về mặc định công ty.
+      //   - maxWastePctOverride: TRẦN hao hụt Sếp đã duyệt cho đợt này. null = ngưỡng thường.
+      const allowCustomLength = job.allowCustomLength ?? config.solverAllowCustomLength;
+      const wasteOverride = job.maxWastePctOverride;
 
       // Sếp cấp riêng ngưỡng hao hụt tối đa cho từng loại Sắt (Material.maxCuttingWastePercentage,
       // xem comment schema.prisma) - solver ĐÃ lặp riêng từng loại trong 1 lần gọi (api/views.py),
@@ -1257,11 +1327,18 @@ export class CuttingProposalsService {
         where: { id: { in: distinctMaterialIds } },
         select: { id: true, maxCuttingWastePercentage: true },
       });
+      //
+      // Ngưỡng đặc cách của đợt (wasteOverride) chỉ NÂNG, không bao giờ hạ: `max(ngưỡng riêng,
+      // đặc cách)`. Hạ được thì một đợt xin đặc cách 5% sẽ vô tình SIẾT loại sắt vốn đang được
+      // Sếp cho 8% - đặc cách là để nới cho loại đang vướng, không phải để đặt lại ngưỡng toàn cục.
+      // Loại chưa có ngưỡng riêng không cần vào dict: nó rơi về scalar max_waste_percentage bên
+      // dưới, mà scalar đó cũng đã được nâng bằng đúng công thức này.
       const maxWastePctByMaterial: Record<string, number> = {};
       for (const m of materialsWithThreshold) {
         const pct = m.maxCuttingWastePercentage?.toNumber();
         if (pct != null && pct > 0) {
-          maxWastePctByMaterial[m.id.toString()] = pct;
+          maxWastePctByMaterial[m.id.toString()] =
+            wasteOverride != null ? Math.max(pct, wasteOverride) : pct;
         }
       }
 
@@ -1274,9 +1351,21 @@ export class CuttingProposalsService {
         stock_lengths: (config.solverStockLengths as number[]).join(' '),
         trim_start: config.solverTrimStartMm,
         blade_width: config.solverBladeWidthMm.toNumber(),
-        max_waste_percentage: config.solverMaxWastePercentage.toNumber(),
+        max_waste_percentage:
+          wasteOverride != null
+            ? Math.max(config.solverMaxWastePercentage.toNumber(), wasteOverride)
+            : config.solverMaxWastePercentage.toNumber(),
         ...(Object.keys(maxWastePctByMaterial).length > 0
           ? { max_waste_percentage_by_material: maxWastePctByMaterial }
+          : {}),
+        // Chiều dài cây RIÊNG theo quy cách KHSX chọn cho đợt này (2026-09-16). Gửi DICT, không
+        // phải chuỗi như stock_lengths ở trên: _parse_stock_lengths_by_material bên solver nhận
+        // số/list/chuỗi cho TỪNG khoá. Khoá = Material.id dạng chuỗi, khớp đúng field `material`
+        // trong bom[] - cùng luật khớp khoá với max_waste_percentage_by_material ở trên, và cùng
+        // hệ quả: khoá không khớp thì solver BỎ QUA lặng lẽ (xem resolved_stock_lengths_by_group
+        // trong input_echo để biết danh sách THỰC SỰ được áp cho từng loại).
+        ...(job.stockLengthsByMaterial && Object.keys(job.stockLengthsByMaterial).length > 0
+          ? { stock_lengths_by_material: job.stockLengthsByMaterial }
           : {}),
         max_surplus: config.solverMaxSurplus,
         min_length: config.solverMinLengthMm,
@@ -1329,12 +1418,22 @@ export class CuttingProposalsService {
           timeoutSeconds * 1000,
         );
 
-      // auto_scan LUÔN true - MỘT LẦN GỌI DUY NHẤT, không có nhánh retry lần 2 (khác hẳn cơ chế
-      // "gọi lại" đã bỏ 2026-08-18 mô tả bên dưới): solver TỰ quyết fixed-hay-scan bên trong 1
-      // request (de_xuat_logic.py::optimize_one_material) - chiều dài chuẩn nào đạt ngưỡng thì
-      // CHỐT LUÔN, chỉ khi KHÔNG chiều dài chuẩn nào đạt mới vét cạn dải min/max_length. Tức là
-      // bật auto_scan không hề đụng tới các dòng đã đạt sẵn trên 6000mm (đã đo thật: 2 dòng feasible
-      // trên 6000mm ra CÙNG SỐ hệt như auto_scan=false, xem changelog 2026-08-26).
+      // auto_scan = `allowCustomLength` (KHSX đề nghị riêng cho đợt này và Sếp đã duyệt, hoặc mặc
+      // định SystemConfig khi KHSX không chọn - 2026-09-14, xem comment ở trên; trước đây LUÔN
+      // true, xem lịch sử bên dưới). false = solver chỉ được thử đúng các chiều dài chuẩn
+      // (`solverStockLengths`), không tự dò mở rộng dù không SKU nào đạt ngưỡng.
+      //
+      // Ngưỡng đặc cách của đợt KHÔNG đụng vào cờ này - nhưng thực tế hay làm nó thành vô nghĩa:
+      // nới ngưỡng lên đủ cao thì cây chuẩn ĐẠT ngưỡng ngay, nên theo đúng cơ chế mô tả ngay dưới
+      // đây solver chốt cây chuẩn và không bao giờ chạy tới nhánh vét cạn. Cờ này chỉ còn quyết
+      // định ca hiếm: nới ngưỡng rồi mà VẪN không cây chuẩn nào đạt.
+      //
+      // MỘT LẦN GỌI DUY NHẤT khi bật, không có nhánh retry lần 2 (khác hẳn cơ chế "gọi lại" đã bỏ
+      // 2026-08-18 mô tả bên dưới): solver TỰ quyết fixed-hay-scan bên trong 1 request
+      // (de_xuat_logic.py::optimize_one_material) - chiều dài chuẩn nào đạt ngưỡng thì CHỐT LUÔN,
+      // chỉ khi KHÔNG chiều dài chuẩn nào đạt mới vét cạn dải min/max_length. Tức là bật auto_scan
+      // không hề đụng tới các dòng đã đạt sẵn trên 6000mm (đã đo thật: 2 dòng feasible trên 6000mm
+      // ra CÙNG SỐ hệt như auto_scan=false, xem changelog 2026-08-26).
       //
       // Lịch sử: 2026-08-06 Sếp bật tính năng này (khi đó cài bằng 1 request GỌI LẦN 2 riêng, xem
       // đoạn "Bỏ hẳn 2026-08-18" cũ). Bỏ 2026-08-18 vì 2 lý do:
@@ -1349,7 +1448,7 @@ export class CuttingProposalsService {
       //       của Sếp/Purchasing, không phải giới hạn kỹ thuật của hệ thống nữa.
       const requestBody: typeof baseRequestBody & { auto_scan: boolean } = {
         ...baseRequestBody,
-        auto_scan: true,
+        auto_scan: allowCustomLength,
       };
       const response = await callSolver(requestBody);
 
@@ -1449,11 +1548,14 @@ export class CuttingProposalsService {
    *     `any_over_threshold` trong response solver). Trước 2026-08-18 field này "thuần chẩn đoán,
    *     không kích hoạt hành động nào" - nghĩa là hệ thống ĐÃ VÀ ĐANG tự duyệt, tự trừ kho, tự đẩy
    *     đề xuất mua cho những phương án vượt ngưỡng, không một lời cảnh báo (phát hiện khi review
-   *     lại luồng theo yêu cầu Sếp). Không được "cứu" ca này bằng cách nới ngưỡng cho qua - đó
-   *     chính là việc auto_scan từng làm (che tín hiệu cần gộp bằng một con số dễ nhìn hơn, xem
-   *     lý do bỏ auto_scan ở nơi gọi solver). Hướng xử lý đúng DUY NHẤT là gộp đợt cắt với SKU
-   *     khác dùng chung loại sắt (xem getBatchSuggestions) - ngưỡng 1% là chính sách, không phải
-   *     tham số để vặn khi thấy vướng.
+   *     lại luồng theo yêu cầu Sếp). Hướng xử lý đúng là gộp đợt cắt với SKU khác dùng chung loại
+   *     sắt (xem getBatchSuggestions), hoặc - khi gộp cũng không cứu được mà đơn lại gấp - KHSX xin
+   *     ngưỡng đặc cách cho đợt đó và Sếp duyệt (ProductionInvoice.solverMaxWastePctOverride).
+   *
+   *     Chặn này KHÔNG có ngoại lệ nào và cố ý không nhận tham số "cho phép vượt": ngưỡng đặc cách
+   *     đã được cộng vào ngưỡng gửi solver TRƯỚC khi giải (xem runSolverAndSave), nên `over_
+   *     threshold` trả về ở đây đã tính theo đúng cái trần Sếp duyệt. Vượt tới tận đây nghĩa là
+   *     vượt CẢ trần đặc cách - phải quay lại xin, không được tự đi tiếp.
    */
   private async autoApproveBlockReason(
     proposalId: bigint,
@@ -1469,30 +1571,35 @@ export class CuttingProposalsService {
         select: { code: true },
       });
       const labels = materials.length > 0 ? materials.map((m) => m.code) : infeasibleIds;
-      // Gợi ý hướng xử lý ngay trong thông báo: từ 2026-08-18 không còn auto_scan dò cỡ cây khác
-      // nữa, nên cách duy nhất để hạ hao hụt là GỘP với SKU khác dùng chung loại sắt (thêm cỡ đoạn
-      // để lấp đầy cây 6000) - xem getBatchSuggestions/màn "Gợi ý gộp đợt cắt".
+      // Vô nghiệm thật thì không thông số nào của đợt cứu được: ngưỡng đặc cách đã được cộng vào
+      // trước khi giải, và nếu có bật cho đặt cây ngoài chuẩn thì solver cũng đã dò hết dải chiều
+      // dài rồi vẫn không xếp nổi. Gợi ý hướng xử lý ngay trong thông báo: cách duy nhất là GỘP với
+      // SKU khác dùng chung loại sắt (thêm cỡ đoạn để lấp đầy cây) - xem getBatchSuggestions/màn
+      // "Gợi ý gộp đợt cắt".
       return (
-        `vật tư ${labels.join(', ')} không cắt được trong ngưỡng hao hụt với cây 6000mm - ` +
-        `thử gộp đợt cắt với SKU khác dùng chung loại sắt này`
+        `vật tư ${labels.join(', ')} không cắt được trong ngưỡng hao hụt dù đã thử mọi chiều dài ` +
+        `cho phép - thử gộp đợt cắt với SKU khác dùng chung loại sắt này`
       );
     }
 
-    // (c) Xem docstring - vượt ngưỡng KHÔNG được tự duyệt, kể cả feasible=true. `over_threshold`
-    // chỉ có mặt trên dòng feasible (xem type SolverProposeResponse), nên không trùng nhánh trên.
-    const overThresholdIds = response.purchase_plan
-      .filter((line) => line.feasible && line.over_threshold)
-      .map((line) => line.material);
-    if (overThresholdIds.length > 0) {
-      const materials = await this.prisma.material.findMany({
-        where: { id: { in: overThresholdIds.map((id) => BigInt(id)) } },
-        select: { code: true },
-      });
-      const labels = materials.length > 0 ? materials.map((m) => m.code) : overThresholdIds;
-      return (
-        `vật tư ${labels.join(', ')} cắt được nhưng vượt ngưỡng hao hụt cho phép - ` +
-        `thử gộp đợt cắt với SKU khác dùng chung loại sắt này (KHÔNG tự nới ngưỡng)`
-      );
+    // (c) Xem docstring - vượt ngưỡng KHÔNG được tự duyệt, kể cả feasible=true (`over_threshold`
+    // chỉ có mặt trên dòng feasible, xem type SolverProposeResponse nên không trùng nhánh trên).
+    // Ngưỡng ở đây đã bao gồm đặc cách của đợt (nếu Sếp duyệt) nên vượt tới đây là vượt cả trần đó.
+    {
+      const overThresholdIds = response.purchase_plan
+        .filter((line) => line.feasible && line.over_threshold)
+        .map((line) => line.material);
+      if (overThresholdIds.length > 0) {
+        const materials = await this.prisma.material.findMany({
+          where: { id: { in: overThresholdIds.map((id) => BigInt(id)) } },
+          select: { code: true },
+        });
+        const labels = materials.length > 0 ? materials.map((m) => m.code) : overThresholdIds;
+        return (
+          `vật tư ${labels.join(', ')} cắt được nhưng vượt ngưỡng hao hụt cho phép - ` +
+          `thử gộp đợt cắt với SKU khác dùng chung loại sắt này (KHÔNG tự nới ngưỡng)`
+        );
+      }
     }
 
     const proposal = await this.prisma.cuttingProposal.findUniqueOrThrow({
@@ -1992,7 +2099,18 @@ export class CuttingProposalsService {
     const order = await this.prisma.productionOrder.findUniqueOrThrow({
       where: { id: productionOrderId },
       include: {
-        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
+        productionInvoiceItem: {
+          select: {
+            salesOrder: { select: { orderCode: true } },
+            productionInvoice: {
+              select: {
+                solverMaxWastePctOverride: true,
+                solverAllowCustomLength: true,
+                solverStockLengthsByMaterial: true,
+              },
+            },
+          },
+        },
       },
     });
     const { bomRows, segmentSpecLookup, segmentNames } = await this.buildBomRows(
@@ -2001,7 +2119,23 @@ export class CuttingProposalsService {
     // Nhãn hiện trong thông báo cho Sếp/QLSX ("Đề xuất cắt sắt cho ... đã tính xong") - ưu tiên mã
     // đơn Sales gốc (xem trao đổi 2026-08-18), fallback poNumber nội bộ khi SKU không gắn đơn nào.
     const label = order.productionInvoiceItem.salesOrder?.orderCode ?? order.poNumber;
-    return { label, numSets: order.quantity, bomRows, segmentSpecLookup, segmentNames };
+    return {
+      label,
+      numSets: order.quantity,
+      bomRows,
+      segmentSpecLookup,
+      segmentNames,
+      // `?.` phòng hờ - tại thời điểm ProductionOrder tồn tại, item LUÔN đã có productionInvoice
+      // (không thể lên PO mà chưa được gom vào PI nào), nhưng quan hệ vẫn khai nullable ở schema.
+      maxWastePctOverride:
+        order.productionInvoiceItem.productionInvoice?.solverMaxWastePctOverride?.toNumber() ??
+        null,
+      allowCustomLength:
+        order.productionInvoiceItem.productionInvoice?.solverAllowCustomLength ?? null,
+      stockLengthsByMaterial:
+        (order.productionInvoiceItem.productionInvoice
+          ?.solverStockLengthsByMaterial as StockLengthsByMaterial | null) ?? null,
+    };
   }
 
   /**
@@ -2077,7 +2211,28 @@ export class CuttingProposalsService {
       bomRows: [...demand.values()],
       segmentSpecLookup,
       segmentNames,
+      maxWastePctOverride: pi.solverMaxWastePctOverride?.toNumber() ?? null,
+      allowCustomLength: pi.solverAllowCustomLength,
+      stockLengthsByMaterial:
+        (pi.solverStockLengthsByMaterial as StockLengthsByMaterial | null) ?? null,
     };
+  }
+
+  /**
+   * Chiều dài cây áp cho MỘT quy cách: ưu tiên lựa chọn của đợt (KHSX chọn trên màn "Tối ưu cắt
+   * sắt", `ProductionInvoice.solverStockLengthsByMaterial`), không có thì rơi về chiều dài chuẩn
+   * của công ty (`SystemConfig.solverStockLengths`).
+   *
+   * Trả về MẢNG dù lựa chọn chỉ là 1 số: cả `bestWasteAcrossStockLengths()` lẫn solver đều nhận
+   * danh sách rồi tự chọn cây tốt nhất trong đó - "chọn 1 cây" nghĩa là danh sách chỉ có đúng nó.
+   */
+  private resolveStockLengths(
+    materialId: bigint,
+    chosen: StockLengthsByMaterial | null | undefined,
+    defaults: number[],
+  ): number[] {
+    const mm = chosen?.[materialId.toString()];
+    return mm != null && mm > 0 ? [mm] : defaults;
   }
 
   private async buildBomRows(bomRevisionId: bigint): Promise<{
@@ -2435,46 +2590,63 @@ export class CuttingProposalsService {
     });
   }
 
-  private toDetailResponseDto(proposal: CuttingProposalDetail): CuttingProposalResponseDto {
+  private toDetailResponseDto(
+    proposal: CuttingProposalDetail,
+    defaultWastePct: number,
+  ): CuttingProposalResponseDto {
     const dto = this.toResponseDto(proposal);
-    dto.lines = proposal.lines.map((line) => ({
-      materialId: line.materialId.toString(),
-      materialCode: line.material.code,
-      materialName: line.material.name,
-      unit: line.material.unit,
-      feasible: line.feasible,
-      bestStockLengthMm: line.bestStockLengthMm,
-      lengthSource: line.lengthSource as 'fixed' | 'scan' | null,
-      totalBars: line.totalBars,
-      totalWasteMm: line.totalWasteMm ? Number(line.totalWasteMm) : null,
-      wastePercentage: line.wastePercentage ? Number(line.wastePercentage) : null,
-      mauNguyenMm: line.mauNguyenMm ? Number(line.mauNguyenMm) : null,
-      lengthComparison: line.lengthComparison as
-        { length: number; bars: number; wastePct: number }[] | null,
-      pieceSummary: line.pieceSummary as CuttingProposalPieceSummaryResponseDto[] | null,
-      reason: line.reason,
-      bestAchievable: line.bestAchievable as {
-        length: number;
-        waste_pct: number;
-        bars: number;
-      } | null,
-      timedOut: line.timedOut,
-      maxWastePctThreshold: line.maxWastePctThreshold ? Number(line.maxWastePctThreshold) : null,
-      overThreshold: line.overThreshold,
-      displayReason: this.lineDisplayReason(line),
-      patterns: line.patterns.map((pattern) => ({
-        id: pattern.id.toString(),
-        patternIndex: pattern.patternIndex,
-        barCount: pattern.barCount,
-        wastePerBarMm: pattern.wastePerBarMm ? Number(pattern.wastePerBarMm) : null,
-        mauNguyenMm: pattern.mauNguyenMm ? Number(pattern.mauNguyenMm) : null,
-        segments: pattern.segments.map((segment) => ({
-          segmentSpecId: segment.segmentSpecId.toString(),
-          cutLengthMm: Number(segment.segmentSpec.cutLengthMm),
-          countPerBar: segment.countPerBar,
+    dto.lines = proposal.lines.map((line) => {
+      // Ngưỡng THƯỜNG của loại sắt này (riêng của vật tư, hoặc mặc định hệ thống) - khác hẳn
+      // `maxWastePctThreshold` phía dưới (ngưỡng đã cộng đặc cách, chính là số gửi solver).
+      const normalWastePctThreshold =
+        line.material.maxCuttingWastePercentage?.toNumber() ?? defaultWastePct;
+      const wastePercentage = line.wastePercentage ? Number(line.wastePercentage) : null;
+      return {
+        materialId: line.materialId.toString(),
+        materialCode: line.material.code,
+        materialName: line.material.name,
+        unit: line.material.unit,
+        feasible: line.feasible,
+        bestStockLengthMm: line.bestStockLengthMm,
+        lengthSource: line.lengthSource as 'fixed' | 'scan' | null,
+        totalBars: line.totalBars,
+        totalWasteMm: line.totalWasteMm ? Number(line.totalWasteMm) : null,
+        wastePercentage,
+        normalWastePctThreshold,
+        // Dòng này chỉ lọt được nhờ ngưỡng đặc cách của đợt: hao hụt thật đã vượt ngưỡng THƯỜNG
+        // nhưng vẫn không bị chặn. Đây là chỗ tiền sắt thật sự bị chi thêm so với lệ thường - phải
+        // chỉ đích danh, vì một con số đặc cách áp cho CẢ đợt có thể vô tình bao luôn loại sắt mà
+        // người xin không hề nghĩ tới.
+        usedWasteOverride:
+          line.feasible && wastePercentage != null && wastePercentage > normalWastePctThreshold,
+        mauNguyenMm: line.mauNguyenMm ? Number(line.mauNguyenMm) : null,
+        lengthComparison: line.lengthComparison as
+          { length: number; bars: number; wastePct: number }[] | null,
+        pieceSummary: line.pieceSummary as CuttingProposalPieceSummaryResponseDto[] | null,
+        reason: line.reason,
+        bestAchievable: line.bestAchievable as {
+          length: number;
+          waste_pct: number;
+          bars: number;
+        } | null,
+        timedOut: line.timedOut,
+        maxWastePctThreshold: line.maxWastePctThreshold ? Number(line.maxWastePctThreshold) : null,
+        overThreshold: line.overThreshold,
+        displayReason: this.lineDisplayReason(line),
+        patterns: line.patterns.map((pattern) => ({
+          id: pattern.id.toString(),
+          patternIndex: pattern.patternIndex,
+          barCount: pattern.barCount,
+          wastePerBarMm: pattern.wastePerBarMm ? Number(pattern.wastePerBarMm) : null,
+          mauNguyenMm: pattern.mauNguyenMm ? Number(pattern.mauNguyenMm) : null,
+          segments: pattern.segments.map((segment) => ({
+            segmentSpecId: segment.segmentSpecId.toString(),
+            cutLengthMm: Number(segment.segmentSpec.cutLengthMm),
+            countPerBar: segment.countPerBar,
+          })),
         })),
-      })),
-    }));
+      };
+    });
     return dto;
   }
 }

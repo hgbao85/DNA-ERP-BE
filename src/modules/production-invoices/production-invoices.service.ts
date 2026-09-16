@@ -39,6 +39,7 @@ import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-
 import { ProductionInvoiceResponseDto } from './dto/production-invoice-response.dto';
 import { RecordPackagingDto } from './dto/record-packaging.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
+import { SolverOverrideDto } from './dto/solver-override.dto';
 import { TransferCheckDefectResponseDto } from './dto/transfer-check-defect-response.dto';
 import { TransferCheckPieceResponseDto } from './dto/transfer-check-piece-response.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
@@ -252,10 +253,67 @@ export class ProductionInvoicesService {
    * đúng luồng cũ (KHSX đặt thời hạn → gửi QLSX → Sếp duyệt), chỉ khác là Sếp duyệt cả cụm một lần
    * và solver chạy chung cho cả nhóm.
    */
+  /**
+   * Chụp lại BẰNG CHỨNG cho lời xin ngưỡng đặc cách, tại đúng thời điểm KHSX bấm - loại sắt vướng
+   * nhất trong tổ hợp cùng ước tính hao hụt và ngưỡng thường của nó.
+   *
+   * Vì sao BE tự tính thay vì nhận số FE gửi lên: đây là căn cứ để Sếp duyệt chi thêm tiền sắt,
+   * không được để client khai. Vì sao chụp lại thay vì tính lúc hiển thị: solver chỉ chạy SAU khi
+   * duyệt (lúc duyệt chưa có số thật), và tính lại về sau có thể ra số khác khi định mức đổi -
+   * cái Sếp cần là đúng con số KHSX đã nhìn thấy.
+   *
+   * PHẢI gọi TRƯỚC transaction gộp: previewBatch chỉ thấy các SKU chưa được gom vào PI nào.
+   * Trả null khi không xin đặc cách (khỏi tốn một lượt tính cho đường thường) hoặc khi không tính
+   * được - callout bên Sếp chịu được null, chỉ là không có dòng "vì...".
+   */
+  private async buildOverrideEvidence(
+    itemIds: string[],
+    solver: SolverOverrideDto | undefined,
+  ): Promise<Prisma.InputJsonValue | undefined> {
+    if (solver?.solverMaxWastePctOverride == null) return undefined;
+    try {
+      const preview = await this.cuttingProposalsService.previewBatch({
+        productionInvoiceItemIds: itemIds,
+        // PHẢI tính trên ĐÚNG chiều dài cây KHSX chọn cho đợt này (2026-09-16). Thiếu dòng
+        // này thì bằng chứng tính trên cây chuẩn 6m trong khi KHSX nhìn số của cây 5m85 rồi
+        // mới xin: Sếp đọc được "xin 15% vì ước tính 1.88%" - vô lý, và đúng loại "con số tự
+        // mâu thuẫn" đã phải sửa một lần ở mục 11.3 changelog 2026-09-14.
+        stockLengthsByMaterial: solver?.solverStockLengthsByMaterial,
+      });
+      if (preview.lines.length === 0) return undefined;
+      // Loại vướng nhất = hao hụt ước tính cao nhất. Ưu tiên trong nhóm chưa đạt ngưỡng; nếu cả
+      // nhóm đều đạt thì vẫn lấy loại cao nhất - Sếp cần thấy "ước tính đã đạt mà vẫn xin" để hỏi
+      // lại, chứ không phải giấu đi.
+      const missing = preview.lines.filter((l) => !l.meetsThreshold);
+      const pool = missing.length > 0 ? missing : preview.lines;
+      const worst = [...pool].sort((a, b) => b.minWastePct - a.minWastePct)[0];
+      return {
+        materialCode: worst.materialCode,
+        estimatedWastePct: worst.minWastePct,
+        normalThresholdPct: worst.thresholdPct,
+        // Cây mà con số trên được tính TRÊN đó (2026-09-16). Trước đây màn duyệt ghi cứng "ở
+        // cây chuẩn" - từ khi KHSX chọn được chiều dài riêng thì câu đó SAI, và Sếp không có
+        // cách nào biết 13,74% là của cây 5m8 chứ không phải cây 6m.
+        stockLengthMm: worst.stockLengthMm,
+      };
+    } catch (error) {
+      // Không có bằng chứng thì vẫn cho gộp - chặn cả thao tác vì một dòng hiển thị là quá tay.
+      this.logger.warn(
+        `Không dựng được bằng chứng đặc cách cho SKU [${itemIds.join(', ')}]: ${
+          (error as Error).message
+        }`,
+      );
+      return undefined;
+    }
+  }
+
   async mergeItems(
     dto: MergeProductionInvoiceDto,
     actorUserId: string,
   ): Promise<ProductionInvoiceResponseDto> {
+    // Trước transaction: sau khi gộp, các SKU này không còn nằm trong danh sách "chưa được gom"
+    // mà previewBatch đọc, nên tính sau là ra rỗng.
+    const overrideEvidence = await this.buildOverrideEvidence(dto.productionInvoiceItemIds, dto);
     const ids = [...new Set(dto.productionInvoiceItemIds.map((id) => parseBigIntId(id)))];
     // Lặp lại điều kiện của DTO (@ArrayMinSize(2)) có chủ đích: đây là bất biến nghiệp vụ (gộp 1
     // SKU không tiết kiệm được gì) chứ không phải chuyện định dạng request, nên phải đứng vững cả
@@ -315,6 +373,17 @@ export class ProductionInvoicesService {
           mergedAt: new Date(),
           mergedById: actorUserId,
           deadline,
+          // Thông số cắt KHSX đề nghị cho ĐÚNG đợt này (2026-09-14) - null = không xin gì đặc
+          // biệt, chạy ngưỡng thường + mặc định công ty lúc Sếp duyệt (xem
+          // CuttingProposalsService.buildInvoiceJob/runSolverAndSave).
+          solverMaxWastePctOverride: dto.solverMaxWastePctOverride ?? null,
+          solverAllowCustomLength: dto.solverAllowCustomLength ?? null,
+          solverOverrideReason: dto.solverOverrideReason ?? null,
+          solverOverrideEvidence: overrideEvidence,
+          // Chiều dài cây theo từng quy cách KHSX chọn cho đợt này (2026-09-16). undefined (không
+          // phải null) khi không chọn: cột Json? nullable không default, để Prisma bỏ qua cột thay
+          // vì phải dùng Prisma.DbNull - cùng idiom overrideEvidence ở trên.
+          solverStockLengthsByMaterial: dto.solverStockLengthsByMaterial ?? undefined,
         },
       });
       // Reset sạch mọi vết của chu kỳ duyệt CŨ (2026-08-24, cùng lý do claimSolo()) - 1 trong các
@@ -350,7 +419,11 @@ export class ProductionInvoicesService {
    * có `productionInvoiceId: null` - hàm này tạo cho nó 1 PI thường (isMerged=false) của riêng nó,
    * mirror đúng PI 1-1 mà trước đây SalesOrdersService tự tạo tự động.
    */
-  async claimSolo(itemId: string): Promise<ProductionInvoiceResponseDto> {
+  async claimSolo(
+    itemId: string,
+    solver?: SolverOverrideDto,
+  ): Promise<ProductionInvoiceResponseDto> {
+    const overrideEvidence = await this.buildOverrideEvidence([itemId], solver);
     const bigId = parseBigIntId(itemId);
     const item = await this.prisma.productionInvoiceItem.findUnique({ where: { id: bigId } });
     if (!item) {
@@ -369,6 +442,12 @@ export class ProductionInvoicesService {
           salesOrderId: item.salesOrderId,
           isMerged: false,
           deadline: item.deliveryDeadline,
+          // Thông số cắt KHSX đề nghị cho ĐÚNG SKU này (2026-09-14) - xem comment ở mergeItems().
+          solverMaxWastePctOverride: solver?.solverMaxWastePctOverride ?? null,
+          solverAllowCustomLength: solver?.solverAllowCustomLength ?? null,
+          solverOverrideReason: solver?.solverOverrideReason ?? null,
+          solverOverrideEvidence: overrideEvidence,
+          solverStockLengthsByMaterial: solver?.solverStockLengthsByMaterial ?? undefined,
         },
       });
       // Reset sạch mọi vết của chu kỳ duyệt CŨ (2026-08-24) - item này có thể vừa quay về từ
@@ -1707,6 +1786,17 @@ export class ProductionInvoicesService {
       status: pi.status,
       isMerged: pi.isMerged,
       deadline: pi.deadline,
+      solverMaxWastePctOverride: pi.solverMaxWastePctOverride?.toNumber() ?? null,
+      solverAllowCustomLength: pi.solverAllowCustomLength,
+      solverOverrideReason: pi.solverOverrideReason,
+      solverStockLengthsByMaterial:
+        (pi.solverStockLengthsByMaterial as Record<string, number> | null) ?? null,
+      solverOverrideEvidence: pi.solverOverrideEvidence as {
+        materialCode: string;
+        estimatedWastePct: number;
+        normalThresholdPct: number;
+        stockLengthMm?: number | null;
+      } | null,
       createdAt: pi.createdAt,
       updatedAt: pi.updatedAt,
       items: pi.items.map((it) => this.toItemResponseDto(it)),

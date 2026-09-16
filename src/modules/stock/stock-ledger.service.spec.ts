@@ -451,6 +451,31 @@ describe('StockLedgerService', () => {
       );
     });
 
+    // BUG đã sửa (2026-09-14, phát hiện qua test tay thật trên UI - Lịch sử kho hiện mã phiếu
+    // chuyển kho "CK-2026-002" cho cả 2 dòng Xuất sắt/Tiêu hao đoạn sắt ngày 11/09, dù 2 dòng đó
+    // không liên quan gì tới phiếu chuyển kho nào). Nguyên nhân: `transferCodeById` map key CHỈ LÀ
+    // refId trần (không kèm refType), và lookup ở toResponseDto() trước đó KHÔNG kiểm tra
+    // row.refType === WAREHOUSE_TRANSFER trước khi tra map - refId của STEEL_ISSUE/SEGMENT_CONSUME
+    // TRÙNG SỐ với warehouse_transfers.id (khác bảng, trùng thuần ngẫu nhiên vì cả 2 đều
+    // autoincrement riêng) sẽ bị gán NHẦM mã phiếu. Test trên (dòng ~433) tưởng đã che ca này nhưng
+    // dùng refId khác nhau (77 vs 5) nên chưa từng thật sự trùng số - test dưới đây mới đúng là ca
+    // lặp lại được bug.
+    it('KHÔNG gán nhầm mã phiếu chuyển kho khi refId của STEEL_ISSUE trùng SỐ với id 1 WarehouseTransfer (khác bảng)', async () => {
+      prisma.stockLedger.findMany.mockResolvedValue([
+        ledgerRow({ refType: StockLedgerRefType.WAREHOUSE_TRANSFER, refId: '2' }),
+        ledgerRow({ id: 101n, refType: StockLedgerRefType.STEEL_ISSUE, refId: '2' }),
+        ledgerRow({ id: 102n, refType: StockLedgerRefType.SEGMENT_CONSUME, refId: '2' }),
+      ]);
+      prisma.stockLedger.count.mockResolvedValue(3);
+      prisma.warehouseTransfer.findMany.mockResolvedValue([{ id: 2n, code: 'CK-2026-002' }]);
+
+      const result = await service.findAll({ page: 1, limit: 20, sortOrder: 'desc' } as never);
+
+      expect(result.data[0].refCode).toBe('CK-2026-002');
+      expect(result.data[1].refCode).toBeNull();
+      expect(result.data[2].refCode).toBeNull();
+    });
+
     // "Đến: Tổ Phôi" thay vì chung chung "Xưởng sản xuất" - chỉ 2 refType có cột stage thật, các
     // loại khác tổ cố định theo nghiệp vụ nên FE tự suy (không query thừa).
     it('tra đúng tổ (stage) cho bút toán tiêu hao đoạn sắt và xuất vật tư tiêu hao', async () => {

@@ -267,6 +267,15 @@ model SystemConfig {
   /// cho production), KHÔNG dùng default 480s của chính solver.
   solverTimeLimitSeconds   Int     @default(20)
 
+  /// Mặc định toàn hệ thống: solver có được đặt cây sắt NGOÀI `solverStockLengths` hay không
+  /// (`auto_scan` gửi solver). true = không chiều dài chuẩn nào đạt ngưỡng thì tự dò trong dải
+  /// `solverMinLengthMm..solverMaxLengthMm`; false = chỉ được thử đúng các chiều dài chuẩn.
+  ///
+  /// Mặc định true vì đó ĐÚNG hành vi hệ thống đã chạy từ 2026-08-26 tới trước khi có cột này -
+  /// đổi default sẽ âm thầm đổi hành vi mọi đợt cắt hiện có. Từng đợt đè lại được qua
+  /// ProductionInvoice.solverAllowCustomLength (KHSX chọn, Sếp duyệt).
+  solverAllowCustomLength Boolean @default(true)
+
   /// Dung sai giao THỪA cho phép khi Thủ kho nhận hàng mua về, tính theo % của buyQty (xem
   /// PurchaseProposalsService.receiveItem). Trong dung sai -> ghi ĐÚNG số thực nhận, kể cả khi
   /// vượt buyQty; vượt dung sai -> chặn và báo lỗi nêu rõ 3 số. Mặc định 0 = không cho nhận thừa.
@@ -748,17 +757,17 @@ model PieceBom {
 /// (systemKey WIRE/NAIL/RIVET/PLASTIC_BUTTON) khi đọc lại, không lưu cột group riêng - cùng
 /// pattern ConsumableBom. Cùng kiểu FK ghép mfgProductId như PieceBom.
 model PieceMaterialItem {
-  id            BigInt  @id @default(autoincrement())
-  bomRevisionId BigInt
-  mfgProductId  BigInt
-  pieceId       BigInt
-  materialId    BigInt
-  qtyPerPiece   Decimal @db.Decimal(14, 4)
-  note          String?
+  id               BigInt  @id @default(autoincrement())
+  bomRevisionId    BigInt
+  mfgProductId     BigInt
+  pieceId          BigInt
+  materialId       BigInt
+  qtyPerPiece      Decimal @db.Decimal(14, 4)
+  note             String?
   /// Ảnh đính kèm cho dòng vật tư (vd ảnh mẫu cuộn dây) - upload qua /uploads/image (Cloudinary,
   /// xem services/uploads-api.ts ở FE), lưu thẳng URL. Áp dụng chung cho cả 4 nhóm phẳng (Dây/
   /// Đinh/Tán rút/Nút nhựa) dù UI hiện chỉ mở ở tab Dây (SpecSteelPage.tsx).
-  photoUrl      String?
+  photoUrl         String?
   /// CHỈ có ý nghĩa với nhóm Nút nhựa (PLASTIC_BUTTON, xem material.materialGroup) - đánh dấu
   /// dòng nút nhựa này "đi kèm mảnh khi xuất đan" (2026-09-11, checkbox riêng từng dòng ở
   /// SpecSteelPage.tsx). Dây/Đinh luôn tự động đi kèm (không cần cờ này, xem
@@ -1118,22 +1127,72 @@ model PlanFormDetailReview {
 /// machine duyệt sản xuất riêng (prodApprovalStatus). PI tự chuyển PRODUCING khi mọi item
 /// đã APPROVED (mirror đúng ProductionInvoiceService.approveItemByBoss trong mock).
 model ProductionInvoice {
-  id           BigInt                  @id @default(autoincrement())
-  code         String                  @unique
+  id                           BigInt                  @id @default(autoincrement())
+  code                         String                  @unique
   /// NULL cho PI gộp (isMerged) - các SKU bên trong có thể đến từ nhiều đơn hàng khác nhau nên
   /// không quy về 1 đơn được. PO gốc của từng SKU đọc ở ProductionInvoiceItem.salesOrderId.
-  salesOrderId BigInt?
-  status       ProductionInvoiceStatus @default(PLANNING)
-  deadline     DateTime?
+  salesOrderId                 BigInt?
+  status                       ProductionInvoiceStatus @default(PLANNING)
+  deadline                     DateTime?
   /// true = KHSX tự gộp nhiều SKU lại để CẮT CHUNG một đợt (màn "Tối ưu cắt sắt"), khác hẳn PI
   /// vỏ 1-1 Sales tự sinh theo mỗi đơn hàng (createLinkedProductionInvoice). Hai loại có luồng
   /// duyệt KHÁC NHAU: PI gộp Sếp duyệt/từ chối CẢ CỤM một lần (approveBatch/rejectBatch, vì cả
   /// nhóm nằm chung một cây sắt, không tách lẻ được), PI thường vẫn duyệt từng SKU như cũ.
-  isMerged     Boolean                 @default(false)
-  mergedAt     DateTime?
-  mergedById   String?
-  createdAt    DateTime                @default(now())
-  updatedAt    DateTime                @updatedAt
+  isMerged                     Boolean                 @default(false)
+  mergedAt                     DateTime?
+  mergedById                   String?
+  /// Thông số cắt KHSX ĐỀ NGHỊ cho riêng đợt này lúc "Xác nhận gộp"/"Tiến hành cắt riêng" ở màn
+  /// "Tối ưu cắt sắt", Sếp chấp thuận bằng chính nút Duyệt lệnh sản xuất (2026-09-14). Cả 3 cột
+  /// đọc ở CuttingProposalsService.buildOrderJob/buildInvoiceJob rồi áp trong runSolverAndSave().
+  ///
+  /// Ngưỡng hao hụt ĐẶC CÁCH cho đợt này (%), dùng khi cây chuẩn không đạt ngưỡng thường mà đơn
+  /// lại gấp: cây đặt riêng phải chờ NCC cán, cây chuẩn mua được ngay. Chỉ NÂNG, không bao giờ hạ
+  /// ngưỡng của loại sắt nào - ngưỡng áp thật = max(ngưỡng thường của loại đó, giá trị này).
+  /// NULL = không xin đặc cách, chạy ngưỡng thường (Material.maxCuttingWastePercentage ??
+  /// SystemConfig.solverMaxWastePercentage).
+  ///
+  /// Đây là TRẦN Sếp đã duyệt, không phải giấy phép vô hạn: solver ra phương án vượt cả trần này
+  /// thì autoApproveBlockReason() vẫn chặn tự duyệt như thường.
+  solverMaxWastePctOverride    Decimal?                @db.Decimal(5, 2)
+  /// Có cho solver đặt cây ngoài `solverStockLengths` không. NULL = theo mặc định công ty
+  /// (SystemConfig.solverAllowCustomLength). Trục này ĐỘC LẬP với ngưỡng hao hụt ở trên: đơn gấp
+  /// thường là false (chỉ mua cây chuẩn) + có đặc cách (chịu hao cao) - tổ hợp mà thiết kế enum 3
+  /// mức trước đó không diễn đạt nổi.
+  solverAllowCustomLength      Boolean?
+  /// Lý do KHSX xin đặc cách, viết cho Sếp đọc lúc duyệt (vd "PO-4 giao gấp, không chờ cán cây
+  /// riêng kịp"). Bắt buộc khi có solverMaxWastePctOverride - chặn ở DTO, xem
+  /// MergeProductionInvoiceDto/ClaimSoloDto. Duyệt một con số mà không biết vì sao là duyệt khống.
+  solverOverrideReason         String?
+  /// BẰNG CHỨNG kèm lời xin đặc cách, CHỤP LẠI đúng lúc KHSX bấm gộp/cắt riêng - loại sắt vướng
+  /// nhất trong đợt cùng ước tính hao hụt của nó và ngưỡng thường đang áp:
+  ///   { materialCode: "SAT-VUONG-20X20", estimatedWastePct: 13.9, normalThresholdPct: 1 }
+  ///
+  /// Vì sao phải LƯU chứ không tính lại lúc hiển thị: (a) solver chỉ chạy SAU khi Sếp duyệt nên
+  /// lúc duyệt chưa có số thật, chỉ có ước tính; (b) tính lại về sau có thể ra số khác (định mức
+  /// hoặc SystemConfig đã đổi) - mà cái Sếp cần thấy là ĐÚNG con số KHSX nhìn thấy khi xin, đây là
+  /// vết duyệt chứ không phải số liệu sống.
+  ///
+  /// Chỉ ghi khi có solverMaxWastePctOverride (khỏi tốn một lượt previewBatch cho đường thường).
+  /// Khoá ghi camelCase TƯỜNG MINH - xem cảnh báo ở CuttingProposalLine.pieceSummary về việc
+  /// lengthComparison dump thẳng snake_case rồi `as`-cast dối làm FE đọc ra undefined.
+  solverOverrideEvidence       Json?
+  /// Chiều dài cây sắt KHSX chọn cho RIÊNG đợt này, theo TỪNG QUY CÁCH: { "<materialId>": <mm> }
+  /// (vd { "5": 5850 } = loại sắt id 5 cắt trên cây 5m85, các loại khác theo mặc định công ty).
+  /// NULL / thiếu khoá = loại sắt đó dùng `SystemConfig.solverStockLengths` như trước.
+  ///
+  /// Vì sao ở tầng PI (đợt) chứ không phải Material (2026-09-16, người dùng chốt): KHSX quyết theo
+  /// TỪNG ĐỢT ngay trên màn "Tối ưu cắt sắt" - cùng một quy cách, đợt gấp thì cắt cây có sẵn, đợt
+  /// thường thì chọn cây cho ít hao. Đặt ở Material sẽ thành mặc định cứng không sửa được lúc gộp.
+  /// Vì là theo QUY CÁCH trong ĐỢT (không phải theo SKU) nên 2 SKU gộp chung 1 loại sắt không thể
+  /// mâu thuẫn chiều dài - mỗi loại chỉ có đúng 1 giá trị.
+  ///
+  /// CẢNH BÁO nghiệp vụ (cùng bản chất với cảnh báo ở SystemConfig.solverStockLengths): điền cỡ mà
+  /// NCC không bán được thì KHÔNG ai phát hiện - Mua hàng vẫn mua cây chuẩn, còn bảng hướng dẫn cắt
+  /// của Phôi lại tính theo cỡ không có thật. BE cố ý KHÔNG chặn theo solverStockLengths (chặn thì
+  /// tính năng vô dụng vì danh sách hiện chỉ có [6000]), nên trách nhiệm nằm ở KHSX.
+  solverStockLengthsByMaterial Json?
+  createdAt                    DateTime                @default(now())
+  updatedAt                    DateTime                @updatedAt
 
   salesOrder        SalesOrder?             @relation(fields: [salesOrderId], references: [id])
   mergedBy          User?                   @relation("PIMergedBy", fields: [mergedById], references: [id])
@@ -2282,7 +2341,7 @@ model SteelIssue {
 /// hiếm; bình thường vài đợt theo ca). Ghi ĐỦ 2 VẾ cân bằng vật chất của số cây đã dùng - xem
 /// migration 20260822030000.
 model CutBundle {
-  id                BigInt  @id @default(autoincrement())
+  id                BigInt          @id @default(autoincrement())
   steelIssueId      BigInt
   /// Kiểu cắt gợi ý đợt này bám theo - THUẦN THAM CHIẾU/audit, KHÔNG dùng để suy ra đoạn (khác
   /// trước 2026-08-21: Phôi khai thẳng số đoạn, không còn "chọn pattern rồi FE bung ra"). NULL =
@@ -2291,13 +2350,13 @@ model CutBundle {
   /// Số CÂY đã dùng trong đợt này (không phải số cây kho đã giao - xem SteelIssue.barCount).
   /// KHÔNG còn bắt Phôi khai từ 2026-09-05 (default 0, xem RecordCutBatchDto): 1 loại sắt giờ gộp
   /// nhiều lần kho giao, đếm cây theo từng đợt cắt là tuỳ tiện. Dữ liệu CŨ vẫn giữ số đã khai.
-  barCount          Int     @default(0)
+  barCount          Int             @default(0)
   /// Tổng chiều dài mẩu sắt còn NGUYÊN từ (các) cây cắt dở trong đợt - nhập lại kho, cắt được cỡ
   /// bất kỳ sau này. KHÔNG phải phế liệu. KHÔNG còn bắt khai từ 2026-09-05 (cùng lý do barCount).
-  mauNguyenMm       Int     @default(0)
+  mauNguyenMm       Int             @default(0)
   /// Phế liệu (mm) - phần dư của phương trình cân bằng, SERVICE TỰ TÍNH, không bắt Phôi gõ (không
   /// ai cân được đống đầu mẩu). Luôn 0 từ 2026-09-05 (bỏ barCount thì không còn vế trái để cân).
-  scrapMm           Int     @default(0)
+  scrapMm           Int             @default(0)
   /// Vòng đời RIÊNG của TỪNG đợt cắt (2026-09-05) - trước đây trạng thái nằm ở cả lô nhận
   /// (SteelIssue.status), nên phải cắt xong TOÀN BỘ số cây kho giao mới gửi KCS được, và sắt giao
   /// bù sau đó không cắt tiếp được (recordCutBatch chặn status != RECEIVED). Giờ mỗi đợt cắt tự đi
@@ -2503,11 +2562,11 @@ model QcReview {
 /// khi Phôi bù đủ, chỉ cần làm thêm rồi gửi KCS như 1 đợt HOÀN TOÀN MỚI (không sửa lại dòng cũ này),
 /// "Còn lại" tự đúng vì cộng thêm "Đã làm" của đợt mới.
 model QcReviewSegment {
-  id             BigInt    @id @default(autoincrement())
-  qcReviewId     BigInt
-  segmentSpecId  BigInt
+  id            BigInt @id @default(autoincrement())
+  qcReviewId    BigInt
+  segmentSpecId BigInt
   /// Số đoạn KCS chấm KHÔNG ĐẠT cho cỡ này. BẤT BIẾN - không sửa sau khi tạo.
-  failedQty      Int
+  failedQty     Int
 
   qcReview    QcReview    @relation(fields: [qcReviewId], references: [id])
   segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])
@@ -2547,10 +2606,10 @@ model WeavingIssue {
   issuedAt          DateTime @default(now())
   issuedById        String
 
-  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
-  piece           Piece           @relation(fields: [pieceId], references: [id])
-  weavingPoint    WeavingPoint    @relation(fields: [weavingPointId], references: [id])
-  issuedBy        User            @relation("WeavingIssueIssuedBy", fields: [issuedById], references: [id])
+  productionOrder ProductionOrder        @relation(fields: [productionOrderId], references: [id])
+  piece           Piece                  @relation(fields: [pieceId], references: [id])
+  weavingPoint    WeavingPoint           @relation(fields: [weavingPointId], references: [id])
+  issuedBy        User                   @relation("WeavingIssueIssuedBy", fields: [issuedById], references: [id])
   materials       WeavingIssueMaterial[]
 
   @@index([productionOrderId, pieceId, weavingPointId])

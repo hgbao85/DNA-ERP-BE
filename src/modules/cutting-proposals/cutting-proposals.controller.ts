@@ -1,5 +1,8 @@
 import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
-import { PreviewCuttingBatchDto } from './dto/cutting-batch-candidate.dto';
+import {
+  BatchStockLengthsQueryDto,
+  PreviewCuttingBatchDto,
+} from './dto/cutting-batch-candidate.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -82,15 +85,15 @@ export class CuttingProposalsController {
    */
   @Get('cutting-batch-suggestions')
   @RequirePermissions(VIEW)
-  getBatchSuggestions() {
-    return this.cuttingProposalsService.getBatchSuggestions();
+  getBatchSuggestions(@Query() query: BatchStockLengthsQueryDto) {
+    return this.cuttingProposalsService.getBatchSuggestions(query.stockLengthsByMaterial);
   }
 
   /** Bảng chọn của KHSX: MỌI SKU chưa duyệt + tổ hợp hệ thống đề xuất (để FE tick sẵn). */
   @Get('cutting-batch-candidates')
   @RequirePermissions(VIEW)
-  getBatchCandidates() {
-    return this.cuttingProposalsService.getBatchCandidates();
+  getBatchCandidates(@Query() query: BatchStockLengthsQueryDto) {
+    return this.cuttingProposalsService.getBatchCandidates(query.stockLengthsByMaterial);
   }
 
   /**

@@ -15,6 +15,13 @@ import { ConsumableMaterialPurchaseService } from './consumable-material-purchas
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 
+/** 3 cột thông số cắt KHSX đề nghị, đọc lại từ payload productionInvoice.create(). */
+type SolverOverrideColumns = {
+  solverMaxWastePctOverride: number | null;
+  solverAllowCustomLength: boolean | null;
+  solverOverrideReason: string | null;
+};
+
 describe('ProductionInvoicesService', () => {
   let service: ProductionInvoicesService;
   let prisma: {
@@ -56,7 +63,11 @@ describe('ProductionInvoicesService', () => {
     createFromApproval: jest.Mock;
     assertActiveBomRevisionExists: jest.Mock;
   };
-  let cuttingProposalsService: { requestForOrder: jest.Mock; requestForInvoice: jest.Mock };
+  let cuttingProposalsService: {
+    requestForOrder: jest.Mock;
+    requestForInvoice: jest.Mock;
+    previewBatch: jest.Mock;
+  };
   let pieceMaterialYieldPurchaseService: { computeAndUpsertProposals: jest.Mock };
   let consumableMaterialPurchaseService: { computeAndUpsertProposals: jest.Mock };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
@@ -175,6 +186,10 @@ describe('ProductionInvoicesService', () => {
           return { id: '2' };
         },
       ),
+      // buildOverrideEvidence() gọi nhờ previewBatch để CHỤP số làm bằng chứng cho Sếp.
+      previewBatch: jest
+        .fn()
+        .mockResolvedValue({ lines: [], totalBarsSaved: 0, daysCutEarly: null }),
     };
     pieceMaterialYieldPurchaseService = {
       computeAndUpsertProposals: jest.fn().mockResolvedValue([]),
@@ -231,6 +246,54 @@ describe('ProductionInvoicesService', () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(
         pi({ id: 50n, code: 'PI-50', isMerged: true, salesOrderId: null, salesOrder: null }),
       );
+    });
+
+    it('bằng chứng đặc cách tính theo ĐÚNG chiều dài cây KHSX chọn cho TỪNG quy cách', async () => {
+      // Ca thật (2026-09-16): KHSX chọn 20x20=6000, 25x50=6000, 30x50=5800 rồi mới bấm "Chấp
+      // nhận hao hụt cao hơn". Số Sếp đọc PHẢI tính trên đúng bộ cây đó, không phải cây chuẩn:
+      // ngưỡng đặc cách được solver áp lên CÂY ĐANG CẮT, nên bằng chứng tính trên cây chuẩn vừa
+      // đọc ra vô lý ("xin 15% vì ước tính 1.88%") vừa dẫn tới xin thiếu -> phương án FAILED sau
+      // khi Sếp đã ký.
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        mergeCandidate(20n, { salesOrderId: 1n }),
+        mergeCandidate(21n, { salesOrderId: 2n }),
+      ]);
+      cuttingProposalsService.previewBatch.mockResolvedValue({
+        lines: [
+          {
+            materialId: '9',
+            materialCode: 'SAT-HOP-30X50',
+            thresholdPct: 1,
+            stockLengthMm: 5800,
+            minWastePct: 13.74,
+            meetsThreshold: false,
+          },
+        ],
+        totalBarsSaved: 0,
+        daysCutEarly: null,
+      });
+
+      await service.mergeItems(
+        {
+          productionInvoiceItemIds: ['20', '21'],
+          solverMaxWastePctOverride: 15,
+          solverOverrideReason: 'PO gấp',
+          solverStockLengthsByMaterial: { '7': 6000, '8': 6000, '9': 5800 },
+        },
+        'user-khsx',
+      );
+
+      // Chiều dài phải đi TỚI previewBatch - thiếu chỗ này là bằng chứng lặng lẽ quay về cây chuẩn.
+      expect(cuttingProposalsService.previewBatch).toHaveBeenCalledWith({
+        productionInvoiceItemIds: ['20', '21'],
+        stockLengthsByMaterial: { '7': 6000, '8': 6000, '9': 5800 },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
+      const created = prisma.productionInvoice.create.mock.calls[0][0] as {
+        data: { solverOverrideEvidence?: { materialCode: string; estimatedWastePct: number } };
+      };
+      expect(created.data.solverOverrideEvidence?.materialCode).toBe('SAT-HOP-30X50');
+      expect(created.data.solverOverrideEvidence?.estimatedWastePct).toBe(13.74);
     });
 
     it('gộp 2 SKU thành PI mới: isMerged, không thuộc đơn nào, hạn theo SKU GẤP NHẤT', async () => {
@@ -333,6 +396,39 @@ describe('ProductionInvoicesService', () => {
         service.mergeItems({ productionInvoiceItemIds: ['20', '21'] }, 'user-khsx'),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it('lưu thông số cắt KHSX đề nghị cho đợt gộp này (2026-09-14) - null hết khi không xin gì', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        mergeCandidate(20n),
+        mergeCandidate(21n),
+      ]);
+
+      await service.mergeItems(
+        {
+          productionInvoiceItemIds: ['20', '21'],
+          solverMaxWastePctOverride: 5,
+          solverAllowCustomLength: false,
+          solverOverrideReason: 'PO-4 giao gấp',
+        },
+        'user-khsx',
+      );
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
+      const created = prisma.productionInvoice.create.mock.calls[0][0] as {
+        data: SolverOverrideColumns;
+      };
+      expect(created.data.solverMaxWastePctOverride).toBe(5);
+      expect(created.data.solverAllowCustomLength).toBe(false);
+      expect(created.data.solverOverrideReason).toBe('PO-4 giao gấp');
+
+      await service.mergeItems({ productionInvoiceItemIds: ['20', '21'] }, 'user-khsx');
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
+      const createdNoChoice = prisma.productionInvoice.create.mock.calls[1][0] as {
+        data: SolverOverrideColumns;
+      };
+      expect(createdNoChoice.data.solverMaxWastePctOverride).toBeNull();
+      expect(createdNoChoice.data.solverAllowCustomLength).toBeNull();
+      expect(createdNoChoice.data.solverOverrideReason).toBeNull();
+    });
   });
 
   // ─── "Tiến hành cắt riêng" (2026-08-20): đúng 1 SKU chưa được gom, tạo PI thường của riêng nó ──
@@ -384,6 +480,43 @@ describe('ProductionInvoicesService', () => {
 
       await expect(service.claimSolo('999')).rejects.toThrow(NotFoundException);
       expect(prisma.productionInvoice.create).not.toHaveBeenCalled();
+    });
+
+    it('lưu thông số cắt KHSX đề nghị cho SKU này (2026-09-14) - null hết khi không truyền gì', async () => {
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue({
+        id: 20n,
+        productionInvoiceId: null,
+        salesOrderId: 1n,
+        deliveryDeadline: new Date('2026-10-10'),
+      });
+      prisma.productionInvoice.create.mockResolvedValue({ id: 60n });
+      prisma.productionInvoiceItem.update.mockResolvedValue({});
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({ id: 60n, code: 'PI-60', isMerged: false, salesOrderId: 1n }),
+      );
+
+      await service.claimSolo('20', {
+        solverMaxWastePctOverride: 5,
+        solverAllowCustomLength: false,
+        solverOverrideReason: 'khách gấp',
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
+      const created = prisma.productionInvoice.create.mock.calls[0][0] as {
+        data: SolverOverrideColumns;
+      };
+      expect(created.data.solverMaxWastePctOverride).toBe(5);
+      expect(created.data.solverAllowCustomLength).toBe(false);
+      expect(created.data.solverOverrideReason).toBe('khách gấp');
+
+      await service.claimSolo('20');
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
+      const createdNoChoice = prisma.productionInvoice.create.mock.calls[1][0] as {
+        data: SolverOverrideColumns;
+      };
+      expect(createdNoChoice.data.solverMaxWastePctOverride).toBeNull();
+      expect(createdNoChoice.data.solverAllowCustomLength).toBeNull();
+      expect(createdNoChoice.data.solverOverrideReason).toBeNull();
     });
   });
 

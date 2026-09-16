@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsInt,
   IsNumber,
   IsOptional,
@@ -107,6 +108,16 @@ export class UpdateSystemConfigDto {
   @IsInt()
   @Min(1)
   solverTimeLimitSeconds?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Mặc định toàn hệ thống: có cho solver đặt cây sắt NGOÀI các chiều dài chuẩn hay không ' +
+      '(auto_scan). Từng đợt cắt đè lại được - KHSX đề nghị ở màn "Tối ưu cắt sắt", Sếp duyệt ' +
+      'cùng lệnh sản xuất.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  solverAllowCustomLength?: boolean;
 
   @ApiPropertyOptional({
     example: 0,

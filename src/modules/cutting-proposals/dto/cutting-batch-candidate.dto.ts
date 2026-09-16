@@ -1,6 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Exclude, Expose, Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsString } from 'class-validator';
+import { Exclude, Expose, Transform, Type } from 'class-transformer';
+import { ArrayMinSize, IsArray, IsOptional, IsString } from 'class-validator';
+import {
+  coerceStockLengthsFromQuery,
+  IsStockLengthsByMaterial,
+  type StockLengthsByMaterial,
+} from '../../../common/validators/stock-lengths-by-material.validator';
 import { ProdApprovalStatus } from '../../../generated/prisma/client';
 
 /** Một loại sắt của MỘT SKU, kèm hao hụt khi SKU đó cắt một mình. */
@@ -11,6 +16,9 @@ export class CandidateMaterialDto {
   @Expose() @ApiProperty() materialName!: string;
   /// Hao hụt tốt nhất có thể khi CHỈ SKU này cắt loại sắt này. Hiển thị kèm dấu "≥".
   @Expose() @ApiProperty() standaloneWastePct!: number;
+  /// Chiều dài cây (mm) con số trên được tính TRÊN đó - đổi ô chọn chiều dài thì số này đổi
+  /// theo, để chip không bao giờ nói về một cây khác với cây đợt sẽ thật sự cắt.
+  @Expose() @ApiPropertyOptional({ nullable: true }) stockLengthMm!: number | null;
   /// Cận dưới số cây khi cắt MỘT MÌNH SKU này (best-fill.util.ts - giả định nguồn đoạn vô hạn).
   /// Nhu cầu nhỏ (ít cây) khiến cận dưới lệch xa thực tế NHẤT: pattern lý tưởng không có đủ cây để
   /// lặp lại, cây cuối chi phối toàn bộ %. FE nên cảnh báo "cận dưới không đáng tin" khi số này
@@ -77,12 +85,37 @@ export class CuttingBatchCandidateListDto {
   }
 }
 
+/**
+ * Chiều dài cây KHSX đang chọn, gửi kèm cho 2 endpoint GET dựng bảng ở màn "Tối ưu cắt sắt".
+ *
+ * Vì sao 2 bảng danh sách cũng phải nhận: đổi ô chọn từ 6m sang 5m85 mà chip "hao hụt khi cắt
+ * riêng" vẫn đứng yên thì màn hình tự mâu thuẫn - chip nói một cây, đợt cắt một cây khác. Và
+ * chiều dài còn quyết định loại sắt nào ĐƯỢC COI LÀ vượt ngưỡng, tức đổi cả danh sách SKU hiện
+ * ra lẫn tổ hợp gộp hệ thống tick sẵn, không chỉ đổi con số.
+ */
+export class BatchStockLengthsQueryDto {
+  @ApiPropertyOptional({ example: { '5': 5850 } })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => coerceStockLengthsFromQuery(value))
+  @IsStockLengthsByMaterial()
+  stockLengthsByMaterial?: StockLengthsByMaterial;
+}
+
 export class PreviewCuttingBatchDto {
   @ApiProperty({ type: [String], description: 'ProductionInvoiceItem.id được KHSX tick chọn' })
   @IsArray()
   @ArrayMinSize(1)
   @IsString({ each: true })
   productionInvoiceItemIds!: string[];
+
+  /// Chiều dài cây KHSX đang chọn trên màn "Tối ưu cắt sắt", theo từng quy cách. Gửi kèm để
+  /// con số "Nếu gộp N SKU" tính THEO ĐÚNG cây sẽ cắt - không gửi thì tính theo cây chuẩn của
+  /// công ty. Cùng shape với SolverOverrideDto.solverStockLengthsByMaterial để KHSX bấm "Xác
+  /// nhận gộp" là gửi lại y nguyên thứ vừa xem, không phải map lại ở FE.
+  @ApiPropertyOptional({ example: { '5': 5850 } })
+  @IsOptional()
+  @IsStockLengthsByMaterial()
+  stockLengthsByMaterial?: StockLengthsByMaterial;
 }
 
 /** Kết quả tính thử cho ĐÚNG tổ hợp KHSX đang chọn, mỗi loại sắt 1 dòng. */
@@ -92,6 +125,10 @@ export class CuttingBatchPreviewLineDto {
   @Expose() @ApiProperty() materialCode!: string;
   @Expose() @ApiProperty() materialName!: string;
   @Expose() @ApiProperty() thresholdPct!: number;
+  /// Chiều dài cây (mm) mà con số của dòng này được tính TRÊN đó - phản chiếu đúng lựa chọn KHSX
+  /// gửi kèm trong stockLengthsByMaterial. null = không chọn riêng, đang dò trong danh sách chiều
+  /// dài chuẩn của công ty nên không có một cây duy nhất để nêu.
+  @Expose() @ApiPropertyOptional({ nullable: true }) stockLengthMm!: number | null;
   /// Mã SKU thực sự có dùng loại sắt này (tập con của tổ hợp được chọn).
   @Expose() @ApiProperty({ type: [String] }) contributingSkus!: string[];
   @Expose() @ApiProperty({ type: [Number] }) cutSizesMm!: number[];

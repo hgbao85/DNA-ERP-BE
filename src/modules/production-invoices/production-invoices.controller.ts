@@ -19,6 +19,7 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
+import { ClaimSoloDto } from './dto/claim-solo.dto';
 import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
 import { RecordPackagingDto } from './dto/record-packaging.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
@@ -76,8 +77,8 @@ export class ProductionInvoicesController {
   @Post('items/:itemId/claim-solo')
   @RequirePermissions(CREATE)
   @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER)
-  claimSolo(@Param('itemId') itemId: string) {
-    return this.productionInvoicesService.claimSolo(itemId);
+  claimSolo(@Param('itemId') itemId: string, @Body() dto: ClaimSoloDto) {
+    return this.productionInvoicesService.claimSolo(itemId, dto);
   }
 
   @Get()

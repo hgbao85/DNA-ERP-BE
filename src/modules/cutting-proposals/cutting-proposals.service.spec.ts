@@ -95,6 +95,7 @@ describe('CuttingProposalsService', () => {
     solverMaxLengthMm: 6000,
     solverLengthStepMm: 10,
     solverTimeLimitSeconds: 20,
+    solverAllowCustomLength: true,
   };
   const pieceBomRow = {
     pieceId: 10n,
@@ -961,6 +962,81 @@ describe('CuttingProposalsService', () => {
       expect(bodySent.max_waste_percentage_by_material).toEqual({ '200': 2 });
     });
 
+    // ── stock_lengths_by_material: chiều dài cây theo từng quy cách (2026-09-16) ──────
+
+    it('gửi stock_lengths_by_material khi KHSX chọn chiều dài riêng cho quy cách', async () => {
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
+        ...productionOrder,
+        productionInvoiceItem: {
+          salesOrder: { orderCode: 'PO-48' },
+          productionInvoice: {
+            solverMaxWastePctOverride: null,
+            solverAllowCustomLength: null,
+            solverStockLengthsByMaterial: { '200': 5850 },
+          },
+        },
+      });
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 50,
+          waste_percentage: 0.3,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            over_threshold: false,
+            total_bars: 8,
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      const body = (
+        externalApiService.post.mock.calls[0] as unknown as [string, Record<string, unknown>]
+      )[1];
+      expect(body.stock_lengths_by_material).toEqual({ '200': 5850 });
+      // stock_lengths CHUNG vẫn phải gửi nguyên: loại sắt nào không có khoá riêng vẫn rơi về nó
+      // (solver resolve theo từng group, xem resolved_stock_lengths_by_group trong input_echo).
+      expect(body.stock_lengths).toBe('5850 6000');
+    });
+
+    it('KHÔNG chọn chiều dài riêng thì KHÔNG gửi key - request y hệt trước khi có tính năng', async () => {
+      // Backward-compat: gửi object rỗng cũng là thay đổi hợp đồng, phải VẮNG hẳn key.
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 50,
+          waste_percentage: 0.3,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            over_threshold: false,
+            total_bars: 8,
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      const body = (
+        externalApiService.post.mock.calls[0] as unknown as [string, Record<string, unknown>]
+      )[1];
+      expect(body).not.toHaveProperty('stock_lengths_by_material');
+    });
+
     // ── auto_scan (bỏ 2026-08-18, MỞ LẠI 2026-08-26) ──────────────────────────────
     // 2026-08-18: bỏ hẳn vì cỡ vét cạn không mua được (NCC chỉ bán 6000mm) và chiều dài đó không
     // chảy tới Mua hàng. 2026-08-26 Sếp chốt mở lại: solver TỰ quyết fixed-hay-scan TRONG 1 lần
@@ -968,7 +1044,7 @@ describe('CuttingProposalsService', () => {
     // luôn, không đạt mới vét cạn. Chiều dài scan giờ chảy tới Mua hàng qua
     // PurchaseProposalItem.stockLengthMm (xem test riêng ở describe('approve')). Vẫn CHỈ 1 lần
     // gọi solver - test này giữ tên cũ về phần "1 lần gọi", chỉ đổi kỳ vọng auto_scan.
-    it('LUÔN gửi auto_scan=true và chỉ gọi solver ĐÚNG 1 LẦN, kể cả khi vượt ngưỡng', async () => {
+    it('mặc định (solverAllowCustomLength=true) gửi auto_scan=true và chỉ gọi solver ĐÚNG 1 LẦN, kể cả khi vượt ngưỡng', async () => {
       prisma.material.findMany.mockResolvedValue([
         { id: 200n, maxCuttingWastePercentage: { toNumber: () => 0.3 } },
       ]);
@@ -1002,6 +1078,234 @@ describe('CuttingProposalsService', () => {
         { data: { wastePercentage: number } },
       ];
       expect(updateCall[0].data.wastePercentage).toBe(9.61);
+    });
+
+    // ── Thông số cắt theo TỪNG đợt (2026-09-14): KHSX đề nghị, Sếp duyệt cùng lệnh sản xuất ─────
+    // 2 trục ĐỘC LẬP, thay cho enum 3 mức cũ (một thang leo tuyến tính, không diễn đạt nổi tổ hợp
+    // "chỉ cây chuẩn + chịu hao vượt ngưỡng" của đơn gấp).
+    it('solverAllowCustomLength=false gửi auto_scan=false - không tự dò mở rộng chiều dài', async () => {
+      prisma.systemConfig.findUniqueOrThrow.mockResolvedValue({
+        ...systemConfig,
+        solverAllowCustomLength: false,
+      });
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 50,
+          waste_percentage: 0.3,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            over_threshold: false,
+            total_bars: 8,
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      const [, body] = externalApiService.post.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(body.auto_scan).toBe(false);
+    });
+
+    it('PI cấm đặt cây ngoài chuẩn riêng cho đợt này - ưu tiên hơn mặc định SystemConfig (đang cho phép)', async () => {
+      // systemConfig mặc định cho phép (auto_scan=true) - PI này phải VẪN gửi auto_scan=false vì
+      // KHSX đề nghị riêng, chứng minh job.allowCustomLength được ưu tiên đọc trước chứ không phải
+      // lúc nào cũng rơi thẳng về SystemConfig.
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
+        ...productionOrder,
+        productionInvoiceItem: {
+          salesOrder: { orderCode: 'PO-31' },
+          productionInvoice: {
+            solverMaxWastePctOverride: null,
+            solverAllowCustomLength: false,
+          },
+        },
+      });
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 50,
+          waste_percentage: 0.3,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            over_threshold: false,
+            total_bars: 8,
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      const [, body] = externalApiService.post.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(body.auto_scan).toBe(false);
+    });
+
+    it('ngưỡng đặc cách của đợt NÂNG cả ngưỡng chung lẫn ngưỡng riêng từng loại sắt - và KHÔNG hạ loại nào', async () => {
+      // Đây là cơ chế làm nên ca "khách gấp": nâng ngưỡng lên 5% thì cây chuẩn 6000mm ở 3.2% ĐẠT
+      // ngưỡng, solver chốt luôn cây chuẩn thay vì đi dò cây lạ (phải chờ NCC cán).
+      //
+      // SAT-200 đang có ngưỡng riêng 0.3% (thấp hơn đặc cách) -> nâng lên 5.
+      // SAT-300 đang có ngưỡng riêng 8% (Sếp đã cấp rộng hơn) -> GIỮ 8, không bị đặc cách siết
+      // xuống 5. Đặc cách là để nới cho loại đang vướng, không phải đặt lại ngưỡng toàn cục.
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
+        ...productionOrder,
+        productionInvoiceItem: {
+          salesOrder: { orderCode: 'PO-31' },
+          productionInvoice: {
+            solverMaxWastePctOverride: { toNumber: () => 5 },
+            solverAllowCustomLength: null,
+          },
+        },
+      });
+      prisma.material.findMany.mockResolvedValueOnce([
+        { id: 200n, maxCuttingWastePercentage: { toNumber: () => 0.3 } },
+        { id: 300n, maxCuttingWastePercentage: { toNumber: () => 8 } },
+      ]);
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 400,
+          waste_percentage: 3.2,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            over_threshold: false,
+            total_bars: 8,
+            best_stock_length: 6000,
+            length_source: 'fixed',
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      const [, body] = externalApiService.post.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      // Ngưỡng chung 1.0% -> nâng lên 5 (loại sắt chưa có ngưỡng riêng ăn theo số này).
+      expect(body.max_waste_percentage).toBe(5);
+      expect(body.max_waste_percentage_by_material).toEqual({ '200': 5, '300': 8 });
+    });
+
+    it('ngưỡng đặc cách KHÔNG đụng tới auto_scan - 2 trục hoàn toàn độc lập', async () => {
+      // Chính chỗ thiết kế enum 3 mức cũ làm sai: "chấp nhận vượt ngưỡng" khi đó luôn kéo theo
+      // "được phép dò cây lạ". Đơn gấp cần đúng tổ hợp ngược lại: nới ngưỡng NHƯNG cấm cây lạ.
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
+        ...productionOrder,
+        productionInvoiceItem: {
+          salesOrder: { orderCode: 'PO-31' },
+          productionInvoice: {
+            solverMaxWastePctOverride: { toNumber: () => 5 },
+            solverAllowCustomLength: false,
+          },
+        },
+      });
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 400,
+          waste_percentage: 3.2,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            over_threshold: false,
+            total_bars: 8,
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+
+      await invoke(2n, 1n);
+
+      const [, body] = externalApiService.post.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(body.max_waste_percentage).toBe(5);
+      expect(body.auto_scan).toBe(false);
+    });
+
+    it('vượt ngưỡng VẪN chặn tự duyệt kể cả khi đợt đã được cấp đặc cách - đặc cách là TRẦN, không phải giấy phép', async () => {
+      // Ngưỡng đặc cách đã cộng vào TRƯỚC khi gọi solver, nên over_threshold trả về ở đây nghĩa là
+      // vượt CẢ cái trần Sếp duyệt. Không còn cửa nào cho qua (thiết kế cũ có ALLOW_OVER_THRESHOLD
+      // bỏ hẳn chặn này - bỏ đi vì lúc duyệt Sếp mới chỉ thấy CẬN DƯỚI của hao hụt).
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
+        ...productionOrder,
+        productionInvoiceItem: {
+          salesOrder: { orderCode: 'PO-31' },
+          productionInvoice: {
+            solverMaxWastePctOverride: { toNumber: () => 5 },
+            solverAllowCustomLength: null,
+          },
+        },
+      });
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 900,
+          waste_percentage: 7.4,
+          any_over_threshold: true,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            over_threshold: true,
+            total_bars: 8,
+            cutting_patterns: [],
+          },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+      prisma.material.findMany
+        .mockResolvedValueOnce([]) // ngưỡng riêng theo vật tư, trước khi gọi solver
+        .mockResolvedValueOnce([{ id: 200n, code: 'SAT-200' }]); // đổi id -> mã cho thông báo
+
+      await invoke(2n, 1n, 'user-boss');
+
+      const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
+        { data: { status?: CuttingProposalStatus } },
+      ][];
+      expect(
+        updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.APPROVED),
+      ).toBeUndefined();
+      const notify = prisma.notification.create.mock.calls[0] as unknown as [
+        { data: { message: string } },
+      ];
+      expect(notify[0].data.message).toContain('vượt ngưỡng hao hụt cho phép');
     });
 
     it('KHÔNG gọi lại solver khi có dòng feasible=false - lưu nguyên kết quả rồi để cổng chặn tự-duyệt xử lý', async () => {
@@ -2686,6 +2990,33 @@ describe('CuttingProposalsService', () => {
       });
 
       await expect(buildJob(50n)).rejects.toThrow(NotFoundException);
+    });
+
+    it('mang theo thông số cắt KHSX đề nghị lúc gộp (2026-09-14) để runSolverAndSave đọc', async () => {
+      prisma.productionInvoice.findUniqueOrThrow.mockResolvedValue({
+        id: 50n,
+        code: 'PI-50',
+        solverMaxWastePctOverride: { toNumber: () => 5 },
+        solverAllowCustomLength: false,
+        items: [
+          {
+            productionOrder: { id: 1n, bomRevisionId: 5n, quantity: 10 },
+            mfgProduct: { factoryCode: 'BAN-J55' },
+          },
+        ],
+      });
+      prisma.bomPiece.findMany.mockResolvedValue([{ pieceId: 10n, qtyPerUnit: 4 }]);
+      prisma.pieceBom.findMany.mockResolvedValue([pieceBomRow]);
+
+      const job = (await buildJob(50n)) as unknown as {
+        maxWastePctOverride: number | null;
+        allowCustomLength: boolean | null;
+      };
+
+      // Decimal của Prisma phải được quy về number ngay ở đây - runSolverAndSave dùng nó trong
+      // Math.max(), truyền thẳng Decimal vào sẽ ra NaN mà không ai báo lỗi.
+      expect(job.maxWastePctOverride).toBe(5);
+      expect(job.allowCustomLength).toBe(false);
     });
   });
 });
