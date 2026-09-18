@@ -10,11 +10,6 @@ export interface JwtPayload {
   warehouseScope: string | null;
 }
 
-export interface RefreshTokenPayload {
-  sub: string;
-  tokenId: string;
-}
-
 export interface AuthenticatedUser {
   id: string;
   username: string;

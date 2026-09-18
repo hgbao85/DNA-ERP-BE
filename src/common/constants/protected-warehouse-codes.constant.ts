@@ -20,5 +20,3 @@ export const PROTECTED_WAREHOUSE_CODES = [
   'SCRAP',
   'OPENING_BALANCE',
 ] as const;
-
-export type ProtectedWarehouseCode = (typeof PROTECTED_WAREHOUSE_CODES)[number];
