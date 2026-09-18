@@ -20,6 +20,8 @@ export const PERMISSION_MODULES = {
   CUSTOMER: 'CUSTOMER',
   PRODUCT: 'PRODUCT',
   MATERIAL: 'MATERIAL',
+  // --- 2026-09-17 (Vật tư văn phòng/sinh hoạt - tách biệt hoàn toàn khỏi MATERIAL sản xuất) ---
+  OFFICE_SUPPLY: 'OFFICE_SUPPLY',
   SEGMENT_SPEC: 'SEGMENT_SPEC',
   BOM_REVISION: 'BOM_REVISION',
   // --- Sales Order + Production Order domain ---

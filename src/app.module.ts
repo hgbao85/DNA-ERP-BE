@@ -34,6 +34,7 @@ import { WarehousesModule } from './modules/warehouses/warehouses.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { ProductsModule } from './modules/products/products.module';
 import { MaterialsModule } from './modules/materials/materials.module';
+import { OfficeSuppliesModule } from './modules/office-supplies/office-supplies.module';
 import { SegmentSpecsModule } from './modules/segment-specs/segment-specs.module';
 import { BomRevisionsModule } from './modules/bom-revisions/bom-revisions.module';
 import { SalesOrdersModule } from './modules/sales-orders/sales-orders.module';
@@ -105,6 +106,7 @@ import { ProductionBatchesModule } from './modules/production-batches/production
     CustomersModule,
     ProductsModule,
     MaterialsModule,
+    OfficeSuppliesModule,
     SegmentSpecsModule,
     BomRevisionsModule,
     SalesOrdersModule,

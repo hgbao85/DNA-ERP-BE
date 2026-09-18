@@ -32,7 +32,7 @@ const ALL_MODULES = Object.values(PERMISSION_MODULES);
 const SEED_WAREHOUSES: { code: string; name: string; isVirtual: boolean; note?: string }[] = [
   {
     code: 'thanh-pham',
-    name: 'Kho Bao bì/Thành phẩm',
+    name: 'Kho thành phẩm',
     isVirtual: false,
     note: 'Bao bì đóng gói & thành phẩm hoàn chỉnh — cuối chuỗi chuyển kho nội bộ',
   },

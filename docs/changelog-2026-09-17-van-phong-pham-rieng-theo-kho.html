@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: "Văn phòng phẩm" — CRUD riêng theo từng kho cho nhân viên kho</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · Tính năng mới cho tài khoản nhân viên kho — "Văn phòng phẩm"</div>
+    <h1>Văn phòng phẩm: CRUD đơn giản có lịch sử nhập/xuất, RIÊNG theo từng kho vật lý</h1>
+    <p class="lede">
+      Xuất phát từ nhu cầu quản lý đồ dùng sinh hoạt (bút, giấy...) — khác hẳn <code>Material</code>
+      hiện có vốn luôn gắn định mức/BOM sản xuất. Xây mới hoàn toàn một domain riêng
+      (<code>OfficeSupply</code> + <code>OfficeSupplyLedgerEntry</code>), để nhân viên kho toàn
+      quyền tự quản lý mà không đụng gì tới quyền hạn/hạ tầng của vật tư sản xuất. Giữa chừng có 1
+      lần đính chính quan trọng: thiết kế ban đầu là danh sách dùng chung toàn hệ thống, sau đó
+      chốt lại đúng nghiệp vụ là <b>mỗi kho có danh sách/tồn/lịch sử độc lập hoàn toàn</b>, kể cả 2
+      kho cùng đặt tên 1 vật tư.
+    </p>
+    <div class="meta">
+      <span>17/09/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>2 migration (bản đầu global → sửa lại per-warehouse)</span>
+      <span>1089 test BE pass (50 suite)</span>
+      <span><b>Đã xác nhận qua API thật (curl) + trình duyệt thật (Playwright)</b></span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li>Model mới <code>OfficeSupply</code>/<code>OfficeSupplyLedgerEntry</code> — hoàn toàn tách biệt khỏi <code>Material</code>, không đụng BOM/StockQuant/StockLedger sản xuất.</li>
+      <li><b>Đính chính giữa chừng:</b> ban đầu thiết kế "dùng chung toàn hệ thống" — user yêu cầu sửa lại thành <b>riêng theo từng kho</b> (<code>warehouseId</code> bắt buộc). Đã có migration + service enforce theo đúng idiom sẵn có trong repo (<code>MaterialIssuesService.assertWarehouseScope</code>): so khớp CHÍNH XÁC mã kho, không gộp theo "họ" kho.</li>
+      <li><code>quantity</code> chỉ đổi được qua <code>POST /:id/adjust</code> (kèm 1 dòng lịch sử) — atomic bằng <code>updateMany</code> + check count, cùng idiom đã vá race <code>PurchaseProposalItem</code> trước đây. Đã verify race thật bằng 2 request xuất đồng thời qua curl.</li>
+      <li>Quyền <code>OFFICE_SUPPLY: 'ALL'</code> cấp cho <code>WAREHOUSE_STAFF</code> — nhân viên kho toàn quyền CRUD+nhập/xuất trên đúng kho mình phụ trách (khác <code>Material</code>, nơi UPDATE/DELETE chỉ Admin có).</li>
+      <li>Trang FE mới <code>OfficeSuppliesPage.tsx</code>, gắn thành tab "Văn phòng phẩm" trong "Kho đầu vào" — nhận <code>warehouseCode</code> theo scope tài khoản, tài khoản không gán kho (Boss/tổng kho) hiện thông báo chưa hỗ trợ (cùng idiom tab "Xuất theo đơn hàng" có sẵn).</li>
+      <li>2 lần chỉnh UI theo yêu cầu tiếp theo: bỏ hẳn cột + ô nhập "Mã" (field vẫn còn ở BE/DB nhưng không hiển thị/nhập từ FE nữa), và đổi tên hiển thị "Vật tư văn phòng" → "Văn phòng phẩm" xuyên suốt (tab, tiêu đề, modal, thông báo rỗng, dialog xóa).</li>
+      <li>Việc phụ trong cùng phiên: đổi tên kho <code>thanh-pham</code> từ "Kho Bao bì/Thành phẩm" → "Kho thành phẩm" (sửa <code>prisma/seed.ts</code>, chạy lại seed — upsert nên áp ngay lên DB dev).</li>
+      <li><b>Đã test qua trình duyệt thật</b> (Playwright, tài khoản <code>khopsh</code>): tạo → nhập → xuất vượt tồn (báo lỗi đúng) → xem lịch sử → sửa → xóa — phát hiện và vá luôn 1 bug UX thật (nút đóng modal Lịch sử thiếu <code>title</code>/tên hỗ trợ công cụ trợ năng).</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 1. BỐI CẢNH ═══════════════════════ -->
+  <div class="module" id="boicanh">
+    <h2>1. Bối cảnh — vật tư sinh hoạt khác hẳn vật tư sản xuất</h2>
+    <p class="module-note">
+      Yêu cầu ban đầu rất mở: "triển khai tính năng mới cho các account nhân viên kho". Sau khi hỏi
+      lại, hoá ra là: hiện tại mọi vật tư trong tồn kho đều gắn với định mức sản xuất
+      (<code>Material</code>, dùng cho BOM/cắt sắt/tiêu hao), nhưng sẽ có vật tư dùng để "làm việc"
+      như bút, giấy — không liên quan gì tới định mức. Yêu cầu là 1 tính năng CRUD đơn giản.
+    </p>
+    <div class="card">
+      <h3>Vì sao không tái dùng bảng <code>materials</code></h3>
+      <p>Khảo sát cho thấy <code>Material</code> có thể tạo item "rỗng" (không group/warehouse/waste) mà không cần đổi schema — nhưng form Admin hiện có quá nhiều trường thừa (waste%, detailKind, group), và nguy cơ rò rỉ vào các dropdown chọn vật tư sản xuất (BOM, cắt sắt) nếu không lọc kỹ. Quyết định cùng user: <b>bảng/module hoàn toàn riêng</b>, có ledger lịch sử nhập/xuất thay vì 1 field số lượng sửa trực tiếp.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. BACKEND ═══════════════════════ -->
+  <div class="module" id="backend">
+    <h2>2. Backend <span class="badge b-be">BE</span> <span class="badge b-db">DB</span></h2>
+
+    <div class="card">
+      <h3><span class="path">prisma/schema.prisma</span> — 2 model mới</h3>
+      <p><code>OfficeSupply</code> (<code>warehouseId</code>, <code>code?</code>, <code>name</code>, <code>unit</code>, <code>quantity</code> denormalized, <code>note?</code>, <code>isActive</code>, <code>deletedAt</code> soft-delete) + <code>OfficeSupplyLedgerEntry</code> (<code>changeQty</code>, <code>quantityAfter</code> snapshot, <code>reason</code> enum <code>INITIAL/IMPORT/EXPORT/ADJUST</code>, <code>createdByUserId</code>). Unique <code>code</code> đổi từ toàn cục sang <code>@@unique([warehouseId, code])</code> — 2 kho được phép trùng mã.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">modules/office-supplies/</span> — module mới, mirror pattern <code>materials</code></h3>
+      <p><code>office-supplies.controller.ts</code>/<code>.service.ts</code>/<code>.module.ts</code> + 4 DTO. Routes: <code>POST /</code>, <code>GET /</code>, <code>GET /:id</code>, <code>GET /:id/ledger</code>, <code>PATCH /:id</code> (chỉ metadata — KHÔNG bao giờ đụng <code>quantity</code>), <code>POST /:id/adjust</code> (route DUY NHẤT đổi số lượng), <code>DELETE /:id</code> (soft-delete, giữ nguyên lịch sử).</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">office-supplies.service.ts</span> — <code>adjustQuantity()</code>, atomic race guard</h3>
+      <p>Trong 1 <code>$transaction</code>: <code>updateMany({ where: { id, quantity: { gte: -changeQty } } })</code> khi xuất, rồi kiểm <code>count === 0</code> → <code>ConflictException</code>. Cùng idiom đã dùng vá race <code>PurchaseProposalItem</code> trước đây (updateMany kèm điều kiện hiện tại + check count) thay vì đọc-rồi-ghi rời rạc.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">common/constants/permission-modules.constant.ts</span> + <span class="path">role-permissions.constant.ts</span></h3>
+      <p>Thêm <code>PERMISSION_MODULES.OFFICE_SUPPLY</code>; cấp <code>{ module: OFFICE_SUPPLY, actions: 'ALL' }</code> cho <code>BUSINESS_ROLES.WAREHOUSE_STAFF</code> — toàn quyền CRUD+adjust, khác hẳn <code>MATERIAL</code> (chỉ VIEW+CREATE, UPDATE/DELETE dành riêng Admin) vì vật tư văn phòng không có rủi ro ảnh hưởng định mức sản xuất. Chạy lại <code>npm run seed</code> để đồng bộ quyền mới vào DB (seed diff <code>ROLE_GRANTS</code>, không xoá dữ liệu khác).</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 3. ĐÍNH CHÍNH: RIÊNG THEO TỪNG KHO ═══════════════════════ -->
+  <div class="module" id="dinhchinh">
+    <h2>3. Đính chính — từ "dùng chung" sang "riêng theo từng kho" <span class="badge b-db">DB</span> <span class="badge b-be">BE</span></h2>
+    <p class="module-note">
+      Bản đầu tiên (migration <code>20260917011441_add_office_supplies</code>) thiết kế danh sách
+      dùng chung toàn hệ thống — giả định hợp lý nhưng SAI với nghiệp vụ thật. User phản hồi ngắn
+      gọn: <i>"Dùng riêng cho từng kho, không phải dùng chung"</i>.
+    </p>
+    <div class="callout warn">
+      <b>Sửa lại:</b> thêm <code>warehouseId</code> bắt buộc (migration <code>20260917015923_office_supplies_per_warehouse</code>) — bảng đang trống (chỉ có dữ liệu test của phiên) nên xoá sạch rồi migrate thẳng, không cần backfill. Do môi trường non-interactive không chạy được <code>prisma migrate dev</code> khi có cảnh báo mất dữ liệu, phải tạo migration thủ công bằng <code>prisma migrate diff --from-config-datasource ... --to-schema ...</code> rồi áp bằng <code>prisma migrate deploy</code>.
+    </div>
+    <div class="card">
+      <h3>Enforce theo ĐÚNG mã kho — không gộp theo "họ"</h3>
+      <p><code>OfficeSuppliesService.assertWarehouseScope()</code>: <code>null</code> (Boss/Admin/tổng kho) không giới hạn; khác <code>null</code> phải khớp CHÍNH XÁC <code>warehouseScope === expectedWarehouseCode</code>. Cố ý KHÁC với tab "Tổng hợp vật tư"/"Chuyền kiểm" (gộp theo family qua <code>isFamilyScope</code>) — user xác nhận qua câu hỏi trực tiếp "Kho tp và kho tp2 có thấy theo từng kho không", verify bằng tài khoản thật <code>khotp</code> (<code>thanh-pham</code>) vs <code>khotp2</code> (<code>thanh-pham-1788485485362</code>, "Kho thành phẩm 2") — tách biệt hoàn toàn, kể cả trùng tên vật tư.</p>
+    </div>
+    <div class="card">
+      <h3><code>create()</code>/<code>findAll()</code> — suy kho từ scope, không tin client</h3>
+      <p>Thủ kho có scope: LUÔN tạo/lọc theo đúng kho mình, bỏ qua <code>warehouseCode</code> nếu client lỡ gửi khác. Tài khoản không scope (Boss/Admin): bắt buộc chỉ định <code>warehouseCode</code> khi tạo; khi liệt kê mà không chỉ định thì xem gộp mọi kho (có <code>warehouseCode/warehouseName</code> denormalized trong response để phân biệt).</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 4. FRONTEND ═══════════════════════ -->
+  <div class="module" id="frontend">
+    <h2>4. Frontend <span class="badge b-fe">FE</span></h2>
+
+    <div class="card">
+      <h3><span class="path">services/office-supplies-api.ts</span> + <span class="path">pages/InboundWarehouse/OfficeSuppliesPage.tsx</span></h3>
+      <p>Trang mới: bảng danh sách, modal Thêm/Sửa (không có ô số lượng), modal Nhập/Xuất riêng (gọi <code>adjust</code>), modal Lịch sử (đọc <code>GET /:id/ledger</code>), xóa qua <code>ConfirmModal</code> có sẵn. Tái dùng nguyên <code>Modal.tsx</code>/<code>ConfirmModal.tsx</code> — không viết lại overlay từ đầu.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">InboundWarehouseApp.tsx</span> — gắn tab mới, truyền <code>warehouseCode={'{scope}'}</code></h3>
+      <p>Thêm vào <code>ALL_TABS</code> và từng nhánh scope cụ thể (<code>vat-tu-tp</code>/<code>phoi-son-han</code>/<code>thanh-pham</code>). <code>scope</code> null (Boss/tổng kho) vẫn thấy tab nhưng <code>OfficeSuppliesPage</code> tự hiện thông báo "chưa hỗ trợ" — cùng idiom tab "Xuất theo đơn hàng" (<code>WarehouseXuatPage</code>) đã có sẵn, vì trên thực tế Boss không có đường điều hướng vào phân hệ Kho đầu vào.</p>
+    </div>
+
+    <div class="card">
+      <h3>2 lần chỉnh theo yêu cầu tiếp theo</h3>
+      <p><span class="pill p-del">Bỏ</span> cột "Mã" khỏi bảng + ô nhập "Mã" khỏi form Thêm/Sửa (field <code>code</code> vẫn tồn tại ở BE/DB, chỉ không còn đường nào ở FE đọc/ghi nó nữa). <span class="pill p-chg">Đổi tên</span> nhãn hiển thị "Vật tư văn phòng" → "Văn phòng phẩm" ở mọi nơi: tên tab, tiêu đề trang, tiêu đề modal Thêm, thông báo danh sách rỗng, tiêu đề dialog Xóa, thông báo fallback cho tài khoản không có kho. Tiện sửa luôn 1 câu mô tả bị lỗi thời còn nói "dùng chung cho mọi kho" sót lại từ trước khi đính chính ở mục 3.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. VIỆC PHỤ CÙNG PHIÊN ═══════════════════════ -->
+  <div class="module" id="viecphu">
+    <h2>5. Việc phụ trong cùng phiên — đổi tên kho <code>thanh-pham</code></h2>
+    <div class="card">
+      <h3><span class="path">prisma/seed.ts</span> — <code>SEED_WAREHOUSES</code></h3>
+      <p>"Kho Bao bì/Thành phẩm" → "Kho thành phẩm". Seed dùng <code>upsert({ update: { name, isVirtual, note } })</code> nên chỉ cần sửa hằng số rồi chạy lại <code>npm run seed</code> là áp thẳng lên DB dev chung, không cần migration riêng. Verify qua API xác nhận tên mới đã lên đúng kho <code>id=4</code>.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 6. KIỂM THỬ ═══════════════════════ -->
+  <div class="module" id="kiemthu">
+    <h2>6. Kiểm thử</h2>
+
+    <div class="stats">
+      <div class="stat"><div class="n">19</div><div class="l">unit test mới<br><code>office-supplies.service.spec.ts</code></div></div>
+      <div class="stat"><div class="n">1089</div><div class="l">tổng test BE pass<br>(50 suite)</div></div>
+      <div class="stat"><div class="n">2</div><div class="l">migration<br>(global → per-warehouse)</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Race condition — verify thật qua curl, không chỉ mock</h3>
+      <p>Tạo item tồn 10, bắn 2 request <code>POST /:id/adjust</code> (<code>changeQty: -6</code>) đồng thời qua <code>curl ... &amp; ... &amp; wait</code>. Kết quả: đúng 1 request <code>201</code> (tồn còn 4), request kia <code>409 Conflict</code> — không âm kho.</p>
+    </div>
+
+    <div class="card">
+      <h3>RBAC — verify thật qua curl</h3>
+      <p>Tài khoản <code>phoi</code> (không có role <code>WAREHOUSE_STAFF</code>) gọi <code>GET /office-supplies</code> → <code>403 Missing required permission(s): OFFICE_SUPPLY:VIEW</code>.</p>
+    </div>
+
+    <div class="card">
+      <h3>Cách ly theo kho — verify thật qua curl, 2 cặp tài khoản thật</h3>
+      <p><code>khopsh</code> (<code>phoi-son-han</code>) tạo vật tư → <code>khotp</code> (<code>thanh-pham</code>) không thấy, thao tác trực tiếp bằng id → <code>403</code>. Lặp lại với <code>khotp</code> vs <code>khotp2</code> (<code>thanh-pham-1788485485362</code>, kho phụ thật trong DB) — cùng kết quả, kể cả khi 2 kho tạo vật tư trùng tên.</p>
+    </div>
+
+    <div class="card">
+      <h3>UI thật qua Playwright (đăng nhập <code>khopsh</code>)</h3>
+      <p>Viết 1 spec tạm trong <code>e2e/</code> (đã xoá sau khi xong, không phải bổ sung permanent vào bộ e2e hiện có) lái qua browser thật: tạo → nhập +5 → xuất vượt tồn (báo lỗi đúng) → xem lịch sử → sửa ghi chú → xóa. Toàn bộ chạy đúng. Phát hiện 1 bug UX thật giữa chừng: nút đóng (X) của modal Lịch sử không có <code>title</code>/tên hỗ trợ công cụ trợ năng nên khó thao tác qua Playwright lẫn trình đọc màn hình — đã vá thêm <code>title="Đóng"</code>.</p>
+    </div>
+
+    <div class="callout warn">
+      <b>Chưa test qua UI thật sau 2 lần chỉnh cuối</b> (bỏ cột "Mã", đổi tên hiển thị "Văn phòng phẩm") — chỉ xác nhận bằng <code>tsc --noEmit</code> (0 lỗi), không chạy lại Playwright/mở trình duyệt thật sau các thay đổi thuần UI-text này.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 7. CÒN ĐỂ NGỎ ═══════════════════════ -->
+  <div class="module" id="conngo">
+    <h2>7. Còn để ngỏ</h2>
+    <ul class="timeline stages">
+      <li class="ok"><b>Luồng chính đã test qua browser thật + curl thật</b><span> — xem mục 6, gồm cả race condition và cách ly theo kho với tài khoản thật.</span></li>
+      <li><b>2 lần chỉnh UI cuối (bỏ cột Mã, đổi tên hiển thị) chỉ verify bằng type-check</b><span> — chưa mở lại trình duyệt thật sau các thay đổi này.</span></li>
+      <li><b>Tài khoản không có <code>warehouseScope</code> (Boss/Admin) tạo vật tư qua <code>warehouseCode</code> trong body chỉ test bằng unit test</b><span> — chưa có UI thật nào cho phép nhập <code>warehouseCode</code> tay (nhánh Boss trong <code>OfficeSuppliesPage</code> chỉ hiện thông báo chưa hỗ trợ), nên đường này chỉ chạy qua service test + gọi API tay.</span></li>
+      <li><b>Field <code>code</code> vẫn còn ở DB/BE dù đã ẩn khỏi FE</b><span> — không xoá field, chỉ ngừng hiển thị/nhập từ UI theo đúng yêu cầu ("bỏ cột"), có thể cân nhắc dọn hẳn nếu về sau xác nhận không cần.</span></li>
+    </ul>
+  </div>
+
+  <footer>
+    Nguồn: toàn bộ nội dung trên tổng hợp trực tiếp từ phiên làm việc trong Claude Code — không suy
+    diễn thêm. Code thật nằm ở <code>D:\DNA-ERP-BE\src\modules\office-supplies</code> (BE) và
+    <code>D:\DNA-ERP\src\modules\pages\InboundWarehouse\OfficeSuppliesPage.tsx</code> +
+    <code>services\office-supplies-api.ts</code> (FE).
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" title="Về đầu trang" type="button">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

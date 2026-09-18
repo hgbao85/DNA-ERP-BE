@@ -301,6 +301,11 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.MATERIAL,
       actions: [PermissionAction.VIEW, PermissionAction.CREATE],
     },
+    // Vật tư văn phòng/sinh hoạt (2026-09-17) - HOÀN TOÀN tách biệt khỏi MATERIAL sản xuất ở
+    // trên (không định mức/BOM, không warehouseId). Toàn quyền CRUD - khác MATERIAL nơi
+    // UPDATE/DELETE do Admin giữ vì Material ảnh hưởng trực tiếp định mức sản xuất; vật tư văn
+    // phòng không có rủi ro đó nên để thủ kho tự quản lý hết.
+    { module: PERMISSION_MODULES.OFFICE_SUPPLY, actions: 'ALL' },
     { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.PURCHASE_RECEIPT, actions: [PermissionAction.UPDATE] },

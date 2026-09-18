@@ -92,6 +92,7 @@ model User {
   materialIssuesReceived            MaterialIssue[]             @relation("MaterialIssueReceivedBy")
   materialYieldIssuesIssued         MaterialYieldIssue[]        @relation("MaterialYieldIssueIssuedBy")
   materialYieldIssuesReceived       MaterialYieldIssue[]        @relation("MaterialYieldIssueReceivedBy")
+  officeSupplyLedgerEntries         OfficeSupplyLedgerEntry[]
   packagingIssuesIssued             PackagingIssue[]            @relation("PackagingIssueIssuedBy")
   productionBatchesReported         ProductionBatch[]           @relation("ProductionBatchReportedBy")
   pieceStepBatchesReported          PieceStepBatch[]            @relation("PieceStepBatchReportedBy")
@@ -417,6 +418,64 @@ model Material {
   @@map("materials")
 }
 
+enum OfficeSupplyLedgerReason {
+  INITIAL
+  IMPORT
+  EXPORT
+  ADJUST
+}
+
+/// Vật tư văn phòng/sinh hoạt (bút, giấy...) - HOÀN TOÀN tách biệt khỏi Material (vật tư sản
+/// xuất gắn định mức/BOM). RIÊNG THEO TỪNG KHO VẬT LÝ (warehouseId bắt buộc, KHÔNG dùng chung
+/// toàn hệ thống) - 2 kho khác nhau có thể cùng đặt tên "Bút bi" nhưng là 2 dòng độc lập, tồn/
+/// lịch sử không gộp. Nhân viên kho (WAREHOUSE_STAFF) toàn quyền CRUD trên ĐÚNG kho mình phụ
+/// trách - enforce ở OfficeSuppliesService.assertWarehouseScope(), cùng idiom
+/// MaterialIssuesService/SteelIssuesService (không dùng RBAC vì đây là scope theo instance kho,
+/// không phải theo module/action).
+model OfficeSupply {
+  id          BigInt    @id @default(autoincrement())
+  warehouseId BigInt
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  code        String?
+  name        String
+  unit        String
+  /// Tồn hiện tại, denormalized - CHỈ được đổi qua OfficeSuppliesService.adjustQuantity() (kèm
+  /// ghi 1 dòng OfficeSupplyLedgerEntry trong cùng transaction). PATCH /office-supplies/:id
+  /// không bao giờ được sửa field này.
+  quantity    Decimal   @default(0) @db.Decimal(14, 3)
+  note        String?
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  ledgerEntries OfficeSupplyLedgerEntry[]
+
+  /// `code` KHÔNG unique toàn cục nữa (khác Material) - unique THEO KHO, để 2 kho tự đặt mã
+  /// trùng nhau vẫn được (Postgres cho phép nhiều NULL trong composite unique index).
+  @@unique([warehouseId, code])
+  @@index([warehouseId])
+  @@map("office_supplies")
+}
+
+model OfficeSupplyLedgerEntry {
+  id              BigInt                   @id @default(autoincrement())
+  officeSupplyId  BigInt
+  officeSupply    OfficeSupply             @relation(fields: [officeSupplyId], references: [id])
+  /// Số dương = nhập, số âm = xuất.
+  changeQty       Decimal                  @db.Decimal(14, 3)
+  /// Snapshot tồn NGAY SAU bút toán này - đọc lịch sử không cần cộng dồn lại từ đầu.
+  quantityAfter   Decimal                  @db.Decimal(14, 3)
+  reason          OfficeSupplyLedgerReason
+  note            String?
+  createdByUserId String?
+  createdByUser   User?                    @relation(fields: [createdByUserId], references: [id])
+  createdAt       DateTime                 @default(now())
+
+  @@index([officeSupplyId, createdAt])
+  @@map("office_supply_ledger_entries")
+}
+
 model Supplier {
   id        BigInt    @id @default(autoincrement())
   name      String
@@ -499,6 +558,7 @@ model Warehouse {
   warehouseTransferReservations WarehouseTransferReservation[]
   stockReservations             StockReservation[]
   materials                     Material[]
+  officeSupplies                OfficeSupply[]
 
   @@map("warehouses")
 }
