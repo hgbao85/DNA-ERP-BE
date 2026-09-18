@@ -122,7 +122,10 @@ export class OfficeSuppliesService {
       : undefined;
 
     const where: Prisma.OfficeSupplyWhereInput = {
-      deletedAt: null,
+      // includeDeleted='true' - CHỈ dùng cho màn quản trị (Admin xem lại vật tư đã xóa để tra
+      // lịch sử) - không giới hạn theo role ở tầng BE (cùng tiền lệ WAREHOUSE:CREATE isAdmin-gated
+      // ở FE), FE chỉ hiện nút bật cho Admin.
+      ...(query.includeDeleted === 'true' ? {} : { deletedAt: null }),
       ...(warehouseId ? { warehouseId } : {}),
       ...(query.search
         ? {
@@ -249,7 +252,10 @@ export class OfficeSuppliesService {
     query: PaginationQueryDto,
     warehouseScope: string | null,
   ): Promise<Paginated<OfficeSupplyLedgerEntryResponseDto>> {
-    const supply = await this.findOneOrThrow(id);
+    // allowDeleted: true - lịch sử phải tra được cả sau khi vật tư đã bị xóa (đúng lời hứa trong
+    // dialog xác nhận xóa ở FE: "Lịch sử nhập/xuất vẫn được giữ lại để tra cứu") - trước đây
+    // findOneOrThrow() mặc định 404 với item đã xóa nên route này chưa từng dùng được sau khi xóa.
+    const supply = await this.findOneOrThrow(id, { allowDeleted: true });
     this.assertWarehouseScope(warehouseScope, supply.warehouse.code);
     const bigId = parseBigIntId(id);
 
@@ -302,13 +308,16 @@ export class OfficeSuppliesService {
     return warehouse;
   }
 
-  private async findOneOrThrow(id: string): Promise<OfficeSupplyWithWarehouse> {
+  private async findOneOrThrow(
+    id: string,
+    options?: { allowDeleted?: boolean },
+  ): Promise<OfficeSupplyWithWarehouse> {
     const bigId = parseBigIntId(id);
     const supply = await this.prisma.officeSupply.findUnique({
       where: { id: bigId },
       include: OFFICE_SUPPLY_INCLUDE,
     });
-    if (!supply || supply.deletedAt) {
+    if (!supply || (supply.deletedAt && !options?.allowDeleted)) {
       throw new NotFoundException(`Office supply ${id} not found`);
     }
     return supply;
@@ -326,6 +335,7 @@ export class OfficeSuppliesService {
       quantity: Number(supply.quantity),
       note: supply.note,
       isActive: supply.isActive,
+      deletedAt: supply.deletedAt,
       createdAt: supply.createdAt,
       updatedAt: supply.updatedAt,
     });

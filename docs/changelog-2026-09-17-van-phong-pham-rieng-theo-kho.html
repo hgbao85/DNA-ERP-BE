@@ -193,13 +193,16 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
       quyền tự quản lý mà không đụng gì tới quyền hạn/hạ tầng của vật tư sản xuất. Giữa chừng có 1
       lần đính chính quan trọng: thiết kế ban đầu là danh sách dùng chung toàn hệ thống, sau đó
       chốt lại đúng nghiệp vụ là <b>mỗi kho có danh sách/tồn/lịch sử độc lập hoàn toàn</b>, kể cả 2
-      kho cùng đặt tên 1 vật tư.
+      kho cùng đặt tên 1 vật tư. Các phiên làm việc sau đó tiếp tục phát hiện và vá thêm 4 vấn đề
+      thật phát sinh từ chính tính năng này: commit BE bị chặn bởi lint, thiếu test race thật (chỉ
+      verify tay), lịch sử "hứa suông" không tra được sau khi xóa, và Admin hoàn toàn không có lối
+      vào tính năng (kèm 1 bug Rules of Hooks phát hiện khi vá).
     </p>
     <div class="meta">
-      <span>17/09/2026</span>
+      <span>17-18/09/2026</span>
       <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
       <span>2 migration (bản đầu global → sửa lại per-warehouse)</span>
-      <span>1089 test BE pass (50 suite)</span>
+      <span>1094 test BE pass (50 suite) + 1 suite integration (Postgres thật)</span>
       <span><b>Đã xác nhận qua API thật (curl) + trình duyệt thật (Playwright)</b></span>
     </div>
   </div>
@@ -209,12 +212,16 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     <ul>
       <li>Model mới <code>OfficeSupply</code>/<code>OfficeSupplyLedgerEntry</code> — hoàn toàn tách biệt khỏi <code>Material</code>, không đụng BOM/StockQuant/StockLedger sản xuất.</li>
       <li><b>Đính chính giữa chừng:</b> ban đầu thiết kế "dùng chung toàn hệ thống" — user yêu cầu sửa lại thành <b>riêng theo từng kho</b> (<code>warehouseId</code> bắt buộc). Đã có migration + service enforce theo đúng idiom sẵn có trong repo (<code>MaterialIssuesService.assertWarehouseScope</code>): so khớp CHÍNH XÁC mã kho, không gộp theo "họ" kho.</li>
-      <li><code>quantity</code> chỉ đổi được qua <code>POST /:id/adjust</code> (kèm 1 dòng lịch sử) — atomic bằng <code>updateMany</code> + check count, cùng idiom đã vá race <code>PurchaseProposalItem</code> trước đây. Đã verify race thật bằng 2 request xuất đồng thời qua curl.</li>
+      <li><code>quantity</code> chỉ đổi được qua <code>POST /:id/adjust</code> (kèm 1 dòng lịch sử) — atomic bằng <code>updateMany</code> + check count, cùng idiom đã vá race <code>PurchaseProposalItem</code> trước đây. Verify race 2 lần: curl thật rồi sau đó có hẳn 1 integration test chạy trên Postgres thật (mục 8).</li>
       <li>Quyền <code>OFFICE_SUPPLY: 'ALL'</code> cấp cho <code>WAREHOUSE_STAFF</code> — nhân viên kho toàn quyền CRUD+nhập/xuất trên đúng kho mình phụ trách (khác <code>Material</code>, nơi UPDATE/DELETE chỉ Admin có).</li>
       <li>Trang FE mới <code>OfficeSuppliesPage.tsx</code>, gắn thành tab "Văn phòng phẩm" trong "Kho đầu vào" — nhận <code>warehouseCode</code> theo scope tài khoản, tài khoản không gán kho (Boss/tổng kho) hiện thông báo chưa hỗ trợ (cùng idiom tab "Xuất theo đơn hàng" có sẵn).</li>
       <li>2 lần chỉnh UI theo yêu cầu tiếp theo: bỏ hẳn cột + ô nhập "Mã" (field vẫn còn ở BE/DB nhưng không hiển thị/nhập từ FE nữa), và đổi tên hiển thị "Vật tư văn phòng" → "Văn phòng phẩm" xuyên suốt (tab, tiêu đề, modal, thông báo rỗng, dialog xóa).</li>
       <li>Việc phụ trong cùng phiên: đổi tên kho <code>thanh-pham</code> từ "Kho Bao bì/Thành phẩm" → "Kho thành phẩm" (sửa <code>prisma/seed.ts</code>, chạy lại seed — upsert nên áp ngay lên DB dev).</li>
       <li><b>Đã test qua trình duyệt thật</b> (Playwright, tài khoản <code>khopsh</code>): tạo → nhập → xuất vượt tồn (báo lỗi đúng) → xem lịch sử → sửa → xóa — phát hiện và vá luôn 1 bug UX thật (nút đóng modal Lịch sử thiếu <code>title</code>/tên hỗ trợ công cụ trợ năng).</li>
+      <li><b>Commit BE từng bị chặn:</b> 27 lỗi ESLint/Prettier trong các file mới khiến hook <code>pre-commit</code> (<code>lint-staged</code>) từ chối - đã dọn sạch, áp đúng idiom cast tường minh sẵn có trong repo (<code>createdCode()</code> ở <code>materials.service.spec.ts</code>) để tránh <code>no-unsafe-assignment</code> khi lồng <code>expect.objectContaining</code>.</li>
+      <li><b>Thêm integration test thật</b> (Postgres qua Docker, không mock) cho đúng race condition đã verify tay trước đó - 2 lệnh xuất đồng thời, đúng 1 lệnh thành công, tồn cuối đọc thẳng từ DB không âm.</li>
+      <li><b>Vá lỗi "hứa suông":</b> dialog xóa nói "lịch sử vẫn giữ để tra cứu" nhưng <code>listLedger()</code> cũ chặn cứng item đã xóa (404) - không ai xem được. Vá + thêm màn Admin xem lại vật tư đã xóa (<code>includeDeleted=true</code>).</li>
+      <li><b>Admin giờ tự quản lý được:</b> trang mới <code>Admin/OfficeSuppliesAdminPage.tsx</code> (chọn kho từ dropdown, tái dùng nguyên <code>OfficeSuppliesPage.tsx</code>) - phát hiện thêm 1 bug thật khi wiring: <code>OfficeSuppliesPage</code> gọi <code>useState</code> SAU 1 early-return, vi phạm Rules of Hooks (17 lỗi ESLint <code>react-hooks/rules-of-hooks</code>), đã chuyển hook lên trước.</li>
     </ul>
   </div>
 
@@ -308,19 +315,96 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
   </div>
 
-  <!-- ═══════════════════════ 6. KIỂM THỬ ═══════════════════════ -->
+  <!-- ═══════════════════════ 6. COMMIT BỊ CHẶN ═══════════════════════ -->
+  <div class="module" id="lint">
+    <h2>6. Commit BE bị chặn — dọn 27 lỗi ESLint/Prettier <span class="badge b-be">BE</span></h2>
+    <p class="module-note">User báo "BE tôi chưa commit được". Nguyên nhân: hook <code>pre-commit</code> (<code>npx lint-staged</code> → <code>eslint --fix</code> + <code>prettier --write</code>) từ chối vì 27 lỗi trong các file mới của tính năng này.</p>
+    <div class="card">
+      <h3>18 lỗi format — tự sửa bằng <code>eslint --fix</code></h3>
+      <p>Chủ yếu khoảng trắng/xuống dòng theo Prettier, không phải lỗi logic.</p>
+    </div>
+    <div class="card">
+      <h3>9 lỗi <code>@typescript-eslint/no-unsafe-assignment</code>/<code>no-unsafe-member-access</code> — phải sửa tay</h3>
+      <p>Nguyên nhân: lồng <code>expect.objectContaining</code> 2 lớp trên <code>jest.Mock</code> chưa gõ kiểu — <code>objectContaining()</code> trả về <code>any</code> theo type của <code>@types/jest</code>, gán <code>any</code> đó làm giá trị 1 field trong object literal khác bị flag "unsafe". Repo đã có sẵn cách vá đúng (docstring <code>createdCode()</code> ở <code>materials.service.spec.ts</code>): viết 1 helper cast tường minh <code>.mock.calls</code> MỘT LẦN DUY NHẤT sang kiểu cụ thể, trả <code>unknown</code>, rồi so khớp trực tiếp bằng <code>toMatchObject</code>/<code>toBe</code> thay vì lồng <code>objectContaining</code>. Áp dụng thành helper <code>lastCallField()</code> dùng chung cho cả 8 chỗ trong <code>office-supplies.service.spec.ts</code>.</p>
+    </div>
+    <div class="callout ok">
+      Verify lại: <code>eslint</code> sạch, <code>tsc --noEmit</code> sạch, toàn bộ test vẫn xanh — commit đi qua bình thường sau đó.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 7. INTEGRATION TEST RACE THẬT ═══════════════════════ -->
+  <div class="module" id="integration-race">
+    <h2>7. Test tích hợp thật cho race condition (Postgres qua Docker) <span class="badge b-be">BE</span></h2>
+    <p class="module-note">User hỏi "chức năng vừa làm này có rủi ro gì không" — rủi ro hàng đầu được chỉ ra: race condition mới chỉ verify TAY qua curl, không có test tự động nào bắt lại được nếu sau này ai đó vô tình làm hỏng guard lúc refactor. User đồng ý vá ("ok làm đi").</p>
+    <div class="card">
+      <h3>Hạ tầng có sẵn nhưng chưa dùng cho tính năng này</h3>
+      <p>Repo đã có <code>test/integration/</code> + <code>docker-compose.test.yml</code> (Postgres riêng, cổng 5433, dữ liệu <code>tmpfs</code> — không đụng DB dev chung) + script <code>npm run test:integration</code>, nhưng Văn phòng phẩm chưa có test nào dùng tới. Khởi động Docker Desktop (không chạy sẵn trên máy) + container test.</p>
+    </div>
+    <div class="card">
+      <h3><span class="path">test/integration/office-supplies.integration.spec.ts</span> — file mới</h3>
+      <p>Chạy trên Postgres THẬT qua <code>NestJS TestingModule</code> (cùng pattern <code>users.integration.spec.ts</code> có sẵn), KHÔNG mock Prisma. Tạo 1 vật tư tồn 10, bắn <b>2 lệnh xuất 6 thật sự đồng thời</b> bằng <code>Promise.allSettled</code>. Assert: đúng 1 lệnh thành công/1 lệnh <code>409</code>; tồn cuối đọc THẲNG từ DB = 4 (không âm); đúng 2 dòng lịch sử (không phải 3 — nếu guard hỏng, cả 2 request sẽ cùng ghi được sổ).</p>
+    </div>
+    <div class="callout ok">
+      Pass ngay lần chạy đầu. Giờ nếu ai sửa <code>adjustQuantity()</code> làm hỏng guard thật (đổi <code>updateMany</code> thành <code>update</code> rời rạc, tách điều kiện ra khỏi transaction...), test này sẽ đỏ — không còn phụ thuộc trí nhớ "phải test tay qua curl".
+    </div>
+    <p class="module-note">Dọn dẹp theo yêu cầu user ("Tắt" / "Tắt luôn đi nhé"): tắt + xoá container test DB, sau đó tắt hẳn Docker Desktop và các tiến trình backend liên quan.</p>
+  </div>
+
+  <!-- ═══════════════════════ 8. LỊCH SỬ SAU KHI XÓA ═══════════════════════ -->
+  <div class="module" id="lichsu-sau-xoa">
+    <h2>8. Vá lỗi "hứa suông" — lịch sử không tra được sau khi xóa <span class="badge b-be">BE</span> <span class="badge b-fe">FE</span></h2>
+    <p class="module-note">User gửi ảnh chụp dialog xác nhận xóa ("Lịch sử nhập/xuất vẫn được giữ lại để tra cứu") và hỏi thẳng "Hiện tại ai tra cứu được?".</p>
+    <div class="callout bad">
+      <b>Phát hiện:</b> <code>listLedger()</code> gọi chung <code>findOneOrThrow()</code> — hàm này chặn CẢ item đã có <code>deletedAt</code>, trả <code>404</code>. Sau khi xóa, item biến mất khỏi bảng (không còn nút "Lịch sử" để bấm) VÀ gọi thẳng API cũng bị chặn — kể cả Admin. Dữ liệu vẫn còn nguyên trong DB nhưng không ai xem lại được qua app, đúng nghĩa "hứa suông".
+    </div>
+    <div class="card">
+      <h3><span class="path">office-supplies.service.ts</span> — <code>findOneOrThrow(id, { allowDeleted })</code></h3>
+      <p>Thêm tham số <code>allowDeleted</code> (mặc định <code>false</code>, không đổi hành vi mọi call site cũ). <code>listLedger()</code> truyền <code>allowDeleted: true</code> — lịch sử tra được cả khi item đã xóa, vẫn enforce đúng <code>assertWarehouseScope()</code> như bình thường. <code>findOne</code>/<code>update</code>/<code>adjustQuantity</code>/<code>remove</code> giữ nguyên chặn cứng.</p>
+    </div>
+    <div class="card">
+      <h3>Admin xem lại vật tư đã xóa — <code>includeDeleted=true</code></h3>
+      <p>Theo yêu cầu tiếp theo "Tôi muốn cho admin thấy trên UI". Thêm <code>ListOfficeSuppliesQueryDto.includeDeleted</code> (string <code>'true'</code>, cùng idiom né coercion boolean của <code>class-transformer</code> đã dùng ở <code>SteelIssuesQueryDto</code>) — không giới hạn theo role ở tầng BE (cùng tiền lệ <code>WAREHOUSE:CREATE</code> isAdmin-gated ở FE), chỉ FE hiện nút bật cho Admin. Response thêm field <code>deletedAt</code> để FE phân biệt.</p>
+    </div>
+    <div class="card">
+      <h3>FE — checkbox "Hiện vật tư đã xóa" (chỉ Admin)</h3>
+      <p><code>OfficeSuppliesPage.tsx</code>: check <code>user.role === 'ADMIN'</code> để hiện checkbox; item đã xóa hiện mờ + badge đỏ "Đã xóa", chỉ còn nút "Lịch sử" (ẩn Nhập/Xuất/Sửa/Xóa vì BE sẽ từ chối các thao tác đó trên item đã xóa).</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 9. ADMIN TỰ QUẢN LÝ ═══════════════════════ -->
+  <div class="module" id="admin-quanly">
+    <h2>9. Admin tự quản lý qua warehouse-picker <span class="badge b-fe">FE</span></h2>
+    <p class="module-note">User: "Tôi muốn admin cũng có thể quản lý được chức năng văn phòng phẩm". Backend thực ra đã sẵn sàng từ đầu (Admin bypass RBAC hoàn toàn) — thứ duy nhất thiếu là lối vào UI, vì trang hiện chỉ nằm trong "Kho đầu vào" (module riêng của thủ kho, gắn theo <code>warehouseScope</code> mà Admin không có).</p>
+    <div class="card">
+      <h3><span class="path">Admin/OfficeSuppliesAdminPage.tsx</span> — trang mới</h3>
+      <p>Dropdown chọn kho (tái dùng <code>getWarehouses()</code>, lọc <code>!isVirtual &amp;&amp; isActive</code> — đúng idiom đã dùng ở <code>MaterialsPage.tsx</code>), rồi tái dùng NGUYÊN <code>OfficeSuppliesPage.tsx</code> đã có, truyền kho đã chọn làm <code>warehouseCode</code> — không viết lại logic CRUD/nhập-xuất/lịch sử. Đăng ký thêm mục "Văn phòng phẩm" trong sidebar <code>AdminApp.tsx</code>, cạnh "Quản lý kho".</p>
+    </div>
+    <div class="callout bad">
+      <b>Bug thật phát hiện khi wiring (không phải chỉ lint cosmetic):</b> <code>OfficeSuppliesPage.tsx</code> có early-return (<code>if (!warehouseCode) return ...</code>) đặt TRƯỚC 15 lệnh gọi <code>useState</code> — vi phạm Rules of Hooks. Trước đây "may mắn" không crash vì cả 2 nơi gọi cũ (tab thủ kho, `warehouseScope` tĩnh theo phiên) không bao giờ đổi `warehouseCode` từ rỗng→có-giá-trị SAU KHI component đã mount. Nhưng trang Admin mới thì CÓ đúng kịch bản đó (đổi qua lại giữa các kho trong dropdown) — sẽ crash "Rendered more hooks than during the previous render" thật nếu không vá.
+    </div>
+    <div class="card">
+      <h3>Vá: chuyển toàn bộ <code>useState</code> lên trước early-return</h3>
+      <p>Early-return chuyển xuống sau dòng khai báo state cuối cùng (<code>ledgerTarget</code>), trước các hàm xử lý sự kiện — đúng quy tắc "hook phải gọi vô điều kiện, ở cùng vị trí mỗi lần render".</p>
+    </div>
+    <div class="callout ok">
+      Verify qua Playwright thật (tài khoản <code>admin</code>): chọn kho → tạo → xóa → bật "Hiện đã xóa" → thấy lại kèm badge; <b>đổi qua lại nhiều kho liên tục trong dropdown không crash</b> (đúng kịch bản bug ở trên). Test lại song song với <code>khopsh</code> xác nhận thủ kho vẫn dùng bình thường và KHÔNG thấy checkbox "Hiện đã xóa" (đúng vì không phải Admin).
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 10. KIỂM THỬ TỔNG HỢP ═══════════════════════ -->
   <div class="module" id="kiemthu">
-    <h2>6. Kiểm thử</h2>
+    <h2>10. Kiểm thử (tổng hợp toàn phiên)</h2>
 
     <div class="stats">
-      <div class="stat"><div class="n">19</div><div class="l">unit test mới<br><code>office-supplies.service.spec.ts</code></div></div>
-      <div class="stat"><div class="n">1089</div><div class="l">tổng test BE pass<br>(50 suite)</div></div>
+      <div class="stat"><div class="n">24</div><div class="l">unit test<br><code>office-supplies.service.spec.ts</code></div></div>
+      <div class="stat"><div class="n">1</div><div class="l">integration test<br>race condition, Postgres thật</div></div>
+      <div class="stat"><div class="n">1094</div><div class="l">tổng test BE pass<br>(50 suite)</div></div>
       <div class="stat"><div class="n">2</div><div class="l">migration<br>(global → per-warehouse)</div></div>
     </div>
 
     <div class="card">
-      <h3>Race condition — verify thật qua curl, không chỉ mock</h3>
-      <p>Tạo item tồn 10, bắn 2 request <code>POST /:id/adjust</code> (<code>changeQty: -6</code>) đồng thời qua <code>curl ... &amp; ... &amp; wait</code>. Kết quả: đúng 1 request <code>201</code> (tồn còn 4), request kia <code>409 Conflict</code> — không âm kho.</p>
+      <h3>Race condition — 2 lớp: curl thật + integration test thật</h3>
+      <p>Verify tay ban đầu bằng <code>curl ... &amp; ... &amp; wait</code> (2 lệnh xuất đồng thời, đúng 1 <code>201</code>/1 <code>409</code>), sau đó nâng cấp thành test tự động chạy trên Postgres thật qua Docker (mục 7) — không còn phụ thuộc trí nhớ chạy tay.</p>
     </div>
 
     <div class="card">
@@ -334,30 +418,35 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
 
     <div class="card">
-      <h3>UI thật qua Playwright (đăng nhập <code>khopsh</code>)</h3>
-      <p>Viết 1 spec tạm trong <code>e2e/</code> (đã xoá sau khi xong, không phải bổ sung permanent vào bộ e2e hiện có) lái qua browser thật: tạo → nhập +5 → xuất vượt tồn (báo lỗi đúng) → xem lịch sử → sửa ghi chú → xóa. Toàn bộ chạy đúng. Phát hiện 1 bug UX thật giữa chừng: nút đóng (X) của modal Lịch sử không có <code>title</code>/tên hỗ trợ công cụ trợ năng nên khó thao tác qua Playwright lẫn trình đọc màn hình — đã vá thêm <code>title="Đóng"</code>.</p>
+      <h3>UI thật qua Playwright — 3 lượt độc lập</h3>
+      <p>Mỗi lượt đều dùng 1 spec tạm trong <code>e2e/</code> rồi xoá ngay sau khi xong (không bổ sung permanent vào bộ e2e hiện có): (1) <code>khopsh</code> — tạo → nhập → xuất vượt tồn (báo lỗi đúng) → xem lịch sử → sửa → xóa, phát hiện + vá bug nút đóng modal Lịch sử thiếu <code>title</code>; (2) <code>admin</code> — chọn kho → CRUD → bật xem đã xóa; (3) đổi qua lại giữa nhiều kho + so sánh lại với <code>khopsh</code>, xác nhận vá Rules of Hooks không phá luồng cũ.</p>
     </div>
 
     <div class="callout warn">
-      <b>Chưa test qua UI thật sau 2 lần chỉnh cuối</b> (bỏ cột "Mã", đổi tên hiển thị "Văn phòng phẩm") — chỉ xác nhận bằng <code>tsc --noEmit</code> (0 lỗi), không chạy lại Playwright/mở trình duyệt thật sau các thay đổi thuần UI-text này.
+      <b>Riêng 2 lần chỉnh UI-text thuần (bỏ cột "Mã", đổi tên hiển thị "Văn phòng phẩm") không có lượt Playwright verify lại riêng</b> — chỉ xác nhận bằng <code>tsc --noEmit</code> tại thời điểm đó. Các lượt Playwright SAU đó (mục UI thật ở trên) đều chạy trên bản UI đã mang 2 thay đổi này nên gián tiếp đi qua, nhưng không có assertion nào kiểm tra riêng "cột Mã đã biến mất"/"nhãn đã đổi đúng chưa" bằng test tự động.
     </div>
   </div>
 
-  <!-- ═══════════════════════ 7. CÒN ĐỂ NGỎ ═══════════════════════ -->
+  <!-- ═══════════════════════ 11. CÒN ĐỂ NGỎ ═══════════════════════ -->
   <div class="module" id="conngo">
-    <h2>7. Còn để ngỏ</h2>
+    <h2>11. Còn để ngỏ</h2>
     <ul class="timeline stages">
-      <li class="ok"><b>Luồng chính đã test qua browser thật + curl thật</b><span> — xem mục 6, gồm cả race condition và cách ly theo kho với tài khoản thật.</span></li>
-      <li><b>2 lần chỉnh UI cuối (bỏ cột Mã, đổi tên hiển thị) chỉ verify bằng type-check</b><span> — chưa mở lại trình duyệt thật sau các thay đổi này.</span></li>
-      <li><b>Tài khoản không có <code>warehouseScope</code> (Boss/Admin) tạo vật tư qua <code>warehouseCode</code> trong body chỉ test bằng unit test</b><span> — chưa có UI thật nào cho phép nhập <code>warehouseCode</code> tay (nhánh Boss trong <code>OfficeSuppliesPage</code> chỉ hiện thông báo chưa hỗ trợ), nên đường này chỉ chạy qua service test + gọi API tay.</span></li>
+      <li class="ok"><b>Race condition giờ có cả curl thật lẫn integration test tự động</b><span> — xem mục 7 &amp; 10.</span></li>
+      <li class="ok"><b>Lịch sử tra được sau khi xóa + Admin có lối vào quản lý đầy đủ</b><span> — xem mục 8 &amp; 9, đã verify qua Playwright thật.</span></li>
       <li><b>Field <code>code</code> vẫn còn ở DB/BE dù đã ẩn khỏi FE</b><span> — không xoá field, chỉ ngừng hiển thị/nhập từ UI theo đúng yêu cầu ("bỏ cột"), có thể cân nhắc dọn hẳn nếu về sau xác nhận không cần.</span></li>
+      <li><b>2 lần chỉnh UI-text (bỏ cột Mã, đổi tên hiển thị) không có assertion tự động riêng</b><span> — xem callout cảnh báo ở mục 10, chỉ verify gián tiếp qua các lượt Playwright sau đó.</span></li>
+      <li><b>Docker/container test DB không chạy thường trực</b><span> — <code>npm run test:integration</code> cần Docker Desktop đang chạy + container <code>docker-compose.test.yml</code> được khởi động tay trước; đã tắt hết theo yêu cầu user cuối phiên, lần chạy sau cần khởi động lại.</span></li>
+      <li><b>Bug Rules of Hooks phát hiện lần này gợi ý nên rà soát các trang InboundWarehouse khác</b><span> — chưa kiểm tra xem có component nào khác trong repo cũng đặt early-return trước hook (ngoài phạm vi tính năng này, chỉ ghi nhận làm việc tiếp theo nếu cần).</span></li>
     </ul>
   </div>
 
   <footer>
-    Nguồn: toàn bộ nội dung trên tổng hợp trực tiếp từ phiên làm việc trong Claude Code — không suy
-    diễn thêm. Code thật nằm ở <code>D:\DNA-ERP-BE\src\modules\office-supplies</code> (BE) và
+    Nguồn: toàn bộ nội dung trên tổng hợp trực tiếp từ 2 phiên làm việc liên tiếp (17-18/09/2026)
+    trong Claude Code — không suy diễn thêm. Code thật nằm ở
+    <code>D:\DNA-ERP-BE\src\modules\office-supplies</code> +
+    <code>test\integration\office-supplies.integration.spec.ts</code> (BE) và
     <code>D:\DNA-ERP\src\modules\pages\InboundWarehouse\OfficeSuppliesPage.tsx</code> +
+    <code>D:\DNA-ERP\src\modules\pages\Admin\OfficeSuppliesAdminPage.tsx</code> +
     <code>services\office-supplies-api.ts</code> (FE).
   </footer>
 </div>

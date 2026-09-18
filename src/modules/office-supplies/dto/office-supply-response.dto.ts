@@ -16,6 +16,10 @@ export class OfficeSupplyResponseDto {
   @Expose() @ApiProperty() quantity!: number;
   @Expose() @ApiPropertyOptional({ nullable: true }) note!: string | null;
   @Expose() @ApiProperty() isActive!: boolean;
+  /** null = đang hoạt động. Khác null = đã xóa (soft-delete) - CHỈ xuất hiện trong response khi
+   *  client gọi kèm `includeDeleted=true` (xem ListOfficeSuppliesQueryDto), dùng để FE (Admin)
+   *  phân biệt/gắn nhãn "Đã xóa" trên bảng thay vì âm thầm hiện lẫn vào vật tư đang dùng. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) deletedAt!: Date | null;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;
 

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString } from 'class-validator';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
 
 export class ListOfficeSuppliesQueryDto extends PaginationQueryDto {
@@ -10,4 +10,13 @@ export class ListOfficeSuppliesQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   warehouseCode?: string;
+
+  @ApiPropertyOptional({
+    enum: ['true'],
+    description:
+      "true = trả về CẢ vật tư đã xóa (soft-delete) lẫn còn hoạt động, để tra lịch sử vật tư cũ - mặc định (bỏ trống) chỉ trả vật tư đang hoạt động. Nhận string 'true' (không phải boolean thật) để tránh gotcha coercion của class-transformer. Không giới hạn theo role ở tầng BE (cùng tiền lệ WAREHOUSE:CREATE isAdmin-gated ở FE) - FE chỉ hiện nút bật cho Admin.",
+  })
+  @IsOptional()
+  @IsIn(['true'])
+  includeDeleted?: string;
 }

@@ -192,6 +192,23 @@ describe('OfficeSuppliesService', () => {
         'warehouseId',
       );
     });
+
+    it('excludes soft-deleted items by default', async () => {
+      await service.findAll({ skip: 0, limit: 20, page: 1 } as never, 'phoi-son-han');
+
+      expect(lastCallField(prisma.officeSupply.findMany, 'where')).toMatchObject({
+        deletedAt: null,
+      });
+    });
+
+    it('includeDeleted=true drops the deletedAt filter (Admin xem lại vật tư đã xóa)', async () => {
+      await service.findAll(
+        { includeDeleted: 'true', skip: 0, limit: 20, page: 1 } as never,
+        'phoi-son-han',
+      );
+
+      expect(lastCallField(prisma.officeSupply.findMany, 'where')).not.toHaveProperty('deletedAt');
+    });
   });
 
   describe('adjustQuantity', () => {
@@ -254,6 +271,38 @@ describe('OfficeSuppliesService', () => {
         ),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.officeSupply.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listLedger', () => {
+    it('lists history for an active item', async () => {
+      prisma.officeSupply.findUnique.mockResolvedValue(existingSupply);
+
+      await expect(
+        service.listLedger('1', { skip: 0, limit: 20, page: 1 } as never, 'phoi-son-han'),
+      ).resolves.toBeDefined();
+    });
+
+    it('still lists history for a SOFT-DELETED item (dialog xóa hứa "vẫn giữ để tra cứu")', async () => {
+      prisma.officeSupply.findUnique.mockResolvedValue({
+        ...existingSupply,
+        deletedAt: new Date(),
+      });
+
+      await expect(
+        service.listLedger('1', { skip: 0, limit: 20, page: 1 } as never, 'phoi-son-han'),
+      ).resolves.toBeDefined();
+    });
+
+    it('still enforces warehouse scope even on a deleted item', async () => {
+      prisma.officeSupply.findUnique.mockResolvedValue({
+        ...existingSupply,
+        deletedAt: new Date(),
+      });
+
+      await expect(
+        service.listLedger('1', { skip: 0, limit: 20, page: 1 } as never, 'thanh-pham'),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 
