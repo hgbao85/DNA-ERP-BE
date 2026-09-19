@@ -882,6 +882,27 @@ export class SteelIssuesService {
     return new Set(rows.map((r) => r.segmentSpecId.toString()));
   }
 
+  /** Gộp nhiều PI - gọi lần lượt theo lô nhỏ (mỗi PI ~5 truy vấn) để không dồn hàng trăm truy vấn
+   *  cùng lúc lên DB. PI không tồn tại trả mảng rỗng thay vì làm hỏng cả lô. */
+  async getPhoiProgressBatch(
+    productionInvoiceIds: string[],
+  ): Promise<Record<string, PhoiProgressItemResponseDto[]>> {
+    const result: Record<string, PhoiProgressItemResponseDto[]> = {};
+    const CHUNK = 4;
+    for (let i = 0; i < productionInvoiceIds.length; i += CHUNK) {
+      const chunk = productionInvoiceIds.slice(i, i + CHUNK);
+      const items = await Promise.all(
+        chunk.map((id) =>
+          this.getPhoiProgress(id).catch(() => [] as PhoiProgressItemResponseDto[]),
+        ),
+      );
+      chunk.forEach((id, idx) => {
+        result[id] = items[idx];
+      });
+    }
+    return result;
+  }
+
   /**
    * Tiến độ cắt theo (LOẠI SẮT -> CỠ ĐOẠN) cho cả 1 PI - nguồn dữ liệu bảng "Cần / Đã cắt /
    * Còn lại" ở màn Lệnh sản xuất (Phôi).

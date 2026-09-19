@@ -108,6 +108,24 @@ export class SteelIssuesController {
   }
 
   /**
+   * Gộp nhiều PI 1 lần - "Bảng thống kê" (ThongKePagePlan.tsx) cần tiến độ Phôi (đoạn đã cắt / định
+   * mức) của nhiều lệnh cùng lúc. 2 segment 'phoi-progress/batch' (không phải 1 segment) để không bị
+   * 'production-invoices/:id' nuốt mất - cùng lý do 'steel-issues/batch' ở trên.
+   */
+  @Get('production-invoices/phoi-progress/batch')
+  @RequirePermissions(VIEW)
+  getPhoiProgressBatch(@Query('ids') idsParam?: string) {
+    if (!idsParam) {
+      throw new BadRequestException('Query ids là bắt buộc (phân tách bởi dấu phẩy)');
+    }
+    const ids = idsParam
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+    return this.steelIssuesService.getPhoiProgressBatch(ids);
+  }
+
+  /**
    * Tiến độ 1 công đoạn chi tiết SAU Cắt (Uốn/Dập/...) - cùng khuôn dạng "Cần/Đã.../Còn lại" như
    * phoi-progress, khác nguồn `done` (StepBatchSegment thay vì CutPatternSegment). `step` trong
    * path phải khớp enum ProcessStep (vd UON/DAP/DUC_LO/TAN/TOP_DAU/XE) - không nhận CAT, dùng
