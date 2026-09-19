@@ -1090,9 +1090,11 @@ describe('PurchaseProposalsService', () => {
 
     // ── B3: nhận thừa ─────────────────────────────────────────────────────────────
     // Trước 2026-08-15: Math.min(buyQty, ...) cắt âm thầm - đặt 10, giao 12, nhập 12 thì sổ ghi
-    // 10 và 2 cây kia biến mất khỏi sổ dù vẫn nằm trong kho thật. Nay: trong dung sai thì ghi
-    // đúng số thật, vượt dung sai thì chặn hẳn. Không bao giờ cắt im lặng.
-    it('CHẶN khi tổng nhận vượt buyQty và dung sai = 0 (không cắt âm thầm về buyQty)', async () => {
+    // 10 và 2 cây kia biến mất khỏi sổ dù vẫn nằm trong kho thật. 2026-08-15 → 2026-09-19: chặn
+    // hẳn nếu vượt dung sai % cấu hình ở System Config. Từ 2026-09-19 (theo yêu cầu người dùng):
+    // bỏ hẳn chặn ở BE - cảnh báo + bắt xác nhận đã chuyển sang FE (popup ở NhapKhoPage.tsx). BE
+    // luôn ghi đúng số thật nhận về, không bao giờ cắt hay chặn im lặng.
+    it('CHO PHÉP tổng nhận vượt buyQty, ghi ĐÚNG số thật (không còn chặn/cắt về buyQty)', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           items: [
@@ -1112,16 +1114,25 @@ describe('PurchaseProposalsService', () => {
           status: PurchaseProposalStatus.PURCHASING,
         },
       ]);
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(8), receivedQty: decimal(13), quotes: [] }),
+      );
 
-      // 3 đã nhận + 10 nhập thêm = 13 > 8 -> chặn, KHÔNG ghi 8 rồi nuốt 5 cây còn lại.
-      await expect(
-        service.receiveItem('300', '400', { receivedQty: 10 }, 'user-1', 'key-1', null),
-      ).rejects.toThrow(BadRequestException);
-      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
-      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      // 3 đã nhận + 10 nhập thêm = 13 > 8 -> vẫn ghi đúng 13, KHÔNG chặn, KHÔNG cắt về 8.
+      await service.receiveItem('300', '400', { receivedQty: 10 }, 'user-1', 'key-1', null);
+
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ receivedQty: decimal(13) }) as unknown,
+        }),
+      );
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ qty: 10 }),
+        expect.anything(),
+      );
     });
 
-    it('CHẶN cả khi item đã nhận đủ mà vẫn nhập thêm (trước đây lặng lẽ bỏ qua)', async () => {
+    it('CHO PHÉP nhập thêm dù item đã nhận đủ (không còn chặn, không lặng lẽ bỏ qua)', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           items: [
@@ -1140,43 +1151,19 @@ describe('PurchaseProposalsService', () => {
           status: PurchaseProposalStatus.PURCHASING,
         },
       ]);
-
-      await expect(
-        service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null),
-      ).rejects.toThrow(BadRequestException);
-      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
-    });
-
-    it('CHO nhận thừa trong dung sai và ghi ĐÚNG số thật (không cắt về buyQty)', async () => {
-      prisma.systemConfig.findUnique.mockResolvedValue({
-        purchaseOverReceiptTolerancePercent: decimal(25), // đặt 8 -> cho tới 10
-      });
-      prisma.purchaseProposal.findUnique.mockResolvedValue(
-        proposal({
-          items: [
-            item({
-              status: PurchaseProposalStatus.PURCHASING,
-              materialId: 30n,
-              buyQty: decimal(8),
-              receivedQty: decimal(0),
-            }),
-          ],
-        }),
-      );
       prisma.purchaseProposalItem.update.mockResolvedValue(
-        item({ buyQty: decimal(8), receivedQty: decimal(10), quotes: [] }),
+        item({ buyQty: decimal(8), receivedQty: decimal(13), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 10 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null);
 
-      // Sổ ghi 10 - đúng số vật lý trong kho, KHÔNG phải 8.
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ receivedQty: decimal(10) }) as unknown,
+          data: expect.objectContaining({ receivedQty: decimal(13) }) as unknown,
         }),
       );
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
-        expect.objectContaining({ qty: 10 }),
+        expect.objectContaining({ qty: 5 }),
         expect.anything(),
       );
     });

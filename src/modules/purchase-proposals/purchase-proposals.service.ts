@@ -457,11 +457,7 @@ export class PurchaseProposalsService {
         select: { id: true },
       })) != null;
 
-    // Dung sai đọc trước tx (business rule dùng chung, không phải state của riêng dòng item nên
-    // không cần nằm trong khoá) - xem getOverReceiptTolerancePercent().
-    const tolerancePercent = await this.getOverReceiptTolerancePercent();
     const buyQty = item.buyQty.toNumber();
-    const maxAllowedQty = buyQty * (1 + tolerancePercent / 100);
 
     const supplierWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
       where: { code: SUPPLIER_WAREHOUSE_CODE },
@@ -513,26 +509,15 @@ export class PurchaseProposalsService {
         // ngược LẠI vào cột Decimal, tồn tại vĩnh viễn trong sổ sách. Cộng bằng Prisma.Decimal
         // (decimal.js - cộng thập phân chính xác, không đi qua vòng chuyển binary float trung
         // gian của JS number) rồi mới .toNumber() ở chỗ CHỈ so sánh/hiển thị, không ghi lại DB.
-        const currentReceivedQty = locked.receivedQty.toNumber();
         const nextReceivedQtyDecimal = locked.receivedQty.plus(dto.receivedQty);
         const nextReceivedQty = nextReceivedQtyDecimal.toNumber();
 
-        // Nhận THỪA: ghi đúng số thật nếu còn trong dung sai, chặn hẳn nếu vượt. Tuyệt đối không
-        // cắt âm thầm về buyQty như trước (Math.min) - lựa chọn tệ nhất trong ba: hàng đã nằm
-        // trong kho vật lý mà sổ không ghi, không cảnh báo, không log, sai lệch chỉ lộ ra lúc
-        // kiểm kê cuối kỳ khi không còn truy ngược được nữa (D.b3-silent-over-receipt).
-        if (nextReceivedQty > maxAllowedQty) {
-          throw new BadRequestException(
-            `Vật tư ${item.material.code}: nhận vượt số đặt mua. Đặt ${buyQty} ${item.material.unit}, ` +
-              `đã nhận ${currentReceivedQty}, lần này nhập ${dto.receivedQty} -> tổng ${nextReceivedQty} ` +
-              `vượt mức cho phép ${maxAllowedQty} (dung sai ${tolerancePercent}%). ` +
-              `Kiểm tra lại số thực nhận, hoặc nhờ Admin nới dung sai ở Cấu hình hệ thống.`,
-          );
-        }
-
-        // Không còn nhánh clamp (Math.min) nào giữa currentReceivedQty và nextReceivedQty - phần
-        // tăng thêm luôn đúng bằng dto.receivedQty, lấy trực tiếp thay vì trừ ngược qua 2 giá trị
-        // đã .toNumber() (tránh cộng-rồi-trừ qua binary float không cần thiết).
+        // Nhận THỪA: không còn chặn cứng ở BE (2026-09-19, theo yêu cầu người dùng - trước đây
+        // chặn theo dung sai % cấu hình ở System Config). Luôn ghi đúng số thật ngay cả khi vượt
+        // buyQty - cảnh báo + bắt xác nhận đã chuyển sang FE (popup ở NhapKhoPage.tsx) trước khi
+        // gọi API này, BE không tái kiểm lại. Không còn nhánh clamp (Math.min) nào giữa số đã nhận
+        // và số nhận mới - phần tăng thêm luôn đúng bằng dto.receivedQty, lấy trực tiếp thay vì trừ
+        // ngược qua 2 giá trị đã .toNumber() (tránh cộng-rồi-trừ qua binary float không cần thiết).
         const incrementQty = dto.receivedQty;
         const nextReceivedQtyPurchaseUnit = dto.receivedQtyPurchaseUnit
           ? (locked.receivedQtyPurchaseUnit ?? new Prisma.Decimal(0)).plus(
@@ -654,19 +639,6 @@ export class PurchaseProposalsService {
         'Bạn không được phân công mua vật tư nào trong đề xuất này - liên hệ Admin nếu cần hỗ trợ',
       );
     }
-  }
-
-  /**
-   * Dung sai giao thừa (%) từ System Config - singleton id=1, cùng chỗ với tham số solver.
-   * Config chưa seed -> 0 (không cho nhận thừa) chứ KHÔNG ném lỗi: thiếu cấu hình không phải lý
-   * do chính đáng để chặn Thủ kho ghi nhận một lô hàng đã về đúng số.
-   */
-  private async getOverReceiptTolerancePercent(): Promise<number> {
-    const config = await this.prisma.systemConfig.findUnique({
-      where: { id: 1 },
-      select: { purchaseOverReceiptTolerancePercent: true },
-    });
-    return config?.purchaseOverReceiptTolerancePercent.toNumber() ?? 0;
   }
 
   private async findDetailOrThrow(id: string): Promise<PurchaseProposalDetail> {
