@@ -15,6 +15,7 @@ import {
   ProdApprovalStatus,
   ProdItemStageType,
   ProductionInvoiceStatus,
+  TransferStatus,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -1312,7 +1313,7 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
 
-    const [bomPieces, results, receiptSums] = await Promise.all([
+    const [bomPieces, results, receiptSums, transferSums] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: productionOrder.bomRevisionId },
         include: { piece: true },
@@ -1328,10 +1329,22 @@ export class ProductionInvoicesService {
         where: { productionOrderId: productionOrder.id },
         _sum: { qty: true },
       }),
+      // Mảnh không đan (Pat, Chân nhôm...) về kho qua phiếu chuyển kho nội bộ đã xác nhận.
+      this.prisma.warehouseTransferPieceItem.groupBy({
+        by: ['pieceId'],
+        where: {
+          productionOrderId: productionOrder.id,
+          transfer: { status: TransferStatus.CONFIRMED },
+        },
+        _sum: { quantity: true },
+      }),
     ]);
 
-    const readyQtyByPiece = new Map<string, number>(
+    const receivedByPiece = new Map<string, number>(
       receiptSums.map((r) => [r.pieceId.toString(), r._sum.qty ?? 0]),
+    );
+    const transferredByPiece = new Map<string, number>(
+      transferSums.map((r) => [r.pieceId.toString(), r._sum.quantity ?? 0]),
     );
 
     return bomPieces.map((bp) => {
@@ -1340,7 +1353,8 @@ export class ProductionInvoicesService {
         pieceId: bp.pieceId.toString(),
         pieceName: bp.piece.name,
         totalQty: bp.qtyPerUnit * productionOrder.quantity,
-        readyQty: readyQtyByPiece.get(bp.pieceId.toString()) ?? 0,
+        readyQty:
+          (bp.isWoven ? receivedByPiece : transferredByPiece).get(bp.pieceId.toString()) ?? 0,
         checkedQty: pieceResults.reduce((sum, r) => sum + r.checkedQty, 0),
         defectCount: pieceResults.reduce((sum, r) => sum + r.defects.length, 0),
       });
@@ -1370,7 +1384,7 @@ export class ProductionInvoicesService {
     const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
     const orderIds = orders.map((o) => o.id);
 
-    const [bomPieces, results, receiptSums] = await Promise.all([
+    const [bomPieces, results, receiptSums, transferSums] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: { in: revisionIds } },
         include: { piece: true },
@@ -1386,6 +1400,14 @@ export class ProductionInvoicesService {
         where: { productionOrderId: { in: orderIds } },
         _sum: { qty: true },
       }),
+      this.prisma.warehouseTransferPieceItem.groupBy({
+        by: ['pieceId', 'productionOrderId'],
+        where: {
+          productionOrderId: { in: orderIds },
+          transfer: { status: TransferStatus.CONFIRMED },
+        },
+        _sum: { quantity: true },
+      }),
     ]);
 
     const bomPiecesByRevision = new Map<string, typeof bomPieces>();
@@ -1395,9 +1417,13 @@ export class ProductionInvoicesService {
       if (arr) arr.push(bp);
       else bomPiecesByRevision.set(key, [bp]);
     }
-    const readyQtyByOrderPiece = new Map<string, number>();
+    const receivedByOrderPiece = new Map<string, number>();
     for (const r of receiptSums) {
-      readyQtyByOrderPiece.set(`${r.productionOrderId}:${r.pieceId}`, r._sum.qty ?? 0);
+      receivedByOrderPiece.set(`${r.productionOrderId}:${r.pieceId}`, r._sum.qty ?? 0);
+    }
+    const transferredByOrderPiece = new Map<string, number>();
+    for (const r of transferSums) {
+      transferredByOrderPiece.set(`${r.productionOrderId}:${r.pieceId}`, r._sum.quantity ?? 0);
     }
 
     for (const itemId of itemIds) {
@@ -1413,7 +1439,10 @@ export class ProductionInvoicesService {
           pieceId: bp.pieceId.toString(),
           pieceName: bp.piece.name,
           totalQty: bp.qtyPerUnit * order.quantity,
-          readyQty: readyQtyByOrderPiece.get(`${order.id}:${bp.pieceId}`) ?? 0,
+          readyQty:
+            (bp.isWoven ? receivedByOrderPiece : transferredByOrderPiece).get(
+              `${order.id}:${bp.pieceId}`,
+            ) ?? 0,
           checkedQty: pieceResults.reduce((sum, r) => sum + r.checkedQty, 0),
           defectCount: pieceResults.reduce((sum, r) => sum + r.defects.length, 0),
         });
@@ -1450,6 +1479,38 @@ export class ProductionInvoicesService {
     if (!bomPiece) {
       throw new NotFoundException(
         `Mảnh ${dto.pieceId} không thuộc định mức (BOM) của item ${itemId}`,
+      );
+    }
+
+    // Chỉ được kiểm tối đa bằng số "Hiện có": mảnh có đan = đã nhập đan về, mảnh không đan = đã
+    // nhập nội bộ (phiếu chuyển kho CONFIRMED).
+    const [received, checked] = await Promise.all([
+      bomPiece.isWoven
+        ? this.prisma.weavingReceipt
+            .aggregate({
+              where: { productionOrderId: productionOrder.id, pieceId: pieceBigId },
+              _sum: { qty: true },
+            })
+            .then((r) => r._sum.qty ?? 0)
+        : this.prisma.warehouseTransferPieceItem
+            .aggregate({
+              where: {
+                productionOrderId: productionOrder.id,
+                pieceId: pieceBigId,
+                transfer: { status: TransferStatus.CONFIRMED },
+              },
+              _sum: { quantity: true },
+            })
+            .then((r) => r._sum.quantity ?? 0),
+      this.prisma.transferCheckResult.aggregate({
+        where: { productionInvoiceItemId: item.id, pieceId: pieceBigId },
+        _sum: { checkedQty: true },
+      }),
+    ]);
+    const available = received - (checked._sum.checkedQty ?? 0);
+    if (dto.checkedQty > available) {
+      throw new BadRequestException(
+        `Số lượng kiểm (${dto.checkedQty}) vượt quá số hiện có (${Math.max(0, available)}) - chỉ kiểm được phần đã nhập về kho`,
       );
     }
 

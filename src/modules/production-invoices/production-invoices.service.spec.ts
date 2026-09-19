@@ -47,14 +47,15 @@ describe('ProductionInvoicesService', () => {
     mfgProduct: { findUnique: jest.Mock };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock; findUnique: jest.Mock };
-    transferCheckResult: { findMany: jest.Mock; create: jest.Mock };
+    transferCheckResult: { findMany: jest.Mock; create: jest.Mock; aggregate: jest.Mock };
     transferCheckDefect: {
       findUnique: jest.Mock;
       update: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
     };
-    weavingReceipt: { groupBy: jest.Mock };
+    weavingReceipt: { groupBy: jest.Mock; aggregate: jest.Mock };
+    warehouseTransferPieceItem: { groupBy: jest.Mock; aggregate: jest.Mock };
     packagingRecord: { create: jest.Mock; aggregate: jest.Mock; groupBy: jest.Mock };
     auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
@@ -149,14 +150,25 @@ describe('ProductionInvoicesService', () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       bomPiece: { findMany: jest.fn(), findUnique: jest.fn() },
-      transferCheckResult: { findMany: jest.fn(), create: jest.fn() },
+      transferCheckResult: {
+        findMany: jest.fn(),
+        create: jest.fn(),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { checkedQty: null } }),
+      },
       transferCheckDefect: {
         findUnique: jest.fn(),
         update: jest.fn(),
         findMany: jest.fn(),
         count: jest.fn(),
       },
-      weavingReceipt: { groupBy: jest.fn().mockResolvedValue([]) },
+      weavingReceipt: {
+        groupBy: jest.fn().mockResolvedValue([]),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { qty: 100 } }),
+      },
+      warehouseTransferPieceItem: {
+        groupBy: jest.fn().mockResolvedValue([]),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: null } }),
+      },
       packagingRecord: {
         create: jest.fn(),
         aggregate: jest.fn().mockResolvedValue({ _sum: { boxesPacked: null } }),
@@ -1437,6 +1449,7 @@ describe('ProductionInvoicesService', () => {
       bomRevisionId: 5n,
       pieceId: 30n,
       qtyPerUnit: 2,
+      isWoven: true,
       piece: { id: 30n, name: 'Thân trên' },
       ...overrides,
     });
@@ -1520,6 +1533,38 @@ describe('ProductionInvoicesService', () => {
         );
         expect(result.checkedQty).toBe(4);
         expect(result.defectCount).toBe(1);
+      });
+
+      it('chặn kiểm vượt "Hiện có" của mảnh có đan (SUM WeavingReceipt trừ đã kiểm)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findUnique.mockResolvedValue(bomPieceRow());
+        prisma.weavingReceipt.aggregate.mockResolvedValue({ _sum: { qty: 10 } });
+        prisma.transferCheckResult.aggregate.mockResolvedValue({ _sum: { checkedQty: 7 } });
+
+        await expect(
+          service.recordTransferCheck('7', '20', { pieceId: '30', checkedQty: 4 }, 'user-kho'),
+        ).rejects.toThrow(BadRequestException);
+        expect(prisma.transferCheckResult.create).not.toHaveBeenCalled();
+      });
+
+      it('mảnh không đan lấy "Hiện có" từ phiếu chuyển kho CONFIRMED, không đọc WeavingReceipt', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findUnique.mockResolvedValue(bomPieceRow({ isWoven: false }));
+        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow({ isWoven: false })]);
+        prisma.transferCheckResult.findMany.mockResolvedValue([]);
+        prisma.warehouseTransferPieceItem.aggregate.mockResolvedValue({ _sum: { quantity: 3 } });
+
+        await expect(
+          service.recordTransferCheck('7', '20', { pieceId: '30', checkedQty: 4 }, 'user-kho'),
+        ).rejects.toThrow(BadRequestException);
+        expect(prisma.weavingReceipt.aggregate).not.toHaveBeenCalled();
+
+        await service.recordTransferCheck('7', '20', { pieceId: '30', checkedQty: 3 }, 'user-kho');
+        expect(prisma.transferCheckResult.create).toHaveBeenCalledTimes(1);
       });
 
       it('rejects a piece that is not part of the item BOM instead of silently recording it', async () => {

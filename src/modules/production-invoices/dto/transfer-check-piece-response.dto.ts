@@ -8,8 +8,10 @@ export class TransferCheckPieceResponseDto {
   /** Suy từ BomPiece.qtyPerUnit (theo bomRevisionId đã ghim ở ProductionOrder) × quantity. */
   @Expose() @ApiProperty() totalQty!: number;
   /**
-   * Đã đan xong, sẵn sàng để kiểm - SUM(WeavingReceipt.qty) theo mảnh, mọi điểm đan cộng lại
-   * (xem WeavingIssuesModule, M2 "Phân bổ/nhận hàng đan", đóng gap 2026-08-11).
+   * "Hiện có" - số đã về kho, sẵn sàng để kiểm; checkedQty không được vượt số này. Mảnh có đan
+   * (BomPiece.isWoven): SUM(WeavingReceipt.qty), mọi điểm đan cộng lại (xem WeavingIssuesModule).
+   * Mảnh không đan (Pat, Chân nhôm...): SUM(WarehouseTransferPieceItem.quantity) của phiếu chuyển
+   * kho CONFIRMED.
    */
   @Expose() @ApiProperty() readyQty!: number;
   /** SUM checkedQty của mọi lần kiểm đã ghi cho mảnh này. */
