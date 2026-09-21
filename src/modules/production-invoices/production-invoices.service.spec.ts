@@ -63,6 +63,7 @@ describe('ProductionInvoicesService', () => {
   let productionOrdersService: {
     createFromApproval: jest.Mock;
     assertActiveBomRevisionExists: jest.Mock;
+    fetchActiveBomRevisionIds: jest.Mock;
   };
   let cuttingProposalsService: {
     requestForOrder: jest.Mock;
@@ -180,6 +181,10 @@ describe('ProductionInvoicesService', () => {
     productionOrdersService = {
       createFromApproval: jest.fn().mockResolvedValue({ id: 99n }),
       assertActiveBomRevisionExists: jest.fn().mockResolvedValue(undefined),
+      // Mặc định "không có bản ACTIVE nào khớp" -> bomOutOfDate=false cho MỌI item có
+      // ProductionOrder (không phá các test sẵn có không quan tâm field này) - test riêng của
+      // bomOutOfDate tự override lại mock này.
+      fetchActiveBomRevisionIds: jest.fn().mockResolvedValue(new Map()),
     };
     cuttingProposalsService = {
       // Mock gọi luôn onComplete (nếu có) để mô phỏng finally block thật của runSolverAndSave() -
@@ -1399,6 +1404,8 @@ describe('ProductionInvoicesService', () => {
           items: [
             piItem({
               productionOrder: {
+                mfgProductId: 2n,
+                bomRevisionId: 5n,
                 cuttingProposals: [
                   { status: 'CALCULATING', requestedAt: new Date('2026-08-14T10:00:00Z') },
                 ],
@@ -1420,8 +1427,14 @@ describe('ProductionInvoicesService', () => {
           isMerged: true,
           cuttingProposals: [{ status: 'FAILED', requestedAt: new Date('2026-08-14T11:00:00Z') }],
           items: [
-            piItem({ id: 20n, productionOrder: { cuttingProposals: [] } }),
-            piItem({ id: 21n, productionOrder: { cuttingProposals: [] } }),
+            piItem({
+              id: 20n,
+              productionOrder: { mfgProductId: 2n, bomRevisionId: 5n, cuttingProposals: [] },
+            }),
+            piItem({
+              id: 21n,
+              productionOrder: { mfgProductId: 2n, bomRevisionId: 5n, cuttingProposals: [] },
+            }),
           ],
         }),
       );
@@ -1440,6 +1453,50 @@ describe('ProductionInvoicesService', () => {
       const result = await service.findOne('7');
 
       expect(result.items[0].cuttingProposalStatus).toBeNull();
+      expect(result.items[0].bomOutOfDate).toBeNull();
+    });
+
+    // Việc 3b (changelog-2026-09-11-bom-revision-ghim-cu-canh-bao.md mục 8) - "Nạp lại định mức"
+    // ở ThongKePagePlan.tsx chỉ hiện khi field này true.
+    describe('bomOutOfDate', () => {
+      it('true khi bomRevisionId đã ghim KHÁC bản ACTIVE hiện tại của sản phẩm', async () => {
+        productionOrdersService.fetchActiveBomRevisionIds.mockResolvedValue(new Map([['2', 7n]]));
+        prisma.productionInvoice.findUnique.mockResolvedValue(
+          pi({
+            isMerged: false,
+            cuttingProposals: [],
+            items: [
+              piItem({
+                productionOrder: { mfgProductId: 2n, bomRevisionId: 5n, cuttingProposals: [] },
+              }),
+            ],
+          }),
+        );
+
+        const result = await service.findOne('7');
+
+        expect(result.items[0].bomOutOfDate).toBe(true);
+        expect(productionOrdersService.fetchActiveBomRevisionIds).toHaveBeenCalledWith([2n]);
+      });
+
+      it('false khi bomRevisionId đã ghim vẫn đúng bản ACTIVE hiện tại', async () => {
+        productionOrdersService.fetchActiveBomRevisionIds.mockResolvedValue(new Map([['2', 5n]]));
+        prisma.productionInvoice.findUnique.mockResolvedValue(
+          pi({
+            isMerged: false,
+            cuttingProposals: [],
+            items: [
+              piItem({
+                productionOrder: { mfgProductId: 2n, bomRevisionId: 5n, cuttingProposals: [] },
+              }),
+            ],
+          }),
+        );
+
+        const result = await service.findOne('7');
+
+        expect(result.items[0].bomOutOfDate).toBe(false);
+      });
     });
   });
 

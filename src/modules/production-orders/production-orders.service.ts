@@ -1,11 +1,21 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { BomRevisionStatus, Prisma } from '../../generated/prisma/client';
+import { ClsService } from 'nestjs-cls';
+import {
+  AuditAction,
+  BomRevisionStatus,
+  CuttingProposalStatus,
+  Prisma,
+  PrismaClient,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { ProductionOrderResponseDto } from './dto/production-order-response.dto';
+import { ResyncBomDto } from './dto/resync-bom.dto';
 
 type ProductionOrderRow = Prisma.ProductionOrderGetPayload<object>;
 
@@ -41,7 +51,10 @@ type ProductionOrderWithSalesOrder = Prisma.ProductionOrderGetPayload<{
  */
 @Injectable()
 export class ProductionOrdersService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly cls: ClsService<AppClsStore>,
+  ) {}
 
   /**
    * Kiểm sớm trước khi ProductionInvoicesService.approveItem() ghi bất kỳ gì - để thiếu BOM
@@ -163,8 +176,13 @@ export class ProductionOrdersService {
   /** mfgProductId -> id của BomRevision đang ACTIVE của sản phẩm đó (tối đa 1 bản/sản phẩm, xem
    *  unique index `bom_revision_one_active_per_product`) - dùng để so với `bomRevisionId` đã ghim
    *  trên từng ProductionOrder (xem `bomOutOfDate` ở toResponseDto). 1 query duy nhất cho cả
-   *  batch, không lặp theo từng dòng. */
-  private async fetchActiveBomRevisionIds(mfgProductIds: bigint[]): Promise<Map<string, bigint>> {
+   *  batch, không lặp theo từng dòng.
+   *
+   *  KHÔNG còn `private`: ProductionInvoicesService.toResponseDtoWithProposalStatus() (đã inject
+   *  sẵn ProductionOrdersService) tái dùng đúng hàm này để tính `bomOutOfDate` cho "Bảng thống kê"
+   *  (ThongKePagePlan.tsx) - tránh chép lại cùng 1 query ở 2 module, lệch nhau 1 lần sửa là ra 2
+   *  công thức "đã cũ" khác nhau. */
+  async fetchActiveBomRevisionIds(mfgProductIds: bigint[]): Promise<Map<string, bigint>> {
     const uniqueIds = [...new Set(mfgProductIds.map((id) => id.toString()))].map(BigInt);
     if (uniqueIds.length === 0) return new Map();
     const revisions = await this.prisma.bomRevision.findMany({
@@ -280,6 +298,108 @@ export class ProductionOrdersService {
           : { floorStage: 'FINISHED' },
       include: SALES_ORDER_CODE_INCLUDE,
     });
+    return this.toResponseDto(
+      updated,
+      await this.fetchActiveBomRevisionIds([updated.mfgProductId]),
+    );
+  }
+
+  /**
+   * Việc 3b (changelog-2026-09-11-bom-revision-ghim-cu-canh-bao.md mục 8): đường sửa CHÍNH THỐNG
+   * để đổi `bomRevisionId` đã ghim của MỘT ProductionOrder sang bản ACTIVE mới nhất - thay cho
+   * việc sửa thẳng DB (đúng đường đã gây ra ca 6mm -> 60mm). `bomOutOfDate` (fetchActiveBomRevisionIds
+   * ở trên) chỉ BÁO, nút này mới THỰC SỰ đổi.
+   *
+   * 4 điều kiện, đủ CẢ 4 mới cho đổi - trượt điều kiện nào trả đúng lý do đó, không gộp chung một
+   * câu "không thực hiện được":
+   *   1. status = RELEASED (chưa DONE/CANCELLED).
+   *   2. floorStage = PENDING - đây là CỔNG DUY NHẤT cần kiểm cho "xưởng đã đụng vào lệnh này
+   *      chưa": floorStage tự nó là cờ kiểm soát hiển thị bên Hàn/Sơn/Phôi (xem doc comment
+   *      ProductionOrder.floorStage và startFloor() ở trên) - PENDING nghĩa là 3 xưởng đó CHƯA
+   *      THỂ thấy lệnh này, nên không cần dò riêng từng bảng SteelIssue/MaterialIssue/
+   *      WeavingIssue/ProductionBatch: tất cả đều nằm SAU floor-start.
+   *   3. Không có CuttingProposal nào APPROVED neo vào lệnh này (solo) hoặc PI chứa nó (gộp) -
+   *      đã chốt phương án cắt thì đổi định mức là đổi ngầm; PurchaseProposal chỉ được tạo SAU
+   *      approve() nên điều kiện này tự bao luôn "chưa mua gì" mà không cần kiểm riêng.
+   *   4. Sản phẩm có bản ACTIVE KHÁC bản đang ghim - không có gì để nạp thì không cho bấm.
+   *
+   * Ghi audit TAY (ProductionOrder không nằm trong AUDITED_MODELS - dòng nghiệp vụ đổi liên tục
+   * theo vòng đời, xem audit-log.extension.ts) để lại bomRevisionId cũ/mới + lý do KHSX/QLSX gõ.
+   */
+  async resyncBom(id: string, dto: ResyncBomDto): Promise<ProductionOrderResponseDto> {
+    const bigId = parseBigIntId(id);
+    const order = await this.prisma.productionOrder.findUnique({
+      where: { id: bigId },
+      include: {
+        productionInvoiceItem: {
+          select: {
+            ...SALES_ORDER_CODE_INCLUDE.productionInvoiceItem.select,
+            productionInvoiceId: true,
+          },
+        },
+      },
+    });
+    if (!order) {
+      throw new NotFoundException(`Production order ${id} not found`);
+    }
+    if (order.status !== 'RELEASED') {
+      throw new ConflictException(
+        `Lệnh sản xuất ${id} đang ở trạng thái ${order.status} - chỉ nạp lại định mức được khi còn RELEASED`,
+      );
+    }
+    if (order.floorStage !== 'PENDING') {
+      throw new ConflictException(
+        `Lệnh sản xuất ${id} đã bấm "Bắt đầu" ở xưởng (floorStage=${order.floorStage}) - không nạp lại định mức được nữa`,
+      );
+    }
+
+    const approvedProposal = await this.prisma.cuttingProposal.findFirst({
+      where: {
+        status: CuttingProposalStatus.APPROVED,
+        OR: [
+          { productionOrderId: bigId },
+          { productionInvoiceId: order.productionInvoiceItem.productionInvoiceId },
+        ],
+      },
+      select: { id: true },
+    });
+    if (approvedProposal) {
+      throw new ConflictException(
+        `Lệnh sản xuất ${id} đã có phương án cắt ${approvedProposal.id} được duyệt - không nạp lại định mức được nữa (đổi ngầm phương án đã chốt)`,
+      );
+    }
+
+    const activeRevision = await this.prisma.bomRevision.findFirst({
+      where: { mfgProductId: order.mfgProductId, status: BomRevisionStatus.ACTIVE },
+      select: { id: true },
+    });
+    if (!activeRevision) {
+      throw new ConflictException(
+        `Sản phẩm của lệnh sản xuất ${id} hiện không có bản định mức ACTIVE nào - không có gì để nạp`,
+      );
+    }
+    if (activeRevision.id === order.bomRevisionId) {
+      throw new ConflictException(
+        `Lệnh sản xuất ${id} đã bám đúng bản định mức ACTIVE hiện tại (revision ${activeRevision.id}) - không cần nạp lại`,
+      );
+    }
+
+    const oldBomRevisionId = order.bomRevisionId;
+    const updated = await this.prisma.productionOrder.update({
+      where: { id: bigId },
+      data: { bomRevisionId: activeRevision.id },
+      include: SALES_ORDER_CODE_INCLUDE,
+    });
+
+    const auditLogClient = this.prisma as unknown as Pick<PrismaClient, 'auditLog'>;
+    await writeAuditLog(auditLogClient, this.cls, {
+      action: AuditAction.UPDATE,
+      tableName: 'ProductionOrder',
+      recordId: id,
+      oldValue: { bomRevisionId: oldBomRevisionId.toString() },
+      newValue: { bomRevisionId: activeRevision.id.toString(), reason: dto.reason },
+    });
+
     return this.toResponseDto(
       updated,
       await this.fetchActiveBomRevisionIds([updated.mfgProductId]),

@@ -74,6 +74,13 @@ export class ProductionInvoiceItemResponseDto {
   @Expose()
   @ApiPropertyOptional({ enum: ProductionOrderFloorStage, nullable: true })
   floorStage?: ProductionOrderFloorStage | null;
+  /** true = ProductionOrder.bomRevisionId đã ghim KHÁC bản ACTIVE hiện tại của sản phẩm - QLSX
+   *  bấm "Nạp lại định mức" (POST /production-orders/:id/resync-bom) để đổi sang bản mới. Cùng
+   *  idiom `floorStage` - null khi item chưa có ProductionOrder, chỉ findAll/findOne mới nạp. Xem
+   *  ProductionOrdersService.fetchActiveBomRevisionIds() - cùng phép so id, tính riêng ở đây
+   *  (không gọi chéo sang ProductionOrdersService) vì PI-item và ProductionOrder là 2 module độc
+   *  lập, tính lại 1 query nhỏ rẻ hơn thêm phụ thuộc module. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) bomOutOfDate?: boolean | null;
   @Expose() @ApiPropertyOptional({ type: [ItemStageDto] }) stages!: ItemStageDto[];
 
   constructor(partial: Partial<ProductionInvoiceItemResponseDto>) {

@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
@@ -6,6 +6,7 @@ import { PERMISSION_MODULES } from '../../common/constants/permission-modules.co
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
+import { ResyncBomDto } from './dto/resync-bom.dto';
 import { ProductionOrdersService } from './production-orders.service';
 
 const VIEW = { module: PERMISSION_MODULES.PRODUCTION_ORDER, action: PermissionAction.VIEW };
@@ -57,5 +58,17 @@ export class ProductionOrdersController {
   @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER)
   finishFloor(@Param('id') id: string) {
     return this.productionOrdersService.finishFloor(id);
+  }
+
+  /**
+   * "Nạp lại định mức" - chỉ hiện ở FE khi `bomOutOfDate=true`. Xem điều kiện đầy đủ ở
+   * ProductionOrdersService.resyncBom() - RELEASED + floorStage PENDING + chưa có phương án cắt
+   * nào được duyệt + có bản ACTIVE khác bản đang ghim.
+   */
+  @Post(':id/resync-bom')
+  @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER)
+  resyncBom(@Param('id') id: string, @Body() dto: ResyncBomDto) {
+    return this.productionOrdersService.resyncBom(id, dto);
   }
 }

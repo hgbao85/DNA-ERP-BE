@@ -3,6 +3,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import {
   BomRevisionStatus,
   PlanFormStatus,
+  Prisma,
   PrismaClient,
   ProcessStep,
 } from '../src/generated/prisma/client';
@@ -46,13 +47,16 @@ import {
  */
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
-const prisma = new PrismaClient({ adapter });
+const rawPrisma = new PrismaClient({ adapter });
+
+/** Type của tham số `tx` trong `rawPrisma.$transaction(async (tx) => ...)` - script này KHÔNG đi
+ *  qua PrismaService/createExtendedPrismaClient (audit-log/soft-delete) nên dùng thẳng type gốc
+ *  của Prisma, không phải PrismaTx của prisma.service.ts. */
+type Tx = Prisma.TransactionClient;
 
 /** Nhóm "Sắt" (systemKey STEEL_BAR) và Kho Phôi Sơn Hàn - giống hệt vật tư sắt đã có sẵn. */
 const STEEL_GROUP_ID = 1n;
 const STEEL_WAREHOUSE_ID = 3n;
-/** Tài khoản KHSX (demo) đứng tên phiếu định mức - PlanForm.createdById bắt buộc. */
-const KHSX_USER_ID = 'e2889ce0-e9fb-4963-ac19-e53c293a68b7';
 
 const STEELS = [
   { code: 'SAT-VUONG-50X50', name: 'Sắt vuông 50×50' },
@@ -252,7 +256,7 @@ const PRODUCTS: { code: string; name: string; pieces: PieceDef[] }[] = [
 /** Bộ SKU tổng hợp tạm ở lần chạy trước - dọn đi để danh sách SKU chỉ còn định mức thật. */
 const OBSOLETE_PRODUCT_CODES = ['CUT-A-1495', 'CUT-B-1990', 'CUT-C-2500', 'CUT-D-0985'];
 
-async function dropObsoleteFixtures() {
+async function dropObsoleteFixtures(prisma: Tx) {
   const stale = await prisma.mfgProduct.findMany({
     where: { factoryCode: { in: OBSOLETE_PRODUCT_CODES } },
     select: { id: true, factoryCode: true },
@@ -278,123 +282,142 @@ async function dropObsoleteFixtures() {
 }
 
 async function main() {
-  await dropObsoleteFixtures();
+  // Toàn bộ nội dung dưới đây chạy trong 1 transaction với SET LOCAL "dna.bom_maintenance" =
+  // 'on' - lối thoát có kiểm soát của trigger `assert_bom_revision_draft()` (migration
+  // 20260921030000), CHỈ có hiệu lực trong đúng transaction này (không rò sang connection khác).
+  // Cần thiết vì script upsert thẳng piece_bom/bom_piece của revision ACTIVE (chạy lại vô hại -
+  // xem doc comment đầu file) và dropObsoleteFixtures() xoá piece_bom/bom_piece khi dọn SKU tổng
+  // hợp tạm - cả 2 việc này giờ bị trigger chặn nếu không bật cờ maintenance. Đây đúng là ca
+  // "seed/khôi phục dữ liệu" mà escape hatch sinh ra để phục vụ, KHÔNG phải né bất biến DRAFT-only
+  // cho đường sửa bình thường qua UI (đường đó vẫn đi qua SkusService.replacePieces như cũ).
+  await rawPrisma.$transaction(
+    async (prisma) => {
+      await prisma.$executeRawUnsafe(`SET LOCAL "dna.bom_maintenance" = 'on'`);
+      await dropObsoleteFixtures(prisma);
 
-  const steelIdByCode = new Map<string, bigint>();
-  for (const s of STEELS) {
-    const m = await prisma.material.upsert({
-      where: { code: s.code },
-      create: {
-        code: s.code,
-        name: s.name,
-        unit: 'cây',
-        materialGroupId: STEEL_GROUP_ID,
-        warehouseId: STEEL_WAREHOUSE_ID,
-      },
-      update: { name: s.name },
-    });
-    steelIdByCode.set(s.code, m.id);
-  }
+      // Tra theo username thay vì hard-code UUID (2026-09-21 - id cũ hard-code từ 1 lần seed DB
+      // khác không còn khớp sau khi DB local bị reset lại, PlanForm.createdById bắt lỗi FK khi
+      // chạy lại script) - luôn khớp bất kể DB đã reset bao nhiêu lần, miễn còn tài khoản `khsx`.
+      const khsxUser = await prisma.user.findFirstOrThrow({ where: { username: 'khsx' } });
 
-  for (const prod of PRODUCTS) {
-    const product = await prisma.mfgProduct.upsert({
-      where: { factoryCode: prod.code },
-      create: { factoryCode: prod.code, name: prod.name },
-      update: { name: prod.name },
-    });
-
-    const revision = await prisma.bomRevision.upsert({
-      where: { mfgProductId_revNo: { mfgProductId: product.id, revNo: 1 } },
-      create: { mfgProductId: product.id, revNo: 1, status: BomRevisionStatus.ACTIVE },
-      update: { status: BomRevisionStatus.ACTIVE },
-    });
-
-    for (const [i, pc] of prod.pieces.entries()) {
-      const piece = await prisma.piece.upsert({
-        where: { mfgProductId_code: { mfgProductId: product.id, code: pc.code } },
-        create: {
-          mfgProductId: product.id,
-          code: pc.code,
-          groupNumber: 1,
-          pieceNumber: i + 1,
-          name: pc.name,
-        },
-        update: { name: pc.name },
-      });
-
-      await prisma.bomPiece.upsert({
-        where: { bomRevisionId_pieceId: { bomRevisionId: revision.id, pieceId: piece.id } },
-        create: {
-          bomRevisionId: revision.id,
-          pieceId: piece.id,
-          qtyPerUnit: pc.qtyPerUnit,
-          needsHan: pc.needsHan ?? false,
-          needsSon: pc.needsSon ?? false,
-        },
-        update: {
-          qtyPerUnit: pc.qtyPerUnit,
-          needsHan: pc.needsHan ?? false,
-          needsSon: pc.needsSon ?? false,
-        },
-      });
-
-      for (const cut of pc.cuts) {
-        const materialId = steelIdByCode.get(cut.steel)!;
-        const spec = await prisma.segmentSpec.upsert({
-          where: { materialId_cutLengthMm: { materialId, cutLengthMm: cut.cutLengthMm } },
-          create: { materialId, cutLengthMm: cut.cutLengthMm },
-          update: {},
+      const steelIdByCode = new Map<string, bigint>();
+      for (const s of STEELS) {
+        const m = await prisma.material.upsert({
+          where: { code: s.code },
+          create: {
+            code: s.code,
+            name: s.name,
+            unit: 'cây',
+            materialGroupId: STEEL_GROUP_ID,
+            warehouseId: STEEL_WAREHOUSE_ID,
+          },
+          update: { name: s.name },
         });
-        await prisma.pieceBom.upsert({
-          where: {
-            bomRevisionId_pieceId_segmentSpecId: {
+        steelIdByCode.set(s.code, m.id);
+      }
+
+      for (const prod of PRODUCTS) {
+        const product = await prisma.mfgProduct.upsert({
+          where: { factoryCode: prod.code },
+          create: { factoryCode: prod.code, name: prod.name },
+          update: { name: prod.name },
+        });
+
+        const revision = await prisma.bomRevision.upsert({
+          where: { mfgProductId_revNo: { mfgProductId: product.id, revNo: 1 } },
+          create: { mfgProductId: product.id, revNo: 1, status: BomRevisionStatus.ACTIVE },
+          update: { status: BomRevisionStatus.ACTIVE },
+        });
+
+        for (const [i, pc] of prod.pieces.entries()) {
+          const piece = await prisma.piece.upsert({
+            where: { mfgProductId_code: { mfgProductId: product.id, code: pc.code } },
+            create: {
+              mfgProductId: product.id,
+              code: pc.code,
+              groupNumber: 1,
+              pieceNumber: i + 1,
+              name: pc.name,
+            },
+            update: { name: pc.name },
+          });
+
+          await prisma.bomPiece.upsert({
+            where: { bomRevisionId_pieceId: { bomRevisionId: revision.id, pieceId: piece.id } },
+            create: {
               bomRevisionId: revision.id,
               pieceId: piece.id,
-              segmentSpecId: spec.id,
+              qtyPerUnit: pc.qtyPerUnit,
+              needsHan: pc.needsHan ?? false,
+              needsSon: pc.needsSon ?? false,
             },
-          },
-          create: {
-            bomRevisionId: revision.id,
-            mfgProductId: product.id,
-            pieceId: piece.id,
-            segmentSpecId: spec.id,
-            qtyPerPiece: cut.qtyPerPiece,
-            processSteps: [ProcessStep.CAT],
-          },
-          update: { qtyPerPiece: cut.qtyPerPiece },
+            update: {
+              qtyPerUnit: pc.qtyPerUnit,
+              needsHan: pc.needsHan ?? false,
+              needsSon: pc.needsSon ?? false,
+            },
+          });
+
+          for (const cut of pc.cuts) {
+            const materialId = steelIdByCode.get(cut.steel)!;
+            const spec = await prisma.segmentSpec.upsert({
+              where: { materialId_cutLengthMm: { materialId, cutLengthMm: cut.cutLengthMm } },
+              create: { materialId, cutLengthMm: cut.cutLengthMm },
+              update: {},
+            });
+            await prisma.pieceBom.upsert({
+              where: {
+                bomRevisionId_pieceId_segmentSpecId: {
+                  bomRevisionId: revision.id,
+                  pieceId: piece.id,
+                  segmentSpecId: spec.id,
+                },
+              },
+              create: {
+                bomRevisionId: revision.id,
+                mfgProductId: product.id,
+                pieceId: piece.id,
+                segmentSpecId: spec.id,
+                qtyPerPiece: cut.qtyPerPiece,
+                processSteps: [ProcessStep.CAT],
+              },
+              update: { qtyPerPiece: cut.qtyPerPiece },
+            });
+          }
+        }
+
+        // Sales chỉ chọn được SKU có PlanForm (phiếu định mức) đã APPROVED - không phải đọc thẳng
+        // mfg_products (xem OrderManagementPage.tsx "SKU đã duyệt"). Không có dòng này thì 4 SKU trên
+        // dựng xong vẫn không đặt hàng được.
+        const planned = await prisma.planForm.findFirst({
+          where: { mfgProductId: product.id, salesOrderId: null },
+          select: { id: true },
         });
+        if (!planned) {
+          await prisma.planForm.create({
+            data: {
+              mfgProductId: product.id,
+              status: PlanFormStatus.APPROVED,
+              createdById: khsxUser.id,
+              note: prod.code,
+            },
+          });
+        }
+
+        const cutCount = prod.pieces.reduce((n, p) => n + p.cuts.length, 0);
+        console.log(
+          `✔ ${prod.code.padEnd(12)} product=${product.id} revision=${revision.id}  ${prod.pieces.length} mảnh · ${cutCount} dòng cỡ đoạn`,
+        );
       }
-    }
-
-    // Sales chỉ chọn được SKU có PlanForm (phiếu định mức) đã APPROVED - không phải đọc thẳng
-    // mfg_products (xem OrderManagementPage.tsx "SKU đã duyệt"). Không có dòng này thì 4 SKU trên
-    // dựng xong vẫn không đặt hàng được.
-    const planned = await prisma.planForm.findFirst({
-      where: { mfgProductId: product.id, salesOrderId: null },
-      select: { id: true },
-    });
-    if (!planned) {
-      await prisma.planForm.create({
-        data: {
-          mfgProductId: product.id,
-          status: PlanFormStatus.APPROVED,
-          createdById: KHSX_USER_ID,
-          note: prod.code,
-        },
-      });
-    }
-
-    const cutCount = prod.pieces.reduce((n, p) => n + p.cuts.length, 0);
-    console.log(
-      `✔ ${prod.code.padEnd(12)} product=${product.id} revision=${revision.id}  ${prod.pieces.length} mảnh · ${cutCount} dòng cỡ đoạn`,
-    );
-  }
+    },
+    { timeout: 30_000, maxWait: 10_000 },
+  );
 }
 
 main()
-  .then(() => prisma.$disconnect())
+  .then(() => rawPrisma.$disconnect())
   .catch(async (e) => {
     console.error(e);
-    await prisma.$disconnect();
+    await rawPrisma.$disconnect();
     process.exit(1);
   });

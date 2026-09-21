@@ -711,6 +711,17 @@ model BomRevision {
   /// "chưa có revision" (xem PlanFormsService.resolveDraftBomRevision).
   sourcePlanFormId BigInt?           @unique
   createdAt        DateTime          @default(now())
+  /// sha256(mọi dòng bom_piece/bom_part/piece_bom/part_bom/piece_material_item/
+  /// piece_material_yield/consumable_bom/bom_accessory_items của revision này, sắp xếp ổn
+  /// định) - tính đúng 1 lần lúc activateInTransaction() ghi ACTIVE (BomRevisionsService),
+  /// null khi còn DRAFT (nội dung còn đổi). Mục đích: bomOutOfDate hiện tại chỉ so
+  /// bomRevisionId (số hiệu) - nếu ai đó bypass trigger 20260921 (vd pg_restore
+  /// --disable-triggers) sửa RUỘT một bản đã ACTIVE mà giữ nguyên id, bomOutOfDate không
+  /// phát hiện được (xem changelog-2026-09-11-bom-revision-ghim-cu-canh-bao.md mục 8).
+  /// contentHash là lớp phát hiện thứ 2, độc lập với trigger (lớp phòng ngừa thứ 1) - dùng
+  /// bởi CLI rà soát định kỳ, KHÔNG dùng trong bomOutOfDate (đó vẫn là so sourcePlanFormId
+  /// hiện tại, so hash mỗi request là quá tốn).
+  contentHash      String?
 
   mfgProduct          MfgProduct           @relation(fields: [mfgProductId], references: [id])
   sourcePlanForm      PlanForm?            @relation(fields: [sourcePlanFormId], references: [id])

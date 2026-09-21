@@ -1,6 +1,8 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { BomRevisionStatus } from '../../generated/prisma/client';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { BomRevisionStatus, CuttingProposalStatus } from '../../generated/prisma/client';
 import { ProductionOrdersService } from './production-orders.service';
 
 describe('ProductionOrdersService', () => {
@@ -15,7 +17,10 @@ describe('ProductionOrdersService', () => {
       findMany: jest.Mock;
       count: jest.Mock;
     };
+    cuttingProposal: { findFirst: jest.Mock };
+    auditLog: { create: jest.Mock };
   };
+  let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
 
   const activeRevision = { id: 5n, mfgProductId: 2n, status: BomRevisionStatus.ACTIVE };
   const order = (overrides: Record<string, unknown> = {}) => ({
@@ -26,11 +31,13 @@ describe('ProductionOrdersService', () => {
     bomRevisionId: 5n,
     quantity: 60,
     status: 'RELEASED',
+    floorStage: 'PENDING',
     releasedAt: new Date(),
     createdAt: new Date(),
     productionInvoiceItem: {
       salesOrder: { orderCode: 'PO-31' },
       productionInvoice: { id: 500n, code: 'PI-2026-001' },
+      productionInvoiceId: 500n,
       deliveryDeadline: new Date('2026-09-01'),
       stages: [],
     },
@@ -48,8 +55,14 @@ describe('ProductionOrdersService', () => {
         findMany: jest.fn(),
         count: jest.fn(),
       },
+      cuttingProposal: { findFirst: jest.fn() },
+      auditLog: { create: jest.fn() },
     };
-    service = new ProductionOrdersService(prisma as unknown as PrismaServiceType);
+    cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
+    service = new ProductionOrdersService(
+      prisma as unknown as PrismaServiceType,
+      cls as unknown as ClsService<AppClsStore>,
+    );
     // Mặc định không có bản ACTIVE nào khớp -> bomOutOfDate=false, không phá các test không quan
     // tâm field này - test riêng của bomOutOfDate tự override lại mock này.
     prisma.bomRevision.findMany.mockResolvedValue([]);
@@ -358,6 +371,111 @@ describe('ProductionOrdersService', () => {
       prisma.productionOrder.findUnique.mockResolvedValue(null);
 
       await expect(service.finishFloor('999')).rejects.toThrow(NotFoundException);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resyncBom — "Nạp lại định mức" (2026-09-21, Việc 3b)', () => {
+    const dto = { reason: 'Định mức sắt tròn Ø4 sửa lại đúng 60mm' };
+    const newActiveRevision = { id: 7n, mfgProductId: 2n, status: BomRevisionStatus.ACTIVE };
+
+    /** Tổ hợp mock cho ca ĐƯỢC PHÉP: 4 điều kiện đều qua. Test riêng từng điều kiện tự override
+     *  lại đúng 1 mock để trượt, giữ nguyên phần còn lại. */
+    function mockAllConditionsPass() {
+      prisma.productionOrder.findUnique.mockResolvedValue(
+        order({ status: 'RELEASED', floorStage: 'PENDING', bomRevisionId: 5n }),
+      );
+      prisma.cuttingProposal.findFirst.mockResolvedValue(null);
+      prisma.bomRevision.findFirst.mockResolvedValue(newActiveRevision);
+      prisma.productionOrder.update.mockResolvedValue(
+        order({ bomRevisionId: newActiveRevision.id }),
+      );
+    }
+
+    it('đổi bomRevisionId sang bản ACTIVE mới và ghi audit log khi đủ cả 4 điều kiện', async () => {
+      mockAllConditionsPass();
+
+      const result = await service.resyncBom('9', dto);
+
+      expect(prisma.productionOrder.update).toHaveBeenCalledWith({
+        where: { id: 9n },
+        data: { bomRevisionId: newActiveRevision.id },
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+        include: expect.anything(),
+      });
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+        data: expect.objectContaining({
+          tableName: 'ProductionOrder',
+          recordId: '9',
+          oldValue: { bomRevisionId: '5' },
+          newValue: { bomRevisionId: '7', reason: dto.reason },
+        }),
+      });
+      expect(result).toBeDefined();
+    });
+
+    it('chặn khi status không còn RELEASED', async () => {
+      mockAllConditionsPass();
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ status: 'DONE' }));
+
+      await expect(service.resyncBom('9', dto)).rejects.toThrow(ConflictException);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+
+    it('chặn khi floorStage đã rời PENDING (xưởng đã bấm Bắt đầu)', async () => {
+      mockAllConditionsPass();
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+
+      await expect(service.resyncBom('9', dto)).rejects.toThrow(ConflictException);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+
+    it('chặn khi đã có CuttingProposal APPROVED neo trực tiếp vào lệnh này (solo)', async () => {
+      mockAllConditionsPass();
+      prisma.cuttingProposal.findFirst.mockResolvedValue({ id: 42n });
+
+      await expect(service.resyncBom('9', dto)).rejects.toThrow(ConflictException);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+
+    it('kiểm cả 2 nhánh neo CuttingProposal (solo + PI gộp), không chỉ productionOrderId', async () => {
+      mockAllConditionsPass();
+      await service.resyncBom('9', dto);
+      const call = prisma.cuttingProposal.findFirst.mock.calls[0] as unknown as [
+        {
+          where: {
+            status: CuttingProposalStatus;
+            OR: Array<{ productionOrderId?: bigint; productionInvoiceId?: bigint }>;
+          };
+        },
+      ];
+      expect(call[0].where.status).toBe(CuttingProposalStatus.APPROVED);
+      expect(call[0].where.OR).toEqual(
+        expect.arrayContaining([{ productionOrderId: 9n }, { productionInvoiceId: 500n }]),
+      );
+    });
+
+    it('chặn khi sản phẩm không có bản ACTIVE nào', async () => {
+      mockAllConditionsPass();
+      prisma.bomRevision.findFirst.mockResolvedValue(null);
+
+      await expect(service.resyncBom('9', dto)).rejects.toThrow(ConflictException);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+
+    it('chặn khi lệnh đã bám đúng bản ACTIVE hiện tại (không có gì để nạp)', async () => {
+      mockAllConditionsPass();
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 5n, mfgProductId: 2n });
+
+      await expect(service.resyncBom('9', dto)).rejects.toThrow(ConflictException);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the order does not exist', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(null);
+
+      await expect(service.resyncBom('999', dto)).rejects.toThrow(NotFoundException);
       expect(prisma.productionOrder.update).not.toHaveBeenCalled();
     });
   });

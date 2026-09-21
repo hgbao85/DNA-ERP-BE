@@ -206,7 +206,7 @@ export class ProductionInvoicesService {
       query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
     );
     return {
-      data: result.data.map((pi) => this.toResponseDtoWithProposalStatus(pi)),
+      data: await Promise.all(result.data.map((pi) => this.toResponseDtoWithProposalStatus(pi))),
       meta: result.meta,
     };
   }
@@ -220,7 +220,7 @@ export class ProductionInvoicesService {
     if (!pi) {
       throw new NotFoundException(`Production invoice ${id} not found`);
     }
-    return this.toResponseDtoWithProposalStatus(pi);
+    return await this.toResponseDtoWithProposalStatus(pi);
   }
 
   async update(id: string, dto: UpdateProductionInvoiceDto): Promise<ProductionInvoiceResponseDto> {
@@ -1823,17 +1823,38 @@ export class ProductionInvoicesService {
    * Đợt gộp (PI.isMerged) dùng CHUNG 1 phương án cho cả PI (proposal.productionInvoiceId); PI
    * thường mỗi SKU tự có phương án riêng qua ProductionOrder của chính nó.
    */
-  private toResponseDtoWithProposalStatus(pi: PIWithProposalStatus): ProductionInvoiceResponseDto {
+  private async toResponseDtoWithProposalStatus(
+    pi: PIWithProposalStatus,
+  ): Promise<ProductionInvoiceResponseDto> {
     const dto = this.toResponseDto(pi);
     const piLevelProposal = pi.isMerged ? pi.cuttingProposals[0] : undefined;
+
+    // 1 query duy nhất cho CẢ PI (không lặp theo từng item) - tái dùng đúng hàm
+    // ProductionOrdersService dùng cho GET /production-orders (xem doc comment hàm đó về vì sao
+    // hết `private`). mfgProductId lấy từ chính ProductionOrder đã include sẵn, không phải từ
+    // PIItemWithRefs.mfgProduct (2 nguồn khác nhau - SKU có thể đổi mfgProduct sau khi
+    // ProductionOrder đã ghim, hiếm nhưng đúng nguồn phải là cái ProductionOrder đang xét).
+    const orderMfgProductIds = pi.items
+      .map((it) => it.productionOrder?.mfgProductId)
+      .filter((id): id is bigint => id != null);
+    const activeRevisionByProduct =
+      await this.productionOrdersService.fetchActiveBomRevisionIds(orderMfgProductIds);
+
     dto.items.forEach((itemDto, i) => {
-      const proposal = piLevelProposal ?? pi.items[i].productionOrder?.cuttingProposals[0];
+      const productionOrder = pi.items[i].productionOrder;
+      const proposal = piLevelProposal ?? productionOrder?.cuttingProposals[0];
       itemDto.cuttingProposalStatus = proposal?.status ?? null;
       itemDto.cuttingProposalRequestedAt = proposal?.requestedAt ?? null;
-      itemDto.productionOrderId = pi.items[i].productionOrder?.id?.toString() ?? null;
+      itemDto.productionOrderId = productionOrder?.id?.toString() ?? null;
       // Bảng thống kê (ThongKePagePlan.tsx) cần floorStage để hiện nút Bắt đầu/Kết thúc (QLSX) và
       // badge trạng thái xưởng (Boss/KHSX chỉ xem) - null khi item chưa có ProductionOrder.
-      itemDto.floorStage = pi.items[i].productionOrder?.floorStage ?? null;
+      itemDto.floorStage = productionOrder?.floorStage ?? null;
+      // "Nạp lại định mức" (Việc 3b, changelog-2026-09-11-bom-revision-ghim-cu-canh-bao.md mục 8)
+      // - null khi chưa có ProductionOrder, cùng idiom floorStage ở trên.
+      itemDto.bomOutOfDate = productionOrder
+        ? activeRevisionByProduct.get(productionOrder.mfgProductId.toString()) !==
+          productionOrder.bomRevisionId
+        : null;
     });
     return dto;
   }
