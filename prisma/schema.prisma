@@ -1515,6 +1515,9 @@ model ProductionOrder {
   materialYieldIssues         MaterialYieldIssue[]
   packagingIssues             PackagingIssue[]
   productionBatches           ProductionBatch[]
+  cutBundles                  CutBundle[]
+  stepBatches                 StepBatch[]
+  stepBundles                 StepBundle[]
   pieceStepBatches            PieceStepBatch[]
   pieceStepBundles            PieceStepBundle[]
   materialInspectionRequests  MaterialInspectionRequest[]
@@ -2439,14 +2442,21 @@ model CutBundle {
   /// Phôi bấm "Báo cắt xong" cho ĐỢT NÀY (chuyển sang chờ KCS).
   completedAt       DateTime?
   createdAt         DateTime        @default(now())
+  /// SKU (ProductionOrder) mà đợt cắt này làm ra đoạn cho (2026-09-21) - để thống kê tiến độ Phôi THẬT theo
+  /// từng SKU trong 1 PI ("Tổng hợp lệnh SX" lớp SKU). 1 đợt = đúng 1 SKU (cắt cho 2 SKU thì ghi 2 đợt).
+  /// NULL = đợt CŨ tạo trước 2026-09-21, không biết thuộc SKU nào (hiện ở "Chưa phân SKU", không chia
+  /// bừa). Đợt mới bắt buộc có (RecordCutBatchDto.productionOrderId).
+  productionOrderId BigInt?
 
   steelIssue      SteelIssue              @relation(fields: [steelIssueId], references: [id])
   proposalPattern CuttingProposalPattern? @relation(fields: [proposalPatternId], references: [id])
+  productionOrder ProductionOrder?        @relation(fields: [productionOrderId], references: [id])
   segments        CutPatternSegment[]
   qcReviews       QcReview[]
 
   @@index([steelIssueId])
   @@index([status])
+  @@index([productionOrderId])
   @@map("cut_bundles")
 }
 
@@ -2495,14 +2505,19 @@ model StepBatch {
   /// qua StepBatchSegment, không phải số lượng phẳng).
   stepBundleId        BigInt?
   createdAt           DateTime    @default(now())
+  /// SKU (ProductionOrder) mà đợt gia công này làm cho (2026-09-21) - cùng ý nghĩa CutBundle.productionOrderId:
+  /// 1 đợt = 1 SKU, NULL = đợt CŨ trước 2026-09-21 chưa biết SKU nào.
+  productionOrderId   BigInt?
 
   productionInvoice ProductionInvoice  @relation(fields: [productionInvoiceId], references: [id])
   material          Material           @relation(fields: [materialId], references: [id])
   stepBundle        StepBundle?        @relation(fields: [stepBundleId], references: [id])
+  productionOrder   ProductionOrder?   @relation(fields: [productionOrderId], references: [id])
   segments          StepBatchSegment[]
 
   @@index([productionInvoiceId, materialId, step])
   @@index([stepBundleId])
+  @@index([productionOrderId])
   @@map("step_batches")
 }
 
@@ -2531,15 +2546,19 @@ model StepBundle {
   status              StepBundleStatus @default(AWAITING_QC)
   submittedAt         DateTime         @default(now())
   submittedById       String
+  /// SKU (ProductionOrder) của đợt gửi KCS này (2026-09-21) - gom các StepBatch CỦA CÙNG SKU. NULL = đợt cũ.
+  productionOrderId   BigInt?
 
   productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id])
   material          Material          @relation(fields: [materialId], references: [id])
   submittedBy       User              @relation("StepBundleSubmittedBy", fields: [submittedById], references: [id])
+  productionOrder   ProductionOrder?  @relation(fields: [productionOrderId], references: [id])
   batches           StepBatch[]
   qcReviews         QcReview[]
 
   @@index([productionInvoiceId, materialId, step])
   @@index([status])
+  @@index([productionOrderId])
   @@map("step_bundles")
 }
 

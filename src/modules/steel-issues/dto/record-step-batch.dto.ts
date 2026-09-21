@@ -40,6 +40,12 @@ export class RecordStepBatchDto {
   @IsEnum(ProcessStep)
   step!: ProcessStep;
 
+  /** SKU (ProductionOrder) đợt gia công này làm cho (2026-09-21) - BẮT BUỘC: 1 đợt = 1 SKU, phải thuộc
+   *  PI, cỡ đoạn phải cần công đoạn này theo định mức của CHÍNH SKU. */
+  @ApiProperty()
+  @IsString()
+  productionOrderId!: string;
+
   @ApiProperty({ type: [StepBatchSegmentDto] })
   @IsArray()
   @ArrayMinSize(1)

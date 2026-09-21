@@ -9,6 +9,11 @@ import { Exclude, Expose } from 'class-transformer';
  */
 @Exclude()
 export class PiOrderSummaryResponseDto {
+  /** ProductionOrder.id - để Phôi chọn SKU khi nhập đợt cắt (RecordCutBatchDto.productionOrderId) và để
+   *  "Tổng hợp lệnh SX" nối tiến độ Phôi theo SKU (2026-09-21). */
+  @Expose() @ApiProperty() productionOrderId!: string;
+  /** Mã xưởng (MfgProduct.factoryCode) của SKU. */
+  @Expose() @ApiProperty() sku!: string;
   @Expose() @ApiProperty() poNumber!: string;
   /** Null cho PI gộp không gắn 1 đơn hàng Sales cụ thể nào (xem ProductionInvoiceItem.salesOrderId). */
   @Expose() @ApiProperty({ nullable: true }) salesOrderCode!: string | null;

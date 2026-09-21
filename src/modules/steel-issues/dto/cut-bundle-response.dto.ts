@@ -47,6 +47,8 @@ export class CutBundleResponseDto {
   @Expose() @ApiProperty({ type: [String] }) requiredSteps!: string[];
   @Expose() @ApiPropertyOptional({ nullable: true }) completedAt!: Date | null;
   @Expose() @ApiProperty() createdAt!: Date;
+  /** SKU (ProductionOrder) đợt cắt này làm cho. null = đợt CŨ tạo trước 2026-09-21, không biết SKU nào. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) productionOrderId!: string | null;
   @Expose()
   @ApiProperty({ type: [CutPatternSegmentResponseDto] })
   segments!: CutPatternSegmentResponseDto[];

@@ -18,6 +18,8 @@ import {
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RequireRole } from '../../common/decorators/require-role.decorator';
+import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
@@ -26,6 +28,7 @@ import { ListStepBundlesQueryDto } from './dto/list-step-bundles-query.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
 import { RecordStepBatchDto } from './dto/record-step-batch.dto';
 import { SubmitStepBundleDto } from './dto/submit-step-bundle.dto';
+import { AssignProductionOrderDto } from './dto/assign-production-order.dto';
 import { UndoCutBatchDto } from './dto/undo-cut-batch.dto';
 import { SteelIssuesService } from './steel-issues.service';
 
@@ -212,6 +215,54 @@ export class SteelIssuesController {
     return this.steelIssuesService.finishCutBundle(id);
   }
 
+  /** Gán SKU cho đợt cắt CŨ chưa có SKU (PI nhiều SKU) - xem AssignProductionOrderDto. */
+  @Post('cut-bundles/:id/assign-order')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  assignCutBundleOrder(
+    @Param('id') id: string,
+    @Body() dto: AssignProductionOrderDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.steelIssuesService.assignCutBundleOrder(id, dto.productionOrderId, userId);
+  }
+
+  /** ADMIN sửa SKU của đợt cắt ĐÃ gắn SKU (gán nhầm) - ghi audit log; xem service.assignCutBundleOrder(reassign). */
+  @Post('cut-bundles/:id/reassign-order')
+  @RequirePermissions(UPDATE)
+  @RequireRole(DEFAULT_ROLES.ADMIN)
+  reassignCutBundleOrder(
+    @Param('id') id: string,
+    @Body() dto: AssignProductionOrderDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.steelIssuesService.assignCutBundleOrder(id, dto.productionOrderId, userId, true);
+  }
+
+  /** Gán SKU cho đợt công đoạn phụ CŨ chưa có SKU (PI nhiều SKU) - xem AssignProductionOrderDto. */
+  @Post('step-bundles/:id/assign-order')
+  @RequirePermissions(UPDATE)
+  @RequireMfgRole(MfgRole.PHOI)
+  assignStepBundleOrder(
+    @Param('id') id: string,
+    @Body() dto: AssignProductionOrderDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.steelIssuesService.assignStepBundleOrder(id, dto.productionOrderId, userId);
+  }
+
+  /** ADMIN sửa SKU của đợt công đoạn phụ ĐÃ gắn SKU (gán nhầm) - ghi audit log. */
+  @Post('step-bundles/:id/reassign-order')
+  @RequirePermissions(UPDATE)
+  @RequireRole(DEFAULT_ROLES.ADMIN)
+  reassignStepBundleOrder(
+    @Param('id') id: string,
+    @Body() dto: AssignProductionOrderDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.steelIssuesService.assignStepBundleOrder(id, dto.productionOrderId, userId, true);
+  }
+
   /** Hoàn tác ĐÚNG lần "Lưu đợt cắt" gần nhất (2026-09-07) - xem doc comment service. */
   @Post('cut-bundles/:id/undo-last-batch')
   @RequirePermissions(UPDATE)
@@ -243,7 +294,13 @@ export class SteelIssuesController {
     @Body() dto: SubmitStepBundleDto,
     @CurrentUser('id') userId: string,
   ) {
-    return this.steelIssuesService.submitStepBundle(id, dto.materialId, dto.step, userId);
+    return this.steelIssuesService.submitStepBundle(
+      id,
+      dto.materialId,
+      dto.step,
+      userId,
+      dto.productionOrderId,
+    );
   }
 
   /** Lịch sử mọi StepBundle của 1 PI (mọi loại sắt/công đoạn) - màn Phôi xem thuần, không thao

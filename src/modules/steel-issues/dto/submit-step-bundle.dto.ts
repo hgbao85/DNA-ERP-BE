@@ -13,4 +13,9 @@ export class SubmitStepBundleDto {
   @ApiProperty({ enum: ProcessStep })
   @IsEnum(ProcessStep)
   step!: ProcessStep;
+
+  /** SKU (ProductionOrder) cần gửi KCS (2026-09-21) - chỉ gom các đợt gia công CỦA SKU này. */
+  @ApiProperty()
+  @IsString()
+  productionOrderId!: string;
 }

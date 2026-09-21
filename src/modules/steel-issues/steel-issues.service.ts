@@ -4,9 +4,11 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
+  AuditAction,
   CutBundleStatus,
   CuttingProposalStatus,
   Prisma,
@@ -32,7 +34,9 @@ import { StockReservationsService } from '../stock/stock-reservations.service';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
 import {
   PhoiProgressItemResponseDto,
+  PhoiProgressOrderSegmentDto,
   PhoiProgressSegmentDto,
+  PhoiStepProgressDto,
 } from './dto/phoi-progress-response.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { CutBundleResponseDto, CutPatternSegmentResponseDto } from './dto/cut-bundle-response.dto';
@@ -60,6 +64,41 @@ const STEEL_ISSUE_DETAIL_INCLUDE = {
 
 type SteelIssueRow = Prisma.SteelIssueGetPayload<{ include: typeof STEEL_ISSUE_INCLUDE }>;
 type SteelIssueDetail = Prisma.SteelIssueGetPayload<{ include: typeof STEEL_ISSUE_DETAIL_INCLUDE }>;
+type BaseInputs = {
+  orders: OrderForBom[];
+  bomPieces: Prisma.BomPieceGetPayload<object>[];
+  pieceBoms: Prisma.PieceBomGetPayload<{
+    include: { segmentSpec: { include: { material: true } } };
+  }>[];
+  issues: { materialId: bigint; barCount: number }[];
+};
+/** Dữ liệu tính tiến độ CẮT của 1 PI (đã chia sẵn theo PI bởi loadPhoiInputs). */
+type CutInputs = BaseInputs & {
+  cutSegments: {
+    segmentSpecId: bigint;
+    qty: number;
+    cutBundle: { productionOrderId: bigint | null };
+  }[];
+  qcSegments: {
+    segmentSpecId: bigint;
+    failedQty: number;
+    qcReview: { cutBundle: { productionOrderId: bigint | null } | null };
+  }[];
+};
+/** Dữ liệu tính tiến độ CÔNG ĐOẠN PHỤ của 1 PI (mọi công đoạn, lọc theo `step` khi tính). */
+type StepInputs = BaseInputs & {
+  stepSegments: {
+    segmentSpecId: bigint;
+    qty: number;
+    stepBatch: { productionOrderId: bigint | null; step: ProcessStep };
+  }[];
+  qcSegments: {
+    segmentSpecId: bigint;
+    failedQty: number;
+    qcReview: { stepBundle: { productionOrderId: bigint | null; step: ProcessStep } | null };
+  }[];
+};
+
 type OrderForBom = {
   id: bigint;
   bomRevisionId: bigint;
@@ -134,6 +173,8 @@ const STEEL_ISSUE_RESERVATION_CUTOVER = new Date('2026-08-18T00:00:00.000Z');
  */
 @Injectable()
 export class SteelIssuesService {
+  private readonly logger = new Logger(SteelIssuesService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
@@ -496,6 +537,17 @@ export class SteelIssuesService {
     }
     await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'nhập đợt cắt');
 
+    // 1 đợt cắt = đúng 1 SKU (2026-09-21) - SKU phải thuộc đúng PI của lô sắt này.
+    const orderId = parseBigIntId(dto.productionOrderId);
+    const order = (await this.findOrdersForInvoice(issue.productionInvoiceId)).find(
+      (o) => o.id === orderId,
+    );
+    if (!order) {
+      throw new BadRequestException(
+        `SKU (lệnh sản xuất ${dto.productionOrderId}) không thuộc PI của lô sắt này`,
+      );
+    }
+
     const specIds = dto.segments.map((seg) => parseBigIntId(seg.segmentSpecId));
     if (new Set(specIds.map(String)).size !== specIds.length) {
       throw new BadRequestException(
@@ -505,7 +557,7 @@ export class SteelIssuesService {
 
     const [specs, allowedSpecIds] = await Promise.all([
       this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } }),
-      this.findBomSegmentSpecIds(issue.productionInvoiceId),
+      this.findBomSegmentSpecIds(issue.productionInvoiceId, order.bomRevisionId),
     ]);
 
     const specById = new Map(specs.map((sp) => [sp.id.toString(), sp]));
@@ -526,7 +578,7 @@ export class SteelIssuesService {
       // mức thì không phải thành phẩm).
       if (!allowedSpecIds.has(spec.id.toString())) {
         throw new BadRequestException(
-          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không có trong định mức của lệnh sản xuất này`,
+          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không có trong định mức của SKU đã chọn`,
         );
       }
     }
@@ -540,8 +592,13 @@ export class SteelIssuesService {
     //
     // Đợt đang mở (CUTTING) của lô này, nếu có, nhận thêm số đoạn lần này (cộng dồn qty theo
     // UNIQUE cutBundleId+segmentSpecId) - xem doc comment trên hàm. Không có thì mới tạo đợt mới.
+    // Chỉ gộp vào đợt đang mở CỦA CÙNG SKU (đợt của SKU khác là đợt riêng).
     const openBundle = await this.prisma.cutBundle.findFirst({
-      where: { steelIssueId: issue.id, status: CutBundleStatus.CUTTING },
+      where: {
+        steelIssueId: issue.id,
+        status: CutBundleStatus.CUTTING,
+        productionOrderId: order.id,
+      },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -569,6 +626,7 @@ export class SteelIssuesService {
       const created = await tx.cutBundle.create({
         data: {
           steelIssueId: issue.id,
+          productionOrderId: order.id,
           proposalPatternId: dto.proposalPatternId
             ? parseBigIntId(dto.proposalPatternId)
             : undefined,
@@ -590,6 +648,255 @@ export class SteelIssuesService {
     });
 
     return this.toBundleResponseDto(await this.findBundleOrThrow(bundleId.toString()));
+  }
+
+  /**
+   * Gán SKU cho đợt cắt CŨ (productionOrderId null, tạo trước 2026-09-21) - chỉ cần khi PI có NHIỀU SKU (PI 1 SKU
+   * đã tự tính cho SKU duy nhất). Gán thường CHỈ 1 lần (phía Phôi); ADMIN sửa được đợt đã gắn nhầm qua
+   * `reassign = true` (kiểm tra thêm: chuyển đi không làm SKU cũ có công đoạn phụ vượt số đã cắt còn lại).
+   * SKU phải thuộc đúng PI của lô sắt; mọi cỡ đoạn của đợt phải nằm trong định mức của SKU đó. Không đổi trạng
+   * thái/số lượng - chỉ đổi việc đợt này tính cho SKU nào. Mọi lần gán/sửa đều ghi audit log.
+   */
+  async assignCutBundleOrder(
+    bundleId: string,
+    productionOrderId: string,
+    actorId: string,
+    reassign = false,
+  ): Promise<CutBundleResponseDto> {
+    const bundle = await this.findBundleOrThrow(bundleId);
+    if (!reassign && bundle.productionOrderId !== null) {
+      throw new ConflictException(
+        `Đợt cắt ${bundleId} đã gắn SKU - chỉ ADMIN sửa được (reassign-order)`,
+      );
+    }
+    if (reassign && bundle.productionOrderId === null) {
+      throw new BadRequestException(`Đợt cắt ${bundleId} chưa gắn SKU - dùng chức năng gán thường`);
+    }
+    const piId = bundle.steelIssue.productionInvoiceId;
+    const piOrders = await this.findOrdersForInvoice(piId);
+    const order = piOrders.find((o) => o.id === parseBigIntId(productionOrderId));
+    if (!order) {
+      throw new BadRequestException(
+        `SKU (lệnh sản xuất ${productionOrderId}) không thuộc PI của đợt này`,
+      );
+    }
+    if (reassign && bundle.productionOrderId === order.id) {
+      throw new BadRequestException('SKU mới trùng SKU hiện tại của đợt');
+    }
+    const allowed = await this.findBomSegmentSpecIds(piId, order.bomRevisionId);
+    for (const seg of bundle.segments) {
+      if (!allowed.has(seg.segmentSpecId.toString())) {
+        throw new BadRequestException(
+          `Cỡ đoạn ${seg.segmentSpec.cutLengthMm.toString()}mm không có trong định mức của SKU đã chọn`,
+        );
+      }
+    }
+    // Sửa SKU: chuyển đợt đi khỏi SKU cũ không được làm số đã Uốn/Dập của SKU cũ vượt số đã cắt còn lại của nó.
+    if (reassign && bundle.productionOrderId !== null) {
+      const ofOld = this.skuScope(piOrders, bundle.productionOrderId);
+      const specIds = bundle.segments.map((sg) => sg.segmentSpecId);
+      const materialId = bundle.steelIssue.materialId;
+      const [catRows, stepRows] = await Promise.all([
+        this.prisma.cutPatternSegment.findMany({
+          where: {
+            segmentSpecId: { in: specIds },
+            cutBundle: { steelIssue: { productionInvoiceId: piId, materialId }, ...ofOld },
+          },
+          select: { segmentSpecId: true, qty: true },
+        }),
+        this.prisma.stepBatchSegment.findMany({
+          where: {
+            segmentSpecId: { in: specIds },
+            stepBatch: { productionInvoiceId: piId, materialId, ...ofOld },
+          },
+          select: { segmentSpecId: true, qty: true, stepBatch: { select: { step: true } } },
+        }),
+      ]);
+      for (const sg of bundle.segments) {
+        const catAfter =
+          catRows
+            .filter((r) => r.segmentSpecId === sg.segmentSpecId)
+            .reduce((t, r) => t + r.qty, 0) - sg.qty;
+        const byStep = new Map<string, number>();
+        for (const r of stepRows.filter((x) => x.segmentSpecId === sg.segmentSpecId)) {
+          byStep.set(r.stepBatch.step, (byStep.get(r.stepBatch.step) ?? 0) + r.qty);
+        }
+        const maxStep = Math.max(0, ...byStep.values());
+        if (maxStep > catAfter) {
+          throw new BadRequestException(
+            `Chuyển đợt này đi sẽ làm SKU cũ đã làm công đoạn phụ (${maxStep}) vượt số đã cắt còn lại (${catAfter}) ở cỡ ${sg.segmentSpec.cutLengthMm.toString()}mm - sửa các đợt công đoạn phụ trước`,
+          );
+        }
+      }
+    }
+    // updateMany kèm điều kiện SKU hiện tại: 2 người sửa cùng lúc thì chỉ 1 người thắng, người sau nhận 409.
+    const res = await this.prisma.cutBundle.updateMany({
+      where: { id: bundle.id, productionOrderId: bundle.productionOrderId },
+      data: { productionOrderId: order.id },
+    });
+    if (res.count === 0) {
+      throw new ConflictException(`Đợt cắt ${bundleId} vừa được gắn SKU bởi người khác`);
+    }
+    await this.writeAssignAudit(
+      actorId,
+      'CutBundle',
+      bundleId,
+      bundle.productionOrderId,
+      order.id,
+      reassign,
+    );
+    return this.toBundleResponseDto(await this.findBundleOrThrow(bundleId));
+  }
+
+  /**
+   * Gán SKU cho đợt công đoạn phụ CŨ (Uốn/Dập/..., productionOrderId null) - cùng quy tắc assignCutBundleOrder()
+   * (kể cả `reassign` cho ADMIN sửa nhầm và audit log), thêm: giữ bất biến "đã làm công đoạn phụ <= đã cắt" của
+   * SKU đích (nên gán các đợt Cắt trước rồi mới gán đợt Uốn).
+   */
+  async assignStepBundleOrder(
+    stepBundleId: string,
+    productionOrderId: string,
+    actorId: string,
+    reassign = false,
+  ): Promise<StepBundleResponseDto> {
+    const sb = await this.prisma.stepBundle.findUnique({
+      where: { id: parseBigIntId(stepBundleId) },
+      include: {
+        material: true,
+        batches: { include: { segments: { include: { segmentSpec: true } } } },
+      },
+    });
+    if (!sb) throw new NotFoundException(`Đợt gửi KCS ${stepBundleId} not found`);
+    if (!reassign && sb.productionOrderId !== null) {
+      throw new ConflictException(
+        `Đợt ${stepBundleId} đã gắn SKU - chỉ ADMIN sửa được (reassign-order)`,
+      );
+    }
+    if (reassign && sb.productionOrderId === null) {
+      throw new BadRequestException(`Đợt ${stepBundleId} chưa gắn SKU - dùng chức năng gán thường`);
+    }
+    const piOrders = await this.findOrdersForInvoice(sb.productionInvoiceId);
+    const order = piOrders.find((o) => o.id === parseBigIntId(productionOrderId));
+    if (!order) {
+      throw new BadRequestException(
+        `SKU (lệnh sản xuất ${productionOrderId}) không thuộc PI của đợt này`,
+      );
+    }
+    if (reassign && sb.productionOrderId === order.id) {
+      throw new BadRequestException('SKU mới trùng SKU hiện tại của đợt');
+    }
+    const allowed = await this.findStepSegmentSpecIds(
+      sb.productionInvoiceId,
+      sb.step,
+      order.bomRevisionId,
+    );
+    const qtyBySpec = new Map<string, number>();
+    for (const batch of sb.batches) {
+      for (const seg of batch.segments) {
+        const k = seg.segmentSpecId.toString();
+        if (!allowed.has(k)) {
+          throw new BadRequestException(
+            `Cỡ đoạn ${seg.segmentSpec.cutLengthMm.toString()}mm không cần công đoạn ${sb.step} theo định mức của SKU đã chọn`,
+          );
+        }
+        qtyBySpec.set(k, (qtyBySpec.get(k) ?? 0) + seg.qty);
+      }
+    }
+    const ofSku = this.skuScope(piOrders, order.id);
+    const specIds = [...qtyBySpec.keys()].map((k) => BigInt(k));
+
+    await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(
+        tx,
+        `step-batch:${sb.productionInvoiceId}:${sb.materialId}:${sb.step}:${order.id}`,
+      );
+      const [catRows, stepRows] = await Promise.all([
+        tx.cutPatternSegment.findMany({
+          where: {
+            segmentSpecId: { in: specIds },
+            cutBundle: {
+              steelIssue: {
+                productionInvoiceId: sb.productionInvoiceId,
+                materialId: sb.materialId,
+              },
+              ...ofSku,
+            },
+          },
+          select: { segmentSpecId: true, qty: true },
+        }),
+        tx.stepBatchSegment.findMany({
+          where: {
+            segmentSpecId: { in: specIds },
+            stepBatch: {
+              productionInvoiceId: sb.productionInvoiceId,
+              materialId: sb.materialId,
+              step: sb.step,
+              stepBundleId: { not: sb.id }, // đợt đang gán chưa tính - tránh đếm 2 lần ở PI 1 SKU
+              ...ofSku,
+            },
+          },
+          select: { segmentSpecId: true, qty: true },
+        }),
+      ]);
+      const sum = (rows: { segmentSpecId: bigint; qty: number }[], k: string) =>
+        rows.filter((r) => r.segmentSpecId.toString() === k).reduce((t, r) => t + r.qty, 0);
+      for (const [k, qty] of qtyBySpec) {
+        if (sum(stepRows, k) + qty > sum(catRows, k)) {
+          throw new BadRequestException(
+            `Gán đợt này cho SKU đã chọn sẽ làm số đã ${sb.step} vượt số đã cắt của SKU (cỡ đoạn ${k}) - gán các đợt Cắt của SKU trước`,
+          );
+        }
+      }
+      const res = await tx.stepBundle.updateMany({
+        where: { id: sb.id, productionOrderId: sb.productionOrderId },
+        data: { productionOrderId: order.id },
+      });
+      if (res.count === 0) {
+        throw new ConflictException(`Đợt ${stepBundleId} vừa được gắn SKU bởi người khác`);
+      }
+      await tx.stepBatch.updateMany({
+        where: { stepBundleId: sb.id },
+        data: { productionOrderId: order.id },
+      });
+    });
+    await this.writeAssignAudit(
+      actorId,
+      'StepBundle',
+      stepBundleId,
+      sb.productionOrderId,
+      order.id,
+      reassign,
+    );
+    return this.toStepBundleResponseDto(
+      { ...sb, productionOrderId: order.id },
+      sb.batches,
+      sb.material,
+    );
+  }
+
+  /** Ghi audit log việc gán/sửa SKU của 1 đợt (2026-09-21) - việc này không hoàn tác được từ giao diện Phôi nên
+   *  phải truy được ai đổi, lúc nào, từ SKU nào sang SKU nào. */
+  private async writeAssignAudit(
+    actorId: string,
+    tableName: 'CutBundle' | 'StepBundle',
+    recordId: string,
+    fromOrderId: bigint | null,
+    toOrderId: bigint,
+    reassign: boolean,
+  ): Promise<void> {
+    this.logger.log(
+      `${reassign ? 'Sửa' : 'Gán'} SKU ${fromOrderId ?? 'null'} -> ${toOrderId} cho ${tableName} ${recordId} (user ${actorId})`,
+    );
+    await this.prisma.auditLog.create({
+      data: {
+        userId: actorId,
+        action: AuditAction.UPDATE,
+        tableName,
+        recordId,
+        oldValue: { productionOrderId: fromOrderId?.toString() ?? null },
+        newValue: { productionOrderId: toOrderId.toString(), reassign },
+      },
+    });
   }
 
   /**
@@ -741,13 +1048,21 @@ export class SteelIssuesService {
     materialId: string,
     step: ProcessStep,
     submittedById: string,
+    productionOrderId: string,
   ): Promise<StepBundleResponseDto> {
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const materialBigId = parseBigIntId(materialId);
     await assertPiHasActiveFloor(this.prisma, invoice.id, 'gửi KCS công đoạn');
+    // Gửi KCS theo TỪNG SKU (2026-09-21): chỉ gom các đợt gia công của SKU này.
+    const piOrders = await this.findOrdersForInvoice(invoice.id);
+    const order = piOrders.find((o) => o.id === parseBigIntId(productionOrderId));
+    if (!order) {
+      throw new BadRequestException(`SKU (lệnh sản xuất ${productionOrderId}) không thuộc PI này`);
+    }
+    const ofSku = this.skuScope(piOrders, order.id);
 
     const created = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `step-bundle:${invoice.id}:${materialBigId}:${step}`);
+      await lockBusinessKey(tx, `step-bundle:${invoice.id}:${materialBigId}:${step}:${order.id}`);
       await assertPiHasActiveFloorLocked(tx, invoice.id, 'gửi KCS công đoạn');
 
       const pending = await tx.stepBatch.findMany({
@@ -756,6 +1071,7 @@ export class SteelIssuesService {
           materialId: materialBigId,
           step,
           stepBundleId: null,
+          ...ofSku,
         },
         include: { segments: { include: { segmentSpec: true } } },
       });
@@ -769,6 +1085,7 @@ export class SteelIssuesService {
           materialId: materialBigId,
           step,
           submittedById,
+          productionOrderId: order.id,
         },
       });
       await tx.stepBatch.updateMany({
@@ -872,35 +1189,249 @@ export class SteelIssuesService {
    * Tập segmentSpecId hợp lệ để khai cắt cho 1 PI = mọi cỡ đoạn xuất hiện trong định mức của mọi
    * ProductionOrder thuộc PI. Dùng để chặn khai cỡ ngoài định mức (xem recordCutBatch).
    */
-  private async findBomSegmentSpecIds(productionInvoiceId: bigint): Promise<Set<string>> {
+  private async findBomSegmentSpecIds(
+    productionInvoiceId: bigint,
+    onlyBomRevisionId?: bigint,
+  ): Promise<Set<string>> {
     const orders = await this.findOrdersForInvoice(productionInvoiceId);
     if (orders.length === 0) return new Set();
+    const revisionIds = onlyBomRevisionId
+      ? [onlyBomRevisionId]
+      : [...new Set(orders.map((o) => o.bomRevisionId))];
     const rows = await this.prisma.pieceBom.findMany({
-      where: { bomRevisionId: { in: [...new Set(orders.map((o) => o.bomRevisionId))] } },
+      where: { bomRevisionId: { in: revisionIds } },
       select: { segmentSpecId: true },
     });
     return new Set(rows.map((r) => r.segmentSpecId.toString()));
   }
 
-  /** Gộp nhiều PI - gọi lần lượt theo lô nhỏ (mỗi PI ~5 truy vấn) để không dồn hàng trăm truy vấn
-   *  cùng lúc lên DB. PI không tồn tại trả mảng rỗng thay vì làm hỏng cả lô. */
+  /**
+   * Gộp nhiều PI (2026-09-21) - "Tổng hợp lệnh SX" cần tiến độ Phôi = Cắt + MỌI công đoạn phụ của mọi PI. Tải dữ
+   * liệu của TẤT CẢ PI trong một lượt truy vấn (không lặp từng PI: DB ở xa, 25 PI từng tốn ~12 giây), rồi tính
+   * trong bộ nhớ bằng đúng các hàm của endpoint 1 PI. PI nào LỖI hoặc không tồn tại thì BỎ KHỎI kết quả (KHÔNG trả
+   * rỗng) - trả rỗng/thiếu công đoạn phụ sẽ làm Phôi trông như đã xong mà không ai biết; FE thấy thiếu khoá thì báo
+   * lỗi tải và coi Phôi của PI đó là "không biết". Lỗi được ghi log.
+   */
   async getPhoiProgressBatch(
     productionInvoiceIds: string[],
   ): Promise<Record<string, PhoiProgressItemResponseDto[]>> {
     const result: Record<string, PhoiProgressItemResponseDto[]> = {};
-    const CHUNK = 4;
-    for (let i = 0; i < productionInvoiceIds.length; i += CHUNK) {
-      const chunk = productionInvoiceIds.slice(i, i + CHUNK);
-      const items = await Promise.all(
-        chunk.map((id) =>
-          this.getPhoiProgress(id).catch(() => [] as PhoiProgressItemResponseDto[]),
-        ),
+    const ids: bigint[] = [];
+    for (const raw of productionInvoiceIds) {
+      try {
+        ids.push(parseBigIntId(raw));
+      } catch {
+        this.logger.warn(`getPhoiProgressBatch: id không hợp lệ '${raw}' - bỏ qua`);
+      }
+    }
+    if (ids.length === 0) return result;
+
+    const existing = await this.prisma.productionInvoice.findMany({
+      where: { id: { in: ids } },
+      select: { id: true },
+    });
+    const existingIds = existing.map((e) => e.id);
+    let inputs: Awaited<ReturnType<SteelIssuesService['loadPhoiInputs']>>;
+    try {
+      inputs = await this.loadPhoiInputs(existingIds);
+    } catch (err) {
+      this.logger.error(
+        'getPhoiProgressBatch: tải dữ liệu lỗi - không trả PI nào',
+        err instanceof Error ? err.stack : String(err),
       );
-      chunk.forEach((id, idx) => {
-        result[id] = items[idx];
-      });
+      return result;
+    }
+
+    for (const id of existingIds) {
+      const key = id.toString();
+      try {
+        const cutInputs = inputs.cut.get(key);
+        const items = cutInputs ? await this.computeCutProgress(cutInputs) : [];
+        const stepInputs = inputs.step.get(key);
+        if (stepInputs) {
+          const steps = new Set<ProcessStep>();
+          for (const pb of stepInputs.pieceBoms) {
+            for (const st of pb.processSteps) if (st !== ProcessStep.CAT) steps.add(st);
+          }
+          for (const step of steps) {
+            for (const it of await this.computeStepProgress(stepInputs, step)) {
+              const target = items.find((m) => m.materialId === it.materialId);
+              if (target) {
+                target.steps.push(new PhoiStepProgressDto({ step, segments: it.segments }));
+              }
+            }
+          }
+        }
+        result[key] = items;
+      } catch (err) {
+        this.logger.error(
+          `getPhoiProgressBatch: PI ${key} lỗi - bỏ khỏi kết quả`,
+          err instanceof Error ? err.stack : String(err),
+        );
+      }
     }
     return result;
+  }
+
+  /**
+   * Tải MỘT LẦN dữ liệu tiến độ Phôi (Cắt + công đoạn phụ) của nhiều PI, chia sẵn theo PI. Dùng chung cho
+   * getPhoiProgress()/getStepProgress() (1 PI) và getPhoiProgressBatch() (nhiều PI) để mọi nơi cùng 1 nguồn số liệu.
+   */
+  private async loadPhoiInputs(
+    invoiceIds: bigint[],
+  ): Promise<{ cut: Map<string, CutInputs>; step: Map<string, StepInputs> }> {
+    const cut = new Map<string, CutInputs>();
+    const step = new Map<string, StepInputs>();
+    if (invoiceIds.length === 0) return { cut, step };
+
+    const orderRows = await this.prisma.productionOrder.findMany({
+      where: { productionInvoiceItem: { productionInvoiceId: { in: invoiceIds } } },
+      select: {
+        id: true,
+        bomRevisionId: true,
+        quantity: true,
+        floorStage: true,
+        productionInvoiceItem: { select: { productionInvoiceId: true } },
+      },
+    });
+    const ordersByPi = new Map<string, OrderForBom[]>();
+    for (const o of orderRows) {
+      const key = o.productionInvoiceItem.productionInvoiceId!.toString();
+      const arr = ordersByPi.get(key) ?? [];
+      arr.push({
+        id: o.id,
+        bomRevisionId: o.bomRevisionId,
+        quantity: o.quantity,
+        floorStage: o.floorStage,
+      });
+      ordersByPi.set(key, arr);
+    }
+    const revisionIds = [...new Set(orderRows.map((o) => o.bomRevisionId))];
+
+    const [bomPieces, pieceBoms, issues, cutSegments, cutQc, stepSegments, stepQc] =
+      await Promise.all([
+        this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: revisionIds } } }),
+        this.prisma.pieceBom.findMany({
+          where: { bomRevisionId: { in: revisionIds } },
+          include: { segmentSpec: { include: { material: true } } },
+        }),
+        this.prisma.steelIssue.findMany({
+          where: { productionInvoiceId: { in: invoiceIds }, reworkOfId: null },
+          select: { productionInvoiceId: true, materialId: true, barCount: true },
+        }),
+        this.prisma.cutPatternSegment.findMany({
+          where: { cutBundle: { steelIssue: { productionInvoiceId: { in: invoiceIds } } } },
+          select: {
+            segmentSpecId: true,
+            qty: true,
+            cutBundle: {
+              select: {
+                productionOrderId: true,
+                steelIssue: { select: { productionInvoiceId: true } },
+              },
+            },
+          },
+        }),
+        // KCS chấm lỗi theo cỡ đoạn - lỗi CỘNG DỒN LỊCH SỬ (xem doc comment getPhoiProgress()).
+        this.prisma.qcReviewSegment.findMany({
+          where: { qcReview: { steelIssue: { productionInvoiceId: { in: invoiceIds } } } },
+          select: {
+            segmentSpecId: true,
+            failedQty: true,
+            qcReview: {
+              select: {
+                steelIssue: { select: { productionInvoiceId: true } },
+                cutBundle: { select: { productionOrderId: true } },
+              },
+            },
+          },
+        }),
+        this.prisma.stepBatchSegment.findMany({
+          where: { stepBatch: { productionInvoiceId: { in: invoiceIds } } },
+          select: {
+            segmentSpecId: true,
+            qty: true,
+            stepBatch: {
+              select: { productionOrderId: true, step: true, productionInvoiceId: true },
+            },
+          },
+        }),
+        // Lỗi công đoạn phụ lọc qua stepBundle (không còn thuộc đúng 1 SteelIssue) và đúng `step`.
+        this.prisma.qcReviewSegment.findMany({
+          where: { qcReview: { stepBundle: { productionInvoiceId: { in: invoiceIds } } } },
+          select: {
+            segmentSpecId: true,
+            failedQty: true,
+            qcReview: {
+              select: {
+                stepBundle: {
+                  select: { productionOrderId: true, step: true, productionInvoiceId: true },
+                },
+              },
+            },
+          },
+        }),
+      ]);
+
+    for (const [piKey, orders] of ordersByPi) {
+      const revs = new Set(orders.map((o) => o.bomRevisionId.toString()));
+      const piBomPieces = bomPieces.filter((bp) => revs.has(bp.bomRevisionId.toString()));
+      const piPieceBoms = pieceBoms.filter((pb) => revs.has(pb.bomRevisionId.toString()));
+      const piIssues = issues
+        .filter((i) => i.productionInvoiceId.toString() === piKey)
+        .map((i) => ({ materialId: i.materialId, barCount: i.barCount }));
+      cut.set(piKey, {
+        orders,
+        bomPieces: piBomPieces,
+        pieceBoms: piPieceBoms,
+        issues: piIssues,
+        cutSegments: cutSegments
+          .filter((cs) => cs.cutBundle.steelIssue.productionInvoiceId.toString() === piKey)
+          .map((cs) => ({
+            segmentSpecId: cs.segmentSpecId,
+            qty: cs.qty,
+            cutBundle: { productionOrderId: cs.cutBundle.productionOrderId },
+          })),
+        qcSegments: cutQc
+          .filter((qs) => qs.qcReview.steelIssue?.productionInvoiceId.toString() === piKey)
+          .map((qs) => ({
+            segmentSpecId: qs.segmentSpecId,
+            failedQty: qs.failedQty,
+            qcReview: { cutBundle: qs.qcReview.cutBundle },
+          })),
+      });
+      step.set(piKey, {
+        orders,
+        bomPieces: piBomPieces,
+        pieceBoms: piPieceBoms,
+        issues: piIssues,
+        stepSegments: stepSegments
+          .filter((ss) => ss.stepBatch.productionInvoiceId.toString() === piKey)
+          .map((ss) => ({
+            segmentSpecId: ss.segmentSpecId,
+            qty: ss.qty,
+            stepBatch: {
+              productionOrderId: ss.stepBatch.productionOrderId,
+              step: ss.stepBatch.step,
+            },
+          })),
+        qcSegments: stepQc
+          .filter((qs) => qs.qcReview.stepBundle?.productionInvoiceId.toString() === piKey)
+          .map((qs) => ({
+            segmentSpecId: qs.segmentSpecId,
+            failedQty: qs.failedQty,
+            qcReview: {
+              stepBundle: qs.qcReview.stepBundle
+                ? {
+                    productionOrderId: qs.qcReview.stepBundle.productionOrderId,
+                    step: qs.qcReview.stepBundle.step,
+                  }
+                : null,
+            },
+          })),
+      });
+    }
+    return { cut, step };
   }
 
   /**
@@ -917,34 +1448,34 @@ export class SteelIssuesService {
    */
   async getPhoiProgress(productionInvoiceId: string): Promise<PhoiProgressItemResponseDto[]> {
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
-    const orders = await this.findOrdersForInvoice(invoice.id);
+    const { cut } = await this.loadPhoiInputs([invoice.id]);
+    const inputs = cut.get(invoice.id.toString());
+    return inputs ? this.computeCutProgress(inputs) : [];
+  }
+
+  private async computeCutProgress(inputs: CutInputs): Promise<PhoiProgressItemResponseDto[]> {
+    const { orders, bomPieces, pieceBoms, issues, cutSegments, qcSegments } = inputs;
     if (orders.length === 0) return [];
 
-    const bomRevisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
-    const [bomPieces, pieceBoms, issues, cutSegments, qcSegments] = await Promise.all([
-      this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: bomRevisionIds } } }),
-      this.prisma.pieceBom.findMany({
-        where: { bomRevisionId: { in: bomRevisionIds } },
-        include: { segmentSpec: { include: { material: true } } },
-      }),
-      this.prisma.steelIssue.findMany({
-        where: { productionInvoiceId: invoice.id, reworkOfId: null },
-        select: { materialId: true, barCount: true },
-      }),
-      this.prisma.cutPatternSegment.findMany({
-        where: { cutBundle: { steelIssue: { productionInvoiceId: invoice.id } } },
-        select: { segmentSpecId: true, qty: true },
-      }),
-      // KCS chấm lỗi theo cỡ đoạn (2026-08-24, vòng 2) - "Đã cắt" giữ nguyên số THÔ (không trừ
-      // gì cả, xem doc comment PhoiProgressSegmentDto.done), phần lỗi tách hẳn sang trường
-      // "failed" riêng = Σ failedQty CỘNG DỒN LỊCH SỬ (2026-09-07 lần 2 - bỏ hẳn resolvedQty/cơ
-      // chế report-done+recheck, xem changelog "Bù đủ dồn về bảng tổng": "Lỗi" không tự giảm,
-      // Phôi bù bằng cách làm thêm rồi gửi KCS như đợt mới, "Còn lại" tự đúng vì cộng thêm "Đã").
-      this.prisma.qcReviewSegment.findMany({
-        where: { qcReview: { steelIssue: { productionInvoiceId: invoice.id } } },
-        select: { segmentSpecId: true, failedQty: true },
-      }),
-    ]);
+    // Khoá (cỡ đoạn, SKU) - SKU 'none' = đợt/đánh giá CŨ chưa gắn SKU (xem CutBundle.productionOrderId).
+    // PI chỉ có ĐÚNG 1 SKU thì đợt cắt CŨ chưa gắn SKU chắc chắn là của SKU đó (không mơ hồ) -> tính cho SKU đó;
+    // PI nhiều SKU thì không biết, giữ 'none' (không chia bừa).
+    const soleOrderId = orders.length === 1 ? orders[0].id : null;
+    const orderKey = (id: bigint | null | undefined) => {
+      const resolved = id ?? soleOrderId;
+      return resolved == null ? 'none' : resolved.toString();
+    };
+    const doneBySpecOrder = new Map<string, number>();
+    for (const cs of cutSegments) {
+      const k = `${cs.segmentSpecId}:${orderKey(cs.cutBundle.productionOrderId)}`;
+      doneBySpecOrder.set(k, (doneBySpecOrder.get(k) ?? 0) + cs.qty);
+    }
+    const failedBySpecOrder = new Map<string, number>();
+    for (const qs of qcSegments) {
+      const k = `${qs.segmentSpecId}:${orderKey(qs.qcReview.cutBundle?.productionOrderId)}`;
+      failedBySpecOrder.set(k, (failedBySpecOrder.get(k) ?? 0) + qs.failedQty);
+    }
+    const requiredBySpecOrder = new Map<string, number>();
 
     const issuedByMaterial = new Map<string, number>();
     for (const i of issues) {
@@ -1005,6 +1536,8 @@ export class SteelIssuesService {
         if (segments <= 0) continue;
         const specKey = registerSpec(row);
         requiredBySpec.set(specKey, (requiredBySpec.get(specKey) ?? 0) + segments);
+        const ok = `${specKey}:${order.id}`;
+        requiredBySpecOrder.set(ok, (requiredBySpecOrder.get(ok) ?? 0) + segments);
       }
     }
 
@@ -1041,6 +1574,23 @@ export class SteelIssuesService {
       }
       const rawDone = doneBySpec.get(specKey) ?? 0;
       const failed = failedBySpec.get(specKey) ?? 0;
+      // Tách theo SKU: mọi SKU có định mức / đã cắt / lỗi ở cỡ này, cộng thêm 'none' nếu có đợt cũ.
+      const orderKeys = new Set<string>();
+      for (const m of [requiredBySpecOrder, doneBySpecOrder, failedBySpecOrder]) {
+        for (const k of m.keys())
+          if (k.startsWith(`${specKey}:`)) orderKeys.add(k.slice(specKey.length + 1));
+      }
+      const byOrder = [...orderKeys]
+        .sort((a, b) => (a === 'none' ? 1 : b === 'none' ? -1 : Number(a) - Number(b)))
+        .map(
+          (ok) =>
+            new PhoiProgressOrderSegmentDto({
+              productionOrderId: ok === 'none' ? null : ok,
+              required: requiredBySpecOrder.get(`${specKey}:${ok}`) ?? 0,
+              done: doneBySpecOrder.get(`${specKey}:${ok}`) ?? 0,
+              failed: failedBySpecOrder.get(`${specKey}:${ok}`) ?? 0,
+            }),
+        );
       item.segments.push(
         new PhoiProgressSegmentDto({
           segmentSpecId: specKey,
@@ -1050,6 +1600,7 @@ export class SteelIssuesService {
           // tự tính required - (done - failed).
           done: rawDone,
           failed,
+          byOrder,
         }),
       );
     }
@@ -1075,33 +1626,39 @@ export class SteelIssuesService {
     step: ProcessStep,
   ): Promise<PhoiProgressItemResponseDto[]> {
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
-    const orders = await this.findOrdersForInvoice(invoice.id);
+    const { step: stepInputs } = await this.loadPhoiInputs([invoice.id]);
+    const inputs = stepInputs.get(invoice.id.toString());
+    return inputs ? this.computeStepProgress(inputs, step) : [];
+  }
+
+  private async computeStepProgress(
+    inputs: StepInputs,
+    step: ProcessStep,
+  ): Promise<PhoiProgressItemResponseDto[]> {
+    const { orders, bomPieces, issues } = inputs;
+    // Lọc theo công đoạn trong bộ nhớ (loader tải chung mọi công đoạn của các PI trong 1 lượt).
+    const pieceBoms = inputs.pieceBoms.filter((pb) => pb.processSteps.includes(step));
+    const stepSegments = inputs.stepSegments.filter((ss) => ss.stepBatch.step === step);
+    const qcSegments = inputs.qcSegments.filter((qs) => qs.qcReview.stepBundle?.step === step);
     if (orders.length === 0) return [];
 
-    const bomRevisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
-    const [bomPieces, pieceBoms, issues, stepSegments, qcSegments] = await Promise.all([
-      this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: bomRevisionIds } } }),
-      this.prisma.pieceBom.findMany({
-        where: { bomRevisionId: { in: bomRevisionIds }, processSteps: { has: step } },
-        include: { segmentSpec: { include: { material: true } } },
-      }),
-      this.prisma.steelIssue.findMany({
-        where: { productionInvoiceId: invoice.id, reworkOfId: null },
-        select: { materialId: true, barCount: true },
-      }),
-      this.prisma.stepBatchSegment.findMany({
-        where: { stepBatch: { step, productionInvoiceId: invoice.id } },
-        select: { segmentSpecId: true, qty: true },
-      }),
-      // Lỗi CỘNG DỒN LỊCH SỬ (2026-09-07 lần 2, xem getPhoiProgress() doc comment) - lọc qua
-      // stepBundle (không phải steelIssue nữa, StepBundle không còn thuộc đúng 1 SteelIssue) VÀ
-      // đúng `step` (sửa luôn 1 thiếu sót cũ: trước đây không lọc step, cộng lẫn lỗi của mọi công
-      // đoạn khác vào cùng 1 con số).
-      this.prisma.qcReviewSegment.findMany({
-        where: { qcReview: { stepBundle: { productionInvoiceId: invoice.id, step } } },
-        select: { segmentSpecId: true, failedQty: true },
-      }),
-    ]);
+    // Tách theo SKU (2026-09-21) - cùng quy tắc getPhoiProgress(): PI 1 SKU thì đợt cũ chưa gắn SKU tính cho SKU đó.
+    const soleOrderId = orders.length === 1 ? orders[0].id : null;
+    const orderKey = (id: bigint | null | undefined) => {
+      const resolved = id ?? soleOrderId;
+      return resolved == null ? 'none' : resolved.toString();
+    };
+    const doneBySpecOrder = new Map<string, number>();
+    for (const ss of stepSegments) {
+      const k = `${ss.segmentSpecId}:${orderKey(ss.stepBatch.productionOrderId)}`;
+      doneBySpecOrder.set(k, (doneBySpecOrder.get(k) ?? 0) + ss.qty);
+    }
+    const failedBySpecOrder = new Map<string, number>();
+    for (const qs of qcSegments) {
+      const k = `${qs.segmentSpecId}:${orderKey(qs.qcReview.stepBundle?.productionOrderId)}`;
+      failedBySpecOrder.set(k, (failedBySpecOrder.get(k) ?? 0) + qs.failedQty);
+    }
+    const requiredBySpecOrder = new Map<string, number>();
 
     const issuedByMaterial = new Map<string, number>();
     for (const i of issues) {
@@ -1157,6 +1714,8 @@ export class SteelIssuesService {
         if (segments <= 0) continue;
         const specKey = registerSpec(row);
         requiredBySpec.set(specKey, (requiredBySpec.get(specKey) ?? 0) + segments);
+        const ok = `${specKey}:${order.id}`;
+        requiredBySpecOrder.set(ok, (requiredBySpecOrder.get(ok) ?? 0) + segments);
       }
     }
 
@@ -1196,6 +1755,12 @@ export class SteelIssuesService {
           required: requiredBySpec.get(specKey) ?? 0,
           done: doneBySpec.get(specKey) ?? 0,
           failed: failedBySpec.get(specKey) ?? 0,
+          byOrder: this.buildOrderBreakdown(
+            specKey,
+            requiredBySpecOrder,
+            doneBySpecOrder,
+            failedBySpecOrder,
+          ),
         }),
       );
     }
@@ -1225,6 +1790,15 @@ export class SteelIssuesService {
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const materialBigId = parseBigIntId(dto.materialId);
     await assertPiHasActiveFloor(this.prisma, invoice.id, 'nhập công đoạn chi tiết');
+    // 1 đợt = đúng 1 SKU (2026-09-21) - SKU phải thuộc PI này.
+    const piOrders = await this.findOrdersForInvoice(invoice.id);
+    const order = piOrders.find((o) => o.id === parseBigIntId(dto.productionOrderId));
+    if (!order) {
+      throw new BadRequestException(
+        `SKU (lệnh sản xuất ${dto.productionOrderId}) không thuộc PI này`,
+      );
+    }
+    const ofSku = this.skuScope(piOrders, order.id);
     const requiredSteps = await this.resolveRequiredSteps(invoice.id, materialBigId);
     if (!requiredSteps.includes(dto.step)) {
       throw new BadRequestException(
@@ -1238,7 +1812,7 @@ export class SteelIssuesService {
     }
 
     const [allowedSpecIds, specs] = await Promise.all([
-      this.findStepSegmentSpecIds(invoice.id, dto.step),
+      this.findStepSegmentSpecIds(invoice.id, dto.step, order.bomRevisionId),
       this.prisma.segmentSpec.findMany({
         where: { id: { in: specIds }, materialId: materialBigId },
       }),
@@ -1252,7 +1826,7 @@ export class SteelIssuesService {
       }
       if (!allowedSpecIds.has(specKey)) {
         throw new BadRequestException(
-          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không cần công đoạn ${dto.step} theo định mức`,
+          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không cần công đoạn ${dto.step} theo định mức của SKU đã chọn`,
         );
       }
     }
@@ -1266,7 +1840,10 @@ export class SteelIssuesService {
     // $transaction + lockBusinessKey theo (invoice, material, step) trước khi đọc lại
     // stepDoneSoFar, giữ khoá tới khi ghi xong dòng mới.
     const created = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `step-batch:${invoice.id}:${materialBigId}:${dto.step}`);
+      await lockBusinessKey(
+        tx,
+        `step-batch:${invoice.id}:${materialBigId}:${dto.step}:${order.id}`,
+      );
       await assertPiHasActiveFloorLocked(tx, invoice.id, 'nhập công đoạn chi tiết');
 
       const [catRows, stepDoneRows] = await Promise.all([
@@ -1275,6 +1852,7 @@ export class SteelIssuesService {
             segmentSpecId: { in: specIds },
             cutBundle: {
               steelIssue: { productionInvoiceId: invoice.id, materialId: materialBigId },
+              ...ofSku,
             },
           },
           select: { segmentSpecId: true, qty: true },
@@ -1286,6 +1864,7 @@ export class SteelIssuesService {
               productionInvoiceId: invoice.id,
               materialId: materialBigId,
               step: dto.step,
+              ...ofSku,
             },
           },
           select: { segmentSpecId: true, qty: true },
@@ -1310,7 +1889,7 @@ export class SteelIssuesService {
         const stepDoneSoFar = stepDoneBySpec.get(specKey) ?? 0;
         if (stepDoneSoFar + seg.qty > catDone) {
           throw new BadRequestException(
-            `Cỡ đoạn ${spec.cutLengthMm.toString()}mm: đã cắt ${catDone} đoạn (cả PI), đã báo ` +
+            `Cỡ đoạn ${spec.cutLengthMm.toString()}mm: đã cắt ${catDone} đoạn (của SKU này), đã báo ` +
               `${dto.step} ${stepDoneSoFar} đoạn - không thể báo thêm ${seg.qty} (vượt số đã cắt)`,
           );
         }
@@ -1321,6 +1900,7 @@ export class SteelIssuesService {
           productionInvoiceId: invoice.id,
           materialId: materialBigId,
           step: dto.step,
+          productionOrderId: order.id,
           segments: {
             create: dto.segments.map((seg) => ({
               segmentSpecId: parseBigIntId(seg.segmentSpecId),
@@ -1346,18 +1926,65 @@ export class SteelIssuesService {
     });
   }
 
+  /** Tách (cỡ đoạn) theo SKU từ 3 map khoá `${specKey}:${orderKey|'none'}` - dùng cho getStepProgress(). */
+  private buildOrderBreakdown(
+    specKey: string,
+    requiredMap: Map<string, number>,
+    doneMap: Map<string, number>,
+    failedMap: Map<string, number>,
+  ): PhoiProgressOrderSegmentDto[] {
+    const orderKeys = new Set<string>();
+    for (const m of [requiredMap, doneMap, failedMap]) {
+      for (const k of m.keys())
+        if (k.startsWith(`${specKey}:`)) orderKeys.add(k.slice(specKey.length + 1));
+    }
+    return [...orderKeys]
+      .sort((a, b) => (a === 'none' ? 1 : b === 'none' ? -1 : Number(a) - Number(b)))
+      .map(
+        (ok) =>
+          new PhoiProgressOrderSegmentDto({
+            productionOrderId: ok === 'none' ? null : ok,
+            required: requiredMap.get(`${specKey}:${ok}`) ?? 0,
+            done: doneMap.get(`${specKey}:${ok}`) ?? 0,
+            failed: failedMap.get(`${specKey}:${ok}`) ?? 0,
+          }),
+      );
+  }
+
+  /**
+   * Điều kiện Prisma "đợt này thuộc SKU `orderId`" (2026-09-21): đợt gắn đúng SKU; riêng PI chỉ có ĐÚNG 1 SKU
+   * thì đợt CŨ chưa gắn SKU (productionOrderId null) chắc chắn là của SKU đó nên tính luôn (không mơ hồ).
+   * PI nhiều SKU: đợt cũ không biết của SKU nào nên KHÔNG tính cho SKU nào (không chia bừa).
+   */
+  private skuScope(
+    piOrders: OrderForBom[],
+    orderId: bigint,
+  ): { OR: { productionOrderId: bigint | null }[] } {
+    return {
+      OR: [
+        { productionOrderId: orderId },
+        ...(piOrders.length === 1 ? [{ productionOrderId: null }] : []),
+      ],
+    };
+  }
+
   /** Tập segmentSpecId hợp lệ để khai công đoạn `step` cho 1 PI - mirror findBomSegmentSpecIds()
    *  nhưng lọc thêm processSteps chứa đúng step, vì không phải cỡ đoạn nào cũng cần MỌI công đoạn
    *  (khác Cắt, luôn bắt buộc cho mọi cỡ). */
   private async findStepSegmentSpecIds(
     productionInvoiceId: bigint,
     step: ProcessStep,
+    onlyBomRevisionId?: bigint,
   ): Promise<Set<string>> {
     const orders = await this.findOrdersForInvoice(productionInvoiceId);
     if (orders.length === 0) return new Set();
     const rows = await this.prisma.pieceBom.findMany({
       where: {
-        bomRevisionId: { in: [...new Set(orders.map((o) => o.bomRevisionId))] },
+        bomRevisionId: {
+          in: onlyBomRevisionId
+            ? [onlyBomRevisionId]
+            : [...new Set(orders.map((o) => o.bomRevisionId))],
+        },
         processSteps: { has: step },
       },
       select: { segmentSpecId: true },
@@ -1462,10 +2089,12 @@ export class SteelIssuesService {
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const orders = await this.prisma.productionOrder.findMany({
       where: { productionInvoiceItem: { productionInvoiceId: invoice.id } },
+      orderBy: { id: 'asc' },
       select: {
+        id: true,
         poNumber: true,
         quantity: true,
-        mfgProduct: { select: { name: true } },
+        mfgProduct: { select: { name: true, factoryCode: true } },
         productionInvoiceItem: {
           select: {
             salesOrder: { select: { orderCode: true } },
@@ -1477,6 +2106,8 @@ export class SteelIssuesService {
     return orders.map(
       (o) =>
         new PiOrderSummaryResponseDto({
+          productionOrderId: o.id.toString(),
+          sku: o.mfgProduct.factoryCode,
           poNumber: o.poNumber,
           salesOrderCode: o.productionInvoiceItem?.salesOrder?.orderCode ?? null,
           productName: o.mfgProduct.name,
@@ -1827,6 +2458,7 @@ export class SteelIssuesService {
       requiredSteps,
       completedAt: bundle.completedAt,
       createdAt: bundle.createdAt,
+      productionOrderId: bundle.productionOrderId?.toString() ?? null,
       segments: bundle.segments.map(
         (s) =>
           new CutPatternSegmentResponseDto({
@@ -1850,6 +2482,7 @@ export class SteelIssuesService {
       status: StepBundleStatus;
       submittedAt: Date;
       submittedById: string;
+      productionOrderId: bigint | null;
     },
     batches: {
       segments: {
@@ -1881,6 +2514,7 @@ export class SteelIssuesService {
       status: bundle.status,
       submittedAt: bundle.submittedAt,
       submittedById: bundle.submittedById,
+      productionOrderId: bundle.productionOrderId?.toString() ?? null,
       segments: [...bySpec.entries()].map(
         ([segmentSpecId, v]) =>
           new StepBundleSegmentResponseDto({

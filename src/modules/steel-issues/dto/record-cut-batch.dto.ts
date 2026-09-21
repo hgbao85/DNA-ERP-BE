@@ -67,6 +67,15 @@ export class RecordCutBatchDto {
   @IsString()
   proposalPatternId?: string;
 
+  /**
+   * SKU (ProductionOrder) mà đợt cắt này làm ra đoạn cho (2026-09-21, thống kê tiến độ Phôi THẬT theo
+   * từng SKU trong PI). BẮT BUỘC: 1 đợt = đúng 1 SKU, cắt cho 2 SKU thì gọi 2 lần. Phải thuộc đúng PI
+   * của lô sắt; cỡ đoạn khai phải nằm trong định mức của CHÍNH SKU này.
+   */
+  @ApiProperty()
+  @IsString()
+  productionOrderId!: string;
+
   @ApiProperty({ type: [CutBatchSegmentDto] })
   @IsArray()
   @ArrayMinSize(1)

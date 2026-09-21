@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose, Type } from 'class-transformer';
 
 @Exclude()
@@ -32,6 +32,8 @@ export class StepBundleResponseDto {
   @Expose() @ApiProperty() status!: string;
   @Expose() @ApiProperty() submittedAt!: Date;
   @Expose() @ApiProperty() submittedById!: string;
+  /** SKU (ProductionOrder) của đợt gửi KCS này (2026-09-21). null = đợt CŨ chưa gắn SKU. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) productionOrderId!: string | null;
   @Expose()
   @Type(() => StepBundleSegmentResponseDto)
   @ApiProperty({ type: [StepBundleSegmentResponseDto] })
