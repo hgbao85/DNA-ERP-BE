@@ -29,6 +29,7 @@ import { ExternalApiHttpError, ExternalApiService } from '../external/external-a
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import {
   CuttingProposalDisplayStatus,
+  CuttingProposalPendingMaterialResponseDto,
   CuttingProposalPieceSummaryResponseDto,
   CuttingProposalResponseDto,
 } from './dto/cutting-proposal-response.dto';
@@ -73,10 +74,18 @@ interface SolverProposeResponse {
     /// Thuần tổng hợp cho hiển thị nhanh; cổng chặn tự-duyệt đọc purchase_plan[].over_threshold
     /// (per-dòng) trực tiếp, không đọc field này (xem autoApproveBlockReason).
     any_over_threshold: boolean;
+    /// Tổng thời gian giải THẬT cộng dồn mọi loại sắt (KHÔNG tính bung BOM/dựng response/network,
+    /// xem api/views.py::total_solve_seconds phía solver, 2026-09-22) - hiện ở mức tổng quan
+    /// (ngoài danh sách), tách bạch với solve_seconds riêng từng dòng bên dưới. Optional vì
+    /// phương án tính TRƯỚC khi có field này (backfill cũ) không có.
+    total_solve_seconds?: number;
   };
   purchase_plan: Array<{
     material: string;
     feasible: boolean;
+    /// Thời gian giải THẬT của riêng loại sắt này (giây) - xem total_solve_seconds ở summary.
+    /// Optional cùng lý do trên.
+    solve_seconds?: number;
     /// true nếu loại này feasible nhưng vượt max_waste_percentage của CHÍNH nó (riêng hoặc mặc
     /// định). Từ 2026-08-18 (review sau khi bỏ auto_scan): CHẶN tự-duyệt (xem
     /// autoApproveBlockReason) - trước đó cờ này bị bỏ qua, hệ thống từng tự duyệt/trừ kho/tạo
@@ -409,7 +418,36 @@ export class CuttingProposalsService {
       where: { id: SYSTEM_CONFIG_ID },
       select: { solverMaxWastePercentage: true },
     });
-    return this.toDetailResponseDto(proposal, config.solverMaxWastePercentage.toNumber());
+    const dto = this.toDetailResponseDto(proposal, config.solverMaxWastePercentage.toNumber());
+    // `lines` chỉ có khi solver đã trả lời (saveSuccess ghi cutting_proposal_lines) - trong lúc
+    // CALCULATING, dựng danh sách "sẽ giải những loại nào" từ requestParams đã ghi sớm (xem
+    // runSolverAndSave) thay vì để FE thấy màn trắng trơn (phản hồi UI/UX 2026-09-22).
+    if (dto.displayStatus === 'CALCULATING' && proposal.requestParams) {
+      dto.pendingMaterials = await this.buildPendingMaterials(proposal.requestParams);
+    }
+    return dto;
+  }
+
+  private async buildPendingMaterials(
+    requestParams: Prisma.JsonValue,
+  ): Promise<CuttingProposalPendingMaterialResponseDto[]> {
+    const bom = (requestParams as { bom?: Array<{ material: string }> } | null)?.bom ?? [];
+    const materialIds = [...new Set(bom.map((row) => BigInt(row.material)))];
+    if (materialIds.length === 0) return [];
+    const materials = await this.prisma.material.findMany({
+      where: { id: { in: materialIds } },
+      select: { id: true, code: true, name: true },
+    });
+    return materials
+      .map(
+        (m) =>
+          new CuttingProposalPendingMaterialResponseDto({
+            materialId: m.id.toString(),
+            materialCode: m.code,
+            materialName: m.name,
+          }),
+      )
+      .sort((a, b) => a.materialCode.localeCompare(b.materialCode));
   }
 
   /**
@@ -1382,7 +1420,15 @@ export class CuttingProposalsService {
         max_length: config.solverMaxLengthMm,
         length_step: config.solverLengthStepMm,
         time_limit_seconds: timeLimitSeconds,
-        stop_on_first: false,
+        // true (2026-09-22, đổi từ false): vét cạn DỪNG NGAY tại chiều dài ĐẦU TIÊN đạt ngưỡng
+        // hao hụt, không quét hết dải để tìm chiều dài TỐT NHẤT - xem de_xuat_logic.py::
+        // optimize_one_material dòng ~616-619. Đo thật 2026-09-22 (GHE-J55 thật, 7 loại sắt,
+        // dải 5000-6000/bước 50mm): false tốn 1302s (21+ phút) vì mỗi điểm quét đều chạy gần hết
+        // time_limit_seconds dù đã có điểm đạt ngưỡng từ sớm - giảm mật độ quét (bước 10->50mm)
+        // gần như không giúp gì vì nút thắt không phải SỐ điểm mà là MỖI điểm cứ chạy hết giờ.
+        // Đánh đổi: chiều dài tìm được là "đạt yêu cầu" (≤ ngưỡng %), không còn đảm bảo là chiều
+        // dài hao hụt THẤP NHẤT có thể trong dải - chấp nhận được vì ngưỡng % đã đủ chặt.
+        stop_on_first: true,
       };
 
       const baseUrl = this.configService.get('solver.baseUrl', { infer: true });
@@ -1426,6 +1472,16 @@ export class CuttingProposalsService {
             `thử lại - không tự giảm số SKU gộp, đó là quyết định của KHSX/Sếp.`,
         );
       }
+
+      // Ghi requestParams NGAY TỪ ĐÂY (trước khi gọi solver), không đợi tới saveSuccess() -
+      // 2026-09-22, theo phản hồi UI/UX: màn "Chi tiết đề xuất cắt sắt" trong lúc đang tính trước
+      // đây trắng trơn "Chưa có dữ liệu (đang tính)" dù BE đã biết SẴN danh sách loại sắt cần giải
+      // (bomRows dựng xong từ đầu hàm này). saveSuccess() vẫn ghi đè lại y hệt field này khi xong -
+      // ghi 2 lần vô hại, KHÔNG đổi hành vi luồng thành công/thất bại nào khác.
+      await this.prisma.cuttingProposal.update({
+        where: { id: proposalId },
+        data: { requestParams: baseRequestBody as unknown as Prisma.InputJsonValue },
+      });
 
       const callSolver = (body: typeof baseRequestBody & { auto_scan: boolean }) =>
         this.externalApiService.post<SolverProposeResponse>(
@@ -2367,6 +2423,7 @@ export class CuttingProposalsService {
             totalBarsAll: response.summary.total_bars_all,
             totalWasteMm: response.summary.total_waste_mm,
             wastePercentage: response.summary.waste_percentage,
+            totalSolveSeconds: response.summary.total_solve_seconds ?? null,
             completedAt: new Date(),
             hasInfeasibleLine,
             hasOverThreshold,
@@ -2403,6 +2460,7 @@ export class CuttingProposalsService {
               timedOut: item.timed_out,
               maxWastePctThreshold: item.max_waste_pct_threshold,
               overThreshold: item.over_threshold,
+              solveSeconds: item.solve_seconds ?? null,
             },
           });
 
@@ -2604,6 +2662,7 @@ export class CuttingProposalsService {
       totalBarsAll: proposal.totalBarsAll,
       totalWasteMm: proposal.totalWasteMm ? Number(proposal.totalWasteMm) : null,
       wastePercentage: proposal.wastePercentage ? Number(proposal.wastePercentage) : null,
+      totalSolveSeconds: proposal.totalSolveSeconds ? Number(proposal.totalSolveSeconds) : null,
       errorMessage: proposal.errorMessage,
       requestedAt: proposal.requestedAt,
       completedAt: proposal.completedAt,
@@ -2653,6 +2712,7 @@ export class CuttingProposalsService {
         timedOut: line.timedOut,
         maxWastePctThreshold: line.maxWastePctThreshold ? Number(line.maxWastePctThreshold) : null,
         overThreshold: line.overThreshold,
+        solveSeconds: line.solveSeconds ? Number(line.solveSeconds) : null,
         displayReason: this.lineDisplayReason(line),
         patterns: line.patterns.map((pattern) => ({
           id: pattern.id.toString(),

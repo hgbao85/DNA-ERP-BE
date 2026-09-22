@@ -128,6 +128,9 @@ export class CuttingProposalLineResponseDto {
   @Expose() @ApiProperty() usedWasteOverride!: boolean;
   /// true = feasible NHƯNG vượt maxWastePctThreshold - null khi feasible=false.
   @Expose() @ApiPropertyOptional({ nullable: true }) overThreshold!: boolean | null;
+  /// Thời gian giải THẬT của riêng loại sắt này (giây) - xem CuttingProposalResponseDto.
+  /// totalSolveSeconds cho tổng cả đợt. null với phương án tính TRƯỚC khi có field này.
+  @Expose() @ApiPropertyOptional({ nullable: true }) solveSeconds!: number | null;
   /// Câu tiếng Việt ĐÃ DỰNG SẴN cho dòng này (xem CuttingProposalsService.lineDisplayReason) -
   /// null khi dòng này không cần xử lý gì (feasible & không vượt ngưỡng). FE ưu tiên hiển thị
   /// field này thay vì tự ghép `reason`/`bestAchievable`/`timedOut` lại với nhau.
@@ -138,6 +141,17 @@ export class CuttingProposalLineResponseDto {
   patterns!: CuttingProposalPatternResponseDto[];
 
   constructor(partial: Partial<CuttingProposalLineResponseDto>) {
+    Object.assign(this, partial);
+  }
+}
+
+@Exclude()
+export class CuttingProposalPendingMaterialResponseDto {
+  @Expose() @ApiProperty() materialId!: string;
+  @Expose() @ApiProperty() materialCode!: string;
+  @Expose() @ApiProperty() materialName!: string;
+
+  constructor(partial: Partial<CuttingProposalPendingMaterialResponseDto>) {
     Object.assign(this, partial);
   }
 }
@@ -169,6 +183,10 @@ export class CuttingProposalResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) totalBarsAll!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) totalWasteMm!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) wastePercentage!: number | null;
+  /// Tổng thời gian giải THẬT cộng dồn mọi loại sắt (giây) - hiện ở mức tổng quan/ngoài danh
+  /// sách, tách bạch với lines[].solveSeconds riêng từng dòng (chỉ có ở gọi chi tiết findOne()).
+  /// null với phương án tính TRƯỚC khi có field này.
+  @Expose() @ApiPropertyOptional({ nullable: true }) totalSolveSeconds!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) errorMessage!: string | null;
   @Expose() @ApiProperty() requestedAt!: Date;
   @Expose() @ApiPropertyOptional({ nullable: true }) completedAt!: Date | null;
@@ -177,6 +195,14 @@ export class CuttingProposalResponseDto {
   @ApiPropertyOptional({ type: [CuttingProposalLineResponseDto] })
   @Type(() => CuttingProposalLineResponseDto)
   lines?: CuttingProposalLineResponseDto[];
+  /// Danh sách loại sắt SẼ được giải, hiện NGAY khi displayStatus=CALCULATING (không cần đợi
+  /// solver trả lời) - đọc từ `requestParams.bom` đã ghi sớm (xem runSolverAndSave). null/rỗng khi
+  /// đã có `lines` thật (tính xong) hoặc phương án cũ tính trước khi có field này. FE dùng để hiện
+  /// sẵn khung "đang tính" cho từng loại thay vì màn trắng trơn.
+  @Expose()
+  @ApiPropertyOptional({ type: [CuttingProposalPendingMaterialResponseDto], nullable: true })
+  @Type(() => CuttingProposalPendingMaterialResponseDto)
+  pendingMaterials?: CuttingProposalPendingMaterialResponseDto[] | null;
 
   constructor(partial: Partial<CuttingProposalResponseDto>) {
     Object.assign(this, partial);

@@ -1564,6 +1564,11 @@ model CuttingProposal {
   /// tính từ cutLengthMm (nay Decimal) nên kế thừa cùng độ chính xác thập phân, xem SegmentSpec.
   totalWasteMm        Decimal?              @db.Decimal(8, 1)
   wastePercentage     Decimal?              @db.Decimal(6, 3)
+  /// Tổng thời gian giải THẬT cộng dồn mọi loại sắt (giây, KHÔNG tính bung BOM/dựng response/
+  /// network) - từ `summary.total_solve_seconds` phía solver (2026-09-22). Hiện ở mức tổng quan
+  /// (ngoài danh sách/header chi tiết), tách bạch với CuttingProposalLine.solveSeconds riêng
+  /// từng dòng. null với phương án tính TRƯỚC khi có field này.
+  totalSolveSeconds   Decimal?              @db.Decimal(10, 2)
   /// Lý do lỗi/timeout/không khả thi khi status=FAILED (bao gồm failing_materials nếu có).
   errorMessage        String?
   requestedAt         DateTime              @default(now())
@@ -1654,6 +1659,10 @@ model CuttingProposalLine {
   /// SegmentSpec.
   totalWasteMm         Decimal? @db.Decimal(7, 1)
   wastePercentage      Decimal? @db.Decimal(6, 3)
+  /// Thời gian giải THẬT của riêng loại sắt này (giây) - từ `purchase_plan[].solve_seconds`
+  /// phía solver (2026-09-22, xem CuttingProposal.totalSolveSeconds cho tổng cả đợt). Có ở CẢ 2
+  /// nhánh feasible/infeasible. null với phương án tính TRƯỚC khi có field này.
+  solveSeconds         Decimal? @db.Decimal(8, 2)
   /// Tổng chiều dài mẩu sắt còn NGUYÊN (chưa cắt, từ cây cắt dở) của loại sắt này - nhập kho,
   /// cắt được cỡ bất kỳ sau này. KHÔNG phải phế liệu/hao hụt. Phôi cần biết số này để nhập kho
   /// đúng, xem thêm CuttingProposalPattern.mauNguyenMm (chi tiết cây nào cắt dở). Decimal không

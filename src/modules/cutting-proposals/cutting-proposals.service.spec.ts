@@ -456,7 +456,7 @@ describe('CuttingProposalsService', () => {
           ],
           stock_lengths: '5850 6000',
           auto_scan: true, // Sếp mở lại 2026-08-26, xem test riêng dưới
-          stop_on_first: false,
+          stop_on_first: true, // 2026-09-22, xem comment tại nơi gửi request
         }),
         { headers: { Authorization: 'Bearer test-key' } },
         300_000,
@@ -468,7 +468,9 @@ describe('CuttingProposalsService', () => {
         externalApiService.post.mock.calls[0] as unknown as [string, Record<string, unknown>]
       )[1];
       expect(bodySent).not.toHaveProperty('max_waste_percentage_by_material');
-      const updateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
+      // calls[0] = ghi requestParams SỚM trước khi gọi solver (2026-09-22, xem
+      // runSolverAndSave) - kết quả cuối cùng giờ là calls[1], không phải calls[0] nữa.
+      const updateCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
         { where: { id: bigint }; data: { status: CuttingProposalStatus } },
       ];
       expect(updateCall[0].where).toEqual({ id: 2n });
@@ -1073,8 +1075,9 @@ describe('CuttingProposalsService', () => {
       expect(body.auto_scan).toBe(true);
       // Ngưỡng riêng theo vật tư vẫn phải gửi đúng (D.hao-hut-sat).
       expect(body.max_waste_percentage_by_material).toEqual({ '200': 0.3 });
-      // Lưu ĐÚNG kết quả lần gọi duy nhất, không có khái niệm "kết quả lần 2".
-      const updateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
+      // Lưu ĐÚNG kết quả lần gọi duy nhất, không có khái niệm "kết quả lần 2". calls[0] = ghi
+      // requestParams SỚM trước khi gọi solver (2026-09-22) - kết quả cuối là calls[1].
+      const updateCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
         { data: { wastePercentage: number } },
       ];
       expect(updateCall[0].data.wastePercentage).toBe(9.61);
@@ -1395,7 +1398,9 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      const failCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
+      // calls[0] = ghi requestParams SỚM trước khi gọi solver (2026-09-22) - lỗi từ solver
+      // (catch) ghi ở calls[1].
+      const failCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
         { where: { id: bigint }; data: { status: CuttingProposalStatus; errorMessage: string } },
       ];
       expect(failCall[0].where).toEqual({ id: 2n });
@@ -1536,7 +1541,9 @@ describe('CuttingProposalsService', () => {
       expect(lineCall[0].data.maxWastePctThreshold).toBe(1);
       expect(lineCall[0].data.overThreshold).toBeUndefined();
 
-      const proposalUpdateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
+      // calls[0] = ghi requestParams SỚM trước khi gọi solver (2026-09-22) - kết quả cuối là
+      // calls[1].
+      const proposalUpdateCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
         { data: { hasInfeasibleLine?: boolean; hasOverThreshold?: boolean } },
       ];
       expect(proposalUpdateCall[0].data.hasInfeasibleLine).toBe(true);
@@ -1569,7 +1576,9 @@ describe('CuttingProposalsService', () => {
       expect(lineCall[0].data.maxWastePctThreshold).toBe(1);
       expect(lineCall[0].data.reason).toBeUndefined();
 
-      const proposalUpdateCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
+      // calls[0] = ghi requestParams SỚM trước khi gọi solver (2026-09-22) - kết quả cuối là
+      // calls[1].
+      const proposalUpdateCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
         { data: { hasInfeasibleLine?: boolean; hasOverThreshold?: boolean } },
       ];
       expect(proposalUpdateCall[0].data.hasInfeasibleLine).toBe(false);
