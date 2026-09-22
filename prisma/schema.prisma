@@ -1262,6 +1262,15 @@ model ProductionInvoice {
   /// của Phôi lại tính theo cỡ không có thật. BE cố ý KHÔNG chặn theo solverStockLengths (chặn thì
   /// tính năng vô dụng vì danh sách hiện chỉ có [6000]), nên trách nhiệm nằm ở KHSX.
   solverStockLengthsByMaterial Json?
+  /// Số giây solver được giải CHO MỖI LOẠI SẮT, riêng cho đợt này (2026-09-22) - KHSX đề nghị ở
+  /// "Tối ưu cắt sắt" (ô "Thời gian chạy tối đa"), đọc ở CuttingProposalsService.buildOrderJob/
+  /// buildInvoiceJob rồi áp trong runSolverAndSave() - thay `SystemConfig.solverTimeLimitSeconds`
+  /// làm mẫu số của phép nhân `số loại sắt × time_limit` để so với timeout HTTP client
+  /// (SOLVER_TIMEOUT_SECONDS). NULL = dùng mặc định công ty như trước.
+  ///
+  /// Không cần Sếp duyệt riêng (khác 2 trục hao hụt/chiều dài ở trên): đây thuần là ngân sách
+  /// THỜI GIAN TÍNH TOÁN, không đổi kết quả cắt hay chi phí sắt, nên KHSX tự set và chạy luôn.
+  solverTimeLimitSecondsOverride Int?
   createdAt                    DateTime                @default(now())
   updatedAt                    DateTime                @updatedAt
 

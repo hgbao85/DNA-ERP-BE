@@ -380,6 +380,7 @@ export class ProductionInvoicesService {
           solverMaxWastePctOverride: dto.solverMaxWastePctOverride ?? null,
           solverAllowCustomLength: dto.solverAllowCustomLength ?? null,
           solverOverrideReason: dto.solverOverrideReason ?? null,
+          solverTimeLimitSecondsOverride: dto.solverTimeLimitSecondsOverride ?? null,
           solverOverrideEvidence: overrideEvidence,
           // Chiều dài cây theo từng quy cách KHSX chọn cho đợt này (2026-09-16). undefined (không
           // phải null) khi không chọn: cột Json? nullable không default, để Prisma bỏ qua cột thay
@@ -447,6 +448,7 @@ export class ProductionInvoicesService {
           solverMaxWastePctOverride: solver?.solverMaxWastePctOverride ?? null,
           solverAllowCustomLength: solver?.solverAllowCustomLength ?? null,
           solverOverrideReason: solver?.solverOverrideReason ?? null,
+          solverTimeLimitSecondsOverride: solver?.solverTimeLimitSecondsOverride ?? null,
           solverOverrideEvidence: overrideEvidence,
           solverStockLengthsByMaterial: solver?.solverStockLengthsByMaterial ?? undefined,
         },
@@ -1871,6 +1873,7 @@ export class ProductionInvoicesService {
       solverMaxWastePctOverride: pi.solverMaxWastePctOverride?.toNumber() ?? null,
       solverAllowCustomLength: pi.solverAllowCustomLength,
       solverOverrideReason: pi.solverOverrideReason,
+      solverTimeLimitSecondsOverride: pi.solverTimeLimitSecondsOverride ?? null,
       solverStockLengthsByMaterial:
         (pi.solverStockLengthsByMaterial as Record<string, number> | null) ?? null,
       solverOverrideEvidence: pi.solverOverrideEvidence as {

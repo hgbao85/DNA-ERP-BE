@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   IsBoolean,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -73,4 +74,18 @@ export class SolverOverrideDto {
   @IsOptional()
   @IsStockLengthsByMaterial()
   solverStockLengthsByMaterial?: StockLengthsByMaterial;
+
+  @ApiPropertyOptional({
+    example: 120,
+    description:
+      'Số giây solver được giải CHO MỖI LOẠI SẮT, riêng cho đợt này - thay ' +
+      'SystemConfig.solverTimeLimitSeconds. Bỏ trống = dùng mặc định công ty. Không cần Sếp duyệt ' +
+      '(không đổi kết quả cắt/chi phí sắt, thuần ngân sách thời gian tính toán) - BE vẫn chặn nếu ' +
+      'số loại sắt × giá trị này vượt timeout HTTP client hiện tại.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(3600)
+  solverTimeLimitSecondsOverride?: number;
 }

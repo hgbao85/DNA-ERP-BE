@@ -175,6 +175,9 @@ type SolverJob = {
    *  TỪNG QUY CÁCH (2026-09-16). null / thiếu khoá = loại sắt đó dùng
    *  SystemConfig.solverStockLengths như trước. */
   stockLengthsByMaterial: StockLengthsByMaterial | null;
+  /** `ProductionInvoice.solverTimeLimitSecondsOverride` (2026-09-22) - số giây solver được giải
+   *  CHO MỖI LOẠI SẮT, riêng cho đợt này. null = dùng SystemConfig.solverTimeLimitSeconds. */
+  timeLimitSecondsOverride: number | null;
 };
 
 type CuttingProposalRow = Prisma.CuttingProposalGetPayload<{ include: typeof LIST_INCLUDE }>;
@@ -1342,6 +1345,13 @@ export class CuttingProposalsService {
         }
       }
 
+      // Ngân sách thời gian CHO MỖI LOẠI SẮT KHSX đề nghị riêng cho đợt này (2026-09-22, ô "Thời
+      // gian chạy tối đa" ở "Tối ưu cắt sắt") - thay hẳn config.solverTimeLimitSeconds làm mẫu số
+      // của cả request lẫn phép kiểm timeout dưới đây khi có. Không cần Sếp duyệt (không đổi kết
+      // quả cắt), nên không áp trần/max() như 2 trục hao hụt/chiều dài - KHSX tự chịu trách nhiệm
+      // với con số mình nhập, BE chỉ còn chặn khi nó khiến ca xấu nhất vượt timeout HTTP client.
+      const timeLimitSeconds = job.timeLimitSecondsOverride ?? config.solverTimeLimitSeconds;
+
       const baseRequestBody = {
         num_sets: job.numSets,
         bom: bomRows,
@@ -1371,7 +1381,7 @@ export class CuttingProposalsService {
         min_length: config.solverMinLengthMm,
         max_length: config.solverMaxLengthMm,
         length_step: config.solverLengthStepMm,
-        time_limit_seconds: config.solverTimeLimitSeconds,
+        time_limit_seconds: timeLimitSeconds,
         stop_on_first: false,
       };
 
@@ -1382,10 +1392,11 @@ export class CuttingProposalsService {
       // Ngân sách thời gian solver (`time_limit_seconds`) là CHO MỖI LOẠI SẮT, không phải cho cả
       // request - api/views.py truyền time_limit_sec vào optimize_one_material() BÊN TRONG vòng
       // lặp `for group in material_groups`. Ca xấu nhất của 1 request nhiều loại sắt (PI gộp) là
-      // distinctMaterialIds.length × solverTimeLimitSeconds. Không kiểm trước thì khi vượt quá
-      // timeout HTTP client, request bị ngắt NGANG CHỪNG (không phải solver kết luận vô nghiệm) -
-      // proposal vẫn bị đánh FAILED nhưng lý do là lỗi mạng chung chung, không nói được vì sao.
-      // Review 2026-08-18 phát hiện: mặc định code (SOLVER_TIMEOUT_SECONDS=300, xem
+      // distinctMaterialIds.length × timeLimitSeconds (config mặc định, hoặc số KHSX tự đề nghị
+      // riêng cho đợt này - xem job.timeLimitSecondsOverride, 2026-09-22). Không kiểm trước thì
+      // khi vượt quá timeout HTTP client, request bị ngắt NGANG CHỪNG (không phải solver kết luận
+      // vô nghiệm) - proposal vẫn bị đánh FAILED nhưng lý do là lỗi mạng chung chung, không nói
+      // được vì sao. Review 2026-08-18 phát hiện: mặc định code (SOLVER_TIMEOUT_SECONDS=300, xem
       // configuration.ts) không đủ cho phiếu gộp nhiều loại sắt nếu ai đó quên set env production.
       //
       // 2026-08-26 (mở lại auto_scan): công thức này KHÔNG tính phần vét cạn - 1 loại sắt cần
@@ -1398,15 +1409,21 @@ export class CuttingProposalsService {
       // còn lại là ca CP-SAT thật sự bế tắc ở MỌI chiều dài (hiếm, thường do ngưỡng % đặt sai) -
       // khi đó request bị timeoutSeconds cắt ngang, lỗi báo ra sẽ là lỗi mạng chung chung như đã
       // mô tả ở trên, không phải điều mới do đổi này gây ra (case đó vốn đã tệ y hệt trước đây).
-      const worstCaseSeconds = distinctMaterialIds.length * config.solverTimeLimitSeconds;
+      const worstCaseSeconds = distinctMaterialIds.length * timeLimitSeconds;
       if (worstCaseSeconds > timeoutSeconds) {
+        // `timeLimitSeconds` có thể là số KHSX tự nhập (job.timeLimitSecondsOverride) chứ không
+        // chỉ config mặc định - câu lỗi phải nêu đúng nguồn để người đọc biết sửa ở đâu (đổi lại ô
+        // "Thời gian chạy tối đa" lúc gộp/cắt riêng, hay đổi SystemConfig nếu không phải KHSX đặt).
+        const sourceHint =
+          job.timeLimitSecondsOverride != null
+            ? 'giảm số phút ở ô "Thời gian chạy tối đa" lúc gộp/cắt riêng'
+            : 'giảm SystemConfig.solverTimeLimitSeconds';
         throw new Error(
           `Đợt tính có ${distinctMaterialIds.length} loại sắt × time_limit ` +
-            `${config.solverTimeLimitSeconds}s/loại = tối đa ${worstCaseSeconds}s, vượt timeout ` +
+            `${timeLimitSeconds}s/loại = tối đa ${worstCaseSeconds}s, vượt timeout ` +
             `HTTP client hiện tại (${timeoutSeconds}s). Solver giải TUẦN TỰ từng loại sắt nên ca ` +
-            `xấu nhất sẽ bị ngắt giữa chừng. Tăng SOLVER_TIMEOUT_SECONDS hoặc giảm ` +
-            `SystemConfig.solverTimeLimitSeconds rồi thử lại - không tự giảm số SKU gộp, đó là ` +
-            `quyết định của KHSX/Sếp.`,
+            `xấu nhất sẽ bị ngắt giữa chừng. Tăng SOLVER_TIMEOUT_SECONDS hoặc ${sourceHint} rồi ` +
+            `thử lại - không tự giảm số SKU gộp, đó là quyết định của KHSX/Sếp.`,
         );
       }
 
@@ -2107,6 +2124,7 @@ export class CuttingProposalsService {
                 solverMaxWastePctOverride: true,
                 solverAllowCustomLength: true,
                 solverStockLengthsByMaterial: true,
+                solverTimeLimitSecondsOverride: true,
               },
             },
           },
@@ -2135,6 +2153,8 @@ export class CuttingProposalsService {
       stockLengthsByMaterial:
         (order.productionInvoiceItem.productionInvoice
           ?.solverStockLengthsByMaterial as StockLengthsByMaterial | null) ?? null,
+      timeLimitSecondsOverride:
+        order.productionInvoiceItem.productionInvoice?.solverTimeLimitSecondsOverride ?? null,
     };
   }
 
@@ -2215,6 +2235,7 @@ export class CuttingProposalsService {
       allowCustomLength: pi.solverAllowCustomLength,
       stockLengthsByMaterial:
         (pi.solverStockLengthsByMaterial as StockLengthsByMaterial | null) ?? null,
+      timeLimitSecondsOverride: pi.solverTimeLimitSecondsOverride ?? null,
     };
   }
 

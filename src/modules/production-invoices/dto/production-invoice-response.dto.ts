@@ -27,6 +27,10 @@ export class ProductionInvoiceResponseDto {
   solverMaxWastePctOverride!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) solverAllowCustomLength!: boolean | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) solverOverrideReason!: string | null;
+  /** Số giây solver được giải cho mỗi loại sắt, riêng cho đợt này (2026-09-22) - null = mặc định
+   *  công ty (SystemConfig.solverTimeLimitSeconds). Không hiện lên màn Sếp duyệt (không phải quyết
+   *  định nghiệp vụ), chỉ để đọc lại/debug. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) solverTimeLimitSecondsOverride!: number | null;
   /** Chiều dài cây (mm) KHSX chọn cho đợt này theo từng quy cách: { "<materialId>": <mm> }.
    *  null = mọi loại sắt dùng chiều dài chuẩn của công ty. FE hiện lại đúng lựa chọn đó ở
    *  header PI để Sếp biết đợt này cắt trên cây nào trước khi duyệt. */
