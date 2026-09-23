@@ -569,7 +569,18 @@ export class CuttingProposalsService {
   ): Promise<CuttingBatchCandidateListDto> {
     const ctx = await this.loadBatchContext();
     if (ctx === null) {
-      return new CuttingBatchCandidateListDto({ items: [], recommendedItemIds: [] });
+      // Không có SKU nào để gộp - vẫn trả 2 mốc thời gian để FE dựng gợi ý/giới hạn ô nhập nhất
+      // quán, không phải xử lý riêng ca "danh sách rỗng" (2026-09-23).
+      const emptyConfig = await this.prisma.systemConfig.findUniqueOrThrow({
+        where: { id: SYSTEM_CONFIG_ID },
+        select: { solverTimeLimitSeconds: true },
+      });
+      return new CuttingBatchCandidateListDto({
+        items: [],
+        recommendedItemIds: [],
+        solverTimeoutSeconds: this.configService.get('solver.timeoutSeconds', { infer: true }),
+        defaultTimeLimitSeconds: emptyConfig.solverTimeLimitSeconds,
+      });
     }
     const { items, byMaterial, materials, config, itemsWithoutBom } = ctx;
     const defaultStockLengths = config.solverStockLengths as number[];
@@ -673,6 +684,8 @@ export class CuttingProposalsService {
         return a.deadline.getTime() - b.deadline.getTime();
       }),
       recommendedItemIds: [...recommended],
+      solverTimeoutSeconds: this.configService.get('solver.timeoutSeconds', { infer: true }),
+      defaultTimeLimitSeconds: config.solverTimeLimitSeconds,
     });
   }
 

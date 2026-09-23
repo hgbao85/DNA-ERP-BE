@@ -79,6 +79,16 @@ export class CuttingBatchCandidateListDto {
   /// Tổ hợp hệ thống tự đề xuất - FE tick sẵn để KHSX chỉ việc xem lại rồi xác nhận, vẫn sửa
   /// được. Lấy từ getBatchSuggestions(): các SKU của mức gộp TỐI THIỂU đủ đạt ngưỡng, gom lại.
   @Expose() @ApiProperty({ type: [String] }) recommendedItemIds!: string[];
+  /// Ngân sách thời gian TỐI ĐA cho CẢ đợt tính (giây) - chính là SOLVER_TIMEOUT_SECONDS mà
+  /// runSolverAndSave() so với `số loại sắt × time_limit` để quyết định chặn hay không (2026-09-23).
+  /// Trả về đây để FE tự tính "tối đa bao nhiêu phút/loại" rồi chặn NGAY TẠI Ô NHẬP bằng tiếng
+  /// Việt dễ hiểu, thay vì để KHSX gõ xong, gộp xong, chờ tới lúc Sếp duyệt mới nhận câu lỗi kỹ
+  /// thuật ("vượt timeout HTTP client...") mà công nhân không thể tự hiểu để sửa.
+  @Expose() @ApiProperty() solverTimeoutSeconds!: number;
+  /// Mặc định công ty (SystemConfig.solverTimeLimitSeconds) - trả kèm để FE hiện gợi ý khi ô
+  /// "Thời gian chạy tối đa" để trống. TRƯỚC ĐÂY FE gọi thẳng GET /system-config cho số này
+  /// nhưng KHSX không có quyền SYSTEM_CONFIG:VIEW nên luôn 403 (gợi ý im lặng không hiện ra).
+  @Expose() @ApiProperty() defaultTimeLimitSeconds!: number;
 
   constructor(partial: Partial<CuttingBatchCandidateListDto>) {
     Object.assign(this, partial);
