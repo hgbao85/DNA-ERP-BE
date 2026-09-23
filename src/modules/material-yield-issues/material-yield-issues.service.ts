@@ -11,6 +11,7 @@ import {
   Prisma,
   ProductionOrder,
   StockLedgerRefType,
+  StockReservationRefType,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -142,11 +143,18 @@ export class MaterialYieldIssuesService {
         FOR UPDATE
       `;
       const onHand = stockRow?.qty.toNumber() ?? 0;
+      // Loại 2 refType đề xuất mua tự động (2026-09-23, đính chính sau live-test) - cùng lý do
+      // MaterialIssuesService.create() (xem doc comment getAvailableQty()).
       const availableQty = await this.stockReservationsService.getAvailableQty(
         tx,
         materialWarehouseId,
         materialBigId,
         onHand,
+        undefined,
+        [
+          StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
+          StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
+        ],
       );
       if (dto.issuedQty > availableQty) {
         throw new ConflictException(
@@ -169,6 +177,21 @@ export class MaterialYieldIssuesService {
       // ngoài sau khi transaction commit sẽ nhả khoá trước khi stock_quant kịp đổi, tái tạo lại
       // đúng race đã vá ở 2 module kia.
       await this.postLedgerEntry(issue, issuedById, tx);
+
+      // Best-effort: "trả nợ" giữ chỗ mà PieceMaterialYieldPurchaseService đã tạo lúc tính đề xuất
+      // mua (2026-09-23) - cùng lý do/cùng idiom MaterialIssuesService.create() (xem doc comment
+      // StockReservationsService.drainPoolBestEffort()). Dùng lại idiom findUniqueOrThrow() của
+      // assertItemPiHasActiveFloor()/assertItemPiHasActiveFloorLocked (floor-gate.util.ts).
+      const piItem = await tx.productionInvoiceItem.findUniqueOrThrow({
+        where: { id: order.productionInvoiceItemId },
+        select: { productionInvoiceId: true },
+      });
+      await this.stockReservationsService.drainPoolBestEffort(tx, {
+        productionInvoiceId: piItem.productionInvoiceId!,
+        materialId: materialBigId,
+        qty: dto.issuedQty,
+      });
+
       return issue;
     });
 

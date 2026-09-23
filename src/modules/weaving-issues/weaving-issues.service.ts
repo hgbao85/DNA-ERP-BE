@@ -11,6 +11,7 @@ import {
   Prisma,
   ProductionOrder,
   StockLedgerRefType,
+  StockReservationRefType,
   TransferStatus,
   WeavingPoint,
 } from '../../generated/prisma/client';
@@ -213,7 +214,19 @@ export class WeavingIssuesService {
       });
 
       if (materialLines.length > 0) {
-        await this.issueMaterialsForWeaving(tx, issue.id, materialLines, issuedById);
+        // "Trả nợ" giữ chỗ cần biết productionInvoiceId - dùng lại idiom findUniqueOrThrow() của
+        // assertItemPiHasActiveFloor()/assertItemPiHasActiveFloorLocked (floor-gate.util.ts).
+        const piItem = await tx.productionInvoiceItem.findUniqueOrThrow({
+          where: { id: order.productionInvoiceItemId },
+          select: { productionInvoiceId: true },
+        });
+        await this.issueMaterialsForWeaving(
+          tx,
+          issue.id,
+          piItem.productionInvoiceId!,
+          materialLines,
+          issuedById,
+        );
       }
 
       return issue;
@@ -231,6 +244,7 @@ export class WeavingIssuesService {
   private async issueMaterialsForWeaving(
     tx: PrismaTx,
     weavingIssueId: bigint,
+    productionInvoiceId: bigint,
     lines: WeavingIssueMaterialLineDto[],
     createdById: string,
   ): Promise<void> {
@@ -259,11 +273,20 @@ export class WeavingIssuesService {
         FOR UPDATE
       `;
       const onHand = stockRow?.qty.toNumber() ?? 0;
+      // Loại 2 refType đề xuất mua tự động (2026-09-23, đính chính sau live-test) - đây CHÍNH LÀ
+      // vật tư mà ConsumableMaterialPurchaseService đã giữ chỗ (nhánh PieceMaterialItem: Dây/Đinh/
+      // Nút nhựa), cùng lý do MaterialIssuesService/PackagingIssuesService. Xem doc comment
+      // getAvailableQty().
       const availableQty = await this.stockReservationsService.getAvailableQty(
         tx,
         material.warehouseId,
         materialBigId,
         onHand,
+        undefined,
+        [
+          StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
+          StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
+        ],
       );
       if (line.qty > availableQty) {
         throw new ConflictException(
@@ -287,6 +310,15 @@ export class WeavingIssuesService {
         },
         tx,
       );
+
+      // Best-effort: "trả nợ" giữ chỗ mà ConsumableMaterialPurchaseService đã tạo lúc tính đề xuất
+      // mua (2026-09-23, cùng lý do/cùng idiom MaterialIssuesService.create() - xem doc comment
+      // StockReservationsService.drainPoolBestEffort()).
+      await this.stockReservationsService.drainPoolBestEffort(tx, {
+        productionInvoiceId,
+        materialId: materialBigId,
+        qty: line.qty,
+      });
     }
   }
 

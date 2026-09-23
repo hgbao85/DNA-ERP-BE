@@ -2077,6 +2077,16 @@ enum StockReservationRefType {
   /// (buyQty = 100% nhu cầu, approve() không giữ chỗ gì từ tồn - xem StockReservationsService.
   /// loadPool/creditPool, L5 2026-08-26). refId = productionInvoiceId.
   PRODUCTION_INVOICE
+  /// ConsumableMaterialPurchaseService.computeAndUpsertProposals() giữ chỗ phần tồn đã dùng để
+  /// che phủ demand (2026-09-23, vá race "2 PI cùng tính lúc gần nhau, cùng thấy 1 tồn kho đủ").
+  /// refId = productionInvoiceId (KHÔNG dùng PurchaseProposalItem.id - dòng đó chưa tồn tại lúc
+  /// cần tính available, xem doc comment computeAndUpsertProposals()). MaterialIssuesService.
+  /// create() rút giữ chỗ này (best-effort, KHÔNG chặn xuất) khi xưởng thực xuất vật tư.
+  CONSUMABLE_MATERIAL_PURCHASE
+  /// Song sinh của CONSUMABLE_MATERIAL_PURCHASE cho PieceMaterialYieldPurchaseService (2026-09-23) -
+  /// cùng lý do/cùng thiết kế, tách refType riêng để không lẫn 2 nguồn cùng ghi 1 (PI, vật tư).
+  /// MaterialYieldIssuesService.create() rút giữ chỗ này (best-effort).
+  PIECE_MATERIAL_YIELD_PURCHASE
 }
 
 /// Sổ cái kho bút toán kép - nguồn sự thật duy nhất của tồn kho. Append-only: không có

@@ -145,6 +145,144 @@ describe('StockReservationsService', () => {
     });
   });
 
+  describe('reserveOrAdjust (2026-09-23, ConsumableMaterialPurchaseService/PieceMaterialYieldPurchaseService - refId ỔN ĐỊNH qua nhiều lần gọi lại)', () => {
+    it('chưa có dòng nào - tạo mới (giống reserve()), no-op nếu qty<=0', async () => {
+      prisma.stockReservation.create.mockResolvedValue({ id: 1n, quantity: decimal(5) });
+
+      await service.reserveOrAdjust(prisma as unknown as PrismaTx, {
+        warehouseId: 800n,
+        materialId: 30n,
+        qty: 5,
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '7',
+      });
+
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ quantity: 5 }) as unknown,
+      });
+    });
+
+    it('qty<=0 và chưa có dòng nào - không tạo gì cả', async () => {
+      await service.reserveOrAdjust(prisma as unknown as PrismaTx, {
+        warehouseId: 800n,
+        materialId: 30n,
+        qty: 0,
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '7',
+      });
+
+      expect(prisma.stockReservation.create).not.toHaveBeenCalled();
+    });
+
+    it('đã có dòng - cập nhật quantity sang giá trị mới (KHÔNG cộng dồn như creditPool)', async () => {
+      prisma.stockReservation.findUnique.mockResolvedValue({
+        id: 900n,
+        quantity: decimal(50),
+        consumedQty: decimal(0),
+      });
+
+      await service.reserveOrAdjust(prisma as unknown as PrismaTx, {
+        warehouseId: 800n,
+        materialId: 30n,
+        qty: 70,
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '7',
+      });
+
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { quantity: 70 },
+      });
+      expect(prisma.stockReservation.create).not.toHaveBeenCalled();
+    });
+
+    it('KHÔNG BAO GIỜ đặt quantity thấp hơn consumedQty đã tiêu (demand giảm xuống dưới phần đã xuất thật)', async () => {
+      prisma.stockReservation.findUnique.mockResolvedValue({
+        id: 900n,
+        quantity: decimal(50),
+        consumedQty: decimal(30), // đã xuất thật 30
+      });
+
+      await service.reserveOrAdjust(prisma as unknown as PrismaTx, {
+        warehouseId: 800n,
+        materialId: 30n,
+        qty: 10, // demand mới thấp hơn cả phần đã tiêu
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '7',
+      });
+
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { quantity: 30 }, // clamp về floor=consumedQty, không phải 10
+      });
+    });
+
+    it('quantity không đổi - không gọi update() thừa', async () => {
+      prisma.stockReservation.findUnique.mockResolvedValue({
+        id: 900n,
+        quantity: decimal(50),
+        consumedQty: decimal(0),
+      });
+
+      await service.reserveOrAdjust(prisma as unknown as PrismaTx, {
+        warehouseId: 800n,
+        materialId: 30n,
+        qty: 50,
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '7',
+      });
+
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('shrinkToFloor (2026-09-23) - co giữ chỗ ỔN ĐỊNH về đúng phần đã tiêu TRƯỚC khi tính lại available', () => {
+    it('chưa có dòng nào - no-op', async () => {
+      await service.shrinkToFloor(prisma as unknown as PrismaTx, {
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '7',
+        materialId: 30n,
+      });
+
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+    });
+
+    it('có dòng, còn phần CHƯA tiêu - co quantity về đúng consumedQty', async () => {
+      prisma.stockReservation.findUnique.mockResolvedValue({
+        id: 900n,
+        quantity: decimal(50),
+        consumedQty: decimal(15),
+      });
+
+      await service.shrinkToFloor(prisma as unknown as PrismaTx, {
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '7',
+        materialId: 30n,
+      });
+
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { quantity: 15 },
+      });
+    });
+
+    it('đã ở floor rồi (mọi thứ đã tiêu hết) - không gọi update() thừa', async () => {
+      prisma.stockReservation.findUnique.mockResolvedValue({
+        id: 900n,
+        quantity: decimal(15),
+        consumedQty: decimal(15),
+      });
+
+      await service.shrinkToFloor(prisma as unknown as PrismaTx, {
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '7',
+        materialId: 30n,
+      });
+
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getAvailableQty', () => {
     it('available = onHand khi không có gì đang giữ chỗ ở cả 2 bảng', async () => {
       const result = await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 20);
@@ -217,6 +355,44 @@ describe('StockReservationsService', () => {
           where: { warehouseId: 800n, materialId: 30n, status: 'ACTIVE' },
         }),
       );
+    });
+
+    // 2026-09-23 (đính chính sau live-test phát hiện bug thật): MaterialIssuesService/
+    // MaterialYieldIssuesService.create() gọi getAvailableQty() để tránh giành tồn với chuyển kho
+    // nội bộ - KHÔNG có ý định bị chặn bởi CHÍNH giữ chỗ mà đề xuất mua của vật tư đó vừa tạo ra
+    // (ConsumableMaterialPurchaseService/PieceMaterialYieldPurchaseService). Tái hiện live: 2 PI
+    // cùng giữ chỗ cộng đúng bằng onHand -> available=0 dù tồn vật lý còn nguyên, xuất bị chặn 409
+    // sai. excludeRefTypes cho phép caller loại các refType đó khỏi phép trừ.
+    it('excludeRefTypes - loại đúng refType truyền vào khỏi phép trừ StockReservation', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([
+        { quantity: decimal(15), consumedQty: decimal(0) },
+      ]);
+      const result = await service.getAvailableQty(
+        prisma as unknown as PrismaTx,
+        800n,
+        30n,
+        20,
+        undefined,
+        ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'],
+      );
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            refType: { notIn: ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'] },
+          }) as unknown,
+        }),
+      );
+      // Mock không thực sự lọc theo where (giả lập DB thật) - phép trừ ở service dùng nguyên kết
+      // quả mock trả về, test này chỉ xác nhận ĐÚNG where đã gửi đi cho Postgres tự lọc.
+      expect(result).toBe(5); // 20 - 15 (mock không tự lọc, chỉ xác nhận where truyền đúng)
+    });
+
+    it('không truyền excludeRefTypes -> KHÔNG thêm điều kiện refType (giữ nguyên hành vi cũ)', async () => {
+      await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 20);
+      const [args] = prisma.stockReservation.findMany.mock.calls[0] as [
+        { where: Record<string, unknown> },
+      ];
+      expect(args.where.refType).toBeUndefined();
     });
   });
 
@@ -472,6 +648,98 @@ describe('StockReservationsService', () => {
           qty: 0,
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('drainPoolBestEffort (2026-09-23, MaterialIssuesService/MaterialYieldIssuesService - KHÔNG BAO GIỜ throw, khác drainPool())', () => {
+    const mockRowLocks = (
+      rows: { id: bigint; warehouseId: bigint; quantity: unknown; consumedQty: unknown }[],
+    ) => {
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      prisma.$queryRaw.mockImplementation((..._args: unknown[]) => {
+        const id = _args.find((a) => typeof a === 'bigint');
+        const row = id != null ? byId.get(id) : undefined;
+        return Promise.resolve(
+          row ? [{ quantity: row.quantity, consumedQty: row.consumedQty }] : [],
+        );
+      });
+    };
+
+    it('pool rỗng - no-op, KHÔNG throw (khác drainPool() ném ConflictException)', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.drainPoolBestEffort(prisma as unknown as PrismaTx, {
+          productionInvoiceId: 50n,
+          materialId: 30n,
+          qty: 5,
+        }),
+      ).resolves.toBeUndefined();
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+    });
+
+    it('pool có đủ - rút đúng qty, giống drainPool()', async () => {
+      const rows = [
+        {
+          id: 900n,
+          refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+          refId: '50',
+          warehouseId: 800n,
+          quantity: decimal(10),
+          consumedQty: decimal(2),
+        },
+      ];
+      prisma.stockReservation.findMany.mockResolvedValue(rows);
+      mockRowLocks(rows);
+
+      await service.drainPoolBestEffort(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        qty: 5,
+      });
+
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { consumedQty: { increment: 5 } },
+      });
+    });
+
+    it('pool KHÔNG đủ - rút hết phần còn lại, KHÔNG throw (khác drainPool() chặn cứng)', async () => {
+      const rows = [
+        {
+          id: 900n,
+          refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+          refId: '50',
+          warehouseId: 800n,
+          quantity: decimal(5),
+          consumedQty: decimal(0),
+        },
+      ];
+      prisma.stockReservation.findMany.mockResolvedValue(rows);
+      mockRowLocks(rows);
+
+      await expect(
+        service.drainPoolBestEffort(prisma as unknown as PrismaTx, {
+          productionInvoiceId: 50n,
+          materialId: 30n,
+          qty: 8, // vượt quá 5 còn giữ - vẫn không throw
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { consumedQty: { increment: 5 } }, // chỉ rút được 5, phần dư 3 bỏ qua
+      });
+    });
+
+    it('qty<=0 - no-op, không query pool', async () => {
+      await service.drainPoolBestEffort(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        qty: 0,
+      });
+
+      expect(prisma.stockReservation.findMany).not.toHaveBeenCalled();
     });
   });
 

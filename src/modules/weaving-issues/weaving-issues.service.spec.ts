@@ -41,7 +41,7 @@ describe('WeavingIssuesService', () => {
     $transaction: jest.Mock;
   };
   let stockLedgerService: { postEntry: jest.Mock };
-  let stockReservationsService: { getAvailableQty: jest.Mock };
+  let stockReservationsService: { getAvailableQty: jest.Mock; drainPoolBestEffort: jest.Mock };
 
   const order = {
     id: 1n,
@@ -148,7 +148,10 @@ describe('WeavingIssuesService', () => {
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
-    stockReservationsService = { getAvailableQty: jest.fn().mockResolvedValue(1_000_000) };
+    stockReservationsService = {
+      getAvailableQty: jest.fn().mockResolvedValue(1_000_000),
+      drainPoolBestEffort: jest.fn().mockResolvedValue(undefined),
+    };
     service = new WeavingIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as never,
@@ -229,6 +232,8 @@ describe('WeavingIssuesService', () => {
         900n,
         60n,
         50,
+        undefined,
+        ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'],
       );
       expect(prisma.weavingIssueMaterial.create).toHaveBeenCalledWith({
         data: { weavingIssueId: 100n, materialId: 60n, qty: 15 },
@@ -244,6 +249,14 @@ describe('WeavingIssuesService', () => {
         }),
         expect.anything(),
       );
+      // 2026-09-23: ConsumableMaterialPurchaseService giờ giữ chỗ (StockReservation) phần tồn dùng
+      // để che phủ demand cho Dây/Đinh/Nút nhựa (PieceMaterialItem) - phải "trả nợ" giữ chỗ đó khi
+      // thủ kho thực xuất kèm mảnh, cùng lý do/cùng idiom MaterialIssuesService.create().
+      expect(stockReservationsService.drainPoolBestEffort).toHaveBeenCalledWith(expect.anything(), {
+        productionInvoiceId: 500n,
+        materialId: 60n,
+        qty: 15,
+      });
     });
 
     it('2026-09-11: tồn khả dụng không đủ cho vật tư mang kèm - ConflictException, không tạo WeavingIssueMaterial/ghi sổ', async () => {

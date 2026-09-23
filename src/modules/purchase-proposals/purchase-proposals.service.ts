@@ -426,36 +426,25 @@ export class PurchaseProposalsService {
     // receiveWarehouseCode, không đối chiếu gì với phạm vi của người gọi. Thủ kho chỉ được UI cho
     // vào 1 kho vẫn gọi thẳng API nhận hộ hàng cho kho khác được nếu không chặn ở đây.
     this.assertWarehouseScope(warehouseScope, targetWarehouseCode);
-    // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26, mở rộng thành pool): cộng hàng về ĐÚNG pool giữ chỗ
-    // (StockReservation, tạo ở CuttingProposalsService.approve()) - CHỈ khi đúng vật tư SẮT của
-    // CuttingProposal thuộc CÙNG PI với đề xuất mua này. KHÔNG còn soi theo
-    // proposal.cuttingProposalId (bị GHI ĐÈ thành phương án duyệt SAU CÙNG mỗi khi merge - nguồn
-    // của lỗ #5: hàng mua về cho SKU A bị cộng nhầm vào giữ chỗ của SKU B) - soi thẳng
+    // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26, mở rộng thành pool) / đính chính 2026-09-23: cộng hàng về
+    // ĐÚNG pool giữ chỗ (StockReservation) của (PI, vật tư) này. Soi thẳng
     // proposal.productionInvoiceId (KHÔNG đổi sau khi tạo, xem PurchaseProposal.productionInvoiceId)
-    // rồi tìm CuttingProposalLine của BẤT KỲ phương án nào (trực tiếp neo PI hoặc qua PO thành
-    // viên) có cùng vật tư - sai chỗ này sẽ tạo StockReservation MỒ CÔI cho vật tư không phải sắt
-    // (xem StockReservationsService.creditPool: pool rỗng thì TỰ TẠO MỚI - ngầm giả định
-    // materialId truyền vào luôn là sắt thuộc PI này). Bất biến theo item, kiểm trước khi mở
-    // transaction an toàn như check warehouseId ở trên.
+    // - KHÔNG còn soi theo proposal.cuttingProposalId (bị GHI ĐÈ thành phương án duyệt SAU CÙNG mỗi
+    // khi merge - nguồn của lỗ #5: hàng mua về cho SKU A bị cộng nhầm vào giữ chỗ của SKU B).
+    //
+    // 2026-08-26 -> 2026-09-23: bản gốc CHỈ cộng khi đúng vật tư SẮT (kiểm bằng CuttingProposalLine)
+    // - lúc đó CHỈ nhánh sắt có pool để cộng vào, "nhánh khác (VTTP/tiêu hao) không có pool nào, cứ
+    // để hàng về rơi vào tồn chung". Từ khi ConsumableMaterialPurchaseService/
+    // PieceMaterialYieldPurchaseService cũng giữ chỗ (StockReservation) cho ĐÚNG vật tư 2 nhánh đó
+    // xử lý, giả định "chỉ sắt có pool" không còn đúng: bỏ sót credit ở đây nghĩa là hàng vừa mua về
+    // (đã thuộc về PI này) vẫn hiện là "chưa cộng" trong giữ chỗ, khiến 1 PI KHÁC tính đề xuất ngay
+    // sau đó đọc trùng đúng phần hàng vừa về - tái hiện lại race condition đã vá cho lúc TÍNH đề
+    // xuất, chỉ khác là xảy ra ở lúc NHẬN hàng. Gọi vô điều kiện cho mọi targetProductionInvoiceId
+    // an toàn: MỌI PurchaseProposalItem đều do 1 trong 3 service tự động tạo ra (không có đường tạo
+    // tay - xem project_purchase_proposal_sources trong memory), nên luôn có pool hợp lệ để cộng vào
+    // hoặc creditPool() tự tạo dòng mới đúng nghĩa (ca hiếm buyQty=100% nhu cầu, chưa từng giữ chỗ
+    // gì - cùng idiom nhánh sắt "consumeQty=0 lúc duyệt").
     const targetProductionInvoiceId = proposal.productionInvoiceId;
-    const isSteelLineOfThisPI =
-      targetProductionInvoiceId != null &&
-      (await this.prisma.cuttingProposalLine.findFirst({
-        where: {
-          materialId: item.materialId,
-          cuttingProposal: {
-            OR: [
-              { productionInvoiceId: targetProductionInvoiceId },
-              {
-                productionOrder: {
-                  productionInvoiceItem: { productionInvoiceId: targetProductionInvoiceId },
-                },
-              },
-            ],
-          },
-        },
-        select: { id: true },
-      })) != null;
 
     const buyQty = item.buyQty.toNumber();
 
@@ -546,15 +535,14 @@ export class PurchaseProposalsService {
             tx,
           );
 
-          // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26): hàng vừa về phải "có chủ" ngay - cộng thẳng vào
-          // pool giữ chỗ của (PI, vật tư) này, KHÔNG để rơi vào tồn chung. Thiếu bước này thì
-          // phương án cắt KHÁC được duyệt xen giữa có thể "giành" mất đúng số hàng vừa mua về cho
-          // đơn này, dù sổ đã ghi "đã mua đủ, đã về hàng" (lỗ #3) - hoặc hàng bị cộng vào giữ chỗ
-          // của SKU KHÁC trong cùng PI thay vì SKU thật sự thiếu (lỗ #5). CHỈ áp dụng khi ĐÚNG
-          // DÒNG này là sắt của phương án cắt nào đó thuộc PI này (xem check đầu hàm) - nhánh khác
-          // (VTTP/tiêu hao, kể cả khi nằm CHUNG 1 đề xuất gộp với sắt) không có pool nào để cộng
-          // vào, cứ để hàng về rơi vào tồn chung.
-          if (isSteelLineOfThisPI && targetProductionInvoiceId != null) {
+          // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26) / đính chính 2026-09-23 (xem comment đầu hàm): hàng
+          // vừa về phải "có chủ" ngay - cộng thẳng vào pool giữ chỗ của (PI, vật tư) này, KHÔNG để
+          // rơi vào tồn chung. Thiếu bước này thì phương án/đề xuất KHÁC tính/duyệt xen giữa có thể
+          // "giành" mất đúng số hàng vừa mua về cho đơn này, dù sổ đã ghi "đã mua đủ, đã về hàng"
+          // (lỗ #3) - hoặc hàng bị cộng vào giữ chỗ của SKU KHÁC trong cùng PI thay vì SKU thật sự
+          // thiếu (lỗ #5). Gọi cho MỌI vật tư (không còn giới hạn riêng sắt) - creditPool() tự xử lý
+          // đúng cả ca pool rỗng (tạo dòng mới) lẫn pool có sẵn (cộng vào dòng ưu tiên cao nhất).
+          if (targetProductionInvoiceId != null) {
             await this.stockReservationsService.creditPool(tx, {
               productionInvoiceId: targetProductionInvoiceId,
               materialId: item.materialId,

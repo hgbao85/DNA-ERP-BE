@@ -18,7 +18,7 @@ import { MaterialIssuesService } from './material-issues.service';
 describe('MaterialIssuesService', () => {
   let service: MaterialIssuesService;
   let stockLedgerService: { postEntry: jest.Mock };
-  let stockReservationsService: { getAvailableQty: jest.Mock };
+  let stockReservationsService: { getAvailableQty: jest.Mock; drainPoolBestEffort: jest.Mock };
   // Vấn đề #1 audit 26/08 - $queryRaw (khoá + đọc stock_quant) điều khiển bởi biến này, mặc định
   // dư dả để không ảnh hưởng các test có sẵn (chỉ quan tâm định mức BOM); test riêng cho check tồn
   // kho thật sẽ tự set lại giá trị thấp.
@@ -136,6 +136,7 @@ describe('MaterialIssuesService', () => {
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
     stockReservationsService = {
       getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
+      drainPoolBestEffort: jest.fn().mockResolvedValue(undefined),
     };
     service = new MaterialIssuesService(
       prisma as unknown as PrismaServiceType,
@@ -352,7 +353,32 @@ describe('MaterialIssuesService', () => {
         2n,
         30n,
         100,
+        undefined,
+        ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'],
       );
+    });
+
+    // 2026-09-23: ConsumableMaterialPurchaseService giờ giữ chỗ (StockReservation) phần tồn dùng để
+    // che phủ demand lúc tính đề xuất mua - create() phải "trả nợ" giữ chỗ đó khi xưởng thực xuất,
+    // nếu không phần chưa tiêu sẽ bị getAvailableQty() coi là "vẫn đang giữ" mãi mãi dù vật lý đã
+    // rời kho. Best-effort (KHÔNG chặn ghi sổ) - xem doc comment drainPoolBestEffort().
+    it('rút giữ chỗ (best-effort) sau khi ghi ledger, đúng productionInvoiceId tra từ productionInvoiceItem', async () => {
+      prisma.materialIssue.create.mockResolvedValue(issueRow);
+
+      await service.create('1', dto, 'user-1', null);
+
+      expect(stockReservationsService.drainPoolBestEffort).toHaveBeenCalledWith(expect.anything(), {
+        productionInvoiceId: 500n,
+        materialId: 30n,
+        qty: 5,
+      });
+    });
+
+    it('không ném lỗi dù drainPoolBestEffort thất bại/pool rỗng - ghi sổ đã xong trước đó', async () => {
+      prisma.materialIssue.create.mockResolvedValue(issueRow);
+      stockReservationsService.drainPoolBestEffort.mockResolvedValue(undefined); // no-op, không throw
+
+      await expect(service.create('1', dto, 'user-1', null)).resolves.toBeDefined();
     });
   });
 

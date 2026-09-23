@@ -13,7 +13,7 @@ import { PackagingIssuesService } from './packaging-issues.service';
 describe('PackagingIssuesService', () => {
   let service: PackagingIssuesService;
   let stockLedgerService: { postEntry: jest.Mock };
-  let stockReservationsService: { getAvailableQty: jest.Mock };
+  let stockReservationsService: { getAvailableQty: jest.Mock; drainPoolBestEffort: jest.Mock };
   // Vấn đề #1 audit 26/08 - $queryRaw (khoá + đọc stock_quant) điều khiển bởi biến này, mặc định
   // dư dả để không ảnh hưởng các test có sẵn (chỉ quan tâm định mức BOM).
   let physicalStockQty: number;
@@ -163,6 +163,7 @@ describe('PackagingIssuesService', () => {
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
     stockReservationsService = {
       getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
+      drainPoolBestEffort: jest.fn().mockResolvedValue(undefined),
     };
     service = new PackagingIssuesService(
       prisma as unknown as PrismaServiceType,
@@ -206,6 +207,21 @@ describe('PackagingIssuesService', () => {
         expect.anything(),
       );
       expect(result.id).toBe('100');
+    });
+
+    // 2026-09-23: ConsumableMaterialPurchaseService giờ giữ chỗ (StockReservation) phần tồn dùng để
+    // che phủ demand cho vật tư đóng gói (BomAccessoryItem kind=PACKAGING) - create() phải "trả nợ"
+    // giữ chỗ đó khi thủ kho thực xuất, cùng lý do/cùng idiom MaterialIssuesService.create().
+    it('rút giữ chỗ (best-effort) sau khi ghi ledger, đúng productionInvoiceId tra từ productionInvoiceItem', async () => {
+      prisma.packagingIssue.create.mockResolvedValue(issueRow);
+
+      await service.create('1', dto, 'user-1', null);
+
+      expect(stockReservationsService.drainPoolBestEffort).toHaveBeenCalledWith(expect.anything(), {
+        productionInvoiceId: 500n,
+        materialId: 30n,
+        qty: 5,
+      });
     });
 
     it('ghi StockLedger tới ĐÚNG kho thành phẩm PHỤ mà QLSX đã chọn (2026-09-03 - trước đây hard-code luôn về kho gốc "thanh-pham" bất kể QLSX chọn kho nào lúc gửi Sếp duyệt)', async () => {
@@ -384,6 +400,8 @@ describe('PackagingIssuesService', () => {
         2n,
         30n,
         100,
+        undefined,
+        ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'],
       );
     });
   });

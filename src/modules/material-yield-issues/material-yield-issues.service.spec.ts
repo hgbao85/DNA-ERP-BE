@@ -13,7 +13,7 @@ import { MaterialYieldIssuesService } from './material-yield-issues.service';
 describe('MaterialYieldIssuesService', () => {
   let service: MaterialYieldIssuesService;
   let stockLedgerService: { postEntry: jest.Mock };
-  let stockReservationsService: { getAvailableQty: jest.Mock };
+  let stockReservationsService: { getAvailableQty: jest.Mock; drainPoolBestEffort: jest.Mock };
   // Đính chính audit độc lập 28/08 (Nghiêm trọng #4) - $queryRaw (khoá + đọc stock_quant) điều
   // khiển bởi biến này, mặc định dư dả để không ảnh hưởng các test có sẵn (chỉ quan tâm định mức
   // BOM); test riêng cho check tồn kho thật sự tự set lại giá trị thấp. Cùng idiom
@@ -129,6 +129,7 @@ describe('MaterialYieldIssuesService', () => {
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
     stockReservationsService = {
       getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
+      drainPoolBestEffort: jest.fn().mockResolvedValue(undefined),
     };
     service = new MaterialYieldIssuesService(
       prisma as unknown as PrismaServiceType,
@@ -217,6 +218,8 @@ describe('MaterialYieldIssuesService', () => {
         5n, // material.warehouseId
         80n,
         100,
+        undefined,
+        ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'],
       );
     });
 
@@ -317,6 +320,21 @@ describe('MaterialYieldIssuesService', () => {
       prisma.productionOrder.findFirst.mockResolvedValue(null);
       await expect(service.create('1', dto, 'user-1', null)).rejects.toThrow(ConflictException);
       expect(prisma.materialYieldIssue.create).not.toHaveBeenCalled();
+    });
+
+    // 2026-09-23: PieceMaterialYieldPurchaseService giờ giữ chỗ (StockReservation) phần tồn dùng để
+    // che phủ demand lúc tính đề xuất mua - create() phải "trả nợ" giữ chỗ đó khi xưởng thực xuất,
+    // cùng lý do/cùng idiom MaterialIssuesService.
+    it('rút giữ chỗ (best-effort) sau khi ghi ledger, đúng productionInvoiceId tra từ productionInvoiceItem', async () => {
+      prisma.materialYieldIssue.create.mockResolvedValue(issueRow);
+
+      await service.create('1', dto, 'user-1', null);
+
+      expect(stockReservationsService.drainPoolBestEffort).toHaveBeenCalledWith(expect.anything(), {
+        productionInvoiceId: 500n,
+        materialId: 80n,
+        qty: 5,
+      });
     });
   });
 

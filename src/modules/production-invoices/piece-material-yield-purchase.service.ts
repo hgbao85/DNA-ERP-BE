@@ -3,12 +3,14 @@ import {
   Prisma,
   PurchaseProposalSource,
   PurchaseProposalStatus,
+  StockReservationRefType,
 } from '../../generated/prisma/client';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PieceMaterialYieldPurchaseResultDto } from './dto/piece-material-yield-purchase-result.dto';
 
 /**
@@ -27,6 +29,7 @@ export class PieceMaterialYieldPurchaseService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly productionBatchesService: ProductionBatchesService,
+    private readonly stockReservationsService: StockReservationsService,
   ) {}
 
   async computeAndUpsertProposals(
@@ -169,6 +172,14 @@ export class PieceMaterialYieldPurchaseService {
         const materialId = BigInt(materialIdStr);
         const acc = barsNeededByMaterial.get(materialIdStr)!;
         const { warehouseId } = warehouseByMaterial.get(materialIdStr)!;
+        // Co giữ chỗ của CHÍNH lượt tính TRƯỚC ĐÓ về đúng phần đã tiêu TRƯỚC khi tính available -
+        // cùng lý do/cùng fix ConsumableMaterialPurchaseService (xem doc comment
+        // StockReservationsService.shrinkToFloor()).
+        await this.stockReservationsService.shrinkToFloor(tx, {
+          refType: StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
+          refId: piBigId.toString(),
+          materialId,
+        });
         const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
           SELECT "qty" FROM "stock_quant"
           WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
@@ -180,8 +191,26 @@ export class PieceMaterialYieldPurchaseService {
         // viễn chỉ nên có bucket 0, nhưng cộng dồn mọi dòng trả về để đúng bất kể vi phạm giả định
         // đó có xảy ra hay không.
         const actualStock = Math.floor(locked.reduce((sum, r) => sum + r.qty.toNumber(), 0));
-        const buyQty = Math.max(0, acc.bars - actualStock);
+        // 2026-09-23 - cùng vá race đã áp dụng ở ConsumableMaterialPurchaseService: buyQty tính
+        // theo tồn KHẢ DỤNG (trừ phần PI/luồng khác đã giữ chỗ), actualStock vẫn là tồn vật lý thật
+        // để hiển thị/audit, không đổi ý nghĩa.
+        const available = await this.stockReservationsService.getAvailableQty(
+          tx,
+          warehouseId,
+          materialId,
+          actualStock,
+        );
+        const consumeQty = Math.min(acc.bars, available);
+        const buyQty = acc.bars - consumeQty;
         computed.push({ materialId, materialIdStr, actualStock, buyQty });
+        await this.stockReservationsService.reserveOrAdjust(tx, {
+          warehouseId,
+          materialId,
+          qty: consumeQty,
+          refType: StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
+          refId: piBigId.toString(),
+          productionInvoiceId: piBigId,
+        });
       }
 
       // Tìm đề xuất "còn mở" (khác PURCHASED) - không còn lọc NEW (2026-08-25, cùng lý do đã sửa ở

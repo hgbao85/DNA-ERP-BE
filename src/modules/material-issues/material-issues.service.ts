@@ -13,6 +13,7 @@ import {
   Prisma,
   ProductionOrder,
   StockLedgerRefType,
+  StockReservationRefType,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -140,11 +141,21 @@ export class MaterialIssuesService {
         FOR UPDATE
       `;
       const onHand = stockRow?.qty.toNumber() ?? 0;
+      // Loại 2 refType đề xuất mua tự động (2026-09-23, đính chính sau live-test) - đây CHÍNH LÀ
+      // vật tư mà ConsumableMaterialPurchaseService đã giữ chỗ cho PI này (và các PI khác cùng
+      // vật tư), không phải "ai đó khác đang giành tồn" như WarehouseTransferReservation - trừ
+      // nhầm vào đây làm available tụt về 0 dù tồn vật lý còn nguyên. Xem doc comment
+      // getAvailableQty().
       const availableQty = await this.stockReservationsService.getAvailableQty(
         tx,
         warehouse.id,
         materialBigId,
         onHand,
+        undefined,
+        [
+          StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
+          StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
+        ],
       );
       if (dto.issuedQty > availableQty) {
         throw new ConflictException(
@@ -172,6 +183,23 @@ export class MaterialIssuesService {
       // idiom WarehouseTransfersService.confirm()" đã lỗi thời - chính idiom đó đã được sửa để gọi
       // postEntry() TRONG tx từ lâu, chỉ MaterialIssuesService/PackagingIssuesService chưa đồng bộ.
       await this.postLedgerEntry(issue, issuedById, tx);
+
+      // Best-effort: "trả nợ" giữ chỗ mà ConsumableMaterialPurchaseService đã tạo lúc tính đề xuất
+      // mua (2026-09-23, xem doc comment StockReservationsService.drainPoolBestEffort() tại sao
+      // KHÔNG chặn cứng như SteelIssuesService - trigger tạo giữ chỗ đó là best-effort, PI có thể
+      // chưa từng có gì để rút). Không ảnh hưởng gate/ledger phía trên (đã ghi xong). Dùng lại
+      // idiom findUniqueOrThrow() của assertItemPiHasActiveFloor()/assertItemPiHasActiveFloorLocked
+      // (floor-gate.util.ts) - order chắc chắn còn productionInvoiceItem hợp lệ (đã qua 2 gate đó).
+      const piItem = await tx.productionInvoiceItem.findUniqueOrThrow({
+        where: { id: order.productionInvoiceItemId },
+        select: { productionInvoiceId: true },
+      });
+      await this.stockReservationsService.drainPoolBestEffort(tx, {
+        productionInvoiceId: piItem.productionInvoiceId!,
+        materialId: materialBigId,
+        qty: dto.issuedQty,
+      });
+
       return issue;
     });
 

@@ -95,6 +95,63 @@ export class StockReservationsService {
   }
 
   /**
+   * Tạo mới HOẶC cập nhật số lượng giữ chỗ cho 1 (refType, refId, materialId) ỔN ĐỊNH qua nhiều
+   * lần gọi lại (2026-09-23, ConsumableMaterialPurchaseService/PieceMaterialYieldPurchaseService -
+   * 2 nguồn này TÍNH LẠI NHIỀU LẦN trên CÙNG 1 refId, khác CUTTING_PROPOSAL mỗi lần approve() sinh
+   * 1 cuttingProposalId MỚI nên `reserve()` (tạo 1 lần, không đổi) là đủ). KHÔNG BAO GIỜ đặt
+   * quantity thấp hơn consumedQty đã tiêu (xưởng đã lấy đi thật, không "tiêu ít hơn 0" được nếu
+   * nhu cầu tính lại giảm xuống) - qty truyền vào <= 0 là hợp lệ (nghĩa là "không giữ gì thêm"),
+   * KHÁC `reserve()` (throw nếu qty<=0) vì hàm này còn dùng để đưa 1 dòng đã có VỀ 0.
+   */
+  async reserveOrAdjust(
+    tx: PrismaTx,
+    input: {
+      warehouseId: bigint;
+      materialId: bigint;
+      qty: number;
+      refType: StockReservationRefType;
+      refId: string;
+      productionInvoiceId?: bigint;
+    },
+  ): Promise<void> {
+    const idempotencyKey = `${input.refType}:${input.refId}:material:${input.materialId}`;
+    const existing = await tx.stockReservation.findUnique({ where: { idempotencyKey } });
+    if (!existing) {
+      if (input.qty > 0) {
+        await this.reserve(input, tx);
+      }
+      return;
+    }
+    const floor = existing.consumedQty.toNumber();
+    const nextQty = Math.max(input.qty, floor);
+    if (nextQty !== existing.quantity.toNumber()) {
+      await tx.stockReservation.update({ where: { id: existing.id }, data: { quantity: nextQty } });
+    }
+  }
+
+  /**
+   * Co 1 dòng giữ chỗ ỔN ĐỊNH (xem reserveOrAdjust) VỀ ĐÚNG phần đã tiêu (consumedQty) TRƯỚC khi
+   * tính lại available của chính lượt tính đang chạy (2026-09-23) - nếu không, phần CHƯA tiêu của
+   * chính lượt giữ chỗ TRƯỚC ĐÓ (do refId ổn định, không đổi qua các lần gọi lại) sẽ bị
+   * getAvailableQty() trừ NHẦM vào chính nó, khiến available bị đánh giá thấp dần mỗi lần tính lại
+   * dù tồn kho thật không đổi (tự xung đột với chính mình - khác CUTTING_PROPOSAL luôn release() 1
+   * refId CŨ trước khi 1 refId MỚI tính available, xem CuttingProposalsService.approve()). No-op
+   * nếu chưa từng giữ chỗ gì (chưa có dòng nào).
+   */
+  async shrinkToFloor(
+    tx: PrismaTx,
+    input: { refType: StockReservationRefType; refId: string; materialId: bigint },
+  ): Promise<void> {
+    const idempotencyKey = `${input.refType}:${input.refId}:material:${input.materialId}`;
+    const existing = await tx.stockReservation.findUnique({ where: { idempotencyKey } });
+    if (!existing) return;
+    const floor = existing.consumedQty.toNumber();
+    if (floor !== existing.quantity.toNumber()) {
+      await tx.stockReservation.update({ where: { id: existing.id }, data: { quantity: floor } });
+    }
+  }
+
+  /**
    * Mọi dòng giữ chỗ ACTIVE của 1 (PI, vật tư) - "pool" mà creditPool()/drainPool() thao tác lên,
    * sắp theo hạn SKU sở hữu từng dòng TĂNG DẦN (SKU gấp nhất được ưu tiên trước, cả khi credit
    * lẫn khi drain - Sếp chốt 2026-08-26, L5). Chỉ dòng refType=CUTTING_PROPOSAL mới có 1 SKU cụ
@@ -288,6 +345,58 @@ export class StockReservationsService {
   }
 
   /**
+   * Bản BEST-EFFORT của drainPool() (2026-09-23) - dùng cho MaterialIssuesService/
+   * MaterialYieldIssuesService.create(): 2 luồng đó xuất vật tư tiêu hao/vật tư thành phẩm dựa
+   * TRỰC TIẾP vào tồn kho vật lý (getAvailableQty() qua stock_quant + WarehouseTransferReservation,
+   * KHÔNG qua StockReservation pool) - vì trigger tạo giữ chỗ ở ConsumableMaterialPurchaseService/
+   * PieceMaterialYieldPurchaseService là BEST-EFFORT (bọc try/catch, chỉ log lỗi - xem
+   * ProductionInvoicesService.triggerPostApprovalProposals()), 1 PI hoàn toàn có thể chưa từng có
+   * dòng giữ chỗ nào (tính lỗi/mất mạng) dù xưởng vẫn cần xuất vật tư bình thường. CHẶN CỨNG như
+   * drainPool() ở đây sẽ khoá xưởng vĩnh viễn cho ĐÚNG những PI hiếm gặp lỗi đó - tệ hơn hẳn race
+   * hiếm mà việc giữ chỗ định vá. Hàm này CHỈ để "trả nợ" giữ chỗ dần dần theo xuất thật (rút tối đa
+   * pool đang có, KHÔNG BAO GIỜ throw, không chặn ghi sổ) - nếu pool rỗng/không đủ, phần vượt quá
+   * coi như "không có gì để rút" (không lỗi, không consumedQty âm) - available cho các lượt TÍNH LẠI
+   * đề xuất mua sau này sẽ tự đúng lại vì onHand (stock_quant) đã giảm thật rồi (kênh đúng-đắn để
+   * biết "đã tiêu" là StockLedger, KHÔNG phải consumedQty của giữ chỗ - trường này chỉ là sổ sách
+   * phụ để nhả giữ chỗ không tiêu tới, không phải nguồn sự thật tồn kho).
+   */
+  async drainPoolBestEffort(
+    tx: PrismaTx,
+    input: { productionInvoiceId: bigint; materialId: bigint; qty: number },
+  ): Promise<void> {
+    if (!(input.qty > 0)) return;
+    const pool = await this.loadPool(tx, input.productionInvoiceId, input.materialId);
+    if (pool.length === 0) return;
+
+    const lockedRows: { id: bigint; remaining: number }[] = [];
+    for (const row of pool) {
+      const [locked] = await tx.$queryRaw<
+        { quantity: Prisma.Decimal; consumedQty: Prisma.Decimal }[]
+      >`
+        SELECT "quantity", "consumedQty" FROM "stock_reservations"
+        WHERE "id" = ${row.id} FOR UPDATE
+      `;
+      lockedRows.push({
+        id: row.id,
+        remaining: locked.quantity.toNumber() - locked.consumedQty.toNumber(),
+      });
+    }
+
+    let remainingToConsume = input.qty;
+    for (const row of lockedRows) {
+      if (remainingToConsume <= 0) break;
+      if (row.remaining <= 0) continue;
+      const take = Math.min(row.remaining, remainingToConsume);
+      await tx.stockReservation.update({
+        where: { id: row.id },
+        data: { consumedQty: { increment: take } },
+      });
+      remainingToConsume -= take;
+    }
+    // remainingToConsume > 0 (pool không đủ) - cố ý bỏ qua, xem docstring.
+  }
+
+  /**
    * available = onHand (stock_quant, caller tự khoá FOR UPDATE và truyền vào - hàm này không đọc
    * lại để tránh đọc ngoài khoá của caller) trừ tổng phần CÒN GIỮ (quantity - consumedQty) của MỌI
    * giữ chỗ ACTIVE, cộng CẢ HAI bảng: StockReservation (cắt sắt) và WarehouseTransferReservation
@@ -307,6 +416,17 @@ export class StockReservationsService {
     materialId: bigint,
     onHand: number,
     stockLengthMm?: number,
+    /** 2026-09-23 (đính chính sau khi live-test phát hiện bug thật): MaterialIssuesService/
+     *  MaterialYieldIssuesService.create() gọi hàm này để tránh giành tồn với chuyển kho nội bộ
+     *  (WarehouseTransferReservation) - KHÔNG có ý định (và trước 2026-09-23 CHƯA BAO GIỜ áp
+     *  dụng thật, vì CUTTING_PROPOSAL chỉ tồn tại cho vật tư sắt, 2 service này không đụng sắt)
+     *  bị chặn bởi CHÍNH giữ chỗ mà đề xuất mua của material đó vừa tạo ra. Từ khi
+     *  ConsumableMaterialPurchaseService/PieceMaterialYieldPurchaseService bắt đầu ghi
+     *  StockReservation cho ĐÚNG những vật tư 2 service issue này xử lý, giữ chỗ CỦA CHÍNH PI
+     *  đang xuất cũng bị trừ vào available, có thể trừ hết sạch dù tồn vật lý còn nguyên (tái
+     *  hiện qua live-test 2026-09-23: 2 PI giữ chỗ cộng đúng bằng onHand -> available=0, xuất bị
+     *  chặn 409 dù vật lý còn đủ) - 2 refType này PHẢI bị loại khỏi phép trừ tại đây. */
+    excludeRefTypes?: StockReservationRefType[],
   ): Promise<number> {
     const db = tx ?? this.prisma;
     const [stockReservations, transferReservations] = await Promise.all([
@@ -316,6 +436,7 @@ export class StockReservationsService {
           materialId,
           status: ReservationStatus.ACTIVE,
           stockLengthMm: stockLengthMm ?? 0,
+          ...(excludeRefTypes?.length ? { refType: { notIn: excludeRefTypes } } : {}),
         },
         select: { quantity: true, consumedQty: true },
       }),

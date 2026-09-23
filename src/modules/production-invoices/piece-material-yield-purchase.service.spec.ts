@@ -2,10 +2,16 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PurchaseProposalSource, PurchaseProposalStatus } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 
 describe('PieceMaterialYieldPurchaseService', () => {
   let service: PieceMaterialYieldPurchaseService;
+  let stockReservationsService: {
+    getAvailableQty: jest.Mock;
+    reserveOrAdjust: jest.Mock;
+    shrinkToFloor: jest.Mock;
+  };
   let prisma: {
     productionInvoice: { findUnique: jest.Mock };
     productionOrder: { findMany: jest.Mock };
@@ -104,9 +110,18 @@ describe('PieceMaterialYieldPurchaseService', () => {
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     productionBatchesService = { getReadyPoolQty: jest.fn().mockResolvedValue(new Map()) };
+    // 2026-09-23: cùng vá race đã áp dụng ở ConsumableMaterialPurchaseService - buyQty giờ tính theo
+    // getAvailableQty(), mặc định trả về ĐÚNG actualStock truyền vào (không giữ chỗ nào khác) để
+    // mọi test buyQty=barsNeeded-actualStock có sẵn không phải sửa.
+    stockReservationsService = {
+      getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
+      reserveOrAdjust: jest.fn().mockResolvedValue(undefined),
+      shrinkToFloor: jest.fn().mockResolvedValue(undefined),
+    };
     service = new PieceMaterialYieldPurchaseService(
       prisma as unknown as PrismaServiceType,
       productionBatchesService as unknown as ProductionBatchesService,
+      stockReservationsService as unknown as StockReservationsService,
     );
   });
 
@@ -346,6 +361,51 @@ describe('PieceMaterialYieldPurchaseService', () => {
         status: { not: PurchaseProposalStatus.PURCHASED },
       },
       include: { items: true },
+    });
+  });
+
+  // 2026-09-23 - cùng vá race đã áp dụng ở ConsumableMaterialPurchaseService: buyQty tính qua
+  // getAvailableQty() (trừ phần giữ chỗ của PI/luồng khác), không đọc thẳng actualStock nữa.
+  it('buyQty tính theo tồn KHẢ DỤNG (getAvailableQty), không phải tồn vật lý thô', async () => {
+    // barsNeeded=9 (onHand pool=0, required=100, piecesPerBar=12 -> ceil(100/12)=9).
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(20)); // tồn vật lý dư dả (20 >= 9)...
+    stockReservationsService.getAvailableQty.mockResolvedValue(4); // ...nhưng PI khác đã giữ chỗ phần lớn
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    // barsNeeded=9, available=4 -> consumeQty=4, buyQty=5 (KHÔNG phải 0 dù actualStock=20 thừa).
+    expect(result[0]).toMatchObject({ barsNeeded: 9, actualStock: 20, buyQty: 5 });
+    expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+      expect.anything(),
+      thanhNhom.warehouse.id,
+      thanhNhom.id,
+      20,
+    );
+  });
+
+  it('giữ chỗ (reserveOrAdjust) ĐÚNG phần tồn đã dùng để che phủ demand, refType=PIECE_MATERIAL_YIELD_PURCHASE, refId=productionInvoiceId', async () => {
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(20));
+    stockReservationsService.getAvailableQty.mockResolvedValue(4);
+
+    await service.computeAndUpsertProposals('1');
+
+    expect(stockReservationsService.reserveOrAdjust).toHaveBeenCalledWith(expect.anything(), {
+      warehouseId: thanhNhom.warehouse.id,
+      materialId: thanhNhom.id,
+      qty: 4, // consumeQty = min(barsNeeded=9, available=4)
+      refType: 'PIECE_MATERIAL_YIELD_PURCHASE',
+      refId: '1', // piBigId
+      productionInvoiceId: 1n,
+    });
+  });
+
+  it('co giữ chỗ của chính lượt tính TRƯỚC ĐÓ về floor (shrinkToFloor) TRƯỚC khi tính available', async () => {
+    await service.computeAndUpsertProposals('1');
+
+    expect(stockReservationsService.shrinkToFloor).toHaveBeenCalledWith(expect.anything(), {
+      refType: 'PIECE_MATERIAL_YIELD_PURCHASE',
+      refId: '1',
+      materialId: thanhNhom.id,
     });
   });
 

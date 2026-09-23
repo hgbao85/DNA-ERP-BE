@@ -5,10 +5,16 @@ import {
   PurchaseProposalStatus,
 } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
 
 describe('ConsumableMaterialPurchaseService', () => {
   let service: ConsumableMaterialPurchaseService;
+  let stockReservationsService: {
+    getAvailableQty: jest.Mock;
+    reserveOrAdjust: jest.Mock;
+    shrinkToFloor: jest.Mock;
+  };
   let prisma: {
     productionInvoice: { findUnique: jest.Mock };
     productionOrder: { findMany: jest.Mock };
@@ -113,7 +119,19 @@ describe('ConsumableMaterialPurchaseService', () => {
       $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
-    service = new ConsumableMaterialPurchaseService(prisma as unknown as PrismaServiceType);
+    // 2026-09-23: buyQty giờ tính theo tồn KHẢ DỤNG (getAvailableQty), không đọc thẳng actualStock -
+    // mặc định trả về ĐÚNG actualStock truyền vào (không giữ chỗ nào khác) để mọi test buyQty=
+    // required-actualStock có sẵn không phải sửa; reserveOrAdjust/shrinkToFloor no-op mặc định, test
+    // riêng cho race condition tự override.
+    stockReservationsService = {
+      getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
+      reserveOrAdjust: jest.fn().mockResolvedValue(undefined),
+      shrinkToFloor: jest.fn().mockResolvedValue(undefined),
+    };
+    service = new ConsumableMaterialPurchaseService(
+      prisma as unknown as PrismaServiceType,
+      stockReservationsService as unknown as StockReservationsService,
+    );
   });
 
   it('trả [] khi PI chưa có ProductionOrder nào', async () => {
@@ -383,6 +401,51 @@ describe('ConsumableMaterialPurchaseService', () => {
       },
     });
     expect(result[0].purchaseProposalId).toBe('900');
+  });
+
+  // 2026-09-23 (vá race "2 PI cùng tính đề xuất mua gần nhau, cùng thấy 1 tồn kho đủ, cả 2 cùng
+  // buyQty=0 dù tồn thật chỉ đủ cho 1 PI"): buyQty giờ tính qua getAvailableQty() (trừ phần giữ chỗ
+  // của PI/luồng khác), không đọc thẳng actualStock (tồn vật lý) nữa.
+  it('buyQty tính theo tồn KHẢ DỤNG (getAvailableQty), không phải tồn vật lý thô - phần đã bị PI khác giữ chỗ vẫn phải mua thêm dù tồn vật lý đủ', async () => {
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(200)); // tồn vật lý dư dả (200 >= required 120)...
+    stockReservationsService.getAvailableQty.mockResolvedValue(50); // ...nhưng PI khác đã giữ chỗ phần lớn, chỉ còn khả dụng 50
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    // required=120, available=50 -> consumeQty=50, buyQty=70 (KHÔNG phải 0 dù actualStock=200 thừa).
+    expect(result[0]).toMatchObject({ required: 120, actualStock: 200, buyQty: 70 });
+    expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+      expect.anything(),
+      day.warehouse.id,
+      day.id,
+      200,
+    );
+  });
+
+  it('giữ chỗ (reserveOrAdjust) ĐÚNG phần tồn đã dùng để che phủ demand (consumeQty), refType=CONSUMABLE_MATERIAL_PURCHASE, refId=productionInvoiceId', async () => {
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(200));
+    stockReservationsService.getAvailableQty.mockResolvedValue(50);
+
+    await service.computeAndUpsertProposals('1');
+
+    expect(stockReservationsService.reserveOrAdjust).toHaveBeenCalledWith(expect.anything(), {
+      warehouseId: day.warehouse.id,
+      materialId: day.id,
+      qty: 50, // consumeQty = min(required=120, available=50)
+      refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+      refId: '1', // piBigId (KHÔNG phải PurchaseProposalItem.id - dòng đó chưa tồn tại lúc này)
+      productionInvoiceId: 1n,
+    });
+  });
+
+  it('co giữ chỗ của chính lượt tính TRƯỚC ĐÓ về floor (shrinkToFloor) TRƯỚC khi tính available - tránh tự xung đột với chính mình qua các lần tính lại', async () => {
+    await service.computeAndUpsertProposals('1');
+
+    expect(stockReservationsService.shrinkToFloor).toHaveBeenCalledWith(expect.anything(), {
+      refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+      refId: '1',
+      materialId: day.id,
+    });
   });
 
   it('ném BadRequestException khi material chưa được cấu hình Kho', async () => {

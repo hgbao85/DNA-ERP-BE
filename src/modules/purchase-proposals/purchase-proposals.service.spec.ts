@@ -928,19 +928,23 @@ describe('PurchaseProposalsService', () => {
       );
 
       expect(result.receivedQty).toBe(5);
-      // Short-circuit trên targetProductionInvoiceId - không có PI thì không có pool nào để soi,
-      // khỏi cần query cuttingProposalLine.
+      // Không neo PI nào -> không có pool nào để soi (creditPool cần productionInvoiceId).
+      // cuttingProposalLine không còn được service này gọi tới nữa (xem đính chính 2026-09-23,
+      // gate riêng cho sắt đã gỡ) - assertion giữ lại chỉ để xác nhận không có query thừa nào phát
+      // sinh ở nhánh này.
       expect(prisma.cuttingProposalLine.findFirst).not.toHaveBeenCalled();
       expect(stockReservationsService.creditPool).not.toHaveBeenCalled();
     });
 
-    // Đề xuất GỘP (2026-08-25): proposal neo đúng 1 PI (từ nguồn sắt) NHƯNG dòng đang nhận là vật
-    // tư KHÁC của cùng PI (VTTP/tiêu hao), không nằm trong CuttingProposalLine của bất kỳ phương
-    // án cắt nào thuộc PI đó. Nhận nhầm theo cấp-đề-xuất (cứ có PI là creditPool) sẽ tạo
-    // StockReservation MỒ CÔI cho vật tư không phải sắt (xem StockReservationsService.creditPool
-    // - pool rỗng thì TỰ TẠO MỚI).
-    it('đề xuất gộp: dòng đang nhận KHÔNG phải sắt của phương án cắt nào thuộc PI này - không gọi creditPool', async () => {
-      prisma.cuttingProposalLine.findFirst.mockResolvedValueOnce(null);
+    // Đính chính 2026-09-23 (xem doc comment receiveItem()): trước đây CHỈ cộng pool khi đúng vật
+    // tư SẮT (kiểm bằng CuttingProposalLine) - "nhánh khác (VTTP/tiêu hao) không có pool nào để
+    // cộng vào". Sai từ khi ConsumableMaterialPurchaseService/PieceMaterialYieldPurchaseService
+    // cũng giữ chỗ cho đúng vật tư 2 nhánh đó - bỏ sót credit khiến hàng vừa mua về vẫn "chưa có
+    // chủ" trong giữ chỗ, PI khác tính đề xuất ngay sau đó đọc trùng đúng phần hàng vừa về (race
+    // condition tái hiện ở lúc NHẬN thay vì lúc TÍNH). Test này xác nhận creditPool() giờ được gọi
+    // VÔ ĐIỀU KIỆN cho mọi vật tư có PI neo, không còn cổng riêng cho sắt / không còn query
+    // cuttingProposalLine nào cả.
+    it('đề xuất gộp: dòng đang nhận là vật tư tiêu hao (KHÔNG phải sắt) - VẪN gọi creditPool() (đính chính 2026-09-23, gỡ cổng riêng cho sắt)', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           cuttingProposalId: 200n,
@@ -976,30 +980,22 @@ describe('PurchaseProposalsService', () => {
       );
 
       expect(result.receivedQty).toBe(5);
-      expect(prisma.cuttingProposalLine.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: {
-            materialId: 99n,
-            cuttingProposal: {
-              OR: [
-                { productionInvoiceId: 50n },
-                { productionOrder: { productionInvoiceItem: { productionInvoiceId: 50n } } },
-              ],
-            },
-          },
-        }),
-      );
-      expect(stockReservationsService.creditPool).not.toHaveBeenCalled();
+      expect(prisma.cuttingProposalLine.findFirst).not.toHaveBeenCalled();
+      expect(stockReservationsService.creditPool).toHaveBeenCalledWith(expect.anything(), {
+        productionInvoiceId: 50n,
+        materialId: 99n,
+        warehouseId: 800n,
+        qty: 5,
+      });
     });
 
     // 2026-08-22: sourceType=PIECE_MATERIAL_YIELD (đề xuất mua thanh nhôm theo PieceMaterialYield,
     // xem PieceMaterialYieldPurchaseService) CỐ Ý luôn có cuttingProposalId null - khác hẳn ca
-    // "dữ liệu hỏng" ở trên (không có sourceType, mặc định coi như CUTTING_PROPOSAL). PI thì VẪN
-    // có (PieceMaterialYieldPurchaseService cũng set productionInvoiceId, xem "gộp 1 PI = 1 form")
-    // nhưng vật tư thanh nhôm này không nằm trong CuttingProposalLine nào của PI - hàng về vẫn
-    // phải nhập kho thành công, chỉ bỏ qua bước cộng vào pool giữ chỗ (không có pool nào để cộng).
-    it('sourceType=PIECE_MATERIAL_YIELD, vật tư không qua CuttingProposal - vẫn nhập kho thành công, không gọi creditPool', async () => {
-      prisma.cuttingProposalLine.findFirst.mockResolvedValueOnce(null);
+    // "dữ liệu hỏng" ở trên (không có sourceType, mặc định coi như CUTTING_PROPOSAL). Đính chính
+    // 2026-09-23: vật tư thanh nhôm này VẪN có pool riêng (PIECE_MATERIAL_YIELD_PURCHASE) từ khi
+    // PieceMaterialYieldPurchaseService bắt đầu giữ chỗ - creditPool() giờ CŨNG được gọi, không
+    // còn "không có pool nào để cộng" như trước.
+    it('sourceType=PIECE_MATERIAL_YIELD - creditPool() VẪN được gọi (đính chính 2026-09-23, vật tư này giờ có pool riêng)', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
           cuttingProposalId: null,
@@ -1040,7 +1036,12 @@ describe('PurchaseProposalsService', () => {
         expect.objectContaining({ materialId: 30n, qty: 5, refType: 'PURCHASE' }),
         expect.anything(),
       );
-      expect(stockReservationsService.creditPool).not.toHaveBeenCalled();
+      expect(stockReservationsService.creditPool).toHaveBeenCalledWith(expect.anything(), {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        warehouseId: 800n,
+        qty: 5,
+      });
     });
 
     // C3: dùng receivedQty KHOÁ ĐƯỢC bên trong transaction, KHÔNG dùng giá trị đọc trước đó ở

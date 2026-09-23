@@ -4,12 +4,14 @@ import {
   Prisma,
   PurchaseProposalSource,
   PurchaseProposalStatus,
+  StockReservationRefType,
 } from '../../generated/prisma/client';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ConsumableMaterialPurchaseResultDto } from './dto/consumable-material-purchase-result.dto';
 
 /**
@@ -27,7 +29,10 @@ import { ConsumableMaterialPurchaseResultDto } from './dto/consumable-material-p
  */
 @Injectable()
 export class ConsumableMaterialPurchaseService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly stockReservationsService: StockReservationsService,
+  ) {}
 
   async computeAndUpsertProposals(
     productionInvoiceId: string,
@@ -167,9 +172,19 @@ export class ConsumableMaterialPurchaseService {
         const materialIdStr = materialId.toString();
         const material = materialById.get(materialIdStr)!;
         const required = requiredByMaterial.get(materialIdStr)!;
+        const warehouseId = material.warehouse!.id;
+        // Co giữ chỗ của CHÍNH lượt tính TRƯỚC ĐÓ (refId=piBigId ổn định qua mọi lần gọi lại, khác
+        // CUTTING_PROPOSAL) về đúng phần đã tiêu TRƯỚC khi tính available - nếu không, phần CHƯA
+        // tiêu của chính nó bị getAvailableQty() trừ nhầm vào chính nó (xem doc comment
+        // StockReservationsService.shrinkToFloor()).
+        await this.stockReservationsService.shrinkToFloor(tx, {
+          refType: StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
+          refId: piBigId.toString(),
+          materialId,
+        });
         const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
           SELECT "qty" FROM "stock_quant"
-          WHERE "warehouseId" = ${material.warehouse!.id} AND "materialId" = ${materialId}
+          WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
           FOR UPDATE
         `;
         // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08): `locked[0]` chỉ lấy 1
@@ -179,7 +194,20 @@ export class ConsumableMaterialPurchaseService {
         // hao phẳng vĩnh viễn chỉ nên có bucket 0, nhưng KHÔNG giả định chỉ có đúng 1 dòng - cộng
         // dồn mọi dòng trả về để đúng bất kể vi phạm giả định đó có xảy ra hay không.
         const actualStock = locked.reduce((sum, r) => sum + r.qty.toNumber(), 0);
-        const buyQty = Math.max(0, required - actualStock);
+        // 2026-09-23 (vá race "2 PI cùng tính đề xuất gần nhau, cùng thấy 1 tồn đủ, cả 2 cùng
+        // buyQty=0 dù tồn thật chỉ đủ cho 1 PI"): buyQty/consumeQty giờ tính theo tồn KHẢ DỤNG
+        // (onHand trừ phần PI/luồng khác đã giữ chỗ - CUTTING_PROPOSAL, chuyển kho nội bộ, hoặc
+        // chính nguồn này của 1 PI khác), KHÔNG dùng thẳng actualStock (tồn vật lý) như trước.
+        // actualStock vẫn giữ nguyên Ý NGHĨA "tồn vật lý thật" để hiển thị/audit - không đổi field
+        // này sang "khả dụng" (cùng idiom CuttingProposalsService.approve()).
+        const available = await this.stockReservationsService.getAvailableQty(
+          tx,
+          warehouseId,
+          materialId,
+          actualStock,
+        );
+        const consumeQty = Math.min(required, available);
+        const buyQty = required - consumeQty;
         computed.push({
           materialId,
           materialIdStr,
@@ -188,6 +216,17 @@ export class ConsumableMaterialPurchaseService {
           buyQty,
           warehouseCode: material.warehouse!.code,
           receiveWarehouseCode: receiveWarehouseByMaterial.get(materialIdStr) ?? null,
+        });
+        // Giữ chỗ ĐÚNG phần tồn đã dùng để che phủ demand - PI khác tính sau sẽ thấy phần này qua
+        // getAvailableQty(), không đọc trùng actualStock nữa (xem doc comment enum refType).
+        // consumeQty=0 là hợp lệ (đưa giữ chỗ cũ về 0 nếu demand giảm xuống 0 giữa 2 lần tính lại).
+        await this.stockReservationsService.reserveOrAdjust(tx, {
+          warehouseId,
+          materialId,
+          qty: consumeQty,
+          refType: StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
+          refId: piBigId.toString(),
+          productionInvoiceId: piBigId,
         });
       }
 
