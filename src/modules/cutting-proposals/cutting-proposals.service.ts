@@ -227,12 +227,48 @@ type CuttingProposalDetail = Prisma.CuttingProposalGetPayload<{ include: typeof 
 export class CuttingProposalsService {
   private readonly logger = new Logger(CuttingProposalsService.name);
 
+  /** Đuôi hàng đợi FIFO cho MỌI lượt gọi solver thật (xem enqueueSolverRun) - CHỈ 1 lượt giải
+   *  chạy tại 1 thời điểm, xếp hàng đúng theo THỨ TỰ Sếp duyệt (2026-09-24, theo yêu cầu người
+   *  dùng: "vẫn phải xếp hàng theo lượt gửi khi boss duyệt... PI 2 sẽ vô hàng chờ solve PI 1
+   *  xong"). Promise-chain trong tiến trình, KHÔNG cần Redis/queue ngoài - BE chạy đúng 1 instance
+   *  (render.yaml: plan free, không scale ngang), lượt duyệt kế tiếp trong CÙNG process luôn thấy
+   *  đúng đuôi hàng đợi mới nhất.
+   *
+   * Lý do cần: 2 lượt giải CHỒNG LÊN NHAU tranh CPU trong CÙNG 1 container solver (SOLVER_WORKERS
+   * dùng chung) - cả 2 chậm lại, dễ chạm SOLVER_TIMEOUT_SECONDS hơn giải TUẦN TỰ (đo thật
+   * 2026-09-24: 1 loại sắt phức tạp MỘT MÌNH đã mất 372s, gần bằng cả ngân sách/loại sắt lý
+   * thuyết - 2 lượt tranh CPU cùng lúc chỉ khiến số đó tệ hơn). Xếp hàng KHÔNG đổi tính ĐÚNG của dữ
+   * liệu (approve() đã tự khoá stock_quant FOR UPDATE, an toàn dù 2 lượt chạy song song thật - xem
+   * dòng ~1125) - hàng đợi này chỉ đổi TỐC ĐỘ/thứ tự hoàn thành, không phải lưới an toàn dữ liệu.
+   */
+  private solveQueueTail: Promise<void> = Promise.resolve();
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly externalApiService: ExternalApiService,
     private readonly configService: ConfigService<AppConfig, true>,
     private readonly stockReservationsService: StockReservationsService,
   ) {}
+
+  /**
+   * Xếp lượt giải (proposalId) vào ĐUÔI hàng đợi - trả về promise của ĐÚNG lượt này, callers giữ
+   * nguyên `.catch()` log lỗi riêng của mình như khi gọi runSolverAndSave() trực tiếp (xem 2 nơi
+   * gọi ở requestForOrder/requestForInvoice). `this.solveQueueTail` chỉ dùng để CHỐT THỨ TỰ chạy
+   * kế tiếp - nuốt lỗi của lượt hiện tại ở ĐÂY (không phải ở `run`) để 1 lượt lỗi không làm vỡ
+   * chuỗi, lượt sau vẫn được xếp hàng và chạy bình thường.
+   */
+  private enqueueSolverRun(
+    proposalId: bigint,
+    buildJob: () => Promise<SolverJob>,
+    requestedById?: string,
+    onComplete?: () => void | Promise<void>,
+  ): Promise<void> {
+    const run = this.solveQueueTail
+      .catch(() => undefined)
+      .then(() => this.runSolverAndSave(proposalId, buildJob, requestedById, onComplete));
+    this.solveQueueTail = run.catch(() => undefined);
+    return run;
+  }
 
   async requestForOrder(
     productionOrderId: bigint,
@@ -265,7 +301,7 @@ export class CuttingProposalsService {
       include: LIST_INCLUDE,
     });
 
-    void this.runSolverAndSave(
+    void this.enqueueSolverRun(
       proposal.id,
       () => this.buildOrderJob(productionOrderId),
       options.requestedById,
@@ -341,7 +377,7 @@ export class CuttingProposalsService {
       include: LIST_INCLUDE,
     });
 
-    void this.runSolverAndSave(
+    void this.enqueueSolverRun(
       proposal.id,
       () => this.buildInvoiceJob(productionInvoiceId),
       options.requestedById,
@@ -1455,10 +1491,33 @@ export class CuttingProposalsService {
 
       // Ngân sách thời gian CHO MỖI LOẠI SẮT KHSX đề nghị riêng cho đợt này (2026-09-22, ô "Thời
       // gian chạy tối đa" ở "Tối ưu cắt sắt") - thay hẳn config.solverTimeLimitSeconds làm mẫu số
-      // của cả request lẫn phép kiểm timeout dưới đây khi có. Không cần Sếp duyệt (không đổi kết
-      // quả cắt), nên không áp trần/max() như 2 trục hao hụt/chiều dài - KHSX tự chịu trách nhiệm
-      // với con số mình nhập, BE chỉ còn chặn khi nó khiến ca xấu nhất vượt timeout HTTP client.
-      const timeLimitSeconds = job.timeLimitSecondsOverride ?? config.solverTimeLimitSeconds;
+      // của request khi có.
+      const requestedTimeLimitSeconds =
+        job.timeLimitSecondsOverride ?? config.solverTimeLimitSeconds;
+      const timeoutSeconds = this.configService.get('solver.timeoutSeconds', { infer: true });
+      // TRẦN AN TOÀN TUYỆT ĐỐI, TỰ CO LẠI thay vì chặn cứng (2026-09-24, đổi từ throw Error cũ -
+      // xem changelog mục 23). N × trần ≤ timeoutSeconds LUÔN đúng (phép chia nguyên, đúng công
+      // thức FE đã dùng để tự tính ô "Thời gian chạy tối đa" - xem GomDotCatPage.tsx
+      // autoTimeLimitSeconds). Lý do đổi: override giờ LUÔN do FE TỰ TÍNH và LƯU LẠI trên PI lúc
+      // gộp/cắt riêng (không còn ô nhập tay cho KHSX từ 2026-09-23) - "KHSX tự chịu trách nhiệm với
+      // số tự nhập" không còn đúng nữa, và số lưu lại có thể LỖI THỜI nếu BOM đổi thêm loại sắt sau
+      // đó: nút "Tính lại" (retryCuttingProposal, gửi body rỗng, không gửi lại override) sẽ tái
+      // dùng đúng số cũ mãi mãi, tính theo N loại sắt lúc lưu, không phải N THẬT bây giờ - từng
+      // chặn oan PI-2026-008 (override=300 lưu từ lúc ít loại sắt hơn, sau đó BOM có 7 loại thì
+      // 7×300=2100s > 1700s, bị chặn dù hoàn toàn có thể giải an toàn ở time_limit thấp hơn).
+      const distinctMaterialCount = Math.max(1, distinctMaterialIds.length);
+      const timeLimitSeconds = Math.min(
+        requestedTimeLimitSeconds,
+        Math.max(1, Math.floor(timeoutSeconds / distinctMaterialCount)),
+      );
+      if (timeLimitSeconds < requestedTimeLimitSeconds) {
+        this.logger.warn(
+          `Cutting proposal ${proposalId}: co ngân sách time_limit từ ${requestedTimeLimitSeconds}s ` +
+            `xuống ${timeLimitSeconds}s/loại (${distinctMaterialCount} loại sắt × timeoutSeconds ` +
+            `${timeoutSeconds}s) - số cũ (lưu trên PI hoặc SystemConfig) đã lỗi thời so với số loại ` +
+            `sắt thật của lượt tính này.`,
+        );
+      }
 
       const baseRequestBody = {
         num_sets: job.numSets,
@@ -1503,45 +1562,25 @@ export class CuttingProposalsService {
 
       const baseUrl = this.configService.get('solver.baseUrl', { infer: true });
       const apiKey = this.configService.get('solver.apiKey', { infer: true });
-      const timeoutSeconds = this.configService.get('solver.timeoutSeconds', { infer: true });
 
       // Ngân sách thời gian solver (`time_limit_seconds`) là CHO MỖI LOẠI SẮT, không phải cho cả
       // request - api/views.py truyền time_limit_sec vào optimize_one_material() BÊN TRONG vòng
       // lặp `for group in material_groups`. Ca xấu nhất của 1 request nhiều loại sắt (PI gộp) là
-      // distinctMaterialIds.length × timeLimitSeconds (config mặc định, hoặc số KHSX tự đề nghị
-      // riêng cho đợt này - xem job.timeLimitSecondsOverride, 2026-09-22). Không kiểm trước thì
-      // khi vượt quá timeout HTTP client, request bị ngắt NGANG CHỪNG (không phải solver kết luận
-      // vô nghiệm) - proposal vẫn bị đánh FAILED nhưng lý do là lỗi mạng chung chung, không nói
-      // được vì sao. Review 2026-08-18 phát hiện: mặc định code (SOLVER_TIMEOUT_SECONDS=300, xem
-      // configuration.ts) không đủ cho phiếu gộp nhiều loại sắt nếu ai đó quên set env production.
+      // distinctMaterialIds.length × timeLimitSeconds - đã CHẶN Ở NGUỒN bằng cách tự co
+      // timeLimitSeconds (xem chỗ tính ở trên), nên KHÔNG còn cần throw chặn ở đây nữa: N × trần
+      // ≤ timeoutSeconds LUÔN đúng theo đúng phép chia nguyên đã dùng để tính trần đó.
       //
-      // 2026-08-26 (mở lại auto_scan): công thức này KHÔNG tính phần vét cạn - 1 loại sắt cần
+      // 2026-08-26 (mở lại auto_scan): công thức trên KHÔNG tính phần vét cạn - 1 loại sắt cần
       // scan gọi optimize_material() LẶP LẠI cho từng chiều dài trong dải min/max_length (mặc
       // định ~100 lần), mỗi lần vẫn giới hạn bởi CÙNG time_limit_seconds đó. Trần lý thuyết thật
-      // sự cao hơn nhiều lần công thức dưới, nhưng KHÔNG nâng multiplier lên (100×) vì CP-SAT cho
+      // sự cao hơn nhiều lần công thức trên, nhưng KHÔNG nâng multiplier lên (100×) vì CP-SAT cho
       // bài toán nhỏ cỡ này hầu như luôn giải xong trong mili-giây tới vài giây - nâng multiplier
       // sẽ chặn nhầm mọi đợt gộp bình thường trước khi kịp thử. Đo thật 2026-08-26 (3 loại sắt, 1
       // loại phải vét cạn 101 chiều dài): 47s, timeoutSeconds mặc định 1700s vẫn dư nhiều. Rủi ro
       // còn lại là ca CP-SAT thật sự bế tắc ở MỌI chiều dài (hiếm, thường do ngưỡng % đặt sai) -
-      // khi đó request bị timeoutSeconds cắt ngang, lỗi báo ra sẽ là lỗi mạng chung chung như đã
-      // mô tả ở trên, không phải điều mới do đổi này gây ra (case đó vốn đã tệ y hệt trước đây).
-      const worstCaseSeconds = distinctMaterialIds.length * timeLimitSeconds;
-      if (worstCaseSeconds > timeoutSeconds) {
-        // `timeLimitSeconds` có thể là số KHSX tự nhập (job.timeLimitSecondsOverride) chứ không
-        // chỉ config mặc định - câu lỗi phải nêu đúng nguồn để người đọc biết sửa ở đâu (đổi lại ô
-        // "Thời gian chạy tối đa" lúc gộp/cắt riêng, hay đổi SystemConfig nếu không phải KHSX đặt).
-        const sourceHint =
-          job.timeLimitSecondsOverride != null
-            ? 'giảm số phút ở ô "Thời gian chạy tối đa" lúc gộp/cắt riêng'
-            : 'giảm SystemConfig.solverTimeLimitSeconds';
-        throw new Error(
-          `Đợt tính có ${distinctMaterialIds.length} loại sắt × time_limit ` +
-            `${timeLimitSeconds}s/loại = tối đa ${worstCaseSeconds}s, vượt timeout ` +
-            `HTTP client hiện tại (${timeoutSeconds}s). Solver giải TUẦN TỰ từng loại sắt nên ca ` +
-            `xấu nhất sẽ bị ngắt giữa chừng. Tăng SOLVER_TIMEOUT_SECONDS hoặc ${sourceHint} rồi ` +
-            `thử lại - không tự giảm số SKU gộp, đó là quyết định của KHSX/Sếp.`,
-        );
-      }
+      // khi đó request bị timeoutSeconds cắt ngang, lỗi báo ra sẽ là lỗi mạng chung chung, không
+      // phải điều mới do đổi này gây ra (case đó vốn đã tệ y hệt trước đây, và hiếm tới mức không
+      // đáng đánh đổi lấy 1 guard cứng chặn oan mọi lượt "Tính lại" có override lỗi thời).
 
       // Ghi requestParams NGAY TỪ ĐÂY (trước khi gọi solver), không đợi tới saveSuccess() -
       // 2026-09-22, theo phản hồi UI/UX: màn "Chi tiết đề xuất cắt sắt" trong lúc đang tính trước

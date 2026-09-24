@@ -1448,11 +1448,13 @@ describe('CuttingProposalsService', () => {
       expect(materialIds).toEqual([200n, 300n]);
     });
 
-    it('chặn TRƯỚC khi gọi solver khi ngân sách thời gian xấu nhất vượt timeout HTTP client - đánh FAILED có lý do rõ, không để timeout mạng chung chung', async () => {
-      // Review 2026-08-18: time_limit_seconds là ngân sách CHO MỖI LOẠI SẮT (api/views.py truyền
-      // vào bên trong vòng lặp material_groups), không phải cho cả request. 2 loại sắt × 200s =
-      // 400s > timeout client 300s (mock mặc định) -> phải chặn TRƯỚC khi gọi, không để axios tự
-      // ngắt giữa chừng rồi báo lỗi mạng không ai hiểu vì sao.
+    it('co time_limit_seconds về mức AN TOÀN thay vì chặn cứng khi ngân sách xấu nhất vượt timeout HTTP client (2026-09-24, đổi từ throw Error cũ)', async () => {
+      // Review 2026-08-18 (hành vi CŨ, đã bỏ): time_limit_seconds là ngân sách CHO MỖI LOẠI SẮT
+      // (api/views.py truyền vào bên trong vòng lặp material_groups), không phải cho cả request -
+      // 2 loại sắt × 200s = 400s > timeout client 300s (mock mặc định) từng bị THROW chặn cứng.
+      // 2026-09-24: override giờ LUÔN do FE tự tính rồi lưu lại trên PI, "Tính lại" không gửi lại
+      // số mới - lưu ý số cũ có thể LỖI THỜI nếu BOM đổi thêm loại sắt (xem changelog mục 23) -
+      // nên đổi sang TỰ CO time_limit xuống floor(300/2)=150s rồi VẪN GỌI SOLVER, không throw nữa.
       prisma.pieceBom.findMany.mockResolvedValue([
         pieceBomRow,
         {
@@ -1471,17 +1473,31 @@ describe('CuttingProposalsService', () => {
         ...systemConfig,
         solverTimeLimitSeconds: 200,
       });
+      externalApiService.post.mockResolvedValue({
+        status: 'success',
+        summary: { total_bars_all: 0, total_waste_mm: 0, waste_percentage: 0 },
+        purchase_plan: [
+          { material: '200', feasible: false },
+          { material: '300', feasible: false },
+        ],
+      });
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
 
       await invoke(2n, 1n);
 
-      expect(externalApiService.post).not.toHaveBeenCalled();
-      const failCall = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
-        { where: { id: bigint }; data: { status: CuttingProposalStatus; errorMessage: string } },
+      expect(externalApiService.post).toHaveBeenCalledTimes(1);
+      const [, body] = externalApiService.post.mock.calls[0] as unknown as [
+        string,
+        { time_limit_seconds: number },
       ];
-      expect(failCall[0].data.status).toBe(CuttingProposalStatus.FAILED);
-      expect(failCall[0].data.errorMessage).toContain('2 loại sắt');
-      expect(failCall[0].data.errorMessage).toContain('400s');
-      expect(failCall[0].data.errorMessage).toContain('300s');
+      expect(body.time_limit_seconds).toBe(150);
+      const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
+        { data?: { status?: CuttingProposalStatus } },
+      ][];
+      const failCall = updateCalls.find(
+        (call) => call[0].data?.status === CuttingProposalStatus.FAILED,
+      );
+      expect(failCall).toBeUndefined();
     });
 
     it('stores an infeasible material line without touching cutting_patterns', async () => {
