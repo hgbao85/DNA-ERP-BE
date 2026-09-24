@@ -1,6 +1,10 @@
 import { randomUUID } from 'crypto';
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client';
+import {
+  Prisma,
+  ProductionOrderFloorStage,
+  SalesOrderItemStatus,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -18,6 +22,32 @@ type SalesOrderWithItems = Prisma.SalesOrderGetPayload<{
   include: { customer: true; items: { include: { mfgProduct: true } } };
 }>;
 type SalesOrderItemWithProduct = Prisma.SalesOrderItemGetPayload<{ include: { mfgProduct: true } }>;
+
+const PI_ITEM_FOR_STAGE_SELECT = {
+  id: true,
+  productionInvoiceId: true,
+  salesOrderId: true,
+  mfgProductId: true,
+  productionInvoice: { select: { salesOrderId: true } },
+  productionOrder: { select: { id: true, quantity: true, floorStage: true } },
+} satisfies Prisma.ProductionInvoiceItemSelect;
+type PiItemForStage = Prisma.ProductionInvoiceItemGetPayload<{
+  select: typeof PI_ITEM_FOR_STAGE_SELECT;
+}>;
+
+/** Thứ tự tiến trình - dùng để lấy mốc CHẬM NHẤT khi 1 dòng đơn khớp nhiều PI item. */
+const STAGE_ORDER: SalesOrderItemStatus[] = [
+  SalesOrderItemStatus.LEN_KE_HOACH,
+  SalesOrderItemStatus.MUA_HANG,
+  SalesOrderItemStatus.KHUNG_CO_KHI,
+  SalesOrderItemStatus.DAN,
+  SalesOrderItemStatus.CHUYEN_KIEM,
+  SalesOrderItemStatus.DONG_GOI,
+  SalesOrderItemStatus.HOAN_THANH,
+];
+
+/** Khoá tra cứu trạng thái đã suy: 1 dòng đơn = (salesOrderId, mfgProductId), mirror updateItem(). */
+const stageKey = (salesOrderId: bigint, mfgProductId: bigint) => `${salesOrderId}:${mfgProductId}`;
 
 /**
  * Hợp nhất "salesPOs" (Sales module) + "exportOrders" (Mfg module) của mock thành 1 bảng
@@ -90,7 +120,7 @@ export class SalesOrdersService {
     await this.linkExistingSkus(withCode);
 
     // Vừa tạo xong trong chính lệnh gọi này - không thể đã gộp PI/đã giao hàng, khỏi cần query.
-    return this.toResponseDto(withCode, null);
+    return this.toResponseDto(withCode, null, new Map());
   }
 
   async findAll(query: PaginationQueryDto): Promise<Paginated<SalesOrderResponseDto>> {
@@ -123,28 +153,25 @@ export class SalesOrdersService {
     // theo TOÀN BỘ orderIds của trang hiện tại thay vì count() riêng từng order (N+1) - chỉ cần
     // biết CÓ gộp PI hay không cho danh sách, không cần đúng số lượng (số chính xác chỉ quan
     // trọng ở remove()/findOne(), nơi đã count() riêng cho đúng 1 order).
+    // 24/09: cùng 1 lần tải PI item dùng luôn cho resolveStages() - không thêm query thứ 2.
     const orderIds = result.data.map((o) => o.id);
-    const merged = await this.prisma.productionInvoiceItem.findMany({
-      where: {
-        productionInvoiceId: { not: null },
-        OR: [
-          { salesOrderId: { in: orderIds } },
-          { productionInvoice: { salesOrderId: { in: orderIds } } },
-        ],
-      },
-      select: { salesOrderId: true, productionInvoice: { select: { salesOrderId: true } } },
-    });
+    const piItems = await this.loadPiItems(orderIds);
     const mergedIds = new Set(
-      merged.flatMap((m) =>
-        [m.salesOrderId, m.productionInvoice?.salesOrderId].filter((x): x is bigint => x != null),
-      ),
+      piItems
+        .filter((m) => m.productionInvoiceId != null)
+        .flatMap((m) =>
+          [m.salesOrderId, m.productionInvoice?.salesOrderId].filter((x): x is bigint => x != null),
+        ),
     );
+
+    const stages = await this.resolveStages(piItems);
 
     return {
       data: result.data.map((o) =>
         this.toResponseDto(
           o,
           this.buildDeleteBlockReason(o.orderCode, o.items, mergedIds.has(o.id) ? 1 : 0),
+          stages,
         ),
       ),
       meta: result.meta,
@@ -157,6 +184,7 @@ export class SalesOrdersService {
     return this.toResponseDto(
       order,
       this.buildDeleteBlockReason(order.orderCode, order.items, mergedCount),
+      await this.resolveStages(await this.loadPiItems([order.id])),
     );
   }
 
@@ -179,6 +207,7 @@ export class SalesOrdersService {
     return this.toResponseDto(
       updated,
       this.buildDeleteBlockReason(updated.orderCode, updated.items, mergedCount),
+      await this.resolveStages(await this.loadPiItems([bigId])),
     );
   }
 
@@ -295,7 +324,7 @@ export class SalesOrdersService {
       include: { mfgProduct: true },
     });
     await this.recomputeDeliveryDate(order.id);
-    return this.toItemResponseDto(item);
+    return this.toItemResponseDto(item, await this.resolveItemStage(item));
   }
 
   async updateItem(
@@ -337,7 +366,7 @@ export class SalesOrdersService {
       include: { mfgProduct: true },
     });
     if (dto.deliveryDate) await this.recomputeDeliveryDate(order.id);
-    return this.toItemResponseDto(updated);
+    return this.toItemResponseDto(updated, await this.resolveItemStage(updated));
   }
 
   /**
@@ -377,7 +406,8 @@ export class SalesOrdersService {
       );
     }
 
-    return this.toItemResponseDto(await this.findItemOrThrow(orderBigId, itemId));
+    const shipped = await this.findItemOrThrow(orderBigId, itemId);
+    return this.toItemResponseDto(shipped, await this.resolveItemStage(shipped));
   }
 
   /**
@@ -482,9 +512,114 @@ export class SalesOrdersService {
     await this.prisma.salesOrder.update({ where: { id: salesOrderId }, data: { deliveryDate } });
   }
 
+  /**
+   * Suy "Chi tiết sản xuất" của từng dòng đơn từ dữ liệu sản xuất THẬT (2026-09-24). Trước đây
+   * trả thẳng cột SalesOrderItem.status - cột này chỉ được set LEN_KE_HOACH lúc tạo đơn, không
+   * luồng nghiệp vụ nào (duyệt lệnh SX, Phôi/Hàn/Sơn, Đan, Chuyền kiểm, Đóng gói) ghi lại nên mọi
+   * đơn hiện "Lên kế hoạch" vĩnh viễn. Cột vẫn giữ trong DB nhưng KHÔNG còn là nguồn hiển thị.
+   *
+   * Mốc của 1 PI item (lấy mốc cao nhất đã có dấu vết):
+   * - chưa có ProductionOrder (Sếp chưa duyệt)                     -> LEN_KE_HOACH
+   * - có ProductionOrder, xưởng chưa làm gì                        -> MUA_HANG
+   * - floorStage != PENDING hoặc có CutBundle/ProductionBatch      -> KHUNG_CO_KHI
+   * - có WeavingIssue/WeavingReceipt                               -> DAN
+   * - có TransferCheckResult                                       -> CHUYEN_KIEM
+   * - có PackagingRecord/PackagingIssue                            -> DONG_GOI
+   * - SUM(PackagingRecord.boxesPacked) >= ProductionOrder.quantity
+   *   VÀ floorStage = FINISHED (QLSX bấm "Kết thúc")              -> HOAN_THANH
+   * Quyết định nghiệp vụ 2026-09-24: cần ĐỦ CẢ HAI - đóng gói đủ mà QLSX chưa bấm Kết thúc vẫn
+   * là DONG_GOI; bấm Kết thúc mà chưa đóng gói đủ thì giữ mốc đang làm (Kết thúc không kiểm tra
+   * tiến độ, xem enum ProductionOrderFloorStage).
+   * 1 dòng đơn khớp nhiều PI item (hiếm) thì lấy mốc CHẬM NHẤT. Batch theo cả trang, không N+1.
+   */
+  private async resolveStages(
+    piItems: PiItemForStage[],
+  ): Promise<Map<string, SalesOrderItemStatus>> {
+    const result = new Map<string, SalesOrderItemStatus>();
+    if (piItems.length === 0) return result;
+
+    const piItemIds = piItems.map((it) => it.id);
+    const poIds = piItems.flatMap((it) => (it.productionOrder ? [it.productionOrder.id] : []));
+    const byPo = { productionOrderId: { in: poIds } };
+    const [batches, bundles, weavingIssues, weavingReceipts, checks, packed, packIssues] =
+      await Promise.all([
+        this.prisma.productionBatch.groupBy({ by: ['productionOrderId'], where: byPo }),
+        this.prisma.cutBundle.groupBy({ by: ['productionOrderId'], where: byPo }),
+        this.prisma.weavingIssue.groupBy({ by: ['productionOrderId'], where: byPo }),
+        this.prisma.weavingReceipt.groupBy({ by: ['productionOrderId'], where: byPo }),
+        this.prisma.transferCheckResult.groupBy({
+          by: ['productionInvoiceItemId'],
+          where: { productionInvoiceItemId: { in: piItemIds } },
+        }),
+        this.prisma.packagingRecord.groupBy({
+          by: ['productionInvoiceItemId'],
+          where: { productionInvoiceItemId: { in: piItemIds } },
+          _sum: { boxesPacked: true },
+        }),
+        this.prisma.packagingIssue.groupBy({ by: ['productionOrderId'], where: byPo }),
+      ]);
+    const poSet = (...groups: { productionOrderId: bigint | null }[][]) =>
+      new Set(groups.flat().map((r) => String(r.productionOrderId)));
+    const framePo = poSet(batches, bundles);
+    const weavingPo = poSet(weavingIssues, weavingReceipts);
+    const packIssuePo = poSet(packIssues);
+    const checkedItem = new Set(checks.map((c) => String(c.productionInvoiceItemId)));
+    const packedByItem = new Map(
+      packed.map((p) => [String(p.productionInvoiceItemId), p._sum.boxesPacked ?? 0]),
+    );
+
+    for (const it of piItems) {
+      const orderId = it.salesOrderId ?? it.productionInvoice?.salesOrderId;
+      if (orderId == null) continue;
+      const po = it.productionOrder;
+      let stage: SalesOrderItemStatus = SalesOrderItemStatus.LEN_KE_HOACH;
+      if (po) {
+        const poId = String(po.id);
+        const itemId = String(it.id);
+        const packedQty = packedByItem.get(itemId) ?? 0;
+        const packedFull = po.quantity > 0 && packedQty >= po.quantity;
+        if (packedFull && po.floorStage === ProductionOrderFloorStage.FINISHED) {
+          stage = SalesOrderItemStatus.HOAN_THANH;
+        } else if (packedQty > 0 || packIssuePo.has(poId)) stage = SalesOrderItemStatus.DONG_GOI;
+        else if (checkedItem.has(itemId)) stage = SalesOrderItemStatus.CHUYEN_KIEM;
+        else if (weavingPo.has(poId)) stage = SalesOrderItemStatus.DAN;
+        else if (po.floorStage !== ProductionOrderFloorStage.PENDING || framePo.has(poId)) {
+          stage = SalesOrderItemStatus.KHUNG_CO_KHI;
+        } else stage = SalesOrderItemStatus.MUA_HANG;
+      }
+      const key = stageKey(orderId, it.mfgProductId);
+      const prev = result.get(key);
+      if (!prev || STAGE_ORDER.indexOf(stage) < STAGE_ORDER.indexOf(prev)) result.set(key, stage);
+    }
+    return result;
+  }
+
+  /** PI item của các đơn - OR 2 đường nối, mirror updateItem()/countMergedProductionInvoiceItems(). */
+  private async loadPiItems(orderIds: bigint[]): Promise<PiItemForStage[]> {
+    if (orderIds.length === 0) return [];
+    return this.prisma.productionInvoiceItem.findMany({
+      where: {
+        OR: [
+          { salesOrderId: { in: orderIds } },
+          { productionInvoice: { salesOrderId: { in: orderIds } } },
+        ],
+      },
+      select: PI_ITEM_FOR_STAGE_SELECT,
+    });
+  }
+
+  private async resolveItemStage(item: SalesOrderItemWithProduct): Promise<SalesOrderItemStatus> {
+    const stages = await this.resolveStages(await this.loadPiItems([item.salesOrderId]));
+    return (
+      stages.get(stageKey(item.salesOrderId, item.mfgProductId)) ??
+      SalesOrderItemStatus.LEN_KE_HOACH
+    );
+  }
+
   private toResponseDto(
     order: SalesOrderWithItems,
     deleteBlockedReason: string | null,
+    stages: Map<string, SalesOrderItemStatus>,
   ): SalesOrderResponseDto {
     return new SalesOrderResponseDto({
       id: order.id.toString(),
@@ -504,11 +639,19 @@ export class SalesOrdersService {
       deleteBlockedReason,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
-      items: order.items.map((it) => this.toItemResponseDto(it)),
+      items: order.items.map((it) =>
+        this.toItemResponseDto(
+          it,
+          stages.get(stageKey(order.id, it.mfgProductId)) ?? SalesOrderItemStatus.LEN_KE_HOACH,
+        ),
+      ),
     });
   }
 
-  private toItemResponseDto(item: SalesOrderItemWithProduct): SalesOrderItemResponseDto {
+  private toItemResponseDto(
+    item: SalesOrderItemWithProduct,
+    status: SalesOrderItemStatus,
+  ): SalesOrderItemResponseDto {
     return new SalesOrderItemResponseDto({
       id: item.id.toString(),
       salesOrderId: item.salesOrderId.toString(),
@@ -517,7 +660,7 @@ export class SalesOrdersService {
       skuName: item.skuName,
       totalQty: item.totalQty,
       shippedQty: item.shippedQty,
-      status: item.status,
+      status,
       deliveryDate: item.deliveryDate,
     });
   }

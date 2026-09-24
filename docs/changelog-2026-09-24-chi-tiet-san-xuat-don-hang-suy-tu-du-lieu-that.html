@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Màn hình Sales — tiến độ thật, đếm PO, responsive</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · Phân hệ Bán hàng (tài khoản Sales)</div>
+    <h1>Màn hình Sales: tiến độ sản xuất lấy từ dữ liệu thật, đếm đúng "PO đã mua", và dùng được trên điện thoại</h1>
+    <p class="lede">
+      Xuất phát từ ảnh chụp đơn <code>5 — test 09/2026</code>: SKU đứng ở bước 1 "Lên kế hoạch" dù Sếp đã
+      duyệt và lệnh sản xuất đã phát hành. Nguyên nhân: màn hình đọc cột <code>sales_order_items.status</code>,
+      cột này chỉ được ghi <code>LEN_KE_HOACH</code> lúc tạo đơn và <b>không luồng nghiệp vụ nào ghi lại</b>.
+      BE giờ tự suy bước hiện tại từ dữ liệu sản xuất thật. Cùng ngày, theo yêu cầu tiếp theo của user:
+      cột "Tổng PO đã mua" ở trang Khách hàng được sửa lại cách đếm, toàn bộ màn hình Sales được làm
+      responsive, và các ô do trình duyệt tự vẽ (chọn khách hàng, chọn ngày, chọn file) được thay bằng
+      thành phần tự vẽ, tiếng Việt, nằm gọn trong màn hình hẹp.
+    </p>
+    <div class="meta">
+      <span>24/09/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>Không migration</span>
+      <span>35/35 test sales-orders pass (+11 test mới)</span>
+      <span><b>Đã kiểm qua API thật + trình duyệt thật (Playwright, tài khoản <code>sales</code>) ở 390 / 768 / 1440px</b></span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li><b>Bug thật (BE):</b> <code>SalesOrderItem.status</code> là cột tĩnh, FE chưa từng gửi <code>status</code> và BE không có luồng nào tự cập nhật, nên mọi đơn hiển thị "Lên kế hoạch" vĩnh viễn.</li>
+      <li><b>Sửa:</b> <code>SalesOrdersService.resolveStages()</code> suy bước của từng dòng đơn từ lệnh SX, bó cắt Phôi, báo sản lượng, đan, chuyền kiểm và đóng gói. Mọi response đơn hàng dùng giá trị suy ra này. Cột DB <b>vẫn giữ nguyên</b>, chỉ không còn là nguồn hiển thị.</li>
+      <li><b>"Hoàn thành"</b> = đóng gói đủ số lượng <b>và</b> QLSX đã bấm "Kết thúc", phải có đủ cả hai (quyết định nghiệp vụ 24/09).</li>
+      <li><b>"Tổng PO đã mua"</b> (trang Khách hàng) giờ đếm <b>số PO mà mọi SKU đều Hoàn thành</b>. Trước đây cột này cộng số lượng sản phẩm, lệch với tên cột, và luôn bằng 0 vì chưa có SKU nào từng lên Hoàn thành.</li>
+      <li><b>Responsive toàn bộ 3 màn hình Sales:</b> dưới 900px sidebar thành menu trượt (nút ☰); dưới 640px bảng thành thẻ, form 1 cột, stepper 6 bước xếp dọc. Giao diện máy tính giữ nguyên.</li>
+      <li><b>Thay ô do trình duyệt tự vẽ:</b> chọn khách hàng (Lịch sử mua hàng) dùng <code>SearchableSelect</code> có sẵn; chọn ngày (Tạo PO) dùng <code>DatePicker</code> mới; chọn file hiện "Chọn file / Chưa chọn file" thay cho "Choose File / No file chosen".</li>
+      <li><code>findAll()</code> vẫn chỉ có <b>1 query</b> <code>productionInvoiceItem.findMany</code> cho cả trang, dùng chung cho check "đã gộp PI" và suy bước, nên không phát sinh N+1.</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 1. CHẨN ĐOÁN ═══════════════════════ -->
+  <div class="module" id="chandoan">
+    <h2>1. Chẩn đoán trên DB dev</h2>
+    <p class="module-note">Đơn <code>orderCode = 5</code> (id 66), 1 SKU (mfgProduct 38), số lượng 31.</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Nguồn</th><th>Giá trị</th><th>Ý nghĩa</th></tr></thead>
+        <tbody>
+          <tr><td class="path">sales_order_items.status</td><td><code>LEN_KE_HOACH</code></td><td>Cột màn hình đọc, chưa từng đổi từ lúc tạo đơn</td></tr>
+          <tr><td class="path">production_invoice_items.prodApprovalStatus</td><td><code>APPROVED</code></td><td>Sếp đã duyệt</td></tr>
+          <tr><td class="path">production_invoices.status</td><td><code>PRODUCING</code></td><td>PI 71 đang sản xuất</td></tr>
+          <tr><td class="path">production_orders</td><td><code>RELEASED</code> · <code>floorStage = PENDING</code></td><td>Lệnh SX 62 đã phát hành, QLSX chưa bấm "Bắt đầu"</td></tr>
+          <tr><td class="path">cut_bundles, production_batches, weaving_*, transfer_check_results, packaging_*</td><td>0 dòng</td><td>Xưởng chưa làm gì</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout bad"><b>Kết luận:</b> thực tế đơn đang ở bước 2 "Mua hàng", màn hình hiện bước 1. Lỗi xảy ra với mọi đơn hàng, không riêng đơn này.</div>
+  </div>
+
+  <!-- ═══════════════════════ 2. QUY TẮC SUY BƯỚC ═══════════════════════ -->
+  <div class="module" id="quytac">
+    <h2>2. Quy tắc suy bước <span class="badge b-be">BE</span></h2>
+    <p class="module-note">
+      Mỗi dòng đơn nối sang <code>ProductionInvoiceItem</code> theo <code>(salesOrderId, mfgProductId)</code>,
+      qua cả 2 đường <code>item.salesOrderId</code> (PI gộp) và <code>productionInvoice.salesOrderId</code>,
+      giống <code>updateItem()</code>. Lấy bước <b>cao nhất đã có dấu vết</b>, xét từ trên xuống:
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Bước</th><th>Điều kiện</th><th>Bảng nguồn</th></tr></thead>
+        <tbody>
+          <tr><td><b>Hoàn thành</b></td><td>Tổng thùng đã đóng ≥ số lượng lệnh SX <b>VÀ</b> QLSX đã bấm "Kết thúc" (<code>floorStage = FINISHED</code>)</td><td class="path">packaging_records.boxesPacked<br>production_orders.quantity<br>production_orders.floorStage</td></tr>
+          <tr><td><b>Đóng gói</b></td><td>Đã đóng thùng, hoặc đã xuất vật tư đóng gói</td><td class="path">packaging_records<br>packaging_issues</td></tr>
+          <tr><td><b>Chuyền kiểm</b></td><td>Đã có kết quả chuyền kiểm</td><td class="path">transfer_check_results</td></tr>
+          <tr><td><b>Đan</b></td><td>Đã giao đan hoặc đã nhận hàng đan</td><td class="path">weaving_issues<br>weaving_receipts</td></tr>
+          <tr><td><b>Khung cơ khí</b></td><td>QLSX đã bấm "Bắt đầu" (<code>floorStage ≠ PENDING</code>), hoặc đã có bó cắt Phôi / báo sản lượng</td><td class="path">production_orders.floorStage<br>cut_bundles<br>production_batches</td></tr>
+          <tr><td><b>Mua hàng</b></td><td>Đã có lệnh SX, chưa có dấu vết nào ở trên</td><td class="path">production_orders</td></tr>
+          <tr><td><b>Lên kế hoạch</b></td><td>Chưa có lệnh SX (Sếp chưa duyệt)</td><td>n/a</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok"><b>Quyết định nghiệp vụ 24/09 về "Hoàn thành":</b> cần <b>đủ cả hai</b> điều kiện. Đóng gói đủ nhưng QLSX chưa bấm "Kết thúc" thì vẫn là "Đóng gói". QLSX bấm "Kết thúc" khi chưa đóng gói đủ thì giữ nguyên bước đang làm, vì nút "Kết thúc" không kiểm tra tiến độ.</div>
+    <div class="callout warn"><b>Thứ tự thao tác thật:</b> phải <b>đóng gói trước, bấm "Kết thúc" sau</b>. Sau khi lệnh đã "Kết thúc", <code>recordPackaging()</code> bị <code>assertPiHasActiveFloor()</code> chặn (409), kho không ghi đóng gói thêm được nữa. Phát hiện khi kiểm thử trên API thật.</div>
+    <div class="callout"><b>Nhiều PI item cho 1 dòng đơn</b> (hiếm): lấy bước <b>chậm nhất</b>, tránh báo "xong" khi còn phần chưa làm.</div>
+    <div class="callout warn">
+      <b>Lưu ý thiết kế:</b>
+      <ul style="margin:.4rem 0 0; padding-left:1.1rem">
+        <li><code>ProductionOrder.status</code> không được dùng vì không có code nào set <code>IN_PROGRESS</code>/<code>DONE</code>.</li>
+        <li><code>ProductionInvoiceItemStage</code> cũng không dùng được: bảng này chỉ lưu deadline kế hoạch, không lưu tiến độ.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 3. TỔNG PO ĐÃ MUA ═══════════════════════ -->
+  <div class="module" id="tongpo">
+    <h2>3. "Tổng PO đã mua" đếm theo đơn, không cộng số lượng <span class="badge b-fe">FE</span></h2>
+    <p class="module-note">
+      Cột ở trang Quản lí khách hàng. Trước đây hàm <code>purchasedQty()</code> cộng <code>totalQty</code> của
+      các SKU đã Hoàn thành, nên ra <b>số sản phẩm</b>, trong khi tên cột là "Tổng PO". User chọn giữ tên,
+      đổi cách tính (phương án B).
+    </p>
+    <div class="card">
+      <h3>Quy tắc mới: <code>completedPoCount()</code></h3>
+      <p>Một PO được tính <b>1</b> khi <b>mọi</b> SKU trong PO đều <code>HOAN_THANH</code>. PO mới xong một phần thì chưa tính. Áp dụng cho cả bảng (máy tính) lẫn thẻ (điện thoại).</p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Đơn thử trên DB dev</th><th>Thao tác</th><th>Cách cũ sẽ ra</th><th>Cách mới ra</th></tr></thead>
+        <tbody>
+          <tr><td>PO-50 (khách <b>khach1</b>, 1 SKU × 50)</td><td>Hoàn thành SKU duy nhất</td><td>50</td><td><b>1</b> ✅</td></tr>
+          <tr><td>PO-42 (khách <b>Khách test - Ghế tình yêu E2E</b>, 2 SKU)</td><td>Chỉ hoàn thành SKU Ghế J56, SKU còn lại ở "Mua hàng"</td><td>3</td><td><b>0</b> ✅</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn"><b>Cần xác nhận:</b> user chỉ trả lời "B". Quy tắc "phải xong <b>mọi</b> SKU mới tính" là mình tự chọn, đã báo lại. Nếu nghiệp vụ muốn tính cả PO xong một phần thì chỉ cần đổi <code>every</code> thành <code>some</code>.</div>
+  </div>
+
+  <!-- ═══════════════════════ 4. RESPONSIVE ═══════════════════════ -->
+  <div class="module" id="responsive">
+    <h2>4. Responsive toàn bộ màn hình Sales <span class="badge b-fe">FE</span></h2>
+    <p class="module-note">
+      Trước khi sửa, ở khổ điện thoại (390px) sidebar cố định 210px chiếm hơn nửa màn hình: bảng bị cắt, chữ gãy
+      từng dòng, stepper 6 bước chỉ thấy được 2. Mình dùng 2 mốc chung trong hook mới <code>useMediaQuery.ts</code>:
+      <code>BREAKPOINT_COMPACT = 900</code> và <code>BREAKPOINT_MOBILE = 640</code>. Trên 900px giao diện <b>giữ nguyên</b>.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Màn hình</th><th>Dưới 900px (máy tính bảng)</th><th>Dưới 640px (điện thoại)</th></tr></thead>
+        <tbody>
+          <tr><td><b>Khung (SalesApp)</b></td><td>Sidebar ẩn, thanh trên cùng có nút ☰ + tên trang, menu trượt ra từ trái</td><td>Như bên trái, padding gọn hơn</td></tr>
+          <tr><td><b>Danh sách đơn hàng</b></td><td>Bảng đủ rộng, các ô ngắn không gãy dòng (<code>nowrap</code>)</td><td>Mỗi PO là 1 thẻ: mã, khách, SKU·số lượng, hạn giao, xong/chưa xong, nút xác nhận cọc</td></tr>
+          <tr><td><b>Form Tạo PO</b></td><td>Co theo màn hình (<code>maxWidth: 100%</code>)</td><td>1 cột; mỗi dòng SKU gom trong 1 khung (SKU trên, Hạn giao/Tổng số/xoá dưới)</td></tr>
+          <tr><td><b>Chi tiết đơn</b></td><td>n/a</td><td>Stepper 6 bước <b>xếp dọc</b>; 2 tab chia đều; tên file đính kèm dài được rút gọn</td></tr>
+          <tr><td><b>Quản lí khách hàng</b></td><td>n/a</td><td>Mỗi khách là 1 thẻ, nút sửa/xoá to hơn; form thêm khách co theo màn hình</td></tr>
+          <tr><td><b>Lịch sử mua hàng</b></td><td>n/a</td><td>Ô chọn khách rộng hết màn hình; mỗi dòng đơn là 1 thẻ</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>Về con số đo tràn 397px ở khổ 390px:</b> có từ trước khi sửa. Đã kiểm tra, trang <b>không</b> cuộn ngang được (<code>scrollX</code> luôn bằng 0, body rộng đúng 390px), nên đây chỉ là sai số khi đo, người dùng không thấy.</div>
+  </div>
+
+  <!-- ═══════════════════════ 5. Ô TỰ VẼ ═══════════════════════ -->
+  <div class="module" id="controls">
+    <h2>5. Thay các ô do trình duyệt tự vẽ <span class="badge b-fe">FE</span></h2>
+    <p class="module-note">
+      User chụp màn hình thấy danh sách <code>&lt;select&gt;</code> tràn ra ngoài khung điện thoại (DevTools device mode).
+      Popup của <code>&lt;select&gt;</code>, <code>&lt;input type="date"&gt;</code> và <code>&lt;input type="file"&gt;</code> do
+      trình duyệt vẽ theo cửa sổ và theo ngôn ngữ máy, không theo layout trang.
+    </p>
+    <div class="card">
+      <h3>Chọn khách hàng (Lịch sử mua hàng): <code>&lt;select&gt;</code> → <code>SearchableSelect</code></h3>
+      <p>Dùng lại component đã có ở form Tạo PO. Danh sách nằm gọn dưới ô, gõ để lọc theo tên hoặc số điện thoại, mỗi dòng kèm số điện thoại để phân biệt khách trùng tên.</p>
+    </div>
+    <div class="card">
+      <h3>Chọn ngày (Tạo PO): <code>&lt;input type="date"&gt;</code> → <code>DatePicker</code> mới <span class="pill p-add">Mới</span></h3>
+      <p>Hiển thị <b>dd/mm/yyyy</b>, tuần bắt đầu Thứ 2, tiêu đề "Tháng 9/2026". Popup dùng <code>position: fixed</code>, tự dịch trái và lật lên để <b>luôn nằm trong viewport</b>, kể cả khi ô nằm trong modal có cuộn. Ô ngày cao 34px, dễ bấm. Có nút "Hôm nay"; prop <code>clearable</code> bật nút "Xoá" (chỉ dùng cho "Hạn giao", "Ngày đặt" bắt buộc nên không có). Giá trị vẫn là <code>yyyy-MM-dd</code> như input gốc nên payload gửi BE không đổi. Đóng khi bấm ra ngoài hoặc Esc.</p>
+    </div>
+    <div class="card">
+      <h3>Chọn file đính kèm (Tạo PO): "Choose File / No file chosen" → "Chọn file / Chưa chọn file"</h3>
+      <p>Input thật bị ẩn, <code>&lt;label&gt;</code> bọc ngoài vẫn mở hộp chọn file. Tên file hiện trong ô (rút gọn bằng "…" nếu dài), có nút ✕ để bỏ chọn (trước đây không có). Dòng tên file lặp lại bên dưới đã bỏ. File vẫn chỉ upload lúc bấm Lưu.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 6. FILE THAY ĐỔI ═══════════════════════ -->
+  <div class="module" id="files">
+    <h2>6. File thay đổi</h2>
+
+    <div class="card">
+      <h3><span class="path">DNA-ERP-BE/src/modules/sales-orders/sales-orders.service.ts</span> <span class="badge b-be">BE</span> <span class="pill p-chg">Sửa</span></h3>
+      <p>Thêm <code>loadPiItems()</code> (1 query, select gồm <code>productionOrder { id, quantity, floorStage }</code>), <code>resolveStages()</code> (7 <code>groupBy</code> chạy song song theo toàn bộ lệnh SX/PI item của trang) và <code>resolveItemStage()</code> cho response 1 dòng. <code>toResponseDto()</code>/<code>toItemResponseDto()</code> nhận bước đã suy thay vì đọc <code>item.status</code>. Check "đã gộp PI" trong <code>findAll()</code> giờ lọc <code>productionInvoiceId != null</code> trong bộ nhớ trên cùng kết quả query.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="path">DNA-ERP-BE/src/modules/sales-orders/sales-orders.service.spec.ts</span> <span class="badge b-be">BE</span> <span class="pill p-add">+11 test</span></h3>
+      <p>Mock mặc định rỗng cho 7 model mới. Nhóm test mới phủ từng bước, gồm case thật đơn 5 (ra "Mua hàng"), case nhiều PI item (lấy bước chậm nhất) và 3 case cho quy tắc "Hoàn thành". Test chống N+1 của <code>findAll()</code> được cập nhật mock và vẫn khẳng định chỉ 1 lần <code>findMany</code>.</p>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File FE (repo <code>DNA-ERP</code>)</th><th></th><th>Nội dung</th></tr></thead>
+        <tbody>
+          <tr><td class="path">src/hooks/useMediaQuery.ts</td><td><span class="pill p-add">Mới</span></td><td><code>useMaxWidth</code>, <code>useIsCompact</code>, <code>useIsMobile</code> dùng chung, các phân hệ khác có thể dùng lại</td></tr>
+          <tr><td class="path">src/components/DatePicker.tsx</td><td><span class="pill p-add">Mới</span></td><td>Ô chọn ngày dùng chung (mục 5)</td></tr>
+          <tr><td class="path">src/modules/pages/Sales/SalesApp.tsx</td><td><span class="pill p-chg">Sửa</span></td><td>Khung responsive: sidebar desktop / thanh trên + menu trượt</td></tr>
+          <tr><td class="path">src/modules/pages/Sales/OrderManagementPage.tsx</td><td><span class="pill p-chg">Sửa</span></td><td>Thẻ đơn hàng, form Tạo PO 1 cột, <code>DatePicker</code>, nút chọn file tiếng Việt, stepper dọc, chi tiết đơn</td></tr>
+          <tr><td class="path">src/modules/pages/Sales/CustomerManagementPage.tsx</td><td><span class="pill p-chg">Sửa</span></td><td>Thẻ khách hàng, modal co giãn, <code>completedPoCount()</code></td></tr>
+          <tr><td class="path">src/modules/pages/Sales/PurchaseHistoryPage.tsx</td><td><span class="pill p-chg">Sửa</span></td><td>Thẻ lịch sử, <code>SearchableSelect</code> thay <code>&lt;select&gt;</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 7. KIỂM CHỨNG ═══════════════════════ -->
+  <div class="module" id="kiemchung">
+    <h2>7. Kiểm chứng</h2>
+    <ul class="timeline stages">
+      <li class="ok"><b>Typecheck + ESLint/Prettier (BE + FE)</b><span><code>tsc --noEmit</code> sạch cả 2 repo; lint các file thay đổi sạch.</span></li>
+      <li class="ok"><b>Unit test BE</b><span>35/35 test <code>sales-orders</code> pass.</span></li>
+      <li class="ok"><b>API thật</b><span><code>GET /sales-orders</code> trả trạng thái suy ra cho 44 dòng đơn, trải đủ các bước; đơn 5 ra "Mua hàng".</span></li>
+      <li class="ok"><b>Trình duyệt thật, tài khoản <code>sales</code></b><span>Đơn 5 hiện "Mua hàng", PO-54 hiện "Đan", PO-50 hiện "Đóng gói", không có lỗi console.</span></li>
+      <li class="ok"><b>Quy tắc "Hoàn thành" trên dữ liệu thật (PO-31)</b><span>Dùng đúng tài khoản <code>khotp</code> (đóng gói) và <code>qlsx</code> (Kết thúc): bấm Kết thúc khi chưa đóng gói thì vẫn "Đóng gói"; đóng gói đủ chưa Kết thúc thì vẫn "Đóng gói"; đủ cả hai thì "Hoàn thành", stepper 6 bước xanh, danh sách hiện "1 xong".</span></li>
+      <li class="ok"><b>"Tổng PO đã mua" trên dữ liệu thật (PO-50, PO-42)</b><span>Xem bảng ở mục 3.</span></li>
+      <li class="ok"><b>Responsive</b><span>Chụp 7 màn hình (danh sách, Tạo PO, chi tiết sản xuất, chi tiết xuất hàng, khách hàng, form khách, lịch sử) cùng menu trượt ở 390 / 768 / 1440px. Giao diện 1440px giống trước khi sửa.</span></li>
+      <li class="ok"><b>Ô tự vẽ</b><span>Chọn khách: gõ "kh" lọc còn 3 khách, chọn "khach1" ra 5 PO. DatePicker: popup luôn trong viewport ở 390 và 1440px, chuyển tháng, chọn ngày, "Hôm nay", "Xoá", bấm ra ngoài để đóng đều đúng. Chọn file: tên dài có dấu không tràn ô, ✕ bỏ chọn được, chọn lại cùng file vẫn nhận.</span></li>
+      <li class="ok"><b>Hoàn nguyên dữ liệu thử</b><span>PO-31, PO-50, PO-42: đã xoá mọi <code>packaging_records</code> có note "TEST 24/09…" và trả <code>floorStage</code> về <code>ACTIVE</code>, <code>floorFinishedAt</code> về <code>null</code>. Bản ghi 6 thùng có sẵn của PO-50 được giữ nguyên. Đã kiểm lại bằng query sau khi hoàn nguyên.</span></li>
+      <li class="ok"><b>Điện thoại thật</b><span>User tự thử trên điện thoại qua mạng Wi-Fi nội bộ và xác nhận ổn. Truy cập qua một proxy tạm ở cổng 3002 (nằm ngoài repo, không sửa code/config app): chuyển <code>/api/v1</code> sang BE và giả Origin/Referer về <code>localhost:3000</code>, vì Next 16 dev chặn <code>/_next/*</code> từ origin lạ (403) và FE gọi thẳng <code>http://localhost:3001</code>. Proxy đã tắt sau khi thử.</span></li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 8. CÒN MỞ ═══════════════════════ -->
+  <div class="module" id="conmo">
+    <h2>8. Còn mở</h2>
+    <div class="card">
+      <h3>Quy tắc đếm "Tổng PO đã mua" cần user xác nhận</h3>
+      <p>Hiện là "mọi SKU Hoàn thành mới tính", xem mục 3.</p>
+    </div>
+    <div class="card">
+      <h3>Cột <code>sales_order_items.status</code> thành dữ liệu chết</h3>
+      <p><code>PATCH .../items/:id</code> vẫn ghi được <code>status</code> nhưng giá trị không còn được hiển thị. Có thể bỏ khỏi DTO và DB trong một đợt dọn dẹp sau.</p>
+    </div>
+    <div class="card">
+      <h3>Ranh giới các bước là quy ước kỹ thuật</h3>
+      <p>Ví dụ "Mua hàng" được tính từ lúc có lệnh SX tới khi xưởng bắt đầu, không đọc trạng thái đề xuất mua thật. "Hoàn thành" giả định 1 thùng = 1 sản phẩm (cùng quy ước với <code>recordPackaging()</code>). Nếu nghiệp vụ muốn chia khác, chỉ cần sửa <code>resolveStages()</code>.</p>
+    </div>
+    <div class="card">
+      <h3>Nhật ký hoạt động còn dấu vết kiểm thử</h3>
+      <p>Các lần gọi API thật khi thử (đóng gói, Kết thúc) có thể vẫn còn trong nhật ký hoạt động của hệ thống, dù dữ liệu nghiệp vụ đã hoàn nguyên.</p>
+    </div>
+    <div class="card">
+      <h3>Chưa commit</h3>
+      <p>Toàn bộ thay đổi của cả 2 repo đang nằm trong working tree.</p>
+    </div>
+  </div>
+
+  <footer>
+    Tài liệu nội bộ DNA-ERP — nhật ký thay đổi 24/09/2026. Mã nguồn tham chiếu theo đường dẫn tương đối trong 2 repo <code>DNA-ERP-BE</code> và <code>DNA-ERP</code>.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" type="button" aria-label="Lên đầu trang">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

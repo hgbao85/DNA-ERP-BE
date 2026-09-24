@@ -37,6 +37,13 @@ describe('SalesOrdersService', () => {
       deleteMany: jest.Mock;
     };
     planForm: { findFirst: jest.Mock; findMany: jest.Mock; update: jest.Mock };
+    productionBatch: { groupBy: jest.Mock };
+    cutBundle: { groupBy: jest.Mock };
+    weavingIssue: { groupBy: jest.Mock };
+    weavingReceipt: { groupBy: jest.Mock };
+    transferCheckResult: { groupBy: jest.Mock };
+    packagingRecord: { groupBy: jest.Mock };
+    packagingIssue: { groupBy: jest.Mock };
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
@@ -115,6 +122,15 @@ describe('SalesOrdersService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn(),
       },
+      // 2026-09-24: resolveStages() suy "Chi tiết sản xuất" từ dấu vết sản xuất thật - mặc định
+      // chưa có dấu vết nào, test nào cần mô phỏng tiến độ tự override.
+      productionBatch: { groupBy: jest.fn().mockResolvedValue([]) },
+      cutBundle: { groupBy: jest.fn().mockResolvedValue([]) },
+      weavingIssue: { groupBy: jest.fn().mockResolvedValue([]) },
+      weavingReceipt: { groupBy: jest.fn().mockResolvedValue([]) },
+      transferCheckResult: { groupBy: jest.fn().mockResolvedValue([]) },
+      packagingRecord: { groupBy: jest.fn().mockResolvedValue([]) },
+      packagingIssue: { groupBy: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn(),
       // 10/09: remove() giờ bọc xoá cascade (productionInvoiceItem/salesOrderItem) +
       // salesOrder.delete() trong 1 $transaction - test chạy callback thẳng với `prisma` (đủ vì
@@ -357,6 +373,120 @@ describe('SalesOrdersService', () => {
     });
   });
 
+  describe('trạng thái sản xuất suy từ dữ liệu thật (resolveStages)', () => {
+    const soItem = {
+      id: 100n,
+      salesOrderId: 10n,
+      mfgProductId: 2n,
+      mfgProduct: product,
+      skuName: 'Ghe A',
+      totalQty: 10,
+      shippedQty: 0,
+      // Cột DB cũ luôn kẹt ở đây - không được dùng làm nguồn hiển thị nữa.
+      status: SalesOrderItemStatus.LEN_KE_HOACH,
+      deliveryDate: null,
+    };
+    const piItem = (productionOrder: unknown) => ({
+      id: 78n,
+      salesOrderId: 10n,
+      mfgProductId: 2n,
+      productionInvoice: { salesOrderId: null },
+      productionOrder,
+    });
+    const po = { id: 62n, quantity: 10, floorStage: 'PENDING' };
+    const stageOf = async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems({ items: [soItem] }));
+      const result = await service.findOne('10');
+      return result.items[0].status;
+    };
+
+    it('LEN_KE_HOACH khi chưa có lệnh sản xuất (Sếp chưa duyệt)', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([piItem(null)]);
+      expect(await stageOf()).toBe('LEN_KE_HOACH');
+    });
+
+    it('MUA_HANG khi đã có lệnh SX nhưng xưởng chưa làm gì (case thật đơn 5/PI 71)', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([piItem(po)]);
+      expect(await stageOf()).toBe('MUA_HANG');
+    });
+
+    it('KHUNG_CO_KHI khi QLSX đã bấm Bắt đầu', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ ...po, floorStage: 'ACTIVE' }),
+      ]);
+      expect(await stageOf()).toBe('KHUNG_CO_KHI');
+    });
+
+    it('KHUNG_CO_KHI khi đã có bó cắt Phôi theo lệnh', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([piItem(po)]);
+      prisma.cutBundle.groupBy.mockResolvedValue([{ productionOrderId: 62n }]);
+      expect(await stageOf()).toBe('KHUNG_CO_KHI');
+    });
+
+    it('DAN khi đã giao đan', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ ...po, floorStage: 'ACTIVE' }),
+      ]);
+      prisma.weavingIssue.groupBy.mockResolvedValue([{ productionOrderId: 62n }]);
+      expect(await stageOf()).toBe('DAN');
+    });
+
+    it('CHUYEN_KIEM khi đã có kết quả chuyền kiểm', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ ...po, floorStage: 'ACTIVE' }),
+      ]);
+      prisma.transferCheckResult.groupBy.mockResolvedValue([{ productionInvoiceItemId: 78n }]);
+      expect(await stageOf()).toBe('CHUYEN_KIEM');
+    });
+
+    it('DONG_GOI khi đóng gói một phần', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ ...po, floorStage: 'ACTIVE' }),
+      ]);
+      prisma.packagingRecord.groupBy.mockResolvedValue([
+        { productionInvoiceItemId: 78n, _sum: { boxesPacked: 4 } },
+      ]);
+      expect(await stageOf()).toBe('DONG_GOI');
+    });
+
+    // Quyết định nghiệp vụ 24/09: HOAN_THANH cần ĐỦ CẢ đóng gói đủ số lượng VÀ QLSX bấm Kết thúc.
+    it('HOAN_THANH khi đã đóng gói đủ số lượng lệnh VÀ QLSX đã bấm Kết thúc', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ ...po, floorStage: 'FINISHED' }),
+      ]);
+      prisma.packagingRecord.groupBy.mockResolvedValue([
+        { productionInvoiceItemId: 78n, _sum: { boxesPacked: 10 } },
+      ]);
+      expect(await stageOf()).toBe('HOAN_THANH');
+    });
+
+    it('vẫn DONG_GOI khi đóng gói đủ nhưng QLSX CHƯA bấm Kết thúc', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ ...po, floorStage: 'ACTIVE' }),
+      ]);
+      prisma.packagingRecord.groupBy.mockResolvedValue([
+        { productionInvoiceItemId: 78n, _sum: { boxesPacked: 10 } },
+      ]);
+      expect(await stageOf()).toBe('DONG_GOI');
+    });
+
+    it('bấm Kết thúc khi chưa đóng gói đủ KHÔNG tính là HOAN_THANH, giữ mốc đang làm', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ ...po, floorStage: 'FINISHED' }),
+      ]);
+      prisma.weavingIssue.groupBy.mockResolvedValue([{ productionOrderId: 62n }]);
+      expect(await stageOf()).toBe('DAN');
+    });
+
+    it('1 dòng đơn khớp nhiều PI item thì lấy mốc CHẬM NHẤT', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ ...po, floorStage: 'ACTIVE' }),
+        { ...piItem(null), id: 79n },
+      ]);
+      expect(await stageOf()).toBe('LEN_KE_HOACH');
+    });
+  });
+
   describe('findAll', () => {
     it('gộp deleteBlockedReason cho nhiều order qua đúng 1 query findMany, không count() riêng từng order (N+1)', async () => {
       prisma.salesOrder.findMany.mockResolvedValue([
@@ -364,8 +494,25 @@ describe('SalesOrdersService', () => {
         orderWithItems({ id: 20n, code: 'PO-20' }),
       ]);
       prisma.salesOrder.count.mockResolvedValue(2);
+      // 24/09: query giờ tải MỌI PI item của trang (dùng chung cho resolveStages()), lọc "đã gộp"
+      // (productionInvoiceId != null) trong bộ nhớ - dòng của PO-20 chưa gộp không được tính.
       prisma.productionInvoiceItem.findMany.mockResolvedValue([
-        { salesOrderId: 10n, productionInvoice: null },
+        {
+          id: 1n,
+          productionInvoiceId: 71n,
+          salesOrderId: 10n,
+          mfgProductId: 2n,
+          productionInvoice: null,
+          productionOrder: null,
+        },
+        {
+          id: 2n,
+          productionInvoiceId: null,
+          salesOrderId: 20n,
+          mfgProductId: 2n,
+          productionInvoice: null,
+          productionOrder: null,
+        },
       ]);
 
       const result = await service.findAll({ page: 1, limit: 20, sortOrder: 'desc' } as never);
