@@ -1663,10 +1663,8 @@ model CuttingProposalLine {
   /// phía solver (2026-09-22, xem CuttingProposal.totalSolveSeconds cho tổng cả đợt). Có ở CẢ 2
   /// nhánh feasible/infeasible. null với phương án tính TRƯỚC khi có field này.
   solveSeconds         Decimal? @db.Decimal(8, 2)
-  /// Tổng chiều dài mẩu sắt còn NGUYÊN (chưa cắt, từ cây cắt dở) của loại sắt này - nhập kho,
-  /// cắt được cỡ bất kỳ sau này. KHÔNG phải phế liệu/hao hụt. Phôi cần biết số này để nhập kho
-  /// đúng, xem thêm CuttingProposalPattern.mauNguyenMm (chi tiết cây nào cắt dở). Decimal không
-  /// Int (2026-08-19) - cùng lý do totalWasteMm ở trên.
+  /// KHÔNG CÒN DÙNG (2026-09-23): solver bỏ cơ chế mẫu nguyên, không code nào đọc/ghi cột này nữa.
+  /// Chỉ còn giữ giá trị cũ của các phương án tính trước đó - xoá cột là bước riêng (mất dữ liệu).
   mauNguyenMm          Decimal? @default(0) @db.Decimal(7, 1)
   /// So sánh hao hụt giữa các chiều dài chuẩn đã chấm (vd [{length:5850,bars:227,wastePct:9.61},
   /// {length:6000,bars:223,wastePct:0.85}]) - thuần hiển thị/audit, không có FK nào cần tới nên
@@ -1754,9 +1752,7 @@ model CuttingProposalPattern {
   /// Decimal, không Int (2026-08-19) - kế thừa độ chính xác thập phân từ cutLengthMm, xem
   /// SegmentSpec.
   wastePerBarMm Decimal? @db.Decimal(6, 1)
-  /// > 0 nghĩa là cây thuộc pattern này CẮT DỞ (dừng sớm, phần còn lại để nguyên nhập kho) -
-  /// đa số pattern có giá trị 0, chỉ pattern "cây cuối" của 1 loại sắt mới có mẩu nguyên. Decimal
-  /// không Int (2026-08-19) - cùng lý do wastePerBarMm ở trên.
+  /// KHÔNG CÒN DÙNG (2026-09-23) - xem CuttingProposalLine.mauNguyenMm.
   mauNguyenMm   Decimal? @default(0) @db.Decimal(7, 1)
 
   line       CuttingProposalLine             @relation(fields: [lineId], references: [id])

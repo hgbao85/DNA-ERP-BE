@@ -14,19 +14,57 @@ export class CandidateMaterialDto {
   @Expose() @ApiProperty() materialId!: string;
   @Expose() @ApiProperty() materialCode!: string;
   @Expose() @ApiProperty() materialName!: string;
-  /// Hao hụt tốt nhất có thể khi CHỈ SKU này cắt loại sắt này. Hiển thị kèm dấu "≥".
+  /// Hao hụt khi CHỈ SKU này cắt loại sắt này. Ý nghĩa phụ thuộc `verified`/`verifiedLengthSource`:
+  ///  - verified=false: cận dưới LÝ TƯỞNG (best-fill.util.ts, giả định nguồn đoạn vô hạn) - hiển
+  ///    thị kèm dấu "≥", thực tế có thể cao hơn.
+  ///  - verified=true, lengthSource='fixed': con số THẬT, so trực tiếp với thresholdPct là đúng.
+  ///  - verified=true, lengthSource='scan': KHÔNG phải "hao hụt sẽ đạt được" - đây là số TỐT NHẤT
+  ///    CÓ THỂ solver tìm ra SAU KHI đã phá luật "mỗi cây ≤ ngưỡng" (xem verifiedLengthSource) -
+  ///    KHÔNG được trình bày như con số sẽ xảy ra thật, chỉ là dữ liệu phụ. Hao hụt THẬT ở trường
+  ///    hợp này CHẮC CHẮN > thresholdPct (chứng minh chặt, xem verifiedLengthSource) - FE PHẢI hiện
+  ///    theo hướng đó (vd "> X%"), không hiện standaloneWastePct như số sẽ đạt (2026-09-24: bản
+  ///    trước hiện thẳng số này bị người dùng chỉ ra là "bịp bợm" vì < ngưỡng mà thực ra không đạt
+  ///    được theo đúng luật - xem changelog mục 19.9).
   @Expose() @ApiProperty() standaloneWastePct!: number;
   /// Chiều dài cây (mm) con số trên được tính TRÊN đó - đổi ô chọn chiều dài thì số này đổi
-  /// theo, để chip không bao giờ nói về một cây khác với cây đợt sẽ thật sự cắt.
+  /// theo, để chip không bao giờ nói về một cây khác với cây đợt sẽ thật sự cắt. Khi verified=true
+  /// và loại này vượt ngưỡng, đây là chiều dài mà "tốt nhất có thể" (best_achievable) được tính -
+  /// có thể KHÁC chiều dài KHSX đang chọn (solver nới lỏng hết bộ lọc để tìm ra con số này).
   @Expose() @ApiPropertyOptional({ nullable: true }) stockLengthMm!: number | null;
-  /// Cận dưới số cây khi cắt MỘT MÌNH SKU này (best-fill.util.ts - giả định nguồn đoạn vô hạn).
-  /// Nhu cầu nhỏ (ít cây) khiến cận dưới lệch xa thực tế NHẤT: pattern lý tưởng không có đủ cây để
-  /// lặp lại, cây cuối chi phối toàn bộ %. FE nên cảnh báo "cận dưới không đáng tin" khi số này
-  /// thấp thay vì trình bày standaloneWastePct như con số chắc chắn - xem changelog 2026-08-15
-  /// mục 15.6-7.
+  /// Số cây. verified=false: cận dưới (best-fill.util.ts - giả định nguồn đoạn vô hạn, nhu cầu
+  /// nhỏ khiến cận dưới lệch xa thực tế NHẤT vì cây cuối chi phối toàn bộ % - xem changelog
+  /// 2026-08-15 mục 15.6-7). verified=true: số cây THẬT solver vừa tính.
   @Expose() @ApiProperty() standaloneMinBars!: number;
   @Expose() @ApiProperty() thresholdPct!: number;
+  /// verified=false, hoặc verified=true+lengthSource='fixed': = standaloneWastePct > thresholdPct
+  /// (so trực tiếp, đúng nghĩa mặt chữ). verified=true+lengthSource='scan': LUÔN true - CHẮC CHẮN
+  /// vượt ngưỡng theo chứng minh chặt (xem verifiedLengthSource), KHÔNG suy từ standaloneWastePct
+  /// (số đó không phải "hao hụt sẽ đạt", xem field đó).
   @Expose() @ApiProperty() overThreshold!: boolean;
+  /// true = 2 field standaloneWastePct/standaloneMinBars ở trên là SỐ THẬT (vừa gọi solver xác
+  /// minh, auto_scan=false, đúng nhu cầu thật của SKU này), KHÔNG phải cận dưới lý tưởng. false =
+  /// ước tính nhanh như trước (loại này có quá nhiều cỡ đoạn để gọi solver mỗi lần tải trang mà
+  /// không làm chậm màn hình, hoặc solver không phản hồi kịp) - xem
+  /// CuttingProposalsService.verifyExactStandaloneWaste.
+  @Expose() @ApiProperty() verified!: boolean;
+  /// CHỈ có ý nghĩa khi verified=true (null nếu không). "fixed" = ĐÃ cắt được ở đúng chiều dài
+  /// KHSX đang chọn với luật "mọi cây đều ≤ ngưỡng/cây" (bộ lọc pattern generation thật của
+  /// solver) - standaloneWastePct đáng tin, so trực tiếp với thresholdPct được.
+  ///
+  /// "scan" = KHÔNG cắt được với luật đó, và CHẮC CHẮN (không phải ước tính) hao hụt thật > ngưỡng:
+  /// generate_patterns() đã liệt kê HẾT kiểu cắt ≤ ngưỡng/cây rồi thử phủ đúng nhu cầu CHỈ bằng
+  /// các kiểu đó và THẤT BẠI - nên MỌI phương án cắt hợp lệ khác bắt buộc phải dùng ít nhất 1 kiểu
+  /// vượt ngưỡng. standaloneWastePct lúc này đến từ _best_achievable() (nới lỏng HẲN luật đó để
+  /// tìm phương án THẬT SỰ CẮT ĐƯỢC có tổng hao hụt thấp nhất) - vẫn là 1 kế hoạch cắt hợp lệ,
+  /// nhưng KHÔNG phải cái solver thật sẽ chọn (pattern generation loại nó ngay từ đầu vì có cây
+  /// vượt ngưỡng riêng) - chỉ dùng làm dữ liệu PHỤ, KHÔNG phải "hao hụt sẽ đạt" (xem
+  /// standaloneWastePct, changelog 2026-09-24 mục 19.9).
+  ///
+  /// Ý NGHĨA NGHIỆP VỤ: hệ thống hiện tại (đang áp luật mỗi cây ≤ ngưỡng khi solve thật) sẽ KHÔNG
+  /// tự chọn cây chuẩn cho loại này - vẫn tự auto-scan sang chiều dài khác như trước.
+  @Expose()
+  @ApiPropertyOptional({ nullable: true, enum: ['fixed', 'scan'] })
+  verifiedLengthSource!: 'fixed' | 'scan' | null;
   /// Mã SKU của các đơn KHÁC cũng dùng loại sắt này - tức những đơn gộp vào thì MỚI có tác dụng.
   /// Rỗng = không đơn nào khác dùng, gộp không cứu được loại này.
   ///

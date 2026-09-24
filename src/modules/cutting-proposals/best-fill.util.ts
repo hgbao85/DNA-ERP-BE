@@ -9,9 +9,7 @@
  *
  * ⚠ Đây là GIỚI HẠN DƯỚI ("khá nhất có thể"), KHÔNG phải hao hụt sẽ đạt được. Thực tế cao hơn khi:
  *   - số lượng nhu cầu không đủ để MỌI cây đều dùng được kiểu cắt tốt nhất (cận này giả định
- *     nguồn đoạn vô hạn, cây nào cũng cắt theo pattern tối ưu);
- *   - cây cuối luôn cắt dở và được giữ nguyên thành mẫu nguyên (xem
- *     de_xuat_logic.py::_giu_lai_mau_nguyen) - tính riêng, không nằm trong con số này.
+ *     nguồn đoạn vô hạn, cây nào cũng cắt theo pattern tối ưu).
  * Dùng để LOẠI SỚM tổ hợp chắc chắn không đạt (cận dưới đã vượt ngưỡng thì thực tế càng vượt),
  * và để xếp hạng ứng viên. Tuyệt đối không trình bày như kết quả cam kết.
  *

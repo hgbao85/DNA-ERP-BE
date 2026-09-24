@@ -38,8 +38,6 @@ export class CuttingProposalPatternResponseDto {
   @Expose() @ApiProperty() patternIndex!: number;
   @Expose() @ApiProperty() barCount!: number;
   @Expose() @ApiPropertyOptional({ nullable: true }) wastePerBarMm!: number | null;
-  /// > 0 = cây thuộc pattern này cắt dở, phần còn lại để nguyên nhập kho (xem Phôi).
-  @Expose() @ApiPropertyOptional({ nullable: true }) mauNguyenMm!: number | null;
   @Expose()
   @ApiProperty({ type: [CuttingProposalSegmentResponseDto] })
   @Type(() => CuttingProposalSegmentResponseDto)
@@ -92,8 +90,6 @@ export class CuttingProposalLineResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) totalBars!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) totalWasteMm!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) wastePercentage!: number | null;
-  /// Tổng mẩu sắt còn nguyên (chưa cắt) của loại sắt này - nhập kho, không phải hao hụt.
-  @Expose() @ApiPropertyOptional({ nullable: true }) mauNguyenMm!: number | null;
   @Expose()
   @ApiPropertyOptional({ type: [LengthComparisonEntryResponseDto], nullable: true })
   lengthComparison!: { length: number; bars: number; wastePct: number }[] | null;

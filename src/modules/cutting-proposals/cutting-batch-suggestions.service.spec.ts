@@ -60,6 +60,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     solverTrimStartMm: 10,
     solverBladeWidthMm: mockDecimal(1.0),
     solverMaxWastePercentage: mockDecimal(1.0),
+    solverMaxSurplus: 10,
   };
 
   /** 1 dòng định mức: mảnh `pieceId` cần `qtyPerPiece` đoạn cỡ `cutLengthMm` của vật tư đó. */
@@ -83,7 +84,10 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     maxCuttingWastePercentage: thresholdPct === null ? null : { toNumber: () => thresholdPct },
   });
 
-  const build = (over: Record<string, unknown> = {}) => {
+  /** post() mặc định KHÔNG implementation (trả undefined) - đúng hành vi "chưa từng gọi solver"
+   *  mà mọi test getBatchSuggestions/previewBatch cũ đã ngầm giả định. Test xác minh chính xác
+   *  (2026-09-24) truyền `postMock` riêng để giả lập response solver thật. */
+  const build = (over: Record<string, unknown> = {}, postMock: jest.Mock = jest.fn()) => {
     prisma = {
       systemConfig: { findUniqueOrThrow: jest.fn().mockResolvedValue(config) },
       productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([]) },
@@ -95,7 +99,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     };
     service = new CuttingProposalsService(
       prisma as unknown as PrismaServiceType,
-      { post: jest.fn() } as unknown as ExternalApiService,
+      { post: postMock } as unknown as ExternalApiService,
       { get: jest.fn() } as unknown as ConfigService<AppConfig, true>,
       { reserve: jest.fn(), getAvailableQty: jest.fn() } as unknown as StockReservationsService,
     );
@@ -642,6 +646,152 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       const line = res.lines.find((l) => l.materialCode === 'STL-VUONG-20X20');
       expect(line?.stockLengthMm).toBe(6000); // vẫn là cây chuẩn, không bị khoá lạ kéo theo
       expect(line?.minWastePct).toBeCloseTo(0.533, 3); // y hệt test "2 SKU -> bớt 1 cây" ở trên
+    });
+
+    /**
+     * verifyExactStandaloneWaste (2026-09-24, mục 19): best-fill.util.ts là cận dưới LÝ TƯỞNG,
+     * có thể "xanh" (đạt ngưỡng) trong khi solver thật auto-scan sang cây khác vì nhu cầu không
+     * tile gọn vào cây chuẩn - xem changelog. getBatchCandidates() giờ gọi THẲNG solver (auto_scan
+     * =false, chỉ đúng loại sắt này) để thay ước tính bằng số thật, khi còn ĐÁNG (≤5 cỡ đoạn).
+     */
+    describe('xác minh chính xác bằng solver thật (verified)', () => {
+      it('feasible=true -> dùng số THẬT solver trả, verified=true, gọi ĐÚNG endpoint/tham số', async () => {
+        const postMock = jest.fn().mockResolvedValue({
+          purchase_plan: [
+            {
+              material: '200',
+              feasible: true,
+              waste_percentage: 0.72,
+              total_bars: 14,
+              best_stock_length: 6000,
+              over_threshold: false,
+            },
+          ],
+        });
+        build(singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20'), postMock);
+
+        const res = await service.getBatchCandidates();
+        const m = res.items[0].materials[0];
+        expect(m.verified).toBe(true);
+        expect(m.standaloneWastePct).toBe(0.72); // KHÔNG còn là cận dưới best-fill (1,883%)
+        expect(m.standaloneMinBars).toBe(14);
+        expect(m.overThreshold).toBe(false);
+        expect(m.verifiedLengthSource).toBe('fixed');
+
+        // auto_scan=false (chỉ hỏi "cây chuẩn có ăn không"), đúng 1 dòng bom (đúng loại sắt này).
+        expect(postMock).toHaveBeenCalledWith(
+          expect.stringContaining('/api/v1/de_xuat/propose/'),
+          expect.objectContaining({
+            auto_scan: false,
+            num_sets: 1,
+            stock_lengths: '6000',
+            // demand = qtyPerUnit(20, singleProduct) × quantity(20, mkItem mặc định) = 400.
+            bom: [expect.objectContaining({ material: '200', cut_length: 840, qty_per_part: 400 })],
+          }) as unknown,
+          expect.anything(),
+          expect.any(Number),
+        );
+      });
+
+      it('feasible=false nhưng có best_achievable -> vẫn là số THẬT, verified=true, overThreshold=true', async () => {
+        // Đúng ca SAT-VUONG-20X20 thật (2026-09-23): cây chuẩn không đạt ngưỡng cho ĐÚNG nhu cầu,
+        // nhưng solver đã tự nới hết bộ lọc để tìm "tốt nhất có thể" - vẫn hơn hẳn ước tính cận dưới.
+        const postMock = jest.fn().mockResolvedValue({
+          purchase_plan: [
+            {
+              material: '200',
+              feasible: false,
+              best_achievable: { length: 6000, waste_pct: 6.83, bars: 18 },
+            },
+          ],
+        });
+        build(singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20'), postMock);
+
+        const res = await service.getBatchCandidates();
+        const m = res.items[0].materials[0];
+        expect(m.verified).toBe(true);
+        expect(m.overThreshold).toBe(true);
+        expect(m.standaloneWastePct).toBe(6.83);
+        expect(m.standaloneMinBars).toBe(18);
+        // "scan" = KHÔNG cắt được ở stockLengths với luật mọi cây ≤ ngưỡng - đây mới là LÝ DO
+        // overThreshold=true, không phải so standaloneWastePct với thresholdPct (xem test dưới).
+        expect(m.verifiedLengthSource).toBe('scan');
+      });
+
+      it('best_achievable trả về % THẤP HƠN ngưỡng -> overThreshold VẪN true (chứng minh chặt, không phải hardcode mù)', async () => {
+        // Lịch sử đúng ca SAT-VUONG-20X20 thật (2026-09-24, 1 ngày 3 lần sửa):
+        //  (a) sáng: hardcode overThreshold=true bất kể số -> người dùng hỏi "0,78% < 1% mà sao đỏ?"
+        //  (b) sửa thành so trực tiếp wastePct>thresholdPct -> 0,78<1 ra XANH -> người dùng gọi thẳng
+        //      là "bịp bợm" vì 0,78% chỉ đạt được bằng cách PHÁ luật mỗi cây - thực tế không đạt.
+        //  (c) mục này: overThreshold LUÔN true cho nhánh best_achievable, nhưng có LÝ DO CHỨNG MINH
+        //      CHẶT (generate_patterns đã liệt kê hết kiểu ≤ngưỡng, phủ nhu cầu chỉ bằng chúng thất
+        //      bại -> mọi phương án hợp lệ khác BẮT BUỘC có cây vượt ngưỡng) - không phải đoán mò
+        //      như (a). standaloneWastePct=0,78 vẫn trả về nhưng CHỈ là dữ liệu phụ (tooltip FE),
+        //      KHÔNG phải "hao hụt sẽ đạt" - xem changelog mục 19.9.
+        const postMock = jest.fn().mockResolvedValue({
+          purchase_plan: [
+            {
+              material: '200',
+              feasible: false,
+              best_achievable: { length: 6000, waste_pct: 0.78, bars: 14 },
+            },
+          ],
+        });
+        build(singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20'), postMock);
+
+        const res = await service.getBatchCandidates();
+        const m = res.items[0].materials[0];
+        expect(m.standaloneWastePct).toBe(0.78); // vẫn trả về làm dữ liệu phụ
+        expect(m.overThreshold).toBe(true); // KHÔNG so với standaloneWastePct - luôn true ở nhánh này
+        expect(m.verifiedLengthSource).toBe('scan'); // vẫn ghi lại: hệ thống sẽ auto-scan khi solve thật
+      });
+
+      it('quá nhiều cỡ đoạn (>5) -> KHÔNG gọi solver, giữ nguyên ước tính cũ', async () => {
+        const postMock = jest.fn().mockResolvedValue({ purchase_plan: [{ feasible: true }] });
+        const materialId = 700n;
+        build(
+          {
+            productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([mkItem()]) },
+            bomRevision: { findMany: jest.fn().mockResolvedValue([{ id: 5n, mfgProductId: 3n }]) },
+            pieceBom: {
+              findMany: jest
+                .fn()
+                .mockResolvedValue(
+                  [100, 200, 300, 400, 500, 600].map((len, i) =>
+                    mkPieceBom(5n, BigInt(10 + i), materialId, len),
+                  ),
+                ),
+            },
+            bomPiece: {
+              findMany: jest.fn().mockResolvedValue(
+                [10, 11, 12, 13, 14, 15].map((pieceId) => ({
+                  bomRevisionId: 5n,
+                  pieceId: BigInt(pieceId),
+                  qtyPerUnit: 1,
+                })),
+              ),
+            },
+            material: {
+              findMany: jest.fn().mockResolvedValue([mkMaterial(materialId, 'NHIEU-CO')]),
+            },
+          },
+          postMock,
+        );
+
+        const res = await service.getBatchCandidates();
+        expect(postMock).not.toHaveBeenCalled();
+        expect(res.items[0].materials[0].verified).toBe(false);
+      });
+
+      it('solver lỗi/timeout -> rơi về ước tính cũ, verified=false, KHÔNG throw', async () => {
+        const postMock = jest.fn().mockRejectedValue(new Error('timeout'));
+        build(singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20'), postMock);
+
+        const res = await service.getBatchCandidates();
+        const m = res.items[0].materials[0];
+        expect(m.verified).toBe(false);
+        expect(m.standaloneWastePct).toBeCloseTo(1.883, 2); // y hệt ước tính best-fill.util.ts cũ
+      });
     });
   });
 });

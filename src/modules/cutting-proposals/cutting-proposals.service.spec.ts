@@ -417,14 +417,12 @@ describe('CuttingProposalsService', () => {
             total_bars: 223,
             total_waste_mm: 11373,
             waste_percentage: 0.85,
-            mau_nguyen_mm: 1351,
             length_comparison: [{ length: 6000, bars: 223, waste_pct: 0.85 }],
             cutting_patterns: [
               {
                 pattern_id: 1,
                 bars: 223,
                 waste_per_bar: 51,
-                mau_nguyen_mm: 1351,
                 pieces_breakdown: [{ size: 660, count: 9 }],
               },
             ],
@@ -481,22 +479,22 @@ describe('CuttingProposalsService', () => {
           data: {
             cuttingProposalId: bigint;
             materialId: bigint;
-            mauNguyenMm: number;
             lengthComparison: unknown;
           };
         },
       ];
       expect(lineCall[0].data.cuttingProposalId).toBe(2n);
       expect(lineCall[0].data.materialId).toBe(200n);
-      expect(lineCall[0].data.mauNguyenMm).toBe(1351);
+      // Bỏ mẫu nguyên 2026-09-23: phương án mới không ghi cột này nữa (DB để mặc định 0).
+      expect(lineCall[0].data).not.toHaveProperty('mauNguyenMm');
       expect(lineCall[0].data.lengthComparison).toEqual([
         { length: 6000, bars: 223, waste_pct: 0.85 },
       ]);
 
       const patternCall = prisma.cuttingProposalPattern.create.mock.calls[0] as unknown as [
-        { data: { mauNguyenMm: number } },
+        { data: Record<string, unknown> },
       ];
-      expect(patternCall[0].data.mauNguyenMm).toBe(1351);
+      expect(patternCall[0].data).not.toHaveProperty('mauNguyenMm');
       expect(prisma.cuttingProposalPatternSegment.create).toHaveBeenCalledWith({
         data: { patternId: 500n, segmentSpecId: 100n, countPerBar: 9 },
       });
