@@ -15,6 +15,7 @@ export class SkuResponseDto {
   @Expose() @ApiProperty() factoryCode!: string;
   @Expose() @ApiProperty() productName!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) customerName!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) imageUrl!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) piCode!: string | null;
   @Expose() @ApiProperty({ enum: PlanFormStatus }) status!: PlanFormStatus;

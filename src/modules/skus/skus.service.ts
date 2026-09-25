@@ -120,6 +120,16 @@ export class SkusService {
   ) {}
 
   async create(dto: CreateSkuDto, actorUserId: string): Promise<SkuResponseDto> {
+    // FE upload ảnh ngay trước khi gọi create - tạo thất bại thì ảnh đó thành mồ côi, dọn luôn.
+    try {
+      return await this.createPlanForm(dto, actorUserId);
+    } catch (error) {
+      if (dto.imageUrl) await this.cloudinaryService.deleteByUrl(dto.imageUrl);
+      throw error;
+    }
+  }
+
+  private async createPlanForm(dto: CreateSkuDto, actorUserId: string): Promise<SkuResponseDto> {
     const mfgProductBigId = parseBigIntId(dto.mfgProductId);
     const product = await this.prisma.mfgProduct.findUnique({ where: { id: mfgProductBigId } });
     if (!product) {
@@ -155,6 +165,7 @@ export class SkusService {
         mfgProductId: mfgProductBigId,
         productionInvoiceId,
         customerName,
+        imageUrl: dto.imageUrl,
         note: dto.note,
         createdById: actorUserId,
       },
@@ -273,6 +284,7 @@ export class SkusService {
       this.prisma.planFormDetailReview.deleteMany({ where: { planFormId: pf.id } }),
       this.prisma.planForm.delete({ where: { id: pf.id } }),
     ]);
+    if (pf.imageUrl) await this.cloudinaryService.deleteByUrl(pf.imageUrl);
   }
 
   // ─── Manh quota (mảnh - Sắt/Dây/Đinh/Tán rút/Nút nhựa, 1 lần nhập/duyệt duy nhất) ───────────
@@ -1461,6 +1473,7 @@ export class SkusService {
       factoryCode: pf.mfgProduct.factoryCode,
       productName: pf.mfgProduct.name,
       customerName: pf.customerName ?? pf.salesOrder?.customer.name ?? null,
+      imageUrl: pf.imageUrl,
       productionInvoiceId: pf.productionInvoiceId?.toString() ?? null,
       piCode: pf.productionInvoice?.code ?? null,
       status: pf.status,

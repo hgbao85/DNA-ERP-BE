@@ -1112,6 +1112,9 @@ model PlanForm {
   /// Tên khách hàng nhập tay lúc tạo SKU (không suy ra được từ salesOrder khi SKU chưa/không
   /// gắn đơn hàng nào) - xem PlanFormsService.create.
   customerName              String?
+  /// Ảnh sản phẩm (Cloudinary URL, upload qua POST /uploads/image) - FE chỉ upload khi bấm
+  /// "Thêm SKU", ảnh bị xoá khỏi Cloudinary khi SKU bị xoá (xem SkusService.remove).
+  imageUrl                  String?
   status                    PlanFormStatus @default(IN_PROGRESS)
   note                      String?
   /// null = SKU thường; 'PRODUCTION_CONFIRM' = bản ghi tự tạo khi Sếp duyệt PI item, chỉ

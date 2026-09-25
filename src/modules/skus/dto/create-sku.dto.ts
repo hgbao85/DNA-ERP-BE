@@ -33,4 +33,9 @@ export class CreateSkuDto {
   @IsOptional()
   @IsString()
   customerName?: string;
+
+  @ApiPropertyOptional({ description: 'URL ảnh sản phẩm (upload qua POST /uploads/image)' })
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
 }
