@@ -26,6 +26,15 @@ describe('MaterialsService', () => {
     };
     materialGroup: { findUnique: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
+    segmentSpec: { deleteMany: jest.Mock };
+    materialSupplier: { deleteMany: jest.Mock };
+    pieceBom: { findMany: jest.Mock };
+    partBom: { findMany: jest.Mock };
+    pieceMaterialItem: { findMany: jest.Mock };
+    pieceMaterialYield: { findMany: jest.Mock };
+    consumableBom: { findMany: jest.Mock };
+    bomAccessoryItem: { findMany: jest.Mock };
+    $transaction: jest.Mock;
   };
   let cloudinary: { deleteByUrl: jest.Mock };
   let stockLedger: { postEntry: jest.Mock };
@@ -53,7 +62,19 @@ describe('MaterialsService', () => {
       },
       materialGroup: { findUnique: jest.fn() },
       warehouse: { findUniqueOrThrow: jest.fn() },
+      segmentSpec: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      materialSupplier: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      pieceBom: { findMany: jest.fn().mockResolvedValue([]) },
+      partBom: { findMany: jest.fn().mockResolvedValue([]) },
+      pieceMaterialItem: { findMany: jest.fn().mockResolvedValue([]) },
+      pieceMaterialYield: { findMany: jest.fn().mockResolvedValue([]) },
+      consumableBom: { findMany: jest.fn().mockResolvedValue([]) },
+      bomAccessoryItem: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn(),
     };
+    prisma.$transaction.mockImplementation((fn: (tx: typeof prisma) => Promise<unknown>) =>
+      fn(prisma),
+    );
     cloudinary = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
     stockLedger = { postEntry: jest.fn().mockResolvedValue(undefined) };
     service = new MaterialsService(
@@ -468,6 +489,41 @@ describe('MaterialsService', () => {
 
       await expect(service.remove('999')).rejects.toThrow(NotFoundException);
       expect(prisma.material.delete).not.toHaveBeenCalled();
+    });
+
+    it('cleans up unused segment specs and supplier links in the same transaction', async () => {
+      prisma.material.findUnique.mockResolvedValue(existingMaterial);
+
+      await service.remove('1');
+
+      expect(prisma.segmentSpec.deleteMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({ materialId: 1n, pieceBoms: { none: {} } }) as unknown,
+      });
+      expect(prisma.materialSupplier.deleteMany).toHaveBeenCalledWith({
+        where: { materialId: 1n },
+      });
+    });
+
+    it('refuses with 409 naming the SKU/piece when the material is still in a BOM', async () => {
+      prisma.material.findUnique.mockResolvedValue(existingMaterial);
+      prisma.pieceBom.findMany.mockResolvedValue([
+        {
+          bomRevision: { revNo: 1, mfgProduct: { factoryCode: 'SKU-A' } },
+          piece: { code: 'MANH-TAY' },
+        },
+      ]);
+
+      await expect(service.remove('1')).rejects.toThrow(/"SKU-A" \(rev 1, mảnh MANH-TAY\)/);
+      expect(prisma.material.delete).not.toHaveBeenCalled();
+    });
+
+    it('maps a remaining FK violation (P2003) to a readable 409', async () => {
+      prisma.material.findUnique.mockResolvedValue(existingMaterial);
+      prisma.material.delete.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('fk', { code: 'P2003', clientVersion: 'x' }),
+      );
+
+      await expect(service.remove('1')).rejects.toThrow(ConflictException);
     });
   });
 });

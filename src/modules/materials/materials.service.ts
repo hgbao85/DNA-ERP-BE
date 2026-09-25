@@ -328,7 +328,46 @@ export class MaterialsService {
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
     const material = await this.findOneOrThrow(id);
-    await this.prisma.material.delete({ where: { id: bigId } });
+
+    // Vật tư còn nằm trong định mức -> báo rõ SKU/mảnh nào, thay vì để FK chặn rồi rơi xuống
+    // AllExceptionsFilter thành "Invalid reference to a related record" không ai hiểu.
+    const bomUsages = await this.findBomUsages(bigId);
+    if (bomUsages.length > 0) {
+      const shown = bomUsages.slice(0, 5).join('; ');
+      const more = bomUsages.length > 5 ? ` và ${bomUsages.length - 5} chỗ khác` : '';
+      throw new ConflictException(
+        `Không xoá được: vật tư "${material.name}" đang dùng trong định mức ${shown}${more}. Gỡ vật tư khỏi các định mức này trước.`,
+      );
+    }
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // Đoạn cắt (segment_spec) và bảng giá NCC là dữ liệu phụ của chính vật tư - dọn cùng.
+        // Đoạn cắt chỉ dọn khi KHÔNG còn bảng nào trỏ tới (định mức cũ đã sửa hay để lại rác).
+        await tx.segmentSpec.deleteMany({
+          where: {
+            materialId: bigId,
+            pieceBoms: { none: {} },
+            partBoms: { none: {} },
+            cuttingProposalPatternSegments: { none: {} },
+            qcReviewSegments: { none: {} },
+            stockLedgerEntries: { none: {} },
+            stockQuants: { none: {} },
+            cutPatternSegments: { none: {} },
+            stepBatchSegments: { none: {} },
+          },
+        });
+        await tx.materialSupplier.deleteMany({ where: { materialId: bigId } });
+        await tx.material.delete({ where: { id: bigId } });
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2003') {
+        throw new ConflictException(
+          `Không xoá được: vật tư "${material.name}" đã phát sinh dữ liệu (tồn kho, phiếu kho, đề xuất mua hoặc sản xuất).`,
+        );
+      }
+      throw e;
+    }
 
     if (material.imageUrl) {
       await this.cloudinaryService.deleteByUrl(material.imageUrl);
@@ -416,6 +455,50 @@ export class MaterialsService {
       );
     }
     return link;
+  }
+
+  /** Nhãn "SKU (rev N, mảnh X)" cho mọi dòng định mức đang dùng vật tư - trực tiếp hoặc qua
+   *  đoạn cắt (segment_spec). Đã bỏ trùng. */
+  private async findBomUsages(materialId: bigint): Promise<string[]> {
+    const rev = { select: { revNo: true, mfgProduct: { select: { factoryCode: true } } } };
+    const viaSegment = { segmentSpec: { materialId } };
+    const [pieceBoms, partBoms, pieceItems, pieceYields, consumables, accessories] =
+      await Promise.all([
+        this.prisma.pieceBom.findMany({
+          where: viaSegment,
+          select: { bomRevision: rev, piece: { select: { code: true } } },
+        }),
+        this.prisma.partBom.findMany({
+          where: viaSegment,
+          select: { bomRevision: rev, part: { select: { code: true } } },
+        }),
+        this.prisma.pieceMaterialItem.findMany({
+          where: { materialId },
+          select: { bomRevision: rev, piece: { select: { code: true } } },
+        }),
+        this.prisma.pieceMaterialYield.findMany({
+          where: { materialId },
+          select: { bomRevision: rev, piece: { select: { code: true } } },
+        }),
+        this.prisma.consumableBom.findMany({ where: { materialId }, select: { bomRevision: rev } }),
+        this.prisma.bomAccessoryItem.findMany({
+          where: { materialId },
+          select: { bomRevision: rev },
+        }),
+      ]);
+
+    const label = (r: { revNo: number; mfgProduct: { factoryCode: string } }, where?: string) =>
+      `"${r.mfgProduct.factoryCode}" (rev ${r.revNo}${where ? `, ${where}` : ''})`;
+    return [
+      ...new Set([
+        ...pieceBoms.map((b) => label(b.bomRevision, `mảnh ${b.piece.code}`)),
+        ...partBoms.map((b) => label(b.bomRevision, `chi tiết ${b.part.code}`)),
+        ...pieceItems.map((b) => label(b.bomRevision, `mảnh ${b.piece.code}`)),
+        ...pieceYields.map((b) => label(b.bomRevision, `mảnh ${b.piece.code}`)),
+        ...consumables.map((b) => label(b.bomRevision, 'vật tư tiêu hao')),
+        ...accessories.map((b) => label(b.bomRevision, 'phụ kiện')),
+      ]),
+    ];
   }
 
   private async findOneOrThrow(id: string): Promise<MaterialWithRelations> {
