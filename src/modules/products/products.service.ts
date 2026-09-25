@@ -35,13 +35,7 @@ export class ProductsService {
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
 
   async create(dto: CreateProductDto): Promise<ProductResponseDto> {
-    const existing = await this.prisma.mfgProduct.findUnique({
-      where: { factoryCode: dto.factoryCode },
-    });
-    if (existing) {
-      throw new ConflictException(`Product "${dto.factoryCode}" already exists`);
-    }
-
+    // Không chặn trùng factoryCode - xem ghi chú MfgProduct.factoryCode trong schema.prisma.
     const product = await this.prisma.mfgProduct.create({
       data: { factoryCode: dto.factoryCode, name: dto.name, description: dto.description },
     });
@@ -78,15 +72,6 @@ export class ProductsService {
   async update(id: string, dto: UpdateProductDto): Promise<ProductResponseDto> {
     const bigId = parseBigIntId(id);
     await this.findOneOrThrow(id);
-
-    if (dto.factoryCode) {
-      const existing = await this.prisma.mfgProduct.findUnique({
-        where: { factoryCode: dto.factoryCode },
-      });
-      if (existing && existing.id !== bigId) {
-        throw new ConflictException(`Product "${dto.factoryCode}" already exists`);
-      }
-    }
 
     const product = await this.prisma.mfgProduct.update({
       where: { id: bigId },

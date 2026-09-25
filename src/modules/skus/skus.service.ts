@@ -219,14 +219,6 @@ export class SkusService {
     const wantsNameChange = dto.factoryCode !== undefined || dto.name !== undefined;
     if (wantsNameChange) {
       await this.assertMfgProductNotSharedElsewhere(pf);
-      if (dto.factoryCode !== undefined) {
-        const existing = await this.prisma.mfgProduct.findUnique({
-          where: { factoryCode: dto.factoryCode },
-        });
-        if (existing && existing.id !== pf.mfgProductId) {
-          throw new ConflictException(`Product "${dto.factoryCode}" already exists`);
-        }
-      }
       await this.prisma.mfgProduct.update({
         where: { id: pf.mfgProductId },
         data: { factoryCode: dto.factoryCode, name: dto.name },

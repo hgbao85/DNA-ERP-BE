@@ -317,11 +317,14 @@ async function main() {
       }
 
       for (const prod of PRODUCTS) {
-        const product = await prisma.mfgProduct.upsert({
+        // factoryCode không còn unique (2026-09-25) - không upsert theo nó được nữa.
+        const found = await prisma.mfgProduct.findFirst({
           where: { factoryCode: prod.code },
-          create: { factoryCode: prod.code, name: prod.name },
-          update: { name: prod.name },
+          orderBy: { id: 'asc' },
         });
+        const product = found
+          ? await prisma.mfgProduct.update({ where: { id: found.id }, data: { name: prod.name } })
+          : await prisma.mfgProduct.create({ data: { factoryCode: prod.code, name: prod.name } });
 
         const revision = await prisma.bomRevision.upsert({
           where: { mfgProductId_revNo: { mfgProductId: product.id, revNo: 1 } },

@@ -584,7 +584,10 @@ model Customer {
 
 model MfgProduct {
   id          BigInt  @id @default(autoincrement())
-  factoryCode String  @unique
+  /// KHÔNG unique (bỏ 2026-09-25): 2 khách có thể dùng cùng 1 mã SKU cho 2 kết cấu khác nhau
+  /// (VD "J55.T4 MỚI (BÀN 4)" GOPLUS vs MEYING) - mỗi bản là 1 MfgProduct riêng, BOM riêng.
+  /// Đừng tra MfgProduct theo factoryCode để xác định 1 sản phẩm - luôn dùng id.
+  factoryCode String
   name        String
   description String?
 
@@ -597,6 +600,7 @@ model MfgProduct {
   productionInvoiceItems ProductionInvoiceItem[]
   productionOrders       ProductionOrder[]
 
+  @@index([factoryCode])
   @@map("mfg_products")
 }
 

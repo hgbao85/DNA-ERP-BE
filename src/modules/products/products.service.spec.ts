@@ -49,12 +49,14 @@ describe('ProductsService', () => {
       expect(result.id).toBe('1');
     });
 
-    it('rejects a duplicate factoryCode with 409', async () => {
+    it('cho phép tạo trùng factoryCode (2 khách dùng cùng mã SKU cho 2 kết cấu khác nhau)', async () => {
       prisma.mfgProduct.findUnique.mockResolvedValue(existingProduct);
+      prisma.mfgProduct.create.mockResolvedValue({ ...existingProduct, id: 2n });
 
-      await expect(service.create({ factoryCode: 'SP-01', name: 'x' } as any)).rejects.toThrow(
-        ConflictException,
-      );
+      const result = await service.create({ factoryCode: 'SP-01', name: 'x' });
+
+      expect(result.id).toBe('2');
+      expect(prisma.mfgProduct.create).toHaveBeenCalled();
     });
   });
 

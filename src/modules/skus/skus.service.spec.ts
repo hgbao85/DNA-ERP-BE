@@ -286,7 +286,6 @@ describe('SkusService', () => {
 
     it('cho sửa tên/mã SKU khi MfgProduct chưa bị bất kỳ bảng nào khác dùng', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
-      prisma.mfgProduct.findUnique.mockResolvedValue(null); // factoryCode mới chưa tồn tại
       prisma.planForm.update.mockResolvedValue(
         planForm({ mfgProduct: { id: 2n, factoryCode: 'SKU-02', name: 'Ghe B' } }),
       );
@@ -330,14 +329,19 @@ describe('SkusService', () => {
       expect(prisma.mfgProduct.update).not.toHaveBeenCalled();
     });
 
-    it('từ chối đổi factoryCode trùng với sản phẩm khác đã tồn tại', async () => {
+    it('cho đổi factoryCode trùng với sản phẩm khác (2 khách có thể dùng cùng mã SKU)', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.mfgProduct.findUnique.mockResolvedValue({ id: 999n, factoryCode: 'SKU-99' });
-
-      await expect(service.update('5', { factoryCode: 'SKU-99' })).rejects.toThrow(
-        ConflictException,
+      prisma.planForm.update.mockResolvedValue(
+        planForm({ mfgProduct: { id: 2n, factoryCode: 'SKU-99', name: 'Ghe A' } }),
       );
-      expect(prisma.mfgProduct.update).not.toHaveBeenCalled();
+
+      await service.update('5', { factoryCode: 'SKU-99' });
+
+      expect(prisma.mfgProduct.update).toHaveBeenCalledWith({
+        where: { id: 2n },
+        data: { factoryCode: 'SKU-99', name: undefined },
+      });
     });
   });
 
