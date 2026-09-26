@@ -14,6 +14,7 @@ import {
 } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { CloudinaryService } from '../uploads/cloudinary.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PurchaseProposalsService } from './purchase-proposals.service';
@@ -39,6 +40,7 @@ describe('PurchaseProposalsService', () => {
       findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
+      count: jest.Mock;
     };
     warehouse: { findUniqueOrThrow: jest.Mock; findUnique: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
@@ -52,6 +54,7 @@ describe('PurchaseProposalsService', () => {
   let stockReservationsService: { creditPool: jest.Mock };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
   let cloudinaryService: { deleteByUrl: jest.Mock };
+  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
 
   const material = (overrides: Record<string, unknown> = {}) => ({
     code: 'SAT-25',
@@ -166,6 +169,10 @@ describe('PurchaseProposalsService', () => {
               : 1;
           return Promise.resolve({ count });
         }),
+        // Đếm vật tư còn PENDING_APPROVAL_STATUSES sau bossApprove() (mục 7.4 changelog 2026-09-26)
+        // để quyết định có resolve() PURCHASE_PROPOSAL_CREATED không - mặc định 0 (đóng hồ sơ),
+        // test riêng cho ca "còn người mua khác chưa duyệt" tự override.
+        count: jest.fn().mockResolvedValue(0),
       },
       // findUniqueOrThrow: tra kho ảo SUPPLIER trong receiveItem(). findUnique (2026-09-04): tra
       // kho GHI ĐÈ khi item.receiveWarehouseCode có giá trị (vật tư đóng gói) - mặc định null vì
@@ -208,12 +215,17 @@ describe('PurchaseProposalsService', () => {
     stockReservationsService = { creditPool: jest.fn() };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
+    notificationsService = {
+      emit: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(undefined),
+    };
     service = new PurchaseProposalsService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
       cls as unknown as ClsService<AppClsStore>,
       cloudinaryService as unknown as CloudinaryService,
+      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -607,6 +619,52 @@ describe('PurchaseProposalsService', () => {
           }) as unknown,
         }) as unknown,
       });
+    });
+
+    // Phase 3a, mục 7.4 changelog 2026-09-25/26.
+    it('emit PURCHASE_PROPOSAL_APPROVED và resolve PURCHASE_PROPOSAL_CREATED khi không còn vật tư nào khác đang chờ', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ id: 400n, status: PurchaseProposalStatus.NEW })] }),
+      );
+      prisma.purchaseProposalItem.count.mockResolvedValue(0);
+
+      await service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE });
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityType: 'PURCHASE_PROPOSAL',
+          entityId: '300',
+          types: ['PURCHASE_PROPOSAL_CREATED'],
+        }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PURCHASE_PROPOSAL_APPROVED',
+        expect.objectContaining({
+          entityId: '300',
+          actorId: 'user-1',
+          params: expect.objectContaining({ piCode: 'PI-2026-014', count: 1 }) as unknown,
+        }),
+      );
+    });
+
+    it('KHÔNG resolve PURCHASE_PROPOSAL_CREATED khi còn vật tư của người mua khác chưa duyệt', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({ id: 400n, material: material({ buyerId: 'user-1' }) }),
+            item({ id: 401n, material: material({ buyerId: 'user-2' }) }),
+          ],
+        }),
+      );
+      prisma.purchaseProposalItem.count.mockResolvedValue(1);
+
+      await service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE });
+
+      expect(notificationsService.resolve).not.toHaveBeenCalled();
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PURCHASE_PROPOSAL_APPROVED',
+        expect.objectContaining({ params: expect.objectContaining({ count: 1 }) as unknown }),
+      );
     });
   });
 
@@ -1379,6 +1437,90 @@ describe('PurchaseProposalsService', () => {
       ).rejects.toThrow(ConflictException);
       expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    // Phase 3a, mục 7.4 changelog 2026-09-25/26.
+    it('emit PURCHASE_PROPOSAL_ITEM_RECEIVED cho mọi lần nhận (kể cả nhận một phần, chưa đủ)', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              id: 400n,
+              status: PurchaseProposalStatus.PURCHASING,
+              materialId: 30n,
+              buyQty: decimal(8),
+              receivedQty: decimal(0),
+            }),
+          ],
+        }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({
+          buyQty: decimal(8),
+          receivedQty: decimal(5),
+          status: PurchaseProposalStatus.PURCHASING,
+        }),
+      );
+
+      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null);
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PURCHASE_PROPOSAL_ITEM_RECEIVED',
+        expect.objectContaining({
+          entityId: '300',
+          actorId: 'user-1',
+          params: expect.objectContaining({
+            piCode: 'PI-2026-014',
+            materialCode: 'SAT-25',
+            qty: 5,
+            unit: 'cây',
+            warehouseId: '800',
+          }) as unknown,
+        }),
+      );
+      // Chưa đủ (5 < buyQty 8) - KHÔNG emit "đủ hàng".
+      expect(notificationsService.emit).not.toHaveBeenCalledWith(
+        'PURCHASE_PROPOSAL_PURCHASED',
+        expect.anything(),
+      );
+    });
+
+    it('emit THÊM PURCHASE_PROPOSAL_PURCHASED khi rollup cấp đề xuất vừa chuyển PURCHASED', async () => {
+      const fullProposal = proposal({
+        items: [
+          item({
+            id: 400n,
+            status: PurchaseProposalStatus.PURCHASING,
+            buyQty: decimal(8),
+            receivedQty: decimal(0),
+          }),
+        ],
+      });
+      prisma.purchaseProposal.findUnique
+        .mockResolvedValueOnce(fullProposal) // #1: findDetailOrThrow() đầu hàm receiveItem()
+        .mockResolvedValueOnce(fullProposal) // #2: resolvePiCodeFor() -> findOne() -> findDetailOrThrow()
+        // #3: refetch riêng SAU transaction để biết rollup vừa lên PURCHASED chưa (best-effort).
+        .mockResolvedValueOnce({ status: PurchaseProposalStatus.PURCHASED });
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({
+          buyQty: decimal(8),
+          receivedQty: decimal(8),
+          status: PurchaseProposalStatus.PURCHASED,
+        }),
+      );
+      prisma.purchaseProposalItem.findMany.mockResolvedValue([
+        { status: PurchaseProposalStatus.PURCHASED },
+      ]);
+
+      await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1', null);
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PURCHASE_PROPOSAL_PURCHASED',
+        expect.objectContaining({
+          entityId: '300',
+          params: expect.objectContaining({ piCode: 'PI-2026-014' }) as unknown,
+        }),
+      );
     });
   });
 

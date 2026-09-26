@@ -30,6 +30,8 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType, PiNotificationParams } from '../notifications/notification-types';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
@@ -108,7 +110,51 @@ export class ProductionInvoicesService {
     private readonly consumableMaterialPurchaseService: ConsumableMaterialPurchaseService,
     private readonly cls: ClsService<AppClsStore>,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  // ─── Notification (Phase 3a, mục 7.2 changelog 2026-09-25) ─────────────────────────────────
+  // Best-effort NGOÀI transaction nghiệp vụ chính - cùng lý do đã ghi ở SkusService.notifySku()
+  // (mục 14/15.2 changelog): catch bên trong 1 Prisma interactive transaction không cứu được
+  // transaction đó, nên luôn gọi SAU KHI phần ghi chính đã xong/commit.
+  private async notifyPi(
+    type: NotificationType,
+    entityId: bigint,
+    params: PiNotificationParams,
+    dedupeKey: string | undefined,
+    actorUserId?: string,
+  ): Promise<void> {
+    try {
+      await this.notifications.emit(type, {
+        entityId: entityId.toString(),
+        actorId: actorUserId,
+        dedupeKey,
+        params: { ...params },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create PI notification (${type}, entity ${entityId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async resolvePiNotifications(
+    entityType: string,
+    entityId: bigint,
+    types: NotificationType[],
+  ): Promise<void> {
+    try {
+      await this.notifications.resolve({
+        entityType,
+        entityId: entityId.toString(),
+        types,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve PI notifications (${types.join(',')}, entity ${entityId}): ${(error as Error).message}`,
+      );
+    }
+  }
 
   /**
    * ProductionInvoiceItem bị loại khỏi AUDITED_MODELS (dòng con đổi liên tục theo vòng đời PI cha
@@ -591,6 +637,21 @@ export class ProductionInvoicesService {
     }
     const updated = { ...item, ...data };
     await this.auditItemApprovalTransition(item, updated);
+    // "n SKU" = mọi item KHÁC của PI này đang WAITING_QLSX (đọc từ pi.items TRƯỚC lệnh ghi trên,
+    // không đổi trạng thái) cộng chính item vừa gửi - dedupeKey gộp các lần gửi liên tiếp trước khi
+    // QLSX kịp xử lý thành 1 dòng duy nhất, count tự cập nhật theo lần gọi gần nhất (mục 15.2 style
+    // "best-effort NGOÀI tx").
+    const waitingQlsx =
+      pi.items.filter(
+        (it) => it.id !== item.id && it.prodApprovalStatus === ProdApprovalStatus.WAITING_QLSX,
+      ).length + 1;
+    await this.notifyPi(
+      'PI_SENT_TO_QLSX',
+      pi.id,
+      { piCode: pi.code, count: waitingQlsx },
+      `PI_SENT_TO_QLSX:${pi.id}`,
+      actorUserId,
+    );
     return this.toItemResponseDto(updated);
   }
 
@@ -624,6 +685,25 @@ export class ProductionInvoicesService {
     }
     const updated = { ...item, ...data };
     await this.auditItemApprovalTransition(item, updated);
+    // Item vừa rời WAITING_QLSX - nếu KHÔNG còn item nào khác của PI này ở đó, đóng thông báo
+    // "chờ QLSX" (mọi SKU trong hàng đợi đã được QLSX xử lý xong).
+    const stillWaitingQlsx = pi.items.some(
+      (it) => it.id !== item.id && it.prodApprovalStatus === ProdApprovalStatus.WAITING_QLSX,
+    );
+    if (!stillWaitingQlsx) {
+      await this.resolvePiNotifications('PRODUCTION_INVOICE', pi.id, ['PI_SENT_TO_QLSX']);
+    }
+    const waitingBoss =
+      pi.items.filter(
+        (it) => it.id !== item.id && it.prodApprovalStatus === ProdApprovalStatus.WAITING_BOSS,
+      ).length + 1;
+    await this.notifyPi(
+      'PI_SENT_TO_BOSS',
+      pi.id,
+      { piCode: pi.code, count: waitingBoss },
+      `PI_SENT_TO_BOSS:${pi.id}`,
+      actorUserId,
+    );
     return this.toItemResponseDto(updated);
   }
 
@@ -684,6 +764,20 @@ export class ProductionInvoicesService {
         rejectReason: null,
       });
     }
+    const targetIds = new Set(targets.map((it) => it.id.toString()));
+    const waitingQlsx =
+      pi.items.filter(
+        (it) =>
+          !targetIds.has(it.id.toString()) &&
+          it.prodApprovalStatus === ProdApprovalStatus.WAITING_QLSX,
+      ).length + targets.length;
+    await this.notifyPi(
+      'PI_SENT_TO_QLSX',
+      pi.id,
+      { piCode: pi.code, count: waitingQlsx },
+      `PI_SENT_TO_QLSX:${pi.id}`,
+      actorUserId,
+    );
     return this.findOne(piId);
   }
 
@@ -731,6 +825,28 @@ export class ProductionInvoicesService {
         qlsxById: actorUserId,
       });
     }
+    const targetIds = new Set(targets.map((it) => it.id.toString()));
+    const stillWaitingQlsx = pi.items.some(
+      (it) =>
+        !targetIds.has(it.id.toString()) &&
+        it.prodApprovalStatus === ProdApprovalStatus.WAITING_QLSX,
+    );
+    if (!stillWaitingQlsx) {
+      await this.resolvePiNotifications('PRODUCTION_INVOICE', pi.id, ['PI_SENT_TO_QLSX']);
+    }
+    const waitingBoss =
+      pi.items.filter(
+        (it) =>
+          !targetIds.has(it.id.toString()) &&
+          it.prodApprovalStatus === ProdApprovalStatus.WAITING_BOSS,
+      ).length + targets.length;
+    await this.notifyPi(
+      'PI_SENT_TO_BOSS',
+      pi.id,
+      { piCode: pi.code, count: waitingBoss },
+      `PI_SENT_TO_BOSS:${pi.id}`,
+      actorUserId,
+    );
     return this.findOne(piId);
   }
 
@@ -800,6 +916,15 @@ export class ProductionInvoicesService {
       this.logger.error(
         `ProductionOrder creation failed unexpectedly for PI item ${item.id} despite BOM check: ${(error as Error).message}`,
       );
+      // 2026-09-26 (người dùng chốt): báo ADMIN (không phải QLSX - route khắc phục
+      // retry-production-order() chỉ ADMIN gọi được, FE chưa có nút, xem notification-types.ts).
+      await this.notifyPi(
+        'PI_PRODUCTION_ORDER_FAILED',
+        item.id,
+        { piCode: pi.code, count: 1, errorMessage: (error as Error).message },
+        undefined,
+        actorUserId,
+      );
     }
 
     // Trigger đề xuất cắt sắt tự động/ngầm - tách try/catch riêng, best-effort thật sự (không có
@@ -822,6 +947,22 @@ export class ProductionInvoicesService {
         data: { status: ProductionInvoiceStatus.PRODUCING },
       });
     }
+
+    // Item vừa rời WAITING_BOSS - đóng thông báo "chờ Sếp" nếu không còn SKU nào khác của PI này
+    // ở đó, rồi báo kết quả cho KHSX + QLSX.
+    const stillWaitingBoss = pi.items.some(
+      (it) => it.id !== item.id && it.prodApprovalStatus === ProdApprovalStatus.WAITING_BOSS,
+    );
+    if (!stillWaitingBoss) {
+      await this.resolvePiNotifications('PRODUCTION_INVOICE', pi.id, ['PI_SENT_TO_BOSS']);
+    }
+    await this.notifyPi(
+      'PI_APPROVED_BY_BOSS',
+      pi.id,
+      { piCode: pi.code, count: 1 },
+      undefined,
+      actorUserId,
+    );
 
     return this.toItemResponseDto(updated);
   }
@@ -922,6 +1063,9 @@ export class ProductionInvoicesService {
       item.quantity,
     );
     await this.triggerPostApprovalProposals(pi.id, item.id, productionOrder.id, actorUserId);
+    await this.resolvePiNotifications('PRODUCTION_INVOICE_ITEM', item.id, [
+      'PI_PRODUCTION_ORDER_FAILED',
+    ]);
 
     return this.toItemResponseDto(item);
   }
@@ -972,6 +1116,22 @@ export class ProductionInvoicesService {
       return { ...item, ...data };
     });
     await this.auditItemApprovalTransition(item, updated);
+    // Item vừa rời WAITING_QLSX (kéo theo có thể đã xoá luôn PI ở trên nếu hết SKU) - `pi.id` vẫn
+    // dùng được để đóng/tạo thông báo dù PI đã bị xoá (Notification không ràng buộc khoá ngoại tới
+    // PlanForm/ProductionInvoice, chỉ lưu id dạng chuỗi).
+    const stillWaitingQlsx = pi.items.some(
+      (it) => it.id !== item.id && it.prodApprovalStatus === ProdApprovalStatus.WAITING_QLSX,
+    );
+    if (!stillWaitingQlsx) {
+      await this.resolvePiNotifications('PRODUCTION_INVOICE', pi.id, ['PI_SENT_TO_QLSX']);
+    }
+    await this.notifyPi(
+      'PI_REJECTED_BY_QLSX',
+      pi.id,
+      { piCode: pi.code, count: 1, reason },
+      undefined,
+      actorUserId,
+    );
     return this.toItemResponseDto(updated);
   }
 
@@ -1050,6 +1210,17 @@ export class ProductionInvoicesService {
       await this.auditItemApprovalTransition(t.before, t.after);
     }
 
+    // Đòi MỌI item đang WAITING_QLSX mới cho xoá cả phiếu (guard ở đầu hàm) nên hàng đợi "chờ
+    // QLSX" của PI này luôn về 0 sau bước này - resolve() không điều kiện, khác rejectItemByQlsx().
+    await this.resolvePiNotifications('PRODUCTION_INVOICE', pi.id, ['PI_SENT_TO_QLSX']);
+    await this.notifyPi(
+      'PI_REJECTED_BY_QLSX',
+      pi.id,
+      { piCode: pi.code, count: itemIds.length, reason },
+      undefined,
+      actorUserId,
+    );
+
     return { movedItemIds: pi.items.map((i) => i.id.toString()) };
   }
 
@@ -1097,6 +1268,19 @@ export class ProductionInvoicesService {
       return { ...item, ...data };
     });
     await this.auditItemApprovalTransition(item, updated);
+    const stillWaitingBoss = pi.items.some(
+      (it) => it.id !== item.id && it.prodApprovalStatus === ProdApprovalStatus.WAITING_BOSS,
+    );
+    if (!stillWaitingBoss) {
+      await this.resolvePiNotifications('PRODUCTION_INVOICE', pi.id, ['PI_SENT_TO_BOSS']);
+    }
+    await this.notifyPi(
+      'PI_REJECTED_BY_BOSS',
+      pi.id,
+      { piCode: pi.code, count: 1, reason },
+      undefined,
+      actorUserId,
+    );
     return this.toItemResponseDto(updated);
   }
 
@@ -1166,6 +1350,13 @@ export class ProductionInvoicesService {
         this.logger.error(
           `ProductionOrder creation failed unexpectedly for PI item ${item.id} despite BOM check: ${(error as Error).message}`,
         );
+        await this.notifyPi(
+          'PI_PRODUCTION_ORDER_FAILED',
+          item.id,
+          { piCode: pi.code, count: 1, errorMessage: (error as Error).message },
+          undefined,
+          actorUserId,
+        );
       }
     }
 
@@ -1173,6 +1364,17 @@ export class ProductionInvoicesService {
       where: { id: pi.id },
       data: { status: ProductionInvoiceStatus.PRODUCING },
     });
+
+    // assertMergedPi() + assertItemStatus() ở đầu hàm đòi MỌI item đang WAITING_BOSS mới cho duyệt
+    // cả cụm - hàng đợi "chờ Sếp" của PI này luôn về 0 sau bước này, resolve() không điều kiện.
+    await this.resolvePiNotifications('PRODUCTION_INVOICE', pi.id, ['PI_SENT_TO_BOSS']);
+    await this.notifyPi(
+      'PI_APPROVED_BY_BOSS',
+      pi.id,
+      { piCode: pi.code, count: pi.items.length },
+      undefined,
+      actorUserId,
+    );
 
     // Best-effort như trigger đơn lẻ: không được phép làm hỏng việc duyệt đã ghi ở trên. Cùng
     // idiom approveItem() (2026-08-24) - 2 trigger mua VTTP/tiêu hao dồn vào onComplete, chỉ chạy
@@ -1282,6 +1484,17 @@ export class ProductionInvoicesService {
     for (const t of transitions) {
       await this.auditItemApprovalTransition(t.before, t.after);
     }
+
+    // updateMany ở trên đòi MỌI item đang WAITING_BOSS mới cho từ chối cả cụm - hàng đợi "chờ Sếp"
+    // của PI này luôn về 0 sau bước này, resolve() không điều kiện.
+    await this.resolvePiNotifications('PRODUCTION_INVOICE', pi.id, ['PI_SENT_TO_BOSS']);
+    await this.notifyPi(
+      'PI_REJECTED_BY_BOSS',
+      pi.id,
+      { piCode: pi.code, count: itemIds.length, reason },
+      undefined,
+      actorUserId,
+    );
 
     return { movedItemIds: pi.items.map((i) => i.id.toString()) };
   }

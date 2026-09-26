@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PurchaseProposalSource, PurchaseProposalStatus } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
@@ -19,16 +20,23 @@ describe('PieceMaterialYieldPurchaseService', () => {
     pieceMaterialYield: { findMany: jest.Mock };
     purchaseProposal: {
       findFirst: jest.Mock;
+      findUnique: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
       findUniqueOrThrow: jest.Mock;
     };
-    purchaseProposalItem: { update: jest.Mock; create: jest.Mock; findMany: jest.Mock };
+    purchaseProposalItem: {
+      update: jest.Mock;
+      create: jest.Mock;
+      findMany: jest.Mock;
+      count: jest.Mock;
+    };
     $queryRaw: jest.Mock;
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   };
   let productionBatchesService: { getReadyPoolQty: jest.Mock };
+  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
 
   const pi = { id: 1n };
   const chanNhom = { id: 40n }; // piece "chân nhôm" (needsHan=false)
@@ -63,6 +71,9 @@ describe('PieceMaterialYieldPurchaseService', () => {
       },
       purchaseProposal: {
         findFirst: jest.fn().mockResolvedValue(null),
+        // notifyPurchaseProposalCreated() (best-effort, NGOÀI transaction) đọc lại proposal sau khi
+        // commit - null mặc định để hàm đó tự bỏ qua êm, test riêng cho notification tự override.
+        findUnique: jest.fn().mockResolvedValue(null),
         // items trả về derive THẲNG từ args.data.items.create - phản ánh đúng buyQty vừa tính,
         // để check allCovered đọc found.items ngay sau create() (không cần findUniqueOrThrow
         // riêng ở nhánh tạo mới, khác nhánh gộp vào proposal có sẵn bên dưới).
@@ -103,6 +114,7 @@ describe('PieceMaterialYieldPurchaseService', () => {
         // item sau khi create/update xong - mặc định 1 dòng NEW, test nào cần kiểm rollup cụ thể
         // (vd "buyQty=0 -> PURCHASED") tự override.
         findMany: jest.fn().mockResolvedValue([{ status: PurchaseProposalStatus.NEW }]),
+        count: jest.fn().mockResolvedValue(0),
       },
       $queryRaw: jest.fn(() => qtyRow(0)),
       // lockBusinessKey() (khoá gộp theo PI, 2026-08-25) dùng $executeRaw - no-op ở test.
@@ -118,10 +130,15 @@ describe('PieceMaterialYieldPurchaseService', () => {
       reserveOrAdjust: jest.fn().mockResolvedValue(undefined),
       shrinkToFloor: jest.fn().mockResolvedValue(undefined),
     };
+    notificationsService = {
+      emit: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(undefined),
+    };
     service = new PieceMaterialYieldPurchaseService(
       prisma as unknown as PrismaServiceType,
       productionBatchesService as unknown as ProductionBatchesService,
       stockReservationsService as unknown as StockReservationsService,
+      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -179,6 +196,29 @@ describe('PieceMaterialYieldPurchaseService', () => {
       },
       include: { items: true },
     });
+  });
+
+  // Phase 3a, mục 7.4 changelog 2026-09-25/26 - notifyPurchaseProposalCreated() (util dùng chung,
+  // best-effort) đọc lại proposal SAU KHI computeAndUpsertProposals() đã commit.
+  it('emit PURCHASE_PROPOSAL_CREATED sau khi tạo/gộp xong, khi rollup còn cần Mua hàng xử lý', async () => {
+    productionBatchesService.getReadyPoolQty.mockResolvedValue(new Map([['40', 20]]));
+    prisma.purchaseProposal.findUnique.mockResolvedValue({
+      id: 900n,
+      status: PurchaseProposalStatus.NEW,
+      productionInvoice: { code: 'PI-2026-020' },
+    });
+    prisma.purchaseProposalItem.count.mockResolvedValue(1);
+
+    await service.computeAndUpsertProposals('1');
+
+    expect(notificationsService.emit).toHaveBeenCalledWith(
+      'PURCHASE_PROPOSAL_CREATED',
+      expect.objectContaining({
+        entityId: '900',
+        dedupeKey: 'PURCHASE_PROPOSAL_CREATED:900',
+        params: expect.objectContaining({ piCode: 'PI-2026-020', count: 1 }) as unknown,
+      }),
+    );
   });
 
   // 2026-09-03: qtyPerPiece (1 piece/mảnh gồm bao nhiêu miếng vật tư thành phẩm, vd 1 "pat" gồm 3

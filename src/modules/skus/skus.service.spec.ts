@@ -4,8 +4,10 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
+import { ReviewDecision } from '../../generated/prisma/client';
 import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { SkusService } from './skus.service';
 
@@ -24,6 +26,7 @@ describe('SkusService', () => {
   let service: SkusService;
   let bomRevisionsService: { create: jest.Mock; activateInTransaction: jest.Mock };
   let cloudinaryService: { deleteByUrl: jest.Mock };
+  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
   let prisma: {
     salesOrder: { findUnique: jest.Mock };
     mfgProduct: { findUnique: jest.Mock; update: jest.Mock };
@@ -175,10 +178,15 @@ describe('SkusService', () => {
     };
     bomRevisionsService = { create: jest.fn(), activateInTransaction: jest.fn() };
     cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
+    notificationsService = {
+      emit: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(undefined),
+    };
     service = new SkusService(
       prisma as unknown as PrismaServiceType,
       bomRevisionsService as unknown as BomRevisionsService,
       cloudinaryService as unknown as CloudinaryService,
+      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -1255,6 +1263,227 @@ describe('SkusService', () => {
 
       expect(result.manhData).toEqual({ pieces: [] });
       expect(result.detailQuota).toEqual({ daySon: [], vatTuPhuKien: [], baoBiDongGoi: [] });
+    });
+  });
+
+  // Phase 3a, mục 7.1 changelog 2026-09-25/26 - notification tại từng transition. Best-effort
+  // (catch+log, xem SkusService.notifySku) nên các test này chỉ kiểm ĐÚNG type/entityId/actorId
+  // được gọi, không kiểm nội dung title/message render (đã có ở notification-types.ts nếu cần) -
+  // renderEmitCall style của cutting-proposals.service.spec.ts không cần thiết ở đây vì mỗi test
+  // chỉ quan tâm request đúng type nào được emit/resolve, không phải nội dung chữ.
+  describe('notifications (Phase 3a, mục 7.1)', () => {
+    it('create() emits SKU_NEEDS_MANH_QUOTA + SKU_NEEDS_DETAIL_QUOTA cho SKU thường, loại trừ actor', async () => {
+      prisma.mfgProduct.findUnique.mockResolvedValue(mfgProduct);
+      prisma.planForm.create.mockResolvedValue(planForm());
+
+      await service.create({ mfgProductId: '2' }, 'user-khsx');
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'SKU_NEEDS_MANH_QUOTA',
+        expect.objectContaining({ entityId: '5', actorId: 'user-khsx' }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'SKU_NEEDS_DETAIL_QUOTA',
+        expect.objectContaining({ entityId: '5', actorId: 'user-khsx' }),
+      );
+    });
+
+    it('create() KHÔNG emit gì cho PlanForm origin=PRODUCTION_CONFIRM (ẩn khỏi mọi màn KHSX)', async () => {
+      prisma.mfgProduct.findUnique.mockResolvedValue(mfgProduct);
+      prisma.planForm.create.mockResolvedValue(planForm({ origin: 'PRODUCTION_CONFIRM' }));
+
+      await service.create({ mfgProductId: '2' }, 'user-khsx');
+
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+    });
+
+    it('updateManhQuota() resolve SKU_NEEDS_MANH_QUOTA + SKU_MANH_QUOTA_REJECTED rồi emit SKU_MANH_QUOTA_SUBMITTED', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Sat' }, 'user-spec-steel');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityType: 'SKU',
+          entityId: '5',
+          types: ['SKU_NEEDS_MANH_QUOTA', 'SKU_MANH_QUOTA_REJECTED'],
+        }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'SKU_MANH_QUOTA_SUBMITTED',
+        expect.objectContaining({ entityId: '5', actorId: 'user-spec-steel' }),
+      );
+    });
+
+    it('updateDetailQuota() resolve SKU_NEEDS_DETAIL_QUOTA + SKU_DETAIL_QUOTA_REJECTED rồi emit SKU_DETAIL_QUOTA_SUBMITTED', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateDetailQuota(
+        '5',
+        { detailLines: [], enteredBy: 'NV Chi Tiet' },
+        'user-spec-detail',
+      );
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityType: 'SKU',
+          entityId: '5',
+          types: ['SKU_NEEDS_DETAIL_QUOTA', 'SKU_DETAIL_QUOTA_REJECTED'],
+        }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'SKU_DETAIL_QUOTA_SUBMITTED',
+        expect.objectContaining({ entityId: '5', actorId: 'user-spec-detail' }),
+      );
+    });
+
+    it('reviewManhQuota() luôn resolve SKU_MANH_QUOTA_SUBMITTED, chỉ emit SKU_MANH_QUOTA_REJECTED khi REJECTED', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm());
+
+      await service.reviewManhQuota('5', { status: ReviewDecision.APPROVED }, 'user-khsx');
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: '5', types: ['SKU_MANH_QUOTA_SUBMITTED'] }),
+      );
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+
+      await service.reviewManhQuota(
+        '5',
+        { status: ReviewDecision.REJECTED, reason: 'Thiếu segment' },
+        'user-khsx',
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'SKU_MANH_QUOTA_REJECTED',
+        expect.objectContaining({
+          entityId: '5',
+          actorId: 'user-khsx',
+          params: expect.objectContaining({ reason: 'Thiếu segment' }) as unknown,
+        }),
+      );
+    });
+
+    it('reviewDetailQuota() luôn resolve SKU_DETAIL_QUOTA_SUBMITTED, chỉ emit SKU_DETAIL_QUOTA_REJECTED khi REJECTED', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm());
+
+      await service.reviewDetailQuota(
+        '5',
+        { status: ReviewDecision.REJECTED, reason: 'Sai màu sơn' },
+        'user-khsx',
+      );
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: '5', types: ['SKU_DETAIL_QUOTA_SUBMITTED'] }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'SKU_DETAIL_QUOTA_REJECTED',
+        expect.objectContaining({
+          entityId: '5',
+          params: expect.objectContaining({ reason: 'Sai màu sơn' }) as unknown,
+        }),
+      );
+    });
+
+    it('approveParts() KHÔNG emit SKU_SENT_TO_BOSS khi nhánh chi tiết chưa forward (chỉ 1/2 nhánh xong)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ manhReviews: [{ group: 'SAT', status: 'APPROVED' }] }),
+      );
+      prisma.planForm.update.mockResolvedValue(planForm({ manhForwardedAt: new Date() }));
+
+      await service.approveParts('5', 'user-khsx');
+
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+    });
+
+    it('approveDetail() emit SKU_SENT_TO_BOSS đúng 1 lần khi nhánh chi tiết là nhánh forward SAU CÙNG', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({
+          detailReviews: [{ group: 'DAY_SON', status: 'APPROVED' }],
+          manhForwardedAt: new Date(), // nhánh mảnh đã forward từ trước
+        }),
+      );
+      prisma.planForm.update.mockResolvedValue(
+        planForm({
+          status: 'WAITING_BOSS_APPROVAL',
+          manhForwardedAt: new Date(),
+          detailForwardedAt: new Date(),
+        }),
+      );
+
+      await service.approveDetail('5', 'user-khsx');
+
+      expect(notificationsService.emit).toHaveBeenCalledTimes(1);
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'SKU_SENT_TO_BOSS',
+        expect.objectContaining({ entityId: '5', actorId: 'user-khsx' }),
+      );
+    });
+
+    it('approve() resolve SKU_SENT_TO_BOSS rồi emit SKU_APPROVED', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      prisma.bomRevision.findFirst.mockResolvedValue(null);
+      prisma.planForm.updateMany.mockResolvedValue({ count: 1 });
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'APPROVED' }));
+
+      await service.approve('5', 'key-1', 'user-boss');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: '5', types: ['SKU_SENT_TO_BOSS'] }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'SKU_APPROVED',
+        expect.objectContaining({ entityId: '5', actorId: 'user-boss' }),
+      );
+    });
+
+    it('approve() KHÔNG emit gì khi short-circuit theo idempotencyKey (retry của request đã commit)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ status: 'APPROVED', bossApproveIdempotencyKey: 'key-1' }),
+      );
+
+      await service.approve('5', 'key-1', 'user-boss');
+
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+      expect(notificationsService.resolve).not.toHaveBeenCalled();
+    });
+
+    it('rejectByBoss() resolve SKU_SENT_TO_BOSS rồi emit SKU_REJECTED_BY_BOSS kèm lý do', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ status: 'WAITING_BOSS_APPROVAL', salesOrderId: 1n }),
+      );
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.rejectByBoss('5', 'Sai quy cách sơn', 'user-boss');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: '5', types: ['SKU_SENT_TO_BOSS'] }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'SKU_REJECTED_BY_BOSS',
+        expect.objectContaining({
+          entityId: '5',
+          actorId: 'user-boss',
+          params: expect.objectContaining({
+            reason: 'Sai quy cách sơn',
+            hasSalesOrder: true,
+          }) as unknown,
+        }),
+      );
+    });
+
+    it('lỗi ghi notification (emit/resolve) không được làm hỏng request nghiệp vụ chính (best-effort)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      prisma.bomRevision.findFirst.mockResolvedValue(null);
+      prisma.planForm.updateMany.mockResolvedValue({ count: 1 });
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'APPROVED' }));
+      notificationsService.resolve.mockRejectedValueOnce(new Error('DB down'));
+      notificationsService.emit.mockRejectedValueOnce(new Error('DB down'));
+
+      const result = await service.approve('5', 'key-1', 'user-boss');
+
+      expect(result.status).toBe('APPROVED');
     });
   });
 });

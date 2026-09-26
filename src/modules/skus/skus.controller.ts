@@ -78,40 +78,56 @@ export class SkusController {
 
   @Post(':id/manh-quota')
   @RequirePermissions(UPDATE)
-  updateManhQuota(@Param('id') id: string, @Body() dto: UpdateQuotaDto) {
-    return this.skusService.updateManhQuota(id, dto);
+  updateManhQuota(
+    @Param('id') id: string,
+    @Body() dto: UpdateQuotaDto,
+    @CurrentUser('id') actorUserId: string,
+  ) {
+    return this.skusService.updateManhQuota(id, dto, actorUserId);
   }
 
   @Post(':id/manh-quota/review')
   @RequirePermissions(APPROVE)
-  reviewManhQuota(@Param('id') id: string, @Body() dto: ReviewQuotaDto) {
-    return this.skusService.reviewManhQuota(id, dto);
+  reviewManhQuota(
+    @Param('id') id: string,
+    @Body() dto: ReviewQuotaDto,
+    @CurrentUser('id') actorUserId: string,
+  ) {
+    return this.skusService.reviewManhQuota(id, dto, actorUserId);
   }
 
   @Post(':id/approve-parts')
   @RequirePermissions(APPROVE)
-  approveParts(@Param('id') id: string) {
-    return this.skusService.approveParts(id);
+  approveParts(@Param('id') id: string, @CurrentUser('id') actorUserId: string) {
+    return this.skusService.approveParts(id, actorUserId);
   }
 
   // ─── Detail quota (chi tiết - Sơn/Phụ kiện/Bao bì, nhập bởi acc chi tiết, duyệt bởi KHSX) ──
 
   @Post(':id/detail-quota')
   @RequirePermissions(UPDATE)
-  updateDetailQuota(@Param('id') id: string, @Body() dto: UpdateQuotaDto) {
-    return this.skusService.updateDetailQuota(id, dto);
+  updateDetailQuota(
+    @Param('id') id: string,
+    @Body() dto: UpdateQuotaDto,
+    @CurrentUser('id') actorUserId: string,
+  ) {
+    return this.skusService.updateDetailQuota(id, dto, actorUserId);
   }
 
   @Post(':id/detail-quota/review')
   @RequirePermissions(APPROVE)
-  reviewDetailQuota(@Param('id') id: string, @Body() dto: ReviewQuotaDto) {
-    return this.skusService.reviewDetailQuota(id, dto);
+  reviewDetailQuota(
+    @Param('id') id: string,
+    @Body() dto: ReviewQuotaDto,
+    @CurrentUser('id') actorUserId: string,
+  ) {
+    return this.skusService.reviewDetailQuota(id, dto, actorUserId);
   }
 
   @Post(':id/approve-detail')
   @RequirePermissions(APPROVE)
-  approveDetail(@Param('id') id: string) {
-    return this.skusService.approveDetail(id);
+  approveDetail(@Param('id') id: string, @CurrentUser('id') actorUserId: string) {
+    return this.skusService.approveDetail(id, actorUserId);
   }
 
   // ─── Sếp (role BOSS) - duyệt cuối, mirror assertBossRole() trong mock ───────
@@ -121,17 +137,25 @@ export class SkusController {
   @Post(':id/approve')
   @RequirePermissions(APPROVE)
   @RequireRole(BUSINESS_ROLES.BOSS)
-  approve(@Param('id') id: string, @Headers('idempotency-key') idempotencyKey: string | undefined) {
+  approve(
+    @Param('id') id: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @CurrentUser('id') actorUserId: string,
+  ) {
     if (!idempotencyKey) {
       throw new BadRequestException('Header Idempotency-Key là bắt buộc');
     }
-    return this.skusService.approve(id, idempotencyKey);
+    return this.skusService.approve(id, idempotencyKey, actorUserId);
   }
 
   @Post(':id/reject-boss')
   @RequirePermissions(APPROVE)
   @RequireRole(BUSINESS_ROLES.BOSS)
-  rejectByBoss(@Param('id') id: string, @Body() dto: RejectBossDto) {
-    return this.skusService.rejectByBoss(id, dto.reason);
+  rejectByBoss(
+    @Param('id') id: string,
+    @Body() dto: RejectBossDto,
+    @CurrentUser('id') actorUserId: string,
+  ) {
+    return this.skusService.rejectByBoss(id, dto.reason, actorUserId);
   }
 }

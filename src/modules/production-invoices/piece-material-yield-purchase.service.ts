@@ -9,6 +9,8 @@ import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
+import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PieceMaterialYieldPurchaseResultDto } from './dto/piece-material-yield-purchase-result.dto';
@@ -30,6 +32,7 @@ export class PieceMaterialYieldPurchaseService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly productionBatchesService: ProductionBatchesService,
     private readonly stockReservationsService: StockReservationsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async computeAndUpsertProposals(
@@ -330,6 +333,10 @@ export class PieceMaterialYieldPurchaseService {
           purchaseProposalStatus: proposal.status,
         }),
       );
+    }
+
+    if (proposal) {
+      await notifyPurchaseProposalCreated(this.prisma, this.notifications, proposal.id);
     }
 
     return results;

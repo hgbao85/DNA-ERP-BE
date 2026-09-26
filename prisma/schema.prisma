@@ -35,6 +35,9 @@ enum MfgRole {
   SPEC_PACKAGING
 }
 
+/// Chỉ còn dùng cho Notification.category = ANNOUNCEMENT (admin phát cho cả nhóm role) - xem
+/// changelog 2026-09-25. Sự kiện nghiệp vụ (mọi category khác) fan-out người nhận cụ thể vào
+/// NotificationRecipient qua NotificationsService.emit(), không còn giới hạn ở 4 giá trị này.
 enum NotificationAudience {
   ALL
   BOSS
@@ -42,6 +45,29 @@ enum NotificationAudience {
   /// QLSX - dùng để báo khi 1 CuttingProposal tính xong/thất bại (xem
   /// CuttingProposalsService), vì đây là role sở hữu quyền CUTTING_PROPOSAL.
   PRODUCTION_MANAGER
+}
+
+/// Phân loại thông báo - quyết định cách FE hiển thị (mục 4/6 changelog 2026-09-25).
+enum NotificationCategory {
+  /// Admin/Sếp phát cho cả nhóm - không gắn với 1 việc cần làm cụ thể.
+  ANNOUNCEMENT
+  /// Có 1 việc người nhận cần làm - biến mất khỏi "cần xử lý" khi NotificationRecipient.resolvedAt
+  /// được set (ai đó đã xử lý xong đối tượng liên quan).
+  ACTION_REQUIRED
+  /// Kết quả của 1 việc người nhận đã gửi đi trước đó (đã duyệt/từ chối/nhận hàng...).
+  RESULT
+  /// Cảnh báo lỗi hệ thống/nghiệp vụ cần chú ý - luôn có severity CRITICAL.
+  ALERT
+  /// Để biết, không cần hành động và không phải kết quả trực tiếp của việc mình gửi.
+  INFO
+}
+
+/// Mức độ - INFO/SUCCESS hiện im lặng ở FE, WARNING/CRITICAL nổi toast (mục 6.1 changelog).
+enum NotificationSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  CRITICAL
 }
 
 model User {
@@ -69,8 +95,9 @@ model User {
 
   roles                             UserRole[]
   refreshTokens                     RefreshToken[]
-  notifications                     Notification[]
-  notificationReads                 NotificationRead[]
+  notificationsCreated              Notification[]              @relation("NotificationCreatedBy")
+  notificationsAsActor              Notification[]               @relation("NotificationActor")
+  notificationRecipients            NotificationRecipient[]
   planForms                         PlanForm[]
   piRequestedItems                  ProductionInvoiceItem[]     @relation("PIItemRequestedBy")
   piQlsxItems                       ProductionInvoiceItem[]     @relation("PIItemQlsxBy")
@@ -200,35 +227,68 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-/// Admin broadcast, targeted by audience rather than individual recipients.
-/// Per-user read state lives in NotificationRead.
+/// 1 dòng = 1 sự kiện thông báo, nội dung đã render sẵn (tiếng Việt). Người nhận cụ thể fan-out
+/// vào NotificationRecipient (đọc/resolve/archive theo TỪNG user) - `audience` chỉ còn có giá trị
+/// cho category=ANNOUNCEMENT (admin phát cho cả nhóm role, tương thích ngược với model cũ). Thay
+/// thế mô hình broadcast-4-audience trước đây - xem changelog 2026-09-25.
 model Notification {
-  id        String               @id @default(uuid())
-  title     String
-  message   String
-  audience  NotificationAudience
+  id       String               @id @default(uuid())
+  /// Khoá vào NOTIFICATION_TYPES (notification-types.ts) - null cho ANNOUNCEMENT tự do của admin.
+  type     String?
+  category NotificationCategory @default(ANNOUNCEMENT)
+  severity NotificationSeverity @default(INFO)
+  title    String
+  message  String
+  /// Đối tượng nghiệp vụ liên quan, vd entityType="CUTTING_PROPOSAL" entityId="123" - dùng để
+  /// resolve() tự đóng thông báo ACTION_REQUIRED khi đối tượng rời trạng thái cần xử lý.
+  entityType String?
+  entityId   String?
+  /// { module, page, params } - FE tự dựng URL từ đây (BE không biết cấu trúc route FE, mục 6.2
+  /// changelog 2026-09-25). null cho ANNOUNCEMENT không link tới đâu cả.
+  link Json?
+  /// Payload thô (mã PO, lý do từ chối...) để FE hiển thị thêm ngoài title/message nếu cần.
+  data Json?
+  /// Người gây ra sự kiện - loại khỏi danh sách người nhận trừ khi type khai notifyActor. null =
+  /// hệ thống (vd solver cắt sắt).
+  actorId String?
+  /// "{type}:{entityId}" - NotificationsService.emit() gộp vào dòng này thay vì tạo dòng mới khi
+  /// cùng sự kiện lặp lại (chống spam khi 1 đối tượng được tính/thử lại nhiều lần).
+  dedupeKey String?
+  /// Chỉ có giá trị cho category=ANNOUNCEMENT.
+  audience  NotificationAudience?
   createdBy String?
-  createdAt DateTime             @default(now())
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
 
-  creator User?              @relation(fields: [createdBy], references: [id], onDelete: SetNull)
-  reads   NotificationRead[]
+  creator    User?                    @relation("NotificationCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  actor      User?                    @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  recipients NotificationRecipient[]
 
   @@index([audience])
+  @@index([entityType, entityId])
+  @@index([dedupeKey])
   @@map("notifications")
 }
 
-/// Junction recording which users have read which notification. Composite PK
-/// doubles as the upsert target that makes POST /notifications/:id/read idempotent.
-model NotificationRead {
+/// Fan-out theo người nhận - thay NotificationRead (vốn chỉ ghi "đã đọc" cho audience-broadcast).
+/// Composite PK vẫn là upsert target cho mark-read idempotent như trước.
+model NotificationRecipient {
   notificationId String
   userId         String
-  readAt         DateTime @default(now())
+  createdAt      DateTime  @default(now())
+  readAt         DateTime?
+  /// Việc "cần xử lý" đã được xử lý xong (bởi CHÍNH người này hoặc người khác cùng vai trò/kho) -
+  /// FE làm mờ + không tính vào badge "cần xử lý" nữa. Có thể resolved mà vẫn chưa đọc.
+  resolvedAt DateTime?
+  /// Người dùng tự ẩn khỏi danh sách của mình - không ảnh hưởng người nhận khác.
+  archivedAt DateTime?
 
   notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([notificationId, userId])
-  @@map("notification_reads")
+  @@index([userId, readAt, createdAt])
+  @@map("notification_recipients")
 }
 
 /// Singleton row (id is pinned to 1 by a CHECK constraint, see

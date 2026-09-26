@@ -11,7 +11,6 @@ import { AppConfig } from '../../config/configuration';
 import {
   BomRevisionStatus,
   CuttingProposalStatus,
-  NotificationAudience,
   Prisma,
   PurchaseProposalStatus,
   ProdApprovalStatus,
@@ -27,6 +26,9 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/notification-types';
+import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
 import {
   CuttingProposalDisplayStatus,
   CuttingProposalPendingMaterialResponseDto,
@@ -248,6 +250,7 @@ export class CuttingProposalsService {
     private readonly externalApiService: ExternalApiService,
     private readonly configService: ConfigService<AppConfig, true>,
     private readonly stockReservationsService: StockReservationsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -1070,6 +1073,11 @@ export class CuttingProposalsService {
         ? { productionInvoiceId: proposal.productionInvoiceId }
         : null;
 
+    // Hoist để đọc được SAU KHI transaction dưới đây commit (mục 7.4 changelog 2026-09-25/26) -
+    // set bên trong nhánh "existingProposal"/"created" của khối gộp PurchaseProposal, đọc lại ở
+    // notifyPurchaseProposalCreated() (best-effort, ngoài transaction).
+    let purchaseProposalIdForNotify: bigint | undefined;
+
     const updated = await this.prisma.$transaction(
       async (tx) => {
         // Khoá chính dòng phương án rồi ĐỌC LẠI trạng thái: kiểm tra DRAFT ở trên nằm ngoài
@@ -1360,6 +1368,7 @@ export class CuttingProposalsService {
               data: { cuttingProposalId: bigId },
             });
             await recomputeProposalStatus(tx, existingProposal.id);
+            purchaseProposalIdForNotify = existingProposal.id;
           } else {
             const created = await tx.purchaseProposal.create({
               data: {
@@ -1386,6 +1395,7 @@ export class CuttingProposalsService {
               },
             });
             await recomputeProposalStatus(tx, created.id);
+            purchaseProposalIdForNotify = created.id;
           }
         }
 
@@ -1426,6 +1436,15 @@ export class CuttingProposalsService {
       // nhiều loại sắt. Bản thân các câu lệnh chỉ tốn mili-giây, nới trần là để chờ khoá.
       { timeout: 15_000 },
     );
+
+    if (purchaseProposalIdForNotify != null) {
+      await notifyPurchaseProposalCreated(
+        this.prisma,
+        this.notifications,
+        purchaseProposalIdForNotify,
+        actorUserId,
+      );
+    }
 
     return this.toResponseDto(updated);
   }
@@ -1646,7 +1665,6 @@ export class CuttingProposalsService {
       // tự duyệt phải qua cổng autoApproveBlockReason() - xem docstring hàm đó.
       const blockReason = await this.autoApproveBlockReason(proposalId, response);
       let autoApproved = false;
-      let approveError: string | undefined;
       if (blockReason) {
         this.logger.warn(`Không tự duyệt phương án cắt ${proposalId}: ${blockReason}`);
       } else {
@@ -1654,39 +1672,27 @@ export class CuttingProposalsService {
           await this.approve(proposalId.toString(), requestedById ?? null);
           autoApproved = true;
         } catch (error) {
-          approveError = (error as Error).message;
-          this.logger.error(`Auto-duyệt phương án cắt ${proposalId} thất bại: ${approveError}`);
+          this.logger.error(
+            `Auto-duyệt phương án cắt ${proposalId} thất bại: ${(error as Error).message}`,
+          );
         }
       }
 
-      // 3 nhánh riêng biệt, KHÔNG gộp "bị chặn" chung với "lỗi kỹ thuật": việc QLSX phải làm khác
-      // hẳn nhau (chặn = xem lại phương án/gộp tổ hợp khác; lỗi = duyệt lại tay). Nội dung cũ báo
-      // "đã tự trừ tồn kho và chuyển đề xuất mua hàng" cho MỌI ca thành công là sai sự thật khi
-      // phương án không có dòng nào mua được.
+      // 2026-09-26 (người dùng chốt): CHỈ báo QLSX khi tự duyệt thành công - quay lại flow cũ.
+      // Trước đây còn báo cho "bị chặn tự duyệt" (blockReason) và "auto-duyệt lỗi" (approveError),
+      // nhưng cả 2 luôn trỏ ý "còn việc cần QLSX làm" trong khi KHÔNG có màn nào cho QLSX làm việc
+      // đó (mục 12.6 changelog 2026-09-25) - bỏ hẳn 2 nhánh này khỏi notifyProductionManagers().
+      // logger.warn/logger.error ở trên vẫn giữ nguyên cho ai cần đọc log server.
       if (autoApproved) {
-        await this.notifyProductionManagers(
-          `Đề xuất cắt sắt cho ${poNumber} đã tính xong và tự động duyệt`,
-          `Đã tự trừ tồn kho và chuyển đề xuất mua hàng (nếu thiếu vật tư) sang Mua hàng.`,
-        );
-      } else if (blockReason) {
-        await this.notifyProductionManagers(
-          `Đề xuất cắt sắt cho ${poNumber} đã tính xong - CẦN DUYỆT TAY`,
-          `Hệ thống không tự duyệt vì ${blockReason}. Chưa trừ tồn kho, chưa tạo đề xuất mua hàng. ` +
-            `Xem phương án tại lệnh sản xuất ${poNumber} rồi quyết định duyệt tay hay tính lại.`,
-        );
-      } else {
-        await this.notifyProductionManagers(
-          `Đề xuất cắt sắt cho ${poNumber} đã tính xong nhưng tự động duyệt thất bại`,
-          `Lỗi: ${approveError ?? 'không rõ'}. Xem chi tiết phương án cắt tại lệnh sản xuất ` +
-            `${poNumber} và duyệt lại thủ công.`,
-        );
+        await this.notifyProductionManagers(proposalId, 'CUTTING_PROPOSAL_AUTO_APPROVED', {
+          poNumber: poNumber ?? '—',
+        });
       }
     } catch (error) {
+      // 2026-09-26 (người dùng chốt): solver lỗi/timeout cũng KHÔNG còn báo QLSX (trước đây là
+      // CUTTING_PROPOSAL_CALCULATION_FAILED) - cùng lý do trên. saveFailure() vẫn lưu FAILED +
+      // errorMessage vào chính CuttingProposal, và extractErrorMessage() vẫn được dùng ở đó.
       await this.saveFailure(proposalId, error);
-      await this.notifyProductionManagers(
-        `Tính đề xuất cắt sắt thất bại${poNumber ? ` cho ${poNumber}` : ''}`,
-        this.extractErrorMessage(error),
-      );
     } finally {
       // Chạy dù thành công/chặn/lỗi - "xong" ở đây nghĩa là đề xuất mua sắt (nếu có) đã hiển thị
       // ổn định, không phải "tính ra kết quả tốt". Tách try/catch riêng, best-effort như mọi
@@ -2103,12 +2109,27 @@ export class CuttingProposalsService {
     );
   }
 
-  /** Báo QLSX khi 1 CuttingProposal tính xong (thành công hoặc thất bại) - im lặng, không chặn
-   * gì cả; lỗi bắn thông báo (nếu có) chỉ log lại, không được làm hỏng luồng chính. */
-  private async notifyProductionManagers(title: string, message: string): Promise<void> {
+  /** Báo QLSX khi 1 CuttingProposal tự duyệt xong - im lặng, không chặn gì cả; lỗi bắn thông báo
+   * (nếu có) chỉ log lại, không được làm hỏng luồng chính. Đi qua NotificationsService.emit()
+   * (2026-09-25) thay vì ghi thẳng prisma.notification - xem NOTIFICATION_TYPES cho title/message/
+   * người nhận. dedupeKey theo proposalId: tính lại NHIỀU LẦN cho cùng 1 CuttingProposal (hiếm - vd
+   * retry lỗi mạng) gộp vào 1 dòng thay vì spam, nhưng KHÔNG gộp qua các lượt "Tính lại" tạo
+   * proposal MỚI (mỗi phương án là 1 quyết định khác nhau, đáng có thông báo riêng).
+   *
+   * 2026-09-26 (người dùng chốt): CHỈ còn gọi cho `CUTTING_PROPOSAL_AUTO_APPROVED` - 3 nhánh
+   * "không thành công" trước đây đã bị bỏ hẳn ở call site (xem comment trong luồng gọi), giữ
+   * `type: NotificationType` chung chung ở đây (thay vì hardcode) để không phải sửa lại chữ ký hàm
+   * nếu Phase 3 thêm type cắt sắt khác. */
+  private async notifyProductionManagers(
+    proposalId: bigint,
+    type: NotificationType,
+    params: { poNumber: string },
+  ): Promise<void> {
     try {
-      await this.prisma.notification.create({
-        data: { title, message, audience: NotificationAudience.PRODUCTION_MANAGER },
+      await this.notifications.emit(type, {
+        entityId: proposalId.toString(),
+        dedupeKey: `${type}:${proposalId}`,
+        params: { ...params, proposalId: proposalId.toString() },
       });
     } catch (error) {
       this.logger.error(

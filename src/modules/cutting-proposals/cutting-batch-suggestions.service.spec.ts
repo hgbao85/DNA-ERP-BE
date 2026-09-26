@@ -3,6 +3,7 @@ import { PrismaServiceType } from '../../prisma/prisma.service';
 import { AppConfig } from '../../config/configuration';
 import { ExternalApiService } from '../external/external-api.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CuttingProposalsService } from './cutting-proposals.service';
 
 /**
@@ -102,6 +103,8 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       { post: postMock } as unknown as ExternalApiService,
       { get: jest.fn() } as unknown as ConfigService<AppConfig, true>,
       { reserve: jest.fn(), getAvailableQty: jest.fn() } as unknown as StockReservationsService,
+      // getBatchSuggestions() không đụng tới thông báo - stub rỗng cho đủ tham số constructor.
+      { emit: jest.fn() } as unknown as NotificationsService,
     );
   };
 

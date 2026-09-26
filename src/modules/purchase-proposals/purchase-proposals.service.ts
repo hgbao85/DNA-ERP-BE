@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
@@ -24,6 +25,7 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { CloudinaryService } from '../uploads/cloudinary.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { recomputeProposalStatus } from './purchase-proposal-status.util';
@@ -144,13 +146,70 @@ type PurchaseProposalItemRow = Prisma.PurchaseProposalItemGetPayload<{
  */
 @Injectable()
 export class PurchaseProposalsService {
+  private readonly logger = new Logger(PurchaseProposalsService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
     private readonly cls: ClsService<AppClsStore>,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  // ─── Notification (Phase 3a, mục 7.4 changelog 2026-09-25/26) ──────────────────────────────
+  // Best-effort NGOÀI transaction - cùng lý do đã ghi ở SkusService.notifySku()/
+  // ProductionInvoicesService.notifyPi() (mục 14/15.2/16.2).
+  private async notifyPurchaseProposal(
+    type:
+      | 'PURCHASE_PROPOSAL_APPROVED'
+      | 'PURCHASE_PROPOSAL_ITEM_RECEIVED'
+      | 'PURCHASE_PROPOSAL_PURCHASED',
+    proposalId: bigint,
+    params: {
+      piCode: string;
+      count: number;
+      materialCode?: string;
+      qty?: number;
+      unit?: string;
+      warehouseId?: string;
+    },
+    actorUserId?: string,
+  ): Promise<void> {
+    try {
+      await this.notifications.emit(type, {
+        entityId: proposalId.toString(),
+        actorId: actorUserId,
+        params: { ...params },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create purchase-proposal notification (${type}, proposal ${proposalId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async resolvePurchaseProposalCreated(proposalId: bigint): Promise<void> {
+    try {
+      await this.notifications.resolve({
+        entityType: 'PURCHASE_PROPOSAL',
+        entityId: proposalId.toString(),
+        types: ['PURCHASE_PROPOSAL_CREATED'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve PURCHASE_PROPOSAL_CREATED (proposal ${proposalId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /** `piCode` dùng chung nhiều nơi trong service này (bossApprove/receiveItem) - lấy qua đúng
+   *  đường `toResponseDto()` đã dùng (cuttingProposal->productionOrder->PI, fallback
+   *  row.productionInvoice) thay vì tự dựng lại logic resolve khác đi. */
+  private async resolvePiCodeFor(proposalId: bigint): Promise<string> {
+    const dto = await this.findOne(proposalId.toString()).catch(() => null);
+    return dto?.piCode ?? `#${proposalId}`;
+  }
 
   /**
    * Ghi audit TAY cho PurchaseProposalItem - bảng con này cố ý không nằm trong AUDITED_MODELS, và
@@ -291,7 +350,24 @@ export class PurchaseProposalsService {
         })),
       },
     });
-    return this.findOne(id);
+
+    // Còn vật tư khác (người mua khác phụ trách) của CÙNG đề xuất chưa duyệt thì KHÔNG đóng
+    // PURCHASE_PROPOSAL_CREATED - "n vật tư cần mua" của Mua hàng phải phản ánh đúng phần còn lại.
+    const stillPending = await this.prisma.purchaseProposalItem.count({
+      where: { proposalId: proposal.id, status: { in: PENDING_APPROVAL_STATUSES } },
+    });
+    if (stillPending === 0) {
+      await this.resolvePurchaseProposalCreated(proposal.id);
+    }
+    const result = await this.findOne(id);
+    await this.notifyPurchaseProposal(
+      'PURCHASE_PROPOSAL_APPROVED',
+      proposal.id,
+      { piCode: result.piCode, count: myPendingItems.length },
+      actorUserId,
+    );
+
+    return result;
   }
 
   /**
@@ -574,6 +650,37 @@ export class PurchaseProposalsService {
       },
       { timeout: 15_000 },
     );
+
+    const piCode = await this.resolvePiCodeFor(proposal.id);
+    await this.notifyPurchaseProposal(
+      'PURCHASE_PROPOSAL_ITEM_RECEIVED',
+      proposal.id,
+      {
+        piCode,
+        count: 1,
+        materialCode: item.material.code,
+        qty: dto.receivedQty,
+        unit: item.material.unit,
+        warehouseId: materialWarehouseId.toString(),
+      },
+      userId,
+    );
+    // Rollup vừa chuyển PURCHASED (MỌI dòng của đề xuất đã nhận đủ) - đọc lại TỪ DB sau khi
+    // transaction commit (recomputeProposalStatus() ghi trong tx, không trả lại giá trị mới).
+    if (updatedItem.status === PurchaseProposalStatus.PURCHASED) {
+      const refreshed = await this.prisma.purchaseProposal.findUnique({
+        where: { id: proposal.id },
+        select: { status: true },
+      });
+      if (refreshed?.status === PurchaseProposalStatus.PURCHASED) {
+        await this.notifyPurchaseProposal(
+          'PURCHASE_PROPOSAL_PURCHASED',
+          proposal.id,
+          { piCode, count: proposal.items.length },
+          userId,
+        );
+      }
+    }
 
     return this.toItemResponseDto(updatedItem);
   }
