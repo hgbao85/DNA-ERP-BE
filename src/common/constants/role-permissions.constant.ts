@@ -618,6 +618,18 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     { module: PERMISSION_MODULES.SUPPLIER, actions: 'ALL' },
     { module: PERMISSION_MODULES.MATERIAL, actions: [PermissionAction.VIEW] },
   ],
+  // Quản lý vật tư (2026-09-28) - tài khoản chuyên biệt CHỈ dùng màn Admin > Danh mục hệ thống >
+  // Vật tư (MaterialsPage.tsx), khác PURCHASER ở trên (chỉ VIEW). MATERIAL: ALL vì màn này có nút
+  // Thêm/Sửa/Xoá vật tư thật. MATERIAL_GROUP/WAREHOUSE/STOCK/USER: VIEW - 4 quyền đọc-only mà
+  // trang cần để dựng dropdown Nhóm vật tư/Kho + hiện Tồn kho/Khả dụng + danh sách Nhân viên mua
+  // hàng (GET /material-groups, /warehouses, /stock-quant, /users - xem MaterialsPage.tsx).
+  [BUSINESS_ROLES.MATERIALS_MANAGER]: [
+    { module: PERMISSION_MODULES.MATERIAL, actions: 'ALL' },
+    { module: PERMISSION_MODULES.MATERIAL_GROUP, actions: [PermissionAction.VIEW] },
+    { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
+    { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
+    { module: PERMISSION_MODULES.USER, actions: [PermissionAction.VIEW] },
+  ],
 };
 
 /**

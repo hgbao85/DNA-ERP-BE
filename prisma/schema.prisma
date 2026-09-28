@@ -61,11 +61,12 @@ model User {
   /// Business-attribute columns (not permission columns - see PermissionsGuard/RBAC
   /// above for actual authorization). Used for row-level scoping and MES-specific
   /// guards (@RequireMfgRole/@RequireWarehouseScope) layered on top of PermissionsGuard.
-  mfgRole          MfgRole?
-  warehouseScope   String?
-  isPurchaser      Boolean  @default(false)
-  isProductPlanner Boolean  @default(false)
-  isSale           Boolean  @default(false)
+  mfgRole            MfgRole?
+  warehouseScope     String?
+  isPurchaser        Boolean  @default(false)
+  isProductPlanner   Boolean  @default(false)
+  isSale             Boolean  @default(false)
+  isMaterialsManager Boolean  @default(false)
 
   roles                             UserRole[]
   refreshTokens                     RefreshToken[]
@@ -1205,20 +1206,20 @@ model PlanFormDetailReview {
 /// machine duyệt sản xuất riêng (prodApprovalStatus). PI tự chuyển PRODUCING khi mọi item
 /// đã APPROVED (mirror đúng ProductionInvoiceService.approveItemByBoss trong mock).
 model ProductionInvoice {
-  id                           BigInt                  @id @default(autoincrement())
-  code                         String                  @unique
+  id                             BigInt                  @id @default(autoincrement())
+  code                           String                  @unique
   /// NULL cho PI gộp (isMerged) - các SKU bên trong có thể đến từ nhiều đơn hàng khác nhau nên
   /// không quy về 1 đơn được. PO gốc của từng SKU đọc ở ProductionInvoiceItem.salesOrderId.
-  salesOrderId                 BigInt?
-  status                       ProductionInvoiceStatus @default(PLANNING)
-  deadline                     DateTime?
+  salesOrderId                   BigInt?
+  status                         ProductionInvoiceStatus @default(PLANNING)
+  deadline                       DateTime?
   /// true = KHSX tự gộp nhiều SKU lại để CẮT CHUNG một đợt (màn "Tối ưu cắt sắt"), khác hẳn PI
   /// vỏ 1-1 Sales tự sinh theo mỗi đơn hàng (createLinkedProductionInvoice). Hai loại có luồng
   /// duyệt KHÁC NHAU: PI gộp Sếp duyệt/từ chối CẢ CỤM một lần (approveBatch/rejectBatch, vì cả
   /// nhóm nằm chung một cây sắt, không tách lẻ được), PI thường vẫn duyệt từng SKU như cũ.
-  isMerged                     Boolean                 @default(false)
-  mergedAt                     DateTime?
-  mergedById                   String?
+  isMerged                       Boolean                 @default(false)
+  mergedAt                       DateTime?
+  mergedById                     String?
   /// Thông số cắt KHSX ĐỀ NGHỊ cho riêng đợt này lúc "Xác nhận gộp"/"Tiến hành cắt riêng" ở màn
   /// "Tối ưu cắt sắt", Sếp chấp thuận bằng chính nút Duyệt lệnh sản xuất (2026-09-14). Cả 3 cột
   /// đọc ở CuttingProposalsService.buildOrderJob/buildInvoiceJob rồi áp trong runSolverAndSave().
@@ -1231,16 +1232,16 @@ model ProductionInvoice {
   ///
   /// Đây là TRẦN Sếp đã duyệt, không phải giấy phép vô hạn: solver ra phương án vượt cả trần này
   /// thì autoApproveBlockReason() vẫn chặn tự duyệt như thường.
-  solverMaxWastePctOverride    Decimal?                @db.Decimal(5, 2)
+  solverMaxWastePctOverride      Decimal?                @db.Decimal(5, 2)
   /// Có cho solver đặt cây ngoài `solverStockLengths` không. NULL = theo mặc định công ty
   /// (SystemConfig.solverAllowCustomLength). Trục này ĐỘC LẬP với ngưỡng hao hụt ở trên: đơn gấp
   /// thường là false (chỉ mua cây chuẩn) + có đặc cách (chịu hao cao) - tổ hợp mà thiết kế enum 3
   /// mức trước đó không diễn đạt nổi.
-  solverAllowCustomLength      Boolean?
+  solverAllowCustomLength        Boolean?
   /// Lý do KHSX xin đặc cách, viết cho Sếp đọc lúc duyệt (vd "PO-4 giao gấp, không chờ cán cây
   /// riêng kịp"). Bắt buộc khi có solverMaxWastePctOverride - chặn ở DTO, xem
   /// MergeProductionInvoiceDto/ClaimSoloDto. Duyệt một con số mà không biết vì sao là duyệt khống.
-  solverOverrideReason         String?
+  solverOverrideReason           String?
   /// BẰNG CHỨNG kèm lời xin đặc cách, CHỤP LẠI đúng lúc KHSX bấm gộp/cắt riêng - loại sắt vướng
   /// nhất trong đợt cùng ước tính hao hụt của nó và ngưỡng thường đang áp:
   ///   { materialCode: "SAT-VUONG-20X20", estimatedWastePct: 13.9, normalThresholdPct: 1 }
@@ -1253,7 +1254,7 @@ model ProductionInvoice {
   /// Chỉ ghi khi có solverMaxWastePctOverride (khỏi tốn một lượt previewBatch cho đường thường).
   /// Khoá ghi camelCase TƯỜNG MINH - xem cảnh báo ở CuttingProposalLine.pieceSummary về việc
   /// lengthComparison dump thẳng snake_case rồi `as`-cast dối làm FE đọc ra undefined.
-  solverOverrideEvidence       Json?
+  solverOverrideEvidence         Json?
   /// Chiều dài cây sắt KHSX chọn cho RIÊNG đợt này, theo TỪNG QUY CÁCH: { "<materialId>": <mm> }
   /// (vd { "5": 5850 } = loại sắt id 5 cắt trên cây 5m85, các loại khác theo mặc định công ty).
   /// NULL / thiếu khoá = loại sắt đó dùng `SystemConfig.solverStockLengths` như trước.
@@ -1268,7 +1269,7 @@ model ProductionInvoice {
   /// NCC không bán được thì KHÔNG ai phát hiện - Mua hàng vẫn mua cây chuẩn, còn bảng hướng dẫn cắt
   /// của Phôi lại tính theo cỡ không có thật. BE cố ý KHÔNG chặn theo solverStockLengths (chặn thì
   /// tính năng vô dụng vì danh sách hiện chỉ có [6000]), nên trách nhiệm nằm ở KHSX.
-  solverStockLengthsByMaterial Json?
+  solverStockLengthsByMaterial   Json?
   /// Số giây solver được giải CHO MỖI LOẠI SẮT, riêng cho đợt này (2026-09-22) - KHSX đề nghị ở
   /// "Tối ưu cắt sắt" (ô "Thời gian chạy tối đa"), đọc ở CuttingProposalsService.buildOrderJob/
   /// buildInvoiceJob rồi áp trong runSolverAndSave() - thay `SystemConfig.solverTimeLimitSeconds`
@@ -1278,8 +1279,8 @@ model ProductionInvoice {
   /// Không cần Sếp duyệt riêng (khác 2 trục hao hụt/chiều dài ở trên): đây thuần là ngân sách
   /// THỜI GIAN TÍNH TOÁN, không đổi kết quả cắt hay chi phí sắt, nên KHSX tự set và chạy luôn.
   solverTimeLimitSecondsOverride Int?
-  createdAt                    DateTime                @default(now())
-  updatedAt                    DateTime                @updatedAt
+  createdAt                      DateTime                @default(now())
+  updatedAt                      DateTime                @updatedAt
 
   salesOrder        SalesOrder?             @relation(fields: [salesOrderId], references: [id])
   mergedBy          User?                   @relation("PIMergedBy", fields: [mergedById], references: [id])

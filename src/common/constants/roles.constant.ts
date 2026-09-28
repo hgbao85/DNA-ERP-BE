@@ -21,6 +21,10 @@ export const BUSINESS_ROLES = {
   KCS_STAFF: 'KCS_STAFF',
   WAREHOUSE_STAFF: 'WAREHOUSE_STAFF',
   PURCHASER: 'PURCHASER',
+  // Quản lý vật tư (2026-09-28) - CRUD danh mục Material (Admin > Danh mục hệ thống > Vật tư),
+  // KHÔNG phải PURCHASER (Mua hàng chỉ VIEW vật tư) và KHÔNG phải WAREHOUSE_STAFF (thủ kho không
+  // được sửa/xoá vật tư gốc, xem comment MATERIAL ở PURCHASER bên role-permissions.constant.ts).
+  MATERIALS_MANAGER: 'MATERIALS_MANAGER',
   // BOM spec editors (định mức) - đi cùng MfgRole.SPEC_* tương ứng.
   SPEC_STEEL_STAFF: 'SPEC_STEEL_STAFF', // định mức mảnh: sắt/dây/đinh/tán rút/nút nhựa (FE: "Sắt")
   SPEC_ACCESSORY_PACKAGING_STAFF: 'SPEC_ACCESSORY_PACKAGING_STAFF', // định mức chi tiết: sơn/phụ kiện/bao bì (FE: "Định mức chi tiết")

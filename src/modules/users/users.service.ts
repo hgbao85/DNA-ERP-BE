@@ -205,6 +205,7 @@ export class UsersService {
           isPurchaser: dto.isPurchaser,
           isProductPlanner: dto.isProductPlanner,
           isSale: dto.isSale,
+          isMaterialsManager: dto.isMaterialsManager,
         },
       });
 
@@ -383,6 +384,7 @@ export class UsersService {
       isPurchaser: user.isPurchaser,
       isProductPlanner: user.isProductPlanner,
       isSale: user.isSale,
+      isMaterialsManager: user.isMaterialsManager,
     });
   }
 }

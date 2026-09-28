@@ -27,4 +27,9 @@ export class UpdateUserMfgAttributesDto {
   @IsOptional()
   @IsBoolean()
   isSale?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isMaterialsManager?: boolean;
 }

@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Role mới "Quản lý vật tư"</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · Quản trị hệ thống — Role mới</div>
+    <h1>Role mới "Quản lý vật tư": tài khoản chuyên biệt chỉ vào đúng 1 màn hình Vật tư</h1>
+    <p class="lede">
+      Yêu cầu: một tài khoản riêng, đăng nhập vào chỉ dùng được đúng màn <code>Admin &gt; Danh mục hệ thống &gt; Vật tư</code>
+      (thêm/sửa/xoá vật tư), không thấy các tab khác của Admin (Người dùng, Kho, Cấu hình hệ thống...).
+      Giải pháp đi theo đúng khuôn mẫu đã có của <code>PURCHASER</code>/<code>SALES_STAFF</code>: 1 role RBAC mới ở tầng
+      quyền (BE) + 1 cờ boolean trên <code>User</code> để định tuyến FE, cùng 1 màn hình riêng gọn tái dùng nguyên
+      component <code>MaterialsPage.tsx</code> đã có, không viết lại logic.
+    </p>
+    <div class="meta">
+      <span>28/09/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>1 migration (<code>isMaterialsManager</code>)</span>
+      <span>Seed: 14 role (13 → 14)</span>
+      <span><b>Đã kiểm qua API thật (login + CRUD + 403 ngoài phạm vi)</b></span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li><b>Role RBAC mới:</b> <code>MATERIALS_MANAGER</code> — quyền <code>MATERIAL: ALL</code> (CRUD vật tư thật), cộng 4 quyền đọc-only <code>MATERIAL_GROUP/WAREHOUSE/STOCK/USER: VIEW</code> mà chính màn Vật tư cần để dựng dropdown Nhóm vật tư/Kho, hiện cột Tồn kho/Khả dụng, và danh sách Nhân viên mua hàng.</li>
+      <li><b>Cờ FE mới:</b> <code>User.isMaterialsManager</code> (cột DB thật <code>users.isMaterialsManager</code>, mirror đúng cách <code>isPurchaser</code>/<code>isSale</code>/<code>isProductPlanner</code> đã làm) — quyết định tài khoản được điều hướng vào phân hệ nào ngay sau đăng nhập.</li>
+      <li><b>Admin tạo tài khoản:</b> ở <code>Người dùng &amp; Phân quyền</code>, chọn "Loại nhân viên" = Văn phòng → "Chức năng" giờ có thêm lựa chọn <b>"Quản lý vật tư"</b>, cùng hàng với Sales/KH Sản xuất/Mua hàng.</li>
+      <li><b>Màn hình riêng:</b> <code>MaterialsManagerApp.tsx</code> mới — chỉ 1 header (tên phân hệ + đăng xuất) + nguyên <code>MaterialsPage.tsx</code> của Admin, KHÔNG có sidebar nhiều tab như các phân hệ chuyên biệt khác (Mua hàng, Kho đầu vào).</li>
+      <li><b>Không đụng vào <code>AdminApp.tsx</code>:</b> trang Admin đầy đủ hiện KHÔNG có cơ chế phân quyền theo từng tab (ai vào được Admin thấy hết mọi thứ), nên role hẹp này đi theo đường ĐỘC LẬP hoàn toàn, không phải "Admin rút gọn".</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 1. THIẾT KẾ ═══════════════════════ -->
+  <div class="module" id="thietke">
+    <h2>1. Vì sao không tái dùng AdminApp <span class="badge b-fe">FE</span></h2>
+    <p class="module-note">
+      Khảo sát trước khi làm: <code>AdminApp.tsx</code> chỉ có ĐÚNG 1 cổng vào — role <code>ADMIN</code> — và một khi
+      vào được thì thấy toàn bộ <code>NAV_ITEMS</code> (Người dùng, Kho, Danh mục hệ thống với 7 tab, Cấu hình hệ thống...),
+      không có khái niệm "Admin giới hạn 1 tab". Thêm 1 giá trị mới vào <code>User.role</code> (vốn đang là union đóng
+      <code>'BOSS' | 'WAREHOUSE_STAFF' | 'ADMIN'</code>) sẽ phải sửa lại kiểu dữ liệu ở rất nhiều nơi. Đúng khuôn mẫu
+      sẵn có: các "tài khoản chuyên biệt" (Mua hàng, Sales, KH Sản xuất) đều giữ nguyên <code>role = 'WAREHOUSE_STAFF'</code>
+      và chỉ thêm 1 cờ boolean riêng, được <code>resolveDefaultModule()</code> đọc để khoá tài khoản vào đúng 1 phân hệ.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Phương án</th><th>Việc phải sửa</th><th>Rủi ro</th></tr></thead>
+        <tbody>
+          <tr><td>Thêm tab-permission cho AdminApp</td><td>Viết cơ chế ẩn/hiện <code>NAV_ITEMS</code> theo quyền — chưa từng có, phải thiết kế mới</td><td>Đổi hành vi phần Admin đang chạy ổn, ảnh hưởng cả ADMIN thật</td></tr>
+          <tr><td>Thêm giá trị vào <code>User.role</code></td><td>Sửa union type + mọi <code>switch</code>/so sánh theo <code>role</code> trong FE</td><td>Rủi ro bỏ sót 1 nơi so sánh <code>role === '...'</code></td></tr>
+          <tr><td><b>Cờ boolean + màn riêng (đã chọn)</b></td><td>1 cột DB, 1 cờ FE, 1 component mới, nối vào <code>resolveDefaultModule</code></td><td>Thấp — đúng pattern đã chạy ổn với Mua hàng/Sales/KHSX</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. BACKEND ═══════════════════════ -->
+  <div class="module" id="backend">
+    <h2>2. Backend: role RBAC + cột cờ <span class="badge b-be">BE</span> <span class="badge b-db">DB</span></h2>
+    <div class="card">
+      <h3><span class="path">src/common/constants/roles.constant.ts</span> <span class="pill p-add">Thêm</span></h3>
+      <p>Thêm <code>MATERIALS_MANAGER: 'MATERIALS_MANAGER'</code> vào <code>BUSINESS_ROLES</code>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="path">src/common/constants/role-permissions.constant.ts</span> <span class="pill p-add">Thêm</span></h3>
+      <p>Grant block mới cho <code>MATERIALS_MANAGER</code>: <code>MATERIAL: 'ALL'</code> (CREATE/VIEW/UPDATE/DELETE/APPROVE) —
+      khác hẳn <code>PURCHASER</code> chỉ có <code>MATERIAL: VIEW</code>. Cộng 4 quyền VIEW (<code>MATERIAL_GROUP</code>,
+      <code>WAREHOUSE</code>, <code>STOCK</code>, <code>USER</code>) — xác định bằng cách đọc đúng 5 lệnh gọi API mà
+      <code>MaterialsPage.tsx</code> thực hiện lúc mount (materials, material-groups, warehouses, stock-quant, users).</p>
+    </div>
+    <div class="card">
+      <h3><span class="path">prisma/schema.prisma</span> + migration <code>20260928041614_add_materials_manager_flag</code> <span class="pill p-add">Mới</span></h3>
+      <p>Cột <code>users.isMaterialsManager BOOLEAN NOT NULL DEFAULT false</code> — cột thứ 4 trong nhóm "cờ chức năng"
+      cùng <code>isPurchaser</code>/<code>isProductPlanner</code>/<code>isSale</code>. Đây KHÔNG phải cột phân quyền
+      (permission nằm hoàn toàn ở RBAC N-N phía trên) — chỉ dùng cho row-level routing/UI, đúng comment sẵn có trong schema.</p>
+    </div>
+    <div class="card">
+      <h3><span class="path">src/modules/users/{dto/update-user-mfg-attributes.dto.ts, dto/user-response.dto.ts, users.service.ts}</span> <span class="pill p-chg">Sửa</span></h3>
+      <p>Thêm field <code>isMaterialsManager</code> xuyên suốt: nhận ở <code>PATCH /users/:id/mfg-attributes</code>, ghi ở
+      <code>updateMfgAttributes()</code>, trả ra ở <code>toResponseDto()</code> — copy nguyên cách <code>isPurchaser</code> đã làm ở cả 3 file.</p>
+    </div>
+    <div class="callout ok"><b>Seed idempotent:</b> chạy lại <code>npm run seed</code> trên DB dev — "Roles synced" tăng từ 13 lên <b>14</b>, không đụng dữ liệu nghiệp vụ có sẵn (upsert theo <code>name</code>).</div>
+  </div>
+
+  <!-- ═══════════════════════ 3. FRONTEND ═══════════════════════ -->
+  <div class="module" id="frontend">
+    <h2>3. Frontend: cờ, routing, màn hình riêng <span class="badge b-fe">FE</span></h2>
+    <div class="card">
+      <h3>Kiểu dữ liệu: <span class="path">context/AuthContext.tsx, types/auth.ts, utils/normalizeUser.ts, services/users-mapper.ts</span> <span class="pill p-chg">Sửa</span></h3>
+      <p><code>isMaterialsManager?: boolean</code> thêm vào <code>User</code>/<code>WarehouseUser</code>/<code>BeUserProfile</code>.
+      <code>users-mapper.ts</code>: <code>deriveRoleIds()</code> gắn thêm role <code>MATERIALS_MANAGER</code> khi cờ bật (payload tạo/sửa user gửi lên BE);
+      <code>mapBeToFe()</code> và <code>mfgAttrsPayload()</code> đọc/ghi cờ 2 chiều — cùng cơ chế "gửi 2 request" đã có
+      (<code>POST/PATCH /users</code> kèm <code>roleIds</code>, rồi <code>PATCH .../mfg-attributes</code> kèm cờ boolean).</p>
+    </div>
+    <div class="card">
+      <h3><span class="path">src/modules/pages/Admin/UsersPage.tsx</span> <span class="pill p-chg">Sửa</span></h3>
+      <p><code>OFFICE_FUNCTIONS</code> thêm lựa chọn <code>MATERIALS_MGR</code> → nhãn "Quản lý vật tư", nằm cùng dropdown
+      "Chức năng" với Sales/KH Sản xuất/Mua hàng (đều thuộc nhóm "Văn phòng"). <code>deriveStaffCategory()</code>,
+      <code>deriveOfficeFn()</code>, <code>onOfficeFnChange()</code>, <code>selectCategory()</code> và <code>chucNangOf()</code>
+      (nhãn cột "Chức năng" ở bảng danh sách) đều cập nhật để nhận diện đúng cờ mới — mirror từng dòng xử lý sẵn có của <code>isPurchaser</code>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="path">src/utils/resolveDefaultModule.ts</span> <span class="pill p-chg">Sửa</span></h3>
+      <p>Thêm 1 dòng vào <code>MODULE_STRATEGIES</code>: <code>isMaterialsManager → module 'materials_manager'</code>, đặt
+      sau <code>isPurchaser</code>. Mảng này được duyệt tuần tự nên tài khoản chỉ bật đúng 1 cờ sẽ luôn khớp đúng 1 chiến lược.</p>
+    </div>
+    <div class="card">
+      <h3><span class="path">src/modules/pages/MaterialsManager/MaterialsManagerApp.tsx</span> <span class="pill p-add">Mới</span></h3>
+      <p>Component mới, đơn giản hơn hẳn các phân hệ chuyên biệt khác (Mua hàng/Kho đầu vào có sidebar nhiều tab) vì role này
+      chỉ được cấp đúng 1 quyền: chỉ 1 thanh header (tên phân hệ, tên user, đổi theme, đăng xuất) rồi render thẳng
+      <code>&lt;MaterialsPage /&gt;</code> — component Admin đã có, không sửa 1 dòng nào bên trong nó.</p>
+    </div>
+    <div class="card">
+      <h3><span class="path">src/app/page.tsx</span> <span class="pill p-chg">Sửa</span></h3>
+      <p>Import <code>MaterialsManagerApp</code>, thêm nhánh <code>activeModule === 'materials_manager'</code>, và thêm
+      <code>user?.isMaterialsManager</code> vào dependency array của <code>useEffect</code> đang re-resolve module khi hồ sơ user đổi.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 4. FILE THAY ĐỔI ═══════════════════════ -->
+  <div class="module" id="files">
+    <h2>4. File thay đổi</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th></th><th>Nội dung</th></tr></thead>
+        <tbody>
+          <tr><td class="path">DNA-ERP-BE/prisma/schema.prisma</td><td><span class="badge b-db">DB</span></td><td>Cột <code>users.isMaterialsManager</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/prisma/migrations/20260928041614_add_materials_manager_flag/</td><td><span class="pill p-add">Mới</span></td><td>Migration SQL, đã áp dụng lên DB dev</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/common/constants/roles.constant.ts</td><td><span class="badge b-be">BE</span></td><td>Role <code>MATERIALS_MANAGER</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/common/constants/role-permissions.constant.ts</td><td><span class="badge b-be">BE</span></td><td>Grant block: <code>MATERIAL: ALL</code> + 4 quyền VIEW</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/users/dto/update-user-mfg-attributes.dto.ts</td><td><span class="badge b-be">BE</span></td><td>Field <code>isMaterialsManager</code> nhận vào</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/users/dto/user-response.dto.ts</td><td><span class="badge b-be">BE</span></td><td>Field <code>isMaterialsManager</code> trả ra</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/users/users.service.ts</td><td><span class="badge b-be">BE</span></td><td>Ghi cờ khi update mfg-attributes, trả cờ ở <code>toResponseDto()</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/context/AuthContext.tsx</td><td><span class="badge b-fe">FE</span></td><td>Kiểu <code>User</code>/<code>WarehouseUser</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/types/auth.ts</td><td><span class="badge b-fe">FE</span></td><td>Kiểu <code>BeUserProfile</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/utils/normalizeUser.ts</td><td><span class="badge b-fe">FE</span></td><td>Chuẩn hoá cờ từ response BE/localStorage</td></tr>
+          <tr><td class="path">DNA-ERP/src/services/users-mapper.ts</td><td><span class="badge b-fe">FE</span></td><td><code>deriveRoleIds</code>, <code>mapBeToFe</code>, <code>mfgAttrsPayload</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/utils/resolveDefaultModule.ts</td><td><span class="badge b-fe">FE</span></td><td>Chiến lược điều hướng module mới</td></tr>
+          <tr><td class="path">DNA-ERP/src/modules/pages/Admin/UsersPage.tsx</td><td><span class="badge b-fe">FE</span></td><td>Lựa chọn "Quản lý vật tư" trong form tạo/sửa user</td></tr>
+          <tr><td class="path">DNA-ERP/src/modules/pages/MaterialsManager/MaterialsManagerApp.tsx</td><td><span class="badge b-fe">FE</span> <span class="pill p-add">Mới</span></td><td>Màn hình riêng cho role, tái dùng <code>MaterialsPage.tsx</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/app/page.tsx</td><td><span class="badge b-fe">FE</span></td><td>Nối route <code>materials_manager</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. KIỂM CHỨNG ═══════════════════════ -->
+  <div class="module" id="kiemchung">
+    <h2>5. Kiểm chứng</h2>
+    <ul class="timeline stages">
+      <li class="ok"><b>Typecheck (BE + FE)</b><span><code>tsc --noEmit</code> sạch cả 2 repo sau khi <code>prisma generate</code> lại Prisma Client.</span></li>
+      <li class="ok"><b>Unit test BE</b><span><code>users.service.spec.ts</code> 16/16 pass, <code>materials.*.spec.ts</code> 38/38 pass — không có test nào vỡ vì role/cột mới.</span></li>
+      <li class="ok"><b>Seed trên DB dev</b><span>"Roles synced: 14" — role <code>MATERIALS_MANAGER</code> lên DB thật với đúng 10 permission (<code>NOTIFICATION:VIEW</code> + <code>MATERIAL:*</code> ×5 + 4 VIEW còn lại), xác nhận bằng script query trực tiếp.</span></li>
+      <li class="ok"><b>Tài khoản test qua API thật</b><span>Tạo tài khoản tạm <code>test-qlvt</code> (role <code>MATERIALS_MANAGER</code>, cờ <code>isMaterialsManager=true</code>) bằng đúng 2 lệnh gọi FE thật sự dùng (<code>POST /users</code> kèm <code>roleIds</code>, rồi <code>PATCH .../mfg-attributes</code>).</span></li>
+      <li class="ok"><b>5 API màn Vật tư cần đều 200</b><span><code>GET /materials</code>, <code>/material-groups</code>, <code>/warehouses</code>, <code>/stock-quant</code>, <code>/users</code> — đúng bộ API <code>MaterialsPage.tsx</code> gọi lúc mount.</span></li>
+      <li class="ok"><b>CRUD vật tư đầy đủ</b><span><code>POST /materials</code> → 201, <code>PATCH /materials/:id</code> → 200, <code>DELETE /materials/:id</code> → 204.</span></li>
+      <li class="ok"><b>Chặn đúng ngoài phạm vi</b><span><code>GET /sales-orders</code> → 403, <code>DELETE /users/:id</code> → 403 (role không có <code>SALES_ORDER</code>/<code>USER:DELETE</code>) — xác nhận <code>PermissionsGuard</code> không "mở toang" ngoài ý muốn.</span></li>
+      <li class="ok"><b>Dọn dẹp</b><span>Tài khoản <code>test-qlvt</code> đã xoá (soft delete) sau khi kiểm xong.</span></li>
+    </ul>
+    <div class="callout warn"><b>Chưa kiểm qua trình duyệt thật (Playwright):</b> công cụ browser-automation trong môi trường này không resolve được <code>patchright</code> (không tìm thấy extension VS Code tương ứng), nên phần xác minh UI dừng lại ở: type-check sạch, FE dev server compile route gốc thành công (không lỗi "Failed to compile"/"Module not found"), và toàn bộ luồng dữ liệu đã kiểm qua API thật. Nên đăng nhập thử bằng tay 1 lần bằng tài khoản "Quản lý vật tư" thật trước khi giao cho người dùng cuối.</div>
+  </div>
+
+  <!-- ═══════════════════════ 6. CÒN MỞ ═══════════════════════ -->
+  <div class="module" id="conmo">
+    <h2>6. Còn mở</h2>
+    <div class="card">
+      <h3>Chưa kiểm bằng mắt trên trình duyệt</h3>
+      <p>Xem callout ở mục 5 — nên tự đăng nhập thử 1 lần trước khi dùng thật.</p>
+    </div>
+    <div class="card">
+      <h3><code>ModuleSelector.tsx</code> chưa thêm module <code>materials_manager</code></h3>
+      <p>Không cần thiết cho luồng chính: tài khoản chỉ bật <code>isMaterialsManager</code> được <code>resolveDefaultModule()</code>
+      khoá thẳng vào phân hệ, không bao giờ dừng ở màn chọn phân hệ. Chỉ cần thêm nếu sau này muốn một tài khoản BOSS
+      chọn tay vào màn này qua module picker.</p>
+    </div>
+    <div class="card">
+      <h3>Chưa commit</h3>
+      <p>Toàn bộ thay đổi của cả 2 repo đang nằm trong working tree, chưa <code>git add</code>/<code>commit</code>.</p>
+    </div>
+    <div class="card">
+      <h3>BE dev server đang chạy nền</h3>
+      <p>Được bật lên (cổng 3001) trong lúc kiểm thử API thật, hiện vẫn đang chạy để tiện thử tay.</p>
+    </div>
+  </div>
+
+  <footer>
+    Tài liệu nội bộ DNA-ERP — nhật ký thay đổi 28/09/2026. Mã nguồn tham chiếu theo đường dẫn tương đối trong 2 repo <code>DNA-ERP-BE</code> và <code>DNA-ERP</code>.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" type="button" aria-label="Lên đầu trang">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

@@ -18,6 +18,7 @@ export class UserResponseDto {
   @Expose() @ApiProperty() isPurchaser!: boolean;
   @Expose() @ApiProperty() isProductPlanner!: boolean;
   @Expose() @ApiProperty() isSale!: boolean;
+  @Expose() @ApiProperty() isMaterialsManager!: boolean;
 
   constructor(partial: Partial<UserResponseDto>) {
     Object.assign(this, partial);
