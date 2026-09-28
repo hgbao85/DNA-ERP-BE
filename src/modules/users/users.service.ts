@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
@@ -11,6 +12,7 @@ import {
   MFG_FLOOR_WAREHOUSE_SCOPE,
   MFG_ROLE_TO_BUSINESS_ROLE,
 } from '../../common/constants/role-permissions.constant';
+import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { paginate } from '../../common/utils/paginate.util';
@@ -18,6 +20,7 @@ import { isFamilyScope } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { TransferBuyerMaterialsDto } from './dto/transfer-buyer-materials.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserMfgAttributesDto } from './dto/update-user-mfg-attributes.dto';
 import { UserResponseDto } from './dto/user-response.dto';
@@ -120,7 +123,7 @@ export class UsersService {
   }
 
   async update(id: string, dto: UpdateUserDto, currentUserId: string): Promise<UserResponseDto> {
-    await this.findOneOrThrow(id);
+    const current = await this.findOneOrThrow(id);
 
     // Self-protection: an admin must not be able to lock themselves out or strip their own
     // roles (would leave the system potentially un-administerable). Enforced server-side -
@@ -131,6 +134,18 @@ export class UsersService {
       }
       if (dto.isActive === false) {
         throw new ForbiddenException('You cannot deactivate your own account');
+      }
+    }
+
+    if (dto.isActive === false && current.isActive) {
+      await this.assertNoBuyerMaterials(id, 'khoá tài khoản');
+    }
+    if (dto.roleIds !== undefined && this.hasRole(current, BUSINESS_ROLES.PURCHASER)) {
+      const keepsPurchaser = await this.prisma.role.count({
+        where: { id: { in: dto.roleIds }, name: BUSINESS_ROLES.PURCHASER },
+      });
+      if (!keepsPurchaser) {
+        await this.assertNoBuyerMaterials(id, 'bỏ chức năng Mua hàng');
       }
     }
 
@@ -176,6 +191,10 @@ export class UsersService {
         ? dto.warehouseScope
         : MFG_FLOOR_WAREHOUSE_SCOPE
       : dto.warehouseScope;
+
+    if (dto.isPurchaser === false && current.isPurchaser) {
+      await this.assertNoBuyerMaterials(id, 'bỏ chức năng Mua hàng');
+    }
 
     const user = await this.prisma.$transaction(async (tx) => {
       await tx.user.update({
@@ -247,8 +266,74 @@ export class UsersService {
       throw new ForbiddenException('You cannot delete your own account');
     }
     await this.findOneOrThrow(id);
+    await this.assertNoBuyerMaterials(id, 'xoá tài khoản');
     // Soft delete: the Prisma extension rewrites this into an UPDATE setting deletedAt.
     await this.prisma.user.delete({ where: { id } });
+  }
+
+  /** Vật tư (Material.buyerId) đang giao cho user này mua - phục vụ màn "Chuyển giao vật tư". */
+  async findBuyerMaterials(id: string) {
+    await this.findOneOrThrow(id);
+    const materials = await this.prisma.material.findMany({
+      where: { buyerId: id, deletedAt: null },
+      select: { id: true, code: true, name: true },
+      orderBy: { code: 'asc' },
+    });
+    // Material.id là BigInt - JSON.stringify không serialize được (500), đổi sang number.
+    return {
+      count: materials.length,
+      materials: materials.map((m) => ({ ...m, id: Number(m.id) })),
+    };
+  }
+
+  /**
+   * Chuyển TOÀN BỘ vật tư đang giao cho `id` mua sang `dto.toUserId` trong 1 lệnh (2026-09-28).
+   * Dùng khi nhân viên mua hàng nghỉ việc/đổi vị trí: trước đây phải sửa tay từng vật tư ở
+   * Admin > Vật tư, và nếu khoá/bỏ Mua hàng trước khi chuyển xong thì vật tư "mồ côi" - buyerId
+   * vẫn trỏ người cũ nên KHÔNG nhân viên mua hàng nào khác thấy/duyệt được đề xuất của chúng
+   * (xem PurchaseProposalsService.assertActorMayHandle), chỉ còn Sếp/Admin xử lý được.
+   *
+   * KHÔNG đổi tên/tái dùng tài khoản cũ cho người mới: lịch sử (PurchaseProposalItem.approvedBy...)
+   * lưu theo User.id, tái dùng sẽ ghi việc người cũ đã làm sang tên người mới.
+   */
+  async transferBuyerMaterials(
+    id: string,
+    dto: TransferBuyerMaterialsDto,
+  ): Promise<{ count: number }> {
+    if (dto.toUserId === id) {
+      throw new BadRequestException('Người nhận phải khác người đang phụ trách');
+    }
+    await this.findOneOrThrow(id);
+    const target = await this.prisma.user.findUnique({ where: { id: dto.toUserId } });
+    if (!target) {
+      throw new NotFoundException(`User ${dto.toUserId} not found`);
+    }
+    if (!target.isActive || !target.isPurchaser) {
+      throw new BadRequestException(
+        'Người nhận phải là tài khoản đang hoạt động và có chức năng Mua hàng',
+      );
+    }
+    // Chuyển cả vật tư đã xoá mềm (nếu có) để không còn bản ghi nào trỏ về người cũ.
+    const { count } = await this.prisma.material.updateMany({
+      where: { buyerId: id },
+      data: { buyerId: dto.toUserId },
+    });
+    return { count };
+  }
+
+  /** Chặn thao tác làm vật tư "mồ côi" (xem transferBuyerMaterials) - phải chuyển giao trước. */
+  private async assertNoBuyerMaterials(id: string, action: string): Promise<void> {
+    const count = await this.prisma.material.count({ where: { buyerId: id, deletedAt: null } });
+    if (count > 0) {
+      throw new BadRequestException(
+        `Không thể ${action}: người này còn phụ trách mua ${count} vật tư. ` +
+          'Dùng "Chuyển giao vật tư" ở Admin > Người dùng để giao cho nhân viên mua hàng khác trước.',
+      );
+    }
+  }
+
+  private hasRole(user: NonNullable<UserWithRoles>, roleName: string): boolean {
+    return user.roles.some((r) => r.role.name === roleName);
   }
 
   /** Used by AuthService to validate credentials without exposing the password hash elsewhere. */

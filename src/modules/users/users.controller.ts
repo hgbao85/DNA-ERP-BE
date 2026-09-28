@@ -18,6 +18,7 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { TransferBuyerMaterialsDto } from './dto/transfer-buyer-materials.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserMfgAttributesDto } from './dto/update-user-mfg-attributes.dto';
 import { UsersService } from './users.service';
@@ -38,6 +39,20 @@ export class UsersController {
   @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.VIEW })
   findAll(@Query() query: PaginationQueryDto) {
     return this.usersService.findAll(query);
+  }
+
+  @Get(':id/buyer-materials')
+  @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.VIEW })
+  findBuyerMaterials(@Param('id') id: string) {
+    return this.usersService.findBuyerMaterials(id);
+  }
+
+  // Chuyển giao toàn bộ vật tư (Material.buyerId) của 1 nhân viên mua hàng sang người khác.
+  @Post(':id/transfer-buyer-materials')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.UPDATE })
+  transferBuyerMaterials(@Param('id') id: string, @Body() dto: TransferBuyerMaterialsDto) {
+    return this.usersService.transferBuyerMaterials(id, dto);
   }
 
   @Get(':id')
