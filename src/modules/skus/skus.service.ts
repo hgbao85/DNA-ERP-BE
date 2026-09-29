@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -30,6 +31,8 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType, SkuNotificationParams } from '../notifications/notification-types';
 import { CreateSkuDto } from './dto/create-sku.dto';
 import { UpdateSkuDto } from './dto/update-sku.dto';
 import { SkuResponseDto } from './dto/sku-response.dto';
@@ -113,11 +116,69 @@ function groupBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
  */
 @Injectable()
 export class SkusService {
+  private readonly logger = new Logger(SkusService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly bomRevisionsService: BomRevisionsService,
     private readonly cloudinaryService: CloudinaryService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  // ─── Notification (Phase 3a, mục 7.1 changelog 2026-09-25) ─────────────────────────────────
+  // Best-effort NGOÀI transaction nghiệp vụ chính (giống notifyProductionManagers() bên
+  // CuttingProposalsService) - KHÔNG dùng `tx` của updateManhQuota/updateDetailQuota/approve/
+  // rejectByBoss dù các hàm đó có sẵn transaction: bắt lỗi rồi tiếp tục bên trong 1 interactive
+  // transaction của Prisma không an toàn (transaction đã bị Postgres đánh dấu abort ở tầng kết
+  // nối nếu 1 statement bên trong throw, catch ở tầng JS không cứu được) - xem changelog mục 14
+  // (thảo luận tương tự cho cutting-proposals). Đánh đổi: 1 thông báo có thể lỡ tạo dù nghiệp vụ
+  // chính đã ghi thành công (chấp nhận được, không phải dữ liệu tài chính/tồn kho).
+  private async notifySku(
+    type: NotificationType,
+    planFormId: bigint,
+    params: SkuNotificationParams,
+    actorUserId?: string,
+  ): Promise<void> {
+    try {
+      await this.notifications.emit(type, {
+        entityId: planFormId.toString(),
+        actorId: actorUserId,
+        params: { ...params },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create SKU notification (${type}, planForm ${planFormId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async resolveSkuNotifications(
+    planFormId: bigint,
+    types: NotificationType[],
+  ): Promise<void> {
+    try {
+      await this.notifications.resolve({
+        entityType: 'SKU',
+        entityId: planFormId.toString(),
+        types,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve SKU notifications (${types.join(',')}, planForm ${planFormId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /** `SkuNotificationParams` chung cho mọi type - đọc factoryCode/productName từ include sẵn có
+   *  (PLAN_FORM_INCLUDE.mfgProduct), không cần query thêm. */
+  private skuParams(pf: PlanFormWithRefs, extra?: { reason?: string }): SkuNotificationParams {
+    return {
+      factoryCode: pf.mfgProduct.factoryCode,
+      productName: pf.mfgProduct.name,
+      hasSalesOrder: pf.salesOrderId != null,
+      ...extra,
+    };
+  }
 
   async create(dto: CreateSkuDto, actorUserId: string): Promise<SkuResponseDto> {
     // FE upload ảnh ngay trước khi gọi create - tạo thất bại thì ảnh đó thành mồ côi, dọn luôn.
@@ -171,6 +232,15 @@ export class SkusService {
       },
       include: PLAN_FORM_INCLUDE,
     });
+    // origin='PRODUCTION_CONFIRM' (tạo nội bộ khi Sếp duyệt PI item, ẩn khỏi mọi màn KHSX - xem
+    // doc comment PlanForm.origin) KHÔNG đi qua nhánh này (createPlanForm() không set origin) nên
+    // guard dưới đây hiện không bao giờ đúng - giữ lại phòng thủ nếu sau này có API khác tái dùng
+    // createPlanForm() cho luồng đó, tránh báo Spec về 1 SKU họ không hề thấy trên màn hình.
+    if (created.origin !== 'PRODUCTION_CONFIRM') {
+      const params = this.skuParams(created);
+      await this.notifySku('SKU_NEEDS_MANH_QUOTA', created.id, params, actorUserId);
+      await this.notifySku('SKU_NEEDS_DETAIL_QUOTA', created.id, params, actorUserId);
+    }
     return this.toResponseDtoWithQuota(created);
   }
 
@@ -281,7 +351,11 @@ export class SkusService {
 
   // ─── Manh quota (mảnh - Sắt/Dây/Đinh/Tán rút/Nút nhựa, 1 lần nhập/duyệt duy nhất) ───────────
 
-  async updateManhQuota(id: string, dto: UpdateQuotaDto): Promise<SkuResponseDto> {
+  async updateManhQuota(
+    id: string,
+    dto: UpdateQuotaDto,
+    actorUserId?: string,
+  ): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     const revision = await this.resolveDraftBomRevision(pf);
     const enteredAt = new Date();
@@ -332,11 +406,20 @@ export class SkusService {
       { timeout: QUOTA_TRANSACTION_TIMEOUT_MS },
     );
     await Promise.all(orphanedPhotoUrls.map((url) => this.cloudinaryService.deleteByUrl(url)));
+    // Nộp (kể cả nộp lại) đóng cả 2 việc chờ Spec: "SKU mới cần nhập" (lần đầu) và "bị KHSX trả
+    // lại" (nộp lại sau reject) - cả 2 resolve() đều an toàn gọi thừa (idempotent, không match
+    // thì không làm gì). Rồi báo KHSX vào review.
+    await this.resolveSkuNotifications(pf.id, ['SKU_NEEDS_MANH_QUOTA', 'SKU_MANH_QUOTA_REJECTED']);
+    await this.notifySku('SKU_MANH_QUOTA_SUBMITTED', pf.id, this.skuParams(updated), actorUserId);
     return this.toResponseDtoWithQuota(updated);
   }
 
-  async reviewManhQuota(id: string, dto: ReviewQuotaDto): Promise<SkuResponseDto> {
-    await this.findOneOrThrow(id);
+  async reviewManhQuota(
+    id: string,
+    dto: ReviewQuotaDto,
+    actorUserId?: string,
+  ): Promise<SkuResponseDto> {
+    const pf = await this.findOneOrThrow(id);
     const bigId = parseBigIntId(id);
     await this.prisma.planFormManhReview.upsert({
       where: { planFormId_group: { planFormId: bigId, group: ManhGroup.SAT } },
@@ -349,19 +432,33 @@ export class SkusService {
       },
       update: { status: dto.status, reason: dto.reason, reviewedAt: new Date() },
     });
+    // KHSX vừa ra quyết định (duyệt HAY từ chối đều tính) - việc "cần review" đã xong.
+    await this.resolveSkuNotifications(bigId, ['SKU_MANH_QUOTA_SUBMITTED']);
+    if (dto.status === ReviewDecision.REJECTED) {
+      await this.notifySku(
+        'SKU_MANH_QUOTA_REJECTED',
+        bigId,
+        this.skuParams(pf, { reason: dto.reason }),
+        actorUserId,
+      );
+    }
     return this.findOne(id);
   }
 
   /** KHSX xác nhận mảnh đã duyệt xong (nhánh độc lập với chi tiết - xem advanceForwardedTrack). */
-  async approveParts(id: string): Promise<SkuResponseDto> {
+  async approveParts(id: string, actorUserId?: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh');
-    return this.advanceForwardedTrack(pf, 'manh');
+    return this.advanceForwardedTrack(pf, 'manh', actorUserId);
   }
 
   // ─── Detail quota (chi tiết - Sơn/Phụ kiện/Bao bì, 1 lần nhập/duyệt duy nhất) ───────────────
 
-  async updateDetailQuota(id: string, dto: UpdateQuotaDto): Promise<SkuResponseDto> {
+  async updateDetailQuota(
+    id: string,
+    dto: UpdateQuotaDto,
+    actorUserId?: string,
+  ): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     const revision = await this.resolveDraftBomRevision(pf);
     const enteredAt = new Date();
@@ -445,11 +542,20 @@ export class SkusService {
       },
       { timeout: QUOTA_TRANSACTION_TIMEOUT_MS },
     );
+    await this.resolveSkuNotifications(pf.id, [
+      'SKU_NEEDS_DETAIL_QUOTA',
+      'SKU_DETAIL_QUOTA_REJECTED',
+    ]);
+    await this.notifySku('SKU_DETAIL_QUOTA_SUBMITTED', pf.id, this.skuParams(updated), actorUserId);
     return this.toResponseDtoWithQuota(updated);
   }
 
-  async reviewDetailQuota(id: string, dto: ReviewQuotaDto): Promise<SkuResponseDto> {
-    await this.findOneOrThrow(id);
+  async reviewDetailQuota(
+    id: string,
+    dto: ReviewQuotaDto,
+    actorUserId?: string,
+  ): Promise<SkuResponseDto> {
+    const pf = await this.findOneOrThrow(id);
     const bigId = parseBigIntId(id);
     await this.prisma.planFormDetailReview.upsert({
       where: { planFormId_group: { planFormId: bigId, group: DetailGroup.DAY_SON } },
@@ -462,6 +568,15 @@ export class SkusService {
       },
       update: { status: dto.status, reason: dto.reason, reviewedAt: new Date() },
     });
+    await this.resolveSkuNotifications(bigId, ['SKU_DETAIL_QUOTA_SUBMITTED']);
+    if (dto.status === ReviewDecision.REJECTED) {
+      await this.notifySku(
+        'SKU_DETAIL_QUOTA_REJECTED',
+        bigId,
+        this.skuParams(pf, { reason: dto.reason }),
+        actorUserId,
+      );
+    }
     return this.findOne(id);
   }
 
@@ -469,25 +584,31 @@ export class SkusService {
    *  KHÔNG còn đòi hỏi mảnh phải xong trước - 2 nhánh tiến song song, ai xong trước forward
    *  trước; khi cả 2 đã forwarded, advanceForwardedTrack tự chuyển thẳng sang Sếp duyệt (bước
    *  QLSX duyệt cục bộ đã bị loại khỏi pipeline từ trước). */
-  async approveDetail(id: string): Promise<SkuResponseDto> {
+  async approveDetail(id: string, actorUserId?: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertAllApproved(pf.detailReviews, DETAIL_GROUPS, 'chi tiết');
-    return this.advanceForwardedTrack(pf, 'detail');
+    return this.advanceForwardedTrack(pf, 'detail', actorUserId);
   }
 
   /**
    * Set đúng 1 mốc forwarded (manh/detail) của nhánh vừa được KHSX xác nhận xong; nếu SAU đó cả
    * 2 mốc đều khác null (nhánh còn lại đã forward từ trước) thì chuyển thẳng
-   * WAITING_BOSS_APPROVAL trong cùng 1 lệnh ghi - không cần biết nhánh nào forward trước.
+   * WAITING_BOSS_APPROVAL trong cùng 1 lệnh ghi - không cần biết nhánh nào forward trước. Báo Sếp
+   * (SKU_SENT_TO_BOSS) ĐÚNG 1 LẦN, khi bothForwarded chuyển từ false -> true trong lệnh ghi này
+   * (không báo lại nếu 1 nhánh đã forward từ trước và nhánh kia forward lần 2 - không xảy ra
+   * trong thực tế vì forward lại đòi hỏi nộp+duyệt lại từ đầu, nhưng viết rõ điều kiện cho chắc).
    */
   private async advanceForwardedTrack(
     pf: PlanFormWithRefs,
     track: 'manh' | 'detail',
+    actorUserId?: string,
   ): Promise<SkuResponseDto> {
     const now = new Date();
     const manhForwardedAt = track === 'manh' ? now : pf.manhForwardedAt;
     const detailForwardedAt = track === 'detail' ? now : pf.detailForwardedAt;
     const bothForwarded = manhForwardedAt != null && detailForwardedAt != null;
+    const justCompleted =
+      bothForwarded && (pf.manhForwardedAt == null || pf.detailForwardedAt == null);
 
     const updated = await this.prisma.planForm.update({
       where: { id: pf.id },
@@ -497,6 +618,9 @@ export class SkusService {
       },
       include: PLAN_FORM_INCLUDE,
     });
+    if (justCompleted) {
+      await this.notifySku('SKU_SENT_TO_BOSS', pf.id, this.skuParams(updated), actorUserId);
+    }
     return this.toResponseDtoWithQuota(updated);
   }
 
@@ -519,7 +643,7 @@ export class SkusService {
    * KHÁC là lỗi client thật (unique constraint), không phải replay hợp lệ - để nguyên cho
    * AllExceptionsFilter map P2002 thành 409, không cần bắt riêng ở đây.
    */
-  async approve(id: string, idempotencyKey: string): Promise<SkuResponseDto> {
+  async approve(id: string, idempotencyKey: string, actorUserId?: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
 
     if (pf.bossApproveIdempotencyKey === idempotencyKey) {
@@ -552,13 +676,15 @@ export class SkusService {
       return tx.planForm.findUniqueOrThrow({ where: { id: pf.id }, include: PLAN_FORM_INCLUDE });
     });
 
+    await this.resolveSkuNotifications(pf.id, ['SKU_SENT_TO_BOSS']);
+    await this.notifySku('SKU_APPROVED', pf.id, this.skuParams(updated), actorUserId);
     return this.toResponseDtoWithQuota(updated);
   }
 
-  async rejectByBoss(id: string, reason?: string): Promise<SkuResponseDto> {
+  async rejectByBoss(id: string, reason?: string, actorUserId?: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
     this.assertStatus(pf, PlanFormStatus.WAITING_BOSS_APPROVAL);
-    return this.rewindToDetailReview(pf.id, reason);
+    return this.rewindToDetailReview(pf, reason, actorUserId);
   }
 
   /**
@@ -569,12 +695,16 @@ export class SkusService {
    * PlanForm.bossRejectReason - khác lý do KHSX từ chối từng nhánh (ManhReview/DetailReview.reason,
    * đã bị xoá ở trên) nên phải giữ riêng ở tầng PlanForm.
    */
-  private async rewindToDetailReview(id: bigint, reason?: string): Promise<SkuResponseDto> {
+  private async rewindToDetailReview(
+    pf: PlanFormWithRefs,
+    reason?: string,
+    actorUserId?: string,
+  ): Promise<SkuResponseDto> {
     const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.planFormManhReview.deleteMany({ where: { planFormId: id } });
-      await tx.planFormDetailReview.deleteMany({ where: { planFormId: id } });
+      await tx.planFormManhReview.deleteMany({ where: { planFormId: pf.id } });
+      await tx.planFormDetailReview.deleteMany({ where: { planFormId: pf.id } });
       return tx.planForm.update({
-        where: { id },
+        where: { id: pf.id },
         data: {
           status: PlanFormStatus.IN_PROGRESS,
           manhForwardedAt: null,
@@ -584,6 +714,13 @@ export class SkusService {
         include: PLAN_FORM_INCLUDE,
       });
     });
+    await this.resolveSkuNotifications(pf.id, ['SKU_SENT_TO_BOSS']);
+    await this.notifySku(
+      'SKU_REJECTED_BY_BOSS',
+      pf.id,
+      this.skuParams(updated, { reason }),
+      actorUserId,
+    );
     return this.toResponseDtoWithQuota(updated);
   }
 

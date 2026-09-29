@@ -5,6 +5,7 @@ import {
   PurchaseProposalStatus,
 } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
 
@@ -15,6 +16,7 @@ describe('ConsumableMaterialPurchaseService', () => {
     reserveOrAdjust: jest.Mock;
     shrinkToFloor: jest.Mock;
   };
+  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
   let prisma: {
     productionInvoice: { findUnique: jest.Mock };
     productionOrder: { findMany: jest.Mock };
@@ -25,11 +27,17 @@ describe('ConsumableMaterialPurchaseService', () => {
     material: { findMany: jest.Mock };
     purchaseProposal: {
       findFirst: jest.Mock;
+      findUnique: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
       findUniqueOrThrow: jest.Mock;
     };
-    purchaseProposalItem: { update: jest.Mock; create: jest.Mock; findMany: jest.Mock };
+    purchaseProposalItem: {
+      update: jest.Mock;
+      create: jest.Mock;
+      findMany: jest.Mock;
+      count: jest.Mock;
+    };
     $queryRaw: jest.Mock;
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
@@ -82,6 +90,10 @@ describe('ConsumableMaterialPurchaseService', () => {
       material: { findMany: jest.fn().mockResolvedValue([day]) },
       purchaseProposal: {
         findFirst: jest.fn().mockResolvedValue(null),
+        // notifyPurchaseProposalCreated() (best-effort, NGOÀI transaction) đọc lại proposal sau khi
+        // commit - null mặc định để hàm đó tự bỏ qua êm (not found), test riêng cho notification tự
+        // override. Không liên quan tới `findFirst` ở trên (đọc TRONG transaction, việc khác).
+        findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn(
           (args: { data: { items: { create: { materialId: bigint; buyQty: number }[] } } }) =>
             Promise.resolve({
@@ -112,6 +124,7 @@ describe('ConsumableMaterialPurchaseService', () => {
         // item sau khi create/update xong - mặc định 1 dòng NEW, test nào cần kiểm rollup cụ thể
         // (vd "buyQty=0 -> PURCHASED") tự override.
         findMany: jest.fn().mockResolvedValue([{ status: PurchaseProposalStatus.NEW }]),
+        count: jest.fn().mockResolvedValue(0),
       },
       $queryRaw: jest.fn(() => qtyRow(0)),
       // lockBusinessKey() (khoá gộp theo PI, 2026-08-25) dùng $executeRaw - no-op ở test, chỉ cần
@@ -128,9 +141,14 @@ describe('ConsumableMaterialPurchaseService', () => {
       reserveOrAdjust: jest.fn().mockResolvedValue(undefined),
       shrinkToFloor: jest.fn().mockResolvedValue(undefined),
     };
+    notificationsService = {
+      emit: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(undefined),
+    };
     service = new ConsumableMaterialPurchaseService(
       prisma as unknown as PrismaServiceType,
       stockReservationsService as unknown as StockReservationsService,
+      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -179,6 +197,40 @@ describe('ConsumableMaterialPurchaseService', () => {
       },
       include: { items: true },
     });
+  });
+
+  // Phase 3a, mục 7.4 changelog 2026-09-25/26 - notifyPurchaseProposalCreated() (util dùng chung,
+  // best-effort) đọc lại proposal SAU KHI computeAndUpsertProposals() đã commit.
+  it('emit PURCHASE_PROPOSAL_CREATED sau khi tạo/gộp xong, khi rollup còn cần Mua hàng xử lý', async () => {
+    prisma.purchaseProposal.findUnique.mockResolvedValue({
+      id: 900n,
+      status: PurchaseProposalStatus.NEW,
+      productionInvoice: { code: 'PI-2026-020' },
+    });
+    prisma.purchaseProposalItem.count.mockResolvedValue(1);
+
+    await service.computeAndUpsertProposals('1');
+
+    expect(notificationsService.emit).toHaveBeenCalledWith(
+      'PURCHASE_PROPOSAL_CREATED',
+      expect.objectContaining({
+        entityId: '900',
+        dedupeKey: 'PURCHASE_PROPOSAL_CREATED:900',
+        params: expect.objectContaining({ piCode: 'PI-2026-020', count: 1 }) as unknown,
+      }),
+    );
+  });
+
+  it('KHÔNG emit gì khi rollup đã PURCHASING/PURCHASED ngay lúc tạo (mọi vật tư đã đủ tồn, buyQty=0)', async () => {
+    prisma.purchaseProposal.findUnique.mockResolvedValue({
+      id: 900n,
+      status: PurchaseProposalStatus.PURCHASED,
+      productionInvoice: { code: 'PI-2026-020' },
+    });
+
+    await service.computeAndUpsertProposals('1');
+
+    expect(notificationsService.emit).not.toHaveBeenCalled();
   });
 
   it('Sơn (ConsumableBom) - phẳng, KHÔNG nhân qua BomPiece (khác PieceMaterialItem)', async () => {

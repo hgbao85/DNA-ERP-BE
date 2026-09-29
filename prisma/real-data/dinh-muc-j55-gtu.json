@@ -1,0 +1,832 @@
+[
+ {
+  "title": "định mức mảnh bàn j55 (900*735*1420)",
+  "pieces": [
+   {
+    "name": "chân bàn",
+    "qty_per_unit": 4,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "50*50*0,8 * 660",
+      "cross_section": "50X50",
+      "thickness_mm": 0.8,
+      "length_mm": 660.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "25*50*0,7  *200",
+      "cross_section": "25X50",
+      "thickness_mm": 0.7,
+      "length_mm": 200.0,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "đoạn dài",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "25*50*0,7 *680",
+      "cross_section": "25X50",
+      "thickness_mm": 0.7,
+      "length_mm": 680.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "pát 1",
+      "material_class": "OTHER",
+      "raw_spec": " 20*46*2,5 *90",
+      "cross_section": " 20*46*2,5 *90",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "pát 2",
+      "material_class": "OTHER",
+      "raw_spec": " 20*46*2,5 *250",
+      "cross_section": " 20*46*2,5 *250",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "pát 3",
+      "material_class": "OTHER",
+      "raw_spec": "20*30*2",
+      "cross_section": "20*30*2",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "đoạn ngắn",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "25*50*0,7 *535",
+      "cross_section": "25X50",
+      "thickness_mm": 0.7,
+      "length_mm": 535.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "pát 1",
+      "material_class": "OTHER",
+      "raw_spec": "20*46*2,5 *90",
+      "cross_section": "20*46*2,5 *90",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "pát 3",
+      "material_class": "OTHER",
+      "raw_spec": "20*30*2",
+      "cross_section": "20*30*2",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "dằng bàn",
+    "qty_per_unit": 1,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "20*20*0,8 *392",
+      "cross_section": "20X20",
+      "thickness_mm": 0.8,
+      "length_mm": 392.0,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "chốt",
+      "material_class": "OTHER",
+      "raw_spec": "phi 8 *20",
+      "cross_section": "phi 8 *20",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "pát 3",
+      "material_class": "OTHER",
+      "raw_spec": "20*30*2",
+      "cross_section": "20*30*2",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 4
+     },
+     {
+      "material_name": "pát 4",
+      "material_class": "OTHER",
+      "raw_spec": "20*47*2",
+      "cross_section": "20*47*2",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "ô tròn lỗ dù",
+      "material_class": "OTHER",
+      "raw_spec": "55 *0.2",
+      "cross_section": "55 *0.2",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "viền bàn",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "25*50*0,7  *695",
+      "cross_section": "25X50",
+      "thickness_mm": 0.7,
+      "length_mm": 695.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "pát 1",
+      "material_class": "OTHER",
+      "raw_spec": "20*46*2,5 *90",
+      "cross_section": "20*46*2,5 *90",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "pát 3",
+      "material_class": "OTHER",
+      "raw_spec": "20*30*2",
+      "cross_section": "20*30*2",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 2
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "title": "định mức mảnh ghế j55 (500*875*445)",
+  "pieces": [
+   {
+    "name": "A",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "TRON",
+      "raw_spec": "Ø21*0.6*610",
+      "cross_section": "FI21",
+      "thickness_mm": 0.6,
+      "length_mm": 610.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "TRON",
+      "raw_spec": "Ø21*0.6*615",
+      "cross_section": "FI21",
+      "thickness_mm": 0.6,
+      "length_mm": 615.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10*10*0.6*520",
+      "cross_section": "10X10",
+      "thickness_mm": 0.6,
+      "length_mm": 520.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10*20*0.6*445",
+      "cross_section": "10X20",
+      "thickness_mm": 0.6,
+      "length_mm": 445.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10*10*0.6*500",
+      "cross_section": "10X10",
+      "thickness_mm": 0.6,
+      "length_mm": 500.0,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "B",
+    "qty_per_unit": 1,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "TRON",
+      "raw_spec": "Ø21*0.6*255",
+      "cross_section": "FI21",
+      "thickness_mm": 0.6,
+      "length_mm": 255.0,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "TRON",
+      "raw_spec": "Ø21*0.6*500",
+      "cross_section": "FI21",
+      "thickness_mm": 0.6,
+      "length_mm": 500.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "20*20*0.6*425",
+      "cross_section": "20X20",
+      "thickness_mm": 0.6,
+      "length_mm": 425.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10*10*0.6*425",
+      "cross_section": "10X10",
+      "thickness_mm": 0.6,
+      "length_mm": 425.0,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "C",
+    "qty_per_unit": 1,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10*20*0.6*430",
+      "cross_section": "10X20",
+      "thickness_mm": 0.6,
+      "length_mm": 430.0,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10*20*0.6*425",
+      "cross_section": "10X20",
+      "thickness_mm": 0.6,
+      "length_mm": 425.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10*20*0.6*460",
+      "cross_section": "10X20",
+      "thickness_mm": 0.6,
+      "length_mm": 460.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "chốt",
+      "material_class": "OTHER",
+      "raw_spec": "Ø6*60*0.6",
+      "cross_section": "Ø6*60*0.6",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 4
+     }
+    ]
+   },
+   {
+    "name": "D",
+    "qty_per_unit": 1,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10*20*0.6*460",
+      "cross_section": "10X20",
+      "thickness_mm": 0.6,
+      "length_mm": 460.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10*20*0.6*200",
+      "cross_section": "10X20",
+      "thickness_mm": 0.6,
+      "length_mm": 200.0,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10*10*0.6*460",
+      "cross_section": "10X10",
+      "thickness_mm": 0.6,
+      "length_mm": 460.0,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "chốt",
+      "material_class": "OTHER",
+      "raw_spec": "Ø6*60*0.6",
+      "cross_section": "Ø6*60*0.6",
+      "thickness_mm": null,
+      "length_mm": null,
+      "qty_per_piece": 2
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "title": "định mức mảnh ghế tình yêu (860*510*1225)",
+  "pieces": [
+   {
+    "name": "chân ghế",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "12x12",
+      "cross_section": "12X12",
+      "thickness_mm": null,
+      "length_mm": 520,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 488,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "12x12",
+      "cross_section": "12X12",
+      "thickness_mm": null,
+      "length_mm": 510,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt Fi",
+      "material_class": "TRON",
+      "raw_spec": "Ø21",
+      "cross_section": "FI21",
+      "thickness_mm": null,
+      "length_mm": 612,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt Fi",
+      "material_class": "TRON",
+      "raw_spec": "Ø21",
+      "cross_section": "FI21",
+      "thickness_mm": null,
+      "length_mm": 590.5,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "bàn trà",
+    "qty_per_unit": 1,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 305,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 490,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 305,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 160,
+      "qty_per_piece": 2
+     }
+    ]
+   },
+   {
+    "name": "hông trước",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 483,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 200,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 483,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 200,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "hông bên",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 428,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 200,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 428,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 200,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "mê ghế",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 460,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 420,
+      "qty_per_piece": 2
+     }
+    ]
+   },
+   {
+    "name": "mơ giữa",
+    "qty_per_unit": 1,
+    "segments": [
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 460,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 310,
+      "qty_per_piece": 2
+     }
+    ]
+   },
+   {
+    "name": "tựa lớn",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt Fi",
+      "material_class": "TRON",
+      "raw_spec": "Ø21",
+      "cross_section": "FI21",
+      "thickness_mm": null,
+      "length_mm": 500,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 527,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "15x15",
+      "cross_section": "15X15",
+      "thickness_mm": null,
+      "length_mm": 460,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 452.7,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt Fi",
+      "material_class": "TRON",
+      "raw_spec": "Ø21",
+      "cross_section": "FI21",
+      "thickness_mm": null,
+      "length_mm": 255,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "tựa nhỏ",
+    "qty_per_unit": 1,
+    "segments": [
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 295,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 420,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "15x15",
+      "cross_section": "15X15",
+      "thickness_mm": null,
+      "length_mm": 295,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 275,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "mơ dưới",
+    "qty_per_unit": 1,
+    "segments": [
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20x20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 265,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "10x20",
+      "cross_section": "10X20",
+      "thickness_mm": null,
+      "length_mm": 460,
+      "qty_per_piece": 2
+     },
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "12x12",
+      "cross_section": "12X12",
+      "thickness_mm": null,
+      "length_mm": 265,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "chân dưới",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt Fi",
+      "material_class": "TRON",
+      "raw_spec": "Ø21",
+      "cross_section": "FI21",
+      "thickness_mm": null,
+      "length_mm": 175,
+      "qty_per_piece": 1
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "title": "định mức mảnh bàn 8 meiying j55",
+  "pieces": [
+   {
+    "name": "chân bàn",
+    "qty_per_unit": 4,
+    "segments": [
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "50*50",
+      "cross_section": "50X50",
+      "thickness_mm": null,
+      "length_mm": 660,
+      "qty_per_piece": 1
+     },
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "25*50",
+      "cross_section": "25X50",
+      "thickness_mm": null,
+      "length_mm": 200,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "đoạn dài",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "25*50",
+      "cross_section": "25X50",
+      "thickness_mm": null,
+      "length_mm": 930,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "đoạn ngắn",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "25*50",
+      "cross_section": "25X50",
+      "thickness_mm": null,
+      "length_mm": 765,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "giằng bàn",
+    "qty_per_unit": 1,
+    "segments": [
+     {
+      "material_name": "sắt vuông",
+      "material_class": "VUONG",
+      "raw_spec": "20*20",
+      "cross_section": "20X20",
+      "thickness_mm": null,
+      "length_mm": 840,
+      "qty_per_piece": 1
+     }
+    ]
+   },
+   {
+    "name": "viền bàn",
+    "qty_per_unit": 2,
+    "segments": [
+     {
+      "material_name": "sắt hộp",
+      "material_class": "HOP",
+      "raw_spec": "25*50",
+      "cross_section": "25X50",
+      "thickness_mm": null,
+      "length_mm": 695,
+      "qty_per_piece": 1
+     }
+    ]
+   }
+  ]
+ }
+]

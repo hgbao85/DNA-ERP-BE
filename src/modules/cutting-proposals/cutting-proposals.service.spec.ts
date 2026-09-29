@@ -1,10 +1,11 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalStatus, PurchaseProposalStatus } from '../../generated/prisma/client';
 import { AppConfig } from '../../config/configuration';
 import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CuttingProposalsService } from './cutting-proposals.service';
 
 describe('CuttingProposalsService', () => {
@@ -23,8 +24,18 @@ describe('CuttingProposalsService', () => {
     cuttingPlanCoverage: { create: jest.Mock; update: jest.Mock; findUnique: jest.Mock };
     cuttingProposalPattern: { create: jest.Mock };
     cuttingProposalPatternSegment: { create: jest.Mock };
-    purchaseProposal: { findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
-    purchaseProposalItem: { findMany: jest.Mock; update: jest.Mock; create: jest.Mock };
+    purchaseProposal: {
+      findFirst: jest.Mock;
+      findUnique: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+    };
+    purchaseProposalItem: {
+      findMany: jest.Mock;
+      update: jest.Mock;
+      create: jest.Mock;
+      count: jest.Mock;
+    };
     productionOrder: { findUniqueOrThrow: jest.Mock; findMany: jest.Mock; findUnique: jest.Mock };
     productionInvoice: { findUniqueOrThrow: jest.Mock; findUnique: jest.Mock };
     systemConfig: { findUniqueOrThrow: jest.Mock };
@@ -33,7 +44,6 @@ describe('CuttingProposalsService', () => {
     material: { findMany: jest.Mock };
     productionInvoiceItem: { findMany: jest.Mock };
     bomRevision: { findMany: jest.Mock };
-    notification: { create: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $queryRaw: jest.Mock;
     $executeRaw: jest.Mock;
@@ -46,6 +56,9 @@ describe('CuttingProposalsService', () => {
     getAvailableQty: jest.Mock;
     releaseByRef: jest.Mock;
   };
+  // notifyProductionManagers() đi qua NotificationsService.emit() (2026-09-25) thay vì
+  // prisma.notification.create trực tiếp - xem các test đọc `notificationsService.emit.mock.calls`.
+  let notificationsService: { emit: jest.Mock };
 
   /** Mô phỏng `Prisma.Decimal` tối thiểu - đủ cho `.toNumber()` mà approve() gọi. */
   const qtyRow = (n: number) => [{ qty: { toNumber: () => n } }];
@@ -149,6 +162,10 @@ describe('CuttingProposalsService', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 900n }),
         update: jest.fn(),
+        // notifyPurchaseProposalCreated() (best-effort, NGOÀI transaction) đọc lại proposal sau
+        // khi approve() commit - null mặc định để hàm đó tự bỏ qua êm, test riêng cho notification
+        // tự override.
+        findUnique: jest.fn().mockResolvedValue(null),
       },
       // recomputeProposalStatus() (purchase-proposal-status.util.ts) đọc TƯƠI status của mọi item
       // sau khi approve() tạo/gộp xong - mặc định 1 dòng NEW.
@@ -156,6 +173,7 @@ describe('CuttingProposalsService', () => {
         findMany: jest.fn().mockResolvedValue([{ status: 'NEW' }]),
         update: jest.fn(),
         create: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
       },
       productionOrder: {
         findUniqueOrThrow: jest.fn().mockResolvedValue(productionOrder),
@@ -181,7 +199,6 @@ describe('CuttingProposalsService', () => {
       // khác; các test gộp đợt cắt tự override.
       productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([]) },
       bomRevision: { findMany: jest.fn().mockResolvedValue([]) },
-      notification: { create: jest.fn() },
       warehouse: {
         findUniqueOrThrow: jest.fn(({ where }: { where: { code: string } }) =>
           Promise.resolve(where.code === 'PRODUCTION' ? { id: 900n } : { id: 800n }),
@@ -231,11 +248,13 @@ describe('CuttingProposalsService', () => {
       ),
       releaseByRef: jest.fn(),
     };
+    notificationsService = { emit: jest.fn() };
     service = new CuttingProposalsService(
       prisma as unknown as PrismaServiceType,
       externalApiService as unknown as ExternalApiService,
       configService as unknown as ConfigService<AppConfig, true>,
       stockReservationsService as unknown as StockReservationsService,
+      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -498,14 +517,12 @@ describe('CuttingProposalsService', () => {
       expect(prisma.cuttingProposalPatternSegment.create).toHaveBeenCalledWith({
         data: { patternId: 500n, segmentSpecId: 100n, countPerBar: 9 },
       });
-      expect(prisma.notification.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ audience: 'PRODUCTION_MANAGER' }) as unknown,
-      });
-      const notifyCall = prisma.notification.create.mock.calls[0] as unknown as [
-        { data: { title: string } },
-      ];
-      // Nhãn thông báo ưu tiên mã đơn Sales gốc (PO-31) thay vì poNumber nội bộ (xem buildOrderJob).
-      expect(notifyCall[0].data.title).toContain('PO-31');
+      // Test này không mock cuttingProposal.findUnique riêng cho approve() -> auto-duyệt rơi vào
+      // nhánh "auto-duyệt lỗi" (approve() tự throw NotFoundException nội bộ) - KHÔNG phải trọng
+      // tâm của test này (chỉ quan tâm bom[]/pattern đã lưu đúng). 2026-09-26 (người dùng chốt):
+      // nhánh này không còn báo QLSX - test riêng "auto-duyệt lỗi không được đè..." ở dưới đã kiểm
+      // kỹ hành vi này, ở đây chỉ cần xác nhận không có emit thừa.
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     /** Đọc `data` của lần cuttingProposalLine.create thứ `index` - dùng chung cho nhóm test
@@ -687,13 +704,13 @@ describe('CuttingProposalsService', () => {
           },
         }) as unknown,
       });
-      const notifyCall = prisma.notification.create.mock.calls[0] as unknown as [
-        { data: { title: string } },
-      ];
-      expect(notifyCall[0].data.title).toContain('tự động duyệt');
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'CUTTING_PROPOSAL_AUTO_APPROVED',
+        expect.anything(),
+      );
     });
 
-    it('auto-duyệt lỗi không được đè kết quả DRAFT vừa lưu thành FAILED - chỉ log + báo QLSX duyệt tay', async () => {
+    it('auto-duyệt lỗi không được đè kết quả DRAFT vừa lưu thành FAILED - chỉ log, KHÔNG báo QLSX (2026-09-26)', async () => {
       externalApiService.post.mockResolvedValue({
         status: 'success',
         summary: {
@@ -720,13 +737,12 @@ describe('CuttingProposalsService', () => {
           data: expect.objectContaining({ status: CuttingProposalStatus.FAILED }) as unknown,
         }),
       );
-      const notifyCall = prisma.notification.create.mock.calls[0] as unknown as [
-        { data: { title: string } },
-      ];
-      expect(notifyCall[0].data.title).toContain('tự động duyệt thất bại');
+      // 2026-09-26 (người dùng chốt): auto-duyệt lỗi không còn báo QLSX - chỉ còn nằm trong log
+      // server (logger.error ở call site) vì màn QLSX chưa có gì để làm với thông báo này.
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
-    it('KHÔNG tự duyệt khi còn vật tư feasible=false - không trừ kho, không tạo đề xuất mua, báo QLSX duyệt tay', async () => {
+    it('KHÔNG tự duyệt khi còn vật tư feasible=false - không trừ kho, không tạo đề xuất mua, KHÔNG báo QLSX (2026-09-26)', async () => {
       // approve() lọc buyableLines theo `feasible && totalBars>0`, nên dòng infeasible bị loại
       // khỏi đề xuất mua KHÔNG một lời cảnh báo. Ca hỗn hợp (1 vật tư ra, 1 vật tư không) là ca
       // nguy hiểm nhất: đề xuất mua trông vẫn bình thường, tới lúc Phôi ra xưởng mới lòi ra thiếu.
@@ -765,16 +781,12 @@ describe('CuttingProposalsService', () => {
       expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
       expect(stockReservationsService.reserve).not.toHaveBeenCalled();
 
-      const notify = prisma.notification.create.mock.calls[0] as unknown as [
-        { data: { title: string; message: string } },
-      ];
-      expect(notify[0].data.title).toContain('CẦN DUYỆT TAY');
-      // Thông báo phải gọi đúng MÃ vật tư ("SAT-201"), không phải id thô - QLSX đọc cái này.
-      expect(notify[0].data.message).toContain('SAT-201');
-      expect(notify[0].data.message).toContain('Chưa trừ tồn kho');
+      // 2026-09-26 (người dùng chốt): bị chặn tự duyệt không còn báo QLSX (trước đây là
+      // CUTTING_PROPOSAL_NEEDS_MANUAL_APPROVAL) - chỉ còn logger.warn ở call site.
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
-    it('KHÔNG tự duyệt khi vật tư feasible=true nhưng over_threshold=true - không trừ kho, không mua', async () => {
+    it('KHÔNG tự duyệt khi vật tư feasible=true nhưng over_threshold=true - không trừ kho, không mua, KHÔNG báo QLSX (2026-09-26)', async () => {
       // Phát hiện khi review sau khi bỏ auto_scan (2026-08-18): over_threshold trước đây bị bỏ
       // qua hoàn toàn ở cổng chặn - hệ thống ĐÃ VÀ ĐANG tự duyệt/trừ kho/tạo đề xuất mua cho các
       // phương án vượt ngưỡng hao hụt, không một lời cảnh báo. Đây là test khẳng định lỗ đã vá.
@@ -817,12 +829,8 @@ describe('CuttingProposalsService', () => {
       expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
       expect(stockReservationsService.reserve).not.toHaveBeenCalled();
 
-      const notify = prisma.notification.create.mock.calls[0] as unknown as [
-        { data: { title: string; message: string } },
-      ];
-      expect(notify[0].data.title).toContain('CẦN DUYỆT TAY');
-      expect(notify[0].data.message).toContain('SAT-200');
-      expect(notify[0].data.message).toContain('KHÔNG tự nới ngưỡng');
+      // 2026-09-26 (người dùng chốt): xem test "feasible=false" ở trên cho lý do.
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     it('vẫn tự duyệt bình thường khi over_threshold=false trên mọi dòng feasible', async () => {
@@ -907,11 +915,8 @@ describe('CuttingProposalsService', () => {
       });
       expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
       expect(stockReservationsService.reserve).not.toHaveBeenCalled();
-      const notify = prisma.notification.create.mock.calls[0] as unknown as [
-        { data: { title: string; message: string } },
-      ];
-      expect(notify[0].data.title).toContain('CẦN DUYỆT TAY');
-      expect(notify[0].data.message).toContain('đã có phương án được duyệt trước đó');
+      // 2026-09-26 (người dùng chốt): xem test "feasible=false" ở trên cho lý do.
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     it('gửi max_waste_percentage_by_material khi vật tư có ngưỡng riêng, bỏ qua vật tư null/<=0 (D.hao-hut-sat)', async () => {
@@ -1295,6 +1300,11 @@ describe('CuttingProposalsService', () => {
         .mockResolvedValueOnce([]) // ngưỡng riêng theo vật tư, trước khi gọi solver
         .mockResolvedValueOnce([{ id: 200n, code: 'SAT-200' }]); // đổi id -> mã cho thông báo
 
+      // 2026-09-26 (người dùng chốt): bị chặn tự duyệt không còn báo QLSX qua notification - lý do
+      // chặn giờ chỉ còn ở logger.warn (xem call site), nên test đọc qua đó thay vì dựng lại
+      // title/message từ notificationsService.emit.mock.calls.
+      const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
       await invoke(2n, 1n, 'user-boss');
 
       const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
@@ -1303,10 +1313,9 @@ describe('CuttingProposalsService', () => {
       expect(
         updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.APPROVED),
       ).toBeUndefined();
-      const notify = prisma.notification.create.mock.calls[0] as unknown as [
-        { data: { message: string } },
-      ];
-      expect(notify[0].data.message).toContain('vượt ngưỡng hao hụt cho phép');
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('vượt ngưỡng hao hụt cho phép'));
+      warnSpy.mockRestore();
     });
 
     it('KHÔNG gọi lại solver khi có dòng feasible=false - lưu nguyên kết quả rồi để cổng chặn tự-duyệt xử lý', async () => {
@@ -1406,12 +1415,9 @@ describe('CuttingProposalsService', () => {
       expect(failCall[0].data.errorMessage).toContain('sắt vuông 20x20');
       expect(prisma.cuttingProposalLine.create).not.toHaveBeenCalled();
 
-      const notifyCall = prisma.notification.create.mock.calls[0] as unknown as [
-        { data: { title: string; message: string; audience: string } },
-      ];
-      expect(notifyCall[0].data.audience).toBe('PRODUCTION_MANAGER');
-      expect(notifyCall[0].data.title).toContain('thất bại');
-      expect(notifyCall[0].data.message).toContain('sắt vuông 20x20');
+      // 2026-09-26 (người dùng chốt): solver lỗi không còn báo QLSX - lỗi vẫn được lưu vào chính
+      // CuttingProposal.errorMessage (kiểm ở trên) cho ai xem lại phương án, chỉ không đẩy chuông.
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     it('maps multiple purchase_plan materials into separate CuttingProposalLine rows', async () => {
@@ -2035,6 +2041,45 @@ describe('CuttingProposalsService', () => {
       });
       // Không có gì để giữ chỗ (consumeQty=0) -> không gọi reserve().
       expect(stockReservationsService.reserve).not.toHaveBeenCalled();
+    });
+
+    // Phase 3a, mục 7.4 changelog 2026-09-25/26 - notifyPurchaseProposalCreated() (util dùng
+    // chung, best-effort) đọc lại proposal SAU KHI approve() đã commit.
+    it('emit PURCHASE_PROPOSAL_CREATED sau khi tạo PurchaseProposal mới, khi rollup còn cần Mua hàng xử lý', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [{ materialId: 30n, feasible: true, totalBars: 8 }],
+      });
+      prisma.cuttingProposal.update.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.APPROVED,
+        ...productionOrderRelation(),
+      });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
+      prisma.purchaseProposal.create.mockResolvedValue({ id: 900n });
+      prisma.purchaseProposal.findUnique.mockResolvedValue({
+        id: 900n,
+        status: PurchaseProposalStatus.NEW,
+        productionInvoice: null,
+      });
+      prisma.purchaseProposalItem.count.mockResolvedValue(1);
+
+      await service.approve('2', 'user-1');
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PURCHASE_PROPOSAL_CREATED',
+        expect.objectContaining({
+          entityId: '900',
+          actorId: 'user-1',
+          dedupeKey: 'PURCHASE_PROPOSAL_CREATED:900',
+          params: expect.objectContaining({ count: 1 }) as unknown,
+        }),
+      );
     });
 
     it('giữ chỗ tự động (B4 Đợt 2): đủ tồn thì buyQty=0 và giữ chỗ đúng số lượng (Phase 8.1)', async () => {

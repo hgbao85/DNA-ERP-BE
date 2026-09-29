@@ -4,6 +4,7 @@ import { ProductionBatchesModule } from '../production-batches/production-batche
 import { ProductionOrdersModule } from '../production-orders/production-orders.module';
 import { StockModule } from '../stock/stock.module';
 import { UploadsModule } from '../uploads/uploads.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesController } from './production-invoices.controller';
@@ -16,6 +17,7 @@ import { ProductionInvoicesService } from './production-invoices.service';
     ProductionBatchesModule,
     UploadsModule,
     StockModule,
+    NotificationsModule,
   ],
   controllers: [ProductionInvoicesController],
   providers: [

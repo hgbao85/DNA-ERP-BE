@@ -11,6 +11,8 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
+import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ConsumableMaterialPurchaseResultDto } from './dto/consumable-material-purchase-result.dto';
 
@@ -32,6 +34,7 @@ export class ConsumableMaterialPurchaseService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockReservationsService: StockReservationsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async computeAndUpsertProposals(
@@ -357,6 +360,11 @@ export class ConsumableMaterialPurchaseService {
           }),
       );
     });
+
+    const proposalId = results[0]?.purchaseProposalId;
+    if (proposalId) {
+      await notifyPurchaseProposalCreated(this.prisma, this.notifications, BigInt(proposalId));
+    }
 
     return results;
   }

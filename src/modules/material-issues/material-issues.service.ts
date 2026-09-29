@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -25,6 +26,7 @@ import {
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreateMaterialIssueDto } from './dto/create-material-issue.dto';
@@ -35,7 +37,14 @@ import { ReceiveMaterialIssueDto } from './dto/receive-material-issue.dto';
 
 const MATERIAL_ISSUE_INCLUDE = {
   productionOrder: {
-    include: { productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } } },
+    include: {
+      productionInvoiceItem: {
+        select: {
+          salesOrder: { select: { orderCode: true } },
+          productionInvoice: { select: { code: true } },
+        },
+      },
+    },
   },
   material: true,
 } satisfies Prisma.MaterialIssueInclude;
@@ -69,11 +78,49 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  */
 @Injectable()
 export class MaterialIssuesService {
+  private readonly logger = new Logger(MaterialIssuesService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
+   *  17.2/19.2 changelog notification). */
+  private async notifyMaterialIssueToTeam(issue: MaterialIssueRow, piCode: string): Promise<void> {
+    try {
+      await this.notifications.emit('MATERIAL_ISSUE_TO_TEAM', {
+        entityId: issue.id.toString(),
+        params: {
+          piCode,
+          materialCode: issue.material.code,
+          qty: issue.issuedQty.toNumber(),
+          unit: issue.material.unit,
+          stage: issue.stage,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create MATERIAL_ISSUE_TO_TEAM notification (entity ${issue.id}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async resolveMaterialIssueToTeam(entityId: bigint): Promise<void> {
+    try {
+      await this.notifications.resolve({
+        entityType: 'MATERIAL_ISSUE',
+        entityId: entityId.toString(),
+        types: ['MATERIAL_ISSUE_TO_TEAM'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve MATERIAL_ISSUE_TO_TEAM (entity ${entityId}): ${(error as Error).message}`,
+      );
+    }
+  }
 
   async create(
     productionOrderId: string,
@@ -203,6 +250,10 @@ export class MaterialIssuesService {
       return issue;
     });
 
+    await this.notifyMaterialIssueToTeam(
+      created,
+      created.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
+    );
     return this.toResponseDto(created);
   }
 
@@ -256,6 +307,7 @@ export class MaterialIssuesService {
       where: { id: issue.id },
       include: MATERIAL_ISSUE_INCLUDE,
     });
+    await this.resolveMaterialIssueToTeam(updated.id);
     return this.toResponseDto(updated);
   }
 

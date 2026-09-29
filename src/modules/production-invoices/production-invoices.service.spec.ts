@@ -11,6 +11,7 @@ import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
@@ -74,6 +75,7 @@ describe('ProductionInvoicesService', () => {
   let consumableMaterialPurchaseService: { computeAndUpsertProposals: jest.Mock };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
   let cloudinaryService: { deleteByUrl: jest.Mock };
+  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
 
   const mfgProduct = { id: 2n, factoryCode: 'SKU-01', name: 'Ghe A' };
   const pi = (overrides: Record<string, unknown> = {}) => ({
@@ -216,6 +218,10 @@ describe('ProductionInvoicesService', () => {
     };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
+    notificationsService = {
+      emit: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(undefined),
+    };
     service = new ProductionInvoicesService(
       prisma as unknown as PrismaServiceType,
       productionOrdersService as unknown as ProductionOrdersService,
@@ -224,6 +230,7 @@ describe('ProductionInvoicesService', () => {
       consumableMaterialPurchaseService as unknown as ConsumableMaterialPurchaseService,
       cls as unknown as ClsService<AppClsStore>,
       cloudinaryService as unknown as CloudinaryService,
+      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -1390,6 +1397,300 @@ describe('ProductionInvoicesService', () => {
     });
   });
 
+  // Phase 3a, mục 7.2 changelog 2026-09-25/26 - notification tại từng transition. Best-effort
+  // (catch+log, xem notifyPi()/resolvePiNotifications()) nên chỉ kiểm ĐÚNG type/entityId/params
+  // được gọi, không kiểm nội dung title/message render (đã ở notification-types.ts nếu cần).
+  describe('notifications (Phase 3a, mục 7.2)', () => {
+    it('sendItemToQlsx() emit PI_SENT_TO_QLSX với count=1, dedupeKey theo PI, loại trừ actor', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+
+      await service.sendItemToQlsx('7', '20', 'user-khsx');
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_SENT_TO_QLSX',
+        expect.objectContaining({
+          entityId: '7',
+          actorId: 'user-khsx',
+          dedupeKey: 'PI_SENT_TO_QLSX:7',
+          params: expect.objectContaining({ piCode: 'PI-7', count: 1 }) as unknown,
+        }),
+      );
+    });
+
+    it('sendBatchToQlsx() emit count = số SKU đủ điều kiện của lần gửi này', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            piItem({ id: 20n, prodApprovalStatus: null }),
+            piItem({ id: 21n, prodApprovalStatus: 'REJECTED' }),
+            piItem({ id: 22n, prodApprovalStatus: 'WAITING_BOSS' }),
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
+
+      await service.sendBatchToQlsx('7', 'user-khsx');
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_SENT_TO_QLSX',
+        expect.objectContaining({ params: expect.objectContaining({ count: 2 }) as unknown }),
+      );
+    });
+
+    it('sendItemToBoss() resolve PI_SENT_TO_QLSX khi KHÔNG còn SKU nào khác đang WAITING_QLSX, rồi emit PI_SENT_TO_BOSS', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi()); // items:[] mặc định
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+
+      await service.sendItemToBoss('7', '20', 'thanh-pham', 'Kho thành phẩm', 'user-qlsx');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityType: 'PRODUCTION_INVOICE',
+          entityId: '7',
+          types: ['PI_SENT_TO_QLSX'],
+        }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_SENT_TO_BOSS',
+        expect.objectContaining({
+          entityId: '7',
+          dedupeKey: 'PI_SENT_TO_BOSS:7',
+          params: expect.objectContaining({ count: 1 }) as unknown,
+        }),
+      );
+    });
+
+    it('sendItemToBoss() KHÔNG resolve PI_SENT_TO_QLSX khi còn SKU khác của PI này đang WAITING_QLSX', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({ items: [piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' })] }),
+      );
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ id: 21n, prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ id: 21n, prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+
+      await service.sendItemToBoss('7', '21', 'thanh-pham', 'Kho thành phẩm', 'user-qlsx');
+
+      expect(notificationsService.resolve).not.toHaveBeenCalled();
+    });
+
+    it('rejectItemByQlsx() resolve PI_SENT_TO_QLSX (item cuối) rồi emit PI_REJECTED_BY_QLSX kèm lý do', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+      prisma.productionInvoiceItem.count.mockResolvedValue(0);
+
+      await service.rejectItemByQlsx('7', '20', 'Không đủ kho', 'user-qlsx');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: '7', types: ['PI_SENT_TO_QLSX'] }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_REJECTED_BY_QLSX',
+        expect.objectContaining({
+          entityId: '7',
+          params: expect.objectContaining({ reason: 'Không đủ kho', count: 1 }) as unknown,
+        }),
+      );
+    });
+
+    it('rejectBatchByQlsx() luôn resolve PI_SENT_TO_QLSX (đòi mọi item đang WAITING_QLSX) và emit count đúng tổng SKU', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }),
+            piItem({ id: 21n, prodApprovalStatus: 'WAITING_QLSX' }),
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
+
+      await service.rejectBatchByQlsx('7', 'Hết giờ SX', 'user-qlsx');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: '7', types: ['PI_SENT_TO_QLSX'] }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_REJECTED_BY_QLSX',
+        expect.objectContaining({
+          params: expect.objectContaining({ reason: 'Hết giờ SX', count: 2 }) as unknown,
+        }),
+      );
+    });
+
+    it('approveItem() resolve PI_SENT_TO_BOSS (item cuối) rồi emit PI_APPROVED_BY_BOSS', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'APPROVED' }),
+      );
+      prisma.productionInvoiceItem.count.mockResolvedValue(0);
+
+      await service.approveItem('7', '20', 'user-boss');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: '7', types: ['PI_SENT_TO_BOSS'] }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_APPROVED_BY_BOSS',
+        expect.objectContaining({
+          entityId: '7',
+          actorId: 'user-boss',
+          params: expect.objectContaining({ count: 1 }) as unknown,
+        }),
+      );
+    });
+
+    it('approveItem() emit PI_PRODUCTION_ORDER_FAILED (entityType item) cho ADMIN khi createFromApproval lỗi', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'APPROVED' }),
+      );
+      prisma.productionInvoiceItem.count.mockResolvedValue(0);
+      productionOrdersService.createFromApproval.mockRejectedValue(
+        new Error('no ACTIVE bom revision'),
+      );
+
+      await service.approveItem('7', '20', 'user-boss');
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_PRODUCTION_ORDER_FAILED',
+        expect.objectContaining({
+          entityId: '20',
+          params: expect.objectContaining({
+            errorMessage: 'no ACTIVE bom revision',
+          }) as unknown,
+        }),
+      );
+    });
+
+    it('approveBatch() luôn resolve PI_SENT_TO_BOSS và emit PI_APPROVED_BY_BOSS count=tổng SKU', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          id: 50n,
+          code: 'PI-50',
+          isMerged: true,
+          items: [
+            piItem({ id: 20n, prodApprovalStatus: 'WAITING_BOSS' }),
+            piItem({ id: 21n, prodApprovalStatus: 'WAITING_BOSS' }),
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
+
+      await service.approveBatch('50', 'user-boss');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: '50', types: ['PI_SENT_TO_BOSS'] }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_APPROVED_BY_BOSS',
+        expect.objectContaining({ params: expect.objectContaining({ count: 2 }) as unknown }),
+      );
+    });
+
+    it('rejectItem() resolve PI_SENT_TO_BOSS (item cuối) rồi emit PI_REJECTED_BY_BOSS kèm lý do', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'REJECTED', rejectReason: 'Thiếu vật tư' }),
+      );
+
+      await service.rejectItem('7', '20', 'Thiếu vật tư', 'user-boss');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: '7', types: ['PI_SENT_TO_BOSS'] }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_REJECTED_BY_BOSS',
+        expect.objectContaining({
+          params: expect.objectContaining({ reason: 'Thiếu vật tư', count: 1 }) as unknown,
+        }),
+      );
+    });
+
+    it('rejectBatch() luôn resolve PI_SENT_TO_BOSS và emit count đúng tổng SKU', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          id: 50n,
+          code: 'PI-50',
+          isMerged: true,
+          items: [
+            piItem({ id: 20n, prodApprovalStatus: 'WAITING_BOSS' }),
+            piItem({ id: 21n, prodApprovalStatus: 'WAITING_BOSS' }),
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
+
+      await service.rejectBatch('50', 'Sai kỹ thuật', 'user-boss');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: '50', types: ['PI_SENT_TO_BOSS'] }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_REJECTED_BY_BOSS',
+        expect.objectContaining({
+          params: expect.objectContaining({ reason: 'Sai kỹ thuật', count: 2 }) as unknown,
+        }),
+      );
+    });
+
+    it('retryProductionOrder() thành công thì resolve PI_PRODUCTION_ORDER_FAILED (entityType item)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'APPROVED' }),
+      );
+      prisma.productionOrder.findUnique.mockResolvedValue(null);
+
+      await service.retryProductionOrder('7', '20', 'admin-1');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityType: 'PRODUCTION_INVOICE_ITEM',
+          entityId: '20',
+          types: ['PI_PRODUCTION_ORDER_FAILED'],
+        }),
+      );
+    });
+
+    it('lỗi ghi notification (emit/resolve) không được làm hỏng request nghiệp vụ chính (best-effort)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'APPROVED' }),
+      );
+      prisma.productionInvoiceItem.count.mockResolvedValue(0);
+      notificationsService.resolve.mockRejectedValueOnce(new Error('DB down'));
+      notificationsService.emit.mockRejectedValueOnce(new Error('DB down'));
+
+      const result = await service.approveItem('7', '20', 'user-boss');
+
+      expect(result.prodApprovalStatus).toBe('APPROVED');
+    });
+  });
+
   describe('findOne', () => {
     it('throws 404 for a non-existent PI', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(null);
@@ -1564,6 +1865,7 @@ describe('ProductionInvoicesService', () => {
         prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
         prisma.bomPiece.findUnique.mockResolvedValue(bomPieceRow());
         prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
+        prisma.transferCheckResult.create.mockResolvedValue({ id: 100n });
         prisma.transferCheckResult.findMany.mockResolvedValue([
           { pieceId: 30n, checkedQty: 4, defects: [{ id: 1n }] },
         ]);
@@ -1590,6 +1892,56 @@ describe('ProductionInvoicesService', () => {
         );
         expect(result.checkedQty).toBe(4);
         expect(result.defectCount).toBe(1);
+      });
+
+      // Phase 3b, nhóm 7.5-v, changelog 2026-09-25 mục 24.
+      it('emit TRANSFER_CHECK_DEFECT_FOUND khi có defects - đúng piCode/pieceName/defectCount/reason (lỗi đầu tiên)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findUnique.mockResolvedValue(bomPieceRow());
+        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
+        prisma.transferCheckResult.create.mockResolvedValue({ id: 100n });
+        prisma.transferCheckResult.findMany.mockResolvedValue([
+          { pieceId: 30n, checkedQty: 4, defects: [{ id: 1n }, { id: 2n }] },
+        ]);
+
+        await service.recordTransferCheck(
+          '7',
+          '20',
+          {
+            pieceId: '30',
+            checkedQty: 4,
+            defects: [{ reason: 'Móp góc' }, { reason: 'Trầy sơn' }],
+          },
+          'user-kho',
+        );
+
+        expect(notificationsService.emit).toHaveBeenCalledWith('TRANSFER_CHECK_DEFECT_FOUND', {
+          entityId: '100',
+          params: {
+            piCode: 'PI-7',
+            pieceName: 'Thân trên',
+            defectCount: 2,
+            reason: 'Móp góc',
+          },
+        });
+      });
+
+      it('KHÔNG emit TRANSFER_CHECK_DEFECT_FOUND khi kiểm không có lỗi', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findUnique.mockResolvedValue(bomPieceRow());
+        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
+        prisma.transferCheckResult.create.mockResolvedValue({ id: 101n });
+        prisma.transferCheckResult.findMany.mockResolvedValue([
+          { pieceId: 30n, checkedQty: 4, defects: [] },
+        ]);
+
+        await service.recordTransferCheck('7', '20', { pieceId: '30', checkedQty: 4 }, 'user-kho');
+
+        expect(notificationsService.emit).not.toHaveBeenCalled();
       });
 
       it('chặn kiểm vượt "Hiện có" của mảnh có đan (SUM WeavingReceipt trừ đã kiểm)', async () => {
@@ -1826,6 +2178,58 @@ describe('ProductionInvoicesService', () => {
           },
         });
         expect(result).toMatchObject({ totalQty: 10, packedQty: 6, remainingQty: 4 });
+      });
+
+      // Phase 3b, nhóm 7.5-vi, changelog 2026-09-25 mục 25.
+      it('emit PI_ITEM_PACKAGING_COMPLETE khi đóng ĐỦ totalQty VÀ item có gắn đơn hàng', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+          piItem({ salesOrderId: 1n, salesOrder: { orderCode: 'PO-31' } }),
+        );
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.packagingRecord.aggregate
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 8 } })
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 10 } });
+
+        await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
+
+        expect(notificationsService.emit).toHaveBeenCalledWith('PI_ITEM_PACKAGING_COMPLETE', {
+          entityId: '20',
+          params: {
+            piCode: 'PI-7',
+            factoryCode: mfgProduct.factoryCode,
+            productName: mfgProduct.name,
+            salesOrderCode: 'PO-31',
+          },
+        });
+      });
+
+      it('KHÔNG emit khi đóng CHƯA đủ totalQty (còn phải đóng thêm)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+          piItem({ salesOrderId: 1n, salesOrder: { orderCode: 'PO-31' } }),
+        );
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.packagingRecord.aggregate
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 4 } })
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 6 } });
+
+        await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
+
+        expect(notificationsService.emit).not.toHaveBeenCalled();
+      });
+
+      it('KHÔNG emit khi đóng ĐỦ nhưng item KHÔNG gắn đơn hàng nào (SalesOrder null)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.packagingRecord.aggregate
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 8 } })
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 10 } });
+
+        await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
+
+        expect(notificationsService.emit).not.toHaveBeenCalled();
       });
 
       it('rejects khi vượt quá totalQty (không chặn theo readyQty/checkedQty của Chuyền kiểm)', async () => {

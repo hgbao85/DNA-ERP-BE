@@ -53,6 +53,7 @@ import { MaterialIssuesModule } from './modules/material-issues/material-issues.
 import { MaterialYieldIssuesModule } from './modules/material-yield-issues/material-yield-issues.module';
 import { PackagingIssuesModule } from './modules/packaging-issues/packaging-issues.module';
 import { ProductionBatchesModule } from './modules/production-batches/production-batches.module';
+import { WorkQueueModule } from './modules/work-queue/work-queue.module';
 
 @Module({
   imports: [
@@ -125,6 +126,7 @@ import { ProductionBatchesModule } from './modules/production-batches/production
     MaterialYieldIssuesModule,
     PackagingIssuesModule,
     ProductionBatchesModule,
+    WorkQueueModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
