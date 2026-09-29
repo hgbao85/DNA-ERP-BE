@@ -8,6 +8,7 @@ import { MfgRole, MfgStage, StockLedgerRefType } from '../../generated/prisma/cl
 import { PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ProductionBatchesService } from './production-batches.service';
 
 describe('ProductionBatchesService', () => {
@@ -53,6 +54,7 @@ describe('ProductionBatchesService', () => {
   };
   let stockLedgerService: { postEntry: jest.Mock };
   let materialYieldIssuesService: { sumReceived: jest.Mock };
+  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
 
   const order = {
     id: 1n,
@@ -179,10 +181,15 @@ describe('ProductionBatchesService', () => {
     // Mặc định "đã nhận đủ" (100) - đa số test case không quan tâm ràng buộc mới "chưa nhận thì
     // chưa báo được" (2026-09-04), xem mục 'assertMaterialYieldReceived' bên dưới mới override 0.
     materialYieldIssuesService = { sumReceived: jest.fn().mockResolvedValue(100) };
+    notificationsService = {
+      emit: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(undefined),
+    };
     service = new ProductionBatchesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       materialYieldIssuesService as unknown as MaterialYieldIssuesService,
+      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -649,6 +656,84 @@ describe('ProductionBatchesService', () => {
         prisma,
       );
     });
+
+    // Phase 3b, nhóm 7.5-i, changelog 2026-09-25 mục 19.
+    it('emit BATCH_TO_KCS sau khi Hàn/Sơn báo xong đợt', async () => {
+      const orderWithPiCode = {
+        ...order,
+        productionInvoiceItem: {
+          salesOrder: { orderCode: 'PO-31' },
+          productionInvoice: { code: 'PI-31' },
+        },
+      };
+      prisma.productionBatch.findUnique.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 8,
+        productionOrder: orderWithPiCode,
+      });
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
+        ...batchRow,
+        status: 'AWAITING_QC',
+        reportedQty: 8,
+        productionOrder: orderWithPiCode,
+      });
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
+      ]);
+
+      await service.finishProductionBatch('700', 'user-han', null, null);
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'BATCH_TO_KCS',
+        expect.objectContaining({ entityId: '700', params: { piCode: 'PI-31', stage: 'HAN' } }),
+      );
+    });
+
+    // mục 22.2 (2026-09-28): `stage` mới thêm vào params để notification-types.ts chọn đúng tab
+    // KCS (kcs-han/kcs-son/kcs-phoi) - PHOI cũng có thể ra ProductionBatch (piece không qua
+    // CutBundle, xem assertMfgRoleMatchesStage()), phải truyền đúng qua emit() cho cả 3 nhánh.
+    it.each([
+      [MfgStage.SON, 'user-son'],
+      [MfgStage.PHOI, 'user-phoi'],
+    ])(
+      'emit BATCH_TO_KCS kèm đúng stage=%s để notification-types.ts chọn đúng tab KCS',
+      async (stage, reportedById) => {
+        const orderWithPiCode = {
+          ...order,
+          productionInvoiceItem: {
+            salesOrder: { orderCode: 'PO-31' },
+            productionInvoice: { code: 'PI-31' },
+          },
+        };
+        prisma.productionBatch.findUnique.mockResolvedValue({
+          ...batchRow,
+          stage,
+          status: 'OPEN',
+          reportedQty: 8,
+          productionOrder: orderWithPiCode,
+        });
+        prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
+          ...batchRow,
+          stage,
+          status: 'AWAITING_QC',
+          reportedQty: 8,
+          productionOrder: orderWithPiCode,
+        });
+        prisma.pieceBom.findMany.mockResolvedValue(
+          stage === MfgStage.PHOI
+            ? []
+            : [{ id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 }],
+        );
+
+        await service.finishProductionBatch('700', reportedById, null, null);
+
+        expect(notificationsService.emit).toHaveBeenCalledWith(
+          'BATCH_TO_KCS',
+          expect.objectContaining({ entityId: '700', params: { piCode: 'PI-31', stage } }),
+        );
+      },
+    );
 
     it('finishProductionBatch - không có PieceBom (VTTP) - chuyển AWAITING_QC, KHÔNG gọi postEntry', async () => {
       prisma.productionBatch.findUnique.mockResolvedValue({

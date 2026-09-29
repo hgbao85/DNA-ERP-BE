@@ -2807,6 +2807,39 @@ export class CuttingProposalsService {
   private static readonly FINALIZING_WINDOW_MS = 60_000;
 
   /**
+   * Đếm số đề xuất cắt sắt đang "cần QLSX xử lý" (Phase 4 "việc chờ tôi", mục 6.3) - tái dùng
+   * ĐÚNG `computeDisplayStatus()` (list-level) thay vì tự viết lại điều kiện `status IN (DRAFT,
+   * FAILED)` như bảng plan gốc mục 6.3 ghi - bảng đó SAI/THIẾU: bỏ qua `CALCULATING` quá hạn (nghi
+   * treo), và đếm nhầm cả `DRAFT` đang trong cửa sổ tự-duyệt `FINALIZING_WINDOW_MS` (60s, chưa kịp
+   * chuyển `APPROVED`) như thể cần xử lý - double-count so với thực tế trong đúng khung 60s đó.
+   * Chỉ query 3 status có khả năng ra `NEEDS_ACTION` (`APPROVED`/`SUPERSEDED` không bao giờ ra
+   * nhánh này, xem computeDisplayStatus() - loại trước ở WHERE cho rẻ hơn lọc hết trong JS).
+   */
+  async countNeedsAction(): Promise<number> {
+    const candidates = await this.prisma.cuttingProposal.findMany({
+      where: {
+        status: {
+          in: [
+            CuttingProposalStatus.CALCULATING,
+            CuttingProposalStatus.DRAFT,
+            CuttingProposalStatus.FAILED,
+          ],
+        },
+      },
+      select: {
+        status: true,
+        hasInfeasibleLine: true,
+        hasOverThreshold: true,
+        completedAt: true,
+        errorMessage: true,
+        requestedAt: true,
+      },
+    });
+    return candidates.filter((p) => this.computeDisplayStatus(p).displayStatus === 'NEEDS_ACTION')
+      .length;
+  }
+
+  /**
    * Dẫn xuất `displayStatus`/`displayReason` (list-level) từ `status` + 2 cờ tổng hợp đã lưu sẵn
    * lúc saveSuccess() - KHÔNG đọc lines[] (tốn 1 query nữa, và list response không load lines).
    * Xem CuttingProposalDisplayStatus (dto) cho định nghĩa từng nhánh.

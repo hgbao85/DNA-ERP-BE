@@ -1865,6 +1865,7 @@ describe('ProductionInvoicesService', () => {
         prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
         prisma.bomPiece.findUnique.mockResolvedValue(bomPieceRow());
         prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
+        prisma.transferCheckResult.create.mockResolvedValue({ id: 100n });
         prisma.transferCheckResult.findMany.mockResolvedValue([
           { pieceId: 30n, checkedQty: 4, defects: [{ id: 1n }] },
         ]);
@@ -1891,6 +1892,56 @@ describe('ProductionInvoicesService', () => {
         );
         expect(result.checkedQty).toBe(4);
         expect(result.defectCount).toBe(1);
+      });
+
+      // Phase 3b, nhóm 7.5-v, changelog 2026-09-25 mục 24.
+      it('emit TRANSFER_CHECK_DEFECT_FOUND khi có defects - đúng piCode/pieceName/defectCount/reason (lỗi đầu tiên)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findUnique.mockResolvedValue(bomPieceRow());
+        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
+        prisma.transferCheckResult.create.mockResolvedValue({ id: 100n });
+        prisma.transferCheckResult.findMany.mockResolvedValue([
+          { pieceId: 30n, checkedQty: 4, defects: [{ id: 1n }, { id: 2n }] },
+        ]);
+
+        await service.recordTransferCheck(
+          '7',
+          '20',
+          {
+            pieceId: '30',
+            checkedQty: 4,
+            defects: [{ reason: 'Móp góc' }, { reason: 'Trầy sơn' }],
+          },
+          'user-kho',
+        );
+
+        expect(notificationsService.emit).toHaveBeenCalledWith('TRANSFER_CHECK_DEFECT_FOUND', {
+          entityId: '100',
+          params: {
+            piCode: 'PI-7',
+            pieceName: 'Thân trên',
+            defectCount: 2,
+            reason: 'Móp góc',
+          },
+        });
+      });
+
+      it('KHÔNG emit TRANSFER_CHECK_DEFECT_FOUND khi kiểm không có lỗi', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.bomPiece.findUnique.mockResolvedValue(bomPieceRow());
+        prisma.bomPiece.findMany.mockResolvedValue([bomPieceRow()]);
+        prisma.transferCheckResult.create.mockResolvedValue({ id: 101n });
+        prisma.transferCheckResult.findMany.mockResolvedValue([
+          { pieceId: 30n, checkedQty: 4, defects: [] },
+        ]);
+
+        await service.recordTransferCheck('7', '20', { pieceId: '30', checkedQty: 4 }, 'user-kho');
+
+        expect(notificationsService.emit).not.toHaveBeenCalled();
       });
 
       it('chặn kiểm vượt "Hiện có" của mảnh có đan (SUM WeavingReceipt trừ đã kiểm)', async () => {
@@ -2127,6 +2178,58 @@ describe('ProductionInvoicesService', () => {
           },
         });
         expect(result).toMatchObject({ totalQty: 10, packedQty: 6, remainingQty: 4 });
+      });
+
+      // Phase 3b, nhóm 7.5-vi, changelog 2026-09-25 mục 25.
+      it('emit PI_ITEM_PACKAGING_COMPLETE khi đóng ĐỦ totalQty VÀ item có gắn đơn hàng', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+          piItem({ salesOrderId: 1n, salesOrder: { orderCode: 'PO-31' } }),
+        );
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.packagingRecord.aggregate
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 8 } })
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 10 } });
+
+        await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
+
+        expect(notificationsService.emit).toHaveBeenCalledWith('PI_ITEM_PACKAGING_COMPLETE', {
+          entityId: '20',
+          params: {
+            piCode: 'PI-7',
+            factoryCode: mfgProduct.factoryCode,
+            productName: mfgProduct.name,
+            salesOrderCode: 'PO-31',
+          },
+        });
+      });
+
+      it('KHÔNG emit khi đóng CHƯA đủ totalQty (còn phải đóng thêm)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+          piItem({ salesOrderId: 1n, salesOrder: { orderCode: 'PO-31' } }),
+        );
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.packagingRecord.aggregate
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 4 } })
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 6 } });
+
+        await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
+
+        expect(notificationsService.emit).not.toHaveBeenCalled();
+      });
+
+      it('KHÔNG emit khi đóng ĐỦ nhưng item KHÔNG gắn đơn hàng nào (SalesOrder null)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+        prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
+        prisma.packagingRecord.aggregate
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 8 } })
+          .mockResolvedValueOnce({ _sum: { boxesPacked: 10 } });
+
+        await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
+
+        expect(notificationsService.emit).not.toHaveBeenCalled();
       });
 
       it('rejects khi vượt quá totalQty (không chặn theo readyQty/checkedQty của Chuyền kiểm)', async () => {

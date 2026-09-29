@@ -391,6 +391,76 @@ describe('NotificationsService', () => {
       );
     });
 
+    it('search lọc theo title/message (contains, không phân biệt hoa thường) qua quan hệ notification', async () => {
+      await service.findMyNotifications(
+        {
+          page: 1,
+          limit: 20,
+          sortOrder: 'desc',
+          search: 'PI-2026',
+        } as unknown as ListNotificationsQueryDto,
+        'user-1',
+      );
+
+      expect(prisma.notificationRecipient.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            userId: 'user-1',
+            archivedAt: null,
+            notification: {
+              OR: [
+                { title: { contains: 'PI-2026', mode: 'insensitive' } },
+                { message: { contains: 'PI-2026', mode: 'insensitive' } },
+              ],
+            },
+          },
+        }),
+      );
+    });
+
+    it('search kèm category cùng gộp vào 1 object notification (không đè nhau)', async () => {
+      await service.findMyNotifications(
+        {
+          page: 1,
+          limit: 20,
+          sortOrder: 'desc',
+          category: 'RESULT',
+          search: 'sắt',
+        } as unknown as ListNotificationsQueryDto,
+        'user-1',
+      );
+
+      expect(prisma.notificationRecipient.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            notification: {
+              category: 'RESULT',
+              OR: [
+                { title: { contains: 'sắt', mode: 'insensitive' } },
+                { message: { contains: 'sắt', mode: 'insensitive' } },
+              ],
+            },
+          }),
+        }),
+      );
+    });
+
+    it('search chỉ toàn khoảng trắng bị bỏ qua (coi như không lọc)', async () => {
+      await service.findMyNotifications(
+        {
+          page: 1,
+          limit: 20,
+          sortOrder: 'desc',
+          search: '   ',
+        } as unknown as ListNotificationsQueryDto,
+        'user-1',
+      );
+
+      expect(prisma.notificationRecipient.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: 'user-1', archivedAt: null } }),
+      );
+    });
+
     it('map isRead/isResolved theo ĐÚNG recipient row của người gọi, không phải trạng thái chung', async () => {
       prisma.notificationRecipient.findMany.mockResolvedValue([
         {

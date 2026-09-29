@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -20,6 +21,7 @@ import {
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreatePackagingIssueDto } from './dto/create-packaging-issue.dto';
@@ -30,7 +32,11 @@ const PACKAGING_ISSUE_INCLUDE = {
   productionOrder: {
     include: {
       productionInvoiceItem: {
-        select: { salesOrder: { select: { orderCode: true } }, warehouseCode: true },
+        select: {
+          salesOrder: { select: { orderCode: true } },
+          warehouseCode: true,
+          productionInvoice: { select: { code: true } },
+        },
       },
     },
   },
@@ -66,11 +72,38 @@ const PACKAGING_DEST_WAREHOUSE_CODE = 'thanh-pham';
  */
 @Injectable()
 export class PackagingIssuesService {
+  private readonly logger = new Logger(PackagingIssuesService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
+   *  17.2/19.2/22.2 changelog notification). KHÔNG có `resolve()` cặp đôi - type này KHÔNG tự đóng
+   *  (INFO thuần, không có bước "nhận hàng" - xem doc comment đầu class + mục 19.1/22 changelog). */
+  private async notifyPackagingIssueCreated(
+    issue: PackagingIssueRow,
+    piCode: string,
+  ): Promise<void> {
+    try {
+      await this.notifications.emit('PACKAGING_ISSUE_CREATED', {
+        entityId: issue.id.toString(),
+        params: {
+          piCode,
+          materialCode: issue.material.code,
+          qty: issue.issuedQty.toNumber(),
+          unit: issue.material.unit,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create PACKAGING_ISSUE_CREATED notification (entity ${issue.id}): ${(error as Error).message}`,
+      );
+    }
+  }
 
   async create(
     productionOrderId: string,
@@ -211,6 +244,10 @@ export class PackagingIssuesService {
       return issue;
     });
 
+    await this.notifyPackagingIssueCreated(
+      created,
+      created.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
+    );
     return this.toResponseDto(created);
   }
 
