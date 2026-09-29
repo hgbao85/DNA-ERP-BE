@@ -31,7 +31,12 @@ import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { NotificationType, PiNotificationParams } from '../notifications/notification-types';
+import {
+  NotificationType,
+  PackagingCompleteNotificationParams,
+  PiNotificationParams,
+  TransferCheckDefectNotificationParams,
+} from '../notifications/notification-types';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
@@ -152,6 +157,44 @@ export class ProductionInvoicesService {
     } catch (error) {
       this.logger.error(
         `Failed to resolve PI notifications (${types.join(',')}, entity ${entityId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  // Phase 3b, nhóm 7.5-v (changelog 2026-09-25 mục 24) - best-effort NGOÀI transaction, cùng lý do
+  // đã ghi ở notifyPi() (recordTransferCheck() không mở transaction riêng nên đây chỉ là 1 lệnh
+  // gọi thêm sau create(), không có gì để "cứu" nếu lỗi).
+  private async notifyTransferCheckDefect(
+    entityId: bigint,
+    params: TransferCheckDefectNotificationParams,
+  ): Promise<void> {
+    try {
+      await this.notifications.emit('TRANSFER_CHECK_DEFECT_FOUND', {
+        entityId: entityId.toString(),
+        params: { ...params },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create TRANSFER_CHECK_DEFECT_FOUND notification (entity ${entityId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  // Phase 3b, nhóm 7.5-vi (changelog 2026-09-25 mục 25) - best-effort NGOÀI transaction, cùng lý
+  // do đã ghi ở notifyPi()/notifyTransferCheckDefect() (recordPackaging() không mở transaction
+  // riêng nên đây chỉ là 1 lệnh gọi thêm sau create()).
+  private async notifyPackagingComplete(
+    entityId: bigint,
+    params: PackagingCompleteNotificationParams,
+  ): Promise<void> {
+    try {
+      await this.notifications.emit('PI_ITEM_PACKAGING_COMPLETE', {
+        entityId: entityId.toString(),
+        params: { ...params },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create PI_ITEM_PACKAGING_COMPLETE notification (entity ${entityId}): ${(error as Error).message}`,
       );
     }
   }
@@ -1729,7 +1772,7 @@ export class ProductionInvoicesService {
       );
     }
 
-    await this.prisma.transferCheckResult.create({
+    const created = await this.prisma.transferCheckResult.create({
       data: {
         productionInvoiceItemId: item.id,
         pieceId: pieceBigId,
@@ -1743,7 +1786,18 @@ export class ProductionInvoicesService {
     });
 
     const pieces = await this.listTransferCheckPieces(piId, itemId);
-    return pieces.find((p) => p.pieceId === dto.pieceId)!;
+    const result = pieces.find((p) => p.pieceId === dto.pieceId)!;
+
+    if (dto.defects?.length) {
+      await this.notifyTransferCheckDefect(created.id, {
+        piCode: pi.code,
+        pieceName: result.pieceName,
+        defectCount: dto.defects.length,
+        reason: dto.defects[0].reason,
+      });
+    }
+
+    return result;
   }
 
   /**
@@ -1934,6 +1988,18 @@ export class ProductionInvoicesService {
         packedById: actorUserId,
       },
     });
+
+    // Chỉ báo khi vừa đóng ĐỦ (không phải mỗi lần ghi) VÀ item có gắn đơn hàng (SalesOrder không có
+    // cột "người phụ trách"/người tạo - báo cả role Sales, cùng lý do mục 15.2). Tự nhiên chỉ bắn
+    // đúng 1 lần: gọi lại sau khi đã đủ luôn bị chặn 400 ở guard phía trên, không cần dedupe thêm.
+    if (packedSoFar + dto.boxesPacked === productionOrder.quantity && item.salesOrder) {
+      await this.notifyPackagingComplete(item.id, {
+        piCode: pi.code,
+        factoryCode: item.mfgProduct.factoryCode,
+        productName: item.mfgProduct.name,
+        salesOrderCode: item.salesOrder.orderCode,
+      });
+    }
 
     return this.getPackaging(piId, itemId);
   }

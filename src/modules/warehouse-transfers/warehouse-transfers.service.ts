@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -21,6 +22,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreatePieceWarehouseTransferDto } from './dto/create-piece-warehouse-transfer.dto';
@@ -72,11 +74,73 @@ type WarehouseTransferWithRefs = Prisma.WarehouseTransferGetPayload<{
  */
 @Injectable()
 export class WarehouseTransfersService {
+  private readonly logger = new Logger(WarehouseTransfersService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
+   *  17.2/19.2/22.2 changelog notification). */
+  private async notifyTransferCreated(transfer: WarehouseTransferWithRefs): Promise<void> {
+    try {
+      const itemCount = transfer.items.length + transfer.pieceItems.length;
+      await this.notifications.emit('WAREHOUSE_TRANSFER_CREATED', {
+        entityId: transfer.id.toString(),
+        actorId: transfer.createdById,
+        params: {
+          code: transfer.code,
+          fromWarehouseName: transfer.fromWarehouse.name,
+          itemCount,
+          toWarehouseCode: transfer.toWarehouse.code,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create WAREHOUSE_TRANSFER_CREATED notification (entity ${transfer.id}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async resolveTransferCreated(entityId: bigint): Promise<void> {
+    try {
+      await this.notifications.resolve({
+        entityType: 'WAREHOUSE_TRANSFER',
+        entityId: entityId.toString(),
+        types: ['WAREHOUSE_TRANSFER_CREATED'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve WAREHOUSE_TRANSFER_CREATED (entity ${entityId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async notifyTransferRejected(
+    transfer: WarehouseTransferWithRefs,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const itemCount = transfer.items.length + transfer.pieceItems.length;
+      await this.notifications.emit('WAREHOUSE_TRANSFER_REJECTED', {
+        entityId: transfer.id.toString(),
+        params: {
+          code: transfer.code,
+          fromWarehouseName: transfer.fromWarehouse.name,
+          itemCount,
+          reason,
+          createdById: transfer.createdById,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create WAREHOUSE_TRANSFER_REJECTED notification (entity ${transfer.id}): ${(error as Error).message}`,
+      );
+    }
+  }
 
   async create(
     dto: CreateWarehouseTransferDto,
@@ -274,6 +338,7 @@ export class WarehouseTransfersService {
       return transfer;
     });
 
+    await this.notifyTransferCreated(created);
     return this.toResponseDto(created);
   }
 
@@ -377,6 +442,7 @@ export class WarehouseTransfersService {
       });
     });
 
+    await this.notifyTransferCreated(transfer);
     return this.toResponseDto(transfer);
   }
 
@@ -619,6 +685,7 @@ export class WarehouseTransfersService {
       });
     });
 
+    await this.resolveTransferCreated(confirmed.id);
     return this.toResponseDto(confirmed);
   }
 
@@ -669,6 +736,8 @@ export class WarehouseTransfersService {
       });
     });
 
+    await this.resolveTransferCreated(rejected.id);
+    await this.notifyTransferRejected(rejected, rejectionReason);
     return this.toResponseDto(rejected);
   }
 

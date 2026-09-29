@@ -1474,7 +1474,7 @@ describe('PurchaseProposalsService', () => {
             materialCode: 'SAT-25',
             qty: 5,
             unit: 'cây',
-            warehouseId: '800',
+            warehouseCode: 'phoi-son-han',
           }) as unknown,
         }),
       );

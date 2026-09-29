@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -24,6 +25,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreateWeavingIssueDto, WeavingIssueMaterialLineDto } from './dto/create-weaving-issue.dto';
@@ -109,10 +111,13 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  */
 @Injectable()
 export class WeavingIssuesService {
+  private readonly logger = new Logger(WeavingIssuesService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async create(
@@ -231,6 +236,8 @@ export class WeavingIssuesService {
 
       return issue;
     });
+
+    await this.notifyWeavingIssueToPoint(created);
 
     return this.toIssueResponseDto(created);
   }
@@ -388,7 +395,121 @@ export class WeavingIssuesService {
       });
     });
 
+    await this.resolveWeavingIssueToPoint(
+      created.productionOrderId,
+      created.pieceId,
+      created.weavingPointId,
+    );
+
     return this.toReceiptResponseDto(created);
+  }
+
+  /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
+   *  17.2/19.2/22.2/23.2 changelog notification): catch bên trong 1 Prisma interactive transaction
+   *  không cứu được transaction đó nếu nó đã abort, nên luôn gọi SAU KHI phần ghi chính đã commit. */
+  private async notifyWeavingIssueToPoint(issue: WeavingIssueRow): Promise<void> {
+    try {
+      const outstandingQty = await this.recomputeOutstandingAtPoint(
+        issue.productionOrderId,
+        issue.pieceId,
+        issue.weavingPointId,
+      );
+      const warehouseCodes = await this.resolveThanhPhamWarehouseCodes();
+      const entityId = this.weavingAllocationEntityId(
+        issue.productionOrderId,
+        issue.pieceId,
+        issue.weavingPointId,
+      );
+      await this.notifications.emit('WEAVING_ISSUE_TO_POINT', {
+        entityId,
+        actorId: issue.issuedById,
+        dedupeKey: `WEAVING_ISSUE_TO_POINT:${entityId}`,
+        params: {
+          poNumber: issue.productionOrder.poNumber,
+          pieceName: issue.piece.name,
+          weavingPointName: issue.weavingPoint.fullName,
+          outstandingQty,
+          warehouseCodes,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create WEAVING_ISSUE_TO_POINT notification (issue ${issue.id}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /** Tự đóng khi tổng đã nhận tại ĐÚNG điểm đan này bắt kịp tổng đã xuất (outstanding về đúng 0) -
+   *  KHÔNG re-emit số đã giảm khi nhận MỘT PHẦN (hạn chế đã chấp nhận ở mục 16.2, mirror
+   *  resolvePiNotifications ở production-invoices.service.ts). */
+  private async resolveWeavingIssueToPoint(
+    productionOrderId: bigint,
+    pieceId: bigint,
+    weavingPointId: bigint,
+  ): Promise<void> {
+    try {
+      const outstandingQty = await this.recomputeOutstandingAtPoint(
+        productionOrderId,
+        pieceId,
+        weavingPointId,
+      );
+      if (outstandingQty > 0) return;
+      await this.notifications.resolve({
+        entityType: 'WEAVING_ALLOCATION',
+        entityId: this.weavingAllocationEntityId(productionOrderId, pieceId, weavingPointId),
+        types: ['WEAVING_ISSUE_TO_POINT'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve WEAVING_ISSUE_TO_POINT (order ${productionOrderId}, piece ${pieceId}, point ${weavingPointId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private weavingAllocationEntityId(
+    productionOrderId: bigint,
+    pieceId: bigint,
+    weavingPointId: bigint,
+  ): string {
+    return `${productionOrderId}:${pieceId}:${weavingPointId}`;
+  }
+
+  private async recomputeOutstandingAtPoint(
+    productionOrderId: bigint,
+    pieceId: bigint,
+    weavingPointId: bigint,
+  ): Promise<number> {
+    const issued = await this.sumIssuedForPoint(
+      this.prisma,
+      productionOrderId,
+      pieceId,
+      weavingPointId,
+    );
+    const received = await this.sumReceivedForPoint(
+      this.prisma,
+      productionOrderId,
+      pieceId,
+      weavingPointId,
+    );
+    return issued - received;
+  }
+
+  /** Mọi kho vật lý thuộc gia đình 'thanh-pham' (kho gốc + các kho phụ '-N', xem
+   *  warehouseFamilyOf()) - WeavingIssue/WeavingReceipt không lưu warehouseId nào nên không nhắm
+   *  được đích danh 1 kho vật lý cụ thể như WAREHOUSE_TRANSFER_CREATED, phải báo CẢ gia đình. */
+  private async resolveThanhPhamWarehouseCodes(): Promise<string[]> {
+    const warehouses = await this.prisma.warehouse.findMany({
+      where: {
+        isActive: true,
+        deletedAt: null,
+        OR: [
+          { code: WEAVING_RECEIVE_WAREHOUSE_CODE },
+          { code: { startsWith: `${WEAVING_RECEIVE_WAREHOUSE_CODE}-` } },
+        ],
+      },
+      select: { code: true },
+    });
+    return warehouses.map((w) => w.code);
   }
 
   /** "Cần xuất đan bao nhiêu" theo mảnh - query trực tiếp, không có bảng cache riêng. */

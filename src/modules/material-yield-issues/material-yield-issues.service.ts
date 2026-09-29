@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -23,6 +24,7 @@ import {
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreateMaterialYieldIssueDto } from './dto/create-material-yield-issue.dto';
@@ -33,7 +35,14 @@ import { ReceiveMaterialYieldIssueDto } from './dto/receive-material-yield-issue
 
 const MATERIAL_YIELD_ISSUE_INCLUDE = {
   productionOrder: {
-    include: { productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } } },
+    include: {
+      productionInvoiceItem: {
+        select: {
+          salesOrder: { select: { orderCode: true } },
+          productionInvoice: { select: { code: true } },
+        },
+      },
+    },
   },
   material: true,
 } satisfies Prisma.MaterialYieldIssueInclude;
@@ -62,11 +71,51 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  */
 @Injectable()
 export class MaterialYieldIssuesService {
+  private readonly logger = new Logger(MaterialYieldIssuesService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
+   *  17.2/19.2/22.2 changelog notification). */
+  private async notifyMaterialYieldIssueToPhoi(
+    issue: MaterialYieldIssueRow,
+    piCode: string,
+  ): Promise<void> {
+    try {
+      await this.notifications.emit('MATERIAL_YIELD_ISSUE_TO_PHOI', {
+        entityId: issue.id.toString(),
+        params: {
+          piCode,
+          materialCode: issue.material.code,
+          qty: issue.issuedQty.toNumber(),
+          unit: issue.material.unit,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create MATERIAL_YIELD_ISSUE_TO_PHOI notification (entity ${issue.id}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async resolveMaterialYieldIssueToPhoi(entityId: bigint): Promise<void> {
+    try {
+      await this.notifications.resolve({
+        entityType: 'MATERIAL_YIELD_ISSUE',
+        entityId: entityId.toString(),
+        types: ['MATERIAL_YIELD_ISSUE_TO_PHOI'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve MATERIAL_YIELD_ISSUE_TO_PHOI (entity ${entityId}): ${(error as Error).message}`,
+      );
+    }
+  }
 
   async create(
     productionOrderId: string,
@@ -195,6 +244,10 @@ export class MaterialYieldIssuesService {
       return issue;
     });
 
+    await this.notifyMaterialYieldIssueToPhoi(
+      created,
+      created.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
+    );
     return this.toResponseDto(created);
   }
 
@@ -273,6 +326,7 @@ export class MaterialYieldIssuesService {
       where: { id: issue.id },
       include: MATERIAL_YIELD_ISSUE_INCLUDE,
     });
+    await this.resolveMaterialYieldIssueToPhoi(updated.id);
     return this.toResponseDto(updated);
   }
 

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { MaterialYieldIssueStatus, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { MaterialYieldIssuesService } from './material-yield-issues.service';
@@ -14,6 +15,7 @@ describe('MaterialYieldIssuesService', () => {
   let service: MaterialYieldIssuesService;
   let stockLedgerService: { postEntry: jest.Mock };
   let stockReservationsService: { getAvailableQty: jest.Mock; drainPoolBestEffort: jest.Mock };
+  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
   // Đính chính audit độc lập 28/08 (Nghiêm trọng #4) - $queryRaw (khoá + đọc stock_quant) điều
   // khiển bởi biến này, mặc định dư dả để không ảnh hưởng các test có sẵn (chỉ quan tâm định mức
   // BOM); test riêng cho check tồn kho thật sự tự set lại giá trị thấp. Cùng idiom
@@ -47,7 +49,10 @@ describe('MaterialYieldIssuesService', () => {
     bomRevisionId: 5n,
     quantity: 10,
     productionInvoiceItemId: 20n,
-    productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
+    productionInvoiceItem: {
+      salesOrder: { orderCode: 'PO-31' },
+      productionInvoice: { code: 'PI-31' },
+    },
   };
   const aluminumWarehouse = { id: 5n, code: 'vat-tu-tp' };
   const productionWarehouse = { id: 9n, code: 'PRODUCTION' };
@@ -55,6 +60,7 @@ describe('MaterialYieldIssuesService', () => {
     id: 80n,
     code: 'VTTP-001',
     name: 'Thanh nhôm 2m',
+    unit: 'thanh',
     warehouseId: 5n,
     warehouse: aluminumWarehouse,
   };
@@ -131,10 +137,15 @@ describe('MaterialYieldIssuesService', () => {
       getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
       drainPoolBestEffort: jest.fn().mockResolvedValue(undefined),
     };
+    notificationsService = {
+      emit: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(undefined),
+    };
     service = new MaterialYieldIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
+      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -172,6 +183,18 @@ describe('MaterialYieldIssuesService', () => {
         expect.anything(),
       );
       expect(result.id).toBe('100');
+    });
+
+    // Phase 3b, nhóm 7.5-ii, changelog 2026-09-25 mục 22.
+    it('emit MATERIAL_YIELD_ISSUE_TO_PHOI sau khi xuất - đúng piCode/materialCode/qty/unit', async () => {
+      prisma.materialYieldIssue.create.mockResolvedValue(issueRow);
+
+      await service.create('1', dto, 'user-1', null);
+
+      expect(notificationsService.emit).toHaveBeenCalledWith('MATERIAL_YIELD_ISSUE_TO_PHOI', {
+        entityId: '100',
+        params: { piCode: 'PI-31', materialCode: 'VTTP-001', qty: 5, unit: material.unit },
+      });
     });
 
     it('idempotency short-circuit - trả về đợt cũ, không tạo mới, VẪN gọi lại postLedgerEntry (retry-safety)', async () => {
@@ -366,6 +389,22 @@ describe('MaterialYieldIssuesService', () => {
         }),
       );
       expect(result.status).toBe(MaterialYieldIssueStatus.RECEIVED);
+    });
+
+    // Phase 3b, nhóm 7.5-ii, changelog 2026-09-25 mục 22.
+    it('resolve MATERIAL_YIELD_ISSUE_TO_PHOI sau khi Phôi xác nhận', async () => {
+      prisma.materialYieldIssue.findUniqueOrThrow.mockResolvedValue({
+        ...issueRow,
+        status: MaterialYieldIssueStatus.RECEIVED,
+      });
+
+      await service.receive('100', {}, 'user-2', null);
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith({
+        entityType: 'MATERIAL_YIELD_ISSUE',
+        entityId: '100',
+        types: ['MATERIAL_YIELD_ISSUE_TO_PHOI'],
+      });
     });
 
     it('cho phép mfgRole=PHOI', async () => {

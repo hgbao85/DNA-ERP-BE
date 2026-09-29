@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { StockModule } from '../stock/stock.module';
 import { MaterialIssuesController } from './material-issues.controller';
 import { MaterialIssuesService } from './material-issues.service';
 
 @Module({
-  imports: [StockModule],
+  imports: [StockModule, NotificationsModule],
   controllers: [MaterialIssuesController],
   providers: [MaterialIssuesService],
   exports: [MaterialIssuesService],

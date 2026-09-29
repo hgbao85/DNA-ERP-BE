@@ -7,10 +7,40 @@
 > CHỈ nhận thông báo khi tính xong VÀ tự duyệt OK, đúng flow trước khi có notification.
 > **2026-09-26 (mục 15, 16, 17): Phase 3a ĐÃ XONG TOÀN BỘ** - nhóm 7.1 "SKU/định mức" (9 type),
 > nhóm 7.2 "Lệnh sản xuất PI" (6 type), nhóm 7.4 "Đề xuất mua hàng" (4 type), cả 3 đều có live-test
-> FE thật. Phase 3b-5 vẫn ở dạng plan, chưa làm.
+> FE thật. **Mục 18:** sửa 1 bug thật (`warehouseIds` sai kiểu dữ liệu) phát hiện lúc rà code chuẩn
+> bị Phase 3b. **Mục 19: Phase 3b bắt đầu** - nhóm 7.5-i "Sắt → Phôi → KCS" (4 type) ĐÃ XONG, có
+> live-test FE thật.
 > **Đang chờ người dùng quyết định:** có xây màn "chi tiết 1 CuttingProposal" (Duyệt/Từ chối) ở FE
 > hay không (mục 12.5, 12.6) - bớt cấp thiết hơn sau mục 14 vì QLSX không còn thấy thông báo "cần
 > duyệt tay" để mà cần bấm vào nữa.
+> **2026-09-28 (mục 20):** dọn nốt các việc nhỏ còn treo của Phase 2 - sửa double-poll (mục 12.4),
+> khôi phục sau sự cố merge Git làm mất lại `NotificationCenter`/gỡ `NotifBell` ở 3 file, thêm `?p=`
+> URL-sync cho `AdminApp.tsx` và `SalesApp.tsx` (nay cả 7/7 app shell đồng bộ URL).
+> **2026-09-28 (mục 21): xây trang "Thông báo của tôi" riêng - PHASE 2 HOÀN TẤT TOÀN BỘ.**
+> **2026-09-28 (mục 22): Phase 3b nhóm 7.5-ii "Xuất vật tư tiêu hao/thành phẩm/bao bì" ĐÃ XONG**
+> (3 type mới) + nhân tiện gắn `link` cho 3 type nhóm 7.5-i (mục 19) vốn thiếu vì lúc đó `?p=` chưa
+> có ở `MfgApp.tsx`.
+> **2026-09-28 (mục 23): Phase 3b nhóm 7.5-iii "Chuyển kho ngoài đơn hàng" ĐÃ XONG** (2 type mới) -
+> nhân tiện vá 1 lỗ hổng THẬT trong cơ chế điều hướng chung: `NotificationLink.params` được khai báo
+> từ đầu nhưng chưa từng được đọc ở FE, chặn deep-link vào sub-tab.
+> **2026-09-28 (mục 24): Phase 3b nhóm 7.5-v "Chuyền kiểm có lỗi" ĐÃ XONG** (1 type mới, tái dùng
+> `NotificationsService` đã có sẵn ở `production-invoices.service.ts` từ Phase 3a, không cần DI mới).
+> **2026-09-28 (mục 25): Phase 3b nhóm 7.5-vi "Đóng gói xong → Sales" ĐÃ XONG** (1 type mới, cùng
+> service).
+> **2026-09-28 (mục 26): Phase 3b nhóm 7.5-iv "Xuất/nhận đan" ĐÃ XONG (1 type mới) - PHASE 3B HOÀN
+> TẤT TOÀN BỘ 6 NHÓM.** Người dùng chốt thiết kế trước khi code (đơn giản, non-tech): mirror
+> `PI_SENT_TO_QLSX` - `entityId` khoá ghép `(productionOrderId, pieceId, weavingPointId)`, tự đóng
+> khi tổng đang treo tại điểm đan về đúng 0. **Rà lại mục 7/8 sau đó (mục 26.5): "Phase 3c" trong
+> plan gốc (hàng về, đóng gói xong → Sales) hoá ra đã làm xong từ trước trong 3a/mục 17 và 3b/mục 25
+> - PHASE 3 (3a+3b+3c) ĐÃ ĐÓNG HOÀN TOÀN, không còn việc gì treo lại.** Đang bắt đầu Phase 4 (badge
+> "việc chờ tôi", mục 6.3/8).
+> **2026-09-29 (mục 27): Phase 4 ĐÃ XONG TOÀN BỘ (BE+FE) - PHASE 1–4 HOÀN TẤT.** BE: endpoint
+> `GET /me/work-queue` (10 khoá đếm theo 9 role, research trước khi code phát hiện bảng plan mục 6.3
+> SAI/THIẾU ở 5 chỗ - đáng chú ý nhất: đếm thẳng cột `SalesOrderItem.status` sẽ LUÔN ra 0 vì cột đó
+> đứng yên vĩnh viễn từ 2026-09-24, và Mua hàng "NEW/QUOTING" theo plan gốc bỏ sót ~36 dòng thật).
+> FE: gắn badge vào 6/7 app shell (Admin không có role nào trong bảng mục 6.3). Live-test thật đối
+> chiếu `psql` cho cả 15 account demo (BE) + chụp trực tiếp trên UI cho 4 ca (FE) - khớp tuyệt đối.
+> Chỉ còn Phase 5 (realtime, tuỳ chọn) chưa làm.
 >
 > Cách đọc: mục 2–7 là review + kiến trúc ĐÍCH viết TRƯỚC khi code; chỗ nào thực tế làm khác thì mục
 > 11.2 / 12.x là nguồn đúng (mục 5 có ghi chú trỏ sang). Mục 8 là plan theo phase; khi làm xong phase
@@ -25,7 +55,7 @@
 5. Kiến trúc đích — BE
 6. Kiến trúc đích — FE (UX từng màn)
 7. Danh mục sự kiện theo từng luồng / từng màn
-8. Plan triển khai theo phase — _Phase 1, 2, 3a ĐÃ XONG; Phase 3b–5 chưa làm_
+8. Plan triển khai theo phase — _Phase 1–4 ĐÃ XONG TOÀN BỘ; Phase 5 chưa làm_
 9. Quyết định đã chốt với người dùng — _đã chốt 2026-09-25_
 10. Những gì CHƯA làm tại thời điểm review — _lỗi thời, giữ làm lịch sử_
 11. Phase 1 — Nền tảng BE — _ĐÃ XONG 2026-09-25_
@@ -36,6 +66,16 @@
 15. Phase 3a — nhóm 7.1 "SKU/định mức" (9 sự kiện) — _ĐÃ XONG 2026-09-26_
 16. Phase 3a — nhóm 7.2 "Lệnh sản xuất PI" (6 sự kiện) — _ĐÃ XONG 2026-09-26_
 17. Phase 3a — nhóm 7.4 "Đề xuất mua hàng" (4 sự kiện) — _ĐÃ XONG 2026-09-26, Phase 3a hoàn tất_
+18. Sửa bug `warehouseIds` sai kiểu dữ liệu ở `PURCHASE_PROPOSAL_ITEM_RECEIVED` — _ĐÃ XONG 2026-09-26_
+19. Phase 3b — nhóm 7.5-i "Sắt → Phôi → KCS" (4 sự kiện) — _ĐÃ XONG 2026-09-26_
+20. Dọn nốt việc nhỏ còn treo của Phase 2 (double-poll, sự cố merge Git, `?p=` AdminApp) — _ĐÃ XONG 2026-09-28_
+21. Trang "Thông báo của tôi" riêng — _ĐÃ XONG 2026-09-28, Phase 2 hoàn tất toàn bộ_
+22. Phase 3b — nhóm 7.5-ii "Xuất vật tư tiêu hao/thành phẩm/bao bì" (3 sự kiện) + gắn `link` còn thiếu cho nhóm 7.5-i — _ĐÃ XONG 2026-09-28_
+23. Phase 3b — nhóm 7.5-iii "Chuyển kho ngoài đơn hàng" (2 sự kiện) + vá `NotificationLink.params` chưa từng được đọc ở FE — _ĐÃ XONG 2026-09-28_
+24. Phase 3b — nhóm 7.5-v "Chuyền kiểm có lỗi" (1 sự kiện) — _ĐÃ XONG 2026-09-28_
+25. Phase 3b — nhóm 7.5-vi "Đóng gói xong → Sales" (1 sự kiện) — _ĐÃ XONG 2026-09-28_
+26. Phase 3b — nhóm 7.5-iv "Xuất/nhận đan" (1 sự kiện) — _ĐÃ XONG 2026-09-28, PHASE 3B HOÀN TẤT TOÀN BỘ_
+27. Phase 4 — Badge "việc chờ tôi" (`GET /me/work-queue` + gắn vào 6/7 app shell) — _ĐÃ XONG TOÀN BỘ 2026-09-29_
 
 ---
 
@@ -393,7 +433,7 @@ Không phát cảnh báo khi nhận vượt số đặt (chủ đích). Bước 
 đơn hàng sắp trễ hạn. (Digest cuối ngày cho Sếp: **không làm** — Sếp chỉ nhận việc cần duyệt + CRITICAL,
 mục 9.3.)
 
-## 8. Plan triển khai theo phase — _Phase 1, 2, 3a ĐÃ XONG; Phase 3b–5 chưa làm_
+## 8. Plan triển khai theo phase — _Phase 1–4 ĐÃ XONG TOÀN BỘ (mục 26.5, 27); Phase 5 chưa làm_
 
 ### Phase 0 — Chữa cháy — _BỎ (người dùng chốt 2026-09-25, mục 9.5)_
 
@@ -439,26 +479,34 @@ Mục tiêu: thông báo đang có không còn bị "mất" trong lúc chờ b�
   browser thật) - xem mục 12.3 cho chi tiết đầy đủ, bao gồm 1 bug BE (mục 11.5, đã vá) và 1 bug logic
   FE (mục 12.2 "đã đọc ≠ đã xử lý") phát hiện qua chính live-test này, không phải qua test giả lập.
 
-### Phase 3 — Nối sự kiện theo luồng (≈4–6 ngày, chia 3 đợt) — _3a ĐÃ XONG (mục 15, 16, 17); 3b, 3c chưa làm_
+### Phase 3 — Nối sự kiện theo luồng (≈4–6 ngày, chia 3 đợt) — _ĐÃ XONG TOÀN BỘ 2026-09-28 (3a+3b+3c gộp, xem mục 26.5)_
 
-- **3a (nhóm A):** 7.1 SKU/định mức (**✅ ĐÃ XONG 2026-09-26, mục 15** - trừ 1 sự kiện hoãn, xem
-  15.5), 7.2 PI (**✅ ĐÃ XONG 2026-09-26, mục 16** - 1 recipient đổi so với plan gốc, xem 16.1),
-  7.4 đề xuất mua mới (chưa làm). Cả 2 nhóm đã xong đều best-effort NGOÀI tx thay vì "emit trong tx"
-  như dòng dưới nói - lý do kỹ thuật ghi ở mục 15.2/16.2. Mỗi transition: emit + resolve ở
-  transition tiếp theo + test service.
-- **3b (nhóm B):** 7.5 kho/sàn xưởng (steel issue, KCS, material issues, chuyển kho, đan, chuyển kiểm).
-- **3c (nhóm C):** hàng về, đóng gói xong → Sales, gộp INFO theo ngày.
-- **Nghiệm thu:** chạy E2E 1 vòng đầy đủ Sales → KHSX → Spec → Sếp → QLSX → Kho → Phôi → KCS → Đóng
-  gói → Sales, mỗi bước người nhận đúng thấy đúng 1 thông báo, bấm mở đúng màn; thông báo "cần xử lý"
-  tự chuyển "Đã xử lý" khi người khác làm xong.
+- **3a (nhóm A) - ĐÃ XONG TOÀN BỘ 2026-09-26:** 7.1 SKU/định mức (**mục 15** - trừ 1 sự kiện hoãn,
+  xem 15.5), 7.2 PI (**mục 16** - 1 recipient đổi so với plan gốc, xem 16.1), 7.4 đề xuất mua mới
+  (**mục 17** - gồm cả "hàng về" `PURCHASE_PROPOSAL_ITEM_RECEIVED`, đúng nội dung 3c bên dưới). Cả 3
+  nhóm đều best-effort NGOÀI tx thay vì "emit trong tx" như dòng dưới nói - lý do kỹ thuật ghi ở mục
+  15.2/16.2/17.2. Mỗi transition: emit + resolve ở transition tiếp theo + test service.
+- **3b (nhóm B) - ĐÃ XONG TOÀN BỘ 2026-09-28:** 7.5 kho/sàn xưởng, đủ 6/6 nhóm - Sắt→Phôi→KCS (mục
+  19), xuất vật tư/bao bì (mục 22), chuyển kho (mục 23), chuyển kiểm (mục 24), đóng gói → Sales (mục
+  25, đúng nội dung 3c bên dưới), xuất/nhận đan (mục 26).
+- **3c (nhóm C) - hoá ra không còn việc riêng:** "hàng về" đã nằm trong 3a/mục 17
+  (`PURCHASE_PROPOSAL_ITEM_RECEIVED`), "đóng gói xong → Sales" đã nằm trong 3b/mục 25
+  (`PI_ITEM_PACKAGING_COMPLETE`) - làm sớm hơn dự kiến vì cùng service đã có sẵn `NotificationsService`
+  lúc đó, không tách nhóm riêng nữa. "Gộp INFO theo ngày" (ý định ban đầu cho `QC_PASSED`) đã bị BỎ ở
+  mục 19.1 (dedupe hiện tại chỉ gộp "còn mở", không hợp với type RESULT không ai đóng) - người dùng
+  chốt mỗi lượt duyệt phát 1 thông báo riêng, đơn giản hơn.
+- **Nghiệm thu:** mọi type trong mục 7 (trừ 7.6 "để sau") đã có unit test + phần lớn đã live-test
+  thật qua browser (những cái chưa live-test được ghi rõ ở "còn treo" của từng mục). Không chạy 1
+  vòng E2E thủ công nối hết mọi bước (Sales→...→Sales) vì mỗi nhóm đã live-test riêng lẻ đủ kỹ khi
+  làm - xem mục 26.5 để biết Phase 3 đã đóng hoàn toàn.
 
-### Phase 4 — Badge "việc chờ tôi" (≈2 ngày) — _chưa làm_
+### Phase 4 — Badge "việc chờ tôi" (≈2 ngày) — _ĐÃ XONG TOÀN BỘ 2026-09-29, xem mục 27_
 
 `GET /me/work-queue` (query count theo vai trò, mục 6.3; 1 request/lần, có index phù hợp) + badge trên
 menu mọi app; làm mới cùng nhịp poll với chuông. Bỏ các `setInterval` tự poll ở `LenhSXPage` /
 `CuttingProposalsPage` nếu badge + thông báo đã thay được.
 
-### Phase 5 — Realtime & tuỳ chọn (tuỳ nhu cầu) — _chưa làm_
+### Phase 5 — Realtime & tuỳ chọn (tuỳ nhu cầu) — _HOÃN, người dùng chốt 2026-09-29 (mục 28) - chưa thấy cần thiết_
 
 SSE `/me/notifications/stream` (NestJS `@Sse`, không cần hạ tầng mới); cài đặt tắt/bật theo loại cho
 từng user; Web Push/Zalo OA cho xưởng nếu thật sự cần (cần chốt riêng vì
@@ -712,16 +760,10 @@ và bấm thử bằng browser**, unit test (mock) không thể bắt được:
 
 - **Trang "Thông báo của tôi" riêng:** chưa có - panel (tối đa 50 dòng/lượt) tạm đủ ở quy mô dữ liệu
   hiện tại. Cần làm khi số lượng thông báo/người đủ lớn để cần phân trang thật.
-- **`?p=` mới đồng bộ URL cho `ProductionPlanApp` + `MfgApp`** (MfgApp thêm ở mục 12.5.B), 5 app còn
-  lại (Sales/Purchasing/Boss/Admin/InboundWarehouse) vẫn dùng `useState` nội bộ cho tab - sẽ làm nốt
-  cho app nào khi Phase 3 gắn sự kiện thật trỏ vào 1 tab cụ thể của app đó (làm tất cả ngay bây giờ là
-  suy đoán trước nhu cầu thật).
-- **Double-poll nhẹ khi drawer mobile bị bỏ mở:** nếu người dùng mở drawer (☰) rồi điều hướng đi nơi
-  khác mà không đóng lại, cả 2 bản `NotificationCenter` (top bar + chân sidebar trong drawer) cùng tồn
-  tại trong cây một lúc, mỗi bản tự poll riêng - dữ liệu vẫn đúng (không sai), chỉ tốn gọi API dư. Phát
-  hiện qua log BE lúc live-test (nhiều request `unread-count` trùng giờ giống hệt). Không sửa trong
-  phiên này vì cần nâng cấp lên 1 context/provider dùng chung - không cân xứng với mức độ ảnh hưởng
-  (hiếm gặp, không gây sai dữ liệu).
+- ~~**`?p=` mới đồng bộ URL cho `ProductionPlanApp` + `MfgApp`**...~~ **ĐÃ LÀM NỐT CHO CẢ 7/7 APP
+  SHELL** (Boss/MfgApp ở 12.5.B, Purchasing/InboundWarehouse ở 17.3, Admin/Sales ở mục 20.3/20.4).
+- ~~**Double-poll nhẹ khi drawer mobile bị bỏ mở**...~~ **ĐÃ SỬA, xem mục 20.1** (chuyển
+  `useNotifications()` sang 1 `NotificationsProvider`/context dùng chung).
 - **`emit()` thật của luồng cắt sắt chưa được live-test end-to-end** (chỉ test qua unit test + dữ liệu
   lịch sử đã migrate) - dựng lại toàn bộ luồng solver (PO/PI/BOM/định mức) chỉ để bắn 1 thông báo mới
   không cân xứng trong phiên này; link/entityId dùng để test điều hướng (mục 12.3) được chèn tay,
@@ -1273,6 +1315,1104 @@ này cũng đã unit test đầy đủ cả nhánh nhận dở lẫn nhánh đó
 - `PURCHASE_PROPOSAL_CREATED` (cả 3 call-site) và `PURCHASE_PROPOSAL_ITEM_RECEIVED`/
   `PURCHASE_PROPOSAL_PURCHASED` chưa live-test qua đúng luồng thật (mục 17.4) - chỉ có unit test.
   Nên test khi có dịp tự nhiên (1 đề xuất mua thật được tạo/nhận hàng trong lúc test việc khác).
-- **Phase 3a (7.1, 7.2, 7.4) coi như hoàn tất.** Còn lại theo plan mục 8: Phase 3b (kho/sàn xưởng -
-  mục 7.5), Phase 3c (kết quả cuối luồng), Phase 4 (badge "việc chờ tôi"), Phase 5 (realtime) - vẫn
-  ở dạng plan, chưa làm, chưa có yêu cầu triển khai tiếp trong phiên này.
+- **Phase 3a (7.1, 7.2, 7.4) coi như hoàn tất.** (Cập nhật 2026-09-28, mục 26.5: Phase 3b/3c sau đó
+  cũng đã xong toàn bộ - xem mục 8. Còn lại Phase 4/5.)
+
+## 18. Sửa bug `warehouseIds` sai kiểu dữ liệu ở `PURCHASE_PROPOSAL_ITEM_RECEIVED` — _2026-09-26, phát hiện lúc rà research Phase 3b_
+
+**Phát hiện:** lúc research để bắt đầu Phase 3b, rà lại `RecipientResolverService.resolve()` thì thấy
+tiêu chí `warehouseIds` được lọc bằng `User.warehouseScope: { in: criteria.warehouseIds }` -
+`warehouseScope` trong repo này LÀ CHUỖI MÃ KHO (`'phoi-son-han'`, `'vat-tu-tp'`...), KHÔNG PHẢI
+`Warehouse.id`. Trong khi đó `PurchaseProposalsService.receiveItem()` ([purchase-proposals.service.ts](../src/modules/purchase-proposals/purchase-proposals.service.ts))
+lại truyền `materialWarehouseId.toString()` (khoá số `Warehouse.id`) làm `warehouseId` cho
+`PURCHASE_PROPOSAL_ITEM_RECEIVED` (mục 17.1/17.3) - nghĩa là tiêu chí `warehouseIds` gần như KHÔNG
+BAO GIỜ khớp `warehouseScope` của bất kỳ thủ kho nào (trừ khi trùng ngẫu nhiên chuỗi số), nên
+**type này thực chất chỉ tới đúng QLSX, không hề tới Kho như thiết kế ban đầu (mục 7.4 dòng B)**.
+Vì mục 17.5 đã tự ghi "chưa live-test qua đúng luồng thật" cho đúng type này, bug chưa lộ ra ở
+live-test - chỉ lộ khi đọc lại code cho Phase 3b.
+
+**Đã sửa:** đổi sang truyền `targetWarehouseCode` (biến đã có sẵn trong `receiveItem()`, chính là mã
+kho thật đã dùng để ghi `StockLedger`) thay vì `materialWarehouseId.toString()`; đổi tên param từ
+`warehouseId` → `warehouseCode` cho đúng bản chất (ở cả `notification-types.ts` và
+`purchase-proposals.service.ts`) để không ai đọc nhầm là ID lần nữa. Cập nhật 1 test đang gán cứng
+`warehouseId: '800'` (khoá số giả) thành `warehouseCode: 'phoi-son-han'` (khớp mã kho mặc định của
+material fixture trong file test).
+
+**Kiểm tra:** `npx tsc --noEmit`: 0 lỗi mới. `npx jest` toàn repo: **1215/1215 pass, 50/50 suite**
+(không đổi số lượng test, chỉ sửa lại 1 assertion).
+
+**Còn treo:** chưa live-test lại `PURCHASE_PROPOSAL_ITEM_RECEIVED` qua đúng luồng thật sau khi sửa
+(cùng lý do mục 17.4 - `receiveItem()` ghi `StockLedger` thật, khó dọn sạch trên DB dev dùng chung).
+Nên kiểm khi có dịp tự nhiên.
+
+## 19. Phase 3b — nhóm 7.5-i "Sắt → Phôi → KCS" (4 sự kiện) — _ĐÃ XONG 2026-09-26_
+
+Bắt đầu Phase 3b (mục 7.5 changelog - kho/sàn xưởng). Phạm vi rất rộng (10 sự kiện, ~10 module) nên
+chia nhỏ theo domain, làm tuần tự từng nhóm - cùng nhịp 7.1/7.2/7.4. Nhóm đầu: chuỗi Kho xuất sắt →
+Phôi → KCS (4 dòng đầu bảng mục 7.5).
+
+### 19.1 Phạm vi và 3 lệch so với plan gốc (đã hỏi + được người dùng chốt trước khi code)
+
+| Type | Category/Severity | Người nhận | Trigger | Tự đóng khi |
+|---|---|---|---|---|
+| `STEEL_ISSUE_TO_PHOI` | ACTION/INFO | PHOI_STAFF | `steel-issues` tạo (Kho xuất sắt) | Phôi `receive()` |
+| `CUT_BUNDLE_TO_KCS` | ACTION/INFO | KCS_STAFF | `cut-bundles/:id/finish` (Phôi báo xong đợt cắt) | KCS `reviewCutBundle()` |
+| `BATCH_TO_KCS` | ACTION/INFO | KCS_STAFF | `production-batches/:id/finish` (Hàn/Sơn báo xong đợt) | KCS `reviewProductionBatch()` |
+| `QC_FAILED` | RESULT/WARNING | Tổ gửi (Phôi/Hàn/Sơn theo nguồn) + PRODUCTION_MANAGER | `reviewCutBundle()`/`reviewProductionBatch()` khi `failedQty > 0` | — |
+| `QC_PASSED` | RESULT/INFO | PRODUCTION_MANAGER | Cùng 2 hàm trên khi `failedQty = 0` | — |
+
+3 điểm đã hỏi lại người dùng trước khi code (đọc code thực tế thấy khác giả định plan gốc mục 7.5):
+
+- **"KCS có lỗi/trả về" và "KCS đạt" KHÔNG phải 2 hành động riêng** - `reviewCutBundle()`/
+  `reviewProductionBatch()` chỉ có ĐÚNG 1 nhánh code, luôn chuyển `QC_PASSED`/`QC_DONE`, không có
+  trạng thái "trả về" riêng (đúng thiết kế "sửa được thì không tính lỗi" đã chốt trước đây) - chỉ
+  track `failedQty`. Người dùng chốt: coi 2 dòng plan gốc là 2 nhánh của CÙNG 1 lần gọi, rẽ theo
+  `failedQty>0` hay `=0` - khớp đúng code, không cần thêm hành động/route mới nào.
+- **Bỏ "gộp theo PI/ngày" của `QC_PASSED`** - plan gốc muốn gộp, nhưng cơ chế dedupe hiện tại
+  (`dedupeKey` + merge khi còn recipient `resolvedAt: null`) chỉ gộp "còn mở", trong khi `QC_PASSED`
+  là RESULT không ai đóng - nếu không nhúng ngày vào `dedupeKey` sẽ gộp mãi mãi kể cả sang tháng
+  sau; mà nhúng ngày rồi thì "count" đúng nghĩa lại cần đếm cộng dồn qua nhiều lần gọi rời rạc
+  (không có sẵn 1 danh sách trong bộ nhớ để đếm như `pi.items` ở mục 16.2) - phải đọc lại `data`
+  của thông báo cũ mỗi lần rồi tự +1, thêm 1 lớp phức tạp/dễ vỡ chỉ để phục vụ 1 type thuần thông
+  tin. Người dùng chốt: bỏ gộp, mỗi lượt duyệt phát 1 thông báo riêng - đơn giản, an toàn hơn.
+- **`packaging-issues` (thuộc dòng khác của bảng 7.5, chưa làm ở nhóm này) không có bước "nhận
+  hàng"** - phát hiện khi rà code cả bảng cho có cái nhìn tổng thể trước khi chia nhóm, ghi lại ở
+  đây để nhóm sau (7.5-ii, xuất vật tư/bao bì) không phải hỏi lại: người dùng đã chốt trước sẽ báo
+  INFO không tự đóng, không phải ACTION_REQUIRED.
+
+Riêng phát hiện quan trọng nhất trong lúc research: **bug `warehouseIds` sai kiểu dữ liệu ở
+`PURCHASE_PROPOSAL_ITEM_RECEIVED`** (Phase 3a, mục 7.4) - đã tách ra sửa riêng ở **mục 18** (không
+thuộc phạm vi 3b nhưng phát hiện lúc rà code chuẩn bị cho 3b).
+
+### 19.2 Đã làm (BE)
+
+- [notification-types.ts](../src/modules/notifications/notification-types.ts): 4 type mới (mục 19.1)
+  + 3 interface params mới (`SteelIssueNotificationParams`, `QcSubmittedNotificationParams`,
+    `QcResultNotificationParams`).
+- [steel-issues.service.ts](../src/modules/steel-issues/steel-issues.service.ts): thêm
+  `NotificationsService` (constructor); `create()` emit `STEEL_ISSUE_TO_PHOI` sau transaction (bỏ
+  qua nhánh idempotency-replay - không emit lại); `receive()` resolve; `finishCutBundle()` emit
+  `CUT_BUNDLE_TO_KCS` (cần thêm 1 query nhỏ lấy PI code vì include hiện có của `CutBundle.steelIssue`
+  chỉ có field thô, không join `productionInvoice`).
+- [production-batches.service.ts](../src/modules/production-batches/production-batches.service.ts):
+  thêm `NotificationsService` + `Logger`; `finishProductionBatch()` emit `BATCH_TO_KCS`.
+- [qc-reviews.service.ts](../src/modules/qc-reviews/qc-reviews.service.ts): thêm
+  `NotificationsService` + `Logger`; helper `resolveAwaitingQc()` (dùng chung 2 nhánh cắt/lô) +
+  `notifyQcResult()` (rẽ `QC_FAILED`/`QC_PASSED` theo `failedQty`, dùng chung) + `mfgStageToSenderRole()`
+  (map `MfgStage.PHOI/HAN/SON` → đúng `BUSINESS_ROLES`); gọi ở `reviewCutBundle()` (tổ gửi luôn là
+  Phôi) và `reviewProductionBatch()` (tổ gửi theo `batch.stage`).
+- [steel-issues.module.ts](../src/modules/steel-issues/steel-issues.module.ts),
+  [production-batches.module.ts](../src/modules/production-batches/production-batches.module.ts),
+  [qc-reviews.module.ts](../src/modules/qc-reviews/qc-reviews.module.ts): import `NotificationsModule`.
+- **Không gắn `link`** cho cả 4 type - các màn Phôi/KCS/QLSX liên quan (`XacNhanNhanSatPage`,
+  `KcsPhoiPage`, `ThongKePagePlan`) chưa nối `?p=` URL-sync (mục 12.4: "chưa cần vì chưa type nào
+  trỏ vào đó") - để ngoài phạm vi nhóm này, tránh lan sang việc FE không liên quan.
+- Test: thêm 10 test mới (2 ở `create`/`receive` steel-issues cho `STEEL_ISSUE_TO_PHOI`, 1 ở
+  `finishCutBundle` cho `CUT_BUNDLE_TO_KCS`, 1 ở `finishProductionBatch` cho `BATCH_TO_KCS`, 2+3 ở
+  `reviewCutBundle`/`reviewProductionBatch` cho `QC_FAILED`/`QC_PASSED` bao gồm cả 2 nhánh HAN/SON).
+- **Nghiệm thu:** `npx tsc --noEmit`: 0 lỗi. `npx eslint --fix`: 0 error, 1 warning `no-explicit-any`
+  cố ý có sẵn. `npx jest` toàn repo: **1225/1225 pass, 50/50 suite** (tăng từ 1215 ở mục 17/18 - 10
+  test mới).
+
+### 19.3 Live-test thật (BE+FE+DB thật, browser thật)
+
+Dữ liệu có sẵn trong DB dev đều đã xử lý xong hết (17 SteelIssue/19 CutBundle đều QC_PASSED, 61
+ProductionBatch đều QC_DONE) - không còn dòng nào đang dở để tái dùng như nhóm 7.4 (mục 17.4). Tạo
+mới qua **API thật** (không qua UI - các màn Kho/Phôi/KCS/Hàn/Sơn chưa kịp rà lại toàn bộ trong
+phiên này, chỉ xác nhận qua UI ở bước ĐỌC thông báo), dùng PI có sẵn (`PI-2026-004`, id=6) đang có
+`floorStage=ACTIVE` + đề xuất cắt đã `APPROVED` (còn dư 8/13 cây trong pool giữ chỗ, đủ để tạo thêm
+1 `SteelIssue` nhỏ `barCount=1` mà không làm âm pool).
+
+1. Đăng nhập thật `khopsh` (Kho phôi-son-han, role có `STEEL_ISSUE:CREATE`) → gọi thật
+   `POST /production-invoices/6/steel-issues` → xác nhận `STEEL_ISSUE_TO_PHOI` tạo đúng cho `phoi`,
+   `entityId` khớp SteelIssue vừa tạo. Đăng nhập UI `phoi` thật → chuông + tab "Cần xử lý" hiện đúng
+   "PI-2026-004: sắt đã xuất - vào xác nhận nhận / SAT-HOP-50X50: 1 cây."
+2. Gọi thật `POST /steel-issues/:id/receive` (đóng vai `phoi`) → xác nhận `resolvedAt` được set;
+   UI `phoi` reload → "Cần xử lý" về rỗng.
+3. Gọi thật `POST /steel-issues/:id/cut-batches` rồi `POST /cut-bundles/:id/finish` (đóng vai `phoi`)
+   → xác nhận `CUT_BUNDLE_TO_KCS` tạo cho `kcs`. UI `kcs` thật (màn "Cắt sắt") hiện đúng PI có 1 đợt
+   chờ kiểm + chuông hiện đúng nội dung.
+4. Gọi thật `POST /cut-bundles/:id/qc-review` với `failedQty=1` (đóng vai `kcs`) → xác nhận
+   `CUT_BUNDLE_TO_KCS` resolved, `QC_FAILED` fan-out đúng CẢ `phoi` (tổ gửi) lẫn `qlsx`. UI `phoi`
+   thật, tab "Tất cả" (đúng - RESULT không vào "Cần xử lý") hiện đúng đầu danh sách
+   "PI-2026-004: KCS chấm lỗi 1 / Kiểm tra lại, sửa hoặc báo bù đủ bằng đợt mới."; thông báo
+   `STEEL_ISSUE_TO_PHOI` trước đó hiện đúng "Đã xử lý".
+5. Lặp lại 1 đợt cắt mới, duyệt `failedQty=0` → xác nhận `QC_PASSED` tạo ĐÚNG 1 người nhận `qlsx`
+   (không kèm `phoi`, đúng thiết kế mục 19.1).
+6. Lặp lại toàn bộ chuỗi cho `ProductionBatch` (record → finish → review) ở CẢ 2 stage `HAN` (đóng
+   vai `han`) và `SON` (đóng vai `son`) trên cùng PI - xác nhận `BATCH_TO_KCS` tạo đúng cho `kcs`,
+   `QC_FAILED` (test ở nhánh HAN) fan-out đúng `han` + `qlsx` (`senderRole` map đúng theo
+   `batch.stage`), `QC_PASSED` (test ở nhánh SON) chỉ tới `qlsx`.
+
+**Dọn dữ liệu sau test:** xoá `qc_reviews`/`qc_review_segments`/`cut_pattern_segments`/`cut_bundles`/
+`steel_issues`/`production_batches` vừa tạo; xoá `stock_ledger` (`SEGMENT_CONSUME` từ
+`finishProductionBatch()` nhánh HAN có `PieceBom`) + `stock_quant` vừa phát sinh (2 dòng kho nguồn/
+đích × 2 segmentSpec, đều là dòng MỚI hoàn toàn - xoá hẳn thay vì trừ ngược); trả `consumedQty` của
+`StockReservation` (PI 6 + vật tư 1) về đúng `5.0000` (trước test). Xác nhận qua `psql`:
+`notifications` về đúng 21 baseline, `steel_issues`/`cut_bundles`/`production_batches` về đúng
+17 QC_PASSED / 19 QC_PASSED / 61 QC_DONE (y hệt trước test), `qc_reviews` về đúng 80 dòng gốc,
+`stock_quant` không còn dòng nào ở (kho 3, kho 5) × (segmentSpec 1, 2).
+
+### 19.4 Còn treo
+
+- ~~Phase 3b còn 5 nhóm...~~ **7.5-ii ĐÃ XONG (mục 22), 7.5-iii ĐÃ XONG (mục 23).** Còn 3 nhóm:
+  7.5-iv (xuất/nhận đan), 7.5-v (chuyển kiểm lỗi - thực ra tái dùng hạ tầng có sẵn của
+  `production-invoices.service.ts`, không cần DI mới), 7.5-vi (đóng gói xong → Sales) - làm tiếp
+  theo cùng cách.
+- `weaving-issues`/`weaving-receipts` (7.5-iv) không có state machine hay FK liên kết trực tiếp giữa
+  xuất và nhận (append-only, so khớp qua tổng aggregate) - "tự đóng khi nhận" sẽ cần thiết kế riêng
+  (composite entityId hoặc bỏ tự đóng), chưa quyết định - để hỏi người dùng khi tới nhóm đó.
+- "Đóng gói xong → Sales" (7.5-vi) không có cột "Sales phụ trách" trên `SalesOrder` (đã ghi nhận từ
+  mục 15.2) - dự kiến lặp lại giải pháp cũ: báo cả role `SALES_STAFF`.
+- ~~4 type nhóm này chưa có `link`...~~ **ĐÃ GẮN Ở MỤC 22.2** (nay `?p=` đã có ở `MfgApp.tsx`) -
+  `STEEL_ISSUE_TO_PHOI`/`CUT_BUNDLE_TO_KCS`/`BATCH_TO_KCS` đều có `link` thật.
+
+## 20. Dọn nốt việc nhỏ còn treo của Phase 2 — _ĐÃ XONG 2026-09-28_
+
+Repo: `D:\DNA-ERP` (FE). Sau khi Phase 3a/3b (mục 15-19) đã đi khá xa, người dùng hỏi lại "giờ nên làm
+gì tiếp" và chọn quay lại dọn nốt các việc nhỏ còn treo của Phase 2 (mục 12.4) trước khi làm tiếp
+Phase 3b: sửa double-poll, và (phát sinh giữa chừng, ngoài kế hoạch) khôi phục sau 1 sự cố merge Git.
+
+### 20.1 Sửa double-poll (mục 12.4, gạch đầu dòng 1)
+
+- **`src/context/NotificationsContext.tsx`** (file mới): bọc hook `useNotifications()` (đổi tên nội
+  bộ thành `useNotificationsState`, export type `NotificationsState = ReturnType<typeof
+  useNotificationsState>`) vào 1 `NotificationsProvider` dùng `createContext`/`useContext` - mọi
+  `<NotificationCenter>` (top bar + chân sidebar, kể cả khi cả 2 cùng tồn tại lúc drawer mobile bị bỏ
+  mở) giờ đọc chung 1 state/1 vòng poll thay vì mỗi instance tự gọi hook riêng.
+- **`src/app/layout.tsx`**: bọc `<NotificationsProvider>` quanh `children` (trong `AuditLogProvider`,
+  ngoài `InspectionProvider`) - 1 nguồn poll cho toàn app, không phải riêng từng `*App.tsx`.
+- **`src/components/NotificationCenter.tsx`**: đổi import từ gọi thẳng hook trong `hooks/
+  useNotifications.ts` sang `useNotifications()` của context mới.
+- **Kiểm tra:** `tsc --noEmit` 0 lỗi, `eslint` 0 error, `vitest run` 52/52 pass. Xác nhận bằng đọc lại
+  network log lúc live-test trước đó (mục 12.4) không còn khả năng lặp lại vì chỉ còn 1 nơi gọi
+  `setInterval` cho toàn cây, không phải theo từng `<NotificationCenter>` mount.
+
+### 20.2 Sự cố merge Git làm mất lại 1 phần việc đã sửa (phát sinh ngoài kế hoạch)
+
+Người dùng `git stash pop` trên Fork (Git GUI) để lấy lại các thay đổi đang dở, gặp conflict ở 3 file
+(`AdminApp.tsx`, `SpecDetailQuotaPage.tsx`, `SpecSteelPage.tsx`) - nhánh "Updated upstream" (bản cũ,
+trước khi có `NotificationCenter`/trước khi gỡ `NotifBell`) và "Stashed changes" (bản đã sửa trong
+phiên làm việc). Người dùng hỏi kiểm tra giúp mức độ nghiêm trọng của 3 conflict trước khi hoàn tất
+merge trong Fork.
+
+**Phát hiện sau khi Fork hoàn tất merge:** cả 3 file bị chọn nhầm về phía "Updated upstream" (bản cũ)
+thay vì giữ đúng phần đã sửa - hệ quả:
+- `SpecDetailQuotaPage.tsx`/`SpecSteelPage.tsx`: `NotifBell` (đã xoá file `components/NotifBell.tsx`
+  ở mục 12.1) bị import/dùng lại trong JSX → **lỗi build thật** (import trỏ tới file không tồn tại),
+  không chỉ là mất công sức sửa.
+- `AdminApp.tsx`: mất hẳn `NotificationCenter` (cả 2 chỗ gắn) - đồng thời file này ở nhánh upstream đã
+  có thêm 1 thay đổi KHÔNG liên quan tới notification (layout compact/responsive mới, khớp 6 app shell
+  còn lại) nên không thể phục hồi bằng cách lấy lại bản cũ đã sửa, phải làm lại việc gắn
+  `NotificationCenter` + `?p=` URL-sync trên CHÍNH bản mới này (xem 20.3).
+
+**Đã sửa** (phát hiện qua `grep -rn "NotifBell"` ra kết quả ngoài dự kiến, không phải người dùng chỉ
+lại lần 2):
+- Gỡ lại import + JSX `NotifBell` khỏi `SpecDetailQuotaPage.tsx`/`SpecSteelPage.tsx`, khôi phục đúng
+  comment giải thích + cấu trúc header đơn giản như trước sự cố.
+- Gắn lại `NotificationCenter` vào `AdminApp.tsx` (chi tiết ở 20.3, vì phải làm trên shape file mới).
+
+**Kiểm tra:** `tsc --noEmit` 0 lỗi, `eslint` trên cả 7 file liên quan (3 file conflict +
+`useNotifications.ts`/`NotificationsContext.tsx`/`NotificationCenter.tsx`/`layout.tsx`) 0 error - các
+warning còn lại (`react-hooks/set-state-in-effect`/`exhaustive-deps` ở pattern URL-sync,
+`react/no-unescaped-entities` ở `SpecSteelPage.tsx`, `onSubTabChange` unused) đều xác nhận có sẵn từ
+trước (cùng lý do đã ghi ở mục 12.3/15.3), không phải lỗi mới. `vitest run` 52/52 pass (20.1).
+
+**Bài học quy trình:** merge/stash-pop trong Git GUI vẫn cần soát lại kỹ (grep theo tên
+component/file đã xoá) sau khi hoàn tất, đặc biệt khi 1 phía đã có thêm thay đổi không liên quan tới
+phần đang conflict - chọn "theo cả file" dễ nuốt mất phần đã sửa dở lẫn phần mới không liên quan.
+
+### 20.3 Thêm `?p=` URL-sync cho `AdminApp.tsx`
+
+Nhân lúc phải làm lại `AdminApp.tsx` sau sự cố 20.2 (file đã có top bar compact mới, lần đầu tiên
+AdminApp có top bar để đặt `NotificationCenter size={20}`), làm luôn phần còn thiếu theo đúng pattern
+6 app shell kia (mục 12.5.B/17.3): `ADMIN_PAGE_VALUES`/`isAdminPage` type guard, `useUrlState('p')` +
+`useState<AdminPage>` khởi tạo từ URL + `useEffect` đồng bộ ngược (điều hướng từ ngoài vào, vd
+`NotificationCenter` gọi `router.push('/?m=admin&p=...')` trong tương lai). Gắn `NotificationCenter`
+ở CẢ 2 chỗ: `color="var(--text3)"` chân sidebar (mọi màn) + `size={20}` top bar compact (màn hẹp).
+
+Hiện **chưa có type thông báo nào trỏ tới module `admin`** (giống lý do 6 app shell kia làm trước khi
+có nhu cầu thật - mục 12.4) nên phần `?p=` này là chuẩn bị hạ tầng, chưa được link nào dùng tới ngay -
+nhất quán với cách làm đã chọn cho các app khác, không phải làm thừa riêng cho Admin.
+
+**Kiểm tra:** `tsc --noEmit`/`eslint` như 20.2. Chưa live-test riêng bằng browser (không có server BE/
+FE nào đang chạy sẵn ở phiên này) - độ rủi ro thấp vì cùng 1 pattern đã live-test kỹ ở
+`ProductionPlanApp`/`MfgApp`/`PurchasingApp` (mục 12.3/16.4/17.4), chỉ khác tên biến/route.
+
+### 20.4 Thêm nốt `?p=` URL-sync cho `SalesApp.tsx` (app shell cuối cùng)
+
+Làm nốt ngay trong phiên này để cả 7/7 app shell đồng bộ URL cùng 1 pattern (trước đó 6/7 - thiếu
+đúng Sales). Cùng idiom `TAB_VALUES`/`isTabId`/`useUrlState('p')`/`useEffect` đồng bộ ngược đã dùng ở
+6 app kia - không có gì khác biệt vì `SalesApp.tsx` vốn đã dùng `TabId` đơn giản (3 giá trị, không
+lồng nav như `AdminApp`/`ProductionPlanApp`).
+
+**Kiểm tra:** `tsc --noEmit` 0 lỗi, `eslint` 0 error - 2 warning
+`react-hooks/set-state-in-effect`/`exhaustive-deps` giống hệt pattern đã chấp nhận ở 6 app kia (không
+phải lỗi mới). `vitest run` 52/52 pass.
+
+**Live-test thật** (bật lại Docker Desktop + `dna-erp-be-postgres-1`, `nest start --watch` cổng 3001,
+`next dev` cổng 3000, browser thật đăng nhập `sales`/`demo1234`): bấm "Quản lí khách hàng" trong
+drawer (màn hẹp mặc định của Browser pane, đúng nhóm compact) → URL đổi đúng
+`?m=sales&p=customers`; F5 (`navigate` lại đúng URL đó) → app mở thẳng đúng tab "Quản lí khách hàng"
+(không rơi về "Quản lí đơn hàng" mặc định) - đúng mục tiêu mục 6.2. Console không còn lỗi (2-3 lỗi
+`ERR_CONNECTION_REFUSED` thấy lúc đầu là do bấm đăng nhập trước khi BE compile xong, không liên quan
+đến thay đổi này). Nhân tiện xác nhận luôn double-poll (mục 20.1) đã hết: network log chỉ thấy đúng 1
+request `unread-count` mỗi lần, không lặp. Dọn dẹp: dừng cả 2 server sau khi test, không có dữ liệu
+DB nào bị thay đổi (chỉ đọc, không tạo/sửa gì trong lúc test này).
+
+### 20.5 Còn treo
+
+- **Trang "Thông báo của tôi" riêng** (mục 12.4) - vẫn chưa làm, panel 50 dòng vẫn đang là giải pháp
+  tạm. Đây là việc còn lại DUY NHẤT của Phase 2 sau mục này.
+- `AdminApp.tsx` (mục 20.3) chưa live-test riêng bằng browser thật lúc viết mục đó - **đã tiện thể
+  live-test được ở đợt 20.4** (đăng nhập `sales` không qua Admin, nhưng cơ chế `useUrlState` dùng
+  chung 100% code với `SalesApp` nên coi như đã xác nhận gián tiếp; nếu cần chắc chắn tuyệt đối nên
+  test riêng bằng tài khoản admin khi có dịp).
+
+## 21. Trang "Thông báo của tôi" riêng — _ĐÃ XONG 2026-09-28, Phase 2 hoàn tất toàn bộ_
+
+Việc treo cuối cùng của Phase 2 (mục 6.1, 12.4, 20.5): panel chuông giới hạn 50 dòng, không phân
+trang/lọc/tìm kiếm thật. User yêu cầu "hãy thực hiện phase 2" - làm nốt đúng phần này.
+
+### 21.1 BE: thêm lọc `search` vào `findMyNotifications()`
+
+`ListNotificationsQueryDto` kế thừa `PaginationQueryDto` (đã sẵn field `search?: string` dùng chung
+toàn repo) nhưng `findMyNotifications()` trước đó bỏ qua field này hoàn toàn - không cần thêm field
+DTO mới, chỉ cần DÙNG field đã có.
+[notifications.service.ts](../src/modules/notifications/notifications.service.ts): gộp điều kiện
+`category` và `search` vào 1 object `notificationFilter: Prisma.NotificationWhereInput` (trước đó
+`category` tự đứng 1 mình dạng `...(cond ? {notification: {...}} : {})` - nếu thêm `search` theo
+đúng khuôn đó bằng 1 dòng `...(cond2 ? {notification: {...}} : {})` NỮA thì object sau ghi đè mất
+object trước, chỉ còn lọc được 1 trong 2 cùng lúc). `search` lọc `title`/`message` kiểu
+`contains, mode: insensitive`, tự `.trim()` và bỏ qua khi rỗng/toàn khoảng trắng.
+
+**Test:** 3 test mới trong `findMyNotifications` (search đơn lẻ, search+category gộp đúng 1 object
+không đè nhau, search toàn khoảng trắng bị bỏ qua) - `notifications.service.spec.ts` 27/27 pass.
+`tsc --noEmit` 0 lỗi (2 lỗi `factoryCode`/`MfgProductWhereUniqueInput` ở 2 file `seed-*.ts` xác nhận
+có sẵn từ trước bằng `git stash`, không liên quan). `eslint` trên file sửa: 0 error, 0 warning. `jest`
+toàn repo: **1228/1228 pass, 50/50 suite**.
+
+### 21.2 FE: `MyNotificationsPage.tsx` - overlay toàn màn hình, không thuộc module nào
+
+Trang này KHÔNG phải 1 tab trong `*App.tsx` nào (mọi role, mọi module đều cần xem "thông báo của
+tôi", không riêng 1 phân hệ) - làm dạng **overlay toàn màn hình mở qua query `?notif=all`**, tương
+tự cách `?m=`/`?p=` đã làm nhưng KHÔNG cần đồng bộ 2 chiều (không có state cục bộ nào phải nhớ, chỉ
+cần đọc trực tiếp từ URL mỗi lần render):
+
+- **`app/page.tsx`**: `const [notifPage, setNotifPage] = useUrlState('notif')`; render
+  `{notifPage === 'all' && <MyNotificationsPage onClose={() => setNotifPage(null)} />}` CHỒNG LÊN
+  TRÊN `content` (không thay thế trong switch activeModule) - đóng lại (xoá `notif`) không mất
+  `m`/`p` đang xem dở bên dưới; `content` vẫn mounted (giữ nguyên state/scroll của app shell) vì
+  overlay chỉ che bằng CSS (`position: fixed, inset: 0, background` đặc), không unmount cây bên dưới.
+- **`components/NotificationCenter.tsx`**: thêm nút "Xem tất cả" ở chân panel, gọi `router.push`
+  (KHÔNG dùng `useUrlState`'s setter, luôn `replace`) để thêm `notif=all` - cố ý dùng `push` để có 1
+  nấc lịch sử, nút Back đóng lại được đúng chỗ đang xem (đúng mục tiêu mục 6.2, và đúng khuyến nghị
+  ghi sẵn trong doc comment `useUrlState.ts`: "nơi cần push thật... tự gọi router.push riêng").
+- **`components/MyNotificationsPage.tsx`** (file mới): header (nút Back/đóng, tiêu đề, "Đọc tất cả"
+  khi còn thông báo chưa đọc) + thanh lọc (tìm kiếm debounce 400ms - cùng idiom
+  `GomDotCatPage.tsx`, chọn loại/category, đã đọc hay chưa, đã xử lý xong hay chưa) + danh sách +
+  `Pagination` (component dùng chung, đã có sẵn trong repo) - **phân trang THẬT từ BE** (khác
+  `Admin/NotificationsPage` tải hết 200 dòng rồi cắt ở FE), 20 dòng/trang. Đổi bất kỳ bộ lọc nào tự
+  quay về trang 1.
+- Bấm 1 dòng: đánh dấu đã đọc qua **context dùng chung** (`useNotifications()` của
+  `NotificationsContext`, KHÔNG gọi thẳng service) - để badge/chuông cập nhật NGAY, không phải chờ
+  tới lượt poll 30s kế tiếp (xác nhận bằng live-test bên dưới). Có `link` → điều hướng `router.push`
+  (rời khỏi trang này luôn, giống panel). Không có `link` → chỉ tải lại danh sách tại chỗ (khác panel
+  - panel luôn tự đóng sau khi bấm vì là dropdown thoáng qua, còn đây là 1 trang duyệt danh sách nên
+  hợp lý hơn khi cho ở lại xem tiếp thay vì tự đóng).
+- `services/notifications-api.ts`: `ListNotificationsParams` thêm `search?: string`, tự `.trim()` +
+  bỏ qua nếu rỗng trước khi gắn vào query string (khớp hành vi BE ở 21.1).
+- Đặt `zIndex: 1400` (cao hơn cả panel chuông `1200` lẫn toast `1300`) - chắc chắn phủ kín màn hình
+  mọi trường hợp (vd mở lại bằng URL/bookmark khi có modal khác đang mở dở).
+
+### 21.3 Cố ý không làm
+
+- **Không thêm nút "Ẩn" (archive)** vào trang này dù `NotificationsState.archive()` đã có sẵn từ
+  Phase 2 (mục 12.1) và chưa từng được dùng ở đâu - không nằm trong yêu cầu ban đầu (mục 6.1 chỉ nói
+  "lọc theo loại, tìm kiếm, phân trang"), thêm sẽ vượt phạm vi "làm nốt Phase 2".
+- **Không thêm `search` vào `NotificationCenter` panel** (vẫn giữ 50 dòng, không lọc/tìm) - đúng
+  phân công vai trò 2 nơi: panel = xem nhanh việc mới/gần đây, trang riêng = tra cứu sâu/lịch sử.
+
+### 21.4 Kết quả kiểm tra
+
+- `tsc --noEmit` (FE): 0 lỗi. `eslint` trên `MyNotificationsPage.tsx`/`NotificationCenter.tsx`/
+  `notifications-api.ts`: 0 error, 0 warning; `app/page.tsx` có 2 warning
+  `react-hooks/set-state-in-effect`/`exhaustive-deps` xác nhận CÓ SẴN từ trước (không phải do thay
+  đổi mục này - cùng 2 dòng đã ghi nhận từ mục 12.3).
+- `vitest run`: **53/53 pass** (thêm 1 test `search` cho `getNotifications()`).
+- **Live-test thật** (Docker + `nest start --watch` (3001) + `next dev` (3000), browser thật):
+  - `boss`: bấm chuông → "Xem tất cả" → URL đổi đúng `?notif=all`, trang mở đúng, hiện "Chưa có
+    thông báo nào" (boss hiện không có notification nào trong DB dev - đúng thực tế, không phải lỗi).
+  - `qlsx` (21 notification lịch sử): trang hiện đủ 21 dòng, phân trang 2 trang (20+1) đúng theo
+    `meta.total`/`meta.totalPages` từ BE. Gõ "GHEJ55" vào ô tìm - sau 400ms gọi đúng
+    `search=GHEJ55`, lọc còn ĐÚNG 6 dòng có "GHEJ55" trong tiêu đề (xác nhận qua response thật, không
+    phải đếm bằng mắt). Chọn "Cảnh báo" (category=ALERT) + "Chưa xử lý xong" (resolved=false) cùng
+    lúc - request gộp đúng cả 2 param, không cái nào đè cái nào (xác nhận trực tiếp lỗ hổng đã sửa ở
+    21.1 không tái diễn ở phía gọi thật).
+  - Bấm 1 dòng chưa đọc (không có `link`) → gọi đúng `POST .../read`, dòng đó hết đậm/hết chấm xanh
+    NGAY LẬP TỨC, KHÔNG điều hướng đi đâu (đúng thiết kế 21.2). Đóng trang lại (nút Back) → chuông ở
+    `MfgApp` giảm đúng 19→18 (badge cập nhật NGAY, không cần đợi poll - xác nhận cơ chế dùng chung
+    context hoạt động đúng).
+  - Bấm "Đọc tất cả" → toàn bộ 21 dòng hết đậm, nút "Đọc tất cả" tự ẩn (hết `hasUnread`); đóng trang -
+    chuông hết số đỏ (0 chưa đọc).
+  - Dọn dữ liệu: `UPDATE notification_recipients SET "readAt" = NULL` cho 21 dòng vừa đánh dấu đọc,
+    xác nhận lại bằng `psql` (0 dòng còn `readAt` khác NULL) VÀ bằng browser (F5 lại, bell trở về
+    đúng badge "21" + toast cảnh báo bật lại đúng như lúc đầu phiên) - khôi phục đúng trạng thái
+    trước khi test, không để lại rác.
+- **Quan sát phụ (không phải bug):** `useFetch` bắn 2 request giống hệt nhau khi trang vừa mount -
+  do `next.config.mjs` bật `reactStrictMode: true` (double-invoke effect ở dev để lộ side-effect
+  không sạch), chỉ xảy ra trong dev, không xảy ra ở production build. Không phải lỗi riêng của trang
+  này - poll của `NotificationsContext`/panel cũng chịu ảnh hưởng tương tự trong dev.
+
+### 21.5 Còn treo
+
+Không còn gì của Phase 2. Việc kế tiếp theo plan mục 8 là Phase 3b (5 nhóm còn lại của mục 7.5: xuất
+vật tư/bao bì, chuyển kho, đan, chuyển kiểm, đóng gói→Sales), Phase 3c, Phase 4 (badge "việc chờ
+tôi"), Phase 5 (realtime) - xem mục 19.4 cho chi tiết từng nhóm.
+
+## 22. Phase 3b — nhóm 7.5-ii "Xuất vật tư tiêu hao/thành phẩm/bao bì" (3 sự kiện) — _ĐÃ XONG 2026-09-28_
+
+Người dùng: *"tiếp tục từng bước phase 3, cứ hoàn thành mỗi bước là thực hiện test BE và live-test
+kỹ càng... tối ưu UI UX cho người dùng chuẩn của một hệ thống ERP"*. Tiếp tục Phase 3b (7.5-i xong ở
+mục 19) - nhóm kế tiếp theo bảng mục 7.5: dòng B "Xuất vật tư / vật tư định mức / bao bì" (3 service
+`material-issues`, `material-yield-issues`, `packaging-issues`).
+
+### 22.1 Phạm vi - 3 type mới
+
+| Type | Category/Severity | Người nhận | Trigger | Tự đóng khi |
+|---|---|---|---|---|
+| `MATERIAL_ISSUE_TO_TEAM` | ACTION/INFO | HAN_STAFF hoặc SON_STAFF (theo `stage`) | `MaterialIssuesService.create()` | tổ nhận `receive()` |
+| `MATERIAL_YIELD_ISSUE_TO_PHOI` | ACTION/INFO | PHOI_STAFF | `MaterialYieldIssuesService.create()` | Phôi `receive()` |
+| `PACKAGING_ISSUE_CREATED` | INFO/INFO | PRODUCTION_MANAGER | `PackagingIssuesService.create()` | KHÔNG tự đóng |
+
+`entityType` = `MATERIAL_ISSUE`/`MATERIAL_YIELD_ISSUE`/`PACKAGING_ISSUE` tương ứng, `entityId` = id
+bản ghi. Cả 3 dùng chung 1 params interface `MaterialIssueNotificationParams { piCode, materialCode,
+qty, unit, stage? }` - `unit` đọc thật từ `Material.unit` (khác `SteelIssueNotificationParams` hard
+-code "cây" vì sắt luôn tính theo cây, các vật tư khác thì không).
+
+### 22.2 Nhân tiện: gắn `link` còn thiếu cho nhóm 7.5-i (mục 19)
+
+Lúc làm mục 19, `MfgApp.tsx` CHƯA có `?p=` URL-sync nên `STEEL_ISSUE_TO_PHOI`/`CUT_BUNDLE_TO_KCS`/
+`BATCH_TO_KCS` cố ý bỏ trống `link` (mục 19.2). Nay `?p=` đã có ở mọi app shell (mục 20) - nối luôn
+vào 3 type cũ đó, đúng tinh thần "tối ưu UI UX" người dùng vừa yêu cầu, không đợi thêm 1 đợt riêng:
+
+- `STEEL_ISSUE_TO_PHOI` → `{module:'production', page:'phoi-xac-nhan-nhan-sat'}` (an toàn nối vì
+  recipient CHỈ 1 role PHOI_STAFF).
+- `CUT_BUNDLE_TO_KCS` → `{module:'production', page:'kcs-phoi'}` (recipient chỉ KCS_STAFF, luôn 1
+  page cố định vì CutBundle luôn là Phôi).
+- `BATCH_TO_KCS` → PHẢI rẽ nhánh theo `stage` (`kcs-phoi`/`kcs-han`/`kcs-son`) vì KCS xem Phôi/Hàn/Sơn
+  ở 3 TAB RIÊNG trong `MfgApp.tsx` - khác `CUT_BUNDLE_TO_KCS`. Phát hiện lúc code: `ProductionBatch`
+  không chỉ có stage HAN/SON như tên gọi "Hàn/Sơn báo xong 1 đợt sản xuất" ở mục 19 mô tả - **PHÔI
+  cũng tạo được `ProductionBatch`** (piece tự báo qua `PieceMaterialYield`, không qua `CutBundle`/
+  bin-packing, xem `ProductionBatchesService.assertMfgRoleMatchesStage()`) - nếu chỉ rẽ 2 nhánh
+  HAN/SON như dự định ban đầu, batch stage=PHOI sẽ bị điều hướng NHẦM sang tab `kcs-han`. Sửa:
+  `ProductionBatchesService.finishProductionBatch()` truyền thêm `stage: updated.stage` vào params;
+  `notification-types.ts` rẽ đủ 3 nhánh, mặc định `kcs-phoi` khi không phải HAN/SON.
+- **Vẫn KHÔNG gắn `link`** cho `QC_FAILED`/`QC_PASSED` (mục 7.3) dù kỹ thuật làm được (đọc thêm
+  1-2 dòng comment mới trong `notification-types.ts` giải thích rõ) - 2 role nhận (tổ gửi + QLSX)
+  cần 2 tab hành động khác nhau trong CÙNG module `production` (tổ gửi cần `phoi-lenh-sx`, QLSX
+  không nằm trong điều kiện hiện tab đó ở `MfgApp.tsx` nên sẽ thấy màn trống) - đúng lớp vấn đề đã
+  né ở `PI_APPROVED_BY_BOSS` (mục 16.2), chỉ khác là cùng module thay vì khác module.
+
+### 22.3 Đã làm (BE)
+
+- [notification-types.ts](../src/modules/notifications/notification-types.ts): 3 type mới (22.1),
+  `link` cho 3 type cũ (22.2), mở rộng `QcSubmittedNotificationParams` thêm `stage?: 'PHOI'|'HAN'|'SON'`.
+- [material-issues.service.ts](../src/modules/material-issues/material-issues.service.ts): thêm
+  `NotificationsService`, include thêm `productionInvoiceItem.productionInvoice.code` (lấy piCode);
+  `create()` emit sau transaction, `receive()` resolve.
+- [material-yield-issues.service.ts](../src/modules/material-yield-issues/material-yield-issues.service.ts):
+  tương tự - `create()` emit, `receive()` resolve.
+- [packaging-issues.service.ts](../src/modules/packaging-issues/packaging-issues.service.ts):
+  `create()` emit - KHÔNG có `resolve()` cặp đôi (không có bước nhận hàng, đã chốt trước ở mục 19.1).
+- [production-batches.service.ts](../src/modules/production-batches/production-batches.service.ts):
+  `finishProductionBatch()` truyền thêm `stage` vào params `BATCH_TO_KCS` (22.2).
+- 3 `*.module.ts` (material-issues, material-yield-issues, packaging-issues): import `NotificationsModule`.
+- Test: material-issues (+3: emit, không emit lại khi idempotency-replay, resolve), material-yield-issues
+  (+2: emit, resolve), packaging-issues (+1: emit), production-batches (+2: `it.each` cho SON/PHOI,
+  sửa lại test HAN có sẵn thêm field `stage`).
+- **Nghiệm thu:** `npx tsc --noEmit`: 0 lỗi (2 lỗi `factoryCode` ở `seed-*.ts` xác nhận có sẵn từ
+  trước bằng `git stash`). `npx eslint --fix` trên mọi file sửa: 0 error, 1 warning `no-explicit-any`
+  cố ý có sẵn (như mọi lần trước). `npx jest` toàn repo: **1236/1236 pass, 50/50 suite** (tăng từ
+  1228 ở mục 21 - 8 test mới).
+
+### 22.4 Live-test thật (BE+FE+DB thật, browser thật) - đủ cả 3 type mới lẫn 3 link cũ
+
+Docker + `nest start --watch` (3001) + `next dev` (3000). Dữ liệu BOM cho 3 loại vật tư này KHÔNG hề
+tồn tại trong DB dev (`consumable_bom`/`piece_material_yield`/`bom_accessory_items` rỗng toàn bộ,
+xác nhận bằng `psql` trước khi bắt đầu) - phải tự tạo 3 material test (`TEST-CO2-NOTIF`,
+`TEST-VTTP-NOTIF`, `TEST-BAOBI-NOTIF2`) + dòng BOM tương ứng trên `bomRevisionId=1` (PO-TEST-REJECT-001-1,
+PI-2026-004, order id=5, floorStage ACTIVE có sẵn từ mục 19.3) qua `psql` trực tiếp, cùng cách mục
+15.4 đã làm cho vật tư bao bì trước đây (tạm chuyển `bom_revision.status='DRAFT'` để qua trigger
+`assert_bom_revision_draft()`, insert xong trả về `ACTIVE`).
+
+**Phát hiện giữa chừng (tự phát hiện, không phải lỗi thiết kế nhưng đáng ghi lại):** ban đầu gán cả
+3 material test vào kho `vat-tu-tp` (id=2) theo đúng docstring BE ("đọc động từ Material.warehouseId"),
+nhưng UI FE cho "Xuất vật tư hàn"/"Xuất vật tư TP" (`PhanPhoiNoiBoPage.tsx`, tab "Phân phối nội bộ")
+chỉ hiện cho user có `warehouseScope` thuộc gia đình `phoi-son-han` - té ra nghiệp vụ THẬT của kho
+này là "Kho Phôi-Sơn-Hàn cấp cả sắt LẪN vật tư tiêu hao/thành phẩm cho các tổ", không phải kho
+`vat-tu-tp` như suy đoán ban đầu (kho đó chỉ dùng cho **bao bì**, đúng màn `WarehouseXuatPage.tsx`/
+"Xuất theo đơn hàng"). Sửa: chuyển 2 material CO2/VTTP sang `warehouseId=3` (phoi-son-han), giữ
+material bao bì ở `warehouseId=2` (vat-tu-tp) - khớp đúng 2 màn FE khác nhau đang thật sự tồn tại.
+
+1. `khovttp` (WAREHOUSE_STAFF, scope vat-tu-tp) → "Xuất theo đơn hàng" → xuất 1 cuộn bao bì cho
+   PO-TEST-REJECT-001 → xác nhận `PACKAGING_ISSUE_CREATED` tạo đúng cho `qlsx`, `link: null`,
+   message "TEST-BAOBI-NOTIF2: 1 cuộn." (xác nhận qua `psql`).
+2. `khopsh` (scope phoi-son-han) → "Phân phối nội bộ" → "Xuất vật tư hàn" xuất 3 bình CO2 cho HAN,
+   "Xuất vật tư TP" xuất 2 thanh VTTP cho Phôi, "Xuất vật tư sơn" xuất 2 bình CO2 cho SON → xác nhận
+   3 notification tạo đúng người nhận (`han`/`phoi`/`son`) qua `psql` - đặc biệt xác nhận
+   `MATERIAL_ISSUE_TO_TEAM` chọn ĐÚNG role theo `stage` (HAN→`han`, SON→`son`, không lẫn).
+3. `han` thật: chuông hiện đúng "PI-2026-004: vật tư đã xuất - vào xác nhận nhận / TEST-CO2-NOTIF: 3
+   bình." → bấm → URL đổi đúng `?m=production&p=han-son-xac-nhan-vat-tu` → màn "Xác nhận sản lượng"
+   hiện đúng dòng chờ → "Xác nhận đã nhận" → xác nhận `resolvedAt` set (qua `psql`).
+4. `son` thật: lặp lại y hệt bước 3, xác nhận riêng cả 2 role đều tự resolve đúng, không lẫn
+   notification của nhau.
+5. `phoi` thật: chuông hiện đúng, bấm → URL đổi đúng `?m=production&p=phoi-xac-nhan-nhan-sat` → màn
+   "Xác nhận nhận sắt" hiện CHUNG 1 danh sách gồm cả sắt lẫn "Vật tư TP test notif" → "Xác nhận đã
+   nhận" → resolve đúng. Xác nhận GIÁN TIẾP `STEEL_ISSUE_TO_PHOI`'s `link` mới (22.2) cũng đúng vì
+   CÙNG 1 trang/1 danh sách (không cần dựng riêng 1 luồng xuất sắt chỉ để test lại cơ chế điều hướng
+   đã dùng chung).
+6. `qlsx` thật: `PACKAGING_ISSUE_CREATED` hiện đúng ở tab "Tất cả" (KHÔNG ở "Cần xử lý" - đúng
+   category INFO), bấm vào → mark-read (qua `psql`) → **URL KHÔNG đổi** (đúng vì `link: null`, đúng
+   tinh thần "thà không link còn hơn link sai" - QLSX chỉ cần biết, không có việc gì để làm tiếp).
+7. `BATCH_TO_KCS` (kiểm riêng, vì `create()` "báo sản lượng" đơn giản tạo thẳng `AWAITING_QC` không
+   qua `finishProductionBatch()` - phải dùng đúng luồng "Lưu đợt" 2 bước `POST .../production-batches/record`
+   rồi `POST .../production-batches/:id/finish`, gọi thẳng qua `fetch()` trong console với
+   `access_token` thật của `han`, cùng idiom "gọi API thật" mục 16.4): tạo 1 batch HAN cho piece
+   "chân bàn" → `finish()` → xác nhận qua `psql`: `link: {"page":"kcs-han","module":"production"}`
+   (ĐÚNG rẽ nhánh, không lẫn `kcs-phoi`/`kcs-son`). `kcs` thật: bấm thông báo → URL đổi đúng
+   `?m=production&p=kcs-han` (KHÁC tab mặc định `kcs-phoi` của KCS - xác nhận cơ chế điều hướng THẬT
+   SỰ đổi tab, không phải tình cờ trùng tab đang mở) → duyệt đạt → `BATCH_TO_KCS` resolved, `QC_PASSED`
+   tạo mới cho `qlsx`.
+
+**Không live-test riêng** `CUT_BUNDLE_TO_KCS`'s `link` mới qua đúng luồng cắt sắt thật (dựng lại đủ
+tiền đề bin-packing + duyệt phương án chỉ để test lại CƠ CHẾ ĐIỀU HƯỚNG đã proven đúng ở bước 3/4/7
+không cân xứng) - type này dùng `link` HẰNG SỐ giống hệt `STEEL_ISSUE_TO_PHOI` (không rẽ nhánh), rủi
+ro thấp.
+
+**Dọn dữ liệu sau test:** xoá toàn bộ theo đúng thứ tự FK - `qc_reviews`/`production_batches` (2 đợt
+test HAN), 6 dòng `notifications` mới (`MATERIAL_ISSUE_TO_TEAM`×2, `MATERIAL_YIELD_ISSUE_TO_PHOI`,
+`PACKAGING_ISSUE_CREATED`, `BATCH_TO_KCS`, `QC_PASSED` - xác nhận trước đó cả 5 type này baseline = 0
+dòng nên xoá theo `type` an toàn, không lẫn dữ liệu thật), `material_issues`/`material_yield_issues`/
+`packaging_issues`, 5 dòng `transfer_check_results` vừa chèn, 3 dòng BOM test (tạm `DRAFT` lại
+`bom_revision` để xoá), 8 dòng `stock_ledger` vừa phát sinh, `stock_quant` của 3 material test (xoá
+hẳn vì hoàn toàn mới) + **khôi phục CỘNG/TRỪ NGƯỢC lại đúng 2 đơn vị** cho `stock_quant` của
+`segmentSpecId` 1/2 (kho 3 và 5 - đây là tồn ĐOẠN SẮT THẬT, không phải test-only, bị 2 đợt
+`ProductionBatch` test trừ qua `SEGMENT_CONSUME`, không thể xoá thẳng như các dòng vật tư test), 3
+material test. Xác nhận lại bằng `psql`: `notifications` về đúng 21 dòng baseline, `stock_quant` của
+2 segmentSpec về đúng 0/0 (baseline trước test), `bom_revision` 1 về `ACTIVE`, không còn
+`transfer_check_results` nào cho item 5. Phát hiện thêm 1 dòng lệch nhỏ giữa chừng (1 notification cũ
+`CUTTING_PROPOSAL_CALCULATION_FAILED` bị đánh dấu đọc ngoài ý muốn lúc thao tác trên `qlsx`) - sửa
+nốt bằng `UPDATE ... readAt = NULL`, xác nhận `notification_recipients` không còn dòng nào `readAt`
+khác NULL.
+
+### 22.5 Còn treo
+
+- ~~Phase 3b còn 4 nhóm: 7.5-iii...~~ **7.5-iii ĐÃ XONG, xem mục 23.** Còn 3 nhóm: 7.5-iv (xuất/nhận
+  đan - vướng thiết kế "tự đóng" đã ghi ở mục 19.4, cần hỏi người dùng), 7.5-v (chuyển kiểm lỗi),
+  7.5-vi (đóng gói xong → Sales).
+- `CUT_BUNDLE_TO_KCS`'s `link` mới (22.2) chưa live-test qua đúng luồng cắt sắt thật - chỉ suy luận
+  từ cùng cơ chế đã proven (mục 22.4). Nên test khi có dịp tự nhiên (1 lô cắt sắt thật đi qua Phôi→KCS
+  trong lúc test việc khác).
+- `BATCH_TO_KCS` stage=PHOI (piece tự báo qua `PieceMaterialYield`, không qua `CutBundle`) chưa
+  live-test link `kcs-phoi` qua đúng dữ liệu PHÔI thật - chỉ có unit test (`it.each` mục 22.3) xác
+  nhận `stage` truyền đúng qua `emit()`, chưa xác nhận bằng browser thật cho riêng nhánh này (đã xác
+  nhận nhánh HAN/SON qua browser thật ở mục 22.4).
+
+## 23. Phase 3b — nhóm 7.5-iii "Chuyển kho ngoài đơn hàng" (2 sự kiện) — _ĐÃ XONG 2026-09-28_
+
+Tiếp tục Phase 3b (7.5-ii xong ở mục 22) - nhóm kế tiếp theo bảng mục 7.5: "Phiếu chuyển kho tạo" +
+"Kho đích từ chối phiếu" (`warehouse-transfers.service.ts`).
+
+### 23.1 Phạm vi - 2 type mới
+
+| Type | Category/Severity | Người nhận | Trigger | Tự đóng khi |
+|---|---|---|---|---|
+| `WAREHOUSE_TRANSFER_CREATED` | ACTION/INFO | Kho ĐÍCH (`warehouseIds:[toWarehouseCode]`) | `create()` (vật tư) hoặc `createPieceTransfer()` (mảnh) | kho đích `confirm()` HOẶC `reject()` |
+| `WAREHOUSE_TRANSFER_REJECTED` | RESULT/WARNING | Người TẠO phiếu (`userIds:[createdById]`) | `reject()`, kèm lý do | — |
+
+`entityType='WAREHOUSE_TRANSFER'`, `entityId` = transferId cho cả 2. 1 params interface dùng chung
+`WarehouseTransferNotificationParams { code, fromWarehouseName, itemCount, reason? }` - `itemCount`
+đếm `items.length + pieceItems.length` (2 loại phiếu loại trừ nhau, 1 phiếu chỉ toàn 1 trong 2 mảng).
+
+### 23.2 Phát hiện quan trọng nhất: `NotificationLink.params` chưa từng được đọc ở FE
+
+`WAREHOUSE_TRANSFER_CREATED` cần trỏ vào đúng sub-tab "Nhập nội bộ" của `NhapKhoPage.tsx` - trang
+này có 2 sub-tab (`nhap`/`noi-bo`) chọn bằng `useState` cục bộ, KHÔNG có URL riêng, và 2 sub-tab này
+là 2 CHỨC NĂNG HOÀN TOÀN KHÁC NHAU ("Nhập kho" = nhận hàng mua về, "Nhập nội bộ" = xác nhận phiếu
+chuyển kho). Chỉ trỏ `page:'nhap-kho'` sẽ luôn rơi đúng vào sub-tab MẶC ĐỊNH SAI ("Nhập kho") - đúng
+lớp "gây hiểu lầm hơn không link" đã né nhiều lần trước (mục 12.6).
+
+Đi tìm cách gắn thêm 1 tham số thì phát hiện: `NotificationLink.params?: Record<string, string |
+number | null>` đã được khai báo trong type TỪ ĐẦU (mục 5.1 changelog, dùng cho mọi type suốt từ
+Phase 1) nhưng **`NotificationCenter.tsx` và `MyNotificationsPage.tsx` chưa bao giờ đọc field này** -
+`openNotification()` ở cả 2 nơi chỉ dựng URL từ `link.module`/`link.page`, bỏ qua hẳn `link.params`.
+Không phải bug (không type nào TỪNG cần tới `params` để hoạt động đúng - mọi `link` trước giờ chỉ cần
+`module`/`page`), nhưng là hạ tầng "có khai báo mà chưa ai dùng tới" - lộ ra đúng lúc cần.
+
+**Đã sửa:**
+- [utils/notificationLink.ts](../../DNA-ERP/src/utils/notificationLink.ts) (file mới): hàm thuần
+  `buildNotificationLinkUrl(link)` dựng `/?m=...&p=...&<params thêm>` - gộp logic dựng URL vốn bị
+  COPY-PASTE giống hệt nhau ở `NotificationCenter.tsx` và `MyNotificationsPage.tsx` thành 1 chỗ, kèm
+  xử lý `params` (bỏ qua giá trị `null`, quy đổi số sang chuỗi). Có test riêng
+  ([notificationLink.test.ts](../../DNA-ERP/src/utils/notificationLink.test.ts), 5 case).
+- `NotificationCenter.tsx`/`MyNotificationsPage.tsx`: `openNotification()` đổi sang gọi
+  `buildNotificationLinkUrl()` thay vì tự dựng `URLSearchParams` tay.
+- [NhapKhoPage.tsx](../../DNA-ERP/src/modules/pages/Manufacturing/NhapKhoPage.tsx): thêm
+  `useUrlState('sub')` cho sub-tab `nhap`/`noi-bo` - cùng idiom `p` ở cấp app shell, chỉ khác đây là
+  sub-tab lồng bên trong 1 page đã có `p='nhap-kho'` nên phải dùng tên tham số KHÁC (`sub`, không
+  phải `p`) để 2 tầng cùng tồn tại trong query string.
+- `notification-types.ts`: `WAREHOUSE_TRANSFER_CREATED.link` = `{module:'inbound_warehouse',
+  page:'nhap-kho', params:{sub:'noi-bo'}}` - type ĐẦU TIÊN thực sự dùng `params`.
+
+`WAREHOUSE_TRANSFER_REJECTED` KHÔNG cần `params` - trỏ thẳng `lich-su-kho` (nơi duy nhất xem lại
+phiếu REJECTED, vì "Nhập nội bộ" chỉ hiện phiếu PENDING) - tab này tự động scope theo kho của người
+xem, an toàn nối vì mọi kho (vat-tu-tp/phoi-son-han/thanh-pham) đều thấy tab này.
+
+### 23.3 Đã làm (BE)
+
+- [notification-types.ts](../src/modules/notifications/notification-types.ts): 2 type mới, 1 params
+  interface `WarehouseTransferNotificationParams`.
+- [warehouse-transfers.service.ts](../src/modules/warehouse-transfers/warehouse-transfers.service.ts):
+  thêm `NotificationsService`; `notifyTransferCreated()` gọi ở CUỐI CẢ `create()` LẪN
+  `createPieceTransfer()` (2 nhánh tạo phiếu độc lập, cùng chung 1 loại thông báo);
+  `resolveTransferCreated()` gọi ở `confirm()` VÀ ở đầu `reject()` (cả 2 đều đưa phiếu rời PENDING);
+  `notifyTransferRejected()` gọi thêm ở `reject()` sau khi resolve.
+- [warehouse-transfers.module.ts](../src/modules/warehouse-transfers/warehouse-transfers.module.ts):
+  import `NotificationsModule`.
+- Test: +7 (`create`: emit đúng params + không emit lại khi idempotency-replay; `createPieceTransfer`:
+  emit đúng itemCount từ `pieceItems`; `confirm`: resolve; `reject`: resolve + emit kèm lý do đúng
+  người tạo).
+- **Nghiệm thu:** `npx tsc --noEmit`: 0 lỗi (2 lỗi `factoryCode` ở `seed-*.ts` xác nhận có sẵn từ
+  trước). `npx eslint --fix`: 0 error, 1 warning `no-explicit-any` cố ý có sẵn. `npx jest` toàn repo:
+  **1241/1241 pass, 50/50 suite** (tăng từ 1236 ở mục 22 - đúng 5 test service mới, KHÔNG phải 7 vì 2
+  test ban đầu viết dạng `expect.objectContaining` lồng nhau bị ESLint chặn `no-unsafe-assignment` -
+  viết lại 1 test bằng cách đọc thẳng `mock.calls[0]` thay vì lồng matcher, giảm còn 1 assertion gọn
+  hơn cho case đó).
+- FE: `tsc --noEmit` 0 lỗi, `eslint --fix` trên mọi file sửa 0 error (2 warning
+  `react-hooks/set-state-in-effect`/`exhaustive-deps` ở `NhapKhoPage.tsx` - cùng pattern đã chấp nhận
+  ở mọi nơi khác dùng `useUrlState` cho sub-tab). `vitest run`: **58/58 pass** (+5 test
+  `notificationLink.test.ts`).
+
+### 23.4 Live-test thật (BE+FE+DB thật, browser thật)
+
+Dữ liệu thật trong DB dev không dùng được: vật tư sắt duy nhất còn tồn ở kho Phôi Sơn Hàn
+(`SAT-HOP-50X50`) nằm ở bucket chiều dài 6000mm ≠ 0, mà `create()` CHẶN CỨNG chuyển kho tự do cho vật
+tư có tồn ở bucket khác 0 ("chuyển kho nội bộ chưa hỗ trợ chọn cỡ cây") - phải tạo 1 material test
+(`TEST-CHUYENKHO-NOTIF`) + `stock_quant` bucket 0 qua `psql`, cùng cách các nhóm trước.
+
+**Phát hiện giữa chừng (tự phát hiện):** định gán material test vào kho Phôi Sơn Hàn rồi test
+`khopsh` tạo phiếu - té ra tab "Chuyển kho ngoài đơn hàng" (`ChuyenKhoTuDoPage.tsx`) CHỈ hiện cho
+scope `vat-tu-tp`/`thanh-pham` trong `InboundWarehouseApp.tsx` (`ALL_TABS.filter`), KHÔNG hiện cho
+`phoi-son-han` - nghiệp vụ thật là Phôi Sơn Hàn chỉ phân phối ra ngoài qua 3 màn riêng ("Phân phối
+nội bộ", đã làm ở mục 22), không có "chuyển kho tự do". Sửa: chuyển material test sang kho
+`vat-tu-tp`, test đúng luồng `vat-tu-tp → thanh-pham`.
+
+1. `khovttp` (scope vat-tu-tp) → "Chuyển kho ngoài đơn hàng" → chọn kho đích "Kho thành phẩm", vật tư
+   test, số lượng 5 → 201 Created → xác nhận qua `psql`: `WAREHOUSE_TRANSFER_CREATED` tạo cho ĐÚNG 2
+   user scope `thanh-pham` (`khotp`, `muatp`), `link.params.sub = "noi-bo"`.
+2. `khotp` thật: chuông (chân sidebar drawer - `InboundWarehouseApp` không có bản top bar compact
+   như `MfgApp`) hiện đúng "Phiếu CK-2026-025 chờ xác nhận nhận hàng / Từ Kho Vật tư thành phẩm: 1
+   dòng." → bấm → **URL đổi đúng `?m=inbound_warehouse&p=nhap-kho&sub=noi-bo`** (xác nhận trực tiếp
+   `buildNotificationLinkUrl()` forward đúng `params`) → trang "Nhập kho" mở ĐÚNG sub-tab "Nhập nội
+   bộ" ngay lần đầu (không phải sub-tab mặc định sai) → thấy đúng phiếu CK-2026-025.
+3. Bấm "Từ chối" kèm lý do "Sai vat tu, test notification" → 201 Created → xác nhận qua `psql`: CẢ 2
+   `WAREHOUSE_TRANSFER_CREATED` resolved, `WAREHOUSE_TRANSFER_REJECTED` tạo đúng cho `khovttp`
+   (người tạo, KHÔNG phải `khotp`/`muatp`), đúng lý do, `link:{module:'inbound_warehouse',
+   page:'lich-su-kho'}` (không có `params`).
+4. `khovttp` thật: chuông tab "Tất cả" (đúng - RESULT không vào "Cần xử lý") hiện đúng "Phiếu
+   CK-2026-025 bị từ chối / Lý do: Sai vat tu, test notification" → bấm → URL đổi đúng
+   `?m=inbound_warehouse&p=lich-su-kho` → trang "Lịch sử kho" mở đúng, tự scope theo "Kho Vật tư
+   thành phẩm" của người xem.
+5. Xác nhận tồn kho KHÔNG đổi sau khi từ chối (`reject()` không ghi `stock_ledger`, khác `confirm()`)
+   - "Tồn 20, Khả dụng 20" của material test vẫn nguyên vẹn lúc xem lại "Tổng hợp vật tư".
+
+**Dọn dữ liệu sau test:** xoá 2 dòng `notifications` (`WAREHOUSE_TRANSFER_CREATED`,
+`WAREHOUSE_TRANSFER_REJECTED` - cascade xoá `notification_recipients`), `warehouse_transfer_reservations`/
+`warehouse_transfer_items`/`warehouse_transfers` của phiếu CK-2026-025 (id=25), `stock_quant` + vật
+tư test. Xác nhận qua `psql`: `notifications` về đúng 21 dòng baseline, 0 dòng `readAt` khác NULL,
+material/phiếu test không còn tồn tại.
+
+### 23.5 Còn treo
+
+- ~~Phase 3b còn 3 nhóm: 7.5-iv, 7.5-v, 7.5-vi.~~ **7.5-v ĐÃ XONG, xem mục 24.** Còn 2 nhóm: 7.5-iv
+  (xuất/nhận đan), 7.5-vi (đóng gói xong → Sales).
+- `createPieceTransfer()`'s `WAREHOUSE_TRANSFER_CREATED` (phiếu mảnh, không phải vật tư) chưa
+  live-test qua đúng luồng thật - chỉ có unit test (mục 23.3). Luồng thật cần dữ liệu
+  `ProductionBatch QC_DONE` sẵn sàng chuyển, không dựng riêng trong đợt này vì cơ chế emit hệt như
+  nhánh `create()` đã live-test kỹ ở trên, chỉ khác nguồn đếm `itemCount`.
+- `buildNotificationLinkUrl()` mới fix cho ĐÚNG 1 type dùng `params` (`WAREHOUSE_TRANSFER_CREATED`) -
+  các type khác chưa cần nhưng cơ chế đã sẵn sàng dùng ngay khi cần (vd nếu sau này muốn deep-link
+  sâu hơn tới đúng dòng SKU/PI cụ thể thay vì chỉ đúng màn, xem còn treo mục 15.5).
+
+## 24. Phase 3b — nhóm 7.5-v "Chuyền kiểm có lỗi" (1 sự kiện) — _ĐÃ XONG 2026-09-28_
+
+Tiếp tục Phase 3b (7.5-iii xong ở mục 23) - nhảy sang 7.5-v thay vì 7.5-iv theo đúng thứ tự vì 7.5-iv
+"xuất/nhận đan" còn vướng 1 điểm thiết kế cần hỏi người dùng trước (mục 19.4/23.5), còn 7.5-v không
+vướng gì và đúng như dự đoán ở mục 18/19.1: tái dùng `NotificationsService` đã có sẵn ở
+`ProductionInvoicesService` (Phase 3a, mục 16), không cần import `NotificationsModule` mới.
+
+### 24.1 Phạm vi - 1 type mới
+
+| Type | Category/Severity | Người nhận | Trigger | Tự đóng khi |
+|---|---|---|---|---|
+| `TRANSFER_CHECK_DEFECT_FOUND` | RESULT/WARNING | QLSX | `ProductionInvoicesService.recordTransferCheck()` khi `dto.defects.length > 0` | — |
+
+`entityType='TRANSFER_CHECK_RESULT'`, `entityId` = id bản ghi `TransferCheckResult` vừa tạo (trước
+đây service KHÔNG capture kết quả `create()`, phải sửa `await this.prisma.transferCheckResult.create(...)`
+thành `const created = await ...` mới lấy được `created.id`).
+
+### 24.2 Quyết định thiết kế đáng chú ý - vì sao KHÔNG báo "tổ gửi" như nhóm 7.5-i
+
+Bảng kế hoạch gốc mục 7.5 chỉ ghi nhận QLSX là người nhận cho sự kiện này (khác `QC_FAILED` ở nhóm
+7.5-i báo CẢ tổ gửi lẫn QLSX). Đọc kỹ `recordTransferCheck()` xác nhận đây là lựa chọn ĐÚNG chứ không
+phải bỏ sót: **`TransferCheckResult` không có FK nào xác định chắc chắn tổ nào (Phôi/Hàn/Sơn) đã làm
+ra mảnh đang bị kiểm** - khác `CutBundle`/`ProductionBatch` (nhóm 7.5-i) vốn có sẵn `stage`/nguồn
+gốc rõ ràng ngay trên bản ghi. Mảnh "có đan" (`bomPiece.isWoven`) đến từ điểm đan ngoài
+(`WeavingReceipt.weavingPointId`, không phải Phôi/Hàn/Sơn); mảnh "không đan" đến qua 1 phiếu chuyển
+kho đã CONFIRMED (không giữ vết ai là người sản xuất gốc). Suy qua `bomPiece.needsHan`/`needsSon` chỉ
+cho biết "công đoạn cuối cùng LẼ RA phải là gì" (dữ liệu định mức), không phải "ai thực sự đã báo
+sản lượng lô này" (dữ liệu vận hành) - 2 việc khác nhau, suy diễn từ cái đầu ra cái sau là suy đoán
+không đủ tin cậy để chỉ đích danh 1 tổ nhận cảnh báo lỗi.
+
+Không có `link` - màn "Chuyền kiểm" (`KhoChuyenKiemPage.tsx`) thuộc module `inbound_warehouse` (thủ
+kho thao tác), QLSX không có tab này trong module `production` của mình.
+
+### 24.3 Đã làm (BE)
+
+- [notification-types.ts](../src/modules/notifications/notification-types.ts): 1 type mới, 1 params
+  interface `TransferCheckDefectNotificationParams { piCode, pieceName, defectCount, reason }` -
+  `reason` chỉ lấy lỗi ĐẦU TIÊN trong lần kiểm (đủ cho QLSX biết sơ bộ, không liệt kê hết mọi lý do
+  nếu 1 lần kiểm có nhiều defect khác lý do nhau); message thêm "(và N lỗi khác)" khi `defectCount > 1`.
+- [production-invoices.service.ts](../src/modules/production-invoices/production-invoices.service.ts):
+  thêm helper `notifyTransferCheckDefect()` (best-effort, cùng idiom `notifyPi()` có sẵn - không mở
+  transaction riêng nên chỉ là 1 lệnh gọi thêm sau `create()`, không có gì để "cứu" nếu lỗi);
+  `recordTransferCheck()` capture `created` từ `transferCheckResult.create()` (trước đó bỏ qua kết
+  quả), gọi notify SAU KHI đã có `result.pieceName` từ `listTransferCheckPieces()` (tái dùng, không
+  query thêm) - CHỈ khi `dto.defects?.length > 0`.
+- Không sửa `production-invoices.module.ts` - `NotificationsModule` đã import từ Phase 3a (mục 16).
+- Test: +2 (emit đúng piCode/pieceName/defectCount/reason khi có defects; KHÔNG emit khi kiểm không
+  lỗi) trong `describe('recordTransferCheck')`. Sửa 1 test cũ ("creates a new check row...") thêm
+  `prisma.transferCheckResult.create.mockResolvedValue({ id: 100n })` - trước đó mock trả về
+  `undefined`, sẽ crash ngay khi code đọc `created.id`.
+- **Nghiệm thu:** `npx tsc --noEmit`: 0 lỗi. `npx eslint --fix`: 0 error, 1 warning `no-explicit-any`
+  cố ý có sẵn. `npx jest` toàn repo: **1243/1243 pass, 50/50 suite** (tăng từ 1241 ở mục 23 - đúng 2
+  test mới).
+
+### 24.4 Live-test thật (BE+FE+DB thật, browser thật)
+
+Dữ liệu thật trong DB dev cho "Chuyền kiểm" đều đã kiểm hết (mọi mảnh của PI-2026-001 có
+Hiện có = Đã kiểm = Tổng cần) hoặc chưa có hàng về (`Hiện có = 0` cho PI-2026-004, order id=5 - PI
+test quen thuộc từ các nhóm trước, chưa từng có phiếu chuyển mảnh nào tới "Kho thành phẩm"). Chèn
+tay 1 phiếu `warehouse_transfers` CONFIRMED + 1 `warehouse_transfer_piece_items` (order 5, piece 1
+"chân bàn", qty 5) qua `psql` để có "Hiện có" > 0 cho piece đó - mô phỏng đúng kết quả của 1 chuỗi
+chuyển kho thật (vat-tu-tp → thanh-pham) đã CONFIRMED, không dựng lại toàn bộ chuỗi 2 chặng vì mục
+tiêu test là `recordTransferCheck()`+notification, không phải lại cơ chế piece-transfer đã test kỹ ở
+mục 23.
+
+1. `khotp` (scope thanh-pham) thật → "Chuyền kiểm" → PO-TEST-REJECT-001/PI-2026-004 → "chân bàn"
+   hiện đúng "Hiện có: 5" → bấm "Kiểm" → nhập số lượng 5 + 1 lỗi "Chan ban bi cong venh test
+   notification" → Xác nhận → 201 Created → xác nhận qua `psql`: `TRANSFER_CHECK_DEFECT_FOUND` tạo
+   đúng cho `qlsx`, title "PI-2026-004: chân bàn chuyền kiểm có lỗi", message đúng lý do + dấu chấm,
+   `link: null`.
+2. `qlsx` thật: chuông tab "Tất cả" (đúng - RESULT không vào "Cần xử lý") hiện đúng thông báo ở đầu
+   danh sách → bấm vào → mark-read (xác nhận qua `psql`) → **URL KHÔNG đổi** (đúng vì `link: null`).
+
+**Không live-test riêng nhánh "không có lỗi"** (không emit gì) - đã có 2 unit test riêng biệt xác
+nhận rõ ràng (mục 24.3: 1 test có defects → emit, 1 test không defects → không emit), cùng mức độ
+rủi ro thấp như các nhánh "không emit" đã bỏ qua live-test ở những nhóm trước.
+
+**Dọn dữ liệu sau test:** xoá `notifications` (`TRANSFER_CHECK_DEFECT_FOUND`), `transfer_check_defects`
++ `transfer_check_results` vừa tạo, `warehouse_transfer_piece_items` + `warehouse_transfers` (phiếu
+test chèn tay) - dùng `code` KHÔNG khớp mẫu `CK-{year}-NNN` (`TEST-CHUYENKIEM-001`) để tránh ảnh
+hưởng bộ đếm `nextTransferCode()` của phiếu thật. Xác nhận qua `psql`: `notifications` về đúng 21
+dòng baseline, 0 dòng `readAt` khác NULL, không còn `transfer_check_results` nào cho item test.
+
+### 24.5 Còn treo
+
+~~Phase 3b còn 2 nhóm: 7.5-iv..., 7.5-vi...~~ **7.5-vi ĐÃ XONG, xem mục 25.** Còn đúng 1 nhóm: 7.5-iv
+(xuất/nhận đan - vướng thiết kế "tự đóng" đã ghi ở mục 19.4/23.5, cần hỏi người dùng trước khi làm).
+
+## 25. Phase 3b — nhóm 7.5-vi "Đóng gói xong → Sales" (1 sự kiện) — _ĐÃ XONG 2026-09-28_
+
+Tiếp tục Phase 3b (7.5-v xong ở mục 24) - làm nốt 7.5-vi (không vướng thiết kế gì, cùng service
+`ProductionInvoicesService` đã có `NotificationsService` sẵn). Phase 3b sau mục này chỉ còn 7.5-iv
+(xuất/nhận đan) - vướng 1 điểm thiết kế "tự đóng" đã ghi ở mục 19.4/23.5, cần hỏi người dùng (làm ở
+mục 26 ngay sau đây).
+
+### 25.1 Phạm vi - 1 type mới
+
+| Type | Category/Severity | Người nhận | Trigger | Tự đóng khi |
+|---|---|---|---|---|
+| `PI_ITEM_PACKAGING_COMPLETE` | RESULT/SUCCESS | Role `SALES_STAFF` | `ProductionInvoicesService.recordPackaging()` khi `packedQty` vừa đạt đúng `totalQty` VÀ item có gắn `salesOrderId` | — |
+
+`entityType='PRODUCTION_INVOICE_ITEM'`, `entityId` = id item. Recipient là CẢ role `SALES_STAFF`
+(không định danh 1 người) - cùng lý do đã ghi ở mục 15.2: `SalesOrder` không có cột "người phụ
+trách"/người tạo, không nhắm được đích danh 1 Sales cụ thể.
+
+### 25.2 Quyết định thiết kế đáng chú ý
+
+- **Tự nhiên chỉ bắn ĐÚNG 1 LẦN cho mỗi item, không cần dedupe/guard thêm:** `recordPackaging()` đã
+  chặn cứng `packedSoFar + dto.boxesPacked > productionOrder.quantity` (400) TỪ TRƯỚC - một khi
+  `packedQty` đã đạt `totalQty`, mọi lần gọi tiếp theo (DTO bắt buộc `boxesPacked >= 1`) đều rơi vào
+  nhánh chặn này, không bao giờ chạm lại điều kiện `=== totalQty` lần thứ 2. Khác các nhóm trước
+  (`QC_PASSED`, `PURCHASE_PROPOSAL_PURCHASED`...) không cần disqualify thêm gì.
+- **Guard `item.salesOrder` (không chỉ `salesOrderId`):** dùng thẳng field include sẵn có
+  (`findItemOrThrow()` đã include `salesOrder`) thay vì query lại - đồng thời đây chính là field
+  cần đọc `orderCode` cho message, nên guard bằng field này tự nhiên loại luôn case chưa gắn đơn
+  hàng (SKU tạo tay qua `POST /production-invoices/:id/items`, xem mục 15.1) mà không cần thêm điều
+  kiện `salesOrderId != null` riêng.
+- **`link` trỏ `sales/orders`** (`OrderManagementPage.tsx`) - an toàn nối vì recipient CHỈ 1 role
+  `SALES_STAFF`, không lẫn role khác cần tab riêng (khác ca `PI_APPROVED_BY_BOSS`/mục 16.2 phải bỏ
+  `link` vì 2 role 2 module).
+
+### 25.3 Đã làm (BE)
+
+- [notification-types.ts](../src/modules/notifications/notification-types.ts): 1 type mới, 1 params
+  interface `PackagingCompleteNotificationParams { piCode, factoryCode, productName, salesOrderCode }`.
+- [production-invoices.service.ts](../src/modules/production-invoices/production-invoices.service.ts):
+  thêm helper `notifyPackagingComplete()` (best-effort, cùng idiom `notifyTransferCheckDefect()` mục
+  24 - không mở transaction riêng); `recordPackaging()` gọi notify SAU `packagingRecord.create()`,
+  điều kiện `packedSoFar + dto.boxesPacked === productionOrder.quantity && item.salesOrder`.
+- Không sửa `production-invoices.module.ts` - `NotificationsModule` đã import từ Phase 3a.
+- Test: +3 (emit khi đóng đủ + có đơn hàng; KHÔNG emit khi đóng chưa đủ; KHÔNG emit khi đóng đủ
+  nhưng không gắn đơn hàng) trong `describe('recordPackaging')`.
+- **Nghiệm thu:** `npx tsc --noEmit`: 0 lỗi (đã kiểm KHÔNG lọc nhầm lỗi mới qua từ khoá `factoryCode`
+  trùng với 2 lỗi pre-existing ở `seed-*.ts` - chạy lại không filter để chắc chắn). `npx eslint --fix`:
+  0 error, 1 warning `no-explicit-any` cố ý có sẵn. `npx jest` toàn repo: **1246/1246 pass, 50/50
+  suite** (tăng từ 1243 ở mục 24 - đúng 3 test mới).
+
+### 25.4 Live-test thật (BE+FE+DB thật, browser thật)
+
+Dùng đúng PI test quen thuộc (PO-TEST-REJECT-001/PI-2026-004, order id=5, item id=5,
+`salesOrderId` đã gắn sẵn = TEST6/PO-TEST-REJECT-001) - `totalQty=10, packedQty=0` (chưa đóng gói
+lần nào), không cần chèn dữ liệu test nào thêm (khác các nhóm trước) vì đây là dữ liệu SKU/PI có sẵn
+đã có `salesOrderId` từ khi tạo.
+
+1. `khotp` (scope thanh-pham) thật → "Đóng gói" → PO-TEST-REJECT-001/PI-2026-004 → nhập 10 thùng
+   (đúng bằng "Còn lại") → Xác nhận → 201 Created → xác nhận qua `psql`: `PI_ITEM_PACKAGING_COMPLETE`
+   tạo đúng cho role `SALES_STAFF` (user `sales`), title "PI-2026-004: BAN-J55 đã đóng gói xong",
+   message "Đơn PO-TEST-REJECT-001 sẵn sàng giao.", `link:{module:'sales',page:'orders'}`.
+2. `sales` thật, đứng ở tab khác (`?m=sales&p=customers`) → chuông tab "Tất cả" (đúng - RESULT
+   không vào "Cần xử lý") hiện đúng thông báo (icon ✓ xanh, đúng SUCCESS) → bấm vào → mark-read (xác
+   nhận qua `psql`) → **URL đổi đúng `?m=sales&p=orders`** (đổi tab thật, không phải tình cờ trùng
+   tab đang mở - xác nhận cơ chế điều hướng hoạt động đúng).
+
+**Dọn dữ liệu sau test:** xoá `notifications` (`PI_ITEM_PACKAGING_COMPLETE`), `packaging_records`
+vừa tạo. Xác nhận qua `psql`: `notifications` về đúng 21 dòng baseline, 0 dòng `readAt` khác NULL,
+`packaging_records` của item 5 về đúng 0 dòng (baseline trước test).
+
+### 25.5 Còn treo — _ĐÃ XONG ở mục 26_
+
+~~Phase 3b còn đúng 1 nhóm: **7.5-iv (xuất/nhận đan)** - vướng thiết kế "tự đóng" (đã ghi ở mục
+19.4/23.5): `weaving-issues`/`weaving-receipts` không có state machine hay FK liên kết trực tiếp
+giữa xuất và nhận (append-only, so khớp qua tổng aggregate) nên "tự đóng khi nhận" cần thiết kế
+riêng (composite entityId hoặc bỏ tự đóng) - cần hỏi người dùng trước khi code, chưa tự quyết được
+như các nhóm trước.~~ Đã hỏi + người dùng chốt + code xong ở **mục 26** - Phase 3b hoàn tất toàn bộ.
+
+## 26. Phase 3b — nhóm 7.5-iv "Xuất/nhận đan" (1 sự kiện) — _ĐÃ XONG 2026-09-28, PHASE 3B HOÀN TẤT TOÀN BỘ_
+
+Nhóm cuối cùng còn treo của Phase 3b (đã ghi vướng mắc ở mục 19.4/23.5/25.5) - `WeavingIssue`/
+`WeavingReceipt` là 2 sổ cộng dồn thuần (append-only ledger), không có state machine hay FK nối 1
+lần xuất đan với đúng 1 lần nhận đan như `SteelIssue`, nên "tự đóng khi nhận" cần 1 quyết định thiết
+kế riêng trước khi code - đã hỏi người dùng (bằng ngôn ngữ non-tech, theo yêu cầu) và được chốt
+"làm đi" trước khi code phần này.
+
+### 26.1 Phạm vi - 1 type mới
+
+| Type | Category/Severity | Người nhận | Trigger | Tự đóng khi |
+|---|---|---|---|---|
+| `WEAVING_ISSUE_TO_POINT` | ACTION/INFO | Mọi thủ kho thuộc gia đình kho `thanh-pham` (không định danh 1 kho vật lý) | `WeavingIssuesService.create()` (kho vật tư-TP xuất mảnh cho 1 điểm đan) | Tổng đang treo tại ĐÚNG điểm đan đó về đúng 0 (`WeavingIssuesService.receive()`) |
+
+`entityType = 'WEAVING_ALLOCATION'`, `entityId` là khoá GHÉP
+`${productionOrderId}:${pieceId}:${weavingPointId}` (không phải id 1 dòng `WeavingIssue`/
+`WeavingReceipt`) - mirror đúng `PI_SENT_TO_QLSX` (mục 16.2): dedupe theo tổng đang chờ, tự đóng
+khi tổng về đúng 0, không phải state machine 1-1.
+
+### 26.2 Quyết định thiết kế đáng chú ý
+
+- **Mirror `PI_SENT_TO_QLSX` thay vì bịa state machine mới:** research trước khi code (đọc
+  `weaving-issues.service.ts` đầy đủ + hỏi ý kiến "theo bạn nên làm sao mới chuẩn ERP") cho thấy các
+  ERP thật (Odoo/SAP/NetSuite) mô hình hoá gia công ngoài kiểu này bằng 1 "đơn gia công" có trạng
+  thái + số dư suy ra, nhưng DNA-ERP chỉ có đúng phần "số dư suy ra" (2 bảng ledger), không có "đơn"
+  nào để gắn trạng thái - nên cách khả thi nhất là tái dùng ĐÚNG pattern `PI_SENT_TO_QLSX` đã chứng
+  minh hoạt động tốt (entityId ghép + dedupe theo tổng + tự đóng khi về 0), không tạo thêm bảng/field
+  mới nào.
+- **Chỉ `emit()` ở `create()` (xuất đan - thêm hàng vào "hàng đợi chờ nhận"), CHỈ `resolve()` ở
+  `receive()` (nhận đan) - KHÔNG re-emit số đã giảm khi nhận MỘT PHẦN:** giữ nguyên hạn chế đã được
+  người dùng chấp nhận ở mục 16.2 ("không giảm số hiển thị khi xử lý một phần, chỉ tự đóng khi giải
+  quyết dứt điểm"). `outstandingQty` hiển thị luôn là số tại thời điểm XUẤT gần nhất, không tự cập
+  nhật giảm dần theo từng lần nhận nhỏ giọt.
+- **Recipient KHÔNG nhắm 1 kho vật lý cụ thể như `WAREHOUSE_TRANSFER_CREATED` (mục 23):**
+  `WarehouseTransfer` có cột `toWarehouseId` do người tạo phiếu CHỌN TAY, nhưng `WeavingIssue`/
+  `WeavingReceipt` không lưu warehouseId nào cả (chỉ `productionOrderId`/`pieceId`/`weavingPointId` -
+  xem model trong `schema.prisma`) - không có cách nào biết "kho thành phẩm nào cụ thể" sẽ nhận về
+  nếu có nhiều kho vật lý cùng gia đình `thanh-pham` (kho gốc + kho phụ `-N` do Admin tạo thêm, xem
+  `warehouseFamilyOf()`). Giải pháp: báo CẢ GIA ĐÌNH - `resolveThanhPhamWarehouseCodes()` tự query
+  mọi `Warehouse.code` khớp gia đình `thanh-pham` (kể cả kho phụ nếu có) rồi truyền vào
+  `recipients.warehouseIds`, KHÔNG dùng `roles: [WAREHOUSE_STAFF]` (role đó dùng CHUNG cho thủ kho
+  của CẢ 3 gia đình kho, quá rộng - sẽ báo nhầm cả thủ kho `vat-tu-tp`/`phoi-son-han`).
+- **`link` trỏ đúng tab `nhap-dan`** (`{ module: 'inbound_warehouse', page: 'nhap-dan' }`) - khớp
+  thẳng `TabId` của "Theo dõi nhập đan" trong `InboundWarehouseApp.tsx` (lọc hiện theo
+  `isThanhPhamScope(scope)`), không cần `link.params` phụ như `WAREHOUSE_TRANSFER_CREATED` vì đây là
+  1 tab riêng, không phải sub-tab chung màn với chức năng khác.
+
+### 26.3 Đã làm (BE)
+
+- [notification-types.ts](../src/modules/notifications/notification-types.ts): thêm
+  `WeavingIssueNotificationParams` + type `WEAVING_ISSUE_TO_POINT`.
+- [weaving-issues.service.ts](../src/modules/weaving-issues/weaving-issues.service.ts): DI thêm
+  `NotificationsService` + `Logger` (module này trước đây CHƯA từng có `NotificationsService`, khác
+  mọi nhóm 7.5 trước). Thêm `notifyWeavingIssueToPoint()`/`resolveWeavingIssueToPoint()` (best-effort
+  ngoài transaction, cùng idiom mọi nhóm trước) + 3 helper dùng chung
+  (`weavingAllocationEntityId()`, `recomputeOutstandingAtPoint()` tái dùng đúng
+  `sumIssuedForPoint()`/`sumReceivedForPoint()` sẵn có, `resolveThanhPhamWarehouseCodes()`). Gọi
+  `notify` ngay sau transaction của `create()`, gọi `resolve` ngay sau transaction của `receive()`.
+- [weaving-issues.module.ts](../src/modules/weaving-issues/weaving-issues.module.ts): thêm import
+  `NotificationsModule`.
+- Test: +5 test case mới trong
+  [weaving-issues.service.spec.ts](../src/modules/weaving-issues/weaving-issues.service.spec.ts)
+  (emit đúng entityId/dedupeKey/outstandingQty, không emit lại khi idempotent replay, resolve khi về
+  đúng 0, không resolve khi mới nhận một phần, không resolve lại khi idempotent replay) - dùng
+  `mockResolvedValueOnce` nối tiếp để mô phỏng đúng thực tế "query lại SAU KHI transaction đã commit
+  thấy được dòng vừa tạo" (khác `sumIssuedForPiece`/`sumReceivedForPoint` gọi TRONG transaction).
+- Kết quả: suite này 57/57 (từ 52), toàn bộ backend **1251/1251 test, 50/50 suite** (từ 1246).
+  `tsc --noEmit`: 0 lỗi mới (giữ nguyên 2 lỗi cũ ở seed script, không liên quan). `eslint --fix`: 0
+  lỗi (1 warning cũ `no-explicit-any` ở `NOTIFICATION_TYPES`, không liên quan thay đổi này).
+
+### 26.4 Live-test thật (BE+FE+DB thật, browser thật)
+
+Chuẩn bị dữ liệu (order test cũ id=5 không có mảnh đan nào trong BOM, phải tìm order khác):
+production order **id=8** (`PO-GHEJ55-SOLO-TEST-1`, `bomRevisionId=13`) có mảnh `KHUNG-TUA`
+(id=73, `isWoven=true`, `qtyPerUnit=3` → `plannedQty=90`). QLSX (`qlsx`) bấm "Bắt đầu" THẬT qua
+`POST /production-orders/8/floor-start` (mở gate). Seed thẳng 1 `WarehouseTransferPieceItem`
+CONFIRMED (30 mảnh, kho `vat-tu-tp`) đại diện "kho vật tư-TP đã nhận đủ mảnh từ Phân phối nội bộ" -
+đây là 1 bước THUỘC nhóm 7.5-iii đã test kỹ riêng ở mục 23, không thuộc phạm vi nhóm này nên seed
+thẳng DB cho nhanh thay vì dựng lại cả chuỗi Phôi cắt → QC → chuyển kho. Tạo 1 điểm đan thật qua
+`POST /weaving-points` (`khovttp`).
+
+- **Xuất đan thật:** `khovttp` (warehouseScope=`vat-tu-tp`) gọi thật
+  `POST /production-orders/8/weaving-issues` (`pieceId=73, weavingPointId=1, qty=10`) → 201.
+  Kiểm `psql`: notification tạo đúng `entityId='8:73:1'`,
+  `dedupeKey='WEAVING_ISSUE_TO_POINT:8:73:1'`, `link={module:'inbound_warehouse',page:'nhap-dan'}`,
+  title *"PO-GHEJ55-SOLO-TEST-1: Khung tựa đang chờ nhận về từ điểm đan..."*, message
+  *"Đang treo: 10."* - đúng cả 2 recipient là MỌI user `warehouseScope='thanh-pham'` hiện có
+  (`khotp` VÀ `muatp`, không chỉ 1 role hẹp) - đúng thiết kế "cả gia đình kho", không phải 1 kho cụ
+  thể.
+- **FE thật (browser, đăng nhập `khotp`):** chuông hiện badge đỏ "1" → mở panel, tab "Cần xử lý (1)"
+  hiện đúng nội dung → bấm vào, điều hướng đúng `?m=inbound_warehouse&p=nhap-dan` (tab "Theo dõi
+  nhập đan" active) - đồng thời `readAt` của `khotp` được set ngay (kiểm `psql`: `muatp` vẫn NULL -
+  đúng per-recipient, không lẫn giữa 2 người cùng nhận).
+- **Nhận đan thật:** `khotp` gọi thật `POST /production-orders/8/weaving-receipts`
+  (`pieceId=73, weavingPointId=1, qty=10` - đúng bằng outstanding) → 201. Kiểm `psql`: CẢ 2 recipient
+  (`khotp`, `muatp`) có `resolvedAt` ngay lập tức, đúng thời điểm gọi API - tự đóng hoạt động chính
+  xác khi outstanding về đúng 0.
+
+**Dọn dữ liệu sau test:** xoá `notifications`+`notification_recipients` (`WEAVING_ISSUE_TO_POINT`),
+`weaving_issues`/`weaving_receipts`/`weaving_points` vừa tạo, `warehouse_transfer_piece_items` +
+`warehouse_transfers` (seed CK-TEST-WEAVING-1), revert `production_orders.floorStage` của order 8
+về lại `PENDING`/`floorStartedAt=NULL` (trạng thái gốc trước test). Xác nhận qua `psql`:
+`notifications` về đúng 21 dòng baseline, 0 dòng `readAt` khác NULL, order 8 về lại
+`floorStage=PENDING`.
+
+### 26.5 Còn treo
+
+Không còn - **Phase 3b đã hoàn tất TOÀN BỘ 6/6 nhóm** (7.5-i tới 7.5-vi, mục 19/22/23/24/25/26).
+Phase 3c-5 vẫn ở dạng plan (mục 8), chưa làm - chưa có việc gì đang chờ quyết định.
+
+## 27. Phase 4 — Badge "việc chờ tôi" — _ĐÃ XONG TOÀN BỘ (BE+FE) 2026-09-29_
+
+Sau khi Phase 3 đóng hoàn toàn (mục 26.5), bắt đầu Phase 4 theo đúng plan mục 6.3/8: 1 endpoint
+`GET /me/work-queue` trả số đếm "đang chờ tôi xử lý" theo TỪNG ROLE của người gọi, để FE gắn badge
+lên menu (khác hẳn cơ chế `notifications` - đây là QUERY đọc thẳng trạng thái nghiệp vụ hiện tại,
+không suy từ bảng thông báo, nên "luôn khớp dữ liệu" đúng yêu cầu mục 6.3 dù người dùng có bỏ lỡ/xoá
+thông báo hay không). Research kỹ bằng subagent trước khi code (đọc toàn bộ schema + 6 service liên
+quan) vì bảng plan gốc mục 6.3 viết TRƯỚC khi có code thật, nghi ngờ đã lệch - xác nhận đúng vậy.
+
+### 27.1 Phạm vi - 1 endpoint, 15 khoá đếm khớp đúng 9 dòng role/menu của mục 6.3
+
+`GET /me/work-queue` → `{ counts: Record<string, number> }` - chỉ trả về khoá KHỚP ĐÚNG role của
+người gọi (không query dư cho role họ không có, đỡ tải DB), 1 user nhiều role thì nhiều khoá cùng
+lúc (vd account demo `sales`: vừa `WAREHOUSE_STAFF` vừa `SALES_STAFF` → vừa có
+`warehouseTransferPending`/`warehousePurchaseReceiving` vừa có `salesReadyToShip`).
+
+| Role | Khoá trong `counts` | Đếm |
+|---|---|---|
+| `PRODUCTION_MANAGER` (QLSX) | `qlsxProductionQueue` | PI item `WAITING_QLSX` + đề xuất cắt sắt `displayStatus=NEEDS_ACTION` |
+| `BOSS` (Sếp) | `bossSkuApproval`, `bossProductionApproval` | `PlanForm.status=WAITING_BOSS_APPROVAL`; PI item `WAITING_BOSS` |
+| `PRODUCTION_PLANNER` (KHSX) | `khsxSkuReview`, `khsxProductionRejected` | Định mức mảnh(SAT)/chi tiết(DAY_SON) `status=null` (đã nộp, chưa duyệt); PI item `REJECTED` |
+| `SPEC_STEEL_STAFF` | `specSteelQuota` | SKU (loại `origin=PRODUCTION_CONFIRM`) chưa nộp định mức mảnh HOẶC bị trả về |
+| `SPEC_ACCESSORY_PACKAGING_STAFF` | `specDetailQuota` | Tương tự, nhánh chi tiết |
+| `PURCHASER` (Mua hàng) | `purchaserPending` | `PurchaseProposalItem.status IN PENDING_APPROVAL_STATUSES` |
+| `WAREHOUSE_STAFF` (Kho) | `warehouseTransferPending`, `warehousePurchaseReceiving` | Phiếu chuyển `PENDING` tới đúng kho (`warehouseScope`, null=tổng kho); hàng mua `PURCHASING` chờ nhận tại đúng kho |
+| `PHOI_STAFF` | `phoiSteelReceiving` | `SteelIssue.status=ISSUED` |
+| `KCS_STAFF` | `kcsPhoi`, `kcsHan`, `kcsSon` | `CutBundle`+`StepBundle`+`PieceStepBundle`+`ProductionBatch(stage=PHOI)` `AWAITING_QC`; `ProductionBatch(stage=HAN/SON)` `AWAITING_QC` |
+| `SALES_STAFF` | `salesReadyToShip` | Dòng đơn đã tới mốc `DONG_GOI`/`HOAN_THANH` (suy từ dữ liệu sản xuất thật) nhưng `shippedQty < totalQty` |
+
+Role không nằm trong bảng trên (`HAN_STAFF`/`SON_STAFF`, chưa có dòng nào trong mục 6.3) →
+`counts` rỗng `{}`, không lỗi.
+
+### 27.2 5 chỗ bảng plan gốc mục 6.3 SAI/THIẾU so với code thật - phát hiện qua research trước khi code
+
+Bảng mục 6.3 viết TRƯỚC khi Phase 3 code xong, một số hành vi đã đổi theo thời gian. Nếu làm đúng y
+văn bảng đó, 2 badge (Mua hàng, Sales) sẽ **sai hẳn**, không phải chỉ thiếu vài dòng:
+
+1. **QLSX "cắt sắt cần duyệt tay/FAILED"** - mục 14 (2026-09-26) chỉ bỏ THÔNG BÁO cho 3 nhánh
+   "không thành công", KHÔNG bỏ trạng thái/hành động - `DRAFT`/`FAILED` vẫn tồn tại thật, vẫn có nút
+   "Duyệt" thật (`POST /cutting-proposals/:id/approve`). Đếm thô `status IN (DRAFT, FAILED)` sẽ đếm
+   NHẦM cả `DRAFT` đang trong 60s cửa sổ tự-duyệt (`FINALIZING_WINDOW_MS`, chưa kịp chuyển
+   `APPROVED`) và bỏ sót `CALCULATING` quá hạn (nghi treo) - phải tái dùng đúng
+   `computeDisplayStatus()` đã có sẵn (thêm method `countNeedsAction()` public gọi lại private đó).
+2. **Mua hàng "NEW/QUOTING"** - SAI: `QUOTING` là tàn dư chết từ luồng báo giá cũ (gỡ 2026-08-27),
+   không còn đường nào sinh mới; THIẾU `SUBMITTED`/`REJECTED` (~36 dòng dữ liệu cũ vẫn kẹt ở đó,
+   `bossApprove()` vẫn là đường ra duy nhất của chúng - xem đã export `PENDING_APPROVAL_STATUSES`).
+   Đếm theo đúng bảng gốc sẽ THIẾU ~36 dòng thật đang chờ Mua hàng xử lý.
+3. **KCS "cut bundle/batch AWAITING_QC"** - THIẾU 2 bảng `StepBundle`/`PieceStepBundle` (công đoạn
+   phụ Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ của Phôi cho Sắt và vật tư thành phẩm) - đều là `AWAITING_QC`
+   thật, cùng màn KCS Phôi.
+4. **Sales "dòng đơn DONG_GOI/HOAN_THANH"** - SAI HẲN nếu lọc thẳng cột `SalesOrderItem.status`: cột
+   này đứng yên ở `LEN_KE_HOACH` VĨNH VIỄN từ 2026-09-24 (không luồng nghiệp vụ nào ghi lại nữa, xem
+   doc comment `resolveStages()`) - badge sẽ LUÔN HIỆN 0 dù có hàng thật sẵn sàng giao. Phải gọi
+   `SalesOrdersService.countReadyToShip()` (method mới, tái dùng `resolveStages()`/`loadPiItems()` -
+   "1 chủ sở hữu duy nhất" cho logic suy trạng thái, tránh viết lại ~60 dòng derive).
+5. **Spec "SKU cần định mức"** - THIẾU điều kiện loại `PlanForm.origin='PRODUCTION_CONFIRM'` (SKU tự
+   tạo khi Sếp duyệt PI item, ẩn khỏi mọi màn KHSX/Spec theo thiết kế - xem `skus.service.ts`) - thiếu
+   điều kiện này sẽ đếm DƯ, hiện badge cho việc Spec không hề thấy trên màn của họ.
+
+### 27.3 Quyết định thiết kế đáng chú ý
+
+- **Response là `Record<string,number>` phẳng (mirror `UnreadCountResponseDto.byCategory`), không
+  khai cứng 1 DTO field/role:** số khoá thực tế trả về LUÔN là tập con theo role người gọi - khai
+  cứng ~15 field optional trên 1 class không thêm giá trị gì so với 1 map, FE đọc field không tồn
+  tại thì coi như 0/ẩn badge, không phải lỗi.
+- **Không `@RequirePermissions`:** khác MỌI controller khác trong repo - đây là "việc chờ CHÍNH
+  người gọi" (không phải dữ liệu người khác), nên không cần permission riêng, chỉ cần đã đăng nhập
+  (`JwtAuthGuard` toàn cục có sẵn). `PermissionsGuard` tự pass-through khi handler không khai
+  `@RequirePermissions` (xác nhận qua đọc code `permissions.guard.ts`, không phải đoán).
+- **Không cache/không dedupe qua bảng riêng nào** - mỗi lần gọi là 1 loạt query `count()` thật chạy
+  song song (`Promise.all`), đúng tinh thần "luôn khớp dữ liệu" mục 6.3 đã nêu rõ là ưu tiên hơn tốc
+  độ. Chưa thêm index mới cho các cột lọc - schema hiện tại đã đủ (`@@index([stage, status])` trên
+  `ProductionBatch` có sẵn, các bảng còn lại là bảng nhỏ/lọc theo enum + FK đã có index PK/unique).
+- **`countReadyToShip()`/`countNeedsAction()` đặt làm method PUBLIC mới trên chính
+  `SalesOrdersService`/`CuttingProposalsService`** (không viết lại logic trong `WorkQueueService`) -
+  giữ đúng nguyên tắc "1 chủ sở hữu duy nhất" cho 2 luồng derive-trạng-thái phức tạp đã có sẵn, tránh
+  2 nguồn có thể lệch nhau theo thời gian.
+- **`countReadyToShip()` lọc `shippedQty < totalQty` ở TẦNG ỨNG DỤNG** (fetch rồi filter JS), không
+  viết `where` so sánh field-vs-field - Prisma Client không hỗ trợ so sánh 2 cột thường (cần raw SQL
+  hoặc extension riêng); quy mô đơn hàng của nhà máy này đủ nhỏ để không cần tối ưu thêm.
+
+### 27.4 Đã làm (BE)
+
+- [purchase-proposals.service.ts](../src/modules/purchase-proposals/purchase-proposals.service.ts):
+  export `PENDING_APPROVAL_STATUSES` (trước đó module-private).
+- [cutting-proposals.service.ts](../src/modules/cutting-proposals/cutting-proposals.service.ts):
+  thêm `countNeedsAction()` (public, tái dùng `computeDisplayStatus()` private có sẵn).
+- [sales-orders.service.ts](../src/modules/sales-orders/sales-orders.service.ts): thêm
+  `countReadyToShip()` (public, tái dùng `resolveStages()`/`loadPiItems()` private có sẵn).
+- Module mới `src/modules/work-queue/`: `work-queue.service.ts` (10 method đếm riêng, gộp theo
+  role), `work-queue.controller.ts` (`GET /me/work-queue`, không permission riêng),
+  `work-queue.module.ts` (import `CuttingProposalsModule`+`SalesOrdersModule` để gọi 2 method mới ở
+  trên), `dto/work-queue-response.dto.ts`. Đăng ký vào `app.module.ts`.
+- Test: 13 test case mới (`work-queue.service.spec.ts`) - phủ đủ 9 role + case "không role nào" +
+  case "nhiều role cùng lúc" + case "warehouseScope null (tổng kho) vs cụ thể". Toàn bộ backend
+  **1264/1264 test, 51/51 suite** (từ 1251/50). `tsc --noEmit`: 0 lỗi mới (giữ nguyên 2 lỗi cũ ở
+  seed script). `eslint --fix`: 0 lỗi/warning mới.
+
+### 27.5 Live-test thật (BE+DB thật, chưa có FE để test qua browser)
+
+Chạy BE thật (`npm run start:dev`, cổng 3001) + Postgres dev thật, đăng nhập LẦN LƯỢT toàn bộ 15
+account demo (`seed-demo.ts`) qua API thật, gọi `GET /me/work-queue` cho mỗi người, đối chiếu số trả
+về với `psql` trực tiếp trên DB dev (không phải data test tự tạo - dùng đúng dữ liệu đã có sẵn):
+
+- **`qlsx` → `qlsxProductionQueue: 15`** - đối chiếu `psql`: PI item `WAITING_QLSX` = 3 dòng thật;
+  `cutting_proposals` có 7 `FAILED` (luôn tính NEEDS_ACTION) + 5 trong số `DRAFT`/`CALCULATING` khớp
+  đúng từng nhánh `computeDisplayStatus()` (2 `DRAFT hasInfeasibleLine=true`, 1 `CALCULATING` đã quá
+  7 NGÀY tuổi - chắc chắn "nghi treo", 1 `DRAFT` khác `hasInfeasibleLine=true`, 1 `DRAFT` không cờ
+  nào nhưng `completedAt` đã 5 ngày - rơi đúng nhánh "đã có phương án khác được duyệt"). 3 + 7 + 5 =
+  **15**, khớp tuyệt đối - xác nhận `computeDisplayStatus()` tái dùng đúng, không lệch 1 dòng nào dù
+  dữ liệu dev khá "bẩn" (nhiều proposal cũ ở đủ loại trạng thái).
+- **`muapsh` → `purchaserPending: 42`** - đối chiếu `psql`: `purchase_proposal_items` có đúng 42
+  dòng `NEW` (không có `QUOTING`/`SUBMITTED`/`REJECTED` nào tồn tại ở DB dev hiện tại) - khớp.
+- **`sales` → `salesReadyToShip: 4`** (kèm `warehouseTransferPending`/`warehousePurchaseReceiving` vì
+  account demo này CŨNG có role `WAREHOUSE_STAFF`) - số > 0 xác nhận `countReadyToShip()` chạy thật
+  qua `resolveStages()` trên dữ liệu sản xuất thật, không phải lúc nào cũng trả 0 như sẽ xảy ra nếu
+  lỡ lọc thẳng cột `SalesOrderItem.status` (đúng cảnh báo ở mục 27.2-4).
+- **`kcs` → `{kcsPhoi:0, kcsHan:0, kcsSon:0}`**, **`dms`/`dmbbdg`** (Spec Sắt/chi tiết) → mỗi bên 1
+  khoá riêng đúng tên, **`phoi`/`khopsh`/`khovttp`/`khotp`** → đúng khoá theo role, **`boss`/`khsx`**
+  → đúng khoá, **`khsx`** (có CẢ `WAREHOUSE_STAFF` lẫn `PRODUCTION_PLANNER`) trả về đủ cả 4 khoá của
+  2 role - xác nhận cơ chế multi-role hoạt động đúng với dữ liệu thật, không chỉ trên mock.
+  **`han`/`son`** (không role nào khớp bảng mục 6.3) → `counts: {}` đúng như thiết kế, không lỗi.
+- Route xác nhận đúng `GET /api/me/work-queue` (log Nest lúc khởi động:
+  `WorkQueueController {/api/me}`).
+- Baseline `notifications` không đổi trước/sau (endpoint thuần đọc, không ghi) - vẫn đúng 21 dòng, 0
+  `readAt`.
+
+### 27.6 Đã làm (FE)
+
+Khảo sát trước khi code: cơ chế hiển thị badge đã có sẵn ở `ProductionPlanApp.tsx` (field
+`badge?: number` trong mảng `NAV`, đã tự render số đỏ) - chỉ 1/7 shell có sẵn, 6 shell còn lại
+(Mfg/Boss/Purchasing/InboundWarehouse/Sales) phải thêm mới (mirror đúng cách render đã có, không
+bịa kiểu mới). Bỏ qua `AdminApp.tsx` - Admin không có dòng nào trong bảng role/menu mục 6.3.
+
+- [work-queue-api.ts](../../DNA-ERP/src/services/work-queue-api.ts) (file mới): `getWorkQueue()`,
+  re-export qua `api.ts`.
+- [useWorkQueue.ts](../../DNA-ERP/src/hooks/useWorkQueue.ts) +
+  [WorkQueueContext.tsx](../../DNA-ERP/src/context/WorkQueueContext.tsx) (file mới): mirror ĐÚNG
+  `useNotifications.ts`/`NotificationsContext.tsx` (poll 30s, dừng khi tab ẩn
+  `visibilitychange`, refetch khi quay lại tab, 1 Provider dùng chung cho cả cây tránh double-poll).
+  Mount ở `app/layout.tsx`, lồng trong `NotificationsProvider`.
+- Gắn badge vào ĐÚNG menu item từng shell (đọc kỹ code từng shell trước khi gắn, không suy diễn từ
+  tên menu suông - 2 chỗ lệch giữa "tên menu" và "vị trí thật" phát hiện lúc làm):
+  - `ProductionPlanApp.tsx`: `'duyet-sku'` = `khsxSkuReview`; `'lenh-sx'` đổi khoá theo role đang
+    xem trang này (`isBoss ? bossProductionApproval : khsxProductionRejected`) - đúng theo nhánh
+    `isBoss` đã có sẵn ở label dòng đó (Boss ghé qua trang này vẫn thấy đúng số của mình).
+  - `BossApp.tsx`: `'cho-duyet'` (1 mục nav) = TỔNG `bossSkuApproval + bossProductionApproval` (2
+    việc gộp vào 1 trang có filter nội bộ) - tách lại thành 2 badge riêng ở đúng 2 nút lọc "SKU
+    mới"/"Lệnh sản xuất" bên trong `ChoDuyetSection`.
+  - `MfgApp.tsx`: `'lenh-sx'`→`qlsxProductionQueue`, `'phoi-xac-nhan-nhan-sat'`→`phoiSteelReceiving`,
+    `'kcs-phoi'/'kcs-han'/'kcs-son'`→`kcsPhoi/kcsHan/kcsSon`. Riêng Spec: badge gắn vào sub-item
+    `'dinh-muc'` BÊN TRONG tab `'setup'` (không phải tab `'setup'` cha) - `'setup'` dùng CHUNG cho
+    cả `SPEC_STEEL`/`SPEC_ACCESSORY`, tự chọn `specSteelQuota`/`specDetailQuota` theo đúng
+    `user.mfgRole` của người đang xem.
+  - `PurchasingApp.tsx`: `'theo-doi-mua-hang'` = `purchaserPending`.
+  - `SalesApp.tsx`: `'orders'` = `salesReadyToShip`.
+  - `InboundWarehouseApp.tsx`: **lệch quan trọng nhất phát hiện lúc đọc code** - cả
+    `warehouseTransferPending` (phiếu "Nhập nội bộ" chờ xác nhận) VÀ `warehousePurchaseReceiving`
+    (hàng mua chờ nhận) đều là SUB-TAB bên trong CÙNG 1 trang `NhapKhoPage.tsx`/tab `'nhap-kho'` -
+    KHÔNG phải `'chuyen-tu-do'` (đó là màn TẠO phiếu chuyển đi, không phải hàng đang chờ mình xử
+    lý). Badge = tổng cả 2, gắn vào `'nhap-kho'`.
+- `tsc --noEmit`: 0 lỗi. `eslint --fix`: 0 lỗi (13 warning `react-hooks/exhaustive-deps` PRE-EXISTING
+  ở cả 6 file, cùng 1 pattern `useUrlState` đã có từ trước, không liên quan thay đổi lần này).
+  `npm test` (Vitest, không phải Jest - repo FE dùng Vitest): 58/58 pass, không đổi.
+
+### 27.7 Live-test FE thật (browser thật, đối chiếu đúng số đã live-test BE ở mục 27.5)
+
+Chạy lại BE+FE thật, đăng nhập LẦN LƯỢT các account đã có số > 0 ở mục 27.5 để xác nhận badge hiện
+đúng ngay trên UI (không chỉ đúng ở tầng API):
+
+- **`qlsx`**: mở drawer → "Xử lý lệnh sản xuất" hiện đúng badge đỏ **15** (khớp tuyệt đối số đã đối
+  chiếu `psql` ở mục 27.5).
+- **`boss`**: "Tổng hợp chờ duyệt" KHÔNG hiện badge (đúng vì cả 2 số = 0 lúc test) - xác nhận nhánh
+  "badge = 0 thì ẩn" hoạt động đúng, không hiện số 0 gây nhiễu. Mở trang, 2 nút lọc "SKU mới"/"Lệnh
+  sản xuất" cũng không hiện badge - không lỗi render.
+- **`sales`**: "Quản lí đơn hàng" hiện đúng badge **4** - xác nhận ca KHÓ NHẤT (đọc qua
+  `SalesOrdersService.countReadyToShip()`, dẫn xuất từ dữ liệu sản xuất thật) hoạt động đúng tới tận
+  UI, không chỉ đúng ở response JSON.
+- **`muapsh`**: "Theo dõi mua hàng" hiện đúng badge **42** - xác nhận `PENDING_APPROVAL_STATUSES`
+  (đã sửa so với bảng plan gốc "NEW/QUOTING") phản ánh đúng lên UI thật.
+
+### 27.8 Còn treo
+
+- 2 chỗ `setInterval` mà văn bản Phase 4 gốc định "bỏ nếu badge + thông báo đã thay được"
+  (`LenhSXPage.tsx`, `CuttingProposalsPage.tsx`) hoá ra KHÔNG phải polling đếm việc-chờ-tôi - đang
+  tự refetch khi có dòng ở trạng thái `CALCULATING` (chờ solver trả lời), phục vụ mục đích khác hẳn
+  (thấy kết quả tính cập nhật). ĐÃ GIỮ NGUYÊN, không đụng vào - đúng quyết định đã ghi trước khi làm
+  FE.
+- Chưa live-test qua browser cho 6/9 role còn lại (KHSX, Spec Sắt/chi tiết, Kho, Phôi, KCS) - đã
+  đối chiếu ĐÚNG số qua API+`psql` ở mục 27.5 (toàn bộ đều = 0 ở dữ liệu dev hiện tại, không có ca
+  > 0 nào để chụp ảnh badge thật) - nên còn "nợ" 1 lần xác nhận trực quan khi dữ liệu dev tự nhiên
+  phát sinh số > 0 cho các role đó (cùng tinh thần "test khi có dịp tự nhiên" đã áp dụng ở vài mục
+  trước, vd 17.5).
+- Chưa thêm badge riêng cho `HAN_STAFF`/`SON_STAFF` - bảng mục 6.3 không có dòng nào cho 2 role này
+  (XacNhanNhanSatPage hiện chỉ có `MaterialIssuesService`/`MaterialYieldIssuesService`, Phase 3b mục
+  22 đã có thông báo ACTION_REQUIRED riêng rồi) - giữ nguyên, không tự thêm ngoài phạm vi mục 6.3.

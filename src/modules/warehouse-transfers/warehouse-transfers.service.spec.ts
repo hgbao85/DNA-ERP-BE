@@ -6,6 +6,7 @@ import {
   TransferStatus,
 } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WarehouseTransfersService } from './warehouse-transfers.service';
@@ -14,6 +15,7 @@ describe('WarehouseTransfersService', () => {
   let service: WarehouseTransfersService;
   let stockLedgerService: { postEntry: jest.Mock };
   let stockReservationsService: { getAvailableQty: jest.Mock };
+  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
   let prisma: {
     warehouse: { findUnique: jest.Mock };
     warehouseTransfer: {
@@ -66,6 +68,7 @@ describe('WarehouseTransfersService', () => {
     rejectedAt: null,
     fromWarehouse: phoiSonHan,
     toWarehouse: vatTuTp,
+    createdById: 'user-creator',
     items: [
       {
         id: 500n,
@@ -112,10 +115,15 @@ describe('WarehouseTransfersService', () => {
         Promise.resolve(onHand),
       ),
     };
+    notificationsService = {
+      emit: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(undefined),
+    };
     service = new WarehouseTransfersService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
+      notificationsService as unknown as NotificationsService,
     );
 
     prisma.warehouse.findUnique.mockImplementation(
@@ -353,6 +361,33 @@ describe('WarehouseTransfersService', () => {
       );
     });
 
+    // Phase 3b, nhóm 7.5-iii, changelog 2026-09-25 mục 23.
+    it('emit WAREHOUSE_TRANSFER_CREATED sau khi tạo - đúng code/kho nguồn/số dòng/kho đích', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
+      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
+
+      await service.create(dto, null, 'user-1', 'idem-key-1');
+
+      expect(notificationsService.emit).toHaveBeenCalledWith('WAREHOUSE_TRANSFER_CREATED', {
+        entityId: '50',
+        actorId: 'user-creator',
+        params: {
+          code: 'CK-2026-001',
+          fromWarehouseName: 'Phoi Son Han',
+          itemCount: 1,
+          toWarehouseCode: 'vat-tu-tp',
+        },
+      });
+    });
+
+    it('idempotency short-circuit - KHÔNG emit lại WAREHOUSE_TRANSFER_CREATED (chỉ notify đúng 1 lần lúc tạo thật)', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+
+      await service.create(dto, null, 'user-1', 'idem-key-1');
+
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+    });
+
     // Vấn đề #11 audit 26/08 (phần còn thiếu) - cùng idiom material-issues/packaging-issues.
     it('idempotency short-circuit - returns the existing transfer, does not create a duplicate', async () => {
       const existing = transferRow();
@@ -439,6 +474,22 @@ describe('WarehouseTransfersService', () => {
           }),
         }),
       );
+    });
+
+    // Phase 3b, nhóm 7.5-iii, changelog 2026-09-25 mục 23.
+    it('resolve WAREHOUSE_TRANSFER_CREATED sau khi kho đích xác nhận', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
+        transferRow({ status: TransferStatus.CONFIRMED }),
+      );
+
+      await service.confirm('50', 'user-1', 'vat-tu-tp');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith({
+        entityType: 'WAREHOUSE_TRANSFER',
+        entityId: '50',
+        types: ['WAREHOUSE_TRANSFER_CREATED'],
+      });
     });
 
     // materialId=null chỉ còn xảy ra với dòng "ghi tự do" tạo TRƯỚC 09/09/2026 (DTO tạo mới đã
@@ -753,6 +804,21 @@ describe('WarehouseTransfersService', () => {
       );
     });
 
+    // Phase 3b, nhóm 7.5-iii, changelog 2026-09-25 mục 23.
+    it('emit WAREHOUSE_TRANSFER_CREATED sau khi tạo phiếu mảnh (itemCount đếm pieceItems, không phải items)', async () => {
+      prisma.warehouseTransfer.create.mockResolvedValue(
+        transferRow({ items: [], pieceItems: [{ id: 900n }] }),
+      );
+
+      await service.createPieceTransfer(pieceDto, 'phoi-son-han', 'user-1', 'idem-key-1');
+
+      const [, emitArg] = notificationsService.emit.mock.calls[0] as [
+        string,
+        { params: { itemCount: number } },
+      ];
+      expect(emitArg.params.itemCount).toBe(1);
+    });
+
     it('rejects with 400 when nothing is ready to transfer', async () => {
       prisma.productionBatch.findMany.mockResolvedValue([]);
 
@@ -875,6 +941,32 @@ describe('WarehouseTransfersService', () => {
           }),
         }),
       );
+    });
+
+    // Phase 3b, nhóm 7.5-iii, changelog 2026-09-25 mục 23.
+    it('resolve WAREHOUSE_TRANSFER_CREATED và emit WAREHOUSE_TRANSFER_REJECTED kèm lý do, đúng người tạo', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
+        transferRow({ status: TransferStatus.REJECTED, rejectionReason: 'thieu hang' }),
+      );
+
+      await service.reject('50', 'thieu hang', 'vat-tu-tp', 'user-1');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith({
+        entityType: 'WAREHOUSE_TRANSFER',
+        entityId: '50',
+        types: ['WAREHOUSE_TRANSFER_CREATED'],
+      });
+      expect(notificationsService.emit).toHaveBeenCalledWith('WAREHOUSE_TRANSFER_REJECTED', {
+        entityId: '50',
+        params: {
+          code: 'CK-2026-001',
+          fromWarehouseName: 'Phoi Son Han',
+          itemCount: 1,
+          reason: 'thieu hang',
+          createdById: 'user-creator',
+        },
+      });
     });
 
     it('rejects with 409 when another request already confirmed/rejected the transfer inside the transaction (race guard)', async () => {

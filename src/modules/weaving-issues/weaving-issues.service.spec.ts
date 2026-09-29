@@ -32,7 +32,7 @@ describe('WeavingIssuesService', () => {
     materialGroup: { findMany: jest.Mock };
     pieceMaterialItem: { findMany: jest.Mock };
     material: { findUnique: jest.Mock };
-    warehouse: { findUniqueOrThrow: jest.Mock };
+    warehouse: { findUniqueOrThrow: jest.Mock; findMany: jest.Mock };
     weavingIssueMaterial: { create: jest.Mock };
     stockQuant: { findMany: jest.Mock };
     warehouseTransferPieceItem: { findMany: jest.Mock; aggregate: jest.Mock };
@@ -42,6 +42,7 @@ describe('WeavingIssuesService', () => {
   };
   let stockLedgerService: { postEntry: jest.Mock };
   let stockReservationsService: { getAvailableQty: jest.Mock; drainPoolBestEffort: jest.Mock };
+  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
 
   const order = {
     id: 1n,
@@ -133,6 +134,7 @@ describe('WeavingIssuesService', () => {
       material: { findUnique: jest.fn() },
       warehouse: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 999n, code: 'PRODUCTION' }),
+        findMany: jest.fn().mockResolvedValue([{ code: 'thanh-pham' }]),
       },
       weavingIssueMaterial: { create: jest.fn() },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
@@ -152,10 +154,15 @@ describe('WeavingIssuesService', () => {
       getAvailableQty: jest.fn().mockResolvedValue(1_000_000),
       drainPoolBestEffort: jest.fn().mockResolvedValue(undefined),
     };
+    notificationsService = {
+      emit: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(undefined),
+    };
     service = new WeavingIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as never,
       stockReservationsService as never,
+      notificationsService as never,
     );
   });
 
@@ -611,6 +618,94 @@ describe('WeavingIssuesService', () => {
         service.receive('1', { pieceId: '20', weavingPointId: '40', qty: 5 }, 'user-1', null),
       ).rejects.toThrow(ConflictException);
       expect(prisma.weavingReceipt.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('notify WEAVING_ISSUE_TO_POINT (nhóm 7.5-iv, xuất/nhận đan)', () => {
+    it('create(): emit() với entityId/dedupeKey ghép + outstandingQty tính lại SAU transaction (thấy cả lần xuất vừa tạo)', async () => {
+      prisma.weavingIssue.create.mockResolvedValue(issueRow);
+      // Gọi 1 (trong tx, cho remaining): issuedSoFar = 0. Gọi 2 (ngoài tx, recompute outstanding
+      // SAU KHI đã commit): đã thấy dòng vừa tạo -> 10.
+      prisma.weavingIssue.aggregate
+        .mockResolvedValueOnce({ _sum: { qty: 0 } })
+        .mockResolvedValueOnce({ _sum: { qty: 10 } });
+
+      await service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null);
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'WEAVING_ISSUE_TO_POINT',
+        expect.objectContaining({
+          entityId: '1:20:40',
+          actorId: 'user-1',
+          dedupeKey: 'WEAVING_ISSUE_TO_POINT:1:20:40',
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+          params: expect.objectContaining({
+            poNumber: 'PO-31-1',
+            pieceName: 'Mảnh Đan',
+            weavingPointName: 'Điểm đan A',
+            outstandingQty: 10,
+            warehouseCodes: ['thanh-pham'],
+          }),
+        }),
+      );
+    });
+
+    it('create(): idempotency short-circuit - KHÔNG emit lại', async () => {
+      prisma.weavingIssue.findUnique.mockResolvedValue(issueRow);
+
+      await service.create(
+        '1',
+        { pieceId: '20', weavingPointId: '40', qty: 10 },
+        'user-1',
+        null,
+        'idem-key-1',
+      );
+
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+    });
+
+    it('receive(): resolve() khi outstanding tại điểm đan về ĐÚNG 0 sau khi nhận', async () => {
+      prisma.weavingReceipt.create.mockResolvedValue(receiptRow);
+      prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: 10 } });
+      // Gọi 1 (trong tx, receivedAtPoint TRƯỚC lần nhận này) = 5 -> remaining = 5, đủ cho qty = 5.
+      // Gọi 2 (ngoài tx, recompute SAU KHI đã commit, đã thấy dòng vừa tạo) = 10 -> outstanding = 0.
+      prisma.weavingReceipt.aggregate
+        .mockResolvedValueOnce({ _sum: { qty: 5 } })
+        .mockResolvedValueOnce({ _sum: { qty: 10 } });
+
+      await service.receive('1', { pieceId: '20', weavingPointId: '40', qty: 5 }, 'user-1', null);
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith({
+        entityType: 'WEAVING_ALLOCATION',
+        entityId: '1:20:40',
+        types: ['WEAVING_ISSUE_TO_POINT'],
+      });
+    });
+
+    it('receive(): KHÔNG resolve() khi mới nhận MỘT PHẦN (outstanding còn > 0)', async () => {
+      prisma.weavingReceipt.create.mockResolvedValue(receiptRow);
+      prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: 10 } });
+      prisma.weavingReceipt.aggregate
+        .mockResolvedValueOnce({ _sum: { qty: 0 } })
+        .mockResolvedValueOnce({ _sum: { qty: 5 } });
+
+      await service.receive('1', { pieceId: '20', weavingPointId: '40', qty: 5 }, 'user-1', null);
+
+      expect(notificationsService.resolve).not.toHaveBeenCalled();
+    });
+
+    it('receive(): idempotency short-circuit - KHÔNG resolve lại', async () => {
+      prisma.weavingReceipt.findUnique.mockResolvedValue(receiptRow);
+
+      await service.receive(
+        '1',
+        { pieceId: '20', weavingPointId: '40', qty: 5 },
+        'user-1',
+        null,
+        'idem-key-1',
+      );
+
+      expect(notificationsService.resolve).not.toHaveBeenCalled();
     });
   });
 

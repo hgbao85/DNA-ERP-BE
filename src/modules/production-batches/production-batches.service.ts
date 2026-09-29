@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -31,6 +32,7 @@ import { isFamilyScope } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreatePieceStepBatchDto } from './dto/create-piece-step-batch.dto';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
 import { ListPieceStepBundlesQueryDto } from './dto/list-piece-step-bundles-query.dto';
@@ -115,11 +117,26 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  */
 @Injectable()
 export class ProductionBatchesService {
+  private readonly logger = new Logger(ProductionBatchesService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
     private readonly materialYieldIssuesService: MaterialYieldIssuesService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
+   *  17.2/19.2 changelog notification). */
+  private async notifyBatchToKcs(entityId: bigint, params: Record<string, unknown>): Promise<void> {
+    try {
+      await this.notifications.emit('BATCH_TO_KCS', { entityId: entityId.toString(), params });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create BATCH_TO_KCS notification (entity ${entityId}): ${(error as Error).message}`,
+      );
+    }
+  }
 
   async create(
     productionOrderId: string,
@@ -348,6 +365,10 @@ export class ProductionBatchesService {
       },
       { timeout: 20_000 },
     );
+    await this.notifyBatchToKcs(updated.id, {
+      piCode: updated.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
+      stage: updated.stage,
+    });
     return this.toResponseDto(updated);
   }
 
