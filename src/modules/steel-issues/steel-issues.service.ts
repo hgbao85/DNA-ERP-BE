@@ -31,7 +31,6 @@ import { isFamilyScope } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
 import {
   PhoiProgressItemResponseDto,
@@ -180,39 +179,7 @@ export class SteelIssuesService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
-    private readonly notifications: NotificationsService,
   ) {}
-
-  /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/17.2
-   *  changelog notification): catch bên trong 1 Prisma interactive transaction không cứu được
-   *  transaction đó nếu lỗi. */
-  private async notifySteelIssue(
-    type: 'STEEL_ISSUE_TO_PHOI' | 'CUT_BUNDLE_TO_KCS',
-    entityId: bigint,
-    params: Record<string, unknown>,
-  ): Promise<void> {
-    try {
-      await this.notifications.emit(type, { entityId: entityId.toString(), params });
-    } catch (error) {
-      this.logger.error(
-        `Failed to create ${type} notification (entity ${entityId}): ${(error as Error).message}`,
-      );
-    }
-  }
-
-  private async resolveSteelIssueToPhoi(entityId: bigint): Promise<void> {
-    try {
-      await this.notifications.resolve({
-        entityType: 'STEEL_ISSUE',
-        entityId: entityId.toString(),
-        types: ['STEEL_ISSUE_TO_PHOI'],
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed to resolve STEEL_ISSUE_TO_PHOI (entity ${entityId}): ${(error as Error).message}`,
-      );
-    }
-  }
 
   async create(
     productionInvoiceId: string,
@@ -293,12 +260,6 @@ export class SteelIssuesService {
       },
       { timeout: 15_000 },
     );
-
-    await this.notifySteelIssue('STEEL_ISSUE_TO_PHOI', created.id, {
-      piCode: created.productionInvoice.code,
-      materialCode: created.material.code,
-      barCount: created.barCount,
-    });
 
     return this.toResponseDto(created, await this.resolveRequiredSteps(invoice.id, materialId));
   }
@@ -538,7 +499,6 @@ export class SteelIssuesService {
       data: { status: SteelIssueStatus.RECEIVED },
       include: STEEL_ISSUE_INCLUDE,
     });
-    await this.resolveSteelIssueToPhoi(updated.id);
     return this.toResponseDto(
       updated,
       await this.resolveRequiredSteps(updated.productionInvoiceId, updated.materialId),
@@ -1028,15 +988,6 @@ export class SteelIssuesService {
       include: { segments: { include: { segmentSpec: true } } },
     });
     await this.syncIssueStatusFromBundles(bundle.steelIssueId);
-
-    const invoice = await this.prisma.productionInvoice.findUnique({
-      where: { id: bundle.steelIssue.productionInvoiceId },
-      select: { code: true },
-    });
-    await this.notifySteelIssue('CUT_BUNDLE_TO_KCS', updated.id, {
-      piCode: invoice?.code ?? `#${bundle.steelIssue.productionInvoiceId}`,
-    });
-
     return this.toBundleResponseDto(updated);
   }
 

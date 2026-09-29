@@ -47,10 +47,7 @@ const SUPPLIER_WAREHOUSE_CODE = 'SUPPLIER';
 /// QUOTING/SUBMITTED/REJECTED là tàn dư của luồng báo giá cũ (gỡ 2026-08-27) và KHÔNG còn sinh
 /// mới, nhưng phải nằm trong danh sách này: production còn 36 dòng kẹt ở đó lúc cắt luồng, và màn
 /// duyệt của Sếp đã bị gỡ nên bossApprove() là đường ra duy nhất của chúng.
-/// Export (2026-09-29, Phase 4 "việc chờ tôi" mục 6.3) - WorkQueueService đếm đúng tập item này
-/// cho badge "Theo dõi mua hàng" của Mua hàng, tránh định nghĩa lại NEW/QUOTING lệch nguồn (xem
-/// research trước khi code: bảng plan gốc mục 6.3 ghi "NEW/QUOTING" là SAI/THIẾU so với luồng thật).
-export const PENDING_APPROVAL_STATUSES: PurchaseProposalStatus[] = [
+const PENDING_APPROVAL_STATUSES: PurchaseProposalStatus[] = [
   PurchaseProposalStatus.NEW,
   PurchaseProposalStatus.QUOTING,
   PurchaseProposalStatus.SUBMITTED,
@@ -175,7 +172,7 @@ export class PurchaseProposalsService {
       materialCode?: string;
       qty?: number;
       unit?: string;
-      warehouseCode?: string;
+      warehouseId?: string;
     },
     actorUserId?: string,
   ): Promise<void> {
@@ -664,7 +661,7 @@ export class PurchaseProposalsService {
         materialCode: item.material.code,
         qty: dto.receivedQty,
         unit: item.material.unit,
-        warehouseCode: targetWarehouseCode,
+        warehouseId: materialWarehouseId.toString(),
       },
       userId,
     );

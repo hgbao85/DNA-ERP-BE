@@ -9,7 +9,6 @@ import { ProductionBatchStatus, SteelIssueStatus } from '../../generated/prisma/
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { QcReviewsService } from './qc-reviews.service';
 
 const decimal = (n: number) => ({ toNumber: () => n, toString: () => String(n) });
@@ -37,7 +36,6 @@ describe('QcReviewsService', () => {
     pieceStepBundle: { update: jest.Mock; updateMany: jest.Mock };
     productionOrder: { findFirst: jest.Mock; findUniqueOrThrow: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
-    productionInvoice: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
   let steelIssuesService: {
@@ -50,7 +48,6 @@ describe('QcReviewsService', () => {
     autoFinalizePieceOutputIfLastStepComplete: jest.Mock;
   };
   let cloudinaryService: { deleteByUrl: jest.Mock };
-  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
 
   const awaitingIssue = {
     id: 100n,
@@ -95,9 +92,6 @@ describe('QcReviewsService', () => {
     reportedQty: 20,
     status: ProductionBatchStatus.AWAITING_QC,
     reportedById: 'user-han',
-    productionOrder: {
-      productionInvoiceItem: { productionInvoice: { code: 'PI-2026-700' } },
-    },
   };
 
   const batchQcReview = {
@@ -203,9 +197,6 @@ describe('QcReviewsService', () => {
       productionInvoiceItem: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceId: 900n }),
       },
-      productionInvoice: {
-        findUnique: jest.fn().mockResolvedValue({ code: 'PI-2026-900' }),
-      },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     steelIssuesService = {
@@ -218,16 +209,11 @@ describe('QcReviewsService', () => {
       autoFinalizePieceOutputIfLastStepComplete: jest.fn().mockResolvedValue(undefined),
     };
     cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
-    notificationsService = {
-      emit: jest.fn().mockResolvedValue(undefined),
-      resolve: jest.fn().mockResolvedValue(undefined),
-    };
     service = new QcReviewsService(
       prisma as unknown as PrismaServiceType,
       steelIssuesService as unknown as SteelIssuesService,
       productionBatchesService as unknown as ProductionBatchesService,
       cloudinaryService as unknown as CloudinaryService,
-      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -369,43 +355,6 @@ describe('QcReviewsService', () => {
       );
       expect(steelIssuesService.syncIssueStatusFromBundles).toHaveBeenCalledWith(100n);
       expect(result.id).toBe('500');
-    });
-
-    // Phase 3b, nhóm 7.5-i, changelog 2026-09-25 mục 19.
-    it('duyệt ĐẠT - resolve CUT_BUNDLE_TO_KCS + emit QC_PASSED cho QLSX', async () => {
-      await service.reviewCutBundle('1', { segments: [] }, 'user-kcs');
-
-      expect(notificationsService.resolve).toHaveBeenCalledWith({
-        entityType: 'CUT_BUNDLE',
-        entityId: '1',
-        types: ['CUT_BUNDLE_TO_KCS'],
-      });
-      expect(notificationsService.emit).toHaveBeenCalledWith(
-        'QC_PASSED',
-        expect.objectContaining({ params: { piCode: 'PI-2026-900' } }),
-      );
-      expect(notificationsService.emit).not.toHaveBeenCalledWith('QC_FAILED', expect.anything());
-    });
-
-    it('duyệt có lỗi (failedQty > 0) - emit QC_FAILED cho Phôi + QLSX, KHÔNG emit QC_PASSED', async () => {
-      prisma.cutPatternSegment.groupBy.mockResolvedValue([
-        { segmentSpecId: 30n, _sum: { qty: 8 } },
-      ]);
-      prisma.qcReview.create.mockResolvedValue({ ...bundleQcReview, failedQty: 2 });
-
-      await service.reviewCutBundle(
-        '1',
-        { segments: [{ segmentSpecId: '30', failedQty: 2 }] },
-        'user-kcs',
-      );
-
-      expect(notificationsService.emit).toHaveBeenCalledWith(
-        'QC_FAILED',
-        expect.objectContaining({
-          params: { piCode: 'PI-2026-900', failedQty: 2, senderRole: 'PHOI_STAFF' },
-        }),
-      );
-      expect(notificationsService.emit).not.toHaveBeenCalledWith('QC_PASSED', expect.anything());
     });
 
     it('vượt số đã cắt của ĐÚNG bundle này (groupBy lọc theo cutBundleId, không cộng dồn cả lô)', async () => {
@@ -572,48 +521,6 @@ describe('QcReviewsService', () => {
         }),
       );
       expect(result.id).toBe('501');
-    });
-
-    // Phase 3b, nhóm 7.5-i, changelog 2026-09-25 mục 19.
-    it('duyệt ĐẠT - resolve BATCH_TO_KCS + emit QC_PASSED', async () => {
-      await service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs');
-
-      expect(notificationsService.resolve).toHaveBeenCalledWith({
-        entityType: 'PRODUCTION_BATCH',
-        entityId: '700',
-        types: ['BATCH_TO_KCS'],
-      });
-      expect(notificationsService.emit).toHaveBeenCalledWith(
-        'QC_PASSED',
-        expect.objectContaining({ params: { piCode: 'PI-2026-700' } }),
-      );
-    });
-
-    it('duyệt có lỗi (failedQty > 0, stage HAN) - emit QC_FAILED cho Hàn + QLSX', async () => {
-      await service.reviewProductionBatch('700', { failedQty: 5 }, 'user-kcs');
-
-      expect(notificationsService.emit).toHaveBeenCalledWith(
-        'QC_FAILED',
-        expect.objectContaining({
-          params: { piCode: 'PI-2026-700', failedQty: 5, senderRole: 'HAN_STAFF' },
-        }),
-      );
-    });
-
-    it('duyệt có lỗi, stage SON - emit QC_FAILED cho Sơn', async () => {
-      productionBatchesService.findOneRowOrThrow.mockResolvedValue({
-        ...awaitingBatch,
-        stage: 'SON',
-      });
-
-      await service.reviewProductionBatch('700', { failedQty: 3 }, 'user-kcs');
-
-      expect(notificationsService.emit).toHaveBeenCalledWith(
-        'QC_FAILED',
-        expect.objectContaining({
-          params: { piCode: 'PI-2026-700', failedQty: 3, senderRole: 'SON_STAFF' },
-        }),
-      );
     });
 
     it('có failedQty - reportedQty ghi đè = phần ĐẠT, KHÔNG tạo lô rework mới (2026-09-08: bỏ hẳn phân loại Sửa được/Phế, mirror reviewPieceStep)', async () => {

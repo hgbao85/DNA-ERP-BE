@@ -11,7 +11,6 @@ import {
   StockLedgerRefType,
 } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { MaterialIssuesService } from './material-issues.service';
@@ -20,7 +19,6 @@ describe('MaterialIssuesService', () => {
   let service: MaterialIssuesService;
   let stockLedgerService: { postEntry: jest.Mock };
   let stockReservationsService: { getAvailableQty: jest.Mock; drainPoolBestEffort: jest.Mock };
-  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
   // Vấn đề #1 audit 26/08 - $queryRaw (khoá + đọc stock_quant) điều khiển bởi biến này, mặc định
   // dư dả để không ảnh hưởng các test có sẵn (chỉ quan tâm định mức BOM); test riêng cho check tồn
   // kho thật sẽ tự set lại giá trị thấp.
@@ -52,10 +50,7 @@ describe('MaterialIssuesService', () => {
     bomRevisionId: 5n,
     quantity: 10,
     productionInvoiceItemId: 20n,
-    productionInvoiceItem: {
-      salesOrder: { orderCode: 'PO-31' },
-      productionInvoice: { code: 'PI-31' },
-    },
+    productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
   };
   // warehouseId/warehouse (2026-09-03): findMaterialWarehouseOrThrow() giờ đọc động Kho của vật
   // tư này thay vì hardcode literal 'vat-tu-tp' - mirror CuttingProposalsService.approve().
@@ -63,7 +58,6 @@ describe('MaterialIssuesService', () => {
     id: 30n,
     code: 'CO2-25',
     name: 'Khí CO₂ (bình 25kg)',
-    unit: 'bình',
     warehouseId: 2n,
     warehouse: { id: 2n, code: 'vat-tu-tp' },
   };
@@ -144,15 +138,10 @@ describe('MaterialIssuesService', () => {
       getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
       drainPoolBestEffort: jest.fn().mockResolvedValue(undefined),
     };
-    notificationsService = {
-      emit: jest.fn().mockResolvedValue(undefined),
-      resolve: jest.fn().mockResolvedValue(undefined),
-    };
     service = new MaterialIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
-      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -192,32 +181,6 @@ describe('MaterialIssuesService', () => {
         expect.anything(),
       );
       expect(result.id).toBe('100');
-    });
-
-    // Phase 3b, nhóm 7.5-ii, changelog 2026-09-25 mục 22.
-    it('emit MATERIAL_ISSUE_TO_TEAM sau khi xuất - đúng piCode/materialCode/qty/unit/stage', async () => {
-      prisma.materialIssue.create.mockResolvedValue(issueRow);
-
-      await service.create('1', dto, 'user-1', null);
-
-      expect(notificationsService.emit).toHaveBeenCalledWith('MATERIAL_ISSUE_TO_TEAM', {
-        entityId: '100',
-        params: {
-          piCode: 'PI-31',
-          materialCode: 'CO2-25',
-          qty: 5,
-          unit: material.unit,
-          stage: MfgStage.HAN,
-        },
-      });
-    });
-
-    it('idempotency short-circuit - KHÔNG emit lại MATERIAL_ISSUE_TO_TEAM (chỉ notify đúng 1 lần lúc tạo thật)', async () => {
-      prisma.materialIssue.findUnique.mockResolvedValue(issueRow);
-
-      await service.create('1', dto, 'user-1', null, 'idem-key-1');
-
-      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     it('idempotency short-circuit - trả về đợt cũ, không tạo mới, vẫn đảm bảo ledger đã ghi', async () => {
@@ -485,22 +448,6 @@ describe('MaterialIssuesService', () => {
         }),
       );
       expect(result.status).toBe(MaterialIssueStatus.RECEIVED);
-    });
-
-    // Phase 3b, nhóm 7.5-ii, changelog 2026-09-25 mục 22.
-    it('resolve MATERIAL_ISSUE_TO_TEAM sau khi tổ nhận xác nhận', async () => {
-      prisma.materialIssue.findUniqueOrThrow.mockResolvedValue({
-        ...issueRow,
-        status: MaterialIssueStatus.RECEIVED,
-      });
-
-      await service.receive('100', {}, 'user-2', null);
-
-      expect(notificationsService.resolve).toHaveBeenCalledWith({
-        entityType: 'MATERIAL_ISSUE',
-        entityId: '100',
-        types: ['MATERIAL_ISSUE_TO_TEAM'],
-      });
     });
 
     it('cho phép mfgRole khớp đúng stage (HAN)', async () => {

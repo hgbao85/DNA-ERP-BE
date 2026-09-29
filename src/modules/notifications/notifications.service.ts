@@ -272,19 +272,6 @@ export class NotificationsService {
     query: ListNotificationsQueryDto,
     userId: string,
   ): Promise<Paginated<NotificationResponseDto>> {
-    // `category` và `search` (kế thừa từ PaginationQueryDto, dùng cho trang "Thông báo của tôi" -
-    // xem changelog notification 2026-09-25 mục 20.6) đều lọc trên quan hệ `notification` - gộp
-    // chung 1 object thay vì 2 `...(cond ? {notification: ...} : {})` sẽ đè nhau.
-    const notificationFilter: Prisma.NotificationWhereInput = {};
-    if (query.category) notificationFilter.category = query.category as NotificationCategory;
-    if (query.search?.trim()) {
-      const term = query.search.trim();
-      notificationFilter.OR = [
-        { title: { contains: term, mode: 'insensitive' } },
-        { message: { contains: term, mode: 'insensitive' } },
-      ];
-    }
-
     const where: Prisma.NotificationRecipientWhereInput = {
       userId,
       archivedAt: null,
@@ -292,7 +279,9 @@ export class NotificationsService {
       // resolved KHÁC status (đã đọc) - xem doc comment ListNotificationsQueryDto.resolved.
       ...(query.resolved === 'false' ? { resolvedAt: null } : {}),
       ...(query.resolved === 'true' ? { resolvedAt: { not: null } } : {}),
-      ...(Object.keys(notificationFilter).length > 0 ? { notification: notificationFilter } : {}),
+      ...(query.category
+        ? { notification: { category: query.category as NotificationCategory } }
+        : {}),
     };
 
     const [rows, total] = await Promise.all([

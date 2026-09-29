@@ -616,29 +616,6 @@ export class SalesOrdersService {
     );
   }
 
-  /**
-   * Đếm số dòng đơn "sẵn sàng giao nhưng chưa giao" (Phase 4 "việc chờ tôi", mục 6.3, badge Sales
-   * "Đơn hàng") - PHẢI tái dùng `resolveStages()`/`loadPiItems()` ở trên, KHÔNG được lọc thẳng
-   * `SalesOrderItem.status` (cột đó đứng yên ở LEN_KE_HOACH vĩnh viễn - xem doc comment
-   * resolveStages(), sẽ luôn trả về 0 nếu lọc theo cột đó). "Chưa giao" = `shippedQty < totalQty`
-   * (cột thật, cập nhật bởi shipItem() - so sánh field-vs-field nên lọc ở tầng ứng dụng thay vì
-   * Prisma `where`, quy mô dữ liệu đơn hàng của nhà máy này đủ nhỏ để không cần raw SQL riêng).
-   */
-  async countReadyToShip(): Promise<number> {
-    const items = await this.prisma.salesOrderItem.findMany({
-      select: { salesOrderId: true, mfgProductId: true, totalQty: true, shippedQty: true },
-    });
-    const pending = items.filter((it) => it.shippedQty < it.totalQty);
-    if (pending.length === 0) return 0;
-
-    const orderIds = [...new Set(pending.map((it) => it.salesOrderId))];
-    const stages = await this.resolveStages(await this.loadPiItems(orderIds));
-    return pending.filter((it) => {
-      const stage = stages.get(stageKey(it.salesOrderId, it.mfgProductId));
-      return stage === SalesOrderItemStatus.DONG_GOI || stage === SalesOrderItemStatus.HOAN_THANH;
-    }).length;
-  }
-
   private toResponseDto(
     order: SalesOrderWithItems,
     deleteBlockedReason: string | null,

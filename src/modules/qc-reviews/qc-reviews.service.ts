@@ -4,12 +4,10 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
   CutBundleStatus,
-  MfgStage,
   PieceStepBundleStatus,
   Prisma,
   ProductionBatchStatus,
@@ -17,7 +15,7 @@ import {
   SteelIssueStatus,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
-import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
+import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import {
   assertOrderPiHasActiveFloor,
   assertPiHasActiveFloor,
@@ -28,7 +26,6 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { CreateQcReviewDto } from './dto/create-qc-review.dto';
 import { CreateSteelIssueQcReviewDto } from './dto/create-steel-issue-qc-review.dto';
 import { ListQcReviewsQueryDto } from './dto/list-qc-reviews-query.dto';
@@ -54,67 +51,12 @@ type QcReviewRow = Prisma.QcReviewGetPayload<{ include: typeof QC_REVIEW_INCLUDE
  */
 @Injectable()
 export class QcReviewsService {
-  private readonly logger = new Logger(QcReviewsService.name);
-
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly steelIssuesService: SteelIssuesService,
     private readonly productionBatchesService: ProductionBatchesService,
     private readonly cloudinaryService: CloudinaryService,
-    private readonly notifications: NotificationsService,
   ) {}
-
-  /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
-   *  17.2/19.2 changelog notification). */
-  private async resolveAwaitingQc(
-    entityType: 'CUT_BUNDLE' | 'PRODUCTION_BATCH',
-    entityId: bigint,
-    type: 'CUT_BUNDLE_TO_KCS' | 'BATCH_TO_KCS',
-  ): Promise<void> {
-    try {
-      await this.notifications.resolve({
-        entityType,
-        entityId: entityId.toString(),
-        types: [type],
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed to resolve ${type} (entity ${entityId}): ${(error as Error).message}`,
-      );
-    }
-  }
-
-  /** `senderRole`: role Phôi cho đợt cắt, Hàn/Sơn cho đợt sản xuất (theo `MfgStage`) - dùng CHUNG
-   *  cho cả QC_FAILED lẫn QC_PASSED nên gộp vào 1 hàm duy nhất. */
-  private async notifyQcResult(
-    piCode: string,
-    failedQty: number,
-    senderRole: string,
-  ): Promise<void> {
-    try {
-      if (failedQty > 0) {
-        await this.notifications.emit('QC_FAILED', { params: { piCode, failedQty, senderRole } });
-      } else {
-        await this.notifications.emit('QC_PASSED', { params: { piCode } });
-      }
-    } catch (error) {
-      this.logger.error(
-        `Failed to create QC result notification (PI ${piCode}): ${(error as Error).message}`,
-      );
-    }
-  }
-
-  private mfgStageToSenderRole(stage: MfgStage): string {
-    switch (stage) {
-      case MfgStage.PHOI:
-        return BUSINESS_ROLES.PHOI_STAFF;
-      case MfgStage.HAN:
-        return BUSINESS_ROLES.HAN_STAFF;
-      case MfgStage.SON:
-      default:
-        return BUSINESS_ROLES.SON_STAFF;
-    }
-  }
 
   /**
    * Duyệt 1 SteelIssue đang AWAITING_QC — chấm THEO TỪNG CỠ ĐOẠN, CHỈ 2 kết quả: Đạt/Không đạt
@@ -323,17 +265,6 @@ export class QcReviewsService {
     // việc tạo review, lệch 1 nhịp ở đây không ảnh hưởng tính đúng đắn của review vừa tạo.
     await this.steelIssuesService.syncIssueStatusFromBundles(bundle.steelIssueId);
 
-    await this.resolveAwaitingQc('CUT_BUNDLE', bundle.id, 'CUT_BUNDLE_TO_KCS');
-    const invoice = await this.prisma.productionInvoice.findUnique({
-      where: { id: bundle.steelIssue.productionInvoiceId },
-      select: { code: true },
-    });
-    await this.notifyQcResult(
-      invoice?.code ?? `#${bundle.steelIssue.productionInvoiceId}`,
-      totalFailed,
-      BUSINESS_ROLES.PHOI_STAFF,
-    );
-
     return this.toResponseDto(created);
   }
 
@@ -500,13 +431,6 @@ export class QcReviewsService {
         include: QC_REVIEW_INCLUDE,
       });
     });
-
-    await this.resolveAwaitingQc('PRODUCTION_BATCH', batch.id, 'BATCH_TO_KCS');
-    await this.notifyQcResult(
-      batch.productionOrder?.productionInvoiceItem?.productionInvoice?.code ?? `#${batch.id}`,
-      dto.failedQty,
-      this.mfgStageToSenderRole(batch.stage),
-    );
 
     return this.toResponseDto(created);
   }

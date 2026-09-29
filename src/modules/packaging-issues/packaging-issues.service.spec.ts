@@ -6,7 +6,6 @@ import {
 } from '@nestjs/common';
 import { AccessoryItemKind, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PackagingIssuesService } from './packaging-issues.service';
@@ -15,7 +14,6 @@ describe('PackagingIssuesService', () => {
   let service: PackagingIssuesService;
   let stockLedgerService: { postEntry: jest.Mock };
   let stockReservationsService: { getAvailableQty: jest.Mock; drainPoolBestEffort: jest.Mock };
-  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
   // Vấn đề #1 audit 26/08 - $queryRaw (khoá + đọc stock_quant) điều khiển bởi biến này, mặc định
   // dư dả để không ảnh hưởng các test có sẵn (chỉ quan tâm định mức BOM).
   let physicalStockQty: number;
@@ -45,10 +43,7 @@ describe('PackagingIssuesService', () => {
     quantity: 10,
     productionInvoiceItemId: 21n,
     mfgProduct: { name: 'Ghế xoay demo' },
-    productionInvoiceItem: {
-      salesOrder: { orderCode: 'PO-31' },
-      productionInvoice: { code: 'PI-31' },
-    },
+    productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
   };
   // warehouseId/warehouse (2026-09-03): findMaterialWarehouseOrThrow() giờ đọc động Kho của vật
   // tư này thay vì hardcode literal 'vat-tu-tp' - mirror CuttingProposalsService.approve().
@@ -170,15 +165,10 @@ describe('PackagingIssuesService', () => {
       getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
       drainPoolBestEffort: jest.fn().mockResolvedValue(undefined),
     };
-    notificationsService = {
-      emit: jest.fn().mockResolvedValue(undefined),
-      resolve: jest.fn().mockResolvedValue(undefined),
-    };
     service = new PackagingIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
-      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -217,19 +207,6 @@ describe('PackagingIssuesService', () => {
         expect.anything(),
       );
       expect(result.id).toBe('100');
-    });
-
-    // Phase 3b, nhóm 7.5-ii, changelog 2026-09-25 mục 22. KHÔNG có test "resolve" cặp đôi - type
-    // này KHÔNG tự đóng (không có receive(), xem doc comment đầu service).
-    it('emit PACKAGING_ISSUE_CREATED sau khi xuất - đúng piCode/materialCode/qty/unit', async () => {
-      prisma.packagingIssue.create.mockResolvedValue(issueRow);
-
-      await service.create('1', dto, 'user-1', null);
-
-      expect(notificationsService.emit).toHaveBeenCalledWith('PACKAGING_ISSUE_CREATED', {
-        entityId: '100',
-        params: { piCode: 'PI-31', materialCode: 'TEM-01', qty: 5, unit: material.unit },
-      });
     });
 
     // 2026-09-23: ConsumableMaterialPurchaseService giờ giữ chỗ (StockReservation) phần tồn dùng để

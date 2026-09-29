@@ -8,7 +8,6 @@ import { PrismaServiceType } from '../../prisma/prisma.service';
 import { CutBundleStatus, ProcessStep, SteelIssueStatus } from '../../generated/prisma/client';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
-import { NotificationsService } from '../notifications/notifications.service';
 import { SteelIssuesService } from './steel-issues.service';
 
 // Prisma trả Decimal cho cutLengthMm/solverBladeWidthMm (vd Decimal(7,1) = 452.7). Service gọi
@@ -74,7 +73,6 @@ describe('SteelIssuesService', () => {
     $transaction: jest.Mock;
   };
   let stockReservationsService: { drainPool: jest.Mock };
-  let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
 
   const invoice = { id: 1n, code: 'PI-31' };
   // floorStage ACTIVE mặc định (2026-08-31) - đa số test không quan tâm gate
@@ -258,15 +256,10 @@ describe('SteelIssuesService', () => {
     stockReservationsService = {
       drainPool: jest.fn().mockResolvedValue({ warehouseId: 800n }),
     };
-    notificationsService = {
-      emit: jest.fn().mockResolvedValue(undefined),
-      resolve: jest.fn().mockResolvedValue(undefined),
-    };
     service = new SteelIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
-      notificationsService as unknown as NotificationsService,
     );
   });
 
@@ -299,40 +292,6 @@ describe('SteelIssuesService', () => {
       );
       expect(result.id).toBe('100');
       expect(result.status).toBe(SteelIssueStatus.ISSUED);
-    });
-
-    // Phase 3b, nhóm 7.5-i (Sắt -> Phôi -> KCS), changelog 2026-09-25 mục 19.
-    it('emit STEEL_ISSUE_TO_PHOI sau khi tạo đợt xuất mới', async () => {
-      prisma.steelIssue.create.mockResolvedValue(issue);
-
-      await service.create(
-        '1',
-        { materialId: '30', barLengthMm: 6000, barCount: 20 },
-        'user-1',
-        null,
-      );
-
-      expect(notificationsService.emit).toHaveBeenCalledWith(
-        'STEEL_ISSUE_TO_PHOI',
-        expect.objectContaining({
-          entityId: '100',
-          params: { piCode: 'PI-31', materialCode: 'ST-18', barCount: 20 },
-        }),
-      );
-    });
-
-    it('idempotency short-circuit - KHÔNG emit lại STEEL_ISSUE_TO_PHOI (đã báo ở lần tạo đầu)', async () => {
-      prisma.steelIssue.findUnique.mockResolvedValue(issue);
-
-      await service.create(
-        '1',
-        { materialId: '30', barLengthMm: 6000, barCount: 20 },
-        'user-1',
-        null,
-        'idem-key-1',
-      );
-
-      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     it('idempotency short-circuit - trả về đợt cũ, không tạo mới', async () => {
@@ -631,19 +590,6 @@ describe('SteelIssuesService', () => {
         expect.objectContaining({ data: { status: SteelIssueStatus.RECEIVED } }),
       );
       expect(result.status).toBe(SteelIssueStatus.RECEIVED);
-    });
-
-    it('resolve STEEL_ISSUE_TO_PHOI sau khi nhận', async () => {
-      prisma.steelIssue.findUnique.mockResolvedValue(issue);
-      prisma.steelIssue.update.mockResolvedValue({ ...issue, status: SteelIssueStatus.RECEIVED });
-
-      await service.receive('100');
-
-      expect(notificationsService.resolve).toHaveBeenCalledWith({
-        entityType: 'STEEL_ISSUE',
-        entityId: '100',
-        types: ['STEEL_ISSUE_TO_PHOI'],
-      });
     });
 
     it('ném ConflictException nếu không phải ISSUED', async () => {
@@ -1375,25 +1321,6 @@ describe('SteelIssuesService', () => {
       segments: [],
       steelIssue: { productionInvoiceId: 1n, materialId: 30n },
     };
-
-    // Phase 3b, nhóm 7.5-i, changelog 2026-09-25 mục 19.
-    it('emit CUT_BUNDLE_TO_KCS sau khi Phôi báo xong đợt cắt', async () => {
-      prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundle);
-      prisma.cutBundle.update.mockResolvedValue({
-        ...cuttingBundle,
-        status: CutBundleStatus.AWAITING_QC,
-      });
-      prisma.cutBundle.findMany.mockResolvedValue([
-        { ...cuttingBundle, status: CutBundleStatus.AWAITING_QC },
-      ]);
-
-      await service.finishCutBundle('1');
-
-      expect(notificationsService.emit).toHaveBeenCalledWith(
-        'CUT_BUNDLE_TO_KCS',
-        expect.objectContaining({ entityId: '1', params: { piCode: 'PI-31' } }),
-      );
-    });
 
     it('CUTTING -> AWAITING_QC khi đã đủ mọi công đoạn bắt buộc, và ROLL-UP SteelIssue.status', async () => {
       prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundle);
