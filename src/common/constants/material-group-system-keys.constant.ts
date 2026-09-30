@@ -1,15 +1,19 @@
 /**
- * 6 khoá kỹ thuật cố định seed sẵn cho MaterialGroup.systemKey (xem prisma/seed.ts và
+ * 7 khoá kỹ thuật cố định seed sẵn cho MaterialGroup.systemKey (xem prisma/seed.ts và
  * schema.prisma MaterialGroup) - thay cho enum MaterialKind cũ đã bị xoá. Mọi logic nghiệp
  * vụ (segment-specs, bom-revisions, skus - trang Spec Sắt [Sắt/Dây/Đinh/Tán rút/Nút nhựa,
  * đều nhập chung trong 1 mảnh]/Sơn/Phụ kiện/Bao bì [3 nhóm này đều dùng chung OTHER, xem
- * AccessoryItemKind + ConsumableBom.stage để phân biệt]) match theo cột `systemKey` này,
- * KHÔNG BAO GIỜ theo `MaterialGroup.name` - admin đổi tên nhóm trong Admin > Nhóm vật tư
- * thoải mái mà không làm hỏng lọc.
+ * AccessoryItemKind + ConsumableBom.stage để phân biệt]/Sắt tự tính [SAT_TU_TINH, PieceMaterialYield])
+ * match theo cột `systemKey` này, KHÔNG BAO GIỜ theo `MaterialGroup.name` - admin đổi tên nhóm
+ * trong Admin > Nhóm vật tư thoải mái mà không làm hỏng lọc.
  *
- * Nhóm do admin tự tạo thêm có systemKey = null, vô hình với mọi logic Spec.
+ * SAT_TU_TINH được "nhận nuôi" (adopt) từ nhóm admin tự tạo trước đó (systemKey=null, name=
+ * "Sắt tự tính") qua cơ chế match-by-name ở prisma/seed.ts - không phải seed mới từ đầu, xem
+ * comment ở bước 7.5 của seed.ts.
  *
- * QUAN TRỌNG: frontend định nghĩa lại y hệt 6 giá trị này ở
+ * Nhóm do admin tự tạo thêm khác có systemKey = null, vô hình với mọi logic Spec.
+ *
+ * QUAN TRỌNG: frontend định nghĩa lại y hệt 7 giá trị này ở
  * d:\DNA-ERP\src\constants\materialGroupSystemKeys.ts (2 repo tách rời, không import chung
  * được) - sửa ở đây thì phải sửa bên đó theo.
  */
@@ -20,6 +24,7 @@ export const MATERIAL_GROUP_SYSTEM_KEYS = {
   RIVET: 'RIVET',
   PLASTIC_BUTTON: 'PLASTIC_BUTTON',
   OTHER: 'OTHER',
+  SAT_TU_TINH: 'SAT_TU_TINH',
 } as const;
 
 export type MaterialGroupSystemKey =

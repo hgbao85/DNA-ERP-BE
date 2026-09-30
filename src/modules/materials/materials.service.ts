@@ -15,6 +15,7 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
+import { BulkUpdateWasteDto } from './dto/bulk-update-waste.dto';
 import { CreateMaterialDto } from './dto/create-material.dto';
 import { CreateMaterialSupplierDto } from './dto/create-material-supplier.dto';
 import { MaterialResponseDto } from './dto/material-response.dto';
@@ -323,6 +324,78 @@ export class MaterialsService {
     }
 
     return this.toResponseDto(material);
+  }
+
+  /**
+   * Sửa % hao hụt hàng loạt - đúng 1 trong 2 phạm vi (dto.materialIds XOR dto.materialGroupId,
+   * xem BulkUpdateWasteDto). Field thật sự ghi (maxCuttingWastePercentage/purchaseWastePercentage)
+   * tuỳ THEO NHÓM CỦA TỪNG VẬT TƯ - chọn tay nhiều vật tư khác nhóm nhau vẫn ra đúng field cho
+   * từng dòng, không giả định cả lô cùng 1 nhóm. 2 updateMany (Sắt/không-Sắt) trong 1 transaction
+   * thay vì update() từng dòng - tránh N round-trip DB không cần thiết cho thao tác vốn chỉ có 1
+   * giá trị áp dụng chung.
+   */
+  async bulkUpdateWaste(dto: BulkUpdateWasteDto): Promise<{ updated: number }> {
+    const hasIds = !!dto.materialIds?.length;
+    const hasGroup = !!dto.materialGroupId;
+    if (hasIds === hasGroup) {
+      throw new BadRequestException(
+        'Phải chọn đúng 1 trong 2: danh sách vật tư cụ thể hoặc 1 nhóm vật tư',
+      );
+    }
+    if (dto.value === undefined) {
+      throw new BadRequestException('Thiếu % hao hụt (dùng null nếu muốn xoá % hao hụt hiện có)');
+    }
+
+    const materials = hasGroup
+      ? await this.prisma.material.findMany({
+          where: { materialGroupId: parseBigIntId(dto.materialGroupId!) },
+          select: { id: true, materialGroupId: true },
+        })
+      : await this.prisma.material.findMany({
+          where: { id: { in: dto.materialIds!.map((id) => parseBigIntId(id)) } },
+          select: { id: true, materialGroupId: true },
+        });
+    if (materials.length === 0) {
+      throw new BadRequestException('Không tìm thấy vật tư nào để cập nhật');
+    }
+
+    // 1 lần fetch nhóm / systemKey cho MỌI nhóm liên quan (không phải 1 lần / vật tư) - materials
+    // chọn tay có thể trải nhiều nhóm khác nhau, materials theo 1 nhóm thì chỉ ra đúng 1 nhóm.
+    const groupIds = [
+      ...new Set(materials.map((m) => m.materialGroupId).filter((id): id is bigint => id != null)),
+    ];
+    const groups = await this.prisma.materialGroup.findMany({ where: { id: { in: groupIds } } });
+    const systemKeyByGroupId = new Map(groups.map((g) => [g.id.toString(), g.systemKey]));
+
+    const steelIds: bigint[] = [];
+    const otherIds: bigint[] = [];
+    for (const m of materials) {
+      const systemKey = m.materialGroupId
+        ? (systemKeyByGroupId.get(m.materialGroupId.toString()) ?? null)
+        : null;
+      (systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR ? steelIds : otherIds).push(m.id);
+    }
+
+    await this.prisma.$transaction([
+      ...(steelIds.length > 0
+        ? [
+            this.prisma.material.updateMany({
+              where: { id: { in: steelIds } },
+              data: { maxCuttingWastePercentage: dto.value, purchaseWastePercentage: null },
+            }),
+          ]
+        : []),
+      ...(otherIds.length > 0
+        ? [
+            this.prisma.material.updateMany({
+              where: { id: { in: otherIds } },
+              data: { purchaseWastePercentage: dto.value, maxCuttingWastePercentage: null },
+            }),
+          ]
+        : []),
+    ]);
+
+    return { updated: materials.length };
   }
 
   async remove(id: string): Promise<void> {

@@ -15,6 +15,7 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { BulkUpdateWasteDto } from './dto/bulk-update-waste.dto';
 import { CreateMaterialDto } from './dto/create-material.dto';
 import { CreateMaterialSupplierDto } from './dto/create-material-supplier.dto';
 import { UpdateMaterialDto } from './dto/update-material.dto';
@@ -43,6 +44,13 @@ export class MaterialsController {
   @RequirePermissions({ module: PERMISSION_MODULES.MATERIAL, action: PermissionAction.VIEW })
   findOne(@Param('id') id: string) {
     return this.materialsService.findOne(id);
+  }
+
+  // Route tĩnh PHẢI khai trước ':id' - đặt sau sẽ bị Nest nuốt mất, hiểu "bulk-waste" là 1 :id.
+  @Patch('bulk-waste')
+  @RequirePermissions({ module: PERMISSION_MODULES.MATERIAL, action: PermissionAction.UPDATE })
+  bulkUpdateWaste(@Body() dto: BulkUpdateWasteDto) {
+    return this.materialsService.bulkUpdateWaste(dto);
   }
 
   @Patch(':id')

@@ -22,9 +22,10 @@ describe('MaterialsService', () => {
       findMany: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
       delete: jest.Mock;
     };
-    materialGroup: { findUnique: jest.Mock };
+    materialGroup: { findUnique: jest.Mock; findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     segmentSpec: { deleteMany: jest.Mock };
     materialSupplier: { deleteMany: jest.Mock };
@@ -58,9 +59,10 @@ describe('MaterialsService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         delete: jest.fn(),
       },
-      materialGroup: { findUnique: jest.fn() },
+      materialGroup: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       warehouse: { findUniqueOrThrow: jest.fn() },
       segmentSpec: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
       materialSupplier: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
@@ -72,8 +74,12 @@ describe('MaterialsService', () => {
       bomAccessoryItem: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };
-    prisma.$transaction.mockImplementation((fn: (tx: typeof prisma) => Promise<unknown>) =>
-      fn(prisma),
+    // remove() truyền 1 callback (tx) => Promise, bulkUpdateWaste() truyền 1 mảng Promise
+    // (overload "sequential array" của Prisma $transaction) - mock phải xử lý được cả 2 dạng.
+    prisma.$transaction.mockImplementation((arg: unknown) =>
+      typeof arg === 'function'
+        ? (arg as (tx: typeof prisma) => Promise<unknown>)(prisma)
+        : Promise.all(arg as Promise<unknown>[]),
     );
     cloudinary = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
     stockLedger = { postEntry: jest.fn().mockResolvedValue(undefined) };
@@ -457,6 +463,93 @@ describe('MaterialsService', () => {
       // khác hẳn ghi đè lại đúng giá trị cũ (2), vì service không có "giá trị cũ" ở dạng number
       // sẵn để so sánh tại đây - tin tưởng Prisma bỏ qua field undefined là đủ.
       expect(call[0].data.maxCuttingWastePercentage).toBeUndefined();
+    });
+  });
+
+  describe('bulkUpdateWaste', () => {
+    it('rejects when neither materialIds nor materialGroupId is given', async () => {
+      await expect(service.bulkUpdateWaste({ value: 5 })).rejects.toThrow(BadRequestException);
+      expect(prisma.material.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects when BOTH materialIds and materialGroupId are given (ambiguous scope)', async () => {
+      await expect(
+        service.bulkUpdateWaste({ materialIds: ['1'], materialGroupId: '7', value: 5 }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.material.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects when value is missing (undefined) - null is a valid "xoá hao hụt" request, not the same as absent', async () => {
+      await expect(service.bulkUpdateWaste({ materialIds: ['1'] } as any)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.material.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('throws when the selected ids/group resolve to 0 materials', async () => {
+      prisma.material.findMany.mockResolvedValueOnce([]);
+
+      await expect(service.bulkUpdateWaste({ materialIds: ['1', '2'], value: 5 })).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('chọn theo materialIds trải nhiều nhóm: tách đúng vào 2 updateMany (Sắt -> cắt, còn lại -> mua) (D.hao-hut-hang-loat)', async () => {
+      prisma.material.findMany.mockResolvedValueOnce([
+        { id: 1n, materialGroupId: 7n }, // Sắt
+        { id: 2n, materialGroupId: 8n }, // Dây
+        { id: 3n, materialGroupId: null }, // không nhóm -> coi như "không phải Sắt"
+      ]);
+      prisma.materialGroup.findMany.mockResolvedValueOnce([
+        { id: 7n, systemKey: 'STEEL_BAR' },
+        { id: 8n, systemKey: 'WIRE' },
+      ]);
+
+      const result = await service.bulkUpdateWaste({ materialIds: ['1', '2', '3'], value: 3 });
+
+      expect(result).toEqual({ updated: 3 });
+      expect(prisma.material.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [1n] } },
+        data: { maxCuttingWastePercentage: 3, purchaseWastePercentage: null },
+      });
+      expect(prisma.material.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [2n, 3n] } },
+        data: { purchaseWastePercentage: 3, maxCuttingWastePercentage: null },
+      });
+      expect(prisma.material.updateMany).toHaveBeenCalledTimes(2);
+    });
+
+    it('chọn theo materialGroupId: lấy toàn bộ vật tư đang thuộc nhóm đó, chỉ 1 updateMany (D.hao-hut-hang-loat)', async () => {
+      prisma.material.findMany.mockResolvedValueOnce([
+        { id: 10n, materialGroupId: 7n },
+        { id: 11n, materialGroupId: 7n },
+      ]);
+      prisma.materialGroup.findMany.mockResolvedValueOnce([{ id: 7n, systemKey: 'STEEL_BAR' }]);
+
+      const result = await service.bulkUpdateWaste({ materialGroupId: '7', value: 1.5 });
+
+      expect(result).toEqual({ updated: 2 });
+      expect(prisma.material.findMany).toHaveBeenCalledWith({
+        where: { materialGroupId: 7n },
+        select: { id: true, materialGroupId: true },
+      });
+      expect(prisma.material.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.material.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [10n, 11n] } },
+        data: { maxCuttingWastePercentage: 1.5, purchaseWastePercentage: null },
+      });
+    });
+
+    it('value = null xoá % hao hụt hiện có (không phải "giữ nguyên" như update() từng vật tư) (D.hao-hut-hang-loat)', async () => {
+      prisma.material.findMany.mockResolvedValueOnce([{ id: 1n, materialGroupId: 7n }]);
+      prisma.materialGroup.findMany.mockResolvedValueOnce([{ id: 7n, systemKey: 'STEEL_BAR' }]);
+
+      await service.bulkUpdateWaste({ materialIds: ['1'], value: null });
+
+      expect(prisma.material.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [1n] } },
+        data: { maxCuttingWastePercentage: null, purchaseWastePercentage: null },
+      });
     });
   });
 
