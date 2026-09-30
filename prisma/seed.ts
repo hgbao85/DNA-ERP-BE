@@ -89,7 +89,6 @@ const SEED_MATERIAL_GROUPS: { systemKey: MaterialGroupSystemKey; name: string }[
   { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.RIVET, name: 'Tán rút' },
   { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.PLASTIC_BUTTON, name: 'Nút nhựa' },
   { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.OTHER, name: 'Vật tư khác' },
-  { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.SAT_TU_TINH, name: 'Sắt tự tính' },
 ];
 
 /**
