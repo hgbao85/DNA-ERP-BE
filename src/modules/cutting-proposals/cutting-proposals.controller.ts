@@ -9,8 +9,11 @@ import { PERMISSION_MODULES } from '../../common/constants/permission-modules.co
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { RequireRole } from '../../common/decorators/require-role.decorator';
+import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { CuttingProposalsService } from './cutting-proposals.service';
+import { RequestCuttingBatchDto } from './dto/request-cutting-batch.dto';
 
 const VIEW = { module: PERMISSION_MODULES.CUTTING_PROPOSAL, action: PermissionAction.VIEW };
 const CREATE = { module: PERMISSION_MODULES.CUTTING_PROPOSAL, action: PermissionAction.CREATE };
@@ -104,6 +107,25 @@ export class CuttingProposalsController {
   @RequirePermissions(VIEW)
   previewBatch(@Body() dto: PreviewCuttingBatchDto) {
     return this.cuttingProposalsService.previewBatch(dto);
+  }
+
+  /**
+   * "Tính phương án cắt" (luồng "Solve trước → tạo PI", 2026-09-30): KHSX chạy solver cho tổ hợp SKU
+   * đang tick TRƯỚC khi có lệnh sản xuất. Trả ngay proposal CALCULATING, tính nền; kết quả không tự
+   * duyệt - KHSX tạo lệnh sản xuất từ đó qua POST /production-invoices/merge | items/:id/claim-solo.
+   */
+  @Post('cutting-batch-solve')
+  @RequirePermissions(CREATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER)
+  requestBatch(@Body() dto: RequestCuttingBatchDto, @CurrentUser('id') userId: string) {
+    return this.cuttingProposalsService.requestForBatch(dto, userId);
+  }
+
+  /** Tiến độ + kết quả các lượt tính trước-PI chưa được dùng (KHSX xem ở "Tối ưu cắt sắt"). */
+  @Get('cutting-batch-solves')
+  @RequirePermissions(VIEW)
+  getBatchSolves() {
+    return this.cuttingProposalsService.getBatchSolves();
   }
 
   @Get('cutting-proposals/:id')

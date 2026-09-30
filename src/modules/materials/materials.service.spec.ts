@@ -229,7 +229,7 @@ describe('MaterialsService', () => {
 
     // % hao hụt mang 2 nghĩa ngược chiều tuỳ nhóm (xem resolveWasteFields) - group STEEL_BAR
     // giữ maxCuttingWastePercentage, ép purchaseWastePercentage về null dù dto có gửi.
-    it('vật tư nhóm Sắt (STEEL_BAR): giữ maxCuttingWastePercentage, ép purchaseWastePercentage về null (D.hao-hut-sat)', async () => {
+    it('vật tư nhóm Sắt (STEEL_BAR): BỎ QUA maxCuttingWastePercentage (KHSX quyết ngưỡng cắt), ép purchaseWastePercentage về null (2026-09-30)', async () => {
       prisma.materialGroup.findUnique.mockResolvedValue({
         id: 7n,
         systemKey: 'STEEL_BAR',
@@ -243,8 +243,8 @@ describe('MaterialsService', () => {
         name: 'Sat cay',
         unit: 'kg',
         materialGroupId: '7',
-        maxCuttingWastePercentage: 2,
-        purchaseWastePercentage: 5, // gửi nhầm cho Sắt - phải bị ép null, không lọt xuống DB
+        maxCuttingWastePercentage: 2, // client cũ còn gửi - phải bị bỏ qua, không lọt xuống DB
+        purchaseWastePercentage: 5, // gửi nhầm cho Sắt - phải bị ép null
       });
 
       const call = prisma.material.create.mock.calls[0] as unknown as [
@@ -255,13 +255,10 @@ describe('MaterialsService', () => {
           };
         },
       ];
-      expect(call[0].data.maxCuttingWastePercentage).toBe(2);
+      expect(call[0].data.maxCuttingWastePercentage).toBeUndefined();
       expect(call[0].data.purchaseWastePercentage).toBeNull();
     });
 
-    // group KHÔNG phải STEEL_BAR (dùng WIRE để né bẫy detailKind bắt buộc của nhóm OTHER,
-    // không liên quan tới field đang test) - ngược lại: giữ purchaseWastePercentage, ép
-    // maxCuttingWastePercentage về null.
     it('vật tư nhóm khác Sắt: giữ purchaseWastePercentage, ép maxCuttingWastePercentage về null (D.hao-hut-sat)', async () => {
       prisma.materialGroup.findUnique.mockResolvedValue({
         id: 8n,
@@ -300,17 +297,17 @@ describe('MaterialsService', () => {
       await expect(service.findOne('999')).rejects.toThrow(NotFoundException);
     });
 
-    it('trả maxCuttingWastePercentage/purchaseWastePercentage dạng number (Decimal.toNumber()), null khi vật tư không có (D.hao-hut-sat)', async () => {
+    it('trả purchaseWastePercentage dạng number; maxCuttingWastePercentage LUÔN null dù DB còn dữ liệu cũ (ngưỡng cắt không còn theo vật tư)', async () => {
       prisma.material.findUnique.mockResolvedValue({
         ...existingMaterial,
-        maxCuttingWastePercentage: { toNumber: () => 2.5 },
-        purchaseWastePercentage: null,
+        maxCuttingWastePercentage: { toNumber: () => 2.5 }, // dữ liệu cũ Admin từng nhập cho Sắt
+        purchaseWastePercentage: { toNumber: () => 4 },
       });
 
       const result = await service.findOne('1');
 
-      expect(result.maxCuttingWastePercentage).toBe(2.5);
-      expect(result.purchaseWastePercentage).toBeNull();
+      expect(result.maxCuttingWastePercentage).toBeNull();
+      expect(result.purchaseWastePercentage).toBe(4);
     });
   });
 
@@ -494,9 +491,9 @@ describe('MaterialsService', () => {
       );
     });
 
-    it('chọn theo materialIds trải nhiều nhóm: tách đúng vào 2 updateMany (Sắt -> cắt, còn lại -> mua) (D.hao-hut-hang-loat)', async () => {
+    it('chọn tay lẫn Sắt: BỎ QUA Sắt (không có % hao hụt để sửa), chỉ ghi % dự trù mua cho vật tư còn lại và báo số Sắt đã bỏ qua', async () => {
       prisma.material.findMany.mockResolvedValueOnce([
-        { id: 1n, materialGroupId: 7n }, // Sắt
+        { id: 1n, materialGroupId: 7n }, // Sắt -> bỏ qua
         { id: 2n, materialGroupId: 8n }, // Dây
         { id: 3n, materialGroupId: null }, // không nhóm -> coi như "không phải Sắt"
       ]);
@@ -507,48 +504,56 @@ describe('MaterialsService', () => {
 
       const result = await service.bulkUpdateWaste({ materialIds: ['1', '2', '3'], value: 3 });
 
-      expect(result).toEqual({ updated: 3 });
-      expect(prisma.material.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [1n] } },
-        data: { maxCuttingWastePercentage: 3, purchaseWastePercentage: null },
-      });
+      expect(result).toEqual({ updated: 2, skippedSteel: 1 });
+      expect(prisma.material.updateMany).toHaveBeenCalledTimes(1);
       expect(prisma.material.updateMany).toHaveBeenCalledWith({
         where: { id: { in: [2n, 3n] } },
         data: { purchaseWastePercentage: 3, maxCuttingWastePercentage: null },
       });
-      expect(prisma.material.updateMany).toHaveBeenCalledTimes(2);
     });
 
-    it('chọn theo materialGroupId: lấy toàn bộ vật tư đang thuộc nhóm đó, chỉ 1 updateMany (D.hao-hut-hang-loat)', async () => {
+    it('chọn nguyên nhóm Sắt: 400 nêu rõ ngưỡng do KHSX quyết - không ghi gì', async () => {
       prisma.material.findMany.mockResolvedValueOnce([
         { id: 10n, materialGroupId: 7n },
         { id: 11n, materialGroupId: 7n },
       ]);
       prisma.materialGroup.findMany.mockResolvedValueOnce([{ id: 7n, systemKey: 'STEEL_BAR' }]);
 
-      const result = await service.bulkUpdateWaste({ materialGroupId: '7', value: 1.5 });
+      await expect(service.bulkUpdateWaste({ materialGroupId: '7', value: 1.5 })).rejects.toThrow(
+        /KHSX quyết định/,
+      );
+      expect(prisma.material.updateMany).not.toHaveBeenCalled();
+    });
 
-      expect(result).toEqual({ updated: 2 });
+    it('chọn nhóm Sắt tự tính (SAT_TU_TINH - không qua solver): vẫn ghi % hao hụt (dự trù mua) cho cả nhóm', async () => {
+      prisma.material.findMany.mockResolvedValueOnce([
+        { id: 20n, materialGroupId: 9n },
+        { id: 21n, materialGroupId: 9n },
+      ]);
+      prisma.materialGroup.findMany.mockResolvedValueOnce([{ id: 9n, systemKey: 'SAT_TU_TINH' }]);
+
+      const result = await service.bulkUpdateWaste({ materialGroupId: '9', value: 2 });
+
+      expect(result).toEqual({ updated: 2, skippedSteel: 0 });
       expect(prisma.material.findMany).toHaveBeenCalledWith({
-        where: { materialGroupId: 7n },
+        where: { materialGroupId: 9n },
         select: { id: true, materialGroupId: true },
       });
-      expect(prisma.material.updateMany).toHaveBeenCalledTimes(1);
       expect(prisma.material.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [10n, 11n] } },
-        data: { maxCuttingWastePercentage: 1.5, purchaseWastePercentage: null },
+        where: { id: { in: [20n, 21n] } },
+        data: { purchaseWastePercentage: 2, maxCuttingWastePercentage: null },
       });
     });
 
-    it('value = null xoá % hao hụt hiện có (không phải "giữ nguyên" như update() từng vật tư) (D.hao-hut-hang-loat)', async () => {
-      prisma.material.findMany.mockResolvedValueOnce([{ id: 1n, materialGroupId: 7n }]);
-      prisma.materialGroup.findMany.mockResolvedValueOnce([{ id: 7n, systemKey: 'STEEL_BAR' }]);
+    it('value = null xoá % hao hụt hiện có (không phải "giữ nguyên" như update() từng vật tư)', async () => {
+      prisma.material.findMany.mockResolvedValueOnce([{ id: 1n, materialGroupId: 8n }]);
+      prisma.materialGroup.findMany.mockResolvedValueOnce([{ id: 8n, systemKey: 'WIRE' }]);
 
       await service.bulkUpdateWaste({ materialIds: ['1'], value: null });
 
       expect(prisma.material.updateMany).toHaveBeenCalledWith({
         where: { id: { in: [1n] } },
-        data: { maxCuttingWastePercentage: null, purchaseWastePercentage: null },
+        data: { purchaseWastePercentage: null, maxCuttingWastePercentage: null },
       });
     });
   });

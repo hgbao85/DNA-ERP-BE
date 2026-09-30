@@ -21,6 +21,7 @@ describe('CuttingProposalsService', () => {
       updateMany: jest.Mock;
     };
     cuttingProposalLine: { create: jest.Mock; findMany: jest.Mock; update: jest.Mock };
+    cuttingProposalItem: { findMany: jest.Mock };
     cuttingPlanCoverage: { create: jest.Mock; update: jest.Mock; findUnique: jest.Mock };
     cuttingProposalPattern: { create: jest.Mock };
     cuttingProposalPatternSegment: { create: jest.Mock };
@@ -36,7 +37,12 @@ describe('CuttingProposalsService', () => {
       create: jest.Mock;
       count: jest.Mock;
     };
-    productionOrder: { findUniqueOrThrow: jest.Mock; findMany: jest.Mock; findUnique: jest.Mock };
+    productionOrder: {
+      findUniqueOrThrow: jest.Mock;
+      findMany: jest.Mock;
+      findUnique: jest.Mock;
+      count: jest.Mock;
+    };
     productionInvoice: { findUniqueOrThrow: jest.Mock; findUnique: jest.Mock };
     systemConfig: { findUniqueOrThrow: jest.Mock };
     pieceBom: { findMany: jest.Mock };
@@ -148,6 +154,8 @@ describe('CuttingProposalsService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn(),
       },
+      // Ảnh chụp đầu vào của lượt tính trước PI - attachToInvoice() đọc SKU của phương án để dọn lượt khác.
+      cuttingProposalItem: { findMany: jest.fn().mockResolvedValue([]) },
       // L2 mức 2 (2026-08-27): bảng phủ - mặc định SKU CHƯA có chủ (câu FOR UPDATE trong
       // claimCuttingPlanCoverage trả rỗng, xem $queryRaw dưới) nên luôn đi nhánh create.
       cuttingPlanCoverage: { create: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
@@ -182,6 +190,8 @@ describe('CuttingProposalsService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         // Chỉ dùng để lấy poNumber cho thông báo lỗi khi phát hiện phủ chồng.
         findUnique: jest.fn().mockResolvedValue({ poNumber: 'PO-31-1' }),
+        // Guard approve() của phương án tính trước PI: đếm lệnh SX đã có của PI.
+        count: jest.fn().mockResolvedValue(0),
       },
       productionInvoice: {
         findUniqueOrThrow: jest.fn(),
@@ -313,6 +323,14 @@ describe('CuttingProposalsService', () => {
           productionInvoice: {
             include: {
               items: { include: { mfgProduct: true, salesOrder: { select: { orderCode: true } } } },
+            },
+          },
+          // Ảnh chụp đầu vào của lượt tính trước PI (luồng "Solve trước").
+          items: {
+            include: {
+              productionInvoiceItem: {
+                include: { mfgProduct: true, salesOrder: { select: { orderCode: true } } },
+              },
             },
           },
         },
@@ -669,11 +687,9 @@ describe('CuttingProposalsService', () => {
       // material.findMany dùng chung mock cho 2 việc theo ĐÚNG thứ tự gọi: (1) tra ngưỡng hao hụt
       // riêng trong runSolverAndSave (rỗng - không vật tư nào có ngưỡng riêng), (2) tra Kho của
       // từng vật tư trong approve() (mới thêm 2026-08-15, xem cutting-proposals.service.ts).
-      prisma.material.findMany
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
-          { id: 200n, code: 'SAT-200', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
-        ]);
+      prisma.material.findMany.mockResolvedValueOnce([
+        { id: 200n, code: 'SAT-200', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
 
       await invoke(2n, 1n, 'user-boss');
 
@@ -762,9 +778,7 @@ describe('CuttingProposalsService', () => {
       prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
       // Chỉ 2 lần gọi: (1) tra ngưỡng hao hụt riêng trước khi gọi solver; (2) đổi id vật tư -> mã
       // cho thông báo QLSX.
-      prisma.material.findMany
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ code: 'SAT-201' }]);
+      prisma.material.findMany.mockResolvedValueOnce([{ code: 'SAT-201' }]);
 
       await invoke(2n, 1n, 'user-boss');
 
@@ -811,9 +825,7 @@ describe('CuttingProposalsService', () => {
       prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
       // 2 lần gọi material.findMany, ĐÚNG thứ tự: (1) tra ngưỡng riêng trước khi gọi solver -
       // rỗng, không vật tư nào có ngưỡng riêng; (2) đổi id -> mã trong autoApproveBlockReason().
-      prisma.material.findMany
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ code: 'SAT-200' }]);
+      prisma.material.findMany.mockResolvedValueOnce([{ code: 'SAT-200' }]);
 
       await invoke(2n, 1n, 'user-boss');
 
@@ -868,11 +880,9 @@ describe('CuttingProposalsService', () => {
         status: CuttingProposalStatus.APPROVED,
         ...productionOrderRelation(),
       });
-      prisma.material.findMany
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
-          { id: 200n, code: 'SAT-200', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
-        ]);
+      prisma.material.findMany.mockResolvedValueOnce([
+        { id: 200n, code: 'SAT-200', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
 
       await invoke(2n, 1n, 'user-boss');
 
@@ -919,7 +929,7 @@ describe('CuttingProposalsService', () => {
       expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
-    it('gửi max_waste_percentage_by_material khi vật tư có ngưỡng riêng, bỏ qua vật tư null/<=0 (D.hao-hut-sat)', async () => {
+    it('KHÔNG gửi max_waste_percentage_by_material dù vật tư còn giá trị cũ trong DB - Sắt chỉ có 1 ngưỡng chung do KHSX quyết (2026-09-30)', async () => {
       prisma.pieceBom.findMany.mockResolvedValue([
         pieceBomRow, // materialId 200n
         {
@@ -934,11 +944,10 @@ describe('CuttingProposalsService', () => {
         { pieceId: 10n, qtyPerUnit: 4 },
         { pieceId: 11n, qtyPerUnit: 1 },
       ]);
-      // 200n: Sếp cấp riêng 2%. 300n: có set nhưng = 0 (bẫy vô nghiệm) -> phải bị loại, KHÔNG
-      // gửi xuống solver. 400n: không nằm trong BOM, không ảnh hưởng gì (kiểm tra where đúng).
+      // Dữ liệu cũ Admin từng nhập ngưỡng riêng - không được lọt xuống solver.
       prisma.material.findMany.mockResolvedValue([
         { id: 200n, maxCuttingWastePercentage: { toNumber: () => 2 } },
-        { id: 300n, maxCuttingWastePercentage: { toNumber: () => 0 } },
+        { id: 300n, maxCuttingWastePercentage: { toNumber: () => 8 } },
       ]);
       externalApiService.post.mockResolvedValue({
         status: 'success',
@@ -957,14 +966,15 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      expect(prisma.material.findMany).toHaveBeenCalledWith({
-        where: { id: { in: [200n, 300n] } },
-        select: { id: true, maxCuttingWastePercentage: true },
-      });
       const bodySent = (
         externalApiService.post.mock.calls[0] as unknown as [string, Record<string, unknown>]
       )[1];
-      expect(bodySent.max_waste_percentage_by_material).toEqual({ '200': 2 });
+      expect(bodySent).not.toHaveProperty('max_waste_percentage_by_material');
+      // Chỉ còn ngưỡng chung của công ty (SystemConfig, KHSX tự đổi được).
+      expect(bodySent.max_waste_percentage).toBe(1);
+      expect(prisma.material.findMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ select: { id: true, maxCuttingWastePercentage: true } }),
+      );
     });
 
     // ── stock_lengths_by_material: chiều dài cây theo từng quy cách (2026-09-16) ──────
@@ -1050,9 +1060,6 @@ describe('CuttingProposalsService', () => {
     // PurchaseProposalItem.stockLengthMm (xem test riêng ở describe('approve')). Vẫn CHỈ 1 lần
     // gọi solver - test này giữ tên cũ về phần "1 lần gọi", chỉ đổi kỳ vọng auto_scan.
     it('mặc định (solverAllowCustomLength=true) gửi auto_scan=true và chỉ gọi solver ĐÚNG 1 LẦN, kể cả khi vượt ngưỡng', async () => {
-      prisma.material.findMany.mockResolvedValue([
-        { id: 200n, maxCuttingWastePercentage: { toNumber: () => 0.3 } },
-      ]);
       externalApiService.post.mockResolvedValue({
         status: 'success',
         summary: {
@@ -1076,8 +1083,8 @@ describe('CuttingProposalsService', () => {
       ];
       expect(url).toBe('http://solver.local/api/v1/de_xuat/propose/');
       expect(body.auto_scan).toBe(true);
-      // Ngưỡng riêng theo vật tư vẫn phải gửi đúng (D.hao-hut-sat).
-      expect(body.max_waste_percentage_by_material).toEqual({ '200': 0.3 });
+      // Không còn ngưỡng riêng theo vật tư (2026-09-30).
+      expect(body).not.toHaveProperty('max_waste_percentage_by_material');
       // Lưu ĐÚNG kết quả lần gọi duy nhất, không có khái niệm "kết quả lần 2". calls[0] = ghi
       // requestParams SỚM trước khi gọi solver (2026-09-22) - kết quả cuối là calls[1].
       const updateCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
@@ -1166,13 +1173,9 @@ describe('CuttingProposalsService', () => {
       expect(body.auto_scan).toBe(false);
     });
 
-    it('ngưỡng đặc cách của đợt NÂNG cả ngưỡng chung lẫn ngưỡng riêng từng loại sắt - và KHÔNG hạ loại nào', async () => {
+    it('ngưỡng đặc cách của đợt NÂNG ngưỡng chung - và KHÔNG hạ ngưỡng chung xuống khi xin thấp hơn', async () => {
       // Đây là cơ chế làm nên ca "khách gấp": nâng ngưỡng lên 5% thì cây chuẩn 6000mm ở 3.2% ĐẠT
       // ngưỡng, solver chốt luôn cây chuẩn thay vì đi dò cây lạ (phải chờ NCC cán).
-      //
-      // SAT-200 đang có ngưỡng riêng 0.3% (thấp hơn đặc cách) -> nâng lên 5.
-      // SAT-300 đang có ngưỡng riêng 8% (Sếp đã cấp rộng hơn) -> GIỮ 8, không bị đặc cách siết
-      // xuống 5. Đặc cách là để nới cho loại đang vướng, không phải đặt lại ngưỡng toàn cục.
       prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
         ...productionOrder,
         productionInvoiceItem: {
@@ -1183,10 +1186,6 @@ describe('CuttingProposalsService', () => {
           },
         },
       });
-      prisma.material.findMany.mockResolvedValueOnce([
-        { id: 200n, maxCuttingWastePercentage: { toNumber: () => 0.3 } },
-        { id: 300n, maxCuttingWastePercentage: { toNumber: () => 8 } },
-      ]);
       externalApiService.post.mockResolvedValue({
         status: 'success',
         summary: {
@@ -1215,9 +1214,9 @@ describe('CuttingProposalsService', () => {
         string,
         Record<string, unknown>,
       ];
-      // Ngưỡng chung 1.0% -> nâng lên 5 (loại sắt chưa có ngưỡng riêng ăn theo số này).
+      // Ngưỡng chung 1.0% -> nâng lên 5.
       expect(body.max_waste_percentage).toBe(5);
-      expect(body.max_waste_percentage_by_material).toEqual({ '200': 5, '300': 8 });
+      expect(body).not.toHaveProperty('max_waste_percentage_by_material');
     });
 
     it('ngưỡng đặc cách KHÔNG đụng tới auto_scan - 2 trục hoàn toàn độc lập', async () => {
@@ -2796,6 +2795,13 @@ describe('CuttingProposalsService', () => {
                 },
               },
             },
+            items: {
+              include: {
+                productionInvoiceItem: {
+                  include: { mfgProduct: true, salesOrder: { select: { orderCode: true } } },
+                },
+              },
+            },
           },
         }),
       );
@@ -3085,6 +3091,651 @@ describe('CuttingProposalsService', () => {
       // Math.max(), truyền thẳng Decimal vào sẽ ra NaN mà không ai báo lỗi.
       expect(job.maxWastePctOverride).toBe(5);
       expect(job.allowCustomLength).toBe(false);
+    });
+  });
+  // ─── Luồng "Solve trước → tạo PI" (2026-09-30) ──────────────────────────────────────────────
+  describe('Solve trước → tạo PI', () => {
+    /** Ảnh chụp 1 SKU trong lượt tính trước PI. */
+    const snap = (over: Record<string, unknown> = {}) => ({
+      productionInvoiceItemId: 20n,
+      mfgProductId: 2n,
+      bomRevisionId: 5n,
+      quantity: 10,
+      productionInvoiceItem: {
+        mfgProduct: { factoryCode: 'SKU-1', name: 'Ghế test' },
+        salesOrder: { orderCode: 'PO-31' },
+      },
+      ...over,
+    });
+    /** Phương án tính trước (DRAFT, chưa gắn PO/PI, đã tính xong không cờ chặn nào). */
+    const proposalRow = (over: Record<string, unknown> = {}) => ({
+      id: 70n,
+      productionOrderId: null,
+      productionInvoiceId: null,
+      status: CuttingProposalStatus.DRAFT,
+      errorMessage: null,
+      hasInfeasibleLine: false,
+      hasOverThreshold: false,
+      solverOptions: { solverMaxWastePctOverride: 5 },
+      totalBarsAll: 387,
+      wastePercentage: mockDecimal(0.8),
+      totalWasteMm: null,
+      totalSolveSeconds: null,
+      requestedAt: new Date(),
+      completedAt: new Date(),
+      approvedAt: null,
+      items: [snap()],
+      ...over,
+    });
+    /** SKU hiện tại y hệt lúc tính + revision ACTIVE trùng - ca "không lỗi thời". */
+    const currentUnchanged = () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        { id: 20n, quantity: 10, productionInvoiceId: null },
+      ]);
+      prisma.bomRevision.findMany.mockResolvedValue([{ id: 5n, mfgProductId: 2n }]);
+    };
+
+    describe('requestForBatch', () => {
+      const dto = { productionInvoiceItemIds: ['20'], solverMaxWastePctOverride: 5 };
+
+      beforeEach(() => {
+        prisma.productionInvoiceItem.findMany.mockResolvedValue([
+          {
+            id: 20n,
+            mfgProductId: 2n,
+            quantity: 10,
+            productionInvoiceId: null,
+            prodApprovalStatus: null,
+          },
+        ]);
+        prisma.bomRevision.findMany.mockResolvedValue([{ id: 5n, mfgProductId: 2n }]);
+        prisma.cuttingProposal.findMany.mockResolvedValue([]);
+        prisma.cuttingProposal.create.mockResolvedValue(
+          proposalRow({ status: CuttingProposalStatus.CALCULATING, completedAt: null }),
+        );
+        // Tiến trình nền không được chạy tiếp trong test - treo ở bước dựng đầu vào.
+        prisma.cuttingProposal.findUniqueOrThrow.mockReturnValue(new Promise(() => {}));
+      });
+
+      it('chụp BOM revision ACTIVE + số lượng từng SKU và lưu thông số cắt vào solverOptions', async () => {
+        const result = await service.requestForBatch(dto, 'user-khsx');
+
+        expect(prisma.cuttingProposal.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: {
+              requestedById: 'user-khsx',
+              solverOptions: { solverMaxWastePctOverride: 5 },
+              items: {
+                create: [
+                  {
+                    productionInvoiceItemId: 20n,
+                    mfgProductId: 2n,
+                    bomRevisionId: 5n,
+                    quantity: 10,
+                  },
+                ],
+              },
+            },
+          }),
+        );
+        expect(result.preSolved).toBe(true);
+        expect(result.mfgProductCode).toBe('SKU-1');
+        expect(result.status).toBe(CuttingProposalStatus.CALCULATING);
+      });
+
+      it('GIỮ lượt cũ dùng được (DRAFT) để KHSX so sánh/có đường lui; chỉ dọn lượt lỗi và lượt vô nghiệm', async () => {
+        const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000);
+        prisma.cuttingProposal.findMany.mockResolvedValue([
+          {
+            id: 60n,
+            status: CuttingProposalStatus.DRAFT,
+            requestedAt: at(5),
+            hasInfeasibleLine: false,
+          },
+          {
+            id: 61n,
+            status: CuttingProposalStatus.FAILED,
+            requestedAt: at(4),
+            hasInfeasibleLine: false,
+          },
+          {
+            id: 62n,
+            status: CuttingProposalStatus.DRAFT,
+            requestedAt: at(3),
+            hasInfeasibleLine: true,
+          },
+        ]);
+
+        await service.requestForBatch(dto, 'user-khsx');
+
+        // 60 (dùng được) được GIỮ; 61 (lỗi) và 62 (vô nghiệm, không dùng được) bị dọn.
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+          where: { id: { in: [61n, 62n] } },
+          data: { status: CuttingProposalStatus.SUPERSEDED },
+        });
+      });
+
+      it('tối đa 3 thẻ dùng được/tổ hợp: lượt dùng được cũ hơn 2 lượt mới nhất bị dọn', async () => {
+        const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000);
+        prisma.cuttingProposal.findMany.mockResolvedValue([
+          {
+            id: 70n,
+            status: CuttingProposalStatus.DRAFT,
+            requestedAt: at(30),
+            hasInfeasibleLine: false,
+          },
+          {
+            id: 71n,
+            status: CuttingProposalStatus.DRAFT,
+            requestedAt: at(20),
+            hasInfeasibleLine: false,
+          },
+          {
+            id: 72n,
+            status: CuttingProposalStatus.DRAFT,
+            requestedAt: at(10),
+            hasInfeasibleLine: false,
+          },
+        ]);
+
+        await service.requestForBatch(dto, 'user-khsx');
+
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+          where: { id: { in: [70n] } },
+          data: { status: CuttingProposalStatus.SUPERSEDED },
+        });
+      });
+
+      it('CHẶN (409) khi đang có lượt tính CALCULATING chưa quá hạn chứa cùng SKU', async () => {
+        prisma.cuttingProposal.findMany.mockResolvedValue([
+          { id: 60n, status: CuttingProposalStatus.CALCULATING, requestedAt: new Date() },
+        ]);
+
+        await expect(service.requestForBatch(dto, 'user-khsx')).rejects.toThrow(ConflictException);
+        expect(prisma.cuttingProposal.create).not.toHaveBeenCalled();
+      });
+
+      it('lượt CALCULATING đã quá hạn timeout (tiến trình nền coi như chết) thì bị thay thế, không chặn', async () => {
+        prisma.cuttingProposal.findMany.mockResolvedValue([
+          {
+            id: 60n,
+            status: CuttingProposalStatus.CALCULATING,
+            requestedAt: new Date(Date.now() - (300 + 60 + 5) * 1000),
+          },
+        ]);
+
+        await service.requestForBatch(dto, 'user-khsx');
+
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalled();
+        expect(prisma.cuttingProposal.create).toHaveBeenCalled();
+      });
+
+      it('CHẶN SKU đã gom vào PI hoặc đã duyệt', async () => {
+        prisma.productionInvoiceItem.findMany.mockResolvedValue([
+          {
+            id: 20n,
+            mfgProductId: 2n,
+            quantity: 10,
+            productionInvoiceId: 7n,
+            prodApprovalStatus: null,
+          },
+        ]);
+
+        await expect(service.requestForBatch(dto, 'user-khsx')).rejects.toThrow(ConflictException);
+        expect(prisma.cuttingProposal.create).not.toHaveBeenCalled();
+      });
+
+      it('CHẶN SKU chưa có định mức ACTIVE', async () => {
+        prisma.bomRevision.findMany.mockResolvedValue([]);
+
+        await expect(service.requestForBatch(dto, 'user-khsx')).rejects.toThrow(ConflictException);
+      });
+
+      it('báo 404 khi có id SKU không tồn tại', async () => {
+        prisma.productionInvoiceItem.findMany.mockResolvedValue([]);
+
+        await expect(service.requestForBatch(dto, 'user-khsx')).rejects.toThrow(NotFoundException);
+      });
+    });
+
+    describe('assertReadyForInvoice - cổng "được tạo lệnh sản xuất từ phương án này"', () => {
+      beforeEach(() => {
+        currentUnchanged();
+      });
+
+      it('phương án DRAFT, không cờ chặn, chưa lỗi thời -> qua, trả thông số cắt đã dùng', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(proposalRow());
+
+        const result = await service.assertReadyForInvoice('70', [20n]);
+
+        expect(result).toEqual({ id: 70n, solverOptions: { solverMaxWastePctOverride: 5 } });
+      });
+
+      it.each([
+        ['có loại sắt không có cách cắt nào', { hasInfeasibleLine: true }, /không có cách cắt nào/],
+        ['vẫn đang tính', { status: CuttingProposalStatus.CALCULATING }, /đang tính/],
+        [
+          'solver lỗi',
+          { status: CuttingProposalStatus.FAILED, errorMessage: 'hết giờ' },
+          /Solver lỗi: hết giờ/,
+        ],
+        ['đã bị thay bằng lượt mới', { status: CuttingProposalStatus.SUPERSEDED }, /SUPERSEDED/],
+      ])('CHẶN khi %s', async (_label, over, message) => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(proposalRow(over));
+
+        await expect(service.assertReadyForInvoice('70', [20n])).rejects.toThrow(message);
+      });
+
+      it('vượt ngưỡng hao hụt KHÔNG chặn (KHSX đã tự nâng được ngưỡng) - vẫn tạo được lệnh', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(
+          proposalRow({ hasOverThreshold: true }),
+        );
+
+        await expect(service.assertReadyForInvoice('70', [20n])).resolves.toMatchObject({
+          id: 70n,
+        });
+      });
+
+      it('CHẶN khi SỐ LƯỢNG SKU đã đổi kể từ lúc tính (lỗi thời)', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(proposalRow());
+        prisma.productionInvoiceItem.findMany.mockResolvedValue([
+          { id: 20n, quantity: 12, productionInvoiceId: null },
+        ]);
+
+        await expect(service.assertReadyForInvoice('70', [20n])).rejects.toThrow(/Số lượng/);
+      });
+
+      it('CHẶN khi ĐỊNH MỨC ACTIVE của SKU đã đổi sang revision khác (lỗi thời)', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(proposalRow());
+        prisma.bomRevision.findMany.mockResolvedValue([{ id: 6n, mfgProductId: 2n }]);
+
+        await expect(service.assertReadyForInvoice('70', [20n])).rejects.toThrow(/Định mức/);
+      });
+
+      it('CHẶN khi 1 SKU đã bị gom vào PI khác kể từ lúc tính', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(proposalRow());
+        prisma.productionInvoiceItem.findMany.mockResolvedValue([
+          { id: 20n, quantity: 10, productionInvoiceId: 9n },
+        ]);
+
+        await expect(service.assertReadyForInvoice('70', [20n])).rejects.toThrow(/gom vào lệnh/);
+      });
+
+      it('CHẶN khi tập SKU KHSX gửi lệch với tập đã tính', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(proposalRow());
+
+        await expect(service.assertReadyForInvoice('70', [20n, 21n])).rejects.toThrow(
+          /Tập SKU không khớp/,
+        );
+      });
+
+      it('CHẶN phương án đã gắn PI (không tạo 2 lệnh từ 1 lượt tính)', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(
+          proposalRow({ productionInvoiceId: 7n }),
+        );
+
+        await expect(service.assertReadyForInvoice('70', [20n])).rejects.toThrow(/đã được dùng/);
+      });
+
+      it('CHẶN phương án không phải lượt tính trước (không có ảnh chụp đầu vào)', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(proposalRow({ items: [] }));
+
+        await expect(service.assertReadyForInvoice('70', [20n])).rejects.toThrow(
+          /không phải lượt tính trước/,
+        );
+      });
+
+      it('báo 404 khi phương án không tồn tại', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(null);
+
+        await expect(service.assertReadyForInvoice('70', [20n])).rejects.toThrow(NotFoundException);
+      });
+    });
+
+    describe('attachToInvoice / releaseForInvoice', () => {
+      it('gắn phương án bằng updateMany CÓ ĐIỀU KIỆN; count=0 (đã bị dùng) -> 409', async () => {
+        prisma.cuttingProposal.updateMany.mockResolvedValueOnce({ count: 1 });
+        prisma.cuttingProposalItem.findMany.mockResolvedValueOnce([
+          { productionInvoiceItemId: 20n },
+        ]);
+        await service.attachToInvoice(prisma as never, 70n, 50n);
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+          where: {
+            id: 70n,
+            productionOrderId: null,
+            productionInvoiceId: null,
+            status: CuttingProposalStatus.DRAFT,
+          },
+          data: { productionInvoiceId: 50n },
+        });
+        // Các lượt tính KHÁC (chưa gắn PI) của cùng SKU thành vô nghĩa -> SUPERSEDED.
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+          where: expect.objectContaining({
+            id: { not: 70n },
+            productionInvoiceId: null,
+            items: { some: { productionInvoiceItemId: { in: [20n] } } },
+          }) as unknown,
+          data: { status: CuttingProposalStatus.SUPERSEDED },
+        });
+
+        prisma.cuttingProposal.updateMany.mockResolvedValueOnce({ count: 0 });
+        await expect(service.attachToInvoice(prisma as never, 70n, 51n)).rejects.toThrow(
+          ConflictException,
+        );
+      });
+
+      it('gỡ phương án khỏi PI: SUPERSEDED + productionInvoiceId=null (để xoá PI không vướng FK)', async () => {
+        await service.releaseForInvoice(prisma as never, 50n);
+
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+          where: expect.objectContaining({ productionInvoiceId: 50n }) as unknown,
+          data: { status: CuttingProposalStatus.SUPERSEDED, productionInvoiceId: null },
+        });
+      });
+    });
+
+    describe('assertReadyForApproval - cổng lúc Sếp duyệt', () => {
+      it('trả revision đã chụp của từng SKU để PO ghim đúng bản đã tính', async () => {
+        currentUnchanged();
+        // SKU lúc này nằm trong PI 50 (không còn "chưa gom").
+        prisma.productionInvoiceItem.findMany.mockResolvedValue([
+          { id: 20n, quantity: 10, productionInvoiceId: 50n },
+        ]);
+        prisma.cuttingProposal.findUnique.mockResolvedValue(
+          proposalRow({ productionInvoiceId: 50n, lines: [] }),
+        );
+
+        const { revisionByItemId } = await service.assertReadyForApproval(70n, 50n);
+
+        expect(revisionByItemId.get(20n)).toBe(5n);
+      });
+
+      it('CHẶN khi vật tư của phương án chưa được gán Kho - trước khi ghi APPROVED', async () => {
+        currentUnchanged();
+        prisma.productionInvoiceItem.findMany.mockResolvedValue([
+          { id: 20n, quantity: 10, productionInvoiceId: 50n },
+        ]);
+        prisma.cuttingProposal.findUnique.mockResolvedValue(
+          proposalRow({
+            productionInvoiceId: 50n,
+            lines: [{ materialId: 200n, feasible: true, totalBars: 8 }],
+          }),
+        );
+        prisma.material.findMany.mockResolvedValue([{ code: 'SAT-200' }]);
+
+        await expect(service.assertReadyForApproval(70n, 50n)).rejects.toThrow(
+          /SAT-200 chưa được cấu hình Kho/,
+        );
+      });
+
+      it('CHẶN khi lỗi thời giữa lúc tạo PI và lúc Sếp duyệt (định mức đổi)', async () => {
+        prisma.productionInvoiceItem.findMany.mockResolvedValue([
+          { id: 20n, quantity: 10, productionInvoiceId: 50n },
+        ]);
+        prisma.bomRevision.findMany.mockResolvedValue([{ id: 9n, mfgProductId: 2n }]);
+        prisma.cuttingProposal.findUnique.mockResolvedValue(
+          proposalRow({ productionInvoiceId: 50n, lines: [] }),
+        );
+
+        await expect(service.assertReadyForApproval(70n, 50n)).rejects.toThrow(/Định mức/);
+      });
+    });
+
+    describe('approve() với phương án tính trước PI', () => {
+      it('CHẶN khi chưa đủ lệnh SX (Sếp chưa duyệt PI) - không giữ chỗ tồn/mua sớm', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(
+          proposalRow({ productionInvoiceId: 50n, lines: [] }),
+        );
+        prisma.productionOrder.count.mockResolvedValue(0);
+
+        await expect(service.approve('70', 'user-boss')).rejects.toThrow(/sau khi Sếp duyệt/);
+        expect(stockReservationsService.reserve).not.toHaveBeenCalled();
+        expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+      });
+
+      it('CHẶN khi phương án chưa gắn PI nào', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(proposalRow({ lines: [] }));
+
+        await expect(service.approve('70', 'user-boss')).rejects.toThrow(ConflictException);
+      });
+    });
+
+    describe('chạy solver cho lượt tính trước PI (runSolverAndSave, preInvoice=true)', () => {
+      type PrivateParts = {
+        runSolverAndSave: (
+          p: bigint,
+          buildJob: () => Promise<unknown>,
+          requestedById?: string,
+          onComplete?: () => void,
+          preInvoice?: boolean,
+        ) => Promise<void>;
+      };
+      const job = () =>
+        Promise.resolve({
+          label: 'SKU-1',
+          numSets: 1,
+          bomRows: [
+            {
+              part: 'SKU-1·chân bàn',
+              qty_per_set: 1,
+              material: '200',
+              spec: '',
+              cut_length: 660,
+              qty_per_part: 40,
+            },
+          ],
+          segmentSpecLookup: new Map<string, bigint>(),
+          segmentNames: new Map<string, string[]>(),
+          maxWastePctOverride: null,
+          allowCustomLength: null,
+          stockLengthsByMaterial: null,
+          timeLimitSecondsOverride: null,
+        });
+      const run = () =>
+        (service as unknown as PrivateParts).runSolverAndSave(
+          70n,
+          job,
+          'user-khsx',
+          undefined,
+          true,
+        );
+      const solverOk = (overrides: Record<string, unknown> = {}) => ({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 100,
+          waste_percentage: 1,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          { material: '200', feasible: true, total_bars: 8, cutting_patterns: [], ...overrides },
+        ],
+      });
+
+      beforeEach(() => {
+        prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+        currentUnchanged();
+      });
+
+      it('đợt chấp nhận hao hụt cao hơn (trần 100%): solver không đánh dấu vượt nhưng hao hụt > mức MẶC ĐỊNH thì vẫn hasOverThreshold=true để Sếp thấy cảnh báo', async () => {
+        externalApiService.post.mockResolvedValue(
+          solverOk({
+            waste_percentage: 14.85,
+            over_threshold: false,
+            max_waste_pct_threshold: 100,
+          }),
+        );
+        prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(proposalRow());
+
+        await run();
+
+        const calls = prisma.cuttingProposal.update.mock.calls as unknown as [
+          { data: { hasOverThreshold?: boolean } },
+        ][];
+        expect(calls.some((c) => c[0].data.hasOverThreshold === true)).toBe(true);
+      });
+
+      it('hao hụt trong mức mặc định thì KHÔNG bị đánh dấu vượt', async () => {
+        externalApiService.post.mockResolvedValue(solverOk({ waste_percentage: 0.5 }));
+        prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(proposalRow());
+
+        await run();
+
+        const calls = prisma.cuttingProposal.update.mock.calls as unknown as [
+          { data: { hasOverThreshold?: boolean } },
+        ][];
+        expect(calls.some((c) => c[0].data.hasOverThreshold === true)).toBe(false);
+      });
+
+      it('KHÔNG tự duyệt (không giữ chỗ tồn, không tạo đề xuất mua) và báo NGƯỜI BẤM TÍNH đã xong', async () => {
+        externalApiService.post.mockResolvedValue(solverOk());
+        prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(proposalRow());
+
+        await run();
+
+        expect(prisma.cuttingProposal.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ status: CuttingProposalStatus.DRAFT }) as unknown,
+          }),
+        );
+        expect(stockReservationsService.reserve).not.toHaveBeenCalled();
+        expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+        expect(notificationsService.emit).toHaveBeenCalledTimes(1);
+        expect(notificationsService.emit).toHaveBeenCalledWith(
+          'CUTTING_SOLVE_DONE',
+          expect.objectContaining({
+            params: expect.objectContaining({
+              requestedById: 'user-khsx',
+              label: 'SKU-1',
+            }) as unknown,
+          }),
+        );
+      });
+
+      it('vượt ngưỡng -> vẫn báo DONE (không chặn) kèm ghi chú vượt ngưỡng, vẫn không tự duyệt', async () => {
+        externalApiService.post.mockResolvedValue(solverOk({ over_threshold: true }));
+        prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(
+          proposalRow({ hasOverThreshold: true }),
+        );
+
+        await run();
+
+        expect(stockReservationsService.reserve).not.toHaveBeenCalled();
+        expect(notificationsService.emit).toHaveBeenCalledWith(
+          'CUTTING_SOLVE_DONE',
+          expect.objectContaining({
+            params: expect.objectContaining({
+              summary: expect.stringMatching(/vượt ngưỡng/) as unknown,
+            }) as unknown,
+          }),
+        );
+      });
+
+      it('loại sắt KHÔNG có cách cắt (vô nghiệm) -> vẫn báo CUTTING_SOLVE_FAILED kèm lý do', async () => {
+        externalApiService.post.mockResolvedValue(solverOk({ feasible: false }));
+        prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(
+          proposalRow({ hasInfeasibleLine: true }),
+        );
+
+        await run();
+
+        expect(notificationsService.emit).toHaveBeenCalledWith(
+          'CUTTING_SOLVE_FAILED',
+          expect.objectContaining({
+            params: expect.objectContaining({
+              reason: expect.stringMatching(/không có cách cắt nào/) as unknown,
+            }) as unknown,
+          }),
+        );
+      });
+
+      it('solver lỗi -> lưu FAILED và báo người bấm Tính', async () => {
+        externalApiService.post.mockRejectedValue(new Error('solver sập'));
+        prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(
+          proposalRow({ status: CuttingProposalStatus.FAILED, errorMessage: 'solver sập' }),
+        );
+
+        await run();
+
+        expect(prisma.cuttingProposal.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ status: CuttingProposalStatus.FAILED }) as unknown,
+          }),
+        );
+        expect(notificationsService.emit).toHaveBeenCalledWith(
+          'CUTTING_SOLVE_FAILED',
+          expect.anything(),
+        );
+      });
+    });
+
+    describe('buildBatchJob - đầu vào solver từ ảnh chụp (không cần PO/PI)', () => {
+      type Priv = {
+        buildBatchJob: (id: bigint) => Promise<{
+          label: string;
+          numSets: number;
+          bomRows: { cut_length: number; qty_per_part: number; qty_per_set: number }[];
+          maxWastePctOverride: number | null;
+          allowCustomLength: boolean | null;
+        }>;
+      };
+
+      it('nhân số lượng ĐÃ CHỤP vào từng dòng (num_sets=1) và đọc thông số cắt từ solverOptions', async () => {
+        prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(
+          proposalRow({
+            solverOptions: { solverMaxWastePctOverride: 5, solverAllowCustomLength: false },
+            items: [
+              snap({
+                bomRevisionId: 5n,
+                quantity: 10,
+                productionInvoiceItem: { mfgProduct: { factoryCode: 'SKU-1', name: 'Ghế' } },
+              }),
+            ],
+          }),
+        );
+
+        const job = await (service as unknown as Priv).buildBatchJob(70n);
+
+        // BOM mặc định của mock: 4 mảnh/bộ × 1 đoạn/mảnh × 10 bộ = 40 đoạn 660mm.
+        expect(prisma.pieceBom.findMany).toHaveBeenCalledWith({
+          where: { bomRevisionId: 5n },
+          include: { piece: true, segmentSpec: true },
+        });
+        expect(job.label).toBe('SKU-1');
+        expect(job.numSets).toBe(1);
+        expect(job.bomRows).toHaveLength(1);
+        expect(job.bomRows[0].cut_length).toBe(660);
+        expect(job.bomRows[0].qty_per_part).toBe(40);
+        expect(job.maxWastePctOverride).toBe(5);
+        expect(job.allowCustomLength).toBe(false);
+      });
+
+      it('báo lỗi rõ khi phương án không có ảnh chụp đầu vào', async () => {
+        prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(proposalRow({ items: [] }));
+
+        await expect((service as unknown as Priv).buildBatchJob(70n)).rejects.toThrow(
+          /không có SKU nào/,
+        );
+      });
+    });
+
+    describe('getBatchSolves', () => {
+      it('trả kèm invoiceReadiness cho phương án DRAFT: ready khi dùng được, kèm lý do khi chưa', async () => {
+        currentUnchanged();
+        prisma.cuttingProposal.findMany.mockResolvedValue([
+          { ...proposalRow(), lines: [] },
+          { ...proposalRow({ id: 71n, hasInfeasibleLine: true }), lines: [] },
+        ]);
+
+        const result = await service.getBatchSolves();
+
+        expect(result).toHaveLength(2);
+        expect(result[0].invoiceReadiness).toMatchObject({ ready: true, reason: null });
+        expect(result[1].invoiceReadiness?.ready).toBe(false);
+        expect(result[1].invoiceReadiness?.reason).toMatch(/không có cách cắt nào/);
+        // Phương án tính trước: DRAFT là bình thường (chờ tạo PI), không phải "đã có phương án khác".
+        expect(result[0].displayStatus).toBe('OK');
+      });
     });
   });
 });

@@ -31,10 +31,13 @@ import { NotificationType } from '../notifications/notification-types';
 import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
 import {
   CuttingProposalDisplayStatus,
+  CuttingProposalInvoiceReadinessDto,
+  CuttingProposalItemResponseDto,
   CuttingProposalPendingMaterialResponseDto,
   CuttingProposalPieceSummaryResponseDto,
   CuttingProposalResponseDto,
 } from './dto/cutting-proposal-response.dto';
+import { RequestCuttingBatchDto } from './dto/request-cutting-batch.dto';
 import {
   CuttingBatchLevelDto,
   CuttingBatchOrderDto,
@@ -171,6 +174,15 @@ const LIST_INCLUDE = {
       items: { include: { mfgProduct: true, salesOrder: { select: { orderCode: true } } } },
     },
   },
+  // Ảnh chụp đầu vào của lượt tính chạy TRƯỚC PI (luồng "Solve trước → tạo PI", 2026-09-30): chưa
+  // có PO/PI nào để lấy mã SKU - đọc từ đây. Rỗng với phương án neo PO/PI theo luồng cũ.
+  items: {
+    include: {
+      productionInvoiceItem: {
+        include: { mfgProduct: true, salesOrder: { select: { orderCode: true } } },
+      },
+    },
+  },
 } satisfies Prisma.CuttingProposalInclude;
 
 const DETAIL_INCLUDE = {
@@ -265,10 +277,13 @@ export class CuttingProposalsService {
     buildJob: () => Promise<SolverJob>,
     requestedById?: string,
     onComplete?: () => void | Promise<void>,
+    preInvoice = false,
   ): Promise<void> {
     const run = this.solveQueueTail
       .catch(() => undefined)
-      .then(() => this.runSolverAndSave(proposalId, buildJob, requestedById, onComplete));
+      .then(() =>
+        this.runSolverAndSave(proposalId, buildJob, requestedById, onComplete, preInvoice),
+      );
     this.solveQueueTail = run.catch(() => undefined);
     return run;
   }
@@ -394,6 +409,502 @@ export class CuttingProposalsService {
     });
 
     return this.toResponseDto(proposal);
+  }
+
+  // ─── Solve trước → tạo PI (2026-09-30) ──────────────────────────────────────────────────────
+  // KHSX bấm "Tính phương án cắt" ở màn "Tối ưu cắt sắt" -> solver chạy TRƯỚC khi có lệnh sản xuất
+  // nào. Kết quả nằm DRAFT (KHÔNG tự duyệt, không đụng kho/mua), KHSX tạo PI từ đúng phương án đó
+  // (ProductionInvoicesService.mergeItems/claimSolo -> assertReadyForInvoice + attachToInvoice), rồi
+  // Sếp duyệt PI thì mới approve() phương án có sẵn (giữ chỗ tồn + đề xuất mua). Không gọi solver lần 2.
+
+  /**
+   * Tính phương án cắt cho đúng tổ hợp SKU KHSX đang tick (1 SKU = cắt riêng, từ 2 SKU = gộp).
+   * Chụp lại BOM revision ACTIVE + số lượng của từng SKU TẠI THỜI ĐIỂM NÀY (CuttingProposalItem) để
+   * sau đó phát hiện phương án "lỗi thời" và để ProductionOrder ghim đúng revision đã tính.
+   */
+  async requestForBatch(
+    dto: RequestCuttingBatchDto,
+    actorUserId: string,
+  ): Promise<CuttingProposalResponseDto> {
+    const itemIds = [...new Set(dto.productionInvoiceItemIds.map((id) => parseBigIntId(id)))].sort(
+      (a, b) => (a < b ? -1 : a > b ? 1 : 0),
+    );
+    const options: Record<string, unknown> = {};
+    if (dto.solverMaxWastePctOverride != null) {
+      options.solverMaxWastePctOverride = dto.solverMaxWastePctOverride;
+    }
+    if (dto.solverAllowCustomLength != null) {
+      options.solverAllowCustomLength = dto.solverAllowCustomLength;
+    }
+    if (dto.solverOverrideReason != null) options.solverOverrideReason = dto.solverOverrideReason;
+    if (dto.solverStockLengthsByMaterial != null) {
+      options.solverStockLengthsByMaterial = dto.solverStockLengthsByMaterial;
+    }
+    if (dto.solverTimeLimitSecondsOverride != null) {
+      options.solverTimeLimitSecondsOverride = dto.solverTimeLimitSecondsOverride;
+    }
+    const timeoutSeconds = this.configService.get('solver.timeoutSeconds', { infer: true });
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      // Khoá theo TỪNG SKU (thứ tự id tăng dần, tránh deadlock): 2 lượt bấm Tính gần như đồng thời
+      // trên tổ hợp chồng nhau xếp hàng, lượt sau thấy đúng kết quả của lượt trước.
+      for (const id of itemIds) {
+        await lockBusinessKey(tx, `cutting-batch-solve:${id}`);
+      }
+      const items = await tx.productionInvoiceItem.findMany({
+        where: { id: { in: itemIds } },
+        select: {
+          id: true,
+          mfgProductId: true,
+          quantity: true,
+          productionInvoiceId: true,
+          prodApprovalStatus: true,
+        },
+      });
+      if (items.length !== itemIds.length) {
+        const found = new Set(items.map((i) => i.id));
+        throw new NotFoundException(
+          `Không tìm thấy SKU: ${itemIds.filter((id) => !found.has(id)).join(', ')}`,
+        );
+      }
+      const gathered = items.filter(
+        (i) =>
+          i.productionInvoiceId !== null || i.prodApprovalStatus === ProdApprovalStatus.APPROVED,
+      );
+      if (gathered.length > 0) {
+        throw new ConflictException(
+          `SKU đã được gom vào lệnh sản xuất (hoặc đã duyệt) thì không tính lại ở đây được: ${gathered
+            .map((i) => i.id)
+            .join(', ')}`,
+        );
+      }
+      const revisions = await tx.bomRevision.findMany({
+        where: {
+          mfgProductId: { in: [...new Set(items.map((i) => i.mfgProductId))] },
+          status: BomRevisionStatus.ACTIVE,
+        },
+        select: { id: true, mfgProductId: true },
+      });
+      const activeByProduct = new Map(revisions.map((r) => [r.mfgProductId, r.id]));
+      const noBom = items.filter((i) => !activeByProduct.has(i.mfgProductId));
+      if (noBom.length > 0) {
+        throw new ConflictException(
+          `SKU chưa có định mức ACTIVE nên không tính được: ${noBom.map((i) => i.id).join(', ')}`,
+        );
+      }
+
+      // Lượt đang chạy (CALCULATING, chưa quá hạn timeout) chặn hẳn thay vì supersede: tiến trình nền
+      // của nó vẫn sẽ ghi kết quả đè lên sau.
+      //
+      // "Tính lại theo chế độ khác" (2026-09-30): GIỮ các lượt cũ DÙNG ĐƯỢC (DRAFT, không có loại sắt vô
+      // nghiệm) để KHSX so sánh và có đường lui nếu lượt mới tệ hơn - trước đây lượt cũ bị thay ngay nên
+      // tính lại mà ra kết quả xấu là mất luôn kết quả tốt. Chỉ dọn: lượt lỗi, lượt vô nghiệm (không dùng
+      // được), và lượt dùng được cũ hơn 2 lượt mới nhất (tối đa 3 thẻ/tổ hợp kể cả lượt sắp tạo). Các
+      // lượt còn lại bị supersede khi 1 trong số chúng được dùng để tạo PI (xem attachToInvoice).
+      const previous = await tx.cuttingProposal.findMany({
+        where: {
+          productionOrderId: null,
+          productionInvoiceId: null,
+          status: {
+            in: [
+              CuttingProposalStatus.CALCULATING,
+              CuttingProposalStatus.DRAFT,
+              CuttingProposalStatus.FAILED,
+            ],
+          },
+          items: { some: { productionInvoiceItemId: { in: itemIds } } },
+        },
+        select: { id: true, status: true, requestedAt: true, hasInfeasibleLine: true },
+      });
+      const running = previous.find(
+        (pr) =>
+          pr.status === CuttingProposalStatus.CALCULATING &&
+          Date.now() - pr.requestedAt.getTime() <= (timeoutSeconds + 60) * 1000,
+      );
+      if (running) {
+        throw new ConflictException(
+          `Đang có lượt tính #${running.id} chứa cùng SKU - chờ nó xong rồi mới tính lại`,
+        );
+      }
+      const usableOldest = previous
+        .filter((pr) => pr.status === CuttingProposalStatus.DRAFT && !pr.hasInfeasibleLine)
+        .sort((a, b) => b.requestedAt.getTime() - a.requestedAt.getTime())
+        .slice(2);
+      const toDrop = [
+        ...previous.filter(
+          (pr) =>
+            pr.status !== CuttingProposalStatus.DRAFT ||
+            (pr.status === CuttingProposalStatus.DRAFT && pr.hasInfeasibleLine),
+        ),
+        ...usableOldest,
+      ];
+      if (toDrop.length > 0) {
+        await tx.cuttingProposal.updateMany({
+          where: { id: { in: toDrop.map((pr) => pr.id) } },
+          data: { status: CuttingProposalStatus.SUPERSEDED },
+        });
+      }
+
+      return tx.cuttingProposal.create({
+        data: {
+          requestedById: actorUserId,
+          solverOptions:
+            Object.keys(options).length > 0 ? (options as Prisma.InputJsonValue) : undefined,
+          items: {
+            create: items.map((it) => ({
+              productionInvoiceItemId: it.id,
+              mfgProductId: it.mfgProductId,
+              bomRevisionId: activeByProduct.get(it.mfgProductId)!,
+              quantity: it.quantity,
+            })),
+          },
+        },
+        include: LIST_INCLUDE,
+      });
+    });
+
+    void this.enqueueSolverRun(
+      created.id,
+      () => this.buildBatchJob(created.id),
+      actorUserId,
+      undefined,
+      true,
+    ).catch((error: unknown) => {
+      this.logger.error(
+        `Cutting proposal ${created.id} (tính trước PI, SKU ${itemIds.join(', ')}) failed: ${
+          (error as Error).message
+        }`,
+      );
+    });
+
+    return this.toResponseDto(created);
+  }
+
+  /**
+   * Các lượt tính trước-PI CHƯA được dùng để tạo lệnh sản xuất (mới nhất trước) - KHSX xem tiến
+   * độ + kết quả ở "Tối ưu cắt sắt". Kèm `invoiceReadiness` cho phương án DRAFT: đủ điều kiện tạo
+   * lệnh sản xuất chưa, hoặc vì sao chưa (vô nghiệm / vượt ngưỡng / lỗi thời).
+   */
+  async getBatchSolves(): Promise<CuttingProposalResponseDto[]> {
+    const config = await this.prisma.systemConfig.findUniqueOrThrow({
+      where: { id: SYSTEM_CONFIG_ID },
+      select: { solverMaxWastePercentage: true },
+    });
+    const rows = await this.prisma.cuttingProposal.findMany({
+      where: {
+        productionOrderId: null,
+        productionInvoiceId: null,
+        items: { some: {} },
+        status: {
+          in: [
+            CuttingProposalStatus.CALCULATING,
+            CuttingProposalStatus.DRAFT,
+            CuttingProposalStatus.FAILED,
+          ],
+        },
+      },
+      include: DETAIL_INCLUDE,
+      orderBy: { requestedAt: 'desc' },
+      take: 30,
+    });
+    const result: CuttingProposalResponseDto[] = [];
+    for (const row of rows) {
+      const dto = this.toDetailResponseDto(row, config.solverMaxWastePercentage.toNumber());
+      // Đang tính: nêu sẵn các loại sắt sẽ giải (đọc từ requestParams đã ghi sớm) - cùng findOne().
+      if (dto.displayStatus === 'CALCULATING' && row.requestParams) {
+        dto.pendingMaterials = await this.buildPendingMaterials(row.requestParams);
+      }
+      if (row.status === CuttingProposalStatus.DRAFT) {
+        const reason = await this.invoiceReadinessReason(row, null);
+        dto.invoiceReadiness = new CuttingProposalInvoiceReadinessDto({
+          ready: reason === null,
+          reason,
+          warning: reason === null ? this.overThresholdWarning(row) : null,
+        });
+      }
+      result.push(dto);
+    }
+    return result;
+  }
+
+  /** Cảnh báo (KHÔNG chặn) khi phương án có loại sắt cắt được nhưng vượt ngưỡng hao hụt - hiện cho
+   *  KHSX lúc tạo lệnh và cho QLSX/Sếp lúc duyệt để họ quyết định (xem invoiceReadinessReason). */
+  private overThresholdWarning(proposal: { hasOverThreshold: boolean }): string | null {
+    return proposal.hasOverThreshold
+      ? 'Có loại sắt vượt ngưỡng hao hụt - vẫn tạo được lệnh, nhưng QLSX/Sếp sẽ thấy cảnh báo này khi duyệt.'
+      : null;
+  }
+
+  /**
+   * Vì sao phương án tính-trước này CHƯA được dùng để tạo/duyệt lệnh sản xuất - null nếu dùng được.
+   * `expectedInvoiceId`: null khi kiểm lúc TẠO PI (SKU phải còn "chưa gom"), = id PI khi kiểm lúc
+   * Sếp DUYỆT (SKU phải đang nằm đúng trong PI đó).
+   *
+   * 2 nhóm lý do: (1) kết quả solver không dùng được (vô nghiệm/hết giờ/lỗi) - nhánh (a) của
+   * autoApproveBlockReason(), giờ chặn ở cổng "được tạo PI" thay vì im lặng sau khi Sếp đã duyệt (nhánh
+   * (c) vượt ngưỡng chỉ còn là CẢNH BÁO, xem overThresholdWarning); (2) LỖI THỜI - SKU/số lượng/định mức đã đổi kể từ lúc tính, số cây không còn đúng.
+   */
+  private async invoiceReadinessReason(
+    proposal: {
+      status: CuttingProposalStatus;
+      errorMessage: string | null;
+      hasInfeasibleLine: boolean;
+      hasOverThreshold: boolean;
+      items: {
+        productionInvoiceItemId: bigint;
+        mfgProductId: bigint;
+        bomRevisionId: bigint;
+        quantity: number;
+      }[];
+    },
+    expectedInvoiceId: bigint | null,
+  ): Promise<string | null> {
+    if (proposal.status === CuttingProposalStatus.CALCULATING) {
+      return 'Phương án đang tính - chờ tính xong.';
+    }
+    if (proposal.status === CuttingProposalStatus.FAILED) {
+      return `Solver lỗi: ${proposal.errorMessage ?? 'không rõ nguyên nhân'} - tính lại.`;
+    }
+    if (proposal.status !== CuttingProposalStatus.DRAFT) {
+      return `Phương án ở trạng thái ${proposal.status} - chỉ phương án DRAFT mới dùng được.`;
+    }
+    // CHỈ chặn khi có loại sắt KHÔNG có phương án cắt nào (không có số cây để mua). Vượt ngưỡng hao
+    // hụt KHÔNG chặn nữa (2026-09-30): KHSX đã tự nâng được ngưỡng mặc định nên chặn ở đây là rào giả
+    // - nâng số là qua - mà QLSX/Sếp lại không thấy gì. Kiểm soát thật nằm ở người duyệt: phương án
+    // vượt ngưỡng vẫn tạo được lệnh nhưng bị đánh CẢNH BÁO rõ (overThresholdWarning) cho QLSX/Sếp.
+    if (proposal.hasInfeasibleLine) {
+      return 'Có loại sắt không có cách cắt nào đạt ngưỡng hao hụt hiện tại - chọn chế độ “Chấp nhận hao hụt cao hơn” (Sếp duyệt riêng) hoặc gộp thêm SKU dùng chung loại sắt, rồi tính lại.';
+    }
+
+    const snapshot = proposal.items;
+    const current = await this.prisma.productionInvoiceItem.findMany({
+      where: { id: { in: snapshot.map((i) => i.productionInvoiceItemId) } },
+      select: { id: true, quantity: true, productionInvoiceId: true },
+    });
+    const currentById = new Map(current.map((c) => [c.id, c]));
+    const revisions = await this.prisma.bomRevision.findMany({
+      where: {
+        mfgProductId: { in: [...new Set(snapshot.map((i) => i.mfgProductId))] },
+        status: BomRevisionStatus.ACTIVE,
+      },
+      select: { id: true, mfgProductId: true },
+    });
+    const activeByProduct = new Map(revisions.map((r) => [r.mfgProductId, r.id]));
+    for (const snap of snapshot) {
+      const cur = currentById.get(snap.productionInvoiceItemId);
+      if (!cur) return 'Có SKU đã bị xoá kể từ lúc tính - tính lại.';
+      if ((cur.productionInvoiceId ?? null) !== expectedInvoiceId) {
+        return 'Có SKU đã được gom vào lệnh sản xuất khác kể từ lúc tính - tính lại.';
+      }
+      if (cur.quantity !== snap.quantity) {
+        return `Số lượng của 1 SKU đã đổi từ ${snap.quantity} thành ${cur.quantity} kể từ lúc tính - tính lại.`;
+      }
+      if (activeByProduct.get(snap.mfgProductId) !== snap.bomRevisionId) {
+        return 'Định mức của 1 SKU đã đổi kể từ lúc tính - số cây không còn đúng, tính lại.';
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Cổng "được tạo lệnh sản xuất từ phương án này" - gọi bởi ProductionInvoicesService.mergeItems/
+   * claimSolo TRƯỚC khi ghi gì. Ném 409 kèm lý do tiếng Việt nếu: phương án đã gắn PI khác, tập SKU
+   * KHSX gửi lệch với tập đã tính, kết quả solver không dùng được, hoặc đã lỗi thời. Trả về thông số
+   * cắt đã dùng để PI copy sang các cột `ProductionInvoice.solver*`.
+   */
+  async assertReadyForInvoice(
+    cuttingProposalId: string,
+    itemIds: bigint[],
+  ): Promise<{ id: bigint; solverOptions: Record<string, unknown> }> {
+    const id = parseBigIntId(cuttingProposalId);
+    const proposal = await this.prisma.cuttingProposal.findUnique({
+      where: { id },
+      include: { items: true },
+    });
+    if (!proposal) {
+      throw new NotFoundException(`Cutting proposal ${cuttingProposalId} not found`);
+    }
+    if (proposal.items.length === 0) {
+      throw new ConflictException(
+        `Phương án ${cuttingProposalId} không phải lượt tính trước - không dùng để tạo lệnh sản xuất được`,
+      );
+    }
+    if (proposal.productionOrderId !== null || proposal.productionInvoiceId !== null) {
+      throw new ConflictException(
+        `Phương án ${cuttingProposalId} đã được dùng cho 1 lệnh sản xuất - tính lại để tạo lệnh mới`,
+      );
+    }
+    const snapshotIds = new Set(proposal.items.map((i) => i.productionInvoiceItemId));
+    const same = snapshotIds.size === itemIds.length && itemIds.every((i) => snapshotIds.has(i));
+    if (!same) {
+      throw new ConflictException(
+        'Tập SKU không khớp với tập đã tính - phương án chỉ dùng được cho ĐÚNG các SKU đã tính, tính lại nếu đổi tổ hợp',
+      );
+    }
+    const reason = await this.invoiceReadinessReason(proposal, null);
+    if (reason) {
+      throw new ConflictException(`Chưa tạo được lệnh sản xuất từ phương án này: ${reason}`);
+    }
+    return { id, solverOptions: (proposal.solverOptions ?? {}) as Record<string, unknown> };
+  }
+
+  /** Gắn phương án tính-trước vào PI vừa tạo (trong CÙNG transaction tạo PI). updateMany có điều
+   *  kiện + so count: 2 request tạo PI cùng lúc từ 1 phương án thì chỉ 1 thắng. */
+  async attachToInvoice(tx: PrismaTx, cuttingProposalId: bigint, invoiceId: bigint): Promise<void> {
+    const { count } = await tx.cuttingProposal.updateMany({
+      where: {
+        id: cuttingProposalId,
+        productionOrderId: null,
+        productionInvoiceId: null,
+        status: CuttingProposalStatus.DRAFT,
+      },
+      data: { productionInvoiceId: invoiceId },
+    });
+    if (count !== 1) {
+      throw new ConflictException(
+        `Phương án ${cuttingProposalId} vừa được dùng cho lệnh sản xuất khác hoặc không còn DRAFT`,
+      );
+    }
+    // Các lượt tính khác (chưa gắn PI) của CÙNG các SKU này thành vô nghĩa - SKU đã nằm trong PI. Đánh
+    // SUPERSEDED để không còn hiện ở tab "Kết quả đã tính" với lý do "SKU đã được gom".
+    const items = await tx.cuttingProposalItem.findMany({
+      where: { cuttingProposalId },
+      select: { productionInvoiceItemId: true },
+    });
+    if (items.length > 0) {
+      await tx.cuttingProposal.updateMany({
+        where: {
+          id: { not: cuttingProposalId },
+          productionOrderId: null,
+          productionInvoiceId: null,
+          status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.FAILED] },
+          items: {
+            some: { productionInvoiceItemId: { in: items.map((i) => i.productionInvoiceItemId) } },
+          },
+        },
+        data: { status: CuttingProposalStatus.SUPERSEDED },
+      });
+    }
+  }
+
+  /** Phương án tính-trước của 1 PI (null với PI theo luồng cũ) - ProductionInvoicesService dùng để
+   *  chọn đường duyệt: có phương án -> approve() phương án đó, không có -> chạy solver như cũ. */
+  async findPreSolvedForInvoice(
+    invoiceId: bigint,
+  ): Promise<{ id: bigint; status: CuttingProposalStatus } | null> {
+    return this.prisma.cuttingProposal.findFirst({
+      where: {
+        productionInvoiceId: invoiceId,
+        items: { some: {} },
+        status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.APPROVED] },
+      },
+      orderBy: { requestedAt: 'desc' },
+      select: { id: true, status: true },
+    });
+  }
+
+  /** Cổng trước khi Sếp duyệt PI: phương án còn đúng (chưa lỗi thời) và mọi loại sắt đã có Kho -
+   *  kiểm TRƯỚC khi ghi APPROVED/tạo PO, thay vì để approve() ném lỗi sau khi item đã APPROVED.
+   *  Trả về BOM revision đã chụp của từng SKU để ProductionOrder ghim đúng revision đã tính. */
+  async assertReadyForApproval(
+    cuttingProposalId: bigint,
+    invoiceId: bigint,
+  ): Promise<{ revisionByItemId: Map<bigint, bigint> }> {
+    const proposal = await this.prisma.cuttingProposal.findUnique({
+      where: { id: cuttingProposalId },
+      include: { items: true, lines: true },
+    });
+    if (!proposal) {
+      throw new NotFoundException(`Cutting proposal ${cuttingProposalId} not found`);
+    }
+    const reason = await this.invoiceReadinessReason(proposal, invoiceId);
+    if (reason) {
+      throw new ConflictException(`Không duyệt được - phương án cắt của lệnh này: ${reason}`);
+    }
+    const buyableMaterialIds = [
+      ...new Set(
+        proposal.lines.filter((l) => l.feasible && (l.totalBars ?? 0) > 0).map((l) => l.materialId),
+      ),
+    ];
+    if (buyableMaterialIds.length > 0) {
+      const materials = await this.prisma.material.findMany({
+        where: { id: { in: buyableMaterialIds }, warehouseId: null },
+        select: { code: true },
+      });
+      if (materials.length > 0) {
+        throw new BadRequestException(
+          `Vật tư ${materials.map((m) => m.code).join(', ')} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi duyệt`,
+        );
+      }
+    }
+    return {
+      revisionByItemId: new Map(
+        proposal.items.map((i) => [i.productionInvoiceItemId, i.bomRevisionId]),
+      ),
+    };
+  }
+
+  /** PI bị từ chối/xoá: gỡ phương án tính-trước khỏi PI (đánh SUPERSEDED + productionInvoiceId
+   *  null) TRƯỚC khi xoá PI - FK không cho xoá PI đang được phương án trỏ tới. SKU quay về "chưa
+   *  gom" nên KHSX phải tính lại (phương án cũ giữ lại làm lịch sử). */
+  async releaseForInvoice(tx: PrismaTx, invoiceId: bigint): Promise<void> {
+    await tx.cuttingProposal.updateMany({
+      where: {
+        productionInvoiceId: invoiceId,
+        items: { some: {} },
+        status: {
+          in: [
+            CuttingProposalStatus.DRAFT,
+            CuttingProposalStatus.CALCULATING,
+            CuttingProposalStatus.FAILED,
+          ],
+        },
+      },
+      data: { status: CuttingProposalStatus.SUPERSEDED, productionInvoiceId: null },
+    });
+  }
+
+  /** Báo đích danh người bấm Tính khi lượt tính trước-PI xong: dùng được -> CUTTING_SOLVE_DONE,
+   *  chưa dùng được (vô nghiệm/vượt ngưỡng/solver lỗi) -> CUTTING_SOLVE_FAILED kèm lý do. Best-
+   *  effort: lỗi thông báo không được làm hỏng kết quả đã lưu. */
+  private async notifySolveFinished(
+    proposalId: bigint,
+    requestedById: string | undefined,
+    label: string,
+  ): Promise<void> {
+    if (!requestedById) return;
+    try {
+      const proposal = await this.prisma.cuttingProposal.findUniqueOrThrow({
+        where: { id: proposalId },
+        include: { items: true },
+      });
+      const reason = await this.invoiceReadinessReason(proposal, null);
+      const params = { label, proposalId: proposalId.toString(), requestedById };
+      if (reason === null) {
+        const bars = proposal.totalBarsAll;
+        const pct = proposal.wastePercentage ? Number(proposal.wastePercentage) : null;
+        await this.notifications.emit('CUTTING_SOLVE_DONE', {
+          entityId: proposalId.toString(),
+          dedupeKey: `CUTTING_SOLVE_DONE:${proposalId}`,
+          params: {
+            ...params,
+            summary: `Tổng ${bars ?? '?'} cây${pct != null ? `, hao hụt ${pct}%` : ''}${
+              proposal.hasOverThreshold ? ' (có loại sắt vượt ngưỡng hao hụt)' : ''
+            }`,
+          },
+        });
+      } else {
+        await this.notifications.emit('CUTTING_SOLVE_FAILED', {
+          entityId: proposalId.toString(),
+          dedupeKey: `CUTTING_SOLVE_FAILED:${proposalId}`,
+          params: { ...params, reason },
+        });
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to notify solve result for proposal ${proposalId}: ${(error as Error).message}`,
+      );
+    }
   }
 
   /** List toàn hệ thống (không lọc theo PO) - dùng cho màn Admin "Quản lý cắt sắt". */
@@ -548,9 +1059,9 @@ export class CuttingProposalsService {
         chosenStockLengths,
         defaultStockLengths,
       );
-      const thresholdPct =
-        material.maxCuttingWastePercentage?.toNumber() ??
-        config.solverMaxWastePercentage.toNumber();
+      // Ngưỡng CHUNG do KHSX quyết (SystemConfig.solverMaxWastePercentage) - từ 2026-09-30 Sắt KHÔNG
+      // còn ngưỡng riêng theo vật tư (Material.maxCuttingWastePercentage đã bỏ khỏi luồng cắt).
+      const thresholdPct = config.solverMaxWastePercentage.toNumber();
 
       // Xếp theo hạn gần nhất trước; KHÔNG có hạn thì xuống cuối (không được để dữ liệu thiếu
       // đẩy 1 đơn lên làm mốc neo "gấp nhất").
@@ -690,9 +1201,7 @@ export class CuttingProposalsService {
           .map(({ materialId, demand }) => {
             const material = materialById.get(materialId);
             if (!material) return null;
-            const thresholdPct =
-              material.maxCuttingWastePercentage?.toNumber() ??
-              config.solverMaxWastePercentage.toNumber();
+            const thresholdPct = config.solverMaxWastePercentage.toNumber();
             // Chip "hao hụt khi cắt riêng" PHẢI tính trên đúng cây KHSX đang chọn cho quy cách
             // này - đổi ô chọn mà chip đứng yên thì màn hình tự mâu thuẫn.
             const stockLengths = this.resolveStockLengths(
@@ -805,9 +1314,7 @@ export class CuttingProposalsService {
     for (const material of materials) {
       const members = (byMaterial.get(material.id) ?? []).filter((e) => selectedIds.has(e.item.id));
       if (members.length === 0) continue;
-      const thresholdPct =
-        material.maxCuttingWastePercentage?.toNumber() ??
-        config.solverMaxWastePercentage.toNumber();
+      const thresholdPct = config.solverMaxWastePercentage.toNumber();
       // Chiều dài KHSX đang chọn cho ĐÚNG quy cách này - phải dùng ở đây, nếu vẫn tính theo cây
       // chuẩn thì con số "Nếu gộp N SKU" nói 6m trong khi đợt sẽ thật sự cắt 5m85: lệch nhau
       // ngay trên cùng một màn.
@@ -971,7 +1478,7 @@ export class CuttingProposalsService {
     // đủ bất kể byMaterial rỗng hay không - KHÔNG được thêm lại early-return này.
     const materials = await this.prisma.material.findMany({
       where: { id: { in: [...byMaterial.keys()] } },
-      select: { id: true, code: true, name: true, maxCuttingWastePercentage: true },
+      select: { id: true, code: true, name: true },
     });
 
     return { items, byMaterial, materials, config, itemsWithoutBom };
@@ -1003,7 +1510,7 @@ export class CuttingProposalsService {
     const bigId = parseBigIntId(id);
     const proposal = await this.prisma.cuttingProposal.findUnique({
       where: { id: bigId },
-      include: { lines: true },
+      include: { lines: true, items: true },
     });
     if (!proposal) {
       throw new NotFoundException(`Cutting proposal ${id} not found`);
@@ -1012,6 +1519,24 @@ export class CuttingProposalsService {
       throw new ConflictException(
         `Cutting proposal ${id} ở trạng thái ${proposal.status} - chỉ DRAFT mới duyệt được`,
       );
+    }
+    // Phương án TÍNH TRƯỚC PI (luồng "Solve trước → tạo PI", 2026-09-30) chỉ được duyệt khi đã gắn
+    // PI VÀ Sếp đã duyệt PI (mọi SKU đã có lệnh sản xuất): approve() giữ chỗ tồn + tạo đề xuất mua
+    // + chốt quyền phủ theo từng lệnh sản xuất - duyệt sớm hơn thì các bước đó chạy trên nhu cầu
+    // chưa được Sếp chấp thuận (và claimCuttingPlanCoverage không có lệnh nào để chốt).
+    if (proposal.items?.length) {
+      const poCount = proposal.productionInvoiceId
+        ? await this.prisma.productionOrder.count({
+            where: {
+              productionInvoiceItem: { productionInvoiceId: proposal.productionInvoiceId },
+            },
+          })
+        : 0;
+      if (poCount < proposal.items.length) {
+        throw new ConflictException(
+          `Phương án ${id} tính trước lệnh sản xuất - chỉ duyệt được sau khi Sếp duyệt lệnh sản xuất (${poCount}/${proposal.items.length} SKU đã có lệnh)`,
+        );
+      }
     }
 
     const buyableLines = proposal.lines.filter(
@@ -1459,11 +1984,17 @@ export class CuttingProposalsService {
     buildJob: () => Promise<SolverJob>,
     requestedById?: string,
     onComplete?: () => void | Promise<void>,
+    /** true = lượt tính chạy TRƯỚC PI (luồng "Solve trước → tạo PI", 2026-09-30): chỉ lưu kết quả
+     *  + báo người bấm Tính, KHÔNG tự duyệt - giữ chỗ tồn/đề xuất mua chỉ xảy ra khi Sếp duyệt PI
+     *  (xem ProductionInvoicesService.approveItem/approveBatch gọi approve()). */
+    preInvoice = false,
   ): Promise<void> {
     let poNumber: string | undefined;
+    let batchLabel = '—';
     try {
       const job = await buildJob();
       poNumber = job.label;
+      batchLabel = job.label;
       const { bomRows, segmentSpecLookup, segmentNames } = job;
       const config = await this.prisma.systemConfig.findUniqueOrThrow({
         where: { id: SYSTEM_CONFIG_ID },
@@ -1478,35 +2009,12 @@ export class CuttingProposalsService {
       const allowCustomLength = job.allowCustomLength ?? config.solverAllowCustomLength;
       const wasteOverride = job.maxWastePctOverride;
 
-      // Sếp cấp riêng ngưỡng hao hụt tối đa cho từng loại Sắt (Material.maxCuttingWastePercentage,
-      // xem comment schema.prisma) - solver ĐÃ lặp riêng từng loại trong 1 lần gọi (api/views.py),
-      // chỉ cần truyền thêm dict theo materialId để nó tự chọn đúng ngưỡng cho từng nhóm, KHÔNG
-      // cần tách nhiều lần gọi (xem review trước đó: gộp/lấy trung bình nhiều ngưỡng khác nhau
-      // trong 1 request duy nhất mới là vấn đề, còn để solver tự áp đúng ngưỡng theo từng vật tư
-      // trong 1 request thì không). Vật tư chưa set dùng SystemConfig.solverMaxWastePercentage
-      // làm mặc định - solver tự làm việc đó (xem docstring endpoint), ở đây chỉ cần bỏ qua
-      // null/<=0 (0 gần như luôn vô nghiệm - bắt lấp đầy cây tới từng mm, xem
-      // de_xuat_logic.py::generate_patterns) và không gửi dict rỗng để giữ request body giống
-      // hệt trước khi có tính năng này cho trường hợp chưa ai đặt ngưỡng riêng.
+      // KHÔNG còn ngưỡng riêng theo vật tư (2026-09-30): Sắt chỉ có MỘT ngưỡng chung do KHSX quyết
+      // (SystemConfig.solverMaxWastePercentage, KHSX tự đổi ở "Tối ưu cắt sắt"), đặc cách của đợt chỉ
+      // NÂNG ngưỡng đó (xem baseRequestBody.max_waste_percentage). Trước đây Admin cấp ngưỡng riêng
+      // cho từng loại sắt (max_waste_percentage_by_material) - bỏ để KHSX toàn quyền, không còn con
+      // số nào âm thầm ghi đè mà KHSX không thấy/không sửa được.
       const distinctMaterialIds = [...new Set(bomRows.map((row) => BigInt(row.material)))];
-      const materialsWithThreshold = await this.prisma.material.findMany({
-        where: { id: { in: distinctMaterialIds } },
-        select: { id: true, maxCuttingWastePercentage: true },
-      });
-      //
-      // Ngưỡng đặc cách của đợt (wasteOverride) chỉ NÂNG, không bao giờ hạ: `max(ngưỡng riêng,
-      // đặc cách)`. Hạ được thì một đợt xin đặc cách 5% sẽ vô tình SIẾT loại sắt vốn đang được
-      // Sếp cho 8% - đặc cách là để nới cho loại đang vướng, không phải để đặt lại ngưỡng toàn cục.
-      // Loại chưa có ngưỡng riêng không cần vào dict: nó rơi về scalar max_waste_percentage bên
-      // dưới, mà scalar đó cũng đã được nâng bằng đúng công thức này.
-      const maxWastePctByMaterial: Record<string, number> = {};
-      for (const m of materialsWithThreshold) {
-        const pct = m.maxCuttingWastePercentage?.toNumber();
-        if (pct != null && pct > 0) {
-          maxWastePctByMaterial[m.id.toString()] =
-            wasteOverride != null ? Math.max(pct, wasteOverride) : pct;
-        }
-      }
 
       // Ngân sách thời gian CHO MỖI LOẠI SẮT KHSX đề nghị riêng cho đợt này (2026-09-22, ô "Thời
       // gian chạy tối đa" ở "Tối ưu cắt sắt") - thay hẳn config.solverTimeLimitSeconds làm mẫu số
@@ -1551,9 +2059,6 @@ export class CuttingProposalsService {
           wasteOverride != null
             ? Math.max(config.solverMaxWastePercentage.toNumber(), wasteOverride)
             : config.solverMaxWastePercentage.toNumber(),
-        ...(Object.keys(maxWastePctByMaterial).length > 0
-          ? { max_waste_percentage_by_material: maxWastePctByMaterial }
-          : {}),
         // Chiều dài cây RIÊNG theo quy cách KHSX chọn cho đợt này (2026-09-16). Gửi DICT, không
         // phải chuỗi như stock_lengths ở trên: _parse_stock_lengths_by_material bên solver nhận
         // số/list/chuỗi cho TỪNG khoá. Khoá = Material.id dạng chuỗi, khớp đúng field `material`
@@ -1653,7 +2158,25 @@ export class CuttingProposalsService {
       };
       const response = await callSolver(requestBody);
 
-      await this.saveSuccess(proposalId, requestBody, response, segmentSpecLookup, segmentNames);
+      await this.saveSuccess(
+        proposalId,
+        requestBody,
+        response,
+        segmentSpecLookup,
+        segmentNames,
+        // Lượt tính TRƯỚC PI: "vượt ngưỡng" luôn xét theo mức MẶC ĐỊNH của công ty, không theo trần đã gửi solver.
+        // Chế độ "Chấp nhận hao hụt cao hơn" gửi trần 100% (không đặt trần) nên solver không bao giờ tự đánh dấu
+        // vượt - không đo lại thì QLSX/Sếp mất cảnh báo đúng ở đợt hao hụt cao nhất. Luồng cũ (có PI) giữ nguyên.
+        preInvoice ? config.solverMaxWastePercentage.toNumber() : null,
+      );
+
+      if (preInvoice) {
+        // Không tự duyệt: phương án nằm DRAFT chờ KHSX tạo lệnh sản xuất từ nó. Báo đích danh người
+        // bấm Tính - kể cả khi kết quả CHƯA dùng được (vô nghiệm/vượt ngưỡng), đây chính là chỗ luồng
+        // cũ im lặng.
+        await this.notifySolveFinished(proposalId, requestedById, batchLabel);
+        return;
+      }
 
       // Sếp chốt (2026-08-15): KHÔNG cần QLSX bấm duyệt riêng nữa - tính xong là tự động duyệt
       // luôn (approve()), tự trừ tồn + tự tạo đề xuất mua hàng ngay, không chờ ai thao tác thêm.
@@ -1693,6 +2216,9 @@ export class CuttingProposalsService {
       // CUTTING_PROPOSAL_CALCULATION_FAILED) - cùng lý do trên. saveFailure() vẫn lưu FAILED +
       // errorMessage vào chính CuttingProposal, và extractErrorMessage() vẫn được dùng ở đó.
       await this.saveFailure(proposalId, error);
+      if (preInvoice) {
+        await this.notifySolveFinished(proposalId, requestedById, batchLabel);
+      }
     } finally {
       // Chạy dù thành công/chặn/lỗi - "xong" ở đây nghĩa là đề xuất mua sắt (nếu có) đã hiển thị
       // ổn định, không phải "tính ra kết quả tốt". Tách try/catch riêng, best-effort như mọi
@@ -2529,13 +3055,48 @@ export class CuttingProposalsService {
       );
     }
 
-    // Gom theo (materialId, cutLengthMm): 2 sản phẩm khác nhau dùng CÙNG cỡ đoạn của CÙNG loại sắt
-    // thì với solver chỉ là một nhu cầu duy nhất - đây chính là chỗ gộp sinh ra lợi ích.
+    const { bomRows, segmentSpecLookup, segmentNames } = await this.aggregateDemand(
+      orders.map(({ order, code }) => ({
+        code,
+        bomRevisionId: order.bomRevisionId,
+        quantity: order.quantity,
+      })),
+    );
+
+    return {
+      label: pi.code,
+      numSets: 1,
+      bomRows,
+      segmentSpecLookup,
+      segmentNames,
+      maxWastePctOverride: pi.solverMaxWastePctOverride?.toNumber() ?? null,
+      allowCustomLength: pi.solverAllowCustomLength,
+      stockLengthsByMaterial:
+        (pi.solverStockLengthsByMaterial as StockLengthsByMaterial | null) ?? null,
+      timeLimitSecondsOverride: pi.solverTimeLimitSecondsOverride ?? null,
+    };
+  }
+
+  /**
+   * Gộp nhu cầu của NHIỀU sản phẩm (mỗi cái một định mức + một số lượng) thành 1 bom[] tuyệt đối cho
+   * solver - lõi dùng chung của buildInvoiceJob (PI gộp đã có lệnh SX) và buildBatchJob (lượt tính
+   * TRƯỚC PI, đọc từ ảnh chụp CuttingProposalItem).
+   *
+   * Gom theo (materialId, cutLengthMm): 2 sản phẩm khác nhau dùng CÙNG cỡ đoạn của CÙNG loại sắt
+   * thì với solver chỉ là một nhu cầu duy nhất - đây chính là chỗ gộp sinh ra lợi ích.
+   */
+  private async aggregateDemand(
+    entries: { code: string; bomRevisionId: bigint; quantity: number }[],
+  ): Promise<{
+    bomRows: SolverBomRow[];
+    segmentSpecLookup: Map<string, bigint>;
+    segmentNames: Map<string, string[]>;
+  }> {
     const demand = new Map<string, SolverBomRow>();
     const segmentSpecLookup = new Map<string, bigint>();
     const segmentNames = new Map<string, string[]>();
-    for (const { order, code } of orders) {
-      const built = await this.buildBomRows(order.bomRevisionId);
+    for (const { code, bomRevisionId, quantity } of entries) {
+      const built = await this.buildBomRows(bomRevisionId);
       for (const [key, specId] of built.segmentSpecLookup) {
         segmentSpecLookup.set(key, specId);
       }
@@ -2552,7 +3113,7 @@ export class CuttingProposalsService {
       }
       for (const row of built.bomRows) {
         const key = `${row.material}:${row.cut_length}`;
-        const absoluteQty = row.qty_per_set * row.qty_per_part * order.quantity;
+        const absoluteQty = row.qty_per_set * row.qty_per_part * quantity;
         const existing = demand.get(key);
         if (existing) {
           existing.qty_per_part += absoluteQty;
@@ -2569,18 +3130,49 @@ export class CuttingProposalsService {
         }
       }
     }
+    return { bomRows: [...demand.values()], segmentSpecLookup, segmentNames };
+  }
 
+  /**
+   * Đầu vào solver cho lượt tính TRƯỚC PI (luồng "Solve trước → tạo PI", 2026-09-30): đọc từ ảnh
+   * chụp CuttingProposalItem (BOM revision + số lượng TẠI THỜI ĐIỂM bấm Tính) và thông số cắt lưu
+   * ở CuttingProposal.solverOptions - chưa có PO/PI nào để đọc. Cùng lõi gộp nhu cầu với
+   * buildInvoiceJob nên 1 SKU hay N SKU đều ra bom[] tuyệt đối với num_sets = 1.
+   */
+  private async buildBatchJob(proposalId: bigint): Promise<SolverJob> {
+    const proposal = await this.prisma.cuttingProposal.findUniqueOrThrow({
+      where: { id: proposalId },
+      include: { items: { include: { productionInvoiceItem: { include: { mfgProduct: true } } } } },
+    });
+    if (proposal.items.length === 0) {
+      throw new NotFoundException(
+        `Phương án cắt ${proposalId} không có SKU nào trong ảnh chụp đầu vào`,
+      );
+    }
+    const options = (proposal.solverOptions ?? {}) as {
+      solverMaxWastePctOverride?: number;
+      solverAllowCustomLength?: boolean;
+      solverStockLengthsByMaterial?: StockLengthsByMaterial;
+      solverTimeLimitSecondsOverride?: number;
+    };
+    const codes = proposal.items.map((it) => it.productionInvoiceItem.mfgProduct.factoryCode);
+    const { bomRows, segmentSpecLookup, segmentNames } = await this.aggregateDemand(
+      proposal.items.map((it) => ({
+        code: it.productionInvoiceItem.mfgProduct.factoryCode,
+        bomRevisionId: it.bomRevisionId,
+        quantity: it.quantity,
+      })),
+    );
     return {
-      label: pi.code,
+      label: [...new Set(codes)].join(', '),
       numSets: 1,
-      bomRows: [...demand.values()],
+      bomRows,
       segmentSpecLookup,
       segmentNames,
-      maxWastePctOverride: pi.solverMaxWastePctOverride?.toNumber() ?? null,
-      allowCustomLength: pi.solverAllowCustomLength,
-      stockLengthsByMaterial:
-        (pi.solverStockLengthsByMaterial as StockLengthsByMaterial | null) ?? null,
-      timeLimitSecondsOverride: pi.solverTimeLimitSecondsOverride ?? null,
+      maxWastePctOverride: options.solverMaxWastePctOverride ?? null,
+      allowCustomLength: options.solverAllowCustomLength ?? null,
+      stockLengthsByMaterial: options.solverStockLengthsByMaterial ?? null,
+      timeLimitSecondsOverride: options.solverTimeLimitSecondsOverride ?? null,
     };
   }
 
@@ -2692,13 +3284,17 @@ export class CuttingProposalsService {
     response: SolverProposeResponse,
     segmentSpecLookup: Map<string, bigint>,
     segmentNames: Map<string, string[]>,
+    defaultWastePct: number | null = null,
   ): Promise<void> {
     // Suy 2 cờ tổng hợp TỪ response gốc trước khi lưu - lý do tồn tại xem comment schema.prisma
     // (hasInfeasibleLine/hasOverThreshold): để màn Cắt sắt lọc/đếm được BẰNG SQL khi poll định kỳ,
     // không phải kéo lines[] về rồi lọc ở code (xem changelog 2026-08-15 mục 15 - đợt 2 sẽ dùng).
     const hasInfeasibleLine = response.purchase_plan.some((item) => !item.feasible);
     const hasOverThreshold = response.purchase_plan.some(
-      (item) => item.feasible && item.over_threshold === true,
+      (item) =>
+        item.feasible &&
+        (item.over_threshold === true ||
+          (defaultWastePct != null && (item.waste_percentage ?? 0) > defaultWastePct)),
     );
 
     await this.prisma.$transaction(
@@ -2825,6 +3421,8 @@ export class CuttingProposalsService {
             CuttingProposalStatus.FAILED,
           ],
         },
+        // Lượt tính trước PI là việc của KHSX (thông báo riêng), không phải "việc chờ QLSX".
+        NOT: { items: { some: {} } },
       },
       select: {
         status: true,
@@ -2851,6 +3449,9 @@ export class CuttingProposalsService {
     completedAt: Date | null;
     errorMessage: string | null;
     requestedAt: Date;
+    /** Phương án tính TRƯỚC PI (có ảnh chụp đầu vào) - DRAFT là trạng thái BÌNH THƯỜNG (chờ tạo/duyệt
+     *  lệnh sản xuất), không phải "đang chờ tự-duyệt" hay "đã có phương án khác duyệt" như luồng cũ. */
+    preSolved?: boolean;
   }): { displayStatus: CuttingProposalDisplayStatus; displayReason: string | null } {
     if (proposal.status === CuttingProposalStatus.CALCULATING) {
       // Chống treo vĩnh viễn: đường DUY NHẤT kẹt CALCULATING mãi mãi là tiến trình BE chết giữa
@@ -2886,6 +3487,15 @@ export class CuttingProposalsService {
       return {
         displayStatus: 'NEEDS_ACTION',
         displayReason: 'Có vật tư không cắt được trong ngưỡng hao hụt - xem chi tiết',
+      };
+    }
+    if (proposal.preSolved) {
+      // Tính trước PI: vượt ngưỡng chỉ là cảnh báo cho người duyệt, không phải "cần xử lý" của KHSX.
+      return {
+        displayStatus: 'OK',
+        displayReason: proposal.hasOverThreshold
+          ? 'Đã tính xong - CÓ loại sắt vượt ngưỡng hao hụt (QLSX/Sếp sẽ thấy cảnh báo)'
+          : 'Đã tính xong - chờ tạo lệnh sản xuất / chờ Sếp duyệt',
       };
     }
     if (proposal.hasOverThreshold) {
@@ -2955,23 +3565,28 @@ export class CuttingProposalsService {
     // thay vì cố nặn ra 1 cái tên (chọn đại 1 SKU sẽ khiến người đọc tưởng phương án chỉ cho SKU đó).
     const order = proposal.productionOrder;
     const pi = proposal.productionInvoice;
-    const mergedSkus = pi?.items.map((it) => it.mfgProduct.factoryCode) ?? [];
+    // Ảnh chụp đầu vào (lượt tính trước PI): chưa có PO/PI thì đây là nguồn DUY NHẤT cho mã SKU.
+    const snapshotItems = proposal.items ?? [];
+    const preSolved = snapshotItems.length > 0;
+    const mergedSkus =
+      pi?.items.map((it) => it.mfgProduct.factoryCode) ??
+      snapshotItems.map((it) => it.productionInvoiceItem.mfgProduct.factoryCode);
     // Mã đơn Sales gốc - đây mới là mã "PO" người dùng cần thấy (poNumber nội bộ chỉ để hệ thống
     // tra cứu, xem trao đổi 2026-08-18). Nhánh gộp có thể trộn nhiều đơn Sales khác nhau - gộp
     // danh sách mã duy nhất, không có "1 mã đại diện" nào đúng cả.
     const salesOrderCode = order
       ? (order.productionInvoiceItem.salesOrder?.orderCode ?? null)
-      : (pi?.items ?? [])
+      : (pi?.items ?? snapshotItems.map((it) => it.productionInvoiceItem))
           .map((it) => it.salesOrder?.orderCode)
           .filter((c): c is string => !!c)
           .filter((c, i, arr) => arr.indexOf(c) === i)
           .join(', ') || null;
-    const { displayStatus, displayReason } = this.computeDisplayStatus(proposal);
+    const { displayStatus, displayReason } = this.computeDisplayStatus({ ...proposal, preSolved });
     return new CuttingProposalResponseDto({
       id: proposal.id.toString(),
       productionOrderId: proposal.productionOrderId?.toString() ?? null,
       productionInvoiceId: proposal.productionInvoiceId?.toString() ?? null,
-      poNumber: order?.poNumber ?? pi?.code ?? '—',
+      poNumber: order?.poNumber ?? pi?.code ?? (preSolved ? `Tính #${proposal.id}` : '—'),
       salesOrderCode,
       mfgProductCode: order?.mfgProduct.factoryCode ?? mergedSkus.join(', '),
       mfgProductName:
@@ -2987,6 +3602,22 @@ export class CuttingProposalsService {
       requestedAt: proposal.requestedAt,
       completedAt: proposal.completedAt,
       approvedAt: proposal.approvedAt,
+      preSolved,
+      items: preSolved
+        ? snapshotItems.map(
+            (it) =>
+              new CuttingProposalItemResponseDto({
+                productionInvoiceItemId: it.productionInvoiceItemId.toString(),
+                mfgProductCode: it.productionInvoiceItem.mfgProduct.factoryCode,
+                mfgProductName: it.productionInvoiceItem.mfgProduct.name,
+                salesOrderCode: it.productionInvoiceItem.salesOrder?.orderCode ?? null,
+                quantity: it.quantity,
+              }),
+          )
+        : undefined,
+      solverOptions: preSolved
+        ? ((proposal.solverOptions as Record<string, unknown>) ?? null)
+        : undefined,
     });
   }
 
@@ -2996,10 +3627,9 @@ export class CuttingProposalsService {
   ): CuttingProposalResponseDto {
     const dto = this.toResponseDto(proposal);
     dto.lines = proposal.lines.map((line) => {
-      // Ngưỡng THƯỜNG của loại sắt này (riêng của vật tư, hoặc mặc định hệ thống) - khác hẳn
-      // `maxWastePctThreshold` phía dưới (ngưỡng đã cộng đặc cách, chính là số gửi solver).
-      const normalWastePctThreshold =
-        line.material.maxCuttingWastePercentage?.toNumber() ?? defaultWastePct;
+      // Ngưỡng THƯỜNG (mặc định chung do KHSX quyết) - khác hẳn `maxWastePctThreshold` phía dưới
+      // (ngưỡng đã cộng đặc cách, chính là số gửi solver).
+      const normalWastePctThreshold = defaultWastePct;
       const wastePercentage = line.wastePercentage ? Number(line.wastePercentage) : null;
       return {
         materialId: line.materialId.toString(),

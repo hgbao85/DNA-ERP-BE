@@ -310,14 +310,16 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     expect(s.levels[0].daysCutEarly).toBeNull(); // 1 đơn thì không có chuyện cắt sớm
   });
 
-  it('ngưỡng riêng của vật tư ghi đè mặc định - đặt 2% thì 1,88% biến mất khỏi danh sách', async () => {
+  it('ngưỡng riêng cũ trên vật tư KHÔNG còn ghi đè (2026-09-30) - vật tư còn 2% trong DB nhưng ngưỡng chung 1% vẫn coi 1,88% là vượt', async () => {
     build({
       ...singleProduct(STEEL_20X20, 840, 1, 'STL-VUONG-20X20'),
       material: {
         findMany: jest.fn().mockResolvedValue([mkMaterial(STEEL_20X20, 'STL-VUONG-20X20', 2.0)]),
       },
     });
-    await expect(service.getBatchSuggestions()).resolves.toEqual([]);
+    const result = await service.getBatchSuggestions();
+    expect(result).toHaveLength(1);
+    expect(result[0].thresholdPct).toBe(1);
   });
 
   it('đơn không có hạn bị xếp CUỐI, không được làm mốc neo "gấp nhất"', async () => {

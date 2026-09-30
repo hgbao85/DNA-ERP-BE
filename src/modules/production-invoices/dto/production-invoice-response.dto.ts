@@ -48,6 +48,21 @@ export class ProductionInvoiceResponseDto {
     /** Cây mà estimatedWastePct được tính trên đó. Thiếu (bản ghi cũ) = cây chuẩn công ty. */
     stockLengthMm?: number | null;
   } | null;
+  /**
+   * Phương án cắt của PI (neo PI): luồng "Solve trước → tạo PI" (2026-09-30) có sẵn NGAY từ lúc tạo
+   * PI nên QLSX/Sếp duyệt trên số THẬT (số cây, hao hụt); PI gộp theo luồng cũ chỉ có sau khi Sếp
+   * duyệt. null = chưa có phương án nào neo PI. Chi tiết từng loại sắt: GET /cutting-proposals/:id.
+   */
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  cuttingPlan?: {
+    proposalId: string;
+    status: string;
+    totalBars: number | null;
+    wastePercentage: number | null;
+    /** Có loại sắt vượt ngưỡng hao hụt - QLSX/Sếp phải thấy cảnh báo trước khi duyệt. */
+    hasOverThreshold: boolean;
+  } | null;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;
   @Expose()

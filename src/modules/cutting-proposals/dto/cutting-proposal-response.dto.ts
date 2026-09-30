@@ -152,6 +152,40 @@ export class CuttingProposalPendingMaterialResponseDto {
   }
 }
 
+/**
+ * 1 SKU trong ảnh chụp đầu vào của lượt tính chạy TRƯỚC khi có PI (luồng "Solve trước → tạo PI",
+ * 2026-09-30) - xem model CuttingProposalItem.
+ */
+@Exclude()
+export class CuttingProposalItemResponseDto {
+  @Expose() @ApiProperty() productionInvoiceItemId!: string;
+  @Expose() @ApiProperty() mfgProductCode!: string;
+  @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
+  @Expose() @ApiProperty() quantity!: number;
+
+  constructor(partial: Partial<CuttingProposalItemResponseDto>) {
+    Object.assign(this, partial);
+  }
+}
+
+/**
+ * Phương án đã đủ điều kiện để tạo lệnh sản xuất (PI) chưa - chỉ có ở phương án tính TRƯỚC PI còn
+ * DRAFT. `reason` = câu tiếng Việt vì sao chưa (vô nghiệm / vượt ngưỡng / lỗi thời so với định
+ * mức hay số lượng hiện tại...), null khi ready.
+ */
+@Exclude()
+export class CuttingProposalInvoiceReadinessDto {
+  @Expose() @ApiProperty() ready!: boolean;
+  @Expose() @ApiPropertyOptional({ nullable: true }) reason!: string | null;
+  /** Cảnh báo KHÔNG chặn (vd có loại sắt vượt ngưỡng hao hụt) - ready vẫn true. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) warning?: string | null;
+
+  constructor(partial: Partial<CuttingProposalInvoiceReadinessDto>) {
+    Object.assign(this, partial);
+  }
+}
+
 @Exclude()
 export class CuttingProposalResponseDto {
   @Expose() @ApiProperty() id!: string;
@@ -199,6 +233,21 @@ export class CuttingProposalResponseDto {
   @ApiPropertyOptional({ type: [CuttingProposalPendingMaterialResponseDto], nullable: true })
   @Type(() => CuttingProposalPendingMaterialResponseDto)
   pendingMaterials?: CuttingProposalPendingMaterialResponseDto[] | null;
+
+  /// true = phương án tính TRƯỚC khi có PI (luồng "Solve trước → tạo PI", 2026-09-30) - có ảnh
+  /// chụp đầu vào ở `items`. false với phương án neo PO/PI theo luồng cũ.
+  @Expose() @ApiProperty() preSolved!: boolean;
+  @Expose()
+  @ApiPropertyOptional({ type: [CuttingProposalItemResponseDto] })
+  @Type(() => CuttingProposalItemResponseDto)
+  items?: CuttingProposalItemResponseDto[];
+  /// Thông số cắt KHSX chọn cho lượt tính (đặc cách %, cho phép cây riêng, chiều dài theo quy
+  /// cách...) - chỉ có ở phương án tính trước PI.
+  @Expose() @ApiPropertyOptional({ nullable: true }) solverOptions?: Record<string, unknown> | null;
+  @Expose()
+  @ApiPropertyOptional({ type: CuttingProposalInvoiceReadinessDto, nullable: true })
+  @Type(() => CuttingProposalInvoiceReadinessDto)
+  invoiceReadiness?: CuttingProposalInvoiceReadinessDto | null;
 
   constructor(partial: Partial<CuttingProposalResponseDto>) {
     Object.assign(this, partial);

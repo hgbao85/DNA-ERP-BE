@@ -1,10 +1,15 @@
 import { NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { SystemConfigService } from './system-config.service';
 
 describe('SystemConfigService', () => {
   let service: SystemConfigService;
-  let prisma: { systemConfig: { findUnique: jest.Mock; update: jest.Mock } };
+  let prisma: {
+    systemConfig: { findUnique: jest.Mock; update: jest.Mock };
+    user: { findUnique: jest.Mock };
+  };
+  let notifications: { emit: jest.Mock };
 
   /** Mô phỏng `Prisma.Decimal` tối thiểu - đủ cho `.toNumber()` mà findOne()/update() gọi. */
   const mockDecimal = (n: number) => ({ toNumber: () => n });
@@ -32,8 +37,19 @@ describe('SystemConfigService', () => {
   };
 
   beforeEach(() => {
-    prisma = { systemConfig: { findUnique: jest.fn(), update: jest.fn() } };
-    service = new SystemConfigService(prisma as unknown as PrismaServiceType);
+    prisma = {
+      systemConfig: { findUnique: jest.fn(), update: jest.fn() },
+      user: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ firstName: 'Sang', lastName: 'Trần', username: 'khsx' }),
+      },
+    };
+    notifications = { emit: jest.fn().mockResolvedValue(undefined) };
+    service = new SystemConfigService(
+      prisma as unknown as PrismaServiceType,
+      notifications as unknown as NotificationsService,
+    );
   });
 
   describe('findOne', () => {
@@ -107,6 +123,93 @@ describe('SystemConfigService', () => {
         }),
       );
       expect(result.solverAllowCustomLength).toBe(false);
+    });
+  });
+  // ─── KHSX tự đổi ngưỡng hao hụt mặc định (2026-09-30) ──────────────────────────────────────
+  describe('cutting defaults (KHSX đổi ngưỡng hao hụt mặc định)', () => {
+    it('getCuttingDefaults trả đúng số hiện tại, dạng number (không phải Decimal)', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue({
+        ...seededConfig,
+        solverMaxWastePercentage: mockDecimal(1.5),
+      });
+
+      const result = await service.getCuttingDefaults();
+
+      expect(result.solverMaxWastePercentage).toBe(1.5);
+    });
+
+    it('CHỈ ghi đúng cột solverMaxWastePercentage - không đụng tham số solver/công ty nào khác', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig); // hiện tại 5
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        solverMaxWastePercentage: mockDecimal(1.5),
+      });
+
+      const result = await service.updateMaxWastePercentage(
+        { solverMaxWastePercentage: 1.5 },
+        'user-khsx',
+      );
+
+      expect(prisma.systemConfig.update).toHaveBeenCalledWith({
+        where: { id: 1 },
+        data: { solverMaxWastePercentage: 1.5 },
+      });
+      expect(result.solverMaxWastePercentage).toBe(1.5);
+      expect(result.previous).toBe(5);
+    });
+
+    it('báo Sếp + QLSX kèm số cũ/mới, người đổi và lý do', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        solverMaxWastePercentage: mockDecimal(2),
+      });
+
+      await service.updateMaxWastePercentage(
+        { solverMaxWastePercentage: 2, reason: 'Đơn Goplus gấp' },
+        'user-khsx',
+      );
+
+      expect(notifications.emit).toHaveBeenCalledWith('CUTTING_WASTE_DEFAULT_CHANGED', {
+        entityId: 'system-config',
+        actorId: 'user-khsx',
+        params: { actorName: 'Trần Sang', previous: 5, next: 2, reason: 'Đơn Goplus gấp' },
+      });
+    });
+
+    it('giá trị KHÔNG đổi -> không ghi DB, không báo (tránh nhiễu audit/thông báo)', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig); // 5
+
+      const result = await service.updateMaxWastePercentage(
+        { solverMaxWastePercentage: 5 },
+        'user-khsx',
+      );
+
+      expect(prisma.systemConfig.update).not.toHaveBeenCalled();
+      expect(notifications.emit).not.toHaveBeenCalled();
+      expect(result.solverMaxWastePercentage).toBe(5);
+    });
+
+    it('lỗi gửi thông báo KHÔNG làm hỏng việc đổi đã ghi (best-effort)', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        solverMaxWastePercentage: mockDecimal(3),
+      });
+      notifications.emit.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        service.updateMaxWastePercentage({ solverMaxWastePercentage: 3 }, 'user-khsx'),
+      ).resolves.toMatchObject({ solverMaxWastePercentage: 3, previous: 5 });
+    });
+
+    it('báo 404 khi chưa seed cấu hình', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updateMaxWastePercentage({ solverMaxWastePercentage: 3 }, 'user-khsx'),
+      ).rejects.toThrow(NotFoundException);
+      await expect(service.getCuttingDefaults()).rejects.toThrow(NotFoundException);
     });
   });
 });

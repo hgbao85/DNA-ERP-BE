@@ -57,6 +57,26 @@ export interface CuttingProposalNotificationParams {
   proposalId: string;
 }
 
+/** Params cho CUTTING_WASTE_DEFAULT_CHANGED - KHSX đổi ngưỡng hao hụt mặc định cắt sắt. */
+export interface CuttingWasteDefaultChangedParams {
+  actorName: string;
+  previous: number;
+  next: number;
+  reason?: string;
+}
+
+/** Params cho 2 type "Solve trước" (CUTTING_SOLVE_DONE/CUTTING_SOLVE_FAILED) - báo đích danh người
+ *  bấm Tính (`requestedById`), không báo theo role. `label` = mã SKU của tổ hợp đã tính. */
+export interface CuttingSolveNotificationParams {
+  label: string;
+  proposalId: string;
+  requestedById: string;
+  /** Tóm tắt kết quả (DONE), vd "Tổng 387 cây, hao hụt 0.8%". */
+  summary?: string;
+  /** Lý do chưa dùng được (FAILED). */
+  reason?: string;
+}
+
 // KHÔNG gắn `link` cho type cắt sắt dưới đây (sửa 2026-09-25, lần 2 - phát hiện qua câu hỏi
 // "solve fail thì sao lại hiện thông báo bên màn QLSX" khi live-test): lúc đầu gắn
 // `module: 'production', page: 'lenh-sx'` tưởng là "chỗ QLSX thấy PO này", nhưng đọc kỹ
@@ -718,6 +738,54 @@ const notificationTypeDefinitions = {
     message: () => 'Đã tự trừ tồn kho và chuyển đề xuất mua hàng (nếu thiếu vật tư) sang Mua hàng.',
     recipients: cuttingProposalRecipients,
   } satisfies NotificationTypeDef<CuttingProposalNotificationParams>,
+
+  // ─── Ngưỡng hao hụt mặc định (2026-09-30) ───────────────────────────────────────────────────
+  /** KHSX đổi ngưỡng hao hụt mặc định cắt sắt -> báo Sếp + QLSX để biết và can thiệp nếu không đồng ý
+   *  (không cần Sếp duyệt trước - đã có AuditLog). KHÔNG gắn `link`: 2 role nhận thuộc 2 module "nhà"
+   *  khác nhau, 1 link không đúng cho cả hai (cùng lý do PI_APPROVED_BY_BOSS). */
+  CUTTING_WASTE_DEFAULT_CHANGED: {
+    category: 'INFO',
+    severity: 'WARNING',
+    entityType: 'SYSTEM_CONFIG',
+    title: (p: CuttingWasteDefaultChangedParams) =>
+      `Ngưỡng hao hụt mặc định đổi: ${p.previous}% → ${p.next}%`,
+    message: (p: CuttingWasteDefaultChangedParams) =>
+      `${p.actorName} (KHSX) đổi ngưỡng hao hụt mặc định cho cắt sắt${
+        p.reason ? ` — lý do: ${p.reason}` : ''
+      }. Áp cho loại sắt chưa có ngưỡng riêng, mọi lượt tính từ giờ.`,
+    recipients: () => ({ roles: [BUSINESS_ROLES.BOSS, BUSINESS_ROLES.PRODUCTION_MANAGER] }),
+  } satisfies NotificationTypeDef<CuttingWasteDefaultChangedParams>,
+
+  // ─── Solve trước → tạo PI (2026-09-30) ─────────────────────────────────────────────────────
+  /** Lượt tính cắt sắt KHSX bấm ở "Tối ưu cắt sắt" đã xong VÀ dùng được (mọi loại sắt cắt được,
+   *  không vượt ngưỡng) - báo đích danh người bấm để họ quay lại tạo lệnh sản xuất. Khác
+   *  CUTTING_PROPOSAL_AUTO_APPROVED (báo QLSX sau khi Sếp duyệt, luồng cũ). */
+  CUTTING_SOLVE_DONE: {
+    category: 'RESULT',
+    severity: 'SUCCESS',
+    entityType: 'CUTTING_PROPOSAL',
+    title: (p: CuttingSolveNotificationParams) => `Đã tính xong phương án cắt: ${p.label}`,
+    message: (p: CuttingSolveNotificationParams) =>
+      `${p.summary ?? 'Phương án dùng được'} - vào "Tối ưu cắt sắt" để tạo lệnh sản xuất.`,
+    link: () => ({ module: 'production_plan', page: 'gom-cat' }),
+    recipients: (p: CuttingSolveNotificationParams) => ({ userIds: [p.requestedById] }),
+    notifyActor: true,
+  } satisfies NotificationTypeDef<CuttingSolveNotificationParams>,
+
+  /** Lượt tính xong nhưng CHƯA dùng được (có loại sắt không cắt được / vượt ngưỡng) hoặc solver
+   *  lỗi/hết giờ - KHSX phải chỉnh (gộp khác, xin đặc cách, cây riêng) rồi tính lại. Đây chính là
+   *  chỗ luồng cũ im lặng (Sếp duyệt xong mới lòi ra, không ai được báo). */
+  CUTTING_SOLVE_FAILED: {
+    category: 'ALERT',
+    severity: 'WARNING',
+    entityType: 'CUTTING_PROPOSAL',
+    title: (p: CuttingSolveNotificationParams) => `Phương án cắt chưa dùng được: ${p.label}`,
+    message: (p: CuttingSolveNotificationParams) =>
+      `${p.reason ?? 'Solver không cho ra phương án'} - chỉnh tổ hợp/thông số ở "Tối ưu cắt sắt" rồi tính lại.`,
+    link: () => ({ module: 'production_plan', page: 'gom-cat' }),
+    recipients: (p: CuttingSolveNotificationParams) => ({ userIds: [p.requestedById] }),
+    notifyActor: true,
+  } satisfies NotificationTypeDef<CuttingSolveNotificationParams>,
 
   // ─── Phase 3b, nhóm 7.5-iv "Xuất/nhận đan" (2026-09-28, xem changelog mục 26) ──────────────
   /** Kho vật tư-TP xuất mảnh cho 1 điểm đan (`WeavingIssuesService.create()`) - báo kho thành phẩm

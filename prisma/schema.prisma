@@ -426,6 +426,9 @@ model Material {
   /// Hệ số quy đổi: số lượng `unit` tương ứng với 1 `purchaseUnit` (vd 250 = 250 cái/kg).
   /// Chỉ có ý nghĩa khi purchaseUnit khác null.
   khoUnitFactor             Decimal?            @db.Decimal(14, 4)
+  /// **ĐÃ BỎ KHỎI LUỒNG (2026-09-30) - không code nào còn đọc/ghi cột này.** Sắt chỉ có MỘT ngưỡng chung
+  /// do KHSX quyết (SystemConfig.solverMaxWastePercentage, KHSX tự đổi ở "Tối ưu cắt sắt"); Admin không
+  /// còn đặt ngưỡng riêng theo vật tư. Cột giữ lại (không xoá dữ liệu cũ) - mô tả dưới là LỊCH SỬ.
   /// % hao hụt Sếp cấp riêng cho vật tư này - CHỈ có ý nghĩa khi materialGroup.systemKey =
   /// STEEL_BAR (null với mọi nhóm khác, xem MaterialsService.resolveWasteFields - mirror
   /// resolveDetailKind ở trên). Đây là NGƯỠNG hao hụt tối đa chấp nhận được khi cắt (không
@@ -1400,6 +1403,7 @@ model ProductionInvoiceItem {
   productionOrder      ProductionOrder?
   transferCheckResults TransferCheckResult[]
   packagingRecords     PackagingRecord[]
+  cuttingProposalItems CuttingProposalItem[]
 
   @@index([productionInvoiceId])
   @@index([mfgProductId])
@@ -1651,6 +1655,12 @@ model CuttingProposal {
   /// true nếu có ≥1 dòng lines[] feasible=true nhưng overThreshold=true. Cùng lý do tồn tại với
   /// hasInfeasibleLine ở trên.
   hasOverThreshold    Boolean               @default(false)
+  /// Thông số cắt KHSX chọn cho lượt tính TRƯỚC KHI có PI (2026-09-30, luồng "Solve trước → tạo
+  /// PI"): {solverMaxWastePctOverride, solverAllowCustomLength, solverOverrideReason,
+  /// solverStockLengthsByMaterial, solverTimeLimitSecondsOverride}. Chưa có PI để lưu các cột
+  /// `ProductionInvoice.solver*` nên giữ tạm ở đây; lúc tạo PI được copy sang các cột đó. null
+  /// với phương án neo PO/PI theo luồng cũ.
+  solverOptions       Json?
 
   productionOrder   ProductionOrder?      @relation(fields: [productionOrderId], references: [id])
   productionInvoice ProductionInvoice?    @relation(fields: [productionInvoiceId], references: [id])
@@ -1659,10 +1669,34 @@ model CuttingProposal {
   lines             CuttingProposalLine[]
   purchaseProposals PurchaseProposal[]
   coverage          CuttingPlanCoverage[]
+  items             CuttingProposalItem[]
 
   @@index([productionOrderId, status])
   @@index([productionInvoiceId, status])
   @@map("cutting_proposals")
+}
+
+/// Ảnh chụp ĐẦU VÀO của 1 lượt tính cắt sắt chạy TRƯỚC khi có PI (2026-09-30, luồng "Solve trước
+/// → tạo PI"): mỗi dòng = 1 SKU (ProductionInvoiceItem chưa gom) được tính trong lượt đó, kèm số
+/// lượng và BOM revision ACTIVE TẠI THỜI ĐIỂM TÍNH. Vì sao phải chụp: (1) solver chạy nền vài phút,
+/// trong lúc đó BOM/số lượng có thể đổi - phải biết chính xác lượt tính dùng số nào để phát hiện
+/// "lỗi thời" trước khi tạo PI/Sếp duyệt; (2) ProductionOrder chỉ sinh ra lúc Sếp duyệt và phải
+/// ghim ĐÚNG revision đã tính, không phải revision ACTIVE lúc duyệt. Chỉ có ở phương án theo luồng
+/// mới.
+model CuttingProposalItem {
+  id                      BigInt @id @default(autoincrement())
+  cuttingProposalId       BigInt
+  productionInvoiceItemId BigInt
+  mfgProductId            BigInt
+  bomRevisionId           BigInt
+  quantity                Int
+
+  cuttingProposal       CuttingProposal       @relation(fields: [cuttingProposalId], references: [id], onDelete: Cascade)
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+
+  @@unique([cuttingProposalId, productionInvoiceItemId])
+  @@index([productionInvoiceItemId])
+  @@map("cutting_proposal_items")
 }
 
 /// Bất biến "mỗi SKU chỉ được phủ bởi ĐÚNG 1 phương án cắt đang hiệu lực" - ép ở tầng DỮ LIỆU

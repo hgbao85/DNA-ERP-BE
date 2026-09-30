@@ -10,6 +10,7 @@ import {
 import { ClsService } from 'nestjs-cls';
 import {
   AuditAction,
+  CuttingProposalStatus,
   Prisma,
   PrismaClient,
   ProdApprovalStatus,
@@ -41,6 +42,7 @@ import { ConsumableMaterialPurchaseService } from './consumable-material-purchas
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
+import { ClaimSoloDto } from './dto/claim-solo.dto';
 import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
 import { PackagingResponseDto } from './dto/packaging-response.dto';
 import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-response.dto';
@@ -401,9 +403,6 @@ export class ProductionInvoicesService {
     dto: MergeProductionInvoiceDto,
     actorUserId: string,
   ): Promise<ProductionInvoiceResponseDto> {
-    // Trước transaction: sau khi gộp, các SKU này không còn nằm trong danh sách "chưa được gom"
-    // mà previewBatch đọc, nên tính sau là ra rỗng.
-    const overrideEvidence = await this.buildOverrideEvidence(dto.productionInvoiceItemIds, dto);
     const ids = [...new Set(dto.productionInvoiceItemIds.map((id) => parseBigIntId(id)))];
     // Lặp lại điều kiện của DTO (@ArrayMinSize(2)) có chủ đích: đây là bất biến nghiệp vụ (gộp 1
     // SKU không tiết kiệm được gì) chứ không phải chuyện định dạng request, nên phải đứng vững cả
@@ -411,6 +410,17 @@ export class ProductionInvoicesService {
     if (ids.length < 2) {
       throw new BadRequestException('Cần ít nhất 2 SKU khác nhau để gộp thành một đợt cắt');
     }
+    // Luồng "Solve trước → tạo PI" (2026-09-30): lệnh sản xuất chỉ được tạo từ 1 phương án cắt đã
+    // tính xong, dùng được và chưa lỗi thời - thông số cắt lấy từ chính lượt tính đó (không nhận
+    // lại từ client: gửi khác với lúc tính là gửi số không khớp với kết quả).
+    const proposal = await this.cuttingProposalsService.assertReadyForInvoice(
+      dto.cuttingProposalId,
+      ids,
+    );
+    const solver = proposal.solverOptions as SolverOverrideDto;
+    // Trước transaction: sau khi gộp, các SKU này không còn nằm trong danh sách "chưa được gom"
+    // mà previewBatch đọc, nên tính sau là ra rỗng.
+    const overrideEvidence = await this.buildOverrideEvidence(dto.productionInvoiceItemIds, solver);
 
     const mergedId = await this.prisma.$transaction(async (tx) => {
       const items = await tx.productionInvoiceItem.findMany({
@@ -466,15 +476,15 @@ export class ProductionInvoicesService {
           // Thông số cắt KHSX đề nghị cho ĐÚNG đợt này (2026-09-14) - null = không xin gì đặc
           // biệt, chạy ngưỡng thường + mặc định công ty lúc Sếp duyệt (xem
           // CuttingProposalsService.buildInvoiceJob/runSolverAndSave).
-          solverMaxWastePctOverride: dto.solverMaxWastePctOverride ?? null,
-          solverAllowCustomLength: dto.solverAllowCustomLength ?? null,
-          solverOverrideReason: dto.solverOverrideReason ?? null,
-          solverTimeLimitSecondsOverride: dto.solverTimeLimitSecondsOverride ?? null,
+          solverMaxWastePctOverride: solver.solverMaxWastePctOverride ?? null,
+          solverAllowCustomLength: solver.solverAllowCustomLength ?? null,
+          solverOverrideReason: solver.solverOverrideReason ?? null,
+          solverTimeLimitSecondsOverride: solver.solverTimeLimitSecondsOverride ?? null,
           solverOverrideEvidence: overrideEvidence,
           // Chiều dài cây theo từng quy cách KHSX chọn cho đợt này (2026-09-16). undefined (không
           // phải null) khi không chọn: cột Json? nullable không default, để Prisma bỏ qua cột thay
           // vì phải dùng Prisma.DbNull - cùng idiom overrideEvidence ở trên.
-          solverStockLengthsByMaterial: dto.solverStockLengthsByMaterial ?? undefined,
+          solverStockLengthsByMaterial: solver.solverStockLengthsByMaterial ?? undefined,
         },
       });
       // Reset sạch mọi vết của chu kỳ duyệt CŨ (2026-08-24, cùng lý do claimSolo()) - 1 trong các
@@ -496,6 +506,9 @@ export class ProductionInvoicesService {
           decidedById: null,
         },
       });
+      // Gắn phương án đã tính vào PI vừa tạo - cùng transaction nên 2 request tạo PI từ cùng 1
+      // phương án thì đúng 1 thắng (updateMany có điều kiện + so count).
+      await this.cuttingProposalsService.attachToInvoice(tx, proposal.id, created.id);
 
       return created.id;
     });
@@ -510,12 +523,16 @@ export class ProductionInvoicesService {
    * có `productionInvoiceId: null` - hàm này tạo cho nó 1 PI thường (isMerged=false) của riêng nó,
    * mirror đúng PI 1-1 mà trước đây SalesOrdersService tự tạo tự động.
    */
-  async claimSolo(
-    itemId: string,
-    solver?: SolverOverrideDto,
-  ): Promise<ProductionInvoiceResponseDto> {
-    const overrideEvidence = await this.buildOverrideEvidence([itemId], solver);
+  async claimSolo(itemId: string, dto: ClaimSoloDto): Promise<ProductionInvoiceResponseDto> {
     const bigId = parseBigIntId(itemId);
+    // Luồng "Solve trước → tạo PI" (2026-09-30) - xem mergeItems(): PI chỉ được tạo từ phương án
+    // đã tính đúng cho SKU này, thông số cắt lấy từ chính lượt tính.
+    const proposal = await this.cuttingProposalsService.assertReadyForInvoice(
+      dto.cuttingProposalId,
+      [bigId],
+    );
+    const solver = proposal.solverOptions as SolverOverrideDto;
+    const overrideEvidence = await this.buildOverrideEvidence([itemId], solver);
     const item = await this.prisma.productionInvoiceItem.findUnique({ where: { id: bigId } });
     if (!item) {
       throw new NotFoundException(`Production invoice item ${itemId} not found`);
@@ -534,12 +551,12 @@ export class ProductionInvoicesService {
           isMerged: false,
           deadline: item.deliveryDeadline,
           // Thông số cắt KHSX đề nghị cho ĐÚNG SKU này (2026-09-14) - xem comment ở mergeItems().
-          solverMaxWastePctOverride: solver?.solverMaxWastePctOverride ?? null,
-          solverAllowCustomLength: solver?.solverAllowCustomLength ?? null,
-          solverOverrideReason: solver?.solverOverrideReason ?? null,
-          solverTimeLimitSecondsOverride: solver?.solverTimeLimitSecondsOverride ?? null,
+          solverMaxWastePctOverride: solver.solverMaxWastePctOverride ?? null,
+          solverAllowCustomLength: solver.solverAllowCustomLength ?? null,
+          solverOverrideReason: solver.solverOverrideReason ?? null,
+          solverTimeLimitSecondsOverride: solver.solverTimeLimitSecondsOverride ?? null,
           solverOverrideEvidence: overrideEvidence,
-          solverStockLengthsByMaterial: solver?.solverStockLengthsByMaterial ?? undefined,
+          solverStockLengthsByMaterial: solver.solverStockLengthsByMaterial ?? undefined,
         },
       });
       // Reset sạch mọi vết của chu kỳ duyệt CŨ (2026-08-24) - item này có thể vừa quay về từ
@@ -562,6 +579,7 @@ export class ProductionInvoicesService {
           decidedById: null,
         },
       });
+      await this.cuttingProposalsService.attachToInvoice(tx, proposal.id, created.id);
       return created.id;
     });
 
@@ -918,11 +936,28 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_BOSS);
 
-    // Duyệt SKU luôn kéo theo tạo ProductionOrder (xem dưới) - kiểm BOM active TRƯỚC khi ghi gì,
-    // để thiếu BOM chặn đúng hành động duyệt (409, có lý do rõ ràng) thay vì duyệt xong rồi mới
-    // âm thầm phát hiện ở bước tạo ProductionOrder - lỗ hổng đã xác nhận, xem
-    // assertActiveBomRevisionExists().
-    await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
+    // Luồng "Solve trước → tạo PI" (2026-09-30): PI này đã có phương án cắt tính sẵn -> Sếp duyệt
+    // ĐÚNG số đó, không chạy solver lại. Kiểm phương án còn đúng (chưa lỗi thời) + vật tư đã có Kho
+    // TRƯỚC khi ghi APPROVED/tạo PO; thay cho kiểm BOM active vì cổng đó đã bao gồm việc revision
+    // ACTIVE phải trùng revision đã tính.
+    const preSolved = await this.cuttingProposalsService.findPreSolvedForInvoice(pi.id);
+    let pinnedRevisions: Map<bigint, bigint> | undefined;
+    if (preSolved) {
+      if (preSolved.status !== CuttingProposalStatus.DRAFT) {
+        throw new ConflictException(
+          `Phương án cắt ${preSolved.id} của ${pi.code} đã ở trạng thái ${preSolved.status} - không duyệt lại được`,
+        );
+      }
+      pinnedRevisions = (
+        await this.cuttingProposalsService.assertReadyForApproval(preSolved.id, pi.id)
+      ).revisionByItemId;
+    } else {
+      // Duyệt SKU luôn kéo theo tạo ProductionOrder (xem dưới) - kiểm BOM active TRƯỚC khi ghi gì,
+      // để thiếu BOM chặn đúng hành động duyệt (409, có lý do rõ ràng) thay vì duyệt xong rồi mới
+      // âm thầm phát hiện ở bước tạo ProductionOrder - lỗ hổng đã xác nhận, xem
+      // assertActiveBomRevisionExists().
+      await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
+    }
 
     const data = {
       prodApprovalStatus: ProdApprovalStatus.APPROVED,
@@ -954,6 +989,7 @@ export class ProductionInvoicesService {
         item.id,
         item.mfgProductId,
         item.quantity,
+        pinnedRevisions?.get(item.id),
       );
     } catch (error) {
       this.logger.error(
@@ -975,7 +1011,16 @@ export class ProductionInvoicesService {
     // đã tạo thành công). Item kẹt ở APPROVED không có ProductionOrder từ đây có đường phục hồi
     // riêng - xem retryProductionOrder().
     if (productionOrder) {
-      await this.triggerPostApprovalProposals(pi.id, item.id, productionOrder.id, actorUserId);
+      if (preSolved) {
+        await this.finalizePreSolvedProposal(
+          pi.id,
+          preSolved.id,
+          `PI item ${item.id}`,
+          actorUserId,
+        );
+      } else {
+        await this.triggerPostApprovalProposals(pi.id, item.id, productionOrder.id, actorUserId);
+      }
     }
 
     const remaining = await this.prisma.productionInvoiceItem.count({
@@ -1030,38 +1075,66 @@ export class ProductionInvoicesService {
       // mua của 1 PI xuất hiện cùng lúc, sau khi phần chậm nhất (sắt) đã xong.
       await this.cuttingProposalsService.requestForOrder(productionOrderId, {
         requestedById: actorUserId,
-        onComplete: async () => {
-          // Cùng idiom trigger cắt sắt - tính lại nhu cầu mua nguyên liệu "vật tư thành phẩm"
-          // (PieceMaterialYield, vd thanh nhôm/tấm sắt lá) cho CẢ PI mỗi khi có thêm 1 SKU được
-          // duyệt, không phải nút bấm riêng (không có màn hình riêng, xem changelog 2026-08-22
-          // mục 15) - best-effort, tách try/catch riêng để không lẫn lỗi với trigger kia.
-          try {
-            await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(piId.toString());
-          } catch (error) {
-            this.logger.error(
-              `Auto piece-material-yield-purchase trigger failed for PI item ${itemId}: ${(error as Error).message}`,
-            );
-          }
-
-          // Cùng idiom - tính nhu cầu mua vật tư tiêu hao phẳng (Dây/Đinh/Tán rút/Nút nhựa/Sơn/
-          // Phụ kiện/Bao bì). Trước đây KHÔNG có gì tự tạo PurchaseProposal cho 3 nguồn này (chỉ
-          // có "Lệnh kiểm tra vật tư" thủ công trong schema, chưa từng cài đặt) - người mua hàng
-          // được gán (Material.buyerId) không bao giờ thấy đề xuất nào dù SKU đã duyệt. Quyết
-          // định nghiệp vụ 2026-08-22: tự động hoàn toàn, bỏ qua bước kiểm tra kho thủ công.
-          try {
-            await this.consumableMaterialPurchaseService.computeAndUpsertProposals(piId.toString());
-          } catch (error) {
-            this.logger.error(
-              `Auto consumable-material-purchase trigger failed for PI item ${itemId}: ${(error as Error).message}`,
-            );
-          }
-        },
+        onComplete: () => this.computeNonSteelPurchaseProposals(piId, `PI item ${itemId}`),
       });
     } catch (error) {
       this.logger.error(
         `Auto cutting-proposal trigger failed for PI item ${itemId}: ${(error as Error).message}`,
       );
     }
+  }
+
+  /**
+   * 2 trigger đề xuất mua còn lại của 1 PI (VTTP + tiêu hao phẳng), chạy SAU đề xuất mua sắt - dùng
+   * chung bởi đường cũ (onComplete của solver) và đường "Solve trước" (sau approve() phương án có
+   * sẵn). Best-effort, tách try/catch riêng để lỗi nguồn này không che nguồn kia. `context` chỉ để
+   * ghi log ("PI item 12" / "merged PI 3").
+   */
+  private async computeNonSteelPurchaseProposals(piId: bigint, context: string): Promise<void> {
+    // Tính lại nhu cầu mua nguyên liệu "vật tư thành phẩm" (PieceMaterialYield, vd thanh nhôm/tấm
+    // sắt lá) cho CẢ PI mỗi khi có thêm 1 SKU được duyệt, không phải nút bấm riêng (không có màn
+    // hình riêng, xem changelog 2026-08-22 mục 15).
+    try {
+      await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(piId.toString());
+    } catch (error) {
+      this.logger.error(
+        `Auto piece-material-yield-purchase trigger failed for ${context}: ${(error as Error).message}`,
+      );
+    }
+
+    // Tính nhu cầu mua vật tư tiêu hao phẳng (Dây/Đinh/Tán rút/Nút nhựa/Sơn/Phụ kiện/Bao bì).
+    // Quyết định nghiệp vụ 2026-08-22: tự động hoàn toàn, bỏ qua bước kiểm tra kho thủ công -
+    // người mua hàng được gán (Material.buyerId) thấy đề xuất ngay khi SKU được duyệt.
+    try {
+      await this.consumableMaterialPurchaseService.computeAndUpsertProposals(piId.toString());
+    } catch (error) {
+      this.logger.error(
+        `Auto consumable-material-purchase trigger failed for ${context}: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Bước "sau khi Sếp duyệt" của luồng "Solve trước → tạo PI" (2026-09-30): duyệt phương án cắt đã
+   * tính sẵn (giữ chỗ tồn + đề xuất mua sắt, KHÔNG gọi solver) rồi tính 2 nguồn đề xuất mua còn lại.
+   * Best-effort như trigger cũ - lỗi chỉ log, không làm hỏng việc duyệt đã ghi; phương án còn DRAFT
+   * thì retryProductionOrder() duyệt lại được. 2 nguồn mua kia vẫn chạy dù duyệt phương án lỗi
+   * (giống đường cũ: chạy sau đề xuất sắt dù thành công/chặn/lỗi).
+   */
+  private async finalizePreSolvedProposal(
+    piId: bigint,
+    proposalId: bigint,
+    context: string,
+    actorUserId: string,
+  ): Promise<void> {
+    try {
+      await this.cuttingProposalsService.approve(proposalId.toString(), actorUserId);
+    } catch (error) {
+      this.logger.error(
+        `Duyệt phương án cắt ${proposalId} (tính trước) cho ${context} thất bại: ${(error as Error).message}`,
+      );
+    }
+    await this.computeNonSteelPurchaseProposals(piId, context);
   }
 
   /**
@@ -1091,21 +1164,49 @@ export class ProductionInvoicesService {
     const existingOrder = await this.prisma.productionOrder.findUnique({
       where: { productionInvoiceItemId: item.id },
     });
+    // Luồng "Solve trước → tạo PI" (2026-09-30): PI có phương án tính sẵn còn DRAFT nghĩa là bước
+    // duyệt phương án sau khi Sếp duyệt đã thất bại (hoặc còn thiếu lệnh SX của SKU khác trong đợt)
+    // - đường phục hồi là duyệt lại phương án đó, không giải lại.
+    const preSolved = await this.cuttingProposalsService.findPreSolvedForInvoice(pi.id);
     if (existingOrder) {
+      if (preSolved?.status === CuttingProposalStatus.DRAFT) {
+        await this.cuttingProposalsService.approve(preSolved.id.toString(), actorUserId);
+        await this.computeNonSteelPurchaseProposals(pi.id, `PI item ${item.id}`);
+        await this.resolvePiNotifications('PRODUCTION_INVOICE_ITEM', item.id, [
+          'PI_PRODUCTION_ORDER_FAILED',
+        ]);
+        return this.toItemResponseDto(item);
+      }
       throw new ConflictException(
         `Item ${item.id} đã có lệnh sản xuất (PO ${existingOrder.poNumber}) - không cần tạo lại`,
       );
     }
-    // Kiểm lại BOM active trước khi thử - trả 409 rõ ràng nếu vẫn thiếu, thay vì để
-    // createFromApproval() ném NotFoundException khó hiểu hơn.
-    await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
+    let pinnedRevisionId: bigint | undefined;
+    if (preSolved?.status === CuttingProposalStatus.DRAFT) {
+      // Cổng kiểm phương án còn đúng (gồm cả revision ACTIVE trùng revision đã tính) - thay cho kiểm
+      // BOM active bên dưới.
+      const { revisionByItemId } = await this.cuttingProposalsService.assertReadyForApproval(
+        preSolved.id,
+        pi.id,
+      );
+      pinnedRevisionId = revisionByItemId.get(item.id);
+    } else {
+      // Kiểm lại BOM active trước khi thử - trả 409 rõ ràng nếu vẫn thiếu, thay vì để
+      // createFromApproval() ném NotFoundException khó hiểu hơn.
+      await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
+    }
 
     const productionOrder = await this.productionOrdersService.createFromApproval(
       item.id,
       item.mfgProductId,
       item.quantity,
+      pinnedRevisionId,
     );
-    await this.triggerPostApprovalProposals(pi.id, item.id, productionOrder.id, actorUserId);
+    if (preSolved?.status === CuttingProposalStatus.DRAFT) {
+      await this.finalizePreSolvedProposal(pi.id, preSolved.id, `PI item ${item.id}`, actorUserId);
+    } else {
+      await this.triggerPostApprovalProposals(pi.id, item.id, productionOrder.id, actorUserId);
+    }
     await this.resolvePiNotifications('PRODUCTION_INVOICE_ITEM', item.id, [
       'PI_PRODUCTION_ORDER_FAILED',
     ]);
@@ -1154,6 +1255,8 @@ export class ProductionInvoicesService {
         where: { productionInvoiceId: pi.id },
       });
       if (remaining === 0) {
+        // Phương án cắt tính trước (nếu có) trỏ FK vào PI - gỡ ra (SUPERSEDED) trước khi xoá PI.
+        await this.cuttingProposalsService.releaseForInvoice(tx, pi.id);
         await tx.productionInvoice.delete({ where: { id: pi.id } });
       }
       return { ...item, ...data };
@@ -1247,6 +1350,7 @@ export class ProductionInvoicesService {
           `${pi.code} đã bị 1 request khác xử lý một phần trong lúc QLSX từ chối cả phiếu - không ghi đè`,
         );
       }
+      await this.cuttingProposalsService.releaseForInvoice(tx, pi.id);
       await tx.productionInvoice.delete({ where: { id: pi.id } });
     });
     for (const t of transitions) {
@@ -1306,6 +1410,8 @@ export class ProductionInvoicesService {
         where: { productionInvoiceId: pi.id },
       });
       if (remaining === 0) {
+        // Phương án cắt tính trước (nếu có) trỏ FK vào PI - gỡ ra (SUPERSEDED) trước khi xoá PI.
+        await this.cuttingProposalsService.releaseForInvoice(tx, pi.id);
         await tx.productionInvoice.delete({ where: { id: pi.id } });
       }
       return { ...item, ...data };
@@ -1342,10 +1448,25 @@ export class ProductionInvoicesService {
     for (const item of pi.items) {
       this.assertItemStatus(item, ProdApprovalStatus.WAITING_BOSS);
     }
-    // Kiểm BOM của MỌI SKU trước khi ghi bất cứ thứ gì: thiếu BOM 1 SKU là cả nhóm không cắt chung
-    // được, dừng sớm với 409 rõ ràng còn hơn duyệt được nửa nhóm rồi kẹt.
-    for (const item of pi.items) {
-      await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
+    // Luồng "Solve trước → tạo PI" (2026-09-30) - xem approveItem(): có phương án tính sẵn thì kiểm
+    // nó còn đúng (thay cho kiểm BOM từng SKU) và duyệt ĐÚNG số đó, không chạy solver lại.
+    const preSolved = await this.cuttingProposalsService.findPreSolvedForInvoice(pi.id);
+    let pinnedRevisions: Map<bigint, bigint> | undefined;
+    if (preSolved) {
+      if (preSolved.status !== CuttingProposalStatus.DRAFT) {
+        throw new ConflictException(
+          `Phương án cắt ${preSolved.id} của ${pi.code} đã ở trạng thái ${preSolved.status} - không duyệt lại được`,
+        );
+      }
+      pinnedRevisions = (
+        await this.cuttingProposalsService.assertReadyForApproval(preSolved.id, pi.id)
+      ).revisionByItemId;
+    } else {
+      // Kiểm BOM của MỌI SKU trước khi ghi bất cứ thứ gì: thiếu BOM 1 SKU là cả nhóm không cắt chung
+      // được, dừng sớm với 409 rõ ràng còn hơn duyệt được nửa nhóm rồi kẹt.
+      for (const item of pi.items) {
+        await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
+      }
     }
 
     // updateMany PHẢI lọc kèm đúng trạng thái kỳ vọng (WAITING_BOSS) + so count, cùng idiom
@@ -1388,6 +1509,7 @@ export class ProductionInvoicesService {
           item.id,
           item.mfgProductId,
           item.quantity,
+          pinnedRevisions?.get(item.id),
         );
       } catch (error) {
         this.logger.error(
@@ -1424,29 +1546,14 @@ export class ProductionInvoicesService {
     // SAU khi đề xuất mua sắt của cả cụm gộp tính xong. Trước đây PI gộp KHÔNG có 2 trigger này
     // (chỉ trigger sắt) - người mua hàng phụ trách VTTP/tiêu hao không bao giờ thấy đề xuất nào
     // cho PI gộp dù SKU đã duyệt và có định mức thật.
+    if (preSolved) {
+      await this.finalizePreSolvedProposal(pi.id, preSolved.id, `merged PI ${pi.id}`, actorUserId);
+      return this.toResponseDto(await this.findOneOrThrow(piId));
+    }
     try {
       await this.cuttingProposalsService.requestForInvoice(pi.id, {
         requestedById: actorUserId,
-        onComplete: async () => {
-          try {
-            await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(
-              pi.id.toString(),
-            );
-          } catch (error) {
-            this.logger.error(
-              `Auto piece-material-yield-purchase trigger failed for merged PI ${pi.id}: ${(error as Error).message}`,
-            );
-          }
-          try {
-            await this.consumableMaterialPurchaseService.computeAndUpsertProposals(
-              pi.id.toString(),
-            );
-          } catch (error) {
-            this.logger.error(
-              `Auto consumable-material-purchase trigger failed for merged PI ${pi.id}: ${(error as Error).message}`,
-            );
-          }
-        },
+        onComplete: () => this.computeNonSteelPurchaseProposals(pi.id, `merged PI ${pi.id}`),
       });
     } catch (error) {
       this.logger.error(
@@ -1522,6 +1629,7 @@ export class ProductionInvoicesService {
           `${pi.code} đã bị 1 request khác xử lý (duyệt/từ chối) một phần trong lúc Sếp từ chối cả cụm - không ghi đè`,
         );
       }
+      await this.cuttingProposalsService.releaseForInvoice(tx, pi.id);
       await tx.productionInvoice.delete({ where: { id: pi.id } });
     });
     for (const t of transitions) {
@@ -2108,7 +2216,21 @@ export class ProductionInvoicesService {
     pi: PIWithProposalStatus,
   ): Promise<ProductionInvoiceResponseDto> {
     const dto = this.toResponseDto(pi);
-    const piLevelProposal = pi.isMerged ? pi.cuttingProposals[0] : undefined;
+    // Phương án neo PI: PI gộp (luồng cũ) HOẶC bất kỳ PI nào tạo từ phương án tính trước (luồng
+    // "Solve trước", 2026-09-30, kể cả PI cắt riêng). PI cắt riêng theo luồng cũ không có phương án
+    // neo PI (chúng neo PO) nên mảng rỗng -> rơi về nhánh productionOrder như trước.
+    const piLevelProposal = pi.cuttingProposals?.[0];
+    dto.cuttingPlan = piLevelProposal
+      ? {
+          proposalId: piLevelProposal.id.toString(),
+          status: piLevelProposal.status,
+          totalBars: piLevelProposal.totalBarsAll ?? null,
+          wastePercentage: piLevelProposal.wastePercentage
+            ? Number(piLevelProposal.wastePercentage)
+            : null,
+          hasOverThreshold: piLevelProposal.hasOverThreshold ?? false,
+        }
+      : null;
 
     // 1 query duy nhất cho CẢ PI (không lặp theo từng item) - tái dùng đúng hàm
     // ProductionOrdersService dùng cho GET /production-orders (xem doc comment hàm đó về vì sao

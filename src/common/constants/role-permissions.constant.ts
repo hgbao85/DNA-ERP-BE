@@ -112,11 +112,16 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       actions: [PermissionAction.VIEW],
     },
     // 2026-08-12: KHSX đọc GET /cutting-batch-suggestions (màn "Gộp đợt cắt" + badge trên menu)
-    // để biết loại sắt nào vượt ngưỡng hao hụt và gộp với đơn nào thì đạt. CHỈ VIEW - quyết định
-    // gộp/duyệt phương án cắt vẫn là của QLSX/Sếp (xem PRODUCTION_MANAGER có thêm CREATE+APPROVE).
+    // để biết loại sắt nào vượt ngưỡng hao hụt và gộp với đơn nào thì đạt. Duyệt phương án cắt
+    // (APPROVE) vẫn là của Sếp/QLSX (xem PRODUCTION_MANAGER có thêm APPROVE).
+    // 2026-09-30: thêm CREATE - luồng "Solve trước → tạo PI": KHSX tự bấm "Tính phương án cắt"
+    // (POST /cutting-batch-solve) rồi tạo lệnh sản xuất từ kết quả đó. CREATE này cũng mở nút "Tính
+    // lại" thủ công của phương án theo luồng cũ (POST production-orders/:id/cutting-proposals), mà
+    // luồng cũ tự duyệt khi tính xong - chấp nhận vì cổng autoApproveBlockReason() vẫn chặn tính
+    // lại đè lên phương án đã APPROVED (không trừ kho/mua trùng), và KHSX không thấy nút đó ở FE.
     {
       module: PERMISSION_MODULES.CUTTING_PROPOSAL,
-      actions: [PermissionAction.VIEW],
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
     },
     // ProductionPlanApp expose luôn MfgWarehousesPage ("Tổng hợp kho", không gate theo role ở
     // FE) cho KHSX - trang này gọi đồng thời GET /warehouses, /materials, /material-groups lúc

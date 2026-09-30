@@ -92,7 +92,7 @@ export class CreateMaterialDto {
   // Chỉ 1 trong 2 field có tác dụng thật tuỳ nhóm vật tư - xem MaterialsService.resolveWasteFields.
   @ApiPropertyOptional({
     description:
-      'CHỈ áp dụng cho vật tư nhóm Sắt (systemKey STEEL_BAR) - ngưỡng hao hụt TỐI ĐA chấp nhận được khi cắt, gửi xuống solver ghi đè SystemConfig.solverMaxWastePercentage. Để trống = dùng mặc định hệ thống. Bị bỏ qua (ghi null) với mọi nhóm khác. Đặt quá thấp có thể khiến solver không tìm được phương án cắt nào.',
+      'ĐÃ BỎ (2026-09-30): Sắt không còn ngưỡng hao hụt riêng theo vật tư - KHSX quyết ngưỡng chung ở "Tối ưu cắt sắt". Giá trị gửi lên bị bỏ qua, giữ field chỉ để không vỡ client cũ.',
   })
   @IsOptional()
   @IsNumber()

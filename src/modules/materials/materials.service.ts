@@ -188,7 +188,11 @@ export class MaterialsService {
   } {
     const isSteel = systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR;
     return {
-      maxCuttingWastePercentage: isSteel ? dto.maxCuttingWastePercentage : null,
+      // Sắt (STEEL_BAR) KHÔNG còn nhập % hao hụt (2026-09-30): ngưỡng cắt do KHSX quyết ở "Tối ưu cắt
+      // sắt" (SystemConfig.solverMaxWastePercentage). dto.maxCuttingWastePercentage bị BỎ QUA hoàn toàn
+      // (undefined = không ghi cột) - cột giữ nguyên dữ liệu cũ nhưng không code nào còn đọc.
+      // Nhóm khác vẫn ép null như cũ (invariant: % cắt không lọt sang vật tư không phải Sắt).
+      maxCuttingWastePercentage: isSteel ? undefined : null,
       purchaseWastePercentage: isSteel ? null : dto.purchaseWastePercentage,
     };
   }
@@ -334,7 +338,9 @@ export class MaterialsService {
    * thay vì update() từng dòng - tránh N round-trip DB không cần thiết cho thao tác vốn chỉ có 1
    * giá trị áp dụng chung.
    */
-  async bulkUpdateWaste(dto: BulkUpdateWasteDto): Promise<{ updated: number }> {
+  async bulkUpdateWaste(
+    dto: BulkUpdateWasteDto,
+  ): Promise<{ updated: number; skippedSteel: number }> {
     const hasIds = !!dto.materialIds?.length;
     const hasGroup = !!dto.materialGroupId;
     if (hasIds === hasGroup) {
@@ -376,15 +382,16 @@ export class MaterialsService {
       (systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR ? steelIds : otherIds).push(m.id);
     }
 
+    // Sắt KHÔNG còn % hao hụt để sửa (KHSX quyết ngưỡng cắt ở "Tối ưu cắt sắt", 2026-09-30) -> loại
+    // khỏi thao tác hàng loạt. Chọn nguyên nhóm Sắt thì báo rõ thay vì "cập nhật 0 vật tư" khó hiểu;
+    // chọn tay lẫn Sắt thì bỏ qua Sắt và trả số đã bỏ qua (skippedSteel) để FE nói lại cho Admin.
+    if (otherIds.length === 0) {
+      throw new BadRequestException(
+        'Vật tư nhóm Sắt không có % hao hụt để sửa - ngưỡng hao hụt cắt do KHSX quyết định ở màn "Tối ưu cắt sắt"',
+      );
+    }
+
     await this.prisma.$transaction([
-      ...(steelIds.length > 0
-        ? [
-            this.prisma.material.updateMany({
-              where: { id: { in: steelIds } },
-              data: { maxCuttingWastePercentage: dto.value, purchaseWastePercentage: null },
-            }),
-          ]
-        : []),
       ...(otherIds.length > 0
         ? [
             this.prisma.material.updateMany({
@@ -395,7 +402,7 @@ export class MaterialsService {
         : []),
     ]);
 
-    return { updated: materials.length };
+    return { updated: otherIds.length, skippedSteel: steelIds.length };
   }
 
   async remove(id: string): Promise<void> {
@@ -602,7 +609,9 @@ export class MaterialsService {
       buyerId: material.buyerId ?? null,
       purchaseUnit: material.purchaseUnit ?? null,
       khoUnitFactor: material.khoUnitFactor?.toNumber() ?? null,
-      maxCuttingWastePercentage: material.maxCuttingWastePercentage?.toNumber() ?? null,
+      // Luôn null: ngưỡng cắt không còn theo vật tư (2026-09-30, KHSX quyết ở "Tối ưu cắt sắt"). Cột DB
+      // còn dữ liệu cũ nhưng không code nào đọc - trả null để UI/API không hiện con số đã vô hiệu.
+      maxCuttingWastePercentage: null,
       purchaseWastePercentage: material.purchaseWastePercentage?.toNumber() ?? null,
       imageUrl: material.imageUrl ?? null,
       isActive: material.isActive,

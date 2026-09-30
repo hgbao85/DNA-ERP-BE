@@ -87,10 +87,16 @@ export class ProductionOrdersService {
     productionInvoiceItemId: bigint,
     mfgProductId: bigint,
     quantity: number,
+    /** Luồng "Solve trước → tạo PI" (2026-09-30): ghim ĐÚNG revision đã được solver tính (chụp lúc
+     *  KHSX bấm Tính), không phải revision ACTIVE lúc Sếp duyệt - số cây của phương án cắt chỉ đúng
+     *  với revision đó. Bỏ trống = lấy ACTIVE như luồng cũ. */
+    pinnedBomRevisionId?: bigint,
   ): Promise<ProductionOrderRow> {
-    const activeRevision = await this.prisma.bomRevision.findFirst({
-      where: { mfgProductId, status: BomRevisionStatus.ACTIVE },
-    });
+    const activeRevision = pinnedBomRevisionId
+      ? { id: pinnedBomRevisionId }
+      : await this.prisma.bomRevision.findFirst({
+          where: { mfgProductId, status: BomRevisionStatus.ACTIVE },
+        });
     if (!activeRevision) {
       throw new NotFoundException(
         `Không tìm thấy BomRevision ACTIVE cho sản phẩm ${mfgProductId} - không thể tạo lệnh sản xuất`,

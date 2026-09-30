@@ -73,6 +73,10 @@ const AUDITED_MODELS = new Set([
   // đổi liên tục.
   'PurchaseProposal',
   'CuttingProposal',
+  // 2026-09-30: KHSX tự đổi ngưỡng hao hụt mặc định cắt sắt (SystemConfig) - thay đổi ảnh hưởng mọi
+  // phương án cắt về sau nên phải truy được ai đổi, từ bao nhiêu sang bao nhiêu. Singleton 1 dòng,
+  // đổi hiếm nên không lo nhiễu.
+  'SystemConfig',
 ]);
 
 /** Minimal shape needed to dynamically call `client[modelKey].findFirst(...)` by model name. */
