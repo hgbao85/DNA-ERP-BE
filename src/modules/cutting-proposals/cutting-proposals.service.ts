@@ -581,6 +581,42 @@ export class CuttingProposalsService {
   }
 
   /**
+   * KHSX xoá 1 đợt tính trước-PI khỏi "Kết quả đã tính" (2026-10-01: thử nhiều lần thì danh sách tràn lan). Chỉ xoá được
+   * đợt CHƯA dùng (DRAFT/FAILED, chưa gắn lệnh sản xuất/PO). Đang tính (CALCULATING) không huỷ được vì solver đã chạy
+   * nền - phải đợi xong. "Xoá" = gỡ dòng ghim SKU (CuttingProposalItem) + đánh SUPERSEDED: bản ghi phương án giữ lại làm
+   * lịch sử/audit (bảng dòng cắt con không cascade), nhưng biến khỏi mọi danh sách và các SKU được thả để tính lại.
+   */
+  async discardBatchSolve(id: string): Promise<void> {
+    const bigId = parseBigIntId(id);
+    const proposal = await this.prisma.cuttingProposal.findUnique({
+      where: { id: bigId },
+      select: { id: true, status: true, productionOrderId: true, productionInvoiceId: true },
+    });
+    if (!proposal) throw new NotFoundException(`Cutting proposal ${id} not found`);
+    if (proposal.productionOrderId != null || proposal.productionInvoiceId != null) {
+      throw new ConflictException(
+        'Phương án này đã được dùng cho một lệnh sản xuất - không xoá ở đây được',
+      );
+    }
+    if (proposal.status === CuttingProposalStatus.CALCULATING) {
+      throw new ConflictException('Đợt này đang tính - đợi tính xong rồi mới xoá được');
+    }
+    if (
+      proposal.status !== CuttingProposalStatus.DRAFT &&
+      proposal.status !== CuttingProposalStatus.FAILED
+    ) {
+      throw new ConflictException('Đợt này không còn nằm trong danh sách kết quả đã tính');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.cuttingProposalItem.deleteMany({ where: { cuttingProposalId: bigId } });
+      await tx.cuttingProposal.update({
+        where: { id: bigId },
+        data: { status: CuttingProposalStatus.SUPERSEDED },
+      });
+    });
+  }
+
+  /**
    * Các lượt tính trước-PI CHƯA được dùng để tạo lệnh sản xuất (mới nhất trước) - KHSX xem tiến
    * độ + kết quả ở "Tối ưu cắt sắt". Kèm `invoiceReadiness` cho phương án DRAFT: đủ điều kiện tạo
    * lệnh sản xuất chưa, hoặc vì sao chưa (vô nghiệm / vượt ngưỡng / lỗi thời).

@@ -21,7 +21,7 @@ describe('CuttingProposalsService', () => {
       updateMany: jest.Mock;
     };
     cuttingProposalLine: { create: jest.Mock; findMany: jest.Mock; update: jest.Mock };
-    cuttingProposalItem: { findMany: jest.Mock };
+    cuttingProposalItem: { findMany: jest.Mock; deleteMany: jest.Mock };
     cuttingPlanCoverage: { create: jest.Mock; update: jest.Mock; findUnique: jest.Mock };
     cuttingProposalPattern: { create: jest.Mock };
     cuttingProposalPatternSegment: { create: jest.Mock };
@@ -155,7 +155,7 @@ describe('CuttingProposalsService', () => {
         update: jest.fn(),
       },
       // Ảnh chụp đầu vào của lượt tính trước PI - attachToInvoice() đọc SKU của phương án để dọn lượt khác.
-      cuttingProposalItem: { findMany: jest.fn().mockResolvedValue([]) },
+      cuttingProposalItem: { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn() },
       // L2 mức 2 (2026-08-27): bảng phủ - mặc định SKU CHƯA có chủ (câu FOR UPDATE trong
       // claimCuttingPlanCoverage trả rỗng, xem $queryRaw dưới) nên luôn đi nhánh create.
       cuttingPlanCoverage: { create: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
@@ -3716,6 +3716,53 @@ describe('CuttingProposalsService', () => {
         await expect((service as unknown as Priv).buildBatchJob(70n)).rejects.toThrow(
           /không có SKU nào/,
         );
+      });
+    });
+
+    describe('discardBatchSolve', () => {
+      const found = (over: Record<string, unknown> = {}) =>
+        prisma.cuttingProposal.findUnique.mockResolvedValue({
+          id: 70n,
+          status: 'DRAFT',
+          productionOrderId: null,
+          productionInvoiceId: null,
+          ...over,
+        });
+
+      it('xoá đợt DRAFT chưa dùng: gỡ dòng ghim SKU rồi đánh SUPERSEDED', async () => {
+        found();
+        await service.discardBatchSolve('70');
+        expect(prisma.cuttingProposalItem.deleteMany).toHaveBeenCalledWith({
+          where: { cuttingProposalId: 70n },
+        });
+        expect(prisma.cuttingProposal.update).toHaveBeenCalledWith({
+          where: { id: 70n },
+          data: { status: 'SUPERSEDED' },
+        });
+      });
+
+      it('xoá được đợt FAILED', async () => {
+        found({ status: 'FAILED' });
+        await service.discardBatchSolve('70');
+        expect(prisma.cuttingProposal.update).toHaveBeenCalled();
+      });
+
+      it('không có -> 404', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(null);
+        await expect(service.discardBatchSolve('70')).rejects.toThrow(NotFoundException);
+      });
+
+      it.each([
+        ['đang tính', { status: 'CALCULATING' }],
+        ['đã gắn PI', { productionInvoiceId: 5n }],
+        ['đã gắn PO', { productionOrderId: 9n }],
+        ['đã duyệt', { status: 'APPROVED' }],
+        ['đã bị thay thế', { status: 'SUPERSEDED' }],
+      ])('chặn (Conflict) khi %s', async (_label, over) => {
+        found(over);
+        await expect(service.discardBatchSolve('70')).rejects.toThrow(ConflictException);
+        expect(prisma.cuttingProposalItem.deleteMany).not.toHaveBeenCalled();
+        expect(prisma.cuttingProposal.update).not.toHaveBeenCalled();
       });
     });
 

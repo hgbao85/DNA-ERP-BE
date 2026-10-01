@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Headers,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   BatchStockLengthsQueryDto,
   PreviewCuttingBatchDto,
@@ -126,6 +137,15 @@ export class CuttingProposalsController {
   @RequirePermissions(VIEW)
   getBatchSolves() {
     return this.cuttingProposalsService.getBatchSolves();
+  }
+
+  /** Xoá 1 đợt tính trước-PI chưa dùng khỏi "Kết quả đã tính" (xem discardBatchSolve). */
+  @Delete('cutting-batch-solves/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermissions(CREATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER)
+  discardBatchSolve(@Param('id') id: string) {
+    return this.cuttingProposalsService.discardBatchSolve(id);
   }
 
   @Get('cutting-proposals/:id')
