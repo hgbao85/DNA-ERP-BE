@@ -17,6 +17,8 @@ export class ProductionBatchResponseDto {
   @Expose() @ApiProperty() pieceCode!: string;
   @Expose() @ApiProperty() pieceName!: string;
   @Expose() @ApiProperty() reportedQty!: number;
+  /** Cảnh báo báo vượt nhu cầu (không chặn), null nếu trong định mức - chỉ có ở phản hồi ghi đợt. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) overPlanWarning?: string | null;
   @Expose() @ApiProperty({ enum: ProductionBatchStatus }) status!: ProductionBatchStatus;
   @Expose() @ApiProperty() reportedAt!: Date;
   @Expose() @ApiProperty() reportedById!: string;
