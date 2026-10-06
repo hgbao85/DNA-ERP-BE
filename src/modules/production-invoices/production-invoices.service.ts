@@ -39,6 +39,7 @@ import {
   TransferCheckDefectNotificationParams,
 } from '../notifications/notification-types';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
+import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
@@ -115,6 +116,7 @@ export class ProductionInvoicesService {
     private readonly cuttingProposalsService: CuttingProposalsService,
     private readonly pieceMaterialYieldPurchaseService: PieceMaterialYieldPurchaseService,
     private readonly consumableMaterialPurchaseService: ConsumableMaterialPurchaseService,
+    private readonly materialYieldRecipePurchaseService: MaterialYieldRecipePurchaseService,
     private readonly cls: ClsService<AppClsStore>,
     private readonly cloudinaryService: CloudinaryService,
     private readonly notifications: NotificationsService,
@@ -1085,10 +1087,11 @@ export class ProductionInvoicesService {
   }
 
   /**
-   * 2 trigger đề xuất mua còn lại của 1 PI (VTTP + tiêu hao phẳng), chạy SAU đề xuất mua sắt - dùng
-   * chung bởi đường cũ (onComplete của solver) và đường "Solve trước" (sau approve() phương án có
-   * sẵn). Best-effort, tách try/catch riêng để lỗi nguồn này không che nguồn kia. `context` chỉ để
-   * ghi log ("PI item 12" / "merged PI 3").
+   * 3 trigger đề xuất mua còn lại của 1 PI (pat/VTTP cũ qua PieceMaterialYield + tiêu hao phẳng +
+   * vật tư thành phẩm không gắn piece qua MaterialYieldRecipe, 2026-10-02), chạy SAU đề xuất mua sắt
+   * - dùng chung bởi đường cũ (onComplete của solver) và đường "Solve trước" (sau approve() phương
+   * án có sẵn). Best-effort, tách try/catch riêng để lỗi nguồn này không che nguồn kia. `context`
+   * chỉ để ghi log ("PI item 12" / "merged PI 3").
    */
   private async computeNonSteelPurchaseProposals(piId: bigint, context: string): Promise<void> {
     // Tính lại nhu cầu mua nguyên liệu "vật tư thành phẩm" (PieceMaterialYield, vd thanh nhôm/tấm
@@ -1110,6 +1113,17 @@ export class ProductionInvoicesService {
     } catch (error) {
       this.logger.error(
         `Auto consumable-material-purchase trigger failed for ${context}: ${(error as Error).message}`,
+      );
+    }
+
+    // Tính nhu cầu mua nguyên liệu đầu vào (vd thanh nhôm) cho "vật tư thành phẩm KHÔNG gắn piece"
+    // (vd chân nhôm, MaterialYieldRecipe) - phần Mua hàng còn thiếu của tính năng 2026-10-01, mirror
+    // 2 nhánh trên (tự động hoàn toàn, không chờ thao tác thủ công nào).
+    try {
+      await this.materialYieldRecipePurchaseService.computeAndUpsertProposals(piId.toString());
+    } catch (error) {
+      this.logger.error(
+        `Auto material-yield-recipe-purchase trigger failed for ${context}: ${(error as Error).message}`,
       );
     }
   }

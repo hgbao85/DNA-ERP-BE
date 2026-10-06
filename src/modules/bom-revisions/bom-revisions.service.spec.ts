@@ -358,7 +358,7 @@ describe('BomRevisionsService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('rejects a duplicate (bomRevisionId, pieceId) row', async () => {
+    it('rejects a duplicate (bomRevisionId, pieceId, materialId) row - CÙNG material trên CÙNG piece', async () => {
       prisma.bomRevision.findUnique.mockResolvedValue(draftRevision());
       prisma.piece.findUnique.mockResolvedValue(piece40);
       prisma.bomPiece.findUnique.mockResolvedValue({ needsHan: false });
@@ -372,6 +372,42 @@ describe('BomRevisionsService', () => {
           piecesPerBar: 12,
         }),
       ).rejects.toThrow(ConflictException);
+    });
+
+    // 2026-10-03: đảo ngược ràng buộc "luôn đúng 1 material/piece" (2026-08-22) - piece giờ được
+    // phép có NHIỀU dòng Tự tính miễn là KHÁC material. Trước đây findUnique trả về {id:1n} (dòng
+    // của material 80) sẽ chặn CẢ dòng material khác trên cùng piece - giờ query đi theo đúng 3
+    // cột (bomRevisionId, pieceId, materialId) nên dòng material 80 không còn chặn material 81.
+    it('cho phép 1 piece có 2 dòng Tự tính KHÁC material (vd "Pat" vừa Tấm sắt la vừa Sắt phi)', async () => {
+      const materialSatPhi = { id: 81n, code: 'SAT-001' };
+      prisma.bomRevision.findUnique.mockResolvedValue(draftRevision());
+      prisma.piece.findUnique.mockResolvedValue(piece40);
+      prisma.bomPiece.findUnique.mockResolvedValue({ needsHan: false });
+      prisma.material.findUnique.mockResolvedValue(materialSatPhi);
+      // Không còn dòng nào trùng ĐÚNG (piece 40, material 81) dù piece 40 đã có dòng material 80.
+      prisma.pieceMaterialYield.findUnique.mockResolvedValue(null);
+      prisma.pieceMaterialYield.create.mockResolvedValue({
+        id: 3n,
+        bomRevisionId: 10n,
+        pieceId: 40n,
+        materialId: 81n,
+        piecesPerBar: 4,
+        piece: piece40,
+        material: materialSatPhi,
+      });
+
+      const result = await service.createPieceMaterialYield('10', {
+        pieceId: '40',
+        materialId: '81',
+        piecesPerBar: 4,
+      });
+
+      expect(result.materialCode).toBe('SAT-001');
+      expect(prisma.pieceMaterialYield.findUnique).toHaveBeenCalledWith({
+        where: {
+          bomRevisionId_pieceId_materialId: { bomRevisionId: 10n, pieceId: 40n, materialId: 81n },
+        },
+      });
     });
 
     it('rejects mutation once the revision is no longer DRAFT', async () => {

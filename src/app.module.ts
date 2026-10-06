@@ -51,6 +51,7 @@ import { QcReviewsModule } from './modules/qc-reviews/qc-reviews.module';
 import { WeavingIssuesModule } from './modules/weaving-issues/weaving-issues.module';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module';
 import { MaterialYieldIssuesModule } from './modules/material-yield-issues/material-yield-issues.module';
+import { MaterialYieldRecipesModule } from './modules/material-yield-recipes/material-yield-recipes.module';
 import { PackagingIssuesModule } from './modules/packaging-issues/packaging-issues.module';
 import { ProductionBatchesModule } from './modules/production-batches/production-batches.module';
 import { WorkQueueModule } from './modules/work-queue/work-queue.module';
@@ -124,6 +125,7 @@ import { WorkQueueModule } from './modules/work-queue/work-queue.module';
     WeavingIssuesModule,
     MaterialIssuesModule,
     MaterialYieldIssuesModule,
+    MaterialYieldRecipesModule,
     PackagingIssuesModule,
     ProductionBatchesModule,
     WorkQueueModule,

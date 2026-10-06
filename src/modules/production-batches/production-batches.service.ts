@@ -418,24 +418,29 @@ export class ProductionBatchesService {
     await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'báo công đoạn');
     const pieceBigId = parseBigIntId(dto.pieceId);
 
-    const yieldRow = await this.prisma.pieceMaterialYield.findUnique({
-      where: { bomRevisionId_pieceId: { bomRevisionId: order.bomRevisionId, pieceId: pieceBigId } },
+    // 2026-10-03: piece có thể có NHIỀU dòng Tự tính (khác material, vd Pat vừa Tấm sắt la vừa
+    // Sắt phi) - TẤT CẢ phải đã nhận, và công đoạn hợp lệ là HỢP của mọi dòng (piece báo "Cắt" 1
+    // lần cho cả piece, không tách riêng theo từng material).
+    const yieldRows = await this.prisma.pieceMaterialYield.findMany({
+      where: { bomRevisionId: order.bomRevisionId, pieceId: pieceBigId },
     });
-    if (!yieldRow) {
+    if (yieldRows.length === 0) {
       throw new BadRequestException(
         `Mảnh ${dto.pieceId} không có định mức vật tư thành phẩm - không báo công đoạn ở đây`,
       );
     }
-    const received = await this.materialYieldIssuesService.sumReceived(
-      order.id,
-      yieldRow.materialId,
-    );
-    if (received <= 0) {
-      throw new BadRequestException(
-        `Mảnh ${dto.pieceId} dùng vật tư thành phẩm chưa được xác nhận nhận từ kho - xác nhận nhận (Xác nhận nhận sắt) trước khi báo công đoạn`,
+    for (const yieldRow of yieldRows) {
+      const received = await this.materialYieldIssuesService.sumReceived(
+        order.id,
+        yieldRow.materialId,
       );
+      if (received <= 0) {
+        throw new BadRequestException(
+          `Mảnh ${dto.pieceId} dùng vật tư thành phẩm chưa được xác nhận nhận từ kho - xác nhận nhận (Xác nhận nhận sắt) trước khi báo công đoạn`,
+        );
+      }
     }
-    const orderedSteps = sortProcessSteps(yieldRow.processSteps);
+    const orderedSteps = this.mergeYieldProcessSteps(yieldRows);
     if (orderedSteps.length === 0) {
       throw new BadRequestException(
         `Mảnh ${dto.pieceId} chưa khai công đoạn nào theo định mức - báo thẳng sản lượng`,
@@ -568,11 +573,12 @@ export class ProductionBatchesService {
     step: ProcessStep,
     reportedById: string,
   ): Promise<void> {
-    const yieldRow = await tx.pieceMaterialYield.findUnique({
-      where: { bomRevisionId_pieceId: { bomRevisionId, pieceId } },
-    });
-    if (!yieldRow) return;
-    const orderedSteps = sortProcessSteps(yieldRow.processSteps);
+    // 2026-10-03: piece có thể có NHIỀU dòng Tự tính - "công đoạn cuối" của piece giờ là công đoạn
+    // cuối trong HỢP của mọi dòng material (mirror cách recordPieceStepBatch xác định công đoạn
+    // hợp lệ).
+    const yieldRows = await tx.pieceMaterialYield.findMany({ where: { bomRevisionId, pieceId } });
+    if (yieldRows.length === 0) return;
+    const orderedSteps = this.mergeYieldProcessSteps(yieldRows);
     if (orderedSteps.length === 0 || orderedSteps[orderedSteps.length - 1] !== step) return;
 
     await lockBusinessKey(tx, `piece-auto-finalize:${productionOrderId}:${pieceId}`);
@@ -1115,14 +1121,20 @@ export class ProductionBatchesService {
       onHandByMaterial.set(key, (onHandByMaterial.get(key) ?? 0) + q.qty.toNumber());
     }
 
+    // 2026-10-03: 1 piece có thể có NHIỀU dòng Tự tính - gộp theo (revision, piece) thay vì ghi đè
+    // (trước đây `inner.set(pieceId, {...})` lặp lại trong for sẽ mất hết trừ dòng CUỐI nếu piece có
+    // ≥2 material). Gộp qua mergeYieldExtrasGroup() - xem doc comment hàm đó.
+    const rowsByRevisionPiece = new Map<string, (typeof yields)[number][]>();
     for (const y of yields) {
-      const revKey = y.bomRevisionId.toString();
+      const key = `${y.bomRevisionId}:${y.pieceId}`;
+      const arr = rowsByRevisionPiece.get(key);
+      if (arr) arr.push(y);
+      else rowsByRevisionPiece.set(key, [y]);
+    }
+    for (const [key, rows] of rowsByRevisionPiece) {
+      const [revKey, pieceKey] = key.split(':');
       const inner = result.get(revKey) ?? new Map<string, PieceMaterialYieldExtras>();
-      inner.set(y.pieceId.toString(), {
-        rawMaterialOnHand: onHandByMaterial.get(y.materialId.toString()) ?? 0,
-        processSteps: sortProcessSteps(y.processSteps),
-        qtyPerPiece: y.qtyPerPiece,
-      });
+      inner.set(pieceKey, this.mergeYieldExtrasGroup(rows, onHandByMaterial));
       result.set(revKey, inner);
     }
     return result;
@@ -1261,15 +1273,40 @@ export class ProductionBatchesService {
       onHandByMaterial.set(key, (onHandByMaterial.get(key) ?? 0) + q.qty.toNumber());
     }
 
-    const result = new Map<string, PieceMaterialYieldExtras>();
+    // 2026-10-03: gộp theo piece thay vì ghi đè - xem doc comment mergeYieldExtrasGroup().
+    const rowsByPiece = new Map<string, typeof yields>();
     for (const y of yields) {
-      result.set(y.pieceId.toString(), {
-        rawMaterialOnHand: onHandByMaterial.get(y.materialId.toString()) ?? 0,
-        processSteps: sortProcessSteps(y.processSteps),
-        qtyPerPiece: y.qtyPerPiece,
-      });
+      const key = y.pieceId.toString();
+      const arr = rowsByPiece.get(key);
+      if (arr) arr.push(y);
+      else rowsByPiece.set(key, [y]);
+    }
+    const result = new Map<string, PieceMaterialYieldExtras>();
+    for (const [pieceKey, rows] of rowsByPiece) {
+      result.set(pieceKey, this.mergeYieldExtrasGroup(rows, onHandByMaterial));
     }
     return result;
+  }
+
+  /** Gộp nhiều dòng PieceMaterialYield của CÙNG 1 piece thành 1 `PieceMaterialYieldExtras` hiển thị
+   *  (2026-10-03, từ khi 1 piece có thể có nhiều dòng Tự tính khác material). processSteps = HỢP
+   *  mọi dòng (piece báo công đoạn chung, xem mergeYieldProcessSteps). rawMaterialOnHand lấy tồn
+   *  THẤP NHẤT trong các material (cảnh báo đúng tinh thần "còn thiếu nguyên liệu" - vật tư nào cạn
+   *  trước là nút thắt thật). qtyPerPiece chỉ còn ý nghĩa hiển thị phụ chú khi piece có ĐÚNG 1
+   *  material (giữ nguyên hành vi cũ) - piece có ≥2 material trả về null, KHÔNG đoán mò hiện nhầm tỉ
+   *  lệ của 1 material cho người đọc hiểu lầm là áp dụng chung; FE cần bản chi tiết theo material thì
+   *  làm riêng sau nếu phát sinh nhu cầu thật (cả 2 field ở đây chỉ dùng hiển thị cảnh báo, KHÔNG
+   *  chặn nghiệp vụ nào - xem doc comment PieceMaterialYieldExtras). */
+  private mergeYieldExtrasGroup(
+    rows: { materialId: bigint; processSteps: ProcessStep[]; qtyPerPiece: number }[],
+    onHandByMaterial: Map<string, number>,
+  ): PieceMaterialYieldExtras {
+    const onHandValues = rows.map((r) => onHandByMaterial.get(r.materialId.toString()) ?? 0);
+    return {
+      rawMaterialOnHand: Math.min(...onHandValues),
+      processSteps: this.mergeYieldProcessSteps(rows),
+      qtyPerPiece: rows.length === 1 ? rows[0].qtyPerPiece : null,
+    };
   }
 
   private assertConsumableStage(stage: MfgStage): void {
@@ -1350,10 +1387,13 @@ export class ProductionBatchesService {
     }
     let needsStage: boolean;
     if (stage === MfgStage.PHOI) {
+      // 2026-10-03: findFirst thay findUnique - 1 piece giờ có thể có NHIỀU dòng Tự tính (khác
+      // material), chỉ cần biết piece này CÓ dòng nào không, không cần đúng 1 dòng cụ thể.
       needsStage =
         !bomPiece.needsHan ||
-        (await this.prisma.pieceMaterialYield.findUnique({
-          where: { bomRevisionId_pieceId: { bomRevisionId, pieceId } },
+        (await this.prisma.pieceMaterialYield.findFirst({
+          where: { bomRevisionId, pieceId },
+          select: { id: true },
         })) !== null;
     } else {
       needsStage = stage === MfgStage.HAN ? bomPiece.needsHan : bomPiece.needsSon;
@@ -1372,6 +1412,17 @@ export class ProductionBatchesService {
    * dùng chung nguyên liệu (Sắt La/thanh nhôm) phải xuất/nhận trước khi sản xuất - không chỉ riêng
    * piece có tick công đoạn.
    */
+  /** HỢP (dedup) các processSteps của mọi dòng PieceMaterialYield thuộc 1 piece, sắp theo đúng thứ
+   *  tự công đoạn chuẩn - dùng khi 1 piece có nhiều dòng Tự tính (2026-10-03), piece báo công đoạn
+   *  1 lần cho cả piece chứ không tách riêng theo từng material. */
+  private mergeYieldProcessSteps(yieldRows: { processSteps: ProcessStep[] }[]): ProcessStep[] {
+    const set = new Set<ProcessStep>();
+    for (const y of yieldRows) {
+      for (const s of y.processSteps) set.add(s);
+    }
+    return sortProcessSteps([...set]);
+  }
+
   private async assertMaterialYieldReceived(
     bomRevisionId: bigint,
     pieceId: bigint,
@@ -1379,18 +1430,23 @@ export class ProductionBatchesService {
     stage: MfgStage,
   ): Promise<void> {
     if (stage !== MfgStage.PHOI) return;
-    const yieldRow = await this.prisma.pieceMaterialYield.findUnique({
-      where: { bomRevisionId_pieceId: { bomRevisionId, pieceId } },
+    const yieldRows = await this.prisma.pieceMaterialYield.findMany({
+      where: { bomRevisionId, pieceId },
     });
-    if (!yieldRow) return;
-    const received = await this.materialYieldIssuesService.sumReceived(
-      productionOrderId,
-      yieldRow.materialId,
-    );
-    if (received <= 0) {
-      throw new BadRequestException(
-        `Mảnh ${pieceId} dùng vật tư thành phẩm chưa được xác nhận nhận từ kho - xác nhận nhận (Xác nhận nhận sắt) trước khi báo sản lượng`,
+    if (yieldRows.length === 0) return;
+    // 2026-10-03: piece có thể có NHIỀU dòng Tự tính (khác material) - TẤT CẢ phải được nhận trước
+    // khi báo sản lượng, thiếu bất kỳ dòng nào cũng chặn (giống hệt cần đủ NGUYÊN LIỆU đầu vào mới
+    // sản xuất ra được, dù là 1 hay nhiều loại).
+    for (const yieldRow of yieldRows) {
+      const received = await this.materialYieldIssuesService.sumReceived(
+        productionOrderId,
+        yieldRow.materialId,
       );
+      if (received <= 0) {
+        throw new BadRequestException(
+          `Mảnh ${pieceId} dùng vật tư thành phẩm chưa được xác nhận nhận từ kho - xác nhận nhận (Xác nhận nhận sắt) trước khi báo sản lượng`,
+        );
+      }
     }
   }
 

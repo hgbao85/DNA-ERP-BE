@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { StockReservationRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { WeavingIssuesService } from './weaving-issues.service';
 
@@ -35,6 +36,7 @@ describe('WeavingIssuesService', () => {
     warehouse: { findUniqueOrThrow: jest.Mock; findMany: jest.Mock };
     weavingIssueMaterial: { create: jest.Mock };
     stockQuant: { findMany: jest.Mock };
+    stockReservation: { findMany: jest.Mock };
     warehouseTransferPieceItem: { findMany: jest.Mock; aggregate: jest.Mock };
     $executeRaw: jest.Mock;
     $queryRaw: jest.Mock;
@@ -138,6 +140,7 @@ describe('WeavingIssuesService', () => {
       },
       weavingIssueMaterial: { create: jest.fn() },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
+      stockReservation: { findMany: jest.fn().mockResolvedValue([]) },
       // Số mảnh đã CONFIRMED từ Phân phối nội bộ (2026-09-12, sumReceivedForPiece/receivedByPiece)
       // - create() mặc định dư dả (không chặn test case cũ không quan tâm ràng buộc mới này);
       // getIssuePlan()/getIssuePlanBatch() mặc định rỗng (canIssueQty=0), test case riêng tự override.
@@ -264,6 +267,43 @@ describe('WeavingIssuesService', () => {
         materialId: 60n,
         qty: 15,
       });
+    });
+
+    it('2026-10-05: giữ chỗ PRODUCTION_INVOICE của CHÍNH PI (giữ toàn bộ định mức Dây/Đinh) không chặn việc mang kèm của chính PI đó - cộng lại phần còn lại (cùng lỗi đã sửa ở MaterialYieldIssuesService)', async () => {
+      prisma.weavingIssue.create.mockResolvedValue(issueRow);
+      prisma.material.findUnique.mockResolvedValue({ id: 60n, code: 'DAY-001', warehouseId: 900n });
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 240 } }]);
+      // Đã loại CONSUMABLE/PIECE_YIELD -> ngoài PI còn 0; toàn bộ 240 đang bị giữ bởi chính PI này
+      stockReservationsService.getAvailableQty.mockResolvedValue(0);
+      prisma.stockReservation.findMany.mockResolvedValue([
+        { quantity: { toNumber: () => 240 }, consumedQty: { toNumber: () => 0 } },
+      ]);
+
+      await service.create(
+        '1',
+        {
+          pieceId: '20',
+          weavingPointId: '40',
+          qty: 10,
+          materials: [{ materialId: '60', qty: 60 }],
+        },
+        'user-1',
+        null,
+      );
+
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          where: expect.objectContaining({
+            refType: StockReservationRefType.PRODUCTION_INVOICE,
+            refId: '500',
+            warehouseId: 900n,
+            materialId: 60n,
+          }),
+        }),
+      );
+      expect(prisma.weavingIssueMaterial.create).toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).toHaveBeenCalled();
     });
 
     it('2026-09-11: tồn khả dụng không đủ cho vật tư mang kèm - ConflictException, không tạo WeavingIssueMaterial/ghi sổ', async () => {

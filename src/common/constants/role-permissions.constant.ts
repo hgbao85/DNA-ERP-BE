@@ -334,6 +334,16 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.MATERIAL_YIELD_ISSUE,
       actions: [PermissionAction.CREATE, PermissionAction.VIEW],
     },
+    // Xuất thanh nhôm cho Phôi gia công chân nhôm (2026-10-01, vật tư thành phẩm KHÔNG gắn piece) -
+    // trang mới xuất qua MATERIAL_YIELD_ISSUE:CREATE đã có ở trên (controller tái dùng đúng module
+    // đó, xem MaterialYieldRecipeIssuesController), nhưng cần THÊM module riêng
+    // MATERIAL_YIELD_RECIPE:VIEW để đọc GET .../material-yield-recipe-demand (biết cần xuất bao
+    // nhiêu) + GET /material-yield-recipes (tên vật tư ra/vào) - thủ kho chỉ VIEW, không tự tạo/sửa
+    // định mức.
+    {
+      module: PERMISSION_MODULES.MATERIAL_YIELD_RECIPE,
+      actions: [PermissionAction.VIEW],
+    },
     // Xuất vật tư đóng gói (vat-tu-tp -> thanh-pham, 2026-08-19) - chỉ CREATE+VIEW, không có
     // UPDATE vì không có bước "xác nhận nhận" riêng (cả kho nguồn lẫn đích đều là thủ kho, khác
     // MATERIAL_ISSUE nơi tổ Hàn/Sơn là actor xác nhận riêng).
@@ -401,6 +411,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.MATERIAL_GROUP,
       actions: [PermissionAction.VIEW],
     },
+    // Quản lý định mức "vật tư thành phẩm" (2026-10-01, vd thanh nhôm → chân nhôm) - NV Định mức
+    // mảnh tự tạo/sửa/xoá MaterialYieldRecipe ngay trong "Quản lý định mức" (tab "Định mức vật tư
+    // thành phẩm"), không cần qua Admin - xem MaterialYieldRecipesPage.tsx (FE).
+    {
+      module: PERMISSION_MODULES.MATERIAL_YIELD_RECIPE,
+      actions: 'ALL',
+    },
   ],
   [BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF]: [
     {
@@ -452,6 +469,14 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     },
     {
       module: PERMISSION_MODULES.PRODUCTION_ORDER,
+      actions: [PermissionAction.VIEW],
+    },
+    // Chân nhôm/vật tư thành phẩm KHÔNG gắn piece (2026-10-01): ChanNhomDetail.tsx gọi
+    // GET .../material-yield-recipe-demand (biết cần sản xuất bao nhiêu) + GET /material-yield-
+    // recipes (lấy processSteps để hiện dải tab công đoạn) - cả 2 đều thuộc module này. Chỉ VIEW -
+    // Phôi không tự tạo/sửa định mức.
+    {
+      module: PERMISSION_MODULES.MATERIAL_YIELD_RECIPE,
       actions: [PermissionAction.VIEW],
     },
     // Vá lỗ quyền phát hiện lúc nối FE KhoPhoiPage (2026-08-14, xem docs/quy-doi-doan-phoi.md):

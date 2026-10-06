@@ -14,10 +14,19 @@ import {
 } from 'class-validator';
 import { PROCESS_STEPS, ProcessStepValue } from '../../../common/constants/process-steps.constant';
 
-/** 4 nhóm vật tư "phẳng theo mảnh" (không có khái niệm cắt) có thể xuất hiện trong 1 mảnh,
+/** 5 nhóm vật tư "phẳng theo mảnh" (không có khái niệm cắt) có thể xuất hiện trong 1 mảnh,
  *  cạnh Sắt (segments). Tag tường minh trên từng dòng vì 1 mảnh giờ nhận vật tư từ nhiều
- *  nhóm cùng lúc trong 1 payload duy nhất - không còn suy nhóm từ route như DAY/DINH cũ. */
-export const PIECE_MATERIAL_LINE_GROUPS = ['WIRE', 'NAIL', 'RIVET', 'PLASTIC_BUTTON'] as const;
+ *  nhóm cùng lúc trong 1 payload duy nhất - không còn suy nhóm từ route như DAY/DINH cũ.
+ *  FINISHED_COMPONENT (2026-10-01, vd chân nhôm) KHÁC 4 nhóm còn lại: không có MaterialGroup/
+ *  systemKey riêng - nằm lồng trong nhóm Sắt qua Material.steelSubGroup=FINISHED_COMPONENT, xem
+ *  SkusService.assertOrAssignSteelSubGroup. */
+export const PIECE_MATERIAL_LINE_GROUPS = [
+  'WIRE',
+  'NAIL',
+  'RIVET',
+  'PLASTIC_BUTTON',
+  'FINISHED_COMPONENT',
+] as const;
 export type PieceMaterialLineGroup = (typeof PIECE_MATERIAL_LINE_GROUPS)[number];
 
 /** Re-export từ common/constants - production-batches.service.ts (báo tiến độ công đoạn vật tư
@@ -88,22 +97,21 @@ export class QuotaPieceMaterialLineDto {
   @ApiPropertyOptional({
     default: false,
     description:
-      'CHỈ có ý nghĩa khi group=PLASTIC_BUTTON (Nút nhựa) - đánh dấu dòng này "đi kèm mảnh khi xuất đan". Nhóm khác luôn bị ép về false, xem SkusService.replacePieces.',
+      'CHỈ có ý nghĩa khi group=PLASTIC_BUTTON (Nút nhựa) hoặc FINISHED_COMPONENT (Vật tư thành phẩm) - đánh dấu dòng này "đi kèm mảnh khi xuất đan". Nhóm khác luôn bị ép về false, xem SkusService.replacePieces.',
   })
   @IsOptional()
   @IsBoolean()
   includeInWeaving?: boolean;
 }
 
-/** 1 dòng định mức "vật tư thành phẩm" (vd thanh nhôm → chân nhôm, tấm sắt lá → "pat") -
- *  PieceMaterialYield, KHÔNG dùng PieceBom/SegmentSpec (đó là "đoạn cắt" tối ưu hao hụt, chỉ
- *  đúng cho Sắt) hay PieceMaterialItem (đó là tiêu hao phẳng, không có khái niệm "1 đơn vị ra N
- *  cái"). Không ràng buộc nhóm vật tư của material (nhóm do admin tự tạo, systemKey=null - "vô
- *  hình với logic Spec", xem comment MaterialGroup.systemKey trong schema.prisma) - khác hẳn
- *  segments/materialLines bên dưới đều bắt buộc đúng nhóm hệ thống. KHÔNG ràng buộc needsHan (gỡ
- *  bỏ 2026-08-22) - áp dụng cho cả piece needsHan=false (vd chân nhôm, cắt xong là hết) lẫn
- *  needsHan=true (vd "pat", cắt xong vẫn phải báo Hàn riêng) - xem
- *  ProductionBatchesService.findPhoiEligibleBomPieces(). */
+/** 1 dòng định mức "Sắt tự tính" (vd tấm sắt lá → "Pat", tỷ lệ cắt cố định) -
+ *  PieceMaterialYield, KHÔNG dùng PieceBom/SegmentSpec (đó là "đoạn cắt" qua solver, chỉ đúng cho
+ *  nhóm con Phần mềm) hay PieceMaterialItem (đó là tiêu hao phẳng, không có khái niệm "1 đơn vị
+ *  ra N cái"). Material PHẢI thuộc nhóm Sắt + nhóm con SELF_CALC (2026-10-01, tự gán nếu material
+ *  chưa có nhóm - xem SkusService.assertOrAssignSteelSubGroup; trước đây KHÔNG ràng buộc gì, lẫn
+ *  được cả Phần mềm/Vật tư thành phẩm vào đây). KHÔNG ràng buộc needsHan (gỡ bỏ 2026-08-22) - áp
+ *  dụng cho cả piece needsHan=false lẫn needsHan=true (vd "Pat" cắt xong vẫn phải báo Hàn riêng) -
+ *  xem ProductionBatchesService.findPhoiEligibleBomPieces(). */
 export class QuotaPieceMaterialYieldDto {
   @ApiProperty()
   @IsString()
@@ -138,9 +146,10 @@ export class QuotaPieceMaterialYieldDto {
   processSteps?: ProcessStepValue[];
 }
 
-/** 1 mảnh (nhóm SAT) - resolve-or-create Piece theo tên trong phạm vi sản phẩm. Chứa cả 6
- *  nhóm vật tư: Sắt (`segments`, phân cấp đoạn cắt), Dây/Đinh/Tán rút/Nút nhựa
- *  (`materialLines`, phẳng theo mảnh, không có khái niệm cắt), và Vật tư thành phẩm
+/** 1 mảnh (nhóm SAT) - resolve-or-create Piece theo tên trong phạm vi sản phẩm. Chứa:
+ *  Sắt nhóm con Phần mềm (`segments`, phân cấp đoạn cắt qua solver), Dây/Đinh/Tán rút/Nút nhựa/
+ *  Vật tư thành phẩm (`materialLines`, phẳng theo mảnh, không có khái niệm cắt - Vật tư thành
+ *  phẩm là nhóm con FINISHED_COMPONENT của Sắt, 2026-10-01), và Sắt nhóm con Tự tính
  *  (`materialYields`, định mức "1 đơn vị ra N cái", áp dụng bất kể needsHan). */
 export class QuotaPieceDto {
   @ApiProperty({ description: 'Tên mảnh - resolve-or-create Piece theo tên (case-insensitive)' })

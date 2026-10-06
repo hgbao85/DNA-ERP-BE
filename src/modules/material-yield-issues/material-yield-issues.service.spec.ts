@@ -34,6 +34,7 @@ describe('MaterialYieldIssuesService', () => {
     };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
+    stockReservation: { findMany: jest.Mock };
     material: { findUnique: jest.Mock };
     pieceMaterialYield: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
@@ -111,6 +112,7 @@ describe('MaterialYieldIssuesService', () => {
       productionInvoiceItem: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceId: 500n }),
       },
+      stockReservation: { findMany: jest.fn().mockResolvedValue([]) },
       material: { findUnique: jest.fn().mockResolvedValue(material) },
       pieceMaterialYield: { findMany: jest.fn().mockResolvedValue([yieldRow]) },
       bomPiece: { findMany: jest.fn().mockResolvedValue([bomPieceRow]) },
@@ -244,6 +246,17 @@ describe('MaterialYieldIssuesService', () => {
         undefined,
         ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'],
       );
+    });
+
+    it('giữ chỗ PRODUCTION_INVOICE của CHÍNH PI đang xuất không chặn việc xuất của PI đó (cộng lại phần còn lại)', async () => {
+      physicalStockQty = 40;
+      stockReservationsService.getAvailableQty.mockResolvedValue(0); // giữ chỗ của chính PI làm available = 0
+      prisma.stockReservation.findMany.mockResolvedValue([
+        { quantity: { toNumber: () => 40 }, consumedQty: { toNumber: () => 0 } },
+      ]);
+      prisma.materialYieldIssue.create.mockResolvedValue(issueRow);
+
+      await expect(service.create('1', dto, 'user-1', null)).resolves.toBeDefined();
     });
 
     it('ném BadRequestException khi material chưa gán warehouseId', async () => {

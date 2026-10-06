@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
 import { CuttingProposalsModule } from '../cutting-proposals/cutting-proposals.module';
+import { MaterialYieldRecipesModule } from '../material-yield-recipes/material-yield-recipes.module';
 import { ProductionBatchesModule } from '../production-batches/production-batches.module';
 import { ProductionOrdersModule } from '../production-orders/production-orders.module';
 import { StockModule } from '../stock/stock.module';
 import { UploadsModule } from '../uploads/uploads.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
+import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesController } from './production-invoices.controller';
 import { ProductionInvoicesService } from './production-invoices.service';
@@ -15,6 +17,7 @@ import { ProductionInvoicesService } from './production-invoices.service';
     ProductionOrdersModule,
     CuttingProposalsModule,
     ProductionBatchesModule,
+    MaterialYieldRecipesModule,
     UploadsModule,
     StockModule,
     NotificationsModule,
@@ -24,6 +27,7 @@ import { ProductionInvoicesService } from './production-invoices.service';
     ProductionInvoicesService,
     PieceMaterialYieldPurchaseService,
     ConsumableMaterialPurchaseService,
+    MaterialYieldRecipePurchaseService,
   ],
   exports: [ProductionInvoicesService],
 })

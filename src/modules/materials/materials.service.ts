@@ -5,7 +5,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MaterialDetailKind, Prisma, StockLedgerRefType } from '../../generated/prisma/client';
+import {
+  MaterialDetailKind,
+  Prisma,
+  StockLedgerRefType,
+  SteelSubGroup,
+} from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { MATERIAL_CODE_FALLBACK_PREFIX } from '../../common/constants/material-group-code-prefix.constant';
@@ -77,7 +82,8 @@ export class MaterialsService {
     // gọi khi tạo vật tư không chọn nhóm, thêm fetch thứ 2 sẽ vỡ assertion đó.
     const systemKey = await this.resolveGroupSystemKey(materialGroupId);
     const detailKind = this.resolveDetailKind(systemKey, dto.detailKind, null);
-    const wasteFields = this.resolveWasteFields(systemKey, dto);
+    const steelSubGroup = this.resolveSteelSubGroup(systemKey, dto.steelSubGroup, null);
+    const wasteFields = this.resolveWasteFields(systemKey, steelSubGroup, dto);
 
     const existing = await this.prisma.material.findUnique({ where: { code } });
     if (existing) {
@@ -99,6 +105,7 @@ export class MaterialsService {
           spec: dto.spec,
           materialGroupId,
           detailKind,
+          steelSubGroup,
           warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
           buyerId: dto.buyerId || undefined,
           purchaseUnit: dto.purchaseUnit,
@@ -170,6 +177,30 @@ export class MaterialsService {
   }
 
   /**
+   * Nhóm con của Sắt (2026-10-01, xem enum SteelSubGroup) - mirror resolveDetailKind: bắt buộc
+   * chọn khi nhóm hiệu lực là STEEL_BAR, LUÔN dọn về null với mọi nhóm khác (kể cả nếu request
+   * có gửi) - tránh rác còn sót khi 1 vật tư từng thuộc Sắt rồi bị đổi sang nhóm khác.
+   */
+  private resolveSteelSubGroup(
+    systemKey: string | null,
+    incomingSteelSubGroup: SteelSubGroup | undefined,
+    previousSteelSubGroup: SteelSubGroup | null,
+  ): SteelSubGroup | null {
+    if (systemKey !== MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR) {
+      return null;
+    }
+
+    const candidate =
+      incomingSteelSubGroup !== undefined ? incomingSteelSubGroup : previousSteelSubGroup;
+    if (!candidate) {
+      throw new BadRequestException(
+        'Vật tư thuộc nhóm "Sắt" phải chọn nhóm con (Phần mềm/Tự tính/Vật tư thành phẩm)',
+      );
+    }
+    return candidate;
+  }
+
+  /**
    * % hao hụt mang 2 NGHĨA NGƯỢC CHIỀU tuỳ nhóm vật tư (xem comment schema.prisma) nên PHẢI
    * tách theo đúng nhóm hiệu lực - mirror resolveDetailKind ở trên, cùng lý do "LUÔN dọn về
    * null kể cả nếu request có gửi": đây là invariant duy nhất chặn % dự trù mua bị nuốt nhầm
@@ -178,22 +209,29 @@ export class MaterialsService {
    * resolveDetailKind vì 2 field này KHÔNG bắt buộc - nhánh "không phải nhóm này" luôn ép
    * null bất kể trước đó là gì, nhánh còn lại truyền thẳng dto (undefined = không đụng lúc
    * PATCH, giữ đúng semantics update() hiện có).
+   *
+   * 2026-10-01: Sắt giờ có 3 nhóm con - CHỈ nhóm con SOFTWARE (Phần mềm, mặc định khi null) mới
+   * null hoá purchaseWastePercentage như hành vi gốc. SELF_CALC/FINISHED_COMPONENT (Tự tính/VTTP)
+   * vẫn là vật tư MUA về như nhóm thường, nên giữ purchaseWastePercentage bình thường.
    */
   private resolveWasteFields(
     systemKey: string | null,
+    steelSubGroup: SteelSubGroup | null,
     dto: { maxCuttingWastePercentage?: number; purchaseWastePercentage?: number },
   ): {
     maxCuttingWastePercentage: number | null | undefined;
     purchaseWastePercentage: number | null | undefined;
   } {
-    const isSteel = systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR;
+    const isSoftwareSteel =
+      systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR &&
+      (steelSubGroup ?? SteelSubGroup.SOFTWARE) === SteelSubGroup.SOFTWARE;
     return {
-      // Sắt (STEEL_BAR) KHÔNG còn nhập % hao hụt (2026-09-30): ngưỡng cắt do KHSX quyết ở "Tối ưu cắt
-      // sắt" (SystemConfig.solverMaxWastePercentage). dto.maxCuttingWastePercentage bị BỎ QUA hoàn toàn
-      // (undefined = không ghi cột) - cột giữ nguyên dữ liệu cũ nhưng không code nào còn đọc.
-      // Nhóm khác vẫn ép null như cũ (invariant: % cắt không lọt sang vật tư không phải Sắt).
-      maxCuttingWastePercentage: isSteel ? undefined : null,
-      purchaseWastePercentage: isSteel ? null : dto.purchaseWastePercentage,
+      // Sắt phần mềm (STEEL_BAR + SOFTWARE) KHÔNG còn nhập % hao hụt (2026-09-30): ngưỡng cắt do
+      // KHSX quyết ở "Tối ưu cắt sắt" (SystemConfig.solverMaxWastePercentage). dto.maxCuttingWastePercentage
+      // bị BỎ QUA hoàn toàn (undefined = không ghi cột) - cột giữ nguyên dữ liệu cũ nhưng không
+      // code nào còn đọc. Nhóm khác (kể cả Tự tính/VTTP) vẫn ép null như cũ.
+      maxCuttingWastePercentage: isSoftwareSteel ? undefined : null,
+      purchaseWastePercentage: isSoftwareSteel ? null : dto.purchaseWastePercentage,
     };
   }
 
@@ -281,7 +319,12 @@ export class MaterialsService {
     // 1 lần fetch group dùng chung - xem comment ở create().
     const systemKey = await this.resolveGroupSystemKey(effectiveGroupId);
     const detailKind = this.resolveDetailKind(systemKey, dto.detailKind, previous.detailKind);
-    const wasteFields = this.resolveWasteFields(systemKey, dto);
+    const steelSubGroup = this.resolveSteelSubGroup(
+      systemKey,
+      dto.steelSubGroup,
+      previous.steelSubGroup,
+    );
+    const wasteFields = this.resolveWasteFields(systemKey, steelSubGroup, dto);
 
     // Đính chính audit độc lập 09/09 (Cao/H1): PHẢI phân biệt "field không có trong body"
     // (undefined - giữ nguyên) với "field có trong body nhưng rỗng/null" (chủ động gỡ gán - ghi
@@ -304,6 +347,7 @@ export class MaterialsService {
               : null
             : undefined,
         detailKind,
+        steelSubGroup,
         warehouseId:
           dto.warehouseId !== undefined
             ? dto.warehouseId
@@ -355,11 +399,11 @@ export class MaterialsService {
     const materials = hasGroup
       ? await this.prisma.material.findMany({
           where: { materialGroupId: parseBigIntId(dto.materialGroupId!) },
-          select: { id: true, materialGroupId: true },
+          select: { id: true, materialGroupId: true, steelSubGroup: true },
         })
       : await this.prisma.material.findMany({
           where: { id: { in: dto.materialIds!.map((id) => parseBigIntId(id)) } },
-          select: { id: true, materialGroupId: true },
+          select: { id: true, materialGroupId: true, steelSubGroup: true },
         });
     if (materials.length === 0) {
       throw new BadRequestException('Không tìm thấy vật tư nào để cập nhật');
@@ -379,12 +423,17 @@ export class MaterialsService {
       const systemKey = m.materialGroupId
         ? (systemKeyByGroupId.get(m.materialGroupId.toString()) ?? null)
         : null;
-      (systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR ? steelIds : otherIds).push(m.id);
+      // 2026-10-01: chỉ nhóm con SOFTWARE (Phần mềm, mặc định khi null) không có % hao hụt để sửa -
+      // SELF_CALC/FINISHED_COMPONENT (Tự tính/VTTP) là vật tư MUA về như nhóm thường, sửa bình thường.
+      const isSoftwareSteel =
+        systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR &&
+        (m.steelSubGroup ?? SteelSubGroup.SOFTWARE) === SteelSubGroup.SOFTWARE;
+      (isSoftwareSteel ? steelIds : otherIds).push(m.id);
     }
 
-    // Sắt KHÔNG còn % hao hụt để sửa (KHSX quyết ngưỡng cắt ở "Tối ưu cắt sắt", 2026-09-30) -> loại
-    // khỏi thao tác hàng loạt. Chọn nguyên nhóm Sắt thì báo rõ thay vì "cập nhật 0 vật tư" khó hiểu;
-    // chọn tay lẫn Sắt thì bỏ qua Sắt và trả số đã bỏ qua (skippedSteel) để FE nói lại cho Admin.
+    // Sắt phần mềm KHÔNG còn % hao hụt để sửa (KHSX quyết ngưỡng cắt ở "Tối ưu cắt sắt", 2026-09-30)
+    // -> loại khỏi thao tác hàng loạt. Chọn nguyên nhóm Sắt thì báo rõ thay vì "cập nhật 0 vật tư" khó
+    // hiểu; chọn tay lẫn Sắt phần mềm thì bỏ qua và trả số đã bỏ qua (skippedSteel) để FE nói lại.
     if (otherIds.length === 0) {
       throw new BadRequestException(
         'Vật tư nhóm Sắt không có % hao hụt để sửa - ngưỡng hao hụt cắt do KHSX quyết định ở màn "Tối ưu cắt sắt"',
@@ -603,6 +652,7 @@ export class MaterialsService {
       materialGroupId: material.materialGroupId?.toString() ?? null,
       materialGroupName: material.materialGroup?.name ?? null,
       detailKind: material.detailKind ?? null,
+      steelSubGroup: material.steelSubGroup ?? null,
       warehouseId: material.warehouseId?.toString() ?? null,
       warehouseCode: material.warehouse?.code ?? null,
       warehouseName: material.warehouse?.name ?? null,

@@ -32,6 +32,9 @@ export class QcReviewResponseDto {
   /** Đợt gửi KCS theo công đoạn (VTTP, 2026-09-07, xem PieceStepBundle) - null với mọi nhánh
    *  khác. */
   @Expose() @ApiPropertyOptional({ nullable: true }) pieceStepBundleId!: string | null;
+  /** Đợt gửi KCS theo công đoạn cho vật tư KHÔNG gắn piece (2026-10-01, vd chân nhôm, xem
+   *  MaterialYieldStepBundle) - null với mọi nhánh khác. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) materialYieldStepBundleId!: string | null;
   /** Tổng dẫn xuất từ segments[] cho nhánh Phôi (xem QcReview doc comment) - nhánh Hàn/Sơn vẫn là
    *  số gốc người dùng nhập (segments luôn rỗng ở nhánh đó). BẤT BIẾN mọi nhánh - số lịch sử cộng
    *  dồn, không tự giảm (xem changelog "Bù đủ dồn về bảng tổng"). */

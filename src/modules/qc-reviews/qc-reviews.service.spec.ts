@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchStatus, SteelIssueStatus } from '../../generated/prisma/client';
+import { MaterialYieldRecipeProductionService } from '../material-yield-recipes/material-yield-recipe-production.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
@@ -48,6 +49,10 @@ describe('QcReviewsService', () => {
     findOneRowOrThrow: jest.Mock;
     findOnePieceStepBundleRowOrThrow: jest.Mock;
     autoFinalizePieceOutputIfLastStepComplete: jest.Mock;
+  };
+  let materialYieldRecipeProductionService: {
+    findOneBundleRowOrThrow: jest.Mock;
+    finalizeRecipeOutputIfLastStepComplete: jest.Mock;
   };
   let cloudinaryService: { deleteByUrl: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
@@ -222,10 +227,15 @@ describe('QcReviewsService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    materialYieldRecipeProductionService = {
+      findOneBundleRowOrThrow: jest.fn(),
+      finalizeRecipeOutputIfLastStepComplete: jest.fn().mockResolvedValue(undefined),
+    };
     service = new QcReviewsService(
       prisma as unknown as PrismaServiceType,
       steelIssuesService as unknown as SteelIssuesService,
       productionBatchesService as unknown as ProductionBatchesService,
+      materialYieldRecipeProductionService as unknown as MaterialYieldRecipeProductionService,
       cloudinaryService as unknown as CloudinaryService,
       notificationsService as unknown as NotificationsService,
     );

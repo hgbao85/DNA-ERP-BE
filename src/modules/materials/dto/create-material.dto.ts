@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNumber, IsOptional, Max, Min } from 'class-validator';
-import { MaterialDetailKind } from '../../../generated/prisma/client';
+import { MaterialDetailKind, SteelSubGroup } from '../../../generated/prisma/client';
 
 /**
  * Không validate gì thật ở đây (theo yêu cầu) - `@IsOptional()` KHÔNG kiểm tra kiểu/độ dài/
@@ -48,6 +48,14 @@ export class CreateMaterialDto {
   })
   @IsOptional()
   detailKind?: MaterialDetailKind;
+
+  @ApiPropertyOptional({
+    enum: SteelSubGroup,
+    description:
+      'Nhóm con của Sắt (SOFTWARE/SELF_CALC/FINISHED_COMPONENT) - bắt buộc khi materialGroupId thuộc nhóm systemKey STEEL_BAR, bị bỏ qua (ghi null) với mọi nhóm khác. Xem MaterialsService.resolveSteelSubGroup.',
+  })
+  @IsOptional()
+  steelSubGroup?: SteelSubGroup;
 
   @ApiPropertyOptional({
     description:
@@ -102,7 +110,7 @@ export class CreateMaterialDto {
 
   @ApiPropertyOptional({
     description:
-      'CHỈ áp dụng cho vật tư KHÔNG thuộc nhóm Sắt - % dự trù cộng thêm vào số lượng đề xuất mua (chưa nối vào luồng đề xuất mua nào, field sẵn sàng chờ luồng đó). Bị bỏ qua (ghi null) với vật tư Sắt.',
+      '% dự trù cộng thêm vào số lượng đề xuất mua (chưa nối vào luồng đề xuất mua nào, field sẵn sàng chờ luồng đó). Bị bỏ qua (ghi null) với vật tư Sắt nhóm con SOFTWARE (Phần mềm) - vẫn áp dụng bình thường cho Tự tính/VTTP và mọi nhóm khác, xem MaterialsService.resolveWasteFields.',
   })
   @IsOptional()
   @IsNumber()

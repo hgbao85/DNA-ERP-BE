@@ -86,6 +86,18 @@ export class QcReviewsController {
     return this.qcReviewsService.reviewPieceStep(id, dto, userId);
   }
 
+  // Vật tư thành phẩm KHÔNG gắn piece (2026-10-01, vd chân nhôm) - cùng pattern ở trên.
+  @Post('material-yield-step-bundles/:id/qc-review')
+  @RequirePermissions(CREATE)
+  @RequireMfgRole(MfgRole.KCS)
+  reviewMaterialYieldStep(
+    @Param('id') id: string,
+    @Body() dto: CreateQcReviewDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.qcReviewsService.reviewMaterialYieldStep(id, dto, userId);
+  }
+
   @Get('qc-reviews')
   @RequirePermissions(VIEW)
   findAll(@Query() query: ListQcReviewsQueryDto) {

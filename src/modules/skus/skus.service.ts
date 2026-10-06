@@ -18,6 +18,7 @@ import {
   Prisma,
   ProcessStep,
   ReviewDecision,
+  SteelSubGroup,
 } from '../../generated/prisma/client';
 import {
   MATERIAL_GROUP_SYSTEM_KEYS,
@@ -828,6 +829,7 @@ export class SkusService {
         code: string;
         materialGroupId: bigint | null;
         detailKind: MaterialDetailKind | null;
+        steelSubGroup: SteelSubGroup | null;
       }
     >
   > {
@@ -858,15 +860,28 @@ export class SkusService {
   }
 
   /** resolve-or-create SegmentSpec theo (materialId, cutLengthMm) - material phải thuộc
-   *  nhóm vật tư Sắt (steelGroupId, xem resolveSystemGroupId). Nhận `material` đã fetch sẵn
-   *  (xem fetchMaterialsOrThrow) thay vì tự findUnique - tránh N round-trip khi có nhiều segment. */
+   *  nhóm vật tư Sắt (steelGroupId, xem resolveSystemGroupId) VÀ nhóm con SOFTWARE (2026-10-01 -
+   *  SegmentSpec/PieceBom là đoạn cắt qua solver bin-packing, chỉ nhóm con này mới dùng cơ chế
+   *  đó, xem enum SteelSubGroup). Nhận `material` đã fetch sẵn (xem fetchMaterialsOrThrow) thay vì
+   *  tự findUnique - tránh N round-trip khi có nhiều segment. */
   private async resolveOrCreateSegmentSpec(
     tx: PrismaTx,
-    material: { id: bigint; code: string; materialGroupId: bigint | null },
+    material: {
+      id: bigint;
+      code: string;
+      materialGroupId: bigint | null;
+      steelSubGroup: SteelSubGroup | null;
+    },
     cutLengthMm: number,
     steelGroupId: bigint,
   ): Promise<{ id: bigint }> {
-    await this.assertOrAssignMaterialGroup(tx, material, steelGroupId, 'Sắt');
+    await this.assertOrAssignSteelSubGroup(
+      tx,
+      material,
+      steelGroupId,
+      SteelSubGroup.SOFTWARE,
+      'Sắt (Phần mềm - đoạn cắt qua solver)',
+    );
     return tx.segmentSpec.upsert({
       where: { materialId_cutLengthMm: { materialId: material.id, cutLengthMm } },
       create: { materialId: material.id, cutLengthMm },
@@ -925,13 +940,45 @@ export class SkusService {
     }
   }
 
-  /** Id nhóm vật tư hệ thống ứng với 1 `PieceMaterialLineDto.group` (WIRE/NAIL/RIVET/PLASTIC_BUTTON). */
+  /** Id nhóm vật tư hệ thống ứng với 1 `PieceMaterialLineDto.group` (WIRE/NAIL/RIVET/PLASTIC_BUTTON).
+   *  KHÔNG gọi cho group=FINISHED_COMPONENT (Vật tư thành phẩm Sắt) - nhóm đó KHÔNG có systemKey
+   *  riêng (nằm lồng trong Sắt qua Material.steelSubGroup), xem assertOrAssignSteelSubGroup. */
   private async resolvePieceMaterialLineGroupId(
     tx: PrismaTx,
-    group: QuotaPieceMaterialLineDto['group'],
+    group: Exclude<QuotaPieceMaterialLineDto['group'], 'FINISHED_COMPONENT'>,
   ): Promise<bigint> {
     const systemKey = MATERIAL_GROUP_SYSTEM_KEYS[group];
     return this.resolveSystemGroupId(tx, systemKey);
+  }
+
+  /**
+   * resolve-or-assign CẢ materialGroupId (Sắt) LẪN steelSubGroup cho material dùng ở 1 trong 3
+   * nhánh nằm trong nhóm Sắt (segments=SOFTWARE, materialYields=SELF_CALC, materialLines group
+   * FINISHED_COMPONENT=FINISHED_COMPONENT) - mirror assertOrAssignMaterialGroup (lần dùng đầu
+   * tiên thì tự gán, đã gán nhóm con khác thì từ chối rõ ràng thay vì âm thầm lẫn lộn 3 nhóm con
+   * có hành vi hoàn toàn khác nhau - xem enum SteelSubGroup).
+   */
+  private async assertOrAssignSteelSubGroup(
+    tx: PrismaTx,
+    material: {
+      id: bigint;
+      code: string;
+      materialGroupId: bigint | null;
+      steelSubGroup: SteelSubGroup | null;
+    },
+    steelGroupId: bigint,
+    expected: SteelSubGroup,
+    label: string,
+  ): Promise<void> {
+    await this.assertOrAssignMaterialGroup(tx, material, steelGroupId, 'Sắt');
+    const current = material.steelSubGroup ?? null;
+    if (current == null) {
+      await tx.material.update({ where: { id: material.id }, data: { steelSubGroup: expected } });
+    } else if (current !== expected) {
+      throw new BadRequestException(
+        `Material "${material.code}" đã thuộc nhóm con Sắt khác - không thể dùng cho ${label}. Vào Admin > Vật tư kiểm tra lại "Nhóm con Sắt" của vật tư này.`,
+      );
+    }
   }
 
   /**
@@ -1050,8 +1097,21 @@ export class SkusService {
       for (const line of p.materialLines ?? []) {
         const materialId = parseBigIntId(line.materialId);
         const material = materialsById.get(materialId.toString())!;
-        const materialGroupId = await this.resolvePieceMaterialLineGroupId(tx, line.group);
-        await this.assertOrAssignMaterialGroup(tx, material, materialGroupId, line.group);
+        // Vật tư thành phẩm (2026-10-01) KHÔNG có MaterialGroup riêng (nằm lồng trong Sắt qua
+        // steelSubGroup=FINISHED_COMPONENT) - khác 4 nhóm WIRE/NAIL/RIVET/PLASTIC_BUTTON đều có
+        // systemKey riêng (resolvePieceMaterialLineGroupId).
+        if (line.group === 'FINISHED_COMPONENT') {
+          await this.assertOrAssignSteelSubGroup(
+            tx,
+            material,
+            steelGroupId,
+            SteelSubGroup.FINISHED_COMPONENT,
+            'Sắt (Vật tư thành phẩm)',
+          );
+        } else {
+          const materialGroupId = await this.resolvePieceMaterialLineGroupId(tx, line.group);
+          await this.assertOrAssignMaterialGroup(tx, material, materialGroupId, line.group);
+        }
         pieceMaterialRows.push({
           bomRevisionId,
           mfgProductId,
@@ -1060,15 +1120,28 @@ export class SkusService {
           qtyPerPiece: line.qtyPerPiece,
           note: line.note ?? null,
           photoUrl: line.photoUrl ?? null,
-          // Ép về false với mọi nhóm khác Nút nhựa - checkbox "đi kèm xuất đan" chỉ có ở UI của
-          // nhóm PLASTIC_BUTTON, không tin field FE gửi lên cho Dây/Đinh/Tán rút dù client cũ/lạ
-          // có lỡ gửi kèm.
+          // Ép về false với mọi nhóm khác Nút nhựa/Vật tư thành phẩm - checkbox "đi kèm xuất đan"
+          // chỉ có ở UI của 2 nhóm đó, không tin field FE gửi lên cho Dây/Đinh/Tán rút dù client
+          // cũ/lạ có lỡ gửi kèm.
           includeInWeaving:
-            line.group === 'PLASTIC_BUTTON' ? (line.includeInWeaving ?? false) : false,
+            line.group === 'PLASTIC_BUTTON' || line.group === 'FINISHED_COMPONENT'
+              ? (line.includeInWeaving ?? false)
+              : false,
         });
       }
       for (const y of p.materialYields ?? []) {
         const materialId = parseBigIntId(y.materialId);
+        const material = materialsById.get(materialId.toString())!;
+        // 2026-10-01: PieceMaterialYield là cơ chế "tỷ lệ cắt cố định" của nhóm con Tự tính
+        // (SELF_CALC, vd sắt lá -> Pat) - trước đây không ràng buộc nhóm vật tư gì cả (comment cũ
+        // ở QuotaPieceMaterialYieldDto), nay chặn nhầm nhóm con Phần mềm/Vật tư thành phẩm.
+        await this.assertOrAssignSteelSubGroup(
+          tx,
+          material,
+          steelGroupId,
+          SteelSubGroup.SELF_CALC,
+          'Sắt (Tự tính - tỷ lệ cắt cố định)',
+        );
         pieceMaterialYieldRows.push({
           bomRevisionId,
           mfgProductId,
@@ -1401,6 +1474,7 @@ export class SkusService {
       const nailGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.NAIL);
       const rivetGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.RIVET);
       const plasticButtonGroupId = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.PLASTIC_BUTTON);
+      const steelGroupIdForRead = groupIdByKey.get(MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR);
 
       // Mảnh giờ chứa cả 5 nhóm vật tư: steel (segments, phân cấp đoạn cắt - PieceBom/
       // SegmentSpec) và wire/nail/rivet/plasticButton (phẳng theo mảnh - PieceMaterialItem),
@@ -1445,6 +1519,16 @@ export class SkusService {
             .filter(
               (r) =>
                 plasticButtonGroupId != null && r.material.materialGroupId === plasticButtonGroupId,
+            )
+            .map(toPieceMaterialLine),
+          // Vật tư thành phẩm (2026-10-01, vd chân nhôm) - nhóm con FINISHED_COMPONENT của Sắt,
+          // KHÔNG có materialGroupId riêng như wire/nail/rivet/plasticButton ở trên.
+          finishedComponent: lineItems
+            .filter(
+              (r) =>
+                steelGroupIdForRead != null &&
+                r.material.materialGroupId === steelGroupIdForRead &&
+                r.material.steelSubGroup === SteelSubGroup.FINISHED_COMPONENT,
             )
             .map(toPieceMaterialLine),
           materialYields: (

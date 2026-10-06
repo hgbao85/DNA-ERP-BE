@@ -198,6 +198,57 @@ describe('PieceMaterialYieldPurchaseService', () => {
     });
   });
 
+  // 2026-10-03: 1 piece giờ được phép có NHIỀU dòng PieceMaterialYield (khác material) - đảo ngược
+  // ràng buộc "luôn đúng 1 material/piece" (2026-08-22). vd "Pat" vừa cần Tấm sắt la vừa cần Sắt phi.
+  it('piece có 2 dòng Tự tính (2 material khác nhau) - cả 2 ĐỀU tính đủ net shortfall, không chia đôi', async () => {
+    const tamSatLa = { id: 81n, code: 'SAT-014', warehouse: { id: 95n, code: 'kho-nhom' } };
+    const satPhi = { id: 82n, code: 'SAT-001', warehouse: { id: 95n, code: 'kho-nhom' } };
+    // required = qtyPerUnit(1) × quantity(100) = 100 piece. onHand pool = 20 -> net = 80 còn thiếu.
+    productionBatchesService.getReadyPoolQty.mockResolvedValue(new Map([['40', 20]]));
+    prisma.pieceMaterialYield.findMany.mockResolvedValue([
+      {
+        bomRevisionId: 5n,
+        pieceId: chanNhom.id,
+        materialId: tamSatLa.id,
+        piecesPerBar: 10, // 80 × 1 / 10 = 8 cây
+        qtyPerPiece: 1,
+        material: tamSatLa,
+      },
+      {
+        bomRevisionId: 5n,
+        pieceId: chanNhom.id,
+        materialId: satPhi.id,
+        piecesPerBar: 4, // 80 × 1 / 4 = 20 cây
+        qtyPerPiece: 1,
+        material: satPhi,
+      },
+    ]);
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result).toHaveLength(2);
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        materialId: '81',
+        materialCode: 'SAT-014',
+        barsNeeded: 8,
+        requiredPieces: 100,
+        onHandPieces: 20,
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        materialId: '82',
+        materialCode: 'SAT-001',
+        barsNeeded: 20,
+        requiredPieces: 100,
+        onHandPieces: 20,
+      }),
+    );
+    // CẢ 2 material đều nằm trong CÙNG 1 PurchaseProposal (gộp theo PI, không vỡ thành 2 bản).
+    expect(prisma.purchaseProposal.create).toHaveBeenCalledTimes(1);
+  });
+
   // Phase 3a, mục 7.4 changelog 2026-09-25/26 - notifyPurchaseProposalCreated() (util dùng chung,
   // best-effort) đọc lại proposal SAU KHI computeAndUpsertProposals() đã commit.
   it('emit PURCHASE_PROPOSAL_CREATED sau khi tạo/gộp xong, khi rollup còn cần Mua hàng xử lý', async () => {
