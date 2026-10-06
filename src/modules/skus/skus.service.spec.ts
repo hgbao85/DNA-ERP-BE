@@ -1607,4 +1607,37 @@ describe('SkusService', () => {
       expect(result.status).toBe('APPROVED');
     });
   });
+
+  describe('isPieceWoven (2026-10-06 - B2 E2E)', () => {
+    const isPieceWoven = (p: {
+      materialLines: { group: string; materialId: string; qtyPerPiece: number }[];
+    }): boolean =>
+      (service as unknown as { isPieceWoven(q: unknown): boolean }).isPieceWoven({
+        name: 'M',
+        qtyPerUnit: 1,
+        segments: [],
+        ...p,
+      });
+    const line = (group: string, qtyPerPiece: number) => ({
+      group,
+      materialId: '1',
+      qtyPerPiece,
+    });
+
+    it('mảnh có Dây và Đinh đều qty > 0 là có đan', () => {
+      expect(isPieceWoven({ materialLines: [line('WIRE', 0.5), line('NAIL', 2)] })).toBe(true);
+    });
+
+    it('Dây qty 0 không được tính là có đan dù đã khai báo dòng', () => {
+      expect(isPieceWoven({ materialLines: [line('WIRE', 0), line('NAIL', 2)] })).toBe(false);
+    });
+
+    it('Đinh qty 0 không được tính là có đan dù đã khai báo dòng', () => {
+      expect(isPieceWoven({ materialLines: [line('WIRE', 0.5), line('NAIL', 0)] })).toBe(false);
+    });
+
+    it('mảnh không có Dây/Đinh (vd Pat) không đan', () => {
+      expect(isPieceWoven({ materialLines: [] })).toBe(false);
+    });
+  });
 });

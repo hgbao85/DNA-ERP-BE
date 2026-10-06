@@ -1178,7 +1178,9 @@ export class SkusService {
    *  (ghi theo đúng bomRevisionId ở bomPieceRows trên) - weaving-issues module đọc từ đó, không đọc
    *  field này. */
   private isPieceWoven(p: QuotaPieceDto): boolean {
-    const lines = p.materialLines ?? [];
+    // Chỉ tính dòng có qtyPerPiece > 0 (2026-10-06, E2E): dòng Dây/Đinh qty 0 không tiêu hao gì,
+    // không được làm mảnh thành "có đan" dù đã khai báo dòng.
+    const lines = (p.materialLines ?? []).filter((l) => l.qtyPerPiece > 0);
     return lines.some((l) => l.group === 'WIRE') && lines.some((l) => l.group === 'NAIL');
   }
 
