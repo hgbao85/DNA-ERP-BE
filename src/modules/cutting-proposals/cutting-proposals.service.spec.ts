@@ -1681,6 +1681,26 @@ describe('CuttingProposalsService', () => {
       await expect(service.approve('999', 'user-1')).rejects.toThrow(NotFoundException);
     });
 
+    // 2026-10-06 (E2E): approve() trước đây không kiểm hasInfeasibleLine nên duyệt được phương án còn
+    // loại sắt không có cách cắt - loại đó biến mất khỏi kế hoạch xuất sắt không cảnh báo.
+    it('chặn duyệt khi có loại sắt không có cách cắt nào (hasInfeasibleLine) - không ghi gì cả', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 12n,
+        productionOrderId: 7n,
+        status: CuttingProposalStatus.DRAFT,
+        hasInfeasibleLine: true,
+        lines: [
+          { materialId: 109n, feasible: false, totalBars: null, bestStockLengthMm: null },
+          { materialId: 33n, feasible: true, totalBars: 1, bestStockLengthMm: 5030 },
+        ],
+        items: [],
+      });
+
+      await expect(service.approve('12', 'qlsx-user')).rejects.toThrow(ConflictException);
+      expect(prisma.cuttingProposal.update).not.toHaveBeenCalled();
+      expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+    });
+
     // L7 (2026-08-26): autoApproveBlockReason() chỉ đứng gác nhánh TỰ động duyệt (xem docstring)
     // - đường thủ công POST /cutting-proposals/:id/approve gọi thẳng approve() và KHÔNG đi qua
     // cổng đó. Không kiểm lại ở đây thì ai gọi trực tiếp endpoint này (vd nút "Tính lại" cho phương

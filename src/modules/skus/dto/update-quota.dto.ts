@@ -7,6 +7,7 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
   Min,
   MinLength,
@@ -81,7 +82,7 @@ export class QuotaPieceMaterialLineDto {
 
   @ApiProperty()
   @IsNumber()
-  @Min(0)
+  @IsPositive()
   qtyPerPiece!: number;
 
   @ApiPropertyOptional()
@@ -208,7 +209,7 @@ export class QuotaMaterialLineDto {
 
   @ApiProperty()
   @IsNumber()
-  @Min(0)
+  @IsPositive()
   qtyPerUnit!: number;
 }
 
@@ -229,7 +230,7 @@ export class QuotaDetailLineDto {
 
   @ApiProperty()
   @IsNumber()
-  @Min(0)
+  @IsPositive()
   qtyPerUnit!: number;
 }
 

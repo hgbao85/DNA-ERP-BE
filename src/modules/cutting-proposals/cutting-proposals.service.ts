@@ -1556,6 +1556,16 @@ export class CuttingProposalsService {
         `Cutting proposal ${id} ở trạng thái ${proposal.status} - chỉ DRAFT mới duyệt được`,
       );
     }
+    // Cùng quy tắc với autoApproveBlockReason()/computeDisplayStatus() (2026-10-06, E2E): có loại sắt
+    // KHÔNG có phương án cắt nào thì KHÔNG được duyệt tay. Trước đây approve() không kiểm tra cờ này nên
+    // duyệt được và loại sắt đó biến mất khỏi kế hoạch xuất sắt mà không có cảnh báo nào.
+    if (proposal.hasInfeasibleLine) {
+      throw new ConflictException(
+        `Phương án ${id} có loại sắt không có cách cắt nào đạt ngưỡng hao hụt - không duyệt được. ` +
+          'Chọn chế độ “Chấp nhận hao hụt cao hơn” (Sếp duyệt riêng) hoặc gộp thêm SKU dùng chung loại sắt, rồi tính lại.',
+      );
+    }
+
     // Phương án TÍNH TRƯỚC PI (luồng "Solve trước → tạo PI", 2026-09-30) chỉ được duyệt khi đã gắn
     // PI VÀ Sếp đã duyệt PI (mọi SKU đã có lệnh sản xuất): approve() giữ chỗ tồn + tạo đề xuất mua
     // + chốt quyền phủ theo từng lệnh sản xuất - duyệt sớm hơn thì các bước đó chạy trên nhu cầu
