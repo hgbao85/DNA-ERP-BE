@@ -38,6 +38,15 @@ import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
 import { ListPieceStepBundlesQueryDto } from './dto/list-piece-step-bundles-query.dto';
 import { ListProductionBatchesQueryDto } from './dto/list-production-batches-query.dto';
 import { PieceStepBatchResponseDto } from './dto/piece-step-batch-response.dto';
+import { ProductionBatchMaterialYieldItemResponseDto } from './dto/production-batch-material-yield-item-response.dto';
+
+/** Đơn vị tính vật tư thành phẩm không gắn mảnh: đủ trường để tính nhu cầu và phân bổ theo PI. */
+interface MaterialYieldPlanOrder {
+  id: bigint;
+  bomRevisionId: bigint;
+  quantity: number;
+  productionInvoiceId: bigint | null;
+}
 import { PieceStepBundleResponseDto } from './dto/piece-step-bundle-response.dto';
 import { PieceStepProgressDto } from './dto/piece-step-progress.dto';
 import { ProductionBatchPlanItemResponseDto } from './dto/production-batch-plan-item-response.dto';
@@ -283,7 +292,40 @@ export class ProductionBatchesService {
       });
     });
 
-    return this.toResponseDto(updated);
+    // Cảnh báo KHÔNG chặn (quyết định 2026-10-06, test lần 8: Sơn Mê ngồi báo 240 trên nhu cầu 120
+    // và KCS duyệt cả 240 mà không thấy): tổng đã báo (mọi trạng thái) vượt Σ nhu cầu của SKU.
+    const response = this.toResponseDto(updated);
+    response.overPlanWarning = await this.buildOverPlanWarning(
+      order.id,
+      order.bomRevisionId,
+      order.quantity,
+      pieceBigId,
+      dto.stage,
+    );
+    return response;
+  }
+
+  /** Cảnh báo báo vượt nhu cầu (null = trong định mức). Chỉ đọc, không chặn. */
+  private async buildOverPlanWarning(
+    orderId: bigint,
+    bomRevisionId: bigint,
+    orderQuantity: number,
+    pieceId: bigint,
+    stage: MfgStage,
+  ): Promise<string | null> {
+    const bomPiece = await this.prisma.bomPiece.findFirst({
+      where: { bomRevisionId, pieceId },
+      select: { qtyPerUnit: true },
+    });
+    const planned = (bomPiece?.qtyPerUnit ?? 0) * orderQuantity;
+    if (planned <= 0) return null;
+    const agg = await this.prisma.productionBatch.aggregate({
+      where: { productionOrderId: orderId, pieceId, stage },
+      _sum: { reportedQty: true },
+    });
+    const reported = agg._sum.reportedQty ?? 0;
+    if (reported <= planned) return null;
+    return `Tổng đã báo ${reported} vượt nhu cầu ${planned} (${stage}). Kiểm tra lại số lượng trước khi KCS duyệt.`;
   }
 
   /**
@@ -900,13 +942,195 @@ export class ProductionBatchesService {
       });
     });
 
+    const materialYieldItems =
+      stage === MfgStage.PHOI
+        ? ((await this.getMaterialYieldPlanBatch([this.toMaterialYieldOrder(order)])).get(
+            order.id.toString(),
+          ) ?? [])
+        : [];
+
     return new ProductionBatchPlanResponseDto({
       poNumber: order.poNumber,
       salesOrderCode: order.productionInvoiceItem.salesOrder?.orderCode ?? null,
       productName: order.mfgProduct.name,
       quantity: order.quantity,
       items,
+      materialYieldItems,
     });
+  }
+
+  private toMaterialYieldOrder(order: {
+    id: bigint;
+    bomRevisionId: bigint;
+    quantity: number;
+    productionInvoiceItem: { productionInvoiceId: bigint | null };
+  }): MaterialYieldPlanOrder {
+    return {
+      id: order.id,
+      bomRevisionId: order.bomRevisionId,
+      quantity: order.quantity,
+      productionInvoiceId: order.productionInvoiceItem.productionInvoiceId,
+    };
+  }
+
+  /**
+   * Vật tư thành phẩm KHÔNG gắn mảnh (vd chân nhôm, MaterialYieldRecipe) cho stage PHOI. Nhu cầu của
+   * từng SKU = Σ (BomPiece.qtyPerUnit × PieceMaterialItem.qtyPerPiece × SL SKU) với các dòng
+   * FINISHED_COMPONENT đã tick includeInWeaving. Tiến độ lấy theo PI từ đợt KCS CÔNG ĐOẠN CUỐI của
+   * recipe (đã cộng vào tồn qua StockLedger MATERIAL_YIELD_RECIPE_OUTPUT, refId = id đợt) và phân bổ
+   * cho từng SKU theo tỷ lệ nhu cầu trong cùng PI. PI có 1 SKU thì phân bổ = toàn bộ.
+   */
+  private async getMaterialYieldPlanBatch(
+    orders: MaterialYieldPlanOrder[],
+  ): Promise<Map<string, ProductionBatchMaterialYieldItemResponseDto[]>> {
+    const result = new Map<string, ProductionBatchMaterialYieldItemResponseDto[]>();
+    const withPi = orders.filter(
+      (o): o is MaterialYieldPlanOrder & { productionInvoiceId: bigint } =>
+        o.productionInvoiceId !== null,
+    );
+    if (withPi.length === 0) return result;
+
+    const piIds = [...new Set(withPi.map((o) => o.productionInvoiceId))];
+    const piOrders = await this.prisma.productionOrder.findMany({
+      where: { productionInvoiceItem: { productionInvoiceId: { in: piIds } } },
+      select: {
+        id: true,
+        bomRevisionId: true,
+        quantity: true,
+        productionInvoiceItem: { select: { productionInvoiceId: true } },
+      },
+    });
+    const recipes = await this.prisma.materialYieldRecipe.findMany({
+      where: { isActive: true },
+      include: { outputMaterial: { select: { id: true, code: true, name: true, spec: true } } },
+    });
+    if (recipes.length === 0) return result;
+
+    const revisionIds = [...new Set(piOrders.map((o) => o.bomRevisionId))];
+    const outputMaterialIds = recipes.map((r) => r.outputMaterialId);
+    const [lines, bomPieces] = await Promise.all([
+      this.prisma.pieceMaterialItem.findMany({
+        where: {
+          bomRevisionId: { in: revisionIds },
+          materialId: { in: outputMaterialIds },
+          includeInWeaving: true,
+        },
+        select: { bomRevisionId: true, pieceId: true, materialId: true, qtyPerPiece: true },
+      }),
+      this.prisma.bomPiece.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        select: { bomRevisionId: true, pieceId: true, qtyPerUnit: true },
+      }),
+    ]);
+    if (lines.length === 0) return result;
+
+    const qtyPerUnitByRevPiece = new Map(
+      bomPieces.map((bp) => [`${bp.bomRevisionId}:${bp.pieceId}`, bp.qtyPerUnit]),
+    );
+    // Định mức vật tư ra / 1 đơn vị SKU, key `${revisionId}:${materialId}`
+    const perUnitByRevMaterial = new Map<string, number>();
+    for (const line of lines) {
+      const qtyPerUnit = qtyPerUnitByRevPiece.get(`${line.bomRevisionId}:${line.pieceId}`);
+      if (qtyPerUnit == null) continue;
+      const key = `${line.bomRevisionId}:${line.materialId}`;
+      perUnitByRevMaterial.set(
+        key,
+        (perUnitByRevMaterial.get(key) ?? 0) + qtyPerUnit * line.qtyPerPiece.toNumber(),
+      );
+    }
+    const requiredOf = (revisionId: bigint, quantity: number, materialId: bigint): number =>
+      (perUnitByRevMaterial.get(`${revisionId}:${materialId}`) ?? 0) * quantity;
+
+    // Tiến độ PI: chỉ đợt của CÔNG ĐOẠN CUỐI (theo processSteps đã sắp xếp của recipe) mới cộng tồn.
+    const lastStepByRecipe = new Map(
+      recipes.map((r) => {
+        const sorted = sortProcessSteps(r.processSteps);
+        return [r.id.toString(), sorted[sorted.length - 1]];
+      }),
+    );
+    const bundles = await this.prisma.materialYieldStepBundle.findMany({
+      where: { productionInvoiceId: { in: piIds }, recipeId: { in: recipes.map((r) => r.id) } },
+      select: {
+        id: true,
+        productionInvoiceId: true,
+        recipeId: true,
+        step: true,
+        qty: true,
+        status: true,
+        submittedAt: true,
+      },
+    });
+    const finalBundles = bundles.filter(
+      (b) => b.step === lastStepByRecipe.get(b.recipeId.toString()),
+    );
+    const passedRows = finalBundles.length
+      ? await this.prisma.stockLedger.findMany({
+          where: {
+            refType: StockLedgerRefType.MATERIAL_YIELD_RECIPE_OUTPUT,
+            refId: { in: finalBundles.map((b) => b.id.toString()) },
+          },
+          select: { refId: true, qty: true },
+        })
+      : [];
+    const passedByBundle = new Map(passedRows.map((r) => [r.refId ?? '', r.qty.toNumber()]));
+    const piProgressKey = (piId: bigint, recipeId: bigint) => `${piId}:${recipeId}`;
+    const passedByPi = new Map<string, number>();
+    const awaitingByPi = new Map<string, number>();
+    // Mốc cập nhật gần nhất của khối vật tư (đợt KCS công đoạn cuối mới nhất của PI/recipe).
+    const lastUpdatedByPi = new Map<string, Date>();
+    for (const b of finalBundles) {
+      const key = piProgressKey(b.productionInvoiceId, b.recipeId);
+      const prev = lastUpdatedByPi.get(key);
+      if (!prev || b.submittedAt > prev) lastUpdatedByPi.set(key, b.submittedAt);
+    }
+    for (const b of finalBundles) {
+      const key = piProgressKey(b.productionInvoiceId, b.recipeId);
+      if (b.status === PieceStepBundleStatus.AWAITING_QC) {
+        awaitingByPi.set(key, (awaitingByPi.get(key) ?? 0) + b.qty);
+      } else {
+        passedByPi.set(
+          key,
+          (passedByPi.get(key) ?? 0) + (passedByBundle.get(b.id.toString()) ?? 0),
+        );
+      }
+    }
+
+    // Tổng nhu cầu PI (mọi SKU trong PI, không chỉ các SKU đang xem) để phân bổ đúng tỷ lệ.
+    const requiredByPi = new Map<string, number>();
+    for (const o of piOrders) {
+      const piId = o.productionInvoiceItem.productionInvoiceId;
+      if (piId === null) continue;
+      for (const recipe of recipes) {
+        const key = piProgressKey(piId, recipe.id);
+        const req = requiredOf(o.bomRevisionId, o.quantity, recipe.outputMaterialId);
+        requiredByPi.set(key, (requiredByPi.get(key) ?? 0) + req);
+      }
+    }
+
+    for (const order of withPi) {
+      const items: ProductionBatchMaterialYieldItemResponseDto[] = [];
+      for (const recipe of recipes) {
+        const planned = requiredOf(order.bomRevisionId, order.quantity, recipe.outputMaterialId);
+        if (planned <= 0) continue;
+        const key = piProgressKey(order.productionInvoiceId, recipe.id);
+        const piRequired = requiredByPi.get(key) ?? 0;
+        const share = piRequired > 0 ? planned / piRequired : 0;
+        items.push(
+          new ProductionBatchMaterialYieldItemResponseDto({
+            materialId: recipe.outputMaterialId.toString(),
+            materialCode: recipe.outputMaterial.code,
+            materialName: recipe.outputMaterial.name,
+            materialSpec: recipe.outputMaterial.spec,
+            lastUpdatedAt: lastUpdatedByPi.get(key)?.toISOString() ?? null,
+            plannedQty: planned,
+            awaitingQcQty: Math.round((awaitingByPi.get(key) ?? 0) * share),
+            passedQty: Math.round((passedByPi.get(key) ?? 0) * share),
+          }),
+        );
+      }
+      result.set(order.id.toString(), items);
+    }
+    return result;
   }
 
   /**
@@ -931,10 +1155,16 @@ export class ProductionBatchesService {
       where: { id: { in: orderBigIds } },
       include: {
         mfgProduct: true,
-        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
+        productionInvoiceItem: {
+          select: { productionInvoiceId: true, salesOrder: { select: { orderCode: true } } },
+        },
       },
     });
     const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
+    const materialYieldByOrder =
+      stage === MfgStage.PHOI
+        ? await this.getMaterialYieldPlanBatch(orders.map((o) => this.toMaterialYieldOrder(o)))
+        : new Map<string, ProductionBatchMaterialYieldItemResponseDto[]>();
 
     const [bomPiecesByRevision, extrasByRevision, batches, stepBatchDoneMap, stepBundleMaps] =
       await Promise.all([
@@ -1014,6 +1244,7 @@ export class ProductionBatchesService {
         productName: order.mfgProduct.name,
         quantity: order.quantity,
         items,
+        materialYieldItems: materialYieldByOrder.get(order.id.toString()) ?? [],
       });
     }
     return result;
@@ -1467,7 +1698,9 @@ export class ProductionBatchesService {
       where: { id: bigId },
       include: {
         mfgProduct: true,
-        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
+        productionInvoiceItem: {
+          select: { productionInvoiceId: true, salesOrder: { select: { orderCode: true } } },
+        },
       },
     });
     if (!order) {

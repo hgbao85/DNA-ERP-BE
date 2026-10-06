@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose, Type } from 'class-transformer';
+import { ProductionBatchMaterialYieldItemResponseDto } from './production-batch-material-yield-item-response.dto';
 import { ProductionBatchPlanItemResponseDto } from './production-batch-plan-item-response.dto';
 
 /**
@@ -19,6 +20,11 @@ export class ProductionBatchPlanResponseDto {
   @Type(() => ProductionBatchPlanItemResponseDto)
   @ApiProperty({ type: [ProductionBatchPlanItemResponseDto] })
   items!: ProductionBatchPlanItemResponseDto[];
+  /** Vật tư thành phẩm không gắn mảnh (vd chân nhôm) - chỉ có ở stage PHOI, rỗng ở các stage khác. */
+  @Expose()
+  @Type(() => ProductionBatchMaterialYieldItemResponseDto)
+  @ApiProperty({ type: [ProductionBatchMaterialYieldItemResponseDto] })
+  materialYieldItems: ProductionBatchMaterialYieldItemResponseDto[] = [];
 
   constructor(partial: Partial<ProductionBatchPlanResponseDto>) {
     Object.assign(this, partial);

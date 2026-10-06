@@ -18,6 +18,7 @@ describe('ProductionBatchesService', () => {
       findUnique: jest.Mock;
       findUniqueOrThrow: jest.Mock;
       findFirst: jest.Mock;
+      aggregate: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
       create: jest.Mock;
@@ -26,7 +27,7 @@ describe('ProductionBatchesService', () => {
     };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
-    bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
+    bomPiece: { findUnique: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     pieceMaterialYield: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
     pieceStepBatch: {
@@ -46,6 +47,10 @@ describe('ProductionBatchesService', () => {
     };
     qcReview: { findMany: jest.Mock };
     stockQuant: { findMany: jest.Mock };
+    materialYieldRecipe: { findMany: jest.Mock };
+    pieceMaterialItem: { findMany: jest.Mock };
+    materialYieldStepBundle: { findMany: jest.Mock };
+    stockLedger: { findMany: jest.Mock };
     warehouseTransferPieceItem: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $queryRaw: jest.Mock;
@@ -63,7 +68,7 @@ describe('ProductionBatchesService', () => {
     quantity: 10,
     productionInvoiceItemId: 20n,
     mfgProduct: { name: 'SP-1' },
-    productionInvoiceItem: { salesOrder: { orderCode: 'PO-31' } },
+    productionInvoiceItem: { productionInvoiceId: 500n, salesOrder: { orderCode: 'PO-31' } },
   };
   const piece = { id: 40n, code: 'MANH-TUA', name: 'Mảnh tựa' };
   const bomPieceRow = {
@@ -99,6 +104,7 @@ describe('ProductionBatchesService', () => {
         findUnique: jest.fn(),
         findUniqueOrThrow: jest.fn(),
         findFirst: jest.fn().mockResolvedValue(null),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { reportedQty: null } }),
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
         create: jest.fn(),
@@ -124,6 +130,7 @@ describe('ProductionBatchesService', () => {
       bomPiece: {
         findUnique: jest.fn().mockResolvedValue(bomPieceRow),
         findMany: jest.fn().mockResolvedValue([{ ...bomPieceRow, piece }]),
+        findFirst: jest.fn().mockResolvedValue({ qtyPerUnit: 2 }),
       },
       // Mặc định rỗng - đa số test case không quan tâm tới nhánh trừ tồn đoạn (mục "Trừ tồn đoạn
       // sắt (SEGMENT_CONSUME)" bên dưới mới override).
@@ -156,6 +163,12 @@ describe('ProductionBatchesService', () => {
       },
       qcReview: { findMany: jest.fn().mockResolvedValue([]) },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
+      // Mặc định rỗng - vật tư thành phẩm không gắn mảnh (chân nhôm, MaterialYieldRecipe) chỉ được
+      // test ở mục 'vật tư thành phẩm không gắn mảnh' bên dưới mới override.
+      materialYieldRecipe: { findMany: jest.fn().mockResolvedValue([]) },
+      pieceMaterialItem: { findMany: jest.fn().mockResolvedValue([]) },
+      materialYieldStepBundle: { findMany: jest.fn().mockResolvedValue([]) },
+      stockLedger: { findMany: jest.fn().mockResolvedValue([]) },
       warehouseTransferPieceItem: { findMany: jest.fn().mockResolvedValue([]) },
       warehouse: {
         findUniqueOrThrow: jest
@@ -588,6 +601,40 @@ describe('ProductionBatchesService', () => {
       );
       expect(prisma.productionBatch.update).not.toHaveBeenCalled();
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('2026-10-06: tổng đã báo vượt nhu cầu (2 × 10 = 20) - trả overPlanWarning nhưng KHÔNG chặn ghi nhận', async () => {
+      prisma.productionBatch.findFirst.mockResolvedValue(null);
+      prisma.productionBatch.create.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 25,
+      });
+      prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 25 } });
+
+      const res = await service.recordProductionBatch(
+        '1',
+        { ...recordDto, qty: 25 },
+        'user-han',
+        null,
+      );
+
+      expect(prisma.productionBatch.create).toHaveBeenCalled();
+      expect(res.overPlanWarning).toContain('vượt nhu cầu 20');
+    });
+
+    it('2026-10-06: tổng đã báo trong nhu cầu - overPlanWarning = null', async () => {
+      prisma.productionBatch.findFirst.mockResolvedValue(null);
+      prisma.productionBatch.create.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 5,
+      });
+      prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 5 } });
+
+      const res = await service.recordProductionBatch('1', recordDto, 'user-han', null);
+
+      expect(res.overPlanWarning).toBeNull();
     });
 
     it('recordProductionBatch - đã có dòng OPEN - CỘNG DỒN reportedQty vào đúng dòng đó, không tạo mới', async () => {
@@ -1756,6 +1803,109 @@ describe('ProductionBatchesService', () => {
           status: 'QC_DONE',
         },
       });
+    });
+  });
+
+  describe('getBatchPlan/getBatchPlanBatch - vật tư thành phẩm không gắn mảnh (chân nhôm, 2026-10-06)', () => {
+    const chanNhomRecipe = {
+      id: 7n,
+      outputMaterialId: 60n,
+      isActive: true,
+      processSteps: ['CAT'],
+      outputMaterial: { id: 60n, code: 'CHAN-NHOM-01', name: 'Chân nhôm', spec: 'Ø25 · Chân' },
+    };
+    const chanNhomLine = {
+      bomRevisionId: 5n,
+      pieceId: 40n,
+      materialId: 60n,
+      qtyPerPiece: { toNumber: () => 2 },
+    };
+
+    it('getBatchPlan stage=PHOI: nhu cầu = qtyPerUnit × qtyPerPiece × SL SKU; tiến độ lấy từ đợt KCS công đoạn cuối, qua StockLedger', async () => {
+      prisma.materialYieldRecipe.findMany.mockResolvedValue([chanNhomRecipe]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([chanNhomLine]);
+      prisma.materialYieldStepBundle.findMany.mockResolvedValue([
+        {
+          id: 100n,
+          productionInvoiceId: 500n,
+          recipeId: 7n,
+          step: 'CAT',
+          qty: 40,
+          status: 'QC_PASSED',
+          submittedAt: new Date('2026-10-05T10:00:00Z'),
+        },
+      ]);
+      prisma.stockLedger.findMany.mockResolvedValue([
+        { refId: '100', qty: { toNumber: () => 40 } },
+      ]);
+
+      const result = await service.getBatchPlan('1', MfgStage.PHOI);
+
+      expect(result.materialYieldItems).toEqual([
+        {
+          materialId: '60',
+          materialCode: 'CHAN-NHOM-01',
+          materialName: 'Chân nhôm',
+          plannedQty: 40,
+          awaitingQcQty: 0,
+          passedQty: 40,
+          materialSpec: 'Ø25 · Chân',
+          lastUpdatedAt: '2026-10-05T10:00:00.000Z',
+        },
+      ]);
+      expect(prisma.stockLedger.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ refId: { in: ['100'] } }) as unknown,
+        }),
+      );
+    });
+
+    it('getBatchPlan stage=HAN: không tính vật tư thành phẩm không gắn mảnh (chỉ PHOI)', async () => {
+      prisma.materialYieldRecipe.findMany.mockResolvedValue([chanNhomRecipe]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([chanNhomLine]);
+
+      const result = await service.getBatchPlan('1', MfgStage.HAN);
+
+      expect(result.materialYieldItems).toEqual([]);
+      expect(prisma.materialYieldRecipe.findMany).not.toHaveBeenCalled();
+    });
+
+    it('phân bổ theo tỷ lệ nhu cầu khi 1 PI có 2 SKU: SKU 10 cái (40 nhu cầu) nhận 1/4 tiến độ PI (passed 80 → 20)', async () => {
+      prisma.materialYieldRecipe.findMany.mockResolvedValue([chanNhomRecipe]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([chanNhomLine]);
+      prisma.productionOrder.findMany.mockResolvedValue([
+        { ...order, id: 1n, quantity: 10, productionInvoiceItem: { productionInvoiceId: 500n } },
+        { ...order, id: 2n, quantity: 30, productionInvoiceItem: { productionInvoiceId: 500n } },
+      ]);
+      prisma.materialYieldStepBundle.findMany.mockResolvedValue([
+        {
+          id: 100n,
+          productionInvoiceId: 500n,
+          recipeId: 7n,
+          step: 'CAT',
+          qty: 80,
+          status: 'QC_PASSED',
+        },
+      ]);
+      prisma.stockLedger.findMany.mockResolvedValue([
+        { refId: '100', qty: { toNumber: () => 80 } },
+      ]);
+
+      const result = await service.getBatchPlan('1', MfgStage.PHOI);
+
+      expect(result.materialYieldItems[0]).toMatchObject({ plannedQty: 40, passedQty: 20 });
+    });
+
+    it('getBatchPlanBatch stage=PHOI: mỗi order nhận materialYieldItems riêng', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([order]);
+      prisma.materialYieldRecipe.findMany.mockResolvedValue([chanNhomRecipe]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([chanNhomLine]);
+
+      const result = await service.getBatchPlanBatch(['1'], MfgStage.PHOI);
+
+      expect(result['1'].materialYieldItems).toEqual([
+        expect.objectContaining({ materialCode: 'CHAN-NHOM-01', plannedQty: 40 }),
+      ]);
     });
   });
 });
