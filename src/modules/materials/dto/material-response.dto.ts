@@ -1,6 +1,6 @@
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
-import { MaterialDetailKind } from '../../../generated/prisma/client';
+import { MaterialDetailKind, SteelSubGroup } from '../../../generated/prisma/client';
 
 @Exclude()
 export class MaterialResponseDto {
@@ -17,6 +17,9 @@ export class MaterialResponseDto {
   @Expose()
   @ApiPropertyOptional({ enum: MaterialDetailKind, nullable: true })
   detailKind!: MaterialDetailKind | null;
+  @Expose()
+  @ApiPropertyOptional({ enum: SteelSubGroup, nullable: true })
+  steelSubGroup!: SteelSubGroup | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) warehouseId!: string | null;
   /** Denormalized từ Warehouse.code/name - cùng lý do materialGroupName ở trên, để FE nhận biết
    *  vật tư thuộc kho nào mà không cần khớp thêm 1 lệnh gọi GET /warehouses theo id. */

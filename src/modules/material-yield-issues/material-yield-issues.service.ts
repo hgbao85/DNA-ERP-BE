@@ -11,6 +11,7 @@ import {
   MaterialYieldIssueStatus,
   Prisma,
   ProductionOrder,
+  ReservationStatus,
   StockLedgerRefType,
   StockReservationRefType,
 } from '../../generated/prisma/client';
@@ -194,7 +195,7 @@ export class MaterialYieldIssuesService {
       const onHand = stockRow?.qty.toNumber() ?? 0;
       // Loại 2 refType đề xuất mua tự động (2026-09-23, đính chính sau live-test) - cùng lý do
       // MaterialIssuesService.create() (xem doc comment getAvailableQty()).
-      const availableQty = await this.stockReservationsService.getAvailableQty(
+      const availableOutsideOwnPi = await this.stockReservationsService.getAvailableQty(
         tx,
         materialWarehouseId,
         materialBigId,
@@ -205,6 +206,31 @@ export class MaterialYieldIssuesService {
           StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
         ],
       );
+      // Giữ chỗ PRODUCTION_INVOICE của CHÍNH PI đang xuất (tạo lúc duyệt PI) không được chặn việc
+      // xuất của chính PI đó - cộng lại phần còn lại của nó (drainPoolBestEffort sẽ trừ sau khi xuất).
+      const ownPiInvoiceId = (
+        await tx.productionInvoiceItem.findUniqueOrThrow({
+          where: { id: order.productionInvoiceItemId },
+          select: { productionInvoiceId: true },
+        })
+      ).productionInvoiceId;
+      const ownPiReservations = ownPiInvoiceId
+        ? await tx.stockReservation.findMany({
+            where: {
+              warehouseId: materialWarehouseId,
+              materialId: materialBigId,
+              status: ReservationStatus.ACTIVE,
+              refType: StockReservationRefType.PRODUCTION_INVOICE,
+              refId: ownPiInvoiceId.toString(),
+            },
+            select: { quantity: true, consumedQty: true },
+          })
+        : [];
+      const ownPiRemaining = ownPiReservations.reduce(
+        (sum, r) => sum + Math.max(0, r.quantity.toNumber() - r.consumedQty.toNumber()),
+        0,
+      );
+      const availableQty = Math.min(onHand, availableOutsideOwnPi + ownPiRemaining);
       if (dto.issuedQty > availableQty) {
         throw new ConflictException(
           `Tồn kho khả dụng (${availableQty}) không đủ xuất ${dto.issuedQty} cho vật tư ${material.name} - kiểm tra lại tồn kho thực tế trước khi xuất`,

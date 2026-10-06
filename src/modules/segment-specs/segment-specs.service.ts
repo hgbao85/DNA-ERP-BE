@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { BomRevisionStatus, Prisma } from '../../generated/prisma/client';
+import { BomRevisionStatus, Prisma, SteelSubGroup } from '../../generated/prisma/client';
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -124,6 +124,14 @@ export class SegmentSpecsService {
     if (material.materialGroup?.systemKey !== MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR) {
       throw new BadRequestException(
         `Material "${material.code}" phải thuộc nhóm vật tư Sắt (systemKey=STEEL_BAR) để tạo segment spec`,
+      );
+    }
+    // 2026-10-01: SegmentSpec là đoạn cắt qua solver bin-packing - chỉ nhóm con SOFTWARE (Phần
+    // mềm, mặc định khi null) mới dùng cơ chế này. Tự tính (SELF_CALC) dùng PieceMaterialYield,
+    // VTTP (FINISHED_COMPONENT) dùng MaterialYieldRecipe - cả 2 không có SegmentSpec.
+    if ((material.steelSubGroup ?? SteelSubGroup.SOFTWARE) !== SteelSubGroup.SOFTWARE) {
+      throw new BadRequestException(
+        `Material "${material.code}" thuộc nhóm con Tự tính/Vật tư thành phẩm - không dùng SegmentSpec (chỉ nhóm con Phần mềm mới cắt qua solver)`,
       );
     }
   }

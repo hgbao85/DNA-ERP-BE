@@ -11,8 +11,10 @@ import {
   Piece,
   Prisma,
   ProductionOrder,
+  ReservationStatus,
   StockLedgerRefType,
   StockReservationRefType,
+  SteelSubGroup,
   TransferStatus,
   WeavingPoint,
 } from '../../generated/prisma/client';
@@ -177,65 +179,71 @@ export class WeavingIssuesService {
 
     // Khoá advisory (H4 fix, cùng lý do H2/H3) - không có dòng có sẵn để FOR UPDATE cho lần xuất
     // đan đầu tiên của 1 khoá (order, piece) - xem lockBusinessKey().
-    const created = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `weaving-issue:${order.id}:${pieceBigId}`);
+    const created = await this.prisma.$transaction(
+      async (tx) => {
+        await lockBusinessKey(tx, `weaving-issue:${order.id}:${pieceBigId}`);
 
-      const issuedSoFar = await this.sumIssuedForPiece(tx, order.id, pieceBigId);
-      const remaining = plannedQty - issuedSoFar;
-      if (dto.qty > remaining) {
-        throw new BadRequestException(
-          `Số lượng xuất đan (${dto.qty}) vượt quá số lượng còn có thể xuất cho mảnh ${dto.pieceId} ` +
-            `(định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
-        );
-      }
+        const issuedSoFar = await this.sumIssuedForPiece(tx, order.id, pieceBigId);
+        const remaining = plannedQty - issuedSoFar;
+        if (dto.qty > remaining) {
+          throw new BadRequestException(
+            `Số lượng xuất đan (${dto.qty}) vượt quá số lượng còn có thể xuất cho mảnh ${dto.pieceId} ` +
+              `(định mức ${plannedQty}, đã xuất ${issuedSoFar}, còn ${remaining})`,
+          );
+        }
 
-      // 2026-09-12 (theo yêu cầu trực tiếp): "còn phải xuất" theo ĐỊNH MỨC ở trên chỉ là kế hoạch
-      // trên giấy - không phản ánh kho vật tư-TP đã THỰC SỰ nhận đủ mảnh từ phôi-sơn-hàn qua Phân
-      // phối nội bộ hay chưa. Chặn thêm theo số đã nhận thật (sumReceivedForPiece, CHỈ tính đúng
-      // SKU/PO/PI này qua productionOrderId - KHÔNG gộp các lệnh sản xuất khác dù cùng tên mảnh,
-      // xem comment WarehouseTransferPieceItem "Đơn vị chuyển là (productionOrder, piece), không
-      // phải PI"). Cùng khoá advisory ở trên - đủ chặn 2 lần xuất đan gần nhau của CHÍNH mảnh này,
-      // không cần khoá chéo sang WarehouseTransfersService (confirm() chỉ CỘNG thêm nguồn, không
-      // bao giờ làm giảm receivedQty nên không tạo được race "xuất vượt" từ phía đó).
-      const receivedQty = await this.sumReceivedForPiece(tx, order.id, pieceBigId);
-      const canIssueQty = Math.max(0, receivedQty - issuedSoFar);
-      if (dto.qty > canIssueQty) {
-        throw new BadRequestException(
-          `Số lượng xuất đan (${dto.qty}) vượt quá số mảnh thực tế đã nhận từ Phân phối nội bộ cho ${dto.pieceId} ` +
-            `(đã nhận ${receivedQty}, đã xuất ${issuedSoFar}, có thể xuất ${canIssueQty}) - kho vật tư-TP chưa nhận đủ`,
-        );
-      }
+        // 2026-09-12 (theo yêu cầu trực tiếp): "còn phải xuất" theo ĐỊNH MỨC ở trên chỉ là kế hoạch
+        // trên giấy - không phản ánh kho vật tư-TP đã THỰC SỰ nhận đủ mảnh từ phôi-sơn-hàn qua Phân
+        // phối nội bộ hay chưa. Chặn thêm theo số đã nhận thật (sumReceivedForPiece, CHỈ tính đúng
+        // SKU/PO/PI này qua productionOrderId - KHÔNG gộp các lệnh sản xuất khác dù cùng tên mảnh,
+        // xem comment WarehouseTransferPieceItem "Đơn vị chuyển là (productionOrder, piece), không
+        // phải PI"). Cùng khoá advisory ở trên - đủ chặn 2 lần xuất đan gần nhau của CHÍNH mảnh này,
+        // không cần khoá chéo sang WarehouseTransfersService (confirm() chỉ CỘNG thêm nguồn, không
+        // bao giờ làm giảm receivedQty nên không tạo được race "xuất vượt" từ phía đó).
+        const receivedQty = await this.sumReceivedForPiece(tx, order.id, pieceBigId);
+        const canIssueQty = Math.max(0, receivedQty - issuedSoFar);
+        if (dto.qty > canIssueQty) {
+          throw new BadRequestException(
+            `Số lượng xuất đan (${dto.qty}) vượt quá số mảnh thực tế đã nhận từ Phân phối nội bộ cho ${dto.pieceId} ` +
+              `(đã nhận ${receivedQty}, đã xuất ${issuedSoFar}, có thể xuất ${canIssueQty}) - kho vật tư-TP chưa nhận đủ`,
+          );
+        }
 
-      const issue = await tx.weavingIssue.create({
-        data: {
-          productionOrderId: order.id,
-          pieceId: pieceBigId,
-          weavingPointId: weavingPointBigId,
-          qty: dto.qty,
-          issuedById,
-          idempotencyKey,
-        },
-        include: WEAVING_ISSUE_INCLUDE,
-      });
-
-      if (materialLines.length > 0) {
-        // "Trả nợ" giữ chỗ cần biết productionInvoiceId - dùng lại idiom findUniqueOrThrow() của
-        // assertItemPiHasActiveFloor()/assertItemPiHasActiveFloorLocked (floor-gate.util.ts).
-        const piItem = await tx.productionInvoiceItem.findUniqueOrThrow({
-          where: { id: order.productionInvoiceItemId },
-          select: { productionInvoiceId: true },
+        const issue = await tx.weavingIssue.create({
+          data: {
+            productionOrderId: order.id,
+            pieceId: pieceBigId,
+            weavingPointId: weavingPointBigId,
+            qty: dto.qty,
+            issuedById,
+            idempotencyKey,
+          },
+          include: WEAVING_ISSUE_INCLUDE,
         });
-        await this.issueMaterialsForWeaving(
-          tx,
-          issue.id,
-          piItem.productionInvoiceId!,
-          materialLines,
-          issuedById,
-        );
-      }
 
-      return issue;
-    });
+        if (materialLines.length > 0) {
+          // "Trả nợ" giữ chỗ cần biết productionInvoiceId - dùng lại idiom findUniqueOrThrow() của
+          // assertItemPiHasActiveFloor()/assertItemPiHasActiveFloorLocked (floor-gate.util.ts).
+          const piItem = await tx.productionInvoiceItem.findUniqueOrThrow({
+            where: { id: order.productionInvoiceItemId },
+            select: { productionInvoiceId: true },
+          });
+          await this.issueMaterialsForWeaving(
+            tx,
+            issue.id,
+            piItem.productionInvoiceId!,
+            materialLines,
+            issuedById,
+          );
+        }
+
+        return issue;
+      },
+      // 2026-10-05: test sống - nhiều dòng mang kèm (khoá FOR UPDATE + getAvailableQty + ghi sổ) vượt
+      // timeout mặc định 5s của Prisma trên DB proxy -> "commit on expired transaction" 500, rollback
+      // sạch (không ghi một phần). Cùng nguyên nhân đã sửa ở MaterialYieldRecipeIssuesService.create().
+      { timeout: 20000 },
+    );
 
     await this.notifyWeavingIssueToPoint(created);
 
@@ -284,7 +292,7 @@ export class WeavingIssuesService {
       // vật tư mà ConsumableMaterialPurchaseService đã giữ chỗ (nhánh PieceMaterialItem: Dây/Đinh/
       // Nút nhựa), cùng lý do MaterialIssuesService/PackagingIssuesService. Xem doc comment
       // getAvailableQty().
-      const availableQty = await this.stockReservationsService.getAvailableQty(
+      const availableOutsideOwnPi = await this.stockReservationsService.getAvailableQty(
         tx,
         material.warehouseId,
         materialBigId,
@@ -295,6 +303,25 @@ export class WeavingIssuesService {
           StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
         ],
       );
+      // Giữ chỗ PRODUCTION_INVOICE của CHÍNH PI đang đan (tạo lúc duyệt PI, giữ TOÀN BỘ định mức
+      // Dây/Đinh) không được chặn việc mang kèm của chính PI đó - cộng lại phần còn lại. Cùng lỗi
+      // đã sửa ở MaterialYieldIssuesService.create() (2026-10-05, test sống: "tồn khả dụng 0" dù
+      // tồn thực 240 Dây, toàn bộ bị giữ bởi PI-2026-001 chính nó).
+      const ownPiReservations = await tx.stockReservation.findMany({
+        where: {
+          warehouseId: material.warehouseId,
+          materialId: materialBigId,
+          status: ReservationStatus.ACTIVE,
+          refType: StockReservationRefType.PRODUCTION_INVOICE,
+          refId: productionInvoiceId.toString(),
+        },
+        select: { quantity: true, consumedQty: true },
+      });
+      const ownPiRemaining = ownPiReservations.reduce(
+        (sum, r) => sum + Math.max(0, r.quantity.toNumber() - r.consumedQty.toNumber()),
+        0,
+      );
+      const availableQty = Math.min(onHand, availableOutsideOwnPi + ownPiRemaining);
       if (line.qty > availableQty) {
         throw new ConflictException(
           `Tồn kho khả dụng (${availableQty}) không đủ mang kèm ${line.qty} vật tư ${material.code} - kiểm tra lại tồn kho thực tế trước khi xuất`,
@@ -589,6 +616,7 @@ export class WeavingIssuesService {
         wire: this.mergeIssuedQty(materialLines?.wire, issuedMaterialQty),
         nail: this.mergeIssuedQty(materialLines?.nail, issuedMaterialQty),
         plasticButton: this.mergeIssuedQty(materialLines?.plasticButton, issuedMaterialQty),
+        finishedComponent: this.mergeIssuedQty(materialLines?.finishedComponent, issuedMaterialQty),
       });
     });
   }
@@ -638,9 +666,12 @@ export class WeavingIssuesService {
   /** Định mức Dây (WIRE) + Đinh (NAIL), luôn đi kèm + Nút nhựa (PLASTIC_BUTTON) CÓ tick
    *  `includeInWeaving` /1 mảnh, gom theo `${bomRevisionId}:${pieceId}` - dùng chung cho
    *  getIssuePlan()/getIssuePlanBatch() để hiển thị kèm mảnh trên màn hình xuất đan (xem comment
-   *  field `wire`/`nail`/`plasticButton` ở WeavingIssuePlanItemResponseDto). Nút nhựa CHƯA tick
-   *  không xuất hiện ở đây (khác Dây/Đinh, không có điều kiện). Cùng pattern truy vấn/nhóm với
-   *  SkusService (toPieceMaterialLine + groupIdByKey), thu hẹp lại chỉ 3 nhóm cần. */
+   *  field `wire`/`nail`/`plasticButton`/`finishedComponent` ở WeavingIssuePlanItemResponseDto).
+   *  Nút nhựa/Vật tư thành phẩm CHƯA tick không xuất hiện ở đây (khác Dây/Đinh, không có điều
+   *  kiện). Cùng pattern truy vấn/nhóm với SkusService (toPieceMaterialLine + groupIdByKey), thu
+   *  hẹp lại chỉ 4 nhóm cần. Vật tư thành phẩm (2026-10-01) nhận diện qua
+   *  `material.steelSubGroup === FINISHED_COMPONENT` (material.materialGroupId === nhóm Sắt), KHÁC
+   *  3 nhóm kia nhận diện qua materialGroupId riêng - xem enum SteelSubGroup. */
   private async getWovenMaterialLinesByPiece(bomRevisionIds: bigint[]): Promise<
     Map<
       string,
@@ -648,6 +679,7 @@ export class WeavingIssuesService {
         wire: WeavingPieceMaterialLineResponseDto[];
         nail: WeavingPieceMaterialLineResponseDto[];
         plasticButton: WeavingPieceMaterialLineResponseDto[];
+        finishedComponent: WeavingPieceMaterialLineResponseDto[];
       }
     >
   > {
@@ -657,6 +689,7 @@ export class WeavingIssuesService {
         wire: WeavingPieceMaterialLineResponseDto[];
         nail: WeavingPieceMaterialLineResponseDto[];
         plasticButton: WeavingPieceMaterialLineResponseDto[];
+        finishedComponent: WeavingPieceMaterialLineResponseDto[];
       }
     >();
     if (bomRevisionIds.length === 0) return result;
@@ -669,6 +702,7 @@ export class WeavingIssuesService {
               MATERIAL_GROUP_SYSTEM_KEYS.WIRE,
               MATERIAL_GROUP_SYSTEM_KEYS.NAIL,
               MATERIAL_GROUP_SYSTEM_KEYS.PLASTIC_BUTTON,
+              MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR,
             ],
           },
         },
@@ -686,6 +720,9 @@ export class WeavingIssuesService {
     )?.id;
     const plasticButtonGroupId = systemGroups.find(
       (g) => g.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.PLASTIC_BUTTON,
+    )?.id;
+    const steelGroupId = systemGroups.find(
+      (g) => g.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR,
     )?.id;
 
     // Tồn kho hiện có (2026-09-11, hiển thị tham khảo cạnh ô nhập số lượng thật ở màn xuất đan) -
@@ -728,7 +765,12 @@ export class WeavingIssuesService {
 
     for (const r of lineItems) {
       const key = `${r.bomRevisionId}:${r.pieceId}`;
-      const entry = result.get(key) ?? { wire: [], nail: [], plasticButton: [] };
+      const entry = result.get(key) ?? {
+        wire: [],
+        nail: [],
+        plasticButton: [],
+        finishedComponent: [],
+      };
       if (wireGroupId != null && r.material.materialGroupId === wireGroupId) {
         entry.wire.push(toLine(r));
       } else if (nailGroupId != null && r.material.materialGroupId === nailGroupId) {
@@ -739,6 +781,13 @@ export class WeavingIssuesService {
         r.includeInWeaving
       ) {
         entry.plasticButton.push(toLine(r));
+      } else if (
+        steelGroupId != null &&
+        r.material.materialGroupId === steelGroupId &&
+        r.material.steelSubGroup === SteelSubGroup.FINISHED_COMPONENT &&
+        r.includeInWeaving
+      ) {
+        entry.finishedComponent.push(toLine(r));
       } else {
         continue;
       }
@@ -860,6 +909,10 @@ export class WeavingIssuesService {
           wire: this.mergeIssuedQty(materialLines?.wire, issuedMaterialQty),
           nail: this.mergeIssuedQty(materialLines?.nail, issuedMaterialQty),
           plasticButton: this.mergeIssuedQty(materialLines?.plasticButton, issuedMaterialQty),
+          finishedComponent: this.mergeIssuedQty(
+            materialLines?.finishedComponent,
+            issuedMaterialQty,
+          ),
         });
       });
     }

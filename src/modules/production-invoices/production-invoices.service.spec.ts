@@ -13,6 +13,7 @@ import { ProductionOrdersService } from '../production-orders/production-orders.
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
+import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 
@@ -79,6 +80,7 @@ describe('ProductionInvoicesService', () => {
   };
   let pieceMaterialYieldPurchaseService: { computeAndUpsertProposals: jest.Mock };
   let consumableMaterialPurchaseService: { computeAndUpsertProposals: jest.Mock };
+  let materialYieldRecipePurchaseService: { computeAndUpsertProposals: jest.Mock };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
   let cloudinaryService: { deleteByUrl: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
@@ -232,6 +234,9 @@ describe('ProductionInvoicesService', () => {
     consumableMaterialPurchaseService = {
       computeAndUpsertProposals: jest.fn().mockResolvedValue([]),
     };
+    materialYieldRecipePurchaseService = {
+      computeAndUpsertProposals: jest.fn().mockResolvedValue([]),
+    };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
     notificationsService = {
@@ -244,6 +249,7 @@ describe('ProductionInvoicesService', () => {
       cuttingProposalsService as unknown as CuttingProposalsService,
       pieceMaterialYieldPurchaseService as unknown as PieceMaterialYieldPurchaseService,
       consumableMaterialPurchaseService as unknown as ConsumableMaterialPurchaseService,
+      materialYieldRecipePurchaseService as unknown as MaterialYieldRecipePurchaseService,
       cls as unknown as ClsService<AppClsStore>,
       cloudinaryService as unknown as CloudinaryService,
       notificationsService as unknown as NotificationsService,

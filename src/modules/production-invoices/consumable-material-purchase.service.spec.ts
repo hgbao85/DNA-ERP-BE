@@ -3,6 +3,7 @@ import {
   AccessoryItemKind,
   PurchaseProposalSource,
   PurchaseProposalStatus,
+  SteelSubGroup,
 } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -163,6 +164,26 @@ describe('ConsumableMaterialPurchaseService', () => {
     prisma.pieceMaterialItem.findMany.mockResolvedValue([]);
 
     expect(await service.computeAndUpsertProposals('1')).toEqual([]);
+  });
+
+  // 2026-10-02 (bug thật phát hiện qua E2E test): vật tư thành phẩm (vd chân nhôm,
+  // steelSubGroup=FINISHED_COMPONENT) KHÔNG mua trực tiếp từ NCC - nó tự sản xuất trong nhà từ 1
+  // nguyên liệu khác (MaterialYieldRecipe). Trước fix này, pieceMaterialItem.findMany không lọc gì
+  // nên dòng PieceMaterialItem gắn chân nhôm (includeInWeaving=true, giống hệt Dây/Đinh/Nút nhựa về
+  // mặt dữ liệu) bị tính nhầm thành "mua thẳng 1999 chân nhôm", chồng lên đề xuất ĐÚNG mua nguyên
+  // liệu đầu vào mà MaterialYieldRecipePurchaseService đã tạo riêng - kế toán kép.
+  it('loại trừ vật tư thành phẩm (steelSubGroup=FINISHED_COMPONENT) khỏi truy vấn PieceMaterialItem - không mua trực tiếp, đã có MaterialYieldRecipePurchaseService lo riêng', async () => {
+    await service.computeAndUpsertProposals('1');
+
+    expect(prisma.pieceMaterialItem.findMany).toHaveBeenCalledWith({
+      where: {
+        bomRevisionId: { in: [5n] },
+        OR: [
+          { material: { steelSubGroup: null } },
+          { material: { steelSubGroup: { not: SteelSubGroup.FINISHED_COMPONENT } } },
+        ],
+      },
+    });
   });
 
   it('Dây/Đinh (PieceMaterialItem) - nhân đủ 3 tầng: BomPiece.qtyPerUnit × order.quantity × qtyPerPiece', async () => {

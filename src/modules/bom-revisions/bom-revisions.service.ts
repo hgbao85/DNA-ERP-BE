@@ -12,6 +12,7 @@ import {
   MaterialDetailKind,
   PlanFormStatus,
   Prisma,
+  SteelSubGroup,
 } from '../../generated/prisma/client';
 import {
   MATERIAL_GROUP_SYSTEM_KEYS,
@@ -441,13 +442,33 @@ export class BomRevisionsService {
     if (!material) {
       throw new NotFoundException(`Material ${dto.materialId} not found`);
     }
+    // 2026-10-01: PieceMaterialYield là cơ chế "tỷ lệ cắt cố định" của nhóm con Tự tính (SELF_CALC,
+    // vd sắt lá -> Pat) - chặn gán nhầm vật tư nhóm con Phần mềm (đi solver/CuttingProposal, dùng
+    // SegmentSpec) vào đây. Vật tư KHÔNG thuộc nhóm Sắt (vd vẫn còn ở nhóm VTTP cũ, admin chưa kịp
+    // migrate) vẫn được chấp nhận như trước - chỉ chặn đúng trường hợp Sắt + SOFTWARE.
+    if (
+      material.materialGroupId &&
+      (await this.isSoftwareSteel(material.materialGroupId, material.steelSubGroup))
+    ) {
+      throw new BadRequestException(
+        `Material "${material.code}" thuộc nhóm con Phần mềm - phải dùng PieceBom/SegmentSpec (cắt qua solver), không dùng PieceMaterialYield`,
+      );
+    }
 
+    // 2026-10-03: 1 piece có thể có NHIỀU dòng Tự tính (khác material) - chỉ còn chặn trùng ĐÚNG 1
+    // material trên cùng piece (@@unique đổi sang bomRevisionId+pieceId+materialId).
     const existing = await this.prisma.pieceMaterialYield.findUnique({
-      where: { bomRevisionId_pieceId: { bomRevisionId: revision.id, pieceId: pieceBigId } },
+      where: {
+        bomRevisionId_pieceId_materialId: {
+          bomRevisionId: revision.id,
+          pieceId: pieceBigId,
+          materialId: materialBigId,
+        },
+      },
     });
     if (existing) {
       throw new ConflictException(
-        `Piece ${dto.pieceId} already has a piece_material_yield row on this revision`,
+        `Piece ${dto.pieceId} already has a piece_material_yield row for material ${dto.materialId} on this revision`,
       );
     }
 
@@ -462,6 +483,19 @@ export class BomRevisionsService {
       include: { piece: true, material: true },
     });
     return this.toPieceMaterialYieldResponseDto(row);
+  }
+
+  /** Mirror MaterialsService.resolveWasteFields's isSoftwareSteel - material thuộc nhóm Sắt
+   *  (STEEL_BAR) VÀ nhóm con SOFTWARE (mặc định khi null). */
+  private async isSoftwareSteel(
+    materialGroupId: bigint,
+    steelSubGroup: SteelSubGroup | null,
+  ): Promise<boolean> {
+    const group = await this.prisma.materialGroup.findUnique({ where: { id: materialGroupId } });
+    return (
+      group?.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR &&
+      (steelSubGroup ?? SteelSubGroup.SOFTWARE) === SteelSubGroup.SOFTWARE
+    );
   }
 
   async listPieceMaterialYields(bomRevisionId: string): Promise<PieceMaterialYieldResponseDto[]> {

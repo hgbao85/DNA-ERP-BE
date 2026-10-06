@@ -484,6 +484,35 @@ describe('SkusService', () => {
         service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Sat' }),
       ).rejects.toThrow(ConflictException);
     });
+
+    // 2026-10-01: Sắt chia 3 nhóm con (Phần mềm/Tự tính/Vật tư thành phẩm) - segments (PieceBom/
+    // SegmentSpec) chỉ nhận material nhóm con SOFTWARE.
+    it('rejects a segment whose material is already classified as a different Sắt sub-group (SELF_CALC)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', code: 'MANH-TUA' }]);
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 31n,
+          code: 'SAT-LA-01',
+          materialGroupId: SYSTEM_GROUP_IDS.STEEL_BAR,
+          steelSubGroup: 'SELF_CALC',
+        },
+      ]);
+
+      await expect(
+        service.updateManhQuota('5', {
+          pieces: [
+            {
+              name: 'Manh tua',
+              qtyPerUnit: 2,
+              segments: [{ materialId: '31', cutLengthMm: 930, qtyPerPiece: 4 }],
+            },
+          ],
+          enteredBy: 'NV Sat',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 
   describe('updateManhQuota (materialLines Dây/Đinh/Tán rút/Nút nhựa trong mảnh)', () => {
@@ -774,13 +803,98 @@ describe('SkusService', () => {
     });
   });
 
+  // 2026-10-01: Vật tư thành phẩm (vd chân nhôm) hạ cấp từ PieceMaterialYield xuống
+  // PieceMaterialItem (group=FINISHED_COMPONENT) - dùng chung cơ chế includeInWeaving với Nút
+  // nhựa, nhưng KHÔNG có MaterialGroup riêng (nằm lồng trong Sắt qua steelSubGroup).
+  describe('updateManhQuota (materialLines Vật tư thành phẩm - vd chân nhôm, 2026-10-01)', () => {
+    it('viết PieceMaterialItem cho group=FINISHED_COMPONENT, tự gán material vào Sắt + nhóm con FINISHED_COMPONENT, giữ includeInWeaving=true', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Tay trai', code: 'TAY-TRAI' }]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 95n, code: 'NHOM-02', materialGroupId: null, steelSubGroup: null },
+      ]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Tay trai',
+            qtyPerUnit: 2,
+            segments: [],
+            materialLines: [
+              {
+                group: 'FINISHED_COMPONENT',
+                materialId: '95',
+                qtyPerPiece: 2,
+                includeInWeaving: true,
+              },
+            ],
+          },
+        ],
+        enteredBy: 'NV Sat',
+      });
+
+      expect(prisma.material.update).toHaveBeenCalledWith({
+        where: { id: 95n },
+        data: { materialGroupId: SYSTEM_GROUP_IDS.STEEL_BAR },
+      });
+      expect(prisma.material.update).toHaveBeenCalledWith({
+        where: { id: 95n },
+        data: { steelSubGroup: 'FINISHED_COMPONENT' },
+      });
+      expect(prisma.pieceMaterialItem.createMany).toHaveBeenCalledWith({
+        data: [
+          {
+            bomRevisionId: 10n,
+            mfgProductId: 2n,
+            pieceId: 20n,
+            materialId: 95n,
+            qtyPerPiece: 2,
+            note: null,
+            photoUrl: null,
+            includeInWeaving: true,
+          },
+        ],
+      });
+    });
+
+    it('rejects a FINISHED_COMPONENT line whose material is already classified SOFTWARE (nhóm con Phần mềm)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Tay trai', code: 'TAY-TRAI' }]);
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 32n,
+          code: 'SAT-VUONG',
+          materialGroupId: SYSTEM_GROUP_IDS.STEEL_BAR,
+          steelSubGroup: 'SOFTWARE',
+        },
+      ]);
+
+      await expect(
+        service.updateManhQuota('5', {
+          pieces: [
+            {
+              name: 'Tay trai',
+              qtyPerUnit: 2,
+              segments: [],
+              materialLines: [{ group: 'FINISHED_COMPONENT', materialId: '32', qtyPerPiece: 2 }],
+            },
+          ],
+          enteredBy: 'NV Sat',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
   describe('updateManhQuota (materialYields - vật tư thành phẩm, vd chân nhôm)', () => {
-    it('viết PieceMaterialYield cho piece needsHan=false, không ràng buộc nhóm vật tư của material', async () => {
+    it('viết PieceMaterialYield cho piece needsHan=false, tự gán material vào Sắt + nhóm con SELF_CALC (lần dùng đầu tiên)', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Chan nhom', code: 'CHAN-NHOM' }]);
       prisma.material.findMany.mockResolvedValue([
-        { id: 80n, code: 'NHOM-01', materialGroupId: null },
+        { id: 80n, code: 'NHOM-01', materialGroupId: null, steelSubGroup: null },
       ]);
       prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
@@ -798,9 +912,16 @@ describe('SkusService', () => {
         enteredBy: 'NV Sat',
       });
 
-      // Khác materialLines (WIRE/NAIL/...) - KHÔNG gọi material.update gán nhóm, vì nhóm "Vật tư
-      // thành phẩm" do admin tự tạo (systemKey=null) "vô hình với logic Spec" (xem schema.prisma).
-      expect(prisma.material.update).not.toHaveBeenCalled();
+      // 2026-10-01: materialYields giờ PHẢI thuộc nhóm Sắt + nhóm con SELF_CALC (Tự tính) - lần
+      // dùng đầu tiên (material chưa có nhóm/nhóm con nào) thì tự gán, mirror materialLines.
+      expect(prisma.material.update).toHaveBeenCalledWith({
+        where: { id: 80n },
+        data: { materialGroupId: SYSTEM_GROUP_IDS.STEEL_BAR },
+      });
+      expect(prisma.material.update).toHaveBeenCalledWith({
+        where: { id: 80n },
+        data: { steelSubGroup: 'SELF_CALC' },
+      });
       // qtyPerPiece không truyền -> mặc định 1, giữ nguyên hành vi trước 2026-09-03 (lúc đó
       // PieceMaterialYieldPurchaseService ngầm định 1 piece = 1 miếng vật tư thành phẩm).
       expect(prisma.pieceMaterialYield.createMany).toHaveBeenCalledWith({

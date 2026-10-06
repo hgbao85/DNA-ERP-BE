@@ -58,7 +58,7 @@ export class PieceMaterialYieldPurchaseService {
 
     const [bomPieces, yields] = await Promise.all([
       // Không lọc needsHan - piece nào không có PieceMaterialYield sẽ tự bị bỏ qua bên dưới
-      // (`if (!yieldRow) continue`), không cần lọc trước ở đây.
+      // (`if (!yieldRows.length) continue`), không cần lọc trước ở đây.
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: { in: bomRevisionIds } },
       }),
@@ -67,7 +67,16 @@ export class PieceMaterialYieldPurchaseService {
         include: { material: { include: { warehouse: true } } },
       }),
     ]);
-    const yieldByRevisionPiece = new Map(yields.map((y) => [`${y.bomRevisionId}:${y.pieceId}`, y]));
+    // 2026-10-03: 1 piece giờ có thể có NHIỀU dòng Tự tính (vd Pat vừa Tấm sắt la vừa Sắt phi) -
+    // gộp theo mảng thay vì 1 dòng duy nhất (trước đây @@unique(bomRevisionId,pieceId) đảm bảo tối
+    // đa 1 dòng, nay đã bỏ ràng buộc đó, @@unique thêm materialId).
+    const yieldsByRevisionPiece = new Map<string, typeof yields>();
+    for (const y of yields) {
+      const key = `${y.bomRevisionId}:${y.pieceId}`;
+      const arr = yieldsByRevisionPiece.get(key);
+      if (arr) arr.push(y);
+      else yieldsByRevisionPiece.set(key, [y]);
+    }
 
     // Gộp required theo pieceId across mọi order/SKU của PI (mỗi order tự tra bomPiece của đúng
     // bomRevisionId nó ghim).
@@ -103,30 +112,35 @@ export class PieceMaterialYieldPurchaseService {
     for (const [pieceKey, required] of requiredByPiece) {
       const revisionId = revisionByPiece.get(pieceKey);
       if (!revisionId) continue;
-      const yieldRow = yieldByRevisionPiece.get(`${revisionId}:${pieceKey}`);
-      if (!yieldRow) continue; // Piece chưa khai định mức nguyên liệu - bỏ qua, không chặn PI.
+      const yieldRows = yieldsByRevisionPiece.get(`${revisionId}:${pieceKey}`);
+      if (!yieldRows?.length) continue; // Piece chưa khai định mức nguyên liệu - bỏ qua, không chặn PI.
 
       const onHand = onHandPool.get(pieceKey) ?? 0;
       const net = Math.max(0, required - onHand);
-      // net (piece/mảnh còn thiếu) -> quy ra số miếng vật tư thành phẩm cần cắt (qtyPerPiece: số
-      // miếng lắp vào 1 mảnh, vd 1 "pat" gồm 3 miếng sắt lá - KHÔNG liên quan piecesPerBar, đó là
-      // tỷ lệ cắt để Mua hàng biết cần bao nhiêu cây/tấm). PHẢI nhân trước khi chia cho
-      // piecesPerBar - nhân sau khi chia (hoặc nhân vào `required`/`onHand` riêng rẽ trước khi trừ)
-      // làm lệch đơn vị giữa required (piece) và onHand (piece), ra kết quả sai.
-      const neededPieceMaterials = net * (yieldRow.qtyPerPiece ?? 1);
-      const bars = Math.ceil(neededPieceMaterials / yieldRow.piecesPerBar);
+      // net (piece/mảnh còn thiếu) áp dụng ĐẦY ĐỦ cho TỪNG dòng Tự tính của piece này - 1 piece có
+      // 2 material Tự tính (vd Pat vừa cần Tấm sắt la vừa cần Sắt phi) nghĩa là CẢ HAI đều cần đủ
+      // số lượng net đó, không chia đôi ra.
+      for (const yieldRow of yieldRows) {
+        // net (piece/mảnh còn thiếu) -> quy ra số miếng vật tư thành phẩm cần cắt (qtyPerPiece: số
+        // miếng lắp vào 1 mảnh, vd 1 "pat" gồm 3 miếng sắt lá - KHÔNG liên quan piecesPerBar, đó là
+        // tỷ lệ cắt để Mua hàng biết cần bao nhiêu cây/tấm). PHẢI nhân trước khi chia cho
+        // piecesPerBar - nhân sau khi chia (hoặc nhân vào `required`/`onHand` riêng rẽ trước khi trừ)
+        // làm lệch đơn vị giữa required (piece) và onHand (piece), ra kết quả sai.
+        const neededPieceMaterials = net * (yieldRow.qtyPerPiece ?? 1);
+        const bars = Math.ceil(neededPieceMaterials / yieldRow.piecesPerBar);
 
-      const materialKey = yieldRow.materialId.toString();
-      const acc = barsNeededByMaterial.get(materialKey) ?? {
-        bars: 0,
-        requiredPieces: 0,
-        onHandPieces: 0,
-        piecesPerBar: yieldRow.piecesPerBar,
-      };
-      acc.bars += bars;
-      acc.requiredPieces += required;
-      acc.onHandPieces += onHand;
-      barsNeededByMaterial.set(materialKey, acc);
+        const materialKey = yieldRow.materialId.toString();
+        const acc = barsNeededByMaterial.get(materialKey) ?? {
+          bars: 0,
+          requiredPieces: 0,
+          onHandPieces: 0,
+          piecesPerBar: yieldRow.piecesPerBar,
+        };
+        acc.bars += bars;
+        acc.requiredPieces += required;
+        acc.onHandPieces += onHand;
+        barsNeededByMaterial.set(materialKey, acc);
+      }
     }
 
     if (barsNeededByMaterial.size === 0) {

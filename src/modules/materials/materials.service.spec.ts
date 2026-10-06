@@ -164,7 +164,12 @@ describe('MaterialsService', () => {
       prisma.material.findUnique.mockResolvedValue(null);
       prisma.material.create.mockResolvedValue({ ...existingMaterial, code: 'SAT-004' });
 
-      await service.create({ name: 'Sat vuong', unit: 'cay', materialGroupId: '7' });
+      await service.create({
+        name: 'Sat vuong',
+        unit: 'cay',
+        materialGroupId: '7',
+        steelSubGroup: 'SOFTWARE',
+      });
 
       expect(prisma.material.findMany).toHaveBeenCalledWith({
         where: { code: { startsWith: 'SAT-' } },
@@ -243,6 +248,7 @@ describe('MaterialsService', () => {
         name: 'Sat cay',
         unit: 'kg',
         materialGroupId: '7',
+        steelSubGroup: 'SOFTWARE',
         maxCuttingWastePercentage: 2, // client cũ còn gửi - phải bị bỏ qua, không lọt xuống DB
         purchaseWastePercentage: 5, // gửi nhầm cho Sắt - phải bị ép null
       });
@@ -446,6 +452,7 @@ describe('MaterialsService', () => {
       prisma.material.findUnique.mockResolvedValueOnce({
         ...existingMaterial,
         materialGroupId: 7n,
+        steelSubGroup: 'SOFTWARE',
         maxCuttingWastePercentage: { toNumber: () => 2 },
       });
       prisma.materialGroup.findUnique.mockResolvedValue({ id: 7n, systemKey: 'STEEL_BAR' });
@@ -537,7 +544,7 @@ describe('MaterialsService', () => {
       expect(result).toEqual({ updated: 2, skippedSteel: 0 });
       expect(prisma.material.findMany).toHaveBeenCalledWith({
         where: { materialGroupId: 9n },
-        select: { id: true, materialGroupId: true },
+        select: { id: true, materialGroupId: true, steelSubGroup: true },
       });
       expect(prisma.material.updateMany).toHaveBeenCalledWith({
         where: { id: { in: [20n, 21n] } },

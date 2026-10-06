@@ -54,6 +54,8 @@ export const PERMISSION_MODULES = {
   PRODUCTION_BATCH: 'PRODUCTION_BATCH',
   // --- 2026-09-04 (xuất kho nguyên liệu thô Vật tư thành phẩm: Sắt La/thanh nhôm cho Phôi) ---
   MATERIAL_YIELD_ISSUE: 'MATERIAL_YIELD_ISSUE',
+  // --- 2026-10-01 (Sắt -> 3 nhóm con: vật tư ra không gắn piece, vd chân nhôm) ---
+  MATERIAL_YIELD_RECIPE: 'MATERIAL_YIELD_RECIPE',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

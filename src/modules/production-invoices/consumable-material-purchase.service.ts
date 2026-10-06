@@ -5,6 +5,7 @@ import {
   PurchaseProposalSource,
   PurchaseProposalStatus,
   StockReservationRefType,
+  SteelSubGroup,
 } from '../../generated/prisma/client';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -57,7 +58,24 @@ export class ConsumableMaterialPurchaseService {
 
     const [bomPieces, pieceMaterialItems, consumableBoms, accessoryItems] = await Promise.all([
       this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: bomRevisionIds } } }),
-      this.prisma.pieceMaterialItem.findMany({ where: { bomRevisionId: { in: bomRevisionIds } } }),
+      this.prisma.pieceMaterialItem.findMany({
+        where: {
+          bomRevisionId: { in: bomRevisionIds },
+          // Loại trừ "vật tư thành phẩm" (vd chân nhôm, 2026-10-02) - vật tư này KHÔNG mua trực
+          // tiếp từ NCC, nó TỰ SẢN XUẤT trong nhà từ 1 nguyên liệu khác (MaterialYieldRecipe,
+          // piecesPerBar). Nhu cầu mua nguyên liệu ĐẦU VÀO của nó (vd thanh nhôm) đã được tính
+          // riêng ở MaterialYieldRecipePurchaseService - giữ dòng này ở đây sẽ tạo thêm 1 đề xuất
+          // SAI "mua thẳng chân nhôm" (không NCC nào bán) chồng lên đề xuất đúng, kế toán kép.
+          // 2026-10-05 (bug thật, test sống PI-2026-001): Dây/Đinh/Tán rút/Nút nhựa có
+          // steelSubGroup = NULL (không thuộc nhóm Sắt). Prisma `not` dịch thành `<> 'X'` - với NULL
+          // SQL ra UNKNOWN nên các dòng này bị LOẠI NHẦM, toàn bộ định mức theo piece biến mất khỏi
+          // đề xuất mua. Phải nói rõ "NULL cũng được giữ".
+          OR: [
+            { material: { steelSubGroup: null } },
+            { material: { steelSubGroup: { not: SteelSubGroup.FINISHED_COMPONENT } } },
+          ],
+        },
+      }),
       this.prisma.consumableBom.findMany({
         where: {
           bomRevisionId: { in: bomRevisionIds },

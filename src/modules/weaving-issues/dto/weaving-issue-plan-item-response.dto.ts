@@ -40,6 +40,13 @@ export class WeavingIssuePlanItemResponseDto {
   @Expose()
   @ApiProperty({ type: [WeavingPieceMaterialLineResponseDto] })
   plasticButton!: WeavingPieceMaterialLineResponseDto[];
+  /** Định mức Vật tư thành phẩm (Sắt, nhóm con FINISHED_COMPONENT, vd chân nhôm) /1 mảnh - CHỈ gồm
+   *  dòng đã tick `includeInWeaving`, cùng điều kiện/ý nghĩa như `plasticButton` ở trên (vai trò
+   *  giống hệt Nút nhựa, khác ở chỗ bản thân vật tư này được sản xuất qua MaterialYieldRecipe thay
+   *  vì mua thẳng - 2026-10-01). */
+  @Expose()
+  @ApiProperty({ type: [WeavingPieceMaterialLineResponseDto] })
+  finishedComponent!: WeavingPieceMaterialLineResponseDto[];
 
   constructor(partial: Partial<WeavingIssuePlanItemResponseDto>) {
     Object.assign(this, partial);

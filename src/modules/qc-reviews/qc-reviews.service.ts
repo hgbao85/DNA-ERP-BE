@@ -25,6 +25,7 @@ import {
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { MaterialYieldRecipeProductionService } from '../material-yield-recipes/material-yield-recipe-production.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
@@ -60,6 +61,7 @@ export class QcReviewsService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly steelIssuesService: SteelIssuesService,
     private readonly productionBatchesService: ProductionBatchesService,
+    private readonly materialYieldRecipeProductionService: MaterialYieldRecipeProductionService,
     private readonly cloudinaryService: CloudinaryService,
     private readonly notifications: NotificationsService,
   ) {}
@@ -591,6 +593,74 @@ export class QcReviewsService {
   }
 
   /**
+   * KCS duyệt 1 "đợt gửi KCS theo công đoạn" cho vật tư KHÔNG gắn piece (MaterialYieldStepBundle,
+   * 2026-10-01, vd chân nhôm) - mirror ĐÚNG reviewPieceStep() ở trên (cùng 2 kết quả Đạt/Không đạt,
+   * cùng ý nghĩa "PASSED = đã qua tay KCS"). Khác reviewPieceStep(): nếu đây là công đoạn CUỐI,
+   * credit THẲNG StockLedger/StockQuant cho outputMaterial qua
+   * MaterialYieldRecipeProductionService.finalizeRecipeOutputIfLastStepComplete() thay vì tạo
+   * ProductionBatch (bảng đó luôn gắn pieceId, không áp dụng được ở đây) - xem doc comment service
+   * đó tại sao KHÔNG cần logic cộng dồn delta như bên piece.
+   */
+  async reviewMaterialYieldStep(
+    materialYieldStepBundleId: string,
+    dto: CreateQcReviewDto,
+    reviewedById: string,
+  ): Promise<QcReviewResponseDto> {
+    const bundle =
+      await this.materialYieldRecipeProductionService.findOneBundleRowOrThrow(
+        materialYieldStepBundleId,
+      );
+    if (bundle.status !== PieceStepBundleStatus.AWAITING_QC) {
+      throw new ConflictException(
+        `Đợt gửi KCS ${materialYieldStepBundleId} đang ở trạng thái ${bundle.status} - chỉ AWAITING_QC mới duyệt được`,
+      );
+    }
+    await assertPiHasActiveFloor(this.prisma, bundle.productionInvoiceId, 'duyệt KCS công đoạn');
+
+    if (dto.failedQty > bundle.qty) {
+      throw new BadRequestException(
+        `failedQty (${dto.failedQty}) không được vượt số lượng đã gửi (${bundle.qty})`,
+      );
+    }
+    const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.materialYieldStepBundle.updateMany({
+        where: { id: bundle.id, status: PieceStepBundleStatus.AWAITING_QC },
+        data: { status: PieceStepBundleStatus.QC_PASSED },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Đợt gửi KCS ${materialYieldStepBundleId} đã bị 1 request khác duyệt trong lúc đang xử lý - không ghi đè`,
+        );
+      }
+
+      const review = await tx.qcReview.create({
+        data: {
+          materialYieldStepBundleId: bundle.id,
+          failedQty: dto.failedQty,
+          defectReasonId,
+          reason: dto.reason,
+          photoUrl: dto.photoUrl,
+          reviewedById,
+        },
+        include: QC_REVIEW_INCLUDE,
+      });
+
+      await this.materialYieldRecipeProductionService.finalizeRecipeOutputIfLastStepComplete(
+        tx,
+        bundle,
+        dto.failedQty,
+        reviewedById,
+      );
+
+      return review;
+    });
+
+    return this.toResponseDto(created);
+  }
+
+  /**
    * Sửa/xóa CHỈ `photoUrl` của 1 QcReview đã tồn tại - dùng khi KCS lỡ chọn nhầm ảnh (vd bug cũ ở
    * kcsCore.tsx upload nhầm lên URL mock, xem changelog audit-upload-file). QcReview đã nằm trong
    * AUDITED_MODELS (audit-log.extension.ts) nên `.update()` dưới đây TỰ ghi AuditLog (before/after,
@@ -657,6 +727,7 @@ export class QcReviewsService {
       cutBundleId: review.cutBundleId?.toString() ?? null,
       stepBundleId: review.stepBundleId?.toString() ?? null,
       pieceStepBundleId: review.pieceStepBundleId?.toString() ?? null,
+      materialYieldStepBundleId: review.materialYieldStepBundleId?.toString() ?? null,
       failedQty: review.failedQty,
       defectReasonId: review.defectReasonId?.toString() ?? null,
       defectReasonLabel: review.defectReason?.label ?? null,

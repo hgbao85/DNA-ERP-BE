@@ -97,7 +97,7 @@ model User {
   roles                             UserRole[]
   refreshTokens                     RefreshToken[]
   notificationsCreated              Notification[]              @relation("NotificationCreatedBy")
-  notificationsAsActor              Notification[]               @relation("NotificationActor")
+  notificationsAsActor              Notification[]              @relation("NotificationActor")
   notificationRecipients            NotificationRecipient[]
   planForms                         PlanForm[]
   piRequestedItems                  ProductionInvoiceItem[]     @relation("PIItemRequestedBy")
@@ -126,6 +126,10 @@ model User {
   pieceStepBatchesReported          PieceStepBatch[]            @relation("PieceStepBatchReportedBy")
   pieceStepBundlesSubmitted         PieceStepBundle[]           @relation("PieceStepBundleSubmittedBy")
   stepBundlesSubmitted              StepBundle[]                @relation("StepBundleSubmittedBy")
+  materialYieldStepBatchesReported  MaterialYieldStepBatch[]    @relation("MaterialYieldStepBatchReportedBy")
+  materialYieldStepBundlesSubmitted MaterialYieldStepBundle[]   @relation("MaterialYieldStepBundleSubmittedBy")
+  materialYieldRecipeIssuesIssued   MaterialYieldRecipeIssue[]  @relation("MaterialYieldRecipeIssueIssuedBy")
+  materialYieldRecipeIssuesReceived MaterialYieldRecipeIssue[]  @relation("MaterialYieldRecipeIssueReceivedBy")
   materialInspectionRequestsCreated MaterialInspectionRequest[]
   inspectionKhoResultsSubmitted     InspectionKhoResult[]
   packagingRecordsPacked            PackagingRecord[]
@@ -233,36 +237,36 @@ model AuditLog {
 /// cho category=ANNOUNCEMENT (admin phát cho cả nhóm role, tương thích ngược với model cũ). Thay
 /// thế mô hình broadcast-4-audience trước đây - xem changelog 2026-09-25.
 model Notification {
-  id       String               @id @default(uuid())
+  id         String                @id @default(uuid())
   /// Khoá vào NOTIFICATION_TYPES (notification-types.ts) - null cho ANNOUNCEMENT tự do của admin.
-  type     String?
-  category NotificationCategory @default(ANNOUNCEMENT)
-  severity NotificationSeverity @default(INFO)
-  title    String
-  message  String
+  type       String?
+  category   NotificationCategory  @default(ANNOUNCEMENT)
+  severity   NotificationSeverity  @default(INFO)
+  title      String
+  message    String
   /// Đối tượng nghiệp vụ liên quan, vd entityType="CUTTING_PROPOSAL" entityId="123" - dùng để
   /// resolve() tự đóng thông báo ACTION_REQUIRED khi đối tượng rời trạng thái cần xử lý.
   entityType String?
   entityId   String?
   /// { module, page, params } - FE tự dựng URL từ đây (BE không biết cấu trúc route FE, mục 6.2
   /// changelog 2026-09-25). null cho ANNOUNCEMENT không link tới đâu cả.
-  link Json?
+  link       Json?
   /// Payload thô (mã PO, lý do từ chối...) để FE hiển thị thêm ngoài title/message nếu cần.
-  data Json?
+  data       Json?
   /// Người gây ra sự kiện - loại khỏi danh sách người nhận trừ khi type khai notifyActor. null =
   /// hệ thống (vd solver cắt sắt).
-  actorId String?
+  actorId    String?
   /// "{type}:{entityId}" - NotificationsService.emit() gộp vào dòng này thay vì tạo dòng mới khi
   /// cùng sự kiện lặp lại (chống spam khi 1 đối tượng được tính/thử lại nhiều lần).
-  dedupeKey String?
+  dedupeKey  String?
   /// Chỉ có giá trị cho category=ANNOUNCEMENT.
-  audience  NotificationAudience?
-  createdBy String?
-  createdAt DateTime              @default(now())
-  updatedAt DateTime              @updatedAt
+  audience   NotificationAudience?
+  createdBy  String?
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
 
-  creator    User?                    @relation("NotificationCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
-  actor      User?                    @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  creator    User?                   @relation("NotificationCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  actor      User?                   @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
   recipients NotificationRecipient[]
 
   @@index([audience])
@@ -280,9 +284,9 @@ model NotificationRecipient {
   readAt         DateTime?
   /// Việc "cần xử lý" đã được xử lý xong (bởi CHÍNH người này hoặc người khác cùng vai trò/kho) -
   /// FE làm mờ + không tính vào badge "cần xử lý" nữa. Có thể resolved mà vẫn chưa đọc.
-  resolvedAt DateTime?
+  resolvedAt     DateTime?
   /// Người dùng tự ẩn khỏi danh sách của mình - không ảnh hưởng người nhận khác.
-  archivedAt DateTime?
+  archivedAt     DateTime?
 
   notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -405,6 +409,27 @@ enum MaterialDetailKind {
   PACKAGING
 }
 
+/// Nhóm con của Sắt (2026-10-01) - CHỈ có ý nghĩa khi materialGroup.systemKey = STEEL_BAR (null với
+/// mọi nhóm khác, mirror MaterialDetailKind). KHÔNG tạo thêm MaterialGroup con có systemKey riêng
+/// (đã thử làm "SAT_TU_TINH" thành nhóm hệ thống thứ 7 ngang hàng Sắt/Dây/Đinh ở commit DEC79-82
+/// 30/09, bị revert cùng ngày vì sai bản chất - 3 nhóm này là CON của Sắt, không phải ngang hàng).
+/// NULL = SOFTWARE (dữ liệu Sắt hiện có trước 2026-10-01, không cần migrate hàng loạt).
+enum SteelSubGroup {
+  /// Sắt phần mềm - hành vi gốc: PieceBom + SegmentSpec -> CuttingProposal (solver bin-packing,
+  /// phải duyệt) -> SteelIssue (chọn đúng cây theo stockLengthMm, QC qua CutBundle).
+  SOFTWARE
+  /// Sắt tự tính - tỷ lệ cắt cố định đã biết trước (vd sắt lá -> Pat), KHÔNG qua solver/
+  /// CuttingProposal, KHÔNG phân biệt stockLengthMm (vật liệu dạng tấm) - dùng PieceMaterialYield
+  /// + MaterialYieldIssuesService + PieceStepBatch/PieceStepBundle y nguyên (piece vẫn là 1 Piece
+  /// thật, vd Pat).
+  SELF_CALC
+  /// Vật tư thành phẩm (VTTP) - gia công từ nguyên liệu mua, qua QC, nhập kho thật. KHÔNG gắn với
+  /// 1 Piece cụ thể (khác SELF_CALC) - dùng MaterialYieldRecipe + MaterialYieldStepBatch/Bundle,
+  /// kết quả là 1 dòng PieceMaterialItem (includeInWeaving) gắn vào BOM của mảnh khác cần đan, vd
+  /// chân nhôm.
+  FINISHED_COMPONENT
+}
+
 model Material {
   id                        BigInt              @id @default(autoincrement())
   code                      String              @unique
@@ -418,6 +443,9 @@ model Material {
   /// biệt được qua materialGroupId nữa. Bắt buộc chọn ở Admin > Vật tư khi nhóm = Vật tư khác
   /// (MaterialsService.resolveDetailKind), tự dọn về null khi đổi sang nhóm khác.
   detailKind                MaterialDetailKind?
+  /// Nhóm con của Sắt (xem enum SteelSubGroup) - chỉ có ý nghĩa khi materialGroup.systemKey =
+  /// STEEL_BAR. NULL coi như SOFTWARE (xem MaterialsService.resolveSteelSubGroup).
+  steelSubGroup             SteelSubGroup?
   warehouseId               BigInt?
   buyerId                   String?
   /// Đơn vị mua hàng từ NCC khi khác với `unit` (đơn vị tồn kho/sản xuất) - vd NCC bán theo "kg"
@@ -475,6 +503,8 @@ model Material {
   packagingIssues               PackagingIssue[]
   inspectionKhoResultItems      InspectionKhoResultItem[]
   weavingIssueMaterials         WeavingIssueMaterial[]
+  materialYieldRecipesAsOutput  MaterialYieldRecipe[]          @relation("MaterialYieldRecipeOutput")
+  materialYieldRecipesAsInput   MaterialYieldRecipe[]          @relation("MaterialYieldRecipeInput")
 
   @@index([materialGroupId])
   @@index([warehouseId])
@@ -930,9 +960,12 @@ model PieceMaterialItem {
 /// ProductionBatchesService.findPhoiEligibleBomPieces(). Tách biệt hoàn toàn khỏi PieceBom/
 /// SegmentSpec: SegmentSpec khoá cứng materialId thuộc nhóm STEEL_BAR và cả pipeline
 /// CuttingProposal/SteelIssue giải bài toán bin-packing đa đoạn qua solver - sai tầm với bài toán
-/// tỷ lệ CỐ ĐỊNH 1 đơn vị→N cái này (không tối ưu hao hụt, không đa đoạn/đa kích cỡ). Luôn đúng 1
-/// material/piece (quyết định nghiệp vụ 2026-08-22) - khác mảnh sắt (PieceBom) có thể ghép nhiều
-/// loại sắt, nên @@unique theo (bomRevisionId, pieceId) chứ không kèm materialId.
+/// tỷ lệ CỐ ĐỊNH 1 đơn vị→N cái này (không tối ưu hao hụt, không đa đoạn/đa kích cỡ).
+/// 2026-10-03: BỎ ràng buộc "luôn đúng 1 material/piece" (quyết định nghiệp vụ 2026-08-22, nay đảo
+/// ngược theo yêu cầu người dùng) - 1 piece (vd "Pat") giờ có thể có NHIỀU dòng Tự tính cùng lúc
+/// (vd vừa Tấm sắt la vừa Sắt phi), mirror đúng cách PieceBom đã cho phép ghép nhiều loại sắt từ
+/// trước. @@unique đổi sang (bomRevisionId, pieceId, materialId) - chỉ còn chặn trùng ĐÚNG 1 material
+/// trên cùng 1 piece, không chặn piece có ≥2 material khác nhau nữa.
 model PieceMaterialYield {
   id            BigInt        @id @default(autoincrement())
   bomRevisionId BigInt
@@ -955,7 +988,7 @@ model PieceMaterialYield {
   piece       Piece       @relation(fields: [pieceId], references: [id])
   material    Material    @relation(fields: [materialId], references: [id])
 
-  @@unique([bomRevisionId, pieceId])
+  @@unique([bomRevisionId, pieceId, materialId])
   @@map("piece_material_yield")
 }
 
@@ -1345,16 +1378,19 @@ model ProductionInvoice {
   createdAt                      DateTime                @default(now())
   updatedAt                      DateTime                @updatedAt
 
-  salesOrder        SalesOrder?             @relation(fields: [salesOrderId], references: [id])
-  mergedBy          User?                   @relation("PIMergedBy", fields: [mergedById], references: [id])
-  items             ProductionInvoiceItem[]
-  planForms         PlanForm[]
-  cuttingProposals  CuttingProposal[]
-  steelIssues       SteelIssue[]
-  stepBatches       StepBatch[]
-  stepBundles       StepBundle[]
-  purchaseProposals PurchaseProposal[]
-  stockReservations StockReservation[]
+  salesOrder                SalesOrder?                @relation(fields: [salesOrderId], references: [id])
+  mergedBy                  User?                      @relation("PIMergedBy", fields: [mergedById], references: [id])
+  items                     ProductionInvoiceItem[]
+  planForms                 PlanForm[]
+  cuttingProposals          CuttingProposal[]
+  steelIssues               SteelIssue[]
+  stepBatches               StepBatch[]
+  stepBundles               StepBundle[]
+  purchaseProposals         PurchaseProposal[]
+  stockReservations         StockReservation[]
+  materialYieldStepBatches  MaterialYieldStepBatch[]
+  materialYieldStepBundles  MaterialYieldStepBundle[]
+  materialYieldRecipeIssues MaterialYieldRecipeIssue[]
 
   @@index([salesOrderId])
   @@map("production_invoices")
@@ -1920,6 +1956,11 @@ enum PurchaseProposalSource {
   /// chưa từng được xây), cùng idiom PIECE_MATERIAL_YIELD - productionInvoiceId luôn có giá trị,
   /// cuttingProposalId/inspectionKhoResultId luôn null. Xem ConsumableMaterialPurchaseService.
   CONSUMABLE_AUTO_CALC
+  /// Đề xuất mua nguyên liệu đầu vào (vd thanh nhôm) tính theo MaterialYieldRecipe cho 1 PI
+  /// (2026-10-02, vật tư thành phẩm KHÔNG gắn piece - vd chân nhôm - khác PIECE_MATERIAL_YIELD ở
+  /// trên vốn dành cho piece CÓ PieceMaterialYield như "pat"). productionInvoiceId luôn có giá
+  /// trị, cuttingProposalId/inspectionKhoResultId luôn null. Xem MaterialYieldRecipePurchaseService.
+  MATERIAL_YIELD_RECIPE
 }
 
 /// Tự sinh 1-1 theo (cuttingProposalId, warehouseCode) ngay khi CuttingProposal được duyệt
@@ -2151,6 +2192,10 @@ enum StockLedgerRefType {
   /// Trừ tồn Dây/Đinh/Nút nhựa thủ kho mang kèm mảnh lúc xuất đan (WeavingIssueMaterial,
   /// 2026-09-11) - KHÁC WeavingIssue chính (không ghi StockLedger, xem "Phase 9b").
   WEAVING_ISSUE_MATERIAL
+  /// Cộng tồn vật tư ra (vd chân nhôm) vào kho thật sau khi QC_PASSED công đoạn CUỐI của
+  /// MaterialYieldStepBundle (2026-10-01) - mirror FRAME_OUTPUT nhưng cho vật tư KHÔNG gắn piece
+  /// (xem MaterialYieldRecipe). Nguồn PRODUCTION -> đích Material.warehouseId (vd kho vat-tu-tp).
+  MATERIAL_YIELD_RECIPE_OUTPUT
 }
 
 enum TransferStatus {
@@ -2185,6 +2230,12 @@ enum StockReservationRefType {
   /// cùng lý do/cùng thiết kế, tách refType riêng để không lẫn 2 nguồn cùng ghi 1 (PI, vật tư).
   /// MaterialYieldIssuesService.create() rút giữ chỗ này (best-effort).
   PIECE_MATERIAL_YIELD_PURCHASE
+  /// Song sinh của PIECE_MATERIAL_YIELD_PURCHASE cho MaterialYieldRecipePurchaseService (2026-10-02)
+  /// - giữ chỗ phần tồn nguyên liệu đầu vào (vd thanh nhôm) đã dùng để che phủ nhu cầu cắt vật tư
+  /// thành phẩm (vd chân nhôm) không gắn piece. refId = productionInvoiceId. CHƯA có phía rút giữ
+  /// chỗ khi xuất thật (MaterialYieldRecipeIssuesService.create() vẫn đọc onHand thô - giản lược có
+  /// chủ đích ghi sẵn ở doc comment service đó, bổ sung sau nếu phát sinh xung đột thực tế).
+  MATERIAL_YIELD_RECIPE_PURCHASE
 }
 
 /// Sổ cái kho bút toán kép - nguồn sự thật duy nhất của tồn kho. Append-only: không có
@@ -2717,21 +2768,21 @@ model StepBatchSegment {
 /// pattern: "Lỗi" là số lịch sử cộng dồn, Bù đủ = 1 ProductionBatch HOÀN TOÀN MỚI gửi duyệt lại
 /// bình thường, không sửa lại dòng review cũ.
 model QcReview {
-  id                BigInt   @id @default(autoincrement())
-  steelIssueId      BigInt?
+  id                        BigInt   @id @default(autoincrement())
+  steelIssueId              BigInt?
   /// Nhánh Hàn/Sơn/VTTP "Chốt & gửi KCS" (Phase 9d, 2026-08-11) - XOR với
   /// steelIssueId/pieceStepBundleId/stepBundleId, CHECK DB qc_reviews_goods_xor_chk (mở rộng 4 cột
   /// 2026-09-07, xem pieceStepBundleId/stepBundleId dưới).
-  productionBatchId BigInt?
+  productionBatchId         BigInt?
   /// Đợt cắt được chấm (2026-09-05) - KCS Phôi giờ duyệt theo TỪNG đợt cắt, không phải cả lô
   /// nhận. KHÔNG nằm trong XOR nói trên: dòng nhánh Phôi mới ghi CẢ steelIssueId (lô cha, giữ cho
   /// mọi truy vấn/ràng buộc cũ nguyên vẹn - kể cả CHECK qc_reviews_goods_xor_chk) LẪN cutBundleId.
   /// NULL = dữ liệu cũ, chấm cho cả lô.
-  cutBundleId       BigInt?
+  cutBundleId               BigInt?
   /// Đợt gửi KCS theo công đoạn PHỤ của Sắt (2026-09-07, đổi scope lần 2 - StepBundle không còn
   /// thuộc đúng 1 SteelIssue nào) - LÀ 1 LEG THẬT trong XOR qc_reviews_goods_xor_chk (mirror
   /// pieceStepBundleId dưới, KHÔNG còn kèm steelIssueId như bản đầu).
-  stepBundleId      BigInt?
+  stepBundleId              BigInt?
   /// Nhánh công đoạn vật tư thành phẩm (2026-09-07, xem PieceStepBundle) - XOR CÙNG
   /// steelIssueId/productionBatchId/stepBundleId (CHECK qc_reviews_goods_xor_chk mở rộng 4 cột).
   /// KHÔNG phải con của productionBatchId - dòng QcReview này của bundle vẫn được tạo TRƯỚC khi
@@ -2740,28 +2791,35 @@ model QcReview {
   /// sinh thẳng ProductionBatch(QC_DONE) - xem
   /// ProductionBatchesService.autoFinalizePieceOutputIfLastStepComplete(). Mảnh KHÔNG khai
   /// processSteps vẫn dùng ProductionBatch.create() thủ công như cũ (không đụng nhánh này).
-  pieceStepBundleId BigInt?
-  failedQty         Int
-  defectReasonId    BigInt?
-  reason            String?
-  photoUrl          String?
-  reviewedAt        DateTime @default(now())
-  reviewedById      String
+  pieceStepBundleId         BigInt?
+  /// Nhánh QC vật tư thành phẩm KHÔNG gắn piece (2026-10-01, xem MaterialYieldStepBundle) - LÀ 1
+  /// LEG THẬT trong XOR qc_reviews_goods_xor_chk (mirror pieceStepBundleId, dùng cho vật tư tự sản
+  /// xuất không thuộc về 1 Piece cụ thể nào, vd chân nhôm - khác pat vẫn dùng pieceStepBundleId vì
+  /// pat vẫn là 1 Piece thật).
+  materialYieldStepBundleId BigInt?
+  failedQty                 Int
+  defectReasonId            BigInt?
+  reason                    String?
+  photoUrl                  String?
+  reviewedAt                DateTime @default(now())
+  reviewedById              String
 
-  steelIssue      SteelIssue?       @relation(fields: [steelIssueId], references: [id])
-  productionBatch ProductionBatch?  @relation(fields: [productionBatchId], references: [id])
-  cutBundle       CutBundle?        @relation(fields: [cutBundleId], references: [id])
-  stepBundle      StepBundle?       @relation(fields: [stepBundleId], references: [id])
-  pieceStepBundle PieceStepBundle?  @relation(fields: [pieceStepBundleId], references: [id])
-  defectReason    DefectReason?     @relation(fields: [defectReasonId], references: [id])
-  reviewedBy      User              @relation("QcReviewReviewedBy", fields: [reviewedById], references: [id])
-  segments        QcReviewSegment[]
+  steelIssue              SteelIssue?              @relation(fields: [steelIssueId], references: [id])
+  productionBatch         ProductionBatch?         @relation(fields: [productionBatchId], references: [id])
+  cutBundle               CutBundle?               @relation(fields: [cutBundleId], references: [id])
+  stepBundle              StepBundle?              @relation(fields: [stepBundleId], references: [id])
+  pieceStepBundle         PieceStepBundle?         @relation(fields: [pieceStepBundleId], references: [id])
+  materialYieldStepBundle MaterialYieldStepBundle? @relation(fields: [materialYieldStepBundleId], references: [id])
+  defectReason            DefectReason?            @relation(fields: [defectReasonId], references: [id])
+  reviewedBy              User                     @relation("QcReviewReviewedBy", fields: [reviewedById], references: [id])
+  segments                QcReviewSegment[]
 
   @@index([steelIssueId])
   @@index([productionBatchId])
   @@index([cutBundleId])
   @@index([stepBundleId])
   @@index([pieceStepBundleId])
+  @@index([materialYieldStepBundleId])
   @@map("qc_reviews")
 }
 
@@ -3169,4 +3227,107 @@ model PieceStepBundle {
   @@index([productionOrderId, pieceId, step])
   @@index([status])
   @@map("piece_step_bundles")
+}
+
+/// Xuất kho nguyên liệu vào (vd thanh nhôm) theo MaterialYieldRecipe - mirror MaterialYieldIssue
+/// nhưng khoá theo (productionInvoiceId, recipeId) thay vì (productionOrderId, materialId), vì vật
+/// tư ra không gắn 1 SKU/piece cụ thể nào (chỉ gắn 1 PI, giống StepBatch/StepBundle bên Sắt). Tái
+/// dùng enum MaterialYieldIssueStatus (ISSUED -> RECEIVED, không QC ở bước xuất nguyên liệu - QC xảy
+/// ra sau, ở MaterialYieldStepBundle khi Phôi gửi kết quả gia công).
+model MaterialYieldRecipeIssue {
+  id                  BigInt                   @id @default(autoincrement())
+  productionInvoiceId BigInt
+  recipeId            BigInt
+  issuedQty           Decimal                  @db.Decimal(14, 4)
+  status              MaterialYieldIssueStatus @default(ISSUED)
+  idempotencyKey      String?                  @unique
+  issuedAt            DateTime                 @default(now())
+  issuedById          String
+  receivedQty         Decimal?                 @db.Decimal(14, 4)
+  receivedAt          DateTime?
+  receivedById        String?
+
+  productionInvoice ProductionInvoice   @relation(fields: [productionInvoiceId], references: [id])
+  recipe            MaterialYieldRecipe @relation(fields: [recipeId], references: [id])
+  issuedBy          User                @relation("MaterialYieldRecipeIssueIssuedBy", fields: [issuedById], references: [id])
+  receivedBy        User?               @relation("MaterialYieldRecipeIssueReceivedBy", fields: [receivedById], references: [id])
+
+  @@index([productionInvoiceId, recipeId])
+  @@index([status])
+  @@map("material_yield_recipe_issues")
+}
+
+/// Định mức "vật tư thành phẩm không gắn piece" (2026-10-01, vd chân nhôm: 1 thanh nhôm -> N chân) -
+/// mirror PieceMaterialYield nhưng KHÔNG có pieceId/bomRevisionId, vì vật tư ra (`outputMaterial`)
+/// không thuộc về 1 SKU/mảnh cụ thể nào - dùng CHUNG cho mọi mảnh cần đan có khai dòng
+/// PieceMaterialItem trỏ tới outputMaterialId (xem WeavingIssuesService.getWovenMaterialLinesByPiece
+/// nhánh FINISHED_COMPONENT). outputMaterial.steelSubGroup phải = FINISHED_COMPONENT (validate ở
+/// MaterialYieldRecipesService).
+model MaterialYieldRecipe {
+  id               BigInt        @id @default(autoincrement())
+  outputMaterialId BigInt        @unique
+  inputMaterialId  BigInt
+  /// Số vật tư ra cắt được từ 1 đơn vị vật tư vào (vd 1 thanh nhôm = 12 chân).
+  piecesPerBar     Int
+  processSteps     ProcessStep[] @default([])
+  isActive         Boolean       @default(true)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  outputMaterial Material                   @relation("MaterialYieldRecipeOutput", fields: [outputMaterialId], references: [id])
+  inputMaterial  Material                   @relation("MaterialYieldRecipeInput", fields: [inputMaterialId], references: [id])
+  stepBatches    MaterialYieldStepBatch[]
+  stepBundles    MaterialYieldStepBundle[]
+  issues         MaterialYieldRecipeIssue[]
+
+  @@map("material_yield_recipes")
+}
+
+/// Mirror PieceStepBatch nhưng khoá theo (productionInvoiceId, recipeId, step) thay vì
+/// (productionOrderId, pieceId, step) - vật tư ra không gắn 1 SKU/piece cụ thể, chỉ gắn 1 PI (giống
+/// StepBatch bên Sắt, scope theo PI + vật tư - xem comment StepBundle).
+model MaterialYieldStepBatch {
+  id                        BigInt      @id @default(autoincrement())
+  productionInvoiceId       BigInt
+  recipeId                  BigInt
+  step                      ProcessStep
+  qty                       Int
+  /// NULL = đã báo nhưng CHƯA gửi KCS (mirror PieceStepBatch.pieceStepBundleId).
+  materialYieldStepBundleId BigInt?
+  idempotencyKey            String?     @unique
+  reportedAt                DateTime    @default(now())
+  reportedById              String
+
+  productionInvoice       ProductionInvoice        @relation(fields: [productionInvoiceId], references: [id])
+  recipe                  MaterialYieldRecipe      @relation(fields: [recipeId], references: [id])
+  materialYieldStepBundle MaterialYieldStepBundle? @relation(fields: [materialYieldStepBundleId], references: [id])
+  reportedBy              User                     @relation("MaterialYieldStepBatchReportedBy", fields: [reportedById], references: [id])
+
+  @@index([productionInvoiceId, recipeId, step])
+  @@index([materialYieldStepBundleId])
+  @@map("material_yield_step_batches")
+}
+
+/// "Đợt gửi KCS" cho vật tư thành phẩm không gắn piece - mirror PieceStepBundle, gom các
+/// MaterialYieldStepBatch CHƯA gửi (materialYieldStepBundleId NULL) của (productionInvoiceId,
+/// recipeId, step) thành 1 bundle rồi gửi KCS qua QcReview.materialYieldStepBundleId.
+model MaterialYieldStepBundle {
+  id                  BigInt                @id @default(autoincrement())
+  productionInvoiceId BigInt
+  recipeId            BigInt
+  step                ProcessStep
+  qty                 Int
+  status              PieceStepBundleStatus @default(AWAITING_QC)
+  submittedAt         DateTime              @default(now())
+  submittedById       String
+
+  productionInvoice ProductionInvoice        @relation(fields: [productionInvoiceId], references: [id])
+  recipe            MaterialYieldRecipe      @relation(fields: [recipeId], references: [id])
+  submittedBy       User                     @relation("MaterialYieldStepBundleSubmittedBy", fields: [submittedById], references: [id])
+  batches           MaterialYieldStepBatch[]
+  qcReviews         QcReview[]
+
+  @@index([productionInvoiceId, recipeId, step])
+  @@index([status])
+  @@map("material_yield_step_bundles")
 }
