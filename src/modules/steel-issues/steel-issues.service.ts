@@ -32,6 +32,7 @@ import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
 import {
   PhoiProgressItemResponseDto,
@@ -181,7 +182,17 @@ export class SteelIssuesService {
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
     private readonly notifications: NotificationsService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  private publishRealtime(
+    entityId: bigint | string,
+    action: 'CREATED' | 'RECEIVED',
+    actorId: string | null,
+  ): void {
+    this.realtime.publishEntityChanged({ entity: 'STEEL_ISSUE', entityId, action, actorId });
+  }
 
   /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/17.2
    *  changelog notification): catch bên trong 1 Prisma interactive transaction không cứu được
@@ -300,6 +311,7 @@ export class SteelIssuesService {
       barCount: created.barCount,
     });
 
+    this.publishRealtime(created.id, 'CREATED', issuedById);
     return this.toResponseDto(created, await this.resolveRequiredSteps(invoice.id, materialId));
   }
 
@@ -539,6 +551,7 @@ export class SteelIssuesService {
       include: STEEL_ISSUE_INCLUDE,
     });
     await this.resolveSteelIssueToPhoi(updated.id);
+    this.publishRealtime(updated.id, 'RECEIVED', null);
     return this.toResponseDto(
       updated,
       await this.resolveRequiredSteps(updated.productionInvoiceId, updated.materialId),

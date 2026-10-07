@@ -26,6 +26,8 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../../realtime/realtime.service';
+import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreateMaterialYieldIssueDto } from './dto/create-material-yield-issue.dto';
@@ -79,7 +81,18 @@ export class MaterialYieldIssuesService {
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
     private readonly notifications: NotificationsService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  private publishRealtime(
+    entity: RealtimeEntity,
+    entityId: bigint | string,
+    action: RealtimeEntityAction,
+    actorId: string | null,
+  ): void {
+    this.realtime.publishEntityChanged({ entity, entityId, action, actorId });
+  }
 
   /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
    *  17.2/19.2/22.2 changelog notification). */
@@ -274,6 +287,7 @@ export class MaterialYieldIssuesService {
       created,
       created.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
     );
+    this.publishRealtime('MATERIAL_YIELD_ISSUE', created.id, 'CREATED', issuedById);
     return this.toResponseDto(created);
   }
 
@@ -353,6 +367,7 @@ export class MaterialYieldIssuesService {
       include: MATERIAL_YIELD_ISSUE_INCLUDE,
     });
     await this.resolveMaterialYieldIssueToPhoi(updated.id);
+    this.publishRealtime('MATERIAL_YIELD_ISSUE', updated.id, 'RECEIVED', receivedById);
     return this.toResponseDto(updated);
   }
 

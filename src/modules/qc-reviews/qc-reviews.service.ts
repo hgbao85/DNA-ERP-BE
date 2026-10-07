@@ -30,6 +30,7 @@ import { ProductionBatchesService } from '../production-batches/production-batch
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { CreateQcReviewDto } from './dto/create-qc-review.dto';
 import { CreateSteelIssueQcReviewDto } from './dto/create-steel-issue-qc-review.dto';
 import { ListQcReviewsQueryDto } from './dto/list-qc-reviews-query.dto';
@@ -64,7 +65,17 @@ export class QcReviewsService {
     private readonly materialYieldRecipeProductionService: MaterialYieldRecipeProductionService,
     private readonly cloudinaryService: CloudinaryService,
     private readonly notifications: NotificationsService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  private publishRealtime(
+    entityId: bigint | string,
+    action: 'QC_RECORDED',
+    actorId: string | null,
+  ): void {
+    this.realtime.publishEntityChanged({ entity: 'QC_REVIEW', entityId, action, actorId });
+  }
 
   /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
    *  17.2/19.2 changelog notification). */
@@ -215,6 +226,7 @@ export class QcReviewsService {
       });
     });
 
+    this.publishRealtime(created.id, 'QC_RECORDED', reviewedById);
     return this.toResponseDto(created);
   }
 
@@ -336,6 +348,7 @@ export class QcReviewsService {
       BUSINESS_ROLES.PHOI_STAFF,
     );
 
+    this.publishRealtime(cutBundleId, 'QC_RECORDED', reviewedById);
     return this.toResponseDto(created);
   }
 
@@ -443,6 +456,7 @@ export class QcReviewsService {
       });
     });
 
+    this.publishRealtime(stepBundleId, 'QC_RECORDED', reviewedById);
     return this.toResponseDto(created);
   }
 
@@ -509,6 +523,7 @@ export class QcReviewsService {
       dto.failedQty,
       this.mfgStageToSenderRole(batch.stage),
     );
+    this.publishRealtime(created.id, 'QC_RECORDED', reviewedById);
 
     return this.toResponseDto(created);
   }
@@ -589,6 +604,7 @@ export class QcReviewsService {
       return review;
     });
 
+    this.publishRealtime(pieceStepBundleId, 'QC_RECORDED', reviewedById);
     return this.toResponseDto(created);
   }
 
@@ -657,6 +673,7 @@ export class QcReviewsService {
       return review;
     });
 
+    this.publishRealtime(materialYieldStepBundleId, 'QC_RECORDED', reviewedById);
     return this.toResponseDto(created);
   }
 

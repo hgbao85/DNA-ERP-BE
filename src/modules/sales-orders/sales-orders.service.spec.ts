@@ -1,3 +1,4 @@
+import { RealtimeService } from '../../realtime/realtime.service';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { Prisma, SalesOrderItemStatus } from '../../generated/prisma/client';
@@ -137,7 +138,10 @@ describe('SalesOrdersService', () => {
       // các mock ở trên dùng chung namespace, không tách tx riêng).
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
-    service = new SalesOrdersService(prisma as unknown as PrismaServiceType);
+    service = new SalesOrdersService(
+      prisma as unknown as PrismaServiceType,
+      { publishEntityChanged: jest.fn() } as unknown as RealtimeService,
+    );
   });
 
   describe('create', () => {

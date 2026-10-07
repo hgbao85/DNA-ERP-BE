@@ -12,11 +12,13 @@ import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { QcReviewsService } from './qc-reviews.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 const decimal = (n: number) => ({ toNumber: () => n, toString: () => String(n) });
 
 describe('QcReviewsService', () => {
   let service: QcReviewsService;
+  let realtimeStub: { publishEntityChanged: jest.Mock; publishNotificationCreated: jest.Mock };
   let prisma: {
     qcReview: {
       create: jest.Mock;
@@ -36,6 +38,7 @@ describe('QcReviewsService', () => {
     stepBundle: { findUnique: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
     productionBatch: { update: jest.Mock; updateMany: jest.Mock };
     pieceStepBundle: { update: jest.Mock; updateMany: jest.Mock };
+    materialYieldStepBundle: { updateMany: jest.Mock };
     productionOrder: { findFirst: jest.Mock; findUniqueOrThrow: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
     productionInvoice: { findUnique: jest.Mock };
@@ -198,6 +201,9 @@ describe('QcReviewsService', () => {
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      materialYieldStepBundle: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       // floorStage gate (2026-08-31) - mặc định PI luôn có 1 order ACTIVE, đa số test không quan
       // tâm gate assertPiHasActiveFloorForInvoice()/assertPiHasActiveFloorForOrder(), xem mục
       // riêng "QLSX kiểm soát" bên dưới mới override.
@@ -231,6 +237,7 @@ describe('QcReviewsService', () => {
       findOneBundleRowOrThrow: jest.fn(),
       finalizeRecipeOutputIfLastStepComplete: jest.fn().mockResolvedValue(undefined),
     };
+    realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new QcReviewsService(
       prisma as unknown as PrismaServiceType,
       steelIssuesService as unknown as SteelIssuesService,
@@ -238,6 +245,7 @@ describe('QcReviewsService', () => {
       materialYieldRecipeProductionService as unknown as MaterialYieldRecipeProductionService,
       cloudinaryService as unknown as CloudinaryService,
       notificationsService as unknown as NotificationsService,
+      realtimeStub as unknown as RealtimeService,
     );
   });
 
@@ -381,6 +389,17 @@ describe('QcReviewsService', () => {
       expect(result.id).toBe('500');
     });
 
+    it('phát entity.changed QC_RECORDED SAU khi commit', async () => {
+      await service.reviewCutBundle('1', { segments: [] }, 'user-kcs');
+
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith({
+        entity: 'QC_REVIEW',
+        entityId: '1',
+        action: 'QC_RECORDED',
+        actorId: 'user-kcs',
+      });
+    });
+
     // Phase 3b, nhóm 7.5-i, changelog 2026-09-25 mục 19.
     it('duyệt ĐẠT - resolve CUT_BUNDLE_TO_KCS + emit QC_PASSED cho QLSX', async () => {
       await service.reviewCutBundle('1', { segments: [] }, 'user-kcs');
@@ -508,6 +527,17 @@ describe('QcReviewsService', () => {
       const calls = prisma.qcReview.create.mock.calls as { data: { steelIssueId?: bigint } }[][];
       expect(calls[0][0].data.steelIssueId).toBeUndefined();
       expect(result.id).toBe('500');
+    });
+
+    it('phát entity.changed QC_RECORDED SAU khi commit', async () => {
+      await service.reviewStepBundle('800', { segments: [] }, 'user-kcs');
+
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith({
+        entity: 'QC_REVIEW',
+        entityId: '800',
+        action: 'QC_RECORDED',
+        actorId: 'user-kcs',
+      });
     });
 
     it('vượt số đã báo của ĐÚNG stepBundle này (groupBy lọc theo stepBatch.stepBundleId)', async () => {
@@ -712,6 +742,17 @@ describe('QcReviewsService', () => {
       expect(result.id).toBe('502');
     });
 
+    it('phát entity.changed QC_RECORDED SAU khi commit', async () => {
+      await service.reviewPieceStep('800', { failedQty: 0 }, 'user-kcs');
+
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith({
+        entity: 'QC_REVIEW',
+        entityId: '800',
+        action: 'QC_RECORDED',
+        actorId: 'user-kcs',
+      });
+    });
+
     it('2026-09-08: gọi autoFinalizePieceOutputIfLastStepComplete() trong CÙNG transaction, đúng tham số từ bundle', async () => {
       await service.reviewPieceStep('800', { failedQty: 0 }, 'user-kcs');
 
@@ -769,6 +810,99 @@ describe('QcReviewsService', () => {
       expect(
         productionBatchesService.autoFinalizePieceOutputIfLastStepComplete,
       ).not.toHaveBeenCalled();
+    });
+  });
+
+  // 2026-10-07: KCS duyệt 1 "đợt gửi KCS" của Vật tư thành phẩm (MaterialYieldStepBundle, vd chân
+  // nhôm) - cùng khuôn reviewPieceStep() nhưng finalize qua MaterialYieldRecipeProductionService
+  // (không phải ProductionBatchesService). Trước 2026-10-07 không có test nào cho method này.
+  describe('reviewMaterialYieldStep', () => {
+    const awaitingMaterialYieldBundle = {
+      id: 850n,
+      productionInvoiceId: 900n,
+      qty: 10,
+      status: 'AWAITING_QC',
+    };
+    const materialYieldQcReview = {
+      ...bundleQcReview,
+      id: 503n,
+      pieceStepBundleId: null,
+      materialYieldStepBundleId: 850n,
+    };
+
+    beforeEach(() => {
+      materialYieldRecipeProductionService.findOneBundleRowOrThrow.mockResolvedValue(
+        awaitingMaterialYieldBundle,
+      );
+      prisma.qcReview.create.mockResolvedValue(materialYieldQcReview);
+    });
+
+    it('duyệt ĐẠT hoàn toàn (failedQty=0) - bundle chuyển QC_PASSED, gọi finalize với đúng tham số', async () => {
+      const result = await service.reviewMaterialYieldStep('850', { failedQty: 0 }, 'user-kcs');
+
+      expect(prisma.materialYieldStepBundle.updateMany).toHaveBeenCalledWith({
+        where: { id: 850n, status: 'AWAITING_QC' },
+        data: { status: 'QC_PASSED' },
+      });
+      expect(prisma.qcReview.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+          data: expect.objectContaining({
+            materialYieldStepBundleId: 850n,
+            failedQty: 0,
+            reviewedById: 'user-kcs',
+          }),
+        }),
+      );
+      expect(
+        materialYieldRecipeProductionService.finalizeRecipeOutputIfLastStepComplete,
+      ).toHaveBeenCalledWith(prisma, awaitingMaterialYieldBundle, 0, 'user-kcs');
+      expect(result.id).toBe('503');
+    });
+
+    it('failedQty vượt số lượng đã gửi (bundle.qty) -> 400, không ghi gì', async () => {
+      await expect(
+        service.reviewMaterialYieldStep('850', { failedQty: 11 }, 'user-kcs'),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+    });
+
+    it('bundle không ở AWAITING_QC -> 409, không ghi gì', async () => {
+      materialYieldRecipeProductionService.findOneBundleRowOrThrow.mockResolvedValue({
+        ...awaitingMaterialYieldBundle,
+        status: 'QC_PASSED',
+      });
+
+      await expect(
+        service.reviewMaterialYieldStep('850', { failedQty: 0 }, 'user-kcs'),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+    });
+
+    // Nghiêm trọng (cùng idiom reviewPieceStep/reviewProductionBatch): 2 request duyệt gần đồng
+    // thời đều đọc status AWAITING_QC (snapshot ngoài transaction) - updateMany+count guard chặn
+    // request thua ngay trong transaction, không để gọi finalize 2 lần cho cùng bundle.
+    it('CHẶN (409, rollback) nếu bundle đã bị 1 request khác duyệt trong lúc đang xử lý', async () => {
+      prisma.materialYieldStepBundle.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.reviewMaterialYieldStep('850', { failedQty: 0 }, 'user-kcs'),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+      expect(
+        materialYieldRecipeProductionService.finalizeRecipeOutputIfLastStepComplete,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('phát entity.changed QC_RECORDED SAU khi commit', async () => {
+      await service.reviewMaterialYieldStep('850', { failedQty: 0 }, 'user-kcs');
+
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith({
+        entity: 'QC_REVIEW',
+        entityId: '850',
+        action: 'QC_RECORDED',
+        actorId: 'user-kcs',
+      });
     });
   });
 

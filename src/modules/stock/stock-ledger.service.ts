@@ -10,6 +10,8 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { RealtimeService } from '../../realtime/realtime.service';
+import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
 import { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
 import { ListStockLedgerQueryDto } from './dto/list-stock-ledger-query.dto';
 import { StockLedgerResponseDto } from './dto/stock-ledger-response.dto';
@@ -72,7 +74,20 @@ export interface PostStockEntryInput {
  */
 @Injectable()
 export class StockLedgerService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly realtime: RealtimeService,
+  ) {}
+
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  private publishRealtime(
+    entity: RealtimeEntity,
+    entityId: bigint | string,
+    action: RealtimeEntityAction,
+    actorId: string | null,
+  ): void {
+    this.realtime.publishEntityChanged({ entity, entityId, action, actorId });
+  }
 
   /**
    * `tx` = ghi bút toán TRONG transaction của caller. BẮT BUỘC dùng khi caller có bước "đọc tồn
@@ -211,7 +226,7 @@ export class StockLedgerService {
     }
     const materialId = input.materialId;
 
-    return this.prisma.$transaction(async (tx) => {
+    const adjusted = await this.prisma.$transaction(async (tx) => {
       // dto.stockLengthMm CÓ giá trị -> caller đã tách hiển thị theo từng bucket (vd
       // MfgWarehousesPage.tsx "Quản lý kho") và muốn sửa ĐÚNG bucket đó - lọc thêm stockLengthMm,
       // khớp unique index 3 cột nên chỉ có ĐÚNG 1 dòng.
@@ -245,6 +260,8 @@ export class StockLedgerService {
       }
       return this.postEntry(input, tx);
     });
+    this.publishRealtime('STOCK', materialId, 'ADJUSTED', userId);
+    return adjusted;
   }
 
   async findAll(query: ListStockLedgerQueryDto): Promise<Paginated<StockLedgerResponseDto>> {

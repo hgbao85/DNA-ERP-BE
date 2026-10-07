@@ -55,6 +55,7 @@ import { MaterialYieldRecipesModule } from './modules/material-yield-recipes/mat
 import { PackagingIssuesModule } from './modules/packaging-issues/packaging-issues.module';
 import { ProductionBatchesModule } from './modules/production-batches/production-batches.module';
 import { WorkQueueModule } from './modules/work-queue/work-queue.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 @Module({
   imports: [
@@ -129,6 +130,7 @@ import { WorkQueueModule } from './modules/work-queue/work-queue.module';
     PackagingIssuesModule,
     ProductionBatchesModule,
     WorkQueueModule,
+    RealtimeModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

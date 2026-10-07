@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Realtime (Socket.IO) — kiến trúc và hợp đồng</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #57606a; --line: #d0d7de;
+    --code-bg: #f6f8fa; --accent: #0969da; --th-bg: #f6f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #8d96a0; --line: #30363d;
+      --code-bg: #161b22; --accent: #58a6ff; --th-bg: #161b22;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117; --fg: #e6edf3; --muted: #8d96a0; --line: #30363d;
+    --code-bg: #161b22; --accent: #58a6ff; --th-bg: #161b22;
+  }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 8px; }
+  h2 { font-size: 20px; margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 24px 0 8px; }
+  p.lede { color: var(--muted); margin: 0 0 24px; }
+  a { color: var(--accent); }
+  code { font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--line); }
+  pre code { background: none; padding: 0; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--th-bg); font-weight: 600; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .flow { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.5; }
+  .note { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--code-bg); border-radius: 4px; margin: 14px 0; }
+  .toc { columns: 2; margin: 0 0 8px; color: var(--muted); }
+  .toc a { color: var(--muted); text-decoration: none; }
+  @media (max-width: 600px) { .toc { columns: 1; } table { font-size: 13px; } }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Realtime (Socket.IO) — kiến trúc, hợp đồng và cách thêm sự kiện</h1>
+<p class="lede">Viết cho: kỹ sư BE/FE làm việc trên ERP, cần thêm một sự kiện realtime mới hoặc debug việc không nhận được cập nhật.</p>
+
+<ol class="toc">
+  <li><a href="#s0">0. Tình trạng hiện tại</a></li>
+  <li><a href="#s1">1. Nguyên tắc</a></li>
+  <li><a href="#s2">2. Kiến trúc</a></li>
+  <li><a href="#s3">3. Xác thực và phân quyền</a></li>
+  <li><a href="#s4">4. Hợp đồng event</a></li>
+  <li><a href="#s5">5. Cách thêm một entity mới</a></li>
+  <li><a href="#s6">6. Mất kết nối và fallback</a></li>
+  <li><a href="#s7">7. Giới hạn đã biết</a></li>
+  <li><a href="#s8">8. Test thủ công giữa nhiều client</a></li>
+  <li><a href="#s9">9. Các file chính</a></li>
+  <li><a href="#s10">10. Triển khai production</a></li>
+</ol>
+
+<h2 id="s0">0. Tình trạng hiện tại (2026-10-07)</h2>
+<p><strong>Tạm ổn, dùng được.</strong> Không có gì vỡ nghiệp vụ; mọi test tự động xanh (BE 1436 test, FE 71 test, tsc/eslint 2 phía sạch).</p>
+<ul>
+  <li><strong>Đã test sống 2 trình duyệt (chắc chắn nhất):</strong> <code>TwoTierScreen</code> (Hàn/Sơn/KCS) và <code>PRODUCTION_ORDER</code> (QLSX/KHSX, <code>ThongKePagePlan.tsx</code>). Cả 2 lần đều tìm ra lỗi thật giữa đường (4 method <code>/qc-reviews</code> thiếu publish event; <code>onReload</code> thiếu <code>refetchPis()</code>) và đã sửa + re-verify.</li>
+  <li><strong>Đã nối đúng kỹ thuật, có test tự động, nhưng CHƯA live-test 2 trình duyệt:</strong> các entity còn lại trong bảng mục 4 (SKU, warehouse-transfers, purchase-proposals, steel-issues, material-issues, material-yield-issues, packaging-issues, weaving-issues, stock, production-invoices, cutting-proposals, sales-orders, material-yield-recipes) + 2 chỗ vừa vá ngày 07/10 (<code>WORK_QUEUE_TOPICS</code>, <code>products.controller.ts</code>).</li>
+  <li><strong>Chủ ý KHÔNG nối</strong> (không phải thiếu sót): 15 module master-data admin (customers, materials, suppliers, warehouses, segment-specs, material-groups, defect-reasons, weaving-points, office-supplies, system-config, users, roles, uploads, auth) + <code>bom-revisions</code> — đổi hiếm, không ai lắng.</li>
+  <li><strong>Chưa làm:</strong> chưa smoke-test trên production thật (Render/Vercel) — mới chạy trên máy dev.</li>
+  <li><strong>Quan sát phụ, không phải lỗi:</strong> 1 phiên trình duyệt mở lâu từng không nhận event (nghi do HMR/"Slow filesystem" của dev server) — không tái hiện được, không ảnh hưởng production.</li>
+</ul>
+
+<h2 id="s1">1. Nguyên tắc</h2>
+<ul>
+  <li><strong>Push tín hiệu, không push dữ liệu.</strong> Event chỉ chứa ID, <code>action</code>, <code>topics</code>. FE nhận tín hiệu rồi <strong>refetch qua REST</strong>. REST là nơi duy nhất áp phân quyền và warehouse scope, nên socket không bao giờ là đường lộ dữ liệu.</li>
+  <li><strong>Chỉ phát sau commit.</strong> <code>RealtimeService.publish*</code> được gọi sau <code>await prisma.$transaction(...)</code> (hoặc sau ghi đơn lẻ). Transaction rollback thì không có event.</li>
+  <li><strong>Realtime là phần phụ.</strong> Lỗi phát event được log kèm correlationId, không bao giờ ném ra ngoài làm hỏng request đã commit.</li>
+  <li><strong>Một kết nối duy nhất mỗi trình duyệt</strong> (<code>realtime</code> singleton ở FE). Component không tự gọi <code>io()</code>.</li>
+</ul>
+
+<h2 id="s2">2. Kiến trúc</h2>
+<pre class="flow"><code>User action → REST controller → Service → $transaction (commit)
+                                               │
+                              after commit ────┘
+                                               ▼
+                 RealtimeService.publishEntityChanged / publishNotificationCreated
+                                               ▼
+                 RealtimeGateway (Socket.IO, cùng cổng HTTP, path /socket.io)
+                   rooms: user:&lt;id&gt;  |  perm:&lt;MODULE&gt;:VIEW
+                                               ▼
+   FE realtime (singleton) → eventBus (khử trùng eventId) → hooks
+     useRealtimeRefetch(topics, refetch)  → refetch REST (debounce 400ms)
+     useRealtimeEvent(name, handler)      → toast / badge
+     resync khi kết nối lại               → refetch toàn bộ topic đang nghe
+     safetyTick mỗi 5 phút (khi connected) → refetch toàn bộ topic đang nghe</code></pre>
+<p>Thông báo (<code>NotificationsService.emit</code>) luôn chạy ngoài transaction nên phát ngay sau khi <code>create</code>/<code>update</code> xong. Không có caller nào truyền <code>tx</code> vào <code>emit</code>; nếu sau này có, caller phải tự phát sau commit (xem chú thích trong code).</p>
+
+<h2 id="s3">3. Xác thực và phân quyền</h2>
+<ul>
+  <li>Handshake: <code>auth: { token, correlationId }</code>. Token không có, sai chữ ký, hoặc hết hạn → <code>connect_error: UNAUTHORIZED</code>. Không dùng cookie hay query string để tránh lộ token trong URL.</li>
+  <li>Room do <strong>server</strong> tự join theo <code>permissions</code> trong JWT. Client không có API chọn room.</li>
+  <li>Chỉ quyền <code>VIEW</code> mở kênh realtime. Quyền <code>CREATE</code>/<code>APPROVE</code> không nghe event.</li>
+  <li>Token hết hạn → server ngắt socket (<code>io server disconnect</code>), FE refresh rồi kết nối lại. Phù hợp với REST: guard cũng chỉ tin token đến khi <code>exp</code>.</li>
+  <li>Quyền thay đổi giữa phiên chỉ có hiệu lực sau khi token mới được cấp, giống REST.</li>
+</ul>
+
+<h2 id="s4">4. Hợp đồng event</h2>
+<p>Nguồn sự thật: <code>src/realtime/realtime.contract.ts</code> (BE). Bản sao FE: <code>src/realtime/contract.ts</code>. Khi đổi một bên, đổi cả hai.</p>
+
+<table>
+  <thead><tr><th>Event</th><th>Room</th><th>Khi nào</th><th>Payload chính</th></tr></thead>
+  <tbody>
+    <tr><td><code>notification.created</code></td><td><code>user:&lt;id&gt;</code></td><td>Thông báo mới hoặc thông báo được gộp (dedupe)</td><td><code>notificationId, type, category, severity, title, message, link, merged, createdAt</code></td></tr>
+    <tr><td><code>notification.changed</code></td><td><code>user:&lt;id&gt;</code></td><td>Đã đọc, đọc tất cả, lưu trữ, hoặc đóng thông báo</td><td><code>action, notificationIds</code></td></tr>
+    <tr><td><code>entity.changed</code></td><td><code>perm:&lt;MODULE&gt;:VIEW</code> của các module trong route</td><td>Entity nghiệp vụ đổi trạng thái</td><td><code>entity, entityId, action, topics</code></td></tr>
+  </tbody>
+</table>
+<p>Envelope chung: <code>{ eventId, name, occurredAt, correlationId, payload }</code>. <code>eventId</code> là UUID để FE khử trùng.</p>
+
+<h3>Entity đã nối (<code>REALTIME_ENTITY_ROUTES</code>)</h3>
+<table>
+  <thead><tr><th>Entity</th><th>Action đã phát</th><th>Module nhận</th><th>Topic FE</th></tr></thead>
+  <tbody>
+    <tr><td><code>WAREHOUSE_TRANSFER</code></td><td>CREATED, CONFIRMED, REJECTED</td><td>WAREHOUSE_TRANSFER, STOCK</td><td>warehouse-transfers, stock</td></tr>
+    <tr><td><code>PURCHASE_PROPOSAL</code></td><td>APPROVED (Sếp duyệt), RECEIVED (thủ kho nhận)</td><td>PURCHASE_PROPOSAL</td><td>purchase-proposals</td></tr>
+    <tr><td><code>STEEL_ISSUE</code></td><td>CREATED (xuất sắt), RECEIVED (Phôi nhận)</td><td>STEEL_ISSUE, STOCK</td><td>steel-issues, stock</td></tr>
+    <tr><td><code>PRODUCTION_BATCH</code></td><td>CREATED, FINISHED</td><td>PRODUCTION_BATCH</td><td>production-batches</td></tr>
+    <tr><td><code>QC_REVIEW</code></td><td>QC_RECORDED (duyệt lô/đợt cắt/bước/mảnh/vật tư thành phẩm - mọi endpoint ghi của <code>/qc-reviews</code>)</td><td>QC_REVIEW</td><td>qc-reviews, production-batches</td></tr>
+    <tr><td><code>MATERIAL_ISSUE</code></td><td>CREATED (xuất cho Hàn/Sơn), RECEIVED</td><td>MATERIAL_ISSUE, STOCK</td><td>material-issues, stock</td></tr>
+    <tr><td><code>PACKAGING_ISSUE</code></td><td>CREATED (xuất đóng gói)</td><td>PACKAGING_ISSUE, STOCK</td><td>packaging-issues, stock</td></tr>
+    <tr><td><code>MATERIAL_YIELD_ISSUE</code></td><td>CREATED, RECEIVED (vật tư thành phẩm)</td><td>MATERIAL_YIELD_ISSUE, STOCK</td><td>material-yield-issues, stock</td></tr>
+    <tr><td><code>WEAVING_ISSUE</code></td><td>CREATED (xuất đan), RECEIVED (nhập đan)</td><td>WEAVING_ISSUE, STOCK</td><td>weaving-issues, stock</td></tr>
+    <tr><td><code>STOCK</code></td><td>ADJUSTED (điều chỉnh tồn kho thủ công)</td><td>STOCK</td><td>stock</td></tr>
+    <tr><td><code>PRODUCTION_INVOICE</code></td><td>APPROVED, REJECTED (Sếp / QLSX duyệt hoặc từ chối PI)</td><td>PRODUCTION_INVOICE</td><td>production-invoices</td></tr>
+    <tr><td><code>CUTTING_PROPOSAL</code></td><td>FINISHED (solver đã lưu kết quả, thành công hoặc lỗi)</td><td>CUTTING_PROPOSAL</td><td>cutting-proposals, production-invoices</td></tr>
+    <tr><td><code>SALES_ORDER</code></td><td>CREATED, UPDATED (sửa đơn / thêm-sửa dòng), DELETED, SHIPPED (xuất dòng)</td><td>SALES_ORDER</td><td>sales-orders</td></tr>
+    <tr><td><code>MATERIAL_YIELD_RECIPE</code></td><td>CREATED, UPDATED, DELETED (CRUD định mức)</td><td>MATERIAL_YIELD_RECIPE</td><td>material-yield-recipes</td></tr>
+    <tr><td><code>PRODUCTION_ORDER</code></td><td>UPDATED (floor-start/pause/finish, resync-bom)</td><td>PRODUCTION_ORDER</td><td>production-orders</td></tr>
+    <tr><td><code>SKU</code></td><td>CREATED, UPDATED (sửa, định mức), APPROVED, REJECTED, DELETED (mọi endpoint ghi của <code>/skus</code>; từ 2026-10-07 gắn thêm cho <code>/products</code>)</td><td>SKU</td><td>skus</td></tr>
+  </tbody>
+</table>
+
+<h3>Màn hình đã nghe (FE)</h3>
+<p>Trang Tồn kho Mfg và Kho Phôi (<code>stock</code>), Xác nhận vật tư (<code>material-issues</code>), Nhận sắt Phôi (<code>steel-issues</code>, <code>material-yield-issues</code>), KCS Phôi/Công đoạn (<code>qc-reviews</code>, <code>production-batches</code>), Đan/Sơn/Hàn (<code>production-batches</code>), Lệnh SX (<code>production-invoices</code>, <code>cutting-proposals</code>), Quản lý đề xuất cắt (<code>cutting-proposals</code>), danh sách PI admin (<code>production-invoices</code>), đơn bán hàng (<code>sales-orders</code>), xuất kho (<code>sales-orders</code>, <code>packaging-issues</code>, <code>stock</code>), dashboard vật tư (<code>stock</code>).</p>
+<p>Màn Danh sách SKU và Duyệt SKU làm mới trực tiếp; màn Định mức mảnh (SPEC_STEEL) chỉ báo để không mất dữ liệu nhập. Form đang nhập không bị refetch tự động: trang Xuất sắt hiện thanh "Dữ liệu vừa được cập nhật" (<code>RealtimeUpdateNotice</code>), người dùng bấm để tải lại.</p>
+<p>Cùng thêm (2026-10-07, rà soát toàn bộ <code>useFetch</code> còn lại): Danh sách/Duyệt SKU, Định mức mảnh/chi tiết (SPEC_STEEL + SPEC_ACCESSORY, <code>skus</code>), Chuyền kiểm/Đóng gói/Nhập-xuất đan/Xuất vật tư Phôi (<code>skus</code>), màn Hàn/Sơn/KCS dùng chung <code>TwoTierScreen</code> (<code>production-batches</code> + <code>qc-reviews</code>), Lệnh SX Phôi/Chân nhôm/Vật tư thành phẩm (<code>steel-issues</code> + <code>qc-reviews</code>), Gán SKU đợt cắt - Admin (<code>steel-issues</code>), KCS Chân nhôm/ảnh đính kèm Admin (<code>qc-reviews</code>), Quản lý/Lịch sử khách hàng (<code>sales-orders</code>), Hướng dẫn cắt/Tổng hợp PI Phôi - Admin (<code>steel-issues</code>, <code>production-invoices</code>). Đợt này cũng vá 4 method <code>/qc-reviews</code> trước đó KHÔNG phát event (<code>reviewCutBundle</code>, <code>reviewStepBundle</code>, <code>reviewPieceStep</code>, <code>reviewMaterialYieldStep</code>) - lỗi thật ở BE, không chỉ thiếu nối FE.</p>
+<p><strong>Đã làm tiếp (2026-10-07, cùng ngày):</strong></p>
+<ul>
+<li>Viết 5 test tự động cho <code>reviewMaterialYieldStep</code> (trước đó chưa có test nào).</li>
+<li>Nối <code>MATERIAL_YIELD_RECIPE</code> (CRUD định mức, entity mới) và 2 controller liên quan tái dùng entity có sẵn: <code>material-yield-recipe-issues.controller.ts</code> dùng chung <code>MATERIAL_YIELD_ISSUE</code>, <code>material-yield-recipe-production.controller.ts</code> dùng chung <code>PRODUCTION_BATCH</code>.</li>
+<li><strong>Test UI thật với 2 trình duyệt</strong> (<code>han</code> và <code>kcs</code>, dữ liệu PI "E2E" - fixture test có sẵn): <code>han</code> báo sản lượng → màn KCS tự hiện lô chờ duyệt KHÔNG CẦN F5; KCS duyệt → màn <code>han</code> (đang mở, không F5) tự hiện thanh "Dữ liệu vừa được cập nhật", bấm Tải lại thì đúng dữ liệu mới (Đã duyệt: 1). Xác nhận <code>TwoTierScreen</code> hoạt động đúng ở cả 3 tầng, 0 lỗi console.</li>
+<li><strong>Rà soát toàn diện lần 2</strong> (liệt kê MỌI controller BE có endpoint ghi, đối chiếu xem đã gắn realtime chưa): phát hiện <code>PRODUCTION_ORDER</code> (floor-start/pause/finish, resync-bom) - cổng gác trung tâm của QLSX, nhiều vai Hàn/Sơn/Phôi/KCS đều có quyền VIEW. Màn duy nhất hiển thị/thao tác (<code>ThongKePagePlan.tsx</code>, dùng chung bởi QLSX và KHSX) đã gắn thêm topic <code>production-orders</code>.</li>
+<li>Các module còn lại chưa gắn (customers, materials, suppliers, warehouses, segment-specs, material-groups, defect-reasons, weaving-points, office-supplies, system-config, users, roles, uploads, auth) là master-data admin thuần, đổi hiếm, ít cộng tác đồng thời - CHỦ Ý không nối. <code>bom-revisions</code> có API ghi nhưng không có trang FE nào hiển thị trực tiếp nên nối sẽ không ai lắng nghe - cũng chủ ý bỏ qua.</li>
+<li><strong>Test UI thật cho <code>PRODUCTION_ORDER</code></strong> (<code>qlsx</code> bấm Bắt đầu/Tạm dừng, <code>khsx</code> xem cùng màn <code>ThongKePagePlan.tsx</code>): phát hiện 1 lỗi thật - nút "Tải lại" trên banner chỉ gọi <code>refetchSkus()</code>, không gọi <code>refetchPis()</code> (fetch riêng giữ floor-stage hiển thị ở danh sách PI). ĐÃ SỬA: thêm <code>refetchPis()</code> vào <code>onReload</code>.</li>
+<li><strong>Quan sát phụ (môi trường dev, không phải lỗi code):</strong> một phiên trình duyệt mở lâu từng không nhận được event dù socket vẫn "kết nối"; socket mới (sau F5) nhận đúng ngay. Trùng lúc dev server FE tự build lại nhiều lần không rõ lý do (nghi liên quan cảnh báo "Slow filesystem"). Không ảnh hưởng production.</li>
+<li><strong>Rà soát tiếp 2026-10-07 - badge "việc chờ tôi" thiếu quá nửa topic:</strong> <code>WORK_QUEUE_TOPICS</code> chỉ có 6/12 topic thật ảnh hưởng tới các counter của <code>WorkQueueService</code> - thiếu <code>skus</code>, <code>production-invoices</code>, <code>cutting-proposals</code>, <code>sales-orders</code>, <code>packaging-issues</code>, <code>production-orders</code>. Không làm badge sai (polling vẫn bắt kịp), chỉ chậm. ĐÃ SỬA: thêm đủ 6 topic còn thiếu.</li>
+<li><strong>Rà soát tiếp 2026-10-07 - <code>products.controller.ts</code> (POST /products) chưa từng nối realtime:</strong> FE gọi qua <code>resolveMfgProduct</code> để tự tạo MfgProduct khi Sales tạo đơn hàng SKU mới - cùng bảng SKUListPage.tsx đọc (lắng topic <code>skus</code>) nhưng ghi qua controller khác nên không đẩy event. ĐÃ SỬA: gắn <code>@RealtimeEntityOn('SKU')</code> cho cả controller.</li>
+</ul>
+<p>Thông báo nghiệp vụ (mọi <code>NOTIFICATION_TYPES</code>) đi qua <code>notification.created</code> tự động, không cần làm gì thêm.</p>
+
+<h2 id="s5">5. Cách thêm một entity mới</h2>
+<ol>
+  <li>Thêm entity vào <code>RealtimeEntity</code> và một dòng vào <code>REALTIME_ENTITY_ROUTES</code> (BE contract), đồng thời cập nhật bản sao FE.</li>
+  <li>Trong service, <strong>sau khi transaction commit</strong> gọi:
+<pre><code>this.realtime.publishEntityChanged({ entity: 'X', entityId: row.id, action: 'CONFIRMED', actorId: userId });</code></pre>
+    Đặt SAU <code>await this.prisma.$transaction(...)</code>, không đặt bên trong callback. Bỏ qua các nhánh idempotent replay (không ghi thêm gì thì không phát).</li>
+  <li>Ở FE, màn hình nghe topic tương ứng:
+<pre><code>useRealtimeRefetch(['x-topic'], refetch);</code></pre>
+    Với danh sách dùng <code>AdminReadOnlyList</code>, khai <code>realtimeTopics: ['x-topic']</code> trong config.</li>
+</ol>
+
+<h2 id="s6">6. Mất kết nối và fallback</h2>
+<ul>
+  <li>Khi <code>realtime</code> không ở trạng thái <code>connected</code>, các hook thông báo và work queue quay về polling 30 giây (hiện là 120 giây khi đang kết nối). Các hook này chỉ gọi API khi đã có token, nên trên trang đăng nhập không có request nào tới <code>/me/work-queue</code> hay <code>/notifications/unread-count</code>.</li>
+  <li>Kết nối lại (sau lần connect đầu tiên) phát <code>resync</code> → mọi <code>useRealtimeRefetch</code> refetch. Event phát trong lúc mất mạng không được replay, nên dữ liệu thật luôn lấy từ REST.</li>
+  <li><strong>Khi đang connected:</strong> mỗi 5 phút màn hình đang nghe tự refetch một lần (<code>safetyTick</code>), để bắt các event có thể bị lỡ mà không mất kết nối (ví dụ Redis lỗi tạm). Tín hiệu này không bật banner "đã cập nhật".</li>
+  <li>Refresh token bị 401 → dừng realtime; luồng REST/AuthContext đăng xuất như cũ.</li>
+  <li>Lỗi mạng khi refresh → thử lại sau 5 giây.</li>
+</ul>
+
+<h2 id="s7">7. Giới hạn đã biết</h2>
+<ul>
+  <li><strong>Nhiều instance cần <code>REDIS_URL</code>.</strong> Mặc định Socket.IO lưu room trong bộ nhớ một tiến trình. Đặt <code>REDIS_URL</code> để bật <code>@socket.io/redis-adapter</code>: event lan truyền giữa các instance. Đã kiểm chứng với Redis 7 thật (<code>realtime-io.redis.integration.spec.ts</code>, chạy khi có <code>REDIS_TEST_URL</code>); đối chứng với Redis không tồn tại thì event không tới.</li>
+  <li><strong>Không lọc theo warehouse scope ở socket.</strong> Người xem kho A có thể nhận tín hiệu "kho B có phiếu đổi" (chỉ có ID và topic). Chấp nhận có chủ đích: payload không chứa dữ liệu nghiệp vụ, REST vẫn chặn đúng scope khi refetch. Nếu cần lọc tín hiệu, phải đưa warehouse vào payload và lọc ở gateway.</li>
+  <li><strong><code>actorId</code> không còn được phát</strong> (chỉ ghi log server). Payload <code>entity.changed</code> chỉ có entity, entityId, action, topics.</li>
+  <li><strong>Token và socket:</strong> socket sống tới khi access token hết hạn (tối đa 15 phút) rồi buộc phải xác thực lại. Đăng xuất ở FE dừng realtime ngay.</li>
+  <li><strong>Đồng bộ giữa các tab/thiết bị</strong> (<code>notification.changed</code>): đã đọc, đọc tất cả, lưu trữ và đóng thông báo (<code>resolve</code>, khi không nằm trong transaction) đều được đẩy tới room <code>user:&lt;id&gt;</code>.</li>
+  <li>Form đang nhập không bị refetch tự động (ví dụ form chuyển kho không nghe topic <code>stock</code> để tránh đổi danh sách vật tư đang chọn). Tồn kho trên form được BE kiểm lại khi xác nhận.</li>
+</ul>
+
+<h2 id="s8">8. Test thủ công giữa nhiều client</h2>
+<ol>
+  <li>Mở 2 trình duyệt, đăng nhập 2 tài khoản khác quyền: A là thủ kho kho đích, B là người tạo phiếu chuyển kho.</li>
+  <li>Ở A, mở <code>Chuyển kho → Nhận</code>. Ở B, tạo phiếu mới tới kho của A. Trong vài giây danh sách chờ ở A tự xuất hiện và chuông thông báo tăng số, không cần F5.</li>
+  <li>Ở A, xác nhận phiếu. Ở B, màn danh sách chuyển kho tự cập nhật trạng thái.</li>
+  <li>Tắt mạng máy A vài giây rồi bật lại. Dữ liệu phải tự làm mới (resync). Khi tắt hẳn server, trạng thái phải chuyển sang <code>disconnected</code> và polling dự phòng vẫn chạy.</li>
+  <li>Kiểm tra log BE: mỗi event có <code>eventId</code> và <code>correlationId</code> trùng với header <code>x-correlation-id</code> của request REST gốc. (Log từng event ở mức <code>debug</code>; bật <code>LOG_LEVEL=debug</code> để thấy.)</li>
+</ol>
+
+<p>Kiểm tra tự động:</p>
+<pre><code>cd D:/DNA-ERP-BE &amp;&amp; pnpm exec jest src/realtime src/modules/notifications
+cd D:/DNA-ERP &amp;&amp; npx vitest run src/realtime</code></pre>
+
+<h2 id="s9">9. Các file chính</h2>
+<p><strong>BE:</strong> <code>src/realtime/</code> (<code>realtime.contract.ts</code>, <code>realtime.gateway.ts</code>, <code>realtime.service.ts</code>, <code>realtime.module.ts</code>, <code>realtime-io.adapter.ts</code>, các spec), <code>src/main.ts</code> (adapter CORS, Redis), <code>src/app.module.ts</code>, <code>src/config/configuration.ts</code> (<code>realtime.redisUrl</code>), <code>src/modules/notifications/notifications.service.ts</code>, các service đã nối realtime (warehouse-transfers, purchase-proposals, steel-issues, production-batches, qc-reviews, production-invoices, material-issues, packaging-issues, material-yield-issues, weaving-issues, stock, cutting-proposals, sales-orders).</p>
+<p><strong>FE:</strong> <code>src/realtime/</code> (<code>contract.ts</code>, <code>eventBus.ts</code>, <code>realtimeClient.ts</code>, <code>hooks.ts</code>, <code>RealtimeProvider.tsx</code>, <code>RealtimeUpdateNotice.tsx</code>, <code>eventBus.test.ts</code>), <code>src/app/layout.tsx</code>, <code>src/services/core/http.ts</code> (<code>refreshSession</code>), <code>src/hooks/useNotifications.ts</code>, <code>src/hooks/useWorkQueue.ts</code>, <code>src/context/InspectionContext.tsx</code>, các trang đã nối trong <code>src/modules/pages/</code>.</p>
+
+<h2 id="s10">10. Triển khai production</h2>
+<p>Không cần migration DB: realtime không đổi schema. Trước khi đưa lên production:</p>
+<ul>
+  <li><strong>BE (Render):</strong> <code>CORS_ORIGIN</code> phải chứa đúng domain FE (socket dùng chung danh sách này). <code>JWT_ACCESS_SECRET</code> là giá trị thật. <code>REDIS_URL</code> để trống khi chạy một instance; đặt khi chạy nhiều instance hoặc deploy không gián đoạn (xem <code>render.yaml</code>).</li>
+  <li><strong>FE (Vercel):</strong> <code>NEXT_PUBLIC_API_BASE_URL</code> trỏ tới BE. Socket tự suy ra origin từ biến này. Chỉ đặt <code>NEXT_PUBLIC_REALTIME_URL</code> khi socket đi qua host khác REST. Biến <code>NEXT_PUBLIC_*</code> được nhúng lúc build, đổi xong phải deploy lại.</li>
+  <li><strong>Gói Free (Render):</strong> service ngủ khi không có truy cập, socket bị ngắt; FE tự kết nối lại, nhưng lần đánh thức đầu có thể mất vài chục giây. Trong lúc đó FE dùng polling dự phòng.</li>
+  <li><strong>Deploy chồng instance:</strong> khi instance cũ và mới chạy song song, event không tới được client nối vào instance kia (nếu chưa có <code>REDIS_URL</code>). Client resync khi kết nối lại.</li>
+  <li><strong>Log:</strong> mỗi event ghi ở mức <code>debug</code>; production dùng <code>LOG_LEVEL=info</code> không bị đầy log.</li>
+  <li><strong>Chưa kiểm chứng trên production:</strong> WebSocket qua proxy của Render và tải nhiều socket đồng thời. Socket không chịu rate limit như HTTP; cần thêm giới hạn nếu mở public.</li>
+</ul>
+<p>Smoke test sau deploy: mở FE production, đăng nhập; trong DevTools → Network lọc WS thấy kết nối tới <code>dna-erp-be.onrender.com/socket.io</code> ở trạng thái 101. Mở hai phiên khác tài khoản, thao tác một phiếu chuyển kho, xem phiên còn lại có tự cập nhật không.</p>
+
+</main>
+</body>
+</html>

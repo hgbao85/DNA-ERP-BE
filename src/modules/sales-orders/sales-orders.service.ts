@@ -17,6 +17,8 @@ import { SalesOrderItemResponseDto } from './dto/sales-order-item-response.dto';
 import { ShipSalesOrderItemDto } from './dto/ship-sales-order-item.dto';
 import { UpdateSalesOrderDto } from './dto/update-sales-order.dto';
 import { UpdateSalesOrderItemDto } from './dto/update-sales-order-item.dto';
+import { RealtimeService } from '../../realtime/realtime.service';
+import { RealtimeEntityAction } from '../../realtime/realtime.contract';
 
 type SalesOrderWithItems = Prisma.SalesOrderGetPayload<{
   include: { customer: true; items: { include: { mfgProduct: true } } };
@@ -57,7 +59,19 @@ const stageKey = (salesOrderId: bigint, mfgProductId: bigint) => `${salesOrderId
  */
 @Injectable()
 export class SalesOrdersService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly realtime: RealtimeService,
+  ) {}
+
+  /** Phát realtime SAU KHI ghi thành công (xem RealtimeService). */
+  private publishRealtime(
+    entityId: bigint | string,
+    action: RealtimeEntityAction,
+    actorId: string | null = null,
+  ): void {
+    this.realtime.publishEntityChanged({ entity: 'SALES_ORDER', entityId, action, actorId });
+  }
 
   async create(dto: CreateSalesOrderDto): Promise<SalesOrderResponseDto> {
     const customerBigId = parseBigIntId(dto.customerId);
@@ -120,6 +134,7 @@ export class SalesOrdersService {
     await this.linkExistingSkus(withCode);
 
     // Vừa tạo xong trong chính lệnh gọi này - không thể đã gộp PI/đã giao hàng, khỏi cần query.
+    this.publishRealtime(withCode.id, 'CREATED');
     return this.toResponseDto(withCode, null, new Map());
   }
 
@@ -203,6 +218,7 @@ export class SalesOrdersService {
       },
       include: { customer: true, items: { include: { mfgProduct: true } } },
     });
+    this.publishRealtime(bigId, 'UPDATED');
     const mergedCount = await this.countMergedProductionInvoiceItems(bigId);
     return this.toResponseDto(
       updated,
@@ -261,6 +277,7 @@ export class SalesOrdersService {
       await tx.salesOrderItem.deleteMany({ where: { salesOrderId: bigId } });
       await tx.salesOrder.delete({ where: { id: bigId } }); // hard delete thật
     });
+    this.publishRealtime(bigId, 'DELETED');
   }
 
   /**
@@ -324,6 +341,7 @@ export class SalesOrdersService {
       include: { mfgProduct: true },
     });
     await this.recomputeDeliveryDate(order.id);
+    this.publishRealtime(item.salesOrderId, 'UPDATED');
     return this.toItemResponseDto(item, await this.resolveItemStage(item));
   }
 
@@ -366,6 +384,7 @@ export class SalesOrdersService {
       include: { mfgProduct: true },
     });
     if (dto.deliveryDate) await this.recomputeDeliveryDate(order.id);
+    this.publishRealtime(updated.salesOrderId, 'UPDATED');
     return this.toItemResponseDto(updated, await this.resolveItemStage(updated));
   }
 
@@ -407,6 +426,7 @@ export class SalesOrdersService {
     }
 
     const shipped = await this.findItemOrThrow(orderBigId, itemId);
+    this.publishRealtime(orderBigId, 'SHIPPED');
     return this.toItemResponseDto(shipped, await this.resolveItemStage(shipped));
   }
 

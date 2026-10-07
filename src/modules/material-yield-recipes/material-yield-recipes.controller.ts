@@ -1,4 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseInterceptors } from '@nestjs/common';
+import {
+  RealtimeEntityOn,
+  RealtimeMutationInterceptor,
+} from '../../realtime/realtime-mutation.interceptor';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -26,6 +30,8 @@ const DELETE = {
 @ApiTags('Material Yield Recipes')
 @ApiBearerAuth()
 @Controller({ version: '1' })
+@RealtimeEntityOn('MATERIAL_YIELD_RECIPE')
+@UseInterceptors(RealtimeMutationInterceptor)
 export class MaterialYieldRecipesController {
   constructor(private readonly service: MaterialYieldRecipesService) {}
 

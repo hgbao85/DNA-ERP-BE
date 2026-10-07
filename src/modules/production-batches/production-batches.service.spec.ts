@@ -10,6 +10,7 @@ import { MaterialYieldIssuesService } from '../material-yield-issues/material-yi
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ProductionBatchesService } from './production-batches.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 describe('ProductionBatchesService', () => {
   let service: ProductionBatchesService;
@@ -199,11 +200,13 @@ describe('ProductionBatchesService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new ProductionBatchesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       materialYieldIssuesService as unknown as MaterialYieldIssuesService,
       notificationsService as unknown as NotificationsService,
+      realtimeStub as unknown as RealtimeService,
     );
   });
 

@@ -1,8 +1,7 @@
 import { Params } from 'nestjs-pino';
-import { IncomingMessage, ServerResponse } from 'http';
+import { IncomingMessage } from 'http';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../config/configuration';
-import { CORRELATION_ID_HEADER } from '../common/middleware/correlation-id.middleware';
 import { resolveCorrelationId } from '../common/utils/correlation-id.util';
 
 export function createPinoLoggerOptions(configService: ConfigService<AppConfig, true>): Params {
@@ -14,11 +13,10 @@ export function createPinoLoggerOptions(configService: ConfigService<AppConfig, 
   return {
     pinoHttp: {
       level: logLevel,
-      genReqId: (req: IncomingMessage, res: ServerResponse) => {
-        const id = resolveCorrelationId(req);
-        res.setHeader(CORRELATION_ID_HEADER, id);
-        return id;
-      },
+      // KHÔNG setHeader ở đây: pino-http chạy sau CorrelationIdMiddleware nên sẽ ghi đè header bằng
+      // một UUID khác với cls.getId() (id dùng cho audit log và event realtime). Header x-correlation-id
+      // do CorrelationIdMiddleware đặt là nguồn duy nhất.
+      genReqId: (req: IncomingMessage) => resolveCorrelationId(req),
       transport:
         env !== 'production'
           ? {

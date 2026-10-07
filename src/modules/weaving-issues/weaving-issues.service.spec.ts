@@ -7,6 +7,7 @@ import {
 import { StockReservationRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { WeavingIssuesService } from './weaving-issues.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 describe('WeavingIssuesService', () => {
   let service: WeavingIssuesService;
@@ -161,11 +162,13 @@ describe('WeavingIssuesService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new WeavingIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as never,
       stockReservationsService as never,
       notificationsService as never,
+      realtimeStub as unknown as RealtimeService,
     );
   });
 

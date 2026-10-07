@@ -34,6 +34,7 @@ import { WarehouseTransferItemResponseDto } from './dto/warehouse-transfer-item-
 import { WarehouseTransferPieceItemResponseDto } from './dto/warehouse-transfer-piece-item-response.dto';
 import { WarehouseTransferResponseDto } from './dto/warehouse-transfer-response.dto';
 import { isValidTransferRoute } from './transfer-routes.constant';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 const ACTOR_NAME_SELECT = { select: { firstName: true, lastName: true } };
 
@@ -81,7 +82,22 @@ export class WarehouseTransfersService {
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
     private readonly notifications: NotificationsService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  private publishTransferChanged(
+    transferId: bigint,
+    action: 'CREATED' | 'CONFIRMED' | 'REJECTED',
+    actorId: string | null,
+  ): void {
+    this.realtime.publishEntityChanged({
+      entity: 'WAREHOUSE_TRANSFER',
+      entityId: transferId,
+      action,
+      actorId,
+    });
+  }
 
   /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
    *  17.2/19.2/22.2 changelog notification). */
@@ -339,6 +355,7 @@ export class WarehouseTransfersService {
     });
 
     await this.notifyTransferCreated(created);
+    this.publishTransferChanged(created.id, 'CREATED', created.createdById);
     return this.toResponseDto(created);
   }
 
@@ -443,6 +460,7 @@ export class WarehouseTransfersService {
     });
 
     await this.notifyTransferCreated(transfer);
+    this.publishTransferChanged(transfer.id, 'CREATED', transfer.createdById);
     return this.toResponseDto(transfer);
   }
 
@@ -686,6 +704,7 @@ export class WarehouseTransfersService {
     });
 
     await this.resolveTransferCreated(confirmed.id);
+    this.publishTransferChanged(confirmed.id, 'CONFIRMED', userId);
     return this.toResponseDto(confirmed);
   }
 
@@ -738,6 +757,7 @@ export class WarehouseTransfersService {
 
     await this.resolveTransferCreated(rejected.id);
     await this.notifyTransferRejected(rejected, rejectionReason);
+    this.publishTransferChanged(rejected.id, 'REJECTED', userId);
     return this.toResponseDto(rejected);
   }
 

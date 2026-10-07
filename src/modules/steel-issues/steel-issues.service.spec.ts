@@ -10,6 +10,7 @@ import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SteelIssuesService } from './steel-issues.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 // Prisma trả Decimal cho cutLengthMm/solverBladeWidthMm (vd Decimal(7,1) = 452.7). Service gọi
 // cả .toNumber() lẫn .toString() nên mock phải có đủ 2, không dùng number trần.
@@ -262,11 +263,13 @@ describe('SteelIssuesService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new SteelIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
       notificationsService as unknown as NotificationsService,
+      realtimeStub as unknown as RealtimeService,
     );
   });
 

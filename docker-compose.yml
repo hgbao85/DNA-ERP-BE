@@ -16,6 +16,18 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    # Realtime (Socket.IO) nhiều instance: adapter Redis. Có thể bỏ nếu chỉ chạy 1 instance (xem REDIS_URL trong .env.example).
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   app:
     build:
       context: .
@@ -25,10 +37,13 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql://erp_user:erp_password@postgres:5432/dna_erp?schema=public
+      REDIS_URL: redis://redis:6379
     ports:
       - '3001:3001'
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
 volumes:

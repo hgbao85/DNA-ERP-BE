@@ -6,6 +6,7 @@ import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { AppConfig } from './config/configuration';
+import { RealtimeIoAdapter } from './realtime/realtime-io.adapter';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -15,10 +16,12 @@ async function bootstrap(): Promise<void> {
 
   const corsOrigin = configService.get('cors.origin', { infer: true });
   app.use(helmet());
-  app.enableCors({
-    origin: corsOrigin === '*' ? true : corsOrigin.split(',').map((origin) => origin.trim()),
-    credentials: true,
-  });
+  const allowedOrigins: boolean | string[] =
+    corsOrigin === '*' ? true : corsOrigin.split(',').map((origin) => origin.trim());
+  app.enableCors({ origin: allowedOrigins, credentials: true });
+  // Socket.IO dùng cùng danh sách origin với REST - xem realtime-io.adapter.ts.
+  const redisUrl = configService.get('realtime.redisUrl', { infer: true });
+  app.useWebSocketAdapter(new RealtimeIoAdapter(app, allowedOrigins, redisUrl));
 
   const apiPrefix = configService.get('apiPrefix', { infer: true });
   app.setGlobalPrefix(apiPrefix);

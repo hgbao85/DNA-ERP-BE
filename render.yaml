@@ -36,3 +36,6 @@ services:
         sync: false
       - key: SEED_ADMIN_PASSWORD
         sync: false
+      # Realtime nhiều instance: đặt URL Redis (vd Render Key Value). Để trống = 1 instance.
+      - key: REDIS_URL
+        sync: false
