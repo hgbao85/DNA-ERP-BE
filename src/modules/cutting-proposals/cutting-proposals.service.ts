@@ -27,6 +27,8 @@ import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma
 import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../../realtime/realtime.service';
+import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
 import { NotificationType } from '../notifications/notification-types';
 import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
 import {
@@ -263,7 +265,18 @@ export class CuttingProposalsService {
     private readonly configService: ConfigService<AppConfig, true>,
     private readonly stockReservationsService: StockReservationsService,
     private readonly notifications: NotificationsService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  private publishRealtime(
+    entity: RealtimeEntity,
+    entityId: bigint | string,
+    action: RealtimeEntityAction,
+    actorId: string | null,
+  ): void {
+    this.realtime.publishEntityChanged({ entity, entityId, action, actorId });
+  }
 
   /**
    * Xếp lượt giải (proposalId) vào ĐUÔI hàng đợi - trả về promise của ĐÚNG lượt này, callers giữ
@@ -3418,6 +3431,7 @@ export class CuttingProposalsService {
       },
       { timeout: 30_000 },
     );
+    this.publishRealtime('CUTTING_PROPOSAL', proposalId, 'FINISHED', null);
   }
 
   private async saveFailure(proposalId: bigint, error: unknown): Promise<void> {
@@ -3429,6 +3443,7 @@ export class CuttingProposalsService {
         completedAt: new Date(),
       },
     });
+    this.publishRealtime('CUTTING_PROPOSAL', proposalId, 'FINISHED', null);
   }
 
   private extractErrorMessage(error: unknown): string {

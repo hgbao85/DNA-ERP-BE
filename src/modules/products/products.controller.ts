@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Query,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
@@ -24,10 +25,25 @@ import { UpdatePieceDto } from './dto/update-piece.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateProductVariantDto } from './dto/update-product-variant.dto';
 import { ProductsService } from './products.service';
+import {
+  RealtimeEntityOn,
+  RealtimeMutationInterceptor,
+} from '../../realtime/realtime-mutation.interceptor';
 
+/**
+ * 2026-10-07: FE chỉ gọi POST/GET gốc (qua products-api.ts::resolveMfgProduct, tự tạo MfgProduct
+ * mới khi Sales tạo đơn hàng tham chiếu SKU chưa tồn tại) - CHƯA từng nối realtime dù SKUListPage
+ * (SKUListPage.tsx) đọc đúng bảng MfgProduct này và chỉ lắng topic 'skus'. Việc mfgProduct được
+ * tạo qua đường NÀY (không qua skus.controller.ts) trước giờ không đẩy 'skus' nên người xem danh
+ * sách SKU không tự thấy SKU vừa phát sinh từ 1 đơn hàng mới - cùng entity SKU, gắn lại đúng
+ * topic đó cho nhất quán. 4 route lồng (variants/pieces/parts) không FE nào gọi (xem
+ * products-api.ts) nên không ảnh hưởng gì thêm, chỉ thừa emit vô hại nếu có ai gọi tay qua API.
+ */
 @ApiTags('Products')
 @ApiBearerAuth()
 @Controller({ path: 'products', version: '1' })
+@RealtimeEntityOn('SKU')
+@UseInterceptors(RealtimeMutationInterceptor)
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 

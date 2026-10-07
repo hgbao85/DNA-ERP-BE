@@ -22,6 +22,8 @@ import {
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../../realtime/realtime.service';
+import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { CreatePackagingIssueDto } from './dto/create-packaging-issue.dto';
@@ -79,7 +81,18 @@ export class PackagingIssuesService {
     private readonly stockLedgerService: StockLedgerService,
     private readonly stockReservationsService: StockReservationsService,
     private readonly notifications: NotificationsService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  private publishRealtime(
+    entity: RealtimeEntity,
+    entityId: bigint | string,
+    action: RealtimeEntityAction,
+    actorId: string | null,
+  ): void {
+    this.realtime.publishEntityChanged({ entity, entityId, action, actorId });
+  }
 
   /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
    *  17.2/19.2/22.2 changelog notification). KHÔNG có `resolve()` cặp đôi - type này KHÔNG tự đóng
@@ -248,6 +261,7 @@ export class PackagingIssuesService {
       created,
       created.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
     );
+    this.publishRealtime('PACKAGING_ISSUE', created.id, 'CREATED', issuedById);
     return this.toResponseDto(created);
   }
 

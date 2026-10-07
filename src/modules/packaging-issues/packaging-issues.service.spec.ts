@@ -10,6 +10,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PackagingIssuesService } from './packaging-issues.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 describe('PackagingIssuesService', () => {
   let service: PackagingIssuesService;
@@ -174,11 +175,13 @@ describe('PackagingIssuesService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new PackagingIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
       notificationsService as unknown as NotificationsService,
+      realtimeStub as unknown as RealtimeService,
     );
   });
 

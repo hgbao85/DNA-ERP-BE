@@ -18,6 +18,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { PurchaseProposalsService } from './purchase-proposals.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 // Prisma.Decimal thật (không phải stub { toNumber }) - Prisma trả về đúng kiểu này cho cột Decimal
 // kể cả qua $queryRaw (xem receiveItem() dùng .plus() để cộng dồn không qua binary float, audit
@@ -219,6 +220,7 @@ describe('PurchaseProposalsService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new PurchaseProposalsService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
@@ -226,6 +228,7 @@ describe('PurchaseProposalsService', () => {
       cls as unknown as ClsService<AppClsStore>,
       cloudinaryService as unknown as CloudinaryService,
       notificationsService as unknown as NotificationsService,
+      realtimeStub as unknown as RealtimeService,
     );
   });
 

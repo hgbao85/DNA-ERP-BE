@@ -16,6 +16,7 @@ import { ConsumableMaterialPurchaseService } from './consumable-material-purchas
 import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 /** 3 cột thông số cắt KHSX đề nghị, đọc lại từ payload productionInvoice.create(). */
 type SolverOverrideColumns = {
@@ -243,6 +244,7 @@ describe('ProductionInvoicesService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new ProductionInvoicesService(
       prisma as unknown as PrismaServiceType,
       productionOrdersService as unknown as ProductionOrdersService,
@@ -253,6 +255,7 @@ describe('ProductionInvoicesService', () => {
       cls as unknown as ClsService<AppClsStore>,
       cloudinaryService as unknown as CloudinaryService,
       notificationsService as unknown as NotificationsService,
+      realtimeStub as unknown as RealtimeService,
     );
   });
 

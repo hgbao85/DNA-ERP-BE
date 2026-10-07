@@ -32,6 +32,8 @@ import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../../realtime/realtime.service';
+import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
 import {
   NotificationType,
   PackagingCompleteNotificationParams,
@@ -120,7 +122,18 @@ export class ProductionInvoicesService {
     private readonly cls: ClsService<AppClsStore>,
     private readonly cloudinaryService: CloudinaryService,
     private readonly notifications: NotificationsService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  private publishRealtime(
+    entity: RealtimeEntity,
+    entityId: bigint | string,
+    action: RealtimeEntityAction,
+    actorId: string | null,
+  ): void {
+    this.realtime.publishEntityChanged({ entity, entityId, action, actorId });
+  }
 
   // ─── Notification (Phase 3a, mục 7.2 changelog 2026-09-25) ─────────────────────────────────
   // Best-effort NGOÀI transaction nghiệp vụ chính - cùng lý do đã ghi ở SkusService.notifySku()
@@ -1053,6 +1066,7 @@ export class ProductionInvoicesService {
       undefined,
       actorUserId,
     );
+    this.publishRealtime('PRODUCTION_INVOICE', pi.id, 'APPROVED', actorUserId);
 
     return this.toItemResponseDto(updated);
   }
@@ -1292,6 +1306,7 @@ export class ProductionInvoicesService {
       undefined,
       actorUserId,
     );
+    this.publishRealtime('PRODUCTION_INVOICE', pi.id, 'REJECTED', actorUserId);
     return this.toItemResponseDto(updated);
   }
 
@@ -1381,6 +1396,7 @@ export class ProductionInvoicesService {
       undefined,
       actorUserId,
     );
+    this.publishRealtime('PRODUCTION_INVOICE', pi.id, 'REJECTED', actorUserId);
 
     return { movedItemIds: pi.items.map((i) => i.id.toString()) };
   }
@@ -1444,6 +1460,7 @@ export class ProductionInvoicesService {
       undefined,
       actorUserId,
     );
+    this.publishRealtime('PRODUCTION_INVOICE', pi.id, 'REJECTED', actorUserId);
     return this.toItemResponseDto(updated);
   }
 
@@ -1555,6 +1572,8 @@ export class ProductionInvoicesService {
       actorUserId,
     );
 
+    this.publishRealtime('PRODUCTION_INVOICE', pi.id, 'APPROVED', actorUserId);
+
     // Best-effort như trigger đơn lẻ: không được phép làm hỏng việc duyệt đã ghi ở trên. Cùng
     // idiom approveItem() (2026-08-24) - 2 trigger mua VTTP/tiêu hao dồn vào onComplete, chỉ chạy
     // SAU khi đề xuất mua sắt của cả cụm gộp tính xong. Trước đây PI gộp KHÔNG có 2 trigger này
@@ -1660,6 +1679,7 @@ export class ProductionInvoicesService {
       undefined,
       actorUserId,
     );
+    this.publishRealtime('PRODUCTION_INVOICE', pi.id, 'REJECTED', actorUserId);
 
     return { movedItemIds: pi.items.map((i) => i.id.toString()) };
   }

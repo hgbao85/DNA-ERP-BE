@@ -18,6 +18,10 @@ export interface AppConfig {
     limit: number;
   };
   logLevel: string;
+  /** Bỏ trống = 1 instance (adapter bộ nhớ). Có giá trị = Redis adapter để nhiều instance cùng phát event. */
+  realtime: {
+    redisUrl: string;
+  };
   solver: {
     baseUrl: string;
     apiKey: string;
@@ -50,6 +54,9 @@ export default (): AppConfig => ({
     limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
   },
   logLevel: process.env.LOG_LEVEL ?? 'info',
+  realtime: {
+    redisUrl: process.env.REDIS_URL ?? '',
+  },
   solver: {
     baseUrl: process.env.SOLVER_BASE_URL ?? '',
     apiKey: process.env.SOLVER_API_KEY ?? '',

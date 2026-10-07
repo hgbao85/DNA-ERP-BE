@@ -6,6 +6,7 @@ import { NotificationAudience } from '../../generated/prisma/client';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { NotificationsService } from './notifications.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { RecipientResolverService } from './recipient-resolver.service';
 import { ListNotificationsQueryDto } from './dto/list-notifications-query.dto';
 import { NOTIFICATION_TYPES } from './notification-types';
@@ -45,6 +46,11 @@ describe('NotificationsService', () => {
   });
 
   let service: NotificationsService;
+  let realtime: {
+    publishNotificationCreated: jest.Mock;
+    publishNotificationChanged: jest.Mock;
+    publishEntityChanged: jest.Mock;
+  };
   let prisma: {
     notification: {
       create: jest.Mock;
@@ -119,9 +125,15 @@ describe('NotificationsService', () => {
       },
     };
     recipientResolver = { resolve: jest.fn().mockResolvedValue(['user-1', 'user-2']) };
+    realtime = {
+      publishNotificationCreated: jest.fn(),
+      publishNotificationChanged: jest.fn(),
+      publishEntityChanged: jest.fn(),
+    };
     service = new NotificationsService(
       prisma as unknown as PrismaServiceType,
       recipientResolver as unknown as RecipientResolverService,
+      realtime as unknown as RealtimeService,
     );
   });
 
@@ -245,6 +257,31 @@ describe('NotificationsService', () => {
         },
         data: { resolvedAt: expect.any(Date) },
       });
+    });
+
+    it('đóng xong -> báo notification.changed RESOLVED tới từng người đang mở (không có tx)', async () => {
+      prisma.notificationRecipient.findMany.mockResolvedValue([
+        { userId: 'user-1', notificationId: 'n-1' },
+        { userId: 'user-1', notificationId: 'n-2' },
+        { userId: 'user-2', notificationId: 'n-1' },
+      ]);
+
+      await service.resolve({ entityType: 'CUTTING_PROPOSAL', entityId: '1' });
+
+      expect(realtime.publishNotificationChanged).toHaveBeenCalledWith(['user-1'], {
+        action: 'RESOLVED',
+        notificationIds: ['n-1', 'n-2'],
+      });
+      expect(realtime.publishNotificationChanged).toHaveBeenCalledWith(['user-2'], {
+        action: 'RESOLVED',
+        notificationIds: ['n-1'],
+      });
+    });
+
+    it('không có gì để đóng -> không phát gì', async () => {
+      prisma.notificationRecipient.findMany.mockResolvedValue([]);
+      await service.resolve({ entityType: 'CUTTING_PROPOSAL', entityId: '1' });
+      expect(realtime.publishNotificationChanged).not.toHaveBeenCalled();
     });
 
     it('lọc thêm theo types khi được truyền', async () => {

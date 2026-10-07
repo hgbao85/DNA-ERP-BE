@@ -16,6 +16,11 @@ import { NotificationResponseDto } from './dto/notification-response.dto';
 import { UnreadCountResponseDto } from './dto/unread-count-response.dto';
 import { NotificationLink, NotificationType, NOTIFICATION_TYPES } from './notification-types';
 import { RecipientResolverService } from './recipient-resolver.service';
+import { RealtimeService } from '../../realtime/realtime.service';
+import {
+  NotificationChangedPayload,
+  NotificationCreatedPayload,
+} from '../../realtime/realtime.contract';
 
 type NotificationRow = Prisma.NotificationGetPayload<Record<string, never>>;
 type RecipientRow = Prisma.NotificationRecipientGetPayload<Record<string, never>>;
@@ -52,6 +57,7 @@ export class NotificationsService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly recipientResolver: RecipientResolverService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   // ─── Sự kiện nghiệp vụ (gọi từ các service khác, vd CuttingProposalsService) ──────────────────
@@ -95,12 +101,19 @@ export class NotificationsService {
         orderBy: { createdAt: 'desc' },
       });
       if (existing) {
-        await this.mergeIntoExisting(
+        const allRecipientIds = await this.mergeIntoExisting(
           client,
           existing.id,
           { title, message, link, params },
           recipientIds,
         );
+        if (!options.tx) {
+          this.publishCreated(
+            { ...existing, title, message, link: link ?? null, createdAt: existing.createdAt },
+            allRecipientIds,
+            true,
+          );
+        }
         return;
       }
     }
@@ -123,11 +136,55 @@ export class NotificationsService {
     await client.notificationRecipient.createMany({
       data: recipientIds.map((userId) => ({ notificationId: notification.id, userId })),
     });
+    // Realtime CHỈ phát khi ghi không nằm trong transaction của caller: khi đó ghi đã commit ở
+    // đây. Không có caller nào truyền tx hiện nay; nếu sau này có, caller phải tự phát sau commit.
+    if (!options.tx) {
+      this.publishCreated(notification, recipientIds, false);
+    }
+  }
+
+  /**
+   * Phát thông báo tới room cá nhân của từng người nhận (xem realtime.contract.ts). FE dùng để
+   * toast + làm mới badge ngay, không cần chờ chu kỳ poll.
+   */
+  private publishCreated(
+    notification: {
+      id: string;
+      type: string | null;
+      category: string;
+      severity: string;
+      title: string;
+      message: string;
+      link: unknown;
+      createdAt: Date;
+    },
+    recipientIds: string[],
+    merged: boolean,
+  ): void {
+    // Realtime là phần phụ: thông báo đã commit, lỗi dựng payload không được làm hỏng caller.
+    try {
+      this.realtime.publishNotificationCreated(recipientIds, {
+        notificationId: notification.id,
+        type: notification.type,
+        category: notification.category,
+        severity: notification.severity as NotificationCreatedPayload['severity'],
+        title: notification.title,
+        message: notification.message,
+        link: (notification.link ?? null) as NotificationLink | null,
+        merged,
+        createdAt: notification.createdAt.toISOString(),
+      });
+    } catch (error) {
+      this.logger.error(
+        `Không phát được realtime cho notification ${notification.id}: ${(error as Error).message}`,
+      );
+    }
   }
 
   /** Cập nhật 1 dòng Notification đã gộp (dedupe) - đẩy lại CHƯA đọc cho người nhận hiện có (sự
    *  kiện vừa tái diễn) + fan-out thêm cho người nhận mới nếu lần này khớp thêm ai đó chưa từng
-   *  nhận (hiếm, vd đổi role giữa 2 lần solver chạy). */
+   *  nhận (hiếm, vd đổi role giữa 2 lần solver chạy). Trả về TOÀN BỘ người nhận sau khi gộp để
+   *  phát realtime. */
   private async mergeIntoExisting(
     client: PrismaServiceType | PrismaTx,
     notificationId: string,
@@ -138,7 +195,7 @@ export class NotificationsService {
       params: Record<string, unknown>;
     },
     recipientIds: string[],
-  ): Promise<void> {
+  ): Promise<string[]> {
     await client.notification.update({
       where: { id: notificationId },
       data: {
@@ -163,6 +220,7 @@ export class NotificationsService {
         data: newIds.map((userId) => ({ notificationId, userId })),
       });
     }
+    return [...existingIds, ...newIds];
   }
 
   /**
@@ -172,17 +230,46 @@ export class NotificationsService {
    */
   async resolve(criteria: ResolveNotificationCriteria, tx?: PrismaTx): Promise<void> {
     const client = tx ?? this.prisma;
-    await client.notificationRecipient.updateMany({
-      where: {
-        resolvedAt: null,
-        notification: {
-          entityType: criteria.entityType,
-          entityId: criteria.entityId,
-          ...(criteria.types ? { type: { in: criteria.types } } : {}),
-        },
+    const where = {
+      resolvedAt: null,
+      notification: {
+        entityType: criteria.entityType,
+        entityId: criteria.entityId,
+        ...(criteria.types ? { type: { in: criteria.types } } : {}),
       },
-      data: { resolvedAt: new Date() },
+    };
+    // Đọc người nhận đang mở TRƯỚC khi đóng để báo đúng từng người (realtime). Không có tx -> ghi đã commit.
+    const open = await client.notificationRecipient.findMany({
+      where,
+      select: { userId: true, notificationId: true },
     });
+    await client.notificationRecipient.updateMany({ where, data: { resolvedAt: new Date() } });
+    if (!tx && open.length > 0) {
+      const byUser = new Map<string, Set<string>>();
+      for (const row of open) {
+        const set = byUser.get(row.userId) ?? new Set<string>();
+        set.add(row.notificationId);
+        byUser.set(row.userId, set);
+      }
+      for (const [userId, ids] of byUser) {
+        this.publishChanged([userId], 'RESOLVED', [...ids]);
+      }
+    }
+  }
+
+  /** Báo đổi trạng thái thông báo tới các tab/thiết bị của người dùng (room user:<id>). */
+  private publishChanged(
+    userIds: string[],
+    action: NotificationChangedPayload['action'],
+    notificationIds: string[],
+  ): void {
+    try {
+      this.realtime.publishNotificationChanged(userIds, { action, notificationIds });
+    } catch (error) {
+      this.logger.error(
+        `Không phát được notification.changed (${action}): ${(error as Error).message}`,
+      );
+    }
   }
 
   // ─── Announcement (admin phát cho cả nhóm) ────────────────────────────────────────────────────
@@ -211,6 +298,7 @@ export class NotificationsService {
       await this.prisma.notificationRecipient.createMany({
         data: recipientIds.map((userId) => ({ notificationId: notification.id, userId })),
       });
+      this.publishCreated(notification, recipientIds, false);
     }
     return this.toResponseDto(notification, null);
   }
@@ -334,6 +422,7 @@ export class NotificationsService {
           data: { readAt: new Date() },
           include: { notification: true },
         });
+    if (!recipient.readAt) this.publishChanged([userId], 'READ', [id]);
     return this.toResponseDto(updated.notification, updated);
   }
 
@@ -346,6 +435,7 @@ export class NotificationsService {
       },
       data: { readAt: new Date() },
     });
+    if (result.count > 0) this.publishChanged([userId], 'READ_ALL', []);
     return { count: result.count };
   }
 
@@ -355,6 +445,7 @@ export class NotificationsService {
       where: { notificationId_userId: { notificationId: id, userId } },
       data: { archivedAt: new Date() },
     });
+    this.publishChanged([userId], 'ARCHIVED', [id]);
   }
 
   private async findRecipientOrThrow(

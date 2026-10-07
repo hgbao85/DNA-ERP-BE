@@ -1,4 +1,17 @@
-import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Post,
+  Query,
+  UseInterceptors,
+} from '@nestjs/common';
+import {
+  RealtimeEntityOn,
+  RealtimeMutationInterceptor,
+} from '../../realtime/realtime-mutation.interceptor';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -19,6 +32,8 @@ const VIEW = { module: PERMISSION_MODULES.PRODUCTION_BATCH, action: PermissionAc
 @ApiTags('Material Yield Recipe Production')
 @ApiBearerAuth()
 @Controller({ version: '1' })
+@RealtimeEntityOn('PRODUCTION_BATCH')
+@UseInterceptors(RealtimeMutationInterceptor)
 export class MaterialYieldRecipeProductionController {
   constructor(private readonly service: MaterialYieldRecipeProductionService) {}
 

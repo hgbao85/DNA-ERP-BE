@@ -7,6 +7,7 @@ import { ExternalApiHttpError, ExternalApiService } from '../external/external-a
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CuttingProposalsService } from './cutting-proposals.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 describe('CuttingProposalsService', () => {
   let service: CuttingProposalsService;
@@ -259,12 +260,14 @@ describe('CuttingProposalsService', () => {
       releaseByRef: jest.fn(),
     };
     notificationsService = { emit: jest.fn() };
+    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new CuttingProposalsService(
       prisma as unknown as PrismaServiceType,
       externalApiService as unknown as ExternalApiService,
       configService as unknown as ConfigService<AppConfig, true>,
       stockReservationsService as unknown as StockReservationsService,
       notificationsService as unknown as NotificationsService,
+      realtimeStub as unknown as RealtimeService,
     );
   });
 

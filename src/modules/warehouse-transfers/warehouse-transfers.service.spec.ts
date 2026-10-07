@@ -10,9 +10,11 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WarehouseTransfersService } from './warehouse-transfers.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 describe('WarehouseTransfersService', () => {
   let service: WarehouseTransfersService;
+  let realtimeStub: { publishEntityChanged: jest.Mock; publishNotificationCreated: jest.Mock };
   let stockLedgerService: { postEntry: jest.Mock };
   let stockReservationsService: { getAvailableQty: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
@@ -119,11 +121,13 @@ describe('WarehouseTransfersService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new WarehouseTransfersService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
       notificationsService as unknown as NotificationsService,
+      realtimeStub as unknown as RealtimeService,
     );
 
     prisma.warehouse.findUnique.mockImplementation(
@@ -474,6 +478,32 @@ describe('WarehouseTransfersService', () => {
           }),
         }),
       );
+    });
+
+    it('phát realtime CONFIRMED chỉ SAU khi transaction commit', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      stockLedgerService.postEntry.mockResolvedValue({ id: '999' });
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
+        transferRow({ status: TransferStatus.CONFIRMED, confirmedAt: new Date() }),
+      );
+
+      await service.confirm('50', 'user-1', 'vat-tu-tp');
+
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledTimes(1);
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith({
+        entity: 'WAREHOUSE_TRANSFER',
+        entityId: 50n,
+        action: 'CONFIRMED',
+        actorId: 'user-1',
+      });
+    });
+
+    it('rollback (ghi ledger lỗi) -> KHÔNG phát realtime nào', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      stockLedgerService.postEntry.mockRejectedValue(new Error('ledger down'));
+
+      await expect(service.confirm('50', 'user-1', 'vat-tu-tp')).rejects.toThrow('ledger down');
+      expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalled();
     });
 
     // Phase 3b, nhóm 7.5-iii, changelog 2026-09-25 mục 23.

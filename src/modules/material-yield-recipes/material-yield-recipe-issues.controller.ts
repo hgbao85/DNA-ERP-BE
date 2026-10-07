@@ -7,7 +7,12 @@ import {
   Param,
   Post,
   Query,
+  UseInterceptors,
 } from '@nestjs/common';
+import {
+  RealtimeEntityOn,
+  RealtimeMutationInterceptor,
+} from '../../realtime/realtime-mutation.interceptor';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -30,6 +35,8 @@ const UPDATE = { module: PERMISSION_MODULES.MATERIAL_YIELD_ISSUE, action: Permis
 @ApiTags('Material Yield Recipe Issues')
 @ApiBearerAuth()
 @Controller({ version: '1' })
+@RealtimeEntityOn('MATERIAL_YIELD_ISSUE')
+@UseInterceptors(RealtimeMutationInterceptor)
 export class MaterialYieldRecipeIssuesController {
   constructor(private readonly service: MaterialYieldRecipeIssuesService) {}
 

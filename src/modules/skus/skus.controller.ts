@@ -11,6 +11,7 @@ import {
   Patch,
   Post,
   Query,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
@@ -26,6 +27,10 @@ import { RejectBossDto } from './dto/reject-boss.dto';
 import { ReviewQuotaDto } from './dto/review-quota.dto';
 import { UpdateQuotaDto } from './dto/update-quota.dto';
 import { SkusService } from './skus.service';
+import {
+  RealtimeEntityOn,
+  RealtimeMutationInterceptor,
+} from '../../realtime/realtime-mutation.interceptor';
 
 const VIEW = { module: PERMISSION_MODULES.SKU, action: PermissionAction.VIEW };
 const CREATE = { module: PERMISSION_MODULES.SKU, action: PermissionAction.CREATE };
@@ -36,6 +41,8 @@ const DELETE = { module: PERMISSION_MODULES.SKU, action: PermissionAction.DELETE
 @ApiTags('SKU')
 @ApiBearerAuth()
 @Controller({ path: 'skus', version: '1' })
+@RealtimeEntityOn('SKU')
+@UseInterceptors(RealtimeMutationInterceptor)
 export class SkusController {
   constructor(private readonly skusService: SkusService) {}
 

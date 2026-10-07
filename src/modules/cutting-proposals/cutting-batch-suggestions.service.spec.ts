@@ -5,6 +5,7 @@ import { ExternalApiService } from '../external/external-api.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CuttingProposalsService } from './cutting-proposals.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 /**
  * Gợi ý gộp đợt cắt (getBatchSuggestions).
@@ -98,6 +99,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       material: { findMany: jest.fn().mockResolvedValue([]) },
       ...over,
     };
+    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new CuttingProposalsService(
       prisma as unknown as PrismaServiceType,
       { post: postMock } as unknown as ExternalApiService,
@@ -105,6 +107,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       { reserve: jest.fn(), getAvailableQty: jest.fn() } as unknown as StockReservationsService,
       // getBatchSuggestions() không đụng tới thông báo - stub rỗng cho đủ tham số constructor.
       { emit: jest.fn() } as unknown as NotificationsService,
+      realtimeStub as unknown as RealtimeService,
     );
   };
 

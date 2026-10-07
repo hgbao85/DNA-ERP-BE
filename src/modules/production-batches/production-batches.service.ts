@@ -33,6 +33,7 @@ import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma
 import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { CreatePieceStepBatchDto } from './dto/create-piece-step-batch.dto';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
 import { ListPieceStepBundlesQueryDto } from './dto/list-piece-step-bundles-query.dto';
@@ -133,7 +134,17 @@ export class ProductionBatchesService {
     private readonly stockLedgerService: StockLedgerService,
     private readonly materialYieldIssuesService: MaterialYieldIssuesService,
     private readonly notifications: NotificationsService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  private publishRealtime(
+    entityId: bigint | string,
+    action: 'CREATED' | 'FINISHED',
+    actorId: string | null,
+  ): void {
+    this.realtime.publishEntityChanged({ entity: 'PRODUCTION_BATCH', entityId, action, actorId });
+  }
 
   /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
    *  17.2/19.2 changelog notification). */
@@ -411,6 +422,7 @@ export class ProductionBatchesService {
       piCode: updated.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
       stage: updated.stage,
     });
+    this.publishRealtime(updated.id, 'FINISHED', reportedById);
     return this.toResponseDto(updated);
   }
 

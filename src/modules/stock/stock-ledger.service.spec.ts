@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException } from '@nes
 import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from './stock-ledger.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 
 describe('StockLedgerService', () => {
   let service: StockLedgerService;
@@ -72,7 +73,11 @@ describe('StockLedgerService', () => {
       $queryRaw: jest.fn().mockResolvedValue([{ qty: { toNumber: () => 100 } }]),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
-    service = new StockLedgerService(prisma as unknown as PrismaServiceType);
+    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    service = new StockLedgerService(
+      prisma as unknown as PrismaServiceType,
+      realtimeStub as unknown as RealtimeService,
+    );
   });
 
   describe('postEntry - XOR 4 chân hàng', () => {

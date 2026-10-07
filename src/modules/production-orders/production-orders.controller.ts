@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
@@ -6,6 +6,10 @@ import { PERMISSION_MODULES } from '../../common/constants/permission-modules.co
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
+import {
+  RealtimeEntityOn,
+  RealtimeMutationInterceptor,
+} from '../../realtime/realtime-mutation.interceptor';
 import { ResyncBomDto } from './dto/resync-bom.dto';
 import { ProductionOrdersService } from './production-orders.service';
 
@@ -20,6 +24,8 @@ const UPDATE = { module: PERMISSION_MODULES.PRODUCTION_ORDER, action: Permission
 @ApiTags('Production Orders')
 @ApiBearerAuth()
 @Controller({ path: 'production-orders', version: '1' })
+@RealtimeEntityOn('PRODUCTION_ORDER')
+@UseInterceptors(RealtimeMutationInterceptor)
 export class ProductionOrdersController {
   constructor(private readonly productionOrdersService: ProductionOrdersService) {}
 

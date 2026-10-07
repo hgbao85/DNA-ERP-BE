@@ -26,6 +26,7 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { recomputeProposalStatus } from './purchase-proposal-status.util';
@@ -158,7 +159,22 @@ export class PurchaseProposalsService {
     private readonly cls: ClsService<AppClsStore>,
     private readonly cloudinaryService: CloudinaryService,
     private readonly notifications: NotificationsService,
+    private readonly realtime: RealtimeService,
   ) {}
+
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  private publishProposalChanged(
+    proposalId: bigint,
+    action: 'APPROVED' | 'RECEIVED',
+    actorId: string | null,
+  ): void {
+    this.realtime.publishEntityChanged({
+      entity: 'PURCHASE_PROPOSAL',
+      entityId: proposalId,
+      action,
+      actorId,
+    });
+  }
 
   // ─── Notification (Phase 3a, mục 7.4 changelog 2026-09-25/26) ──────────────────────────────
   // Best-effort NGOÀI transaction - cùng lý do đã ghi ở SkusService.notifySku()/
@@ -369,6 +385,7 @@ export class PurchaseProposalsService {
       { piCode: result.piCode, count: myPendingItems.length },
       actorUserId,
     );
+    this.publishProposalChanged(proposal.id, 'APPROVED', actorUserId);
 
     return result;
   }
@@ -685,6 +702,7 @@ export class PurchaseProposalsService {
       }
     }
 
+    this.publishProposalChanged(proposal.id, 'RECEIVED', userId);
     return this.toItemResponseDto(updatedItem);
   }
 
