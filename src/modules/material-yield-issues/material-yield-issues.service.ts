@@ -7,7 +7,11 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
+import { auditEvent } from '../../common/utils/audit-event.util';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import {
+  AuditAction,
   MaterialYieldIssueStatus,
   Prisma,
   ProductionOrder,
@@ -82,6 +86,7 @@ export class MaterialYieldIssuesService {
     private readonly stockReservationsService: StockReservationsService,
     private readonly notifications: NotificationsService,
     private readonly realtime: RealtimeService,
+    private readonly cls: ClsService<AppClsStore>,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -287,6 +292,16 @@ export class MaterialYieldIssuesService {
       created,
       created.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
     );
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.CREATE,
+      tableName: 'MaterialYieldIssue',
+      recordId: created.id,
+      newValue: {
+        productionOrderId: productionOrderId,
+        materialId: dto.materialId,
+        issuedQty: dto.issuedQty,
+      },
+    });
     this.publishRealtime('MATERIAL_YIELD_ISSUE', created.id, 'CREATED', issuedById);
     return this.toResponseDto(created);
   }
@@ -365,6 +380,13 @@ export class MaterialYieldIssuesService {
     const updated = await this.prisma.materialYieldIssue.findUniqueOrThrow({
       where: { id: issue.id },
       include: MATERIAL_YIELD_ISSUE_INCLUDE,
+    });
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.UPDATE,
+      tableName: 'MaterialYieldIssue',
+      recordId: updated.id,
+      oldValue: { status: issue.status },
+      newValue: { status: updated.status, receivedQty: updated.receivedQty?.toNumber() ?? null },
     });
     await this.resolveMaterialYieldIssueToPhoi(updated.id);
     this.publishRealtime('MATERIAL_YIELD_ISSUE', updated.id, 'RECEIVED', receivedById);

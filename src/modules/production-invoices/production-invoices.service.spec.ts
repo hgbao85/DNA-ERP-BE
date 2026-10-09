@@ -1227,6 +1227,59 @@ describe('ProductionInvoicesService', () => {
     });
   });
 
+  describe('updateItem - audit + thông báo đổi thời hạn (P2, changelog 31.3)', () => {
+    const emitted = () =>
+      (notificationsService.emit.mock.calls as unknown[][]).filter(
+        (c) => c[0] === 'PI_ITEM_DEADLINE_CHANGED',
+      ) as unknown as [
+        string,
+        { params: { roles: string[]; warehouseIds: string[]; changes: string[] } },
+      ][];
+
+    it('đổi mốc Hàn + Đan + giao hàng → audit 1 dòng và báo HAN, thủ kho Đan, Sales', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValueOnce(piItem()).mockResolvedValueOnce(
+        piItem({
+          deliveryDeadline: new Date('2026-08-20'),
+          stages: [
+            { stageType: 'FRAME_HAN', deadline: new Date('2026-08-10') },
+            { stageType: 'WEAVING', deadline: new Date('2026-08-15') },
+          ],
+        }),
+      );
+
+      await service.updateItem('7', '20', {
+        deliveryDeadline: '2026-08-20',
+        stages: [
+          { stageType: ProdItemStageType.FRAME_HAN, deadline: '2026-08-10' },
+          { stageType: ProdItemStageType.WEAVING, deadline: '2026-08-15' },
+        ],
+      });
+
+      const calls = emitted();
+      expect(calls).toHaveLength(1);
+      expect(calls[0][1].params.roles.sort()).toEqual(['HAN_STAFF', 'SALES_STAFF'].sort());
+      expect(calls[0][1].params.warehouseIds).toEqual(['phoi-son-han', 'vat-tu-tp']);
+      expect(calls[0][1].params.changes).toHaveLength(3);
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('lưu lại y nguyên giá trị cũ → không audit, không báo', async () => {
+      const same = piItem({
+        stages: [{ stageType: 'FRAME_HAN', deadline: new Date('2026-08-10') }],
+      });
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(same);
+
+      await service.updateItem('7', '20', {
+        stages: [{ stageType: ProdItemStageType.FRAME_HAN, deadline: '2026-08-10' }],
+      });
+
+      expect(emitted()).toHaveLength(0);
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
+  });
+
   // 2026-09-11 lần 2: đồng bộ lại - FRAME_PHOI/FRAME_HAN/FRAME_SON quay về CHỈ 1 mốc `deadline`
   // như WEAVING/TRANSFER_CHECK/PACKAGING, bỏ hẳn "khoảng thời gian"/ràng buộc "nằm trong khung
   // cha" (assertFrameSubStagesWithinRange() đã xoá - xem doc comment schema.prisma). Test cũ cho

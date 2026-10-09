@@ -1,6 +1,9 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PieceStepBundleStatus, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { ClsService } from 'nestjs-cls';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { MaterialYieldRecipeIssuesService } from './material-yield-recipe-issues.service';
 import { MaterialYieldRecipeProductionService } from './material-yield-recipe-production.service';
@@ -12,6 +15,7 @@ describe('MaterialYieldRecipeProductionService', () => {
     materialYieldStepBatch: { findUnique: jest.Mock };
     materialYieldStepBundle: { findMany: jest.Mock; count: jest.Mock; findUnique: jest.Mock };
     productionOrder: { findFirst: jest.Mock };
+    auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
   };
   let tx: {
@@ -24,6 +28,7 @@ describe('MaterialYieldRecipeProductionService', () => {
   let stockLedgerService: { postEntry: jest.Mock };
   let materialYieldRecipesService: { findOneRowOrThrow: jest.Mock };
   let materialYieldRecipeIssuesService: { sumReceived: jest.Mock };
+  let notifications: { emit: jest.Mock };
 
   const recipe = {
     id: 9n,
@@ -56,17 +61,25 @@ describe('MaterialYieldRecipeProductionService', () => {
       materialYieldStepBatch: { findUnique: jest.fn() },
       materialYieldStepBundle: { findMany: jest.fn(), count: jest.fn(), findUnique: jest.fn() },
       productionOrder: { findFirst: jest.fn().mockResolvedValue({ id: 1n }) },
+      auditLog: { create: jest.fn().mockResolvedValue(undefined) },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(tx)),
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
     materialYieldRecipesService = { findOneRowOrThrow: jest.fn().mockResolvedValue(recipe) };
     materialYieldRecipeIssuesService = { sumReceived: jest.fn().mockResolvedValue(20) };
+    notifications = { emit: jest.fn().mockResolvedValue(undefined) };
 
     service = new MaterialYieldRecipeProductionService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       materialYieldRecipesService as unknown as MaterialYieldRecipesService,
       materialYieldRecipeIssuesService as unknown as MaterialYieldRecipeIssuesService,
+      notifications as unknown as NotificationsService,
+      {
+        isActive: jest.fn().mockReturnValue(false),
+        get: jest.fn(),
+        getId: jest.fn(),
+      } as unknown as ClsService<AppClsStore>,
     );
   });
 
@@ -154,6 +167,42 @@ describe('MaterialYieldRecipeProductionService', () => {
         data: { materialYieldStepBundleId: 77n },
       });
       expect(result.outputMaterialCode).toBe('CHAN-NHOM-01');
+    });
+
+    it('báo KCS (MATERIAL_YIELD_STEP_BUNDLE_TO_KCS) sau khi tạo bundle - nhánh chân nhôm từng im lặng (N-1)', async () => {
+      tx.materialYieldStepBatch.findMany.mockResolvedValue([{ id: 1n, qty: 3 }]);
+      tx.materialYieldStepBundle.create.mockResolvedValue(bundleRow);
+
+      await service.submitStep('5', { recipeId: '9', step: 'UON' }, 'u1', 'PHOI');
+
+      expect(notifications.emit).toHaveBeenCalledWith('MATERIAL_YIELD_STEP_BUNDLE_TO_KCS', {
+        entityId: '77',
+        params: { piCode: 'PI-001' },
+      });
+    });
+
+    it('ghi audit khi Phôi gửi bundle sang KCS (P2 mục 31)', async () => {
+      tx.materialYieldStepBatch.findMany.mockResolvedValue([{ id: 1n, qty: 3 }]);
+      tx.materialYieldStepBundle.create.mockResolvedValue(bundleRow);
+
+      await service.submitStep('5', { recipeId: '9', step: 'UON' }, 'u1', 'PHOI');
+
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          tableName: 'MaterialYieldStepBundle',
+          recordId: '77',
+        }) as unknown,
+      });
+    });
+
+    it('lỗi phát thông báo KHÔNG làm hỏng việc gửi KCS đã commit', async () => {
+      tx.materialYieldStepBatch.findMany.mockResolvedValue([{ id: 1n, qty: 3 }]);
+      tx.materialYieldStepBundle.create.mockResolvedValue(bundleRow);
+      notifications.emit.mockRejectedValue(new Error('boom'));
+
+      await expect(
+        service.submitStep('5', { recipeId: '9', step: 'UON' }, 'u1', 'PHOI'),
+      ).resolves.toBeDefined();
     });
 
     it('từ chối khi không có batch nào chưa gửi', async () => {

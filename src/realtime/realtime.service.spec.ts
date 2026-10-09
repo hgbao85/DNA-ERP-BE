@@ -38,6 +38,8 @@ describe('RealtimeService', () => {
       title: 'Phiếu mới',
       message: 'msg',
       link: null,
+      entityType: null,
+      entityId: null,
       merged: false,
       createdAt: '2026-10-07T00:00:00.000Z',
     });
@@ -101,6 +103,8 @@ describe('RealtimeService', () => {
         title: 't',
         message: 'm',
         link: null,
+        entityType: null,
+        entityId: null,
         merged: false,
         createdAt: new Date().toISOString(),
       }),
@@ -116,6 +120,8 @@ describe('RealtimeService', () => {
       title: 't',
       message: 'm',
       link: null,
+      entityType: null,
+      entityId: null,
       merged: false,
       createdAt: new Date().toISOString(),
     });

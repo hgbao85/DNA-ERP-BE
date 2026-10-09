@@ -2,6 +2,8 @@ import { RealtimeService } from '../../realtime/realtime.service';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { Prisma, SalesOrderItemStatus } from '../../generated/prisma/client';
+import { ClsService } from 'nestjs-cls';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { SalesOrdersService } from './sales-orders.service';
 
 describe('SalesOrdersService', () => {
@@ -46,6 +48,7 @@ describe('SalesOrdersService', () => {
     packagingRecord: { groupBy: jest.Mock };
     packagingIssue: { groupBy: jest.Mock };
     $queryRaw: jest.Mock;
+    auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
   };
 
@@ -133,6 +136,7 @@ describe('SalesOrdersService', () => {
       packagingRecord: { groupBy: jest.fn().mockResolvedValue([]) },
       packagingIssue: { groupBy: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn(),
+      auditLog: { create: jest.fn() },
       // 10/09: remove() giờ bọc xoá cascade (productionInvoiceItem/salesOrderItem) +
       // salesOrder.delete() trong 1 $transaction - test chạy callback thẳng với `prisma` (đủ vì
       // các mock ở trên dùng chung namespace, không tách tx riêng).
@@ -141,6 +145,11 @@ describe('SalesOrdersService', () => {
     service = new SalesOrdersService(
       prisma as unknown as PrismaServiceType,
       { publishEntityChanged: jest.fn() } as unknown as RealtimeService,
+      {
+        isActive: jest.fn().mockReturnValue(false),
+        get: jest.fn(),
+        getId: jest.fn(),
+      } as unknown as ClsService<AppClsStore>,
     );
   });
 
@@ -692,7 +701,7 @@ describe('SalesOrdersService', () => {
 
   describe('shipItem', () => {
     it('cộng dồn shippedQty qua 1 câu UPDATE nguyên tử, không đọc-rồi-ghi', async () => {
-      prisma.$queryRaw.mockResolvedValue([{ id: 5n }]);
+      prisma.$queryRaw.mockResolvedValue([{ id: 5n, shippedQty: 7 }]);
       prisma.salesOrderItem.findUnique.mockResolvedValue({
         id: 5n,
         salesOrderId: 10n,
@@ -711,6 +720,32 @@ describe('SalesOrdersService', () => {
       // Phép cộng + điều kiện trần nằm chung 1 câu SQL - không có findUnique nào xen giữa để đọc
       // "current" trước khi ghi, đúng thứ tự khoá dòng ở DB thay vì tính ở tầng ứng dụng.
       expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it('ghi audit xuất giao: ai giao bao nhiêu, shippedQty trước → sau (P2 mục 31)', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ id: 5n, shippedQty: 7 }]);
+      prisma.salesOrderItem.findUnique.mockResolvedValue({
+        id: 5n,
+        salesOrderId: 10n,
+        mfgProductId: 2n,
+        skuName: 'Ghe A',
+        totalQty: 10,
+        shippedQty: 7,
+        status: 'LEN_KE_HOACH',
+        deliveryDate: null,
+        mfgProduct: product,
+      });
+
+      await service.shipItem('10', '5', { qty: 3 });
+
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          tableName: 'SalesOrderItem',
+          recordId: '5',
+          oldValue: { shippedQty: 4 },
+          newValue: { shippedQty: 7, shipQty: 3, salesOrderId: '10' },
+        }) as unknown,
+      });
     });
 
     it('từ chối khi ship sẽ vượt totalQty, không âm thầm ghi đè', async () => {

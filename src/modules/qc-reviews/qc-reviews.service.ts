@@ -674,6 +674,17 @@ export class QcReviewsService {
     });
 
     this.publishRealtime(materialYieldStepBundleId, 'QC_RECORDED', reviewedById);
+    try {
+      await this.notifications.resolve({
+        entityType: 'MATERIAL_YIELD_STEP_BUNDLE',
+        entityId: materialYieldStepBundleId,
+        types: ['MATERIAL_YIELD_STEP_BUNDLE_TO_KCS'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve MATERIAL_YIELD_STEP_BUNDLE_TO_KCS (bundle ${materialYieldStepBundleId}): ${(error as Error).message}`,
+      );
+    }
     return this.toResponseDto(created);
   }
 

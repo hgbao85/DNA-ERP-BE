@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { StockModule } from '../stock/stock.module';
 import { MaterialYieldRecipeIssuesController } from './material-yield-recipe-issues.controller';
 import { MaterialYieldRecipeIssuesService } from './material-yield-recipe-issues.service';
@@ -8,7 +9,7 @@ import { MaterialYieldRecipesController } from './material-yield-recipes.control
 import { MaterialYieldRecipesService } from './material-yield-recipes.service';
 
 @Module({
-  imports: [StockModule],
+  imports: [StockModule, NotificationsModule],
   controllers: [
     MaterialYieldRecipesController,
     MaterialYieldRecipeIssuesController,

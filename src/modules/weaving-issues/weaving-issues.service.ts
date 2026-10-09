@@ -7,7 +7,11 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
+import { auditEvent } from '../../common/utils/audit-event.util';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import {
+  AuditAction,
   Piece,
   Prisma,
   ProductionOrder,
@@ -123,6 +127,7 @@ export class WeavingIssuesService {
     private readonly stockReservationsService: StockReservationsService,
     private readonly notifications: NotificationsService,
     private readonly realtime: RealtimeService,
+    private readonly cls: ClsService<AppClsStore>,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -258,6 +263,17 @@ export class WeavingIssuesService {
       { timeout: 20000 },
     );
 
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.CREATE,
+      tableName: 'WeavingIssue',
+      recordId: created.id,
+      newValue: {
+        productionOrderId: created.productionOrderId.toString(),
+        pieceId: created.pieceId.toString(),
+        weavingPointId: created.weavingPointId.toString(),
+        qty: created.qty,
+      },
+    });
     await this.notifyWeavingIssueToPoint(created);
     this.publishRealtime('WEAVING_ISSUE', created.id, 'CREATED', issuedById);
 
@@ -441,6 +457,17 @@ export class WeavingIssuesService {
       created.pieceId,
       created.weavingPointId,
     );
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.CREATE,
+      tableName: 'WeavingReceipt',
+      recordId: created.id,
+      newValue: {
+        productionOrderId: created.productionOrderId.toString(),
+        pieceId: created.pieceId.toString(),
+        weavingPointId: created.weavingPointId.toString(),
+        qty: created.qty,
+      },
+    });
     this.publishRealtime('WEAVING_ISSUE', created.id, 'RECEIVED', receivedById);
 
     return this.toReceiptResponseDto(created);
@@ -469,7 +496,7 @@ export class WeavingIssuesService {
         params: {
           poNumber: issue.productionOrder.poNumber,
           pieceName: issue.piece.name,
-          weavingPointName: issue.weavingPoint.fullName,
+          weavingPointName: issue.weavingPoint.fullName?.trim() || issue.weavingPoint.code,
           outstandingQty,
           warehouseCodes,
         },

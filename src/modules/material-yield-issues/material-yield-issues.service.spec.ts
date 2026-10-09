@@ -42,6 +42,7 @@ describe('MaterialYieldIssuesService', () => {
     warehouse: { findUniqueOrThrow: jest.Mock };
     $executeRaw: jest.Mock;
     $queryRaw: jest.Mock;
+    auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
   };
 
@@ -132,6 +133,7 @@ describe('MaterialYieldIssuesService', () => {
           ? Promise.resolve([{ floorStage: 'ACTIVE' }])
           : Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }]),
       ),
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     physicalStockQty = 9999;
@@ -151,6 +153,7 @@ describe('MaterialYieldIssuesService', () => {
       stockReservationsService as unknown as StockReservationsService,
       notificationsService as unknown as NotificationsService,
       realtimeStub as unknown as RealtimeService,
+      { isActive: jest.fn().mockReturnValue(false), get: jest.fn() } as never,
     );
   });
 

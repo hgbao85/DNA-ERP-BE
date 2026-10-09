@@ -41,6 +41,7 @@ describe('WeavingIssuesService', () => {
     warehouseTransferPieceItem: { findMany: jest.Mock; aggregate: jest.Mock };
     $executeRaw: jest.Mock;
     $queryRaw: jest.Mock;
+    auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
   };
   let stockLedgerService: { postEntry: jest.Mock };
@@ -151,6 +152,7 @@ describe('WeavingIssuesService', () => {
       },
       $executeRaw: jest.fn().mockResolvedValue(0),
       $queryRaw: jest.fn().mockResolvedValue([]),
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue(undefined) };
@@ -169,6 +171,7 @@ describe('WeavingIssuesService', () => {
       stockReservationsService as never,
       notificationsService as never,
       realtimeStub as unknown as RealtimeService,
+      { isActive: jest.fn().mockReturnValue(false), get: jest.fn() } as never,
     );
   });
 

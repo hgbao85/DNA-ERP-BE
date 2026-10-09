@@ -2089,7 +2089,16 @@ describe('CuttingProposalsService', () => {
         status: PurchaseProposalStatus.NEW,
         productionInvoice: null,
       });
-      prisma.purchaseProposalItem.count.mockResolvedValue(1);
+      // notifyPurchaseProposalCreated() đọc các dòng còn chờ + người mua của vật tư (N-4) bằng findMany(select material).
+      const baseFindMany = prisma.purchaseProposalItem.findMany.getMockImplementation();
+      prisma.purchaseProposalItem.findMany.mockImplementation(
+        (args?: { select?: { material?: unknown } }) =>
+          args?.select?.material
+            ? [{ material: { buyerId: null } }]
+            : baseFindMany
+              ? (baseFindMany(args) as unknown)
+              : [],
+      );
 
       await service.approve('2', 'user-1');
 

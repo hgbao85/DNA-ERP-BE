@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import {
   AuditAction,
@@ -14,6 +14,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ProductionOrderResponseDto } from './dto/production-order-response.dto';
 import { ResyncBomDto } from './dto/resync-bom.dto';
 
@@ -51,9 +52,12 @@ type ProductionOrderWithSalesOrder = Prisma.ProductionOrderGetPayload<{
  */
 @Injectable()
 export class ProductionOrdersService {
+  private readonly logger = new Logger(ProductionOrdersService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly cls: ClsService<AppClsStore>,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -257,10 +261,19 @@ export class ProductionOrdersService {
           : { floorStage: 'ACTIVE' },
       include: SALES_ORDER_CODE_INCLUDE,
     });
-    return this.toResponseDto(
+    const dto = this.toResponseDto(
       updated,
       await this.fetchActiveBomRevisionIds([updated.mfgProductId]),
     );
+    await this.recordFloorChange(
+      order.floorStage,
+      'ACTIVE',
+      dto,
+      order.floorStage === 'PENDING'
+        ? 'PRODUCTION_ORDER_FLOOR_STARTED'
+        : 'PRODUCTION_ORDER_FLOOR_RESUMED',
+    );
+    return dto;
   }
 
   /**
@@ -279,10 +292,12 @@ export class ProductionOrdersService {
       data: { floorStage: 'PAUSED' },
       include: SALES_ORDER_CODE_INCLUDE,
     });
-    return this.toResponseDto(
+    const dto = this.toResponseDto(
       updated,
       await this.fetchActiveBomRevisionIds([updated.mfgProductId]),
     );
+    await this.recordFloorChange(order.floorStage, 'PAUSED', dto, 'PRODUCTION_ORDER_FLOOR_PAUSED');
+    return dto;
   }
 
   /**
@@ -304,10 +319,70 @@ export class ProductionOrdersService {
           : { floorStage: 'FINISHED' },
       include: SALES_ORDER_CODE_INCLUDE,
     });
-    return this.toResponseDto(
+    const dto = this.toResponseDto(
       updated,
       await this.fetchActiveBomRevisionIds([updated.mfgProductId]),
     );
+    await this.recordFloorChange(
+      order.floorStage,
+      'FINISHED',
+      dto,
+      'PRODUCTION_ORDER_FLOOR_FINISHED',
+    );
+    return dto;
+  }
+
+  /**
+   * Sau mỗi lần QLSX đổi `floorStage` (P1 mục 31 changelog notification): (1) ghi AuditLog - ProductionOrder không nằm trong
+   * AUDITED_MODELS nên trước đây "ai bấm Tạm dừng/Kết thúc, lúc nào" không truy được; (2) báo các tổ xưởng. Bấm lại cùng
+   * trạng thái (idempotent) thì KHÔNG ghi/báo gì. Best-effort: lỗi ở đây không được làm hỏng việc đổi trạng thái đã ghi.
+   */
+  private async recordFloorChange(
+    from: string,
+    to: 'ACTIVE' | 'PAUSED' | 'FINISHED',
+    order: ProductionOrderResponseDto,
+    type:
+      | 'PRODUCTION_ORDER_FLOOR_STARTED'
+      | 'PRODUCTION_ORDER_FLOOR_RESUMED'
+      | 'PRODUCTION_ORDER_FLOOR_PAUSED'
+      | 'PRODUCTION_ORDER_FLOOR_FINISHED',
+  ): Promise<void> {
+    if (from === to) return;
+    try {
+      const auditLogClient = this.prisma as unknown as Pick<PrismaClient, 'auditLog'>;
+      await writeAuditLog(auditLogClient, this.cls, {
+        action: AuditAction.UPDATE,
+        tableName: 'ProductionOrder',
+        recordId: order.id,
+        oldValue: { floorStage: from },
+        newValue: { floorStage: to },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Không ghi được audit floorStage (order ${order.id}): ${(error as Error).message}`,
+      );
+    }
+    try {
+      // Tiếp tục/Kết thúc làm thông báo "Tạm dừng" hết giá trị -> tự đóng.
+      if (to !== 'PAUSED') {
+        await this.notifications.resolve({
+          entityType: 'PRODUCTION_ORDER',
+          entityId: order.id,
+          types: ['PRODUCTION_ORDER_FLOOR_PAUSED'],
+        });
+      }
+      await this.notifications.emit(type, {
+        entityId: order.id,
+        params: {
+          piCode: order.piCode ?? `#${order.productionInvoiceId ?? order.id}`,
+          poNumber: order.poNumber,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Không phát được thông báo ${type} (order ${order.id}): ${(error as Error).message}`,
+      );
+    }
   }
 
   /**

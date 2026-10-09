@@ -156,6 +156,8 @@ export class NotificationsService {
       title: string;
       message: string;
       link: unknown;
+      entityType?: string | null;
+      entityId?: string | null;
       createdAt: Date;
     },
     recipientIds: string[],
@@ -171,6 +173,8 @@ export class NotificationsService {
         title: notification.title,
         message: notification.message,
         link: (notification.link ?? null) as NotificationLink | null,
+        entityType: notification.entityType ?? null,
+        entityId: notification.entityId ?? null,
         merged,
         createdAt: notification.createdAt.toISOString(),
       });
@@ -402,7 +406,10 @@ export class NotificationsService {
 
   async unreadCount(userId: string): Promise<UnreadCountResponseDto> {
     const rows = await this.prisma.notificationRecipient.findMany({
-      where: { userId, readAt: null, archivedAt: null },
+      // resolvedAt: null - việc ĐÃ xử lý xong (ACTION_REQUIRED bị resolve()) không còn đáng để huy hiệu
+      // chuông/tab "Cần xử lý" đếm, dù người dùng chưa bấm "đã đọc" (N-2 báo cáo 07/10: boss hiện 14
+      // trong khi chỉ 3 mục còn chờ).
+      where: { userId, readAt: null, archivedAt: null, resolvedAt: null },
       select: { notification: { select: { category: true } } },
     });
     const byCategory: Record<string, number> = {};

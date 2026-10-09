@@ -14,6 +14,16 @@ export interface RecipientCriteria {
   mfgRoles?: MfgRole[];
   /** `User.warehouseScope` - báo đúng kho liên quan (vd theo `Material.warehouseId`). */
   warehouseIds?: string[];
+  /** Nếu có: nhóm `warehouseIds` CHỈ gồm user thuộc kho đó VÀ có 1 trong các role này (tránh báo cho Mua
+   *  hàng/tổ sản xuất chỉ vì họ cũng có `warehouseScope`). */
+  warehouseScopeRoles?: string[];
+  /** Nếu có: loại khỏi nhóm `warehouseIds` user có 1 trong các role này. Cần vì Mua hàng cùng kho thường GIỮ CẢ
+   *  role WAREHOUSE_STAFF (dữ liệu thật: muapsh/muatp/muavttp) nhưng bị khoá vào phân hệ `purchasing`, không mở
+   *  được màn kho - báo họ chỉ tạo thông báo bấm không đi đâu. */
+  warehouseScopeExcludeRoles?: string[];
+  /** Loại KHỎI TOÀN BỘ kết quả những user có 1 trong các role này (áp sau khi gộp mọi nhóm). Dùng khi 1 nhóm role rộng
+   *  (vd WAREHOUSE_STAFF) bị Mua hàng giữ chung nhưng họ không làm việc ở màn đích. */
+  excludeRoles?: string[];
   /** Chỉ định đích danh (vd người đã tạo phiếu, để báo kết quả duyệt/từ chối cho đúng họ). */
   userIds?: string[];
   /** Mọi user active/chưa xoá - dùng cho ANNOUNCEMENT audience=ALL. */
@@ -27,10 +37,19 @@ export type NotificationSeverityValue = 'INFO' | 'SUCCESS' | 'WARNING' | 'CRITIC
 /** FE dựng URL từ đây (BE không biết cấu trúc route FE - mục 6.2 changelog 2026-09-25). Index
  *  signature vì đây là dữ liệu lưu thẳng vào cột JSONB `Notification.link` (Prisma.InputJsonValue
  *  đòi hỏi kiểu object phải "trông giống JSON", không chấp nhận interface đóng). */
+export interface NotificationLinkTarget {
+  module: string;
+  page: string;
+  params?: Record<string, string | number | null>;
+}
+
 export interface NotificationLink {
   module: string;
   page: string;
   params?: Record<string, string | number | null>;
+  /** Link thay thế khi người nhận KHÔNG mở được `module` chính (mỗi người chỉ vào 1 phân hệ, vd KHSX ở
+   *  `production_plan` còn QLSX ở `production`): FE chọn cái đầu tiên mà người dùng mở được. */
+  alternatives?: NotificationLinkTarget[];
   [key: string]: unknown;
 }
 
@@ -114,6 +133,21 @@ const skuLabel = (p: SkuNotificationParams) => `${p.factoryCode} – ${p.product
 const specSetupLink = () => ({ module: 'production', page: 'setup' });
 // Link module 'production_plan' page 'duyet-sku' (SKUReviewPage) - nơi KHSX duyệt/trả định mức
 // và forward sang Sếp (approve-parts/approve-detail).
+/** Người nhận thông báo trạng thái xưởng: các tổ làm theo lệnh (Phôi/Hàn/Sơn/KCS) + thủ kho 3 kho vật lý. Thủ kho xác định theo
+ *  `warehouseScope` (không theo role WAREHOUSE_STAFF đơn thuần: dữ liệu demo cho cả khsx/sales giữ role này) và loại Mua hàng. */
+const floorStageRecipients = (): RecipientCriteria => ({
+  roles: [
+    BUSINESS_ROLES.PHOI_STAFF,
+    BUSINESS_ROLES.HAN_STAFF,
+    BUSINESS_ROLES.SON_STAFF,
+    BUSINESS_ROLES.KCS_STAFF,
+  ],
+  warehouseIds: ['phoi-son-han', 'vat-tu-tp', 'thanh-pham'],
+  warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+  warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+  excludeRoles: [BUSINESS_ROLES.PURCHASER],
+});
+
 const khsxReviewLink = () => ({ module: 'production_plan', page: 'duyet-sku' });
 
 const skuNeedsQuotaRecipients = (role: string) => (): RecipientCriteria => ({ roles: [role] });
@@ -142,6 +176,27 @@ export interface PurchaseProposalNotificationParams {
   materialCode?: string;
   qty?: number;
   unit?: string;
+  /** Chỉ `PURCHASE_PROPOSAL_READY_TO_RECEIVE`: kho nhận hàng của các vật tư vừa được Sếp duyệt mua. */
+  warehouseCodes?: string[];
+  /** Chỉ `PURCHASE_PROPOSAL_CREATED`: người mua được giao các vật tư còn chờ (Material.buyerId). Vắng = báo mọi Mua hàng. */
+  buyerIds?: string[];
+}
+
+/** Trạng thái xưởng của 1 lệnh sản xuất (ProductionOrder.floorStage) - QLSX Bắt đầu/Tạm dừng/Tiếp tục/Kết thúc. */
+export interface FloorStageNotificationParams {
+  piCode: string;
+  poNumber: string;
+}
+
+/** Mốc kế hoạch của 1 dòng SKU trong lệnh sản xuất bị đổi ("Sửa thời hạn"). Người nhận do service tính (theo mốc nào
+ *  đổi) rồi truyền qua `roles`/`warehouseIds` - type không tự đoán được. */
+export interface PiDeadlineChangedNotificationParams {
+  piCode: string;
+  factoryCode: string;
+  /** Mỗi phần tử 1 mốc đổi, vd "Hàn: 10/10/2026 → 15/10/2026". */
+  changes: string[];
+  roles: string[];
+  warehouseIds: string[];
 }
 
 /** Phase 3b, nhóm 7.5-i (Sắt → Phôi → KCS). */
@@ -330,7 +385,14 @@ const notificationTypeDefinitions = {
     entityType: 'SKU',
     title: (p: SkuNotificationParams) => `SKU đã được duyệt: ${skuLabel(p)}`,
     message: () => 'Sếp đã duyệt - định mức chính thức có hiệu lực.',
-    link: () => ({ module: 'production_plan', page: 'planforms' }),
+    link: () => ({
+      module: 'production_plan',
+      page: 'planforms',
+      alternatives: [
+        { module: 'production', page: 'setup' },
+        { module: 'sales', page: 'orders' },
+      ],
+    }),
     recipients: (p: SkuNotificationParams) => ({
       roles: [
         BUSINESS_ROLES.PRODUCTION_PLANNER,
@@ -408,6 +470,11 @@ const notificationTypeDefinitions = {
     category: 'RESULT',
     severity: 'SUCCESS',
     entityType: 'PRODUCTION_INVOICE',
+    link: () => ({
+      module: 'production',
+      page: 'ke-hoach',
+      alternatives: [{ module: 'production_plan', page: 'lenh-sx' }],
+    }),
     title: (p: PiNotificationParams) => `${piLabel(p)} đã được Sếp duyệt`,
     message: () => 'Đã tạo lệnh sản xuất, bắt đầu cắt sắt.',
     recipients: () => ({
@@ -419,6 +486,11 @@ const notificationTypeDefinitions = {
     category: 'RESULT',
     severity: 'WARNING',
     entityType: 'PRODUCTION_INVOICE',
+    link: () => ({
+      module: 'production',
+      page: 'ke-hoach',
+      alternatives: [{ module: 'production_plan', page: 'gom-cat' }],
+    }),
     title: (p: PiNotificationParams) => `${piLabel(p)} bị Sếp từ chối`,
     message: (p: PiNotificationParams) =>
       `Lý do: ${p.reason ?? 'không nêu lý do'}. SKU đã quay về "Tối ưu cắt sắt".`,
@@ -461,20 +533,43 @@ const notificationTypeDefinitions = {
     title: (p: PurchaseProposalNotificationParams) => `${p.piCode}: ${p.count} vật tư cần mua`,
     message: () => 'Đề xuất mua mới - vào xem và xử lý.',
     link: () => ({ module: 'purchasing', page: 'lenh-mua-ncc' }),
-    recipients: () => ({ roles: [BUSINESS_ROLES.PURCHASER] }),
+    recipients: (p: PurchaseProposalNotificationParams) =>
+      p.buyerIds?.length ? { userIds: p.buyerIds } : { roles: [BUSINESS_ROLES.PURCHASER] },
   } satisfies NotificationTypeDef<PurchaseProposalNotificationParams>,
 
   /** Mua hàng tải file duyệt ký tay xong (`bossApprove()`) - `count` = số vật tư vừa được ĐÚNG
    *  người mua này duyệt trong lần gọi này (bossApprove() duyệt riêng theo `Material.buyerId`,
    *  không phải luôn cả đề xuất - xem docstring service). */
+  /** Mua hàng đã tải file Sếp duyệt -> kho ĐƯỢC PHÉP nhận hàng (P1 mục 31: trước đây chỉ QLSX được báo, thủ kho chỉ thấy khi tự
+   *  mở "Nhập kho"). Gộp theo đề xuất (nhiều người mua duyệt từng phần), tự đóng khi đề xuất PURCHASED. Loại Mua hàng
+   *  (họ giữ cả role thủ kho nhưng bị khoá vào phân hệ purchasing). */
+  PURCHASE_PROPOSAL_READY_TO_RECEIVE: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'PURCHASE_PROPOSAL',
+    title: (p: PurchaseProposalNotificationParams) => `${p.piCode}: hàng mua sắp về - chờ nhận kho`,
+    message: () => 'Mua hàng đã có file Sếp duyệt - vào Nhập kho để ghi nhận khi hàng về.',
+    link: () => ({ module: 'inbound_warehouse', page: 'nhap-kho' }),
+    recipients: (p: PurchaseProposalNotificationParams) => ({
+      warehouseIds: p.warehouseCodes ?? [],
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<PurchaseProposalNotificationParams>,
+
   PURCHASE_PROPOSAL_APPROVED: {
     category: 'RESULT',
     severity: 'INFO',
     entityType: 'PURCHASE_PROPOSAL',
     title: (p: PurchaseProposalNotificationParams) => `${p.piCode}: đề xuất mua đã có Sếp duyệt`,
-    message: (p: PurchaseProposalNotificationParams) =>
-      `Mua hàng đã tải file duyệt ký tay cho ${p.count} vật tư - đang đặt hàng.`,
-    link: () => ({ module: 'production', page: 'lenh-sx' }),
+    message: () => 'Mua hàng đã tải file duyệt ký tay - đang đặt hàng.',
+    link: (p: PurchaseProposalNotificationParams) => ({
+      // QLSX theo dõi PI ở "Tổng hợp lệnh SX" (`ke-hoach`); màn `lenh-sx` chỉ liệt kê PI chờ QLSX duyệt nên không
+      // có dòng để chỉ tới. `focus` theo MÃ PI vì danh sách đó không biết id đề xuất mua.
+      module: 'production',
+      page: 'ke-hoach',
+      params: { focus: `PI_CODE:${p.piCode}` },
+    }),
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
   } satisfies NotificationTypeDef<PurchaseProposalNotificationParams>,
 
@@ -486,11 +581,25 @@ const notificationTypeDefinitions = {
     category: 'RESULT',
     severity: 'INFO',
     entityType: 'PURCHASE_PROPOSAL',
+    link: (p: PurchaseProposalNotificationParams) => ({
+      // QLSX theo dõi PI ở "Tổng hợp lệnh SX" (`ke-hoach`); màn `lenh-sx` chỉ liệt kê PI chờ QLSX duyệt nên không
+      // có dòng để chỉ tới. `focus` theo MÃ PI vì danh sách đó không biết id đề xuất mua.
+      module: 'production',
+      page: 'ke-hoach',
+      params: { focus: `PI_CODE:${p.piCode}` },
+      alternatives: [{ module: 'inbound_warehouse', page: 'lich-su-kho' }],
+    }),
     title: (p: PurchaseProposalNotificationParams) => `${p.piCode}: hàng về kho`,
     message: (p: PurchaseProposalNotificationParams) =>
       `${p.materialCode ?? 'Vật tư'}: đã nhận ${p.qty ?? 0}${p.unit ? ` ${p.unit}` : ''}.`,
     recipients: (p: PurchaseProposalNotificationParams & { warehouseCode?: string }) => ({
-      ...(p.warehouseCode ? { warehouseIds: [p.warehouseCode] } : {}),
+      ...(p.warehouseCode
+        ? {
+            warehouseIds: [p.warehouseCode],
+            warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+            warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+          }
+        : {}),
       roles: [BUSINESS_ROLES.PRODUCTION_MANAGER],
     }),
   } satisfies NotificationTypeDef<PurchaseProposalNotificationParams & { warehouseCode?: string }>,
@@ -501,6 +610,14 @@ const notificationTypeDefinitions = {
     category: 'RESULT',
     severity: 'SUCCESS',
     entityType: 'PURCHASE_PROPOSAL',
+    link: (p: PurchaseProposalNotificationParams) => ({
+      // QLSX theo dõi PI ở "Tổng hợp lệnh SX" (`ke-hoach`); màn `lenh-sx` chỉ liệt kê PI chờ QLSX duyệt nên không
+      // có dòng để chỉ tới. `focus` theo MÃ PI vì danh sách đó không biết id đề xuất mua.
+      module: 'production',
+      page: 'ke-hoach',
+      params: { focus: `PI_CODE:${p.piCode}` },
+      alternatives: [{ module: 'purchasing', page: 'lenh-mua-ncc' }],
+    }),
     title: (p: PurchaseProposalNotificationParams) => `${p.piCode}: đề xuất mua đã đủ hàng`,
     message: () => 'Mọi vật tư trong đề xuất đã nhận đủ.',
     recipients: () => ({
@@ -528,6 +645,124 @@ const notificationTypeDefinitions = {
 
   /** Phôi báo xong 1 đợt cắt - chờ KCS chấm. Tự đóng khi KCS `reviewCutBundle()`. `link` thêm ở
    *  mục 22.2 - cùng lý do STEEL_ISSUE_TO_PHOI, recipient chỉ KCS_STAFF nên an toàn nối. */
+  /** QLSX Bắt đầu/Tạm dừng/Tiếp tục/Kết thúc lệnh (P1 mục 31 - trước đây KHÔNG báo gì: tổ xưởng chỉ biết khi thao tác bị chặn
+   *  409 hoặc thấy PI biến mất khỏi danh sách, vì màn xưởng chỉ liệt kê PI có `floorStage = ACTIVE`). Tạm dừng là ALERT và
+   *  tự đóng khi Tiếp tục/Kết thúc. Người nhận = mọi tổ làm việc theo lệnh (Phôi/Hàn/Sơn/KCS/thủ kho), loại Mua hàng. */
+  PRODUCTION_ORDER_FLOOR_STARTED: {
+    category: 'RESULT',
+    severity: 'INFO',
+    entityType: 'PRODUCTION_ORDER',
+    title: (p: FloorStageNotificationParams) => `${p.piCode}: QLSX cho phép sản xuất`,
+    message: (p: FloorStageNotificationParams) => `${p.poNumber}: xưởng có thể bắt đầu làm.`,
+    link: (p: FloorStageNotificationParams) => ({
+      module: 'production',
+      page: 'phoi-lenh-sx',
+      params: { focus: `PI_CODE:${p.piCode}` },
+      alternatives: [{ module: 'inbound_warehouse', page: 'xuat-kho' }],
+    }),
+    recipients: floorStageRecipients,
+  } satisfies NotificationTypeDef<FloorStageNotificationParams>,
+
+  /** KHSX sửa mốc kế hoạch (thời hạn mua vật tư / giao hàng / từng công đoạn) của 1 SKU - báo đúng bộ phận có mốc đổi. */
+  PI_ITEM_DEADLINE_CHANGED: {
+    category: 'INFO',
+    severity: 'INFO',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PiDeadlineChangedNotificationParams) => `${p.piCode}: đổi thời hạn ${p.factoryCode}`,
+    message: (p: PiDeadlineChangedNotificationParams) => p.changes.join('; '),
+    link: (p: PiDeadlineChangedNotificationParams) => ({
+      module: 'production',
+      page: 'phoi-lenh-sx',
+      params: { focus: `PI_CODE:${p.piCode}` },
+      alternatives: [
+        { module: 'inbound_warehouse', page: 'xuat-kho' },
+        { module: 'purchasing', page: 'lenh-mua-ncc' },
+        { module: 'sales', page: 'orders' },
+      ],
+    }),
+    recipients: (p: PiDeadlineChangedNotificationParams): RecipientCriteria => ({
+      roles: p.roles,
+      warehouseIds: p.warehouseIds,
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+      // Mua hàng giữ cả role WAREHOUSE_STAFF: chỉ báo họ khi chính mốc mua vật tư đổi.
+      excludeRoles: p.roles.includes(BUSINESS_ROLES.PURCHASER) ? [] : [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<PiDeadlineChangedNotificationParams>,
+
+  PRODUCTION_ORDER_FLOOR_PAUSED: {
+    category: 'ALERT',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_ORDER',
+    title: (p: FloorStageNotificationParams) => `${p.piCode}: lệnh bị TẠM DỪNG`,
+    message: (p: FloorStageNotificationParams) =>
+      `${p.poNumber}: chưa thao tác được cho tới khi QLSX bấm tiếp tục.`,
+    link: (p: FloorStageNotificationParams) => ({
+      module: 'production',
+      page: 'phoi-lenh-sx',
+      params: { focus: `PI_CODE:${p.piCode}` },
+      alternatives: [{ module: 'inbound_warehouse', page: 'xuat-kho' }],
+    }),
+    recipients: floorStageRecipients,
+  } satisfies NotificationTypeDef<FloorStageNotificationParams>,
+
+  PRODUCTION_ORDER_FLOOR_RESUMED: {
+    category: 'RESULT',
+    severity: 'INFO',
+    entityType: 'PRODUCTION_ORDER',
+    title: (p: FloorStageNotificationParams) => `${p.piCode}: QLSX cho tiếp tục sản xuất`,
+    message: (p: FloorStageNotificationParams) => `${p.poNumber}: lệnh đã mở lại, làm tiếp được.`,
+    link: (p: FloorStageNotificationParams) => ({
+      module: 'production',
+      page: 'phoi-lenh-sx',
+      params: { focus: `PI_CODE:${p.piCode}` },
+      alternatives: [{ module: 'inbound_warehouse', page: 'xuat-kho' }],
+    }),
+    recipients: floorStageRecipients,
+  } satisfies NotificationTypeDef<FloorStageNotificationParams>,
+
+  PRODUCTION_ORDER_FLOOR_FINISHED: {
+    category: 'RESULT',
+    severity: 'INFO',
+    entityType: 'PRODUCTION_ORDER',
+    title: (p: FloorStageNotificationParams) => `${p.piCode}: lệnh đã KẾT THÚC`,
+    message: (p: FloorStageNotificationParams) =>
+      `${p.poNumber}: không còn thao tác trên lệnh này.`,
+    link: (p: FloorStageNotificationParams) => ({
+      module: 'production',
+      page: 'phoi-lenh-sx',
+      params: { focus: `PI_CODE:${p.piCode}` },
+      alternatives: [{ module: 'inbound_warehouse', page: 'xuat-kho' }],
+    }),
+    recipients: floorStageRecipients,
+  } satisfies NotificationTypeDef<FloorStageNotificationParams>,
+
+  /** Nhánh "Vật tư thành phẩm không gắn mảnh" (chân nhôm - big-update): kho xuất NGUYÊN LIỆU (thanh nhôm) cho Phôi cắt
+   *  ra thành phẩm. Trước 2026-10-09 nhánh này KHÔNG phát thông báo nào (N-1 báo cáo 07/10) - Phôi chỉ biết nếu tự
+   *  vào màn. Tự đóng khi Phôi xác nhận nhận (MaterialYieldRecipeIssuesService.receive). */
+  MATERIAL_YIELD_RECIPE_ISSUE_TO_PHOI: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'MATERIAL_YIELD_RECIPE_ISSUE',
+    title: (p: MaterialIssueNotificationParams) =>
+      `${p.piCode}: nguyên liệu thành phẩm đã xuất - vào xác nhận nhận`,
+    message: (p: MaterialIssueNotificationParams) => `${p.materialCode}: ${p.qty} ${p.unit}.`,
+    link: () => ({ module: 'production', page: 'phoi-xac-nhan-nhan-sat' }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.PHOI_STAFF] }),
+  } satisfies NotificationTypeDef<MaterialIssueNotificationParams>,
+
+  /** Phôi gửi KCS 1 công đoạn của vật tư thành phẩm không gắn mảnh (bundle chân nhôm). Tự đóng khi KCS duyệt
+   *  (QcReviewsService.reviewMaterialYieldStep). Link vào tab con "VT không gắn mảnh" của KCS Phôi (`sub`). */
+  MATERIAL_YIELD_STEP_BUNDLE_TO_KCS: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'MATERIAL_YIELD_STEP_BUNDLE',
+    title: (p: QcSubmittedNotificationParams) => `${p.piCode}: Phôi gửi KCS vật tư không gắn mảnh`,
+    message: () => 'Chờ KCS chấm.',
+    link: () => ({ module: 'production', page: 'kcs-phoi', params: { sub: 'chan-nhom' } }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.KCS_STAFF] }),
+  } satisfies NotificationTypeDef<QcSubmittedNotificationParams>,
+
   CUT_BUNDLE_TO_KCS: {
     category: 'ACTION_REQUIRED',
     severity: 'INFO',
@@ -586,6 +821,7 @@ const notificationTypeDefinitions = {
     category: 'RESULT',
     severity: 'INFO',
     entityType: 'QC_REVIEW',
+    link: () => ({ module: 'production', page: 'ke-hoach' }),
     title: (p: QcSubmittedNotificationParams) => `${p.piCode}: KCS duyệt đạt`,
     message: () => 'Không có lỗi.',
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
@@ -635,6 +871,7 @@ const notificationTypeDefinitions = {
     category: 'INFO',
     severity: 'INFO',
     entityType: 'PACKAGING_ISSUE',
+    link: () => ({ module: 'production', page: 'ke-hoach' }),
     title: (p: MaterialIssueNotificationParams) => `${p.piCode}: vật tư đóng gói đã xuất`,
     message: (p: MaterialIssueNotificationParams) => `${p.materialCode}: ${p.qty} ${p.unit}.`,
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
@@ -660,6 +897,8 @@ const notificationTypeDefinitions = {
     link: () => ({ module: 'inbound_warehouse', page: 'nhap-kho', params: { sub: 'noi-bo' } }),
     recipients: (p: WarehouseTransferNotificationParams & { toWarehouseCode: string }) => ({
       warehouseIds: [p.toWarehouseCode],
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
     }),
   } satisfies NotificationTypeDef<
     WarehouseTransferNotificationParams & { toWarehouseCode: string }
@@ -693,6 +932,7 @@ const notificationTypeDefinitions = {
     category: 'RESULT',
     severity: 'WARNING',
     entityType: 'TRANSFER_CHECK_RESULT',
+    link: () => ({ module: 'production', page: 'ke-hoach' }),
     title: (p: TransferCheckDefectNotificationParams) =>
       `${p.piCode}: ${p.pieceName} chuyền kiểm có lỗi`,
     message: (p: TransferCheckDefectNotificationParams) =>
@@ -715,7 +955,12 @@ const notificationTypeDefinitions = {
     title: (p: PackagingCompleteNotificationParams) =>
       `${p.piCode}: ${p.factoryCode} đã đóng gói xong`,
     message: (p: PackagingCompleteNotificationParams) => `Đơn ${p.salesOrderCode} sẵn sàng giao.`,
-    link: () => ({ module: 'sales', page: 'orders' }),
+    // entityId là id dòng PI (ProductionInvoiceItem) - danh sách đơn hàng khoá theo ĐƠN BÁN nên nháy theo mã đơn.
+    link: (p: PackagingCompleteNotificationParams) => ({
+      module: 'sales',
+      page: 'orders',
+      params: { focus: `SALES_ORDER_CODE:${p.salesOrderCode}` },
+    }),
     recipients: () => ({ roles: [BUSINESS_ROLES.SALES_STAFF] }),
   } satisfies NotificationTypeDef<PackagingCompleteNotificationParams>,
 
@@ -806,6 +1051,8 @@ const notificationTypeDefinitions = {
     link: () => ({ module: 'inbound_warehouse', page: 'nhap-dan' }),
     recipients: (p: WeavingIssueNotificationParams & { warehouseCodes: string[] }) => ({
       warehouseIds: p.warehouseCodes,
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
     }),
   } satisfies NotificationTypeDef<WeavingIssueNotificationParams & { warehouseCodes: string[] }>,
 };

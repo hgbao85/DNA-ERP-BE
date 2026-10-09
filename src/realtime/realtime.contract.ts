@@ -161,6 +161,9 @@ export interface NotificationCreatedPayload {
   title: string;
   message: string;
   link: NotificationLink | null;
+  /** Đối tượng nghiệp vụ của thông báo - FE dùng để mở thẳng đúng mục (`?focus=<entityType>:<entityId>`). */
+  entityType: string | null;
+  entityId: string | null;
   /** true = sự kiện trùng được gộp vào thông báo cũ chưa đọc (dedupeKey). */
   merged: boolean;
   createdAt: string;

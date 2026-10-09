@@ -3,6 +3,7 @@ import { ClsService } from 'nestjs-cls';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BomRevisionStatus, CuttingProposalStatus } from '../../generated/prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ProductionOrdersService } from './production-orders.service';
 
 describe('ProductionOrdersService', () => {
@@ -21,6 +22,7 @@ describe('ProductionOrdersService', () => {
     auditLog: { create: jest.Mock };
   };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
+  let notifications: { emit: jest.Mock; resolve: jest.Mock };
 
   const activeRevision = { id: 5n, mfgProductId: 2n, status: BomRevisionStatus.ACTIVE };
   const order = (overrides: Record<string, unknown> = {}) => ({
@@ -59,9 +61,14 @@ describe('ProductionOrdersService', () => {
       auditLog: { create: jest.fn() },
     };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
+    notifications = {
+      emit: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(undefined),
+    };
     service = new ProductionOrdersService(
       prisma as unknown as PrismaServiceType,
       cls as unknown as ClsService<AppClsStore>,
+      notifications as unknown as NotificationsService,
     );
     // Mặc định không có bản ACTIVE nào khớp -> bomOutOfDate=false, không phá các test không quan
     // tâm field này - test riêng của bomOutOfDate tự override lại mock này.
@@ -372,6 +379,83 @@ describe('ProductionOrdersService', () => {
 
       await expect(service.finishFloor('999')).rejects.toThrow(NotFoundException);
       expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('đổi floorStage -> audit + thông báo tổ xưởng (P1 mục 31)', () => {
+    const auditCalls = () => prisma.auditLog.create.mock.calls as unknown[][];
+
+    it('Bắt đầu (PENDING -> ACTIVE): ghi audit và báo STARTED, đóng thông báo Tạm dừng cũ', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'PENDING' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+
+      await service.startFloor('9');
+
+      expect(auditCalls()).toHaveLength(1);
+      expect(notifications.emit).toHaveBeenCalledWith('PRODUCTION_ORDER_FLOOR_STARTED', {
+        entityId: '9',
+        params: { piCode: 'PI-2026-001', poNumber: 'PO-31-1' },
+      });
+      expect(notifications.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ types: ['PRODUCTION_ORDER_FLOOR_PAUSED'] }),
+      );
+    });
+
+    it('Tiếp tục (PAUSED -> ACTIVE): báo RESUMED, không phải STARTED', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'PAUSED' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+
+      await service.startFloor('9');
+
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'PRODUCTION_ORDER_FLOOR_RESUMED',
+        expect.anything(),
+      );
+    });
+
+    it('Tạm dừng: báo PAUSED và KHÔNG đóng thông báo Tạm dừng', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'PAUSED' }));
+
+      await service.pauseFloor('9');
+
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'PRODUCTION_ORDER_FLOOR_PAUSED',
+        expect.anything(),
+      );
+      expect(notifications.resolve).not.toHaveBeenCalled();
+      expect(auditCalls()).toHaveLength(1);
+    });
+
+    it('Kết thúc: báo FINISHED và đóng thông báo Tạm dừng', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+
+      await service.finishFloor('9');
+
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'PRODUCTION_ORDER_FLOOR_FINISHED',
+        expect.anything(),
+      );
+      expect(notifications.resolve).toHaveBeenCalled();
+    });
+
+    it('bấm lại cùng trạng thái (idempotent) KHÔNG ghi audit, KHÔNG báo', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+
+      await service.startFloor('9');
+
+      expect(auditCalls()).toHaveLength(0);
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('lỗi phát thông báo KHÔNG làm hỏng việc đổi trạng thái đã ghi', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'PAUSED' }));
+      notifications.emit.mockRejectedValue(new Error('boom'));
+
+      await expect(service.pauseFloor('9')).resolves.toMatchObject({ floorStage: 'PAUSED' });
     });
   });
 

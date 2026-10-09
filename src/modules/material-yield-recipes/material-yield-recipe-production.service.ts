@@ -3,9 +3,18 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { MaterialYieldStepBatch, Prisma, StockLedgerRefType } from '../../generated/prisma/client';
+import {
+  AuditAction,
+  MaterialYieldStepBatch,
+  Prisma,
+  StockLedgerRefType,
+} from '../../generated/prisma/client';
+import { ClsService } from 'nestjs-cls';
+import { auditEvent } from '../../common/utils/audit-event.util';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { sortProcessSteps } from '../../common/constants/process-steps.constant';
@@ -16,6 +25,7 @@ import {
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CreateMaterialYieldStepBatchDto } from './dto/create-material-yield-step-batch.dto';
 import { ListMaterialYieldStepBundlesQueryDto } from './dto/list-material-yield-step-bundles-query.dto';
@@ -49,11 +59,15 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  */
 @Injectable()
 export class MaterialYieldRecipeProductionService {
+  private readonly logger = new Logger(MaterialYieldRecipeProductionService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
     private readonly materialYieldRecipesService: MaterialYieldRecipesService,
     private readonly materialYieldRecipeIssuesService: MaterialYieldRecipeIssuesService,
+    private readonly notifications: NotificationsService,
+    private readonly cls: ClsService<AppClsStore>,
   ) {}
 
   async recordStepBatch(
@@ -107,6 +121,17 @@ export class MaterialYieldRecipeProductionService {
       });
     });
 
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.CREATE,
+      tableName: 'MaterialYieldStepBatch',
+      recordId: created.id,
+      newValue: {
+        productionInvoiceId: piId.toString(),
+        recipeId: recipeBigId.toString(),
+        step: dto.step,
+        qty: dto.qty,
+      },
+    });
     return this.toBatchResponseDto(created);
   }
 
@@ -157,7 +182,35 @@ export class MaterialYieldRecipeProductionService {
       return bundle;
     });
 
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.CREATE,
+      tableName: 'MaterialYieldStepBundle',
+      recordId: created.id,
+      newValue: {
+        productionInvoiceId: piId.toString(),
+        recipeId: recipeBigId.toString(),
+        step: dto.step,
+        qty: created.qty,
+        event: 'submit-to-kcs',
+      },
+    });
+    await this.notifyBundleToKcs(created);
     return this.toBundleResponseDto(created);
+  }
+
+  /** Best-effort NGOÀI transaction - báo KCS có bundle vật tư thành phẩm không gắn mảnh chờ chấm (N-1). Tự đóng ở
+   *  QcReviewsService.reviewMaterialYieldStep(). */
+  private async notifyBundleToKcs(bundle: MaterialYieldStepBundleRow): Promise<void> {
+    try {
+      await this.notifications.emit('MATERIAL_YIELD_STEP_BUNDLE_TO_KCS', {
+        entityId: bundle.id.toString(),
+        params: { piCode: bundle.productionInvoice.code },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create MATERIAL_YIELD_STEP_BUNDLE_TO_KCS notification (bundle ${bundle.id}): ${(error as Error).message}`,
+      );
+    }
   }
 
   /** Phôi xem lại bundle theo PI (lịch sử + đang chờ KCS) - mirror

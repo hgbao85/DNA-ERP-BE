@@ -182,6 +182,7 @@ export class PurchaseProposalsService {
   private async notifyPurchaseProposal(
     type:
       | 'PURCHASE_PROPOSAL_APPROVED'
+      | 'PURCHASE_PROPOSAL_READY_TO_RECEIVE'
       | 'PURCHASE_PROPOSAL_ITEM_RECEIVED'
       | 'PURCHASE_PROPOSAL_PURCHASED',
     proposalId: bigint,
@@ -192,6 +193,7 @@ export class PurchaseProposalsService {
       qty?: number;
       unit?: string;
       warehouseCode?: string;
+      warehouseCodes?: string[];
     },
     actorUserId?: string,
   ): Promise<void> {
@@ -199,11 +201,32 @@ export class PurchaseProposalsService {
       await this.notifications.emit(type, {
         entityId: proposalId.toString(),
         actorId: actorUserId,
+        // N-3 (báo cáo 07/10): mỗi người mua duyệt phần vật tư của mình đều phát 1 thông báo y hệt cho QLSX -> gộp
+        // theo đề xuất (cùng cơ chế dedupe của PURCHASE_PROPOSAL_CREATED); message không nêu số vật tư vì số này
+        // chỉ là phần của người duyệt sau cùng, không phải tổng.
+        ...(type === 'PURCHASE_PROPOSAL_APPROVED' || type === 'PURCHASE_PROPOSAL_READY_TO_RECEIVE'
+          ? { dedupeKey: `${type}:${proposalId}` }
+          : {}),
         params: { ...params },
       });
     } catch (error) {
       this.logger.error(
         `Failed to create purchase-proposal notification (${type}, proposal ${proposalId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /** Đề xuất đã PURCHASED (nhận đủ) -> "hàng mua sắp về" của thủ kho hết giá trị. */
+  private async resolveReadyToReceive(proposalId: bigint): Promise<void> {
+    try {
+      await this.notifications.resolve({
+        entityType: 'PURCHASE_PROPOSAL',
+        entityId: proposalId.toString(),
+        types: ['PURCHASE_PROPOSAL_READY_TO_RECEIVE'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve PURCHASE_PROPOSAL_READY_TO_RECEIVE (proposal ${proposalId}): ${(error as Error).message}`,
       );
     }
   }
@@ -385,6 +408,21 @@ export class PurchaseProposalsService {
       { piCode: result.piCode, count: myPendingItems.length },
       actorUserId,
     );
+    const warehouseCodes = [
+      ...new Set(
+        myPendingItems
+          .map((item) => item.receiveWarehouseCode ?? item.material.warehouse?.code)
+          .filter((code): code is string => !!code),
+      ),
+    ];
+    if (warehouseCodes.length > 0) {
+      await this.notifyPurchaseProposal(
+        'PURCHASE_PROPOSAL_READY_TO_RECEIVE',
+        proposal.id,
+        { piCode: result.piCode, count: myPendingItems.length, warehouseCodes },
+        actorUserId,
+      );
+    }
     this.publishProposalChanged(proposal.id, 'APPROVED', actorUserId);
 
     return result;
@@ -693,6 +731,7 @@ export class PurchaseProposalsService {
         select: { status: true },
       });
       if (refreshed?.status === PurchaseProposalStatus.PURCHASED) {
+        await this.resolveReadyToReceive(proposal.id);
         await this.notifyPurchaseProposal(
           'PURCHASE_PROPOSAL_PURCHASED',
           proposal.id,

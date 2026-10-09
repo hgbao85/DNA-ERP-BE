@@ -57,6 +57,16 @@ export class RecipientResolverService {
           isActive: true,
           deletedAt: null,
           warehouseScope: { in: criteria.warehouseIds },
+          ...(criteria.warehouseScopeRoles?.length
+            ? { roles: { some: { role: { name: { in: criteria.warehouseScopeRoles } } } } }
+            : {}),
+          ...(criteria.warehouseScopeExcludeRoles?.length
+            ? {
+                NOT: {
+                  roles: { some: { role: { name: { in: criteria.warehouseScopeExcludeRoles } } } },
+                },
+              }
+            : {}),
         },
         select: { id: true },
       });
@@ -72,6 +82,16 @@ export class RecipientResolverService {
     }
 
     excludeUserIds.forEach((id) => ids.delete(id));
+    if (criteria.excludeRoles?.length && ids.size > 0) {
+      const excluded = await client.user.findMany({
+        where: {
+          id: { in: [...ids] },
+          roles: { some: { role: { name: { in: criteria.excludeRoles } } } },
+        },
+        select: { id: true },
+      });
+      excluded.forEach((u) => ids.delete(u.id));
+    }
     return [...ids];
   }
 }

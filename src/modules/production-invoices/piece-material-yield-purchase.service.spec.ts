@@ -258,7 +258,16 @@ describe('PieceMaterialYieldPurchaseService', () => {
       status: PurchaseProposalStatus.NEW,
       productionInvoice: { code: 'PI-2026-020' },
     });
-    prisma.purchaseProposalItem.count.mockResolvedValue(1);
+    // notifyPurchaseProposalCreated() đọc các dòng còn chờ + người mua của vật tư (N-4) bằng findMany(select material).
+    const baseFindMany = prisma.purchaseProposalItem.findMany.getMockImplementation();
+    prisma.purchaseProposalItem.findMany.mockImplementation(
+      (args?: { select?: { material?: unknown } }) =>
+        args?.select?.material
+          ? [{ material: { buyerId: null } }]
+          : baseFindMany
+            ? (baseFindMany(args) as unknown)
+            : [],
+    );
 
     await service.computeAndUpsertProposals('1');
 

@@ -38,10 +38,17 @@ export async function notifyPurchaseProposalCreated(
     ) {
       return;
     }
-    const pendingCount = await prisma.purchaseProposalItem.count({
+    const pendingItems = await prisma.purchaseProposalItem.findMany({
       where: { proposalId, status: { not: PurchaseProposalStatus.PURCHASED } },
+      select: { material: { select: { buyerId: true } } },
     });
+    const pendingCount = pendingItems.length;
     if (pendingCount === 0) return;
+    // N-4 (báo cáo 07/10): chỉ báo NGƯỜI MUA được giao các vật tư còn chờ (Material.buyerId) - trước đây báo mọi
+    // PURCHASER nên muatp nhận "4 vật tư cần mua" dù đề xuất không có vật tư kho nào của họ. Có vật tư chưa giao
+    // người mua (buyerId null) thì ai cũng xử lý được -> giữ nhóm PURCHASER như cũ.
+    const buyerIds = pendingItems.map((i) => i.material.buyerId);
+    const targeted = buyerIds.length > 0 && buyerIds.every((id): id is string => !!id);
 
     await notifications.emit('PURCHASE_PROPOSAL_CREATED', {
       entityId: proposalId.toString(),
@@ -50,6 +57,7 @@ export async function notifyPurchaseProposalCreated(
       params: {
         piCode: proposal.productionInvoice?.code ?? `#${proposalId}`,
         count: pendingCount,
+        ...(targeted ? { buyerIds: [...new Set(buyerIds)] } : {}),
       },
     });
   } catch (error) {

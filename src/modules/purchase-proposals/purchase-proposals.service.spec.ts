@@ -645,7 +645,38 @@ describe('PurchaseProposalsService', () => {
         expect.objectContaining({
           entityId: '300',
           actorId: 'user-1',
+          // gộp thông báo trùng của nhiều người mua cùng duyệt 1 đề xuất (N-3)
+          dedupeKey: 'PURCHASE_PROPOSAL_APPROVED:300',
           params: expect.objectContaining({ piCode: 'PI-2026-014', count: 1 }) as unknown,
+        }),
+      );
+    });
+
+    it('báo THỦ KHO (PURCHASE_PROPOSAL_READY_TO_RECEIVE) kho nhận của các vật tư vừa được duyệt - gộp theo đề xuất', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({ id: 400n, status: PurchaseProposalStatus.NEW }),
+            item({
+              id: 401n,
+              status: PurchaseProposalStatus.NEW,
+              material: material({ code: 'VTK-1', warehouse: { code: 'vat-tu-tp' } }),
+            }),
+          ],
+        }),
+      );
+      prisma.purchaseProposalItem.count.mockResolvedValue(0);
+
+      await service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE });
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PURCHASE_PROPOSAL_READY_TO_RECEIVE',
+        expect.objectContaining({
+          entityId: '300',
+          dedupeKey: 'PURCHASE_PROPOSAL_READY_TO_RECEIVE:300',
+          params: expect.objectContaining({
+            warehouseCodes: ['phoi-son-han', 'vat-tu-tp'],
+          }) as unknown,
         }),
       );
     });

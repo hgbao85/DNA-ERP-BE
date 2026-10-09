@@ -525,7 +525,7 @@ describe('NotificationsService', () => {
   });
 
   describe('unreadCount', () => {
-    it('đếm theo category từ các NotificationRecipient chưa đọc/chưa ẩn', async () => {
+    it('đếm theo category từ các NotificationRecipient chưa đọc/chưa ẩn/chưa được xử lý xong (resolvedAt null)', async () => {
       prisma.notificationRecipient.findMany.mockResolvedValue([
         { notification: { category: 'ACTION_REQUIRED' } },
         { notification: { category: 'ACTION_REQUIRED' } },
@@ -535,7 +535,7 @@ describe('NotificationsService', () => {
       const result = await service.unreadCount('user-1');
 
       expect(prisma.notificationRecipient.findMany).toHaveBeenCalledWith({
-        where: { userId: 'user-1', readAt: null, archivedAt: null },
+        where: { userId: 'user-1', readAt: null, archivedAt: null, resolvedAt: null },
         select: { notification: { select: { category: true } } },
       });
       expect(result.total).toBe(3);

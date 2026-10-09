@@ -1,12 +1,16 @@
 import { randomUUID } from 'crypto';
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
 import {
+  AuditAction,
   Prisma,
   ProductionOrderFloorStage,
   SalesOrderItemStatus,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { auditEvent } from '../../common/utils/audit-event.util';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -59,9 +63,12 @@ const stageKey = (salesOrderId: bigint, mfgProductId: bigint) => `${salesOrderId
  */
 @Injectable()
 export class SalesOrdersService {
+  private readonly logger = new Logger(SalesOrdersService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly realtime: RealtimeService,
+    private readonly cls: ClsService<AppClsStore>,
   ) {}
 
   /** Phát realtime SAU KHI ghi thành công (xem RealtimeService). */
@@ -404,13 +411,13 @@ export class SalesOrdersService {
     const orderBigId = parseBigIntId(salesOrderId);
     const itemBigId = parseBigIntId(itemId);
 
-    const updated = await this.prisma.$queryRaw<{ id: bigint }[]>`
+    const updated = await this.prisma.$queryRaw<{ id: bigint; shippedQty: number }[]>`
       UPDATE "sales_order_items"
       SET "shippedQty" = "shippedQty" + ${dto.qty}
       WHERE "id" = ${itemBigId}
         AND "salesOrderId" = ${orderBigId}
         AND "shippedQty" + ${dto.qty} <= "totalQty"
-      RETURNING "id"
+      RETURNING "id", "shippedQty"
     `;
 
     if (updated.length === 0) {
@@ -425,6 +432,16 @@ export class SalesOrdersService {
       );
     }
 
+    // Xuất giao là bước KHÔNG hoàn tác được mà SalesOrderItem (dòng con, raw SQL) không được audit tự động - ghi tay
+    // để truy được ai giao bao nhiêu, lúc nào (P2 mục 31).
+    const shippedAfter = Number(updated[0].shippedQty);
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.UPDATE,
+      tableName: 'SalesOrderItem',
+      recordId: itemBigId,
+      oldValue: { shippedQty: shippedAfter - dto.qty },
+      newValue: { shippedQty: shippedAfter, shipQty: dto.qty, salesOrderId: orderBigId.toString() },
+    });
     const shipped = await this.findItemOrThrow(orderBigId, itemId);
     this.publishRealtime(orderBigId, 'SHIPPED');
     return this.toItemResponseDto(shipped, await this.resolveItemStage(shipped));

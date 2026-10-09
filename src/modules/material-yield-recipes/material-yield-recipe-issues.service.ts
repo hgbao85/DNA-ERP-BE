@@ -8,10 +8,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  AuditAction,
   MaterialYieldIssueStatus,
   Prisma,
   StockLedgerRefType,
 } from '../../generated/prisma/client';
+import { ClsService } from 'nestjs-cls';
+import { auditEvent } from '../../common/utils/audit-event.util';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import {
@@ -26,6 +30,7 @@ import { CreateMaterialYieldRecipeIssueDto } from './dto/create-material-yield-r
 import { ListMaterialYieldRecipeIssuesQueryDto } from './dto/list-material-yield-recipe-issues-query.dto';
 import { MaterialYieldRecipeIssueResponseDto } from './dto/material-yield-recipe-issue-response.dto';
 import { ReceiveMaterialYieldRecipeIssueDto } from './dto/receive-material-yield-recipe-issue.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 import { MaterialYieldRecipesService } from './material-yield-recipes.service';
 
 const ISSUE_INCLUDE = {
@@ -55,6 +60,8 @@ export class MaterialYieldRecipeIssuesService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
     private readonly materialYieldRecipesService: MaterialYieldRecipesService,
+    private readonly notifications: NotificationsService,
+    private readonly cls: ClsService<AppClsStore>,
   ) {}
 
   async create(
@@ -124,6 +131,17 @@ export class MaterialYieldRecipeIssuesService {
       { timeout: 20000 },
     );
     this.logger.log(`recipe issue ${created.id} đã commit cùng ledger consume`);
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.CREATE,
+      tableName: 'MaterialYieldRecipeIssue',
+      recordId: created.id,
+      newValue: {
+        productionInvoiceId: piId.toString(),
+        recipeId: recipeBigId.toString(),
+        issuedQty: dto.issuedQty,
+      },
+    });
+    await this.notifyIssuedToPhoi(created);
 
     return this.toResponseDto(created);
   }
@@ -194,7 +212,49 @@ export class MaterialYieldRecipeIssuesService {
       where: { id: issue.id },
       include: ISSUE_INCLUDE,
     });
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.UPDATE,
+      tableName: 'MaterialYieldRecipeIssue',
+      recordId: issue.id,
+      oldValue: { status: issue.status },
+      newValue: { status: MaterialYieldIssueStatus.RECEIVED, receivedQty, issuedQty },
+    });
+    await this.resolveIssuedToPhoi(issue.id);
     return this.toResponseDto(updated);
+  }
+
+  /** Best-effort NGOÀI transaction (cùng lý do kỹ thuật như MaterialYieldIssuesService) - báo Phôi có nguyên liệu
+   *  thành phẩm (thanh nhôm...) chờ nhận; trước đây nhánh này im lặng hoàn toàn (N-1 báo cáo 07/10). */
+  private async notifyIssuedToPhoi(issue: IssueRow): Promise<void> {
+    try {
+      await this.notifications.emit('MATERIAL_YIELD_RECIPE_ISSUE_TO_PHOI', {
+        entityId: issue.id.toString(),
+        params: {
+          piCode: issue.productionInvoice.code,
+          materialCode: issue.recipe.inputMaterial.code,
+          qty: issue.issuedQty.toNumber(),
+          unit: issue.recipe.inputMaterial.unit,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create MATERIAL_YIELD_RECIPE_ISSUE_TO_PHOI notification (issue ${issue.id}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async resolveIssuedToPhoi(issueId: bigint): Promise<void> {
+    try {
+      await this.notifications.resolve({
+        entityType: 'MATERIAL_YIELD_RECIPE_ISSUE',
+        entityId: issueId.toString(),
+        types: ['MATERIAL_YIELD_RECIPE_ISSUE_TO_PHOI'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve MATERIAL_YIELD_RECIPE_ISSUE_TO_PHOI (issue ${issueId}): ${(error as Error).message}`,
+      );
+    }
   }
 
   /** Dùng bởi MaterialYieldRecipeProductionService để chặn "chưa nhận thì chưa báo được". */

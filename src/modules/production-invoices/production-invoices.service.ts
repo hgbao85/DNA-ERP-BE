@@ -26,6 +26,8 @@ import { nextProductionInvoiceCode } from '../../common/utils/production-invoice
 import { assertPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
+import { auditEvent } from '../../common/utils/audit-event.util';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
@@ -676,7 +678,97 @@ export class ProductionInvoicesService {
     });
 
     const updated = await this.findItemOrThrow(pi.id, itemId);
+    await this.auditAndNotifyDeadlineChange(pi.code, item, updated);
     return this.toItemResponseDto(updated);
+  }
+
+  /** Audit + báo bộ phận liên quan khi KHSX đổi mốc kế hoạch (chỉ khi giá trị THỰC SỰ đổi, không phải lưu lại y nguyên).
+   *  Best-effort NGOÀI transaction: lỗi chỉ log, không làm hỏng thao tác sửa. */
+  private async auditAndNotifyDeadlineChange(
+    piCode: string,
+    before: PIItemWithRefs,
+    after: PIItemWithRefs,
+  ): Promise<void> {
+    const fmt = (d: Date | null | undefined) =>
+      d ? d.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '(chưa có)';
+    const changed = (a: Date | null | undefined, b: Date | null | undefined) =>
+      (a?.getTime() ?? null) !== (b?.getTime() ?? null);
+    const stageLabel: Record<string, string> = {
+      FRAME: 'Khung cơ khí',
+      WEAVING: 'Đan',
+      TRANSFER_CHECK: 'Kiểm tra chuyển kho',
+      PACKAGING: 'Đóng gói',
+      FRAME_PHOI: 'Phôi',
+      FRAME_HAN: 'Hàn',
+      FRAME_SON: 'Sơn',
+    };
+    const stageRoles: Record<string, string[]> = {
+      FRAME: [BUSINESS_ROLES.PHOI_STAFF, BUSINESS_ROLES.HAN_STAFF, BUSINESS_ROLES.SON_STAFF],
+      FRAME_PHOI: [BUSINESS_ROLES.PHOI_STAFF],
+      FRAME_HAN: [BUSINESS_ROLES.HAN_STAFF],
+      FRAME_SON: [BUSINESS_ROLES.SON_STAFF],
+    };
+    const stageWarehouses: Record<string, string[]> = {
+      WEAVING: ['phoi-son-han', 'vat-tu-tp'],
+      TRANSFER_CHECK: ['vat-tu-tp', 'thanh-pham'],
+      PACKAGING: ['vat-tu-tp', 'thanh-pham'],
+    };
+
+    const changes: string[] = [];
+    const oldValue: Record<string, string | null> = {};
+    const newValue: Record<string, string | null> = {};
+    const roles = new Set<string>();
+    const warehouseIds = new Set<string>();
+    const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
+
+    if (changed(before.materialDeadline, after.materialDeadline)) {
+      changes.push(`Mua vật tư: ${fmt(before.materialDeadline)} → ${fmt(after.materialDeadline)}`);
+      oldValue.materialDeadline = iso(before.materialDeadline);
+      newValue.materialDeadline = iso(after.materialDeadline);
+      roles.add(BUSINESS_ROLES.PURCHASER);
+    }
+    if (changed(before.deliveryDeadline, after.deliveryDeadline)) {
+      changes.push(`Giao hàng: ${fmt(before.deliveryDeadline)} → ${fmt(after.deliveryDeadline)}`);
+      oldValue.deliveryDeadline = iso(before.deliveryDeadline);
+      newValue.deliveryDeadline = iso(after.deliveryDeadline);
+      roles.add(BUSINESS_ROLES.SALES_STAFF);
+    }
+    for (const stage of after.stages) {
+      const prev = before.stages.find((st) => st.stageType === stage.stageType);
+      if (prev && !changed(prev.deadline, stage.deadline)) continue;
+      const label = stageLabel[stage.stageType] ?? stage.stageType;
+      changes.push(`${label}: ${fmt(prev?.deadline)} → ${fmt(stage.deadline)}`);
+      oldValue[`stage.${stage.stageType}`] = iso(prev?.deadline);
+      newValue[`stage.${stage.stageType}`] = iso(stage.deadline);
+      (stageRoles[stage.stageType] ?? []).forEach((r) => roles.add(r));
+      (stageWarehouses[stage.stageType] ?? []).forEach((w) => warehouseIds.add(w));
+    }
+    if (changes.length === 0) return;
+
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.UPDATE,
+      tableName: 'ProductionInvoiceItem',
+      recordId: after.id,
+      oldValue,
+      newValue,
+    });
+    try {
+      await this.notifications.emit('PI_ITEM_DEADLINE_CHANGED', {
+        entityId: (after.productionInvoiceId ?? before.productionInvoiceId ?? 0n).toString(),
+        actorId: this.cls.get('userId'),
+        params: {
+          piCode,
+          factoryCode: after.mfgProduct.factoryCode,
+          changes,
+          roles: [...roles],
+          warehouseIds: [...warehouseIds],
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create PI deadline notification (item ${after.id}): ${(error as Error).message}`,
+      );
+    }
   }
 
   /** KHSX gửi 1 SKU cho QLSX xử lý - mirror sendItemToQlsx() mock. */
