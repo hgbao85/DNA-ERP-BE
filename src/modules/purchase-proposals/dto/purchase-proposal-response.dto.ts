@@ -31,6 +31,13 @@ export class PurchaseProposalItemResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) purchaseUnit!: string | null;
   /// Số lượng unit / 1 purchaseUnit (vd 250 = 250 cái/kg) - FE dùng để gợi ý quy đổi lúc nhập kho.
   @Expose() @ApiPropertyOptional({ nullable: true }) khoUnitFactor!: number | null;
+  /// % dự trù hao hụt khi mua (Material.purchaseWastePercentage) - LIVE theo Material HIỆN TẠI
+  /// (giống purchaseUnit/khoUnitFactor ở trên), KHÔNG snapshot lúc tạo dòng. Đã được cộng vào
+  /// `buyQty` dưới đây ngay lúc tính đề xuất (2026-10-08, xem Consumable/PieceMaterialYield/
+  /// MaterialYieldRecipePurchaseService) - field này CHỈ để FE hiển thị giải thích vì sao buyQty
+  /// cao hơn nhu cầu gốc, không dùng để tính lại gì. null = vật tư chưa cấu hình % (hoặc Sắt
+  /// phần mềm, luôn null - xem MaterialsService.resolveWasteFields).
+  @Expose() @ApiPropertyOptional({ nullable: true }) purchaseWastePercentage!: number | null;
   /// Kho nhận hàng THẬT của riêng vật tư này - nguồn xác thực để Thủ kho nhận hàng (xem
   /// PurchaseProposalsService.receiveItem()). Thường = Material.warehouseId -> Warehouse.code,
   /// TRỪ vật tư có kho MẶC ĐỊNH đã thuộc họ "thanh-pham" (2026-09-04, vd Bì zipper/Nhãn): khi đó

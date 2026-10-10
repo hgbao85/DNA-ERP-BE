@@ -483,6 +483,92 @@ describe('PieceMaterialYieldPurchaseService', () => {
     );
   });
 
+  it('2026-10-08: cộng đệm Material.purchaseWastePercentage vào buyQty, ceil lên cây/tấm nguyên', async () => {
+    prisma.pieceMaterialYield.findMany.mockResolvedValue([
+      {
+        bomRevisionId: 5n,
+        pieceId: chanNhom.id,
+        materialId: thanhNhom.id,
+        piecesPerBar: 12,
+        material: { ...thanhNhom, purchaseWastePercentage: decimal(5) },
+      },
+    ]);
+    // barsNeeded=9 (như test "buyQty tính theo tồn KHẢ DỤNG" ở trên), actualStock=0 -> buyQty gốc=9.
+    // Đệm 5% -> 9×1.05=9.45 -> ceil=10 (không mua lẻ cây).
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ barsNeeded: 9, buyQty: 10 });
+  });
+
+  it('purchaseWastePercentage=null (chưa cấu hình) - buyQty không đổi (tương thích ngược)', async () => {
+    prisma.pieceMaterialYield.findMany.mockResolvedValue([
+      {
+        bomRevisionId: 5n,
+        pieceId: chanNhom.id,
+        materialId: thanhNhom.id,
+        piecesPerBar: 12,
+        material: { ...thanhNhom, purchaseWastePercentage: null },
+      },
+    ]);
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ barsNeeded: 9, buyQty: 9 });
+  });
+
+  it('2026-10-10: purchaseRoundUp=false ép GIỮ thập phân (vd Tấm sắt la - mua theo tấm lẻ)', async () => {
+    prisma.pieceMaterialYield.findMany.mockResolvedValue([
+      {
+        bomRevisionId: 5n,
+        pieceId: chanNhom.id,
+        materialId: thanhNhom.id,
+        piecesPerBar: 12,
+        material: { ...thanhNhom, purchaseWastePercentage: decimal(5), purchaseRoundUp: false },
+      },
+    ]);
+    // Cùng input test "ceil lên cây/tấm nguyên" ở trên (barsNeeded=9, đệm 5% -> 9.45) nhưng
+    // purchaseRoundUp=false ép giữ thập phân - KHÔNG ceil lên 10.
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ barsNeeded: 9 });
+    expect(result[0].buyQty).toBeCloseTo(9.45);
+  });
+
+  it('purchaseRoundUp=true/null (mặc định) - vẫn ceil như cũ', async () => {
+    prisma.pieceMaterialYield.findMany.mockResolvedValue([
+      {
+        bomRevisionId: 5n,
+        pieceId: chanNhom.id,
+        materialId: thanhNhom.id,
+        piecesPerBar: 12,
+        material: { ...thanhNhom, purchaseWastePercentage: decimal(5), purchaseRoundUp: null },
+      },
+    ]);
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ barsNeeded: 9, buyQty: 10 });
+  });
+
+  it('buyQty gốc=0 (đủ tồn) - vẫn 0 sau khi đệm % (giữ đúng nhánh auto-PURCHASED)', async () => {
+    prisma.pieceMaterialYield.findMany.mockResolvedValue([
+      {
+        bomRevisionId: 5n,
+        pieceId: chanNhom.id,
+        materialId: thanhNhom.id,
+        piecesPerBar: 12,
+        material: { ...thanhNhom, purchaseWastePercentage: decimal(5) },
+      },
+    ]);
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(20)); // actualStock=20 >= barsNeeded=9
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0].buyQty).toBe(0);
+  });
+
   it('giữ chỗ (reserveOrAdjust) ĐÚNG phần tồn đã dùng để che phủ demand, refType=PIECE_MATERIAL_YIELD_PURCHASE, refId=productionInvoiceId', async () => {
     prisma.$queryRaw.mockResolvedValue(await qtyRow(20));
     stockReservationsService.getAvailableQty.mockResolvedValue(4);

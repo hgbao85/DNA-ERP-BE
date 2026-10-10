@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: % hao hụt thật + làm tròn Tấm sắt la</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+td.num{font-family:var(--mono); text-align:right; font-variant-numeric:tabular-nums}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · Mua hàng — % hao hụt &amp; làm tròn</div>
+    <h1>% hao hụt mua hàng dùng đúng số thật + Tấm sắt la không còn bị ép làm tròn</h1>
+    <p class="lede">
+      Tiếp nối tính năng "đệm % hao hụt vào <code>buyQty</code>" (ship 08/10): % hao hụt trên DB dev trước đó chỉ là
+      số tạm (1%/2%) dùng để test, chưa phải số thật xưởng dùng. Đối chiếu với cuộc trao đổi thật giữa Anh Nhân và
+      Claude (quản lý mua hàng/phôi, file <code>docs/LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026.md</code>) lộ ra 2 việc
+      cần sửa: (A) áp đúng bảng % thật đã chốt, (B) Tấm sắt la đang bị ép làm tròn lên nguyên tấm — ngược chỉ đạo
+      thật "phải tính ra số thập phân, không được làm tròn thành số nguyên".
+    </p>
+    <div class="meta">
+      <span>10/10/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>1 cột DB mới (<code>purchaseRoundUp</code>, tri-state)</span>
+      <span>81 vật tư đổi % hao hụt</span>
+      <span><b>Đã kiểm qua UI thật + API thật + 1574 test tự động</b></span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li><b>Phần A — % hao hụt thật:</b> áp lại đúng bảng đã chốt (0% Dây đan/Dây hàn/CO2/Nhãn số/HDLR, 1% Sắt tự
+        tính + Bì zipper, 1,5% mọi thứ còn lại). 81/93 vật tư active trên DB dev đổi giá trị, bằng 1 script chạy
+        1 lần qua Prisma, map rõ từng mã vật tư theo đúng bảng — không phải đoán theo tên như cách làm gốc (vốn
+        từng bị lẫn 4 trường hợp trong file log, vd "lục giác"/"nút"/"pass" khớp nhầm chữ).</li>
+      <li><b>Phần B — tri-state <code>Material.purchaseRoundUp</code>:</b> cột mới (<code>null</code>/<code>true</code>/<code>false</code>)
+        cho phép Admin ép CÁCH làm tròn <code>buyQty</code> theo CẢ 2 CHIỀU, dùng chung 1 field cho 2 luồng vốn mặc
+        định NGƯỢC nhau: vật tư tiêu hao mặc định giữ thập phân (chỉ ceil khi ép <code>true</code>), Sắt tự tính
+        mặc định luôn ceil nguyên cây/tấm (chỉ giữ thập phân khi ép <code>false</code>).</li>
+      <li><b>Đã set <code>purchaseRoundUp=false</code> cho SAT-014 (Tấm sắt la)</b> — vật tư duy nhất được chỉ đích
+        danh trong file log thật. Sắt phi/Thanh nhôm/Chân nhôm giữ nguyên hành vi ceil như trước (log không nhắc
+        tới, để nguyên cho an toàn).</li>
+      <li><b>An toàn dữ liệu:</b> áp cột mới bằng <code>prisma db push</code> (không mất dữ liệu) vì <code>migrate dev</code>
+        chặn lại do phát hiện 1 lỗi lệch dữ liệu CÓ SẴN TỪ TRƯỚC (bảng <code>notifications</code>, không liên quan
+        đợt này) — nếu ép chạy tiếp sẽ bị gợi ý <code>migrate reset</code> (xoá sạch DB). Đã dọn lại đúng lịch sử
+        migration sau đó (xem mục 4), không đụng dữ liệu nghiệp vụ.</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 1. CƠ CHẾ ═══════════════════════ -->
+  <div class="module" id="coche">
+    <h2>1. Cơ chế % hao hụt — công thức chung</h2>
+    <p class="module-note">
+      Khi tính "cần mua bao nhiêu" cho 1 vật tư, hệ thống cộng thêm % hao hụt (phòng rách/hỏng/thất thoát lúc mua
+      về) vào số thực sự còn thiếu, SAU khi đã trừ tồn kho khả dụng — không đệm vào số tồn hay số giữ chỗ.
+    </p>
+    <div class="card">
+      <h3>Công thức</h3>
+      <p><code>Số cần mua = (Số cần - Tồn khả dụng) × (1 + % hao hụt / 100)</code></p>
+      <p>Vật tư chưa cấu hình % (<code>null</code>) → hệ số = 1 → không đổi gì, tương thích ngược hoàn toàn.</p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Ví dụ</th><th>Thiếu</th><th>% hao hụt</th><th>Cần mua</th></tr></thead>
+        <tbody>
+          <tr><td>Đinh F 10 đen</td><td class="num">48</td><td class="num">1,5%</td><td class="num">48,72</td></tr>
+          <tr><td>Dây đen</td><td class="num">6</td><td class="num">0%</td><td class="num">6</td></tr>
+          <tr><td>Sắt phi (1 cây, ceil nguyên)</td><td class="num">1</td><td class="num">1%</td><td class="num">2 <span style="color:var(--ink-soft)">(1,01 → ceil)</span></td></tr>
+          <tr><td><b>Tấm sắt la (giữ lẻ)</b></td><td class="num">1</td><td class="num">1%</td><td class="num"><b>1,01</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. % HAO HỤT THẬT ═══════════════════════ -->
+  <div class="module" id="phanA">
+    <h2>2. Phần A — Bảng % hao hụt thật <span class="badge b-db">DB</span></h2>
+    <p class="module-note">
+      Theo đúng bảng cuối cùng Anh Nhân đã chốt (08/10, sau 2 lượt sửa) trong file log thật. Sắt phần mềm (có
+      file cắt sắt riêng, dùng solver bin-packing) nằm ngoài cơ chế này hoàn toàn — không cộng %.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Nhóm</th><th>%</th><th>Ví dụ vật tư thật trên DB dev</th></tr></thead>
+        <tbody>
+          <tr><td>Sắt ống/hộp (Sắt phần mềm)</td><td class="num">—</td><td>Sắt hộp 6zem, Sắt vuông 6zem...</td></tr>
+          <tr><td>Sắt tự tính + Bì zipper</td><td class="num">1%</td><td>Sắt phi, Tấm sắt la, Thanh nhôm, Chân nhôm, Bì zipper</td></tr>
+          <tr><td>Dây đan, Dây hàn, Khí CO2, Nhãn số, HDLR, Poster</td><td class="num">0%</td><td>Dây đen/nâu/xám bông, Dây hàn, Khí CO2, Nhãn số 1-4, HDLR</td></tr>
+          <tr><td>Mọi thứ còn lại</td><td class="num">1,5%</td><td>Đinh, Vis, Nút nhựa, Tán rút, Londen, Bulon, Sơn, Xốp, Bao bì...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n">81</div><div class="l">vật tư đổi %</div></div>
+      <div class="stat"><div class="n">11</div><div class="l">vật tư ở 0%</div></div>
+      <div class="stat"><div class="n">8</div><div class="l">vật tư ở 1%</div></div>
+      <div class="stat"><div class="n">67</div><div class="l">vật tư ở 1,5%</div></div>
+    </div>
+    <div class="callout ok">
+      <b>Đối chiếu tỷ lệ:</b> file log thật (411 món của xưởng) ra tỷ lệ 76% / 15% / 9% cho 3 mức 1,5% / 0% / 1%.
+      DB dev (93 vật tư active, 86 vật tư KHÔNG phải Sắt phần mềm) ra 78% / 13% / 9% — gần như trùng khớp, chỉ
+      lệch nhẹ vì DB dev chưa nhập đủ hết 411 món thật của xưởng.
+    </div>
+    <div class="callout warn">
+      <b>6 trường hợp sửa riêng trong file log</b> (Tán rút lục giác, Chữ dán/tem trên nút su kính, Ống nhựa phi 16,
+      Dây SHT 132, Đế nhựa đinh nâu phi 21, Poster A5) — đã rà từng mã, KHÔNG món nào trong 6 món này tồn tại trên
+      DB dev hiện tại (chỉ có 93/411 món thật). Khi được nhập vào hệ thống sau này, áp đúng bảng ở trên là ra đúng %.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 3. LÀM TRÒN ═══════════════════════ -->
+  <div class="module" id="phanB">
+    <h2>3. Phần B — Tri-state <code>purchaseRoundUp</code> <span class="badge b-be">BE</span> <span class="badge b-db">DB</span></h2>
+    <p class="module-note">
+      Vật tư chia 2 kiểu, mỗi kiểu có hành vi làm tròn MẶC ĐỊNH ngược nhau — field mới cho phép Admin ép đổi theo
+      cả 2 chiều, dùng chung 1 cột cho cả 2 luồng tính đề xuất mua.
+    </p>
+    <div class="card">
+      <h3><span class="path">prisma/schema.prisma</span> — <code>Material.purchaseRoundUp Boolean?</code> <span class="pill p-add">Mới</span></h3>
+      <p><code>null</code> (mặc định) = mỗi luồng tự theo hành vi gốc của nó. <code>true</code> = ép ceil lên nguyên
+      bất kể luồng nào. <code>false</code> = ép GIỮ thập phân bất kể luồng nào.</p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Luồng</th><th>Mặc định gốc (<code>null</code>)</th><th>Khi Admin ép <code>true</code></th><th>Khi Admin ép <code>false</code></th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="path">ConsumableMaterialPurchaseService <br><span style="color:var(--ink-soft);font-family:var(--sans)">(Dây/Đinh/Nút/Sơn/Bao bì...)</span></td>
+            <td>Giữ thập phân</td>
+            <td><b>Ceil lên nguyên</b></td>
+            <td>Giữ thập phân <span style="color:var(--ink-soft)">(trùng mặc định)</span></td>
+          </tr>
+          <tr>
+            <td class="path">PieceMaterialYieldPurchaseService<br>MaterialYieldRecipePurchaseService <br><span style="color:var(--ink-soft);font-family:var(--sans)">(Sắt tự tính)</span></td>
+            <td>Ceil lên nguyên</td>
+            <td>Ceil lên nguyên <span style="color:var(--ink-soft)">(trùng mặc định)</span></td>
+            <td><b>Giữ thập phân</b></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok"><b>Đã set <code>false</code> cho SAT-014 (Tấm sắt la)</b> — vật tư duy nhất được chỉ đích danh trong file log thật ("phần sắt la... không được làm tròn thành số nguyên đâu", 08/10 05:11). Sắt phi/Thanh nhôm/Chân nhôm giữ nguyên <code>null</code> (vẫn ceil như trước), vì file log không nhắc riêng tới các vật tư này.</div>
+  </div>
+
+  <!-- ═══════════════════════ 4. FILE THAY ĐỔI ═══════════════════════ -->
+  <div class="module" id="files">
+    <h2>4. File thay đổi</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th></th><th>Nội dung</th></tr></thead>
+        <tbody>
+          <tr><td class="path">DNA-ERP-BE/prisma/schema.prisma</td><td><span class="badge b-db">DB</span></td><td>Cột <code>materials.purchaseRoundUp</code> (nullable Boolean)</td></tr>
+          <tr><td class="path">DNA-ERP-BE/prisma/migrations/20261010090000_fix_notifications_updatedat_drift/</td><td><span class="pill p-add">Mới</span></td><td>Ghi lại đúng lịch sử cho lỗi lệch dữ liệu có sẵn từ trước (bảng <code>notifications</code>) — không đổi gì trên DB, chỉ đồng bộ migration history</td></tr>
+          <tr><td class="path">DNA-ERP-BE/prisma/migrations/20261010091500_add_material_purchase_round_up/</td><td><span class="pill p-add">Mới</span></td><td>Migration chuẩn cho cột <code>purchaseRoundUp</code> (viết tay SQL + <code>migrate resolve --applied</code>, vì cột đã có sẵn qua <code>db push</code> trước đó)</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/materials/dto/{create-material,material-response}.dto.ts</td><td><span class="badge b-be">BE</span></td><td>Field <code>purchaseRoundUp</code> nhận vào/trả ra</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/materials/materials.service.ts</td><td><span class="badge b-be">BE</span></td><td><code>create()</code>/<code>update()</code>/<code>toResponseDto()</code> — plain passthrough</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/production-invoices/consumable-material-purchase.service.ts</td><td><span class="badge b-be">BE</span></td><td>Ceil có điều kiện khi <code>purchaseRoundUp===true</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/production-invoices/piece-material-yield-purchase.service.ts</td><td><span class="badge b-be">BE</span></td><td>Giữ thập phân khi <code>purchaseRoundUp===false</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/production-invoices/material-yield-recipe-purchase.service.ts</td><td><span class="badge b-be">BE</span></td><td>Giữ thập phân khi <code>purchaseRoundUp===false</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/services/materials-api.ts</td><td><span class="badge b-fe">FE</span></td><td><code>BeMaterial</code> + <code>decodeRoundUp()</code> (select 3 lựa chọn → boolean|null)</td></tr>
+          <tr><td class="path">DNA-ERP/src/modules/pages/Admin/masterData/MaterialsPage.tsx</td><td><span class="badge b-fe">FE</span></td><td>Field "Làm tròn khi mua" (select 3 lựa chọn) + ghi chú "· làm tròn"/"· giữ lẻ" ở cột % hao hụt</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. KIỂM CHỨNG ═══════════════════════ -->
+  <div class="module" id="kiemchung">
+    <h2>5. Kiểm chứng</h2>
+    <ul class="timeline stages">
+      <li class="ok"><b>Test tự động</b><span>1494/1495 test BE xanh (1 skip, không liên quan), 80/80 test FE xanh, cộng 109 test mới cho 2 tính năng (tri-state + bảng %) — không có test cũ nào vỡ.</span></li>
+      <li class="ok"><b>Typecheck</b><span><code>tsc --noEmit</code> sạch cả 2 repo sau khi sửa.</span></li>
+      <li class="ok"><b>Script data-fix chạy thật trên DB dev</b><span>81 vật tư đổi % đúng theo map, xác nhận lại bằng query trực tiếp (0%: 11, 1%: 8, 1,5%: 67, null: 7).</span></li>
+      <li class="ok"><b>Gọi lại API thật để tính lại đề xuất mua</b><span><code>POST /production-invoices/13/piece-material-yield-purchase-proposals</code> (PI-2026-008) → Tấm sắt la ra đúng <code>buyQty=1.01</code> (giữ lẻ), Sắt phi vẫn <code>buyQty=2</code> (ceil như cũ).</span></li>
+      <li class="ok"><b>UI thật (tài khoản <code>nhan</code>, màn Mua hàng)</b><span>Dòng Tấm sắt la hiện đúng "1.01" + "+1%"; Dây đen hiện "—" (0%, đúng bảng thật) thay vì "+2%" cũ.</span></li>
+      <li class="ok"><b>Migration history</b><span><code>prisma migrate status</code> → "Database schema is up to date!"; chạy lại <code>prisma migrate dev</code> → "Already in sync, no schema change or pending migration was found." — sạch hoàn toàn, không còn drift.</span></li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 6. CÒN MỞ ═══════════════════════ -->
+  <div class="module" id="conmo">
+    <h2>6. Còn mở</h2>
+    <div class="card">
+      <h3>2 migration mới chưa commit</h3>
+      <p><code>20261010090000_fix_notifications_updatedat_drift</code> và
+      <code>20261010091500_add_material_purchase_round_up</code> đang nằm trong working tree (cùng các file code
+      khác), chưa <code>git add</code>/<code>commit</code>.</p>
+    </div>
+    <div class="card">
+      <h3>Không có bulk-toggle cho <code>purchaseRoundUp</code></h3>
+      <p>Khác <code>purchaseWastePercentage</code> (có "Sửa hao hụt hàng loạt"), field mới chỉ sửa được từng vật tư
+      1 qua form Admin &gt; Vật tư. Nếu sau này cần bật/tắt hàng loạt, có thể làm thêm.</p>
+    </div>
+    <div class="card">
+      <h3>6 vật tư trong file log chưa có trên DB dev</h3>
+      <p>Tán rút lục giác (đã có, không vấn đề), Chữ dán/tem trên nút su kính, Ống nhựa phi 16 bịt pass, Dây SHT
+      132, Đế nhựa đinh nâu phi 21, Poster A5 — khi nhập vào hệ thống thật, nhớ áp đúng bảng % ở mục 2.</p>
+    </div>
+    <div class="card">
+      <h3>Sắt phi/Thanh nhôm/Chân nhôm vẫn ceil nguyên</h3>
+      <p>Chỉ Tấm sắt la được xác nhận giữ lẻ qua file log thật. Nếu xưởng xác nhận các vật tư Sắt tự tính khác cũng
+      mua được theo số lẻ, chỉ cần set <code>purchaseRoundUp=false</code> cho từng vật tư đó — không cần sửa code.</p>
+    </div>
+  </div>
+
+  <footer>
+    Tài liệu nội bộ DNA-ERP — nhật ký thay đổi 10/10/2026. Đối chiếu với
+    <code>docs/LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026.md</code> (cuộc trao đổi thật giữa Anh Nhân và Claude,
+    không liên quan code — chỉ dùng làm nguồn dữ liệu % hao hụt thật).
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" type="button" aria-label="Lên đầu trang">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

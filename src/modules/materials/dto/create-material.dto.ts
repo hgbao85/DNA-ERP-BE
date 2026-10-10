@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNumber, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, Max, Min } from 'class-validator';
 import { MaterialDetailKind, SteelSubGroup } from '../../../generated/prisma/client';
 
 /**
@@ -110,11 +110,19 @@ export class CreateMaterialDto {
 
   @ApiPropertyOptional({
     description:
-      '% dự trù cộng thêm vào số lượng đề xuất mua (chưa nối vào luồng đề xuất mua nào, field sẵn sàng chờ luồng đó). Bị bỏ qua (ghi null) với vật tư Sắt nhóm con SOFTWARE (Phần mềm) - vẫn áp dụng bình thường cho Tự tính/VTTP và mọi nhóm khác, xem MaterialsService.resolveWasteFields.',
+      '% dự trù cộng thêm vào số lượng đề xuất mua. Đã nối vào cả 3 luồng tự sinh đề xuất mua cho vật tư KHÔNG phải Sắt phần mềm. Bị bỏ qua (ghi null) với vật tư Sắt nhóm con SOFTWARE (Phần mềm) - vẫn áp dụng bình thường cho Tự tính/VTTP và mọi nhóm khác, xem MaterialsService.resolveWasteFields.',
   })
   @IsOptional()
   @IsNumber()
   @Min(0)
   @Max(100)
   purchaseWastePercentage?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Tri-state - ép CÁCH làm tròn buyQty khi tính đề xuất mua. null/để trống = mỗi luồng tự theo mặc định gốc (vật tư tiêu hao giữ thập phân, Sắt tự tính luôn ceil nguyên cây/tấm). true = ép ceil lên nguyên (vd Đinh/Vis/Nút - không mua được số lẻ). false = ép GIỮ thập phân (vd Tấm sắt la - mua theo tấm lẻ).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  purchaseRoundUp?: boolean | null;
 }

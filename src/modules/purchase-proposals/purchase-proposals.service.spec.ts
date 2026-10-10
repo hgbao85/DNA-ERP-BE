@@ -293,6 +293,26 @@ describe('PurchaseProposalsService', () => {
       expect(result.items?.[0].quotes[0].unitPrice).toBe(45000);
     });
 
+    it('2026-10-08: purchaseWastePercentage đọc LIVE từ Material.purchaseWastePercentage (không snapshot)', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [item({ material: material({ purchaseWastePercentage: decimal(5) }) })],
+        }),
+      );
+
+      const result = await service.findOne('300');
+
+      expect(result.items?.[0].purchaseWastePercentage).toBe(5);
+    });
+
+    it('purchaseWastePercentage=null (chưa cấu hình, hoặc Sắt phần mềm) - trả null, không crash', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(proposal()); // material() mặc định không set field này
+
+      const result = await service.findOne('300');
+
+      expect(result.items?.[0].purchaseWastePercentage).toBeNull();
+    });
+
     it('cuttingProposal=null (CuttingProposal gốc đã bị xóa, FK ON DELETE SET NULL) - trả về "—" thay vì crash 500', async () => {
       // Phát hiện 2026-08-19 khi dọn CuttingProposal test cho J55/Ghế tình yêu: `row.cuttingProposal!`
       // giả định luôn tồn tại, nhưng schema cho phép NULL (PurchaseProposal.cuttingProposalId

@@ -285,6 +285,71 @@ describe('ConsumableMaterialPurchaseService', () => {
     expect(result[0].buyQty).toBe(74.5);
   });
 
+  it('2026-10-08: cộng đệm Material.purchaseWastePercentage vào buyQty - CHỈ phần thực sự phải mua', async () => {
+    prisma.material.findMany.mockResolvedValue([{ ...day, purchaseWastePercentage: decimal(5) }]);
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(20));
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    // required=120, actualStock=20 -> buyQty gốc=100, đệm 5% -> 105 (không làm tròn, giống idiom
+    // "số thập phân không làm tròn" ở test trên).
+    expect(result[0].buyQty).toBe(105);
+  });
+
+  it('2026-10-10: purchaseRoundUp=true ép ceil buyQty lên nguyên (vd Đinh/Vis - không mua số lẻ)', async () => {
+    prisma.material.findMany.mockResolvedValue([
+      { ...day, purchaseWastePercentage: decimal(5), purchaseRoundUp: true },
+    ]);
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(20));
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    // required=120, actualStock=20 -> buyQty gốc=100, đệm 5% -> 105 (đã nguyên sẵn) -> ceil(105)=105.
+    expect(result[0].buyQty).toBe(105);
+  });
+
+  it('purchaseRoundUp=true + kết quả lẻ - ceil lên nguyên', async () => {
+    prisma.material.findMany.mockResolvedValue([
+      { ...day, purchaseWastePercentage: decimal(2), purchaseRoundUp: true },
+    ]);
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(45.5));
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    // required=120, actualStock=45.5 -> buyQty gốc=74.5, đệm 2% -> 75.99 -> ceil = 76.
+    expect(result[0].buyQty).toBe(76);
+  });
+
+  it('purchaseRoundUp=false/null (mặc định) - vẫn giữ thập phân như cũ, không ceil', async () => {
+    prisma.material.findMany.mockResolvedValue([
+      { ...day, purchaseWastePercentage: decimal(2), purchaseRoundUp: null },
+    ]);
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(45.5));
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    // Cùng input test "purchaseRoundUp=true" ở trên nhưng KHÔNG ceil -> 75.99 giữ nguyên.
+    expect(result[0].buyQty).toBeCloseTo(75.99);
+  });
+
+  it('purchaseWastePercentage=null (chưa cấu hình) - buyQty không đổi (tương thích ngược)', async () => {
+    prisma.material.findMany.mockResolvedValue([{ ...day, purchaseWastePercentage: null }]);
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(20));
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0].buyQty).toBe(100);
+  });
+
+  it('buyQty gốc=0 (đủ tồn) - vẫn 0 sau khi đệm % (giữ đúng nhánh auto-PURCHASED)', async () => {
+    prisma.material.findMany.mockResolvedValue([{ ...day, purchaseWastePercentage: decimal(5) }]);
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(200));
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0].buyQty).toBe(0);
+  });
+
   // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08): trước đây `locked[0]?.qty` chỉ
   // lấy 1 dòng BẤT KỲ - nếu vật tư có ≥2 dòng stock_quant (nhiều bucket stockLengthMm), các dòng
   // còn lại bị ÂM THẦM BỎ QUA, tính thiếu tồn thực có -> đề xuất mua nhiều hơn cần thiết.

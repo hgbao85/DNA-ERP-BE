@@ -465,14 +465,25 @@ model Material {
   /// (vẫn là mặc định khi để trống). Đặt quá thấp có thể khiến solver KHÔNG tìm được phương án
   /// cắt nào (vô nghiệm), không phải chỉ là "cảnh báo" - xem comment ở nơi gọi.
   maxCuttingWastePercentage Decimal?            @db.Decimal(6, 3)
-  /// % dự trù hao hụt khi MUA vật tư này (vd bao bì rách/lỗi lúc vận chuyển) - CHỈ có ý nghĩa
-  /// khi materialGroup.systemKey KHÁC STEEL_BAR (null với Sắt, xem
-  /// MaterialsService.resolveWasteFields). Khác hẳn maxCuttingWastePercentage ở trên: đây là
-  /// ĐỆM cộng thêm vào số lượng đề xuất mua (SL cần mua thực = SL đề xuất mua gốc + % này),
-  /// không phải ràng buộc. Field sẵn sàng nhưng CHƯA nối vào luồng đề xuất mua nào (luồng đó
-  /// hiện chỉ tồn tại cho Sắt, xem cutting-proposals.service.ts) - chờ xây khi có luồng cho
-  /// vật tư khác.
+  /// % dự trù hao hụt khi MUA vật tư này (vd bao bì rách/lỗi lúc vận chuyển) - KHÔNG còn ép null
+  /// theo STEEL_BAR tuyệt đối như comment cũ (2026-10-01: SELF_CALC/FINISHED_COMPONENT = "Sắt tự
+  /// tính" vẫn dùng bình thường, chỉ SOFTWARE mới null - xem MaterialsService.resolveWasteFields).
+  /// Khác hẳn maxCuttingWastePercentage ở trên: đây là ĐỆM cộng thêm vào số lượng đề xuất mua (SL
+  /// cần mua thực = SL đề xuất mua gốc + % này), không phải ràng buộc. ĐÃ NỐI (2026-10-08) vào cả
+  /// 3 luồng tự sinh PurchaseProposal cho vật tư không phải Sắt phần mềm - xem Consumable/
+  /// PieceMaterialYield/MaterialYieldRecipePurchaseService.
   purchaseWastePercentage   Decimal?            @db.Decimal(6, 3)
+  /// Ép CÁCH làm tròn `buyQty` khi tính đề xuất mua - tri-state, KHÔNG phải boolean thường:
+  /// `null` (mặc định) = mỗi luồng tự theo hành vi gốc của nó (Consumable giữ thập phân,
+  /// PieceMaterialYield/MaterialYieldRecipe luôn ceil nguyên cây/tấm - 2 luồng này vốn ngược
+  /// nhau). `true` = ép ceil lên nguyên bất kể luồng nào (vd Đinh/Vis/Nút - không mua được "0,96
+  /// cái", chỉ ConsumableMaterialPurchaseService đọc nhánh này). `false` = ép GIỮ thập phân bất
+  /// kể luồng nào (vd Tấm sắt la - mua theo tấm lẻ, chỉ PieceMaterialYield/
+  /// MaterialYieldRecipePurchaseService đọc nhánh này, Consumable vốn đã mặc định thập phân nên
+  /// `false` ở đó vô nghĩa/trùng mặc định). 2026-10-10, theo chỉ đạo thật trong
+  /// docs/LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026.md (08/10 05:11): "sắt la" không được làm tròn
+  /// nguyên.
+  purchaseRoundUp           Boolean?
   imageUrl                  String?
   isActive                  Boolean             @default(true)
   deletedAt                 DateTime?

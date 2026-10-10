@@ -928,6 +928,7 @@ export class PurchaseProposalsService {
       unit: item.material.unit,
       purchaseUnit: item.material.purchaseUnit ?? null,
       khoUnitFactor: item.material.khoUnitFactor?.toNumber() ?? null,
+      purchaseWastePercentage: item.material.purchaseWastePercentage?.toNumber() ?? null,
       // Kho nhận hàng THẬT của riêng dòng này - ưu tiên item.receiveWarehouseCode (vật tư đóng
       // gói, ghi đè về kho thành phẩm QLSX đã chọn, 2026-09-04), rơi về Material.warehouseId nếu
       // không có override. Nguồn xác thực cho receiveItem(), KHÔNG phải

@@ -228,7 +228,16 @@ export class ConsumableMaterialPurchaseService {
           actualStock,
         );
         const consumeQty = Math.min(required, available);
-        const buyQty = required - consumeQty;
+        // 2026-10-08: đệm % hao hụt khi mua (Material.purchaseWastePercentage, vd bao bì rách/lỗi
+        // lúc vận chuyển) - CHỈ cộng vào phần THỰC SỰ phải mua (sau khi đã trừ tồn khả dụng),
+        // KHÔNG đụng required/consumeQty/reserveOrAdjust (giữ chỗ tồn kho tính theo nhu cầu THẬT).
+        // null/0 -> buyQty không đổi (tương thích ngược vật tư chưa cấu hình %).
+        const wastePct = material.purchaseWastePercentage?.toNumber() ?? 0;
+        const buyQtyRaw = (required - consumeQty) * (1 + wastePct / 100);
+        // 2026-10-10: mặc định luồng này GIỮ thập phân (vd kg sơn/dây) - CHỈ ceil lên nguyên khi
+        // Admin chủ động ép qua Material.purchaseRoundUp=true (vd Đinh/Vis/Nút - không mua được
+        // số lẻ). Tri-state: null/false đều giữ thập phân, chỉ true mới ceil - xem schema.prisma.
+        const buyQty = material.purchaseRoundUp === true ? Math.ceil(buyQtyRaw) : buyQtyRaw;
         computed.push({
           materialId,
           materialIdStr,

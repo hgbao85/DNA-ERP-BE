@@ -141,7 +141,18 @@ export class MaterialYieldRecipePurchaseService {
           actualStock,
         );
         const consumeQty = Math.min(acc.requiredInputQty, available);
-        const buyQty = acc.requiredInputQty - consumeQty;
+        // 2026-10-08: đệm % hao hụt khi mua (Material.purchaseWastePercentage), CHỈ cộng vào phần
+        // THỰC SỰ phải mua, cùng lý do/cùng fix ConsumableMaterialPurchaseService. Đơn vị ở đây
+        // MẶC ĐỊNH là cây/tấm NGUYÊN (Int) nên ceil lại sau khi nhân - không mua lẻ cây/tấm.
+        const materialForWaste = materialById.get(materialIdStr)!;
+        const wastePct = materialForWaste.purchaseWastePercentage?.toNumber() ?? 0;
+        const buyQtyRaw = (acc.requiredInputQty - consumeQty) * (1 + wastePct / 100);
+        // 2026-10-10: ngoại lệ cho vật tư mua theo tấm LẺ (vd Tấm sắt la, xem docs/
+        // LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026.md 08/10 05:11) - Admin ép giữ thập phân qua
+        // Material.purchaseRoundUp=false. Tri-state: null/true đều ceil (mặc định gốc của luồng
+        // này), chỉ false mới giữ thập phân - ngược chiều với ConsumableMaterialPurchaseService.
+        const buyQty =
+          materialForWaste.purchaseRoundUp === false ? buyQtyRaw : Math.ceil(buyQtyRaw);
         computed.push({ materialId, materialIdStr, actualStock, buyQty });
         await this.stockReservationsService.reserveOrAdjust(tx, {
           warehouseId,

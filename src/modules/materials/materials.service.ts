@@ -112,6 +112,7 @@ export class MaterialsService {
           khoUnitFactor: dto.khoUnitFactor,
           maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,
           purchaseWastePercentage: wasteFields.purchaseWastePercentage,
+          purchaseRoundUp: dto.purchaseRoundUp,
           imageUrl: dto.imageUrl,
         },
         include: MATERIAL_RELATIONS_INCLUDE,
@@ -359,6 +360,7 @@ export class MaterialsService {
         khoUnitFactor: dto.khoUnitFactor,
         maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,
         purchaseWastePercentage: wasteFields.purchaseWastePercentage,
+        purchaseRoundUp: dto.purchaseRoundUp,
         imageUrl: dto.imageUrl,
         isActive: dto.isActive,
       },
@@ -663,6 +665,7 @@ export class MaterialsService {
       // còn dữ liệu cũ nhưng không code nào đọc - trả null để UI/API không hiện con số đã vô hiệu.
       maxCuttingWastePercentage: null,
       purchaseWastePercentage: material.purchaseWastePercentage?.toNumber() ?? null,
+      purchaseRoundUp: material.purchaseRoundUp ?? null,
       imageUrl: material.imageUrl ?? null,
       isActive: material.isActive,
       createdAt: material.createdAt,

@@ -294,6 +294,29 @@ describe('MaterialsService', () => {
       expect(call[0].data.maxCuttingWastePercentage).toBeNull();
       expect(call[0].data.purchaseWastePercentage).toBe(5);
     });
+
+    it('2026-10-10: purchaseRoundUp truyền thẳng (plain passthrough, không qua resolveWasteFields)', async () => {
+      prisma.materialGroup.findUnique.mockResolvedValue({
+        id: 8n,
+        systemKey: 'WIRE',
+        codePrefix: 'DAY',
+      });
+      prisma.material.findUnique.mockResolvedValue(null);
+      prisma.material.create.mockResolvedValue(existingMaterial);
+
+      await service.create({
+        code: 'DAY-01',
+        name: 'Day thep',
+        unit: 'kg',
+        materialGroupId: '8',
+        purchaseRoundUp: true,
+      });
+
+      const call = prisma.material.create.mock.calls[0] as unknown as [
+        { data: { purchaseRoundUp?: boolean | null } },
+      ];
+      expect(call[0].data.purchaseRoundUp).toBe(true);
+    });
   });
 
   describe('findOne', () => {
@@ -314,6 +337,17 @@ describe('MaterialsService', () => {
 
       expect(result.maxCuttingWastePercentage).toBeNull();
       expect(result.purchaseWastePercentage).toBe(4);
+    });
+
+    it('2026-10-10: trả purchaseRoundUp nguyên trạng (true/false/null)', async () => {
+      prisma.material.findUnique.mockResolvedValue({
+        ...existingMaterial,
+        purchaseRoundUp: false,
+      });
+
+      const result = await service.findOne('1');
+
+      expect(result.purchaseRoundUp).toBe(false);
     });
   });
 

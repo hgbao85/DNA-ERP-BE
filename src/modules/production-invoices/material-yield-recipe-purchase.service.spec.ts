@@ -212,6 +212,60 @@ describe('MaterialYieldRecipePurchaseService', () => {
     );
   });
 
+  it('2026-10-08: cộng đệm Material.purchaseWastePercentage vào buyQty, ceil lên cây/tấm nguyên', async () => {
+    prisma.material.findMany.mockResolvedValue([
+      { ...thanhNhom, purchaseWastePercentage: decimal(5) },
+    ]);
+    // requiredInputQty=7 (demand mặc định), actualStock=0 -> buyQty gốc=7. Đệm 5% -> 7×1.05=7.35 ->
+    // ceil=8 (không mua lẻ cây).
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ requiredInputQty: 7, buyQty: 8 });
+  });
+
+  it('purchaseWastePercentage=null (chưa cấu hình) - buyQty không đổi (tương thích ngược)', async () => {
+    prisma.material.findMany.mockResolvedValue([{ ...thanhNhom, purchaseWastePercentage: null }]);
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ requiredInputQty: 7, buyQty: 7 });
+  });
+
+  it('2026-10-10: purchaseRoundUp=false ép GIỮ thập phân (vd Tấm sắt la - mua theo tấm lẻ)', async () => {
+    prisma.material.findMany.mockResolvedValue([
+      { ...thanhNhom, purchaseWastePercentage: decimal(5), purchaseRoundUp: false },
+    ]);
+    // Cùng input test "ceil lên cây/tấm nguyên" ở trên (requiredInputQty=7, đệm 5% -> 7.35) nhưng
+    // purchaseRoundUp=false ép giữ thập phân - KHÔNG ceil lên 8.
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0].requiredInputQty).toBe(7);
+    expect(result[0].buyQty).toBeCloseTo(7.35);
+  });
+
+  it('purchaseRoundUp=true/null (mặc định) - vẫn ceil như cũ', async () => {
+    prisma.material.findMany.mockResolvedValue([
+      { ...thanhNhom, purchaseWastePercentage: decimal(5), purchaseRoundUp: null },
+    ]);
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ requiredInputQty: 7, buyQty: 8 });
+  });
+
+  it('buyQty gốc=0 (đủ tồn) - vẫn 0 sau khi đệm % (giữ đúng nhánh auto-PURCHASED)', async () => {
+    prisma.material.findMany.mockResolvedValue([
+      { ...thanhNhom, purchaseWastePercentage: decimal(5) },
+    ]);
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(20)); // actualStock=20 >= requiredInputQty=7
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0].buyQty).toBe(0);
+  });
+
   it('giữ chỗ (reserveOrAdjust) đúng phần tồn đã dùng để che phủ demand, refType=MATERIAL_YIELD_RECIPE_PURCHASE', async () => {
     prisma.$queryRaw.mockResolvedValue(await qtyRow(20));
     stockReservationsService.getAvailableQty.mockResolvedValue(4);
