@@ -182,7 +182,7 @@ describe('SalesOrdersService', () => {
         orderCode: 'DH-KHACH-A-01',
         customerId: '1',
         orderDate: '2026-01-01',
-        items: [{ mfgProductId: '2', totalQty: 5 }],
+        items: [{ mfgProductId: '2', totalQty: 5, deliveryDate: '2026-10-25' }],
       });
 
       expect(result.code).toBe('PO-10');
@@ -235,7 +235,7 @@ describe('SalesOrdersService', () => {
         orderCode: 'DH-KHACH-A-01',
         customerId: '1',
         orderDate: '2026-01-01',
-        items: [{ mfgProductId: '2', totalQty: 5 }],
+        items: [{ mfgProductId: '2', totalQty: 5, deliveryDate: '2026-10-25' }],
       });
 
       expect(prisma.planForm.findFirst).toHaveBeenCalledWith(
@@ -256,7 +256,7 @@ describe('SalesOrdersService', () => {
           orderCode: 'DH-KHACH-A-01',
           customerId: '999',
           orderDate: '2026-01-01',
-          items: [{ mfgProductId: '2', totalQty: 1 }],
+          items: [{ mfgProductId: '2', totalQty: 1, deliveryDate: '2026-10-25' }],
         }),
       ).rejects.toThrow(NotFoundException);
       expect(prisma.salesOrder.create).not.toHaveBeenCalled();
@@ -271,7 +271,7 @@ describe('SalesOrdersService', () => {
           orderCode: 'DH-KHACH-A-01',
           customerId: '1',
           orderDate: '2026-01-01',
-          items: [{ mfgProductId: '999', totalQty: 1 }],
+          items: [{ mfgProductId: '999', totalQty: 1, deliveryDate: '2026-10-25' }],
         }),
       ).rejects.toThrow(NotFoundException);
       expect(prisma.salesOrder.create).not.toHaveBeenCalled();
@@ -289,7 +289,7 @@ describe('SalesOrdersService', () => {
           orderCode: 'DH-KHACH-A-01',
           customerId: '1',
           orderDate: '2026-01-01',
-          items: [{ mfgProductId: '2', totalQty: 1 }],
+          items: [{ mfgProductId: '2', totalQty: 1, deliveryDate: '2026-10-25' }],
         }),
       ).rejects.toThrow(
         new ConflictException('Mã đơn hàng "DH-KHACH-A-01" đã được dùng cho đơn khác'),
@@ -316,7 +316,7 @@ describe('SalesOrdersService', () => {
           orderCode: 'DH-KHACH-A-01',
           customerId: '1',
           orderDate: '2026-01-01',
-          items: [{ mfgProductId: '2', totalQty: 1 }],
+          items: [{ mfgProductId: '2', totalQty: 1, deliveryDate: '2026-10-25' }],
         }),
       ).rejects.toThrow(
         new ConflictException('Mã đơn hàng "DH-KHACH-A-01" đã được dùng cho đơn khác'),
