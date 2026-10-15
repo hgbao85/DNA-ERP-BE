@@ -22,6 +22,7 @@ import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { ReceiveSteelIssueDto } from './dto/receive-steel-issue.dto';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
 import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { ListStepBundlesQueryDto } from './dto/list-step-bundles-query.dto';
@@ -177,8 +178,12 @@ export class SteelIssuesController {
   @Post('steel-issues/:id/receive')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  receive(@Param('id') id: string) {
-    return this.steelIssuesService.receive(id);
+  receive(
+    @Param('id') id: string,
+    @Body() dto: ReceiveSteelIssueDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.steelIssuesService.receive(id, userId, dto.receivedBarCount);
   }
 
   /**
@@ -188,8 +193,13 @@ export class SteelIssuesController {
   @Post('steel-issues/:id/cut-batches')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  recordCutBatch(@Param('id') id: string, @Body() dto: RecordCutBatchDto) {
-    return this.steelIssuesService.recordCutBatch(id, dto);
+  recordCutBatch(
+    @Param('id') id: string,
+    @Body() dto: RecordCutBatchDto,
+    @CurrentUser('id') userId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return this.steelIssuesService.recordCutBatch(id, dto, userId, idempotencyKey);
   }
 
   // ─── Đợt cắt là đơn vị mang trạng thái (2026-09-05) ─────────────────────────
@@ -267,8 +277,12 @@ export class SteelIssuesController {
   @Post('cut-bundles/:id/undo-last-batch')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  undoLastCutBatch(@Param('id') id: string, @Body() dto: UndoCutBatchDto) {
-    return this.steelIssuesService.undoLastCutBatch(id, dto.segments);
+  undoLastCutBatch(
+    @Param('id') id: string,
+    @Body() dto: UndoCutBatchDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.steelIssuesService.undoLastCutBatch(id, dto.segments, userId);
   }
 
   // ─── Công đoạn phụ (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ) - scope PI + loại sắt (2026-09-07 lần 2) ──
@@ -280,8 +294,13 @@ export class SteelIssuesController {
   @Post('production-invoices/:id/step-batches')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  recordStepBatch(@Param('id') id: string, @Body() dto: RecordStepBatchDto) {
-    return this.steelIssuesService.recordStepBatch(id, dto);
+  recordStepBatch(
+    @Param('id') id: string,
+    @Body() dto: RecordStepBatchDto,
+    @CurrentUser('id') userId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return this.steelIssuesService.recordStepBatch(id, dto, userId, idempotencyKey);
   }
 
   /** Phôi gom mọi StepBatch chưa gửi của (productionInvoiceId, materialId, step) thành 1 đợt gửi

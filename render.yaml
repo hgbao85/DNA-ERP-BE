@@ -36,6 +36,11 @@ services:
         sync: false
       - key: SEED_ADMIN_PASSWORD
         sync: false
+      # Số lớp proxy trước app, để BE thấy IP thật của client (giới hạn mạng công ty cho công nhân). Bắt đầu 1; kiểm bằng nút
+      # "Thêm IP hiện tại của tôi" ở Cấu hình hệ thống so với trang "what is my ip" - nếu ra IP của Cloudflare/Render thì đổi thành '2'.
+      # KHÔNG đặt true (client giả được X-Forwarded-For). Xem docs/changelog-2026-10-08-ke-hoach-tem-qr-bo-sat-phoi.md mục 28.6.
+      - key: TRUST_PROXY_HOPS
+        value: '1'
       # Realtime nhiều instance: đặt URL Redis (vd Render Key Value). Để trống = 1 instance.
       - key: REDIS_URL
         sync: false

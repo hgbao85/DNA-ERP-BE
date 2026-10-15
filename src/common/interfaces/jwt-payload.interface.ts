@@ -1,7 +1,7 @@
 export interface JwtPayload {
   sub: string;
   username: string;
-  email: string;
+  email: string | null;
   roles: string[];
   /** Flattened "MODULE:ACTION" strings, e.g. "USER:CREATE" */
   permissions: string[];
@@ -13,7 +13,7 @@ export interface JwtPayload {
 export interface AuthenticatedUser {
   id: string;
   username: string;
-  email: string;
+  email: string | null;
   roles: string[];
   permissions: string[];
   mfgRole: string | null;

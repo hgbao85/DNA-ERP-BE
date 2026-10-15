@@ -75,7 +75,9 @@ model User {
   /// Login identifier (replaces email as of the username migration - see D.username).
   /// email is kept as a separate contact field, no longer used for authentication.
   username  String    @unique
-  email     String    @unique
+  /// NULL được (2026-10-13): tài khoản công nhân xưởng (role FLOOR_WORKER, QLSX tạo ở màn Sản lượng
+  /// xưởng) không có email - đăng nhập bằng username + PIN. Postgres UNIQUE cho phép nhiều NULL.
+  email     String?   @unique
   password  String
   firstName String
   lastName  String
@@ -89,10 +91,19 @@ model User {
   /// guards (@RequireMfgRole/@RequireWarehouseScope) layered on top of PermissionsGuard.
   mfgRole            MfgRole?
   warehouseScope     String?
-  isPurchaser        Boolean  @default(false)
-  isProductPlanner   Boolean  @default(false)
-  isSale             Boolean  @default(false)
-  isMaterialsManager Boolean  @default(false)
+  isPurchaser        Boolean   @default(false)
+  isProductPlanner   Boolean   @default(false)
+  isSale             Boolean   @default(false)
+  isMaterialsManager Boolean   @default(false)
+  /// Tài khoản công nhân xưởng (role FLOOR_WORKER, 2026-10-13) tự đặt PIN ở lần đăng nhập đầu - QLSX KHÔNG biết PIN
+  /// (kế hoạch QR mục 20.3: dữ liệu "ai báo" là bằng chứng phạt lương nên không ai khác được biết PIN).
+  /// pinPending = chưa có PIN (password là hash ngẫu nhiên không ai biết); pinClaimExpiresAt = hạn đặt PIN (QLSX cho đặt lại thì gia hạn).
+  pinPending         Boolean   @default(false)
+  pinClaimExpiresAt  DateTime?
+  pinSetAt           DateTime?
+  /// Khoá tạm sau 5 lần nhập sai (chỉ áp cho tài khoản công nhân - PIN 6 số dễ dò hơn mật khẩu thường).
+  failedLoginCount   Int       @default(0)
+  lockedUntil        DateTime?
 
   roles                             UserRole[]
   refreshTokens                     RefreshToken[]
@@ -113,6 +124,14 @@ model User {
   stockReservations                 StockReservation[]
   materialsToBuy                    Material[]
   steelIssuesIssued                 SteelIssue[]                @relation("SteelIssueIssuedBy")
+  steelIssuesReceived               SteelIssue[]                @relation("SteelIssueReceivedBy")
+  floorReports                      FloorReport[]
+  cutBundlesOpened                  CutBundle[]                 @relation("CutBundleOpenedBy")
+  stepBatchesReported               StepBatch[]                 @relation("StepBatchReportedBy")
+  stepBundlesWorker                 StepBundle[]                @relation("StepBundleWorker")
+  floorQueueQueued                  FloorQueueEntry[]           @relation("FloorQueueQueuedBy")
+  floorQueueStarted                 FloorQueueEntry[]           @relation("FloorQueueStartedBy")
+  floorQueueEnded                   FloorQueueEntry[]           @relation("FloorQueueEndedBy")
   qcReviewsReviewed                 QcReview[]                  @relation("QcReviewReviewedBy")
   weavingIssuesIssued               WeavingIssue[]              @relation("WeavingIssueIssuedBy")
   weavingReceiptsReceived           WeavingReceipt[]            @relation("WeavingReceiptReceivedBy")
@@ -349,6 +368,17 @@ model SystemConfig {
   /// ghi 10, hai cây kia biến mất khỏi sổ nhưng vẫn nằm trong kho thật - không cảnh báo, không
   /// log, tồn hệ thống lệch tồn thực ngay từ lúc nhập (D.b3-silent-over-receipt).
   purchaseOverReceiptTolerancePercent Decimal @default(0) @db.Decimal(6, 3)
+
+  /// Địa chỉ gốc của ERP dùng để IN TEM QR (2026-10-13, vd "https://erpdna.vercel.app") - QLSX đặt ở màn "Sản lượng xưởng".
+  /// NULL = dùng địa chỉ trình duyệt đang mở. Cột theo TỪNG MÔI TRƯỜNG (mỗi DB 1 giá trị): mã QR của máy chỉ có nghĩa trên hệ
+  /// thống chứa máy đó, nên máy local để trống - đừng điền địa chỉ thật vào DB local. Đổi sau khi đã dán tem = tem cũ hỏng.
+  floorPublicUrl String?
+
+  /// Mạng công ty được phép đăng nhập (2026-10-13, Sếp chốt "công nhân thôi, ai có chức năng quét mã"): danh sách IP công cộng
+  /// (IPv4/IPv6 cụ thể hoặc IPv4 CIDR như 203.0.113.0/24). RỖNG = không giới hạn (mặc định, và máy local). Có giá trị thì tài khoản
+  /// công nhân (role FLOOR_WORKER) và tài khoản tổ Phôi/Hàn/Sơn chỉ đăng nhập/làm việc được từ các IP này; Sếp/QLSX/KCS/Admin
+  /// không bị giới hạn. Theo từng môi trường.
+  floorAllowedIps String[] @default([])
 
   updatedAt DateTime @updatedAt
 
@@ -757,6 +787,7 @@ model Piece {
   pieceStepBatches            PieceStepBatch[]
   pieceStepBundles            PieceStepBundle[]
   warehouseTransferPieceItems WarehouseTransferPieceItem[]
+  floorReportLines            FloorReportLine[]
 
   @@unique([mfgProductId, code])
   @@index([mfgProductId])
@@ -802,6 +833,7 @@ model SegmentSpec {
   stockQuants                    StockQuant[]
   cutPatternSegments             CutPatternSegment[]
   stepBatchSegments              StepBatchSegment[]
+  floorReportLines               FloorReportLine[]
 
   @@unique([materialId, cutLengthMm])
   @@map("segment_spec")
@@ -1402,6 +1434,8 @@ model ProductionInvoice {
   materialYieldStepBatches  MaterialYieldStepBatch[]
   materialYieldStepBundles  MaterialYieldStepBundle[]
   materialYieldRecipeIssues MaterialYieldRecipeIssue[]
+  floorQueueEntries         FloorQueueEntry[]
+  floorReports              FloorReport[]
 
   @@index([salesOrderId])
   @@map("production_invoices")
@@ -2582,10 +2616,18 @@ model SteelIssue {
   completedAt         DateTime?
   /// Self-reference - đợt làm lại do KCS bắt sửa.
   reworkOfId          BigInt?
+  /// Số cây Phôi ĐẾM THỰC NHẬN lúc xác nhận nhận (2026-10-12) - người nhận tự điền, mặc định =
+  /// barCount. Lệch barCount thì báo kho + QLSX, KHÔNG tự ghi StockLedger (kho tự xử lý). Dùng cho cảnh
+  /// báo sắt vào - đoạn ra. KHÔNG dùng actualBarCount cho việc này vì cột đó bị
+  /// syncIssueStatusFromBundles() ghi đè theo roll-up đợt cắt. NULL = đợt nhận trước 2026-10-12.
+  receivedBarCount    Int?
+  receivedAt          DateTime?
+  receivedById        String?
 
   productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id])
   material          Material          @relation(fields: [materialId], references: [id])
   issuedBy          User              @relation("SteelIssueIssuedBy", fields: [issuedById], references: [id])
+  receivedBy        User?             @relation("SteelIssueReceivedBy", fields: [receivedById], references: [id])
   reworkOf          SteelIssue?       @relation("SteelIssueRework", fields: [reworkOfId], references: [id])
   reworkIssues      SteelIssue[]      @relation("SteelIssueRework")
   bundles           CutBundle[]
@@ -2635,12 +2677,18 @@ model CutBundle {
   /// NULL = đợt CŨ tạo trước 2026-09-21, không biết thuộc SKU nào (hiện ở "Chưa phân SKU", không chia
   /// bừa). Đợt mới bắt buộc có (RecordCutBatchDto.productionOrderId).
   productionOrderId BigInt?
+  /// Người MỞ đợt cắt này (2026-10-13, "mỗi công nhân 1 đợt riêng" - mục 20.5/22): recordCutBatch chỉ
+  /// cộng dồn vào đợt CUTTING của CHÍNH người báo, để KCS chấm đạt/lỗi biết của ai. NULL = đợt cũ tạo
+  /// trước khi có cột này - người báo đầu tiên sau đó nhận luôn đợt đó (xem recordCutBatch).
+  openedById        String?
 
   steelIssue      SteelIssue              @relation(fields: [steelIssueId], references: [id])
+  openedBy        User?                   @relation("CutBundleOpenedBy", fields: [openedById], references: [id])
   proposalPattern CuttingProposalPattern? @relation(fields: [proposalPatternId], references: [id])
   productionOrder ProductionOrder?        @relation(fields: [productionOrderId], references: [id])
   segments        CutPatternSegment[]
   qcReviews       QcReview[]
+  floorReports    FloorReport[]
 
   @@index([steelIssueId])
   @@index([status])
@@ -2696,12 +2744,17 @@ model StepBatch {
   /// SKU (ProductionOrder) mà đợt gia công này làm cho (2026-09-21) - cùng ý nghĩa CutBundle.productionOrderId:
   /// 1 đợt = 1 SKU, NULL = đợt CŨ trước 2026-09-21 chưa biết SKU nào.
   productionOrderId   BigInt?
+  /// Công nhân báo đợt này (2026-10-13, "mỗi công nhân 1 đợt riêng" cho công đoạn phụ): "Gửi KCS" của QLSX chỉ gom các StepBatch
+  /// CỦA CÙNG 1 NGƯỜI thành 1 StepBundle để KCS chấm đạt/lỗi biết của ai. NULL = đợt cũ chưa biết người.
+  reportedById        String?
 
   productionInvoice ProductionInvoice  @relation(fields: [productionInvoiceId], references: [id])
+  reportedBy        User?              @relation("StepBatchReportedBy", fields: [reportedById], references: [id])
   material          Material           @relation(fields: [materialId], references: [id])
   stepBundle        StepBundle?        @relation(fields: [stepBundleId], references: [id])
   productionOrder   ProductionOrder?   @relation(fields: [productionOrderId], references: [id])
   segments          StepBatchSegment[]
+  floorReports      FloorReport[]
 
   @@index([productionInvoiceId, materialId, step])
   @@index([stepBundleId])
@@ -2736,10 +2789,13 @@ model StepBundle {
   submittedById       String
   /// SKU (ProductionOrder) của đợt gửi KCS này (2026-09-21) - gom các StepBatch CỦA CÙNG SKU. NULL = đợt cũ.
   productionOrderId   BigInt?
+  /// Công nhân của đợt (2026-10-13) - các StepBatch trong bundle đều của người này. NULL = đợt gom nhiều người / đợt cũ.
+  reportedById        String?
 
   productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id])
   material          Material          @relation(fields: [materialId], references: [id])
   submittedBy       User              @relation("StepBundleSubmittedBy", fields: [submittedById], references: [id])
+  reportedBy        User?             @relation("StepBundleWorker", fields: [reportedById], references: [id])
   productionOrder   ProductionOrder?  @relation(fields: [productionOrderId], references: [id])
   batches           StepBatch[]
   qcReviews         QcReview[]
@@ -2763,6 +2819,150 @@ model StepBatchSegment {
 
   @@unique([stepBatchId, segmentSpecId])
   @@map("step_batch_segments")
+}
+
+enum FloorReportKind {
+  /// Báo số đoạn cắt (recordCutBatch) - dòng theo segmentSpecId, gắn cutBundleId.
+  CUT
+  /// Báo công đoạn phụ sau Cắt (recordStepBatch) - dòng theo segmentSpecId, gắn stepBatchId.
+  STEP
+  /// Báo số mảnh Phôi/Hàn/Sơn (recordProductionBatch) - dòng theo pieceId, gắn productionBatchId.
+  PIECE
+}
+
+/// Sổ ghi TỪNG LẦN báo sản lượng xưởng (2026-10-12, "phần nền" trước QR - xem
+/// changelog-2026-10-08-ke-hoach-tem-qr-bo-sat-phoi.md mục 21). APPEND-ONLY: không sửa, không xoá.
+/// Lý do: CutBundle/CutPatternSegment/StepBatch không lưu người báo, ProductionBatch cộng dồn nhiều lần
+/// vào 1 dòng OPEN (reportedBy chỉ là người đầu tiên), và "Hoàn tác" trừ thẳng số - không còn dấu vết.
+/// Số tổng vẫn nằm ở các bảng cũ (tiến độ/KCS không đổi); bảng này là nhật ký ai báo bao nhiêu, lúc nào.
+/// Hoàn tác = 1 dòng MỚI với qty âm + reversalOfId trỏ về lần báo bị đảo.
+/// idempotencyKey: client gửi lại cùng khoá (mạng chập chờn, bấm lưu 2 lần) -> trả kết quả cũ, không
+/// cộng lần 2. QR (giai đoạn sau) thêm workstationId vào đây.
+model FloorReport {
+  id                  BigInt          @id @default(autoincrement())
+  kind                FloorReportKind
+  reportedById        String
+  idempotencyKey      String?         @unique
+  cutBundleId         BigInt?
+  stepBatchId         BigInt?
+  productionBatchId   BigInt?
+  /// Lần báo bị đảo (Hoàn tác). @unique: mỗi lần báo chỉ bị đảo tối đa 1 lần.
+  reversalOfId        BigInt?         @unique
+  /// Máy/điểm làm việc đã quét mã QR để báo (2026-10-13). NULL = báo từ màn thống kê cũ (không qua QR).
+  workstationId       BigInt?
+  /// PI của lần báo (2026-10-13) - ghi thẳng, không suy qua đợt: đợt cắt/công đoạn bị đảo hết thì bị xoá
+  /// (FK cutBundleId/stepBatchId về NULL) mà "Sản lượng của tôi" vẫn phải biết lần báo đó thuộc PI nào.
+  productionInvoiceId BigInt?
+  /// Lý do - chỉ có ở dòng đảo do QLSX đảo 1 lần báo sai (POST floor-reports/:id/reverse).
+  reason              String?
+  createdAt           DateTime        @default(now())
+
+  reportedBy        User               @relation(fields: [reportedById], references: [id])
+  workstation       Workstation?       @relation(fields: [workstationId], references: [id])
+  productionInvoice ProductionInvoice? @relation(fields: [productionInvoiceId], references: [id])
+  cutBundle         CutBundle?         @relation(fields: [cutBundleId], references: [id])
+  stepBatch         StepBatch?         @relation(fields: [stepBatchId], references: [id])
+  productionBatch   ProductionBatch?   @relation(fields: [productionBatchId], references: [id])
+  reversalOf        FloorReport?       @relation("FloorReportReversal", fields: [reversalOfId], references: [id])
+  reversedBy        FloorReport?       @relation("FloorReportReversal")
+  lines             FloorReportLine[]
+
+  @@index([cutBundleId])
+  @@index([stepBatchId])
+  @@index([productionBatchId])
+  @@index([reportedById, createdAt])
+  @@index([workstationId])
+  @@index([productionInvoiceId])
+  @@map("floor_reports")
+}
+
+/// 1 dòng số lượng của 1 lần báo - đúng 1 trong segmentSpecId (CUT/STEP) hoặc pieceId (PIECE).
+model FloorReportLine {
+  id            BigInt  @id @default(autoincrement())
+  floorReportId BigInt
+  segmentSpecId BigInt?
+  pieceId       BigInt?
+  /// Âm ở dòng đảo (Hoàn tác).
+  qty           Int
+
+  floorReport FloorReport  @relation(fields: [floorReportId], references: [id])
+  segmentSpec SegmentSpec? @relation(fields: [segmentSpecId], references: [id])
+  piece       Piece?       @relation(fields: [pieceId], references: [id])
+
+  @@index([floorReportId])
+  @@map("floor_report_lines")
+}
+
+/// Loại điểm làm việc có dán mã QR (2026-10-13, QR tại máy - changelog-2026-10-08-ke-hoach-tem-qr-bo-sat-phoi.md
+/// mục 15/17/19/22). Quyết định cách màn quét hỏi gì và báo vào đâu.
+enum WorkstationKind {
+  /// Máy cắt laser (Phôi) - báo SỐ ĐOẠN đã cắt theo cỡ (SteelIssuesService.recordCutBatch).
+  CUT
+  /// Máy/điểm công đoạn phụ của Phôi (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ) - `processStep` bắt buộc
+  /// (SteelIssuesService.recordStepBatch).
+  STEP
+  /// Điểm Hàn hoặc Sơn - báo SỐ MẢNH (ProductionBatchesService.recordProductionBatch).
+  PIECE
+  /// Khu nhận sắt của Phôi - Sếp chốt 1 mã cho cả khu (mục 17): người nhận quét, tự điền số cây thực nhận.
+  STEEL_RECEIVE
+}
+
+/// Máy / điểm làm việc dán mã QR cố định (Sếp chốt 2026-10-12: dán theo máy, KHÔNG in PI vào mã - PI
+/// đang chạy của tổ lấy từ FloorQueueEntry). `qrToken` ngẫu nhiên, khó đoán - mã QR là link
+/// `<FE>/?m=floor&ws=<qrToken>`; đổi mã (mất/bị chụp) = sinh token mới, tem cũ hết hiệu lực.
+model Workstation {
+  id          BigInt          @id @default(autoincrement())
+  code        String          @unique
+  name        String
+  /// Tổ sở hữu điểm này - chỉ công nhân cùng tổ (User.mfgRole) báo được qua mã của nó.
+  stage       MfgStage
+  kind        WorkstationKind
+  /// Chỉ cho kind = STEP (công đoạn phụ, khác CAT). NULL ở mọi kind khác.
+  processStep ProcessStep?
+  qrToken     String          @unique
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  floorReports FloorReport[]
+
+  @@index([stage])
+  @@map("workstations")
+}
+
+enum FloorQueueStatus {
+  QUEUED
+  RUNNING
+  DONE
+}
+
+/// Hàng đợi PI của TỪNG TỔ (Phôi/Hàn/Sơn) - mục 19: tổ chạy 1 PI một lúc theo thứ tự QLSX xếp, xong PI
+/// này QLSX bấm "Chuyển PI tiếp" (không tự chuyển: còn đợt chờ KCS/cắt bù). Mỗi tổ ĐÚNG 1 dòng RUNNING
+/// (partial unique index viết tay trong migration). startedAt/endedAt là lịch sử PI–tổ. Lớp này ngồi
+/// TRÊN ProductionOrder.floorStage (không đổi nó): báo vẫn phải qua gate "PI có SKU ACTIVE" như cũ.
+/// DONE vẫn báo được qua mục "Bù lỗi" của màn quét khi PI còn SKU ACTIVE (KCS chấm lỗi sau khi tổ đã sang PI mới).
+model FloorQueueEntry {
+  id                  BigInt           @id @default(autoincrement())
+  stage               MfgStage
+  productionInvoiceId BigInt
+  /// Thứ tự trong hàng đợi của tổ (nhỏ chạy trước) - chỉ có nghĩa với QUEUED.
+  position            Int
+  status              FloorQueueStatus @default(QUEUED)
+  queuedAt            DateTime         @default(now())
+  queuedById          String
+  startedAt           DateTime?
+  startedById         String?
+  endedAt             DateTime?
+  endedById           String?
+
+  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id])
+  queuedBy          User              @relation("FloorQueueQueuedBy", fields: [queuedById], references: [id])
+  startedBy         User?             @relation("FloorQueueStartedBy", fields: [startedById], references: [id])
+  endedBy           User?             @relation("FloorQueueEndedBy", fields: [endedById], references: [id])
+
+  @@unique([stage, productionInvoiceId])
+  @@index([stage, status, position])
+  @@map("floor_queue_entries")
 }
 
 /// KCS duyệt, dùng chung Phôi/Hàn/Sơn qua FK XOR (steelIssueId <> productionBatchId - CHECK
@@ -2831,6 +3031,8 @@ model QcReview {
   @@index([stepBundleId])
   @@index([pieceStepBundleId])
   @@index([materialYieldStepBundleId])
+  /// Báo cáo sản lượng đạt KCS (2026-10-15, floor-stats.service): lọc theo khoảng ngày KCS duyệt.
+  @@index([reviewedAt])
   @@map("qc_reviews")
 }
 
@@ -3149,6 +3351,7 @@ model ProductionBatch {
   reworkOf        ProductionBatch?  @relation("ProductionBatchRework", fields: [reworkOfId], references: [id])
   reworkBatches   ProductionBatch[] @relation("ProductionBatchRework")
   qcReviews       QcReview[]
+  floorReports    FloorReport[]
 
   @@index([productionOrderId, pieceId])
   @@index([stage, status])

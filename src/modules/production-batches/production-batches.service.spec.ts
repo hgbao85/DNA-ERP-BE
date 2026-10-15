@@ -27,6 +27,7 @@ describe('ProductionBatchesService', () => {
       updateMany: jest.Mock;
     };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
+    floorReport: { create: jest.Mock; findUnique: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
     pieceBom: { findMany: jest.Mock };
@@ -190,6 +191,11 @@ describe('ProductionBatchesService', () => {
       $queryRaw: jest.fn(() => Promise.resolve([{ floorStage: 'ACTIVE' }])),
       // lockBusinessKey() (recordPieceStepBatch) - pg_advisory_xact_lock, no-op trong test.
       $executeRaw: jest.fn().mockResolvedValue(undefined),
+      // Sổ ghi từng lần báo (2026-10-12) - mặc định chưa có khoá nào.
+      floorReport: {
+        create: jest.fn().mockResolvedValue({ id: 900n }),
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue({}) };
@@ -606,6 +612,54 @@ describe('ProductionBatchesService', () => {
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
 
+    it('2026-10-12: mỗi lần "Lưu đợt" ghi 1 dòng sổ PIECE (người báo, mảnh, số) kể cả khi cộng dồn vào đợt OPEN', async () => {
+      prisma.productionBatch.findFirst.mockResolvedValue({
+        ...batchRow,
+        id: 77n,
+        status: 'OPEN',
+        reportedQty: 3,
+      });
+      prisma.productionBatch.update.mockResolvedValue({
+        ...batchRow,
+        id: 77n,
+        status: 'OPEN',
+        reportedQty: 8,
+      });
+
+      await service.recordProductionBatch('1', recordDto, 'cn-han-2', null, 'key-h');
+
+      expect(prisma.floorReport.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          kind: 'PIECE',
+          reportedById: 'cn-han-2',
+          idempotencyKey: 'key-h',
+          productionBatchId: 77n,
+          lines: { create: [{ segmentSpecId: undefined, pieceId: 40n, qty: 5 }] },
+        }) as unknown,
+      });
+    });
+
+    it('2026-10-12: gửi lại CÙNG khoá - trả đợt cũ, KHÔNG cộng reportedQty lần 2', async () => {
+      prisma.floorReport.findUnique.mockResolvedValue({
+        id: 9n,
+        kind: 'PIECE',
+        productionBatchId: 77n,
+      });
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
+        ...batchRow,
+        id: 77n,
+        status: 'OPEN',
+        reportedQty: 8,
+      });
+
+      const res = await service.recordProductionBatch('1', recordDto, 'cn-han-2', null, 'key-h');
+
+      expect(res.id).toBe('77');
+      expect(prisma.productionBatch.update).not.toHaveBeenCalled();
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+      expect(prisma.floorReport.create).not.toHaveBeenCalled();
+    });
+
     it('2026-10-06: tổng đã báo vượt nhu cầu (2 × 10 = 20) - trả overPlanWarning nhưng KHÔNG chặn ghi nhận', async () => {
       prisma.productionBatch.findFirst.mockResolvedValue(null);
       prisma.productionBatch.create.mockResolvedValue({
@@ -655,6 +709,23 @@ describe('ProductionBatchesService', () => {
       );
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    // 2026-10-13 (QR tại máy, mục 22): mỗi công nhân 1 đợt riêng.
+    it('recordProductionBatch - chỉ tìm đợt OPEN do CHÍNH người báo mở; sổ ghi máy + PI', async () => {
+      prisma.productionBatch.findFirst.mockResolvedValue(null);
+      prisma.productionBatch.create.mockResolvedValue({ ...batchRow, status: 'OPEN' });
+
+      await service.recordProductionBatch('1', recordDto, 'cn-han-3', null, 'k-9', {
+        workstationId: 4n,
+      });
+
+      expect(prisma.productionBatch.findFirst).toHaveBeenCalledWith({
+        where: expect.objectContaining({ status: 'OPEN', reportedById: 'cn-han-3' }) as unknown,
+      });
+      expect(prisma.floorReport.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ workstationId: 4n, productionInvoiceId: 500n }) as unknown,
+      });
     });
 
     it('recordProductionBatch - stage DAN (không consumable) - BadRequest, không tạo/cộng dồn gì', async () => {

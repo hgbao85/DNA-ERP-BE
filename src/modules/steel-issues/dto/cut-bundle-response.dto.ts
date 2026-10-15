@@ -47,6 +47,9 @@ export class CutBundleResponseDto {
   @Expose() @ApiProperty({ type: [String] }) requiredSteps!: string[];
   @Expose() @ApiPropertyOptional({ nullable: true }) completedAt!: Date | null;
   @Expose() @ApiProperty() createdAt!: Date;
+  /** Những người đã báo số vào đợt này (sổ FloorReport, 2026-10-12) - theo thứ tự lần báo đầu, bỏ lần
+   *  đã Hoàn tác. Rỗng với đợt tạo trước khi có sổ. */
+  @Expose() @ApiProperty({ type: [String] }) reportedByNames: string[] = [];
   /** SKU (ProductionOrder) đợt cắt này làm cho. null = đợt CŨ tạo trước 2026-09-21, không biết SKU nào. */
   @Expose() @ApiPropertyOptional({ nullable: true }) productionOrderId!: string | null;
   @Expose()

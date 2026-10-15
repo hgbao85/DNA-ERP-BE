@@ -8,6 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  FloorReportKind,
   MfgRole,
   MfgStage,
   PieceStepBundleStatus,
@@ -21,6 +22,12 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import {
+  FloorReportContext,
+  findFloorReportByKey,
+  isIdempotencyConflict,
+  writeFloorReport,
+} from '../../common/utils/floor-report.util';
 import { ProcessStepValue, sortProcessSteps } from '../../common/constants/process-steps.constant';
 import {
   assertItemPiHasActiveFloor,
@@ -254,9 +261,16 @@ export class ProductionBatchesService {
     dto: { pieceId: string; qty: number; stage: MfgStage },
     reportedById: string,
     callerMfgRole: string | null,
+    idempotencyKey?: string | null,
+    ctx?: FloorReportContext,
   ): Promise<ProductionBatchResponseDto> {
     this.assertConsumableStage(dto.stage);
     this.assertMfgRoleMatchesStage(callerMfgRole, dto.stage);
+    // Gửi lại cùng khoá (mạng chập chờn, bấm Lưu 2 lần) -> trả đợt đã cộng, KHÔNG cộng lần 2
+    // (2026-10-12; trước đây cố ý không dedup vì "chỉ cộng dư, dễ nhận ra" - nay công nhân tự báo
+    // trên điện thoại ở xưởng nên trùng là chuyện thường, xem FloorReport).
+    const replay = await this.replayRecordedBatch(idempotencyKey);
+    if (replay) return replay;
     const order = await this.findOrderOrThrow(productionOrderId);
     await assertItemPiHasActiveFloor(
       this.prisma,
@@ -266,42 +280,69 @@ export class ProductionBatchesService {
     const pieceBigId = parseBigIntId(dto.pieceId);
     await this.assertPieceInBom(order.bomRevisionId, pieceBigId, dto.stage);
     await this.assertMaterialYieldReceived(order.bomRevisionId, pieceBigId, order.id, dto.stage);
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `production-batch-open:${order.id}:${pieceBigId}:${dto.stage}`);
-      await assertItemPiHasActiveFloorLocked(
-        tx,
-        order.productionInvoiceItemId,
-        'ghi nhận sản lượng',
-      );
-
-      const open = await tx.productionBatch.findFirst({
-        where: {
-          stage: dto.stage,
-          productionOrderId: order.id,
-          pieceId: pieceBigId,
-          status: ProductionBatchStatus.OPEN,
-        },
-      });
-      if (open) {
-        return tx.productionBatch.update({
-          where: { id: open.id },
-          data: { reportedQty: open.reportedQty + dto.qty },
-          include: PRODUCTION_BATCH_INCLUDE,
-        });
-      }
-      return tx.productionBatch.create({
-        data: {
-          stage: dto.stage,
-          productionOrderId: order.id,
-          pieceId: pieceBigId,
-          reportedQty: dto.qty,
-          reportedById,
-          status: ProductionBatchStatus.OPEN,
-        },
-        include: PRODUCTION_BATCH_INCLUDE,
-      });
+    const piItem = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
+      where: { id: order.productionInvoiceItemId },
+      select: { productionInvoiceId: true },
     });
+
+    let updated: ProductionBatchRow;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
+        await lockBusinessKey(tx, `production-batch-open:${order.id}:${pieceBigId}:${dto.stage}`);
+        await assertItemPiHasActiveFloorLocked(
+          tx,
+          order.productionInvoiceItemId,
+          'ghi nhận sản lượng',
+        );
+
+        // Mỗi công nhân 1 đợt riêng (2026-10-13, mục 20.5/22): chỉ cộng vào đợt OPEN do CHÍNH người này
+        // mở (reportedById = người mở) - KCS chấm đạt/lỗi theo đợt nên biết được của ai.
+        const open = await tx.productionBatch.findFirst({
+          where: {
+            stage: dto.stage,
+            productionOrderId: order.id,
+            pieceId: pieceBigId,
+            status: ProductionBatchStatus.OPEN,
+            reportedById,
+          },
+        });
+        const batch = open
+          ? await tx.productionBatch.update({
+              where: { id: open.id },
+              data: { reportedQty: open.reportedQty + dto.qty },
+              include: PRODUCTION_BATCH_INCLUDE,
+            })
+          : await tx.productionBatch.create({
+              data: {
+                stage: dto.stage,
+                productionOrderId: order.id,
+                pieceId: pieceBigId,
+                reportedQty: dto.qty,
+                reportedById,
+                status: ProductionBatchStatus.OPEN,
+              },
+              include: PRODUCTION_BATCH_INCLUDE,
+            });
+        // Sổ ghi từng lần báo (ai/lúc nào/bao nhiêu) - ProductionBatch.reportedById chỉ là người MỞ đợt,
+        // các lần cộng dồn sau không còn dấu vết nếu không có dòng này.
+        await writeFloorReport(tx, {
+          kind: FloorReportKind.PIECE,
+          reportedById,
+          idempotencyKey,
+          productionBatchId: batch.id,
+          workstationId: ctx?.workstationId,
+          productionInvoiceId: piItem.productionInvoiceId,
+          lines: [{ pieceId: pieceBigId, qty: dto.qty }],
+        });
+        return batch;
+      });
+    } catch (e) {
+      if (isIdempotencyConflict(e)) {
+        const replayAfterRace = await this.replayRecordedBatch(idempotencyKey);
+        if (replayAfterRace) return replayAfterRace;
+      }
+      throw e;
+    }
 
     // Cảnh báo KHÔNG chặn (quyết định 2026-10-06, test lần 8: Sơn Mê ngồi báo 240 trên nhu cầu 120
     // và KCS duyệt cả 240 mà không thấy): tổng đã báo (mọi trạng thái) vượt Σ nhu cầu của SKU.
@@ -314,6 +355,22 @@ export class ProductionBatchesService {
       dto.stage,
     );
     return response;
+  }
+
+  /** Kết quả lần "Lưu đợt" đã ghi với khoá này (null = chưa có). Khoá đã dùng cho loại báo khác -> 409. */
+  private async replayRecordedBatch(
+    idempotencyKey: string | null | undefined,
+  ): Promise<ProductionBatchResponseDto | null> {
+    const prev = await findFloorReportByKey(this.prisma, idempotencyKey);
+    if (!prev) return null;
+    if (prev.kind !== FloorReportKind.PIECE || !prev.productionBatchId) {
+      throw new ConflictException('Idempotency-Key đã dùng cho một lần báo khác');
+    }
+    const batch = await this.prisma.productionBatch.findUniqueOrThrow({
+      where: { id: prev.productionBatchId },
+      include: PRODUCTION_BATCH_INCLUDE,
+    });
+    return this.toResponseDto(batch);
   }
 
   /** Cảnh báo báo vượt nhu cầu (null = trong định mức). Chỉ đọc, không chặn. */

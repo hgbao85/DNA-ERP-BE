@@ -1,6 +1,7 @@
 import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from 'helmet';
@@ -9,10 +10,17 @@ import { AppConfig } from './config/configuration';
 import { RealtimeIoAdapter } from './realtime/realtime-io.adapter';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
 
   app.useLogger(app.get(PinoLogger));
   const configService = app.get(ConfigService<AppConfig, true>);
+
+  // Sau proxy/CDN (Render, Cloudflare...) phải khai số lớp để req.ip là IP THẬT của client - giới hạn mạng công ty và
+  // IP ghi vào refresh token đều dựa vào đó. Đặt đúng số lớp (không dùng `true`): header X-Forwarded-For do client gửi lên có thể giả.
+  const trustProxyHops = configService.get('trustProxyHops', { infer: true });
+  if (trustProxyHops > 0) {
+    app.set('trust proxy', trustProxyHops);
+  }
 
   const corsOrigin = configService.get('cors.origin', { infer: true });
   app.use(helmet());

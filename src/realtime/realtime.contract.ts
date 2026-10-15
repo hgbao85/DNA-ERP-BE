@@ -52,7 +52,8 @@ export type RealtimeEntity =
   | 'SALES_ORDER'
   | 'SKU'
   | 'MATERIAL_YIELD_RECIPE'
-  | 'PRODUCTION_ORDER';
+  | 'PRODUCTION_ORDER'
+  | 'FLOOR_REPORT';
 
 export interface RealtimeEntityRoute {
   /** Module nào được nhận event (room perm:<module>:VIEW). */
@@ -117,6 +118,11 @@ export const REALTIME_ENTITY_ROUTES: Record<RealtimeEntity, RealtimeEntityRoute>
   PRODUCTION_ORDER: {
     modules: [PERMISSION_MODULES.PRODUCTION_ORDER],
     topics: ['production-orders'],
+  },
+  // QR tại máy (2026-10-13): công nhân báo / QLSX gửi KCS, đảo, xếp hàng đợi - màn "Sản lượng xưởng" của QLSX tự tải lại.
+  FLOOR_REPORT: {
+    modules: [PERMISSION_MODULES.FLOOR_REPORT],
+    topics: ['floor'],
   },
   SALES_ORDER: {
     modules: [PERMISSION_MODULES.SALES_ORDER],

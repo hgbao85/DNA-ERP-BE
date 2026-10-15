@@ -28,6 +28,10 @@ export const BUSINESS_ROLES = {
   // BOM spec editors (định mức) - đi cùng MfgRole.SPEC_* tương ứng.
   SPEC_STEEL_STAFF: 'SPEC_STEEL_STAFF', // định mức mảnh: sắt/dây/đinh/tán rút/nút nhựa (FE: "Sắt")
   SPEC_ACCESSORY_PACKAGING_STAFF: 'SPEC_ACCESSORY_PACKAGING_STAFF', // định mức chi tiết: sơn/phụ kiện/bao bì (FE: "Định mức chi tiết")
+  // Công nhân xưởng (2026-10-13, QR tại máy) - tài khoản con QLSX tạo (username + PIN, không email), tổ
+  // nằm ở User.mfgRole (PHOI/HAN/SON). CHỈ quét mã tại máy để báo sản lượng / nhận sắt - KHÔNG có
+  // STEEL_ISSUE:UPDATE hay PRODUCTION_BATCH:CREATE nên không gọi thẳng được các route của màn thống kê cũ.
+  FLOOR_WORKER: 'FLOOR_WORKER',
 } as const;
 
 export type BusinessRole = (typeof BUSINESS_ROLES)[keyof typeof BUSINESS_ROLES];

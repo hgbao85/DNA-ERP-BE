@@ -20,6 +20,10 @@ export class SteelIssueResponseDto {
   @Expose() @ApiProperty() barCount!: number;
   @Expose() @ApiProperty({ enum: SteelIssueStatus }) status!: SteelIssueStatus;
   @Expose() @ApiPropertyOptional({ nullable: true }) actualBarCount!: number | null;
+  /** Số cây Phôi đếm thực nhận (2026-10-12) - null = chưa nhận, hoặc đợt nhận trước khi có cột này. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) receivedBarCount!: number | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) receivedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) receivedByName!: string | null;
   @Expose() @ApiProperty() issuedAt!: Date;
   @Expose() @ApiProperty() issuedById!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) completedAt!: Date | null;

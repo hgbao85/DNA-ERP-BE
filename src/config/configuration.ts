@@ -18,6 +18,11 @@ export interface AppConfig {
     limit: number;
   };
   logLevel: string;
+  /**
+   * Số lớp proxy/CDN đứng TRƯỚC app (Render = 1, thêm Cloudflare = 2...). 0 = không tin header X-Forwarded-For (chạy local). Cần đúng
+   * để BE thấy IP THẬT của client (giới hạn mạng công ty đọc IP này) - sai thì thấy IP của proxy, hoặc bị giả mạo header.
+   */
+  trustProxyHops: number;
   /** Bỏ trống = 1 instance (adapter bộ nhớ). Có giá trị = Redis adapter để nhiều instance cùng phát event. */
   realtime: {
     redisUrl: string;
@@ -54,6 +59,7 @@ export default (): AppConfig => ({
     limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
   },
   logLevel: process.env.LOG_LEVEL ?? 'info',
+  trustProxyHops: parseInt(process.env.TRUST_PROXY_HOPS ?? '0', 10),
   realtime: {
     redisUrl: process.env.REDIS_URL ?? '',
   },

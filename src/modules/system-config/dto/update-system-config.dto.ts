@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsBoolean,
@@ -10,6 +11,7 @@ import {
   IsString,
   Length,
   Max,
+  MaxLength,
   Min,
   MinLength,
 } from 'class-validator';
@@ -39,6 +41,32 @@ export class UpdateSystemConfigDto {
   @IsOptional()
   @IsString()
   taxCode?: string;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    example: 'https://erpdna.vercel.app',
+    description:
+      'Địa chỉ ERP in lên tem QR của máy xưởng (chuẩn hoá về scheme://host[:port]; rỗng/null = dùng địa chỉ trình duyệt đang mở). ' +
+      'Theo từng môi trường - xem doc comment SystemConfig.floorPublicUrl.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  floorPublicUrl?: string | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['203.0.113.5', '198.51.100.0/24'],
+    description:
+      'Mạng công ty được phép đăng nhập: IP công cộng (IPv4/IPv6 cụ thể hoặc IPv4 CIDR /8-/32). RỖNG = không giới hạn. Áp cho tài khoản công nhân ' +
+      '(role FLOOR_WORKER) và tài khoản tổ Phôi/Hàn/Sơn; Sếp/QLSX/KCS/Admin không bị giới hạn. Không gửi field = giữ nguyên.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  floorAllowedIps?: string[];
 
   @ApiPropertyOptional({ minLength: 3, maxLength: 3, example: 'VND' })
   @IsOptional()
