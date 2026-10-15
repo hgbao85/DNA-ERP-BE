@@ -169,6 +169,10 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // để tách khỏi bước duyệt CUỐI của Sếp, vốn dùng CHÍNH action APPROVE này nhưng gắn thêm
   // @RequireRole('BOSS') (xem production-invoices controller).
   [BUSINESS_ROLES.PRODUCTION_MANAGER]: [
+    // QR tại máy (2026-10-13): QLSX quản lý điểm làm việc + in mã QR, tài khoản công nhân, hàng đợi PI
+    // theo tổ ("Chuyển PI tiếp"), kiểm rồi "Gửi KCS" (APPROVE), đảo 1 lần báo sai. Route của module này gắn
+    // thêm @RequireRole(PRODUCTION_MANAGER) nên BOSS (VIEW+APPROVE mọi module) không tự gửi KCS được.
+    { module: PERMISSION_MODULES.FLOOR_REPORT, actions: 'ALL' },
     {
       module: PERMISSION_MODULES.SKU,
       actions: [PermissionAction.VIEW],
@@ -441,6 +445,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // WORK_SESSION vẫn chưa tồn tại (xem comment schema.prisma "Phase 9d" - không triển khai vì
   // mock không có khái niệm ca làm việc để validate).
   [BUSINESS_ROLES.PHOI_STAFF]: [
+    // QR tại máy (2026-10-13): tài khoản thống kê của tổ vẫn là "công nhân" (mục 15) - quét được mã tại máy
+    // như tài khoản công nhân riêng. CHỈ VIEW+CREATE (quét, báo, xem sản lượng của mình); gửi KCS/đảo lần
+    // báo/xếp hàng đợi là của QLSX.
+    {
+      module: PERMISSION_MODULES.FLOOR_REPORT,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
     {
       module: PERMISSION_MODULES.STEEL_ISSUE,
       actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
@@ -525,6 +536,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // /production-orders/:id/production-batches, "báo sản lượng") - KHÔNG có UPDATE, duyệt
   // (QC_REVIEW) là việc của KCS_STAFF, không phải tự duyệt.
   [BUSINESS_ROLES.HAN_STAFF]: [
+    // QR tại máy (2026-10-13): tài khoản thống kê của tổ vẫn là "công nhân" (mục 15) - quét được mã tại máy
+    // như tài khoản công nhân riêng. CHỈ VIEW+CREATE (quét, báo, xem sản lượng của mình); gửi KCS/đảo lần
+    // báo/xếp hàng đợi là của QLSX.
+    {
+      module: PERMISSION_MODULES.FLOOR_REPORT,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
     {
       module: PERMISSION_MODULES.MATERIAL_ISSUE,
       actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
@@ -559,6 +577,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     },
   ],
   [BUSINESS_ROLES.SON_STAFF]: [
+    // QR tại máy (2026-10-13): tài khoản thống kê của tổ vẫn là "công nhân" (mục 15) - quét được mã tại máy
+    // như tài khoản công nhân riêng. CHỈ VIEW+CREATE (quét, báo, xem sản lượng của mình); gửi KCS/đảo lần
+    // báo/xếp hàng đợi là của QLSX.
+    {
+      module: PERMISSION_MODULES.FLOOR_REPORT,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
     {
       module: PERMISSION_MODULES.MATERIAL_ISSUE,
       actions: [PermissionAction.UPDATE, PermissionAction.VIEW],
@@ -659,6 +684,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.USER, actions: [PermissionAction.VIEW] },
+  ],
+  // Công nhân xưởng (2026-10-13) - xem BUSINESS_ROLES.FLOOR_WORKER. Chỉ màn quét QR + "Sản lượng của tôi".
+  [BUSINESS_ROLES.FLOOR_WORKER]: [
+    {
+      module: PERMISSION_MODULES.FLOOR_REPORT,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE],
+    },
   ],
 };
 

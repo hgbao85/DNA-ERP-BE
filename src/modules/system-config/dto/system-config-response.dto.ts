@@ -28,6 +28,12 @@ export class SystemConfigResponseDto {
   /** Dung sai giao thừa khi nhận hàng mua về (% của buyQty) - xem SystemConfig trong schema. */
   @Expose() @ApiProperty() purchaseOverReceiptTolerancePercent!: number;
 
+  /** Địa chỉ ERP in lên tem QR máy xưởng; null = dùng địa chỉ trình duyệt đang mở. */
+  @Expose() @ApiProperty({ nullable: true, type: String }) floorPublicUrl!: string | null;
+
+  /** Mạng công ty được phép đăng nhập (công nhân); rỗng = không giới hạn. */
+  @Expose() @ApiProperty({ type: [String] }) floorAllowedIps!: string[];
+
   @Expose() @ApiProperty() updatedAt!: Date;
 
   constructor(partial: Partial<SystemConfigResponseDto>) {

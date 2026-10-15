@@ -6,7 +6,7 @@ import { MfgRole } from '../../../generated/prisma/client';
 export class UserResponseDto {
   @Expose() @ApiProperty() id!: string;
   @Expose() @ApiProperty() username!: string;
-  @Expose() @ApiProperty() email!: string;
+  @Expose() @ApiProperty({ type: String, nullable: true }) email!: string | null;
   @Expose() @ApiProperty() firstName!: string;
   @Expose() @ApiProperty() lastName!: string;
   @Expose() @ApiProperty() isActive!: boolean;

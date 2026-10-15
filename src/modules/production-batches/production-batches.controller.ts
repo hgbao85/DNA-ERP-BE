@@ -79,8 +79,15 @@ export class ProductionBatchesController {
     @Body() dto: RecordProductionBatchDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('mfgRole') mfgRole: string | null,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
   ) {
-    return this.productionBatchesService.recordProductionBatch(id, dto, userId, mfgRole);
+    return this.productionBatchesService.recordProductionBatch(
+      id,
+      dto,
+      userId,
+      mfgRole,
+      idempotencyKey,
+    );
   }
 
   /** "Gửi KCS" - đóng ProductionBatch đang OPEN, chuyển AWAITING_QC (+ trừ tồn đoạn sắt nếu có -

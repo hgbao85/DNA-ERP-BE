@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Put } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Ip, Put } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { AppConfig } from '../../config/configuration';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
@@ -14,7 +16,10 @@ import { UpdateMaxWasteDto } from './dto/update-max-waste.dto';
 @ApiBearerAuth()
 @Controller({ path: 'system-config', version: '1' })
 export class SystemConfigController {
-  constructor(private readonly systemConfigService: SystemConfigService) {}
+  constructor(
+    private readonly systemConfigService: SystemConfigService,
+    private readonly configService: ConfigService<AppConfig, true>,
+  ) {}
 
   @Get()
   @RequirePermissions({ module: PERMISSION_MODULES.SYSTEM_CONFIG, action: PermissionAction.VIEW })
@@ -44,6 +49,19 @@ export class SystemConfigController {
   @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER, DEFAULT_ROLES.ADMIN)
   updateMaxWaste(@Body() dto: UpdateMaxWasteDto, @CurrentUser('id') userId: string) {
     return this.systemConfigService.updateMaxWastePercentage(dto, userId);
+  }
+
+  /** IP mà BE thấy của người gọi (để Admin điền danh sách mạng công ty) - xem SystemConfigService.getNetworkInfo. */
+  @Get('my-ip')
+  @RequirePermissions({ module: PERMISSION_MODULES.SYSTEM_CONFIG, action: PermissionAction.VIEW })
+  async myIp(@Ip() ip: string, @Headers('x-forwarded-for') forwardedFor: string | undefined) {
+    return {
+      ...(await this.systemConfigService.getNetworkInfo(ip)),
+      // Chẩn đoán số lớp proxy (TRUST_PROXY_HOPS): chuỗi X-Forwarded-For BE nhận được + số lớp BE đang tin. Đặt đúng khi `ip` ở trên là
+      // IP công cộng của chính người đang mở màn này (so với trang "what is my ip"); thấy IP của proxy/Cloudflare thì tăng 1 lớp.
+      forwardedFor: forwardedFor ?? null,
+      trustProxyHops: this.configService.get('trustProxyHops', { infer: true }),
+    };
   }
 
   @Put()

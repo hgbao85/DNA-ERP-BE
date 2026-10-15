@@ -5,7 +5,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { CutBundleStatus, ProcessStep, SteelIssueStatus } from '../../generated/prisma/client';
+import {
+  CutBundleStatus,
+  FloorReportKind,
+  Prisma,
+  ProcessStep,
+  SteelIssueStatus,
+} from '../../generated/prisma/client';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -27,7 +33,10 @@ describe('SteelIssuesService', () => {
       count: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
     };
+    floorReport: { create: jest.Mock; findUnique: jest.Mock; findFirst: jest.Mock };
     productionInvoice: { findUnique: jest.Mock; findMany: jest.Mock };
     auditLog: { create: jest.Mock };
     productionOrder: { findMany: jest.Mock; findFirst: jest.Mock };
@@ -58,6 +67,7 @@ describe('SteelIssuesService', () => {
       findMany: jest.Mock;
       create: jest.Mock;
       updateMany: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
     };
     stepBatchSegment: { findMany: jest.Mock };
     stepBundle: {
@@ -138,6 +148,15 @@ describe('SteelIssuesService', () => {
         count: jest.fn().mockResolvedValue(0),
         create: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn(),
+      },
+      // Sổ ghi từng lần báo (2026-10-12) - mặc định chưa có khoá nào (findUnique null), không có lần
+      // báo trước để đảo (findFirst null).
+      floorReport: {
+        create: jest.fn().mockResolvedValue({ id: 900n }),
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       productionInvoice: {
         findUnique: jest.fn().mockResolvedValue(invoice),
@@ -221,6 +240,11 @@ describe('SteelIssuesService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn(),
         updateMany: jest.fn(),
+        // recordStepBatch() đọc lại dòng vừa tạo để trả response (2026-10-12) - mặc định trả đúng giá
+        // trị `create` vừa trả, để các test cũ chỉ cần mock `create`.
+        findUniqueOrThrow: jest.fn(
+          () => prisma.stepBatch.create.mock.results.at(-1)?.value as unknown,
+        ),
       },
       stepBatchSegment: { findMany: jest.fn().mockResolvedValue([]) },
       stepBundle: {
@@ -624,23 +648,76 @@ describe('SteelIssuesService', () => {
   });
 
   describe('receive', () => {
-    it('ISSUED -> RECEIVED', async () => {
+    const receivedRow = (receivedBarCount: number) => ({
+      ...issue,
+      status: SteelIssueStatus.RECEIVED,
+      receivedBarCount,
+      receivedAt: new Date(),
+      receivedById: 'user-2',
+      receivedBy: { firstName: 'An', lastName: 'Nguyễn Văn', username: 'cn1' },
+    });
+
+    it('ISSUED -> RECEIVED, lưu số cây (mặc định = số kho xuất) + người + giờ nhận', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(issue);
-      prisma.steelIssue.update.mockResolvedValue({ ...issue, status: SteelIssueStatus.RECEIVED });
+      prisma.steelIssue.findUniqueOrThrow.mockResolvedValue(receivedRow(20));
 
-      const result = await service.receive('100');
+      const result = await service.receive('100', 'user-2');
 
-      expect(prisma.steelIssue.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: SteelIssueStatus.RECEIVED } }),
-      );
+      expect(prisma.steelIssue.updateMany).toHaveBeenCalledWith({
+        where: { id: 100n, status: SteelIssueStatus.ISSUED },
+        data: expect.objectContaining({
+          status: SteelIssueStatus.RECEIVED,
+          receivedBarCount: 20,
+          receivedById: 'user-2',
+          receivedAt: expect.any(Date) as unknown,
+        }) as unknown,
+      });
       expect(result.status).toBe(SteelIssueStatus.RECEIVED);
+      expect(result.receivedBarCount).toBe(20);
+      expect(result.receivedByName).toBe('Nguyễn Văn An');
+      // Khớp số -> không báo lệch.
+      expect(notificationsService.emit).not.toHaveBeenCalledWith(
+        'STEEL_ISSUE_RECEIVED_MISMATCH',
+        expect.anything(),
+      );
+    });
+
+    it('nhận LỆCH số (18/20): vẫn RECEIVED, báo thủ kho đã xuất + QLSX, không ghi sổ kho', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(issue);
+      prisma.steelIssue.findUniqueOrThrow.mockResolvedValue(receivedRow(18));
+
+      await service.receive('100', 'user-2', 18);
+
+      expect(prisma.steelIssue.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ receivedBarCount: 18 }) as unknown,
+        }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith('STEEL_ISSUE_RECEIVED_MISMATCH', {
+        entityId: '100',
+        actorId: 'user-2',
+        params: expect.objectContaining({
+          barCount: 20,
+          receivedBarCount: 18,
+          issuedById: 'user-1',
+          receiverName: 'Nguyễn Văn An',
+        }) as unknown,
+      });
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('2 người bấm nhận cùng lúc: người sau nhận 409 (updateMany có điều kiện ISSUED)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(issue);
+      prisma.steelIssue.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.receive('100', 'user-2')).rejects.toThrow(ConflictException);
     });
 
     it('resolve STEEL_ISSUE_TO_PHOI sau khi nhận', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(issue);
-      prisma.steelIssue.update.mockResolvedValue({ ...issue, status: SteelIssueStatus.RECEIVED });
+      prisma.steelIssue.findUniqueOrThrow.mockResolvedValue(receivedRow(20));
 
-      await service.receive('100');
+      await service.receive('100', 'user-2');
 
       expect(notificationsService.resolve).toHaveBeenCalledWith({
         entityType: 'STEEL_ISSUE',
@@ -655,15 +732,15 @@ describe('SteelIssuesService', () => {
         status: SteelIssueStatus.RECEIVED,
       });
 
-      await expect(service.receive('100')).rejects.toThrow(ConflictException);
+      await expect(service.receive('100', 'user-2')).rejects.toThrow(ConflictException);
     });
 
     it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc" (assertPiHasActiveFloor, 2026-09-01)', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(issue);
       prisma.productionOrder.findFirst.mockResolvedValue(null);
 
-      await expect(service.receive('100')).rejects.toThrow(ConflictException);
-      expect(prisma.steelIssue.update).not.toHaveBeenCalled();
+      await expect(service.receive('100', 'user-2')).rejects.toThrow(ConflictException);
+      expect(prisma.steelIssue.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -678,10 +755,14 @@ describe('SteelIssuesService', () => {
     it('ghi 1 đợt cắt CHỈ theo số đoạn - không cần số cây, không tính phế liệu', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
 
-      await service.recordCutBatch('100', {
-        productionOrderId: '1',
-        segments: [{ segmentSpecId: '30', qty: 8 }],
-      });
+      await service.recordCutBatch(
+        '100',
+        {
+          productionOrderId: '1',
+          segments: [{ segmentSpecId: '30', qty: 8 }],
+        },
+        'user-1',
+      );
 
       expect(prisma.cutBundle.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -702,10 +783,14 @@ describe('SteelIssuesService', () => {
 
       // 9 đoạn 745mm từ 1 cây 6000mm - trước 2026-09-05 bị chặn cứng, giờ cho qua.
       await expect(
-        service.recordCutBatch('100', {
-          productionOrderId: '1',
-          segments: [{ segmentSpecId: '30', qty: 9999 }],
-        }),
+        service.recordCutBatch(
+          '100',
+          {
+            productionOrderId: '1',
+            segments: [{ segmentSpecId: '30', qty: 9999 }],
+          },
+          'user-1',
+        ),
       ).resolves.toBeDefined();
       expect(prisma.cutBundle.create).toHaveBeenCalled();
     });
@@ -717,10 +802,14 @@ describe('SteelIssuesService', () => {
       const openBundle = { id: 5n, steelIssueId: 100n, status: CutBundleStatus.CUTTING };
       prisma.cutBundle.findFirst.mockResolvedValue(openBundle);
 
-      await service.recordCutBatch('100', {
-        productionOrderId: '1',
-        segments: [{ segmentSpecId: '30', qty: 3 }],
-      });
+      await service.recordCutBatch(
+        '100',
+        {
+          productionOrderId: '1',
+          segments: [{ segmentSpecId: '30', qty: 3 }],
+        },
+        'user-1',
+      );
 
       expect(prisma.cutBundle.create).not.toHaveBeenCalled();
       expect(prisma.cutPatternSegment.upsert).toHaveBeenCalledWith({
@@ -733,14 +822,76 @@ describe('SteelIssuesService', () => {
       );
     });
 
+    // 2026-10-13 (QR tại máy, mục 22): mỗi công nhân 1 đợt riêng - KCS chấm đạt/lỗi theo đợt nên phải biết của ai.
+    it('chỉ cộng vào đợt CUTTING của CHÍNH người báo; đợt mới ghi người mở + máy + PI vào sổ', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+      prisma.cutBundle.findFirst.mockResolvedValue(null); // không có đợt của mình, không có đợt cũ vô chủ
+
+      await service.recordCutBatch(
+        '100',
+        { productionOrderId: '1', segments: [{ segmentSpecId: '30', qty: 2 }] },
+        'cn-2',
+        'k-1',
+        { workstationId: 9n },
+      );
+
+      expect(prisma.cutBundle.findFirst).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          where: expect.objectContaining({ openedById: 'cn-2' }) as unknown,
+        }),
+      );
+      expect(prisma.cutBundle.findFirst).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          where: expect.objectContaining({ openedById: null }) as unknown,
+        }),
+      );
+      expect(prisma.cutBundle.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ openedById: 'cn-2' }) as unknown,
+        }),
+      );
+      expect(prisma.floorReport.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          reportedById: 'cn-2',
+          workstationId: 9n,
+          productionInvoiceId: receivedIssue.productionInvoiceId,
+        }) as unknown,
+      });
+    });
+
+    it('đợt CŨ chưa có người mở (tạo trước cột openedById) → người báo đầu tiên nhận luôn đợt đó', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+      prisma.cutBundle.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 5n, status: CutBundleStatus.CUTTING, openedById: null });
+
+      await service.recordCutBatch(
+        '100',
+        { productionOrderId: '1', segments: [{ segmentSpecId: '30', qty: 1 }] },
+        'cn-3',
+      );
+
+      expect(prisma.cutBundle.create).not.toHaveBeenCalled();
+      expect(prisma.cutBundle.update).toHaveBeenCalledWith({
+        where: { id: 5n },
+        data: { openedById: 'cn-3' },
+      });
+    });
+
     it('không còn đợt nào đang mở (đợt trước đã Báo cắt xong) → TẠO đợt mới như bình thường', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
       prisma.cutBundle.findFirst.mockResolvedValue(null); // đợt trước đã AWAITING_QC/QC_PASSED
 
-      await service.recordCutBatch('100', {
-        productionOrderId: '1',
-        segments: [{ segmentSpecId: '30', qty: 4 }],
-      });
+      await service.recordCutBatch(
+        '100',
+        {
+          productionOrderId: '1',
+          segments: [{ segmentSpecId: '30', qty: 4 }],
+        },
+        'user-1',
+      );
 
       expect(prisma.cutPatternSegment.upsert).not.toHaveBeenCalled();
       expect(prisma.cutBundle.create).toHaveBeenCalled();
@@ -754,11 +905,15 @@ describe('SteelIssuesService', () => {
       ]);
 
       await expect(
-        service.recordCutBatch('100', {
-          productionOrderId: '1',
-          barCount: 1,
-          segments: [{ segmentSpecId: '31', qty: 2 }],
-        }),
+        service.recordCutBatch(
+          '100',
+          {
+            productionOrderId: '1',
+            barCount: 1,
+            segments: [{ segmentSpecId: '31', qty: 2 }],
+          },
+          'user-1',
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -769,11 +924,15 @@ describe('SteelIssuesService', () => {
       ]);
 
       await expect(
-        service.recordCutBatch('100', {
-          productionOrderId: '1',
-          barCount: 1,
-          segments: [{ segmentSpecId: '30', qty: 2 }],
-        }),
+        service.recordCutBatch(
+          '100',
+          {
+            productionOrderId: '1',
+            barCount: 1,
+            segments: [{ segmentSpecId: '30', qty: 2 }],
+          },
+          'user-1',
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -781,10 +940,14 @@ describe('SteelIssuesService', () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
 
       await expect(
-        service.recordCutBatch('100', {
-          productionOrderId: '999',
-          segments: [{ segmentSpecId: '30', qty: 2 }],
-        }),
+        service.recordCutBatch(
+          '100',
+          {
+            productionOrderId: '999',
+            segments: [{ segmentSpecId: '30', qty: 2 }],
+          },
+          'user-1',
+        ),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.cutBundle.create).not.toHaveBeenCalled();
     });
@@ -792,10 +955,14 @@ describe('SteelIssuesService', () => {
     it('chỉ gộp vào đợt đang CUTTING CỦA CÙNG SKU - tìm đợt mở lọc theo productionOrderId', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
 
-      await service.recordCutBatch('100', {
-        productionOrderId: '1',
-        segments: [{ segmentSpecId: '30', qty: 2 }],
-      });
+      await service.recordCutBatch(
+        '100',
+        {
+          productionOrderId: '1',
+          segments: [{ segmentSpecId: '30', qty: 2 }],
+        },
+        'user-1',
+      );
 
       expect(prisma.cutBundle.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -808,11 +975,15 @@ describe('SteelIssuesService', () => {
       prisma.steelIssue.findUnique.mockResolvedValue(issue); // vẫn ISSUED
 
       await expect(
-        service.recordCutBatch('100', {
-          productionOrderId: '1',
-          barCount: 1,
-          segments: [{ segmentSpecId: '30', qty: 8 }],
-        }),
+        service.recordCutBatch(
+          '100',
+          {
+            productionOrderId: '1',
+            barCount: 1,
+            segments: [{ segmentSpecId: '30', qty: 8 }],
+          },
+          'user-1',
+        ),
       ).rejects.toThrow(ConflictException);
       expect(prisma.cutBundle.create).not.toHaveBeenCalled();
     });
@@ -830,10 +1001,14 @@ describe('SteelIssuesService', () => {
       });
 
       await expect(
-        service.recordCutBatch('100', {
-          productionOrderId: '1',
-          segments: [{ segmentSpecId: '30', qty: 8 }],
-        }),
+        service.recordCutBatch(
+          '100',
+          {
+            productionOrderId: '1',
+            segments: [{ segmentSpecId: '30', qty: 8 }],
+          },
+          'user-1',
+        ),
       ).resolves.toBeDefined();
       expect(prisma.cutBundle.create).toHaveBeenCalled();
     });
@@ -843,11 +1018,15 @@ describe('SteelIssuesService', () => {
       prisma.productionOrder.findFirst.mockResolvedValue(null);
 
       await expect(
-        service.recordCutBatch('100', {
-          productionOrderId: '1',
-          barCount: 1,
-          segments: [{ segmentSpecId: '30', qty: 8 }],
-        }),
+        service.recordCutBatch(
+          '100',
+          {
+            productionOrderId: '1',
+            barCount: 1,
+            segments: [{ segmentSpecId: '30', qty: 8 }],
+          },
+          'user-1',
+        ),
       ).rejects.toThrow(ConflictException);
       expect(prisma.cutBundle.create).not.toHaveBeenCalled();
     });
@@ -855,10 +1034,164 @@ describe('SteelIssuesService', () => {
 
   // 2026-09-07: hoàn tác ĐÚNG lần "Lưu đợt cắt" gần nhất - FE gửi lại chính xác delta vừa submit,
   // hàm chỉ trừ đối xứng lại (không đọc lịch sử để suy luận).
+  // Sổ ghi từng lần báo + chống gửi trùng (phần nền 2026-10-12, changelog-2026-10-08 mục 20).
+  describe('sổ ghi từng lần báo (FloorReport) + Idempotency-Key', () => {
+    const cutDto = { productionOrderId: '1', segments: [{ segmentSpecId: '30', qty: 8 }] };
+
+    it('recordCutBatch ghi 1 lần báo CUT: người báo, khoá, đợt cắt, từng dòng cỡ đoạn', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+
+      await service.recordCutBatch('100', cutDto, 'cn-1', 'key-1');
+
+      expect(prisma.floorReport.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          kind: FloorReportKind.CUT,
+          reportedById: 'cn-1',
+          idempotencyKey: 'key-1',
+          cutBundleId: 1n,
+          lines: { create: [{ segmentSpecId: 30n, pieceId: undefined, qty: 8 }] },
+        }) as unknown,
+      });
+    });
+
+    it('cộng dồn vào đợt đang mở cũng ghi sổ (mỗi lần lưu 1 dòng, không chỉ lần mở đợt)', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+      prisma.cutBundle.findFirst.mockResolvedValue({ id: 7n, status: CutBundleStatus.CUTTING });
+
+      await service.recordCutBatch('100', cutDto, 'cn-2');
+
+      expect(prisma.cutBundle.create).not.toHaveBeenCalled();
+      expect(prisma.floorReport.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          reportedById: 'cn-2',
+          cutBundleId: 7n,
+          idempotencyKey: null,
+        }) as unknown,
+      });
+    });
+
+    it('gửi lại CÙNG khoá: trả đợt đã cộng, không cộng lần 2, không ghi sổ lần 2', async () => {
+      prisma.floorReport.findUnique.mockResolvedValue({
+        id: 5n,
+        kind: FloorReportKind.CUT,
+        cutBundleId: 1n,
+      });
+
+      const result = await service.recordCutBatch('100', cutDto, 'cn-1', 'key-1');
+
+      expect(result.id).toBe('1');
+      expect(prisma.cutBundle.create).not.toHaveBeenCalled();
+      expect(prisma.cutPatternSegment.upsert).not.toHaveBeenCalled();
+      expect(prisma.floorReport.create).not.toHaveBeenCalled();
+    });
+
+    it('2 request cùng khoá chạy song song: request thua (P2002) trả kết quả của request thắng', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+      prisma.floorReport.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint', {
+          code: 'P2002',
+          clientVersion: 'test',
+          meta: { target: ['idempotencyKey'] },
+        }),
+      );
+      prisma.floorReport.findUnique
+        .mockResolvedValueOnce(null) // lúc kiểm trước: chưa có
+        .mockResolvedValueOnce({ id: 6n, kind: FloorReportKind.CUT, cutBundleId: 1n }); // sau khi thua
+
+      const result = await service.recordCutBatch('100', cutDto, 'cn-1', 'key-race');
+
+      expect(result.id).toBe('1');
+    });
+
+    it('khoá đã dùng cho loại báo khác -> 409', async () => {
+      prisma.floorReport.findUnique.mockResolvedValue({
+        id: 5n,
+        kind: FloorReportKind.PIECE,
+        productionBatchId: 3n,
+      });
+
+      await expect(service.recordCutBatch('100', cutDto, 'cn-1', 'key-x')).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('Hoàn tác KHÔNG xoá sổ: ghi 1 dòng đảo (qty âm) trỏ về lần báo gần nhất chưa bị đảo', async () => {
+      prisma.cutBundle.findUnique.mockResolvedValue({
+        id: 1n,
+        status: CutBundleStatus.CUTTING,
+        steelIssue: { productionInvoiceId: 7n },
+        segments: [{ id: 900n, segmentSpecId: 30n, qty: 8 }],
+      });
+      prisma.cutPatternSegment.count.mockResolvedValue(0);
+      prisma.floorReport.findFirst.mockResolvedValue({ id: 41n });
+
+      await service.undoLastCutBatch('1', [{ segmentSpecId: '30', qty: 8 }], 'cn-1');
+
+      expect(prisma.floorReport.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ cutBundleId: 1n, reversalOfId: null }) as unknown,
+        }),
+      );
+      expect(prisma.floorReport.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          reportedById: 'cn-1',
+          reversalOfId: 41n,
+          productionInvoiceId: 7n,
+          lines: { create: [{ segmentSpecId: 30n, pieceId: undefined, qty: -8 }] },
+        }) as unknown,
+      });
+      // Ghi sổ TRƯỚC khi xoá đợt rỗng (FK sổ tự về NULL, dòng sổ vẫn còn).
+      expect(prisma.floorReport.create.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.cutBundle.delete.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('recordStepBatch ghi 1 lần báo STEP; gửi lại cùng khoá trả đúng đợt cũ', async () => {
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { ...pieceBomRow, processSteps: [ProcessStep.CAT, ProcessStep.UON] },
+      ]);
+      prisma.cutPatternSegment.findMany.mockResolvedValue([{ segmentSpecId: 30n, qty: 8 }]);
+      const row = {
+        id: 900n,
+        step: ProcessStep.UON,
+        segments: [{ segmentSpecId: 30n, qty: 5, segmentSpec: { cutLengthMm: decimal(745) } }],
+      };
+      prisma.stepBatch.create.mockResolvedValue(row);
+      const dto = {
+        productionOrderId: '1',
+        materialId: '30',
+        step: ProcessStep.UON,
+        segments: [{ segmentSpecId: '30', qty: 5 }],
+      };
+
+      await service.recordStepBatch('1', dto, 'cn-3', 'key-s');
+      expect(prisma.floorReport.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          kind: FloorReportKind.STEP,
+          reportedById: 'cn-3',
+          stepBatchId: 900n,
+          idempotencyKey: 'key-s',
+        }) as unknown,
+      });
+
+      prisma.stepBatch.create.mockClear();
+      prisma.floorReport.findUnique.mockResolvedValue({
+        id: 8n,
+        kind: FloorReportKind.STEP,
+        stepBatchId: 900n,
+      });
+      prisma.stepBatch.findUniqueOrThrow.mockResolvedValue(row);
+      const again = await service.recordStepBatch('1', dto, 'cn-3', 'key-s');
+      expect(again.id).toBe('900');
+      expect(prisma.stepBatch.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('undoLastCutBatch', () => {
     const cuttingBundleWithSegments = {
       id: 1n,
       status: CutBundleStatus.CUTTING,
+      steelIssue: { productionInvoiceId: 7n },
       segments: [
         { id: 900n, segmentSpecId: 30n, qty: 5 },
         { id: 901n, segmentSpecId: 31n, qty: 2 },
@@ -868,7 +1201,7 @@ describe('SteelIssuesService', () => {
     it('trừ đúng qty đã gửi cho từng segment (còn dư thì update, không xoá)', async () => {
       prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundleWithSegments);
 
-      await service.undoLastCutBatch('1', [{ segmentSpecId: '30', qty: 3 }]);
+      await service.undoLastCutBatch('1', [{ segmentSpecId: '30', qty: 3 }], 'user-1');
 
       expect(prisma.cutPatternSegment.update).toHaveBeenCalledWith({
         where: { id: 900n },
@@ -882,7 +1215,7 @@ describe('SteelIssuesService', () => {
       prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundleWithSegments);
       prisma.cutPatternSegment.count.mockResolvedValue(1); // vẫn còn segment 31n khác
 
-      await service.undoLastCutBatch('1', [{ segmentSpecId: '30', qty: 5 }]);
+      await service.undoLastCutBatch('1', [{ segmentSpecId: '30', qty: 5 }], 'user-1');
 
       expect(prisma.cutPatternSegment.delete).toHaveBeenCalledWith({ where: { id: 900n } });
       expect(prisma.cutPatternSegment.update).not.toHaveBeenCalled();
@@ -893,10 +1226,14 @@ describe('SteelIssuesService', () => {
       prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundleWithSegments);
       prisma.cutPatternSegment.count.mockResolvedValue(0); // hết sạch segment sau khi trừ
 
-      await service.undoLastCutBatch('1', [
-        { segmentSpecId: '30', qty: 5 },
-        { segmentSpecId: '31', qty: 2 },
-      ]);
+      await service.undoLastCutBatch(
+        '1',
+        [
+          { segmentSpecId: '30', qty: 5 },
+          { segmentSpecId: '31', qty: 2 },
+        ],
+        'user-1',
+      );
 
       expect(prisma.cutPatternSegment.delete).toHaveBeenCalledTimes(2);
       expect(prisma.cutBundle.delete).toHaveBeenCalledWith({ where: { id: 1n } });
@@ -905,7 +1242,7 @@ describe('SteelIssuesService', () => {
     it('bỏ qua an toàn nếu segmentSpecId gửi lên không còn khớp dòng nào (đã bị xoá/khác)', async () => {
       prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundleWithSegments);
 
-      await service.undoLastCutBatch('1', [{ segmentSpecId: '999', qty: 1 }]);
+      await service.undoLastCutBatch('1', [{ segmentSpecId: '999', qty: 1 }], 'user-1');
 
       expect(prisma.cutPatternSegment.update).not.toHaveBeenCalled();
       expect(prisma.cutPatternSegment.delete).not.toHaveBeenCalled();
@@ -918,7 +1255,7 @@ describe('SteelIssuesService', () => {
       });
 
       await expect(
-        service.undoLastCutBatch('1', [{ segmentSpecId: '30', qty: 1 }]),
+        service.undoLastCutBatch('1', [{ segmentSpecId: '30', qty: 1 }], 'user-1'),
       ).rejects.toThrow(ConflictException);
       expect(prisma.cutPatternSegment.update).not.toHaveBeenCalled();
     });
@@ -927,7 +1264,7 @@ describe('SteelIssuesService', () => {
       prisma.cutBundle.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.undoLastCutBatch('999', [{ segmentSpecId: '30', qty: 1 }]),
+        service.undoLastCutBatch('999', [{ segmentSpecId: '30', qty: 1 }], 'user-1'),
       ).rejects.toThrow(NotFoundException);
     });
   });
@@ -969,6 +1306,80 @@ describe('SteelIssuesService', () => {
       expect(result[0].segments[0]).toEqual(
         expect.objectContaining({ required: 120, done: 8, failed: 3 }),
       );
+    });
+
+    describe('đối chiếu sắt vào - đoạn ra (steelBalance, 2026-10-12)', () => {
+      const cut = (qty: number) => [
+        {
+          segmentSpecId: 30n,
+          qty,
+          cutBundle: { productionOrderId: 1n, steelIssue: { productionInvoiceId: 1n } },
+        },
+      ];
+      const issueRow = (over: Record<string, unknown>) => ({
+        productionInvoiceId: 1n,
+        materialId: 30n,
+        barCount: 2,
+        barLengthMm: 6000,
+        status: SteelIssueStatus.RECEIVED,
+        receivedBarCount: null,
+        reworkOfId: null,
+        ...over,
+      });
+
+      it('dùng SỐ CÂY THỰC NHẬN × (dài cây − tề 10) so với đoạn × (dài đoạn + mạch 1): trong định mức -> overMm 0', async () => {
+        prisma.steelIssue.findMany.mockResolvedValue([issueRow({ receivedBarCount: 2 })]);
+        prisma.cutPatternSegment.findMany.mockResolvedValue(cut(8));
+
+        const [item] = await service.getPhoiProgress('1');
+
+        // 2 × 5990 = 11980 ; 8 × 746 = 5968
+        expect(item.steelBalance).toEqual(
+          expect.objectContaining({
+            receivedBarCount: 2,
+            usableMm: 11980,
+            reportedMm: 5968,
+            overMm: 0,
+          }),
+        );
+      });
+
+      it('nhận thiếu (1/2 cây) + báo 9 đoạn -> vượt 724mm (cảnh báo, không chặn)', async () => {
+        prisma.steelIssue.findMany.mockResolvedValue([issueRow({ receivedBarCount: 1 })]);
+        prisma.cutPatternSegment.findMany.mockResolvedValue(cut(9));
+
+        const [item] = await service.getPhoiProgress('1');
+
+        // 1 × 5990 = 5990 ; 9 × 746 = 6714 -> vượt 724
+        expect(item.steelBalance).toEqual(
+          expect.objectContaining({ receivedBarCount: 1, usableMm: 5990, overMm: 724 }),
+        );
+      });
+
+      it('đợt kho mới xuất, Phôi CHƯA nhận (ISSUED) không tính; chưa nhận đợt nào -> steelBalance null', async () => {
+        prisma.steelIssue.findMany.mockResolvedValue([
+          issueRow({ status: SteelIssueStatus.ISSUED }),
+        ]);
+        prisma.cutPatternSegment.findMany.mockResolvedValue(cut(8));
+
+        const [item] = await service.getPhoiProgress('1');
+
+        expect(item.steelBalance).toBeNull();
+        expect(item.issuedBarCount).toBe(2); // kế hoạch xuất vẫn đếm như cũ
+      });
+
+      it('đợt rework vẫn cộng vào sắt đã nhận nhưng KHÔNG vào issuedBarCount (giữ nghĩa cũ)', async () => {
+        prisma.steelIssue.findMany.mockResolvedValue([
+          issueRow({ receivedBarCount: 2 }),
+          issueRow({ barCount: 1, receivedBarCount: 1, reworkOfId: 99n }),
+        ]);
+        prisma.cutPatternSegment.findMany.mockResolvedValue(cut(8));
+
+        const [item] = await service.getPhoiProgress('1');
+
+        expect(item.issuedBarCount).toBe(2);
+        expect(item.steelBalance?.receivedBarCount).toBe(3);
+      });
     });
 
     it('failed = 0 khi chưa có lỗi nào (qcReviewSegment rỗng)', async () => {
@@ -1482,10 +1893,22 @@ describe('SteelIssuesService', () => {
       prisma.cutPatternSegment.findMany.mockResolvedValue([{ segmentSpecId: 30n, qty: 8 }]);
     });
 
+    it('lưu người báo vào StepBatch để gom đợt theo người (2026-10-13)', async () => {
+      prisma.stepBatch.create.mockResolvedValue(createdRow);
+
+      await service.recordStepBatch('1', dto, 'cn-7');
+
+      expect(prisma.stepBatch.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ reportedById: 'cn-7' }) as unknown,
+        }),
+      );
+    });
+
     it('happy path - tạo StepBatch scope PI + vật tư, catDone tính TỔNG cả PI', async () => {
       prisma.stepBatch.create.mockResolvedValue(createdRow);
 
-      const result = await service.recordStepBatch('1', dto);
+      const result = await service.recordStepBatch('1', dto, 'user-1');
 
       expect(prisma.stepBatch.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1501,7 +1924,11 @@ describe('SteelIssuesService', () => {
 
     it('ném BadRequestException nếu báo vượt tổng đã cắt CẢ PI (catDone=8)', async () => {
       await expect(
-        service.recordStepBatch('1', { ...dto, segments: [{ segmentSpecId: '30', qty: 9 }] }),
+        service.recordStepBatch(
+          '1',
+          { ...dto, segments: [{ segmentSpecId: '30', qty: 9 }] },
+          'user-1',
+        ),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.stepBatch.create).not.toHaveBeenCalled();
     });
@@ -1509,26 +1936,30 @@ describe('SteelIssuesService', () => {
     it('ném BadRequestException nếu cỡ đoạn không thuộc loại sắt này (lọc theo materialId)', async () => {
       prisma.segmentSpec.findMany.mockResolvedValue([]); // materialId filter loại bỏ hết
 
-      await expect(service.recordStepBatch('1', dto)).rejects.toThrow(BadRequestException);
+      await expect(service.recordStepBatch('1', dto, 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('ném BadRequestException nếu step không thuộc processSteps đã khai của vật tư này', async () => {
       prisma.pieceBom.findMany.mockResolvedValue([pieceBomRow]); // chỉ có CAT
 
-      await expect(service.recordStepBatch('1', dto)).rejects.toThrow(BadRequestException);
+      await expect(service.recordStepBatch('1', dto, 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
       expect(prisma.stepBatch.create).not.toHaveBeenCalled();
     });
 
     it('ném BadRequestException nếu step=CAT (dùng route cut-batches riêng)', async () => {
-      await expect(service.recordStepBatch('1', { ...dto, step: ProcessStep.CAT })).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.recordStepBatch('1', { ...dto, step: ProcessStep.CAT }, 'user-1'),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('ném ConflictException khi PI đã bị QLSX "Tạm dừng"/"Kết thúc"', async () => {
       prisma.productionOrder.findFirst.mockResolvedValue(null);
 
-      await expect(service.recordStepBatch('1', dto)).rejects.toThrow(ConflictException);
+      await expect(service.recordStepBatch('1', dto, 'user-1')).rejects.toThrow(ConflictException);
       expect(prisma.stepBatch.create).not.toHaveBeenCalled();
     });
 
@@ -1540,7 +1971,7 @@ describe('SteelIssuesService', () => {
     it('khoá advisory theo (invoice, material, step) TRƯỚC khi đọc lại stepDoneRows - chặn race giữa 2 lượt báo gần đồng thời', async () => {
       prisma.stepBatch.create.mockResolvedValue(createdRow);
 
-      await service.recordStepBatch('1', dto);
+      await service.recordStepBatch('1', dto, 'user-1');
 
       expect(prisma.$executeRaw).toHaveBeenCalled();
       const lockCallOrder = prisma.$executeRaw.mock.invocationCallOrder[0];
@@ -1551,7 +1982,9 @@ describe('SteelIssuesService', () => {
     it('ném NotFoundException nếu PI không tồn tại', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(null);
 
-      await expect(service.recordStepBatch('999', dto)).rejects.toThrow(NotFoundException);
+      await expect(service.recordStepBatch('999', dto, 'user-1')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -1750,12 +2183,16 @@ describe('SteelIssuesService', () => {
 
     it('recordStepBatch CHẶN SKU không thuộc PI', async () => {
       await expect(
-        service.recordStepBatch('1', {
-          materialId: '30',
-          step: ProcessStep.UON,
-          productionOrderId: '999',
-          segments: [{ segmentSpecId: '30', qty: 1 }],
-        }),
+        service.recordStepBatch(
+          '1',
+          {
+            materialId: '30',
+            step: ProcessStep.UON,
+            productionOrderId: '999',
+            segments: [{ segmentSpecId: '30', qty: 1 }],
+          },
+          'user-1',
+        ),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.stepBatch.create).not.toHaveBeenCalled();
     });
@@ -1836,6 +2273,7 @@ describe('SteelIssuesService', () => {
           step: ProcessStep.UON,
           submittedById: 'user-phoi',
           productionOrderId: 1n,
+          reportedById: null, // gọi kiểu cũ (màn Phôi) - gom hết, bundle không gắn người
         },
       });
       expect(prisma.stepBatch.updateMany).toHaveBeenCalledWith({
@@ -1868,6 +2306,36 @@ describe('SteelIssuesService', () => {
 
     // Đính chính audit toàn diện 09/09 (mục Thấp): trước đây không khoá - 2 lượt "Gửi KCS" gần
     // đồng thời cho cùng (invoice, material, step) đều đọc cùng danh sách pending, đều tạo
+    // 2026-10-13 (QR tại máy, mục 26): mỗi công nhân 1 đợt riêng cho công đoạn phụ.
+    it('có worker -> CHỈ gom lần báo của đúng người đó và gắn người vào StepBundle', async () => {
+      prisma.stepBatch.findMany.mockResolvedValue(pendingBatches);
+      prisma.stepBundle.create.mockResolvedValue(createdStepBundle);
+
+      await service.submitStepBundle('1', '30', ProcessStep.UON, 'qlsx-1', '1', { id: 'cn-2' });
+
+      expect(prisma.stepBatch.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ stepBundleId: null, reportedById: 'cn-2' }) as unknown,
+        }),
+      );
+      expect(prisma.stepBundle.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ submittedById: 'qlsx-1', reportedById: 'cn-2' }) as unknown,
+      });
+    });
+
+    it('worker.id = null -> gom đúng các đợt CŨ chưa biết người (IS NULL), không lẫn đợt của người khác', async () => {
+      prisma.stepBatch.findMany.mockResolvedValue(pendingBatches);
+      prisma.stepBundle.create.mockResolvedValue(createdStepBundle);
+
+      await service.submitStepBundle('1', '30', ProcessStep.UON, 'qlsx-1', '1', { id: null });
+
+      expect(prisma.stepBatch.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ reportedById: null }) as unknown,
+        }),
+      );
+    });
+
     // StepBundle riêng, rồi updateMany gán stepBundleId không kiểm tra lại -> đợt commit sau ghi
     // đè đợt commit trước, để lại 1 StepBundle rỗng. Vá bằng lockBusinessKey, mirror
     // ProductionBatchesService.submitPieceStep() (VTTP, đã làm đúng từ trước).

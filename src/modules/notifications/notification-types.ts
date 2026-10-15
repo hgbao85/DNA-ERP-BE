@@ -206,6 +206,34 @@ export interface SteelIssueNotificationParams {
   barCount: number;
 }
 
+/** Phôi nhận sắt LỆCH số kho xuất (2026-10-12). */
+export interface SteelIssueReceivedMismatchParams {
+  piCode: string;
+  materialCode: string;
+  barCount: number;
+  receivedBarCount: number;
+  receiverName: string;
+  /** Thủ kho đã xuất đợt này - báo đích danh. */
+  issuedById: string;
+}
+
+/** Tổ xưởng báo ĐỦ số cần của PI đang chạy (2026-10-13, QR tại máy mục 19) - nhắc QLSX kiểm các đợt chờ rồi "Chuyển PI tiếp". */
+export interface FloorStageCompleteParams {
+  stage: 'PHOI' | 'HAN' | 'SON';
+  piCode: string;
+}
+
+/** Có đợt công nhân đã báo nhưng QLSX chưa gửi KCS quá lâu (2026-10-13). */
+export interface FloorBatchStaleParams {
+  stage: 'PHOI' | 'HAN' | 'SON';
+  /** Số đợt chờ quá ngưỡng tại lúc báo. */
+  count: number;
+  /** Ngưỡng (giờ). */
+  hours: number;
+}
+
+const FLOOR_STAGE_LABEL = { PHOI: 'Phôi', HAN: 'Hàn', SON: 'Sơn' } as const;
+
 export interface QcSubmittedNotificationParams {
   piCode: string;
   /** Chỉ `BATCH_TO_KCS` dùng (KCS xem theo 3 tab riêng `kcs-phoi`/`kcs-han`/`kcs-son`, xem
@@ -642,6 +670,57 @@ const notificationTypeDefinitions = {
     link: () => ({ module: 'production', page: 'phoi-xac-nhan-nhan-sat' }),
     recipients: () => ({ roles: [BUSINESS_ROLES.PHOI_STAFF] }),
   } satisfies NotificationTypeDef<SteelIssueNotificationParams>,
+
+  /** Phôi nhận sắt lệch số kho xuất (2026-10-12, người nhận tự điền số thực nhận - changelog
+   *  2026-10-08-ke-hoach-tem-qr-bo-sat-phoi.md mục 21). Báo thủ kho đã xuất (đích danh) + QLSX. Hệ
+   *  thống KHÔNG tự sửa tồn kho - kho tự kiểm, giao bù hoặc điều chỉnh. Link: thủ kho -> Xuất sắt trong
+   *  phôi; QLSX -> Tổng hợp lệnh SX (2 phân hệ khác nhau nên dùng alternatives). */
+  STEEL_ISSUE_RECEIVED_MISMATCH: {
+    category: 'ALERT',
+    severity: 'WARNING',
+    entityType: 'STEEL_ISSUE',
+    title: (p: SteelIssueReceivedMismatchParams) =>
+      `${p.piCode}: Phôi nhận ${p.receivedBarCount}/${p.barCount} cây ${p.materialCode}`,
+    message: (p: SteelIssueReceivedMismatchParams) =>
+      `${p.receiverName} xác nhận nhận ${p.receivedBarCount} cây, kho xuất ${p.barCount} cây ` +
+      `(${p.receivedBarCount < p.barCount ? 'thiếu' : 'thừa'} ${Math.abs(p.barCount - p.receivedBarCount)}). Kho kiểm lại.`,
+    link: () => ({
+      module: 'inbound_warehouse',
+      page: 'xuat-sat',
+      alternatives: [{ module: 'production', page: 'ke-hoach' }],
+    }),
+    recipients: (p: SteelIssueReceivedMismatchParams) => ({
+      userIds: [p.issuedById],
+      roles: [BUSINESS_ROLES.PRODUCTION_MANAGER],
+    }),
+  } satisfies NotificationTypeDef<SteelIssueReceivedMismatchParams>,
+
+  /** Tổ báo đủ số cần của PI đang chạy -> QLSX kiểm đợt chờ + "Chuyển PI tiếp" (màn "Sản lượng xưởng"). ACTION_REQUIRED, tự đóng
+   *  khi QLSX chuyển PI (FloorAlertsService). Chỉ là nhắc - KHÔNG chặn gì, không tự chuyển PI (còn đợt chờ KCS / cắt bù). */
+  FLOOR_STAGE_COMPLETE: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'FLOOR_QUEUE_ENTRY',
+    title: (p: FloorStageCompleteParams) =>
+      `Tổ ${FLOOR_STAGE_LABEL[p.stage]} đã báo đủ số của ${p.piCode}`,
+    message: (p: FloorStageCompleteParams) =>
+      `Kiểm các đợt đang chờ rồi bấm “Chuyển PI tiếp” cho tổ ${FLOOR_STAGE_LABEL[p.stage]} (${p.piCode}).`,
+    link: () => ({ module: 'production', page: 'san-luong-xuong' }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
+  } satisfies NotificationTypeDef<FloorStageCompleteParams>,
+
+  /** Có đợt chờ gửi KCS quá lâu -> QLSX gửi KCS hoặc xử lý. ACTION_REQUIRED, mỗi tổ 1 thông báo, tự đóng khi hết đợt quá hạn. */
+  FLOOR_BATCH_STALE: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'FLOOR_STAGE',
+    title: (p: FloorBatchStaleParams) =>
+      `Tổ ${FLOOR_STAGE_LABEL[p.stage]}: ${p.count} đợt chờ gửi KCS quá ${p.hours} giờ`,
+    message: (p: FloorBatchStaleParams) =>
+      `Công nhân đã báo nhưng chưa gửi KCS quá ${p.hours} giờ - kiểm và gửi KCS (hoặc đảo nếu báo sai).`,
+    link: () => ({ module: 'production', page: 'san-luong-xuong' }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
+  } satisfies NotificationTypeDef<FloorBatchStaleParams>,
 
   /** Phôi báo xong 1 đợt cắt - chờ KCS chấm. Tự đóng khi KCS `reviewCutBundle()`. `link` thêm ở
    *  mục 22.2 - cùng lý do STEEL_ISSUE_TO_PHOI, recipient chỉ KCS_STAFF nên an toàn nối. */

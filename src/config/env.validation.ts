@@ -27,6 +27,9 @@ export const envValidationSchema = Joi.object({
     otherwise: Joi.string().default('*'),
   }),
 
+  // Số lớp proxy đứng trước app (xem AppConfig.trustProxyHops). Production sau Render/Heroku... đặt 1.
+  TRUST_PROXY_HOPS: Joi.number().integer().min(0).max(5).default(0),
+
   THROTTLE_TTL: Joi.number().default(60),
   THROTTLE_LIMIT: Joi.number().default(100),
 

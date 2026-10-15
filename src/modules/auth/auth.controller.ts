@@ -9,6 +9,8 @@ import { AuthService } from './auth.service';
 import { AuthTokensDto } from './dto/auth-tokens.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
+import { PinSetupDto } from './dto/pin-setup.dto';
+import { PinStatusDto } from './dto/pin-status.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 
 @ApiTags('Auth')
@@ -27,6 +29,29 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto, @Ip() ip: string): Promise<AuthTokensDto> {
     return this.authService.login(dto, ip);
+  }
+
+  // Màn đăng nhập công nhân hỏi trước khi hiện ô PIN: đã có PIN hay phải tự đặt. Kết quả đồng nhất cho người lạ (xem
+  // AuthService.pinStatus) nên không cần chặt như /login; nhưng công nhân cả xưởng dùng chung 1 IP công cộng (NAT) nên
+  // giới hạn rộng hơn 8/phút (mỗi route có bộ đếm riêng).
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Public()
+  @Post('pin-status')
+  @HttpCode(HttpStatus.OK)
+  pinStatus(
+    @Body() dto: PinStatusDto,
+    @Ip() ip: string,
+  ): Promise<{ needsPin: boolean; expired: boolean }> {
+    return this.authService.pinStatus(dto.username, ip);
+  }
+
+  // Công nhân đặt PIN lần đầu - cùng giới hạn chặt như /login.
+  @Throttle({ default: { limit: 8, ttl: 60_000 } })
+  @Public()
+  @Post('pin-setup')
+  @HttpCode(HttpStatus.OK)
+  pinSetup(@Body() dto: PinSetupDto, @Ip() ip: string): Promise<AuthTokensDto> {
+    return this.authService.pinSetup(dto, ip);
   }
 
   @Public()

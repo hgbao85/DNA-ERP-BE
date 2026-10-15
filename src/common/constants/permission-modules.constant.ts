@@ -56,6 +56,8 @@ export const PERMISSION_MODULES = {
   MATERIAL_YIELD_ISSUE: 'MATERIAL_YIELD_ISSUE',
   // --- 2026-10-01 (Sắt -> 3 nhóm con: vật tư ra không gắn piece, vd chân nhôm) ---
   MATERIAL_YIELD_RECIPE: 'MATERIAL_YIELD_RECIPE',
+  // --- 2026-10-13 (QR tại máy: điểm làm việc, hàng đợi PI theo tổ, công nhân quét báo, QLSX gửi KCS) ---
+  FLOOR_REPORT: 'FLOOR_REPORT',
 } as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];

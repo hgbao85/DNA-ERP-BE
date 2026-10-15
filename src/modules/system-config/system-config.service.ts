@@ -1,4 +1,7 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { NetworkAccessService } from '../../common/network/network-access.service';
+import { isPrivateOrLoopbackIp, normalizeAllowedIps } from '../../common/utils/ip-allowlist.util';
+import { normalizePublicUrl } from '../../common/utils/public-url.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SystemConfigResponseDto } from './dto/system-config-response.dto';
@@ -15,6 +18,7 @@ export class SystemConfigService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly notifications: NotificationsService,
+    private readonly network: NetworkAccessService,
   ) {}
 
   /** Ngưỡng hao hụt mặc định hiện tại - KHSX đọc ở màn "Tối ưu cắt sắt" (quyền CUTTING_PROPOSAL:VIEW,
@@ -109,10 +113,19 @@ export class SystemConfigService {
       throw new NotFoundException('System config has not been seeded');
     }
 
+    // floorPublicUrl chuẩn hoá về scheme://host[:port] (dán cả /login cũng được; rỗng = xoá). Không gửi field = giữ nguyên.
+    // floorAllowedIps: chuẩn hoá từng dòng (IP/CIDR hợp lệ, bỏ trùng); rỗng = tắt giới hạn. Không gửi field = giữ nguyên.
+    const data: typeof dto = { ...dto };
+    if (dto.floorPublicUrl !== undefined)
+      data.floorPublicUrl = normalizePublicUrl(dto.floorPublicUrl);
+    if (dto.floorAllowedIps !== undefined)
+      data.floorAllowedIps = normalizeAllowedIps(dto.floorAllowedIps);
     const updated = await this.prisma.systemConfig.update({
       where: { id: SINGLETON_ID },
-      data: dto,
+      data,
     });
+    // Có hiệu lực ngay trên instance này (instance khác chậm nhất 30 giây - xem NetworkAccessService).
+    if (dto.floorAllowedIps !== undefined) this.network.invalidate();
 
     return new SystemConfigResponseDto({
       ...updated,
@@ -121,5 +134,18 @@ export class SystemConfigService {
       solverMaxWastePercentage: updated.solverMaxWastePercentage.toNumber(),
       purchaseOverReceiptTolerancePercent: updated.purchaseOverReceiptTolerancePercent.toNumber(),
     });
+  }
+
+  /**
+   * IP mà BE đang thấy của NGƯỜI GỌI + trạng thái giới hạn - Admin mở màn Cấu hình từ mạng công ty bấm "thêm IP hiện tại" để điền danh sách
+   * đúng, và biết ngay BE có đọc đúng IP thật không (thấy IP nội bộ = chưa khai TRUST_PROXY_HOPS sau proxy).
+   */
+  async getNetworkInfo(clientIp: string | undefined) {
+    return {
+      ip: clientIp ?? null,
+      isPrivate: clientIp ? isPrivateOrLoopbackIp(clientIp) : false,
+      enforced: await this.network.isEnforced(),
+      allowed: await this.network.isAllowed(clientIp),
+    };
   }
 }

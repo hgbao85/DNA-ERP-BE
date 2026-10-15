@@ -75,6 +75,23 @@ export class PhoiStepProgressDto {
 }
 
 @Exclude()
+/** Đối chiếu sắt vào - đoạn ra của 1 loại sắt trong cả PI (2026-10-12) - xem
+ *  SteelIssuesService.attachSteelBalance(). overMm > 0 = đoạn đã báo vượt lượng sắt đã nhận: CHỈ cảnh
+ *  báo (có thể do cắt bù bằng sắt thừa dưới xưởng), không chặn. */
+export class PhoiSteelBalanceDto {
+  /** Σ số cây thực nhận (đợt nhận trước 2026-10-12 lấy số kho xuất). */
+  @Expose() @ApiProperty() receivedBarCount!: number;
+  /** Σ cây × (dài cây − tề đầu). */
+  @Expose() @ApiProperty() usableMm!: number;
+  /** Σ đoạn đã cắt × (dài đoạn + mạch cắt). */
+  @Expose() @ApiProperty() reportedMm!: number;
+  @Expose() @ApiProperty() overMm!: number;
+
+  constructor(partial: Partial<PhoiSteelBalanceDto>) {
+    Object.assign(this, partial);
+  }
+}
+
 export class PhoiProgressItemResponseDto {
   @Expose() @ApiProperty() materialId!: string;
   @Expose() @ApiProperty() materialCode!: string;
@@ -91,6 +108,11 @@ export class PhoiProgressItemResponseDto {
   @Type(() => PhoiStepProgressDto)
   @ApiProperty({ type: [PhoiStepProgressDto] })
   steps: PhoiStepProgressDto[] = [];
+  /** Null = chưa nhận đợt sắt nào của loại này. */
+  @Expose()
+  @Type(() => PhoiSteelBalanceDto)
+  @ApiPropertyOptional({ type: PhoiSteelBalanceDto, nullable: true })
+  steelBalance: PhoiSteelBalanceDto | null = null;
 
   constructor(partial: Partial<PhoiProgressItemResponseDto>) {
     Object.assign(this, partial);

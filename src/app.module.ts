@@ -47,6 +47,9 @@ import { WarehouseTransfersModule } from './modules/warehouse-transfers/warehous
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { PurchaseProposalsModule } from './modules/purchase-proposals/purchase-proposals.module';
 import { SteelIssuesModule } from './modules/steel-issues/steel-issues.module';
+import { FloorModule } from './modules/floor/floor.module';
+import { NetworkAccessGuard } from './common/network/network-access.guard';
+import { NetworkAccessModule } from './common/network/network-access.module';
 import { QcReviewsModule } from './modules/qc-reviews/qc-reviews.module';
 import { WeavingIssuesModule } from './modules/weaving-issues/weaving-issues.module';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module';
@@ -122,6 +125,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     UploadsModule,
     PurchaseProposalsModule,
     SteelIssuesModule,
+    FloorModule,
     QcReviewsModule,
     WeavingIssuesModule,
     MaterialIssuesModule,
@@ -131,10 +135,13 @@ import { RealtimeModule } from './realtime/realtime.module';
     ProductionBatchesModule,
     WorkQueueModule,
     RealtimeModule,
+    NetworkAccessModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // Ngay sau JwtAuthGuard (cần request.user): công nhân ngoài mạng công ty bị chặn mọi request (2026-10-13).
+    { provide: APP_GUARD, useClass: NetworkAccessGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
     { provide: APP_GUARD, useClass: MfgRoleGuard },
     { provide: APP_GUARD, useClass: RoleGuard },
