@@ -5,21 +5,27 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
 import {
   AccessoryItemKind,
+  AuditAction,
   BomRevision,
   BomRevisionStatus,
   MaterialDetailKind,
   PlanFormStatus,
   Prisma,
+  PrismaClient,
   SteelSubGroup,
 } from '../../generated/prisma/client';
 import {
   MATERIAL_GROUP_SYSTEM_KEYS,
   MaterialGroupSystemKey,
 } from '../../common/constants/material-group-system-keys.constant';
+import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { BomAccessoryItemResponseDto } from './dto/bom-accessory-item-response.dto';
 import { BomPartResponseDto } from './dto/bom-part-response.dto';
 import { BomPieceResponseDto } from './dto/bom-piece-response.dto';
@@ -79,7 +85,10 @@ type PrismaTx = Parameters<Parameters<PrismaServiceType['$transaction']>[0]>[0];
  */
 @Injectable()
 export class BomRevisionsService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly cls: ClsService<AppClsStore>,
+  ) {}
 
   // ─── BomRevision ────────────────────────────────────────────────────────────
 
@@ -246,17 +255,29 @@ export class BomRevisionsService {
     bomRevisionId: string,
     id: string,
     dto: UpdateBomPieceDto,
+    actorRoles: string[] = [],
   ): Promise<BomPieceResponseDto> {
     const revision = await this.findOneOrThrow(bomRevisionId);
-    this.assertDraft(revision);
+    const allowOverride = this.assertDraftOrAdminOverride(revision, actorRoles);
     const row = await this.findBomPieceOrThrow(revision.id, id);
 
-    const updated = await this.prisma.bomPiece.update({
-      where: { id: row.id },
-      data: { qtyPerUnit: dto.qtyPerUnit, needsHan: dto.needsHan, needsSon: dto.needsSon },
-      include: { piece: true },
-    });
-    return this.toBomPieceResponseDto(updated);
+    const updated = await this.withAdminOverride(allowOverride, (db) =>
+      db.bomPiece.update({
+        where: { id: row.id },
+        data: { qtyPerUnit: dto.qtyPerUnit, needsHan: dto.needsHan, needsSon: dto.needsSon },
+        include: { piece: true },
+      }),
+    );
+    const responseDto = this.toBomPieceResponseDto(updated);
+    if (allowOverride) {
+      await this.writeAdminOverrideAudit(
+        'BomPiece',
+        row.id.toString(),
+        this.toBomPieceResponseDto(row),
+        responseDto,
+      );
+    }
+    return responseDto;
   }
 
   async removeBomPiece(bomRevisionId: string, id: string): Promise<void> {
@@ -307,17 +328,29 @@ export class BomRevisionsService {
     bomRevisionId: string,
     id: string,
     dto: UpdateBomPartDto,
+    actorRoles: string[] = [],
   ): Promise<BomPartResponseDto> {
     const revision = await this.findOneOrThrow(bomRevisionId);
-    this.assertDraft(revision);
+    const allowOverride = this.assertDraftOrAdminOverride(revision, actorRoles);
     const row = await this.findBomPartOrThrow(revision.id, id);
 
-    const updated = await this.prisma.bomPart.update({
-      where: { id: row.id },
-      data: { qtyPerUnit: dto.qtyPerUnit },
-      include: { part: true },
-    });
-    return this.toBomPartResponseDto(updated);
+    const updated = await this.withAdminOverride(allowOverride, (db) =>
+      db.bomPart.update({
+        where: { id: row.id },
+        data: { qtyPerUnit: dto.qtyPerUnit },
+        include: { part: true },
+      }),
+    );
+    const responseDto = this.toBomPartResponseDto(updated);
+    if (allowOverride) {
+      await this.writeAdminOverrideAudit(
+        'BomPart',
+        row.id.toString(),
+        this.toBomPartResponseDto(row),
+        responseDto,
+      );
+    }
+    return responseDto;
   }
 
   async removeBomPart(bomRevisionId: string, id: string): Promise<void> {
@@ -396,20 +429,32 @@ export class BomRevisionsService {
     bomRevisionId: string,
     id: string,
     dto: UpdatePieceBomDto,
+    actorRoles: string[] = [],
   ): Promise<PieceBomResponseDto> {
     const revision = await this.findOneOrThrow(bomRevisionId);
-    this.assertDraft(revision);
+    const allowOverride = this.assertDraftOrAdminOverride(revision, actorRoles);
     const row = await this.findPieceBomOrThrow(revision.id, id);
 
-    const updated = await this.prisma.pieceBom.update({
-      where: { id: row.id },
-      data: {
-        qtyPerPiece: dto.qtyPerPiece,
-        note: dto.note,
-      },
-      include: { piece: true, segmentSpec: { include: { material: true } } },
-    });
-    return this.toPieceBomResponseDto(updated);
+    const updated = await this.withAdminOverride(allowOverride, (db) =>
+      db.pieceBom.update({
+        where: { id: row.id },
+        data: {
+          qtyPerPiece: dto.qtyPerPiece,
+          note: dto.note,
+        },
+        include: { piece: true, segmentSpec: { include: { material: true } } },
+      }),
+    );
+    const responseDto = this.toPieceBomResponseDto(updated);
+    if (allowOverride) {
+      await this.writeAdminOverrideAudit(
+        'PieceBom',
+        row.id.toString(),
+        this.toPieceBomResponseDto(row),
+        responseDto,
+      );
+    }
+    return responseDto;
   }
 
   async removePieceBom(bomRevisionId: string, id: string): Promise<void> {
@@ -512,17 +557,29 @@ export class BomRevisionsService {
     bomRevisionId: string,
     id: string,
     dto: UpdatePieceMaterialYieldDto,
+    actorRoles: string[] = [],
   ): Promise<PieceMaterialYieldResponseDto> {
     const revision = await this.findOneOrThrow(bomRevisionId);
-    this.assertDraft(revision);
+    const allowOverride = this.assertDraftOrAdminOverride(revision, actorRoles);
     const row = await this.findPieceMaterialYieldOrThrow(revision.id, id);
 
-    const updated = await this.prisma.pieceMaterialYield.update({
-      where: { id: row.id },
-      data: { piecesPerBar: dto.piecesPerBar },
-      include: { piece: true, material: true },
-    });
-    return this.toPieceMaterialYieldResponseDto(updated);
+    const updated = await this.withAdminOverride(allowOverride, (db) =>
+      db.pieceMaterialYield.update({
+        where: { id: row.id },
+        data: { piecesPerBar: dto.piecesPerBar },
+        include: { piece: true, material: true },
+      }),
+    );
+    const responseDto = this.toPieceMaterialYieldResponseDto(updated);
+    if (allowOverride) {
+      await this.writeAdminOverrideAudit(
+        'PieceMaterialYield',
+        row.id.toString(),
+        this.toPieceMaterialYieldResponseDto(row),
+        responseDto,
+      );
+    }
+    return responseDto;
   }
 
   async removePieceMaterialYield(bomRevisionId: string, id: string): Promise<void> {
@@ -595,17 +652,29 @@ export class BomRevisionsService {
     bomRevisionId: string,
     id: string,
     dto: UpdatePartBomDto,
+    actorRoles: string[] = [],
   ): Promise<PartBomResponseDto> {
     const revision = await this.findOneOrThrow(bomRevisionId);
-    this.assertDraft(revision);
+    const allowOverride = this.assertDraftOrAdminOverride(revision, actorRoles);
     const row = await this.findPartBomOrThrow(revision.id, id);
 
-    const updated = await this.prisma.partBom.update({
-      where: { id: row.id },
-      data: { qtyPerPart: dto.qtyPerPart },
-      include: { part: true, segmentSpec: { include: { material: true } } },
-    });
-    return this.toPartBomResponseDto(updated);
+    const updated = await this.withAdminOverride(allowOverride, (db) =>
+      db.partBom.update({
+        where: { id: row.id },
+        data: { qtyPerPart: dto.qtyPerPart },
+        include: { part: true, segmentSpec: { include: { material: true } } },
+      }),
+    );
+    const responseDto = this.toPartBomResponseDto(updated);
+    if (allowOverride) {
+      await this.writeAdminOverrideAudit(
+        'PartBom',
+        row.id.toString(),
+        this.toPartBomResponseDto(row),
+        responseDto,
+      );
+    }
+    return responseDto;
   }
 
   async removePartBom(bomRevisionId: string, id: string): Promise<void> {
@@ -681,17 +750,29 @@ export class BomRevisionsService {
     bomRevisionId: string,
     id: string,
     dto: UpdateConsumableBomDto,
+    actorRoles: string[] = [],
   ): Promise<ConsumableBomResponseDto> {
     const revision = await this.findOneOrThrow(bomRevisionId);
-    this.assertDraft(revision);
+    const allowOverride = this.assertDraftOrAdminOverride(revision, actorRoles);
     const row = await this.findConsumableBomOrThrow(revision.id, id);
 
-    const updated = await this.prisma.consumableBom.update({
-      where: { id: row.id },
-      data: { qtyPerUnit: dto.qtyPerUnit },
-      include: { material: true },
-    });
-    return this.toConsumableBomResponseDto(updated);
+    const updated = await this.withAdminOverride(allowOverride, (db) =>
+      db.consumableBom.update({
+        where: { id: row.id },
+        data: { qtyPerUnit: dto.qtyPerUnit },
+        include: { material: true },
+      }),
+    );
+    const responseDto = this.toConsumableBomResponseDto(updated);
+    if (allowOverride) {
+      await this.writeAdminOverrideAudit(
+        'ConsumableBom',
+        row.id.toString(),
+        this.toConsumableBomResponseDto(row),
+        responseDto,
+      );
+    }
+    return responseDto;
   }
 
   async removeConsumableBom(bomRevisionId: string, id: string): Promise<void> {
@@ -763,17 +844,29 @@ export class BomRevisionsService {
     bomRevisionId: string,
     id: string,
     dto: UpdateBomAccessoryItemDto,
+    actorRoles: string[] = [],
   ): Promise<BomAccessoryItemResponseDto> {
     const revision = await this.findOneOrThrow(bomRevisionId);
-    this.assertDraft(revision);
+    const allowOverride = this.assertDraftOrAdminOverride(revision, actorRoles);
     const row = await this.findBomAccessoryItemOrThrow(revision.id, id);
 
-    const updated = await this.prisma.bomAccessoryItem.update({
-      where: { id: row.id },
-      data: { qtyPerUnit: dto.qtyPerUnit },
-      include: { material: true },
-    });
-    return this.toBomAccessoryItemResponseDto(updated);
+    const updated = await this.withAdminOverride(allowOverride, (db) =>
+      db.bomAccessoryItem.update({
+        where: { id: row.id },
+        data: { qtyPerUnit: dto.qtyPerUnit },
+        include: { material: true },
+      }),
+    );
+    const responseDto = this.toBomAccessoryItemResponseDto(updated);
+    if (allowOverride) {
+      await this.writeAdminOverrideAudit(
+        'BomAccessoryItem',
+        row.id.toString(),
+        this.toBomAccessoryItemResponseDto(row),
+        responseDto,
+      );
+    }
+    return responseDto;
   }
 
   async removeBomAccessoryItem(bomRevisionId: string, id: string): Promise<void> {
@@ -800,6 +893,68 @@ export class BomRevisionsService {
         `Cannot modify line items on bom_revision ${revision.id} - status is ${revision.status}, only DRAFT is editable`,
       );
     }
+  }
+
+  /**
+   * Admin override (2026-10-15, theo yêu cầu "sửa định mức đã duyệt không cần duyệt lại") - CHỈ
+   * áp dụng cho các hàm `updateXxx` sửa SỐ LƯỢNG trên dòng con đã có, KHÔNG áp dụng cho
+   * create/remove (thêm/xoá hẳn 1 dòng định mức sau khi đã ACTIVE vẫn bị chặn tuyệt đối qua
+   * assertDraft() như trước - đổi cấu trúc định mức của 1 bản đã phát hành là rủi ro khác hẳn
+   * đổi 1 con số, không mở cùng lúc).
+   *
+   * Trả về true nếu đây là 1 lần ghi đè (caller phải mở escape hatch DB qua withAdminOverride()
+   * VÀ tự ghi AuditLog tay - bomPiece/bomPart/... không nằm trong AUDITED_MODELS nên không có gì
+   * tự ghi giúp). Role ADMIN kiểm Ở ĐÂY (tầng service) thay vì chỉ ở controller/decorator tĩnh, vì
+   * nhánh DRAFT bình thường vẫn phải đi qua được mà không cần actorRoles.
+   */
+  private assertDraftOrAdminOverride(revision: BomRevision, actorRoles: string[]): boolean {
+    if (revision.status === BomRevisionStatus.DRAFT) {
+      return false;
+    }
+    if (!actorRoles.includes(DEFAULT_ROLES.ADMIN)) {
+      throw new ConflictException(
+        `Cannot modify line items on bom_revision ${revision.id} - status is ${revision.status}, only DRAFT is editable (chỉ Admin mới ghi đè được bản đã duyệt)`,
+      );
+    }
+    return true;
+  }
+
+  /**
+   * allowOverride=false: chạy thẳng qua this.prisma như mọi hàm update khác (đường DRAFT bình
+   * thường, không transaction thừa). allowOverride=true: mở escape hatch DB
+   * `SET LOCAL "dna.bom_maintenance" = 'on'` (migration 20260921030000_bom_line_items_immutable_
+   * when_published) trong ĐÚNG 1 transaction, nếu không trigger `assert_bom_revision_draft()` vẫn
+   * chặn write dù assertDraftOrAdminOverride() đã cho qua ở tầng service.
+   */
+  private async withAdminOverride<T>(
+    allowOverride: boolean,
+    fn: (db: PrismaServiceType | PrismaTx) => Promise<T>,
+  ): Promise<T> {
+    if (!allowOverride) {
+      return fn(this.prisma);
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL "dna.bom_maintenance" = 'on'`);
+      return fn(tx);
+    });
+  }
+
+  /** Ghi AuditLog TAY cho 1 lần Admin ghi đè định mức đã ACTIVE - before/after lấy từ chính DTO
+   *  response đã serialize (bigint -> string) để khỏi tự viết lại logic serialize ở đây. */
+  private async writeAdminOverrideAudit(
+    tableName: string,
+    recordId: string,
+    oldValue: unknown,
+    newValue: unknown,
+  ): Promise<void> {
+    const auditLogClient = this.prisma as unknown as Pick<PrismaClient, 'auditLog'>;
+    await writeAuditLog(auditLogClient, this.cls, {
+      action: AuditAction.UPDATE,
+      tableName,
+      recordId,
+      oldValue: { ...(oldValue as object), __adminOverrideOnActiveRevision: true },
+      newValue,
+    });
   }
 
   /** Vật tư phải thuộc 1 trong các nhóm hệ thống cho phép (vd Dây/Đinh/Vật tư khác cho

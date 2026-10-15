@@ -35,6 +35,8 @@
     "backfill:cutting-plan-coverage": "ts-node -r tsconfig-paths/register prisma/backfill-cutting-plan-coverage.ts",
     "backfill:stock-length-steel": "ts-node -r tsconfig-paths/register prisma/backfill-stock-length-steel-zero-to-6000.ts",
     "audit:merge-invariants": "ts-node -r tsconfig-paths/register prisma/audit-merge-invariants.ts",
+    "delete-sku": "ts-node -r tsconfig-paths/register prisma/delete-sku.ts",
+    "reset-and-delete-sku": "ts-node -r tsconfig-paths/register prisma/reset-and-delete-sku.ts",
     "db:backup": "bash scripts/backup-db.sh",
     "db:restore": "bash scripts/restore-db.sh",
     "postinstall": "prisma generate",

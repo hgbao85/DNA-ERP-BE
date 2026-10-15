@@ -4,7 +4,9 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
 import { ReviewDecision } from '../../generated/prisma/client';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -21,6 +23,18 @@ const SYSTEM_GROUP_IDS = {
   PLASTIC_BUTTON: 905n,
   RIVET: 906n,
 } as const;
+
+/** Đọc `{ data }` từ 1 lệnh gọi `prisma.auditLog.create.mock.calls[n]` không qua `any` - jest.Mock
+ *  không giữ type tham số thật của hàm giả lập, nên tự khai type tối thiểu cần dùng ở test dưới. */
+function auditLogCreateData(call: unknown[]): {
+  tableName: string;
+  recordId: string;
+  oldValue: Record<string, unknown>;
+} {
+  return (
+    call[0] as { data: { tableName: string; recordId: string; oldValue: Record<string, unknown> } }
+  ).data;
+}
 
 describe('SkusService', () => {
   let service: SkusService;
@@ -58,7 +72,9 @@ describe('SkusService', () => {
     pieceMaterialYield: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     consumableBom: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     bomAccessoryItem: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
+    auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
+    $executeRawUnsafe: jest.Mock;
   };
 
   const mfgProduct = { id: 2n, factoryCode: 'SKU-01', name: 'Ghe A' };
@@ -174,7 +190,9 @@ describe('SkusService', () => {
         createMany: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
       },
+      auditLog: { create: jest.fn() },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
+      $executeRawUnsafe: jest.fn(),
     };
     bomRevisionsService = { create: jest.fn(), activateInTransaction: jest.fn() };
     cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
@@ -182,11 +200,13 @@ describe('SkusService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    const cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     service = new SkusService(
       prisma as unknown as PrismaServiceType,
       bomRevisionsService as unknown as BomRevisionsService,
       cloudinaryService as unknown as CloudinaryService,
       notificationsService as unknown as NotificationsService,
+      cls as unknown as ClsService<AppClsStore>,
     );
   });
 
@@ -981,6 +1001,108 @@ describe('SkusService', () => {
           },
         ],
       });
+    });
+  });
+
+  // Admin override (2026-10-15): sửa định mức của 1 SKU đã APPROVED (BomRevision ACTIVE) mà
+  // không cần quay lại luồng duyệt KHSX/Sếp - xem SkusService.resolveNonDraftOrAdminOverride().
+  describe('updateManhQuota / updateDetailQuota (admin override trên SKU đã APPROVED)', () => {
+    it('updateManhQuota: rejects khi BomRevision đã ACTIVE và actor KHÔNG phải ADMIN', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
+
+      await expect(
+        service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Sat' }, 'user-1', [
+          'PRODUCTION_PLANNER',
+        ]),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.bomPiece.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('updateManhQuota: vẫn rejects khi KHÔNG truyền actorRoles (mặc định [])', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
+
+      await expect(
+        service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Sat' }, 'user-1'),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('updateManhQuota: ADMIN ghi đè được - mở escape hatch DB, không đụng PlanForm/review, ghi AuditLog tay, không báo KHSX', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', isWoven: false }]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-25', materialGroupId: SYSTEM_GROUP_IDS.STEEL_BAR },
+      ]);
+      prisma.segmentSpec.upsert.mockResolvedValue({ id: 40n });
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'APPROVED' }));
+
+      const result = await service.updateManhQuota(
+        '5',
+        {
+          pieces: [
+            {
+              name: 'Manh tua',
+              qtyPerUnit: 9,
+              segments: [{ materialId: '30', cutLengthMm: 930, qtyPerPiece: 4 }],
+            },
+          ],
+          enteredBy: 'Admin',
+        },
+        'admin-1',
+        ['ADMIN'],
+      );
+
+      expect(result.status).toBe('APPROVED');
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        `SET LOCAL "dna.bom_maintenance" = 'on'`,
+      );
+      expect(prisma.bomPiece.createMany).toHaveBeenCalledWith({
+        data: [expect.objectContaining({ bomRevisionId: 10n, pieceId: 20n, qtyPerUnit: 9 })],
+      });
+      // Không đụng workflow duyệt của PlanForm đã chốt xong.
+      expect(prisma.planFormManhReview.upsert).not.toHaveBeenCalled();
+      expect(prisma.planForm.update).not.toHaveBeenCalled();
+      // Không spam KHSX "cần duyệt lại" cho 1 SKU đã xong việc.
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+      // AuditLog tay - bom_piece/piece_bom không nằm trong AUDITED_MODELS tự động.
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+      const auditArgs = auditLogCreateData(prisma.auditLog.create.mock.calls[0]);
+      expect(auditArgs.tableName).toBe('PlanForm');
+      expect(auditArgs.recordId).toBe('5');
+      expect(auditArgs.oldValue.adminOverrideOnApprovedSku).toBe(true);
+      expect(auditArgs.oldValue.quotaType).toBe('manh');
+    });
+
+    it('updateDetailQuota: ADMIN ghi đè được trên 1 SKU đã APPROVED, không báo KHSX', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 70n, code: 'SON-01', materialGroupId: SYSTEM_GROUP_IDS.OTHER, detailKind: 'PAINT' },
+      ]);
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'APPROVED' }));
+
+      const result = await service.updateDetailQuota(
+        '5',
+        {
+          detailLines: [{ group: 'DAY_SON', materialId: '70', qtyPerUnit: 1.5 }],
+          enteredBy: 'Admin',
+        },
+        'admin-1',
+        ['ADMIN'],
+      );
+
+      expect(result.status).toBe('APPROVED');
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        `SET LOCAL "dna.bom_maintenance" = 'on'`,
+      );
+      expect(prisma.planFormDetailReview.upsert).not.toHaveBeenCalled();
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+      expect(auditLogCreateData(prisma.auditLog.create.mock.calls[0]).oldValue.quotaType).toBe(
+        'detail',
+      );
     });
   });
 

@@ -1,7 +1,29 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
 import { AccessoryItemKind } from '../../generated/prisma/client';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { BomRevisionsService } from './bom-revisions.service';
+
+/** Đọc `{ data }` từ 1 lệnh gọi `prisma.auditLog.create.mock.calls[n]` không qua `any` - jest.Mock
+ *  không giữ type tham số thật của hàm giả lập, nên tự khai type tối thiểu cần dùng ở test dưới. */
+function auditLogCreateData(call: unknown[]): {
+  tableName: string;
+  recordId: string;
+  oldValue: Record<string, unknown>;
+  newValue: Record<string, unknown>;
+} {
+  return (
+    call[0] as {
+      data: {
+        tableName: string;
+        recordId: string;
+        oldValue: Record<string, unknown>;
+        newValue: Record<string, unknown>;
+      };
+    }
+  ).data;
+}
 
 describe('BomRevisionsService', () => {
   let service: BomRevisionsService;
@@ -32,6 +54,9 @@ describe('BomRevisionsService', () => {
       update: jest.Mock;
       delete: jest.Mock;
     };
+    auditLog: { create: jest.Mock };
+    $transaction: jest.Mock;
+    $executeRawUnsafe: jest.Mock;
   };
 
   const draftRevision = (overrides: Record<string, unknown> = {}) => ({
@@ -72,8 +97,18 @@ describe('BomRevisionsService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
+      auditLog: { create: jest.fn() },
+      // Admin-override path (withAdminOverride) chạy qua $transaction thật - mock chạy callback
+      // với chính `prisma` giả này làm `tx` (đủ dùng vì tx chỉ cần có cùng shape delegate), và
+      // $executeRawUnsafe (SET LOCAL escape hatch) chỉ cần no-op.
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
+      $executeRawUnsafe: jest.fn(),
     };
-    service = new BomRevisionsService(prisma as unknown as PrismaServiceType);
+    const cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
+    service = new BomRevisionsService(
+      prisma as unknown as PrismaServiceType,
+      cls as unknown as ClsService<AppClsStore>,
+    );
   });
 
   describe('create', () => {
@@ -270,6 +305,86 @@ describe('BomRevisionsService', () => {
           qtyPerUnit: 1,
         }),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // Admin override (2026-10-15): sửa SỐ LƯỢNG trên 1 bản đã ACTIVE, không cần quay lại DRAFT/duyệt
+  // lại - xem BomRevisionsService.assertDraftOrAdminOverride()/withAdminOverride(). Chỉ update
+  // được cho phép, create/remove vẫn chặn tuyệt đối dù actorRoles có ADMIN hay không (các describe
+  // create*/remove* ở trên không truyền actorRoles nên luôn đi nhánh "không override").
+  describe('updateBomAccessoryItem (admin override trên bản đã ACTIVE)', () => {
+    const existingRow = () => ({
+      id: 1n,
+      bomRevisionId: 10n,
+      materialId: 80n,
+      kind: 'ACCESSORY',
+      qtyPerUnit: { toNumber: () => 5 },
+      material: { code: 'PK-01' },
+    });
+
+    it('rejects khi revision không còn DRAFT và actor KHÔNG phải ADMIN', async () => {
+      prisma.bomRevision.findUnique.mockResolvedValue(draftRevision({ status: 'ACTIVE' }));
+      prisma.bomAccessoryItem.findUnique.mockResolvedValue(existingRow());
+
+      await expect(
+        service.updateBomAccessoryItem('10', '1', { qtyPerUnit: 9 }, ['PURCHASER']),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.bomAccessoryItem.update).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('vẫn rejects khi KHÔNG truyền actorRoles (mặc định [])', async () => {
+      prisma.bomRevision.findUnique.mockResolvedValue(draftRevision({ status: 'ACTIVE' }));
+      prisma.bomAccessoryItem.findUnique.mockResolvedValue(existingRow());
+
+      await expect(service.updateBomAccessoryItem('10', '1', { qtyPerUnit: 9 })).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('cho phép ADMIN sửa qua escape hatch DB + ghi AuditLog tay khi revision đã ACTIVE', async () => {
+      prisma.bomRevision.findUnique.mockResolvedValue(draftRevision({ status: 'ACTIVE' }));
+      prisma.bomAccessoryItem.findUnique.mockResolvedValue(existingRow());
+      prisma.bomAccessoryItem.update.mockResolvedValue({
+        ...existingRow(),
+        qtyPerUnit: { toNumber: () => 9 },
+      });
+
+      const result = await service.updateBomAccessoryItem('10', '1', { qtyPerUnit: 9 }, ['ADMIN']);
+
+      expect(result.qtyPerUnit).toBe(9);
+      // Phải mở escape hatch TRONG transaction, không update thẳng ngoài transaction.
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        `SET LOCAL "dna.bom_maintenance" = 'on'`,
+      );
+      expect(prisma.bomAccessoryItem.update).toHaveBeenCalledWith({
+        where: { id: 1n },
+        data: { qtyPerUnit: 9 },
+        include: { material: true },
+      });
+      // AuditLog tay - bomAccessoryItem không nằm trong AUDITED_MODELS tự động.
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+      const auditArgs = auditLogCreateData(prisma.auditLog.create.mock.calls[0]);
+      expect(auditArgs.tableName).toBe('BomAccessoryItem');
+      expect(auditArgs.recordId).toBe('1');
+      expect(auditArgs.oldValue.__adminOverrideOnActiveRevision).toBe(true);
+      expect(auditArgs.newValue.qtyPerUnit).toBe(9);
+    });
+
+    it('vẫn update bình thường (không transaction/audit) khi revision còn DRAFT', async () => {
+      prisma.bomRevision.findUnique.mockResolvedValue(draftRevision());
+      prisma.bomAccessoryItem.findUnique.mockResolvedValue(existingRow());
+      prisma.bomAccessoryItem.update.mockResolvedValue({
+        ...existingRow(),
+        qtyPerUnit: { toNumber: () => 9 },
+      });
+
+      const result = await service.updateBomAccessoryItem('10', '1', { qtyPerUnit: 9 }, ['ADMIN']);
+
+      expect(result.qtyPerUnit).toBe(9);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
     });
   });
 

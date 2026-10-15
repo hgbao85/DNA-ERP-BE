@@ -7,8 +7,10 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
 import {
   AccessoryItemKind,
+  AuditAction,
   BomRevisionStatus,
   DetailGroup,
   ManhGroup,
@@ -16,6 +18,7 @@ import {
   MfgStage,
   PlanFormStatus,
   Prisma,
+  PrismaClient,
   ProcessStep,
   ReviewDecision,
   SteelSubGroup,
@@ -24,12 +27,15 @@ import {
   MATERIAL_GROUP_SYSTEM_KEYS,
   MaterialGroupSystemKey,
 } from '../../common/constants/material-group-system-keys.constant';
+import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -124,6 +130,7 @@ export class SkusService {
     private readonly bomRevisionsService: BomRevisionsService,
     private readonly cloudinaryService: CloudinaryService,
     private readonly notifications: NotificationsService,
+    private readonly cls: ClsService<AppClsStore>,
   ) {}
 
   // ─── Notification (Phase 3a, mục 7.1 changelog 2026-09-25) ─────────────────────────────────
@@ -356,9 +363,15 @@ export class SkusService {
     id: string,
     dto: UpdateQuotaDto,
     actorUserId?: string,
+    actorRoles: string[] = [],
   ): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
-    const revision = await this.resolveDraftBomRevision(pf);
+    const revision = await this.resolveDraftBomRevision(pf, actorRoles);
+    // Chỉ cần snapshot "trước" khi Admin ghi đè (đường DRAFT bình thường không audit) - tránh
+    // round-trip reconstructQuotaBatch thừa cho mọi lần nhập quota bình thường.
+    const beforeManhData = revision.isAdminOverride
+      ? (await this.toResponseDtoWithQuota(pf)).manhData
+      : undefined;
     const enteredAt = new Date();
     // Ảnh (Dây, xem PieceMaterialItem.photoUrl) bị "mồ côi" khi 1 dòng đổi/mất ảnh trong lần
     // full-replace này - dọn best-effort SAU KHI transaction đã commit (xem cuối hàm), không
@@ -370,12 +383,27 @@ export class SkusService {
         if (!dto.pieces) {
           throw new BadRequestException('manh-quota yêu cầu field "pieces"');
         }
+        if (revision.isAdminOverride) {
+          // Mở escape hatch DB (migration 20260921030000_bom_line_items_immutable_when_published)
+          // TRONG ĐÚNG transaction này - nếu không, trigger assert_bom_revision_draft() vẫn chặn
+          // dù resolveDraftBomRevision() đã cho qua ở tầng service.
+          await tx.$executeRawUnsafe(`SET LOCAL "dna.bom_maintenance" = 'on'`);
+        }
         ({ orphanedPhotoUrls } = await this.replacePieces(
           tx,
           revision.id,
           pf.mfgProductId,
           dto.pieces,
         ));
+
+        if (revision.isAdminOverride) {
+          // SKU vẫn APPROVED - không có vòng duyệt nào để "nộp lại" cho KHSX, nên không đụng
+          // PlanFormManhReview/forward/status (khác hẳn nhánh DRAFT bên dưới).
+          return tx.planForm.findUniqueOrThrow({
+            where: { id: pf.id },
+            include: PLAN_FORM_INCLUDE,
+          });
+        }
 
         // Nhập lại (kể cả sau khi bị từ chối) coi như đã sửa xong - xoá quyết định duyệt cũ
         // (status/reason/reviewedAt về null), giữ enteredBy/enteredAt mới.
@@ -407,11 +435,18 @@ export class SkusService {
       { timeout: QUOTA_TRANSACTION_TIMEOUT_MS },
     );
     await Promise.all(orphanedPhotoUrls.map((url) => this.cloudinaryService.deleteByUrl(url)));
-    // Nộp (kể cả nộp lại) đóng cả 2 việc chờ Spec: "SKU mới cần nhập" (lần đầu) và "bị KHSX trả
-    // lại" (nộp lại sau reject) - cả 2 resolve() đều an toàn gọi thừa (idempotent, không match
-    // thì không làm gì). Rồi báo KHSX vào review.
-    await this.resolveSkuNotifications(pf.id, ['SKU_NEEDS_MANH_QUOTA', 'SKU_MANH_QUOTA_REJECTED']);
-    await this.notifySku('SKU_MANH_QUOTA_SUBMITTED', pf.id, this.skuParams(updated), actorUserId);
+    if (revision.isAdminOverride) {
+      await this.writeAdminOverrideAudit(pf.id, 'manh', beforeManhData, dto);
+    } else {
+      // Nộp (kể cả nộp lại) đóng cả 2 việc chờ Spec: "SKU mới cần nhập" (lần đầu) và "bị KHSX trả
+      // lại" (nộp lại sau reject) - cả 2 resolve() đều an toàn gọi thừa (idempotent, không match
+      // thì không làm gì). Rồi báo KHSX vào review.
+      await this.resolveSkuNotifications(pf.id, [
+        'SKU_NEEDS_MANH_QUOTA',
+        'SKU_MANH_QUOTA_REJECTED',
+      ]);
+      await this.notifySku('SKU_MANH_QUOTA_SUBMITTED', pf.id, this.skuParams(updated), actorUserId);
+    }
     return this.toResponseDtoWithQuota(updated);
   }
 
@@ -459,15 +494,22 @@ export class SkusService {
     id: string,
     dto: UpdateQuotaDto,
     actorUserId?: string,
+    actorRoles: string[] = [],
   ): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
-    const revision = await this.resolveDraftBomRevision(pf);
+    const revision = await this.resolveDraftBomRevision(pf, actorRoles);
+    const beforeDetailQuota = revision.isAdminOverride
+      ? (await this.toResponseDtoWithQuota(pf)).detailQuota
+      : undefined;
     const enteredAt = new Date();
 
     const updated = await this.prisma.$transaction(
       async (tx) => {
         if (!dto.detailLines) {
           throw new BadRequestException('detail-quota yêu cầu field "detailLines"');
+        }
+        if (revision.isAdminOverride) {
+          await tx.$executeRawUnsafe(`SET LOCAL "dna.bom_maintenance" = 'on'`);
         }
         const linesOf = (g: DetailLineGroup): QuotaMaterialLineDto[] =>
           dto
@@ -510,6 +552,15 @@ export class SkusService {
           linesOf('BAO_BI_DONG_GOI'),
         );
 
+        if (revision.isAdminOverride) {
+          // SKU vẫn APPROVED - không có vòng duyệt nào để "nộp lại" cho KHSX, nên không đụng
+          // PlanFormDetailReview/forward/status (khác hẳn nhánh DRAFT bên dưới).
+          return tx.planForm.findUniqueOrThrow({
+            where: { id: pf.id },
+            include: PLAN_FORM_INCLUDE,
+          });
+        }
+
         // Nhập lại (kể cả sau khi bị từ chối) coi như đã sửa xong - xoá quyết định duyệt cũ
         // (status/reason/reviewedAt về null), giữ enteredBy/enteredAt mới.
         await tx.planFormDetailReview.upsert({
@@ -543,11 +594,20 @@ export class SkusService {
       },
       { timeout: QUOTA_TRANSACTION_TIMEOUT_MS },
     );
-    await this.resolveSkuNotifications(pf.id, [
-      'SKU_NEEDS_DETAIL_QUOTA',
-      'SKU_DETAIL_QUOTA_REJECTED',
-    ]);
-    await this.notifySku('SKU_DETAIL_QUOTA_SUBMITTED', pf.id, this.skuParams(updated), actorUserId);
+    if (revision.isAdminOverride) {
+      await this.writeAdminOverrideAudit(pf.id, 'detail', beforeDetailQuota, dto);
+    } else {
+      await this.resolveSkuNotifications(pf.id, [
+        'SKU_NEEDS_DETAIL_QUOTA',
+        'SKU_DETAIL_QUOTA_REJECTED',
+      ]);
+      await this.notifySku(
+        'SKU_DETAIL_QUOTA_SUBMITTED',
+        pf.id,
+        this.skuParams(updated),
+        actorUserId,
+      );
+    }
     return this.toResponseDtoWithQuota(updated);
   }
 
@@ -734,17 +794,15 @@ export class SkusService {
    * ACTIVE/RETIRED - PlanForm đã qua duyệt cuối), từ chối sửa tiếp thay vì âm thầm mutate
    * lịch sử đã chốt.
    */
-  private async resolveDraftBomRevision(pf: PlanFormWithRefs): Promise<{ id: bigint }> {
+  private async resolveDraftBomRevision(
+    pf: PlanFormWithRefs,
+    actorRoles: string[] = [],
+  ): Promise<{ id: bigint; isAdminOverride: boolean }> {
     const existing = await this.prisma.bomRevision.findFirst({
       where: { sourcePlanFormId: pf.id },
     });
     if (existing) {
-      if (existing.status !== BomRevisionStatus.DRAFT) {
-        throw new ConflictException(
-          `Plan form ${pf.id} đã có BomRevision ở trạng thái ${existing.status} - không thể sửa định mức sau khi đã duyệt`,
-        );
-      }
-      return existing;
+      return this.resolveNonDraftOrAdminOverride(pf, existing, actorRoles);
     }
 
     try {
@@ -752,23 +810,68 @@ export class SkusService {
         pf.mfgProductId.toString(),
         pf.id.toString(),
       );
-      return { id: parseBigIntId(created.id) };
+      return { id: parseBigIntId(created.id), isAdminOverride: false };
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         const raced = await this.prisma.bomRevision.findFirst({
           where: { sourcePlanFormId: pf.id },
         });
         if (raced) {
-          if (raced.status !== BomRevisionStatus.DRAFT) {
-            throw new ConflictException(
-              `Plan form ${pf.id} đã có BomRevision ở trạng thái ${raced.status} - không thể sửa định mức sau khi đã duyệt`,
-            );
-          }
-          return raced;
+          return this.resolveNonDraftOrAdminOverride(pf, raced, actorRoles);
         }
       }
       throw e;
     }
+  }
+
+  /**
+   * Admin override (2026-10-15, theo yêu cầu "sửa định mức SKU đã duyệt, không cần duyệt lại"):
+   * nếu revision đã có nhưng không còn DRAFT (PlanForm đã qua Sếp duyệt cuối - xem doc comment
+   * resolveDraftBomRevision), CHỈ role ADMIN mới được trả về chính revision đó để ghi tiếp; mọi
+   * role khác vẫn bị chặn tuyệt đối như trước (không đổi hành vi cho KHSX/account chuyên trách).
+   * `isAdminOverride=true` báo cho updateManhQuota/updateDetailQuota biết phải: (1) mở escape
+   * hatch DB `SET LOCAL "dna.bom_maintenance" = 'on'` trong transaction ghi (nếu không, trigger
+   * `assert_bom_revision_draft()` - migration 20260921030000 - vẫn chặn dù qua được check này ở
+   * tầng service), (2) KHÔNG đụng PlanFormManhReview/DetailReview hay forward lại PlanForm - SKU
+   * vẫn APPROVED, không có vòng duyệt nào để "nộp lại", và (3) ghi AuditLog TAY thay cho luồng
+   * notify KHSX bình thường (xem writeAdminOverrideAudit).
+   */
+  private resolveNonDraftOrAdminOverride(
+    pf: PlanFormWithRefs,
+    revision: { id: bigint; status: BomRevisionStatus },
+    actorRoles: string[],
+  ): { id: bigint; isAdminOverride: boolean } {
+    if (revision.status === BomRevisionStatus.DRAFT) {
+      return { id: revision.id, isAdminOverride: false };
+    }
+    if (!actorRoles.includes(DEFAULT_ROLES.ADMIN)) {
+      throw new ConflictException(
+        `Plan form ${pf.id} đã có BomRevision ở trạng thái ${revision.status} - không thể sửa định mức sau khi đã duyệt (chỉ Admin mới ghi đè được)`,
+      );
+    }
+    return { id: revision.id, isAdminOverride: true };
+  }
+
+  /** Ghi AuditLog TAY cho 1 lần Admin ghi đè định mức của 1 SKU đã APPROVED - 5 bảng dòng con
+   *  (bom_piece/piece_bom/piece_material_item/piece_material_yield/consumable_bom/
+   *  bom_accessory_items) KHÔNG nằm trong AUDITED_MODELS (đổi liên tục lúc DRAFT, xem
+   *  audit-log.extension.ts) nên không có gì tự ghi giúp; ghi 1 dòng trên PlanForm thay vì dò
+   *  từng bảng con - trước/sau lấy nguyên state đã reconstruct qua toResponseDtoWithQuota (cùng
+   *  shape dto FE gửi lên) để dễ so sánh, đủ cho mục đích truy vết "ai đổi gì, lúc nào". */
+  private async writeAdminOverrideAudit(
+    planFormId: bigint,
+    quotaType: 'manh' | 'detail',
+    oldValue: unknown,
+    newValue: unknown,
+  ): Promise<void> {
+    const auditLogClient = this.prisma as unknown as Pick<PrismaClient, 'auditLog'>;
+    await writeAuditLog(auditLogClient, this.cls, {
+      action: AuditAction.UPDATE,
+      tableName: 'PlanForm',
+      recordId: planFormId.toString(),
+      oldValue: { quotaType, adminOverrideOnApprovedSku: true, data: oldValue },
+      newValue: { quotaType, data: newValue },
+    });
   }
 
   /** Batch resolve-or-create Piece theo tên (không phân biệt hoa/thường) trong phạm vi 1 sản

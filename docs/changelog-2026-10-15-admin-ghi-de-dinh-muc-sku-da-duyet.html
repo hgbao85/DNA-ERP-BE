@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Admin ghi đè định mức SKU đã duyệt</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+pre.term{
+  background:var(--code-bg); border:1px solid var(--line); border-radius:8px;
+  padding:.9rem 1.1rem; margin:.6rem 0 0; font-size:.8rem; line-height:1.6;
+  overflow-x:auto; white-space:pre;
+}
+pre.term .prompt{color:var(--accent-ink)}
+pre.term .ok{color:var(--add); font-weight:700}
+pre.term .bad{color:var(--del); font-weight:700}
+pre.term .muted{color:var(--ink-soft)}
+.card .cap{margin:.9rem 0 0; font-size:.78rem; color:var(--ink-soft)}
+.card .cap:first-of-type{margin-top:1.1rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+td.num{font-family:var(--mono); text-align:right; font-variant-numeric:tabular-nums}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · SKU — Định mức sau khi đã duyệt</div>
+    <h1>Admin ghi đè trực tiếp định mức của 1 SKU đã duyệt, không cần duyệt lại</h1>
+    <p class="lede">
+      Trước đây, sau khi 1 SKU đã qua đủ luồng duyệt (KHSX → Sếp), <code>BomRevision</code> của nó chuyển
+      <code>ACTIVE</code> và bị khoá tuyệt đối ở 3 tầng (service, CRUD định mức, trigger DB) — <b>không ai sửa lại
+      được, kể cả Admin</b>. Theo lựa chọn của người dùng (đánh đổi lấy tốc độ, bỏ qua phương án "mở lại duyệt" an
+      toàn hơn), đợt này mở 1 lối riêng: role <code>ADMIN</code> ghi đè trực tiếp số liệu, có audit log kèm theo,
+      không phải tạo SKU mới hay duyệt lại từ đầu.
+    </p>
+    <div class="meta">
+      <span>15/10/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>1 trang Admin mới</span>
+      <span>+4 test tự động (bom-revisions) · +4 test (skus)</span>
+      <span><b>Đã kiểm qua UI thật (trình duyệt headless) + API thật</b></span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li><b>Backend — luồng thật nằm ở <code>SkusService</code>:</b> ban đầu tưởng nhầm chỗ sửa là các route CRUD
+        cấp thấp của <code>BomRevisionsController</code> (cũng đã vá cho chắc, xem mục 3) — nhưng FE không gọi tới
+        đó. UI nhập định mức thật (<code>updateManhQuota</code>/<code>updateDetailQuota</code>) tự xoá-sạch-ghi-lại
+        toàn bộ dòng con mỗi lần gửi, khoá theo <code>BomRevision.status===DRAFT</code>. Đây mới là nơi phải mở
+        cho Admin.</li>
+      <li><b>Cú twist Frontend:</b> màn sửa định mức (<code>SpecSteelPage</code>/<code>SpecDetailQuotaPage</code>)
+        chỉ render trong <code>MfgApp</code> khi <code>user.mfgRole</code> khớp — mà <b>Admin không có
+        <code>mfgRole</code> nên không bao giờ vào được <code>MfgApp</code></b> (<code>resolveDefaultModule.ts</code>
+        khoá Admin vào đúng 1 phân hệ <code>'admin'</code>). Suýt ship xong 2 trang có logic đúng nhưng không ai
+        bấm tới được — phải dựng thêm 1 trang trong <code>AdminApp</code>, tái dùng nguyên 2 component cũ qua 1
+        toggle, không viết lại form.</li>
+      <li><b>An toàn:</b> escape hatch DB (<code>SET LOCAL "dna.bom_maintenance"</code>, cơ chế đã có từ trigger
+        bất biến 21/09) chỉ mở trong đúng 1 transaction khi override; không đụng workflow duyệt của PlanForm; ghi
+        <code>AuditLog</code> tay (before/after + người sửa) vì các bảng dòng con định mức cố ý không tự audit lúc
+        còn DRAFT.</li>
+      <li><b>Kèm 1 script dọn dữ liệu test</b> (<code>prisma/delete-sku.ts</code>) — dựng lại đúng quy trình dọn tay
+        lúc QA tính năng này, tự chặn nếu SKU đã có dữ liệu sản xuất thật bám vào. Xem mục 6.</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 1. BỐI CẢNH ═══════════════════════ -->
+  <div class="module" id="boicanh">
+    <h2>1. Bối cảnh — vì sao trước đây không sửa được</h2>
+    <p class="module-note">
+      Người dùng hỏi kiểm tra trước: "hệ thống có cách nào sửa định mức SKU sau khi đã duyệt không?". Rà lại thì
+      đúng — chặn ở cả 3 tầng, không có đường vòng.
+    </p>
+    <div class="card">
+      <h3>Tầng 1 — Service <span class="badge b-be">BE</span></h3>
+      <p><code class="path">SkusService.resolveDraftBomRevision()</code> ném <code>ConflictException</code> ngay
+      khi <code>BomRevision.status !== DRAFT</code>.</p>
+    </div>
+    <div class="card">
+      <h3>Tầng 2 — CRUD định mức cấp thấp <span class="badge b-be">BE</span></h3>
+      <p><code class="path">BomRevisionsService.assertDraft()</code> — chặn ở 21 chỗ (mọi create/update/remove của
+      7 loại dòng con BOM).</p>
+    </div>
+    <div class="card">
+      <h3>Tầng 3 — Trigger DB <span class="badge b-db">DB</span></h3>
+      <p><code class="path">assert_bom_revision_draft()</code> (migration
+      <code>20260921030000_bom_line_items_immutable_when_published</code>) — chặn cả khi ai đó bypass tầng service
+      bằng SQL thẳng. Đây chính là lớp từng vá 1 lỗ hổng thật (sửa thẳng SQL một <code>BomRevision</code> đã
+      <code>ACTIVE</code>, xem changelog 11/09).</p>
+    </div>
+    <div class="callout">
+      <b>Lý do kiến trúc, không phải thiếu sót:</b> <code>ProductionOrder</code>/<code>CuttingProposal</code>/
+      <code>PurchaseProposal</code> ghim <code>bomRevisionId</code> cụ thể tại thời điểm duyệt sản xuất, làm chứng
+      từ bất biến cho số liệu đã xuất/cắt/mua. Sửa ngược 1 bản đã <code>ACTIVE</code> sẽ làm sai lệch các chứng từ
+      đã phát sinh mà không có vết tích gì.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. BACKEND ═══════════════════════ -->
+  <div class="module" id="backend">
+    <h2>2. Backend — mở lối cho Admin <span class="badge b-be">BE</span></h2>
+    <p class="module-note">
+      <code class="path">SkusService.updateManhQuota()</code>/<code class="path">updateDetailQuota()</code> nhận
+      thêm <code>actorRoles: string[]</code>. <code>resolveDraftBomRevision()</code> đổi thành
+      <code>resolveNonDraftOrAdminOverride()</code>: nếu revision không còn DRAFT và actor có role
+      <code>ADMIN</code> (<code>DEFAULT_ROLES.ADMIN</code>, cùng idiom <code>QcReviewsService.updatePhoto</code>),
+      trả về <code>{ id, isAdminOverride: true }</code> thay vì throw.
+    </p>
+    <div class="card">
+      <h3>Khi <code>isAdminOverride</code></h3>
+      <p>1. Mở <code>SET LOCAL "dna.bom_maintenance" = 'on'</code> ngay trong transaction ghi (nếu không, trigger
+      vẫn chặn dù qua được check service).<br>
+      2. <b>Không đụng</b> <code>PlanFormManhReview</code>/<code>DetailReview</code> hay forward/status của
+      <code>PlanForm</code> — SKU vẫn <code>APPROVED</code>, không có vòng duyệt nào để "nộp lại".<br>
+      3. <b>Không</b> gửi notification "cần KHSX duyệt" (sẽ sai ngữ nghĩa cho 1 SKU đã xong việc).<br>
+      4. Ghi 1 dòng <code>AuditLog</code> TAY trên bảng <code>PlanForm</code> — <code>oldValue</code> lấy từ
+      <code>toResponseDtoWithQuota()</code> TRƯỚC khi sửa (snapshot đầy đủ), <code>newValue</code> = dto admin gửi
+      lên, kèm cờ <code>adminOverrideOnApprovedSku: true</code>.</p>
+    </div>
+    <div class="card">
+      <h3>Lớp phòng thủ bổ sung — <code class="path">BomRevisionsService</code>/<code class="path">Controller</code></h3>
+      <p>7 hàm <code>updateXxx</code> (chỉ UPDATE, không áp dụng create/remove) cũng được thêm admin-override tương
+      tự, cùng escape hatch + <code>AuditLog</code> tay. Đây là lớp API cấp thấp <b>KHÔNG phải đường UI thật đang
+      dùng</b> (FE không gọi trực tiếp các route này) — giữ lại vì nó là capability hợp lý của tầng API, không phải
+      dead code (có test riêng, đúng hành vi).</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 3. FRONTEND ═══════════════════════ -->
+  <div class="module" id="frontend">
+    <h2>3. Frontend — cú twist "Admin không vào được MfgApp" <span class="badge b-fe">FE</span></h2>
+    <p class="module-note">
+      <code class="path">SpecSteelPage.tsx</code>/<code class="path">SpecDetailQuotaPage.tsx</code> được thêm
+      <code>isAdmin = user?.role === 'ADMIN'</code>: bỏ lọc "đã duyệt" khỏi danh sách chọn SKU, mở khoá
+      <code>isSubmitted</code>, đổi label nút "Gửi phê duyệt →" → "Ghi đè định mức →" kèm banner cảnh báo khi admin
+      sửa 1 SKU đã duyệt. Logic đúng — nhưng <b>không ai bấm tới được</b>, vì 2 trang này chỉ render trong
+      <code class="path">MfgApp.tsx</code> theo <code>user.mfgRole === 'SPEC_STEEL'/'SPEC_ACCESSORY'</code>, và
+      <code class="path">resolveDefaultModule.ts</code> khoá mọi account <code>role === 'ADMIN'</code> vào đúng 1
+      module <code>'admin'</code> — <b>không có đường nào từ Admin vào MfgApp</b> (cùng lý do
+      <code class="path">PhoiSkuAdminPage.tsx</code> tồn tại trước đó: "Đặt trong AdminApp vì ADMIN không vào được
+      giao diện Sản xuất").
+    </p>
+    <div class="card">
+      <h3>Giải pháp — trang mới, tái dùng nguyên component cũ</h3>
+      <p><code class="path">src/modules/pages/Admin/SkuQuotaAdminPage.tsx</code> (mới) — 1 toggle 2 nút ("Định mức
+      mảnh" / "Định mức chi tiết"), render thẳng <code>&lt;SpecSteelPage subTab="dinh-muc" .../&gt;</code> hoặc
+      <code>&lt;SpecDetailQuotaPage .../&gt;</code> bên trong. Không viết lại form nhập mảnh/chi tiết phức tạp —
+      chỉ thêm 1 lối vào UI, giống đúng tinh thần comment trong
+      <code class="path">OfficeSuppliesAdminPage.tsx</code>: "Backend đã cho Admin toàn quyền — phần còn thiếu chỉ
+      là lối vào UI".</p>
+    </div>
+    <div class="card">
+      <h3>Gắn vào <code class="path">AdminApp.tsx</code></h3>
+      <p>Thêm nav item "Sửa định mức SKU" (icon <code>Ruler</code>), tab id <code>sku-quota</code>, cùng vị trí
+      với "Sửa SKU đợt Phôi" trong sidebar Quản trị.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 4. FILE THAY ĐỔI ═══════════════════════ -->
+  <div class="module" id="files">
+    <h2>4. File thay đổi</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th></th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">DNA-ERP-BE/src/modules/skus/skus.service.ts</td><td><span class="badge b-be">BE</span></td><td><code>resolveNonDraftOrAdminOverride()</code>, <code>writeAdminOverrideAudit()</code>, nhánh override trong <code>updateManhQuota</code>/<code>updateDetailQuota</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/skus/skus.controller.ts</td><td><span class="badge b-be">BE</span></td><td>Thêm <code>@CurrentUser('roles')</code> cho 2 endpoint manh/detail-quota</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/skus/skus.service.spec.ts</td><td><span class="badge b-be">BE</span></td><td>+4 test: chặn non-admin, admin override + escape hatch + audit, bỏ qua khi còn DRAFT</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/bom-revisions/bom-revisions.service.ts</td><td><span class="badge b-be">BE</span></td><td><code>assertDraftOrAdminOverride()</code>, <code>withAdminOverride()</code> cho 7 hàm update</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/bom-revisions/bom-revisions.controller.ts</td><td><span class="badge b-be">BE</span></td><td>Thêm <code>@CurrentUser('roles')</code> cho 7 endpoint PATCH</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/bom-revisions/bom-revisions.service.spec.ts</td><td><span class="badge b-be">BE</span></td><td>+4 test tương tự ở tầng CRUD cấp thấp</td></tr>
+          <tr><td class="path">DNA-ERP-BE/prisma/delete-sku.ts</td><td><span class="badge b-be">BE</span></td><td><b>Mới</b> — script dọn sạch 1 SKU test (xem mục 6)</td></tr>
+          <tr><td class="path">DNA-ERP-BE/package.json</td><td><span class="badge b-be">BE</span></td><td>Thêm script <code>npm run delete-sku</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/modules/pages/Manufacturing/SpecSteelPage.tsx</td><td><span class="badge b-fe">FE</span></td><td><code>isAdmin</code> bypass (filter danh sách, <code>isSubmitted</code>, label nút, banner)</td></tr>
+          <tr><td class="path">DNA-ERP/src/modules/pages/Manufacturing/SpecDetailQuotaPage.tsx</td><td><span class="badge b-fe">FE</span></td><td>Tương tự <code>SpecSteelPage.tsx</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/modules/pages/Admin/SkuQuotaAdminPage.tsx</td><td><span class="badge b-fe">FE</span></td><td><b>Mới</b> — lối vào UI cho Admin, tái dùng 2 trang trên</td></tr>
+          <tr><td class="path">DNA-ERP/src/modules/pages/Admin/AdminApp.tsx</td><td><span class="badge b-fe">FE</span></td><td>Nav item "Sửa định mức SKU"</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. KIỂM CHỨNG ═══════════════════════ -->
+  <div class="module" id="kiemchung">
+    <h2>5. Kiểm chứng</h2>
+    <div class="stats">
+      <div class="stat"><div class="n">1502</div><div class="l">test backend xanh</div></div>
+      <div class="stat"><div class="n">+8</div><div class="l">test mới (2 tầng override)</div></div>
+      <div class="stat"><div class="n">2</div><div class="l">SKU test lái qua UI thật (mảnh + chi tiết)</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">lỗi tsc/eslint mới</div></div>
+    </div>
+    <p class="module-note" style="margin-top:1rem">
+      Test tự động không đủ tin — đã lái 2 phiên trình duyệt headless thật (patchright, qua skill
+      <code>browser-automation</code>), cả 2 nhánh "Định mức mảnh" và "Định mức chi tiết", để xác nhận đường UI
+      thật hoạt động, không chỉ API.
+    </p>
+    <ol class="timeline">
+      <li><b>Dựng SKU test đi hết luồng duyệt thật</b><span> — tạo PlanForm, nộp mảnh, KHSX duyệt mảnh, nộp chi
+        tiết, KHSX duyệt chi tiết, và Sếp duyệt cuối → SKU đạt <code>APPROVED</code>, <code>BomRevision</code>
+        chuyển <code>ACTIVE</code> thật. Bước duyệt cuối khoá cứng <code>@RequireRole(BOSS)</code> (ADMIN có mọi
+        permission vẫn không qua được role decorator tĩnh) — lần 1 phải tạo riêng 1 user BOSS tạm, lần 2 dùng
+        thẳng account demo <code>boss</code> có sẵn (được người dùng cho phép đăng nhập các account demo).</span></li>
+      <li><b>Nhánh "Định mức mảnh"</b><span> — Admin vào list thấy badge "✓ Đã duyệt (Admin ghi đè)", mở SKU thấy
+        banner cảnh báo + nút "Ghi đè định mức →", tick ô "Hàn" cho 1 mảnh rồi gửi.</span></li>
+      <li class="ok"><b>Lưu thành công, không lỗi</b><span> — API xác nhận giá trị mới đã lưu đúng, SKU vẫn giữ
+        <code>APPROVED</code>, có đúng 1 dòng <code>AuditLog</code> mới ghi "Super Admin" sửa gì/từ gì sang gì,
+        kèm <code>adminOverrideOnApprovedSku: true</code>, <code>quotaType: "manh"</code>.</span></li>
+      <li class="bad"><b>Bug phát hiện khi test tiếp nhánh "Định mức chi tiết"</b><span> — danh sách SKU ở
+        <code class="path">SpecDetailQuotaPage.tsx</code> hiện badge "Chờ nhập" cho 1 SKU đã <code>APPROVED</code>
+        có vật tư, vì lúc sửa file này (mục 3) chỉ thêm nhánh badge "✓ Đã duyệt (Admin ghi đè)" ở
+        <code class="path">SpecSteelPage.tsx</code>, quên thêm y hệt ở đây. Vá ngay: thêm nhánh
+        <code>st === 'approved'</code> vào cột "Trạng thái", đúng 1 chỗ, không đổi logic khác.</span></li>
+      <li><b>Nhánh "Định mức chi tiết" (sau khi vá)</b><span> — list hiện đúng badge; xoá dòng Sơn cũ, thêm lại dòng
+        Sơn mới qua <code>MaterialPicker</code> (đổi <code>qtyPerUnit</code> 0,5 → 0,8 Kg) rồi gửi.</span></li>
+      <li class="ok"><b>Lưu thành công, không lỗi</b><span> — API xác nhận <code>qtyPerUnit=0.8</code>, SKU vẫn
+        <code>APPROVED</code>, <code>AuditLog</code> mới ghi <code>quotaType: "detail"</code>.</span></li>
+    </ol>
+    <div class="callout ok">
+      <b>Kết luận:</b> tính năng hoạt động đúng thiết kế xuyên suốt UI thật → API thật → DB thật → AuditLog, không
+      chỉ đúng trên giấy/test mock.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 6. SCRIPT DỌN DỮ LIỆU TEST ═══════════════════════ -->
+  <div class="module" id="deletesku">
+    <h2>6. Script dọn dữ liệu test <span class="badge b-be">BE</span></h2>
+    <p class="module-note">
+      QA tính năng ở mục 5 phải tạo SKU/sản phẩm test riêng rồi dọn tay bằng raw SQL - gói lại thành 3 script dùng
+      lại được cho lần sau. Trước khi xoá, mỗi SKU luôn qua ĐỦ 4 lớp kiểm an toàn (đã gắn
+      <code>productionInvoiceId</code> thật, có <code>WarehouseTransfer</code>, có
+      <code>MaterialInspectionRequest</code>, hoặc <code>BomRevision</code> đã bị 1 <code>ProductionOrder</code>
+      ghim) - chỉ cần 1 trong 4 có dữ liệu thật là TỪ CHỐI xoá, không đổi gì. Đã test đủ cả 4 lớp bằng dữ liệu
+      thật (kể cả bị ProductionOrder/WarehouseTransfer/MaterialInspectionRequest chặn đúng), xác nhận lại bằng
+      API (404 sau khi xoá) và <code>AuditLog</code>.
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Mục đích</th><th>Lệnh</th><th>Khi dùng</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Xoá 1 SKU cụ thể</td>
+            <td class="path">npm run delete-sku -- &lt;planFormId&gt; [--with-product] [--dry-run]</td>
+            <td>Chỉ 1 SKU tạo nhầm/test, không đụng gì khác.</td>
+          </tr>
+          <tr>
+            <td>Xoá TẤT CẢ SKU (vẫn tự kiểm an toàn)</td>
+            <td class="path">npm run delete-sku -- --all [--with-product] [--dry-run]</td>
+            <td>Dọn nhiều SKU test 1 lượt - SKU có dữ liệu thật vẫn được giữ lại.</td>
+          </tr>
+          <tr>
+            <td>Chỉ reset dữ liệu giao dịch (giữ nguyên SKU/BOM)</td>
+            <td class="path">$env:CONFIRM_RESET="YES"; npx ts-node -r tsconfig-paths/register prisma/reset-warehouse-v2.ts</td>
+            <td>Dọn lịch sử đơn hàng/sản xuất/kho, giữ lại toàn bộ SKU/BOM.</td>
+          </tr>
+          <tr>
+            <td>Gộp cả 2 bước trên (dọn triệt để)</td>
+            <td class="path">npm run reset-and-delete-sku [-- --dry-run]</td>
+            <td>Đưa dev DB về sạch hoàn toàn trong 1 lệnh.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="module-note">
+      3 file đứng riêng (<code class="path">delete-sku.ts</code>, <code class="path">reset-warehouse-v2.ts</code>)
+      vẫn giữ nguyên - lệnh gộp (<code class="path">reset-and-delete-sku.ts</code>) chỉ gọi lại 2 file đó bằng
+      tiến trình con, không chứa logic riêng, xoá 1 trong 2 là lệnh gộp hỏng ngay.
+    </p>
+  </div>
+
+  <!-- ═══════════════════════ 7. CÒN MỞ ═══════════════════════ -->
+  <div class="module" id="conmo">
+    <h2>7. Còn mở</h2>
+    <div class="card">
+      <h3><code>MaterialInspectionRequest</code> là tính năng chết, chỉ tồn tại trong schema</h3>
+      <p>Nhánh chặn trong <code>delete-sku.ts</code> vẫn đúng và đã test (mục 6), nhưng không có gì trong app thật
+      tạo ra dòng này để nhánh đó CÓ CƠ HỘI kích hoạt ngoài đời — cùng kết luận đã ghi nhận trước đây (4 nguồn
+      PurchaseProposal, chỉ 3 có code thật). Không phải việc của đợt này, chỉ ghi lại để biết.</p>
+    </div>
+    <div class="card">
+      <h3>Không có bulk-override</h3>
+      <p>Admin override hiện chỉ sửa được từng SKU một qua form nhập mảnh/chi tiết — không có cách sửa hàng loạt
+      nhiều SKU cùng lúc.</p>
+    </div>
+  </div>
+
+  <footer>
+    Tài liệu nội bộ DNA-ERP — nhật ký thay đổi 15/10/2026.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" type="button" aria-label="Lên đầu trang">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

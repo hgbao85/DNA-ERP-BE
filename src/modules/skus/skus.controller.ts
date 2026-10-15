@@ -83,14 +83,18 @@ export class SkusController {
 
   // ─── Manh quota (mảnh - Sắt/Dây/Đinh/Tán rút/Nút nhựa, nhập bởi acc Sắt, duyệt bởi KHSX) ──
 
+  // actorRoles: chỉ dùng khi BomRevision của SKU này không còn DRAFT (đã qua Sếp duyệt cuối) -
+  // cho phép Admin ghi đè định mức mà không cần quay lại luồng duyệt (xem
+  // SkusService.resolveNonDraftOrAdminOverride()). Role khác bị chặn như trước.
   @Post(':id/manh-quota')
   @RequirePermissions(UPDATE)
   updateManhQuota(
     @Param('id') id: string,
     @Body() dto: UpdateQuotaDto,
     @CurrentUser('id') actorUserId: string,
+    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.skusService.updateManhQuota(id, dto, actorUserId);
+    return this.skusService.updateManhQuota(id, dto, actorUserId, actorRoles);
   }
 
   @Post(':id/manh-quota/review')
@@ -117,8 +121,9 @@ export class SkusController {
     @Param('id') id: string,
     @Body() dto: UpdateQuotaDto,
     @CurrentUser('id') actorUserId: string,
+    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.skusService.updateDetailQuota(id, dto, actorUserId);
+    return this.skusService.updateDetailQuota(id, dto, actorUserId, actorRoles);
   }
 
   @Post(':id/detail-quota/review')
