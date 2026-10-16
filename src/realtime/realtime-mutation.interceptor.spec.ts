@@ -1,7 +1,7 @@
 import { CallHandler, ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { lastValueFrom, of, throwError } from 'rxjs';
-import { RealtimeMutationInterceptor } from './realtime-mutation.interceptor';
+import { REALTIME_ENTITY_KEY, RealtimeMutationInterceptor } from './realtime-mutation.interceptor';
 import { RealtimeService } from './realtime.service';
 
 describe('RealtimeMutationInterceptor', () => {
@@ -14,6 +14,9 @@ describe('RealtimeMutationInterceptor', () => {
   ) => {
     const context = {
       getClass: () => class SkusController {},
+      // Handler thật (vd saveManhDraft) chỉ khác gì khi gắn @SkipRealtimeMutation() - test này
+      // dùng handler rỗng (không skip) nên luôn đi qua nhánh phát event bình thường.
+      getHandler: () => function Handler() {},
       switchToHttp: () => ({ getRequest: () => req }),
     } as unknown as ExecutionContext;
     const next = { handle: () => handler() } as unknown as CallHandler;
@@ -23,7 +26,12 @@ describe('RealtimeMutationInterceptor', () => {
   beforeEach(() => {
     publish = jest.fn();
     const realtime = { publishEntityChanged: publish } as unknown as RealtimeService;
-    const reflector = { get: jest.fn(() => 'SKU') } as unknown as Reflector;
+    // Reflector thật phân biệt theo key truyền vào - mock đơn giản (bỏ qua key) từng đủ khi chỉ
+    // có 1 chỗ gọi get(); giờ interceptor gọi 2 lần (entity trên class, skip trên handler) nên
+    // phải phân biệt, nếu không key skip sẽ "ăn theo" giá trị 'SKU' và luôn bị coi là skip=true.
+    const reflector = {
+      get: jest.fn((key: string) => (key === REALTIME_ENTITY_KEY ? 'SKU' : undefined)),
+    } as unknown as Reflector;
     interceptor = new RealtimeMutationInterceptor(reflector, realtime);
   });
 
@@ -80,6 +88,30 @@ describe('RealtimeMutationInterceptor', () => {
     expect(publish).toHaveBeenCalledWith(
       expect.objectContaining({ entityId: '7', action: 'DELETED' }),
     );
+  });
+
+  it('handler gắn @SkipRealtimeMutation() -> KHÔNG phát event dù entity có trên class (vd tạm lưu nháp debounce)', async () => {
+    const context = {
+      getClass: () => class SkusController {},
+      getHandler: () => function SaveManhDraft() {},
+      switchToHttp: () => ({
+        getRequest: () => ({
+          method: 'PATCH',
+          path: '/api/v1/skus/7/manh-quota/draft',
+          params: { id: '7' },
+        }),
+      }),
+    } as unknown as ExecutionContext;
+    const reflector = {
+      get: jest.fn((key: string) => (key === REALTIME_ENTITY_KEY ? 'SKU' : true)),
+    } as unknown as Reflector;
+    interceptor = new RealtimeMutationInterceptor(reflector, {
+      publishEntityChanged: publish,
+    } as unknown as RealtimeService);
+    const next = { handle: () => of({ id: 7 }) } as unknown as CallHandler;
+
+    await lastValueFrom(interceptor.intercept(context, next));
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('request lỗi (handler ném) -> KHÔNG phát event', async () => {

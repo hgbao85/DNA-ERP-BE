@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
-import { ReviewDecision } from '../../generated/prisma/client';
+import { Prisma, ReviewDecision } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
@@ -469,7 +469,13 @@ describe('SkusService', () => {
 
       expect(prisma.planForm.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { manhForwardedAt: null, status: 'IN_PROGRESS' },
+          data: {
+            manhForwardedAt: null,
+            manhDraft: Prisma.JsonNull,
+            manhDraftSavedAt: null,
+            manhDraftSavedBy: null,
+            status: 'IN_PROGRESS',
+          },
         }),
       );
     });
@@ -1061,6 +1067,12 @@ describe('SkusService', () => {
       expect(prisma.bomPiece.createMany).toHaveBeenCalledWith({
         data: [expect.objectContaining({ bomRevisionId: 10n, pieceId: 20n, qtyPerUnit: 9 })],
       });
+      // Nháp tạm lưu (nếu có) phải được dọn qua $executeRawUnsafe (KHÔNG qua planForm.update() -
+      // xem comment updateManhQuota), tránh mồ côi vĩnh viễn hoặc "sống lại" đè dữ liệu mới hơn.
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        expect.stringContaining('"manhDraft" = NULL'),
+        5n,
+      );
       // Không đụng workflow duyệt của PlanForm đã chốt xong.
       expect(prisma.planFormManhReview.upsert).not.toHaveBeenCalled();
       expect(prisma.planForm.update).not.toHaveBeenCalled();
@@ -1096,6 +1108,10 @@ describe('SkusService', () => {
       expect(result.status).toBe('APPROVED');
       expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
         `SET LOCAL "dna.bom_maintenance" = 'on'`,
+      );
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        expect.stringContaining('"detailDraft" = NULL'),
+        5n,
       );
       expect(prisma.planFormDetailReview.upsert).not.toHaveBeenCalled();
       expect(notificationsService.emit).not.toHaveBeenCalled();
@@ -1175,7 +1191,13 @@ describe('SkusService', () => {
 
       expect(prisma.planForm.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { detailForwardedAt: null, status: 'IN_PROGRESS' },
+          data: {
+            detailForwardedAt: null,
+            detailDraft: Prisma.JsonNull,
+            detailDraftSavedAt: null,
+            detailDraftSavedBy: null,
+            status: 'IN_PROGRESS',
+          },
         }),
       );
     });

@@ -12,6 +12,7 @@ import { RealtimeEntity, RealtimeEntityAction } from './realtime.contract';
 import { RealtimeService } from './realtime.service';
 
 export const REALTIME_ENTITY_KEY = 'realtime:entity';
+export const SKIP_REALTIME_KEY = 'realtime:skip';
 
 /**
  * Gắn trên controller: mọi request GHI (POST/PATCH/PUT/DELETE) THÀNH CÔNG sẽ phát entity.changed.
@@ -19,6 +20,13 @@ export const REALTIME_ENTITY_KEY = 'realtime:entity';
  */
 export const RealtimeEntityOn = (entity: RealtimeEntity) =>
   SetMetadata(REALTIME_ENTITY_KEY, entity);
+
+/**
+ * Gắn trên 1 handler cụ thể để BỎ phát realtime dù controller có @RealtimeEntityOn - dùng cho
+ * endpoint ghi liên tục/tần suất cao mà không ai cần biết ngay (vd tạm lưu nháp debounce mỗi
+ * giây) - phát bừa sẽ làm mọi client khác xem cùng entity bị spam banner "dữ liệu đã đổi".
+ */
+export const SkipRealtimeMutation = () => SetMetadata(SKIP_REALTIME_KEY, true);
 
 type MutationRequest = Request & { user?: { id: string } };
 
@@ -43,8 +51,9 @@ export class RealtimeMutationInterceptor implements NestInterceptor {
       REALTIME_ENTITY_KEY,
       context.getClass(),
     );
+    const skip = this.reflector.get<boolean | undefined>(SKIP_REALTIME_KEY, context.getHandler());
     const req = context.switchToHttp().getRequest<MutationRequest>();
-    if (!entity || req.method === 'GET') return next.handle();
+    if (!entity || skip || req.method === 'GET') return next.handle();
 
     return next.handle().pipe(
       tap((result) => {

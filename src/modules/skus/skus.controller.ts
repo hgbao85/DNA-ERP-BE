@@ -26,10 +26,12 @@ import { UpdateSkuDto } from './dto/update-sku.dto';
 import { RejectBossDto } from './dto/reject-boss.dto';
 import { ReviewQuotaDto } from './dto/review-quota.dto';
 import { UpdateQuotaDto } from './dto/update-quota.dto';
+import { SaveQuotaDraftDto } from './dto/save-quota-draft.dto';
 import { SkusService } from './skus.service';
 import {
   RealtimeEntityOn,
   RealtimeMutationInterceptor,
+  SkipRealtimeMutation,
 } from '../../realtime/realtime-mutation.interceptor';
 
 const VIEW = { module: PERMISSION_MODULES.SKU, action: PermissionAction.VIEW };
@@ -97,6 +99,23 @@ export class SkusController {
     return this.skusService.updateManhQuota(id, dto, actorUserId, actorRoles);
   }
 
+  // Nháp tạm lưu (CHƯA gửi phê duyệt) - khôi phục khi đổi máy/mất mạng/sập nguồn giữa chừng. Bỏ
+  // qua realtime: autosave debounce mỗi giây, phát bừa sẽ spam banner "dữ liệu đã đổi" cho mọi
+  // client khác đang xem danh sách SKU (xem SkipRealtimeMutation).
+  @Patch(':id/manh-quota/draft')
+  @RequirePermissions(UPDATE)
+  @SkipRealtimeMutation()
+  saveManhDraft(@Param('id') id: string, @Body() dto: SaveQuotaDraftDto) {
+    return this.skusService.saveManhDraft(id, dto);
+  }
+
+  @Delete(':id/manh-quota/draft')
+  @RequirePermissions(UPDATE)
+  @SkipRealtimeMutation()
+  clearManhDraft(@Param('id') id: string) {
+    return this.skusService.clearManhDraft(id);
+  }
+
   @Post(':id/manh-quota/review')
   @RequirePermissions(APPROVE)
   reviewManhQuota(
@@ -124,6 +143,20 @@ export class SkusController {
     @CurrentUser('roles') actorRoles: string[],
   ) {
     return this.skusService.updateDetailQuota(id, dto, actorUserId, actorRoles);
+  }
+
+  @Patch(':id/detail-quota/draft')
+  @RequirePermissions(UPDATE)
+  @SkipRealtimeMutation()
+  saveDetailDraft(@Param('id') id: string, @Body() dto: SaveQuotaDraftDto) {
+    return this.skusService.saveDetailDraft(id, dto);
+  }
+
+  @Delete(':id/detail-quota/draft')
+  @RequirePermissions(UPDATE)
+  @SkipRealtimeMutation()
+  clearDetailDraft(@Param('id') id: string) {
+    return this.skusService.clearDetailDraft(id);
   }
 
   @Post(':id/detail-quota/review')

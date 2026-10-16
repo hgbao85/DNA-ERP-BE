@@ -55,6 +55,7 @@ import {
   UpdateQuotaDto,
 } from './dto/update-quota.dto';
 import { ReviewQuotaDto } from './dto/review-quota.dto';
+import { SaveQuotaDraftDto } from './dto/save-quota-draft.dto';
 
 const PLAN_FORM_INCLUDE = {
   mfgProduct: true,
@@ -396,9 +397,28 @@ export class SkusService {
           dto.pieces,
         ));
 
+        // Nộp thật thành công - nháp tạm lưu (nếu có) đã lỗi thời, xoá luôn để GET không còn
+        // hiện banner "khôi phục nháp" bằng dữ liệu cũ hơn những gì vừa nộp. Không xoá thì nháp
+        // mồ côi nằm lại vĩnh viễn trong DB VÀ có thể "sống lại" đè lên dữ liệu mới hơn ở lần mở
+        // trang sau (draftSavedAt > entryAt cũ) - xem comment ở updateManhQuota ban đầu, lỗi
+        // thật phát hiện 2026-10-16.
+        const clearManhDraft = {
+          manhDraft: Prisma.JsonNull,
+          manhDraftSavedAt: null,
+          manhDraftSavedBy: null,
+        };
+
         if (revision.isAdminOverride) {
           // SKU vẫn APPROVED - không có vòng duyệt nào để "nộp lại" cho KHSX, nên không đụng
-          // PlanFormManhReview/forward/status (khác hẳn nhánh DRAFT bên dưới).
+          // PlanFormManhReview/forward/status (khác hẳn nhánh DRAFT bên dưới). CỐ Ý không gọi
+          // tx.planForm.update() (xem test "Không đụng PlanForm/review") - update() đi qua
+          // extension audit-log, sẽ tự ghi 1 bản ghi AuditLog TRÙNG với writeAdminOverrideAudit()
+          // gọi tay bên dưới. Dùng $executeRaw xoá thẳng 2 cột nháp - không qua extension, không
+          // tạo audit log thừa, vẫn giữ đúng tinh thần "không đụng workflow" của nhánh này.
+          await tx.$executeRawUnsafe(
+            `UPDATE "plan_forms" SET "manhDraft" = NULL, "manhDraftSavedAt" = NULL, "manhDraftSavedBy" = NULL WHERE id = $1`,
+            pf.id,
+          );
           return tx.planForm.findUniqueOrThrow({
             where: { id: pf.id },
             include: PLAN_FORM_INCLUDE,
@@ -425,6 +445,7 @@ export class SkusService {
           where: { id: pf.id },
           data: {
             manhForwardedAt: null,
+            ...clearManhDraft,
             ...(pf.status === PlanFormStatus.WAITING_BOSS_APPROVAL
               ? { status: PlanFormStatus.IN_PROGRESS }
               : {}),
@@ -552,9 +573,23 @@ export class SkusService {
           linesOf('BAO_BI_DONG_GOI'),
         );
 
+        // Cùng lý do với updateManhQuota - nộp thật thành công thì nháp tạm lưu đã lỗi thời, xoá
+        // luôn (không xoá sẽ mồ côi vĩnh viễn + có thể "sống lại" đè dữ liệu mới hơn sau này).
+        const clearDetailDraft = {
+          detailDraft: Prisma.JsonNull,
+          detailDraftSavedAt: null,
+          detailDraftSavedBy: null,
+        };
+
         if (revision.isAdminOverride) {
           // SKU vẫn APPROVED - không có vòng duyệt nào để "nộp lại" cho KHSX, nên không đụng
-          // PlanFormDetailReview/forward/status (khác hẳn nhánh DRAFT bên dưới).
+          // PlanFormDetailReview/forward/status (khác hẳn nhánh DRAFT bên dưới). Dùng $executeRaw
+          // để xoá nháp mà không gọi planForm.update() (tránh audit-log extension tự ghi trùng
+          // với writeAdminOverrideAudit() - xem comment đầy đủ ở updateManhQuota).
+          await tx.$executeRawUnsafe(
+            `UPDATE "plan_forms" SET "detailDraft" = NULL, "detailDraftSavedAt" = NULL, "detailDraftSavedBy" = NULL WHERE id = $1`,
+            pf.id,
+          );
           return tx.planForm.findUniqueOrThrow({
             where: { id: pf.id },
             include: PLAN_FORM_INCLUDE,
@@ -585,6 +620,7 @@ export class SkusService {
           where: { id: pf.id },
           data: {
             detailForwardedAt: null,
+            ...clearDetailDraft,
             ...(pf.status === PlanFormStatus.WAITING_BOSS_APPROVAL
               ? { status: PlanFormStatus.IN_PROGRESS }
               : {}),
@@ -608,6 +644,61 @@ export class SkusService {
         actorUserId,
       );
     }
+    return this.toResponseDtoWithQuota(updated);
+  }
+
+  // ─── Nháp tạm lưu (CHƯA gửi phê duyệt) ───────────────────────────────────────────────────
+  // Ghi thẳng 1 cột JSON trên PlanForm, KHÔNG qua $transaction/replacePieces/BomRevision như
+  // updateManhQuota/updateDetailQuota ở trên - đây chỉ là chỗ giữ tạm form đang nhập dở (có
+  // thể nửa vời) để khôi phục khi đổi máy/mất mạng/sập nguồn, không phải dữ liệu BOM thật, nên
+  // không cần transaction/validate nặng. Dọn khi nộp thật thành công (xem 2 hàm trên) hoặc khi
+  // FE tự gọi xoá (người dùng bấm "Bỏ bản nháp").
+
+  async saveManhDraft(id: string, dto: SaveQuotaDraftDto): Promise<SkuResponseDto> {
+    await this.findOneOrThrow(id);
+    const updated = await this.prisma.planForm.update({
+      where: { id: parseBigIntId(id) },
+      data: {
+        manhDraft: dto.data as Prisma.InputJsonValue,
+        manhDraftSavedAt: new Date(),
+        manhDraftSavedBy: dto.savedBy,
+      },
+      include: PLAN_FORM_INCLUDE,
+    });
+    return this.toResponseDtoWithQuota(updated);
+  }
+
+  async clearManhDraft(id: string): Promise<SkuResponseDto> {
+    await this.findOneOrThrow(id);
+    const updated = await this.prisma.planForm.update({
+      where: { id: parseBigIntId(id) },
+      data: { manhDraft: Prisma.JsonNull, manhDraftSavedAt: null, manhDraftSavedBy: null },
+      include: PLAN_FORM_INCLUDE,
+    });
+    return this.toResponseDtoWithQuota(updated);
+  }
+
+  async saveDetailDraft(id: string, dto: SaveQuotaDraftDto): Promise<SkuResponseDto> {
+    await this.findOneOrThrow(id);
+    const updated = await this.prisma.planForm.update({
+      where: { id: parseBigIntId(id) },
+      data: {
+        detailDraft: dto.data as Prisma.InputJsonValue,
+        detailDraftSavedAt: new Date(),
+        detailDraftSavedBy: dto.savedBy,
+      },
+      include: PLAN_FORM_INCLUDE,
+    });
+    return this.toResponseDtoWithQuota(updated);
+  }
+
+  async clearDetailDraft(id: string): Promise<SkuResponseDto> {
+    await this.findOneOrThrow(id);
+    const updated = await this.prisma.planForm.update({
+      where: { id: parseBigIntId(id) },
+      data: { detailDraft: Prisma.JsonNull, detailDraftSavedAt: null, detailDraftSavedBy: null },
+      include: PLAN_FORM_INCLUDE,
+    });
     return this.toResponseDtoWithQuota(updated);
   }
 
@@ -1799,6 +1890,12 @@ export class SkusService {
       origin: pf.origin,
       manhData: quota.manhData,
       detailQuota: quota.detailQuota,
+      manhDraft: pf.manhDraft,
+      manhDraftSavedAt: pf.manhDraftSavedAt,
+      manhDraftSavedBy: pf.manhDraftSavedBy,
+      detailDraft: pf.detailDraft,
+      detailDraftSavedAt: pf.detailDraftSavedAt,
+      detailDraftSavedBy: pf.detailDraftSavedBy,
       manhForwardedAt: pf.manhForwardedAt,
       detailForwardedAt: pf.detailForwardedAt,
       bossRejectReason: pf.bossRejectReason,

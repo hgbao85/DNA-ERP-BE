@@ -1263,6 +1263,16 @@ model PlanForm {
   origin                    String?
   manhData                  Json?
   detailQuota               Json?
+  /// Nháp tạm lưu (CHƯA gửi phê duyệt) - blob JSON tự do do FE tự định hình, server không parse/
+  /// validate (khác hẳn manhData/detailQuota, luôn hợp lệ vì đi qua UpdateQuotaDto). Chỉ để khôi
+  /// phục form đang nhập dở nếu đổi máy/mất mạng/sập nguồn giữa chừng - xoá khi nộp thật thành
+  /// công (xem updateManhQuota/updateDetailQuota) hoặc khi FE tự gọi xoá nháp. 2026-10-16.
+  manhDraft                 Json?
+  manhDraftSavedAt          DateTime?
+  manhDraftSavedBy          String?
+  detailDraft               Json?
+  detailDraftSavedAt        DateTime?
+  detailDraftSavedBy        String?
   /// KHSX đã "chốt xong" nhánh mảnh/chi tiết chưa - null = chưa, 2 nhánh tiến độc lập (không còn
   /// suy ra được từ status như trước). Khi CẢ HAI khác null, status tự chuyển WAITING_BOSS_APPROVAL
   /// (xem SkusService.advanceForwardedTrack). Nhập lại dữ liệu của 1 nhánh sau khi đã forward sẽ

@@ -23,6 +23,13 @@ export class SkuResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) origin!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) manhData!: unknown;
   @Expose() @ApiPropertyOptional({ nullable: true }) detailQuota!: unknown;
+  /** Nháp tạm lưu (CHƯA gửi phê duyệt) - xem PlanForm.manhDraft. FE tự định hình shape. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) manhDraft!: unknown;
+  @Expose() @ApiPropertyOptional({ nullable: true }) manhDraftSavedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) manhDraftSavedBy!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) detailDraft!: unknown;
+  @Expose() @ApiPropertyOptional({ nullable: true }) detailDraftSavedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) detailDraftSavedBy!: string | null;
   /** KHSX đã chốt xong nhánh mảnh/chi tiết chưa - null = chưa. 2 nhánh độc lập, xem PlanForm.status. */
   @Expose() @ApiPropertyOptional({ nullable: true }) manhForwardedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) detailForwardedAt!: Date | null;
