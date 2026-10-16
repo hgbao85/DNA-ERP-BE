@@ -18,6 +18,21 @@ export class PurchaseProposalQuoteResponseDto {
 }
 
 @Exclude()
+export class PurchaseReceiptLogResponseDto {
+  @Expose() @ApiProperty() id!: string;
+  @Expose() @ApiProperty() unitRateQty!: number;
+  @Expose() @ApiProperty() supplierUnitQty!: number;
+  @Expose() @ApiProperty() receivedQty!: number;
+  @Expose() @ApiPropertyOptional({ nullable: true }) receiptFileUrl!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) receivedByName!: string | null;
+  @Expose() @ApiProperty() receivedAt!: Date;
+
+  constructor(partial: Partial<PurchaseReceiptLogResponseDto>) {
+    Object.assign(this, partial);
+  }
+}
+
+@Exclude()
 export class PurchaseProposalItemResponseDto {
   @Expose() @ApiProperty() id!: string;
   @Expose() @ApiProperty() materialId!: string;
@@ -27,12 +42,8 @@ export class PurchaseProposalItemResponseDto {
   /// đặt, nhất là vật tư trùng tên khác kích cỡ (2026-09-15).
   @Expose() @ApiPropertyOptional({ nullable: true }) materialSpec!: string | null;
   @Expose() @ApiProperty() unit!: string;
-  /// Đơn vị mua hàng từ NCC (vd "kg") khi khác unit - null nếu vật tư chỉ có 1 đơn vị.
-  @Expose() @ApiPropertyOptional({ nullable: true }) purchaseUnit!: string | null;
-  /// Số lượng unit / 1 purchaseUnit (vd 250 = 250 cái/kg) - FE dùng để gợi ý quy đổi lúc nhập kho.
-  @Expose() @ApiPropertyOptional({ nullable: true }) khoUnitFactor!: number | null;
-  /// % dự trù hao hụt khi mua (Material.purchaseWastePercentage) - LIVE theo Material HIỆN TẠI
-  /// (giống purchaseUnit/khoUnitFactor ở trên), KHÔNG snapshot lúc tạo dòng. Đã được cộng vào
+  /// % dự trù hao hụt khi mua (Material.purchaseWastePercentage) - LIVE theo Material HIỆN TẠI,
+  /// KHÔNG snapshot lúc tạo dòng. Đã được cộng vào
   /// `buyQty` dưới đây ngay lúc tính đề xuất (2026-10-08, xem Consumable/PieceMaterialYield/
   /// MaterialYieldRecipePurchaseService) - field này CHỈ để FE hiển thị giải thích vì sao buyQty
   /// cao hơn nhu cầu gốc, không dùng để tính lại gì. null = vật tư chưa cấu hình % (hoặc Sắt
@@ -59,8 +70,8 @@ export class PurchaseProposalItemResponseDto {
   /// KHÁC 6000mm mặc định (auto_scan mở lại, xem CuttingProposalLine.lengthSource).
   @Expose() @ApiPropertyOptional({ nullable: true }) stockLengthMm!: number | null;
   @Expose() @ApiProperty() receivedQty!: number;
-  /// Cộng dồn số lượng thực nhận theo purchaseUnit - chỉ để đối chiếu/audit, xem
-  /// PurchaseProposalItem.receivedQtyPurchaseUnit.
+  /// Cộng dồn "Ô2" (supplierUnitQty) của từng lần nhận - chỉ để đối chiếu/audit tổng số lượng
+  /// theo đơn vị bên bán, xem receiptLogs bên dưới để xem chi tiết từng lô.
   @Expose() @ApiPropertyOptional({ nullable: true }) receivedQtyPurchaseUnit!: number | null;
   /// State machine THẬT, ĐỘC LẬP theo từng dòng (2026-08-25, "duyệt riêng từng người mua hàng").
   /// Từ 2026-08-27 rút còn NEW -> PURCHASING -> PURCHASED; QUOTING/SUBMITTED/REJECTED chỉ còn
@@ -81,6 +92,13 @@ export class PurchaseProposalItemResponseDto {
   @ApiProperty({ type: [PurchaseProposalQuoteResponseDto] })
   @Type(() => PurchaseProposalQuoteResponseDto)
   quotes!: PurchaseProposalQuoteResponseDto[];
+  /// Lịch sử từng lần nhận hàng (2026-10-16) - 1 dòng/1 lần gọi receiveItem(), mới nhất trước.
+  /// Thay cho hệ số quy đổi cố định Material.purchaseUnit/khoUnitFactor đã xoá: Ô1/Ô2 nhập tay
+  /// mỗi lô, xem PurchaseReceiptLog.
+  @Expose()
+  @ApiProperty({ type: [PurchaseReceiptLogResponseDto] })
+  @Type(() => PurchaseReceiptLogResponseDto)
+  receiptLogs!: PurchaseReceiptLogResponseDto[];
 
   constructor(partial: Partial<PurchaseProposalItemResponseDto>) {
     Object.assign(this, partial);

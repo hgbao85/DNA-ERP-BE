@@ -57,20 +57,6 @@ export class CreateMaterialDto {
   @IsOptional()
   steelSubGroup?: SteelSubGroup;
 
-  @ApiPropertyOptional({
-    description:
-      'Đơn vị mua hàng từ NCC khi khác với unit (đơn vị tồn kho/sản xuất), vd "kg" khi unit = "cái". Để trống nếu vật tư chỉ có 1 đơn vị.',
-  })
-  @IsOptional()
-  purchaseUnit?: string;
-
-  @ApiPropertyOptional({
-    description:
-      'Hệ số quy đổi: số lượng unit tương ứng với 1 purchaseUnit, vd 250 = 250 cái/kg. Chỉ có ý nghĩa khi purchaseUnit khác trống.',
-  })
-  @IsOptional()
-  khoUnitFactor?: number;
-
   @ApiPropertyOptional({ description: 'Kho vật tư này sẽ nằm khi được tạo' })
   @IsOptional()
   warehouseId?: string;

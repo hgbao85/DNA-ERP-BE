@@ -108,8 +108,6 @@ export class MaterialsService {
           steelSubGroup,
           warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
           buyerId: dto.buyerId || undefined,
-          purchaseUnit: dto.purchaseUnit,
-          khoUnitFactor: dto.khoUnitFactor,
           maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,
           purchaseWastePercentage: wasteFields.purchaseWastePercentage,
           purchaseRoundUp: dto.purchaseRoundUp,
@@ -356,8 +354,6 @@ export class MaterialsService {
               : null
             : undefined,
         buyerId: dto.buyerId !== undefined ? dto.buyerId || null : undefined,
-        purchaseUnit: dto.purchaseUnit,
-        khoUnitFactor: dto.khoUnitFactor,
         maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,
         purchaseWastePercentage: wasteFields.purchaseWastePercentage,
         purchaseRoundUp: dto.purchaseRoundUp,
@@ -659,8 +655,6 @@ export class MaterialsService {
       warehouseCode: material.warehouse?.code ?? null,
       warehouseName: material.warehouse?.name ?? null,
       buyerId: material.buyerId ?? null,
-      purchaseUnit: material.purchaseUnit ?? null,
-      khoUnitFactor: material.khoUnitFactor?.toNumber() ?? null,
       // Luôn null: ngưỡng cắt không còn theo vật tư (2026-09-30, KHSX quyết ở "Tối ưu cắt sắt"). Cột DB
       // còn dữ liệu cũ nhưng không code nào đọc - trả null để UI/API không hiện con số đã vô hiệu.
       maxCuttingWastePercentage: null,

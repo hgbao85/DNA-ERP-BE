@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Bỏ hệ số quy đổi cố định, nhập Ô1×Ô2 theo từng lô nhận hàng</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+pre.term{
+  background:var(--code-bg); border:1px solid var(--line); border-radius:8px;
+  padding:.9rem 1.1rem; margin:.6rem 0 0; font-size:.8rem; line-height:1.6;
+  overflow-x:auto; white-space:pre;
+}
+pre.term .prompt{color:var(--accent-ink)}
+pre.term .ok{color:var(--add); font-weight:700}
+pre.term .bad{color:var(--del); font-weight:700}
+pre.term .muted{color:var(--ink-soft)}
+.card .cap{margin:.9rem 0 0; font-size:.78rem; color:var(--ink-soft)}
+.card .cap:first-of-type{margin-top:1.1rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+td.num{font-family:var(--mono); text-align:right; font-variant-numeric:tabular-nums}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend · Mua hàng — Nhập kho vật tư</div>
+    <h1>Bỏ hệ số quy đổi cố định theo vật tư, chuyển sang nhập tay Ô1×Ô2 theo từng lô nhận hàng</h1>
+    <p class="lede">
+      Theo yêu cầu từ trao đổi hệ số quy đổi <code>Material.purchaseUnit</code>/<code>khoUnitFactor</code>
+      (vd "1kg = 250 cái") khai <b>cố định 1 lần cho cả vật tư</b> là sai, vì tỷ lệ này thực tế đổi theo từng lô hàng/nhà cung cấp.
+      Bỏ hẳn 2 field này, thay bằng 2 ô nhập tay ngay tại màn Nhập kho — Ô1 "Số lượng/1 đơn vị tính" × Ô2 "Số lượng đơn vị tính bên bán"
+      (mặc định 1) — hệ thống tự nhân ra số lượng thật, đúng theo phiếu nhập kho giấy của từng lô.
+    </p>
+    <div class="meta">
+      <span>16/10/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>1 model DB mới (<code>PurchaseReceiptLog</code>)</span>
+      <span>121 test BE · 169 test FE xanh</span>
+      <span><b>Đã kiểm qua UI thật — đi hết luồng PO → PI → Mua hàng → Nhập kho qua trình duyệt</b></span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li><b>Bối cảnh nghiệp vụ:</b> ví dụ "bì zip" — NCC A giao 1kg=130 cái, NCC B giao 1kg=120 cái. Hệ số quy đổi
+        không phải thuộc tính cố định của vật tư, mà của từng lô nhận hàng.</li>
+      <li><b>Backend:</b> xoá <code>Material.purchaseUnit</code>/<code>khoUnitFactor</code> (migration tay, DB dev có
+        dữ liệu nên <code>prisma migrate dev</code> từ chối chạy non-interactive — áp bằng <code>migrate deploy</code>).
+        Model mới <code>PurchaseReceiptLog</code>: 1 dòng/1 lần nhận hàng, lưu Ô1, Ô2, receivedQty, ảnh phiếu, người
+        nhận, thời gian. <code>receiveItem()</code> tự nhân Ô1×Ô2 ở backend (không tin số client gửi sẵn).</li>
+      <li><b>Frontend:</b> bỏ 2 field hệ số quy đổi khỏi form "Thêm vật tư". Màn Nhập kho thay ô kg×hệ-số-cố-định
+        bằng 2 ô tự do + preview trực tiếp + input ảnh "phiếu nhập kho" + khối "Lịch sử nhận hàng" xem lại từng lô.</li>
+      <li><b>Bug tự phát hiện khi kiểm qua UI thật:</b> khối "Lịch sử nhận hàng" bị ẩn theo luôn khi vật tư đã nhận
+        đủ (<code>done=true</code>) — sửa trước khi báo xong, xem mục 4.</li>
+      <li><b>Kiểm chứng bằng cách đi hết luồng thật qua trình duyệt</b> (không chỉ test tự động) — khôi phục lại
+        <code>e2e/golden-path.spec.ts</code> (FE) vốn đã lỗi thời vì kiến trúc tạo PI đổi hẳn từ 2026-09-30, xem
+        mục 5.</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 1. BACKEND ═══════════════════════ -->
+  <div class="module" id="backend">
+    <h2>1. Backend <span class="badge b-be">BE</span></h2>
+    <p class="module-note">
+      Research xác nhận <code>purchaseUnit</code>/<code>khoUnitFactor</code> là metadata chết — không có luồng tính
+      <code>buyQty</code>/demand nào đọc, chỉ hiển thị. Nhưng <code>NhapKhoPage.tsx</code> (FE) đang dùng
+      <code>item.khoUnitFactor</code> để tự quy đổi 1 ô kg → ô cái — đúng đoạn cần thay.
+    </p>
+    <div class="card">
+      <h3>Schema + migration <span class="badge b-db">DB</span></h3>
+      <p>Xoá 2 cột trên <code class="path">materials</code>. Model mới <code>PurchaseReceiptLog</code>
+      (<code>unitRateQty</code>, <code>supplierUnitQty</code> mặc định 1, <code>receivedQty</code>,
+      <code>receiptFileUrl</code>, <code>receivedById</code>, <code>receivedAt</code>), quan hệ
+      <code>PurchaseProposalItem.receiptLogs</code>. Migration viết tay
+      (<code class="path">20261016100000_remove_material_conversion_add_receipt_log</code>) vì DB dev còn 2 dòng
+      <code>materials</code> có giá trị cũ, <code>prisma migrate dev</code> từ chối chạy non-interactive khi có cảnh
+      báo mất dữ liệu — cùng tiền lệ migration <code>20260819025542</code>. Áp bằng
+      <code>prisma migrate deploy</code>.</p>
+    </div>
+    <div class="card">
+      <h3><code class="path">PurchaseProposalsService.receiveItem()</code></h3>
+      <p>DTO <code>ReceivePurchaseProposalItemDto</code> đổi <code>receivedQty</code>/<code>receivedQtyPurchaseUnit</code>
+      thành <code>unitRateQty</code> (bắt buộc) + <code>supplierUnitQty</code> (tùy chọn, mặc định 1) +
+      <code>receiptFileUrl</code> (tùy chọn). Backend tính <code>incrementQty = unitRateQty × supplierUnitQty</code>
+      — thay mọi chỗ trước đây đọc thẳng <code>dto.receivedQty</code> (Decimal accumulate, qty post vào
+      <code>postEntry()</code>, credit <code>StockReservation</code>, check <code>&gt;= buyQty</code>). Trong cùng
+      transaction, ngay sau <code>postEntry()</code>, ghi 1 dòng <code>PurchaseReceiptLog</code>.
+      <code>receivedQtyPurchaseUnit</code> trên <code>PurchaseProposalItem</code> tiếp tục cộng dồn (giờ nguồn là Ô2
+      thay vì field cũ) để giữ nguyên ý nghĩa "tổng theo đơn vị bên bán" cho audit.</p>
+    </div>
+    <div class="card">
+      <h3>Module Materials — dọn field chết</h3>
+      <p><code class="path">create-material.dto.ts</code>/<code class="path">material-response.dto.ts</code>/
+      <code class="path">materials.service.ts</code>: xoá property + pass-through ở <code>create()</code>/
+      <code>update()</code>/<code>toResponseDto()</code>.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. FRONTEND ═══════════════════════ -->
+  <div class="module" id="frontend">
+    <h2>2. Frontend <span class="badge b-fe">FE</span></h2>
+    <div class="card">
+      <h3>Form "Thêm vật tư" <code class="path">MaterialsPage.tsx</code></h3>
+      <p>Xoá 2 field + 2 cột bảng + field trong <code>materials-api.ts</code> (<code>BeMaterial</code>,
+      <code>createMaterial()</code>, <code>updateMaterial()</code>).</p>
+    </div>
+    <div class="card">
+      <h3>Màn Nhập kho <code class="path">NhapKhoPage.tsx</code> — trọng tâm thay đổi</h3>
+      <p>Xoá nhánh <code>hasConversion</code>/đọc <code>item.khoUnitFactor</code>. Thay bằng 2 ô luôn hiển thị:
+      <b>Ô1 "Số lượng/1 đơn vị tính"</b> × <b>Ô2 "Số lượng đơn vị tính bên bán"</b> (mặc định trống = 1) — công thức
+      giống nhau cho mọi vật tư, vật tư không chênh lệch đơn vị chỉ cần nhập Ô1. Preview trực tiếp
+      "= &lt;kết quả&gt; {unit}". Thêm input chọn ảnh "Ảnh phiếu nhập kho" (upload lúc bấm Xác nhận, theo pattern
+      <code class="path">LenhMuaNCCPage.tsx</code> — tránh rác Cloudinary nếu đổi ý). Thêm khối "Lịch sử nhận hàng"
+      xem lại từng lô (ngày, Ô1×Ô2=số lượng, ảnh, người nhận).</p>
+    </div>
+    <div class="card">
+      <h3>API/context plumbing</h3>
+      <p><code class="path">purchasing-api.ts</code>: <code>receiveProposalItem()</code> đổi sang nhận object
+      <code>{ unitRateQty, supplierUnitQty, receiptFileUrl }</code>; thêm map <code>receiptLogs</code>.
+      <code class="path">InspectionContext.tsx</code>: type <code>PurchaseReceiptLog</code> mới, field
+      <code>receiptLogs?</code> trên <code>PurchaseProposalItem</code>.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 3. FILE THAY ĐỔI ═══════════════════════ -->
+  <div class="module" id="files">
+    <h2>3. File thay đổi</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>File</th><th></th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">DNA-ERP-BE/prisma/schema.prisma</td><td><span class="badge b-db">DB</span></td><td>Xoá 2 field Material, model mới <code>PurchaseReceiptLog</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/prisma/migrations/20261016100000_.../migration.sql</td><td><span class="badge b-db">DB</span></td><td><b>Mới</b> — viết tay, áp qua <code>migrate deploy</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/materials/dto/create-material.dto.ts</td><td><span class="badge b-be">BE</span></td><td>Xoá <code>purchaseUnit</code>/<code>khoUnitFactor</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/materials/dto/material-response.dto.ts</td><td><span class="badge b-be">BE</span></td><td>Xoá 2 field response</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/materials/materials.service.ts</td><td><span class="badge b-be">BE</span></td><td>Xoá pass-through create/update/toResponseDto</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/materials/materials.service.spec.ts</td><td><span class="badge b-be">BE</span></td><td>Bỏ field khỏi mock fixture</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/purchase-proposals/dto/receive-purchase-proposal-item.dto.ts</td><td><span class="badge b-be">BE</span></td><td>Đổi hẳn shape — <code>unitRateQty</code>/<code>supplierUnitQty</code>/<code>receiptFileUrl</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/purchase-proposals/dto/purchase-proposal-response.dto.ts</td><td><span class="badge b-be">BE</span></td><td>DTO mới <code>PurchaseReceiptLogResponseDto</code>, field <code>receiptLogs</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/purchase-proposals/purchase-proposals.service.ts</td><td><span class="badge b-be">BE</span></td><td><code>receiveItem()</code> tự nhân Ô1×Ô2, ghi <code>PurchaseReceiptLog</code>; map response</td></tr>
+          <tr><td class="path">DNA-ERP-BE/src/modules/purchase-proposals/purchase-proposals.service.spec.ts</td><td><span class="badge b-be">BE</span></td><td>Cập nhật ~26 lời gọi DTO, +2 test case mới cho Ô1×Ô2/<code>PurchaseReceiptLog</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/services/materials-api.ts</td><td><span class="badge b-fe">FE</span></td><td>Xoá field khỏi <code>BeMaterial</code>/payload create/update</td></tr>
+          <tr><td class="path">DNA-ERP/src/modules/pages/Admin/masterData/MaterialsPage.tsx</td><td><span class="badge b-fe">FE</span></td><td>Xoá 2 field form + 2 cột bảng</td></tr>
+          <tr><td class="path">DNA-ERP/src/modules/pages/ProductionPlan/VatTuDashboardPage.tsx</td><td><span class="badge b-fe">FE</span></td><td>Xoá dòng hiển thị <code>purchaseUnit</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/modules/pages/Manufacturing/NhapKhoPage.tsx</td><td><span class="badge b-fe">FE</span></td><td><b>Trọng tâm</b> — 2 ô Ô1×Ô2, upload ảnh, Lịch sử nhận hàng</td></tr>
+          <tr><td class="path">DNA-ERP/src/services/purchasing-api.ts</td><td><span class="badge b-fe">FE</span></td><td><code>receiveProposalItem()</code> đổi shape, map <code>receiptLogs</code></td></tr>
+          <tr><td class="path">DNA-ERP/src/services/purchasing-api.test.ts</td><td><span class="badge b-fe">FE</span></td><td>Cập nhật 2 test theo shape DTO mới</td></tr>
+          <tr><td class="path">DNA-ERP/src/context/InspectionContext.tsx</td><td><span class="badge b-fe">FE</span></td><td>Type <code>PurchaseReceiptLog</code> mới, field <code>receiptLogs</code></td></tr>
+          <tr><td class="path">DNA-ERP-BE/prisma/seed-e2e-golden-path-sku.ts</td><td><span class="badge b-be">BE</span></td><td><b>Mới</b> — khôi phục fixture SKU "test" cho e2e (xem mục 5)</td></tr>
+          <tr><td class="path">DNA-ERP/e2e/golden-path.spec.ts</td><td><span class="badge b-fe">FE</span></td><td>Vá lại toàn bộ theo UI/kiến trúc hiện tại (xem mục 5)</td></tr>
+          <tr><td class="path">DNA-ERP/e2e/fixtures/phieu-da-ky.png</td><td><span class="badge b-fe">FE</span></td><td><b>Mới</b> — ảnh fixture còn thiếu từ trước</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 4. BUG TỰ PHÁT HIỆN ═══════════════════════ -->
+  <div class="module" id="bugfix">
+    <h2>4. Bug tự phát hiện khi kiểm qua UI thật</h2>
+    <div class="callout bad">
+      <b>"Lịch sử nhận hàng" biến mất ngay khi vật tư nhận đủ:</b> bản đầu chỉ render khối Ô1/Ô2 + Lịch sử bên trong
+      nhánh <code>{done ? checkmark : {Ô1/Ô2 + ... + Lịch sử}}</code> — khi <code>done=true</code>,
+      toàn bộ (kể cả Lịch sử) bị thay bằng dòng "✓ Đã nhận đủ", nghĩa là ngay sau khi nhận xong không ai xem lại
+      lịch sử được nữa. Phát hiện lúc tự rà lại code trước khi dựng kịch bản kiểm UI thật, sửa ngay: tách khối Lịch
+      sử ra khỏi điều kiện <code>done</code>, chỉ phần input/nút Xác nhận mới ẩn khi đã xong.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. KIỂM CHỨNG ═══════════════════════ -->
+  <div class="module" id="kiemchung">
+    <h2>5. Kiểm chứng</h2>
+    <div class="stats">
+      <div class="stat"><div class="n">121</div><div class="l">test backend xanh</div></div>
+      <div class="stat"><div class="n">169</div><div class="l">test frontend xanh</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">lỗi tsc/eslint mới</div></div>
+      <div class="stat"><div class="n">2×</div><div class="l">e2e golden-path pass liên tiếp</div></div>
+    </div>
+    <p class="module-note" style="margin-top:1rem">
+      Test tự động không đủ tin cho riêng tính năng này (logic nhân Ô1×Ô2 + upload ảnh + hiển thị lịch sử nằm hết ở
+      tầng UI) — đi hết luồng thật qua trình duyệt Chromium (Playwright), đăng nhập lần lượt các role thật
+      (<code>sales</code>, <code>khsx</code>, <code>qlsx</code>, <code>boss</code>, <code>nhan</code>,
+      <code>khopsh</code>), từ tạo PO tới Nhập kho.
+    </p>
+    <ol class="timeline stages">
+      <li class="bad"><b>DB dev rỗng hoàn toàn</b><span> — không còn SKU/PO/PurchaseProposal nào (đợt dọn trước đó).
+        Bài <code>e2e/golden-path.spec.ts</code> có sẵn trong repo chạy thẳng bị kẹt ngay bước đầu vì thiếu đúng SKU
+        mẫu "test" mà nó cần.</span></li>
+      <li><b>Khôi phục fixture</b><span> — viết <code class="path">prisma/seed-e2e-golden-path-sku.ts</code>: 1
+        MfgProduct factoryCode "test", 1 Material sắt (<code>buyerId</code> gán tài khoản "nhan" đúng như test cần,
+        <code>warehouseId</code> = kho phôi-sơn-hàn), BOM 1 mảnh 1 đoạn, <code>PlanForm APPROVED</code>.</span></li>
+      <li class="bad"><b>Hàng loạt chỗ lệch do UI đã đổi kiến trúc từ lâu, không liên quan đợt sửa này</b><span> —
+        DatePicker đổi từ <code>&lt;input type="date"&gt;</code> sang popup tự vẽ; field "Mã đơn hàng" mới bắt
+        buộc; mã hiển thị đổi từ <code>SalesOrder.code</code> tự sinh ("PO-19") sang <code>orderCode</code> gõ tay;
+        trang "Lệnh sản xuất mới" đổi tìm theo mã PI thay vì PO; <b>đổi lớn nhất</b>: từ 2026-09-30 PI không còn tự
+        sinh khi Boss duyệt — KHSX phải tự tính phương án cắt ở "Tối ưu cắt sắt" (tab "Chọn và tính" → tick SKU →
+        "Tính phương án cắt" → đợi solver → tab "Kết quả đã tính" → "Tạo lệnh sản xuất") TRƯỚC, nên bỏ hẳn được đoạn
+        dò API cũ (tìm PI item/ProductionOrder/đợi cutting proposal/QLSX duyệt cắt sắt) vì <code>cuttingProposalId</code>
+        và <code>piCode</code> giờ lấy thẳng từ response <code>claim-solo</code>.</span></li>
+      <li><b>Vá từng bước, chạy lại tới khi pass</b><span> — kể cả modal "Gửi QLSX xử lý" đổi tên, picker kho thành
+        phẩm dùng <code>&lt;button&gt;</code> thật, cột bảng Nhập kho lệch chỉ số vì có thêm cột "Quy cách", và tạo
+        bù file ảnh fixture <code class="path">e2e/fixtures/phieu-da-ky.png</code> vốn chưa từng được commit.</span></li>
+      <li class="ok"><b>Pass trọn vẹn 2 lần liên tiếp</b><span> — đi hết PO → duyệt SKU → Tối ưu cắt sắt (chế độ
+        "Chấp nhận hao hụt cao hơn" vì đơn test 1 SKU quá nhỏ không lấp đầy 1 cây chuẩn) → Lệnh sản xuất mới → QLSX
+        chọn kho → Boss duyệt → Mua hàng (nhan) "Sếp đã duyệt" kèm file ký → <b>Nhập kho (khopsh) nhập Ô1×Ô2 + đính
+        ảnh phiếu, xác nhận preview tính đúng, xác nhận Lịch sử nhận hàng còn hiện sau khi nhận đủ</b> → ship.</span></li>
+    </ol>
+    <div class="callout ok">
+      <b>Bằng chứng DB sau khi chạy:</b> <code>PurchaseReceiptLog</code> ghi đúng
+      <code>{unitRateQty:1, supplierUnitQty:1, receivedQty:1, receiptFileUrl:"https://res.cloudinary.com/.../ecpakkn7....png", receivedByName:"khopsh khopsh"}</code>
+      — ảnh phiếu nhập kho upload thật lên Cloudinary, không phải mock; <code>StockQuant</code> cộng đúng; item
+      chuyển <code>PURCHASED</code> đúng lúc <code>receivedQty &gt;= buyQty</code>.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 6. CÒN MỞ ═══════════════════════ -->
+  <div class="module" id="conmo">
+    <h2>6. Còn mở</h2>
+    <div class="card">
+      <h3>Input ảnh "phiếu nhập kho" chưa bắt buộc</h3>
+      <p>Để tùy chọn trước (không chặn nhận hàng nếu quên chụp) — có thể đổi thành bắt buộc sau nếu nghiệp vụ cần
+      bằng chứng cho mọi lô.</p>
+    </div>
+    <div class="card">
+      <h3><code class="path">e2e/golden-path.spec.ts</code> vẫn tạo dữ liệu mới mỗi lần chạy (PO/PI), tích luỹ trong
+      DB dev</h3>
+      <p>Cùng idiom "tồn kho demo dùng chung, tích luỹ qua các lần chạy" đã ghi trong chính file test — không dọn tự
+      động, giống các test e2e khác trong repo.</p>
+    </div>
+    <div class="card">
+      <h3>Chưa quyết định: xoá hẳn commit hay giữ lại <code class="path">seed-e2e-golden-path-sku.ts</code> +
+      bản vá <code class="path">golden-path.spec.ts</code></h3>
+      <p>Người dùng đã xác nhận giữ lại bản test mới nhất (đã pass) — chờ quyết định có commit vào repo hay không.</p>
+    </div>
+  </div>
+
+  <footer>
+    Tài liệu nội bộ DNA-ERP — nhật ký thay đổi 16/10/2026.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" type="button" aria-label="Lên đầu trang">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

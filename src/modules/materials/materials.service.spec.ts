@@ -46,7 +46,6 @@ describe('MaterialsService', () => {
     name: 'Sat cay',
     unit: 'kg',
     materialGroupId: null,
-    khoUnitFactor: null,
     isActive: true,
     createdAt: new Date(),
     updatedAt: new Date(),

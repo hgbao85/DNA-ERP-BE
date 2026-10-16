@@ -43,6 +43,7 @@ describe('PurchaseProposalsService', () => {
       updateMany: jest.Mock;
       count: jest.Mock;
     };
+    purchaseReceiptLog: { create: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock; findUnique: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     auditLog: { create: jest.Mock };
@@ -103,6 +104,9 @@ describe('PurchaseProposalsService', () => {
     // Luồng cũ (gỡ 2026-08-27) - giữ mảng rỗng vì toItemResponseDto vẫn map field này để tra cứu
     // lịch sử; không còn đường nào ghi thêm báo giá mới.
     quotes: [],
+    // toItemResponseDto() map field này (2026-10-16) - mảng rỗng mặc định, test riêng cho
+    // PurchaseReceiptLog tự override.
+    receiptLogs: [],
     ...overrides,
   });
 
@@ -175,6 +179,9 @@ describe('PurchaseProposalsService', () => {
         // test riêng cho ca "còn người mua khác chưa duyệt" tự override.
         count: jest.fn().mockResolvedValue(0),
       },
+      // Lịch sử từng lần nhận hàng (2026-10-16) - receiveItem() ghi 1 dòng mỗi lần gọi, trong cùng
+      // transaction ngay sau postEntry(). Test không soi dữ liệu trả về nên stub rỗng là đủ.
+      purchaseReceiptLog: { create: jest.fn() },
       // findUniqueOrThrow: tra kho ảo SUPPLIER trong receiveItem(). findUnique (2026-09-04): tra
       // kho GHI ĐÈ khi item.receiveWarehouseCode có giá trị (vật tư đóng gói) - mặc định null vì
       // hầu hết test không dùng nhánh này (item() factory mặc định receiveWarehouseCode=null).
@@ -732,7 +739,7 @@ describe('PurchaseProposalsService', () => {
       );
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', null),
+        service.receiveItem('300', '400', { unitRateQty: 1 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(ConflictException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -743,7 +750,7 @@ describe('PurchaseProposalsService', () => {
       );
 
       await expect(
-        service.receiveItem('300', '999', { receivedQty: 1 }, 'user-1', 'key-1', null),
+        service.receiveItem('300', '999', { unitRateQty: 1 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(NotFoundException);
       expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
@@ -777,7 +784,7 @@ describe('PurchaseProposalsService', () => {
       const result = await service.receiveItem(
         '300',
         '400',
-        { receivedQty: 5 },
+        { unitRateQty: 5 },
         'user-1',
         'key-1',
         null,
@@ -808,6 +815,85 @@ describe('PurchaseProposalsService', () => {
       );
     });
 
+    // 2026-10-16: thay cho hệ số quy đổi cố định Material.khoUnitFactor đã xoá - Ô1 (unitRateQty)
+    // × Ô2 (supplierUnitQty) nhập tay mỗi lô, backend tự nhân (không tin số client gửi sẵn).
+    it('nhân Ô1 × Ô2 ra đúng receivedQty cộng vào StockLedger và ghi 1 dòng PurchaseReceiptLog', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              materialId: 30n,
+              buyQty: decimal(10000),
+              receivedQty: decimal(0),
+            }),
+          ],
+        }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(10000), receivedQty: decimal(6500), quotes: [] }),
+      );
+
+      await service.receiveItem(
+        '300',
+        '400',
+        { unitRateQty: 130, supplierUnitQty: 50, receiptFileUrl: 'https://cdn/phieu.jpg' },
+        'user-1',
+        'key-1',
+        null,
+      );
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ qty: 6500 }),
+        expect.anything(),
+      );
+      expect(prisma.purchaseReceiptLog.create).toHaveBeenCalledWith({
+        data: {
+          itemId: 400n,
+          unitRateQty: 130,
+          supplierUnitQty: 50,
+          receivedQty: 6500,
+          receiptFileUrl: 'https://cdn/phieu.jpg',
+          receivedById: 'user-1',
+        },
+      });
+    });
+
+    it('vật tư không chênh lệch đơn vị: bỏ trống supplierUnitQty mặc định = 1, receivedQty = unitRateQty', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              materialId: 30n,
+              buyQty: decimal(10),
+              receivedQty: decimal(0),
+            }),
+          ],
+        }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(10), receivedQty: decimal(4), quotes: [] }),
+      );
+
+      await service.receiveItem('300', '400', { unitRateQty: 4 }, 'user-1', 'key-1', null);
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ qty: 4 }),
+        expect.anything(),
+      );
+      expect(prisma.purchaseReceiptLog.create).toHaveBeenCalledWith({
+        data: {
+          itemId: 400n,
+          unitRateQty: 4,
+          supplierUnitQty: 1,
+          receivedQty: 4,
+          receiptFileUrl: undefined,
+          receivedById: 'user-1',
+        },
+      });
+    });
+
     // Trung bình, audit toàn diện 09/09/2026: trước đây cộng dồn bằng .toNumber() + phép + của JS
     // (binary float) - qua nhiều đợt nhận nhỏ lẻ, sai số nhị phân kinh điển (0.1 + 0.2 =
     // 0.30000000000000004, KHÔNG PHẢI 0.3) có thể bị ghi thẳng vào cột Decimal, tồn tại vĩnh viễn.
@@ -835,7 +921,7 @@ describe('PurchaseProposalsService', () => {
         item({ buyQty: decimal(10), receivedQty: decimal(0.3), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 0.1 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 0.1 }, 'user-1', 'key-1', null);
 
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
       const call = prisma.purchaseProposalItem.update.mock.calls[0][0];
@@ -865,7 +951,7 @@ describe('PurchaseProposalsService', () => {
         item({ buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 5 }, 'user-1', 'key-1', null);
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ stockLengthMm: 5900 }),
@@ -895,7 +981,7 @@ describe('PurchaseProposalsService', () => {
         item({ buyQty: decimal(3), receivedQty: decimal(3), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 3 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 3 }, 'user-1', 'key-1', null);
 
       expect(prisma.warehouse.findUnique).toHaveBeenCalledWith({
         where: { code: 'thanh-pham-1788485485362' },
@@ -920,7 +1006,7 @@ describe('PurchaseProposalsService', () => {
       prisma.warehouse.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 3 }, 'user-1', 'key-1', null),
+        service.receiveItem('300', '400', { unitRateQty: 3 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(BadRequestException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -955,7 +1041,7 @@ describe('PurchaseProposalsService', () => {
         item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 5 }, 'user-1', 'key-1', null);
 
       expect(stockReservationsService.creditPool).toHaveBeenCalledWith(expect.anything(), {
         productionInvoiceId: 50n,
@@ -991,7 +1077,7 @@ describe('PurchaseProposalsService', () => {
         item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 0 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 0 }, 'user-1', 'key-1', null);
 
       expect(stockReservationsService.creditPool).not.toHaveBeenCalled();
     });
@@ -1033,7 +1119,7 @@ describe('PurchaseProposalsService', () => {
       const result = await service.receiveItem(
         '300',
         '400',
-        { receivedQty: 5 },
+        { unitRateQty: 5 },
         'user-1',
         'key-1',
         null,
@@ -1085,7 +1171,7 @@ describe('PurchaseProposalsService', () => {
       const result = await service.receiveItem(
         '300',
         '400',
-        { receivedQty: 5 },
+        { unitRateQty: 5 },
         'user-1',
         'key-1',
         null,
@@ -1137,7 +1223,7 @@ describe('PurchaseProposalsService', () => {
       const result = await service.receiveItem(
         '300',
         '400',
-        { receivedQty: 5 },
+        { unitRateQty: 5 },
         'user-1',
         'key-1',
         null,
@@ -1187,7 +1273,7 @@ describe('PurchaseProposalsService', () => {
         item({ buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 2 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 2 }, 'user-1', 'key-1', null);
 
       // 3 (khoá được) + 2 (nhập lần này) = 5, KHÔNG PHẢI 0 + 2 = 2 (nếu lỡ dùng snapshot cũ).
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
@@ -1232,7 +1318,7 @@ describe('PurchaseProposalsService', () => {
       );
 
       // 3 đã nhận + 10 nhập thêm = 13 > 8 -> vẫn ghi đúng 13, KHÔNG chặn, KHÔNG cắt về 8.
-      await service.receiveItem('300', '400', { receivedQty: 10 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 10 }, 'user-1', 'key-1', null);
 
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1268,7 +1354,7 @@ describe('PurchaseProposalsService', () => {
         item({ buyQty: decimal(8), receivedQty: decimal(13), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 5 }, 'user-1', 'key-1', null);
 
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1305,7 +1391,7 @@ describe('PurchaseProposalsService', () => {
         { status: PurchaseProposalStatus.PURCHASED },
       ]);
 
-      await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 8 }, 'user-1', 'key-1', null);
 
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1343,7 +1429,7 @@ describe('PurchaseProposalsService', () => {
         { status: PurchaseProposalStatus.PURCHASING },
       ]);
 
-      await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 8 }, 'user-1', 'key-1', null);
 
       expect(prisma.purchaseProposal.update).toHaveBeenCalledWith({
         where: { id: 300n },
@@ -1377,7 +1463,7 @@ describe('PurchaseProposalsService', () => {
         item({ materialId: 40n, buyQty: decimal(5), receivedQty: decimal(5), quotes: [] }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 5 }, 'user-1', 'key-1', null);
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ toWarehouseId: 810n, materialId: 40n, qty: 5 }),
@@ -1398,7 +1484,7 @@ describe('PurchaseProposalsService', () => {
       );
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', null),
+        service.receiveItem('300', '400', { unitRateQty: 1 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(BadRequestException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -1419,7 +1505,7 @@ describe('PurchaseProposalsService', () => {
       );
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', 'vat-tu-tp'),
+        service.receiveItem('300', '400', { unitRateQty: 1 }, 'user-1', 'key-1', 'vat-tu-tp'),
       ).rejects.toThrow(ForbiddenException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -1439,7 +1525,7 @@ describe('PurchaseProposalsService', () => {
       prisma.warehouse.findUnique.mockResolvedValue({ id: 212n, code: 'thanh-pham-2' });
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', 'thanh-pham-1'),
+        service.receiveItem('300', '400', { unitRateQty: 1 }, 'user-1', 'key-1', 'thanh-pham-1'),
       ).rejects.toThrow(ForbiddenException);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
@@ -1460,10 +1546,10 @@ describe('PurchaseProposalsService', () => {
       );
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', 'phoi-son-han'),
+        service.receiveItem('300', '400', { unitRateQty: 1 }, 'user-1', 'key-1', 'phoi-son-han'),
       ).resolves.toBeDefined();
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', null),
+        service.receiveItem('300', '400', { unitRateQty: 1 }, 'user-1', 'key-1', null),
       ).resolves.toBeDefined();
     });
 
@@ -1487,7 +1573,7 @@ describe('PurchaseProposalsService', () => {
       ]);
 
       await expect(
-        service.receiveItem('300', '400', { receivedQty: 1 }, 'user-1', 'key-1', null),
+        service.receiveItem('300', '400', { unitRateQty: 1 }, 'user-1', 'key-1', null),
       ).rejects.toThrow(ConflictException);
       expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
@@ -1516,7 +1602,7 @@ describe('PurchaseProposalsService', () => {
         }),
       );
 
-      await service.receiveItem('300', '400', { receivedQty: 5 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 5 }, 'user-1', 'key-1', null);
 
       expect(notificationsService.emit).toHaveBeenCalledWith(
         'PURCHASE_PROPOSAL_ITEM_RECEIVED',
@@ -1566,7 +1652,7 @@ describe('PurchaseProposalsService', () => {
         { status: PurchaseProposalStatus.PURCHASED },
       ]);
 
-      await service.receiveItem('300', '400', { receivedQty: 8 }, 'user-1', 'key-1', null);
+      await service.receiveItem('300', '400', { unitRateQty: 8 }, 'user-1', 'key-1', null);
 
       expect(notificationsService.emit).toHaveBeenCalledWith(
         'PURCHASE_PROPOSAL_PURCHASED',

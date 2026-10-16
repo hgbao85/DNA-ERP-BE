@@ -120,6 +120,7 @@ model User {
   transferCheckResults              TransferCheckResult[]       @relation("TransferCheckCheckedBy")
   purchaseProposalsApproved         PurchaseProposal[]
   purchaseProposalItemsApproved     PurchaseProposalItem[]
+  purchaseReceiptLogsReceived       PurchaseReceiptLog[]
   stockLedgerEntries                StockLedger[]
   stockReservations                 StockReservation[]
   materialsToBuy                    Material[]
@@ -478,12 +479,6 @@ model Material {
   steelSubGroup             SteelSubGroup?
   warehouseId               BigInt?
   buyerId                   String?
-  /// Đơn vị mua hàng từ NCC khi khác với `unit` (đơn vị tồn kho/sản xuất) - vd NCC bán theo "kg"
-  /// nhưng sản xuất dùng "cái". Để trống nếu vật tư chỉ có 1 đơn vị duy nhất (unit).
-  purchaseUnit              String?
-  /// Hệ số quy đổi: số lượng `unit` tương ứng với 1 `purchaseUnit` (vd 250 = 250 cái/kg).
-  /// Chỉ có ý nghĩa khi purchaseUnit khác null.
-  khoUnitFactor             Decimal?            @db.Decimal(14, 4)
   /// **ĐÃ BỎ KHỎI LUỒNG (2026-09-30) - không code nào còn đọc/ghi cột này.** Sắt chỉ có MỘT ngưỡng chung
   /// do KHSX quyết (SystemConfig.solverMaxWastePercentage, KHSX tự đổi ở "Tối ưu cắt sắt"); Admin không
   /// còn đặt ngưỡng riêng theo vật tư. Cột giữ lại (không xoá dữ liệu cũ) - mô tả dưới là LỊCH SỬ.
@@ -2064,8 +2059,10 @@ model PurchaseProposalItem {
   actualStock             Decimal  @default(0) @db.Decimal(14, 4)
   buyQty                  Decimal  @db.Decimal(14, 4)
   receivedQty             Decimal  @default(0) @db.Decimal(14, 4)
-  /// Cộng dồn số lượng thực nhận theo purchaseUnit của material (vd kg) - chỉ để đối chiếu/audit,
-  /// không dùng để tính tồn kho (receivedQty theo unit mới là số chốt vào StockLedger).
+  /// Cộng dồn "Ô2" (supplierUnitQty) của từng lần nhận - xem PurchaseReceiptLog. Chỉ để đối
+  /// chiếu/audit tổng số lượng theo đơn vị bên bán qua các lô, không dùng để tính tồn kho
+  /// (receivedQty theo unit mới là số chốt vào StockLedger). Từ 2026-10-16 không còn gắn với
+  /// Material.purchaseUnit (đã xoá) - hệ số quy đổi giờ nhập tay theo từng lô, xem PurchaseReceiptLog.
   receivedQtyPurchaseUnit Decimal? @db.Decimal(14, 4)
   /// CHỈ có ý nghĩa với vật tư sắt (nhánh CuttingProposalsService.approve() - copy nguyên văn từ
   /// CuttingProposalLine.bestStockLengthMm lúc tạo dòng này). Cho Mua hàng biết PHẢI đặt cây dài
@@ -2111,10 +2108,11 @@ model PurchaseProposalItem {
   /// tách ra cột riêng (Sếp chốt). NULL = dòng duyệt theo luồng cũ (trước 2026-08-27).
   approvalFileUrl String?
 
-  proposal   PurchaseProposal        @relation(fields: [proposalId], references: [id])
-  material   Material                @relation(fields: [materialId], references: [id])
-  quotes     PurchaseProposalQuote[]
-  approvedBy User?                   @relation(fields: [approvedById], references: [id])
+  proposal    PurchaseProposal        @relation(fields: [proposalId], references: [id])
+  material    Material                @relation(fields: [materialId], references: [id])
+  quotes      PurchaseProposalQuote[]
+  approvedBy  User?                   @relation(fields: [approvedById], references: [id])
+  receiptLogs PurchaseReceiptLog[]
 
   @@index([proposalId])
   @@index([status])
@@ -2138,6 +2136,35 @@ model PurchaseProposalQuote {
 
   @@index([itemId])
   @@map("purchase_proposal_quotes")
+}
+
+/// 1 dòng / 1 lần nhận hàng thực tế cho 1 PurchaseProposalItem (2026-10-16, thay cho hệ số quy
+/// đổi cố định Material.purchaseUnit/khoUnitFactor đã xoá - tỷ lệ thực tế đổi theo từng lô/NCC
+/// nên không thể khai 1 lần cho cả vật tư). Ô1×Ô2 = receivedQty, cùng công thức cho mọi vật tư -
+/// vật tư không chênh lệch đơn vị chỉ cần nhập Ô1, giữ Ô2 mặc định 1. Xem
+/// PurchaseProposalsService.receiveItem().
+model PurchaseReceiptLog {
+  id              BigInt   @id @default(autoincrement())
+  itemId          BigInt
+  /// Ô1 "Số lượng/1 đơn vị tính" - vật tư không chênh lệch đơn vị: chính là số lượng nhận thực tế
+  /// (theo material.unit). Vật tư có chênh lệch (vd bì zip): tỷ lệ quy đổi riêng của LÔ này (vd
+  /// 130 = 130 cái/kg) - nhập tay mỗi lần, không lấy từ Material.
+  unitRateQty     Decimal  @db.Decimal(14, 4)
+  /// Ô2 "Số lượng đơn vị tính bên bán" - mặc định 1 khi không có chênh lệch đơn vị.
+  supplierUnitQty Decimal  @default(1) @db.Decimal(14, 4)
+  /// = unitRateQty * supplierUnitQty (tính ở backend, không tin số client gửi sẵn), theo
+  /// material.unit - đúng bằng số đã cộng vào StockLedger cho lần nhận này.
+  receivedQty     Decimal  @db.Decimal(14, 4)
+  /// Ảnh/scan phiếu nhập kho giấy của đúng lần nhận này (Cloudinary secure_url, POST /uploads/image).
+  receiptFileUrl  String?
+  receivedById    String?
+  receivedAt      DateTime @default(now())
+
+  item       PurchaseProposalItem @relation(fields: [itemId], references: [id])
+  receivedBy User?                @relation(fields: [receivedById], references: [id])
+
+  @@index([itemId])
+  @@map("purchase_receipt_logs")
 }
 
 // =====================================================================

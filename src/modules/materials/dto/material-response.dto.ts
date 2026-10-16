@@ -26,8 +26,6 @@ export class MaterialResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) warehouseCode!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) warehouseName!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) buyerId!: string | null;
-  @Expose() @ApiPropertyOptional({ nullable: true }) purchaseUnit!: string | null;
-  @Expose() @ApiPropertyOptional({ nullable: true }) khoUnitFactor!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) maxCuttingWastePercentage!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) purchaseWastePercentage!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) purchaseRoundUp!: boolean | null;

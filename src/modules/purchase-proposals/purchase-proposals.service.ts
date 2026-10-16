@@ -35,6 +35,7 @@ import {
   PurchaseProposalItemResponseDto,
   PurchaseProposalQuoteResponseDto,
   PurchaseProposalResponseDto,
+  PurchaseReceiptLogResponseDto,
 } from './dto/purchase-proposal-response.dto';
 import { ListPurchaseProposalsQueryDto } from './dto/list-purchase-proposals-query.dto';
 import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
@@ -113,6 +114,7 @@ const LIST_INCLUDE = {
 const ITEM_INCLUDE = {
   material: { include: { warehouse: true } },
   quotes: { include: { supplier: true } },
+  receiptLogs: { include: { receivedBy: true }, orderBy: { receivedAt: 'desc' } },
 } satisfies Prisma.PurchaseProposalItemInclude;
 
 const DETAIL_INCLUDE = {
@@ -582,6 +584,12 @@ export class PurchaseProposalsService {
 
     const buyQty = item.buyQty.toNumber();
 
+    // Backend tự tính Ô1×Ô2 (2026-10-16, thay cho hệ số quy đổi cố định Material.khoUnitFactor đã
+    // xoá) - không tin số đã nhân sẵn từ client. Ô2 mặc định 1 khi vật tư không chênh lệch đơn vị
+    // (xem ReceivePurchaseProposalItemDto, PurchaseReceiptLog).
+    const supplierUnitQty = dto.supplierUnitQty ?? 1;
+    const incrementQty = dto.unitRateQty * supplierUnitQty;
+
     const supplierWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
       where: { code: SUPPLIER_WAREHOUSE_CODE },
     });
@@ -632,21 +640,17 @@ export class PurchaseProposalsService {
         // ngược LẠI vào cột Decimal, tồn tại vĩnh viễn trong sổ sách. Cộng bằng Prisma.Decimal
         // (decimal.js - cộng thập phân chính xác, không đi qua vòng chuyển binary float trung
         // gian của JS number) rồi mới .toNumber() ở chỗ CHỈ so sánh/hiển thị, không ghi lại DB.
-        const nextReceivedQtyDecimal = locked.receivedQty.plus(dto.receivedQty);
+        const nextReceivedQtyDecimal = locked.receivedQty.plus(incrementQty);
         const nextReceivedQty = nextReceivedQtyDecimal.toNumber();
 
         // Nhận THỪA: không còn chặn cứng ở BE (2026-09-19, theo yêu cầu người dùng - trước đây
         // chặn theo dung sai % cấu hình ở System Config). Luôn ghi đúng số thật ngay cả khi vượt
         // buyQty - cảnh báo + bắt xác nhận đã chuyển sang FE (popup ở NhapKhoPage.tsx) trước khi
-        // gọi API này, BE không tái kiểm lại. Không còn nhánh clamp (Math.min) nào giữa số đã nhận
-        // và số nhận mới - phần tăng thêm luôn đúng bằng dto.receivedQty, lấy trực tiếp thay vì trừ
-        // ngược qua 2 giá trị đã .toNumber() (tránh cộng-rồi-trừ qua binary float không cần thiết).
-        const incrementQty = dto.receivedQty;
-        const nextReceivedQtyPurchaseUnit = dto.receivedQtyPurchaseUnit
-          ? (locked.receivedQtyPurchaseUnit ?? new Prisma.Decimal(0)).plus(
-              dto.receivedQtyPurchaseUnit,
-            )
-          : (locked.receivedQtyPurchaseUnit ?? undefined);
+        // gọi API này, BE không tái kiểm lại. incrementQty tính sẵn ở trên (unitRateQty ×
+        // supplierUnitQty), không còn nhánh clamp (Math.min) nào giữa số đã nhận và số nhận mới.
+        const nextReceivedQtyPurchaseUnit = (
+          locked.receivedQtyPurchaseUnit ?? new Prisma.Decimal(0)
+        ).plus(supplierUnitQty);
 
         // Bút toán "hàng mua về nhập kho" - CÙNG transaction với update receivedQty bên dưới
         // (postEntry nhận tx), khoá chỉ nhả sau khi cả hai đã ghi xong.
@@ -668,6 +672,20 @@ export class PurchaseProposalsService {
             },
             tx,
           );
+
+          // Lịch sử từng lần nhận hàng (2026-10-16) - 1 dòng/1 lần gọi receiveItem(), lưu lại đúng
+          // Ô1/Ô2 nhân viên đã nhập + ảnh phiếu nhập kho, để audit/xem lại theo từng lô (khác
+          // receivedQty/receivedQtyPurchaseUnit trên item vốn chỉ là số cộng dồn).
+          await tx.purchaseReceiptLog.create({
+            data: {
+              itemId: item.id,
+              unitRateQty: dto.unitRateQty,
+              supplierUnitQty,
+              receivedQty: incrementQty,
+              receiptFileUrl: dto.receiptFileUrl,
+              receivedById: userId,
+            },
+          });
 
           // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26) / đính chính 2026-09-23 (xem comment đầu hàm): hàng
           // vừa về phải "có chủ" ngay - cộng thẳng vào pool giữ chỗ của (PI, vật tư) này, KHÔNG để
@@ -717,7 +735,7 @@ export class PurchaseProposalsService {
         piCode,
         count: 1,
         materialCode: item.material.code,
-        qty: dto.receivedQty,
+        qty: incrementQty,
         unit: item.material.unit,
         warehouseCode: targetWarehouseCode,
       },
@@ -926,8 +944,6 @@ export class PurchaseProposalsService {
       materialName: item.material.name,
       materialSpec: item.material.spec ?? null,
       unit: item.material.unit,
-      purchaseUnit: item.material.purchaseUnit ?? null,
-      khoUnitFactor: item.material.khoUnitFactor?.toNumber() ?? null,
       purchaseWastePercentage: item.material.purchaseWastePercentage?.toNumber() ?? null,
       // Kho nhận hàng THẬT của riêng dòng này - ưu tiên item.receiveWarehouseCode (vật tư đóng
       // gói, ghi đè về kho thành phẩm QLSX đã chọn, 2026-09-04), rơi về Material.warehouseId nếu
@@ -956,6 +972,20 @@ export class PurchaseProposalsService {
             expectedDate: q.expectedDate,
             note: q.note,
             isChosen: q.isChosen,
+          }),
+      ),
+      receiptLogs: item.receiptLogs.map(
+        (r) =>
+          new PurchaseReceiptLogResponseDto({
+            id: r.id.toString(),
+            unitRateQty: r.unitRateQty.toNumber(),
+            supplierUnitQty: r.supplierUnitQty.toNumber(),
+            receivedQty: r.receivedQty.toNumber(),
+            receiptFileUrl: r.receiptFileUrl,
+            receivedByName: r.receivedBy
+              ? `${r.receivedBy.firstName} ${r.receivedBy.lastName}`.trim()
+              : null,
+            receivedAt: r.receivedAt,
           }),
       ),
     });
