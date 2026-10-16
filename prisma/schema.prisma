@@ -931,6 +931,8 @@ enum ProcessStep {
   TOP_DAU
   /// Xẻ
   XE
+  /// Nhấn
+  NHAN
 }
 
 /// Đoạn cấu thành 1 mảnh. mfgProductId denormalized để FK ghép (bomRevisionId,

@@ -30,6 +30,7 @@ export const STAT_OPS = [
   'TAN',
   'TOP_DAU',
   'XE',
+  'NHAN',
   'PHOI',
   'HAN',
   'SON',

@@ -175,7 +175,7 @@ export class FloorAdminService {
     }
     if (kind === WorkstationKind.STEP && (!processStep || processStep === ProcessStep.CAT)) {
       throw new BadRequestException(
-        'Máy công đoạn phụ phải chọn công đoạn (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ)',
+        'Máy công đoạn phụ phải chọn công đoạn (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ/Nhấn)',
       );
     }
   }
