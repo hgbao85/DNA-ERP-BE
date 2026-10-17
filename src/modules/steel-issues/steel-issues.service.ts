@@ -229,8 +229,15 @@ export class SteelIssuesService {
     entityId: bigint | string,
     action: 'CREATED' | 'RECEIVED',
     actorId: string | null,
+    productionInvoiceId: bigint | string,
   ): void {
-    this.realtime.publishEntityChanged({ entity: 'STEEL_ISSUE', entityId, action, actorId });
+    this.realtime.publishEntityChanged({
+      entity: 'STEEL_ISSUE',
+      entityId,
+      action,
+      actorId,
+      parentId: productionInvoiceId,
+    });
   }
 
   /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/17.2
@@ -375,7 +382,7 @@ export class SteelIssuesService {
       barCount: created.barCount,
     });
 
-    this.publishRealtime(created.id, 'CREATED', issuedById);
+    this.publishRealtime(created.id, 'CREATED', issuedById, created.productionInvoiceId);
     return this.toResponseDto(created, await this.resolveRequiredSteps(invoice.id, materialId));
   }
 
@@ -645,7 +652,7 @@ export class SteelIssuesService {
     if (receivedBarCount !== issue.barCount) {
       await this.notifyReceivedMismatch(updated, receivedBarCount);
     }
-    this.publishRealtime(updated.id, 'RECEIVED', null);
+    this.publishRealtime(updated.id, 'RECEIVED', null, updated.productionInvoiceId);
     return this.toResponseDto(
       updated,
       await this.resolveRequiredSteps(updated.productionInvoiceId, updated.materialId),

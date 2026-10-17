@@ -86,6 +86,7 @@ describe('SteelIssuesService', () => {
   };
   let stockReservationsService: { drainPool: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
+  let realtimeStub: { publishEntityChanged: jest.Mock; publishNotificationCreated: jest.Mock };
 
   const invoice = { id: 1n, code: 'PI-31' };
   // floorStage ACTIVE mặc định (2026-08-31) - đa số test không quan tâm gate
@@ -287,7 +288,7 @@ describe('SteelIssuesService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
-    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new SteelIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
@@ -344,6 +345,26 @@ describe('SteelIssuesService', () => {
         expect.objectContaining({
           entityId: '100',
           params: { piCode: 'PI-31', materialCode: 'ST-18', barCount: 20 },
+        }),
+      );
+    });
+
+    it('phát entity.changed kèm parentId=productionInvoiceId (2026-10-17, FE lọc banner theo đúng PI đang xem)', async () => {
+      prisma.steelIssue.create.mockResolvedValue(issue);
+
+      await service.create(
+        '1',
+        { materialId: '30', barLengthMm: 6000, barCount: 20 },
+        'user-1',
+        null,
+      );
+
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity: 'STEEL_ISSUE',
+          entityId: issue.id,
+          action: 'CREATED',
+          parentId: issue.productionInvoiceId,
         }),
       );
     });
@@ -679,6 +700,14 @@ describe('SteelIssuesService', () => {
       expect(notificationsService.emit).not.toHaveBeenCalledWith(
         'STEEL_ISSUE_RECEIVED_MISMATCH',
         expect.anything(),
+      );
+      // 2026-10-17: entity.changed RECEIVED cũng mang parentId=productionInvoiceId, không chỉ CREATED.
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity: 'STEEL_ISSUE',
+          action: 'RECEIVED',
+          parentId: issue.productionInvoiceId,
+        }),
       );
     });
 

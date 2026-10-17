@@ -66,6 +66,8 @@ export class RealtimeService {
     action: RealtimeEntityAction;
     /** Chỉ để truy vết trong log server - KHÔNG đưa vào payload (tránh lộ người thao tác cho mọi người có VIEW). */
     actorId?: string | null;
+    /** TUỲ CHỌN - id bản ghi cha (vd PI cho STEEL_ISSUE), xem EntityChangedPayload.parentId. */
+    parentId?: string | number | bigint | null;
   }): void {
     this.logger.debug(
       `entity.changed ${input.entity}#${String(input.entityId)} ${input.action} actor=${input.actorId ?? '-'}`,
@@ -77,6 +79,7 @@ export class RealtimeService {
       entityId: String(input.entityId),
       action: input.action,
       topics: route.topics,
+      ...(input.parentId != null ? { parentId: String(input.parentId) } : {}),
     };
     this.emit(rooms, REALTIME_EVENTS.ENTITY_CHANGED, payload);
   }

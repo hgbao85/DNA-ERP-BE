@@ -68,13 +68,25 @@ export class QcReviewsService {
     private readonly realtime: RealtimeService,
   ) {}
 
-  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
+  /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). `parentId` (2026-10-17,
+   *  xem EntityChangedPayload.parentId) - id của lệnh sản xuất/PI mà bản ghi này thuộc về, để FE lọc
+   *  đúng màn chi tiết đang xem (vd core.tsx/VatTuTpDetail.tsx/ChanNhomDetail.tsx). Chỉ 3/6 nhánh
+   *  gọi hàm này (reviewProductionBatch/reviewPieceStep/reviewMaterialYieldStep) hiện truyền - 3
+   *  nhánh còn lại (review/reviewCutBundle/reviewStepBundle) chưa có màn FE nào cần lọc theo cha nên
+   *  chưa nối, không phải thiếu sót. */
   private publishRealtime(
     entityId: bigint | string,
     action: 'QC_RECORDED',
     actorId: string | null,
+    parentId?: bigint | string,
   ): void {
-    this.realtime.publishEntityChanged({ entity: 'QC_REVIEW', entityId, action, actorId });
+    this.realtime.publishEntityChanged({
+      entity: 'QC_REVIEW',
+      entityId,
+      action,
+      actorId,
+      parentId,
+    });
   }
 
   /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
@@ -523,7 +535,7 @@ export class QcReviewsService {
       dto.failedQty,
       this.mfgStageToSenderRole(batch.stage),
     );
-    this.publishRealtime(created.id, 'QC_RECORDED', reviewedById);
+    this.publishRealtime(created.id, 'QC_RECORDED', reviewedById, batch.productionOrderId);
 
     return this.toResponseDto(created);
   }
@@ -604,7 +616,7 @@ export class QcReviewsService {
       return review;
     });
 
-    this.publishRealtime(pieceStepBundleId, 'QC_RECORDED', reviewedById);
+    this.publishRealtime(pieceStepBundleId, 'QC_RECORDED', reviewedById, bundle.productionOrderId);
     return this.toResponseDto(created);
   }
 
@@ -673,7 +685,12 @@ export class QcReviewsService {
       return review;
     });
 
-    this.publishRealtime(materialYieldStepBundleId, 'QC_RECORDED', reviewedById);
+    this.publishRealtime(
+      materialYieldStepBundleId,
+      'QC_RECORDED',
+      reviewedById,
+      bundle.productionInvoiceId,
+    );
     try {
       await this.notifications.resolve({
         entityType: 'MATERIAL_YIELD_STEP_BUNDLE',

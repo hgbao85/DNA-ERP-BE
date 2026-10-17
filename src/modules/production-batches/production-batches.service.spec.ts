@@ -62,6 +62,7 @@ describe('ProductionBatchesService', () => {
   let stockLedgerService: { postEntry: jest.Mock };
   let materialYieldIssuesService: { sumReceived: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
+  let realtimeStub: { publishEntityChanged: jest.Mock; publishNotificationCreated: jest.Mock };
 
   const order = {
     id: 1n,
@@ -206,7 +207,7 @@ describe('ProductionBatchesService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
-    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new ProductionBatchesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
@@ -780,6 +781,26 @@ describe('ProductionBatchesService', () => {
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ segmentSpecId: 60n, qty: 24 }), // 3 × reportedQty(8) CUỐI CÙNG
         prisma,
+      );
+    });
+
+    it('finishProductionBatch - phát entity.changed kèm parentId=productionOrderId (2026-10-17, FE lọc banner theo đúng PO đang xem)', async () => {
+      prisma.productionBatch.findUnique.mockResolvedValue({ ...batchRow, status: 'OPEN' });
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
+        ...batchRow,
+        status: 'AWAITING_QC',
+      });
+      prisma.pieceBom.findMany.mockResolvedValue([]);
+
+      await service.finishProductionBatch('700', 'user-han', null, null);
+
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity: 'PRODUCTION_BATCH',
+          entityId: 700n,
+          action: 'FINISHED',
+          parentId: 1n,
+        }),
       );
     });
 

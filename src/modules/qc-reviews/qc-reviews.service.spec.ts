@@ -614,6 +614,18 @@ describe('QcReviewsService', () => {
       expect(result.id).toBe('501');
     });
 
+    it('phát entity.changed kèm parentId=productionOrderId (2026-10-17, FE lọc banner theo đúng PO đang xem)', async () => {
+      await service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs');
+
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity: 'QC_REVIEW',
+          action: 'QC_RECORDED',
+          parentId: 1n,
+        }),
+      );
+    });
+
     // Phase 3b, nhóm 7.5-i, changelog 2026-09-25 mục 19.
     it('duyệt ĐẠT - resolve BATCH_TO_KCS + emit QC_PASSED', async () => {
       await service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs');
@@ -750,6 +762,7 @@ describe('QcReviewsService', () => {
         entityId: '800',
         action: 'QC_RECORDED',
         actorId: 'user-kcs',
+        parentId: 1n,
       });
     });
 
@@ -902,6 +915,7 @@ describe('QcReviewsService', () => {
         entityId: '850',
         action: 'QC_RECORDED',
         actorId: 'user-kcs',
+        parentId: 900n,
       });
     });
   });

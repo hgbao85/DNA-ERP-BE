@@ -49,6 +49,9 @@ describe('UsersService', () => {
   });
 
   describe('resetPassword', () => {
+    // Timeout riêng 15s (2026-10-17) - argon2 cố ý băm chậm/tốn CPU (chống dò mật khẩu hàng loạt),
+    // dưới tải CPU cao của cả bộ test (1700+ test chạy song song) có thể vượt timeout mặc định 5s
+    // dù chạy riêng lẻ luôn qua nhanh - flake môi trường, không phải lỗi logic.
     it('hashes the new password, stores it, and revokes the user live refresh tokens', async () => {
       prisma.user.findUnique.mockResolvedValue(existingUser);
 
@@ -75,7 +78,7 @@ describe('UsersService', () => {
           data: expect.objectContaining({ revokedAt: expect.any(Date) }),
         }),
       );
-    });
+    }, 15_000);
 
     it('throws NotFound and writes nothing when the user does not exist', async () => {
       prisma.user.findUnique.mockResolvedValue(null);

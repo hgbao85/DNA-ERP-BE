@@ -149,8 +149,15 @@ export class ProductionBatchesService {
     entityId: bigint | string,
     action: 'CREATED' | 'FINISHED',
     actorId: string | null,
+    productionOrderId: bigint | string,
   ): void {
-    this.realtime.publishEntityChanged({ entity: 'PRODUCTION_BATCH', entityId, action, actorId });
+    this.realtime.publishEntityChanged({
+      entity: 'PRODUCTION_BATCH',
+      entityId,
+      action,
+      actorId,
+      parentId: productionOrderId,
+    });
   }
 
   /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
@@ -479,7 +486,7 @@ export class ProductionBatchesService {
       piCode: updated.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
       stage: updated.stage,
     });
-    this.publishRealtime(updated.id, 'FINISHED', reportedById);
+    this.publishRealtime(updated.id, 'FINISHED', reportedById, updated.productionOrderId);
     return this.toResponseDto(updated);
   }
 

@@ -181,6 +181,15 @@ export interface EntityChangedPayload {
   action: RealtimeEntityAction;
   /** Lấy từ REALTIME_ENTITY_ROUTES tại thời điểm publish. */
   topics: string[];
+  /**
+   * TUỲ CHỌN (2026-10-17) - id của bản ghi cha mà màn hình đang mở thực sự lọc theo (vd PI cho
+   * STEEL_ISSUE), KHÔNG phải entityId của chính bản ghi đổi. Thêm để FE lọc được banner "dữ liệu
+   * vừa đổi" đúng theo bản ghi cha đang xem (vd 1 PI cụ thể) mà KHÔNG cần đợi tải lại danh sách cũ
+   * rồi so (cách đó bỏ sót bản ghi MỚI vừa tạo cho đúng PI đang xem - tệ hơn báo nhầm). Entity nào
+   * chưa gắn field này thì FE coi như luôn liên quan (giữ hành vi rộng cũ, không đổi gì nếu không
+   * truyền). Xem project_spec_steel_false_banner_fix_2026_10_17 (ca XuatSatPage/PhoiSkuAdminPage).
+   */
+  parentId?: string;
 }
 
 export interface NotificationChangedPayload {
