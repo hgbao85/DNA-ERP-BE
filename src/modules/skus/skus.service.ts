@@ -1189,22 +1189,6 @@ export class SkusService {
     mfgProductId: bigint,
     pieces: QuotaPieceDto[],
   ): Promise<{ orphanedPhotoUrls: string[] }> {
-    // 2 mảnh trùng tên (không phân biệt hoa/thường, đã trim) cùng resolve về 1 pieceId
-    // (resolveOrCreatePieces) - createMany bomPieceRows bên dưới sẽ vi phạm
-    // @@unique([bomRevisionId, pieceId]) và rơi thẳng ra AllExceptionsFilter thành lỗi khó hiểu
-    // "Duplicate value for: undefined" (meta.target không có với lỗi batch của createMany). Chặn
-    // sớm ở đây để báo đúng tên mảnh bị trùng.
-    const seenNames = new Set<string>();
-    for (const p of pieces) {
-      const key = p.name.trim().toLowerCase();
-      if (seenNames.has(key)) {
-        throw new BadRequestException(
-          `Tên mảnh bị trùng: "${p.name.trim()}" - mỗi mảnh trong 1 SKU phải có tên riêng.`,
-        );
-      }
-      seenNames.add(key);
-    }
-
     const steelGroupId = await this.resolveSystemGroupId(tx, MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR);
     // Ảnh (Dây, xem PieceMaterialItem.photoUrl) không có bảng riêng để "cascade xoá theo dõi" -
     // full-replace bên dưới xoá sạch rồi tạo lại, nên phải chụp URL đang có TRƯỚC khi xoá để biết
