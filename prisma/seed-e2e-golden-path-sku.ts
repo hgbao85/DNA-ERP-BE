@@ -111,10 +111,11 @@ async function main() {
 
       await prisma.pieceBom.upsert({
         where: {
-          bomRevisionId_pieceId_segmentSpecId: {
+          bomRevisionId_pieceId_segmentSpecId_processSteps: {
             bomRevisionId: revision.id,
             pieceId: piece.id,
             segmentSpecId: spec.id,
+            processSteps: [ProcessStep.CAT],
           },
         },
         create: {

@@ -386,10 +386,13 @@ export class BomRevisionsService {
 
     const existing = await this.prisma.pieceBom.findUnique({
       where: {
-        bomRevisionId_pieceId_segmentSpecId: {
+        // processSteps vào khoá duy nhất (2026-10-19, xem schema.prisma PieceBom) - DTO này
+        // không nhận processSteps nên luôn tạo với mảng rỗng, check trùng cũng phải khớp đúng [].
+        bomRevisionId_pieceId_segmentSpecId_processSteps: {
           bomRevisionId: revision.id,
           pieceId: pieceBigId,
           segmentSpecId: segmentSpecBigId,
+          processSteps: [],
         },
       },
     });

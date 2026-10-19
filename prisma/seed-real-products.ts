@@ -193,10 +193,11 @@ async function main() {
             const specId = await resolveSegmentSpec(s.material_class, s.cross_section, s.length_mm);
             await prisma.pieceBom.upsert({
               where: {
-                bomRevisionId_pieceId_segmentSpecId: {
+                bomRevisionId_pieceId_segmentSpecId_processSteps: {
                   bomRevisionId: revision.id,
                   pieceId: piece.id,
                   segmentSpecId: specId,
+                  processSteps: [ProcessStep.CAT],
                 },
               },
               create: {

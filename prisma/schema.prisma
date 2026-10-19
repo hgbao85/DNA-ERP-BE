@@ -955,7 +955,15 @@ model PieceBom {
   piece       Piece       @relation(fields: [pieceId], references: [id])
   segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])
 
-  @@unique([bomRevisionId, pieceId, segmentSpecId])
+  /// processSteps nằm TRONG khoá duy nhất (2026-10-19) - cho phép 1 mảnh có NHIỀU dòng cùng
+  /// (vật tư, chiều dài cắt) miễn là công đoạn phôi khác nhau (vd "4 cây 460mm có Dập" tách
+  /// riêng khỏi "4 cây 460mm trơn") - đây là 2 chi tiết thật khác nhau, không phải trùng dữ
+  /// liệu. Trước đây khoá chỉ (bomRevisionId, pieceId, segmentSpecId) nên 2 dòng này đụng P2002
+  /// lúc submitManhQuota (bug thật, phát hiện 2026-10-19) dù getStepProgress()/buildBomRows() ở
+  /// steel-issues.service.ts/cutting-proposals.service.ts đã cộng dồn qtyPerPiece theo đúng
+  /// segmentSpecId từ nhiều dòng PieceBom - tầng tính toán vốn đã chịu được nhiều dòng, chỉ có
+  /// ràng buộc DB là chặn nhầm.
+  @@unique([bomRevisionId, pieceId, segmentSpecId, processSteps])
   @@map("piece_bom")
 }
 
