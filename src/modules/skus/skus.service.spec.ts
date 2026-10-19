@@ -502,6 +502,22 @@ describe('SkusService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
+    it('rejects 2 pieces whose names collide after trim+lowercase instead of leaking a raw Prisma P2002 ("Duplicate value for: undefined")', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+
+      await expect(
+        service.updateManhQuota('5', {
+          pieces: [
+            { name: 'Manh tua', qtyPerUnit: 2, segments: [] },
+            { name: ' MANH TUA ', qtyPerUnit: 1, segments: [] },
+          ],
+          enteredBy: 'NV Sat',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.bomPiece.createMany).not.toHaveBeenCalled();
+    });
+
     it('rejects editing quota once the owned revision is no longer DRAFT (already approved)', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
