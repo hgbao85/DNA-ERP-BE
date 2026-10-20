@@ -1882,3 +1882,18 @@ Hai câu hỏi đã chốt: bài hướng dẫn trùng → **Gộp**; cách pull
 - Chưa commit (người dùng tự commit). Chưa push, chưa deploy.
 - Stash `stash@{0}` trên FE còn giữ — xoá khi đã commit ổn.
 - Production vẫn phải chạy lại `npm run seed` khi deploy (quyền `QC_REVIEW:VIEW`, `MATERIAL_GROUP:VIEW` cho QLSX).
+
+### 57.6. Việc cần làm trên production sau khi push bản staged này (người dùng hỏi, 2026-10-20)
+- **Migration: không có.** Bản staged không đổi `prisma/schema.prisma`, không thêm thư mục migration (so với `origin/main` cũng không có migration nào mới).
+  Dù vậy container Render vẫn tự chạy `prisma migrate deploy` lúc khởi động (`docker/entrypoint.js`) — không cần làm tay.
+- **Seed: CÓ — bắt buộc 1 lần.** `ROLE_GRANTS` thêm cho `PRODUCTION_MANAGER` (QLSX) 2 quyền chỉ xem: `QC_REVIEW:VIEW` (xem kết quả KCS + nhận realtime KCS)
+  và `MATERIAL_GROUP:VIEW` (cột "Nhóm vật tư" ở "Tổng hợp kho"). Không seed thì: thẻ PI/ngăn "còn thiếu gì" không tự cập nhật khi KCS chấm, cột Nhóm vật tư trống "—".
+  Cách chạy giống mục 38: sao lưu DB trước (Prisma Postgres 17, `backups/`) → chạy bản thử chỉ đọc `prisma/seed-dry-run.ts` với URL production, mong đợi chỉ
+  "PRODUCTION_MANAGER +2, gỡ 0" → `npm run seed` từ máy dev (image production không có `ts-node`) với `SEED_ADMIN_EMAIL=admin@dna-erp.local`,
+  `SEED_ADMIN_USERNAME=sysadmin` (để không tạo admin mới) → chạy lại bản thử, mong đợi +0/−0.
+- **Đăng nhập lại: không bắt buộc.** Quyền nằm trong access token 15 phút; lần làm mới token (`refresh`) đọc lại vai trò từ DB nên tài khoản QLSX tự có quyền mới
+  trong ≤ 15 phút; muốn có ngay thì đăng xuất/đăng nhập lại.
+- **Biến môi trường: không có biến mới.** `TRUST_PROXY_HOPS` đã có trong `render.yaml` từ mục 28 (chỉ cần kiểm Render đang có giá trị). FE không cần biến mới
+  (`NEXT_DIST_DIR`, `DEV_ALLOWED_ORIGINS` trong `next.config.mjs` chỉ dùng cho máy dev/bài thử điện thoại; không đặt = như cũ). FE không đổi `package.json`.
+- **Kiểm sau deploy:** đăng nhập QLSX → "Sản lượng xưởng": thẻ PI có thanh 3 màu + "Xem còn thiếu gì" mở được; "Tổng hợp kho" có cột Nhóm vật tư; một lần báo sai
+  hiện nút "Hủy" (không còn "Đảo").
