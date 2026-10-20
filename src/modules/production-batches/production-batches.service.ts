@@ -956,10 +956,15 @@ export class ProductionBatchesService {
 
     const awaitingByPiece = new Map<string, number>();
     const passedByPiece = new Map<string, number>();
+    const openByPiece = new Map<string, number>();
     for (const b of batches) {
-      // status OPEN (2026-09-08, ChotPanel "Lưu đợt" chưa gửi KCS) - CHƯA tính vào đâu cả, không
-      // phải "chờ KCS" (chưa gửi) cũng không phải "đã chốt" (chưa qua duyệt).
-      if (b.status === ProductionBatchStatus.OPEN) continue;
+      // status OPEN (2026-09-08, ChotPanel "Lưu đợt" chưa gửi KCS) - không phải "chờ KCS" (chưa gửi)
+      // cũng không phải "đã chốt" (chưa qua duyệt) -> cộng riêng vào openQty (2026-10-16).
+      if (b.status === ProductionBatchStatus.OPEN) {
+        const k = b.pieceId.toString();
+        openByPiece.set(k, (openByPiece.get(k) ?? 0) + b.reportedQty);
+        continue;
+      }
       const key = b.pieceId.toString();
       const target =
         b.status === ProductionBatchStatus.AWAITING_QC ? awaitingByPiece : passedByPiece;
@@ -1001,6 +1006,7 @@ export class ProductionBatchesService {
         plannedQty,
         awaitingQcQty: awaitingByPiece.get(key) ?? 0,
         passedQty: passedByPiece.get(key) ?? 0,
+        openQty: openByPiece.get(key) ?? 0,
         rawMaterialOnHand: extras?.rawMaterialOnHand ?? null,
         processSteps,
         stepProgress: processSteps.map((step) => {
@@ -1268,11 +1274,14 @@ export class ProductionBatchesService {
 
     const awaitingByOrderPiece = new Map<string, number>();
     const passedByOrderPiece = new Map<string, number>();
+    const openByOrderPiece = new Map<string, number>();
     for (const b of batches) {
-      // status OPEN (2026-09-08, ChotPanel "Lưu đợt" chưa gửi KCS) - CHƯA tính vào đâu, xem
-      // getBatchPlan() ở trên.
-      if (b.status === ProductionBatchStatus.OPEN) continue;
+      // status OPEN (2026-09-08, ChotPanel "Lưu đợt" chưa gửi KCS) -> openQty, xem getBatchPlan() ở trên.
       const key = `${b.productionOrderId}:${b.pieceId}`;
+      if (b.status === ProductionBatchStatus.OPEN) {
+        openByOrderPiece.set(key, (openByOrderPiece.get(key) ?? 0) + b.reportedQty);
+        continue;
+      }
       const target =
         b.status === ProductionBatchStatus.AWAITING_QC ? awaitingByOrderPiece : passedByOrderPiece;
       target.set(key, (target.get(key) ?? 0) + b.reportedQty);
@@ -1297,6 +1306,7 @@ export class ProductionBatchesService {
           plannedQty,
           awaitingQcQty: awaitingByOrderPiece.get(orderPieceKey) ?? 0,
           passedQty: passedByOrderPiece.get(orderPieceKey) ?? 0,
+          openQty: openByOrderPiece.get(orderPieceKey) ?? 0,
           rawMaterialOnHand: extras?.rawMaterialOnHand ?? null,
           processSteps,
           stepProgress: processSteps.map((step) => {

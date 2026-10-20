@@ -1093,6 +1093,33 @@ describe('ProductionBatchesService', () => {
       expect(prisma.bomPiece.findMany).toHaveBeenCalledTimes(1);
     });
 
+    it('2026-10-16: đợt OPEN (đã Lưu đợt, chưa gửi KCS) cộng vào openQty của ĐÚNG order, không lẫn sang chờ/đạt', async () => {
+      const order2 = { ...order, id: 2n, poNumber: 'PO-32-1', quantity: 5 };
+      prisma.productionOrder.findMany.mockResolvedValue([order, order2]);
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { productionOrderId: 1n, pieceId: 40n, status: 'OPEN', reportedQty: 4 },
+        { productionOrderId: 1n, pieceId: 40n, status: 'OPEN', reportedQty: 2 },
+        { productionOrderId: 1n, pieceId: 40n, status: 'QC_DONE', reportedQty: 9 },
+        { productionOrderId: 2n, pieceId: 40n, status: 'AWAITING_QC', reportedQty: 7 },
+      ]);
+
+      const result = await service.getBatchPlanBatch(['1', '2'], MfgStage.HAN);
+
+      expect(result['1'].items[0]).toMatchObject({ openQty: 6, awaitingQcQty: 0, passedQty: 9 });
+      expect(result['2'].items[0]).toMatchObject({ openQty: 0, awaitingQcQty: 7, passedQty: 0 });
+    });
+
+    it('getBatchPlan (1 order) cũng trả openQty', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { productionOrderId: 1n, pieceId: 40n, status: 'OPEN', reportedQty: 3 },
+        { productionOrderId: 1n, pieceId: 40n, status: 'AWAITING_QC', reportedQty: 5 },
+      ]);
+
+      const result = await service.getBatchPlan('1', MfgStage.HAN);
+
+      expect(result.items[0]).toMatchObject({ openQty: 3, awaitingQcQty: 5, passedQty: 0 });
+    });
+
     it('query productionBatch.findMany với where IN theo mọi orderId + đúng stage đang lọc', async () => {
       await service.getBatchPlanBatch(['1'], MfgStage.SON);
 

@@ -79,8 +79,11 @@ export const REALTIME_ENTITY_ROUTES: Record<RealtimeEntity, RealtimeEntityRoute>
     modules: [PERMISSION_MODULES.PRODUCTION_BATCH],
     topics: ['production-batches'],
   },
+  // + FLOOR_REPORT (2026-10-19): KCS chấm xong thì màn "Sản lượng xưởng"/"Báo cáo" của QLSX và "Sản lượng của tôi"
+  // của công nhân tự tải lại (QLSX cũ không có QC_REVIEW:VIEW nên không bao giờ nhận được sự kiện này). Sự kiện chỉ
+  // mang tên topic, không mang dữ liệu.
   QC_REVIEW: {
-    modules: [PERMISSION_MODULES.QC_REVIEW],
+    modules: [PERMISSION_MODULES.QC_REVIEW, PERMISSION_MODULES.FLOOR_REPORT],
     topics: ['qc-reviews', 'production-batches'],
   },
   MATERIAL_ISSUE: {

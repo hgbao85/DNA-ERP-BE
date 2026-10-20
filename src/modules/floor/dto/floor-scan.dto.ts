@@ -72,7 +72,7 @@ export class ScanReceiveSteelDto {
 }
 
 export class ReverseFloorReportDto {
-  @ApiProperty({ description: 'Lý do đảo - bắt buộc, công nhân xem được' })
+  @ApiProperty({ description: 'Lý do hủy lần báo - bắt buộc, công nhân xem được' })
   @IsString()
   @MinLength(3)
   @MaxLength(300)

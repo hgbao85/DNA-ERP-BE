@@ -717,7 +717,7 @@ const notificationTypeDefinitions = {
     title: (p: FloorBatchStaleParams) =>
       `Tổ ${FLOOR_STAGE_LABEL[p.stage]}: ${p.count} đợt chờ gửi KCS quá ${p.hours} giờ`,
     message: (p: FloorBatchStaleParams) =>
-      `Công nhân đã báo nhưng chưa gửi KCS quá ${p.hours} giờ - kiểm và gửi KCS (hoặc đảo nếu báo sai).`,
+      `Công nhân đã báo nhưng chưa gửi KCS quá ${p.hours} giờ - kiểm và gửi KCS (hoặc hủy lần báo sai).`,
     link: () => ({ module: 'production', page: 'san-luong-xuong' }),
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
   } satisfies NotificationTypeDef<FloorBatchStaleParams>,

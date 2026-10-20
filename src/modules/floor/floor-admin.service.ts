@@ -29,6 +29,15 @@ import {
   UpdateFloorWorkerDto,
 } from './dto/floor-worker.dto';
 import { CreateWorkstationDto, UpdateWorkstationDto } from './dto/workstation.dto';
+import {
+  addBuckets,
+  bucketLine,
+  emptyBuckets,
+  isShort,
+  percentOf,
+  type ProgressBuckets,
+  type ProgressLineInput,
+} from './floor-progress.util';
 
 /** Token trong link mã QR - 18 byte ngẫu nhiên (24 ký tự base64url), không đoán/dò được. */
 function newQrToken(): string {
@@ -57,11 +66,119 @@ const QUEUE_INCLUDE = {
 
 type QueueRow = Prisma.FloorQueueEntryGetPayload<{ include: typeof QUEUE_INCLUDE }>;
 
-export interface FloorProgress {
-  required: number;
-  reported: number;
+/** 1 công đoạn của tổ trên PI: `CAT`/công đoạn phụ (Phôi, đơn vị đoạn) hoặc `PIECE` (mảnh/vật tư thành phẩm). */
+export interface FloorProgressStep extends ProgressBuckets {
+  step: string;
+  percent: number;
+}
+
+/**
+ * Tiến độ của tổ trên 1 PI theo định nghĩa số chung (`floor-progress.util.ts`, changelog 10-08 mục 45.2): mọi số đã
+ * chặn trần theo từng dòng; `reported` = `passed` + `awaiting` + `open` (Đã báo − Lỗi, chặn trần).
+ */
+export interface FloorProgress extends ProgressBuckets {
   percent: number;
   complete: boolean;
+  /** Theo công đoạn - chỉ công đoạn PI có (Phôi: CAT + công đoạn phụ + PIECE nếu có mảnh). */
+  breakdown: FloorProgressStep[];
+  missing: {
+    /** Số dòng (cỡ đoạn × công đoạn / mảnh) còn thiếu. */
+    lines: number;
+    /** Phôi: số loại sắt còn thiếu ít nhất 1 dòng; trong đó `materialsNotReceived` loại Phôi chưa nhận đợt sắt nào. */
+    materials: number;
+    materialsNotReceived: number;
+    /** Số mảnh / vật tư thành phẩm còn thiếu. */
+    pieces: number;
+  };
+}
+
+type PhoiItems = Awaited<ReturnType<SteelIssuesService['getPhoiProgressBatch']>>[string];
+type BatchPlans = Awaited<ReturnType<ProductionBatchesService['getBatchPlanBatch']>>;
+interface StageData {
+  phoi: PhoiItems | null;
+  plans: BatchPlans;
+  orders: { productionOrderId: string; poNumber: string; productName: string }[];
+}
+
+/**
+ * Tiến độ của tổ trên 1 PI theo định nghĩa số chung (`floor-progress.util.ts`): MỖI dòng chặn trần ở số cần (dòng
+ * báo vượt không che dòng còn thiếu), số được tính = Đã báo − Lỗi KCS. Cùng phạm vi với tab Phôi/Hàn/Sơn của
+ * "Tổng hợp lệnh SX" để 2 màn ra cùng %:
+ * - Phôi: Cắt + MỌI công đoạn phụ (Uốn/Dập/…) theo cỡ đoạn + mảnh Phôi tự báo + vật tư thành phẩm (chân nhôm) -
+ *   người dùng chốt 2026-10-19 (mục 45.9-1): tổ Phôi chỉ "đủ số" khi xong cả công đoạn phụ.
+ * - Hàn/Sơn: mảnh theo định mức (đạt + chờ KCS + chưa gửi; số đạt đã trừ lỗi vì KCS ghi đè `reportedQty`).
+ * Chỉ là gợi ý nhắc QLSX, KHÔNG tự chuyển PI và không chặn gì.
+ */
+function progressFrom({ phoi, plans }: StageData): FloorProgress {
+  const steps = new Map<string, ProgressBuckets>();
+  const missing = { lines: 0, materials: 0, materialsNotReceived: 0, pieces: 0 };
+  const add = (step: string, line: ProgressLineInput): boolean => {
+    const acc = steps.get(step) ?? emptyBuckets();
+    addBuckets(acc, bucketLine(line));
+    steps.set(step, acc);
+    const short = isShort(line);
+    if (short) missing.lines++;
+    return short;
+  };
+
+  for (const m of phoi ?? []) {
+    let materialShort = false;
+    for (const g of [{ step: 'CAT', segments: m.segments }, ...m.steps]) {
+      for (const sg of g.segments) {
+        const short = add(g.step, {
+          required: sg.required,
+          done: sg.done,
+          failed: sg.failed,
+          open: sg.openQty,
+          awaiting: sg.awaitingQcQty,
+        });
+        materialShort ||= short;
+      }
+    }
+    if (materialShort) {
+      missing.materials++;
+      if (m.steelBalance === null) missing.materialsNotReceived++;
+    }
+  }
+
+  for (const plan of Object.values(plans)) {
+    for (const it of plan.items) {
+      // Mảnh: `passedQty` đã là số ĐẠT sau KCS (lỗi đã bị trừ) → failed = 0 ở đây.
+      const short = add('PIECE', {
+        required: it.plannedQty,
+        done: it.passedQty + it.awaitingQcQty + it.openQty,
+        failed: 0,
+        open: it.openQty,
+        awaiting: it.awaitingQcQty,
+      });
+      if (short) missing.pieces++;
+    }
+    for (const it of plan.materialYieldItems ?? []) {
+      const short = add('PIECE', {
+        required: it.plannedQty,
+        done: it.passedQty + it.awaitingQcQty,
+        failed: 0,
+        open: 0,
+        awaiting: it.awaitingQcQty,
+      });
+      if (short) missing.pieces++;
+    }
+  }
+
+  const total = emptyBuckets();
+  const breakdown: FloorProgressStep[] = [];
+  for (const [step, b] of steps) {
+    if (b.required <= 0) continue;
+    addBuckets(total, b);
+    breakdown.push({ step, ...b, percent: percentOf(b.reported, b.required) });
+  }
+  return {
+    ...total,
+    percent: percentOf(total.reported, total.required),
+    complete: total.required > 0 && total.reported >= total.required,
+    breakdown,
+    missing,
+  };
 }
 
 const fullName = (u: { firstName: string; lastName: string } | null) =>
@@ -449,57 +566,64 @@ export class FloorAdminService {
     return out;
   }
 
-  /**
-   * Tiến độ của tổ trên 1 PI: Σ số cần vs Σ số đã báo, MỖI dòng (cỡ đoạn / mảnh) chặn trần ở số cần - dòng
-   * báo vượt không che dòng còn thiếu. Phôi: đoạn cắt (CAT); Hàn/Sơn: mảnh theo định mức, tính cả đợt chưa gửi
-   * KCS. Chỉ là gợi ý nhắc QLSX, KHÔNG tự chuyển PI và không chặn gì.
-   */
+  /** Tiến độ của tổ trên 1 PI - xem `progressFrom`. */
   async computeProgress(stage: MfgStage, productionInvoiceId: bigint): Promise<FloorProgress> {
-    let required = 0;
-    let reported = 0;
-    if (stage === MfgStage.PHOI) {
-      const items = await this.steelIssues.getPhoiProgress(productionInvoiceId.toString());
-      for (const m of items) {
-        for (const sg of m.segments) {
-          required += sg.required;
-          reported += Math.min(sg.done, sg.required);
-        }
-      }
-    } else {
-      const orders = await this.prisma.productionOrder.findMany({
-        where: { productionInvoiceItem: { productionInvoiceId } },
-        select: { id: true },
-      });
-      const orderIds = orders.map((o) => o.id);
-      const [plans, open] = await Promise.all([
-        this.productionBatches.getBatchPlanBatch(
-          orderIds.map((o) => o.toString()),
-          stage,
-        ),
-        this.prisma.productionBatch.groupBy({
-          by: ['productionOrderId', 'pieceId'],
-          where: { stage, status: 'OPEN', productionOrderId: { in: orderIds } },
-          _sum: { reportedQty: true },
-        }),
-      ]);
-      const openQty = new Map(
-        open.map((r) => [`${r.productionOrderId}:${r.pieceId}`, r._sum.reportedQty ?? 0]),
-      );
-      for (const [orderId, plan] of Object.entries(plans)) {
-        for (const it of plan.items) {
-          const done =
-            it.passedQty + it.awaitingQcQty + (openQty.get(`${orderId}:${it.pieceId}`) ?? 0);
-          required += it.plannedQty;
-          reported += Math.min(done, it.plannedQty);
-        }
-      }
-    }
+    return progressFrom(await this.loadStageData(stage, productionInvoiceId));
+  }
+
+  /**
+   * Ngăn "còn thiếu gì" của thẻ PI (mục 45.4): tiến độ + ĐÚNG dữ liệu gốc đã dùng để tính (phoi-progress, batch-plan
+   * theo SKU) để FE dựng bảng chi tiết bằng bảng sẵn có mà số không lệch thẻ. Mở được cho PI đang chạy, đang chờ
+   * (xem trước đã nhận sắt chưa) hay đã xong (bù lỗi) - chỉ cần PI đã có lệnh sản xuất.
+   */
+  async stageDetail(stage: FloorWorkerStage, productionInvoiceIdRaw: string) {
+    const productionInvoiceId = parseBigIntId(productionInvoiceIdRaw);
+    const pi = await this.prisma.productionInvoice.findUnique({
+      where: { id: productionInvoiceId },
+      select: { id: true, code: true },
+    });
+    if (!pi) throw new NotFoundException('Không tìm thấy PI');
+    const data = await this.loadStageData(stage, productionInvoiceId);
     return {
-      required,
-      reported,
-      percent: required > 0 ? Math.round((reported / required) * 100) : 0,
-      complete: required > 0 && reported >= required,
+      productionInvoiceId: pi.id.toString(),
+      piCode: pi.code,
+      stage,
+      progress: progressFrom(data),
+      orders: data.orders,
+      phoi: data.phoi,
+      plans: data.plans,
     };
+  }
+
+  /** Tải 1 lần dữ liệu tiến độ của tổ trên PI (dùng chung cho thẻ PI, nhắc "đủ số" và ngăn chi tiết). */
+  private async loadStageData(stage: MfgStage, productionInvoiceId: bigint): Promise<StageData> {
+    let phoi: PhoiItems | null = null;
+    if (stage === MfgStage.PHOI) {
+      const key = productionInvoiceId.toString();
+      const batch = await this.steelIssues.getPhoiProgressBatch([key]);
+      // Batch BỎ PI lỗi khỏi kết quả (không trả rỗng) - thiếu khoá thì báo lỗi, đừng coi là "không có việc".
+      const items = batch[key];
+      if (!items) throw new Error(`Không tính được tiến độ Phôi của PI ${key}`);
+      phoi = items;
+    }
+    const orderRows = await this.prisma.productionOrder.findMany({
+      where: { productionInvoiceItem: { productionInvoiceId } },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+    });
+    const plans =
+      orderRows.length > 0
+        ? await this.productionBatches.getBatchPlanBatch(
+            orderRows.map((o) => o.id.toString()),
+            stage,
+          )
+        : {};
+    const orders = Object.entries(plans).map(([id, plan]) => ({
+      productionOrderId: id,
+      poNumber: plan.poNumber,
+      productName: plan.productName,
+    }));
+    return { phoi, plans, orders };
   }
 
   /** Số đợt đang chờ QLSX gửi KCS theo tổ - chấm số trên menu "Sản lượng xưởng". */

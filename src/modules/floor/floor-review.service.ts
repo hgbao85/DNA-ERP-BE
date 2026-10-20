@@ -405,8 +405,9 @@ export class FloorReviewService {
       include: { lines: true, reversedBy: { select: { id: true } } },
     });
     if (!report) throw new NotFoundException(`Lần báo ${floorReportId} không tồn tại`);
-    if (report.reversalOfId) throw new BadRequestException('Đây là dòng đảo - không đảo lại được');
-    if (report.reversedBy) throw new ConflictException('Lần báo này đã bị đảo rồi');
+    if (report.reversalOfId)
+      throw new BadRequestException('Đây là dòng ghi hủy - không hủy lại được');
+    if (report.reversedBy) throw new ConflictException('Lần báo này đã bị hủy rồi');
 
     const reversal = {
       kind: report.kind,
@@ -433,7 +434,7 @@ export class FloorReviewService {
     } catch (e) {
       // reversalOfId @unique - 2 QLSX cùng bấm đảo 1 lần báo.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        throw new ConflictException('Lần báo này vừa được người khác đảo');
+        throw new ConflictException('Lần báo này vừa được người khác hủy');
       }
       throw e;
     }
@@ -452,7 +453,7 @@ export class FloorReviewService {
         SELECT "status" FROM "cut_bundles" WHERE "id" = ${cutBundleId} FOR UPDATE`;
       if (!locked) throw new ConflictException('Đợt cắt của lần báo này không còn');
       if (locked.status !== CutBundleStatus.CUTTING) {
-        throw new ConflictException('Đợt cắt đã gửi KCS - không đảo được nữa');
+        throw new ConflictException('Đợt cắt đã gửi KCS - không hủy được nữa');
       }
       await writeFloorReport(tx, { ...reversal, cutBundleId });
       for (const l of lines) {
@@ -483,7 +484,7 @@ export class FloorReviewService {
         SELECT "stepBundleId" FROM "step_batches" WHERE "id" = ${stepBatchId} FOR UPDATE`;
       if (!locked) throw new ConflictException('Đợt công đoạn của lần báo này không còn');
       if (locked.stepBundleId)
-        throw new ConflictException('Công đoạn đã gửi KCS - không đảo được nữa');
+        throw new ConflictException('Công đoạn đã gửi KCS - không hủy được nữa');
       await writeFloorReport(tx, { ...reversal, stepBatchId });
       await tx.stepBatchSegment.deleteMany({ where: { stepBatchId } });
       await tx.stepBatch.delete({ where: { id: stepBatchId } });
@@ -509,7 +510,7 @@ export class FloorReviewService {
       );
       const fresh = await tx.productionBatch.findUniqueOrThrow({ where: { id: batch.id } });
       if (fresh.status !== ProductionBatchStatus.OPEN) {
-        throw new ConflictException('Đợt đã gửi KCS - không đảo được nữa');
+        throw new ConflictException('Đợt đã gửi KCS - không hủy được nữa');
       }
       await writeFloorReport(tx, { ...reversal, productionBatchId: batch.id });
       const left = Math.max(fresh.reportedQty - qty, 0);

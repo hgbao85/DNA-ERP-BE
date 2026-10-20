@@ -173,6 +173,9 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     // theo tổ ("Chuyển PI tiếp"), kiểm rồi "Gửi KCS" (APPROVE), đảo 1 lần báo sai. Route của module này gắn
     // thêm @RequireRole(PRODUCTION_MANAGER) nên BOSS (VIEW+APPROVE mọi module) không tự gửi KCS được.
     { module: PERMISSION_MODULES.FLOOR_REPORT, actions: 'ALL' },
+    // 2026-10-19 (changelog 10-08 mục 46.4-1/47): chỉ VIEW - QLSX xem kết quả/lý do KCS chấm và nhận realtime KCS;
+    // việc chấm vẫn là của KCS_STAFF. Production phải chạy lại `npm run seed` để vai trò có quyền này.
+    { module: PERMISSION_MODULES.QC_REVIEW, actions: [PermissionAction.VIEW] },
     {
       module: PERMISSION_MODULES.SKU,
       actions: [PermissionAction.VIEW],
@@ -234,6 +237,9 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     },
     { module: PERMISSION_MODULES.WAREHOUSE, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
+    // 2026-10-20 (changelog 10-08 mục 50/51): "Tổng hợp kho" (MfgWarehousesPage) gọi GET /material-groups để hiện cột
+    // "Nhóm vật tư" - thiếu quyền này 403 âm thầm, cột trống "—" ở mọi dòng. Chỉ VIEW.
+    { module: PERMISSION_MODULES.MATERIAL_GROUP, actions: [PermissionAction.VIEW] },
     // Tab "Kế hoạch" của QLSX mở ThongKePagePlan (MfgApp.tsx:234) - cùng trang KHSX dùng, có
     // mục Mua hàng đọc GET /purchase-proposals. Xem ghi chú ở PRODUCTION_PLANNER phía trên
     // (phát hiện 2026-08-12 khi test E2E: thiếu quyền -> mục Mua hàng trống, không báo lỗi).

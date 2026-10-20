@@ -20,6 +20,9 @@ export class ProductionBatchPlanItemResponseDto {
   /** Σ ProductionBatch.reportedQty (status=QC_DONE) - đã là passed-qty sau khi KCS duyệt, không
    *  phải qty gốc đã báo. */
   @Expose() @ApiProperty() passedQty!: number;
+  /** Σ ProductionBatch.reportedQty (status=OPEN) - đã "Lưu đợt" nhưng CHƯA gửi KCS (2026-10-16, để 3 màn QLSX
+   *  hiện cùng số: Đã báo = openQty + awaitingQcQty + passedQty). Mặc định 0. */
+  @Expose() @ApiProperty() openQty: number = 0;
   /** Chỉ có giá trị cho stage=PHOI khi piece có PieceMaterialYield (vd chân nhôm) - tồn nguyên
    *  liệu thô (vd thanh nhôm) hiện có tại kho, để FE cảnh báo "còn X cây chưa cắt hết" (chỉ hiển
    *  thị, không chặn thao tác - quyết định nghiệp vụ 2026-08-22). Null cho mọi trường hợp khác. */

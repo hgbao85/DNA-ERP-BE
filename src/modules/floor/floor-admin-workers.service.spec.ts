@@ -1,7 +1,15 @@
+import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
+import { MFG_FLOOR_WAREHOUSE_SCOPE } from '../../common/constants/role-permissions.constant';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { FloorAdminService } from './floor-admin.service';
+
+/** Đối số đầu tiên của lần gọi đầu tiên của một jest.Mock - có kiểu rõ ràng để assert không phải dùng `any`. */
+const firstCall = (mock: jest.Mock) =>
+  (mock.mock.calls as unknown[][])[0][0] as { data: Record<string, unknown> };
 
 /** Tài khoản công nhân: QLSX KHÔNG đặt/biết PIN - công nhân tự đặt ở lần đăng nhập đầu (AuthService.pinSetup). */
 describe('FloorAdminService - tài khoản công nhân', () => {
@@ -123,4 +131,116 @@ describe('FloorAdminService - tài khoản công nhân', () => {
     expect(list[3].lockedUntil).not.toBeNull();
     expect(list[4].lockedUntil).toBeNull();
   });
+
+  // ─── tạo công nhân: các nhánh còn lại ─────────────────────────────────────────
+
+  const newWorker = {
+    username: 'phoi.b',
+    firstName: 'Bình',
+    lastName: 'Trần',
+    stage: 'PHOI' as const,
+  };
+
+  it('tạo: tổ của công nhân = mfgRole, gắn role FLOOR_WORKER + kho xưởng, họ tên được cắt khoảng trắng', async () => {
+    await service.createWorker({
+      ...newWorker,
+      firstName: '  Bình ',
+      lastName: ' Trần  ',
+      stage: 'HAN',
+    });
+
+    const data = firstCall(prisma.user.create).data;
+    expect(data).toMatchObject({
+      mfgRole: 'HAN',
+      warehouseScope: MFG_FLOOR_WAREHOUSE_SCOPE,
+      firstName: 'Bình',
+      lastName: 'Trần',
+      roles: { create: { roleId: 'role-fw' } },
+    });
+    expect(prisma.role.findUnique).toHaveBeenCalledWith({
+      where: { name: BUSINESS_ROLES.FLOOR_WORKER },
+    });
+  });
+
+  it('tạo: chưa có role FLOOR_WORKER (chưa chạy seed) -> 409 nhắc chạy seed, không tạo tài khoản', async () => {
+    prisma.role.findUnique.mockResolvedValue(null);
+    await expect(service.createWorker(newWorker)).rejects.toThrow(/seed/);
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('tạo: tên đăng nhập đã có (kể cả khác hoa/thường) -> 409, không tạo', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 'x' });
+    await expect(service.createWorker({ ...newWorker, username: 'PHOI.B' })).rejects.toThrow(
+      ConflictException,
+    );
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { username: 'phoi.b' } });
+    expect(prisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('tạo: 2 QLSX cùng tạo 1 tên (trùng unique, P2002) -> 409 thay vì lỗi 500; lỗi khác ném lại nguyên văn', async () => {
+    prisma.user.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'test' }),
+    );
+    await expect(service.createWorker(newWorker)).rejects.toThrow(/đã có người dùng/);
+    prisma.user.create.mockRejectedValueOnce(new Error('mất kết nối'));
+    await expect(service.createWorker(newWorker)).rejects.toThrow('mất kết nối');
+  });
+
+  // ─── sửa công nhân: khoá / đổi tổ phải đăng xuất mọi máy ───────────────────────
+
+  it.each([
+    ['khoá tài khoản (isActive=false)', { isActive: false }, true],
+    ['đổi tổ (token cũ còn mang tổ cũ)', { stage: 'HAN' as const }, true],
+    ['mở khoá lại (isActive=true) không cần đăng xuất', { isActive: true }, false],
+    ['chỉ sửa họ tên không đăng xuất ai', { firstName: ' Mới ', lastName: ' Tên ' }, false],
+  ])('sửa: %s', async (_label, dto, revokes) => {
+    await service.updateWorker('u1', dto);
+
+    if (revokes) {
+      expect(tx.refreshToken.updateMany).toHaveBeenCalledWith({
+        where: { userId: 'u1', revokedAt: null },
+        data: { revokedAt: expect.any(Date) as unknown },
+      });
+    } else {
+      expect(tx.refreshToken.updateMany).not.toHaveBeenCalled();
+    }
+  });
+
+  it('sửa: họ tên được cắt khoảng trắng, tổ ghi vào mfgRole, trường không gửi thì để nguyên (undefined)', async () => {
+    await service.updateWorker('u1', { firstName: ' Mới ', stage: 'SON' });
+
+    expect(tx.user.update).toHaveBeenCalledWith({
+      where: { id: 'u1' },
+      data: { firstName: 'Mới', lastName: undefined, mfgRole: 'SON', isActive: undefined },
+      select: expect.anything() as unknown,
+    });
+  });
+
+  // ─── ranh giới quyền: QLSX chỉ động được vào tài khoản CÔNG NHÂN ──────────────
+
+  it.each([
+    ['sửa', (s: FloorAdminService) => s.updateWorker('adm', { isActive: false })],
+    ['đặt lại PIN', (s: FloorAdminService) => s.resetWorkerPin('adm')],
+    ['mở khoá', (s: FloorAdminService) => s.unlockWorker('adm')],
+  ])(
+    '%s: id không phải công nhân (vd tài khoản admin) -> 404, không sửa gì',
+    async (_label, call) => {
+      prisma.user.findFirst.mockResolvedValue(null);
+
+      await expect(call(service)).rejects.toThrow(NotFoundException);
+
+      expect(prisma.user.findFirst).toHaveBeenCalledWith({
+        where: {
+          id: 'adm',
+          deletedAt: null,
+          roles: { some: { role: { name: BUSINESS_ROLES.FLOOR_WORKER } } },
+        },
+        select: { id: true },
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(tx.user.update).not.toHaveBeenCalled();
+      expect(tx.refreshToken.updateMany).not.toHaveBeenCalled();
+    },
+  );
 });

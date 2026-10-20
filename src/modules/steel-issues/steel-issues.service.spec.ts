@@ -1538,6 +1538,75 @@ describe('SteelIssuesService', () => {
       // Tổng các SKU khớp đúng số cả PI
       expect(seg30.byOrder.reduce((t, o) => t + o.done, 0)).toBe(seg30.done);
     });
+
+    it('2026-10-16: tách phần chưa gửi KCS (đợt CUTTING) và chờ KCS (AWAITING_QC) khỏi done, theo cả PI lẫn SKU', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([
+        {
+          id: 1n,
+          bomRevisionId: 5n,
+          quantity: 10,
+          floorStage: 'ACTIVE',
+          productionInvoiceItem: { productionInvoiceId: 1n },
+        },
+        {
+          id: 2n,
+          bomRevisionId: 5n,
+          quantity: 10,
+          floorStage: 'ACTIVE',
+          productionInvoiceItem: { productionInvoiceId: 1n },
+        },
+      ]);
+      const cut = (orderId: bigint, qty: number, status: string) => ({
+        segmentSpecId: 30n,
+        qty,
+        cutBundle: { productionOrderId: orderId, status, steelIssue: { productionInvoiceId: 1n } },
+      });
+      prisma.cutPatternSegment.findMany.mockResolvedValue([
+        cut(1n, 8, 'CUTTING'),
+        cut(1n, 5, 'AWAITING_QC'),
+        cut(2n, 6, 'QC_PASSED'),
+        cut(2n, 3, 'CUTTING'),
+      ]);
+
+      const [item] = await service.getPhoiProgress('1');
+      const seg30 = item.segments[0];
+
+      expect(seg30).toEqual(expect.objectContaining({ done: 22, openQty: 11, awaitingQcQty: 5 }));
+      expect(seg30.byOrder).toEqual([
+        expect.objectContaining({ productionOrderId: '1', done: 13, openQty: 8, awaitingQcQty: 5 }),
+        expect.objectContaining({ productionOrderId: '2', done: 9, openQty: 3, awaitingQcQty: 0 }),
+      ]);
+    });
+
+    it('2026-10-16: công đoạn phụ - dòng chưa vào đợt = chưa gửi KCS, đợt AWAITING_QC = chờ KCS, đợt QC_PASSED = đã chấm', async () => {
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { ...pieceBomRow, processSteps: [ProcessStep.CAT, ProcessStep.UON] },
+      ]);
+      const step = (qty: number, bundle: { status: string } | null) => ({
+        segmentSpecId: 30n,
+        qty,
+        stepBatch: {
+          productionOrderId: 1n,
+          step: ProcessStep.UON,
+          productionInvoiceId: 1n,
+          stepBundle: bundle,
+        },
+      });
+      prisma.stepBatchSegment.findMany.mockResolvedValue([
+        step(4, null),
+        step(6, { status: 'AWAITING_QC' }),
+        step(10, { status: 'QC_PASSED' }),
+      ]);
+
+      const [item] = await service.getStepProgress('1', ProcessStep.UON);
+
+      expect(item.segments[0]).toEqual(
+        expect.objectContaining({ done: 20, openQty: 4, awaitingQcQty: 6 }),
+      );
+      expect(item.segments[0].byOrder[0]).toEqual(
+        expect.objectContaining({ productionOrderId: '1', openQty: 4, awaitingQcQty: 6 }),
+      );
+    });
   });
 
   // Sửa 2026-09-05: getIssuePlan() giờ lấy "Cần" từ CuttingProposalLine (kết quả phần mềm tính cắt

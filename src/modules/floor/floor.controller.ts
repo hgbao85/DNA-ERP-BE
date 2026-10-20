@@ -271,6 +271,17 @@ export class FloorController {
     return this.admin.reopenLast(parseStage(stage));
   }
 
+  /** Ngăn "còn thiếu gì" của thẻ PI (mục 45.4): tiến độ tổ + dữ liệu gốc (phoi-progress / batch-plan theo SKU). */
+  @Get('queue/:stage/detail/:productionInvoiceId')
+  @RequirePermissions(perm(PermissionAction.VIEW))
+  @RequireRole(QLSX)
+  stageDetail(
+    @Param('stage') stage: string,
+    @Param('productionInvoiceId') productionInvoiceId: string,
+  ) {
+    return this.admin.stageDetail(parseStage(stage), productionInvoiceId);
+  }
+
   @Delete('queue/:id')
   @RequirePermissions(perm(PermissionAction.DELETE))
   @RequireRole(QLSX)

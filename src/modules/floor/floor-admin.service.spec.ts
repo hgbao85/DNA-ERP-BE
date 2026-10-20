@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
@@ -17,7 +18,12 @@ describe('FloorAdminService', () => {
     floorReport: { count: jest.Mock };
   };
   let prisma: {
-    workstation: { create: jest.Mock };
+    workstation: {
+      create: jest.Mock;
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
+    };
     floorQueueEntry: { findMany: jest.Mock };
     floorReport: { count: jest.Mock };
     productionInvoice: { findUnique: jest.Mock };
@@ -25,9 +31,18 @@ describe('FloorAdminService', () => {
     productionBatch: { groupBy: jest.Mock };
     $transaction: jest.Mock;
   };
-  let steelIssues: { getPhoiProgress: jest.Mock };
+  let steelIssues: { getPhoiProgressBatch: jest.Mock };
   let productionBatches: { getBatchPlanBatch: jest.Mock };
   let service: FloorAdminService;
+
+  /** 1 cỡ đoạn của phoi-progress (mặc định chưa lỗi, chưa có phần chưa gửi/chờ KCS). */
+  const seg = (s: {
+    required: number;
+    done: number;
+    failed?: number;
+    openQty?: number;
+    awaitingQcQty?: number;
+  }) => ({ failed: 0, openQty: 0, awaitingQcQty: 0, ...s });
 
   beforeEach(() => {
     tx = {
@@ -49,6 +64,20 @@ describe('FloorAdminService', () => {
           createdAt: new Date(),
           ...args.data,
         })),
+        findUnique: jest.fn().mockResolvedValue({ id: 1n }),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn((args: { data: Record<string, unknown> }) => ({
+          id: 1n,
+          code: 'LASER-01',
+          name: 'Máy laser 1',
+          stage: 'PHOI',
+          kind: 'CUT',
+          processStep: null,
+          qrToken: 'old-token-old-token-old-',
+          isActive: true,
+          createdAt: new Date(),
+          ...Object.fromEntries(Object.entries(args.data).filter(([, v]) => v !== undefined)),
+        })),
       },
       floorQueueEntry: { findMany: jest.fn().mockResolvedValue([]) },
       floorReport: { count: jest.fn().mockResolvedValue(0) },
@@ -57,7 +86,7 @@ describe('FloorAdminService', () => {
       productionBatch: { groupBy: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
     };
-    steelIssues = { getPhoiProgress: jest.fn() };
+    steelIssues = { getPhoiProgressBatch: jest.fn().mockResolvedValue({ 45: [] }) };
     productionBatches = { getBatchPlanBatch: jest.fn() };
     service = new FloorAdminService(
       prisma as unknown as PrismaServiceType,
@@ -97,6 +126,92 @@ describe('FloorAdminService', () => {
       expect(w.code).toBe('LASER-01');
       expect(w.processStep).toBeNull();
       expect(w.qrToken).toMatch(/^[A-Za-z0-9_-]{24}$/);
+    });
+
+    it('tổ Đan không dùng mã QR (kể cả loại mảnh); khu nhận sắt chỉ của Phôi', async () => {
+      await expect(
+        service.createWorkstation({ code: 'D1', name: 'x', stage: 'DAN', kind: 'PIECE' }),
+      ).rejects.toThrow(/Đan/);
+      await expect(
+        service.createWorkstation({ code: 'N1', name: 'x', stage: 'HAN', kind: 'STEEL_RECEIVE' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.workstation.create).not.toHaveBeenCalled();
+    });
+
+    it('hợp lệ: PIECE cho Phôi/Hàn/Sơn, STEEL_RECEIVE cho Phôi, STEP giữ công đoạn phụ', async () => {
+      for (const stage of ['PHOI', 'HAN', 'SON'] as const) {
+        await service.createWorkstation({ code: `P-${stage}`, name: 'x', stage, kind: 'PIECE' });
+      }
+      await service.createWorkstation({
+        code: 'KN',
+        name: 'x',
+        stage: 'PHOI',
+        kind: 'STEEL_RECEIVE',
+      });
+      const step = await service.createWorkstation({
+        code: 'UON-1',
+        name: 'Máy uốn',
+        stage: 'PHOI',
+        kind: 'STEP',
+        processStep: 'UON',
+      });
+      expect(prisma.workstation.create).toHaveBeenCalledTimes(5);
+      expect(step.processStep).toBe('UON');
+    });
+
+    it('trùng mã điểm làm việc (P2002) -> 409 nêu mã; lỗi khác ném lại nguyên văn', async () => {
+      const dto = { code: 'laser-01', name: 'x', stage: 'PHOI', kind: 'CUT' } as const;
+      prisma.workstation.create.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'test' }),
+      );
+      await expect(service.createWorkstation(dto)).rejects.toThrow(
+        new ConflictException('Mã điểm làm việc LASER-01 đã có'),
+      );
+      prisma.workstation.create.mockRejectedValueOnce(new Error('mất kết nối'));
+      await expect(service.createWorkstation(dto)).rejects.toThrow('mất kết nối');
+    });
+  });
+
+  describe('danh sách / sửa máy / đổi mã QR', () => {
+    it('danh sách xếp theo tổ rồi mã máy', async () => {
+      await service.listWorkstations();
+      expect(prisma.workstation.findMany).toHaveBeenCalledWith({
+        orderBy: [{ stage: 'asc' }, { code: 'asc' }],
+      });
+    });
+
+    it('sửa: tên được cắt khoảng trắng, bật/tắt máy; id không tồn tại -> 404, không sửa', async () => {
+      const w = await service.updateWorkstation('1', { name: '  Máy laser mới ', isActive: false });
+      expect(prisma.workstation.update).toHaveBeenCalledWith({
+        where: { id: 1n },
+        data: { name: 'Máy laser mới', isActive: false },
+      });
+      expect(w).toMatchObject({ name: 'Máy laser mới', isActive: false });
+
+      prisma.workstation.update.mockClear();
+      prisma.workstation.findUnique.mockResolvedValue(null);
+      await expect(service.updateWorkstation('9', { name: 'x' })).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.workstation.update).not.toHaveBeenCalled();
+    });
+
+    it('đổi mã QR: sinh token ngẫu nhiên mới (24 ký tự, khác token cũ) -> tem cũ hết dùng; id lạ -> 404', async () => {
+      const w = await service.regenerateWorkstationToken('1');
+      const data = (prisma.workstation.update.mock.calls as unknown[][])[0][0] as {
+        data: { qrToken: string };
+      };
+      expect(data.data.qrToken).toMatch(/^[A-Za-z0-9_-]{24}$/);
+      expect(data.data.qrToken).not.toBe('old-token-old-token-old-');
+      expect(w.qrToken).toBe(data.data.qrToken);
+
+      const again = await service.regenerateWorkstationToken('1');
+      expect(again.qrToken).not.toBe(w.qrToken); // mỗi lần một mã khác
+
+      prisma.workstation.update.mockClear();
+      prisma.workstation.findUnique.mockResolvedValue(null);
+      await expect(service.regenerateWorkstationToken('9')).rejects.toThrow(NotFoundException);
+      expect(prisma.workstation.update).not.toHaveBeenCalled();
     });
   });
 
@@ -245,18 +360,93 @@ describe('FloorAdminService', () => {
 
     it('Phôi: mỗi cỡ đoạn chặn trần ở số cần - báo vượt cỡ này không che cỡ khác còn thiếu', async () => {
       prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
-      steelIssues.getPhoiProgress.mockResolvedValue([
-        {
-          segments: [
-            { required: 60, done: 78 }, // vượt 18 - chỉ tính 60
-            { required: 60, done: 10 },
-          ],
-        },
-      ]);
+      steelIssues.getPhoiProgressBatch.mockResolvedValue({
+        45: [
+          {
+            steelBalance: { receivedBarCount: 12 },
+            steps: [],
+            segments: [
+              seg({ required: 60, done: 78, awaitingQcQty: 78 }), // vượt 18 - chỉ tính 60
+              seg({ required: 60, done: 10, openQty: 10 }),
+            ],
+          },
+        ],
+      });
 
       const [e] = await service.listQueue('PHOI');
 
-      expect(e.progress).toEqual({ required: 120, reported: 70, percent: 58, complete: false });
+      expect(e.progress).toMatchObject({
+        required: 120,
+        reported: 70,
+        awaiting: 60,
+        open: 10,
+        percent: 58,
+        complete: false,
+        missing: { lines: 1, materialsNotReceived: 0 },
+      });
+    });
+
+    it('Phôi: tính cả công đoạn phụ + trừ lỗi KCS; breakdown theo công đoạn; loại sắt chưa nhận được đếm', async () => {
+      prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
+      steelIssues.getPhoiProgressBatch.mockResolvedValue({
+        45: [
+          {
+            steelBalance: { receivedBarCount: 12 },
+            segments: [seg({ required: 100, done: 100, failed: 4 })], // đạt 96, thiếu 4 do lỗi
+            steps: [{ step: 'UON', segments: [seg({ required: 100, done: 0 })] }],
+          },
+          {
+            steelBalance: null, // chưa nhận sắt
+            segments: [seg({ required: 50, done: 0 })],
+            steps: [],
+          },
+        ],
+      });
+
+      const [e] = await service.listQueue('PHOI');
+
+      expect(e.progress).toMatchObject({
+        required: 250,
+        reported: 96,
+        passed: 96,
+        failed: 4,
+        percent: 38,
+        complete: false,
+        missing: { lines: 3, materialsNotReceived: 1 },
+      });
+      expect(e.progress!.breakdown.map((b) => [b.step, b.required, b.reported])).toEqual([
+        ['CAT', 150, 96],
+        ['UON', 100, 0],
+      ]);
+    });
+
+    it('Phôi: thiếu PI trong kết quả batch (PI lỗi) → progress null, không coi là xong', async () => {
+      prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
+      steelIssues.getPhoiProgressBatch.mockResolvedValue({});
+
+      const [e] = await service.listQueue('PHOI');
+
+      expect(e.progress).toBeNull();
+    });
+
+    it('Phôi: mảnh Phôi + vật tư thành phẩm vào công đoạn PIECE', async () => {
+      prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
+      prisma.productionOrder.findMany
+        .mockResolvedValueOnce([]) // hasActiveFloor
+        .mockResolvedValueOnce([{ id: 41n }]);
+      productionBatches.getBatchPlanBatch.mockResolvedValue({
+        '41': {
+          items: [{ plannedQty: 10, passedQty: 4, awaitingQcQty: 3, openQty: 3 }],
+          materialYieldItems: [{ plannedQty: 10, passedQty: 5, awaitingQcQty: 0 }],
+        },
+      });
+
+      const [e] = await service.listQueue('PHOI');
+
+      expect(productionBatches.getBatchPlanBatch).toHaveBeenCalledWith(['41'], 'PHOI');
+      expect(e.progress!.breakdown).toEqual([
+        expect.objectContaining({ step: 'PIECE', required: 20, reported: 15, percent: 75 }),
+      ]);
     });
 
     it('Hàn: tính cả đợt chưa gửi KCS; đủ số thì complete', async () => {
@@ -265,15 +455,35 @@ describe('FloorAdminService', () => {
         .mockResolvedValueOnce([]) // PI có SKU đang chạy (hasActiveFloor)
         .mockResolvedValueOnce([{ id: 41n }]); // các SKU của PI
       productionBatches.getBatchPlanBatch.mockResolvedValue({
-        '41': { items: [{ pieceId: '73', plannedQty: 60, passedQty: 40, awaitingQcQty: 10 }] },
+        '41': {
+          items: [{ pieceId: '73', plannedQty: 60, passedQty: 40, awaitingQcQty: 10, openQty: 20 }],
+        },
       });
-      prisma.productionBatch.groupBy.mockResolvedValue([
-        { productionOrderId: 41n, pieceId: 73n, _sum: { reportedQty: 20 } },
-      ]);
 
       const [e] = await service.listQueue('HAN');
 
-      expect(e.progress).toEqual({ required: 60, reported: 60, percent: 100, complete: true });
+      expect(steelIssues.getPhoiProgressBatch).not.toHaveBeenCalled();
+      expect(e.progress).toMatchObject({
+        required: 60,
+        reported: 60,
+        percent: 100,
+        complete: true,
+        missing: { lines: 0, materialsNotReceived: 0 },
+      });
+    });
+
+    it('% chưa đủ không làm tròn lên 100', async () => {
+      prisma.floorQueueEntry.findMany.mockResolvedValue([running('HAN')]);
+      prisma.productionOrder.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 41n }]);
+      productionBatches.getBatchPlanBatch.mockResolvedValue({
+        '41': { items: [{ plannedQty: 1000, passedQty: 999, awaitingQcQty: 0, openQty: 0 }] },
+      });
+
+      const [e] = await service.listQueue('HAN');
+
+      expect(e.progress).toMatchObject({ percent: 99, complete: false });
     });
 
     it('canReopen chỉ ở dòng DONE đóng gần nhất; tắt khi PI đang chạy đã có lần báo', async () => {
@@ -290,7 +500,7 @@ describe('FloorAdminService', () => {
         done(2n, '2026-10-13T01:00:00Z'),
         done(3n, '2026-10-13T02:00:00Z'),
       ]);
-      steelIssues.getPhoiProgress.mockResolvedValue([]);
+      steelIssues.getPhoiProgressBatch.mockResolvedValue({ 45: [] });
 
       prisma.floorReport.count.mockResolvedValue(0);
       let list = await service.listQueue('PHOI');
@@ -303,11 +513,71 @@ describe('FloorAdminService', () => {
 
     it('lỗi khi tính tiến độ không làm hỏng danh sách (progress = null)', async () => {
       prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
-      steelIssues.getPhoiProgress.mockRejectedValue(new Error('boom'));
+      steelIssues.getPhoiProgressBatch.mockRejectedValue(new Error('boom'));
 
       const [e] = await service.listQueue('PHOI');
 
       expect(e.progress).toBeNull();
+    });
+  });
+
+  describe('stageDetail (ngăn "còn thiếu gì", mục 45.4)', () => {
+    it('PI không tồn tại → 404, không tính gì', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(null);
+
+      await expect(service.stageDetail('PHOI', '45')).rejects.toThrow(NotFoundException);
+      expect(steelIssues.getPhoiProgressBatch).not.toHaveBeenCalled();
+    });
+
+    it('trả tiến độ + đúng dữ liệu gốc đã dùng để tính (phoi + batch-plan theo SKU) + danh sách SKU', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue({ id: 45n, code: 'PI-45' });
+      const phoi = [
+        {
+          steelBalance: null,
+          steps: [],
+          segments: [{ required: 10, done: 4, failed: 0, openQty: 4, awaitingQcQty: 0 }],
+        },
+      ];
+      steelIssues.getPhoiProgressBatch.mockResolvedValue({ 45: phoi });
+      prisma.productionOrder.findMany.mockResolvedValue([{ id: 41n }]);
+      const plans = {
+        '41': {
+          poNumber: 'PO-1',
+          productName: 'Ghế J55',
+          items: [{ plannedQty: 2, passedQty: 2, awaitingQcQty: 0, openQty: 0 }],
+          materialYieldItems: [],
+        },
+      };
+      productionBatches.getBatchPlanBatch.mockResolvedValue(plans);
+
+      const d = await service.stageDetail('PHOI', '45');
+
+      expect(d).toMatchObject({
+        productionInvoiceId: '45',
+        piCode: 'PI-45',
+        stage: 'PHOI',
+        phoi,
+        plans,
+      });
+      expect(d.orders).toEqual([
+        { productionOrderId: '41', poNumber: 'PO-1', productName: 'Ghế J55' },
+      ]);
+      expect(d.progress).toMatchObject({
+        required: 12,
+        reported: 6,
+        missing: { lines: 1, materials: 1, materialsNotReceived: 1, pieces: 0 },
+      });
+    });
+
+    it('Hàn: không gọi phoi-progress, phoi = null', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue({ id: 45n, code: 'PI-45' });
+      prisma.productionOrder.findMany.mockResolvedValue([]);
+
+      const d = await service.stageDetail('HAN', '45');
+
+      expect(steelIssues.getPhoiProgressBatch).not.toHaveBeenCalled();
+      expect(d.phoi).toBeNull();
+      expect(d.progress).toMatchObject({ required: 0, percent: 0, complete: false });
     });
   });
 });

@@ -118,7 +118,7 @@ type CutInputs = BaseInputs & {
   cutSegments: {
     segmentSpecId: bigint;
     qty: number;
-    cutBundle: { productionOrderId: bigint | null };
+    cutBundle: { productionOrderId: bigint | null; status: CutBundleStatus };
   }[];
   qcSegments: {
     segmentSpecId: bigint;
@@ -131,7 +131,12 @@ type StepInputs = BaseInputs & {
   stepSegments: {
     segmentSpecId: bigint;
     qty: number;
-    stepBatch: { productionOrderId: bigint | null; step: ProcessStep };
+    /** `bundleStatus` null = dòng đã báo nhưng CHƯA gom vào đợt gửi KCS nào. */
+    stepBatch: {
+      productionOrderId: bigint | null;
+      step: ProcessStep;
+      bundleStatus: StepBundleStatus | null;
+    };
   }[];
   qcSegments: {
     segmentSpecId: bigint;
@@ -1606,6 +1611,7 @@ export class SteelIssuesService {
             cutBundle: {
               select: {
                 productionOrderId: true,
+                status: true,
                 steelIssue: { select: { productionInvoiceId: true } },
               },
             },
@@ -1631,7 +1637,12 @@ export class SteelIssuesService {
             segmentSpecId: true,
             qty: true,
             stepBatch: {
-              select: { productionOrderId: true, step: true, productionInvoiceId: true },
+              select: {
+                productionOrderId: true,
+                step: true,
+                productionInvoiceId: true,
+                stepBundle: { select: { status: true } },
+              },
             },
           },
         }),
@@ -1676,7 +1687,10 @@ export class SteelIssuesService {
           .map((cs) => ({
             segmentSpecId: cs.segmentSpecId,
             qty: cs.qty,
-            cutBundle: { productionOrderId: cs.cutBundle.productionOrderId },
+            cutBundle: {
+              productionOrderId: cs.cutBundle.productionOrderId,
+              status: cs.cutBundle.status,
+            },
           })),
         qcSegments: cutQc
           .filter((qs) => qs.qcReview.steelIssue?.productionInvoiceId.toString() === piKey)
@@ -1699,6 +1713,7 @@ export class SteelIssuesService {
             stepBatch: {
               productionOrderId: ss.stepBatch.productionOrderId,
               step: ss.stepBatch.step,
+              bundleStatus: ss.stepBatch.stepBundle?.status ?? null,
             },
           })),
         qcSegments: stepQc
@@ -1752,9 +1767,17 @@ export class SteelIssuesService {
       return resolved == null ? 'none' : resolved.toString();
     };
     const doneBySpecOrder = new Map<string, number>();
+    // Chưa gửi KCS (đợt CUTTING) / chờ KCS (đợt AWAITING_QC) - phần của `done`, để 3 màn QLSX hiện cùng số.
+    const openBySpecOrder = new Map<string, number>();
+    const awaitingBySpecOrder = new Map<string, number>();
     for (const cs of cutSegments) {
       const k = `${cs.segmentSpecId}:${orderKey(cs.cutBundle.productionOrderId)}`;
       doneBySpecOrder.set(k, (doneBySpecOrder.get(k) ?? 0) + cs.qty);
+      if (cs.cutBundle.status === CutBundleStatus.CUTTING) {
+        openBySpecOrder.set(k, (openBySpecOrder.get(k) ?? 0) + cs.qty);
+      } else if (cs.cutBundle.status === CutBundleStatus.AWAITING_QC) {
+        awaitingBySpecOrder.set(k, (awaitingBySpecOrder.get(k) ?? 0) + cs.qty);
+      }
     }
     const failedBySpecOrder = new Map<string, number>();
     for (const qs of qcSegments) {
@@ -1862,22 +1885,13 @@ export class SteelIssuesService {
       const rawDone = doneBySpec.get(specKey) ?? 0;
       const failed = failedBySpec.get(specKey) ?? 0;
       // Tách theo SKU: mọi SKU có định mức / đã cắt / lỗi ở cỡ này, cộng thêm 'none' nếu có đợt cũ.
-      const orderKeys = new Set<string>();
-      for (const m of [requiredBySpecOrder, doneBySpecOrder, failedBySpecOrder]) {
-        for (const k of m.keys())
-          if (k.startsWith(`${specKey}:`)) orderKeys.add(k.slice(specKey.length + 1));
-      }
-      const byOrder = [...orderKeys]
-        .sort((a, b) => (a === 'none' ? 1 : b === 'none' ? -1 : Number(a) - Number(b)))
-        .map(
-          (ok) =>
-            new PhoiProgressOrderSegmentDto({
-              productionOrderId: ok === 'none' ? null : ok,
-              required: requiredBySpecOrder.get(`${specKey}:${ok}`) ?? 0,
-              done: doneBySpecOrder.get(`${specKey}:${ok}`) ?? 0,
-              failed: failedBySpecOrder.get(`${specKey}:${ok}`) ?? 0,
-            }),
-        );
+      const byOrder = this.buildOrderBreakdown(specKey, {
+        required: requiredBySpecOrder,
+        done: doneBySpecOrder,
+        failed: failedBySpecOrder,
+        open: openBySpecOrder,
+        awaiting: awaitingBySpecOrder,
+      });
       item.segments.push(
         new PhoiProgressSegmentDto({
           segmentSpecId: specKey,
@@ -1887,6 +1901,8 @@ export class SteelIssuesService {
           // tự tính required - (done - failed).
           done: rawDone,
           failed,
+          openQty: byOrder.reduce((t, o) => t + o.openQty, 0),
+          awaitingQcQty: byOrder.reduce((t, o) => t + o.awaitingQcQty, 0),
           byOrder,
         }),
       );
@@ -1984,9 +2000,17 @@ export class SteelIssuesService {
       return resolved == null ? 'none' : resolved.toString();
     };
     const doneBySpecOrder = new Map<string, number>();
+    // Chưa gửi KCS (dòng chưa vào đợt) / chờ KCS (đợt AWAITING_QC) - phần của `done`.
+    const openBySpecOrder = new Map<string, number>();
+    const awaitingBySpecOrder = new Map<string, number>();
     for (const ss of stepSegments) {
       const k = `${ss.segmentSpecId}:${orderKey(ss.stepBatch.productionOrderId)}`;
       doneBySpecOrder.set(k, (doneBySpecOrder.get(k) ?? 0) + ss.qty);
+      if (ss.stepBatch.bundleStatus === null) {
+        openBySpecOrder.set(k, (openBySpecOrder.get(k) ?? 0) + ss.qty);
+      } else if (ss.stepBatch.bundleStatus === StepBundleStatus.AWAITING_QC) {
+        awaitingBySpecOrder.set(k, (awaitingBySpecOrder.get(k) ?? 0) + ss.qty);
+      }
     }
     const failedBySpecOrder = new Map<string, number>();
     for (const qs of qcSegments) {
@@ -2084,6 +2108,13 @@ export class SteelIssuesService {
         });
         byMaterial.set(meta.materialId, item);
       }
+      const byOrder = this.buildOrderBreakdown(specKey, {
+        required: requiredBySpecOrder,
+        done: doneBySpecOrder,
+        failed: failedBySpecOrder,
+        open: openBySpecOrder,
+        awaiting: awaitingBySpecOrder,
+      });
       item.segments.push(
         new PhoiProgressSegmentDto({
           segmentSpecId: specKey,
@@ -2091,12 +2122,9 @@ export class SteelIssuesService {
           required: requiredBySpec.get(specKey) ?? 0,
           done: doneBySpec.get(specKey) ?? 0,
           failed: failedBySpec.get(specKey) ?? 0,
-          byOrder: this.buildOrderBreakdown(
-            specKey,
-            requiredBySpecOrder,
-            doneBySpecOrder,
-            failedBySpecOrder,
-          ),
+          openQty: byOrder.reduce((t, o) => t + o.openQty, 0),
+          awaitingQcQty: byOrder.reduce((t, o) => t + o.awaitingQcQty, 0),
+          byOrder,
         }),
       );
     }
@@ -2300,15 +2328,19 @@ export class SteelIssuesService {
     });
   }
 
-  /** Tách (cỡ đoạn) theo SKU từ 3 map khoá `${specKey}:${orderKey|'none'}` - dùng cho getStepProgress(). */
+  /** Tách (cỡ đoạn) theo SKU từ các map khoá `${specKey}:${orderKey|'none'}` - dùng cho cả Cắt lẫn công đoạn phụ. */
   private buildOrderBreakdown(
     specKey: string,
-    requiredMap: Map<string, number>,
-    doneMap: Map<string, number>,
-    failedMap: Map<string, number>,
+    maps: {
+      required: Map<string, number>;
+      done: Map<string, number>;
+      failed: Map<string, number>;
+      open: Map<string, number>;
+      awaiting: Map<string, number>;
+    },
   ): PhoiProgressOrderSegmentDto[] {
     const orderKeys = new Set<string>();
-    for (const m of [requiredMap, doneMap, failedMap]) {
+    for (const m of [maps.required, maps.done, maps.failed]) {
       for (const k of m.keys())
         if (k.startsWith(`${specKey}:`)) orderKeys.add(k.slice(specKey.length + 1));
     }
@@ -2318,9 +2350,11 @@ export class SteelIssuesService {
         (ok) =>
           new PhoiProgressOrderSegmentDto({
             productionOrderId: ok === 'none' ? null : ok,
-            required: requiredMap.get(`${specKey}:${ok}`) ?? 0,
-            done: doneMap.get(`${specKey}:${ok}`) ?? 0,
-            failed: failedMap.get(`${specKey}:${ok}`) ?? 0,
+            required: maps.required.get(`${specKey}:${ok}`) ?? 0,
+            done: maps.done.get(`${specKey}:${ok}`) ?? 0,
+            failed: maps.failed.get(`${specKey}:${ok}`) ?? 0,
+            openQty: maps.open.get(`${specKey}:${ok}`) ?? 0,
+            awaitingQcQty: maps.awaiting.get(`${specKey}:${ok}`) ?? 0,
           }),
       );
   }

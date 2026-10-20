@@ -17,6 +17,10 @@ export class PhoiProgressOrderSegmentDto {
   @Expose() @ApiProperty() required!: number;
   @Expose() @ApiProperty() done!: number;
   @Expose() @ApiProperty() failed!: number;
+  /** Phần của `done` CHƯA gửi KCS (đợt cắt đang CUTTING / dòng công đoạn phụ chưa vào đợt gửi KCS). */
+  @Expose() @ApiProperty() openQty: number = 0;
+  /** Phần của `done` đã gửi KCS, đang CHỜ KCS chấm (đợt AWAITING_QC). */
+  @Expose() @ApiProperty() awaitingQcQty: number = 0;
 
   constructor(partial: Partial<PhoiProgressOrderSegmentDto>) {
     Object.assign(this, partial);
@@ -38,7 +42,11 @@ export class PhoiProgressSegmentDto {
   /** Σ (failedQty - resolvedQty) của mọi QcReviewSegment thuộc cỡ này trong cả PI - số đoạn ĐANG
    *  thực sự lỗi (KCS đã chấm, chưa duyệt lại xác nhận đạt). "Còn lại" = required - (done - failed). */
   @Expose() @ApiProperty() failed!: number;
-  /** Tách theo SKU (2026-09-21): Σ required/done/failed các phần tử = đúng 3 số ở trên. */
+  /** Phần của `done` CHƯA gửi KCS (2026-10-16, thống nhất số 3 màn QLSX). `done` = openQty + awaitingQcQty + đã chấm. */
+  @Expose() @ApiProperty() openQty: number = 0;
+  /** Phần của `done` đã gửi KCS, đang chờ KCS chấm. */
+  @Expose() @ApiProperty() awaitingQcQty: number = 0;
+  /** Tách theo SKU (2026-09-21): Σ required/done/failed/openQty/awaitingQcQty các phần tử = đúng các số ở trên. */
   @Expose()
   @Type(() => PhoiProgressOrderSegmentDto)
   @ApiProperty({ type: [PhoiProgressOrderSegmentDto] })
