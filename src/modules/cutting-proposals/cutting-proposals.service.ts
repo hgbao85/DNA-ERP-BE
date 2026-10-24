@@ -21,6 +21,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
+import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -1239,6 +1240,8 @@ export class CuttingProposalsService {
         productionInvoiceItemId: item.id.toString(),
         mfgProductCode: item.mfgProduct.factoryCode,
         mfgProductName: item.mfgProduct.name,
+        wireMaterial: item.wireMaterial ? toMaterialChoiceRef(item.wireMaterial) : null,
+        cushionMaterial: item.cushionMaterial ? toMaterialChoiceRef(item.cushionMaterial) : null,
         quantity: item.quantity,
         salesOrderCode: item.salesOrder?.orderCode ?? null,
         productionInvoiceCode: item.productionInvoice?.code ?? null,
@@ -1460,6 +1463,10 @@ export class CuttingProposalsService {
         salesOrder: true,
         stages: true,
         productionInvoice: { include: { salesOrder: true } },
+        // Loại dây/nệm Sales chọn - chỉ để HIỂN THỊ phân biệt 2 dòng cùng SKU khác dây (không ảnh
+        // hưởng cắt sắt, dây/nệm không phải sắt).
+        wireMaterial: true,
+        cushionMaterial: true,
       },
     });
     if (items.length === 0) return null;

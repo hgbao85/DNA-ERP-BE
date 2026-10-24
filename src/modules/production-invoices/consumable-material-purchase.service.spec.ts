@@ -25,6 +25,7 @@ describe('ConsumableMaterialPurchaseService', () => {
     pieceMaterialItem: { findMany: jest.Mock };
     consumableBom: { findMany: jest.Mock };
     bomAccessoryItem: { findMany: jest.Mock };
+    bomOption: { findMany: jest.Mock };
     material: { findMany: jest.Mock };
     purchaseProposal: {
       findFirst: jest.Mock;
@@ -88,6 +89,8 @@ describe('ConsumableMaterialPurchaseService', () => {
       },
       consumableBom: { findMany: jest.fn().mockResolvedValue([]) },
       bomAccessoryItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // Tick loại dây/nệm của định mức - mặc định SKU không tick gì (không lọc dòng nào).
+      bomOption: { findMany: jest.fn().mockResolvedValue([]) },
       material: { findMany: jest.fn().mockResolvedValue([day]) },
       purchaseProposal: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -186,6 +189,111 @@ describe('ConsumableMaterialPurchaseService', () => {
     });
   });
 
+  // Loại dây/nệm Sales chọn cho từng lệnh (bom_option): chỉ dòng định mức của loại được chọn mới
+  // được tính, đinh/nút/sơn... không nằm trong tick nên luôn được tính.
+  describe('lọc theo loại dây / loại nệm đã chọn', () => {
+    const day2 = { id: 63n, code: 'DAY-02', warehouse: { id: 91n, code: 'kho-day-dinh' } };
+    const dinh = { id: 64n, code: 'DINH-01', warehouse: { id: 91n, code: 'kho-day-dinh' } };
+    const nemA = { id: 65n, code: 'NEM-A', warehouse: { id: 94n, code: 'kho-pk' } };
+    const nemB = { id: 66n, code: 'NEM-B', warehouse: { id: 94n, code: 'kho-pk' } };
+    const order = (
+      id: bigint,
+      quantity: number,
+      wire: bigint | null,
+      cushion: bigint | null = null,
+    ) => ({
+      id,
+      bomRevisionId: 5n,
+      quantity,
+      wireMaterialId: wire,
+      cushionMaterialId: cushion,
+      productionInvoiceItem: { warehouseCode: 'thanh-pham' },
+    });
+    const pmi = (materialId: bigint, qty: number) => ({
+      bomRevisionId: 5n,
+      pieceId: 40n,
+      materialId,
+      qtyPerPiece: { toNumber: () => qty },
+    });
+    const opt = (kind: 'WIRE' | 'CUSHION', materialId: bigint) => ({
+      bomRevisionId: 5n,
+      kind,
+      materialId,
+    });
+    const requiredOf = (result: { materialCode: string; required: number }[]) =>
+      Object.fromEntries(result.map((r) => [r.materialCode, r.required]));
+
+    beforeEach(() => {
+      // Mảnh có 2 dòng dây khác loại (số lượng khác nhau) + 1 dòng đinh luôn dùng.
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([
+        pmi(day.id, 3),
+        pmi(day2.id, 5),
+        pmi(dinh.id, 4),
+      ]);
+      prisma.material.findMany.mockResolvedValue([day, day2, dinh, nemA, nemB]);
+      prisma.bomOption.findMany.mockResolvedValue([opt('WIRE', day.id), opt('WIRE', day2.id)]);
+    });
+
+    it('chỉ tính dây lệnh đã chọn, vẫn tính đinh (không nằm trong tick)', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([order(10n, 20, day.id)]);
+
+      const result = await service.computeAndUpsertProposals('1');
+
+      // 2 mảnh/SKU × 20 SKU: DAY-01 ×3 = 120, DINH-01 ×4 = 160; DAY-02 (không chọn) KHÔNG xuất hiện.
+      expect(requiredOf(result)).toEqual({ 'DAY-01': 120, 'DINH-01': 160 });
+    });
+
+    it('2 lệnh cùng SKU/revision khác dây trong cùng PI: mỗi lệnh cộng đúng loại dây của nó', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([
+        order(10n, 20, day.id),
+        order(11n, 30, day2.id),
+      ]);
+
+      const result = await service.computeAndUpsertProposals('1');
+
+      // DAY-01: 2×20×3 = 120 (chỉ lệnh 10); DAY-02: 2×30×5 = 300 (chỉ lệnh 11);
+      // DINH-01: 2×(20+30)×4 = 400 (cả hai lệnh).
+      expect(requiredOf(result)).toEqual({ 'DAY-01': 120, 'DAY-02': 300, 'DINH-01': 400 });
+    });
+
+    it('nệm (phụ kiện) cũng chỉ tính loại đã chọn', async () => {
+      prisma.bomOption.findMany.mockResolvedValue([
+        opt('WIRE', day.id),
+        opt('WIRE', day2.id),
+        opt('CUSHION', nemA.id),
+        opt('CUSHION', nemB.id),
+      ]);
+      prisma.bomAccessoryItem.findMany.mockResolvedValue([
+        {
+          bomRevisionId: 5n,
+          materialId: nemA.id,
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: { toNumber: () => 1 },
+        },
+        {
+          bomRevisionId: 5n,
+          materialId: nemB.id,
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: { toNumber: () => 1 },
+        },
+      ]);
+      prisma.productionOrder.findMany.mockResolvedValue([order(10n, 20, day.id, nemB.id)]);
+
+      const result = await service.computeAndUpsertProposals('1');
+
+      expect(requiredOf(result)['NEM-B']).toBe(20);
+      expect(requiredOf(result)).not.toHaveProperty('NEM-A');
+    });
+
+    it('lệnh chưa chọn gì (đơn cũ, wireMaterialId null) giữ hành vi cũ: tính mọi dòng', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([order(10n, 20, null)]);
+
+      const result = await service.computeAndUpsertProposals('1');
+
+      expect(requiredOf(result)).toEqual({ 'DAY-01': 120, 'DAY-02': 200, 'DINH-01': 160 });
+    });
+  });
+
   it('Dây/Đinh (PieceMaterialItem) - nhân đủ 3 tầng: BomPiece.qtyPerUnit × order.quantity × qtyPerPiece', async () => {
     // required = qtyPerUnit(2 mảnh/SKU) × quantity(20 SKU) × qtyPerPiece(3 dây/mảnh) = 120.
     const result = await service.computeAndUpsertProposals('1');
@@ -207,6 +315,7 @@ describe('ConsumableMaterialPurchaseService', () => {
           create: [
             {
               materialId: 60n,
+              spec: null,
               buyQty: 120,
               actualStock: 0,
               receiveWarehouseCode: null,
@@ -520,7 +629,7 @@ describe('ConsumableMaterialPurchaseService', () => {
     expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
     expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
       where: { id: 950n },
-      data: { buyQty: 120, actualStock: 0, receiveWarehouseCode: null },
+      data: { spec: null, buyQty: 120, actualStock: 0, receiveWarehouseCode: null },
     });
     expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
     expect(result[0].purchaseProposalId).toBe('900');
@@ -540,6 +649,7 @@ describe('ConsumableMaterialPurchaseService', () => {
       data: {
         proposalId: 900n,
         materialId: 60n,
+        spec: null,
         buyQty: 120,
         actualStock: 0,
         receiveWarehouseCode: null,
@@ -566,6 +676,9 @@ describe('ConsumableMaterialPurchaseService', () => {
       day.warehouse.id,
       day.id,
       200,
+      undefined,
+      undefined,
+      '', // bucket quy cách: vật tư không có quy cách riêng -> ''
     );
   });
 
@@ -582,6 +695,7 @@ describe('ConsumableMaterialPurchaseService', () => {
       refType: 'CONSUMABLE_MATERIAL_PURCHASE',
       refId: '1', // piBigId (KHÔNG phải PurchaseProposalItem.id - dòng đó chưa tồn tại lúc này)
       productionInvoiceId: 1n,
+      spec: '',
     });
   });
 
@@ -592,6 +706,7 @@ describe('ConsumableMaterialPurchaseService', () => {
       refType: 'CONSUMABLE_MATERIAL_PURCHASE',
       refId: '1',
       materialId: day.id,
+      spec: '',
     });
   });
 
@@ -605,5 +720,195 @@ describe('ConsumableMaterialPurchaseService', () => {
     prisma.productionInvoice.findUnique.mockResolvedValue(null);
 
     await expect(service.computeAndUpsertProposals('999')).rejects.toThrow(NotFoundException);
+  });
+  // 2026-10-23: quy cách nệm riêng theo SKU (BomAccessoryItem.spec) -> dòng mua riêng theo quy cách.
+  describe('nệm khác quy cách giữa các SKU trong 1 PI', () => {
+    const nem = { id: 70n, code: 'VTK-340', warehouse: { id: 94n, code: 'thanh-pham' } };
+    type CreatedItem = { materialId: bigint; spec: string | null; buyQty: number };
+    const createdItems = () => {
+      const [args] = prisma.purchaseProposal.create.mock.calls[0] as unknown as [
+        { data: { items: { create: CreatedItem[] } } },
+      ];
+      return args.data.items.create;
+    };
+
+    beforeEach(() => {
+      // 2 SKU (2 BOM revision) cùng dùng nệm VTK-340, mỗi SKU 1 nệm/cái: 20 cái quy cách A, 5 cái quy cách B.
+      prisma.productionOrder.findMany.mockResolvedValue([
+        {
+          id: 10n,
+          bomRevisionId: 5n,
+          quantity: 20,
+          productionInvoiceItem: { warehouseCode: null },
+        },
+        { id: 11n, bomRevisionId: 6n, quantity: 5, productionInvoiceItem: { warehouseCode: null } },
+      ]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([]);
+      prisma.bomAccessoryItem.findMany.mockResolvedValue([
+        {
+          bomRevisionId: 5n,
+          materialId: nem.id,
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: decimal(1),
+          spec: '50x50x5',
+        },
+        {
+          bomRevisionId: 6n,
+          materialId: nem.id,
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: decimal(1),
+          spec: '45x45x4',
+        },
+      ]);
+      prisma.material.findMany.mockResolvedValue([nem]);
+    });
+
+    it('ra 2 dòng mua riêng theo quy cách, mỗi dòng đúng số lượng của SKU đó', async () => {
+      const result = await service.computeAndUpsertProposals('1');
+
+      expect(createdItems().map((i) => [i.spec, i.buyQty])).toEqual([
+        ['45x45x4', 5],
+        ['50x50x5', 20],
+      ]);
+      expect(result.map((r) => r.buyQty)).toEqual([5, 20]);
+    });
+
+    it('tồn kho tách THEO QUY CÁCH: tồn của quy cách này không che nhu cầu của quy cách kia', async () => {
+      // Kho có 10 cái quy cách 50x50x5, 0 cái quy cách 45x45x4 (tham số thứ 3 của câu lệnh = quy cách đang khoá).
+      prisma.$queryRaw.mockImplementation((_strings: unknown, ...values: unknown[]) =>
+        qtyRow(values[2] === '50x50x5' ? 10 : 0),
+      );
+
+      await service.computeAndUpsertProposals('1');
+
+      // 50x50x5: cần 20, tồn 10 -> mua 10. 45x45x4: cần 5, tồn 0 -> mua đủ 5 (KHÔNG bị tồn của quy cách kia che).
+      expect(createdItems().map((i) => [i.spec, i.buyQty])).toEqual([
+        ['45x45x4', 5],
+        ['50x50x5', 10],
+      ]);
+      // mỗi quy cách giữ chỗ RIÊNG phần tồn của bucket mình
+      expect(stockReservationsService.reserveOrAdjust).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ materialId: nem.id, qty: 10, spec: '50x50x5' }),
+      );
+      expect(stockReservationsService.reserveOrAdjust).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ materialId: nem.id, qty: 0, spec: '45x45x4' }),
+      );
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        prisma,
+        nem.warehouse.id,
+        nem.id,
+        10,
+        undefined,
+        undefined,
+        '50x50x5',
+      );
+    });
+
+    it('2 SKU cùng quy cách (hoặc đều không có) gộp lại thành 1 dòng như trước', async () => {
+      prisma.bomAccessoryItem.findMany.mockResolvedValue([
+        {
+          bomRevisionId: 5n,
+          materialId: nem.id,
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: decimal(1),
+          spec: '50x50x5',
+        },
+        {
+          bomRevisionId: 6n,
+          materialId: nem.id,
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: decimal(1),
+          spec: '50x50x5',
+        },
+      ]);
+
+      await service.computeAndUpsertProposals('1');
+
+      expect(createdItems().map((i) => [i.spec, i.buyQty])).toEqual([['50x50x5', 25]]);
+    });
+
+    it('lượt tính lại: cập nhật đúng dòng theo (vật tư, quy cách), không lẫn dòng của quy cách kia', async () => {
+      prisma.purchaseProposal.findFirst.mockResolvedValue({
+        id: 900n,
+        status: PurchaseProposalStatus.NEW,
+        items: [
+          {
+            id: 950n,
+            materialId: nem.id,
+            spec: '45x45x4',
+            status: PurchaseProposalStatus.NEW,
+            buyQty: decimal(1),
+          },
+          {
+            id: 951n,
+            materialId: nem.id,
+            spec: '50x50x5',
+            status: PurchaseProposalStatus.NEW,
+            buyQty: decimal(1),
+          },
+        ],
+      });
+
+      await service.computeAndUpsertProposals('1');
+
+      expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 951n },
+          data: expect.objectContaining({ spec: '50x50x5', buyQty: 20 }) as unknown,
+        }),
+      );
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 950n },
+          data: expect.objectContaining({ spec: '45x45x4', buyQty: 5 }) as unknown,
+        }),
+      );
+    });
+
+    it('quy cách của định mức đổi: tái dùng dòng còn mở cũ thay vì để lại dòng lỗi thời', async () => {
+      prisma.bomAccessoryItem.findMany.mockResolvedValue([
+        {
+          bomRevisionId: 5n,
+          materialId: nem.id,
+          kind: AccessoryItemKind.ACCESSORY,
+          qtyPerUnit: decimal(1),
+          spec: '60x60x6',
+        },
+      ]);
+      prisma.productionOrder.findMany.mockResolvedValue([
+        {
+          id: 10n,
+          bomRevisionId: 5n,
+          quantity: 20,
+          productionInvoiceItem: { warehouseCode: null },
+        },
+      ]);
+      prisma.purchaseProposal.findFirst.mockResolvedValue({
+        id: 900n,
+        status: PurchaseProposalStatus.NEW,
+        items: [
+          {
+            id: 950n,
+            materialId: nem.id,
+            spec: '50x50x5',
+            status: PurchaseProposalStatus.NEW,
+            buyQty: decimal(20),
+          },
+        ],
+      });
+
+      await service.computeAndUpsertProposals('1');
+
+      expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 950n },
+          data: expect.objectContaining({ spec: '60x60x6', buyQty: 20 }) as unknown,
+        }),
+      );
+    });
   });
 });

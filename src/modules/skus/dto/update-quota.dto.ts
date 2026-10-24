@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  MaxLength,
   Min,
   MinLength,
   ValidateNested,
@@ -211,6 +212,16 @@ export class QuotaMaterialLineDto {
   @IsNumber()
   @IsPositive()
   qtyPerUnit!: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Quy cách riêng của dòng trên SKU này - CHỈ nhận khi vật tư là nệm (detailKind=CUSHION), vật tư khác bị bỏ qua ' +
+      '(quy cách của chúng luôn lấy từ Material.spec). Bỏ trống = không có quy cách riêng.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  spec?: string;
 }
 
 /** 3 nhóm định mức chi tiết - Sơn/Phụ kiện/Bao bì đều nhập/duyệt chung 1 lần (1 account, 1
@@ -232,6 +243,14 @@ export class QuotaDetailLineDto {
   @IsNumber()
   @IsPositive()
   qtyPerUnit!: number;
+
+  @ApiPropertyOptional({
+    description: 'Quy cách riêng theo SKU - chỉ áp dụng cho nệm, xem QuotaMaterialLineDto.spec',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  spec?: string;
 }
 
 /**
@@ -256,6 +275,28 @@ export class UpdateQuotaDto {
   @ValidateNested({ each: true })
   @Type(() => QuotaDetailLineDto)
   detailLines?: QuotaDetailLineDto[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Dùng cho manh-quota: id các loại dây (nhóm Dây) Sales được chọn khi lên đơn. Bỏ trống field = ' +
+      'giữ nguyên; [] = xoá hết tick.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  wireOptions?: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Dùng cho detail-quota: id các loại nệm (Vật tư khác, phân loại Phụ kiện) Sales được chọn khi ' +
+      'lên đơn. Bỏ trống field = giữ nguyên; [] = xoá hết tick.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  cushionOptions?: string[];
 
   @ApiProperty()
   @IsString()

@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Chọn loại dây, loại nệm theo dòng đơn hàng; quy cách nệm theo SKU</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype","URW Palladio",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --line-strong:#3A4348;
+    --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226;
+    --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B;
+    --fe:#6FA3D8; --fe-bg:#1B2C3D;
+    --be:#B39DDB; --be-bg:#2A2140;
+    --db:#5FBB8B; --db-bg:#173226;
+    --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --line-strong:#3A4348;
+  --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226;
+  --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B;
+  --fe:#6FA3D8; --fe-bg:#1B2C3D;
+  --be:#B39DDB; --be-bg:#2A2140;
+  --db:#5FBB8B; --db-bg:#173226;
+  --code-bg:#20272A; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --line-strong:#C3C9CA;
+  --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7;
+  --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2;
+  --fe:#2B6CB0; --fe-bg:#E3EDF7;
+  --be:#6B4FA0; --be-bg:#EDE7F6;
+  --db:#1E7A4C; --db-bg:#E1F1E7;
+  --code-bg:#F4F5F5; --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+  line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--accent-bg)}
+a{color:var(--accent-ink)}
+code, pre, .mono{font-family:var(--mono)}
+code{background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+
+.topbar{
+  position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between;
+  gap:1rem; padding:.7rem 1.4rem; background:var(--paper); border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow);
+}
+.topbar .brand{font-family:var(--serif); font-weight:600; font-size:1.05rem; display:flex; align-items:baseline; gap:.55rem}
+.topbar .brand small{font-family:var(--mono); font-weight:400; color:var(--ink-soft); font-size:.72rem; letter-spacing:.02em}
+.topbar button{
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px;
+  padding:.42rem .8rem; font-size:.83rem; font-family:var(--sans); cursor:pointer;
+}
+.topbar button:hover{background:var(--accent-bg); border-color:var(--accent)}
+.topbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+.wrap{max-width:58rem; margin:0 auto; padding:2.6rem 1.6rem 6rem}
+@media (max-width:640px){ .wrap{padding:1.6rem 1.1rem 4rem} }
+
+.masthead{max-width:54rem; margin-bottom:2.2rem}
+.eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-family:var(--serif); font-size:1.95rem; font-weight:600; margin:.5rem 0 .7rem; text-wrap:balance; letter-spacing:-.01em}
+.lede{color:var(--ink-soft); font-size:1.02rem; max-width:64ch}
+.meta{display:flex; gap:1.2rem; flex-wrap:wrap; margin-top:1rem; font-size:.82rem; color:var(--ink-soft); font-family:var(--mono)}
+
+.tldr{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.2rem 1.4rem; margin:1.6rem 0 2.6rem;
+}
+.tldr h2{margin:0 0 .7rem; font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; font-family:var(--mono); color:var(--ink-soft)}
+.tldr ul{margin:0; padding-left:1.2rem; display:flex; flex-direction:column; gap:.45rem}
+.tldr li{font-size:.94rem}
+
+.module{margin-top:3rem; scroll-margin-top:1.2rem}
+.module > h2{
+  font-family:var(--serif); font-size:1.35rem; font-weight:600; margin:0 0 .3rem; display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+}
+.module-note{color:var(--ink-soft); font-size:.92rem; margin:.4rem 0 1.3rem; max-width:66ch}
+
+.badge{
+  display:inline-flex; align-items:center; font-family:var(--mono); font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; padding:.18rem .5rem; border-radius:5px; text-transform:uppercase;
+}
+.b-fe{background:var(--fe-bg); color:var(--fe)}
+.b-be{background:var(--be-bg); color:var(--be)}
+.b-db{background:var(--db-bg); color:var(--db)}
+
+.pill{
+  display:inline-flex; align-items:center; font-size:.72rem; font-weight:700; padding:.12rem .55rem;
+  border-radius:20px; font-family:var(--sans);
+}
+.p-add{background:var(--add-bg); color:var(--add)}
+.p-chg{background:var(--chg-bg); color:var(--chg)}
+.p-del{background:var(--del-bg); color:var(--del)}
+
+.card{
+  background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:var(--shadow);
+  padding:1.1rem 1.3rem; margin-bottom:.9rem;
+}
+.card h3{margin:0 0 .35rem; font-size:1rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.card p{margin:.3rem 0 0; color:var(--ink-soft); font-size:.92rem; max-width:68ch}
+.card .path{font-family:var(--mono); font-size:.82rem}
+
+pre.term{
+  background:var(--code-bg); border:1px solid var(--line); border-radius:8px;
+  padding:.9rem 1.1rem; margin:.6rem 0 0; font-size:.8rem; line-height:1.6;
+  overflow-x:auto; white-space:pre;
+}
+pre.term .prompt{color:var(--accent-ink)}
+pre.term .ok{color:var(--add); font-weight:700}
+pre.term .bad{color:var(--del); font-weight:700}
+pre.term .muted{color:var(--ink-soft)}
+.card .cap{margin:.9rem 0 0; font-size:.78rem; color:var(--ink-soft)}
+.card .cap:first-of-type{margin-top:1.1rem}
+
+.callout{
+  border:1px solid var(--line); background:var(--paper); border-left:3px solid var(--accent);
+  border-radius:8px; padding:.85rem 1.1rem; margin:1rem 0; font-size:.92rem; max-width:68ch;
+}
+.callout b{color:var(--accent-ink)}
+.callout.warn{border-left-color:var(--chg); background:var(--chg-bg)}
+.callout.warn b{color:var(--chg)}
+.callout.ok{border-left-color:var(--add); background:var(--add-bg)}
+.callout.ok b{color:var(--add)}
+.callout.bad{border-left-color:var(--del); background:var(--del-bg)}
+.callout.bad b{color:var(--del)}
+
+.tbl-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:9px; margin:1rem 0 0; box-shadow:var(--shadow)}
+table{width:100%; border-collapse:collapse; font-size:.86rem; background:var(--paper)}
+th, td{text-align:left; padding:.6rem .8rem; border-bottom:1px solid var(--line); vertical-align:top}
+thead th{font-family:var(--mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--code-bg)}
+tbody tr:last-child td{border-bottom:none}
+td.path{font-family:var(--mono); font-size:.8rem; white-space:nowrap}
+td.num{font-family:var(--mono); text-align:right; font-variant-numeric:tabular-nums}
+
+.timeline{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem}
+.timeline li{padding-left:1.6rem; position:relative; font-size:.94rem}
+.timeline li::before{
+  content:''; position:absolute; left:0; top:.42em; width:.55rem; height:.55rem; border-radius:50%;
+  background:var(--accent);
+}
+.timeline b{display:block; margin-bottom:.1rem}
+.timeline span{color:var(--ink-soft)}
+.timeline.stages li::before{background:var(--del)}
+.timeline.stages li.ok::before{background:var(--add)}
+
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin:1rem 0}
+.stat{background:var(--paper); padding:.9rem 1rem}
+.stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.5rem; font-weight:700; color:var(--accent-ink); line-height:1.1}
+.stat .l{margin-top:.2rem; font-size:.72rem; color:var(--ink-soft)}
+
+footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); color:var(--ink-soft); font-size:.85rem; max-width:66ch}
+
+.back-to-top{
+  position:fixed; bottom:1.4rem; right:1.4rem; width:2.6rem; height:2.6rem; border-radius:50%;
+  border:1px solid var(--line); background:var(--paper); color:var(--ink); font-size:1.1rem; cursor:pointer;
+  box-shadow:var(--shadow); opacity:.85;
+}
+.back-to-top:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">DNA-ERP <small>NHẬT KÝ THAY ĐỔI</small></div>
+  <button id="theme-toggle" type="button">◐ Theme</button>
+</div>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Backend + Frontend + DB · Định mức — Đơn hàng — Mua hàng — Xuất đan — Tồn kho</div>
+    <h1>Chọn loại dây (mã SHT), loại nệm theo từng dòng đơn hàng; quy cách nệm theo SKU</h1>
+    <p class="lede">
+      Một SKU có thể dùng nhiều loại dây (SHT01…SHT132) và nhiều loại nệm, số lượng dây trên từng mảnh khác nhau
+      theo loại dây. Trước đây hệ thống chỉ có <b>một bộ định mức cho mỗi SKU</b> và cộng dồn mọi dòng vật tư: mảnh
+      có hai dòng dây sẽ bị mua và xuất cả hai. Đợt này cho người nhập định mức <b>tick các loại được phép</b>, cho
+      Sales <b>chọn đúng một loại dây và một loại nệm cho từng dòng đơn</b>, và đưa lựa chọn đó đi xuyên suốt tới
+      Mua hàng và Xuất đan.
+      Ngày 23/10 bổ sung: <b>quy cách nệm nhập theo từng SKU</b> (không lưu ở vật tư), <b>tồn kho tách theo quy cách</b>,
+      bảng Mua hàng theo từng SKU ở "Bảng thống kê" và lọc SKU theo khách hàng khi tạo PO.
+    </p>
+    <div class="meta">
+      <span>22–24/10/2026</span>
+      <span>2 repo: <code>DNA-ERP-BE</code> + <code>DNA-ERP</code></span>
+      <span>5 migration (2 ngày 22/10 + 3 ngày 23/10)</span>
+      <span>Backend 1915 test · Frontend 221 test · tích hợp 10 test (đều qua)</span>
+      <span><b>Đã chạy thử qua trình duyệt</b> (xem mục 8 và 12–14)</span>
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Tóm tắt nhanh</h2>
+    <ul>
+      <li><b>Nhập định mức:</b> dmm tick các loại dây ở <code>SpecSteelPage</code>, dmct tick các loại nệm ở
+        <code>SpecDetailQuotaPage</code>. Tick xong, mỗi mảnh đan tự có sẵn dòng dây cho từng loại (nệm thì mỗi loại
+        một dòng Phụ kiện), người nhập chỉ điền số lượng.</li>
+      <li><b>Sales:</b> chọn SKU rồi chọn <b>Màu dây</b> và <b>Màu nệm</b> trong danh sách đã tick của định mức đã
+        duyệt (có ảnh mẫu, bấm để phóng to). Cùng một SKU nhiều màu thì tách thành nhiều dòng đơn.</li>
+      <li><b>Hạ nguồn:</b> lựa chọn được chép sang dòng lệnh sản xuất và <b>chốt vào lệnh sản xuất lúc Sếp duyệt</b>.
+        Mua hàng và kế hoạch xuất đan chỉ tính dây/nệm của loại đã chọn. Đinh, nút nhựa, sắt… luôn tính như cũ.</li>
+      <li><b>Phân loại vật tư mới "Nệm":</b> lọc đúng 9 loại nệm thay vì 242 phụ kiện. Đã áp lên DB dev và đổi
+        VTK-338…VTK-346 sang phân loại này.</li>
+      <li><b>Gom đợt cắt không bị chặn:</b> dây và nệm không liên quan tới cắt sắt, nên hai dòng cùng SKU khác màu
+        vẫn gộp chung được.</li>
+      <li><b>23/10 - quy cách nệm theo SKU:</b> quy cách nhập tay (tuỳ chọn) ở Định mức chi tiết, lưu theo SKU; Admin &gt; Vật tư
+        ẩn ô Quy cách của nệm. Một SKU có thể có nhiều dòng cùng một nệm nếu khác quy cách (vd nệm đôi + nệm đơn).</li>
+      <li><b>23/10 - tồn kho tách theo quy cách:</b> nhận hàng, giữ chỗ, đề xuất mua, sửa tồn, chuyển kho đều theo từng
+        (vật tư, quy cách). Cùng một nệm khác quy cách ra các dòng mua và dòng tồn riêng.</li>
+      <li><b>23/10 - hiển thị theo SKU:</b> nhãn dây/nệm đã nối vào "Bảng thống kê" và ngăn chi tiết QLSX, hiện <b>tên</b> thay vì mã;
+        bảng Mua hàng của từng SKU chỉ giữ dây/nệm của SKU đó (sắt, đinh... ghi "mua chung"); form Tạo PO lọc SKU theo khách hàng.</li>
+      <li><b>24/10 - kiểm nốt:</b> giao diện tick dây/nệm, chặn gỡ tick, nhãn dây/nệm ở các trang kho và test tích hợp trigger
+        <code>bom_option</code> đều đã kiểm và đạt (xem mục 8). Thông báo chặn gỡ tick nay ghi mã đơn Sales nhập (<code>orderCode</code>).
+        Còn lại: màn công nhân quét mã chưa có nhãn dây/nệm (mục 10).</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 1. BỐI CẢNH ═══════════════════════ -->
+  <div class="module" id="boicanh">
+    <h2>1. Bối cảnh</h2>
+    <p class="module-note">
+      Người dùng cung cấp danh mục 14–15 loại dây nhà máy đang dùng (mỗi loại có mã SHT, ảnh mẫu và thông số
+      độ dày/rộng/định lượng) và nêu nhu cầu: khách đặt hàng chọn được màu dây đan và màu nệm, hệ thống phải mua và
+      xuất đúng loại đã chọn.
+    </p>
+    <div class="card">
+      <h3>Vấn đề với mô hình cũ</h3>
+      <p>Định mức dây nhập riêng từng mảnh (đã xác nhận với bộ phận định mức). Với mô hình một bộ định mức cho mỗi
+      SKU, các dòng dây khác loại của cùng một mảnh bị <b>cộng dồn</b> ở mọi nơi tính vật tư — mua dư, xuất đan sai.
+      Hai dòng cùng SKU trong một đơn cũng bị <b>lẫn</b> vì dòng lệnh sản xuất chỉ nối với đơn qua cặp
+      (đơn, sản phẩm).</p>
+    </div>
+    <div class="card">
+      <h3>Dây là "loại dây", không chỉ là màu</h3>
+      <p>Các mã SHT khác nhau về hoa văn, bề rộng, số khía (ví dụ SHT72 là bản dẹt rộng, SHT29 rộng 14 mm). Vì vậy
+      <b>mỗi mã SHT là một vật tư (<code>Material</code>) riêng</b> chứ không phải một nhãn màu gắn lên vật tư.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 2. QUY TRÌNH ═══════════════════════ -->
+  <div class="module" id="quytrinh">
+    <h2>2. Quy trình mới, nhìn từ người dùng</h2>
+    <ol class="timeline">
+      <li><b>dmm tick loại dây cho SKU</b>
+        <span>Trang Định mức mảnh có ô "Danh sách màu dây SKU" (nút "Chọn các màu dây"): chọn nhiều có tìm kiếm, mỗi loại có ảnh mẫu. Tick xong,
+        mỗi mảnh đã có Đinh hoặc Dây tự có dòng dây cho từng loại với số lượng trống; mảnh khác có nút "Thêm dây đã
+        tick". Nhập số lượng ngay trên dòng.</span></li>
+      <li><b>dmct tick loại nệm cho SKU</b>
+        <span>Trang Định mức chi tiết có ô "Danh sách màu nệm SKU" (nút "Chọn các màu nệm", chỉ liệt kê vật tư phân loại Nệm). Mỗi loại tick
+        tự có một dòng Phụ kiện để nhập số lượng.</span></li>
+      <li><b>KHSX duyệt, Sếp duyệt như cũ</b>
+        <span>Danh sách tick đi cùng bản định mức; khi bản định mức chuyển ACTIVE thì danh sách tick bị khoá như mọi dòng
+        con khác.</span></li>
+      <li><b>Sales lên đơn</b>
+        <span>Chọn SKU (chỉ SKU đã duyệt) rồi chọn Loại dây, Loại nệm. SKU chỉ có một loại thì tự chọn sẵn. SKU không
+        có tick thì không hiện hai ô này và chạy như trước.</span></li>
+      <li><b>Duyệt lệnh sản xuất</b>
+        <span>Hệ thống kiểm lựa chọn có khớp bản định mức sắp ghim không, rồi chốt loại dây/nệm vào lệnh sản xuất.</span></li>
+      <li><b>Mua hàng và Xuất đan</b>
+        <span>Đề xuất mua và kế hoạch xuất đan chỉ gồm dây/nệm của loại đã chọn, tính riêng cho từng lệnh.</span></li>
+    </ol>
+  </div>
+
+  <!-- ═══════════════════════ 3. DB ═══════════════════════ -->
+  <div class="module" id="db">
+    <h2>3. Cơ sở dữ liệu <span class="badge b-db">DB</span></h2>
+    <p class="module-note">Hai migration ngày 22/10 (dưới đây), đều chỉ <b>thêm</b>, không đổi hay xoá dữ liệu cũ.
+      Ba migration ngày 23/10 xem mục 12 và 13.</p>
+    <div class="card">
+      <h3>Migration <code>20261022100000_add_bom_option_selection</code></h3>
+      <p>Bảng mới <code>bom_option(bomRevisionId, kind WIRE|CUSHION, materialId)</code>, unique theo bộ ba. Một dòng định mức
+      mà vật tư của nó nằm trong bảng này là <b>"dòng chọn một"</b>; mọi vật tư không nằm trong bảng luôn được tính. SKU
+      không tick gì chạy y như trước.</p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Bảng</th><th>Cột thêm</th><th>Ý nghĩa</th></tr></thead>
+        <tbody>
+          <tr><td class="path">sales_order_items</td><td class="path">wireMaterialId, cushionMaterialId</td><td>Loại dây/nệm Sales chọn cho dòng đơn. Sửa được cho tới khi lệnh sản xuất của dòng được duyệt.</td></tr>
+          <tr><td class="path">production_invoice_items</td><td class="path">salesOrderItemId, wireMaterialId, cushionMaterialId</td><td><code>salesOrderItemId</code> nối đúng dòng đơn (trước đây chỉ nối qua đơn + sản phẩm nên hai dòng cùng SKU bị lẫn). Hai cột còn lại là bản sao lựa chọn.</td></tr>
+          <tr><td class="path">production_orders</td><td class="path">wireMaterialId, cushionMaterialId</td><td>Bản <b>chốt</b> lúc duyệt; mọi luồng mua hàng/xuất đan đọc từ đây.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card" style="margin-top:.9rem">
+      <h3>Trigger chống sửa sau khi duyệt</h3>
+      <p><code>bom_option</code> được gắn trigger <code>bom_revision_draft_guard</code> như 8 bảng dòng con khác: chỉ bản
+      DRAFT mới sửa được. Đã thử trên DB dev bằng giao dịch luôn rollback: INSERT/UPDATE/DELETE đều bị chặn khi bản
+      ACTIVE (mã lỗi IE001); lối thoát <code>dna.bom_maintenance</code> của Admin ghi đè hoạt động trong transaction.</p>
+    </div>
+    <div class="card">
+      <h3>Backfill</h3>
+      <p><code>production_invoice_items.salesOrderItemId</code> được gán cho dòng đơn <b>khớp duy nhất</b> theo
+      (đơn, sản phẩm). Đơn cũ có từ hai dòng cùng SKU thì để trống, không đoán. DB dev lúc áp chưa có lệnh sản xuất
+      nên không có dòng nào cần chuyển.</p>
+    </div>
+    <div class="card">
+      <h3>Migration <code>20261022130000_add_material_detail_kind_cushion</code></h3>
+      <p>Thêm giá trị <code>CUSHION</code> vào enum <code>MaterialDetailKind</code> (Sơn, Phụ kiện, <b>Nệm</b>, Bao bì).
+      Lý do: nhóm "Vật tư khác" + phân loại Phụ kiện có 242 mục (mặt bàn, bản lề…), chưa có trường nào đánh dấu nệm. Nệm
+      vẫn lưu trong định mức như phụ kiện (<code>BomAccessoryItem</code> kind ACCESSORY), chỉ có thêm phân loại riêng để lọc.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 4. BACKEND ═══════════════════════ -->
+  <div class="module" id="backend">
+    <h2>4. Backend <span class="badge b-be">BE</span></h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Nơi sửa</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">skus/skus.service.ts<br>skus/dto/update-quota.dto.ts</td>
+            <td><code>manh-quota</code> nhận <code>wireOptions[]</code>, <code>detail-quota</code> nhận <code>cushionOptions[]</code>
+            (bỏ trống = giữ nguyên, <code>[]</code> = xoá hết tick). Ghi <code>bom_option</code> trong cùng transaction với
+            định mức. Dây phải thuộc nhóm Dây; nệm phải có phân loại Nệm. Dữ liệu đọc ra có thêm danh sách tick. Endpoint mới
+            <code>GET /skus/order-options?mfgProductId=</code> (quyền <code>SKU:VIEW</code>) trả loại dây/nệm của bản ACTIVE kèm ảnh.</td></tr>
+          <tr><td class="path">bom-revisions/bom-option.util.ts</td>
+            <td>Hàm trung tâm <code>loadBomOptionExclusions</code>: với mỗi lệnh sản xuất trả tập vật tư <b>phải loại</b> (loại đã
+            tick nhưng lệnh không chọn). Lệnh chưa chọn gì (đơn cũ) thì không lọc, giữ hành vi cũ.</td></tr>
+          <tr><td class="path">sales-orders/sales-orders.service.ts</td>
+            <td>Tạo/thêm/sửa dòng đơn nhận loại dây/nệm và kiểm theo bản ACTIVE. Ghi <code>salesOrderItemId</code> khi sinh dòng lệnh sản xuất.
+            Trạng thái "Chi tiết sản xuất" tính riêng từng dòng đơn (khoá theo <code>salesOrderItemId</code>, có dự phòng cho dữ liệu cũ).
+            Sau khi lệnh sản xuất của dòng đã duyệt thì không đổi được loại dây/nệm.</td></tr>
+          <tr><td class="path">production-orders/production-orders.service.ts<br>production-invoices/production-invoices.service.ts</td>
+            <td><code>createFromApproval</code> chốt lựa chọn vào lệnh. <code>assertChoiceMatchesRevision</code> chạy <b>trước khi ghi APPROVED</b> ở
+            <code>approveItem</code>, <code>approveBatch</code> và <code>retryProductionOrder</code>; <code>resyncBom</code> cũng kiểm (không đổi ngầm làm mất loại đã chọn).
+            Response lệnh sản xuất/dòng lệnh/ứng viên gom đợt cắt trả thêm loại dây/nệm.</td></tr>
+          <tr><td class="path">production-invoices/consumable-material-purchase.service.ts</td>
+            <td>Đề xuất mua bỏ các dòng dây/nệm của loại không được chọn. Tính theo từng lệnh nên hai lệnh cùng SKU khác dây trong cùng một PI vẫn cộng đúng từng loại.</td></tr>
+          <tr><td class="path">weaving-issues/weaving-issues.service.ts</td>
+            <td>Kế hoạch xuất đan (một lệnh và hàng loạt) chỉ trả dây đã chọn. <code>create()</code> từ chối mang kèm dây không thuộc loại đã chọn (400).</td></tr>
+          <tr><td class="path">materials/materials.service.ts<br>bom-revisions/bom-revisions.service.ts</td>
+            <td>Vật tư đang được tick tính vào "đang dùng trong định mức". Dòng Phụ kiện nhận cả phân loại Phụ kiện và Nệm; dòng Bao bì không nhận Nệm.</td></tr>
+          <tr><td class="path">prisma/delete-sku.ts</td>
+            <td>Xoá <code>bom_option</code> trước khi xoá bản định mức (khoá ngoại RESTRICT).</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 5. FRONTEND ═══════════════════════ -->
+  <div class="module" id="frontend">
+    <h2>5. Frontend <span class="badge b-fe">FE</span></h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Nơi sửa</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">components/MaterialOptionsPanel.tsx (mới)</td>
+            <td>Ô tick dùng chung cho dây và nệm: chip đã chọn (ảnh + tên), hộp chọn nhiều có tìm kiếm, "Chọn tất cả". Hiện tên, không hiện mã.</td></tr>
+          <tr><td class="path">Manufacturing/SpecSteelPage.tsx<br>utils/wireOptions.ts</td>
+            <td>Tick dây tự thêm dòng vào các mảnh đan; nhập số lượng ngay trên dòng; nút "Thêm dây đã tick"; hỏi xác nhận khi bỏ tick loại đã nhập số lượng.
+            Chặn gửi duyệt nếu loại đã tick chưa có số lượng ở mảnh nào. Tick được lưu cùng nháp và được chép khi "Sao chép từ SKU khác". Dòng Dây hiện tên, không hiện mã; cột Ảnh hiện ảnh mẫu của vật tư.</td></tr>
+          <tr><td class="path">Manufacturing/SpecDetailQuotaPage.tsx<br>utils/cushionOptions.ts</td>
+            <td>Tương tự cho nệm; danh sách chỉ gồm vật tư phân loại Nệm. Tab Phụ kiện nhận cả Phụ kiện và Nệm.</td></tr>
+          <tr><td class="path">Sales/OrderManagementPage.tsx</td>
+            <td>Hai ô "Màu dây", "Màu nệm" dưới mỗi dòng SKU, bắt buộc khi SKU có tick, tự chọn khi chỉ có một loại; ảnh loại đã chọn bấm phóng to. Chi tiết đơn hiện nhãn dây/nệm.</td></tr>
+          <tr><td class="path">components/MaterialChoiceTags.tsx (mới)</td>
+            <td>Nhãn "Dây … · Nệm …" hiện ở Lệnh sản xuất, Gom đợt cắt, chi tiết đơn và 6 trang kho (Xuất đan, Nhập đan, Chuyền kiểm, Đóng gói, Xuất vật tư thành phẩm, Xuất vật tư tiêu hao).</td></tr>
+          <tr><td class="path">components/ZoomableImage.tsx (mới)<br>components/SkuImageThumb.tsx</td>
+            <td>Ảnh bấm để phóng to ngay trong trang (khung giữa màn hình). <b>Tác động kèm theo:</b> ảnh SKU ở Định mức mảnh, Định mức chi tiết và Chi tiết SKU trước đây mở tab mới, nay cũng phóng to tại chỗ.</td></tr>
+          <tr><td class="path">Admin/masterData/MaterialsPage.tsx<br>components/MaterialPicker.tsx<br>Manufacturing/SpecAccessoryCatalogPage.tsx</td>
+            <td>Thêm lựa chọn Phân loại = Nệm; bộ chọn vật tư nhận nhiều phân loại; danh mục phụ kiện hiện cả Nệm.
+            <b>23/10:</b> ẩn ô Quy cách khi Phân loại = Nệm; cột "Tồn kho" hiện thêm dòng tách theo quy cách (chỉ tính ở kho gốc của vật tư).</td></tr>
+          <tr><td class="path">components/MaterialChoiceTags.tsx</td>
+            <td><b>23/10:</b> nhãn hiện <b>tên</b> dây/nệm (vd "Dây nâu SHT08", "Nệm màu be"), không hiện mã; tooltip cũng chỉ còn tên.</td></tr>
+          <tr><td class="path">Manufacturing/ThongKePagePlan.tsx<br>utils/purchaseScope.ts</td>
+            <td><b>23/10:</b> hiện nhãn dây/nệm (thẻ đầu trang, bảng desktop, thẻ mobile) và mục "Số lượng". Bảng Mua hàng của từng SKU chỉ giữ dây/nệm
+            của SKU đó; sắt, đinh... giữ số gộp cả PI kèm nhãn "(mua chung)" và một dòng ghi chú dưới bảng (chỉ khi PI có từ 2 SKU).
+            Cùng một vật tư ra nhiều dòng mua (nệm khác quy cách) thì tên ghi thêm quy cách.</td></tr>
+          <tr><td class="path">Floor/QlsxPiDetail.tsx<br>services/floor-api.ts</td>
+            <td><b>23/10:</b> ô "Xem theo SKU" trong ngăn chi tiết ghi kèm dây/nệm của từng lệnh; dưới tiêu đề hiện nhãn khi PI có 1 SKU.</td></tr>
+          <tr><td class="path">Sales/OrderManagementPage.tsx</td>
+            <td><b>23/10:</b> ô chọn SKU lọc theo khách hàng đã chọn (chưa chọn khách thì chưa liệt kê). Đổi khách thì các dòng đã chọn SKU của khách khác bị bỏ.
+            SKU chưa gán khách nào vẫn hiện ở mọi khách để không bị mồ côi.</td></tr>
+          <tr><td class="path">Manufacturing/SpecDetailQuotaPage.tsx</td>
+            <td><b>23/10:</b> nhập quy cách cho dòng nệm (ô thêm dòng và ô sửa trong bảng); hộp xác nhận cho "Tạm lưu" và "Bỏ bản nháp" như Định mức mảnh.</td></tr>
+          <tr><td class="path">Manufacturing/MfgWarehousesPage.tsx<br>ProductionPlan/VatTuDashboardPage.tsx<br>components/WarehouseLedgerHistory.tsx<br>InboundWarehouse/ChuyenKhoTuDoPage.tsx</td>
+            <td><b>23/10:</b> tồn kho hiện và sửa theo từng quy cách; Lịch sử kho ghi quy cách; Chuyển kho ngoài đơn hàng cho chọn từng quy cách như một lựa chọn riêng (số kèm theo là số khả dụng).</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 6. QUY TẮC ═══════════════════════ -->
+  <div class="module" id="quytac">
+    <h2>6. Quy tắc nghiệp vụ</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Tình huống</th><th>Kết quả</th></tr></thead>
+        <tbody>
+          <tr><td>SKU có tick dây/nệm, dòng đơn không chọn</td><td>400, không tạo đơn</td></tr>
+          <tr><td>Chọn loại không nằm trong tick của bản ACTIVE</td><td>400</td></tr>
+          <tr><td>SKU không có tick mà dòng đơn vẫn gửi dây/nệm</td><td>400</td></tr>
+          <tr><td>Bỏ tick loại đang nằm trên dòng đơn chưa giao hết (<code>shippedQty &lt; totalQty</code>)</td><td>409, nêu mã vật tư và mã đơn Sales nhập (<code>orderCode</code>, không phải mã nội bộ <code>PO-{id}</code>; sửa 24/10)</td></tr>
+          <tr><td>Đổi loại dây/nệm sau khi lệnh sản xuất của dòng đã được duyệt</td><td>409</td></tr>
+          <tr><td>Duyệt lệnh mà lựa chọn không khớp bản định mức sắp ghim</td><td>409, chặn trước khi ghi APPROVED</td></tr>
+          <tr><td>Xuất đan mang kèm dây không thuộc loại đã chọn</td><td>400, không tạo phiếu xuất</td></tr>
+          <tr><td>Tick nệm với vật tư không phân loại Nệm</td><td>400</td></tr>
+          <tr><td>Đơn cũ (lựa chọn rỗng)</td><td>Chạy như trước, không lọc gì</td></tr>
+          <tr><td>Gom hai dòng cùng SKU khác dây vào một đợt cắt</td><td>Cho phép (dây/nệm không ảnh hưởng cắt sắt)</td></tr>
+          <tr><td>Nhập 2 dòng trùng cả nệm lẫn quy cách trong cùng SKU</td><td>400, nêu mã nệm (khác quy cách thì được)</td></tr>
+          <tr><td>Gửi quy cách cho vật tư không phải nệm</td><td>Bỏ qua - quy cách của chúng luôn lấy từ vật tư</td></tr>
+          <tr><td>Tạo PO: chọn SKU của khách khác</td><td>Ô SKU không liệt kê SKU đó; đổi khách thì bỏ dòng SKU của khách cũ</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <b>Điều kiện "chưa giao hết" dùng <code>shippedQty &lt; totalQty</code></b>, không dùng cột
+      <code>SalesOrderItem.status</code> vì cột đó là dữ liệu chết (luôn kẹt ở LEN_KE_HOACH).
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 7. QUYẾT ĐỊNH ═══════════════════════ -->
+  <div class="module" id="quyetdinh">
+    <h2>7. Quyết định thiết kế và lý do</h2>
+    <div class="card">
+      <h3>Một bảng <code>bom_option</code> thay vì thêm cờ vào từng dòng định mức</h3>
+      <p>Đường ghi định mức (<code>replacePieces</code>) gần như giữ nguyên; "dòng chọn một" được suy ra từ việc vật tư có nằm trong bảng hay không.
+      Vật tư khác (đinh, nút, sắt) không đụng tới.</p>
+    </div>
+    <div class="card">
+      <h3>Chốt lựa chọn vào lệnh sản xuất, không đọc lại dòng đơn</h3>
+      <p>Bản định mức đã ACTIVE là bất biến, nên lựa chọn của đơn phải nằm ở chứng từ (lệnh sản xuất) giống cách lệnh ghim <code>bomRevisionId</code>.
+      Nhờ đó không cần dọn đề xuất mua mồ côi khi đổi lựa chọn sau này (đã khoá đổi sau khi duyệt).</p>
+    </div>
+    <div class="card">
+      <h3>Không chặn gom đợt cắt</h3>
+      <p>Ban đầu dự kiến chặn gom hai dòng cùng SKU khác dây vì lo các trang kho lấy nhầm lệnh. Kiểm lại code: các trang kho đã dựng
+      mỗi lệnh sản xuất một dòng (<code>expandSkusByProductionOrder</code>, mang sẵn id lệnh), nên chỉ cần hiện nhãn dây/nệm để phân biệt.</p>
+    </div>
+    <div class="card">
+      <h3>Phân loại "Nệm" thật thay vì đoán theo tên</h3>
+      <p>Bản đầu lọc nệm theo tên bắt đầu bằng "Nệm". Người dùng chọn thêm phân loại riêng để lọc chắc chắn; nệm mới chỉ cần chọn Phân loại = Nệm ở Admin &gt; Vật tư.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 8. KIỂM THỬ ═══════════════════════ -->
+  <div class="module" id="kiemthu">
+    <h2>8. Kiểm thử</h2>
+    <div class="stats">
+      <div class="stat"><div class="n">1915</div><div class="l">test backend qua (1 bỏ qua có sẵn)</div></div>
+      <div class="stat"><div class="n">221</div><div class="l">test frontend qua (chạy lại sau đổi nhãn)</div></div>
+      <div class="stat"><div class="n">10</div><div class="l">test tích hợp qua (Postgres thật)</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">lỗi lint, <code>tsc</code> sạch</div></div>
+    </div>
+    <div class="card">
+      <h3>Đã kiểm</h3>
+      <p>Unit test cho: ghi/đọc tick, chặn gỡ tick đang dùng, kiểm lựa chọn khi tạo/sửa đơn, chốt vào lệnh, kiểm khớp bản định mức,
+      mua hàng cộng đúng từng loại (kể cả hai lệnh cùng SKU khác dây trong một PI), kế hoạch xuất đan, từ chối dây sai, phân loại Nệm,
+      và logic tick ở frontend. Trigger <code>bom_option</code> thử trực tiếp trên DB dev bằng giao dịch luôn rollback, không để lại dữ liệu.</p>
+    </div>
+    <div class="callout ok">
+      <b>Đã chạy thử trên DB dev (23/10):</b> định mức có tick dây/nệm → duyệt SKU → Sales lên đơn 2 dòng cùng SKU khác dây/nệm (qua giao diện) → gom PI →
+      QLSX gửi Sếp → Sếp duyệt → đề xuất mua (DAY-010 = 20, DAY-020 = 15, VTK-338 = 10, VTK-340 = 5, không cộng dồn) → kế hoạch xuất đan chỉ có dây của lệnh đó.
+      Các quy tắc chặn đều đúng (xuất đan dây sai 400, đổi dây sau duyệt 409, thiếu/ngoài tick 400).
+      Quy cách nệm: nhập 2 dòng cùng nệm khác quy cách → đề xuất mua ra 2 dòng riêng → màn Nhập kho của thủ kho hiện đúng 2 dòng quy cách → nhận hàng
+      chỉ cộng đúng dòng → tồn kho tách bucket → sửa tồn đúng bucket (sai số cũ 409) → chuyển kho 2 cái quy cách Đôi chỉ động bucket Đôi.
+    </div>
+    <div class="callout ok">
+      <b>Kiểm nốt ngày 24/10 (đạt hết):</b> dùng SKU thử <code>ZZ-TEST-UI</code>, đơn thử 2 dòng cùng SKU khác dây/nệm, đi đủ Sales → gom PI → QLSX → Sếp duyệt → QLSX Bắt đầu, rồi dọn sạch.
+      <ul style="margin:.5rem 0 0; padding-left:1.2rem">
+        <li><b>Giao diện tick (trình duyệt thật):</b> hộp tick dây hiện 14 loại, hộp tick nệm chỉ 9 loại nệm; tick xong có nút "Thêm dây đã tick" / tự thêm dòng Phụ kiện;
+          chưa nhập số lượng thì hiện cảnh báo và khoá "Gửi phê duyệt"; bỏ tick loại đã có số lượng thì hỏi xác nhận (Hủy giữ nguyên); quy cách nệm lưu đúng;
+          gửi duyệt xong khoá form, BE lưu <code>wireOptions</code>/<code>cushionOptions</code> đúng.</li>
+        <li><b>Chặn gỡ tick:</b> gỡ dây DAY-020 hoặc nệm VTK-338 khi đơn còn dòng chưa giao dùng chúng → 409, tick giữ nguyên.</li>
+        <li><b>Nhãn dây/nệm ở các trang kho (trình duyệt thật):</b> Theo dõi xuất đan, Theo dõi nhập đan, Chuyền kiểm, Đóng gói, Xuất vật tư TP, Xuất vật tư hàn, Xuất vật tư sơn
+          (tài khoản <code>khovttp</code>, <code>khopsh</code>, <code>khotp2</code>) đều hiện đúng nhãn tên dây/nệm cho từng lệnh; hai dòng cùng SKU phân biệt được. Đã mở chi tiết ở Xuất đan và Đóng gói: tiêu đề có nhãn. Không có lỗi console.</li>
+        <li><b>Test tích hợp (Postgres 16 thật qua <code>docker-compose.test.yml</code>, cổng 5433):</b> 3 suite, 10 test qua; riêng <code>bom-revision-immutability</code> 7/7 gồm 2 ca <code>bom_option</code>.
+          Toàn bộ migration (tới <code>20261023120000</code>) áp được từ DB trống.</li>
+      </ul>
+      Không kiểm được ở đợt này: danh sách dây đã lọc trên màn Xuất đan (dữ liệu thử không có mảnh đan; phần lọc đã kiểm bằng API ở 23/10).
+      Riêng 3 migration ngày 23/10: migration tồn kho đã <b>thử trong giao dịch luôn rollback</b> trước khi áp thật (ghi nhiều quy cách, xuất một quy cách, bucket chiều dài
+      sắt vẫn chạy, ràng buộc CHECK chặn đúng, rollback sạch).
+    </div>
+    <div class="callout">
+      <b>Đã sửa trong lúc kiểm (24/10):</b> thông báo 409 chặn gỡ tick ghi mã nội bộ (<code>PO-44</code>) thay vì mã đơn Sales nhập (<code>orderCode</code>) - đổi ở
+      <code>skus.service.ts</code>, test cập nhật theo. Cũng 24/10: <b>thống nhất nhãn "màu dây / màu nệm"</b> ở mọi nơi hiển thị cho người dùng (trước đó hai bảng tick ghi "màu", còn trang Sales,
+      cảnh báo, hộp xác nhận và thông báo lỗi BE ghi "loại"): ô chọn của Sales, cảnh báo "Màu dây … đã tick nhưng chưa nhập số lượng", hộp "Bỏ màu dây đã nhập số lượng?",
+      tooltip nhãn, và các thông báo lỗi 400/409 (đơn hàng, duyệt lệnh, xuất đan). Tên trong code, API và chú thích giữ nguyên "loại dây/nệm" (không hiển thị cho người dùng).
+      Lưu ý: các đoạn mô tả trong tài liệu này vẫn dùng "loại dây/nệm" như tên khái niệm.
+    </div>
+    <div class="callout ok">
+      <b>Kiểm lại sau khi đổi nhãn (24/10):</b>
+      <ul style="margin:.5rem 0 0; padding-left:1.2rem">
+        <li><b>Test:</b> backend 5 suite liên quan 252 test qua; frontend 221 test qua, <code>tsc</code> frontend sạch; test tích hợp chạy lại trên Postgres mới, 3 suite 10 test qua.</li>
+        <li><b>Giao diện thật (SKU thử có tick 2 dây + 2 nệm, đã duyệt tới ACTIVE):</b>
+          trang Sales, form Tạo PO hiện "Màu dây *" / "Màu nệm *", placeholder "Chọn màu dây *" / "Chọn màu nệm *" và dòng nhắc "chọn đủ Màu dây và Màu nệm…";
+          dmm, hộp tick hiện "Chọn tất cả 14 màu dây", "Đã chọn 0 màu" rồi "Đã chọn 1 màu", sau khi Xong thì nút thành "Sửa danh sách màu dây";
+          cảnh báo "Màu dây … đã tick nhưng chưa nhập số lượng ở mảnh nào…" và hộp xác nhận "Bỏ màu dây đã nhập số lượng?" ("…thuộc các màu vừa bỏ tick…") đều đúng. Không có lỗi console.</li>
+        <li><b>Chưa kiểm qua giao diện:</b> phần nệm ở dmct (cùng component <code>MaterialOptionsPanel</code>, chuỗi tương tự, chỉ kiểm qua code + test), tooltip nút "Thêm dây đã tick",
+          và 6 trang kho sau khi đổi nhãn (chỉ tooltip nhãn dây/nệm đổi, phần hiển thị tên không đổi và đã kiểm trước đó).</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 9. TRẠNG THÁI ═══════════════════════ -->
+  <div class="module" id="trangthai">
+    <h2>9. Trạng thái trên DB dev dùng chung <span class="badge b-db">DB</span></h2>
+    <ul class="timeline">
+      <li><b>Cả 2 migration đã áp (22/10/2026, theo đồng ý của người dùng)</b>
+        <span>Không có công cụ sao lưu trên máy (không có <code>pg_dump</code>; script <code>db:backup</code> trỏ tới file không tồn tại). Cả hai chỉ thêm bảng/cột/giá trị enum nên quay lại được bằng cách xoá phần vừa thêm.</span></li>
+      <li><b>9 vật tư nệm đã đổi Phân loại từ Phụ kiện sang Nệm</b>
+        <span>VTK-338 Nệm màu kem trắng 004, VTK-339 Nệm màu 700, VTK-340 Nệm màu be, VTK-341 Nệm màu xanh navy, VTK-342 Nệm màu trắng wh,
+        VTK-343 Nệm màu đen, VTK-344 Nệm màu cát vàng, VTK-345 Nệm màu đỏ, VTK-346 Nệm màu xám. Đổi trong một giao dịch có kiểm số dòng.</span></li>
+      <li><b>Danh mục dây SHT do người dùng tự nhập</b>
+        <span>Không có script nhập dữ liệu nào được chạy. Vật tư dây cần thuộc nhóm Dây; ảnh mẫu thêm ở Admin &gt; Vật tư.</span></li>
+      <li><b>3 migration ngày 23/10 đã áp lên DB dev dùng chung</b>
+        <span><code>20261023100000_add_cushion_spec_per_sku</code>, <code>20261023110000_bom_accessory_items_unique_per_spec</code>,
+        <code>20261023120000_stock_spec_dimension</code>. Đều chỉ mở rộng/nới ràng buộc, mọi dòng cũ nhận quy cách rỗng nên số liệu cũ không đổi.
+        Code cũ đang chạy vẫn tương thích (cột mới có giá trị mặc định).</span></li>
+      <li><b>Dữ liệu thử đã được dọn sạch (23/10/2026)</b>
+        <span>Toàn bộ dữ liệu sinh ra khi chạy thử (khách "TEST", 3 SKU/product <code>ZZ-TEST-*</code>, 2 đơn hàng <code>ZZ-PO-*</code>, 2 PI, 3 lệnh sản xuất, 4 phương án cắt,
+        2 đề xuất mua, phiếu chuyển kho CK-2026-001, sổ kho/tồn kho của nệm VTK-340, 35 thông báo) đã xoá khỏi DB dev. Các bảng giao dịch về 0; 16 SKU thật, 3 khách hàng,
+        2 bản định mức nháp và 31 thông báo cũ còn nguyên. Dọn bằng script có kiểm tra khớp danh sách trước khi xoá (không dùng <code>reset-warehouse-v2.ts</code> vì nó xoá cả thông báo
+        và sổ văn phòng phẩm không thuộc dữ liệu thử), riêng SKU/product dùng <code>delete-sku.ts --with-product</code>. <b>Nhật ký hoạt động (audit_logs) của các thao tác thử được giữ lại</b>
+        vì là lịch sử, không xoá.</span></li>
+      <li><b>Đợt kiểm 24/10 cũng đã dọn sạch</b>
+        <span>Dữ liệu thử (SKU/sản phẩm <code>ZZ-TEST-UI</code>, đơn <code>ZZ-PO-VERIFY-1</code>, PI-2026-001, 2 lệnh sản xuất, 1 đề xuất mua, 2 phương án cắt, 14 thông báo mới) đã xoá;
+        DB về lại 16 SKU thật, PI/đơn/lệnh sản xuất/đề xuất mua = 0, 31 thông báo cũ còn nguyên. Lưu ý khi dùng <code>delete-sku.ts</code> qua <code>npm run</code>: npm nuốt cờ
+        <code>--with-product</code> nên sản phẩm sót lại và phải xoá bằng API <code>DELETE /products/:id</code> (xoá mảnh trước); dùng <code>npx ts-node -r tsconfig-paths/register prisma/delete-sku.ts &lt;id&gt; --with-product</code> để tránh.</span></li>
+      <li><b>Vòng kiểm nhãn 24/10 cũng đã dọn sạch</b>
+        <span>Hai SKU thử <code>ZZ-TEST-LBL</code> và <code>ZZ-TEST-LBL2</code> (product 120, 121) đã xoá bằng <code>delete-sku.ts --with-product</code> (có chạy <code>--dry-run</code> trước), không tạo đơn/PI nào.
+        Kiểm lại: SKU còn 16 cái thật, 3 product thử trả 404, PI/đơn/lệnh sản xuất/đề xuất mua = 0, tồn kho và hàng đợi sàn = 0. Sau đó người dùng tự chạy script xoá nốt 26 dòng <code>audit_logs</code> và 23 dòng <code>refresh_tokens</code> của các lần thử
+        (lọc đúng từ 01:00 UTC 24/10 và chỉ các tài khoản thử; đã dry-run xác nhận không có dòng của người khác). Kiểm lại: cả hai về 0 trong khoảng đó.
+        Hai lần thử trước đó (SKU <code>ZZ-TEST-*</code>) vẫn giữ nhật ký như đã ghi ở trên.
+        <br>Ảnh chụp mục 15 dùng thêm 2 SKU demo <code>GHE-DEMO-MAU-01/02</code>, cũng đã xoá theo cách trên (delete-sku có dry-run), không tạo đơn nào.</span></li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════ 10. CÒN MỞ ═══════════════════════ -->
+  <div class="module" id="conmo">
+    <h2>10. Còn mở và giới hạn đã biết</h2>
+    <div class="card">
+      <h3>Nhãn dây/nệm ở màn QLSX trên điện thoại (công nhân quét mã)</h3>
+      <p>"Bảng thống kê" và ngăn chi tiết QLSX đã có nhãn (23/10). Màn của công nhân quét mã (<code>FloorScanApp</code>) chưa hiện nhãn dây/nệm.</p>
+    </div>
+    <div class="card">
+      <h3>Không có luồng xuất nào tự trừ nệm</h3>
+      <p>Dòng nệm (phụ kiện) chỉ được mua và nhận về kho; chỉ bao bì mới có luồng xuất. Nên xuất nệm theo quy cách hiện chỉ có qua chuyển kho thủ công.
+      Hệ thống không kiểm được xuất đúng quy cách hay chưa ngoài phạm vi chuyển kho.</p>
+    </div>
+    <div class="card">
+      <h3>Sổ kho không ghi quy cách vào ghi chú, "Sửa nhanh tồn" chỉ ở Quản lý kho</h3>
+      <p>Quy cách có cột riêng ở sổ kho và hiện trong Lịch sử kho. Tồn ở Admin &gt; Vật tư chỉ đọc và chỉ tính ở kho gốc của vật tư; sửa tồn theo quy cách làm ở Quản lý kho.
+      Tồn nệm có sẵn từ trước khi có tính năng này sẽ nằm ở nhóm "không quy cách" (không tự đoán quy cách cho hàng cũ).</p>
+    </div>
+    <div class="card">
+      <h3>Backend chưa ép "SKU chưa duyệt thì không lên đơn được"</h3>
+      <p>Hiện chỉ giao diện Sales ẩn SKU chưa duyệt (có từ trước). Phần lựa chọn dây/nệm chỉ lấy từ bản ACTIVE nên SKU chưa duyệt không có danh sách để chọn.</p>
+    </div>
+    <div class="card">
+      <h3><code>SalesOrdersService.addItem</code> không sinh dòng lệnh sản xuất</h3>
+      <p>Có từ trước, không thuộc đợt này: dòng thêm sau khi tạo đơn không có dòng lệnh sản xuất đi kèm.</p>
+    </div>
+    <div class="card">
+      <h3>API tạo dòng lệnh sản xuất thủ công chưa nhận lựa chọn</h3>
+      <p>Giao diện không có chỗ tạo thủ công nên chỉ là lý thuyết; nếu gọi API trực tiếp cho SKU có tick thì sẽ bị chặn lúc duyệt vì thiếu lựa chọn.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 11. HƯỚNG DẪN ═══════════════════════ -->
+  <div class="module" id="huongdan">
+    <h2>11. Hướng dẫn thử nhanh</h2>
+    <ol class="timeline">
+      <li><b>Chuẩn bị danh mục</b><span>Admin &gt; Vật tư: tạo các mã dây SHT thuộc nhóm Dây (thêm ảnh mẫu nếu có). Nệm: nhóm Vật tư khác, Phân loại = Nệm.</span></li>
+      <li><b>Tick màu dây</b><span>dmm → Định mức mảnh → mở một SKU → "Chọn các màu dây", nhập số lượng ở từng dòng dây rồi Gửi phê duyệt.</span></li>
+      <li><b>Tick màu nệm</b><span>dmct → Định mức chi tiết → "Chọn các màu nệm", nhập số lượng rồi Gửi phê duyệt.</span></li>
+      <li><b>Duyệt SKU</b><span>KHSX duyệt từng nhánh, Sếp duyệt cuối như cũ.</span></li>
+      <li><b>Lên đơn</b><span>Sales → Quản lí đơn hàng → Tạo PO: chọn SKU, chọn Màu dây và Màu nệm. Thử thêm hai dòng cùng SKU khác dây.</span></li>
+      <li><b>Kiểm hạ nguồn</b><span>Sau khi duyệt lệnh: đề xuất mua chỉ có dây/nệm đã chọn; màn Xuất đan chỉ liệt kê dây đã chọn.</span></li>
+      <li><b>Thử quy cách nệm</b><span>dmct → Định mức chi tiết → tab Phụ kiện → chọn một nệm: ô Quy cách thành ô nhập tay. Thêm 2 dòng cùng nệm với 2 quy cách, tick nệm đó,
+        gửi phê duyệt. Sau khi duyệt lệnh, đề xuất mua ra 2 dòng riêng; thủ kho nhận hàng từng dòng, xem tồn tách ở Tổng hợp vật tư/Quản lý kho.</span></li>
+    </ol>
+  </div>
+
+  <!-- ═══════════════════════ 12. QUY CÁCH NỆM ═══════════════════════ -->
+  <div class="module" id="quycach">
+    <h2>12. Cập nhật 23/10: quy cách nệm theo từng SKU <span class="badge b-be">BE</span> <span class="badge b-fe">FE</span> <span class="badge b-db">DB</span></h2>
+    <p class="module-note">Nệm chỉ khác nhau theo <b>màu</b> ở danh mục vật tư; quy cách (kích thước) linh hoạt giữa các SKU nên nhập ở định mức của SKU. Ví dụ thật:
+      SKU I5 có "nệm đôi 870x450x50" × 1 và "nệm đơn 450x450x50" × 2.</p>
+    <div class="card">
+      <h3>Cơ sở dữ liệu <code>20261023100000</code> và <code>20261023110000</code></h3>
+      <p>Thêm cột <code>spec</code> (tuỳ chọn) vào <code>bom_accessory_items</code> và <code>purchase_proposal_items</code>. Ràng buộc "mỗi (bản định mức, vật tư) một dòng" được thay bằng
+      unique theo <b>(bản định mức, vật tư, quy cách)</b> - index theo biểu thức <code>COALESCE(spec,'')</code> tạo bằng SQL, nên 2 dòng cùng vật tư đều không quy cách vẫn bị chặn trùng như trước.
+      Prisma không còn khoá <code>bomRevisionId_materialId</code> (code dùng <code>findFirst</code>).</p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Nơi sửa</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">skus/dto/update-quota.dto.ts<br>skus/skus.service.ts</td>
+            <td><code>detailLines[].spec</code> (tối đa 200 ký tự). Chỉ vật tư phân loại Nệm nhận quy cách (cắt khoảng trắng, rỗng = không có); vật tư khác bỏ qua.
+            Trùng (vật tư, quy cách) trong cùng lần nhập → 400. Dữ liệu đọc ra trả quy cách riêng ở <code>materialSpec</code> kèm <code>materialDetailKind</code>.</td></tr>
+          <tr><td class="path">production-invoices/consumable-material-purchase.service.ts</td>
+            <td>Nhu cầu gom theo (vật tư, quy cách); mỗi cặp khoá tồn, tính khả dụng, giữ chỗ và ra <b>một dòng mua riêng</b> (sắp theo quy cách để khoá luôn theo thứ tự cố định).
+            Lượt tính lại khớp dòng theo (vật tư, quy cách); quy cách đổi thì tái dùng dòng còn mở thay vì để dòng lỗi thời.</td></tr>
+          <tr><td class="path">purchase-proposals/purchase-proposals.service.ts</td>
+            <td><code>materialSpec</code> của dòng đề xuất = quy cách riêng, nếu không có thì quy cách vật tư. Nhận hàng ghi sổ kho và cộng giữ chỗ theo quy cách của dòng.</td></tr>
+          <tr><td class="path">bom-revisions/bom-revisions.service.ts<br>packaging-issues/packaging-issues.service.ts</td>
+            <td>Bỏ khoá unique cũ: kiểm trùng dòng phụ kiện và tra dòng đóng gói đổi sang <code>findFirst</code> (bao bì không có quy cách riêng).</td></tr>
+          <tr><td class="path">SpecDetailQuotaPage.tsx · MaterialsPage.tsx</td>
+            <td>Ô Quy cách của dòng nệm nhập tay (tuỳ chọn, cả ở form thêm và trong bảng), lưu cùng nháp; Admin &gt; Vật tư ẩn ô Quy cách khi Phân loại = Nệm.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <b>Sales không cần thấy quy cách:</b> trong một SKU mỗi màu nệm nhận ra dòng nào qua tên màu, nên nhãn nệm và ô chọn của Sales chỉ hiện màu.
+      Quy cách hiện ở các màn mua hàng, nhập kho, chuyển kho và định mức.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 13. TỒN KHO THEO QUY CÁCH ═══════════════════════ -->
+  <div class="module" id="tonkho">
+    <h2>13. Cập nhật 23/10: tồn kho tách theo quy cách <span class="badge b-db">DB</span> <span class="badge b-be">BE</span> <span class="badge b-fe">FE</span></h2>
+    <p class="module-note">Ban đầu chọn tồn chung theo loại nệm; sau đó đổi ý sang tách tồn theo quy cách. Chiều "quy cách" (chuỗi, rỗng = không quy cách) được thêm cạnh chiều dài cây sắt, đúng mẫu migration
+      <code>20260829072018_stock_length_bucket</code>.</p>
+    <div class="card">
+      <h3>Migration <code>20261023120000_stock_spec_dimension</code></h3>
+      <p>Thêm cột <code>spec</code> (mặc định rỗng) vào <code>stock_ledger</code>, <code>stock_quant</code>, <code>stock_reservations</code>, <code>warehouse_transfer_reservations</code>,
+      <code>warehouse_transfer_items</code>; ràng buộc CHECK (quy cách khác rỗng thì phải có vật tư); unique của tồn kho thành
+      <code>(kho, vật tư, độ dài, quy cách)</code>; và <b>cập nhật trigger <code>fn_sync_stock_quant</code></b> trong cùng migration (bài học 04/09: đổi unique mà quên trigger làm hỏng mọi luồng ghi sổ kho).</p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Nơi sửa</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">stock/stock-ledger.service.ts<br>stock/dto/*</td>
+            <td><code>postEntry({ spec })</code>; sửa nhanh tồn nhận <code>spec</code> và khoá lạc quan chỉ so đúng bucket quy cách; sổ kho và tồn kho trả thêm <code>spec</code>.</td></tr>
+          <tr><td class="path">stock/stock-reservations.service.ts</td>
+            <td>Giữ chỗ theo quy cách: khoá idempotency có đuôi <code>:spec:&lt;quy cách&gt;</code> <b>chỉ khi có quy cách</b> (dòng cũ không đổi); pool theo PI/vật tư/quy cách;
+            <code>getAvailableQty</code> có tham số quy cách (tham số cuối) và lọc cả giữ chỗ của phiếu chuyển kho.</td></tr>
+          <tr><td class="path">warehouse-transfers/*</td>
+            <td>Dòng phiếu có <code>spec</code>; gộp, khoá, tính khả dụng, giữ chỗ và xác nhận theo từng (vật tư, quy cách). Chi tiết phiếu trả quy cách đã chọn.</td></tr>
+          <tr><td class="path">purchase-proposals · consumable-material-purchase</td>
+            <td>Nhận hàng và tính đề xuất mua dùng đúng bucket quy cách (mục 12).</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn">
+      <b>Khả dụng</b> = tồn thực trừ phần giữ chỗ (hàng mua về cho PI được giữ cho PI đó; phiếu chuyển kho chờ xác nhận giữ phần sẽ chuyển). Chuyển kho thủ công chỉ lấy được phần khả dụng của từng quy cách.
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 14. HIỂN THỊ THEO SKU ═══════════════════════ -->
+  <div class="module" id="hienthi">
+    <h2>14. Cập nhật 23/10: hiển thị theo từng SKU <span class="badge b-fe">FE</span></h2>
+    <div class="card">
+      <h3>Bảng Mua hàng ở "Bảng thống kê"</h3>
+      <p>Đề xuất mua gộp theo PI nên trước đây mọi SKU trong PI thấy chung một danh sách. Nay mỗi SKU chỉ giữ dây/nệm của loại mình chọn.
+      <b>Sắt, đinh và các vật tư còn lại giữ số gộp cả PI</b> (đúng với những gì người mua thật sự đặt) kèm nhãn "(mua chung)" và dòng ghi chú dưới bảng, chỉ khi PI có từ 2 SKU.
+      Chế độ xem cả PI vẫn giữ danh sách đầy đủ.</p>
+    </div>
+    <div class="card">
+      <h3>Quyết định: không chia số sắt/đinh theo SKU</h3>
+      <p>Từng làm bản chia số sắt/đinh về từng SKU (thêm endpoint backend tính nhu cầu theo lệnh) nhưng người dùng chọn bỏ vì cây sắt dùng chung giữa các SKU nên chia chỉ là ước lượng;
+      đã gỡ sạch cả backend lẫn frontend. Ghi chú "mua chung" thay thế.</p>
+    </div>
+    <div class="card">
+      <h3>Form Tạo PO</h3>
+      <p>Ô SKU lọc theo khách hàng đã chọn; chưa chọn khách thì hiện "Chọn khách hàng trước để xem SKU của khách đó". SKU đã duyệt nhưng chưa gán khách nào vẫn hiện ở mọi khách.</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ 15. HƯỚNG DẪN SỬ DỤNG ═══════════════════════ -->
+  <div class="module" id="guide">
+    <h2>15. Cập nhật 24/10: trang Hướng dẫn sử dụng (<code>/guide</code>) <span class="badge b-fe">FE</span></h2>
+    <p class="module-note">Nội dung hướng dẫn là dữ liệu tĩnh ở <code>src/modules/pages/Guide/content/*.ts</code>. Đợt này viết bài mới và bổ sung các bài hiện có theo nhãn "màu dây / màu nệm".</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Bài</th><th>Thay đổi</th></tr></thead>
+        <tbody>
+          <tr><td class="path">journey.ts<br><code>journey-mau-day-nem</code> (mới)</td>
+            <td>Bài tổng hợp "Màu dây &amp; màu nệm theo từng dòng đơn": khối quy tắc cốt lõi, bảng đường đi 7 bước (khai định mức → duyệt → Sales chọn → gộp → duyệt lệnh → mua hàng → xuất đan), bảng "màu hiện ở đâu", bảng "hệ thống chặn gì", 5 lỗi thường gặp. Bài "1. Kinh doanh tạo đơn hàng" và "2. Xây dựng &amp; duyệt định mức" trỏ sang bài này.</td></tr>
+          <tr><td class="path">sales.ts<br><code>sales-tao-po</code></td>
+            <td>Thêm bước chọn "Màu dây"/"Màu nệm", cảnh báo màu được chốt khi duyệt lệnh và chưa sửa được trên giao diện, lỗi nút "Lưu" mờ.</td></tr>
+          <tr><td class="path">manufacturing.ts<br><code>mfg-spec-steel</code>, <code>mfg-spec-detail</code></td>
+            <td>Cách tick màu dây/màu nệm, "Thêm dây đã tick", quy cách nệm nhập tay, cảnh báo chưa nhập số lượng, hộp xác nhận bỏ tick, tạm lưu và sao chép chép luôn danh sách tick. Sửa "ba nhóm" thành bốn nhóm (Sơn/Phụ kiện/Nệm/Bao bì).</td></tr>
+          <tr><td class="path">productionPlan.ts<br><code>pp-gom-dot-cat</code>, <code>pp-lenh-sx-khsx</code>, <code>pp-lenh-sx-boss</code></td>
+            <td>Gộp chung hai dòng cùng SKU khác màu, nhãn màu cạnh mã SKU, kiểm màu khớp định mức khi duyệt lệnh và lỗi 409 tương ứng.</td></tr>
+          <tr><td class="path">warehouse.ts, purchasing.ts</td>
+            <td>Theo dõi xuất đan (dây đúng màu, lỗi mang kèm dây sai), nhập đan, chuyền kiểm, đóng gói, xuất vật tư TP/hàn/sơn: nhãn màu và hai dòng cùng SKU. Mua hàng: đề xuất chỉ có đúng màu đã chọn, nệm khác quy cách ra dòng riêng.</td></tr>
+          <tr><td class="path">admin.ts<br><code>admin-sua-dinh-muc-sku</code></td>
+            <td>Cảnh báo không gỡ được tick màu đang nằm trên đơn chưa giao hết.</td></tr>
+          <tr><td class="path">materialsShared.ts<br>(Quản lý vật tư, Admin)</td>
+            <td><b>Sửa nội dung đã lỗi thời:</b> Phân loại trước ghi "Sơn / Phụ kiện / Bao bì", nay thêm "Nệm" ở bảng cột, form thêm vật tư, bảng Phân loại, cảnh báo, thông báo lỗi và thẻ tìm kiếm; ô Quy cách ẩn khi Phân loại = Nệm; mỗi màu dây là một vật tư riêng.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok">
+      <b>Ảnh chụp thật (24/10):</b> chụp trên giao diện thật bằng 2 SKU demo <code>GHE-DEMO-MAU-01/02</code> (khách GOPLUS, ảnh sản phẩm mượn từ một SKU thật), 1440×900, đã gỡ chấm dev của Next.js và tắt gạch chân chính tả.
+      <ul style="margin:.5rem 0 0; padding-left:1.2rem">
+        <li><code>sales-tao-po.png</code> (thay ảnh cũ): form Tạo PO có "Màu dây" (ảnh mẫu) và "Màu nệm" đã chọn. Bài "1. Kinh doanh tạo đơn hàng" dùng chung ảnh này.</li>
+        <li><code>mfg-spec-steel.png</code> (thay ảnh cũ): khối "Danh sách màu dây SKU" với 3 thẻ màu và mảnh có 3 dòng dây đã nhập số lượng.</li>
+        <li><code>mfg-spec-detail.png</code> (thay ảnh cũ): khối "Danh sách màu nệm SKU", 2 dòng nệm có quy cách "Đôi 870x450x50" và "Đơn 450x450x50", cùng một dòng sơn.</li>
+        <li><code>journey-mau-day-nem.png</code> (mới): danh sách "Màu dây" mở ra với ảnh mẫu từng màu, dùng cho bài tổng hợp.</li>
+      </ul>
+      <b>Ảnh phụ cho các bài KHSX và Kho:</b> thêm trường tuỳ chọn <code>extraScreenshots</code> (<code>types.ts</code>, <code>ArticleView.tsx</code>) để hiện thêm một ảnh ngay sau ảnh chính, mỗi ảnh có chú thích riêng.
+      Ảnh chính của các bài này giữ nguyên vì đó là màn chi tiết có dữ liệu dày (mảnh, điểm đan, số liệu), còn nhãn màu phát huy tác dụng nhất ở màn <b>danh sách</b>, nơi hai dòng cùng SKU phải phân biệt được.
+      Chụp bằng PI demo <code>PI-2026-001</code> (SKU <code>GHE-DEMO-MAU-03</code>, 2 dòng: Dây nâu SHT08 + Nệm màu be, và Dây vàng 8 chỉ SHT29 + Nệm màu kem trắng 004):
+      <ul style="margin:.5rem 0 0; padding-left:1.2rem">
+        <li><code>pp-gom-dot-cat-mau.png</code>: Tối ưu cắt sắt, bảng chọn SKU trước khi gộp.</li>
+        <li><code>pp-lenh-sx-khsx-mau.png</code>: Lệnh sản xuất mới, PI mở ra với hai dòng.</li>
+        <li><code>wh-xuat-dan-ds.png</code>, <code>wh-nhap-dan-ds.png</code>, <code>wh-chuyen-kiem-ds.png</code>, <code>wh-dong-goi-ds.png</code>, <code>wh-phan-phoi-noi-bo-khac-ds.png</code>: các màn danh sách của Thủ kho.</li>
+      </ul>
+      Kiểm: <code>tsc</code> và lint sạch, test Guide 16/16 qua, các bài mở được trên <code>/guide?a=…</code> với ảnh phụ tải đủ, không request lỗi. Ảnh cũ đã sao lưu ngoài repo; <code>git checkout</code> khôi phục được.
+    </div>
+  </div>
+
+  <footer>
+    Tài liệu nội bộ DNA-ERP — nhật ký thay đổi 22–24/10/2026.
+  </footer>
+</div>
+
+<button class="back-to-top" id="back-to-top" type="button" aria-label="Lên đầu trang">↑</button>
+
+<script>
+(function(){
+  var KEY = 'dna-erp-changelog-theme';
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var saved = localStorage.getItem(KEY);
+  if (saved) root.setAttribute('data-theme', saved);
+  btn.addEventListener('click', function(){
+    var current = root.getAttribute('data-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effectiveCurrent = current || (prefersDark ? 'dark' : 'light');
+    var next = effectiveCurrent === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+  });
+})();
+(function(){
+  document.getElementById('back-to-top').addEventListener('click', function(){
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+</body>
+</html>

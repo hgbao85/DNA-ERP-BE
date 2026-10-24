@@ -23,4 +23,16 @@ export class UpdateSalesOrderItemDto {
   @IsOptional()
   @IsDateString()
   deliveryDate?: string;
+
+  // Đổi loại dây/nệm - chỉ được khi lệnh sản xuất của dòng này CHƯA được Sếp duyệt (sau đó lệnh
+  // đã chốt lựa chọn, xem ProductionOrder.wireMaterialId).
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  wireMaterialId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  cushionMaterialId?: string;
 }

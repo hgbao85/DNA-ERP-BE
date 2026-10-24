@@ -437,6 +437,9 @@ model MaterialGroup {
 enum MaterialDetailKind {
   PAINT
   ACCESSORY
+  /// Nệm - vẫn là phụ kiện (lưu ở BomAccessoryItem kind ACCESSORY) nhưng có phân loại riêng để lọc: nhóm
+  /// "Vật tư khác" có hàng trăm phụ kiện, còn nệm là thứ Sales chọn theo SKU (xem BomOption kind CUSHION).
+  CUSHION
   PACKAGING
 }
 
@@ -541,6 +544,13 @@ model Material {
   weavingIssueMaterials         WeavingIssueMaterial[]
   materialYieldRecipesAsOutput  MaterialYieldRecipe[]          @relation("MaterialYieldRecipeOutput")
   materialYieldRecipesAsInput   MaterialYieldRecipe[]          @relation("MaterialYieldRecipeInput")
+  bomOptions                    BomOption[]
+  salesOrderItemsAsWire         SalesOrderItem[]               @relation("SalesOrderItemWire")
+  salesOrderItemsAsCushion      SalesOrderItem[]               @relation("SalesOrderItemCushion")
+  productionInvoiceItemsAsWire  ProductionInvoiceItem[]        @relation("ProductionInvoiceItemWire")
+  productionInvoiceItemsAsCushion ProductionInvoiceItem[]      @relation("ProductionInvoiceItemCushion")
+  productionOrdersAsWire        ProductionOrder[]              @relation("ProductionOrderWire")
+  productionOrdersAsCushion     ProductionOrder[]              @relation("ProductionOrderCushion")
 
   @@index([materialGroupId])
   @@index([warehouseId])
@@ -869,6 +879,7 @@ model BomRevision {
   pieceMaterialYields PieceMaterialYield[]
   consumableBoms      ConsumableBom[]
   bomAccessoryItems   BomAccessoryItem[]
+  bomOptions          BomOption[]
   productionOrders    ProductionOrder[]
 
   @@unique([mfgProductId, revNo])
@@ -1089,17 +1100,48 @@ model BomAccessoryItem {
   materialId    BigInt
   kind          AccessoryItemKind
   qtyPerUnit    Decimal           @db.Decimal(14, 4)
+  /// Quy cách RIÊNG của dòng này trên SKU (2026-10-23) - CHỈ dùng cho nệm (Material.detailKind=CUSHION): cùng 1 màu
+  /// nệm nhưng mỗi SKU 1 quy cách khác nhau nên không thể nằm ở Material.spec. Đi theo xuống PurchaseProposalItem.spec.
+  /// null = không có quy cách riêng (các loại phụ kiện khác vẫn lấy Material.spec).
+  spec          String?
 
   bomRevision BomRevision @relation(fields: [bomRevisionId], references: [id])
   material    Material    @relation(fields: [materialId], references: [id])
 
-  @@unique([bomRevisionId, materialId])
+  /// Ràng buộc duy nhất thật là index theo biểu thức (bomRevisionId, materialId, COALESCE(spec,'')) tạo bằng raw SQL ở
+  /// migration 20261023110000 - 1 SKU có thể có nhiều dòng cùng vật tư (nệm) khi khác quy cách. Prisma không khai báo được
+  /// index biểu thức nên không có @@unique ở đây (không còn findUnique theo bomRevisionId_materialId).
   @@map("bom_accessory_items")
 }
 
 enum AccessoryItemKind {
   ACCESSORY
   PACKAGING
+}
+
+enum BomOptionKind {
+  WIRE
+  CUSHION
+}
+
+/// Danh sách loại dây (WIRE) / loại nệm (CUSHION) mà 1 bản định mức cho phép Sales chọn khi lên
+/// đơn. Người nhập định mức tick; vật tư được tick mà có dòng định mức (PieceMaterialItem cho
+/// dây, BomAccessoryItem cho nệm) thì dòng đó là "dòng chọn một": chỉ tính khi đơn chọn đúng vật
+/// tư đó (xem BomOptionResolver). Vật tư KHÔNG nằm trong bảng này luôn được tính như cũ.
+/// Bất biến sau khi bản định mức không còn DRAFT - trigger bom_revision_draft_guard chặn như các
+/// bảng dòng con khác (migration add_bom_option_selection).
+model BomOption {
+  id            BigInt        @id @default(autoincrement())
+  bomRevisionId BigInt
+  kind          BomOptionKind
+  materialId    BigInt
+
+  bomRevision BomRevision @relation(fields: [bomRevisionId], references: [id])
+  material    Material    @relation(fields: [materialId], references: [id])
+
+  @@unique([bomRevisionId, kind, materialId])
+  @@index([materialId])
+  @@map("bom_option")
 }
 
 /// BOM đóng gói theo biến thể sản phẩm.
@@ -1235,9 +1277,18 @@ model SalesOrderItem {
   shippedQty   Int                  @default(0)
   status       SalesOrderItemStatus @default(LEN_KE_HOACH)
   deliveryDate DateTime?
+  /// Loại dây (mã SHT) và loại nệm Sales chọn cho dòng này - lấy từ bom_option của BomRevision
+  /// ACTIVE của mfgProductId. NULL = SKU không khai tick lựa chọn (hoặc đơn tạo trước khi có
+  /// tính năng). Chỉ sửa được trước khi lệnh sản xuất của dòng được duyệt - sau đó lệnh sản xuất
+  /// ghim bản sao riêng (ProductionOrder.wireMaterialId/cushionMaterialId).
+  wireMaterialId    BigInt?
+  cushionMaterialId BigInt?
 
-  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id])
-  mfgProduct MfgProduct @relation(fields: [mfgProductId], references: [id])
+  salesOrder             SalesOrder              @relation(fields: [salesOrderId], references: [id])
+  mfgProduct             MfgProduct              @relation(fields: [mfgProductId], references: [id])
+  wireMaterial           Material?               @relation("SalesOrderItemWire", fields: [wireMaterialId], references: [id])
+  cushionMaterial        Material?               @relation("SalesOrderItemCushion", fields: [cushionMaterialId], references: [id])
+  productionInvoiceItems ProductionInvoiceItem[]
 
   @@index([salesOrderId])
   @@index([mfgProductId])
@@ -1468,8 +1519,15 @@ model ProductionInvoiceItem {
   /// NHIỀU PO nên đường suy ngược đó mất dấu - phải ghim thẳng ở đây. Nullable vì SKU tạo tay qua
   /// POST /production-invoices/:id/items không bắt buộc gắn đơn hàng nào.
   salesOrderId        BigInt?
+  /// Dòng đơn hàng Sales sinh ra item này. Trước đây chỉ nối ngầm qua (salesOrderId, mfgProductId)
+  /// nên 2 dòng CÙNG SKU trong 1 đơn (khác loại dây/nệm) bị lẫn - xem SalesOrdersService.
+  /// Nullable: item tạo tay qua POST /production-invoices/:id/items và dữ liệu cũ không có.
+  salesOrderItemId    BigInt?
   mfgProductId        BigInt
   productVariantId    BigInt?
+  /// Sao chép từ SalesOrderItem lúc sinh item; chốt sang ProductionOrder khi Sếp duyệt.
+  wireMaterialId      BigInt?
+  cushionMaterialId   BigInt?
   quantity            Int
   materialDeadline    DateTime?
   deliveryDeadline    DateTime?
@@ -1490,8 +1548,11 @@ model ProductionInvoiceItem {
 
   productionInvoice    ProductionInvoice?           @relation(fields: [productionInvoiceId], references: [id])
   salesOrder           SalesOrder?                  @relation(fields: [salesOrderId], references: [id])
+  salesOrderItem       SalesOrderItem?              @relation(fields: [salesOrderItemId], references: [id])
   mfgProduct           MfgProduct                   @relation(fields: [mfgProductId], references: [id])
   productVariant       ProductVariant?              @relation(fields: [productVariantId], references: [id])
+  wireMaterial         Material?                    @relation("ProductionInvoiceItemWire", fields: [wireMaterialId], references: [id])
+  cushionMaterial      Material?                    @relation("ProductionInvoiceItemCushion", fields: [cushionMaterialId], references: [id])
   requestedBy          User?                        @relation("PIItemRequestedBy", fields: [requestedById], references: [id])
   qlsxBy               User?                        @relation("PIItemQlsxBy", fields: [qlsxById], references: [id])
   decidedBy            User?                        @relation("PIItemDecidedBy", fields: [decidedById], references: [id])
@@ -1504,6 +1565,7 @@ model ProductionInvoiceItem {
   @@index([productionInvoiceId])
   @@index([mfgProductId])
   @@index([salesOrderId])
+  @@index([salesOrderItemId])
   @@map("production_invoice_items")
 }
 
@@ -1672,6 +1734,11 @@ model ProductionOrder {
   bomRevisionId           BigInt
   /// Snapshot productionInvoiceItem.quantity tại thời điểm duyệt - xem ghi chú đầu section.
   quantity                Int
+  /// Snapshot loại dây/nệm Sales chọn, chốt lúc duyệt (createFromApproval) - mọi luồng mua hàng/
+  /// xuất đan đọc từ đây (qua BomOptionResolver), KHÔNG đọc lại từ SalesOrderItem. NULL = SKU
+  /// không có tick lựa chọn: không lọc gì, chạy như cũ.
+  wireMaterialId          BigInt?
+  cushionMaterialId       BigInt?
   status                  ProductionOrderStatus     @default(RELEASED)
   releasedAt              DateTime?                 @default(now())
   /// Xem enum ProductionOrderFloorStage - kiểm soát hiển thị bên Hàn/Sơn/Phôi, tách biệt hoàn
@@ -1684,6 +1751,8 @@ model ProductionOrder {
   productionInvoiceItem       ProductionInvoiceItem        @relation(fields: [productionInvoiceItemId], references: [id])
   mfgProduct                  MfgProduct                   @relation(fields: [mfgProductId], references: [id])
   bomRevision                 BomRevision                  @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
+  wireMaterial                Material?                    @relation("ProductionOrderWire", fields: [wireMaterialId], references: [id])
+  cushionMaterial             Material?                    @relation("ProductionOrderCushion", fields: [cushionMaterialId], references: [id])
   cuttingProposals            CuttingProposal[]
   cuttingPlanCoverage         CuttingPlanCoverage?
   weavingIssues               WeavingIssue[]
@@ -2090,6 +2159,10 @@ model PurchaseProposalItem {
   /// buyQty vô nghĩa nếu không kèm chiều dài, người mua sẽ đặt nhầm cây chuẩn). null cho nhánh
   /// kiểm tra vật tư (InspectionKhoResultItem) - vật tư đó không có khái niệm "chiều dài cây".
   stockLengthMm           Int?
+  /// Quy cách riêng của dòng mua (2026-10-23) - CHỈ nệm: sao chép từ BomAccessoryItem.spec để cùng 1 loại nệm khác
+  /// quy cách giữa các SKU trong 1 PI ra các dòng mua RIÊNG. null = dùng Material.spec. Tồn kho/nhận hàng vẫn theo
+  /// vật tư (không tách theo quy cách).
+  spec                    String?
   /// Kho nhận hàng GHI ĐÈ (2026-09-04, sửa lại cùng ngày sau khi phát hiện qua test sống) - CHỈ
   /// set khi kho MẶC ĐỊNH của vật tư (Material.warehouseId) đã sẵn thuộc họ "thanh-pham" (vd Bì
   /// zipper/Nhãn/Bao nylon - xem Admin > Vật tư, warehouseFamilyOf()) - giá trị =
@@ -2364,6 +2437,9 @@ model StockLedger {
   /// độ-dài với PurchaseProposalItem.stockLengthMm (migration 20260826010000) nhưng áp cho tồn
   /// kho thật thay vì đề xuất mua - 1 kho có thể tồn nhiều lô cùng material khác độ dài cây.
   stockLengthMm    Int                @default(0)
+  /// Quy cách của hàng (nệm: "Đôi 870x450x50"...) - '' = không có quy cách riêng. Chiều thứ 3 của bucket tồn kho
+  /// (kho, vật tư, độ dài, quy cách), xem migration 20261023120000_stock_spec_dimension.
+  spec             String             @default("")
 
   fromWarehouse  Warehouse       @relation("StockLedgerFromWarehouse", fields: [fromWarehouseId], references: [id])
   toWarehouse    Warehouse       @relation("StockLedgerToWarehouse", fields: [toWarehouseId], references: [id])
@@ -2383,6 +2459,7 @@ model StockLedger {
   @@index([fromWarehouseId, productVariantId])
   @@index([fromWarehouseId, materialId, stockLengthMm])
   @@index([toWarehouseId, materialId, stockLengthMm])
+  @@index([toWarehouseId, materialId, spec])
   @@map("stock_ledger")
 }
 
@@ -2403,6 +2480,9 @@ model StockQuant {
   /// tiếp bằng raw SQL ở migration (cùng lý do @@unique 4 partial index bên dưới KHÔNG khai báo ở
   /// đây - xem cảnh báo "check constraints"/index có điều kiện Prisma Client chưa hỗ trợ đầy đủ).
   stockLengthMm    Int      @default(0)
+  /// Cùng ý nghĩa StockLedger.spec - unique "1 dòng số dư mỗi (kho, hàng, độ dài, quy cách)" là index riêng
+  /// stock_quant_wh_mat_len_spec_key tạo bằng raw SQL (index có điều kiện, Prisma không khai báo được).
+  spec             String   @default("")
 
   warehouse      Warehouse       @relation(fields: [warehouseId], references: [id])
   material       Material?       @relation(fields: [materialId], references: [id])
@@ -2463,6 +2543,8 @@ model StockReservation {
   /// Cùng ý nghĩa StockLedger.stockLengthMm - giữ chỗ cũng phải khớp đúng độ dài cây đang giữ,
   /// không thì trừ nhầm sang lô cùng material nhưng khác độ dài.
   stockLengthMm       Int                     @default(0)
+  /// Cùng ý nghĩa StockLedger.spec - giữ chỗ phải khớp đúng quy cách đang giữ ('' = không quy cách).
+  spec                String                  @default("")
 
   warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
   material          Material           @relation(fields: [materialId], references: [id])
@@ -2479,6 +2561,7 @@ model StockReservation {
   /// 63 ký tự của Postgres, bị cắt cụt gây đụng tên với chỉ mục khác (migration
   /// 20260829072458_fix_truncated_stock_length_index_names).
   @@index([warehouseId, materialId, stockLengthMm, status], map: "stock_reservations_wh_mat_len_status_idx")
+  @@index([warehouseId, materialId, spec, status], map: "stock_reservations_wh_mat_spec_status_idx")
   @@map("stock_reservations")
 }
 
@@ -2540,6 +2623,8 @@ model WarehouseTransferItem {
   /// Đã clamp theo tồn khả dụng (stock_quant trừ reservation ACTIVE) tại thời điểm tạo phiếu.
   quantity     Decimal @db.Decimal(16, 4)
   note         String?
+  /// Quy cách của dòng vật tư lấy ra khỏi kho ('' = không quy cách) - nệm có nhiều quy cách cùng 1 vật tư.
+  spec         String  @default("")
 
   transfer WarehouseTransfer @relation(fields: [transferId], references: [id])
   material Material?         @relation(fields: [materialId], references: [id])
@@ -2586,6 +2671,7 @@ model WarehouseTransferReservation {
   createdAt     DateTime          @default(now())
   /// Cùng ý nghĩa StockLedger.stockLengthMm.
   stockLengthMm Int               @default(0)
+  spec          String            @default("")
 
   transfer  WarehouseTransfer @relation(fields: [transferId], references: [id])
   warehouse Warehouse         @relation(fields: [warehouseId], references: [id])

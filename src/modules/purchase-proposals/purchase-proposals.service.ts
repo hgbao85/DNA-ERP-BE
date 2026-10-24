@@ -669,6 +669,8 @@ export class PurchaseProposalsService {
               // xem CuttingProposalsService.approve()) - hàng sắt về đúng bucket chiều dài này thay
               // vì đổ chung vào tồn không phân biệt chiều dài (sửa 2026-09-05).
               stockLengthMm: item.stockLengthMm ?? 0,
+              // Quy cách riêng của dòng mua (nệm) - hàng về đúng bucket quy cách này, tồn kho tách theo quy cách.
+              spec: item.spec ?? '',
             },
             tx,
           );
@@ -700,6 +702,7 @@ export class PurchaseProposalsService {
               materialId: item.materialId,
               warehouseId: materialWarehouseId,
               qty: incrementQty,
+              spec: item.spec ?? '',
             });
           }
         }
@@ -942,7 +945,8 @@ export class PurchaseProposalsService {
       materialId: item.materialId.toString(),
       materialCode: item.material.code,
       materialName: item.material.name,
-      materialSpec: item.material.spec ?? null,
+      // Nệm: quy cách riêng của dòng mua (theo SKU, PurchaseProposalItem.spec) thay cho Material.spec.
+      materialSpec: item.spec ?? item.material.spec ?? null,
       unit: item.material.unit,
       purchaseWastePercentage: item.material.purchaseWastePercentage?.toNumber() ?? null,
       // Kho nhận hàng THẬT của riêng dòng này - ưu tiên item.receiveWarehouseCode (vật tư đóng

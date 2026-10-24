@@ -63,6 +63,8 @@ export class StockLedgerResponseDto {
   /// sắt nhưng khác chiều dài là 2 lô tồn RIÊNG (xem comment cột stockLengthMm ở schema), nên sổ
   /// kho phải hiện ra mới đọc đúng được (thêm 2026-09-12).
   @Expose() @ApiProperty() stockLengthMm!: number;
+  /// Quy cách của hàng (nệm: "Đôi 870x450x50"), '' = không quy cách - cùng 1 vật tư khác quy cách là 2 lô tồn RIÊNG.
+  @Expose() @ApiProperty() spec!: string;
 
   constructor(partial: Partial<StockLedgerResponseDto>) {
     Object.assign(this, partial);

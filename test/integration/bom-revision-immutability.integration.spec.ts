@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import { ClsModule } from 'nestjs-cls';
 import configuration from '../../src/config/configuration';
 import { envValidationSchema } from '../../src/config/env.validation';
-import { BomRevisionStatus, ProcessStep } from '../../src/generated/prisma/client';
+import { BomOptionKind, BomRevisionStatus, ProcessStep } from '../../src/generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../src/prisma/prisma.service';
 import { PrismaModule } from '../../src/prisma/prisma.module';
 
@@ -21,6 +21,8 @@ import { PrismaModule } from '../../src/prisma/prisma.module';
 describe('BomRevision line-item immutability trigger (integration, real Postgres)', () => {
   let prisma: PrismaServiceType;
   let materialId: bigint;
+  /** Vật tư dây dùng làm tick (bom_option) - bảng này cũng nằm dưới trigger như các dòng con khác. */
+  let wireMaterialId: bigint;
   let mfgProductId: bigint;
   let pieceId: bigint;
   let segmentSpecId: bigint;
@@ -47,6 +49,11 @@ describe('BomRevision line-item immutability trigger (integration, real Postgres
       data: { code: `TRIGGER-TEST-STEEL-${suffix}`, name: 'Sắt test trigger', unit: 'cây' },
     });
     materialId = material.id;
+
+    const wireMaterial = await prisma.material.create({
+      data: { code: `TRIGGER-TEST-WIRE-${suffix}`, name: 'Dây test trigger', unit: 'kg' },
+    });
+    wireMaterialId = wireMaterial.id;
 
     const segmentSpec = await prisma.segmentSpec.create({
       data: { materialId, cutLengthMm: 100 },
@@ -94,6 +101,7 @@ describe('BomRevision line-item immutability trigger (integration, real Postgres
   });
 
   afterAll(async () => {
+    await prisma.bomOption.deleteMany({ where: { bomRevisionId: draftRevisionId } });
     await prisma.pieceBom.deleteMany({ where: { bomRevisionId: draftRevisionId } });
     // Bản ACTIVE: trigger chặn xoá thẳng - phải qua escape hatch để dọn dẹp sau test, đúng use
     // case chính đáng mà escape hatch sinh ra để phục vụ (dọn dữ liệu test).
@@ -106,6 +114,7 @@ describe('BomRevision line-item immutability trigger (integration, real Postgres
     await prisma.mfgProduct.delete({ where: { id: mfgProductId } });
     await prisma.segmentSpec.delete({ where: { id: segmentSpecId } });
     await prisma.material.delete({ where: { id: materialId } });
+    await prisma.material.delete({ where: { id: wireMaterialId } });
     await prisma.$disconnect();
   });
 
@@ -174,6 +183,43 @@ describe('BomRevision line-item immutability trigger (integration, real Postgres
       where: { bomRevisionId: activeRevisionId },
     });
     await expectBlockedByTrigger(prisma.pieceBom.delete({ where: { id: existing.id } }));
+  });
+
+  it('bom_option (tick dây/nệm Sales được chọn) cũng bị chặn INSERT khi BomRevision đã ACTIVE', async () => {
+    await expectBlockedByTrigger(
+      prisma.bomOption.create({
+        data: {
+          bomRevisionId: activeRevisionId,
+          kind: BomOptionKind.WIRE,
+          materialId: wireMaterialId,
+        },
+      }),
+    );
+  });
+
+  it('bom_option VẪN ghi/xoá được khi BomRevision còn DRAFT, và escape hatch cho phép sửa bản ACTIVE chỉ trong transaction đó', async () => {
+    const created = await prisma.bomOption.create({
+      data: {
+        bomRevisionId: draftRevisionId,
+        kind: BomOptionKind.WIRE,
+        materialId: wireMaterialId,
+      },
+    });
+    await prisma.bomOption.delete({ where: { id: created.id } });
+
+    // Đường Admin ghi đè định mức đã duyệt: mở escape hatch TRONG transaction rồi dọn lại sạch.
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL "dna.bom_maintenance" = 'on'`);
+      const row = await tx.bomOption.create({
+        data: {
+          bomRevisionId: activeRevisionId,
+          kind: BomOptionKind.WIRE,
+          materialId: wireMaterialId,
+        },
+      });
+      await tx.bomOption.delete({ where: { id: row.id } });
+    });
+    expect(await prisma.bomOption.count({ where: { bomRevisionId: activeRevisionId } })).toBe(0);
   });
 
   it('VẪN cho sửa dòng con khi BomRevision còn DRAFT (không cần escape hatch)', async () => {

@@ -5,6 +5,7 @@ import {
   ProductionOrderFloorStage,
   ProductionOrderStatus,
 } from '../../../generated/prisma/client';
+import { MaterialChoiceRefDto } from '../../../common/utils/material-choice-ref.util';
 
 /// Mốc kế hoạch của SKU cha (ProductionInvoiceItem.stages, LenhSXPage "Sửa thời hạn") - lặp lại
 /// đúng shape `ItemStageDto` bên production-invoices (không import chéo module, cùng idiom DTO
@@ -49,6 +50,14 @@ export class ProductionOrderResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) floorStartedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) floorFinishedAt!: Date | null;
   @Expose() @ApiProperty() createdAt!: Date;
+  /// Loại dây (mã SHT)/loại nệm Sales đã chọn, chốt lúc duyệt - null khi SKU không có lựa chọn.
+  /// FE hiện cạnh tên SKU để phân biệt các lệnh cùng SKU khác dây/nệm.
+  @Expose()
+  @ApiPropertyOptional({ type: MaterialChoiceRefDto, nullable: true })
+  wireMaterial!: MaterialChoiceRefDto | null;
+  @Expose()
+  @ApiPropertyOptional({ type: MaterialChoiceRefDto, nullable: true })
+  cushionMaterial!: MaterialChoiceRefDto | null;
   /// true nếu `bomRevisionId` ở trên KHÔNG còn là bản BOM đang ACTIVE của `mfgProductId` (định
   /// mức sản phẩm đã được sửa/duyệt lại SAU KHI lệnh này được tạo - xem changelog
   /// 2026-09-11-bom-revision-ghim-cu-canh-bao.md). Vật tư mới khai ở bản BOM mới sẽ KHÔNG áp

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 
 export class CreateWarehouseTransferItemDto {
   // Bắt buộc từ 09/09/2026 (audit toàn diện, mục Trung bình "phiếu ghi tự do") - trước đây field
@@ -30,4 +30,12 @@ export class CreateWarehouseTransferItemDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  /** Quy cách của hàng cần chuyển (nệm có nhiều quy cách cùng 1 vật tư, tồn kho tách theo quy cách). Bỏ trống =
+   *  bucket "không quy cách". Cùng vật tư khác quy cách là các dòng riêng, mỗi dòng tính khả dụng riêng. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  spec?: string;
 }

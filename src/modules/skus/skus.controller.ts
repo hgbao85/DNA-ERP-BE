@@ -60,6 +60,15 @@ export class SkusController {
     return this.skusService.findAll(query);
   }
 
+  // Loại dây/nệm Sales chọn khi lên đơn (từ định mức ACTIVE của sản phẩm). Khai báo TRƯỚC
+  // ':id' để "order-options" không bị bắt làm id.
+  @Get('order-options')
+  @RequirePermissions(VIEW)
+  getOrderOptions(@Query('mfgProductId') mfgProductId: string) {
+    if (!mfgProductId) throw new BadRequestException('Thiếu mfgProductId');
+    return this.skusService.getOrderOptions(mfgProductId);
+  }
+
   @Get(':id')
   @RequirePermissions(VIEW)
   findOne(@Param('id') id: string) {

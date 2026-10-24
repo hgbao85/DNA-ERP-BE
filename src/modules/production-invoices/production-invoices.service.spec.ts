@@ -66,6 +66,7 @@ describe('ProductionInvoicesService', () => {
   let productionOrdersService: {
     createFromApproval: jest.Mock;
     assertActiveBomRevisionExists: jest.Mock;
+    assertChoiceMatchesRevision: jest.Mock;
     fetchActiveBomRevisionIds: jest.Mock;
   };
   let cuttingProposalsService: {
@@ -192,6 +193,7 @@ describe('ProductionInvoicesService', () => {
     productionOrdersService = {
       createFromApproval: jest.fn().mockResolvedValue({ id: 99n }),
       assertActiveBomRevisionExists: jest.fn().mockResolvedValue(undefined),
+      assertChoiceMatchesRevision: jest.fn().mockResolvedValue(undefined),
       // Mặc định "không có bản ACTIVE nào khớp" -> bomOutOfDate=false cho MỌI item có
       // ProductionOrder (không phá các test sẵn có không quan tâm field này) - test riêng của
       // bomOutOfDate tự override lại mock này.

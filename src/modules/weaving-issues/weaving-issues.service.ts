@@ -31,6 +31,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { loadBomOptionExclusions } from '../bom-revisions/bom-option.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
@@ -193,6 +194,21 @@ export class WeavingIssuesService {
     const materialIds = materialLines.map((m) => m.materialId);
     if (new Set(materialIds).size !== materialIds.length) {
       throw new BadRequestException('Danh sách vật tư mang kèm có materialId trùng lặp');
+    }
+    // Dây/nệm đã tick trong định mức mà lệnh này KHÔNG chọn thì không được mang kèm - nếu không, thủ
+    // kho (hoặc client lỗi) xuất nhầm loại dây và trừ tồn của loại khác với đơn hàng.
+    if (materialLines.length > 0) {
+      const excluded =
+        (await loadBomOptionExclusions(this.prisma, [order])).get(order.id.toString()) ??
+        new Set<string>();
+      const notAllowed = materialLines.filter((m) =>
+        excluded.has(parseBigIntId(m.materialId).toString()),
+      );
+      if (notAllowed.length > 0) {
+        throw new BadRequestException(
+          `Vật tư ${notAllowed.map((m) => m.materialId).join(', ')} không thuộc màu dây/nệm đã chọn cho lệnh sản xuất này - không thể mang kèm`,
+        );
+      }
     }
 
     // Khoá advisory (H4 fix, cùng lý do H2/H3) - không có dòng có sẵn để FOR UPDATE cho lần xuất
@@ -585,25 +601,28 @@ export class WeavingIssuesService {
   async getIssuePlan(productionOrderId: string): Promise<WeavingIssuePlanItemResponseDto[]> {
     const order = await this.findOrderOrThrow(productionOrderId);
 
-    const [bomPieces, issues, receipts, materialLinesByPiece, receivedItems] = await Promise.all([
-      this.prisma.bomPiece.findMany({
-        where: { bomRevisionId: order.bomRevisionId },
-        include: { piece: true },
-      }),
-      this.prisma.weavingIssue.findMany({
-        where: { productionOrderId: order.id },
-        include: { weavingPoint: true, materials: true },
-      }),
-      this.prisma.weavingReceipt.findMany({
-        where: { productionOrderId: order.id },
-        include: { weavingPoint: true },
-      }),
-      this.getWovenMaterialLinesByPiece([order.bomRevisionId]),
-      this.prisma.warehouseTransferPieceItem.findMany({
-        where: { productionOrderId: order.id, transfer: { status: TransferStatus.CONFIRMED } },
-        select: { pieceId: true, quantity: true },
-      }),
-    ]);
+    const [bomPieces, issues, receipts, materialLinesByPiece, receivedItems, exclusions] =
+      await Promise.all([
+        this.prisma.bomPiece.findMany({
+          where: { bomRevisionId: order.bomRevisionId },
+          include: { piece: true },
+        }),
+        this.prisma.weavingIssue.findMany({
+          where: { productionOrderId: order.id },
+          include: { weavingPoint: true, materials: true },
+        }),
+        this.prisma.weavingReceipt.findMany({
+          where: { productionOrderId: order.id },
+          include: { weavingPoint: true },
+        }),
+        this.getWovenMaterialLinesByPiece([order.bomRevisionId]),
+        this.prisma.warehouseTransferPieceItem.findMany({
+          where: { productionOrderId: order.id, transfer: { status: TransferStatus.CONFIRMED } },
+          select: { pieceId: true, quantity: true },
+        }),
+        loadBomOptionExclusions(this.prisma, [order]),
+      ]);
+    const excluded = exclusions.get(order.id.toString()) ?? new Set<string>();
     const receivedByPiece = this.sumByPieceId(receivedItems);
 
     const wovenBomPieces = bomPieces.filter((bp) => bp.isWoven);
@@ -655,10 +674,18 @@ export class WeavingIssuesService {
         // có đủ hàng thật để xuất.
         canIssueQty: Math.max(0, Math.min(totalQty - issuedQty, receivedQty - issuedQty)),
         allocations,
-        wire: this.mergeIssuedQty(materialLines?.wire, issuedMaterialQty),
-        nail: this.mergeIssuedQty(materialLines?.nail, issuedMaterialQty),
-        plasticButton: this.mergeIssuedQty(materialLines?.plasticButton, issuedMaterialQty),
-        finishedComponent: this.mergeIssuedQty(materialLines?.finishedComponent, issuedMaterialQty),
+        wire: this.mergeIssuedQty(materialLines?.wire, issuedMaterialQty, excluded),
+        nail: this.mergeIssuedQty(materialLines?.nail, issuedMaterialQty, excluded),
+        plasticButton: this.mergeIssuedQty(
+          materialLines?.plasticButton,
+          issuedMaterialQty,
+          excluded,
+        ),
+        finishedComponent: this.mergeIssuedQty(
+          materialLines?.finishedComponent,
+          issuedMaterialQty,
+          excluded,
+        ),
       });
     });
   }
@@ -695,14 +722,18 @@ export class WeavingIssuesService {
   private mergeIssuedQty(
     lines: WeavingPieceMaterialLineResponseDto[] | undefined,
     issuedByMaterial: Map<string, number>,
+    excluded: Set<string> = new Set(),
   ): WeavingPieceMaterialLineResponseDto[] {
-    return (lines ?? []).map(
-      (l) =>
-        new WeavingPieceMaterialLineResponseDto({
-          ...l,
-          issuedQty: issuedByMaterial.get(l.materialId) ?? 0,
-        }),
-    );
+    // excluded = loại dây/nệm đã tick nhưng lệnh này không chọn - bỏ khỏi kế hoạch xuất đan.
+    return (lines ?? [])
+      .filter((l) => !excluded.has(l.materialId))
+      .map(
+        (l) =>
+          new WeavingPieceMaterialLineResponseDto({
+            ...l,
+            issuedQty: issuedByMaterial.get(l.materialId) ?? 0,
+          }),
+      );
   }
 
   /** Định mức Dây (WIRE) + Đinh (NAIL), luôn đi kèm + Nút nhựa (PLASTIC_BUTTON) CÓ tick
@@ -854,33 +885,43 @@ export class WeavingIssuesService {
     const orderBigIds = productionOrderIds.map((id) => parseBigIntId(id));
     const orders = await this.prisma.productionOrder.findMany({
       where: { id: { in: orderBigIds } },
-      select: { id: true, bomRevisionId: true, quantity: true },
+      select: {
+        id: true,
+        bomRevisionId: true,
+        quantity: true,
+        wireMaterialId: true,
+        cushionMaterialId: true,
+      },
     });
     const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
     const orderIds = orders.map((o) => o.id);
 
-    const [bomPieces, issues, receipts, materialLinesByPiece, receivedItems] = await Promise.all([
-      this.prisma.bomPiece.findMany({
-        where: { bomRevisionId: { in: revisionIds } },
-        include: { piece: true },
-      }),
-      this.prisma.weavingIssue.findMany({
-        where: { productionOrderId: { in: orderIds } },
-        include: { weavingPoint: true, materials: true },
-      }),
-      this.prisma.weavingReceipt.findMany({
-        where: { productionOrderId: { in: orderIds } },
-        include: { weavingPoint: true },
-      }),
-      this.getWovenMaterialLinesByPiece(revisionIds),
-      this.prisma.warehouseTransferPieceItem.findMany({
-        where: {
-          productionOrderId: { in: orderIds },
-          transfer: { status: TransferStatus.CONFIRMED },
-        },
-        select: { productionOrderId: true, pieceId: true, quantity: true },
-      }),
-    ]);
+    const [bomPieces, issues, receipts, materialLinesByPiece, receivedItems, exclusions] =
+      await Promise.all([
+        this.prisma.bomPiece.findMany({
+          where: { bomRevisionId: { in: revisionIds } },
+          include: { piece: true },
+        }),
+        this.prisma.weavingIssue.findMany({
+          where: { productionOrderId: { in: orderIds } },
+          include: { weavingPoint: true, materials: true },
+        }),
+        this.prisma.weavingReceipt.findMany({
+          where: { productionOrderId: { in: orderIds } },
+          include: { weavingPoint: true },
+        }),
+        this.getWovenMaterialLinesByPiece(revisionIds),
+        this.prisma.warehouseTransferPieceItem.findMany({
+          where: {
+            productionOrderId: { in: orderIds },
+            transfer: { status: TransferStatus.CONFIRMED },
+          },
+          select: { productionOrderId: true, pieceId: true, quantity: true },
+        }),
+        // Mỗi lệnh có tập loại dây/nệm bị loại riêng - 2 lệnh cùng SKU/revision khác dây dùng chung
+        // map materialLinesByPiece (khoá theo revision) nhưng được lọc khác nhau ở bước dựng kế hoạch.
+        loadBomOptionExclusions(this.prisma, orders),
+      ]);
     // Key theo CẢ productionOrderId lẫn pieceId (khác getIssuePlan() - 1 order duy nhất nên chỉ
     // cần pieceId) - nhiều order trong cùng batch có thể dùng chung tên mảnh, không được gộp
     // nhầm số đã nhận của order khác vào (xem comment sumReceivedForPiece).
@@ -904,6 +945,7 @@ export class WeavingIssuesService {
       );
       const orderIssues = issues.filter((i) => i.productionOrderId === order.id);
       const orderReceipts = receipts.filter((r) => r.productionOrderId === order.id);
+      const excluded = exclusions.get(order.id.toString()) ?? new Set<string>();
 
       result[order.id.toString()] = wovenBomPieces.map((bp) => {
         const pieceKey = bp.pieceId.toString();
@@ -948,12 +990,17 @@ export class WeavingIssuesService {
           remainingToIssue: totalQty - issuedQty,
           canIssueQty: Math.max(0, Math.min(totalQty - issuedQty, receivedQty - issuedQty)),
           allocations,
-          wire: this.mergeIssuedQty(materialLines?.wire, issuedMaterialQty),
-          nail: this.mergeIssuedQty(materialLines?.nail, issuedMaterialQty),
-          plasticButton: this.mergeIssuedQty(materialLines?.plasticButton, issuedMaterialQty),
+          wire: this.mergeIssuedQty(materialLines?.wire, issuedMaterialQty, excluded),
+          nail: this.mergeIssuedQty(materialLines?.nail, issuedMaterialQty, excluded),
+          plasticButton: this.mergeIssuedQty(
+            materialLines?.plasticButton,
+            issuedMaterialQty,
+            excluded,
+          ),
           finishedComponent: this.mergeIssuedQty(
             materialLines?.finishedComponent,
             issuedMaterialQty,
+            excluded,
           ),
         });
       });

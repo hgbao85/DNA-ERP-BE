@@ -539,7 +539,13 @@ describe('FloorAdminService', () => {
         },
       ];
       steelIssues.getPhoiProgressBatch.mockResolvedValue({ 45: phoi });
-      prisma.productionOrder.findMany.mockResolvedValue([{ id: 41n }]);
+      prisma.productionOrder.findMany.mockResolvedValue([
+        {
+          id: 41n,
+          wireMaterial: { id: 7n, code: 'SHT29', name: 'Dây SHT29', imageUrl: null },
+          cushionMaterial: null,
+        },
+      ]);
       const plans = {
         '41': {
           poNumber: 'PO-1',
@@ -560,7 +566,18 @@ describe('FloorAdminService', () => {
         plans,
       });
       expect(d.orders).toEqual([
-        { productionOrderId: '41', poNumber: 'PO-1', productName: 'Ghế J55' },
+        {
+          productionOrderId: '41',
+          poNumber: 'PO-1',
+          productName: 'Ghế J55',
+          wireMaterial: {
+            materialId: '7',
+            materialCode: 'SHT29',
+            materialName: 'Dây SHT29',
+            imageUrl: null,
+          },
+          cushionMaterial: null,
+        },
       ]);
       expect(d.progress).toMatchObject({
         required: 12,

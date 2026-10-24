@@ -44,7 +44,13 @@ describe('SkusService', () => {
   let prisma: {
     salesOrder: { findUnique: jest.Mock };
     mfgProduct: { findUnique: jest.Mock; update: jest.Mock };
-    salesOrderItem: { findFirst: jest.Mock; findUnique: jest.Mock; count: jest.Mock };
+    salesOrderItem: {
+      findFirst: jest.Mock;
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+      count: jest.Mock;
+    };
+    bomOption: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     planForm: {
       create: jest.Mock;
       findUnique: jest.Mock;
@@ -108,7 +114,13 @@ describe('SkusService', () => {
       salesOrderItem: {
         findFirst: jest.fn(),
         findUnique: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
+      },
+      bomOption: {
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       planForm: {
         create: jest.fn(),
@@ -1122,6 +1134,424 @@ describe('SkusService', () => {
     });
   });
 
+  // Tick loại dây (manh-quota) / loại nệm (detail-quota) Sales được chọn khi lên đơn - bảng
+  // bom_option, xem schema.prisma BomOption.
+  describe('bom_option - tick loại dây / loại nệm', () => {
+    const wirePiece = {
+      name: 'Manh tua',
+      qtyPerUnit: 1,
+      segments: [],
+      materialLines: [],
+    };
+
+    function arrangeManh() {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', code: 'MANH-TUA' }]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+    }
+
+    it('ghi tick dây: thay toàn bộ bom_option kind WIRE và tự gán nhóm Dây cho vật tư chưa có nhóm', async () => {
+      arrangeManh();
+      prisma.material.findMany.mockResolvedValue([
+        { id: 60n, code: 'SHT08', materialGroupId: null },
+        { id: 61n, code: 'SHT29', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+      ]);
+
+      await service.updateManhQuota('5', {
+        pieces: [wirePiece],
+        wireOptions: ['60', '61', '60'],
+        enteredBy: 'NV Day',
+      });
+
+      expect(prisma.material.update).toHaveBeenCalledWith({
+        where: { id: 60n },
+        data: { materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+      });
+      expect(prisma.bomOption.deleteMany).toHaveBeenCalledWith({
+        where: { bomRevisionId: 10n, kind: 'WIRE' },
+      });
+      // trùng id ('60' hai lần) chỉ ghi 1 dòng
+      expect(prisma.bomOption.createMany).toHaveBeenCalledWith({
+        data: [
+          { bomRevisionId: 10n, kind: 'WIRE', materialId: 60n },
+          { bomRevisionId: 10n, kind: 'WIRE', materialId: 61n },
+        ],
+      });
+    });
+
+    it('wireOptions=[] xoá hết tick; bỏ trống field thì KHÔNG đụng bom_option', async () => {
+      arrangeManh();
+
+      await service.updateManhQuota('5', {
+        pieces: [wirePiece],
+        wireOptions: [],
+        enteredBy: 'NV Day',
+      });
+      expect(prisma.bomOption.deleteMany).toHaveBeenCalledWith({
+        where: { bomRevisionId: 10n, kind: 'WIRE' },
+      });
+      expect(prisma.bomOption.createMany).not.toHaveBeenCalled();
+
+      prisma.bomOption.deleteMany.mockClear();
+      await service.updateManhQuota('5', { pieces: [wirePiece], enteredBy: 'NV Day' });
+      expect(prisma.bomOption.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('từ chối tick một vật tư đã thuộc nhóm khác Dây', async () => {
+      arrangeManh();
+      prisma.material.findMany.mockResolvedValue([
+        { id: 62n, code: 'DINH-01', materialGroupId: SYSTEM_GROUP_IDS.NAIL },
+      ]);
+
+      await expect(
+        service.updateManhQuota('5', {
+          pieces: [wirePiece],
+          wireOptions: ['62'],
+          enteredBy: 'NV Day',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.bomOption.createMany).not.toHaveBeenCalled();
+    });
+
+    it('chặn gỡ tick loại dây đang nằm trên dòng đơn chưa giao hết (409, nêu mã đơn Sales nhập)', async () => {
+      arrangeManh();
+      prisma.material.findMany.mockResolvedValue([
+        { id: 61n, code: 'SHT29', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+      ]);
+      prisma.salesOrderItem.findMany.mockResolvedValue([
+        {
+          shippedQty: 10,
+          totalQty: 50,
+          salesOrder: { orderCode: 'KH-0007' },
+          wireMaterial: { code: 'SHT08' },
+          cushionMaterial: null,
+        },
+      ]);
+
+      const attempt = service.updateManhQuota('5', {
+        pieces: [wirePiece],
+        wireOptions: ['61'], // bỏ SHT08 đang được PO-7 dùng
+        enteredBy: 'NV Day',
+      });
+      await expect(attempt).rejects.toThrow(ConflictException);
+      // Mã hiển thị Sales nhập (orderCode), KHÔNG phải mã nội bộ PO-{id}.
+      await expect(attempt).rejects.toThrow(/SHT08.*KH-0007/);
+      expect(prisma.salesOrderItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { mfgProductId: 2n, wireMaterialId: { notIn: [61n] } },
+        }),
+      );
+      expect(prisma.bomOption.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('cho gỡ tick khi dòng đơn đã giao đủ (shippedQty = totalQty)', async () => {
+      arrangeManh();
+      prisma.material.findMany.mockResolvedValue([
+        { id: 61n, code: 'SHT29', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+      ]);
+      prisma.salesOrderItem.findMany.mockResolvedValue([
+        {
+          shippedQty: 50,
+          totalQty: 50,
+          salesOrder: { orderCode: 'KH-0007' },
+          wireMaterial: { code: 'SHT08' },
+          cushionMaterial: null,
+        },
+      ]);
+
+      await service.updateManhQuota('5', {
+        pieces: [wirePiece],
+        wireOptions: ['61'],
+        enteredBy: 'NV Day',
+      });
+
+      expect(prisma.bomOption.createMany).toHaveBeenCalled();
+    });
+
+    function arrangeDetail() {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+    }
+
+    it('ghi tick nệm: vật tư nhóm Vật tư khác phân loại Nệm, bom_option kind CUSHION', async () => {
+      arrangeDetail();
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 90n,
+          code: 'NEM-A',
+          materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+          detailKind: 'CUSHION',
+        },
+      ]);
+
+      await service.updateDetailQuota('5', {
+        detailLines: [],
+        cushionOptions: ['90'],
+        enteredBy: 'NV PK',
+      });
+
+      expect(prisma.bomOption.deleteMany).toHaveBeenCalledWith({
+        where: { bomRevisionId: 10n, kind: 'CUSHION' },
+      });
+      expect(prisma.bomOption.createMany).toHaveBeenCalledWith({
+        data: [{ bomRevisionId: 10n, kind: 'CUSHION', materialId: 90n }],
+      });
+    });
+
+    it.each(['PACKAGING', 'ACCESSORY', 'PAINT'])(
+      'từ chối tick nệm có phân loại %s (chỉ nhận phân loại Nệm)',
+      async (detailKind) => {
+        arrangeDetail();
+        prisma.material.findMany.mockResolvedValue([
+          {
+            id: 91n,
+            code: 'KHAC-1',
+            materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+            detailKind,
+          },
+        ]);
+
+        await expect(
+          service.updateDetailQuota('5', {
+            detailLines: [],
+            cushionOptions: ['91'],
+            enteredBy: 'NV PK',
+          }),
+        ).rejects.toThrow(/Nệm/);
+        expect(prisma.bomOption.createMany).not.toHaveBeenCalled();
+      },
+    );
+
+    it('dòng Phụ kiện nhận cả vật tư phân loại Nệm (nệm tick xong nằm ở nhóm Phụ kiện)', async () => {
+      arrangeDetail();
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 90n,
+          code: 'NEM-A',
+          materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+          detailKind: 'CUSHION',
+        },
+      ]);
+
+      await service.updateDetailQuota('5', {
+        detailLines: [{ group: 'VAT_TU_PHU_KIEN', materialId: '90', qtyPerUnit: 1 }],
+        enteredBy: 'NV PK',
+      });
+
+      expect(prisma.bomAccessoryItem.createMany).toHaveBeenCalledWith({
+        data: [
+          { bomRevisionId: 10n, materialId: 90n, kind: 'ACCESSORY', qtyPerUnit: 1, spec: null },
+        ],
+      });
+    });
+
+    it('nệm: quy cách riêng theo SKU được lưu vào dòng định mức (cắt khoảng trắng), không lưu vào vật tư', async () => {
+      arrangeDetail();
+      prisma.material.findMany.mockResolvedValue([
+        { id: 90n, code: 'NEM-A', materialGroupId: SYSTEM_GROUP_IDS.OTHER, detailKind: 'CUSHION' },
+      ]);
+
+      await service.updateDetailQuota('5', {
+        detailLines: [
+          { group: 'VAT_TU_PHU_KIEN', materialId: '90', qtyPerUnit: 1, spec: '  50x50x5 ' },
+        ],
+        enteredBy: 'NV PK',
+      });
+
+      expect(prisma.bomAccessoryItem.createMany).toHaveBeenCalledWith({
+        data: [
+          {
+            bomRevisionId: 10n,
+            materialId: 90n,
+            kind: 'ACCESSORY',
+            qtyPerUnit: 1,
+            spec: '50x50x5',
+          },
+        ],
+      });
+    });
+
+    it.each(['', '   ', undefined])(
+      'nệm: quy cách %p = không có quy cách riêng (null)',
+      async (spec) => {
+        arrangeDetail();
+        prisma.material.findMany.mockResolvedValue([
+          {
+            id: 90n,
+            code: 'NEM-A',
+            materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+            detailKind: 'CUSHION',
+          },
+        ]);
+
+        await service.updateDetailQuota('5', {
+          detailLines: [{ group: 'VAT_TU_PHU_KIEN', materialId: '90', qtyPerUnit: 1, spec }],
+          enteredBy: 'NV PK',
+        });
+
+        expect(prisma.bomAccessoryItem.createMany).toHaveBeenCalledWith({
+          data: [
+            { bomRevisionId: 10n, materialId: 90n, kind: 'ACCESSORY', qtyPerUnit: 1, spec: null },
+          ],
+        });
+      },
+    );
+
+    it('phụ kiện thường (không phải nệm) bỏ qua quy cách gửi lên - quy cách của chúng luôn lấy từ vật tư', async () => {
+      arrangeDetail();
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 80n,
+          code: 'PK-01',
+          materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+          detailKind: 'ACCESSORY',
+        },
+      ]);
+
+      await service.updateDetailQuota('5', {
+        detailLines: [{ group: 'VAT_TU_PHU_KIEN', materialId: '80', qtyPerUnit: 2, spec: '10x10' }],
+        enteredBy: 'NV PK',
+      });
+
+      expect(prisma.bomAccessoryItem.createMany).toHaveBeenCalledWith({
+        data: [
+          { bomRevisionId: 10n, materialId: 80n, kind: 'ACCESSORY', qtyPerUnit: 2, spec: null },
+        ],
+      });
+    });
+
+    it('1 SKU có nhiều dòng cùng 1 nệm khi khác quy cách (nệm đôi + nệm đơn cùng màu)', async () => {
+      arrangeDetail();
+      prisma.material.findMany.mockResolvedValue([
+        { id: 90n, code: 'NEM-A', materialGroupId: SYSTEM_GROUP_IDS.OTHER, detailKind: 'CUSHION' },
+      ]);
+
+      await service.updateDetailQuota('5', {
+        detailLines: [
+          { group: 'VAT_TU_PHU_KIEN', materialId: '90', qtyPerUnit: 1, spec: 'Đôi 870x450x50' },
+          { group: 'VAT_TU_PHU_KIEN', materialId: '90', qtyPerUnit: 2, spec: 'Đơn 450x450x50' },
+        ],
+        enteredBy: 'NV PK',
+      });
+
+      expect(prisma.bomAccessoryItem.createMany).toHaveBeenCalledWith({
+        data: [
+          {
+            bomRevisionId: 10n,
+            materialId: 90n,
+            kind: 'ACCESSORY',
+            qtyPerUnit: 1,
+            spec: 'Đôi 870x450x50',
+          },
+          {
+            bomRevisionId: 10n,
+            materialId: 90n,
+            kind: 'ACCESSORY',
+            qtyPerUnit: 2,
+            spec: 'Đơn 450x450x50',
+          },
+        ],
+      });
+    });
+
+    it.each([
+      ['cùng nệm cùng quy cách', 'A', 'A'],
+      ['cùng nệm đều không có quy cách', undefined, ''],
+    ])(
+      'chặn 2 dòng trùng (%s) bằng thông báo rõ ràng, không ghi gì',
+      async (_label, specA, specB) => {
+        arrangeDetail();
+        prisma.material.findMany.mockResolvedValue([
+          {
+            id: 90n,
+            code: 'NEM-A',
+            materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+            detailKind: 'CUSHION',
+          },
+        ]);
+
+        await expect(
+          service.updateDetailQuota('5', {
+            detailLines: [
+              { group: 'VAT_TU_PHU_KIEN', materialId: '90', qtyPerUnit: 1, spec: specA },
+              { group: 'VAT_TU_PHU_KIEN', materialId: '90', qtyPerUnit: 2, spec: specB },
+            ],
+            enteredBy: 'NV PK',
+          }),
+        ).rejects.toThrow(/NEM-A.*trùng/);
+        expect(prisma.bomAccessoryItem.createMany).not.toHaveBeenCalled();
+      },
+    );
+
+    it('dòng Bao bì vẫn KHÔNG nhận vật tư phân loại Nệm', async () => {
+      arrangeDetail();
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 90n,
+          code: 'NEM-A',
+          materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+          detailKind: 'CUSHION',
+        },
+      ]);
+
+      await expect(
+        service.updateDetailQuota('5', {
+          detailLines: [{ group: 'BAO_BI_DONG_GOI', materialId: '90', qtyPerUnit: 1 }],
+          enteredBy: 'NV PK',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('getOrderOptions: sản phẩm chưa có bản định mức ACTIVE trả rỗng', async () => {
+      prisma.bomRevision.findFirst.mockResolvedValue(null);
+
+      await expect(service.getOrderOptions('2')).resolves.toEqual({
+        bomRevisionId: null,
+        wireOptions: [],
+        cushionOptions: [],
+      });
+      expect(prisma.bomOption.findMany).not.toHaveBeenCalled();
+    });
+
+    it('getOrderOptions: tách dây/nệm của bản ACTIVE, kèm ảnh mẫu', async () => {
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n });
+      const material = (id: bigint, code: string, imageUrl: string | null) => ({
+        id,
+        code,
+        name: `Vat tu ${code}`,
+        spec: 'D 1-1,05',
+        unit: 'KG',
+        imageUrl,
+      });
+      prisma.bomOption.findMany.mockResolvedValue([
+        { kind: 'WIRE', material: material(60n, 'SHT08', 'https://img/sht08.jpg') },
+        { kind: 'CUSHION', material: material(90n, 'NEM-A', null) },
+      ]);
+
+      const result = await service.getOrderOptions('2');
+
+      expect(prisma.bomRevision.findFirst).toHaveBeenCalledWith({
+        where: { mfgProductId: 2n, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      expect(result.bomRevisionId).toBe('10');
+      expect(result.wireOptions).toEqual([
+        {
+          materialId: '60',
+          materialCode: 'SHT08',
+          materialName: 'Vat tu SHT08',
+          materialSpec: 'D 1-1,05',
+          materialUnit: 'KG',
+          imageUrl: 'https://img/sht08.jpg',
+        },
+      ]);
+      expect(result.cushionOptions).toHaveLength(1);
+      expect(result.cushionOptions[0].materialCode).toBe('NEM-A');
+    });
+  });
+
   describe('updateDetailQuota', () => {
     it('rejects a DAY_SON material that belongs to a different group', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
@@ -1161,7 +1591,9 @@ describe('SkusService', () => {
         where: { bomRevisionId: 10n, kind: 'ACCESSORY' },
       });
       expect(prisma.bomAccessoryItem.createMany).toHaveBeenCalledWith({
-        data: [{ bomRevisionId: 10n, materialId: 80n, kind: 'ACCESSORY', qtyPerUnit: 5 }],
+        data: [
+          { bomRevisionId: 10n, materialId: 80n, kind: 'ACCESSORY', qtyPerUnit: 5, spec: null },
+        ],
       });
     });
 
@@ -1526,8 +1958,13 @@ describe('SkusService', () => {
 
       const result = await service.findOne('5');
 
-      expect(result.manhData).toEqual({ pieces: [] });
-      expect(result.detailQuota).toEqual({ daySon: [], vatTuPhuKien: [], baoBiDongGoi: [] });
+      expect(result.manhData).toEqual({ pieces: [], wireOptions: [] });
+      expect(result.detailQuota).toEqual({
+        daySon: [],
+        vatTuPhuKien: [],
+        baoBiDongGoi: [],
+        cushionOptions: [],
+      });
     });
   });
 

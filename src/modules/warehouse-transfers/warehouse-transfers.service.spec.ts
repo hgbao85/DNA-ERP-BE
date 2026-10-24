@@ -307,7 +307,82 @@ describe('WarehouseTransfersService', () => {
         10n,
         100,
         0,
+        undefined,
+        '', // quy cách: dòng không chọn quy cách -> bucket '' (nệm có quy cách mới có giá trị)
       );
+    });
+
+    // 2026-10-23: tồn kho tách theo quy cách (nệm) - cùng 1 vật tư khác quy cách là 2 bucket riêng, mỗi bucket
+    // khoá/tính khả dụng/giữ chỗ riêng, và lúc xác nhận lấy đúng bucket đã chọn.
+    it('nệm khác quy cách trong cùng phiếu: mỗi quy cách tính khả dụng và giữ chỗ RIÊNG theo đúng bucket', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
+      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
+
+      await service.create(
+        {
+          ...dto,
+          items: [
+            {
+              materialId: '10',
+              materialName: 'Nệm',
+              unit: 'cái',
+              quantity: 3,
+              spec: 'Đôi 870x450x50',
+            },
+            {
+              materialId: '10',
+              materialName: 'Nệm',
+              unit: 'cái',
+              quantity: 4,
+              spec: 'Đơn 450x450x50',
+            },
+            {
+              materialId: '10',
+              materialName: 'Nệm',
+              unit: 'cái',
+              quantity: 2,
+              spec: 'Đôi 870x450x50',
+            },
+          ],
+        },
+        null,
+        'user-1',
+        'idem-key-1',
+      );
+
+      // 2 bucket (dòng cùng quy cách được gộp: 3 + 2 = 5), mỗi bucket 1 lần tính khả dụng với đúng quy cách.
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledTimes(2);
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        prisma,
+        1n,
+        10n,
+        100,
+        0,
+        undefined,
+        'Đôi 870x450x50',
+      );
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        prisma,
+        1n,
+        10n,
+        100,
+        0,
+        undefined,
+        'Đơn 450x450x50',
+      );
+      const [createArgs] = prisma.warehouseTransfer.create.mock.calls[0] as unknown as [
+        { data: { items: { create: { quantity: number; spec: string }[] } } },
+      ];
+      expect(createArgs.data.items.create.map((i) => [i.spec, i.quantity])).toEqual([
+        ['Đôi 870x450x50', 5],
+        ['Đơn 450x450x50', 4],
+      ]);
+      expect(prisma.warehouseTransferReservation.createMany).toHaveBeenCalledWith({
+        data: [
+          expect.objectContaining({ spec: 'Đôi 870x450x50', quantity: 5 }),
+          expect.objectContaining({ spec: 'Đơn 450x450x50', quantity: 4 }),
+        ],
+      });
     });
 
     it('rejects with 400 when clamped availability is 0 for every item', async () => {

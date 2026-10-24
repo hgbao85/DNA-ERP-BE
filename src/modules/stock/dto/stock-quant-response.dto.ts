@@ -19,6 +19,8 @@ export class StockQuantResponseDto {
    *  biệt được trên UI (trước 14/09/2026 field này bị ẩn, khiến nhiều nơi FE gộp nhầm/báo thiếu
    *  tồn cho vật tư Sắt đa-bucket). */
   @Expose() @ApiProperty() stockLengthMm!: number;
+  /** Quy cách (nệm), '' = không quy cách - cùng vật tư khác quy cách là các dòng tồn RIÊNG (unique index kho+vật tư+độ dài+quy cách). */
+  @Expose() @ApiProperty() spec!: string;
   @Expose() @ApiProperty() qty!: number;
   /** Vấn đề #13 audit 26/08 - `qty` (tồn thực tế) trừ phần đang bị giữ chỗ (cắt sắt/chuyển kho
    *  nội bộ ACTIVE), qua ĐÚNG MỘT hàm StockReservationsService.getAvailableQty() dùng chung với

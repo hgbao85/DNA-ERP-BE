@@ -24,6 +24,7 @@ import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
 import { assertPiHasActiveFloor } from '../../common/utils/floor-gate.util';
+import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
@@ -68,6 +69,8 @@ type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
       include: {
         mfgProduct: true;
         productVariant: true;
+        wireMaterial: true;
+        cushionMaterial: true;
         stages: true;
         salesOrder: { include: { customer: true } };
       };
@@ -78,6 +81,8 @@ type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
   include: {
     mfgProduct: true;
     productVariant: true;
+    wireMaterial: true;
+    cushionMaterial: true;
     stages: true;
     salesOrder: { include: { customer: true } };
   };
@@ -92,6 +97,8 @@ const PROPOSAL_STATUS_INCLUDE = {
     include: {
       mfgProduct: true,
       productVariant: true,
+      wireMaterial: true,
+      cushionMaterial: true,
       stages: true,
       salesOrder: { include: { customer: true } },
       productionOrder: {
@@ -283,6 +290,8 @@ export class ProductionInvoicesService {
           include: {
             mfgProduct: true,
             productVariant: true,
+            wireMaterial: true,
+            cushionMaterial: true,
             stages: true,
             salesOrder: { include: { customer: true } },
           },
@@ -343,6 +352,8 @@ export class ProductionInvoicesService {
           include: {
             mfgProduct: true,
             productVariant: true,
+            wireMaterial: true,
+            cushionMaterial: true,
             stages: true,
             salesOrder: { include: { customer: true } },
           },
@@ -628,6 +639,8 @@ export class ProductionInvoicesService {
       include: {
         mfgProduct: true,
         productVariant: true,
+        wireMaterial: true,
+        cushionMaterial: true,
         stages: true,
         salesOrder: { include: { customer: true } },
       },
@@ -1065,6 +1078,13 @@ export class ProductionInvoicesService {
       // assertActiveBomRevisionExists().
       await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
     }
+    // Loại dây/nệm Sales chọn phải khớp bản định mức sắp ghim - chặn TRƯỚC khi ghi APPROVED.
+    await this.productionOrdersService.assertChoiceMatchesRevision(
+      item.mfgProductId,
+      pinnedRevisions?.get(item.id),
+      item,
+      `Dòng ${item.id} của ${pi.code}`,
+    );
 
     const data = {
       prodApprovalStatus: ProdApprovalStatus.APPROVED,
@@ -1315,6 +1335,12 @@ export class ProductionInvoicesService {
       // createFromApproval() ném NotFoundException khó hiểu hơn.
       await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
     }
+    await this.productionOrdersService.assertChoiceMatchesRevision(
+      item.mfgProductId,
+      pinnedRevisionId,
+      item,
+      `Dòng ${item.id} của ${pi.code}`,
+    );
 
     const productionOrder = await this.productionOrdersService.createFromApproval(
       item.id,
@@ -1590,6 +1616,15 @@ export class ProductionInvoicesService {
       for (const item of pi.items) {
         await this.productionOrdersService.assertActiveBomRevisionExists(item.mfgProductId);
       }
+    }
+    // Loại dây/nệm của MỌI dòng phải khớp bản định mức sẽ ghim - dừng sớm nếu 1 dòng sai lệch.
+    for (const item of pi.items) {
+      await this.productionOrdersService.assertChoiceMatchesRevision(
+        item.mfgProductId,
+        pinnedRevisions?.get(item.id),
+        item,
+        `Dòng ${item.id} của ${pi.code}`,
+      );
     }
 
     // updateMany PHẢI lọc kèm đúng trạng thái kỳ vọng (WAITING_BOSS) + so count, cùng idiom
@@ -2270,6 +2305,8 @@ export class ProductionInvoicesService {
           include: {
             mfgProduct: true,
             productVariant: true,
+            wireMaterial: true,
+            cushionMaterial: true,
             stages: true,
             salesOrder: { include: { customer: true } },
           },
@@ -2289,6 +2326,8 @@ export class ProductionInvoicesService {
       include: {
         mfgProduct: true,
         productVariant: true,
+        wireMaterial: true,
+        cushionMaterial: true,
         stages: true,
         salesOrder: { include: { customer: true } },
       },
@@ -2429,6 +2468,8 @@ export class ProductionInvoicesService {
       productName: item.mfgProduct.name,
       productVariantId: item.productVariantId?.toString() ?? null,
       colorCode: item.productVariant?.colorCode ?? null,
+      wireMaterial: item.wireMaterial ? toMaterialChoiceRef(item.wireMaterial) : null,
+      cushionMaterial: item.cushionMaterial ? toMaterialChoiceRef(item.cushionMaterial) : null,
       quantity: item.quantity,
       materialDeadline: item.materialDeadline,
       deliveryDeadline: item.deliveryDeadline,

@@ -246,6 +246,7 @@ export class WarehouseTransfersService {
         unit: string;
         quantity: number;
         note?: string;
+        spec: string;
       }[] = [];
 
       // Gộp các dòng CÙNG materialId TRƯỚC khi tính khả dụng (2026-09-15, phát hiện qua live-test:
@@ -256,16 +257,28 @@ export class WarehouseTransfersService {
       // không tự chặn âm số dư khi confirm() ghi ledger sau này - nếu phiếu này được duyệt sẽ làm
       // âm tồn kho thật. Gộp theo materialId để mỗi vật tư chỉ bị trừ khả dụng ĐÚNG 1 lần cho dù
       // request có bao nhiêu dòng trùng.
+      //
+      // Gộp theo (vật tư, QUY CÁCH): nệm khác quy cách là các bucket tồn RIÊNG nên mỗi quy cách tự tính khả dụng
+      // và giữ chỗ riêng (2026-10-23).
       const itemsByMaterial = new Map<
         string,
-        { materialId: string; materialName: string; unit: string; quantity: number; note?: string }
+        {
+          materialId: string;
+          materialName: string;
+          unit: string;
+          quantity: number;
+          note?: string;
+          spec: string;
+        }
       >();
       for (const item of dto.items) {
-        const existing = itemsByMaterial.get(item.materialId);
+        const spec = item.spec?.trim() ?? '';
+        const key = `${item.materialId}|${spec}`;
+        const existing = itemsByMaterial.get(key);
         if (existing) {
           existing.quantity += item.quantity;
         } else {
-          itemsByMaterial.set(item.materialId, { ...item });
+          itemsByMaterial.set(key, { ...item, spec });
         }
       }
 
@@ -278,6 +291,7 @@ export class WarehouseTransfersService {
         const locked = await tx.$queryRaw<{ qty: Prisma.Decimal; stockLengthMm: number }[]>`
           SELECT "qty", "stockLengthMm" FROM "stock_quant"
           WHERE "warehouseId" = ${fromWarehouseId} AND "materialId" = ${materialId}
+            AND "spec" = ${item.spec}
           FOR UPDATE
         `;
         // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08): trước đây đọc `locked[0]`
@@ -309,6 +323,8 @@ export class WarehouseTransfersService {
           materialId,
           onHand,
           0,
+          undefined,
+          item.spec,
         );
         const quantity = Math.max(0, Math.min(item.quantity, available));
         if (quantity > 0) {
@@ -318,6 +334,7 @@ export class WarehouseTransfersService {
             unit: item.unit,
             quantity,
             note: item.note,
+            spec: item.spec,
           });
         }
       }
@@ -348,6 +365,7 @@ export class WarehouseTransfersService {
           warehouseId: fromWarehouseId,
           materialId: item.materialId,
           quantity: item.quantity,
+          spec: item.spec,
         })),
       });
 
@@ -672,6 +690,8 @@ export class WarehouseTransfersService {
             refId: transfer.id.toString(),
             createdById: userId,
             idempotencyKey: `warehouse-transfer:${transfer.id}:item:${item.id}`,
+            // Lấy ĐÚNG bucket quy cách đã chọn lúc tạo phiếu ('' = không quy cách) - nệm.
+            spec: item.spec,
           },
           tx,
         );
@@ -866,7 +886,8 @@ export class WarehouseTransfersService {
             id: item.id.toString(),
             materialId: item.materialId?.toString() ?? null,
             materialName: item.materialName,
-            materialSpec: item.material?.spec ?? null,
+            // Nệm: quy cách đã chọn khi tạo phiếu thay cho Material.spec.
+            materialSpec: item.spec || (item.material?.spec ?? null),
             unit: item.unit,
             quantity: item.quantity.toNumber(),
             note: item.note,

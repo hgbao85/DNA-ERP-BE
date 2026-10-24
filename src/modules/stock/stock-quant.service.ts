@@ -65,6 +65,9 @@ export class StockQuantService {
           row.warehouseId,
           row.materialId,
           qty,
+          undefined, // chiều dài cây: giữ nguyên hành vi cũ (xem getAvailableQty)
+          undefined,
+          row.spec,
         )
       : qty;
     return new StockQuantResponseDto({
@@ -82,6 +85,7 @@ export class StockQuantService {
       productVariantId: row.productVariantId?.toString() ?? null,
       productVariantLabel: row.productVariant?.description ?? row.productVariant?.colorCode ?? null,
       stockLengthMm: row.stockLengthMm,
+      spec: row.spec,
       qty,
       availableQty,
       updatedAt: row.updatedAt,

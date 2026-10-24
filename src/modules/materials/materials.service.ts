@@ -169,7 +169,7 @@ export class MaterialsService {
     const candidate = incomingDetailKind !== undefined ? incomingDetailKind : previousDetailKind;
     if (!candidate) {
       throw new BadRequestException(
-        'Vật tư thuộc nhóm "Vật tư khác" phải chọn Phân loại (Sơn/Phụ kiện/Bao bì)',
+        'Vật tư thuộc nhóm "Vật tư khác" phải chọn Phân loại (Sơn/Phụ kiện/Nệm/Bao bì)',
       );
     }
     return candidate;
@@ -589,7 +589,7 @@ export class MaterialsService {
   private async findBomUsages(materialId: bigint): Promise<string[]> {
     const rev = { select: { revNo: true, mfgProduct: { select: { factoryCode: true } } } };
     const viaSegment = { segmentSpec: { materialId } };
-    const [pieceBoms, partBoms, pieceItems, pieceYields, consumables, accessories] =
+    const [pieceBoms, partBoms, pieceItems, pieceYields, consumables, accessories, options] =
       await Promise.all([
         this.prisma.pieceBom.findMany({
           where: viaSegment,
@@ -612,6 +612,8 @@ export class MaterialsService {
           where: { materialId },
           select: { bomRevision: rev },
         }),
+        // Tick loại dây/nệm Sales được chọn - vật tư đang được tick cũng là "đang dùng trong định mức".
+        this.prisma.bomOption.findMany({ where: { materialId }, select: { bomRevision: rev } }),
       ]);
 
     const label = (r: { revNo: number; mfgProduct: { factoryCode: string } }, where?: string) =>
@@ -624,6 +626,7 @@ export class MaterialsService {
         ...pieceYields.map((b) => label(b.bomRevision, `mảnh ${b.piece.code}`)),
         ...consumables.map((b) => label(b.bomRevision, 'vật tư tiêu hao')),
         ...accessories.map((b) => label(b.bomRevision, 'phụ kiện')),
+        ...options.map((b) => label(b.bomRevision, 'lựa chọn dây/nệm')),
       ]),
     ];
   }

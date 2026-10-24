@@ -435,10 +435,11 @@ export class PackagingIssuesService {
     bomRevisionId: bigint,
     materialId: bigint,
   ) {
-    const item = await client.bomAccessoryItem.findUnique({
-      where: { bomRevisionId_materialId: { bomRevisionId, materialId } },
+    // Bao bì không có quy cách riêng (chỉ nệm có) nên mỗi (bản định mức, vật tư) tối đa 1 dòng PACKAGING.
+    const item = await client.bomAccessoryItem.findFirst({
+      where: { bomRevisionId, materialId, kind: AccessoryItemKind.PACKAGING },
     });
-    if (!item || item.kind !== AccessoryItemKind.PACKAGING) {
+    if (!item) {
       throw new NotFoundException(
         `Vật tư ${materialId} không thuộc định mức đóng gói (BomAccessoryItem kind=PACKAGING) của lệnh sản xuất này`,
       );

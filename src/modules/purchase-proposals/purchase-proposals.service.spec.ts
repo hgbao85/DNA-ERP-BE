@@ -810,6 +810,7 @@ describe('PurchaseProposalsService', () => {
           createdById: 'user-1',
           idempotencyKey: 'key-1',
           stockLengthMm: 0,
+          spec: '',
         },
         expect.anything(),
       );
@@ -1048,7 +1049,48 @@ describe('PurchaseProposalsService', () => {
         materialId: 30n,
         warehouseId: 800n,
         qty: 5,
+        spec: '',
       });
+    });
+
+    // 2026-10-23: nệm khác quy cách là các dòng mua riêng - hàng về phải vào ĐÚNG bucket quy cách của dòng đó
+    // (sổ kho + giữ chỗ), không đổ chung vào tồn "không quy cách".
+    it('dòng mua có quy cách (nệm): ghi sổ kho và cộng giữ chỗ đúng bucket quy cách', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          productionInvoiceId: 50n,
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              materialId: 30n,
+              spec: 'Đôi 870x450x50',
+              buyQty: decimal(8),
+              receivedQty: decimal(3),
+            }),
+          ],
+        }),
+      );
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          receivedQty: decimal(3),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
+      ]);
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(8), receivedQty: decimal(8), quotes: [] }),
+      );
+
+      await service.receiveItem('300', '400', { unitRateQty: 5 }, 'user-1', 'key-1', null);
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ materialId: 30n, qty: 5, spec: 'Đôi 870x450x50' }),
+        expect.anything(),
+      );
+      expect(stockReservationsService.creditPool).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ materialId: 30n, qty: 5, spec: 'Đôi 870x450x50' }),
+      );
     });
 
     it('B4 Đợt 3 / L5: không gọi creditPool() khi không có gì tăng thật (incrementQty=0, ca hiếm nhận trùng)', async () => {
@@ -1184,6 +1226,7 @@ describe('PurchaseProposalsService', () => {
         materialId: 99n,
         warehouseId: 800n,
         qty: 5,
+        spec: '',
       });
     });
 
@@ -1239,6 +1282,7 @@ describe('PurchaseProposalsService', () => {
         materialId: 30n,
         warehouseId: 800n,
         qty: 5,
+        spec: '',
       });
     });
 

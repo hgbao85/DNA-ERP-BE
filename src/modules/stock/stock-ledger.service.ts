@@ -62,6 +62,10 @@ export interface PostStockEntryInput {
    *  cutting-proposals approve) truyền giá trị thật để tồn kho phân biệt đúng theo từng lô chiều
    *  dài, xem migration 20260829072018_stock_length_bucket. */
   stockLengthMm?: number;
+  /** Quy cách (nệm: "Đôi 870x450x50") - CHỈ có ý nghĩa khi materialId set (CHECK DB). Bỏ trống = không quy cách,
+   *  giữ nguyên hành vi cũ cho mọi caller không phải nệm. Là chiều thứ 3 của bucket tồn kho, xem migration
+   *  20261023120000_stock_spec_dimension. */
+  spec?: string;
 }
 
 /**
@@ -131,6 +135,7 @@ export class StockLedgerService {
       createdBy: input.createdById ? { connect: { id: input.createdById } } : undefined,
       idempotencyKey: input.idempotencyKey,
       stockLengthMm: input.stockLengthMm ?? 0,
+      spec: input.spec?.trim() ?? '',
     };
 
     if (input.idempotencyKey) {
@@ -198,6 +203,8 @@ export class StockLedgerService {
       // Bỏ trống -> postEntry() mặc định 0 (bucket "chung", dùng cho UI chỉ hiện 1 số tổng - xem
       // comment CreateStockAdjustmentDto.stockLengthMm). Có giá trị -> ghi ĐÚNG bucket đó.
       stockLengthMm: dto.stockLengthMm,
+      // Quy cách của bucket cần chỉnh (nệm) - bỏ trống = bucket "không quy cách".
+      spec: dto.spec,
       refType: StockLedgerRefType.ADJUST,
       note: dto.note,
       createdById: userId,
@@ -239,17 +246,21 @@ export class StockLedgerService {
       // tự Postgres KHÔNG đảm bảo) trong khi FE đã hiển thị đúng TỔNG các bucket cho Admin xem -
       // lệch nhau khiến "Sửa nhanh tồn kho" luôn 409 cho mọi vật tư Sắt đa-bucket (xác nhận thật
       // qua SAT-005: hiển thị 324, locked[0] ngẫu nhiên ra 0 hoặc 324).
+      // dto.spec CÓ giá trị (kể cả '') -> caller đã tách theo quy cách (nệm), chỉ khoá/so ĐÚNG bucket quy cách đó.
+      const specFilter = dto.spec !== undefined ? dto.spec.trim() : undefined;
       const locked =
         dto.stockLengthMm !== undefined
           ? await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
               SELECT "qty" FROM "stock_quant"
               WHERE "warehouseId" = ${expectedWarehouseId} AND "materialId" = ${materialId}
                 AND "stockLengthMm" = ${dto.stockLengthMm}
+                AND (${specFilter}::text IS NULL OR "spec" = ${specFilter}::text)
               FOR UPDATE
             `
           : await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
               SELECT "qty" FROM "stock_quant"
               WHERE "warehouseId" = ${expectedWarehouseId} AND "materialId" = ${materialId}
+                AND (${specFilter}::text IS NULL OR "spec" = ${specFilter}::text)
               FOR UPDATE
             `;
       const currentQty = locked.reduce((sum, row) => sum + row.qty.toNumber(), 0);
@@ -708,6 +719,7 @@ export class StockLedgerService {
         ? `${row.createdBy.firstName} ${row.createdBy.lastName}`.trim()
         : null,
       stockLengthMm: row.stockLengthMm,
+      spec: row.spec,
     });
   }
 }

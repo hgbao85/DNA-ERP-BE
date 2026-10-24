@@ -1,8 +1,17 @@
 import { randomUUID } from 'crypto';
-import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import {
   AuditAction,
+  BomOptionKind,
+  BomRevisionStatus,
   Prisma,
   ProductionOrderFloorStage,
   SalesOrderItemStatus,
@@ -11,6 +20,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { auditEvent } from '../../common/utils/audit-event.util';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -24,15 +34,25 @@ import { UpdateSalesOrderItemDto } from './dto/update-sales-order-item.dto';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { RealtimeEntityAction } from '../../realtime/realtime.contract';
 
+/** Dòng đơn luôn kèm sản phẩm + loại dây/nệm Sales đã chọn (nếu có) để trả về FE. */
+const ITEM_INCLUDE = {
+  mfgProduct: true,
+  wireMaterial: true,
+  cushionMaterial: true,
+} satisfies Prisma.SalesOrderItemInclude;
+
 type SalesOrderWithItems = Prisma.SalesOrderGetPayload<{
-  include: { customer: true; items: { include: { mfgProduct: true } } };
+  include: { customer: true; items: { include: typeof ITEM_INCLUDE } };
 }>;
-type SalesOrderItemWithProduct = Prisma.SalesOrderItemGetPayload<{ include: { mfgProduct: true } }>;
+type SalesOrderItemWithProduct = Prisma.SalesOrderItemGetPayload<{
+  include: typeof ITEM_INCLUDE;
+}>;
 
 const PI_ITEM_FOR_STAGE_SELECT = {
   id: true,
   productionInvoiceId: true,
   salesOrderId: true,
+  salesOrderItemId: true,
   mfgProductId: true,
   productionInvoice: { select: { salesOrderId: true } },
   productionOrder: { select: { id: true, quantity: true, floorStage: true } },
@@ -52,8 +72,24 @@ const STAGE_ORDER: SalesOrderItemStatus[] = [
   SalesOrderItemStatus.HOAN_THANH,
 ];
 
-/** Khoá tra cứu trạng thái đã suy: 1 dòng đơn = (salesOrderId, mfgProductId), mirror updateItem(). */
+/** Khoá tra cứu trạng thái đã suy cho dữ liệu CŨ chưa nối PI item với dòng đơn (salesOrderItemId
+ *  null): 1 dòng đơn = (salesOrderId, mfgProductId), mirror updateItem(). */
 const stageKey = (salesOrderId: bigint, mfgProductId: bigint) => `${salesOrderId}:${mfgProductId}`;
+/** Khoá chính xác theo dòng đơn - dùng khi PI item đã ghi salesOrderItemId, để 2 dòng CÙNG SKU
+ *  trong 1 đơn (khác loại dây/nệm) có trạng thái riêng thay vì dồn làm 1. */
+const itemStageKey = (salesOrderItemId: bigint) => `item:${salesOrderItemId}`;
+
+/** Trạng thái của 1 dòng đơn: ưu tiên khoá theo dòng, rơi về khoá (đơn, sản phẩm) cho PI item cũ. */
+function stageOfItem(
+  stages: Map<string, SalesOrderItemStatus>,
+  item: { id: bigint; salesOrderId: bigint; mfgProductId: bigint },
+): SalesOrderItemStatus {
+  return (
+    stages.get(itemStageKey(item.id)) ??
+    stages.get(stageKey(item.salesOrderId, item.mfgProductId)) ??
+    SalesOrderItemStatus.LEN_KE_HOACH
+  );
+}
 
 /**
  * Hợp nhất "salesPOs" (Sales module) + "exportOrders" (Mfg module) của mock thành 1 bảng
@@ -87,6 +123,7 @@ export class SalesOrdersService {
       throw new NotFoundException(`Customer ${dto.customerId} not found`);
     }
     await this.assertProductsExist(dto.items);
+    await this.assertOptionChoices(dto.items);
 
     const orderCode = dto.orderCode.trim();
     const existingOrderCode = await this.prisma.salesOrder.findUnique({ where: { orderCode } });
@@ -119,10 +156,14 @@ export class SalesOrdersService {
               skuName: it.skuName,
               totalQty: it.totalQty,
               deliveryDate: it.deliveryDate ? new Date(it.deliveryDate) : undefined,
+              wireMaterialId: it.wireMaterialId ? parseBigIntId(it.wireMaterialId) : undefined,
+              cushionMaterialId: it.cushionMaterialId
+                ? parseBigIntId(it.cushionMaterialId)
+                : undefined,
             })),
           },
         },
-        include: { customer: true, items: { include: { mfgProduct: true } } },
+        include: { customer: true, items: { include: ITEM_INCLUDE } },
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
@@ -134,7 +175,7 @@ export class SalesOrdersService {
     const withCode = await this.prisma.salesOrder.update({
       where: { id: created.id },
       data: { code: `PO-${created.id}` },
-      include: { customer: true, items: { include: { mfgProduct: true } } },
+      include: { customer: true, items: { include: ITEM_INCLUDE } },
     });
 
     await this.createProductionInvoiceItems(withCode);
@@ -162,7 +203,7 @@ export class SalesOrdersService {
         findMany: (args) =>
           this.prisma.salesOrder.findMany({
             ...args,
-            include: { customer: true, items: { include: { mfgProduct: true } } },
+            include: { customer: true, items: { include: ITEM_INCLUDE } },
           }),
         count: (args) => this.prisma.salesOrder.count(args),
       },
@@ -223,7 +264,7 @@ export class SalesOrdersService {
         depositConfirmed: dto.depositConfirmed,
         isActive: dto.isActive,
       },
-      include: { customer: true, items: { include: { mfgProduct: true } } },
+      include: { customer: true, items: { include: ITEM_INCLUDE } },
     });
     this.publishRealtime(bigId, 'UPDATED');
     const mergedCount = await this.countMergedProductionInvoiceItems(bigId);
@@ -336,6 +377,7 @@ export class SalesOrdersService {
   ): Promise<SalesOrderItemResponseDto> {
     const order = await this.findOneOrThrow(salesOrderId);
     await this.assertProductsExist([dto]);
+    await this.assertOptionChoices([dto]);
 
     const item = await this.prisma.salesOrderItem.create({
       data: {
@@ -344,8 +386,10 @@ export class SalesOrdersService {
         skuName: dto.skuName,
         totalQty: dto.totalQty,
         deliveryDate: dto.deliveryDate ? new Date(dto.deliveryDate) : undefined,
+        wireMaterialId: dto.wireMaterialId ? parseBigIntId(dto.wireMaterialId) : undefined,
+        cushionMaterialId: dto.cushionMaterialId ? parseBigIntId(dto.cushionMaterialId) : undefined,
       },
-      include: { mfgProduct: true },
+      include: ITEM_INCLUDE,
     });
     await this.recomputeDeliveryDate(order.id);
     this.publishRealtime(item.salesOrderId, 'UPDATED');
@@ -367,10 +411,16 @@ export class SalesOrdersService {
     // thường tạo qua resolveProductionInvoice() - xem skus.service.ts, không set field trên item)
     // vì tuỳ đường tạo mà field nào có giá trị.
     if (dto.totalQty !== undefined && dto.totalQty !== item.totalQty) {
+      // PI item đã nối đúng dòng này (salesOrderItemId) thì chỉ item đó tính; PI item cũ chưa nối
+      // dòng nào (salesOrderItemId null) giữ cách dò cũ theo (đơn, sản phẩm).
       const linked = await this.prisma.productionInvoiceItem.findFirst({
         where: {
           mfgProductId: item.mfgProductId,
-          OR: [{ salesOrderId: order.id }, { productionInvoice: { salesOrderId: order.id } }],
+          OR: [
+            { salesOrderItemId: item.id },
+            { salesOrderItemId: null, salesOrderId: order.id },
+            { salesOrderItemId: null, productionInvoice: { salesOrderId: order.id } },
+          ],
         },
       });
       if (linked) {
@@ -380,6 +430,32 @@ export class SalesOrdersService {
       }
     }
 
+    const choiceChanged = dto.wireMaterialId !== undefined || dto.cushionMaterialId !== undefined;
+    if (choiceChanged) {
+      await this.assertOptionChoices([
+        {
+          mfgProductId: item.mfgProductId.toString(),
+          wireMaterialId: dto.wireMaterialId ?? item.wireMaterialId?.toString(),
+          cushionMaterialId: dto.cushionMaterialId ?? item.cushionMaterialId?.toString(),
+        },
+      ]);
+      // Sếp đã duyệt lệnh sản xuất của dòng này thì lệnh đã chốt dây/nệm - đổi ở đây không còn tác
+      // dụng (mua hàng/xuất đan đọc từ lệnh), nên chặn thay vì để đơn hàng và lệnh lệch nhau.
+      const approved = await this.prisma.productionInvoiceItem.findFirst({
+        where: { salesOrderItemId: item.id, productionOrder: { isNot: null } },
+        select: { id: true },
+      });
+      if (approved) {
+        throw new ConflictException(
+          `Dòng ${item.mfgProduct.factoryCode} của đơn hàng ${order.code} đã được duyệt sản xuất - không thể đổi màu dây/nệm`,
+        );
+      }
+    }
+
+    const wireMaterialId = dto.wireMaterialId ? parseBigIntId(dto.wireMaterialId) : undefined;
+    const cushionMaterialId = dto.cushionMaterialId
+      ? parseBigIntId(dto.cushionMaterialId)
+      : undefined;
     const updated = await this.prisma.salesOrderItem.update({
       where: { id: item.id },
       data: {
@@ -387,9 +463,18 @@ export class SalesOrdersService {
         totalQty: dto.totalQty,
         status: dto.status,
         deliveryDate: dto.deliveryDate ? new Date(dto.deliveryDate) : undefined,
+        wireMaterialId,
+        cushionMaterialId,
       },
-      include: { mfgProduct: true },
+      include: ITEM_INCLUDE,
     });
+    if (choiceChanged) {
+      // Giữ bản sao ở dòng lệnh sản xuất (chưa duyệt) khớp với dòng đơn - lệnh chốt từ đó khi duyệt.
+      await this.prisma.productionInvoiceItem.updateMany({
+        where: { salesOrderItemId: item.id },
+        data: { wireMaterialId, cushionMaterialId },
+      });
+    }
     if (dto.deliveryDate) await this.recomputeDeliveryDate(order.id);
     this.publishRealtime(updated.salesOrderId, 'UPDATED');
     return this.toItemResponseDto(updated, await this.resolveItemStage(updated));
@@ -462,6 +547,10 @@ export class SalesOrdersService {
         productionInvoiceId: null,
         mfgProductId: it.mfgProductId,
         salesOrderId: order.id,
+        // Nối đúng dòng đơn - 2 dòng cùng SKU khác dây/nệm không còn bị lẫn (xem schema).
+        salesOrderItemId: it.id,
+        wireMaterialId: it.wireMaterialId,
+        cushionMaterialId: it.cushionMaterialId,
         quantity: it.totalQty,
         deliveryDeadline: it.deliveryDate,
       })),
@@ -498,7 +587,7 @@ export class SalesOrdersService {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.salesOrder.findUnique({
       where: { id: bigId },
-      include: { customer: true, items: { include: { mfgProduct: true } } },
+      include: { customer: true, items: { include: ITEM_INCLUDE } },
     });
     if (!order) {
       throw new NotFoundException(`Sales order ${id} not found`);
@@ -513,7 +602,7 @@ export class SalesOrdersService {
     const idBigId = parseBigIntId(id);
     const item = await this.prisma.salesOrderItem.findUnique({
       where: { id: idBigId },
-      include: { mfgProduct: true },
+      include: ITEM_INCLUDE,
     });
     if (!item || item.salesOrderId !== salesOrderId) {
       throw new NotFoundException(`Sales order item ${id} not found on order ${salesOrderId}`);
@@ -528,6 +617,54 @@ export class SalesOrdersService {
       if (!product) {
         throw new NotFoundException(`Product ${it.mfgProductId} not found`);
       }
+    }
+  }
+
+  /**
+   * Loại dây/nệm của từng dòng phải khớp danh sách tick trong định mức ĐÃ DUYỆT (BomRevision
+   * ACTIVE) của sản phẩm: SKU có tick loại nào thì bắt buộc chọn đúng 1 trong số đó; SKU không có
+   * tick loại nào thì không được gửi. Đơn không chọn gì (SKU chưa khai tick) chạy như trước.
+   */
+  private async assertOptionChoices(
+    items: { mfgProductId: string; wireMaterialId?: string; cushionMaterialId?: string }[],
+  ): Promise<void> {
+    const productIds = [...new Set(items.map((it) => parseBigIntId(it.mfgProductId)))];
+    const rows = await this.prisma.bomOption.findMany({
+      where: {
+        bomRevision: { mfgProductId: { in: productIds }, status: BomRevisionStatus.ACTIVE },
+      },
+      select: { kind: true, materialId: true, bomRevision: { select: { mfgProductId: true } } },
+    });
+    const optionsOf = (productId: bigint, kind: BomOptionKind) =>
+      new Set(
+        rows
+          .filter((r) => r.kind === kind && r.bomRevision.mfgProductId === productId)
+          .map((r) => r.materialId.toString()),
+      );
+
+    for (const it of items) {
+      const productId = parseBigIntId(it.mfgProductId);
+      const sku = `SKU ${it.mfgProductId}`;
+      const check = (label: string, options: Set<string>, chosen: string | undefined) => {
+        if (options.size === 0) {
+          if (chosen) {
+            throw new BadRequestException(
+              `${sku} không có lựa chọn ${label} trong định mức - bỏ trống ${label}`,
+            );
+          }
+          return;
+        }
+        if (!chosen) {
+          throw new BadRequestException(`${sku}: bắt buộc chọn ${label}`);
+        }
+        if (!options.has(parseBigIntId(chosen).toString())) {
+          throw new BadRequestException(
+            `${sku}: ${label} đã chọn không nằm trong định mức đã duyệt của sản phẩm`,
+          );
+        }
+      };
+      check('màu dây', optionsOf(productId, BomOptionKind.WIRE), it.wireMaterialId);
+      check('màu nệm', optionsOf(productId, BomOptionKind.CUSHION), it.cushionMaterialId);
     }
   }
 
@@ -624,7 +761,11 @@ export class SalesOrdersService {
           stage = SalesOrderItemStatus.KHUNG_CO_KHI;
         } else stage = SalesOrderItemStatus.MUA_HANG;
       }
-      const key = stageKey(orderId, it.mfgProductId);
+      // PI item đã nối dòng đơn thì khoá theo dòng; chưa nối (dữ liệu cũ) mới dồn theo (đơn, sản phẩm).
+      const key =
+        it.salesOrderItemId != null
+          ? itemStageKey(it.salesOrderItemId)
+          : stageKey(orderId, it.mfgProductId);
       const prev = result.get(key);
       if (!prev || STAGE_ORDER.indexOf(stage) < STAGE_ORDER.indexOf(prev)) result.set(key, stage);
     }
@@ -647,10 +788,7 @@ export class SalesOrdersService {
 
   private async resolveItemStage(item: SalesOrderItemWithProduct): Promise<SalesOrderItemStatus> {
     const stages = await this.resolveStages(await this.loadPiItems([item.salesOrderId]));
-    return (
-      stages.get(stageKey(item.salesOrderId, item.mfgProductId)) ??
-      SalesOrderItemStatus.LEN_KE_HOACH
-    );
+    return stageOfItem(stages, item);
   }
 
   /**
@@ -663,7 +801,13 @@ export class SalesOrdersService {
    */
   async countReadyToShip(): Promise<number> {
     const items = await this.prisma.salesOrderItem.findMany({
-      select: { salesOrderId: true, mfgProductId: true, totalQty: true, shippedQty: true },
+      select: {
+        id: true,
+        salesOrderId: true,
+        mfgProductId: true,
+        totalQty: true,
+        shippedQty: true,
+      },
     });
     const pending = items.filter((it) => it.shippedQty < it.totalQty);
     if (pending.length === 0) return 0;
@@ -671,7 +815,7 @@ export class SalesOrdersService {
     const orderIds = [...new Set(pending.map((it) => it.salesOrderId))];
     const stages = await this.resolveStages(await this.loadPiItems(orderIds));
     return pending.filter((it) => {
-      const stage = stages.get(stageKey(it.salesOrderId, it.mfgProductId));
+      const stage = stageOfItem(stages, it);
       return stage === SalesOrderItemStatus.DONG_GOI || stage === SalesOrderItemStatus.HOAN_THANH;
     }).length;
   }
@@ -699,12 +843,7 @@ export class SalesOrdersService {
       deleteBlockedReason,
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
-      items: order.items.map((it) =>
-        this.toItemResponseDto(
-          it,
-          stages.get(stageKey(order.id, it.mfgProductId)) ?? SalesOrderItemStatus.LEN_KE_HOACH,
-        ),
-      ),
+      items: order.items.map((it) => this.toItemResponseDto(it, stageOfItem(stages, it))),
     });
   }
 
@@ -722,6 +861,8 @@ export class SalesOrdersService {
       shippedQty: item.shippedQty,
       status,
       deliveryDate: item.deliveryDate,
+      wireMaterial: item.wireMaterial ? toMaterialChoiceRef(item.wireMaterial) : null,
+      cushionMaterial: item.cushionMaterial ? toMaterialChoiceRef(item.cushionMaterial) : null,
     });
   }
 }

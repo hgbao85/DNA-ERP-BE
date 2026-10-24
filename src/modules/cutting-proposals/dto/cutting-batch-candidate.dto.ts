@@ -7,6 +7,7 @@ import {
   type StockLengthsByMaterial,
 } from '../../../common/validators/stock-lengths-by-material.validator';
 import { ProdApprovalStatus } from '../../../generated/prisma/client';
+import { MaterialChoiceRefDto } from '../../../common/utils/material-choice-ref.util';
 
 /** Một loại sắt của MỘT SKU, kèm hao hụt khi SKU đó cắt một mình. */
 @Exclude()
@@ -84,6 +85,14 @@ export class CuttingBatchCandidateDto {
   @Expose() @ApiProperty() productionInvoiceItemId!: string;
   @Expose() @ApiProperty() mfgProductCode!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;
+  /// Loại dây (mã SHT)/loại nệm Sales chọn cho dòng này - CHỈ để KHSX phân biệt 2 dòng cùng SKU
+  /// khác dây (dây/nệm không ảnh hưởng cắt sắt nên vẫn gộp chung được). null = SKU không có lựa chọn.
+  @Expose()
+  @ApiPropertyOptional({ type: MaterialChoiceRefDto, nullable: true })
+  wireMaterial!: MaterialChoiceRefDto | null;
+  @Expose()
+  @ApiPropertyOptional({ type: MaterialChoiceRefDto, nullable: true })
+  cushionMaterial!: MaterialChoiceRefDto | null;
   @Expose() @ApiProperty() quantity!: number;
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceCode!: string | null;

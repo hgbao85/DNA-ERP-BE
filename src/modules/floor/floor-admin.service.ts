@@ -20,6 +20,10 @@ import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { PIN_CLAIM_HOURS } from '../../common/utils/pin.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import {
+  MaterialChoiceRefDto,
+  toMaterialChoiceRef,
+} from '../../common/utils/material-choice-ref.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
@@ -97,7 +101,14 @@ type BatchPlans = Awaited<ReturnType<ProductionBatchesService['getBatchPlanBatch
 interface StageData {
   phoi: PhoiItems | null;
   plans: BatchPlans;
-  orders: { productionOrderId: string; poNumber: string; productName: string }[];
+  orders: {
+    productionOrderId: string;
+    poNumber: string;
+    productName: string;
+    /** Loại dây/nệm Sales đã chọn - phân biệt các lệnh cùng SKU khác dây/nệm (null = không có lựa chọn). */
+    wireMaterial: MaterialChoiceRefDto | null;
+    cushionMaterial: MaterialChoiceRefDto | null;
+  }[];
 }
 
 /**
@@ -608,7 +619,7 @@ export class FloorAdminService {
     }
     const orderRows = await this.prisma.productionOrder.findMany({
       where: { productionInvoiceItem: { productionInvoiceId } },
-      select: { id: true },
+      select: { id: true, wireMaterial: true, cushionMaterial: true },
       orderBy: { id: 'asc' },
     });
     const plans =
@@ -618,11 +629,17 @@ export class FloorAdminService {
             stage,
           )
         : {};
-    const orders = Object.entries(plans).map(([id, plan]) => ({
-      productionOrderId: id,
-      poNumber: plan.poNumber,
-      productName: plan.productName,
-    }));
+    const choiceById = new Map(orderRows.map((o) => [o.id.toString(), o]));
+    const orders = Object.entries(plans).map(([id, plan]) => {
+      const row = choiceById.get(id);
+      return {
+        productionOrderId: id,
+        poNumber: plan.poNumber,
+        productName: plan.productName,
+        wireMaterial: row?.wireMaterial ? toMaterialChoiceRef(row.wireMaterial) : null,
+        cushionMaterial: row?.cushionMaterial ? toMaterialChoiceRef(row.cushionMaterial) : null,
+      };
+    });
     return { phoi, plans, orders };
   }
 

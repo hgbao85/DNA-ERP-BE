@@ -49,6 +49,7 @@ describe('BomRevisionsService', () => {
     };
     bomAccessoryItem: {
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
       findMany: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
@@ -92,6 +93,7 @@ describe('BomRevisionsService', () => {
       },
       bomAccessoryItem: {
         findUnique: jest.fn(),
+        findFirst: jest.fn(),
         findMany: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
@@ -195,7 +197,7 @@ describe('BomRevisionsService', () => {
         detailKind: 'ACCESSORY',
         materialGroup: { systemKey: 'OTHER' },
       });
-      prisma.bomAccessoryItem.findUnique.mockResolvedValue(null);
+      prisma.bomAccessoryItem.findFirst.mockResolvedValue(null);
       prisma.bomAccessoryItem.create.mockResolvedValue({
         id: 1n,
         bomRevisionId: 10n,
@@ -271,7 +273,7 @@ describe('BomRevisionsService', () => {
         detailKind: 'ACCESSORY',
         materialGroup: { systemKey: 'OTHER' },
       });
-      prisma.bomAccessoryItem.findUnique.mockResolvedValue({ id: 1n });
+      prisma.bomAccessoryItem.findFirst.mockResolvedValue({ id: 1n });
 
       await expect(
         service.createBomAccessoryItem('10', {

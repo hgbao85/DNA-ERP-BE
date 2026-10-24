@@ -1,5 +1,5 @@
 import { RealtimeService } from '../../realtime/realtime.service';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { Prisma, SalesOrderItemStatus } from '../../generated/prisma/client';
 import { ClsService } from 'nestjs-cls';
@@ -36,9 +36,11 @@ describe('SalesOrdersService', () => {
       findFirst: jest.Mock;
       findMany: jest.Mock;
       createMany: jest.Mock;
+      updateMany: jest.Mock;
       count: jest.Mock;
       deleteMany: jest.Mock;
     };
+    bomOption: { findMany: jest.Mock };
     planForm: { findFirst: jest.Mock; findMany: jest.Mock; update: jest.Mock };
     productionBatch: { groupBy: jest.Mock };
     cutBundle: { groupBy: jest.Mock };
@@ -114,10 +116,14 @@ describe('SalesOrdersService', () => {
         // mặc định chưa có order nào gộp PI (mảng rỗng), test nào cần mô phỏng đã gộp tự override.
         findMany: jest.fn().mockResolvedValue([]),
         createMany: jest.fn(),
+        updateMany: jest.fn(),
         // Medium fix "chặn xoá đơn đã gộp PI" (remove()) - mặc định chưa gộp PI nào (0).
         count: jest.fn().mockResolvedValue(0),
         deleteMany: jest.fn(),
       },
+
+      // Tick loại dây/nệm của định mức ACTIVE - mặc định SKU không có tick nào (không bắt chọn gì).
+      bomOption: { findMany: jest.fn().mockResolvedValue([]) },
 
       // 10/09: remove() gỡ liên kết (KHÔNG xoá) mọi PlanForm/SKU còn gắn vào đơn - mặc định chưa
       // gắn SKU nào (mảng rỗng), test nào cần mô phỏng đã gắn tự override.
@@ -498,6 +504,215 @@ describe('SalesOrdersService', () => {
       ]);
       expect(await stageOf()).toBe('LEN_KE_HOACH');
     });
+
+    it('2 dòng CÙNG SKU trong 1 đơn (khác loại dây) có mốc riêng nhờ PI item nối đúng salesOrderItemId', async () => {
+      const lineA = { ...soItem, id: 100n };
+      const lineB = { ...soItem, id: 101n };
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        { ...piItem({ ...po, floorStage: 'ACTIVE' }), id: 78n, salesOrderItemId: 100n },
+        { ...piItem(null), id: 79n, salesOrderItemId: 101n },
+      ]);
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems({ items: [lineA, lineB] }));
+
+      const result = await service.findOne('10');
+
+      expect(result.items.map((i) => i.status)).toEqual(['KHUNG_CO_KHI', 'LEN_KE_HOACH']);
+    });
+  });
+
+  // Loại dây (mã SHT) / loại nệm Sales chọn cho từng dòng - phải nằm trong tick của định mức
+  // ACTIVE (bom_option), được chép xuống PI item và khoá sau khi lệnh sản xuất đã duyệt.
+  describe('loại dây / loại nệm theo dòng đơn', () => {
+    const option = (kind: 'WIRE' | 'CUSHION', materialId: bigint) => ({
+      kind,
+      materialId,
+      bomRevision: { mfgProductId: 2n },
+    });
+    const wireMaterial = { id: 60n, code: 'SHT08', name: 'Day nau', imageUrl: null };
+    const cushionMaterial = {
+      id: 90n,
+      code: 'NEM-A',
+      name: 'Nem A',
+      imageUrl: 'https://img/n.jpg',
+    };
+    const createDto = (item: Record<string, unknown> = {}) => ({
+      orderCode: 'DH-01',
+      customerId: '1',
+      orderDate: '2026-01-01',
+      items: [{ mfgProductId: '2', totalQty: 5, deliveryDate: '2026-10-25', ...item }],
+    });
+    const arrangeCreate = (items: unknown[] = []) => {
+      prisma.customer.findUnique.mockResolvedValue(customer);
+      prisma.mfgProduct.findUnique.mockResolvedValue(product);
+      prisma.salesOrder.create.mockResolvedValue(orderWithItems({ code: 'PO-TMP-x' }));
+      prisma.salesOrder.update.mockResolvedValue(orderWithItems({ code: 'PO-10', items }));
+      prisma.productionInvoiceItem.createMany.mockResolvedValue({ count: items.length });
+      prisma.planForm.findFirst.mockResolvedValue(null);
+    };
+
+    it('SKU có tick dây mà dòng không chọn dây -> 400, không tạo đơn', async () => {
+      arrangeCreate();
+      prisma.bomOption.findMany.mockResolvedValue([option('WIRE', 60n), option('WIRE', 61n)]);
+
+      await expect(service.create(createDto())).rejects.toThrow(/bắt buộc chọn màu dây/);
+      expect(prisma.salesOrder.create).not.toHaveBeenCalled();
+    });
+
+    it('dây chọn không nằm trong tick của định mức -> 400', async () => {
+      arrangeCreate();
+      prisma.bomOption.findMany.mockResolvedValue([option('WIRE', 60n)]);
+
+      await expect(service.create(createDto({ wireMaterialId: '99' }))).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.salesOrder.create).not.toHaveBeenCalled();
+    });
+
+    it('SKU không có tick loại nào mà dòng vẫn gửi dây -> 400', async () => {
+      arrangeCreate();
+
+      await expect(service.create(createDto({ wireMaterialId: '60' }))).rejects.toThrow(
+        /không có lựa chọn màu dây/,
+      );
+    });
+
+    it('chỉ tick nệm: không bắt chọn dây, bắt chọn nệm', async () => {
+      arrangeCreate();
+      prisma.bomOption.findMany.mockResolvedValue([option('CUSHION', 90n)]);
+
+      await expect(service.create(createDto())).rejects.toThrow(/bắt buộc chọn màu nệm/);
+    });
+
+    it('chỉ xét tick của bản định mức ACTIVE của đúng sản phẩm đang đặt', async () => {
+      arrangeCreate();
+      prisma.bomOption.findMany.mockResolvedValue([]);
+
+      await service.create(createDto());
+
+      expect(prisma.bomOption.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { bomRevision: { mfgProductId: { in: [2n] }, status: 'ACTIVE' } },
+        }),
+      );
+    });
+
+    it('lưu lựa chọn trên dòng đơn và chép xuống PI item kèm salesOrderItemId', async () => {
+      arrangeCreate([
+        {
+          id: 100n,
+          salesOrderId: 10n,
+          mfgProductId: 2n,
+          mfgProduct: product,
+          skuName: null,
+          totalQty: 5,
+          shippedQty: 0,
+          deliveryDate: null,
+          wireMaterialId: 60n,
+          cushionMaterialId: 90n,
+          wireMaterial,
+          cushionMaterial,
+        },
+      ]);
+      prisma.bomOption.findMany.mockResolvedValue([option('WIRE', 60n), option('CUSHION', 90n)]);
+
+      const result = await service.create(
+        createDto({ wireMaterialId: '60', cushionMaterialId: '90' }),
+      );
+
+      expect(prisma.salesOrder.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          data: expect.objectContaining({
+            items: {
+              create: [
+                expect.objectContaining({
+                  mfgProductId: 2n,
+                  wireMaterialId: 60n,
+                  cushionMaterialId: 90n,
+                }),
+              ],
+            },
+          }),
+        }),
+      );
+      expect(prisma.productionInvoiceItem.createMany).toHaveBeenCalledWith({
+        data: [
+          expect.objectContaining({
+            salesOrderItemId: 100n,
+            wireMaterialId: 60n,
+            cushionMaterialId: 90n,
+          }),
+        ],
+      });
+      expect(result.items[0].wireMaterial).toEqual({
+        materialId: '60',
+        materialCode: 'SHT08',
+        materialName: 'Day nau',
+        imageUrl: null,
+      });
+      expect(result.items[0].cushionMaterial?.materialCode).toBe('NEM-A');
+    });
+
+    describe('updateItem đổi loại dây/nệm', () => {
+      const item = {
+        id: 5n,
+        salesOrderId: 10n,
+        mfgProductId: 2n,
+        totalQty: 10,
+        shippedQty: 0,
+        mfgProduct: product,
+        wireMaterialId: 60n,
+        cushionMaterialId: null,
+      };
+
+      it('đổi dây hợp lệ khi lệnh chưa duyệt: cập nhật dòng đơn và đồng bộ PI item', async () => {
+        prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+        prisma.salesOrderItem.findUnique.mockResolvedValue(item);
+        prisma.bomOption.findMany.mockResolvedValue([option('WIRE', 60n), option('WIRE', 61n)]);
+        prisma.productionInvoiceItem.findFirst.mockResolvedValue(null); // chưa có lệnh sản xuất
+        prisma.salesOrderItem.update.mockResolvedValue({ ...item, wireMaterialId: 61n });
+
+        await service.updateItem('10', '5', { wireMaterialId: '61' });
+
+        expect(prisma.salesOrderItem.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+            data: expect.objectContaining({ wireMaterialId: 61n }),
+          }),
+        );
+        expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+          where: { salesOrderItemId: 5n },
+          data: { wireMaterialId: 61n, cushionMaterialId: undefined },
+        });
+      });
+
+      it('chặn đổi khi lệnh sản xuất của dòng đã được duyệt (409)', async () => {
+        prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+        prisma.salesOrderItem.findUnique.mockResolvedValue(item);
+        prisma.bomOption.findMany.mockResolvedValue([option('WIRE', 60n), option('WIRE', 61n)]);
+        prisma.productionInvoiceItem.findFirst.mockResolvedValue({ id: 77n }); // đã có lệnh sản xuất
+
+        await expect(service.updateItem('10', '5', { wireMaterialId: '61' })).rejects.toThrow(
+          ConflictException,
+        );
+        expect(prisma.salesOrderItem.update).not.toHaveBeenCalled();
+        expect(prisma.productionInvoiceItem.findFirst).toHaveBeenCalledWith({
+          where: { salesOrderItemId: 5n, productionOrder: { isNot: null } },
+          select: { id: true },
+        });
+      });
+
+      it('dây mới không nằm trong tick -> 400, không đụng dữ liệu', async () => {
+        prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+        prisma.salesOrderItem.findUnique.mockResolvedValue(item);
+        prisma.bomOption.findMany.mockResolvedValue([option('WIRE', 60n)]);
+
+        await expect(service.updateItem('10', '5', { wireMaterialId: '99' })).rejects.toThrow(
+          BadRequestException,
+        );
+        expect(prisma.salesOrderItem.update).not.toHaveBeenCalled();
+      });
+    });
   });
 
   describe('findAll', () => {
@@ -670,7 +885,11 @@ describe('SalesOrdersService', () => {
       expect(prisma.productionInvoiceItem.findFirst).toHaveBeenCalledWith({
         where: {
           mfgProductId: 2n,
-          OR: [{ salesOrderId: 10n }, { productionInvoice: { salesOrderId: 10n } }],
+          OR: [
+            { salesOrderItemId: 5n },
+            { salesOrderItemId: null, salesOrderId: 10n },
+            { salesOrderItemId: null, productionInvoice: { salesOrderId: 10n } },
+          ],
         },
       });
     });

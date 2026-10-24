@@ -30,7 +30,7 @@ describe('PackagingIssuesService', () => {
     productionOrder: { findUnique: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
     material: { findUnique: jest.Mock };
-    bomAccessoryItem: { findUnique: jest.Mock; findMany: jest.Mock };
+    bomAccessoryItem: { findFirst: jest.Mock; findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     transferCheckResult: { groupBy: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
@@ -112,7 +112,7 @@ describe('PackagingIssuesService', () => {
       },
       material: { findUnique: jest.fn().mockResolvedValue(material) },
       bomAccessoryItem: {
-        findUnique: jest.fn().mockResolvedValue(accessoryRow),
+        findFirst: jest.fn().mockResolvedValue(accessoryRow),
         findMany: jest.fn().mockResolvedValue([{ ...accessoryRow, material }]),
       },
       // mockImplementation lọc theo where.bomRevisionId thật (thay vì trả tĩnh mọi mảnh của mọi
@@ -328,16 +328,17 @@ describe('PackagingIssuesService', () => {
     });
 
     it('ném NotFoundException khi không có BomAccessoryItem cho vật tư này', async () => {
-      prisma.bomAccessoryItem.findUnique.mockResolvedValue(null);
+      prisma.bomAccessoryItem.findFirst.mockResolvedValue(null);
       await expect(service.create('1', dto, 'user-1', null)).rejects.toThrow(NotFoundException);
     });
 
-    it('ném NotFoundException khi item tồn tại nhưng kind=ACCESSORY (không phải PACKAGING)', async () => {
-      prisma.bomAccessoryItem.findUnique.mockResolvedValue({
-        ...accessoryRow,
-        kind: AccessoryItemKind.ACCESSORY,
-      });
+    it('chỉ tra dòng PACKAGING - dòng cùng vật tư nhưng kind=ACCESSORY không bao giờ được dùng cho đóng gói', async () => {
+      // Lọc kind ngay trong truy vấn (1 SKU có thể có nhiều dòng cùng vật tư khi khác quy cách, nên không còn tra theo khoá duy nhất).
+      prisma.bomAccessoryItem.findFirst.mockResolvedValue(null);
       await expect(service.create('1', dto, 'user-1', null)).rejects.toThrow(NotFoundException);
+      expect(prisma.bomAccessoryItem.findFirst).toHaveBeenCalledWith({
+        where: expect.objectContaining({ kind: AccessoryItemKind.PACKAGING }) as unknown,
+      });
     });
 
     it('ném BadRequestException khi vượt quá số lượng còn có thể xuất', async () => {

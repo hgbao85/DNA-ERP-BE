@@ -14,6 +14,7 @@ describe('StockQuantService', () => {
     pieceId: null,
     productVariantId: null,
     qty: { toNumber: () => 42.5 },
+    spec: '',
     updatedAt: new Date('2026-08-05T00:00:00Z'),
     warehouse: { id: 1n, code: 'vat-tu-tp' },
     material: { id: 10n, code: 'SAT-25' },
@@ -74,7 +75,16 @@ describe('StockQuantService', () => {
 
     const result = await service.findAll({ warehouseId: '1' });
 
-    expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(undefined, 1n, 10n, 42.5);
+    // 5 tham số sau onHand: chiều dài cây (giữ hành vi cũ = undefined), excludeRefTypes, quy cách của dòng tồn.
+    expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+      undefined,
+      1n,
+      10n,
+      42.5,
+      undefined,
+      undefined,
+      '',
+    );
     expect(result).toEqual([expect.objectContaining({ qty: 42.5, availableQty: 10 })]);
   });
 

@@ -11,6 +11,7 @@ import { ClsService } from 'nestjs-cls';
 import {
   AccessoryItemKind,
   AuditAction,
+  BomOptionKind,
   BomRevisionStatus,
   DetailGroup,
   ManhGroup,
@@ -396,6 +397,16 @@ export class SkusService {
           pf.mfgProductId,
           dto.pieces,
         ));
+        // Tick loại dây Sales được chọn (field bỏ trống = giữ nguyên, [] = xoá hết tick).
+        if (dto.wireOptions) {
+          await this.replaceBomOptions(
+            tx,
+            revision.id,
+            pf.mfgProductId,
+            BomOptionKind.WIRE,
+            dto.wireOptions,
+          );
+        }
 
         // Nộp thật thành công - nháp tạm lưu (nếu có) đã lỗi thời, xoá luôn để GET không còn
         // hiện banner "khôi phục nháp" bằng dữ liệu cũ hơn những gì vừa nộp. Không xoá thì nháp
@@ -535,7 +546,7 @@ export class SkusService {
         const linesOf = (g: DetailLineGroup): QuotaMaterialLineDto[] =>
           dto
             .detailLines!.filter((l) => l.group === g)
-            .map((l) => ({ materialId: l.materialId, qtyPerUnit: l.qtyPerUnit }));
+            .map((l) => ({ materialId: l.materialId, qtyPerUnit: l.qtyPerUnit, spec: l.spec }));
 
         // Sơn/Phụ kiện/Bao bì đều dùng chung 1 nhóm vật tư hệ thống ("Vật tư khác", OTHER) -
         // Sơn tách qua stage=SON, Phụ kiện/Bao bì tách qua AccessoryItemKind (xem
@@ -559,7 +570,8 @@ export class SkusService {
           revision.id,
           otherGroupId,
           AccessoryItemKind.ACCESSORY,
-          MaterialDetailKind.ACCESSORY,
+          // Nệm vẫn là phụ kiện: dòng nệm (tick tự thêm) nằm ở nhóm Phụ kiện nên chấp nhận cả 2 phân loại.
+          [MaterialDetailKind.ACCESSORY, MaterialDetailKind.CUSHION],
           'Phụ kiện',
           linesOf('VAT_TU_PHU_KIEN'),
         );
@@ -572,6 +584,16 @@ export class SkusService {
           'Bao bì',
           linesOf('BAO_BI_DONG_GOI'),
         );
+        // Tick loại nệm Sales được chọn (field bỏ trống = giữ nguyên, [] = xoá hết tick).
+        if (dto.cushionOptions) {
+          await this.replaceBomOptions(
+            tx,
+            revision.id,
+            pf.mfgProductId,
+            BomOptionKind.CUSHION,
+            dto.cushionOptions,
+          );
+        }
 
         // Cùng lý do với updateManhQuota - nộp thật thành công thì nháp tạm lưu đã lỗi thời, xoá
         // luôn (không xoá sẽ mồ côi vĩnh viễn + có thể "sống lại" đè dữ liệu mới hơn sau này).
@@ -1107,10 +1129,11 @@ export class SkusService {
    *  dùng đầu tiên" nào hợp lý để suy luận) - thiếu hoặc sai thì từ chối rõ ràng. */
   private assertMaterialDetailKind(
     material: { code: string; detailKind: MaterialDetailKind | null },
-    expected: MaterialDetailKind,
+    expected: MaterialDetailKind | MaterialDetailKind[],
     groupLabel: string,
   ): void {
-    if (material.detailKind !== expected) {
+    const accepted = Array.isArray(expected) ? expected : [expected];
+    if (!material.detailKind || !accepted.includes(material.detailKind)) {
       throw new BadRequestException(
         `Material "${material.code}" chưa được phân loại đúng cho ${groupLabel} - vào Admin > Vật tư gán Phân loại = ${groupLabel} cho vật tư này trước`,
       );
@@ -1464,7 +1487,7 @@ export class SkusService {
     bomRevisionId: bigint,
     materialGroupId: bigint,
     kind: AccessoryItemKind,
-    expectedDetailKind: MaterialDetailKind,
+    expectedDetailKind: MaterialDetailKind | MaterialDetailKind[],
     groupLabel: string,
     items: QuotaMaterialLineDto[],
   ): Promise<void> {
@@ -1479,18 +1502,152 @@ export class SkusService {
       this.assertMaterialDetailKind(material, expectedDetailKind, groupLabel);
     }
 
+    // Quy cách riêng theo SKU CHỈ có ở nệm; vật tư khác luôn dùng Material.spec nên bỏ qua giá trị gửi lên. Chuỗi rỗng
+    // = không có. 1 SKU có thể có NHIỀU dòng cùng 1 nệm nếu khác quy cách (vd nệm đôi + nệm đơn cùng màu).
+    const rows = items.map((it, i) => ({
+      bomRevisionId,
+      materialId: materialIds[i],
+      kind,
+      qtyPerUnit: it.qtyPerUnit,
+      spec:
+        materialsById.get(materialIds[i].toString())!.detailKind === MaterialDetailKind.CUSHION
+          ? it.spec?.trim() || null
+          : null,
+    }));
+    const seen = new Set<string>();
+    for (const r of rows) {
+      const key = `${r.materialId}|${r.spec ?? ''}`;
+      if (seen.has(key)) {
+        const code = materialsById.get(r.materialId.toString())!.code;
+        throw new BadRequestException(
+          r.spec
+            ? `${groupLabel}: vật tư ${code} bị nhập trùng cùng quy cách "${r.spec}" - gộp số lượng vào 1 dòng`
+            : `${groupLabel}: vật tư ${code} bị nhập trùng - nệm cùng loại chỉ được nhiều dòng khi khác quy cách`,
+        );
+      }
+      seen.add(key);
+    }
+
     await tx.bomAccessoryItem.deleteMany({ where: { bomRevisionId, kind } });
 
-    if (items.length) {
-      await tx.bomAccessoryItem.createMany({
-        data: items.map((it, i) => ({
-          bomRevisionId,
-          materialId: materialIds[i],
-          kind,
-          qtyPerUnit: it.qtyPerUnit,
-        })),
+    if (rows.length) {
+      await tx.bomAccessoryItem.createMany({ data: rows });
+    }
+  }
+
+  /**
+   * Thay toàn bộ tick (bom_option) của 1 loại (dây/nệm) trên revision. Dây phải thuộc nhóm Dây;
+   * nệm là vật tư nhóm "Vật tư khác" phân loại Phụ kiện (nệm là phụ kiện - xem BomAccessoryItem).
+   * Không cho gỡ tick của loại đang nằm trên dòng đơn hàng chưa giao hết của cùng sản phẩm: dòng
+   * đơn đó sẽ mất định mức tương ứng ở Mua hàng/Xuất đan.
+   */
+  private async replaceBomOptions(
+    tx: PrismaTx,
+    bomRevisionId: bigint,
+    mfgProductId: bigint,
+    kind: BomOptionKind,
+    materialIdsRaw: string[],
+  ): Promise<void> {
+    const materialIds = [...new Set(materialIdsRaw.map((id) => parseBigIntId(id).toString()))].map(
+      (id) => BigInt(id),
+    );
+    const isWire = kind === BomOptionKind.WIRE;
+    const label = isWire ? 'Dây' : 'Nệm (Phụ kiện)';
+    const materialsById = await this.fetchMaterialsOrThrow(
+      tx,
+      materialIds.map((id) => ({ display: id.toString(), id })),
+    );
+    const groupId = await this.resolveSystemGroupId(
+      tx,
+      isWire ? MATERIAL_GROUP_SYSTEM_KEYS.WIRE : MATERIAL_GROUP_SYSTEM_KEYS.OTHER,
+    );
+    for (const materialId of materialIds) {
+      const material = materialsById.get(materialId.toString())!;
+      await this.assertOrAssignMaterialGroup(tx, material, groupId, label);
+      if (!isWire) this.assertMaterialDetailKind(material, MaterialDetailKind.CUSHION, 'Nệm');
+    }
+
+    // Dòng đơn đang dùng 1 loại KHÔNG còn nằm trong danh sách mới -> chặn. notIn trên cột nullable
+    // tự loại dòng NULL (chưa chọn) - đúng ý ở đây, không phải bẫy.
+    const inUse = await tx.salesOrderItem.findMany({
+      where: isWire
+        ? { mfgProductId, wireMaterialId: { notIn: materialIds } }
+        : { mfgProductId, cushionMaterialId: { notIn: materialIds } },
+      select: {
+        shippedQty: true,
+        totalQty: true,
+        salesOrder: { select: { orderCode: true } },
+        wireMaterial: { select: { code: true } },
+        cushionMaterial: { select: { code: true } },
+      },
+    });
+    const blocking = inUse.filter(
+      (row) => row.shippedQty < row.totalQty && (isWire ? row.wireMaterial : row.cushionMaterial),
+    );
+    if (blocking.length > 0) {
+      const sample = blocking
+        .slice(0, 3)
+        .map(
+          (row) =>
+            `${(isWire ? row.wireMaterial : row.cushionMaterial)!.code} (đơn ${row.salesOrder.orderCode})`,
+        )
+        .join(', ');
+      throw new ConflictException(
+        `Không thể gỡ tick ${label.toLowerCase()} đang được đơn hàng chưa giao xong sử dụng: ${sample}${
+          blocking.length > 3 ? ` và ${blocking.length - 3} dòng khác` : ''
+        }`,
+      );
+    }
+
+    await tx.bomOption.deleteMany({ where: { bomRevisionId, kind } });
+    if (materialIds.length) {
+      await tx.bomOption.createMany({
+        data: materialIds.map((materialId) => ({ bomRevisionId, kind, materialId })),
       });
     }
+  }
+
+  /**
+   * Loại dây/nệm Sales được chọn cho 1 sản phẩm - lấy từ BomRevision ACTIVE (SKU chưa duyệt định
+   * mức thì chưa có revision ACTIVE nên trả rỗng). Rỗng ở 1 loại nghĩa là SKU không có lựa chọn
+   * loại đó: dòng đơn không được (và không cần) chọn.
+   */
+  async getOrderOptions(mfgProductIdRaw: string) {
+    const mfgProductId = parseBigIntId(mfgProductIdRaw);
+    const revision = await this.prisma.bomRevision.findFirst({
+      where: { mfgProductId, status: BomRevisionStatus.ACTIVE },
+      select: { id: true },
+    });
+    if (!revision) return { bomRevisionId: null, wireOptions: [], cushionOptions: [] };
+    const rows = await this.prisma.bomOption.findMany({
+      where: { bomRevisionId: revision.id },
+      include: { material: true },
+      orderBy: { materialId: 'asc' },
+    });
+    const toRef = (r: (typeof rows)[number]) => this.toOptionRef(r.material);
+    return {
+      bomRevisionId: revision.id.toString(),
+      wireOptions: rows.filter((r) => r.kind === BomOptionKind.WIRE).map(toRef),
+      cushionOptions: rows.filter((r) => r.kind === BomOptionKind.CUSHION).map(toRef),
+    };
+  }
+
+  private toOptionRef(material: {
+    id: bigint;
+    code: string;
+    name: string;
+    spec: string | null;
+    unit: string;
+    imageUrl: string | null;
+  }) {
+    return {
+      materialId: material.id.toString(),
+      materialCode: material.code,
+      materialName: material.name,
+      materialSpec: material.spec,
+      materialUnit: material.unit,
+      imageUrl: material.imageUrl,
+    };
   }
 
   /**
@@ -1558,6 +1715,7 @@ export class SkusService {
       pieceMaterialYields,
       consumableBoms,
       accessoryItems,
+      bomOptions,
     ] = await Promise.all([
       this.prisma.materialGroup.findMany({
         where: { systemKey: { in: Object.values(MATERIAL_GROUP_SYSTEM_KEYS) } },
@@ -1586,8 +1744,14 @@ export class SkusService {
         where: { bomRevisionId: { in: revisionIds } },
         include: { material: true },
       }),
+      this.prisma.bomOption.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { material: true },
+        orderBy: { materialId: 'asc' },
+      }),
     ]);
 
+    const optionsByRev = groupBy(bomOptions, (r) => r.bomRevisionId.toString());
     const bomPiecesByRev = groupBy(bomPieces, (r) => r.bomRevisionId.toString());
     const pieceBomsByRevPiece = new Map<string, typeof pieceBoms>();
     for (const row of pieceBoms) {
@@ -1630,7 +1794,9 @@ export class SkusService {
       materialId: r.materialId.toString(),
       materialCode: r.material.code,
       materialName: r.material.name,
-      materialSpec: r.material.spec,
+      // Nệm: quy cách riêng của SKU (BomAccessoryItem.spec) thay cho Material.spec; vật tư khác không có.
+      materialSpec: r.spec ?? r.material.spec,
+      materialDetailKind: r.material.detailKind,
       materialUnit: r.material.unit,
       qtyPerUnit: r.qtyPerUnit.toNumber(),
     });
@@ -1747,9 +1913,18 @@ export class SkusService {
         .filter((r) => r.kind === AccessoryItemKind.PACKAGING)
         .map(toAccessoryLine);
 
+      const optionRows = optionsByRev.get(revKey) ?? [];
+      const optionRefs = (kind: BomOptionKind) =>
+        optionRows.filter((r) => r.kind === kind).map((r) => this.toOptionRef(r.material));
+
       result.set(pf.id.toString(), {
-        manhData: { pieces },
-        detailQuota: { daySon, vatTuPhuKien, baoBiDongGoi },
+        manhData: { pieces, wireOptions: optionRefs(BomOptionKind.WIRE) },
+        detailQuota: {
+          daySon,
+          vatTuPhuKien,
+          baoBiDongGoi,
+          cushionOptions: optionRefs(BomOptionKind.CUSHION),
+        },
       });
     }
 

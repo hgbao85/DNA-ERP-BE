@@ -10,6 +10,7 @@ describe('ProductionOrdersService', () => {
   let service: ProductionOrdersService;
   let prisma: {
     bomRevision: { findFirst: jest.Mock; findMany: jest.Mock };
+    bomOption: { findMany: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
     productionOrder: {
       create: jest.Mock;
@@ -49,6 +50,8 @@ describe('ProductionOrdersService', () => {
   beforeEach(() => {
     prisma = {
       bomRevision: { findFirst: jest.fn(), findMany: jest.fn() },
+      // Mặc định bản định mức không có tick dây/nệm nào - test riêng tự override.
+      bomOption: { findMany: jest.fn().mockResolvedValue([]) },
       productionInvoiceItem: { findUniqueOrThrow: jest.fn() },
       productionOrder: {
         create: jest.fn(),
@@ -73,6 +76,73 @@ describe('ProductionOrdersService', () => {
     // Mặc định không có bản ACTIVE nào khớp -> bomOutOfDate=false, không phá các test không quan
     // tâm field này - test riêng của bomOutOfDate tự override lại mock này.
     prisma.bomRevision.findMany.mockResolvedValue([]);
+  });
+
+  // Loại dây/nệm Sales chọn phải khớp tick của bản định mức sắp ghim (bom_option) - kiểm TRƯỚC khi
+  // ghi APPROVED để sai lệch chặn đúng hành động duyệt (409).
+  describe('assertChoiceMatchesRevision', () => {
+    const opt = (kind: 'WIRE' | 'CUSHION', materialId: bigint) => ({ kind, materialId });
+
+    it('bản không có tick và dòng không chọn gì: qua (SKU không dùng tính năng này)', async () => {
+      prisma.bomRevision.findFirst.mockResolvedValue(activeRevision);
+
+      await expect(
+        service.assertChoiceMatchesRevision(2n, undefined, { wireMaterialId: null }, 'Dòng 1'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('bản có tick dây mà dòng chưa chọn dây -> 409', async () => {
+      prisma.bomRevision.findFirst.mockResolvedValue(activeRevision);
+      prisma.bomOption.findMany.mockResolvedValue([opt('WIRE', 60n), opt('WIRE', 61n)]);
+
+      await expect(
+        service.assertChoiceMatchesRevision(2n, undefined, {}, 'Dòng 1'),
+      ).rejects.toThrow(/chưa chọn màu dây/);
+    });
+
+    it('dây đã chọn không nằm trong tick của bản ghim -> 409', async () => {
+      prisma.bomOption.findMany.mockResolvedValue([opt('WIRE', 60n)]);
+
+      await expect(
+        service.assertChoiceMatchesRevision(2n, 7n, { wireMaterialId: 99n }, 'Dòng 1'),
+      ).rejects.toThrow(ConflictException);
+      // Bản ghim sẵn (phương án cắt tính sẵn): đối chiếu ĐÚNG bản đó, không tra lại bản ACTIVE.
+      expect(prisma.bomRevision.findFirst).not.toHaveBeenCalled();
+      expect(prisma.bomOption.findMany).toHaveBeenCalledWith({
+        where: { bomRevisionId: 7n },
+        select: { kind: true, materialId: true },
+      });
+    });
+
+    it('bản không có tick mà dòng vẫn mang lựa chọn -> 409', async () => {
+      prisma.bomOption.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.assertChoiceMatchesRevision(2n, 7n, { cushionMaterialId: 90n }, 'Dòng 1'),
+      ).rejects.toThrow(/không có lựa chọn màu nệm/);
+    });
+
+    it('dây và nệm đều đúng tick: qua', async () => {
+      prisma.bomOption.findMany.mockResolvedValue([opt('WIRE', 60n), opt('CUSHION', 90n)]);
+
+      await expect(
+        service.assertChoiceMatchesRevision(
+          2n,
+          7n,
+          { wireMaterialId: 60n, cushionMaterialId: 90n },
+          'Dòng 1',
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    it('không tìm thấy bản ACTIVE thì bỏ qua (assertActiveBomRevisionExists chặn riêng)', async () => {
+      prisma.bomRevision.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.assertChoiceMatchesRevision(2n, undefined, { wireMaterialId: 60n }, 'Dòng 1'),
+      ).resolves.toBeUndefined();
+      expect(prisma.bomOption.findMany).not.toHaveBeenCalled();
+    });
   });
 
   describe('createFromApproval', () => {
@@ -100,6 +170,8 @@ describe('ProductionOrdersService', () => {
           mfgProductId: 2n,
           bomRevisionId: 5n,
           quantity: 60,
+          wireMaterialId: null,
+          cushionMaterialId: null,
         },
       });
       expect(result.quantity).toBe(60);
@@ -123,7 +195,27 @@ describe('ProductionOrdersService', () => {
           mfgProductId: 2n,
           bomRevisionId: 5n,
           quantity: 60,
+          wireMaterialId: null,
+          cushionMaterialId: null,
         },
+      });
+    });
+
+    it('chốt (snapshot) loại dây/nệm của dòng lệnh sản xuất vào ProductionOrder', async () => {
+      prisma.bomRevision.findFirst.mockResolvedValue(activeRevision);
+      prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue({
+        salesOrderId: null,
+        salesOrder: null,
+        wireMaterialId: 60n,
+        cushionMaterialId: 90n,
+      });
+      prisma.productionOrder.create.mockResolvedValue(order({ poNumber: 'NB-20' }));
+
+      await service.createFromApproval(20n, 2n, 60);
+
+      expect(prisma.productionOrder.create).toHaveBeenCalledWith({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+        data: expect.objectContaining({ wireMaterialId: 60n, cushionMaterialId: 90n }),
       });
     });
 
@@ -497,6 +589,16 @@ describe('ProductionOrdersService', () => {
         }),
       });
       expect(result).toBeDefined();
+    });
+
+    it('chặn khi bản ACTIVE mới không còn loại dây lệnh đã chốt (không đổi ngầm làm mất định mức)', async () => {
+      mockAllConditionsPass();
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ wireMaterialId: 60n }));
+      // Bản mới chỉ còn tick dây 61 - dây 60 lệnh đã chọn biến mất.
+      prisma.bomOption.findMany.mockResolvedValue([{ kind: 'WIRE', materialId: 61n }]);
+
+      await expect(service.resyncBom('9', dto)).rejects.toThrow(/màu dây đã chọn không nằm/);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
     });
 
     it('chặn khi status không còn RELEASED', async () => {

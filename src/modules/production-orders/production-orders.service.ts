@@ -2,6 +2,7 @@ import { ConflictException, Inject, Injectable, Logger, NotFoundException } from
 import { ClsService } from 'nestjs-cls';
 import {
   AuditAction,
+  BomOptionKind,
   BomRevisionStatus,
   CuttingProposalStatus,
   Prisma,
@@ -10,6 +11,7 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -24,6 +26,9 @@ type ProductionOrderRow = Prisma.ProductionOrderGetPayload<object>;
 // Include riêng (không gộp vào ProductionOrderRow) vì createFromApproval() không cần tới, tránh
 // query thừa.
 const SALES_ORDER_CODE_INCLUDE = {
+  // Loại dây/nệm đã chốt trên lệnh (xem ProductionOrder.wireMaterialId) - FE hiện cạnh tên SKU.
+  wireMaterial: true,
+  cushionMaterial: true,
   productionInvoiceItem: {
     select: {
       salesOrder: { select: { orderCode: true } },
@@ -107,7 +112,16 @@ export class ProductionOrdersService {
       );
     }
 
-    const poNumber = await this.resolvePoNumber(productionInvoiceItemId);
+    const item = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
+      where: { id: productionInvoiceItemId },
+      select: {
+        salesOrderId: true,
+        salesOrder: { select: { orderCode: true } },
+        wireMaterialId: true,
+        cushionMaterialId: true,
+      },
+    });
+    const poNumber = await this.resolvePoNumber(productionInvoiceItemId, item);
     return this.prisma.productionOrder.create({
       data: {
         poNumber,
@@ -115,8 +129,72 @@ export class ProductionOrdersService {
         mfgProductId,
         bomRevisionId: activeRevision.id,
         quantity,
+        // Chốt loại dây/nệm Sales đã chọn - từ đây mua hàng/xuất đan đọc từ lệnh, không đọc lại
+        // dòng đơn (xem BomOptionResolver). NULL = SKU không có tick lựa chọn.
+        wireMaterialId: item.wireMaterialId ?? null,
+        cushionMaterialId: item.cushionMaterialId ?? null,
       },
     });
+  }
+
+  /**
+   * Loại dây/nệm Sales chọn phải khớp tick của bản định mức mà lệnh sắp ghim: bản có tick loại nào
+   * thì bắt buộc đã chọn đúng 1 trong số đó; bản không có tick loại nào thì không được kèm lựa
+   * chọn. Kiểm TRƯỚC khi ghi APPROVED (cùng chỗ với assertActiveBomRevisionExists) để sai lệch chặn
+   * đúng hành động duyệt (409, có lý do) thay vì để lại item APPROVED mồ côi lệnh sản xuất.
+   * pinnedBomRevisionId bỏ trống = bản ACTIVE hiện tại (luồng cũ, không có phương án cắt tính sẵn).
+   */
+  async assertChoiceMatchesRevision(
+    mfgProductId: bigint,
+    pinnedBomRevisionId: bigint | undefined,
+    choice: { wireMaterialId?: bigint | null; cushionMaterialId?: bigint | null },
+    subject: string,
+  ): Promise<void> {
+    const revisionId =
+      pinnedBomRevisionId ??
+      (
+        await this.prisma.bomRevision.findFirst({
+          where: { mfgProductId, status: BomRevisionStatus.ACTIVE },
+          select: { id: true },
+        })
+      )?.id;
+    // Không có bản nào để đối chiếu: assertActiveBomRevisionExists đã/sẽ chặn riêng.
+    if (revisionId == null) return;
+    await this.assertChoiceFitsRevision(revisionId, choice, subject);
+  }
+
+  private async assertChoiceFitsRevision(
+    bomRevisionId: bigint,
+    choice: { wireMaterialId?: bigint | null; cushionMaterialId?: bigint | null },
+    subject: string,
+  ): Promise<void> {
+    const options = await this.prisma.bomOption.findMany({
+      where: { bomRevisionId },
+      select: { kind: true, materialId: true },
+    });
+    const check = (kind: BomOptionKind, label: string, chosen: bigint | null | undefined) => {
+      const allowed = options.filter((o) => o.kind === kind).map((o) => o.materialId);
+      if (allowed.length === 0) {
+        if (chosen != null) {
+          throw new ConflictException(
+            `${subject} đã chọn ${label} nhưng bản định mức ${bomRevisionId} không có lựa chọn ${label} - cần sửa lại dòng đơn hàng`,
+          );
+        }
+        return;
+      }
+      if (chosen == null) {
+        throw new ConflictException(
+          `${subject} chưa chọn ${label} (bản định mức ${bomRevisionId} có ${allowed.length} lựa chọn) - Sales cần chọn trước khi duyệt`,
+        );
+      }
+      if (!allowed.includes(chosen)) {
+        throw new ConflictException(
+          `${subject}: ${label} đã chọn không nằm trong bản định mức ${bomRevisionId} - cần chọn lại`,
+        );
+      }
+    };
+    check(BomOptionKind.WIRE, 'màu dây', choice.wireMaterialId);
+    check(BomOptionKind.CUSHION, 'màu nệm', choice.cushionMaterialId);
   }
 
   /**
@@ -135,11 +213,10 @@ export class ProductionOrdersService {
    * unique constraint trên poNumber tự chặn, ném lỗi rõ ràng thay vì âm thầm ghi trùng - đủ an
    * toàn vì approveItem() vốn đã là thao tác bấm tay từng item một, không phải batch job.
    */
-  private async resolvePoNumber(productionInvoiceItemId: bigint): Promise<string> {
-    const item = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
-      where: { id: productionInvoiceItemId },
-      select: { salesOrderId: true, salesOrder: { select: { orderCode: true } } },
-    });
+  private async resolvePoNumber(
+    productionInvoiceItemId: bigint,
+    item: { salesOrderId: bigint | null; salesOrder: { orderCode: string } | null },
+  ): Promise<string> {
     if (!item.salesOrderId || !item.salesOrder) {
       return `NB-${productionInvoiceItemId}`;
     }
@@ -229,6 +306,8 @@ export class ProductionOrdersService {
       floorStartedAt: order.floorStartedAt,
       floorFinishedAt: order.floorFinishedAt,
       createdAt: order.createdAt,
+      wireMaterial: order.wireMaterial ? toMaterialChoiceRef(order.wireMaterial) : null,
+      cushionMaterial: order.cushionMaterial ? toMaterialChoiceRef(order.cushionMaterial) : null,
       // activeRevisionId undefined (sản phẩm không còn bản ACTIVE nào, hiếm) - coi như KHÔNG
       // out-of-date, tránh cảnh báo sai khi không có gì để so sánh.
       bomOutOfDate: activeRevisionId != null && activeRevisionId !== order.bomRevisionId,
@@ -464,6 +543,14 @@ export class ProductionOrdersService {
         `Lệnh sản xuất ${id} đã bám đúng bản định mức ACTIVE hiện tại (revision ${activeRevision.id}) - không cần nạp lại`,
       );
     }
+
+    // Lệnh đã chốt loại dây/nệm: bản định mức mới phải còn đúng lựa chọn đó, nếu không đổi ngầm sẽ
+    // làm mất định mức của dây/nệm đã chọn.
+    await this.assertChoiceFitsRevision(
+      activeRevision.id,
+      { wireMaterialId: order.wireMaterialId, cushionMaterialId: order.cushionMaterialId },
+      `Lệnh sản xuất ${id}`,
+    );
 
     const oldBomRevisionId = order.bomRevisionId;
     const updated = await this.prisma.productionOrder.update({

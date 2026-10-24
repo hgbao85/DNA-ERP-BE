@@ -800,9 +800,10 @@ export class BomRevisionsService {
       [MATERIAL_GROUP_SYSTEM_KEYS.OTHER],
       'bom_accessory_items',
     );
+    // Nệm vẫn là phụ kiện (BomAccessoryItem kind ACCESSORY) nên chấp nhận cả phân loại Phụ kiện lẫn Nệm.
     const expectedDetailKind =
       dto.kind === AccessoryItemKind.ACCESSORY
-        ? MaterialDetailKind.ACCESSORY
+        ? [MaterialDetailKind.ACCESSORY, MaterialDetailKind.CUSHION]
         : MaterialDetailKind.PACKAGING;
     this.assertMaterialDetailKind(
       material,
@@ -810,10 +811,9 @@ export class BomRevisionsService {
       `bom_accessory_items (${dto.kind})`,
     );
 
-    const existing = await this.prisma.bomAccessoryItem.findUnique({
-      where: {
-        bomRevisionId_materialId: { bomRevisionId: revision.id, materialId: materialBigId },
-      },
+    // API này không nhận quy cách nên chỉ chặn trùng với dòng CHƯA có quy cách riêng của cùng vật tư.
+    const existing = await this.prisma.bomAccessoryItem.findFirst({
+      where: { bomRevisionId: revision.id, materialId: materialBigId, spec: null },
     });
     if (existing) {
       throw new ConflictException(
@@ -991,12 +991,13 @@ export class BomRevisionsService {
    *  mới biết đúng vật tư đó dành cho mục đích nào (xem assertMaterialInSystemGroups). */
   private assertMaterialDetailKind(
     material: { code: string; detailKind: MaterialDetailKind | null },
-    expected: MaterialDetailKind,
+    expected: MaterialDetailKind | MaterialDetailKind[],
     label: string,
   ): void {
-    if (material.detailKind !== expected) {
+    const accepted = Array.isArray(expected) ? expected : [expected];
+    if (!material.detailKind || !accepted.includes(material.detailKind)) {
       throw new BadRequestException(
-        `Material "${material.code}" chưa được phân loại đúng cho ${label} - vào Admin > Vật tư gán Phân loại = ${expected} cho vật tư này trước`,
+        `Material "${material.code}" chưa được phân loại đúng cho ${label} - vào Admin > Vật tư gán Phân loại = ${accepted.join(' hoặc ')} cho vật tư này trước`,
       );
     }
   }

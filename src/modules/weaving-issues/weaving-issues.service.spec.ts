@@ -33,6 +33,7 @@ describe('WeavingIssuesService', () => {
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
     materialGroup: { findMany: jest.Mock };
     pieceMaterialItem: { findMany: jest.Mock };
+    bomOption: { findMany: jest.Mock };
     material: { findUnique: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock; findMany: jest.Mock };
     weavingIssueMaterial: { create: jest.Mock };
@@ -133,6 +134,8 @@ describe('WeavingIssuesService', () => {
       // tự override.
       materialGroup: { findMany: jest.fn().mockResolvedValue([]) },
       pieceMaterialItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // Tick loại dây/nệm của định mức - mặc định không tick gì (không lọc dòng nào).
+      bomOption: { findMany: jest.fn().mockResolvedValue([]) },
       // Vật tư THẬT mang kèm mảnh (2026-09-11, issueMaterialsForWeaving) - mặc định rỗng/không
       // gọi tới, các test case về materials tự override.
       material: { findUnique: jest.fn() },
@@ -1010,6 +1013,109 @@ describe('WeavingIssuesService', () => {
       expect(result[0].wire).toEqual([
         expect.objectContaining({ materialId: '60', issuedQty: 24, onHandQty: 120 }),
       ]);
+    });
+  });
+
+  // Loại dây Sales chọn cho từng lệnh (bom_option): kế hoạch xuất đan chỉ hiện dây đã chọn, và
+  // không cho mang kèm dây khác. Đinh/nút nhựa không nằm trong tick nên luôn hiện.
+  describe('lọc theo loại dây đã chọn (bom_option)', () => {
+    const wireLine = (materialId: bigint, code: string, qty: number) => ({
+      bomRevisionId: 5n,
+      pieceId: 20n,
+      materialId,
+      qtyPerPiece: { toNumber: () => qty },
+      includeInWeaving: false,
+      material: {
+        code,
+        name: code,
+        spec: null,
+        unit: 'kg',
+        materialGroupId: 900n,
+        warehouseId: null,
+      },
+    });
+    const nailLine = {
+      bomRevisionId: 5n,
+      pieceId: 20n,
+      materialId: 70n,
+      qtyPerPiece: { toNumber: () => 4 },
+      includeInWeaving: false,
+      material: {
+        code: 'DINH-01',
+        name: 'Đinh',
+        spec: null,
+        unit: 'cái',
+        materialGroupId: 901n,
+        warehouseId: null,
+      },
+    };
+    const opt = (materialId: bigint) => ({ bomRevisionId: 5n, kind: 'WIRE', materialId });
+
+    beforeEach(() => {
+      prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
+      prisma.materialGroup.findMany.mockResolvedValue([
+        { id: 900n, systemKey: 'WIRE' },
+        { id: 901n, systemKey: 'NAIL' },
+      ]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([
+        wireLine(60n, 'SHT08', 3),
+        wireLine(61n, 'SHT29', 5),
+        nailLine,
+      ]);
+      prisma.bomOption.findMany.mockResolvedValue([opt(60n), opt(61n)]);
+    });
+
+    it('getIssuePlan: chỉ trả dây lệnh đã chọn, vẫn trả đinh', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue({ ...order, wireMaterialId: 61n });
+
+      const [item] = await service.getIssuePlan('1');
+
+      expect(item.wire.map((w) => w.materialCode)).toEqual(['SHT29']);
+      expect(item.wire[0].qtyPerPiece).toBe(5);
+      expect(item.nail.map((n) => n.materialCode)).toEqual(['DINH-01']);
+    });
+
+    it('getIssuePlan: lệnh chưa chọn dây (đơn cũ) giữ hành vi cũ - hiện mọi dây', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue({ ...order, wireMaterialId: null });
+
+      const [item] = await service.getIssuePlan('1');
+
+      expect(item.wire.map((w) => w.materialCode)).toEqual(['SHT08', 'SHT29']);
+    });
+
+    it('getIssuePlanBatch: 2 lệnh CÙNG SKU/revision khác dây nhận đúng dây của riêng mình', async () => {
+      const orderA = { ...order, id: 1n, wireMaterialId: 60n, cushionMaterialId: null };
+      const orderB = { ...order, id: 2n, wireMaterialId: 61n, cushionMaterialId: null };
+      prisma.productionOrder.findMany.mockResolvedValue([orderA, orderB]);
+
+      const result = await service.getIssuePlanBatch(['1', '2']);
+
+      expect(result['1'][0].wire.map((w) => w.materialCode)).toEqual(['SHT08']);
+      expect(result['2'][0].wire.map((w) => w.materialCode)).toEqual(['SHT29']);
+      expect(result['1'][0].nail).toHaveLength(1);
+      expect(result['2'][0].nail).toHaveLength(1);
+      // Dùng chung 1 lần nạp tick cho cả batch (cùng revision), không query theo từng lệnh.
+      expect(prisma.bomOption.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('create: từ chối mang kèm dây không thuộc loại đã chọn cho lệnh (400), không tạo phiếu xuất', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue({ ...order, wireMaterialId: 61n });
+      prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: null } });
+
+      await expect(
+        service.create(
+          '1',
+          {
+            pieceId: '20',
+            weavingPointId: '40',
+            qty: 1,
+            materials: [{ materialId: '60', qty: 3 }],
+          },
+          'user-1',
+          'vat-tu-tp',
+        ),
+      ).rejects.toThrow(/không thuộc màu dây.nệm đã chọn/);
+      expect(prisma.weavingIssue.create).not.toHaveBeenCalled();
     });
   });
 

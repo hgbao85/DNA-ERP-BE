@@ -19,6 +19,21 @@ export interface ReserveInput {
    *  có 1 chiều dài nhờ CuttingProposalsService.findConflictingStockLengthReason() chặn từ lúc
    *  duyệt, nên rút theo tổng số cây vẫn đúng). Mặc định 0 khi không truyền. */
   stockLengthMm?: number;
+  /** Quy cách của hàng được giữ ('' / bỏ trống = không quy cách) - nệm. Khác quy cách = dòng giữ chỗ RIÊNG. */
+  spec?: string;
+}
+
+/** Khoá idempotency của giữ chỗ - quy cách rỗng GIỮ NGUYÊN dạng cũ (dòng cũ không đổi); có quy cách thì thêm đuôi
+ *  để cùng (nguồn, vật tư) giữ được NHIỀU dòng, mỗi quy cách 1 dòng (nệm). */
+function reservationKey(
+  refType: StockReservationRefType,
+  refId: string,
+  materialId: bigint,
+  spec?: string,
+): string {
+  const base = `${refType}:${refId}:material:${materialId}`;
+  const s = spec?.trim();
+  return s ? `${base}:spec:${s}` : base;
 }
 
 interface PoolRow {
@@ -69,9 +84,9 @@ export class StockReservationsService {
       throw new BadRequestException('qty giữ chỗ phải lớn hơn 0');
     }
 
-    // Idempotent theo (refType, refId, materialId) - 1 nguồn chỉ giữ chỗ đúng 1 dòng cho 1 vật tư,
-    // gọi lại (retry mất mạng, double-click) trả về dòng đã tạo thay vì cộng dồn sai.
-    const idempotencyKey = `${input.refType}:${input.refId}:material:${input.materialId}`;
+    // Idempotent theo (refType, refId, materialId, quy cách) - 1 nguồn chỉ giữ chỗ đúng 1 dòng cho 1 (vật tư,
+    // quy cách), gọi lại (retry mất mạng, double-click) trả về dòng đã tạo thay vì cộng dồn sai.
+    const idempotencyKey = reservationKey(input.refType, input.refId, input.materialId, input.spec);
     const existing = await db.stockReservation.findUnique({ where: { idempotencyKey } });
     if (existing) {
       return { id: existing.id, quantity: existing.quantity };
@@ -89,6 +104,7 @@ export class StockReservationsService {
         createdById: input.createdById,
         idempotencyKey,
         stockLengthMm: input.stockLengthMm ?? 0,
+        spec: input.spec?.trim() ?? '',
       },
     });
     return { id: created.id, quantity: created.quantity };
@@ -112,9 +128,10 @@ export class StockReservationsService {
       refType: StockReservationRefType;
       refId: string;
       productionInvoiceId?: bigint;
+      spec?: string;
     },
   ): Promise<void> {
-    const idempotencyKey = `${input.refType}:${input.refId}:material:${input.materialId}`;
+    const idempotencyKey = reservationKey(input.refType, input.refId, input.materialId, input.spec);
     const existing = await tx.stockReservation.findUnique({ where: { idempotencyKey } });
     if (!existing) {
       if (input.qty > 0) {
@@ -140,9 +157,9 @@ export class StockReservationsService {
    */
   async shrinkToFloor(
     tx: PrismaTx,
-    input: { refType: StockReservationRefType; refId: string; materialId: bigint },
+    input: { refType: StockReservationRefType; refId: string; materialId: bigint; spec?: string },
   ): Promise<void> {
-    const idempotencyKey = `${input.refType}:${input.refId}:material:${input.materialId}`;
+    const idempotencyKey = reservationKey(input.refType, input.refId, input.materialId, input.spec);
     const existing = await tx.stockReservation.findUnique({ where: { idempotencyKey } });
     if (!existing) return;
     const floor = existing.consumedQty.toNumber();
@@ -169,9 +186,10 @@ export class StockReservationsService {
     tx: PrismaTx,
     productionInvoiceId: bigint,
     materialId: bigint,
+    spec = '',
   ): Promise<PoolRow[]> {
     const rows = await tx.stockReservation.findMany({
-      where: { productionInvoiceId, materialId, status: ReservationStatus.ACTIVE },
+      where: { productionInvoiceId, materialId, spec, status: ReservationStatus.ACTIVE },
       select: {
         id: true,
         refType: true,
@@ -235,12 +253,23 @@ export class StockReservationsService {
    */
   async creditPool(
     tx: PrismaTx,
-    input: { productionInvoiceId: bigint; materialId: bigint; warehouseId: bigint; qty: number },
+    input: {
+      productionInvoiceId: bigint;
+      materialId: bigint;
+      warehouseId: bigint;
+      qty: number;
+      spec?: string;
+    },
   ): Promise<void> {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty cộng thêm giữ chỗ phải lớn hơn 0');
     }
-    const pool = await this.loadPool(tx, input.productionInvoiceId, input.materialId);
+    const pool = await this.loadPool(
+      tx,
+      input.productionInvoiceId,
+      input.materialId,
+      input.spec?.trim(),
+    );
     // Pool rỗng - approve() chưa từng giữ chỗ gì cho (PI, vật tư) này (buyQty = 100% nhu cầu ngay
     // từ đầu, mọi dòng nguồn có thể cũng đã bị releaseByRef() supersede/huỷ hết) - tạo 1 dòng
     // "thuộc về cả PI" thay vì thuộc về 1 cuttingProposalId cụ thể (case hiếm, PI chắc chắn còn
@@ -254,7 +283,13 @@ export class StockReservationsService {
           quantity: input.qty,
           refType: StockReservationRefType.PRODUCTION_INVOICE,
           refId: input.productionInvoiceId.toString(),
-          idempotencyKey: `${StockReservationRefType.PRODUCTION_INVOICE}:${input.productionInvoiceId}:material:${input.materialId}`,
+          idempotencyKey: reservationKey(
+            StockReservationRefType.PRODUCTION_INVOICE,
+            input.productionInvoiceId.toString(),
+            input.materialId,
+            input.spec,
+          ),
+          spec: input.spec?.trim() ?? '',
         },
       });
       return;
@@ -289,12 +324,17 @@ export class StockReservationsService {
    */
   async drainPool(
     tx: PrismaTx,
-    input: { productionInvoiceId: bigint; materialId: bigint; qty: number },
+    input: { productionInvoiceId: bigint; materialId: bigint; qty: number; spec?: string },
   ): Promise<{ warehouseId: bigint }> {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty xuất phải lớn hơn 0');
     }
-    const pool = await this.loadPool(tx, input.productionInvoiceId, input.materialId);
+    const pool = await this.loadPool(
+      tx,
+      input.productionInvoiceId,
+      input.materialId,
+      input.spec?.trim(),
+    );
     if (pool.length === 0) {
       throw new ConflictException(
         `Không tìm thấy giữ chỗ tồn kho cho vật tư ${input.materialId} của PI ${input.productionInvoiceId} - chưa từng giữ chỗ (tồn + hàng mua chưa đủ), hoặc mọi phương án cắt liên quan đã bị supersede/huỷ`,
@@ -362,10 +402,15 @@ export class StockReservationsService {
    */
   async drainPoolBestEffort(
     tx: PrismaTx,
-    input: { productionInvoiceId: bigint; materialId: bigint; qty: number },
+    input: { productionInvoiceId: bigint; materialId: bigint; qty: number; spec?: string },
   ): Promise<void> {
     if (!(input.qty > 0)) return;
-    const pool = await this.loadPool(tx, input.productionInvoiceId, input.materialId);
+    const pool = await this.loadPool(
+      tx,
+      input.productionInvoiceId,
+      input.materialId,
+      input.spec?.trim(),
+    );
     if (pool.length === 0) return;
 
     const lockedRows: { id: bigint; remaining: number }[] = [];
@@ -427,6 +472,8 @@ export class StockReservationsService {
      *  hiện qua live-test 2026-09-23: 2 PI giữ chỗ cộng đúng bằng onHand -> available=0, xuất bị
      *  chặn 409 dù vật lý còn đủ) - 2 refType này PHẢI bị loại khỏi phép trừ tại đây. */
     excludeRefTypes?: StockReservationRefType[],
+    /** Quy cách của bucket đang tính available ('' / bỏ trống = không quy cách) - phải khớp đúng bucket của `onHand`. */
+    spec?: string,
   ): Promise<number> {
     const db = tx ?? this.prisma;
     const [stockReservations, transferReservations] = await Promise.all([
@@ -436,12 +483,18 @@ export class StockReservationsService {
           materialId,
           status: ReservationStatus.ACTIVE,
           stockLengthMm: stockLengthMm ?? 0,
+          spec: spec?.trim() ?? '',
           ...(excludeRefTypes?.length ? { refType: { notIn: excludeRefTypes } } : {}),
         },
         select: { quantity: true, consumedQty: true },
       }),
       db.warehouseTransferReservation.findMany({
-        where: { warehouseId, materialId, status: ReservationStatus.ACTIVE },
+        where: {
+          warehouseId,
+          materialId,
+          status: ReservationStatus.ACTIVE,
+          spec: spec?.trim() ?? '',
+        },
         select: { quantity: true },
       }),
     ]);

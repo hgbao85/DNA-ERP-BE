@@ -6,6 +6,7 @@ import {
   ProdItemStageType,
   ProductionOrderFloorStage,
 } from '../../../generated/prisma/client';
+import { MaterialChoiceRefDto } from '../../../common/utils/material-choice-ref.util';
 
 class ItemStageDto {
   @Expose() @ApiProperty({ enum: ProdItemStageType }) stageType!: ProdItemStageType;
@@ -34,6 +35,13 @@ export class ProductionInvoiceItemResponseDto {
   @Expose() @ApiProperty() productName!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) productVariantId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) colorCode!: string | null;
+  /** Loại dây (mã SHT)/loại nệm Sales chọn cho dòng này - null khi SKU không có lựa chọn. */
+  @Expose()
+  @ApiPropertyOptional({ type: MaterialChoiceRefDto, nullable: true })
+  wireMaterial!: MaterialChoiceRefDto | null;
+  @Expose()
+  @ApiPropertyOptional({ type: MaterialChoiceRefDto, nullable: true })
+  cushionMaterial!: MaterialChoiceRefDto | null;
   @Expose() @ApiProperty() quantity!: number;
   @Expose() @ApiPropertyOptional({ nullable: true }) materialDeadline!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) deliveryDeadline!: Date | null;

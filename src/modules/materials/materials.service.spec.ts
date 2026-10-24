@@ -35,6 +35,7 @@ describe('MaterialsService', () => {
     pieceMaterialYield: { findMany: jest.Mock };
     consumableBom: { findMany: jest.Mock };
     bomAccessoryItem: { findMany: jest.Mock };
+    bomOption: { findMany: jest.Mock };
     $transaction: jest.Mock;
   };
   let cloudinary: { deleteByUrl: jest.Mock };
@@ -71,6 +72,7 @@ describe('MaterialsService', () => {
       pieceMaterialYield: { findMany: jest.fn().mockResolvedValue([]) },
       consumableBom: { findMany: jest.fn().mockResolvedValue([]) },
       bomAccessoryItem: { findMany: jest.fn().mockResolvedValue([]) },
+      bomOption: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };
     // remove() truyền 1 callback (tx) => Promise, bulkUpdateWaste() truyền 1 mảng Promise

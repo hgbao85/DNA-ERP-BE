@@ -70,6 +70,7 @@ describe('StockReservationsService', () => {
           createdById: undefined,
           idempotencyKey: 'CUTTING_PROPOSAL:22:material:30',
           stockLengthMm: 0,
+          spec: '',
         },
       });
       expect(result.id).toBe(1n);
@@ -352,9 +353,61 @@ describe('StockReservationsService', () => {
       expect(result).toBe(16); // 20 - 4, vẫn trừ dù gọi với chiều dài 6000
       expect(prisma.warehouseTransferReservation.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { warehouseId: 800n, materialId: 30n, status: 'ACTIVE' },
+          where: { warehouseId: 800n, materialId: 30n, status: 'ACTIVE', spec: '' },
         }),
       );
+    });
+
+    it('chỉ trừ giữ chỗ ĐÚNG quy cách đang tính (nệm khác quy cách là bucket riêng)', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([
+        { quantity: decimal(6), consumedQty: decimal(0) },
+      ]);
+      prisma.warehouseTransferReservation.findMany.mockResolvedValue([{ quantity: decimal(1) }]);
+
+      const result = await service.getAvailableQty(
+        prisma as unknown as PrismaTx,
+        800n,
+        30n,
+        10,
+        undefined,
+        undefined,
+        'Đơn 450x450x50',
+      );
+
+      expect(result).toBe(3); // 10 - 6 - 1
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ spec: 'Đơn 450x450x50' }) as unknown,
+        }),
+      );
+      expect(prisma.warehouseTransferReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ spec: 'Đơn 450x450x50' }) as unknown,
+        }),
+      );
+    });
+
+    it('reserve với quy cách: khoá idempotency có đuôi quy cách (cùng nguồn+vật tư giữ được nhiều dòng)', async () => {
+      prisma.stockReservation.create.mockResolvedValue({ id: 2n, quantity: decimal(3) });
+
+      await service.reserve(
+        {
+          warehouseId: 800n,
+          materialId: 30n,
+          qty: 3,
+          refType: 'CUTTING_PROPOSAL',
+          refId: '22',
+          spec: ' Đôi ',
+        },
+        prisma as unknown as PrismaTx,
+      );
+
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          idempotencyKey: 'CUTTING_PROPOSAL:22:material:30:spec:Đôi',
+          spec: 'Đôi',
+        }) as unknown,
+      });
     });
 
     // 2026-09-23 (đính chính sau live-test phát hiện bug thật): MaterialIssuesService/
@@ -487,7 +540,32 @@ describe('StockReservationsService', () => {
           refType: 'PRODUCTION_INVOICE',
           refId: '50',
           idempotencyKey: 'PRODUCTION_INVOICE:50:material:30',
+          spec: '',
         },
+      });
+    });
+
+    it('pool rỗng + có quy cách - dòng mới mang quy cách và khoá idempotency riêng theo quy cách', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([]);
+
+      await service.creditPool(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        warehouseId: 800n,
+        qty: 5,
+        spec: 'Đôi 870x450x50',
+      });
+
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ spec: 'Đôi 870x450x50' }) as unknown,
+        }),
+      );
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          spec: 'Đôi 870x450x50',
+          idempotencyKey: 'PRODUCTION_INVOICE:50:material:30:spec:Đôi 870x450x50',
+        }) as unknown,
       });
     });
 

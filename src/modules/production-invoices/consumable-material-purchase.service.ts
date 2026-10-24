@@ -11,6 +11,7 @@ import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { loadBomOptionExclusions } from '../bom-revisions/bom-option.util';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
 import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -89,9 +90,17 @@ export class ConsumableMaterialPurchaseService {
     );
 
     const requiredByMaterial = new Map<string, number>();
-    const addRequired = (materialId: bigint, qty: number) => {
+    // Nhu cầu theo (vật tư, quy cách) - quy cách riêng theo SKU CHỈ có ở nệm (BomAccessoryItem.spec); khoá '' =
+    // không có quy cách riêng. Tồn kho/hao hụt vẫn tính theo TỔNG vật tư (requiredByMaterial), sau đó chia lại về
+    // từng quy cách để ra các dòng mua riêng.
+    const requiredBySpec = new Map<string, Map<string, number>>();
+    const addRequired = (materialId: bigint, qty: number, spec?: string | null) => {
       const key = materialId.toString();
       requiredByMaterial.set(key, (requiredByMaterial.get(key) ?? 0) + qty);
+      const bySpec = requiredBySpec.get(key) ?? new Map<string, number>();
+      const specKey = spec?.trim() ?? '';
+      bySpec.set(specKey, (bySpec.get(specKey) ?? 0) + qty);
+      requiredBySpec.set(key, bySpec);
     };
 
     // Kho QLSX chọn cho PI đó, chụp lại theo TỪNG vật tư chạm tới - dùng SAU khi biết kho mặc
@@ -107,11 +116,18 @@ export class ConsumableMaterialPurchaseService {
       }
     };
 
+    // Loại dây/nệm đã tick trong định mức mà MỖI lệnh không chọn - dòng của chúng KHÔNG được tính
+    // (nếu không, mảnh có 2 dòng dây sẽ mua cả 2 loại). Tính theo từng lệnh nên 2 lệnh cùng SKU khác
+    // dây trong cùng 1 PI vẫn cộng đúng từng loại (xem bom-option.util.ts).
+    const excludedByOrder = await loadBomOptionExclusions(this.prisma, orders);
+
     for (const order of orders) {
+      const excluded = excludedByOrder.get(order.id.toString()) ?? new Set<string>();
       // Dây/Đinh/Tán rút/Nút nhựa - PHẢI nhân thêm BomPiece.qtyPerUnit (SL mảnh/SKU) vì định mức
       // này gắn theo TỪNG PIECE, khác ConsumableBom/BomAccessoryItem phẳng theo cả lệnh.
       for (const pmi of pieceMaterialItems) {
         if (pmi.bomRevisionId !== order.bomRevisionId) continue;
+        if (excluded.has(pmi.materialId.toString())) continue;
         const pieceQty = pieceQtyByRevPiece.get(`${order.bomRevisionId}:${pmi.pieceId}`);
         if (!pieceQty) continue; // piece không thuộc BOM của order này - bỏ qua, không throw
         addRequired(pmi.materialId, pieceQty * order.quantity * pmi.qtyPerPiece.toNumber());
@@ -126,7 +142,8 @@ export class ConsumableMaterialPurchaseService {
       // Phụ kiện/Bao bì (BomAccessoryItem) - phẳng, không qua piece.
       for (const item of accessoryItems) {
         if (item.bomRevisionId !== order.bomRevisionId) continue;
-        addRequired(item.materialId, item.qtyPerUnit.toNumber() * order.quantity);
+        if (excluded.has(item.materialId.toString())) continue;
+        addRequired(item.materialId, item.qtyPerUnit.toNumber() * order.quantity, item.spec);
         trackChosenWarehouse(item.materialId, order);
       }
     }
@@ -183,6 +200,8 @@ export class ConsumableMaterialPurchaseService {
       const computed: {
         materialId: bigint;
         materialIdStr: string;
+        /** Quy cách riêng của dòng mua (chỉ nệm) - null = dùng Material.spec. */
+        spec: string | null;
         required: number;
         actualStock: number;
         buyQty: number;
@@ -192,72 +211,89 @@ export class ConsumableMaterialPurchaseService {
       for (const materialId of orderedMaterialIds) {
         const materialIdStr = materialId.toString();
         const material = materialById.get(materialIdStr)!;
-        const required = requiredByMaterial.get(materialIdStr)!;
         const warehouseId = material.warehouse!.id;
-        // Co giữ chỗ của CHÍNH lượt tính TRƯỚC ĐÓ (refId=piBigId ổn định qua mọi lần gọi lại, khác
-        // CUTTING_PROPOSAL) về đúng phần đã tiêu TRƯỚC khi tính available - nếu không, phần CHƯA
-        // tiêu của chính nó bị getAvailableQty() trừ nhầm vào chính nó (xem doc comment
-        // StockReservationsService.shrinkToFloor()).
-        await this.stockReservationsService.shrinkToFloor(tx, {
-          refType: StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
-          refId: piBigId.toString(),
-          materialId,
-        });
-        const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
-          SELECT "qty" FROM "stock_quant"
-          WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
-          FOR UPDATE
-        `;
-        // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08): `locked[0]` chỉ lấy 1
-        // dòng BẤT KỲ Postgres trả về - nếu vật tư này có ≥2 dòng stock_quant (nhiều bucket
-        // stockLengthMm, vd gán nhầm dùng chung materialId với CuttingProposal), các dòng còn lại
-        // bị ÂM THẦM BỎ QUA, tính thiếu tồn thực có -> đề xuất mua nhiều hơn cần thiết. Vật tư tiêu
-        // hao phẳng vĩnh viễn chỉ nên có bucket 0, nhưng KHÔNG giả định chỉ có đúng 1 dòng - cộng
-        // dồn mọi dòng trả về để đúng bất kể vi phạm giả định đó có xảy ra hay không.
-        const actualStock = locked.reduce((sum, r) => sum + r.qty.toNumber(), 0);
-        // 2026-09-23 (vá race "2 PI cùng tính đề xuất gần nhau, cùng thấy 1 tồn đủ, cả 2 cùng
-        // buyQty=0 dù tồn thật chỉ đủ cho 1 PI"): buyQty/consumeQty giờ tính theo tồn KHẢ DỤNG
-        // (onHand trừ phần PI/luồng khác đã giữ chỗ - CUTTING_PROPOSAL, chuyển kho nội bộ, hoặc
-        // chính nguồn này của 1 PI khác), KHÔNG dùng thẳng actualStock (tồn vật lý) như trước.
-        // actualStock vẫn giữ nguyên Ý NGHĨA "tồn vật lý thật" để hiển thị/audit - không đổi field
-        // này sang "khả dụng" (cùng idiom CuttingProposalsService.approve()).
-        const available = await this.stockReservationsService.getAvailableQty(
-          tx,
-          warehouseId,
-          materialId,
-          actualStock,
-        );
-        const consumeQty = Math.min(required, available);
-        // 2026-10-08: đệm % hao hụt khi mua (Material.purchaseWastePercentage, vd bao bì rách/lỗi
-        // lúc vận chuyển) - CHỈ cộng vào phần THỰC SỰ phải mua (sau khi đã trừ tồn khả dụng),
-        // KHÔNG đụng required/consumeQty/reserveOrAdjust (giữ chỗ tồn kho tính theo nhu cầu THẬT).
-        // null/0 -> buyQty không đổi (tương thích ngược vật tư chưa cấu hình %).
-        const wastePct = material.purchaseWastePercentage?.toNumber() ?? 0;
-        const buyQtyRaw = (required - consumeQty) * (1 + wastePct / 100);
-        // 2026-10-10: mặc định luồng này GIỮ thập phân (vd kg sơn/dây) - CHỈ ceil lên nguyên khi
-        // Admin chủ động ép qua Material.purchaseRoundUp=true (vd Đinh/Vis/Nút - không mua được
-        // số lẻ). Tri-state: null/false đều giữ thập phân, chỉ true mới ceil - xem schema.prisma.
-        const buyQty = material.purchaseRoundUp === true ? Math.ceil(buyQtyRaw) : buyQtyRaw;
-        computed.push({
-          materialId,
-          materialIdStr,
-          required,
-          actualStock,
-          buyQty,
-          warehouseCode: material.warehouse!.code,
-          receiveWarehouseCode: receiveWarehouseByMaterial.get(materialIdStr) ?? null,
-        });
-        // Giữ chỗ ĐÚNG phần tồn đã dùng để che phủ demand - PI khác tính sau sẽ thấy phần này qua
-        // getAvailableQty(), không đọc trùng actualStock nữa (xem doc comment enum refType).
-        // consumeQty=0 là hợp lệ (đưa giữ chỗ cũ về 0 nếu demand giảm xuống 0 giữa 2 lần tính lại).
-        await this.stockReservationsService.reserveOrAdjust(tx, {
-          warehouseId,
-          materialId,
-          qty: consumeQty,
-          refType: StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
-          refId: piBigId.toString(),
-          productionInvoiceId: piBigId,
-        });
+        // Tồn kho tách theo QUY CÁCH (2026-10-23, nệm): mỗi (vật tư, quy cách) là 1 bucket tồn + 1 dòng giữ chỗ + 1
+        // dòng mua RIÊNG - tồn của quy cách này không che nhu cầu của quy cách kia. Vật tư không có quy cách riêng chỉ
+        // có khoá '' nên ra đúng 1 bucket như trước. Sắp theo quy cách để khoá stock_quant luôn theo thứ tự cố định
+        // (materialId rồi quy cách) - 2 PI chạm cùng vật tư không khoá chéo.
+        const specEntries = [
+          ...(
+            requiredBySpec.get(materialIdStr) ??
+            new Map([['', requiredByMaterial.get(materialIdStr)!]])
+          ).entries(),
+        ].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+        for (const [specKey, required] of specEntries) {
+          // Co giữ chỗ của CHÍNH lượt tính TRƯỚC ĐÓ (refId=piBigId ổn định qua mọi lần gọi lại, khác
+          // CUTTING_PROPOSAL) về đúng phần đã tiêu TRƯỚC khi tính available - nếu không, phần CHƯA
+          // tiêu của chính nó bị getAvailableQty() trừ nhầm vào chính nó (xem doc comment
+          // StockReservationsService.shrinkToFloor()).
+          await this.stockReservationsService.shrinkToFloor(tx, {
+            refType: StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
+            refId: piBigId.toString(),
+            materialId,
+            spec: specKey,
+          });
+          const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+            SELECT "qty" FROM "stock_quant"
+            WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
+              AND "spec" = ${specKey}
+            FOR UPDATE
+          `;
+          // Đính chính audit độc lập 09/09 (rà soát nốt nhánh fixbug-28-08): `locked[0]` chỉ lấy 1
+          // dòng BẤT KỲ Postgres trả về - nếu bucket này có ≥2 dòng stock_quant (nhiều bucket
+          // stockLengthMm, vd gán nhầm dùng chung materialId với CuttingProposal), các dòng còn lại
+          // bị ÂM THẦM BỎ QUA, tính thiếu tồn thực có -> đề xuất mua nhiều hơn cần thiết. Vật tư tiêu
+          // hao phẳng vĩnh viễn chỉ nên có bucket 0, nhưng KHÔNG giả định chỉ có đúng 1 dòng - cộng
+          // dồn mọi dòng trả về để đúng bất kể vi phạm giả định đó có xảy ra hay không.
+          const actualStock = locked.reduce((sum, r) => sum + r.qty.toNumber(), 0);
+          // 2026-09-23 (vá race "2 PI cùng tính đề xuất gần nhau, cùng thấy 1 tồn đủ, cả 2 cùng
+          // buyQty=0 dù tồn thật chỉ đủ cho 1 PI"): buyQty/consumeQty giờ tính theo tồn KHẢ DỤNG
+          // (onHand trừ phần PI/luồng khác đã giữ chỗ - CUTTING_PROPOSAL, chuyển kho nội bộ, hoặc
+          // chính nguồn này của 1 PI khác), KHÔNG dùng thẳng actualStock (tồn vật lý) như trước.
+          // actualStock vẫn giữ nguyên Ý NGHĨA "tồn vật lý thật" để hiển thị/audit - không đổi field
+          // này sang "khả dụng" (cùng idiom CuttingProposalsService.approve()).
+          const available = await this.stockReservationsService.getAvailableQty(
+            tx,
+            warehouseId,
+            materialId,
+            actualStock,
+            undefined,
+            undefined,
+            specKey,
+          );
+          const consumeQty = Math.min(required, available);
+          // 2026-10-08: đệm % hao hụt khi mua (Material.purchaseWastePercentage, vd bao bì rách/lỗi
+          // lúc vận chuyển) - CHỈ cộng vào phần THỰC SỰ phải mua (sau khi đã trừ tồn khả dụng),
+          // KHÔNG đụng required/consumeQty/reserveOrAdjust (giữ chỗ tồn kho tính theo nhu cầu THẬT).
+          // null/0 -> buyQty không đổi (tương thích ngược vật tư chưa cấu hình %).
+          const wastePct = material.purchaseWastePercentage?.toNumber() ?? 0;
+          const buyQtyRaw = (required - consumeQty) * (1 + wastePct / 100);
+          // 2026-10-10: mặc định luồng này GIỮ thập phân (vd kg sơn/dây) - CHỈ ceil lên nguyên khi
+          // Admin chủ động ép qua Material.purchaseRoundUp=true (vd Đinh/Vis/Nút - không mua được
+          // số lẻ). Tri-state: null/false đều giữ thập phân, chỉ true mới ceil - xem schema.prisma.
+          computed.push({
+            materialId,
+            materialIdStr,
+            spec: specKey || null,
+            required,
+            actualStock,
+            buyQty: material.purchaseRoundUp === true ? Math.ceil(buyQtyRaw) : buyQtyRaw,
+            warehouseCode: material.warehouse!.code,
+            receiveWarehouseCode: receiveWarehouseByMaterial.get(materialIdStr) ?? null,
+          });
+          // Giữ chỗ ĐÚNG phần tồn đã dùng để che phủ demand - PI khác tính sau sẽ thấy phần này qua
+          // getAvailableQty(), không đọc trùng actualStock nữa (xem doc comment enum refType).
+          // consumeQty=0 là hợp lệ (đưa giữ chỗ cũ về 0 nếu demand giảm xuống 0 giữa 2 lần tính lại).
+          await this.stockReservationsService.reserveOrAdjust(tx, {
+            warehouseId,
+            materialId,
+            qty: consumeQty,
+            refType: StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
+            refId: piBigId.toString(),
+            productionInvoiceId: piBigId,
+            spec: specKey,
+          });
+        }
       }
 
       // Khoá theo PI (KHÔNG theo sourceType) - từ 2026-08-25, cả 3 nguồn (sắt/PieceMaterialYield/
@@ -289,6 +325,7 @@ export class ConsumableMaterialPurchaseService {
             items: {
               create: computed.map((c) => ({
                 materialId: c.materialId,
+                spec: c.spec,
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
                 receiveWarehouseCode: c.receiveWarehouseCode,
@@ -303,9 +340,12 @@ export class ConsumableMaterialPurchaseService {
         // Ưu tiên dòng CHƯA đóng hồ sơ (status khác PURCHASED) nếu 1 material lỡ có 2 dòng (dòng cũ
         // đã PURCHASED + dòng mới tách ra cho phần thiếu, xem nhánh dưới) - nếu không, lượt tính lại
         // kế tiếp có thể chọn nhầm dòng đã đóng làm "dòng đang mở" và tách thêm dòng thiếu trùng lặp.
+        // Khoá theo (vật tư, quy cách): nệm khác quy cách giữa các SKU là các dòng mua RIÊNG (2026-10-23).
+        const itemKey = (materialId: bigint | string, spec: string | null) =>
+          `${materialId}|${spec?.trim() ?? ''}`;
         const itemByMaterial = new Map<string, (typeof proposal.items)[number]>();
         for (const it of proposal.items) {
-          const key = it.materialId.toString();
+          const key = itemKey(it.materialId, it.spec);
           const current = itemByMaterial.get(key);
           if (
             !current ||
@@ -315,8 +355,22 @@ export class ConsumableMaterialPurchaseService {
             itemByMaterial.set(key, it);
           }
         }
+        const computedKeys = new Set(computed.map((c) => itemKey(c.materialIdStr, c.spec)));
+        const claimedItemIds = new Set<bigint>();
         for (const c of computed) {
-          const existingItem = itemByMaterial.get(c.materialIdStr);
+          let existingItem = itemByMaterial.get(itemKey(c.materialIdStr, c.spec));
+          if (!existingItem) {
+            // Quy cách của dòng định mức vừa đổi (vd Admin sửa/nạp lại định mức): tái dùng dòng còn mở của cùng
+            // vật tư mà quy cách cũ không còn ở lượt tính này, thay vì để lại dòng cũ với số lượng lỗi thời.
+            existingItem = proposal.items.find(
+              (it) =>
+                it.materialId === c.materialId &&
+                it.status !== PurchaseProposalStatus.PURCHASED &&
+                !computedKeys.has(itemKey(it.materialId, it.spec)) &&
+                !claimedItemIds.has(it.id),
+            );
+          }
+          if (existingItem) claimedItemIds.add(existingItem.id);
           if (existingItem?.status === PurchaseProposalStatus.PURCHASED) {
             // Dòng đã đóng hồ sơ (nhận đủ hàng) - KHÔNG ghi đè buyQty lên nó (2026-08-26, lỗ #6 "ghi
             // đè buyQty của item PURCHASED làm thiếu hụt biến mất khỏi hàng đợi vĩnh viễn"). Nếu
@@ -329,6 +383,7 @@ export class ConsumableMaterialPurchaseService {
                 data: {
                   proposalId: proposal.id,
                   materialId: c.materialId,
+                  spec: c.spec,
                   buyQty: shortfall,
                   actualStock: c.actualStock,
                   receiveWarehouseCode: c.receiveWarehouseCode,
@@ -346,6 +401,7 @@ export class ConsumableMaterialPurchaseService {
             await tx.purchaseProposalItem.update({
               where: { id: existingItem.id },
               data: {
+                spec: c.spec,
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
                 receiveWarehouseCode: c.receiveWarehouseCode,
@@ -357,6 +413,7 @@ export class ConsumableMaterialPurchaseService {
               data: {
                 proposalId: proposal.id,
                 materialId: c.materialId,
+                spec: c.spec,
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
                 receiveWarehouseCode: c.receiveWarehouseCode,

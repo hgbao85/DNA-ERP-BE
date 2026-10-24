@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 
 /** POST /stock-ledger/adjust - ngoại lệ duy nhất được ghi stock_ledger trực tiếp qua HTTP. */
 export class CreateStockAdjustmentDto {
@@ -46,6 +46,13 @@ export class CreateStockAdjustmentDto {
   @IsNumber()
   @Min(0)
   stockLengthMm?: number;
+
+  /** Quy cách của bucket cần điều chỉnh (nệm). Bỏ trống = bucket "không quy cách"; kèm `expectedCurrentQty` thì chỉ khoá/so đúng bucket này. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  spec?: string;
 
   /** Vấn đề #25 audit 26/08/2026 - bắt buộc để sổ kho còn tra soát được sau này. Trước đây
    *  optional nên FE luôn gửi kèm 1 câu cố định giống hệt nhau (không mang thông tin gì) thay vì

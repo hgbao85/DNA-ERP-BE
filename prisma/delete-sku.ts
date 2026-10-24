@@ -142,6 +142,7 @@ async function processOne(
       materialYieldCount,
       consumableCount,
       accessoryCount,
+      optionCount,
     ] = await Promise.all([
       prisma.bomPiece.count({ where: { bomRevisionId: revision.id } }),
       prisma.pieceBom.count({ where: { bomRevisionId: revision.id } }),
@@ -149,9 +150,10 @@ async function processOne(
       prisma.pieceMaterialYield.count({ where: { bomRevisionId: revision.id } }),
       prisma.consumableBom.count({ where: { bomRevisionId: revision.id } }),
       prisma.bomAccessoryItem.count({ where: { bomRevisionId: revision.id } }),
+      prisma.bomOption.count({ where: { bomRevisionId: revision.id } }),
     ]);
     plan.push(
-      `BomRevision #${revision.id} (status=${revision.status}) + dòng con: bomPiece=${bomPieceCount}, pieceBom=${pieceBomCount}, pieceMaterialItem=${materialItemCount}, pieceMaterialYield=${materialYieldCount}, consumableBom=${consumableCount}, bomAccessoryItem=${accessoryCount}`,
+      `BomRevision #${revision.id} (status=${revision.status}) + dòng con: bomPiece=${bomPieceCount}, pieceBom=${pieceBomCount}, pieceMaterialItem=${materialItemCount}, pieceMaterialYield=${materialYieldCount}, consumableBom=${consumableCount}, bomAccessoryItem=${accessoryCount}, bomOption=${optionCount}`,
     );
   } else {
     plan.push('(SKU chưa từng có BomRevision nào)');
@@ -189,6 +191,8 @@ async function processOne(
       await tx.pieceMaterialYield.deleteMany({ where: { bomRevisionId: revision.id } });
       await tx.consumableBom.deleteMany({ where: { bomRevisionId: revision.id } });
       await tx.bomAccessoryItem.deleteMany({ where: { bomRevisionId: revision.id } });
+      // Tick loại dây/nệm Sales được chọn (bom_option) - FK RESTRICT tới bom_revision nên phải xoá trước.
+      await tx.bomOption.deleteMany({ where: { bomRevisionId: revision.id } });
       await tx.bomRevision.delete({ where: { id: revision.id } });
     }
 
