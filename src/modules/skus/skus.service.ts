@@ -391,6 +391,7 @@ export class SkusService {
           // dù resolveDraftBomRevision() đã cho qua ở tầng service.
           await tx.$executeRawUnsafe(`SET LOCAL "dna.bom_maintenance" = 'on'`);
         }
+        await this.assertWireLinesAreTicked(tx, revision.id, dto.pieces, dto.wireOptions);
         ({ orphanedPhotoUrls } = await this.replacePieces(
           tx,
           revision.id,
@@ -556,6 +557,12 @@ export class SkusService {
         // material sai phân loại, nên cũng tự động chặn luôn trường hợp 1 material vừa được
         // gửi làm Phụ kiện vừa làm Bao bì trong cùng 1 lần nhập (không cần check riêng nữa).
         const otherGroupId = await this.resolveSystemGroupId(tx, MATERIAL_GROUP_SYSTEM_KEYS.OTHER);
+        await this.assertCushionLinesAreTicked(
+          tx,
+          revision.id,
+          linesOf('VAT_TU_PHU_KIEN'),
+          dto.cushionOptions,
+        );
         await this.replaceConsumableLines(
           tx,
           revision.id,
@@ -1533,6 +1540,93 @@ export class SkusService {
     if (rows.length) {
       await tx.bomAccessoryItem.createMany({ data: rows });
     }
+  }
+
+  /**
+   * Mọi dòng Dây của định mức mảnh PHẢI là 1 màu dây đã tick (bom_option WIRE) - không có "dây cố
+   * định" nằm ngoài danh sách (quyết định 2026-10-24). Dòng dây không tick sẽ bị coi là "luôn tính"
+   * ở mua hàng/xuất đan (xem bom-option.util) nên cộng thêm dây ngoài màu khách chọn. `wireOptions`
+   * bỏ trống = giữ danh sách tick đang có của bản định mức (cùng ngữ nghĩa với replaceBomOptions).
+   */
+  private async assertWireLinesAreTicked(
+    tx: PrismaTx,
+    bomRevisionId: bigint,
+    pieces: QuotaPieceDto[],
+    wireOptions: string[] | undefined,
+  ): Promise<void> {
+    const wireIds = new Set<string>();
+    for (const piece of pieces) {
+      for (const line of piece.materialLines ?? []) {
+        if (line.group === 'WIRE') wireIds.add(parseBigIntId(line.materialId).toString());
+      }
+    }
+    if (wireIds.size === 0) return;
+
+    const ticked = wireOptions
+      ? new Set(wireOptions.map((id) => parseBigIntId(id).toString()))
+      : new Set(
+          (
+            await tx.bomOption.findMany({
+              where: { bomRevisionId, kind: BomOptionKind.WIRE },
+              select: { materialId: true },
+            })
+          ).map((o) => o.materialId.toString()),
+        );
+    const notTicked = [...wireIds].filter((id) => !ticked.has(id));
+    if (notTicked.length === 0) return;
+
+    const materials = await tx.material.findMany({
+      where: { id: { in: notTicked.map((id) => BigInt(id)) } },
+      select: { id: true, code: true, name: true },
+    });
+    const names = notTicked
+      .map((id) => materials.find((m) => m.id.toString() === id))
+      .map((m, i) => (m ? `${m.code} (${m.name})` : notTicked[i]))
+      .join(', ');
+    throw new BadRequestException(
+      `Dây ${names} chưa nằm trong danh sách màu dây của SKU - tick màu đó ở "Danh sách màu dây SKU" trước; dây không tick không được nhập vào định mức`,
+    );
+  }
+
+  /**
+   * Mọi dòng NỆM (Phụ kiện có Material.detailKind=CUSHION) PHẢI là 1 màu nệm đã tick (bom_option
+   * CUSHION) - cùng quy tắc với dây, không có "nệm cố định" nằm ngoài danh sách (2026-10-24). Một màu
+   * đã tick vẫn được có NHIỀU dòng nếu khác quy cách (vd nệm đôi + nệm đơn). `cushionOptions` bỏ trống
+   * = giữ danh sách tick đang có của bản định mức (cùng ngữ nghĩa với replaceBomOptions).
+   */
+  private async assertCushionLinesAreTicked(
+    tx: PrismaTx,
+    bomRevisionId: bigint,
+    accessoryLines: QuotaMaterialLineDto[],
+    cushionOptions: string[] | undefined,
+  ): Promise<void> {
+    const lineIds = [...new Set(accessoryLines.map((l) => parseBigIntId(l.materialId).toString()))];
+    if (lineIds.length === 0) return;
+    const cushions = (
+      await tx.material.findMany({
+        where: { id: { in: lineIds.map((id) => BigInt(id)) } },
+        select: { id: true, code: true, name: true, detailKind: true },
+      })
+    )
+      .filter((m) => m.detailKind === MaterialDetailKind.CUSHION)
+      .map((m) => ({ ...m, key: m.id.toString() }));
+    if (cushions.length === 0) return;
+
+    const ticked = cushionOptions
+      ? new Set(cushionOptions.map((id) => parseBigIntId(id).toString()))
+      : new Set(
+          (
+            await tx.bomOption.findMany({
+              where: { bomRevisionId, kind: BomOptionKind.CUSHION },
+              select: { materialId: true },
+            })
+          ).map((o) => o.materialId.toString()),
+        );
+    const notTicked = cushions.filter((m) => !ticked.has(m.key));
+    if (notTicked.length === 0) return;
+    throw new BadRequestException(
+      `Nệm ${notTicked.map((m) => `${m.code} (${m.name})`).join(', ')} chưa nằm trong danh sách màu nệm của SKU - tick màu đó ở "Danh sách màu nệm SKU" trước; nệm không tick không được nhập vào định mức`,
+    );
   }
 
   /**

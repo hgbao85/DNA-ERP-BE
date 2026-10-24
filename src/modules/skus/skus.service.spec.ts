@@ -554,6 +554,61 @@ describe('SkusService', () => {
   });
 
   describe('updateManhQuota (materialLines Dây/Đinh/Tán rút/Nút nhựa trong mảnh)', () => {
+    // 2026-10-24: mọi dòng Dây PHẢI là màu dây đã tick (không có "dây cố định"). Các test dưới đây dùng
+    // vật tư Dây id 60, nên mặc định bản định mức đã tick đúng màu đó (wireOptions bỏ trống = giữ tick sẵn có).
+    beforeEach(() => {
+      prisma.bomOption.findMany.mockResolvedValue([{ materialId: 60n }]);
+    });
+
+    it('chặn dòng Dây không nằm trong danh sách màu dây đã tick (không có "dây cố định")', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.bomOption.findMany.mockResolvedValue([{ materialId: 61n }]); // chỉ tick màu 61, KHÔNG có 60
+      prisma.material.findMany.mockResolvedValue([
+        { id: 60n, code: 'DAY-2LY', name: 'Dây 2 ly', materialGroupId: null },
+      ]);
+
+      const attempt = service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Manh tua',
+            qtyPerUnit: 2,
+            segments: [],
+            materialLines: [{ group: 'WIRE', materialId: '60', qtyPerPiece: 3 }],
+          },
+        ],
+        enteredBy: 'NV Day',
+      });
+
+      await expect(attempt).rejects.toThrow(BadRequestException);
+      await expect(attempt).rejects.toThrow(/DAY-2LY.*chưa nằm trong danh sách màu dây/);
+      expect(prisma.pieceMaterialItem.createMany).not.toHaveBeenCalled();
+    });
+
+    it('wireOptions gửi kèm là danh sách quyết định: dây ngoài danh sách mới bị chặn dù tick cũ có nó', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 60n, code: 'DAY-2LY', name: 'Dây 2 ly', materialGroupId: null },
+      ]);
+
+      await expect(
+        service.updateManhQuota('5', {
+          pieces: [
+            {
+              name: 'Manh tua',
+              qtyPerUnit: 2,
+              segments: [],
+              materialLines: [{ group: 'WIRE', materialId: '60', qtyPerPiece: 3 }],
+            },
+          ],
+          wireOptions: ['61'], // tick mới không còn 60 (dù tick cũ trong DB có 60)
+          enteredBy: 'NV Day',
+        }),
+      ).rejects.toThrow(/DAY-2LY.*chưa nằm trong danh sách màu dây/);
+      expect(prisma.bomOption.findMany).not.toHaveBeenCalled();
+    });
+
     it('resolves the "Dây" system MaterialGroup and writes PieceMaterialItem for a WIRE line', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
@@ -1273,7 +1328,76 @@ describe('SkusService', () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      // 2026-10-24: mọi dòng nệm PHẢI là màu nệm đã tick (như dây). Các ca dưới dùng nệm id 90, nên mặc
+      // định bản định mức đã tick đúng màu đó (cushionOptions bỏ trống = giữ tick sẵn có).
+      prisma.bomOption.findMany.mockResolvedValue([{ materialId: 90n }]);
     }
+
+    it('chặn dòng nệm không nằm trong danh sách màu nệm đã tick (không có "nệm cố định")', async () => {
+      arrangeDetail();
+      prisma.bomOption.findMany.mockResolvedValue([{ materialId: 91n }]); // chỉ tick màu 91, KHÔNG có 90
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 90n,
+          code: 'NEM-A',
+          name: 'Nệm màu be',
+          materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+          detailKind: 'CUSHION',
+        },
+      ]);
+
+      const attempt = service.updateDetailQuota('5', {
+        detailLines: [{ group: 'VAT_TU_PHU_KIEN', materialId: '90', qtyPerUnit: 1 }],
+        enteredBy: 'NV PK',
+      });
+
+      await expect(attempt).rejects.toThrow(BadRequestException);
+      await expect(attempt).rejects.toThrow(/NEM-A.*chưa nằm trong danh sách màu nệm/);
+      expect(prisma.bomAccessoryItem.createMany).not.toHaveBeenCalled();
+    });
+
+    it('cushionOptions gửi kèm là danh sách quyết định: nệm ngoài danh sách mới bị chặn dù tick cũ có nó', async () => {
+      arrangeDetail();
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 90n,
+          code: 'NEM-A',
+          name: 'Nệm màu be',
+          materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+          detailKind: 'CUSHION',
+        },
+      ]);
+
+      await expect(
+        service.updateDetailQuota('5', {
+          detailLines: [{ group: 'VAT_TU_PHU_KIEN', materialId: '90', qtyPerUnit: 1 }],
+          cushionOptions: ['91'], // tick mới không còn 90 (dù tick cũ trong DB có 90)
+          enteredBy: 'NV PK',
+        }),
+      ).rejects.toThrow(/NEM-A.*chưa nằm trong danh sách màu nệm/);
+      expect(prisma.bomOption.findMany).not.toHaveBeenCalled();
+    });
+
+    it('phụ kiện thường (không phải nệm) KHÔNG cần tick', async () => {
+      arrangeDetail();
+      prisma.bomOption.findMany.mockResolvedValue([]); // không tick gì
+      prisma.material.findMany.mockResolvedValue([
+        {
+          id: 80n,
+          code: 'PK-01',
+          name: 'Vít',
+          materialGroupId: SYSTEM_GROUP_IDS.OTHER,
+          detailKind: 'ACCESSORY',
+        },
+      ]);
+
+      await service.updateDetailQuota('5', {
+        detailLines: [{ group: 'VAT_TU_PHU_KIEN', materialId: '80', qtyPerUnit: 4 }],
+        enteredBy: 'NV PK',
+      });
+
+      expect(prisma.bomAccessoryItem.createMany).toHaveBeenCalled();
+    });
 
     it('ghi tick nệm: vật tư nhóm Vật tư khác phân loại Nệm, bom_option kind CUSHION', async () => {
       arrangeDetail();

@@ -424,6 +424,8 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
           <tr><td>Duyệt lệnh mà lựa chọn không khớp bản định mức sắp ghim</td><td>409, chặn trước khi ghi APPROVED</td></tr>
           <tr><td>Xuất đan mang kèm dây không thuộc loại đã chọn</td><td>400, không tạo phiếu xuất</td></tr>
           <tr><td>Tick nệm với vật tư không phân loại Nệm</td><td>400</td></tr>
+          <tr><td>Dòng Dây trong định mức mảnh không thuộc màu dây đã tick (không có "dây cố định", quyết định 24/10)</td><td>400 nêu mã và tên dây; FE bỏ tab "Dây" khỏi form "Thêm vật tư", cảnh báo và khoá "Gửi phê duyệt" nếu còn dòng dây ngoài danh sách.</td></tr>
+          <tr><td>Dòng nệm trong định mức chi tiết không thuộc màu nệm đã tick (không có "nệm cố định", cùng quy tắc với dây)</td><td>400 nêu mã và tên nệm; FE: ô chọn vật tư ở tab Phụ kiện chỉ liệt kê nệm thuộc màu đã tick (vẫn thêm được dòng thứ hai của cùng màu khác quy cách), cảnh báo và khoá "Gửi phê duyệt" nếu còn dòng nệm ngoài danh sách. Phụ kiện thường không bị ảnh hưởng.</td></tr>
           <tr><td>Đơn cũ (lựa chọn rỗng)</td><td>Chạy như trước, không lọc gì</td></tr>
           <tr><td>Gom hai dòng cùng SKU khác dây vào một đợt cắt</td><td>Cho phép (dây/nệm không ảnh hưởng cắt sắt)</td></tr>
           <tr><td>Nhập 2 dòng trùng cả nệm lẫn quy cách trong cùng SKU</td><td>400, nêu mã nệm (khác quy cách thì được)</td></tr>
