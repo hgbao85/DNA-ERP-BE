@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose, Type } from 'class-transformer';
-import { ProductionInvoiceStatus } from '../../../generated/prisma/client';
+import { ProductionInvoiceStatus, SolverMachine } from '../../../generated/prisma/client';
 import { ProductionInvoiceItemResponseDto } from './production-invoice-item-response.dto';
 
 @Exclude()
@@ -26,6 +26,11 @@ export class ProductionInvoiceResponseDto {
   })
   solverMaxWastePctOverride!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) solverAllowCustomLength!: boolean | null;
+  /** Máy cắt KHSX chọn cho đợt này (2026-10-23): 'laser' | 'tu_dong'. null = theo mặc định công ty
+   *  (SystemConfig.solverMachine). FE hiện lên màn Sếp duyệt cùng 2 trục ở trên. */
+  @Expose()
+  @ApiPropertyOptional({ nullable: true, enum: SolverMachine })
+  solverMachine!: SolverMachine | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) solverOverrideReason!: string | null;
   /** Số giây solver được giải cho mỗi loại sắt, riêng cho đợt này (2026-09-22) - null = mặc định
    *  công ty (SystemConfig.solverTimeLimitSeconds). Không hiện lên màn Sếp duyệt (không phải quyết
@@ -62,6 +67,9 @@ export class ProductionInvoiceResponseDto {
     wastePercentage: number | null;
     /** Có loại sắt vượt ngưỡng hao hụt - QLSX/Sếp phải thấy cảnh báo trước khi duyệt. */
     hasOverThreshold: boolean;
+    /** Máy cắt THỰC SỰ đã dùng ở lượt tính này ('laser' | 'tu_dong') - đã resolve, không bao giờ null
+     *  (khác `solverMachine` của PI: null khi KHSX để theo mặc định công ty). */
+    machine: SolverMachine;
   } | null;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;

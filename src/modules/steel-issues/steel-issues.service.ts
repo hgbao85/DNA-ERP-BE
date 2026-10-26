@@ -15,6 +15,7 @@ import {
   Prisma,
   ProcessStep,
   ProductionOrderFloorStage,
+  SolverMachine,
   StepBundleStatus,
   StockLedgerRefType,
   SteelIssueStatus,
@@ -115,6 +116,9 @@ type BaseInputs = {
 };
 /** Dữ liệu tính tiến độ CẮT của 1 PI (đã chia sẵn theo PI bởi loadPhoiInputs). */
 type CutInputs = BaseInputs & {
+  /** Máy cắt của phương án đã duyệt, theo loại sắt (2026-10-23): quyết định dùng tề đầu/lưỡi của máy nào để
+   *  đối chiếu sắt vào - đoạn ra. Thiếu khoá = MC Laser (phương án cũ chưa ghi máy). */
+  machineByMaterial: Map<string, SolverMachine>;
   cutSegments: {
     segmentSpecId: bigint;
     qty: number;
@@ -1584,7 +1588,7 @@ export class SteelIssuesService {
     }
     const revisionIds = [...new Set(orderRows.map((o) => o.bomRevisionId))];
 
-    const [bomPieces, pieceBoms, issues, cutSegments, cutQc, stepSegments, stepQc] =
+    const [bomPieces, pieceBoms, issues, cutSegments, cutQc, stepSegments, stepQc, machineLines] =
       await Promise.all([
         this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: revisionIds } } }),
         this.prisma.pieceBom.findMany({
@@ -1661,6 +1665,36 @@ export class SteelIssuesService {
             },
           },
         }),
+        // Máy cắt của các phương án ĐÃ DUYỆT (neo PI hoặc neo lệnh SX của PI) - cùng điều kiện phủ với
+        // getIssuePlan(). Một query cho mọi PI, chia theo PI ở dưới.
+        this.prisma.cuttingProposalLine.findMany({
+          where: {
+            feasible: true,
+            cuttingProposal: {
+              status: CuttingProposalStatus.APPROVED,
+              OR: [
+                { productionInvoiceId: { in: invoiceIds } },
+                {
+                  productionOrder: {
+                    productionInvoiceItem: { productionInvoiceId: { in: invoiceIds } },
+                  },
+                },
+              ],
+            },
+          },
+          select: {
+            materialId: true,
+            machine: true,
+            cuttingProposal: {
+              select: {
+                productionInvoiceId: true,
+                productionOrder: {
+                  select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+                },
+              },
+            },
+          },
+        }),
       ]);
 
     for (const [piKey, orders] of ordersByPi) {
@@ -1677,7 +1711,18 @@ export class SteelIssuesService {
           receivedBarCount: i.receivedBarCount,
           reworkOfId: i.reworkOfId,
         }));
+      // Một loại sắt có thể do nhiều phương án phủ (gộp PI + từng SKU): chỉ cần MỘT dòng cắt bằng MC Tự động là
+      // coi cả loại là MC Tự động (trong cùng PI hai máy khác nhau cho cùng loại sắt là ca không thực tế).
+      const machineByMaterial = new Map<string, SolverMachine>();
+      for (const line of machineLines) {
+        const linePi =
+          line.cuttingProposal.productionInvoiceId ??
+          line.cuttingProposal.productionOrder?.productionInvoiceItem.productionInvoiceId;
+        if (linePi?.toString() !== piKey || line.machine !== SolverMachine.tu_dong) continue;
+        machineByMaterial.set(line.materialId.toString(), SolverMachine.tu_dong);
+      }
       cut.set(piKey, {
+        machineByMaterial,
         orders,
         bomPieces: piBomPieces,
         pieceBoms: piPieceBoms,
@@ -1755,7 +1800,8 @@ export class SteelIssuesService {
   }
 
   private async computeCutProgress(inputs: CutInputs): Promise<PhoiProgressItemResponseDto[]> {
-    const { orders, bomPieces, pieceBoms, issues, cutSegments, qcSegments } = inputs;
+    const { orders, bomPieces, pieceBoms, issues, cutSegments, qcSegments, machineByMaterial } =
+      inputs;
     if (orders.length === 0) return [];
 
     // Khoá (cỡ đoạn, SKU) - SKU 'none' = đợt/đánh giá CŨ chưa gắn SKU (xem CutBundle.productionOrderId).
@@ -1913,7 +1959,7 @@ export class SteelIssuesService {
     for (const item of byMaterial.values()) {
       item.segments.sort((a, b) => b.cutLengthMm - a.cutLengthMm);
     }
-    await this.attachSteelBalance(byMaterial, issues);
+    await this.attachSteelBalance(byMaterial, issues, machineByMaterial);
     return [...byMaterial.values()].sort((a, b) => a.materialCode.localeCompare(b.materialCode));
   }
 
@@ -1932,14 +1978,24 @@ export class SteelIssuesService {
   private async attachSteelBalance(
     byMaterial: Map<string, PhoiProgressItemResponseDto>,
     issues: BaseInputs['issues'],
+    machineByMaterial: Map<string, SolverMachine>,
   ): Promise<void> {
     const config = await this.prisma.systemConfig.findUnique({
       where: { id: 1 },
-      select: { solverTrimStartMm: true, solverBladeWidthMm: true },
+      select: {
+        solverTrimStartMm: true,
+        solverBladeWidthMm: true,
+        solverMctdTrimStartMm: true,
+        solverMctdBladeWidthMm: true,
+      },
     });
-    const trimMm = config?.solverTrimStartMm ?? 0;
-    const kerfMm = config?.solverBladeWidthMm?.toNumber() ?? 0;
     for (const item of byMaterial.values()) {
+      // Tề đầu/lưỡi theo MÁY của phương án (2026-10-23): MC Tự động có cặp riêng (mặc định 0 / 2,5 mm), dùng
+      // cặp của MC Laser sẽ lệch cân bằng sắt vào - đoạn ra. Không có máy ghi nhận = MC Laser.
+      const tuDong = machineByMaterial.get(item.materialId) === SolverMachine.tu_dong;
+      const trimMm = (tuDong ? config?.solverMctdTrimStartMm : config?.solverTrimStartMm) ?? 0;
+      const kerfMm =
+        (tuDong ? config?.solverMctdBladeWidthMm : config?.solverBladeWidthMm)?.toNumber() ?? 0;
       const received = issues.filter(
         (i) => i.materialId.toString() === item.materialId && i.status !== SteelIssueStatus.ISSUED,
       );

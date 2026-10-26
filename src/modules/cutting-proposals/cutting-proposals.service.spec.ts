@@ -3,7 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalStatus, PurchaseProposalStatus } from '../../generated/prisma/client';
 import { AppConfig } from '../../config/configuration';
-import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
+import { ExternalApiHttpError } from '../external/external-api.service';
+import { SolverClientService } from './solver-client.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CuttingProposalsService } from './cutting-proposals.service';
@@ -56,7 +57,7 @@ describe('CuttingProposalsService', () => {
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   };
-  let externalApiService: { post: jest.Mock };
+  let solverClient: { propose: jest.Mock };
   let configService: { get: jest.Mock };
   let stockReservationsService: {
     reserve: jest.Mock;
@@ -116,6 +117,16 @@ describe('CuttingProposalsService', () => {
     solverLengthStepMm: 10,
     solverTimeLimitSeconds: 20,
     solverAllowCustomLength: true,
+    // Máy cắt (2026-10-23): mặc định công ty = MC Laser; cặp lưỡi/tề + tham số bó của MC Tự động.
+    solverMachine: 'laser',
+    solverMctdBladeWidthMm: mockDecimal(2.5),
+    solverMctdTrimStartMm: 0,
+    solverBundleFactors: [14, 16, 18, 20],
+    solverMaxManualCuts: 5,
+    solverMaxSizesPerPattern: 5,
+    // Luật gộp (2026-10-24): mốc cần sắt ≤ 3 ngày, ≤ 5 SKU mỗi đợt.
+    solverMergeWindowDays: 3,
+    solverMergeMaxSkus: 5,
   };
   const pieceBomRow = {
     pieceId: 10n,
@@ -238,12 +249,10 @@ describe('CuttingProposalsService', () => {
       $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
-    externalApiService = { post: jest.fn() };
+    solverClient = { propose: jest.fn() };
     configService = {
       get: jest.fn((key: string) => {
         const map: Record<string, unknown> = {
-          'solver.baseUrl': 'http://solver.local',
-          'solver.apiKey': 'test-key',
           'solver.timeoutSeconds': 300,
         };
         return map[key];
@@ -261,9 +270,10 @@ describe('CuttingProposalsService', () => {
     };
     notificationsService = { emit: jest.fn() };
     const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    // SolverClientService giả: HiGHS là bộ giải duy nhất, test chỉ cần bắt (body, timeoutMs) gửi đi.
     service = new CuttingProposalsService(
       prisma as unknown as PrismaServiceType,
-      externalApiService as unknown as ExternalApiService,
+      solverClient as unknown as SolverClientService,
       configService as unknown as ConfigService<AppConfig, true>,
       stockReservationsService as unknown as StockReservationsService,
       notificationsService as unknown as NotificationsService,
@@ -308,7 +318,7 @@ describe('CuttingProposalsService', () => {
         approvedAt: null,
         ...productionOrderRelation(),
       });
-      externalApiService.post.mockReturnValue(new Promise(() => {})); // never resolves
+      solverClient.propose.mockReturnValue(new Promise(() => {})); // never resolves
 
       const result = await service.requestForOrder(1n);
 
@@ -385,7 +395,7 @@ describe('CuttingProposalsService', () => {
         productionOrder: null,
         productionInvoice: { code: 'PI-2026-020', items: [] },
       });
-      externalApiService.post.mockReturnValue(new Promise(() => {})); // never resolves
+      solverClient.propose.mockReturnValue(new Promise(() => {})); // never resolves
 
       const result = await service.requestForInvoice(5n);
 
@@ -409,7 +419,7 @@ describe('CuttingProposalsService', () => {
 
       await expect(service.requestForInvoice(5n)).rejects.toThrow(ConflictException);
       expect(prisma.cuttingProposal.create).not.toHaveBeenCalled();
-      expect(externalApiService.post).not.toHaveBeenCalled();
+      expect(solverClient.propose).not.toHaveBeenCalled();
     });
 
     it('CHẶN (404) khi PI không tồn tại - không tạo phương án nào (L2)', async () => {
@@ -441,7 +451,7 @@ describe('CuttingProposalsService', () => {
     };
 
     it('builds the bom[] payload from pieceBom/bomPiece and saves the mapped result on success', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 223,
@@ -478,8 +488,7 @@ describe('CuttingProposalsService', () => {
         where: { bomRevisionId: 5n },
         include: { piece: true, segmentSpec: true },
       });
-      expect(externalApiService.post).toHaveBeenCalledWith(
-        'http://solver.local/api/v1/de_xuat/propose/',
+      expect(solverClient.propose).toHaveBeenCalledWith(
         expect.objectContaining({
           num_sets: 500,
           bom: [
@@ -496,15 +505,14 @@ describe('CuttingProposalsService', () => {
           auto_scan: true, // Sếp mở lại 2026-08-26, xem test riêng dưới
           stop_on_first: true, // 2026-09-22, xem comment tại nơi gửi request
         }),
-        { headers: { Authorization: 'Bearer test-key' } },
         300_000,
       );
-      expect(externalApiService.post).toHaveBeenCalledTimes(1); // any_over_threshold=false -> no retry
+      expect(solverClient.propose).toHaveBeenCalledTimes(1); // any_over_threshold=false -> no retry
       // Không vật tư nào có ngưỡng riêng -> KHÔNG gửi key này (giống hệt request trước khi có
       // tính năng ngưỡng-theo-vật-tư), không phải gửi object rỗng.
       const bodySent = (
-        externalApiService.post.mock.calls[0] as unknown as [string, Record<string, unknown>]
-      )[1];
+        solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>]
+      )[0];
       expect(bodySent).not.toHaveProperty('max_waste_percentage_by_material');
       // calls[0] = ghi requestParams SỚM trước khi gọi solver (2026-09-22, xem
       // runSolverAndSave) - kết quả cuối cùng giờ là calls[1], không phải calls[0] nữa.
@@ -573,7 +581,7 @@ describe('CuttingProposalsService', () => {
         { pieceId: 11n, qtyPerUnit: 4 },
         { pieceId: 12n, qtyPerUnit: 2 },
       ]);
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 223,
@@ -607,7 +615,7 @@ describe('CuttingProposalsService', () => {
     });
 
     it('pieceSummary = undefined khi solver không trả pieces (dòng infeasible) - để Prisma bỏ qua cột', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 0,
@@ -625,7 +633,7 @@ describe('CuttingProposalsService', () => {
     });
 
     it('lưu lengthSource nguyên văn từ solver ("fixed" hoặc "scan") - null khi infeasible hoặc solver không gửi', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 295,
@@ -661,7 +669,7 @@ describe('CuttingProposalsService', () => {
     });
 
     it('tự động duyệt ngay sau khi tính thành công - không cần gọi approve() riêng (Sếp chốt 2026-08-15)', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -730,7 +738,7 @@ describe('CuttingProposalsService', () => {
     });
 
     it('auto-duyệt lỗi không được đè kết quả DRAFT vừa lưu thành FAILED - chỉ log, KHÔNG báo QLSX (2026-09-26)', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -765,7 +773,7 @@ describe('CuttingProposalsService', () => {
       // approve() lọc buyableLines theo `feasible && totalBars>0`, nên dòng infeasible bị loại
       // khỏi đề xuất mua KHÔNG một lời cảnh báo. Ca hỗn hợp (1 vật tư ra, 1 vật tư không) là ca
       // nguy hiểm nhất: đề xuất mua trông vẫn bình thường, tới lúc Phôi ra xưởng mới lòi ra thiếu.
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -807,7 +815,7 @@ describe('CuttingProposalsService', () => {
       // Phát hiện khi review sau khi bỏ auto_scan (2026-08-18): over_threshold trước đây bị bỏ
       // qua hoàn toàn ở cổng chặn - hệ thống ĐÃ VÀ ĐANG tự duyệt/trừ kho/tạo đề xuất mua cho các
       // phương án vượt ngưỡng hao hụt, không một lời cảnh báo. Đây là test khẳng định lỗ đã vá.
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -852,7 +860,7 @@ describe('CuttingProposalsService', () => {
       // Không được quá tay chặn cả ca hợp lệ - đối trọng với 2 test chặn ở trên, tránh regression
       // kiểu "chặn nhầm mọi thứ". Mirror đúng mock của test "tự động duyệt ngay sau khi tính
       // thành công" ở trên, chỉ thêm over_threshold: false tường minh.
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -903,7 +911,7 @@ describe('CuttingProposalsService', () => {
       // duyệt tiếp sẽ trừ tồn lần 2 (idempotencyKey bút toán khoá theo id phương án) và tạo
       // PurchaseProposal trùng, trong khi phương án cũ chỉ bị đánh SUPERSEDED - trạng thái đó
       // KHÔNG huỷ đề xuất mua cũ và KHÔNG hoàn tồn.
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -952,7 +960,7 @@ describe('CuttingProposalsService', () => {
         { id: 200n, maxCuttingWastePercentage: { toNumber: () => 2 } },
         { id: 300n, maxCuttingWastePercentage: { toNumber: () => 8 } },
       ]);
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 10,
@@ -970,8 +978,8 @@ describe('CuttingProposalsService', () => {
       await invoke(2n, 1n);
 
       const bodySent = (
-        externalApiService.post.mock.calls[0] as unknown as [string, Record<string, unknown>]
-      )[1];
+        solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>]
+      )[0];
       expect(bodySent).not.toHaveProperty('max_waste_percentage_by_material');
       // Chỉ còn ngưỡng chung của công ty (SystemConfig, KHSX tự đổi được).
       expect(bodySent.max_waste_percentage).toBe(1);
@@ -994,7 +1002,7 @@ describe('CuttingProposalsService', () => {
           },
         },
       });
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -1016,9 +1024,7 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      const body = (
-        externalApiService.post.mock.calls[0] as unknown as [string, Record<string, unknown>]
-      )[1];
+      const body = (solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>])[0];
       expect(body.stock_lengths_by_material).toEqual({ '200': 5850 });
       // stock_lengths CHUNG vẫn phải gửi nguyên: loại sắt nào không có khoá riêng vẫn rơi về nó
       // (solver resolve theo từng group, xem resolved_stock_lengths_by_group trong input_echo).
@@ -1027,7 +1033,7 @@ describe('CuttingProposalsService', () => {
 
     it('KHÔNG chọn chiều dài riêng thì KHÔNG gửi key - request y hệt trước khi có tính năng', async () => {
       // Backward-compat: gửi object rỗng cũng là thay đổi hợp đồng, phải VẮNG hẳn key.
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -1049,9 +1055,7 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      const body = (
-        externalApiService.post.mock.calls[0] as unknown as [string, Record<string, unknown>]
-      )[1];
+      const body = (solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>])[0];
       expect(body).not.toHaveProperty('stock_lengths_by_material');
     });
 
@@ -1063,7 +1067,7 @@ describe('CuttingProposalsService', () => {
     // PurchaseProposalItem.stockLengthMm (xem test riêng ở describe('approve')). Vẫn CHỈ 1 lần
     // gọi solver - test này giữ tên cũ về phần "1 lần gọi", chỉ đổi kỳ vọng auto_scan.
     it('mặc định (solverAllowCustomLength=true) gửi auto_scan=true và chỉ gọi solver ĐÚNG 1 LẦN, kể cả khi vượt ngưỡng', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 227,
@@ -1079,12 +1083,8 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      expect(externalApiService.post).toHaveBeenCalledTimes(1);
-      const [url, body] = externalApiService.post.mock.calls[0] as unknown as [
-        string,
-        Record<string, unknown>,
-      ];
-      expect(url).toBe('http://solver.local/api/v1/de_xuat/propose/');
+      expect(solverClient.propose).toHaveBeenCalledTimes(1);
+      const [body] = solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>];
       expect(body.auto_scan).toBe(true);
       // Không còn ngưỡng riêng theo vật tư (2026-09-30).
       expect(body).not.toHaveProperty('max_waste_percentage_by_material');
@@ -1104,7 +1104,7 @@ describe('CuttingProposalsService', () => {
         ...systemConfig,
         solverAllowCustomLength: false,
       });
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -1126,10 +1126,7 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      const [, body] = externalApiService.post.mock.calls[0] as unknown as [
-        string,
-        Record<string, unknown>,
-      ];
+      const [body] = solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>];
       expect(body.auto_scan).toBe(false);
     });
 
@@ -1147,7 +1144,7 @@ describe('CuttingProposalsService', () => {
           },
         },
       });
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -1169,10 +1166,7 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      const [, body] = externalApiService.post.mock.calls[0] as unknown as [
-        string,
-        Record<string, unknown>,
-      ];
+      const [body] = solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>];
       expect(body.auto_scan).toBe(false);
     });
 
@@ -1189,7 +1183,7 @@ describe('CuttingProposalsService', () => {
           },
         },
       });
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -1213,10 +1207,7 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      const [, body] = externalApiService.post.mock.calls[0] as unknown as [
-        string,
-        Record<string, unknown>,
-      ];
+      const [body] = solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>];
       // Ngưỡng chung 1.0% -> nâng lên 5.
       expect(body.max_waste_percentage).toBe(5);
       expect(body).not.toHaveProperty('max_waste_percentage_by_material');
@@ -1235,7 +1226,7 @@ describe('CuttingProposalsService', () => {
           },
         },
       });
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -1257,10 +1248,7 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      const [, body] = externalApiService.post.mock.calls[0] as unknown as [
-        string,
-        Record<string, unknown>,
-      ];
+      const [body] = solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>];
       expect(body.max_waste_percentage).toBe(5);
       expect(body.auto_scan).toBe(false);
     });
@@ -1279,7 +1267,7 @@ describe('CuttingProposalsService', () => {
           },
         },
       });
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 8,
@@ -1321,7 +1309,7 @@ describe('CuttingProposalsService', () => {
     });
 
     it('KHÔNG gọi lại solver khi có dòng feasible=false - lưu nguyên kết quả rồi để cổng chặn tự-duyệt xử lý', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 0,
@@ -1337,7 +1325,7 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      expect(externalApiService.post).toHaveBeenCalledTimes(1);
+      expect(solverClient.propose).toHaveBeenCalledTimes(1);
       // Dòng infeasible vẫn được lưu (không đánh cả phương án thành FAILED) - và
       // autoApproveBlockReason() sẽ chặn tự duyệt, báo QLSX đi gộp đợt cắt.
       const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
@@ -1356,7 +1344,7 @@ describe('CuttingProposalsService', () => {
     // nhau (SKU A đã duyệt trước, chốt 5900mm; SKU B đang xét ở đây ra 6200mm) - KHÔNG được tự
     // duyệt, vì bước gộp PurchaseProposal bên dưới sẽ ÂM THẦM giữ chiều dài của SKU A cho cả 2.
     it('KHÔNG tự duyệt khi vật tư đã bị SKU khác trong cùng PI chốt chiều dài cây khác (L7)', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: {
           total_bars_all: 20,
@@ -1397,7 +1385,7 @@ describe('CuttingProposalsService', () => {
     });
 
     it('marks the proposal FAILED with the solver error message when solver returns NO_FEASIBLE_SOLUTION', async () => {
-      externalApiService.post.mockRejectedValue(
+      solverClient.propose.mockRejectedValue(
         new ExternalApiHttpError(422, {
           code: 'NO_FEASIBLE_SOLUTION',
           message: 'Không có cách cắt nào đạt hao hụt <= 1.0%',
@@ -1437,7 +1425,7 @@ describe('CuttingProposalsService', () => {
         { pieceId: 10n, qtyPerUnit: 4 },
         { pieceId: 11n, qtyPerUnit: 1 },
       ]);
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: { total_bars_all: 286, total_waste_mm: 12129, waste_percentage: 0.61 },
         purchase_plan: [
@@ -1481,7 +1469,7 @@ describe('CuttingProposalsService', () => {
         ...systemConfig,
         solverTimeLimitSeconds: 200,
       });
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: { total_bars_all: 0, total_waste_mm: 0, waste_percentage: 0 },
         purchase_plan: [
@@ -1493,9 +1481,8 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      expect(externalApiService.post).toHaveBeenCalledTimes(1);
-      const [, body] = externalApiService.post.mock.calls[0] as unknown as [
-        string,
+      expect(solverClient.propose).toHaveBeenCalledTimes(1);
+      const [body] = solverClient.propose.mock.calls[0] as unknown as [
         { time_limit_seconds: number },
       ];
       expect(body.time_limit_seconds).toBe(150);
@@ -1508,8 +1495,208 @@ describe('CuttingProposalsService', () => {
       expect(failCall).toBeUndefined();
     });
 
+    // ── Máy cắt (2026-10-23): MC Laser giữ nguyên, MC Tự động thêm tham số bó ───────────
+
+    describe('máy cắt', () => {
+      /** Đợt có PI với máy KHSX chọn (null = không chọn, theo mặc định công ty). */
+      const orderWithMachine = (solverMachine: string | null) => ({
+        ...productionOrder,
+        productionInvoiceItem: {
+          salesOrder: { orderCode: 'PO-48' },
+          productionInvoice: {
+            solverMaxWastePctOverride: null,
+            solverAllowCustomLength: null,
+            solverMachine,
+            solverStockLengthsByMaterial: null,
+          },
+        },
+      });
+      const okLaser = {
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 50,
+          waste_percentage: 0.3,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            machine: 'laser',
+            over_threshold: false,
+            total_bars: 8,
+            cutting_patterns: [{ pattern_id: 1, bars: 8, waste_per_bar: 5 }],
+          },
+        ],
+      };
+      const okTuDong = {
+        status: 'success',
+        summary: {
+          total_bars_all: 36,
+          total_waste_mm: 90,
+          waste_percentage: 0.4,
+          any_over_threshold: false,
+        },
+        purchase_plan: [
+          {
+            material: '200',
+            feasible: true,
+            machine: 'tu_dong',
+            over_threshold: false,
+            total_bars: 36,
+            bundle_summary: {
+              factors: [14, 16, 18, 20],
+              total_bundles: 2,
+              manual_bars: 2,
+              total_cuts: 4,
+              max_sizes_per_pattern: 5,
+            },
+            cutting_patterns: [
+              {
+                pattern_id: 1,
+                bars: 36,
+                waste_per_bar: 3,
+                pieces_breakdown: [{ size: 660, count: 9 }],
+                bundles: { '16': 1, '18': 1, '1': 2 },
+              },
+            ],
+          },
+        ],
+      };
+      const sentBody = () =>
+        (solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+
+      beforeEach(() => {
+        prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+        prisma.cuttingProposalPattern.create.mockResolvedValue({ id: 500n });
+      });
+
+      it('MC Laser (mặc định công ty, KHSX không chọn): body y như trước + machine=laser, KHÔNG có tham số bó, dùng tề/lưỡi MC Laser', async () => {
+        solverClient.propose.mockResolvedValue(okLaser);
+
+        await invoke(2n, 1n);
+
+        const body = sentBody();
+        expect(body.machine).toBe('laser');
+        expect(body.trim_start).toBe(10);
+        expect(body.blade_width).toBe(1);
+        expect(body).not.toHaveProperty('bundle_factors');
+        expect(body).not.toHaveProperty('max_manual_cuts');
+        expect(body).not.toHaveProperty('max_sizes_per_pattern');
+        // Dòng lưu: máy laser, không có tổng kết bó / bó theo pattern.
+        expect(prisma.cuttingProposalLine.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({ machine: 'laser', bundleSummary: undefined }) as unknown,
+        });
+        expect(prisma.cuttingProposalPattern.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({ bundles: undefined }) as unknown,
+        });
+      });
+
+      it('KHSX chọn MC Tự động cho đợt: dùng cặp lưỡi/tề RIÊNG của MCTĐ + bundle_factors/max_manual_cuts/max_sizes_per_pattern', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderWithMachine('tu_dong'));
+        solverClient.propose.mockResolvedValue(okTuDong);
+
+        await invoke(2n, 1n);
+
+        const body = sentBody();
+        expect(body).toEqual(
+          expect.objectContaining({
+            machine: 'tu_dong',
+            trim_start: 0, // solverMctdTrimStartMm, KHÔNG phải solverTrimStartMm (10)
+            blade_width: 2.5, // solverMctdBladeWidthMm, KHÔNG phải solverBladeWidthMm (1)
+            bundle_factors: [14, 16, 18, 20],
+            max_manual_cuts: 5,
+            max_sizes_per_pattern: 5,
+          }),
+        );
+        // 2 chế độ cây chuẩn giữ nguyên cho MC Tự động.
+        expect(body.stop_on_first).toBe(true);
+        expect(body.auto_scan).toBe(true);
+      });
+
+      it('lưu machine + bundleSummary (camelCase TƯỜNG MINH) vào dòng và bundles vào pattern', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderWithMachine('tu_dong'));
+        solverClient.propose.mockResolvedValue(okTuDong);
+
+        await invoke(2n, 1n);
+
+        expect(prisma.cuttingProposalLine.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            machine: 'tu_dong',
+            bundleSummary: {
+              factors: [14, 16, 18, 20],
+              totalBundles: 2,
+              manualBars: 2,
+              totalCuts: 4,
+              maxSizesPerPattern: 5,
+            },
+          }) as unknown,
+        });
+        expect(prisma.cuttingProposalPattern.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            barCount: 36,
+            bundles: { '16': 1, '18': 1, '1': 2 },
+          }) as unknown,
+        });
+      });
+
+      it('KHSX không chọn máy -> theo SystemConfig.solverMachine (công ty đặt MC Tự động)', async () => {
+        prisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
+          ...systemConfig,
+          solverMachine: 'tu_dong',
+          solverBundleFactors: [10, 12],
+          solverMaxManualCuts: 3,
+          solverMaxSizesPerPattern: 4,
+        });
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderWithMachine(null));
+        solverClient.propose.mockResolvedValue(okTuDong);
+
+        await invoke(2n, 1n);
+
+        expect(sentBody()).toEqual(
+          expect.objectContaining({
+            machine: 'tu_dong',
+            bundle_factors: [10, 12],
+            max_manual_cuts: 3,
+            max_sizes_per_pattern: 4,
+          }),
+        );
+      });
+
+      it('KHSX chọn MC Laser dù công ty đặt MC Tự động -> lựa chọn của đợt thắng', async () => {
+        prisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
+          ...systemConfig,
+          solverMachine: 'tu_dong',
+        });
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderWithMachine('laser'));
+        solverClient.propose.mockResolvedValue(okLaser);
+
+        await invoke(2n, 1n);
+
+        const body = sentBody();
+        expect(body.machine).toBe('laser');
+        expect(body.trim_start).toBe(10);
+        expect(body).not.toHaveProperty('bundle_factors');
+      });
+
+      it('requestParams ghi sớm cũng mang máy + tham số bó (để màn chi tiết khi đang tính biết máy nào)', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderWithMachine('tu_dong'));
+        solverClient.propose.mockResolvedValue(okTuDong);
+
+        await invoke(2n, 1n);
+
+        const firstUpdate = prisma.cuttingProposal.update.mock.calls[0] as unknown as [
+          { data: { requestParams: Record<string, unknown> } },
+        ];
+        expect(firstUpdate[0].data.requestParams).toEqual(
+          expect.objectContaining({ machine: 'tu_dong', bundle_factors: [14, 16, 18, 20] }),
+        );
+      });
+    });
+
     it('stores an infeasible material line without touching cutting_patterns', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: { total_bars_all: 0, total_waste_mm: 0, waste_percentage: 0 },
         purchase_plan: [{ material: '200', feasible: false }],
@@ -1528,7 +1715,7 @@ describe('CuttingProposalsService', () => {
     it('lưu NGUYÊN VĂN reason/best_achievable/timed_out/max_waste_pct_threshold cho dòng infeasible - và tính đúng hasInfeasibleLine (2026-08-19)', async () => {
       // Trước 2026-08-19, 4 field này bị vứt bỏ hoàn toàn - FE chỉ hiện được "Không khả thi" trơ
       // trọi, không nói được vì sao. Test này khẳng định đường lưu đã được nối.
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: { total_bars_all: 0, total_waste_mm: 0, waste_percentage: 0 },
         purchase_plan: [
@@ -1573,7 +1760,7 @@ describe('CuttingProposalsService', () => {
     });
 
     it('lưu overThreshold/maxWastePctThreshold cho dòng feasible vượt ngưỡng - và tính đúng hasOverThreshold, KHÔNG lẫn với hasInfeasibleLine', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: { total_bars_all: 8, total_waste_mm: 400, waste_percentage: 2.4 },
         purchase_plan: [
@@ -1608,7 +1795,7 @@ describe('CuttingProposalsService', () => {
     });
 
     it('skips a pieces_breakdown segment whose size has no matching segmentSpec, without failing the rest', async () => {
-      externalApiService.post.mockResolvedValue({
+      solverClient.propose.mockResolvedValue({
         status: 'success',
         summary: { total_bars_all: 223, total_waste_mm: 11373, waste_percentage: 0.85 },
         purchase_plan: [
@@ -3178,6 +3365,9 @@ describe('CuttingProposalsService', () => {
             quantity: 10,
             productionInvoiceId: null,
             prodApprovalStatus: null,
+            materialDeadline: null,
+            stages: [],
+            mfgProduct: { factoryCode: 'GHE-J55' },
           },
         ]);
         prisma.bomRevision.findMany.mockResolvedValue([{ id: 5n, mfgProductId: 2n }]);
@@ -3213,6 +3403,31 @@ describe('CuttingProposalsService', () => {
         expect(result.preSolved).toBe(true);
         expect(result.mfgProductCode).toBe('SKU-1');
         expect(result.status).toBe(CuttingProposalStatus.CALCULATING);
+      });
+
+      it('máy cắt KHSX chọn đi vào solverOptions; không gửi (hoặc null) = KHÔNG có khoá -> theo mặc định công ty, không thừa hưởng máy của lượt trước', async () => {
+        await service.requestForBatch(
+          { productionInvoiceItemIds: ['20'], solverMachine: 'tu_dong' } as never,
+          'user-khsx',
+        );
+        expect(prisma.cuttingProposal.create).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              solverOptions: { solverMachine: 'tu_dong' },
+            }) as unknown,
+          }),
+        );
+
+        await service.requestForBatch({ productionInvoiceItemIds: ['20'] }, 'user-khsx');
+        await service.requestForBatch(
+          { productionInvoiceItemIds: ['20'], solverMachine: null } as never,
+          'user-khsx',
+        );
+        const calls = prisma.cuttingProposal.create.mock.calls as unknown as [
+          { data: { solverOptions?: unknown } },
+        ][];
+        expect(calls[1][0].data.solverOptions).toBeUndefined();
+        expect(calls[2][0].data.solverOptions).toBeUndefined();
       });
 
       it('GIỮ lượt cũ dùng được (DRAFT) để KHSX so sánh/có đường lui; chỉ dọn lượt lỗi và lượt vô nghiệm', async () => {
@@ -3310,6 +3525,9 @@ describe('CuttingProposalsService', () => {
             quantity: 10,
             productionInvoiceId: 7n,
             prodApprovalStatus: null,
+            materialDeadline: null,
+            stages: [],
+            mfgProduct: { factoryCode: 'GHE-J55' },
           },
         ]);
 
@@ -3330,6 +3548,33 @@ describe('CuttingProposalsService', () => {
       });
     });
 
+    describe('getProposalLineWaste - hao hụt THẬT từng loại sắt của phương án (bằng chứng đặc cách)', () => {
+      it('trả % thật (số, không phải chuỗi Decimal) + cây đã chọn; dòng vô nghiệm = null', async () => {
+        prisma.cuttingProposalLine.findMany.mockResolvedValue([
+          {
+            feasible: true,
+            wastePercentage: mockDecimal(55.833),
+            bestStockLengthMm: 6000,
+            material: { code: 'SAT-VUONG-50X50' },
+          },
+          {
+            feasible: false,
+            wastePercentage: null,
+            bestStockLengthMm: null,
+            material: { code: 'SAT-HOP-10X20' },
+          },
+        ]);
+
+        await expect(service.getProposalLineWaste(70n)).resolves.toEqual([
+          { materialCode: 'SAT-VUONG-50X50', wastePct: 55.833, stockLengthMm: 6000 },
+          { materialCode: 'SAT-HOP-10X20', wastePct: null, stockLengthMm: null },
+        ]);
+        expect(prisma.cuttingProposalLine.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { cuttingProposalId: 70n } }),
+        );
+      });
+    });
+
     describe('assertReadyForInvoice - cổng "được tạo lệnh sản xuất từ phương án này"', () => {
       beforeEach(() => {
         currentUnchanged();
@@ -3340,7 +3585,22 @@ describe('CuttingProposalsService', () => {
 
         const result = await service.assertReadyForInvoice('70', [20n]);
 
-        expect(result).toEqual({ id: 70n, solverOptions: { solverMaxWastePctOverride: 5 } });
+        expect(result).toEqual({
+          id: 70n,
+          solverOptions: { solverMaxWastePctOverride: 5 },
+          usedMachine: null, // phương án cũ chưa ghi máy trong requestParams
+        });
+      });
+
+      it('trả máy THỰC SỰ đã dùng (requestParams.machine) để PI chốt, kể cả khi solverOptions không có máy', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(
+          proposalRow({ requestParams: { machine: 'tu_dong' } }),
+        );
+
+        const result = await service.assertReadyForInvoice('70', [20n]);
+
+        expect(result.usedMachine).toBe('tu_dong');
+        expect(result.solverOptions).not.toHaveProperty('solverMachine');
       });
 
       it.each([
@@ -3357,6 +3617,44 @@ describe('CuttingProposalsService', () => {
 
         await expect(service.assertReadyForInvoice('70', [20n])).rejects.toThrow(message);
       });
+
+      it('lý do vô nghiệm THEO CHẾ ĐỘ ĐANG DÙNG: chưa nới ngưỡng -> khuyên chọn "Chấp nhận hao hụt cao hơn"', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(
+          proposalRow({ hasInfeasibleLine: true, solverOptions: {} }),
+        );
+
+        await expect(service.assertReadyForInvoice('70', [20n])).rejects.toThrow(
+          /đạt ngưỡng hao hụt hiện tại - chọn chế độ “Chấp nhận hao hụt cao hơn”/,
+        );
+      });
+
+      it.each([
+        ['chỉ cây đã định (đơn gấp từ 2026-10-24)', false],
+        ['phương án cũ còn cho dò chiều dài', true],
+      ])(
+        'đang Ở chế độ "Chấp nhận hao hụt cao hơn" mà vẫn vô nghiệm (%s) -> KHÔNG khuyên chọn lại chế độ đó, KHÔNG khuyên bỏ tick/dò chiều dài (proposal 191)',
+        async (_label, allowCustom) => {
+          prisma.cuttingProposal.findUnique.mockResolvedValue(
+            proposalRow({
+              hasInfeasibleLine: true,
+              solverOptions: {
+                solverMaxWastePctOverride: 100,
+                solverAllowCustomLength: allowCustom,
+              },
+            }),
+          );
+
+          const err = (await service
+            .assertReadyForInvoice('70', [20n])
+            .catch((e: Error) => e)) as Error;
+          expect(err.message).toContain('dù đã chọn chế độ “Chấp nhận hao hụt cao hơn”');
+          expect(err.message).not.toMatch(/ - chọn chế độ “Chấp nhận/);
+          // ô tick "Giữ đúng chiều dài đã định" đã bỏ khỏi FE - đơn gấp chỉ cắt trên cây đã định
+          expect(err.message).not.toMatch(/tick|Giữ đúng chiều dài|dò chiều dài/);
+          expect(err.message).toContain('chọn MC Laser');
+          expect(err.message).toContain('gộp thêm SKU');
+        },
+      );
 
       it('vượt ngưỡng hao hụt KHÔNG chặn (KHSX đã tự nâng được ngưỡng) - vẫn tạo được lệnh', async () => {
         prisma.cuttingProposal.findUnique.mockResolvedValue(
@@ -3590,7 +3888,7 @@ describe('CuttingProposalsService', () => {
       });
 
       it('đợt chấp nhận hao hụt cao hơn (trần 100%): solver không đánh dấu vượt nhưng hao hụt > mức MẶC ĐỊNH thì vẫn hasOverThreshold=true để Sếp thấy cảnh báo', async () => {
-        externalApiService.post.mockResolvedValue(
+        solverClient.propose.mockResolvedValue(
           solverOk({
             waste_percentage: 14.85,
             over_threshold: false,
@@ -3608,7 +3906,7 @@ describe('CuttingProposalsService', () => {
       });
 
       it('hao hụt trong mức mặc định thì KHÔNG bị đánh dấu vượt', async () => {
-        externalApiService.post.mockResolvedValue(solverOk({ waste_percentage: 0.5 }));
+        solverClient.propose.mockResolvedValue(solverOk({ waste_percentage: 0.5 }));
         prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(proposalRow());
 
         await run();
@@ -3620,7 +3918,7 @@ describe('CuttingProposalsService', () => {
       });
 
       it('KHÔNG tự duyệt (không giữ chỗ tồn, không tạo đề xuất mua) và báo NGƯỜI BẤM TÍNH đã xong', async () => {
-        externalApiService.post.mockResolvedValue(solverOk());
+        solverClient.propose.mockResolvedValue(solverOk());
         prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(proposalRow());
 
         await run();
@@ -3645,7 +3943,7 @@ describe('CuttingProposalsService', () => {
       });
 
       it('vượt ngưỡng -> vẫn báo DONE (không chặn) kèm ghi chú vượt ngưỡng, vẫn không tự duyệt', async () => {
-        externalApiService.post.mockResolvedValue(solverOk({ over_threshold: true }));
+        solverClient.propose.mockResolvedValue(solverOk({ over_threshold: true }));
         prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(
           proposalRow({ hasOverThreshold: true }),
         );
@@ -3664,7 +3962,7 @@ describe('CuttingProposalsService', () => {
       });
 
       it('loại sắt KHÔNG có cách cắt (vô nghiệm) -> vẫn báo CUTTING_SOLVE_FAILED kèm lý do', async () => {
-        externalApiService.post.mockResolvedValue(solverOk({ feasible: false }));
+        solverClient.propose.mockResolvedValue(solverOk({ feasible: false }));
         prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(
           proposalRow({ hasInfeasibleLine: true }),
         );
@@ -3682,7 +3980,7 @@ describe('CuttingProposalsService', () => {
       });
 
       it('solver lỗi -> lưu FAILED và báo người bấm Tính', async () => {
-        externalApiService.post.mockRejectedValue(new Error('solver sập'));
+        solverClient.propose.mockRejectedValue(new Error('solver sập'));
         prisma.cuttingProposal.findUniqueOrThrow.mockResolvedValue(
           proposalRow({ status: CuttingProposalStatus.FAILED, errorMessage: 'solver sập' }),
         );

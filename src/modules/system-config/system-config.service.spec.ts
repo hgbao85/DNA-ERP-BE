@@ -38,6 +38,14 @@ describe('SystemConfigService', () => {
     solverLengthStepMm: 10,
     solverTimeLimitSeconds: 30,
     solverAllowCustomLength: true,
+    solverMachine: 'laser',
+    solverMctdBladeWidthMm: mockDecimal(2.5),
+    solverMctdTrimStartMm: 0,
+    solverBundleFactors: [14, 16, 18, 20],
+    solverMaxManualCuts: 5,
+    solverMaxSizesPerPattern: 5,
+    solverMergeWindowDays: 3,
+    solverMergeMaxSkus: 5,
     purchaseOverReceiptTolerancePercent: mockDecimal(0),
     floorPublicUrl: null,
     floorAllowedIps: [],
@@ -95,6 +103,19 @@ describe('SystemConfigService', () => {
       const result = await service.findOne();
 
       expect(result.solverAllowCustomLength).toBe(true);
+    });
+
+    it('máy cắt (2026-10-23): Decimal lưỡi MCTĐ -> number, JSON hệ số bó -> mảng số, còn lại giữ nguyên', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+
+      const result = await service.findOne();
+
+      expect(result.solverMachine).toBe('laser');
+      expect(result.solverMctdBladeWidthMm).toBe(2.5);
+      expect(result.solverMctdTrimStartMm).toBe(0);
+      expect(result.solverBundleFactors).toEqual([14, 16, 18, 20]);
+      expect(result.solverMaxManualCuts).toBe(5);
+      expect(result.solverMaxSizesPerPattern).toBe(5);
     });
   });
 
@@ -241,6 +262,42 @@ describe('SystemConfigService', () => {
       );
       expect(result.solverAllowCustomLength).toBe(false);
     });
+
+    it('lưu cấu hình máy cắt (đổi mặc định sang MC Tự động + tham số bó) và trả lại đã ép kiểu', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        solverMachine: 'tu_dong',
+        solverMctdBladeWidthMm: mockDecimal(3),
+        solverMctdTrimStartMm: 5,
+        solverBundleFactors: [10, 12],
+        solverMaxManualCuts: 8,
+        solverMaxSizesPerPattern: 4,
+      });
+
+      const result = await service.update({
+        companyName: 'DNA Steel',
+        solverMachine: 'tu_dong',
+        solverMctdBladeWidthMm: 3,
+        solverMctdTrimStartMm: 5,
+        solverBundleFactors: [10, 12],
+        solverMaxManualCuts: 8,
+        solverMaxSizesPerPattern: 4,
+      });
+
+      expect(prisma.systemConfig.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            solverMachine: 'tu_dong',
+            solverBundleFactors: [10, 12],
+          }) as unknown,
+        }),
+      );
+      expect(result.solverMachine).toBe('tu_dong');
+      expect(result.solverMctdBladeWidthMm).toBe(3);
+      expect(result.solverBundleFactors).toEqual([10, 12]);
+      expect(result.solverMaxSizesPerPattern).toBe(4);
+    });
   });
   // ─── KHSX tự đổi ngưỡng hao hụt mặc định (2026-09-30) ──────────────────────────────────────
   describe('cutting defaults (KHSX đổi ngưỡng hao hụt mặc định)', () => {
@@ -253,6 +310,35 @@ describe('SystemConfigService', () => {
       const result = await service.getCuttingDefaults();
 
       expect(result.solverMaxWastePercentage).toBe(1.5);
+    });
+
+    it('getCuttingDefaults trả kèm máy cắt mặc định để KHSX (không có quyền đọc /system-config) hiện "Theo mặc định (MC …)"', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue({
+        ...seededConfig,
+        solverMachine: 'tu_dong',
+      });
+
+      const result = await service.getCuttingDefaults();
+
+      expect(result.solverMachine).toBe('tu_dong');
+    });
+
+    it('getCuttingDefaults trả kèm thông số 2 máy cắt (KHSX chỉ XEM, Admin sửa) - Decimal ra number', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+
+      const result = await service.getCuttingDefaults();
+
+      expect(result).toMatchObject({
+        solverStockLengths: [6000, 5800],
+        solverMaxSurplus: 2,
+        solverTrimStartMm: 10,
+        solverBladeWidthMm: 3,
+        solverMctdTrimStartMm: 0,
+        solverMctdBladeWidthMm: 2.5,
+        solverBundleFactors: [14, 16, 18, 20],
+        solverMaxManualCuts: 5,
+        solverMaxSizesPerPattern: 5,
+      });
     });
 
     it('CHỈ ghi đúng cột solverMaxWastePercentage - không đụng tham số solver/công ty nào khác', async () => {

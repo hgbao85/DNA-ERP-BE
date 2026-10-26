@@ -259,6 +259,9 @@ describe('SteelIssuesService', () => {
         findUnique: jest.fn().mockResolvedValue({
           solverTrimStartMm: 10,
           solverBladeWidthMm: decimal(1),
+          // Cặp riêng của MC Tự động (mặc định theo app cat_sat_iea).
+          solverMctdTrimStartMm: 0,
+          solverMctdBladeWidthMm: decimal(2.5),
         }),
       },
       stockReservation: { update: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
@@ -1383,6 +1386,60 @@ describe('SteelIssuesService', () => {
         expect(item.steelBalance).toEqual(
           expect.objectContaining({ receivedBarCount: 1, usableMm: 5990, overMm: 724 }),
         );
+      });
+
+      it('phương án cắt bằng MC Tự động -> dùng tề 0 / lưỡi 2,5 của MCTĐ, không dùng cặp MC Laser (2026-10-23)', async () => {
+        prisma.steelIssue.findMany.mockResolvedValue([issueRow({ receivedBarCount: 2 })]);
+        prisma.cutPatternSegment.findMany.mockResolvedValue(cut(8));
+        prisma.cuttingProposalLine.findMany.mockResolvedValue([
+          {
+            materialId: 30n,
+            machine: 'tu_dong',
+            cuttingProposal: { productionInvoiceId: 1n, productionOrder: null },
+          },
+        ]);
+
+        const [item] = await service.getPhoiProgress('1');
+
+        // 2 × (6000 − 0) = 12000 ; 8 × (746 − 1 + 2.5 = 747.5) = 5980  (mạch 2,5 thay vì 1)
+        expect(item.steelBalance).toEqual(
+          expect.objectContaining({ usableMm: 12000, reportedMm: 5980, overMm: 0 }),
+        );
+      });
+
+      it('máy ghi trên phương án neo LỆNH SX của PI cũng được nhận ra; dòng laser / PI khác không đổi máy', async () => {
+        prisma.steelIssue.findMany.mockResolvedValue([issueRow({ receivedBarCount: 2 })]);
+        prisma.cutPatternSegment.findMany.mockResolvedValue(cut(8));
+        prisma.cuttingProposalLine.findMany.mockResolvedValue([
+          {
+            materialId: 30n,
+            machine: 'tu_dong',
+            cuttingProposal: {
+              productionInvoiceId: null,
+              productionOrder: { productionInvoiceItem: { productionInvoiceId: 1n } },
+            },
+          },
+          // PI khác (không thuộc PI 1) - bị bỏ qua.
+          {
+            materialId: 31n,
+            machine: 'tu_dong',
+            cuttingProposal: { productionInvoiceId: 2n, productionOrder: null },
+          },
+        ]);
+
+        const [item] = await service.getPhoiProgress('1');
+
+        expect(item.steelBalance?.usableMm).toBe(12000); // tề 0 của MCTĐ
+
+        prisma.cuttingProposalLine.findMany.mockResolvedValue([
+          {
+            materialId: 30n,
+            machine: 'laser',
+            cuttingProposal: { productionInvoiceId: 1n, productionOrder: null },
+          },
+        ]);
+        const [laser] = await service.getPhoiProgress('1');
+        expect(laser.steelBalance?.usableMm).toBe(11980); // tề 10 của MC Laser như cũ
       });
 
       it('đợt kho mới xuất, Phôi CHƯA nhận (ISSUED) không tính; chưa nhận đợt nào -> steelBalance null', async () => {

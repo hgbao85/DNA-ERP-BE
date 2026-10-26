@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
+import { SolverMachine } from '../../../generated/prisma/client';
 
 @Exclude()
 export class SystemConfigResponseDto {
@@ -24,6 +25,20 @@ export class SystemConfigResponseDto {
   /** Mặc định toàn hệ thống: có cho solver đặt cây ngoài chiều dài chuẩn không. Từng đợt đè lại
    *  được qua ProductionInvoice.solverAllowCustomLength (KHSX đề nghị ở "Tối ưu cắt sắt"). */
   @Expose() @ApiProperty() solverAllowCustomLength!: boolean;
+
+  /** Máy cắt mặc định toàn hệ thống (laser | tu_dong). Từng đợt đè lại qua ProductionInvoice.solverMachine. */
+  @Expose() @ApiProperty({ enum: SolverMachine }) solverMachine!: SolverMachine;
+  /** Lưỡi cắt / tề đầu (mm) của MC Tự động - cặp riêng, MC Laser vẫn dùng solverBladeWidthMm/solverTrimStartMm. */
+  @Expose() @ApiProperty() solverMctdBladeWidthMm!: number;
+  @Expose() @ApiProperty() solverMctdTrimStartMm!: number;
+  /** Hệ số bó của MC Tự động, vd [14,16,18,20]. */
+  @Expose() @ApiProperty({ type: [Number] }) solverBundleFactors!: number[];
+  @Expose() @ApiProperty() solverMaxManualCuts!: number;
+  @Expose() @ApiProperty() solverMaxSizesPerPattern!: number;
+  /** Cửa sổ hạn giao (ngày) khi gợi ý gộp đơn giảm hao hụt - xem SystemConfig.solverMergeWindowDays. */
+  @Expose() @ApiProperty() solverMergeWindowDays!: number;
+  /** Trần số SKU mỗi đợt tính / lệnh gộp - xem SystemConfig.solverMergeMaxSkus. */
+  @Expose() @ApiProperty() solverMergeMaxSkus!: number;
 
   /** Dung sai giao thừa khi nhận hàng mua về (% của buyQty) - xem SystemConfig trong schema. */
   @Expose() @ApiProperty() purchaseOverReceiptTolerancePercent!: number;

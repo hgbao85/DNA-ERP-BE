@@ -1,12 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose, Transform, Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsOptional, IsString } from 'class-validator';
+import { ArrayMinSize, IsArray, IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
 import {
   coerceStockLengthsFromQuery,
   IsStockLengthsByMaterial,
   type StockLengthsByMaterial,
 } from '../../../common/validators/stock-lengths-by-material.validator';
-import { ProdApprovalStatus } from '../../../generated/prisma/client';
+import { ProdApprovalStatus, SolverMachine } from '../../../generated/prisma/client';
 import { MaterialChoiceRefDto } from '../../../common/utils/material-choice-ref.util';
 
 /** Một loại sắt của MỘT SKU, kèm hao hụt khi SKU đó cắt một mình. */
@@ -123,8 +123,9 @@ export class CuttingBatchCandidateListDto {
   @ApiProperty({ type: [CuttingBatchCandidateDto] })
   @Type(() => CuttingBatchCandidateDto)
   items!: CuttingBatchCandidateDto[];
-  /// Tổ hợp hệ thống tự đề xuất - FE tick sẵn để KHSX chỉ việc xem lại rồi xác nhận, vẫn sửa
-  /// được. Lấy từ getBatchSuggestions(): các SKU của mức gộp TỐI THIỂU đủ đạt ngưỡng, gom lại.
+  /// Tổ hợp hệ thống tự đề xuất - FE tick sẵn để KHSX chỉ việc xem lại rồi xác nhận, vẫn sửa được. Từ 2026-10-24 = đúng 1 SKU:
+  /// đơn có mốc cần sắt SỚM NHẤT đang bị cảnh báo ở cây chuẩn; FE gọi cutting-batch-fix-options cho đợt đó rồi tự thêm các đơn
+  /// gợi ý gộp (luật gộp ≤ N ngày, ≤ M SKU, ít hao hụt nhất).
   @Expose() @ApiProperty({ type: [String] }) recommendedItemIds!: string[];
   /// Ngân sách thời gian TỐI ĐA cho CẢ đợt tính (giây) - chính là SOLVER_TIMEOUT_SECONDS mà
   /// runSolverAndSave() so với `số loại sắt × time_limit` để quyết định chặn hay không (2026-09-23).
@@ -156,6 +157,23 @@ export class BatchStockLengthsQueryDto {
   @Transform(({ value }: { value: unknown }) => coerceStockLengthsFromQuery(value))
   @IsStockLengthsByMaterial()
   stockLengthsByMaterial?: StockLengthsByMaterial;
+
+  /// Máy cắt KHSX đang chọn cho đợt (2026-10-23) - đổi máy là đổi tề đầu/lưỡi nên đổi cả con số ước tính
+  /// lẫn số xác minh bằng solver. Không gửi = máy mặc định của công ty (SystemConfig.solverMachine).
+  @ApiPropertyOptional({ enum: SolverMachine })
+  @IsOptional()
+  @IsEnum(SolverMachine)
+  solverMachine?: SolverMachine;
+
+  /// CHỈ cutting-batch-candidates (2026-10-24): `true` = lượt KIỂM BÙ chạy nền sau lần tải trang - xác minh bằng solver cả các chip
+  /// lần đầu chưa kịp (lâu hơn, tới 12 cỡ đoạn). Kết quả đã có được nhớ nên không giải lại. Bỏ trống = lượt nhanh như cũ.
+  @ApiPropertyOptional({ type: Boolean })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' || value === true ? true : value === 'false' ? false : value,
+  )
+  @IsBoolean()
+  deepVerify?: boolean;
 }
 
 export class PreviewCuttingBatchDto {
@@ -173,6 +191,12 @@ export class PreviewCuttingBatchDto {
   @IsOptional()
   @IsStockLengthsByMaterial()
   stockLengthsByMaterial?: StockLengthsByMaterial;
+
+  /// Máy cắt KHSX đang chọn cho đợt - như BatchStockLengthsQueryDto.solverMachine.
+  @ApiPropertyOptional({ enum: SolverMachine })
+  @IsOptional()
+  @IsEnum(SolverMachine)
+  solverMachine?: SolverMachine;
 }
 
 /** Kết quả tính thử cho ĐÚNG tổ hợp KHSX đang chọn, mỗi loại sắt 1 dòng. */
@@ -214,6 +238,105 @@ export class CuttingBatchPreviewDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) daysCutEarly!: number | null;
 
   constructor(partial: Partial<CuttingBatchPreviewDto>) {
+    Object.assign(this, partial);
+  }
+}
+
+/** 1 kết quả bộ giải gọn: hao hụt (%) + số cây (dùng cho các cách xử lý ở khối "Đợt đang chọn"). */
+@Exclude()
+export class CuttingBatchFixResultDto {
+  @Expose() @ApiProperty() wastePct!: number;
+  @Expose() @ApiProperty() bars!: number;
+  /// Chiều dài cây (mm) của kết quả - với "đặt cây riêng" là cây hệ thống sẽ đặt.
+  @Expose() @ApiProperty() lengthMm!: number;
+
+  constructor(partial: Partial<CuttingBatchFixResultDto>) {
+    Object.assign(this, partial);
+  }
+}
+
+/** Gợi ý "gộp thêm đơn" cho 1 loại sắt vượt ngưỡng ở cây chuẩn - ít hao hụt nhất trong luật gộp. */
+@Exclude()
+export class CuttingBatchFixAddDto {
+  /// ProductionInvoiceItem.id cần THÊM vào đợt
+  @Expose() @ApiProperty({ type: [String] }) itemIds!: string[];
+  /// hao hụt của loại sắt này ở cây chuẩn SAU khi thêm (số bộ giải thật)
+  @Expose() @ApiProperty() wastePct!: number;
+  @Expose() @ApiProperty() bars!: number;
+  /// false = gộp hết đơn được phép vẫn chưa về ngưỡng (vẫn trả để KHSX thấy gộp giúp được bao nhiêu)
+  @Expose() @ApiProperty() meetsThreshold!: boolean;
+  /// khoảng mốc cần sắt (ngày) của đợt SAU khi thêm, null = không đủ 2 SKU có mốc
+  @Expose() @ApiPropertyOptional({ nullable: true }) spanDaysAfter!: number | null;
+
+  constructor(partial: Partial<CuttingBatchFixAddDto>) {
+    Object.assign(this, partial);
+  }
+}
+
+/** 1 loại sắt của đợt đang chọn: trạng thái ở cây chuẩn + các cách xử lý khi vượt ngưỡng. */
+@Exclude()
+export class CuttingBatchFixMaterialDto {
+  @Expose() @ApiProperty() materialId!: string;
+  @Expose() @ApiProperty() materialCode!: string;
+  @Expose() @ApiProperty() thresholdPct!: number;
+  @Expose() @ApiPropertyOptional({ nullable: true }) stockLengthMm!: number | null;
+  /// ok = cắt chung ở cây chuẩn đạt ngưỡng; over = vượt; unknown = bộ giải chưa kịp/không kết luận được
+  @Expose() @ApiProperty({ enum: ['ok', 'over', 'unknown'] }) status!: 'ok' | 'over' | 'unknown';
+  /// hao hụt ở cây chuẩn (over + scan: "tốt nhất có thể" khi phá luật mỗi cây - chỉ để tham khảo)
+  @Expose() @ApiPropertyOptional({ nullable: true }) wastePct!: number | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) bars!: number | null;
+  @Expose()
+  @ApiPropertyOptional({ nullable: true, enum: ['fixed', 'scan'] })
+  verifiedLengthSource!: 'fixed' | 'scan' | null;
+  /// SKU (id) trong đợt có dùng loại này
+  @Expose() @ApiProperty({ type: [String] }) itemIds!: string[];
+  @Expose()
+  @ApiPropertyOptional({ type: CuttingBatchFixAddDto, nullable: true })
+  @Type(() => CuttingBatchFixAddDto)
+  addSuggestion!: CuttingBatchFixAddDto | null;
+  /// vì sao không có gợi ý gộp (vd không còn đơn nào trong N ngày, đã đủ M SKU)
+  @Expose() @ApiPropertyOptional({ nullable: true }) addReason!: string | null;
+  /// không gộp: chế độ Bình thường tự đặt cây riêng - null khi không tìm được / không cho đặt cây riêng
+  @Expose()
+  @ApiPropertyOptional({ type: CuttingBatchFixResultDto, nullable: true })
+  @Type(() => CuttingBatchFixResultDto)
+  customLength!: CuttingBatchFixResultDto | null;
+  /// đơn gấp: vẫn mua cây chuẩn, không trần hao hụt
+  @Expose()
+  @ApiPropertyOptional({ type: CuttingBatchFixResultDto, nullable: true })
+  @Type(() => CuttingBatchFixResultDto)
+  urgent!: CuttingBatchFixResultDto | null;
+
+  constructor(partial: Partial<CuttingBatchFixMaterialDto>) {
+    Object.assign(this, partial);
+  }
+}
+
+/**
+ * Khối "Đợt đang chọn" ở màn Tối ưu cắt sắt (2026-10-24, người dùng: chỉ gộp khi đơn cắt riêng ở cây 6m vượt 1 % mà không muốn dùng
+ * chế độ đơn gấp; Sếp Nhân: chỉ gom lệnh có mốc cần sắt cách nhau ≤ 3 ngày; người dùng: ít hao hụt nhất, tối đa M SKU).
+ */
+@Exclude()
+export class CuttingBatchFixOptionsDto {
+  @Expose() @ApiProperty() windowDays!: number;
+  @Expose() @ApiProperty() maxSkus!: number;
+  @Expose() @ApiProperty() count!: number;
+  @Expose() @ApiPropertyOptional({ nullable: true }) spanDays!: number | null;
+  /// đợt đang chọn có hợp luật gộp không (false = nút Tính bị chặn ở BE)
+  @Expose() @ApiProperty() ruleOk!: boolean;
+  @Expose() @ApiPropertyOptional({ nullable: true }) ruleReason!: string | null;
+  @Expose()
+  @ApiProperty({ type: [CuttingBatchFixMaterialDto] })
+  @Type(() => CuttingBatchFixMaterialDto)
+  materials!: CuttingBatchFixMaterialDto[];
+  /// hợp các gợi ý gộp ĐẠT ngưỡng, còn hợp luật khi thêm cùng lúc - nút "Thêm tất cả đơn gợi ý"; null = không có / không hợp luật
+  @Expose() @ApiPropertyOptional({ type: [String], nullable: true }) addAllItemIds!:
+    string[] | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) addAllReason!: string | null;
+  /// hết ngân sách thời gian trước khi tính xong mọi cách xử lý (phần còn thiếu để null)
+  @Expose() @ApiProperty() incomplete!: boolean;
+
+  constructor(partial: Partial<CuttingBatchFixOptionsDto>) {
     Object.assign(this, partial);
   }
 }

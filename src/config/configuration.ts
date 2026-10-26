@@ -28,9 +28,17 @@ export interface AppConfig {
     redisUrl: string;
   };
   solver: {
-    baseUrl: string;
-    apiKey: string;
+    /** Trần cho CẢ 1 lần gọi solver (giây): chờ hàng đợi + chạy trong worker. */
     timeoutSeconds: number;
+    /** HiGHS WASM trong worker thread - xem solver-ts/solver-worker-host.ts. */
+    ts: {
+      /** số worker thread chạy song song (1 = đúng "1 lượt giải tại 1 thời điểm") */
+      workers: number;
+      /** trần heap V8 mỗi worker (MB), 0 = mặc định Node */
+      heapMb: number;
+      /** trần RSS toàn tiến trình (MB) khi đang giải, 0 = tắt */
+      maxRssMb: number;
+    };
   };
   cloudinary: {
     cloudName: string;
@@ -64,9 +72,12 @@ export default (): AppConfig => ({
     redisUrl: process.env.REDIS_URL ?? '',
   },
   solver: {
-    baseUrl: process.env.SOLVER_BASE_URL ?? '',
-    apiKey: process.env.SOLVER_API_KEY ?? '',
     timeoutSeconds: parseInt(process.env.SOLVER_TIMEOUT_SECONDS ?? '300', 10),
+    ts: {
+      workers: parseInt(process.env.SOLVER_TS_WORKERS ?? '1', 10),
+      heapMb: parseInt(process.env.SOLVER_TS_HEAP_MB ?? '0', 10),
+      maxRssMb: parseInt(process.env.SOLVER_TS_MAX_RSS_MB ?? '0', 10),
+    },
   },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME ?? '',

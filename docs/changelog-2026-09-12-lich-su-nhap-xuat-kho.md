@@ -334,6 +334,10 @@ cần.
   sổ cái). Phiếu bị từ chối xem lại ở "Nhập nội bộ" (hộp thư PENDING), không có màn lịch sử riêng.
 - Chưa có **tồn lũy kế sau mỗi dòng** (running balance) và chưa **link `refId` ra chứng từ gốc** —
   2 thứ này có trong danh sách "chuẩn ERP" đã bàn nhưng xếp làm sau.
+- ~~Cột "Lệnh sản xuất" gán NHẦM mã phiếu chuyển kho cho bút toán không liên quan khi `refId` trùng
+  số (khác bảng) với 1 `WarehouseTransfer.id`~~ — **đã sửa 2026-09-14**, xem
+  `changelog-2026-09-14-e2e-test-bug-hunt.md` mục 3c (phát hiện qua test tay toàn trình, bug khá
+  nghiêm trọng vì sai dữ liệu hiển thị trực tiếp trên chính màn này).
 - Phiếu chuyển kho nội bộ đang `PENDING` (chưa ai xác nhận/từ chối) KHÔNG xuất hiện ở sổ - đúng ý
   Sếp (mục 7): sổ chỉ ghi việc đã CHẤP NHẬN. Xem "đang chờ" ở tab "Nhập nội bộ" (hộp thư PENDING).
 - Xuất cho khách (`SalesOrder.shippedQty`) **không ghi `stock_ledger`** nên không xuất hiện ở sổ kho

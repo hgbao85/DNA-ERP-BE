@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { SolverMachine } from '../../../generated/prisma/client';
 
 /**
  * KHSX tự đổi NGƯỠNG HAO HỤT MẶC ĐỊNH cho cắt sắt (`SystemConfig.solverMaxWastePercentage`) ngay ở
@@ -31,6 +32,22 @@ export class UpdateMaxWasteDto {
 /** Trả về sau khi đổi (và khi đọc): số hiện tại + số trước đó để FE hiện "1% → 1,5%". */
 export class CuttingDefaultsResponseDto {
   @ApiProperty() solverMaxWastePercentage!: number;
+  /// Máy cắt MẶC ĐỊNH của công ty (2026-10-23) - KHSX không có quyền đọc GET /system-config nên lấy ở đây
+  /// để hiện "Theo mặc định (MC …)" ở lựa chọn máy cắt của đợt.
+  @ApiProperty({ enum: SolverMachine }) solverMachine!: SolverMachine;
+  /// Thông số máy cắt hiện tại - KHSX CHỈ XEM ở "Tối ưu cắt sắt" (2026-10-24, người dùng: "để KHSX xem thông số hiện tại…
+  /// cần config lại thì liên hệ admin"). Cùng tên cột SystemConfig; chỉ Admin sửa qua PUT /system-config.
+  @ApiProperty({ type: [Number] }) solverStockLengths!: number[];
+  @ApiProperty() solverMaxSurplus!: number;
+  @ApiProperty() solverTrimStartMm!: number;
+  @ApiProperty() solverBladeWidthMm!: number;
+  @ApiProperty() solverMctdTrimStartMm!: number;
+  @ApiProperty() solverMctdBladeWidthMm!: number;
+  @ApiProperty({ type: [Number] }) solverBundleFactors!: number[];
+  @ApiProperty() solverMaxManualCuts!: number;
+  @ApiProperty() solverMaxSizesPerPattern!: number;
+  @ApiProperty() solverMergeWindowDays!: number;
+  @ApiProperty() solverMergeMaxSkus!: number;
   @ApiPropertyOptional({ nullable: true }) previous!: number | null;
   @ApiProperty() updatedAt!: Date;
 

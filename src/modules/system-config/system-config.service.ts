@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { NetworkAccessService } from '../../common/network/network-access.service';
 import { isPrivateOrLoopbackIp, normalizeAllowedIps } from '../../common/utils/ip-allowlist.util';
 import { normalizePublicUrl } from '../../common/utils/public-url.util';
+import { type SystemConfig } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SystemConfigResponseDto } from './dto/system-config-response.dto';
@@ -30,9 +31,28 @@ export class SystemConfigService {
     }
     return new CuttingDefaultsResponseDto({
       solverMaxWastePercentage: config.solverMaxWastePercentage.toNumber(),
+      solverMachine: config.solverMachine,
+      ...this.cuttingParams(config),
       previous: null,
       updatedAt: config.updatedAt,
     });
+  }
+
+  /** Thông số máy cắt KHSX được XEM (chỉ đọc) - Decimal đổi ra number, Json ra mảng số. */
+  private cuttingParams(config: SystemConfig) {
+    return {
+      solverStockLengths: config.solverStockLengths as number[],
+      solverMaxSurplus: config.solverMaxSurplus,
+      solverTrimStartMm: config.solverTrimStartMm,
+      solverBladeWidthMm: config.solverBladeWidthMm.toNumber(),
+      solverMctdTrimStartMm: config.solverMctdTrimStartMm,
+      solverMctdBladeWidthMm: config.solverMctdBladeWidthMm.toNumber(),
+      solverBundleFactors: config.solverBundleFactors as number[],
+      solverMaxManualCuts: config.solverMaxManualCuts,
+      solverMaxSizesPerPattern: config.solverMaxSizesPerPattern,
+      solverMergeWindowDays: config.solverMergeWindowDays,
+      solverMergeMaxSkus: config.solverMergeMaxSkus,
+    };
   }
 
   /**
@@ -53,6 +73,8 @@ export class SystemConfigService {
     if (previous === dto.solverMaxWastePercentage) {
       return new CuttingDefaultsResponseDto({
         solverMaxWastePercentage: previous,
+        solverMachine: existing.solverMachine,
+        ...this.cuttingParams(existing),
         previous,
         updatedAt: existing.updatedAt,
       });
@@ -88,6 +110,8 @@ export class SystemConfigService {
 
     return new CuttingDefaultsResponseDto({
       solverMaxWastePercentage: updated.solverMaxWastePercentage.toNumber(),
+      solverMachine: updated.solverMachine,
+      ...this.cuttingParams(updated),
       previous,
       updatedAt: updated.updatedAt,
     });
@@ -102,6 +126,8 @@ export class SystemConfigService {
       ...config,
       solverStockLengths: config.solverStockLengths as number[],
       solverBladeWidthMm: config.solverBladeWidthMm.toNumber(),
+      solverMctdBladeWidthMm: config.solverMctdBladeWidthMm.toNumber(),
+      solverBundleFactors: config.solverBundleFactors as number[],
       solverMaxWastePercentage: config.solverMaxWastePercentage.toNumber(),
       purchaseOverReceiptTolerancePercent: config.purchaseOverReceiptTolerancePercent.toNumber(),
     });
@@ -131,6 +157,8 @@ export class SystemConfigService {
       ...updated,
       solverStockLengths: updated.solverStockLengths as number[],
       solverBladeWidthMm: updated.solverBladeWidthMm.toNumber(),
+      solverMctdBladeWidthMm: updated.solverMctdBladeWidthMm.toNumber(),
+      solverBundleFactors: updated.solverBundleFactors as number[],
       solverMaxWastePercentage: updated.solverMaxWastePercentage.toNumber(),
       purchaseOverReceiptTolerancePercent: updated.purchaseOverReceiptTolerancePercent.toNumber(),
     });

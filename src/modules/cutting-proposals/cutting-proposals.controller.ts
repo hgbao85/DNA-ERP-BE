@@ -100,14 +100,21 @@ export class CuttingProposalsController {
   @Get('cutting-batch-suggestions')
   @RequirePermissions(VIEW)
   getBatchSuggestions(@Query() query: BatchStockLengthsQueryDto) {
-    return this.cuttingProposalsService.getBatchSuggestions(query.stockLengthsByMaterial);
+    return this.cuttingProposalsService.getBatchSuggestions(
+      query.stockLengthsByMaterial,
+      query.solverMachine,
+    );
   }
 
   /** Bảng chọn của KHSX: MỌI SKU chưa duyệt + tổ hợp hệ thống đề xuất (để FE tick sẵn). */
   @Get('cutting-batch-candidates')
   @RequirePermissions(VIEW)
   getBatchCandidates(@Query() query: BatchStockLengthsQueryDto) {
-    return this.cuttingProposalsService.getBatchCandidates(query.stockLengthsByMaterial);
+    return this.cuttingProposalsService.getBatchCandidates(
+      query.stockLengthsByMaterial,
+      query.solverMachine,
+      query.deepVerify === true,
+    );
   }
 
   /**
@@ -118,6 +125,16 @@ export class CuttingProposalsController {
   @RequirePermissions(VIEW)
   previewBatch(@Body() dto: PreviewCuttingBatchDto) {
     return this.cuttingProposalsService.previewBatch(dto);
+  }
+
+  /**
+   * Khối "Đợt đang chọn" (2026-10-24): từng loại sắt của tổ hợp đang tick ở cây chuẩn + cách xử lý khi vượt ngưỡng (gộp thêm đơn
+   * trong luật gộp / đặt cây riêng / đơn gấp). CHỈ ĐỌC dù là POST (danh sách id dài).
+   */
+  @Post('cutting-batch-fix-options')
+  @RequirePermissions(VIEW)
+  getBatchFixOptions(@Body() dto: PreviewCuttingBatchDto) {
+    return this.cuttingProposalsService.getBatchFixOptions(dto);
   }
 
   /**

@@ -64,6 +64,34 @@
 > nhận" (lưu+gửi KCS cùng lúc) sang 2 bước "Lưu đợt"/"Gửi KCS" + bảng layout giống hệt Sắt, theo
 > yêu cầu người dùng ("giống Phôi luôn... nhìn cho dễ") - ĐÃ XONG (BE thêm `ProductionBatchStatus.OPEN`
 > + 2 endpoint mới, FE+live-test qua UI thật).
+>
+> Cập nhật 2026-09-08 (mục 26): sau khi deploy production thành công, người dùng phát hiện thêm 2
+> điểm lệch giữa VTTP và Sắt - (a) nút "Gửi KCS" ở StepPanel/ChotPanel nằm TÁCH RIÊNG khỏi "Lưu đợt"
+> (dưới 1 khối thống kê riêng, màu cam, có kèm số lượng trong nhãn) thay vì đứng CẠNH NHAU như bên
+> Cắt sắt (màu xanh lá, nhãn trơn "Gửi KCS"); (b) VTTP không có mục "Các đợt đã gửi" (lịch sử thuần
+> xem) như bên Sắt dù dữ liệu (`PieceStepBundle`/`ProductionBatch`) đã lưu đủ. Cả 2 ĐÃ SỬA - xem mục
+> 26 bên dưới.
+>
+> Cập nhật 2026-09-09 (mục 27): **đồng bộ TOÀN BỘ Hàn/Sơn theo Sắt/VTTP** (trước đó mục 25 CHỈ làm
+> VTTP - "Chỉ Vật tư TP" theo lựa chọn lúc đó) - `recordProductionBatch()`/`finishProductionBatch()`
+> mở rộng nhận CẢ 3 stage (trừ tồn đoạn sắt dời sang lúc `finish()` để tránh trừ thiếu khi "Lưu đợt"
+> nhiều lần); đổi tên cột ("Cần"/"Đã báo"), thêm cột "Lỗi" hiện thẳng; và theo yêu cầu người dùng
+> "bên Phôi đang sao thì Hàn Sơn y chang vậy thậm chí đơn giản hơn" - **thay hẳn bảng nhiều dòng cũ
+> bằng list + card 1 mảnh y hệt VTTP ChotPanel** (đơn giản hơn vì không có dải tab công đoạn) - ĐÃ
+> XONG, live-test qua UI thật tài khoản `han` (mới tạo).
+>
+> Cập nhật 2026-09-09 (mục 28): **Deadline con Phôi/Hàn/Sơn lồng trong khoảng Khung cơ khí (FRAME)**
+> - theo yêu cầu người dùng, KHSX giờ đặt được deadline RIÊNG cho từng công đoạn con, bắt buộc nằm
+> trong khoảng Khung cơ khí (giờ cũng là khoảng bắt đầu-kết thúc, trước chỉ có 1 mốc), 3 khoảng con
+> được phép chồng lấn nhau. BE chặn cứng (400) khi lệch khoảng - ĐÃ XONG (BE+FE+test+live-test qua
+> UI thật). CHƯA làm: hiện các deadline này lên "Lệnh sản xuất" thật của Phôi/Hàn/Sơn - xem mục 28.
+>
+> Cập nhật 2026-09-09 (mục 28.6, cùng ngày): người dùng hỏi lại và yêu cầu Phôi/Hàn/Sơn cũng phải TỰ
+> TÍNH deadline mặc định dựa theo khoảng Khung cơ khí (giống idiom "ước tính" sẵn có của FRAME/Đan/
+> Đóng gói) - thêm mặc định cho cả "Bắt đầu" của Khung cơ khí (= Kết thúc trừ 30 ngày) rồi chia tỷ lệ
+> cho Phôi 0-55%/Hàn 30-70%/Sơn 45-100% (chồng lấn nhau), tự tính lại LIVE khi sửa khoảng Khung cơ
+> khí. Phát hiện + sửa 1 bug: chốt 1 mốc con mà chưa từng lưu FRAME thật bị BE chặn nhầm - nay LUÔN
+> gửi kèm FRAME khi có mốc con được chốt. ĐÃ XONG, live-test qua UI thật.
 
 ## 1. Đã làm gì
 
@@ -1480,3 +1508,333 @@ KCS" (đóng đợt) mirror CutBundle, thêm trạng thái mới **`OPEN`** (CH�
   ĐÃ khôi phục đúng về local docker và xác nhận lại lần cuối trước khi kết thúc phiên, nhưng nên
   kiểm tra lại 1 lần nữa ở phiên sau (`cat .env | grep DATABASE_URL`) trước khi chạy bất kỳ lệnh nào
   đụng dữ liệu.
+
+## 26. Đồng bộ nút "Gửi KCS" + thêm "Các đợt đã gửi" (lịch sử) cho VTTP - khớp Sắt (2026-09-08)
+
+### 26.1. Vì sao làm
+
+Sau khi deploy production thành công (mục 22 coi như đã đóng), người dùng gửi ảnh chụp màn hình
+VTTP thật, hỏi 2 câu liên tiếp:
+1. "sao button gửi KCS của VTTP lại khác với bên Cắt sắt" - so lại code mới thấy: `NewCutBundleForm`
+   (Cắt sắt) đặt "Lưu đợt cắt" + "Gửi KCS" NGAY CẠNH NHAU (1 hàng), "Gửi KCS" màu XANH LÁ, nhãn trơn
+   "Gửi KCS". StepPanel/ChotPanel (VTTP, viết ở mục 17.8/25) lại đặt "Gửi KCS" TÁCH RIÊNG bên dưới 1
+   khối thống kê "Chưa gửi KCS/Chờ KCS duyệt/Đã duyệt", màu CAM (trùng màu "Lưu đợt"), nhãn có kèm số
+   lượng ("Gửi KCS N mảnh") - khác thật, không phải cảm giác nhầm.
+2. "khi click gửi KCS thì có tạo từng đợt như cắt sắt không" - xác nhận: CÓ ở tầng dữ liệu (mỗi lần
+   gửi tạo 1 `PieceStepBundle`/`ProductionBatch` riêng, bất biến, y hệt `CutBundle`) nhưng KHÔNG ở
+   tầng hiển thị - `VatTuTpDetail.tsx` không có mục "Các đợt" (lịch sử) nào cả, trong khi
+   `LenhSanXuatPhoi.tsx` có hẳn khối này (mục 18-19) cho Sắt. Hỏi lại, người dùng xác nhận muốn thêm.
+
+### 26.2. Đã sửa - (a) đồng bộ nút Gửi KCS
+
+`StepPanel`/`ChotPanel` (`VatTuTpDetail.tsx`): gộp "Lưu đợt" + "Gửi KCS" vào CHUNG 1 hàng
+(`display:flex, gap:8`) ngay dưới bảng, giống hệt `NewCutBundleForm` - "Gửi KCS" đổi màu GREEN, bỏ
+số lượng khỏi nhãn (chỉ còn "Gửi KCS" trơn, số lượng đã có sẵn trong khối thống kê bên dưới). Khối
+thống kê "Chưa gửi KCS/Chờ KCS duyệt/Đã duyệt(chốt)" GIỮ NGUYÊN bên dưới làm thông tin tham khảo,
+chỉ bỏ nút khỏi đó.
+
+### 26.3. Đã sửa - (b) thêm "Các đợt đã gửi" (lịch sử thuần xem)
+
+Mirror ĐÚNG cấu trúc `StepBundleForm`/`StepBundleHistoryCard`/`CutBundleCard` bên Sắt (đánh số "Đợt
+N" theo thứ tự TẠO RA - cũ nhất = Đợt 1, không đổi theo vị trí hiển thị), nhưng đơn giản hơn: KHÔNG
+có bảng chi tiết cỡ đoạn để bung/thu gọn (`PieceMaterialYield` chỉ 1 số phẳng, không có `SegmentSpec`
+để bóc) - mỗi "đợt" hiện thẳng 1 dòng (số lượng, thời gian, trạng thái, Lỗi nếu có), viền đỏ khi có
+lỗi (mirror `outstanding > 0` bên Sắt).
+
+- **Backend**: thêm `getQcReviewsForPieceStepBundles()` (FE, `production-batches-api.ts`) - mirror
+  `getQcReviewsForProductionBatches()` (fetch hết `/qc-reviews` rồi lọc client theo
+  `pieceStepBundleId != null`) - route BE `GET /qc-reviews` đã trả sẵn field này (`QcReviewResponseDto`),
+  không cần đổi gì ở BE.
+- **Frontend** (`VatTuTpDetail.tsx`):
+  - `StepPanel`: thêm `useFetch` cho `getPieceStepBundlesForOrder(orderId)` +
+    `getQcReviewsForPieceStepBundles()`, lọc theo `pieceId`+`step`, hiện khối "Các đợt đã gửi (N)"
+    dưới khối thống kê. Component mới `PieceStepBundleHistoryCard`.
+  - `ChotPanel`: TÁI SỬ DỤNG `batches`/`reviews` đã fetch sẵn (dùng để tính "Lỗi" ở bảng tổng), chỉ
+    thêm bước sort+đánh số+render. Component mới `ProductionBatchHistoryCard` (phân biệt thêm badge
+    "đang mở" cho status OPEN, riêng có ở nhánh này).
+  - Sửa lại `getPieceStepBundlesForOrder()` doc comment (đã dùng thật, không còn "chỉ để tìm bundleId
+    gọi Bù đủ" như comment cũ ghi nhầm từ trước khi cơ chế Bù đủ đổi qua client-side pre-fill).
+
+### 26.4. Kết quả kiểm tra
+
+- `npx tsc --noEmit` sạch cả repo, `npx eslint` sạch mọi file đã sửa (`VatTuTpDetail.tsx`,
+  `production-batches-api.ts`, `api.ts`).
+- **Live-test qua UI thật** (`tkphoi`, PO-52 · "giằng bàn" [ChotPanel] và PI-2026-054 · "Chân Nhôm"
+  [StepPanel, cả 2 tab Cắt/Uốn]): nút "Lưu đợt"/"Gửi KCS" giờ đứng cạnh nhau, "Gửi KCS" màu xanh lá,
+  nhãn trơn - khớp ảnh chụp Cắt sắt người dùng gửi. Khối "Các đợt đã gửi (N)" hiện đúng dưới cùng: PO-52
+  "giằng bàn" hiện "Đợt 1 · 1 mảnh · [giờ] · chờ KCS"; PI-2026-054 "Chân Nhôm" tab Cắt hiện "Đợt 2" (3
+  mảnh, không lỗi) + "Đợt 1" (10 mảnh, viền đỏ "Lỗi 3") - đúng dữ liệu lịch sử thật đã có từ trước,
+  không cần thao tác gì thêm để thấy. Network tab xác nhận `GET /qc-reviews?limit=100 → 200` cho cả
+  2 khối.
+
+### 26.5. Chưa làm / lưu ý cho lần sau
+
+- Không có phần nào treo lại - cả 2 điểm người dùng nêu đã sửa xong và live-test qua UI thật.
+
+## 27. Đồng bộ TOÀN BỘ Hàn/Sơn theo Sắt/VTTP - "Lưu đợt"/"Gửi KCS"/"Lỗi"/"Các đợt" + đổi hẳn sang list + card (2026-09-09)
+
+### 27.1. Vì sao làm
+
+Sau mục 26, người dùng hỏi tiếp: "sao button gửi KCS của VTTP lại khác với bên Cắt sắt" rồi "còn
+phần Hàn và Sơn chưa đồng bộ với Sắt với VTTP đúng không" - xác nhận ĐÚNG, mục 25 CHỈ làm VTTP theo
+lựa chọn "Chỉ Vật tư TP" lúc đó (Hàn/Sơn vẫn 1 nút "Ghi nhận" cũ, không "Bù đủ", không "Các đợt").
+Người dùng yêu cầu "tiến hành đồng bộ luôn". Sau khi làm xong phần hành vi (nút/Bù đủ/lịch sử) trong
+khuôn bảng nhiều dòng cũ, người dùng hỏi tiếp "sao không đồng bộ UI với Sắt với VTTP luôn?" - tôi đề
+xuất phương án nhẹ (chỉ đổi tên cột + thêm cột Lỗi, giữ bảng nhiều dòng vì Hàn/Sơn có nhiều mảnh/PO
+nên bảng tổng quan có lý). Người dùng phản bác bằng câu hỏi ngược: "theo bạn làm thế nào mới chuẩn...
+UI Phôi 1 kiểu, Hàn 1 kiểu, Sơn 1 kiểu à" rồi chốt thẳng: "bên Phôi đang sao thì bên Hàn Sơn y chang
+vậy thậm chí đơn giản hơn" - tức KHÔNG chấp nhận phương án nửa vời, muốn đồng bộ UI THẬT SỰ.
+
+### 27.2. Backend - mở rộng recordProductionBatch()/finishProductionBatch() nhận cả 3 stage
+
+Mục 25 hard-code `MfgStage.PHOI` trong 2 hàm này (chỉ VTTP dùng). Mở rộng:
+- `recordProductionBatch()`: nhận `dto.stage` (thêm field vào `RecordProductionBatchDto`), validate
+  y hệt `create()` (`assertConsumableStage`/`assertMfgRoleMatchesStage`/`assertPieceInBom`/
+  `assertMaterialYieldReceived` - hàm sau tự no-op ngoài PHOI, không cần tách nhánh).
+- **Phát hiện + tránh 1 bug thật lúc mở rộng**: `postSegmentConsumeEntries()` (trừ tồn đoạn sắt qua
+  StockLedger, CÓ áp dụng thật cho Hàn/Sơn khác VTTP) dùng `idempotencyKey` CỐ ĐỊNH theo
+  `batch.id` - nếu trừ tồn lúc "Lưu đợt" (có thể bấm NHIỀU LẦN, mỗi lần cộng dồn `reportedQty` vào
+  CÙNG `batch.id`), lần gọi sau sẽ bị coi trùng key với lần trước dù `reportedQty` đã tăng → chỉ trừ
+  đúng phần đầu, âm thầm THIẾU tồn kho. Sửa: dời việc trừ tồn sang **`finishProductionBatch()`**
+  (thời điểm `reportedQty` trở nên BẤT BIẾN - `recordProductionBatch()` chỉ nhận batch đang OPEN) -
+  mỗi `batch.id` chỉ gọi `postSegmentConsumeEntries()` ĐÚNG 1 LẦN trong vòng đời, khớp giả định của
+  idempotencyKey đó. `finishProductionBatch()` giờ nhận thêm `reportedById`/`warehouseScope` để trừ
+  đúng kho phoi-son-han theo scope người gửi (cùng idiom `create()`).
+- Controller: `@RequireMfgRole` 2 route mở rộng `(PHOI, HAN, SON)`.
+- `prisma/schema.prisma`: cập nhật doc comment `ProductionBatchStatus.OPEN` (không còn "CHỈ dùng cho
+  stage=PHOI" nữa).
+- Test mới (`production-batches.service.spec.ts`, describe
+  `'recordProductionBatch / finishProductionBatch (Lưu đợt / Gửi KCS)'`, 7 test): tạo mới vs cộng
+  dồn dòng OPEN, chặn stage DAN (không consumable), batch không OPEN thì ConflictException, `reportedQty=0`
+  thì BadRequest, **trừ đúng 1 dòng StockLedger theo `reportedQty` CUỐI CÙNG lúc finish (không phải
+  lúc record)**, và không gọi `postEntry` khi mảnh không có `PieceBom` (VTTP).
+
+### 27.3. Frontend - thay hẳn bảng nhiều dòng bằng list + card 1 mảnh
+
+`D:\DNA-ERP\src\components\sanxuat\core.tsx` (dùng chung Phôi mock/Hàn/Sơn):
+- `VatTuDetailBoard`: thêm nhánh MỚI - khi có `onRecord` (Hàn/Sơn thật, đang tương tác) VÀ không
+  phải `phoiMode` (mock 3 tầng Phôi vẫn giữ nguyên, không đụng), render `LineListBoard` (danh sách
+  mảnh, mirror ĐÚNG list "Vật tư TP" bên `LenhSanXuatPhoi.tsx`) hoặc `LineDetailCard` (1 mảnh đang
+  chọn, mirror ĐÚNG `ChotPanel` - bảng Mảnh/Cần/Đã báo/Lỗi/Còn lại/Nhập đợt này + Lưu đợt/Gửi KCS
+  cạnh nhau (xanh lá) + Bù đủ + "Các đợt đã gửi", TÁI SỬ DỤNG `BatchHistoryList` đã viết ở mục 25/26)
+  - **KHÔNG có dải tab công đoạn** (đơn giản hơn VTTP thật, vì Hàn/Sơn không có `processSteps`).
+  - Bảng nhiều dòng CŨ (Loại sắt/Quy cách/SL·bộ/Định mức/Đã hàn/Thực có/Còn lại/Cập nhật lúc) VẪN
+    GIỮ NGUYÊN cho `phoiMode` (mock) và các nhúng `readOnly` khác (`ThongKePagePlan.tsx`, không
+    truyền `onRecord`) - không đụng, tránh phá 2 nơi dùng khác.
+  - Banner xanh "Đồng bộ: X bộ — các mảnh đang [verb] cân đối" (kiểm tra các vật tư trong 1 SKU tiến
+    độ đều nhau) TỰ BIẾN MẤT ở nhánh mới - không phải bug, đây là khác biệt CÓ CHỦ ĐÍCH: banner đó
+    thuộc bảng nhiều dòng cũ, list+card mới (mirror VTTP) không có khái niệm này, đúng ý người dùng
+    hỏi "sao không đồng bộ UI luôn".
+- Component mới `LineListBoard`/`LineDetailCard`, định nghĩa local `card`/`thH`/`thHR` style (core.tsx
+  không import `phoiStyles.ts` - khác thư mục, định nghĩa lại tương đương bằng CSS var sẵn có).
+- `fetchHanSonRows()`/`HanSonFetch`: thêm fetch `getProductionBatchesForOrder()` song song với
+  `getProductionBatchPlan()` mỗi order → `batchesByLine: Map<pieceId, BeProductionBatch[]>` (tìm đợt
+  OPEN + hiện lịch sử). `TwoTierScreen`: thêm fetch `getQcReviewsForProductionBatches()` (tính Lỗi),
+  đổi `report()`→`recordQty()`+`finishBatch()` (gọi `recordProductionBatch()`/`finishProductionBatch()`
+  thay `reportProductionBatch()` 1-shot cũ).
+- `D:\DNA-ERP\src\services\production-batches-api.ts`: `recordProductionBatch()` thêm field `stage`.
+
+### 27.4. Kết quả kiểm tra
+
+- Backend: `npx tsc --noEmit` sạch, `npx eslint` sạch. `npx jest` **47/47 suite · 932/932 test pass**
+  (thêm 7 test mục 27.2).
+- Frontend: `npx tsc --noEmit` sạch cả repo, `npx eslint src/components/sanxuat/core.tsx` sạch (2
+  warning CÓ SẴN từ trước, không liên quan thay đổi lần này: `lineStats` unused,
+  `setState`-trong-`useEffect`).
+- **Live-test qua UI thật** (tài khoản `han`/`son` - MỚI TẠO, xem mục 27.5; DB dev local cần khởi động lại
+  Docker Desktop + Postgres containers trong phiên này, xem mục 27.5): PI-2026-054 → "Bàn thử A" →
+  list hiện đúng 1 dòng "PAT · Cần 10 cái · ⏱ chờ KCS duyệt" (KHÔNG còn banner "Đồng bộ", KHÔNG còn
+  bảng nhiều dòng) → bấm vào → `LineDetailCard` hiện đúng bảng Cần/Đã báo/Lỗi/Còn lại +
+  "Lưu đợt"/"Gửi KCS" cạnh nhau + "Các đợt đã gửi" đúng lịch sử thật đã có. Nhập "4" → Lưu đợt → nút
+  "Gửi KCS" (xanh lá) xuất hiện, Network xác nhận `POST .../production-batches/record → 201` → bấm
+  Gửi KCS → chuyển "chờ KCS", Network xác nhận `POST .../production-batches/13/finish → 201`. Lặp
+  lại "Lưu đợt" lần 2 (nhập "2") → "Các đợt đã gửi (2)" hiện đúng "Đợt 2 · 2 cái · đang mở" + "Đợt 1
+  · 4 cái · chờ KCS" - xác nhận cộng dồn đúng dòng OPEN, đánh số đợt đúng thứ tự tạo.
+- **Live-test thêm nhánh Sơn** (tài khoản `son`, cùng lúc tạo với `han`): PI-2026-054 → "Bàn thử A" →
+  list hiện đúng "PAT · Cần 10 cái · còn 10 cái" (state độc lập với dữ liệu Hàn ở trên, đúng vì khác
+  `stage`) → nhập "3" → Lưu đợt → "Gửi KCS" (xanh lá) → Network xác nhận
+  `POST .../production-orders/.../production-batches/record → 201` rồi
+  `POST .../production-batches/.../finish → 201` → chuyển "Chờ KCS duyệt 3" + "Các đợt đã gửi (1):
+  Đợt 1 · 3 cái · chờ KCS" - hành vi khớp hệt Hàn, xác nhận component dùng chung hoạt động đúng cho
+  cả 2 stage.
+
+### 27.5. Sự cố phụ gặp phải khi live-test (đã xử lý, không phải bug code)
+
+- **BE báo "Database error" lúc đăng nhập**: Docker Desktop không chạy trên máy (tắt từ trước, không
+  liên quan phiên này) → 2 container Postgres dev (`dna-erp-be-postgres-1`,
+  `dna-erp-be-postgres-test-1`) cũng dừng theo. Khởi động lại Docker Desktop (tự khởi động lại
+  container do đã cấu hình restart policy), xác nhận healthy, DB dev local vẫn còn nguyên dữ liệu cũ
+  (không mất gì).
+- **Tài khoản `han`/`son` demo KHÔNG tồn tại** trong DB dev local (dù có trong `seed-demo.ts`) -
+  `npm run seed:demo` chạy bị lỗi P2002 (unique constraint `username`) vì DB có sẵn vài dòng dữ liệu
+  test tự động (vd `username='boss'`/`'sales'`/`'khsx'` nhưng email `@test.local` khác hẳn
+  `seed-demo.ts` mong đợi `@demo.com`) chặn ngay từ account đầu tiên trong danh sách, chưa kịp tới
+  `han`/`son`. KHÔNG động vào các dòng test đó (không rõ mục đích, không phải của lần làm việc này) -
+  viết script tạm riêng chỉ tạo đúng 2 tài khoản `han`/`son` (mật khẩu `demo1234`, cùng role/mfgRole
+  như `seed-demo.ts` định nghĩa), xoá ngay sau khi dùng xong.
+- FE dev server (`localhost:3000`) không tự chạy sẵn ở đầu phiên (khác BE, launch.json của session
+  này chỉ đăng ký BE) - khởi động tay qua `npm run dev` trong `D:\DNA-ERP`.
+
+### 27.6. Chưa làm / lưu ý cho lần sau
+
+- Chưa live-test case trừ tồn đoạn sắt THẬT (StockLedger) lúc "Gửi KCS" cho mảnh CÓ `PieceBom` - dữ
+  liệu dev hiện có (`PAT`, mảnh VTTP dùng `PieceMaterialYield`) không có `PieceBom` nên nhánh
+  `postSegmentConsumeEntries()` thật sự chạy no-op khi test qua UI. Logic đã có unit test riêng xác
+  nhận trừ đúng `reportedQty` CUỐI CÙNG (mục 27.2), nhưng chưa xác nhận qua UI thật với mảnh có định
+  mức đoạn sắt thật.
+- 2 file mock cũ `hanSeed()`/`sonSeed()` (`LenhSanXuatHan.tsx`/`LenhSanXuatSon.tsx`) vẫn còn, comment
+  ghi rõ chỉ để `KhoPhoiPage` (Phôi, còn mock) dùng - không đụng, ngoài phạm vi lần đồng bộ này.
+
+## 28. Deadline con Phôi/Hàn/Sơn lồng trong khoảng Khung cơ khí (FRAME) (2026-09-09)
+
+### 28.1. Vấn đề xuất phát
+
+KHSX trước đây chỉ đặt được 1 deadline duy nhất cho cả cụm "Khung cơ khí" (`ProdItemStageType.FRAME`
+- gộp chung Phôi→Hàn→Sơn thành 1 mốc), qua màn "Sửa thời hạn" (`LenhSXPage.tsx`). Không có cách nào
+tách riêng deadline cho từng công đoạn con. Người dùng yêu cầu (verbatim): "tôi muốn khi set deadline
+cho Khung cơ khí xong thì bắt đầu set deadline cho Phôi Sơn Hàn ví dụ Khung cơ khí là 20/5-15/7 thì
+deadline của Phôi Sơn Hàn phải nằm trong khoảng này Phôi 20/5-20/6. Hàn 10/6-30/6, Sơn 15/6-15/7 chẳng
+hạn" - tức mỗi công đoạn con giờ là 1 khoảng bắt đầu-kết thúc (khái niệm "khoảng ngày" người dùng
+nhập tay ĐẦU TIÊN trong toàn hệ thống), phải nằm TRONG khoảng Khung cơ khí (giờ cũng đổi thành khoảng,
+trước chỉ có 1 mốc kết thúc), nhưng 3 khoảng con ĐƯỢC PHÉP chồng lấn nhau (khớp thực tế - không có
+ràng buộc thứ tự cứng giữa Phôi/Hàn/Sơn, xem memory `han-son-no-phoi-stock-check-by-design`). Xác
+nhận qua `AskUserQuestion`: nhập lệch khoảng Khung cơ khí phải **CHẶN CỨNG, không cho lưu** (không
+chỉ cảnh báo).
+
+### 28.2. Thiết kế
+
+Tái sử dụng `ProductionInvoiceItemStage` (không tạo bảng mới - rủi ro thấp nhất, dùng lại toàn bộ hạ
+tầng upsert/DTO có sẵn):
+
+- Cột mới `startDate DateTime?` (nullable, migration THUẦN `ADD COLUMN`).
+- 3 giá trị enum mới `FRAME_PHOI`/`FRAME_HAN`/`FRAME_SON` trong `ProdItemStageType` - đặt tên có tiền
+  tố `FRAME_` CỐ Ý không trùng bare `PHOI`/`HAN`/`SON` của enum `MfgStage` (domain thực thi/báo sản
+  lượng, hoàn toàn khác), tránh nhầm lẫn tên như FE `production-invoices-api.ts` từng cảnh báo trong
+  comment.
+- `FRAME` (giá trị cũ) từ nay CŨNG dùng `startDate` để trở thành 1 khoảng thật, không đổi ý nghĩa
+  `deadline` (vẫn là ngày kết thúc).
+- Migration `20260909100000_prod_item_stage_frame_sub_deadlines` - thuần additive (`ADD COLUMN` +
+  3×`ADD VALUE`), áp an toàn trên DB dev local.
+
+Validation mới `ProductionInvoicesService.assertFrameSubStagesWithinRange()` (gọi đầu transaction
+của `updateItem()`, trước vòng lặp upsert `stages`):
+
+- Với mỗi stage con (`FRAME_PHOI`/`FRAME_HAN`/`FRAME_SON`) trong payload: xác định khoảng FRAME hiệu
+  lực (ưu tiên FRAME có trong CHÍNH payload này, fallback đọc dòng FRAME đã lưu trong DB).
+- Chặn (400) nếu FRAME hiệu lực chưa có đủ cả `startDate` lẫn `deadline`; nếu stage con thiếu
+  `startDate` (chỉ có `deadline`); nếu `sub.startDate < FRAME.startDate` hoặc `sub.deadline >
+  FRAME.deadline` hoặc `sub.startDate > sub.deadline` - đều nêu rõ ngày vi phạm trong message.
+- KHÔNG kiểm tra chồng lấn giữa Phôi/Hàn/Sơn với nhau (được phép chồng lấn, theo đúng yêu cầu).
+
+FE (`LenhSXPage.tsx`, màn "Sửa thời hạn" duy nhất có UI này): thêm ô "Bắt đầu" cho Khung cơ khí (field
+mới `FRAME_START`, không có khái niệm "ước tính" như các field cũ); khi đã có đủ khoảng Khung cơ khí,
+hiện thêm 3 khối lồng bên dưới (thụt lề, viền trái) "Phôi"/"Hàn"/"Sơn" với `min`/`max` HTML hint theo
+khoảng cha. Tự kiểm tra client-side trước khi gọi API (đủ cặp start+end, nằm trong khoảng cha, start
+≤ end) - lệch thì hiện lỗi đỏ tại chỗ và KHÔNG gọi API; BE vẫn là nơi chặn thật nếu lọt qua.
+
+### 28.3. Bug tự phát hiện khi live-test (sửa trong cùng lượt)
+
+1. **FRAME không được gửi lên nếu chỉ mới nhập `FRAME_START`**: field `FRAME` (Kết thúc) cũ vẫn theo
+   cơ chế "ước tính" (`isCommittable`) - nếu người dùng chỉ nhập Bắt đầu mà chưa tự sửa tay ô Kết
+   thúc, `FRAME` bị lọc khỏi payload hoàn toàn → BE không thấy FRAME trong payload, fallback đọc DB
+   (cũng chưa có `startDate`) → báo sai "chưa đặt khoảng Khung cơ khí" dù người dùng vừa nhập. Sửa:
+   khi `FRAME_START` có giá trị, LUÔN gửi kèm `FRAME` (dù Kết thúc còn là giá trị ước tính).
+2. **BE trả về thiếu `startDate`**: `ProductionInvoicesService.toItemResponseDto()` và
+   `ItemStageDto` (`production-invoice-item-response.dto.ts`) map `stages` chỉ có `stageType`/
+   `deadline`, thiếu `startDate` - lưu xuống DB đúng nhưng mở lại modal "Sửa thời hạn" luôn thấy ô
+   "Bắt đầu" trống (mất giá trị vừa lưu). Thêm `startDate` vào cả DTO và mapping.
+
+### 28.4. Kết quả kiểm tra
+
+- Migration: `npx prisma migrate deploy` + `npx prisma generate` thành công trên DB dev local.
+- Backend: `npx tsc --noEmit` sạch, `npx eslint --fix` sạch (0 lỗi). Thêm 7 test mới cho
+  `assertFrameSubStagesWithinRange` (chặn khi chưa có FRAME/thiếu startDate/vượt khoảng từng hướng,
+  cho qua khi hợp lệ kể cả 3 stage con chồng lấn nhau, lấy FRAME từ DB khi payload không gửi kèm) -
+  toàn bộ suite: **47/47 test suites, 962/962 test PASS** (tăng từ 932 trước phiên này).
+- Frontend: `npx tsc --noEmit` sạch; `npx eslint` 0 lỗi (chỉ còn warning `no-explicit-any`/
+  `no-unused-vars` đã có từ trước, không liên quan thay đổi này).
+- Live-test qua UI thật (tài khoản KHSX tạm `khsxdemo`, tạo/xoá riêng cho lần test này vì username
+  `khsx` bị dữ liệu e2e test cũ chiếm - xem mục 27.5 cùng vấn đề với `han`/`son`): đặt Khung cơ khí
+  10/01/2026-11/17/2026, đặt Phôi 10/01-10/25, Hàn 10/20-11/05 (chồng lấn Phôi), Sơn 11/01-11/17
+  (chồng lấn Hàn) → lưu thành công, DB xác nhận đủ 4 dòng đúng giá trị; mở lại modal xác nhận
+  `startDate` hiện đúng (sau khi sửa bug 28.3.2). Thử đặt Sơn kết thúc 12/05/2026 (vượt Khung cơ khí)
+  → bị chặn CẢ 2 lớp: client-side hiện lỗi đỏ "khoảng thời gian Sơn phải nằm trong khoảng Khung cơ
+  khí (2026-10-01 - 2026-11-17)" không gọi API; gọi thẳng API qua `curl` (bỏ qua FE) cũng bị BE chặn
+  400 với message tương tự.
+
+### 28.5. Chưa làm / lưu ý cho lần sau
+
+- **Chưa hiện 3 deadline mới này lên màn "Lệnh sản xuất" thật của Phôi/Hàn/Sơn**
+  (`LenhSanXuatPhoi.tsx`, `core.tsx`'s `fetchHanSonRows()` - hiện hard-code `deadline: '—'`) - cần
+  thêm plumbing riêng (BE include `stages` vào response của các API đó). Tách thành việc riêng sau.
+- Chưa validate lại các dòng stage con ĐÃ LƯU TRƯỚC ĐÓ nếu sau này KHSX thu hẹp lại khoảng FRAME -
+  edge case hiếm, chỉ áp dụng trong CHÍNH 1 lần lưu đang xử lý (đúng theo phạm vi đã thống nhất khi
+  lập kế hoạch).
+
+## 28.6. Tự tính deadline MẶC ĐỊNH cho Phôi/Hàn/Sơn dựa theo Khung cơ khí (cùng ngày, sau khi hỏi lại)
+
+### 28.6.1. Vấn đề xuất phát
+
+Sau khi mục 28 xong, người dùng hỏi lại "khi có PI thì hệ thống tự tạo dl mặc định cho khung cơ khí
+đúng không" - phát hiện ra Khung cơ khí (FRAME) trước đó CHỈ có "ước tính" hiển thị cho phía "Kết
+thúc" (công thức cũ: hạn giao hàng trừ 14 ngày), còn "Bắt đầu" luôn để trống vì tính năng "khoảng"
+mới thêm ở mục 28 chưa có công thức mặc định nào cho nó cả - nghĩa là cascade Phôi/Hàn/Sơn ở mục 28
+gần như KHÔNG BAO GIỜ tự hiện được (vì luôn thiếu Bắt đầu của FRAME để tính từ đó). Người dùng yêu
+cầu: "tôi muốn cái deadline của Phôi Sơn Hàn cũng dựa vào Khung cơ khí mà tự tạo ra deadline mặc định
+rồi kế hoạch sản xuất sẻ sửa sau" - tức muốn ÁP DỤNG ĐÚNG cùng idiom "ước tính, chưa lưu DB, KHSX sửa
+gì thì lưu cái đó" đã có sẵn cho FRAME/Đan/Đóng gói, mở rộng cho cả "Bắt đầu" của FRAME và 3 mốc con.
+
+Hỏi lại qua `AskUserQuestion` về công thức mặc định cụ thể (số ngày cho FRAME_START, tỷ lệ chia cho
+Phôi/Hàn/Sơn) - người dùng không có con số cụ thể, giao lại cho AI chọn ("bạn thấy sao... tôi chưa
+nghĩ ra"/chọn "[No preference]"). Tự chọn theo gợi ý đã đề xuất (khớp gần với ví dụ người dùng từng
+đưa ở mục 28.1: Khung cơ khí 20/5-15/7 (57 ngày) → Phôi 20/5-20/6 (~56%), Hàn 10/6-30/6 (~35-72%),
+Sơn 15/6-15/7 (~44-100%)):
+
+- **`FRAME_START` mặc định** = `FRAME` (Kết thúc, ước tính hoặc thật) trừ lùi **30 ngày**.
+- **Tỷ lệ chia trong khoảng Khung cơ khí** (`SUB_STAGE_DEFS.ratio`, `LenhSXPage.tsx`): Phôi
+  **0%-55%**, Hàn **30%-70%**, Sơn **45%-100%** (chồng lấn nhau, Phôi đầu/Hàn giữa/Sơn cuối).
+
+### 28.6.2. Thiết kế/cài đặt
+
+Mở rộng idiom "ước tính" (`editEstimated`/`editTouched`/`isCommittable` đã có cho materialDeadline/
+deliveryDeadline/FRAME/WEAVING/PACKAGING, `LenhSXPage.tsx`) sang thêm 7 field mới: `FRAME_START` +
+`PHOI_START/PHOI_END/HAN_START/HAN_END/SON_START/SON_END` - mỗi field độc lập, tự tính mặc định lúc
+mở modal (`openPIEdit()`, hàm mới `computeSubRange()` chia tỷ lệ) nếu chưa có dòng thật trong DB.
+Chỉ commit khi KHSX chủ động sửa (touched) HOẶC vốn đã là giá trị thật - giữ đúng nguyên tắc "không
+tự ghi DB nếu không đụng vào".
+
+Thêm 1 hành vi LIVE: khi KHSX tự sửa `FRAME_START`/`FRAME` (khoảng Khung cơ khí), 3 mốc con NÀO CHƯA
+bị touched sẽ tự tính lại theo khoảng mới ngay (trong `setField()`) - tránh trường hợp ước tính cũ
+(tính từ khoảng FRAME CŨ) bị lệch ra ngoài khoảng FRAME MỚI mà không ai để ý.
+
+### 28.6.3. Bug tự phát hiện khi live-test (sửa trong cùng lượt)
+
+KHSX chỉ sửa 1 mốc con (vd Phôi) mà CHƯA từng lưu FRAME thật vào DB (PI mới, chưa ai đụng "Sửa thời
+hạn" lần nào) → payload gửi lên CHỈ có `FRAME_PHOI`, không có `FRAME` (vì FRAME vẫn còn "ước tính",
+chưa touched) → BE (`assertFrameSubStagesWithinRange`) không tìm được dòng FRAME nào trong DB để làm
+chuẩn so sánh → chặn nhầm "chưa đặt khoảng Khung cơ khí" dù màn hình đang hiện đủ ngày (chỉ là ước
+tính chưa lưu). Sửa: hễ có ÍT NHẤT 1 mốc con được commit lần này, LUÔN gửi kèm `FRAME` (giá trị hiện
+tại, dù còn là ước tính) - vì BE bắt buộc cần nó tồn tại thật để validate, và về ý nghĩa nghiệp vụ thì
+"chốt 1 công đoạn con" ngụ ý luôn "chốt luôn khung cha nó nằm trong" là hợp lý.
+
+### 28.6.4. Kết quả kiểm tra
+
+- `npx tsc --noEmit` sạch, `npx eslint` 0 lỗi (frontend).
+- Live-test qua UI thật (tài khoản KHSX tạm `khsxdemo`, tạo/xoá lại lần 2 - xem mục 28.4, đã xoá sau
+  khi test xong): mở "Sửa thời hạn" cho 1 PI CHƯA TỪNG đụng tới (PI-2026-010) → Khung cơ khí tự hiện
+  "10/07/2026 - 11/06/2026 (ước tính)", Phôi/Hàn/Sơn tự hiện lồng đúng trong khoảng đó (Phôi
+  10/07-10/23, Hàn 10/16-10/28, Sơn 10/20-11/06, đều "(ước tính)"). Bấm Lưu KHÔNG sửa gì → xác nhận
+  qua network response `stages: []` - không tự ghi DB (đúng nguyên tắc). Mở lại, sửa 1 mình "Kết
+  thúc" của Phôi rồi Lưu → gặp bug 28.6.3 (400), sửa xong, thử lại → 200 OK, DB xác nhận CHỈ có 2
+  dòng `FRAME` (giá trị ước tính hiện tại) + `FRAME_PHOI` (giá trị vừa sửa) - `FRAME_HAN`/`FRAME_SON`
+  KHÔNG bị ghi (đúng thiết kế, vẫn thuần ước tính chưa lưu). Đã dọn lại dữ liệu test (xoá 2 dòng vừa
+  tạo) để không để lại rác trên PI thật.
+
+### 28.6.5. Chưa làm / lưu ý cho lần sau
+
+- Chưa có test tự động (unit/e2e) cho phần FE tính "ước tính" mặc định này - hiện chỉ live-test qua
+  UI thật. Logic BE (`assertFrameSubStagesWithinRange`) không đổi nên test cũ ở mục 28.4 vẫn còn giá
+  trị, chỉ riêng phần "tính mặc định" là code thuần FE (`LenhSXPage.tsx`), chưa có test riêng.
+- Công thức "30 ngày"/"tỷ lệ 0-55/30-70/45-100%" là do AI tự chọn (người dùng giao lại quyết định) -
+  nếu thực tế sản xuất thấy lệch nhiều, có thể cần chỉnh lại các số này (chỉ nằm ở 2 chỗ:
+  `frameStartOf()`'s `-30` và `SUB_STAGE_DEFS.ratio`, `LenhSXPage.tsx`).

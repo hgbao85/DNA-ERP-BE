@@ -40,11 +40,17 @@
 > đứng yên vĩnh viễn từ 2026-09-24, và Mua hàng "NEW/QUOTING" theo plan gốc bỏ sót ~36 dòng thật).
 > FE: gắn badge vào 6/7 app shell (Admin không có role nào trong bảng mục 6.3). Live-test thật đối
 > chiếu `psql` cho cả 15 account demo (BE) + chụp trực tiếp trên UI cho 4 ca (FE) - khớp tuyệt đối.
-> Chỉ còn Phase 5 (realtime, tuỳ chọn) chưa làm.
+> **2026-09-29 (mục 28): Người dùng chốt Phase 5 (realtime SSE, cài đặt theo loại, kênh ngoài Web
+> Push/Zalo) chưa cần thiết - HOÃN vô thời hạn. DỰ ÁN NOTIFICATION COI NHƯ HOÀN TẤT (Phase 1–4).**
 >
 > Cách đọc: mục 2–7 là review + kiến trúc ĐÍCH viết TRƯỚC khi code; chỗ nào thực tế làm khác thì mục
 > 11.2 / 12.x là nguồn đúng (mục 5 có ghi chú trỏ sang). Mục 8 là plan theo phase; khi làm xong phase
 > nào thì cập nhật tiêu đề phase đó + mục lục bên dưới.
+>
+> **2026-10-08 (mục 29): rà soát "bấm thông báo có nhảy đúng màn không" bằng bấm thật trên 14 vai trò** -
+> chỉ tới đúng MÀN (module+trang), KHÔNG mở thẳng đúng mục; 11 type không có link; một số link trỏ
+> vào phân hệ mà vai trò nhận không vào được; 1 lỗi chữ "null". **ĐÃ SỬA ở mục 30 (2026-10-08)** - mở
+> thẳng đúng mục (tham số `focus` trên URL), link cho 7 type, người nhận kho chỉ còn thủ kho, hết chữ "null".
 
 ## Mục lục
 
@@ -76,6 +82,9 @@
 25. Phase 3b — nhóm 7.5-vi "Đóng gói xong → Sales" (1 sự kiện) — _ĐÃ XONG 2026-09-28_
 26. Phase 3b — nhóm 7.5-iv "Xuất/nhận đan" (1 sự kiện) — _ĐÃ XONG 2026-09-28, PHASE 3B HOÀN TẤT TOÀN BỘ_
 27. Phase 4 — Badge "việc chờ tôi" (`GET /me/work-queue` + gắn vào 6/7 app shell) — _ĐÃ XONG TOÀN BỘ 2026-09-29_
+28. Quyết định dừng lại - Phase 5 hoãn — _2026-09-29, người dùng chốt_
+29. Rà soát "bấm thông báo có nhảy đúng màn không" — _2026-10-08, chỉ rà (đã sửa ở mục 30)_
+30. Sửa theo mục 29: mở thẳng đúng mục, link cho thông báo thiếu link, rà người nhận/quyền — _2026-10-08, đã làm, chưa commit_
 
 ---
 
@@ -2416,3 +2425,177 @@ Chạy lại BE+FE thật, đăng nhập LẦN LƯỢT các account đã có s�
 - Chưa thêm badge riêng cho `HAN_STAFF`/`SON_STAFF` - bảng mục 6.3 không có dòng nào cho 2 role này
   (XacNhanNhanSatPage hiện chỉ có `MaterialIssuesService`/`MaterialYieldIssuesService`, Phase 3b mục
   22 đã có thông báo ACTION_REQUIRED riêng rồi) - giữ nguyên, không tự thêm ngoài phạm vi mục 6.3.
+
+## 28. Quyết định dừng lại - Phase 5 hoãn — _2026-09-29, người dùng chốt_
+
+Sau khi Phase 4 xong (mục 27, kéo theo Phase 1–4 hoàn tất toàn bộ), người dùng xem xét Phase 5
+(realtime SSE thay poll, cài đặt bật/tắt thông báo theo loại cho từng user, kênh ngoài Web
+Push/Zalo OA cho xưởng - mục 8) và chốt: **"Phase 5 có vẻ chưa cần thiết"** - hoãn vô thời hạn,
+không đặt lịch làm tiếp.
+
+**Lý do hợp lý (không phải người dùng nêu, tự suy từ bối cảnh dự án):** hệ thống thông báo hiện tại
+(poll 30s cho chuông + badge "việc chờ tôi", cả hai đã có live-test thật qua browser ở mọi nhóm) đã
+đáp ứng đủ nhu cầu vận hành thực tế của nhà máy quy mô này - độ trễ tối đa 30s giữa lúc có việc mới
+và lúc người dùng thấy không phải vấn đề với nhịp độ thao tác thủ công trên sàn xưởng/văn phòng.
+SSE/Web Push/Zalo OA là chi phí hạ tầng + độ phức tạp thêm (kênh ngoài cần tài khoản dịch vụ riêng)
+cho lợi ích biên khá nhỏ ở quy mô hiện tại.
+
+**Trạng thái cuối cùng của toàn bộ dự án notification (bắt đầu từ changelog này 2026-09-25):**
+Phase 1 (nền tảng BE), Phase 2 (Notification Center FE + URL), Phase 3 (nối sự kiện theo luồng -
+3a/3b/3c gộp, toàn bộ mục 7 trừ 7.6), Phase 4 (badge "việc chờ tôi") - **CẢ 4 PHASE CHÍNH ĐÃ HOÀN
+TẤT VÀ ĐƯỢC LIVE-TEST THẬT**. Phase 5 hoãn theo quyết định trên. Không còn việc gì đang treo chờ
+quyết định hay chờ code tiếp trong phạm vi tài liệu này, trừ vài mục "còn treo" nhỏ đã ghi rõ ở
+từng mục con (chủ yếu là "test khi có dịp tự nhiên" cho vài nhánh hiếm chưa có dữ liệu thật để
+live-test).
+
+## 29. Rà soát "bấm thông báo có nhảy trực tiếp vào màn của mục đó không" — _2026-10-08, CHỈ RÀ, CHƯA SỬA_
+
+**Cách kiểm:** đọc code (`NotificationCenter.tsx`, `utils/notificationLink.ts`, `notification-types.ts`) + bấm thật bằng Playwright trên local: đăng nhập 14 vai trò (khsx, qlsx, boss, sales, khovttp, khotp, muapsh, muavttp, muatp, han, son, kcs, dms, dmbbdg, phoi một phần; khopsh/admin không có thông báo), mở chuông → tab "Tất cả" → bấm từng thông báo (tối đa 6–14 dòng/vai trò, bỏ trùng tiêu đề) → ghi URL đích + tiêu đề màn.
+
+**Kết luận:**
+1. **Bấm là tới đúng MÀN, không tới đúng MỤC.** Bấm → đánh dấu đã đọc → `router.push('/?m=<module>&p=<trang>')`. `Notification.link` chỉ có `module`/`page`; FE chỉ đọc thêm đúng 1 tham số `sub` (tab "Nhập nội bộ"). Thông báo "PI-2026-034 …" hay "SKU E2E-FULL-… " đều dẫn tới cùng danh sách; người nhận tự tìm dòng đó. Đã kiểm 16 key trang trong link — đều tồn tại trong các `*App.tsx`.
+2. **11 type KHÔNG có `link`** → bấm chỉ đánh dấu đã đọc, màn ở nguyên chỗ cũ (đã thấy thật: qlsx bấm "Sếp đã duyệt"/"KCS đạt"/"KCS lỗi"/"hàng về kho"; mua hàng/han/son bấm "hàng về kho"/"đủ hàng"): `PI_APPROVED_BY_BOSS`, `PI_REJECTED_BY_BOSS`, `PI_PRODUCTION_ORDER_FAILED`, `PURCHASE_PROPOSAL_ITEM_RECEIVED`, `PURCHASE_PROPOSAL_PURCHASED`, `QC_FAILED`, `QC_PASSED`, `PACKAGING_ISSUE_CREATED`, `TRANSFER_CHECK_DEFECT_FOUND`, `CUTTING_PROPOSAL_AUTO_APPROVED`, `CUTTING_WASTE_DEFAULT_CHANGED`. Một số cố ý (mục 22.2: 2 vai trò nhận cần 2 tab khác nhau).
+3. **Link trỏ vào phân hệ mà vai trò nhận không vào được → bấm không đi đâu:** `muavttp`/`muatp` nhận "Phiếu CK chờ xác nhận nhận hàng" và "chờ nhận về từ điểm đan" (link `inbound_warehouse`) nhưng sau bấm vẫn ở "Lệnh mua vật tư"; `dms`/`dmbbdg` nhận "SKU đã được duyệt" (link `production_plan/planforms`) nhưng vẫn ở "Quản lý định mức". Chưa phân loại: lỗi chọn người nhận hay lỗi link.
+4. **Chữ lỗi:** thông báo đan ghi "đang chờ nhận về từ điểm đan **null**" (tên điểm đan thiếu khi dựng câu).
+5. **Màn đích đúng cho vai trò phù hợp** (xác nhận thật): khsx → Tối ưu cắt sắt / Danh sách SKU / Duyệt SKU; qlsx → Xử lý lệnh sản xuất; boss → chờ duyệt; sales → Quản lý đơn hàng; khovttp → Nhập kho (đúng sub-tab nội bộ); khotp → Theo dõi nhập đan; mua hàng → Lệnh mua vật tư; phôi → xác nhận nhận sắt; kcs → màn KCS đúng công đoạn (Sơn/Phôi); dms/dmbbdg → setup.
+
+**Chưa kiểm/hạn chế:** phép thử đứt giữa chừng ở `phoi` (browser context đóng — nghi `uiLogin` có handler ném lỗi khi gặp `alert()`), `han`/`son` chỉ có thông báo "hàng về kho"; chưa thử bấm trên màn mobile; chưa kiểm trang "Thông báo của tôi" (dùng chung bộ dựng URL nên dự kiến cùng kết quả).
+**CHƯA làm:** thêm tham số mục (vd `?focus=<entityType>:<entityId>`) để mở thẳng đúng mục; bổ sung `link` cho 11 type; rà lại danh sách người nhận vs quyền vào module.
+
+### 29.1 Rà soát nhánh DEC-85 (realtime Socket.IO) — _2026-10-08, chỉ rà, chưa sửa_
+
+**Nhánh làm gì:** BE `src/realtime/` (gateway Socket.IO xác thực JWT trong handshake, join room `user:<id>` và `perm:<MODULE>:VIEW` do SERVER quyết theo quyền trong JWT, ngắt khi token hết hạn, Redis adapter tuỳ chọn, `RealtimeService.publish*` sau commit, interceptor `RealtimeEntityOn` cho 6 controller + 13 chỗ publish thủ công); FE `src/realtime/` (client singleton, bus, `useRealtimeRefetch`, thanh "Tải lại", resync khi nối lại, refetch dự phòng 5 phút). 3 event: `notification.created`, `notification.changed`, `entity.changed` (chỉ id + action + topic; FE refetch qua REST).
+
+**Đã kiểm:** jest BE realtime + notifications 55 pass (1 skip: test Redis cần `REDIS_TEST_URL`); vitest FE realtime/notificationLink/notifications-api 30 pass. Live socket thật: không token / token rác / token rỗng → `UNAUTHORIZED`; 5 người dùng kết nối; tạo đơn hàng → cả 5 nhận `entity.changed SALES_ORDER CREATED` sau ~141 ms (đều có `SALES_ORDER:VIEW` — đúng); xoá → `DELETED`; đọc 1 thông báo ở tab A → tab B cùng user nhận `notification.changed READ`.
+
+**Chưa kiểm / lưu ý:** (1) nhiều instance + Redis adapter chưa chạy thật (test tích hợp bị skip) — Render chạy >1 instance thì BẮT BUỘC đặt `REDIS_URL`; (2) quyền chỉ đọc lúc nối → đổi quyền/đăng xuất chỉ có hiệu lực khi token hết hạn (≤15 phút) hoặc nối lại; (3) interceptor bỏ qua request ghi không lấy được `id` (từ `req.params.id` hoặc `result.id`) — batch endpoint phải tự publish (chưa liệt kê hết); (4) `entity.changed` phát cho MỌI người có quyền VIEW của module, không lọc theo kho (payload chỉ có id nên rò rỉ tối thiểu, nhưng mỗi thay đổi kéo refetch ở nhiều máy); (5) chưa kiểm UI thật (toast, badge tức thì, thanh "Tải lại"); (6) FE cần `NEXT_PUBLIC_REALTIME_URL` nếu BE sau proxy có path riêng; mặc định lấy origin của `API_BASE_URL`.
+
+### 29.2 Kiểm thật DEC-85: nhiều instance + giao diện — _2026-10-08, ĐẠT, không sửa code_
+
+**Nhiều instance (Redis adapter):** chạy 4 BE từ `dist` (2 cổng có `REDIS_URL` trỏ vào 1 Redis tạm `redis:7-alpine`, 2 cổng không). Socket nghe ở instance B, ghi (tạo đơn hàng) qua instance A:
+- CÓ Redis (3002→3003): cả socket cùng instance và socket ở instance khác đều nhận `entity.changed SALES_ORDER CREATED`.
+- KHÔNG Redis (3004→3005, đối chứng): socket cùng instance nhận, socket ở instance khác KHÔNG nhận (`[]`).
+→ Kết luận: chạy >1 instance BẮT BUỘC đặt `REDIS_URL`; có đặt thì hoạt động đúng. Đã dọn 4 tiến trình + container Redis tạm.
+
+**Giao diện thật (browser pane, FE :3000 + BE :3001), không tải lại trang:**
+1. Sales mở "Quản lí đơn hàng" (82 PO) → tạo 1 đơn từ phiên khác → danh sách tự lên 83, đơn mới ở đầu bảng.
+2. Admin phát thông báo chung (INFO) → badge chuông 2→3 ngay; KHÔNG có toast (đúng thiết kế: chỉ WARNING/CRITICAL mới toast — `useNotifications.ts`).
+3. QLSX đăng nhập, KHSX đổi ngưỡng hao hụt mặc định 1%→2% → toast "Ngưỡng hao hụt mặc định đổi: 1% → 2%" hiện ngay, badge tăng. Đã đặt lại ngưỡng về 1% sau khi thử.
+4. Kho (khopsh) mở "Phân phối nội bộ → Xuất vật tư hàn", admin sửa 1 SKU từ phiên khác → hiện thanh vàng "Dữ liệu vừa được cập nhật… Tải lại"; bấm "Tải lại" thì thanh biến mất.
+5. Tắt rồi bật lại BE khi trang đang mở → socket tự nối lại; sửa SKU lần nữa → thanh "Tải lại" hiện lại (không cần F5).
+Ghi nhận phụ: bấm toast "đổi ngưỡng hao hụt" ở QLSX không đổi màn (link trỏ `sales/orders`, QLSX không vào phân hệ Bán hàng) — cùng nhóm lỗi link/vai trò ở mục 29.
+
+**Dư lại ở DB local:** 2 thông báo chung "Kiểm thử realtime" (INFO, ALL) + 2 thông báo đổi ngưỡng; đơn thử đã xoá. **Còn chưa kiểm:** reconnect khi token hết hạn giữa chừng (15 phút), tải trên nhiều người dùng cùng lúc, batch endpoint không có `id`.
+
+## 30. Sửa theo mục 29: mở thẳng đúng mục, link cho thông báo thiếu link, rà người nhận/quyền — _2026-10-08, ĐÃ LÀM (chưa commit)_
+
+**Thứ tự làm (theo đề xuất đã chốt):** (1) bấm thông báo mở thẳng đúng mục; (2) thêm link cho loại thiếu link; (3) rà người nhận vs quyền vào phân hệ; kèm sửa chữ "null".
+
+### 30.1 Mở thẳng đúng mục
+- **Cơ chế:** URL thêm `focus=<entityType>:<entityId>` (lấy thẳng `Notification.entityType/entityId`, không đổi schema). `NotificationFocus` (mới, gắn ở `app/page.tsx`) chờ (MutationObserver, tối đa 8 s) dòng có `data-focus-id` khớp → cuộn giữa màn + nháy sáng (CSS `notif-focus-flash`) → xoá `focus` khỏi URL (replace). Trang đích chỉ cần rải `{...focusAttr('TYPE', id)}` vào dòng/thẻ.
+- **Đã gắn:** `LenhSXPage` + `ThongKePagePlan` (PI, desktop+mobile), `SKUReviewPage`/`SKUListPage`/`SpecSteelPage`/`SpecDetailQuotaPage`/`SkuMobileCard` (SKU), `LenhMuaNCCPage`+`ProposalCards` (đề xuất mua), `CuttingSolvePanel` (đợt tính cắt). Boss "Tổng hợp chờ duyệt" tự bật đúng tab con (SKU mới / Lệnh sản xuất) theo `focus`.
+- **Toast realtime** nay mang `entityType/entityId` (BE `NotificationCreatedPayload` + bản sao FE `contract.ts`).
+- **Chọn đích theo quyền:** `NotificationLink.alternatives[]`; FE `resolveNotificationUrl` chọn link chính nếu người nhận mở được phân hệ (`canOpenModule` = Giám đốc hoặc đúng phân hệ mặc định), không thì link thay thế đầu tiên mở được; không có đích nào → dòng hiện "· Chỉ để xem" (panel + trang "Thông báo của tôi") thay vì bấm mà im lặng.
+
+### 30.2 Link cho thông báo thiếu link (BE `notification-types.ts`)
+Thêm: `PI_APPROVED_BY_BOSS`/`PI_REJECTED_BY_BOSS` (QLSX → `production/ke-hoach`, KHSX → `production_plan/lenh-sx` hoặc `gom-cat`), `PURCHASE_PROPOSAL_PURCHASED` (QLSX `production/lenh-sx`, Mua hàng `purchasing/lenh-mua-ncc`), `PURCHASE_PROPOSAL_ITEM_RECEIVED` (QLSX / thủ kho `inbound_warehouse/lich-su-kho`), `QC_PASSED`/`PACKAGING_ISSUE_CREATED`/`TRANSFER_CHECK_DEFECT_FOUND` (QLSX `production/ke-hoach`). `SKU_APPROVED` thêm đích thay thế cho nhân viên định mức (`production/setup`) và Sales (`sales/orders`).
+**Cố ý VẪN không link (có test khoá lại, kèm lý do):** `PI_PRODUCTION_ORDER_FAILED` (Admin, chưa có màn xử lý), `QC_FAILED` (tổ gửi + QLSX cùng phân hệ nhưng cần trang khác nhau), `CUTTING_PROPOSAL_AUTO_APPROVED` (luồng cũ), `CUTTING_WASTE_DEFAULT_CHANGED` (BOSS/QLSX không có màn cấu hình).
+
+### 30.3 Người nhận vs quyền
+- **Phát hiện bằng dữ liệu thật:** nhóm nhận theo `warehouseIds` gồm MỌI user có `warehouseScope` đó — kể cả Mua hàng (`muapsh/muatp/muavttp`, giữ cả role `WAREHOUSE_STAFF` nhưng bị khoá vào phân hệ `purchasing`) và tổ sản xuất (`han/son/phoi/kcs` cùng kho `phoi-son-han`) — nên họ nhận thông báo kho mà không mở được màn.
+- **Sửa:** `RecipientCriteria` thêm `warehouseScopeRoles` (chỉ role đó) và `warehouseScopeExcludeRoles` (loại role đó); áp cho `WAREHOUSE_TRANSFER_CREATED`, `WEAVING_ISSUE_TO_POINT`, `PURCHASE_PROPOSAL_ITEM_RECEIVED` = chỉ `WAREHOUSE_STAFF` và không phải `PURCHASER`. Đối chiếu SQL trên DB local: `vat-tu-tp` khovttp+muavttp → **khovttp**; `thanh-pham` khotp+muatp → **khotp**; `phoi-son-han` han,kcs,khopsh,muapsh,phoi,son → **khopsh**.
+- **Chữ "null":** `weavingPointName` dùng `fullName` (có thể rỗng) → nay `fullName?.trim() || code`.
+
+### 30.4 Kiểm tra
+- BE: jest `notifications` + `realtime` + `weaving-issues` **119 pass** (mới: `recipient-resolver.service.spec.ts` 4 ca, `notification-links.spec.ts` khoá "mọi link trỏ phân hệ FE có thật" + "type không link phải nằm trong danh sách cố ý"); eslint 0 lỗi.
+- FE: tsc sạch; vitest `notificationLink`/`realtime`/`notifications-api` **37 pass** (+7 ca mới); eslint chỉ còn cảnh báo cũ.
+- **Live (browser pane):** KHSX tính 1 đợt cắt → bấm thông báo "Đã tính xong…" → vào `gom-cat`, thẻ `CUTTING_PROPOSAL:173` nháy sáng, `focus` bị xoá khỏi URL; mở `?focus=CUTTING_PROPOSAL:131` (đợt cũ) → thẻ nháy + cuộn giữa màn; Mua hàng (`muavttp`) thấy "· Chỉ để xem" ở các phiếu chuyển kho cũ; Sếp mở `?focus=PRODUCTION_INVOICE:…` → tab con "Lệnh sản xuất" tự bật.
+- **CHƯA kiểm live:** `focus` ở các trang PI/SKU/đề xuất mua (mới kiểm bằng tsc + test hàm; chỉ `CUTTING_PROPOSAL` kiểm thật); người nhận mới theo quy tắc kho (chưa phát 1 phiếu chuyển kho thật — mới đối chiếu SQL); thông báo cũ trong DB không có `alternatives` nên vẫn dùng link cũ.
+
+### 30.5 Còn treo
+- Dòng cấp **item** (SKU trong PI) chưa có `data-focus-id` — thông báo `PRODUCTION_INVOICE_ITEM` chỉ tới đúng màn, không tới đúng dòng.
+- Các trang KCS/Phôi/Hàn/Sơn/kho (`kcs-*`, `phoi-xac-nhan-nhan-sat`, `han-son-xac-nhan-vat-tu`, `nhap-kho`, `nhap-dan`...) chưa gắn `focusAttr` — các thông báo `STEEL_ISSUE`/`CUT_BUNDLE`/`PRODUCTION_BATCH`/`MATERIAL_ISSUE`/`WAREHOUSE_TRANSFER`/`WEAVING_ALLOCATION` vẫn chỉ tới đúng màn.
+- `QC_FAILED` chưa có link; `PI_PRODUCTION_ORDER_FAILED` (Admin) chưa có màn.
+
+### 30.6 Gắn `focus` cho trang kho / KCS / phôi — _2026-10-08, ĐÃ LÀM (chưa commit)_
+
+**Mở rộng cơ chế:** `NotificationFocus` khớp theo TỪ (`[data-focus-id~="KEY"]`), thêm `focusAttrAny([...keys])` để 1 dòng GOM nhiều đối tượng (dòng PI trong KCS chứa nhiều đợt) nháy khi bất kỳ khoá con nào được trỏ tới. `LenhSanXuatBoard` (board dùng chung của Phôi/Hàn/Sơn/KCS) thêm prop `rowFocus`; `KcsLine.focusKey` mang khoá của lô.
+
+**Đã gắn:**
+| Thông báo (entityType) | Trang | Dòng |
+|---|---|---|
+| `STEEL_ISSUE` | `phoi-xac-nhan-nhan-sat` (`XacNhanNhanSatPage`) | dòng phiếu xuất sắt |
+| `MATERIAL_YIELD_ISSUE` | cùng trang | dòng xuất vật tư thành phẩm |
+| `CUT_BUNDLE` | `kcs-phoi` (`KcsPhoiPage`) | dòng PI (gom mọi đợt cắt của PI) + dòng đợt trong chi tiết PI |
+| `PRODUCTION_BATCH` | `kcs-han`/`kcs-son` (`KcsStagePage` qua `kcsCore`) | dòng PI/PO (gom các lô) + dòng lô |
+| `MATERIAL_ISSUE` | `han-son-xac-nhan-vat-tu` (`XacNhanVatTuPage`) | dòng chờ nhận |
+| `WAREHOUSE_TRANSFER` | `nhap-kho` sub `noi-bo` (`InternalTransferSections`) | thẻ phiếu chuyển |
+
+**Kiểm tra:** tsc sạch; vitest `notificationLink` 13 pass; eslint 0 lỗi (chỉ cảnh báo cũ). **Live (browser pane, thông báo thật):** Phôi → `STEEL_ISSUE:31` nháy sáng, `focus` tự xoá khỏi URL; KCS Phôi → dòng `PI-2026-029` nháy (khoá `CUT_BUNDLE:32 CUT_BUNDLE:31 …`).
+**CHƯA kiểm live:** KCS Hàn/Sơn (`PRODUCTION_BATCH:81` đã được duyệt nên màn không còn lô chờ để nháy — cần 1 lô chờ KCS mới), phiếu chuyển kho (`WAREHOUSE_TRANSFER:35` đã xác nhận, tạo phiếu thử không được vì kho không đủ tồn khả dụng), xác nhận vật tư Hàn/Sơn (DB không có thông báo `MATERIAL_ISSUE`). Ba chỗ này mới kiểm bằng tsc + cùng mẫu code với chỗ đã live.
+**CHƯA làm (có chủ đích):** `WEAVING_ALLOCATION` (`nhap-dan`) — `entityId` là khoá ghép `đơn:mảnh:điểm đan`, còn trang là danh sách theo SKU rồi mới tới bảng phân bổ, client không có mã đơn sản xuất để dựng khoá; chân nhôm/`MATERIAL_YIELD_STEP` không phát thông báo; dòng SKU cấp item trong PI.
+
+### 30.7 Live-test bằng thông báo THẬT trong luồng đầu–cuối (08/10/2026) — kết quả `focus` + người nhận
+
+Chi tiết từng chặng ở `changelog-2026-10-07-bao-cao-test-be-fe-solve.md` mục 13. **Đã kiểm live (bấm chuông → dòng nháy):** `PURCHASE_PROPOSAL` (Mua hàng, lenh-mua-ncc), `STEEL_ISSUE` (Phôi), `CUT_BUNDLE` (KCS Phôi, dòng PI gom), `PRODUCTION_BATCH` (KCS Hàn và KCS Sơn — trước đây CHƯA kiểm, nay đạt), `WAREHOUSE_TRANSFER` (khovttp, sub-tab nội bộ). **Người nhận:** phiếu chuyển kho chỉ tới khovttp (muavttp không còn nhận) — đúng mục 30.3.
+**Khoảng trống còn lại:** (1) thông báo mua hàng gửi QLSX trỏ `production/lenh-sx` — màn này chỉ có PI chờ QLSX duyệt nên không có dòng; nên trỏ `production/ke-hoach` + khoá PI; (2) `PI_ITEM_PACKAGING_COMPLETE` (Sales) không có dòng khớp khoá (`PRODUCTION_INVOICE_ITEM`); (3) nút trong menu bên bố cục hẹp không tự đóng khi bấm thông báo; (4) `MATERIAL_ISSUE` (Hàn/Sơn xác nhận vật tư) chưa kiểm vì xuất sơn bị chặn bởi lỗi B-1.
+
+### 30.8 Sửa N-2 (huy hiệu đếm cả việc đã xử lý) và khoảng trống thông báo mua hàng gửi QLSX — _2026-10-09, ĐÃ LÀM (chưa commit)_
+
+**N-2 (mục 10 báo cáo 07/10) — ĐÃ SỬA:** `NotificationsService.unreadCount()` thêm `resolvedAt: null` → việc ĐÃ xử lý xong (ACTION_REQUIRED bị `resolve()`) không còn tính vào huy hiệu chuông / số "Cần xử lý". Live: dms `ACTION_REQUIRED` = 1 khớp đúng 1 mục chưa xử lý chưa đọc; qlsx 1/1; boss 0 (trước: boss 14 với 3 mục thật). Spec `unreadCount` cập nhật theo.
+
+**Thông báo mua hàng gửi QLSX (mục 30.7 khoảng trống 1) — ĐÃ SỬA:** `PURCHASE_PROPOSAL_APPROVED/_ITEM_RECEIVED/_PURCHASED` nay trỏ `production/ke-hoach` ("Tổng hợp lệnh SX") kèm `link.params.focus = PI_CODE:<mã PI>` (BE chỉ biết mã PI, không biết id PI ở chỗ phát). FE: `buildNotificationLinkUrl` để `link.params.focus` thắng khoá suy từ entity; dòng PI ở `ThongKePagePlan` (desktop + thẻ mobile) gắn thêm khoá `PI_CODE:<mã>`. Link thay thế vẫn dùng khoá entity (`PURCHASE_PROPOSAL:<id>` ở màn Mua hàng). Live: mở `?m=production&p=ke-hoach&focus=PI_CODE:PI-2026-038` → dòng PI-2026-038 nháy.
+**Kiểm tra:** jest `notifications` 38 pass (+test khoá link 3 type này); vitest `notificationLink` 14 pass (+1 ca focus do BE chỉ định); tsc BE/FE sạch (trừ 2 file seed prisma cũ), eslint 0 lỗi.
+**CHƯA kiểm live bằng thông báo thật:** 3 thông báo mua hàng mới (cần 1 PI mới đi qua bước mua; các thông báo cũ trong DB vẫn mang link `lenh-sx`).
+**Còn lại:** xem mục 30.7 (Sales "đã đóng gói xong" không có dòng khớp; menu bên bố cục hẹp; N-1, N-3, N-4, N-7).
+
+### 30.9 Sửa N-1, N-3, N-4, khoảng trống Sales và menu bên — _2026-10-09, ĐÃ LÀM (chưa commit)_
+
+- **N-1 (nhánh chân nhôm im lặng) — ĐÃ SỬA:** 2 type mới. `MATERIAL_YIELD_RECIPE_ISSUE_TO_PHOI` (ACTION_REQUIRED, entity `MATERIAL_YIELD_RECIPE_ISSUE`, tới Phôi, link `phoi-xac-nhan-nhan-sat`) phát sau commit ở `MaterialYieldRecipeIssuesService.create`, tự đóng ở `receive`. `MATERIAL_YIELD_STEP_BUNDLE_TO_KCS` (entity `MATERIAL_YIELD_STEP_BUNDLE`, tới KCS, link `kcs-phoi?sub=chan-nhom`) phát ở `MaterialYieldRecipeProductionService.submitStep`, tự đóng ở `QcReviewsService.reviewMaterialYieldStep`. Module import `NotificationsModule`. FE: `XacNhanNhanSatPage` (dòng recipe) + `KcsChanNhomSection` (dòng bundle) gắn `focusAttr`; `KcsPhoiPage` đọc `?sub=chan-nhom` để mở thẳng tab "VT không gắn mảnh". Lỗi phát/đóng thông báo không làm hỏng việc đã commit (có test).
+- **N-3 (trùng) — ĐÃ SỬA phần trùng:** `PURCHASE_PROPOSAL_APPROVED` gộp theo đề xuất (`dedupeKey` `PURCHASE_PROPOSAL_APPROVED:<id>`) → QLSX không còn nhận 1 thông báo/mỗi người mua; message bỏ số vật tư (số đó chỉ là phần người duyệt sau cùng). Phần "hàng về kho gửi ~7 vai" đã hết nhờ mục 30.3; message "hàng về kho" đã nêu vật tư + số lượng.
+- **N-4 (muatp nhận thông báo không liên quan) — ĐÃ SỬA:** `notifyPurchaseProposalCreated` đọc người mua (`Material.buyerId`) của các dòng còn chờ → `params.buyerIds` → `PURCHASE_PROPOSAL_CREATED` chỉ báo đúng người mua; còn vật tư chưa giao người mua thì giữ báo cả nhóm PURCHASER như cũ.
+- **Sales "đã đóng gói xong" không nháy — ĐÃ SỬA:** link mang `params.focus = SALES_ORDER_CODE:<mã đơn>`; `OrderManagementPage` gắn khoá đó ở dòng/thẻ đơn. Live: mở link → dòng `E2E-PO-1791443380842` nháy.
+- **Menu bên bố cục hẹp không tự đóng khi bấm thông báo — ĐÃ SỬA:** `useCloseNavOnNotification` (sự kiện `dna:notification-navigate`) gắn vào 7 app shell; `NotificationCenter` + `MyNotificationsPage` phát sự kiện trước khi điều hướng. Live: bấm thông báo khi menu đang mở → menu đóng.
+- **Kiểm tra:** jest BE (notifications, material-yield-recipes, qc-reviews, purchase-proposals, cutting-proposals, production-invoices) xanh — các spec cũ mock `purchaseProposalItem.count` được đổi sang `findMany`; mới: `purchase-proposal-notify.util.spec.ts`, `material-yield-recipe-issues.service.spec.ts`, ca N-1/N-4 trong `notification-links.spec.ts`; vitest FE 80 pass; tsc sạch (trừ 2 seed prisma cũ); eslint 0 lỗi.
+- **CHƯA kiểm live:** N-1 (cần 1 PI có công thức chân nhôm đi qua xuất nhôm → nhận → gửi KCS; dữ liệu E2E07 cũ đã xong), N-4 (cần 1 PI mới có vật tư gán người mua khác nhau), N-3 gộp (cần 2 người mua cùng duyệt).
+- **Còn lại:** N-7 (không có thông báo khi KHSX duyệt định mức / QLSX kết thúc — nghi chủ đích, chờ xác nhận); các loại cố ý không link (`QC_FAILED`, `PI_PRODUCTION_ORDER_FAILED`, `CUTTING_WASTE_DEFAULT_CHANGED`, `CUTTING_PROPOSAL_AUTO_APPROVED`); `WEAVING_ALLOCATION` và dòng SKU cấp item chưa có `focus`; `MATERIAL_ISSUE` chưa kiểm live (bị B-1 chặn).
+
+### 30.10 Review N-7 (không có thông báo khi KHSX duyệt định mức / QLSX kết thúc) — _2026-10-09, CHỈ REVIEW, CHƯA SỬA_
+
+**Kết luận: không phải sót khi cài đặt — 2 sự kiện này KHÔNG nằm trong bảng thiết kế 7.1/7.2** (bảng chỉ có "KHSX trả về định mức" và "Sếp duyệt/từ chối SKU"). Đánh giá giá trị: (1) **KHSX duyệt định mức → Spec**: Spec không có việc gì tiếp theo ở bước này; kết quả cuối (`SKU_APPROVED`) đã báo Spec khi Sếp duyệt → thêm chỉ tăng nhiễu, **đề xuất giữ nguyên**. (2) **QLSX Kết thúc → KHSX/Sales**: Sales đã được báo ở sự kiện có hành động ("đã đóng gói xong, sẵn sàng giao"); Kết thúc thường diễn ra SAU giao hàng → giá trị thấp, **tuỳ chọn** (chỉ có ích như dấu vết khi bấm nhầm).
+**Khoảng trống THẬT được phát hiện khi review:** `ProductionOrdersService.startFloor/pauseFloor/finishFloor` KHÔNG phát thông báo cũng không phát realtime; tổ Phôi/Hàn/Sơn/KCS/kho không đọc `floorStage` ở màn của mình — bị QLSX **Tạm dừng/Kết thúc** thì chỉ biết khi thao tác bị BE chặn 409 ("chưa có SKU nào được QLSX bấm Bắt đầu…/đã Kết thúc"). Nếu làm gì ở nhóm này thì nên là **thông báo Tạm dừng/Tiếp tục/Kết thúc cho các tổ xưởng liên quan** (ALERT khi tạm dừng), không phải 2 mục N-7 gốc. CHƯA làm, chờ quyết định.
+
+## 31. Rà vòng đời lệnh sản xuất theo 4 nhóm quản lý của ERP — _2026-10-09, rà xong; P1 (31.1–31.2) và P2 (31.3) ĐÃ LÀM, P3 còn treo_
+
+Căn cứ: đọc code BE (`notification-types.ts` ~48 type, `RealtimeEntityOn`/`publishEntityChanged`, `AUDITED_MODELS` + `writeAuditLog` thủ công, không có `@Cron`/scheduler nào) + kết quả live-test 08/10. 4 nhóm: (1) bàn giao có việc phải làm, (2) đổi trạng thái ảnh hưởng người khác, (3) ngoại lệ/cảnh báo, (4) dấu vết kiểm toán.
+
+**Nhóm 1 — bàn giao có việc phải làm: phủ gần đủ.** Đã có: định mức → duyệt → Sếp; claim/gửi QLSX/Sếp; đề xuất mua; xuất sắt → Phôi; Phôi → KCS; Hàn/Sơn → KCS; xuất vật tư tiêu hao → tổ; chuyển kho; đóng gói → Sales; chân nhôm (mục 30.9). **Thiếu:** (a) Mua hàng "Sếp đã duyệt" → **Kho được phép nhận hàng**: `PURCHASE_PROPOSAL_APPROVED` chỉ tới QLSX, thủ kho chỉ thấy khi tự mở "Nhập kho"; (b) Sales tạo đơn có SKU chưa có định mức → KHSX (hoãn từ mục 15.5, chưa làm); (c) thông báo đan (`WEAVING_ALLOCATION`) có nhưng không `focus`; (d) chuyền kiểm xong → đóng gói, và xuất giao → QLSX/Sales: không báo (cùng kho, giá trị thấp).
+**Nhóm 2 — đổi trạng thái ảnh hưởng người khác: thiếu nhiều nhất.** QLSX Bắt đầu/Tạm dừng/Tiếp tục/Kết thúc (`ProductionOrdersService.startFloor/pauseFloor/finishFloor`): KHÔNG thông báo; chỉ có `entity.changed PRODUCTION_ORDER` qua interceptor và CHỈ màn QLSX "Tổng hợp lệnh SX" nghe topic `production-orders` — màn Phôi/Hàn/Sơn/KCS/kho không nghe, không đọc `floorStage` → tổ xưởng chỉ biết khi thao tác bị BE chặn 409. Cũng không báo: sửa hạn từng công đoạn (`stages.deadline`), nạp lại định mức (`resync-bom`) cho tổ đang làm, PI/lệnh bị kết thúc khi còn dở.
+**Nhóm 3 — ngoại lệ/cảnh báo: có phản ứng, chưa có chủ động.** Đã có: tính cắt lỗi/không đạt ngưỡng, KCS không đạt, chuyền kiểm có lỗi, đổi ngưỡng hao hụt, tạo lệnh thất bại (Admin, chưa có màn). **Thiếu (không có scheduler nào):** quá hạn giao (UI chỉ hiện "Quá hạn" khi mở), PI/đề xuất mua kẹt lâu ở 1 trạng thái (chờ QLSX/Sếp/Mua), thiếu tồn chỉ báo cho người thao tác lúc bị chặn (B-1 là ví dụ), lệch số lượng giữa các chặng, tồn dưới ngưỡng.
+**Nhóm 4 — dấu vết kiểm toán: tốt ở chứng từ, hở ở vận hành xưởng.** Có audit tự động: master data, `SalesOrder`, `PlanForm`, `ProductionInvoice`, `WarehouseTransfer`, `SteelIssue`, `QcReview`, `MaterialIssue`, `PackagingIssue`, `ProductionBatch`, `StockReservation`, `PurchaseProposal` (+ ghi tay dòng item), `CuttingProposal`, `SystemConfig`; sổ kho `StockLedger` bất biến. **KHÔNG có audit:** `ProductionOrder` (ai bấm Bắt đầu/Tạm dừng/Kết thúc, lúc nào — chỉ `resync-bom` được ghi tay), xuất giao hàng (`SalesOrderItem.shippedQty`, dòng con, chỉ còn dấu vết ở sổ kho nếu có), `WeavingIssue/Receipt`, nhánh chân nhôm (`MaterialYieldRecipeIssue`, `MaterialYieldStepBundle`, `MaterialYieldIssue`).
+
+**Việc đề xuất theo ưu tiên** (chưa làm): P1 audit `ProductionOrder` (bấm nhầm Kết thúc không truy được) + thông báo/realtime Tạm dừng-Tiếp tục-Kết thúc cho tổ xưởng (và màn tổ xưởng hiện trạng thái lệnh); P1 thông báo "Kho được nhận hàng" khi Mua hàng duyệt xong; P2 audit xuất giao hàng + nhánh chân nhôm; P2 thông báo đổi hạn công đoạn / nạp lại định mức cho tổ liên quan; P3 scheduler cảnh báo quá hạn / kẹt trạng thái (cần quyết định hạ tầng: cron trong BE hay job ngoài); P3 Sales tạo đơn thiếu định mức → KHSX.
+
+### 31.1 Làm P1 của mục 31 — _2026-10-09, ĐÃ LÀM (chưa commit)_
+
+1. **Audit `ProductionOrder` đổi `floorStage` — ĐÃ LÀM:** `ProductionOrdersService.recordFloorChange()` ghi `AuditLog` (UPDATE, `{floorStage: cũ}` → `{floorStage: mới}`, kèm người thao tác qua CLS) cho Bắt đầu / Tiếp tục / Tạm dừng / Kết thúc. Bấm lại cùng trạng thái (idempotent) không ghi. Live: audit có đủ 2 dòng PAUSED→ACTIVE và ACTIVE→PAUSED của PO 37.
+2. **Thông báo trạng thái xưởng — ĐÃ LÀM:** 4 type mới `PRODUCTION_ORDER_FLOOR_STARTED/PAUSED/RESUMED/FINISHED` (entity `PRODUCTION_ORDER`); Tạm dừng là ALERT/WARNING và tự đóng khi Tiếp tục/Kết thúc. Người nhận = tổ Phôi/Hàn/Sơn/KCS + thủ kho 3 kho vật lý (xác định theo `warehouseScope` + role, KHÔNG theo role WAREHOUSE_STAFF đơn thuần vì dữ liệu demo cho cả `khsx`/`sales` giữ role này), loại Mua hàng. Resolver thêm tiêu chí `excludeRoles` (loại khỏi kết quả cuối). Live (kết thúc PO 37): nhận = phoi, han, son, kcs, khotp, khovttp, khopsh; KHÔNG nhận = muapsh/muavttp/muatp, sales, khsx, boss, qlsx. Tiếp tục → thông báo Tạm dừng cũ thành "Đã xử lý". Link: `production/phoi-lenh-sx?focus=PI_CODE:<mã PI>` (thay thế `inbound_warehouse/xuat-kho`); dòng PI ở board Hàn/Sơn (`PiListBoard` qua `rowFocus`), Phôi (`LenhSanXuatPhoi`), kho xuất sắt (`XuatSatPage`) gắn khoá `PI_CODE:`. Màn Phôi/Hàn/Sơn/KCS nay nghe thêm topic realtime `production-orders`.
+3. **"Kho được nhận hàng" — ĐÃ LÀM:** type `PURCHASE_PROPOSAL_READY_TO_RECEIVE` (ACTION_REQUIRED) phát khi Mua hàng "Sếp đã duyệt" (`bossApprove`), tới thủ kho của đúng kho nhận từng vật tư (`receiveWarehouseCode ?? material.warehouse`), loại Mua hàng, gộp theo đề xuất (nhiều người mua), tự đóng khi đề xuất PURCHASED. Link `inbound_warehouse/nhap-kho` + khoá `PURCHASE_PROPOSAL:<id>`; `NhapKhoPage` gắn khoá ở dòng đề xuất.
+4. **Kiểm tra:** jest BE (production-orders, purchase-proposals, notifications, production-invoices) 342 pass (mới: 6 ca đổi `floorStage`, ca READY_TO_RECEIVE, ca `excludeRoles`, ca khoá link/người nhận 5 type); vitest FE 80 pass; tsc sạch (trừ 2 seed prisma cũ); eslint 0 lỗi.
+5. **Giới hạn đã thấy khi live:** (a) thông báo Tạm dừng/Kết thúc dẫn tới danh sách mà PI đó KHÔNG còn nằm trong (màn xưởng chỉ liệt kê PI `ACTIVE`) → không có dòng để nháy — chủ ý, tự thông báo đã giải thích; (b) thông báo Tiếp tục/Bắt đầu khi màn xưởng đã mở sẵn: danh sách chưa tải lại nên dòng chưa có để nháy tới khi bấm "Tải lại" (banner "Dữ liệu vừa được cập nhật" hiện); (c) READY_TO_RECEIVE chưa kiểm live bằng thông báo thật (cần 1 đề xuất mua mới đi qua bước "Sếp đã duyệt"); (d) màn xưởng vẫn không hiển thị TRẠNG THÁI lệnh (PAUSED/FINISHED) — PI chỉ biến khỏi danh sách.
+
+### 31.2 Hiện trạng thái "tạm dừng" trên màn xưởng/kho — _2026-10-09, ĐÃ LÀM (chưa commit)_
+
+**Vấn đề (mục 31.1 giới hạn d):** màn Phôi/Hàn/Sơn/KCS/kho chỉ liệt kê PI có ít nhất 1 SKU `floorStage = ACTIVE`, nên PI bị QLSX Tạm dừng chỉ BIẾN MẤT, người làm không biết vì sao. **Đã làm:** `components/FloorStoppedBanner.tsx` — banner vàng "Lệnh đang TẠM DỪNG — chưa thao tác được: <mã PI>…" (PI tạm dừng = có SKU PAUSED và không còn SKU ACTIVE, cùng quy tắc gộp theo PI), tự cập nhật theo realtime `production-orders` (không có ô nhập nên không cần nút "Tải lại"). Gắn ở 1 chỗ trung tâm mỗi app: `MfgApp` (Phôi/Hàn/Sơn/KCS) và `InboundWarehouseApp` (thủ kho có `warehouseScope`). **Cố ý KHÔNG liệt kê PI đã Kết thúc** (lịch sử dài, đã có thông báo riêng). Live: tạm dừng PO 37 → banner hiện đúng PI-2026-037 ở màn Hàn; tiếp tục → banner tự biến mất không cần tải lại. tsc/eslint sạch, vitest FE 80 pass. **Chưa:** test tự động riêng cho component (kiểm bằng live), banner chưa hiện ở màn Mua hàng/Sales (không làm việc theo lệnh xưởng).
+
+### 31.3 Làm P2 của mục 31 — audit xuất giao/vật tư thành phẩm/đan + thông báo đổi thời hạn — _2026-10-09, ĐÃ LÀM (chưa commit)_
+
+**Đã làm (BE):**
+- Helper mới `src/common/utils/audit-event.util.ts` (`auditEvent`, best-effort: audit hỏng chỉ log, không chặn thao tác xưởng) cho các bảng không nằm trong `AUDITED_MODELS` hoặc ghi bằng `updateMany`/raw SQL.
+- Audit mới: **xuất giao hàng** (`SalesOrdersService.shipItem` — `SalesOrderItem.shippedQty` trước → sau, raw SQL nay `RETURNING`); **nhánh vật tư thành phẩm/chân nhôm** (`MaterialYieldRecipeIssue` tạo/nhận, `MaterialYieldStepBatch` tạo, `MaterialYieldStepBundle` tạo); **xuất vật tư thành phẩm theo mảnh** (`MaterialYieldIssue` tạo/nhận); **đan** (`WeavingIssue` tạo, `WeavingReceipt` tạo). Mốc kế hoạch (`updateItem` — `materialDeadline`, `deliveryDeadline`, `stages`): audit 1 dòng old → new, CHỈ khi giá trị thật sự đổi.
+- Thông báo mới `PI_ITEM_DEADLINE_CHANGED` (INFO, entity PRODUCTION_INVOICE, KHÔNG dùng dedupeKey (live-test thấy gộp làm mất nội dung lần sửa trước và dồn người nhận của 2 lần sửa khác nhau → mỗi lần sửa 1 thông báo)). Người nhận do service tính theo mốc nào đổi: Phôi/Hàn/Sơn → đúng tổ đó (Khung cơ khí → cả 3 tổ); Đan → thủ kho `phoi-son-han`+`vat-tu-tp`; Kiểm tra chuyển kho/Đóng gói → thủ kho `vat-tu-tp`+`thanh-pham`; mua vật tư → Mua hàng; giao hàng → Sales. KHÔNG báo QLSX (người sửa/tab khác). Mua hàng chỉ bị báo khi chính mốc mua vật tư đổi (họ giữ cả role WAREHOUSE_STAFF). Link `production/phoi-lenh-sx` focus PI_CODE, alt kho/mua hàng/Sales.
+- **Quyết định không làm:** thông báo "resync BOM" — chỉ cho resync khi `floorStage = PENDING`, xưởng chưa thấy lệnh nên báo vô nghĩa. Phần gán thủ kho theo công đoạn Đan/Kiểm tra/Đóng gói là suy luận theo kho (chưa có người xác nhận), sai thì chỉnh bảng `stageWarehouses` trong `auditAndNotifyDeadlineChange`.
+
+**Kiểm tra:** constructor `MaterialYieldIssuesService`/`WeavingIssuesService` thêm `ClsService` (spec cập nhật); test mới cho audit ship, yield-recipe, `updateItem` (đổi Hàn+Đan+giao hàng → đúng người nhận; lưu y nguyên → không audit/báo). tsc sạch, eslint sạch (chỉ 1 warning `any` có sẵn), jest toàn BE 1474 pass / 1 skip.
+**Live-test UI (khsx, PI-2026-035, "Sửa thời hạn"):** đổi Mua hàng + Giao hàng + Khung cơ khí → audit 1 dòng (cũ→mới) + thông báo tới sales, 3 Mua hàng, phoi, han, son; đổi Đan + Đóng gói → thêm kho phôi-sơn-hàn/vật tư/thành phẩm; chỉ đổi Đan → CHỈ khopsh, khovttp; bấm Lưu không đổi gì → không audit, không thông báo. **Lỗi phát hiện & sửa trong live-test:** lúc đầu có dedupeKey nên lần sửa 2 ghi đè nội dung lần 1 và dồn người nhận của cả hai (phoi/han/son bị báo "Đan…") → bỏ dedupeKey. Chưa kiểm: bấm thông báo của người nhận để nhảy màn (link dùng lại của floor-stage, đã live-test ở 31.1).
+**Chưa:** FE chưa đụng (type mới dùng link sẵn có); P3 (job báo quá hạn/kẹt) vẫn treo, cần quyết định hạ tầng scheduler. Lỗi B-1 (kho không xuất được sơn cho PI của chính nó) KHÔNG thuộc phạm vi notification, chủ việc khác xử lý — không sửa ở đây.

@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose, Type } from 'class-transformer';
-import { CuttingProposalStatus } from '../../../generated/prisma/client';
+import { CuttingProposalStatus, SolverMachine } from '../../../generated/prisma/client';
 
 /**
  * Trạng thái RÚT GỌN cho màn Cắt sắt (3 nhãn, xem changelog 2026-08-15 mục 15) - dẫn xuất từ
@@ -38,6 +38,12 @@ export class CuttingProposalPatternResponseDto {
   @Expose() @ApiProperty() patternIndex!: number;
   @Expose() @ApiProperty() barCount!: number;
   @Expose() @ApiPropertyOptional({ nullable: true }) wastePerBarMm!: number | null;
+  /// CHỈ khi dòng cắt bằng MC Tự động (2026-10-23): số bó theo hệ số + số cây cắt tay, dạng
+  /// { "<hệ số>": số bó, "1": số cây cắt tay } (vd {"16": 3, "14": 1, "1": 2}); barCount = Σ hệ số × số bó.
+  /// null với MC Laser và với phương án tính trước khi có máy cắt.
+  @Expose()
+  @ApiPropertyOptional({ nullable: true, type: 'object', additionalProperties: { type: 'number' } })
+  bundles!: Record<string, number> | null;
   @Expose()
   @ApiProperty({ type: [CuttingProposalSegmentResponseDto] })
   @Type(() => CuttingProposalSegmentResponseDto)
@@ -65,6 +71,21 @@ export class CuttingProposalPieceSummaryResponseDto {
   @Expose() @ApiProperty({ type: [String] }) names!: string[];
 }
 
+/// Tổng kết cắt theo bó của 1 loại sắt (CHỈ khi machine = 'tu_dong'), camelCase.
+@Exclude()
+export class CuttingProposalBundleSummaryResponseDto {
+  /// Các hệ số bó đã dùng (số cây/bó), vd [14,16,18,20].
+  @Expose() @ApiProperty({ type: [Number] }) factors!: number[];
+  /// Số bó (mỗi bó = 1 lần cắt máy).
+  @Expose() @ApiProperty() totalBundles!: number;
+  /// Số cây cắt tay (hệ số 1).
+  @Expose() @ApiProperty() manualBars!: number;
+  /// Số lần cắt = số bó + số cây cắt tay.
+  @Expose() @ApiProperty() totalCuts!: number;
+  /// Số cỡ đoạn tối đa trên 1 kiểu cắt đã áp.
+  @Expose() @ApiProperty() maxSizesPerPattern!: number;
+}
+
 @Exclude()
 export class LengthComparisonEntryResponseDto {
   @Expose() @ApiProperty() length!: number;
@@ -87,6 +108,16 @@ export class CuttingProposalLineResponseDto {
   @Expose()
   @ApiPropertyOptional({ nullable: true, enum: ['fixed', 'scan'] })
   lengthSource!: 'fixed' | 'scan' | null;
+  /// Máy cắt ĐÃ DÙNG để giải dòng này (2026-10-23): 'laser' | 'tu_dong'. null với dòng không khả thi và với
+  /// phương án tính trước khi có máy cắt (đều là MC Laser).
+  @Expose()
+  @ApiPropertyOptional({ nullable: true, enum: SolverMachine })
+  machine!: SolverMachine | null;
+  /// Tổng kết theo bó - CHỈ khi machine = 'tu_dong', còn lại null.
+  @Expose()
+  @ApiPropertyOptional({ type: CuttingProposalBundleSummaryResponseDto, nullable: true })
+  @Type(() => CuttingProposalBundleSummaryResponseDto)
+  bundleSummary!: CuttingProposalBundleSummaryResponseDto | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) totalBars!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) totalWasteMm!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) wastePercentage!: number | null;
@@ -110,7 +141,7 @@ export class CuttingProposalLineResponseDto {
     waste_pct: number;
     bars: number;
   } | null;
-  /// true = CP-SAT hết time_limit_seconds mà CHƯA kết luận được - khác hẳn infeasible THẬT.
+  /// true = HiGHS hết time_limit_seconds mà CHƯA kết luận được - khác hẳn infeasible THẬT.
   @Expose() @ApiPropertyOptional({ nullable: true }) timedOut!: boolean | null;
   /// Ngưỡng hao hụt % đã áp dụng cho loại sắt này khi tính - có ở CẢ 2 nhánh feasible/infeasible.
   /// ĐÃ BAO GỒM ngưỡng đặc cách của đợt (nếu có), tức có thể cao hơn ngưỡng thường bên dưới.

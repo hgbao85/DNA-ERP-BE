@@ -316,6 +316,15 @@ model NotificationRecipient {
   @@map("notification_recipients")
 }
 
+/// Máy cắt cho bài toán "Đề xuất thanh sắt" (2026-10-23, Sếp yêu cầu chọn máy trong HiGHS).
+/// laser   = MC Laser: cắt TỪNG CÂY (hành vi từ trước tới nay).
+/// tu_dong = MC Tự động (MCTĐ): cắt theo BÓ nhiều cây cùng lúc (hệ số bó vd 14/16/18/20), các cây lẻ
+///           còn lại cắt tay - mã gốc là module `cat_sat` của app cat_sat_iea.
+enum SolverMachine {
+  laser
+  tu_dong
+}
+
 /// Singleton row (id is pinned to 1 by a CHECK constraint, see
 /// prisma/migrations/.../migration.sql) holding company-wide configuration.
 /// Seeded once; there is intentionally no "create" endpoint.
@@ -361,6 +370,33 @@ model SystemConfig {
   /// đổi default sẽ âm thầm đổi hành vi mọi đợt cắt hiện có. Từng đợt đè lại được qua
   /// ProductionInvoice.solverAllowCustomLength (KHSX chọn, Sếp duyệt).
   solverAllowCustomLength Boolean @default(true)
+
+  /// Máy cắt MẶC ĐỊNH toàn hệ thống (2026-10-23): đợt nào KHSX không chọn máy riêng
+  /// (ProductionInvoice.solverMachine = null) thì theo giá trị này. Mặc định laser vì đó ĐÚNG hành vi
+  /// đã chạy tới trước khi có cột này - đổi default sẽ âm thầm đổi cách cắt mọi đợt hiện có.
+  solverMachine            SolverMachine @default(laser)
+  /// Lưỡi cắt (mm) và tề đầu (mm) của MC TỰ ĐỘNG - cặp RIÊNG, tách khỏi solverBladeWidthMm/
+  /// solverTrimStartMm (2 cột đó vẫn là của MC Laser). Mặc định theo app cat_sat_iea: lưỡi 2,5 mm, tề
+  /// đầu 0. Admin chỉnh được qua PUT /system-config. Chỉ có tác dụng khi máy = tu_dong.
+  solverMctdBladeWidthMm   Decimal @default(2.5) @db.Decimal(6, 1)
+  solverMctdTrimStartMm    Int     @default(0)
+  /// Các hệ số bó của MC Tự động (số cây/bó), vd [14,16,18,20] - mặc định như app cat_sat_iea. Chỉ dùng
+  /// khi máy = tu_dong; mảng số nguyên > 1. Cây còn lại không đủ bó thì cắt tay (xem
+  /// solverMaxManualCuts).
+  solverBundleFactors      Json    @default("[14,16,18,20]")
+  /// Tổng số cây cắt tay (hệ số 1) tối đa trong 1 loại sắt khi dùng MC Tự động (mặc định 5 như app cũ).
+  solverMaxManualCuts      Int     @default(5)
+  /// Số cỡ đoạn tối đa trên 1 kiểu cắt khi dùng MC Tự động (mặc định 5: máy MCTĐ chỉ nhập được 5 cỡ).
+  solverMaxSizesPerPattern Int     @default(5)
+  /// LUẬT GỘP (Sếp Nhân 2026-10-24: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại", "không được gộp 2 lệnh cách nhau quá xa",
+  /// "sẽ kiểm soát lúc lên kế hoạch"): trong 1 đợt tính / 1 lệnh gộp, MỐC CẦN SẮT của các SKU (frameDeadlineOf: hạn mua hàng, không có
+  /// thì hạn khung) cách nhau tối đa chừng này ngày - LUẬT CỨNG ở cutting-batch-solve, merge và lưu hạn lệnh gộp; gợi ý gộp cũng chỉ
+  /// chọn trong giới hạn này. SKU chưa có mốc không bị chặn. Admin chỉnh. KHUNG TÍNH CẢ NGÀY ĐẦU ("ngày 1 gộp được ngày 3, ngày 1 ko
+  /// được gộp với ngày 4"): 3 = chênh tối đa 2 ngày (merge-rules.util maxGapDays).
+  solverMergeWindowDays    Int     @default(3)
+  /// Trần số SKU trong 1 đợt tính / 1 lệnh gộp (2026-10-24, Sếp Nhân: "bắt buộc chỉ được gộp tối đa 2 lệnh") - luật cứng như
+  /// solverMergeWindowDays. Admin chỉnh.
+  solverMergeMaxSkus       Int     @default(2)
 
   /// Dung sai giao THỪA cho phép khi Thủ kho nhận hàng mua về, tính theo % của buyQty (xem
   /// PurchaseProposalsService.receiveItem). Trong dung sai -> ghi ĐÚNG số thực nhận, kể cả khi
@@ -1443,6 +1479,11 @@ model ProductionInvoice {
   /// thường là false (chỉ mua cây chuẩn) + có đặc cách (chịu hao cao) - tổ hợp mà thiết kế enum 3
   /// mức trước đó không diễn đạt nổi.
   solverAllowCustomLength        Boolean?
+  /// Máy cắt cho RIÊNG đợt này (2026-10-23). NULL = theo mặc định công ty (SystemConfig.solverMachine).
+  /// Trục này ĐỘC LẬP với 2 trục hao hụt/chiều dài ở trên (2 chế độ cây chuẩn "Bình thường" / "Chấp nhận
+  /// hao hụt cao hơn" giữ nguyên cho cả hai máy). KHSX chọn ở "Tối ưu cắt sắt" lúc gộp/cắt riêng, Sếp
+  /// duyệt bằng chính nút duyệt lệnh SX (không có bước duyệt riêng) - giống solverAllowCustomLength.
+  solverMachine                  SolverMachine?
   /// Lý do KHSX xin đặc cách, viết cho Sếp đọc lúc duyệt (vd "PO-4 giao gấp, không chờ cán cây
   /// riêng kịp"). Bắt buộc khi có solverMaxWastePctOverride - chặn ở DTO, xem
   /// MergeProductionInvoiceDto/ClaimSoloDto. Duyệt một con số mà không biết vì sao là duyệt khống.
@@ -1821,7 +1862,7 @@ model CuttingProposal {
   /// hasInfeasibleLine ở trên.
   hasOverThreshold    Boolean               @default(false)
   /// Thông số cắt KHSX chọn cho lượt tính TRƯỚC KHI có PI (2026-09-30, luồng "Solve trước → tạo
-  /// PI"): {solverMaxWastePctOverride, solverAllowCustomLength, solverOverrideReason,
+  /// PI"): {solverMaxWastePctOverride, solverAllowCustomLength, solverMachine, solverOverrideReason,
   /// solverStockLengthsByMaterial, solverTimeLimitSecondsOverride}. Chưa có PI để lưu các cột
   /// `ProductionInvoice.solver*` nên giữ tạm ở đây; lúc tạo PI được copy sang các cột đó. null
   /// với phương án neo PO/PI theo luồng cũ.
@@ -1996,6 +2037,14 @@ model CuttingProposalLine {
   /// (PurchaseProposalItem.stockLengthMm) nên không còn là con số ảo như lần trước, và cờ này là
   /// cách duy nhất để người xem phân biệt "cây chuẩn" với "cây phải đặt riêng theo đúng NCC".
   lengthSource         String?
+  /// Máy cắt ĐÃ DÙNG để giải loại sắt này (2026-10-23) - chụp lại từ `purchase_plan[].machine`, không suy
+  /// lại từ cấu hình lúc hiển thị vì SystemConfig/đợt có thể đổi sau khi phương án được tính. null với
+  /// dòng feasible=false và với phương án tính TRƯỚC khi có cột này (đều là MC Laser).
+  machine              SolverMachine?
+  /// Tổng kết cắt theo bó (CHỈ khi machine = tu_dong): { factors: number[], totalBundles, manualBars,
+  /// totalCuts, maxSizesPerPattern } - ghi khoá camelCase TƯỜNG MINH từ `bundle_summary` snake_case của
+  /// solver (xem cảnh báo ở pieceSummary về việc dump nguyên văn snake_case). null với MC Laser.
+  bundleSummary        Json?
 
   cuttingProposal CuttingProposal          @relation(fields: [cuttingProposalId], references: [id])
   material        Material                 @relation(fields: [materialId], references: [id])
@@ -2021,6 +2070,9 @@ model CuttingProposalPattern {
   wastePerBarMm Decimal? @db.Decimal(6, 1)
   /// KHÔNG CÒN DÙNG (2026-09-23) - xem CuttingProposalLine.mauNguyenMm.
   mauNguyenMm   Decimal? @default(0) @db.Decimal(7, 1)
+  /// Số bó theo hệ số (CHỈ khi cắt MC Tự động): { "<hệ số>": số bó, "1": số cây cắt tay }, vd
+  /// {"16": 3, "14": 1, "1": 2}; barCount = Σ hệ số × số bó. null với MC Laser.
+  bundles       Json?
 
   line       CuttingProposalLine             @relation(fields: [lineId], references: [id])
   segments   CuttingProposalPatternSegment[]

@@ -1,14 +1,14 @@
 import { Module } from '@nestjs/common';
-import { ExternalApiModule } from '../external/external-api.module';
 import { StockModule } from '../stock/stock.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { CuttingProposalsController } from './cutting-proposals.controller';
 import { CuttingProposalsService } from './cutting-proposals.service';
+import { SolverClientService } from './solver-client.service';
 
 @Module({
-  imports: [ExternalApiModule, StockModule, NotificationsModule],
+  imports: [StockModule, NotificationsModule],
   controllers: [CuttingProposalsController],
-  providers: [CuttingProposalsService],
+  providers: [CuttingProposalsService, SolverClientService],
   exports: [CuttingProposalsService],
 })
 export class CuttingProposalsModule {}

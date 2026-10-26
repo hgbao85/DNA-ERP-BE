@@ -28,6 +28,7 @@ import { SendBatchDto, SendBatchToBossDto } from './dto/send-batch.dto';
 import { SendToBossDto } from './dto/send-to-boss.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
 import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
+import { UpdateItemsDeadlinesDto } from './dto/update-items-deadlines.dto';
 import { UpdateTransferCheckDefectPhotoDto } from './dto/update-transfer-check-defect-photo.dto';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
@@ -115,6 +116,13 @@ export class ProductionInvoicesController {
   @RequirePermissions(CREATE)
   addItem(@Param('id') id: string, @Body() dto: CreateProductionInvoiceItemDto) {
     return this.productionInvoicesService.addItem(id, dto);
+  }
+
+  /** "Sửa thời hạn" cả PI trong 1 giao dịch - lệnh gộp kiểm luật mốc cần sắt ≤ N ngày (xem UpdateItemsDeadlinesDto). */
+  @Patch(':id/items-deadlines')
+  @RequirePermissions(UPDATE)
+  updateItemsDeadlines(@Param('id') id: string, @Body() dto: UpdateItemsDeadlinesDto) {
+    return this.productionInvoicesService.updateItemsDeadlines(id, dto);
   }
 
   @Patch(':id/items/:itemId')

@@ -74,6 +74,9 @@ importers:
       helmet:
         specifier: ^8.0.0
         version: 8.3.0
+      highs:
+        specifier: ^1.15.4
+        version: 1.15.4
       ioredis:
         specifier: ^5
         version: 5.11.1
@@ -2441,6 +2444,10 @@ packages:
 
   help-me@5.0.0:
     resolution: {integrity: sha512-7xgomUX6ADmcYzFik0HzAxh/73YlKR9bmFzf51CZwR+b6YtzU2m0u49hQCqV6SvlqIqsaxovfwdvbnsw3b/zpg==}
+
+  highs@1.15.4:
+    resolution: {integrity: sha512-vsC03XHDqWAVrEFUt22h8e4CDDMb+LAFa0bycjPUq2kadRigK5pNLVIlwspKvMxxVtrr4NAucZHP/CAgigxiDQ==}
+    engines: {node: '>=18'}
 
   html-escaper@2.0.2:
     resolution: {integrity: sha512-H2iMtd0I4Mt5eYiapRdIDjp+XzelXQ0tFE4JS7YFwFevXXMmOp9myNrUvCg0D6ws8iqkRPBfKHgbwig1SmlLfg==}
@@ -6803,6 +6810,8 @@ snapshots:
   helmet@8.3.0: {}
 
   help-me@5.0.0: {}
+
+  highs@1.15.4: {}
 
   html-escaper@2.0.2: {}
 

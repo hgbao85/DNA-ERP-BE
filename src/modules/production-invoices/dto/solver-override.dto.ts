@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   IsBoolean,
+  IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
@@ -11,6 +12,7 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import { SolverMachine } from '../../../generated/prisma/client';
 import {
   IsStockLengthsByMaterial,
   type StockLengthsByMaterial,
@@ -47,6 +49,19 @@ export class SolverOverrideDto {
   @IsOptional()
   @IsBoolean()
   solverAllowCustomLength?: boolean;
+
+  @ApiPropertyOptional({
+    enum: SolverMachine,
+    example: SolverMachine.tu_dong,
+    description:
+      'Máy cắt cho RIÊNG đợt này: laser = MC Laser (cắt từng cây), tu_dong = MC Tự động (cắt theo bó). ' +
+      'Bỏ trống = theo mặc định công ty (SystemConfig.solverMachine). Độc lập với 2 chế độ cây chuẩn ' +
+      '(ngưỡng đặc cách / cho phép cây riêng) - cả hai chế độ đó áp cho cả hai máy. Sếp chấp thuận ' +
+      'bằng chính nút Duyệt lệnh sản xuất.',
+  })
+  @IsOptional()
+  @IsEnum(SolverMachine)
+  solverMachine?: SolverMachine;
 
   @ApiPropertyOptional({
     example: 'PO-4 giao gấp, không kịp chờ NCC cán cây riêng',

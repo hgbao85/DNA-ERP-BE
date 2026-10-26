@@ -53,6 +53,30 @@ describe('SolverOverrideDto', () => {
     expect(await errorsOn({ solverAllowCustomLength: false })).toEqual([]);
   });
 
+  describe('solverMachine - máy cắt của đợt (2026-10-23)', () => {
+    it('nhận laser | tu_dong, bỏ trống cũng được (theo mặc định công ty)', async () => {
+      expect(await errorsOn({ solverMachine: 'laser' })).toEqual([]);
+      expect(await errorsOn({ solverMachine: 'tu_dong' })).toEqual([]);
+      expect(await errorsOn({})).toEqual([]);
+    });
+
+    it('từ chối máy lạ', async () => {
+      expect(await errorsOn({ solverMachine: 'plasma' })).toContain('solverMachine');
+      expect(await errorsOn({ solverMachine: 1 })).toContain('solverMachine');
+    });
+
+    it('ĐỘC LẬP với đặc cách: chọn máy không kéo theo yêu cầu lý do, và đi cùng đặc cách vẫn hợp lệ', async () => {
+      expect(await errorsOn({ solverMachine: 'tu_dong' })).toEqual([]);
+      expect(
+        await errorsOn({
+          solverMachine: 'tu_dong',
+          solverMaxWastePctOverride: 5,
+          solverOverrideReason: 'PO-4 giao gấp',
+        }),
+      ).toEqual([]);
+    });
+  });
+
   describe('solverStockLengthsByMaterial - chiều dài cây theo từng quy cách (2026-09-16)', () => {
     const KEY = 'solverStockLengthsByMaterial';
 

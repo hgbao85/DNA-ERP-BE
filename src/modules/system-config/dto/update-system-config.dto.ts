@@ -3,8 +3,10 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
+  ArrayUnique,
   IsArray,
   IsBoolean,
+  IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
@@ -15,6 +17,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { SolverMachine } from '../../../generated/prisma/client';
 
 export class UpdateSystemConfigDto {
   @ApiProperty()
@@ -146,6 +149,102 @@ export class UpdateSystemConfigDto {
   @IsOptional()
   @IsBoolean()
   solverAllowCustomLength?: boolean;
+
+  @ApiPropertyOptional({
+    enum: SolverMachine,
+    example: SolverMachine.laser,
+    description:
+      'Máy cắt MẶC ĐỊNH toàn hệ thống: laser = MC Laser (cắt từng cây), tu_dong = MC Tự động (cắt theo bó). ' +
+      'Từng đợt đè lại được - KHSX chọn ở "Tối ưu cắt sắt", Sếp duyệt cùng lệnh sản xuất.',
+  })
+  @IsOptional()
+  @IsEnum(SolverMachine)
+  solverMachine?: SolverMachine;
+
+  @ApiPropertyOptional({
+    example: 2.5,
+    description:
+      'Lưỡi cắt (mm) của MC Tự động - cặp riêng, tách khỏi solverBladeWidthMm (MC Laser). 0-10, tối đa 1 chữ số thập phân (cột DB Decimal(6,1)).',
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 1 })
+  @Min(0)
+  @Max(10)
+  solverMctdBladeWidthMm?: number;
+
+  @ApiPropertyOptional({
+    example: 0,
+    description:
+      'Tề đầu (mm) của MC Tự động - cặp riêng, tách khỏi solverTrimStartMm (MC Laser). 0-100.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  solverMctdTrimStartMm?: number;
+
+  @ApiPropertyOptional({
+    type: [Number],
+    example: [14, 16, 18, 20],
+    description:
+      'Các hệ số bó (số cây/bó) của MC Tự động: 1-8 số nguyên khác nhau, mỗi số 2-100. Chỉ dùng khi máy = tu_dong.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(8)
+  @ArrayUnique()
+  @IsInt({ each: true })
+  @Min(2, { each: true })
+  @Max(100, { each: true })
+  @Type(() => Number)
+  solverBundleFactors?: number[];
+
+  @ApiPropertyOptional({
+    example: 5,
+    description:
+      'Tổng số cây cắt tay (hệ số 1) tối đa trong 1 loại sắt khi dùng MC Tự động. 0-100.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  solverMaxManualCuts?: number;
+
+  @ApiPropertyOptional({
+    example: 5,
+    description:
+      'Số cỡ đoạn tối đa trên 1 kiểu cắt khi dùng MC Tự động (máy MCTĐ nhập được 5). 1-10.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  solverMaxSizesPerPattern?: number;
+
+  @ApiPropertyOptional({
+    example: 3,
+    description:
+      'Luật gộp: mốc cần sắt (hạn mua hàng, không có thì hạn khung) của các SKU trong 1 đợt tính / 1 lệnh gộp nằm trong khung ' +
+      'chừng này ngày TÍNH CẢ NGÀY ĐẦU (3 = ngày 1 gộp được ngày 3, không gộp với ngày 4) - chặn khi tính phương án, gộp lệnh ' +
+      'và lưu hạn lệnh gộp. 1 = chỉ gộp SKU cùng ngày. 1-365.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  solverMergeWindowDays?: number;
+
+  @ApiPropertyOptional({
+    example: 2,
+    description:
+      'Luật gộp: số SKU tối đa trong 1 đợt tính / 1 lệnh gộp (mặc định 2 - Sếp Nhân). 1-50.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  solverMergeMaxSkus?: number;
 
   @ApiPropertyOptional({
     example: 0,

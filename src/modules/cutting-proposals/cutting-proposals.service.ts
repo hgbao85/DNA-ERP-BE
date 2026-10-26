@@ -15,7 +15,9 @@ import {
   PurchaseProposalStatus,
   ProdApprovalStatus,
   ProdItemStageType,
+  SolverMachine,
   StockReservationRefType,
+  type SystemConfig,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -25,7 +27,8 @@ import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
-import { ExternalApiHttpError, ExternalApiService } from '../external/external-api.service';
+import { ExternalApiHttpError } from '../external/external-api.service';
+import { SolverClientService } from './solver-client.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
@@ -37,6 +40,7 @@ import {
   CuttingProposalInvoiceReadinessDto,
   CuttingProposalItemResponseDto,
   CuttingProposalPendingMaterialResponseDto,
+  CuttingProposalBundleSummaryResponseDto,
   CuttingProposalPieceSummaryResponseDto,
   CuttingProposalResponseDto,
 } from './dto/cutting-proposal-response.dto';
@@ -49,6 +53,10 @@ import {
 } from './dto/cutting-batch-suggestion.dto';
 import {
   CandidateMaterialDto,
+  CuttingBatchFixAddDto,
+  CuttingBatchFixMaterialDto,
+  CuttingBatchFixOptionsDto,
+  CuttingBatchFixResultDto,
   CuttingBatchCandidateDto,
   CuttingBatchCandidateListDto,
   CuttingBatchPreviewDto,
@@ -58,8 +66,13 @@ import {
 import { bestWasteAcrossStockLengths } from './best-fill.util';
 import type { StockLengthsByMaterial } from '../../common/validators/stock-lengths-by-material.validator';
 import { frameDeadlineOf } from '../../common/utils/frame-deadline.util';
+import {
+  checkMergeRules,
+  maxGapDays,
+  ownSteelDeadlineOf,
+  skuLabel,
+} from '../../common/utils/merge-rules.util';
 
-const SOLVER_PROPOSE_PATH = '/api/v1/de_xuat/propose/';
 const SYSTEM_CONFIG_ID = 1;
 
 /**
@@ -87,6 +100,28 @@ const EXACT_CHECK_CONCURRENCY = 6;
  *  nhiều SKU/loại sắt cần xác minh thì sau mốc này KHÔNG bắn thêm request mới, phần còn lại rơi
  *  về ước tính cũ - trang KHÔNG BAO GIỜ treo chờ xác minh dù dữ liệu tăng đột biến. */
 const EXACT_CHECK_BATCH_BUDGET_MS = 12_000;
+/**
+ * Lượt KIỂM BÙ (2026-10-24, `deepVerify`): FE gọi lại NỀN ngay sau lần tải trang cho các chip chưa kịp xác minh (người dùng:
+ * "chip chưa kiểm hiện xám, kiểm bù ca chậm không chặn trang"). Đo 2026-10-24 (DB test, 78 bài): SAT-PHI-6 30 mm ×120 + 60 mm ×240
+ * cần 7,7 s ở 5 s → rơi về ước tính "≥0,17%" XANH trong khi cây 6m tốt nhất 19,67 % - bỏ sót cảnh báo. Loại 7–10 cỡ đoạn giải
+ * được trong ~16–30 s. Mặc định bộ giải chỉ 1 luồng (SOLVER_TS_WORKERS=1) nên các lần gọi XẾP HÀNG - ngân sách tính cả hàng đợi.
+ */
+const EXACT_CHECK_DEEP_MAX_SIZES = 12;
+const EXACT_CHECK_DEEP_TIMEOUT_MS = 75_000;
+/** 30 s/bài: SAT-PHI-6 GHE-J55 ×20 cần ~16 s (ngưỡng 1 % vô nghiệm rồi mới tìm "tốt nhất có thể") - 15 s chưa đủ (đo 2026-10-24). */
+const EXACT_CHECK_DEEP_SOLVER_TIME_LIMIT_SEC = 30;
+const EXACT_CHECK_DEEP_BATCH_BUDGET_MS = 120_000;
+/**
+ * Nhớ kết quả xác minh QUA các lần tải trang, theo ĐÚNG mọi tham số dựng body gửi solver (loại sắt, nhu cầu, chiều dài, ngưỡng,
+ * dư, tề, lưỡi, máy) - cùng khoá = cùng bài toán = cùng câu trả lời, nên lượt kiểm bù không giải lại các chip đã có, và lần mở
+ * trang sau ra ngay. Chỉ nhớ kết quả THÀNH CÔNG (null = không kịp/lỗi thì lần sau thử lại). Hết hạn sau 30 phút, tối đa 3.000 khoá.
+ */
+const EXACT_CHECK_CACHE_TTL_MS = 30 * 60_000;
+/** Khối "Đợt đang chọn" (getBatchFixOptions): tổng ngân sách 1 lần gọi + trần mỗi lượt solver phụ (đặt cây riêng / đơn gấp). */
+const FIX_OPTIONS_BUDGET_MS = 60_000;
+const FIX_OPTIONS_SOLVER_TIME_LIMIT_SEC = 15;
+const FIX_OPTIONS_SOLVER_TIMEOUT_MS = 40_000;
+const EXACT_CHECK_CACHE_MAX = 3_000;
 
 interface SolverBomRow {
   part: string;
@@ -109,7 +144,7 @@ interface SolverProposeResponse {
     /// (per-dòng) trực tiếp, không đọc field này (xem autoApproveBlockReason).
     any_over_threshold: boolean;
     /// Tổng thời gian giải THẬT cộng dồn mọi loại sắt (KHÔNG tính bung BOM/dựng response/network,
-    /// xem api/views.py::total_solve_seconds phía solver, 2026-09-22) - hiện ở mức tổng quan
+    /// xem solver-ts/propose.ts::total_solve_seconds, 2026-09-22) - hiện ở mức tổng quan
     /// (ngoài danh sách), tách bạch với solve_seconds riêng từng dòng bên dưới. Optional vì
     /// phương án tính TRƯỚC khi có field này (backfill cũ) không có.
     total_solve_seconds?: number;
@@ -124,32 +159,32 @@ interface SolverProposeResponse {
     /// định). Từ 2026-08-18 (review sau khi bỏ auto_scan): CHẶN tự-duyệt (xem
     /// autoApproveBlockReason) - trước đó cờ này bị bỏ qua, hệ thống từng tự duyệt/trừ kho/tạo
     /// đề xuất mua cho các phương án vượt ngưỡng mà không ai biết. Chỉ có ở dòng feasible=true
-    /// (api/views.py không gắn field này cho dòng infeasible).
+    /// (solver không gắn field này cho dòng infeasible).
     over_threshold?: boolean;
     /// Ngưỡng hao hụt % ĐÃ ÁP DỤNG cho loại sắt này (riêng hoặc mặc định) - có ở CẢ 2 nhánh
     /// feasible/infeasible.
     max_waste_pct_threshold?: number | null;
-    /// CHỈ có ở dòng feasible=false. true = CP-SAT hết time_limit_seconds mà CHƯA kết luận được
-    /// (status UNKNOWN) - KHÁC hẳn infeasible THẬT (đã chứng minh vô nghiệm). Xem
-    /// cat_sat/de_xuat_logic.py::_unsolved.
+    /// CHỈ có ở dòng feasible=false. true = HiGHS hết time_limit_seconds mà CHƯA kết luận được
+    /// (chưa chứng minh được là vô nghiệm) - KHÁC hẳn infeasible THẬT (đã chứng minh vô nghiệm). Xem
+    /// solver-ts/optimize-one-material.ts.
     timed_out?: boolean;
     /// CHỈ có ở dòng feasible=false, và chỉ khi có giá trị (không phải mọi ca infeasible đều có -
-    /// xem _best_achievable/_no_solution). "Tốt nhất có thể" nếu chấp nhận nới ngưỡng.
+    /// xem best_achievable ở solver-ts). "Tốt nhất có thể" nếu chấp nhận nới ngưỡng.
     best_achievable?: { length: number; waste_pct: number; bars: number } | null;
     /// CHỈ có ở dòng feasible=false. Lý do nguyên văn từ solver.
     reason?: string;
     best_stock_length?: number;
     /// "fixed" = 1 trong các chiều dài chuẩn (SystemConfig.solverStockLengths) đạt ngưỡng.
     /// "scan" = KHÔNG chiều dài chuẩn nào đạt, solver tự dò (auto_scan) ra 1 chiều dài đặt riêng
-    /// trong dải min_length..max_length. CHỈ có ở dòng feasible=true (api/views.py::"length_source",
-    /// mặc định "fixed" nếu solver không gửi - de_xuat_logic.py luôn gửi field này khi feasible).
+    /// trong dải min_length..max_length. CHỈ có ở dòng feasible=true (solver-ts/propose.ts::"length_source",
+    /// mặc định "fixed" nếu solver không gửi - solver-ts luôn gửi field này khi feasible).
     length_source?: string;
     total_bars?: number;
     total_waste_mm?: number;
     waste_percentage?: number;
     /// So sánh hao hụt giữa các chiều dài chuẩn đã chấm - thuần hiển thị.
     length_comparison?: Array<{ length: number; bars: number; waste_pct: number }>;
-    /// Nhu cầu vs thực cắt theo TỪNG cỡ đoạn (api/views.py gắn `item["pieces"]`). CHỈ có ở dòng
+    /// Nhu cầu vs thực cắt theo TỪNG cỡ đoạn (solver-ts/propose.ts gắn `item["pieces"]`). CHỈ có ở dòng
     /// feasible=true. `surplus` = produced - demand, không lưu lại (Sếp chốt 2026-08-25 bỏ cột
     /// Tồn kho khỏi bản in) - cần thì suy lại được. Trước 2026-08-25 field này bị bỏ qua hoàn
     /// toàn, "SL cần" không có chỗ nào lưu -> bản in thiếu hẳn bảng TỔNG KẾT.
@@ -159,8 +194,39 @@ interface SolverProposeResponse {
       bars: number;
       waste_per_bar?: number;
       pieces_breakdown?: Array<{ size: number; count: number }>;
+      /// CHỈ khi machine = 'tu_dong': { "<hệ số bó>": số bó, "1": số cây cắt tay }; bars = Σ hệ số × số bó.
+      bundles?: Record<string, number>;
     }>;
+    /// Máy cắt đã dùng để giải loại sắt này ('laser' | 'tu_dong'). Có ở dòng feasible=true.
+    machine?: 'laser' | 'tu_dong';
+    /// CHỈ khi machine = 'tu_dong' (snake_case của solver - saveSuccess map sang camelCase tường minh).
+    bundle_summary?: {
+      factors: number[];
+      total_bundles: number;
+      manual_bars: number;
+      total_cuts: number;
+      max_sizes_per_pattern: number;
+    };
   }>;
+}
+
+/**
+ * Tham số theo MÁY CẮT gửi solver (2026-10-23). MC Laser giữ nguyên như trước (tề đầu/lưỡi
+ * `solverTrimStartMm`/`solverBladeWidthMm`). MC Tự động dùng cặp lưỡi/tề RIÊNG (`solverMctd*`, mặc định
+ * 2,5 mm / 0 theo app cat_sat_iea) cộng tham số bó. `trimStart/bladeWidth` trả riêng để đường ước
+ * tính (best-fill) và đường xác minh dùng ĐÚNG cùng cặp số với lượt giải thật.
+ */
+export interface MachineSolverParams {
+  machine: SolverMachine;
+  trimStart: number;
+  bladeWidth: number;
+  /** Các trường machine/bundle_* gộp thẳng vào body gửi solver. */
+  body: {
+    machine: 'laser' | 'tu_dong';
+    bundle_factors?: number[];
+    max_manual_cuts?: number;
+    max_sizes_per_pattern?: number;
+  };
 }
 
 const LIST_INCLUDE = {
@@ -227,13 +293,16 @@ type SolverJob = {
   /** `ProductionInvoice.solverTimeLimitSecondsOverride` (2026-09-22) - số giây solver được giải
    *  CHO MỖI LOẠI SẮT, riêng cho đợt này. null = dùng SystemConfig.solverTimeLimitSeconds. */
   timeLimitSecondsOverride: number | null;
+  /** `ProductionInvoice.solverMachine` (2026-10-23) - máy cắt KHSX chọn cho đợt này. null = theo mặc
+   *  định công ty (SystemConfig.solverMachine). */
+  machine: SolverMachine | null;
 };
 
 type CuttingProposalRow = Prisma.CuttingProposalGetPayload<{ include: typeof LIST_INCLUDE }>;
 type CuttingProposalDetail = Prisma.CuttingProposalGetPayload<{ include: typeof DETAIL_INCLUDE }>;
 
 /**
- * 1 lần gọi solver cat_sat_iea cho 1 ProductionOrder. Gọi tự động (fire-and-forget) ngay sau
+ * 1 lần gọi bộ giải HiGHS (solver-ts, chạy trong BE) cho 1 ProductionOrder. Gọi tự động (fire-and-forget) ngay sau
  * khi ProductionOrder được tạo (xem ProductionInvoicesService.approveItem) - KHÔNG chặn
  * response, tạo ngay 1 dòng CALCULATING rồi cập nhật DRAFT/FAILED khi solver trả lời. Tính
  * THÀNH CÔNG là tự động duyệt (approve()) luôn ngay sau đó (Sếp chốt 2026-08-15 - không cần
@@ -262,7 +331,8 @@ export class CuttingProposalsService {
 
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
-    private readonly externalApiService: ExternalApiService,
+    /** Bộ giải HiGHS (WASM) chạy trong worker thread của BE - bộ giải duy nhất của ERP. */
+    private readonly solverClient: SolverClientService,
     private readonly configService: ConfigService<AppConfig, true>,
     private readonly stockReservationsService: StockReservationsService,
     private readonly notifications: NotificationsService,
@@ -450,6 +520,7 @@ export class CuttingProposalsService {
     if (dto.solverAllowCustomLength != null) {
       options.solverAllowCustomLength = dto.solverAllowCustomLength;
     }
+    if (dto.solverMachine != null) options.solverMachine = dto.solverMachine;
     if (dto.solverOverrideReason != null) options.solverOverrideReason = dto.solverOverrideReason;
     if (dto.solverStockLengthsByMaterial != null) {
       options.solverStockLengthsByMaterial = dto.solverStockLengthsByMaterial;
@@ -473,6 +544,10 @@ export class CuttingProposalsService {
           quantity: true,
           productionInvoiceId: true,
           prodApprovalStatus: true,
+          materialDeadline: true,
+          stages: { select: { stageType: true, deadline: true } },
+          mfgProduct: { select: { factoryCode: true } },
+          salesOrder: { select: { orderCode: true } },
         },
       });
       if (items.length !== itemIds.length) {
@@ -481,6 +556,21 @@ export class CuttingProposalsService {
           `Không tìm thấy SKU: ${itemIds.filter((id) => !found.has(id)).join(', ')}`,
         );
       }
+      // LUẬT GỘP (2026-10-24, Sếp Nhân: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại", "sẽ kiểm soát lúc lên kế hoạch") -
+      // chặn ngay lúc KHSX bấm Tính, trước khi tốn một lượt giải. Xem merge-rules.util.
+      const mergeCfg = await tx.systemConfig.findUniqueOrThrow({
+        where: { id: SYSTEM_CONFIG_ID },
+        select: { solverMergeWindowDays: true, solverMergeMaxSkus: true },
+      });
+      const rule = checkMergeRules(
+        items.map((i) => ({
+          materialDeadline: i.materialDeadline,
+          stages: i.stages,
+          label: skuLabel(i.mfgProduct.factoryCode, i.salesOrder?.orderCode),
+        })),
+        { windowDays: mergeCfg.solverMergeWindowDays, maxSkus: mergeCfg.solverMergeMaxSkus },
+      );
+      if (!rule.ok) throw new BadRequestException(rule.reason);
       const gathered = items.filter(
         (i) =>
           i.productionInvoiceId !== null || i.prodApprovalStatus === ProdApprovalStatus.APPROVED,
@@ -680,9 +770,36 @@ export class CuttingProposalsService {
   /** Cảnh báo (KHÔNG chặn) khi phương án có loại sắt cắt được nhưng vượt ngưỡng hao hụt - hiện cho
    *  KHSX lúc tạo lệnh và cho QLSX/Sếp lúc duyệt để họ quyết định (xem invoiceReadinessReason). */
   private overThresholdWarning(proposal: { hasOverThreshold: boolean }): string | null {
+    // "cao hơn mức mặc định" (2026-10-24, UX-8): đúng cả đợt thường lẫn đợt đặc cách - đợt đặc cách các dòng của chính
+    // phương án đã ghi "Cao hơn mức mặc định", để "vượt ngưỡng" ở đây là hai chỗ nói hai kiểu.
     return proposal.hasOverThreshold
-      ? 'Có loại sắt vượt ngưỡng hao hụt - vẫn tạo được lệnh, nhưng QLSX/Sếp sẽ thấy cảnh báo này khi duyệt.'
+      ? 'Có loại sắt hao hụt cao hơn mức mặc định - vẫn tạo được lệnh, nhưng QLSX/Sếp sẽ thấy cảnh báo này khi duyệt.'
       : null;
+  }
+
+  /**
+   * Lời khuyên khi có loại sắt không có cách cắt nào, THEO CHẾ ĐỘ ĐANG DÙNG (2026-10-24): trước đây luôn bảo "chọn chế độ
+   * Chấp nhận hao hụt cao hơn" kể cả khi KHSX đang ở chính chế độ đó (proposal 191) - lời khuyên vô nghĩa. Đã nới ngưỡng
+   * mà vẫn vô nghiệm thì vật cản không còn là ngưỡng nữa: đoạn dài hơn cây, ràng buộc bó MC Tự động, hoặc hết giờ.
+   * Trả 2 nửa câu: `head` (vì sao) và `tail` (nên làm gì).
+   */
+  private noPlanReason(solverOptions: unknown): { head: string; tail: string } {
+    const o = (solverOptions ?? {}) as { solverMaxWastePctOverride?: number | null };
+    if (o.solverMaxWastePctOverride == null) {
+      return {
+        head: 'đạt ngưỡng hao hụt hiện tại',
+        tail: 'chọn chế độ “Chấp nhận hao hụt cao hơn” (Sếp duyệt riêng) hoặc gộp thêm SKU dùng chung loại sắt, rồi tính lại.',
+      };
+    }
+    // Đơn gấp = chỉ cây đã định (6m), không trần hao hụt (2026-10-24, người dùng: bỏ ô tick "Giữ đúng chiều dài đã định" vì dò
+    // chiều dài là việc của chế độ Bình thường) -> KHÔNG khuyên dò chiều dài nữa. Ở chế độ này chỉ còn vô nghiệm khi có đoạn dài
+    // hơn cây, MC Tự động không ghép được bó (số lượng nhỏ/lệch), hoặc hết giờ - lý do cụ thể nằm ở từng loại sắt.
+    return {
+      head: 'dù đã chọn chế độ “Chấp nhận hao hụt cao hơn”',
+      tail:
+        'xem lý do ở từng loại sắt: đoạn dài hơn cây thì sửa định mức; MC Tự động không ghép được bó thì chọn MC Laser ' +
+        'cho đợt này hoặc gộp thêm SKU dùng chung loại sắt; hết giờ thì tính lại.',
+    };
   }
 
   /**
@@ -698,6 +815,8 @@ export class CuttingProposalsService {
     proposal: {
       status: CuttingProposalStatus;
       errorMessage: string | null;
+      /** thông số cắt KHSX đã chọn cho lượt tính này - để lời khuyên khi vô nghiệm đúng theo chế độ ĐANG dùng */
+      solverOptions?: unknown;
       hasInfeasibleLine: boolean;
       hasOverThreshold: boolean;
       items: {
@@ -723,7 +842,8 @@ export class CuttingProposalsService {
     // - nâng số là qua - mà QLSX/Sếp lại không thấy gì. Kiểm soát thật nằm ở người duyệt: phương án
     // vượt ngưỡng vẫn tạo được lệnh nhưng bị đánh CẢNH BÁO rõ (overThresholdWarning) cho QLSX/Sếp.
     if (proposal.hasInfeasibleLine) {
-      return 'Có loại sắt không có cách cắt nào đạt ngưỡng hao hụt hiện tại - chọn chế độ “Chấp nhận hao hụt cao hơn” (Sếp duyệt riêng) hoặc gộp thêm SKU dùng chung loại sắt, rồi tính lại.';
+      const { head, tail } = this.noPlanReason(proposal.solverOptions);
+      return `Có loại sắt không có cách cắt nào ${head} - ${tail}`;
     }
 
     const snapshot = proposal.items;
@@ -765,7 +885,11 @@ export class CuttingProposalsService {
   async assertReadyForInvoice(
     cuttingProposalId: string,
     itemIds: bigint[],
-  ): Promise<{ id: bigint; solverOptions: Record<string, unknown> }> {
+  ): Promise<{
+    id: bigint;
+    solverOptions: Record<string, unknown>;
+    usedMachine: SolverMachine | null;
+  }> {
     const id = parseBigIntId(cuttingProposalId);
     const proposal = await this.prisma.cuttingProposal.findUnique({
       where: { id },
@@ -795,7 +919,43 @@ export class CuttingProposalsService {
     if (reason) {
       throw new ConflictException(`Chưa tạo được lệnh sản xuất từ phương án này: ${reason}`);
     }
-    return { id, solverOptions: (proposal.solverOptions ?? {}) as Record<string, unknown> };
+    // Máy THỰC SỰ đã dùng: requestParams.machine là body đã resolve (đợt ?? mặc định công ty) lúc gọi solver.
+    // PI phải ghi đúng máy này (chứ không chỉ máy KHSX chọn, vốn có thể null = theo mặc định) để "Tính lại"
+    // sau khi Admin đổi mặc định công ty không âm thầm đổi máy của đợt đã duyệt.
+    const used = (proposal.requestParams as { machine?: unknown } | null)?.machine;
+    const usedMachine =
+      used === SolverMachine.laser || used === SolverMachine.tu_dong ? used : null;
+    return {
+      id,
+      solverOptions: (proposal.solverOptions ?? {}) as Record<string, unknown>,
+      usedMachine,
+    };
+  }
+
+  /**
+   * Hao hụt THẬT (%) và cây đã chọn của từng loại sắt trong 1 phương án đã tính, theo mã vật tư. Dùng làm bằng
+   * chứng cho lời xin ngưỡng đặc cách khi PI tạo từ phương án tính-trước (xem ProductionInvoicesService.
+   * buildOverrideEvidence): ước tính best-fill chỉ là cận dưới theo 1 cây lý tưởng (SAT-VUONG-50X50: ước 0,55 % nhưng
+   * phương án thật 55,83 % vì số lượng nhỏ + dư ≤ max_surplus), không được đưa cho Sếp như thể là số thật.
+   * Dòng vô nghiệm (không có phương án) trả wastePct = null.
+   */
+  async getProposalLineWaste(
+    cuttingProposalId: bigint,
+  ): Promise<{ materialCode: string; wastePct: number | null; stockLengthMm: number | null }[]> {
+    const lines = await this.prisma.cuttingProposalLine.findMany({
+      where: { cuttingProposalId },
+      select: {
+        feasible: true,
+        wastePercentage: true,
+        bestStockLengthMm: true,
+        material: { select: { code: true } },
+      },
+    });
+    return lines.map((l) => ({
+      materialCode: l.material.code,
+      wastePct: l.feasible && l.wastePercentage !== null ? Number(l.wastePercentage) : null,
+      stockLengthMm: l.feasible ? l.bestStockLengthMm : null,
+    }));
   }
 
   /** Gắn phương án tính-trước vào PI vừa tạo (trong CÙNG transaction tạo PI). updateMany có điều
@@ -1090,13 +1250,17 @@ export class CuttingProposalsService {
    */
   async getBatchSuggestions(
     chosenStockLengths?: StockLengthsByMaterial | null,
+    chosenMachine?: SolverMachine | null,
   ): Promise<CuttingBatchSuggestionDto[]> {
     const ctx = await this.loadBatchContext();
     if (ctx === null) return [];
     const { byMaterial, materials, config } = ctx;
     const defaultStockLengths = config.solverStockLengths as number[];
-    const trimMm = config.solverTrimStartMm;
-    const kerfMm = config.solverBladeWidthMm.toNumber();
+    // Tề đầu/lưỡi theo MÁY KHSX đang chọn (2026-10-23) - mặc định máy của công ty.
+    const { trimStart: trimMm, bladeWidth: kerfMm } = this.resolveMachineParams(
+      config,
+      chosenMachine,
+    );
 
     const suggestions: CuttingBatchSuggestionDto[] = [];
     for (const material of materials) {
@@ -1180,6 +1344,328 @@ export class CuttingProposalsService {
   }
 
   /**
+   * Khối "Đợt đang chọn" (2026-10-24): với ĐÚNG tổ hợp KHSX đang tick, từng loại sắt cắt chung ở cây chuẩn ra sao (bộ giải thật) và -
+   * loại nào vượt ngưỡng - 3 cách xử lý: (1) gộp thêm đơn dùng chung loại sắt (ít hao hụt nhất, trong luật gộp: mốc cần sắt cả đợt cách
+   * nhau ≤ solverMergeWindowDays, tổng ≤ solverMergeMaxSkus SKU), (2) không gộp - chế độ Bình thường tự đặt cây riêng, (3) đơn gấp -
+   * vẫn mua cây chuẩn, không trần hao hụt. CHỈ ĐỌC. Ngân sách FIX_OPTIONS_BUDGET_MS; quá thì phần chưa tính để null + incomplete.
+   *
+   * Gợi ý gộp: đơn ứng viên (cùng loại sắt, chưa chọn) xếp theo mốc cần sắt GẦN đợt nhất (chưa có mốc xuống cuối), thêm dần từng đơn
+   * miễn còn hợp luật, mỗi bậc giải thật; chọn bậc hao hụt thấp nhất trong các bậc đạt ngưỡng (hoà -> ít đơn hơn); không bậc nào đạt
+   * thì trả bậc thấp nhất kèm meetsThreshold=false.
+   */
+  async getBatchFixOptions(dto: PreviewCuttingBatchDto): Promise<CuttingBatchFixOptionsDto> {
+    const started = Date.now();
+    const overBudget = () => Date.now() - started > FIX_OPTIONS_BUDGET_MS;
+    const ctx = await this.loadBatchContext();
+    const config =
+      ctx?.config ??
+      (await this.prisma.systemConfig.findUniqueOrThrow({ where: { id: SYSTEM_CONFIG_ID } }));
+    const windowDays = config.solverMergeWindowDays;
+    const maxSkus = config.solverMergeMaxSkus;
+    const selectedIds = new Set(dto.productionInvoiceItemIds);
+    const selected = (ctx?.items ?? []).filter((i) => selectedIds.has(i.id.toString()));
+    const label = (i: (typeof selected)[number]) =>
+      skuLabel(i.mfgProduct.factoryCode, i.salesOrder?.orderCode);
+    const ruleOf = (list: typeof selected) =>
+      checkMergeRules(
+        list.map((i) => ({
+          materialDeadline: i.materialDeadline,
+          stages: i.stages,
+          label: label(i),
+        })),
+        { windowDays, maxSkus },
+      );
+    const rule = ruleOf(selected);
+    const empty = new CuttingBatchFixOptionsDto({
+      windowDays,
+      maxSkus,
+      count: selected.length,
+      spanDays: rule.spanDays,
+      ruleOk: rule.ok,
+      ruleReason: rule.reason,
+      materials: [],
+      addAllItemIds: null,
+      addAllReason: null,
+      incomplete: false,
+    });
+    if (!ctx || selected.length === 0) return empty;
+
+    const { byMaterial, materials } = ctx;
+    const materialById = new Map(materials.map((m) => [m.id, m]));
+    const defaultStockLengths = config.solverStockLengths as number[];
+    const machineParams = this.resolveMachineParams(config, dto.solverMachine);
+    const { trimStart: trimMm, bladeWidth: kerfMm } = machineParams;
+    const thresholdPct = config.solverMaxWastePercentage.toNumber();
+    const sumDemand = (entries: { demand: Map<number, number> }[]) => {
+      const out = new Map<number, number>();
+      for (const e of entries)
+        for (const [len, q] of e.demand) out.set(len, (out.get(len) ?? 0) + q);
+      return new Map([...out.entries()].sort((a, b) => a[0] - b[0]));
+    };
+    const exact = async (
+      materialId: bigint,
+      demand: Map<number, number>,
+      stockLengths: number[],
+    ) => {
+      const key = this.exactCheckKey(
+        materialId,
+        demand,
+        stockLengths,
+        thresholdPct,
+        config.solverMaxSurplus,
+        trimMm,
+        kerfMm,
+        machineParams.body,
+      );
+      const cached = this.exactCheckCache.get(key);
+      if (cached && Date.now() - cached.at < EXACT_CHECK_CACHE_TTL_MS) return cached.value;
+      if (overBudget() || demand.size > EXACT_CHECK_DEEP_MAX_SIZES) return null;
+      const v = await this.verifyExactStandaloneWaste(
+        materialId,
+        demand,
+        stockLengths,
+        thresholdPct,
+        config.solverMaxSurplus,
+        trimMm,
+        kerfMm,
+        machineParams.body,
+        true,
+      );
+      if (v) this.rememberExactCheck(key, v);
+      return v;
+    };
+    const selDated = selected
+      .map((i) => ownSteelDeadlineOf(i)?.getTime())
+      .filter((t): t is number => t !== undefined);
+    const anchorAt = selDated.length ? Math.min(...selDated) : null;
+
+    let incomplete = false;
+    const out: CuttingBatchFixMaterialDto[] = [];
+    for (const [materialId, entries] of byMaterial) {
+      const inBatch = entries.filter((e) => selectedIds.has(e.item.id.toString()));
+      if (inBatch.length === 0) continue;
+      const material = materialById.get(materialId);
+      if (!material) continue;
+      const stockLengths = this.resolveStockLengths(
+        materialId,
+        dto.stockLengthsByMaterial,
+        defaultStockLengths,
+      );
+      const demand = sumDemand(inBatch);
+      const cur = await exact(materialId, demand, stockLengths);
+      const status: 'ok' | 'over' | 'unknown' =
+        cur === null ? 'unknown' : cur.overThreshold ? 'over' : 'ok';
+      if (cur === null) incomplete = incomplete || overBudget();
+      const row = new CuttingBatchFixMaterialDto({
+        materialId: materialId.toString(),
+        materialCode: material.code,
+        thresholdPct,
+        stockLengthMm: stockLengths.length === 1 ? stockLengths[0] : null,
+        status,
+        wastePct: cur?.wastePct ?? null,
+        bars: cur?.bars ?? null,
+        verifiedLengthSource: cur?.lengthSource ?? null,
+        itemIds: inBatch.map((e) => e.item.id.toString()),
+        addSuggestion: null,
+        addReason: null,
+        customLength: null,
+        urgent: null,
+      });
+      if (status === 'over') {
+        // (1) gộp thêm đơn
+        const capacity = maxSkus - selected.length;
+        const pool = entries
+          .filter((e) => !selectedIds.has(e.item.id.toString()))
+          .map((e) => ({ e, at: ownSteelDeadlineOf(e.item)?.getTime() ?? null }))
+          .sort((a, b) => {
+            const ga =
+              a.at === null
+                ? Number.POSITIVE_INFINITY
+                : anchorAt === null
+                  ? a.at
+                  : Math.abs(a.at - anchorAt);
+            const gb =
+              b.at === null
+                ? Number.POSITIVE_INFINITY
+                : anchorAt === null
+                  ? b.at
+                  : Math.abs(b.at - anchorAt);
+            return ga - gb;
+          });
+        if (capacity < 0) {
+          row.addReason = `Đợt đang có ${selected.length} SKU, quá trần ${maxSkus} SKU - bỏ bớt SKU trước, chưa gộp thêm được.`;
+        } else if (capacity === 0) {
+          row.addReason = `Đợt đã đủ ${maxSkus} SKU (tối đa mỗi đợt/lệnh gộp) - không gộp thêm được.`;
+        } else {
+          const chain: typeof pool = [];
+          for (const c of pool) {
+            if (chain.length >= capacity) break;
+            const trial = [...selected, ...chain.map((x) => x.e.item), c.e.item];
+            const span = ruleOf(trial).spanDays;
+            if (span !== null && span > maxGapDays(windowDays)) continue;
+            chain.push(c);
+          }
+          if (chain.length === 0) {
+            row.addReason = `Không còn đơn nào dùng ${material.code} có mốc cần sắt trong khung ${windowDays} ngày với đợt này.`;
+          } else {
+            let best: CuttingBatchFixAddDto | null = null;
+            for (let k = 1; k <= chain.length; k++) {
+              const added = chain.slice(0, k);
+              const v = await exact(
+                materialId,
+                sumDemand([...inBatch, ...added.map((x) => x.e)]),
+                stockLengths,
+              );
+              if (!v) {
+                incomplete = incomplete || overBudget();
+                continue;
+              }
+              const cand = new CuttingBatchFixAddDto({
+                itemIds: added.map((x) => x.e.item.id.toString()),
+                wastePct: v.wastePct,
+                bars: v.bars,
+                meetsThreshold: !v.overThreshold,
+                spanDaysAfter: ruleOf([...selected, ...added.map((x) => x.e.item)]).spanDays,
+              });
+              const better =
+                !best ||
+                (cand.meetsThreshold && !best.meetsThreshold) ||
+                (cand.meetsThreshold === best.meetsThreshold &&
+                  cand.wastePct < best.wastePct - 1e-9);
+              if (better) best = cand;
+            }
+            row.addSuggestion = best;
+            if (!best)
+              row.addReason = 'Bộ giải chưa kịp tính các cách gộp - bấm Tải lại để thử lại.';
+          }
+        }
+        // (2) không gộp: chế độ Bình thường tự đặt cây riêng
+        if (config.solverAllowCustomLength && !overBudget()) {
+          const p = await this.solveSingleForFix(materialId, demand, stockLengths, {
+            ...machineParams.body,
+            trim_start: trimMm,
+            blade_width: kerfMm,
+            max_waste_percentage: thresholdPct,
+            max_surplus: config.solverMaxSurplus,
+            auto_scan: true,
+            stop_on_first: true,
+            min_length: config.solverMinLengthMm,
+            max_length: config.solverMaxLengthMm,
+            length_step: config.solverLengthStepMm,
+            time_limit_seconds: FIX_OPTIONS_SOLVER_TIME_LIMIT_SEC,
+          });
+          if (
+            p?.feasible &&
+            p.best_stock_length != null &&
+            !stockLengths.includes(p.best_stock_length)
+          ) {
+            row.customLength = new CuttingBatchFixResultDto({
+              wastePct: p.waste_percentage ?? 0,
+              bars: p.total_bars ?? 0,
+              lengthMm: p.best_stock_length,
+            });
+          }
+        } else if (config.solverAllowCustomLength) incomplete = true;
+        // (3) đơn gấp: vẫn mua cây chuẩn, không trần hao hụt
+        if (!overBudget()) {
+          const p = await this.solveSingleForFix(materialId, demand, stockLengths, {
+            ...machineParams.body,
+            trim_start: trimMm,
+            blade_width: kerfMm,
+            max_waste_percentage: 100,
+            max_surplus: config.solverMaxSurplus,
+            auto_scan: false,
+            time_limit_seconds: FIX_OPTIONS_SOLVER_TIME_LIMIT_SEC,
+          });
+          if (p?.feasible) {
+            row.urgent = new CuttingBatchFixResultDto({
+              wastePct: p.waste_percentage ?? 0,
+              bars: p.total_bars ?? 0,
+              lengthMm: p.best_stock_length ?? stockLengths[0],
+            });
+          }
+        } else incomplete = true;
+      }
+      out.push(row);
+    }
+    out.sort(
+      (a, b) =>
+        Number(b.status === 'over') - Number(a.status === 'over') ||
+        a.materialCode.localeCompare(b.materialCode),
+    );
+
+    // "Thêm tất cả đơn gợi ý": hợp các gợi ý ĐẠT ngưỡng, còn hợp luật khi thêm cùng lúc
+    const addIds = [
+      ...new Set(
+        out.flatMap((m) => (m.addSuggestion?.meetsThreshold ? m.addSuggestion.itemIds : [])),
+      ),
+    ];
+    let addAllItemIds: string[] | null = null;
+    let addAllReason: string | null = null;
+    if (addIds.length > 0) {
+      const union = [...selected, ...ctx.items.filter((i) => addIds.includes(i.id.toString()))];
+      const r = ruleOf(union);
+      if (r.ok) addAllItemIds = addIds;
+      else
+        addAllReason = `Thêm cùng lúc mọi đơn gợi ý thì vượt luật gộp (${r.reason}) - chọn từng loại sắt.`;
+    }
+    return new CuttingBatchFixOptionsDto({
+      ...empty,
+      materials: out,
+      addAllItemIds,
+      addAllReason,
+      incomplete,
+    });
+  }
+
+  /** 1 lượt solver cho 1 loại sắt với body tuỳ ý (đặt cây riêng / đơn gấp ở khối "Đợt đang chọn") - nhớ theo body, lỗi = null. */
+  private async solveSingleForFix(
+    materialId: bigint,
+    demand: Map<number, number>,
+    stockLengths: number[],
+    body: Record<string, unknown>,
+  ): Promise<SolverProposeResponse['purchase_plan'][number] | null> {
+    const key = `fix|${JSON.stringify([materialId.toString(), [...demand.entries()], stockLengths, body])}`;
+    const hit = this.fixSolveCache.get(key);
+    if (hit && Date.now() - hit.at < EXACT_CHECK_CACHE_TTL_MS) return hit.value;
+    try {
+      const res = await this.solverClient.propose<SolverProposeResponse>(
+        {
+          num_sets: 1,
+          bom: [...demand.entries()].map(([size, qty]) => ({
+            part: '',
+            qty_per_set: 1,
+            material: materialId.toString(),
+            spec: '',
+            cut_length: size,
+            qty_per_part: qty,
+          })),
+          stock_lengths: stockLengths.join(' '),
+          ...body,
+        },
+        FIX_OPTIONS_SOLVER_TIMEOUT_MS,
+      );
+      const item = res?.purchase_plan?.[0] ?? null;
+      if (item) {
+        this.fixSolveCache.set(key, { at: Date.now(), value: item });
+        while (this.fixSolveCache.size > EXACT_CHECK_CACHE_MAX) {
+          const oldest = this.fixSolveCache.keys().next().value;
+          if (oldest === undefined) break;
+          this.fixSolveCache.delete(oldest);
+        }
+      }
+      return item;
+    } catch {
+      return null;
+    }
+  }
+
+  private readonly fixSolveCache = new Map<
+    string,
+    { at: number; value: SolverProposeResponse['purchase_plan'][number] }
+  >();
+
+  /**
    * Bảng chọn của KHSX: MỌI SKU chưa được Sếp duyệt, kèm hao hụt từng loại sắt khi SKU đó cắt một
    * mình và cờ vượt ngưỡng.
    *
@@ -1189,6 +1675,9 @@ export class CuttingProposalsService {
    */
   async getBatchCandidates(
     chosenStockLengths?: StockLengthsByMaterial | null,
+    chosenMachine?: SolverMachine | null,
+    /** true = lượt KIỂM BÙ (xem EXACT_CHECK_DEEP_*): xác minh cả loại tới 12 cỡ đoạn, cho mỗi bài lâu hơn. */
+    deepVerify = false,
   ): Promise<CuttingBatchCandidateListDto> {
     const ctx = await this.loadBatchContext();
     if (ctx === null) {
@@ -1207,8 +1696,11 @@ export class CuttingProposalsService {
     }
     const { items, byMaterial, materials, config, itemsWithoutBom } = ctx;
     const defaultStockLengths = config.solverStockLengths as number[];
-    const trimMm = config.solverTrimStartMm;
-    const kerfMm = config.solverBladeWidthMm.toNumber();
+    // Cùng máy với đợt KHSX đang chọn (query `solverMachine`, mặc định máy công ty) để con số ước tính
+    // lẫn số xác minh bằng solver khớp với lượt giải thật sau này.
+    const machineParams = this.resolveMachineParams(config, chosenMachine);
+    const trimMm = machineParams.trimStart;
+    const kerfMm = machineParams.bladeWidth;
     const materialById = new Map(materials.map((m) => [m.id, m]));
 
     // itemId -> các loại sắt của nó (kèm nhu cầu) - đảo chiều byMaterial để dựng theo dòng SKU.
@@ -1287,7 +1779,10 @@ export class CuttingProposalsService {
                 .filter((e) => e.item.id !== item.id)
                 .map((e) => e.item.mfgProduct.factoryCode),
             });
-            if (demand.size > 0 && demand.size <= EXACT_CHECK_MAX_SIZES) {
+            if (
+              demand.size > 0 &&
+              demand.size <= (deepVerify ? EXACT_CHECK_DEEP_MAX_SIZES : EXACT_CHECK_MAX_SIZES)
+            ) {
               verifyTargets.push({ dto, materialId, demand, stockLengths, thresholdPct });
             }
             return dto;
@@ -1307,27 +1802,29 @@ export class CuttingProposalsService {
         config.solverMaxSurplus,
         trimMm,
         kerfMm,
+        machineParams.body,
+        deepVerify,
       );
       for (const dtoItem of dtoItems) {
         dtoItem.materials.sort((a, b) => b.standaloneWastePct - a.standaloneWastePct);
       }
     }
 
-    // Tổ hợp đề xuất = hợp của mọi SKU xuất hiện ở mức gộp cuối (mức tối thiểu đủ đạt) của các
-    // loại sắt CỨU ĐƯỢC. Loại "gộp không cứu được" không đưa vào - tick sẵn một nhóm vô ích chỉ
-    // khiến KHSX gộp nhầm.
-    // Truyền tiếp lựa chọn: tổ hợp tick sẵn phải tính trên CÙNG chiều dài với bảng bên trên,
-    // nếu không hệ thống tick một nhóm dựa trên cây 6m trong khi bảng đang hiện số của cây 5m85.
-    const suggestions = await this.getBatchSuggestions(chosenStockLengths);
-    const recommended = new Set<string>();
-    for (const s of suggestions) {
-      if (s.outcome !== CuttingBatchOutcome.FIXED_BY_MERGE) continue;
-      const last = s.levels[s.levels.length - 1];
-      if (!last?.meetsThreshold) continue;
-      for (const o of s.orders.slice(0, last.orderCount)) {
-        recommended.add(o.productionInvoiceItemId);
-      }
-    }
+    // Tick sẵn (2026-10-24): ĐÚNG 1 SKU - đơn có mốc cần sắt SỚM NHẤT đang có chip đỏ ở cây chuẩn. Phần "gộp thêm đơn nào" là việc
+    // của cutting-batch-fix-options (bộ giải thật, luật gộp ≤ N ngày / ≤ M SKU, ít hao hụt nhất): FE gọi cho đợt này rồi tự thêm. Trước
+    // đó tick sẵn = hợp mọi nhóm gộp (mục 30) ra tới 45 SKU khi không có hạn giao - không ai cắt một đợt như vậy.
+    const anchor = items
+      .filter((it) =>
+        dtoItems
+          .find((d) => d.productionInvoiceItemId === it.id.toString())
+          ?.materials.some((m) => m.overThreshold),
+      )
+      .map((it) => ({
+        id: it.id.toString(),
+        at: ownSteelDeadlineOf(it)?.getTime() ?? Number.POSITIVE_INFINITY,
+      }))
+      .sort((a, b) => a.at - b.at)[0];
+    const recommended = new Set(anchor ? [anchor.id] : []);
 
     return new CuttingBatchCandidateListDto({
       items: dtoItems.sort((a, b) => {
@@ -1359,8 +1856,10 @@ export class CuttingProposalsService {
     }
     const { byMaterial, materials, config } = ctx;
     const defaultStockLengths = config.solverStockLengths as number[];
-    const trimMm = config.solverTrimStartMm;
-    const kerfMm = config.solverBladeWidthMm.toNumber();
+    const { trimStart: trimMm, bladeWidth: kerfMm } = this.resolveMachineParams(
+      config,
+      dto.solverMachine,
+    );
 
     const lines: CuttingBatchPreviewLineDto[] = [];
     for (const material of materials) {
@@ -1580,9 +2079,10 @@ export class CuttingProposalsService {
     // KHÔNG có phương án cắt nào thì KHÔNG được duyệt tay. Trước đây approve() không kiểm tra cờ này nên
     // duyệt được và loại sắt đó biến mất khỏi kế hoạch xuất sắt mà không có cảnh báo nào.
     if (proposal.hasInfeasibleLine) {
+      const { head, tail } = this.noPlanReason(proposal.solverOptions);
       throw new ConflictException(
-        `Phương án ${id} có loại sắt không có cách cắt nào đạt ngưỡng hao hụt - không duyệt được. ` +
-          'Chọn chế độ “Chấp nhận hao hụt cao hơn” (Sếp duyệt riêng) hoặc gộp thêm SKU dùng chung loại sắt, rồi tính lại.',
+        `Phương án ${id} có loại sắt không có cách cắt nào ${head} - không duyệt được. ` +
+          `${tail.charAt(0).toUpperCase()}${tail.slice(1)}`,
       );
     }
 
@@ -1830,7 +2330,7 @@ export class CuttingProposalsService {
           // warehouseCode cấp cả đề xuất giờ CHỈ mang tính tóm tắt/hiển thị (lấy theo dòng đầu tiên)
           // - nguồn xác thực thật để nhập hàng là PurchaseProposalItem.materialId -> Material.
           // warehouseId, xem PurchaseProposalsService.receiveItem(). Hiện luôn trùng 1 kho vì
-          // cat_sat_iea chỉ tính vật tư sắt, nhưng KHÔNG còn là giả định cứng của code.
+          // bộ giải chỉ tính vật tư sắt, nhưng KHÔNG còn là giả định cứng của code.
           const primaryWarehouseCode = warehouseByMaterialId.get(
             buyableLines[0].materialId,
           )!.warehouseCode;
@@ -2074,6 +2574,10 @@ export class CuttingProposalsService {
       //   - maxWastePctOverride: TRẦN hao hụt Sếp đã duyệt cho đợt này. null = ngưỡng thường.
       const allowCustomLength = job.allowCustomLength ?? config.solverAllowCustomLength;
       const wasteOverride = job.maxWastePctOverride;
+      // Trục thứ 3, ĐỘC LẬP với 2 trục trên (2026-10-23): MÁY CẮT. KHSX chọn theo đợt (job.machine), không
+      // chọn thì theo SystemConfig.solverMachine. Máy đổi cặp tề đầu/lưỡi và (MC Tự động) thêm tham số bó -
+      // 2 chế độ cây chuẩn ở trên giữ nguyên cho cả hai máy.
+      const machineParams = this.resolveMachineParams(config, job.machine);
 
       // KHÔNG còn ngưỡng riêng theo vật tư (2026-09-30): Sắt chỉ có MỘT ngưỡng chung do KHSX quyết
       // (SystemConfig.solverMaxWastePercentage, KHSX tự đổi ở "Tối ưu cắt sắt"), đặc cách của đợt chỉ
@@ -2119,8 +2623,9 @@ export class CuttingProposalsService {
         // cách nhau bởi khoảng trắng, gửi mảng JSON sẽ bị solver parse sai (str([5850,6000]) ->
         // "[5850 6000]" -> phần tử đầu/cuối dính ký tự "[" "]" và bị loại bỏ, ra 0).
         stock_lengths: (config.solverStockLengths as number[]).join(' '),
-        trim_start: config.solverTrimStartMm,
-        blade_width: config.solverBladeWidthMm.toNumber(),
+        trim_start: machineParams.trimStart,
+        blade_width: machineParams.bladeWidth,
+        ...machineParams.body,
         max_waste_percentage:
           wasteOverride != null
             ? Math.max(config.solverMaxWastePercentage.toNumber(), wasteOverride)
@@ -2140,8 +2645,8 @@ export class CuttingProposalsService {
         length_step: config.solverLengthStepMm,
         time_limit_seconds: timeLimitSeconds,
         // true (2026-09-22, đổi từ false): vét cạn DỪNG NGAY tại chiều dài ĐẦU TIÊN đạt ngưỡng
-        // hao hụt, không quét hết dải để tìm chiều dài TỐT NHẤT - xem de_xuat_logic.py::
-        // optimize_one_material dòng ~616-619. Đo thật 2026-09-22 (GHE-J55 thật, 7 loại sắt,
+        // hao hụt, không quét hết dải để tìm chiều dài TỐT NHẤT - xem solver-ts/
+        // optimize-one-material.ts (nhánh stop_on_first). Đo thật 2026-09-22 (GHE-J55 thật, 7 loại sắt,
         // dải 5000-6000/bước 50mm): false tốn 1302s (21+ phút) vì mỗi điểm quét đều chạy gần hết
         // time_limit_seconds dù đã có điểm đạt ngưỡng từ sớm - giảm mật độ quét (bước 10->50mm)
         // gần như không giúp gì vì nút thắt không phải SỐ điểm mà là MỖI điểm cứ chạy hết giờ.
@@ -2150,11 +2655,8 @@ export class CuttingProposalsService {
         stop_on_first: true,
       };
 
-      const baseUrl = this.configService.get('solver.baseUrl', { infer: true });
-      const apiKey = this.configService.get('solver.apiKey', { infer: true });
-
       // Ngân sách thời gian solver (`time_limit_seconds`) là CHO MỖI LOẠI SẮT, không phải cho cả
-      // request - api/views.py truyền time_limit_sec vào optimize_one_material() BÊN TRONG vòng
+      // request - solver-ts/propose.ts truyền time_limit_sec vào optimize_one_material() BÊN TRONG vòng
       // lặp `for group in material_groups`. Ca xấu nhất của 1 request nhiều loại sắt (PI gộp) là
       // distinctMaterialIds.length × timeLimitSeconds - đã CHẶN Ở NGUỒN bằng cách tự co
       // timeLimitSeconds (xem chỗ tính ở trên), nên KHÔNG còn cần throw chặn ở đây nữa: N × trần
@@ -2163,11 +2665,11 @@ export class CuttingProposalsService {
       // 2026-08-26 (mở lại auto_scan): công thức trên KHÔNG tính phần vét cạn - 1 loại sắt cần
       // scan gọi optimize_material() LẶP LẠI cho từng chiều dài trong dải min/max_length (mặc
       // định ~100 lần), mỗi lần vẫn giới hạn bởi CÙNG time_limit_seconds đó. Trần lý thuyết thật
-      // sự cao hơn nhiều lần công thức trên, nhưng KHÔNG nâng multiplier lên (100×) vì CP-SAT cho
+      // sự cao hơn nhiều lần công thức trên, nhưng KHÔNG nâng multiplier lên (100×) vì bộ giải cho
       // bài toán nhỏ cỡ này hầu như luôn giải xong trong mili-giây tới vài giây - nâng multiplier
       // sẽ chặn nhầm mọi đợt gộp bình thường trước khi kịp thử. Đo thật 2026-08-26 (3 loại sắt, 1
       // loại phải vét cạn 101 chiều dài): 47s, timeoutSeconds mặc định 1700s vẫn dư nhiều. Rủi ro
-      // còn lại là ca CP-SAT thật sự bế tắc ở MỌI chiều dài (hiếm, thường do ngưỡng % đặt sai) -
+      // còn lại là ca bộ giải thật sự bế tắc ở MỌI chiều dài (hiếm, thường do ngưỡng % đặt sai) -
       // khi đó request bị timeoutSeconds cắt ngang, lỗi báo ra sẽ là lỗi mạng chung chung, không
       // phải điều mới do đổi này gây ra (case đó vốn đã tệ y hệt trước đây, và hiếm tới mức không
       // đáng đánh đổi lấy 1 guard cứng chặn oan mọi lượt "Tính lại" có override lỗi thời).
@@ -2183,12 +2685,7 @@ export class CuttingProposalsService {
       });
 
       const callSolver = (body: typeof baseRequestBody & { auto_scan: boolean }) =>
-        this.externalApiService.post<SolverProposeResponse>(
-          `${baseUrl}${SOLVER_PROPOSE_PATH}`,
-          body,
-          { headers: { Authorization: `Bearer ${apiKey}` } },
-          timeoutSeconds * 1000,
-        );
+        this.solverClient.propose<SolverProposeResponse>(body, timeoutSeconds * 1000);
 
       // auto_scan = `allowCustomLength` (KHSX đề nghị riêng cho đợt này và Sếp đã duyệt, hoặc mặc
       // định SystemConfig khi KHSX không chọn - 2026-09-14, xem comment ở trên; trước đây LUÔN
@@ -2202,7 +2699,7 @@ export class CuttingProposalsService {
       //
       // MỘT LẦN GỌI DUY NHẤT khi bật, không có nhánh retry lần 2 (khác hẳn cơ chế "gọi lại" đã bỏ
       // 2026-08-18 mô tả bên dưới): solver TỰ quyết fixed-hay-scan bên trong 1 request
-      // (de_xuat_logic.py::optimize_one_material) - chiều dài chuẩn nào đạt ngưỡng thì CHỐT LUÔN,
+      // (solver-ts/optimize-one-material.ts) - chiều dài chuẩn nào đạt ngưỡng thì CHỐT LUÔN,
       // chỉ khi KHÔNG chiều dài chuẩn nào đạt mới vét cạn dải min/max_length. Tức là bật auto_scan
       // không hề đụng tới các dòng đã đạt sẵn trên 6000mm (đã đo thật: 2 dòng feasible trên 6000mm
       // ra CÙNG SỐ hệt như auto_scan=false, xem changelog 2026-08-26).
@@ -2777,7 +3274,7 @@ export class CuttingProposalsService {
       const byMaterial = result.get(row.bomRevisionId) ?? new Map<bigint, Map<number, number>>();
       const byCutLength = byMaterial.get(row.segmentSpec.materialId) ?? new Map<number, number>();
       // Cộng dồn: nhiều mảnh khác nhau có thể cùng dùng 1 (vật tư, chiều dài đoạn) - đúng cách
-      // explode_bom của solver gom nhóm (de_xuat_logic.py: groups[key][cut_len] += demand).
+      // explode_bom của solver gom nhóm (solver-ts/propose.ts: groups[key][cut_len] += demand).
       byCutLength.set(cutLengthMm, (byCutLength.get(cutLengthMm) ?? 0) + qtyPerSet);
       byMaterial.set(row.segmentSpec.materialId, byCutLength);
       result.set(row.bomRevisionId, byMaterial);
@@ -2872,7 +3369,7 @@ export class CuttingProposalsService {
    *
    * Dùng `bestUsed` (tổng sắt+lưỡi lớn nhất nhét vừa 1 cây) làm mẫu số chứ KHÔNG dùng `usable`:
    * không cây nào chở nổi quá bestUsed, nên `ceil(cần / bestUsed)` vừa là cận dưới HỢP LỆ vừa
-   * CHẶT HƠN ràng buộc `ceil(cần / usable)` của solver (de_xuat_logic.py:383-386) - vốn giả định
+   * CHẶT HƠN ràng buộc `ceil(cần / usable)` của solver (solver-ts/optimize-material.ts) - vốn giả định
    * lấp đầy hoàn hảo nên không phản ánh được phần phí do không lấp kín được cây.
    */
   private minBarsFor(
@@ -2887,6 +3384,52 @@ export class CuttingProposalsService {
     let neededMm = 0;
     for (const [cutLengthMm, qty] of demand) neededMm += qty * (cutLengthMm + kerfMm);
     return Math.ceil(neededMm / best.bestUsedMm);
+  }
+
+  /** Khoá nhớ kết quả xác minh = đúng mọi tham số dựng body solver (nhu cầu xếp theo cỡ để 2 cách cộng dồn ra cùng khoá). */
+  private exactCheckKey(
+    materialId: bigint,
+    demand: Map<number, number>,
+    stockLengths: number[],
+    thresholdPct: number,
+    maxSurplus: number,
+    trimMm: number,
+    kerfMm: number,
+    machineBody: MachineSolverParams['body'],
+  ): string {
+    return JSON.stringify([
+      materialId.toString(),
+      [...demand.entries()].sort((a, b) => a[0] - b[0]),
+      stockLengths,
+      thresholdPct,
+      maxSurplus,
+      trimMm,
+      kerfMm,
+      machineBody,
+    ]);
+  }
+
+  /** Kết quả xác minh chip đã có, giữ qua các lần tải trang - xem EXACT_CHECK_CACHE_TTL_MS. */
+  private readonly exactCheckCache = new Map<
+    string,
+    {
+      at: number;
+      value: Awaited<ReturnType<CuttingProposalsService['verifyExactStandaloneWaste']>>;
+    }
+  >();
+
+  private rememberExactCheck(
+    key: string,
+    value: Awaited<ReturnType<CuttingProposalsService['verifyExactStandaloneWaste']>>,
+  ): void {
+    this.exactCheckCache.delete(key);
+    this.exactCheckCache.set(key, { at: Date.now(), value });
+    // Map giữ thứ tự chèn -> khoá đầu là khoá cũ nhất.
+    while (this.exactCheckCache.size > EXACT_CHECK_CACHE_MAX) {
+      const oldest = this.exactCheckCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.exactCheckCache.delete(oldest);
+    }
   }
 
   /**
@@ -2909,14 +3452,26 @@ export class CuttingProposalsService {
     maxSurplus: number,
     trimMm: number,
     kerfMm: number,
+    machineBody: MachineSolverParams['body'],
+    deep = false,
   ): Promise<void> {
-    const deadline = Date.now() + EXACT_CHECK_BATCH_BUDGET_MS;
+    const deadline =
+      Date.now() + (deep ? EXACT_CHECK_DEEP_BATCH_BUDGET_MS : EXACT_CHECK_BATCH_BUDGET_MS);
+    // Nhớ tạm theo ĐÚNG tham số dựng body gửi solver, CHỈ trong 1 lần gọi hàm này (1 lần tải trang):
+    // cùng 1 loại sắt với cùng nhu cầu thường lặp ở nhiều SKU (đo 2026-10-21: [30×120, 60×240] lặp 11 SKU,
+    // chiếm 73/79 s giải tuần tự) - cùng khoá = cùng body = cùng câu trả lời, nên giải 1 lần, mọi dòng
+    // dùng chung. Lưu cả promise đang chạy để lời gọi trùng ĐỒNG THỜI cũng chờ chung, không bắn thêm.
+    // Không giữ qua các lần tải trang: nhu cầu/tồn kho có thể đổi giữa 2 lần, và trang vốn tính lại mỗi lần.
+    const memo = new Map<
+      string,
+      ReturnType<CuttingProposalsService['verifyExactStandaloneWaste']>
+    >();
     let cursor = 0;
     const worker = async () => {
       while (cursor < targets.length) {
         const target = targets[cursor++];
         if (Date.now() > deadline) continue; // hết ngân sách chung - bỏ qua, giữ verified=false
-        const result = await this.verifyExactStandaloneWaste(
+        const key = this.exactCheckKey(
           target.materialId,
           target.demand,
           target.stockLengths,
@@ -2924,8 +3479,30 @@ export class CuttingProposalsService {
           maxSurplus,
           trimMm,
           kerfMm,
+          machineBody,
         );
+        const cached = this.exactCheckCache.get(key);
+        let pending =
+          cached && Date.now() - cached.at < EXACT_CHECK_CACHE_TTL_MS
+            ? Promise.resolve(cached.value)
+            : memo.get(key);
+        if (!pending) {
+          pending = this.verifyExactStandaloneWaste(
+            target.materialId,
+            target.demand,
+            target.stockLengths,
+            target.thresholdPct,
+            maxSurplus,
+            trimMm,
+            kerfMm,
+            machineBody,
+            deep,
+          );
+          memo.set(key, pending);
+        }
+        const result = await pending;
         if (result === null) continue; // không xác minh được - giữ nguyên ước tính cũ
+        if (!cached) this.rememberExactCheck(key, result);
         target.dto.standaloneWastePct = result.wastePct;
         target.dto.standaloneMinBars = result.bars;
         target.dto.stockLengthMm = result.stockLengthMm;
@@ -2935,7 +3512,19 @@ export class CuttingProposalsService {
       }
     };
     await Promise.all(
-      Array.from({ length: Math.min(EXACT_CHECK_CONCURRENCY, targets.length) }, worker),
+      // Lượt kiểm bù: song song ĐÚNG bằng số luồng bộ giải (mặc định 1) - gửi 6 bài cùng lúc vào 1 luồng thì bài cuối hàng chờ
+      // quá EXACT_CHECK_DEEP_TIMEOUT_MS rồi bị bỏ (đo 2026-10-24: 4 bài 0,1–16 s vẫn "chưa kiểm" vì xếp hàng).
+      Array.from(
+        {
+          length: Math.min(
+            deep
+              ? Math.max(1, this.configService.get('solver.ts.workers', { infer: true }) ?? 1)
+              : EXACT_CHECK_CONCURRENCY,
+            targets.length,
+          ),
+        },
+        worker,
+      ),
     );
   }
 
@@ -2963,6 +3552,8 @@ export class CuttingProposalsService {
     maxSurplus: number,
     trimMm: number,
     kerfMm: number,
+    machineBody: MachineSolverParams['body'],
+    deep = false,
   ): Promise<{
     wastePct: number;
     bars: number;
@@ -2978,25 +3569,25 @@ export class CuttingProposalsService {
       cut_length: size,
       qty_per_part: qty,
     }));
-    const baseUrl = this.configService.get('solver.baseUrl', { infer: true });
-    const apiKey = this.configService.get('solver.apiKey', { infer: true });
     let res: SolverProposeResponse;
     try {
-      res = await this.externalApiService.post<SolverProposeResponse>(
-        `${baseUrl}${SOLVER_PROPOSE_PATH}`,
+      res = await this.solverClient.propose<SolverProposeResponse>(
         {
           num_sets: 1,
           bom,
           stock_lengths: stockLengths.join(' '),
           trim_start: trimMm,
           blade_width: kerfMm,
+          // Cùng máy với đợt (2026-10-23): MC Tự động cắt theo bó nên cùng nhu cầu ra số cây khác MC Laser.
+          ...machineBody,
           max_waste_percentage: thresholdPct,
           max_surplus: maxSurplus,
           auto_scan: false,
-          time_limit_seconds: EXACT_CHECK_SOLVER_TIME_LIMIT_SEC,
+          time_limit_seconds: deep
+            ? EXACT_CHECK_DEEP_SOLVER_TIME_LIMIT_SEC
+            : EXACT_CHECK_SOLVER_TIME_LIMIT_SEC,
         },
-        { headers: { Authorization: `Bearer ${apiKey}` } },
-        EXACT_CHECK_TIMEOUT_MS,
+        deep ? EXACT_CHECK_DEEP_TIMEOUT_MS : EXACT_CHECK_TIMEOUT_MS,
       );
     } catch {
       // Lỗi mạng/timeout/solver quá tải - KHÔNG được để 1 loại sắt xác minh hỏng làm sập cả
@@ -3004,7 +3595,7 @@ export class CuttingProposalsService {
       return null;
     }
     // res?. (không chỉ purchase_plan?.) - phòng cả ca response rỗng/không đúng dạng JSON kỳ vọng
-    // (đã thấy khi test: mock externalApiService.post trả undefined mặc định cho các test KHÁC
+    // (đã thấy khi test: mock externalApiService.post (qua SolverClientService) trả undefined mặc định cho các test KHÁC
     // không liên quan tới xác minh này, chưa từng gọi qua nhánh này trước 2026-09-24).
     const item = res?.purchase_plan?.[0];
     if (!item) return null;
@@ -3031,7 +3622,7 @@ export class CuttingProposalsService {
       // ước tính: hao hụt ở cây chuẩn CHẮC CHẮN > ngưỡng (2026-09-24, theo đúng yêu cầu người dùng
       // sau khi chỉ ra bản trước "bịp bợm" vì trưng con số < ngưỡng cho 1 ca vốn KHÔNG đạt ngưỡng).
       //
-      // waste_pct từ _best_achievable() (ratio=1.0, nới lỏng HẲN luật mỗi cây) KHÔNG dùng làm số
+      // waste_pct từ best_achievable (ratio=1.0, nới lỏng HẲN luật mỗi cây) KHÔNG dùng làm số
       // hiển thị chính nữa - nó chỉ là "tốt nhất có thể NẾU chấp nhận phá luật", một phương án
       // solver thật sự sẽ KHÔNG BAO GIỜ tự chọn (pattern generation loại nó ngay từ đầu). Giữ lại
       // trong response làm dữ liệu PHỤ (FE đưa vào tooltip), không phải con số "hao hụt sẽ đạt".
@@ -3060,6 +3651,7 @@ export class CuttingProposalsService {
               select: {
                 solverMaxWastePctOverride: true,
                 solverAllowCustomLength: true,
+                solverMachine: true,
                 solverStockLengthsByMaterial: true,
                 solverTimeLimitSecondsOverride: true,
               },
@@ -3092,6 +3684,7 @@ export class CuttingProposalsService {
           ?.solverStockLengthsByMaterial as StockLengthsByMaterial | null) ?? null,
       timeLimitSecondsOverride:
         order.productionInvoiceItem.productionInvoice?.solverTimeLimitSecondsOverride ?? null,
+      machine: order.productionInvoiceItem.productionInvoice?.solverMachine ?? null,
     };
   }
 
@@ -3140,6 +3733,7 @@ export class CuttingProposalsService {
       stockLengthsByMaterial:
         (pi.solverStockLengthsByMaterial as StockLengthsByMaterial | null) ?? null,
       timeLimitSecondsOverride: pi.solverTimeLimitSecondsOverride ?? null,
+      machine: pi.solverMachine,
     };
   }
 
@@ -3218,6 +3812,7 @@ export class CuttingProposalsService {
     const options = (proposal.solverOptions ?? {}) as {
       solverMaxWastePctOverride?: number;
       solverAllowCustomLength?: boolean;
+      solverMachine?: SolverMachine;
       solverStockLengthsByMaterial?: StockLengthsByMaterial;
       solverTimeLimitSecondsOverride?: number;
     };
@@ -3239,6 +3834,56 @@ export class CuttingProposalsService {
       allowCustomLength: options.solverAllowCustomLength ?? null,
       stockLengthsByMaterial: options.solverStockLengthsByMaterial ?? null,
       timeLimitSecondsOverride: options.solverTimeLimitSecondsOverride ?? null,
+      machine: options.solverMachine ?? null,
+    };
+  }
+
+  /**
+   * LƯU Ý cho đường ƯỚC TÍNH NHANH (best-fill trong previewBatch/getBatchSuggestions/getBatchCandidates):
+   * với MC Tự động nó chỉ đổi tề đầu/lưỡi sang cặp Mctd, KHÔNG tính ràng buộc bó (hệ số bó, cắt tay tối đa,
+   * số cỡ đoạn/kiểu cắt) nên LẠC QUAN hơn thực tế. Số chính thức là lượt solver (và số xác minh bằng
+   * solver ở getBatchCandidates, đã gửi đủ tham số bó).
+   *
+   * Máy cắt áp cho một lượt tính: `chosen` (KHSX chọn cho đợt) ưu tiên, không có thì
+   * `SystemConfig.solverMachine`. Thiếu cả hai (cấu hình cũ/spec mock) = MC Laser - đúng hành vi trước
+   * khi có tính năng, nên đường laser KHÔNG đổi gì ngoài việc gửi thêm `machine:'laser'` tường minh.
+   *
+   * MC Tự động: tề đầu/lưỡi lấy từ cặp `solverMctd*` (KHÔNG dùng `solverTrimStartMm`/`solverBladeWidthMm`
+   * của MC Laser), kèm hệ số bó + giới hạn cắt tay + số cỡ đoạn tối đa/kiểu cắt.
+   */
+  private resolveMachineParams(
+    config: Pick<
+      SystemConfig,
+      | 'solverMachine'
+      | 'solverTrimStartMm'
+      | 'solverBladeWidthMm'
+      | 'solverMctdTrimStartMm'
+      | 'solverMctdBladeWidthMm'
+      | 'solverBundleFactors'
+      | 'solverMaxManualCuts'
+      | 'solverMaxSizesPerPattern'
+    >,
+    chosen: SolverMachine | null | undefined,
+  ): MachineSolverParams {
+    const machine = chosen ?? config.solverMachine ?? SolverMachine.laser;
+    if (machine === SolverMachine.tu_dong) {
+      return {
+        machine,
+        trimStart: config.solverMctdTrimStartMm,
+        bladeWidth: config.solverMctdBladeWidthMm.toNumber(),
+        body: {
+          machine: 'tu_dong',
+          bundle_factors: config.solverBundleFactors as number[],
+          max_manual_cuts: config.solverMaxManualCuts,
+          max_sizes_per_pattern: config.solverMaxSizesPerPattern,
+        },
+      };
+    }
+    return {
+      machine,
+      trimStart: config.solverTrimStartMm,
+      bladeWidth: config.solverBladeWidthMm.toNumber(),
+      body: { machine: 'laser' },
     };
   }
 
@@ -3303,7 +3948,7 @@ export class CuttingProposalsService {
         part: row.piece.name,
         qty_per_set: qtyPerUnitByPieceId.get(row.pieceId) ?? 0,
         // material = materialId thô (KHÔNG kèm spec thật) - solver gom nhóm theo
-        // `"{material} {normalize_spec(spec)}"` (xem cat_sat/de_xuat_logic.py::explode_bom).
+        // `"{material} {normalize_spec(spec)}"` (xem solver-ts/propose.ts, bản port explode_bom).
         // Nếu gửi spec thật, response trả lại material="<id> <spec>" thay vì "<id>" và
         // BigInt(item.material) ở saveSuccess() sẽ throw - giữ spec rỗng để round-trip
         // đúng nguyên vẹn materialId.
@@ -3342,6 +3987,21 @@ export class CuttingProposalsService {
         // KHÔNG được ghép thẳng Decimal vào đây).
         names: segmentNames.get(`${item.material}:${p.size}`) ?? [],
       }));
+  }
+
+  /** `bundle_summary` snake_case của solver -> camelCase tường minh để lưu/trả FE. undefined = MC Laser. */
+  private buildBundleSummary(
+    summary:
+      NonNullable<SolverProposeResponse['purchase_plan'][number]['bundle_summary']> | undefined,
+  ): Prisma.InputJsonValue | undefined {
+    if (!summary) return undefined;
+    return {
+      factors: summary.factors,
+      totalBundles: summary.total_bundles,
+      manualBars: summary.manual_bars,
+      totalCuts: summary.total_cuts,
+      maxSizesPerPattern: summary.max_sizes_per_pattern,
+    };
   }
 
   private async saveSuccess(
@@ -3391,6 +4051,10 @@ export class CuttingProposalsService {
               // "fixed" | "scan" - null với dòng infeasible (solver không gửi length_source khi
               // feasible=false), xem doc comment schema.prisma.
               lengthSource: item.length_source ?? null,
+              // Máy đã giải dòng này + tổng kết theo bó (chỉ MC Tự động) - 2026-10-23. camelCase
+              // TƯỜNG MINH, không dump snake_case của solver (xem cảnh báo ở schema pieceSummary).
+              machine: item.machine ?? null,
+              bundleSummary: this.buildBundleSummary(item.bundle_summary),
               totalBars: item.total_bars,
               totalWasteMm: item.total_waste_mm,
               wastePercentage: item.waste_percentage,
@@ -3421,6 +4085,9 @@ export class CuttingProposalsService {
                 patternIndex: pattern.pattern_id ?? index,
                 barCount: pattern.bars,
                 wastePerBarMm: pattern.waste_per_bar,
+                // { "<hệ số>": số bó, "1": số cây cắt tay } - chỉ MC Tự động; undefined (không phải null)
+                // với MC Laser để Prisma bỏ qua cột Json?.
+                bundles: pattern.bundles ?? undefined,
               },
             });
 
@@ -3707,6 +4374,8 @@ export class CuttingProposalsService {
         feasible: line.feasible,
         bestStockLengthMm: line.bestStockLengthMm,
         lengthSource: line.lengthSource as 'fixed' | 'scan' | null,
+        machine: line.machine,
+        bundleSummary: line.bundleSummary as CuttingProposalBundleSummaryResponseDto | null,
         totalBars: line.totalBars,
         totalWasteMm: line.totalWasteMm ? Number(line.totalWasteMm) : null,
         wastePercentage,
@@ -3736,6 +4405,7 @@ export class CuttingProposalsService {
           patternIndex: pattern.patternIndex,
           barCount: pattern.barCount,
           wastePerBarMm: pattern.wastePerBarMm ? Number(pattern.wastePerBarMm) : null,
+          bundles: pattern.bundles as Record<string, number> | null,
           segments: pattern.segments.map((segment) => ({
             segmentSpecId: segment.segmentSpecId.toString(),
             cutLengthMm: Number(segment.segmentSpec.cutLengthMm),

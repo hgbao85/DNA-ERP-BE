@@ -42,21 +42,23 @@ export const envValidationSchema = Joi.object({
     .optional(),
   SEED_ADMIN_PASSWORD: Joi.string().min(8).optional(),
 
-  // cat_sat_iea solver (Phase 7 - Đề xuất cắt sắt). Tham số TUNING của bài toán (stock_lengths,
-  // trim_start, max_waste_percentage...) nằm ở SystemConfig (admin sửa qua PUT /system-config),
-  // KHÔNG ở đây - 2 biến này chỉ là thông tin KẾT NỐI tới solver. Cố ý để .optional() (không
-  // .required()) dù đây là 1 tính năng thật - thiếu 2 biến này KHÔNG được phép chặn boot cả app
-  // (mọi module khác không liên quan gì tới Đề xuất cắt sắt), chỉ riêng CuttingProposalsService
-  // sẽ tự báo FAILED khi thật sự có ai gọi mà chưa cấu hình (xem runSolverAndSave).
-  SOLVER_BASE_URL: Joi.string().uri().optional(),
-  SOLVER_API_KEY: Joi.string().optional(),
-  /// Timeout HTTP CLIENT (giây) - KHÁC với time_limit_seconds gửi trong body request (đó là
-  /// SystemConfig.solverTimeLimitSeconds, mỗi lần giải solver). Để dư dả vì số lần giải/request
+  // Bộ giải "Đề xuất thanh sắt" (Phase 7): HiGHS (WASM) chạy trong worker thread NGAY TRONG tiến trình BE
+  // - bộ giải duy nhất của ERP (2026-10-23, changelog 2026-10-20 mục 9), không còn gọi DNA-DEXUAT qua mạng
+  // nên không còn SOLVER_MODE / SOLVER_BASE_URL / SOLVER_API_KEY. Tham số TUNING của bài toán
+  // (stock_lengths, trim_start, max_waste_percentage...) nằm ở SystemConfig (admin sửa qua PUT
+  // /system-config), KHÔNG ở đây.
+  // WORKERS=1 giữ đúng "1 lượt giải tại 1 thời điểm"; HEAP_MB = trần heap V8 mỗi worker (0 = mặc định
+  // Node, KHÔNG gồm bộ nhớ WASM); MAX_RSS_MB = trần RSS toàn tiến trình khi đang giải (0 = tắt) - vượt
+  // là terminate worker, API vẫn sống.
+  SOLVER_TS_WORKERS: Joi.number().integer().min(1).max(4).default(1),
+  SOLVER_TS_HEAP_MB: Joi.number().integer().min(0).default(0),
+  SOLVER_TS_MAX_RSS_MB: Joi.number().integer().min(0).default(0),
+  /// Trần cho CẢ 1 lần gọi solver (giây: chờ hàng đợi + chạy worker) - KHÁC với time_limit_seconds gửi
+  /// trong body request (đó là SystemConfig.solverTimeLimitSeconds, mỗi lần giải 1 loại sắt). Để dư dả vì số lần giải/request
   /// = số loại sắt x (1 + N lần vét cạn) có thể cộng dồn khá lâu dù mỗi lần giải nhanh.
   SOLVER_TIMEOUT_SECONDS: Joi.number().default(300),
 
-  // Cloudinary (upload ảnh, xem UploadsModule). .optional() cùng lý do với SOLVER_* ở trên -
-  // thiếu cấu hình không được chặn boot cả app, chỉ riêng route POST /uploads/image sẽ báo lỗi
+  // Cloudinary (upload ảnh, xem UploadsModule). .optional() - thiếu cấu hình không được chặn boot cả app, chỉ riêng route POST /uploads/image sẽ báo lỗi
   // khi thật sự có ai gọi mà chưa cấu hình.
   CLOUDINARY_CLOUD_NAME: Joi.string().optional(),
   CLOUDINARY_API_KEY: Joi.string().optional(),

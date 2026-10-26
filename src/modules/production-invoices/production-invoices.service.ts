@@ -16,6 +16,7 @@ import {
   ProdApprovalStatus,
   ProdItemStageType,
   ProductionInvoiceStatus,
+  SolverMachine,
   TransferStatus,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
@@ -26,6 +27,7 @@ import { nextProductionInvoiceCode } from '../../common/utils/production-invoice
 import { assertPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { checkMergeRules, skuLabel } from '../../common/utils/merge-rules.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { auditEvent } from '../../common/utils/audit-event.util';
@@ -48,6 +50,7 @@ import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purc
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
+import { UpdateItemsDeadlinesDto } from './dto/update-items-deadlines.dto';
 import { ClaimSoloDto } from './dto/claim-solo.dto';
 import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
 import { PackagingResponseDto } from './dto/packaging-response.dto';
@@ -77,6 +80,9 @@ type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
     };
   };
 }>;
+/** SystemConfig là bảng 1 dòng (id = 1) - đọc luật gộp solverMergeWindowDays/solverMergeMaxSkus. */
+const SYSTEM_CONFIG_ID = 1;
+
 type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
   include: {
     mfgProduct: true;
@@ -389,6 +395,7 @@ export class ProductionInvoicesService {
   private async buildOverrideEvidence(
     itemIds: string[],
     solver: SolverOverrideDto | undefined,
+    cuttingProposalId?: bigint,
   ): Promise<Prisma.InputJsonValue | undefined> {
     if (solver?.solverMaxWastePctOverride == null) return undefined;
     try {
@@ -399,13 +406,40 @@ export class ProductionInvoicesService {
         // mới xin: Sếp đọc được "xin 15% vì ước tính 1.88%" - vô lý, và đúng loại "con số tự
         // mâu thuẫn" đã phải sửa một lần ở mục 11.3 changelog 2026-09-14.
         stockLengthsByMaterial: solver?.solverStockLengthsByMaterial,
+        // Cùng máy với đợt (2026-10-23): đổi máy là đổi tề đầu/lưỡi nên đổi cả ước tính hao hụt.
+        solverMachine: solver?.solverMachine,
       });
       if (preview.lines.length === 0) return undefined;
+      // PI tạo từ phương án ĐÃ TÍNH (luồng solve-trước, 2026-09-30) thì phương án đã có hao hụt THẬT của từng loại:
+      // dùng nó thay cho ước tính best-fill. Ước tính chỉ là cận dưới theo 1 cây lý tưởng ("hao ≥ 0,55 %") và lệch
+      // xa số thật khi số lượng nhỏ (PI-2026-041, SAT-VUONG-50X50: ước 0,55 % - phương án thật 55,83 %): Sếp duyệt chi
+      // thêm tiền sắt trên con số không phải của lượt tính. Đơn vị cả hai đều là % (không phải phân số). Loại không
+      // có dòng thật dùng được (vô nghiệm, hoặc không có trong phương án) giữ ước tính.
+      let realByCode = new Map<string, { wastePct: number | null; stockLengthMm: number | null }>();
+      if (cuttingProposalId !== undefined) {
+        realByCode = new Map(
+          (await this.cuttingProposalsService.getProposalLineWaste(cuttingProposalId)).map((l) => [
+            l.materialCode,
+            l,
+          ]),
+        );
+      }
+      const lines = preview.lines.map((l) => {
+        const real = realByCode.get(l.materialCode);
+        if (!real || real.wastePct === null) return { ...l, fromProposal: false };
+        return {
+          ...l,
+          minWastePct: real.wastePct,
+          stockLengthMm: real.stockLengthMm ?? l.stockLengthMm,
+          meetsThreshold: real.wastePct <= l.thresholdPct,
+          fromProposal: true,
+        };
+      });
       // Loại vướng nhất = hao hụt ước tính cao nhất. Ưu tiên trong nhóm chưa đạt ngưỡng; nếu cả
       // nhóm đều đạt thì vẫn lấy loại cao nhất - Sếp cần thấy "ước tính đã đạt mà vẫn xin" để hỏi
       // lại, chứ không phải giấu đi.
-      const missing = preview.lines.filter((l) => !l.meetsThreshold);
-      const pool = missing.length > 0 ? missing : preview.lines;
+      const missing = lines.filter((l) => !l.meetsThreshold);
+      const pool = missing.length > 0 ? missing : lines;
       const worst = [...pool].sort((a, b) => b.minWastePct - a.minWastePct)[0];
       return {
         materialCode: worst.materialCode,
@@ -415,6 +449,9 @@ export class ProductionInvoicesService {
         // cây chuẩn" - từ khi KHSX chọn được chiều dài riêng thì câu đó SAI, và Sếp không có
         // cách nào biết 13,74% là của cây 5m8 chứ không phải cây 6m.
         stockLengthMm: worst.stockLengthMm,
+        // true = số trên là hao hụt THẬT của phương án đã tính, không phải cận dưới ước tính - màn duyệt
+        // phải ghi khác ("theo phương án đã tính" thay vì "ước tính ≥"). Bản ghi cũ thiếu trường = ước tính.
+        fromProposal: worst.fromProposal,
       };
     } catch (error) {
       // Không có bằng chứng thì vẫn cho gộp - chặn cả thao tác vì một dòng hiển thị là quá tay.
@@ -445,15 +482,24 @@ export class ProductionInvoicesService {
       dto.cuttingProposalId,
       ids,
     );
-    const solver = proposal.solverOptions as SolverOverrideDto;
+    // Chốt máy cắt THỰC SỰ đã dùng vào PI (2026-10-23): KHSX để theo mặc định thì solverOptions không có máy,
+    // nhưng lượt tính đã chạy bằng máy mặc định lúc đó - ghi lại để "Tính lại" về sau không đổi máy.
+    const solver: SolverOverrideDto = {
+      ...(proposal.solverOptions as SolverOverrideDto),
+    };
+    solver.solverMachine ??= proposal.usedMachine ?? undefined;
     // Trước transaction: sau khi gộp, các SKU này không còn nằm trong danh sách "chưa được gom"
     // mà previewBatch đọc, nên tính sau là ra rỗng.
-    const overrideEvidence = await this.buildOverrideEvidence(dto.productionInvoiceItemIds, solver);
+    const overrideEvidence = await this.buildOverrideEvidence(
+      dto.productionInvoiceItemIds,
+      solver,
+      proposal.id,
+    );
 
     const mergedId = await this.prisma.$transaction(async (tx) => {
       const items = await tx.productionInvoiceItem.findMany({
         where: { id: { in: ids } },
-        include: { productionInvoice: true, stages: true },
+        include: { productionInvoice: true, stages: true, mfgProduct: true, salesOrder: true },
       });
       if (items.length !== ids.length) {
         const found = new Set(items.map((i) => i.id));
@@ -461,6 +507,21 @@ export class ProductionInvoicesService {
           `Không tìm thấy SKU: ${ids.filter((id) => !found.has(id)).join(', ')}`,
         );
       }
+      // LUẬT GỘP (2026-10-24, Sếp Nhân: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại") - kiểm lại dù cutting-batch-solve đã
+      // chặn: hạn SKU có thể bị sửa giữa lúc tính và lúc gộp. Xem merge-rules.util.
+      const mergeCfg = await tx.systemConfig.findUniqueOrThrow({
+        where: { id: SYSTEM_CONFIG_ID },
+        select: { solverMergeWindowDays: true, solverMergeMaxSkus: true },
+      });
+      const rule = checkMergeRules(
+        items.map((i) => ({
+          materialDeadline: i.materialDeadline,
+          stages: i.stages,
+          label: skuLabel(i.mfgProduct.factoryCode, i.salesOrder?.orderCode),
+        })),
+        { windowDays: mergeCfg.solverMergeWindowDays, maxSkus: mergeCfg.solverMergeMaxSkus },
+      );
+      if (!rule.ok) throw new BadRequestException(rule.reason);
 
       // Đã duyệt = đã sinh ProductionOrder và (có thể) đã chạy solver riêng - kéo vào nhóm nữa thì
       // phần sắt của nó bị tính hai lần.
@@ -506,6 +567,7 @@ export class ProductionInvoicesService {
           // CuttingProposalsService.buildInvoiceJob/runSolverAndSave).
           solverMaxWastePctOverride: solver.solverMaxWastePctOverride ?? null,
           solverAllowCustomLength: solver.solverAllowCustomLength ?? null,
+          solverMachine: solver.solverMachine ?? null,
           solverOverrideReason: solver.solverOverrideReason ?? null,
           solverTimeLimitSecondsOverride: solver.solverTimeLimitSecondsOverride ?? null,
           solverOverrideEvidence: overrideEvidence,
@@ -559,8 +621,13 @@ export class ProductionInvoicesService {
       dto.cuttingProposalId,
       [bigId],
     );
-    const solver = proposal.solverOptions as SolverOverrideDto;
-    const overrideEvidence = await this.buildOverrideEvidence([itemId], solver);
+    // Chốt máy cắt THỰC SỰ đã dùng vào PI (2026-10-23): KHSX để theo mặc định thì solverOptions không có máy,
+    // nhưng lượt tính đã chạy bằng máy mặc định lúc đó - ghi lại để "Tính lại" về sau không đổi máy.
+    const solver: SolverOverrideDto = {
+      ...(proposal.solverOptions as SolverOverrideDto),
+    };
+    solver.solverMachine ??= proposal.usedMachine ?? undefined;
+    const overrideEvidence = await this.buildOverrideEvidence([itemId], solver, proposal.id);
     const item = await this.prisma.productionInvoiceItem.findUnique({ where: { id: bigId } });
     if (!item) {
       throw new NotFoundException(`Production invoice item ${itemId} not found`);
@@ -581,6 +648,7 @@ export class ProductionInvoicesService {
           // Thông số cắt KHSX đề nghị cho ĐÚNG SKU này (2026-09-14) - xem comment ở mergeItems().
           solverMaxWastePctOverride: solver.solverMaxWastePctOverride ?? null,
           solverAllowCustomLength: solver.solverAllowCustomLength ?? null,
+          solverMachine: solver.solverMachine ?? null,
           solverOverrideReason: solver.solverOverrideReason ?? null,
           solverTimeLimitSecondsOverride: solver.solverTimeLimitSecondsOverride ?? null,
           solverOverrideEvidence: overrideEvidence,
@@ -663,36 +731,110 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
 
     await this.prisma.$transaction(async (tx) => {
-      if (dto.materialDeadline || dto.deliveryDeadline) {
-        await tx.productionInvoiceItem.update({
-          where: { id: item.id },
-          data: {
-            materialDeadline: dto.materialDeadline ? new Date(dto.materialDeadline) : undefined,
-            deliveryDeadline: dto.deliveryDeadline ? new Date(dto.deliveryDeadline) : undefined,
-          },
-        });
-      }
-      for (const stage of dto.stages ?? []) {
-        await tx.productionInvoiceItemStage.upsert({
-          where: {
-            productionInvoiceItemId_stageType: {
-              productionInvoiceItemId: item.id,
-              stageType: stage.stageType,
-            },
-          },
-          create: {
-            productionInvoiceItemId: item.id,
-            stageType: stage.stageType,
-            deadline: new Date(stage.deadline),
-          },
-          update: { deadline: new Date(stage.deadline) },
-        });
-      }
+      await this.applyItemDeadlines(tx, item.id, dto);
+      if (pi.isMerged) await this.assertMergedPiDeadlineRule(tx, pi.id);
     });
 
     const updated = await this.findItemOrThrow(pi.id, itemId);
     await this.auditAndNotifyDeadlineChange(pi.code, item, updated);
     return this.toItemResponseDto(updated);
+  }
+
+  /**
+   * "Sửa thời hạn" cả PI trong MỘT giao dịch (2026-10-24) - xem UpdateItemsDeadlinesDto. Lệnh gộp: lưu hết rồi kiểm luật gộp (mốc cần
+   * sắt các SKU cách nhau ≤ solverMergeWindowDays); vi phạm -> 400 kèm câu báo, KHÔNG lưu gì (rollback).
+   */
+  async updateItemsDeadlines(
+    piId: string,
+    dto: UpdateItemsDeadlinesDto,
+  ): Promise<ProductionInvoiceResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const befores = await Promise.all(dto.items.map((e) => this.findItemOrThrow(pi.id, e.itemId)));
+
+    await this.prisma.$transaction(async (tx) => {
+      if (dto.deadline) {
+        await tx.productionInvoice.update({
+          where: { id: pi.id },
+          data: { deadline: new Date(dto.deadline) },
+        });
+      }
+      for (const [idx, entry] of dto.items.entries()) {
+        await this.applyItemDeadlines(tx, befores[idx].id, entry);
+      }
+      if (pi.isMerged) await this.assertMergedPiDeadlineRule(tx, pi.id);
+    });
+
+    for (const [idx, entry] of dto.items.entries()) {
+      const updated = await this.findItemOrThrow(pi.id, entry.itemId);
+      await this.auditAndNotifyDeadlineChange(pi.code, befores[idx], updated);
+    }
+    return this.findOne(piId);
+  }
+
+  /** Ghi mốc kế hoạch của 1 SKU (dùng chung cho sửa 1 SKU và sửa cả PI). */
+  private async applyItemDeadlines(
+    tx: Pick<PrismaServiceType, 'productionInvoiceItem' | 'productionInvoiceItemStage'>,
+    itemId: bigint,
+    dto: {
+      materialDeadline?: string;
+      deliveryDeadline?: string;
+      stages?: { stageType: ProdItemStageType; deadline: string }[];
+    },
+  ): Promise<void> {
+    if (dto.materialDeadline || dto.deliveryDeadline) {
+      await tx.productionInvoiceItem.update({
+        where: { id: itemId },
+        data: {
+          materialDeadline: dto.materialDeadline ? new Date(dto.materialDeadline) : undefined,
+          deliveryDeadline: dto.deliveryDeadline ? new Date(dto.deliveryDeadline) : undefined,
+        },
+      });
+    }
+    for (const stage of dto.stages ?? []) {
+      await tx.productionInvoiceItemStage.upsert({
+        where: {
+          productionInvoiceItemId_stageType: {
+            productionInvoiceItemId: itemId,
+            stageType: stage.stageType,
+          },
+        },
+        create: {
+          productionInvoiceItemId: itemId,
+          stageType: stage.stageType,
+          deadline: new Date(stage.deadline),
+        },
+        update: { deadline: new Date(stage.deadline) },
+      });
+    }
+  }
+
+  /**
+   * LUẬT GỘP khi sửa hạn lệnh gộp (2026-10-24): không có chỗ này thì gộp xong kéo hạn 1 SKU ra xa là lách được luật "chỉ gom các lệnh
+   * cách nhau ≤ 3 ngày". Đọc lại trong CÙNG giao dịch (thấy giá trị vừa ghi) và ném lỗi để rollback.
+   */
+  private async assertMergedPiDeadlineRule(
+    tx: Pick<PrismaServiceType, 'productionInvoiceItem' | 'systemConfig'>,
+    piId: bigint,
+  ): Promise<void> {
+    const items = await tx.productionInvoiceItem.findMany({
+      where: { productionInvoiceId: piId },
+      include: { stages: true, mfgProduct: true, salesOrder: true },
+    });
+    if (items.length < 2) return;
+    const cfg = await tx.systemConfig.findUniqueOrThrow({
+      where: { id: SYSTEM_CONFIG_ID },
+      select: { solverMergeWindowDays: true, solverMergeMaxSkus: true },
+    });
+    const rule = checkMergeRules(
+      items.map((i) => ({
+        materialDeadline: i.materialDeadline,
+        stages: i.stages,
+        label: skuLabel(i.mfgProduct.factoryCode, i.salesOrder?.orderCode),
+      })),
+      { windowDays: cfg.solverMergeWindowDays, maxSkus: cfg.solverMergeMaxSkus },
+      'invoice',
+    );
+    if (!rule.ok) throw new BadRequestException(rule.reason);
   }
 
   /** Audit + báo bộ phận liên quan khi KHSX đổi mốc kế hoạch (chỉ khi giá trị THỰC SỰ đổi, không phải lưu lại y nguyên).
@@ -2394,6 +2536,12 @@ export class ProductionInvoicesService {
             ? Number(piLevelProposal.wastePercentage)
             : null,
           hasOverThreshold: piLevelProposal.hasOverThreshold ?? false,
+          // Máy THỰC SỰ đã dùng ở lượt tính (2026-10-23), khác `solverMachine` của PI vốn null khi KHSX
+          // để theo mặc định công ty. Nguồn đáng tin nhất là requestParams.machine: runSolverAndSave ghi
+          // body ĐÃ resolve (đợt ?? mặc định công ty) ngay trước khi gọi solver, nên có cả khi đang
+          // tính. Thiếu (phương án tính trước khi có máy cắt) -> máy của PI -> MC Laser, vì mọi phương
+          // án trước tính năng này đều là MC Laser.
+          machine: this.machineOfProposal(piLevelProposal.requestParams, pi.solverMachine),
         }
       : null;
 
@@ -2427,6 +2575,15 @@ export class ProductionInvoicesService {
     return dto;
   }
 
+  private machineOfProposal(
+    requestParams: unknown,
+    piMachine: SolverMachine | null,
+  ): SolverMachine {
+    const used = (requestParams as { machine?: unknown } | null)?.machine;
+    if (used === SolverMachine.laser || used === SolverMachine.tu_dong) return used;
+    return piMachine ?? SolverMachine.laser;
+  }
+
   private toResponseDto(pi: PIWithRefs): ProductionInvoiceResponseDto {
     return new ProductionInvoiceResponseDto({
       id: pi.id.toString(),
@@ -2438,6 +2595,7 @@ export class ProductionInvoicesService {
       deadline: pi.deadline,
       solverMaxWastePctOverride: pi.solverMaxWastePctOverride?.toNumber() ?? null,
       solverAllowCustomLength: pi.solverAllowCustomLength,
+      solverMachine: pi.solverMachine,
       solverOverrideReason: pi.solverOverrideReason,
       solverTimeLimitSecondsOverride: pi.solverTimeLimitSecondsOverride ?? null,
       solverStockLengthsByMaterial:
@@ -2447,6 +2605,7 @@ export class ProductionInvoicesService {
         estimatedWastePct: number;
         normalThresholdPct: number;
         stockLengthMm?: number | null;
+        fromProposal?: boolean;
       } | null,
       createdAt: pi.createdAt,
       updatedAt: pi.updatedAt,

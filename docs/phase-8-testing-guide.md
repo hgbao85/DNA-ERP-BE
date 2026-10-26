@@ -54,9 +54,9 @@ npx prisma generate
 npm run start:dev
 ```
 
-Solver `cat_sat_iea` phải chạy thật (Phase 7 gọi HTTP thật, không mock) — xem
-`docker ps` có `catsat_web` (cổng 18080) và `.env` có `SOLVER_BASE_URL`/`SOLVER_API_KEY` trỏ
-đúng instance đó.
+Bộ giải "Đề xuất thanh sắt" (Phase 7) là HiGHS (WASM) chạy ngay trong BE (worker thread) — không còn
+phải chạy DNA-DEXUAT/`catsat_web` và `.env` không còn `SOLVER_BASE_URL`/`SOLVER_API_KEY`/`SOLVER_MODE`
+(changelog 2026-10-20 mục 9). Cần `pnpm install` đầy đủ (gói `highs`).
 
 ## 3. Lấy token
 
@@ -94,9 +94,8 @@ curl -s $BASE/cutting-proposals/$CP_ID -H "Authorization: Bearer $TOKEN" | jq '.
 # kỳ vọng: status=DRAFT, lines[] có ít nhất 1 dòng feasible=true, totalBars>0
 ```
 
-Nếu `status=FAILED` (`errorMessage` có nội dung) — kiểm tra solver có chạy không
-(`curl $SOLVER_BASE_URL/api/v1/de_xuat/propose/` phải trả lỗi 401 chứ không phải connection
-refused), hoặc `SystemConfig.solverMaxWastePercentage` đang quá chặt so với BOM test.
+Nếu `status=FAILED` (`errorMessage` có nội dung) — đọc log BE (`SolverClientService`: worker hết giờ/tràn
+RAM/lỗi đầu vào), hoặc `SystemConfig.solverMaxWastePercentage` đang quá chặt so với BOM test.
 
 ## 5. Duyệt Cutting Proposal → xác nhận PurchaseProposal tự sinh
 

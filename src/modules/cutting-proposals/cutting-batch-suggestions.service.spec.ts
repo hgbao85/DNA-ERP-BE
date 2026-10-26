@@ -1,10 +1,10 @@
 import { ConfigService } from '@nestjs/config';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { AppConfig } from '../../config/configuration';
-import { ExternalApiService } from '../external/external-api.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CuttingProposalsService } from './cutting-proposals.service';
+import { SolverClientService } from './solver-client.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 
 /**
@@ -63,6 +63,15 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     solverBladeWidthMm: mockDecimal(1.0),
     solverMaxWastePercentage: mockDecimal(1.0),
     solverMaxSurplus: 10,
+    // Máy cắt (2026-10-23): mặc định MC Laser; cặp lưỡi/tề + tham số bó của MC Tự động.
+    solverMachine: 'laser',
+    solverMctdBladeWidthMm: mockDecimal(2.5),
+    solverMctdTrimStartMm: 0,
+    solverBundleFactors: [14, 16, 18, 20],
+    solverMaxManualCuts: 5,
+    solverMaxSizesPerPattern: 5,
+    solverMergeWindowDays: 7,
+    solverMergeMaxSkus: 5,
   };
 
   /** 1 dòng định mức: mảnh `pieceId` cần `qtyPerPiece` đoạn cỡ `cutLengthMm` của vật tư đó. */
@@ -86,7 +95,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     maxCuttingWastePercentage: thresholdPct === null ? null : { toNumber: () => thresholdPct },
   });
 
-  /** post() mặc định KHÔNG implementation (trả undefined) - đúng hành vi "chưa từng gọi solver"
+  /** propose() mặc định KHÔNG implementation (trả undefined) - đúng hành vi "chưa từng gọi solver"
    *  mà mọi test getBatchSuggestions/previewBatch cũ đã ngầm giả định. Test xác minh chính xác
    *  (2026-09-24) truyền `postMock` riêng để giả lập response solver thật. */
   const build = (over: Record<string, unknown> = {}, postMock: jest.Mock = jest.fn()) => {
@@ -100,10 +109,13 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       ...over,
     };
     const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    // SolverClientService giả: `propose(body, timeoutMs)` = postMock (HiGHS là bộ giải duy nhất, không
+    // còn đường http để mock).
+    const configStub = { get: jest.fn() } as unknown as ConfigService<AppConfig, true>;
     service = new CuttingProposalsService(
       prisma as unknown as PrismaServiceType,
-      { post: postMock } as unknown as ExternalApiService,
-      { get: jest.fn() } as unknown as ConfigService<AppConfig, true>,
+      { propose: postMock } as unknown as SolverClientService,
+      configStub,
       { reserve: jest.fn(), getAvailableQty: jest.fn() } as unknown as StockReservationsService,
       // getBatchSuggestions() không đụng tới thông báo - stub rỗng cho đủ tham số constructor.
       { emit: jest.fn() } as unknown as NotificationsService,
@@ -498,10 +510,131 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       expect(okItem?.materials[0].standaloneMinBars).toBeGreaterThan(0);
     });
 
-    it('tick sẵn đúng tổ hợp tối thiểu đủ đạt ngưỡng', async () => {
-      build(twoSkuSharingMaterial());
+    // Luật gộp (2026-10-24): mốc cần sắt cách nhau ≤ solverMergeWindowDays, ≤ solverMergeMaxSkus SKU. 2 SKU của
+    // twoSkuSharingMaterial có mốc 20/08 (id 1) và 28/08 (id 2) - cách 8 ngày - và đều có chip đỏ khi cắt riêng.
+    const withWindow = (days: number, maxSkus = 5) => ({
+      ...twoSkuSharingMaterial(),
+      systemConfig: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          ...config,
+          solverMergeWindowDays: days,
+          solverMergeMaxSkus: maxSkus,
+          solverAllowCustomLength: true,
+        }),
+      },
+    });
+
+    it('tick sẵn ĐÚNG 1 SKU: đơn có chip đỏ với mốc cần sắt sớm nhất (gộp thêm là việc của fix-options)', async () => {
+      build(withWindow(10));
       const res = await service.getBatchCandidates();
-      expect(res.recommendedItemIds.sort()).toEqual(['1', '2']);
+      expect(res.recommendedItemIds).toEqual(['1']);
+    });
+
+    /** Solver giả cho fix-options: tổng đoạn 20 (1 SKU) -> vô nghiệm ở 1 %/cây (tốt nhất 4 %); 35 (2 SKU) -> 0,5 % đạt; dò chiều dài -> 5120;
+     *  đơn gấp (100 %) -> 4 %. */
+    const fixSolver = () =>
+      jest.fn((body: Record<string, unknown>) => {
+        const qty = (body.bom as Array<{ qty_per_part: number }>).reduce(
+          (a, r) => a + r.qty_per_part,
+          0,
+        );
+        const ok = (pct: number, len = 6000) => ({
+          purchase_plan: [
+            {
+              material: '200',
+              feasible: true,
+              waste_percentage: pct,
+              total_bars: 3,
+              best_stock_length: len,
+              over_threshold: false,
+            },
+          ],
+        });
+        if (body.auto_scan === true) return Promise.resolve(ok(0.3, 5120));
+        if (body.max_waste_percentage === 100) return Promise.resolve(ok(4));
+        if (qty > 20) return Promise.resolve(ok(0.5));
+        return Promise.resolve({
+          purchase_plan: [
+            {
+              material: '200',
+              feasible: false,
+              best_achievable: { length: 6000, waste_pct: 4, bars: 3 },
+            },
+          ],
+        });
+      });
+
+    it('fix-options: loại sắt vượt ở cây chuẩn -> gợi ý gộp đơn trong cửa sổ, đặt cây riêng, đơn gấp; "thêm tất cả"', async () => {
+      build(withWindow(10), fixSolver());
+      const res = await service.getBatchFixOptions({ productionInvoiceItemIds: ['1'] });
+      expect(res).toMatchObject({
+        ruleOk: true,
+        count: 1,
+        windowDays: 10,
+        maxSkus: 5,
+        addAllItemIds: ['2'],
+      });
+      expect(res.materials[0]).toMatchObject({
+        materialId: '200',
+        status: 'over',
+        verifiedLengthSource: 'scan',
+        addSuggestion: { itemIds: ['2'], wastePct: 0.5, meetsThreshold: true, spanDaysAfter: 8 },
+        customLength: { lengthMm: 5120, wastePct: 0.3 },
+        urgent: { lengthMm: 6000, wastePct: 4 },
+      });
+    });
+
+    it('fix-options: đơn kia ngoài cửa sổ (8 > 7 ngày) -> không gợi ý gộp, nói rõ vì sao', async () => {
+      build(withWindow(7), fixSolver());
+      const res = await service.getBatchFixOptions({ productionInvoiceItemIds: ['1'] });
+      expect(res.materials[0].addSuggestion).toBeNull();
+      expect(res.materials[0].addReason).toContain('trong khung 7 ngày');
+      expect(res.addAllItemIds).toBeNull();
+    });
+
+    it('fix-options: đợt đã đủ trần SKU -> không gộp thêm', async () => {
+      build(withWindow(10, 1), fixSolver());
+      const res = await service.getBatchFixOptions({ productionInvoiceItemIds: ['1'] });
+      expect(res.materials[0].addReason).toContain('đã đủ 1 SKU');
+    });
+
+    it('fix-options: đợt đang QUÁ trần SKU -> nói "quá trần", không nói "đã đủ"', async () => {
+      // solver giả: ở 1 %/cây luôn vô nghiệm (cả khi gộp đủ 2 SKU) -> loại sắt vẫn "over" -> có dòng gộp thêm
+      const alwaysOver = jest.fn((body: Record<string, unknown>) =>
+        Promise.resolve(
+          body.auto_scan === true || body.max_waste_percentage === 100
+            ? {
+                purchase_plan: [
+                  {
+                    material: '200',
+                    feasible: true,
+                    waste_percentage: 4,
+                    total_bars: 3,
+                    best_stock_length: 6000,
+                  },
+                ],
+              }
+            : {
+                purchase_plan: [
+                  {
+                    material: '200',
+                    feasible: false,
+                    best_achievable: { length: 6000, waste_pct: 4, bars: 3 },
+                  },
+                ],
+              },
+        ),
+      );
+      build(withWindow(10, 1), alwaysOver);
+      const res = await service.getBatchFixOptions({ productionInvoiceItemIds: ['1', '2'] });
+      expect(res.materials[0].addReason).toContain('Đợt đang có 2 SKU, quá trần 1 SKU');
+    });
+
+    it('fix-options: đợt đang chọn vi phạm luật gộp -> ruleOk=false kèm câu báo', async () => {
+      build(withWindow(7), fixSolver());
+      const res = await service.getBatchFixOptions({ productionInvoiceItemIds: ['1', '2'] });
+      expect(res.ruleOk).toBe(false);
+      expect(res.ruleReason).toContain('cách nhau 8 ngày');
     });
 
     it('SKU chưa có định mức ACTIVE vẫn hiện ra, có cờ hasActiveBom=false', async () => {
@@ -616,7 +749,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       // Chiều dài quyết định loại sắt nào BỊ COI LÀ vượt ngưỡng, mà gợi ý gộp chỉ dựng cho loại
       // vượt ngưỡng - nên recommendedItemIds phải tính trên CÙNG chiều dài với bảng, nếu không hệ
       // thống tick sẵn một nhóm dựa trên cây 6m trong khi bảng đang hiện số của cây 5m85.
-      build(twoSkuSharingMaterial());
+      build(withWindow(10));
       const chon = await service.getBatchCandidates({ '200': 5850 });
 
       // Cả 2 SKU đều dùng loại 200 nên khi ép cây xấu, gợi ý gộp vẫn phải gom đủ 2 SKU.
@@ -688,7 +821,6 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
 
         // auto_scan=false (chỉ hỏi "cây chuẩn có ăn không"), đúng 1 dòng bom (đúng loại sắt này).
         expect(postMock).toHaveBeenCalledWith(
-          expect.stringContaining('/api/v1/de_xuat/propose/'),
           expect.objectContaining({
             auto_scan: false,
             num_sets: 1,
@@ -696,9 +828,178 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
             // demand = qtyPerUnit(20, singleProduct) × quantity(20, mkItem mặc định) = 400.
             bom: [expect.objectContaining({ material: '200', cut_length: 840, qty_per_part: 400 })],
           }) as unknown,
-          expect.anything(),
           expect.any(Number),
         );
+      });
+
+      it('kết quả xác minh được NHỚ qua lần tải trang: gọi lại cùng bài -> không gọi solver lần 2 (2026-10-24)', async () => {
+        const postMock = jest.fn().mockResolvedValue({
+          purchase_plan: [
+            { material: '200', feasible: true, waste_percentage: 0.72, total_bars: 14 },
+          ],
+        });
+        build(singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20'), postMock);
+
+        await service.getBatchCandidates();
+        const again = await service.getBatchCandidates();
+
+        expect(postMock).toHaveBeenCalledTimes(1);
+        expect(again.items[0].materials[0]).toMatchObject({
+          verified: true,
+          standaloneWastePct: 0.72,
+        });
+      });
+
+      it('lượt nhanh không kịp -> chip giữ ước tính (verified=false), KHÔNG nhớ; lượt KIỂM BÙ (deepVerify) giải lại với thời gian dài hơn', async () => {
+        const postMock = jest
+          .fn()
+          .mockRejectedValueOnce(new Error('timeout'))
+          .mockResolvedValue({
+            purchase_plan: [
+              { material: '200', feasible: true, waste_percentage: 0.72, total_bars: 14 },
+            ],
+          });
+        build(singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20'), postMock);
+
+        const fast = await service.getBatchCandidates();
+        expect(fast.items[0].materials[0].verified).toBe(false);
+
+        const deep = await service.getBatchCandidates(undefined, undefined, true);
+        expect(deep.items[0].materials[0]).toMatchObject({
+          verified: true,
+          standaloneWastePct: 0.72,
+        });
+        expect(postMock).toHaveBeenCalledTimes(2);
+        const [firstBody, firstTimeout] = postMock.mock.calls[0] as unknown as [
+          Record<string, unknown>,
+          number,
+        ];
+        const [deepBody, deepTimeout] = postMock.mock.calls[1] as unknown as [
+          Record<string, unknown>,
+          number,
+        ];
+        expect(firstBody.time_limit_seconds).toBe(5);
+        expect(deepBody.time_limit_seconds).toBe(30);
+        expect(deepTimeout).toBeGreaterThan(firstTimeout);
+      });
+
+      it('chọn MC Tự động -> xác minh gửi solver CÙNG máy với đợt (tề/lưỡi MCTĐ + tham số bó)', async () => {
+        const postMock = jest.fn().mockResolvedValue({
+          purchase_plan: [
+            { material: '200', feasible: true, waste_percentage: 0.5, total_bars: 14 },
+          ],
+        });
+        build(singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20'), postMock);
+
+        await service.getBatchCandidates(undefined, 'tu_dong');
+
+        expect(postMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            machine: 'tu_dong',
+            trim_start: 0,
+            blade_width: 2.5,
+            bundle_factors: [14, 16, 18, 20],
+            max_manual_cuts: 5,
+            max_sizes_per_pattern: 5,
+          }) as unknown,
+          expect.any(Number),
+        );
+      });
+
+      it('không chọn máy -> MC Laser của công ty: machine=laser, tề/lưỡi MC Laser, không có tham số bó', async () => {
+        const postMock = jest.fn().mockResolvedValue({
+          purchase_plan: [
+            { material: '200', feasible: true, waste_percentage: 0.5, total_bars: 14 },
+          ],
+        });
+        build(singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20'), postMock);
+
+        await service.getBatchCandidates();
+
+        const body = (postMock.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+        expect(body).toEqual(
+          expect.objectContaining({ machine: 'laser', trim_start: 10, blade_width: 1 }),
+        );
+        expect(body).not.toHaveProperty('bundle_factors');
+      });
+
+      it('kết quả xác minh KHÔNG dùng chung giữa hai máy: cùng nhu cầu, khác máy -> gọi solver riêng với body riêng', async () => {
+        const postMock = jest.fn().mockResolvedValue({
+          purchase_plan: [
+            { material: '200', feasible: true, waste_percentage: 0.5, total_bars: 14 },
+          ],
+        });
+        build(singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20'), postMock);
+
+        await service.getBatchCandidates(undefined, 'laser');
+        await service.getBatchCandidates(undefined, 'tu_dong');
+
+        expect(postMock).toHaveBeenCalledTimes(2);
+        const bodies = (postMock.mock.calls as unknown as [Record<string, unknown>][]).map(
+          (c) => c[0],
+        );
+        expect(bodies.map((b) => b.machine)).toEqual(['laser', 'tu_dong']);
+        expect(bodies.map((b) => b.blade_width)).toEqual([1, 2.5]);
+      });
+
+      it('nhiều SKU cùng loại sắt + cùng nhu cầu -> gọi solver ĐÚNG 1 lần, mọi dòng dùng chung kết quả', async () => {
+        // 2026-10-21: [30×120, 60×240] lặp ở 11 SKU từng chiếm 73/79 s của trang (giải trùng 11 lần).
+        const postMock = jest.fn().mockResolvedValue({
+          purchase_plan: [
+            {
+              material: '200',
+              feasible: true,
+              waste_percentage: 0.72,
+              total_bars: 14,
+              best_stock_length: 6000,
+              over_threshold: false,
+            },
+          ],
+        });
+        const base = singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20');
+        build(
+          {
+            ...base,
+            // 3 SKU, cùng sản phẩm/BOM và cùng số lượng -> cùng nhu cầu 400 đoạn 840 mm cho loại 200.
+            productionInvoiceItem: {
+              findMany: jest
+                .fn()
+                .mockResolvedValue([mkItem({ id: 1n }), mkItem({ id: 2n }), mkItem({ id: 3n })]),
+            },
+          },
+          postMock,
+        );
+
+        const res = await service.getBatchCandidates();
+        const mats = res.items.flatMap((i) => i.materials);
+        expect(mats).toHaveLength(3);
+        expect(mats.every((m) => m.verified && m.standaloneWastePct === 0.72)).toBe(true);
+        expect(postMock).toHaveBeenCalledTimes(1);
+      });
+
+      it('khác nhu cầu -> mỗi nhu cầu 1 lần gọi riêng (không gộp nhầm)', async () => {
+        const postMock = jest.fn().mockResolvedValue({ purchase_plan: [] });
+        const base = singleProduct(STEEL_20X20, 840, 20, 'STL-VUONG-20X20');
+        build(
+          {
+            ...base,
+            productionInvoiceItem: {
+              findMany: jest
+                .fn()
+                .mockResolvedValue([
+                  mkItem({ id: 1n, quantity: 20 }),
+                  mkItem({ id: 2n, quantity: 21 }),
+                ]),
+            },
+          },
+          postMock,
+        );
+
+        await service.getBatchCandidates();
+        expect(postMock).toHaveBeenCalledTimes(2);
+        const calls = postMock.mock.calls as Array<[{ bom: Array<{ qty_per_part: number }> }]>;
+        const qtys = calls.map((c) => c[0].bom[0].qty_per_part);
+        expect(qtys.sort()).toEqual([400, 420]);
       });
 
       it('feasible=false nhưng có best_achievable -> vẫn là số THẬT, verified=true, overThreshold=true', async () => {
