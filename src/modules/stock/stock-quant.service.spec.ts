@@ -75,7 +75,7 @@ describe('StockQuantService', () => {
 
     const result = await service.findAll({ warehouseId: '1' });
 
-    // 5 tham số sau onHand: chiều dài cây (giữ hành vi cũ = undefined), excludeRefTypes, quy cách của dòng tồn.
+    // 5 tham số sau onHand: chiều dài cây (giữ hành vi cũ = undefined), ownProductionInvoiceId (undefined = trừ mọi giữ chỗ), quy cách của dòng tồn.
     expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
       undefined,
       1n,

@@ -12,7 +12,6 @@ import {
   Prisma,
   ProductionOrder,
   StockLedgerRefType,
-  StockReservationRefType,
 } from '../../generated/prisma/client';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import {
@@ -201,21 +200,20 @@ export class PackagingIssuesService {
         FOR UPDATE
       `;
       const onHand = stockRow?.qty.toNumber() ?? 0;
-      // Loại 2 refType đề xuất mua tự động (2026-09-23, đính chính sau live-test phát hiện bug thật
-      // ở MaterialIssuesService/MaterialYieldIssuesService cho cùng lớp lỗi) - đây CHÍNH LÀ vật tư
-      // mà ConsumableMaterialPurchaseService đã giữ chỗ (nhánh BomAccessoryItem kind=PACKAGING),
-      // không phải "ai đó khác đang giành tồn" như WarehouseTransferReservation - trừ nhầm vào đây
-      // làm available tụt dù tồn vật lý còn nguyên. Xem doc comment getAvailableQty().
+      // Chỉ trừ giữ chỗ của PI KHÁC (2026-10-27) - cùng lý do MaterialIssuesService.create(): phần
+      // hàng đã giữ/mua cho CHÍNH PI này không được chặn xuất của nó nhưng phải chặn PI khác lấy mất.
+      // Xem doc comment getAvailableQty().
+      const piItem = await tx.productionInvoiceItem.findUniqueOrThrow({
+        where: { id: order.productionInvoiceItemId },
+        select: { productionInvoiceId: true },
+      });
       const availableQty = await this.stockReservationsService.getAvailableQty(
         tx,
         sourceWarehouse.id,
         materialBigId,
         onHand,
         undefined,
-        [
-          StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
-          StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
-        ],
+        piItem.productionInvoiceId!,
       );
       if (dto.issuedQty > availableQty) {
         throw new ConflictException(
@@ -244,10 +242,6 @@ export class PackagingIssuesService {
       // mua (2026-09-23, cùng lý do/cùng idiom MaterialIssuesService.create() - xem doc comment
       // StockReservationsService.drainPoolBestEffort()). Dùng lại idiom findUniqueOrThrow() của
       // assertItemPiHasActiveFloor()/assertItemPiHasActiveFloorLocked (floor-gate.util.ts).
-      const piItem = await tx.productionInvoiceItem.findUniqueOrThrow({
-        where: { id: order.productionInvoiceItemId },
-        select: { productionInvoiceId: true },
-      });
       await this.stockReservationsService.drainPoolBestEffort(tx, {
         productionInvoiceId: piItem.productionInvoiceId!,
         materialId: materialBigId,

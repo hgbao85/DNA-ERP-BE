@@ -410,13 +410,10 @@ describe('StockReservationsService', () => {
       });
     });
 
-    // 2026-09-23 (đính chính sau live-test phát hiện bug thật): MaterialIssuesService/
-    // MaterialYieldIssuesService.create() gọi getAvailableQty() để tránh giành tồn với chuyển kho
-    // nội bộ - KHÔNG có ý định bị chặn bởi CHÍNH giữ chỗ mà đề xuất mua của vật tư đó vừa tạo ra
-    // (ConsumableMaterialPurchaseService/PieceMaterialYieldPurchaseService). Tái hiện live: 2 PI
-    // cùng giữ chỗ cộng đúng bằng onHand -> available=0 dù tồn vật lý còn nguyên, xuất bị chặn 409
-    // sai. excludeRefTypes cho phép caller loại các refType đó khỏi phép trừ.
-    it('excludeRefTypes - loại đúng refType truyền vào khỏi phép trừ StockReservation', async () => {
+    // 2026-10-27: các luồng xuất vật tư (tiêu hao/đóng gói/vật tư thành phẩm/đan) truyền PI đang xuất -
+    // chỉ giữ chỗ của PI KHÁC (hoặc không neo PI nào) bị trừ. Thay cho excludeRefTypes cũ (loại cả đề
+    // xuất mua của MỌI PI nên PI khác lấy mất hàng; còn PRODUCTION_INVOICE không loại nên chính PI bị chặn).
+    it('ownProductionInvoiceId - chỉ lọc giữ chỗ của PI KHÁC hoặc không neo PI nào (giữ chỗ của chính PI bị bỏ khỏi phép trừ)', async () => {
       prisma.stockReservation.findMany.mockResolvedValue([
         { quantity: decimal(15), consumedQty: decimal(0) },
       ]);
@@ -426,26 +423,27 @@ describe('StockReservationsService', () => {
         30n,
         20,
         undefined,
-        ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'],
+        500n,
       );
       expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            refType: { notIn: ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'] },
+            OR: [{ productionInvoiceId: null }, { productionInvoiceId: { not: 500n } }],
           }) as unknown,
         }),
       );
       // Mock không thực sự lọc theo where (giả lập DB thật) - phép trừ ở service dùng nguyên kết
       // quả mock trả về, test này chỉ xác nhận ĐÚNG where đã gửi đi cho Postgres tự lọc.
-      expect(result).toBe(5); // 20 - 15 (mock không tự lọc, chỉ xác nhận where truyền đúng)
+      expect(result).toBe(5); // 20 - 15
     });
 
-    it('không truyền excludeRefTypes -> KHÔNG thêm điều kiện refType (giữ nguyên hành vi cũ)', async () => {
+    it('không truyền ownProductionInvoiceId -> KHÔNG thêm điều kiện PI (trừ MỌI giữ chỗ, giữ nguyên hành vi cũ)', async () => {
       await service.getAvailableQty(prisma as unknown as PrismaTx, 800n, 30n, 20);
       const [args] = prisma.stockReservation.findMany.mock.calls[0] as [
         { where: Record<string, unknown> },
       ];
-      expect(args.where.refType).toBeUndefined();
+      expect(args.where.OR).toBeUndefined();
+      expect(args.where.productionInvoiceId).toBeUndefined();
     });
   });
 

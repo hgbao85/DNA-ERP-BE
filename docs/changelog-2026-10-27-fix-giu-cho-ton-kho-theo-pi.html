@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Sửa giữ chỗ tồn kho vật tư tiêu hao theo PI</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7; --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2; --code-bg:#F4F5F5;
+  --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226; --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B; --code-bg:#20272A;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226; --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B; --code-bg:#20272A;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+body{margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans); line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased}
+code{font-family:var(--mono); background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+.page{max-width:900px; margin:0 auto; padding:2rem 16px 4rem}
+header.hero{margin-bottom:1.6rem}
+header.hero .kicker{font-family:var(--mono); font-size:.78rem; color:var(--ink-soft); letter-spacing:.02em}
+header.hero h1{font-family:var(--serif); font-size:1.9rem; line-height:1.25; margin:.3rem 0 .6rem}
+header.hero p{margin:0; color:var(--ink-soft)}
+section{background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); padding:1.3rem 1.5rem; margin:0 0 1.2rem}
+h2{font-family:var(--serif); font-size:1.28rem; margin:0 0 .7rem}
+h3{font-size:1rem; margin:1.1rem 0 .4rem}
+p{margin:.5rem 0}
+ul,ol{margin:.4rem 0 .6rem; padding-left:1.3rem}
+li{margin:.25rem 0}
+.tag{display:inline-block; font-family:var(--mono); font-size:.72rem; padding:.1rem .5rem; border-radius:99px; vertical-align:middle; margin-right:.3rem}
+.tag.add{background:var(--add-bg); color:var(--add)}
+.tag.chg{background:var(--chg-bg); color:var(--chg)}
+.tag.del{background:var(--del-bg); color:var(--del)}
+.callout{border-left:4px solid var(--accent); background:var(--accent-bg); color:var(--ink); padding:.7rem 1rem; border-radius:0 8px 8px 0; margin:.8rem 0}
+.callout.ok{border-color:var(--add); background:var(--add-bg)}
+.callout.warn{border-color:var(--chg); background:var(--chg-bg)}
+table{width:100%; border-collapse:collapse; margin:.6rem 0; font-size:.93rem; display:block; overflow-x:auto}
+th,td{text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--line); vertical-align:top}
+th{font-size:.8rem; color:var(--ink-soft); font-weight:600; white-space:nowrap}
+.theme{position:fixed; top:10px; right:12px; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px; padding:.3rem .7rem; font-size:.8rem; cursor:pointer}
+@media (max-width:560px){ header.hero h1{font-size:1.5rem} section{padding:1rem} }
+</style>
+</head>
+<body>
+<button class="theme" type="button" onclick="toggleTheme()">Sáng / Tối</button>
+<div class="page">
+
+<header class="hero">
+  <div class="kicker">DNA-ERP-BE · 2026-10-27 · Kho / Giữ chỗ tồn kho</div>
+  <h1>Sửa giữ chỗ tồn kho vật tư tiêu hao theo PI</h1>
+  <p>Hai lỗi ở khâu xuất kho vật tư (sơn, dây, đinh, bao bì…) đã được sửa và kiểm tra trên Postgres thử nghiệm. Chưa kiểm tra trên dữ liệu thật.</p>
+</header>
+
+<section id="tom-tat">
+  <h2>1. Tóm tắt</h2>
+  <table>
+    <tr><th>#</th><th>Hiện tượng người dùng thấy</th><th>Trạng thái</th></tr>
+    <tr><td>1</td><td>PI đã mua hàng về, nhưng chính PI đó xuất vật tư lại bị báo <code>Tồn kho khả dụng (0) không đủ xuất…</code> dù kho còn đủ.</td><td><span class="tag add">Đã sửa</span></td></tr>
+    <tr><td>2</td><td>Hàng vừa mua cho PI này bị PI khác xuất mất. Cùng một lô hàng, có lúc được giữ chặt, có lúc ai xuất trước thì lấy.</td><td><span class="tag add">Đã sửa</span></td></tr>
+    <tr><td>3</td><td>Tính lại đề xuất mua <em>sau khi đã xuất một phần</em> sẽ mua thừa và giữ chỗ thiếu (xem mục 6).</td><td><span class="tag chg">Biết, chưa sửa</span></td></tr>
+  </table>
+  <div class="callout ok">Ví dụ báo từ DB test: PI-2026-022 có “Sơn LIVE 01” tồn thật 100, đang giữ đúng 100 cho chính PI này nhưng xuất sơn vẫn báo khả dụng 0. PI-029, 037, 038 cũng vậy. Các PI này chưa được đối chiếu lại trên dữ liệu thật sau khi sửa.</div>
+</section>
+
+<section id="nguyen-nhan">
+  <h2>2. Nguyên nhân</h2>
+  <p>Khi hàng mua về, hệ thống ghi một dòng “giữ chỗ” cho PI đã mua. Lúc xuất, kho tính <em>tồn khả dụng = tồn thật − tổng giữ chỗ</em>. Phép tính cũ xử lý hai loại dòng giữ chỗ không nhất quán:</p>
+  <ul>
+    <li><strong>Lỗi 1.</strong> Khi hàng về mà PI chưa có dòng giữ nào (kho hết lúc tính đề xuất), hàng được ghi vào dòng loại <code>PRODUCTION_INVOICE</code> cho cả PI. Xuất tiêu hao và xuất đóng gói trừ dòng này mà <strong>không cộng lại phần của chính PI</strong>, nên khả dụng về 0. Xuất đan và xuất vật tư thành phẩm đã được vá lỗi cùng loại ngày 05/10 bằng cách cộng lại; hai luồng kia thì chưa.</li>
+    <li><strong>Lỗi 2.</strong> Khi lúc tính đề xuất kho còn ít hàng, hàng về được cộng vào dòng loại <code>CONSUMABLE_MATERIAL_PURCHASE</code>. Mọi luồng xuất đều <strong>bỏ qua loại này cho mọi PI</strong> (để tránh lỗi live-test 23/09), nên PI khác thấy hàng đó là tồn tự do và lấy được.</li>
+  </ul>
+  <p>Gốc chung: cách cũ lọc theo <em>loại</em> giữ chỗ, trong khi điều cần phân biệt là giữ chỗ đó của <em>PI nào</em>.</p>
+</section>
+
+<section id="cach-sua">
+  <h2>3. Cách sửa</h2>
+  <p><span class="tag chg">BE</span><code>StockReservationsService.getAvailableQty()</code> không còn nhận <code>excludeRefTypes</code>. Thay vào đó nhận <code>ownProductionInvoiceId</code> (PI đang xuất):</p>
+  <div class="callout"><strong>Quy tắc mới:</strong> PI đang xuất chỉ bị chặn bởi giữ chỗ của <strong>PI khác</strong> (hoặc giữ chỗ không gắn PI nào) và giữ chỗ chuyển kho nội bộ. Phần giữ cho chính PI này không bị trừ.</div>
+  <ul>
+    <li>Không truyền <code>ownProductionInvoiceId</code> = trừ mọi giữ chỗ như cũ. Các luồng tính đề xuất mua, duyệt phương án cắt, chuyển kho và hiển thị tồn kho không đổi hành vi.</li>
+    <li>Truyền PI đang xuất vào cả 4 luồng xuất. Hai luồng đã vá tay ngày 05/10 bỏ đoạn cộng-lại <code>ownPiRemaining</code> vì cách mới thay thế nó.</li>
+  </ul>
+  <table>
+    <tr><th>Luồng xuất</th><th>File</th><th>Thay đổi</th></tr>
+    <tr><td>Xuất tiêu hao (Hàn/Sơn)</td><td><code>material-issues.service.ts</code></td><td>Truyền PI; bỏ lọc theo loại</td></tr>
+    <tr><td>Xuất đóng gói</td><td><code>packaging-issues.service.ts</code></td><td>Truyền PI; bỏ lọc theo loại</td></tr>
+    <tr><td>Xuất vật tư thành phẩm</td><td><code>material-yield-issues.service.ts</code></td><td>Truyền PI; bỏ <code>ownPiRemaining</code></td></tr>
+    <tr><td>Xuất kèm mảnh khi đan</td><td><code>weaving-issues.service.ts</code></td><td>Truyền PI; bỏ <code>ownPiRemaining</code></td></tr>
+    <tr><td>Lõi tính khả dụng</td><td><code>stock-reservations.service.ts</code></td><td>Tham số mới <code>ownProductionInvoiceId</code></td></tr>
+  </table>
+  <p>Không có migration, không đổi dữ liệu. Các dòng giữ chỗ đang có trên DB thật không cần xử lý, chỉ cần triển khai code mới.</p>
+</section>
+
+<section id="kiem-thu">
+  <h2>4. Kiểm thử</h2>
+  <h3>Test tích hợp trên Postgres thật</h3>
+  <p>File <code>test/integration/reservation-own-pi.integration.spec.ts</code>, chạy trên DB thử nghiệm riêng (<code>docker-compose.test.yml</code>, cổng 5433, dữ liệu trong RAM, không đụng DB đang dùng). Gọi thật <code>MaterialIssuesService.create()</code>, <code>creditPool()</code>, <code>reserveOrAdjust()</code> và <code>ConsumableMaterialPurchaseService</code>. Chỉ mock thông báo và realtime.</p>
+  <table>
+    <tr><th>Kịch bản</th><th>Trước khi sửa</th><th>Sau khi sửa</th></tr>
+    <tr><td>Kho có 100, hàng về cho PI A, PI A xuất 10</td><td>409 “khả dụng (0)”</td><td>Xuất được</td></tr>
+    <tr><td>Kho 30 + mua 70 về cho PI A, PI B xuất 100</td><td>PI B xuất thành công, lấy mất hàng</td><td>PI B bị chặn</td></tr>
+    <tr><td>Tính lại đề xuất sau khi hàng về</td><td>—</td><td>Giữ chỗ vẫn đủ 100 cho PI A, <code>buyQty</code> = 0</td></tr>
+    <tr><td>Xuất 20/100 rồi tính lại</td><td colspan="2">Còn lỗi (mục 6), test đánh dấu <code>it.failing</code></td></tr>
+  </table>
+  <h3>Test đơn vị</h3>
+  <p>Các suite stock, tiêu hao, đóng gói, vật tư thành phẩm, đan và mua hàng tiêu hao: 318 test pass. Spec cũ bám vào <code>excludeRefTypes</code> đã được viết lại theo hành vi mới. Hai suite <code>production-invoices.service.spec</code> và <code>solver-override.dto.spec</code> fail cả trên bản gốc chưa sửa (thiếu <code>SolverMachine</code> trong Prisma client đã sinh), không do thay đổi này.</p>
+</section>
+
+<section id="chua-lam">
+  <h2>5. Chưa kiểm chứng / chưa làm</h2>
+  <ul>
+    <li><strong>Dữ liệu thật:</strong> chưa xem được DB thật. Sau khi triển khai, nên thử xuất sơn cho PI-2026-022, 029, 037, 038.</li>
+    <li><strong>Xuất đóng gói:</strong> sửa cùng cách với tiêu hao nhưng mới có test đơn vị, chưa chạy trên DB thật (cần dựng thêm dữ liệu chuyền kiểm).</li>
+    <li><strong>Màn hình tồn kho:</strong> con số “khả dụng” ở <code>StockQuantService</code> vẫn trừ mọi giữ chỗ, kể cả của chính PI. Có thể hiện 0 trong khi PI giữ hàng vẫn xuất được. Chưa đổi vì chưa rõ màn này phục vụ ai.</li>
+    <li><strong>Xuất vật tư thành phẩm theo công thức (<code>MaterialYieldRecipeIssuesService</code>):</strong> luồng này không kiểm tra giữ chỗ, chỉ nhìn tồn thô (ghi chú trong code nói là cố ý đơn giản hóa), nên PI khác vẫn có thể lấy hàng ở luồng này. Ngoài phạm vi lần sửa.</li>
+  </ul>
+</section>
+
+<section id="loi-da-biet">
+  <h2>6. Lỗi đã biết, chưa sửa: mua thừa khi tính lại sau khi đã xuất</h2>
+  <p><code>ConsumableMaterialPurchaseService</code> coi nhu cầu (<code>required</code>) là <strong>tổng</strong> định mức của PI, không trừ phần đã xuất.</p>
+  <p>Ví dụ: PI A cần 100, kho 100 và giữ đủ. PI A xuất 20, kho còn 80. Nếu lúc đó nhu cầu được tính lại, hệ thống thấy “cần 100, có 80” và kết luận thiếu 20:</p>
+  <table>
+    <tr><th></th><th>Đúng ra</th><th>Thực tế</th></tr>
+    <tr><td>Đề xuất mua thêm</td><td>0</td><td>20 (mua thừa)</td></tr>
+    <tr><td>Giữ chỗ còn lại cho PI A</td><td>80</td><td>60 (PI khác có thể lấy 20)</td></tr>
+  </table>
+  <div class="callout warn"><strong>Mức độ: thấp.</strong> Sau khi Sếp duyệt (<code>approveItem</code> cho PI thường chỉ có 1 SKU, <code>approveBatch</code> duyệt cả PI gộp một lần), nhu cầu chỉ được tính một lần, lúc chưa xuất gì. Đường tính lại duy nhất đã thấy trong code là <code>retryProductionOrder()</code> (Admin chạy lại để cứu SKU kẹt không tạo được lệnh sản xuất). Không có nút hay route tính lại thủ công cho vật tư tiêu hao. Lỗi này có từ trước và không liên quan thay đổi ở trên.</div>
+  <p><strong>Hướng sửa khi cần:</strong> trừ phần đã xuất khỏi <code>required</code>, theo phiếu xuất thật ở ba bảng <code>MaterialIssue</code> (sơn), <code>PackagingIssue</code> (bao bì) và <code>WeavingIssueMaterial</code> (dây, đinh). Phụ kiện không phải bao bì chưa rõ ghi xuất ở đâu. Cách đơn giản hơn là trừ theo <code>consumedQty</code> của dòng giữ chỗ, nhưng số này được ghi theo kiểu best-effort nên có thể thiếu.</p>
+  <p>Test cho lỗi này nằm sẵn trong file test tích hợp ở dạng <code>it.failing</code>. Khi sửa xong, đổi lại thành <code>it</code>.</p>
+</section>
+
+<section id="tep">
+  <h2>7. Tệp thay đổi</h2>
+  <ul>
+    <li><span class="tag chg">sửa</span><code>src/modules/stock/stock-reservations.service.ts</code></li>
+    <li><span class="tag chg">sửa</span><code>src/modules/material-issues/material-issues.service.ts</code></li>
+    <li><span class="tag chg">sửa</span><code>src/modules/packaging-issues/packaging-issues.service.ts</code></li>
+    <li><span class="tag chg">sửa</span><code>src/modules/material-yield-issues/material-yield-issues.service.ts</code></li>
+    <li><span class="tag chg">sửa</span><code>src/modules/weaving-issues/weaving-issues.service.ts</code></li>
+    <li><span class="tag chg">sửa</span>Các file <code>*.spec.ts</code> tương ứng và <code>stock-quant.service.spec.ts</code></li>
+    <li><span class="tag add">mới</span><code>test/integration/reservation-own-pi.integration.spec.ts</code></li>
+  </ul>
+</section>
+
+</div>
+<script>
+function toggleTheme(){
+  var root = document.documentElement;
+  var dark = root.getAttribute('data-theme') === 'dark' ||
+    (!root.hasAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  root.setAttribute('data-theme', dark ? 'light' : 'dark');
+}
+</script>
+</body>
+</html>

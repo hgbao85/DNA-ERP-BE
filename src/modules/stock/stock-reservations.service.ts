@@ -461,17 +461,16 @@ export class StockReservationsService {
     materialId: bigint,
     onHand: number,
     stockLengthMm?: number,
-    /** 2026-09-23 (đính chính sau khi live-test phát hiện bug thật): MaterialIssuesService/
-     *  MaterialYieldIssuesService.create() gọi hàm này để tránh giành tồn với chuyển kho nội bộ
-     *  (WarehouseTransferReservation) - KHÔNG có ý định (và trước 2026-09-23 CHƯA BAO GIỜ áp
-     *  dụng thật, vì CUTTING_PROPOSAL chỉ tồn tại cho vật tư sắt, 2 service này không đụng sắt)
-     *  bị chặn bởi CHÍNH giữ chỗ mà đề xuất mua của material đó vừa tạo ra. Từ khi
-     *  ConsumableMaterialPurchaseService/PieceMaterialYieldPurchaseService bắt đầu ghi
-     *  StockReservation cho ĐÚNG những vật tư 2 service issue này xử lý, giữ chỗ CỦA CHÍNH PI
-     *  đang xuất cũng bị trừ vào available, có thể trừ hết sạch dù tồn vật lý còn nguyên (tái
-     *  hiện qua live-test 2026-09-23: 2 PI giữ chỗ cộng đúng bằng onHand -> available=0, xuất bị
-     *  chặn 409 dù vật lý còn đủ) - 2 refType này PHẢI bị loại khỏi phép trừ tại đây. */
-    excludeRefTypes?: StockReservationRefType[],
+    /** PI đang XUẤT (2026-10-27) - các luồng xuất vật tư tiêu hao/đóng gói/vật tư thành phẩm/đan chỉ
+     *  được bị chặn bởi giữ chỗ của PI KHÁC (hoặc giữ chỗ không neo PI nào), KHÔNG bị chặn bởi chính
+     *  phần đã giữ cho PI này: hàng PI này vừa mua về (creditPool) nằm ở dòng giữ chỗ của CHÍNH nó, xuất
+     *  cho chính nó phải được, còn PI khác thì phải bị chặn (không lấy mất hàng đã mua cho PI này).
+     *  Thay cho excludeRefTypes cũ (loại cả CONSUMABLE_MATERIAL_PURCHASE/PIECE_MATERIAL_YIELD_PURCHASE
+     *  của MỌI PI nên PI khác lấy mất hàng; còn PRODUCTION_INVOICE thì không loại nên chính PI bị chặn).
+     *  Không truyền = trừ MỌI giữ chỗ (đề xuất mua/chuyển kho/duyệt phương án tính available của PI nào
+     *  cũng phải thấy phần PI khác đã giữ). Tái hiện live-test 2026-09-23: 2 PI giữ chỗ cộng đúng bằng
+     *  onHand - mỗi PI xuất phần của mình vẫn được vì phần của PI kia mới bị trừ. */
+    ownProductionInvoiceId?: bigint,
     /** Quy cách của bucket đang tính available ('' / bỏ trống = không quy cách) - phải khớp đúng bucket của `onHand`. */
     spec?: string,
   ): Promise<number> {
@@ -484,7 +483,14 @@ export class StockReservationsService {
           status: ReservationStatus.ACTIVE,
           stockLengthMm: stockLengthMm ?? 0,
           spec: spec?.trim() ?? '',
-          ...(excludeRefTypes?.length ? { refType: { notIn: excludeRefTypes } } : {}),
+          ...(ownProductionInvoiceId !== undefined
+            ? {
+                OR: [
+                  { productionInvoiceId: null },
+                  { productionInvoiceId: { not: ownProductionInvoiceId } },
+                ],
+              }
+            : {}),
         },
         select: { quantity: true, consumedQty: true },
       }),

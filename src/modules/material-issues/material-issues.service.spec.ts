@@ -394,7 +394,7 @@ describe('MaterialIssuesService', () => {
         30n,
         100,
         undefined,
-        ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'],
+        500n, // PI đang xuất - chỉ trừ giữ chỗ của PI KHÁC
       );
     });
 

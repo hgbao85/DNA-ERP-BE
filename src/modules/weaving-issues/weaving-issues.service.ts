@@ -15,9 +15,7 @@ import {
   Piece,
   Prisma,
   ProductionOrder,
-  ReservationStatus,
   StockLedgerRefType,
-  StockReservationRefType,
   SteelSubGroup,
   TransferStatus,
   WeavingPoint,
@@ -334,40 +332,18 @@ export class WeavingIssuesService {
         FOR UPDATE
       `;
       const onHand = stockRow?.qty.toNumber() ?? 0;
-      // Loại 2 refType đề xuất mua tự động (2026-09-23, đính chính sau live-test) - đây CHÍNH LÀ
-      // vật tư mà ConsumableMaterialPurchaseService đã giữ chỗ (nhánh PieceMaterialItem: Dây/Đinh/
-      // Nút nhựa), cùng lý do MaterialIssuesService/PackagingIssuesService. Xem doc comment
+      // Chỉ trừ giữ chỗ của PI KHÁC (2026-10-27, thay cho ownPiRemaining cộng-lại cũ - sửa từ
+      // 2026-10-05 "tồn khả dụng 0 dù tồn thực 240 Dây, toàn bộ bị giữ bởi PI-2026-001 chính nó"
+      // chỉ phủ PRODUCTION_INVOICE và loại cả đề xuất mua của PI khác). Xem doc comment
       // getAvailableQty().
-      const availableOutsideOwnPi = await this.stockReservationsService.getAvailableQty(
+      const availableQty = await this.stockReservationsService.getAvailableQty(
         tx,
         material.warehouseId,
         materialBigId,
         onHand,
         undefined,
-        [
-          StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
-          StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
-        ],
+        productionInvoiceId,
       );
-      // Giữ chỗ PRODUCTION_INVOICE của CHÍNH PI đang đan (tạo lúc duyệt PI, giữ TOÀN BỘ định mức
-      // Dây/Đinh) không được chặn việc mang kèm của chính PI đó - cộng lại phần còn lại. Cùng lỗi
-      // đã sửa ở MaterialYieldIssuesService.create() (2026-10-05, test sống: "tồn khả dụng 0" dù
-      // tồn thực 240 Dây, toàn bộ bị giữ bởi PI-2026-001 chính nó).
-      const ownPiReservations = await tx.stockReservation.findMany({
-        where: {
-          warehouseId: material.warehouseId,
-          materialId: materialBigId,
-          status: ReservationStatus.ACTIVE,
-          refType: StockReservationRefType.PRODUCTION_INVOICE,
-          refId: productionInvoiceId.toString(),
-        },
-        select: { quantity: true, consumedQty: true },
-      });
-      const ownPiRemaining = ownPiReservations.reduce(
-        (sum, r) => sum + Math.max(0, r.quantity.toNumber() - r.consumedQty.toNumber()),
-        0,
-      );
-      const availableQty = Math.min(onHand, availableOutsideOwnPi + ownPiRemaining);
       if (line.qty > availableQty) {
         throw new ConflictException(
           `Tồn kho khả dụng (${availableQty}) không đủ mang kèm ${line.qty} vật tư ${material.code} - kiểm tra lại tồn kho thực tế trước khi xuất`,

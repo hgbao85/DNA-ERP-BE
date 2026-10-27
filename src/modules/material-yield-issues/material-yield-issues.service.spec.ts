@@ -35,7 +35,6 @@ describe('MaterialYieldIssuesService', () => {
     };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
-    stockReservation: { findMany: jest.Mock };
     material: { findUnique: jest.Mock };
     pieceMaterialYield: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
@@ -114,7 +113,6 @@ describe('MaterialYieldIssuesService', () => {
       productionInvoiceItem: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceId: 500n }),
       },
-      stockReservation: { findMany: jest.fn().mockResolvedValue([]) },
       material: { findUnique: jest.fn().mockResolvedValue(material) },
       pieceMaterialYield: { findMany: jest.fn().mockResolvedValue([yieldRow]) },
       bomPiece: { findMany: jest.fn().mockResolvedValue([bomPieceRow]) },
@@ -250,19 +248,24 @@ describe('MaterialYieldIssuesService', () => {
         80n,
         100,
         undefined,
-        ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'],
+        500n, // PI đang xuất - chỉ trừ giữ chỗ của PI KHÁC
       );
     });
 
-    it('giữ chỗ PRODUCTION_INVOICE của CHÍNH PI đang xuất không chặn việc xuất của PI đó (cộng lại phần còn lại)', async () => {
+    it('giữ chỗ của CHÍNH PI đang xuất không chặn việc xuất của PI đó (2026-10-27: getAvailableQty tự loại giữ chỗ của PI này qua tham số ownProductionInvoiceId, thay cho cộng-lại ownPiRemaining cũ)', async () => {
       physicalStockQty = 40;
-      stockReservationsService.getAvailableQty.mockResolvedValue(0); // giữ chỗ của chính PI làm available = 0
-      prisma.stockReservation.findMany.mockResolvedValue([
-        { quantity: { toNumber: () => 40 }, consumedQty: { toNumber: () => 0 } },
-      ]);
+      stockReservationsService.getAvailableQty.mockResolvedValue(40); // chỉ còn giữ chỗ của PI khác = 0
       prisma.materialYieldIssue.create.mockResolvedValue(issueRow);
 
       await expect(service.create('1', dto, 'user-1', null)).resolves.toBeDefined();
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        expect.anything(),
+        5n,
+        80n,
+        40,
+        undefined,
+        500n,
+      );
     });
 
     it('ném BadRequestException khi material chưa gán warehouseId', async () => {

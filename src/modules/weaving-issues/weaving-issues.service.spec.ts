@@ -4,7 +4,6 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { StockReservationRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { WeavingIssuesService } from './weaving-issues.service';
 import { RealtimeService } from '../../realtime/realtime.service';
@@ -38,7 +37,6 @@ describe('WeavingIssuesService', () => {
     warehouse: { findUniqueOrThrow: jest.Mock; findMany: jest.Mock };
     weavingIssueMaterial: { create: jest.Mock };
     stockQuant: { findMany: jest.Mock };
-    stockReservation: { findMany: jest.Mock };
     warehouseTransferPieceItem: { findMany: jest.Mock; aggregate: jest.Mock };
     $executeRaw: jest.Mock;
     $queryRaw: jest.Mock;
@@ -145,7 +143,6 @@ describe('WeavingIssuesService', () => {
       },
       weavingIssueMaterial: { create: jest.fn() },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
-      stockReservation: { findMany: jest.fn().mockResolvedValue([]) },
       // Số mảnh đã CONFIRMED từ Phân phối nội bộ (2026-09-12, sumReceivedForPiece/receivedByPiece)
       // - create() mặc định dư dả (không chặn test case cũ không quan tâm ràng buộc mới này);
       // getIssuePlan()/getIssuePlanBatch() mặc định rỗng (canIssueQty=0), test case riêng tự override.
@@ -252,7 +249,7 @@ describe('WeavingIssuesService', () => {
         60n,
         50,
         undefined,
-        ['CONSUMABLE_MATERIAL_PURCHASE', 'PIECE_MATERIAL_YIELD_PURCHASE'],
+        500n, // PI đang xuất - chỉ trừ giữ chỗ của PI KHÁC
       );
       expect(prisma.weavingIssueMaterial.create).toHaveBeenCalledWith({
         data: { weavingIssueId: 100n, materialId: 60n, qty: 15 },
@@ -278,15 +275,12 @@ describe('WeavingIssuesService', () => {
       });
     });
 
-    it('2026-10-05: giữ chỗ PRODUCTION_INVOICE của CHÍNH PI (giữ toàn bộ định mức Dây/Đinh) không chặn việc mang kèm của chính PI đó - cộng lại phần còn lại (cùng lỗi đã sửa ở MaterialYieldIssuesService)', async () => {
+    it('2026-10-27: giữ chỗ của CHÍNH PI (giữ toàn bộ định mức Dây/Đinh) không chặn việc mang kèm của chính PI đó - getAvailableQty tự loại giữ chỗ của PI này qua ownProductionInvoiceId (thay cho cộng-lại ownPiRemaining của 2026-10-05)', async () => {
       prisma.weavingIssue.create.mockResolvedValue(issueRow);
       prisma.material.findUnique.mockResolvedValue({ id: 60n, code: 'DAY-001', warehouseId: 900n });
       prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 240 } }]);
-      // Đã loại CONSUMABLE/PIECE_YIELD -> ngoài PI còn 0; toàn bộ 240 đang bị giữ bởi chính PI này
-      stockReservationsService.getAvailableQty.mockResolvedValue(0);
-      prisma.stockReservation.findMany.mockResolvedValue([
-        { quantity: { toNumber: () => 240 }, consumedQty: { toNumber: () => 0 } },
-      ]);
+      // Tồn 240, toàn bộ đang bị giữ bởi chính PI này -> ngoài PI này còn lại 240
+      stockReservationsService.getAvailableQty.mockResolvedValue(240);
 
       await service.create(
         '1',
@@ -300,16 +294,13 @@ describe('WeavingIssuesService', () => {
         null,
       );
 
-      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
-          where: expect.objectContaining({
-            refType: StockReservationRefType.PRODUCTION_INVOICE,
-            refId: '500',
-            warehouseId: 900n,
-            materialId: 60n,
-          }),
-        }),
+      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+        expect.anything(),
+        900n,
+        60n,
+        240,
+        undefined,
+        500n,
       );
       expect(prisma.weavingIssueMaterial.create).toHaveBeenCalled();
       expect(stockLedgerService.postEntry).toHaveBeenCalled();
