@@ -4,6 +4,7 @@ import { PrismaServiceType } from '../../prisma/prisma.service';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BomRevisionStatus, CuttingProposalStatus } from '../../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ProductionOrdersService } from './production-orders.service';
 
 describe('ProductionOrdersService', () => {
@@ -24,6 +25,7 @@ describe('ProductionOrdersService', () => {
   };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
   let notifications: { emit: jest.Mock; resolve: jest.Mock };
+  let stockReservationsService: { releaseByProductionInvoice: jest.Mock };
 
   const activeRevision = { id: 5n, mfgProductId: 2n, status: BomRevisionStatus.ACTIVE };
   const order = (overrides: Record<string, unknown> = {}) => ({
@@ -68,10 +70,15 @@ describe('ProductionOrdersService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    stockReservationsService = { releaseByProductionInvoice: jest.fn().mockResolvedValue(0) };
+    // Mặc định mọi lệnh của PI đã Kết thúc (count chưa-xong = 0) - test riêng của nhả giữ chỗ tự override.
+    prisma.productionOrder.count.mockResolvedValue(0);
+    prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue({ productionInvoiceId: 500n });
     service = new ProductionOrdersService(
       prisma as unknown as PrismaServiceType,
       cls as unknown as ClsService<AppClsStore>,
       notifications as unknown as NotificationsService,
+      stockReservationsService as unknown as StockReservationsService,
     );
     // Mặc định không có bản ACTIVE nào khớp -> bomOutOfDate=false, không phá các test không quan
     // tâm field này - test riêng của bomOutOfDate tự override lại mock này.
@@ -471,6 +478,56 @@ describe('ProductionOrdersService', () => {
 
       await expect(service.finishFloor('999')).rejects.toThrow(NotFoundException);
       expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+      expect(stockReservationsService.releaseByProductionInvoice).not.toHaveBeenCalled();
+    });
+
+    // 2026-10-28: phần giữ chỗ dư của PI đã xong chặn oan PI khác -> nhả khi MỌI lệnh của PI đã Kết thúc.
+    it('mọi lệnh của PI đã Kết thúc -> nhả giữ chỗ còn dư của PI đó', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+      prisma.productionOrder.count.mockResolvedValue(0);
+
+      await service.finishFloor('9');
+
+      expect(prisma.productionOrder.count).toHaveBeenCalledWith({
+        where: {
+          productionInvoiceItem: { productionInvoiceId: 500n },
+          floorStage: { not: 'FINISHED' },
+        },
+      });
+      expect(stockReservationsService.releaseByProductionInvoice).toHaveBeenCalledWith(
+        prisma,
+        500n,
+      );
+    });
+
+    it('PI còn lệnh chưa Kết thúc (vd PI gộp) -> CHƯA nhả giữ chỗ', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+      prisma.productionOrder.count.mockResolvedValue(2);
+
+      await service.finishFloor('9');
+
+      expect(stockReservationsService.releaseByProductionInvoice).not.toHaveBeenCalled();
+    });
+
+    it('nhả giữ chỗ lỗi -> vẫn Kết thúc bình thường (best-effort, chỉ log)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+      stockReservationsService.releaseByProductionInvoice.mockRejectedValue(new Error('db down'));
+
+      const result = await service.finishFloor('9');
+
+      expect(result.floorStage).toBe('FINISHED');
+    });
+
+    it('Tạm dừng/Bắt đầu KHÔNG nhả giữ chỗ (chỉ Kết thúc)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'PAUSED' }));
+
+      await service.pauseFloor('9');
+
+      expect(stockReservationsService.releaseByProductionInvoice).not.toHaveBeenCalled();
     });
   });
 

@@ -17,6 +17,7 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { NotificationsService } from '../notifications/notifications.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ProductionOrderResponseDto } from './dto/production-order-response.dto';
 import { ResyncBomDto } from './dto/resync-bom.dto';
 
@@ -63,6 +64,7 @@ export class ProductionOrdersService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly cls: ClsService<AppClsStore>,
     private readonly notifications: NotificationsService,
+    private readonly stockReservationsService: StockReservationsService,
   ) {}
 
   /**
@@ -408,7 +410,38 @@ export class ProductionOrdersService {
       dto,
       'PRODUCTION_ORDER_FLOOR_FINISHED',
     );
+    await this.releaseReservationsIfPiFinished(updated.productionInvoiceItemId);
     return dto;
+  }
+
+  /**
+   * 2026-10-28: khi MỌI lệnh sản xuất của PI đã Kết thúc thì nhả phần giữ chỗ tồn kho còn dư của PI đó
+   * (xem StockReservationsService.releaseByProductionInvoice - không nhả thì phần dư chặn oan PI khác).
+   * Không bọc chung transaction với việc đổi floorStage: 2 lệnh cùng PI Kết thúc gần đồng thời thì ít nhất
+   * 1 lượt thấy "đã xong hết" (mỗi lượt đã commit floorStage của mình trước khi đếm) và việc nhả idempotent.
+   * Best-effort - lỗi chỉ log, không được làm hỏng việc Kết thúc đã ghi (cùng recordFloorChange).
+   */
+  private async releaseReservationsIfPiFinished(productionInvoiceItemId: bigint): Promise<void> {
+    try {
+      const item = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
+        where: { id: productionInvoiceItemId },
+        select: { productionInvoiceId: true },
+      });
+      const piId = item.productionInvoiceId;
+      if (piId == null) return;
+      const unfinished = await this.prisma.productionOrder.count({
+        where: {
+          productionInvoiceItem: { productionInvoiceId: piId },
+          floorStage: { not: 'FINISHED' },
+        },
+      });
+      if (unfinished > 0) return;
+      await this.stockReservationsService.releaseByProductionInvoice(this.prisma, piId);
+    } catch (error) {
+      this.logger.error(
+        `Failed to release reservations after finishing PI of item ${productionInvoiceItemId}: ${(error as Error).message}`,
+      );
+    }
   }
 
   /**

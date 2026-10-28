@@ -11,6 +11,7 @@ import {
   StockReservationRefType,
 } from '../../src/generated/prisma/client';
 import { ConsumableMaterialPurchaseService } from '../../src/modules/production-invoices/consumable-material-purchase.service';
+import { ProductionOrdersService } from '../../src/modules/production-orders/production-orders.service';
 import { MaterialIssuesService } from '../../src/modules/material-issues/material-issues.service';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service';
 import { StockLedgerService } from '../../src/modules/stock/stock-ledger.service';
@@ -32,6 +33,7 @@ describe('Giữ chỗ tồn kho vật tư tiêu hao theo PI (integration, real P
   let prisma: PrismaServiceType;
   let issues: MaterialIssuesService;
   let purchase: ConsumableMaterialPurchaseService;
+  let productionOrders: ProductionOrdersService;
   let reservations: StockReservationsService;
   let ledger: StockLedgerService;
 
@@ -119,6 +121,7 @@ describe('Giữ chỗ tồn kho vật tư tiêu hao theo PI (integration, real P
       providers: [
         MaterialIssuesService,
         ConsumableMaterialPurchaseService,
+        ProductionOrdersService,
         StockLedgerService,
         StockReservationsService,
         { provide: NotificationsService, useValue: { emit: jest.fn(), resolve: jest.fn() } },
@@ -129,6 +132,7 @@ describe('Giữ chỗ tồn kho vật tư tiêu hao theo PI (integration, real P
     prisma = moduleRef.get(PRISMA_SERVICE);
     issues = moduleRef.get(MaterialIssuesService);
     purchase = moduleRef.get(ConsumableMaterialPurchaseService);
+    productionOrders = moduleRef.get(ProductionOrdersService);
     reservations = moduleRef.get(StockReservationsService);
     ledger = moduleRef.get(StockLedgerService);
 
@@ -161,6 +165,9 @@ describe('Giữ chỗ tồn kho vật tư tiêu hao theo PI (integration, real P
     if (!prisma) return;
     // Test DB tmpfs, nhưng vẫn dọn đúng những gì mình tạo (không đụng dòng nào khác).
     const matIds = created.materials;
+    await prisma.auditLog.deleteMany({
+      where: { tableName: 'ProductionOrder', recordId: { in: created.orders.map(String) } },
+    });
     await prisma.purchaseProposalItem.deleteMany({
       where: { proposal: { productionInvoiceId: { in: created.invoices } } },
     });
@@ -366,4 +373,79 @@ describe('Giữ chỗ tồn kho vật tư tiêu hao theo PI (integration, real P
       ).rejects.toThrow(); // 80 còn lại đã giữ cho PI A
     },
   );
+  // 2026-10-28 (review sau commit dbfd2ea): phần giữ chỗ còn dư của PI đã xong (mua cộng % hao hụt, nhận vượt, xưởng
+  // dùng ít hơn định mức) phải được nhả khi QLSX bấm "Kết thúc" (finishFloor), nếu không nó chặn oan PI khác.
+  it('PI A đã Kết thúc còn dư 5 giữ chỗ loại CONSUMABLE (kho còn ít lúc tính, nhận vượt) -> sau khi Kết thúc PI A nhả phần dư, PI B xuất được 5 kg tồn thật', async () => {
+    const materialId = await makeMaterial('S1', 30);
+    const a = await makePi('S1-A', materialId, 10, 10); // cần 100
+    const b = await makePi('S1-B', materialId, 10, 1); // cần 10
+
+    await purchase.computeAndUpsertProposals(a.piId.toString()); // tồn 30 -> giữ 30, mua 70
+    await ledger.postEntry({
+      fromWarehouseId: supplierWhId,
+      toWarehouseId: whId,
+      materialId,
+      qty: 75, // nhận vượt 5 so với đặt 70
+      refType: StockLedgerRefType.PURCHASE,
+      refId: `repro-S1-${sfx}`,
+      idempotencyKey: `repro-purchase-S1-${sfx}`,
+    });
+    await prisma.$transaction((tx) =>
+      reservations.creditPool(tx, {
+        productionInvoiceId: a.piId,
+        materialId,
+        warehouseId: whId,
+        qty: 75,
+      }),
+    );
+    await issues.create(
+      a.orderId.toString(),
+      { stage: MfgStage.SON, materialId: materialId.toString(), issuedQty: 100 },
+      userId,
+      null,
+    ); // tồn còn 5, giữ chỗ của A còn dư 5
+    await productionOrders.finishFloor(a.orderId.toString()); // QLSX bấm "Kết thúc"
+    console.log('[S1] giữ còn cho PI A đã xong:', await remainingReserved(materialId, a.piId));
+
+    await expect(
+      issues.create(
+        b.orderId.toString(),
+        { stage: MfgStage.SON, materialId: materialId.toString(), issuedQty: 5 },
+        userId,
+        null,
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it('PI A đã Kết thúc còn dư 5 giữ chỗ loại PRODUCTION_INVOICE (kho hết lúc tính) -> sau khi Kết thúc PI A nhả phần dư, PI B xuất được 5 kg tồn thật', async () => {
+    const materialId = await makeMaterial('S2', 105);
+    const a = await makePi('S2-A', materialId, 10, 10);
+    const b = await makePi('S2-B', materialId, 10, 1);
+
+    await prisma.$transaction((tx) =>
+      reservations.creditPool(tx, {
+        productionInvoiceId: a.piId,
+        materialId,
+        warehouseId: whId,
+        qty: 105, // mua 100 + 5% hao hụt, cả 105 ghi là giữ cho PI A
+      }),
+    );
+    await issues.create(
+      a.orderId.toString(),
+      { stage: MfgStage.SON, materialId: materialId.toString(), issuedQty: 100 },
+      userId,
+      null,
+    );
+    await productionOrders.finishFloor(a.orderId.toString()); // QLSX bấm "Kết thúc"
+    console.log('[S2] giữ còn cho PI A đã xong:', await remainingReserved(materialId, a.piId));
+
+    await expect(
+      issues.create(
+        b.orderId.toString(),
+        { stage: MfgStage.SON, materialId: materialId.toString(), issuedQty: 5 },
+        userId,
+        null,
+      ),
+    ).resolves.toBeDefined();
+  });
 });

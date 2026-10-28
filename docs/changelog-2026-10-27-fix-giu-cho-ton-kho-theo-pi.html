@@ -148,14 +148,32 @@ th{font-size:.8rem; color:var(--ink-soft); font-weight:600; white-space:nowrap}
   <p>Test cho lỗi này nằm sẵn trong file test tích hợp ở dạng <code>it.failing</code>. Khi sửa xong, đổi lại thành <code>it</code>.</p>
 </section>
 
+<section id="bo-sung-1028">
+  <h2>7. Bổ sung 2026-10-28: nhả giữ chỗ dư khi PI xong</h2>
+  <p>Review sau bản sửa trên chỉ ra một hệ quả phụ: phần giữ chỗ còn dư của PI đã xong (mua cộng % hao hụt, kho nhận vượt, xưởng dùng ít hơn định mức) không bao giờ được nhả, nên nay chặn oan PI khác. Ví dụ: PI A cần 100, hàng về 105, dùng 100 rồi Kết thúc; 5 còn lại vẫn đứng tên PI A và PI B báo “khả dụng 0” dù kho có 5.</p>
+  <ul>
+    <li>Với giữ chỗ loại <code>CONSUMABLE_MATERIAL_PURCHASE</code> (kho còn ít lúc tính đề xuất), lỗi này <strong>do bản sửa ở mục 3 gây ra</strong>: trước đó các luồng xuất bỏ qua loại này nên phần dư không chặn ai.</li>
+    <li>Với giữ chỗ loại <code>PRODUCTION_INVOICE</code> (kho hết lúc tính), lỗi này đã có từ trước.</li>
+  </ul>
+  <div class="callout"><strong>Cách sửa:</strong> khi QLSX bấm “Kết thúc” (<code>ProductionOrdersService.finishFloor</code>) và <strong>mọi lệnh sản xuất của PI đã Kết thúc</strong>, hệ thống nhả phần giữ chỗ còn dư của PI đó (<code>StockReservationsService.releaseByProductionInvoice</code>). PI gộp có nhiều lệnh thì chỉ nhả khi lệnh cuối cùng Kết thúc.</div>
+  <ul>
+    <li>Chỉ nhả dòng còn dư (đã giữ lớn hơn đã tiêu). Dòng đã tiêu hết giữ nguyên. Áp dụng cho mọi loại giữ chỗ, cả sắt lẫn vật tư tiêu hao.</li>
+    <li>Best-effort: lỗi khi nhả chỉ ghi log, không làm hỏng việc Kết thúc đã ghi.</li>
+    <li><span class="tag chg">Cần biết</span> “Xong” ở đây là <code>floorStage = FINISHED</code>. <code>ProductionInvoice.status</code> (<code>DONE</code>, <code>CANCELLED</code>) hiện không có code nào gán, và chưa thấy luồng huỷ PI sau khi duyệt.</li>
+    <li><span class="tag chg">Cần biết</span> Nếu QLSX bấm “Bắt đầu” lại một lệnh đã Kết thúc, PI đó không còn được giữ phần đã nhả. Luồng xuất sắt chặn cứng “không tìm thấy giữ chỗ” cho đến khi phương án cắt được duyệt lại; luồng xuất vật tư tiêu hao thì không chặn. Ca này hiếm nên chấp nhận.</li>
+    <li>Kiểm thử: 2 test tích hợp (giữ chỗ loại <code>CONSUMABLE</code> và <code>PRODUCTION_INVOICE</code>, gọi <code>finishFloor</code> thật) và các test đơn vị. Cả hai ca tích hợp đều thấy PI B bị chặn trước khi sửa và xuất được sau khi sửa.</li>
+  </ul>
+</section>
+
 <section id="tep">
-  <h2>7. Tệp thay đổi</h2>
+  <h2>8. Tệp thay đổi</h2>
   <ul>
     <li><span class="tag chg">sửa</span><code>src/modules/stock/stock-reservations.service.ts</code></li>
     <li><span class="tag chg">sửa</span><code>src/modules/material-issues/material-issues.service.ts</code></li>
     <li><span class="tag chg">sửa</span><code>src/modules/packaging-issues/packaging-issues.service.ts</code></li>
     <li><span class="tag chg">sửa</span><code>src/modules/material-yield-issues/material-yield-issues.service.ts</code></li>
     <li><span class="tag chg">sửa</span><code>src/modules/weaving-issues/weaving-issues.service.ts</code></li>
+    <li><span class="tag chg">sửa</span><code>src/modules/production-orders/production-orders.service.ts</code> và <code>production-orders.module.ts</code> (bổ sung 28/10)</li>
     <li><span class="tag chg">sửa</span>Các file <code>*.spec.ts</code> tương ứng và <code>stock-quant.service.spec.ts</code></li>
     <li><span class="tag add">mới</span><code>test/integration/reservation-own-pi.integration.spec.ts</code></li>
   </ul>

@@ -835,4 +835,42 @@ describe('StockReservationsService', () => {
       });
     });
   });
+  describe('releaseByProductionInvoice (2026-10-28 - nhả phần dư của PI đã xong)', () => {
+    it('chỉ nhả dòng ACTIVE còn dư (quantity > consumedQty), bỏ dòng đã tiêu hết', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([
+        { id: 1n, quantity: decimal(105), consumedQty: decimal(100) }, // dư 5
+        { id: 2n, quantity: decimal(50), consumedQty: decimal(50) }, // tiêu hết
+        { id: 3n, quantity: decimal(10), consumedQty: decimal(0) }, // dư 10
+      ]);
+      prisma.stockReservation.updateMany.mockResolvedValue({ count: 2 });
+
+      const released = await service.releaseByProductionInvoice(
+        prisma as unknown as PrismaTx,
+        500n,
+      );
+
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { productionInvoiceId: 500n, status: 'ACTIVE' } }),
+      );
+      expect(prisma.stockReservation.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [1n, 3n] }, status: 'ACTIVE' },
+        data: { status: 'RELEASED', releasedAt: expect.any(Date) as Date },
+      });
+      expect(released).toBe(2);
+    });
+
+    it('không còn dòng nào dư -> không ghi gì, trả 0', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([
+        { id: 2n, quantity: decimal(50), consumedQty: decimal(50) },
+      ]);
+
+      const released = await service.releaseByProductionInvoice(
+        prisma as unknown as PrismaTx,
+        500n,
+      );
+
+      expect(prisma.stockReservation.updateMany).not.toHaveBeenCalled();
+      expect(released).toBe(0);
+    });
+  });
 });

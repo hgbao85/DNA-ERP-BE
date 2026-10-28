@@ -539,4 +539,33 @@ export class StockReservationsService {
       data: { status: ReservationStatus.RELEASED, releasedAt: new Date() },
     });
   }
+
+  /**
+   * 2026-10-28 - nhả phần giữ chỗ CÒN DƯ của 1 PI đã xong (mọi lệnh sản xuất đã "Kết thúc", xem
+   * ProductionOrdersService.finishFloor). Phần dư luôn có thật: mua cộng % hao hụt, kho nhận vượt, xưởng
+   * dùng ít hơn định mức - nếu không nhả, nó đứng tên PI đã xong mãi mãi và (từ khi các luồng xuất tính giữ
+   * chỗ của PI KHÁC, xem getAvailableQty) chặn oan PI khác xuất phần tồn thật đó.
+   *
+   * Mọi refType (sắt lẫn vật tư tiêu hao), CHỈ dòng còn dư (quantity > consumedQty) - dòng đã tiêu hết vẫn
+   * ACTIVE như quy ước ở drainPool() (RELEASED chỉ mang nghĩa "đã huỷ/nhả"). Không hoàn phần consumedQty
+   * (hàng đã rời kho thật), giống releaseByRef(). Trả về số dòng đã nhả. Idempotent.
+   *
+   * Hệ quả cần biết: QLSX bấm "Bắt đầu" lại một lệnh đã Kết thúc thì PI đó KHÔNG còn được giữ chỗ phần đã
+   * nhả (luồng xuất sắt chặn cứng "không tìm thấy giữ chỗ" cho tới khi phương án cắt được duyệt lại).
+   */
+  async releaseByProductionInvoice(tx: PrismaTx, productionInvoiceId: bigint): Promise<number> {
+    const rows = await tx.stockReservation.findMany({
+      where: { productionInvoiceId, status: ReservationStatus.ACTIVE },
+      select: { id: true, quantity: true, consumedQty: true },
+    });
+    const ids = rows
+      .filter((r) => r.quantity.toNumber() > r.consumedQty.toNumber())
+      .map((r) => r.id);
+    if (ids.length === 0) return 0;
+    const { count } = await tx.stockReservation.updateMany({
+      where: { id: { in: ids }, status: ReservationStatus.ACTIVE },
+      data: { status: ReservationStatus.RELEASED, releasedAt: new Date() },
+    });
+    return count;
+  }
 }
