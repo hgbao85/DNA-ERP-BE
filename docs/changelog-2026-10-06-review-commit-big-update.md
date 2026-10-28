@@ -1,6 +1,6 @@
 # Changelog 2026-10-06 — Rà 2 commit mới nhất (Update catsat + big-update) sau sự cố deploy Render
 
-> Trạng thái: **CHỈ RÀ, CHƯA SỬA CODE.** Local `main` BE đang ở `fc3327f`, chưa pull `big-update`. Mục 5 (2026-10-26): rà 2 commit "day-nem"/"fix-day-nem" — gộp thử sạch, không ảnh hưởng logic; 5.1: ĐÃ PULL cả BE main, worktree BE, FE demo (giữ thay đổi trong máy); 5.2: đã áp 5 migration vào DB test + kiểm trình duyệt. 5.3: đã chọn file nên commit và đưa vào staged ở BE worktree / BE main / FE — CHƯA commit. 5.4: đã gom phần BE về main checkout — giờ BE commit ở MỘT chỗ (`main`, 79 file staged), FE ở `demo` (28 file); vẫn CHƯA commit. 5.5: danh sách việc cần làm khi lên production (quan trọng nhất: gói Render 512 MB không đủ RAM cho bộ giải trong BE). 5.6: ĐÃ sao lưu DB production (`backups/prod_20261026_0951_truoc-deploy-solver.dump`); production chỉ còn thiếu đúng 4 migration mới, không có migration lỗi. 5.7: lần commit đầu ở main bị hook pre-commit chặn vì main thiếu gói `highs` và Prisma client cũ — đã cài + sinh lại, hook giờ qua; CHƯA commit.
+> Trạng thái: **CHỈ RÀ, CHƯA SỬA CODE.** Local `main` BE đang ở `fc3327f`, chưa pull `big-update`. Mục 5 (2026-10-26): rà 2 commit "day-nem"/"fix-day-nem" — gộp thử sạch, không ảnh hưởng logic; 5.1: ĐÃ PULL cả BE main, worktree BE, FE demo (giữ thay đổi trong máy); 5.2: đã áp 5 migration vào DB test + kiểm trình duyệt. 5.3: đã chọn file nên commit và đưa vào staged ở BE worktree / BE main / FE — CHƯA commit. 5.4: đã gom phần BE về main checkout — giờ BE commit ở MỘT chỗ (`main`, 79 file staged), FE ở `demo` (28 file); vẫn CHƯA commit. 5.5: danh sách việc cần làm khi lên production (quan trọng nhất: gói Render 512 MB không đủ RAM cho bộ giải trong BE). 5.6: ĐÃ sao lưu DB production (`backups/prod_20261026_0951_truoc-deploy-solver.dump`); production chỉ còn thiếu đúng 4 migration mới, không có migration lỗi. 5.7: lần commit đầu ở main bị hook pre-commit chặn vì main thiếu gói `highs` và Prisma client cũ — đã cài + sinh lại, hook giờ qua. **5.8: người dùng ĐÃ commit + push (BE `4cf4078`, FE `d70be5e`); CI xanh; Render + Vercel đã chạy bản mới.**
 
 ## 1. Sự cố deploy
 Người dùng: deploy lần đầu chạy ~20 phút rồi fail, redeploy thì thành công. Không đọc được log Render (cần đăng nhập).
@@ -432,3 +432,48 @@ lint-staged tự trả lại trạng thái cũ: staged vẫn đủ 79 file, khô
 **Lưu ý:**
 - Main giờ đã có `highs` + client mới.
 - Nếu chạy `start-dev.bat` thì `prisma migrate deploy` sẽ áp 4 migration mới lên DB dev `dna_erp` (xem 5.4).
+
+### 5.8 2026-10-26 — ĐÃ commit + push; CI xanh; production đã chạy bản mới (chỉ kiểm từ ngoài, không đăng nhập, không chạy lượt giải)
+
+Người dùng: "tôi đã commit, và push".
+
+**Commit:**
+
+| Repo | Commit | Nội dung |
+|---|---|---|
+| BE `main` | `4cf4078` "add High for Pm catsat" (XSang, 10:03) | 79 file, +16.105 / −247 |
+| FE `demo` | `d70be5e` "Add high vào catsat" (XSang, 10:04) | 28 file, +2.027 / −351 |
+
+- Sau fetch, cả hai trùng `origin` (ahead/behind 0/0).
+- Index trống ở cả hai repo.
+
+**Kiểm sau push** (`scratchpad/watch_deploy.sh`):
+- Chỉ đọc: GitHub API công khai, cùng lời gọi KHÔNG token vào API production.
+- **CI BE** (run 40262197367): `lint`, `test` (`pnpm test` gồm cả bộ giải nặng + `test:e2e`), `build` — **đều success**.
+- **Vercel FE:** deployment Production của `d70be5e` xong lúc 03:05:17 UTC (10:05). `erpdna.vercel.app/login` trả 200.
+- **Render BE:**
+  - Cách dò: gọi `POST /api/v1/cutting-batch-fix-options` (route mới) không token. 404 nghĩa là vẫn bản cũ, 401 nghĩa là bản mới
+    đã lên. Đối chứng bằng `POST /api/v1/cutting-batch-preview` (route cũ), luôn 401.
+  - 03:06:41 vẫn 404; **03:07:12 đã 401 → bản mới đang chạy**.
+  - `/api/health` ok (database up).
+  - `docker/entrypoint.js` thoát nếu `migrate deploy` lỗi, nên app mới khởi động được nghĩa là **4 migration mới đã áp lên
+    production**. Bản sao lưu trước đó ở 5.6.
+- FE lên trước BE khoảng 2 phút (10:05 → 10:07). Trong khoảng đó, khung "Đợt đang chọn" và "Sửa thời hạn" lệnh gộp có thể báo
+  lỗi. Giờ đã hết.
+
+**Còn treo (người dùng tự làm, xem 5.5):**
+- Gói Render. `render.yaml` vẫn ghi `plan: free` (512 MB); chưa biết người dùng đã nâng chưa. Còn ở gói 512 MB thì lượt giải lớn
+  có thể làm BE bị giết.
+- `SOLVER_TS_MAX_RSS_MB`.
+- Admin kiểm Cấu hình hệ thống (máy cắt, luật gộp 3 ngày / 2 SKU, thông số MC Tự động).
+- Đổi mật khẩu DB production.
+- Xoá biến cũ `SOLVER_BASE_URL` / `SOLVER_API_KEY` / `SOLVER_MODE` trên Render.
+
+**Việc khác:**
+- Worktree `solver-ts-research-1a4370` vẫn giữ nguyên các file đã staged, giờ trùng với commit `4cf4078`. Chưa dọn
+  (luật: không reset/xoá khi người dùng chưa bảo).
+- DB dev `dna_erp` vẫn chưa có 4 migration.
+- Các cập nhật trạng thái changelog ở mục này nằm ngoài commit, chưa commit:
+  - đầu changelog 2026-10-20, 2026-10-21 (BE);
+  - changelog 2026-10-23 (FE);
+  - mục 5.8.

@@ -1,5 +1,7 @@
 # Changelog 2026-10-21 — Review thư mục "Data test solve" (bảng theo dõi sắt thành phẩm)
 
+> **2026-10-26: ĐÃ COMMIT + PUSH + LÊN PRODUCTION** (BE `4cf4078` trên `main`, FE `d70be5e` trên `demo`; CI xanh, Render và Vercel đã chạy bản mới — changelog-2026-10-06 mục 5.8). Các chữ "CHƯA commit/CHƯA deploy" bên dưới là trạng thái lúc viết từng mục.
+>
 > Trạng thái: mục 1–16 CHỈ REVIEW DỮ LIỆU / báo cáo (không sửa code); từ mục 17 có sửa code solver + BE/FE (máy cắt MC Tự động, local, CHƯA commit, CHƯA deploy). Các điểm "cần xác nhận" chờ người dùng.
 
 ## 1. Nội dung thư mục

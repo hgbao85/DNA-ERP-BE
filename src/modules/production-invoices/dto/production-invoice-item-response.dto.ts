@@ -44,6 +44,8 @@ export class ProductionInvoiceItemResponseDto {
   cushionMaterial!: MaterialChoiceRefDto | null;
   @Expose() @ApiProperty() quantity!: number;
   @Expose() @ApiPropertyOptional({ nullable: true }) materialDeadline!: Date | null;
+  /** "Mua VT còn lại" (2026-10-27) - null = KHSX chưa đặt, FE hiện đề xuất Đóng gói − 7. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) finishedMaterialDeadline!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) deliveryDeadline!: Date | null;
   @Expose()
   @ApiPropertyOptional({ enum: ProdApprovalStatus, nullable: true })

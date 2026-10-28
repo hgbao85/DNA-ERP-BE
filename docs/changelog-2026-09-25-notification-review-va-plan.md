@@ -51,6 +51,10 @@
 > chỉ tới đúng MÀN (module+trang), KHÔNG mở thẳng đúng mục; 11 type không có link; một số link trỏ
 > vào phân hệ mà vai trò nhận không vào được; 1 lỗi chữ "null". **ĐÃ SỬA ở mục 30 (2026-10-08)** - mở
 > thẳng đúng mục (tham số `focus` trên URL), link cho 7 type, người nhận kho chỉ còn thủ kho, hết chữ "null".
+>
+> **2026-10-26 (mục 32): nghiên cứu "timeline chuẩn ERP"** (SAP/Odoo/Dynamics 365) cho mốc công đoạn + thiết kế thông báo trễ
+> hạn, đối chiếu DNA-ERP qua PI-2026-035 - **CHỈ NGHIÊN CỨU, CHƯA SỬA CODE**, chờ Sếp họp chốt 15 câu hỏi. Tài liệu cho buổi
+> họp: https://claude.ai/artifact/Uuz7ZdMh6oECZjSBKGQWTn
 
 ## Mục lục
 
@@ -85,6 +89,8 @@
 28. Quyết định dừng lại - Phase 5 hoãn — _2026-09-29, người dùng chốt_
 29. Rà soát "bấm thông báo có nhảy đúng màn không" — _2026-10-08, chỉ rà (đã sửa ở mục 30)_
 30. Sửa theo mục 29: mở thẳng đúng mục, link cho thông báo thiếu link, rà người nhận/quyền — _2026-10-08, đã làm, chưa commit_
+31. Rà vòng đời lệnh sản xuất theo 4 nhóm quản lý của ERP — _2026-10-09; P1, P2 đã làm; P3 (quét quá hạn) còn treo, thiết kế ở mục 32_
+32. Nghiên cứu timeline chuẩn ERP + thiết kế thông báo trễ hạn — _2026-10-26, chỉ nghiên cứu, chờ Sếp họp chốt_ (32.1: anh Nhân đã có quy tắc mốc theo N từ 05–06/10; 32.2: Sếp chốt hệ thống đề xuất theo mốc Phú An; 32.3: ĐÃ LÀM ở FE, chưa commit; 32.4: rà vật tư production theo công đoạn; 32.5: Sếp làm rõ khung ngày về vật tư; 32.6: review lệnh gộp + chia hàng về cho SKU; 32.7: Sếp xác nhận nhóm vật tư + tên/vị trí cột mốc; 32.8: ĐÃ LÀM A–C - mốc Mua VT khung & đan / Mua VT còn lại + "về từ", local chưa commit; 32.9: live-test XÁC NHẬN lỗi chặn nhầm chính PI khi xuất tiêu hao/đóng gói; 32.10: ĐÃ SỬA lỗi đó, local chưa commit; 32.11: review commit dbfd2ea của ohey trên origin/main - sửa cả lỗi 1 lẫn lỗi 2, thay bản sửa local 32.10; 32.12: đã bỏ bản local 32.10 và pull dbfd2ea về main, chưa commit gì thêm; 32.13: dbfd2ea không đụng phần code của người dùng, đã STAGE phần cần commit BE + FE, người dùng tự commit)
 
 ---
 
@@ -2565,7 +2571,7 @@ Chi tiết từng chặng ở `changelog-2026-10-07-bao-cao-test-be-fe-solve.md`
 **Kết luận: không phải sót khi cài đặt — 2 sự kiện này KHÔNG nằm trong bảng thiết kế 7.1/7.2** (bảng chỉ có "KHSX trả về định mức" và "Sếp duyệt/từ chối SKU"). Đánh giá giá trị: (1) **KHSX duyệt định mức → Spec**: Spec không có việc gì tiếp theo ở bước này; kết quả cuối (`SKU_APPROVED`) đã báo Spec khi Sếp duyệt → thêm chỉ tăng nhiễu, **đề xuất giữ nguyên**. (2) **QLSX Kết thúc → KHSX/Sales**: Sales đã được báo ở sự kiện có hành động ("đã đóng gói xong, sẵn sàng giao"); Kết thúc thường diễn ra SAU giao hàng → giá trị thấp, **tuỳ chọn** (chỉ có ích như dấu vết khi bấm nhầm).
 **Khoảng trống THẬT được phát hiện khi review:** `ProductionOrdersService.startFloor/pauseFloor/finishFloor` KHÔNG phát thông báo cũng không phát realtime; tổ Phôi/Hàn/Sơn/KCS/kho không đọc `floorStage` ở màn của mình — bị QLSX **Tạm dừng/Kết thúc** thì chỉ biết khi thao tác bị BE chặn 409 ("chưa có SKU nào được QLSX bấm Bắt đầu…/đã Kết thúc"). Nếu làm gì ở nhóm này thì nên là **thông báo Tạm dừng/Tiếp tục/Kết thúc cho các tổ xưởng liên quan** (ALERT khi tạm dừng), không phải 2 mục N-7 gốc. CHƯA làm, chờ quyết định.
 
-## 31. Rà vòng đời lệnh sản xuất theo 4 nhóm quản lý của ERP — _2026-10-09, rà xong; P1 (31.1–31.2) và P2 (31.3) ĐÃ LÀM, P3 còn treo_
+## 31. Rà vòng đời lệnh sản xuất theo 4 nhóm quản lý của ERP — _2026-10-09, rà xong; P1 (31.1–31.2) và P2 (31.3) ĐÃ LÀM, P3 còn treo_ _(P3 "quét quá hạn": thiết kế đề xuất ở mục 32, chưa làm)_
 
 Căn cứ: đọc code BE (`notification-types.ts` ~48 type, `RealtimeEntityOn`/`publishEntityChanged`, `AUDITED_MODELS` + `writeAuditLog` thủ công, không có `@Cron`/scheduler nào) + kết quả live-test 08/10. 4 nhóm: (1) bàn giao có việc phải làm, (2) đổi trạng thái ảnh hưởng người khác, (3) ngoại lệ/cảnh báo, (4) dấu vết kiểm toán.
 
@@ -2599,3 +2605,736 @@ Căn cứ: đọc code BE (`notification-types.ts` ~48 type, `RealtimeEntityOn`/
 **Kiểm tra:** constructor `MaterialYieldIssuesService`/`WeavingIssuesService` thêm `ClsService` (spec cập nhật); test mới cho audit ship, yield-recipe, `updateItem` (đổi Hàn+Đan+giao hàng → đúng người nhận; lưu y nguyên → không audit/báo). tsc sạch, eslint sạch (chỉ 1 warning `any` có sẵn), jest toàn BE 1474 pass / 1 skip.
 **Live-test UI (khsx, PI-2026-035, "Sửa thời hạn"):** đổi Mua hàng + Giao hàng + Khung cơ khí → audit 1 dòng (cũ→mới) + thông báo tới sales, 3 Mua hàng, phoi, han, son; đổi Đan + Đóng gói → thêm kho phôi-sơn-hàn/vật tư/thành phẩm; chỉ đổi Đan → CHỈ khopsh, khovttp; bấm Lưu không đổi gì → không audit, không thông báo. **Lỗi phát hiện & sửa trong live-test:** lúc đầu có dedupeKey nên lần sửa 2 ghi đè nội dung lần 1 và dồn người nhận của cả hai (phoi/han/son bị báo "Đan…") → bỏ dedupeKey. Chưa kiểm: bấm thông báo của người nhận để nhảy màn (link dùng lại của floor-stage, đã live-test ở 31.1).
 **Chưa:** FE chưa đụng (type mới dùng link sẵn có); P3 (job báo quá hạn/kẹt) vẫn treo, cần quyết định hạ tầng scheduler. Lỗi B-1 (kho không xuất được sơn cho PI của chính nó) KHÔNG thuộc phạm vi notification, chủ việc khác xử lý — không sửa ở đây.
+
+## 32. Nghiên cứu "timeline chuẩn ERP" + thiết kế thông báo trễ hạn — _2026-10-26, CHỈ NGHIÊN CỨU, CHƯA SỬA CODE_
+
+Người dùng gửi ảnh ô "Sửa thời hạn" của SKU E2E-FULL-42810908 ×50 (PI-2026-035, dữ liệu test) kèm yêu cầu "nghiên cứu về phần
+timeline chuẩn ERP". Đây là phần nền cho buổi Sếp họp chốt business rule thời hạn (bộ nhớ `business-rule-thoi-han-cho-hop-sep`,
+changelog-2026-10-21 mục 32.6), sau đó mới làm thông báo trễ deadline cho Sếp.
+
+**Sản phẩm:**
+- Trang tài liệu cho buổi họp https://claude.ai/artifact/Uuz7ZdMh6oECZjSBKGQWTn (riêng tư, người dùng tự chia sẻ cho Sếp).
+- **Bản HTML mở trực tiếp (cập nhật 2026-10-26, người dùng muốn HTML thay PDF): `docs/nghien-cuu-timeline-chuan-erp-2026-10-26.html`.**
+  - Cùng nội dung với trang online, có đủ `<!doctype>/<head>`, bấm đúp là mở bằng trình duyệt.
+  - Không có mạng thì dùng phông của máy.
+  - Có kiểu in A4 (Ctrl+P): luôn nền sáng, hình co vừa trang, link nguồn in kèm địa chỉ.
+  - Đã mở thử từ ổ đĩa: hiển thị đúng, tag đóng đủ.
+  - Chưa commit.
+- Nguồn dựng trang nằm ở scratchpad phiên (`timeline-doc/template.html` + `build.py`, hình SVG sinh từ dữ liệu). Thư mục tạm có thể
+  bị dọn; bản giữ lâu dài là file trong `docs/`.
+
+**Hiện trạng DNA-ERP (đọc code 26/10):**
+- Mốc của 1 SKU:
+  - `materialDeadline` (Mua hàng, **một ngày chung cho mọi vật tư**) + `deliveryDeadline`;
+  - `ProductionInvoiceItemStage` gồm FRAME, FRAME_PHOI/HAN/SON, WEAVING, TRANSFER_CHECK (form chưa hiện), PACKAGING.
+  - Mỗi mốc chỉ là 1 `deadline`. Dạng khoảng từng thử ngày 11/09 rồi bỏ.
+- "Ước tính" ở FE (`LenhSXPage` `estimateFrom`) lùi cố định từ hạn giao của SKU: Phôi −25, Mua hàng −21, Hàn −20, Sơn −16,
+  Khung −14, Đan −8, Đóng gói −3.
+  - Các số của công đoạn sản xuất đã khớp một chuỗi tính lùi (Hàn 5 / Sơn 4 / KCS 2 / Đan 6 / Đóng gói 5 / đệm giao 2 ngày).
+  - **Chỉ Mua hàng −21 lạc chỗ**, nằm giữa Phôi và Hàn.
+  - Ước tính không bám mốc đã chốt bên cạnh.
+- BE `applyItemDeadlines` ghi thẳng, **không kiểm thứ tự mốc**. Chỉ có luật gộp ≤ 3 ngày / tối đa 2 SKU.
+- `MaterialSupplier.leadTimeDays` có sẵn nhưng chưa dùng để tính ngày đặt hàng.
+- Đã có `PI_ITEM_DEADLINE_CHANGED` (mục 31.3) và mẫu quét định kỳ `FloorAlertsService` (10 phút, dedupe, tự đóng).
+- **Chưa có cảnh báo quá hạn/sắp trễ** (mục 31, P3).
+- Quy ước 9.3 vẫn giữ: Sếp chỉ nhận việc cần duyệt + CRITICAL, không có digest.
+
+**Lệch ở PI-2026-035:**
+- Mua hàng 02/10 (đã lưu) nằm sau Phôi 17/09 tới 15 ngày.
+  - So với chuỗi đề xuất: trễ 18 ngày so với ngày cần sắt (14/09) và trễ 4 ngày so với vật tư đan (28/09). Chỉ kịp cho bao bì,
+    nệm (04/10).
+- Đan 07/10 → Đóng gói 10/10 chỉ còn 3 ngày, chuẩn 5 ngày → sớm nhất xong 12/10, trùng ngày giao.
+- Mốc mặc định Đan (D−8) rơi vào Chủ nhật 04/10.
+- **UI:** ô `<input type="date">` hiện tháng/ngày/năm theo ngôn ngữ trình duyệt, còn thẻ lệnh hiện ngày/tháng/năm → dễ đọc nhầm.
+
+**Cách ERP chuẩn làm (có nguồn):**
+- Odoo 17 "Lead times": tính lùi kèm ví dụ ngày giao 20/9; tách vendor lead time / purchase security / days to purchase.
+- Odoo "Delayed manufacturing orders": 3 bộ lọc Delayed Productions / Late / Late Availability.
+- SAP Help:
+  - đệm trước/sau sản xuất (scheduling margin key);
+  - các phần thời gian của công đoạn: queue/setup/processing/teardown/wait/move;
+  - overlapping với số lượng chuyển trước tối thiểu;
+  - thông báo ngoại lệ MRP.
+- Microsoft Learn "Master plans": Calculated delays, Action messages.
+- Critical Chain: chia đệm xanh/vàng/đỏ.
+
+**Đề xuất (chờ Sếp chốt, số có * là giả định):**
+- Chuỗi 12 mốc tính lùi: đặt mua sắt D−35 (NCC giao 7*) → sắt về D−28 → Phôi 3* ngày (ngày cắt D−27, xong D−25) → Hàn D−20
+  → Sơn D−16 → KCS/hoàn thiện khung D−14 → (vật tư đan về D−14) → Đan D−8 → (bao bì, nệm về D−8) → Đóng gói D−3 → đệm 2 ngày
+  → giao D.
+- 7 luật kiểm, L1–L7:
+  - chặn đảo thứ tự;
+  - cảnh báo khi gấp hơn số ngày chuẩn, khi rơi ngày nghỉ, khi lệnh không kịp lúc tạo;
+  - ước tính bám mốc đã chốt;
+  - mốc tự dời khi khách dời hạn giao;
+  - lệnh gộp giữ như 24/10.
+- 5 loại thông báo:
+  - A. Sắp tới hạn;
+  - B. Chưa khởi công;
+  - C. Vật tư về trễ;
+  - D. Quá hạn công đoạn;
+  - E. Nguy cơ trễ giao, có vàng/đỏ. Đỏ là CRITICAL nên tới Sếp theo quy ước 9.3.
+  - Tất cả tính theo "ngày dự kiến xong" lan truyền từ tiến độ thật.
+- 15 câu hỏi Q1–Q15 cho buổi họp. Quan trọng nhất:
+  - Q1–Q2: "Mua hàng" là ngày gì, có tách theo nhóm vật tư không;
+  - Q3: "ngày cắt sắt" của luật gộp là ngày nào;
+  - Q4: số ngày từng công đoạn;
+  - Q8: ngày lịch hay ngày làm việc;
+  - Q10: thế nào là "xong";
+  - Q11: Sếp nhận gì.
+
+**Kiểm tra:**
+- Đã kiểm lại bằng script mọi ngày ghi kèm thứ trong trang và mọi số D−n (0 sai).
+- `node --check` script tooltip: sạch.
+- Xem hình 1 lần qua máy chủ tĩnh tạm (cấu hình thêm tạm vào `.claude/launch.json`, đã gỡ lại đúng 6 mục cũ). Sửa màu cột Chủ
+  nhật ở chế độ tối cho dễ thấy.
+- Không chạy test code vì không sửa code.
+
+**Chưa làm / còn treo:**
+- Chưa sửa phần mềm.
+- **Tới khi có kết quả họp vẫn giữ `ownSteelDeadlineOf` (BE) / `steelNeedDate` (FE) = Mua hàng → Khung.**
+- Danh sách việc kỹ thuật sau khi chốt nằm ở mục 9 của trang tài liệu.
+- Trang tài liệu đang riêng tư. Người dùng cần bấm Share trên trang thì Sếp mới mở được.
+
+### 32.1 2026-10-27 — Đối chiếu nhật ký "LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026" — anh Nhân ĐÃ có quy tắc mốc theo ngày N
+
+Người dùng gửi file nhật ký trao đổi anh Nhân – Claude, 04–10/10/2026, 12.519 dòng, nhờ review và tóm tắt.
+- Nhật ký là một phiên Claude chạy trên máy anh Nhân: đọc Zalo/OneDrive "nhà máy IEA", làm file Excel/PDF, nhắn nhóm Zalo.
+- File gốc chỉ ở `Downloads` của người dùng, không chép vào repo.
+
+**Phát hiện quan trọng cho mục 32:** ngày 05–06/10 anh Nhân đã chốt với Claude quy tắc lên kế hoạch lệnh sản xuất.
+- Mọi mốc tính **xuôi từ N = ngày bắt đầu phôi**, không lùi từ hạn giao.
+- Bảng mốc Phú An / Phước An:
+
+| Mốc | Phú An | Phước An |
+|---|---|---|
+| Nhóm 1 (sắt, thép, la tấm, tán rút, đá cắt, dây hàn, CO2, viên nén, sơn bột, hoá chất, gas, nút/ống nhôm) + nhóm 2 (dây đan, đinh, nút cỡ ống) về | hết N−1, sớm nhất N−5 | như Phú An |
+| Phôi xong (xuất đan đủ) | N+2 | N+4 |
+| Vật tư còn lại (thùng, xốp, nệm, gỗ, phụ kiện, nhãn) về đủ | hết N+8 | hết N+10 |
+| Thu mảnh từ / về đủ | N+9 / N+12 | N+11 / N+14 |
+| Chuyền kiểm xong | N+12 | N+14 |
+| Đóng gói xong | N+14 | N+16 |
+
+- Các luật đi kèm:
+  - Phú An mỗi ngày bắt đầu 1 lệnh; Phước An các lệnh cách nhau 3 ngày.
+  - Xếp theo hạn giao gần trước.
+  - Năng lực hàn khoảng 6.500 mảnh/ngày chỉ dùng để cảnh báo.
+  - Vật tư không về sớm quá 4 ngày vì kho chật.
+  - Sản phẩm không đan: vật tư còn lại về hết N+4 / N+6.
+  - MY-324/325 (sofa) nới thêm 10 ngày từ mốc vật tư còn lại trở đi.
+  - Lệnh tách xưởng: ghế làm ở Phước An, bàn làm ở Phú An.
+- **Hàng gỗ:** G = ngày gỗ nhập kho = hạn giao − 9. Vật tư đóng gói về G − 3, đóng gói xong G + 2. Số cont gỗ mỗi tháng không vượt
+  bảng của Ba Chinh.
+- **Chưa thấy anh Nhân trả lời** câu "có xếp lệnh vào Chủ nhật không".
+
+**Ý nghĩa với tài liệu Timeline (mục 32) — chưa sửa tài liệu, chưa sửa code:**
+- Q3 "ngày cắt sắt": anh Nhân đã dùng N (ngày bắt đầu phôi) làm mốc gốc, khớp phương án b.
+- Q1/Q2: vật tư đã được tách theo nhóm và gắn với N: nhóm 1–2 về hết N−1, vật tư còn lại về hết N+8/N+10.
+- Q4: số ngày khác hẳn chuỗi mặc định trong ERP (lùi từ hạn giao: Phôi −25 … Khung −14 … Đóng gói −3).
+  - Theo quy tắc N, cắt + hàn + sơn tới lúc xuất đan chỉ 2 ngày (Phú An); từ xuất đan tới đóng gói 12 ngày.
+  - ERP hiện không có mốc "thu mảnh", còn quy tắc N có.
+- Xưởng (Phú An/Phước An) làm lệch mốc +2 ngày. ERP chưa có khái niệm này trên timeline.
+- Luật gộp sắt anh Nhân chốt trong nhật ký khớp luật ERP 24/10 ở điểm **tối đa 2 lệnh**. Các luật cắt sắt khác trong nhật ký:
+  - mỗi quy cách 1 chiều dài cây, tròn đuôi 0/5 cm, tối đa 6,5 m;
+  - mỗi kiểu cắt hao dưới 1%, nhát cưa không tính hao, tề đầu 10 mm có tính;
+  - gộp cùng xưởng cùng quy cách; riêng 20×20×0,6 ghép bàn I3 mới với bàn J55;
+  - đoạn dư chuyển cho lệnh sau, cây cuối giữ dài lưu kho;
+  - kg/m lấy theo phiếu so sánh giá Kim Phát.
+  - Kết quả: 15 quy cách, khoảng 128.900 cây, 212,6 tấn.
+  - Những luật này cần đối chiếu với bộ giải HiGHS trước khi coi là "luật ERP".
+
+**Còn treo:**
+- Chưa cập nhật tài liệu Timeline (artifact + `docs/nghien-cuu-timeline-chuan-erp-2026-10-26.html`) theo quy tắc N — chờ người dùng đồng ý.
+- Vẫn giữ `ownSteelDeadlineOf` / `steelNeedDate` = Mua hàng → Khung tới khi có kết quả họp.
+
+### 32.2 2026-10-27 — Sếp chốt: hệ thống đề xuất timeline theo mốc Phú An, KHSX cập nhật ngày cụ thể — ĐÃ LÀM ở 32.3
+
+Người dùng: "sếp nói là hệ thống sẻ đề xuất timeline theo mốc của Phú An, và đó là hệ thống đề xuất thôi còn thời gian cụ thể thì
+KHSX sẻ cập nhập".
+
+**Đã chốt:**
+- Ngày "ước tính" trên lệnh sản xuất đổi từ số lùi cố định (−21/−25/−20/−16/−14/−8/−3) sang quy tắc N của Phú An (mục 32.1).
+- Đó chỉ là đề xuất; KHSX sửa ngày thật như hiện nay.
+- Không dùng mốc Phước An (+2 ngày) cho đề xuất.
+
+**Rà hiện trạng:**
+- Ngày ước tính chỉ tính ở FE, `LenhSXPage.tsx` (`estimateFrom`), ở 4 chỗ: form sửa, chi tiết Sếp/QLSX, chi tiết KHSX, hộp xác nhận.
+- BE chỉ dùng ngày đã lưu (`frameDeadlineOf`, `ownSteelDeadlineOf`), không có số lùi. Vì vậy đổi đề xuất không ảnh hưởng luật
+  gộp, đề xuất mua hay giữ chỗ tồn.
+
+**Cách áp đang đề xuất (chờ người dùng xác nhận trước khi code):**
+- N = hạn giao − 17, tức đóng gói xong trước hạn giao 3 ngày như mặc định cũ.
+- Mua hàng = N−1.
+- Phôi / Hàn / Sơn = N / N+1 / N+2.
+- Khung cơ khí (xuất đan đủ) = N+2.
+- Đan (thu mảnh về đủ) = N+12.
+- Đóng gói = N+14.
+- "Vật tư còn lại về hết N+8" chưa có ô trong ERP, để sau.
+- Chuyền kiểm (N+12) có trong dữ liệu nhưng form chưa hiện, giữ nguyên.
+
+### 32.3 2026-10-27 — ĐÃ LÀM: ngày đề xuất theo mốc Phú An ở FE (form "Sửa thời hạn" + 3 màn chi tiết lệnh) — local, CHƯA commit
+
+Người dùng duyệt danh sách A/B/C rồi bảo "làm". **Chỉ sửa FE `D:\DNA-ERP`; BE không đổi, không migration.**
+
+**A. Cách tính** — file mới `src/utils/phuAnTimeline.ts`:
+- `phuAnAnchor(Khung, hạn giao)`:
+  - N = Khung cơ khí đã có − 2;
+  - chưa có Khung thì N = hạn giao CỦA CHÍNH SKU − 17 (đóng gói N+14 xong trước hạn giao 3 ngày).
+- `phuAnDate`: Mua hàng N−1, Phôi N, Hàn N+1, Sơn N+2, Khung N+2, Đan N+12, Đóng gói N+14.
+- Kèm `phuAnOffsetLabel`, `fmtDayVN` (luôn ngày/tháng/năm kèm thứ), `toInputDate`.
+- Test mới `phuAnTimeline.test.ts`: 8 ca, gồm PI-2026-035 và ca qua năm.
+- `LenhSXPage.tsx`: bỏ `estimateFrom` (lùi cố định 21/25/20/16/14/8/3), thay bằng `proposeFor(item, hạn PI)` cho cả 4 chỗ.
+
+**B. Form "Sửa thời hạn":**
+- Dòng "Bắt đầu phôi đề xuất (N): T5 · 24/09/2026, tính từ Khung cơ khí 26/09" (hoặc "từ hạn giao … (đóng gói xong trước 3 ngày)").
+- Ô xếp theo dây chuyền: Mua hàng → Khung cơ khí → Đan → Đóng gói.
+  - Lưới 4 cột, điện thoại 2×2. Trước đây flex-wrap làm ô Đóng gói rớt một mình.
+  - Nút Phôi/Hàn/Sơn dời xuống dưới ô Khung. Để chung dòng nhãn thì khung hẹp nhãn bị đẩy 2 dòng, ô lệch hàng (thấy khi kiểm trên
+    trình duyệt).
+- Nhãn "(ước tính)" → "(đề xuất)".
+- Dưới mỗi ô có dòng "T6 · 02/10/2026", cạnh ô đề xuất ghi kèm "N+1".
+- Ô đã chốt mà khác đề xuất có nút "đề xuất dd/mm" để điền nhanh, vẫn phải bấm Lưu.
+- Đổi Khung hoặc hạn giao thì mọi ô còn đề xuất (chưa ai sửa) tự tính lại theo N mới; ô đã chốt giữ nguyên.
+- Cách lưu không đổi: ô đề xuất không sửa thì không ghi.
+
+**C. Màn chi tiết + hướng dẫn:**
+- Chi tiết Sếp/QLSX, chi tiết KHSX và hộp xác nhận "Gửi QLSX" dùng cùng công thức, nhãn "đề xuất".
+- Trang Hướng dẫn (`Guide/content/productionPlan.ts`) thêm câu giải thích quy tắc.
+
+**Kèm theo:** dòng 808 cùng file trộn `gap` + `rowGap` (React cảnh báo khi vẽ lại) → `gap: '8px 10px'`.
+
+**Kiểm tra:**
+- `tsc` sạch; eslint 0 lỗi (91 cảnh báo có từ trước, gồm `piDeadline` không dùng ở hộp duyệt); vitest **28 file / 258 test** xanh.
+- **Trình duyệt** (FE 3100 + BE 3002 trên DB test, tài khoản KHSX demo; máy vừa khởi động lại nên đã bật lại Docker Desktop, BE, FE):
+  - PI-2026-035, form Sửa thời hạn:
+    - N = T5 24/09, Phôi/Hàn/Sơn đề xuất 24/25/26/09;
+    - nút "đề xuất 23/09 / 06/10 / 08/10" ở Mua hàng / Đan / Đóng gói;
+    - đổi Khung thử 29/09 → N thành CN 27/09, Phôi/Hàn/Sơn 27/28/29/09, các nút đề xuất đổi theo;
+    - bấm nút đề xuất Mua hàng → ô thành 26/09;
+    - bấm **Hủy**, dữ liệu không đổi (vẫn 02/10, 26/09, 07/10, 10/10).
+  - PI-2026-016 (lệnh gộp, hạn giao 05/12 và 10/12, chưa lưu Khung/Đan/Đóng gói):
+    - chi tiết KHSX và hộp "Gửi QLSX" hiện Khung 20/11 và 25/11, Đan 30/11 và 05/12, Đóng gói 02/12 và 07/12, đều "đề xuất";
+    - tính theo hạn giao riêng từng SKU.
+    - Hộp "Gửi QLSX" bấm Hủy, không gửi.
+  - Màn chi tiết Sếp/QLSX chưa mở trên trình duyệt, chỉ kiểm qua tsc vì cùng đoạn code.
+  - Console còn 1 dòng cảnh báo React gap/rowGap. Chưa chắc là cảnh báo cũ còn lưu từ lúc nạp nóng hay mới phát sinh.
+
+**Chưa làm / còn treo:**
+- Mốc "vật tư còn lại N+8" (chưa có ô).
+- Chặn khi nhập sai thứ tự.
+- Ô Chuyền kiểm.
+- Thông báo trễ.
+- Cập nhật tài liệu Timeline (artifact + HTML) theo quyết định này.
+- Chưa commit.
+
+### 32.4 2026-10-27 — Rà vật tư trong bản sao lưu production: thuộc công đoạn nào, thuộc mốc vật tư nào (CHỈ RÀ)
+
+Người dùng làm rõ: "vật tư còn lại là trừ vật tư khung cơ khí, vật tư thành phẩm". Người dùng nhờ rà DB production đã sao lưu, xem có
+những vật tư gì và thuộc công đoạn nào.
+
+**Cách rà:**
+- Khôi phục `backups/prod_20261026_0951_truoc-deploy-solver.dump` vào container `postgres:17-alpine` tạm (không mở cổng, xoá ngay sau đó).
+- **Không kết nối DB production.**
+- Danh sách đầy đủ 384 vật tư: `backups/vat-tu-production-2026-10-26.csv` (đã gitignore, là dữ liệu production).
+- Script ở scratchpad: `review_prod_materials.sh`, `prod_material_stage.sh`.
+
+**Có gì:** 384 vật tư đang dùng, không có vật tư nào xoá hoặc ngừng.
+
+| Kho | Nhóm / loại | Số |
+|---|---|---|
+| Phôi Sơn Hàn | Sắt phần mềm (sắt hộp/phi/vuông 6–8 zem) | 20 |
+| | Sắt tự tính (la tấm, sắt phi, thanh nhôm) | 7 |
+| | Vật tư thành phẩm tự gia công (chân nhôm, các loại Pat) | 19 |
+| | Tán rút | 3 |
+| | Tiêu hao (đá cắt, đá mài, dây hàn, CO2, gas, hãm bọt, photphat, tẩy dầu, viên nén) | 11 |
+| | Sơn bột | 1 |
+| Vật tư thành phẩm | Dây | 14 |
+| | Đinh | 3 |
+| | Nút nhựa / nút nhôm | 18 |
+| | Phụ kiện bulon, londen, lục giác, vis, tán dù, góc su gỗ, xăng | 31 |
+| Kho thành phẩm | Phụ kiện: xốp, HDLR, nhãn, lót, tem, logo, giấy, băng keo; đồ gỗ / kính (mặt bàn gỗ, tay gỗ, khung tựa, mê ngồi, kính cường lực); gối ôm | 191 |
+| | Nệm (9 màu) | 9 |
+| | Bao bì (bao nylon, thùng…) | 55 |
+| | Sơn dặm | 1 |
+| | Nút phi Ø18 | 1 |
+
+- Người mua: Nhàn 156, Nguyệt 148, Nghi 77.
+- 3 dòng "Chân nhôm" không có người mua; đây là hàng tự gia công nên không cần người mua.
+
+**Không đọc được công đoạn từ dữ liệu production:**
+- Production **chưa có định mức nào**: `consumable_bom`, `piece_material_item`, `bom_accessory_items` đều 0 dòng.
+- Chỉ có đoạn cắt cho 12 mã sắt.
+- **Chưa có phiếu xuất nào**: xuất sắt, xuất tiêu hao, xuất đan, xuất đóng gói, xuất VTTP đều 0.
+- DB test trên máy cũng chỉ có định mức E2E.
+- Vì vậy phân loại công đoạn dưới đây **suy từ kho / nhóm / loại / tên + luồng xuất trong code**:
+  - xuất sắt → Phôi;
+  - định mức tiêu hao theo công đoạn → Hàn/Sơn;
+  - mảnh có đan = có dòng Dây + Đinh, xuất đan gộp dây/đinh/VTTP;
+  - xuất đóng gói theo phụ kiện/bao bì BOM.
+
+**Phân loại đề xuất:**
+- **VT khung cơ khí, về hết N−1** (khoảng 95 mã):
+  - toàn bộ kho Phôi Sơn Hàn (Phôi: sắt, la, đá cắt/mài; Hàn: dây hàn, CO2, tán rút; Sơn: sơn bột, tẩy dầu, photphat, hãm bọt);
+  - Dây, Đinh (trừ đinh cấp chuyền), Nút ở kho Vật tư thành phẩm (đi kèm khung lúc xuất đan).
+- **VT thành phẩm, về hết N+8** (khoảng 289 mã):
+  - toàn bộ kho thành phẩm (đóng gói, nệm, gối, đồ gỗ, kính, nhãn, HDLR);
+  - phụ kiện bulon/vis/lục giác ở kho Vật tư thành phẩm (kèm thùng);
+  - đinh cấp chuyền.
+
+**Cần người dùng / KHSX xác nhận:**
+- Gas (đốt móc), viên nén, hãm bọt: dùng ở Hàn hay Sơn.
+- Pat là VTTP tự gia công: dùng ở Hàn hay đi kèm xuất đan.
+- Nút nhựa: gắn ở công đoạn nào.
+- Đế nhựa đinh nâu phi 21.
+- Đinh F10 cấp chuyền.
+- Xăng.
+- Sơn dặm.
+- Nút phi Ø18 nằm ở kho thành phẩm.
+- 256 vật tư đóng gói/phụ kiện gán kho "Kho thành phẩm" chứ không phải "Kho Vật tư thành phẩm". Luồng xuất đóng gói trong code
+  ghi nguồn là kho Vật tư thành phẩm → cần xem đây là chủ ý hay nhập nhầm kho.
+
+### 32.5 2026-10-27 — Sếp làm rõ khung ngày về của 2 nhóm vật tư (hạn chót + ngày sớm nhất) — A–C ĐÃ LÀM ở 32.8, D để sau
+
+Người dùng gửi ảnh tin nhắn của Sếp Nhân, trả lời câu hỏi về mốc N−1 / N+8:
+- "N-1 là deadline, còn được về là ngày N-5".
+- "vật tư còn lại thì anh lấy ngày đóng gói trừ đi 7 ngày mới đúng".
+- "trừ đi 7 ngày là deadline, còn về được từ ngày đóng gói trừ đi 11 ngày".
+
+**Quy tắc sau khi làm rõ** (N = ngày bắt đầu phôi, ĐG = ngày đóng gói):
+
+| Nhóm vật tư | Được về từ (sớm nhất) | Hạn chót | Tính theo |
+|---|---|---|---|
+| VT khung cơ khí (sắt, la, tán rút, đá cắt, dây hàn, CO2, sơn bột, hoá chất, dây đan, đinh, nút) | N−5 | N−1 | ngày bắt đầu phôi |
+| VT thành phẩm (vật tư còn lại: thùng, xốp, nệm, gỗ, phụ kiện, nhãn) | ĐG−11 | ĐG−7 | ngày đóng gói |
+
+- Mỗi nhóm có **khung 5 ngày** (từ ngày sớm nhất tới hạn chót, tính cả hai đầu).
+- Khác ghi chép cũ ở 32.1: "vật tư còn lại về hết N+8". Nay tính theo **ngày đóng gói**:
+  - đóng gói đề xuất N+14 thì hạn chót = N+7 (sớm hơn ghi chép cũ 1 ngày);
+  - KHSX dời ngày đóng gói thì hạn VT thành phẩm dời theo.
+- Ví dụ PI-2026-035 (Khung 26/09 → N = T5 24/09, đóng gói đề xuất T5 08/10):
+  - VT khung: về từ T7 19/09, hạn chót T4 23/09;
+  - VT thành phẩm: về từ CN 27/09, hạn chót T5 01/10.
+
+**Cách hiểu "được về từ" (chưa hỏi lại Sếp):** ngày sớm nhất nên cho hàng về, để không chiếm kho và vốn quá sớm.
+Chưa rõ:
+- chỉ để Mua hàng tham khảo hay hệ thống phải cảnh báo khi hàng về sớm hơn;
+- KHSX sửa tay hạn chót thì ngày sớm nhất tính lại theo hạn mới (hạn − 4) hay vẫn theo N / ĐG.
+
+**Đối chiếu code hiện tại (chỉ đọc):**
+- Ô "Mua hàng" (`materialDeadline`) đang chỉ dùng cho luồng sắt, nên đúng nghĩa là hạn chót VT khung cơ khí:
+  - hạn xếp việc của đề xuất mua từ phương án cắt (`purchase-proposals.service.ts` `frameDeadlineOf`);
+  - luật gộp (`merge-rules.util.ts` `ownSteelDeadlineOf`);
+  - xếp hạng giữ tồn (`stock-reservations.service.ts`, qua `frame-deadline.util.ts`).
+- Chưa có ô nào cho VT thành phẩm.
+- Enum `ProdItemStageType` đã có `TRANSFER_CHECK` (Chuyền kiểm) nhưng form chưa có ô.
+- **Phát hiện khi lập danh sách sửa:** đề xuất mua tự tính theo PI KHÔNG có hạn.
+  - Gồm các nguồn `CONSUMABLE_AUTO_CALC` (dây/đinh/tán/nút, sơn, phụ kiện/bao bì), `PIECE_MATERIAL_YIELD`, `MATERIAL_YIELD_RECIPE`.
+  - Lý do: `PurchaseProposalsService.toResponseDto` chỉ tính `deadline` qua `cuttingProposal`. Các nguồn này không có phương án cắt
+    nên `deadline = null`, Mua hàng thấy "chưa có hạn".
+  - Chỉ đọc code, chưa kiểm trên dữ liệu. Đưa vào phần D của danh sách sửa (làm sau).
+
+**Trạng thái (cập nhật 2026-10-27):** A–C đã làm ở 32.8 (local, chưa commit). D (gắn hạn cho dòng đề xuất mua tự tính theo PI) để sau.
+
+### 32.6 2026-10-27 — Review: lệnh gộp chia mốc riêng từng SKU + hàng về kho "fill" cho SKU hạn gần trước (CHỈ RÀ; phát hiện 1 đã xác nhận ở 32.9 và ĐÃ SỬA ở 32.10)
+
+Người dùng gửi ảnh mục 11 (ý Sếp):
+- Câu hỏi: "gộp sku lại thì chia timeline như thế nào, cách filling vật tư cho các lệnh sản xuất được gộp".
+- Sếp trả lời: "gộp lại nhưng vẫn chia mốc thời gian tách biệt nhau, lúc nhận vật tư thì ưu tiên filling cho các lệnh sớm trước".
+- Người dùng giải thích: hàng về kho thì fill vật tư cho từng SKU trong PI, SKU nào hạn gần nhất thì được fill trước để sản xuất.
+
+**Cách rà:**
+- Đọc code BE: `stock-reservations.service.ts`, `purchase-proposals.service.ts` (`receiveItem`), `consumable-material-purchase.service.ts`,
+  `steel-issues`, `material-issues`, `weaving-issues`, `packaging-issues`, `material-yield-issues`.
+- Đọc code FE: `ThongKePagePlan.tsx`.
+- Truy vấn CHỈ ĐỌC DB test `dna_erp_solver_test`. Script: scratchpad `merged_pi_fill_check.sh`.
+
+**Kết quả:**
+
+| Phần | Ý Sếp | ERP hiện tại | Đánh giá |
+|---|---|---|---|
+| Mốc thời gian từng SKU trong lệnh gộp | tách riêng | Mỗi SKU có mốc riêng. Đề xuất Phú An tính theo hạn của chính SKU (32.3). Luật gộp chỉ so mốc cần sắt. | Đạt |
+| Đề xuất mua lệnh gộp | — | 1 đề xuất cho cả PI. Hạn sắt = SKU sớm nhất. Đề xuất tự tính theo PI không có hạn (32.5). | Đạt một phần |
+| Hàng mua về kho | fill từng SKU, hạn gần trước | `creditPool` cộng vào phần giữ của CẢ PI. Không chia SKU. | Chưa đạt |
+| Xuất tiêu hao / đan / đóng gói (theo từng SKU) | SKU sớm trước | Chỉ kiểm tồn thật. SKU hạn sau xuất trước vẫn được, có thể lấy hết phần SKU hạn sớm cần, không cảnh báo. | Chưa đạt |
+| Xuất sắt cho Phôi | — | Theo cả PI (cắt chung). Một cây có đoạn của nhiều SKU nên không chia cây theo SKU được. | Đúng bản chất cắt chung |
+| % Mua hàng từng SKU (Thống kê QLSX) | — | Số chung cả PI, trừ dây/nệm riêng từng dòng. Không biết SKU nào đã đủ. | Chưa đạt |
+
+**Chi tiết phần "hàng về" và "xuất":**
+- Quyết định cũ (Sếp chốt 2026-08-26, L5): SKU gấp nhất được ưu tiên. Code `loadPool` có sắp theo hạn SKU, nhưng:
+  - chỉ có tác dụng khi các SKU được duyệt cắt RIÊNG (mỗi SKU 1 dòng giữ);
+  - lệnh gộp cắt chung, cùng mọi vật tư tiêu hao / phụ kiện / bao bì, chỉ có 1 dòng giữ cho cả PI;
+  - xuất rút theo TỔNG của PI, nên thứ tự này không quyết định SKU nào được hàng.
+- DB test: 15 PI có 2 SKU. Giữ chỗ đều 1 dòng / PI / vật tư, không có dòng nào theo SKU.
+
+**Phát hiện thêm (nên sửa, chưa sửa):**
+1. **Rất có thể chặn nhầm chính PI đã mua hàng.**
+   - Hàng về khi PI chưa có dòng giữ (thường gặp: lúc tính đề xuất kho = 0) thì `creditPool` tạo dòng giữ loại `PRODUCTION_INVOICE`.
+   - Xuất tiêu hao (`material-issues`) và xuất đóng gói (`packaging-issues`) trừ dòng này khỏi tồn khả dụng mà không cộng lại phần của
+     chính PI. Xuất đan và xuất VTTP đã sửa lỗi cùng loại ngày 2026-10-05.
+   - Ví dụ DB test: PI-2026-022 "Sơn LIVE 01" tồn thật 100, giữ cho chính PI 100. Tính theo code thì khả dụng = 0, xuất sơn cho PI này
+     sẽ báo "không đủ".
+   - Cùng dạng: PI-2026-029, 037, 038.
+   - ĐÃ XÁC NHẬN bằng live-test 2026-10-27 (32.9): đúng là lỗi, cả xuất tiêu hao lẫn xuất đóng gói. ĐÃ SỬA ở 32.10.
+2. **PI khác lấy được hàng đã mua cho PI này.**
+   - Nếu lúc tính đề xuất kho còn ít hàng, PI có dòng giữ loại `CONSUMABLE_MATERIAL_PURCHASE`. Hàng về cộng vào dòng đó.
+   - Cả 4 luồng xuất bỏ qua loại này cho MỌI PI (không chỉ PI đang xuất), nên PI khác xuất trước vẫn lấy được.
+   - Cùng một lô hàng, cách xử lý khác hẳn nhau tùy lúc tính đề xuất kho còn hàng hay không.
+
+**Hướng đề xuất (chờ người dùng / Sếp duyệt):**
+- Chia theo SKU lúc ĐỌC, không thêm bảng:
+  - mỗi (PI, vật tư): rải số đã có (còn giữ + đã xuất) cho các SKU theo thứ tự hạn;
+  - VT khung theo hạn VT khung (không có thì Khung), VT thành phẩm theo hạn VT thành phẩm / Đóng gói;
+  - SKU sớm được đủ định mức trước;
+  - hiện "đủ / thiếu" từng SKU ở màn QLSX/KHSX.
+- Khi xuất cho SKU hạn sau mà làm SKU hạn sớm hơn thiếu: cảnh báo (đề xuất) hoặc chặn. Chờ Sếp quyết.
+- Sắt lệnh gộp: giữ theo cả PI. Nếu cần ưu tiên thì là thứ tự cắt, câu hỏi riêng.
+- Sửa 2 phát hiện trên:
+  - `material-issues` / `packaging-issues` cộng lại phần giữ của chính PI;
+  - chỉ bỏ qua dòng giữ của chính PI, không bỏ của PI khác. Rủi ro: dòng giữ cũ của PI đã huỷ có thể chặn oan, cần rà trước.
+
+**Chưa làm:** phát hiện 1 đã sửa (32.10). Phát hiện 2: commit dbfd2ea (ohey, origin/main, chưa pull) đã sửa, xem 32.11. Phần chia hàng theo SKU chưa làm.
+
+### 32.7 2026-10-27 — Sếp xác nhận bảng nhóm vật tư + tên và vị trí cột mốc (đã làm ở 32.8)
+
+Người dùng gửi 2 ảnh và báo Sếp đã xác nhận "đúng" cả hai:
+
+1. **Bảng nhóm vật tư (bản tóm tắt của 32.5) đúng:**
+
+   | Nhóm | Về từ (sớm nhất) | Hạn chót | Tính từ |
+   |---|---|---|---|
+   | VT khung cơ khí: sắt, la, tán rút, đá cắt, dây hàn, CO2, sơn bột, hoá chất, dây đan, đinh, nút | N−5 | N−1 | N = ngày bắt đầu phôi |
+   | VT thành phẩm: thùng, xốp, nệm, gỗ, phụ kiện, nhãn... | ĐG−11 | ĐG−7 | ĐG = ngày đóng gói |
+
+2. **Tên và vị trí cột trên thẻ SKU đúng** (người dùng hỏi, Sếp trả lời đúng):
+   - Cột "Mua hàng" (`materialDeadline`) đổi tên thành **"Mua vật tư khung cơ khí và đan"**. Dây đan thuộc nhóm VT khung nên phải có chữ "đan".
+   - Thêm cột **"Mua vật tư còn lại"** (= VT thành phẩm) nằm **giữa Đan và Đóng gói**.
+   - Thứ tự mới: Mua VT khung & đan → Khung CK → Đan → Mua VT còn lại → Đóng gói → Hạn giao.
+
+**Ảnh hưởng tới danh sách sửa A–D của 32.5:**
+- Tên hiển thị:
+  - "VT khung cơ khí" → "Mua VT khung & đan" (bản đầy đủ "Mua vật tư khung cơ khí và đan" ở form và tooltip);
+  - "VT thành phẩm" → "Mua VT còn lại" (tooltip liệt kê thùng, xốp, nệm, gỗ, phụ kiện, nhãn).
+- Vị trí cột mới: giữa Đan và Đóng gói (32.5 đề xuất ngay sau VT khung). Áp cho cả 3 màn chi tiết, thẻ điện thoại và form "Sửa thời hạn".
+- Lưu ý giao diện:
+  - ngày ĐG−7 thường SỚM hơn ngày Đan (theo Phú An Đan = ĐG−2), vd thẻ E2E-FULL: Đan 07/10, Mua VT còn lại 03/10, Đóng gói 10/10;
+  - cột xếp theo "vật tư đứng trước công đoạn dùng nó", không theo thứ tự ngày, nên đây không phải lỗi.
+- Đã rà các chỗ đang ghi tên mốc "Mua hàng" (chỉ đọc):
+  - FE `LenhSXPage.tsx`: `DATE_COL_LABELS`, 2 bảng tiêu đề, thẻ điện thoại, form, 2 câu nhắc luật gộp;
+  - FE `SystemConfigPage.tsx`: chữ giải thích luật gộp;
+  - FE `Guide/content/productionPlan.ts`: 4 câu;
+  - FE `steelNeedWindow.ts`: chỉ chú thích;
+  - BE thông báo đổi hạn "Mua vật tư: cũ → mới" (`production-invoices.service.ts`);
+  - BE chữ giải thích luật gộp "hạn mua hàng" (`update-system-config.dto.ts`).
+  - KHÔNG đổi chữ "Mua hàng" là tên bộ phận, module hay bước tiến độ (Guide journey/sales/boss, Admin, màn Mua hàng).
+
+**Trạng thái (cập nhật 2026-10-27):** người dùng duyệt làm A–C, 3 câu theo đề xuất (chỉ hiển thị "về từ"; sửa tay thì "về từ" = hạn − 4;
+D để sau). Đã làm, xem 32.8.
+
+### 32.8 2026-10-27 — ĐÃ LÀM A–C: mốc "Mua VT khung & đan" + "Mua VT còn lại" + dòng "về từ" (local, CHƯA commit)
+
+Người dùng duyệt: "Làm A, B, C theo bản đã chỉnh (Mua VT khung & đan, thêm Mua VT còn lại giữa Đan và Đóng gói). 3 câu theo đề xuất:
+về từ chỉ hiển thị; sửa tay thì về từ = hạn − 4; D để sau. Sửa ở local, migration chỉ DB test, kiểm trên trình duyệt, không commit."
+
+**BE (D:\DNA-ERP-BE):**
+- `prisma/schema.prisma`: `ProductionInvoiceItem.finishedMaterialDeadline DateTime?` ("Mua VT còn lại").
+  - Chọn cột riêng, không thêm `ProdItemStageType`, vì đây là hạn vật tư về kho (cùng loại `materialDeadline`), không phải công đoạn.
+  - Doc comment `materialDeadline` ghi rõ đó là "Mua VT khung & đan" và cũng là mốc cần sắt.
+- Migration `20261027100000_add_finished_material_deadline`: chỉ ADD COLUMN, nullable.
+  - ĐÃ áp lên DB test `dna_erp_solver_test` bằng script scratchpad `migrate-main-solver-test.ps1` (chặn nếu không phải localhost/DB test).
+  - KHÔNG đụng DB dev `dna_erp`, KHÔNG đụng production.
+- DTO:
+  - `UpdateProductionInvoiceItemDto` thêm `finishedMaterialDeadline?`; `ItemDeadlinesInputDto` kế thừa nên "Sửa thời hạn" cả PI cũng nhận.
+  - `ProductionInvoiceItemResponseDto` trả thêm field; `toItemResponseDto` map.
+- `applyItemDeadlines` ghi cột mới (chỉ khi có gửi, như `materialDeadline`).
+- Thông báo đổi hạn (`auditAndNotifyDeadlineChange`):
+  - "Mua vật tư: cũ → mới" đổi thành "Mua VT khung & đan: cũ → mới" (vẫn báo Mua hàng);
+  - thêm "Mua VT còn lại: cũ → mới", báo Mua hàng + thủ kho `vat-tu-tp` và `thanh-pham`; audit ghi `finishedMaterialDeadline`.
+- Chữ giải thích luật gộp trong `update-system-config.dto.ts`: "hạn mua hàng" → "hạn Mua VT khung & đan".
+- KHÔNG đổi:
+  - luật gộp, mốc cần sắt (vẫn `materialDeadline` → Khung);
+  - hạn sắt đề xuất mua, xếp hạng giữ chỗ;
+  - cột mới CHƯA nối vào đề xuất mua / giữ chỗ (việc D).
+
+**FE (D:\DNA-ERP):**
+- `utils/phuAnTimeline.ts`:
+  - `finishedMaterialDate` = Đóng gói − 7, `FINISHED_MATERIAL_OFFSET_LABEL` "ĐG−7";
+  - `materialArrivalFrom` = hạn − 4;
+  - `MATERIAL_MILESTONES`: tên ngắn/đầy đủ + chú thích danh sách vật tư của 2 mốc.
+  - Test thêm: PI-2026-035 (N = T5 24/09, ĐG = T5 08/10 → VT khung 19/09 → 23/09, VT còn lại 27/09 → 01/10), theo ĐG đã lưu, qua năm, null.
+- `services/production-invoices-api.ts`: đọc/gửi `finishedMaterialDeadline`.
+- `LenhSXPage.tsx`:
+  - nhãn cột "Mua hàng" → "Mua VT khung & đan"; thêm cột "Mua VT còn lại" GIỮA Đan và Đóng gói ở cả 3 màn (QLSX/Sếp, KHSX, hộp "Gửi QLSX");
+  - rê chuột lên tiêu đề hiện danh sách vật tư;
+  - chưa lưu thì hiện đề xuất ĐG−7 (ĐG = Đóng gói đã lưu hoặc đề xuất); dòng nhỏ "từ dd/mm" dưới 2 ô hạn vật tư;
+  - điện thoại: dải ngày 2 hàng × 3 (VT khung & đan, Khung, Đan / VT còn lại, Đóng gói, Hạn giao).
+- Form "Sửa thời hạn":
+  - cùng thứ tự với thẻ: Mua vật tư khung cơ khí và đan → Khung (nút Phôi/Hàn/Sơn) → Đan → Mua vật tư còn lại → Đóng gói;
+  - 2 lưới 3 cột (điện thoại 2 cột), ô Phôi/Hàn/Sơn mở ngay dưới hàng có Khung. Bỏ cách chia "Vật tư về / Sản xuất" đề xuất ở 32.5.
+  - Ô Mua VT còn lại còn là đề xuất thì tự tính lại khi đổi Khung / hạn giao / Đóng gói. Có nút "đề xuất dd/mm" và dòng "về từ <thứ · ngày>".
+  - Ô đề xuất chưa đụng tới không gửi lên (giữ quy ước cũ).
+- Chữ: câu nhắc luật gộp, `SystemConfigPage` (giải thích luật gộp), `Guide/content/productionPlan.ts` (4 câu + 1 câu mới về 2 mốc vật tư và
+  việc cột VT còn lại thường sớm hơn Đan), chú thích `steelNeedWindow.ts`.
+  - Chữ "Mua hàng" là tên bộ phận/module/bước tiến độ GIỮ nguyên.
+
+**Kiểm tra:**
+- BE:
+  - `jest src/modules/production-invoices src/common/utils/merge-rules`: 236/236 pass, có 2 test mới (lưu + báo đúng người cho mốc mới; chỉ gửi mốc mới không đụng mốc khác).
+  - Jest toàn bộ: 2071 pass, 2 fail ở `solver-ts/optimize-material.spec.ts` (chạy cùng lúc `nest build`, 241 s). Chạy lại riêng file đó: 14/14 pass.
+  - `nest build` OK.
+- FE: `tsc --noEmit` OK; eslint 0 lỗi (chỉ warning `any` cũ); vitest 262/262 pass.
+- Trình duyệt: BE 3002 + FE 3100 trên DB test, tài khoản KHSX + QLSX mẫu.
+  - PI-2026-035: bảng hiện 02/10 · từ 28/09 | 26/09 | 07/10 | 03/10 · từ 29/09 (đề xuất) | 10/10 | 12/10.
+  - Form: bấm "đề xuất 08/10" ở Đóng gói thì VT còn lại tự đổi 01/10 · ĐG−7 · về từ CN 27/09; bấm "đề xuất 23/09" thì về từ T7 19/09 (khớp ví dụ của Sếp).
+  - Lưu thật 1 lần chỉ ô VT còn lại = 01/10:
+    - PATCH items-deadlines 200; DB có giá trị;
+    - thông báo "Mua VT còn lại: (chưa có) → 1/10/2026" tới muapsh, muatp, muavttp, khovttp, khotp;
+    - sau đó đặt lại cột về NULL trên DB test (thông báo + audit của lần thử vẫn còn).
+  - PI-2026-016 (gộp 2 SKU): mỗi SKU có VT còn lại riêng (25/11, 30/11).
+  - QLSX PI-2026-019: 6 cột, ngày đúng theo hạn giao − 17.
+  - Hộp "Gửi QLSX" chỉ mở xem, không gửi.
+  - Lỗi giao diện tìm thấy và đã sửa: nhãn "MUA VT KHUNG & ĐAN" xuống 2 dòng làm ngày lệch hàng ở thẻ điện thoại và hộp "Gửi QLSX". Đã chừa
+    sẵn 2 dòng cho mọi nhãn, kiểm lại thì thẳng hàng.
+
+**Lưu ý khi chạy tiếp / deploy:**
+- Prisma client trong `D:\DNA-ERP-BE` đã generate có cột mới. DB dev `dna_erp` CHƯA có cột: `start-dev.bat` chạy `prisma migrate deploy` trước nên
+  sẽ tự áp khi người dùng mở lại; chạy BE dev bằng cách khác thì phải migrate trước.
+- Production cần migration này khi deploy (chưa làm, chờ người dùng nói "deploy").
+
+**Chưa làm:**
+- D: gắn hạn cho dòng đề xuất mua tự tính theo PI.
+- Review 32.6 (chia hàng về theo SKU, 2 lỗi giữ chỗ) vẫn chờ.
+- Không commit.
+
+### 32.9 2026-10-27 — Live-test XÁC NHẬN: xuất tiêu hao / đóng gói bị chặn bởi giữ chỗ của CHÍNH PI (đã sửa ở 32.10)
+
+Người dùng: "Chạy thử trên DB test để xác nhận lỗi xuất tiêu hao/đóng gói bị chặn nhầm cho chính PI đã mua hàng (PI-2026-022). Chỉ kiểm,
+báo kết quả, chưa sửa code, không commit."
+
+**Cách làm (không đụng DB test gốc):**
+- Đọc `MaterialIssuesService.create()` và `PackagingIssuesService.create()`: cùng một cách tính tồn khả dụng.
+  - `getAvailableQty()` chỉ loại 2 loại giữ chỗ `CONSUMABLE_MATERIAL_PURCHASE`, `PIECE_MATERIAL_YIELD_PURCHASE`.
+  - Loại `PRODUCTION_INVOICE` (do `creditPool` tạo khi hàng về mà PI chưa có dòng giữ) bị trừ hết, KỂ CẢ của chính PI đang xuất.
+  - Không cộng lại phần của chính PI. `WeavingIssuesService` và `MaterialYieldIssuesService` đã sửa lỗi cùng loại ngày 2026-10-05.
+- PI-2026-022 không gọi thẳng được trên DB test:
+  - lệnh SX 24 đã `floorStage = FINISHED`, cổng "xưởng đang chạy" chặn trước, chưa tới bước kiểm tồn;
+  - DB test không có phụ kiện đóng gói nào (`bom_accessory_items` rỗng).
+- Nên tạo BẢN SAO `dna_erp_solver_test_pi022` (`CREATE DATABASE ... TEMPLATE dna_erp_solver_test`) và chỉ dựng tạm trên bản sao
+  (script scratchpad `pi022_copy_fixture.sql`):
+  - mở lại lệnh SX 24 (PI-2026-022) thành ACTIVE;
+  - gắn VTK-018 làm phụ kiện PACKAGING cho định mức 31 của PI-2026-037 (lệnh SX 37, đang ACTIVE thật). Phải tắt trigger
+    `assert_bom_revision_draft` trong đúng phiên đó vì định mức ACTIVE;
+  - ghi Chuyền kiểm 50/50 cho mảnh 96 để qua cổng Chuyền kiểm.
+  - Giữ chỗ và tồn là dữ liệu CÓ SẴN, không dựng.
+- BE `dist` (checkout chính) chạy cổng 3003 trỏ vào bản sao (launch `be-3003-copy-pi022`). Gọi API thật bằng thủ kho `khopsh`
+  (phoi-son-han), script `pi022_live_test.sh`.
+
+**Kết quả:**
+
+| # | Thao tác | Tồn thật | Giữ chỗ bị trừ | Kết quả |
+|---|---|---|---|---|
+| 1 | PI-2026-022 xuất tiêu hao Sơn LIVE 01 (VTK-009) công đoạn SON 10 / định mức 100 | 100 | 100, đều là `PRODUCTION_INVOICE` của chính PI-2026-022 | **409** "Tồn kho khả dụng (0) không đủ xuất 10" |
+| 2 | PI-2026-037 xuất tiêu hao Sơn E2E (VTK-018) SON 10 | 100 | 100, của chính PI-2026-037 | **409** cùng câu |
+| 3 | PI-2026-037 xuất ĐÓNG GÓI VTK-018 10 (phụ kiện dựng tạm) | 100 | 100, của chính PI-2026-037 | **409** cùng câu |
+| 4 | Đối chứng: nhả giữ chỗ của PI-2026-022 (RELEASED, chỉ trên bản sao) rồi xuất lại đúng lệnh 1 | 100 | 0 | **201**, tồn 100 → 90, 1 phiếu xuất 10 |
+
+- Kết luận: lỗi THẬT. Kho không xuất được vật tư tiêu hao/đóng gói cho chính PI đã mua hàng đó, dù tồn thật đủ và chưa PI nào khác giữ.
+- Cùng dạng trên DB test: PI-2026-022, 029, 037, 038 (mỗi PI 1 dòng `PRODUCTION_INVOICE` giữ đúng bằng tồn).
+- Production: chưa kiểm.
+
+**Hướng sửa (đã duyệt và ĐÃ LÀM ở 32.10):**
+- `material-issues` và `packaging-issues` làm giống `WeavingIssuesService.create()`:
+  - cộng lại phần `PRODUCTION_INVOICE` còn giữ của chính PI (`refId` = PI id);
+  - `available = min(onHand, availableOutsideOwnPi + ownPiRemaining)`;
+  - `drainPoolBestEffort` phía sau vẫn rút giữ chỗ của PI như cũ.
+- Thêm test cho cả 2 service (giữ chỗ của chính PI bằng đúng tồn thật thì vẫn xuất được; giữ của PI khác thì vẫn chặn).
+
+**Dọn dẹp:**
+- DB test gốc KHÔNG đổi gì.
+- Bản sao `dna_erp_solver_test_pi022` (có dữ liệu tạm + 1 phiếu xuất thử) vẫn còn; xoá khi người dùng đồng ý (32.10 dùng bản sao mới).
+- BE 3003 đã tắt.
+
+**Chưa làm:**
+- Sửa code.
+- Live-test phát hiện 2 của 32.6 (PI khác lấy được hàng mua cho PI này).
+- Không commit.
+
+### 32.10 2026-10-27 — (ĐÃ BỎ 2026-10-28, thay bằng commit dbfd2ea - xem 32.11, 32.12) Sửa local: xuất tiêu hao / đóng gói cộng lại giữ chỗ của CHÍNH PI
+
+Người dùng: "Sửa lỗi xuất tiêu hao và xuất đóng gói theo cách luồng Đan: cộng lại phần giữ hàng của chính PI đang xuất, PI khác vẫn chặn.
+Thêm test cho hai luồng, chạy jest và nest build, chạy lại 3 lần xuất trên bản sao DB test để xác nhận. Sửa ở local, không commit."
+
+**Đã sửa (D:\DNA-ERP-BE):**
+- `MaterialIssuesService.create()` và `PackagingIssuesService.create()`, làm y như `MaterialYieldIssuesService`/`WeavingIssuesService` (2026-10-05):
+  - `availableOutsideOwnPi` = `getAvailableQty()` như cũ (vẫn trừ giữ chỗ của MỌI PI khác + chuyển kho);
+  - đọc dòng `StockReservation` ACTIVE loại `PRODUCTION_INVOICE` của CHÍNH PI (`refId` = PI id), cùng kho, cùng vật tư;
+  - cộng phần còn giữ: `available = min(onHand, availableOutsideOwnPi + ownPiRemaining)`.
+- `productionInvoiceItem` giờ tra 1 lần ở bước kiểm tồn và dùng lại cho `drainPoolBestEffort` (trước tra ở cuối). Rút giữ chỗ sau khi xuất giữ như cũ.
+- Không đổi: câu báo lỗi, `getAvailableQty()`, luồng Đan/VTTP/sắt, cách tạo giữ chỗ khi hàng về.
+
+**Test thêm** (`material-issues.service.spec.ts`, `packaging-issues.service.spec.ts`, mỗi file 2 test):
+- giữ chỗ `PRODUCTION_INVOICE` của chính PI bằng đúng tồn thật thì vẫn xuất được, kiểm cả điều kiện truy vấn (kho, vật tư, ACTIVE,
+  PRODUCTION_INVOICE, refId);
+- PI khác đang giữ thì vẫn chặn với đúng câu "Tồn kho khả dụng (10) không đủ xuất 20".
+
+**Kiểm tra:**
+- `jest` 5 module (material-issues, packaging-issues, weaving-issues, material-yield-issues, stock): 245/245 pass.
+- `nest build` OK.
+- Jest toàn bộ (chạy SAU nest build, không chạy song song): 2076 pass, 1 fail ở `solver-ts/optimize-material.spec.ts` (bộ giải cắt sắt, không liên quan; chạy cùng lúc BE 3003 khởi động). Chạy lại riêng file đó lúc máy rảnh: 14/14 pass. Cùng file này đã fail khi máy bận ở 32.8.
+- Live-test trên BẢN SAO SẠCH mới `dna_erp_solver_test_pi022_fix`:
+  - tạo bằng `CREATE DATABASE ... TEMPLATE dna_erp_solver_test`;
+  - cùng dữ liệu tạm như 32.9, thêm VTK-009 vào định mức SON của PI-2026-037 cho ca "PI khác";
+  - BE `dist` mới build, cổng 3003, thủ kho `khopsh`; script `pi022_live_test_after_fix.sh`.
+
+| # | Thao tác | Trước khi sửa (32.9) | Sau khi sửa |
+|---|---|---|---|
+| 1 | PI-2026-022 xuất tiêu hao Sơn LIVE 01 (VTK-009) 10 | 409 "tồn khả dụng 0" | **201**. Tồn 100 → 90, giữ chỗ PI-2026-022 rút 10/100 |
+| 2 | PI-2026-037 xuất tiêu hao Sơn E2E (VTK-018) 10 | 409 | **201**. Tồn 100 → 90, giữ chỗ PI-2026-037 rút 10/100 |
+| 3 | PI-2026-037 xuất đóng gói VTK-018 10 | 409 | **201**. Tồn 90 → 80, giữ chỗ PI-2026-037 rút 20/100 |
+| 4 | PI KHÁC: PI-2026-037 xuất VTK-009 10 (tồn 90, PI-2026-022 còn giữ 90) | — | **409** "Tồn kho khả dụng (0) không đủ xuất 10" (vẫn chặn đúng) |
+
+- DB test gốc `dna_erp_solver_test`: kiểm lại không đổi (giữ chỗ 20 vẫn ACTIVE 0 đã rút, lệnh SX 24 FINISHED, 0 phụ kiện đóng gói).
+
+**Còn lại:**
+- 2 bản sao `dna_erp_solver_test_pi022` và `dna_erp_solver_test_pi022_fix` vẫn còn trong Postgres local; xoá khi người dùng đồng ý.
+- Launch `be-3003-copy-pi022` hiện trỏ bản `_fix`.
+- Phát hiện 2 của 32.6 (giữ chỗ loại `CONSUMABLE_MATERIAL_PURCHASE` bị mọi luồng bỏ qua cho MỌI PI nên PI khác lấy được) chưa live-test,
+  chưa sửa. Phần chia hàng theo SKU chưa làm.
+- Chưa deploy; production chưa kiểm có PI nào đang bị chặn kiểu này.
+- Không commit.
+
+### 32.11 2026-10-27 — Review commit `dbfd2ea` "fix-stockReservation" (ohey, origin/main, CHƯA pull về local)
+
+Người dùng: "review commit mới nhất". Commit nằm trên `origin/main`, cha là `4cf4078` (main local). Chỉ review + chạy
+thử, không sửa code, không pull, không commit.
+
+**Commit làm gì:**
+- `StockReservationsService.getAvailableQty()`: bỏ tham số `excludeRefTypes` (lọc theo LOẠI giữ chỗ), thay bằng
+  `ownProductionInvoiceId` (lọc theo PI). Khi truyền PI đang xuất thì chỉ trừ giữ chỗ của PI KHÁC hoặc không neo PI nào
+  (`OR [productionInvoiceId null, productionInvoiceId <> PI]`). Không truyền thì trừ mọi giữ chỗ như cũ.
+- 4 luồng xuất truyền PI đang xuất: tiêu hao, đóng gói, vật tư thành phẩm, mang kèm khi đan. Hai luồng sau bỏ đoạn
+  cộng-lại `ownPiRemaining` của 2026-10-05.
+- Các luồng tính đề xuất mua, duyệt phương án cắt, chuyển kho, màn tồn kho không đổi (không truyền PI).
+- Spec đơn vị viết lại theo hành vi mới. Test tích hợp mới `test/integration/reservation-own-pi.integration.spec.ts`
+  (Postgres test cổng 5433), có 1 ca `it.failing` cho lỗi mua thừa khi tính lại sau khi đã xuất (biết, chưa sửa).
+- Changelog HTML `docs/changelog-2026-10-27-fix-giu-cho-ton-kho-theo-pi.html`.
+
+**Đánh giá đúng/sai:**
+- Đúng hướng và tốt hơn bản sửa local 32.10: sửa cả lỗi 1 (chính PI bị chặn) lẫn lỗi 2 của 32.6 (PI khác lấy được hàng
+  mua cho PI này, vì `CONSUMABLE_MATERIAL_PURCHASE`/`PIECE_MATERIAL_YIELD_PURCHASE` bị bỏ qua cho MỌI PI), gom về 1 chỗ.
+- Đã kiểm: mọi chỗ ghi giữ chỗ cho vật tư (tiêu hao, mảnh, công thức VTTP, creditPool) đều set `productionInvoiceId`,
+  nên lọc theo PI phủ đủ. Chỉ 4 luồng xuất từng truyền tham số thứ 6, cả 4 đã đổi. `productionInvoiceId` null thì
+  rơi về "trừ mọi giữ chỗ", không lỗi.
+
+**Phát hiện:**
+1. (Trung bình, chưa có trên DB test) Giữ chỗ còn dư của PI đã xong/huỷ không bao giờ được nhả, giờ chặn PI khác.
+   - Không có chỗ nào đánh RELEASED giữ chỗ vật tư khi PI xong/huỷ (`releaseByRef` chỉ gọi từ phương án cắt sắt;
+     `releaseForInvoice` chỉ đụng CuttingProposal). Dòng giữ chỉ giảm qua `consumedQty` khi xuất.
+   - Dư là bình thường: `receiveItem()` cộng vào giữ chỗ ĐÚNG số nhận (`incrementQty`), gồm cả % hao hụt khi mua
+     (`purchaseWastePercentage`) và nhận vượt (không chặn, có chủ đích với bao bì/bì zip); xưởng cũng có thể xuất ít
+     hơn định mức.
+   - Trước commit: dư loại `CONSUMABLE_MATERIAL_PURCHASE`/`PIECE_MATERIAL_YIELD_PURCHASE` bị 4 luồng xuất bỏ qua nên
+     không chặn ai (dư loại `PRODUCTION_INVOICE` thì vốn đã chặn). Sau commit: mọi dư của PI khác đều trừ vào khả dụng,
+     cộng dồn theo thời gian -> PI mới gặp lại đúng triệu chứng "Tồn kho khả dụng thấp hơn tồn thật", nặng nhất ở
+     bao bì.
+   - DB test hiện chưa có ca này (dư còn giữ chỉ thuộc PI đang PRODUCING: 4 dòng sắt, 9 dòng PRODUCTION_INVOICE).
+   - Hướng sửa gợi ý: khi PI sang DONE/CANCELLED thì nhả (RELEASED) giữ chỗ ACTIVE của PI; hoặc `getAvailableQty()`
+     bỏ qua giữ chỗ của PI đã DONE/CANCELLED.
+2. (Ghi nhận, commit đã tự nêu) Màn tồn kho vẫn trừ cả giữ chỗ của chính PI; luồng xuất VTTP theo công thức không kiểm
+   giữ chỗ; lỗi mua thừa khi tính lại sau khi đã xuất (`it.failing`).
+3. (Đụng sửa local) Commit sửa đúng 4 file mà bản local 32.10 cũng sửa: `material-issues.service(.spec).ts`,
+   `packaging-issues.service(.spec).ts`. Pull về sẽ bị git từ chối/xung đột. Bản local 32.10 nên bỏ, lấy bản commit
+   (test local của 32.10 mock `stockReservation.findMany` sẽ sai với cách mới). Các thay đổi local khác (mốc Mua VT
+   32.8: production-invoices, schema, migration, system-config) không đụng file nào của commit.
+
+**Kiểm tra (trên bản xuất riêng của commit trong scratchpad, không đụng working tree):**
+- `prisma generate` + `nest build`: OK.
+- Jest đơn vị 12 suite (stock, 4 luồng xuất, mua tiêu hao, mua mảnh, đề xuất mua): 374/374 pass.
+- Test tích hợp `reservation-own-pi` trên Postgres test 5433: 4/4 pass (gồm ca `it.failing`); ca R1 in "giữ còn 100,
+  buyQty 0".
+- Live-test lại 4 lần xuất của 32.9/32.10 với BE build từ commit (cổng 3003) trên bản sao sạch mới
+  `dna_erp_solver_test_pi022_review` (cùng fixture `pi022_copy_fixture.sql`):
+
+| # | Thao tác | Trước khi sửa (32.9) | Commit dbfd2ea |
+|---|---|---|---|
+| 1 | PI-2026-022 xuất tiêu hao VTK-009 10 | 409 | **201**. Tồn 100 → 90, giữ chỗ rút 10 |
+| 2 | PI-2026-037 xuất tiêu hao VTK-018 10 | 409 | **201**. Tồn 100 → 90 |
+| 3 | PI-2026-037 xuất đóng gói VTK-018 10 | 409 | **201**. Tồn 90 → 80, rút tổng 20 |
+| 4 | PI KHÁC: PI-2026-037 xuất VTK-009 (PI-022 còn giữ 90) | — | **409** "Tồn kho khả dụng (0)", chặn đúng |
+
+- Kết quả trùng bản sửa local 32.10. DB test gốc kiểm lại không đổi.
+
+**Còn lại:**
+- ĐÃ pull commit về local và bỏ bản sửa local 32.10 (32.12).
+- Phát hiện 1 chưa báo người viết commit, chưa sửa.
+- Bản sao DB tạm giờ có 3: `dna_erp_solver_test_pi022`, `_pi022_fix`, `_pi022_review`; xoá khi người dùng đồng ý.
+- Launch `be-3003-review-dbfd2ea` + thư mục xuất `review-dbfd2ea` (có junction `node_modules`) nằm trong scratchpad.
+
+### 32.12 2026-10-28 — Bỏ bản sửa local 32.10, pull commit `dbfd2ea` về main (CHƯA commit gì thêm)
+
+Người dùng (nút sau review 32.11): "Bỏ local, pull" - bỏ thay đổi local của 4 file xuất kho, giữ nguyên các thay đổi
+local khác, pull `dbfd2ea` từ `origin/main`, không commit.
+
+**Đã làm:**
+- Sao lưu bản local 32.10 trước khi bỏ: 4 file + `local-32-10.patch` ở scratchpad phiên, thư mục `backup-local-32-10`.
+- `git checkout --` đúng 4 file: `material-issues.service.ts`, `material-issues.service.spec.ts`,
+  `packaging-issues.service.ts`, `packaging-issues.service.spec.ts`.
+- `git fetch` (origin/main vẫn là `dbfd2ea`, chỉ hơn main 1 commit) rồi `git merge --ff-only dbfd2ea`: fast-forward
+  `4cf4078..dbfd2ea`, không xung đột.
+- Giữ nguyên thay đổi local khác: mốc Mua VT 32.8 (`schema.prisma`, migration `20261027100000_add_finished_material_deadline`,
+  production-invoices dto/service/spec, system-config dto) và các file docs.
+
+**Kiểm tra trên main sau khi pull (code commit + thay đổi local còn lại):**
+- `nest build`: OK.
+- Jest các module stock, material-issues, packaging-issues, weaving-issues, material-yield-issues, production-invoices,
+  purchase-proposals, system-config: 17/17 suite, 577/577 test pass.
+
+**Còn lại:**
+- Phát hiện 1 của 32.11 (giữ chỗ dư của PI đã xong/huỷ không được nhả, giờ chặn PI khác) chưa sửa.
+- 3 bản sao DB tạm vẫn còn; xoá khi người dùng đồng ý.
+- Không commit, không push, không deploy.
+
+### 32.13 2026-10-28 — dbfd2ea không đụng phần code của người dùng; đã STAGE phần cần commit (BE + FE), KHÔNG commit
+
+Người dùng: "không cần sửa, để đó bạn tôi sửa, review nhánh fix stock đó còn đụng gì tới code phần tôi không nếu không
+hãy đưa những gì cần commit xuống staged không tự commit, tôi sẽ tự commit".
+
+- Phát hiện 1 của 32.11 (nhả giữ chỗ dư khi PI xong/huỷ): người dùng để bạn (người viết dbfd2ea) sửa, phiên này KHÔNG sửa.
+
+**Rà "nhánh fix stock":**
+- `git fetch --prune`: không có nhánh fix stock riêng, chỉ có commit `dbfd2ea` trên `origin/main`, đã pull về ở 32.12;
+  `main` = `origin/main` = `dbfd2ea`.
+- File của commit giao với file local đang đổi/chưa track: KHÔNG có file nào.
+- Commit không nhắc tới `finishedMaterialDeadline`, `materialDeadline`, `applyItemDeadlines`,
+  `auditAndNotifyDeadlineChange`, system-config.
+- Không đổi API trả về FE (màn tồn kho vẫn gọi `getAvailableQty()` không truyền PI) nên FE không bị ảnh hưởng.
+- Test tích hợp mới chạy `prisma migrate deploy` trên Postgres test 5433, sẽ áp cả migration mới của người dùng (cột
+  nullable), không xung đột.
+
+**Đã stage (chưa commit):**
+- BE `D:\DNA-ERP-BE` (`main`), 12 file:
+  - code: `prisma/schema.prisma`, migration `20261027100000_add_finished_material_deadline`,
+    production-invoices (2 dto, service, spec), `system-config/dto/update-system-config.dto.ts`;
+  - docs: changelog `2026-09-25` (mục 32.x), `2026-10-06`, `2026-10-20`, `2026-10-21` (cập nhật trạng thái đã
+    commit/push 26/10), `docs/nghien-cuu-timeline-chuan-erp-2026-10-26.html` (tài liệu nghiên cứu mục 32 dẫn tới).
+- FE `D:\DNA-ERP` (`demo`, khớp `origin/demo`), 8 file: `LenhSXPage.tsx`, `production-invoices-api.ts`,
+  `SystemConfigPage.tsx`, `Guide/content/productionPlan.ts`, `steelNeedWindow.ts`, `phuAnTimeline.ts` +
+  `phuAnTimeline.test.ts` (mới), changelog `2026-10-23` (cập nhật trạng thái).
+
+**CỐ Ý không stage (không thuộc việc này hoặc là đồ local):**
+- BE: `.claude/`, `CLAUDE.md`, `start-dev.bat`, `test/solver-real-data-new/`, 15 file docs pdf/xlsx báo cáo solver và
+  3 changelog md (HR, tool nhập công) (code HR đã xoá) - đều đã nằm ngoài các commit trước.
+- FE:
+  - `.env.example` bị XOÁ ở local, không rõ nguồn - không stage việc xoá;
+  - `next-env.d.ts` do `next dev` với `.next-e2e` (máy chủ FE kiểm thử) tự sửa - không nên commit;
+  - `e2e/golden-path.spec.ts` (MEIJING → Meiying) và `docs/quy-doi-doan-phoi.md` không thuộc việc mốc Mua VT;
+  - các file untracked khác (`.claude/`, `AGENTS.md`, `CLAUDE.md`, docs, e2e mới, `pnpm-*`, `tsconfig.tsbuildinfo`,
+    `playwright.nows.config.ts`).
+
+**Kiểm tra:**
+- BE (trên main sau pull, 32.12): `nest build` OK; jest 17 suite liên quan 577/577 pass.
+- FE: `tsc --noEmit` OK; vitest `phuAnTimeline` 12/12 pass; eslint 3 file chính 0 lỗi (96 cảnh báo có sẵn).
+
+**Còn lại:**
+- Người dùng tự commit + push.
+- Khi lên production, migration `finishedMaterialDeadline` phải chạy (cột nullable, không đụng dữ liệu cũ).
+- 3 bản sao DB tạm vẫn còn; xoá khi người dùng đồng ý.

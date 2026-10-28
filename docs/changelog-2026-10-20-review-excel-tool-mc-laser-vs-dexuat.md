@@ -1,5 +1,7 @@
 # Changelog 2026-10-20 — Review `MC_CatSat_ExcelTool.zip` và so sánh với DNA-DEXUAT
 
+> **2026-10-26: ĐÃ COMMIT + PUSH + LÊN PRODUCTION** (BE `4cf4078` trên `main`, FE `d70be5e` trên `demo`; CI xanh, Render và Vercel đã chạy bản mới — changelog-2026-10-06 mục 5.8). Các chữ "CHƯA commit/CHƯA deploy" bên dưới là trạng thái lúc viết từng mục.
+>
 > Trạng thái: **CHỈ REVIEW + ĐO, CHƯA SỬA CODE** ở DNA-DEXUAT lẫn DNA-ERP-BE (mục 7: solver TS + HiGHS; từ 7.7 đã nối vào BE; **mục 9 (2026-10-23): HiGHS là bộ giải DUY NHẤT, đã gỡ `SOLVER_MODE=http`/DNA-DEXUAT, thêm chọn máy cắt Laser/Tự động ở BE**; local, chưa deploy, CHƯA commit; **mục 10 (2026-10-23): MC Tự động đi đường "thu hẹp" qua nghiệm không-bó — I5 V15 từ không ra thành 1801 cây/30 s, lệnh I5 293 s -> 50 s**). **Mục 7A–7B**: hai mục trước chỉ có ở bản checkout chính, gộp vào đây 2026-10-26 khi gom code BE về `main`. Các đề xuất ở mục 5 chờ người dùng chốt.
 
 ## Mục lục

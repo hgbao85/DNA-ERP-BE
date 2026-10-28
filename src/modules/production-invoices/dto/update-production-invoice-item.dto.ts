@@ -27,6 +27,14 @@ export class UpdateProductionInvoiceItemDto {
   @IsDateString()
   materialDeadline?: string;
 
+  @ApiPropertyOptional({
+    description:
+      '"Mua VT còn lại" - hạn chót vật tư thành phẩm về kho (đề xuất = Đóng gói − 7, 2026-10-27).',
+  })
+  @IsOptional()
+  @IsDateString()
+  finishedMaterialDeadline?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsDateString()

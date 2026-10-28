@@ -777,15 +777,19 @@ export class ProductionInvoicesService {
     itemId: bigint,
     dto: {
       materialDeadline?: string;
+      finishedMaterialDeadline?: string;
       deliveryDeadline?: string;
       stages?: { stageType: ProdItemStageType; deadline: string }[];
     },
   ): Promise<void> {
-    if (dto.materialDeadline || dto.deliveryDeadline) {
+    if (dto.materialDeadline || dto.finishedMaterialDeadline || dto.deliveryDeadline) {
       await tx.productionInvoiceItem.update({
         where: { id: itemId },
         data: {
           materialDeadline: dto.materialDeadline ? new Date(dto.materialDeadline) : undefined,
+          finishedMaterialDeadline: dto.finishedMaterialDeadline
+            ? new Date(dto.finishedMaterialDeadline)
+            : undefined,
           deliveryDeadline: dto.deliveryDeadline ? new Date(dto.deliveryDeadline) : undefined,
         },
       });
@@ -877,10 +881,22 @@ export class ProductionInvoicesService {
     const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
 
     if (changed(before.materialDeadline, after.materialDeadline)) {
-      changes.push(`Mua vật tư: ${fmt(before.materialDeadline)} → ${fmt(after.materialDeadline)}`);
+      changes.push(
+        `Mua VT khung & đan: ${fmt(before.materialDeadline)} → ${fmt(after.materialDeadline)}`,
+      );
       oldValue.materialDeadline = iso(before.materialDeadline);
       newValue.materialDeadline = iso(after.materialDeadline);
       roles.add(BUSINESS_ROLES.PURCHASER);
+    }
+    // "Mua VT còn lại" (2026-10-27): vật tư thành phẩm về kho VTTP rồi xuất đóng gói - báo Mua hàng + thủ kho VTTP/thành phẩm.
+    if (changed(before.finishedMaterialDeadline, after.finishedMaterialDeadline)) {
+      changes.push(
+        `Mua VT còn lại: ${fmt(before.finishedMaterialDeadline)} → ${fmt(after.finishedMaterialDeadline)}`,
+      );
+      oldValue.finishedMaterialDeadline = iso(before.finishedMaterialDeadline);
+      newValue.finishedMaterialDeadline = iso(after.finishedMaterialDeadline);
+      roles.add(BUSINESS_ROLES.PURCHASER);
+      ['vat-tu-tp', 'thanh-pham'].forEach((w) => warehouseIds.add(w));
     }
     if (changed(before.deliveryDeadline, after.deliveryDeadline)) {
       changes.push(`Giao hàng: ${fmt(before.deliveryDeadline)} → ${fmt(after.deliveryDeadline)}`);
@@ -2631,6 +2647,7 @@ export class ProductionInvoicesService {
       cushionMaterial: item.cushionMaterial ? toMaterialChoiceRef(item.cushionMaterial) : null,
       quantity: item.quantity,
       materialDeadline: item.materialDeadline,
+      finishedMaterialDeadline: item.finishedMaterialDeadline,
       deliveryDeadline: item.deliveryDeadline,
       prodApprovalStatus: item.prodApprovalStatus,
       requestedAt: item.requestedAt,

@@ -112,6 +112,7 @@ describe('ProductionInvoicesService', () => {
     productVariant: null,
     quantity: 10,
     materialDeadline: null,
+    finishedMaterialDeadline: null,
     deliveryDeadline: null,
     prodApprovalStatus: null,
     requestedAt: null,
@@ -1492,6 +1493,54 @@ describe('ProductionInvoicesService', () => {
       expect(calls[0][1].params.warehouseIds).toEqual(['phoi-son-han', 'vat-tu-tp']);
       expect(calls[0][1].params.changes).toHaveLength(3);
       expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('Mua VT khung & đan + Mua VT còn lại (2026-10-27) → lưu cả hai, báo Mua hàng + kho VTTP/thành phẩm', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValueOnce(piItem()).mockResolvedValueOnce(
+        piItem({
+          materialDeadline: new Date('2026-09-23'),
+          finishedMaterialDeadline: new Date('2026-10-01'),
+        }),
+      );
+
+      const result = await service.updateItem('7', '20', {
+        materialDeadline: '2026-09-23',
+        finishedMaterialDeadline: '2026-10-01',
+      });
+
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledWith({
+        where: { id: 20n },
+        data: {
+          materialDeadline: new Date('2026-09-23'),
+          finishedMaterialDeadline: new Date('2026-10-01'),
+          deliveryDeadline: undefined,
+        },
+      });
+      expect(result.finishedMaterialDeadline).toEqual(new Date('2026-10-01'));
+      const calls = emitted();
+      expect(calls).toHaveLength(1);
+      expect(calls[0][1].params.roles).toEqual(['PURCHASER']);
+      expect(calls[0][1].params.warehouseIds).toEqual(['vat-tu-tp', 'thanh-pham']);
+      expect(calls[0][1].params.changes).toEqual([
+        expect.stringMatching(/^Mua VT khung & đan: \(chưa có\) → /),
+        expect.stringMatching(/^Mua VT còn lại: \(chưa có\) → /),
+      ]);
+    });
+
+    it('chỉ gửi Mua VT còn lại → không đụng mốc khác', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+
+      await service.updateItem('7', '20', { finishedMaterialDeadline: '2026-10-01' });
+
+      const call = prisma.productionInvoiceItem.update.mock.calls[0] as [
+        { data: Record<string, unknown> },
+      ];
+      expect(call[0].data.finishedMaterialDeadline).toEqual(new Date('2026-10-01'));
+      expect(call[0].data.materialDeadline).toBeUndefined();
+      expect(call[0].data.deliveryDeadline).toBeUndefined();
+      expect(prisma.productionInvoiceItemStage.upsert).not.toHaveBeenCalled();
     });
 
     it('lưu lại y nguyên giá trị cũ → không audit, không báo', async () => {

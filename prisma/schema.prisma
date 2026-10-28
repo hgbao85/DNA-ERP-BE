@@ -1570,7 +1570,12 @@ model ProductionInvoiceItem {
   wireMaterialId      BigInt?
   cushionMaterialId   BigInt?
   quantity            Int
+  /// "Mua VT khung & đan" (FE đổi tên từ "Mua hàng" 2026-10-27): hạn chót vật tư khung cơ khí + dây đan về kho (N−1).
+  /// Cũng là "mốc cần sắt" của luật gộp và hạn sắt của đề xuất mua (xem frame-deadline.util, merge-rules.util).
   materialDeadline    DateTime?
+  /// "Mua VT còn lại" (2026-10-27, Sếp chốt): hạn chót vật tư thành phẩm (thùng, xốp, nệm, gỗ, phụ kiện, nhãn) về kho,
+  /// đề xuất = ngày Đóng gói − 7. Chỉ là mốc kế hoạch KHSX đặt + thông báo; chưa nối vào đề xuất mua/giữ chỗ.
+  finishedMaterialDeadline DateTime?
   deliveryDeadline    DateTime?
   prodApprovalStatus  ProdApprovalStatus?
   requestedAt         DateTime?

@@ -225,7 +225,7 @@ export class UpdateSystemConfigDto {
   @ApiPropertyOptional({
     example: 3,
     description:
-      'Luật gộp: mốc cần sắt (hạn mua hàng, không có thì hạn khung) của các SKU trong 1 đợt tính / 1 lệnh gộp nằm trong khung ' +
+      'Luật gộp: mốc cần sắt (hạn Mua VT khung & đan, không có thì hạn khung) của các SKU trong 1 đợt tính / 1 lệnh gộp nằm trong khung ' +
       'chừng này ngày TÍNH CẢ NGÀY ĐẦU (3 = ngày 1 gộp được ngày 3, không gộp với ngày 4) - chặn khi tính phương án, gộp lệnh ' +
       'và lưu hạn lệnh gộp. 1 = chỉ gộp SKU cùng ngày. 1-365.',
   })
