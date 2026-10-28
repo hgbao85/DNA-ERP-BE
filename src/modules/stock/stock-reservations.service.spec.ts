@@ -538,8 +538,26 @@ describe('StockReservationsService', () => {
           refType: 'PRODUCTION_INVOICE',
           refId: '50',
           idempotencyKey: 'PRODUCTION_INVOICE:50:material:30',
+          stockLengthMm: 0,
           spec: '',
         },
+      });
+    });
+
+    // Lỗi 2026-10-28: dòng tạo mới luôn rơi về ngăn chiều dài 0 dù hàng sắt về ngăn 5080 -> giữ chỗ không khớp tồn thật.
+    it('pool rỗng + có stockLengthMm - dòng mới mang đúng chiều dài cây', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([]);
+
+      await service.creditPool(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        warehouseId: 800n,
+        qty: 5,
+        stockLengthMm: 5080,
+      });
+
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ stockLengthMm: 5080 }) as unknown,
       });
     });
 

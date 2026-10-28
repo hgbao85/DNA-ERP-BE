@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DNA-ERP — Nhật ký thay đổi: Sửa giữ chỗ sắt theo chiều dài cây và 5 lỗi giao diện</title>
+<style>
+:root{
+  --ground:#EEF0F0; --paper:#FFFFFF; --ink:#1B2023; --ink-soft:#565F66;
+  --line:#D8DCDD; --accent:#C4501E; --accent-bg:#FBE9DE; --accent-ink:#9C3E17;
+  --add:#1E7A4C; --add-bg:#E1F1E7; --chg:#B7791B; --chg-bg:#FBF0DA;
+  --del:#B0332B; --del-bg:#FAE4E2; --code-bg:#F4F5F5;
+  --shadow:0 1px 2px rgba(20,24,26,.05),0 6px 20px rgba(20,24,26,.06);
+  --serif: ui-serif,"Iowan Old Style","Palatino Linotype",Georgia,serif;
+  --sans: -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono: ui-monospace,"SF Mono",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+    --line:#2B3235; --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+    --add:#5FBB8B; --add-bg:#173226; --chg:#D9A441; --chg-bg:#332609;
+    --del:#E0776D; --del-bg:#3A1E1B; --code-bg:#20272A;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#14181A; --paper:#1B2124; --ink:#E7EAEA; --ink-soft:#9AA3A8;
+  --line:#2B3235; --accent:#E08350; --accent-bg:#3A2416; --accent-ink:#F0A472;
+  --add:#5FBB8B; --add-bg:#173226; --chg:#D9A441; --chg-bg:#332609;
+  --del:#E0776D; --del-bg:#3A1E1B; --code-bg:#20272A;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+body{margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans); line-height:1.6; font-size:15.5px; -webkit-font-smoothing:antialiased}
+code{font-family:var(--mono); background:var(--code-bg); padding:.1em .4em; border-radius:4px; font-size:.88em}
+.page{max-width:900px; margin:0 auto; padding:2rem 16px 4rem}
+header.hero{margin-bottom:1.6rem}
+header.hero .kicker{font-family:var(--mono); font-size:.78rem; color:var(--ink-soft); letter-spacing:.02em}
+header.hero h1{font-family:var(--serif); font-size:1.9rem; line-height:1.25; margin:.3rem 0 .6rem}
+header.hero p{margin:0; color:var(--ink-soft)}
+section{background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); padding:1.3rem 1.5rem; margin:0 0 1.2rem}
+h2{font-family:var(--serif); font-size:1.28rem; margin:0 0 .7rem}
+h3{font-size:1rem; margin:1.1rem 0 .4rem}
+p{margin:.5rem 0}
+ul,ol{margin:.4rem 0 .6rem; padding-left:1.3rem}
+li{margin:.25rem 0}
+.tag{display:inline-block; font-family:var(--mono); font-size:.72rem; padding:.1rem .5rem; border-radius:99px; vertical-align:middle; margin-right:.3rem}
+.tag.add{background:var(--add-bg); color:var(--add)}
+.tag.chg{background:var(--chg-bg); color:var(--chg)}
+.tag.del{background:var(--del-bg); color:var(--del)}
+.callout{border-left:4px solid var(--accent); background:var(--accent-bg); color:var(--ink); padding:.7rem 1rem; border-radius:0 8px 8px 0; margin:.8rem 0}
+.callout.ok{border-color:var(--add); background:var(--add-bg)}
+.callout.warn{border-color:var(--chg); background:var(--chg-bg)}
+table{width:100%; border-collapse:collapse; margin:.6rem 0; font-size:.93rem; display:block; overflow-x:auto}
+th,td{text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--line); vertical-align:top}
+th{font-size:.8rem; color:var(--ink-soft); font-weight:600; white-space:nowrap}
+.theme{position:fixed; top:10px; right:12px; border:1px solid var(--line); background:var(--paper); color:var(--ink); border-radius:7px; padding:.3rem .7rem; font-size:.8rem; cursor:pointer}
+@media (max-width:560px){ header.hero h1{font-size:1.5rem} section{padding:1rem} }
+</style>
+</head>
+<body>
+<button class="theme" type="button" onclick="toggleTheme()">Sáng / Tối</button>
+<div class="page">
+
+<header class="hero">
+  <div class="kicker">DNA-ERP-BE + DNA-ERP (FE) · 2026-10-28 · Kho / Giữ chỗ / Giao diện</div>
+  <h1>Sửa giữ chỗ sắt theo chiều dài cây và 5 lỗi giao diện</h1>
+  <p>Một lỗi BE ở khâu nhận hàng sắt và năm lỗi giao diện do kiểm thử thực tế phát hiện. Đã kiểm tra bằng typecheck và unit test; chưa xem trên giao diện thật, chưa chạy trên dữ liệu production.</p>
+</header>
+
+<section id="tom-tat">
+  <h2>1. Tóm tắt</h2>
+  <table>
+    <thead><tr><th>#</th><th>Lỗi</th><th>Nơi sửa</th><th>Trạng thái</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Hàng sắt vừa mua cho PI không được giữ đúng chỗ (dòng giữ chỗ nằm ngăn chiều dài 0)</td><td>BE</td><td><span class="tag add">đã sửa code</span> dữ liệu cũ chưa sửa</td></tr>
+      <tr><td>2</td><td>Hộp "Chọn kho thành phẩm" hiện tên tài khoản thủ kho</td><td>FE</td><td><span class="tag add">đã sửa</span></td></tr>
+      <tr><td>3</td><td>Tên tab "Xác nhận sản lượng" của tổ Hàn/Sơn gây hiểu nhầm</td><td>FE</td><td><span class="tag add">đã sửa</span></td></tr>
+      <tr><td>4</td><td>Chi tiết PI hiện "Hoàn thành" trước khi lệnh "Kết thúc"</td><td>FE</td><td><span class="tag add">đã sửa</span> <span class="tag chg">đổi hành vi</span></td></tr>
+      <tr><td>5</td><td>Màn xuất hàng kho thành phẩm: cột PI trống, "Số lượng vật tư" thực ra là số SKU</td><td>BE + FE</td><td><span class="tag add">đã sửa</span></td></tr>
+      <tr><td>6</td><td>Màn Chuyển kiểm: nút "Kiểm" vẫn hiện khi đã kiểm đủ</td><td>FE</td><td><span class="tag add">đã sửa</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="loi-1">
+  <h2>2. Lỗi BE: giữ chỗ sắt không khớp chiều dài cây</h2>
+  <h3>Chuyện gì xảy ra</h3>
+  <p>Khi kho nhận hàng sắt, <code>receiveItem</code> ghi sổ kho đúng chiều dài cây (vd 5080 mm) nhưng gọi <code>creditPool</code> mà không truyền chiều dài. Nếu pool giữ chỗ của PI đang rỗng, <code>creditPool</code> tạo dòng giữ chỗ mới với <code>stockLengthMm</code> mặc định là 0. Tồn thật nằm ngăn 5080, giữ chỗ nằm ngăn 0.</p>
+  <h3>Hậu quả</h3>
+  <ul>
+    <li>Sắt vừa mua cho PI này không được giữ đúng chỗ, PI khác có thể lấy mất trong lúc chờ xuất sắt, vì truy vấn giữ chỗ lọc theo ngăn chiều dài.</li>
+    <li>"Kiểm tra dữ liệu" báo lỗi nặng cho PI đã nhận hàng mà chưa xuất sắt (ví dụ đã thấy: <code>SAT-056</code> của <code>PI-2026-004</code>).</li>
+  </ul>
+  <p>Nếu pool đã có dòng giữ chỗ từ trước thì <code>creditPool</code> chỉ cộng thêm vào dòng đó nên không bị lỗi. Lỗi chỉ xảy ra ở nhánh pool rỗng.</p>
+  <h3>Cách sửa</h3>
+  <ul>
+    <li><code>creditPool</code> nhận thêm <code>stockLengthMm</code> (mặc định 0) và ghi vào dòng giữ chỗ mới.</li>
+    <li><code>receiveItem</code> truyền <code>item.stockLengthMm ?? 0</code>, cùng giá trị với bút toán nhập kho.</li>
+  </ul>
+  <div class="callout warn">
+    <strong>Dữ liệu cũ chưa được sửa.</strong> Các dòng đã bị lỗi vẫn nằm ngăn 0 trong database. Một script backfill đã được viết và chạy dry-run trên database trong <code>.env</code> (kết quả 0 dòng), sau đó bị bỏ theo quyết định của người phụ trách. Các dòng này cần xử lý tay trên production.
+  </div>
+</section>
+
+<section id="loi-fe">
+  <h2>3. Lỗi giao diện</h2>
+
+  <h3>3.1 Hộp "Chọn kho thành phẩm" hiện tên tài khoản thủ kho</h3>
+  <p>Danh sách kho trước đây suy ra từ tên tài khoản thủ kho (bỏ tiền tố "Thủ kho "), nên kho chính hiện thành "khotp khotp". Nay lấy từ <code>getWarehouses()</code>, lọc kho thành phẩm (gốc + <code>thanh-pham-N</code>) đang hoạt động, không phải kho ảo, và hiện đúng tên kho. QLSX có sẵn quyền <code>WAREHOUSE:VIEW</code>.</p>
+
+  <h3>3.2 Tên tab "Xác nhận sản lượng" của tổ Hàn/Sơn</h3>
+  <p>Tab này thực chất để xác nhận đã nhận vật tư kho cấp. Đổi thành <strong>"Xác nhận nhận vật tư"</strong> ở menu, tiêu đề trang và các bài hướng dẫn.</p>
+  <div class="callout">
+    Dòng chữ "tự cập nhật từ màn Xác nhận sản lượng" trong <code>components/sanxuat/core.tsx</code> (nhánh tự đồng bộ của trang lệnh Hàn/Sơn) được để nguyên vì chưa rõ còn đúng hay không.
+  </div>
+
+  <h3>3.3 Chi tiết PI hiện "Hoàn thành" quá sớm</h3>
+  <p>Trang chi tiết tự coi là hoàn thành khi đóng gói đủ, trong khi BE định nghĩa "Hoàn thành = đóng gói đủ VÀ QLSX bấm Kết thúc". Nay lệnh đã có trạng thái xưởng chỉ "Hoàn thành" khi QLSX bấm Kết thúc; trang chi tiết dùng chung quy tắc với danh sách. Lệnh chưa có xưởng vẫn tự suy ra từ các bước con.</p>
+  <div class="callout warn">
+    <strong>Đổi hành vi:</strong> lệnh cũ đã đóng gói đủ nhưng chưa ai bấm Kết thúc sẽ hiện lại là "Đang sản xuất".
+  </div>
+
+  <h3>3.4 Màn xuất hàng của kho thành phẩm</h3>
+  <p>Cột PI luôn trống vì dữ liệu đơn bán hàng không có PI. BE nay trả thêm <code>piCodes</code> (mã các PI đơn đã gộp vào, không trùng, sắp theo mã). Chỉ tính PI item đã gộp vào PI thật; PI gộp chứa SKU của đơn khác không bị lẫn. FE hiện đủ các mã, ngăn bằng dấu phẩy; đơn chưa vào PI nào hiện "—". Với đơn xuất cho khách, nhãn "Số lượng vật tư" đổi thành "Số SKU" vì đó là số dòng SKU của đơn.</p>
+  <p>Đơn cũ có PI item chưa nối đúng đơn hàng (cả <code>salesOrderId</code> của item lẫn của PI đều trống) vẫn hiện "—".</p>
+
+  <h3>3.5 Màn Chuyển kiểm: nút "Kiểm" khi đã kiểm đủ</h3>
+  <p>Khi số đã kiểm đạt tổng cần, nút "Kiểm" mờ được thay bằng nhãn "Đã kiểm đủ". Trường hợp mới kiểm hết số đã về nhưng chưa đủ tổng cần vẫn giữ nút bị vô hiệu kèm gợi ý "Chưa có hàng về để kiểm".</p>
+</section>
+
+<section id="kiem-tra">
+  <h2>4. Kiểm tra đã làm</h2>
+  <ul>
+    <li>BE: <code>stock-reservations.service.spec.ts</code> và <code>purchase-proposals.service.spec.ts</code> (103 test) pass; <code>sales-orders.service.spec.ts</code> (51 test, gồm 5 test mới cho <code>piCodes</code>) pass.</li>
+    <li>FE: 262 test (vitest) pass.</li>
+    <li>Typecheck cả hai repo không có lỗi ở các file sửa. <code>tsc</code> BE còn báo lỗi ở file khác (<code>cutting-proposals.service.ts</code>, các file seed), có vẻ do Prisma client sinh ra đã cũ so với schema; chưa tìm hiểu kỹ.</li>
+  </ul>
+  <div class="callout warn">
+    <strong>Chưa làm:</strong> chưa mở giao diện thật (cần xem hộp chọn kho với tài khoản QLSX, cột PI ở màn xuất hàng, nhãn "Đã kiểm đủ"); chưa chạy trên dữ liệu production.
+  </div>
+</section>
+
+<section id="viec-con-lai">
+  <h2>5. Việc còn lại</h2>
+  <ol>
+    <li>Sửa tay dữ liệu cũ trên production (dòng giữ chỗ nằm ngăn 0, ví dụ <code>SAT-056</code> / <code>PI-2026-004</code>).</li>
+    <li>Commit và deploy. <strong>Deploy BE trước FE</strong>: nếu FE lên trước, cột PI chỉ hiện "—" cho đến khi BE có <code>piCodes</code>, không gây lỗi.</li>
+    <li>Xác nhận nghiệp vụ cho thay đổi ở mục 3.3.</li>
+    <li>Xem lại câu "tự cập nhật từ màn Xác nhận sản lượng" ở <code>components/sanxuat/core.tsx</code>.</li>
+  </ol>
+</section>
+
+<section id="tep">
+  <h2>6. Tệp thay đổi</h2>
+  <h3>BE (DNA-ERP-BE)</h3>
+  <ul>
+    <li><span class="tag chg">sửa</span><code>src/modules/stock/stock-reservations.service.ts</code> và <code>.spec.ts</code></li>
+    <li><span class="tag chg">sửa</span><code>src/modules/purchase-proposals/purchase-proposals.service.ts</code> và <code>.spec.ts</code></li>
+    <li><span class="tag chg">sửa</span><code>src/modules/sales-orders/sales-orders.service.ts</code>, <code>dto/sales-order-response.dto.ts</code> và <code>.spec.ts</code></li>
+  </ul>
+  <h3>FE (DNA-ERP)</h3>
+  <ul>
+    <li><span class="tag chg">sửa</span><code>src/modules/pages/ProductionPlan/LenhSXPage.tsx</code></li>
+    <li><span class="tag chg">sửa</span><code>src/modules/pages/Manufacturing/MfgApp.tsx</code>, <code>XacNhanVatTuPage.tsx</code>, <code>ThongKePagePlan.tsx</code></li>
+    <li><span class="tag chg">sửa</span><code>src/modules/pages/InboundWarehouse/WarehouseXuatPage.tsx</code>, <code>KhoChuyenKiemPage.tsx</code>, <code>XuatVatTuTieuHaoPage.tsx</code></li>
+    <li><span class="tag chg">sửa</span><code>src/services/sales-orders-api.ts</code>, <code>src/types/sales.ts</code></li>
+    <li><span class="tag chg">sửa</span><code>src/modules/pages/Guide/content/manufacturing.ts</code>, <code>warehouse.ts</code></li>
+  </ul>
+</section>
+
+</div>
+<script>
+function toggleTheme(){
+  var root = document.documentElement;
+  var dark = root.getAttribute('data-theme') === 'dark' ||
+    (!root.hasAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  root.setAttribute('data-theme', dark ? 'light' : 'dark');
+}
+</script>
+</body>
+</html>

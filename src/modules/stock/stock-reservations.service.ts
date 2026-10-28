@@ -259,6 +259,10 @@ export class StockReservationsService {
       warehouseId: bigint;
       qty: number;
       spec?: string;
+      /** Chiều dài cây (mm) của hàng vừa về - chỉ dùng khi pool rỗng phải TẠO dòng mới, để dòng giữ chỗ
+       *  nằm đúng ngăn chiều dài với tồn kho thật (getAvailableQty lọc theo ngăn này). Pool có sẵn dòng
+       *  thì cộng vào dòng đó, giữ nguyên chiều dài đã chốt lúc duyệt. Mặc định 0. */
+      stockLengthMm?: number;
     },
   ): Promise<void> {
     if (!(input.qty > 0)) {
@@ -289,6 +293,7 @@ export class StockReservationsService {
             input.materialId,
             input.spec,
           ),
+          stockLengthMm: input.stockLengthMm ?? 0,
           spec: input.spec?.trim() ?? '',
         },
       });

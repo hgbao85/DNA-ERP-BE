@@ -522,6 +522,70 @@ describe('SalesOrdersService', () => {
 
   // Loại dây (mã SHT) / loại nệm Sales chọn cho từng dòng - phải nằm trong tick của định mức
   // ACTIVE (bom_option), được chép xuống PI item và khoá sau khi lệnh sản xuất đã duyệt.
+  describe('piCodes - mã PI mà đơn đã được gộp vào', () => {
+    const piItem = (over: Record<string, unknown>) => ({
+      id: 78n,
+      salesOrderId: 10n,
+      salesOrderItemId: null,
+      mfgProductId: 2n,
+      productionInvoiceId: 5n,
+      productionInvoice: { salesOrderId: null, code: 'PI-2026-005' },
+      productionOrder: null,
+      ...over,
+    });
+    const piCodesOf = async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems({ items: [] }));
+      return (await service.findOne('10')).piCodes;
+    };
+
+    it('rỗng khi chưa có PI item nào hoặc PI item chưa gộp vào PI (productionInvoiceId = null)', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ productionInvoiceId: null, productionInvoice: null }),
+      ]);
+      expect(await piCodesOf()).toEqual([]);
+    });
+
+    it('trả mã PI của PI item đã gộp', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([piItem({})]);
+      expect(await piCodesOf()).toEqual(['PI-2026-005']);
+    });
+
+    it('đơn nằm trong nhiều PI -> đủ các mã, không trùng, sắp theo mã', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({
+          id: 1n,
+          productionInvoice: { salesOrderId: null, code: 'PI-2026-009' },
+          productionInvoiceId: 9n,
+        }),
+        piItem({ id: 2n }),
+        piItem({ id: 3n }),
+      ]);
+      expect(await piCodesOf()).toEqual(['PI-2026-005', 'PI-2026-009']);
+    });
+
+    it('PI vỏ 1-1 (item không ghi salesOrderId) vẫn gán đúng đơn qua productionInvoice.salesOrderId', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({
+          salesOrderId: null,
+          productionInvoice: { salesOrderId: 10n, code: 'PI-2026-010' },
+        }),
+      ]);
+      expect(await piCodesOf()).toEqual(['PI-2026-010']);
+    });
+
+    it('không lẫn PI của đơn khác (PI gộp chứa SKU của nhiều đơn)', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ id: 1n }),
+        piItem({
+          id: 2n,
+          salesOrderId: 99n,
+          productionInvoice: { salesOrderId: null, code: 'PI-2026-777' },
+        }),
+      ]);
+      expect(await piCodesOf()).toEqual(['PI-2026-005']);
+    });
+  });
+
   describe('loại dây / loại nệm theo dòng đơn', () => {
     const option = (kind: 'WIRE' | 'CUSHION', materialId: bigint) => ({
       kind,

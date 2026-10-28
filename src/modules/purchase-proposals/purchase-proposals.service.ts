@@ -703,6 +703,9 @@ export class PurchaseProposalsService {
               warehouseId: materialWarehouseId,
               qty: incrementQty,
               spec: item.spec ?? '',
+              // Cùng chiều dài với bút toán nhập kho ở trên - dòng giữ chỗ mới (pool rỗng) phải nằm đúng
+              // ngăn chiều dài với tồn thật, không rơi về ngăn 0.
+              stockLengthMm: item.stockLengthMm ?? 0,
             });
           }
         }

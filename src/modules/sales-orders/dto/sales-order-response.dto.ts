@@ -24,6 +24,8 @@ export class SalesOrderResponseDto {
   /** null = xoá được. Có giá trị = lý do không xoá được (đã gộp PI/đã giao hàng một phần) - dùng
    *  thẳng làm message/tooltip, xem SalesOrdersService.buildDeleteBlockReason(). */
   @Expose() @ApiPropertyOptional({ nullable: true }) deleteBlockedReason!: string | null;
+  /** Mã các PI mà đơn này đã được gộp vào (rỗng = chưa vào PI nào) - 1 đơn có thể nằm trong nhiều PI. */
+  @Expose() @ApiProperty({ type: [String] }) piCodes!: string[];
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;
   @Expose()

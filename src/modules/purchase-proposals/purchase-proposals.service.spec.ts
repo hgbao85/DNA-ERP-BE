@@ -1050,7 +1050,43 @@ describe('PurchaseProposalsService', () => {
         warehouseId: 800n,
         qty: 5,
         spec: '',
+        stockLengthMm: 0,
       });
+    });
+
+    // Lỗi 2026-10-28: creditPool không nhận chiều dài -> dòng giữ chỗ mới nằm ngăn 0 trong khi tồn sắt ở ngăn thật.
+    it('item.stockLengthMm có giá trị -> creditPool() nhận ĐÚNG chiều dài đó', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          productionInvoiceId: 50n,
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              materialId: 30n,
+              buyQty: decimal(8),
+              receivedQty: decimal(0),
+              stockLengthMm: 5080,
+            }),
+          ],
+        }),
+      );
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          receivedQty: decimal(0),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
+      ]);
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ buyQty: decimal(8), receivedQty: decimal(5), quotes: [] }),
+      );
+
+      await service.receiveItem('300', '400', { unitRateQty: 5 }, 'user-1', 'key-1', null);
+
+      expect(stockReservationsService.creditPool).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ materialId: 30n, qty: 5, stockLengthMm: 5080 }),
+      );
     });
 
     // 2026-10-23: nệm khác quy cách là các dòng mua riêng - hàng về phải vào ĐÚNG bucket quy cách của dòng đó
@@ -1227,6 +1263,7 @@ describe('PurchaseProposalsService', () => {
         warehouseId: 800n,
         qty: 5,
         spec: '',
+        stockLengthMm: 0,
       });
     });
 
@@ -1283,6 +1320,7 @@ describe('PurchaseProposalsService', () => {
         warehouseId: 800n,
         qty: 5,
         spec: '',
+        stockLengthMm: 0,
       });
     });
 

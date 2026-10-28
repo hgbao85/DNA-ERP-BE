@@ -54,7 +54,7 @@ const PI_ITEM_FOR_STAGE_SELECT = {
   salesOrderId: true,
   salesOrderItemId: true,
   mfgProductId: true,
-  productionInvoice: { select: { salesOrderId: true } },
+  productionInvoice: { select: { salesOrderId: true, code: true } },
   productionOrder: { select: { id: true, quantity: true, floorStage: true } },
 } satisfies Prisma.ProductionInvoiceItemSelect;
 type PiItemForStage = Prisma.ProductionInvoiceItemGetPayload<{
@@ -228,6 +228,7 @@ export class SalesOrdersService {
     );
 
     const stages = await this.resolveStages(piItems);
+    const piCodes = this.resolvePiCodes(piItems);
 
     return {
       data: result.data.map((o) =>
@@ -235,6 +236,7 @@ export class SalesOrdersService {
           o,
           this.buildDeleteBlockReason(o.orderCode, o.items, mergedIds.has(o.id) ? 1 : 0),
           stages,
+          piCodes,
         ),
       ),
       meta: result.meta,
@@ -244,10 +246,12 @@ export class SalesOrdersService {
   async findOne(id: string): Promise<SalesOrderResponseDto> {
     const order = await this.findOneOrThrow(id);
     const mergedCount = await this.countMergedProductionInvoiceItems(order.id);
+    const piItems = await this.loadPiItems([order.id]);
     return this.toResponseDto(
       order,
       this.buildDeleteBlockReason(order.orderCode, order.items, mergedCount),
-      await this.resolveStages(await this.loadPiItems([order.id])),
+      await this.resolveStages(piItems),
+      this.resolvePiCodes(piItems),
     );
   }
 
@@ -268,10 +272,12 @@ export class SalesOrdersService {
     });
     this.publishRealtime(bigId, 'UPDATED');
     const mergedCount = await this.countMergedProductionInvoiceItems(bigId);
+    const piItems = await this.loadPiItems([bigId]);
     return this.toResponseDto(
       updated,
       this.buildDeleteBlockReason(updated.orderCode, updated.items, mergedCount),
-      await this.resolveStages(await this.loadPiItems([bigId])),
+      await this.resolveStages(piItems),
+      this.resolvePiCodes(piItems),
     );
   }
 
@@ -772,6 +778,25 @@ export class SalesOrdersService {
     return result;
   }
 
+  /**
+   * Mã PI (đã gộp vào PI thật - productionInvoiceId != null) của từng đơn, khoá theo id đơn. Cùng cách
+   * xác định đơn của PI item với resolveStages() (salesOrderId của item, rơi về PI vỏ 1-1). 1 đơn có thể
+   * nằm trong NHIỀU PI (PI gộp, hoặc các SKU tách PI khác nhau) nên trả về danh sách, sắp theo mã.
+   */
+  private resolvePiCodes(piItems: PiItemForStage[]): Map<string, string[]> {
+    const byOrder = new Map<string, Set<string>>();
+    for (const it of piItems) {
+      if (it.productionInvoiceId == null || !it.productionInvoice) continue;
+      const orderId = it.salesOrderId ?? it.productionInvoice.salesOrderId;
+      if (orderId == null) continue;
+      const key = orderId.toString();
+      const codes = byOrder.get(key) ?? new Set<string>();
+      codes.add(it.productionInvoice.code);
+      byOrder.set(key, codes);
+    }
+    return new Map([...byOrder].map(([k, v]) => [k, [...v].sort()]));
+  }
+
   /** PI item của các đơn - OR 2 đường nối, mirror updateItem()/countMergedProductionInvoiceItems(). */
   private async loadPiItems(orderIds: bigint[]): Promise<PiItemForStage[]> {
     if (orderIds.length === 0) return [];
@@ -824,6 +849,7 @@ export class SalesOrdersService {
     order: SalesOrderWithItems,
     deleteBlockedReason: string | null,
     stages: Map<string, SalesOrderItemStatus>,
+    piCodes: Map<string, string[]> = new Map(),
   ): SalesOrderResponseDto {
     return new SalesOrderResponseDto({
       id: order.id.toString(),
@@ -841,6 +867,7 @@ export class SalesOrdersService {
       note: order.note,
       isActive: order.isActive,
       deleteBlockedReason,
+      piCodes: piCodes.get(order.id.toString()) ?? [],
       createdAt: order.createdAt,
       updatedAt: order.updatedAt,
       items: order.items.map((it) => this.toItemResponseDto(it, stageOfItem(stages, it))),
