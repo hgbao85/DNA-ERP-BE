@@ -613,6 +613,26 @@ describe('ProductionBatchesService', () => {
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
 
+    it('2026-10-29: "Lưu đợt" trên web phát realtime PROGRESS (Bảng mốc tính phần chưa gửi KCS); báo QR tại máy thì không phát trùng', async () => {
+      prisma.productionBatch.findFirst.mockResolvedValue(null);
+      prisma.productionBatch.create.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 5,
+      });
+
+      await service.recordProductionBatch('1', recordDto, 'user-han', null);
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith(
+        expect.objectContaining({ entity: 'PRODUCTION_BATCH', action: 'PROGRESS' }),
+      );
+
+      realtimeStub.publishEntityChanged.mockClear();
+      await service.recordProductionBatch('1', recordDto, 'cn-han-2', null, 'key-qr', {
+        workstationId: 5n,
+      });
+      expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalled();
+    });
+
     it('2026-10-12: mỗi lần "Lưu đợt" ghi 1 dòng sổ PIECE (người báo, mảnh, số) kể cả khi cộng dồn vào đợt OPEN', async () => {
       prisma.productionBatch.findFirst.mockResolvedValue({
         ...batchRow,

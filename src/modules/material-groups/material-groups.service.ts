@@ -8,6 +8,7 @@ import {
 import { MaterialGroup, Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { uniqueTargetOf } from '../../common/filters/all-exceptions.filter';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -52,7 +53,8 @@ export class MaterialGroupsService {
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        const target = (e.meta?.target as string[] | undefined) ?? [];
+        // Qua driver adapter `meta.target` trống - tên cột nằm trong lỗi của adapter (uniqueTargetOf, 2026-10-29).
+        const target = uniqueTargetOf(e.meta);
         if (target.includes('codePrefix')) {
           throw new ConflictException(`Tiền tố mã "${dto.codePrefix}" đã dùng cho nhóm khác`);
         }

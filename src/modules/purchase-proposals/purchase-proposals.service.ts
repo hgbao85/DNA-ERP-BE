@@ -13,6 +13,7 @@ import {
   Prisma,
   PrismaClient,
   ProdItemStageType,
+  ProductionOrderFloorStage,
   PurchaseProposalStatus,
   StockLedgerRefType,
 } from '../../generated/prisma/client';
@@ -20,6 +21,11 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import {
+  PurchaseDeadlineItem,
+  purchaseDeadlineOf,
+  purchaseGroupOf,
+} from '../../common/utils/frame-deadline.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -85,6 +91,8 @@ const LIST_INCLUDE = {
               mfgProduct: true,
               stages: true,
               salesOrder: { select: { orderCode: true } },
+              // deadlineScope: SKU đã Kết thúc không còn quyết định hạn vật tư chung (như Bảng mốc).
+              productionOrder: { select: { floorStage: true } },
             },
           },
         },
@@ -101,10 +109,13 @@ const LIST_INCLUDE = {
   productionInvoice: {
     select: {
       code: true,
+      deadline: true,
       items: {
         include: {
           mfgProduct: true,
+          stages: true,
           salesOrder: { select: { orderCode: true } },
+          productionOrder: { select: { floorStage: true } },
         },
       },
     },
@@ -127,6 +138,30 @@ type PurchaseProposalDetail = Prisma.PurchaseProposalGetPayload<{ include: typeo
 type PurchaseProposalItemRow = Prisma.PurchaseProposalItemGetPayload<{
   include: typeof ITEM_INCLUDE;
 }>;
+
+/** 1 dòng SKU mà đề xuất phục vụ - đủ trường để tính hạn từng dòng mua (`itemDeadlineOf`). */
+type DeadlineScopeItem = PurchaseDeadlineItem & {
+  wireMaterialId: string | null;
+  cushionMaterialId: string | null;
+  /** Lệnh SX của dòng đã Kết thúc. */
+  finished: boolean;
+};
+
+function pickDeadlineFields(it: {
+  materialDeadline: Date | null;
+  finishedMaterialDeadline: Date | null;
+  stages: { stageType: ProdItemStageType; deadline: Date }[];
+  wireMaterialId: bigint | null;
+  cushionMaterialId: bigint | null;
+}): Omit<DeadlineScopeItem, 'productionInvoice' | 'finished'> {
+  return {
+    materialDeadline: it.materialDeadline,
+    finishedMaterialDeadline: it.finishedMaterialDeadline ?? null,
+    stages: it.stages ?? [],
+    wireMaterialId: it.wireMaterialId != null ? String(it.wireMaterialId) : null,
+    cushionMaterialId: it.cushionMaterialId != null ? String(it.cushionMaterialId) : null,
+  };
+}
 
 /**
  * Mua hàng (Phase 8, rút gọn) - tiêu thụ PurchaseProposal do CuttingProposalsService.approve()
@@ -938,11 +973,70 @@ export class PurchaseProposalsService {
 
   private toDetailResponseDto(row: PurchaseProposalDetail): PurchaseProposalResponseDto {
     const dto = this.toResponseDto(row);
-    dto.items = row.items.map((item) => this.toItemResponseDto(item));
+    const scope = this.deadlineScope(row);
+    const lines = row.items.map((item) => this.itemDeadlineOf(item, scope));
+    dto.items = row.items.map((item, i) => this.toItemResponseDto(item, lines[i].deadline));
+    // Hạn cấp đề xuất = dòng gấp nhất, bỏ dòng chỉ thuộc SKU đã Kết thúc (dây/nệm riêng của nó - test thật vòng 3: kéo hạn đầu
+    // đề xuất và đầu "Nhập kho" về hạn cũ của SKU đã xong). Đề xuất tự tính theo PI trước đây luôn "chưa có hạn" (phần D của
+    // mục 32.5); đề xuất sắt giữ nguyên giá trị cũ (cùng chuỗi frameDeadlineOf).
+    const live = lines.filter((l) => !l.finishedOnly);
+    const earliest = (live.length > 0 ? live : lines)
+      .map((l) => l.deadline)
+      .filter((d): d is Date => d !== null)
+      .sort((a, b) => a.getTime() - b.getTime())[0];
+    if (earliest) dto.deadline = earliest;
     return dto;
   }
 
-  private toItemResponseDto(item: PurchaseProposalItemRow): PurchaseProposalItemResponseDto {
+  /** Các dòng SKU mà đề xuất phục vụ: 1 lệnh SX, PI gộp của phương án cắt, hoặc PI trực tiếp (đề xuất tự tính theo PI). */
+  private deadlineScope(row: PurchaseProposalDetail): DeadlineScopeItem[] {
+    const order = row.cuttingProposal?.productionOrder;
+    if (order) {
+      const it = order.productionInvoiceItem;
+      return [
+        { ...pickDeadlineFields(it), productionInvoice: it.productionInvoice, finished: false },
+      ];
+    }
+    const pi = row.cuttingProposal?.productionInvoice ?? row.productionInvoice;
+    if (!pi) return [];
+    // `?? []` như các chỗ fallback khác trong toResponseDto (dữ liệu cũ / mock thiếu items).
+    const items = pi.items ?? [];
+    const approved = items.filter((it) => it.prodApprovalStatus === 'APPROVED');
+    return (approved.length > 0 ? approved : items).map((it) => ({
+      ...pickDeadlineFields(it),
+      productionInvoice: { deadline: pi.deadline },
+      finished: it.productionOrder?.floorStage === ProductionOrderFloorStage.FINISHED,
+    }));
+  }
+
+  /**
+   * Hạn riêng 1 dòng mua - cùng `purchaseDeadlineOf` với Bảng mốc. Dây/nệm là lựa chọn RIÊNG của SKU (như `scopePurchasingRows`
+   * FE / Bảng mốc): chỉ tính hạn các SKU đã chọn nó; vật tư chung thì SKU gấp nhất CÒN CHẠY quyết định (SKU đã Kết thúc không
+   * có trên Bảng mốc - tính nó thì màn mua ghi trễ trong khi Bảng mốc ghi còn hạn, review 32.27 N3).
+   */
+  private itemDeadlineOf(
+    item: PurchaseProposalItemRow,
+    scope: DeadlineScopeItem[],
+  ): { deadline: Date | null; finishedOnly: boolean } {
+    const materialId = String(item.materialId);
+    const owners = scope.filter(
+      (s) => s.wireMaterialId === materialId || s.cushionMaterialId === materialId,
+    );
+    const pool = owners.length > 0 ? owners : scope;
+    const running = pool.filter((s) => !s.finished);
+    const group = purchaseGroupOf(item.material.detailKind);
+    const deadline =
+      (running.length > 0 ? running : pool)
+        .map((s) => purchaseDeadlineOf(s, group))
+        .filter((d): d is Date => d !== null)
+        .sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
+    return { deadline, finishedOnly: pool.length > 0 && running.length === 0 };
+  }
+
+  private toItemResponseDto(
+    item: PurchaseProposalItemRow,
+    deadline: Date | null = null,
+  ): PurchaseProposalItemResponseDto {
     return new PurchaseProposalItemResponseDto({
       id: item.id.toString(),
       materialId: item.materialId.toString(),
@@ -960,6 +1054,7 @@ export class PurchaseProposalsService {
       actualStock: item.actualStock.toNumber(),
       buyQty: item.buyQty.toNumber(),
       stockLengthMm: item.stockLengthMm,
+      deadline,
       receivedQty: item.receivedQty.toNumber(),
       receivedQtyPurchaseUnit: item.receivedQtyPurchaseUnit?.toNumber() ?? null,
       status: item.status,

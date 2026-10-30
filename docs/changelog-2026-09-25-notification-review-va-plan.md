@@ -90,7 +90,7 @@
 29. Rà soát "bấm thông báo có nhảy đúng màn không" — _2026-10-08, chỉ rà (đã sửa ở mục 30)_
 30. Sửa theo mục 29: mở thẳng đúng mục, link cho thông báo thiếu link, rà người nhận/quyền — _2026-10-08, đã làm, chưa commit_
 31. Rà vòng đời lệnh sản xuất theo 4 nhóm quản lý của ERP — _2026-10-09; P1, P2 đã làm; P3 (quét quá hạn) còn treo, thiết kế ở mục 32_
-32. Nghiên cứu timeline chuẩn ERP + thiết kế thông báo trễ hạn — _2026-10-26, chỉ nghiên cứu, chờ Sếp họp chốt_ (32.1: anh Nhân đã có quy tắc mốc theo N từ 05–06/10; 32.2: Sếp chốt hệ thống đề xuất theo mốc Phú An; 32.3: ĐÃ LÀM ở FE, chưa commit; 32.4: rà vật tư production theo công đoạn; 32.5: Sếp làm rõ khung ngày về vật tư; 32.6: review lệnh gộp + chia hàng về cho SKU; 32.7: Sếp xác nhận nhóm vật tư + tên/vị trí cột mốc; 32.8: ĐÃ LÀM A–C - mốc Mua VT khung & đan / Mua VT còn lại + "về từ", local chưa commit; 32.9: live-test XÁC NHẬN lỗi chặn nhầm chính PI khi xuất tiêu hao/đóng gói; 32.10: ĐÃ SỬA lỗi đó, local chưa commit; 32.11: review commit dbfd2ea của ohey trên origin/main - sửa cả lỗi 1 lẫn lỗi 2, thay bản sửa local 32.10; 32.12: đã bỏ bản local 32.10 và pull dbfd2ea về main, chưa commit gì thêm; 32.13: dbfd2ea không đụng phần code của người dùng, đã STAGE phần cần commit BE + FE, người dùng tự commit)
+32. Nghiên cứu timeline chuẩn ERP + thiết kế thông báo trễ hạn — _2026-10-26, chỉ nghiên cứu, chờ Sếp họp chốt_ (32.1: anh Nhân đã có quy tắc mốc theo N từ 05–06/10; 32.2: Sếp chốt hệ thống đề xuất theo mốc Phú An; 32.3: ĐÃ LÀM ở FE, chưa commit; 32.4: rà vật tư production theo công đoạn; 32.5: Sếp làm rõ khung ngày về vật tư; 32.6: review lệnh gộp + chia hàng về cho SKU; 32.7: Sếp xác nhận nhóm vật tư + tên/vị trí cột mốc; 32.8: ĐÃ LÀM A–C - mốc Mua VT khung & đan / Mua VT còn lại + "về từ", local chưa commit; 32.9: live-test XÁC NHẬN lỗi chặn nhầm chính PI khi xuất tiêu hao/đóng gói; 32.10: ĐÃ SỬA lỗi đó, local chưa commit; 32.11: review commit dbfd2ea của ohey trên origin/main - sửa cả lỗi 1 lẫn lỗi 2, thay bản sửa local 32.10; 32.12: đã bỏ bản local 32.10 và pull dbfd2ea về main, chưa commit gì thêm; 32.13: dbfd2ea không đụng phần code của người dùng, đã STAGE phần cần commit BE + FE, người dùng tự commit (đã commit `ab847fa`); 32.14: review tài liệu "Kế hoạch thực hiện 12 yêu cầu mới" 26/10, chỉ rà; 32.15: review commit 689a93f của ohey - nhả giữ chỗ dư khi PI Kết thúc, còn 1 lỗi nhận hàng sau khi nhả + thiếu nhả bù PI cũ; 32.16: đã pull 689a93f về main; 32.17: review file câu hỏi làm rõ nghiệp vụ part 1 gửi Sếp, chỉ góp ý; 32.18: đề xuất cách làm "tự kiểm tra dữ liệu mỗi đêm" + "bảng lệnh sắp trễ / tin tóm tắt sáng", CHƯA làm; 32.19: ý 1 - nguyên mẫu phép kiểm chạy trên DB test + danh sách file, đã duyệt; 32.20: ĐÃ LÀM ý 1 "Kiểm tra dữ liệu" mỗi đêm, local chưa commit; 32.21: Sếp trả lời 16 câu nghiệp vụ part 1; 32.22: soạn câu trả lời Câu 2 / Mục 3 "Số liệu thống kê"; 32.23: pull + review BE d1e09a3 + FE b6e3f2b của ohey - sửa đúng lỗi giữ chỗ sắt theo chiều dài + 5 lỗi giao diện, E2E qua; lỗi trùng khoá sau khi nhả (32.15) + dữ liệu cũ vẫn còn; 32.24: giải thích `DATA_HEALTH_CRON_KEY`, đề xuất hẹn giờ trong app thay lịch GitHub + kế hoạch mục 3 bảng mốc / tin sáng, đã duyệt; 32.25: ĐÃ LÀM - hẹn giờ trong app (bỏ khoá cron + lịch GitHub), Bảng mốc, tin sáng, cảnh báo nguy cơ trễ hạn giao; local chưa commit; 32.26: rà lỗi biên 32.25 - 10 phát hiện, ĐÃ SỬA 9 (tin vật tư riêng từng người nhận, kho nhận ghi đè, dây của SKU đã Kết thúc, khoá chạy 1 nơi, cảnh báo hạn giao không báo lại mỗi lần đóng thùng...), 1 lệch có sẵn ở FE để lại; local chưa commit; 32.27: 2 agent test chạy thật + 1 agent quản lý rà code mục 1 và 3 - đủ thiết kế, chấm 8 và 8,5/10; tìm 3 lỗi mục 1 + 9 điểm lệch/lỗi nhỏ quanh mục 3, đã sửa ở 32.28; 32.28: ĐÃ SỬA HẾT theo "Sửa hết" (P1 + P2 + Q1–Q7) + 2 vòng test lại bằng agent, local chưa commit; 32.29: đã STAGE BE + FE của mục 1 và 3 (người dùng tự commit), deploy không cần chạy tay gì)
 
 ---
 
@@ -2893,7 +2893,7 @@ những vật tư gì và thuộc công đoạn nào.
 - 256 vật tư đóng gói/phụ kiện gán kho "Kho thành phẩm" chứ không phải "Kho Vật tư thành phẩm". Luồng xuất đóng gói trong code
   ghi nguồn là kho Vật tư thành phẩm → cần xem đây là chủ ý hay nhập nhầm kho.
 
-### 32.5 2026-10-27 — Sếp làm rõ khung ngày về của 2 nhóm vật tư (hạn chót + ngày sớm nhất) — A–C ĐÃ LÀM ở 32.8, D để sau
+### 32.5 2026-10-27 — Sếp làm rõ khung ngày về của 2 nhóm vật tư (hạn chót + ngày sớm nhất) — A–C ĐÃ LÀM ở 32.8, D ĐÃ LÀM ở 32.28
 
 Người dùng gửi ảnh tin nhắn của Sếp Nhân, trả lời câu hỏi về mốc N−1 / N+8:
 - "N-1 là deadline, còn được về là ngày N-5".
@@ -2933,7 +2933,7 @@ Chưa rõ:
     nên `deadline = null`, Mua hàng thấy "chưa có hạn".
   - Chỉ đọc code, chưa kiểm trên dữ liệu. Đưa vào phần D của danh sách sửa (làm sau).
 
-**Trạng thái (cập nhật 2026-10-27):** A–C đã làm ở 32.8 (local, chưa commit). D (gắn hạn cho dòng đề xuất mua tự tính theo PI) để sau.
+**Trạng thái (cập nhật 2026-10-27):** A–C đã làm ở 32.8 (local, chưa commit). D (gắn hạn cho dòng đề xuất mua tự tính theo PI) để sau. **Cập nhật 2026-10-29: D ĐÃ LÀM ở 32.28** (hạn riêng từng dòng mua theo nhóm vật tư, hàm dùng chung `purchaseDeadlineOf`).
 
 ### 32.6 2026-10-27 — Review: lệnh gộp chia mốc riêng từng SKU + hàng về kho "fill" cho SKU hạn gần trước (CHỈ RÀ; phát hiện 1 đã xác nhận ở 32.9 và ĐÃ SỬA ở 32.10)
 
@@ -3226,7 +3226,7 @@ thử, không sửa code, không pull, không commit.
   rơi về "trừ mọi giữ chỗ", không lỗi.
 
 **Phát hiện:**
-1. (Trung bình, chưa có trên DB test) Giữ chỗ còn dư của PI đã xong/huỷ không bao giờ được nhả, giờ chặn PI khác.
+1. (Trung bình, chưa có trên DB test) Giữ chỗ còn dư của PI đã xong/huỷ không bao giờ được nhả, giờ chặn PI khác. **ohey đã sửa ở commit `689a93f` (review 32.15).**
    - Không có chỗ nào đánh RELEASED giữ chỗ vật tư khi PI xong/huỷ (`releaseByRef` chỉ gọi từ phương án cắt sắt;
      `releaseForInvoice` chỉ đụng CuttingProposal). Dòng giữ chỉ giảm qua `consumedQty` khi xuất.
    - Dư là bình thường: `receiveItem()` cộng vào giữ chỗ ĐÚNG số nhận (`incrementQty`), gồm cả % hao hụt khi mua
@@ -3338,3 +3338,970 @@ hãy đưa những gì cần commit xuống staged không tự commit, tôi sẽ
 - Người dùng tự commit + push.
 - Khi lên production, migration `finishedMaterialDeadline` phải chạy (cột nullable, không đụng dữ liệu cũ).
 - 3 bản sao DB tạm vẫn còn; xoá khi người dùng đồng ý.
+
+### 32.14 2026-10-28 — Review tài liệu "Kế hoạch thực hiện 12 yêu cầu mới" (ngày 26/10) — CHỈ RÀ, không sửa code
+
+Người dùng dán toàn văn tài liệu (12 mục, thứ tự làm, câu hỏi cần chốt) và bảo "review file docs này". Đối chiếu với
+schema/code BE+FE hiện tại, DB test (chỉ đọc), các quyết định Sếp 27/10 (32.5, 32.7) và review 32.6, 32.11.
+
+Ghi chú trạng thái: người dùng đã tự commit phần stage ở 32.13 thành `ab847fa` trên `main` BE.
+
+**Sai so với code (nên sửa trong tài liệu):**
+1. Mục 11 + Mục 8 ghi "hàng về đã ưu tiên chia cho SKU hạn gần nhất trong cùng cụm gộp" — KHÔNG đúng với lệnh gộp.
+   - Ưu tiên theo hạn (`loadPool`) chỉ có tác dụng khi SKU duyệt cắt RIÊNG (mỗi SKU 1 dòng giữ sắt).
+   - Lệnh gộp chỉ có 1 dòng giữ cho cả PI, mọi vật tư; DB test 15 PI 2 SKU đều 1 dòng/PI/vật tư (32.6).
+   - Hệ quả: Mục 11 lớn hơn tài liệu nói (phải làm chia theo SKU, hướng "chia lúc đọc" ở 32.6).
+2. Mục 7 bỏ sót tính năng có sẵn: KHSX đã gộp được nhiều SKU (kể cả khác đơn hàng) thành 1 lệnh để cắt chung, 1 đề xuất
+   mua chung; Admin đã có cấu hình `solverMergeWindowDays` / `solverMergeMaxSkus` (mặc định 2 SKU, ≤ 3 ngày).
+   - "Quy tắc gộp chưa chốt, đề xuất để cấu hình" — với sắt đã có cấu hình; nhật ký nói 3 lệnh, ERP mặc định 2.
+   - Cần nói rõ phần MỚI của Mục 7: gộp MUA giữa các lệnh không cắt chung, nhất là vật tư tiêu hao (khí hàn, đinh…).
+
+**Lỗi thời so với quyết định / việc đã làm 27/10:**
+3. Mục 10: vật tư còn lại = ĐG−7, được về từ ĐG−11 (Sếp chốt 27/10), không còn "N+8". Đã làm (commit `ab847fa`, chưa
+   lên production): tách 2 mốc "Mua VT khung & đan" / "Mua VT còn lại", hệ thống đề xuất mốc theo Phú An (N = Khung − 2,
+   chưa có thì hạn giao SKU − 17), dòng "về từ" = hạn − 4. Còn lại của Mục 10: cảnh báo trễ / sớm / chưa bắt đầu, số
+   ngày theo container (Mục 9), nối hạn VT còn lại vào đề xuất mua.
+   - Tên mốc (1) trong tài liệu "vật tư Phôi, Sơn, Hàn" nên đổi theo tên Sếp chốt "Mua vật tư khung cơ khí và đan".
+4. Mục 6: kế hoạch đã có đủ 2 hạn vật tư nên Mục 6 không còn phải chờ Mục 10.
+
+**Thứ tự / tham chiếu mâu thuẫn:**
+5. Mục 6: phần 2 ghi "sau Mục 10", phần chi tiết ghi "sau Mục 2".
+6. Mục 5 ghi "hạn của kế hoạch sản xuất (Mục 2 và Mục 6) nên suy ra từ booking" — Mục 6 không phải hạn kế hoạch; đúng ra Mục 10.
+7. Mục 9 xếp "Cao, nền cho Mục 10": luật Phú An tính theo ngày lịch cố định (1 lệnh ≈ 1 container/ngày), số container chỉ
+   cần khi lệnh > 1 container. Phần cảnh báo của Mục 10 không phải chờ Mục 9.
+
+**Thiếu rủi ro / thông tin:**
+8. Mục 7, 8: thiếu rủi ro giữ chỗ theo PI (commit `dbfd2ea`) và giữ dư không được nhả (32.11): gộp mua nhiều PI phải
+   chia giữ chỗ đúng từng PI; câu "hàng về thừa xử lý thế nào" — hiện tại phần thừa (gồm % hao hụt, nhận vượt) cộng hết vào
+   giữ chỗ của PI và không bao giờ nhả.
+9. Mục 4: đề xuất mua đã có ô phiếu duyệt Sếp ký (`PurchaseProposalItem.approvalFileUrl`) — "phiếu đề xuất" lúc nhập kho
+   có thể dùng lại, không bắt tải lại. Câu "xuất kho áp dụng loại nào" nên liệt kê đủ: sắt, tiêu hao, đan, đóng gói, VTTP,
+   VTTP theo công thức, chuyển kho, giao hàng (shipItem). Hiện không bảng xuất nào có cột file.
+10. Phần 4 "Việc cần chốt" trùng một phần với 15 câu Q1–Q15 của tài liệu họp 26/10 (`docs/nghien-cuu-timeline-chuan-erp-2026-10-26.html`)
+    — nên gộp để không hỏi Sếp 2 lần; thiếu câu của Mục 12 và Mục 1.
+11. (Nhỏ) Mục 6: bảng báo giá NCC có sẵn cột `PurchaseProposalQuote.expectedDate` nhưng chưa có API/màn nào ghi — nếu chọn
+    cách "nhân viên mua nhập ngày NCC hẹn" thì có chỗ tái dùng.
+
+**Đã kiểm, khớp code:** Mục 9 (không có cột kích thước/thể tích), Mục 12 (chưa có danh mục xưởng; PI item lưu
+`warehouseCode/Name`; chỉ 1 kho thành phẩm), Mục 5 (`SalesOrderItem.shippedQty`, chưa có booking/container), Mục 1 (DTO
+tạo dòng PI tay chưa có dây/nệm; chưa thấy chặn SKU chưa duyệt định mức), Mục 2 (sửa hạn từng dòng có lịch sử + thông báo).
+
+**Còn lại:** tài liệu gốc không có trong repo; chưa sửa tài liệu, chờ người dùng.
+
+### 32.15 2026-10-28 — Review commit `689a93f` "fix-stockReservation-v2" (ohey, origin/main; đã pull ở 32.16)
+
+Người dùng: "review commit BE mới nhất". `origin/main` = `689a93f`, hơn `main` local (`ab847fa`) đúng 1 commit. Chỉ review +
+chạy thử, không sửa code, không pull, không commit.
+
+**Commit làm gì** (sửa phát hiện 1 của 32.11):
+- `StockReservationsService.releaseByProductionInvoice(tx, piId)`: đánh RELEASED mọi dòng giữ chỗ ACTIVE còn dư
+  (`quantity > consumedQty`) của PI, mọi refType; dòng đã tiêu hết giữ ACTIVE. Idempotent.
+- `ProductionOrdersService.finishFloor()` gọi `releaseReservationsIfPiFinished()` sau khi ghi FINISHED: đếm lệnh của PI chưa
+  FINISHED, = 0 thì nhả. Best-effort (lỗi chỉ log), ngoài transaction. `ProductionOrdersModule` import `StockModule`.
+- Thêm test đơn vị + 2 test tích hợp (dư loại CONSUMABLE và PRODUCTION_INVOICE, gọi `finishFloor` thật); changelog HTML mục 7.
+
+**Kiểm tra** (bản xuất riêng của commit trong scratchpad `review-689a93f`, không đụng working tree):
+- `prisma generate` + `nest build`: OK. BE khởi động được (không lỗi phụ thuộc module).
+- Jest đơn vị 12 suite (production-orders, stock, 4 luồng xuất, steel-issues, purchase-proposals): 486/486 pass.
+- Tích hợp `reservation-own-pi` (Postgres test 5433): 6/6 pass.
+- Live-test BE của commit (cổng 3003) trên bản sao `dna_erp_solver_test_pi022_review`, script `live-test-689a93f.sh`:
+  - PI-037 xuất VTK-009 10 khi PI-022 còn giữ 90: 409 (đúng);
+  - QLSX bấm Kết thúc lệnh 24 (lệnh duy nhất của PI-022): 201, dòng VTK-009 (100, đã rút 10) -> RELEASED; dòng SAT-009 đã
+    tiêu hết 75/75 vẫn ACTIVE (đúng thiết kế);
+  - PI-037 xuất lại VTK-009 10: **201**;
+  - bấm Kết thúc lần 2: 201, không đổi gì (idempotent).
+
+**Phát hiện:**
+1. (Trung bình–cao, ĐÃ TÁI HIỆN) Nhận hàng SAU khi PI đã Kết thúc bị lỗi, thủ kho không ghi được hàng về.
+   - Điều kiện: đề xuất mua còn đang nhận dở (PURCHASING, giao nhiều đợt) mà QLSX đã Kết thúc hết lệnh của PI, và dòng giữ
+     `PRODUCTION_INVOICE` của (PI, vật tư) đã bị nhả.
+   - `creditPool()` chỉ đọc dòng ACTIVE -> pool rỗng -> `create` dòng `PRODUCTION_INVOICE` với `idempotencyKey` TRÙNG dòng
+     đã RELEASED -> "Unique constraint failed on idempotencyKey". `receiveItem()` gọi `creditPool` không bọc try nên cả lượt
+     nhận hàng hỏng.
+   - Tái hiện bằng 1 test thêm vào BẢN XUẤT (không phải repo): giao 60, xuất 50, Kết thúc (nhả dòng 60/50), giao nốt 40 ->
+     `creditPool` lỗi đúng câu trên.
+   - Ca gần giống: nếu dòng bị nhả là `CONSUMABLE_MATERIAL_PURCHASE` thì lần giao sau tạo dòng `PRODUCTION_INVOICE` MỚI ACTIVE
+     cho PI đã xong, không ai nhả nữa -> lại chặn PI khác.
+   - Hướng sửa gợi ý: PI đã Kết thúc hết thì `creditPool` bỏ qua (hàng về thành tồn tự do); hoặc pool rỗng mà đã có dòng
+     RELEASED cùng khoá thì dùng lại dòng đó thay vì tạo mới.
+2. (Trung bình, thấy trên DB test) Không nhả bù cho PI đã Kết thúc TRƯỚC khi lên bản này.
+   - Chỉ nhả lúc bấm Kết thúc; FE ẩn mọi nút khi lệnh đã FINISHED ("không hoàn tác được") nên PI cũ không có cách nào kích.
+   - DB test: PI-2026-029 và PI-2026-038 đã FINISHED vẫn giữ 170 (SAT-013 10, VTK-010 60, VTK-019 100). Production chưa kiểm.
+   - Cần chạy nhả bù 1 lần khi deploy (script hoặc migration dữ liệu) cho các PI mà mọi lệnh đã FINISHED.
+3. (Thấp) `reserveOrAdjust()` tìm theo khoá rồi cập nhật số lượng cả khi dòng đã RELEASED, không bật lại ACTIVE -> tính lại đề
+   xuất mua sau khi đã nhả (vd `retryProductionOrder`) tưởng đã giữ mà thực ra không. Hiếm.
+4. (Thấp) Chỉ đếm lệnh SX đã có: SKU của PI chưa được duyệt (chưa có lệnh) không chặn việc nhả. PI duyệt lệch từng SKU thì có
+   thể nhả sớm. Hiếm (lệnh gộp duyệt cùng lúc).
+5. (Thấp, tác giả đã ghi) API cho "Bắt đầu" lại lệnh đã Kết thúc, khi đó phần đã nhả không quay lại (xuất sắt bị chặn); FE không
+   có nút này nên khó xảy ra.
+
+**Với local:** working tree chỉ đang sửa changelog này; commit không đụng file đó -> pull sẽ fast-forward sạch.
+
+**Còn lại:** đã pull (32.16); phát hiện 1–2 chưa báo/chưa sửa (người dùng để ohey sửa); 3 bản sao DB tạm + thư mục `review-689a93f`
+(junction `node_modules`, có test review thêm) trong scratchpad; launch `be-3003-review-689a93f`.
+
+### 32.16 2026-10-28 — Pull commit `689a93f` về main (CHƯA commit gì thêm)
+
+Người dùng (nút sau review 32.15): "Pull về".
+
+- `git fetch`: `origin/main` vẫn là `689a93f`, hơn main đúng 1 commit; không file nào giao với thay đổi local (chỉ có
+  changelog này đang sửa).
+- `git merge --ff-only 689a93f`: fast-forward `ab847fa..689a93f`, không xung đột. Thay đổi changelog local giữ nguyên.
+- Kiểm tra trên main sau pull: `nest build` OK; jest các module production-orders, stock, 4 luồng xuất, steel-issues,
+  purchase-proposals, production-invoices: 17/17 suite, 715/715 test pass.
+
+**Còn lại:** phát hiện 1 (nhận hàng sau khi PI Kết thúc bị lỗi trùng khoá) và 2 (nhả bù PI đã Kết thúc trước khi deploy) của
+32.15 vẫn chưa sửa, người dùng để ohey sửa. Không commit, không push, không deploy.
+
+### 32.17 2026-10-28 — Review file "Câu hỏi làm rõ nghiệp vụ trước khi lên lại kế hoạch" (part 1) — CHỈ GÓP Ý (Sếp đã trả lời, xem 32.21)
+
+Người dùng gửi `Downloads\cau-hoi-lam-ro-nghiep-vu-part1 (1).docx` (16 câu + mặc định + "các điều đã chốt"), định gửi Sếp,
+nhờ xem thử. Đối chiếu với code/DB test (chỉ đọc), quyết định Sếp 27/10 và các review 32.6, 32.11, 32.14, 32.15. Không sửa file.
+
+**Sai / lệch, nên sửa trước khi gửi:**
+1. Đầu file ghi "Mục 10 đã làm trong commit 28/10 nên không có" — commit `ab847fa` mới làm 2 mốc vật tư + đề xuất mốc Phú
+   An + dòng "về từ", chưa lên production. Còn: cảnh báo trễ/sớm/chưa bắt đầu, số ngày theo container, nối hạn VT còn lại vào
+   đề xuất mua. Câu còn treo của Mục 10 (cảnh báo gửi ai, sofa +10 ngày, các SKU cùng lệnh chung N hay riêng, tính từ hạn giao
+   hay cut off booking, "ngày cắt sắt" của luật gộp là mốc Mua VT khung hay Phôi) đang bị bỏ ra khỏi file.
+2. "Đã chốt: SKU là cả bộ (bàn kèm 6 ghế)" mâu thuẫn Câu 9 và dữ liệu: DB test có `BAN-J55` "Bàn J55" và `GHE-J55` "Ghế J55"
+   là 2 sản phẩm riêng (thêm `BAN-8-MEIYING-J55`). Nên chuyển thành câu hỏi, gộp với Câu 9; Câu 4 (thể tích cả bộ) phụ thuộc câu này.
+3. "Đã chốt: gộp sắt tối đa 3 lệnh, cùng xưởng, cùng quy cách, hạn giao gần nhau" lệch ERP: cấu hình hiện tại
+   `solverMergeMaxSkus` = 2 SKU, `solverMergeWindowDays` = 3 ngày, đo theo mốc cần sắt (Mua VT khung → Khung), không theo hạn
+   giao; ERP chưa có "xưởng" (Mục 12). Cần hỏi lại: 2 hay 3, "lệnh" là SKU hay PI, đo theo mốc nào. Chốt số thì Admin tự chỉnh.
+4. Câu 14 đề xuất "hàng thừa nhập tồn chung, có cảnh báo như hiện tại": cảnh báo thì có (popup khi nhận vượt, `NhapKhoPage`),
+   nhưng hiện phần thừa (gồm % hao hụt mua thêm + nhận vượt) cộng hết vào giữ chỗ của lệnh, chỉ nhả khi lệnh Kết thúc (`689a93f`).
+   Chọn "tồn chung" là phải sửa code.
+
+**Nên thêm câu:**
+5. Vật tư còn dư khi lệnh Kết thúc trả về tồn chung (ohey vừa làm) - xin Sếp xác nhận; hàng về SAU khi lệnh đã Kết thúc thì vào
+   tồn chung? (cần cho lỗi nhận hàng 32.15).
+6. Trong lệnh gộp, SKU hạn sau xuất trước làm SKU hạn sớm thiếu: cảnh báo hay chặn (32.6 chờ Sếp).
+7. Câu 8, Câu 13 và quy tắc gộp tiêu hao "hạn vật tư cách nhau 4 ngày": nay có 2 hạn vật tư - ghi rõ vật tư khung (sơn, khí,
+   dây hàn, dây đan…) theo "Mua VT khung & đan", vật tư thành phẩm (thùng, xốp…) theo "Mua VT còn lại".
+
+**Bổ sung đề xuất:**
+8. Câu 5: đề xuất mua đã có ô tải phiếu duyệt Sếp ký (`approvalFileUrl`) - "phiếu đề xuất" dùng lại, lúc nhập kho chỉ cần 2 giấy
+   mới; nhận nhiều đợt thì mỗi đợt một phiếu nhà cung cấp.
+9. Câu 6: thiếu các loại xuất vật tư thành phẩm, VTTP theo công thức, chuyển kho nội bộ.
+10. Câu 2 hỏi phần thống kê của anh Sang - người trong nhóm trả lời được, không cần Sếp.
+11. Chữ "lệnh" dùng lẫn cho PI và lệnh SX từng SKU (ERP: mỗi SKU 1 lệnh SX) - nên định nghĩa ở đầu, nhất là trong quy tắc gộp.
+
+**Còn lại:** chưa sửa file docx, chờ người dùng.
+
+### 32.18 2026-10-28 — Đề xuất cách làm: (1) tự kiểm tra dữ liệu mỗi đêm, (3) bảng "lệnh sắp trễ" + tin tóm tắt sáng — CHƯA làm
+
+Người dùng hỏi ý tưởng phát triển; trong 7 ý mình đưa, người dùng hỏi "cách thức thực hiện 1 với 3". Chỉ thiết kế, chưa sửa code.
+
+**Hạ tầng đã rà:**
+- Chưa có `@nestjs/schedule`; job định kỳ duy nhất là `FloorAlertsService` (setInterval 10 phút, tắt bằng `FLOOR_ALERTS=off`,
+  không phát lại nhắc đang mở, tự `resolve` khi hết lý do) - làm mẫu được.
+- `render.yaml` khai `plan: free` -> máy chủ ngủ khi không có request, hẹn giờ trong app không tin được ban đêm. Đề xuất dùng
+  GitHub Actions lịch (đã có `ci.yml`) gọi endpoint có khoá bí mật riêng; cần kiểm gói Render thật trên dashboard.
+- Thông báo: `NotificationsService.emit()` có `dedupeKey`, `resolve()`; quy ước 9.3: Sếp chỉ nhận việc cần duyệt + CRITICAL,
+  không có tin tóm tắt.
+- Tiến độ từng công đoạn hiện tính ở FE (`ThongKePagePlan.tsx`: `isAllDone`, % mua hàng, Phôi, đan, chuyền kiểm, đóng gói từ
+  5 API) -> bảng lệnh sắp trễ cần đưa phần tính này về BE một chỗ.
+- DB test: vật tư nằm ở kho `phoi-son-han` (53) và `vat-tu-tp` (1) -> chia 2 nhóm vật tư theo kho là khả thi nhưng phải kiểm
+  trên dữ liệu thật (dây đan nằm kho nào).
+
+**Ý 1 - module `data-health`:** danh sách phép kiểm SQL chỉ đọc (tồn lệch sổ cái, tồn âm, giữ hàng vượt tồn, lệnh đã Kết thúc
+còn giữ dư, `consumedQty > quantity`, đề xuất mua nhận dở của lệnh đã Kết thúc, lệnh thiếu đề xuất mua/giữ chỗ, mốc sai thứ tự,
+xuất vượt định mức); 2 bảng lưu lần chạy + phát hiện (biết mới/cũ/đã hết); báo Admin khi có phát hiện mới; trang Admin; chạy
+đêm + nút "Kiểm ngay". Kiểm thử: DB test đã có PI-2026-029/038 giữ dư 170 -> phép kiểm "lệnh đã Kết thúc còn giữ dư" phải bắt được.
+
+**Ý 3 - bảng lệnh sắp trễ + tin sáng:** BE service tính trạng thái từng mốc mỗi SKU (Xong / Đúng hạn / Sắp tới hạn / Trễ) + lý do
+(thiếu vật tư gì); màn hình một dòng một SKU theo thứ tự cột đã chốt; tin sáng theo vai trò (Mua hàng + kho: vật tư phải về hôm
+nay / đã trễ = Mục 6; KHSX/QLSX: lệnh trễ, sắp tới hạn, tới ngày mà chưa bắt đầu); Sếp xem màn hình, chỉ lệnh nguy cơ trễ hạn
+giao mới thành CRITICAL (giữ quy ước 9.3). dedupeKey theo (người, ngày) và (lệnh, mốc), tự đóng khi mốc xong.
+
+**Cần người dùng/Sếp quyết:** "sắp tới hạn" trước mấy ngày; cảnh báo gửi ai; Sếp có nhận tin tóm tắt không (đổi quy ước 9.3);
+cách chia 2 nhóm vật tư; dùng GitHub Actions hay Render Cron.
+
+**Ghi chú:** file `docs/nghien-cuu-timeline-chuan-erp-2026-10-26.html` không có trong commit `ab847fa` và không còn trong repo
+(người dùng tự gỡ) - các mục trước nhắc tới file này giờ chỉ còn link artifact.
+
+### 32.19 2026-10-28 — Ý 1 "tự kiểm tra dữ liệu mỗi đêm": nguyên mẫu phép kiểm + danh sách file (đã duyệt, ĐÃ LÀM ở 32.20)
+
+Người dùng: "Làm ý 1". Theo quy ước, liệt kê thay đổi trước để duyệt. Đã chạy thử nguyên mẫu SQL (chỉ đọc) trên
+`dna_erp_solver_test`, script scratchpad `data-health-prototype.sql`.
+
+**Kết quả nguyên mẫu trên DB test:**
+
+| Phép kiểm | Kết quả |
+|---|---|
+| C1 tồn kho lệch sổ cái (kho thật) | 1 vật tư (id 1: tồn 7, sổ cái 8) + 2 dòng đoạn (sổ cái âm, tồn 0) |
+| C2 tồn âm | 20+ dòng, TOÀN là đoạn (`segmentSpecId`), không có vật tư |
+| C3 hàng giữ nhiều hơn tồn thật | 4 vật tư sắt (SAT-HOP-50X50 8, SAT-TRON-FI21 35, SAT-HOP-10X20 41, SAT-VUONG-10X10 30; tồn 0) |
+| C4 PI đã Kết thúc hết lệnh còn giữ dư | PI-2026-022 VTK-009 100; PI-2026-029 SAT-013 10, VTK-010 60; PI-2026-038 VTK-019 100 |
+| C5 đã rút > phần giữ | 0 |
+| C6 đơn mua nhận dở của PI đã Kết thúc | 0 |
+| C7 PI có lệnh SX mà không có đề xuất mua | 0 |
+| C8 mốc sai thứ tự | PI-2026-035 (VT khung 02/10 sau Khung 26/09 - đúng ví dụ đã biết) |
+
+- Enum mốc thật: `ProdItemStageType` = FRAME, WEAVING, TRANSFER_CHECK, PACKAGING, FRAME_PHOI, FRAME_HAN, FRAME_SON.
+- Đoạn (segment) âm rất nhiều - chưa rõ có phải đúng nghiệp vụ (đoạn dư để dưới xưởng, xuất trước nhập) -> đợt 1 chỉ kiểm
+  dòng VẬT TƯ, đoạn/mảnh để sau khi hỏi.
+- C3 (sắt giữ > tồn, `stockLengthMm` 0) chưa điều tra nguyên nhân - có thể dữ liệu test cũ.
+
+**Đề xuất (chờ duyệt):** module BE `data-health` (danh sách phép kiểm, service, controller 3 route: xem / kiểm ngay / cron có
+khoá), 2 bảng + migration (chỉ DB test), loại thông báo Admin mức WARNING, biến môi trường khoá cron, GitHub Actions lịch 01:00
+giờ VN; FE thêm khối "Kiểm tra dữ liệu" vào trang có sẵn "Tình trạng hệ thống" (không thêm mục menu); dùng quyền
+`SYSTEM_CONFIG` sẵn có để khỏi chạy seed production.
+
+### 32.20 2026-10-28 — ĐÃ LÀM ý 1 "Kiểm tra dữ liệu" mỗi đêm (local, CHƯA commit; migration chỉ DB test)
+
+Người dùng duyệt danh sách file + mặc định ở 32.19: "Duyệt, làm đi".
+
+**BE (`D:\DNA-ERP-BE`):**
+- `prisma/schema.prisma` + migration `20261028100000_add_data_health`: bảng `data_health_runs` (lần chạy: CRON/MANUAL, người bấm,
+  summary JSON số dòng từng phép kiểm, lỗi) và `data_health_findings` (unique `checkCode + entityKey`, `detail` JSON, lần đầu /
+  lần cuối thấy, `resolvedAt`). Áp CHỈ `dna_erp_solver_test` (+ bản sao `_pi022_review` để thử vòng đời); `migrate diff` DB test
+  vs schema: rỗng.
+- Module mới `src/modules/data-health/`:
+  - `data-health.checks.ts`: 8 phép kiểm SQL CHỈ ĐỌC, mỗi phép có tên, mức độ, giải thích, cách xử lý, cột hiển thị, trần 500 dòng:
+    STOCK_LEDGER_MISMATCH, NEGATIVE_STOCK, RESERVED_OVER_STOCK (Cao); FINISHED_PI_HOLDING, RESERVATION_OVERCONSUMED,
+    FINISHED_PI_OPEN_PURCHASE, PI_WITHOUT_PURCHASE (Trung bình); MILESTONE_ORDER (Thấp, chỉ PI chưa Kết thúc hết, thứ tự Phú An).
+    Chỉ dòng VẬT TƯ - chưa kiểm đoạn/mảnh/biến thể.
+  - `data-health.service.ts`: chạy lần lượt, phép kiểm lỗi ghi -1 + lý do và KHÔNG đóng phát hiện cũ của nó; đồng bộ phát hiện
+    (mới / còn / thấy lại / đã hết) trong transaction; chặn chạy chồng (409); báo Admin khi có dòng mới, gộp 1 thông báo/ngày
+    theo ngày giờ VN, tự `resolve` khi hết sạch.
+  - `data-health.controller.ts`: `GET /data-health` (SYSTEM_CONFIG VIEW), `POST /data-health/run` (SYSTEM_CONFIG UPDATE),
+    `POST /data-health/cron` (@Public + `CronKeyGuard`, chỉ trả tóm tắt).
+  - `cron-key.guard.ts`: so header `x-cron-key` với `DATA_HEALTH_CRON_KEY` (timingSafeEqual); chưa đặt biến = route tắt (401).
+  - Test: `data-health.service.spec.ts` (8), `cron-key.guard.spec.ts` (4).
+- `notification-types.ts`: loại `DATA_HEALTH_NEW_FINDINGS` (ALERT, WARNING, chỉ ADMIN, link `admin/system-status`).
+- `app.module.ts`, `config/configuration.ts` (`dataHealth.cronKey`), `config/env.validation.ts` (`DATA_HEALTH_CRON_KEY` optional,
+  tối thiểu 24 ký tự).
+- `.github/workflows/data-health-nightly.yml`: 18:00 UTC = 01:00 giờ VN + chạy tay; thiếu secret thì bỏ qua; curl thử lại 4 lần,
+  mỗi lần tối đa 5 phút (máy chủ Render đang ngủ).
+- `render.yaml`: khai `DATA_HEALTH_CRON_KEY` (sync: false).
+
+**FE (`D:\DNA-ERP`):**
+- `src/services/data-health-api.ts`; `Admin/DataHealthSection.tsx` (mới): tóm tắt lần kiểm gần nhất, nút "Kiểm ngay", mỗi phép
+  kiểm 1 thẻ (mức độ, "Ổn" / "N dòng" / "N mới" / "Lỗi khi kiểm"), mở ra có giải thích + cách xử lý + bảng dựng theo `columns`
+  BE trả, dòng mới tô đỏ; mặc định mở thẻ có dòng mới.
+- `Admin/SystemStatusPage.tsx`: đặt khối mới lên đầu trang "Tình trạng hệ thống" (không thêm mục menu). UI/UX: trang này vốn
+  ghi "toàn bộ dữ liệu là mock, không có backend thật" - mâu thuẫn với khối dữ liệu thật mới -> đổi phụ đề trang và gắn nhãn
+  "Dữ liệu demo trong trình duyệt" cho phần mock cũ (phần mock giữ nguyên).
+- `Guide/content/admin.ts`: thêm dòng "Tình trạng hệ thống > Kiểm tra dữ liệu" + tag.
+
+**Kiểm tra:**
+- BE: `nest build` OK; eslint module mới sạch; jest data-health 12/12; data-health + notifications + system-config + config
+  93/93; jest toàn bộ: 2088 pass, 3 fail cùng 1 file bộ giải cắt sắt optimize-material.spec.ts (chạy chung lúc máy bận BE 3002 + FE 3100), chạy riêng file đó 14/14 pass - không liên quan thay đổi này.
+- FE: `tsc --noEmit` OK; eslint 4 file sạch; vitest Guide + utils 111/111.
+- Live trên DB test (BE 3002 + FE 3100, `admin`):
+  - `POST /data-health/cron`: không khoá 401, sai khoá 401, đúng khoá 200 -> 10 dòng (lệch sổ cái 1, giữ > tồn 4, PI đã Kết
+    thúc còn giữ dư 4, mốc sai thứ tự 1); `GET /data-health` không JWT 401.
+  - Thông báo "Kiểm tra dữ liệu: 10 bất thường mới" tới `admin`, `admin2` (1 thông báo); bấm thông báo mở đúng trang.
+  - Bấm "Kiểm ngay" lần 2: vẫn 10 dòng, 0 mới, không báo lại. Giao diện desktop + mobile 375px ổn (bảng cuộn ngang).
+- Vòng đời trên bản sao `dna_erp_solver_test_pi022_review` (BE 3003, script `dh-resolve-test.sh`): lần 1 có PI-029 (2 dòng) +
+  PI-038; nhả bù giữ chỗ dư của PI-029 bằng SQL trên bản sao; lần 2 -> 2 dòng PI-029 "đã hết", PI-038 vẫn mở, newCount 0, không
+  thêm thông báo.
+
+**Phát hiện trên DB test (chưa điều tra):** vật tư `SAT-HOP-50X50` tồn 7 / sổ cái 8; 4 loại sắt giữ 8-41 cây khi tồn 0
+(`stockLengthMm` 0) - có thể là dữ liệu test cũ.
+
+**Còn lại / khi lên production (người dùng tự làm):**
+- ~~Đặt `DATA_HEALTH_CRON_KEY` trên Render + 2 secret GitHub~~ - **ĐÃ BỎ ở 32.25**: lịch GitHub Actions + khoá cron thay bằng hẹn
+  giờ trong app (`DailyJobsService`), không cần cấu hình gì.
+- Migration tự chạy khi deploy (entrypoint). Không cần seed (dùng quyền SYSTEM_CONFIG có sẵn).
+- Chưa: kiểm đoạn/mảnh, xuất vượt định mức (ý 2). DB test gốc giờ có 2 lần chạy + 10 phát hiện trong 2 bảng mới.
+- Không commit, không push, không deploy.
+
+### 32.21 2026-10-28 — Sếp trả lời 16 câu "làm rõ nghiệp vụ" (part 1)
+
+Người dùng gửi `Downloads\cau-hoi-lam-ro-nghiep-vu-part1 (2).docx`: "sếp đã trả lời". Bản gửi Sếp là bản gốc (chưa áp góp ý
+32.17). Chỉ đọc + đối chiếu, không sửa code.
+
+**Quyết định của Sếp:**
+
+| Câu | Mục | Trả lời | So với đề xuất |
+|---|---|---|---|
+| 1 | 1 | Chặn Sales lên đơn SKU chưa duyệt định mức | Đồng ý. FE `OrderManagementPage` đã chỉ liệt kê SKU APPROVED; BE `sales-orders` chưa chặn |
+| 2 | 3 | "anh Sang trả lời" | Người dùng tự trả lời |
+| 3 | 9 | 68 m³ đúng là cont 40HQ, cài 40HQ làm mặc định | Đồng ý |
+| 4 | 9 | Ưu tiên số load cont THEO TỪNG THÙNG, thêm 1 ô load cont THEO BỘ | KHÁC: không chỉ chia cho tổng cả bộ |
+| 5 | 4 | Thiếu giấy = CẢNH BÁO; mọi nhóm vật tư; mọi phiếu (kể cả cũ) | KHÁC: không chặn cứng, áp cả phiếu cũ |
+| 6 | 4 | Theo đề xuất (bắt buộc với xuất thành phẩm đóng container, loại khác cảnh báo) | Đồng ý |
+| 7 | 2 | Cho sửa kế hoạch đã duyệt/đang chạy bằng Excel, nhưng sửa xong phải DUYỆT LẠI TỪ ĐẦU | KHÁC: thêm bước duyệt lại |
+| 8 | 6 | Người mua được ghi đè ngày hẹn, nhưng phải KHỚP kế hoạch | KHÁC: có ràng buộc |
+| 9 | 12 | Bàn và ghế là 2 SKU RIÊNG | Chọn xưởng theo SKU |
+| 10 | 5 | Theo đề xuất (tên PI booking là mã riêng, nối qua từng dòng) | Đồng ý |
+| 11 | 5 | Tên hàng booking = tên KHÁCH đặt; Sales phải cập nhật tên của khách tương ứng sản phẩm nhà máy | KHÁC: cần bảng đối chiếu tên khách ↔ sản phẩm |
+| 12 | 5 | Theo đề xuất (lấy được cả hàng đã đóng gói trong kho) | Đồng ý |
+| 13 | 7/8/11 | Chia hàng đầy trước theo HẠN PHÔI và HẠN ĐÓNG GÓI | KHÁC: không theo "hạn vật tư" |
+| 14 | 7/8/11 | Hàng về thừa vào tồn chung | Đồng ý - nhưng CODE HIỆN KHÁC (xem dưới) |
+| 15 | 7/8/11 | Sếp ký chung 1 phiếu cho đơn gộp | Đồng ý |
+| 16 | 7/8/11 | Theo đề xuất (không tách sau duyệt, chỉ huỷ gộp khi chưa mua) | Đồng ý |
+
+- Mặc định Mục 9 Sếp sửa: SKU đã duyệt PHẢI bổ sung kích thước thùng ngay (mặc định cũ "không bắt").
+- Các mặc định khác (Mục 1, 2, 6, 12, 5, 7/8/11) Sếp không sửa = chấp nhận.
+
+**Hệ quả / mâu thuẫn cần xử lý:**
+1. "Các điều đã chốt" trong file vẫn ghi "SKU là cả bộ (bàn kèm 6 ghế)" - SAI theo Câu 9 (khớp DB test: `BAN-J55`, `GHE-J55`
+   riêng). Phải sửa trong tài liệu kế hoạch.
+2. Câu 4 "load cont theo bộ" khi bàn/ghế là SKU riêng: "bộ" là gì trong hệ thống (tổ hợp SKU khách đặt, vd 1 bàn + 6 ghế?) -
+   chưa có khái niệm này; ô "theo bộ" nhập tay hay tự tính - cần hỏi lại.
+3. Câu 7 "duyệt lại từ đầu": chỉ khi sửa bằng Excel hay cả sửa tay hiện nay (đang không cần duyệt lại)? Lệnh đang sản xuất
+   (giữ hàng, đề xuất mua, xưởng đang chạy) xử lý thế nào trong lúc chờ duyệt lại - cần hỏi.
+4. Câu 8 "khớp kế hoạch": đề xuất hiểu là ngày hẹn phải nằm trong khung về hàng (VT khung N−5 → N−1, VT còn lại ĐG−11 → ĐG−7);
+   ngoài khung thì chặn hay cảnh báo - cần hỏi.
+5. Câu 13: hiểu là vật tư khung & đan chia theo hạn Phôi, vật tư còn lại chia theo hạn Đóng gói (khớp 2 nhóm vật tư 32.7). Có
+   thể liên quan "ngày cắt sắt" của luật gộp (đang giữ Mua VT khung → Khung, chờ chốt) - chưa tự đổi.
+6. Câu 14 hàng thừa vào tồn chung: code hiện cộng HẾT số nhận (gồm % hao hụt + nhận vượt) vào giữ chỗ của PI
+   (`creditPool`), chỉ nhả khi Kết thúc (`689a93f`). Đúng ý Sếp thì `creditPool` chỉ cộng tới phần còn thiếu, phần vượt thành
+   tồn chung - cùng chỗ với lỗi nhận hàng sau Kết thúc (32.15) ohey đang sửa -> nên báo ohey quyết định này. Phần mua dư %
+   hao hụt có tính là "thừa" không - chưa rõ.
+7. File vẫn ghi "Mục 10 đã làm"; quy tắc gộp "sắt tối đa 3 lệnh" vẫn lệch cấu hình ERP (2 SKU, 3 ngày) - Sếp không sửa mục
+   "đã chốt", chưa ai chốt lại (32.17).
+
+Đã lưu ghi nhớ dự án `sep-tra-loi-16-cau-nghiep-vu-2026-10-28`.
+
+### 32.22 2026-10-28 — Soạn câu trả lời Câu 2 (Mục 3 "Số liệu thống kê")
+
+Người dùng: "trả lời mục 3, phần đó tôi vs bạn làm" (Sếp ghi "anh Sang trả lời" ở 32.21). Chỉ soạn chữ, không sửa code.
+
+**Đối chiếu:** "Nhập số liệu thống kê" = phần báo sản lượng xưởng bằng QR (changelog `2026-10-08-ke-hoach-tem-qr-bo-sat-phoi.md`
+mục 15-57): QR tại máy, công nhân tự báo, QLSX kiểm rồi gửi KCS, KCS chấm, "Báo cáo sản lượng đạt KCS", nhắc QLSX, PIN + giới
+hạn mạng công ty, QR nhận sắt ở khu Phôi. Đã commit nhánh `QR-QLSX` (merge vào `main` BE / `demo` FE), deploy + seed production
+15/10/2026; bản bổ sung "Fix QLSX" + seed production 20/10/2026 (mục 38, 57.7). FE: `Floor/FloorScanApp.tsx`, `QlsxFloorPage`,
+`QlsxQueue`, `QlsxReview`, `QlsxStats`, `QlsxSetup`; BE `floor`, `FloorAlertsService`.
+
+**Câu trả lời đã soạn (gửi người dùng dán vào file):** phạm vi gồm 5 phần trên; đã ghép vào hệ thống chung (dùng chung PI, lệnh
+SX, KCS, tài khoản), đang chạy trên hệ thống thật từ 15/10; không trùng Mục 6 (thống kê là đầu ra của xưởng, Mục 6 là vật tư đầu
+vào); chưa làm: Hàn quét nhận đoạn của Phôi (cần Ban giám đốc chốt), cải tiến giao diện giai đoạn 2-4 (mục 31), màn "Lệnh sản
+xuất" theo tổ (mục 43).
+
+### 32.23 2026-10-28 — Pull + review BE `d1e09a3` "fix-stockReservation-v3" và FE `b6e3f2b` "fix-UIUX-QLSX" (ohey)
+
+Người dùng: "pull commit FE và BE mới nhất và review". Mỗi repo hơn local đúng 1 commit; không file nào trùng thay đổi local, nên
+`git pull --ff-only` cả hai. Thay đổi local (data-health, tài liệu, e2e...) giữ nguyên. Không commit, không push.
+
+**Hai commit làm gì** (sửa đúng các điểm báo ở changelog `2026-10-28-e2e-tren-backup-production.md` mục 11):
+- **BE: lỗi giữ chỗ sắt.**
+  - `creditPool()` nhận thêm `stockLengthMm`; `receiveItem()` truyền `item.stockLengthMm ?? 0`.
+  - Dòng giữ chỗ tạo mới (pool rỗng) nằm đúng ngăn chiều dài với tồn thật. Pool có sẵn dòng thì vẫn cộng vào dòng đó.
+- **BE: đơn hàng trả thêm `piCodes`** - mã các PI thật mà đơn đã gộp vào, sắp theo mã. Có 5 test mới.
+- **FE: 5 sửa giao diện.**
+  - Hộp "Chọn kho thành phẩm" của QLSX lấy từ bảng kho: kho thật, đang hoạt động, họ `thanh-pham`.
+  - Tab Hàn/Sơn đổi tên "Xác nhận nhận vật tư".
+  - Chi tiết PI chỉ "Hoàn thành" khi QLSX đã Kết thúc. Lệnh chưa có trạng thái xưởng vẫn tự suy ra như cũ.
+  - Màn xuất hàng kho thành phẩm: cột PI lấy từ `piCodes`; nhãn "Số SKU" khi cả trang là đơn xuất cho khách.
+  - Chuyền kiểm: kiểm đủ thì hiện "Đã kiểm đủ" thay nút "Kiểm".
+- Commit kèm `docs/changelog-2026-10-28-fix-giu-cho-sat-va-loi-giao-dien.html`. Tài liệu đó tự ghi: dữ liệu cũ chưa sửa, chưa
+  mở giao diện thật.
+
+**Kiểm tra trên main sau pull:**
+
+| Phép kiểm | Kết quả |
+|---|---|
+| BE `nest build` | OK |
+| BE jest toàn bộ | 2096/2099 qua, 1 bỏ qua. 2 hỏng ở `solver-ts/optimize-material.spec.ts`; chạy riêng file đó 14/14 qua |
+| FE `tsc --noEmit` | 0 lỗi |
+| FE vitest | 262/262 |
+| E2E `full-flow` (BE `be-3001-e2e` bản build mới + FE 3000, DB `dna_erp`) | **QUA, 3,3 phút** (`PI-2026-008`) |
+
+- 2 test solver hỏng phụ thuộc thời gian (giới hạn 20 giây), chỉ hỏng khi chạy chung cả bộ dưới tải. Code solver không đổi từ
+  `4cf4078` → không do commit này.
+- E2E kiểm được trên giao diện thật 3 điểm FE mới:
+  - hộp kho hiện "Kho thành phẩm";
+  - nhãn "Đã kiểm đủ";
+  - cột PI ở màn xuất hàng có mã PI.
+- DB sau E2E: dòng giữ chỗ `PRODUCTION_INVOICE` của sắt `SAT-064` / `PI-2026-008` có `stockLengthMm = 5020`, đúng ngăn với
+  `stock_quant` (trước bản sửa là 0).
+- File test FE `e2e/full-flow.spec.ts` (chưa track) sửa theo giao diện mới:
+  - chọn lại `Kho thành phẩm` theo tên kho;
+  - thêm 2 câu kiểm "Đã kiểm đủ" và cột PI.
+
+**Phát hiện:**
+1. (Trung bình, CÒN MỞ từ 32.15 phát hiện 1) Nhận hàng sau khi PI đã Kết thúc vẫn lỗi trùng `idempotencyKey`.
+   - `d1e09a3` không đổi khoá hay cách tìm pool: `loadPool` chỉ đọc dòng ACTIVE, nhánh tạo mới vẫn dùng khoá
+     `PRODUCTION_INVOICE:{pi}:material:{id}` trùng dòng đã RELEASED.
+2. (Trung bình) Dữ liệu cũ chưa sửa - cần chạy 1 lần khi deploy:
+   - dòng giữ chỗ sắt nằm ngăn 0 do `creditPool` cũ tạo; trên `dna_erp` local còn 1 dòng: id 89, `SAT-056` / `PI-2026-004`;
+   - nhả bù PI đã Kết thúc trước 689a93f (32.15 phát hiện 2);
+   - tác giả có viết script backfill nhưng đã bỏ. "Kiểm tra dữ liệu" (`RESERVED_OVER_STOCK`, `FINISHED_PI_HOLDING`) sẽ chỉ ra
+     các dòng này sau khi lên production.
+3. (Thấp) Pool đã có dòng thì `creditPool` cộng vào dòng ưu tiên cao nhất, không xét chiều dài.
+   - Hiện an toàn: `approve()` chặn 2 cỡ cây cho cùng loại sắt trong 1 PI và chỉ giữ ở ngăn `bestStockLengthMm`.
+   - Còn khe nếu "Tính lại" đổi cỡ cây sau khi đã nhận một phần. Hiếm.
+4. (Thấp, FE) Hộp chọn kho giờ liệt kê MỌI kho thành phẩm đang hoạt động, kể cả kho chưa có tài khoản thủ kho.
+   - Chọn nhầm kho đó thì không ai thấy lệnh ở Chuyền kiểm / Đóng gói / Nhập đan.
+   - Bản cũ lấy từ tài khoản nên luôn có thủ kho. Production hiện kho 2, 3 đều có tài khoản (`khotp2`, `khotp3`) nên chưa sao.
+5. (Thấp, FE) Nhãn "Số SKU" chỉ đổi khi MỌI đơn trên trang là đơn xuất cho khách. Trang lẫn đơn vật tư đóng gói vẫn ghi "Số
+   lượng vật tư" cho cả hai loại (bản điện thoại thì đúng từng dòng).
+6. Đổi hành vi cần nghiệp vụ xác nhận (tác giả đã ghi): lệnh cũ đóng gói đủ mà chưa ai bấm Kết thúc sẽ hiện lại "Đang sản xuất".
+   Chữ "Xác nhận sản lượng" còn sót trong `components/sanxuat/core.tsx`.
+
+**Còn lại:**
+- Phát hiện 1-2 chờ ohey (như 32.15).
+- BE cổng 3001 đang chạy `be-3001-e2e` với bản build mới.
+- Không commit, không push, không deploy.
+
+### 32.24 2026-10-29 — `DATA_HEALTH_CRON_KEY` để làm gì + kế hoạch mục 3 "bảng mốc / tin sáng" (ĐÃ DUYỆT, ĐÃ LÀM ở 32.25)
+
+Người dùng: "`DATA_HEALTH_CRON_KEY` phần này là làm gì? Liệu có cần hay có cách nào đơn giản và tối ưu hơn" + "làm mục 3" (sau câu
+hỏi dùng mặc định đề xuất ở lượt trước).
+
+**`DATA_HEALTH_CRON_KEY` (mục 1, 32.20):**
+- Là khoá bí mật để chỉ lịch GitHub Actions gọi được route công khai `POST /data-health/cron` (không đăng nhập). Không có khoá
+  thì ai trên Internet cũng bấm chạy 8 phép kiểm liên tục được.
+- Phải cấu hình 3 chỗ: biến trên Render + 2 secret GitHub (`ERP_BASE_URL`, `DATA_HEALTH_CRON_KEY`).
+- Lý do phải gọi từ ngoài: `render.yaml` khai `plan: free`, máy chủ ngủ khi không có request, nên hẹn giờ 01:00 trong app không
+  chạy được.
+- **Cách đơn giản hơn (đề xuất):** hẹn giờ TRONG APP theo mẫu `FloorAlertsService` (10 phút kiểm 1 lần): "mỗi ngày chạy 1 lần
+  vào lần đầu máy chủ thức trong ngày".
+  - Dữ liệu chỉ đổi khi có người dùng app, nên kiểm lúc máy chủ thức là đủ.
+  - Bỏ được khoá, route `/cron`, guard, workflow GitHub, biến Render, 2 secret.
+  - Dùng chung cơ chế cho tin sáng mục 3.
+  - Đánh đổi: gói free thì chạy lúc người đầu tiên mở app trong ngày, không đúng 01:00; máy chủ chạy liên tục thì đúng giờ.
+  - Chống chạy trùng bằng cách tra DB đã có lần chạy hôm nay (giờ VN).
+
+**Rà hiện trạng cho mục 3** (agent, chỉ đọc):
+- Mốc đã lưu:
+  - `ProductionInvoiceItem.materialDeadline` ("Mua VT khung & đan"), `finishedMaterialDeadline` ("Mua VT còn lại"),
+    `deliveryDeadline` ("Hạn giao");
+  - `ProductionInvoiceItemStage`: FRAME_PHOI/HAN/SON, FRAME ("Khung CK"), WEAVING ("Đan"), PACKAGING ("Đóng gói").
+  - `TRANSFER_CHECK` không ai ghi → Chuyền kiểm không có ngày.
+- Tiến độ mỗi công đoạn hiện CHỈ tính ở FE `ThongKePagePlan.tsx` (`subStatusOf`, `buildFrame`, `buildWeaving`,
+  `buildChuyenKiem`, `buildPackaging`, `getPurchasingPercent`) từ 7 API batch BE có sẵn. BE chưa có chỗ nào so mốc với hôm nay,
+  chưa có job buổi sáng.
+- Quá hạn hiện có:
+  - `isOrderOverdue` chỉ so Hạn giao;
+  - LenhSXPage tô đỏ ô ngày đã qua nhưng không xét tiến độ.
+- Chưa có code chia vật tư 2 nhóm mua. Chia được theo `MaterialGroup.systemKey` + `Material.detailKind`:
+  - VT khung = Sắt/Dây/Đinh/Tán rút/Nút + Sơn;
+  - VT còn lại = Phụ kiện/Nệm/Bao bì.
+
+**Kế hoạch đề xuất** (mặc định: sắp tới hạn = trước 2 ngày; tin sáng 07:00 theo vai trò; Sếp KHÔNG nhận tin tóm tắt - giữ quy
+ước 9.3):
+- **BE `milestone-board`:** 1 service tính cho mỗi dòng SKU đang chạy, từng mốc:
+  - trạng thái: Xong / Đúng hạn / Sắp tới hạn (≤ 2 ngày) / Trễ / Chưa đặt hạn;
+  - lý do: mua hàng = vật tư chưa về đủ; công đoạn = % đã làm.
+  - Luật "xong" theo đúng các luật FE đang dùng, gọi lại các service batch BE sẵn có.
+  - Route `GET /milestone-board` (quyền PRODUCTION_INVOICE:VIEW).
+- **BE `daily-jobs`:** hẹn giờ trong app, 10 phút kiểm 1 lần, tắt bằng `DAILY_JOBS=off`, tắt khi chạy test.
+  - Mỗi ngày 1 lần: chạy "Kiểm tra dữ liệu".
+  - Sau 07:00 giờ VN: tin sáng
+    - Mua hàng + thủ kho: vật tư phải về hôm nay / đã trễ;
+    - KHSX + QLSX: mốc trễ, sắp tới hạn, tới ngày Phôi mà chưa "Bắt đầu".
+  - Sếp + KHSX + QLSX nhận cảnh báo CRITICAL khi Hạn giao còn ≤ 2 ngày hoặc đã qua mà chưa đóng gói đủ (1 thông báo/dòng SKU,
+    tự đóng khi xong).
+- **Gỡ phần lịch ngoài của mục 1:** route `/cron`, `cron-key.guard`, biến `DATA_HEALTH_CRON_KEY`, mục trong `render.yaml`,
+  workflow GitHub. Sửa chữ "mỗi đêm" ở FE + Hướng dẫn.
+- **FE:** thêm chế độ xem "Bảng mốc" ngay trong trang "Tổng hợp lệnh SX" (`ThongKePagePlan`, đã có ở KHSX, QLSX, Sếp, Giám
+  đốc - không thêm mục menu):
+  - mỗi SKU 1 dòng, 9 mốc tô màu, rê chuột xem lý do;
+  - điện thoại hiện thẻ.
+- **Kiểm thử:** unit test luật trạng thái + điều kiện chạy 1 lần/ngày; chạy thử trên `dna_erp` bằng dữ liệu E2E rồi dọn lại
+  sạch.
+
+**Còn mở:** mốc chưa lưu ngày thì KHÔNG cảnh báo (chỉ hiện "chưa đặt hạn") - không dùng ngày đề xuất Phú An để báo trễ. Tiến độ
+FE cũ vẫn tự tính riêng (2 nơi tính, cần giữ luật khớp nhau).
+
+### 32.25 2026-10-29 — ĐÃ LÀM: hẹn giờ trong app (bỏ khoá cron), Bảng mốc, tin sáng, cảnh báo nguy cơ trễ hạn giao (local, CHƯA commit; đã sửa thêm theo review ở 32.26)
+
+Người dùng duyệt 32.24 ("Duyệt, làm đi"), giữa chừng hỏi "số liệu sản xuất tuần hoàn liên tục trong 1 ngày thì call 1 lần có đủ
+không... hay admin không cần theo dõi quá nhiều". Đã trả lời:
+- "Kiểm tra dữ liệu" bắt lỗi dữ liệu/hệ thống (việc kỹ thuật của Admin), hiếm và không gấp - 1 lần/ngày + nút "Kiểm ngay" là đủ.
+- Tiến độ sản xuất liên tục thuộc Bảng mốc:
+  - tính trực tiếp mỗi lần mở trang;
+  - cảnh báo hạn giao xét lại mỗi 10 phút;
+  - tin sáng chỉ là tóm tắt đầu ngày.
+
+**BE (`D:\DNA-ERP-BE`):**
+- **Gỡ lịch ngoài của mục 1** (về đúng bản gốc, `git diff` rỗng): route `POST /data-health/cron`, `cron-key.guard.ts` + spec,
+  `dataHealth.cronKey` trong `configuration.ts`, `DATA_HEALTH_CRON_KEY` trong `env.validation.ts` và `render.yaml`,
+  `.github/workflows/data-health-nightly.yml`. `DataHealthModule` export service; ngày VN dùng chung `vnDayKey`
+  (`floor-stats.util`).
+- **Module mới `milestone-board`:**
+  - `milestone-board.rules.ts`: luật thuần.
+    - Trạng thái: DONE / NA / UNKNOWN / NO_DEADLINE / ON_TRACK / DUE_SOON (≤ 2 ngày, gồm hôm nay) / LATE.
+    - Thứ tự 9 mốc; `combineProgress` (Khung = Phôi + Hàn + Sơn); `goodCapped`; `percentOf` (cùng `pctOf` FE).
+  - `milestone-board.service.ts` `getBoard()`:
+    - Lấy dòng PI đã Sếp duyệt mà lệnh chưa FINISHED.
+    - Gọi lại đúng các hàm batch FE "Tổng hợp lệnh SX" đang dùng: `getPhoiProgressBatch`, `getBatchPlanBatch` PHOI/HAN/SON,
+      `getIssuePlanBatch`, `getPackagingBatch`. Đọc đề xuất mua theo PI.
+    - Mỗi nguồn bắt lỗi riêng → mốc liên quan "Chưa biết".
+    - Luật xong như FE:
+      - Phôi = cắt + công đoạn phụ theo SKU (`byOrder`, trừ lỗi KCS) + vật tư thành phẩm Phôi làm;
+      - Hàn/Sơn = đạt + chờ KCS + chưa gửi;
+      - Đan = đã NHẬN về;
+      - mua hàng = mọi dòng về đủ; dây/nệm của SKU khác trong PI không tính (như `scopePurchasingRows`).
+    - Nhóm mua theo `Material.detailKind`: ACCESSORY/CUSHION/PACKAGING = "VT còn lại", còn lại = "VT khung & đan".
+    - Hạn = ngày ĐÃ LƯU. "Mua VT khung" chưa lưu thì theo hạn Khung (chuỗi `ownSteelDeadlineOf`); Hạn giao chưa lưu thì theo hạn
+      PI.
+    - Trả mỗi ô: trạng thái, số ngày, %, cần/đã làm, lý do (vật tư chưa về đủ "đã về/cần"). Dòng xấu nhất lên đầu.
+  - `GET /milestone-board` (quyền PRODUCTION_INVOICE:VIEW sẵn có).
+- **Module mới `daily-jobs` `DailyJobsService`** (mẫu `FloorAlertsService`): 60 giây sau khi lên rồi 10 phút 1 lần; tắt bằng
+  `DAILY_JOBS=off`, không chạy khi test; mỗi bước bắt lỗi riêng.
+  1. "Kiểm tra dữ liệu": hôm nay (giờ VN) chưa có lần CRON thì chạy (409 do Admin đang bấm "Kiểm ngay" thì bỏ qua).
+     _32.26: chỉ tính lần đã CHẠY XONG; cả lần kiểm chạy dưới khoá advisory._
+  2. `DELIVERY_AT_RISK` (ALERT/CRITICAL → tự thêm Sếp; KHSX + QLSX):
+     - phát cho dòng có Hạn giao Trễ / Sắp tới hạn;
+     - chỉ phát lại khi số ngày hoặc số đã đóng gói đổi (gộp sẽ đặt lại "chưa đọc"); _32.26: chỉ khi SỐ NGÀY đổi_;
+     - đóng khi hết nguy cơ hoặc lệnh Kết thúc; "Chưa biết" thì giữ.
+  3. Từ 07:00 giờ VN, 1 lần/ngày (tra `dedupeKey` theo ngày khi khởi động lại), tin hôm trước tự đóng, không có gì thì không gửi:
+     - `MORNING_MATERIALS_DIGEST` → NV mua phụ trách vật tư (`buyerId`) + thủ kho đúng kho (`warehouse.code`), link "Theo dõi
+       mua hàng" / "Nhập kho"; _32.26: mỗi người nhận 1 tin riêng, kho = kho nhận ghi đè trước, gộp trùng theo (PI, vật tư)_;
+     - `MORNING_PRODUCTION_DIGEST` → KHSX + QLSX: mốc trễ / sắp tới hạn / tới ngày Phôi mà chưa "Bắt đầu".
+- `notification-types.ts`: 3 loại mới. Link Bảng mốc có `alternatives` cho từng phân hệ: `production_plan/thongke`,
+  `production/ke-hoach`, `boss/thong-ke`, `?view=moc`. _32.26: `boss/thong-ke` lên đầu (Sếp mở được mọi phân hệ nên trước đây
+  luôn rơi vào màn KHSX)._
+- Test mới: `milestone-board.rules.spec` (8), `milestone-board.service.spec` (5), `daily-jobs.service.spec` (14).
+
+**FE (`D:\DNA-ERP`):**
+- `services/milestone-board-api.ts`.
+- `Manufacturing/MilestoneBoardView.tsx`:
+  - máy tính: bảng 9 cột tô màu (đỏ / vàng / xanh dương / xanh lá / xám), rê chuột xem lý do;
+  - điện thoại: thẻ chỉ liệt kê mốc còn việc kèm lý do;
+  - lọc "Tất cả / Cần chú ý", ô tìm, "Tải lại", chú giải;
+  - tải lại ngầm theo realtime (gom 5 giây);
+  - nháy đúng dòng khi mở từ cảnh báo (`focus=PRODUCTION_INVOICE_ITEM:id`).
+- `ThongKePagePlan.tsx`: vỏ mới đọc `?view=moc` + nút "Theo lệnh / Bảng mốc" cạnh tiêu đề; trang cũ đổi tên `OrderSummaryView`,
+  không đổi gì khác.
+- Hướng dẫn:
+  - bài mới "Bảng mốc" (KHSX, QLSX, Sếp) trong `Guide/content/manufacturing.ts`;
+  - sửa chữ "mỗi đêm" → "mỗi ngày 1 lần" ở `DataHealthSection.tsx`, `Guide/content/admin.ts`, `data-health-api.ts`.
+
+**Kiểm tra:**
+- BE:
+  - `nest build` OK; `tsc` chỉ còn 2 lỗi cũ ở `prisma/seed-*.ts` (tác giả `d1e09a3` đã ghi nhận);
+  - jest mục mới + data-health + notifications 83/83 (gồm test link: mọi đích là phân hệ FE thật);
+  - toàn bộ 2120/2122: 1 bỏ qua, 1 hỏng là test thời gian solver `optimize-material.spec.ts` khi chạy chung (đã gặp ở 32.23).
+- FE: `tsc` 0 lỗi; eslint file mới sạch (3 cảnh báo cũ của ThongKePagePlan); vitest 262/262.
+- **Chạy thử thật trên `dna_erp`** (dữ liệu E2E rồi dọn sạch):
+  - Dựng dữ liệu:
+    - full-flow phần A+B (cờ dừng tạm `E2E_STOP_AFTER_B`, đã gỡ ngay, `grep` = 0) → `PI-2026-001` đã duyệt, chưa mua,
+      chưa bắt đầu;
+    - KHSX đặt mốc qua `PATCH /production-invoices/:id/items-deadlines`.
+  - Kết quả Bảng mốc:
+    - Mua VT khung Trễ 2 ngày, lý do "Sắt … 0/67 cây; Sơn … 0/100 kg; Dây … 0/25 kg; +1";
+    - Phôi Trễ, Hàn Sắp tới hạn, Sơn/Khung/Đan/Đóng gói Đúng hạn;
+    - Mua VT còn lại Không cần, Hạn giao Sắp tới hạn.
+  - BE `be-3001-dist`, lần kiểm đầu sau ~60 giây:
+    - CRON "Kiểm tra dữ liệu" chạy 1 lần;
+    - tin vật tư tới `muapsh`, `muavttp`, `khopsh`, `khovttp`;
+    - tin tiến độ tới `khsx`, `qlsx`;
+    - `DELIVERY_AT_RISK` tới `boss`, `khsx`, `qlsx`.
+  - Khởi động lại trong ngày: không chạy lại kiểm tra dữ liệu, không phát trùng cảnh báo.
+  - Giao diện (KHSX, trình duyệt trong app):
+    - 1400 px vừa khít không cuộn ngang (đã thu cột);
+    - điện thoại hiện thẻ;
+    - nút "Theo lệnh" quay về trang cũ;
+    - bấm cảnh báo trong chuông mở đúng Bảng mốc và nháy dòng SKU.
+  - UX đã sửa khi chạy thử:
+    - tiêu đề tin bỏ phần "0 phải về";
+    - gộp vật tư theo dòng SKU thay vì lặp "PI · SKU";
+    - thêm "Tiến độ hôm nay:";
+    - ô "Không cần" bỏ ngày;
+    - chú giải trên điện thoại bỏ câu "rê chuột".
+- full-flow chạy lại (BE `be-3001-e2e`, cấu hình này giờ có thêm `DAILY_JOBS=off`) QUA 3,5 phút - trang "Theo lệnh" + Bắt đầu /
+  Kết thúc của QLSX vẫn chạy với lớp vỏ mới.
+- Dọn `dna_erp` về bản sạch: giống hệt 8187 dòng. BE `be-3001-dist` bật lại sẽ tự thêm 1 lần chạy "Kiểm tra dữ liệu" trong ngày
+  (đúng thiết kế mới).
+
+**Còn lại / lưu ý:**
+- Mốc chưa lưu ngày không báo trễ. _32.28: riêng 2 mốc mua vật tư nay có hạn dự phòng (Khung / Đóng gói → hạn PI), cùng hàm với "Theo dõi mua hàng"._
+- Chuyền kiểm chưa có ô hạn nên không có cột.
+- Mốc "Mua VT còn lại" chỉ đúng khi vật tư có `detailKind`.
+- Tiến độ tính 2 nơi (BE Bảng mốc, FE "Theo lệnh"). _32.28: % Khung và làm tròn % mua đã cho khớp nhau._
+- Production chưa có PI nào (26/10) nên Bảng mốc sẽ trống tới khi xưởng chạy lệnh thật.
+- Không commit, không push, không deploy. Khi deploy không cần cấu hình gì thêm. Muốn tắt việc hằng ngày thì đặt
+  `DAILY_JOBS=off`.
+
+### 32.26 2026-10-29 — Rà lỗi biên của 32.25: 10 phát hiện, ĐÃ SỬA 9, 1 lệch có sẵn ở FE để lại (local, CHƯA commit)
+
+Người dùng hỏi "đã chuẩn chỉ hết chưa, kiểm tra các trường hợp có thể gây bug chưa".
+- Cho 1 agent rà độc lập (chỉ đưa code, không đưa kết luận của mình) rồi tự kiểm lại từng ý trên code.
+- Agent: 0 lỗi nặng, 3 trung bình, 1 trung bình-thấp, 6 thấp.
+- DB dev không có lệnh nào đang chạy, nên mọi ý dưới đây xác nhận bằng đọc code + test, chưa thấy trên dữ liệu thật.
+
+**Đã sửa (BE `D:\DNA-ERP-BE`):**
+1. **Tin vật tư tới nhầm thủ kho với vật tư đóng gói** (trung bình).
+   - Lỗi: Bảng mốc lấy kho mặc định của vật tư.
+   - Thực tế: hàng về kho QLSX ghi đè trên dòng mua (`receiveWarehouseCode`), giống `receiveItem` và `work-queue`.
+   - Sửa: `loadPurchaseLines` lấy `receiveWarehouseCode ?? material.warehouse.code`.
+2. **Dây/nệm của SKU đã Kết thúc bị tính sang SKU còn chạy** (trung bình).
+   - Lỗi: tập "dây của dòng khác" chỉ dựng từ các dòng trên bảng (không gồm lệnh FINISHED).
+   - Hậu quả: dây chưa về của SKU đã xong làm SKU kia "Trễ" và vào tin sáng mỗi ngày, trong khi trang "Theo lệnh" ẩn nó.
+   - Sửa: đọc thêm dây/nệm của MỌI dòng đã duyệt trong các PI đó - cùng tập `approvedRows` FE dùng.
+3. **Tin vật tư không theo từng người nhận, và đếm trùng** (trung bình).
+   - Lỗi 1: 1 tin chứa mọi vật tư gửi cho mọi NV mua + thủ kho; 5 dòng hiện là 5 dòng trễ nhất chung, nên vật tư của 1 người có
+     thể bị chìm trong "+N dòng khác".
+   - Lỗi 2: vật tư mua chung cả PI (sắt, đinh) có ở mọi SKU nên bị đếm 1 lần mỗi SKU (PI 4 SKU × 3 dòng sắt = "12 đã trễ").
+   - Sửa: `materialsDigests()` gộp theo (PI, vật tư), lấy hạn gấp nhất; mỗi NV mua và mỗi kho nhận 1 tin riêng chỉ gồm vật tư
+     của mình (`dedupeKey` `MORNING_MATERIALS_DIGEST:<ngày>:u:<userId>` / `:w:<mã kho>`).
+   - Khởi động lại giữa ngày: tra theo tiền tố ngày, chỉ gửi người nhận nào chưa có; chỉ đóng tin hôm trước khi hôm nay chưa gửi tin
+     nào, để không đóng nhầm tin hôm nay.
+4. **2 tiến trình cùng chạy việc hằng ngày** (trung bình-thấp: deploy chồng nhau / sau này nhiều instance).
+   - Hậu quả: gửi đôi tin sáng; cảnh báo CRITICAL đôi cho Sếp; 2 lần "Kiểm tra dữ liệu" đụng unique, lần hỏng để lại dòng chưa xong.
+   - Sửa: `tick()` chạy trong 1 transaction giữ `pg_try_advisory_xact_lock(hashtext('daily-jobs'))` (tối đa 10 phút); nơi không
+     lấy được khoá thì bỏ qua lượt đó.
+   - Chọn khoá theo transaction (không theo phiên) để vẫn đúng nếu DB đi qua bộ gộp kết nối.
+   - Đã kiểm: adapter-pg gắn bộ nghe lỗi cho kết nối transaction, nên nếu DB cắt kết nối thì chỉ ghi lỗi, tiến trình không sập.
+5. **Cảnh báo nguy cơ trễ hạn giao báo lại quá nhiều** (thấp).
+   - Lỗi: mỗi lần đóng thêm thùng là phát lại, và phát lại sẽ đặt "chưa đọc" cho Sếp/KHSX/QLSX - ngày đóng gói thì 10 phút 1 lần.
+   - Sửa: chỉ phát lại khi số ngày còn lại đổi (sang ngày mới). Số đã đóng trong tin có thể cũ trong ngày; Bảng mốc luôn là số mới.
+6. **"Kiểm tra dữ liệu" lỗi giữa chừng thì cả ngày không kiểm lại** (thấp).
+   - Sửa: chỉ tính lần CRON có `finishedAt`.
+7. **Phôi tải lỗi mà bảng không hiện băng cảnh báo** (thấp).
+   - Lỗi: `getPhoiProgressBatch` tự nuốt lỗi từng PI (bỏ PI khỏi kết quả), nên `failedSources` rỗng dù ô Phôi "Chưa biết".
+   - Sửa: PI nào thiếu trong kết quả thì báo nguồn `phoi-progress` lỗi, như FE `ThongKePagePlan`.
+8. **PI đã huỷ / đơn bán đã ngừng hoặc xoá vẫn lên bảng** (thấp, phòng hờ).
+   - Hiện chưa màn nào đặt các trạng thái này, nhưng nếu có thì Sếp nhận CRITICAL về lệnh không còn.
+   - Sửa: lọc `productionInvoice.status ≠ CANCELLED` và đơn bán `isActive` + chưa xoá (dòng không có đơn bán vẫn giữ).
+9. **Link thông báo của Sếp** (thấp): `boss/thong-ke` lên đầu `MILESTONE_BOARD_LINK`. Trước đây Sếp mở được mọi phân hệ nên luôn
+   bị đưa vào màn KHSX. KHSX/QLSX không mở được `boss` nên vẫn đi theo đích dự phòng của mình.
+
+**Đã sửa (FE `D:\DNA-ERP`, `MilestoneBoardView.tsx`):**
+- Thêm chủ đề realtime `floor` (công nhân báo sản lượng bằng QR) vào danh sách tự tải lại.
+- Tải lại lỗi sau lần đầu: trước đây im lặng, giờ hiện băng đỏ "Không tải lại được bảng - đang hiện số lúc HH:MM".
+
+**KHÔNG sửa:**
+- **Phát hiện 8 - 2 màn có thể lệch ở mốc mua hàng** (lỗi có sẵn ở FE, không do 32.25).
+  - FE "Theo lệnh" chỉ tải đề xuất mua chưa PURCHASED (100 dòng) + 100 đề xuất mới nhất.
+  - Đề xuất đã mua nhưng hàng chưa về, cũ hơn 100 đề xuất mới nhất, sẽ mất khỏi FE: "Theo lệnh" hiện Mua hàng 100% trong khi Bảng
+    mốc hiện Trễ. Bảng mốc là số đúng.
+  - Production hiện có ít đề xuất nên chưa chạm ngưỡng.
+- Đóng gói (`recordPackaging`) không phát realtime nên Bảng mốc không tự tải lại khi đóng thùng - có sẵn từ trước; bấm "Tải lại"
+  hoặc chờ sự kiện khác.
+
+**Test:**
+- `daily-jobs.service.spec` viết lại (19 test):
+  - khoá: lấy được / không lấy được / lỗi mở transaction;
+  - `finishedAt`;
+  - tin riêng từng người nhận + gộp (PI, vật tư) + chỉ vật tư của mình;
+  - khởi động lại giữa ngày chỉ gửi phần thiếu, không đóng nhầm;
+  - hạn giao chỉ phát lại khi số ngày đổi.
+- `milestone-board.service.spec` thêm 4 test (9): lọc huỷ/ngừng; dây của dòng đã Kết thúc; kho nhận ghi đè; PI thiếu trong tiến độ
+  Phôi.
+
+**Kiểm tra:**
+- BE:
+  - jest mục mới + data-health + notifications 92/92 (gồm `notification-links.spec`);
+  - `nest build` OK; `tsc` chỉ còn 2 lỗi cũ ở `prisma/seed-*.ts`;
+  - toàn bộ 2127/2131: 1 bỏ qua; 3 hỏng đều là test đo thời gian 20 s của bộ giải `optimize-material.spec.ts` khi máy đang chạy
+    song song build + vitest + BE (đã gặp ở 32.23/32.25) - chạy riêng file đó 14/14 đạt.
+- FE: `tsc` 0 lỗi; eslint file đổi chỉ còn 3 cảnh báo cũ của `ThongKePagePlan.tsx` (có từ HEAD); vitest 262/262.
+- Chạy thật:
+  - câu khoá `pg_try_advisory_xact_lock(hashtext($1)::bigint)` với tham số không khai kiểu (như Prisma gửi) trả `t` trên Postgres
+    dev;
+  - BE `be-3001-dist` khởi động lại bằng bản build mới, lượt kiểm đầu không lỗi, thấy lần CRON hôm nay (10:14) đã xong nên không
+    chạy lại.
+  - DB dev không có lệnh đang chạy nên chưa thấy tin riêng từng người nhận trên dữ liệu thật; muốn xem thì dựng lại PI như 32.25.
+
+**Còn lại:** không commit, không push, không deploy.
+
+### 32.27 2026-10-29 — Test thật mục 1 + mục 3 bằng 2 agent test + 1 agent quản lý rà code (CHỈ TEST; các lỗi tìm được ĐÃ SỬA ở 32.28)
+
+Người dùng: "đã oke hết chưa, có thể tạo agent 1 và 2 thực hiện test và 1 agent quản lý và check mục 1 và 3 đã code".
+
+**Cách làm:**
+- Mỗi agent test có stack riêng, dựng từ bản sạch production 26/10 (`backups/local_dna_erp_20261028_prod-sach-truoc-e2e.dump`):
+  - Agent 1 (mục 1 + việc hằng ngày): DB `dna_erp_t1`, BE 3011 + 3012 cùng DB.
+  - Agent 2 (mục 3, E2E giao diện): DB `dna_erp_t2`, BE 3021, FE 3100. Dữ liệu dựng bằng API: 3 PI, 4 SKU MEYING có sẵn, đơn
+    `A2-PO-394336`.
+- Agent quản lý: chỉ đọc code, lập checklist theo §32.18–32.26 rồi đối chiếu 2 báo cáo test.
+- Không đụng `dna_erp`, BE 3001, FE 3000. Xong đã tắt server và `dropdb` cả 2 DB; `git status` 2 repo đầu/cuối giống hệt.
+- `.claude/launch.json` (chưa track) thêm 4 cấu hình `be-3011-t1`, `be-3012-t1`, `be-3021-t2`, `fe-3100-t2`.
+- Người dùng quyết GIỮ NGUYÊN 2 điểm:
+  - (a) Sếp xem được `/data-health`, vì role BOSS production có SYSTEM_CONFIG VIEW; chỉ sửa comment "chỉ Admin" ở
+    `data-health.controller.ts`.
+  - (b) Người bấm "Kiểm ngay" không nhận thông báo của lần đó.
+
+**Agent quản lý - code đủ thiết kế:** mọi điểm hứa ở §32.18–32.26 đều có và đúng. Phần gỡ cron sạch, hợp đồng FE↔BE khớp, link
+thông báo trỏ trang FE có thật. Diff các file BE đã track không có gì lạc đề. FE `.env.example` bị xoá là việc có từ trước (ghi ở
+changelog 06/10).
+
+**Đạt khi chạy thật:**
+- **Mục 1:**
+  - 401/403/200, bấm chồng 409, `/cron` 404;
+  - 8/8 phép kiểm bắt đúng thực thể cố ý làm sai, đối chứng âm không bị bắt;
+  - vòng đời mới / còn / thấy lại / đã hết; 1 thông báo/ngày, resolve khi hết;
+  - phép kiểm lỗi SQL thì ghi -1;
+  - CRON 60 s sau khi lên, khởi động lại không chạy lại, `finishedAt` NULL thì chạy lại, `DAILY_JOBS=off`;
+  - 2 tiến trình chỉ 1 lần CRON, kể cả khi ép kẹt 55 s; API thường không treo;
+  - `vnDayKey` 16:59:59Z / 17:00Z.
+- **Mục 3:**
+  - trạng thái, %, lý do 4 SKU × 9 mốc; dòng xấu nhất lên đầu;
+  - nhận hàng 1 phần; vật tư dùng chung không đếm trùng; dây của SKU khác (kể cả đã Kết thúc) không tính;
+  - tin vật tư riêng từng NV mua / từng kho, có kho nhận ghi đè; tin tiến độ tới KHSX + QLSX;
+  - `DELIVERY_AT_RISK` CRITICAL đúng người;
+  - khởi động lại 3 lần không trùng; đóng thêm thùng không phát lại; đóng đủ / Kết thúc / CANCELLED / đơn ngừng thì ẩn + resolve;
+  - link Sếp / KHSX / QLSX / NV mua / thủ kho đúng trang, nháy đúng dòng;
+  - 1400 px không cuộn ngang, 375 px hiện thẻ; quyền đúng.
+
+**Lỗi tìm được (agent quản lý đã kiểm trên code, đều thật):**
+- **Mục 1** (`data-health.service.ts`, có từ 32.20):
+  - L2 (TB): `run()` chỉ bọc lỗi phần đọc SQL. Lỗi ở bước ghi phát hiện thì cả lần chạy dừng, `finishedAt` / `error` NULL,
+    phát hiện đã ghi không bao giờ được báo. `getReport` lấy lần mới nhất kể cả lần dở, nên 8 thẻ hiện "Chưa kiểm".
+  - L1 (thấp–TB): "Kiểm ngay" ở tiến trình khác chạy chồng CRON → `createMany` đụng unique → 409 "Duplicate value for:
+    undefined", lần chạy bỏ dở. Cờ `running` chỉ trong 1 tiến trình; khoá advisory chỉ bọc việc hằng ngày.
+  - L3 (thấp): trần 500 dòng làm cửa sổ trượt → dòng bị đẩy ra bị đánh "đã hết", quay vào lại thì thành "mới" giả và có
+    thông báo.
+- **Quanh mục 3:**
+  - B3 (TB, có từ trước = phần D §32.5 chưa làm): "Theo dõi mua hàng" (đích tin sáng NV mua) tính hạn theo cả đề xuất
+    (`frameDeadlineOf`), không biết `finishedMaterialDeadline` → tin nói "hôm nay", màn mua nói "trễ 2 ngày". Nhãn "Hạn giao vật
+    tư" ở "Theo lệnh" thực ra là hạn giao hàng.
+  - B8 (TB, có từ trước ở FE): `getPurchasingPercent` dùng `Math.round` và `isAllDone` xét ≥ 100 → 99,67% thành 100%: "Theo
+    lệnh" coi mua hàng XONG trong khi Bảng mốc báo Trễ.
+  - B2 (thấp, 32.25 chọn khác FE): % Khung CK - FE lấy trung bình 3 tổ (8%), BE cộng dồn (10%). % Đan - FE trung bình xuất +
+    nhận, BE chỉ tính đã nhận. Trạng thái vẫn khớp.
+  - B1 (thấp, có từ trước): KHSX không có QC_REVIEW / FLOOR_REPORT nên Bảng mốc không tự tải lại sau KCS chấm / báo QR.
+    `recordProductionBatch` ("Lưu đợt") không phát realtime. Bảng vẫn tự làm mới định kỳ 5 phút.
+  - B4 (thấp): đơn vị sắt hiện "Mm" (`Material.unit` production) ở lý do và tin sáng; số thật là cây.
+  - B5, B6 (thấp, 32.25): tải lần đầu lỗi ghi "0 SKU đang chạy"; tooltip ô mua hàng ghi "đã làm" (phải là "đã về") và lặp %.
+  - B7, B9 (thấp, có từ trước, ngoài mục 3): PI CANCELLED vẫn hiện ở "Theo lệnh"; "Ngày tạo" lệnh lấy `approvedAt`.
+  - UX: thẻ điện thoại thiếu "chưa bắt đầu / tạm dừng" và liệt kê cả mốc "Chưa đặt hạn"; chú giải thiếu "Chưa biết"; "Tải lại"
+    không có dấu hiệu đang tải; bài Hướng dẫn "Bảng mốc" nằm sai nhóm (Phôi·Hàn·Sơn·KCS).
+
+**Chấm (agent quản lý):** mục 1: 8/10; mục 3: 8,5/10. Không lỗi nặng; nên sửa nhóm P1 trước khi deploy.
+
+**Đề xuất sửa (CHƯA làm, chờ người dùng duyệt):**
+- P1:
+  - L2: lỗi bước ghi = -1, try/catch ngoài cùng ghi `error` + `finishedAt`, `getReport` lấy lần đã xong;
+  - L1: khoá advisory riêng `data-health` trong `run()` + `skipDuplicates`;
+  - B8: làm tròn xuống;
+  - B4: dòng sắt hiện "cây";
+  - comment cũ ("chỉ Admin", "chạy đêm / GitHub Actions", tham số tin vật tư).
+- P2:
+  - L3: chạm trần thì không đóng dòng vắng;
+  - chữ / chú giải / thẻ điện thoại / "Tải lại";
+  - Hướng dẫn;
+  - B1 realtime;
+  - cộng dồn số "mới" khi gộp thông báo Admin;
+  - `unref()` timer; B7; bộ lọc lỗi P2002 đọc tên ràng buộc.
+
+**Cần người dùng / Sếp quyết:**
+- Q1: % Khung CK lấy trung bình 3 tổ hay cộng dồn.
+- Q2: % Đan: giữ "đã nhận về" hay đồng bộ 2 màn.
+- Q3: hạn từng dòng ở "Theo dõi mua hàng" theo nhóm vật tư (làm phần D §32.5), dự phòng hạn Khung hay hạn Khung → hạn PI.
+- Q4: `DELIVERY_AT_RISK` có vào tab "Cần xử lý" không.
+- Q5: phép kiểm lỗi (-1) có báo Admin không.
+- Q6: đơn vị "Mm" sửa dữ liệu production hay chỉ sửa hiển thị.
+- Q7: vật tư không có `buyerId` thì gửi tin cho mọi NV mua hay chỉ thủ kho.
+  - _Người dùng làm rõ:_ sẽ có 3 NV mua, mỗi người phụ trách vật tư riêng, không trùng nhau. Bản sạch 26/10 khớp: `nhan` 156,
+    `nguyet` 148, `nghi` 77 vật tư. Còn 3 vật tư chưa gán người mua: `CHAN-NHOM-01/02/03` "Chân nhôm".
+  - _Người dùng:_ "Chân nhôm là thanh nhôm do Nhàn mua". Lúc đầu mình hiểu sai thành "gán Nhàn làm người mua Chân nhôm" -
+    **SAI, đã rút lại**. Kiểm dữ liệu:
+    - `CHAN-NHOM-01/02/03` là **vật tư thành phẩm** (`steelSubGroup` = FINISHED_COMPONENT). Phôi tự cắt ra từ Thanh nhôm theo
+      công thức `material_yield_recipes` (bước CAT):
+      - 01 ← `SAT-015`, 161 chân/thanh;
+      - 02 ← `SAT-032`, 12 chân/thanh;
+      - 03 ← `SAT-033`, 193 chân/thanh.
+    - Thứ được MUA là Thanh nhôm, đã gán sẵn `nhan`. Chân nhôm không bao giờ vào đề xuất mua (lọc FINISHED_COMPONENT ở
+      `consumable-material-purchase.service.ts:76`), nên để trống người mua là ĐÚNG - không gán.
+  - Kết luận Q7: hiện 0 vật tư MUA nào thiếu người mua, vấn đề chưa xảy ra. Đề xuất: không gửi tin cho cả 3 người; nếu thêm
+    phép kiểm "Vật tư chưa có người mua phụ trách" thì phải bỏ qua FINISHED_COMPONENT (để bắt vật tư mua mới thêm sau này quên
+    gán người).
+
+**Chưa ai thử:**
+- mốc 07:00 và sang ngày mới (không đổi giờ hệ thống);
+- lệnh tạm dừng; mốc "Không cần" / "Chưa biết" trên bảng;
+- QR tại máy; % Đan chạy thật;
+- transaction giữ khoá lâu trên Prisma Postgres production (theo dõi log "Việc hằng ngày lỗi" sau deploy);
+- 2 dòng mua cùng vật tư bị gộp trong tin vật tư.
+
+Không sửa code, không commit, không push, không deploy.
+
+### 32.28 2026-10-29 — ĐÃ SỬA HẾT theo 32.27 ("Sửa hết": P1 + P2 + Q1–Q7) + 2 vòng test lại bằng agent (local, CHƯA commit)
+
+Người dùng: "Sửa hết" (theo đề xuất ở 32.27). Q7 làm rõ thêm: sẽ có 3 NV mua, mỗi người phụ trách vật tư riêng, không trùng; "Chân
+nhôm" là vật tư thành phẩm Phôi cắt từ Thanh nhôm (Nhàn mua Thanh nhôm) - KHÔNG gán người mua cho Chân nhôm.
+
+**Quyết định đã chốt (theo đề xuất 32.27):**
+- Q1: % Khung CK = trung bình % 3 tổ (như "Theo lệnh").
+- Q2: % Đan giữ "đã nhận về".
+- Q3: 1 hàm hạn dùng chung cho Bảng mốc / tin sáng / "Theo dõi mua hàng" (làm phần D của 32.5).
+- Q4: `DELIVERY_AT_RISK` giữ loại ALERT (không vào tab "Cần xử lý").
+- Q5: phép kiểm lỗi có báo Admin.
+- Q6: đơn vị sắt chỉ sửa hiển thị ("cây"), không sửa dữ liệu production.
+- Q7: thêm phép kiểm "vật tư mua chưa có người mua", bỏ qua vật tư thành phẩm.
+- Giữ nguyên (người dùng chốt ở 32.27): Sếp xem được `/data-health`; người bấm "Kiểm ngay" không nhận thông báo của lần đó.
+
+**BE (`D:\DNA-ERP-BE`) - mục 1 "Kiểm tra dữ liệu" (`src/modules/data-health/`):**
+- L1: `run()` giữ khoá `pg_try_advisory_xact_lock(hashtext('data-health'))` cho cả lần tự chạy lẫn "Kiểm ngay" (mọi tiến trình);
+  không lấy được khoá -> 409 "Đang kiểm tra dữ liệu - thử lại sau ít phút". `createMany(skipDuplicates)`.
+- L2:
+  - lỗi ở bước ghi phát hiện chỉ làm phép kiểm đó -1 (lý do "CODE: ghi phát hiện - …" / "CODE: chạy SQL - …"), lần chạy vẫn xong;
+  - lỗi ngoài từng phép kiểm: ghi `error` "Dừng giữa chừng: …", KHÔNG đặt `finishedAt` (việc hằng ngày còn chạy lại), vẫn báo
+    Admin số dòng mới đã ghi trước đó;
+  - `GET /data-health`: `lastRun` = lần ĐÃ XONG gần nhất; thêm `pendingRun` (lần mới hơn chưa xong). Chưa xong quá 10 phút mà không
+    có lý do -> "Không thấy lần kiểm kết thúc - máy chủ có thể đã khởi động lại giữa chừng.";
+  - lý do lưu cho Admin chỉ giữ dòng cuối của thông điệp Prisma (bỏ đường dẫn máy chủ / trích đoạn code).
+- L3: chạm trần 500 dòng thì không đánh "đã hết" dòng vắng; phép kiểm vốn đã có dòng mở thì khoá mới lọt vào cửa sổ không tính
+  "mới" (lần đầu chạm trần vẫn tính đủ).
+- Thông báo `DATA_HEALTH_NEW_FINDINGS`:
+  - số "mới" cộng dồn trong ngày (`byCheck`);
+  - có "N phép kiểm lỗi" + "Lỗi khi kiểm: …" (Q5); có phép lỗi thì không resolve;
+  - phép kiểm hết lỗi mà không có dòng mới -> sửa chữ thông báo đang mở, KHÔNG bật lại "chưa đọc"; lỗi y như cũ -> không gửi lại.
+- Q7: phép kiểm thứ 9 `MATERIAL_WITHOUT_BUYER` "Vật tư mua chưa có người mua phụ trách" - vật tư đang hoạt động, chưa xoá,
+  `buyerId` NULL, bỏ `steelSubGroup` = FINISHED_COMPONENT. Bản sạch 26/10: 0 dòng (3 mã `CHAN-NHOM-*` là vật tư thành phẩm).
+- Bộ lọc lỗi P2002 (`all-exceptions.filter.ts` `uniqueTargetOf`): đọc tên cột từ lỗi của driver adapter, hết "Duplicate value
+  for: undefined"; `material-groups.service.ts` dùng chung hàm này.
+- Comment: controller (Sếp xem được), schema `DataHealthRun`, `data-health.checks.ts`, tham số tin vật tư ở `notification-types.ts`.
+  `migration.sql` giữ nguyên (sửa sẽ đổi checksum migration).
+
+**BE - mục 3 Bảng mốc / tin sáng / màn mua:**
+- `src/common/utils/frame-deadline.util.ts`: `purchaseGroupOf` (ACCESSORY/CUSHION/PACKAGING = VT còn lại) + `purchaseDeadlineOf`:
+  - VT khung & đan: hạn Mua VT khung đã lưu → hạn Khung → hạn PI (= `frameDeadlineOf` cũ);
+  - VT còn lại: hạn Mua VT còn lại đã lưu → hạn Đóng gói → hạn PI.
+- `milestone-board.service.ts`:
+  - hạn 2 mốc mua qua `purchaseDeadlineOf`;
+  - % Khung = `averagePercent` (lý do "Đã làm X% (trung bình Phôi a%, Hàn b%, Sơn c%)"), trạng thái vẫn theo cộng dồn;
+  - dòng mua có `stockLengthMm` -> đơn vị "cây", tên kèm chiều dài ("Sắt hộp 6zem (5.020 mm) 12/32 cây"); nệm kèm quy cách;
+  - `MissingMaterial.lineId` (id dòng đề xuất mua).
+- `daily-jobs.service.ts`: tin vật tư gộp theo `lineId` (2 dòng cùng vật tư khác chiều dài / quy cách vẫn là 2 dòng); `unref()` timer.
+- `purchase-proposals.service.ts` + DTO: `items[].deadline` riêng từng dòng (dây/nệm theo SKU đã chọn nó; vật tư chung theo SKU gấp
+  nhất CÒN CHẠY); hạn cấp đề xuất = dòng gấp nhất (đề xuất tự tính theo PI trước đây luôn null).
+- Realtime:
+  - `recordProductionBatch` ("Lưu đợt" trên web) phát PROGRESS; báo QR tại máy thì không phát thêm (đã có FLOOR_REPORT);
+  - `realtime.contract.ts`: thêm PRODUCTION_INVOICE vào PRODUCTION_BATCH / QC_REVIEW / FLOOR_REPORT để KHSX/Sếp nhận được.
+
+**FE (`D:\DNA-ERP`):**
+- `MilestoneBoardView.tsx`:
+  - chú giải thêm "Chưa biết" (viền vàng đứt);
+  - tooltip "đã về / đã nhận về / đã đóng X%", không lặp %; ô Hạn giao xong ghi "Đã đóng đủ" (cả tooltip);
+  - tiêu đề khi chưa tải được: "Đang tải bảng mốc…" / "Chưa tải được bảng mốc" (không ghi "0 SKU");
+  - "Tải lại" hiện "Đang tải…" tới khi chính lần gọi đó xong;
+  - thẻ điện thoại: "chưa bắt đầu / tạm dừng", gộp các mốc "Chưa đặt hạn" thành 1 dòng;
+  - câu chú giải nói rõ hạn dự phòng.
+- `ThongKePagePlan.tsx` ("Theo lệnh"):
+  - `getPurchasingPercent` làm tròn xuống (99,67% không thành 100% / "xong");
+  - bỏ PI CANCELLED; nhãn "Hạn giao vật tư" → "Hạn giao hàng";
+  - tự tải lại phần tiến độ theo `production-batches`, `qc-reviews`, `floor`, `steel-issues`, `weaving-issues`,
+    `material-yield-issues` (gom 5 giây);
+  - bảng Mua hàng ghi chiều dài cây vào tên dòng sắt.
+- `services/purchasing-api.ts`: dòng có `stockLengthMm` -> đơn vị "cây" (1 chỗ cho mọi màn mua / nhập kho); map `items[].deadline`.
+- `TheoDoiMuaHangPage.tsx`: cột Hạn giao dùng hạn từng dòng; màu: đã trễ đỏ, hôm nay vàng, còn hạn chữ thường.
+- `DataHealthSection.tsx` + `data-health-api.ts`: băng "đang kiểm" / "dừng giữa chừng" theo `pendingRun`; mô tả nhắc người mua phụ trách.
+- Hướng dẫn: bài "Bảng mốc" chuyển sang nhóm "Kế hoạch sản xuất" (bổ sung "Chưa biết", hạn dự phòng, % Khung trung bình, tin
+  riêng từng người, cảnh báo chỉ báo lại khi sang ngày mới); bài Admin thêm phép kiểm thứ 9; bài Mua hàng ("Theo dõi mua hàng") và
+  Thủ kho ("Nhập kho") thêm ý tin sáng / hạn từng dòng.
+
+**Ảnh hưởng nên biết:**
+- Mốc "Mua VT còn lại" trước đây chưa lưu ngày thì không báo trễ; nay lấy hạn Đóng gói / hạn PI nên báo trễ nhiều hơn. Trên dữ liệu
+  test của agent 2 (4 SKU): 11 mốc trễ thay vì 9, tin sáng thêm 4 dòng (bulon, thùng, bao nylon) - đều là hàng thật chưa về.
+- Giới hạn có từ trước, CHƯA sửa: dòng mua phụ kiện / bao bì gộp theo PI, không gắn SKU - PI 2 SKU có ngày đóng gói khác nhau thì
+  SKU đóng sớm có thể "Trễ" vì bao bì của SKU kia (muốn sửa phải truy dòng mua về SKU qua định mức).
+- Hạn dự phòng cuối là `ProductionInvoice.deadline` - nếu hạn PI không được cập nhật (gọi API `items-deadlines` không kèm
+  `deadline`) thì có thể cũ hơn hạn giao của SKU; form "Sửa thời hạn" có gửi nên ít gặp.
+- Thông báo `floor` / `qc-reviews` / `production-batches` nay tới mọi người có PRODUCTION_INVOICE:VIEW (cả Mua hàng, thủ kho) - chỉ
+  là tên topic, màn không đăng ký thì không tải lại.
+
+**Kiểm tra:**
+- BE:
+  - jest các module đổi 125/125 (vòng cuối) - trước đó 406/406 và 240/240 ở các bước giữa;
+  - `nest build` OK; eslint các file đổi sạch (còn 1 cảnh báo `any` có từ HEAD ở `notification-types.ts`); đã chạy prettier BE trên
+    các file đổi (BE có `.prettierrc`, HEAD sạch prettier);
+  - toàn bộ 2151/2155: 1 bỏ qua, 3 hỏng là test đo thời gian của bộ giải (`optimize-material.spec.ts`, `propose.spec.ts`) khi máy đang
+    chạy stack test của agent - chạy riêng 14/14 và 8/8 đạt.
+- FE: `tsc` 0 lỗi; eslint chỉ 3 cảnh báo cũ của `ThongKePagePlan.tsx`; vitest 262/262. Không chạy prettier FE.
+- Agent quản lý rà code (chỉ đọc): mọi điểm P1/P2/Q1–Q7 đúng ý; tìm thêm N1–N6 + lặt vặt -> đã sửa N1 (QR không phát PROGRESS), N3
+  (bỏ SKU đã Kết thúc), N4 ("Tải lại"), N5 (lần chưa xong quá hạn), báo Admin khi dừng giữa chừng, comment, đơn vị "cây" ở "Lệnh mua
+  NCC" / "Nhập kho"; N2 (phép kiểm 9 quét cả danh mục) giữ nguyên vì bản sạch ra 0 dòng; N6 là giới hạn ở trên.
+- Agent 1 vòng 2 (DB `dna_erp_t1`, BE 3011 + 3012):
+  - ĐẠT: quyền; 1 lần CRON khi 2 tiến trình; "Kiểm ngay" khi tiến trình kia đang giữ khoá -> 409 đúng chữ, 0 dòng MANUAL dở, 0 lỗi
+    unique; API thường không treo; P2002 ra "checkCode, entityKey"; lỗi bước ghi -> -1, lần chạy xong, thông báo có "phép kiểm
+    lỗi"; dừng giữa chừng -> `pendingRun` có lý do, `lastCount` giữ số thật; Q5; cộng dồn 1 → 11 → 12; Q7 (chỉ bắt vật tư mua);
+    hồi quy lịch hằng ngày.
+  - Còn R2-1 (L3 "mới" giả), R2-2 (thông báo còn ghi "phép kiểm lỗi" sau khi hết lỗi), R2-3 (lý do dài) -> ĐÃ SỬA sau vòng này
+    (unit test), chưa chạy thật lại.
+- Agent 2 vòng 2 (DB `dna_erp_t2`, BE 3021, FE 3100, 3 PI / 4 SKU MEYING):
+  - ĐẠT: Bảng mốc của KHSX tự tải lại sau "Lưu đợt" / KCS chấm; % Khung 2 màn bằng nhau; hạn từng dòng ở "Theo dõi mua hàng" khớp
+    Bảng mốc và tin sáng (cả dây riêng SKU); hạn dự phòng; "cây" + 2 dòng khác chiều dài; B5–B8; UX; Hướng dẫn; người nhận / không
+    trùng / vòng đời / link / quyền.
+  - Còn: "Theo lệnh" không tự cập nhật, "Mm" ở bảng Mua hàng "Theo lệnh", tooltip "Xong", màu hạn hôm nay -> ĐÃ SỬA sau vòng này.
+- Agent 2 vòng 3 (stack t2 dựng lại, `dist` có mọi bản sửa trên):
+  - ĐẠT:
+    - "Theo lệnh" của KHSX tự cập nhật sau "Lưu đợt" / KCS chấm (5–6 s);
+    - "cây" ở bảng Mua hàng "Theo lệnh" (2 dòng 5.020 / 6.000 mm tách rõ), "Nhập kho", "Lệnh mua NCC";
+    - "Tải lại" khi tắt BE: 2 lần liền đều "Đang tải…" rồi băng đỏ, không kẹt;
+    - tooltip "Đã đóng đủ"; màu hạn ở chi tiết "Theo dõi mua hàng" (trễ đỏ, hôm nay vàng, còn hạn thường);
+    - sau khi B Kết thúc, hạn dòng chung theo A, khớp Bảng mốc, dây của B giữ hạn B;
+    - Admin băng vàng "đang chạy" / băng đỏ "dừng giữa chừng" (quá 10 phút), thẻ thứ 9 "Ổn";
+    - hồi quy người nhận / không trùng / vòng đời.
+  - Còn 3 điểm nhỏ -> ĐÃ SỬA sau vòng này (chưa chạy thật lại):
+    - cột Deadline ở màn danh sách "Theo dõi mua hàng" vẫn luôn đỏ và in "3/11/2026" -> dùng cùng màu + dạng dd/MM/yyyy;
+    - hạn cấp đề xuất bị dây của SKU đã Kết thúc kéo về hạn cũ (hiện ở đầu "Nhập kho") -> bỏ dòng chỉ thuộc SKU đã Kết thúc;
+    - thẻ thứ 9 (Trung bình) đứng sau thẻ mức Thấp -> đưa lên trước.
+  - Chưa test được: báo QR tại máy (cần LAN / điện thoại công nhân).
+- Sau các sửa cuối: jest các module đổi 139/139; `nest build` OK; FE `tsc` 0 lỗi; eslint sạch. BE `be-3001-dist` của người dùng khởi
+  động lại bằng bản build mới.
+
+**Còn lại / lưu ý:**
+- Chưa ai thử thật: mốc 07:00 và sang ngày mới; QR tại máy; % Đan đã nhận một phần; transaction giữ khoá lâu trên Prisma Postgres
+  production (2 transaction mở cùng lúc lúc tự chạy - theo dõi log "Việc hằng ngày lỗi" sau deploy).
+- `.claude/launch.json` (chưa track) có thêm 4 cấu hình test `be-3011-t1`, `be-3012-t1`, `be-3021-t2`, `fe-3100-t2`.
+- Không commit, không push, không deploy.
+
+### 32.29 2026-10-30 — Đã STAGE BE + FE của mục 1 và mục 3 (KHÔNG commit) + ghi chú deploy
+
+Người dùng: "hãy đưa xuống FE và BE staged cho tôi, không tự commit, cho tôi description và title, nếu commit xong chạy CI và lên
+production thì có cần chạy tay gì để cho production chạy bình thường mục 1 và 3 này không".
+
+**Đã stage (người dùng tự commit):**
+- BE `D:\DNA-ERP-BE` - 29 file:
+  - `prisma/schema.prisma`, migration `20261028100000_add_data_health`;
+  - `src/app.module.ts`;
+  - module mới `src/modules/data-health`, `src/modules/daily-jobs`, `src/modules/milestone-board`;
+  - `src/common/utils/frame-deadline.util.ts`, `src/common/filters/all-exceptions.filter.ts` (+ spec mới);
+  - `src/modules/notifications/notification-types.ts`, `src/realtime/realtime.contract.ts`;
+  - `src/modules/production-batches/production-batches.service.ts` (+ spec);
+  - `src/modules/purchase-proposals/purchase-proposals.service.ts` (+ spec, DTO);
+  - `src/modules/material-groups/material-groups.service.ts`;
+  - changelog này.
+- FE `D:\DNA-ERP` - 13 file:
+  - mới: `Admin/DataHealthSection.tsx`, `Manufacturing/MilestoneBoardView.tsx`, `services/data-health-api.ts`,
+    `services/milestone-board-api.ts`;
+  - sửa: `Admin/SystemStatusPage.tsx`, `Manufacturing/ThongKePagePlan.tsx`, `Purchasing/TheoDoiMuaHangPage.tsx`,
+    `services/purchasing-api.ts`, `context/InspectionContext.tsx`, Guide `admin.ts`, `productionPlan.ts`, `purchasing.ts`,
+    `warehouse.ts`.
+- Kiểm trước khi stage:
+  - eslint `--quiet` toàn bộ `src/**/*.ts` BE: 0 lỗi (CI chạy `lint:check`);
+  - mọi import tương đối trong file đã stage đều trỏ tới file đã có trong index (trừ `src/generated/prisma`, do CI tự chạy
+    `prisma generate`);
+  - migration mới nhất trong repo là `20261028100000_add_data_health`.
+
+**KHÔNG stage (để nguyên, không thuộc mục 1/3):**
+- BE: `.claude/`, `CLAUDE.md`, `start-dev.bat`, `test/solver-real-data-new/`, các PDF/XLSX báo cáo solver, `docs/business*`, các
+  changelog khác chưa track (`changelog-2026-10-17…`, `-10-19…`, `-10-20…`, `-10-28-e2e…`, `-10-28-tai-lieu…`),
+  `docs/doi-chieu-du-lieu-2026-10-29.md`.
+- FE: `.env.example` bị xoá (có từ trước, changelog 06/10), `docs/quy-doi-doan-phoi.md`, `e2e/golden-path.spec.ts`,
+  `next-env.d.ts`, `e2e/full-flow.spec.ts`, `e2e/helpers.ts`, `playwright.nows.config.ts`, `pnpm-*.yaml`, docs chưa track.
+- FE `Guide/content/manufacturing.ts` hiện "M" chỉ vì ký tự xuống dòng (nội dung giống HEAD sau khi chuyển bài "Bảng mốc" đi) -
+  không cần stage.
+
+**Deploy - KHÔNG cần chạy tay gì:**
+- BE (Render, `docker/entrypoint.js`) tự chạy `prisma migrate deploy` trước khi bật app, nên tự tạo 2 bảng `data_health_runs` /
+  `data_health_findings`.
+- Không thêm biến môi trường hay secret nào. Không cần `DATA_HEALTH_CRON_KEY` hay lịch GitHub (đã bỏ ở 32.25). Muốn tắt việc hằng
+  ngày thì đặt `DAILY_JOBS=off`.
+- Không cần seed: dùng quyền có sẵn `SYSTEM_CONFIG` (Kiểm tra dữ liệu) và `PRODUCTION_INVOICE` (Bảng mốc); loại thông báo khai trong
+  code.
+- FE (Vercel) không đổi biến môi trường.
+- Nên deploy BE trước hoặc cùng lúc FE: FE mới gọi `/milestone-board`, `/data-health`. FE chạy trước BE thì 2 màn này tạm báo lỗi tới
+  khi BE lên; các trường mới (`items[].deadline`, `pendingRun`) là tuỳ chọn nên màn cũ không vỡ.
+
+**Sau deploy nên xem (không bắt buộc):**
+- Admin > Tình trạng hệ thống > "Kiểm tra dữ liệu": 9 thẻ, bấm "Kiểm ngay" được.
+- KHSX > Tổng hợp lệnh SX > "Bảng mốc": mở được; trống vì production chưa có PI.
+- Log Render: không có "Việc hằng ngày lỗi" / "Data health check … failed" (rủi ro H3: transaction giữ khoá lâu trên Prisma Postgres
+  production chưa thử).
+
+**Lưu ý vận hành:**
+- Render gói free ngủ khi không có request: việc hằng ngày chỉ chạy lúc máy chủ thức (60 giây sau khi thức, rồi 10 phút 1 lần). Tin
+  sáng gửi sau 07:00 VN ở lần thức đầu tiên trong ngày, không đúng 07:00 nếu không ai mở app.
+- Chưa có PI thì không có tin sáng / cảnh báo hạn giao nào; "Kiểm tra dữ liệu" lần đầu dự kiến 0 bất thường (bản sạch 26/10: 0 dòng
+  cả 9 phép kiểm).
+- `docker/entrypoint.js`: khi `migrate deploy` kẹt P1002 thì ngắt MỌI phiên đang giữ advisory lock. Comment ở đó ghi "app không dùng
+  advisory lock", nay không còn đúng (từ trước đã có `lockBusinessKey`, nay thêm khoá việc hằng ngày / kiểm tra dữ liệu). Chỉ xảy ra
+  ở nhánh P1002 hiếm gặp; bị ngắt thì app chỉ ghi lỗi và chạy lại lượt sau. Chưa sửa (ngoài phạm vi).
+- CI có test đo thời gian 20 s của bộ giải (`optimize-material.spec.ts`, `propose.spec.ts`), có thể chậm trên máy CI - có từ trước;
+  hỏng thì chạy lại job.
+
+**Ngoài lề:** sáng 30/10 Docker Desktop đang tắt (container Postgres local không chạy), BE 3001 / FE 3000 local cũng không chạy - không
+ảnh hưởng việc stage.
+
+Không commit, không push, không deploy.

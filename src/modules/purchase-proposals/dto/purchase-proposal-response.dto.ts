@@ -69,6 +69,9 @@ export class PurchaseProposalItemResponseDto {
   /// nếu người mua không biết đặt cây dài bao nhiêu, nhất là từ khi solver có thể đề xuất cây
   /// KHÁC 6000mm mặc định (auto_scan mở lại, xem CuttingProposalLine.lengthSource).
   @Expose() @ApiPropertyOptional({ nullable: true }) stockLengthMm!: number | null;
+  /// Hạn hàng phải về của RIÊNG dòng này theo nhóm vật tư (VT khung & đan / VT còn lại) - cùng hàm `purchaseDeadlineOf` với
+  /// Bảng mốc (2026-10-29, changelog 2026-09-25 mục 32.27). Dây/nệm chỉ theo SKU đã chọn nó; vật tư chung theo SKU gấp nhất.
+  @Expose() @ApiPropertyOptional({ nullable: true }) deadline!: Date | null;
   @Expose() @ApiProperty() receivedQty!: number;
   /// Cộng dồn "Ô2" (supplierUnitQty) của từng lần nhận - chỉ để đối chiếu/audit tổng số lượng
   /// theo đơn vị bên bán, xem receiptLogs bên dưới để xem chi tiết từng lô.

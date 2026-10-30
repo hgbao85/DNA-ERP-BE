@@ -407,6 +407,80 @@ describe('PurchaseProposalsService', () => {
       expect(result.mfgProductCode).toBe('SKU-A, SKU-B');
     });
 
+    it('đề xuất tự tính theo PI: hạn RIÊNG từng dòng theo nhóm vật tư (cùng Bảng mốc), dây theo SKU đã chọn nó; hạn đề xuất = dòng gấp nhất', async () => {
+      const day = (s: string) => new Date(`${s}T00:00:00.000Z`);
+      const sku = (wire: bigint | null, materialDeadline: string, packaging: string) => ({
+        prodApprovalStatus: 'APPROVED',
+        materialDeadline: day(materialDeadline),
+        finishedMaterialDeadline: null,
+        wireMaterialId: wire,
+        cushionMaterialId: null,
+        stages: [{ stageType: 'PACKAGING', deadline: day(packaging) }],
+        mfgProduct: { factoryCode: `SKU-${String(wire)}` },
+        salesOrder: null,
+      });
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          cuttingProposal: null,
+          productionInvoice: {
+            code: 'PI-2026-001',
+            deadline: day('2026-11-30'),
+            items: [sku(41n, '2026-10-27', '2026-11-10'), sku(42n, '2026-10-29', '2026-11-05')],
+          },
+          items: [
+            item({ id: 401n, materialId: 30n, material: material({ detailKind: null }) }),
+            item({ id: 402n, materialId: 42n, material: material({ detailKind: null }) }),
+            item({ id: 403n, materialId: 70n, material: material({ detailKind: 'PACKAGING' }) }),
+          ],
+        }),
+      );
+
+      const result = await service.findOne('300');
+
+      const byId = new Map(result.items!.map((i) => [i.id, i.deadline]));
+      expect(byId.get('401')).toEqual(day('2026-10-27')); // vật tư chung -> SKU gấp nhất
+      expect(byId.get('402')).toEqual(day('2026-10-29')); // dây của SKU 2 -> chỉ hạn SKU 2
+      expect(byId.get('403')).toEqual(day('2026-11-05')); // bao bì -> hạn Đóng gói gấp nhất
+      expect(result.deadline).toEqual(day('2026-10-27'));
+    });
+
+    it('hạn vật tư chung bỏ SKU đã Kết thúc (như Bảng mốc); dây của SKU đã Kết thúc vẫn theo hạn chính nó', async () => {
+      const day = (s: string) => new Date(`${s}T00:00:00.000Z`);
+      const sku = (wire: bigint | null, materialDeadline: string, floorStage: string) => ({
+        prodApprovalStatus: 'APPROVED',
+        materialDeadline: day(materialDeadline),
+        finishedMaterialDeadline: null,
+        wireMaterialId: wire,
+        cushionMaterialId: null,
+        stages: [],
+        productionOrder: { floorStage },
+        mfgProduct: { factoryCode: `SKU-${String(wire)}` },
+        salesOrder: null,
+      });
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          cuttingProposal: null,
+          productionInvoice: {
+            code: 'PI-2026-001',
+            deadline: day('2026-11-30'),
+            items: [sku(41n, '2026-10-20', 'FINISHED'), sku(42n, '2026-11-02', 'ACTIVE')],
+          },
+          items: [
+            item({ id: 401n, materialId: 30n, material: material({ detailKind: null }) }),
+            item({ id: 402n, materialId: 41n, material: material({ detailKind: null }) }),
+          ],
+        }),
+      );
+
+      const result = await service.findOne('300');
+
+      const byId = new Map(result.items!.map((i) => [i.id, i.deadline]));
+      expect(byId.get('401')).toEqual(day('2026-11-02'));
+      expect(byId.get('402')).toEqual(day('2026-10-20'));
+      // Hạn cấp đề xuất bỏ dòng chỉ thuộc SKU đã Kết thúc (dây của SKU 41).
+      expect(result.deadline).toEqual(day('2026-11-02'));
+    });
+
     // ── A3: deadline (frameDeadlineOf) ──────────────────────────────────────────
     it('deadline ưu tiên materialDeadline trước mốc FRAME và hạn cả PI (nhánh lệnh SX đơn)', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(

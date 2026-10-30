@@ -75,15 +75,22 @@ export const REALTIME_ENTITY_ROUTES: Record<RealtimeEntity, RealtimeEntityRoute>
     modules: [PERMISSION_MODULES.STEEL_ISSUE, PERMISSION_MODULES.STOCK],
     topics: ['steel-issues', 'stock'],
   },
+  // + PRODUCTION_INVOICE ở 3 route tiến độ xưởng (PRODUCTION_BATCH, QC_REVIEW, FLOOR_REPORT - 2026-10-29, test thật 32.27):
+  // KHSX/Sếp chỉ có PRODUCTION_INVOICE:VIEW nên Bảng mốc / "Theo lệnh" của họ không bao giờ nhận được "Lưu đợt", KCS chấm,
+  // báo QR. Sự kiện chỉ mang tên topic - màn không đăng ký topic đó thì không tải lại.
   PRODUCTION_BATCH: {
-    modules: [PERMISSION_MODULES.PRODUCTION_BATCH],
+    modules: [PERMISSION_MODULES.PRODUCTION_BATCH, PERMISSION_MODULES.PRODUCTION_INVOICE],
     topics: ['production-batches'],
   },
   // + FLOOR_REPORT (2026-10-19): KCS chấm xong thì màn "Sản lượng xưởng"/"Báo cáo" của QLSX và "Sản lượng của tôi"
   // của công nhân tự tải lại (QLSX cũ không có QC_REVIEW:VIEW nên không bao giờ nhận được sự kiện này). Sự kiện chỉ
   // mang tên topic, không mang dữ liệu.
   QC_REVIEW: {
-    modules: [PERMISSION_MODULES.QC_REVIEW, PERMISSION_MODULES.FLOOR_REPORT],
+    modules: [
+      PERMISSION_MODULES.QC_REVIEW,
+      PERMISSION_MODULES.FLOOR_REPORT,
+      PERMISSION_MODULES.PRODUCTION_INVOICE,
+    ],
     topics: ['qc-reviews', 'production-batches'],
   },
   MATERIAL_ISSUE: {
@@ -124,7 +131,7 @@ export const REALTIME_ENTITY_ROUTES: Record<RealtimeEntity, RealtimeEntityRoute>
   },
   // QR tại máy (2026-10-13): công nhân báo / QLSX gửi KCS, đảo, xếp hàng đợi - màn "Sản lượng xưởng" của QLSX tự tải lại.
   FLOOR_REPORT: {
-    modules: [PERMISSION_MODULES.FLOOR_REPORT],
+    modules: [PERMISSION_MODULES.FLOOR_REPORT, PERMISSION_MODULES.PRODUCTION_INVOICE],
     topics: ['floor'],
   },
   SALES_ORDER: {

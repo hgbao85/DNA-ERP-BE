@@ -26,6 +26,9 @@ import { HealthModule } from './modules/health/health.module';
 import { ExternalApiModule } from './modules/external/external-api.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { SystemConfigModule } from './modules/system-config/system-config.module';
+import { DataHealthModule } from './modules/data-health/data-health.module';
+import { MilestoneBoardModule } from './modules/milestone-board/milestone-board.module';
+import { DailyJobsModule } from './modules/daily-jobs/daily-jobs.module';
 import { MaterialGroupsModule } from './modules/material-groups/material-groups.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { DefectReasonsModule } from './modules/defect-reasons/defect-reasons.module';
@@ -104,6 +107,9 @@ import { RealtimeModule } from './realtime/realtime.module';
     ExternalApiModule,
     NotificationsModule,
     SystemConfigModule,
+    DataHealthModule,
+    MilestoneBoardModule,
+    DailyJobsModule,
     MaterialGroupsModule,
     SuppliersModule,
     DefectReasonsModule,

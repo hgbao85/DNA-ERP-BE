@@ -1,4 +1,4 @@
-import { ProdItemStageType } from '../../generated/prisma/client';
+import { MaterialDetailKind, ProdItemStageType } from '../../generated/prisma/client';
 
 export interface FrameDeadlineItem {
   materialDeadline: Date | null;
@@ -27,4 +27,43 @@ export interface FrameDeadlineItem {
 export function frameDeadlineOf(item: FrameDeadlineItem): Date | null {
   const frame = item.stages.find((s) => s.stageType === ProdItemStageType.FRAME);
   return item.materialDeadline ?? frame?.deadline ?? item.productionInvoice?.deadline ?? null;
+}
+
+/**
+ * 2 nhóm mua theo hạn (Sếp chốt, changelog 2026-09-25 mục 32.5 / 32.7): "VT còn lại" = phụ kiện, nệm, bao bì (theo hạn Đóng
+ * gói); mọi thứ khác (sắt, dây, đinh, tán rút, nút, sơn, vật tư hàn/cắt...) là "VT khung & đan" (theo hạn bắt đầu Phôi).
+ */
+export type PurchaseDeadlineGroup = 'FRAME' | 'FINISHED';
+
+const FINISHED_KINDS = new Set<MaterialDetailKind>([
+  MaterialDetailKind.ACCESSORY,
+  MaterialDetailKind.CUSHION,
+  MaterialDetailKind.PACKAGING,
+]);
+
+export function purchaseGroupOf(
+  detailKind: MaterialDetailKind | null | undefined,
+): PurchaseDeadlineGroup {
+  return detailKind && FINISHED_KINDS.has(detailKind) ? 'FINISHED' : 'FRAME';
+}
+
+export interface PurchaseDeadlineItem extends FrameDeadlineItem {
+  finishedMaterialDeadline: Date | null;
+}
+
+/**
+ * Hạn vật tư phải về của 1 dòng SKU theo nhóm mua - 1 hàm dùng chung cho Bảng mốc / tin sáng và "Theo dõi mua hàng" để 2 màn
+ * không nói 2 ngày khác nhau (test thật 32.27, phần D của 32.5). Chỉ dùng ngày ĐÃ LƯU, không tự trừ ngày theo mốc Phú An:
+ *  - VT khung & đan: `frameDeadlineOf` (hạn Mua VT khung → hạn Khung → hạn PI);
+ *  - VT còn lại: hạn Mua VT còn lại → hạn Đóng gói → hạn PI.
+ */
+export function purchaseDeadlineOf(
+  item: PurchaseDeadlineItem,
+  group: PurchaseDeadlineGroup,
+): Date | null {
+  if (group === 'FRAME') return frameDeadlineOf(item);
+  const packaging = item.stages.find((s) => s.stageType === ProdItemStageType.PACKAGING);
+  return (
+    item.finishedMaterialDeadline ?? packaging?.deadline ?? item.productionInvoice?.deadline ?? null
+  );
 }

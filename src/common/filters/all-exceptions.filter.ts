@@ -92,7 +92,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       case 'P2002':
         return {
           statusCode: HttpStatus.CONFLICT,
-          message: `Duplicate value for: ${(exception.meta?.target as string[])?.join(', ')}`,
+          message: `Duplicate value for: ${uniqueTargetOf(exception.meta)}`,
           error: 'ConflictException',
         };
       case 'P2025':
@@ -115,4 +115,26 @@ export class AllExceptionsFilter implements ExceptionFilter {
         };
     }
   }
+}
+
+/**
+ * Trường bị trùng của lỗi P2002. Engine cũ ghi `meta.target`; qua driver adapter (adapter-pg) `target` trống, tên cột nằm ở
+ * `meta.driverAdapterError.cause.constraint.fields` (vd `"checkCode", "entityKey"`) - trước đây ra "Duplicate value for:
+ * undefined" (test thật 32.27).
+ */
+export function uniqueTargetOf(meta: Record<string, unknown> | undefined): string {
+  const target = meta?.target;
+  if (Array.isArray(target) && target.length > 0) return target.join(', ');
+  if (typeof target === 'string' && target) return target;
+  const cause = (
+    meta?.driverAdapterError as
+      { cause?: { constraint?: { fields?: unknown[]; index?: string } } } | undefined
+  )?.cause;
+  const fields = cause?.constraint?.fields;
+  if (Array.isArray(fields) && fields.length > 0)
+    return fields
+      .map((f) => (typeof f === 'string' ? f.replace(/"/g, '') : JSON.stringify(f)))
+      .join(', ');
+  if (typeof cause?.constraint?.index === 'string') return cause.constraint.index;
+  return 'unknown field';
 }

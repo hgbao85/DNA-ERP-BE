@@ -3735,3 +3735,42 @@ model MaterialYieldStepBundle {
   @@index([status])
   @@map("material_yield_step_bundles")
 }
+
+/// Một lần chạy "Kiểm tra dữ liệu" (2026-10-28, changelog 2026-09-25 mục 32.19-32.20): tự chạy mỗi ngày 1 lần (`CRON`,
+/// DailyJobsService hẹn giờ trong app - từ 32.25) hoặc Admin bấm "Kiểm ngay" (`MANUAL`). Chỉ ĐỌC dữ liệu nghiệp vụ - không sửa gì.
+/// `finishedAt` null = đang chạy hoặc dừng giữa chừng (khi đó `error` ghi lý do).
+model DataHealthRun {
+  id            BigInt    @id @default(autoincrement())
+  /// 'CRON' | 'MANUAL'
+  trigger       String
+  /// Người bấm "Kiểm ngay" (null với CRON). Không FK - chỉ để hiển thị/audit.
+  triggeredById String?
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  /// { [checkCode]: số dòng bất thường } của lần chạy này. Phép kiểm lỗi SQL ghi -1 (xem `error`).
+  summary       Json?
+  /// Lỗi của từng phép kiểm hỏng (nối chuỗi) - các phép kiểm khác vẫn chạy.
+  error         String?
+
+  @@index([startedAt])
+  @@map("data_health_runs")
+}
+
+/// Một dòng bất thường của một phép kiểm, gom theo (checkCode, entityKey) qua nhiều lần chạy: lần đầu thấy / lần cuối thấy /
+/// đã hết. Lần chạy sau không còn thấy -> `resolvedAt`; thấy lại -> mở lại (resolvedAt = null, firstSeenAt = lúc thấy lại).
+model DataHealthFinding {
+  id          BigInt    @id @default(autoincrement())
+  /// Mã phép kiểm, xem src/modules/data-health/data-health.checks.ts.
+  checkCode   String
+  /// Khoá ổn định của đối tượng (vd "pi:27|mat:59|PRODUCTION_INVOICE") - để nhận ra cùng 1 dòng giữa các lần chạy.
+  entityKey   String
+  /// Các cột phép kiểm trả về (số liệu tại lần thấy gần nhất).
+  detail      Json
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  @@unique([checkCode, entityKey])
+  @@index([resolvedAt])
+  @@map("data_health_findings")
+}

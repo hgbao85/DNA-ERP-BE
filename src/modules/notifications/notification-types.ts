@@ -314,6 +314,67 @@ export interface WeavingIssueNotificationParams {
   outstandingQty: number;
 }
 
+/** "Kiểm tra dữ liệu" (2026-10-28, DataHealthService) - lần chạy có dòng bất thường MỚI. */
+export interface DataHealthNotificationParams {
+  /** Tổng dòng mới trong ngày (cộng dồn các lần chạy gộp vào cùng thông báo). */
+  newCount: number;
+  totalOpen: number;
+  /** "Tiêu đề phép kiểm: số dòng mới; ..." */
+  breakdown: string;
+  /** Số dòng mới theo tiêu đề phép kiểm - để lần chạy sau trong ngày cộng dồn (32.27). Thiếu ở thông báo cũ. */
+  byCheck?: Record<string, number>;
+  /** Phép kiểm lỗi ở lần chạy gần nhất (32.27, Q5). Thiếu ở thông báo cũ = 0. */
+  failedCount?: number;
+  /** Tiêu đề các phép kiểm lỗi, nối bằng "; ". */
+  failed?: string;
+}
+
+/** Tin sáng "vật tư cần về" (DailyJobsService, 2026-10-29, changelog 2026-09-25 mục 32.24) - 1 tin cho TỪNG người nhận (32.26). */
+export interface MaterialsDigestNotificationParams {
+  /** Số dòng mua (gộp theo dòng đề xuất mua, không lặp theo SKU) phải về đúng hôm nay / đã quá hạn mà chưa về đủ. */
+  dueToday: number;
+  late: number;
+  /** Vài câu tiêu biểu "PI (trễ N ngày): vật tư đã về/cần, ...". */
+  lines: string;
+  /** NV mua nhận tin này (`Material.buyerId`) - tin của 1 NV mua thì đúng 1 phần tử, tin của thủ kho thì rỗng. */
+  buyerIds: string[];
+  /** Kho nhận nhận tin này (kho ghi đè trên dòng mua, không có thì kho của vật tư) - tin của thủ kho thì đúng 1 phần tử. */
+  warehouseCodes: string[];
+}
+
+/** Tin sáng tiến độ cho KHSX + QLSX (DailyJobsService, 2026-10-29). */
+export interface ProductionDigestNotificationParams {
+  late: number;
+  dueSoon: number;
+  /** Lệnh đã tới/qua hạn Phôi mà QLSX chưa bấm "Bắt đầu". */
+  notStarted: number;
+  lines: string;
+}
+
+/** Hạn giao còn ≤ 2 ngày hoặc đã qua mà chưa đóng gói đủ (DailyJobsService, 2026-10-29). */
+export interface DeliveryAtRiskNotificationParams {
+  piCode: string;
+  skuCode: string;
+  /** dd/MM/yyyy */
+  deliveryDate: string;
+  daysLeft: number;
+  packed: number;
+  total: number;
+}
+
+/** Tin sáng / cảnh báo tiến độ mở "Bảng mốc" trong "Tổng hợp lệnh SX" - mỗi vai trò vào 1 phân hệ khác nhau. FE chọn đích
+ *  ĐẦU TIÊN người nhận mở được, mà Giám đốc mở được MỌI phân hệ -> `boss` phải đứng đầu, không thì Sếp rơi vào màn KHSX
+ *  (review 32.26). KHSX/QLSX không mở được `boss` nên rơi xuống đúng phân hệ của mình. */
+const MILESTONE_BOARD_LINK = {
+  module: 'boss',
+  page: 'thong-ke',
+  params: { view: 'moc' },
+  alternatives: [
+    { module: 'production_plan', page: 'thongke', params: { view: 'moc' } },
+    { module: 'production', page: 'ke-hoach', params: { view: 'moc' } },
+  ],
+};
+
 const notificationTypeDefinitions = {
   // ─── 7.1 SKU/định mức (Phase 3a, 2026-09-26) ───────────────────────────────────────────────
 
@@ -1134,6 +1195,98 @@ const notificationTypeDefinitions = {
       warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
     }),
   } satisfies NotificationTypeDef<WeavingIssueNotificationParams & { warehouseCodes: string[] }>,
+  // Chỉ Admin, mức WARNING (Sếp không nhận - quy ước 9.3). 1 thông báo/ngày (dedupeKey theo ngày, xem DataHealthService.notify),
+  // tự đóng khi không còn dòng bất thường nào mở. Link tới khối "Kiểm tra dữ liệu" ở trang Admin "Tình trạng hệ thống".
+  DATA_HEALTH_NEW_FINDINGS: {
+    category: 'ALERT',
+    severity: 'WARNING',
+    entityType: 'DATA_HEALTH',
+    title: (p: DataHealthNotificationParams) =>
+      'Kiểm tra dữ liệu: ' +
+      [
+        p.newCount > 0 ? `${p.newCount} bất thường mới` : null,
+        p.failedCount ? `${p.failedCount} phép kiểm lỗi` : null,
+      ]
+        .filter(Boolean)
+        .join(', '),
+    message: (p: DataHealthNotificationParams) =>
+      [
+        p.breakdown || null,
+        p.failedCount ? `Lỗi khi kiểm: ${p.failed}` : null,
+        `Đang mở tổng ${p.totalOpen}`,
+      ]
+        .filter(Boolean)
+        .join('. ') + '.',
+    link: () => ({ module: 'admin', page: 'system-status' }),
+    recipients: () => ({ roles: [DEFAULT_ROLES.ADMIN] }),
+  } satisfies NotificationTypeDef<DataHealthNotificationParams>,
+
+  // ─── Bảng mốc / tin sáng (2026-10-29, changelog 2026-09-25 mục 32.24) ─────────────────────────
+  // 1 tin/ngày/người nhận sau 07:00 giờ VN (dedupeKey theo ngày + người nhận), tin hôm trước tự đóng khi có tin mới. Không có
+  // gì để báo thì không gửi. Sếp KHÔNG nhận tin sáng (quy ước 9.3) - chỉ nhận DELIVERY_AT_RISK (CRITICAL).
+  /** Vật tư phải về hôm nay / đã trễ - mỗi NV mua 1 tin chỉ vật tư mình phụ trách, mỗi kho nhận 1 tin cho thủ kho kho đó. */
+  MORNING_MATERIALS_DIGEST: {
+    category: 'INFO',
+    severity: 'WARNING',
+    entityType: 'MORNING_DIGEST',
+    title: (p: MaterialsDigestNotificationParams) =>
+      'Vật tư cần về: ' +
+      [
+        p.dueToday > 0 ? `${p.dueToday} phải về hôm nay` : null,
+        p.late > 0 ? `${p.late} đã trễ` : null,
+      ]
+        .filter(Boolean)
+        .join(', '),
+    message: (p: MaterialsDigestNotificationParams) => p.lines,
+    link: () => ({
+      module: 'purchasing',
+      page: 'theo-doi-mua-hang',
+      alternatives: [{ module: 'inbound_warehouse', page: 'nhap-kho' }],
+    }),
+    recipients: (p: MaterialsDigestNotificationParams): RecipientCriteria => ({
+      userIds: p.buyerIds,
+      warehouseIds: p.warehouseCodes,
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<MaterialsDigestNotificationParams>,
+
+  /** Mốc sản xuất trễ / sắp tới hạn / tới ngày Phôi chưa Bắt đầu - báo KHSX + QLSX. */
+  MORNING_PRODUCTION_DIGEST: {
+    category: 'INFO',
+    severity: 'WARNING',
+    entityType: 'MORNING_DIGEST',
+    title: (p: ProductionDigestNotificationParams) =>
+      'Tiến độ hôm nay: ' +
+      [
+        p.late > 0 ? `${p.late} mốc trễ` : null,
+        p.dueSoon > 0 ? `${p.dueSoon} mốc sắp tới hạn` : null,
+        p.notStarted > 0 ? `${p.notStarted} lệnh chưa bắt đầu` : null,
+      ]
+        .filter(Boolean)
+        .join(', '),
+    message: (p: ProductionDigestNotificationParams) => p.lines,
+    link: () => MILESTONE_BOARD_LINK,
+    recipients: () => ({
+      roles: [BUSINESS_ROLES.PRODUCTION_PLANNER, BUSINESS_ROLES.PRODUCTION_MANAGER],
+    }),
+  } satisfies NotificationTypeDef<ProductionDigestNotificationParams>,
+
+  /** Hạn giao còn ≤ 2 ngày hoặc đã qua mà chưa đóng gói đủ. CRITICAL nên NotificationsService tự thêm Sếp. 1 thông báo mở/dòng
+   *  SKU (dedupeKey theo dòng), tự đóng khi đã đóng gói đủ hoặc lệnh Kết thúc. */
+  DELIVERY_AT_RISK: {
+    category: 'ALERT',
+    severity: 'CRITICAL',
+    entityType: 'PRODUCTION_INVOICE_ITEM',
+    title: (p: DeliveryAtRiskNotificationParams) =>
+      `${p.piCode} · ${p.skuCode}: nguy cơ trễ hạn giao`,
+    message: (p: DeliveryAtRiskNotificationParams) =>
+      `Hạn giao ${p.deliveryDate} (${p.daysLeft < 0 ? `đã trễ ${-p.daysLeft} ngày` : p.daysLeft === 0 ? 'hôm nay' : `còn ${p.daysLeft} ngày`}), mới đóng gói ${p.packed}/${p.total}.`,
+    link: () => MILESTONE_BOARD_LINK,
+    recipients: () => ({
+      roles: [BUSINESS_ROLES.PRODUCTION_PLANNER, BUSINESS_ROLES.PRODUCTION_MANAGER],
+    }),
+  } satisfies NotificationTypeDef<DeliveryAtRiskNotificationParams>,
 };
 
 /** Danh mục loại thông báo - 1 nguồn duy nhất cho text/link/mức độ/người nhận (mục 5.2 changelog

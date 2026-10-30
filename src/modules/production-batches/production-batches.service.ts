@@ -147,7 +147,7 @@ export class ProductionBatchesService {
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
   private publishRealtime(
     entityId: bigint | string,
-    action: 'CREATED' | 'FINISHED',
+    action: 'CREATED' | 'PROGRESS' | 'FINISHED',
     actorId: string | null,
     productionOrderId: bigint | string,
   ): void {
@@ -350,6 +350,11 @@ export class ProductionBatchesService {
       }
       throw e;
     }
+
+    // Bảng mốc / "Theo lệnh" tính phần "chưa gửi KCS" là đã làm - "Lưu đợt" phải báo để các màn đó tự tải lại (test thật
+    // 32.27: trước đây chỉ "Gửi KCS" mới phát). Báo QR tại máy (`ctx`) thì KHÔNG phát ở đây: FloorRealtimeInterceptor đã phát
+    // FLOOR_REPORT ('floor') cho mỗi lần quét - phát thêm 'production-batches' làm màn KCS / Phôi / Hàn tải lại theo nhịp quét.
+    if (!ctx) this.publishRealtime(updated.id, 'PROGRESS', reportedById, updated.productionOrderId);
 
     // Cảnh báo KHÔNG chặn (quyết định 2026-10-06, test lần 8: Sơn Mê ngồi báo 240 trên nhu cầu 120
     // và KCS duyệt cả 240 mà không thấy): tổng đã báo (mọi trạng thái) vượt Σ nhu cầu của SKU.
