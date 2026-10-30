@@ -4266,9 +4266,13 @@ export class CuttingProposalsService {
   }): string | null {
     if (!line.feasible) {
       if (line.timedOut) {
+        // 2026-10-30 (changelog 2026-10-21 mục 33–38): câu cũ bảo "tăng SystemConfig.solverTimeLimitSeconds" - vô tác dụng với PI
+        // tạo từ "Tối ưu cắt sắt" (override lưu trên PI thắng SystemConfig). KHÔNG nói "đã tự tính lại": optimize-one-material chỉ
+        // giải lại ×3/×6 (`FIXED_RETRY_FACTORS`) khi chiều dài CHUẨN hết giờ - nhánh cây chuẩn không đạt ngưỡng rồi dò chiều dài
+        // hết giờ thì không giải lại. Nguyên nhân thường là máy chủ đang bận / CPU yếu.
         return (
-          'Chưa kết luận được - hết thời gian tính (solver chưa liệt kê xong các kiểu cắt). ' +
-          'Bấm "Tính lại" hoặc tăng SystemConfig.solverTimeLimitSeconds.'
+          'Chưa kết luận được - hết thời gian tính mà chưa tìm ra cách cắt. Thường do máy chủ đang bận hoặc loại sắt có ' +
+          'nhiều cỡ đoạn: thử tính lại lúc ít người dùng.'
         );
       }
       const hint = line.bestAchievable as

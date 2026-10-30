@@ -3157,6 +3157,25 @@ describe('CuttingProposalsService', () => {
       expect(msg).not.toContain('2.4');
     });
 
+    it('lineDisplayReason - hết giờ: KHÔNG bảo tăng SystemConfig (override trên PI thắng), KHÔNG khẳng định đã tự tính lại (2026-10-30)', () => {
+      const msg = priv().lineDisplayReason({
+        feasible: false,
+        timedOut: true,
+        bestAchievable: null,
+        // Nhánh dò chiều dài hết giờ (cây chuẩn chỉ không đạt ngưỡng) - bộ giải không giải lại ×3/×6 ở nhánh này.
+        reason:
+          'Hết thời gian ở toàn bộ 3 chiều dài đã thử — chưa kết luận được. Hãy tăng thời gian chạy.',
+        overThreshold: null,
+        maxWastePctThreshold: null,
+      });
+      expect(msg).toBe(
+        'Chưa kết luận được - hết thời gian tính mà chưa tìm ra cách cắt. Thường do máy chủ đang bận hoặc loại sắt có ' +
+          'nhiều cỡ đoạn: thử tính lại lúc ít người dùng.',
+      );
+      expect(msg).not.toContain('SystemConfig');
+      expect(msg).not.toContain('đã tự tính lại');
+    });
+
     it('lineDisplayReason - infeasible thật kèm best_achievable -> nêu con số cụ thể', () => {
       const msg = priv().lineDisplayReason({
         feasible: false,

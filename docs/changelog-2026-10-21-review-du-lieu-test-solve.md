@@ -891,3 +891,235 @@ dạng lại (diff ~2.900 dòng). Đã dựng lại bản gốc từ cache Turbo
   "ngày cắt sắt", ràng buộc giữa các mốc) — làm nền cho thông báo trễ deadline gửi Sếp sau này. Tới lúc đó GIỮ NGUYÊN Mua hàng → Khung, chưa sửa code.
 - Khi deploy (chỉ khi người dùng nói "deploy"): chạy migration `20261024100000_add_solver_merge_window_days`, `20261024110000_merge_rules_window_3_max_skus`,
   `20261024120000_merge_max_skus_default_2` (cùng migration MCTĐ `20261023100000_add_solver_machine_mctd`); đã áp DB test, chưa áp DB dev/production.
+
+## 33. 2026-10-30 — 2 ca HiGHS lớn: máy bận thì hết 20 s/loại và báo "Chưa kết luận được" (CHỈ KIỂM) — ĐÍNH CHÍNH ở 35: đường thật của "Tối ưu cắt sắt" có sẵn tự tính lại ×3/×6 nên vẫn ra phương án; A + C (mục 34) review thấy A sai, xem 35
+
+Người dùng hỏi về 3 test hỏng khi chạy toàn bộ jest (changelog 2026-09-25 mục 32.26–32.28): "2 case highs fail đó test ở giao diện
+local có fail không".
+
+**3 test đó (`src/modules/cutting-proposals/solver-ts/optimize-material.spec.ts`, cùng nhóm ở `propose.spec.ts`):**
+- "loại sắt lớn (I5 V15 LSX 316, 27.300 đoạn, N=1794)" - 12 cỡ, ngân sách 20 s, mong 1794 cây, 0,1667 %.
+- "ngưỡng hao hụt 100 % … (proposal 191, SAT-HOP-10X20)" - 7 cỡ, 20 s, mong 41 cây.
+- "MC Tự động: loại sắt lớn I5 V15 theo bó" - mong ≤ 45 s.
+
+**Đo lại (máy i7-9750H 12 luồng):**
+
+| Ca | Máy rảnh | Máy bận (11 tiến trình chiếm CPU) |
+|---|---|---|
+| I5 V15 LSX 316 | 14,6 s - 1794 cây, 0,1667 %, tối ưu | 70 s - `feasible=false`, `timed_out=true`: "Hết 20s mà chưa tìm ra nghiệm — CHƯA kết luận được…" |
+| SAT-HOP-10X20 ngưỡng 100 % | 14,2 s - 41 cây, 0,1667 % | 22 s - `feasible=false`, `timed_out=true` (cùng lý do) |
+| MC Tự động I5 V15 theo bó | ~30 s, đạt | 58 s, vượt mức 45 s của test |
+
+Đo bằng đúng hàm `optimizeMaterial` trong `dist` (script scratchpad `solver-case.js`, tải CPU bằng `cpu-burn.js`) và bằng jest chạy
+riêng 2 ca.
+
+**Kết luận:**
+- Không phải test "lỗi vặt": ngân sách 20 s là thời gian THỰC (wall-clock). CPU bị chia thì HiGHS chưa ra nghiệm đầu tiên đã hết giờ ->
+  KHÔNG có phương án, không phải phương án kém hơn.
+- Màn "Tối ưu cắt sắt" dùng cùng bộ giải và cùng ngân sách (FE `GomDotCatPage.tsx` `SOLVER_MAX_SECONDS_PER_MATERIAL = 20`, lưu vào
+  `ProductionInvoice.solverTimeLimitSecondsOverride`).
+  - Máy local rảnh: ra phương án bình thường như test chạy riêng.
+  - Máy bận (nhiều lệnh tính cùng lúc, hoặc máy chủ CPU yếu): dòng vật tư lớn hiện "Chưa kết luận được - hết thời gian tính…".
+- Chưa bấm qua giao diện thật: DB dev / production chưa có SKU định mức tạo ra đúng 2 ca này. Kết luận dựa trên đúng hàm mà giao diện
+  gọi (`runSolverAndSave` → worker → `propose` → `optimizeMaterial`).
+- Không liên quan các thay đổi mục 1/3 của changelog 2026-09-25 (32.18–32.29).
+
+**Điểm phát hiện thêm:**
+- Câu báo lỗi (`cutting-proposals.service.ts` `lineDisplayReason`) bảo "Bấm Tính lại hoặc tăng SystemConfig.solverTimeLimitSeconds",
+  nhưng cả 2 cách đều không giúp với PI tạo từ màn "Tối ưu cắt sắt":
+  - FE luôn gửi `solverTimeLimitSecondsOverride` ≤ 20 và BE lưu trên PI;
+  - `requestedTimeLimitSeconds = override ?? config.solverTimeLimitSeconds`, nên SystemConfig bị bỏ qua;
+  - "Tính lại" dùng lại đúng override cũ (`buildInvoiceJob`).
+  - Máy còn bận thì "Tính lại" lại hết giờ y như cũ.
+- Production: `render.yaml` ghi `plan: free`. Nếu gói thật đúng là free (CPU rất yếu, dùng chung) thì loại sắt lớn rất dễ rơi vào
+  "Chưa kết luận được". CHƯA kiểm gói Render thật / CHƯA chạy ca lớn trên production (không đụng production khi chưa được bảo).
+
+**Hướng sửa (chờ người dùng quyết, chưa làm):**
+- Hết giờ mà chưa có nghiệm thì tự tính lại 1 lần với ngân sách lớn hơn (chạy nền sau khi Sếp duyệt nên không ai phải chờ).
+- Hoặc nâng trần 20 s/loại cho loại sắt nhiều cỡ.
+- Sửa câu báo lỗi cho đúng cách tăng thời gian thật sự có tác dụng.
+
+Không sửa code, không commit.
+
+## 34. 2026-10-30 — ĐÃ LÀM A + C cho mục 33: tự tính lại khi hết giờ + "Tính lại lâu hơn" (local, CHƯA commit) — ĐÃ GỠ ở 36 (review 35: A trùng cơ chế có sẵn + có thể làm hỏng cả phương án; chỉ giữ câu báo lỗi viết lại)
+
+Người dùng: gói Render sẽ tự nâng cấp sau (hướng D, chưa phải bây giờ); "Làm A và C trước".
+
+**A - tự tính lại khi hết giờ chưa có nghiệm (BE):**
+- `solver-ts/types.ts` + `propose.ts`: 2 trường tuỳ chọn mới của request:
+  - `timeout_retry_seconds` (vd [60, 180]);
+  - `time_budget_seconds` (= timeout của worker).
+- Loại sắt nào hết `time_limit_seconds` mà `timed_out` + chưa có nghiệm thì giải lại lần lượt với các mức đó; mức ≤ ngân sách gốc bỏ qua.
+- Chỉ tính lại khi còn đủ ngân sách: `đã trôi + mức × 2 (2 tầng) + chừa time_limit cho mỗi loại chưa giải ≤ 90 % ngân sách` - không bao
+  giờ làm worker quá giờ (quá giờ hỏng CẢ phương án).
+- Dòng kết quả có `retried_time_limits`; vẫn hết giờ thì lý do thêm "Đã tự tính lại với 60 s, 180 s."
+- Không gửi 2 trường này thì y hệt cũ - hợp đồng `api_de_xuat_propose` (DEXUAT gọi) không đổi.
+- `cutting-proposals.service.ts` `runSolverAndSave`: gửi `timeout_retry_seconds: [60, 180]` (`SOLVER_TIMEOUT_RETRY_SECONDS`) +
+  `time_budget_seconds: timeoutSeconds` cho MỌI lượt tính (đầu tiên, "Tính lại", "Tối ưu cắt sắt").
+- Vì sao 60 / 180: đo lúc máy bận (11 tiến trình chiếm CPU), I5 V15 và SAT-HOP-10X20 cho 60 s đều ra đúng tối ưu trong ~42–46 s.
+
+**C - câu báo lỗi + "Tính lại lâu hơn":**
+- BE `lineDisplayReason`: bỏ câu sai "Bấm Tính lại hoặc tăng SystemConfig.solverTimeLimitSeconds". Câu mới: chưa kết luận vì hết
+  giờ (máy chủ bận / nhiều cỡ đoạn), có thì ghi đã tự tính lại với mức nào, chỉ cách bấm "Tính lại lâu hơn".
+- FE `CuttingSolvePanel.tsx`: nút cam "Tính lại lâu hơn" ở thẻ kết quả, chỉ hiện khi có loại sắt hết giờ chưa kết luận.
+- FE `GomDotCatPage.tsx` `handleRecalcLonger`: tính lại NGAY đúng SKU + cài đặt của lượt đó (`solverOptions`), chỉ đổi
+  `solverTimeLimitSecondsOverride` = 300 s/loại (`SOLVER_LONGER_SECONDS_PER_MATERIAL`; BE vẫn tự co để N loại × giây ≤ timeout). Lượt
+  mới thành thẻ mới, thẻ cũ giữ nguyên. Khoá nút khi đang gửi.
+- Hướng dẫn `productionPlan.ts` (bài Tối ưu cắt sắt): thêm bước "Hết giờ chưa kết luận" → "Tính lại lâu hơn".
+
+**Kiểm tra:**
+- BE:
+  - `propose.retry.spec.ts` mới, 7 test (bộ giải giả):
+    - không gửi trường mới thì giải 1 lần;
+    - 20 s hết giờ → 60 s ra nghiệm;
+    - hết các mức vẫn hết giờ thì lý do ghi đã tính lại;
+    - vô nghiệm thật không tính lại;
+    - thiếu ngân sách không tính lại;
+    - chừa ngân sách cho loại sau; mức ≤ ngân sách gốc bỏ qua;
+    - đủ cho 60 không đủ cho 180.
+  - jest module cắt sắt: 301/303 khi chạy chung các suite. 2 hỏng là chính 2 test đo thời gian của mục 33 (các suite jest chạy song song
+    tranh CPU - đúng hiện tượng "máy bận"); chạy riêng `optimize-material` 14/14.
+  - eslint `src/modules/cutting-proposals/**/*.ts` sạch; `nest build` OK.
+- FE: `tsc` 0 lỗi; eslint 2 cảnh báo có sẵn từ HEAD ở `GomDotCatPage.tsx`; vitest 262/262.
+- Chạy thật `propose()` trong `dist` (đường worker của "Tối ưu cắt sắt"), lúc máy bận, ca I5 V15:
+  - ra 1794 cây ngay lần đầu, mất 91 s (đường `optimizeOneMaterial` có `stop_on_first` chịu tải tốt hơn gọi thẳng `optimizeMaterial`),
+    nên không cần tính lại;
+  - `retried_time_limits` rỗng ở cả 2 cách gửi.
+  - ca SAT-HOP-10X20 ngưỡng 100 %: ra 41 cây ngay lần đầu, 52–55 s, cũng không cần tính lại.
+- **Đính chính mục 33:** cùng mức máy bận, gọi thẳng `optimizeMaterial` (như 2 test) thì hết giờ không nghiệm; nhưng đường thật của
+  "Tối ưu cắt sắt" (`propose` → `optimizeOneMaterial`) vẫn ra phương án, chỉ chậm hơn (91 s / 55 s thay vì ~14 s). Tức ở mức tải
+  đó giao diện KHÔNG báo "Chưa kết luận được". Rủi ro còn lại là máy chủ yếu / bận hơn nữa (vd Render gói free) - A là lưới an toàn
+  cho ca đó.
+
+**Chưa làm / lưu ý:**
+- Chưa bấm thử nút "Tính lại lâu hơn" trên giao diện thật (Docker / DB local đang tắt; DB chưa có SKU định mức tạo ra ca hết giờ).
+- Màn Admin "Cắt sắt" ("Tính lại" cấp lệnh SX / PI gộp) không có nút "lâu hơn"; vẫn được A tự tính lại.
+- Test đo thời gian 20 s (`optimize-material.spec.ts`, `propose.spec.ts`) vẫn có thể hỏng khi CI / máy chạy nhiều suite song song -
+  chưa sửa test.
+- Hướng D (nâng gói Render): người dùng tự làm sau.
+- Không commit, không push, không deploy. Phần này CHƯA stage (khác đợt mục 1 / 3 đã stage).
+
+## 35. 2026-10-30 — Review độc lập A + C (mục 34): A SAI THIẾT KẾ, nên gỡ; C cần sửa lại (CHỈ RÀ) — ĐÃ GỠ theo đề xuất ở 36
+
+Người dùng: "review và đánh giá Phần cắt sắt (A + C)". Cho 1 agent rà độc lập (chỉ đưa code), rồi tự kiểm lại từng ý trên code.
+
+**Phát hiện gốc (đã kiểm trên code):**
+- `optimize-one-material.ts` VỐN ĐÃ tự tính lại khi hết giờ: `FIXED_RETRY_FACTORS = [3, 6]` (dòng 10, 189–206). Mọi chiều dài chuẩn hết
+  giờ thì giải lại với 3T rồi 6T; có `auto_scan` thì dò thêm tới `MAX_SCAN_TIMEOUT_STREAK` chiều dài liên tiếp hết giờ, mỗi chiều dài T.
+  HiGHS WASM còn có thể vượt `time_limit` 2–3 lần ở pha gốc (`highs-solver.ts` ~dòng 400).
+- => 1 lần gọi với mức T mà kết thúc `timed_out` tốn khoảng 10T mỗi chiều dài cây + phần dò, không phải "2T" như A ước.
+- => **Đính chính mục 33–34:**
+  - 2 test hỏng gọi THẲNG `optimizeMaterial` (không có lần giải lại ×3/×6) nên hết giờ.
+  - Đường thật của "Tối ưu cắt sắt" (`propose` → `optimizeOneMaterial`) có sẵn ×3/×6 nên vẫn ra phương án: 91 s = 20 s + lần ×3 (60 s).
+    Không phải do `stop_on_first`.
+  - Kết luận "giao diện cũng báo Chưa kết luận được ở mức tải đó" của mục 33 là SAI. Chỉ máy chủ yếu / bận hơn nữa, tới mức hết cả 6T,
+    mới ra dòng đó.
+
+**Lỗi của A (nặng):**
+- Ước chi phí `RETRY_COST_FACTOR = 2` lệch 5–6 lần.
+- Ví dụ: production 1700 s, 1 loại sắt nặng, T = 20: lần đầu ≈ 260 s → tính lại 60 (≈ 780 s) → còn "đủ" theo ước tính nên tính tiếp 180
+  (cần tới ~2340 s) → worker bị kill ở 1700 s → CẢ phương án FAILED. Trước A chỉ ra 1 dòng "Chưa kết luận".
+- Mức 60 trùng lần ×3 có sẵn (T = 20).
+- Phần chừa cho các loại sau cũng thiếu tương tự.
+- Đồng hồ ngân sách bắt đầu trong worker, không tính thời gian chờ hàng đợi worker.
+- Hệ thống ngoài gửi mức tính lại mà không gửi ngân sách thì tính lại không giới hạn.
+
+**Lỗi của C:**
+- Nút "Tính lại lâu hơn" 300 s/loại (nặng): ×3/×6 bên trong thành 900 / 1800 s → vượt 1700 s → FAILED. Với N ≥ 6 loại thì 1 lần ×3 là vượt.
+- Số 300 dính sang PI khi tạo lệnh từ lượt đó (`production-invoices.service.ts` ~572 / ~653 chép `solverTimeLimitSecondsOverride`) →
+  mọi "Tính lại" sau của PI cùng rủi ro (TB).
+- Câu `lineDisplayReason` mới (TB):
+  - hiện cả ở Admin "Cắt sắt" / màn duyệt lệnh, nơi không có nút "Tính lại lâu hơn";
+  - "tới 5 phút" sai khi N > 5 hoặc `SOLVER_TIMEOUT_SECONDS` = 300;
+  - không nói hệ thống đã tự thử ×3/×6.
+- Thấp:
+  - comment "lượt cũ để nguyên" sai: `requestForBatch` đánh SUPERSEDED lượt DRAFT có dòng vô nghiệm, lượt mới FAILED thì mất cả kết quả cũ;
+  - không chốt máy cắt thật như `handleRecalcFrom`;
+  - thẻ lượt 300 s vẫn hiện nút;
+  - chữ trắng trên `--fg-e65100` tương phản thấp.
+- Test `propose.retry.spec.ts` dùng bộ giải giả trả ngay nên không bao giờ chạm phần "đã trôi" của phép kiểm ngân sách - không bắt được
+  lỗi trên.
+
+**Đúng / nên giữ:**
+- Ý sửa câu báo lỗi: câu cũ bảo "tăng SystemConfig.solverTimeLimitSeconds" là sai thật, vì override trên PI thắng SystemConfig.
+- Hợp đồng `api_de_xuat_propose` giữ nguyên khi không gửi trường mới.
+
+**Chấm:**
+- A: 3/10 - trùng cơ chế có sẵn và lớp chặn an toàn sai, đúng ca nhắm tới có thể làm hỏng cả phương án.
+- C: 5/10 - hướng câu báo đúng, nhưng nút 300 s có thể gây vượt timeout và dính sang PI, câu báo sai ở màn khác.
+
+**Đề xuất (chờ người dùng duyệt):**
+- Gỡ A: `propose.ts`, `types.ts`, `propose.retry.spec.ts`, 2 trường gửi đi + hằng `SOLVER_TIMEOUT_RETRY_SECONDS` ở service.
+- Gỡ nút "Tính lại lâu hơn" + handler + dòng Hướng dẫn.
+- Giữ câu báo lỗi nhưng viết lại: "đã tự tính lại với 3 và 6 lần thời gian mà vẫn chưa xong - máy chủ đang bận; bấm Tính lại lúc ít người
+  dùng", không nhắc nút / con số.
+- Gốc thật là CPU máy chủ: nâng gói Render (hướng D, người dùng làm sau).
+
+Không sửa code.
+
+## 36. 2026-10-30 — ĐÃ GỠ A + nút "Tính lại lâu hơn" theo review 35; chỉ giữ câu báo lỗi viết lại (local, CHƯA commit)
+
+Người dùng: "Gỡ theo đề xuất".
+
+**Đã làm:**
+- Gỡ A: đảo ngược đúng phần diff của mục 34 ở `solver-ts/propose.ts`, `solver-ts/types.ts`, `cutting-proposals.service.ts` (hằng
+  `SOLVER_TIMEOUT_RETRY_SECONDS` + 2 trường `timeout_retry_seconds` / `time_budget_seconds`); xoá `propose.retry.spec.ts`. Trước khi đảo
+  đã kiểm diff 3 file chỉ chứa phần của mục 34. `propose.ts` / `types.ts` giờ giống HEAD.
+- Gỡ C2: đảo ngược diff ở FE `CuttingSolvePanel.tsx` (nút, props `onRecalcLonger` / `recalcBusy`) và `GomDotCatPage.tsx`
+  (`handleRecalcLonger`, `SOLVER_LONGER_SECONDS_PER_MATERIAL`) - nội dung giống HEAD (git còn hiện "M" chỉ do ký tự xuống dòng,
+  `git diff` rỗng). Bỏ dòng Hướng dẫn "Tính lại lâu hơn" ở `Guide/content/productionPlan.ts` - file này trở về đúng bản đã STAGE
+  (mục 1/3).
+- Giữ C1, viết lại câu `lineDisplayReason` cho dòng hết giờ:
+  - "Chưa kết luận được - hết thời gian tính mà chưa tìm ra cách cắt, kể cả sau khi hệ thống đã tự tính lại với thời gian dài hơn.
+    Thường do máy chủ đang bận hoặc loại sắt có nhiều cỡ đoạn: thử tính lại lúc ít người dùng."
+  - Không nhắc nút / con số / SystemConfig; đúng ở mọi màn hiện câu này (Tối ưu cắt sắt, Admin "Cắt sắt", màn duyệt lệnh).
+
+**Kiểm tra:**
+- BE: jest `src/modules/cutting-proposals` (trừ file đo thời gian) 282/282; `optimize-material.spec.ts` chạy riêng 14/14; eslint sạch;
+  prettier sạch; `nest build` OK. `git diff` BE còn đúng 7 dòng ở `cutting-proposals.service.ts` + changelog.
+- FE: `tsc` 0 lỗi; vitest 262/262; không còn diff nội dung ở `ProductionPlan/` và `productionPlan.ts` so với index.
+
+**Còn lại:**
+- Gốc là CPU máy chủ: nâng gói Render (người dùng làm sau, khớp quyết định C6 của Sếp 29/10).
+- Câu báo mới chưa stage (khác đợt mục 1/3).
+- Không commit, không push, không deploy.
+
+## 37. 2026-10-30 — Đánh giá lại sau khi gỡ (mục 36): câu báo hết giờ đúng hướng, nhưng 1 vế chưa đúng mọi nhánh (CHỈ RÀ) — ĐÃ SỬA ở 38
+
+Người dùng: "đánh giá lại".
+
+**Trạng thái:** thay đổi cắt sắt còn đúng 1 chỗ - câu `lineDisplayReason` cho dòng hết giờ (mục 36).
+
+**Kiểm lại câu mới với mọi nhánh trả `timed_out` của `optimize-one-material.ts`:**
+- Không dò chiều dài (`autoScan` false): `timed_out` chỉ khi các chiều dài chuẩn vẫn hết giờ sau lần giải lại ×3/×6 (dòng 189–206,
+  217–225) - vế "kể cả sau khi hệ thống đã tự tính lại" ĐÚNG.
+- Có dò, chiều dài chuẩn hết giờ: đã giải lại ×3/×6 rồi mới dò - ĐÚNG.
+- Có dò, chiều dài chuẩn KHÔNG hết giờ mà chỉ không đạt ngưỡng hao hụt, rồi các chiều dài dò hết giờ (dòng 241–291, kể cả
+  `scanAbandoned` sau 3 lần liên tiếp): KHÔNG có lần giải lại nào - vế "đã tự tính lại" SAI ở nhánh này.
+- => Nên bỏ vế đó, giữ phần đúng ở mọi nhánh: "Chưa kết luận được - hết thời gian tính mà chưa tìm ra cách cắt. Thường do máy chủ đang
+  bận hoặc loại sắt có nhiều cỡ đoạn: thử tính lại lúc ít người dùng."
+
+**Chấm lại:**
+- Phần cắt sắt hiện tại: 7/10 - bỏ được chỉ dẫn sai (SystemConfig), câu đúng ở mọi màn; trừ điểm vì 1 vế không đúng ở nhánh dò và
+  chưa có test cho câu. Sửa vế đó xong ước 9/10.
+- Cả đợt A + C (mục 33–36): chẩn đoán ban đầu sai (đo bằng `optimizeMaterial` gọi thẳng, bỏ sót lần giải lại ×3/×6 có sẵn). Review
+  độc lập bắt được trước khi commit, đã gỡ - không có gì lọt vào phần đã stage.
+- Gốc chậm vẫn là CPU máy chủ (nâng gói Render - quyết định C6 của Sếp: sau khi xong chức năng).
+
+Chưa sửa code.
+
+## 38. 2026-10-30 — ĐÃ SỬA câu báo hết giờ theo 37 + thêm test (local, CHƯA commit)
+
+Người dùng: "Sửa câu + test".
+
+- `cutting-proposals.service.ts` `lineDisplayReason` (dòng hết giờ): bỏ vế "kể cả sau khi hệ thống đã tự tính lại với thời gian dài hơn"
+  (sai ở nhánh dò chiều dài, mục 37). Câu còn lại: "Chưa kết luận được - hết thời gian tính mà chưa tìm ra cách cắt. Thường do máy
+  chủ đang bận hoặc loại sắt có nhiều cỡ đoạn: thử tính lại lúc ít người dùng." Comment ghi rõ vì sao không nói "đã tự tính lại".
+- `cutting-proposals.service.spec.ts`: thêm 1 test khoá đúng câu này (dùng lý do của nhánh dò hết giờ), kiểm không còn "SystemConfig" và
+  không có "đã tự tính lại".
+- Kiểm tra: `cutting-proposals.service.spec.ts` 143/143 (6 test `lineDisplayReason`); eslint + prettier sạch; `nest build` OK.
+- Thay đổi cắt sắt còn lại so với HEAD: câu báo trong `cutting-proposals.service.ts` + 1 test trong spec. Chưa stage, chưa commit.
+- **Cập nhật 2026-10-30:** người dùng hỏi "có cần commit gì không" → đã STAGE (không commit): `cutting-proposals.service.ts`,
+  `cutting-proposals.service.spec.ts`, changelog này (mục 33–38), và phần ghi chú sửa ở changelog 2026-09-25 (32.28 / 32.29). Đợt mục 1/3
+  người dùng đã commit + push từ trước (BE `5e34763`, FE `d263e05`); FE không còn gì cần commit cho cắt sắt (nút đã gỡ, 2 file FE chỉ
+  khác ký tự xuống dòng).
