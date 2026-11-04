@@ -14,7 +14,6 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { BossApprovePurchaseProposalDto } from './dto/boss-approve-purchase-proposal.dto';
 import { ListPurchaseProposalsQueryDto } from './dto/list-purchase-proposals-query.dto';
 import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
 import { UpdateApprovalFileDto } from './dto/update-approval-file.dto';
@@ -52,20 +51,9 @@ export class PurchaseProposalsController {
     return this.purchaseProposalsService.findOne(id);
   }
 
-  /**
-   * Mua hàng xác nhận "Sếp đã duyệt" kèm file phiếu đã ký (2026-08-27). Quyền UPDATE, KHÔNG phải
-   * APPROVE - xem giải thích ở PurchaseProposalsService.bossApprove().
-   */
-  @Post(':id/boss-approve')
-  @RequirePermissions(UPDATE)
-  bossApprove(
-    @Param('id') id: string,
-    @Body() dto: BossApprovePurchaseProposalDto,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('roles') roles: string[],
-  ) {
-    return this.purchaseProposalsService.bossApprove(id, userId, roles, dto);
-  }
+  // "Sếp đã duyệt" theo CẢ đề xuất (POST :id/boss-approve, 2026-08-27) đã gỡ 2026-11-04: bắt buộc
+  // chọn NCC nên duyệt theo đơn đặt hàng NCC - xem SupplierOrdersController (POST
+  // /supplier-orders/:id/boss-approve), 1 phiếu ký cho 1 đơn (bản v8 mục 4.10).
 
   /**
    * THAY hoặc XÓA HẲN file duyệt của Sếp khi lỡ upload nhầm - 2026-09-11 lần 2 (theo Sếp: "cho

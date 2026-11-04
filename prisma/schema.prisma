@@ -120,6 +120,8 @@ model User {
   transferCheckResults              TransferCheckResult[]       @relation("TransferCheckCheckedBy")
   purchaseProposalsApproved         PurchaseProposal[]
   purchaseProposalItemsApproved     PurchaseProposalItem[]
+  supplierOrdersCreated             SupplierOrder[]             @relation("SupplierOrderCreatedBy")
+  supplierOrdersApproved            SupplierOrder[]             @relation("SupplierOrderApprovedBy")
   purchaseReceiptLogsReceived       PurchaseReceiptLog[]
   stockLedgerEntries                StockLedger[]
   stockReservations                 StockReservation[]
@@ -378,25 +380,25 @@ model SystemConfig {
   /// Lưỡi cắt (mm) và tề đầu (mm) của MC TỰ ĐỘNG - cặp RIÊNG, tách khỏi solverBladeWidthMm/
   /// solverTrimStartMm (2 cột đó vẫn là của MC Laser). Mặc định theo app cat_sat_iea: lưỡi 2,5 mm, tề
   /// đầu 0. Admin chỉnh được qua PUT /system-config. Chỉ có tác dụng khi máy = tu_dong.
-  solverMctdBladeWidthMm   Decimal @default(2.5) @db.Decimal(6, 1)
-  solverMctdTrimStartMm    Int     @default(0)
+  solverMctdBladeWidthMm   Decimal       @default(2.5) @db.Decimal(6, 1)
+  solverMctdTrimStartMm    Int           @default(0)
   /// Các hệ số bó của MC Tự động (số cây/bó), vd [14,16,18,20] - mặc định như app cat_sat_iea. Chỉ dùng
   /// khi máy = tu_dong; mảng số nguyên > 1. Cây còn lại không đủ bó thì cắt tay (xem
   /// solverMaxManualCuts).
-  solverBundleFactors      Json    @default("[14,16,18,20]")
+  solverBundleFactors      Json          @default("[14,16,18,20]")
   /// Tổng số cây cắt tay (hệ số 1) tối đa trong 1 loại sắt khi dùng MC Tự động (mặc định 5 như app cũ).
-  solverMaxManualCuts      Int     @default(5)
+  solverMaxManualCuts      Int           @default(5)
   /// Số cỡ đoạn tối đa trên 1 kiểu cắt khi dùng MC Tự động (mặc định 5: máy MCTĐ chỉ nhập được 5 cỡ).
-  solverMaxSizesPerPattern Int     @default(5)
+  solverMaxSizesPerPattern Int           @default(5)
   /// LUẬT GỘP (Sếp Nhân 2026-10-24: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại", "không được gộp 2 lệnh cách nhau quá xa",
   /// "sẽ kiểm soát lúc lên kế hoạch"): trong 1 đợt tính / 1 lệnh gộp, MỐC CẦN SẮT của các SKU (frameDeadlineOf: hạn mua hàng, không có
   /// thì hạn khung) cách nhau tối đa chừng này ngày - LUẬT CỨNG ở cutting-batch-solve, merge và lưu hạn lệnh gộp; gợi ý gộp cũng chỉ
   /// chọn trong giới hạn này. SKU chưa có mốc không bị chặn. Admin chỉnh. KHUNG TÍNH CẢ NGÀY ĐẦU ("ngày 1 gộp được ngày 3, ngày 1 ko
   /// được gộp với ngày 4"): 3 = chênh tối đa 2 ngày (merge-rules.util maxGapDays).
-  solverMergeWindowDays    Int     @default(3)
+  solverMergeWindowDays    Int           @default(3)
   /// Trần số SKU trong 1 đợt tính / 1 lệnh gộp (2026-10-24, Sếp Nhân: "bắt buộc chỉ được gộp tối đa 2 lệnh") - luật cứng như
   /// solverMergeWindowDays. Admin chỉnh.
-  solverMergeMaxSkus       Int     @default(2)
+  solverMergeMaxSkus       Int           @default(2)
 
   /// Dung sai giao THỪA cho phép khi Thủ kho nhận hàng mua về, tính theo % của buyQty (xem
   /// PurchaseProposalsService.receiveItem). Trong dung sai -> ghi ĐÚNG số thực nhận, kể cả khi
@@ -554,39 +556,39 @@ model Material {
   createdAt                 DateTime            @default(now())
   updatedAt                 DateTime            @updatedAt
 
-  materialGroup                 MaterialGroup?                 @relation(fields: [materialGroupId], references: [id])
-  warehouse                     Warehouse?                     @relation(fields: [warehouseId], references: [id])
-  buyer                         User?                          @relation(fields: [buyerId], references: [id])
-  materialSuppliers             MaterialSupplier[]
-  segmentSpecs                  SegmentSpec[]
-  consumableBoms                ConsumableBom[]
-  bomAccessoryItems             BomAccessoryItem[]
-  cuttingProposalLines          CuttingProposalLine[]
-  purchaseProposalItems         PurchaseProposalItem[]
-  stockLedgerEntries            StockLedger[]
-  stockQuants                   StockQuant[]
-  warehouseTransferItems        WarehouseTransferItem[]
-  warehouseTransferReservations WarehouseTransferReservation[]
-  stockReservations             StockReservation[]
-  pieceMaterialItems            PieceMaterialItem[]
-  pieceMaterialYields           PieceMaterialYield[]
-  steelIssues                   SteelIssue[]
-  materialIssues                MaterialIssue[]
-  materialYieldIssues           MaterialYieldIssue[]
-  stepBatches                   StepBatch[]
-  stepBundles                   StepBundle[]
-  packagingIssues               PackagingIssue[]
-  inspectionKhoResultItems      InspectionKhoResultItem[]
-  weavingIssueMaterials         WeavingIssueMaterial[]
-  materialYieldRecipesAsOutput  MaterialYieldRecipe[]          @relation("MaterialYieldRecipeOutput")
-  materialYieldRecipesAsInput   MaterialYieldRecipe[]          @relation("MaterialYieldRecipeInput")
-  bomOptions                    BomOption[]
-  salesOrderItemsAsWire         SalesOrderItem[]               @relation("SalesOrderItemWire")
-  salesOrderItemsAsCushion      SalesOrderItem[]               @relation("SalesOrderItemCushion")
-  productionInvoiceItemsAsWire  ProductionInvoiceItem[]        @relation("ProductionInvoiceItemWire")
-  productionInvoiceItemsAsCushion ProductionInvoiceItem[]      @relation("ProductionInvoiceItemCushion")
-  productionOrdersAsWire        ProductionOrder[]              @relation("ProductionOrderWire")
-  productionOrdersAsCushion     ProductionOrder[]              @relation("ProductionOrderCushion")
+  materialGroup                   MaterialGroup?                 @relation(fields: [materialGroupId], references: [id])
+  warehouse                       Warehouse?                     @relation(fields: [warehouseId], references: [id])
+  buyer                           User?                          @relation(fields: [buyerId], references: [id])
+  materialSuppliers               MaterialSupplier[]
+  segmentSpecs                    SegmentSpec[]
+  consumableBoms                  ConsumableBom[]
+  bomAccessoryItems               BomAccessoryItem[]
+  cuttingProposalLines            CuttingProposalLine[]
+  purchaseProposalItems           PurchaseProposalItem[]
+  stockLedgerEntries              StockLedger[]
+  stockQuants                     StockQuant[]
+  warehouseTransferItems          WarehouseTransferItem[]
+  warehouseTransferReservations   WarehouseTransferReservation[]
+  stockReservations               StockReservation[]
+  pieceMaterialItems              PieceMaterialItem[]
+  pieceMaterialYields             PieceMaterialYield[]
+  steelIssues                     SteelIssue[]
+  materialIssues                  MaterialIssue[]
+  materialYieldIssues             MaterialYieldIssue[]
+  stepBatches                     StepBatch[]
+  stepBundles                     StepBundle[]
+  packagingIssues                 PackagingIssue[]
+  inspectionKhoResultItems        InspectionKhoResultItem[]
+  weavingIssueMaterials           WeavingIssueMaterial[]
+  materialYieldRecipesAsOutput    MaterialYieldRecipe[]          @relation("MaterialYieldRecipeOutput")
+  materialYieldRecipesAsInput     MaterialYieldRecipe[]          @relation("MaterialYieldRecipeInput")
+  bomOptions                      BomOption[]
+  salesOrderItemsAsWire           SalesOrderItem[]               @relation("SalesOrderItemWire")
+  salesOrderItemsAsCushion        SalesOrderItem[]               @relation("SalesOrderItemCushion")
+  productionInvoiceItemsAsWire    ProductionInvoiceItem[]        @relation("ProductionInvoiceItemWire")
+  productionInvoiceItemsAsCushion ProductionInvoiceItem[]        @relation("ProductionInvoiceItemCushion")
+  productionOrdersAsWire          ProductionOrder[]              @relation("ProductionOrderWire")
+  productionOrdersAsCushion       ProductionOrder[]              @relation("ProductionOrderCushion")
 
   @@index([materialGroupId])
   @@index([warehouseId])
@@ -664,6 +666,8 @@ model Supplier {
 
   materialSuppliers      MaterialSupplier[]
   purchaseProposalQuotes PurchaseProposalQuote[]
+  orders                 SupplierOrder[]
+  orderCounters          SupplierOrderCounter[]
 
   @@map("suppliers")
 }
@@ -1305,14 +1309,14 @@ model SalesOrder {
 }
 
 model SalesOrderItem {
-  id           BigInt               @id @default(autoincrement())
-  salesOrderId BigInt
-  mfgProductId BigInt
-  skuName      String?
-  totalQty     Int
-  shippedQty   Int                  @default(0)
-  status       SalesOrderItemStatus @default(LEN_KE_HOACH)
-  deliveryDate DateTime?
+  id                BigInt               @id @default(autoincrement())
+  salesOrderId      BigInt
+  mfgProductId      BigInt
+  skuName           String?
+  totalQty          Int
+  shippedQty        Int                  @default(0)
+  status            SalesOrderItemStatus @default(LEN_KE_HOACH)
+  deliveryDate      DateTime?
   /// Loại dây (mã SHT) và loại nệm Sales chọn cho dòng này - lấy từ bom_option của BomRevision
   /// ACTIVE của mfgProductId. NULL = SKU không khai tick lựa chọn (hoặc đơn tạo trước khi có
   /// tính năng). Chỉ sửa được trước khi lệnh sản xuất của dòng được duyệt - sau đó lệnh sản xuất
@@ -1549,48 +1553,48 @@ model ProductionInvoice {
 }
 
 model ProductionInvoiceItem {
-  id                  BigInt              @id @default(autoincrement())
+  id                       BigInt              @id @default(autoincrement())
   /// Nullable (2026-08-20): Sales tạo item ngay lúc lưu PO nhưng KHÔNG còn bọc sẵn trong 1 PI -
   /// NULL nghĩa là "chưa được KHSX gom", chỉ có giá trị từ lúc KHSX bấm "Xác nhận gộp"/"Tiến hành
   /// cắt riêng" ở GomDotCatPage. Trước đây PI tự sinh 1-1 ngay lúc tạo PO, kể cả PO chưa xác nhận
   /// cọc - khiến "Lệnh sản xuất mới" của KHSX lộ ra cả đơn hàng chưa chắc chắn về mặt thương mại.
-  productionInvoiceId BigInt?
+  productionInvoiceId      BigInt?
   /// PO (đơn hàng Sales) mà SKU này thuộc về. TRƯỚC ĐÂY suy ngược qua productionInvoice.salesOrder
   /// vì 1 PI = đúng 1 PO; từ khi có PI gộp (ProductionInvoice.isMerged) thì 1 PI chứa SKU của
   /// NHIỀU PO nên đường suy ngược đó mất dấu - phải ghim thẳng ở đây. Nullable vì SKU tạo tay qua
   /// POST /production-invoices/:id/items không bắt buộc gắn đơn hàng nào.
-  salesOrderId        BigInt?
+  salesOrderId             BigInt?
   /// Dòng đơn hàng Sales sinh ra item này. Trước đây chỉ nối ngầm qua (salesOrderId, mfgProductId)
   /// nên 2 dòng CÙNG SKU trong 1 đơn (khác loại dây/nệm) bị lẫn - xem SalesOrdersService.
   /// Nullable: item tạo tay qua POST /production-invoices/:id/items và dữ liệu cũ không có.
-  salesOrderItemId    BigInt?
-  mfgProductId        BigInt
-  productVariantId    BigInt?
+  salesOrderItemId         BigInt?
+  mfgProductId             BigInt
+  productVariantId         BigInt?
   /// Sao chép từ SalesOrderItem lúc sinh item; chốt sang ProductionOrder khi Sếp duyệt.
-  wireMaterialId      BigInt?
-  cushionMaterialId   BigInt?
-  quantity            Int
+  wireMaterialId           BigInt?
+  cushionMaterialId        BigInt?
+  quantity                 Int
   /// "Mua VT khung & đan" (FE đổi tên từ "Mua hàng" 2026-10-27): hạn chót vật tư khung cơ khí + dây đan về kho (N−1).
   /// Cũng là "mốc cần sắt" của luật gộp và hạn sắt của đề xuất mua (xem frame-deadline.util, merge-rules.util).
-  materialDeadline    DateTime?
+  materialDeadline         DateTime?
   /// "Mua VT còn lại" (2026-10-27, Sếp chốt): hạn chót vật tư thành phẩm (thùng, xốp, nệm, gỗ, phụ kiện, nhãn) về kho,
   /// đề xuất = ngày Đóng gói − 7. Chỉ là mốc kế hoạch KHSX đặt + thông báo; chưa nối vào đề xuất mua/giữ chỗ.
   finishedMaterialDeadline DateTime?
-  deliveryDeadline    DateTime?
-  prodApprovalStatus  ProdApprovalStatus?
-  requestedAt         DateTime?
-  requestedById       String?
+  deliveryDeadline         DateTime?
+  prodApprovalStatus       ProdApprovalStatus?
+  requestedAt              DateTime?
+  requestedById            String?
   /// Kho thành phẩm QLSX chọn làm điểm cuối trước khi gửi Sếp duyệt (sendItemToBoss trong
   /// mock) - đây là warehouseScope (chuỗi tự do gắn trên User, vd 'thanh-pham-2'), KHÔNG phải
   /// FK tới bảng Warehouse (vốn chỉ có các mã kho vật lý cố định, không có khái niệm
   /// "kho thành phẩm 2/3" theo từng thủ kho) - cố ý lưu plain string, mirror đúng mock.
-  warehouseCode       String?
-  warehouseName       String?
-  qlsxAt              DateTime?
-  qlsxById            String?
-  decidedAt           DateTime?
-  decidedById         String?
-  rejectReason        String?
+  warehouseCode            String?
+  warehouseName            String?
+  qlsxAt                   DateTime?
+  qlsxById                 String?
+  decidedAt                DateTime?
+  decidedById              String?
+  rejectReason             String?
 
   productionInvoice    ProductionInvoice?           @relation(fields: [productionInvoiceId], references: [id])
   salesOrder           SalesOrder?                  @relation(fields: [salesOrderId], references: [id])
@@ -1946,10 +1950,10 @@ model CuttingPlanCoverage {
 /// bar_count ở đây là NGUỒN CHÍNH XÁC cho Phase 8 (inspection_items.required vật tư sắt),
 /// ưu tiên hơn ước lượng thô qua BOM - xem docs/dna-erp-backend-implementation-plan.md 8.1.
 model CuttingProposalLine {
-  id                   BigInt   @id @default(autoincrement())
+  id                   BigInt         @id @default(autoincrement())
   cuttingProposalId    BigInt
   materialId           BigInt
-  feasible             Boolean  @default(true)
+  feasible             Boolean        @default(true)
   bestStockLengthMm    Int?
   totalBars            Int?
   /// Số cây PHẢI MUA của riêng dòng này, chốt tại thời điểm approve() (L1, 2026-08-26):
@@ -1970,15 +1974,15 @@ model CuttingProposalLine {
   buyBars              Int?
   /// Decimal, không Int (2026-08-19) - kế thừa độ chính xác thập phân từ cutLengthMm, xem
   /// SegmentSpec.
-  totalWasteMm         Decimal? @db.Decimal(7, 1)
-  wastePercentage      Decimal? @db.Decimal(6, 3)
+  totalWasteMm         Decimal?       @db.Decimal(7, 1)
+  wastePercentage      Decimal?       @db.Decimal(6, 3)
   /// Thời gian giải THẬT của riêng loại sắt này (giây) - từ `purchase_plan[].solve_seconds`
   /// phía solver (2026-09-22, xem CuttingProposal.totalSolveSeconds cho tổng cả đợt). Có ở CẢ 2
   /// nhánh feasible/infeasible. null với phương án tính TRƯỚC khi có field này.
-  solveSeconds         Decimal? @db.Decimal(8, 2)
+  solveSeconds         Decimal?       @db.Decimal(8, 2)
   /// KHÔNG CÒN DÙNG (2026-09-23): solver bỏ cơ chế mẫu nguyên, không code nào đọc/ghi cột này nữa.
   /// Chỉ còn giữ giá trị cũ của các phương án tính trước đó - xoá cột là bước riêng (mất dữ liệu).
-  mauNguyenMm          Decimal? @default(0) @db.Decimal(7, 1)
+  mauNguyenMm          Decimal?       @default(0) @db.Decimal(7, 1)
   /// So sánh hao hụt giữa các chiều dài chuẩn đã chấm (vd [{length:5850,bars:227,wastePct:9.61},
   /// {length:6000,bars:223,wastePct:0.85}]) - thuần hiển thị/audit, không có FK nào cần tới nên
   /// giữ JSON thay vì tách bảng.
@@ -2024,7 +2028,7 @@ model CuttingProposalLine {
   /// Material.maxCuttingWastePercentage, hoặc SystemConfig.solverMaxWastePercentage mặc định) -
   /// có mặt ở CẢ 2 nhánh feasible/infeasible trong response. Không suy lại từ SystemConfig lúc
   /// hiển thị vì ngưỡng có thể đã đổi kể từ khi phương án này được tính.
-  maxWastePctThreshold Decimal? @db.Decimal(6, 3)
+  maxWastePctThreshold Decimal?       @db.Decimal(6, 3)
   /// true = feasible=true NHƯNG vượt maxWastePctThreshold của chính loại sắt này. Trước 2026-08-19
   /// field over_threshold trong response solver bị bỏ qua hoàn toàn ở cổng chặn tự-duyệt - hệ
   /// thống từng tự duyệt/trừ kho/tạo đề xuất mua cho các phương án vượt ngưỡng, không ai biết
@@ -2264,16 +2268,75 @@ model PurchaseProposalItem {
   /// mua" - Kho chỉ nhận hàng cho dòng đã có file này. Giá và NCC nằm trong file, cố ý KHÔNG
   /// tách ra cột riêng (Sếp chốt). NULL = dòng duyệt theo luồng cũ (trước 2026-08-27).
   approvalFileUrl String?
+  /// Đơn đặt hàng NCC chứa dòng này (2026-11-04, bản v8 mục 4.10). Người mua phải gom dòng vào 1
+  /// đơn (chọn NCC, hệ thống cấp số đơn) rồi mới "Sếp đã duyệt" được - duyệt theo đơn, 1 phiếu ký
+  /// cho 1 đơn. null = chưa vào đơn nào (hoặc dòng duyệt theo luồng cũ trước 11/2026).
+  supplierOrderId BigInt?
 
-  proposal    PurchaseProposal        @relation(fields: [proposalId], references: [id])
-  material    Material                @relation(fields: [materialId], references: [id])
-  quotes      PurchaseProposalQuote[]
-  approvedBy  User?                   @relation(fields: [approvedById], references: [id])
-  receiptLogs PurchaseReceiptLog[]
+  proposal      PurchaseProposal        @relation(fields: [proposalId], references: [id])
+  material      Material                @relation(fields: [materialId], references: [id])
+  quotes        PurchaseProposalQuote[]
+  approvedBy    User?                   @relation(fields: [approvedById], references: [id])
+  receiptLogs   PurchaseReceiptLog[]
+  supplierOrder SupplierOrder?          @relation(fields: [supplierOrderId], references: [id])
 
   @@index([proposalId])
   @@index([status])
+  @@index([supplierOrderId])
   @@map("purchase_proposal_items")
+}
+
+/// Trạng thái đơn đặt hàng NCC. DRAFT = đã cấp số, chờ phiếu Giám đốc ký; APPROVED = đã tải
+/// phiếu ký ("Sếp đã duyệt"), các dòng sang PURCHASING; CANCELLED = huỷ trước khi duyệt - số đơn
+/// GIỮ NGUYÊN, không cấp lại cho đơn khác (số đã có thể nằm trên giấy tờ gửi NCC).
+enum SupplierOrderStatus {
+  DRAFT
+  APPROVED
+  CANCELLED
+}
+
+/// Đơn đặt hàng gửi 1 nhà cung cấp (2026-11-04, bản v8 mục 4.10, V3-4): 1 đơn = 1 NCC = 1 số.
+/// "Số đơn đặt hàng" = seq/year (vd 52/2026), đánh riêng theo từng NCC, đánh lại từ 1 mỗi năm,
+/// cấp ngay lúc tạo đơn qua SupplierOrderCounter. Đơn chứa các PurchaseProposalItem của cùng 1
+/// người mua; Đợt 5c mở rộng thành đơn gộp nhiều lệnh SX.
+model SupplierOrder {
+  id              BigInt              @id @default(autoincrement())
+  supplierId      BigInt
+  year            Int
+  seq             Int
+  status          SupplierOrderStatus @default(DRAFT)
+  createdById     String
+  approvalFileUrl String?
+  approvedAt      DateTime?
+  approvedById    String?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  supplier   Supplier               @relation(fields: [supplierId], references: [id])
+  createdBy  User                   @relation("SupplierOrderCreatedBy", fields: [createdById], references: [id])
+  approvedBy User?                  @relation("SupplierOrderApprovedBy", fields: [approvedById], references: [id])
+  items      PurchaseProposalItem[]
+
+  @@unique([supplierId, year, seq])
+  @@index([status])
+  @@map("supplier_orders")
+}
+
+/// Số đơn đặt hàng CUỐI CÙNG đã cấp cho 1 NCC trong 1 năm - tăng nguyên tử khi tạo đơn. Admin
+/// nạp số cuối năm 2026 của từng NCC từ sổ của phòng mua trước khi dùng (bản v8 mục 4.13, V4-8);
+/// không được hạ thấp hơn số lớn nhất hệ thống đã cấp.
+model SupplierOrderCounter {
+  supplierId BigInt
+  year       Int
+  lastSeq    Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  supplier Supplier @relation(fields: [supplierId], references: [id])
+
+  @@id([supplierId, year])
+  @@map("supplier_order_counters")
 }
 
 /// Báo giá NCC cho 1 dòng vật tư - Purchasing thêm nhiều dòng/item, Sếp chọn đúng 1

@@ -1,0 +1,285 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import { ClsService } from 'nestjs-cls';
+import { Prisma, PurchaseProposalStatus, SupplierOrderStatus } from '../../generated/prisma/client';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { PrismaServiceType } from '../../prisma/prisma.service';
+import { RealtimeService } from '../../realtime/realtime.service';
+import { PurchaseProposalsService } from './purchase-proposals.service';
+import { SupplierOrdersService } from './supplier-orders.service';
+import { vnYear } from './supplier-order-code.util';
+
+const decimal = (n: number) => new Prisma.Decimal(n);
+
+describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)', () => {
+  let service: SupplierOrdersService;
+  let prisma: {
+    supplier: { findUnique: jest.Mock; findMany: jest.Mock };
+    purchaseProposalItem: { findMany: jest.Mock; updateMany: jest.Mock; update: jest.Mock };
+    supplierOrder: {
+      create: jest.Mock;
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
+      updateMany: jest.Mock;
+      aggregate: jest.Mock;
+      groupBy: jest.Mock;
+    };
+    supplierOrderCounter: { findUnique: jest.Mock; findMany: jest.Mock; upsert: jest.Mock };
+    auditLog: { create: jest.Mock };
+    $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
+    $transaction: jest.Mock;
+  };
+  let proposals: { bossApprove: jest.Mock };
+
+  const supplier = { id: 7n, name: 'Kim Phát', isActive: true, deletedAt: null };
+  const pendingItem = (overrides: Record<string, unknown> = {}) => ({
+    id: 400n,
+    proposalId: 300n,
+    status: PurchaseProposalStatus.NEW,
+    supplierOrderId: null,
+    buyQty: decimal(6),
+    orderQty: null,
+    stockLengthMm: null,
+    material: { code: 'KHI-CO2', name: 'Khí CO2', unit: 'bình', buyerId: 'buyer-1' },
+    ...overrides,
+  });
+  const order = (overrides: Record<string, unknown> = {}) => ({
+    id: 90n,
+    supplierId: 7n,
+    year: 2026,
+    seq: 53,
+    status: SupplierOrderStatus.DRAFT,
+    createdById: 'buyer-1',
+    approvalFileUrl: null,
+    approvedAt: null,
+    cancelledAt: null,
+    cancelReason: null,
+    createdAt: new Date(),
+    supplier,
+    createdBy: { firstName: 'Nghi', lastName: 'Trần' },
+    items: [pendingItem({ supplierOrderId: 90n })],
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    prisma = {
+      supplier: { findUnique: jest.fn().mockResolvedValue(supplier), findMany: jest.fn() },
+      purchaseProposalItem: {
+        findMany: jest.fn().mockResolvedValue([pendingItem()]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn(),
+      },
+      supplierOrder: {
+        create: jest.fn().mockResolvedValue({ id: 90n }),
+        findUnique: jest.fn().mockResolvedValue(order()),
+        findMany: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }),
+        groupBy: jest.fn().mockResolvedValue([]),
+      },
+      supplierOrderCounter: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+        upsert: jest.fn(),
+      },
+      auditLog: { create: jest.fn() },
+      // Mặc định: bộ đếm trả số tiếp theo 53; khoá dòng đơn trả DRAFT.
+      $queryRaw: jest.fn().mockResolvedValue([{ lastSeq: 53, status: SupplierOrderStatus.DRAFT }]),
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
+    };
+    proposals = { bossApprove: jest.fn().mockResolvedValue({}) };
+    const cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
+    service = new SupplierOrdersService(
+      prisma as unknown as PrismaServiceType,
+      proposals as unknown as PurchaseProposalsService,
+      cls as unknown as ClsService<AppClsStore>,
+      { publishEntityChanged: jest.fn() } as unknown as RealtimeService,
+    );
+  });
+
+  describe('create', () => {
+    it('cấp số đơn tiếp theo của NCC trong năm, gắn các dòng vào đơn', async () => {
+      const res = await service.create({ supplierId: '7', itemIds: ['400'] }, 'buyer-1', [
+        'PURCHASER',
+      ]);
+
+      expect(prisma.supplierOrder.create).toHaveBeenCalledWith({
+        data: { supplierId: 7n, year: vnYear(), seq: 53, createdById: 'buyer-1' },
+      });
+      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: { in: [400n] },
+          supplierOrderId: null,
+          status: { in: expect.any(Array) as unknown },
+        },
+        data: { supplierOrderId: 90n },
+      });
+      expect(res).toMatchObject({ code: '53/2026', supplierName: 'Kim Phát' });
+    });
+
+    it('bắt buộc NCC tồn tại và còn hợp tác', async () => {
+      prisma.supplier.findUnique.mockResolvedValueOnce(null);
+      await expect(
+        service.create({ supplierId: '7', itemIds: ['400'] }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(NotFoundException);
+
+      prisma.supplier.findUnique.mockResolvedValueOnce({ ...supplier, isActive: false });
+      await expect(
+        service.create({ supplierId: '7', itemIds: ['400'] }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('chặn dòng của người mua khác (403), dòng đã duyệt hoặc đã nằm trong đơn khác (409)', async () => {
+      prisma.purchaseProposalItem.findMany.mockResolvedValueOnce([
+        pendingItem({ material: { code: 'X', name: 'X', unit: 'c', buyerId: 'buyer-2' } }),
+      ]);
+      await expect(
+        service.create({ supplierId: '7', itemIds: ['400'] }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(ForbiddenException);
+
+      prisma.purchaseProposalItem.findMany.mockResolvedValueOnce([
+        pendingItem({ status: PurchaseProposalStatus.PURCHASING }),
+      ]);
+      await expect(
+        service.create({ supplierId: '7', itemIds: ['400'] }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(ConflictException);
+
+      prisma.purchaseProposalItem.findMany.mockResolvedValueOnce([
+        pendingItem({ supplierOrderId: 88n }),
+      ]);
+      await expect(
+        service.create({ supplierId: '7', itemIds: ['400'] }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.supplierOrder.create).not.toHaveBeenCalled();
+    });
+
+    it('409 nếu dòng vừa bị thao tác khác xử lý giữa lúc kiểm và lúc ghi (cả đơn rollback)', async () => {
+      prisma.purchaseProposalItem.updateMany.mockResolvedValueOnce({ count: 0 });
+      await expect(
+        service.create({ supplierId: '7', itemIds: ['400'] }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('approve', () => {
+    it('duyệt đúng các dòng của đơn qua bossApprove() theo từng đề xuất, rồi đánh dấu đơn APPROVED', async () => {
+      prisma.supplierOrder.findUnique.mockResolvedValue(
+        order({
+          items: [
+            pendingItem({ id: 400n, proposalId: 300n }),
+            pendingItem({ id: 401n, proposalId: 301n }),
+            pendingItem({ id: 402n, proposalId: 300n }),
+          ],
+        }),
+      );
+
+      await service.approve('90', 'https://file/ky.pdf', 'buyer-1', ['PURCHASER']);
+
+      expect(proposals.bossApprove).toHaveBeenCalledWith(
+        '300',
+        'buyer-1',
+        ['PURCHASER'],
+        { approvalFileUrl: 'https://file/ky.pdf' },
+        [400n, 402n],
+      );
+      expect(proposals.bossApprove).toHaveBeenCalledWith(
+        '301',
+        'buyer-1',
+        ['PURCHASER'],
+        { approvalFileUrl: 'https://file/ky.pdf' },
+        [401n],
+      );
+      expect(prisma.supplierOrder.updateMany).toHaveBeenCalledWith({
+        where: { id: 90n, status: SupplierOrderStatus.DRAFT },
+        data: expect.objectContaining({
+          status: SupplierOrderStatus.APPROVED,
+          approvalFileUrl: 'https://file/ky.pdf',
+        }) as unknown,
+      });
+    });
+
+    it('không duyệt lại đơn đã duyệt hoặc đã huỷ; người mua khác không duyệt hộ được', async () => {
+      prisma.supplierOrder.findUnique.mockResolvedValueOnce(
+        order({ status: SupplierOrderStatus.APPROVED }),
+      );
+      await expect(service.approve('90', 'https://f', 'buyer-1', ['PURCHASER'])).rejects.toThrow(
+        ConflictException,
+      );
+
+      await expect(service.approve('90', 'https://f', 'buyer-2', ['PURCHASER'])).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(proposals.bossApprove).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('removeItem / cancel', () => {
+    it('gỡ dòng cuối cùng thì đơn tự huỷ, số đơn giữ nguyên', async () => {
+      await service.removeItem('90', '400', 'buyer-1', ['PURCHASER']);
+
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
+        where: { id: 400n },
+        data: { supplierOrderId: null },
+      });
+      expect(prisma.supplierOrder.update).toHaveBeenCalledWith({
+        where: { id: 90n },
+        data: expect.objectContaining({ status: SupplierOrderStatus.CANCELLED }) as unknown,
+      });
+    });
+
+    it('huỷ đơn: các dòng quay về chờ gom đơn', async () => {
+      await service.cancel('90', 'Đổi NCC', 'buyer-1', ['PURCHASER']);
+
+      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
+        where: { supplierOrderId: 90n },
+        data: { supplierOrderId: null },
+      });
+      expect(prisma.supplierOrder.update).toHaveBeenCalledWith({
+        where: { id: 90n },
+        data: expect.objectContaining({
+          status: SupplierOrderStatus.CANCELLED,
+          cancelReason: 'Đổi NCC',
+        }) as unknown,
+      });
+    });
+
+    it('409 nếu đơn vừa được duyệt ở nơi khác lúc đang khoá', async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([{ status: SupplierOrderStatus.APPROVED }]);
+      await expect(service.cancel('90', 'x', 'buyer-1', ['PURCHASER'])).rejects.toThrow(
+        ConflictException,
+      );
+    });
+  });
+
+  describe('setCounter (bản v8 mục 4.13 - nạp số cuối năm)', () => {
+    it('nạp số đơn cuối cùng của NCC trong năm', async () => {
+      prisma.supplier.findMany.mockResolvedValue([supplier]);
+      prisma.supplierOrderCounter.findMany.mockResolvedValue([
+        { supplierId: 7n, year: 2026, lastSeq: 52 },
+      ]);
+
+      const res = await service.setCounter('7', 2026, 52);
+
+      expect(prisma.supplierOrderCounter.upsert).toHaveBeenCalledWith({
+        where: { supplierId_year: { supplierId: 7n, year: 2026 } },
+        create: { supplierId: 7n, year: 2026, lastSeq: 52 },
+        update: { lastSeq: 52 },
+      });
+      expect(res).toMatchObject({ supplierName: 'Kim Phát', lastSeq: 52 });
+    });
+
+    it('không cho nạp thấp hơn số hệ thống đã cấp', async () => {
+      prisma.supplierOrder.aggregate.mockResolvedValueOnce({ _max: { seq: 60 } });
+      await expect(service.setCounter('7', 2026, 52)).rejects.toThrow(BadRequestException);
+      expect(prisma.supplierOrderCounter.upsert).not.toHaveBeenCalled();
+    });
+  });
+});

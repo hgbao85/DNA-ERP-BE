@@ -68,6 +68,12 @@ export class PurchaseProposalItemResponseDto {
   /// Số thực mua = max(buyQty, orderQty) - số in trên phiếu đề xuất và mốc để dòng đóng hồ sơ khi
   /// nhận đủ. Mua dư = purchaseQty − buyQty.
   @Expose() @ApiProperty() purchaseQty!: number;
+  /// Đơn đặt hàng NCC chứa dòng này (2026-11-04, bản v8 mục 4.10) - null = chưa vào đơn nào.
+  @Expose() @ApiPropertyOptional({ nullable: true }) supplierOrderId!: string | null;
+  /// "Số đơn đặt hàng" dạng "52/2026" - đánh riêng theo từng NCC, đánh lại từ 1 mỗi năm.
+  @Expose() @ApiPropertyOptional({ nullable: true }) supplierOrderCode!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) supplierOrderStatus!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) supplierName!: string | null;
   /// Chiều dài cây phải đặt (mm) - CHỈ có ở nhánh sắt (copy từ CuttingProposalLine.
   /// bestStockLengthMm lúc CuttingProposalsService.approve(), 2026-08-26). null cho nhánh kiểm
   /// tra vật tư (InspectionKhoResultItem) - không có khái niệm chiều dài cây. buyQty vô nghĩa

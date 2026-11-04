@@ -48,6 +48,7 @@ import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-
 import { UpdateApprovalFileDto } from './dto/update-approval-file.dto';
 import { UpdateOrderQtyDto } from './dto/update-order-qty.dto';
 import { effectiveOrderQty, receiptQtyForPool } from './purchase-order-qty.util';
+import { supplierOrderCode } from './supplier-order-code.util';
 
 /// Kho ảo cố định (protected-warehouse-codes.constant.ts) - nguồn của bút toán "nhập hàng mua
 /// về" khi Thủ kho xác nhận nhận hàng (xem receiveItem()).
@@ -126,6 +127,7 @@ const LIST_INCLUDE = {
 
 const ITEM_INCLUDE = {
   material: { include: { warehouse: true } },
+  supplierOrder: { include: { supplier: true } },
   quotes: { include: { supplier: true } },
   receiptLogs: { include: { receivedBy: true }, orderBy: { receivedAt: 'desc' } },
 } satisfies Prisma.PurchaseProposalItemInclude;
@@ -376,6 +378,10 @@ export class PurchaseProposalsService {
     actorUserId: string,
     actorRoles: string[],
     dto: BossApprovePurchaseProposalDto,
+    // 2026-11-04 (bản v8 mục 4.10): duyệt THEO ĐƠN ĐẶT HÀNG NCC - SupplierOrdersService.approve()
+    // truyền đúng các dòng của 1 đơn, chỉ các dòng đó chuyển PURCHASING. Không truyền = mọi dòng
+    // chờ duyệt của actor (hành vi cũ; route theo cả đề xuất đã gỡ khỏi controller).
+    onlyItemIds?: bigint[],
   ): Promise<PurchaseProposalResponseDto> {
     const proposal = await this.findDetailOrThrow(id);
     this.assertActorMayHandle(proposal, actorUserId, actorRoles);
@@ -383,6 +389,7 @@ export class PurchaseProposalsService {
     const myPendingItems = proposal.items.filter(
       (item) =>
         PENDING_APPROVAL_STATUSES.includes(item.status) &&
+        (!onlyItemIds || onlyItemIds.includes(item.id)) &&
         (isPrivileged || !item.material.buyerId || item.material.buyerId === actorUserId),
     );
     if (myPendingItems.length === 0) {
@@ -1152,6 +1159,12 @@ export class PurchaseProposalsService {
       buyQty: item.buyQty.toNumber(),
       orderQty: item.orderQty?.toNumber() ?? null,
       purchaseQty: effectiveOrderQty(item.buyQty.toNumber(), item.orderQty?.toNumber()),
+      supplierOrderId: item.supplierOrderId?.toString() ?? null,
+      supplierOrderCode: item.supplierOrder
+        ? supplierOrderCode(item.supplierOrder.seq, item.supplierOrder.year)
+        : null,
+      supplierOrderStatus: item.supplierOrder?.status ?? null,
+      supplierName: item.supplierOrder?.supplier.name ?? null,
       stockLengthMm: item.stockLengthMm,
       deadline,
       receivedQty: item.receivedQty.toNumber(),
