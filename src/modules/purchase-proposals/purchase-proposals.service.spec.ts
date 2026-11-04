@@ -615,6 +615,26 @@ describe('PurchaseProposalsService', () => {
     // Ca sống-còn của đợt cắt luồng: lúc gỡ màn duyệt của Sếp, production còn 36 dòng nằm ở
     // QUOTING/SUBMITTED (đã bấm Tiếp nhận, hoặc đã gửi Sếp theo luồng cũ). bossApprove() là đường
     // ra DUY NHẤT của chúng - siết lại chỉ nhận NEW là treo vĩnh viễn 36 dòng hàng thật.
+    it('2026-11-04: duyệt theo đơn đặt hàng NCC - chỉ đúng các dòng truyền vào, dòng khác giữ nguyên', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ id: 400n }), item({ id: 401n })] }),
+      );
+
+      await service.bossApprove(
+        '300',
+        'buyer-1',
+        ['PURCHASER'],
+        { approvalFileUrl: 'https://f/ky.pdf' },
+        [401n],
+      );
+
+      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: { in: [401n] } }) as unknown,
+        }),
+      );
+    });
+
     it('nhận LUÔN dòng đang QUOTING/SUBMITTED/REJECTED của luồng cũ, không chỉ NEW', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
