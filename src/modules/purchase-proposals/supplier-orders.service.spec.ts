@@ -31,6 +31,8 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
     };
     supplierOrderCounter: { findUnique: jest.Mock; findMany: jest.Mock; upsert: jest.Mock };
     stockQuant: { groupBy: jest.Mock };
+    productionInvoice: { findMany: jest.Mock };
+    productionInvoiceItem: { findMany: jest.Mock };
     purchaseProposal: { update: jest.Mock };
     auditLog: { create: jest.Mock };
     $queryRaw: jest.Mock;
@@ -52,7 +54,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
     spec: null,
     materialId: 30n,
     material: { code: 'KHI-CO2', name: 'Khí CO2', unit: 'bình', buyerId: 'buyer-1', spec: null },
-    proposal: { productionInvoice: { code: 'PI-2026-031' } },
+    proposal: { productionInvoiceId: 50n },
     ...overrides,
   });
   const order = (overrides: Record<string, unknown> = {}) => ({
@@ -100,6 +102,13 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       },
       auditLog: { create: jest.fn() },
       stockQuant: { groupBy: jest.fn().mockResolvedValue([]) },
+      // Mã lệnh hiển thị (loadLenhDisplayCodes của người A): PI 50 có dòng mang số LSX MY-313.
+      productionInvoice: {
+        findMany: jest.fn().mockResolvedValue([{ id: 50n, code: 'PI-2026-031' }]),
+      },
+      productionInvoiceItem: {
+        findMany: jest.fn().mockResolvedValue([{ productionInvoiceId: 50n, lsxCode: 'MY-313' }]),
+      },
       // recomputeProposalStatus() sau THAY PHIẾU: đọc status mọi dòng rồi ghi rollup lên đề xuất.
       purchaseProposal: { update: jest.fn() },
       // Mặc định: bộ đếm trả số tiếp theo 53; khoá dòng đơn trả DRAFT.
@@ -135,6 +144,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
         data: { supplierOrderId: 90n },
       });
       expect(res).toMatchObject({ code: '53/2026', supplierName: 'Kim Phát' });
+      expect(res.items[0].orderCode).toBe('MY-313');
     });
 
     it('bắt buộc NCC tồn tại và còn hợp tác', async () => {

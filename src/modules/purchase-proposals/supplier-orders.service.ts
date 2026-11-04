@@ -25,6 +25,7 @@ import { PENDING_APPROVAL_STATUSES, PurchaseProposalsService } from './purchase-
 import { effectiveOrderQty } from './purchase-order-qty.util';
 import { supplierOrderCode, vnYear } from './supplier-order-code.util';
 import { recomputeProposalStatus } from './purchase-proposal-status.util';
+import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { buildPrintRows, PrintItemInput, renderPrintWorkbook } from './supplier-order-print';
 import {
   CreateSupplierOrderDto,
@@ -40,7 +41,7 @@ const ORDER_INCLUDE = {
   items: {
     include: {
       material: true,
-      proposal: { select: { productionInvoice: { select: { code: true } } } },
+      proposal: { select: { productionInvoiceId: true } },
     },
     orderBy: { id: 'asc' },
   },
@@ -81,11 +82,13 @@ export class SupplierOrdersService {
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
-    return rows.map((r) => this.toDto(r));
+    const codes = await this.lenhCodesOf(rows);
+    return rows.map((r) => this.toDto(r, codes));
   }
 
   async findOne(id: string): Promise<SupplierOrderResponseDto> {
-    return this.toDto(await this.findOrThrow(id));
+    const order = await this.findOrThrow(id);
+    return this.toDto(order, await this.lenhCodesOf([order]));
   }
 
   async create(
@@ -168,7 +171,7 @@ export class SupplierOrdersService {
       itemIds: dto.itemIds,
     });
     this.publish(proposalIds, actorUserId);
-    return this.toDto(result);
+    return this.toDto(result, await this.lenhCodesOf([result]));
   }
 
   /** Gỡ 1 dòng khỏi đơn CHƯA duyệt (bản v8 mục 7.5). Đơn rỗng thì tự huỷ, số đơn giữ nguyên. */
@@ -394,13 +397,14 @@ export class SupplierOrdersService {
     if (order.status === SupplierOrderStatus.CANCELLED) {
       throw new ConflictException('Đơn đã huỷ - không in phiếu');
     }
+    const codes = await this.lenhCodesOf([order]);
     const inputs: PrintItemInput[] = order.items.map((it) => ({
       materialCode: it.material.code,
       materialName: it.material.name,
       spec: it.spec ?? it.material.spec ?? null,
       stockLengthMm: it.stockLengthMm,
       unit: it.stockLengthMm != null ? 'cây' : it.material.unit,
-      orderCode: it.proposal.productionInvoice?.code ?? '—',
+      orderCode: this.lenhCodeOf(it, codes) ?? '—',
       buyQty: it.buyQty.toNumber(),
       purchaseQty: effectiveOrderQty(it.buyQty.toNumber(), it.orderQty?.toNumber()),
     }));
@@ -588,7 +592,23 @@ export class SupplierOrdersService {
     }
   }
 
-  private toDto(order: OrderRow): SupplierOrderResponseDto {
+  /**
+   * Mã lệnh hiển thị (số LSX, lệnh cũ chưa có LSX thì mã PI) của các lệnh có dòng trong đơn - dùng
+   * hàm chung của người A (common/utils/lenh-code.util.ts, điểm ghép ①), 1 lần đọc cho cả danh sách.
+   */
+  private lenhCodesOf(orders: OrderRow[]): Promise<Map<string, string>> {
+    const piIds = orders.flatMap((o) =>
+      o.items.map((it) => it.proposal.productionInvoiceId).filter((id): id is bigint => id != null),
+    );
+    return loadLenhDisplayCodes(this.prisma, piIds);
+  }
+
+  private lenhCodeOf(item: OrderRow['items'][number], codes: Map<string, string>): string | null {
+    const piId = item.proposal.productionInvoiceId;
+    return piId != null ? (codes.get(piId.toString()) ?? null) : null;
+  }
+
+  private toDto(order: OrderRow, codes: Map<string, string>): SupplierOrderResponseDto {
     return new SupplierOrderResponseDto({
       id: order.id.toString(),
       code: supplierOrderCode(order.seq, order.year),
@@ -619,7 +639,7 @@ export class SupplierOrdersService {
             purchaseQty: effectiveOrderQty(it.buyQty.toNumber(), it.orderQty?.toNumber()),
             status: it.status,
             receivedQty: it.receivedQty.toNumber(),
-            orderCode: it.proposal.productionInvoice?.code ?? null,
+            orderCode: this.lenhCodeOf(it, codes),
           }),
       ),
     });
