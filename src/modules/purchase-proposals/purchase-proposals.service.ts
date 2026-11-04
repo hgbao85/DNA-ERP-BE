@@ -46,6 +46,8 @@ import {
 import { ListPurchaseProposalsQueryDto } from './dto/list-purchase-proposals-query.dto';
 import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
 import { UpdateApprovalFileDto } from './dto/update-approval-file.dto';
+import { UpdateOrderQtyDto } from './dto/update-order-qty.dto';
+import { effectiveOrderQty, receiptQtyForPool } from './purchase-order-qty.util';
 
 /// Kho ảo cố định (protected-warehouse-codes.constant.ts) - nguồn của bút toán "nhập hàng mua
 /// về" khi Thủ kho xác nhận nhận hàng (xem receiveItem()).
@@ -425,6 +427,7 @@ export class PurchaseProposalsService {
           itemId: item.id.toString(),
           materialCode: item.material.code,
           buyQty: item.buyQty.toNumber(),
+          orderQty: item.orderQty?.toNumber() ?? null,
           previousStatus: item.status,
         })),
       },
@@ -524,6 +527,92 @@ export class PurchaseProposalsService {
   }
 
   /**
+   * Người mua chốt "số mua" cho 1 dòng (2026-11-04, YC7 mục 7.2 - bản yêu cầu v8): được TĂNG so
+   * với "cần mua" (buyQty) cho tròn số tối thiểu NCC bán, không được giảm dưới. Không có bước duyệt
+   * trong phần mềm - Giám đốc duyệt bằng chữ ký trên phiếu đề xuất (phiếu in số cần, số mua, dòng
+   * "Mua dư → nhập tồn"), nên số này KHOÁ khi dòng đã qua "Sếp đã duyệt" (đã tải phiếu ký): muốn
+   * đổi phải in phiếu "THAY PHIẾU" và ký lại (V4-2, làm ở bước đơn mua gộp).
+   *
+   * Quyền: đúng người mua phụ trách vật tư (Material.buyerId, hoặc vật tư chưa gán ai) hoặc
+   * Admin/Sếp - cùng luật lọc của bossApprove(). Áp cho mọi loại vật tư kể cả sắt (số cây thêm là
+   * mua dư, nhập tồn; bảng cắt của Phôi không đổi), sắt chỉ nhận số cây nguyên.
+   */
+  async updateOrderQty(
+    id: string,
+    itemId: string,
+    dto: UpdateOrderQtyDto,
+    actorUserId: string,
+    actorRoles: string[],
+  ): Promise<PurchaseProposalItemResponseDto> {
+    const proposal = await this.findDetailOrThrow(id);
+    const bigItemId = parseBigIntId(itemId);
+    const item = proposal.items.find((it) => it.id === bigItemId);
+    if (!item) {
+      throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
+    }
+    const buyerId = item.material.buyerId;
+    if (!this.isPrivilegedActor(actorRoles) && buyerId && buyerId !== actorUserId) {
+      throw new ForbiddenException(
+        'Vật tư này do người mua khác phụ trách - không sửa số mua được',
+      );
+    }
+    if (!PENDING_APPROVAL_STATUSES.includes(item.status)) {
+      throw new ConflictException(
+        `Vật tư ${item.material.code} đã có phiếu Giám đốc ký - số mua đã khoá, muốn đổi phải làm phiếu thay thế`,
+      );
+    }
+
+    const buyQty = item.buyQty.toNumber();
+    const requested = dto.orderQty ?? null;
+    if (requested !== null && requested < buyQty) {
+      throw new BadRequestException(
+        `Số mua (${requested}) không được nhỏ hơn số cần mua (${buyQty}) - muốn mua ít hơn thì sửa nhu cầu (định mức hoặc số lượng lệnh)`,
+      );
+    }
+    if (requested !== null && item.stockLengthMm != null && !Number.isInteger(requested)) {
+      throw new BadRequestException('Sắt mua theo cây - số mua phải là số nguyên');
+    }
+    // Bằng đúng số cần mua = không có mua dư, lưu null để lượt tính lại đề xuất sau đó (đổi buyQty)
+    // không để lại 1 con số chốt cũ vô nghĩa.
+    const newOrderQty = requested !== null && requested > buyQty ? requested : null;
+    const oldOrderQty = item.orderQty?.toNumber() ?? null;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
+      // Tái kiểm trạng thái trong khoá - bossApprove() có thể vừa chạy xong giữa lúc đọc và lúc khoá.
+      const { count } = await tx.purchaseProposalItem.updateMany({
+        where: { id: item.id, status: { in: PENDING_APPROVAL_STATUSES } },
+        data: { orderQty: newOrderQty },
+      });
+      if (count !== 1) {
+        throw new ConflictException(
+          'Dòng này vừa được duyệt bởi thao tác khác - số mua đã khoá, tải lại trang để xem tình trạng mới nhất',
+        );
+      }
+      return tx.purchaseProposalItem.findUniqueOrThrow({
+        where: { id: item.id },
+        include: ITEM_INCLUDE,
+      });
+    });
+
+    // updateMany không được extension audit tự ghi - ghi tay như bossApprove().
+    await this.auditProposalDecision({
+      action: AuditAction.UPDATE,
+      proposalId: proposal.id,
+      oldValue: { itemId, materialCode: item.material.code, buyQty, orderQty: oldOrderQty },
+      newValue: { itemId, materialCode: item.material.code, buyQty, orderQty: newOrderQty },
+    });
+    this.realtime.publishEntityChanged({
+      entity: 'PURCHASE_PROPOSAL',
+      entityId: proposal.id,
+      action: 'UPDATED',
+      actorId: actorUserId,
+    });
+
+    return this.toItemResponseDto(updated);
+  }
+
+  /**
    * Thủ kho xác nhận nhận hàng - cộng dồn qua nhiều lần (hàng có thể về nhiều đợt).
    *
    * Trước 2026-08-15 (D.c3-receive-race-not-atomic, ghi chú "Lỗ 5" ở changelog): 2 lỗi chồng
@@ -618,6 +707,9 @@ export class PurchaseProposalsService {
     const targetProductionInvoiceId = proposal.productionInvoiceId;
 
     const buyQty = item.buyQty.toNumber();
+    // Số thực mua (2026-11-04, YC7 mục 7.2): người mua có thể đã chốt mua dư hơn số cần mua -
+    // dòng chỉ đóng hồ sơ khi nhận đủ SỐ MUA, không phải số cần mua.
+    const orderQty = effectiveOrderQty(buyQty, item.orderQty?.toNumber());
 
     // Backend tự tính Ô1×Ô2 (2026-10-16, thay cho hệ số quy đổi cố định Material.khoUnitFactor đã
     // xoá) - không tin số đã nhân sẵn từ client. Ô2 mặc định 1 khi vật tư không chênh lệch đơn vị
@@ -731,12 +823,17 @@ export class PurchaseProposalsService {
           // (lỗ #3) - hoặc hàng bị cộng vào giữ chỗ của SKU KHÁC trong cùng PI thay vì SKU thật sự
           // thiếu (lỗ #5). Gọi cho MỌI vật tư (không còn giới hạn riêng sắt) - creditPool() tự xử lý
           // đúng cả ca pool rỗng (tạo dòng mới) lẫn pool có sẵn (cộng vào dòng ưu tiên cao nhất).
-          if (targetProductionInvoiceId != null) {
+          //
+          // 2026-11-04 (bản yêu cầu v8 mục 7.4, 4.12): chỉ cộng phần còn thiếu so với "cần mua"
+          // (buyQty). Phần vượt - mua dư theo số mua đã duyệt, hoặc NCC giao vượt - về tồn CHƯA GIỮ
+          // để lần tính đề xuất sau tự trừ, không bị giam trong giữ chỗ của PI này.
+          const poolQty = receiptQtyForPool(buyQty, locked.receivedQty.toNumber(), incrementQty);
+          if (targetProductionInvoiceId != null && poolQty > 0) {
             await this.stockReservationsService.creditPool(tx, {
               productionInvoiceId: targetProductionInvoiceId,
               materialId: item.materialId,
               warehouseId: materialWarehouseId,
-              qty: incrementQty,
+              qty: poolQty,
               spec: item.spec ?? '',
               // Cùng chiều dài với bút toán nhập kho ở trên - dòng giữ chỗ mới (pool rỗng) phải nằm đúng
               // ngăn chiều dài với tồn thật, không rơi về ngăn 0.
@@ -745,11 +842,11 @@ export class PurchaseProposalsService {
           }
         }
 
-        // Nhận đủ (>=buyQty) -> ĐÚNG DÒNG này đóng hồ sơ PURCHASED ngay, độc lập với item khác
+        // Nhận đủ (>= số mua, xem orderQty ở trên) -> ĐÚNG DÒNG này đóng hồ sơ PURCHASED ngay, độc lập với item khác
         // trong cùng đề xuất (2026-08-25) - trước đây phải đợi TOÀN BỘ items của cả phiếu nhận đủ
         // mới đóng hồ sơ chung. recomputeProposalStatus() bên dưới tự suy ra rollup cấp proposal
         // (chỉ PURCHASED khi MỌI dòng đã PURCHASED, xem purchase-proposal-status.util.ts).
-        const nowFullyReceived = nextReceivedQty >= buyQty;
+        const nowFullyReceived = nextReceivedQty >= orderQty;
         const saved = await tx.purchaseProposalItem.update({
           where: { id: item.id },
           data: {
@@ -1053,6 +1150,8 @@ export class PurchaseProposalsService {
       warehouseCode: item.receiveWarehouseCode ?? item.material.warehouse?.code ?? null,
       actualStock: item.actualStock.toNumber(),
       buyQty: item.buyQty.toNumber(),
+      orderQty: item.orderQty?.toNumber() ?? null,
+      purchaseQty: effectiveOrderQty(item.buyQty.toNumber(), item.orderQty?.toNumber()),
       stockLengthMm: item.stockLengthMm,
       deadline,
       receivedQty: item.receivedQty.toNumber(),

@@ -2204,6 +2204,13 @@ model PurchaseProposalItem {
   /// kiểm tra vật tư) - không tính lại theo thời gian thực (giống buyQty, là số chốt).
   actualStock             Decimal  @default(0) @db.Decimal(14, 4)
   buyQty                  Decimal  @db.Decimal(14, 4)
+  /// "Số mua" người mua chốt (2026-11-04, YC7 mục 7.2): chỉ được TĂNG so với buyQty ("cần mua",
+  /// hệ thống tính) để tròn số tối thiểu NCC bán, Giám đốc duyệt bằng chữ ký trên phiếu. null =
+  /// mua đúng buyQty. Tách cột riêng thay vì sửa thẳng buyQty vì các lượt tính lại đề xuất ghi đè
+  /// buyQty của dòng NEW. Số thực mua = max(buyQty, orderQty) - xem effectiveOrderQty(); phần dư
+  /// so với buyQty là "mua dư", về kho thì vào tồn CHƯA GIỮ (không cộng vào giữ chỗ của PI).
+  /// Khoá (không sửa được) khi dòng đã qua bước "Sếp đã duyệt" (status khác NEW/QUOTING/SUBMITTED/REJECTED).
+  orderQty                Decimal? @db.Decimal(14, 4)
   receivedQty             Decimal  @default(0) @db.Decimal(14, 4)
   /// Cộng dồn "Ô2" (supplierUnitQty) của từng lần nhận - xem PurchaseReceiptLog. Chỉ để đối
   /// chiếu/audit tổng số lượng theo đơn vị bên bán qua các lô, không dùng để tính tồn kho

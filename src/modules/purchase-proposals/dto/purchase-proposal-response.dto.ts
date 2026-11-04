@@ -63,6 +63,11 @@ export class PurchaseProposalItemResponseDto {
   /// (xem purchasing-api.ts).
   @Expose() @ApiProperty() actualStock!: number;
   @Expose() @ApiProperty() buyQty!: number;
+  /// "Số mua" người mua đã chốt (2026-11-04, YC7 mục 7.2) - null = mua đúng buyQty ("cần mua").
+  @Expose() @ApiPropertyOptional({ nullable: true }) orderQty!: number | null;
+  /// Số thực mua = max(buyQty, orderQty) - số in trên phiếu đề xuất và mốc để dòng đóng hồ sơ khi
+  /// nhận đủ. Mua dư = purchaseQty − buyQty.
+  @Expose() @ApiProperty() purchaseQty!: number;
   /// Chiều dài cây phải đặt (mm) - CHỈ có ở nhánh sắt (copy từ CuttingProposalLine.
   /// bestStockLengthMm lúc CuttingProposalsService.approve(), 2026-08-26). null cho nhánh kiểm
   /// tra vật tư (InspectionKhoResultItem) - không có khái niệm chiều dài cây. buyQty vô nghĩa
