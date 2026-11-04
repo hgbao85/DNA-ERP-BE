@@ -32,48 +32,74 @@
 <div class="sub">IT · 04/11/2026 · Dựa trên bản nghiệp vụ <code>lam-ro-12-yeu-cau-thay-doi-ERP-v8-2026-11-04.docx</code> và đối chiếu code BE (<code>D:\DNA-ERP-BE</code>) + FE (<code>D:\DNA-ERP</code>) ngày 04/11.</div>
 
 <div class="box">
-<b>Tóm tắt.</b> Chia làm 11 đợt, tổng khoảng <b>110 ngày công</b> (khoảng 5 tháng) cho 1 lập trình viên (chưa tính thời gian người dùng thử và sửa sau thử). Hai đợt lớn và rủi ro nhất là <b>Mua hàng gộp + nhập 1 lần tự chia</b> (đợt 5) và <b>chia 9 kho</b> (đợt 7). Làm trước các đợt nhỏ, ít rủi ro, là đầu vào cho đợt sau: load cont → mã lệnh + xưởng → mốc và năng lực → vật tư cần về.
+<b>Tóm tắt (bản 2 người, cập nhật 04/11).</b> Đợt 0 đã xong. Phần còn lại (khoảng 97 ngày công, chưa tính máy cắt theo quy cách) chia thành <b>2 luồng chạy song song</b>, mỗi người giữ một mảng code riêng để ít đụng file của nhau:
+<ul>
+  <li><b>Người A – Kế hoạch &amp; Sản xuất</b> (KHSX, QLSX, cắt sắt): khoảng <b>46 ngày công</b>, sau đó nhận thêm máy cắt theo quy cách (8–12 ngày) khi có câu trả lời V7.</li>
+  <li><b>Người B – Mua hàng &amp; Kho</b> (mua, nhận hàng, chứng từ, chia kho, xuất hàng): khoảng <b>51 ngày công</b>.</li>
+</ul>
+Nếu bắt đầu 05/11, cả hai luồng xong khoảng <b>cuối tháng 01/2027</b> (thay vì đầu tháng 04/2027 nếu 1 người làm), chưa tính máy cắt theo quy cách (chờ anh Nhân trả lời V7). Có 4 điểm hai người phải ghép code với nhau (mục 3).
 </div>
 
 <h2>1. Nguyên tắc làm</h2>
 <ul>
   <li>Mỗi đợt giao trọn: thay đổi dữ liệu (migration) → API → màn hình → test tự động → thử trên máy dev → cập nhật trang Hướng dẫn (<code>/guide</code>) → anh thử → mới đưa lên bản chính.</li>
-  <li>Đợt sau không bắt đầu khi đợt trước chưa được anh thử xong, trừ các đợt nhỏ độc lập (đánh dấu <span class="tag g">độc lập</span>).</li>
   <li>Số liệu nghiệp vụ có thể đổi (68 m³, 1,3 cont/ngày, 4 ngày, lưỡi 3 mm, ngưỡng đặc cách 2…) đều để ở <b>Cấu hình</b> (bảng <code>SystemConfig</code> đang có), Admin sửa được.</li>
-  <li>Ước lượng là ngày công 1 người, đã gồm test tự động; sai số ±30% với các đợt lớn.</li>
+  <li>Ước lượng là ngày công 1 người, đã gồm test tự động; sai số ±30% với các đợt lớn. Số ngày ở bảng chưa cộng thời gian ghép code giữa 2 người; mốc ở mục 9 đã cộng thêm khoảng 10% cho phần đó.</li>
 </ul>
 
-<h2>2. Thứ tự và ước lượng</h2>
+<h2>2. Chia việc cho 2 người</h2>
 <div class="wrap">
 <table>
-<tr><th>Đợt</th><th>Nội dung</th><th>Yêu cầu</th><th>Ngày công</th><th>Phụ thuộc</th></tr>
-<tr><td>0</td><td>Việc nhỏ làm ngay: sửa công thức hao hụt mua; đổi nhãn "Nệm" → "Vải nệm"; xác nhận YC3 trên bản chính</td><td>7.9, YC1, YC3</td><td class="n">3</td><td>Không</td></tr>
-<tr><td>1</td><td>Kích thước thùng, load cont</td><td>YC9</td><td class="n">3</td><td>Không</td></tr>
-<tr><td>2</td><td>Mã lệnh = số LSX nhà máy; chọn xưởng cơ khí khi chọn kho đóng gói</td><td>V3-1, YC12 (phần chọn)</td><td class="n">5</td><td>Không</td></tr>
-<tr><td>3</td><td>Bộ mốc mới, 4 mốc neo, kiểm năng lực theo xưởng, cảnh báo</td><td>YC10</td><td class="n">10</td><td>Đợt 1, 2</td></tr>
-<tr><td>4</td><td>Màn "Vật tư cần về"</td><td>YC6</td><td class="n">5</td><td>Đợt 3</td></tr>
-<tr><td>5</td><td>Mua hàng: sửa số mua, chọn NCC + số đơn đặt hàng, đơn gộp, nhập 1 lần tự chia, ưu tiên SKU sớm, đóng phần thiếu, nhận vượt có lý do; kèm chứng từ nhập kho</td><td>YC7, YC8, YC11, YC4 (nhập kho)</td><td class="n">24</td><td>Đợt 3, 4</td></tr>
-<tr><td>6</td><td>Chứng từ xuất kho đợt 1 (xuất sắt, xuất tiêu hao), số phiếu NK/XK, in phiếu, khoá cứng</td><td>YC4</td><td class="n">7</td><td>Đợt 5</td></tr>
-<tr><td>7</td><td>Chia 9 kho (F7), thủ kho theo kho, chuyển mảnh Phôi → Hàn → Sơn bằng phiếu, xuất đan 2 phiếu</td><td>F7, YC12 (phần kho)</td><td class="n">15</td><td>Đợt 2, 6</td></tr>
-<tr><td>8</td><td>Sắt cắt bằng phần mềm: 2 lần tính, chiều dài chuẩn theo kho Phôi, đếm đặc cách, gợi ý chiều dài</td><td>7.12, 7.14, 7.15, 7.17</td><td class="n">9</td><td>Đợt 7</td></tr>
-<tr><td>9</td><td>Sửa mốc mọi giai đoạn, Excel kế hoạch, Sếp duyệt lại</td><td>YC2</td><td class="n">7</td><td>Đợt 3</td></tr>
-<tr><td>10</td><td>Booking / Lịch xuất hàng; chứng từ các loại xuất còn lại (đan, đóng gói, chuyển kho, xuất hàng)</td><td>YC5, YC4 (đợt sau)</td><td class="n">12</td><td>Đợt 1, 6, 7</td></tr>
-<tr><td>11</td><td>Máy cắt theo quy cách (sau khi anh Nhân trả lời V7-1 → V7-4)</td><td>7.16</td><td class="n">8–12</td><td>Đợt 8</td></tr>
-<tr><th></th><th>Tổng</th><th></th><th class="n">≈ 108–112</th><th></th></tr>
+<tr><th>Thứ tự</th><th>Người A – Kế hoạch &amp; Sản xuất</th><th class="n">Ngày</th><th>Người B – Mua hàng &amp; Kho</th><th class="n">Ngày</th></tr>
+<tr><td>1</td><td><b>Đợt 1</b> – Load cont (YC9)</td><td class="n">3</td><td rowspan="2"><b>Đợt 5a–5c</b> – Sửa số mua, chọn NCC + số đơn đặt hàng, đơn mua gộp + in phiếu đề xuất (YC7)</td><td class="n" rowspan="2">13</td></tr>
+<tr><td>2</td><td><b>Đợt 2</b> – Mã lệnh LSX + chọn xưởng (V3-1, YC12 phần chọn) <span class="tag">ghép ①</span></td><td class="n">5</td></tr>
+<tr><td>3</td><td rowspan="2"><b>Đợt 3</b> – Mốc, năng lực, cảnh báo (YC10) <span class="tag">ghép ②</span></td><td class="n" rowspan="2">10</td><td><b>Đợt 5d–5e</b> – Nhập 1 lần tự chia, ưu tiên SKU sớm, chứng từ nhập kho, đóng phần thiếu, nhận vượt (YC8, YC11, YC4 nhập)</td><td class="n">11</td></tr>
+<tr><td>4</td><td><b>Đợt 6</b> – Chứng từ xuất đợt 1, số phiếu NK/XK, in phiếu, bật khoá cứng (YC4)</td><td class="n">7</td></tr>
+<tr><td>5</td><td><b>Đợt 4</b> – Vật tư cần về (YC6)</td><td class="n">5</td><td rowspan="3"><b>Đợt 7</b> – Chia 9 kho, thủ kho theo kho, chuyển mảnh bằng phiếu, xuất đan 2 phiếu (F7, YC12 phần kho) <span class="tag">ghép ③</span></td><td class="n" rowspan="3">15</td></tr>
+<tr><td>6</td><td><b>Đợt 9</b> – Sửa mốc mọi giai đoạn, Excel kế hoạch, Sếp duyệt lại (YC2)</td><td class="n">7</td></tr>
+<tr><td>7</td><td rowspan="2"><b>Đợt 8</b> – Sắt: 2 lần tính, chiều dài chuẩn theo xưởng, đếm đặc cách, gợi ý chiều dài (7.12–7.17)</td><td class="n" rowspan="2">9</td></tr>
+<tr><td>8</td><td rowspan="2"><b>Đợt 10b</b> – Kho TP xác nhận xuất theo booking, trừ tồn thật, bỏ nút xuất cũ, chứng từ các loại xuất còn lại (YC5, YC4 đợt sau)</td><td class="n" rowspan="2">5</td></tr>
+<tr><td>9</td><td><b>Đợt 10a</b> – Booking, Lịch xuất hàng của Sales, chọn hàng theo lệnh (YC5) <span class="tag">ghép ④</span></td><td class="n">7</td></tr>
+<tr><td>Sau</td><td><b>Đợt 11</b> – Máy cắt theo quy cách (7.16), khi có câu trả lời V7</td><td class="n">8–12</td><td>Hỗ trợ người A / sửa lỗi sau khi người dùng thử</td><td></td></tr>
+<tr><th></th><th>Tổng (chưa tính Đợt 11)</th><th class="n">≈ 46</th><th>Tổng</th><th class="n">≈ 51</th></tr>
 </table>
 </div>
-<p>Thay đổi so với thứ tự trong bản v8: (1) gom các việc nhỏ ra Đợt 0; (2) làm YC4 phần nhập kho <b>cùng</b> YC8 vì cả hai viết lại màn nhận hàng; (3) thêm Đợt 8 (sắt) sau khi chia kho, vì chiều dài chuẩn đặt theo từng kho Phôi; (4) YC2 dời sau vì dùng lại phần mốc của Đợt 3.</p>
-
-<h2>3. Chi tiết từng đợt</h2>
-
-<h3>Đợt 0 – Việc nhỏ làm ngay <span class="tag g">độc lập</span></h3>
+<p><b>Cách chia:</b> Người A giữ phần lệnh sản xuất, mốc, cắt sắt (module BE <code>production-invoices</code>, <code>milestone-board</code>, <code>skus</code>, <code>cutting-proposals</code>, <code>daily-jobs</code>; màn FE ProductionPlan, Manufacturing). Người B giữ phần mua hàng và kho (BE <code>purchase-proposals</code>, <code>stock</code>, <code>warehouse-transfers</code>, các luồng xuất kho, <code>uploads</code>; màn FE Purchasing, InboundWarehouse, NhapKhoPage). YC6 tuy là màn của Mua hàng/Kho nhưng giao cho A vì lấy ngày từ bộ mốc A làm.</p>
+<p><b>Hai thay đổi thiết kế để gỡ chờ nhau:</b></p>
 <ul>
-  <li><b>Công thức hao hụt (7.9):</b> <code>consumable-material-purchase.service.ts</code> (~dòng 270) đang tính <code>(cần − tồn) × (1 + hh)</code> → đổi thành <code>cần × (1 + hh) − tồn chưa giữ</code>. Áp cùng công thức cho 2 luồng mua còn lại (định mức cắt theo tỷ lệ, công thức vật tư thành phẩm). Nạp bảng hao hụt mặc định cho vật tư chưa có số (dùng chức năng sửa hao hụt hàng loạt đã có).</li>
-  <li><b>YC1 "Vải nệm":</b> nhóm lựa chọn nệm đã có sẵn (<code>BomOption</code> kind CUSHION), Sales đã chọn 1 dây + 1 nệm mỗi dòng đơn. Chỉ đổi nhãn hiển thị thành "Vải nệm" (khoảng 10 file FE, 2 thông báo lỗi BE, trang Hướng dẫn). Không đổi dữ liệu.</li>
-  <li><b>YC3:</b> kiểm phần nhập số liệu thống kê đang chạy đúng trên bản chính.</li>
+  <li><b>Chiều dài chuẩn sắt đặt theo XƯỞNG</b> (mỗi xưởng có đúng 1 kho Phôi nên cùng ý nghĩa với "theo kho Phôi" trong v8). Người A làm Đợt 8 mà không phải chờ người B chia 9 kho.</li>
+  <li><b>YC5 tách đôi:</b> người A làm booking và màn Sales (10a); người B làm phần kho xác nhận xuất, trừ tồn và chứng từ (10b), dùng lại hạ tầng chứng từ của Đợt 6.</li>
 </ul>
 
-<h3>Đợt 1 – Load cont (YC9)</h3>
+<h2>3. Bốn điểm ghép code giữa 2 người</h2>
+<div class="wrap">
+<table>
+<tr><th>Điểm</th><th>Khi nào</th><th>Ai đưa</th><th>Ai dùng</th><th>Nội dung thống nhất</th></tr>
+<tr><td>①</td><td>Cuối tuần 2</td><td>A (Đợt 2)</td><td>B (in phiếu Đợt 5c, chia kho Đợt 7)</td><td>Hàm lấy <b>mã hiển thị của lệnh</b> (số LSX, chưa có thì mã PI cũ) và <b>danh mục xưởng</b> + cột xưởng ở dòng SKU. A tạo sẵn hàm ngay ngày đầu (tạm trả về mã PI); B dùng hàm đó từ đầu, khi A làm xong thì B không phải sửa gì.</td></tr>
+<tr><td>②</td><td>Tuần 4</td><td>A (Đợt 3)</td><td>B (chia hàng Đợt 5d)</td><td>Hàm <b>ngày cần vật tư theo từng SKU</b> (M1 cho vật tư khung, M3 cho vật tư còn lại). Trước khi A xong, hàm này gọi tạm <code>purchaseDeadlineOf</code> đang có; A đổi ruột hàm, B không phải sửa.</td></tr>
+<tr><td>③</td><td>Tuần 8–9</td><td>B (Đợt 7)</td><td>A (Đợt 8, phần xuất sắt)</td><td>"Xưởng X → kho Phôi nào". Đợt 8 của A tính theo xưởng; khi xuất sắt A dùng kho chung hiện tại cho tới khi B xong.</td></tr>
+<tr><td>④</td><td>Tuần 10</td><td>A (Đợt 10a)</td><td>B (Đợt 10b)</td><td>Bảng booking và dòng hàng theo lệnh. A làm bảng dữ liệu trước (2 ngày đầu của 10a) rồi mới làm màn, để B bắt đầu 10b song song.</td></tr>
+</table>
+</div>
+
+<h2>4. Quy tắc làm chung code</h2>
+<ul>
+  <li><b>Mỗi đợt một nhánh</b> (vd <code>dot-3-moc-nang-luc</code>), gộp vào <code>main</code> (BE) / <code>demo</code> (FE) ít nhất 2–3 ngày một lần, không để nhánh sống quá 1 tuần. Hiện cả hai repo đang commit thẳng lên nhánh chính; làm 2 người thì nên đổi sang cách này.</li>
+  <li><b>Migration:</b> trước khi tạo migration mới, kéo code mới nhất về; không sửa migration người kia đã gộp. Hai migration tạo cùng lúc thì người gộp sau chạy lại <code>prisma migrate dev</code> để kiểm thứ tự.</li>
+  <li><b>File dùng chung</b> (<code>schema.prisma</code>, <code>SystemConfig</code>, sidebar FE, trang Hướng dẫn): sửa gọn trong phần của mình, báo người kia trước khi đụng chỗ đã có.</li>
+  <li><b>DB dev đang dùng chung</b> (bản Prisma trên mạng): ai chạy migration thì báo người kia; dữ liệu thử mỗi người đặt tên có tiền tố riêng để không xoá nhầm của nhau. Nếu được, mỗi người nên có DB dev riêng.</li>
+  <li><b>Bật khoá cứng chứng từ</b> (cuối Đợt 6 của B) phải lên bản chính cùng lúc với phần nhập kho của Đợt 5 (V4-1: mọi kho cùng lúc).</li>
+</ul>
+
+<h2>5. Đợt 0 – đã xong 04/11</h2>
+<ul>
+  <li>Công thức hao hụt mua mới ở cả 3 luồng; nhãn "Vải nệm"; bảng % hao hụt mặc định đã nạp lên DB dev (script <code>prisma/apply-purchase-waste-defaults.ts</code>).</li>
+  <li>Còn: chạy script nạp % trên bản chính; kiểm YC3 trên bản chính.</li>
+</ul>
+
+<h2>6. Chi tiết từng đợt</h2>
+
+<h3>Đợt 1 – Load cont (YC9) <span class="tag">Người A</span></h3>
 <ul>
   <li>Hiện chưa có trường nào cho kích thước thùng. Thêm vào sản phẩm (<code>MfgProduct</code>): dài, rộng, cao (cm), số thùng/bộ (mặc định 1), load cont nhập tay. Để ở sản phẩm chứ không ở bản định mức, vì bản định mức bị khoá sau khi duyệt mà KHSX vẫn phải nhập tay cho SKU cũ.</li>
   <li>Cấu hình: thể tích cont 68 m³.</li>
@@ -81,14 +107,14 @@
   <li>Ghi chú: bản v8 ghi "68 ÷ thể tích thùng"; với bộ nhiều thùng IT chia thêm cho số thùng/bộ – sẽ ghi rõ trong Hướng dẫn.</li>
 </ul>
 
-<h3>Đợt 2 – Mã lệnh LSX + chọn xưởng</h3>
+<h3>Đợt 2 – Mã lệnh LSX + chọn xưởng <span class="tag">Người A</span></h3>
 <ul>
   <li><b>Mã lệnh:</b> hiện tự cấp <code>PI-2026-xxx</code> ở 4 chỗ (tạo lệnh, gộp, cắt riêng, lệnh theo đơn). Thêm cột số LSX (không trùng), tiền tố ở Cấu hình; bắt buộc trước khi gửi duyệt; lệnh gộp hiện số của 2 lệnh gốc; tìm kiếm theo cả hai mã. Giữ mã PI làm khoá nội bộ để không vỡ dữ liệu cũ.</li>
   <li><b>Xưởng cơ khí:</b> chưa có khái niệm này trong hệ thống. Thêm danh mục xưởng (Phú An, Phước An) và cột xưởng ở từng dòng SKU của lệnh. Hộp chọn kho của QLSX (<code>LenhSXPage</code>, API gửi Sếp) thêm ô xưởng + "áp dụng cho tất cả"; bắt buộc đủ 2 ô mới gửi Sếp; lệnh gộp bắt buộc 1 xưởng (11.4); đổi xưởng sau duyệt chỉ khi chưa xuất sắt (12.3, 12.5).</li>
   <li>Phần "xưởng chỉ thấy việc của mình" và "vật tư xuất về kho của xưởng" làm ở Đợt 7.</li>
 </ul>
 
-<h3>Đợt 3 – Mốc và năng lực (YC10)</h3>
+<h3>Đợt 3 – Mốc và năng lực (YC10) <span class="tag">Người A</span></h3>
 <ul>
   <li>Mốc hiện lưu ở <code>ProductionInvoiceItemStage</code> theo từng SKU; công thức "Phú An" chỉ nằm ở FE (<code>phuAnTimeline.ts</code>). Chuyển công thức về BE để cảnh báo và YC6 dùng chung.</li>
   <li>Đổi tên "Đan" → "Nhập đan"; thêm mốc "Chuyền kiểm" (loại công đoạn đã có, chưa có trên bảng mốc). Đề xuất mặc định Nhập đan N+12, Chuyền kiểm N+13, Đóng gói N+14.</li>
@@ -98,14 +124,14 @@
   <li>Cần kiểm thêm khi làm: dữ liệu báo sản lượng có đủ cho Nhập đan và Chuyền kiểm theo ngày không.</li>
 </ul>
 
-<h3>Đợt 4 – Vật tư cần về (YC6)</h3>
+<h3>Đợt 4 – Vật tư cần về (YC6) <span class="tag">Người A</span></h3>
 <ul>
   <li>Hạn chót hiện tính bằng hàm <code>purchaseDeadlineOf</code> theo cả lệnh. Đổi sang M1 (vật tư khung, dây đan, đinh, nút) / M3 (thùng, nệm/vải, phụ kiện, nhãn) theo <b>từng SKU</b> (cần cho YC11).</li>
   <li>Ngày sớm nhất được về = hạn chót − 4 (Cấu hình). Màn mới cho Mua hàng và Kho: Quá hạn / Hôm nay / Theo ngày; badge trên sidebar.</li>
   <li>Bản tin sáng đã có (<code>MORNING_MATERIALS_DIGEST</code>, gửi 7h) → đổi nội dung theo danh sách mới.</li>
 </ul>
 
-<h3>Đợt 5 – Mua hàng gộp + nhập 1 lần tự chia (YC7, YC8, YC11, YC4 nhập kho) <span class="tag r">lớn, rủi ro</span></h3>
+<h3>Đợt 5 – Mua hàng gộp + nhập 1 lần tự chia (YC7, YC8, YC11, YC4 nhập kho) <span class="tag">Người B</span> <span class="tag r">lớn, rủi ro</span></h3>
 <ul>
   <li><b>5a. Sửa số mua (7.2):</b> chưa có API sửa số mua. Thêm: người mua chỉ được tăng, ghi "mua dư"; khoá khi đã tải phiếu ký; "THAY PHIẾU" để sửa lại.</li>
   <li><b>5b. Chọn NCC + Số đơn đặt hàng (4.10):</b> danh mục NCC đã có (<code>Supplier</code>) nhưng dòng mua chưa gắn NCC. Thêm bước chọn NCC bắt buộc; bộ đếm số đơn theo NCC + năm, nạp số cuối năm 2026 (chờ danh sách của chị Nghi, chị Nhàn).</li>
@@ -115,13 +141,13 @@
   <li><b>5e.</b> "Đóng phần thiếu" (7.13); nhận vượt bắt buộc lý do + thống kê (4.12) – hiện BE đã cho nhận vượt, chỉ có hộp hỏi ở FE.</li>
 </ul>
 
-<h3>Đợt 6 – Chứng từ xuất kho đợt 1 (YC4)</h3>
+<h3>Đợt 6 – Chứng từ xuất kho đợt 1 (YC4) <span class="tag">Người B</span></h3>
 <ul>
   <li>Hiện chỉ phiếu chuyển kho có số (<code>CK-năm-NNN</code>); xuất sắt, xuất tiêu hao chưa có số và chưa có ô ảnh. Thêm bảng ảnh chứng từ dùng chung cho mọi loại phiếu; số phiếu NK-yymmdd-001, XK-yymmdd-001, CK-&lt;kho giao&gt;-001; in phiếu theo mẫu <code>PHIEU_NHAP_XUAT_KHO_MAU_MOI_IEA</code>; dòng "Dùng chung" (4.9).</li>
   <li>Khoá cứng bật <b>cùng lúc mọi kho</b> (V4-1), nên phần nhập (Đợt 5) và phần xuất đợt 1 (Đợt 6) đưa lên bản chính cùng một lần.</li>
 </ul>
 
-<h3>Đợt 7 – Chia 9 kho (F7 + YC12 phần kho) <span class="tag r">lớn, rủi ro</span></h3>
+<h3>Đợt 7 – Chia 9 kho (F7 + YC12 phần kho) <span class="tag">Người B</span> <span class="tag r">lớn, rủi ro</span></h3>
 <ul>
   <li>Hiện Phôi-Hàn-Sơn là 1 kho chung (<code>phoi-son-han</code>), kho không có loại, không gắn xưởng. Thêm loại kho + xưởng cho kho; tạo 9 kho đã chốt; gán thủ kho theo tài khoản.</li>
   <li>Vật tư nhập theo nhóm hàng vào đúng kho (danh sách "Hàng theo kho" trong v8); lệnh ở xưởng nào thì sắt và vật tư Phôi-Hàn xuất về kho của xưởng đó; màn xưởng chỉ hiện lệnh của xưởng mình.</li>
@@ -129,67 +155,71 @@
   <li><b>Rủi ro:</b> chuyển tồn kho đang có ở kho chung sang kho mới trên bản chính. Cần chốt ngày chuyển và kiểm kê.</li>
 </ul>
 
-<h3>Đợt 8 – Sắt cắt bằng phần mềm (7.12, 7.14, 7.15, 7.17)</h3>
+<h3>Đợt 8 – Sắt cắt bằng phần mềm (7.12, 7.14, 7.15, 7.17) <span class="tag">Người A</span></h3>
 <ul>
   <li>Hiện phần mềm cắt chạy 1 lần, số cây mua và bảng cắt dùng chung kết quả. Tách 2 lần: lần mua lưỡi 3 mm (Cấu hình), lần bảng cắt lưỡi thật.</li>
-  <li>Bảng mới "chiều dài chuẩn" theo quy cách × kho Phôi, KHSX đặt; bỏ chọn chiều dài theo lệnh; tự dò chiều dài chỉ còn trong nút "Gợi ý chiều dài"; lịch sử đổi + báo Mua hàng.</li>
-  <li>Đếm số lệnh xin đặc cách theo quy cách × kho Phôi từ lần đổi chiều dài gần nhất; từ 2 lệnh báo KHSX + Sếp, cờ đỏ.</li>
+  <li>Bảng mới "chiều dài chuẩn" theo quy cách × xưởng (mỗi xưởng có đúng 1 kho Phôi nên khớp "theo kho Phôi" của v8, không phải chờ Đợt 7), KHSX đặt; bỏ chọn chiều dài theo lệnh; tự dò chiều dài chỉ còn trong nút "Gợi ý chiều dài"; lịch sử đổi + báo Mua hàng.</li>
+  <li>Đếm số lệnh xin đặc cách theo quy cách × xưởng từ lần đổi chiều dài gần nhất; từ 2 lệnh báo KHSX + Sếp, cờ đỏ.</li>
 </ul>
 
-<h3>Đợt 9 – Sửa kế hoạch + Excel (YC2)</h3>
+<h3>Đợt 9 – Sửa kế hoạch + Excel (YC2) <span class="tag">Người A</span></h3>
 <ul>
   <li>Hiện nút "Sửa thời hạn" không bị chặn theo trạng thái ở cả BE lẫn FE. Thêm: lệnh chưa duyệt sửa thẳng; lệnh Sếp đã duyệt thì tạo thay đổi "Chờ Sếp duyệt lại", Sếp duyệt cả lô; không sửa Hạn giao.</li>
   <li>Tải Excel / tải lên với bảng so sánh cũ → mới, báo dòng lỗi; chỉ KHSX; lịch sử + thông báo sau khi Sếp duyệt.</li>
 </ul>
 
-<h3>Đợt 10 – Booking / Lịch xuất hàng (YC5) + chứng từ xuất đợt sau</h3>
+<h3>Đợt 10 – Booking / Lịch xuất hàng (YC5) + chứng từ xuất đợt sau <span class="tag">10a: Người A · 10b: Người B</span></h3>
 <ul>
-  <li>Chưa có gì về booking. Thêm bảng booking và dòng hàng theo lệnh; màn "Lịch xuất hàng" trên sidebar Sales; kho TP xác nhận số thực xuất.</li>
+  <li><b>10a (A):</b> chưa có gì về booking. Thêm bảng booking và dòng hàng theo lệnh (làm trước, điểm ghép ④); màn "Lịch xuất hàng" trên sidebar Sales; chặn nhập vượt số còn lại, tổng m³ so với cont, cảnh báo ngày lấy cont / CUT OFF.</li>
+  <li><b>10b (B):</b> kho TP xem hàng cần đóng theo booking, xác nhận số thực xuất, trừ tồn, cập nhật đã xuất / còn lại của từng đơn.</li>
   <li><b>Lưu ý:</b> nút xuất hàng hiện tại (kho bấm ở <code>WarehouseXuatPage</code>) chỉ tăng "đã giao" mà <b>không trừ tồn kho thành phẩm</b>. Luồng booking mới sẽ trừ tồn thật; bỏ nút cũ.</li>
   <li>Thêm ô ảnh chứng từ cho xuất đan, xuất đóng gói, chuyển kho, xuất hàng.</li>
 </ul>
 
-<h3>Đợt 11 – Máy cắt theo quy cách (7.16)</h3>
+<h3>Đợt 11 – Máy cắt theo quy cách (7.16) <span class="tag">Người A</span></h3>
 <ul>
   <li>Làm sau khi có câu trả lời V7-1 → V7-4 (ghi ở cuối bản v8). Hiện mỗi lần tính chỉ có 1 máy cho cả đợt; chưa có danh sách máy cụ thể; định mức chưa có công đoạn "Lỗ ô van", "Khoan".</li>
 </ul>
 
-<h2>4. Cần chuẩn bị trước</h2>
+<h2>7. Cần chuẩn bị trước</h2>
 <div class="wrap">
 <table>
-<tr><th>Việc</th><th>Ai</th><th>Cần trước đợt</th></tr>
-<tr><td>Số đơn đặt hàng cuối năm 2026 của từng NCC</td><td>Chị Nghi, chị Nhàn</td><td>5</td></tr>
-<tr><td>File mẫu phiếu: <code>PHIEU_DE_XUAT_MAU_TRONG_IEA.xlsx</code>, <code>PHIEU_NHAP_XUAT_KHO_MAU_MOI_IEA</code>, <code>PHIEU_CHUYEN_KHO_NOI_BO_IEA</code> (bản gốc anh Nhân gửi 30/10)</td><td>Anh (gửi IT)</td><td>5</td></tr>
-<tr><td>Tiền tố số LSX theo từng khách/dòng hàng (vd MY, GP)</td><td>KHSX</td><td>2</td></tr>
-<tr><td>Kích thước thùng cho các SKU đang chạy</td><td>KHSX / NV định mức</td><td>3 (để có load cont)</td></tr>
-<tr><td>Tài khoản thủ kho cho từng kho trong 9 kho</td><td>Admin</td><td>7</td></tr>
-<tr><td>Ngày chuyển tồn sang 9 kho + kiểm kê</td><td>Anh Nhân, thủ kho</td><td>7</td></tr>
+<tr><th>Việc</th><th>Ai</th><th>Cần trước (đợt, người, khoảng tuần)</th></tr>
+<tr><td>Số đơn đặt hàng cuối năm 2026 của từng NCC</td><td>Chị Nghi, chị Nhàn</td><td>5b – B – tuần 2</td></tr>
+<tr><td>File mẫu phiếu: <code>PHIEU_DE_XUAT_MAU_TRONG_IEA.xlsx</code>, <code>PHIEU_NHAP_XUAT_KHO_MAU_MOI_IEA</code>, <code>PHIEU_CHUYEN_KHO_NOI_BO_IEA</code> (bản gốc anh Nhân gửi 30/10)</td><td>Anh (gửi IT)</td><td>5c – B – tuần 2</td></tr>
+<tr><td>Tiền tố số LSX theo từng khách/dòng hàng (vd MY, GP)</td><td>KHSX</td><td>2 – A – tuần 1</td></tr>
+<tr><td>Kích thước thùng cho các SKU đang chạy</td><td>KHSX / NV định mức</td><td>3 – A – tuần 2 (để có load cont)</td></tr>
+<tr><td>Tài khoản thủ kho cho từng kho trong 9 kho</td><td>Admin</td><td>7 – B – tuần 7</td></tr>
+<tr><td>Ngày chuyển tồn sang 9 kho + kiểm kê</td><td>Anh Nhân, thủ kho</td><td>7 – B – tuần 8</td></tr>
 <tr><td>Trả lời V7-1 → V7-4 (máy cắt), số máy mỗi xưởng</td><td>Anh Nhân</td><td>11 (riêng câu "Lỗ ô van" nên sớm)</td></tr>
 </table>
 </div>
 
-<h2>5. Rủi ro chính</h2>
+<h2>8. Rủi ro chính</h2>
 <div class="box warn">
 <ul>
   <li><b>Giữ chỗ tồn theo SKU (Đợt 5):</b> đổi khoá giữ chỗ từ "theo lệnh" sang "theo SKU trong lệnh" chạm vào mọi luồng xuất kho. Làm có test cho từng luồng, thử trên dữ liệu thật trước.</li>
   <li><b>Chuyển tồn sang 9 kho (Đợt 7):</b> sai là lệch tồn toàn nhà máy. Làm script chuyển chạy thử nhiều lần trên bản sao dữ liệu, chốt ngày, kiểm kê sau khi chuyển.</li>
   <li><b>Khoá cứng chứng từ mọi kho cùng lúc:</b> ngày đầu thủ kho dễ bị chặn. Cần hướng dẫn và có người trực hỗ trợ ngày bật.</li>
   <li><b>Xuất hàng hiện không trừ tồn thành phẩm:</b> khi chuyển sang booking, số tồn thành phẩm sẽ thay đổi so với hiện nay. Nên kiểm kê kho TP trước Đợt 10.</li>
+  <li><b>Hai người cùng sửa 1 file lớn</b> (<code>schema.prisma</code>, <code>production-invoices.service.ts</code>): dễ đụng nhau khi gộp. Gộp nhánh thường xuyên và giữ đúng phần việc đã chia ở mục 2.</li>
   <li><b>Phạm vi đổi trong lúc làm:</b> các quyết định đã đổi qua 6 vòng. Mỗi đợt bám bản v8; quyết định mới thì cập nhật v8 trước rồi mới sửa code.</li>
 </ul>
 </div>
 
-<h2>6. Mốc dự kiến (nếu bắt đầu 05/11, 1 người, 5,5 ngày/tuần)</h2>
+<h2>9. Mốc dự kiến (bắt đầu 05/11, 2 người, 5,5 ngày/tuần)</h2>
 <div class="wrap">
 <table>
-<tr><th>Giai đoạn</th><th>Đợt</th><th>Dự kiến xong</th></tr>
-<tr><td>Nền và kế hoạch</td><td>0–4</td><td>đầu tháng 12/2026</td></tr>
-<tr><td>Mua hàng + chứng từ (bật khoá cứng)</td><td>5–6</td><td>giữa tháng 01/2027</td></tr>
-<tr><td>9 kho + sắt</td><td>7–8</td><td>cuối tháng 02/2027 (đã tính khoảng 1 tuần nghỉ Tết)</td></tr>
-<tr><td>Sửa kế hoạch, booking, máy cắt</td><td>9–11</td><td>đầu tháng 04/2027</td></tr>
+<tr><th>Tuần</th><th>Người A</th><th>Người B</th><th>Có thể đưa lên bản chính</th></tr>
+<tr><td>1–2 (đến ~18/11)</td><td>Đợt 1, Đợt 2</td><td>Đợt 5a–5c</td><td>Load cont, mã LSX, chọn xưởng</td></tr>
+<tr><td>3–4 (đến ~02/12)</td><td>Đợt 3</td><td>Đợt 5a–5c (tiếp), 5d</td><td>Mốc, năng lực, cảnh báo</td></tr>
+<tr><td>5–6 (đến ~16/12)</td><td>Đợt 4, bắt đầu Đợt 9</td><td>Đợt 5d–5e, Đợt 6</td><td>Vật tư cần về; mua gộp + chứng từ + bật khoá cứng (cùng 1 lần)</td></tr>
+<tr><td>7–9 (đến ~06/01)</td><td>Đợt 9, Đợt 8</td><td>Đợt 7</td><td>Sửa kế hoạch + Excel; 9 kho (cần kiểm kê)</td></tr>
+<tr><td>10–11 (đến ~23/01/2027)</td><td>Đợt 8 (tiếp), Đợt 10a</td><td>Đợt 10b</td><td>Sắt; Booking</td></tr>
+<tr><td>Sau</td><td>Đợt 11 khi có câu trả lời V7</td><td>Sửa lỗi sau khi người dùng thử</td><td>Máy cắt theo quy cách</td></tr>
 </table>
 </div>
-<p class="sub">Mốc chỉ để tham khảo; sẽ cập nhật sau khi xong Đợt 0–1 và đo được tốc độ thật.</p>
+<p class="sub">Tết 2027 khoảng 06/02, nên việc chuyển sang 9 kho nên xong và kiểm kê trước giữa tháng 01. Mốc sẽ cập nhật sau 2 tuần đầu khi đo được tốc độ thật của cả hai người.</p>
 </main>
 </body>
 </html>
