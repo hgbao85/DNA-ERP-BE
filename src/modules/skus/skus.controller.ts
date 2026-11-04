@@ -16,13 +16,14 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
-import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
+import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { CreateSkuDto } from './dto/create-sku.dto';
 import { UpdateSkuDto } from './dto/update-sku.dto';
+import { UpdateContainerLoadDto } from './dto/update-container-load.dto';
 import { RejectBossDto } from './dto/reject-boss.dto';
 import { ReviewQuotaDto } from './dto/review-quota.dto';
 import { UpdateQuotaDto } from './dto/update-quota.dto';
@@ -83,6 +84,23 @@ export class SkusController {
   @RequirePermissions(CREATE)
   update(@Param('id') id: string, @Body() dto: UpdateSkuDto) {
     return this.skusService.update(id, dto);
+  }
+
+  // Phần A – Đợt 1 (YC9): thùng + load cont của SKU. Sửa được ở MỌI trạng thái định mức (MfgProduct không bị khoá BOM).
+  // Không thêm quyền mới: SKU:VIEW + vai trò NV định mức chi tiết / KHSX / Admin (RequireRole là OR, không tự cho Admin qua).
+  @Patch(':id/container-load')
+  @RequirePermissions(VIEW)
+  @RequireRole(
+    DEFAULT_ROLES.ADMIN,
+    BUSINESS_ROLES.PRODUCTION_PLANNER,
+    BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF,
+  )
+  updateContainerLoad(
+    @Param('id') id: string,
+    @Body() dto: UpdateContainerLoadDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.skusService.updateContainerLoad(id, dto, userId);
   }
 
   @Delete(':id')

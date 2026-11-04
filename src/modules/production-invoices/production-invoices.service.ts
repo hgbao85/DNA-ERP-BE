@@ -57,6 +57,7 @@ import { PackagingResponseDto } from './dto/packaging-response.dto';
 import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-response.dto';
 import { ProductionInvoiceResponseDto } from './dto/production-invoice-response.dto';
 import { RecordPackagingDto } from './dto/record-packaging.dto';
+import { toContainerLoadDto } from '../../common/dto/container-load.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { SolverOverrideDto } from './dto/solver-override.dto';
 import { TransferCheckDefectResponseDto } from './dto/transfer-check-defect-response.dto';
@@ -2641,6 +2642,7 @@ export class ProductionInvoicesService {
       mfgProductId: item.mfgProductId.toString(),
       factoryCode: item.mfgProduct.factoryCode,
       productName: item.mfgProduct.name,
+      containerLoad: toContainerLoadDto(item.mfgProduct),
       productVariantId: item.productVariantId?.toString() ?? null,
       colorCode: item.productVariant?.colorCode ?? null,
       wireMaterial: item.wireMaterial ? toMaterialChoiceRef(item.wireMaterial) : null,
