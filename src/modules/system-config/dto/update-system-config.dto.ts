@@ -258,4 +258,16 @@ export class UpdateSystemConfigDto {
   @Min(0)
   @Max(100)
   purchaseOverReceiptTolerancePercent?: number;
+
+  @ApiPropertyOptional({
+    example: 68,
+    description:
+      'Phần A – Đợt 1 (YC9): thể tích 1 cont (m³) dùng tính load cont của SKU. 1-200, tối đa 2 số lẻ. ' +
+      'Đổi giá trị thì load cont lưu sẵn trên mọi SKU có thùng/load cont nhập tay được tính lại.',
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(1)
+  @Max(200)
+  containerVolumeM3?: number;
 }

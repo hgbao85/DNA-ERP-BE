@@ -32,6 +32,8 @@ import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { computeContainerLoad } from '../../common/utils/container-load.util';
+import { ContainerLoadDto, toContainerLoadDto } from '../../common/dto/container-load.dto';
 import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
@@ -43,6 +45,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType, SkuNotificationParams } from '../notifications/notification-types';
 import { CreateSkuDto } from './dto/create-sku.dto';
 import { UpdateSkuDto } from './dto/update-sku.dto';
+import { UpdateContainerLoadDto } from './dto/update-container-load.dto';
 import { SkuResponseDto } from './dto/sku-response.dto';
 import {
   SkuDetailReviewResponseDto,
@@ -277,6 +280,48 @@ export class SkusService {
 
   async findOne(id: string): Promise<SkuResponseDto> {
     return this.toResponseDtoWithQuota(await this.findOneOrThrow(id));
+  }
+
+  /**
+   * Phần A – Đợt 1 (YC9): ghi kích thước thùng / số thùng-bộ / load cont nhập tay của SKU (MfgProduct) và tính + LƯU SẴN
+   * boxVolumeM3, loadContFormula, loadCont (mapper chỉ đọc cột, không đọc SystemConfig). undefined = giữ, null = xoá. KHÔNG chặn
+   * theo trạng thái PlanForm/BOM - thùng không thuộc BOM nên trigger khoá BOM không đụng tới.
+   */
+  async updateContainerLoad(
+    id: string,
+    dto: UpdateContainerLoadDto,
+    actorUserId: string,
+  ): Promise<ContainerLoadDto> {
+    const pf = await this.findOneOrThrow(id);
+    const cur = pf.mfgProduct;
+    const merged = {
+      boxLengthCm:
+        dto.boxLengthCm === undefined ? (cur.boxLengthCm?.toNumber() ?? null) : dto.boxLengthCm,
+      boxWidthCm:
+        dto.boxWidthCm === undefined ? (cur.boxWidthCm?.toNumber() ?? null) : dto.boxWidthCm,
+      boxHeightCm:
+        dto.boxHeightCm === undefined ? (cur.boxHeightCm?.toNumber() ?? null) : dto.boxHeightCm,
+      boxesPerSet: dto.boxesPerSet ?? cur.boxesPerSet,
+      loadContManual: dto.loadContManual === undefined ? cur.loadContManual : dto.loadContManual,
+    };
+    const config = await this.prisma.systemConfig.findUniqueOrThrow({ where: { id: 1 } });
+    const calc = computeContainerLoad(merged, config.containerVolumeM3.toNumber());
+
+    // Lịch sử sửa: MfgProduct nằm trong AUDITED_MODELS của audit extension Prisma (src/prisma/extensions/
+    // audit-log.extension.ts) - lệnh update dưới TỰ ghi AuditLog cũ/mới; không gọi auditEvent tay (sẽ thành 2 dòng).
+    const updated = await this.prisma.mfgProduct.update({
+      where: { id: pf.mfgProductId },
+      data: {
+        ...merged,
+        boxVolumeM3: calc.boxVolumeM3,
+        loadContFormula: calc.loadContFormula,
+        loadCont: calc.loadCont,
+        containerLoadUpdatedAt: new Date(),
+        containerLoadUpdatedById: actorUserId,
+      },
+    });
+    // Hợp đồng với FE (src/types/containerLoad.ts): route trả đúng khối ContainerLoad, không trả cả SKU.
+    return toContainerLoadDto(updated);
   }
 
   /**
@@ -2150,6 +2195,7 @@ export class SkusService {
       mfgProductId: pf.mfgProductId.toString(),
       factoryCode: pf.mfgProduct.factoryCode,
       productName: pf.mfgProduct.name,
+      containerLoad: toContainerLoadDto(pf.mfgProduct),
       customerName: pf.customerName ?? pf.salesOrder?.customer.name ?? null,
       imageUrl: pf.imageUrl,
       productionInvoiceId: pf.productionInvoiceId?.toString() ?? null,

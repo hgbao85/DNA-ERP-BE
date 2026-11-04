@@ -27,6 +27,7 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { CreateSalesOrderItemDto } from './dto/create-sales-order-item.dto';
 import { SalesOrderResponseDto } from './dto/sales-order-response.dto';
+import { toContainerLoadDto } from '../../common/dto/container-load.dto';
 import { SalesOrderItemResponseDto } from './dto/sales-order-item-response.dto';
 import { ShipSalesOrderItemDto } from './dto/ship-sales-order-item.dto';
 import { UpdateSalesOrderDto } from './dto/update-sales-order.dto';
@@ -884,6 +885,7 @@ export class SalesOrdersService {
       mfgProductId: item.mfgProductId.toString(),
       factoryCode: item.mfgProduct.factoryCode,
       skuName: item.skuName,
+      containerLoad: toContainerLoadDto(item.mfgProduct),
       totalQty: item.totalQty,
       shippedQty: item.shippedQty,
       status,

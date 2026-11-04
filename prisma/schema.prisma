@@ -419,6 +419,11 @@ model SystemConfig {
   /// không bị giới hạn. Theo từng môi trường.
   floorAllowedIps String[] @default([])
 
+  // Phần A – Đợt 1 (YC9): thùng + load cont
+  /// Thể tích 1 cont (m³) dùng tính load cont của SKU. Mặc định 68 (cont 40HC); Admin sửa qua PUT /system-config -
+  /// đổi thì load cont lưu sẵn trên mfg_products được tính lại trong cùng transaction.
+  containerVolumeM3 Decimal @default(68) @db.Decimal(6, 2)
+
   updatedAt DateTime @updatedAt
 
   @@map("system_config")
@@ -770,6 +775,24 @@ model MfgProduct {
   factoryCode String
   name        String
   description String?
+
+  // Phần A – Đợt 1 (YC9): thùng + load cont
+  /// Kích thước 1 thùng (cm, 1 số lẻ). Thiếu 1 trong 3 thì không tính được load cont theo công thức.
+  boxLengthCm            Decimal? @db.Decimal(7, 1)
+  boxWidthCm             Decimal? @db.Decimal(7, 1)
+  boxHeightCm            Decimal? @db.Decimal(7, 1)
+  /// Số thùng của 1 bộ (mặc định 1).
+  boxesPerSet            Int      @default(1)
+  /// Load cont nhập tay - có thì thắng công thức.
+  loadContManual         Int?
+  /// Thể tích 1 thùng (m³) - LƯU SẴN lúc ghi kích thước / khi Admin đổi thể tích cont, để mapper không phải đọc SystemConfig.
+  boxVolumeM3            Decimal? @db.Decimal(10, 4)
+  /// ⌊thể tích cont ÷ (thể tích thùng × số thùng/bộ)⌋ - lưu sẵn như trên.
+  loadContFormula        Int?
+  /// Load cont hiệu lực = loadContManual ?? loadContFormula - lưu sẵn như trên.
+  loadCont               Int?
+  containerLoadUpdatedAt DateTime?
+  containerLoadUpdatedById String?
 
   variants               ProductVariant[]
   pieces                 Piece[]

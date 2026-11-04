@@ -49,6 +49,9 @@ export class SystemConfigResponseDto {
   /** Mạng công ty được phép đăng nhập (công nhân); rỗng = không giới hạn. */
   @Expose() @ApiProperty({ type: [String] }) floorAllowedIps!: string[];
 
+  /** Thể tích 1 cont (m³) tính load cont của SKU - mặc định 68. */
+  @Expose() @ApiProperty() containerVolumeM3!: number;
+
   @Expose() @ApiProperty() updatedAt!: Date;
 
   constructor(partial: Partial<SystemConfigResponseDto>) {

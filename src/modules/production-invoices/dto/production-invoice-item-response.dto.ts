@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Exclude, Expose } from 'class-transformer';
+import { Exclude, Expose, Type } from 'class-transformer';
+import { ContainerLoadDto } from '../../../common/dto/container-load.dto';
 import {
   CuttingProposalStatus,
   ProdApprovalStatus,
@@ -33,6 +34,11 @@ export class ProductionInvoiceItemResponseDto {
   @Expose() @ApiProperty() mfgProductId!: string;
   @Expose() @ApiProperty() factoryCode!: string;
   @Expose() @ApiProperty() productName!: string;
+  /** Phần A – Đợt 1 (YC9): thùng + load cont của SKU. */
+  @Expose()
+  @Type(() => ContainerLoadDto)
+  @ApiPropertyOptional({ type: ContainerLoadDto, nullable: true })
+  containerLoad!: ContainerLoadDto | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productVariantId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) colorCode!: string | null;
   /** Loại dây (mã SHT)/loại nệm Sales chọn cho dòng này - null khi SKU không có lựa chọn. */

@@ -8,6 +8,8 @@ describe('SystemConfigService', () => {
   let service: SystemConfigService;
   let prisma: {
     systemConfig: { findUnique: jest.Mock; update: jest.Mock };
+    mfgProduct: { findMany: jest.Mock; update: jest.Mock };
+    $transaction: jest.Mock;
     user: { findUnique: jest.Mock };
   };
   let notifications: { emit: jest.Mock };
@@ -47,6 +49,7 @@ describe('SystemConfigService', () => {
     solverMergeWindowDays: 3,
     solverMergeMaxSkus: 5,
     purchaseOverReceiptTolerancePercent: mockDecimal(0),
+    containerVolumeM3: mockDecimal(68),
     floorPublicUrl: null,
     floorAllowedIps: [],
     updatedAt: new Date('2026-01-01'),
@@ -55,6 +58,8 @@ describe('SystemConfigService', () => {
   beforeEach(() => {
     prisma = {
       systemConfig: { findUnique: jest.fn(), update: jest.fn() },
+      mfgProduct: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
       user: {
         findUnique: jest
           .fn()
@@ -300,6 +305,88 @@ describe('SystemConfigService', () => {
     });
   });
   // ─── KHSX tự đổi ngưỡng hao hụt mặc định (2026-09-30) ──────────────────────────────────────
+  describe('Phần A – Đợt 1 (YC9): thể tích cont', () => {
+    const product = (id: bigint, over: Record<string, unknown> = {}) => ({
+      id,
+      boxLengthCm: mockDecimal(85),
+      boxWidthCm: mockDecimal(80),
+      boxHeightCm: mockDecimal(100),
+      boxesPerSet: 1,
+      loadContManual: null,
+      ...over,
+    });
+
+    it('đổi thể tích cont -> tính lại load cont mọi MfgProduct có thùng/nhập tay, CÙNG transaction', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        containerVolumeM3: mockDecimal(34),
+      });
+      prisma.mfgProduct.findMany.mockResolvedValue([
+        product(1n),
+        product(2n, { boxesPerSet: 2 }),
+        product(3n, { boxLengthCm: null, boxWidthCm: null, boxHeightCm: null, loadContManual: 9 }),
+      ]);
+
+      const result = await service.update({ containerVolumeM3: 34 } as any);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(result.containerVolumeM3).toBe(34);
+      const calls = prisma.mfgProduct.update.mock.calls as [
+        { where: { id: bigint }; data: Record<string, unknown> },
+      ][];
+      expect(calls).toHaveLength(3);
+      expect(calls[0][0]).toEqual({
+        where: { id: 1n },
+        data: { boxVolumeM3: 0.68, loadContFormula: 50, loadCont: 50 },
+      });
+      expect(calls[1][0].data).toEqual({ boxVolumeM3: 0.68, loadContFormula: 25, loadCont: 25 });
+      // Chỉ có số nhập tay: công thức null, load cont = số nhập tay.
+      expect(calls[2][0].data).toEqual({ boxVolumeM3: null, loadContFormula: null, loadCont: 9 });
+    });
+
+    it('chỉ chọn MfgProduct có ít nhất 1 cột thùng hoặc loadContManual', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        containerVolumeM3: mockDecimal(34),
+      });
+      await service.update({ containerVolumeM3: 34 } as any);
+      expect(prisma.mfgProduct.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            OR: [
+              { boxLengthCm: { not: null } },
+              { boxWidthCm: { not: null } },
+              { boxHeightCm: { not: null } },
+              { loadContManual: { not: null } },
+            ],
+          },
+        }),
+      );
+    });
+
+    it('KHÔNG tính lại khi thể tích cont không đổi (hoặc không gửi)', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue(seededConfig);
+
+      await service.update({ containerVolumeM3: 68 } as any);
+      await service.update({ companyName: 'DNA Steel 2' });
+
+      expect(prisma.mfgProduct.findMany).not.toHaveBeenCalled();
+      expect(prisma.mfgProduct.update).not.toHaveBeenCalled();
+    });
+
+    it('getPlanningParams trả thể tích cont dạng number; 404 khi chưa seed', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      await expect(service.getPlanningParams()).resolves.toMatchObject({ containerVolumeM3: 68 });
+      expect(prisma.systemConfig.findUnique).toHaveBeenCalledWith({ where: { id: 1 } });
+
+      prisma.systemConfig.findUnique.mockResolvedValue(null);
+      await expect(service.getPlanningParams()).rejects.toThrow(NotFoundException);
+    });
+  });
+
   describe('cutting defaults (KHSX đổi ngưỡng hao hụt mặc định)', () => {
     it('getCuttingDefaults trả đúng số hiện tại, dạng number (không phải Decimal)', async () => {
       prisma.systemConfig.findUnique.mockResolvedValue({

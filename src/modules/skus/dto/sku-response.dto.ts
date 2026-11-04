@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose, Type } from 'class-transformer';
+import { ContainerLoadDto } from '../../../common/dto/container-load.dto';
 import { PlanFormStatus } from '../../../generated/prisma/client';
 import { SkuDetailReviewResponseDto, SkuManhReviewResponseDto } from './sku-review-response.dto';
 
@@ -14,6 +15,11 @@ export class SkuResponseDto {
   @Expose() @ApiProperty() mfgProductId!: string;
   @Expose() @ApiProperty() factoryCode!: string;
   @Expose() @ApiProperty() productName!: string;
+  /** Phần A – Đợt 1 (YC9): thùng + load cont của SKU. */
+  @Expose()
+  @Type(() => ContainerLoadDto)
+  @ApiPropertyOptional({ type: ContainerLoadDto, nullable: true })
+  containerLoad!: ContainerLoadDto | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) customerName!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) imageUrl!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceId!: string | null;

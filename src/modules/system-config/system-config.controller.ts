@@ -21,6 +21,13 @@ export class SystemConfigController {
     private readonly configService: ConfigService<AppConfig, true>,
   ) {}
 
+  // Không gắn RequirePermissions: PermissionsGuard cho qua khi route không khai quyền, còn JWT guard toàn cục vẫn bắt đăng nhập -
+  // nên MỌI người đã đăng nhập đọc được (FE xem trước load cont ở màn nhập thùng).
+  @Get('planning-params')
+  getPlanningParams() {
+    return this.systemConfigService.getPlanningParams();
+  }
+
   @Get()
   @RequirePermissions({ module: PERMISSION_MODULES.SYSTEM_CONFIG, action: PermissionAction.VIEW })
   findOne() {
