@@ -4,6 +4,16 @@
   "sourceRoot": "src",
   "compilerOptions": {
     "deleteOutDir": true,
-    "assets": [{ "include": "../prisma/**/*", "outDir": "dist/prisma", "watchAssets": true }]
+    "assets": [
+      {
+        "include": "../prisma/**/*",
+        "outDir": "dist/prisma",
+        "watchAssets": true
+      },
+      {
+        "include": "modules/purchase-proposals/templates/*.xlsx",
+        "watchAssets": true
+      }
+    ]
   }
 }

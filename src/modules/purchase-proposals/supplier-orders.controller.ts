@@ -11,6 +11,7 @@ import {
   CancelSupplierOrderDto,
   CreateSupplierOrderDto,
   ListSupplierOrdersQueryDto,
+  ReviseSupplierOrderDto,
   SetSupplierOrderCounterDto,
 } from './dto/supplier-order.dto';
 import { SupplierOrdersService } from './supplier-orders.service';
@@ -86,6 +87,25 @@ export class SupplierOrdersController {
     @CurrentUser('roles') roles: string[],
   ) {
     return this.supplierOrdersService.cancel(id, dto.reason, userId, roles);
+  }
+
+  /** File phiếu đề xuất .xlsx theo mẫu (base64 trong envelope JSON). */
+  @Get(':id/print')
+  @RequirePermissions(VIEW)
+  print(@Param('id') id: string) {
+    return this.supplierOrdersService.print(id);
+  }
+
+  /** "THAY PHIẾU" - đơn đã ký về chờ duyệt để gỡ dòng / sửa số mua, in phiếu mới cùng số. */
+  @Post(':id/revise')
+  @RequirePermissions(UPDATE)
+  revise(
+    @Param('id') id: string,
+    @Body() dto: ReviseSupplierOrderDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.supplierOrdersService.revise(id, dto.reason, userId, roles);
   }
 
   /** "Sếp đã duyệt" theo đơn - tải phiếu Giám đốc đã ký cho đúng đơn này. */

@@ -30,6 +30,8 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       groupBy: jest.Mock;
     };
     supplierOrderCounter: { findUnique: jest.Mock; findMany: jest.Mock; upsert: jest.Mock };
+    stockQuant: { groupBy: jest.Mock };
+    purchaseProposal: { update: jest.Mock };
     auditLog: { create: jest.Mock };
     $queryRaw: jest.Mock;
     $executeRaw: jest.Mock;
@@ -45,8 +47,12 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
     supplierOrderId: null,
     buyQty: decimal(6),
     orderQty: null,
+    receivedQty: decimal(0),
     stockLengthMm: null,
-    material: { code: 'KHI-CO2', name: 'Khí CO2', unit: 'bình', buyerId: 'buyer-1' },
+    spec: null,
+    materialId: 30n,
+    material: { code: 'KHI-CO2', name: 'Khí CO2', unit: 'bình', buyerId: 'buyer-1', spec: null },
+    proposal: { productionInvoice: { code: 'PI-2026-031' } },
     ...overrides,
   });
   const order = (overrides: Record<string, unknown> = {}) => ({
@@ -60,7 +66,10 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
     approvedAt: null,
     cancelledAt: null,
     cancelReason: null,
-    createdAt: new Date(),
+    revision: 0,
+    revisedAt: null,
+    reviseReason: null,
+    createdAt: new Date('2026-11-04T03:00:00Z'),
     supplier,
     createdBy: { firstName: 'Nghi', lastName: 'Trần' },
     items: [pendingItem({ supplierOrderId: 90n })],
@@ -90,6 +99,9 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
         upsert: jest.fn(),
       },
       auditLog: { create: jest.fn() },
+      stockQuant: { groupBy: jest.fn().mockResolvedValue([]) },
+      // recomputeProposalStatus() sau THAY PHIẾU: đọc status mọi dòng rồi ghi rollup lên đề xuất.
+      purchaseProposal: { update: jest.fn() },
       // Mặc định: bộ đếm trả số tiếp theo 53; khoá dòng đơn trả DRAFT.
       $queryRaw: jest.fn().mockResolvedValue([{ lastSeq: 53, status: SupplierOrderStatus.DRAFT }]),
       $executeRaw: jest.fn().mockResolvedValue(0),
@@ -280,6 +292,102 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       prisma.supplierOrder.aggregate.mockResolvedValueOnce({ _max: { seq: 60 } });
       await expect(service.setCounter('7', 2026, 52)).rejects.toThrow(BadRequestException);
       expect(prisma.supplierOrderCounter.upsert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('revise - THAY PHIẾU (bản v8 mục 7.2, 7.11)', () => {
+    const approved = (items: unknown[]) =>
+      order({ status: SupplierOrderStatus.APPROVED, approvalFileUrl: 'https://f/old.pdf', items });
+
+    it('đơn đã ký về DRAFT, revision + 1; chỉ dòng chưa nhận quay về chờ duyệt', async () => {
+      prisma.supplierOrder.findUnique.mockResolvedValue(
+        approved([
+          pendingItem({ id: 400n, status: PurchaseProposalStatus.PURCHASING }),
+          pendingItem({
+            id: 401n,
+            status: PurchaseProposalStatus.PURCHASING,
+            receivedQty: decimal(2),
+          }),
+        ]),
+      );
+      prisma.purchaseProposalItem.findMany.mockResolvedValue([
+        { status: PurchaseProposalStatus.NEW },
+        { status: PurchaseProposalStatus.PURCHASING },
+      ]);
+
+      await service.revise('90', 'Bỏ bớt 1 dòng', 'buyer-1', ['PURCHASER']);
+
+      expect(prisma.supplierOrder.updateMany).toHaveBeenCalledWith({
+        where: { id: 90n, status: SupplierOrderStatus.APPROVED },
+        data: expect.objectContaining({
+          status: SupplierOrderStatus.DRAFT,
+          revision: { increment: 1 },
+          reviseReason: 'Bỏ bớt 1 dòng',
+          approvalFileUrl: null,
+        }) as unknown,
+      });
+      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [400n] }, status: PurchaseProposalStatus.PURCHASING, receivedQty: 0 },
+        data: expect.objectContaining({
+          status: PurchaseProposalStatus.NEW,
+          approvalFileUrl: null,
+        }) as unknown,
+      });
+    });
+
+    it('đơn chưa ký thì không cần thay phiếu; mọi dòng đã nhận thì không còn gì để thay', async () => {
+      await expect(service.revise('90', 'x', 'buyer-1', ['PURCHASER'])).rejects.toThrow(
+        ConflictException,
+      );
+
+      prisma.supplierOrder.findUnique.mockResolvedValueOnce(
+        approved([
+          pendingItem({ status: PurchaseProposalStatus.PURCHASING, receivedQty: decimal(6) }),
+        ]),
+      );
+      await expect(service.revise('90', 'x', 'buyer-1', ['PURCHASER'])).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('sau thay phiếu: dòng đã nhận một phần không gỡ được, không huỷ được cả đơn', async () => {
+      prisma.supplierOrder.findUnique.mockResolvedValue(
+        order({
+          revision: 1,
+          items: [
+            pendingItem({ id: 400n }),
+            pendingItem({
+              id: 401n,
+              status: PurchaseProposalStatus.PURCHASING,
+              receivedQty: decimal(2),
+            }),
+          ],
+        }),
+      );
+
+      await expect(service.removeItem('90', '401', 'buyer-1', ['PURCHASER'])).rejects.toThrow(
+        ConflictException,
+      );
+      await expect(service.cancel('90', 'x', 'buyer-1', ['PURCHASER'])).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('print', () => {
+    it('trả file .xlsx (base64) đặt tên theo NCC + số đơn', async () => {
+      const res = await service.print('90');
+
+      expect(res.fileName).toBe('phieu-de-xuat-Kim Phát-53-2026.xlsx');
+      expect(Buffer.from(res.base64, 'base64').subarray(0, 2).toString()).toBe('PK');
+    });
+
+    it('không in đơn đã huỷ', async () => {
+      prisma.supplierOrder.findUnique.mockResolvedValueOnce(
+        order({ status: SupplierOrderStatus.CANCELLED }),
+      );
+      await expect(service.print('90')).rejects.toThrow(ConflictException);
     });
   });
 });

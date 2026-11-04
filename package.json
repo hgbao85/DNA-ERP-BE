@@ -66,6 +66,7 @@
     "class-validator": "^0.14.1",
     "cloudinary": "^2.10.0",
     "dotenv": "^16.4.7",
+    "exceljs": "4.4.0",
     "helmet": "^8.0.0",
     "highs": "^1.15.4",
     "ioredis": "^5",
