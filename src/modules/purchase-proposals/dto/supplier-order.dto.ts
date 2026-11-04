@@ -35,6 +35,15 @@ export class CancelSupplierOrderDto {
   reason!: string;
 }
 
+/** THAY PHIẾU (bản v8 mục 7.11) - lý do bắt buộc, lưu trên đơn và audit. */
+export class ReviseSupplierOrderDto {
+  @ApiProperty({ description: 'Lý do thay phiếu (gỡ dòng nào, sửa số mua nào...)' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  reason!: string;
+}
+
 export class ListSupplierOrdersQueryDto {
   @ApiPropertyOptional({ enum: ['DRAFT', 'APPROVED', 'CANCELLED'] })
   @IsOptional()
@@ -67,6 +76,9 @@ export class SupplierOrderItemDto {
   @Expose() @ApiProperty() buyQty!: number;
   @Expose() @ApiProperty() purchaseQty!: number;
   @Expose() @ApiProperty() status!: string;
+  @Expose() @ApiProperty() receivedQty!: number;
+  /// Mã lệnh sản xuất của dòng (mã PI; số LSX khi người A làm xong Đợt 2).
+  @Expose() @ApiPropertyOptional({ nullable: true }) orderCode!: string | null;
 
   constructor(partial: Partial<SupplierOrderItemDto>) {
     Object.assign(this, partial);
@@ -89,6 +101,10 @@ export class SupplierOrderResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) approvedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) cancelledAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) cancelReason!: string | null;
+  /// Số lần THAY PHIẾU (0 = phiếu gốc).
+  @Expose() @ApiProperty() revision!: number;
+  @Expose() @ApiPropertyOptional({ nullable: true }) revisedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) reviseReason!: string | null;
   @Expose() @ApiProperty({ type: [SupplierOrderItemDto] }) items!: SupplierOrderItemDto[];
 
   constructor(partial: Partial<SupplierOrderResponseDto>) {

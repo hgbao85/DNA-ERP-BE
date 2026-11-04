@@ -11,6 +11,7 @@ import {
   AuditAction,
   Prisma,
   PrismaClient,
+  PurchaseProposalStatus,
   SupplierOrderStatus,
 } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
@@ -23,6 +24,9 @@ import { RealtimeService } from '../../realtime/realtime.service';
 import { PENDING_APPROVAL_STATUSES, PurchaseProposalsService } from './purchase-proposals.service';
 import { effectiveOrderQty } from './purchase-order-qty.util';
 import { supplierOrderCode, vnYear } from './supplier-order-code.util';
+import { recomputeProposalStatus } from './purchase-proposal-status.util';
+import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
+import { buildPrintRows, PrintItemInput, renderPrintWorkbook } from './supplier-order-print';
 import {
   CreateSupplierOrderDto,
   ListSupplierOrdersQueryDto,
@@ -34,7 +38,13 @@ import {
 const ORDER_INCLUDE = {
   supplier: true,
   createdBy: { select: { firstName: true, lastName: true } },
-  items: { include: { material: true }, orderBy: { id: 'asc' } },
+  items: {
+    include: {
+      material: true,
+      proposal: { select: { productionInvoiceId: true } },
+    },
+    orderBy: { id: 'asc' },
+  },
 } satisfies Prisma.SupplierOrderInclude;
 
 type OrderRow = Prisma.SupplierOrderGetPayload<{ include: typeof ORDER_INCLUDE }>;
@@ -72,11 +82,13 @@ export class SupplierOrdersService {
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
-    return rows.map((r) => this.toDto(r));
+    const codes = await this.lenhCodesOf(rows);
+    return rows.map((r) => this.toDto(r, codes));
   }
 
   async findOne(id: string): Promise<SupplierOrderResponseDto> {
-    return this.toDto(await this.findOrThrow(id));
+    const order = await this.findOrThrow(id);
+    return this.toDto(order, await this.lenhCodesOf([order]));
   }
 
   async create(
@@ -159,7 +171,7 @@ export class SupplierOrdersService {
       itemIds: dto.itemIds,
     });
     this.publish(proposalIds, actorUserId);
-    return this.toDto(result);
+    return this.toDto(result, await this.lenhCodesOf([result]));
   }
 
   /** Gỡ 1 dòng khỏi đơn CHƯA duyệt (bản v8 mục 7.5). Đơn rỗng thì tự huỷ, số đơn giữ nguyên. */
@@ -176,6 +188,12 @@ export class SupplierOrdersService {
     const item = order.items.find((it) => it.id === bigItemId);
     if (!item) {
       throw new NotFoundException('Dòng này không nằm trong đơn');
+    }
+    // Đơn đã "THAY PHIẾU" có thể còn dòng đã nhận một phần (vẫn PURCHASING) - đã nhận thì không gỡ (7.5).
+    if (!PENDING_APPROVAL_STATUSES.includes(item.status)) {
+      throw new ConflictException(
+        `Vật tư ${item.material.code} đã nhận hàng một phần - không gỡ khỏi đơn được`,
+      );
     }
     const emptied = order.items.length === 1;
     await this.prisma.$transaction(async (tx) => {
@@ -215,6 +233,11 @@ export class SupplierOrdersService {
     const order = await this.findOrThrow(id);
     this.assertOwner(order, actorUserId, actorRoles);
     this.assertDraft(order);
+    if (order.items.some((it) => !PENDING_APPROVAL_STATUSES.includes(it.status))) {
+      throw new ConflictException(
+        'Đơn có vật tư đã nhận hàng một phần - không huỷ được cả đơn, chỉ gỡ được dòng chưa nhận',
+      );
+    }
     await this.prisma.$transaction(async (tx) => {
       await this.lockDraft(tx, order.id);
       await tx.purchaseProposalItem.updateMany({
@@ -286,6 +309,145 @@ export class SupplierOrdersService {
       approvalFileUrl,
     });
     return this.findOne(id);
+  }
+
+  /**
+   * "THAY PHIẾU" (bản v8 mục 7.2, 7.11): đơn đã có phiếu Giám đốc ký mà cần gỡ dòng hoặc sửa số mua.
+   * Đơn về DRAFT, revision + 1; dòng CHƯA nhận gì quay về chờ duyệt (bỏ file duyệt cũ) để sửa/gỡ
+   * được; dòng đã nhận một phần giữ nguyên "Đang mua" (đã nhận thì không gỡ, 7.5). Người mua in
+   * phiếu mới cùng số đơn - phiếu ghi "THAY PHIẾU lần n" - xin ký lại rồi "Sếp đã duyệt" lần nữa.
+   */
+  async revise(
+    id: string,
+    reason: string,
+    actorUserId: string,
+    actorRoles: string[],
+  ): Promise<SupplierOrderResponseDto> {
+    const order = await this.findOrThrow(id);
+    this.assertOwner(order, actorUserId, actorRoles);
+    if (order.status !== SupplierOrderStatus.APPROVED) {
+      throw new ConflictException(
+        `Đơn ${supplierOrderCode(order.seq, order.year)} chưa có phiếu ký - sửa trực tiếp, không cần thay phiếu`,
+      );
+    }
+    const reopen = order.items.filter(
+      (it) => it.status === PurchaseProposalStatus.PURCHASING && it.receivedQty.isZero(),
+    );
+    if (reopen.length === 0) {
+      throw new ConflictException('Mọi vật tư trong đơn đã nhận hàng - không còn gì để thay phiếu');
+    }
+    const proposalIds = [...new Set(order.items.map((it) => it.proposalId))].sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+    await this.prisma.$transaction(async (tx) => {
+      for (const pid of proposalIds) {
+        await lockBusinessKey(tx, `purchase-proposal-mutate:${pid}`);
+      }
+      const { count } = await tx.supplierOrder.updateMany({
+        where: { id: order.id, status: SupplierOrderStatus.APPROVED },
+        data: {
+          status: SupplierOrderStatus.DRAFT,
+          revision: { increment: 1 },
+          revisedAt: new Date(),
+          reviseReason: reason,
+          approvalFileUrl: null,
+          approvedAt: null,
+          approvedById: null,
+        },
+      });
+      if (count !== 1) {
+        throw new ConflictException('Đơn vừa bị thao tác khác đổi trạng thái - tải lại trang');
+      }
+      // Chỉ dòng chưa nhận gì (receivedQty = 0, khoá trong cùng transaction) - Kho nhận xen giữa thì
+      // dòng đó giữ "Đang mua".
+      await tx.purchaseProposalItem.updateMany({
+        where: {
+          id: { in: reopen.map((it) => it.id) },
+          status: PurchaseProposalStatus.PURCHASING,
+          receivedQty: 0,
+        },
+        data: {
+          status: PurchaseProposalStatus.NEW,
+          approvedAt: null,
+          approvedById: null,
+          approvalFileUrl: null,
+        },
+      });
+      for (const pid of proposalIds) {
+        await recomputeProposalStatus(tx, pid);
+      }
+    });
+    await this.audit(AuditAction.UPDATE, order, null, {
+      event: 'supplier-order-revised',
+      revision: order.revision + 1,
+      reason,
+      reopenedItemIds: reopen.map((it) => it.id.toString()),
+      oldApprovalFileUrl: order.approvalFileUrl,
+    });
+    this.publish(proposalIds, actorUserId);
+    return this.findOne(id);
+  }
+
+  /**
+   * File phiếu đề xuất (.xlsx, theo mẫu PHIEU_DE_XUAT_MAU_TRONG_IEA) của 1 đơn - trả base64 vì mọi
+   * phản hồi đều bọc trong envelope JSON (ResponseInterceptor), FE tự giải mã rồi tải xuống.
+   */
+  async print(id: string): Promise<{ fileName: string; base64: string }> {
+    const order = await this.findOrThrow(id);
+    if (order.status === SupplierOrderStatus.CANCELLED) {
+      throw new ConflictException('Đơn đã huỷ - không in phiếu');
+    }
+    const codes = await this.lenhCodesOf([order]);
+    const inputs: PrintItemInput[] = order.items.map((it) => ({
+      materialCode: it.material.code,
+      materialName: it.material.name,
+      spec: it.spec ?? it.material.spec ?? null,
+      stockLengthMm: it.stockLengthMm,
+      unit: it.stockLengthMm != null ? 'cây' : it.material.unit,
+      orderCode: this.lenhCodeOf(it, codes) ?? '—',
+      buyQty: it.buyQty.toNumber(),
+      purchaseQty: effectiveOrderQty(it.buyQty.toNumber(), it.orderQty?.toNumber()),
+    }));
+    // Tồn kho hiện tại theo vật tư + quy cách + chiều dài cây, chỉ kho thật (không tính kho ảo).
+    const quants = await this.prisma.stockQuant.groupBy({
+      by: ['materialId', 'spec', 'stockLengthMm'],
+      where: {
+        materialId: { in: [...new Set(order.items.map((it) => it.materialId))] },
+        warehouse: { isVirtual: false },
+      },
+      _sum: { qty: true },
+    });
+    const stockByKey = new Map(
+      quants.map((q) => [
+        `${q.materialId}|${q.spec}|${q.stockLengthMm}`,
+        q._sum.qty?.toNumber() ?? 0,
+      ]),
+    );
+    const materialIdByCode = new Map(order.items.map((it) => [it.material.code, it.materialId]));
+    const rows = buildPrintRows(inputs, (it) => {
+      const materialId = materialIdByCode.get(it.materialCode);
+      return stockByKey.get(`${materialId}|${it.spec ?? ''}|${it.stockLengthMm ?? 0}`) ?? 0;
+    });
+    const code = supplierOrderCode(order.seq, order.year);
+    const buffer = await renderPrintWorkbook(
+      {
+        supplierName: order.supplier.name,
+        orderCode: code,
+        revision: order.revision,
+        date: order.revisedAt ?? order.createdAt,
+        buyerName: `${order.createdBy.lastName} ${order.createdBy.firstName}`.trim(),
+      },
+      rows,
+    );
+    const suffix = order.revision > 0 ? `-thay-phieu-${order.revision}` : '';
+    return {
+      fileName:
+        `phieu-de-xuat-${order.supplier.name}-${order.seq}-${order.year}${suffix}.xlsx`.replace(
+          /[\\/:*?"<>|]/g,
+          '-',
+        ),
+      base64: buffer.toString('base64'),
+    };
   }
 
   /** Số đơn cuối cùng của từng NCC trong 1 năm - Admin xem/nạp trước khi dùng (bản v8 mục 4.13). */
@@ -430,7 +592,23 @@ export class SupplierOrdersService {
     }
   }
 
-  private toDto(order: OrderRow): SupplierOrderResponseDto {
+  /**
+   * Mã lệnh hiển thị (số LSX, lệnh cũ chưa có LSX thì mã PI) của các lệnh có dòng trong đơn - dùng
+   * hàm chung của người A (common/utils/lenh-code.util.ts, điểm ghép ①), 1 lần đọc cho cả danh sách.
+   */
+  private lenhCodesOf(orders: OrderRow[]): Promise<Map<string, string>> {
+    const piIds = orders.flatMap((o) =>
+      o.items.map((it) => it.proposal.productionInvoiceId).filter((id): id is bigint => id != null),
+    );
+    return loadLenhDisplayCodes(this.prisma, piIds);
+  }
+
+  private lenhCodeOf(item: OrderRow['items'][number], codes: Map<string, string>): string | null {
+    const piId = item.proposal.productionInvoiceId;
+    return piId != null ? (codes.get(piId.toString()) ?? null) : null;
+  }
+
+  private toDto(order: OrderRow, codes: Map<string, string>): SupplierOrderResponseDto {
     return new SupplierOrderResponseDto({
       id: order.id.toString(),
       code: supplierOrderCode(order.seq, order.year),
@@ -446,6 +624,9 @@ export class SupplierOrdersService {
       approvedAt: order.approvedAt,
       cancelledAt: order.cancelledAt,
       cancelReason: order.cancelReason,
+      revision: order.revision,
+      revisedAt: order.revisedAt,
+      reviseReason: order.reviseReason,
       items: order.items.map(
         (it) =>
           new SupplierOrderItemDto({
@@ -457,6 +638,8 @@ export class SupplierOrdersService {
             buyQty: it.buyQty.toNumber(),
             purchaseQty: effectiveOrderQty(it.buyQty.toNumber(), it.orderQty?.toNumber()),
             status: it.status,
+            receivedQty: it.receivedQty.toNumber(),
+            orderCode: this.lenhCodeOf(it, codes),
           }),
       ),
     });
