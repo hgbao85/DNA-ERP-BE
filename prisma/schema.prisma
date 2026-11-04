@@ -408,6 +408,11 @@ model SystemConfig {
   /// log, tồn hệ thống lệch tồn thực ngay từ lúc nhập (D.b3-silent-over-receipt).
   purchaseOverReceiptTolerancePercent Decimal @default(0) @db.Decimal(6, 3)
 
+  // Phần A – Đợt 2 (V3-1): tiền tố số LSX nhà máy
+  /// Tiền tố số LSX được phép (vd ["MY","GP"]) - Admin khai ở "Cấu hình hệ thống". RỖNG = chấp nhận mọi tiền tố đúng dạng
+  /// (1–6 chữ cái). Số LSX có dạng TIỀN TỐ-SỐ (MY-313), xem src/common/utils/lenh-code.util.ts.
+  lsxPrefixes String[] @default([])
+
   /// Địa chỉ gốc của ERP dùng để IN TEM QR (2026-10-13, vd "https://erpdna.vercel.app") - QLSX đặt ở màn "Sản lượng xưởng".
   /// NULL = dùng địa chỉ trình duyệt đang mở. Cột theo TỪNG MÔI TRƯỜNG (mỗi DB 1 giá trị): mã QR của máy chỉ có nghĩa trên hệ
   /// thống chứa máy đó, nên máy local để trống - đừng điền địa chỉ thật vào DB local. Đổi sau khi đã dán tem = tem cũ hỏng.
@@ -418,6 +423,11 @@ model SystemConfig {
   /// công nhân (role FLOOR_WORKER) và tài khoản tổ Phôi/Hàn/Sơn chỉ đăng nhập/làm việc được từ các IP này; Sếp/QLSX/KCS/Admin
   /// không bị giới hạn. Theo từng môi trường.
   floorAllowedIps String[] @default([])
+
+  // Phần A – Đợt 1 (YC9): thùng + load cont
+  /// Thể tích 1 cont (m³) dùng tính load cont của SKU. Mặc định 68 (cont 40HC); Admin sửa qua PUT /system-config -
+  /// đổi thì load cont lưu sẵn trên mfg_products được tính lại trong cùng transaction.
+  containerVolumeM3 Decimal @default(68) @db.Decimal(6, 2)
 
   updatedAt DateTime @updatedAt
 
@@ -770,6 +780,24 @@ model MfgProduct {
   factoryCode String
   name        String
   description String?
+
+  // Phần A – Đợt 1 (YC9): thùng + load cont
+  /// Kích thước 1 thùng (cm, 1 số lẻ). Thiếu 1 trong 3 thì không tính được load cont theo công thức.
+  boxLengthCm            Decimal? @db.Decimal(7, 1)
+  boxWidthCm             Decimal? @db.Decimal(7, 1)
+  boxHeightCm            Decimal? @db.Decimal(7, 1)
+  /// Số thùng của 1 bộ (mặc định 1).
+  boxesPerSet            Int      @default(1)
+  /// Load cont nhập tay - có thì thắng công thức.
+  loadContManual         Int?
+  /// Thể tích 1 thùng (m³) - LƯU SẴN lúc ghi kích thước / khi Admin đổi thể tích cont, để mapper không phải đọc SystemConfig.
+  boxVolumeM3            Decimal? @db.Decimal(10, 4)
+  /// ⌊thể tích cont ÷ (thể tích thùng × số thùng/bộ)⌋ - lưu sẵn như trên.
+  loadContFormula        Int?
+  /// Load cont hiệu lực = loadContManual ?? loadContFormula - lưu sẵn như trên.
+  loadCont               Int?
+  containerLoadUpdatedAt DateTime?
+  containerLoadUpdatedById String?
 
   variants               ProductVariant[]
   pieces                 Piece[]
@@ -1595,6 +1623,15 @@ model ProductionInvoiceItem {
   decidedAt                DateTime?
   decidedById              String?
   rejectReason             String?
+  // Phần A – Đợt 2 (V3-1, YC12)
+  /// Số LSX nhà máy của DÒNG SKU này (vd "MY-313") - mã lệnh hiển thị chính (lệnh gộp hiện đủ số các dòng, xem
+  /// lenh-code.util.ts). KHÔNG trùng toàn hệ thống (người dùng chốt 04/11), lưu đã chuẩn hoá in hoa. KHSX nhập; bắt buộc trước
+  /// khi gửi QLSX. Lệnh cũ để NULL (hiện mã PI), bổ sung sau được. Đi theo dòng SKU (gộp/cắt riêng lại vẫn giữ).
+  lsxCode                  String?             @unique
+  /// Xưởng cơ khí QLSX chọn cùng lúc chọn kho thành phẩm (gửi Sếp) - ĐI CÙNG VÒNG ĐỜI warehouseCode: chỗ nào xoá
+  /// warehouseCode (gộp/cắt riêng lại) thì xoá luôn cột này. Mọi dòng của 1 PI cùng 1 xưởng (xuất sắt/giữ chỗ theo PI).
+  workshopId               BigInt?
+  workshop                 Workshop?           @relation(fields: [workshopId], references: [id])
 
   productionInvoice    ProductionInvoice?           @relation(fields: [productionInvoiceId], references: [id])
   salesOrder           SalesOrder?                  @relation(fields: [salesOrderId], references: [id])
@@ -1616,7 +1653,36 @@ model ProductionInvoiceItem {
   @@index([mfgProductId])
   @@index([salesOrderId])
   @@index([salesOrderItemId])
+  @@index([workshopId])
   @@map("production_invoice_items")
+}
+
+// Phần A – Đợt 2 (YC12): xưởng cơ khí
+/// Cách tính năng lực của xưởng (dùng ở Đợt 3): Phú An đo theo số cont/ngày, Phước An theo số ngày/cont.
+enum WorkshopCapacityMode {
+  CONT_PER_DAY
+  DAYS_PER_CONT
+}
+
+/// Xưởng cơ khí (Phôi + Hàn + Sơn) làm 1 lệnh SX. Migration chèn sẵn PHU_AN "Xưởng Phú An" và PHUOC_AN "Xưởng Phước An"
+/// (Phước An sơn ở Phú An - paintWorkshopId) nên production có ngay sau `migrate deploy`, không cần seed. Chưa có màn sửa.
+model Workshop {
+  id              BigInt               @id @default(autoincrement())
+  code            String               @unique
+  name            String
+  capacityMode    WorkshopCapacityMode
+  /// Xưởng làm công đoạn Sơn cho xưởng này (NULL = tự sơn).
+  paintWorkshopId BigInt?
+  sortOrder       Int                  @default(0)
+  isActive        Boolean              @default(true)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  paintWorkshop          Workshop?               @relation("WorkshopPaint", fields: [paintWorkshopId], references: [id])
+  paintsFor              Workshop[]              @relation("WorkshopPaint")
+  productionInvoiceItems ProductionInvoiceItem[]
+
+  @@map("workshops")
 }
 
 /// Mốc kế hoạch từng công đoạn do KHSX đặt riêng cho 1 SKU trong PI (LenhSXPage "Sửa thời hạn").

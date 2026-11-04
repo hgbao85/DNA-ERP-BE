@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Exclude, Expose } from 'class-transformer';
+import { Exclude, Expose, Type } from 'class-transformer';
+import { ContainerLoadDto } from '../../../common/dto/container-load.dto';
 import {
   CuttingProposalStatus,
   ProdApprovalStatus,
@@ -7,6 +8,13 @@ import {
   ProductionOrderFloorStage,
 } from '../../../generated/prisma/client';
 import { MaterialChoiceRefDto } from '../../../common/utils/material-choice-ref.util';
+
+/** Phần A – Đợt 2: xưởng cơ khí gắn với dòng SKU. */
+class ItemWorkshopDto {
+  @Expose() @ApiProperty() id!: string;
+  @Expose() @ApiProperty() code!: string;
+  @Expose() @ApiProperty() name!: string;
+}
 
 class ItemStageDto {
   @Expose() @ApiProperty({ enum: ProdItemStageType }) stageType!: ProdItemStageType;
@@ -33,6 +41,11 @@ export class ProductionInvoiceItemResponseDto {
   @Expose() @ApiProperty() mfgProductId!: string;
   @Expose() @ApiProperty() factoryCode!: string;
   @Expose() @ApiProperty() productName!: string;
+  /** Phần A – Đợt 1 (YC9): thùng + load cont của SKU. */
+  @Expose()
+  @Type(() => ContainerLoadDto)
+  @ApiPropertyOptional({ type: ContainerLoadDto, nullable: true })
+  containerLoad!: ContainerLoadDto | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productVariantId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) colorCode!: string | null;
   /** Loại dây (mã SHT)/loại nệm Sales chọn cho dòng này - null khi SKU không có lựa chọn. */
@@ -92,6 +105,13 @@ export class ProductionInvoiceItemResponseDto {
    *  lập, tính lại 1 query nhỏ rẻ hơn thêm phụ thuộc module. */
   @Expose() @ApiPropertyOptional({ nullable: true }) bomOutOfDate?: boolean | null;
   @Expose() @ApiPropertyOptional({ type: [ItemStageDto] }) stages!: ItemStageDto[];
+  /** Phần A – Đợt 2: số LSX nhà máy của dòng (vd MY-313), null = chưa nhập (lệnh cũ / KHSX chưa điền). */
+  @Expose() @ApiPropertyOptional({ nullable: true }) lsxCode!: string | null;
+  /** Phần A – Đợt 2: xưởng cơ khí QLSX chọn lúc gửi Sếp (đi cùng vòng đời warehouseCode), null = chưa chọn. */
+  @Expose()
+  @ApiPropertyOptional({ type: ItemWorkshopDto, nullable: true })
+  @Type(() => ItemWorkshopDto)
+  workshop!: ItemWorkshopDto | null;
 
   constructor(partial: Partial<ProductionInvoiceItemResponseDto>) {
     Object.assign(this, partial);

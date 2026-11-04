@@ -1,10 +1,13 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { NetworkAccessService } from '../../common/network/network-access.service';
+import { normalizeLsxPrefixes } from '../../common/utils/lenh-code.util';
 import { isPrivateOrLoopbackIp, normalizeAllowedIps } from '../../common/utils/ip-allowlist.util';
+import { computeContainerLoad } from '../../common/utils/container-load.util';
 import { normalizePublicUrl } from '../../common/utils/public-url.util';
 import { type SystemConfig } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PlanningParamsDto } from './dto/planning-params.dto';
 import { SystemConfigResponseDto } from './dto/system-config-response.dto';
 import { CuttingDefaultsResponseDto, UpdateMaxWasteDto } from './dto/update-max-waste.dto';
 import { UpdateSystemConfigDto } from './dto/update-system-config.dto';
@@ -117,6 +120,63 @@ export class SystemConfigService {
     });
   }
 
+  /** Tham số lập kế hoạch cho MỌI người đăng nhập (route không gắn RequirePermissions) - thể tích cont, tiền tố số LSX. */
+  async getPlanningParams(): Promise<PlanningParamsDto> {
+    const config = await this.prisma.systemConfig.findUnique({ where: { id: SINGLETON_ID } });
+    if (!config) {
+      throw new NotFoundException('System config has not been seeded');
+    }
+    return new PlanningParamsDto({
+      containerVolumeM3: config.containerVolumeM3.toNumber(),
+      lsxPrefixes: config.lsxPrefixes, // Phần A – Đợt 2
+    });
+  }
+
+  /** Tính lại boxVolumeM3/loadContFormula/loadCont cho mọi MfgProduct có ít nhất 1 cột thùng hoặc loadContManual. */
+  private async recomputeContainerLoads(
+    tx: Parameters<Parameters<PrismaServiceType['$transaction']>[0]>[0],
+    containerVolumeM3: number,
+  ): Promise<void> {
+    const products = await tx.mfgProduct.findMany({
+      where: {
+        OR: [
+          { boxLengthCm: { not: null } },
+          { boxWidthCm: { not: null } },
+          { boxHeightCm: { not: null } },
+          { loadContManual: { not: null } },
+        ],
+      },
+      select: {
+        id: true,
+        boxLengthCm: true,
+        boxWidthCm: true,
+        boxHeightCm: true,
+        boxesPerSet: true,
+        loadContManual: true,
+      },
+    });
+    for (const p of products) {
+      const calc = computeContainerLoad(
+        {
+          boxLengthCm: p.boxLengthCm?.toNumber() ?? null,
+          boxWidthCm: p.boxWidthCm?.toNumber() ?? null,
+          boxHeightCm: p.boxHeightCm?.toNumber() ?? null,
+          boxesPerSet: p.boxesPerSet,
+          loadContManual: p.loadContManual,
+        },
+        containerVolumeM3,
+      );
+      await tx.mfgProduct.update({
+        where: { id: p.id },
+        data: {
+          boxVolumeM3: calc.boxVolumeM3,
+          loadContFormula: calc.loadContFormula,
+          loadCont: calc.loadCont,
+        },
+      });
+    }
+  }
+
   async findOne(): Promise<SystemConfigResponseDto> {
     const config = await this.prisma.systemConfig.findUnique({ where: { id: SINGLETON_ID } });
     if (!config) {
@@ -130,6 +190,7 @@ export class SystemConfigService {
       solverBundleFactors: config.solverBundleFactors as number[],
       solverMaxWastePercentage: config.solverMaxWastePercentage.toNumber(),
       purchaseOverReceiptTolerancePercent: config.purchaseOverReceiptTolerancePercent.toNumber(),
+      containerVolumeM3: config.containerVolumeM3.toNumber(),
     });
   }
 
@@ -142,13 +203,24 @@ export class SystemConfigService {
     // floorPublicUrl chuẩn hoá về scheme://host[:port] (dán cả /login cũng được; rỗng = xoá). Không gửi field = giữ nguyên.
     // floorAllowedIps: chuẩn hoá từng dòng (IP/CIDR hợp lệ, bỏ trùng); rỗng = tắt giới hạn. Không gửi field = giữ nguyên.
     const data: typeof dto = { ...dto };
+    // Phần A – Đợt 2: tiền tố số LSX - in hoa, bỏ trùng/rỗng.
+    if (dto.lsxPrefixes !== undefined) data.lsxPrefixes = normalizeLsxPrefixes(dto.lsxPrefixes);
     if (dto.floorPublicUrl !== undefined)
       data.floorPublicUrl = normalizePublicUrl(dto.floorPublicUrl);
     if (dto.floorAllowedIps !== undefined)
       data.floorAllowedIps = normalizeAllowedIps(dto.floorAllowedIps);
-    const updated = await this.prisma.systemConfig.update({
-      where: { id: SINGLETON_ID },
-      data,
+    // Đổi thể tích cont -> tính lại load cont lưu sẵn trên MỌI SKU (MfgProduct) có thùng/load cont nhập tay, CÙNG transaction
+    // với việc ghi cấu hình để không có lúc nào hai nơi lệch nhau.
+    const volumeChanged =
+      dto.containerVolumeM3 !== undefined &&
+      dto.containerVolumeM3 !== existing.containerVolumeM3.toNumber();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.systemConfig.update({
+        where: { id: SINGLETON_ID },
+        data,
+      });
+      if (volumeChanged) await this.recomputeContainerLoads(tx, row.containerVolumeM3.toNumber());
+      return row;
     });
     // Có hiệu lực ngay trên instance này (instance khác chậm nhất 30 giây - xem NetworkAccessService).
     if (dto.floorAllowedIps !== undefined) this.network.invalidate();
@@ -161,6 +233,7 @@ export class SystemConfigService {
       solverBundleFactors: updated.solverBundleFactors as number[],
       solverMaxWastePercentage: updated.solverMaxWastePercentage.toNumber(),
       purchaseOverReceiptTolerancePercent: updated.purchaseOverReceiptTolerancePercent.toNumber(),
+      containerVolumeM3: updated.containerVolumeM3.toNumber(),
     });
   }
 

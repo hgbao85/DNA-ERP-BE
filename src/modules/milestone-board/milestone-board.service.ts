@@ -6,6 +6,7 @@ import {
   ProductionOrderFloorStage,
 } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { vnDayKey } from '../../common/utils/floor-stats.util';
 import { purchaseDeadlineOf, purchaseGroupOf } from '../../common/utils/frame-deadline.util';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
@@ -62,6 +63,10 @@ export interface MilestoneRow {
   itemId: string;
   piId: string;
   piCode: string;
+  /** Phần A – Đợt 2: số LSX của CHÍNH dòng SKU này (null = chưa nhập). */
+  lsxCode: string | null;
+  /** Phần A – Đợt 2: mã lệnh hiển thị của PI (các LSX nối " + ", chưa có thì mã PI). */
+  displayCode: string;
   productionOrderId: string;
   skuCode: string;
   skuName: string | null;
@@ -122,6 +127,7 @@ export class MilestoneBoardService {
       select: {
         id: true,
         productionInvoiceId: true,
+        lsxCode: true,
         quantity: true,
         materialDeadline: true,
         finishedMaterialDeadline: true,
@@ -163,6 +169,7 @@ export class MilestoneBoardService {
       packagingByItem,
       purchaseLines,
       approvedChoices,
+      displayCodes,
     ] = await Promise.all([
       safe('phoi-progress', this.steelIssues.getPhoiProgressBatch(piIds)),
       safe(
@@ -190,6 +197,11 @@ export class MilestoneBoardService {
           wireMaterialId: true,
           cushionMaterialId: true,
         },
+      }),
+      // Phần A – Đợt 2: mã lệnh hiển thị (số LSX) của mọi PI trên bảng, 1 lần cho cả bảng; lỗi thì rơi về mã PI.
+      loadLenhDisplayCodes(this.prisma, piBigIds).catch((err: Error) => {
+        this.logger.warn(`Bảng mốc: không đọc được số LSX - ${err.message}`);
+        return new Map<string, string>();
       }),
     ]);
     // getPhoiProgressBatch tự nuốt lỗi từng PI (bỏ PI đó khỏi kết quả) - thiếu khoá = nguồn lỗi, phải báo như FE ThongKePagePlan.
@@ -391,6 +403,8 @@ export class MilestoneBoardService {
         itemId: String(item.id),
         piId,
         piCode: item.productionInvoice?.code ?? '',
+        lsxCode: item.lsxCode ?? null,
+        displayCode: displayCodes.get(piId) ?? item.productionInvoice?.code ?? '',
         productionOrderId: orderId,
         skuCode: item.mfgProduct.factoryCode,
         skuName: item.mfgProduct.name ?? null,

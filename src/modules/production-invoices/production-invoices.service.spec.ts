@@ -6,7 +6,9 @@ import {
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { ProdItemStageType } from '../../generated/prisma/client';
+import { Prisma, ProdItemStageType } from '../../generated/prisma/client';
+import { instanceToPlain } from 'class-transformer';
+import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-response.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
@@ -44,9 +46,14 @@ describe('ProductionInvoicesService', () => {
       update: jest.Mock;
       updateMany: jest.Mock;
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
     };
+    // Phần A – Đợt 2
+    workshop: { findUnique: jest.Mock };
+    steelIssue: { count: jest.Mock };
+    materialYieldIssue: { count: jest.Mock };
     productionInvoiceItemStage: { upsert: jest.Mock; findFirst: jest.Mock };
     mfgProduct: { findUnique: jest.Mock };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
@@ -124,9 +131,15 @@ describe('ProductionInvoicesService', () => {
     decidedAt: null,
     decidedById: null,
     rejectReason: null,
+    // Phần A – Đợt 2: mặc định đã có số LSX (KHSX bắt buộc nhập trước khi gửi QLSX) và chưa có xưởng
+    lsxCode: 'MY-313',
+    workshopId: null,
+    workshop: null,
     stages: [],
     ...overrides,
   });
+  const workshopPA = { id: 3n, code: 'PA', name: 'Phú An', isActive: true };
+  const workshopMY = { id: 4n, code: 'MY', name: 'Mỹ Yến', isActive: true };
 
   beforeEach(() => {
     prisma = {
@@ -149,9 +162,18 @@ describe('ProductionInvoicesService', () => {
         // chối PI item") - test race-guard tự override count:0 để mô phỏng đã bị xử lý trước.
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn(),
         count: jest.fn(),
       },
+      // Phần A – Đợt 2: mặc định xưởng Phú An còn dùng, chưa xuất sắt/vật tư.
+      workshop: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 3n, code: 'PA', name: 'Phú An', isActive: true }),
+      },
+      steelIssue: { count: jest.fn().mockResolvedValue(0) },
+      materialYieldIssue: { count: jest.fn().mockResolvedValue(0) },
       productionInvoiceItemStage: {
         upsert: jest.fn(),
         findFirst: jest.fn().mockResolvedValue(null),
@@ -196,7 +218,7 @@ describe('ProductionInvoicesService', () => {
       systemConfig: {
         findUniqueOrThrow: jest
           .fn()
-          .mockResolvedValue({ solverMergeWindowDays: 3, solverMergeMaxSkus: 5 }),
+          .mockResolvedValue({ solverMergeWindowDays: 3, solverMergeMaxSkus: 5, lsxPrefixes: [] }),
       },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
@@ -532,12 +554,14 @@ describe('ProductionInvoicesService', () => {
         requestedById: null,
         warehouseCode: null,
         warehouseName: null,
+        workshopId: null, // Phần A – Đợt 2 (lsxCode KHÔNG bị xoá)
         qlsxAt: null,
         qlsxById: null,
         decidedAt: null,
         decidedById: null,
       });
       expect(moved.data).not.toHaveProperty('salesOrderId');
+      expect(moved.data).not.toHaveProperty('lsxCode');
     });
 
     it('chặn gộp dưới 2 SKU (trùng id cũng tính là 1)', async () => {
@@ -784,10 +808,13 @@ describe('ProductionInvoicesService', () => {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
       const updated = prisma.productionInvoiceItem.update.mock.calls[0][0] as {
         where: { id: bigint };
-        data: { productionInvoiceId: bigint };
+        data: { productionInvoiceId: bigint; workshopId: null };
       };
       expect(updated.where.id).toBe(20n);
       expect(updated.data.productionInvoiceId).toBe(60n);
+      // Phần A – Đợt 2: xưởng reset cùng warehouseCode, lsxCode giữ
+      expect(updated.data.workshopId).toBeNull();
+      expect(updated.data).not.toHaveProperty('lsxCode');
     });
 
     it('chặn gọi lại cho SKU đã được gom rồi - không tạo PI mới đè lên', async () => {
@@ -1323,7 +1350,7 @@ describe('ProductionInvoicesService', () => {
       );
       prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
 
-      await service.sendBatchToBoss('7', 'thanh-pham', 'Kho thành phẩm', 'user-qlsx');
+      await service.sendBatchToBoss('7', 'thanh-pham', 'Kho thành phẩm', '3', 'user-qlsx');
 
       expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
         where: { id: { in: [20n, 21n] } },
@@ -1331,6 +1358,7 @@ describe('ProductionInvoicesService', () => {
           prodApprovalStatus: 'WAITING_BOSS',
           warehouseCode: 'thanh-pham',
           warehouseName: 'Kho thành phẩm',
+          workshopId: 3n,
           qlsxById: 'user-qlsx',
         }) as unknown,
       });
@@ -1343,7 +1371,7 @@ describe('ProductionInvoicesService', () => {
       );
 
       await expect(
-        service.sendBatchToBoss('7', 'thanh-pham', 'Kho thành phẩm', 'user-qlsx'),
+        service.sendBatchToBoss('7', 'thanh-pham', 'Kho thành phẩm', '3', 'user-qlsx'),
       ).rejects.toThrow(ConflictException);
       expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
     });
@@ -1357,32 +1385,47 @@ describe('ProductionInvoicesService', () => {
       );
 
       await expect(
-        service.sendItemToBoss('7', '20', 'thanh-pham-2', 'Kho Thành phẩm 2', 'user-qlsx'),
+        service.sendItemToBoss('7', '20', 'thanh-pham-2', 'Kho Thành phẩm 2', '3', 'user-qlsx'),
       ).rejects.toThrow(ConflictException);
     });
 
     it('records the chosen warehouse scope/name and moves to WAITING_BOSS', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
-      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
-        piItem({ prodApprovalStatus: 'WAITING_QLSX' }),
-      );
-      prisma.productionInvoiceItem.update.mockResolvedValue(
-        piItem({
-          prodApprovalStatus: 'WAITING_BOSS',
-          warehouseCode: 'thanh-pham-2',
-          warehouseName: 'Kho Thành phẩm 2',
-        }),
-      );
+      // Lần 1 = đọc trước khi ghi, lần 2 = đọc lại sau khi ghi (khối workshop phải là xưởng MỚI).
+      prisma.productionInvoiceItem.findUnique
+        .mockResolvedValueOnce(piItem({ prodApprovalStatus: 'WAITING_QLSX' }))
+        .mockResolvedValueOnce(
+          piItem({
+            prodApprovalStatus: 'WAITING_BOSS',
+            warehouseCode: 'thanh-pham-2',
+            warehouseName: 'Kho Thành phẩm 2',
+            workshopId: 3n,
+            workshop: workshopPA,
+          }),
+        );
 
       const result = await service.sendItemToBoss(
         '7',
         '20',
         'thanh-pham-2',
         'Kho Thành phẩm 2',
+        '3',
         'user-qlsx',
       );
       expect(result.prodApprovalStatus).toBe('WAITING_BOSS');
       expect(result.warehouseCode).toBe('thanh-pham-2');
+      expect(result.workshop).toEqual({ id: '3', code: 'PA', name: 'Phú An' });
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+        where: { id: 20n, prodApprovalStatus: 'WAITING_QLSX' },
+        data: expect.objectContaining({ workshopId: 3n }) as unknown,
+      });
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment -- jest matcher typing */
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          newValue: expect.objectContaining({ workshopId: '3' }),
+        }),
+      });
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
     });
 
     it('rejects with ConflictException when another request already moved the item away from WAITING_QLSX (race guard)', async () => {
@@ -1393,7 +1436,7 @@ describe('ProductionInvoicesService', () => {
       prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(
-        service.sendItemToBoss('7', '20', 'thanh-pham-2', 'Kho Thành phẩm 2', 'user-qlsx'),
+        service.sendItemToBoss('7', '20', 'thanh-pham-2', 'Kho Thành phẩm 2', '3', 'user-qlsx'),
       ).rejects.toThrow(ConflictException);
     });
   });
@@ -1991,6 +2034,560 @@ describe('ProductionInvoicesService', () => {
   // Phase 3a, mục 7.2 changelog 2026-09-25/26 - notification tại từng transition. Best-effort
   // (catch+log, xem notifyPi()/resolvePiNotifications()) nên chỉ kiểm ĐÚNG type/entityId/params
   // được gọi, không kiểm nội dung title/message render (đã ở notification-types.ts nếu cần).
+  // ─── Phần A – Đợt 2: số LSX + xưởng cơ khí ──────────────────────────────────────
+  describe('updateItemLsx (Phần A – Đợt 2)', () => {
+    const khsx = { id: 'user-khsx', roles: ['PRODUCTION_PLANNER'] };
+    const admin = { id: 'user-admin', roles: ['ADMIN'] };
+
+    const setup = (itemOverrides: Record<string, unknown> = {}) => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ lsxCode: null, ...itemOverrides }),
+      );
+    };
+
+    it('chuẩn hoá "my 313" -> "MY-313", ghi audit + realtime và trả dòng đọc lại từ DB', async () => {
+      setup();
+      prisma.productionInvoiceItem.findUnique
+        .mockResolvedValueOnce(piItem({ lsxCode: null }))
+        .mockResolvedValueOnce(piItem({ lsxCode: 'MY-313' }));
+
+      const result = await service.updateItemLsx('7', '20', ' my 313 ', khsx);
+
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledWith({
+        where: { id: 20n },
+        data: { lsxCode: 'MY-313' },
+      });
+      expect(result.lsxCode).toBe('MY-313');
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment -- jest matcher typing */
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          tableName: 'ProductionInvoiceItem',
+          recordId: '20',
+          oldValue: { lsxCode: null },
+          newValue: { lsxCode: 'MY-313' },
+        }),
+      });
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+    });
+
+    it('chuỗi rỗng/chỉ trắng và null = xoá số', async () => {
+      setup({ lsxCode: 'MY-313' });
+      await service.updateItemLsx('7', '20', '   ', khsx);
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledWith({
+        where: { id: 20n },
+        data: { lsxCode: null },
+      });
+      await service.updateItemLsx('7', '20', null, khsx);
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['abc', 'MY-', '1234', 'TOOLONGPREFIX-1', 'MY-1234567'])(
+      'sai dạng "%s" -> 400',
+      async (raw) => {
+        setup();
+        await expect(service.updateItemLsx('7', '20', raw, khsx)).rejects.toThrow(
+          /Số LSX phải dạng TIỀN TỐ-SỐ/,
+        );
+        expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+      },
+    );
+
+    it('tiền tố ngoài danh sách Cấu hình hệ thống -> 400 nêu danh sách đang có', async () => {
+      setup();
+      prisma.systemConfig.findUniqueOrThrow.mockResolvedValue({ lsxPrefixes: ['MY', 'GP'] });
+      await expect(service.updateItemLsx('7', '20', 'XX-5', khsx)).rejects.toThrow(
+        'Tiền tố XX chưa có trong Cấu hình hệ thống (đang có: MY, GP)',
+      );
+      await expect(service.updateItemLsx('7', '20', 'gp-176', khsx)).resolves.toBeDefined();
+    });
+
+    it('danh sách tiền tố rỗng = chấp nhận mọi tiền tố đúng dạng', async () => {
+      setup();
+      prisma.systemConfig.findUniqueOrThrow.mockResolvedValue({ lsxPrefixes: [] });
+      await expect(service.updateItemLsx('7', '20', 'zz-9', khsx)).resolves.toBeDefined();
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledWith({
+        where: { id: 20n },
+        data: { lsxCode: 'ZZ-9' },
+      });
+    });
+
+    it('trùng số ở dòng của lệnh khác -> 409 nêu mã hiển thị của lệnh đó + SKU', async () => {
+      setup();
+      prisma.productionInvoiceItem.findFirst.mockResolvedValue({
+        id: 30n,
+        productionInvoiceId: 9n,
+        lsxCode: 'MY-313',
+        mfgProduct: { factoryCode: 'GHE-9' },
+      });
+      prisma.productionInvoice.findMany.mockResolvedValue([{ id: 9n, code: 'PI-9' }]);
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        { productionInvoiceId: 9n, lsxCode: 'MY-313' },
+        { productionInvoiceId: 9n, lsxCode: 'MY-314' },
+      ]);
+
+      await expect(service.updateItemLsx('7', '20', 'MY-313', khsx)).rejects.toThrow(
+        new ConflictException('Số LSX MY-313 đang dùng ở lệnh MY-313 + MY-314 (SKU GHE-9)'),
+      );
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+    });
+
+    it('trùng với SKU chưa gom vào lệnh -> câu "SKU chưa gom vào lệnh"', async () => {
+      setup();
+      prisma.productionInvoiceItem.findFirst.mockResolvedValue({
+        id: 30n,
+        productionInvoiceId: null,
+        mfgProduct: { factoryCode: 'GHE-9' },
+      });
+      await expect(service.updateItemLsx('7', '20', 'MY-313', khsx)).rejects.toThrow(
+        'Số LSX MY-313 đang dùng ở lệnh SKU chưa gom vào lệnh (SKU GHE-9)',
+      );
+    });
+
+    it('P2002 lúc update (2 người cùng lúc) -> 409 cùng câu', async () => {
+      setup();
+      prisma.productionInvoiceItem.findFirst
+        .mockResolvedValueOnce(null) // kiểm trước: chưa ai giữ
+        .mockResolvedValueOnce({
+          id: 31n,
+          productionInvoiceId: null,
+          mfgProduct: { factoryCode: 'GHE-9' },
+        }); // sau khi unique index chặn: đã có người giữ
+      prisma.productionInvoiceItem.update.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: 'test',
+        }),
+      );
+      const attempt = service.updateItemLsx('7', '20', 'MY-313', khsx);
+      await expect(attempt).rejects.toThrow(ConflictException);
+      await expect(attempt).rejects.toThrow(/Số LSX MY-313 đang dùng ở lệnh/);
+    });
+
+    it('dòng APPROVED đã có số: KHSX đổi/xoá -> 403, không ghi', async () => {
+      setup({ prodApprovalStatus: 'APPROVED', lsxCode: 'MY-313' });
+      await expect(service.updateItemLsx('7', '20', 'MY-400', khsx)).rejects.toThrow(
+        ForbiddenException,
+      );
+      await expect(service.updateItemLsx('7', '20', null, khsx)).rejects.toThrow(
+        'Lệnh đã được Sếp duyệt - số LSX chỉ được bổ sung khi đang trống; muốn đổi phải nhờ Admin',
+      );
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+    });
+
+    it('dòng APPROVED đã có số: Admin đổi được', async () => {
+      setup({ prodApprovalStatus: 'APPROVED', lsxCode: 'MY-313' });
+      await service.updateItemLsx('7', '20', 'MY-400', admin);
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledWith({
+        where: { id: 20n },
+        data: { lsxCode: 'MY-400' },
+      });
+    });
+
+    it('dòng APPROVED đang trống: KHSX điền được', async () => {
+      setup({ prodApprovalStatus: 'APPROVED', lsxCode: null });
+      await service.updateItemLsx('7', '20', 'MY-400', khsx);
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('dòng chưa APPROVED (đang chờ Sếp) có số: KHSX sửa tự do', async () => {
+      setup({ prodApprovalStatus: 'WAITING_BOSS', lsxCode: 'MY-313' });
+      await service.updateItemLsx('7', '20', 'MY-400', khsx);
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('giống giá trị cũ (sau chuẩn hoá) -> trả dòng, KHÔNG ghi, KHÔNG audit', async () => {
+      setup({ lsxCode: 'MY-313' });
+      const result = await service.updateItemLsx('7', '20', 'my313', khsx);
+      expect(result.lsxCode).toBe('MY-313');
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('gửi QLSX bắt buộc số LSX (Phần A – Đợt 2)', () => {
+    it('sendItemToQlsx: dòng thiếu LSX -> 400 nêu mã SKU, không ghi', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem({ lsxCode: null }));
+      await expect(service.sendItemToQlsx('7', '20', 'user-khsx')).rejects.toThrow(
+        new BadRequestException("Chưa nhập số LSX cho SKU SKU-01 - nhập ở ô 'Số LSX' rồi gửi lại"),
+      );
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('sendBatchToQlsx: liệt kê MỌI SKU thiếu LSX trong tập sẽ gửi, không gửi gì', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            piItem({ id: 20n, lsxCode: 'MY-1' }),
+            piItem({
+              id: 21n,
+              lsxCode: null,
+              mfgProduct: { ...mfgProduct, factoryCode: 'SKU-02' },
+            }),
+            piItem({
+              id: 22n,
+              lsxCode: null,
+              mfgProduct: { ...mfgProduct, factoryCode: 'SKU-03' },
+            }),
+          ],
+        }),
+      );
+      await expect(service.sendBatchToQlsx('7', 'user-khsx')).rejects.toThrow(/SKU-02, SKU-03/);
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('sendBatchToQlsx: SKU thiếu LSX nhưng bị bỏ tick (ngoài tập gửi) thì không chặn', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [piItem({ id: 20n, lsxCode: 'MY-1' }), piItem({ id: 21n, lsxCode: null })],
+        }),
+      );
+      await expect(service.sendBatchToQlsx('7', 'user-khsx', ['20'])).resolves.toBeDefined();
+    });
+
+    it('sendItemToBoss/approve KHÔNG chặn thiếu LSX (lệnh cũ đang chờ sẵn)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_QLSX', lsxCode: null }),
+      );
+      await expect(
+        service.sendItemToBoss('7', '20', 'thanh-pham', 'Kho thành phẩm', '3', 'user-qlsx'),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  describe('gửi Sếp kèm xưởng cơ khí (Phần A – Đợt 2)', () => {
+    const waitingQlsxPi = (extraItems: unknown[] = []) =>
+      pi({
+        items: [piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }), ...extraItems],
+      });
+
+    it('sendItemToBoss thiếu workshopId -> 400 có chữ "tải lại trang"', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(waitingQlsxPi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+      await expect(
+        service.sendItemToBoss('7', '20', 'thanh-pham', 'Kho thành phẩm', undefined, 'u'),
+      ).rejects.toThrow(/tải lại trang/);
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('sendBatchToBoss thiếu workshopId -> 400 có chữ "tải lại trang"', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(waitingQlsxPi());
+      await expect(
+        service.sendBatchToBoss('7', 'thanh-pham', 'Kho thành phẩm', undefined, 'u'),
+      ).rejects.toThrow(/tải lại trang/);
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('xưởng không tồn tại hoặc đã ngừng dùng -> 400', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(waitingQlsxPi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+      prisma.workshop.findUnique.mockResolvedValueOnce(null);
+      await expect(service.sendItemToBoss('7', '20', 'tp', 'Kho', '99', 'u')).rejects.toThrow(
+        'Xưởng cơ khí không tồn tại hoặc đã ngừng dùng',
+      );
+      prisma.workshop.findUnique.mockResolvedValueOnce({ ...workshopPA, isActive: false });
+      await expect(service.sendBatchToBoss('7', 'tp', 'Kho', '3', 'u')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('dòng KHÁC của PI đã WAITING_BOSS/APPROVED ở xưởng khác -> 409 nêu tên xưởng đó', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        waitingQlsxPi([
+          piItem({
+            id: 21n,
+            lsxCode: 'MY-314',
+            prodApprovalStatus: 'APPROVED',
+            workshopId: 4n,
+            workshop: workshopMY,
+          }),
+        ]),
+      );
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }),
+      );
+      await expect(service.sendItemToBoss('7', '20', 'tp', 'Kho', '3', 'u')).rejects.toThrow(
+        'Lệnh MY-313 + MY-314 đã có SKU gửi Sếp ở Mỹ Yến - mọi SKU của một lệnh phải cùng 1 xưởng',
+      );
+      await expect(service.sendBatchToBoss('7', 'tp', 'Kho', '3', 'u')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('dòng khác đã ở CÙNG xưởng -> gửi được', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        waitingQlsxPi([
+          piItem({
+            id: 21n,
+            prodApprovalStatus: 'WAITING_BOSS',
+            workshopId: 3n,
+            workshop: workshopPA,
+          }),
+        ]),
+      );
+      await expect(service.sendBatchToBoss('7', 'tp', 'Kho', '3', 'u')).resolves.toBeDefined();
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [20n] } },
+        data: expect.objectContaining({ workshopId: 3n }) as unknown,
+      });
+    });
+
+    it('sendBatchToBoss ghi workshopId vào audit của từng dòng', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(waitingQlsxPi());
+      await service.sendBatchToBoss('7', 'tp', 'Kho', '3', 'u');
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment -- jest matcher typing */
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          newValue: expect.objectContaining({ workshopId: '3' }),
+        }),
+      });
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+    });
+  });
+
+  describe('changeWorkshop (Phần A – Đợt 2)', () => {
+    const sentPi = (itemOverrides: Record<string, unknown>[] = [{}, {}]) =>
+      pi({
+        items: itemOverrides.map((o, i) =>
+          piItem({
+            id: BigInt(20 + i),
+            lsxCode: `MY-${313 + i}`,
+            prodApprovalStatus: 'WAITING_BOSS',
+            workshopId: 3n,
+            workshop: workshopPA,
+            ...o,
+          }),
+        ),
+      });
+    beforeEach(() => {
+      prisma.workshop.findUnique.mockResolvedValue(workshopMY);
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
+    });
+
+    it('đổi xưởng mọi dòng, audit từng dòng, emit PI_WORKSHOP_CHANGED đúng params, trả PI mới', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        sentPi([{}, { prodApprovalStatus: 'APPROVED' }]),
+      );
+
+      const result = await service.changeWorkshop('7', '4', 'Phú An quá tải', 'user-qlsx');
+
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: { in: [20n, 21n] },
+          prodApprovalStatus: { in: ['WAITING_BOSS', 'APPROVED'] },
+        },
+        data: { workshopId: 4n },
+      });
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment -- jest matcher typing */
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          recordId: '20',
+          oldValue: { workshopId: '3', workshopCode: 'PA' },
+          newValue: { workshopId: '4', workshopCode: 'MY', reason: 'Phú An quá tải' },
+        }),
+      });
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+      expect(notificationsService.emit).toHaveBeenCalledWith('PI_WORKSHOP_CHANGED', {
+        entityId: '7',
+        actorId: 'user-qlsx',
+        params: {
+          piCode: 'PI-7',
+          displayCode: 'MY-313 + MY-314',
+          fromWorkshop: 'Phú An',
+          toWorkshop: 'Mỹ Yến',
+          reason: 'Phú An quá tải',
+          count: 2,
+        },
+      });
+      expect(result.displayCode).toBe('MY-313 + MY-314');
+    });
+
+    it('emit lỗi vẫn không làm hỏng việc đổi xưởng (best-effort)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      notificationsService.emit.mockRejectedValueOnce(new Error('boom'));
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).resolves.toBeDefined();
+    });
+
+    it('PI có SteelIssue -> 409 "đã xuất sắt", không ghi', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      prisma.steelIssue.count.mockResolvedValue(1);
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(
+        'Lệnh MY-313 + MY-314 đã xuất sắt - không đổi xưởng được',
+      );
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('có MaterialYieldIssue của production order thuộc dòng PI -> 409 "đã xuất vật tư"', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      prisma.materialYieldIssue.count.mockResolvedValue(2);
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(
+        /đã xuất vật tư cho xưởng - không đổi xưởng được/,
+      );
+      expect(prisma.materialYieldIssue.count).toHaveBeenCalledWith({
+        where: { productionOrder: { productionInvoiceItemId: { in: [20n, 21n] } } },
+      });
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('xuất sắt chen vào giữa lúc đổi (kiểm lại TRONG transaction) -> 409, không ghi', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      prisma.steelIssue.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(/đã xuất sắt/);
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('có dòng WAITING_QLSX -> 409 nêu SKU và trạng thái', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        sentPi([{}, { prodApprovalStatus: 'WAITING_QLSX' }]),
+      );
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(
+        'Chỉ đổi xưởng khi mọi SKU của lệnh đã gửi Sếp hoặc đã duyệt (còn SKU SKU-01: WAITING_QLSX)',
+      );
+    });
+
+    it('PI không còn dòng -> 409', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ items: [] }));
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('mọi dòng đã ở đúng xưởng này -> 400', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      prisma.workshop.findUnique.mockResolvedValue(workshopPA);
+      await expect(service.changeWorkshop('7', '3', 'lý do', 'u')).rejects.toThrow(
+        'Lệnh đang ở Phú An rồi',
+      );
+    });
+
+    it('xưởng không dùng -> 400', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      prisma.workshop.findUnique.mockResolvedValue({ ...workshopMY, isActive: false });
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('updateMany đếm lệch số dòng (có người đổi trạng thái giữa chừng) -> 409', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 1 });
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(/tải lại trang/);
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('response: displayCode / lsxCodes / hasMaterialIssue / search (Phần A – Đợt 2)', () => {
+    it('PI chưa dòng nào có LSX -> displayCode = mã PI, lsxCodes rỗng', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          cuttingProposals: [],
+          items: [piItem({ lsxCode: null }), piItem({ id: 21n, lsxCode: null })],
+        }),
+      );
+      const result = await service.findOne('7');
+      expect(result.displayCode).toBe('PI-7');
+      expect(result.lsxCodes).toEqual([]);
+    });
+
+    it('PI gộp 2 dòng -> displayCode "MY-313 + MY-314"; cùng số ở 2 dòng chỉ hiện 1 lần', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          isMerged: true,
+          cuttingProposals: [],
+          items: [
+            piItem({ id: 20n, lsxCode: 'MY-313' }),
+            piItem({ id: 21n, lsxCode: 'MY-314' }),
+            piItem({ id: 22n, lsxCode: 'MY-313' }),
+          ],
+        }),
+      );
+      const result = await service.findOne('7');
+      expect(result.displayCode).toBe('MY-313 + MY-314');
+      expect(result.lsxCodes).toEqual(['MY-313', 'MY-314']);
+    });
+
+    it('create/update (toResponseDto) cũng có displayCode và lsxCodes, hasMaterialIssue để undefined', async () => {
+      prisma.productionInvoice.create.mockResolvedValue(
+        pi({ items: [piItem({ lsxCode: 'GP-176' })] }),
+      );
+      const result = await service.create({});
+      expect(result.displayCode).toBe('GP-176');
+      expect(result.lsxCodes).toEqual(['GP-176']);
+      expect(result.hasMaterialIssue).toBeUndefined();
+    });
+
+    it('hasMaterialIssue = true khi có SteelIssue của PI, hoặc MaterialYieldIssue ở production order của dòng bất kỳ', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValueOnce(
+        pi({ cuttingProposals: [], _count: { steelIssues: 1 }, items: [piItem()] }),
+      );
+      expect((await service.findOne('7')).hasMaterialIssue).toBe(true);
+
+      prisma.productionInvoice.findUnique.mockResolvedValueOnce(
+        pi({
+          cuttingProposals: [],
+          _count: { steelIssues: 0 },
+          items: [
+            piItem({
+              productionOrder: {
+                mfgProductId: 2n,
+                bomRevisionId: 5n,
+                cuttingProposals: [],
+                _count: { materialYieldIssues: 3 },
+              },
+            }),
+          ],
+        }),
+      );
+      expect((await service.findOne('7')).hasMaterialIssue).toBe(true);
+
+      prisma.productionInvoice.findUnique.mockResolvedValueOnce(
+        pi({ cuttingProposals: [], _count: { steelIssues: 0 }, items: [piItem()] }),
+      );
+      expect((await service.findOne('7')).hasMaterialIssue).toBe(false);
+    });
+
+    it('findAll search khớp mã PI HOẶC số LSX của dòng, vẫn giữ điều kiện items: { some: {} }', async () => {
+      prisma.productionInvoice.findMany.mockResolvedValue([]);
+      prisma.productionInvoice.count.mockResolvedValue(0);
+      await service.findAll({ search: 'my-31', page: 1, limit: 10, sortOrder: 'desc' } as never);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
+      const args = prisma.productionInvoice.findMany.mock.calls[0][0] as {
+        where: Record<string, unknown>;
+      };
+      expect(args.where).toEqual({
+        items: { some: {} },
+        AND: [
+          {
+            OR: [
+              { code: { contains: 'my-31', mode: 'insensitive' } },
+              { items: { some: { lsxCode: { contains: 'my-31', mode: 'insensitive' } } } },
+            ],
+          },
+        ],
+      });
+    });
+
+    it('item DTO có workshop: instanceToPlain giữ đủ field con id/code/name và lsxCode', () => {
+      const dto = new ProductionInvoiceItemResponseDto({
+        id: '20',
+        lsxCode: 'MY-313',
+        workshop: { id: '3', code: 'PA', name: 'Phú An' },
+      });
+      const plain = instanceToPlain(dto);
+      expect(plain.lsxCode).toBe('MY-313');
+      expect(plain.workshop).toEqual({ id: '3', code: 'PA', name: 'Phú An' });
+    });
+  });
+
   describe('notifications (Phase 3a, mục 7.2)', () => {
     it('sendItemToQlsx() emit PI_SENT_TO_QLSX với count=1, dedupeKey theo PI, loại trừ actor', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
@@ -2041,7 +2638,7 @@ describe('ProductionInvoicesService', () => {
         piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
       );
 
-      await service.sendItemToBoss('7', '20', 'thanh-pham', 'Kho thành phẩm', 'user-qlsx');
+      await service.sendItemToBoss('7', '20', 'thanh-pham', 'Kho thành phẩm', '3', 'user-qlsx');
 
       expect(notificationsService.resolve).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -2071,7 +2668,7 @@ describe('ProductionInvoicesService', () => {
         piItem({ id: 21n, prodApprovalStatus: 'WAITING_BOSS' }),
       );
 
-      await service.sendItemToBoss('7', '21', 'thanh-pham', 'Kho thành phẩm', 'user-qlsx');
+      await service.sendItemToBoss('7', '21', 'thanh-pham', 'Kho thành phẩm', '3', 'user-qlsx');
 
       expect(notificationsService.resolve).not.toHaveBeenCalled();
     });

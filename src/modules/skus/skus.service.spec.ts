@@ -44,6 +44,7 @@ describe('SkusService', () => {
   let prisma: {
     salesOrder: { findUnique: jest.Mock };
     mfgProduct: { findUnique: jest.Mock; update: jest.Mock };
+    systemConfig: { findUniqueOrThrow: jest.Mock };
     salesOrderItem: {
       findFirst: jest.Mock;
       findUnique: jest.Mock;
@@ -111,6 +112,11 @@ describe('SkusService', () => {
     prisma = {
       salesOrder: { findUnique: jest.fn() },
       mfgProduct: { findUnique: jest.fn(), update: jest.fn() },
+      systemConfig: {
+        findUniqueOrThrow: jest
+          .fn()
+          .mockResolvedValue({ containerVolumeM3: { toNumber: () => 68 } }),
+      },
       salesOrderItem: {
         findFirst: jest.fn(),
         findUnique: jest.fn(),
@@ -2310,6 +2316,150 @@ describe('SkusService', () => {
       const result = await service.approve('5', 'key-1', 'user-boss');
 
       expect(result.status).toBe('APPROVED');
+    });
+  });
+
+  describe('updateContainerLoad (Phần A – Đợt 1, YC9)', () => {
+    const dec = (n: number) => ({ toNumber: () => n });
+    const withBox = (o: Record<string, unknown> = {}) =>
+      planForm({
+        mfgProduct: {
+          ...mfgProduct,
+          boxLengthCm: null,
+          boxWidthCm: null,
+          boxHeightCm: null,
+          boxesPerSet: 1,
+          loadContManual: null,
+          boxVolumeM3: null,
+          loadContFormula: null,
+          loadCont: null,
+          containerLoadUpdatedAt: null,
+          ...o,
+        },
+      });
+    const updateData = () =>
+      (
+        prisma.mfgProduct.update.mock.calls[0] as [
+          { where: unknown; data: Record<string, unknown> },
+        ]
+      )[0];
+    // update trả lại dòng đã ghi (như Prisma) - service đổi dòng đó thành ContainerLoadDto.
+    beforeEach(() => {
+      prisma.mfgProduct.update.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve({ id: 2n, ...data }),
+      );
+    });
+
+    it('tính và lưu boxVolumeM3/loadContFormula/loadCont (85 x 80 x 100 -> 100 bộ), ghi người sửa', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(withBox());
+      const result = await service.updateContainerLoad(
+        '5',
+        { boxLengthCm: 85, boxWidthCm: 80, boxHeightCm: 100 },
+        'user-9',
+      );
+      const { where, data } = updateData();
+      expect(where).toEqual({ id: 2n });
+      expect(data).toMatchObject({
+        boxLengthCm: 85,
+        boxWidthCm: 80,
+        boxHeightCm: 100,
+        boxesPerSet: 1,
+        loadContManual: null,
+        boxVolumeM3: 0.68,
+        loadContFormula: 100,
+        loadCont: 100,
+        containerLoadUpdatedById: 'user-9',
+      });
+      expect(data.containerLoadUpdatedAt).toBeInstanceOf(Date);
+      // Trả đúng khối ContainerLoad (hợp đồng FE), không trả cả SKU.
+      expect(result).toMatchObject({
+        boxLengthCm: 85,
+        boxVolumeM3: 0.68,
+        loadContFormula: 100,
+        loadCont: 100,
+        source: 'FORMULA',
+      });
+      expect(result).not.toHaveProperty('factoryCode');
+    });
+
+    it('undefined giữ giá trị cũ, null xoá', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        withBox({
+          boxLengthCm: dec(85),
+          boxWidthCm: dec(80),
+          boxHeightCm: dec(100),
+          loadContManual: 7,
+        }),
+      );
+      await service.updateContainerLoad('5', { boxHeightCm: null, loadContManual: null }, 'u');
+      expect(updateData().data).toMatchObject({
+        boxLengthCm: 85,
+        boxWidthCm: 80,
+        boxHeightCm: null,
+        loadContManual: null,
+        boxVolumeM3: null,
+        loadContFormula: null,
+        loadCont: null,
+      });
+    });
+
+    it('số nhập tay thắng công thức', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(withBox());
+      await service.updateContainerLoad(
+        '5',
+        { boxLengthCm: 85, boxWidthCm: 80, boxHeightCm: 100, loadContManual: 90 },
+        'u',
+      );
+      expect(updateData().data).toMatchObject({
+        loadContFormula: 100,
+        loadContManual: 90,
+        loadCont: 90,
+      });
+    });
+
+    it('số thùng/bộ chia thêm vào công thức; dùng thể tích cont trong SystemConfig', async () => {
+      prisma.systemConfig.findUniqueOrThrow.mockResolvedValue({ containerVolumeM3: dec(34) });
+      prisma.planForm.findUnique.mockResolvedValue(withBox());
+      await service.updateContainerLoad(
+        '5',
+        { boxLengthCm: 85, boxWidthCm: 80, boxHeightCm: 100, boxesPerSet: 2 },
+        'u',
+      );
+      expect(updateData().data).toMatchObject({
+        boxesPerSet: 2,
+        loadContFormula: 25,
+        loadCont: 25,
+      });
+    });
+
+    it('không chặn theo trạng thái PlanForm (đã gửi Sếp duyệt vẫn sửa được)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue({
+        ...withBox(),
+        status: 'WAITING_BOSS_APPROVAL',
+      });
+      await expect(
+        service.updateContainerLoad('5', { boxesPerSet: 3 }, 'u'),
+      ).resolves.toBeDefined();
+      expect(prisma.mfgProduct.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('404 khi không có PlanForm, không ghi gì', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(null);
+      await expect(service.updateContainerLoad('5', { boxesPerSet: 2 }, 'u')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.mfgProduct.update).not.toHaveBeenCalled();
+    });
+
+    it('không tự ghi AuditLog tay - audit extension của Prisma ghi khi mfgProduct.update (tránh 2 dòng)', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(withBox());
+      await service.updateContainerLoad(
+        '5',
+        { boxLengthCm: 85, boxWidthCm: 80, boxHeightCm: 100 },
+        'u',
+      );
+      expect(prisma.mfgProduct.update).toHaveBeenCalledTimes(1);
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
     });
   });
 

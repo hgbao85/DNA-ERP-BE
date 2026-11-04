@@ -31,6 +31,14 @@ import { checkMergeRules, skuLabel } from '../../common/utils/merge-rules.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { auditEvent } from '../../common/utils/audit-event.util';
+import {
+  isValidLsxCode,
+  lenhDisplayCode,
+  lenhLsxCodes,
+  loadLenhDisplayCodes,
+  lsxPrefixOf,
+  normalizeLsxCode,
+} from '../../common/utils/lenh-code.util';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
@@ -57,6 +65,7 @@ import { PackagingResponseDto } from './dto/packaging-response.dto';
 import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-response.dto';
 import { ProductionInvoiceResponseDto } from './dto/production-invoice-response.dto';
 import { RecordPackagingDto } from './dto/record-packaging.dto';
+import { toContainerLoadDto } from '../../common/dto/container-load.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { SolverOverrideDto } from './dto/solver-override.dto';
 import { TransferCheckDefectResponseDto } from './dto/transfer-check-defect-response.dto';
@@ -74,6 +83,7 @@ type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
         productVariant: true;
         wireMaterial: true;
         cushionMaterial: true;
+        workshop: true;
         stages: true;
         salesOrder: { include: { customer: true } };
       };
@@ -89,6 +99,7 @@ type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
     productVariant: true;
     wireMaterial: true;
     cushionMaterial: true;
+    workshop: true;
     stages: true;
     salesOrder: { include: { customer: true } };
   };
@@ -99,16 +110,23 @@ type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
 const PROPOSAL_STATUS_INCLUDE = {
   salesOrder: true,
   cuttingProposals: { orderBy: { requestedAt: 'desc' as const }, take: 1 },
+  // Phần A – Đợt 2: cờ "đã xuất vật tư" (hasMaterialIssue) - đếm cùng truy vấn, không thêm truy vấn theo từng PI.
+  _count: { select: { steelIssues: true } },
   items: {
     include: {
       mfgProduct: true,
       productVariant: true,
       wireMaterial: true,
       cushionMaterial: true,
+      workshop: true,
       stages: true,
       salesOrder: { include: { customer: true } },
       productionOrder: {
-        include: { cuttingProposals: { orderBy: { requestedAt: 'desc' as const }, take: 1 } },
+        include: {
+          cuttingProposals: { orderBy: { requestedAt: 'desc' as const }, take: 1 },
+          // Phần A – Đợt 2
+          _count: { select: { materialYieldIssues: true } },
+        },
       },
     },
   },
@@ -245,6 +263,8 @@ export class ProductionInvoicesService {
       prodApprovalStatus: item.prodApprovalStatus,
       warehouseCode: item.warehouseCode,
       warehouseName: item.warehouseName,
+      // Phần A – Đợt 2: xưởng cơ khí đi cùng vòng đời warehouseCode
+      workshopId: item.workshopId?.toString() ?? null,
       requestedAt: item.requestedAt,
       requestedById: item.requestedById,
       qlsxAt: item.qlsxAt,
@@ -298,6 +318,7 @@ export class ProductionInvoicesService {
             productVariant: true,
             wireMaterial: true,
             cushionMaterial: true,
+            workshop: true,
             stages: true,
             salesOrder: { include: { customer: true } },
           },
@@ -312,7 +333,23 @@ export class ProductionInvoicesService {
       // Ẩn PI đã bị rút sạch SKU sang một đợt gộp. KHÔNG xoá bản ghi (PlanForm.productionInvoiceId
       // còn trỏ tới, xoá là mất truy vết) - chỉ không hiện dòng rỗng vô nghĩa cho KHSX.
       items: { some: {} },
-      ...(query.search ? { code: { contains: query.search, mode: 'insensitive' } } : {}),
+      // Phần A – Đợt 2: tìm theo mã PI HOẶC số LSX của một dòng (AND để giữ điều kiện `items: { some: {} }`).
+      ...(query.search
+        ? {
+            AND: [
+              {
+                OR: [
+                  { code: { contains: query.search, mode: 'insensitive' } },
+                  {
+                    items: {
+                      some: { lsxCode: { contains: query.search, mode: 'insensitive' } },
+                    },
+                  },
+                ],
+              },
+            ],
+          }
+        : {}),
     };
 
     const result = await paginate(
@@ -360,6 +397,7 @@ export class ProductionInvoicesService {
             productVariant: true,
             wireMaterial: true,
             cushionMaterial: true,
+            workshop: true,
             stages: true,
             salesOrder: { include: { customer: true } },
           },
@@ -590,6 +628,7 @@ export class ProductionInvoicesService {
           requestedById: null,
           warehouseCode: null,
           warehouseName: null,
+          workshopId: null, // Phần A – Đợt 2 (lsxCode GIỮ - số LSX đi theo dòng SKU)
           qlsxAt: null,
           qlsxById: null,
           decidedAt: null,
@@ -669,6 +708,7 @@ export class ProductionInvoicesService {
           requestedById: null,
           warehouseCode: null,
           warehouseName: null,
+          workshopId: null, // Phần A – Đợt 2 (lsxCode GIỮ)
           qlsxAt: null,
           qlsxById: null,
           decidedAt: null,
@@ -709,6 +749,7 @@ export class ProductionInvoicesService {
         productVariant: true,
         wireMaterial: true,
         cushionMaterial: true,
+        workshop: true,
         stages: true,
         salesOrder: { include: { customer: true } },
       },
@@ -942,6 +983,214 @@ export class ProductionInvoicesService {
     }
   }
 
+  // ─── Phần A – Đợt 2: số LSX + xưởng cơ khí ─────────────────────────────────────
+
+  /**
+   * Phần A – Đợt 2: KHSX/Admin nhập-sửa-xoá số LSX của 1 dòng SKU (PATCH :id/items/:itemId/lsx). Số lưu dạng chuẩn hoá,
+   * không trùng toàn hệ thống. Dòng đã Sếp duyệt: chỉ được BỔ SUNG khi đang trống, đổi/xoá phải là Admin.
+   */
+  async updateItemLsx(
+    piId: string,
+    itemId: string,
+    raw: string | null,
+    actor: { id: string; roles: string[] },
+  ): Promise<ProductionInvoiceItemResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const item = await this.findItemOrThrow(pi.id, itemId);
+
+    const trimmed = raw === null ? '' : raw.trim();
+    const next = trimmed === '' ? null : normalizeLsxCode(trimmed);
+    if (next !== null && !isValidLsxCode(next)) {
+      throw new BadRequestException(
+        'Số LSX phải dạng TIỀN TỐ-SỐ, vd MY-313 (1–6 chữ cái, 1–6 chữ số)',
+      );
+    }
+    if (next === item.lsxCode) return this.toItemResponseDto(item);
+
+    if (next !== null) {
+      const config = await this.prisma.systemConfig.findUniqueOrThrow({
+        where: { id: SYSTEM_CONFIG_ID },
+        select: { lsxPrefixes: true },
+      });
+      const prefix = lsxPrefixOf(next);
+      if (
+        config.lsxPrefixes.length > 0 &&
+        prefix !== null &&
+        !config.lsxPrefixes.includes(prefix)
+      ) {
+        throw new BadRequestException(
+          `Tiền tố ${prefix} chưa có trong Cấu hình hệ thống (đang có: ${config.lsxPrefixes.join(', ')})`,
+        );
+      }
+    }
+    if (
+      item.prodApprovalStatus === ProdApprovalStatus.APPROVED &&
+      item.lsxCode !== null &&
+      !actor.roles.includes(DEFAULT_ROLES.ADMIN)
+    ) {
+      throw new ForbiddenException(
+        'Lệnh đã được Sếp duyệt - số LSX chỉ được bổ sung khi đang trống; muốn đổi phải nhờ Admin',
+      );
+    }
+    if (next !== null) await this.assertLsxNotTaken(next, item.id);
+
+    try {
+      await this.prisma.productionInvoiceItem.update({
+        where: { id: item.id },
+        data: { lsxCode: next },
+      });
+    } catch (error) {
+      if (
+        next !== null &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        // 2 người nhập cùng số cùng lúc: unique index chặn người thứ hai.
+        await this.assertLsxNotTaken(next, item.id);
+        throw new ConflictException(`Số LSX ${next} đang được dùng ở một lệnh khác`);
+      }
+      throw error;
+    }
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.UPDATE,
+      tableName: 'ProductionInvoiceItem',
+      recordId: item.id,
+      oldValue: { lsxCode: item.lsxCode },
+      newValue: { lsxCode: next },
+    });
+    this.publishRealtime('PRODUCTION_INVOICE', pi.id, 'UPDATED', actor.id);
+    return this.toItemResponseDto(await this.findItemOrThrow(pi.id, itemId));
+  }
+
+  /** Số LSX đã có ở dòng khác -> 409 kèm mã lệnh đang giữ số. */
+  private async assertLsxNotTaken(lsxCode: string, exceptItemId: bigint): Promise<void> {
+    const holder = await this.prisma.productionInvoiceItem.findFirst({
+      where: { lsxCode, id: { not: exceptItemId } },
+      include: { mfgProduct: true },
+    });
+    if (!holder) return;
+    let where = 'SKU chưa gom vào lệnh';
+    if (holder.productionInvoiceId !== null) {
+      const codes = await loadLenhDisplayCodes(this.prisma, [holder.productionInvoiceId]);
+      where = codes.get(holder.productionInvoiceId.toString()) ?? where;
+    }
+    throw new ConflictException(
+      `Số LSX ${lsxCode} đang dùng ở lệnh ${where} (SKU ${holder.mfgProduct.factoryCode})`,
+    );
+  }
+
+  /**
+   * Phần A – Đợt 2: QLSX đổi xưởng cơ khí của CẢ lệnh (PATCH :id/workshop) sau khi đã gửi Sếp/đã duyệt - chỉ được khi chưa xuất
+   * sắt / vật tư cho xưởng. Kiểm 2 lần (trước + trong transaction) để chống đua với xuất sắt.
+   */
+  async changeWorkshop(
+    piId: string,
+    workshopId: string,
+    reason: string,
+    actorUserId: string,
+  ): Promise<ProductionInvoiceResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    if (pi.items.length === 0) {
+      throw new ConflictException(`Lệnh ${pi.code} không còn SKU nào - không đổi xưởng được`);
+    }
+    const notSent = pi.items.find(
+      (it) =>
+        it.prodApprovalStatus !== ProdApprovalStatus.WAITING_BOSS &&
+        it.prodApprovalStatus !== ProdApprovalStatus.APPROVED,
+    );
+    if (notSent) {
+      throw new ConflictException(
+        `Chỉ đổi xưởng khi mọi SKU của lệnh đã gửi Sếp hoặc đã duyệt (còn SKU ${
+          notSent.mfgProduct.factoryCode
+        }: ${notSent.prodApprovalStatus ?? 'chưa gửi'})`,
+      );
+    }
+    const workshop = await this.prisma.workshop.findUnique({
+      where: { id: parseBigIntId(workshopId) },
+    });
+    if (!workshop || !workshop.isActive) {
+      throw new BadRequestException('Xưởng cơ khí không tồn tại hoặc đã ngừng dùng');
+    }
+    if (pi.items.every((it) => it.workshopId === workshop.id)) {
+      throw new BadRequestException(`Lệnh đang ở ${workshop.name} rồi`);
+    }
+    const displayCode = lenhDisplayCode(pi, pi.items);
+    const ids = pi.items.map((it) => it.id);
+    await this.assertNoMaterialIssued(this.prisma, pi.id, ids, displayCode);
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.assertNoMaterialIssued(tx, pi.id, ids, displayCode);
+      const { count } = await tx.productionInvoiceItem.updateMany({
+        where: {
+          id: { in: ids },
+          prodApprovalStatus: {
+            in: [ProdApprovalStatus.WAITING_BOSS, ProdApprovalStatus.APPROVED],
+          },
+        },
+        data: { workshopId: workshop.id },
+      });
+      if (count !== ids.length) {
+        throw new ConflictException(
+          `Lệnh ${displayCode} đã có thay đổi khác trong lúc đổi xưởng - tải lại trang rồi thử lại`,
+        );
+      }
+    });
+
+    for (const it of pi.items) {
+      await auditEvent(this.prisma, this.cls, this.logger, {
+        action: AuditAction.UPDATE,
+        tableName: 'ProductionInvoiceItem',
+        recordId: it.id,
+        oldValue: {
+          workshopId: it.workshopId?.toString() ?? null,
+          workshopCode: it.workshop?.code ?? null,
+        },
+        newValue: { workshopId: workshop.id.toString(), workshopCode: workshop.code, reason },
+      });
+    }
+    try {
+      await this.notifications.emit('PI_WORKSHOP_CHANGED', {
+        entityId: pi.id.toString(),
+        actorId: actorUserId,
+        params: {
+          piCode: pi.code,
+          displayCode,
+          fromWorkshop: pi.items.find((it) => it.workshop)?.workshop?.name ?? null,
+          toWorkshop: workshop.name,
+          reason,
+          count: ids.length,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create PI_WORKSHOP_CHANGED notification (PI ${pi.id}): ${(error as Error).message}`,
+      );
+    }
+    this.publishRealtime('PRODUCTION_INVOICE', pi.id, 'UPDATED', actorUserId);
+    return this.findOne(piId);
+  }
+
+  /** Đã xuất sắt cho PI hoặc xuất vật tư cho xưởng (theo production order của các dòng) -> 409. `client` = prisma hoặc tx. */
+  private async assertNoMaterialIssued(
+    client: Pick<PrismaServiceType, 'steelIssue' | 'materialYieldIssue'>,
+    piId: bigint,
+    itemIds: bigint[],
+    displayCode: string,
+  ): Promise<void> {
+    const steel = await client.steelIssue.count({ where: { productionInvoiceId: piId } });
+    if (steel > 0) {
+      throw new ConflictException(`Lệnh ${displayCode} đã xuất sắt - không đổi xưởng được`);
+    }
+    const yieldIssues = await client.materialYieldIssue.count({
+      where: { productionOrder: { productionInvoiceItemId: { in: itemIds } } },
+    });
+    if (yieldIssues > 0) {
+      throw new ConflictException(
+        `Lệnh ${displayCode} đã xuất vật tư cho xưởng - không đổi xưởng được`,
+      );
+    }
+  }
+
   /** KHSX gửi 1 SKU cho QLSX xử lý - mirror sendItemToQlsx() mock. */
   async sendItemToQlsx(
     piId: string,
@@ -951,6 +1200,12 @@ export class ProductionInvoicesService {
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertNoApprovalOrRejected(item);
+    // Phần A – Đợt 2: KHSX phải nhập số LSX trước khi gửi QLSX (lệnh cũ đang chờ sẵn không bị chặn ở bước sau).
+    if (!item.lsxCode) {
+      throw new BadRequestException(
+        `Chưa nhập số LSX cho SKU ${item.mfgProduct.factoryCode} - nhập ở ô 'Số LSX' rồi gửi lại`,
+      );
+    }
 
     const data = {
       prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX,
@@ -1000,16 +1255,20 @@ export class ProductionInvoicesService {
     itemId: string,
     warehouseCode: string,
     warehouseName: string,
+    workshopId: string | undefined,
     actorUserId: string,
   ): Promise<ProductionInvoiceItemResponseDto> {
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_QLSX);
+    // Phần A – Đợt 2: bắt buộc chọn xưởng cơ khí; 1 PI = 1 xưởng.
+    const workshop = await this.resolveWorkshopForSend(pi, [item.id], workshopId);
 
     const data = {
       prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS,
       warehouseCode,
       warehouseName,
+      workshopId: workshop.id,
       qlsxAt: new Date(),
       qlsxById: actorUserId,
     };
@@ -1022,8 +1281,7 @@ export class ProductionInvoicesService {
         `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc gửi Sếp - không ghi đè`,
       );
     }
-    const updated = { ...item, ...data };
-    await this.auditItemApprovalTransition(item, updated);
+    await this.auditItemApprovalTransition(item, { ...item, ...data });
     // Item vừa rời WAITING_QLSX - nếu KHÔNG còn item nào khác của PI này ở đó, đóng thông báo
     // "chờ QLSX" (mọi SKU trong hàng đợi đã được QLSX xử lý xong).
     const stillWaitingQlsx = pi.items.some(
@@ -1043,7 +1301,47 @@ export class ProductionInvoicesService {
       `PI_SENT_TO_BOSS:${pi.id}`,
       actorUserId,
     );
-    return this.toItemResponseDto(updated);
+    // Phần A – Đợt 2: đọc lại từ DB để khối `workshop` là xưởng MỚI (không spread {...item, ...data}).
+    return this.toItemResponseDto(await this.findItemOrThrow(pi.id, itemId));
+  }
+
+  /**
+   * Phần A – Đợt 2: kiểm xưởng cơ khí lúc QLSX gửi Sếp. Thiếu -> 400 (FE bản cũ); không tồn tại/ngừng dùng -> 400;
+   * 1 PI = 1 xưởng (xuất sắt/giữ chỗ theo PI): SKU KHÁC của PI (ngoài tập đang gửi) đã WAITING_BOSS/APPROVED ở xưởng khác -> 409.
+   */
+  private async resolveWorkshopForSend(
+    pi: PIWithRefs,
+    targetIds: bigint[],
+    workshopId: string | undefined,
+  ): Promise<{ id: bigint; code: string; name: string }> {
+    if (!workshopId || workshopId.trim() === '') {
+      throw new BadRequestException(
+        'Thiếu xưởng cơ khí - trang đang là phiên bản cũ, hãy tải lại trang (F5) rồi chọn xưởng',
+      );
+    }
+    const workshop = await this.prisma.workshop.findUnique({
+      where: { id: parseBigIntId(workshopId) },
+    });
+    if (!workshop || !workshop.isActive) {
+      throw new BadRequestException('Xưởng cơ khí không tồn tại hoặc đã ngừng dùng');
+    }
+    const targetSet = new Set(targetIds.map((id) => id.toString()));
+    const other = pi.items.find(
+      (it) =>
+        !targetSet.has(it.id.toString()) &&
+        (it.prodApprovalStatus === ProdApprovalStatus.WAITING_BOSS ||
+          it.prodApprovalStatus === ProdApprovalStatus.APPROVED) &&
+        it.workshopId !== null &&
+        it.workshopId !== workshop.id,
+    );
+    if (other) {
+      throw new ConflictException(
+        `Lệnh ${lenhDisplayCode(pi, pi.items)} đã có SKU gửi Sếp ở ${
+          other.workshop?.name ?? 'xưởng khác'
+        } - mọi SKU của một lệnh phải cùng 1 xưởng`,
+      );
+    }
+    return workshop;
   }
 
   // ─── Gửi CẢ PHIẾU (mọi SKU đủ điều kiện) - 2026-08-18 ───────────────────────────
@@ -1080,6 +1378,15 @@ export class ProductionInvoicesService {
     if (targets.length === 0) {
       throw new ConflictException(
         `${pi.code} không còn SKU nào ở trạng thái gửi được (chưa gửi / bị QLSX trả lại)`,
+      );
+    }
+    // Phần A – Đợt 2: mọi SKU sẽ gửi phải có số LSX - thiếu thì không gửi gì, liệt kê hết.
+    const missingLsx = targets.filter((it) => !it.lsxCode);
+    if (missingLsx.length > 0) {
+      throw new BadRequestException(
+        `Chưa nhập số LSX cho SKU ${missingLsx
+          .map((it) => it.mfgProduct.factoryCode)
+          .join(', ')} - nhập ở ô 'Số LSX' rồi gửi lại`,
       );
     }
 
@@ -1129,6 +1436,7 @@ export class ProductionInvoicesService {
     piId: string,
     warehouseCode: string,
     warehouseName: string,
+    workshopId: string | undefined,
     actorUserId: string,
     itemIds?: string[],
   ): Promise<ProductionInvoiceResponseDto> {
@@ -1142,6 +1450,12 @@ export class ProductionInvoicesService {
     if (targets.length === 0) {
       throw new ConflictException(`${pi.code} không còn SKU nào đang chờ QLSX xử lý`);
     }
+    // Phần A – Đợt 2: xưởng cơ khí chung cho cả lần gửi; 1 PI = 1 xưởng.
+    const workshop = await this.resolveWorkshopForSend(
+      pi,
+      targets.map((it) => it.id),
+      workshopId,
+    );
 
     const qlsxAt = new Date();
     await this.prisma.productionInvoiceItem.updateMany({
@@ -1150,6 +1464,7 @@ export class ProductionInvoicesService {
         prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS,
         warehouseCode,
         warehouseName,
+        workshopId: workshop.id,
         qlsxAt,
         qlsxById: actorUserId,
       },
@@ -1160,6 +1475,7 @@ export class ProductionInvoicesService {
         prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS,
         warehouseCode,
         warehouseName,
+        workshopId: workshop.id,
         qlsxAt,
         qlsxById: actorUserId,
       });
@@ -2465,6 +2781,7 @@ export class ProductionInvoicesService {
             productVariant: true,
             wireMaterial: true,
             cushionMaterial: true,
+            workshop: true,
             stages: true,
             salesOrder: { include: { customer: true } },
           },
@@ -2486,6 +2803,7 @@ export class ProductionInvoicesService {
         productVariant: true,
         wireMaterial: true,
         cushionMaterial: true,
+        workshop: true,
         stages: true,
         salesOrder: { include: { customer: true } },
       },
@@ -2539,6 +2857,10 @@ export class ProductionInvoicesService {
     pi: PIWithProposalStatus,
   ): Promise<ProductionInvoiceResponseDto> {
     const dto = this.toResponseDto(pi);
+    // Phần A – Đợt 2: đã xuất sắt cho PI hoặc xuất vật tư cho xưởng ở production order của dòng nào -> khoá đổi xưởng.
+    dto.hasMaterialIssue =
+      (pi._count?.steelIssues ?? 0) > 0 ||
+      pi.items.some((it) => (it.productionOrder?._count?.materialYieldIssues ?? 0) > 0);
     // Phương án neo PI: PI gộp (luồng cũ) HOẶC bất kỳ PI nào tạo từ phương án tính trước (luồng
     // "Solve trước", 2026-09-30, kể cả PI cắt riêng). PI cắt riêng theo luồng cũ không có phương án
     // neo PI (chúng neo PO) nên mảng rỗng -> rơi về nhánh productionOrder như trước.
@@ -2604,6 +2926,9 @@ export class ProductionInvoicesService {
     return new ProductionInvoiceResponseDto({
       id: pi.id.toString(),
       code: pi.code,
+      // Phần A – Đợt 2: mã lệnh hiển thị (số LSX nối " + ", chưa có thì mã PI)
+      displayCode: lenhDisplayCode(pi, pi.items),
+      lsxCodes: lenhLsxCodes(pi.items),
       salesOrderId: pi.salesOrderId?.toString() ?? null,
       salesOrderCode: pi.salesOrder?.orderCode ?? null,
       status: pi.status,
@@ -2641,6 +2966,7 @@ export class ProductionInvoicesService {
       mfgProductId: item.mfgProductId.toString(),
       factoryCode: item.mfgProduct.factoryCode,
       productName: item.mfgProduct.name,
+      containerLoad: toContainerLoadDto(item.mfgProduct),
       productVariantId: item.productVariantId?.toString() ?? null,
       colorCode: item.productVariant?.colorCode ?? null,
       wireMaterial: item.wireMaterial ? toMaterialChoiceRef(item.wireMaterial) : null,
@@ -2659,6 +2985,11 @@ export class ProductionInvoicesService {
       decidedAt: item.decidedAt,
       decidedById: item.decidedById,
       rejectReason: item.rejectReason,
+      // Phần A – Đợt 2
+      lsxCode: item.lsxCode ?? null,
+      workshop: item.workshop
+        ? { id: item.workshop.id.toString(), code: item.workshop.code, name: item.workshop.name }
+        : null,
       stages: item.stages.map((s) => ({
         stageType: s.stageType,
         deadline: s.deadline,

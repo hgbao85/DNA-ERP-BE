@@ -38,6 +38,8 @@ const row = (
   itemId,
   piId: '7',
   piCode: 'PI-2026-001',
+  lsxCode: null, // Phần A – Đợt 2
+  displayCode: 'PI-2026-001',
   productionOrderId: `${itemId}0`,
   skuCode: `SKU-${itemId}`,
   skuName: null,

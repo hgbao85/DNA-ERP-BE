@@ -7,6 +7,10 @@ import { ProductionInvoiceItemResponseDto } from './production-invoice-item-resp
 export class ProductionInvoiceResponseDto {
   @Expose() @ApiProperty() id!: string;
   @Expose() @ApiProperty() code!: string;
+  /** Phần A – Đợt 2: mã lệnh hiển thị = các số LSX của dòng nối " + " (vd "MY-313 + MY-314"); chưa dòng nào có LSX thì = `code`. */
+  @Expose() @ApiProperty() displayCode!: string;
+  /** Phần A – Đợt 2: các số LSX khác nhau của PI, theo thứ tự dòng. */
+  @Expose() @ApiProperty({ type: [String] }) lsxCodes!: string[];
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   @Expose() @ApiProperty({ enum: ProductionInvoiceStatus }) status!: ProductionInvoiceStatus;
@@ -71,6 +75,11 @@ export class ProductionInvoiceResponseDto {
      *  (khác `solverMachine` của PI: null khi KHSX để theo mặc định công ty). */
     machine: SolverMachine;
   } | null;
+  /**
+   * Phần A – Đợt 2: true = PI đã xuất sắt hoặc đã xuất vật tư cho xưởng (không đổi xưởng được nữa). Chỉ findAll/findOne nạp,
+   * nơi khác để undefined.
+   */
+  @Expose() @ApiPropertyOptional() hasMaterialIssue?: boolean;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;
   @Expose()
