@@ -18,6 +18,7 @@ import { BossApprovePurchaseProposalDto } from './dto/boss-approve-purchase-prop
 import { ListPurchaseProposalsQueryDto } from './dto/list-purchase-proposals-query.dto';
 import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
 import { UpdateApprovalFileDto } from './dto/update-approval-file.dto';
+import { UpdateOrderQtyDto } from './dto/update-order-qty.dto';
 import { PurchaseProposalsService } from './purchase-proposals.service';
 
 const VIEW = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.VIEW };
@@ -82,6 +83,22 @@ export class PurchaseProposalsController {
     @CurrentUser('roles') roles: string[],
   ) {
     return this.purchaseProposalsService.updateApprovalFile(id, itemId, dto, userId, roles);
+  }
+
+  /**
+   * Người mua chốt "số mua" (2026-11-04, YC7 mục 7.2) - chỉ được tăng so với số cần mua, khoá sau
+   * khi đã "Sếp đã duyệt". Luật quyền/khoá nằm trong service.
+   */
+  @Patch(':id/items/:itemId/order-qty')
+  @RequirePermissions(UPDATE)
+  updateOrderQty(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: UpdateOrderQtyDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.purchaseProposalsService.updateOrderQty(id, itemId, dto, userId, roles);
   }
 
   @Post(':id/items/:itemId/receive')

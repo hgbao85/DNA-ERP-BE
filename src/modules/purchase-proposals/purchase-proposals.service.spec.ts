@@ -717,6 +717,7 @@ describe('PurchaseProposalsService', () => {
                 itemId: '400',
                 materialCode: 'SAT-25',
                 buyQty: 8,
+                orderQty: null,
                 previousStatus: PurchaseProposalStatus.SUBMITTED,
               },
             ],
@@ -800,6 +801,92 @@ describe('PurchaseProposalsService', () => {
         'PURCHASE_PROPOSAL_APPROVED',
         expect.objectContaining({ params: expect.objectContaining({ count: 1 }) as unknown }),
       );
+    });
+  });
+
+  describe('updateOrderQty (YC7 mục 7.2 - người mua tăng số mua)', () => {
+    const setItem = (overrides: Record<string, unknown> = {}) => {
+      const it = item(overrides);
+      prisma.purchaseProposal.findUnique.mockResolvedValue(proposal({ items: [it] }));
+      prisma.purchaseProposalItem.findUniqueOrThrow.mockResolvedValue(it);
+      return it;
+    };
+
+    it('lưu số mua lớn hơn số cần mua, chỉ trên dòng còn chờ duyệt', async () => {
+      setItem({ buyQty: decimal(6) });
+
+      await service.updateOrderQty('300', '400', { orderQty: 10 }, 'buyer-1', ['PURCHASER']);
+
+      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
+        where: { id: 400n, status: { in: expect.any(Array) as unknown } },
+        data: { orderQty: 10 },
+      });
+      expect(prisma.auditLog.create).toHaveBeenCalled();
+    });
+
+    it('chặn (400) số mua nhỏ hơn số cần mua', async () => {
+      setItem({ buyQty: decimal(6) });
+
+      await expect(
+        service.updateOrderQty('300', '400', { orderQty: 5 }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.purchaseProposalItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('bằng đúng số cần mua hoặc null -> lưu null (không có mua dư)', async () => {
+      setItem({ buyQty: decimal(6) });
+
+      await service.updateOrderQty('300', '400', { orderQty: 6 }, 'buyer-1', ['PURCHASER']);
+      await service.updateOrderQty('300', '400', { orderQty: null }, 'buyer-1', ['PURCHASER']);
+
+      const calls = prisma.purchaseProposalItem.updateMany.mock.calls as [{ data: unknown }][];
+      expect(calls.map((c) => c[0].data)).toEqual([{ orderQty: null }, { orderQty: null }]);
+    });
+
+    it('khoá (409) khi dòng đã qua "Sếp đã duyệt" (đã có phiếu ký)', async () => {
+      setItem({ status: PurchaseProposalStatus.PURCHASING });
+
+      await expect(
+        service.updateOrderQty('300', '400', { orderQty: 10 }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('409 nếu dòng vừa được duyệt bởi thao tác khác giữa lúc đọc và lúc khoá', async () => {
+      setItem();
+      prisma.purchaseProposalItem.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(
+        service.updateOrderQty('300', '400', { orderQty: 10 }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('chặn (403) người mua không phụ trách vật tư; Sếp sửa hộ được', async () => {
+      setItem({ material: material({ buyerId: 'buyer-2' }) });
+
+      await expect(
+        service.updateOrderQty('300', '400', { orderQty: 10 }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(ForbiddenException);
+      await expect(
+        service.updateOrderQty('300', '400', { orderQty: 10 }, 'boss-1', ['BOSS']),
+      ).resolves.toBeDefined();
+    });
+
+    it('sắt (có chiều dài cây) chỉ nhận số cây nguyên', async () => {
+      setItem({ stockLengthMm: 6000 });
+
+      await expect(
+        service.updateOrderQty('300', '400', { orderQty: 9.5 }, 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('trả về purchaseQty = số mua và orderQty đã lưu', async () => {
+      setItem({ buyQty: decimal(6), orderQty: decimal(10) });
+
+      const res = await service.updateOrderQty('300', '400', { orderQty: 10 }, 'buyer-1', [
+        'PURCHASER',
+      ]);
+
+      expect(res).toMatchObject({ buyQty: 6, orderQty: 10, purchaseQty: 10 });
     });
   });
 
@@ -1526,6 +1613,95 @@ describe('PurchaseProposalsService', () => {
     // 2026-08-25: item nhận đủ (>=buyQty) tự chuyển PURCHASED NGAY trong data của chính update()
     // này (không còn 1 vòng riêng đọc lại "freshItems" như code cũ) - recomputeProposalStatus()
     // (đọc TƯƠI status mọi item qua purchaseProposalItem.findMany) mới suy ra rollup cấp proposal.
+    it('YC7 7.2: có số mua dư -> nhận đủ số CẦN mua chưa đóng hồ sơ, phải nhận đủ SỐ MUA', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              buyQty: decimal(6),
+              orderQty: decimal(10),
+            }),
+          ],
+        }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(item({ receivedQty: decimal(6) }));
+
+      await service.receiveItem('300', '400', { unitRateQty: 6 }, 'user-1', 'key-1', null);
+
+      const call = prisma.purchaseProposalItem.update.mock.calls[0] as [{ data: object }];
+      expect(call[0].data).not.toHaveProperty('status');
+    });
+
+    it('YC7 7.4 / 4.12: chỉ phần còn thiếu so với số cần mua vào giữ chỗ của PI, phần vượt về tồn chưa giữ', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          productionInvoiceId: 50n,
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              buyQty: decimal(8),
+              orderQty: decimal(12),
+              receivedQty: decimal(3),
+            }),
+          ],
+        }),
+      );
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          receivedQty: decimal(3),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
+      ]);
+      prisma.purchaseProposalItem.update.mockResolvedValue(item({ receivedQty: decimal(12) }));
+
+      // 3 đã nhận + 9 về = 12: cần 8 nên chỉ 5 vào giữ chỗ, 4 mua dư về tồn tự do; kho vẫn ghi đủ 9.
+      await service.receiveItem('300', '400', { unitRateQty: 9 }, 'user-1', 'key-1', null);
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ qty: 9 }),
+        expect.anything(),
+      );
+      expect(stockReservationsService.creditPool).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ qty: 5 }),
+      );
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: PurchaseProposalStatus.PURCHASED }) as unknown,
+        }),
+      );
+    });
+
+    it('đã nhận đủ số cần mua, lượt nhận sau (mua dư) không gọi creditPool', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          productionInvoiceId: 50n,
+          items: [
+            item({
+              status: PurchaseProposalStatus.PURCHASING,
+              buyQty: decimal(8),
+              orderQty: decimal(12),
+            }),
+          ],
+        }),
+      );
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          receivedQty: decimal(8),
+          receivedQtyPurchaseUnit: null,
+          status: PurchaseProposalStatus.PURCHASING,
+        },
+      ]);
+      prisma.purchaseProposalItem.update.mockResolvedValue(item({ receivedQty: decimal(12) }));
+
+      await service.receiveItem('300', '400', { unitRateQty: 4 }, 'user-1', 'key-1', null);
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalled();
+      expect(stockReservationsService.creditPool).not.toHaveBeenCalled();
+    });
+
     it('item nhận đủ -> tự chuyển status=PURCHASED ngay trong update(), và rollup cấp proposal PURCHASED khi MỌI item đã vậy', async () => {
       prisma.purchaseProposal.findUnique.mockResolvedValue(
         proposal({
