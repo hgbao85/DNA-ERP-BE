@@ -52,6 +52,7 @@ describe('SystemConfigService', () => {
     containerVolumeM3: mockDecimal(68),
     floorPublicUrl: null,
     floorAllowedIps: [],
+    lsxPrefixes: [],
     updatedAt: new Date('2026-01-01'),
   };
 
@@ -379,8 +380,19 @@ describe('SystemConfigService', () => {
 
     it('getPlanningParams trả thể tích cont dạng number; 404 khi chưa seed', async () => {
       prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
-      await expect(service.getPlanningParams()).resolves.toMatchObject({ containerVolumeM3: 68 });
+      await expect(service.getPlanningParams()).resolves.toMatchObject({
+        containerVolumeM3: 68,
+        lsxPrefixes: [],
+      });
       expect(prisma.systemConfig.findUnique).toHaveBeenCalledWith({ where: { id: 1 } });
+      // Phần A – Đợt 2: tiền tố số LSX cho ô chọn tiền tố (mọi người đăng nhập đọc được).
+      prisma.systemConfig.findUnique.mockResolvedValue({
+        ...seededConfig,
+        lsxPrefixes: ['MY', 'GP'],
+      });
+      await expect(service.getPlanningParams()).resolves.toMatchObject({
+        lsxPrefixes: ['MY', 'GP'],
+      });
 
       prisma.systemConfig.findUnique.mockResolvedValue(null);
       await expect(service.getPlanningParams()).rejects.toThrow(NotFoundException);
@@ -500,6 +512,44 @@ describe('SystemConfigService', () => {
         service.updateMaxWastePercentage({ solverMaxWastePercentage: 3 }, 'user-khsx'),
       ).rejects.toThrow(NotFoundException);
       await expect(service.getCuttingDefaults()).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // Phần A – Đợt 2: tiền tố số LSX Admin khai.
+  describe('lsxPrefixes', () => {
+    it('findOne trả lsxPrefixes', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue({
+        ...seededConfig,
+        lsxPrefixes: ['MY', 'GP'],
+      });
+      const r = await service.findOne();
+      expect(r.lsxPrefixes).toEqual(['MY', 'GP']);
+    });
+
+    it('update chuẩn hoá (in hoa, bỏ trắng, bỏ trùng) trước khi lưu và trả lại', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({ ...seededConfig, lsxPrefixes: ['MY', 'GP'] });
+
+      const r = await service.update({
+        companyName: 'DNA Steel',
+        lsxPrefixes: ['my', ' gp', 'MY'],
+      });
+
+      const calls = prisma.systemConfig.update.mock.calls as { data: Record<string, unknown> }[][];
+      expect(calls[0][0].data.lsxPrefixes).toEqual(['MY', 'GP']);
+      expect(r.lsxPrefixes).toEqual(['MY', 'GP']);
+    });
+
+    it('mảng rỗng = mọi tiền tố (lưu mảng rỗng); không gửi field = KHÔNG đụng', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue(seededConfig);
+
+      await service.update({ companyName: 'DNA Steel', lsxPrefixes: [] });
+      await service.update({ companyName: 'DNA Steel' });
+
+      const calls = prisma.systemConfig.update.mock.calls as { data: Record<string, unknown> }[][];
+      expect(calls[0][0].data.lsxPrefixes).toEqual([]);
+      expect('lsxPrefixes' in calls[1][0].data).toBe(false);
     });
   });
 });

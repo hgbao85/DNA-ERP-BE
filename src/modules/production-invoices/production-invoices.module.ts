@@ -4,6 +4,7 @@ import { MaterialYieldRecipesModule } from '../material-yield-recipes/material-y
 import { ProductionBatchesModule } from '../production-batches/production-batches.module';
 import { ProductionOrdersModule } from '../production-orders/production-orders.module';
 import { StockModule } from '../stock/stock.module';
+import { WorkshopsModule } from '../workshops/workshops.module';
 import { UploadsModule } from '../uploads/uploads.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ConsumableMaterialPurchaseService } from './consumable-material-purchase.service';
@@ -21,6 +22,7 @@ import { ProductionInvoicesService } from './production-invoices.service';
     UploadsModule,
     StockModule,
     NotificationsModule,
+    WorkshopsModule, // Phần A – Đợt 2
   ],
   controllers: [ProductionInvoicesController],
   providers: [

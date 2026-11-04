@@ -9,6 +9,13 @@ import {
 } from '../../../generated/prisma/client';
 import { MaterialChoiceRefDto } from '../../../common/utils/material-choice-ref.util';
 
+/** Phần A – Đợt 2: xưởng cơ khí gắn với dòng SKU. */
+class ItemWorkshopDto {
+  @Expose() @ApiProperty() id!: string;
+  @Expose() @ApiProperty() code!: string;
+  @Expose() @ApiProperty() name!: string;
+}
+
 class ItemStageDto {
   @Expose() @ApiProperty({ enum: ProdItemStageType }) stageType!: ProdItemStageType;
   @Expose() @ApiProperty() deadline!: Date;
@@ -98,6 +105,13 @@ export class ProductionInvoiceItemResponseDto {
    *  lập, tính lại 1 query nhỏ rẻ hơn thêm phụ thuộc module. */
   @Expose() @ApiPropertyOptional({ nullable: true }) bomOutOfDate?: boolean | null;
   @Expose() @ApiPropertyOptional({ type: [ItemStageDto] }) stages!: ItemStageDto[];
+  /** Phần A – Đợt 2: số LSX nhà máy của dòng (vd MY-313), null = chưa nhập (lệnh cũ / KHSX chưa điền). */
+  @Expose() @ApiPropertyOptional({ nullable: true }) lsxCode!: string | null;
+  /** Phần A – Đợt 2: xưởng cơ khí QLSX chọn lúc gửi Sếp (đi cùng vòng đời warehouseCode), null = chưa chọn. */
+  @Expose()
+  @ApiPropertyOptional({ type: ItemWorkshopDto, nullable: true })
+  @Type(() => ItemWorkshopDto)
+  workshop!: ItemWorkshopDto | null;
 
   constructor(partial: Partial<ProductionInvoiceItemResponseDto>) {
     Object.assign(this, partial);

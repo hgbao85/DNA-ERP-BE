@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { NetworkAccessService } from '../../common/network/network-access.service';
+import { normalizeLsxPrefixes } from '../../common/utils/lenh-code.util';
 import { isPrivateOrLoopbackIp, normalizeAllowedIps } from '../../common/utils/ip-allowlist.util';
 import { computeContainerLoad } from '../../common/utils/container-load.util';
 import { normalizePublicUrl } from '../../common/utils/public-url.util';
@@ -119,13 +120,16 @@ export class SystemConfigService {
     });
   }
 
-  /** Tham số lập kế hoạch cho MỌI người đăng nhập (route không gắn RequirePermissions) - hiện chỉ thể tích cont. */
+  /** Tham số lập kế hoạch cho MỌI người đăng nhập (route không gắn RequirePermissions) - thể tích cont, tiền tố số LSX. */
   async getPlanningParams(): Promise<PlanningParamsDto> {
     const config = await this.prisma.systemConfig.findUnique({ where: { id: SINGLETON_ID } });
     if (!config) {
       throw new NotFoundException('System config has not been seeded');
     }
-    return new PlanningParamsDto({ containerVolumeM3: config.containerVolumeM3.toNumber() });
+    return new PlanningParamsDto({
+      containerVolumeM3: config.containerVolumeM3.toNumber(),
+      lsxPrefixes: config.lsxPrefixes, // Phần A – Đợt 2
+    });
   }
 
   /** Tính lại boxVolumeM3/loadContFormula/loadCont cho mọi MfgProduct có ít nhất 1 cột thùng hoặc loadContManual. */
@@ -199,6 +203,8 @@ export class SystemConfigService {
     // floorPublicUrl chuẩn hoá về scheme://host[:port] (dán cả /login cũng được; rỗng = xoá). Không gửi field = giữ nguyên.
     // floorAllowedIps: chuẩn hoá từng dòng (IP/CIDR hợp lệ, bỏ trùng); rỗng = tắt giới hạn. Không gửi field = giữ nguyên.
     const data: typeof dto = { ...dto };
+    // Phần A – Đợt 2: tiền tố số LSX - in hoa, bỏ trùng/rỗng.
+    if (dto.lsxPrefixes !== undefined) data.lsxPrefixes = normalizeLsxPrefixes(dto.lsxPrefixes);
     if (dto.floorPublicUrl !== undefined)
       data.floorPublicUrl = normalizePublicUrl(dto.floorPublicUrl);
     if (dto.floorAllowedIps !== undefined)

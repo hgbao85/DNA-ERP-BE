@@ -12,6 +12,7 @@ import {
   IsOptional,
   IsString,
   Length,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -44,6 +45,22 @@ export class UpdateSystemConfigDto {
   @IsOptional()
   @IsString()
   taxCode?: string;
+
+  // Phần A – Đợt 2: tiền tố số LSX (vd MY, GP); rỗng = nhận mọi tiền tố.
+  @ApiPropertyOptional({
+    type: [String],
+    example: ['MY', 'GP'],
+    description: 'Tiền tố số LSX (1–6 chữ cái, vd MY, GP); rỗng = nhận mọi tiền tố.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @Matches(/^[A-Za-z]{1,6}$/, {
+    each: true,
+    message: 'Tiền tố số LSX chỉ gồm 1–6 chữ cái (vd MY, GP)',
+  })
+  lsxPrefixes?: string[];
 
   @ApiPropertyOptional({
     nullable: true,

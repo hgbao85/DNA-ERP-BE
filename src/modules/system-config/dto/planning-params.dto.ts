@@ -6,6 +6,8 @@ import { Exclude, Expose } from 'class-transformer';
 export class PlanningParamsDto {
   /** Thể tích 1 cont (m³) - FE dùng xem trước load cont khi nhập kích thước thùng. */
   @Expose() @ApiProperty() containerVolumeM3!: number;
+  /** Phần A – Đợt 2: tiền tố số LSX Admin khai (vd ["MY","GP"]); rỗng = mọi tiền tố đúng dạng. FE dùng cho ô chọn tiền tố. */
+  @Expose() @ApiProperty({ type: [String] }) lsxPrefixes!: string[];
 
   constructor(partial: Partial<PlanningParamsDto>) {
     Object.assign(this, partial);

@@ -14,9 +14,12 @@ import { PERMISSION_MODULES } from '../../common/constants/permission-modules.co
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
+import { ChangeWorkshopDto } from './dto/change-workshop.dto';
+import { UpdateItemLsxDto } from './dto/update-item-lsx.dto';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
 import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
 import { ClaimSoloDto } from './dto/claim-solo.dto';
@@ -135,6 +138,25 @@ export class ProductionInvoicesController {
     return this.productionInvoicesService.updateItem(id, itemId, dto);
   }
 
+  /**
+   * Phần A – Đợt 2: nhập/sửa/xoá số LSX của 1 dòng SKU. KHSX (hoặc Admin) - quy tắc "đã duyệt chỉ bổ sung, đổi phải Admin"
+   * do service kiểm theo roles của người gọi.
+   */
+  @Patch(':id/items/:itemId/lsx')
+  @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER, DEFAULT_ROLES.ADMIN)
+  updateItemLsx(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: UpdateItemLsxDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.productionInvoicesService.updateItemLsx(id, itemId, dto.lsxCode, {
+      id: user.id,
+      roles: user.roles,
+    });
+  }
+
   // ─── KHSX (role PRODUCTION_PLANNER - đến từ User.isProductPlanner, KHÔNG phải mfgRole,
   // xem MFG_ROLE_TO_BUSINESS_ROLE) - cố ý siết hơn mock (mock không guard chỗ này) ──
 
@@ -179,6 +201,7 @@ export class ProductionInvoicesController {
       itemId,
       dto.warehouseCode,
       dto.warehouseName,
+      dto.workshopId,
       userId,
     );
   }
@@ -197,9 +220,22 @@ export class ProductionInvoicesController {
       id,
       dto.warehouseCode,
       dto.warehouseName,
+      dto.workshopId,
       userId,
       dto.itemIds,
     );
+  }
+
+  /** Phần A – Đợt 2: QLSX đổi xưởng cơ khí của cả lệnh (chỉ khi mọi SKU đã gửi Sếp/đã duyệt và chưa xuất sắt/vật tư). */
+  @Patch(':id/workshop')
+  @RequirePermissions(APPROVE)
+  @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)
+  changeWorkshop(
+    @Param('id') id: string,
+    @Body() dto: ChangeWorkshopDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.productionInvoicesService.changeWorkshop(id, dto.workshopId, dto.reason, userId);
   }
 
   @Post(':id/items/:itemId/reject-by-qlsx')
