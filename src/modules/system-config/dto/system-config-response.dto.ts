@@ -43,6 +43,9 @@ export class SystemConfigResponseDto {
   /** Dung sai giao thừa khi nhận hàng mua về (% của buyQty) - xem SystemConfig trong schema. */
   @Expose() @ApiProperty() purchaseOverReceiptTolerancePercent!: number;
 
+  /** Phần A – Đợt 2: tiền tố số LSX Admin khai (vd MY, GP); rỗng = nhận mọi tiền tố. */
+  @Expose() @ApiProperty({ type: [String] }) lsxPrefixes!: string[];
+
   /** Địa chỉ ERP in lên tem QR máy xưởng; null = dùng địa chỉ trình duyệt đang mở. */
   @Expose() @ApiProperty({ nullable: true, type: String }) floorPublicUrl!: string | null;
 

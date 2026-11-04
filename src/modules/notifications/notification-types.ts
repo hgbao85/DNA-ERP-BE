@@ -362,6 +362,19 @@ export interface DeliveryAtRiskNotificationParams {
   total: number;
 }
 
+// Phần A – Đợt 2: QLSX đổi xưởng cơ khí của 1 lệnh (PI_WORKSHOP_CHANGED). `entityId` = piId.
+export interface PiWorkshopChangedNotificationParams {
+  piCode: string;
+  /** Mã lệnh hiển thị (số LSX nối " + ", chưa có thì mã PI) - lenh-code.util.ts. */
+  displayCode: string;
+  /** Tên xưởng cũ (null nếu dòng chưa có xưởng). */
+  fromWorkshop: string | null;
+  toWorkshop: string;
+  reason: string;
+  /** Số dòng SKU được đổi. */
+  count: number;
+}
+
 /** Tin sáng / cảnh báo tiến độ mở "Bảng mốc" trong "Tổng hợp lệnh SX" - mỗi vai trò vào 1 phân hệ khác nhau. FE chọn đích
  *  ĐẦU TIÊN người nhận mở được, mà Giám đốc mở được MỌI phân hệ -> `boss` phải đứng đầu, không thì Sếp rơi vào màn KHSX
  *  (review 32.26). KHSX/QLSX không mở được `boss` nên rơi xuống đúng phân hệ của mình. */
@@ -1287,6 +1300,31 @@ const notificationTypeDefinitions = {
       roles: [BUSINESS_ROLES.PRODUCTION_PLANNER, BUSINESS_ROLES.PRODUCTION_MANAGER],
     }),
   } satisfies NotificationTypeDef<DeliveryAtRiskNotificationParams>,
+
+  // ─── Phần A – Đợt 2 (YC12 12.3/12.5): QLSX đổi xưởng cơ khí của lệnh đã gửi Sếp / đã duyệt ──────────────────────────────
+  /** QLSX đổi xưởng (`ProductionInvoicesService.changeWorkshop`) - chỉ khi lệnh chưa xuất sắt/vật tư. Báo Sếp (v8 12.5) + KHSX
+   *  (lập kế hoạch theo xưởng). Link "Tổng hợp lệnh SX" theo lệnh: `boss` đứng đầu (Sếp mở được mọi phân hệ), KHSX rơi xuống
+   *  phân hệ của mình. Người đổi (QLSX) bị loại qua actorId lúc emit. */
+  PI_WORKSHOP_CHANGED: {
+    category: 'INFO',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PiWorkshopChangedNotificationParams) =>
+      `${p.displayCode}: đổi xưởng ${p.fromWorkshop ?? '(chưa có)'} → ${p.toWorkshop}`,
+    message: (p: PiWorkshopChangedNotificationParams) =>
+      `QLSX đổi xưởng cơ khí của lệnh ${p.piCode} (${p.count} SKU). Lý do: ${p.reason}`,
+    link: (p: PiWorkshopChangedNotificationParams) => ({
+      module: 'boss',
+      page: 'thong-ke',
+      params: { focus: `PI_CODE:${p.piCode}` },
+      alternatives: [
+        { module: 'production_plan', page: 'thongke', params: { focus: `PI_CODE:${p.piCode}` } },
+      ],
+    }),
+    recipients: () => ({
+      roles: [BUSINESS_ROLES.BOSS, BUSINESS_ROLES.PRODUCTION_PLANNER],
+    }),
+  } satisfies NotificationTypeDef<PiWorkshopChangedNotificationParams>,
 };
 
 /** Danh mục loại thông báo - 1 nguồn duy nhất cho text/link/mức độ/người nhận (mục 5.2 changelog

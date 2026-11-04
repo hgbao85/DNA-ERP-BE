@@ -9,6 +9,7 @@ describe('MilestoneBoardService', () => {
   const NOW = new Date('2026-10-29T02:00:00.000Z');
   let prisma: {
     productionInvoiceItem: { findMany: jest.Mock };
+    productionInvoice: { findMany: jest.Mock };
     purchaseProposalItem: { findMany: jest.Mock };
   };
   let steelIssues: { getPhoiProgressBatch: jest.Mock };
@@ -66,6 +67,9 @@ describe('MilestoneBoardService', () => {
   beforeEach(() => {
     prisma = {
       productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([item(1n)]) },
+      productionInvoice: {
+        findMany: jest.fn().mockResolvedValue([{ id: 7n, code: 'PI-2026-001' }]),
+      },
       purchaseProposalItem: {
         findMany: jest
           .fn()
@@ -285,5 +289,48 @@ describe('MilestoneBoardService', () => {
     expect(cell(rows, 'DONG_GOI').status).toBe('UNKNOWN');
     expect(cell(rows, 'HAN_GIAO').status).toBe('UNKNOWN');
     expect(cell(rows, 'PHOI').status).toBe('LATE');
+  });
+
+  // Phần A – Đợt 2: số LSX trên bảng mốc.
+  describe('số LSX / mã lệnh hiển thị', () => {
+    /** findMany của dòng SKU: truy vấn của loadLenhDisplayCodes (có where.lsxCode) trả `lsxRows`, còn lại trả `items`. */
+    const mockItems = (
+      items: unknown[],
+      lsxRows: { productionInvoiceId: bigint; lsxCode: string }[],
+    ) =>
+      prisma.productionInvoiceItem.findMany.mockImplementation(
+        (args: { where: Record<string, unknown> }) =>
+          Promise.resolve('lsxCode' in args.where ? lsxRows : items),
+      );
+
+    it('dòng có lsxCode; displayCode của PI gộp = các LSX khác nhau nối " + " (1 lần đọc cho cả bảng)', async () => {
+      prisma.productionInvoice.findMany.mockResolvedValue([{ id: 7n, code: 'PI-2026-001' }]);
+      mockItems(
+        [item(1n, { lsxCode: 'MY-313' }), item(2n, { lsxCode: 'GP-176' })],
+        [
+          { productionInvoiceId: 7n, lsxCode: 'MY-313' },
+          { productionInvoiceId: 7n, lsxCode: 'GP-176' },
+        ],
+      );
+      const { rows } = await service.getBoard(NOW);
+      expect(rows).toHaveLength(2);
+      expect(rows.map((r) => r.lsxCode).sort()).toEqual(['GP-176', 'MY-313']);
+      expect(rows.every((r) => r.displayCode === 'MY-313 + GP-176')).toBe(true);
+      expect(rows.every((r) => r.piCode === 'PI-2026-001')).toBe(true);
+      expect(prisma.productionInvoice.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('dòng chưa có LSX: lsxCode = null, displayCode = mã PI', async () => {
+      prisma.productionInvoice.findMany.mockResolvedValue([{ id: 7n, code: 'PI-2026-001' }]);
+      mockItems([item(1n, { lsxCode: null })], []);
+      const { rows } = await service.getBoard(NOW);
+      expect(rows[0]).toMatchObject({ lsxCode: null, displayCode: 'PI-2026-001' });
+    });
+
+    it('đọc số LSX lỗi thì bảng vẫn ra, displayCode rơi về mã PI', async () => {
+      prisma.productionInvoice.findMany.mockRejectedValue(new Error('db'));
+      const { rows } = await service.getBoard(NOW);
+      expect(rows[0].displayCode).toBe('PI-2026-001');
+    });
   });
 });

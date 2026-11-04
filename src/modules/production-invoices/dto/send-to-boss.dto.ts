@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, MinLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString, MinLength } from 'class-validator';
 
 /**
  * QLSX chọn kho thành phẩm làm điểm cuối trước khi gửi Sếp duyệt - mirror sendItemToBoss()
@@ -16,4 +16,13 @@ export class SendToBossDto {
   @IsString()
   @MinLength(1)
   warehouseName!: string;
+
+  /**
+   * Phần A – Đợt 2: xưởng cơ khí làm lệnh (Workshop.id). Khai optional để thiếu thì service trả câu 400 rõ ràng ("tải lại
+   * trang") thay vì lỗi validate chung - FE bản cũ không gửi field này.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  workshopId?: string;
 }
