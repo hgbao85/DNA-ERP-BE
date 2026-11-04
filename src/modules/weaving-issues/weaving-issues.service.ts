@@ -204,7 +204,7 @@ export class WeavingIssuesService {
       );
       if (notAllowed.length > 0) {
         throw new BadRequestException(
-          `Vật tư ${notAllowed.map((m) => m.materialId).join(', ')} không thuộc màu dây/nệm đã chọn cho lệnh sản xuất này - không thể mang kèm`,
+          `Vật tư ${notAllowed.map((m) => m.materialId).join(', ')} không thuộc màu dây/vải nệm đã chọn cho lệnh sản xuất này - không thể mang kèm`,
         );
       }
     }

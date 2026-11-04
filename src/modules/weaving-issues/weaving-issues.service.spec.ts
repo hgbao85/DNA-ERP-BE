@@ -1105,7 +1105,7 @@ describe('WeavingIssuesService', () => {
           'user-1',
           'vat-tu-tp',
         ),
-      ).rejects.toThrow(/không thuộc màu dây.nệm đã chọn/);
+      ).rejects.toThrow(/không thuộc màu dây\/vải nệm đã chọn/);
       expect(prisma.weavingIssue.create).not.toHaveBeenCalled();
     });
   });

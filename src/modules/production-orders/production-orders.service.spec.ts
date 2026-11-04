@@ -126,7 +126,7 @@ describe('ProductionOrdersService', () => {
 
       await expect(
         service.assertChoiceMatchesRevision(2n, 7n, { cushionMaterialId: 90n }, 'Dòng 1'),
-      ).rejects.toThrow(/không có lựa chọn màu nệm/);
+      ).rejects.toThrow(/không có lựa chọn màu vải nệm/);
     });
 
     it('dây và nệm đều đúng tick: qua', async () => {

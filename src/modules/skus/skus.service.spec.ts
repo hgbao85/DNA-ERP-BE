@@ -1352,7 +1352,7 @@ describe('SkusService', () => {
       });
 
       await expect(attempt).rejects.toThrow(BadRequestException);
-      await expect(attempt).rejects.toThrow(/NEM-A.*chưa nằm trong danh sách màu nệm/);
+      await expect(attempt).rejects.toThrow(/NEM-A.*chưa nằm trong danh sách màu vải nệm/);
       expect(prisma.bomAccessoryItem.createMany).not.toHaveBeenCalled();
     });
 
@@ -1374,7 +1374,7 @@ describe('SkusService', () => {
           cushionOptions: ['91'], // tick mới không còn 90 (dù tick cũ trong DB có 90)
           enteredBy: 'NV PK',
         }),
-      ).rejects.toThrow(/NEM-A.*chưa nằm trong danh sách màu nệm/);
+      ).rejects.toThrow(/NEM-A.*chưa nằm trong danh sách màu vải nệm/);
       expect(prisma.bomOption.findMany).not.toHaveBeenCalled();
     });
 

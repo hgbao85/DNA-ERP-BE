@@ -453,7 +453,7 @@ export class SalesOrdersService {
       });
       if (approved) {
         throw new ConflictException(
-          `Dòng ${item.mfgProduct.factoryCode} của đơn hàng ${order.code} đã được duyệt sản xuất - không thể đổi màu dây/nệm`,
+          `Dòng ${item.mfgProduct.factoryCode} của đơn hàng ${order.code} đã được duyệt sản xuất - không thể đổi màu dây/vải nệm`,
         );
       }
     }
@@ -670,7 +670,7 @@ export class SalesOrdersService {
         }
       };
       check('màu dây', optionsOf(productId, BomOptionKind.WIRE), it.wireMaterialId);
-      check('màu nệm', optionsOf(productId, BomOptionKind.CUSHION), it.cushionMaterialId);
+      check('màu vải nệm', optionsOf(productId, BomOptionKind.CUSHION), it.cushionMaterialId);
     }
   }
 

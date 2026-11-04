@@ -14,6 +14,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { MaterialYieldRecipesService } from '../material-yield-recipes/material-yield-recipes.service';
 import { MaterialYieldRecipePurchaseResultDto } from './dto/material-yield-recipe-purchase-result.dto';
+import { purchaseBuyQtyWithWaste } from '../../common/utils/purchase-waste.util';
 
 /**
  * Tính nhu cầu mua nguyên liệu ĐẦU VÀO (vd thanh nhôm) cho "vật tư thành phẩm KHÔNG gắn piece" (vd
@@ -141,12 +142,12 @@ export class MaterialYieldRecipePurchaseService {
           actualStock,
         );
         const consumeQty = Math.min(acc.requiredInputQty, available);
-        // 2026-10-08: đệm % hao hụt khi mua (Material.purchaseWastePercentage), CHỈ cộng vào phần
-        // THỰC SỰ phải mua, cùng lý do/cùng fix ConsumableMaterialPurchaseService. Đơn vị ở đây
+        // % hao hụt khi mua (Material.purchaseWastePercentage) - 2026-11-04 (V3-3) đệm trên TOÀN BỘ
+        // nhu cầu rồi mới trừ tồn khả dụng, cùng công thức ConsumableMaterialPurchaseService. Đơn vị ở đây
         // MẶC ĐỊNH là cây/tấm NGUYÊN (Int) nên ceil lại sau khi nhân - không mua lẻ cây/tấm.
         const materialForWaste = materialById.get(materialIdStr)!;
         const wastePct = materialForWaste.purchaseWastePercentage?.toNumber() ?? 0;
-        const buyQtyRaw = (acc.requiredInputQty - consumeQty) * (1 + wastePct / 100);
+        const buyQtyRaw = purchaseBuyQtyWithWaste(acc.requiredInputQty, available, wastePct);
         // 2026-10-10: ngoại lệ cho vật tư mua theo tấm LẺ (vd Tấm sắt la, xem docs/
         // LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026.md 08/10 05:11) - Admin ép giữ thập phân qua
         // Material.purchaseRoundUp=false. Tri-state: null/true đều ceil (mặc định gốc của luồng

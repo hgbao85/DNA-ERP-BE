@@ -196,7 +196,7 @@ export class ProductionOrdersService {
       }
     };
     check(BomOptionKind.WIRE, 'màu dây', choice.wireMaterialId);
-    check(BomOptionKind.CUSHION, 'màu nệm', choice.cushionMaterialId);
+    check(BomOptionKind.CUSHION, 'màu vải nệm', choice.cushionMaterialId);
   }
 
   /**

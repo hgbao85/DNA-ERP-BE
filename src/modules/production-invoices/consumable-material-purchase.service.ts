@@ -17,6 +17,7 @@ import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-pr
 import { NotificationsService } from '../notifications/notifications.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ConsumableMaterialPurchaseResultDto } from './dto/consumable-material-purchase-result.dto';
+import { purchaseBuyQtyWithWaste } from '../../common/utils/purchase-waste.util';
 
 /**
  * Tính nhu cầu mua "vật tư tiêu hao phẳng" cho 1 PI - gộp cả 3 nguồn định mức không có khái
@@ -262,12 +263,12 @@ export class ConsumableMaterialPurchaseService {
             specKey,
           );
           const consumeQty = Math.min(required, available);
-          // 2026-10-08: đệm % hao hụt khi mua (Material.purchaseWastePercentage, vd bao bì rách/lỗi
-          // lúc vận chuyển) - CHỈ cộng vào phần THỰC SỰ phải mua (sau khi đã trừ tồn khả dụng),
-          // KHÔNG đụng required/consumeQty/reserveOrAdjust (giữ chỗ tồn kho tính theo nhu cầu THẬT).
-          // null/0 -> buyQty không đổi (tương thích ngược vật tư chưa cấu hình %).
+          // % hao hụt khi mua (Material.purchaseWastePercentage, vd bao bì rách/lỗi lúc vận chuyển).
+          // 2026-11-04 (V3-3): đệm trên TOÀN BỘ nhu cầu rồi mới trừ tồn khả dụng, xem
+          // purchaseBuyQtyWithWaste. KHÔNG đụng required/consumeQty/reserveOrAdjust (giữ chỗ tồn kho
+          // tính theo nhu cầu THẬT). null/0 -> buyQty = nhu cầu − tồn như trước.
           const wastePct = material.purchaseWastePercentage?.toNumber() ?? 0;
-          const buyQtyRaw = (required - consumeQty) * (1 + wastePct / 100);
+          const buyQtyRaw = purchaseBuyQtyWithWaste(required, available, wastePct);
           // 2026-10-10: mặc định luồng này GIỮ thập phân (vd kg sơn/dây) - CHỈ ceil lên nguyên khi
           // Admin chủ động ép qua Material.purchaseRoundUp=true (vd Đinh/Vis/Nút - không mua được
           // số lẻ). Tri-state: null/false đều giữ thập phân, chỉ true mới ceil - xem schema.prisma.

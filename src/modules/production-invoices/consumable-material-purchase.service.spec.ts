@@ -394,15 +394,14 @@ describe('ConsumableMaterialPurchaseService', () => {
     expect(result[0].buyQty).toBe(74.5);
   });
 
-  it('2026-10-08: cộng đệm Material.purchaseWastePercentage vào buyQty - CHỈ phần thực sự phải mua', async () => {
+  it('2026-10-08: cộng đệm Material.purchaseWastePercentage vào buyQty - 2026-11-04 (V3-3) đệm trên TOÀN BỘ nhu cầu rồi mới trừ tồn', async () => {
     prisma.material.findMany.mockResolvedValue([{ ...day, purchaseWastePercentage: decimal(5) }]);
     prisma.$queryRaw.mockResolvedValue(await qtyRow(20));
 
     const result = await service.computeAndUpsertProposals('1');
 
-    // required=120, actualStock=20 -> buyQty gốc=100, đệm 5% -> 105 (không làm tròn, giống idiom
-    // "số thập phân không làm tròn" ở test trên).
-    expect(result[0].buyQty).toBe(105);
+    // required=120, actualStock=20 -> 120 × 1,05 − 20 = 106 (công thức cũ đệm trên phần thiếu ra 105).
+    expect(result[0].buyQty).toBe(106);
   });
 
   it('2026-10-10: purchaseRoundUp=true ép ceil buyQty lên nguyên (vd Đinh/Vis - không mua số lẻ)', async () => {
@@ -413,8 +412,8 @@ describe('ConsumableMaterialPurchaseService', () => {
 
     const result = await service.computeAndUpsertProposals('1');
 
-    // required=120, actualStock=20 -> buyQty gốc=100, đệm 5% -> 105 (đã nguyên sẵn) -> ceil(105)=105.
-    expect(result[0].buyQty).toBe(105);
+    // required=120, actualStock=20 -> 120 × 1,05 − 20 = 106 (đã nguyên sẵn) -> ceil(106)=106.
+    expect(result[0].buyQty).toBe(106);
   });
 
   it('purchaseRoundUp=true + kết quả lẻ - ceil lên nguyên', async () => {
@@ -425,8 +424,8 @@ describe('ConsumableMaterialPurchaseService', () => {
 
     const result = await service.computeAndUpsertProposals('1');
 
-    // required=120, actualStock=45.5 -> buyQty gốc=74.5, đệm 2% -> 75.99 -> ceil = 76.
-    expect(result[0].buyQty).toBe(76);
+    // required=120, actualStock=45.5 -> 120 × 1,02 − 45,5 = 76,9 -> ceil = 77.
+    expect(result[0].buyQty).toBe(77);
   });
 
   it('purchaseRoundUp=false/null (mặc định) - vẫn giữ thập phân như cũ, không ceil', async () => {
@@ -437,8 +436,8 @@ describe('ConsumableMaterialPurchaseService', () => {
 
     const result = await service.computeAndUpsertProposals('1');
 
-    // Cùng input test "purchaseRoundUp=true" ở trên nhưng KHÔNG ceil -> 75.99 giữ nguyên.
-    expect(result[0].buyQty).toBeCloseTo(75.99);
+    // Cùng input test "purchaseRoundUp=true" ở trên nhưng KHÔNG ceil -> 76.9 giữ nguyên.
+    expect(result[0].buyQty).toBeCloseTo(76.9);
   });
 
   it('purchaseWastePercentage=null (chưa cấu hình) - buyQty không đổi (tương thích ngược)', async () => {

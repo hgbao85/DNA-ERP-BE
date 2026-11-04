@@ -626,7 +626,7 @@ export class MaterialsService {
         ...pieceYields.map((b) => label(b.bomRevision, `mảnh ${b.piece.code}`)),
         ...consumables.map((b) => label(b.bomRevision, 'vật tư tiêu hao')),
         ...accessories.map((b) => label(b.bomRevision, 'phụ kiện')),
-        ...options.map((b) => label(b.bomRevision, 'lựa chọn dây/nệm')),
+        ...options.map((b) => label(b.bomRevision, 'lựa chọn dây/vải nệm')),
       ]),
     ];
   }

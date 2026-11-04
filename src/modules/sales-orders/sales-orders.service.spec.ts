@@ -644,7 +644,7 @@ describe('SalesOrdersService', () => {
       arrangeCreate();
       prisma.bomOption.findMany.mockResolvedValue([option('CUSHION', 90n)]);
 
-      await expect(service.create(createDto())).rejects.toThrow(/bắt buộc chọn màu nệm/);
+      await expect(service.create(createDto())).rejects.toThrow(/bắt buộc chọn màu vải nệm/);
     });
 
     it('chỉ xét tick của bản định mức ACTIVE của đúng sản phẩm đang đặt', async () => {

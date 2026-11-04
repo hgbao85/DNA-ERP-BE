@@ -1529,7 +1529,7 @@ export class SkusService {
         throw new BadRequestException(
           r.spec
             ? `${groupLabel}: vật tư ${code} bị nhập trùng cùng quy cách "${r.spec}" - gộp số lượng vào 1 dòng`
-            : `${groupLabel}: vật tư ${code} bị nhập trùng - nệm cùng loại chỉ được nhiều dòng khi khác quy cách`,
+            : `${groupLabel}: vật tư ${code} bị nhập trùng - vải nệm cùng loại chỉ được nhiều dòng khi khác quy cách`,
         );
       }
       seen.add(key);
@@ -1625,7 +1625,7 @@ export class SkusService {
     const notTicked = cushions.filter((m) => !ticked.has(m.key));
     if (notTicked.length === 0) return;
     throw new BadRequestException(
-      `Nệm ${notTicked.map((m) => `${m.code} (${m.name})`).join(', ')} chưa nằm trong danh sách màu nệm của SKU - tick màu đó ở "Danh sách màu nệm SKU" trước; nệm không tick không được nhập vào định mức`,
+      `Vải nệm ${notTicked.map((m) => `${m.code} (${m.name})`).join(', ')} chưa nằm trong danh sách màu vải nệm của SKU - tick màu đó ở "Danh sách màu vải nệm SKU" trước; vải nệm không tick không được nhập vào định mức`,
     );
   }
 
