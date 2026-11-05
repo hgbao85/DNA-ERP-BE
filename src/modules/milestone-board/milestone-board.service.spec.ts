@@ -15,7 +15,7 @@ describe('MilestoneBoardService', () => {
   let steelIssues: { getPhoiProgressBatch: jest.Mock };
   let batches: { getBatchPlanBatch: jest.Mock };
   let weaving: { getIssuePlanBatch: jest.Mock };
-  let invoices: { getPackagingBatch: jest.Mock };
+  let invoices: { getPackagingBatch: jest.Mock; listTransferCheckPiecesBatch: jest.Mock };
   let service: MilestoneBoardService;
 
   const item = (id: bigint, extra: Record<string, unknown> = {}) => ({
@@ -123,6 +123,13 @@ describe('MilestoneBoardService', () => {
       getPackagingBatch: jest
         .fn()
         .mockResolvedValue({ '1': { totalQty: 50, packedQty: 10, remainingQty: 40 } }),
+      // Phần A – Đợt 3: Chuyền kiểm - 2 mảnh tổng 100, đã kiểm 50 (mảnh 2 kiểm lố 20 -> chặn trần 30).
+      listTransferCheckPiecesBatch: jest.fn().mockResolvedValue({
+        '1': [
+          { pieceId: '1', totalQty: 50, checkedQty: 20 },
+          { pieceId: '2', totalQty: 50, checkedQty: 60 },
+        ],
+      }),
     };
     service = new MilestoneBoardService(
       prisma as never,
@@ -181,6 +188,64 @@ describe('MilestoneBoardService', () => {
       need: 50,
     });
     expect(rows[0].worst).toBe('LATE');
+  });
+
+  // Phần A – Đợt 3
+  it('nhãn Nhập đan + ô Chuyền kiểm đứng ngay sau Nhập đan (10 mốc)', async () => {
+    const { rows } = await service.getBoard(NOW);
+    expect(rows[0].milestones).toHaveLength(10);
+    const keys = rows[0].milestones.map((m) => m.key);
+    expect(keys.indexOf('CHUYEN_KIEM')).toBe(keys.indexOf('DAN') + 1);
+    expect(cell(rows, 'DAN').label).toBe('Nhập đan');
+    expect(cell(rows, 'CHUYEN_KIEM').label).toBe('Chuyền kiểm');
+  });
+
+  it('Chuyền kiểm: tiến độ theo mảnh, đã kiểm chặn trần từng mảnh; chấm theo hạn TRANSFER_CHECK', async () => {
+    prisma.productionInvoiceItem.findMany.mockResolvedValue([
+      item(1n, {
+        stages: [{ stageType: 'TRANSFER_CHECK', deadline: d('2026-11-03') }],
+      }),
+    ]);
+    let { rows } = await service.getBoard(NOW);
+    expect(cell(rows, 'CHUYEN_KIEM')).toMatchObject({
+      need: 100,
+      done: 70,
+      status: 'ON_TRACK',
+      deadline: '2026-11-03',
+      reason: 'Đã kiểm 70/100 mảnh',
+    });
+    prisma.productionInvoiceItem.findMany.mockResolvedValue([
+      item(1n, {
+        stages: [{ stageType: 'TRANSFER_CHECK', deadline: d('2026-10-27') }],
+      }),
+    ]);
+    rows = (await service.getBoard(NOW)).rows;
+    expect(cell(rows, 'CHUYEN_KIEM')).toMatchObject({ status: 'LATE', daysLeft: -2 });
+  });
+
+  it('Chuyền kiểm: nguồn lỗi -> "Chưa biết"; không có mảnh -> "Không cần"', async () => {
+    invoices.listTransferCheckPiecesBatch.mockRejectedValue(new Error('timeout'));
+    let res = await service.getBoard(NOW);
+    expect(res.failedSources).toEqual(['transfer-check']);
+    expect(cell(res.rows, 'CHUYEN_KIEM').status).toBe('UNKNOWN');
+    invoices.listTransferCheckPiecesBatch.mockResolvedValue({ '1': [] });
+    res = await service.getBoard(NOW);
+    expect(cell(res.rows, 'CHUYEN_KIEM').status).toBe('NA');
+  });
+
+  it('phoiStart / packagingStart = ngày đã lưu của PHOI_START / PACKAGING_START (null khi chưa có)', async () => {
+    let { rows } = await service.getBoard(NOW);
+    expect(rows[0]).toMatchObject({ phoiStart: null, packagingStart: null });
+    prisma.productionInvoiceItem.findMany.mockResolvedValue([
+      item(1n, {
+        stages: [
+          { stageType: 'PHOI_START', deadline: d('2026-10-26') },
+          { stageType: 'PACKAGING_START', deadline: d('2026-11-18') },
+        ],
+      }),
+    ]);
+    rows = (await service.getBoard(NOW)).rows;
+    expect(rows[0]).toMatchObject({ phoiStart: '2026-10-26', packagingStart: '2026-11-18' });
   });
 
   it('hạn mua VT khung chưa lưu thì theo hạn Khung (cùng chuỗi đề xuất mua đang dùng)', async () => {

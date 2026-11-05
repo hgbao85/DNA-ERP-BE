@@ -287,4 +287,29 @@ export class UpdateSystemConfigDto {
   @Min(1)
   @Max(200)
   containerVolumeM3?: number;
+
+  // ─── Phần A – Đợt 3 (YC10): năng lực sản xuất ───────────────────────────────────
+
+  @ApiPropertyOptional({
+    example: 1.3,
+    description:
+      'Phần A – Đợt 3 (YC10): năng lực cont/ngày của xưởng Phú An và của mỗi kho đóng gói (mặc định 1,3). ' +
+      '0,1-20, tối đa 2 số lẻ.',
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.1)
+  @Max(20)
+  capacityContPerDay?: number;
+
+  @ApiPropertyOptional({
+    example: 4,
+    description:
+      'Phần A – Đợt 3 (YC10): số ngày làm 1 cont ở Phôi và Hàn của xưởng Phước An (mặc định 4). Số nguyên 1-60.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(60)
+  daysPerContPhuocAn?: number;
 }

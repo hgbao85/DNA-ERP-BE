@@ -50,6 +50,8 @@ describe('SystemConfigService', () => {
     solverMergeMaxSkus: 5,
     purchaseOverReceiptTolerancePercent: mockDecimal(0),
     containerVolumeM3: mockDecimal(68),
+    capacityContPerDay: mockDecimal(1.3),
+    daysPerContPhuocAn: 4,
     floorPublicUrl: null,
     floorAllowedIps: [],
     lsxPrefixes: [],
@@ -378,11 +380,39 @@ describe('SystemConfigService', () => {
       expect(prisma.mfgProduct.update).not.toHaveBeenCalled();
     });
 
+    it('Phần A – Đợt 3: update + findOne trả capacityContPerDay dạng number, ghi 2 trường năng lực, KHÔNG tính lại load cont', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        capacityContPerDay: mockDecimal(1.5),
+        daysPerContPhuocAn: 5,
+      });
+
+      const result = await service.update({
+        capacityContPerDay: 1.5,
+        daysPerContPhuocAn: 5,
+      } as any);
+
+      expect(result.capacityContPerDay).toBe(1.5);
+      expect(result.daysPerContPhuocAn).toBe(5);
+      expect(prisma.systemConfig.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { capacityContPerDay: 1.5, daysPerContPhuocAn: 5 } }),
+      );
+      expect(prisma.mfgProduct.findMany).not.toHaveBeenCalled();
+      await expect(service.findOne()).resolves.toMatchObject({
+        capacityContPerDay: 1.3,
+        daysPerContPhuocAn: 4,
+      });
+    });
+
     it('getPlanningParams trả thể tích cont dạng number; 404 khi chưa seed', async () => {
       prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
       await expect(service.getPlanningParams()).resolves.toMatchObject({
         containerVolumeM3: 68,
         lsxPrefixes: [],
+        // Phần A – Đợt 3: năng lực cont/ngày + số ngày/cont Phước An
+        capacityContPerDay: 1.3,
+        daysPerContPhuocAn: 4,
       });
       expect(prisma.systemConfig.findUnique).toHaveBeenCalledWith({ where: { id: 1 } });
       // Phần A – Đợt 2: tiền tố số LSX cho ô chọn tiền tố (mọi người đăng nhập đọc được).

@@ -275,7 +275,7 @@ export const DATA_HEALTH_CHECKS: DataHealthCheck[] = [
     title: 'Mốc thời gian sai thứ tự',
     severity: 'LOW',
     description:
-      'Mốc trước muộn hơn mốc sau theo thứ tự Phú An (Mua VT khung & đan → Phôi → Hàn → Sơn → Khung → Đan → Chuyền kiểm → Đóng gói → Hạn giao; Mua VT còn lại trước Đóng gói). Chỉ xét PI chưa Kết thúc hết.',
+      'Mốc trước muộn hơn mốc sau theo thứ tự Phú An (Mua VT khung & đan → Bắt đầu Phôi → Phôi → Hàn → Sơn → Khung → Nhập đan → Chuyền kiểm → Bắt đầu đóng gói → Đóng gói → Hạn giao; Mua VT còn lại trước Bắt đầu đóng gói). Chỉ xét PI chưa Kết thúc hết.',
     hint: 'KHSX mở "Sửa thời hạn" của SKU và chỉnh lại các mốc.',
     columns: [
       { key: 'pi', label: 'PI' },
@@ -287,12 +287,14 @@ export const DATA_HEALTH_CHECKS: DataHealthCheck[] = [
         SELECT i.id, p.code AS pi, mp."factoryCode" AS sku,
           i."materialDeadline"::date AS vt_khung, i."finishedMaterialDeadline"::date AS vt_con_lai,
           i."deliveryDeadline"::date AS giao,
+          MAX(st.deadline::date) FILTER (WHERE st."stageType"::text = 'PHOI_START') AS phoi_start,
           MAX(st.deadline::date) FILTER (WHERE st."stageType"::text = 'FRAME_PHOI') AS phoi,
           MAX(st.deadline::date) FILTER (WHERE st."stageType"::text = 'FRAME_HAN') AS han,
           MAX(st.deadline::date) FILTER (WHERE st."stageType"::text = 'FRAME_SON') AS son,
           MAX(st.deadline::date) FILTER (WHERE st."stageType"::text = 'FRAME') AS khung,
           MAX(st.deadline::date) FILTER (WHERE st."stageType"::text = 'WEAVING') AS dan,
           MAX(st.deadline::date) FILTER (WHERE st."stageType"::text = 'TRANSFER_CHECK') AS chuyen_kiem,
+          MAX(st.deadline::date) FILTER (WHERE st."stageType"::text = 'PACKAGING_START') AS packaging_start,
           MAX(st.deadline::date) FILTER (WHERE st."stageType"::text = 'PACKAGING') AS dong_goi
         FROM production_invoice_items i
         JOIN production_invoices p ON p.id = i."productionInvoiceId"
@@ -302,14 +304,16 @@ export const DATA_HEALTH_CHECKS: DataHealthCheck[] = [
         GROUP BY i.id, p.code, mp."factoryCode"
       ), e AS (
         SELECT id, pi, sku, concat_ws(', ',
-          CASE WHEN vt_khung > COALESCE(phoi, khung) THEN 'Mua VT khung & đan sau Phôi' END,
+          CASE WHEN vt_khung > COALESCE(phoi_start, phoi, khung) THEN 'Mua VT khung & đan sau Bắt đầu Phôi' END,
+          CASE WHEN phoi_start > phoi THEN 'Bắt đầu Phôi sau Phôi xong' END,
           CASE WHEN phoi > han THEN 'Phôi sau Hàn' END,
           CASE WHEN han > son THEN 'Hàn sau Sơn' END,
           CASE WHEN son > khung THEN 'Sơn sau Khung' END,
-          CASE WHEN khung > dan THEN 'Khung sau Đan' END,
-          CASE WHEN dan > chuyen_kiem THEN 'Đan sau Chuyền kiểm' END,
+          CASE WHEN khung > dan THEN 'Khung sau Nhập đan' END,
+          CASE WHEN dan > chuyen_kiem THEN 'Nhập đan sau Chuyền kiểm' END,
           CASE WHEN chuyen_kiem > dong_goi THEN 'Chuyền kiểm sau Đóng gói' END,
-          CASE WHEN vt_con_lai > dong_goi THEN 'Mua VT còn lại sau Đóng gói' END,
+          CASE WHEN packaging_start > dong_goi THEN 'Bắt đầu đóng gói sau Đóng gói xong' END,
+          CASE WHEN vt_con_lai > COALESCE(packaging_start, dong_goi) THEN 'Mua VT còn lại sau Bắt đầu đóng gói' END,
           CASE WHEN dong_goi > giao THEN 'Đóng gói sau Hạn giao' END) AS sai
         FROM s
       )

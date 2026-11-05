@@ -2562,7 +2562,11 @@ export class SteelIssuesService {
         productionInvoiceItem: {
           select: {
             salesOrder: { select: { orderCode: true } },
-            stages: { where: { stageType: 'FRAME_PHOI' }, select: { deadline: true } },
+            // Phần A – Đợt 3: lấy thêm mốc Bắt đầu Phôi (PHOI_START) cùng mốc Phôi xong (FRAME_PHOI).
+            stages: {
+              where: { stageType: { in: ['FRAME_PHOI', 'PHOI_START'] } },
+              select: { stageType: true, deadline: true },
+            },
           },
         },
       },
@@ -2576,7 +2580,12 @@ export class SteelIssuesService {
           salesOrderCode: o.productionInvoiceItem?.salesOrder?.orderCode ?? null,
           productName: o.mfgProduct.name,
           quantity: o.quantity,
-          phoiDeadline: o.productionInvoiceItem?.stages[0]?.deadline ?? null,
+          phoiDeadline:
+            o.productionInvoiceItem?.stages.find((st) => st.stageType === 'FRAME_PHOI')?.deadline ??
+            null,
+          phoiStart:
+            o.productionInvoiceItem?.stages.find((st) => st.stageType === 'PHOI_START')?.deadline ??
+            null,
         }),
     );
   }

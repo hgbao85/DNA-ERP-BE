@@ -18,6 +18,7 @@ import {
   ProductionInvoiceStatus,
   SolverMachine,
   TransferStatus,
+  Workshop,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -28,6 +29,14 @@ import { assertPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { checkMergeRules, skuLabel } from '../../common/utils/merge-rules.util';
+import { vnDayKey } from '../../common/utils/floor-stats.util';
+import {
+  DEFAULT_TIMELINE_PARAMS,
+  frameDaysOf,
+  suggestTimeline,
+  TimelineCapacityMode,
+  TimelineParams,
+} from '../../common/utils/timeline-suggest.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { auditEvent } from '../../common/utils/audit-event.util';
@@ -895,15 +904,19 @@ export class ProductionInvoicesService {
       (a?.getTime() ?? null) !== (b?.getTime() ?? null);
     const stageLabel: Record<string, string> = {
       FRAME: 'Khung cơ khí',
-      WEAVING: 'Đan',
-      TRANSFER_CHECK: 'Kiểm tra chuyển kho',
+      // Phần A – Đợt 3 (YC10): đổi "Đan" -> "Nhập đan", "Kiểm tra chuyển kho" -> "Chuyền kiểm"; thêm 2 mốc ngày bắt đầu.
+      WEAVING: 'Nhập đan',
+      TRANSFER_CHECK: 'Chuyền kiểm',
       PACKAGING: 'Đóng gói',
+      PHOI_START: 'Bắt đầu Phôi',
+      PACKAGING_START: 'Bắt đầu đóng gói',
       FRAME_PHOI: 'Phôi',
       FRAME_HAN: 'Hàn',
       FRAME_SON: 'Sơn',
     };
     const stageRoles: Record<string, string[]> = {
       FRAME: [BUSINESS_ROLES.PHOI_STAFF, BUSINESS_ROLES.HAN_STAFF, BUSINESS_ROLES.SON_STAFF],
+      PHOI_START: [BUSINESS_ROLES.PHOI_STAFF], // Phần A – Đợt 3
       FRAME_PHOI: [BUSINESS_ROLES.PHOI_STAFF],
       FRAME_HAN: [BUSINESS_ROLES.HAN_STAFF],
       FRAME_SON: [BUSINESS_ROLES.SON_STAFF],
@@ -912,6 +925,7 @@ export class ProductionInvoicesService {
       WEAVING: ['phoi-son-han', 'vat-tu-tp'],
       TRANSFER_CHECK: ['vat-tu-tp', 'thanh-pham'],
       PACKAGING: ['vat-tu-tp', 'thanh-pham'],
+      PACKAGING_START: ['vat-tu-tp', 'thanh-pham'], // Phần A – Đợt 3
     };
 
     const changes: string[] = [];
@@ -956,6 +970,8 @@ export class ProductionInvoicesService {
       (stageWarehouses[stage.stageType] ?? []).forEach((w) => warehouseIds.add(w));
     }
     if (changes.length === 0) return;
+    // Phần A – Đợt 3 (V4-20): mọi lần đổi mốc đều báo thêm QLSX (để chốt lại kế hoạch năng lực).
+    roles.add(BUSINESS_ROLES.PRODUCTION_MANAGER);
 
     await auditEvent(this.prisma, this.cls, this.logger, {
       action: AuditAction.UPDATE,
@@ -1148,6 +1164,8 @@ export class ProductionInvoicesService {
         newValue: { workshopId: workshop.id.toString(), workshopCode: workshop.code, reason },
       });
     }
+    // Phần A – Đợt 3 (V4-5): đổi sang xưởng làm số ngày khác -> báo KHSX đặt lại mốc.
+    await this.notifyTimelineReplanIfNeeded(pi, pi.items, workshop, actorUserId);
     try {
       await this.notifications.emit('PI_WORKSHOP_CHANGED', {
         entityId: pi.id.toString(),
@@ -1206,6 +1224,8 @@ export class ProductionInvoicesService {
         `Chưa nhập số LSX cho SKU ${item.mfgProduct.factoryCode} - nhập ở ô 'Số LSX' rồi gửi lại`,
       );
     }
+    // Phần A – Đợt 3 (Q2): mốc nào còn trống thì tự lưu ngày đề xuất theo năng lực (vi phạm luật gộp -> 400, chưa đổi trạng thái).
+    const autoFilled = await this.autofillSuggestedDeadlines(pi, [item]);
 
     const data = {
       prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX,
@@ -1229,8 +1249,10 @@ export class ProductionInvoicesService {
         `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc gửi QLSX - không ghi đè`,
       );
     }
-    const updated = { ...item, ...data };
-    await this.auditItemApprovalTransition(item, updated);
+    // Đã tự lưu mốc -> đọc lại để phản hồi có đủ mốc mới.
+    const fresh = autoFilled > 0 ? await this.findItemOrThrow(pi.id, itemId) : item;
+    const updated = { ...fresh, ...data };
+    await this.auditItemApprovalTransition(item, { ...item, ...data });
     // "n SKU" = mọi item KHÁC của PI này đang WAITING_QLSX (đọc từ pi.items TRƯỚC lệnh ghi trên,
     // không đổi trạng thái) cộng chính item vừa gửi - dedupeKey gộp các lần gửi liên tiếp trước khi
     // QLSX kịp xử lý thành 1 dòng duy nhất, count tự cập nhật theo lần gọi gần nhất (mục 15.2 style
@@ -1282,6 +1304,8 @@ export class ProductionInvoicesService {
       );
     }
     await this.auditItemApprovalTransition(item, { ...item, ...data });
+    // Phần A – Đợt 3 (V4-5): xưởng QLSX chọn làm số ngày khác xưởng đã dùng để đề xuất mốc -> báo KHSX đặt lại mốc.
+    await this.notifyTimelineReplanIfNeeded(pi, [item], workshop, actorUserId);
     // Item vừa rời WAITING_QLSX - nếu KHÔNG còn item nào khác của PI này ở đó, đóng thông báo
     // "chờ QLSX" (mọi SKU trong hàng đợi đã được QLSX xử lý xong).
     const stillWaitingQlsx = pi.items.some(
@@ -1313,7 +1337,7 @@ export class ProductionInvoicesService {
     pi: PIWithRefs,
     targetIds: bigint[],
     workshopId: string | undefined,
-  ): Promise<{ id: bigint; code: string; name: string }> {
+  ): Promise<Workshop> {
     if (!workshopId || workshopId.trim() === '') {
       throw new BadRequestException(
         'Thiếu xưởng cơ khí - trang đang là phiên bản cũ, hãy tải lại trang (F5) rồi chọn xưởng',
@@ -1342,6 +1366,209 @@ export class ProductionInvoicesService {
       );
     }
     return workshop;
+  }
+
+  // ─── Phần A – Đợt 3 (YC10): mốc đề xuất theo năng lực ──────────────────────────────
+
+  /** Tham số năng lực Admin cấu hình; thiếu/lỗi -> mặc định (1,3 cont/ngày, 4 ngày/cont). */
+  private async loadTimelineParams(): Promise<TimelineParams> {
+    const cfg = await this.prisma.systemConfig.findUniqueOrThrow({
+      where: { id: SYSTEM_CONFIG_ID },
+      select: { capacityContPerDay: true, daysPerContPhuocAn: true },
+    });
+    // Decimal -> number (Number() chạy được cả với Decimal lẫn số thường); thiếu -> mặc định.
+    const cap = Number(cfg.capacityContPerDay);
+    const days = Number(cfg.daysPerContPhuocAn);
+    return {
+      capacityContPerDay:
+        Number.isFinite(cap) && cap > 0 ? cap : DEFAULT_TIMELINE_PARAMS.capacityContPerDay,
+      daysPerContPhuocAn:
+        Number.isFinite(days) && days > 0 ? days : DEFAULT_TIMELINE_PARAMS.daysPerContPhuocAn,
+    };
+  }
+
+  /** "Xưởng dự kiến" khi dòng chưa có xưởng (V4-5): Phú An (code PHU_AN); không có trong bảng -> coi là cont/ngày. */
+  private async loadDefaultWorkshop(): Promise<{ name: string; mode: TimelineCapacityMode }> {
+    const w = await this.prisma.workshop.findUnique({ where: { code: 'PHU_AN' } });
+    return {
+      name: w?.name ?? 'Xưởng Phú An',
+      mode: w?.capacityMode === 'DAYS_PER_CONT' ? 'DAYS_PER_CONT' : 'CONT_PER_DAY',
+    };
+  }
+
+  /**
+   * Q2: lúc KHSX gửi QLSX, mốc nào còn TRỐNG thì BE tự lưu ngày đề xuất (công thức `suggestTimeline`, xưởng của dòng, chưa có thì Phú An).
+   * Không ghi đè mốc đã có, không đụng deliveryDeadline. Chạy trong 1 transaction; PI gộp kiểm lại luật gộp (vi phạm -> 400, không lưu gì).
+   * Audit từng dòng có ghi (newValue.source = AUTO_FILL_ON_SEND_QLSX), KHÔNG gửi thông báo. Trả số dòng đã ghi.
+   */
+  private async autofillSuggestedDeadlines(
+    pi: PIWithRefs,
+    items: PIItemWithRefs[],
+  ): Promise<number> {
+    const params = await this.loadTimelineParams();
+    const defaultMode = (await this.loadDefaultWorkshop()).mode;
+
+    type Plan = {
+      item: PIItemWithRefs;
+      itemData: { materialDeadline?: Date; finishedMaterialDeadline?: Date };
+      stages: { stageType: ProdItemStageType; deadline: Date }[];
+    };
+    const toDate = (day: string) => new Date(`${day}T00:00:00.000Z`);
+    const plans: Plan[] = [];
+    for (const item of items) {
+      const stageDay = (t: ProdItemStageType) => {
+        const st = item.stages.find((x) => x.stageType === t);
+        return st ? vnDayKey(st.deadline) : null;
+      };
+      const suggestion = suggestTimeline(
+        {
+          quantity: item.quantity,
+          loadCont: item.mfgProduct.loadCont,
+          capacityMode: item.workshop?.capacityMode ?? defaultMode,
+          saved: {
+            PHOI_START: stageDay('PHOI_START'),
+            FRAME_PHOI: stageDay('FRAME_PHOI'),
+            FRAME: stageDay('FRAME'),
+            PACKAGING_START: stageDay('PACKAGING_START'),
+            PACKAGING: stageDay('PACKAGING'),
+          },
+          delivery: item.deliveryDeadline
+            ? vnDayKey(item.deliveryDeadline)
+            : pi.deadline
+              ? vnDayKey(pi.deadline)
+              : null,
+        },
+        params,
+      );
+      if (!suggestion) continue;
+      const plan: Plan = { item, itemData: {}, stages: [] };
+      if (!item.materialDeadline) {
+        plan.itemData.materialDeadline = toDate(suggestion.dates.materialDeadline);
+      }
+      if (!item.finishedMaterialDeadline) {
+        plan.itemData.finishedMaterialDeadline = toDate(suggestion.dates.finishedMaterialDeadline);
+      }
+      const stageTypes: ProdItemStageType[] = [
+        'PHOI_START',
+        'FRAME_PHOI',
+        'FRAME_HAN',
+        'FRAME_SON',
+        'FRAME',
+        'WEAVING',
+        'TRANSFER_CHECK',
+        'PACKAGING_START',
+        'PACKAGING',
+      ];
+      for (const t of stageTypes) {
+        if (item.stages.some((x) => x.stageType === t)) continue;
+        plan.stages.push({ stageType: t, deadline: toDate(suggestion.dates[t]) });
+      }
+      if (Object.keys(plan.itemData).length > 0 || plan.stages.length > 0) plans.push(plan);
+    }
+    if (plans.length === 0) return 0;
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        for (const plan of plans) {
+          if (Object.keys(plan.itemData).length > 0) {
+            await tx.productionInvoiceItem.update({
+              where: { id: plan.item.id },
+              data: plan.itemData,
+            });
+          }
+          for (const st of plan.stages) {
+            // update: {} - lỡ có người vừa đặt mốc này giữa chừng thì KHÔNG ghi đè.
+            await tx.productionInvoiceItemStage.upsert({
+              where: {
+                productionInvoiceItemId_stageType: {
+                  productionInvoiceItemId: plan.item.id,
+                  stageType: st.stageType,
+                },
+              },
+              create: {
+                productionInvoiceItemId: plan.item.id,
+                stageType: st.stageType,
+                deadline: st.deadline,
+              },
+              update: {},
+            });
+          }
+        }
+        if (pi.isMerged) await this.assertMergedPiDeadlineRule(tx, pi.id);
+      });
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw new BadRequestException(
+          `${error.message} - mở "Sửa thời hạn" đặt mốc Mua VT khung & đan của các SKU rồi gửi lại`,
+        );
+      }
+      throw error;
+    }
+
+    for (const plan of plans) {
+      const oldValue: Record<string, string | null> = {};
+      const newValue: Record<string, string | null> = { source: 'AUTO_FILL_ON_SEND_QLSX' };
+      for (const [k, v] of Object.entries(plan.itemData)) {
+        oldValue[k] = null;
+        newValue[k] = v.toISOString();
+      }
+      for (const st of plan.stages) {
+        oldValue[`stage.${st.stageType}`] = null;
+        newValue[`stage.${st.stageType}`] = st.deadline.toISOString();
+      }
+      await auditEvent(this.prisma, this.cls, this.logger, {
+        action: AuditAction.UPDATE,
+        tableName: 'ProductionInvoiceItem',
+        recordId: plan.item.id,
+        oldValue,
+        newValue,
+      });
+    }
+    return plans.length;
+  }
+
+  /**
+   * V4-5: QLSX chọn / đổi xưởng mà số ngày X (Phôi = Hàn = Sơn) khác X của xưởng đã dùng để đề xuất mốc (xưởng cũ của dòng, chưa có
+   * thì Phú An) -> gom các dòng lệch của PI thành 1 thông báo cho KHSX. Best-effort, KHÔNG chặn thao tác (lỗi chỉ log).
+   */
+  private async notifyTimelineReplanIfNeeded(
+    pi: PIWithRefs,
+    items: PIItemWithRefs[],
+    newWorkshop: Workshop,
+    actorUserId: string,
+  ): Promise<void> {
+    try {
+      const params = await this.loadTimelineParams();
+      const fallback = items.some((it) => !it.workshop) ? await this.loadDefaultWorkshop() : null;
+      const newMode: TimelineCapacityMode =
+        newWorkshop.capacityMode === 'DAYS_PER_CONT' ? 'DAYS_PER_CONT' : 'CONT_PER_DAY';
+      const lines: string[] = [];
+      for (const it of items) {
+        const oldMode = it.workshop?.capacityMode ?? fallback?.mode ?? 'CONT_PER_DAY';
+        const oldName = it.workshop?.name ?? fallback?.name ?? 'Xưởng Phú An';
+        const oldDays = frameDaysOf(it.quantity, it.mfgProduct.loadCont, oldMode, params);
+        const newDays = frameDaysOf(it.quantity, it.mfgProduct.loadCont, newMode, params);
+        if (oldDays === newDays) continue;
+        lines.push(
+          `${it.mfgProduct.factoryCode}: Phôi/Hàn/Sơn cần ${newDays} ngày mỗi công đoạn ở ${newWorkshop.name} (mốc đang đặt theo ${oldName}: ${oldDays} ngày)`,
+        );
+      }
+      if (lines.length === 0) return;
+      await this.notifications.emit('PI_TIMELINE_NEEDS_REPLAN', {
+        entityId: pi.id.toString(),
+        actorId: actorUserId,
+        params: {
+          piCode: pi.code,
+          displayCode: lenhDisplayCode(pi, pi.items),
+          workshopName: newWorkshop.name,
+          lines,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create PI_TIMELINE_NEEDS_REPLAN notification (PI ${pi.id}): ${(error as Error).message}`,
+      );
+    }
   }
 
   // ─── Gửi CẢ PHIẾU (mọi SKU đủ điều kiện) - 2026-08-18 ───────────────────────────
@@ -1389,6 +1616,8 @@ export class ProductionInvoicesService {
           .join(', ')} - nhập ở ô 'Số LSX' rồi gửi lại`,
       );
     }
+    // Phần A – Đợt 3 (Q2): tự lưu ngày đề xuất cho mốc còn trống của mọi SKU sẽ gửi.
+    await this.autofillSuggestedDeadlines(pi, targets);
 
     const requestedAt = new Date();
     await this.prisma.productionInvoiceItem.updateMany({
@@ -1480,6 +1709,8 @@ export class ProductionInvoicesService {
         qlsxById: actorUserId,
       });
     }
+    // Phần A – Đợt 3 (V4-5): báo KHSX nếu xưởng chọn làm số ngày khác xưởng đã dùng để đề xuất mốc.
+    await this.notifyTimelineReplanIfNeeded(pi, targets, workshop, actorUserId);
     const targetIds = new Set(targets.map((it) => it.id.toString()));
     const stillWaitingQlsx = pi.items.some(
       (it) =>

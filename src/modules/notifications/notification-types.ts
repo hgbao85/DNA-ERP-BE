@@ -349,6 +349,11 @@ export interface ProductionDigestNotificationParams {
   /** Lệnh đã tới/qua hạn Phôi mà QLSX chưa bấm "Bắt đầu". */
   notStarted: number;
   lines: string;
+  // Phần A – Đợt 3 (YC10, V4-13): cảnh báo mốc neo + sản lượng ngày gộp vào tin sáng này (không thêm loại tin mới).
+  /** Dòng đã tới M4 (bắt đầu Đóng gói) mà chưa đóng thùng nào. Thiếu ở tin cũ = 0. */
+  packagingNotStarted?: number;
+  /** Số (xưởng/kho × công đoạn) hôm qua làm chưa đủ 1 cont (hoặc chưa đủ phần còn lại) - v8 10.4, 10.15. Thiếu ở tin cũ = 0. */
+  lowOutput?: number;
 }
 
 /** Hạn giao còn ≤ 2 ngày hoặc đã qua mà chưa đóng gói đủ (DailyJobsService, 2026-10-29). */
@@ -373,6 +378,18 @@ export interface PiWorkshopChangedNotificationParams {
   reason: string;
   /** Số dòng SKU được đổi. */
   count: number;
+}
+
+// Phần A – Đợt 3 (YC10, V4-5): QLSX chọn/đổi xưởng khác xưởng KHSX đã dùng để đề xuất mốc (chưa có xưởng = dự kiến Phú An) mà số
+// ngày Phôi/Hàn/Sơn khác đi -> báo KHSX đặt lại mốc. `entityId` = piId.
+export interface PiTimelineReplanNotificationParams {
+  piCode: string;
+  /** Mã lệnh hiển thị (số LSX nối " + ", chưa có thì mã PI). */
+  displayCode: string;
+  /** Xưởng QLSX vừa chọn / đổi sang. */
+  workshopName: string;
+  /** Mỗi SKU 1 câu, vd "J55: Phôi cần 8 ngày ở Xưởng Phước An (mốc đang đặt theo Xưởng Phú An 2 ngày)". */
+  lines: string[];
 }
 
 /** Tin sáng / cảnh báo tiến độ mở "Bảng mốc" trong "Tổng hợp lệnh SX" - mỗi vai trò vào 1 phân hệ khác nhau. FE chọn đích
@@ -1275,6 +1292,11 @@ const notificationTypeDefinitions = {
         p.late > 0 ? `${p.late} mốc trễ` : null,
         p.dueSoon > 0 ? `${p.dueSoon} mốc sắp tới hạn` : null,
         p.notStarted > 0 ? `${p.notStarted} lệnh chưa bắt đầu` : null,
+        // Phần A – Đợt 3
+        (p.packagingNotStarted ?? 0) > 0
+          ? `${p.packagingNotStarted} lệnh chưa bắt đầu đóng gói`
+          : null,
+        (p.lowOutput ?? 0) > 0 ? `${p.lowOutput} công đoạn chưa đủ 1 cont hôm qua` : null,
       ]
         .filter(Boolean)
         .join(', '),
@@ -1325,6 +1347,26 @@ const notificationTypeDefinitions = {
       roles: [BUSINESS_ROLES.BOSS, BUSINESS_ROLES.PRODUCTION_PLANNER],
     }),
   } satisfies NotificationTypeDef<PiWorkshopChangedNotificationParams>,
+
+  // ─── Phần A – Đợt 3 (YC10, V4-5): xưởng QLSX chọn khác xưởng dùng để đề xuất mốc ────────────────────────────────────────
+  /** QLSX gửi Sếp / đổi xưởng mà số ngày Phôi-Hàn-Sơn theo xưởng mới khác số ngày đang đặt -> KHSX mở "Sửa thời hạn" đặt lại.
+   *  Chỉ báo, không chặn (năng lực chỉ để cảnh báo - v8 10.12). */
+  PI_TIMELINE_NEEDS_REPLAN: {
+    category: 'INFO',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PiTimelineReplanNotificationParams) =>
+      `${p.displayCode}: đặt lại mốc theo ${p.workshopName}`,
+    message: (p: PiTimelineReplanNotificationParams) => p.lines.join('; '),
+    link: (p: PiTimelineReplanNotificationParams) => ({
+      module: 'production_plan',
+      page: 'lenh-sx',
+      params: { focus: `PI_CODE:${p.piCode}` },
+    }),
+    recipients: () => ({
+      roles: [BUSINESS_ROLES.PRODUCTION_PLANNER],
+    }),
+  } satisfies NotificationTypeDef<PiTimelineReplanNotificationParams>,
 };
 
 /** Danh mục loại thông báo - 1 nguồn duy nhất cho text/link/mức độ/người nhận (mục 5.2 changelog

@@ -87,4 +87,24 @@ describe('UpdateSystemConfigDto - máy cắt', () => {
     expect(await errorsOn({ solverMctdTrimStartMm: -1 })).toContain('solverMctdTrimStartMm');
     expect(await errorsOn({ solverMctdTrimStartMm: 1.5 })).toContain('solverMctdTrimStartMm');
   });
+
+  // Phần A – Đợt 3 (YC10)
+  it('capacityContPerDay 0,1-20, tối đa 2 số lẻ', async () => {
+    expect(await errorsOn({ capacityContPerDay: 1.3 })).toEqual([]);
+    expect(await errorsOn({ capacityContPerDay: 0.1 })).toEqual([]);
+    expect(await errorsOn({ capacityContPerDay: 20 })).toEqual([]);
+    expect(await errorsOn({ capacityContPerDay: 0.05 })).toContain('capacityContPerDay');
+    expect(await errorsOn({ capacityContPerDay: 0 })).toContain('capacityContPerDay');
+    expect(await errorsOn({ capacityContPerDay: 20.01 })).toContain('capacityContPerDay');
+    expect(await errorsOn({ capacityContPerDay: 1.333 })).toContain('capacityContPerDay');
+  });
+
+  it('daysPerContPhuocAn là số nguyên 1-60', async () => {
+    expect(await errorsOn({ daysPerContPhuocAn: 4 })).toEqual([]);
+    expect(await errorsOn({ daysPerContPhuocAn: 1 })).toEqual([]);
+    expect(await errorsOn({ daysPerContPhuocAn: 60 })).toEqual([]);
+    expect(await errorsOn({ daysPerContPhuocAn: 0 })).toContain('daysPerContPhuocAn');
+    expect(await errorsOn({ daysPerContPhuocAn: 61 })).toContain('daysPerContPhuocAn');
+    expect(await errorsOn({ daysPerContPhuocAn: 2.5 })).toContain('daysPerContPhuocAn');
+  });
 });
