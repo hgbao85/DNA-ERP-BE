@@ -9,6 +9,12 @@ export class PlanningParamsDto {
   /** Phần A – Đợt 2: tiền tố số LSX Admin khai (vd ["MY","GP"]); rỗng = mọi tiền tố đúng dạng. FE dùng cho ô chọn tiền tố. */
   @Expose() @ApiProperty({ type: [String] }) lsxPrefixes!: string[];
 
+  // Phần A – Đợt 3 (YC10)
+  /** Năng lực cont/ngày (Phú An + mỗi kho đóng gói) - FE tính mốc đề xuất. */
+  @Expose() @ApiProperty() capacityContPerDay!: number;
+  /** Số ngày/cont ở Phôi, Hàn của xưởng Phước An. */
+  @Expose() @ApiProperty() daysPerContPhuocAn!: number;
+
   constructor(partial: Partial<PlanningParamsDto>) {
     Object.assign(this, partial);
   }

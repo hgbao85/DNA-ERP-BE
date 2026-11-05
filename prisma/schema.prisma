@@ -429,6 +429,13 @@ model SystemConfig {
   /// đổi thì load cont lưu sẵn trên mfg_products được tính lại trong cùng transaction.
   containerVolumeM3 Decimal @default(68) @db.Decimal(6, 2)
 
+  // Phần A – Đợt 3 (YC10 10.12, 10.16): năng lực - chỉ để CẢNH BÁO, không khoá.
+  /// Số cont mỗi ngày 1 xưởng CONT_PER_DAY (Phú An) / 1 kho đóng gói làm được ở mỗi công đoạn (mặc định 1,3). Số ngày Phôi
+  /// đề xuất = ⌈số cont ÷ số này⌉ (Đóng gói cũng vậy).
+  capacityContPerDay Decimal @default(1.3) @db.Decimal(4, 2)
+  /// Xưởng DAYS_PER_CONT (Phước An): số ngày làm 1 cont ở Phôi/Hàn (mặc định 4) - số ngày = ⌈số này × số cont⌉.
+  daysPerContPhuocAn Int     @default(4)
+
   updatedAt DateTime @updatedAt
 
   @@map("system_config")
@@ -1715,6 +1722,12 @@ enum ProdItemStageType {
   FRAME_PHOI
   FRAME_HAN
   FRAME_SON
+  // Phần A – Đợt 3 (YC10): 2 mốc NGÀY BẮT ĐẦU (M2, M4). Các giá trị phía trên vẫn là ngày phải XONG (Bảng mốc chấm theo nghĩa
+  // này). Thêm bằng migration riêng (Postgres không cho dùng giá trị enum mới trong cùng transaction với ADD VALUE).
+  /// M2 - ngày bắt đầu Phôi (N). Phôi xong = FRAME_PHOI.
+  PHOI_START
+  /// M4 - ngày bắt đầu Đóng gói. Đóng gói xong = PACKAGING.
+  PACKAGING_START
 }
 
 model ProductionInvoiceItemStage {

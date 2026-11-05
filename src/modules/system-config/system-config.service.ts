@@ -129,6 +129,9 @@ export class SystemConfigService {
     return new PlanningParamsDto({
       containerVolumeM3: config.containerVolumeM3.toNumber(),
       lsxPrefixes: config.lsxPrefixes, // Phần A – Đợt 2
+      // Phần A – Đợt 3 (YC10)
+      capacityContPerDay: config.capacityContPerDay.toNumber(),
+      daysPerContPhuocAn: config.daysPerContPhuocAn,
     });
   }
 
@@ -191,6 +194,7 @@ export class SystemConfigService {
       solverMaxWastePercentage: config.solverMaxWastePercentage.toNumber(),
       purchaseOverReceiptTolerancePercent: config.purchaseOverReceiptTolerancePercent.toNumber(),
       containerVolumeM3: config.containerVolumeM3.toNumber(),
+      capacityContPerDay: config.capacityContPerDay.toNumber(), // Phần A – Đợt 3
     });
   }
 
@@ -234,6 +238,7 @@ export class SystemConfigService {
       solverMaxWastePercentage: updated.solverMaxWastePercentage.toNumber(),
       purchaseOverReceiptTolerancePercent: updated.purchaseOverReceiptTolerancePercent.toNumber(),
       containerVolumeM3: updated.containerVolumeM3.toNumber(),
+      capacityContPerDay: updated.capacityContPerDay.toNumber(), // Phần A – Đợt 3
     });
   }
 

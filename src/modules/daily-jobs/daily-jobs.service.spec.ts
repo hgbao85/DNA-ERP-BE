@@ -10,6 +10,8 @@ import {
   MilestoneKey,
   MilestoneStatus,
 } from '../milestone-board/milestone-board.rules';
+import { addDays } from '../../common/utils/timeline-suggest.util';
+import type { DailyOutputAlert } from '../production-capacity/production-capacity.types';
 import { DailyJobsService, vnHour } from './daily-jobs.service';
 
 const cell = (
@@ -20,7 +22,8 @@ const cell = (
 ): MilestoneCell => ({
   key,
   label: MILESTONES.find((m) => m.key === key)!.label,
-  deadline: daysLeft === null ? null : '2026-10-30',
+  // Hạn = hôm nay (29/10) + daysLeft, để so ngày (M2 rơi về hạn Phôi) khớp daysLeft.
+  deadline: daysLeft === null ? null : addDays('2026-10-29', daysLeft),
   status,
   daysLeft,
   percent: 0,
@@ -45,6 +48,8 @@ const row = (
   skuName: null,
   quantity: 50,
   floorStage: 'ACTIVE',
+  phoiStart: null, // Phần A – Đợt 3
+  packagingStart: null,
   milestones: MILESTONES.map(
     (m) => cells.find((c) => c.key === m.key) ?? cell(m.key, 'NO_DEADLINE', null),
   ),
@@ -91,6 +96,7 @@ describe('DailyJobsService', () => {
   let dataHealth: { run: jest.Mock };
   let board: { getBoard: jest.Mock };
   let notifications: { emit: jest.Mock; resolve: jest.Mock };
+  let dailyOutput: { alertsForDay: jest.Mock };
   let service: DailyJobsService;
 
   beforeEach(() => {
@@ -108,11 +114,13 @@ describe('DailyJobsService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
+    dailyOutput = { alertsForDay: jest.fn().mockResolvedValue([]) };
     service = new DailyJobsService(
       prisma as never,
       dataHealth as never,
       board as never,
       notifications as never,
+      dailyOutput as never,
     );
   });
 
@@ -303,6 +311,131 @@ describe('DailyJobsService', () => {
       const b = boardOf([row('1', [cell('PHOI', 'DUE_SOON', 0)], { floorStage: 'PENDING' })]);
       expect(DailyJobsService.productionDigest(b)).toMatchObject({ notStarted: 1, dueSoon: 1 });
       expect(DailyJobsService.productionDigest(b)!.lines).toContain('chưa bấm Bắt đầu');
+    });
+  });
+
+  // Phần A – Đợt 3 (YC10): M2/M4 + sản lượng ngày gộp vào tin sáng.
+  describe('tin sáng - mốc neo M2/M4 và sản lượng ngày', () => {
+    const alert = (message: string): DailyOutputAlert => ({
+      groupKind: 'WORKSHOP',
+      groupCode: 'PHU_AN',
+      groupName: 'Xưởng Phú An',
+      stage: 'HAN',
+      stageLabel: 'Hàn',
+      day: '2026-10-28',
+      mode: 'CONT_PER_DAY',
+      doneCont: 0.6,
+      thresholdCont: 1,
+      estimated: false,
+      itemIds: ['1'],
+      displayCodes: ['MY-313'],
+      message,
+    });
+
+    it('chưa bắt đầu Phôi: tới M2 (phoiStart) dù hạn Phôi còn xa', () => {
+      const b = boardOf([
+        row('1', [cell('PHOI', 'ON_TRACK', 5)], { floorStage: 'PENDING', phoiStart: '2026-10-29' }),
+        row('2', [cell('PHOI', 'ON_TRACK', 5)], { floorStage: 'PENDING', phoiStart: '2026-10-30' }),
+      ]);
+      const p = DailyJobsService.productionDigest(b)!;
+      expect(p).toMatchObject({ notStarted: 1, late: 0, dueSoon: 0 });
+      expect(p.lines).toBe('PI-2026-001 · SKU-1: chưa bấm Bắt đầu.');
+    });
+
+    it('chưa có M2 thì rơi về hạn Phôi như cũ; Phôi đã xong thì không báo', () => {
+      const b = boardOf([
+        row('1', [cell('PHOI', 'LATE', -1)], { floorStage: 'PENDING' }),
+        row('2', [cell('PHOI', 'DONE', -1)], { floorStage: 'PENDING', phoiStart: '2026-10-20' }),
+        row('3', [cell('PHOI', 'LATE', -1)], { floorStage: 'ACTIVE', phoiStart: '2026-10-20' }),
+      ]);
+      expect(DailyJobsService.productionDigest(b)).toMatchObject({ notStarted: 1 });
+    });
+
+    it('tới M4 mà chưa đóng thùng nào -> packagingNotStarted + câu "chưa bắt đầu Đóng gói"', () => {
+      const b = boardOf([
+        row('1', [cell('DONG_GOI', 'ON_TRACK', 8, { need: 50, done: 0 })], {
+          packagingStart: '2026-10-29',
+        }),
+        row('2', [cell('DONG_GOI', 'ON_TRACK', 8, { need: 50, done: 5 })], {
+          packagingStart: '2026-10-28',
+        }),
+        row('3', [cell('DONG_GOI', 'ON_TRACK', 8, { need: 50, done: 0 })], {
+          packagingStart: '2026-10-31',
+        }),
+        row('4', [cell('DONG_GOI', 'UNKNOWN', 8, { need: null, done: null })], {
+          packagingStart: '2026-10-28',
+        }),
+        row('5', [cell('DONG_GOI', 'NA', 8, { need: 0, done: 0 })], {
+          packagingStart: '2026-10-28',
+        }),
+      ]);
+      const p = DailyJobsService.productionDigest(b)!;
+      expect(p).toMatchObject({ packagingNotStarted: 1, notStarted: 0 });
+      expect(p.lines).toBe('PI-2026-001 · SKU-1: chưa bắt đầu Đóng gói.');
+    });
+
+    it('lowOutput: câu cảnh báo vào lines (sau các dòng theo lệnh) + đếm; chỉ có lowOutput vẫn có tin', () => {
+      const msg = 'Hàn · Xưởng Phú An 28/10: làm 0,6/1 cont - MY-313';
+      expect(DailyJobsService.productionDigest(boardOf([]), [alert(msg)])).toEqual({
+        late: 0,
+        dueSoon: 0,
+        notStarted: 0,
+        packagingNotStarted: 0,
+        lowOutput: 1,
+        lines: `${msg}.`,
+      });
+      const b = boardOf([row('1', [cell('PHOI', 'LATE', -1)])]);
+      const p = DailyJobsService.productionDigest(b, [alert(msg)])!;
+      expect(p.lines).toBe(`PI-2026-001 · SKU-1: Phôi trễ 1 ngày; ${msg}.`);
+      expect(p.late).toBe(1);
+    });
+
+    it('joinLines vẫn cắt 5 dòng khi có nhiều cảnh báo sản lượng', () => {
+      const alerts = Array.from({ length: 7 }, (_, i) => alert(`cảnh báo ${i + 1}`));
+      const p = DailyJobsService.productionDigest(boardOf([]), alerts)!;
+      expect(p.lowOutput).toBe(7);
+      expect(p.lines).toBe(
+        'cảnh báo 1; cảnh báo 2; cảnh báo 3; cảnh báo 4; cảnh báo 5; +2 dòng khác.',
+      );
+    });
+
+    it('sendDigestsIfDue chấm sản lượng đúng ngày HÔM QUA giờ VN và đưa vào tin tiến độ', async () => {
+      dailyOutput.alertsForDay.mockResolvedValue([alert('Hàn · cảnh báo')]);
+      await service.sendDigestsIfDue(boardOf([]), MORNING);
+      expect(dailyOutput.alertsForDay).toHaveBeenCalledWith('2026-10-28');
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'MORNING_PRODUCTION_DIGEST',
+        expect.objectContaining({
+          params: expect.objectContaining({ lowOutput: 1, lines: 'Hàn · cảnh báo.' }) as unknown,
+        }),
+      );
+    });
+
+    it('08:00 VN ngày 1 tháng: hôm qua là ngày cuối tháng trước', async () => {
+      await service.sendDigestsIfDue(boardOf([]), new Date('2026-10-31T23:30:00.000Z')); // 06:30 1/11 VN - chưa tới giờ
+      expect(dailyOutput.alertsForDay).not.toHaveBeenCalled();
+      await service.sendDigestsIfDue(boardOf([]), new Date('2026-11-01T01:00:00.000Z'));
+      expect(dailyOutput.alertsForDay).toHaveBeenCalledWith('2026-10-31');
+    });
+
+    it('alertsForDay lỗi -> vẫn gửi tin tiến độ (không có cảnh báo sản lượng)', async () => {
+      dailyOutput.alertsForDay.mockRejectedValue(new Error('db'));
+      const lateOnly = boardOf([row('1', [cell('PHOI', 'LATE', -1)])]);
+      await service.sendDigestsIfDue(lateOnly, MORNING);
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'MORNING_PRODUCTION_DIGEST',
+        expect.objectContaining({
+          params: expect.objectContaining({ late: 1, lowOutput: 0 }) as unknown,
+        }),
+      );
+    });
+
+    it('tin tiến độ hôm nay đã gửi -> không chấm lại sản lượng', async () => {
+      prisma.notification.findMany.mockResolvedValue([
+        { dedupeKey: 'MORNING_PRODUCTION_DIGEST:2026-10-29' },
+      ]);
+      await service.sendDigestsIfDue(boardOf([]), MORNING);
+      expect(dailyOutput.alertsForDay).not.toHaveBeenCalled();
     });
   });
 

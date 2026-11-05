@@ -26,6 +26,8 @@ export class PiOrderSummaryResponseDto {
    *  này (STEEL_ISSUE:VIEW) là đường duy nhất Phôi đọc được thông tin PO/SKU). null nếu KHSX chưa
    *  từng đặt mốc Phôi cho SKU này. */
   @Expose() @ApiPropertyOptional({ nullable: true }) phoiDeadline!: Date | null;
+  /** Phần A – Đợt 3 (YC10): mốc Bắt đầu Phôi (ProdItemStageType.PHOI_START) của SKU; null nếu chưa đặt. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) phoiStart!: Date | null;
 
   constructor(partial: Partial<PiOrderSummaryResponseDto>) {
     Object.assign(this, partial);
