@@ -132,6 +132,7 @@ export class SystemConfigService {
       // Phần A – Đợt 3 (YC10)
       capacityContPerDay: config.capacityContPerDay.toNumber(),
       daysPerContPhuocAn: config.daysPerContPhuocAn,
+      materialEarliestArrivalDays: config.materialEarliestArrivalDays, // Phần A – Đợt 4
     });
   }
 

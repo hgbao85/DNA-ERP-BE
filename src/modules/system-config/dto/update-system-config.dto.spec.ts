@@ -107,4 +107,20 @@ describe('UpdateSystemConfigDto - máy cắt', () => {
     expect(await errorsOn({ daysPerContPhuocAn: 61 })).toContain('daysPerContPhuocAn');
     expect(await errorsOn({ daysPerContPhuocAn: 2.5 })).toContain('daysPerContPhuocAn');
   });
+
+  // Phần A – Đợt 4 (YC6)
+  it('materialEarliestArrivalDays là số nguyên 0-30', async () => {
+    expect(await errorsOn({ materialEarliestArrivalDays: 4 })).toEqual([]);
+    expect(await errorsOn({ materialEarliestArrivalDays: 0 })).toEqual([]);
+    expect(await errorsOn({ materialEarliestArrivalDays: 30 })).toEqual([]);
+    expect(await errorsOn({ materialEarliestArrivalDays: -1 })).toContain(
+      'materialEarliestArrivalDays',
+    );
+    expect(await errorsOn({ materialEarliestArrivalDays: 31 })).toContain(
+      'materialEarliestArrivalDays',
+    );
+    expect(await errorsOn({ materialEarliestArrivalDays: 2.5 })).toContain(
+      'materialEarliestArrivalDays',
+    );
+  });
 });

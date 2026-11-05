@@ -15,6 +15,10 @@ export class PlanningParamsDto {
   /** Số ngày/cont ở Phôi, Hàn của xưởng Phước An. */
   @Expose() @ApiProperty() daysPerContPhuocAn!: number;
 
+  // Phần A – Đợt 4 (YC6)
+  /** Số ngày vật tư được về sớm nhất trước hạn chót (N) - FE màn "Vật tư cần về". */
+  @Expose() @ApiProperty() materialEarliestArrivalDays!: number;
+
   constructor(partial: Partial<PlanningParamsDto>) {
     Object.assign(this, partial);
   }

@@ -51,19 +51,35 @@ export interface PurchaseDeadlineItem extends FrameDeadlineItem {
   finishedMaterialDeadline: Date | null;
 }
 
+/** Một ngày lịch (VN không có giờ mùa hè nên trừ đúng 24 giờ là đủ). */
+const DAY_MS = 86_400_000;
+/** Phần A – Đợt 4 (V4-3): vật tư khung phải về trước ngày bắt đầu Phôi 1 ngày; vật tư còn lại trước ngày bắt đầu Đóng gói 7 ngày. */
+export const FRAME_MATERIAL_LEAD_DAYS = 1;
+export const FINISHED_MATERIAL_LEAD_DAYS = 7;
+
+const minusDays = (d: Date, n: number) => new Date(d.getTime() - n * DAY_MS);
+
 /**
- * Hạn vật tư phải về của 1 dòng SKU theo nhóm mua - 1 hàm dùng chung cho Bảng mốc / tin sáng và "Theo dõi mua hàng" để 2 màn
- * không nói 2 ngày khác nhau (test thật 32.27, phần D của 32.5). Chỉ dùng ngày ĐÃ LƯU, không tự trừ ngày theo mốc Phú An:
- *  - VT khung & đan: `frameDeadlineOf` (hạn Mua VT khung → hạn Khung → hạn PI);
- *  - VT còn lại: hạn Mua VT còn lại → hạn Đóng gói → hạn PI.
+ * Hạn vật tư phải về của 1 dòng SKU theo nhóm mua - 1 hàm dùng chung cho Bảng mốc / tin sáng, "Theo dõi mua hàng" và màn "Vật tư cần
+ * về" để các màn không nói các ngày khác nhau (test thật 32.27, phần D của 32.5). Chỉ dùng ngày ĐÃ LƯU hoặc suy từ ngày bắt đầu đã lưu
+ * (Phần A – Đợt 4, V4-3: lệnh chưa có hạn mua riêng thì lấy trước mốc bắt đầu, không đợi rơi về hạn Khung / Đóng gói):
+ *  - VT khung & đan: hạn Mua VT khung → (ngày bắt đầu Phôi − 1) → hạn Khung → hạn PI;
+ *  - VT còn lại: hạn Mua VT còn lại → (ngày bắt đầu Đóng gói − 7) → hạn Đóng gói → hạn PI.
+ * `frameDeadlineOf` KHÔNG đổi (xếp cắt / luật gộp vẫn dùng bản cũ).
  */
 export function purchaseDeadlineOf(
   item: PurchaseDeadlineItem,
   group: PurchaseDeadlineGroup,
 ): Date | null {
-  if (group === 'FRAME') return frameDeadlineOf(item);
+  if (group === 'FRAME') {
+    if (item.materialDeadline) return item.materialDeadline;
+    const phoiStart = item.stages.find((s) => s.stageType === ProdItemStageType.PHOI_START);
+    if (phoiStart) return minusDays(phoiStart.deadline, FRAME_MATERIAL_LEAD_DAYS);
+    return frameDeadlineOf(item);
+  }
+  if (item.finishedMaterialDeadline) return item.finishedMaterialDeadline;
+  const packagingStart = item.stages.find((s) => s.stageType === ProdItemStageType.PACKAGING_START);
+  if (packagingStart) return minusDays(packagingStart.deadline, FINISHED_MATERIAL_LEAD_DAYS);
   const packaging = item.stages.find((s) => s.stageType === ProdItemStageType.PACKAGING);
-  return (
-    item.finishedMaterialDeadline ?? packaging?.deadline ?? item.productionInvoice?.deadline ?? null
-  );
+  return packaging?.deadline ?? item.productionInvoice?.deadline ?? null;
 }

@@ -439,6 +439,10 @@ model SystemConfig {
   /// Xưởng DAYS_PER_CONT (Phước An): số ngày làm 1 cont ở Phôi/Hàn (mặc định 4) - số ngày = ⌈số này × số cont⌉.
   daysPerContPhuocAn Int     @default(4)
 
+  // Phần A – Đợt 4 (YC6): màn "Vật tư cần về"
+  /// N: vật tư được về sớm nhất N ngày trước hạn chót (khoảng "hôm nay" = [hạn chót − N, hạn chót]). Mặc định 4; Admin sửa 0-30.
+  materialEarliestArrivalDays Int @default(4)
+
   updatedAt DateTime @updatedAt
 
   @@map("system_config")

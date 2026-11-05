@@ -15,11 +15,11 @@ import {
   MilestoneBoardService,
   MilestoneCell,
   MilestoneRow,
-  MissingMaterial,
 } from '../milestone-board/milestone-board.service';
 import { MilestoneKey, daysBetween } from '../milestone-board/milestone-board.rules';
 import {
   DeliveryAtRiskNotificationParams,
+  MaterialsDeadlineAlertNotificationParams,
   MaterialsDigestNotificationParams,
   ProductionDigestNotificationParams,
 } from '../notifications/notification-types';
@@ -27,6 +27,9 @@ import { NotificationsService } from '../notifications/notifications.service';
 // Phần A – Đợt 3: cảnh báo sản lượng ngày gộp vào tin sáng.
 import { DailyOutputService } from '../production-capacity/daily-output.service';
 import type { DailyOutputAlert } from '../production-capacity/production-capacity.types';
+// Phần A – Đợt 4 (YC6): tin sáng vật tư + cảnh báo tới hạn chót lấy từ màn "Vật tư cần về"
+import { MaterialsDueService, isDueNow } from '../materials-due/materials-due.service';
+import type { MaterialsDueRow } from '../materials-due/materials-due.types';
 // Phần A – Đợt 10a
 import { BookingAlertsService } from '../bookings/booking-alerts.service';
 
@@ -43,6 +46,9 @@ const LOCK_KEY = 'daily-jobs';
 /** Đủ cho 1 lần kiểm cả "Kiểm tra dữ liệu" (transaction riêng tối đa 60 s) + bảng mốc + gửi tin. */
 const LOCK_TIMEOUT_MS = 10 * 60_000;
 const DELIVERY_ENTITY = 'PRODUCTION_INVOICE_ITEM';
+// Phần A – Đợt 4 (YC6)
+const MATERIALS_ALERT_ENTITY = 'MATERIALS_DUE';
+const MATERIALS_ALERT_ENTITY_ID = 'deadline';
 
 export function vnHour(d: Date): number {
   return new Date(d.getTime() + VN_OFFSET_MS).getUTCHours();
@@ -53,6 +59,20 @@ const fmt = (n: number) => Number(n.toFixed(2)).toLocaleString('vi-VN');
 const cellOf = (r: MilestoneRow, key: MilestoneKey): MilestoneCell | undefined =>
   r.milestones.find((m) => m.key === key);
 const lateText = (d: number) => (d < 0 ? `trễ ${-d} ngày` : d === 0 ? 'hôm nay' : `còn ${d} ngày`);
+/** Mã lệnh nêu trong câu: các lệnh (số LSX) của SKU có hạn chót sớm nhất của dòng mua; dòng chưa có hạn thì mã lệnh của PI. */
+const dueLenhOf = (r: MaterialsDueRow): string => {
+  const first = r.skus[0];
+  if (!first || first.deadline === null) return r.lenhCode;
+  return [
+    ...new Set(r.skus.filter((k) => k.deadline === first.deadline).map((k) => k.lenhCode)),
+  ].join(' + ');
+};
+const dueStatusText = (r: MaterialsDueRow): string =>
+  r.state === 'OVERDUE'
+    ? `quá hạn ${-(r.daysLeft ?? 0)} ngày`
+    : r.state === 'DEADLINE_TODAY'
+      ? 'HẠN CHÓT HÔM NAY'
+      : `còn ${r.daysLeft ?? 0} ngày tới hạn chót`;
 const joinLines = (lines: string[]) =>
   lines.slice(0, MAX_LINES).join('; ') +
   (lines.length > MAX_LINES ? `; +${lines.length - MAX_LINES} dòng khác` : '') +
@@ -87,6 +107,8 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
     private readonly dailyOutput: DailyOutputService,
     // Phần A – Đợt 10a
     private readonly bookingAlerts: BookingAlertsService,
+    // Phần A – Đợt 4 (YC6)
+    private readonly materialsDue: MaterialsDueService,
   ) {}
 
   onModuleInit(): void {
@@ -131,6 +153,8 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
     await this.step('kiểm tra dữ liệu', () => this.runDataHealthIfDue(now));
     // Phần A – Đợt 10a
     await this.step('cảnh báo booking', () => this.bookingAlerts.syncShortAlerts(now));
+    // Phần A – Đợt 4 (YC6): không phụ thuộc Bảng mốc - Bảng mốc lỗi vẫn báo được vật tư tới hạn chót.
+    await this.step('cảnh báo vật tư tới hạn chót', () => this.syncMaterialsDeadlineAlert(now));
     let board: MilestoneBoard | null = null;
     await this.step('bảng mốc', async () => {
       board = await this.milestoneBoard.getBoard(now);
@@ -242,23 +266,31 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
       ).map((n) => n.dedupeKey ?? ''),
     );
 
-    // Tin vật tư: mỗi người nhận 1 tin chỉ gồm vật tư của mình (NV mua theo vật tư phụ trách, thủ kho theo kho nhận).
-    // Đóng tin hôm trước chỉ ở lần gửi ĐẦU TIÊN trong ngày - khởi động lại giữa chừng thì không đóng nhầm tin hôm nay đã gửi.
-    if (![...sent].some((k) => k.startsWith(materialsPrefix))) {
-      await this.notifications.resolve({
-        entityType: DIGEST_ENTITY,
-        entityId: 'materials',
-        types: ['MORNING_MATERIALS_DIGEST'],
-      });
-    }
-    for (const d of DailyJobsService.materialsDigests(board)) {
-      const key = `${materialsPrefix}:${d.recipientKey}`;
-      if (sent.has(key)) continue;
-      await this.notifications.emit('MORNING_MATERIALS_DIGEST', {
-        entityId: 'materials',
-        dedupeKey: key,
-        params: d.params as unknown as Record<string, unknown>,
-      });
+    // Tin vật tư (Phần A – Đợt 4: nguồn là màn "Vật tư cần về"): mỗi người nhận 1 tin chỉ gồm vật tư của mình (NV mua theo vật tư
+    // phụ trách, thủ kho theo kho nhận). Đóng tin hôm trước chỉ ở lần gửi ĐẦU TIÊN trong ngày - khởi động lại giữa chừng thì không
+    // đóng nhầm tin hôm nay đã gửi. Lỗi nguồn vật tư chỉ bỏ phần này (thử lại lần kiểm sau), không chặn tin tiến độ.
+    let materialsOk = true;
+    try {
+      if (![...sent].some((k) => k.startsWith(materialsPrefix))) {
+        await this.notifications.resolve({
+          entityType: DIGEST_ENTITY,
+          entityId: 'materials',
+          types: ['MORNING_MATERIALS_DIGEST'],
+        });
+      }
+      const { rows } = await this.materialsDue.listAllRows(now);
+      for (const d of DailyJobsService.materialsDigests(rows)) {
+        const key = `${materialsPrefix}:${d.recipientKey}`;
+        if (sent.has(key)) continue;
+        await this.notifications.emit('MORNING_MATERIALS_DIGEST', {
+          entityId: 'materials',
+          dedupeKey: key,
+          params: d.params as unknown as Record<string, unknown>,
+        });
+      }
+    } catch (err) {
+      materialsOk = false;
+      this.logger.error(`Tin sáng - vật tư lỗi: ${(err as Error).message}`);
     }
 
     if (!sent.has(productionKey)) {
@@ -283,72 +315,112 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
-    this.digestDoneDay = today;
+    if (materialsOk) this.digestDoneDay = today;
   }
 
   /**
-   * Tin "vật tư cần về" cho TỪNG người nhận (review 32.26): vật tư có mốc mua đã trễ hoặc tới hạn HÔM NAY mà chưa về đủ.
-   * Dòng mua gộp theo PI nên 1 dòng chung (sắt, đinh...) có ở mọi SKU của PI - gộp theo DÒNG MUA (id), lấy hạn gấp nhất, để
-   * không đếm/ghi lặp; 2 dòng cùng vật tư khác chiều dài cây / quy cách nệm vẫn là 2 dòng (test thật 32.27). Mỗi NV mua
-   * (`buyerId`) và mỗi kho nhận (`warehouseCode`) nhận 1 tin chỉ gồm vật tư của mình.
+   * Tin "vật tư cần về" cho TỪNG người nhận (Phần A – Đợt 4, YC6): chỉ dòng OVERDUE / DEADLINE_TODAY / IN_WINDOW của màn "Vật tư cần
+   * về" (đã tính theo số chốt mua). Mỗi dòng mua đã là 1 dòng riêng (không lặp theo SKU). Mỗi NV mua (`buyerId`) và mỗi kho nhận
+   * (`warehouseCode`) nhận 1 tin chỉ gồm dòng của mình; không có dòng nào thì không có tin.
    */
   static materialsDigests(
-    board: MilestoneBoard,
+    allRows: MaterialsDueRow[],
   ): { recipientKey: string; params: MaterialsDigestNotificationParams }[] {
-    type Entry = MissingMaterial & { piCode: string; daysLeft: number };
-    const byLine = new Map<string, Entry>();
-    for (const row of board.rows) {
-      for (const key of ['MUA_VT_KHUNG', 'MUA_VT_CON_LAI'] as const) {
-        const cell = cellOf(row, key);
-        if (!cell || cell.daysLeft === null || cell.daysLeft > 0) continue;
-        if (cell.status !== 'LATE' && cell.status !== 'DUE_SOON') continue;
-        for (const m of row.missing[key]) {
-          const prev = byLine.get(m.lineId);
-          if (!prev || cell.daysLeft < prev.daysLeft)
-            byLine.set(m.lineId, { ...m, piCode: row.piCode, daysLeft: cell.daysLeft });
-        }
-      }
-    }
-    const entries = [...byLine.values()];
-    const digestOf = (mine: Entry[]): MaterialsDigestNotificationParams => {
-      // 1 câu cho mỗi (PI, số ngày): "PI-… (trễ 2 ngày): Sắt 0/67 cây, Sơn 0/100 kg".
-      const groups = new Map<string, Entry[]>();
-      for (const e of [...mine].sort((a, b) => a.daysLeft - b.daysLeft)) {
-        const g = `${e.piCode}|${e.daysLeft}`;
-        groups.set(g, [...(groups.get(g) ?? []), e]);
+    const rows = allRows.filter(isDueNow);
+    const digestOf = (mine: MaterialsDueRow[]): MaterialsDigestNotificationParams => {
+      // 1 câu cho mỗi (mã lệnh, trạng thái): "MY-313 (quá hạn 2 ngày): Sơn ABC còn thiếu 20 kg, Sắt X còn thiếu 5 cây".
+      const groups = new Map<string, MaterialsDueRow[]>();
+      for (const r of mine) {
+        const g = `${dueLenhOf(r)}|${dueStatusText(r)}`;
+        groups.set(g, [...(groups.get(g) ?? []), r]);
       }
       const lines = [...groups.values()].map(
-        (es) =>
-          `${es[0].piCode} (${lateText(es[0].daysLeft)}): ` +
-          es.map((e) => `${e.name} ${fmt(e.receivedQty)}/${fmt(e.buyQty)} ${e.unit}`).join(', '),
+        (rs) =>
+          `${dueLenhOf(rs[0])} (${dueStatusText(rs[0])}): ` +
+          rs.map((r) => `${r.materialName} còn thiếu ${fmt(r.remainingQty)} ${r.unit}`).join(', '),
       );
       return {
-        dueToday: mine.filter((e) => e.daysLeft === 0).length,
-        late: mine.filter((e) => e.daysLeft < 0).length,
+        overdue: mine.filter((r) => r.state === 'OVERDUE').length,
+        deadlineToday: mine.filter((r) => r.state === 'DEADLINE_TODAY').length,
+        inWindow: mine.filter((r) => r.state === 'IN_WINDOW').length,
         lines: joinLines(lines),
         buyerIds: [],
         warehouseCodes: [],
       };
     };
     const out: { recipientKey: string; params: MaterialsDigestNotificationParams }[] = [];
-    for (const buyerId of new Set(entries.flatMap((e) => (e.buyerId ? [e.buyerId] : [])))) {
+    for (const buyerId of new Set(rows.flatMap((r) => (r.buyerId ? [r.buyerId] : [])))) {
       out.push({
         recipientKey: `u:${buyerId}`,
-        params: { ...digestOf(entries.filter((e) => e.buyerId === buyerId)), buyerIds: [buyerId] },
+        params: { ...digestOf(rows.filter((r) => r.buyerId === buyerId)), buyerIds: [buyerId] },
       });
     }
-    for (const code of new Set(
-      entries.flatMap((e) => (e.warehouseCode ? [e.warehouseCode] : [])),
-    )) {
+    for (const code of new Set(rows.flatMap((r) => (r.warehouseCode ? [r.warehouseCode] : [])))) {
       out.push({
         recipientKey: `w:${code}`,
         params: {
-          ...digestOf(entries.filter((e) => e.warehouseCode === code)),
+          ...digestOf(rows.filter((r) => r.warehouseCode === code)),
           warehouseCodes: [code],
         },
       });
     }
     return out;
+  }
+
+  /**
+   * Phần A – Đợt 4 (YC6, Sếp câu 1): tới hạn chót mà vật tư chưa về đủ → báo KHSX + Sếp (CRITICAL). Toàn hệ thống (không lọc người).
+   * Từ 07:00 giờ VN, 1 lần/ngày (dedupeKey theo ngày), lần gửi đầu trong ngày đóng tin các ngày trước. Mỗi lượt kiểm: tin hôm nay đang
+   * mở mà không còn dòng quá hạn / hạn chót hôm nay (hàng đã về) → đóng.
+   */
+  async syncMaterialsDeadlineAlert(now: Date): Promise<void> {
+    if (vnHour(now) < DIGEST_HOUR_VN) return;
+    const today = vnDayKey(now);
+    const { rows } = await this.materialsDue.listAllRows(now);
+    const critical = rows.filter((r) => r.state === 'OVERDUE' || r.state === 'DEADLINE_TODAY');
+    const dedupeKey = `MATERIALS_DEADLINE_ALERT:${today}`;
+    const existing = await this.prisma.notification.findFirst({
+      where: { dedupeKey },
+      select: {
+        id: true,
+        recipients: { where: { resolvedAt: null }, select: { userId: true }, take: 1 },
+      },
+    });
+    const resolveAll = () =>
+      this.notifications.resolve({
+        entityType: MATERIALS_ALERT_ENTITY,
+        entityId: MATERIALS_ALERT_ENTITY_ID,
+        types: ['MATERIALS_DEADLINE_ALERT'],
+      });
+
+    if (critical.length === 0) {
+      if (existing && existing.recipients.length > 0) await resolveAll();
+      return;
+    }
+    if (existing) return; // đã gửi hôm nay (còn mở hoặc đã đóng vì hàng về) - không gửi lại trong ngày
+    await resolveAll(); // lần gửi đầu trong ngày: đóng tin các ngày trước
+    const params = DailyJobsService.materialsDeadlineAlert(critical);
+    await this.notifications.emit('MATERIALS_DEADLINE_ALERT', {
+      entityId: MATERIALS_ALERT_ENTITY_ID,
+      dedupeKey,
+      params: params as unknown as Record<string, unknown>,
+    });
+  }
+
+  /** Nội dung cảnh báo tới hạn chót từ các dòng OVERDUE / DEADLINE_TODAY (đã xếp: quá hạn trước). */
+  static materialsDeadlineAlert(
+    critical: MaterialsDueRow[],
+  ): MaterialsDeadlineAlertNotificationParams {
+    const lines = critical.map(
+      (r) =>
+        `${dueLenhOf(r)} · ${r.state === 'DEADLINE_TODAY' ? 'hạn chót hôm nay' : dueStatusText(r)}: ` +
+        `${r.materialName} còn thiếu ${fmt(r.remainingQty)} ${r.unit}` +
+        (r.buyerName ? ` (${r.buyerName})` : ''),
+    );
+    return {
+      deadlineToday: critical.filter((r) => r.state === 'DEADLINE_TODAY').length,
+      overdue: critical.filter((r) => r.state === 'OVERDUE').length,
+      lines: joinLines(lines),
+    };
   }
 
   /** Mốc trễ / sắp tới hạn (mọi mốc, gồm cả mua vật tư - KHSX cần biết vì nó chặn sản xuất) + lệnh tới ngày bắt đầu Phôi (M2)

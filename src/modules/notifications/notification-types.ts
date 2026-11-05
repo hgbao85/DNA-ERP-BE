@@ -340,17 +340,33 @@ export interface DataHealthNotificationParams {
   failed?: string;
 }
 
-/** Tin sáng "vật tư cần về" (DailyJobsService, 2026-10-29, changelog 2026-09-25 mục 32.24) - 1 tin cho TỪNG người nhận (32.26). */
+/**
+ * Tin sáng "vật tư cần về" (DailyJobsService, 2026-10-29, changelog 2026-09-25 mục 32.24) - 1 tin cho TỪNG người nhận (32.26).
+ * Phần A – Đợt 4 (YC6): nguồn đổi sang MaterialsDueService; đếm theo 3 trạng thái của màn "Vật tư cần về".
+ */
 export interface MaterialsDigestNotificationParams {
-  /** Số dòng mua (gộp theo dòng đề xuất mua, không lặp theo SKU) phải về đúng hôm nay / đã quá hạn mà chưa về đủ. */
-  dueToday: number;
-  late: number;
-  /** Vài câu tiêu biểu "PI (trễ N ngày): vật tư đã về/cần, ...". */
+  /** Số dòng mua (không lặp theo SKU) đã quá hạn chót mà chưa về đủ số chốt mua. */
+  overdue: number;
+  /** Số dòng mua có hạn chót là hôm nay. */
+  deadlineToday: number;
+  /** Số dòng mua đang trong khoảng được về [hạn chót − N, hạn chót) - chưa tới hạn chót. */
+  inWindow: number;
+  /** Vài câu tiêu biểu theo MÃ LỆNH: "MY-313 (quá hạn 2 ngày): Sơn ABC còn thiếu 20 kg; ...". */
   lines: string;
   /** NV mua nhận tin này (`Material.buyerId`) - tin của 1 NV mua thì đúng 1 phần tử, tin của thủ kho thì rỗng. */
   buyerIds: string[];
   /** Kho nhận nhận tin này (kho ghi đè trên dòng mua, không có thì kho của vật tư) - tin của thủ kho thì đúng 1 phần tử. */
   warehouseCodes: string[];
+}
+
+/** Phần A – Đợt 4 (YC6, Sếp câu 1): có vật tư tới hạn chót / quá hạn chót mà chưa về đủ - báo KHSX + Sếp. 1 tin/ngày toàn hệ thống. */
+export interface MaterialsDeadlineAlertNotificationParams {
+  /** Số dòng mua có hạn chót là hôm nay. */
+  deadlineToday: number;
+  /** Số dòng mua đã quá hạn chót. */
+  overdue: number;
+  /** Tối đa 5 câu theo mã lệnh kèm người mua: "MY-313 · hạn chót hôm nay: Sơn ABC còn thiếu 20 kg (Lan)". */
+  lines: string;
 }
 
 /** Tin sáng tiến độ cho KHSX + QLSX (DailyJobsService, 2026-10-29). */
@@ -1298,8 +1314,9 @@ const notificationTypeDefinitions = {
 
   // ─── Bảng mốc / tin sáng (2026-10-29, changelog 2026-09-25 mục 32.24) ─────────────────────────
   // 1 tin/ngày/người nhận sau 07:00 giờ VN (dedupeKey theo ngày + người nhận), tin hôm trước tự đóng khi có tin mới. Không có
-  // gì để báo thì không gửi. Sếp KHÔNG nhận tin sáng (quy ước 9.3) - chỉ nhận DELIVERY_AT_RISK (CRITICAL).
-  /** Vật tư phải về hôm nay / đã trễ - mỗi NV mua 1 tin chỉ vật tư mình phụ trách, mỗi kho nhận 1 tin cho thủ kho kho đó. */
+  // gì để báo thì không gửi. Sếp KHÔNG nhận tin sáng (quy ước 9.3) - chỉ nhận DELIVERY_AT_RISK và MATERIALS_DEADLINE_ALERT (CRITICAL).
+  /** Vật tư cần về (Phần A – Đợt 4: quá hạn / hạn chót hôm nay / trong hạn về) - mỗi NV mua 1 tin chỉ vật tư mình phụ trách, mỗi kho
+   *  nhận 1 tin cho thủ kho kho đó. */
   MORNING_MATERIALS_DIGEST: {
     category: 'INFO',
     severity: 'WARNING',
@@ -1307,16 +1324,20 @@ const notificationTypeDefinitions = {
     title: (p: MaterialsDigestNotificationParams) =>
       'Vật tư cần về: ' +
       [
-        p.dueToday > 0 ? `${p.dueToday} phải về hôm nay` : null,
-        p.late > 0 ? `${p.late} đã trễ` : null,
+        p.overdue > 0 ? `${p.overdue} quá hạn` : null,
+        p.deadlineToday > 0 ? `${p.deadlineToday} hạn chót hôm nay` : null,
+        p.inWindow > 0 ? `${p.inWindow} trong hạn về` : null,
       ]
         .filter(Boolean)
         .join(', '),
     message: (p: MaterialsDigestNotificationParams) => p.lines,
     link: () => ({
       module: 'purchasing',
-      page: 'theo-doi-mua-hang',
-      alternatives: [{ module: 'inbound_warehouse', page: 'nhap-kho' }],
+      page: 'vat-tu-can-ve',
+      params: { view: 'today' },
+      alternatives: [
+        { module: 'inbound_warehouse', page: 'vat-tu-can-ve', params: { view: 'today' } },
+      ],
     }),
     recipients: (p: MaterialsDigestNotificationParams): RecipientCriteria => ({
       userIds: p.buyerIds,
@@ -1325,6 +1346,33 @@ const notificationTypeDefinitions = {
       warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
     }),
   } satisfies NotificationTypeDef<MaterialsDigestNotificationParams>,
+
+  /** Phần A – Đợt 4 (YC6, Sếp câu 1): tới hạn chót mà vật tư chưa về đủ → báo KHSX + Sếp. CRITICAL nên NotificationsService tự thêm
+   *  Sếp. 1 tin/ngày (dedupeKey theo ngày), tự đóng khi mọi dòng đó đã về đủ hoặc sang ngày mới. */
+  MATERIALS_DEADLINE_ALERT: {
+    category: 'ALERT',
+    severity: 'CRITICAL',
+    entityType: 'MATERIALS_DUE',
+    title: (p: MaterialsDeadlineAlertNotificationParams) =>
+      'Vật tư tới hạn chót chưa về đủ: ' +
+      [
+        p.deadlineToday > 0 ? `${p.deadlineToday} hạn chót hôm nay` : null,
+        p.overdue > 0 ? `${p.overdue} quá hạn` : null,
+      ]
+        .filter(Boolean)
+        .join(', '),
+    message: (p: MaterialsDeadlineAlertNotificationParams) => p.lines,
+    link: () => ({
+      module: 'production_plan',
+      page: 'vat-tu-can-ve',
+      params: { view: 'all' },
+      alternatives: [
+        { module: 'purchasing', page: 'vat-tu-can-ve', params: { view: 'all' } },
+        { module: 'inbound_warehouse', page: 'vat-tu-can-ve', params: { view: 'all' } },
+      ],
+    }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_PLANNER] }),
+  } satisfies NotificationTypeDef<MaterialsDeadlineAlertNotificationParams>,
 
   /** Mốc sản xuất trễ / sắp tới hạn / tới ngày Phôi chưa Bắt đầu - báo KHSX + QLSX. */
   MORNING_PRODUCTION_DIGEST: {

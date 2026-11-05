@@ -4,6 +4,8 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { PENDING_APPROVAL_STATUSES } from '../purchase-proposals/purchase-proposals.service';
 import { SalesOrdersService } from '../sales-orders/sales-orders.service';
+// Phần A – Đợt 4 (YC6): badge Vật tư cần về
+import { MaterialsDueService } from '../materials-due/materials-due.service';
 import { WorkQueueResponseDto } from './dto/work-queue-response.dto';
 
 /**
@@ -37,9 +39,13 @@ export class WorkQueueService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly cuttingProposalsService: CuttingProposalsService,
     private readonly salesOrdersService: SalesOrdersService,
+    // Phần A – Đợt 4 (YC6)
+    private readonly materialsDueService: MaterialsDueService,
   ) {}
 
   async getWorkQueue(user: {
+    /** Phần A – Đợt 4: id người gọi - badge Vật tư cần về của người mua tính theo vật tư mình phụ trách. */
+    id?: string;
     roles: string[];
     warehouseScope: string | null;
   }): Promise<WorkQueueResponseDto> {
@@ -107,6 +113,19 @@ export class WorkQueueService {
     }
     if (has(BUSINESS_ROLES.SALES_STAFF)) {
       set('salesReadyToShip', this.salesOrdersService.countReadyToShip());
+    }
+
+    // Phần A – Đợt 4 (YC6): "Vật tư cần về" - người mua (vật tư mình phụ trách) và thủ kho (kho mình); người vừa mua vừa thủ kho
+    // tính theo người mua. KHSX / QLSX / Sếp không có badge này (chỉ xem).
+    if (has(BUSINESS_ROLES.PURCHASER) || has(BUSINESS_ROLES.WAREHOUSE_STAFF)) {
+      set(
+        'materialsDueNow',
+        this.materialsDueService.countDueNow({
+          id: user.id ?? '',
+          roles: user.roles,
+          warehouseScope: user.warehouseScope,
+        }),
+      );
     }
 
     await Promise.all(tasks);
