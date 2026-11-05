@@ -7,6 +7,13 @@ import {
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { WeavingIssuesService } from './weaving-issues.service';
 import { RealtimeService } from '../../realtime/realtime.service';
+import { loadSkuPriorityHoldback } from '../stock/sku-priority.util';
+
+// YC11: mặc định không có SKU sớm hơn cần chừa - test riêng từng ca ở 'YC11' bên dưới; logic chừa thật test ở sku-priority.util.spec.
+jest.mock('../stock/sku-priority.util', () => ({
+  ...jest.requireActual<Record<string, unknown>>('../stock/sku-priority.util'),
+  loadSkuPriorityHoldback: jest.fn(() => Promise.resolve({ qty: 0, holders: [] })),
+}));
 
 describe('WeavingIssuesService', () => {
   let service: WeavingIssuesService;
@@ -223,6 +230,42 @@ describe('WeavingIssuesService', () => {
         where: { productionOrderId: 1n, pieceId: 20n, transfer: { status: 'CONFIRMED' } },
         _sum: { quantity: true },
       });
+    });
+
+    it('YC11: vật tư mang kèm đan bị chặn khi phần dư sau khi chừa cho SKU sớm hơn trong lệnh gộp không đủ', async () => {
+      prisma.weavingIssue.create.mockResolvedValue(issueRow);
+      prisma.material.findUnique.mockResolvedValue({ id: 60n, code: 'DAY-2LY', warehouseId: 900n });
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 50 } }]);
+      stockReservationsService.getAvailableQty.mockResolvedValue(20);
+      (loadSkuPriorityHoldback as jest.Mock).mockResolvedValueOnce({
+        qty: 8,
+        holders: [
+          {
+            productionOrderId: '2',
+            lenhCode: 'MY-313',
+            deadline: new Date('2026-11-10T00:00:00+07:00'),
+            qty: 8,
+          },
+        ],
+      });
+
+      const err = await service
+        .create(
+          '1',
+          {
+            pieceId: '20',
+            weavingPointId: '40',
+            qty: 10,
+            materials: [{ materialId: '60', qty: 15 }],
+          },
+          'user-1',
+          null,
+        )
+        .catch((e: Error) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as Error).message).toContain('đang chừa 8 cho lệnh MY-313');
+      expect((err as Error).message).toContain('chỉ còn xuất được 12');
+      expect(prisma.weavingIssueMaterial.create).not.toHaveBeenCalled();
     });
 
     it('2026-09-11: có materials mang kèm - trừ tồn thật (FOR UPDATE + getAvailableQty + postEntry TRONG transaction), tạo dòng WeavingIssueMaterial', async () => {

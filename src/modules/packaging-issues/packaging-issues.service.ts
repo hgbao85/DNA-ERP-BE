@@ -19,6 +19,11 @@ import {
   assertItemPiHasActiveFloorLocked,
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import {
+  loadSkuPriorityHoldback,
+  SiblingOrder,
+  skuHoldbackMessage,
+} from '../stock/sku-priority.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
@@ -218,6 +223,24 @@ export class PackagingIssuesService {
       if (dto.issuedQty > availableQty) {
         throw new ConflictException(
           `Tồn kho khả dụng (${availableQty}) không đủ xuất ${dto.issuedQty} cho vật tư ${dto.materialId} - kiểm tra lại tồn kho thực tế trước khi xuất`,
+        );
+      }
+      // YC11: chừa phần SKU cần sớm hơn trong cùng lệnh gộp còn cần - xem sku-priority.util.ts.
+      const holdback = await loadSkuPriorityHoldback(tx, {
+        orderId: order.id,
+        productionInvoiceItemId: order.productionInvoiceItemId,
+        productionInvoiceId: piItem.productionInvoiceId!,
+        materialId: materialBigId,
+        remainingOf: (sib) => this.remainingForSibling(tx, sib, materialBigId),
+      });
+      if (holdback.qty > 0 && dto.issuedQty > availableQty - holdback.qty) {
+        throw new ConflictException(
+          skuHoldbackMessage(
+            holdback,
+            availableQty,
+            dto.issuedQty,
+            holdback.materialCode ?? dto.materialId,
+          ),
         );
       }
 
@@ -470,6 +493,22 @@ export class PackagingIssuesService {
         Math.floor((checkedByPiece.get(bp.pieceId.toString()) ?? 0) / bp.qtyPerUnit),
       ),
     );
+  }
+
+  /** Phần SKU khác trong cùng PI còn cần vật tư đóng gói này - định mức − đã xuất (YC11). */
+  private async remainingForSibling(
+    tx: PrismaTx,
+    sib: SiblingOrder,
+    materialId: bigint,
+  ): Promise<number> {
+    const [items, issued] = await Promise.all([
+      tx.bomAccessoryItem.findMany({
+        where: { bomRevisionId: sib.bomRevisionId, materialId, kind: AccessoryItemKind.PACKAGING },
+        select: { qtyPerUnit: true },
+      }),
+      this.sumIssued(tx, sib.id, materialId),
+    ]);
+    return items.reduce((s, i) => s + i.qtyPerUnit.toNumber(), 0) * sib.quantity - issued;
   }
 
   private async sumIssued(

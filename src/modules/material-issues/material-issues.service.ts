@@ -24,6 +24,11 @@ import {
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import {
+  loadSkuPriorityHoldback,
+  SiblingOrder,
+  skuHoldbackMessage,
+} from '../stock/sku-priority.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
@@ -218,6 +223,24 @@ export class MaterialIssuesService {
       if (dto.issuedQty > availableQty) {
         throw new ConflictException(
           `Tồn kho khả dụng (${availableQty}) không đủ xuất ${dto.issuedQty} cho vật tư ${dto.materialId} - kiểm tra lại tồn kho thực tế trước khi xuất`,
+        );
+      }
+      // YC11: chừa phần SKU cần sớm hơn trong cùng lệnh gộp còn cần (mọi công đoạn) - xem sku-priority.util.ts.
+      const holdback = await loadSkuPriorityHoldback(tx, {
+        orderId: order.id,
+        productionInvoiceItemId: order.productionInvoiceItemId,
+        productionInvoiceId: piItem.productionInvoiceId!,
+        materialId: materialBigId,
+        remainingOf: (sib) => this.remainingForSibling(tx, sib, materialBigId),
+      });
+      if (holdback.qty > 0 && dto.issuedQty > availableQty - holdback.qty) {
+        throw new ConflictException(
+          skuHoldbackMessage(
+            holdback,
+            availableQty,
+            dto.issuedQty,
+            holdback.materialCode ?? dto.materialId,
+          ),
         );
       }
 
@@ -483,6 +506,26 @@ export class MaterialIssuesService {
       );
     }
     return bom.qtyPerUnit.toNumber() * orderQuantity;
+  }
+
+  /** Phần SKU khác trong cùng PI còn cần vật tư này - định mức tiêu hao mọi công đoạn − đã xuất mọi công đoạn (YC11). */
+  private async remainingForSibling(
+    tx: PrismaTx,
+    sib: SiblingOrder,
+    materialId: bigint,
+  ): Promise<number> {
+    const [boms, issued] = await Promise.all([
+      tx.consumableBom.findMany({
+        where: { bomRevisionId: sib.bomRevisionId, materialId },
+        select: { qtyPerUnit: true },
+      }),
+      tx.materialIssue.aggregate({
+        where: { productionOrderId: sib.id, materialId },
+        _sum: { issuedQty: true },
+      }),
+    ]);
+    const planned = boms.reduce((s, b) => s + b.qtyPerUnit.toNumber(), 0) * sib.quantity;
+    return planned - (issued._sum.issuedQty?.toNumber() ?? 0);
   }
 
   private async sumIssued(
