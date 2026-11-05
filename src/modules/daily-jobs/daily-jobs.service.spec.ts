@@ -3,8 +3,8 @@ import {
   MilestoneBoard,
   MilestoneCell,
   MilestoneRow,
-  MissingMaterial,
 } from '../milestone-board/milestone-board.service';
+import type { MaterialsDueRow } from '../materials-due/materials-due.types';
 import {
   MILESTONES,
   MilestoneKey,
@@ -58,22 +58,45 @@ const row = (
   ...extra,
 });
 
-const mat = (
-  materialId: string,
-  name: string,
-  buyerId: string | null,
-  warehouseCode: string | null,
-  lineId = `line-${materialId}`,
-): MissingMaterial => ({
-  lineId,
-  materialId,
-  name,
-  unit: 'kg',
-  buyQty: 100,
-  receivedQty: 40,
-  warehouseCode,
-  buyerId,
-});
+// Phần A – Đợt 4 (YC6): dòng "Vật tư cần về". Hôm nay 29/10; daysLeft âm = quá hạn.
+const dueRow = (over: Partial<MaterialsDueRow> = {}): MaterialsDueRow => {
+  const state = over.state ?? 'OVERDUE';
+  const daysLeft =
+    over.daysLeft !== undefined
+      ? over.daysLeft
+      : state === 'OVERDUE'
+        ? -2
+        : state === 'DEADLINE_TODAY'
+          ? 0
+          : 2;
+  const deadline = daysLeft === null ? null : addDays('2026-10-29', daysLeft);
+  return {
+    lineId: 'l1',
+    piId: '7',
+    lenhCode: 'MY-313',
+    materialId: '31',
+    materialName: 'Sơn ABC',
+    unit: 'kg',
+    group: 'FRAME',
+    needQty: 100,
+    orderQty: 100,
+    receivedQty: 80,
+    remainingQty: 20,
+    purchaseStatus: 'PURCHASING',
+    deadline,
+    earliestArrival: deadline ? addDays(deadline, -4) : null,
+    daysLeft,
+    state,
+    skus: [{ itemId: '1', lenhCode: 'MY-313', skuCode: 'SKU-1', deadline }],
+    supplierName: null,
+    supplierOrderCode: null,
+    buyerId: 'b1',
+    buyerName: 'Lan',
+    warehouseCode: 'phoi-son-han',
+    warehouseName: 'Kho Phôi',
+    ...over,
+  };
+};
 
 const boardOf = (rows: MilestoneRow[]): MilestoneBoard => ({
   today: '2026-10-29',
@@ -91,13 +114,14 @@ describe('DailyJobsService', () => {
   let prisma: {
     $transaction: jest.Mock;
     dataHealthRun: { findFirst: jest.Mock };
-    notification: { findMany: jest.Mock };
+    notification: { findMany: jest.Mock; findFirst: jest.Mock };
   };
   let dataHealth: { run: jest.Mock };
   let board: { getBoard: jest.Mock };
   let notifications: { emit: jest.Mock; resolve: jest.Mock };
   let dailyOutput: { alertsForDay: jest.Mock };
   let bookingAlerts: { syncShortAlerts: jest.Mock };
+  let materialsDue: { listAllRows: jest.Mock };
   let service: DailyJobsService;
 
   beforeEach(() => {
@@ -107,7 +131,10 @@ describe('DailyJobsService', () => {
         .fn()
         .mockImplementation((fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
       dataHealthRun: { findFirst: jest.fn().mockResolvedValue(null) },
-      notification: { findMany: jest.fn().mockResolvedValue([]) },
+      notification: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
     dataHealth = { run: jest.fn().mockResolvedValue({}) };
     board = { getBoard: jest.fn().mockResolvedValue(boardOf([])) };
@@ -117,6 +144,7 @@ describe('DailyJobsService', () => {
     };
     dailyOutput = { alertsForDay: jest.fn().mockResolvedValue([]) };
     bookingAlerts = { syncShortAlerts: jest.fn().mockResolvedValue(undefined) };
+    materialsDue = { listAllRows: jest.fn().mockResolvedValue({ rows: [], today: '2026-10-29' }) };
     service = new DailyJobsService(
       prisma as never,
       dataHealth as never,
@@ -124,6 +152,7 @@ describe('DailyJobsService', () => {
       notifications as never,
       dailyOutput as never,
       bookingAlerts as never,
+      materialsDue as never,
     );
   });
 
@@ -144,6 +173,13 @@ describe('DailyJobsService', () => {
       bookingAlerts.syncShortAlerts.mockRejectedValue(new Error('boom'));
       await service.tick(MORNING);
       expect(bookingAlerts.syncShortAlerts).toHaveBeenCalledWith(MORNING);
+      expect(board.getBoard).toHaveBeenCalled();
+    });
+
+    // Phần A – Đợt 4 (YC6)
+    it('bước cảnh báo vật tư tới hạn chót lỗi không chặn Bảng mốc / tin sáng', async () => {
+      materialsDue.listAllRows.mockRejectedValue(new Error('boom'));
+      await service.tick(MORNING);
       expect(board.getBoard).toHaveBeenCalled();
     });
 
@@ -188,18 +224,18 @@ describe('DailyJobsService', () => {
   });
 
   describe('tin sáng', () => {
-    const lateBoard = boardOf([
-      row('1', [cell('MUA_VT_KHUNG', 'LATE', -2), cell('PHOI', 'DUE_SOON', 1)], {
-        missing: { MUA_VT_KHUNG: [mat('31', 'Sơn', 'b1', 'phoi-son-han')], MUA_VT_CON_LAI: [] },
-      }),
-    ]);
+    // Phần A – Đợt 4 (YC6): nguồn vật tư là màn "Vật tư cần về".
+    const lateBoard = boardOf([row('1', [cell('PHOI', 'DUE_SOON', 1), cell('KHUNG', 'LATE', -1)])]);
+    const lateRows = [dueRow({ state: 'OVERDUE' })];
 
     it('trước 07:00 giờ VN không gửi', async () => {
+      materialsDue.listAllRows.mockResolvedValue({ rows: lateRows, today: '2026-10-29' });
       await service.sendDigestsIfDue(lateBoard, EARLY);
       expect(notifications.emit).not.toHaveBeenCalled();
     });
 
     it('sau 07:00: tin vật tư riêng cho NV mua và cho kho, tin tiến độ cho KHSX+QLSX; không gửi lại trong ngày', async () => {
+      materialsDue.listAllRows.mockResolvedValue({ rows: lateRows, today: '2026-10-29' });
       await service.sendDigestsIfDue(lateBoard, MORNING);
       expect(notifications.resolve).toHaveBeenCalledWith(
         expect.objectContaining({ entityType: 'MORNING_DIGEST', entityId: 'materials' }),
@@ -209,7 +245,9 @@ describe('DailyJobsService', () => {
         expect.objectContaining({
           dedupeKey: 'MORNING_MATERIALS_DIGEST:2026-10-29:u:b1',
           params: expect.objectContaining({
-            late: 1,
+            overdue: 1,
+            deadlineToday: 0,
+            inWindow: 0,
             buyerIds: ['b1'],
             warehouseCodes: [],
           }) as unknown,
@@ -237,6 +275,7 @@ describe('DailyJobsService', () => {
     });
 
     it('khởi động lại trong ngày: chỉ gửi tin người nhận nào CHƯA có, không đóng nhầm tin hôm nay đã gửi', async () => {
+      materialsDue.listAllRows.mockResolvedValue({ rows: lateRows, today: '2026-10-29' });
       prisma.notification.findMany.mockResolvedValue([
         { dedupeKey: 'MORNING_MATERIALS_DIGEST:2026-10-29:u:b1' },
         { dedupeKey: 'MORNING_PRODUCTION_DIGEST:2026-10-29' },
@@ -254,52 +293,110 @@ describe('DailyJobsService', () => {
       expect(notifications.emit).not.toHaveBeenCalled();
     });
 
-    it('vật tư mua chung cả PI (có ở mọi SKU) chỉ đếm 1 lần, lấy hạn gấp nhất', () => {
-      const shared = mat('30', 'Sắt', 'b1', 'phoi-son-han');
-      const b = boardOf(
-        ['1', '2', '3'].map((id, i) =>
-          row(id, [cell('MUA_VT_KHUNG', 'LATE', -1 - i)], {
-            missing: { MUA_VT_KHUNG: [shared], MUA_VT_CON_LAI: [] },
-          }),
-        ),
+    it('nguồn vật tư lỗi: vẫn gửi tin tiến độ, không đánh dấu xong ngày (lần kiểm sau thử lại vật tư)', async () => {
+      materialsDue.listAllRows.mockRejectedValueOnce(new Error('db'));
+      await service.sendDigestsIfDue(lateBoard, MORNING);
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'MORNING_PRODUCTION_DIGEST',
+        expect.anything(),
       );
-      const buyer = DailyJobsService.materialsDigests(b).find((d) => d.recipientKey === 'u:b1')!;
-      expect(buyer.params.late).toBe(1);
-      expect(buyer.params.lines).toBe('PI-2026-001 (trễ 3 ngày): Sắt 40/100 kg.');
-    });
-
-    it('2 dòng mua cùng vật tư (khác chiều dài cây / quy cách nệm) vẫn là 2 dòng, không gộp mất 1', () => {
-      const b = boardOf([
-        row('1', [cell('MUA_VT_KHUNG', 'LATE', -1)], {
-          missing: {
-            MUA_VT_KHUNG: [
-              mat('30', 'Sắt (6.000 mm)', 'b1', 'phoi-son-han', 'l1'),
-              mat('30', 'Sắt (5.020 mm)', 'b1', 'phoi-son-han', 'l2'),
-            ],
-            MUA_VT_CON_LAI: [],
-          },
-        }),
+      notifications.emit.mockClear();
+      materialsDue.listAllRows.mockResolvedValue({ rows: lateRows, today: '2026-10-29' });
+      prisma.notification.findMany.mockResolvedValue([
+        { dedupeKey: 'MORNING_PRODUCTION_DIGEST:2026-10-29' },
       ]);
-      const buyer = DailyJobsService.materialsDigests(b).find((d) => d.recipientKey === 'u:b1')!;
-      expect(buyer.params.late).toBe(2);
-      expect(buyer.params.lines).toBe(
-        'PI-2026-001 (trễ 1 ngày): Sắt (6.000 mm) 40/100 kg, Sắt (5.020 mm) 40/100 kg.',
+      await service.sendDigestsIfDue(lateBoard, MORNING);
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'MORNING_MATERIALS_DIGEST',
+        expect.anything(),
       );
     });
 
-    it('mỗi NV mua chỉ thấy vật tư mình phụ trách', () => {
-      const b = boardOf([
-        row('1', [cell('MUA_VT_KHUNG', 'LATE', -1)], {
-          missing: {
-            MUA_VT_KHUNG: [
-              mat('30', 'Sắt', 'b1', 'phoi-son-han'),
-              mat('40', 'Dây', 'b2', 'vat-tu-tp'),
-            ],
-            MUA_VT_CON_LAI: [],
-          },
+    it('materialsDigests: chỉ OVERDUE / DEADLINE_TODAY / IN_WINDOW; đếm đúng 3 loại', () => {
+      const rows = [
+        dueRow({ lineId: 'a', state: 'OVERDUE' }),
+        dueRow({ lineId: 'b', state: 'OVERDUE' }),
+        dueRow({ lineId: 'c', state: 'DEADLINE_TODAY' }),
+        dueRow({ lineId: 'd', state: 'IN_WINDOW' }),
+        dueRow({ lineId: 'e', state: 'UPCOMING' }),
+        dueRow({ lineId: 'f', state: 'NO_DEADLINE', daysLeft: null }),
+      ];
+      const buyer = DailyJobsService.materialsDigests(rows).find((d) => d.recipientKey === 'u:b1')!;
+      expect(buyer.params).toMatchObject({ overdue: 2, deadlineToday: 1, inWindow: 1 });
+      expect(DailyJobsService.materialsDigests([rows[4], rows[5]])).toEqual([]);
+    });
+
+    it('câu theo MÃ LỆNH (không mã PI): quá hạn / HẠN CHÓT HÔM NAY / còn N ngày', () => {
+      const rows = [
+        dueRow({ lineId: 'a', state: 'OVERDUE', daysLeft: -2 }),
+        dueRow({
+          lineId: 'b',
+          state: 'DEADLINE_TODAY',
+          lenhCode: 'MY-314',
+          materialName: 'Đinh',
+          unit: 'kg',
+          remainingQty: 5,
+          skus: [{ itemId: '2', lenhCode: 'MY-314', skuCode: 'SKU-2', deadline: '2026-10-29' }],
         }),
-      ]);
-      const digests = DailyJobsService.materialsDigests(b);
+        dueRow({
+          lineId: 'c',
+          state: 'IN_WINDOW',
+          daysLeft: 3,
+          lenhCode: 'MY-315',
+          materialName: 'Nệm',
+          unit: 'cái',
+          remainingQty: 7,
+          skus: [{ itemId: '3', lenhCode: 'MY-315', skuCode: 'SKU-3', deadline: '2026-11-01' }],
+        }),
+      ];
+      const lines = DailyJobsService.materialsDigests(rows).find((d) => d.recipientKey === 'u:b1')!
+        .params.lines;
+      expect(lines).toBe(
+        'MY-313 (quá hạn 2 ngày): Sơn ABC còn thiếu 20 kg; ' +
+          'MY-314 (HẠN CHÓT HÔM NAY): Đinh còn thiếu 5 kg; ' +
+          'MY-315 (còn 3 ngày tới hạn chót): Nệm còn thiếu 7 cái.',
+      );
+      expect(lines).not.toContain('PI-');
+    });
+
+    it('lệnh gộp 2 SKU 2 hạn: câu nêu lệnh của SKU có hạn sớm nhất', () => {
+      const r = dueRow({
+        state: 'OVERDUE',
+        daysLeft: -1,
+        lenhCode: 'MY-313 + MY-314',
+        skus: [
+          { itemId: '1', lenhCode: 'MY-313', skuCode: 'A', deadline: '2026-10-28' },
+          { itemId: '2', lenhCode: 'MY-314', skuCode: 'B', deadline: '2026-11-05' },
+        ],
+      });
+      const lines = DailyJobsService.materialsDigests([r])[0].params.lines;
+      expect(lines.startsWith('MY-313 (quá hạn 1 ngày)')).toBe(true);
+      expect(lines).not.toContain('MY-314');
+    });
+
+    it('tối đa 5 câu, phần còn lại ghi "+k dòng khác"', () => {
+      const rows = Array.from({ length: 7 }, (_, i) =>
+        dueRow({
+          lineId: `x${i}`,
+          lenhCode: `MY-${300 + i}`,
+          skus: [
+            { itemId: String(i), lenhCode: `MY-${300 + i}`, skuCode: 'S', deadline: '2026-10-27' },
+          ],
+        }),
+      );
+      const lines = DailyJobsService.materialsDigests(rows).find((d) => d.recipientKey === 'u:b1')!
+        .params.lines;
+      expect(lines.split('; ')).toHaveLength(6);
+      expect(lines.endsWith('+2 dòng khác.')).toBe(true);
+    });
+
+    it('mỗi NV mua và mỗi kho chỉ thấy dòng của mình', () => {
+      const rows = [
+        dueRow({ lineId: 'a', buyerId: 'b1', warehouseCode: 'phoi-son-han', materialName: 'Sắt' }),
+        dueRow({ lineId: 'b', buyerId: 'b2', warehouseCode: 'vat-tu-tp', materialName: 'Dây' }),
+        dueRow({ lineId: 'c', buyerId: null, warehouseCode: null, materialName: 'Lạ' }),
+      ];
+      const digests = DailyJobsService.materialsDigests(rows);
       expect(digests.map((d) => d.recipientKey).sort()).toEqual([
         'u:b1',
         'u:b2',
@@ -307,15 +404,7 @@ describe('DailyJobsService', () => {
         'w:vat-tu-tp',
       ]);
       expect(digests.find((d) => d.recipientKey === 'u:b2')!.params.lines).not.toContain('Sắt');
-    });
-
-    it('vật tư chỉ "sắp tới hạn" (còn > 0 ngày) chưa vào tin vật tư hôm nay', () => {
-      const b = boardOf([
-        row('1', [cell('MUA_VT_KHUNG', 'DUE_SOON', 2)], {
-          missing: { MUA_VT_KHUNG: [mat('31', 'Sơn', 'b1', null)], MUA_VT_CON_LAI: [] },
-        }),
-      ]);
-      expect(DailyJobsService.materialsDigests(b)).toEqual([]);
+      expect(digests.find((d) => d.recipientKey === 'w:vat-tu-tp')!.params.lines).toContain('Dây');
     });
 
     it('lệnh tới ngày Phôi mà QLSX chưa bấm Bắt đầu', () => {
@@ -447,6 +536,138 @@ describe('DailyJobsService', () => {
       ]);
       await service.sendDigestsIfDue(boardOf([]), MORNING);
       expect(dailyOutput.alertsForDay).not.toHaveBeenCalled();
+    });
+  });
+
+  // Phần A – Đợt 4 (YC6, Sếp câu 1)
+  describe('cảnh báo vật tư tới hạn chót chưa về đủ', () => {
+    const critical = [
+      dueRow({ lineId: 'a', state: 'OVERDUE', daysLeft: -2 }),
+      dueRow({
+        lineId: 'b',
+        state: 'DEADLINE_TODAY',
+        lenhCode: 'MY-314',
+        materialName: 'Đinh',
+        remainingQty: 5,
+        buyerName: 'Mai',
+        skus: [{ itemId: '2', lenhCode: 'MY-314', skuCode: 'S', deadline: '2026-10-29' }],
+      }),
+    ];
+    const withRows = (rows: MaterialsDueRow[]) =>
+      materialsDue.listAllRows.mockResolvedValue({ rows, today: '2026-10-29' });
+
+    it('trước 07:00 không gửi, không đọc nguồn', async () => {
+      withRows(critical);
+      await service.syncMaterialsDeadlineAlert(EARLY);
+      expect(notifications.emit).not.toHaveBeenCalled();
+      expect(materialsDue.listAllRows).not.toHaveBeenCalled();
+    });
+
+    it('có dòng quá hạn / hạn chót hôm nay: gửi 1 tin CRITICAL theo ngày, đóng tin các ngày trước', async () => {
+      withRows(critical);
+      await service.syncMaterialsDeadlineAlert(MORNING);
+      expect(notifications.resolve).toHaveBeenCalledWith({
+        entityType: 'MATERIALS_DUE',
+        entityId: 'deadline',
+        types: ['MATERIALS_DEADLINE_ALERT'],
+      });
+      expect(notifications.emit).toHaveBeenCalledTimes(1);
+      const [type, opts] = notifications.emit.mock.calls[0] as [
+        string,
+        { dedupeKey: string; entityId: string; params: Record<string, unknown> },
+      ];
+      expect(type).toBe('MATERIALS_DEADLINE_ALERT');
+      expect(opts.dedupeKey).toBe('MATERIALS_DEADLINE_ALERT:2026-10-29');
+      expect(opts.entityId).toBe('deadline');
+      expect(opts.params).toMatchObject({ overdue: 1, deadlineToday: 1 });
+      expect(opts.params.lines).toBe(
+        'MY-313 · quá hạn 2 ngày: Sơn ABC còn thiếu 20 kg (Lan); ' +
+          'MY-314 · hạn chót hôm nay: Đinh còn thiếu 5 kg (Mai).',
+      );
+    });
+
+    it('chỉ IN_WINDOW / UPCOMING (chưa tới hạn chót) thì không gửi', async () => {
+      withRows([dueRow({ state: 'IN_WINDOW' }), dueRow({ state: 'UPCOMING' })]);
+      await service.syncMaterialsDeadlineAlert(MORNING);
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('đã có tin hôm nay (còn mở) và vẫn còn dòng: không gửi lại', async () => {
+      withRows(critical);
+      prisma.notification.findFirst.mockResolvedValue({ id: 'n1', recipients: [{ userId: 'u' }] });
+      await service.syncMaterialsDeadlineAlert(MORNING);
+      expect(notifications.emit).not.toHaveBeenCalled();
+      expect(notifications.resolve).not.toHaveBeenCalled();
+    });
+
+    it('tin hôm nay đang mở mà hàng đã về hết (0 dòng) -> đóng tin', async () => {
+      withRows([]);
+      prisma.notification.findFirst.mockResolvedValue({ id: 'n1', recipients: [{ userId: 'u' }] });
+      await service.syncMaterialsDeadlineAlert(MORNING);
+      expect(notifications.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ entityType: 'MATERIALS_DUE', entityId: 'deadline' }),
+      );
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('0 dòng và tin hôm nay đã đóng / chưa từng gửi -> không làm gì', async () => {
+      withRows([]);
+      prisma.notification.findFirst.mockResolvedValue({ id: 'n1', recipients: [] });
+      await service.syncMaterialsDeadlineAlert(MORNING);
+      prisma.notification.findFirst.mockResolvedValue(null);
+      await service.syncMaterialsDeadlineAlert(MORNING);
+      expect(notifications.resolve).not.toHaveBeenCalled();
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('đã đóng vì hàng về, sau đó lại có dòng quá hạn: không gửi lại trong ngày', async () => {
+      withRows(critical);
+      prisma.notification.findFirst.mockResolvedValue({ id: 'n1', recipients: [] });
+      await service.syncMaterialsDeadlineAlert(MORNING);
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('tin cho KHSX, tự thêm Sếp (CRITICAL), link sang màn Vật tư cần về', async () => {
+      const { NOTIFICATION_TYPES } = await import('../notifications/notification-types');
+      const def = NOTIFICATION_TYPES.MATERIALS_DEADLINE_ALERT;
+      const p = { deadlineToday: 1, overdue: 2, lines: 'x.' };
+      expect(def.severity).toBe('CRITICAL');
+      expect(def.category).toBe('ALERT');
+      expect(def.recipients(p)).toEqual({ roles: ['PRODUCTION_PLANNER'] });
+      expect(def.title(p)).toBe('Vật tư tới hạn chót chưa về đủ: 1 hạn chót hôm nay, 2 quá hạn');
+      expect(def.title({ ...p, deadlineToday: 0 })).toBe(
+        'Vật tư tới hạn chót chưa về đủ: 2 quá hạn',
+      );
+      expect(def.link!(p)).toMatchObject({
+        module: 'production_plan',
+        page: 'vat-tu-can-ve',
+        params: { view: 'all' },
+      });
+    });
+
+    it('tiêu đề / link tin sáng vật tư theo hợp đồng Đợt 4', async () => {
+      const { NOTIFICATION_TYPES } = await import('../notifications/notification-types');
+      const def = NOTIFICATION_TYPES.MORNING_MATERIALS_DIGEST;
+      const p = {
+        overdue: 2,
+        deadlineToday: 1,
+        inWindow: 5,
+        lines: 'x',
+        buyerIds: [],
+        warehouseCodes: [],
+      };
+      expect(def.title(p)).toBe('Vật tư cần về: 2 quá hạn, 1 hạn chót hôm nay, 5 trong hạn về');
+      expect(def.title({ ...p, overdue: 0, inWindow: 0 })).toBe(
+        'Vật tư cần về: 1 hạn chót hôm nay',
+      );
+      expect(def.link!(p)).toEqual({
+        module: 'purchasing',
+        page: 'vat-tu-can-ve',
+        params: { view: 'today' },
+        alternatives: [
+          { module: 'inbound_warehouse', page: 'vat-tu-can-ve', params: { view: 'today' } },
+        ],
+      });
     });
   });
 

@@ -9,6 +9,7 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { vnDayKey } from '../../common/utils/floor-stats.util';
 import { purchaseDeadlineOf, purchaseGroupOf } from '../../common/utils/frame-deadline.util';
+import { purchaseLineMatcher } from '../../common/utils/purchase-line-sku.util';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { ProductionInvoicesService } from '../production-invoices/production-invoices.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
@@ -219,10 +220,6 @@ export class MilestoneBoardService {
       failedSources.push('phoi-progress');
     }
 
-    // Dây/nệm là lựa chọn RIÊNG của từng dòng trong PI (mua gộp theo PI) - cùng luật scopePurchasingRows ở FE.
-    const choiceIds = (i: { wireMaterialId: bigint | null; cushionMaterialId: bigint | null }) =>
-      [i.wireMaterialId, i.cushionMaterialId].flatMap((m) => (m != null ? [String(m)] : []));
-
     const rows: MilestoneRow[] = items.map((item) => {
       const piId = String(item.productionInvoiceId);
       const orderId = String(item.productionOrder!.id);
@@ -233,14 +230,10 @@ export class MilestoneBoardService {
       const day = (d: Date | null | undefined) => (d ? vnDayKey(d) : null);
 
       // ── Mua hàng ──
-      const own = new Set(choiceIds(item));
-      const siblings = new Set(
-        approvedChoices
-          .filter((o) => o.id !== item.id && String(o.productionInvoiceId) === piId)
-          .flatMap(choiceIds),
-      );
+      // Dây/nệm là lựa chọn RIÊNG của từng dòng trong PI (mua gộp theo PI) - luật dùng chung ở purchase-line-sku.util (Phần A – Đợt 4).
+      const usedByMe = purchaseLineMatcher(item, approvedChoices);
       const myLines = (purchaseLines ?? []).filter(
-        (l) => l.piId === piId && (own.has(l.materialId) || !siblings.has(l.materialId)),
+        (l) => l.piId === piId && usedByMe(l.materialId),
       );
       const purchase = (group: PurchaseLine['group']) => {
         const lines = myLines.filter((l) => l.group === group);

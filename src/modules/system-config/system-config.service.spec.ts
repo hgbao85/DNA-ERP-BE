@@ -52,6 +52,7 @@ describe('SystemConfigService', () => {
     containerVolumeM3: mockDecimal(68),
     capacityContPerDay: mockDecimal(1.3),
     daysPerContPhuocAn: 4,
+    materialEarliestArrivalDays: 4,
     floorPublicUrl: null,
     floorAllowedIps: [],
     lsxPrefixes: [],
@@ -405,6 +406,22 @@ describe('SystemConfigService', () => {
       });
     });
 
+    it('Phần A – Đợt 4: update + findOne trả materialEarliestArrivalDays', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        materialEarliestArrivalDays: 0,
+      });
+
+      const result = await service.update({ materialEarliestArrivalDays: 0 } as any);
+
+      expect(result.materialEarliestArrivalDays).toBe(0);
+      expect(prisma.systemConfig.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { materialEarliestArrivalDays: 0 } }),
+      );
+      await expect(service.findOne()).resolves.toMatchObject({ materialEarliestArrivalDays: 4 });
+    });
+
     it('getPlanningParams trả thể tích cont dạng number; 404 khi chưa seed', async () => {
       prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
       await expect(service.getPlanningParams()).resolves.toMatchObject({
@@ -413,6 +430,8 @@ describe('SystemConfigService', () => {
         // Phần A – Đợt 3: năng lực cont/ngày + số ngày/cont Phước An
         capacityContPerDay: 1.3,
         daysPerContPhuocAn: 4,
+        // Phần A – Đợt 4 (YC6)
+        materialEarliestArrivalDays: 4,
       });
       expect(prisma.systemConfig.findUnique).toHaveBeenCalledWith({ where: { id: 1 } });
       // Phần A – Đợt 2: tiền tố số LSX cho ô chọn tiền tố (mọi người đăng nhập đọc được).

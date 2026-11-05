@@ -18,6 +18,7 @@ describe('WorkQueueService', () => {
   };
   let cuttingProposalsService: { countNeedsAction: jest.Mock };
   let salesOrdersService: { countReadyToShip: jest.Mock };
+  let materialsDueService: { countDueNow: jest.Mock }; // Phần A – Đợt 4
 
   beforeEach(() => {
     prisma = {
@@ -35,10 +36,12 @@ describe('WorkQueueService', () => {
     };
     cuttingProposalsService = { countNeedsAction: jest.fn().mockResolvedValue(0) };
     salesOrdersService = { countReadyToShip: jest.fn().mockResolvedValue(0) };
+    materialsDueService = { countDueNow: jest.fn().mockResolvedValue(0) };
     service = new WorkQueueService(
       prisma as unknown as PrismaServiceType,
       cuttingProposalsService as never,
       salesOrdersService as never,
+      materialsDueService as never,
     );
   });
 
@@ -245,6 +248,53 @@ describe('WorkQueueService', () => {
       warehouseTransferPending: 1,
       warehousePurchaseReceiving: 2,
       salesReadyToShip: 3,
+      materialsDueNow: 0,
+    });
+  });
+
+  // ─── Phần A – Đợt 4 (YC6): badge Vật tư cần về ───
+  describe('materialsDueNow', () => {
+    it('người mua: tính theo vật tư mình (truyền id + role), khoá materialsDueNow', async () => {
+      materialsDueService.countDueNow.mockResolvedValue(7);
+
+      const result = await service.getWorkQueue({
+        id: 'u-buyer',
+        roles: ['PURCHASER'],
+        warehouseScope: null,
+      });
+
+      expect(result.counts.materialsDueNow).toBe(7);
+      expect(materialsDueService.countDueNow).toHaveBeenCalledWith({
+        id: 'u-buyer',
+        roles: ['PURCHASER'],
+        warehouseScope: null,
+      });
+    });
+
+    it('thủ kho: tính theo kho mình (truyền warehouseScope)', async () => {
+      materialsDueService.countDueNow.mockResolvedValue(3);
+
+      const result = await service.getWorkQueue({
+        id: 'u-wh',
+        roles: ['WAREHOUSE_STAFF'],
+        warehouseScope: 'son',
+      });
+
+      expect(result.counts.materialsDueNow).toBe(3);
+      expect(materialsDueService.countDueNow).toHaveBeenCalledWith(
+        expect.objectContaining({ warehouseScope: 'son' }),
+      );
+    });
+
+    it('KHSX / QLSX / Sếp: không có khoá materialsDueNow, không tính', async () => {
+      const result = await service.getWorkQueue({
+        id: 'u',
+        roles: ['PRODUCTION_PLANNER', 'PRODUCTION_MANAGER', 'BOSS'],
+        warehouseScope: null,
+      });
+
+      expect(result.counts).not.toHaveProperty('materialsDueNow');
+      expect(materialsDueService.countDueNow).not.toHaveBeenCalled();
     });
   });
 });

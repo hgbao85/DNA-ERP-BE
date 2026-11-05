@@ -15,9 +15,10 @@ export class WorkQueueController {
 
   @Get('work-queue')
   getWorkQueue(
+    @CurrentUser('id') id: string,
     @CurrentUser('roles') roles: string[],
     @CurrentUser('warehouseScope') warehouseScope: string | null,
   ) {
-    return this.workQueueService.getWorkQueue({ roles, warehouseScope });
+    return this.workQueueService.getWorkQueue({ id, roles, warehouseScope });
   }
 }

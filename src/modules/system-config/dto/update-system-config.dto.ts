@@ -312,4 +312,17 @@ export class UpdateSystemConfigDto {
   @Min(1)
   @Max(60)
   daysPerContPhuocAn?: number;
+
+  // ─── Phần A – Đợt 4 (YC6): màn Vật tư cần về ────────────────────────────────────
+
+  @ApiPropertyOptional({
+    example: 4,
+    description:
+      'Phần A – Đợt 4 (YC6): số ngày vật tư được về sớm nhất trước hạn chót (mặc định 4; 0 = chỉ ngày hạn chót). Số nguyên 0-30.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(30)
+  materialEarliestArrivalDays?: number;
 }

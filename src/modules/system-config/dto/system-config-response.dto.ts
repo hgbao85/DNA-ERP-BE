@@ -62,6 +62,10 @@ export class SystemConfigResponseDto {
   /** Số ngày/cont ở Phôi, Hàn của xưởng Phước An - mặc định 4. */
   @Expose() @ApiProperty() daysPerContPhuocAn!: number;
 
+  // Phần A – Đợt 4 (YC6)
+  /** Số ngày vật tư được về sớm nhất trước hạn chót - mặc định 4. */
+  @Expose() @ApiProperty() materialEarliestArrivalDays!: number;
+
   @Expose() @ApiProperty() updatedAt!: Date;
 
   constructor(partial: Partial<SystemConfigResponseDto>) {
