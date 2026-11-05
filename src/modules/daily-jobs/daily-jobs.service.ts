@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { VN_OFFSET_MS, vnDayKey, vnDayStart } from '../../common/utils/floor-stats.util';
+import { addDays } from '../../common/utils/timeline-suggest.util';
 import { DataHealthService } from '../data-health/data-health.service';
 import {
   MilestoneBoard,
@@ -16,13 +17,18 @@ import {
   MilestoneRow,
   MissingMaterial,
 } from '../milestone-board/milestone-board.service';
-import { MilestoneKey } from '../milestone-board/milestone-board.rules';
+import { MilestoneKey, daysBetween } from '../milestone-board/milestone-board.rules';
 import {
   DeliveryAtRiskNotificationParams,
   MaterialsDigestNotificationParams,
   ProductionDigestNotificationParams,
 } from '../notifications/notification-types';
 import { NotificationsService } from '../notifications/notifications.service';
+// Phần A – Đợt 3: cảnh báo sản lượng ngày gộp vào tin sáng.
+import { DailyOutputService } from '../production-capacity/daily-output.service';
+import type { DailyOutputAlert } from '../production-capacity/production-capacity.types';
+// Phần A – Đợt 10a
+import { BookingAlertsService } from '../bookings/booking-alerts.service';
 
 const CHECK_INTERVAL_MS = 10 * 60_000;
 /** Lần kiểm đầu sau khi máy chủ lên - chờ app ổn định, không chen vào lúc deploy/khởi động. */
@@ -78,6 +84,9 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
     private readonly dataHealth: DataHealthService,
     private readonly milestoneBoard: MilestoneBoardService,
     private readonly notifications: NotificationsService,
+    private readonly dailyOutput: DailyOutputService,
+    // Phần A – Đợt 10a
+    private readonly bookingAlerts: BookingAlertsService,
   ) {}
 
   onModuleInit(): void {
@@ -120,6 +129,8 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
 
   private async runSteps(now: Date): Promise<void> {
     await this.step('kiểm tra dữ liệu', () => this.runDataHealthIfDue(now));
+    // Phần A – Đợt 10a
+    await this.step('cảnh báo booking', () => this.bookingAlerts.syncShortAlerts(now));
     let board: MilestoneBoard | null = null;
     await this.step('bảng mốc', async () => {
       board = await this.milestoneBoard.getBoard(now);
@@ -256,7 +267,14 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
         entityId: 'production',
         types: ['MORNING_PRODUCTION_DIGEST'],
       });
-      const params = DailyJobsService.productionDigest(board);
+      // Phần A – Đợt 3: chấm sản lượng NGÀY HÔM QUA (giờ VN). Lỗi thì vẫn gửi tin, coi như không có cảnh báo sản lượng.
+      let lowOutput: DailyOutputAlert[] = [];
+      try {
+        lowOutput = await this.dailyOutput.alertsForDay(addDays(today, -1));
+      } catch (err) {
+        this.logger.warn(`Tin sáng: không chấm được sản lượng hôm qua - ${(err as Error).message}`);
+      }
+      const params = DailyJobsService.productionDigest(board, lowOutput);
       if (params) {
         await this.notifications.emit('MORNING_PRODUCTION_DIGEST', {
           entityId: 'production',
@@ -333,30 +351,56 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
     return out;
   }
 
-  /** Mốc trễ / sắp tới hạn (mọi mốc, gồm cả mua vật tư - KHSX cần biết vì nó chặn sản xuất) + lệnh tới ngày Phôi mà chưa
-   *  "Bắt đầu". null = không có gì để báo. */
-  static productionDigest(board: MilestoneBoard): ProductionDigestNotificationParams | null {
+  /** Mốc trễ / sắp tới hạn (mọi mốc, gồm cả mua vật tư - KHSX cần biết vì nó chặn sản xuất) + lệnh tới ngày bắt đầu Phôi (M2)
+   *  mà chưa "Bắt đầu" + lệnh tới ngày bắt đầu Đóng gói (M4) mà chưa đóng thùng nào + công đoạn hôm qua làm chưa đủ 1 cont
+   *  (`lowOutput`, Phần A – Đợt 3). null = không có gì để báo. */
+  static productionDigest(
+    board: MilestoneBoard,
+    lowOutput: DailyOutputAlert[] = [],
+  ): ProductionDigestNotificationParams | null {
     let late = 0;
     let dueSoon = 0;
     let notStarted = 0;
+    let packagingNotStarted = 0;
     const lines: string[] = [];
     for (const row of board.rows) {
       const bad = row.milestones.filter((m) => m.status === 'LATE' || m.status === 'DUE_SOON');
       late += bad.filter((m) => m.status === 'LATE').length;
       dueSoon += bad.filter((m) => m.status === 'DUE_SOON').length;
+      // Phần A – Đợt 3: ngày so = M2 (Bắt đầu Phôi) đã lưu; lệnh cũ chưa có M2 thì rơi về hạn Phôi như trước.
       const phoi = cellOf(row, 'PHOI');
+      const phoiDay = row.phoiStart ?? phoi?.deadline ?? null;
       const waiting =
         row.floorStage === 'PENDING' &&
-        phoi?.daysLeft != null &&
-        phoi.daysLeft <= 0 &&
-        phoi.status !== 'DONE';
+        phoiDay != null &&
+        daysBetween(board.today, phoiDay) <= 0 &&
+        phoi?.status !== 'DONE';
       if (waiting) notStarted += 1;
-      if (bad.length === 0 && !waiting) continue;
+      // M4: tới ngày bắt đầu Đóng gói mà chưa đóng thùng nào (chỉ khi biết số đóng gói và có việc đóng gói).
+      const dong = cellOf(row, 'DONG_GOI');
+      const packWaiting =
+        row.packagingStart != null &&
+        daysBetween(board.today, row.packagingStart) <= 0 &&
+        dong != null &&
+        dong.need !== null &&
+        dong.need > 0 &&
+        (dong.done ?? 0) === 0;
+      if (packWaiting) packagingNotStarted += 1;
+      if (bad.length === 0 && !waiting && !packWaiting) continue;
       const parts = bad.map((m) => `${m.label} ${lateText(m.daysLeft!)}`);
+      if (packWaiting) parts.unshift('chưa bắt đầu Đóng gói');
       if (waiting) parts.unshift('chưa bấm Bắt đầu');
       lines.push(`${row.piCode} · ${row.skuCode}: ${parts.join(', ')}`);
     }
-    if (late + dueSoon + notStarted === 0) return null;
-    return { late, dueSoon, notStarted, lines: joinLines(lines) };
+    lines.push(...lowOutput.map((a) => a.message));
+    if (late + dueSoon + notStarted + packagingNotStarted + lowOutput.length === 0) return null;
+    return {
+      late,
+      dueSoon,
+      notStarted,
+      lines: joinLines(lines),
+      packagingNotStarted,
+      lowOutput: lowOutput.length,
+    };
   }
 }

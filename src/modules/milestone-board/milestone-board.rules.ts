@@ -10,6 +10,7 @@ export type MilestoneKey =
   | 'SON'
   | 'KHUNG'
   | 'DAN'
+  | 'CHUYEN_KIEM'
   | 'MUA_VT_CON_LAI'
   | 'DONG_GOI'
   | 'HAN_GIAO';
@@ -21,7 +22,9 @@ export const MILESTONES: { key: MilestoneKey; label: string }[] = [
   { key: 'HAN', label: 'Hàn' },
   { key: 'SON', label: 'Sơn' },
   { key: 'KHUNG', label: 'Khung CK' },
-  { key: 'DAN', label: 'Đan' },
+  { key: 'DAN', label: 'Nhập đan' },
+  // Phần A – Đợt 3 (YC10): thêm ô Chuyền kiểm ngay sau Nhập đan.
+  { key: 'CHUYEN_KIEM', label: 'Chuyền kiểm' },
   { key: 'MUA_VT_CON_LAI', label: 'Mua VT còn lại' },
   { key: 'DONG_GOI', label: 'Đóng gói' },
   { key: 'HAN_GIAO', label: 'Hạn giao' },

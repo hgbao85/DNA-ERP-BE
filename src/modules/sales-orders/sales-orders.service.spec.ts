@@ -48,6 +48,8 @@ describe('SalesOrdersService', () => {
     weavingReceipt: { groupBy: jest.Mock };
     transferCheckResult: { groupBy: jest.Mock };
     packagingRecord: { groupBy: jest.Mock };
+    // Phần A – Đợt 10a
+    bookingLine: { findFirst: jest.Mock; deleteMany: jest.Mock };
     packagingIssue: { groupBy: jest.Mock };
     $queryRaw: jest.Mock;
     auditLog: { create: jest.Mock };
@@ -140,6 +142,11 @@ describe('SalesOrdersService', () => {
       weavingReceipt: { groupBy: jest.fn().mockResolvedValue([]) },
       transferCheckResult: { groupBy: jest.fn().mockResolvedValue([]) },
       packagingRecord: { groupBy: jest.fn().mockResolvedValue([]) },
+      // Phần A – Đợt 10a: remove() kiểm hàng trong booking chưa huỷ rồi xoá dòng booking của booking đã huỷ.
+      bookingLine: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       packagingIssue: { groupBy: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn(),
       auditLog: { create: jest.fn() },
@@ -894,6 +901,37 @@ describe('SalesOrdersService', () => {
       expect(piDeleteCallOrder).toBeLessThan(deleteOrderCallOrder);
       expect(piItemDeleteCallOrder).toBeLessThan(deleteOrderCallOrder);
       expect(orderItemDeleteCallOrder).toBeLessThan(deleteOrderCallOrder);
+    });
+
+    // Phần A – Đợt 10a
+    it('ném ConflictException khi đơn có hàng trong booking chưa huỷ, không xoá gì', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.bookingLine.findFirst.mockResolvedValue({ booking: { bookingNo: 'BK0000123' } });
+
+      await expect(service.remove('10')).rejects.toThrow(/booking BK0000123/);
+      expect(prisma.bookingLine.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.salesOrderItem.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.salesOrder.delete).not.toHaveBeenCalled();
+    });
+
+    it('xoá đơn: dọn dòng booking của booking đã huỷ TRƯỚC khi xoá dòng đơn / dòng lệnh', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+
+      await service.remove('10');
+
+      expect(prisma.bookingLine.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            booking: { status: { in: ['DRAFT', 'CONFIRMED', 'SHIPPED'] } },
+          }) as unknown,
+        }),
+      );
+      expect(prisma.bookingLine.deleteMany).toHaveBeenCalledWith({
+        where: { salesOrderItem: { salesOrderId: 10n } },
+      });
+      const bl = prisma.bookingLine.deleteMany.mock.invocationCallOrder[0];
+      expect(bl).toBeLessThan(prisma.productionInvoiceItem.deleteMany.mock.invocationCallOrder[0]);
+      expect(bl).toBeLessThan(prisma.salesOrderItem.deleteMany.mock.invocationCallOrder[0]);
     });
 
     // 10/09: SKU (PlanForm) gắn sẵn vào đơn qua linkExistingSkus() KHÔNG bị xoá khi xoá PO - chỉ

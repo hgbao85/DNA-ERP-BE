@@ -73,6 +73,9 @@ export interface MilestoneRow {
   quantity: number;
   floorStage: ProductionOrderFloorStage;
   milestones: MilestoneCell[];
+  /** Phần A – Đợt 3: ngày bắt đầu Phôi (M2) / bắt đầu Đóng gói (M4) đã lưu, 'YYYY-MM-DD' - null = chưa có. */
+  phoiStart: string | null;
+  packagingStart: string | null;
   worst: MilestoneStatus;
   /** Vật tư còn thiếu theo từng mốc mua (rỗng khi đã về đủ / không cần). */
   missing: { MUA_VT_KHUNG: MissingMaterial[]; MUA_VT_CON_LAI: MissingMaterial[] };
@@ -95,7 +98,7 @@ interface PurchaseLine extends MissingMaterial {
 const fmt = (n: number) => Number(n.toFixed(2)).toLocaleString('vi-VN');
 
 /**
- * "Bảng mốc" (2026-10-29, changelog 2026-09-25 mục 32.24): mỗi dòng SKU đang chạy (đã Sếp duyệt, lệnh chưa Kết thúc) × 9 mốc,
+ * "Bảng mốc" (2026-10-29, changelog 2026-09-25 mục 32.24): mỗi dòng SKU đang chạy (đã Sếp duyệt, lệnh chưa Kết thúc) × 10 mốc,
  * tính trạng thái so với hạn ĐÃ LƯU. Tiến độ lấy từ ĐÚNG các hàm batch mà màn "Tổng hợp lệnh SX" (FE ThongKePagePlan) đang
  * dùng và theo đúng luật "xong" ở đó (Hàn/Sơn = đạt + chờ KCS + chưa gửi; mua hàng = mọi dòng đã về đủ...) để 2 nơi không
  * nói 2 điều khác nhau. Chỉ đọc.
@@ -167,6 +170,7 @@ export class MilestoneBoardService {
       sonByOrder,
       weavingByOrder,
       packagingByItem,
+      transferCheckByItem,
       purchaseLines,
       approvedChoices,
       displayCodes,
@@ -186,6 +190,8 @@ export class MilestoneBoardService {
       ),
       safe('weaving-issue-plan', this.weavingIssues.getIssuePlanBatch(orderIds)),
       safe('packaging', this.productionInvoices.getPackagingBatch(itemIds)),
+      // Phần A – Đợt 3: tiến độ Chuyền kiểm theo mảnh.
+      safe('transfer-check', this.productionInvoices.listTransferCheckPiecesBatch(itemIds)),
       safe('purchase-proposals', this.loadPurchaseLines(piBigIds)),
       // Dây/nệm của MỌI dòng đã duyệt trong các PI này, kể cả dòng đã Kết thúc (không có trên bảng): dây riêng của dòng đã xong
       // vẫn là của dòng đó, không được tính sang dòng còn chạy (review 32.26) - cùng tập `approvedRows` FE dùng.
@@ -323,6 +329,14 @@ export class MilestoneBoardService {
         ),
       };
 
+      // ── Chuyền kiểm (Phần A – Đợt 3): cần = Σ tổng mảnh, đã làm = Σ min(đã kiểm, tổng) ──
+      const checkPieces = transferCheckByItem ? transferCheckByItem[String(item.id)] : undefined;
+      const chuyenKiem: MilestoneProgress = {
+        known: checkPieces !== undefined,
+        need: (checkPieces ?? []).reduce((a, c) => a + c.totalQty, 0),
+        done: (checkPieces ?? []).reduce((a, c) => a + Math.min(c.checkedQty, c.totalQty), 0),
+      };
+
       // ── Đóng gói / Hạn giao ──
       const pack = packagingByItem ? packagingByItem[String(item.id)] : undefined;
       const dongGoi: MilestoneProgress = {
@@ -380,6 +394,14 @@ export class MilestoneBoardService {
           dan.known && dan.need > 0 ? `Đã nhận về ${fmt(dan.done)}/${fmt(dan.need)} mảnh` : null,
         ),
         cell(
+          'CHUYEN_KIEM',
+          chuyenKiem,
+          stageDay(ProdItemStageType.TRANSFER_CHECK),
+          chuyenKiem.known && chuyenKiem.need > 0
+            ? `Đã kiểm ${fmt(Math.min(chuyenKiem.done, chuyenKiem.need))}/${fmt(chuyenKiem.need)} mảnh`
+            : null,
+        ),
+        cell(
           'MUA_VT_CON_LAI',
           muaConLai.progress,
           day(purchaseDeadlineOf(item, 'FINISHED')),
@@ -411,6 +433,8 @@ export class MilestoneBoardService {
         quantity: item.quantity,
         floorStage: item.productionOrder!.floorStage,
         milestones,
+        phoiStart: stageDay(ProdItemStageType.PHOI_START),
+        packagingStart: stageDay(ProdItemStageType.PACKAGING_START),
         worst: worstStatus(milestones.map((m) => m.status)),
         missing: {
           MUA_VT_KHUNG: muaKhung.missing.map(stripLine),

@@ -1839,7 +1839,10 @@ describe('SteelIssuesService', () => {
           mfgProduct: { name: 'Ghế tình yêu', factoryCode: 'GTY' },
           productionInvoiceItem: {
             salesOrder: { orderCode: 'SO-47' },
-            stages: [{ deadline: new Date('2026-06-20') }],
+            stages: [
+              { stageType: 'PHOI_START', deadline: new Date('2026-06-18') },
+              { stageType: 'FRAME_PHOI', deadline: new Date('2026-06-20') },
+            ],
           },
         },
         {
@@ -1862,6 +1865,7 @@ describe('SteelIssuesService', () => {
           productName: 'Ghế tình yêu',
           quantity: 20,
           phoiDeadline: new Date('2026-06-20'),
+          phoiStart: new Date('2026-06-18'),
         },
         {
           productionOrderId: '48',
@@ -1871,6 +1875,7 @@ describe('SteelIssuesService', () => {
           productName: 'Ghế J55',
           quantity: 8,
           phoiDeadline: null,
+          phoiStart: null,
         },
       ]);
     });

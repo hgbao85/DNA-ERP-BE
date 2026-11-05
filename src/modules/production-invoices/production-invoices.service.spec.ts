@@ -1441,6 +1441,423 @@ describe('ProductionInvoicesService', () => {
     });
   });
 
+  // ─── Phần A – Đợt 3 (YC10): tự lưu ngày đề xuất lúc gửi QLSX + báo KHSX khi xưởng đổi số ngày ───
+  describe('tự lưu ngày đề xuất khi KHSX gửi QLSX (Phần A – Đợt 3, Q2)', () => {
+    const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
+    const mfg240 = { ...mfgProduct, loadCont: 80 };
+    // 240 bộ, load 80 = 3 cont; 1,3 cont/ngày -> X = Xđg = 3. FRAME đã lưu 13/11 -> N = 13/11 - (3+1) = 09/11.
+    const item240 = (o: Record<string, unknown> = {}) =>
+      piItem({
+        quantity: 240,
+        mfgProduct: mfg240,
+        stages: [{ stageType: 'FRAME', deadline: day('2026-11-13') }],
+        ...o,
+      });
+    const upserts = () =>
+      (
+        prisma.productionInvoiceItemStage.upsert.mock.calls as [
+          {
+            where: { productionInvoiceItemId_stageType: { productionInvoiceItemId: bigint } };
+            create: { productionInvoiceItemId: bigint; stageType: string; deadline: Date };
+            update: object;
+          },
+        ][]
+      ).map((c) => c[0]);
+    const createdStages = (itemId?: bigint) =>
+      Object.fromEntries(
+        upserts()
+          .filter((u) => itemId === undefined || u.create.productionInvoiceItemId === itemId)
+          .map((u) => [u.create.stageType, u.create.deadline.toISOString().slice(0, 10)]),
+      );
+
+    beforeEach(() => {
+      prisma.systemConfig.findUniqueOrThrow.mockResolvedValue({
+        solverMergeWindowDays: 3,
+        solverMergeMaxSkus: 5,
+        lsxPrefixes: [],
+        capacityContPerDay: { toNumber: () => 1.3 },
+        daysPerContPhuocAn: 4,
+      });
+    });
+
+    it('ghi MỌI mốc còn trống đúng công thức, KHÔNG ghi đè mốc đã có (FRAME), KHÔNG đụng deliveryDeadline', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(item240());
+
+      await service.sendItemToQlsx('7', '20', 'user-khsx');
+
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledTimes(1);
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledWith({
+        where: { id: 20n },
+        data: {
+          materialDeadline: day('2026-11-08'),
+          finishedMaterialDeadline: day('2026-11-16'),
+        },
+      });
+      expect(createdStages()).toEqual({
+        PHOI_START: '2026-11-09',
+        FRAME_PHOI: '2026-11-11',
+        FRAME_HAN: '2026-11-12',
+        FRAME_SON: '2026-11-13',
+        // FRAME đã có (13/11) -> không ghi lại
+        WEAVING: '2026-11-21',
+        TRANSFER_CHECK: '2026-11-22',
+        PACKAGING_START: '2026-11-23',
+        PACKAGING: '2026-11-25',
+      });
+      // upsert luôn update: {} -> không bao giờ ghi đè mốc vừa có người đặt giữa chừng
+      expect(upserts().every((u) => Object.keys(u.update).length === 0)).toBe(true);
+      const updateData = (
+        prisma.productionInvoiceItem.update.mock.calls as [{ data: Record<string, unknown> }][]
+      )[0][0].data;
+      expect(updateData).not.toHaveProperty('deliveryDeadline');
+      // Audit riêng cho lần tự lưu, kèm nguồn; KHÔNG báo ai.
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          tableName: 'ProductionInvoiceItem',
+          recordId: '20',
+          oldValue: expect.objectContaining({ materialDeadline: null }) as unknown,
+          newValue: expect.objectContaining({
+            source: 'AUTO_FILL_ON_SEND_QLSX',
+            materialDeadline: '2026-11-08T00:00:00.000Z',
+            'stage.PHOI_START': '2026-11-09T00:00:00.000Z',
+          }) as unknown,
+        }) as unknown,
+      });
+      expect(notificationsService.emit).not.toHaveBeenCalledWith(
+        'PI_ITEM_DEADLINE_CHANGED',
+        expect.anything(),
+      );
+    });
+
+    it('mốc đã có thì GIỮ NGUYÊN: chỉ ghi các mốc còn trống, N lấy từ PHOI_START đã lưu', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        item240({
+          materialDeadline: day('2026-11-01'),
+          stages: [
+            { stageType: 'PHOI_START', deadline: day('2026-11-10') },
+            { stageType: 'WEAVING', deadline: day('2026-11-30') },
+          ],
+        }),
+      );
+
+      await service.sendItemToQlsx('7', '20', 'user-khsx');
+
+      // N = 10/11: M3 = (N+14) - 7 = 17/11; M1 đã có nên KHÔNG có trong data.
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledWith({
+        where: { id: 20n },
+        data: { finishedMaterialDeadline: day('2026-11-17') },
+      });
+      const created = createdStages();
+      expect(created).not.toHaveProperty('PHOI_START');
+      expect(created).not.toHaveProperty('WEAVING');
+      expect(created.FRAME_PHOI).toBe('2026-11-12');
+      expect(created.FRAME).toBe('2026-11-14');
+      expect(created.TRANSFER_CHECK).toBe('2026-11-23');
+    });
+
+    it('dòng chưa có load cont: X = 1 (Phôi = Hàn = Sơn mỗi công đoạn 1 ngày)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        item240({ mfgProduct: { ...mfgProduct, loadCont: null } }),
+      );
+
+      await service.sendItemToQlsx('7', '20', 'user-khsx');
+
+      // FRAME 13/11, X = 1 -> N = 11/11; Phôi xong 11/11, Hàn 12/11, Sơn 13/11.
+      expect(createdStages()).toMatchObject({
+        PHOI_START: '2026-11-11',
+        FRAME_PHOI: '2026-11-11',
+        FRAME_HAN: '2026-11-12',
+        FRAME_SON: '2026-11-13',
+      });
+    });
+
+    it('không mốc nào để tính N (chưa mốc nào, chưa hạn giao) -> không ghi gì', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(item240({ stages: [] }));
+
+      await service.sendItemToQlsx('7', '20', 'user-khsx');
+
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+      expect(prisma.productionInvoiceItemStage.upsert).not.toHaveBeenCalled();
+    });
+
+    it('chỉ có hạn giao của lệnh -> N = hạn giao - (Xđg + 16) = 10/12 - 19 = 21/11', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ deadline: day('2026-12-10') }));
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(item240({ stages: [] }));
+
+      await service.sendItemToQlsx('7', '20', 'user-khsx');
+
+      expect(createdStages().PHOI_START).toBe('2026-11-21');
+    });
+
+    it('xưởng của dòng là Phước An (DAYS_PER_CONT, 4 ngày/cont): X = 12, N = 13/11 - 13 = 31/10', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        item240({
+          workshopId: 5n,
+          workshop: {
+            id: 5n,
+            code: 'PHUOC_AN',
+            name: 'Xưởng Phước An',
+            capacityMode: 'DAYS_PER_CONT',
+          },
+        }),
+      );
+
+      await service.sendItemToQlsx('7', '20', 'user-khsx');
+
+      expect(createdStages()).toMatchObject({
+        PHOI_START: '2026-10-31',
+        FRAME_PHOI: '2026-11-11',
+      });
+    });
+
+    it('PI gộp vi phạm luật gộp -> 400 kèm gợi ý "Sửa thời hạn", không đổi trạng thái, không audit chuyển trạng thái', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ isMerged: true }));
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(item240());
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        piItem({ id: 20n, materialDeadline: day('2026-11-08') }),
+        piItem({ id: 21n, materialDeadline: day('2026-11-20') }),
+      ]);
+
+      await expect(service.sendItemToQlsx('7', '20', 'user-khsx')).rejects.toThrow(
+        /lệnh gộp cách nhau 12 ngày.*mở "Sửa thời hạn" đặt mốc Mua VT khung & đan/,
+      );
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it('gửi cả phiếu: tự lưu cho từng SKU trống mốc trong 1 giao dịch, rồi mới đổi trạng thái', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            item240({ id: 20n }),
+            item240({ id: 21n }),
+            item240({ id: 22n, prodApprovalStatus: 'WAITING_BOSS' }),
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
+
+      await service.sendBatchToQlsx('7', 'user-khsx');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      // 2 SKU gửi được (22 đã WAITING_BOSS -> bỏ qua): mỗi SKU 1 lần update cột + 8 mốc stage
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledTimes(2);
+      expect(Object.keys(createdStages(20n))).toHaveLength(8);
+      expect(Object.keys(createdStages(21n))).toHaveLength(8);
+      expect(createdStages(22n)).toEqual({});
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [20n, 21n] } },
+        data: expect.objectContaining({ prodApprovalStatus: 'WAITING_QLSX' }) as unknown,
+      });
+    });
+  });
+
+  describe('báo KHSX khi QLSX chọn xưởng làm số ngày khác (Phần A – Đợt 3, V4-5)', () => {
+    const phuAn = {
+      id: 3n,
+      code: 'PHU_AN',
+      name: 'Xưởng Phú An',
+      isActive: true,
+      capacityMode: 'CONT_PER_DAY',
+    };
+    const phuocAn = {
+      id: 5n,
+      code: 'PHUOC_AN',
+      name: 'Xưởng Phước An',
+      isActive: true,
+      capacityMode: 'DAYS_PER_CONT',
+    };
+    const mfg240 = { ...mfgProduct, loadCont: 80 };
+    const replanEmits = () =>
+      (notificationsService.emit.mock.calls as unknown[][]).filter(
+        (c) => c[0] === 'PI_TIMELINE_NEEDS_REPLAN',
+      );
+    /** findUnique theo code PHU_AN = xưởng dự kiến; theo id = xưởng QLSX chọn. */
+    const pickWorkshop = (chosen: typeof phuAn) =>
+      prisma.workshop.findUnique.mockImplementation(({ where }: { where: { code?: string } }) =>
+        Promise.resolve(where.code === 'PHU_AN' ? phuAn : chosen),
+      );
+    const waitingQlsx = (o: Record<string, unknown> = {}) =>
+      piItem({ prodApprovalStatus: 'WAITING_QLSX', quantity: 240, mfgProduct: mfg240, ...o });
+
+    beforeEach(() => {
+      prisma.systemConfig.findUniqueOrThrow.mockResolvedValue({
+        solverMergeWindowDays: 3,
+        solverMergeMaxSkus: 5,
+        lsxPrefixes: [],
+        capacityContPerDay: { toNumber: () => 1.3 },
+        daysPerContPhuocAn: 4,
+      });
+    });
+
+    it('sendItemToBoss chọn Phước An cho dòng 240 bộ load 80 chưa có xưởng -> emit (Phú An 3 ngày vs Phước An 12 ngày)', async () => {
+      const item = waitingQlsx();
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ items: [item] }));
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(item);
+      pickWorkshop(phuocAn);
+
+      await service.sendItemToBoss('7', '20', 'thanh-pham', 'Kho thành phẩm', '5', 'user-qlsx');
+
+      expect(replanEmits()).toEqual([
+        [
+          'PI_TIMELINE_NEEDS_REPLAN',
+          {
+            entityId: '7',
+            actorId: 'user-qlsx',
+            params: {
+              piCode: 'PI-7',
+              displayCode: 'MY-313',
+              workshopName: 'Xưởng Phước An',
+              lines: [
+                'SKU-01: Phôi/Hàn/Sơn cần 12 ngày mỗi công đoạn ở Xưởng Phước An (mốc đang đặt theo Xưởng Phú An: 3 ngày)',
+              ],
+            },
+          },
+        ],
+      ]);
+    });
+
+    it('chọn Phú An (xưởng đã dùng để đề xuất) -> KHÔNG emit', async () => {
+      const item = waitingQlsx();
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ items: [item] }));
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(item);
+      pickWorkshop(phuAn);
+
+      await service.sendItemToBoss('7', '20', 'thanh-pham', 'Kho thành phẩm', '3', 'user-qlsx');
+
+      expect(replanEmits()).toHaveLength(0);
+    });
+
+    it('dòng chưa có load cont: X luôn 1 -> chọn Phước An cũng KHÔNG emit', async () => {
+      const item = waitingQlsx({ mfgProduct: { ...mfgProduct, loadCont: null } });
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ items: [item] }));
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(item);
+      pickWorkshop(phuocAn);
+
+      await service.sendItemToBoss('7', '20', 'thanh-pham', 'Kho thành phẩm', '5', 'user-qlsx');
+
+      expect(replanEmits()).toHaveLength(0);
+    });
+
+    it('sendBatchToBoss: gom các dòng lệch của PI thành 1 thông báo, bỏ dòng không lệch', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            waitingQlsx({ id: 20n, lsxCode: 'MY-313' }),
+            waitingQlsx({
+              id: 21n,
+              lsxCode: 'MY-314',
+              mfgProduct: { ...mfgProduct, factoryCode: 'J55', loadCont: 240 },
+            }), // 1 cont -> 1 ngày vs 4 ngày
+            waitingQlsx({
+              id: 22n,
+              lsxCode: 'MY-315',
+              mfgProduct: { ...mfgProduct, loadCont: null },
+            }), // không lệch
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 3 });
+      pickWorkshop(phuocAn);
+
+      await service.sendBatchToBoss('7', 'thanh-pham', 'Kho thành phẩm', '5', 'user-qlsx');
+
+      expect(replanEmits()).toHaveLength(1);
+      const [, payload] = replanEmits()[0] as [string, { params: { lines: string[] } }];
+      expect(payload.params.lines).toEqual([
+        'SKU-01: Phôi/Hàn/Sơn cần 12 ngày mỗi công đoạn ở Xưởng Phước An (mốc đang đặt theo Xưởng Phú An: 3 ngày)',
+        'J55: Phôi/Hàn/Sơn cần 4 ngày mỗi công đoạn ở Xưởng Phước An (mốc đang đặt theo Xưởng Phú An: 1 ngày)',
+      ]);
+    });
+
+    it('emit lỗi không chặn việc gửi Sếp (best-effort)', async () => {
+      const item = waitingQlsx();
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ items: [item] }));
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(item);
+      pickWorkshop(phuocAn);
+      notificationsService.emit.mockImplementation((type: string) =>
+        type === 'PI_TIMELINE_NEEDS_REPLAN'
+          ? Promise.reject(new Error('boom'))
+          : Promise.resolve(undefined),
+      );
+
+      await expect(
+        service.sendItemToBoss('7', '20', 'thanh-pham', 'Kho thành phẩm', '5', 'user-qlsx'),
+      ).resolves.toBeDefined();
+    });
+
+    it('changeWorkshop Phú An -> Phước An -> emit; Phước An -> Phú An (Phôi/Hàn/Sơn 12 -> 3 ngày) -> cũng emit', async () => {
+      const sent = (workshop: typeof phuAn) =>
+        pi({
+          items: [
+            piItem({
+              id: 20n,
+              prodApprovalStatus: 'WAITING_BOSS',
+              quantity: 240,
+              mfgProduct: mfg240,
+              workshopId: workshop.id,
+              workshop,
+            }),
+          ],
+        });
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 1 });
+
+      prisma.productionInvoice.findUnique.mockResolvedValue(sent(phuAn));
+      prisma.workshop.findUnique.mockResolvedValue(phuocAn);
+      await service.changeWorkshop('7', '5', 'Phú An quá tải', 'user-qlsx');
+      expect(replanEmits()).toHaveLength(1);
+      expect(replanEmits()[0][1]).toMatchObject({
+        entityId: '7',
+        actorId: 'user-qlsx',
+        params: {
+          workshopName: 'Xưởng Phước An',
+          lines: [
+            'SKU-01: Phôi/Hàn/Sơn cần 12 ngày mỗi công đoạn ở Xưởng Phước An (mốc đang đặt theo Xưởng Phú An: 3 ngày)',
+          ],
+        },
+      });
+
+      notificationsService.emit.mockClear();
+      prisma.productionInvoice.findUnique.mockResolvedValue(sent(phuocAn));
+      prisma.workshop.findUnique.mockResolvedValue(phuAn);
+      await service.changeWorkshop('7', '3', 'Đổi lại', 'user-qlsx');
+      expect(replanEmits()).toHaveLength(1);
+    });
+
+    it('changeWorkshop giữa 2 xưởng cùng chế độ -> KHÔNG emit', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            piItem({
+              id: 20n,
+              prodApprovalStatus: 'WAITING_BOSS',
+              quantity: 240,
+              mfgProduct: mfg240,
+              workshopId: phuAn.id,
+              workshop: phuAn,
+            }),
+          ],
+        }),
+      );
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 1 });
+      prisma.workshop.findUnique.mockResolvedValue({
+        ...phuAn,
+        id: 9n,
+        code: 'MY',
+        name: 'Mỹ Yến',
+      });
+
+      await service.changeWorkshop('7', '9', 'lý do', 'user-qlsx');
+
+      expect(replanEmits()).toHaveLength(0);
+    });
+  });
+
   describe('updateItem', () => {
     it('updates materialDeadline/deliveryDeadline and upserts each stage deadline', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
@@ -1532,7 +1949,10 @@ describe('ProductionInvoicesService', () => {
 
       const calls = emitted();
       expect(calls).toHaveLength(1);
-      expect(calls[0][1].params.roles.sort()).toEqual(['HAN_STAFF', 'SALES_STAFF'].sort());
+      // Phần A – Đợt 3 (V4-20): mọi lần đổi mốc báo thêm QLSX.
+      expect(calls[0][1].params.roles.sort()).toEqual(
+        ['HAN_STAFF', 'SALES_STAFF', 'PRODUCTION_MANAGER'].sort(),
+      );
       expect(calls[0][1].params.warehouseIds).toEqual(['phoi-son-han', 'vat-tu-tp']);
       expect(calls[0][1].params.changes).toHaveLength(3);
       expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
@@ -1563,7 +1983,7 @@ describe('ProductionInvoicesService', () => {
       expect(result.finishedMaterialDeadline).toEqual(new Date('2026-10-01'));
       const calls = emitted();
       expect(calls).toHaveLength(1);
-      expect(calls[0][1].params.roles).toEqual(['PURCHASER']);
+      expect(calls[0][1].params.roles).toEqual(['PURCHASER', 'PRODUCTION_MANAGER']);
       expect(calls[0][1].params.warehouseIds).toEqual(['vat-tu-tp', 'thanh-pham']);
       expect(calls[0][1].params.changes).toEqual([
         expect.stringMatching(/^Mua VT khung & đan: \(chưa có\) → /),
@@ -1584,6 +2004,42 @@ describe('ProductionInvoicesService', () => {
       expect(call[0].data.materialDeadline).toBeUndefined();
       expect(call[0].data.deliveryDeadline).toBeUndefined();
       expect(prisma.productionInvoiceItemStage.upsert).not.toHaveBeenCalled();
+    });
+
+    // Phần A – Đợt 3 (YC10): nhãn mới + người nhận mới
+    it('nhãn mới: WEAVING = "Nhập đan", TRANSFER_CHECK = "Chuyền kiểm", PHOI_START = "Bắt đầu Phôi"; báo Phôi + QLSX', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValueOnce(piItem()).mockResolvedValueOnce(
+        piItem({
+          stages: [
+            { stageType: 'PHOI_START', deadline: new Date('2026-11-09') },
+            { stageType: 'WEAVING', deadline: new Date('2026-11-21') },
+            { stageType: 'TRANSFER_CHECK', deadline: new Date('2026-11-22') },
+            { stageType: 'PACKAGING_START', deadline: new Date('2026-11-23') },
+          ],
+        }),
+      );
+
+      await service.updateItem('7', '20', {
+        stages: [
+          { stageType: ProdItemStageType.PHOI_START, deadline: '2026-11-09' },
+          { stageType: ProdItemStageType.WEAVING, deadline: '2026-11-21' },
+          { stageType: ProdItemStageType.TRANSFER_CHECK, deadline: '2026-11-22' },
+          { stageType: ProdItemStageType.PACKAGING_START, deadline: '2026-11-23' },
+        ],
+      });
+
+      const [call] = emitted();
+      expect(call[1].params.changes).toEqual([
+        expect.stringMatching(/^Bắt đầu Phôi: \(chưa có\) → /),
+        expect.stringMatching(/^Nhập đan: \(chưa có\) → /),
+        expect.stringMatching(/^Chuyền kiểm: \(chưa có\) → /),
+        expect.stringMatching(/^Bắt đầu đóng gói: \(chưa có\) → /),
+      ]);
+      expect(call[1].params.roles.sort()).toEqual(['PHOI_STAFF', 'PRODUCTION_MANAGER']);
+      expect(call[1].params.warehouseIds.sort()).toEqual(
+        ['phoi-son-han', 'thanh-pham', 'vat-tu-tp'].sort(),
+      );
     });
 
     it('lưu lại y nguyên giá trị cũ → không audit, không báo', async () => {

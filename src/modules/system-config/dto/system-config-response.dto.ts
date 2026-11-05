@@ -55,6 +55,13 @@ export class SystemConfigResponseDto {
   /** Thể tích 1 cont (m³) tính load cont của SKU - mặc định 68. */
   @Expose() @ApiProperty() containerVolumeM3!: number;
 
+  // Phần A – Đợt 3 (YC10)
+  /** Năng lực cont/ngày của xưởng Phú An và mỗi kho đóng gói - mặc định 1,3. */
+  @Expose() @ApiProperty() capacityContPerDay!: number;
+
+  /** Số ngày/cont ở Phôi, Hàn của xưởng Phước An - mặc định 4. */
+  @Expose() @ApiProperty() daysPerContPhuocAn!: number;
+
   @Expose() @ApiProperty() updatedAt!: Date;
 
   constructor(partial: Partial<SystemConfigResponseDto>) {
