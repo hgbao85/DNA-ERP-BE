@@ -19,6 +19,10 @@ import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purc
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 import { RealtimeService } from '../../realtime/realtime.service';
+import { ItemDeadlineWriter } from './item-deadline-writer.service';
+import { DeadlineChangesService } from './deadline-changes/deadline-changes.service';
+
+const ACTOR = { id: 'khsx-1', roles: ['PRODUCTION_PLANNER'] };
 
 /** 3 cột thông số cắt KHSX đề nghị, đọc lại từ payload productionInvoice.create(). */
 type SolverOverrideColumns = {
@@ -96,6 +100,11 @@ describe('ProductionInvoicesService', () => {
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
   let cloudinaryService: { deleteByUrl: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
+  let deadlineChanges: {
+    previewEntries: jest.Mock;
+    saveEntries: jest.Mock;
+    pendingByItem: jest.Mock;
+  };
 
   const mfgProduct = { id: 2n, factoryCode: 'SKU-01', name: 'Ghe A' };
   const pi = (overrides: Record<string, unknown> = {}) => ({
@@ -274,6 +283,11 @@ describe('ProductionInvoicesService', () => {
     materialYieldRecipePurchaseService = {
       computeAndUpsertProposals: jest.fn().mockResolvedValue([]),
     };
+    deadlineChanges = {
+      previewEntries: jest.fn().mockResolvedValue([]),
+      saveEntries: jest.fn().mockResolvedValue({ applied: [], batch: null, skipped: [] }),
+      pendingByItem: jest.fn().mockResolvedValue(new Map()),
+    };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
     notificationsService = {
@@ -292,8 +306,23 @@ describe('ProductionInvoicesService', () => {
       cloudinaryService as unknown as CloudinaryService,
       notificationsService as unknown as NotificationsService,
       realtimeStub as unknown as RealtimeService,
+      // Phần A – Đợt 9 (YC2): đường ghi mốc dùng chung (thật) + lõi đổi mốc (mock - test riêng ở deadline-changes.service.spec.ts)
+      new ItemDeadlineWriter(
+        prisma as unknown as PrismaServiceType,
+        cls as unknown as ClsService<AppClsStore>,
+        notificationsService as unknown as NotificationsService,
+      ),
+      deadlineChanges as unknown as DeadlineChangesService,
     );
   });
+
+  // Đợt 9: updateItem / updateItemsDeadlines nhận thêm actor - các test cũ (dòng chưa duyệt) chỉ cần một actor KHSX bất kỳ.
+  const updateItemAs = (
+    ...args: [string, string, Parameters<ProductionInvoicesService['updateItem']>[2]]
+  ) => service.updateItem(args[0], args[1], args[2], ACTOR);
+  const updateItemsDeadlinesAs = (
+    ...args: [string, Parameters<ProductionInvoicesService['updateItemsDeadlines']>[1]]
+  ) => service.updateItemsDeadlines(args[0], args[1], ACTOR);
 
   describe('create', () => {
     // Medium fix: create() trước đây tạo xong với code đúng định dạng "PI-2026-0xx"
@@ -337,7 +366,7 @@ describe('ProductionInvoicesService', () => {
       ]);
 
       await expect(
-        service.updateItemsDeadlines('50', {
+        updateItemsDeadlinesAs('50', {
           items: [{ itemId: '21', materialDeadline: '2026-11-10T00:00:00.000Z' }],
         }),
       ).rejects.toThrow(/lệnh gộp cách nhau 9 ngày.*tách SKU ra lệnh riêng/);
@@ -349,7 +378,7 @@ describe('ProductionInvoicesService', () => {
         withDeadline(21n, '2026-11-08'),
       ]);
 
-      await service.updateItemsDeadlines('50', {
+      await updateItemsDeadlinesAs('50', {
         deadline: '2026-11-20T00:00:00.000Z',
         items: [
           { itemId: '20', materialDeadline: '2026-11-06T00:00:00.000Z' },
@@ -359,6 +388,110 @@ describe('ProductionInvoicesService', () => {
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(prisma.productionInvoiceItem.update).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // Phần A – Đợt 9 (YC2): dòng đã Sếp duyệt không ghi thẳng mà gửi yêu cầu qua DeadlineChangesService
+  describe('sửa mốc dòng đã duyệt (Đợt 9)', () => {
+    const approvedItem = (id: bigint) =>
+      piItem({ id, productionInvoiceId: 7n, prodApprovalStatus: 'APPROVED' });
+
+    beforeEach(() => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockImplementation(
+        ({ where }: { where: { id: bigint } }) =>
+          Promise.resolve(
+            where.id === 21n
+              ? approvedItem(21n)
+              : piItem({ id: where.id, productionInvoiceId: 7n }),
+          ),
+      );
+    });
+
+    it('updateItem dòng đã duyệt: gọi saveEntries (strict, MANUAL, bỏ hạn giao), KHÔNG ghi thẳng', async () => {
+      await updateItemAs('7', '21', {
+        materialDeadline: '2026-11-10T00:00:00.000Z',
+        deliveryDeadline: '2026-12-01T00:00:00.000Z',
+        stages: [{ stageType: ProdItemStageType.FRAME_HAN, deadline: '2026-11-14' }],
+      });
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+      expect(deadlineChanges.saveEntries).toHaveBeenCalledWith(
+        ACTOR,
+        [
+          {
+            itemId: '21',
+            newValues: { materialDeadline: '2026-11-10', 'stage.FRAME_HAN': '2026-11-14' },
+          },
+        ],
+        'MANUAL',
+        { strict: true },
+      );
+    });
+
+    it('PI đã huỷ → 400, không ghi / gửi gì', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ status: 'CANCELLED' }));
+      await expect(updateItemAs('7', '20', { materialDeadline: '2026-11-10' })).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(
+        updateItemsDeadlinesAs('7', { items: [{ itemId: '20', materialDeadline: '2026-11-10' }] }),
+      ).rejects.toThrow(/huỷ/);
+      expect(deadlineChanges.saveEntries).not.toHaveBeenCalled();
+    });
+
+    it('updateItemsDeadlines hỗn hợp: dòng chưa duyệt ghi thẳng (cả hạn giao), dòng đã duyệt → yêu cầu; hạn PI không ghi khi PI có dòng đã duyệt', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({ items: [piItem({ id: 20n }), approvedItem(21n)] }),
+      );
+      deadlineChanges.previewEntries.mockResolvedValue([{ itemId: '21', errors: [] }]);
+      deadlineChanges.saveEntries.mockResolvedValue({
+        applied: [],
+        batch: { id: '50' },
+        skipped: [],
+      });
+      const result = await updateItemsDeadlinesAs('7', {
+        deadline: '2026-12-20T00:00:00.000Z',
+        items: [
+          { itemId: '20', materialDeadline: '2026-11-10', deliveryDeadline: '2026-12-01' },
+          { itemId: '21', materialDeadline: '2026-11-11' },
+        ],
+      });
+      expect(prisma.productionInvoice.update).not.toHaveBeenCalled();
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledTimes(1);
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledWith({
+        where: { id: 20n },
+        data: expect.objectContaining({
+          materialDeadline: new Date('2026-11-10'),
+          deliveryDeadline: new Date('2026-12-01'),
+        }) as unknown,
+      });
+      expect(deadlineChanges.saveEntries).toHaveBeenCalledWith(
+        ACTOR,
+        [{ itemId: '21', newValues: { materialDeadline: '2026-11-11' } }],
+        'MANUAL',
+        { strict: true },
+      );
+      expect(result.deadlineSave?.batch).toEqual({ id: '50' });
+      expect(result.deadlineSave?.applied.map((c) => c.itemId)).toEqual(['20']);
+    });
+
+    it('dòng đã duyệt có lỗi → 400 TRƯỚC khi ghi dòng chưa duyệt', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({ items: [piItem({ id: 20n }), approvedItem(21n)] }),
+      );
+      deadlineChanges.previewEntries.mockResolvedValue([
+        { itemId: '21', lenhCode: 'MY-21', skuCode: 'SKU', errors: ['Lệnh đã Kết thúc'] },
+      ]);
+      await expect(
+        updateItemsDeadlinesAs('7', {
+          items: [
+            { itemId: '20', materialDeadline: '2026-11-10' },
+            { itemId: '21', materialDeadline: '2026-11-11' },
+          ],
+        }),
+      ).rejects.toThrow(/MY-21 · SKU: Lệnh đã Kết thúc/);
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+      expect(deadlineChanges.saveEntries).not.toHaveBeenCalled();
     });
   });
 
@@ -1874,7 +2007,7 @@ describe('ProductionInvoicesService', () => {
           }),
         ); // findItemOrThrow đọc lại sau khi ghi
 
-      const result = await service.updateItem('7', '20', {
+      const result = await updateItemAs('7', '20', {
         materialDeadline: '2026-08-01',
         deliveryDeadline: '2026-08-20',
         stages: [
@@ -1909,7 +2042,7 @@ describe('ProductionInvoicesService', () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
 
-      await service.updateItem('7', '20', {
+      await updateItemAs('7', '20', {
         stages: [{ stageType: ProdItemStageType.PACKAGING, deadline: '2026-08-17' }],
       });
 
@@ -1939,7 +2072,7 @@ describe('ProductionInvoicesService', () => {
         }),
       );
 
-      await service.updateItem('7', '20', {
+      await updateItemAs('7', '20', {
         deliveryDeadline: '2026-08-20',
         stages: [
           { stageType: ProdItemStageType.FRAME_HAN, deadline: '2026-08-10' },
@@ -1967,7 +2100,7 @@ describe('ProductionInvoicesService', () => {
         }),
       );
 
-      const result = await service.updateItem('7', '20', {
+      const result = await updateItemAs('7', '20', {
         materialDeadline: '2026-09-23',
         finishedMaterialDeadline: '2026-10-01',
       });
@@ -1995,7 +2128,7 @@ describe('ProductionInvoicesService', () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
 
-      await service.updateItem('7', '20', { finishedMaterialDeadline: '2026-10-01' });
+      await updateItemAs('7', '20', { finishedMaterialDeadline: '2026-10-01' });
 
       const call = prisma.productionInvoiceItem.update.mock.calls[0] as [
         { data: Record<string, unknown> },
@@ -2020,7 +2153,7 @@ describe('ProductionInvoicesService', () => {
         }),
       );
 
-      await service.updateItem('7', '20', {
+      await updateItemAs('7', '20', {
         stages: [
           { stageType: ProdItemStageType.PHOI_START, deadline: '2026-11-09' },
           { stageType: ProdItemStageType.WEAVING, deadline: '2026-11-21' },
@@ -2049,7 +2182,7 @@ describe('ProductionInvoicesService', () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(same);
 
-      await service.updateItem('7', '20', {
+      await updateItemAs('7', '20', {
         stages: [{ stageType: ProdItemStageType.FRAME_HAN, deadline: '2026-08-10' }],
       });
 
@@ -2069,7 +2202,7 @@ describe('ProductionInvoicesService', () => {
     });
 
     it('lưu được 3 mốc con Phôi/Hàn/Sơn CHỒNG LẤN nhau, không cần Khung cơ khí (FRAME) đặt trước', async () => {
-      await service.updateItem('7', '20', {
+      await updateItemAs('7', '20', {
         stages: [
           { stageType: ProdItemStageType.FRAME_PHOI, deadline: '2026-06-20' },
           { stageType: ProdItemStageType.FRAME_HAN, deadline: '2026-06-10' },

@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose, Type } from 'class-transformer';
 import { ProductionInvoiceStatus, SolverMachine } from '../../../generated/prisma/client';
 import { ProductionInvoiceItemResponseDto } from './production-invoice-item-response.dto';
+import type { DeadlineSaveResult } from '../deadline-changes/deadline-changes.types';
 
 @Exclude()
 export class ProductionInvoiceResponseDto {
@@ -80,6 +81,11 @@ export class ProductionInvoiceResponseDto {
    * nơi khác để undefined.
    */
   @Expose() @ApiPropertyOptional() hasMaterialIssue?: boolean;
+  /**
+   * Phần A – Đợt 9 (YC2): kết quả lần "Sửa thời hạn" vừa lưu - dòng ghi thẳng, lô chờ Sếp duyệt lại (dòng đã duyệt), dòng bị bỏ.
+   * Chỉ route PATCH :id/items-deadlines trả; nơi khác để undefined.
+   */
+  @Expose() @ApiPropertyOptional() deadlineSave?: DeadlineSaveResult;
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;
   @Expose()

@@ -72,6 +72,11 @@ export class WorkQueueService {
         'bossProductionApproval',
         this.prisma.productionInvoiceItem.count({ where: { prodApprovalStatus: 'WAITING_BOSS' } }),
       );
+      // Phần A – Đợt 9 (YC2): lô đổi mốc lệnh đã duyệt đang chờ Sếp duyệt lại (đếm thẳng bằng prisma, không import module PI - tránh vòng).
+      set(
+        'bossDeadlineChange',
+        this.prisma.deadlineChangeBatch.count({ where: { status: 'PENDING' } }),
+      );
     }
     if (has(BUSINESS_ROLES.PRODUCTION_PLANNER)) {
       set('khsxSkuReview', this.countKhsxSkuReview());
