@@ -11,6 +11,7 @@ describe('MilestoneBoardService', () => {
     productionInvoiceItem: { findMany: jest.Mock };
     productionInvoice: { findMany: jest.Mock };
     purchaseProposalItem: { findMany: jest.Mock };
+    deadlineChangeRequest: { findMany: jest.Mock }; // Phần A – Đợt 9
   };
   let steelIssues: { getPhoiProgressBatch: jest.Mock };
   let batches: { getBatchPlanBatch: jest.Mock };
@@ -70,6 +71,7 @@ describe('MilestoneBoardService', () => {
       productionInvoice: {
         findMany: jest.fn().mockResolvedValue([{ id: 7n, code: 'PI-2026-001' }]),
       },
+      deadlineChangeRequest: { findMany: jest.fn().mockResolvedValue([]) },
       purchaseProposalItem: {
         findMany: jest
           .fn()
@@ -396,6 +398,24 @@ describe('MilestoneBoardService', () => {
       prisma.productionInvoice.findMany.mockRejectedValue(new Error('db'));
       const { rows } = await service.getBoard(NOW);
       expect(rows[0].displayCode).toBe('PI-2026-001');
+    });
+  });
+
+  // Phần A – Đợt 9 (YC2)
+  describe('pendingDeadlineChange', () => {
+    it('dòng có yêu cầu đổi mốc chờ Sếp → true (1 truy vấn cho cả bảng), dòng khác → false', async () => {
+      prisma.deadlineChangeRequest.findMany.mockResolvedValue([{ productionInvoiceItemId: 2n }]);
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([item(1n), item(2n)]);
+      const { rows } = await service.getBoard(NOW);
+      expect(rows.find((r) => r.itemId === '1')?.pendingDeadlineChange).toBe(false);
+      expect(rows.find((r) => r.itemId === '2')?.pendingDeadlineChange).toBe(true);
+      expect(prisma.deadlineChangeRequest.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('đọc yêu cầu chờ lỗi thì bảng vẫn ra, coi như không có', async () => {
+      prisma.deadlineChangeRequest.findMany.mockRejectedValue(new Error('db'));
+      const { rows } = await service.getBoard(NOW);
+      expect(rows[0].pendingDeadlineChange).toBe(false);
     });
   });
 });

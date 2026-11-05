@@ -124,18 +124,31 @@ export class ProductionInvoicesController {
   /** "Sửa thời hạn" cả PI trong 1 giao dịch - lệnh gộp kiểm luật mốc cần sắt ≤ N ngày (xem UpdateItemsDeadlinesDto). */
   @Patch(':id/items-deadlines')
   @RequirePermissions(UPDATE)
-  updateItemsDeadlines(@Param('id') id: string, @Body() dto: UpdateItemsDeadlinesDto) {
-    return this.productionInvoicesService.updateItemsDeadlines(id, dto);
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER, DEFAULT_ROLES.ADMIN) // Phần A – Đợt 9 (YC2): chỉ KHSX (+ Admin) sửa mốc
+  updateItemsDeadlines(
+    @Param('id') id: string,
+    @Body() dto: UpdateItemsDeadlinesDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.productionInvoicesService.updateItemsDeadlines(id, dto, {
+      id: user.id,
+      roles: user.roles,
+    });
   }
 
   @Patch(':id/items/:itemId')
   @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER, DEFAULT_ROLES.ADMIN) // Phần A – Đợt 9 (YC2)
   updateItem(
     @Param('id') id: string,
     @Param('itemId') itemId: string,
     @Body() dto: UpdateProductionInvoiceItemDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.productionInvoicesService.updateItem(id, itemId, dto);
+    return this.productionInvoicesService.updateItem(id, itemId, dto, {
+      id: user.id,
+      roles: user.roles,
+    });
   }
 
   /**

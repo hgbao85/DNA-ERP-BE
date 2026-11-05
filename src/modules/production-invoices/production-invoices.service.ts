@@ -30,6 +30,7 @@ import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { checkMergeRules, skuLabel } from '../../common/utils/merge-rules.util';
 import { vnDayKey } from '../../common/utils/floor-stats.util';
+import { milestoneOrderWarnings } from '../../common/utils/milestone-order.util'; // Phần A – Đợt 9
 import {
   DEFAULT_TIMELINE_PARAMS,
   frameDaysOf,
@@ -38,7 +39,6 @@ import {
   TimelineParams,
 } from '../../common/utils/timeline-suggest.util';
 import { paginate } from '../../common/utils/paginate.util';
-import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { auditEvent } from '../../common/utils/audit-event.util';
 import {
   isValidLsxCode,
@@ -82,6 +82,18 @@ import { TransferCheckPieceResponseDto } from './dto/transfer-check-piece-respon
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
 import { UpdateTransferCheckDefectPhotoDto } from './dto/update-transfer-check-defect-photo.dto';
 import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
+// Phần A – Đợt 9 (YC2)
+import { DeadlineChangesService } from './deadline-changes/deadline-changes.service';
+import type { DeadlineActor } from './deadline-changes/deadline-changes.port';
+import type {
+  DeadlineChangeBatchDto,
+  DeadlineEntryCheck,
+  DeadlineEntryInput,
+  DeadlineFieldKey,
+  DeadlineValues,
+} from './deadline-changes/deadline-changes.types';
+import { diffValues, pendingRefOf, valuesOfItem } from './deadline-changes/deadline-values.util';
+import { ItemDeadlineWriter } from './item-deadline-writer.service';
 
 type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
   include: {
@@ -130,6 +142,8 @@ const PROPOSAL_STATUS_INCLUDE = {
       workshop: true,
       stages: true,
       salesOrder: { include: { customer: true } },
+      // Phần A – Đợt 9 (YC2): yêu cầu đổi mốc đang chờ (tối đa 1/dòng) - nạp cùng truy vấn, không N+1.
+      deadlineChangeRequests: { where: { status: 'PENDING' as const }, take: 1 },
       productionOrder: {
         include: {
           cuttingProposals: { orderBy: { requestedAt: 'desc' as const }, take: 1 },
@@ -165,6 +179,9 @@ export class ProductionInvoicesService {
     private readonly cloudinaryService: CloudinaryService,
     private readonly notifications: NotificationsService,
     private readonly realtime: RealtimeService,
+    // Phần A – Đợt 9 (YC2)
+    private readonly deadlineWriter: ItemDeadlineWriter,
+    private readonly deadlineChanges: DeadlineChangesService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -771,231 +788,150 @@ export class ProductionInvoicesService {
    * deliveryDeadline ghi thẳng lên item, còn `stages` (Khung cơ khí/Đan/Đóng gói) upsert theo
    * unique (productionInvoiceItemId, stageType) vì đây là mốc kế hoạch do KHSX đặt, không phải
    * tiến độ thực thi Phôi/Hàn/Sơn thật (domain đó chưa tồn tại - xem ProdItemStageType).
+   *
+   * Phần A – Đợt 9 (YC2): dòng ĐÃ Sếp duyệt không ghi thẳng - đi qua DeadlineChangesService thành yêu cầu chờ Sếp duyệt lại
+   * (bỏ `deliveryDeadline`); PI huỷ → 400. Dòng chưa duyệt giữ đường ghi cũ.
    */
   async updateItem(
     piId: string,
     itemId: string,
     dto: UpdateProductionInvoiceItemDto,
+    actor: DeadlineActor,
   ): Promise<ProductionInvoiceItemResponseDto> {
     const pi = await this.findOneOrThrow(piId);
+    this.assertPiAllowsDeadlineEdit(pi);
     const item = await this.findItemOrThrow(pi.id, itemId);
 
+    if (item.prodApprovalStatus === ProdApprovalStatus.APPROVED) {
+      await this.deadlineChanges.saveEntries(
+        actor,
+        [{ itemId, newValues: this.deadlineValuesOfDto(dto) }],
+        'MANUAL',
+        { strict: true },
+      );
+      const updated = await this.findItemOrThrow(pi.id, itemId);
+      const out = this.toItemResponseDto(updated);
+      const pending = await this.deadlineChanges.pendingByItem([updated.id]);
+      out.pendingDeadlineChange = pending.get(updated.id.toString()) ?? null;
+      return out;
+    }
+
     await this.prisma.$transaction(async (tx) => {
-      await this.applyItemDeadlines(tx, item.id, dto);
-      if (pi.isMerged) await this.assertMergedPiDeadlineRule(tx, pi.id);
+      await this.deadlineWriter.applyItemDeadlines(tx, item.id, dto);
+      if (pi.isMerged) await this.deadlineWriter.assertMergedPiDeadlineRule(tx, pi.id);
     });
 
     const updated = await this.findItemOrThrow(pi.id, itemId);
-    await this.auditAndNotifyDeadlineChange(pi.code, item, updated);
+    await this.deadlineWriter.auditAndNotifyDeadlineChange(pi.code, item, updated);
     return this.toItemResponseDto(updated);
   }
 
   /**
    * "Sửa thời hạn" cả PI trong MỘT giao dịch (2026-10-24) - xem UpdateItemsDeadlinesDto. Lệnh gộp: lưu hết rồi kiểm luật gộp (mốc cần
    * sắt các SKU cách nhau ≤ solverMergeWindowDays); vi phạm -> 400 kèm câu báo, KHÔNG lưu gì (rollback).
+   *
+   * Phần A – Đợt 9 (YC2): tách dòng theo duyệt. Dòng chưa duyệt → đường ghi cũ (gồm `deliveryDeadline`); dòng đã duyệt → yêu cầu chờ Sếp
+   * (bỏ `deliveryDeadline`, strict: lỗi dòng nào thì 400 cả lần). Hạn của PI (`dto.deadline`) chỉ ghi khi PI không có dòng đã duyệt.
+   * Dòng đã duyệt được kiểm TRƯỚC khi ghi bất cứ gì để lần lưu hỏng thì không lưu dở dòng chưa duyệt.
    */
   async updateItemsDeadlines(
     piId: string,
     dto: UpdateItemsDeadlinesDto,
+    actor: DeadlineActor,
   ): Promise<ProductionInvoiceResponseDto> {
     const pi = await this.findOneOrThrow(piId);
+    this.assertPiAllowsDeadlineEdit(pi);
     const befores = await Promise.all(dto.items.map((e) => this.findItemOrThrow(pi.id, e.itemId)));
 
+    const plain: { entry: (typeof dto.items)[number]; before: PIItemWithRefs }[] = [];
+    const approvedEntries: DeadlineEntryInput[] = [];
+    for (const [idx, entry] of dto.items.entries()) {
+      if (befores[idx].prodApprovalStatus === ProdApprovalStatus.APPROVED) {
+        approvedEntries.push({ itemId: entry.itemId, newValues: this.deadlineValuesOfDto(entry) });
+      } else {
+        plain.push({ entry, before: befores[idx] });
+      }
+    }
+    if (approvedEntries.length > 0) {
+      const checks = await this.deadlineChanges.previewEntries(approvedEntries);
+      const errors = checks.flatMap((c) =>
+        c.errors.map((e) => `${c.lenhCode} · ${c.skuCode}: ${e}`),
+      );
+      if (errors.length > 0) throw new BadRequestException(errors.join('\n'));
+    }
+    const hasApprovedItem = pi.items.some(
+      (i) => i.prodApprovalStatus === ProdApprovalStatus.APPROVED,
+    );
+
     await this.prisma.$transaction(async (tx) => {
-      if (dto.deadline) {
+      if (dto.deadline && !hasApprovedItem) {
         await tx.productionInvoice.update({
           where: { id: pi.id },
           data: { deadline: new Date(dto.deadline) },
         });
       }
-      for (const [idx, entry] of dto.items.entries()) {
-        await this.applyItemDeadlines(tx, befores[idx].id, entry);
+      for (const { entry, before } of plain) {
+        await this.deadlineWriter.applyItemDeadlines(tx, before.id, entry);
       }
-      if (pi.isMerged) await this.assertMergedPiDeadlineRule(tx, pi.id);
+      if (pi.isMerged && plain.length > 0) {
+        await this.deadlineWriter.assertMergedPiDeadlineRule(tx, pi.id);
+      }
     });
 
-    for (const [idx, entry] of dto.items.entries()) {
+    const applied: DeadlineEntryCheck[] = [];
+    for (const { entry, before } of plain) {
       const updated = await this.findItemOrThrow(pi.id, entry.itemId);
-      await this.auditAndNotifyDeadlineChange(pi.code, befores[idx], updated);
-    }
-    return this.findOne(piId);
-  }
-
-  /** Ghi mốc kế hoạch của 1 SKU (dùng chung cho sửa 1 SKU và sửa cả PI). */
-  private async applyItemDeadlines(
-    tx: Pick<PrismaServiceType, 'productionInvoiceItem' | 'productionInvoiceItemStage'>,
-    itemId: bigint,
-    dto: {
-      materialDeadline?: string;
-      finishedMaterialDeadline?: string;
-      deliveryDeadline?: string;
-      stages?: { stageType: ProdItemStageType; deadline: string }[];
-    },
-  ): Promise<void> {
-    if (dto.materialDeadline || dto.finishedMaterialDeadline || dto.deliveryDeadline) {
-      await tx.productionInvoiceItem.update({
-        where: { id: itemId },
-        data: {
-          materialDeadline: dto.materialDeadline ? new Date(dto.materialDeadline) : undefined,
-          finishedMaterialDeadline: dto.finishedMaterialDeadline
-            ? new Date(dto.finishedMaterialDeadline)
-            : undefined,
-          deliveryDeadline: dto.deliveryDeadline ? new Date(dto.deliveryDeadline) : undefined,
-        },
+      await this.deadlineWriter.auditAndNotifyDeadlineChange(pi.code, before, updated);
+      const changes = diffValues(valuesOfItem(before), valuesOfItem(updated));
+      applied.push({
+        itemId: updated.id.toString(),
+        lenhCode: updated.lsxCode ?? lenhDisplayCode(pi, pi.items),
+        skuCode: updated.mfgProduct.factoryCode,
+        kind: changes.length > 0 ? 'APPLY' : 'NO_CHANGE',
+        changes,
+        errors: [],
+        // Cảnh báo thứ tự mốc cho cả dòng sửa thẳng (như dòng chờ duyệt) - chỉ khi có đổi; không chặn.
+        warnings:
+          changes.length > 0
+            ? milestoneOrderWarnings({
+                ...valuesOfItem(updated),
+                deliveryDeadline: updated.deliveryDeadline
+                  ? vnDayKey(updated.deliveryDeadline)
+                  : null,
+              })
+            : [],
       });
     }
-    for (const stage of dto.stages ?? []) {
-      await tx.productionInvoiceItemStage.upsert({
-        where: {
-          productionInvoiceItemId_stageType: {
-            productionInvoiceItemId: itemId,
-            stageType: stage.stageType,
-          },
-        },
-        create: {
-          productionInvoiceItemId: itemId,
-          stageType: stage.stageType,
-          deadline: new Date(stage.deadline),
-        },
-        update: { deadline: new Date(stage.deadline) },
+
+    let batch: DeadlineChangeBatchDto | null = null;
+    if (approvedEntries.length > 0) {
+      const saved = await this.deadlineChanges.saveEntries(actor, approvedEntries, 'MANUAL', {
+        strict: true,
       });
+      batch = saved.batch;
     }
+    const out = await this.findOne(piId);
+    out.deadlineSave = { applied, batch, skipped: [] };
+    return out;
   }
 
-  /**
-   * LUẬT GỘP khi sửa hạn lệnh gộp (2026-10-24): không có chỗ này thì gộp xong kéo hạn 1 SKU ra xa là lách được luật "chỉ gom các lệnh
-   * cách nhau ≤ 3 ngày". Đọc lại trong CÙNG giao dịch (thấy giá trị vừa ghi) và ném lỗi để rollback.
-   */
-  private async assertMergedPiDeadlineRule(
-    tx: Pick<PrismaServiceType, 'productionInvoiceItem' | 'systemConfig'>,
-    piId: bigint,
-  ): Promise<void> {
-    const items = await tx.productionInvoiceItem.findMany({
-      where: { productionInvoiceId: piId },
-      include: { stages: true, mfgProduct: true, salesOrder: true },
-    });
-    if (items.length < 2) return;
-    const cfg = await tx.systemConfig.findUniqueOrThrow({
-      where: { id: SYSTEM_CONFIG_ID },
-      select: { solverMergeWindowDays: true, solverMergeMaxSkus: true },
-    });
-    const rule = checkMergeRules(
-      items.map((i) => ({
-        materialDeadline: i.materialDeadline,
-        stages: i.stages,
-        label: skuLabel(i.mfgProduct.factoryCode, i.salesOrder?.orderCode),
-      })),
-      { windowDays: cfg.solverMergeWindowDays, maxSkus: cfg.solverMergeMaxSkus },
-      'invoice',
-    );
-    if (!rule.ok) throw new BadRequestException(rule.reason);
+  /** Đầu vào "Sửa thời hạn" → mốc dạng `DeadlineValues` ('YYYY-MM-DD' ngày VN). `deliveryDeadline` KHÔNG vào (dòng đã duyệt không đổi hạn giao). */
+  private deadlineValuesOfDto(dto: UpdateProductionInvoiceItemDto): DeadlineValues {
+    const out: DeadlineValues = {};
+    if (dto.materialDeadline) out.materialDeadline = vnDayKey(new Date(dto.materialDeadline));
+    if (dto.finishedMaterialDeadline) {
+      out.finishedMaterialDeadline = vnDayKey(new Date(dto.finishedMaterialDeadline));
+    }
+    for (const st of dto.stages ?? []) {
+      out[`stage.${st.stageType}` as DeadlineFieldKey] = vnDayKey(new Date(st.deadline));
+    }
+    return out;
   }
 
-  /** Audit + báo bộ phận liên quan khi KHSX đổi mốc kế hoạch (chỉ khi giá trị THỰC SỰ đổi, không phải lưu lại y nguyên).
-   *  Best-effort NGOÀI transaction: lỗi chỉ log, không làm hỏng thao tác sửa. */
-  private async auditAndNotifyDeadlineChange(
-    piCode: string,
-    before: PIItemWithRefs,
-    after: PIItemWithRefs,
-  ): Promise<void> {
-    const fmt = (d: Date | null | undefined) =>
-      d ? d.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '(chưa có)';
-    const changed = (a: Date | null | undefined, b: Date | null | undefined) =>
-      (a?.getTime() ?? null) !== (b?.getTime() ?? null);
-    const stageLabel: Record<string, string> = {
-      FRAME: 'Khung cơ khí',
-      // Phần A – Đợt 3 (YC10): đổi "Đan" -> "Nhập đan", "Kiểm tra chuyển kho" -> "Chuyền kiểm"; thêm 2 mốc ngày bắt đầu.
-      WEAVING: 'Nhập đan',
-      TRANSFER_CHECK: 'Chuyền kiểm',
-      PACKAGING: 'Đóng gói',
-      PHOI_START: 'Bắt đầu Phôi',
-      PACKAGING_START: 'Bắt đầu đóng gói',
-      FRAME_PHOI: 'Phôi',
-      FRAME_HAN: 'Hàn',
-      FRAME_SON: 'Sơn',
-    };
-    const stageRoles: Record<string, string[]> = {
-      FRAME: [BUSINESS_ROLES.PHOI_STAFF, BUSINESS_ROLES.HAN_STAFF, BUSINESS_ROLES.SON_STAFF],
-      PHOI_START: [BUSINESS_ROLES.PHOI_STAFF], // Phần A – Đợt 3
-      FRAME_PHOI: [BUSINESS_ROLES.PHOI_STAFF],
-      FRAME_HAN: [BUSINESS_ROLES.HAN_STAFF],
-      FRAME_SON: [BUSINESS_ROLES.SON_STAFF],
-    };
-    const stageWarehouses: Record<string, string[]> = {
-      WEAVING: ['phoi-son-han', 'vat-tu-tp'],
-      TRANSFER_CHECK: ['vat-tu-tp', 'thanh-pham'],
-      PACKAGING: ['vat-tu-tp', 'thanh-pham'],
-      PACKAGING_START: ['vat-tu-tp', 'thanh-pham'], // Phần A – Đợt 3
-    };
-
-    const changes: string[] = [];
-    const oldValue: Record<string, string | null> = {};
-    const newValue: Record<string, string | null> = {};
-    const roles = new Set<string>();
-    const warehouseIds = new Set<string>();
-    const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
-
-    if (changed(before.materialDeadline, after.materialDeadline)) {
-      changes.push(
-        `Mua VT khung & đan: ${fmt(before.materialDeadline)} → ${fmt(after.materialDeadline)}`,
-      );
-      oldValue.materialDeadline = iso(before.materialDeadline);
-      newValue.materialDeadline = iso(after.materialDeadline);
-      roles.add(BUSINESS_ROLES.PURCHASER);
-    }
-    // "Mua VT còn lại" (2026-10-27): vật tư thành phẩm về kho VTTP rồi xuất đóng gói - báo Mua hàng + thủ kho VTTP/thành phẩm.
-    if (changed(before.finishedMaterialDeadline, after.finishedMaterialDeadline)) {
-      changes.push(
-        `Mua VT còn lại: ${fmt(before.finishedMaterialDeadline)} → ${fmt(after.finishedMaterialDeadline)}`,
-      );
-      oldValue.finishedMaterialDeadline = iso(before.finishedMaterialDeadline);
-      newValue.finishedMaterialDeadline = iso(after.finishedMaterialDeadline);
-      roles.add(BUSINESS_ROLES.PURCHASER);
-      ['vat-tu-tp', 'thanh-pham'].forEach((w) => warehouseIds.add(w));
-    }
-    if (changed(before.deliveryDeadline, after.deliveryDeadline)) {
-      changes.push(`Giao hàng: ${fmt(before.deliveryDeadline)} → ${fmt(after.deliveryDeadline)}`);
-      oldValue.deliveryDeadline = iso(before.deliveryDeadline);
-      newValue.deliveryDeadline = iso(after.deliveryDeadline);
-      roles.add(BUSINESS_ROLES.SALES_STAFF);
-    }
-    for (const stage of after.stages) {
-      const prev = before.stages.find((st) => st.stageType === stage.stageType);
-      if (prev && !changed(prev.deadline, stage.deadline)) continue;
-      const label = stageLabel[stage.stageType] ?? stage.stageType;
-      changes.push(`${label}: ${fmt(prev?.deadline)} → ${fmt(stage.deadline)}`);
-      oldValue[`stage.${stage.stageType}`] = iso(prev?.deadline);
-      newValue[`stage.${stage.stageType}`] = iso(stage.deadline);
-      (stageRoles[stage.stageType] ?? []).forEach((r) => roles.add(r));
-      (stageWarehouses[stage.stageType] ?? []).forEach((w) => warehouseIds.add(w));
-    }
-    if (changes.length === 0) return;
-    // Phần A – Đợt 3 (V4-20): mọi lần đổi mốc đều báo thêm QLSX (để chốt lại kế hoạch năng lực).
-    roles.add(BUSINESS_ROLES.PRODUCTION_MANAGER);
-
-    await auditEvent(this.prisma, this.cls, this.logger, {
-      action: AuditAction.UPDATE,
-      tableName: 'ProductionInvoiceItem',
-      recordId: after.id,
-      oldValue,
-      newValue,
-    });
-    try {
-      await this.notifications.emit('PI_ITEM_DEADLINE_CHANGED', {
-        entityId: (after.productionInvoiceId ?? before.productionInvoiceId ?? 0n).toString(),
-        actorId: this.cls.get('userId'),
-        params: {
-          piCode,
-          factoryCode: after.mfgProduct.factoryCode,
-          changes,
-          roles: [...roles],
-          warehouseIds: [...warehouseIds],
-        },
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed to create PI deadline notification (item ${after.id}): ${(error as Error).message}`,
-      );
+  /** Đợt 9: PI huỷ không sửa mốc được (lệnh Kết thúc do DeadlineChangesService chặn riêng cho dòng đã duyệt). */
+  private assertPiAllowsDeadlineEdit(pi: { status: ProductionInvoiceStatus }): void {
+    if (pi.status === ProductionInvoiceStatus.CANCELLED) {
+      throw new BadRequestException('Lệnh đã huỷ - không sửa được thời hạn');
     }
   }
 
@@ -1494,7 +1430,7 @@ export class ProductionInvoicesService {
             });
           }
         }
-        if (pi.isMerged) await this.assertMergedPiDeadlineRule(tx, pi.id);
+        if (pi.isMerged) await this.deadlineWriter.assertMergedPiDeadlineRule(tx, pi.id);
       });
     } catch (error) {
       if (error instanceof BadRequestException) {
@@ -3225,6 +3161,15 @@ export class ProductionInvoicesService {
         stageType: s.stageType,
         deadline: s.deadline,
       })),
+      // Phần A – Đợt 9 (YC2): chỉ có khi truy vấn nạp `deadlineChangeRequests` (findAll / findOne); nơi khác để undefined.
+      pendingDeadlineChange: this.pendingRefOfItem(item),
     });
+  }
+
+  private pendingRefOfItem(item: PIItemWithRefs) {
+    const reqs = (item as { deadlineChangeRequests?: Parameters<typeof pendingRefOf>[0][] })
+      .deadlineChangeRequests;
+    if (!reqs) return undefined;
+    return reqs[0] ? pendingRefOf(reqs[0]) : null;
   }
 }

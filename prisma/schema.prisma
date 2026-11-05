@@ -161,6 +161,9 @@ model User {
   warehouseTransfersRejected        WarehouseTransfer[]         @relation("WarehouseTransferRejectedBy")
   // Phần A – Đợt 10a (YC5)
   bookingsCreated                   Booking[]                   @relation("BookingCreatedBy")
+  // Phần A – Đợt 9 (YC2)
+  deadlineChangeBatchesRequested    DeadlineChangeBatch[]       @relation("DeadlineChangeRequestedBy")
+  deadlineChangeBatchesDecided      DeadlineChangeBatch[]       @relation("DeadlineChangeDecidedBy")
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -1759,6 +1762,8 @@ model ProductionInvoiceItem {
   cuttingProposalItems CuttingProposalItem[]
   // Phần A – Đợt 10a (YC5)
   bookingLines         BookingLine[]
+  // Phần A – Đợt 9 (YC2)
+  deadlineChangeRequests DeadlineChangeRequest[]
 
   @@index([productionInvoiceId])
   @@index([mfgProductId])
@@ -4091,4 +4096,70 @@ model DataHealthFinding {
   @@unique([checkCode, entityKey])
   @@index([resolvedAt])
   @@map("data_health_findings")
+}
+
+// ─── Phần A – Đợt 9 (YC2): sửa kế hoạch (mốc) ở mọi giai đoạn + Sếp duyệt lại ───────────────────────────────────────────
+// Dòng SKU đã Sếp duyệt (APPROVED) không ghi mốc thẳng: KHSX gửi 1 LÔ yêu cầu đổi mốc, Sếp duyệt / từ chối từng yêu cầu; mốc cũ vẫn
+// chạy tới khi duyệt. "Mỗi dòng SKU ≤ 1 yêu cầu PENDING" do unique index MỘT PHẦN (WHERE status = 'PENDING') trong migration
+// 20261105130000 (Prisma không khai được index có WHERE).
+enum DeadlineChangeSource {
+  MANUAL
+  EXCEL
+}
+
+enum DeadlineChangeBatchStatus {
+  PENDING
+  DECIDED
+  CANCELLED
+}
+
+enum DeadlineChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// 1 lần bấm Lưu ("Sửa thời hạn") hoặc 1 lần Xác nhận Excel của KHSX = 1 lô, chứa mọi yêu cầu của các dòng SKU đã duyệt.
+model DeadlineChangeBatch {
+  id             BigInt                    @id @default(autoincrement())
+  source         DeadlineChangeSource
+  status         DeadlineChangeBatchStatus @default(PENDING)
+  requestedById  String
+  requestedAt    DateTime                  @default(now())
+  decidedById    String?
+  decidedAt      DateTime?
+  /// Lý do Sếp từ chối (khi có yêu cầu bị từ chối).
+  decisionNote   String?
+  /// Ghi chú KHSX lúc gửi (vd tên file Excel).
+  note           String?
+  /// Khoá chống gửi 2 lần (Excel Xác nhận gửi kèm Idempotency-Key).
+  idempotencyKey String?                   @unique
+
+  requestedBy User                      @relation("DeadlineChangeRequestedBy", fields: [requestedById], references: [id])
+  decidedBy   User?                     @relation("DeadlineChangeDecidedBy", fields: [decidedById], references: [id])
+  requests    DeadlineChangeRequest[]
+
+  @@index([status])
+  @@map("deadline_change_batches")
+}
+
+/// Yêu cầu đổi mốc của 1 dòng SKU trong lô. `oldValues` / `newValues`: chỉ các khoá ĐỔI ('materialDeadline', 'finishedMaterialDeadline',
+/// 'stage.<TYPE>') → 'YYYY-MM-DD' (ngày VN).
+model DeadlineChangeRequest {
+  id                      BigInt                      @id @default(autoincrement())
+  batchId                 BigInt
+  productionInvoiceItemId BigInt
+  status                  DeadlineChangeRequestStatus @default(PENDING)
+  oldValues               Json
+  newValues               Json
+  createdAt               DateTime                    @default(now())
+  decidedAt               DateTime?
+
+  batch                 DeadlineChangeBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+
+  @@index([productionInvoiceItemId, status])
+  @@index([batchId])
+  @@map("deadline_change_requests")
 }

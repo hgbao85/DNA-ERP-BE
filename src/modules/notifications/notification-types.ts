@@ -208,7 +208,31 @@ export interface PiDeadlineChangedNotificationParams {
   changes: string[];
   roles: string[];
   warehouseIds: string[];
+  /** Phần A – Đợt 9: ghi chú đứng đầu nội dung, vd "Sếp đã duyệt". */
+  note?: string;
 }
+
+// ─── Phần A – Đợt 9 (YC2): sửa kế hoạch (mốc) ở mọi giai đoạn + Sếp duyệt lại ──────────────────────────────────────────
+/** KHSX gửi lô đổi mốc của lệnh đã duyệt chờ Sếp duyệt lại. `lenhCodes` = mã lệnh (số LSX) của các SKU trong lô. */
+export interface DeadlineChangePendingNotificationParams {
+  skuCount: number;
+  lenhCodes: string[];
+  requestedByName: string;
+  source: 'MANUAL' | 'EXCEL';
+}
+
+/** Sếp quyết xong 1 lô - báo người gửi (KHSX). */
+export interface DeadlineChangeDecidedNotificationParams {
+  total: number;
+  approved: number;
+  rejected: number;
+  /** Lý do từ chối (khi có yêu cầu bị từ chối). */
+  reason?: string;
+  requestedById: string;
+}
+
+const deadlineChangeCodes = (codes: string[]) =>
+  codes.slice(0, 3).join(', ') + (codes.length > 3 ? '…' : '');
 
 /** Phase 3b, nhóm 7.5-i (Sắt → Phôi → KCS). */
 export interface SteelIssueNotificationParams {
@@ -900,7 +924,8 @@ const notificationTypeDefinitions = {
     severity: 'INFO',
     entityType: 'PRODUCTION_INVOICE',
     title: (p: PiDeadlineChangedNotificationParams) => `${p.piCode}: đổi thời hạn ${p.factoryCode}`,
-    message: (p: PiDeadlineChangedNotificationParams) => p.changes.join('; '),
+    message: (p: PiDeadlineChangedNotificationParams) =>
+      (p.note ? `${p.note}: ` : '') + p.changes.join('; '),
     link: (p: PiDeadlineChangedNotificationParams) => ({
       module: 'production',
       page: 'phoi-lenh-sx',
@@ -1487,6 +1512,36 @@ const notificationTypeDefinitions = {
       warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
     }),
   } satisfies NotificationTypeDef<BookingShortNotificationParams>,
+  // ─── Phần A – Đợt 9 (YC2): đổi mốc lệnh đã duyệt ──────────────────────────────────────────────────────────────────────
+  /** Lô đổi mốc chờ Sếp duyệt lại. ACTION_REQUIRED tới Sếp, tự đóng khi lô hết yêu cầu chờ (Sếp quyết xong / KHSX huỷ hết). */
+  DEADLINE_CHANGE_PENDING: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'DEADLINE_CHANGE_BATCH',
+    title: (p: DeadlineChangePendingNotificationParams) =>
+      `Đổi mốc chờ duyệt: ${p.skuCount} SKU (${deadlineChangeCodes(p.lenhCodes)})`,
+    message: (p: DeadlineChangePendingNotificationParams) =>
+      `${p.requestedByName} gửi đổi mốc ${p.skuCount} SKU của lệnh đã duyệt${p.source === 'EXCEL' ? ' (từ file Excel)' : ''}. Mốc cũ vẫn chạy tới khi Sếp duyệt.`,
+    link: () => ({ module: 'boss', page: 'cho-duyet', params: { filter: 'doi-moc' } }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.BOSS] }),
+  } satisfies NotificationTypeDef<DeadlineChangePendingNotificationParams>,
+
+  /** Sếp đã quyết lô đổi mốc - báo KHSX người gửi (đích danh). */
+  DEADLINE_CHANGE_DECIDED: {
+    category: 'RESULT',
+    severity: 'INFO',
+    entityType: 'DEADLINE_CHANGE_BATCH',
+    title: (p: DeadlineChangeDecidedNotificationParams) =>
+      p.approved > 0
+        ? `Sếp đã duyệt đổi mốc ${p.approved}/${p.total} SKU`
+        : `Sếp từ chối đổi mốc ${p.total} SKU`,
+    message: (p: DeadlineChangeDecidedNotificationParams) =>
+      p.rejected > 0
+        ? `Từ chối ${p.rejected} SKU (giữ mốc cũ). Lý do: ${p.reason ?? '(không ghi)'}`
+        : 'Mốc mới đã áp dụng.',
+    link: () => ({ module: 'production_plan', page: 'lenh-sx' }),
+    recipients: (p: DeadlineChangeDecidedNotificationParams) => ({ userIds: [p.requestedById] }),
+  } satisfies NotificationTypeDef<DeadlineChangeDecidedNotificationParams>,
 };
 
 /** Danh mục loại thông báo - 1 nguồn duy nhất cho text/link/mức độ/người nhận (mục 5.2 changelog

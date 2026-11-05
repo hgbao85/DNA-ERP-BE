@@ -80,4 +80,17 @@ describe('ProductionInvoicesController (Phần A – Đợt 2)', () => {
       expect(service.sendBatchToBoss).toHaveBeenCalledWith('7', 'tp', 'Kho', '3', 'u1', ['20']);
     });
   });
+
+  // Phần A – Đợt 9 (YC2): 2 route sửa mốc chỉ còn KHSX (+ Admin); thủ kho (có UPDATE) không gọi được nữa.
+  it('PATCH :id/items-deadlines và :id/items/:itemId - UPDATE + (KHSX hoặc ADMIN)', () => {
+    for (const handler of [proto.updateItemsDeadlines, proto.updateItem]) {
+      expect(meta(PERMISSIONS_KEY, handler)).toEqual([
+        { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.UPDATE },
+      ]);
+      expect(meta(ROLE_KEY, handler)).toEqual([
+        BUSINESS_ROLES.PRODUCTION_PLANNER,
+        DEFAULT_ROLES.ADMIN,
+      ]);
+    }
+  });
 });

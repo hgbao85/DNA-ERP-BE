@@ -74,6 +74,8 @@ export interface MilestoneRow {
   quantity: number;
   floorStage: ProductionOrderFloorStage;
   milestones: MilestoneCell[];
+  /** Phần A – Đợt 9 (YC2): dòng đang có yêu cầu đổi mốc chờ Sếp duyệt lại (mốc trên bảng vẫn là mốc cũ). Service luôn gán; để `?` vì daily-jobs.service.spec.ts dựng MilestoneRow tay (đổi thành bắt buộc cùng lúc sửa spec đó). */
+  pendingDeadlineChange?: boolean;
   /** Phần A – Đợt 3: ngày bắt đầu Phôi (M2) / bắt đầu Đóng gói (M4) đã lưu, 'YYYY-MM-DD' - null = chưa có. */
   phoiStart: string | null;
   packagingStart: string | null;
@@ -175,6 +177,7 @@ export class MilestoneBoardService {
       purchaseLines,
       approvedChoices,
       displayCodes,
+      pendingChangeItemIds,
     ] = await Promise.all([
       safe('phoi-progress', this.steelIssues.getPhoiProgressBatch(piIds)),
       safe(
@@ -210,6 +213,20 @@ export class MilestoneBoardService {
         this.logger.warn(`Bảng mốc: không đọc được số LSX - ${err.message}`);
         return new Map<string, string>();
       }),
+      // Phần A – Đợt 9 (YC2): dòng nào đang có yêu cầu đổi mốc chờ Sếp - 1 truy vấn cho cả bảng; lỗi thì coi như không có.
+      this.prisma.deadlineChangeRequest
+        .findMany({
+          where: {
+            status: 'PENDING',
+            productionInvoiceItemId: { in: items.map((i) => i.id) },
+          },
+          select: { productionInvoiceItemId: true },
+        })
+        .then((rows) => new Set(rows.map((r) => String(r.productionInvoiceItemId))))
+        .catch((err: Error) => {
+          this.logger.warn(`Bảng mốc: không đọc được yêu cầu đổi mốc chờ - ${err.message}`);
+          return new Set<string>();
+        }),
     ]);
     // getPhoiProgressBatch tự nuốt lỗi từng PI (bỏ PI đó khỏi kết quả) - thiếu khoá = nguồn lỗi, phải báo như FE ThongKePagePlan.
     if (
@@ -426,6 +443,7 @@ export class MilestoneBoardService {
         quantity: item.quantity,
         floorStage: item.productionOrder!.floorStage,
         milestones,
+        pendingDeadlineChange: pendingChangeItemIds.has(String(item.id)),
         phoiStart: stageDay(ProdItemStageType.PHOI_START),
         packagingStart: stageDay(ProdItemStageType.PACKAGING_START),
         worst: worstStatus(milestones.map((m) => m.status)),

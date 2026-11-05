@@ -8,6 +8,7 @@ import {
   ProductionOrderFloorStage,
 } from '../../../generated/prisma/client';
 import { MaterialChoiceRefDto } from '../../../common/utils/material-choice-ref.util';
+import type { PendingDeadlineChangeRef } from '../deadline-changes/deadline-changes.types';
 
 /** Phần A – Đợt 2: xưởng cơ khí gắn với dòng SKU. */
 class ItemWorkshopDto {
@@ -112,6 +113,14 @@ export class ProductionInvoiceItemResponseDto {
   @ApiPropertyOptional({ type: ItemWorkshopDto, nullable: true })
   @Type(() => ItemWorkshopDto)
   workshop!: ItemWorkshopDto | null;
+
+  /**
+   * Phần A – Đợt 9 (YC2): yêu cầu đổi mốc đang chờ Sếp duyệt lại của dòng (null = không có). Chỉ findAll/findOne nạp (và route sửa mốc
+   * 1 SKU), nơi khác để undefined.
+   */
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  pendingDeadlineChange?: PendingDeadlineChangeRef | null;
 
   constructor(partial: Partial<ProductionInvoiceItemResponseDto>) {
     Object.assign(this, partial);
