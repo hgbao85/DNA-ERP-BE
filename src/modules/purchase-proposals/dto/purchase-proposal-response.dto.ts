@@ -146,6 +146,9 @@ export class PurchaseProposalResponseDto {
   /// poNumber vì 2 bộ đếm độc lập nhau (ProductionOrder vs ProductionInvoice), dễ nhầm là cùng 1
   /// mã do cùng đứng cạnh nhau trên UI Mua hàng (xem LenhMuaNCCPage/TheoDoiMuaHangPage FE).
   @Expose() @ApiProperty() piCode!: string;
+  /// Mã lệnh hiển thị (2026-11-05): số LSX nhà máy (vd MY-313, lệnh gộp "MY-313 + GP-176"); lệnh
+  /// cũ chưa có LSX thì bằng piCode. FE hiện field này ở mọi màn Mua hàng / Nhập kho.
+  @Expose() @ApiProperty() lenhCode!: string;
   @Expose() @ApiProperty() mfgProductCode!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) mfgProductName!: string | null;
   /// Hạn Mua hàng nên ưu tiên - nhánh lệnh SX đơn: materialDeadline -> mốc Khung cơ khí -> hạn cả

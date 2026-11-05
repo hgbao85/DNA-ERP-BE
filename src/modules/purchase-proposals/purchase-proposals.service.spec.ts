@@ -48,6 +48,8 @@ describe('PurchaseProposalsService', () => {
     systemConfig: { findUnique: jest.Mock };
     auditLog: { create: jest.Mock };
     cuttingProposalLine: { findFirst: jest.Mock };
+    productionInvoice: { findMany: jest.Mock };
+    productionInvoiceItem: { findMany: jest.Mock };
     $queryRaw: jest.Mock;
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
@@ -204,6 +206,9 @@ describe('PurchaseProposalsService', () => {
       // materialId=30n) vốn đại diện cho ca sắt ở phần lớn test cũ; test nào cần mô phỏng "dòng
       // này KHÔNG phải sắt của phương án đó" (đề xuất gộp) tự override bằng mockResolvedValueOnce(null).
       cuttingProposalLine: { findFirst: jest.fn().mockResolvedValue({ id: 1n }) },
+      // Mã lệnh hiển thị (loadLenhDisplayCodes của người A) - mặc định chưa PI nào có số LSX.
+      productionInvoice: { findMany: jest.fn().mockResolvedValue([]) },
+      productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([]) },
       // receiveItem() khoá dòng item rồi đọc lại receivedQty MỚI NHẤT bên trong transaction (C3,
       // xem receiveItem() và ghi chú D.c3-receive-race-not-atomic) - mặc định "chưa nhận gì" (0),
       // test nào cần giá trị khác (đã nhận 1 phần/đủ) tự override bằng mockResolvedValueOnce.
@@ -333,6 +338,22 @@ describe('PurchaseProposalsService', () => {
       expect(result.salesOrderCode).toBeNull();
       expect(result.deadline).toBeNull();
       expect(result.mfgProductName).toBeNull();
+    });
+
+    it('2026-11-05: lenhCode = số LSX của lệnh (điểm ghép ①); lệnh chưa có LSX thì bằng piCode', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(proposal({ productionInvoiceId: 50n }));
+      prisma.productionInvoice.findMany.mockResolvedValueOnce([{ id: 50n, code: 'PI-2026-014' }]);
+      prisma.productionInvoiceItem.findMany.mockResolvedValueOnce([
+        { productionInvoiceId: 50n, lsxCode: 'MY-313' },
+      ]);
+
+      expect(await service.findOne('300')).toMatchObject({
+        piCode: 'PI-2026-014',
+        lenhCode: 'MY-313',
+      });
+
+      prisma.productionInvoice.findMany.mockResolvedValueOnce([{ id: 50n, code: 'PI-2026-014' }]);
+      expect((await service.findOne('300')).lenhCode).toBe('PI-2026-014');
     });
 
     it('throws NotFoundException when the proposal does not exist', async () => {
