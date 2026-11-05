@@ -23,6 +23,8 @@ import {
   ProductionDigestNotificationParams,
 } from '../notifications/notification-types';
 import { NotificationsService } from '../notifications/notifications.service';
+// Phần A – Đợt 10a
+import { BookingAlertsService } from '../bookings/booking-alerts.service';
 
 const CHECK_INTERVAL_MS = 10 * 60_000;
 /** Lần kiểm đầu sau khi máy chủ lên - chờ app ổn định, không chen vào lúc deploy/khởi động. */
@@ -78,6 +80,8 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
     private readonly dataHealth: DataHealthService,
     private readonly milestoneBoard: MilestoneBoardService,
     private readonly notifications: NotificationsService,
+    // Phần A – Đợt 10a
+    private readonly bookingAlerts: BookingAlertsService,
   ) {}
 
   onModuleInit(): void {
@@ -120,6 +124,8 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
 
   private async runSteps(now: Date): Promise<void> {
     await this.step('kiểm tra dữ liệu', () => this.runDataHealthIfDue(now));
+    // Phần A – Đợt 10a
+    await this.step('cảnh báo booking', () => this.bookingAlerts.syncShortAlerts(now));
     let board: MilestoneBoard | null = null;
     await this.step('bảng mốc', async () => {
       board = await this.milestoneBoard.getBoard(now);
