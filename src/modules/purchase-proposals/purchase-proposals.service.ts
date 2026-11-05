@@ -20,6 +20,7 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
+import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import {
   PurchaseDeadlineItem,
@@ -28,7 +29,7 @@ import {
 } from '../../common/utils/frame-deadline.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -44,7 +45,6 @@ import {
   PurchaseReceiptLogResponseDto,
 } from './dto/purchase-proposal-response.dto';
 import { ListPurchaseProposalsQueryDto } from './dto/list-purchase-proposals-query.dto';
-import { ReceivePurchaseProposalItemDto } from './dto/receive-purchase-proposal-item.dto';
 import { UpdateApprovalFileDto } from './dto/update-approval-file.dto';
 import { UpdateOrderQtyDto } from './dto/update-order-qty.dto';
 import { effectiveOrderQty, receiptQtyForPool } from './purchase-order-qty.util';
@@ -53,7 +53,7 @@ import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 
 /// Kho ảo cố định (protected-warehouse-codes.constant.ts) - nguồn của bút toán "nhập hàng mua
 /// về" khi Thủ kho xác nhận nhận hàng (xem receiveItem()).
-const SUPPLIER_WAREHOUSE_CODE = 'SUPPLIER';
+export const SUPPLIER_WAREHOUSE_CODE = 'SUPPLIER';
 
 /// Mọi trạng thái ĐỨNG TRƯỚC PURCHASING - tập item mà bossApprove() được phép đẩy đi tiếp.
 /// QUOTING/SUBMITTED/REJECTED là tàn dư của luồng báo giá cũ (gỡ 2026-08-27) và KHÔNG còn sinh
@@ -127,10 +127,25 @@ const LIST_INCLUDE = {
 } satisfies Prisma.PurchaseProposalInclude;
 
 const ITEM_INCLUDE = {
-  material: { include: { warehouse: true } },
+  material: { include: { warehouse: true, materialGroup: { select: { systemKey: true } } } },
   supplierOrder: { include: { supplier: true } },
   quotes: { include: { supplier: true } },
-  receiptLogs: { include: { receivedBy: true }, orderBy: { receivedAt: 'desc' } },
+  receiptLogs: {
+    include: {
+      receivedBy: true,
+      receipt: {
+        select: {
+          receivedQty: true,
+          allocationAdjusted: true,
+          supplierSlipUrls: true,
+          approvalFileUrls: true,
+          receiptSlipUrls: true,
+          weighSlipUrls: true,
+        },
+      },
+    },
+    orderBy: { receivedAt: 'desc' },
+  },
 } satisfies Prisma.PurchaseProposalItemInclude;
 
 const DETAIL_INCLUDE = {
@@ -143,6 +158,19 @@ type PurchaseProposalDetail = Prisma.PurchaseProposalGetPayload<{ include: typeo
 type PurchaseProposalItemRow = Prisma.PurchaseProposalItemGetPayload<{
   include: typeof ITEM_INCLUDE;
 }>;
+
+/** 1 dòng mua trong 1 lần nhận hàng (Đợt 5d) - xem PurchaseProposalsService.loadReceiveLines(). */
+export interface ReceiveLine {
+  proposal: PurchaseProposalDetail;
+  item: PurchaseProposalItemRow;
+  /** Hạn cần vật tư của dòng (cùng hạn màn Mua hàng hiện). */
+  deadline: Date | null;
+  /** Lúc Giám đốc duyệt lệnh - xếp thứ tự khi trùng hạn (bản v8 8.1). */
+  approvedAt: Date | null;
+  lenhCode: string;
+  warehouseId: bigint;
+  warehouseCode: string;
+}
 
 /** 1 dòng SKU mà đề xuất phục vụ - đủ trường để tính hạn từng dòng mua (`itemDeadlineOf`). */
 type DeadlineScopeItem = PurchaseDeadlineItem & {
@@ -647,53 +675,82 @@ export class PurchaseProposalsService {
   }
 
   /**
-   * Thủ kho xác nhận nhận hàng - cộng dồn qua nhiều lần (hàng có thể về nhiều đợt).
-   *
-   * Trước 2026-08-15 (D.c3-receive-race-not-atomic, ghi chú "Lỗ 5" ở changelog): 2 lỗi chồng
-   * nhau. (1) Read-modify-write không khoá dòng - `currentReceivedQty` đọc TRƯỚC transaction,
-   * 2 lần nhận song song cùng đọc thấy số cũ, lần ghi sau đè mất lần trước trên sổ đề xuất dù
-   * CẢ HAI đều đã post bút toán kho (mỗi lần 1 Idempotency-Key riêng nên không bị chặn trùng).
-   * (2) Bút toán post NGOÀI transaction cập nhật `receivedQty` - chết giữa hai đoạn thì kho đã
-   * cộng hàng mà đề xuất vẫn ghi chưa nhận, vĩnh viễn, không cơ chế nào phát hiện.
-   *
-   * Nay: khoá đúng dòng item (FOR UPDATE) rồi đọc lại receivedQty MỚI NHẤT bên trong cùng
-   * transaction đang giữ khoá bút toán - lượt nhận thứ hai phải xếp hàng chờ lượt đầu commit
-   * xong (khoá chỉ nhả khi cả bút toán lẫn receivedQty đã ghi), đúng idiom
-   * CuttingProposalsService.approve() (Lỗ 5 gốc). `postEntry(tx)` nhận tx để bút toán và update
-   * item nằm chung 1 transaction - không còn khoảng hở giữa hai đoạn.
+   * Đọc các dòng mua cho 1 lần nhận hàng (Đợt 5d, 2026-11-05 - thay `receiveItem()` nhận từng dòng): kèm hạn cần vật tư
+   * (cùng `itemDeadlineOf` với Mua hàng/Bảng mốc), lúc Giám đốc duyệt lệnh (xếp thứ tự khi trùng hạn, bản v8 8.1), mã
+   * lệnh hiển thị và kho nhận thật của từng dòng. Đọc NGOÀI transaction - receivedQty/status được đọc lại sau khi khoá
+   * trong `applyItemReceipt()`, mọi trường còn lại bất biến theo dòng.
    */
-  async receiveItem(
-    id: string,
-    itemId: string,
-    dto: ReceivePurchaseProposalItemDto,
-    userId: string,
-    idempotencyKey: string,
-    warehouseScope: string | null,
-  ): Promise<PurchaseProposalItemResponseDto> {
-    const proposal = await this.findDetailOrThrow(id);
-    const bigItemId = parseBigIntId(itemId);
-    const item = proposal.items.find((it) => it.id === bigItemId);
-    if (!item) {
-      throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
+  async loadReceiveLines(itemIds: bigint[]): Promise<ReceiveLine[]> {
+    const wanted = new Set(itemIds.map(String));
+    const proposals = await this.prisma.purchaseProposal.findMany({
+      where: { items: { some: { id: { in: itemIds } } } },
+      include: DETAIL_INCLUDE,
+    });
+    const pairs: {
+      proposal: PurchaseProposalDetail;
+      item: PurchaseProposalItemRow;
+      deadline: Date | null;
+    }[] = [];
+    for (const proposal of proposals) {
+      const scope = this.deadlineScope(proposal);
+      for (const item of proposal.items) {
+        if (!wanted.has(item.id.toString())) continue;
+        pairs.push({ proposal, item, deadline: this.itemDeadlineOf(item, scope).deadline });
+      }
     }
-    // Kiểm ở CẤP ITEM (2026-08-25, không còn assertStatus(proposal, PURCHASING) - status cấp
-    // proposal giờ chỉ là rollup, có thể vẫn "quoting" nếu vật tư khác trong cùng đề xuất gộp chưa
-    // được duyệt, trong khi ĐÚNG DÒNG này đã PURCHASING và nhận hàng được bình thường).
-    if (item.status !== PurchaseProposalStatus.PURCHASING) {
-      throw new ConflictException(
-        `Vật tư ${item.material.code} đang ở trạng thái ${item.status} - chỉ PURCHASING (đã Sếp duyệt NCC) mới nhận hàng được`,
-      );
+    const missing = [...wanted].filter((id) => !pairs.some((p) => p.item.id.toString() === id));
+    if (missing.length > 0) {
+      throw new NotFoundException(`Không tìm thấy dòng mua ${missing.join(', ')}`);
     }
-    // Kho nhận hàng = kho đã khai CHO ĐÚNG vật tư này (Material.warehouseId, xem Admin > Vật tư),
-    // KHÔNG còn theo proposal.warehouseCode (1 kho chung cho cả đề xuất) - Sếp chốt 2026-08-15
-    // mục 2. TRỪ vật tư có kho MẶC ĐỊNH đã thuộc họ "thanh-pham" (item.receiveWarehouseCode có
-    // giá trị, xem ConsumableMaterialPurchaseService) - ưu tiên về ĐÚNG kho thành phẩm QLSX đã
-    // chọn cho PI đó thay vì kho thành phẩm gốc cố định (2026-09-04, xác nhận lại nghiệp vụ với
-    // user sau khi phát hiện qua test sống: vật tư mặc định về vat-tu-tp/phoi-son-han KHÔNG được
-    // ghi đè, bắt buộc giữ nguyên ở kho trung chuyển để bước Đóng gói lấy ra được). Bất biến theo
-    // item nên kiểm trước khi mở transaction là an toàn (không cần khoá).
-    let materialWarehouseId: bigint;
-    let targetWarehouseCode: string;
+
+    const piIds = [
+      ...new Set(
+        pairs.map((p) => p.proposal.productionInvoiceId).filter((id): id is bigint => id != null),
+      ),
+    ];
+    const decisions =
+      piIds.length > 0
+        ? await this.prisma.productionInvoiceItem.findMany({
+            where: { productionInvoiceId: { in: piIds }, prodApprovalStatus: 'APPROVED' },
+            select: { productionInvoiceId: true, decidedAt: true },
+          })
+        : [];
+    const approvedAtByPi = new Map<string, Date>();
+    for (const d of decisions) {
+      if (!d.decidedAt) continue;
+      const key = d.productionInvoiceId?.toString();
+      if (!key) continue;
+      const cur = approvedAtByPi.get(key);
+      if (!cur || d.decidedAt < cur) approvedAtByPi.set(key, d.decidedAt);
+    }
+    const codes = await loadLenhDisplayCodes(this.prisma, piIds);
+
+    const lines: ReceiveLine[] = [];
+    for (const { proposal, item, deadline } of pairs) {
+      const target = await this.resolveReceiveWarehouse(item);
+      const piId = proposal.productionInvoiceId?.toString();
+      const base = this.toResponseDto(proposal);
+      lines.push({
+        proposal,
+        item,
+        deadline,
+        approvedAt: piId ? (approvedAtByPi.get(piId) ?? null) : null,
+        lenhCode: (piId ? codes.get(piId) : undefined) ?? base.piCode,
+        warehouseId: target.id,
+        warehouseCode: target.code,
+      });
+    }
+    return lines;
+  }
+
+  /**
+   * Kho nhận hàng = kho đã khai CHO ĐÚNG vật tư này (Material.warehouseId, xem Admin > Vật tư), KHÔNG theo
+   * proposal.warehouseCode (Sếp chốt 2026-08-15 mục 2) - TRỪ vật tư đóng gói có `item.receiveWarehouseCode` (kho thành
+   * phẩm QLSX đã chọn cho PI, 2026-09-04).
+   */
+  private async resolveReceiveWarehouse(
+    item: PurchaseProposalItemRow,
+  ): Promise<{ id: bigint; code: string }> {
     if (item.receiveWarehouseCode) {
       const overrideWarehouse = await this.prisma.warehouse.findUnique({
         where: { code: item.receiveWarehouseCode },
@@ -703,202 +760,156 @@ export class PurchaseProposalsService {
           `Kho thành phẩm "${item.receiveWarehouseCode}" (QLSX đã chọn cho PI) không còn tồn tại - báo Admin kiểm tra lại`,
         );
       }
-      materialWarehouseId = overrideWarehouse.id;
-      targetWarehouseCode = overrideWarehouse.code;
-    } else {
-      if (!item.material.warehouseId || !item.material.warehouse) {
-        throw new BadRequestException(
-          `Vật tư ${item.material.code} chưa được cấu hình Kho - không thể nhập kho tự động, vào Admin > Vật tư để gán Kho trước`,
-        );
-      }
-      materialWarehouseId = item.material.warehouseId;
-      targetWarehouseCode = item.material.warehouse.code;
+      return { id: overrideWarehouse.id, code: overrideWarehouse.code };
     }
-    // Đây từng là chỗ ghi kho DUY NHẤT thiếu kiểm scope trong toàn hệ thống (mọi service ghi kho
-    // khác đều gọi assertWarehouseScope trước khi ghi, xem material-issues/packaging-issues/
-    // warehouse-transfers.service.ts) - kho đích xác định thẳng từ Material.warehouseId hoặc
-    // receiveWarehouseCode, không đối chiếu gì với phạm vi của người gọi. Thủ kho chỉ được UI cho
-    // vào 1 kho vẫn gọi thẳng API nhận hộ hàng cho kho khác được nếu không chặn ở đây.
-    this.assertWarehouseScope(warehouseScope, targetWarehouseCode);
-    // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26, mở rộng thành pool) / đính chính 2026-09-23: cộng hàng về
-    // ĐÚNG pool giữ chỗ (StockReservation) của (PI, vật tư) này. Soi thẳng
-    // proposal.productionInvoiceId (KHÔNG đổi sau khi tạo, xem PurchaseProposal.productionInvoiceId)
-    // - KHÔNG còn soi theo proposal.cuttingProposalId (bị GHI ĐÈ thành phương án duyệt SAU CÙNG mỗi
-    // khi merge - nguồn của lỗ #5: hàng mua về cho SKU A bị cộng nhầm vào giữ chỗ của SKU B).
-    //
-    // 2026-08-26 -> 2026-09-23: bản gốc CHỈ cộng khi đúng vật tư SẮT (kiểm bằng CuttingProposalLine)
-    // - lúc đó CHỈ nhánh sắt có pool để cộng vào, "nhánh khác (VTTP/tiêu hao) không có pool nào, cứ
-    // để hàng về rơi vào tồn chung". Từ khi ConsumableMaterialPurchaseService/
-    // PieceMaterialYieldPurchaseService cũng giữ chỗ (StockReservation) cho ĐÚNG vật tư 2 nhánh đó
-    // xử lý, giả định "chỉ sắt có pool" không còn đúng: bỏ sót credit ở đây nghĩa là hàng vừa mua về
-    // (đã thuộc về PI này) vẫn hiện là "chưa cộng" trong giữ chỗ, khiến 1 PI KHÁC tính đề xuất ngay
-    // sau đó đọc trùng đúng phần hàng vừa về - tái hiện lại race condition đã vá cho lúc TÍNH đề
-    // xuất, chỉ khác là xảy ra ở lúc NHẬN hàng. Gọi vô điều kiện cho mọi targetProductionInvoiceId
-    // an toàn: MỌI PurchaseProposalItem đều do 1 trong 3 service tự động tạo ra (không có đường tạo
-    // tay - xem project_purchase_proposal_sources trong memory), nên luôn có pool hợp lệ để cộng vào
-    // hoặc creditPool() tự tạo dòng mới đúng nghĩa (ca hiếm buyQty=100% nhu cầu, chưa từng giữ chỗ
-    // gì - cùng idiom nhánh sắt "consumeQty=0 lúc duyệt").
-    const targetProductionInvoiceId = proposal.productionInvoiceId;
+    if (!item.material.warehouseId || !item.material.warehouse) {
+      throw new BadRequestException(
+        `Vật tư ${item.material.code} chưa được cấu hình Kho - không thể nhập kho tự động, vào Admin > Vật tư để gán Kho trước`,
+      );
+    }
+    return { id: item.material.warehouseId, code: item.material.warehouse.code };
+  }
 
+  /**
+   * Ghi PHẦN CHIA của 1 lần nhận hàng vào 1 dòng mua - gọi trong transaction của PurchaseReceiptsService.receive() (đơn
+   * gộp nhiều lệnh nhập 1 lần = 1 transaction, gọi hàm này cho từng lệnh có phần chia > 0).
+   *
+   * Giữ nguyên các chốt của `receiveItem()` cũ:
+   *  - Khoá `purchase-proposal-mutate:<id>` (chung mọi method ghi status) + FOR UPDATE dòng rồi đọc lại receivedQty/status
+   *    MỚI NHẤT (C3 - 2 lần nhận song song không đè nhau; dòng vừa bị đóng/từ chối thì Conflict, không cộng tiếp).
+   *  - Bút toán kho, lịch sử nhận, cộng giữ chỗ, cập nhật dòng - CÙNG 1 transaction.
+   *  - Cộng bằng Prisma.Decimal (audit 09/09/2026 - không tích luỹ sai số nhị phân).
+   *  - Chỉ phần còn thiếu so với "cần mua" (buyQty) vào giữ chỗ của PI; mua dư / giao vượt về tồn chưa giữ (v8 7.4, 4.12).
+   *  - Đóng dòng (PURCHASED) khi nhận đủ SỐ MUA (orderQty), không phải số cần mua.
+   */
+  async applyItemReceipt(
+    tx: PrismaTx,
+    input: {
+      line: ReceiveLine;
+      /** Phần chia cho dòng này, theo đơn vị kho. */
+      qty: number;
+      /** Ô1/Ô2 của cả lần nhận - lịch sử dòng ghi phần Ô2 tương ứng với phần chia (qty / tổng). */
+      unitRateQty: number;
+      supplierUnitShare: number;
+      receiptId: bigint;
+      supplierWarehouseId: bigint;
+      userId: string;
+      idempotencyKey: string;
+    },
+  ): Promise<PurchaseProposalItemRow> {
+    const { line, qty } = input;
+    const { proposal, item } = line;
+    await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
+    const [locked] = await tx.$queryRaw<
+      {
+        receivedQty: Prisma.Decimal;
+        receivedQtyPurchaseUnit: Prisma.Decimal | null;
+        status: PurchaseProposalStatus;
+      }[]
+    >`
+      SELECT "receivedQty", "receivedQtyPurchaseUnit", "status" FROM "purchase_proposal_items"
+      WHERE "id" = ${item.id} FOR UPDATE
+    `;
+    if (!locked) {
+      throw new NotFoundException(`Không tìm thấy dòng mua ${item.id}`);
+    }
+    if (locked.status !== PurchaseProposalStatus.PURCHASING) {
+      throw new ConflictException(
+        `Vật tư ${item.material.code} của lệnh ${line.lenhCode} đã bị 1 thao tác khác xử lý trong lúc nhận hàng ` +
+          `(đang ở trạng thái ${locked.status}, không còn chờ nhận) - tải lại màn hình rồi nhập lại`,
+      );
+    }
     const buyQty = item.buyQty.toNumber();
-    // Số thực mua (2026-11-04, YC7 mục 7.2): người mua có thể đã chốt mua dư hơn số cần mua -
-    // dòng chỉ đóng hồ sơ khi nhận đủ SỐ MUA, không phải số cần mua.
     const orderQty = effectiveOrderQty(buyQty, item.orderQty?.toNumber());
+    const nextReceivedQtyDecimal = locked.receivedQty.plus(qty);
+    const nextReceivedQtyPurchaseUnit = (
+      locked.receivedQtyPurchaseUnit ?? new Prisma.Decimal(0)
+    ).plus(input.supplierUnitShare);
 
-    // Backend tự tính Ô1×Ô2 (2026-10-16, thay cho hệ số quy đổi cố định Material.khoUnitFactor đã
-    // xoá) - không tin số đã nhân sẵn từ client. Ô2 mặc định 1 khi vật tư không chênh lệch đơn vị
-    // (xem ReceivePurchaseProposalItemDto, PurchaseReceiptLog).
-    const supplierUnitQty = dto.supplierUnitQty ?? 1;
-    const incrementQty = dto.unitRateQty * supplierUnitQty;
-
-    const supplierWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
-      where: { code: SUPPLIER_WAREHOUSE_CODE },
-    });
-
-    const updatedItem = await this.prisma.$transaction(
-      async (tx) => {
-        // Khoá dòng item rồi đọc lại receivedQty MỚI NHẤT - đây là điểm sửa chính của C3. Bỏ qua
-        // giá trị `item.receivedQty` đọc ở findDetailOrThrow phía trên vì nó có thể đã cũ nếu 1
-        // lượt nhận khác đang chạy song song.
-        // Khoá thêm ở mức CẢ PHIẾU (không chỉ dòng item) - recomputeProposalStatus() bên dưới phải
-        // đọc status MỚI NHẤT của MỌI item khác trong phiếu, không chỉ dòng đang FOR UPDATE. Row
-        // lock trên 1 item không ngăn được 2 request nhận hàng cho 2 item KHÁC nhau của cùng phiếu
-        // chạy song song, mỗi bên đọc item còn lại theo snapshot cũ (Medium "allReceived tính từ
-        // snapshot cũ") - phiếu kẹt PURCHASING vĩnh viễn dù cả 2 item vừa nhận đủ. Tên khoá dùng
-        // CHUNG `purchase-proposal-mutate:` với mọi method ghi status khác (2026-08-25) - trước đó
-        // dùng tên riêng `purchase-proposal-received:`, khác tên nghĩa là KHÔNG loại trừ lẫn nhau,
-        // nhận hàng và duyệt/từ chối có thể chen ngang nhau khi cùng ghi status cùng lúc.
-        await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
-
-        // Đọc kèm "status" và tái kiểm NGAY SAU KHI khoá dòng: `item.status` ở trên là snapshot đọc
-        // TRƯỚC transaction, không phản ánh 1 lượt nhận/duyệt/từ chối khác vừa commit trong lúc
-        // request này chờ khoá. Không tái kiểm ở đây thì lượt nhận thứ hai vẫn cộng dồn bình thường
-        // trên receivedQty MỚI (đúng, nhờ FOR UPDATE) dù dòng đã đóng hồ sơ PURCHASED hoặc bị REJECTED
-        // - chỉ bị chặn bởi ngưỡng dung sai chứ không phải bởi trạng thái, vi phạm state machine đã
-        // công bố (PURCHASED/REJECTED không còn nhận thêm được).
-        const [locked] = await tx.$queryRaw<
-          {
-            receivedQty: Prisma.Decimal;
-            receivedQtyPurchaseUnit: Prisma.Decimal | null;
-            status: PurchaseProposalStatus;
-          }[]
-        >`
-          SELECT "receivedQty", "receivedQtyPurchaseUnit", "status" FROM "purchase_proposal_items"
-          WHERE "id" = ${item.id} FOR UPDATE
-        `;
-        if (!locked) {
-          throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
-        }
-        if (locked.status !== PurchaseProposalStatus.PURCHASING) {
-          throw new ConflictException(
-            `Vật tư ${item.material.code} đã bị 1 request khác xử lý trong lúc chờ nhận hàng ` +
-              `(đang ở trạng thái ${locked.status}, không còn PURCHASING) - không ghi đè`,
-          );
-        }
-        // Trung bình, audit toàn diện 09/09/2026: receivedQty/receivedQtyPurchaseUnit là cột
-        // Decimal ở DB nhưng trước đây bị .toNumber() rồi cộng bằng phép + của JS (binary float) -
-        // qua nhiều đợt nhận nhỏ lẻ, sai số biểu diễn nhị phân có thể tích luỹ dần rồi bị ghi
-        // ngược LẠI vào cột Decimal, tồn tại vĩnh viễn trong sổ sách. Cộng bằng Prisma.Decimal
-        // (decimal.js - cộng thập phân chính xác, không đi qua vòng chuyển binary float trung
-        // gian của JS number) rồi mới .toNumber() ở chỗ CHỈ so sánh/hiển thị, không ghi lại DB.
-        const nextReceivedQtyDecimal = locked.receivedQty.plus(incrementQty);
-        const nextReceivedQty = nextReceivedQtyDecimal.toNumber();
-
-        // Nhận THỪA: không còn chặn cứng ở BE (2026-09-19, theo yêu cầu người dùng - trước đây
-        // chặn theo dung sai % cấu hình ở System Config). Luôn ghi đúng số thật ngay cả khi vượt
-        // buyQty - cảnh báo + bắt xác nhận đã chuyển sang FE (popup ở NhapKhoPage.tsx) trước khi
-        // gọi API này, BE không tái kiểm lại. incrementQty tính sẵn ở trên (unitRateQty ×
-        // supplierUnitQty), không còn nhánh clamp (Math.min) nào giữa số đã nhận và số nhận mới.
-        const nextReceivedQtyPurchaseUnit = (
-          locked.receivedQtyPurchaseUnit ?? new Prisma.Decimal(0)
-        ).plus(supplierUnitQty);
-
-        // Bút toán "hàng mua về nhập kho" - CÙNG transaction với update receivedQty bên dưới
-        // (postEntry nhận tx), khoá chỉ nhả sau khi cả hai đã ghi xong.
-        if (incrementQty > 0) {
-          await this.stockLedgerService.postEntry(
-            {
-              fromWarehouseId: supplierWarehouse.id,
-              toWarehouseId: materialWarehouseId,
-              materialId: item.materialId,
-              qty: incrementQty,
-              refType: StockLedgerRefType.PURCHASE,
-              refId: proposal.id.toString(),
-              createdById: userId,
-              idempotencyKey,
-              // Chiều dài cây đã chốt lúc duyệt phương án cắt (CuttingProposalLine.bestStockLengthMm,
-              // xem CuttingProposalsService.approve()) - hàng sắt về đúng bucket chiều dài này thay
-              // vì đổ chung vào tồn không phân biệt chiều dài (sửa 2026-09-05).
-              stockLengthMm: item.stockLengthMm ?? 0,
-              // Quy cách riêng của dòng mua (nệm) - hàng về đúng bucket quy cách này, tồn kho tách theo quy cách.
-              spec: item.spec ?? '',
-            },
-            tx,
-          );
-
-          // Lịch sử từng lần nhận hàng (2026-10-16) - 1 dòng/1 lần gọi receiveItem(), lưu lại đúng
-          // Ô1/Ô2 nhân viên đã nhập + ảnh phiếu nhập kho, để audit/xem lại theo từng lô (khác
-          // receivedQty/receivedQtyPurchaseUnit trên item vốn chỉ là số cộng dồn).
-          await tx.purchaseReceiptLog.create({
-            data: {
-              itemId: item.id,
-              unitRateQty: dto.unitRateQty,
-              supplierUnitQty,
-              receivedQty: incrementQty,
-              receiptFileUrl: dto.receiptFileUrl,
-              receivedById: userId,
-            },
-          });
-
-          // B4 Đợt 3 (lỗ #3) / L5 (2026-08-26) / đính chính 2026-09-23 (xem comment đầu hàm): hàng
-          // vừa về phải "có chủ" ngay - cộng thẳng vào pool giữ chỗ của (PI, vật tư) này, KHÔNG để
-          // rơi vào tồn chung. Thiếu bước này thì phương án/đề xuất KHÁC tính/duyệt xen giữa có thể
-          // "giành" mất đúng số hàng vừa mua về cho đơn này, dù sổ đã ghi "đã mua đủ, đã về hàng"
-          // (lỗ #3) - hoặc hàng bị cộng vào giữ chỗ của SKU KHÁC trong cùng PI thay vì SKU thật sự
-          // thiếu (lỗ #5). Gọi cho MỌI vật tư (không còn giới hạn riêng sắt) - creditPool() tự xử lý
-          // đúng cả ca pool rỗng (tạo dòng mới) lẫn pool có sẵn (cộng vào dòng ưu tiên cao nhất).
-          //
-          // 2026-11-04 (bản yêu cầu v8 mục 7.4, 4.12): chỉ cộng phần còn thiếu so với "cần mua"
-          // (buyQty). Phần vượt - mua dư theo số mua đã duyệt, hoặc NCC giao vượt - về tồn CHƯA GIỮ
-          // để lần tính đề xuất sau tự trừ, không bị giam trong giữ chỗ của PI này.
-          const poolQty = receiptQtyForPool(buyQty, locked.receivedQty.toNumber(), incrementQty);
-          if (targetProductionInvoiceId != null && poolQty > 0) {
-            await this.stockReservationsService.creditPool(tx, {
-              productionInvoiceId: targetProductionInvoiceId,
-              materialId: item.materialId,
-              warehouseId: materialWarehouseId,
-              qty: poolQty,
-              spec: item.spec ?? '',
-              // Cùng chiều dài với bút toán nhập kho ở trên - dòng giữ chỗ mới (pool rỗng) phải nằm đúng
-              // ngăn chiều dài với tồn thật, không rơi về ngăn 0.
-              stockLengthMm: item.stockLengthMm ?? 0,
-            });
-          }
-        }
-
-        // Nhận đủ (>= số mua, xem orderQty ở trên) -> ĐÚNG DÒNG này đóng hồ sơ PURCHASED ngay, độc lập với item khác
-        // trong cùng đề xuất (2026-08-25) - trước đây phải đợi TOÀN BỘ items của cả phiếu nhận đủ
-        // mới đóng hồ sơ chung. recomputeProposalStatus() bên dưới tự suy ra rollup cấp proposal
-        // (chỉ PURCHASED khi MỌI dòng đã PURCHASED, xem purchase-proposal-status.util.ts).
-        const nowFullyReceived = nextReceivedQty >= orderQty;
-        const saved = await tx.purchaseProposalItem.update({
-          where: { id: item.id },
-          data: {
-            receivedQty: nextReceivedQtyDecimal,
-            receivedQtyPurchaseUnit: nextReceivedQtyPurchaseUnit,
-            ...(nowFullyReceived
-              ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
-              : {}),
-          },
-          include: ITEM_INCLUDE,
-        });
-        await recomputeProposalStatus(tx, proposal.id);
-
-        return saved;
+    if (qty > 0) await this.postItemReceipt(tx, input, buyQty, locked.receivedQty.toNumber());
+    const nowFullyReceived = nextReceivedQtyDecimal.toNumber() >= orderQty;
+    const saved = await tx.purchaseProposalItem.update({
+      where: { id: item.id },
+      data: {
+        receivedQty: nextReceivedQtyDecimal,
+        receivedQtyPurchaseUnit: nextReceivedQtyPurchaseUnit,
+        ...(nowFullyReceived
+          ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
+          : {}),
       },
-      { timeout: 15_000 },
-    );
+      include: ITEM_INCLUDE,
+    });
+    await recomputeProposalStatus(tx, proposal.id);
+    return saved;
+  }
 
+  /** Bút toán kho + lịch sử nhận + cộng giữ chỗ cho phần chia `qty` > 0 (trong transaction của applyItemReceipt). */
+  private async postItemReceipt(
+    tx: PrismaTx,
+    input: {
+      line: ReceiveLine;
+      qty: number;
+      unitRateQty: number;
+      supplierUnitShare: number;
+      receiptId: bigint;
+      supplierWarehouseId: bigint;
+      userId: string;
+      idempotencyKey: string;
+    },
+    buyQty: number,
+    receivedBefore: number,
+  ): Promise<void> {
+    const { line, qty } = input;
+    const { proposal, item } = line;
+    await this.stockLedgerService.postEntry(
+      {
+        fromWarehouseId: input.supplierWarehouseId,
+        toWarehouseId: line.warehouseId,
+        materialId: item.materialId,
+        qty,
+        refType: StockLedgerRefType.PURCHASE,
+        refId: proposal.id.toString(),
+        createdById: input.userId,
+        // 1 lần nhận có thể ghi nhiều bút toán (1/lệnh) - khoá chống trùng riêng từng dòng.
+        idempotencyKey: `${input.idempotencyKey}:${item.id}`,
+        // Chiều dài cây đã chốt lúc duyệt phương án cắt (sửa 2026-09-05) / quy cách riêng của dòng mua (nệm).
+        stockLengthMm: item.stockLengthMm ?? 0,
+        spec: item.spec ?? '',
+      },
+      tx,
+    );
+    await tx.purchaseReceiptLog.create({
+      data: {
+        itemId: item.id,
+        receiptId: input.receiptId,
+        unitRateQty: input.unitRateQty,
+        supplierUnitQty: input.supplierUnitShare,
+        receivedQty: qty,
+        receivedById: input.userId,
+      },
+    });
+    // Hàng vừa về "có chủ" ngay - cộng thẳng vào pool giữ chỗ của (PI, vật tư) (B4 Đợt 3 / L5 / đính chính 2026-09-23).
+    const poolQty = receiptQtyForPool(buyQty, receivedBefore, qty);
+    if (proposal.productionInvoiceId != null && poolQty > 0) {
+      await this.stockReservationsService.creditPool(tx, {
+        productionInvoiceId: proposal.productionInvoiceId,
+        materialId: item.materialId,
+        warehouseId: line.warehouseId,
+        qty: poolQty,
+        spec: item.spec ?? '',
+        stockLengthMm: item.stockLengthMm ?? 0,
+      });
+    }
+  }
+
+  /** Thông báo + realtime sau khi 1 lần nhận hàng đã commit (best-effort, ngoài transaction). */
+  async afterItemReceipt(
+    line: ReceiveLine,
+    qty: number,
+    saved: PurchaseProposalItemRow,
+    userId: string,
+  ): Promise<void> {
+    const { proposal, item } = line;
     const piCode = await this.resolvePiCodeFor(proposal.id);
     await this.notifyPurchaseProposal(
       'PURCHASE_PROPOSAL_ITEM_RECEIVED',
@@ -907,15 +918,13 @@ export class PurchaseProposalsService {
         piCode,
         count: 1,
         materialCode: item.material.code,
-        qty: incrementQty,
+        qty,
         unit: item.material.unit,
-        warehouseCode: targetWarehouseCode,
+        warehouseCode: line.warehouseCode,
       },
       userId,
     );
-    // Rollup vừa chuyển PURCHASED (MỌI dòng của đề xuất đã nhận đủ) - đọc lại TỪ DB sau khi
-    // transaction commit (recomputeProposalStatus() ghi trong tx, không trả lại giá trị mới).
-    if (updatedItem.status === PurchaseProposalStatus.PURCHASED) {
+    if (saved.status === PurchaseProposalStatus.PURCHASED) {
       const refreshed = await this.prisma.purchaseProposal.findUnique({
         where: { id: proposal.id },
         select: { status: true },
@@ -930,9 +939,15 @@ export class PurchaseProposalsService {
         );
       }
     }
-
     this.publishProposalChanged(proposal.id, 'RECEIVED', userId);
-    return this.toItemResponseDto(updatedItem);
+  }
+
+  /** Dòng đã đổi sau 1 lần nhận - trả cho FE (cùng mapping với danh sách). */
+  itemResponse(
+    saved: PurchaseProposalItemRow,
+    deadline: Date | null,
+  ): PurchaseProposalItemResponseDto {
+    return this.toItemResponseDto(saved, deadline);
   }
 
   /** Boss/Admin điều phối chung - bỏ qua mọi ràng buộc theo `Material.buyerId` (cả cấp đề xuất lẫn
@@ -1177,6 +1192,8 @@ export class PurchaseProposalsService {
       materialSpec: item.spec ?? item.material.spec ?? null,
       unit: item.material.unit,
       purchaseWastePercentage: item.material.purchaseWastePercentage?.toNumber() ?? null,
+      // Đợt 5d: nhận sắt bắt buộc thêm ảnh phiếu cân xe (bản v8 4.6).
+      isSteel: item.material.materialGroup?.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR,
       // Kho nhận hàng THẬT của riêng dòng này - ưu tiên item.receiveWarehouseCode (vật tư đóng
       // gói, ghi đè về kho thành phẩm QLSX đã chọn, 2026-09-04), rơi về Material.warehouseId nếu
       // không có override. Nguồn xác thực cho receiveItem(), KHÔNG phải
@@ -1191,6 +1208,7 @@ export class PurchaseProposalsService {
         ? supplierOrderCode(item.supplierOrder.seq, item.supplierOrder.year)
         : null,
       supplierOrderStatus: item.supplierOrder?.status ?? null,
+      supplierOrderApprovalFileUrl: item.supplierOrder?.approvalFileUrl ?? null,
       supplierName: item.supplierOrder?.supplier.name ?? null,
       stockLengthMm: item.stockLengthMm,
       deadline,
@@ -1227,6 +1245,13 @@ export class PurchaseProposalsService {
               ? `${r.receivedBy.firstName} ${r.receivedBy.lastName}`.trim()
               : null,
             receivedAt: r.receivedAt,
+            receiptId: r.receiptId?.toString() ?? null,
+            receiptTotalQty: r.receipt?.receivedQty.toNumber() ?? null,
+            allocationAdjusted: r.receipt?.allocationAdjusted ?? false,
+            supplierSlipUrls: r.receipt?.supplierSlipUrls ?? [],
+            approvalFileUrls: r.receipt?.approvalFileUrls ?? [],
+            receiptSlipUrls: r.receipt?.receiptSlipUrls ?? [],
+            weighSlipUrls: r.receipt?.weighSlipUrls ?? [],
           }),
       ),
     });

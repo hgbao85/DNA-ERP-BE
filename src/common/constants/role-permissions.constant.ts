@@ -293,7 +293,7 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // đúng phạm vi việc của thủ kho, không hơn. Từ 2026-08-27 việc tách này còn QUAN TRỌNG HƠN:
   // UPDATE giờ mở khoá boss-approve (đẩy thẳng sang PURCHASING kèm file Sếp ký) - thủ kho mà có
   // UPDATE là tự duyệt mua cho chính lô hàng mình sắp nhận.
-  // PURCHASE_RECEIPT: UPDATE - gọi POST .../items/:itemId/receive xác nhận đã nhận hàng. Chỉ có
+  // PURCHASE_RECEIPT: UPDATE - gọi POST /purchase-receipts (Đợt 5d) xác nhận đã nhận hàng. Chỉ có
   // 1 action, không có VIEW riêng: danh sách đọc qua PURCHASE_PROPOSAL:VIEW ở trên.
   // SKU:VIEW để XuatKhoPage.tsx liệt kê SKU lúc xuất kho.
   // STEEL_ISSUE: CREATE+VIEW (Phase 9, 2026-08-11) - thủ kho trung tâm là người xuất sắt cho
