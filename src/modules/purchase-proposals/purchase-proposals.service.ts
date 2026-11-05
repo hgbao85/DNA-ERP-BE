@@ -49,6 +49,7 @@ import { UpdateApprovalFileDto } from './dto/update-approval-file.dto';
 import { UpdateOrderQtyDto } from './dto/update-order-qty.dto';
 import { effectiveOrderQty, receiptQtyForPool } from './purchase-order-qty.util';
 import { supplierOrderCode } from './supplier-order-code.util';
+import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 
 /// Kho ảo cố định (protected-warehouse-codes.constant.ts) - nguồn của bút toán "nhập hàng mua
 /// về" khi Thủ kho xác nhận nhận hàng (xem receiveItem()).
@@ -290,8 +291,9 @@ export class PurchaseProposalsService {
    *  đường `toResponseDto()` đã dùng (cuttingProposal->productionOrder->PI, fallback
    *  row.productionInvoice) thay vì tự dựng lại logic resolve khác đi. */
   private async resolvePiCodeFor(proposalId: bigint): Promise<string> {
+    // Thông báo hiện mã lệnh hiển thị (số LSX) - cùng mã Mua hàng thấy trên màn hình (2026-11-05).
     const dto = await this.findOne(proposalId.toString()).catch(() => null);
-    return dto?.piCode ?? `#${proposalId}`;
+    return dto?.lenhCode ?? dto?.piCode ?? `#${proposalId}`;
   }
 
   /**
@@ -348,11 +350,36 @@ export class PurchaseProposalsService {
       where,
       query.sortBy ? { [query.sortBy]: query.sortOrder } : { createdAt: query.sortOrder },
     );
-    return { data: result.data.map((p) => this.toDetailResponseDto(p)), meta: result.meta };
+    const dtos = result.data.map((p) => this.toDetailResponseDto(p));
+    await this.attachLenhCodes(result.data, dtos);
+    return { data: dtos, meta: result.meta };
   }
 
   async findOne(id: string): Promise<PurchaseProposalResponseDto> {
-    return this.toDetailResponseDto(await this.findDetailOrThrow(id));
+    const row = await this.findDetailOrThrow(id);
+    const dto = this.toDetailResponseDto(row);
+    await this.attachLenhCodes([row], [dto]);
+    return dto;
+  }
+
+  /**
+   * Mã lệnh hiển thị (số LSX nhà máy, lệnh gộp nối " + ", lệnh cũ chưa có LSX thì mã PI) - hàm chung
+   * của người A (common/utils/lenh-code.util.ts, điểm ghép ①), 1 lần đọc cho cả danh sách. Đề xuất
+   * không ghim PI nào (dữ liệu rất cũ) giữ nguyên piCode.
+   */
+  private async attachLenhCodes(
+    rows: { productionInvoiceId: bigint | null }[],
+    dtos: PurchaseProposalResponseDto[],
+  ): Promise<void> {
+    const codes = await loadLenhDisplayCodes(
+      this.prisma,
+      rows.map((r) => r.productionInvoiceId).filter((id): id is bigint => id != null),
+    );
+    rows.forEach((row, i) => {
+      const code =
+        row.productionInvoiceId != null ? codes.get(row.productionInvoiceId.toString()) : undefined;
+      dtos[i].lenhCode = code ?? dtos[i].piCode;
+    });
   }
 
   /**
