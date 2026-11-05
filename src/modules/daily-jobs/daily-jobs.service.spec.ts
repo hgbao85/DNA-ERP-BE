@@ -97,6 +97,7 @@ describe('DailyJobsService', () => {
   let board: { getBoard: jest.Mock };
   let notifications: { emit: jest.Mock; resolve: jest.Mock };
   let dailyOutput: { alertsForDay: jest.Mock };
+  let bookingAlerts: { syncShortAlerts: jest.Mock };
   let service: DailyJobsService;
 
   beforeEach(() => {
@@ -115,12 +116,14 @@ describe('DailyJobsService', () => {
       resolve: jest.fn().mockResolvedValue(undefined),
     };
     dailyOutput = { alertsForDay: jest.fn().mockResolvedValue([]) };
+    bookingAlerts = { syncShortAlerts: jest.fn().mockResolvedValue(undefined) };
     service = new DailyJobsService(
       prisma as never,
       dataHealth as never,
       board as never,
       notifications as never,
       dailyOutput as never,
+      bookingAlerts as never,
     );
   });
 
@@ -133,6 +136,14 @@ describe('DailyJobsService', () => {
     it('lấy được khoá -> chạy đủ các bước; 1 bước lỗi không chặn bước sau', async () => {
       prisma.dataHealthRun.findFirst.mockRejectedValue(new Error('db'));
       await service.tick(MORNING);
+      expect(board.getBoard).toHaveBeenCalled();
+    });
+
+    // Phần A – Đợt 10a
+    it('có bước cảnh báo booking; bước đó lỗi không chặn bước sau', async () => {
+      bookingAlerts.syncShortAlerts.mockRejectedValue(new Error('boom'));
+      await service.tick(MORNING);
+      expect(bookingAlerts.syncShortAlerts).toHaveBeenCalledWith(MORNING);
       expect(board.getBoard).toHaveBeenCalled();
     });
 

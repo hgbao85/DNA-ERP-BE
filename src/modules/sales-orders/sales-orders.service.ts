@@ -12,6 +12,7 @@ import {
   AuditAction,
   BomOptionKind,
   BomRevisionStatus,
+  BookingStatus,
   Prisma,
   ProductionOrderFloorStage,
   SalesOrderItemStatus,
@@ -322,6 +323,24 @@ export class SalesOrdersService {
     // (định mức, lịch sử duyệt...), có trước cả PO này - chỉ GỠ LIÊN KẾT (salesOrderId = null) để
     // hết trỏ tới đơn sắp xoá, SKU đó vẫn còn nguyên, sẵn sàng gắn cho đơn khác sau này.
     await this.prisma.$transaction(async (tx) => {
+      // Phần A – Đợt 10a: đơn có hàng nằm trong booking chưa huỷ thì không xoá (gỡ hàng khỏi booking hoặc huỷ booking trước).
+      const inBooking = await tx.bookingLine.findFirst({
+        where: {
+          salesOrderItem: { salesOrderId: bigId },
+          booking: {
+            status: { in: [BookingStatus.DRAFT, BookingStatus.CONFIRMED, BookingStatus.SHIPPED] },
+          },
+        },
+        select: { booking: { select: { bookingNo: true } } },
+      });
+      if (inBooking) {
+        throw new ConflictException(
+          `Đơn hàng ${order.orderCode} đang có hàng trong booking ${inBooking.booking.bookingNo} - gỡ hàng khỏi booking (hoặc huỷ booking) trước khi xoá đơn.`,
+        );
+      }
+      // Còn lại chỉ là dòng của booking đã huỷ - FK Restrict sẽ chặn xoá dòng đơn nếu không dọn trước.
+      await tx.bookingLine.deleteMany({ where: { salesOrderItem: { salesOrderId: bigId } } });
+
       const linkedSkus = await tx.planForm.findMany({ where: { salesOrderId: bigId } });
       for (const sku of linkedSkus) {
         await tx.planForm.update({ where: { id: sku.id }, data: { salesOrderId: null } });

@@ -392,6 +392,25 @@ export interface PiTimelineReplanNotificationParams {
   lines: string[];
 }
 
+// Phần A – Đợt 10a (YC5): booking sắp đến hạn (lấy cont / CUT OFF) mà chưa đủ hàng. `entityId` = bookingId.
+export interface BookingShortNotificationParams {
+  bookingId: string;
+  bookingNo: string;
+  customerName: string;
+  /** Hạn đến từ ngày lấy cont hay từ CUT OFF. */
+  dueKind: 'lấy cont' | 'CUT OFF';
+  /** dd/MM/yyyy */
+  dueDate: string;
+  /** Số ngày còn lại tới hạn (âm = đã trễ). */
+  daysLeft: number;
+  shortLines: number;
+  shortQty: number;
+  /** Tối đa 5 dòng: "{factoryCode} (PO {orderCode}) thiếu {n} bộ" nối "; " + "; +k dòng khác". */
+  lines: string;
+  /** Kho thành phẩm gom hàng (để báo thủ kho đúng kho). */
+  warehouseCode: string | null;
+}
+
 /** Tin sáng / cảnh báo tiến độ mở "Bảng mốc" trong "Tổng hợp lệnh SX" - mỗi vai trò vào 1 phân hệ khác nhau. FE chọn đích
  *  ĐẦU TIÊN người nhận mở được, mà Giám đốc mở được MỌI phân hệ -> `boss` phải đứng đầu, không thì Sếp rơi vào màn KHSX
  *  (review 32.26). KHSX/QLSX không mở được `boss` nên rơi xuống đúng phân hệ của mình. */
@@ -1367,6 +1386,33 @@ const notificationTypeDefinitions = {
       roles: [BUSINESS_ROLES.PRODUCTION_PLANNER],
     }),
   } satisfies NotificationTypeDef<PiTimelineReplanNotificationParams>,
+  // ─── Phần A – Đợt 10a (YC5 5.8): booking sắp đến hạn mà chưa đủ hàng ─────────────────────────────────────────────────────
+  /** Booking có ngày hạn (lấy cont / CUT OFF) ≤ ngày mai mà "chưa đủ hàng" (= đã đóng gói − đã xuất). 1 thông báo mở/booking
+   *  (dedupeKey theo booking), `BookingAlertsService` gửi lại khi sang ngày mới và tự đóng khi đủ hàng / booking huỷ / đã xuất. */
+  BOOKING_SHORT: {
+    category: 'ALERT',
+    severity: 'WARNING',
+    entityType: 'BOOKING',
+    title: (p: BookingShortNotificationParams) =>
+      `Booking ${p.bookingNo} (${p.customerName}): chưa đủ hàng`,
+    message: (p: BookingShortNotificationParams) =>
+      `${p.dueKind} ${p.dueDate} (${p.daysLeft < 0 ? `đã trễ ${-p.daysLeft} ngày` : p.daysLeft === 0 ? 'hôm nay' : 'ngày mai'}) - còn thiếu ${p.shortQty} bộ ở ${p.shortLines} dòng: ${p.lines}. "Chưa đủ hàng" = đã đóng gói − đã xuất.`,
+    link: (p: BookingShortNotificationParams) => ({
+      module: 'sales',
+      page: 'bookings',
+      params: { focus: `BOOKING:${p.bookingId}` },
+      alternatives: [
+        { module: 'production_plan', page: 'thongke' },
+        { module: 'inbound_warehouse', page: 'xuat-kho' },
+      ],
+    }),
+    recipients: (p: BookingShortNotificationParams): RecipientCriteria => ({
+      roles: [BUSINESS_ROLES.SALES_STAFF, BUSINESS_ROLES.PRODUCTION_PLANNER],
+      warehouseIds: p.warehouseCode ? [p.warehouseCode] : [],
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<BookingShortNotificationParams>,
 };
 
 /** Danh mục loại thông báo - 1 nguồn duy nhất cho text/link/mức độ/người nhận (mục 5.2 changelog

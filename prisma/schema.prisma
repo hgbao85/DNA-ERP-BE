@@ -158,6 +158,8 @@ model User {
   warehouseTransfersCreated         WarehouseTransfer[]         @relation("WarehouseTransferCreatedBy")
   warehouseTransfersConfirmed       WarehouseTransfer[]         @relation("WarehouseTransferConfirmedBy")
   warehouseTransfersRejected        WarehouseTransfer[]         @relation("WarehouseTransferRejectedBy")
+  // Phần A – Đợt 10a (YC5)
+  bookingsCreated                   Booking[]                   @relation("BookingCreatedBy")
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -775,6 +777,8 @@ model Customer {
 
   productVariants ProductVariant[]
   salesOrders     SalesOrder[]
+  // Phần A – Đợt 10a (YC5)
+  bookings        Booking[]
 
   @@map("sales_customers")
 }
@@ -1364,10 +1368,102 @@ model SalesOrderItem {
   wireMaterial           Material?               @relation("SalesOrderItemWire", fields: [wireMaterialId], references: [id])
   cushionMaterial        Material?               @relation("SalesOrderItemCushion", fields: [cushionMaterialId], references: [id])
   productionInvoiceItems ProductionInvoiceItem[]
+  // Phần A – Đợt 10a (YC5)
+  bookingLines           BookingLine[]
 
   @@index([salesOrderId])
   @@index([mfgProductId])
   @@map("sales_order_items")
+}
+
+// =====================================================================
+// Phần A – Đợt 10a (YC5, phần Sales): Booking / Lịch xuất hàng. Điểm ghép ④ với người B (10b: kho TP xác nhận số thực xuất,
+// trừ tồn, bỏ nút "Xuất giao" cũ - ghi BookingLine.shippedQty). Nghiệp vụ: v8 YC5 5.1–5.8; code: src/modules/bookings.
+// =====================================================================
+
+/// DRAFT = Sales đang soạn; CONFIRMED = Sales chốt (kho TP thấy để đóng cont - 10b); SHIPPED = kho TP đã xác nhận xuất (10b);
+/// CANCELLED = huỷ, trả lại số đã xếp. Sửa được khi DRAFT/CONFIRMED.
+enum BookingStatus {
+  DRAFT
+  CONFIRMED
+  SHIPPED
+  CANCELLED
+}
+
+/// 1 booking của hãng tàu (thường 1 cont - 5.4). Các ô theo bảng booking anh Nhân gửi (5.1). Mã PI/PO của khách không lưu riêng:
+/// suy từ các dòng (SalesOrder.orderCode của dòng đã chọn - 5.2).
+model Booking {
+  id            BigInt        @id @default(autoincrement())
+  /// Số booking của hãng tàu (vd BK0000123). Không trùng giữa các booking CHƯA HUỶ (kiểm ở service, không unique ở DB để tạo
+  /// lại được số của booking đã huỷ).
+  bookingNo     String
+  customerId    BigInt
+  /// Loại cont (mặc định 40HC - v8 9.2 chỉ dùng 40HC 68 m³).
+  containerType String        @default("40HC")
+  containerQty  Int           @default(1)
+  /// Cảng đến (LA, NY, TACOMA, TX…).
+  pod           String
+  /// Hạn cắt SI (ngày giờ).
+  cutSiAt       DateTime?
+  /// Ngày lấy cont (chỉ ngày).
+  pickupDate    DateTime?     @db.Date
+  /// CUT OFF - hạn chót hạ cont (ngày giờ, tô nổi bật).
+  cutOffAt      DateTime?
+  /// ETD (chỉ ngày).
+  etd           DateTime?     @db.Date
+  /// Nơi lấy cont (vd QUY NHƠN).
+  pickupPlace   String?
+  /// Tên tàu / chuyến (vd TÊN TÀU 0123-045N).
+  vesselVoyage  String?
+  /// Kho thành phẩm gom hàng trước khi đóng cont (5.6) = Warehouse.code họ 'thanh-pham'. Bắt buộc khi xác nhận.
+  warehouseCode String?
+  note          String?
+  /// File/ảnh booking của hãng tàu: [{ name, url, uploadedAt }] - url từ POST /uploads/document.
+  attachments   Json          @default("[]")
+  status        BookingStatus @default(DRAFT)
+  createdById   String
+  confirmedAt   DateTime?
+  confirmedById String?
+  cancelledAt   DateTime?
+  cancelledById String?
+  cancelReason  String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  customer  Customer      @relation(fields: [customerId], references: [id])
+  createdBy User          @relation("BookingCreatedBy", fields: [createdById], references: [id])
+  lines     BookingLine[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([pickupDate])
+  @@index([cutOffAt])
+  @@index([bookingNo])
+  @@map("bookings")
+}
+
+/// Hàng xếp vào booking: lấy từ 1 lệnh SX của 1 SKU (dòng ProductionInvoiceItem, kèm dòng đơn của khách). Còn được xếp của 1 dòng
+/// đơn = SL dòng − đã xuất − đã xếp ở booking khác chưa huỷ (kiểm trong transaction có khoá dòng đơn - V2-6).
+model BookingLine {
+  id                      BigInt   @id @default(autoincrement())
+  bookingId               BigInt
+  productionInvoiceItemId BigInt
+  salesOrderItemId        BigInt
+  /// Số bộ xếp.
+  qty                     Int
+  /// Số bộ thực xuất - 10b (kho TP xác nhận) ghi. 10a luôn 0.
+  shippedQty              Int      @default(0)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  booking               Booking               @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+  salesOrderItem        SalesOrderItem        @relation(fields: [salesOrderItemId], references: [id])
+
+  @@unique([bookingId, productionInvoiceItemId])
+  @@index([productionInvoiceItemId])
+  @@index([salesOrderItemId])
+  @@map("booking_lines")
 }
 
 /// SKU quota-approval pipeline (KHSX tạo -> account chuyên trách nhập -> KHSX duyệt từng
@@ -1655,6 +1751,8 @@ model ProductionInvoiceItem {
   transferCheckResults TransferCheckResult[]
   packagingRecords     PackagingRecord[]
   cuttingProposalItems CuttingProposalItem[]
+  // Phần A – Đợt 10a (YC5)
+  bookingLines         BookingLine[]
 
   @@index([productionInvoiceId])
   @@index([mfgProductId])
