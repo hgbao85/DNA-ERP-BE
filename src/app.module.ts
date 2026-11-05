@@ -49,6 +49,7 @@ import { StockModule } from './modules/stock/stock.module';
 import { WarehouseTransfersModule } from './modules/warehouse-transfers/warehouse-transfers.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { PurchaseProposalsModule } from './modules/purchase-proposals/purchase-proposals.module';
+import { LenhCodesModule } from './modules/lenh-codes/lenh-codes.module';
 import { SteelIssuesModule } from './modules/steel-issues/steel-issues.module';
 import { FloorModule } from './modules/floor/floor.module';
 import { NetworkAccessGuard } from './common/network/network-access.guard';
@@ -130,6 +131,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     WarehouseTransfersModule,
     UploadsModule,
     PurchaseProposalsModule,
+    LenhCodesModule,
     SteelIssuesModule,
     FloorModule,
     QcReviewsModule,
