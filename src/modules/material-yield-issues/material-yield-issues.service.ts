@@ -26,6 +26,11 @@ import {
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import {
+  loadSkuPriorityHoldback,
+  SiblingOrder,
+  skuHoldbackMessage,
+} from '../stock/sku-priority.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
@@ -227,6 +232,19 @@ export class MaterialYieldIssuesService {
       if (dto.issuedQty > availableQty) {
         throw new ConflictException(
           `Tồn kho khả dụng (${availableQty}) không đủ xuất ${dto.issuedQty} cho vật tư ${material.name} - kiểm tra lại tồn kho thực tế trước khi xuất`,
+        );
+      }
+      // YC11: chừa phần SKU cần sớm hơn trong cùng lệnh gộp còn cần - xem sku-priority.util.ts.
+      const holdback = await loadSkuPriorityHoldback(tx, {
+        orderId: order.id,
+        productionInvoiceItemId: order.productionInvoiceItemId,
+        productionInvoiceId: piItem.productionInvoiceId!,
+        materialId: materialBigId,
+        remainingOf: (sib) => this.remainingForSibling(tx, sib, materialBigId),
+      });
+      if (holdback.qty > 0 && dto.issuedQty > availableQty - holdback.qty) {
+        throw new ConflictException(
+          skuHoldbackMessage(holdback, availableQty, dto.issuedQty, material.name),
         );
       }
 
@@ -481,6 +499,23 @@ export class MaterialYieldIssuesService {
       _sum: { receivedQty: true },
     });
     return result._sum.receivedQty?.toNumber() ?? 0;
+  }
+
+  /** Phần SKU khác trong cùng PI còn cần vật tư thành phẩm này - định mức − đã xuất (YC11). Không thuộc định mức = 0. */
+  private async remainingForSibling(
+    tx: PrismaTx,
+    sib: SiblingOrder,
+    materialId: bigint,
+  ): Promise<number> {
+    const hasYield = await tx.pieceMaterialYield.count({
+      where: { bomRevisionId: sib.bomRevisionId, materialId },
+    });
+    if (hasYield === 0) return 0;
+    const [required, issued] = await Promise.all([
+      this.resolveRequiredQty(tx, sib.bomRevisionId, materialId, sib.quantity),
+      this.sumIssued(tx, sib.id, materialId),
+    ]);
+    return required - issued;
   }
 
   private async resolveRequiredQty(

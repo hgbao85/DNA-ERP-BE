@@ -28,6 +28,11 @@ import { assertItemPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { paginate } from '../../common/utils/paginate.util';
+import {
+  loadSkuPriorityHoldback,
+  SiblingOrder,
+  skuHoldbackMessage,
+} from '../stock/sku-priority.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { loadBomOptionExclusions } from '../bom-revisions/bom-option.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -263,6 +268,7 @@ export class WeavingIssuesService {
           await this.issueMaterialsForWeaving(
             tx,
             issue.id,
+            order,
             piItem.productionInvoiceId!,
             materialLines,
             issuedById,
@@ -303,6 +309,7 @@ export class WeavingIssuesService {
   private async issueMaterialsForWeaving(
     tx: PrismaTx,
     weavingIssueId: bigint,
+    order: ProductionOrder,
     productionInvoiceId: bigint,
     lines: WeavingIssueMaterialLineDto[],
     createdById: string,
@@ -349,6 +356,19 @@ export class WeavingIssuesService {
           `Tồn kho khả dụng (${availableQty}) không đủ mang kèm ${line.qty} vật tư ${material.code} - kiểm tra lại tồn kho thực tế trước khi xuất`,
         );
       }
+      // YC11: chừa phần SKU cần sớm hơn trong cùng lệnh gộp còn cần (vật tư mang kèm đan) - xem sku-priority.util.ts.
+      const holdback = await loadSkuPriorityHoldback(tx, {
+        orderId: order.id,
+        productionInvoiceItemId: order.productionInvoiceItemId,
+        productionInvoiceId,
+        materialId: materialBigId,
+        remainingOf: (sib) => this.remainingWeavingMaterialForSibling(tx, sib, materialBigId),
+      });
+      if (holdback.qty > 0 && line.qty > availableQty - holdback.qty) {
+        throw new ConflictException(
+          skuHoldbackMessage(holdback, availableQty, line.qty, material.code),
+        );
+      }
 
       await tx.weavingIssueMaterial.create({
         data: { weavingIssueId, materialId: materialBigId, qty: line.qty },
@@ -376,6 +396,51 @@ export class WeavingIssuesService {
         qty: line.qty,
       });
     }
+  }
+
+  /**
+   * Phần SKU khác trong cùng PI còn cần mang kèm vật tư này khi đan (YC11): Σ định mức vật tư/mảnh × số mảnh đan (Dây/Đinh luôn
+   * đi kèm, nhóm khác chỉ khi tick includeInWeaving - cùng quy tắc getWovenMaterialLinesByPiece) − đã mang kèm. Dây/nệm SKU đó
+   * không chọn thì 0.
+   */
+  private async remainingWeavingMaterialForSibling(
+    tx: PrismaTx,
+    sib: SiblingOrder,
+    materialId: bigint,
+  ): Promise<number> {
+    const excluded = (await loadBomOptionExclusions(tx, [sib])).get(sib.id.toString());
+    if (excluded?.has(materialId.toString())) return 0;
+    const [rows, wovenPieces, issued] = await Promise.all([
+      tx.pieceMaterialItem.findMany({
+        where: { bomRevisionId: sib.bomRevisionId, materialId },
+        select: {
+          pieceId: true,
+          qtyPerPiece: true,
+          includeInWeaving: true,
+          material: { select: { materialGroup: { select: { systemKey: true } } } },
+        },
+      }),
+      tx.bomPiece.findMany({
+        where: { bomRevisionId: sib.bomRevisionId, isWoven: true },
+        select: { pieceId: true, qtyPerUnit: true },
+      }),
+      tx.weavingIssueMaterial.aggregate({
+        where: { materialId, weavingIssue: { productionOrderId: sib.id } },
+        _sum: { qty: true },
+      }),
+    ]);
+    const piecesPerUnit = new Map(wovenPieces.map((bp) => [bp.pieceId.toString(), bp.qtyPerUnit]));
+    let planned = 0;
+    for (const r of rows) {
+      const perUnit = piecesPerUnit.get(r.pieceId.toString());
+      if (perUnit == null) continue;
+      const key = r.material.materialGroup?.systemKey;
+      const always =
+        key === MATERIAL_GROUP_SYSTEM_KEYS.WIRE || key === MATERIAL_GROUP_SYSTEM_KEYS.NAIL;
+      if (!always && !r.includeInWeaving) continue;
+      planned += r.qtyPerPiece.toNumber() * perUnit * sib.quantity;
+    }
+    return planned - (issued._sum.qty?.toNumber() ?? 0);
   }
 
   async receive(

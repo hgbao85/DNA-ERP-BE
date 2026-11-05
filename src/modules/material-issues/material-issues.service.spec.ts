@@ -16,6 +16,13 @@ import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { MaterialIssuesService } from './material-issues.service';
 import { RealtimeService } from '../../realtime/realtime.service';
+import { loadSkuPriorityHoldback } from '../stock/sku-priority.util';
+
+// YC11: mặc định không có SKU sớm hơn cần chừa - test riêng từng ca ở 'YC11' bên dưới; logic chừa thật test ở sku-priority.util.spec.
+jest.mock('../stock/sku-priority.util', () => ({
+  ...jest.requireActual<Record<string, unknown>>('../stock/sku-priority.util'),
+  loadSkuPriorityHoldback: jest.fn(() => Promise.resolve({ qty: 0, holders: [] })),
+}));
 
 describe('MaterialIssuesService', () => {
   let service: MaterialIssuesService;
@@ -365,6 +372,43 @@ describe('MaterialIssuesService', () => {
       await expect(
         service.create('1', { ...dto, issuedQty: 5 }, 'user-1', null),
       ).resolves.toBeDefined();
+    });
+
+    describe('YC11 - lệnh gộp ưu tiên SKU cần sớm hơn', () => {
+      const holdback = {
+        qty: 8,
+        holders: [
+          {
+            productionOrderId: '2',
+            lenhCode: 'MY-313',
+            deadline: new Date('2026-11-10T00:00:00+07:00'),
+            qty: 8,
+          },
+        ],
+      };
+
+      it('chặn khi tồn khả dụng trừ phần chừa cho SKU sớm hơn không đủ, báo rõ lệnh đang được chừa', async () => {
+        stockReservationsService.getAvailableQty.mockResolvedValueOnce(10);
+        (loadSkuPriorityHoldback as jest.Mock).mockResolvedValueOnce(holdback);
+        const err = await service.create('1', dto, 'user-1', null).catch((e: Error) => e);
+        expect(err).toBeInstanceOf(ConflictException);
+        expect((err as Error).message).toContain('đang chừa 8 cho lệnh MY-313');
+        expect((err as Error).message).toContain('chỉ còn xuất được 2');
+        expect(prisma.materialIssue.create).not.toHaveBeenCalled();
+      });
+
+      it('cho xuất phần dư sau khi chừa, hỏi đúng PI + vật tư + lệnh đang xuất', async () => {
+        stockReservationsService.getAvailableQty.mockResolvedValueOnce(10);
+        (loadSkuPriorityHoldback as jest.Mock).mockResolvedValueOnce(holdback);
+        prisma.materialIssue.create.mockResolvedValue(issueRow);
+        await expect(
+          service.create('1', { ...dto, issuedQty: 2 }, 'user-1', null),
+        ).resolves.toBeDefined();
+        expect(loadSkuPriorityHoldback).toHaveBeenLastCalledWith(
+          expect.anything(),
+          expect.objectContaining({ productionInvoiceId: 500n, materialId: 30n }),
+        );
+      });
     });
 
     it('khoá dòng stock_quant bằng FOR UPDATE trước khi đọc tồn (chặn race giữa 2 lệnh SX khác nhau)', async () => {
