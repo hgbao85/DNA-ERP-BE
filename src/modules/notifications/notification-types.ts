@@ -182,6 +182,17 @@ export interface PurchaseProposalNotificationParams {
   buyerIds?: string[];
 }
 
+/** `PURCHASE_RECEIPT_REJECTED` (Đợt 5d). */
+export interface PurchaseReceiptRejectedParams {
+  materialCode: string;
+  unit?: string;
+  deliveredQty: number;
+  reason: string;
+  /** "Kim Phát – Số 52/2026" */
+  orderCode?: string;
+  buyerIds: string[];
+}
+
 /** Trạng thái xưởng của 1 lệnh sản xuất (ProductionOrder.floorStage) - QLSX Bắt đầu/Tạm dừng/Tiếp tục/Kết thúc. */
 export interface FloorStageNotificationParams {
   piCode: string;
@@ -762,6 +773,21 @@ const notificationTypeDefinitions = {
       roles: [BUSINESS_ROLES.PRODUCTION_MANAGER, BUSINESS_ROLES.PURCHASER],
     }),
   } satisfies NotificationTypeDef<PurchaseProposalNotificationParams>,
+
+  /** Thủ kho "Từ chối nhận" 1 lần hàng về (Đợt 5d, bản v8 4.5) - không cộng tồn; người mua phụ trách vật tư làm việc
+   *  lại với NCC. Không có người mua được gán (Material.buyerId) thì báo mọi Mua hàng. */
+  PURCHASE_RECEIPT_REJECTED: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PURCHASE_PROPOSAL',
+    title: (p: PurchaseReceiptRejectedParams) =>
+      `Kho từ chối nhận ${p.materialCode}${p.orderCode ? ` - đơn ${p.orderCode}` : ''}`,
+    message: (p: PurchaseReceiptRejectedParams) =>
+      `Phiếu giao ${p.deliveredQty}${p.unit ? ` ${p.unit}` : ''}. Lý do: ${p.reason}`,
+    link: () => ({ module: 'purchasing', page: 'don-dat-hang' }),
+    recipients: (p: PurchaseReceiptRejectedParams) =>
+      p.buyerIds.length > 0 ? { userIds: p.buyerIds } : { roles: [BUSINESS_ROLES.PURCHASER] },
+  } satisfies NotificationTypeDef<PurchaseReceiptRejectedParams>,
 
   // ─── Phase 3b, nhóm 7.5-i "Sắt → Phôi → KCS" (xem changelog 2026-09-25 mục 19) ─────────────
   /** Kho xuất sắt cho PI - Phôi vào xác nhận đã nhận. Tự đóng khi Phôi `receive()`.

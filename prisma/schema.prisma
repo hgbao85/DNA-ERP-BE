@@ -123,6 +123,7 @@ model User {
   supplierOrdersCreated             SupplierOrder[]             @relation("SupplierOrderCreatedBy")
   supplierOrdersApproved            SupplierOrder[]             @relation("SupplierOrderApprovedBy")
   purchaseReceiptLogsReceived       PurchaseReceiptLog[]
+  purchaseReceiptsCreated           PurchaseReceipt[]           @relation("PurchaseReceiptCreatedBy")
   stockLedgerEntries                StockLedger[]
   stockReservations                 StockReservation[]
   materialsToBuy                    Material[]
@@ -608,6 +609,7 @@ model Material {
   productionInvoiceItemsAsCushion ProductionInvoiceItem[]        @relation("ProductionInvoiceItemCushion")
   productionOrdersAsWire          ProductionOrder[]              @relation("ProductionOrderWire")
   productionOrdersAsCushion       ProductionOrder[]              @relation("ProductionOrderCushion")
+  purchaseReceipts                PurchaseReceipt[]
 
   @@index([materialGroupId])
   @@index([warehouseId])
@@ -794,20 +796,20 @@ model MfgProduct {
 
   // Phần A – Đợt 1 (YC9): thùng + load cont
   /// Kích thước 1 thùng (cm, 1 số lẻ). Thiếu 1 trong 3 thì không tính được load cont theo công thức.
-  boxLengthCm            Decimal? @db.Decimal(7, 1)
-  boxWidthCm             Decimal? @db.Decimal(7, 1)
-  boxHeightCm            Decimal? @db.Decimal(7, 1)
+  boxLengthCm              Decimal?  @db.Decimal(7, 1)
+  boxWidthCm               Decimal?  @db.Decimal(7, 1)
+  boxHeightCm              Decimal?  @db.Decimal(7, 1)
   /// Số thùng của 1 bộ (mặc định 1).
-  boxesPerSet            Int      @default(1)
+  boxesPerSet              Int       @default(1)
   /// Load cont nhập tay - có thì thắng công thức.
-  loadContManual         Int?
+  loadContManual           Int?
   /// Thể tích 1 thùng (m³) - LƯU SẴN lúc ghi kích thước / khi Admin đổi thể tích cont, để mapper không phải đọc SystemConfig.
-  boxVolumeM3            Decimal? @db.Decimal(10, 4)
+  boxVolumeM3              Decimal?  @db.Decimal(10, 4)
   /// ⌊thể tích cont ÷ (thể tích thùng × số thùng/bộ)⌋ - lưu sẵn như trên.
-  loadContFormula        Int?
+  loadContFormula          Int?
   /// Load cont hiệu lực = loadContManual ?? loadContFormula - lưu sẵn như trên.
-  loadCont               Int?
-  containerLoadUpdatedAt DateTime?
+  loadCont                 Int?
+  containerLoadUpdatedAt   DateTime?
   containerLoadUpdatedById String?
 
   variants               ProductVariant[]
@@ -2500,6 +2502,7 @@ model SupplierOrder {
   createdBy  User                   @relation("SupplierOrderCreatedBy", fields: [createdById], references: [id])
   approvedBy User?                  @relation("SupplierOrderApprovedBy", fields: [approvedById], references: [id])
   items      PurchaseProposalItem[]
+  receipts   PurchaseReceipt[]
 
   @@unique([supplierId, year, seq])
   @@index([status])
@@ -2561,12 +2564,71 @@ model PurchaseReceiptLog {
   receiptFileUrl  String?
   receivedById    String?
   receivedAt      DateTime @default(now())
+  /// Phiếu nhận hàng chứa lần nhận này (Đợt 5d, 2026-11-05) - null với lịch sử nhận trước Đợt 5d (nhận từng dòng).
+  receiptId       BigInt?
 
   item       PurchaseProposalItem @relation(fields: [itemId], references: [id])
   receivedBy User?                @relation(fields: [receivedById], references: [id])
+  receipt    PurchaseReceipt?     @relation(fields: [receiptId], references: [id])
 
   @@index([itemId])
+  @@index([receiptId])
   @@map("purchase_receipt_logs")
+}
+
+enum PurchaseReceiptStatus {
+  RECEIVED
+  REJECTED
+}
+
+/// Phiếu nhận hàng mua (Đợt 5d, 2026-11-05 - bản v8 YC8, YC4 4.3-4.6): 1 lần hàng về = 1 phiếu cho 1 vật tư của 1 đơn đặt
+/// hàng NCC (đơn gộp nhiều lệnh nhập 1 lần, hệ thống tự chia - từng phần chia ghi ở PurchaseReceiptLog.receiptId). Chứng từ
+/// bắt buộc ngay lúc nhập (khoá cứng V4-1/V5-1). REJECTED = "Từ chối nhận": không cộng tồn, không có dòng log nào.
+model PurchaseReceipt {
+  id                 BigInt                @id @default(autoincrement())
+  supplierOrderId    BigInt?
+  materialId         BigInt
+  /// Kho nhận thật (cùng luật receiveItem cũ: receiveWarehouseCode của dòng, không có thì Material.warehouse).
+  warehouseCode      String
+  spec               String                @default("")
+  stockLengthMm      Int?
+  status             PurchaseReceiptStatus
+  /// Ô1 / Ô2 như PurchaseReceiptLog - tổng của cả lần nhận (trước khi chia cho các lệnh).
+  unitRateQty        Decimal               @db.Decimal(14, 4)
+  supplierUnitQty    Decimal               @default(1) @db.Decimal(14, 4)
+  /// "SL theo phiếu giao" (4.5) - cùng đơn vị với ô thủ kho đối chiếu (Ô2 nếu có quy đổi, không thì Ô1). Phiếu RECEIVED
+  /// luôn khớp số thực nhận (không dung sai); lệch thì chỉ có thể Từ chối nhận.
+  deliveredQty       Decimal               @db.Decimal(14, 4)
+  /// Số cộng vào kho theo đơn vị kho (= Ô1 × Ô2); 0 khi REJECTED.
+  receivedQty        Decimal               @db.Decimal(14, 4)
+  /// (1) Phiếu xuất kho/giao hàng của NCC.
+  supplierSlipUrls   String[]
+  /// (2) Phiếu đề xuất Giám đốc ký - tự lấy từ đơn đặt hàng (SupplierOrder.approvalFileUrl), chỉ tải tay khi đơn chưa có.
+  approvalFileUrls   String[]
+  /// (3) Phiếu nhập kho của nhà máy.
+  receiptSlipUrls    String[]
+  /// (4) Phiếu cân xe - bắt buộc với sắt (4.6).
+  weighSlipUrls      String[]
+  rejectReason       String?
+  rejectFileUrls     String[]
+  /// Phân bổ hệ thống tự chia [{itemId, qty}] - giữ lại để biết thủ kho đã chỉnh gì (8.2).
+  autoAllocation     Json
+  /// Phân bổ thật đã ghi [{itemId, qty}].
+  allocation         Json
+  allocationAdjusted Boolean               @default(false)
+  idempotencyKey     String                @unique
+  createdById        String
+  createdAt          DateTime              @default(now())
+
+  supplierOrder SupplierOrder?       @relation(fields: [supplierOrderId], references: [id])
+  material      Material             @relation(fields: [materialId], references: [id])
+  createdBy     User                 @relation("PurchaseReceiptCreatedBy", fields: [createdById], references: [id])
+  logs          PurchaseReceiptLog[]
+
+  @@index([supplierOrderId])
+  @@index([materialId])
+  @@index([createdAt])
+  @@map("purchase_receipts")
 }
 
 // =====================================================================

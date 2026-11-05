@@ -26,6 +26,16 @@ export class PurchaseReceiptLogResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) receiptFileUrl!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) receivedByName!: string | null;
   @Expose() @ApiProperty() receivedAt!: Date;
+  /// Phiếu nhận chứa lần nhận này (Đợt 5d) - null với lịch sử trước Đợt 5d.
+  @Expose() @ApiPropertyOptional({ nullable: true }) receiptId!: string | null;
+  /// Tổng của cả phiếu (đơn gộp: lần nhận của dòng này chỉ là 1 phần chia).
+  @Expose() @ApiPropertyOptional({ nullable: true }) receiptTotalQty!: number | null;
+  @Expose() @ApiProperty() allocationAdjusted!: boolean;
+  /// 4 ô chứng từ của phiếu (YC4): (1) phiếu giao NCC, (2) phiếu đề xuất Giám đốc ký, (3) phiếu nhập kho, (4) phiếu cân xe.
+  @Expose() @ApiProperty() supplierSlipUrls!: string[];
+  @Expose() @ApiProperty() approvalFileUrls!: string[];
+  @Expose() @ApiProperty() receiptSlipUrls!: string[];
+  @Expose() @ApiProperty() weighSlipUrls!: string[];
 
   constructor(partial: Partial<PurchaseReceiptLogResponseDto>) {
     Object.assign(this, partial);
@@ -49,6 +59,8 @@ export class PurchaseProposalItemResponseDto {
   /// cao hơn nhu cầu gốc, không dùng để tính lại gì. null = vật tư chưa cấu hình % (hoặc Sắt
   /// phần mềm, luôn null - xem MaterialsService.resolveWasteFields).
   @Expose() @ApiPropertyOptional({ nullable: true }) purchaseWastePercentage!: number | null;
+  /// Vật tư nhóm Sắt (STEEL_BAR) - nhận hàng bắt buộc ảnh phiếu cân xe (Đợt 5d, bản v8 4.6).
+  @Expose() @ApiProperty() isSteel!: boolean;
   /// Kho nhận hàng THẬT của riêng vật tư này - nguồn xác thực để Thủ kho nhận hàng (xem
   /// PurchaseProposalsService.receiveItem()). Thường = Material.warehouseId -> Warehouse.code,
   /// TRỪ vật tư có kho MẶC ĐỊNH đã thuộc họ "thanh-pham" (2026-09-04, vd Bì zipper/Nhãn): khi đó
@@ -73,6 +85,8 @@ export class PurchaseProposalItemResponseDto {
   /// "Số đơn đặt hàng" dạng "52/2026" - đánh riêng theo từng NCC, đánh lại từ 1 mỗi năm.
   @Expose() @ApiPropertyOptional({ nullable: true }) supplierOrderCode!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) supplierOrderStatus!: string | null;
+  /// File phiếu đề xuất Giám đốc ký của đơn đặt hàng - Nhập kho tự dùng làm chứng từ (2) (Đợt 5d).
+  @Expose() @ApiPropertyOptional({ nullable: true }) supplierOrderApprovalFileUrl!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) supplierName!: string | null;
   /// Chiều dài cây phải đặt (mm) - CHỈ có ở nhánh sắt (copy từ CuttingProposalLine.
   /// bestStockLengthMm lúc CuttingProposalsService.approve(), 2026-08-26). null cho nhánh kiểm

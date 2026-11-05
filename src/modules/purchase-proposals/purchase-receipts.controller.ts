@@ -1,0 +1,69 @@
+import { BadRequestException, Body, Controller, Get, Headers, Post, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { PermissionAction } from '../../generated/prisma/client';
+import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import {
+  CreatePurchaseReceiptDto,
+  PreviewPurchaseReceiptDto,
+  RejectPurchaseReceiptDto,
+} from './dto/purchase-receipt.dto';
+import { PurchaseReceiptsService } from './purchase-receipts.service';
+
+// Cùng quyền với route nhận hàng cũ - TÁCH khỏi PURCHASE_PROPOSAL:UPDATE (thủ kho không được chạm luồng mua).
+const RECEIVE = { module: PERMISSION_MODULES.PURCHASE_RECEIPT, action: PermissionAction.UPDATE };
+const VIEW = { module: PERMISSION_MODULES.PURCHASE_PROPOSAL, action: PermissionAction.VIEW };
+
+function requireKey(key: string | undefined): string {
+  if (!key) throw new BadRequestException('Header Idempotency-Key là bắt buộc');
+  return key;
+}
+
+/** Nhận hàng mua theo phiếu (Đợt 5d) - xem PurchaseReceiptsService. */
+@ApiTags('Purchase Receipts')
+@ApiBearerAuth()
+@Controller({ path: 'purchase-receipts', version: '1' })
+export class PurchaseReceiptsController {
+  constructor(private readonly receipts: PurchaseReceiptsService) {}
+
+  @Get()
+  @RequirePermissions(VIEW)
+  list(
+    @Query('supplierOrderId') supplierOrderId?: string,
+    @Query('materialId') materialId?: string,
+  ) {
+    return this.receipts.list({ supplierOrderId, materialId });
+  }
+
+  @Post('preview')
+  @RequirePermissions(RECEIVE)
+  preview(
+    @Body() dto: PreviewPurchaseReceiptDto,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.receipts.preview(dto, warehouseScope);
+  }
+
+  @Post()
+  @RequirePermissions(RECEIVE)
+  receive(
+    @Body() dto: CreatePurchaseReceiptDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.receipts.receive(dto, userId, requireKey(idempotencyKey), warehouseScope);
+  }
+
+  @Post('reject')
+  @RequirePermissions(RECEIVE)
+  reject(
+    @Body() dto: RejectPurchaseReceiptDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.receipts.reject(dto, userId, requireKey(idempotencyKey), warehouseScope);
+  }
+}
