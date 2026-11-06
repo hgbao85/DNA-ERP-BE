@@ -6,6 +6,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import {
   CreatePurchaseReceiptDto,
+  OverReceiptStatsQueryDto,
   PreviewPurchaseReceiptDto,
   RejectPurchaseReceiptDto,
 } from './dto/purchase-receipt.dto';
@@ -34,6 +35,13 @@ export class PurchaseReceiptsController {
     @Query('materialId') materialId?: string,
   ) {
     return this.receipts.list({ supplierOrderId, materialId });
+  }
+
+  /** Thống kê nhận vượt (4.12) - theo NCC, vật tư, thủ kho. Cùng quyền xem với Mua hàng. */
+  @Get('over-stats')
+  @RequirePermissions(VIEW)
+  overStats(@Query() query: OverReceiptStatsQueryDto) {
+    return this.receipts.overStats(query);
   }
 
   @Post('preview')

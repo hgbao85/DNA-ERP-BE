@@ -389,6 +389,7 @@ describe('PurchaseReceiptsService', () => {
         id: 900n,
         status: 'RECEIVED',
         receivedQty: dec(150),
+        overQty: dec(0),
         allocation: [],
         allocationAdjusted: false,
       });
@@ -396,6 +397,97 @@ describe('PurchaseReceiptsService', () => {
       expect(res.id).toBe('900');
       expect(proposals.loadReceiveLines).not.toHaveBeenCalled();
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('nhận vượt (4.12)', () => {
+    // Đơn gộp còn lại 100 + 120 + 80 = 300; giao 310 -> vượt 10.
+    const over = { itemIds: ['3', '1', '2'], unitRateQty: 310, deliveredQty: 310, ...docs };
+
+    it('vượt số còn lại của đơn mà không có lý do -> 400, không ghi phiếu', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      const err = await service.receive(over, 'kho-1', 'key-o', null).catch((e: Error) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toContain('Nhận vượt 10');
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+      expect(proposals.applyItemReceipt).not.toHaveBeenCalled();
+    });
+
+    it('có lý do: ghi số vượt + lý do + ảnh vào phiếu, báo người mua phụ trách', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      const res = await service.receive(
+        { ...over, overReason: '  NCC giao nguyên bó  ', overFileUrls: ['https://cdn/bo.jpg'] },
+        'kho-1',
+        'key-o',
+        null,
+      );
+      expect(res.overQty).toBe(10);
+      expect(prisma.purchaseReceipt.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          receivedQty: 310,
+          overQty: 10,
+          overReason: 'NCC giao nguyên bó',
+          overFileUrls: ['https://cdn/bo.jpg'],
+        }) as unknown,
+      });
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'PURCHASE_OVER_RECEIVED',
+        expect.objectContaining({
+          actorId: 'kho-1',
+          params: expect.objectContaining({
+            materialCode: 'SAT-25',
+            receivedQty: 310,
+            overQty: 10,
+            reason: 'NCC giao nguyên bó',
+            orderCode: 'Kim Phát – Số 52/2026',
+            buyerIds: ['buyer-1'],
+          }) as unknown,
+        }),
+      );
+    });
+
+    it('số còn lại tính theo số đã nhận MỚI NHẤT sau khoá: lệnh đã nhận 50 thì giao 260 đã là vượt 10', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      prisma.purchaseProposalItem.findMany.mockResolvedValue(
+        lines.map((l) => ({
+          id: l.item.id,
+          receivedQty: dec(l.item.id === 1n ? 50 : 0),
+          status: l.item.status,
+        })),
+      );
+      const err = await service
+        .receive({ ...over, unitRateQty: 260, deliveredQty: 260 }, 'kho-1', 'key-o', null)
+        .catch((e: Error) => e);
+      expect((err as Error).message).toContain('Nhận vượt 10');
+    });
+
+    it('nhận đúng bằng số còn lại: không cần lý do, overQty 0, không báo nhận vượt', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      const res = await service.receive(
+        { ...over, unitRateQty: 300, deliveredQty: 300, overReason: 'thừa' },
+        'kho-1',
+        'key-o',
+        null,
+      );
+      expect(res.overQty).toBe(0);
+      expect(prisma.purchaseReceipt.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          overQty: 0,
+          overReason: null,
+          overFileUrls: [],
+        }) as unknown,
+      });
+      expect(notifications.emit).not.toHaveBeenCalledWith(
+        'PURCHASE_OVER_RECEIVED',
+        expect.anything(),
+      );
     });
   });
 

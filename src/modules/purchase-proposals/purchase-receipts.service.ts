@@ -32,6 +32,9 @@ import { AllocationResult, autoAllocate } from './purchase-receipt-allocation.ut
 import { supplierOrderCode } from './supplier-order-code.util';
 
 const round4 = (n: number) => Math.round(n * 10_000) / 10_000;
+/** YYYY-MM-DD theo giờ VN -> đầu / cuối ngày đó. */
+const vnDayStart = (day: string) => new Date(`${day.slice(0, 10)}T00:00:00+07:00`);
+const vnDayEnd = (day: string) => new Date(`${day.slice(0, 10)}T23:59:59.999+07:00`);
 const cleanUrls = (urls: string[] | undefined) => [
   ...new Set((urls ?? []).map((u) => u.trim()).filter(Boolean)),
 ];
@@ -51,6 +54,8 @@ export interface PurchaseReceiptResult {
   id: string;
   status: PurchaseReceiptStatus;
   receivedQty: number;
+  /** Phần vượt tổng số còn lại của đơn (4.12). */
+  overQty: number;
   allocation: PreviewLine[];
   allocationAdjusted: boolean;
 }
@@ -107,6 +112,8 @@ export class PurchaseReceiptsService {
     const supplierSlipUrls = cleanUrls(dto.supplierSlipUrls);
     const receiptSlipUrls = cleanUrls(dto.receiptSlipUrls);
     const weighSlipUrls = cleanUrls(dto.weighSlipUrls);
+    const overReason = dto.overReason?.trim() || undefined;
+    const overFileUrls = cleanUrls(dto.overFileUrls);
     const missing: string[] = [];
     if (supplierSlipUrls.length === 0) missing.push('phiếu giao hàng của NCC');
     if (receiptSlipUrls.length === 0) missing.push('phiếu nhập kho nhà máy');
@@ -159,6 +166,22 @@ export class PurchaseReceiptsService {
             : autoAlloc;
           const isAdjusted = !!dto.allocation && !sameAllocation(autoAlloc, finalAlloc);
 
+          // 4.12: vượt tổng số CÒN LẠI của đơn (số đặt − đã nhận, đọc sau khoá) thì bắt buộc lý do.
+          const remainingTotal = lines.reduce((sum, l) => {
+            const received = freshById.get(l.item.id.toString())!.receivedQty.toNumber();
+            const ordered = effectiveOrderQty(
+              l.item.buyQty.toNumber(),
+              l.item.orderQty?.toNumber() ?? null,
+            );
+            return sum + Math.max(0, ordered - received);
+          }, 0);
+          const overQty = round4(Math.max(0, total - remainingTotal));
+          if (overQty > 0 && !overReason) {
+            throw new BadRequestException(
+              `Nhận vượt ${overQty} so với số còn lại của đơn (${round4(remainingTotal)}) - bắt buộc ghi lý do nhận vượt.`,
+            );
+          }
+
           const receipt = await tx.purchaseReceipt.create({
             data: {
               supplierOrderId: first.item.supplierOrderId,
@@ -179,6 +202,9 @@ export class PurchaseReceiptsService {
               autoAllocation: autoAlloc as unknown as Prisma.InputJsonValue,
               allocation: finalAlloc as unknown as Prisma.InputJsonValue,
               allocationAdjusted: isAdjusted,
+              overQty,
+              overReason: overQty > 0 ? overReason : null,
+              overFileUrls: overQty > 0 ? overFileUrls : [],
               idempotencyKey,
               createdById: userId,
             },
@@ -206,6 +232,7 @@ export class PurchaseReceiptsService {
           }
           return {
             receiptId: receipt.id,
+            overQty,
             applied: done,
             auto: autoAlloc,
             finalAllocation: finalAlloc,
@@ -222,10 +249,13 @@ export class PurchaseReceiptsService {
       }
       throw error;
     }
-    const { receiptId, applied, auto, finalAllocation, adjusted } = outcome;
+    const { receiptId, overQty, applied, auto, finalAllocation, adjusted } = outcome;
 
     for (const a of applied) {
       await this.proposals.afterItemReceipt(a.line, a.qty, a.saved, userId);
+    }
+    if (overQty > 0) {
+      await this.notifyOverReceived(first, total, overQty, overReason!, receiptId, userId);
     }
     if (adjusted) {
       this.logger.log(
@@ -236,6 +266,7 @@ export class PurchaseReceiptsService {
       id: receiptId.toString(),
       status: PurchaseReceiptStatus.RECEIVED,
       receivedQty: total,
+      overQty,
       allocation: this.toPreview(lines, finalAllocation),
       allocationAdjusted: adjusted,
     };
@@ -307,9 +338,42 @@ export class PurchaseReceiptsService {
       id: receipt.id.toString(),
       status: PurchaseReceiptStatus.REJECTED,
       receivedQty: 0,
+      overQty: 0,
       allocation: [],
       allocationAdjusted: false,
     };
+  }
+
+  private async notifyOverReceived(
+    first: ReceiveLine,
+    receivedQty: number,
+    overQty: number,
+    reason: string,
+    receiptId: bigint,
+    userId: string,
+  ): Promise<void> {
+    const order = first.item.supplierOrder;
+    try {
+      await this.notifications.emit('PURCHASE_OVER_RECEIVED', {
+        entityId: first.proposal.id.toString(),
+        actorId: userId,
+        params: {
+          materialCode: first.item.material.code,
+          unit: first.item.material.unit,
+          receivedQty,
+          overQty,
+          reason,
+          orderCode: order
+            ? `${order.supplier.name} – Số ${supplierOrderCode(order.seq, order.year)}`
+            : undefined,
+          buyerIds: first.item.material.buyerId ? [first.item.material.buyerId] : [],
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Không gửi được thông báo nhận vượt (phiếu ${receiptId}): ${(error as Error).message}`,
+      );
+    }
   }
 
   /** Lịch sử phiếu nhận (kể cả phiếu từ chối) của 1 đơn đặt hàng hoặc 1 vật tư. */
@@ -346,9 +410,84 @@ export class PurchaseReceiptsService {
       allocation: r.allocation,
       autoAllocation: r.autoAllocation,
       allocationAdjusted: r.allocationAdjusted,
+      overQty: r.overQty.toNumber(),
+      overReason: r.overReason,
+      overFileUrls: r.overFileUrls,
       createdByName: `${r.createdBy.firstName} ${r.createdBy.lastName}`.trim(),
       createdAt: r.createdAt,
     }));
+  }
+
+  /**
+   * Thống kê nhận vượt (4.12): từng lần nhận vượt + gộp theo NCC, vật tư, thủ kho. Đếm số lần ở mọi nhóm; tổng số vượt chỉ cộng
+   * theo vật tư (khác vật tư khác đơn vị, cộng chéo vô nghĩa). Ngày theo giờ VN, mặc định 30 ngày gần nhất.
+   */
+  async overStats(query: { from?: string; to?: string }) {
+    const to = query.to ? vnDayEnd(query.to) : new Date();
+    const from = query.from ? vnDayStart(query.from) : new Date(to.getTime() - 30 * 86_400_000);
+    const rows = await this.prisma.purchaseReceipt.findMany({
+      where: {
+        status: PurchaseReceiptStatus.RECEIVED,
+        overQty: { gt: 0 },
+        createdAt: { gte: from, lte: to },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+      include: {
+        material: { select: { code: true, name: true, unit: true } },
+        createdBy: { select: { firstName: true, lastName: true } },
+        supplierOrder: { select: { seq: true, year: true, supplier: { select: { name: true } } } },
+      },
+    });
+    const items = rows.map((r) => ({
+      id: r.id.toString(),
+      createdAt: r.createdAt,
+      supplierName: r.supplierOrder?.supplier.name ?? '(không có đơn)',
+      orderCode: r.supplierOrder
+        ? supplierOrderCode(r.supplierOrder.seq, r.supplierOrder.year)
+        : null,
+      materialCode: r.material.code,
+      materialName: r.material.name,
+      unit: r.material.unit,
+      receivedQty: r.receivedQty.toNumber(),
+      overQty: r.overQty.toNumber(),
+      overReason: r.overReason ?? '',
+      overFileUrls: r.overFileUrls,
+      createdByName: `${r.createdBy.firstName} ${r.createdBy.lastName}`.trim(),
+    }));
+    const group = (keyOf: (i: (typeof items)[number]) => string) => {
+      const map = new Map<string, number>();
+      for (const i of items) map.set(keyOf(i), (map.get(keyOf(i)) ?? 0) + 1);
+      return [...map.entries()]
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    };
+    const byMaterialMap = new Map<
+      string,
+      { code: string; name: string; unit: string; count: number; overQty: number }
+    >();
+    for (const i of items) {
+      const cur = byMaterialMap.get(i.materialCode) ?? {
+        code: i.materialCode,
+        name: i.materialName,
+        unit: i.unit,
+        count: 0,
+        overQty: 0,
+      };
+      cur.count += 1;
+      cur.overQty = round4(cur.overQty + i.overQty);
+      byMaterialMap.set(i.materialCode, cur);
+    }
+    return {
+      from,
+      to,
+      items,
+      bySupplier: group((i) => i.supplierName),
+      byMaterial: [...byMaterialMap.values()].sort(
+        (a, b) => b.count - a.count || a.code.localeCompare(b.code),
+      ),
+      byUser: group((i) => i.createdByName),
+    };
   }
 
   // ─── helpers ───────────────────────────────────────────────────────────────────────────────
@@ -454,6 +593,7 @@ export class PurchaseReceiptsService {
       id: r.id.toString(),
       status: r.status,
       receivedQty: r.receivedQty.toNumber(),
+      overQty: r.overQty.toNumber(),
       allocation: preview,
       allocationAdjusted: r.allocationAdjusted,
     };

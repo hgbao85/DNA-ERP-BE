@@ -36,6 +36,10 @@ export class PurchaseReceiptLogResponseDto {
   @Expose() @ApiProperty() approvalFileUrls!: string[];
   @Expose() @ApiProperty() receiptSlipUrls!: string[];
   @Expose() @ApiProperty() weighSlipUrls!: string[];
+  /// Nhận vượt của cả phiếu (Đợt 5e, 4.12): số vượt, lý do, ảnh bằng chứng.
+  @Expose() @ApiProperty() overQty!: number;
+  @Expose() @ApiPropertyOptional({ nullable: true }) overReason!: string | null;
+  @Expose() @ApiProperty() overFileUrls!: string[];
 
   constructor(partial: Partial<PurchaseReceiptLogResponseDto>) {
     Object.assign(this, partial);

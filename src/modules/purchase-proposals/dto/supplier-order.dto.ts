@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsIn,
@@ -31,6 +32,22 @@ export class CancelSupplierOrderDto {
   @ApiProperty({ description: 'Lý do huỷ - số đơn vẫn giữ, không cấp lại' })
   @IsString()
   @MinLength(1)
+  @MaxLength(500)
+  reason!: string;
+}
+
+/** "Đóng phần thiếu" (Đợt 5e, bản v8 7.13) - các dòng của đơn đã duyệt mà NCC không giao nốt. */
+export class CloseShortageDto {
+  @ApiProperty({ type: [String], description: 'Dòng vật tư trong đơn cần đóng (đang chờ nhận)' })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  itemIds!: string[];
+
+  @ApiProperty({ description: 'Lý do NCC không giao nốt' })
+  @IsString()
+  @MinLength(3)
   @MaxLength(500)
   reason!: string;
 }
@@ -79,6 +96,10 @@ export class SupplierOrderItemDto {
   @Expose() @ApiProperty() receivedQty!: number;
   /// Mã lệnh sản xuất của dòng (mã PI; số LSX khi người A làm xong Đợt 2).
   @Expose() @ApiPropertyOptional({ nullable: true }) orderCode!: string | null;
+  /// "Đóng phần thiếu" (7.13): số đặt − đã nhận lúc đóng, lý do, lúc đóng. null = chưa đóng.
+  @Expose() @ApiPropertyOptional({ nullable: true }) shortClosedQty!: number | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) shortCloseReason!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) shortClosedAt!: Date | null;
 
   constructor(partial: Partial<SupplierOrderItemDto>) {
     Object.assign(this, partial);

@@ -193,6 +193,18 @@ export interface PurchaseReceiptRejectedParams {
   buyerIds: string[];
 }
 
+/** Kho nhận vượt số còn lại của đơn (Đợt 5e, bản v8 4.12). */
+export interface PurchaseOverReceivedParams {
+  materialCode: string;
+  unit?: string;
+  receivedQty: number;
+  overQty: number;
+  reason: string;
+  /** "Kim Phát – Số 52/2026" */
+  orderCode?: string;
+  buyerIds: string[];
+}
+
 /** Trạng thái xưởng của 1 lệnh sản xuất (ProductionOrder.floorStage) - QLSX Bắt đầu/Tạm dừng/Tiếp tục/Kết thúc. */
 export interface FloorStageNotificationParams {
   piCode: string;
@@ -828,6 +840,21 @@ const notificationTypeDefinitions = {
     recipients: (p: PurchaseReceiptRejectedParams) =>
       p.buyerIds.length > 0 ? { userIds: p.buyerIds } : { roles: [BUSINESS_ROLES.PURCHASER] },
   } satisfies NotificationTypeDef<PurchaseReceiptRejectedParams>,
+
+  /** Kho nhận vượt số còn lại của đơn (Đợt 5e, bản v8 4.12) - phần vượt vào tồn chưa giữ, người mua phụ trách vật tư nắm
+   *  để tính vào lần mua sau. Không có người mua được gán thì báo mọi Mua hàng. */
+  PURCHASE_OVER_RECEIVED: {
+    category: 'INFO',
+    severity: 'WARNING',
+    entityType: 'PURCHASE_PROPOSAL',
+    title: (p: PurchaseOverReceivedParams) =>
+      `Kho nhận vượt ${p.overQty}${p.unit ? ` ${p.unit}` : ''} ${p.materialCode}${p.orderCode ? ` - đơn ${p.orderCode}` : ''}`,
+    message: (p: PurchaseOverReceivedParams) =>
+      `Thực nhận ${p.receivedQty}${p.unit ? ` ${p.unit}` : ''}, phần vượt vào tồn chưa giữ. Lý do: ${p.reason}`,
+    link: () => ({ module: 'purchasing', page: 'nhan-vuot' }),
+    recipients: (p: PurchaseOverReceivedParams) =>
+      p.buyerIds.length > 0 ? { userIds: p.buyerIds } : { roles: [BUSINESS_ROLES.PURCHASER] },
+  } satisfies NotificationTypeDef<PurchaseOverReceivedParams>,
 
   // ─── Phase 3b, nhóm 7.5-i "Sắt → Phôi → KCS" (xem changelog 2026-09-25 mục 19) ─────────────
   /** Kho xuất sắt cho PI - Phôi vào xác nhận đã nhận. Tự đóng khi Phôi `receive()`.
