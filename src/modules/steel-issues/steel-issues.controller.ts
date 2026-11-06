@@ -24,7 +24,6 @@ import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorat
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { ReceiveSteelIssueDto } from './dto/receive-steel-issue.dto';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
-import { CreateSteelIssueDto } from './dto/create-steel-issue.dto';
 import { ListStepBundlesQueryDto } from './dto/list-step-bundles-query.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
 import { RecordStepBatchDto } from './dto/record-step-batch.dto';
@@ -34,7 +33,6 @@ import { UndoCutBatchDto } from './dto/undo-cut-batch.dto';
 import { SteelIssuesService } from './steel-issues.service';
 
 const VIEW = { module: PERMISSION_MODULES.STEEL_ISSUE, action: PermissionAction.VIEW };
-const CREATE = { module: PERMISSION_MODULES.STEEL_ISSUE, action: PermissionAction.CREATE };
 const UPDATE = { module: PERMISSION_MODULES.STEEL_ISSUE, action: PermissionAction.UPDATE };
 
 @ApiTags('Steel Issues')
@@ -45,23 +43,9 @@ export class SteelIssuesController {
 
   // ─── Thủ kho trung tâm (WAREHOUSE_STAFF) - xuất sắt cho Phôi, gộp theo cả PI ─
 
-  @Post('production-invoices/:id/steel-issues')
-  @RequirePermissions(CREATE)
-  create(
-    @Param('id') id: string,
-    @Body() dto: CreateSteelIssueDto,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('warehouseScope') warehouseScope: string | null,
-    @Headers('Idempotency-Key') idempotencyKey: string | undefined,
-  ) {
-    // Vấn đề #11 audit 26/08 - trước đây header này chỉ tuỳ chọn dù service đã hỗ trợ dedupe theo
-    // key, nên 1 request gửi lặp (mất mạng rồi gửi lại...) mà thiếu header vẫn tạo 2 bản ghi riêng
-    // biệt. FE đã gửi kèm ở mọi lần gọi thật (xem withIdempotencyKey() trong steel-issues-api.ts).
-    if (!idempotencyKey) {
-      throw new BadRequestException('Header Idempotency-Key là bắt buộc');
-    }
-    return this.steelIssuesService.create(id, dto, userId, warehouseScope, idempotencyKey);
-  }
+  // Route xuất từng dòng (không ảnh chứng từ) ĐÃ GỠ ở Đợt 6 (2026-11-06, bản v8 YC4, V4-1 khoá cứng): xuất kho chỉ qua phiếu
+  // xuất XK nhiều dòng - POST /issue-slips (tạo, cấp số, in) rồi POST /issue-slips/:id/confirm kèm ảnh phiếu đã ký. Lõi
+  // ghi vẫn ở service này (prepareIssue / createInTx / afterCreate).
 
   @Get('production-invoices/:id/steel-issues')
   @RequirePermissions(VIEW)

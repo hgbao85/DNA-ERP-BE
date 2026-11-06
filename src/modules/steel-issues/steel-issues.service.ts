@@ -95,7 +95,16 @@ const STEEL_ISSUE_DETAIL_INCLUDE = {
   },
 } satisfies Prisma.SteelIssueInclude;
 
-type SteelIssueRow = Prisma.SteelIssueGetPayload<{ include: typeof STEEL_ISSUE_INCLUDE }>;
+export type SteelIssueRow = Prisma.SteelIssueGetPayload<{ include: typeof STEEL_ISSUE_INCLUDE }>;
+
+/** Kết quả prepareIssue() - đủ để ghi 1 lần xuất sắt trong transaction của caller (Đợt 6, phiếu xuất XK). */
+export interface PreparedSteelIssue {
+  productionInvoiceId: bigint;
+  materialId: bigint;
+  barLengthMm: number;
+  barCount: number;
+  isPostCutover: boolean;
+}
 type SteelIssueDetail = Prisma.SteelIssueGetPayload<{ include: typeof STEEL_ISSUE_DETAIL_INCLUDE }>;
 type BaseInputs = {
   orders: OrderForBom[];
@@ -335,6 +344,26 @@ export class SteelIssuesService {
       }
     }
 
+    const prepared = await this.prepareIssue(productionInvoiceId, dto);
+    const created = await this.prisma.$transaction(
+      (tx) => this.createInTx(tx, prepared, issuedById, idempotencyKey),
+      { timeout: 15_000 },
+    );
+    await this.afterCreate(created, issuedById);
+    return this.toResponseDto(
+      created,
+      await this.resolveRequiredSteps(prepared.productionInvoiceId, prepared.materialId),
+    );
+  }
+
+  /**
+   * Phần kiểm tra TRƯỚC transaction của 1 lần xuất sắt (đọc qua this.prisma) - tách riêng (Đợt 6, phiếu xuất XK nhiều dòng)
+   * để IssueSlipsService kiểm từng dòng trước rồi ghi mọi dòng trong 1 transaction chung.
+   */
+  async prepareIssue(
+    productionInvoiceId: string,
+    dto: CreateSteelIssueDto,
+  ): Promise<PreparedSteelIssue> {
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const materialId = parseBigIntId(dto.materialId);
     const orders = await this.findOrdersForInvoice(invoice.id);
@@ -350,49 +379,59 @@ export class SteelIssuesService {
     // luôn được set cùng lúc chuyển status) - coi như "trước cutover" nếu có, an toàn hơn (không
     // trừ tồn lần 2) là sai theo chiều ngược lại.
     const isPostCutover = (approvedAt ?? new Date(0)) >= STEEL_ISSUE_RESERVATION_CUTOVER;
+    return {
+      productionInvoiceId: invoice.id,
+      materialId,
+      barLengthMm: dto.barLengthMm,
+      barCount: dto.barCount,
+      isPostCutover,
+    };
+  }
 
-    const created = await this.prisma.$transaction(
-      async (tx) => {
-        await assertPiHasActiveFloorLocked(tx, invoice.id, 'xuất sắt');
+  /** Phần ghi TRONG transaction (caller mở transaction) - không gửi thông báo, xem afterCreate(). */
+  async createInTx(
+    tx: PrismaTx,
+    p: PreparedSteelIssue,
+    issuedById: string,
+    idempotencyKey?: string,
+  ): Promise<SteelIssueRow> {
+    await assertPiHasActiveFloorLocked(tx, p.productionInvoiceId, 'xuất sắt');
 
-        const issue = await tx.steelIssue.create({
-          data: {
-            productionInvoiceId: invoice.id,
-            materialId,
-            barLengthMm: dto.barLengthMm,
-            barCount: dto.barCount,
-            issuedById,
-            idempotencyKey,
-          },
-          include: STEEL_ISSUE_INCLUDE,
-        });
-
-        if (isPostCutover) {
-          await this.consumeReservationAndDeduct(tx, {
-            // L5 (2026-08-26): rút từ POOL của cả PI+vật tư, không còn 1 cuttingProposalId cụ thể
-            // - xem StockReservationsService.drainPool và docstring hàm dưới đây.
-            productionInvoiceId: invoice.id,
-            materialId,
-            barLengthMm: dto.barLengthMm,
-            barCount: dto.barCount,
-            steelIssueId: issue.id,
-            issuedById,
-          });
-        }
-
-        return issue;
+    const issue = await tx.steelIssue.create({
+      data: {
+        productionInvoiceId: p.productionInvoiceId,
+        materialId: p.materialId,
+        barLengthMm: p.barLengthMm,
+        barCount: p.barCount,
+        issuedById,
+        idempotencyKey,
       },
-      { timeout: 15_000 },
-    );
+      include: STEEL_ISSUE_INCLUDE,
+    });
 
+    if (p.isPostCutover) {
+      await this.consumeReservationAndDeduct(tx, {
+        // L5 (2026-08-26): rút từ POOL của cả PI+vật tư, không còn 1 cuttingProposalId cụ thể
+        // - xem StockReservationsService.drainPool và docstring hàm dưới đây.
+        productionInvoiceId: p.productionInvoiceId,
+        materialId: p.materialId,
+        barLengthMm: p.barLengthMm,
+        barCount: p.barCount,
+        steelIssueId: issue.id,
+        issuedById,
+      });
+    }
+    return issue;
+  }
+
+  /** Sau khi transaction đã commit: báo Phôi + realtime (best-effort). */
+  async afterCreate(created: SteelIssueRow, issuedById: string): Promise<void> {
     await this.notifySteelIssue('STEEL_ISSUE_TO_PHOI', created.id, {
       piCode: created.productionInvoice.code,
       materialCode: created.material.code,
       barCount: created.barCount,
     });
-
     this.publishRealtime(created.id, 'CREATED', issuedById, created.productionInvoiceId);
-    return this.toResponseDto(created, await this.resolveRequiredSteps(invoice.id, materialId));
   }
 
   /**

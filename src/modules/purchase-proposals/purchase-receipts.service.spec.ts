@@ -61,6 +61,7 @@ function line(o: {
 }
 
 const docs = {
+  slipCode: 'NK-261106-001',
   supplierSlipUrls: ['https://cdn/giao.jpg'],
   receiptSlipUrls: ['https://cdn/nhap.jpg'],
   weighSlipUrls: ['https://cdn/can.jpg'],
@@ -70,9 +71,11 @@ describe('PurchaseReceiptsService', () => {
   let service: PurchaseReceiptsService;
   let prisma: {
     purchaseReceipt: { findUnique: jest.Mock; create: jest.Mock };
+    reservedSlipCode: { updateMany: jest.Mock; findUnique: jest.Mock; create: jest.Mock };
     purchaseProposalItem: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $executeRaw: jest.Mock;
+    $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
   let proposals: {
@@ -96,6 +99,12 @@ describe('PurchaseReceiptsService', () => {
         create: jest.fn().mockResolvedValue({ id: 900n }),
       },
       purchaseProposalItem: { findMany: jest.fn() },
+      reservedSlipCode: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([{ lastSeq: 4 }]),
       warehouse: { findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 700n }) },
       $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
@@ -255,6 +264,7 @@ describe('PurchaseReceiptsService', () => {
         service.receive(
           {
             itemIds: ['1'],
+            slipCode: 'NK-261106-001',
             unitRateQty: 5,
             deliveredQty: 5,
             supplierSlipUrls: [],
@@ -278,6 +288,7 @@ describe('PurchaseReceiptsService', () => {
       await service.receive(
         {
           itemIds: ['1'],
+          slipCode: 'NK-261106-001',
           unitRateQty: 5,
           deliveredQty: 5,
           supplierSlipUrls: ['a'],
@@ -397,6 +408,63 @@ describe('PurchaseReceiptsService', () => {
       expect(res.id).toBe('900');
       expect(proposals.loadReceiveLines).not.toHaveBeenCalled();
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('số phiếu nhập NK (Đợt 6, 4.8)', () => {
+    const base = { itemIds: ['3', '1', '2'], unitRateQty: 150, deliveredQty: 150, ...docs };
+
+    it('gắn số NK đã giữ vào phiếu nhận và đánh dấu đã dùng, trong cùng transaction', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      const res = await service.receive(base, 'kho-1', 'key-nk', null);
+      expect(res.code).toBe('NK-261106-001');
+      expect(prisma.reservedSlipCode.updateMany).toHaveBeenCalledWith({
+        where: { code: 'NK-261106-001', kind: 'NK', usedAt: null },
+        data: { usedAt: expect.any(Date) as unknown },
+      });
+      expect(prisma.purchaseReceipt.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ code: 'NK-261106-001' }) as unknown,
+      });
+    });
+
+    it('số NK chưa giữ hoặc đã dùng -> 400, không ghi phiếu', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      prisma.reservedSlipCode.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.receive(base, 'kho-1', 'key-nk', null)).rejects.toThrow('In phiếu nhập');
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+      expect(proposals.applyItemReceipt).not.toHaveBeenCalled();
+    });
+
+    it('"In phiếu nhập": cấp số NK mới; in lại cùng lần nhận thì dùng lại số chưa dùng của chính mình', async () => {
+      const first = await service.reserveSlipCode('kho-1');
+      expect(first.code).toMatch(/^NK-\d{6}-004$/);
+      expect(prisma.reservedSlipCode.create).toHaveBeenCalledWith({
+        data: { code: first.code, kind: 'NK', createdById: 'kho-1' },
+      });
+
+      prisma.reservedSlipCode.findUnique.mockResolvedValue({
+        code: 'NK-261106-002',
+        kind: 'NK',
+        usedAt: null,
+        createdById: 'kho-1',
+      });
+      expect(await service.reserveSlipCode('kho-1', 'NK-261106-002')).toEqual({
+        code: 'NK-261106-002',
+      });
+      // Số của người khác / đã dùng thì cấp số mới.
+      prisma.reservedSlipCode.findUnique.mockResolvedValue({
+        code: 'NK-261106-002',
+        kind: 'NK',
+        usedAt: new Date(),
+        createdById: 'kho-1',
+      });
+      expect((await service.reserveSlipCode('kho-1', 'NK-261106-002')).code).not.toBe(
+        'NK-261106-002',
+      );
     });
   });
 

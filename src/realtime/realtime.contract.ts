@@ -53,7 +53,8 @@ export type RealtimeEntity =
   | 'SKU'
   | 'MATERIAL_YIELD_RECIPE'
   | 'PRODUCTION_ORDER'
-  | 'FLOOR_REPORT';
+  | 'FLOOR_REPORT'
+  | 'ISSUE_SLIP';
 
 export interface RealtimeEntityRoute {
   /** Module nào được nhận event (room perm:<module>:VIEW). */
@@ -137,6 +138,15 @@ export const REALTIME_ENTITY_ROUTES: Record<RealtimeEntity, RealtimeEntityRoute>
   SALES_ORDER: {
     modules: [PERMISSION_MODULES.SALES_ORDER],
     topics: ['sales-orders'],
+  },
+  // Phiếu xuất kho XK (Đợt 6): tạo / xuất / huỷ phiếu - màn phiếu xuất của thủ kho tự tải lại; xuất xong kéo theo tồn kho.
+  ISSUE_SLIP: {
+    modules: [
+      PERMISSION_MODULES.MATERIAL_ISSUE,
+      PERMISSION_MODULES.STEEL_ISSUE,
+      PERMISSION_MODULES.STOCK,
+    ],
+    topics: ['issue-slips', 'stock'],
   },
   CUTTING_PROPOSAL: {
     modules: [PERMISSION_MODULES.CUTTING_PROPOSAL],
