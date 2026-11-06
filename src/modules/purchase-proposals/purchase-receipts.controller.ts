@@ -44,6 +44,16 @@ export class PurchaseReceiptsController {
     return this.receipts.overStats(query);
   }
 
+  /** "In phiếu nhập" (Đợt 6): giữ 1 số NK-yymmdd-NNN để in trước khi xác nhận nhập. `reuse` = số đã giữ trước đó (in lại). */
+  @Post('slip-code')
+  @RequirePermissions(RECEIVE)
+  reserveSlipCode(@CurrentUser('id') userId: string, @Body() body: { reuse?: string }) {
+    return this.receipts.reserveSlipCode(
+      userId,
+      typeof body?.reuse === 'string' ? body.reuse : undefined,
+    );
+  }
+
   @Post('preview')
   @RequirePermissions(RECEIVE)
   preview(

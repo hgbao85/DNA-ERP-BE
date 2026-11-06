@@ -30,6 +30,7 @@ import {
 } from './purchase-proposals.service';
 import { AllocationResult, autoAllocate } from './purchase-receipt-allocation.util';
 import { supplierOrderCode } from './supplier-order-code.util';
+import { allocateSlipCode } from '../issue-slips/slip-code.util';
 
 const round4 = (n: number) => Math.round(n * 10_000) / 10_000;
 /** YYYY-MM-DD theo giờ VN -> đầu / cuối ngày đó. */
@@ -52,6 +53,8 @@ export interface PreviewLine {
 
 export interface PurchaseReceiptResult {
   id: string;
+  /** Số phiếu nhập NK (Đợt 6); null với phiếu từ chối / phiếu trước Đợt 6. */
+  code: string | null;
   status: PurchaseReceiptStatus;
   receivedQty: number;
   /** Phần vượt tổng số còn lại của đơn (4.12). */
@@ -113,6 +116,7 @@ export class PurchaseReceiptsService {
     const receiptSlipUrls = cleanUrls(dto.receiptSlipUrls);
     const weighSlipUrls = cleanUrls(dto.weighSlipUrls);
     const overReason = dto.overReason?.trim() || undefined;
+    const slipCode = dto.slipCode.trim();
     const overFileUrls = cleanUrls(dto.overFileUrls);
     const missing: string[] = [];
     if (supplierSlipUrls.length === 0) missing.push('phiếu giao hàng của NCC');
@@ -166,6 +170,17 @@ export class PurchaseReceiptsService {
             : autoAlloc;
           const isAdjusted = !!dto.allocation && !sameAllocation(autoAlloc, finalAlloc);
 
+          // Số phiếu NK đã giữ lúc in (Đợt 6, 4.8) - mỗi số chỉ gắn 1 phiếu nhận.
+          const { count: codeUsed } = await tx.reservedSlipCode.updateMany({
+            where: { code: slipCode, kind: 'NK', usedAt: null },
+            data: { usedAt: new Date() },
+          });
+          if (codeUsed !== 1) {
+            throw new BadRequestException(
+              `Số phiếu nhập ${slipCode} không hợp lệ hoặc đã dùng cho lần nhập khác - bấm "In phiếu nhập" để lấy số mới`,
+            );
+          }
+
           // 4.12: vượt tổng số CÒN LẠI của đơn (số đặt − đã nhận, đọc sau khoá) thì bắt buộc lý do.
           const remainingTotal = lines.reduce((sum, l) => {
             const received = freshById.get(l.item.id.toString())!.receivedQty.toNumber();
@@ -184,6 +199,7 @@ export class PurchaseReceiptsService {
 
           const receipt = await tx.purchaseReceipt.create({
             data: {
+              code: slipCode,
               supplierOrderId: first.item.supplierOrderId,
               materialId: first.item.materialId,
               warehouseCode: first.warehouseCode,
@@ -264,6 +280,7 @@ export class PurchaseReceiptsService {
     }
     return {
       id: receiptId.toString(),
+      code: slipCode,
       status: PurchaseReceiptStatus.RECEIVED,
       receivedQty: total,
       overQty,
@@ -336,6 +353,7 @@ export class PurchaseReceiptsService {
 
     return {
       id: receipt.id.toString(),
+      code: null,
       status: PurchaseReceiptStatus.REJECTED,
       receivedQty: 0,
       overQty: 0,
@@ -376,6 +394,25 @@ export class PurchaseReceiptsService {
     }
   }
 
+  /**
+   * "In phiếu nhập" (Đợt 6, bản v8 4.2, 4.8): giữ 1 số NK-yymmdd-NNN cho thủ kho in phiếu, người giao ký, chụp tải vào ô "Phiếu
+   * nhập kho" rồi xác nhận nhập kèm số này. In lại cùng lần nhận thì dùng lại số chưa dùng của chính người đó trong ngày.
+   */
+  async reserveSlipCode(userId: string, reuse?: string): Promise<{ code: string }> {
+    if (reuse) {
+      const old = await this.prisma.reservedSlipCode.findUnique({ where: { code: reuse } });
+      if (old && old.kind === 'NK' && !old.usedAt && old.createdById === userId) {
+        return { code: old.code };
+      }
+    }
+    const code = await this.prisma.$transaction(async (tx) => {
+      const c = await allocateSlipCode(tx, 'NK');
+      await tx.reservedSlipCode.create({ data: { code: c, kind: 'NK', createdById: userId } });
+      return c;
+    });
+    return { code };
+  }
+
   /** Lịch sử phiếu nhận (kể cả phiếu từ chối) của 1 đơn đặt hàng hoặc 1 vật tư. */
   async list(query: { supplierOrderId?: string; materialId?: string }) {
     const where: Prisma.PurchaseReceiptWhereInput = {
@@ -393,6 +430,7 @@ export class PurchaseReceiptsService {
     });
     return rows.map((r) => ({
       id: r.id.toString(),
+      code: r.code,
       supplierOrderId: r.supplierOrderId?.toString() ?? null,
       materialCode: r.material.code,
       materialName: r.material.name,
@@ -591,6 +629,7 @@ export class PurchaseReceiptsService {
     }
     return {
       id: r.id.toString(),
+      code: r.code,
       status: r.status,
       receivedQty: r.receivedQty.toNumber(),
       overQty: r.overQty.toNumber(),

@@ -55,7 +55,17 @@ const MATERIAL_ISSUE_INCLUDE = {
   material: true,
 } satisfies Prisma.MaterialIssueInclude;
 
-type MaterialIssueRow = Prisma.MaterialIssueGetPayload<{ include: typeof MATERIAL_ISSUE_INCLUDE }>;
+export type MaterialIssueRow = Prisma.MaterialIssueGetPayload<{
+  include: typeof MATERIAL_ISSUE_INCLUDE;
+}>;
+
+/** Kết quả prepareIssue() - đủ để ghi 1 lần xuất tiêu hao trong transaction của caller (Đợt 6, phiếu xuất XK). */
+export interface PreparedMaterialIssue {
+  order: ProductionOrder;
+  materialBigId: bigint;
+  warehouse: { id: bigint; code: string };
+  dto: CreateMaterialIssueDto;
+}
 
 /// Kho vật lý để trừ tồn/ghi ledger KHÔNG còn hardcode 1 code - đọc động từ Material.warehouseId
 /// (2026-09-03, mirror CuttingProposalsService.approve(): mỗi vật tư xuất đúng theo kho đã khai
@@ -159,6 +169,24 @@ export class MaterialIssuesService {
       }
     }
 
+    const prepared = await this.prepareIssue(productionOrderId, dto, warehouseScope);
+    const created = await this.prisma.$transaction((tx) =>
+      this.createInTx(tx, prepared, issuedById, idempotencyKey),
+    );
+    await this.afterCreate(created, issuedById);
+    return this.toResponseDto(created);
+  }
+
+  /**
+   * Phần kiểm tra TRƯỚC transaction của 1 lần xuất vật tư tiêu hao - tách riêng (Đợt 6, phiếu xuất XK nhiều dòng) để
+   * IssueSlipsService kiểm từng dòng trước rồi ghi mọi dòng trong 1 transaction chung.
+   */
+  async prepareIssue(
+    productionOrderId: string,
+    dto: CreateMaterialIssueDto,
+    warehouseScope: string | null,
+  ): Promise<PreparedMaterialIssue> {
+    this.assertConsumableStage(dto.stage);
     const order = await this.findOrderOrThrow(productionOrderId);
     await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'xuất vật tư');
     const materialBigId = parseBigIntId(dto.materialId);
@@ -166,13 +194,23 @@ export class MaterialIssuesService {
     // Gate theo ĐÚNG instance kho vật lý của vật tư này (không chỉ cùng gia đình vat-tu-tp) - Thủ
     // kho của vat-tu-tp-2 không được xuất vật tư đang thật sự nằm ở kho vat-tu-tp gốc và ngược lại.
     this.assertWarehouseScope(warehouseScope, warehouse.code);
+    return { order, materialBigId, warehouse, dto };
+  }
 
+  /** Phần ghi TRONG transaction (caller mở transaction) - không gửi thông báo, xem afterCreate(). */
+  async createInTx(
+    tx: PrismaTx,
+    p: PreparedMaterialIssue,
+    issuedById: string,
+    idempotencyKey?: string,
+  ): Promise<MaterialIssueRow> {
+    const { order, materialBigId, warehouse, dto } = p;
     // Khoá advisory theo (H2 fix) - resolvePlannedQty/sumIssued/create trước đây đọc-rồi-ghi
     // không transaction/lock: 2 request gần đồng thời cùng thấy 1 `remaining` rồi cùng xuất, tổng
     // ghi sổ vượt định mức. Không có dòng có sẵn để SELECT ... FOR UPDATE (lần xuất đầu tiên cho
     // 1 khoá (order, stage, material) chưa từng có dòng MaterialIssue nào) nên dùng
     // pg_advisory_xact_lock qua lockBusinessKey() - xem comment ở đó.
-    const created = await this.prisma.$transaction(async (tx) => {
+    {
       await lockBusinessKey(tx, `material-issue:${order.id}:${dto.stage}:${materialBigId}`);
       await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, 'xuất vật tư');
 
@@ -278,14 +316,16 @@ export class MaterialIssuesService {
       });
 
       return issue;
-    });
+    }
+  }
 
+  /** Sau khi transaction đã commit: báo tổ nhận + realtime (best-effort). */
+  async afterCreate(created: MaterialIssueRow, issuedById: string): Promise<void> {
     await this.notifyMaterialIssueToTeam(
       created,
       created.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
     );
     this.publishRealtime('MATERIAL_ISSUE', created.id, 'CREATED', issuedById);
-    return this.toResponseDto(created);
   }
 
   async receive(

@@ -41,6 +41,15 @@ export class ReceiptAllocationDto {
 
 /** Nhận 1 lần hàng về (Đợt 5d - bản v8 YC8, YC4 4.3-4.6). Chứng từ bắt buộc ngay lúc nhập. */
 export class CreatePurchaseReceiptDto {
+  @ApiProperty({
+    description:
+      'Số phiếu nhập NK-yymmdd-NNN đã giữ lúc in phiếu (POST /purchase-receipts/slip-code) - Đợt 6, bản v8 4.8',
+  })
+  @IsString()
+  @MinLength(5)
+  @MaxLength(40)
+  slipCode!: string;
+
   @ApiProperty({ type: [String] })
   @IsArray()
   @ArrayMinSize(1)

@@ -57,6 +57,7 @@ import { NetworkAccessModule } from './common/network/network-access.module';
 import { QcReviewsModule } from './modules/qc-reviews/qc-reviews.module';
 import { WeavingIssuesModule } from './modules/weaving-issues/weaving-issues.module';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module';
+import { IssueSlipsModule } from './modules/issue-slips/issue-slips.module';
 import { MaterialYieldIssuesModule } from './modules/material-yield-issues/material-yield-issues.module';
 import { MaterialYieldRecipesModule } from './modules/material-yield-recipes/material-yield-recipes.module';
 import { PackagingIssuesModule } from './modules/packaging-issues/packaging-issues.module';
@@ -137,6 +138,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     QcReviewsModule,
     WeavingIssuesModule,
     MaterialIssuesModule,
+    IssueSlipsModule,
     MaterialYieldIssuesModule,
     MaterialYieldRecipesModule,
     PackagingIssuesModule,
