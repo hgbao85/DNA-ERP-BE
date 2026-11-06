@@ -47,7 +47,9 @@ import {
 } from './deadline-changes.types';
 import {
   diffValues,
+  FLOOR_STARTED_ERROR,
   fieldLabel,
+  isFloorStarted,
   pendingRefOf,
   pickChanged,
   valuesOfItem,
@@ -55,7 +57,9 @@ import {
 
 /** Dòng SKU kèm mọi thứ cần để kiểm 1 dòng nhập (xem `evaluate`). */
 const ITEM_INCLUDE = {
-  productionInvoice: { select: { id: true, code: true, status: true, isMerged: true } },
+  productionInvoice: {
+    select: { id: true, code: true, status: true, isMerged: true, deadline: true },
+  },
   mfgProduct: { select: { factoryCode: true, name: true } },
   stages: true,
   productionOrder: { select: { floorStage: true } },
@@ -72,9 +76,10 @@ const BATCH_INCLUDE = {
     include: {
       productionInvoiceItem: {
         include: {
-          productionInvoice: { select: { id: true, code: true } },
+          productionInvoice: { select: { id: true, code: true, status: true, deadline: true } },
           mfgProduct: { select: { factoryCode: true, name: true } },
           stages: true,
+          productionOrder: { select: { floorStage: true } },
         },
       },
     },
@@ -107,6 +112,31 @@ const userRef = (u: { id: string; firstName: string; lastName: string }): UserRe
   id: u.id,
   name: userName(u),
 });
+
+/** Hạn giao dùng để kiểm thứ tự mốc: hạn riêng của dòng, chưa có thì hạn của lệnh (Đợt 9 phần 2 - khớp form FE). */
+const deliveryDayOf = (item: {
+  deliveryDeadline: Date | null;
+  productionInvoice: { deadline: Date | null } | null;
+}): string | null => {
+  const d = item.deliveryDeadline ?? item.productionInvoice?.deadline ?? null;
+  return d ? vnDayKey(d) : null;
+};
+
+/** Phần A – Đợt 9 phần 2 (Q9-3): vì sao Sếp không duyệt được yêu cầu này (chỉ từ chối được); null = duyệt được. */
+const blockedReasonOf = (item: {
+  productionInvoice: { status: ProductionInvoiceStatus } | null;
+  productionOrder: { floorStage: ProductionOrderFloorStage } | null;
+}): string | null => {
+  if (item.productionInvoice?.status === ProductionInvoiceStatus.CANCELLED) {
+    return 'Lệnh đã huỷ – chỉ từ chối được';
+  }
+  const stage = item.productionOrder?.floorStage;
+  if (stage === ProductionOrderFloorStage.FINISHED) return 'Lệnh đã Kết thúc – chỉ từ chối được';
+  if (isFloorStarted(stage)) {
+    return 'Lệnh đã bắt đầu sản xuất (cắt phôi) – không đổi mốc được nữa, chỉ từ chối được';
+  }
+  return null;
+};
 
 /**
  * Phần A – Đợt 9 (YC2): lõi "sửa kế hoạch ở mọi giai đoạn + Sếp duyệt lại". Dòng SKU chưa Sếp duyệt → ghi mốc thẳng (cùng đường ghi,
@@ -191,6 +221,11 @@ export class DeadlineChangesService implements DeadlineChangesPort {
         check.errors.push('Lệnh đã Kết thúc - không sửa được mốc');
         return check;
       }
+      // Phần A – Đợt 9 phần 2 (Q9-3): lệnh đã bắt đầu sản xuất (cắt phôi) → không đổi mốc, kiểm trước "đang chờ duyệt lại".
+      if (isFloorStarted(item.productionOrder?.floorStage)) {
+        check.errors.push(FLOOR_STARTED_ERROR);
+        return check;
+      }
       if (item.deadlineChangeRequests.length > 0) {
         check.errors.push('Đang chờ Sếp duyệt lại - Huỷ yêu cầu cũ rồi mới sửa lại được');
         return check;
@@ -229,7 +264,8 @@ export class DeadlineChangesService implements DeadlineChangesPort {
       for (const c of changes) projected[c.key] = c.to;
       const warnings = milestoneOrderWarnings({
         ...projected,
-        deliveryDeadline: item.deliveryDeadline ? vnDayKey(item.deliveryDeadline) : null,
+        // Đợt 9 phần 2: dòng chưa có hạn giao riêng thì so với hạn của lệnh (như form hiện) - FE kiểm cùng cách.
+        deliveryDeadline: deliveryDayOf(item),
       });
       if (ORDER_VIOLATION_BLOCKS) check.errors.push(...warnings);
       else check.warnings.push(...warnings);
@@ -541,9 +577,10 @@ export class DeadlineChangesService implements DeadlineChangesPort {
           changes: diffValues(oldValues, newValues),
           warnings: milestoneOrderWarnings({
             ...projected,
-            deliveryDeadline: item.deliveryDeadline ? vnDayKey(item.deliveryDeadline) : null,
+            deliveryDeadline: deliveryDayOf(item),
           }),
           rejectReason: r.status === 'REJECTED' ? batch.decisionNote : null,
+          blockedReason: r.status === 'PENDING' ? blockedReasonOf(item) : null,
         };
       });
       const count = (s: DeadlineChangeRequestStatus) =>
@@ -644,6 +681,12 @@ export class DeadlineChangesService implements DeadlineChangesPort {
         ) {
           throw new ConflictException(
             `Lệnh ${lenh} đã huỷ / Kết thúc - không áp mốc được, hãy từ chối yêu cầu này`,
+          );
+        }
+        // Phần A – Đợt 9 phần 2 (Q9-3): lệnh đã bắt đầu sản xuất (cắt phôi) → không áp mốc được nữa.
+        if (isFloorStarted(item.productionOrder?.floorStage)) {
+          throw new ConflictException(
+            `Lệnh ${lenh} · ${item.mfgProduct.factoryCode} đã bắt đầu sản xuất (cắt phôi) - không đổi mốc được nữa, hãy bỏ chọn (từ chối) yêu cầu này`,
           );
         }
         // V9-2: giá trị hiện tại phải còn đúng bằng lúc KHSX gửi, không thì Sếp đang duyệt trên số cũ.

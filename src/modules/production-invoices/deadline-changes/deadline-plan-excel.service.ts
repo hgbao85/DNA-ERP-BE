@@ -1,5 +1,6 @@
 /**
- * Phần A – Đợt 9 (YC2): file Excel kế hoạch - XUẤT mọi dòng SKU còn sống ra .xlsx để KHSX sửa ngày mốc hàng loạt, rồi ĐỌC lại file đó
+ * Phần A – Đợt 9 (YC2): file Excel kế hoạch - XUẤT các dòng SKU CHƯA BẮT ĐẦU SẢN XUẤT (chưa có lệnh SX, hoặc lệnh SX `floorStage` = PENDING:
+ * chưa cắt phôi - Đợt 9 phần 2 Q9-3; gồm cả dòng chưa duyệt lẫn dòng Sếp đã duyệt mà chưa cắt) ra .xlsx để KHSX sửa ngày mốc hàng loạt, rồi ĐỌC lại file đó
  * thành bản xem trước (`DeadlineImportPreview`). Việc kiểm luật + ghi là của lõi (`DeadlineChangesPort`), file này chỉ lo định dạng.
  *
  * QUY ƯỚC NGÀY TRONG EXCEL: ô ngày là kiểu Date, giá trị = NỬA ĐÊM UTC của NGÀY LỊCH VN (ghi `new Date(Date.UTC(y, m-1, d))`, đọc bằng
@@ -10,6 +11,10 @@
  * theo DEADLINE_FIELDS · R Hạn giao (chỉ xem) · S (ẨN) mã dòng · T (ẨN) JSON giá trị mốc lúc xuất. Sheet ẨN "_dna" giữ dấu file.
  * Sheet được khoá (không mật khẩu): chỉ ô mốc của dòng sửa được là mở khoá; dòng đang chờ Sếp duyệt lại khoá hết.
  * Ô mốc để TRỐNG = giữ nguyên; ô ĐỔI = khác giá trị lúc xuất (cột T).
+ *
+ * Phần A – Đợt 9 phần 2 (Q9-1 = B): mốc sản xuất (khoá `stage.*`) của dòng sửa được xuất dưới dạng CÔNG THỨC `<ô mốc sản xuất gần nhất phía
+ * trước>±<số ngày>` để KHSX thấy mốc sau tự dời ngay trong Excel. Khi đọc, ô có công thức KHỚP đúng công thức kỳ vọng của dòng = mốc tự dời
+ * (không phải ô gõ); mọi ô khác (giá trị, công thức lạ, ô trống = gõ lại ngày cũ) là ô KHSX gõ → `resolveAutoShift` ra bộ mốc cuối cùng.
  */
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import ExcelJS from 'exceljs';
@@ -27,12 +32,21 @@ import {
   DeadlinePlanScope,
   DeadlineValues,
 } from './deadline-changes.types';
-import { fieldLabel, valuesOfItem } from './deadline-values.util';
+import {
+  AUTO_SHIFT_KEYS,
+  daysBetween,
+  fieldLabel,
+  resolveAutoShift,
+  valuesOfItem,
+} from './deadline-values.util';
 
 export const PLAN_SHEET_NAME = 'Kế hoạch';
 export const MARKER_SHEET_NAME = '_dna';
 export const MARKER_KIND = 'dna-erp-deadline-plan';
-export const MARKER_VERSION = 1;
+/** Phần A – Đợt 9 phần 2: v2 = có công thức mốc tự dời. Đọc chấp nhận v1 (không công thức → không tự dời) và v2. */
+export const MARKER_VERSION = 2;
+const MARKER_VERSIONS_ACCEPTED = [1, 2];
+export const GUIDE_SHEET_NAME = 'Hướng dẫn';
 export const MAX_PLAN_ROWS = 2000;
 export const MAX_PLAN_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -49,7 +63,7 @@ const COL_ITEM_ID = COL_DELIVERY + 1;
 const COL_EXPORTED_JSON = COL_DELIVERY + 2;
 
 const STATUS_DRAFT = 'Chưa duyệt';
-const STATUS_APPROVED = 'Đã duyệt – sửa cần Sếp duyệt lại';
+const STATUS_APPROVED = 'Đã duyệt, chưa cắt – sửa cần Sếp duyệt lại';
 const STATUS_PENDING = 'Đang chờ Sếp duyệt lại – không sửa được';
 
 const DATE_FORMAT = 'dd/mm/yyyy';
@@ -138,6 +152,54 @@ function cellText(value: unknown): string {
     : '';
 }
 
+/** Số cột (1-based) → chữ cột Excel (1 → A, 27 → AA). */
+export function columnLetter(n: number): string {
+  let s = '';
+  let x = n;
+  while (x > 0) {
+    const r = (x - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    x = Math.floor((x - 1) / 26);
+  }
+  return s;
+}
+
+/**
+ * Phần A – Đợt 9 phần 2 (Q9-1): công thức kỳ vọng của ô mốc sản xuất `key` ở dòng `rowNumber` = ô mốc sản xuất GẦN NHẤT phía trước có ngày
+ * (theo DEADLINE_FIELDS) ± số ngày cách nhau lúc xuất. null = ô này ghi giá trị thường (không phải mốc sản xuất, mốc trống, hoặc là mốc
+ * sản xuất đầu tiên có ngày). Dùng chung cho xuất (ghi công thức) và đọc (nhận ra ô tự dời).
+ */
+export function expectedShiftFormula(
+  exported: DeadlineValues,
+  key: DeadlineFieldKey,
+  rowNumber: number,
+): string | null {
+  if (!AUTO_SHIFT_KEYS.includes(key)) return null;
+  const cur = exported[key] ?? null;
+  if (cur === null) return null;
+  const idx = AUTO_SHIFT_KEYS.indexOf(key);
+  for (let j = idx - 1; j >= 0; j--) {
+    const pk = AUTO_SHIFT_KEYS[j];
+    const pv = exported[pk] ?? null;
+    if (pv === null) continue;
+    const col = columnLetter(COL_FIRST_DEADLINE + DEADLINE_FIELDS.findIndex((f) => f.key === pk));
+    const gap = daysBetween(pv, cur);
+    return `${col}${rowNumber}${gap < 0 ? '-' : '+'}${Math.abs(gap)}`;
+  }
+  return null;
+}
+
+/** Bỏ `=`, `$`, khoảng trắng, viết hoa - để so công thức đọc từ file với công thức kỳ vọng. */
+function normalizeFormula(f: string): string {
+  return f.replace(/^=/, '').replace(/[$\s]/g, '').toUpperCase();
+}
+
+/** Công thức của ô (shared formula: exceljs đã dịch theo ô); chuỗi rỗng nếu ô không có công thức. */
+function formulaOf(cell: ExcelJS.Cell): string {
+  const f = (cell as unknown as { formula?: unknown }).formula;
+  return typeof f === 'string' ? f : '';
+}
+
 /** Đổi 'YYYY-MM-DD' của giờ VN thành dòng tên file `YYYYMMDD-HHmm`. */
 export function planFileStamp(now: Date): string {
   const t = new Date(now.getTime() + VN_OFFSET_MS);
@@ -169,11 +231,11 @@ export class DeadlinePlanExcelService {
               { salesOrder: { is: { deletedAt: null, isActive: true } } },
             ],
           },
-          // Lệnh chưa Kết thúc (chưa có lệnh SX cũng tính).
+          // Đợt 9 phần 2 (Q9-3): chỉ lệnh CHƯA BẮT ĐẦU SẢN XUẤT - chưa có lệnh SX, hoặc lệnh SX còn PENDING (chưa cắt phôi).
           {
             OR: [
               { productionOrder: { is: null } },
-              { productionOrder: { is: { floorStage: { not: 'FINISHED' } } } },
+              { productionOrder: { is: { floorStage: 'PENDING' } } },
             ],
           },
         ],
@@ -268,7 +330,10 @@ export class DeadlinePlanExcelService {
       DEADLINE_FIELDS.forEach((f, i) => {
         const cell = row.getCell(COL_FIRST_DEADLINE + i);
         const day = values[f.key];
-        cell.value = day ? dayToExcelDate(day) : null;
+        // Đợt 9 phần 2 (Q9-1): dòng sửa được → mốc sản xuất ghi công thức theo mốc sản xuất gần nhất phía trước; dòng chờ duyệt giữ giá trị.
+        const formula = isPending ? null : expectedShiftFormula(values, f.key, idx + 2);
+        const asDate = day ? dayToExcelDate(day) : null;
+        cell.value = formula && asDate ? { formula, result: asDate } : asDate;
         cell.numFmt = DATE_FORMAT;
         cell.alignment = { horizontal: 'center' };
         // Mặc định mọi ô bị khoá khi bật bảo vệ sheet; chỉ mở ô mốc của dòng sửa được.
@@ -299,6 +364,8 @@ export class DeadlinePlanExcelService {
       formatRows: true,
     });
 
+    this.addGuideSheet(wb);
+
     const marker = wb.addWorksheet(MARKER_SHEET_NAME);
     marker.state = 'hidden';
     marker.getCell('A1').value = JSON.stringify({
@@ -309,6 +376,28 @@ export class DeadlinePlanExcelService {
 
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
     return { fileName: `ke-hoach-san-xuat-${planFileStamp(now)}.xlsx`, buffer };
+  }
+
+  /** Đợt 9 phần 2: sheet "Hướng dẫn" (chữ thường, không thuật ngữ IT) đặt sau "Kế hoạch", trước "_dna". */
+  private addGuideSheet(wb: ExcelJS.Workbook): void {
+    const g = wb.addWorksheet(GUIDE_SHEET_NAME);
+    g.columns = [{ width: 110 }];
+    const lines = [
+      'Cách sửa file kế hoạch',
+      'File chỉ có lệnh CHƯA bắt đầu sản xuất (chưa cắt phôi). Lệnh đã bắt đầu cắt không sửa mốc được nữa.',
+      'Sửa 1 mốc sản xuất (Bắt đầu Phôi … Đóng gói) thì các mốc sản xuất sau nó tự dời cùng số ngày. Mua VT và Hạn giao không tự dời.',
+      'Muốn giữ 1 mốc phía sau không dời: gõ lại đúng ngày cũ vào ô đó.',
+      'Ô để trống = giữ nguyên mốc cũ (không xoá mốc qua file).',
+      'Mốc sau sớm hơn mốc trước (vd Hàn trước Phôi, Đóng gói sau Hạn giao) thì dòng đó không lưu được – sửa lại cho đúng thứ tự.',
+      "Dòng 'Chưa duyệt' lưu ngay khi Xác nhận; dòng 'Đã duyệt, chưa cắt' sửa xong phải chờ Sếp duyệt lại; dòng 'Đang chờ Sếp duyệt lại' không sửa được.",
+      'Không thêm / xoá dòng, không sửa cột Mã lệnh / SKU. File để lâu thì tải file mới.',
+    ];
+    lines.forEach((text, i) => {
+      const c = g.getCell(i + 1, 1);
+      c.value = text;
+      c.alignment = { wrapText: true, vertical: 'top' };
+      c.font = i === 0 ? { bold: true, size: 14 } : { size: 12 };
+    });
   }
 
   // ─── Đọc + xem trước ─────────────────────────────────────────────────────────────────────────
@@ -341,12 +430,16 @@ export class DeadlinePlanExcelService {
       sku: string;
       exportedRaw: string;
       cells: unknown[];
+      formulas: string[];
     }
     const raws: RawRow[] = [];
     ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber === 1) return;
       const cells: unknown[] = DEADLINE_FIELDS.map(
         (_, i) => row.getCell(COL_FIRST_DEADLINE + i).value,
+      );
+      const formulas = DEADLINE_FIELDS.map((_, i) =>
+        formulaOf(row.getCell(COL_FIRST_DEADLINE + i)),
       );
       const itemIdRaw = cellText(row.getCell(COL_ITEM_ID).value);
       const exportedRaw = cellText(row.getCell(COL_EXPORTED_JSON).value);
@@ -359,7 +452,7 @@ export class DeadlinePlanExcelService {
         sku !== '' ||
         cells.some((c) => cellText(c) !== '');
       if (!anyContent) return;
-      raws.push({ rowNumber, itemIdRaw, lenh, sku, exportedRaw, cells });
+      raws.push({ rowNumber, itemIdRaw, lenh, sku, exportedRaw, cells, formulas });
     });
     if (raws.length > MAX_PLAN_ROWS) {
       throw new BadRequestException(`File có ${raws.length} dòng, tối đa ${MAX_PLAN_ROWS} dòng`);
@@ -375,7 +468,12 @@ export class DeadlinePlanExcelService {
     }
 
     const results: DeadlineImportRow[] = [];
-    const entries: { rowNumber: number; entry: DeadlineEntryInput; raw: RawRow }[] = [];
+    const entries: {
+      rowNumber: number;
+      entry: DeadlineEntryInput;
+      raw: RawRow;
+      autoKeys: DeadlineFieldKey[];
+    }[] = [];
 
     for (const r of raws) {
       const base = {
@@ -402,22 +500,46 @@ export class DeadlinePlanExcelService {
         continue;
       }
 
-      const newValues: DeadlineValues = {};
-      const expectedOld: DeadlineValues = {};
+      // Đợt 9 phần 2 (Q9-1): phân loại từng ô → ô KHSX gõ (`explicit`) hay mốc tự dời (công thức khớp kỳ vọng của đúng dòng này).
+      const explicit: DeadlineValues = {};
       const errors: string[] = [];
       DEADLINE_FIELDS.forEach((f, i) => {
+        const old = exported[f.key] ?? null;
+        const formula = r.formulas[i];
+        if (formula !== '') {
+          const expected = expectedShiftFormula(exported, f.key, r.rowNumber);
+          if (expected !== null && normalizeFormula(formula) === expected) return; // mốc tự dời
+          // Công thức lạ do KHSX tự viết: lấy kết quả đã lưu làm ô gõ.
+          const pf = parseDateCell(r.cells[i]);
+          if (pf.kind === 'ok') explicit[f.key] = pf.day;
+          else if (pf.kind === 'empty')
+            errors.push(`ô ${fieldLabel(f.key)} có công thức không ra ngày – gõ ngày vào ô`);
+          else errors.push(`ô ${fieldLabel(f.key)} không phải ngày hợp lệ: '${pf.raw}'`);
+          return;
+        }
         const parsed = parseDateCell(r.cells[i]);
-        if (parsed.kind === 'empty') return;
+        if (parsed.kind === 'empty') {
+          // Ô trống = giữ nguyên = coi như gõ lại ngày cũ (mốc sau nó không bị dời theo).
+          if (old !== null) explicit[f.key] = old;
+          return;
+        }
         if (parsed.kind === 'bad') {
           errors.push(`ô ${fieldLabel(f.key)} không phải ngày hợp lệ: '${parsed.raw}'`);
           return;
         }
+        explicit[f.key] = parsed.day;
+      });
+      const { values: resolved, autoKeys } = resolveAutoShift(exported, explicit);
+      const newValues: DeadlineValues = {};
+      const expectedOld: DeadlineValues = {};
+      for (const f of DEADLINE_FIELDS) {
+        const v = resolved[f.key];
         const old = exported[f.key] ?? null;
-        if (parsed.day !== old) {
-          newValues[f.key] = parsed.day;
+        if (v !== null && v !== old) {
+          newValues[f.key] = v;
           expectedOld[f.key] = old;
         }
-      });
+      }
       if (errors.length > 0) {
         fail(errors);
         continue;
@@ -430,6 +552,7 @@ export class DeadlinePlanExcelService {
         rowNumber: r.rowNumber,
         raw: r,
         entry: { itemId: r.itemIdRaw, newValues, expectedOld },
+        autoKeys,
       });
     }
 
@@ -453,7 +576,10 @@ export class DeadlinePlanExcelService {
           });
           continue;
         }
-        results.push({ ...check, rowNumber: e.rowNumber });
+        // Gắn `auto: true` cho mốc tự dời (copy, không sửa mảng dùng chung của cổng).
+        const autoSet = new Set<DeadlineFieldKey>(e.autoKeys);
+        const changes = check.changes.map((c) => (autoSet.has(c.key) ? { ...c, auto: true } : c));
+        results.push({ ...check, changes, rowNumber: e.rowNumber });
         if (check.kind === 'APPLY' || check.kind === 'NEEDS_APPROVAL') commitItems.push(e.entry);
       }
     }
@@ -485,7 +611,12 @@ export class DeadlinePlanExcelService {
         kind?: unknown;
         v?: unknown;
       };
-      if (parsed.kind !== MARKER_KIND || parsed.v !== MARKER_VERSION) throw err;
+      if (
+        parsed.kind !== MARKER_KIND ||
+        typeof parsed.v !== 'number' ||
+        !MARKER_VERSIONS_ACCEPTED.includes(parsed.v)
+      )
+        throw err;
     } catch {
       throw err;
     }

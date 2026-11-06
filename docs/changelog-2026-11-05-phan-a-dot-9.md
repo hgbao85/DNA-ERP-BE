@@ -1,10 +1,10 @@
-# Changelog – Phần A, Đợt 9 (phần 1): sửa kế hoạch ở mọi giai đoạn + Excel + Sếp duyệt lại (YC2) – 05/11/2026
+# Changelog – Phần A, Đợt 9: sửa kế hoạch + Excel + Sếp duyệt lại (YC2) – phần 1 05/11, phần 2 06/11/2026
 
 Nhánh `dot-9-sua-ke-hoach` ở 2 worktree: BE `D:\DNA-ERP-BE-dot9` (cắt từ `origin/main` `59f828c` = đã có Đợt 4 + 5d), FE `D:\DNA-ERP-dot9`
 (cắt từ `origin/demo` `136a1a3`). **Phần 1 (theo phương án IT đề xuất cho 4 câu chờ Sếp) commit trên nhánh + gộp `--no-ff` vào `main` / `demo`
 05/11, sau Đợt 5d phần 2 của người B (chưa push).** Phần 2 = đổi theo câu trả lời của Sếp + file Excel mẫu (mục 3). Plan: `docs/ke-hoach-phan-a-12-yeu-cau-2026-11-04.md` mục 5, **5b**; bản yêu cầu v8 YC2
-(2.1–2.4). 4 câu xin Sếp chốt: `docs/cau-hoi-sep-dot-9-sua-ke-hoach-2026-11-05.docx` - **chưa có câu trả lời**, code theo phương án IT đề xuất
-(đổi nhanh được - mục 3).
+(2.1–2.4). 4 câu xin Sếp chốt: `docs/cau-hoi-sep-dot-9-sua-ke-hoach-2026-11-05.docx` - phần 1 code theo phương án IT đề xuất (mục 3).
+**Sếp trả lời 06/11 → phần 2 (mục 9): code xong ở nhánh, CHƯA commit.** Phần 1 đã push 05/11 (Render 17:01, Vercel kiểm 06/11).
 
 ## Mục lục
 - 1. Đã làm (BE, FE)
@@ -15,6 +15,7 @@ Nhánh `dot-9-sua-ke-hoach` ở 2 worktree: BE `D:\DNA-ERP-BE-dot9` (cắt từ 
 - 6. Đụng phần có sẵn của file dùng chung
 - 7. Danh sách file để commit
 - 8. Môi trường thử
+- 9. Phần 2 (06/11): đổi theo câu trả lời của Sếp
 
 ---
 
@@ -72,13 +73,13 @@ Nhánh `dot-9-sua-ke-hoach` ở 2 worktree: BE `D:\DNA-ERP-BE-dot9` (cắt từ 
   đúng lúc) thì phần chưa duyệt đã ghi - hiếm, chấp nhận.
 - File xuất trả bằng `@Res()` (không qua interceptor bọc JSON) + `Access-Control-Expose-Headers: Content-Disposition`.
 
-## 3. Phụ thuộc 4 câu đang chờ Sếp - chỗ đổi khi Sếp trả lời
-| Câu | Đang làm (IT đề xuất) | Đổi nếu Sếp chọn khác |
+## 3. Phụ thuộc 4 câu chờ Sếp - ~~chỗ đổi khi Sếp trả lời~~ → Sếp đã trả lời 06/11, đã đổi (mục 9)
+| Câu | Phần 1 (IT đề xuất) | Sếp trả lời 06/11 → phần 2 |
 |---|---|---|
-| Q9-1 dời 1 mốc có tự dời mốc sau | A - chỉ ô đã sửa + cảnh báo | B: thêm bước tự dời mốc sau cùng số ngày ở `DeadlineChangesService` (form + Excel) |
-| Q9-2 thứ tự ngược | A - cảnh báo, vẫn lưu | B: `ORDER_VIOLATION_BLOCKS = true` (`deadline-changes.types.ts`) |
-| Q9-3 Excel gồm | A - mọi lệnh chưa Kết thúc (`scope=all`) | B: FE gọi `downloadDeadlinePlan('approved')` |
-| Q9-4 lô có lệnh không đồng ý | B - Sếp bỏ chọn từng yêu cầu | A: `DEADLINE_PARTIAL_APPROVAL = false` (`deadline-changes-api.ts`) |
+| Q9-1 dời 1 mốc có tự dời mốc sau | A - chỉ ô đã sửa + cảnh báo | **B** - mốc sản xuất sau tự dời cùng số ngày (form + Excel), KHSX sửa tay lại được - mục 9.1 |
+| Q9-2 thứ tự ngược | A - cảnh báo, vẫn lưu | **B** - không cho lưu dòng đó (`ORDER_VIOLATION_BLOCKS = true`, cả dòng sửa thẳng) - mục 9.2 |
+| Q9-3 Excel gồm | A - mọi lệnh chưa Kết thúc | **Ý kiến khác** - chỉ lệnh CHƯA bắt đầu sản xuất (chưa cắt phôi); lệnh đã bắt đầu không sửa mốc ở mọi đường - mục 9.3 |
+| Q9-4 lô có lệnh không đồng ý | B - Sếp bỏ chọn từng yêu cầu | **B** - giữ nguyên |
 
 ## 4. Kiểm tra
 - **BE** (worktree, sau khi Opus nối Excel vào module): `nest build` OK; `tsc` chỉ 2 lỗi seed cũ; `jest --runInBand` toàn bộ **132 suite / 2672 test
@@ -95,7 +96,7 @@ Nhánh `dot-9-sua-ke-hoach` ở 2 worktree: BE `D:\DNA-ERP-BE-dot9` (cắt từ 
   trên MY-9401; duyệt xong số nhắc việc giảm ngay (sau khi thêm `refresh`).
 
 ## 5. Chưa làm / còn treo
-- 4 câu Sếp (mục 3) - có câu trả lời thì đổi + chạy lại test.
+- ~~4 câu Sếp (mục 3) - có câu trả lời thì đổi + chạy lại test.~~ → đã đổi ở phần 2 (mục 9).
 - File Excel kế hoạch mẫu của KHSX (nếu Sếp gửi) → đổi tên / thứ tự cột của file xuất.
 - Tab "Đang chạy" tính từ danh sách PI FE đang tải (`limit=100` có sẵn) - lệnh cũ ngoài 100 lệnh mới nhất không hiện (chưa gặp ở dữ liệu thật).
 - Chưa mở file Excel bằng Microsoft Excel thật (khoá ô / ẩn cột mới kiểm bằng đọc lại qua exceljs).
@@ -125,3 +126,87 @@ service + spec, controller + spec, dto, Excel service + spec, Excel controller +
 - DB `dna_erp_dot9` = bản sao `dna_erp_dot4` + migration 5d + Đợt 9; dữ liệu: `.claude/tools/huong-dan-test-phan-a/pa4-seed.sql` rồi `pa9-seed.sql` (lệnh gộp
   đã duyệt PA4-PI-C = MY-9403 + MY-9404, xoá lô đổi mốc cũ). Không commit 2 script (repo public).
 - `.claude/launch.json`: `be-3038-dot9`, `fe-3138-dot9`.
+
+## 9. Phần 2 (06/11): đổi theo câu trả lời của Sếp
+
+Người dùng gửi file trả lời của Sếp (`TRA_LOI_DOT_9_SUA_KE_HOACH_IT_05-11-2026.docx`): Q1 **B** ("Mốc sau tự dời theo; KHSX vẫn sửa tay lại được
+từng mốc nếu cần"), Q2 **B** ("Không cho lưu dòng đó tới khi sửa đúng thứ tự"), Q3 **ý kiến khác** ("Chỉ tải các lệnh CHƯA BẮT ĐẦU SẢN XUẤT (chưa
+bắt đầu cắt phôi) – gồm cả lệnh chưa duyệt và lệnh Sếp đã duyệt nhưng chưa cắt. Lệnh đã bắt đầu cắt sắt KHÔNG được sửa mốc nên không đưa vào file."),
+Q4 **B**. Không kèm file Excel mẫu → giữ thứ tự cột như màn "Sửa thời hạn". Nhánh `dot-9-sua-ke-hoach` fast-forward lên `main` `9615554` / `demo`
+`e1cae72` trước khi làm. Opus viết hợp đồng (types + hàm thuần BE, bản chép FE + test) → 4 thợ song song (BE lõi, BE Excel, FE KHSX, FE Sếp), không
+chung file → Opus đọc diff, sửa nhỏ, chạy lại hết.
+
+### 9.1 Q9-1 = B: tự dời mốc sau
+- **Luật (hàm thuần `resolveAutoShift(old, explicit)`** ở `deadline-values.util.ts`, FE chép y hệt `ProductionPlan/deadlineRules.ts`): mốc SẢN XUẤT
+  (`stage.*`: Bắt đầu Phôi → Đóng gói) KHSX không gõ mà đã có ngày → dời cùng số ngày với mốc sản xuất gõ GẦN NHẤT phía trước. Gõ lại đúng ngày cũ
+  = dời 0 → mốc sau đứng yên (cách nén lịch: dời Phôi mà giữ Đóng gói). Mốc chưa có ngày không tự sinh; gõ mốc chưa có ngày không dời mốc sau. **2 mốc
+  Mua VT không tự dời** (danh sách Sếp chọn chỉ có mốc sản xuất; Mua VT là hạn của Mua hàng - dời theo sẽ đổi hạn mua mà không ai sửa) - nếu dời sớm
+  làm Mua VT còn lại muộn hơn Bắt đầu đóng gói thì luật thứ tự (9.2) chặn để KHSX sửa tay. Hạn giao không dời (v8 2.4).
+- **Form** (`LenhSXPage`): `applyFormAutoShift` (`deadlineChange.ts`) - `saved` = mốc đã lưu (ô đề xuất không bao giờ tự dời), `explicit` = ô đã chạm
+  (chạm mà để trống = ngày đã lưu); ô tự dời ghi "(tự dời +2)" ở tên ô, state `editAuto`; tự dời chạy trước rồi mới tính lại ô đề xuất. Dòng đã duyệt
+  gửi cả ô tự dời (khác ngày đã lưu). Câu nhắc trong khung thông tin dòng.
+- **Excel** (`deadline-plan-excel.service.ts`): mốc sản xuất của dòng sửa được xuất dạng **công thức** `<ô mốc sản xuất trước gần nhất có ngày>±<số
+  ngày lúc xuất>` (vd `=H14+1`) → KHSX sửa 1 ô thì Excel đổi các ô sau ngay. Đọc lại: ô có công thức KHỚP công thức kỳ vọng của đúng dòng đó (bỏ `=`,
+  `$`, khoảng trắng; `cell.formula` của exceljs đã dịch shared formula theo ô) = mốc tự dời - BE **tự tính lại**, không tin kết quả Excel lưu; ô giá trị /
+  công thức lạ (lấy kết quả đã lưu) / ô trống (= gõ lại ngày cũ) = ô gõ → `resolveAutoShift`. Bản xem trước gắn `auto: true` (FE ghi "(tự dời)" + chú
+  thích). Dấu file v2 (đọc nhận v1 - file cũ không công thức thì không tự dời). Thêm trang **"Hướng dẫn"** (8 dòng chữ thường) trong file.
+- Thiết kế công thức thay vì "ô không đổi = dời theo" vì cách sau không cho KHSX giữ 1 mốc sau ở ngày cũ trong Excel (ô gõ lại ngày cũ trông như
+  không đổi) - đúng ca hay gặp nhất (dời Phôi, giữ Đóng gói theo hạn giao).
+
+### 9.2 Q9-2 = B: thứ tự ngược chặn lưu
+- `ORDER_VIOLATION_BLOCKS = true` (BE types + FE). Dòng đã duyệt: `evaluate()` đã có → lỗi dòng (form 400; Excel dòng Lỗi, bị bỏ).
+- **Dòng sửa thẳng** (`updateItemsDeadlines`, `updateItem`): `assertMilestoneOrderAfterWrite` đọc lại dòng trong giao dịch sau khi ghi; dòng CÓ ĐỔI (mốc
+  hoặc hạn giao) mà ngược thứ tự → 400 `<LSX> · <SKU>: <câu>` (nhiều dòng), rollback cả lần kể cả hạn PI. Dòng không đổi thì không kiểm (dữ liệu cũ sai
+  thứ tự không chặn dòng khác).
+- Opus: hạn giao để so = hạn riêng của dòng, chưa có thì **hạn của lệnh** (form đang hiện như vậy; Excel cũng xuất như vậy) - sửa ở `evaluate`,
+  `toBatchDtos` (`deliveryDayOf`) và dòng sửa thẳng, để BE và FE chặn cùng một chỗ.
+- **Form**: `projectedOrderErrors` trên đúng giá trị sẽ gửi (tách `buildItemsOut()` dùng chung cho Lưu + kiểm) → khung đỏ dưới SKU "Thứ tự mốc ngược –
+  sửa lại mới lưu được:" + câu; nút Lưu khoá (title). Bỏ khung vàng `timelineWarnings` cũ trong hộp (trùng ý). Câu lỗi 400 nhiều dòng hiện xuống dòng.
+
+### 9.3 Q9-3: lệnh đã bắt đầu sản xuất không sửa mốc
+- Định nghĩa: lệnh SX `floorStage` ≠ PENDING (`isFloorStarted`) - QLSX đã bấm "Bắt đầu" (Phôi chỉ báo cắt được khi lệnh ACTIVE; PAUSED / FINISHED
+  cũng là đã bắt đầu). Thu hẹp v8 2.1 "mọi giai đoạn trước Kết thúc" theo ý Sếp.
+- BE: `evaluate()` lỗi `FLOOR_STARTED_ERROR` (trước kiểm "đang chờ"); dòng sửa thẳng phòng xa 400 (`assertFloorNotStarted`); `decide()` 409 nếu duyệt yêu
+  cầu của lệnh đã bắt đầu; `DeadlineChangeRequestDto.blockedReason` (huỷ / Kết thúc / đã bắt đầu) cho yêu cầu PENDING. Excel chỉ xuất dòng chưa có lệnh
+  SX hoặc `floorStage = PENDING`; chữ Trạng thái "Đã duyệt, chưa cắt – sửa cần Sếp duyệt lại".
+- FE KHSX: `itemDeadlineState` thêm `STARTED` (khoá như Kết thúc, khung xám `FLOOR_STARTED_TEXT`, nhãn "Đã bắt đầu SX" ở danh sách, vẫn nằm tab Đang
+  chạy); dòng đang chờ mà lệnh đã cắt → câu "Sếp không duyệt được nữa, nên Huỷ yêu cầu". Câu "Sửa ô nào thì lưu ô đó; Bắt đầu Phôi và Bắt đầu đóng gói
+  luôn được lưu" chỉ hiện ở dòng chưa duyệt (Opus - trước hiện cả dòng khoá / dòng đã duyệt, sai với dòng đã duyệt).
+- FE Sếp: yêu cầu bị chặn → ô chọn khoá + bỏ chọn, chữ đỏ `blockedReason`, "Chọn hết" bỏ qua, nút Duyệt khoá khi không còn gì duyệt được, lý do từ chối
+  điền sẵn "Lệnh đã bắt đầu sản xuất (cắt phôi)" khi chỉ còn yêu cầu bị chặn (không ghi đè chữ Sếp gõ); câu xác nhận / kết quả nhắc số yêu cầu bị chặn
+  (Opus rút gọn câu). Danh sách mốc dài xuống dòng trên điện thoại.
+- Hướng dẫn: `productionPlan.ts` (điều kiện chưa cắt phôi, tự dời, khung đỏ, nhãn Đã bắt đầu SX, Excel chỉ lệnh chưa cắt + ô tự đổi trong file), `boss.ts`.
+
+### 9.4 Kiểm tra
+- **BE** (worktree): `nest build` OK; `tsc` chỉ 2 lỗi seed cũ; `jest --runInBand` toàn bộ **134 suite / 2722 test xanh** (1 skip có sẵn) - mới: util tự
+  dời 10 ca, Excel 13 ca (công thức đúng chữ, vòng tròn xuất → sửa → đọc, gõ lại ngày cũ, xoá trống ô công thức, công thức lạ, shared formula, file v1),
+  lõi (chặn đã bắt đầu, thứ tự ngược strict / không strict, decide 409, `blockedReason`), dòng sửa thẳng (ngược → 400, đúng → lưu, không đổi không
+  kiểm, lệnh SX đã bắt đầu → 400); eslint file đổi 0 lỗi.
+- **FE**: `tsc` sạch; `vitest` **37 file / 392 test xanh** (mới: `deadlineRules` 10 ca cùng ca với BE, trạng thái STARTED, `applyFormAutoShift`,
+  `projectedOrderErrors`, màn Sếp 5 ca); eslint 0 lỗi (cảnh báo có sẵn).
+- **API thật** (BE 3038, `dna_erp_dot9`, tài khoản demo): xuất 20 dòng - không có MY-9308 / 9309 (ACTIVE), MY-9405 (Kết thúc); công thức vd MY-9311
+  `=H14+1 | =I14+1 | … | =P14+1`, sheet Kế hoạch / Hướng dẫn / `_dna` ẩn. Sửa file rồi xem trước: MY-9311 Bắt đầu Phôi +3 → APPLY, 8 mốc sau "(tự dời)"
+  +3; MY-9310 +2 → NEEDS_APPROVAL, 8 mốc tự dời; MY-9304 +3 và gõ lại ngày cũ Đóng gói → ERROR "Đóng gói (21/11) sớm hơn Bắt đầu đóng gói (24/11)";
+  MY-9303 (Hàn đang ngược sẵn) sửa Nhập đan → ERROR. Sửa thẳng MY-9311 Hàn ra sau Sơn → 400; đúng thứ tự → 200. Sửa MY-9308 → 400 "đã bắt đầu sản
+  xuất". MY-9401 gửi Sếp rồi đặt ACTIVE → `blockedReason` đúng; Sếp duyệt → 409; từ chối → DECIDED.
+- **Trình duyệt** (FE 3138): `khsx` MY-9308 nhãn "Đã bắt đầu SX", form khung xám + ô khoá; MY-9310 dời Bắt đầu Phôi 04/11 → 06/11 → 8 ô "(tự dời +2)",
+  Mua VT + hạn giao giữ; gõ lại Đóng gói 18/11 → khung đỏ, Lưu khoá (title đúng); Đóng gói 21/11 → Lưu → "1 SKU đã gửi Sếp duyệt lại", yêu cầu lưu 9
+  mốc. Đặt MY-9310 ACTIVE → `boss` Đổi mốc lệnh SX: chữ đỏ, ô chọn khoá, "Duyệt (0)" khoá, Từ chối… lý do điền sẵn → "Đã từ chối 1 yêu cầu (1 yêu cầu
+  của lệnh đã bắt đầu sản xuất, không duyệt được)", số nhắc việc hết. Console không lỗi. Dữ liệu thử dựng lại sau khi thử.
+- **Microsoft Excel 16 thật** (Opus, qua Excel COM): mở file xuất - sheet khoá, `_dna` ẩn; ô Mã lệnh không sửa được; MY-9311 sửa Bắt đầu Phôi +3 → Excel tự
+  tính các ô Phôi … Đóng gói +3 ngay, Mua VT giữ; MY-9305 Bắt đầu Phôi +2 + gõ lại ngày cũ vào Bắt đầu đóng gói / Đóng gói; lưu bằng Excel → tải lên:
+  MY-9311 APPLY 8 mốc "(tự dời)", MY-9305 ERROR "Chuyền kiểm (23/11) muộn hơn các mốc sau nó: Bắt đầu đóng gói (22/11), Đóng gói (22/11)" - công thức Excel
+  lưu lại vẫn được nhận là ô tự dời.
+
+### 9.5 Chưa làm / còn treo
+- Chưa thử WPS / Google Sheets (đã thử Microsoft Excel 16 - mục 9.4).
+- Màn xem trước Excel (`DeadlinePlanImportModal`) chưa thử bấm trên trình duyệt (dữ liệu `auto` đã kiểm qua API; thay đổi màn chỉ thêm chữ "(tự dời)").
+- File Excel mẫu của KHSX (nếu Sếp gửi) → đổi tên / thứ tự cột.
+- Chưa commit / gộp / push (chờ người dùng). Báo người B (3 điểm ở mục 5) + `production-invoices.service.ts` thêm 2 hàm kiểm cho dòng sửa thẳng.
+
+### 9.6 File phần 2
+**BE**: `deadline-changes/{deadline-changes.types.ts, deadline-values.util.ts, deadline-values.util.spec.ts (mới), deadline-changes.service.ts + spec,
+deadline-plan-excel.service.ts + spec}`, `production-invoices.service.ts` + spec, `docs/changelog-2026-11-05-phan-a-dot-9.md`.
+**FE**: `src/services/deadline-changes-api.ts`, `src/modules/pages/ProductionPlan/{deadlineRules.ts (mới), deadlineRules.test.ts (mới), deadlineChange.ts,
+deadlineChange.test.ts, LenhSXPage.tsx, DeadlinePlanImportModal.tsx}`, `src/modules/pages/Boss/{DuyetDoiMocPage.tsx, duyetDoiMoc.ts, duyetDoiMoc.test.ts}`,
+`src/modules/pages/Guide/content/{productionPlan,boss}.ts`. **Không commit:** `next-env.d.ts`, `tsconfig.tsbuildinfo`.

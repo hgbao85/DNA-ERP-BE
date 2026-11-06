@@ -50,7 +50,7 @@ const makeItem = (id: bigint, over: Partial<FakeItem> = {}): FakeItem => ({
 const approved = (id: bigint, over: Partial<FakeItem> = {}) =>
   makeItem(id, {
     prodApprovalStatus: 'APPROVED',
-    productionOrder: { floorStage: 'RUNNING' },
+    productionOrder: { floorStage: 'PENDING' },
     ...over,
   });
 
@@ -245,12 +245,59 @@ describe('DeadlineChangesService', () => {
       expect(ok.kind).toBe('APPLY');
     });
 
-    it('thứ tự mốc ngược → cảnh báo (không chặn khi ORDER_VIOLATION_BLOCKS = false)', async () => {
-      const [c] = await service.previewEntries([
-        { itemId: '20', newValues: { 'stage.FRAME_HAN': '2026-11-08' } },
-      ]);
-      expect(c.kind).toBe('APPLY');
-      expect(c.warnings).toEqual(['Hàn (08/11) sớm hơn Phôi (10/11)']);
+    it('lệnh đã bắt đầu sản xuất (ACTIVE / PAUSED) → ERROR, kiểm trước "đang chờ duyệt lại" (Đợt 9 phần 2, Q9-3)', async () => {
+      items = [
+        approved(51n, { productionOrder: { floorStage: 'ACTIVE' } }),
+        approved(52n, { productionOrder: { floorStage: 'PAUSED' } }),
+        approved(53n, {
+          productionOrder: { floorStage: 'ACTIVE' },
+          deadlineChangeRequests: [{ id: 1n }],
+        }),
+        approved(54n, { productionOrder: { floorStage: 'PENDING' } }),
+      ];
+      const v = { 'stage.FRAME_HAN': '2026-11-14' };
+      const checks = await service.previewEntries(
+        ['51', '52', '53', '54'].map((itemId) => ({ itemId, newValues: v })),
+      );
+      expect(checks.map((c) => c.kind)).toEqual(['ERROR', 'ERROR', 'ERROR', 'NEEDS_APPROVAL']);
+      for (const c of checks.slice(0, 3)) {
+        expect(c.errors).toEqual(['Lệnh đã bắt đầu sản xuất (cắt phôi) - không sửa mốc được nữa']);
+      }
+      // strict → 400; không strict → skipped, không ghi / không tạo lô
+      await expect(
+        service.saveEntries(KHSX, [{ itemId: '51', newValues: v }], 'MANUAL', { strict: true }),
+      ).rejects.toThrow(/đã bắt đầu sản xuất/);
+      prisma.deadlineChangeBatch.findUnique.mockResolvedValue(batchRow());
+      const res = await service.saveEntries(
+        KHSX,
+        [
+          { itemId: '52', newValues: v },
+          { itemId: '54', newValues: v },
+        ],
+        'MANUAL',
+        { strict: false },
+      );
+      expect(res.skipped.map((c) => c.itemId)).toEqual(['52']);
+      expect(created).toHaveLength(1);
+      expect(created[0].data.requests.create).toHaveLength(1);
+    });
+
+    it('thứ tự mốc ngược → ERROR (Q9-2 = B): preview ERROR, strict 400, không strict → skipped', async () => {
+      const bad = { itemId: '21', newValues: { 'stage.FRAME_HAN': '2026-11-08' } };
+      const [c] = await service.previewEntries([bad]);
+      expect(c.kind).toBe('ERROR');
+      expect(c.errors).toEqual(['Hàn (08/11) sớm hơn Phôi (10/11)']);
+      expect(c.warnings).toEqual([]);
+      await expect(service.saveEntries(KHSX, [bad], 'MANUAL', { strict: true })).rejects.toThrow(
+        /MY-21 · SKU-21: Hàn \(08\/11\) sớm hơn Phôi \(10\/11\)/,
+      );
+      const res = await service.saveEntries(KHSX, [bad], 'MANUAL', { strict: false });
+      expect(res.skipped.map((x) => x.itemId)).toEqual(['21']);
+      expect(res.batch).toBeNull();
+      expect(created).toHaveLength(0);
+      // dòng chưa duyệt (sửa thẳng) cũng bị chặn
+      const [d] = await service.previewEntries([{ ...bad, itemId: '20' }]);
+      expect(d.kind).toBe('ERROR');
     });
 
     it('lệnh gộp: luật gộp trên giá trị DỰ KIẾN vi phạm → mọi dòng đổi của lệnh mang lỗi', async () => {
@@ -451,6 +498,24 @@ describe('DeadlineChangesService', () => {
       );
     });
 
+    it('duyệt yêu cầu của lệnh đã bắt đầu sản xuất → 409, nêu lệnh + SKU (Đợt 9 phần 2, Q9-3)', async () => {
+      items[0].productionOrder = { floorStage: 'ACTIVE' };
+      await expect(
+        service.decide(BOSS, '50', { approveRequestIds: ['501', '502'] }),
+      ).rejects.toThrow(
+        /Lệnh MY-21 · SKU-21 đã bắt đầu sản xuất \(cắt phôi\) - không đổi mốc được nữa, hãy bỏ chọn \(từ chối\) yêu cầu này/,
+      );
+      expect(writer.applyItemDeadlines).not.toHaveBeenCalled();
+      // từ chối thì vẫn được (không đọc lệnh SX)
+      prisma.deadlineChangeBatch.findUnique
+        .mockReset()
+        .mockResolvedValueOnce(pendingBatch([req(501n, 21n)]))
+        .mockResolvedValue(batchRow({ status: 'DECIDED' }));
+      await expect(
+        service.decide(BOSS, '50', { approveRequestIds: [], rejectReason: 'Lệnh đã cắt' }),
+      ).resolves.toBeDefined();
+    });
+
     it('lô đã quyết → 409', async () => {
       prisma.deadlineChangeBatch.findUnique.mockReset();
       prisma.deadlineChangeBatch.findUnique.mockResolvedValue({
@@ -541,7 +606,49 @@ describe('DeadlineChangesService', () => {
         rejectReason: null,
         changes: [{ key: 'stage.FRAME_HAN', label: 'Hàn', from: '2026-11-12', to: '2026-11-15' }],
         warnings: [],
+        blockedReason: null,
       });
+    });
+
+    it('blockedReason: PI huỷ / Kết thúc / đã bắt đầu sản xuất → câu chỉ-từ-chối-được; còn lại và yêu cầu không PENDING → null', async () => {
+      const mk = (id: bigint, status: string, item: FakeItem) => ({
+        id,
+        batchId: 50n,
+        productionInvoiceItemId: item.id,
+        status,
+        oldValues: { 'stage.FRAME_HAN': '2026-11-12' },
+        newValues: { 'stage.FRAME_HAN': '2026-11-15' },
+        createdAt: new Date('2026-11-05T03:00:00.000Z'),
+        decidedAt: null,
+        productionInvoiceItem: item,
+      });
+      prisma.deadlineChangeBatch.findUnique.mockResolvedValue(
+        batchRow({
+          requests: [
+            mk(
+              1n,
+              'PENDING',
+              makeItem(60n, {
+                productionInvoice: { id: 7n, code: 'PI-7', status: 'CANCELLED', isMerged: false },
+              }),
+            ),
+            mk(2n, 'PENDING', approved(61n, { productionOrder: { floorStage: 'FINISHED' } })),
+            mk(3n, 'PENDING', approved(62n, { productionOrder: { floorStage: 'ACTIVE' } })),
+            mk(4n, 'PENDING', approved(63n, { productionOrder: { floorStage: 'PAUSED' } })),
+            mk(5n, 'PENDING', approved(64n)),
+            mk(6n, 'APPROVED', approved(65n, { productionOrder: { floorStage: 'ACTIVE' } })),
+          ],
+        }),
+      );
+      const dto = await service.getBatch(BOSS, '50');
+      expect(dto.requests.map((r) => r.blockedReason)).toEqual([
+        'Lệnh đã huỷ – chỉ từ chối được',
+        'Lệnh đã Kết thúc – chỉ từ chối được',
+        'Lệnh đã bắt đầu sản xuất (cắt phôi) – không đổi mốc được nữa, chỉ từ chối được',
+        'Lệnh đã bắt đầu sản xuất (cắt phôi) – không đổi mốc được nữa, chỉ từ chối được',
+        null,
+        null,
+      ]);
     });
 
     it('pendingByItem + countPendingBatches', async () => {

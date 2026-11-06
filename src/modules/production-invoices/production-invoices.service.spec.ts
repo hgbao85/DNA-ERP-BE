@@ -50,6 +50,7 @@ describe('ProductionInvoicesService', () => {
       update: jest.Mock;
       updateMany: jest.Mock;
       findUnique: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
       findFirst: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
@@ -171,6 +172,8 @@ describe('ProductionInvoicesService', () => {
         // chối PI item") - test race-guard tự override count:0 để mô phỏng đã bị xử lý trước.
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUnique: jest.fn(),
+        // Đợt 9 phần 2: đọc lại dòng trong giao dịch sau khi ghi mốc (kiểm thứ tự) - mặc định = dòng không đổi.
+        findUniqueOrThrow: jest.fn().mockImplementation(() => Promise.resolve(piItem())),
         findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn(),
         count: jest.fn(),
@@ -492,6 +495,118 @@ describe('ProductionInvoicesService', () => {
       ).rejects.toThrow(/MY-21 · SKU: Lệnh đã Kết thúc/);
       expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
       expect(deadlineChanges.saveEntries).not.toHaveBeenCalled();
+    });
+  });
+
+  // Phần A – Đợt 9 phần 2: Q9-2 (thứ tự mốc ngược → chặn) + Q9-3 (lệnh đã bắt đầu sản xuất → không sửa mốc).
+  describe('sửa thẳng dòng chưa duyệt - chặn thứ tự ngược + lệnh đã bắt đầu (Đợt 9 phần 2)', () => {
+    const stage = (stageType: string, d: string) => ({ stageType, deadline: new Date(d) });
+    beforeEach(() => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ items: [piItem()] }));
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+    });
+
+    it('updateItem: Hàn sớm hơn Phôi → 400, giao dịch ném lỗi', async () => {
+      prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue(
+        piItem({
+          stages: [stage('FRAME_PHOI', '2026-11-13'), stage('FRAME_HAN', '2026-11-12')],
+        }),
+      );
+      await expect(
+        updateItemAs('7', '20', {
+          stages: [
+            { stageType: ProdItemStageType.FRAME_PHOI, deadline: '2026-11-13' },
+            { stageType: ProdItemStageType.FRAME_HAN, deadline: '2026-11-12' },
+          ],
+        }),
+      ).rejects.toThrow(/MY-313 · SKU-01: Hàn \(12\/11\) sớm hơn Phôi \(13\/11\)/);
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+    });
+
+    it('updateItem: thứ tự đúng → vẫn lưu', async () => {
+      prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue(
+        piItem({
+          stages: [stage('FRAME_PHOI', '2026-11-12'), stage('FRAME_HAN', '2026-11-13')],
+        }),
+      );
+      await expect(
+        updateItemAs('7', '20', {
+          stages: [
+            { stageType: ProdItemStageType.FRAME_PHOI, deadline: '2026-11-12' },
+            { stageType: ProdItemStageType.FRAME_HAN, deadline: '2026-11-13' },
+          ],
+        }),
+      ).resolves.toBeDefined();
+      expect(prisma.productionInvoiceItemStage.upsert).toHaveBeenCalledTimes(2);
+    });
+
+    it('updateItem: dòng KHÔNG đổi gì thì không kiểm (dữ liệu cũ sai thứ tự không chặn)', async () => {
+      const bad = piItem({
+        stages: [stage('FRAME_PHOI', '2026-11-13'), stage('FRAME_HAN', '2026-11-12')],
+      });
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(bad);
+      prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue(bad);
+      await expect(updateItemAs('7', '20', {})).resolves.toBeDefined();
+    });
+
+    it('updateItemsDeadlines: thứ tự ngược → 400 và giao dịch ném lỗi (hạn PI nằm trong cùng giao dịch)', async () => {
+      prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue(
+        piItem({
+          materialDeadline: new Date('2026-11-20'),
+          stages: [stage('PACKAGING_START', '2026-11-10')],
+        }),
+      );
+      await expect(
+        updateItemsDeadlinesAs('7', {
+          deadline: '2026-12-20T00:00:00.000Z',
+          items: [
+            {
+              itemId: '20',
+              materialDeadline: '2026-11-20',
+              stages: [{ stageType: ProdItemStageType.PACKAGING_START, deadline: '2026-11-10' }],
+            },
+          ],
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('updateItemsDeadlines: thứ tự đúng → lưu, applied không còn cảnh báo', async () => {
+      prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue(
+        piItem({ materialDeadline: new Date('2026-11-10') }),
+      );
+      const result = await updateItemsDeadlinesAs('7', {
+        items: [{ itemId: '20', materialDeadline: '2026-11-10' }],
+      });
+      expect(result.deadlineSave?.applied[0].warnings).toEqual([]);
+    });
+
+    it.each(['ACTIVE', 'PAUSED', 'FINISHED'])(
+      'lệnh SX đã bắt đầu (%s) → 400, chưa ghi gì (cả updateItem lẫn updateItemsDeadlines)',
+      async (floorStage) => {
+        prisma.productionOrder.findMany.mockResolvedValue([
+          { productionInvoiceItemId: 20n, floorStage },
+        ]);
+        await expect(updateItemAs('7', '20', { materialDeadline: '2026-11-10' })).rejects.toThrow(
+          /đã bắt đầu sản xuất \(cắt phôi\)/,
+        );
+        await expect(
+          updateItemsDeadlinesAs('7', {
+            items: [{ itemId: '20', materialDeadline: '2026-11-10' }],
+          }),
+        ).rejects.toThrow(/MY-313 · SKU-01: Lệnh đã bắt đầu sản xuất/);
+        expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      },
+    );
+
+    it('lệnh SX còn PENDING → vẫn sửa được', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([
+        { productionInvoiceItemId: 20n, floorStage: 'PENDING' },
+      ]);
+      await expect(
+        updateItemAs('7', '20', { materialDeadline: '2026-11-10' }),
+      ).resolves.toBeDefined();
     });
   });
 
