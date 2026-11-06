@@ -16,6 +16,7 @@ import {
   ProdApprovalStatus,
   ProdItemStageType,
   ProductionInvoiceStatus,
+  ProductionOrderFloorStage,
   SolverMachine,
   TransferStatus,
   Workshop,
@@ -49,7 +50,7 @@ import {
   normalizeLsxCode,
 } from '../../common/utils/lenh-code.util';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { ProductionOrdersService } from '../production-orders/production-orders.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
@@ -85,6 +86,7 @@ import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-
 // Phần A – Đợt 9 (YC2)
 import { DeadlineChangesService } from './deadline-changes/deadline-changes.service';
 import type { DeadlineActor } from './deadline-changes/deadline-changes.port';
+import { ORDER_VIOLATION_BLOCKS } from './deadline-changes/deadline-changes.types';
 import type {
   DeadlineChangeBatchDto,
   DeadlineEntryCheck,
@@ -92,7 +94,12 @@ import type {
   DeadlineFieldKey,
   DeadlineValues,
 } from './deadline-changes/deadline-changes.types';
-import { diffValues, pendingRefOf, valuesOfItem } from './deadline-changes/deadline-values.util';
+import {
+  diffValues,
+  FLOOR_STARTED_ERROR,
+  pendingRefOf,
+  valuesOfItem,
+} from './deadline-changes/deadline-values.util';
 import { ItemDeadlineWriter } from './item-deadline-writer.service';
 
 type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
@@ -816,9 +823,12 @@ export class ProductionInvoicesService {
       return out;
     }
 
+    // Đợt 9 phần 2 (Q9-3): lệnh đã bắt đầu sản xuất (cắt phôi) thì không sửa mốc; (Q9-2) thứ tự mốc ngược thì không lưu.
+    await this.assertFloorNotStarted(pi, [item]);
     await this.prisma.$transaction(async (tx) => {
       await this.deadlineWriter.applyItemDeadlines(tx, item.id, dto);
       if (pi.isMerged) await this.deadlineWriter.assertMergedPiDeadlineRule(tx, pi.id);
+      await this.assertMilestoneOrderAfterWrite(tx, pi, [item]);
     });
 
     const updated = await this.findItemOrThrow(pi.id, itemId);
@@ -859,6 +869,11 @@ export class ProductionInvoicesService {
       );
       if (errors.length > 0) throw new BadRequestException(errors.join('\n'));
     }
+    // Đợt 9 phần 2 (Q9-3): dòng sửa thẳng mà lệnh đã bắt đầu sản xuất (cắt phôi) → 400, chưa ghi gì.
+    await this.assertFloorNotStarted(
+      pi,
+      plain.map((p) => p.before),
+    );
     const hasApprovedItem = pi.items.some(
       (i) => i.prodApprovalStatus === ProdApprovalStatus.APPROVED,
     );
@@ -876,6 +891,12 @@ export class ProductionInvoicesService {
       if (pi.isMerged && plain.length > 0) {
         await this.deadlineWriter.assertMergedPiDeadlineRule(tx, pi.id);
       }
+      // Đợt 9 phần 2 (Q9-2): thứ tự mốc ngược ở dòng có đổi → 400, rollback cả lần (kể cả hạn PI).
+      await this.assertMilestoneOrderAfterWrite(
+        tx,
+        pi,
+        plain.map((p) => p.before),
+      );
     });
 
     const applied: DeadlineEntryCheck[] = [];
@@ -890,9 +911,10 @@ export class ProductionInvoicesService {
         kind: changes.length > 0 ? 'APPLY' : 'NO_CHANGE',
         changes,
         errors: [],
-        // Cảnh báo thứ tự mốc cho cả dòng sửa thẳng (như dòng chờ duyệt) - chỉ khi có đổi; không chặn.
+        // Cảnh báo thứ tự mốc cho cả dòng sửa thẳng - chỉ khi có đổi; khi ORDER_VIOLATION_BLOCKS = true thì đã bị chặn ở
+        // giao dịch (Đợt 9 phần 2, Q9-2) nên đến đây không còn câu nào; = false thì chỉ cảnh báo.
         warnings:
-          changes.length > 0
+          changes.length > 0 && !ORDER_VIOLATION_BLOCKS
             ? milestoneOrderWarnings({
                 ...valuesOfItem(updated),
                 deliveryDeadline: updated.deliveryDeadline
@@ -926,6 +948,76 @@ export class ProductionInvoicesService {
       out[`stage.${st.stageType}` as DeadlineFieldKey] = vnDayKey(new Date(st.deadline));
     }
     return out;
+  }
+
+  /** Mã lệnh hiển thị của dòng (số LSX của dòng, không có thì mã gộp của lệnh) - như phần `applied`. */
+  private lenhCodeOfItem(
+    pi: { code: string; items: readonly { lsxCode?: string | null }[] },
+    item: { lsxCode: string | null },
+  ): string {
+    return item.lsxCode ?? lenhDisplayCode(pi, pi.items);
+  }
+
+  /**
+   * Phần A – Đợt 9 phần 2 (Q9-3): dòng sửa thẳng mà lệnh SX đã bắt đầu (floorStage khác PENDING) → 400. Chưa có lệnh SX = chưa bắt đầu.
+   * Phòng xa: dòng chưa Sếp duyệt thường chưa có lệnh SX.
+   */
+  private async assertFloorNotStarted(
+    pi: { code: string; items: readonly { lsxCode?: string | null }[] },
+    items: PIItemWithRefs[],
+  ): Promise<void> {
+    if (items.length === 0) return;
+    const orders = await this.prisma.productionOrder.findMany({
+      where: { productionInvoiceItemId: { in: items.map((i) => i.id) } },
+      select: { productionInvoiceItemId: true, floorStage: true },
+    });
+    const started = new Set(
+      orders
+        .filter((o) => o.floorStage !== ProductionOrderFloorStage.PENDING)
+        .map((o) => String(o.productionInvoiceItemId)),
+    );
+    const lines = items
+      .filter((i) => started.has(i.id.toString()))
+      .map(
+        (i) =>
+          `${this.lenhCodeOfItem(pi, i)} · ${i.mfgProduct.factoryCode}: ${FLOOR_STARTED_ERROR}`,
+      );
+    if (lines.length > 0) throw new BadRequestException(lines.join('\n'));
+  }
+
+  /**
+   * Phần A – Đợt 9 phần 2 (Q9-2 = B): sau khi ghi dòng sửa thẳng, đọc lại trong giao dịch; dòng CÓ ĐỔI mà thứ tự mốc ngược →
+   * 400 (rollback cả lần). Dòng không đổi thì không kiểm (dữ liệu cũ sai thứ tự không chặn dòng không sửa). `ORDER_VIOLATION_BLOCKS`
+   * = false thì không chặn (chỉ còn cảnh báo ở kết quả).
+   */
+  private async assertMilestoneOrderAfterWrite(
+    tx: PrismaTx,
+    pi: { code: string; deadline: Date | null; items: readonly { lsxCode?: string | null }[] },
+    befores: PIItemWithRefs[],
+  ): Promise<void> {
+    if (!ORDER_VIOLATION_BLOCKS) return;
+    const lines: string[] = [];
+    for (const before of befores) {
+      const after = await tx.productionInvoiceItem.findUniqueOrThrow({
+        where: { id: before.id },
+        include: { stages: true },
+      });
+      const valuesChanged = diffValues(valuesOfItem(before), valuesOfItem(after)).length > 0;
+      const deliveryChanged =
+        (before.deliveryDeadline?.getTime() ?? null) !==
+        (after.deliveryDeadline?.getTime() ?? null);
+      if (!valuesChanged && !deliveryChanged) continue;
+      // Hạn giao riêng của dòng, chưa có thì hạn của lệnh (như form hiện; lõi đổi mốc kiểm cùng cách).
+      const delivery = after.deliveryDeadline ?? pi.deadline ?? null;
+      const warnings = milestoneOrderWarnings({
+        ...valuesOfItem(after),
+        deliveryDeadline: delivery ? vnDayKey(delivery) : null,
+      });
+      for (const w of warnings) {
+        lines.push(`${this.lenhCodeOfItem(pi, before)} · ${before.mfgProduct.factoryCode}: ${w}`);
+      }
+    }
+    if (lines.length > 0) throw new BadRequestException(lines.join('\n'));
   }
 
   /** Đợt 9: PI huỷ không sửa mốc được (lệnh Kết thúc do DeadlineChangesService chặn riêng cho dòng đã duyệt). */

@@ -6,16 +6,19 @@
  * dòng APPROVED → yêu cầu trong 1 lô chờ Sếp duyệt lại (mốc cũ vẫn chạy tới khi Sếp duyệt); dòng có lệnh Kết thúc / PI huỷ → lỗi; mỗi dòng
  * tối đa 1 yêu cầu PENDING; chỉ KHSX (+ Admin) sửa / tải Excel; Sếp duyệt.
  *
- * Câu hỏi đang chờ Sếp (file `docs/cau-hoi-sep-dot-9-sua-ke-hoach-2026-11-05.docx`) - code theo phương án IT đề xuất, đổi được nhanh:
- *  Q9-1 dời 1 mốc KHÔNG tự dời mốc sau (chỉ ô đã sửa) · Q9-2 thứ tự mốc ngược = CẢNH BÁO (`ORDER_VIOLATION_BLOCKS = false`) ·
- *  Q9-3 Excel gồm mọi lệnh chưa Kết thúc (`scope=all`, có `scope=approved`) · Q9-4 Sếp được BỎ CHỌN từng yêu cầu trong lô (API nhận danh sách
- *  yêu cầu duyệt; FE bật/tắt bằng 1 hằng).
+ * Sếp trả lời 4 câu ngày 06/11 (file `docs/cau-hoi-sep-dot-9-sua-ke-hoach-2026-11-05.docx`) - phần 2:
+ *  Q9-1 = B: dời 1 mốc SẢN XUẤT thì các mốc sản xuất SAU nó tự dời cùng số ngày (`resolveAutoShift` ở deadline-values.util.ts); 2 mốc Mua VT
+ *        và hạn giao không tự dời; KHSX vẫn sửa tay lại từng mốc được.
+ *  Q9-2 = B: thứ tự mốc ngược = LỖI, không cho lưu dòng đó (`ORDER_VIOLATION_BLOCKS = true`, cả dòng sửa thẳng).
+ *  Q9-3 = ý kiến khác: Excel CHỈ gồm lệnh CHƯA BẮT ĐẦU SẢN XUẤT (chưa cắt phôi) - cả chưa duyệt lẫn đã duyệt mà chưa cắt. Lệnh đã bắt đầu
+ *        (lệnh SX `floorStage` ≠ PENDING, QLSX đã bấm "Bắt đầu") KHÔNG được sửa mốc ở mọi đường (form, Excel, Sếp duyệt).
+ *  Q9-4 = B: Sếp bỏ chọn từng yêu cầu trong lô (đã làm ở phần 1).
  *
  * Ngày luôn là ngày VN 'YYYY-MM-DD'.
  */
 
-/** Q9-2: true = thứ tự mốc ngược là LỖI (chặn dòng); false = chỉ cảnh báo (IT đề xuất, chờ Sếp). */
-export const ORDER_VIOLATION_BLOCKS = false;
+/** Q9-2 (Sếp chọn B): true = thứ tự mốc ngược là LỖI (chặn dòng); false = chỉ cảnh báo. */
+export const ORDER_VIOLATION_BLOCKS = true;
 
 /** Các mốc sửa được, ĐÚNG thứ tự cột Excel / form (Phú An). Hạn giao KHÔNG nằm ở đây (2.4). */
 export const DEADLINE_FIELDS = [
@@ -41,6 +44,8 @@ export interface DeadlineFieldChange {
   label: string;
   from: string | null;
   to: string | null;
+  /** Q9-1: true = mốc TỰ DỜI theo mốc sản xuất phía trước (không phải ô KHSX gõ). Chỉ bản xem trước Excel gắn; vắng = KHSX gõ. */
+  auto?: boolean;
 }
 
 export type DeadlineChangeSource = 'MANUAL' | 'EXCEL';
@@ -71,6 +76,11 @@ export interface DeadlineChangeRequestDto {
   warnings: string[];
   /** Lý do khi REJECTED (= decisionNote của lô). */
   rejectReason: string | null;
+  /**
+   * Q9-3: yêu cầu PENDING mà Sếp KHÔNG duyệt được nữa (tính lúc đọc) - lệnh đã bắt đầu sản xuất (cắt phôi) / Kết thúc / huỷ. Có giá trị → FE
+   * khoá ô chọn, chỉ từ chối được (BE `decide` cũng chặn). null = duyệt được (hoặc yêu cầu không còn PENDING).
+   */
+  blockedReason: string | null;
 }
 
 export interface DeadlineChangeBatchDto {
@@ -144,6 +154,7 @@ export interface DeadlineHistoryEntry {
 
 // ─── Excel (`/deadline-plan`) ─────────────────────────────────────────────────────────────────────
 
+/** Q9-3: 'all' = mọi lệnh CHƯA BẮT ĐẦU sản xuất (chưa duyệt + đã duyệt chưa cắt) · 'approved' = chỉ phần đã duyệt chưa cắt. */
 export type DeadlinePlanScope = 'all' | 'approved';
 
 export interface DeadlineImportRow extends DeadlineEntryCheck {

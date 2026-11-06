@@ -73,6 +73,74 @@ export function pickChanged(changes: DeadlineFieldChange[]): {
   return { oldValues, newValues };
 }
 
+// ─── Phần A – Đợt 9 phần 2 (Sếp trả lời 06/11) ───────────────────────────────────────────────────
+
+/**
+ * Q9-3: lệnh đã BẮT ĐẦU SẢN XUẤT (cắt phôi) = lệnh SX có `floorStage` khác PENDING (QLSX đã bấm "Bắt đầu" - Phôi chỉ báo cắt được khi lệnh
+ * ACTIVE; PAUSED / FINISHED cũng là đã bắt đầu). Chưa có lệnh SX (chưa duyệt) = chưa bắt đầu.
+ */
+export const isFloorStarted = (floorStage: string | null | undefined): boolean =>
+  !!floorStage && floorStage !== 'PENDING';
+
+/** Câu lỗi dùng chung khi dòng đã bắt đầu sản xuất (Q9-3). */
+export const FLOOR_STARTED_ERROR = 'Lệnh đã bắt đầu sản xuất (cắt phôi) - không sửa mốc được nữa';
+
+/** Q9-1: các mốc SẢN XUẤT (khoá `stage.*`) theo thứ tự DEADLINE_FIELDS - chỉ những mốc này tự dời. 2 mốc Mua VT và hạn giao không tự dời. */
+export const AUTO_SHIFT_KEYS: DeadlineFieldKey[] = DEADLINE_FIELDS.map((f) => f.key).filter(
+  isStageKey,
+);
+
+const DAY_MS = 86_400_000;
+const utcOfDay = (day: string): number =>
+  Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)));
+
+/** Số ngày từ `from` tới `to` ('YYYY-MM-DD'), âm nếu `to` sớm hơn. */
+export function daysBetween(from: string, to: string): number {
+  return Math.round((utcOfDay(to) - utcOfDay(from)) / DAY_MS);
+}
+
+/** 'YYYY-MM-DD' + n ngày lịch. */
+export function addDays(day: string, n: number): string {
+  return new Date(utcOfDay(day) + n * DAY_MS).toISOString().slice(0, 10);
+}
+
+export interface AutoShiftResult {
+  /** Đủ mọi khoá DEADLINE_FIELDS: ô gõ + mốc tự dời + mốc giữ nguyên. */
+  values: Required<DeadlineValues>;
+  /** Các mốc TỰ DỜI (không phải ô gõ), theo thứ tự DEADLINE_FIELDS. */
+  autoKeys: DeadlineFieldKey[];
+}
+
+/**
+ * Q9-1 (Sếp chọn B): mốc sản xuất KHSX không gõ mà đã có ngày → dời cùng số ngày với mốc sản xuất GẦN NHẤT PHÍA TRƯỚC nó mà KHSX đã gõ.
+ * - `old` = mốc đang lưu (form) / lúc xuất file (Excel). `explicit` = ô KHSX gõ (null / vắng = không gõ).
+ * - Gõ lại đúng ngày cũ = dời 0 ngày → các mốc sau đứng yên (cách giữ hạn đóng gói khi dời Phôi: gõ lại ngày Đóng gói cũ).
+ * - Mốc chưa có ngày thì không tự sinh; gõ ngày cho mốc chưa có ngày thì không làm dời mốc sau. 2 mốc Mua VT: chỉ ô gõ, không tự dời,
+ *   không làm dời mốc khác (số ngày dời đi xuyên qua chúng).
+ * Hàm thuần - FE chép y hệt ở `src/modules/pages/ProductionPlan/deadlineRules.ts`.
+ */
+export function resolveAutoShift(old: DeadlineValues, explicit: DeadlineValues): AutoShiftResult {
+  const values = {} as Required<DeadlineValues>;
+  const autoKeys: DeadlineFieldKey[] = [];
+  let delta = 0;
+  for (const f of DEADLINE_FIELDS) {
+    const prev = old[f.key] ?? null;
+    const typed = explicit[f.key] ?? null;
+    if (typed !== null) {
+      values[f.key] = typed;
+      if (isStageKey(f.key) && prev !== null) delta = daysBetween(prev, typed);
+      continue;
+    }
+    if (isStageKey(f.key) && prev !== null && delta !== 0) {
+      values[f.key] = addDays(prev, delta);
+      autoKeys.push(f.key);
+      continue;
+    }
+    values[f.key] = prev;
+  }
+  return { values, autoKeys };
+}
+
 /** Dòng `DeadlineChangeRequest` tối thiểu để dựng `PendingDeadlineChangeRef` (oldValues / newValues là JSON đã lưu). */
 export interface PendingRequestRow {
   id: bigint;
