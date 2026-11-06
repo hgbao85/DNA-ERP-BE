@@ -19,7 +19,12 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
   let service: SupplierOrdersService;
   let prisma: {
     supplier: { findUnique: jest.Mock; findMany: jest.Mock };
-    purchaseProposalItem: { findMany: jest.Mock; updateMany: jest.Mock; update: jest.Mock };
+    purchaseProposalItem: {
+      findMany: jest.Mock;
+      updateMany: jest.Mock;
+      update: jest.Mock;
+      create: jest.Mock;
+    };
     supplierOrder: {
       create: jest.Mock;
       findUnique: jest.Mock;
@@ -85,6 +90,9 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
         findMany: jest.fn().mockResolvedValue([pendingItem()]),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn(),
+        create: jest.fn((args: { data: { reorderOfItemId: bigint } }) =>
+          Promise.resolve({ id: args.data.reorderOfItemId + 1000n }),
+        ),
       },
       supplierOrder: {
         create: jest.fn().mockResolvedValue({ id: 90n }),
@@ -381,6 +389,138 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       await expect(service.cancel('90', 'x', 'buyer-1', ['PURCHASER'])).rejects.toThrow(
         ConflictException,
       );
+      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('closeShortage - Đóng phần thiếu (bản v8 mục 7.13)', () => {
+    // Đơn gộp đã ký: lệnh A cần 100, mua 110 (dư 10), đã nhận 60; lệnh B cần 50, chưa nhận gì.
+    const approvedOrder = () =>
+      order({
+        status: SupplierOrderStatus.APPROVED,
+        approvalFileUrl: 'https://f/ky.pdf',
+        items: [
+          pendingItem({
+            id: 400n,
+            proposalId: 300n,
+            status: PurchaseProposalStatus.PURCHASING,
+            buyQty: decimal(100),
+            orderQty: decimal(110),
+            receivedQty: decimal(60),
+            receiveWarehouseCode: null,
+          }),
+          pendingItem({
+            id: 401n,
+            proposalId: 301n,
+            status: PurchaseProposalStatus.PURCHASING,
+            buyQty: decimal(50),
+            receivedQty: decimal(0),
+            receiveWarehouseCode: null,
+          }),
+        ],
+      });
+    const lockedRows = (rows: { buy: number; order: number | null; received: number }[]) => {
+      for (const r of rows) {
+        prisma.$queryRaw.mockResolvedValueOnce([
+          {
+            status: PurchaseProposalStatus.PURCHASING,
+            buyQty: decimal(r.buy),
+            orderQty: r.order == null ? null : decimal(r.order),
+            receivedQty: decimal(r.received),
+          },
+        ]);
+      }
+    };
+
+    it('đóng từng dòng (PURCHASED + lý do + số thiếu theo số đặt), phần CẦN mua còn thiếu tách thành dòng mới chưa vào đơn', async () => {
+      prisma.supplierOrder.findUnique.mockResolvedValue(approvedOrder());
+      lockedRows([
+        { buy: 100, order: 110, received: 60 },
+        { buy: 50, order: null, received: 0 },
+      ]);
+      prisma.purchaseProposalItem.findMany.mockResolvedValue([
+        { status: PurchaseProposalStatus.PURCHASED },
+        { status: PurchaseProposalStatus.NEW },
+      ]);
+
+      await service.closeShortage('90', ['400', '401'], '  NCC hết hàng  ', 'buyer-1', [
+        'PURCHASER',
+      ]);
+
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
+        where: { id: 400n },
+        data: expect.objectContaining({
+          status: PurchaseProposalStatus.PURCHASED,
+          shortClosedById: 'buyer-1',
+          shortCloseReason: 'NCC hết hàng',
+          shortClosedQty: 50,
+        }) as unknown,
+      });
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
+        where: { id: 401n },
+        data: expect.objectContaining({ shortClosedQty: 50 }) as unknown,
+      });
+      // Phần dư 10 chưa về thì bỏ: lệnh A chỉ còn cần 100 − 60 = 40.
+      expect(prisma.purchaseProposalItem.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          proposalId: 300n,
+          materialId: 30n,
+          buyQty: 40,
+          actualStock: 0,
+          reorderOfItemId: 400n,
+        }) as unknown,
+      });
+      expect(prisma.purchaseProposalItem.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          proposalId: 301n,
+          buyQty: 50,
+          reorderOfItemId: 401n,
+        }) as unknown,
+      });
+      const created = prisma.purchaseProposalItem.create.mock.calls as [
+        { data: Record<string, unknown> },
+      ][];
+      expect(created.every(([a]) => !('supplierOrderId' in a.data))).toBe(true);
+      // Rollup lại cả 2 đề xuất.
+      expect(prisma.purchaseProposal.update).toHaveBeenCalledTimes(2);
+    });
+
+    it('đã nhận đủ số CẦN (chỉ thiếu phần mua dư) thì đóng mà không tạo dòng mua lại', async () => {
+      prisma.supplierOrder.findUnique.mockResolvedValue(approvedOrder());
+      lockedRows([{ buy: 100, order: 110, received: 100 }]);
+      prisma.purchaseProposalItem.findMany.mockResolvedValue([
+        { status: PurchaseProposalStatus.PURCHASED },
+      ]);
+      await service.closeShortage('90', ['400'], 'NCC hết hàng', 'buyer-1', ['PURCHASER']);
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
+        where: { id: 400n },
+        data: expect.objectContaining({ shortClosedQty: 10 }) as unknown,
+      });
+      expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
+    });
+
+    it('chỉ đóng được đơn đã có phiếu ký, dòng của chính đơn, dòng còn chờ nhận; người mua khác không đóng hộ', async () => {
+      await expect(
+        service.closeShortage('90', ['400'], 'NCC hết hàng', 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(ConflictException);
+
+      prisma.supplierOrder.findUnique.mockResolvedValue(approvedOrder());
+      await expect(
+        service.closeShortage('90', ['999'], 'NCC hết hàng', 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(NotFoundException);
+      await expect(
+        service.closeShortage('90', ['400'], 'NCC hết hàng', 'buyer-2', ['PURCHASER']),
+      ).rejects.toThrow(ForbiddenException);
+
+      // Kho vừa nhận nốt (đọc lại sau khoá đã đủ) hoặc dòng vừa đổi trạng thái -> 409, không ghi gì.
+      lockedRows([{ buy: 100, order: 110, received: 110 }]);
+      await expect(
+        service.closeShortage('90', ['400'], 'NCC hết hàng', 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow('đã nhận đủ');
+      prisma.$queryRaw.mockResolvedValueOnce([{ status: PurchaseProposalStatus.PURCHASED }]);
+      await expect(
+        service.closeShortage('90', ['400'], 'NCC hết hàng', 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow('không còn chờ nhận');
       expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
     });
   });

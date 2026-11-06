@@ -2461,6 +2461,16 @@ model PurchaseProposalItem {
   /// cho 1 đơn. null = chưa vào đơn nào (hoặc dòng duyệt theo luồng cũ trước 11/2026).
   supplierOrderId BigInt?
 
+  /// "Đóng phần thiếu" (Đợt 5e, bản v8 7.13, V4-7): NCC không giao nốt, người mua đóng dòng này (sang PURCHASED) kèm lý do.
+  /// Phần còn thiếu so với số CẦN mua (buyQty − đã nhận) tách thành dòng NEW mới (`reorderOfItemId` trỏ về dòng này) để đặt
+  /// NCC khác bằng đơn + phiếu ký mới; phần "mua dư" chưa về thì bỏ. shortClosedQty = số đặt − đã nhận lúc đóng.
+  shortClosedAt    DateTime?
+  shortClosedById  String?
+  shortCloseReason String?
+  shortClosedQty   Decimal?  @db.Decimal(14, 4)
+  /// Dòng NEW sinh ra từ "Đóng phần thiếu" của dòng nào (null = dòng thường).
+  reorderOfItemId  BigInt?
+
   proposal      PurchaseProposal        @relation(fields: [proposalId], references: [id])
   material      Material                @relation(fields: [materialId], references: [id])
   quotes        PurchaseProposalQuote[]
@@ -2625,6 +2635,11 @@ model PurchaseReceipt {
   /// Phân bổ thật đã ghi [{itemId, qty}].
   allocation         Json
   allocationAdjusted Boolean               @default(false)
+  /// Nhận vượt (Đợt 5e, bản v8 4.12, V4-6): phần thực nhận vượt tổng số CÒN LẠI của đơn (số đặt − đã nhận) lúc nhận. > 0 thì
+  /// thủ kho BẮT BUỘC ghi lý do, ảnh bằng chứng nếu có; phần vượt vào tồn chưa giữ (pool PI chỉ cộng tới buyQty) và báo người mua.
+  overQty            Decimal               @default(0) @db.Decimal(14, 4)
+  overReason         String?
+  overFileUrls       String[]              @default([])
   idempotencyKey     String                @unique
   createdById        String
   createdAt          DateTime              @default(now())

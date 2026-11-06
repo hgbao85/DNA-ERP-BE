@@ -35,6 +35,8 @@ import {
   SupplierOrderResponseDto,
 } from './dto/supplier-order.dto';
 
+const round4 = (n: number) => Math.round(n * 10_000) / 10_000;
+
 const ORDER_INCLUDE = {
   supplier: true,
   createdBy: { select: { firstName: true, lastName: true } },
@@ -389,6 +391,122 @@ export class SupplierOrdersService {
   }
 
   /**
+   * "Đóng phần thiếu" (Đợt 5e, bản v8 7.13, V4-7): NCC không giao nốt. Mỗi dòng chọn (đang chờ nhận, đơn đã có phiếu ký) đóng lại
+   * (PURCHASED) kèm lý do; phần còn thiếu so với số CẦN mua (buyQty − đã nhận) tách thành dòng NEW mới cùng lệnh, chưa vào đơn
+   * nào - người mua đặt NCC khác bằng đơn mới (số đơn mới theo NCC mới, phiếu ký mới chỉ gồm phần thiếu). Phần "mua dư" chưa về
+   * thì bỏ. Đơn gộp: hàng về đã chia lệnh sớm trước (YC8), nên phần thiếu tự rơi vào các lệnh xếp sau. Dòng mới vẫn hiện ở "Vật
+   * tư cần về" (đếm dòng NEW) tới khi về đủ; lượt tính lại đề xuất tự nhận dòng NEW này là dòng đang mở của vật tư.
+   */
+  async closeShortage(
+    id: string,
+    itemIds: string[],
+    reason: string,
+    actorUserId: string,
+    actorRoles: string[],
+  ): Promise<SupplierOrderResponseDto> {
+    const order = await this.findOrThrow(id);
+    this.assertOwner(order, actorUserId, actorRoles);
+    if (order.status !== SupplierOrderStatus.APPROVED) {
+      throw new ConflictException(
+        `Đơn ${supplierOrderCode(order.seq, order.year)} chưa có phiếu Giám đốc ký - gỡ dòng hoặc sửa số mua trực tiếp, không cần đóng phần thiếu`,
+      );
+    }
+    const wanted = [...new Set(itemIds)].map((x) => parseBigIntId(x));
+    const items = wanted.map((wid) => order.items.find((it) => it.id === wid));
+    if (items.some((it) => !it)) {
+      throw new NotFoundException('Có dòng không nằm trong đơn này');
+    }
+    const picked = items as OrderRow['items'];
+    const proposalIds = [...new Set(picked.map((it) => it.proposalId))].sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+    const trimmed = reason.trim();
+    const now = new Date();
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Cùng khoá với nhận hàng (applyItemReceipt) - Kho nhận xen giữa thì đọc lại số đã nhận mới nhất.
+      for (const pid of proposalIds) {
+        await lockBusinessKey(tx, `purchase-proposal-mutate:${pid}`);
+      }
+      const closed: {
+        itemId: string;
+        closedQty: number;
+        reorderQty: number;
+        newItemId?: string;
+      }[] = [];
+      for (const it of picked) {
+        const [row] = await tx.$queryRaw<
+          {
+            status: PurchaseProposalStatus;
+            buyQty: Prisma.Decimal;
+            orderQty: Prisma.Decimal | null;
+            receivedQty: Prisma.Decimal;
+          }[]
+        >`
+          SELECT "status", "buyQty", "orderQty", "receivedQty" FROM "purchase_proposal_items"
+          WHERE "id" = ${it.id} FOR UPDATE
+        `;
+        if (row?.status !== PurchaseProposalStatus.PURCHASING) {
+          throw new ConflictException(
+            `Vật tư ${it.material.code} (${it.id}) không còn chờ nhận - tải lại trang`,
+          );
+        }
+        const buy = row.buyQty.toNumber();
+        const received = row.receivedQty.toNumber();
+        const closedQty = round4(
+          Math.max(0, effectiveOrderQty(buy, row.orderQty?.toNumber() ?? null) - received),
+        );
+        if (closedQty <= 0) {
+          throw new ConflictException(
+            `Vật tư ${it.material.code} đã nhận đủ - không còn phần thiếu`,
+          );
+        }
+        const reorderQty = round4(Math.max(0, buy - received));
+        await tx.purchaseProposalItem.update({
+          where: { id: it.id },
+          data: {
+            status: PurchaseProposalStatus.PURCHASED,
+            purchasedAt: now,
+            shortClosedAt: now,
+            shortClosedById: actorUserId,
+            shortCloseReason: trimmed,
+            shortClosedQty: closedQty,
+          },
+        });
+        let newItemId: string | undefined;
+        if (reorderQty > 0) {
+          const created = await tx.purchaseProposalItem.create({
+            data: {
+              proposalId: it.proposalId,
+              materialId: it.materialId,
+              spec: it.spec,
+              stockLengthMm: it.stockLengthMm,
+              receiveWarehouseCode: it.receiveWarehouseCode,
+              buyQty: reorderQty,
+              actualStock: 0,
+              reorderOfItemId: it.id,
+            },
+          });
+          newItemId = created.id.toString();
+        }
+        closed.push({ itemId: it.id.toString(), closedQty, reorderQty, newItemId });
+      }
+      for (const pid of proposalIds) {
+        await recomputeProposalStatus(tx, pid);
+      }
+      return closed;
+    });
+
+    await this.audit(AuditAction.UPDATE, order, null, {
+      event: 'supplier-order-short-closed',
+      reason: trimmed,
+      items: result,
+    });
+    this.publish(proposalIds, actorUserId);
+    return this.findOne(id);
+  }
+
+  /**
    * File phiếu đề xuất (.xlsx, theo mẫu PHIEU_DE_XUAT_MAU_TRONG_IEA) của 1 đơn - trả base64 vì mọi
    * phản hồi đều bọc trong envelope JSON (ResponseInterceptor), FE tự giải mã rồi tải xuống.
    */
@@ -640,6 +758,9 @@ export class SupplierOrdersService {
             status: it.status,
             receivedQty: it.receivedQty.toNumber(),
             orderCode: this.lenhCodeOf(it, codes),
+            shortClosedQty: it.shortClosedQty?.toNumber() ?? null,
+            shortCloseReason: it.shortCloseReason,
+            shortClosedAt: it.shortClosedAt,
           }),
       ),
     });

@@ -9,6 +9,7 @@ import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { BossApprovePurchaseProposalDto } from './dto/boss-approve-purchase-proposal.dto';
 import {
   CancelSupplierOrderDto,
+  CloseShortageDto,
   CreateSupplierOrderDto,
   ListSupplierOrdersQueryDto,
   ReviseSupplierOrderDto,
@@ -106,6 +107,18 @@ export class SupplierOrdersController {
     @CurrentUser('roles') roles: string[],
   ) {
     return this.supplierOrdersService.revise(id, dto.reason, userId, roles);
+  }
+
+  /** "Đóng phần thiếu" (7.13) - NCC không giao nốt; phần thiếu quay lại thành "cần mua" để đặt NCC khác. */
+  @Post(':id/close-shortage')
+  @RequirePermissions(UPDATE)
+  closeShortage(
+    @Param('id') id: string,
+    @Body() dto: CloseShortageDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.supplierOrdersService.closeShortage(id, dto.itemIds, dto.reason, userId, roles);
   }
 
   /** "Sếp đã duyệt" theo đơn - tải phiếu Giám đốc đã ký cho đúng đơn này. */

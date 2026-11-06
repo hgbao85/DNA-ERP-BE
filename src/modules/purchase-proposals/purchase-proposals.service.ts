@@ -137,6 +137,9 @@ const ITEM_INCLUDE = {
         select: {
           receivedQty: true,
           allocationAdjusted: true,
+          overQty: true,
+          overReason: true,
+          overFileUrls: true,
           supplierSlipUrls: true,
           approvalFileUrls: true,
           receiptSlipUrls: true,
@@ -1252,6 +1255,9 @@ export class PurchaseProposalsService {
             approvalFileUrls: r.receipt?.approvalFileUrls ?? [],
             receiptSlipUrls: r.receipt?.receiptSlipUrls ?? [],
             weighSlipUrls: r.receipt?.weighSlipUrls ?? [],
+            overQty: r.receipt?.overQty.toNumber() ?? 0,
+            overReason: r.receipt?.overReason ?? null,
+            overFileUrls: r.receipt?.overFileUrls ?? [],
           }),
       ),
     });

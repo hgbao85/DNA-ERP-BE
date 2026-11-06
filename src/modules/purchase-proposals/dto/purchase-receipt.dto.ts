@@ -11,6 +11,7 @@ import {
   Min,
   MinLength,
   ValidateNested,
+  IsDateString,
 } from 'class-validator';
 
 const MAX_FILES = 20;
@@ -111,6 +112,22 @@ export class CreatePurchaseReceiptDto {
   @ValidateNested({ each: true })
   @Type(() => ReceiptAllocationDto)
   allocation?: ReceiptAllocationDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'Lý do nhận vượt (4.12) - BẮT BUỘC khi số thực nhận vượt tổng số còn lại của đơn (số đặt − đã nhận).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  overReason?: string;
+
+  @ApiPropertyOptional({ type: [String], description: 'Ảnh bằng chứng nhận vượt (không bắt buộc)' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_FILES)
+  @IsString({ each: true })
+  overFileUrls?: string[];
 }
 
 /** "Từ chối nhận" (4.5): hàng lệch phiếu giao / không đạt - không cộng tồn, báo người mua phụ trách. */
@@ -139,4 +156,17 @@ export class RejectPurchaseReceiptDto {
   @ArrayMaxSize(MAX_FILES)
   @IsString({ each: true })
   fileUrls!: string[];
+}
+
+/** Thống kê nhận vượt (4.12) - lọc theo ngày nhận (giờ VN, YYYY-MM-DD, cả 2 đầu). */
+export class OverReceiptStatsQueryDto {
+  @ApiPropertyOptional({ example: '2026-11-01' })
+  @IsOptional()
+  @IsDateString()
+  from?: string;
+
+  @ApiPropertyOptional({ example: '2026-11-30' })
+  @IsOptional()
+  @IsDateString()
+  to?: string;
 }
