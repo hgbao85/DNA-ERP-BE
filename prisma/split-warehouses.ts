@@ -1,5 +1,6 @@
 /**
- * Đợt 7 - chuyển vật tư Hàn/Sơn từ kho chung cũ 'phoi-son-han' (nay là Kho Phôi Phú An) sang Kho Hàn Phú An / Kho Sơn Phú An,
+ * Đợt 7 - chuyển vật tư Hàn/Sơn từ kho chung cũ 'phoi-son-han' (nay là Kho Phôi Phú An) sang Kho Hàn Phú An / Kho Sơn Phú An
+ * (và chân nhôm sang Kho Phụ kiện),
  * và gắn kho nhận Phước An cho các dòng mua chưa nhận của lệnh xưởng Phước An. Chạy NGÀY KIỂM KÊ (12/11/2026), sau khi
  * migration 20261107090000_warehouse_kind_workshop đã lên.
  *
@@ -9,12 +10,14 @@
  *   ... --rehearse [--plan-file x.csv]   # chạy y hệt --apply trong 1 transaction rồi HOÀN TÁC (diễn tập trên DB thật)
  *
  * Phân loại tự động vật tư đang ở kho cũ:
- *   - nhóm Sắt (STEEL_BAR), tên có "đá cắt"                                 -> giữ ở kho Phôi
- *   - nhóm Tán rút (RIVET)                                                  -> kho Hàn  (bản v8: tán rút thuộc kho Hàn)
+ *   - tên bắt đầu "Chân nhôm"                                               -> kho Phụ kiện (anh Nhân chốt 07/11)
+ *   - nhóm Sắt (STEEL_BAR), tên có "đá cắt", nhóm Tán rút (RIVET)            -> giữ ở kho Phôi (anh Nhân 07/11: tán rút ở
+ *     kho Phôi, đổi lại so với bản v8; đá cắt mua về kho Phôi rồi lập phiếu chuyển sang kho Hàn)
  *   - định mức tiêu hao (consumable_bom) chỉ dùng ở công đoạn HAN / chỉ SON -> kho Hàn / kho Sơn
  *   - còn lại                                                               -> CẦN XEM (không chạy --apply được tới khi
  *     có trong --plan-file)
- * --plan-file: CSV 2 cột `mã vật tư,PHOI|HAN|SON` (dòng đầu là tiêu đề hoặc không đều được) - ghi đè phân loại tự động.
+ * --plan-file: CSV 2 cột `mã vật tư,PHOI|HAN|SON|PHU_KIEN|NGUNG` (dòng đầu là tiêu đề hoặc không đều được) - ghi đè phân
+ * loại tự động. NGUNG = mã ngưng dùng (vd gas đốt móc, xưởng đã bỏ): không chuyển, --apply đặt vật tư ngưng hoạt động.
  *
  * Mỗi vật tư chuyển: đổi Material.warehouseId, chuyển toàn bộ tồn (mọi chiều dài/quy cách) bằng bút toán WAREHOUSE_SPLIT
  * (idempotencyKey cố định -> chạy lại không ghi 2 lần), chuyển giữ chỗ ACTIVE sang kho mới. Tất cả trong 1 transaction.
@@ -40,8 +43,12 @@ const ROOT = 'phoi-son-han';
 const TARGET_CODE: Partial<Record<WarehouseKind, string>> = {
   HAN: 'phoi-son-han-han-pa',
   SON: 'phoi-son-han-son-pa',
+  PHU_KIEN: 'vat-tu-tp',
 };
-type Kind = 'PHOI' | 'HAN' | 'SON';
+type Kind = 'PHOI' | 'HAN' | 'SON' | 'PHU_KIEN' | 'NGUNG';
+const KINDS: Kind[] = ['PHOI', 'HAN', 'SON', 'PHU_KIEN', 'NGUNG'];
+type MoveKind = 'HAN' | 'SON' | 'PHU_KIEN';
+const isMove = (k: Kind | null): k is MoveKind => k === 'HAN' || k === 'SON' || k === 'PHU_KIEN';
 
 const args = process.argv.slice(2);
 const rehearse = args.includes('--rehearse');
@@ -56,9 +63,9 @@ function readPlanFile(file: string): Map<string, Kind> {
     const [code, kind] = raw.split(',').map((s) => s.trim());
     if (!code || !kind) continue;
     const k = kind.toUpperCase();
-    if (k === 'PHOI' || k === 'HAN' || k === 'SON') map.set(code, k);
+    if ((KINDS as string[]).includes(k)) map.set(code, k as Kind);
     else if (!/^(kind|kho|loai)/i.test(kind))
-      throw new Error(`Dòng "${raw}": loại kho phải là PHOI, HAN hoặc SON`);
+      throw new Error(`Dòng "${raw}": loại kho phải là ${KINDS.join(', ')}`);
   }
   return map;
 }
@@ -67,12 +74,13 @@ async function main() {
   const root = await prisma.warehouse.findUnique({ where: { code: ROOT } });
   const han = await prisma.warehouse.findUnique({ where: { code: TARGET_CODE.HAN! } });
   const son = await prisma.warehouse.findUnique({ where: { code: TARGET_CODE.SON! } });
-  if (!root || !han || !son || root.kind !== WarehouseKind.PHOI) {
+  const phuKien = await prisma.warehouse.findUnique({ where: { code: TARGET_CODE.PHU_KIEN! } });
+  if (!root || !han || !son || !phuKien || root.kind !== WarehouseKind.PHOI) {
     throw new Error(
       'Chưa có 9 kho - chạy `npx prisma migrate deploy` (migration 20261107090000) trước',
     );
   }
-  const targetOf: Record<'HAN' | 'SON', typeof han> = { HAN: han, SON: son };
+  const targetOf: Record<MoveKind, typeof han> = { HAN: han, SON: son, PHU_KIEN: phuKien };
   const override = planFile ? readPlanFile(planFile) : new Map<string, Kind>();
   const actor = await prisma.user.findFirst({
     where: { roles: { some: { role: { name: 'ADMIN' } } }, deletedAt: null },
@@ -100,9 +108,10 @@ async function main() {
     let kind: Kind | null = null;
     let why = '';
     if (override.has(m.code)) [kind, why] = [override.get(m.code)!, 'bảng sửa tay'];
+    else if (/^chân nhôm/i.test(m.name)) [kind, why] = ['PHU_KIEN', 'chân nhôm'];
     else if (m.materialGroup?.systemKey === 'STEEL_BAR') [kind, why] = ['PHOI', 'nhóm Sắt'];
     else if (/đá cắt/i.test(m.name)) [kind, why] = ['PHOI', 'đá cắt'];
-    else if (m.materialGroup?.systemKey === 'RIVET') [kind, why] = ['HAN', 'nhóm Tán rút'];
+    else if (m.materialGroup?.systemKey === 'RIVET') [kind, why] = ['PHOI', 'nhóm Tán rút'];
     else if (stages.length === 1 && stages[0] === 'HAN')
       [kind, why] = ['HAN', 'định mức chỉ dùng ở Hàn'];
     else if (stages.length === 1 && stages[0] === 'SON')
@@ -111,15 +120,18 @@ async function main() {
     plan.push({ id: m.id, code: m.code, name: m.name, kind, why });
   }
   console.log(`\n=== Phân loại ${plan.length} vật tư đang ở kho ${ROOT} ===`);
-  for (const k of ['PHOI', 'HAN', 'SON', null] as const) {
+  for (const k of [...KINDS, null]) {
     const rows = plan.filter((p) => p.kind === k);
     console.log(`\n${k ?? 'CẦN XEM (ghi vào --plan-file)'}: ${rows.length}`);
     for (const p of rows) console.log(`  ${p.code.padEnd(12)} ${p.name}  (${p.why})`);
   }
   const unresolved = plan.filter((p) => p.kind === null);
+  const retired = plan.filter((p) => p.kind === 'NGUNG');
 
   // ── 2. Tồn / giữ chỗ của vật tư sẽ chuyển ─────────────────────────────────────────────────────
-  const moving = plan.filter((p) => p.kind === 'HAN' || p.kind === 'SON');
+  const moving = plan.filter((p): p is (typeof plan)[number] & { kind: MoveKind } =>
+    isMove(p.kind),
+  );
   const movingIds = moving.map((p) => p.id);
   const quants = movingIds.length
     ? await prisma.stockQuant.findMany({
@@ -140,7 +152,9 @@ async function main() {
   const draftSlips = await prisma.issueSlip.count({
     where: { warehouseId: root.id, status: 'DRAFT' },
   });
-  console.log(`\n=== Sẽ chuyển ${moving.length} vật tư sang kho Hàn/Sơn Phú An ===`);
+  console.log(
+    `\n=== Sẽ chuyển ${moving.length} vật tư sang kho Hàn/Sơn Phú An, Phụ kiện; ngưng dùng ${retired.length} mã ===`,
+  );
   console.log(`  ${quants.length} dòng tồn khác 0, ${reservations} dòng giữ chỗ ACTIVE`);
   for (const q of quants) {
     const p = moving.find((x) => x.id === q.materialId)!;
@@ -233,7 +247,7 @@ async function main() {
     .$transaction(
       async (tx) => {
         for (const p of moving) {
-          const target = targetOf[p.kind as 'HAN' | 'SON'];
+          const target = targetOf[p.kind];
           for (const q of quants.filter((x) => x.materialId === p.id)) {
             await tx.stockLedger.create({
               data: {
@@ -257,6 +271,9 @@ async function main() {
           });
           await tx.material.update({ where: { id: p.id }, data: { warehouseId: target.id } });
         }
+        for (const p of retired) {
+          await tx.material.update({ where: { id: p.id }, data: { isActive: false } });
+        }
         for (const it of phaOpenItems) {
           const w = phaWarehouses.find((x) => x.kind === it.material.warehouse?.kind);
           if (!w) throw new Error(`Xưởng Phước An chưa có kho ${it.material.warehouse?.kind}`);
@@ -267,13 +284,13 @@ async function main() {
         }
         if (rehearse) {
           const moved = await tx.material.count({
-            where: { id: { in: movingIds }, warehouseId: { in: [han.id, son.id] } },
+            where: { id: { in: movingIds }, warehouseId: { in: [han.id, son.id, phuKien.id] } },
           });
           const left = await tx.stockQuant.count({
             where: { warehouseId: root.id, materialId: { in: movingIds }, NOT: { qty: 0 } },
           });
           console.log(`
-[diễn tập] đã đổi kho ${moved}/${moving.length} vật tư, tồn còn ở kho cũ: ${left} dòng - HOÀN TÁC`);
+[diễn tập] đã đổi kho ${moved}/${moving.length} vật tư, ngưng ${retired.length} mã, tồn còn ở kho cũ: ${left} dòng - HOÀN TÁC`);
           throw new Rollback();
         }
       },
@@ -284,7 +301,7 @@ async function main() {
     });
   if (rehearse) return;
   console.log(
-    `\nĐÃ CHẠY: chuyển ${moving.length} vật tư, gắn kho nhận Phước An cho ${phaOpenItems.length} dòng mua.`,
+    `\nĐÃ CHẠY: chuyển ${moving.length} vật tư, ngưng ${retired.length} mã, gắn kho nhận Phước An cho ${phaOpenItems.length} dòng mua.`,
   );
 }
 

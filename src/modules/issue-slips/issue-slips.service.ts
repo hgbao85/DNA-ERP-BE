@@ -16,7 +16,7 @@ import {
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
-import { isFamilyScope } from '../../common/utils/warehouse-family.util';
+import { isFamilyScope, warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { WarehouseLike, WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
@@ -435,8 +435,18 @@ export class IssueSlipsService {
     if (m.materialGroup?.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR) {
       throw new BadRequestException(`Sắt (${m.code}) xuất theo lệnh, không xuất dùng chung`);
     }
+    // Đợt 7: thủ kho Phôi/Hàn/Sơn xuất "Dùng chung" từ CHÍNH kho mình (vd đá cắt kho mặc định kho Phôi, đã chuyển một phần
+    // sang kho Hàn bằng phiếu chuyển kho) - đủ hay không do bước xác nhận kiểm tồn khả dụng của kho đó.
+    const scopeWarehouse =
+      !slipWarehouse && scope && warehouseFamilyOf(scope) === STEEL_FAMILY
+        ? await this.prisma.warehouse.findUnique({
+            where: { code: scope },
+            select: { id: true, code: true },
+          })
+        : null;
     const real =
       slipWarehouse ??
+      scopeWarehouse ??
       (await new WorkshopWarehouseResolver(this.prisma).sameKindAs(
         {
           id: m.warehouseId,

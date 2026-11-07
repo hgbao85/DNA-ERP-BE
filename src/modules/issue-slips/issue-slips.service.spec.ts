@@ -96,7 +96,12 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
         }),
         findUniqueOrThrow: jest.fn().mockResolvedValue({ code: 'GAS-01' }),
       },
-      warehouse: { findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 99n }) },
+      warehouse: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 99n }),
+        findUnique: jest.fn(({ where }: { where: { code: string } }) =>
+          Promise.resolve({ id: 11n, code: where.code }),
+        ),
+      },
       productionOrder: { findMany: jest.fn().mockResolvedValue([]) },
       productionInvoice: { findMany: jest.fn().mockResolvedValue([]) },
       productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([]) },
@@ -219,6 +224,18 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       await expect(service.create({ lines: [dto.lines[0]] }, 'kho-1', 'vat-tu-tp')).rejects.toThrow(
         ForbiddenException,
       );
+    });
+
+    it('Đợt 7: thủ kho Hàn xuất "Dùng chung" vật tư kho mặc định kho Phôi (đá cắt đã chuyển sang) từ CHÍNH kho Hàn', async () => {
+      await service.create(
+        { lines: [{ kind: IssueSlipLineKind.SHARED, materialId: '50', qty: 2 }] },
+        'kho-han',
+        'phoi-son-han-han-pa',
+      );
+      expect(
+        (prisma.issueSlip.create.mock.calls[0] as [{ data: { warehouseId: bigint } }])[0].data
+          .warehouseId,
+      ).toBe(11n);
     });
 
     it('dòng "Dùng chung": không cần lệnh; sắt không được xuất dùng chung; kho khác phạm vi -> 403', async () => {

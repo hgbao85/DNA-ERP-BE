@@ -42,7 +42,28 @@ describe('WarehouseTransfersService', () => {
     $transaction: jest.Mock;
   };
 
-  const phoiSonHan = { id: 1n, code: 'phoi-son-han', name: 'Phoi Son Han' };
+  const phoiSonHan = {
+    id: 1n,
+    code: 'phoi-son-han',
+    name: 'Phoi Son Han',
+    kind: 'PHOI',
+    workshopId: 1n,
+  };
+  // Đợt 7 (9 kho): kho Hàn Phú An / Phôi Phước An.
+  const hanPA = {
+    id: 6n,
+    code: 'phoi-son-han-han-pa',
+    name: 'Kho Han PA',
+    kind: 'HAN',
+    workshopId: 1n,
+  };
+  const phoiPHA = {
+    id: 7n,
+    code: 'phoi-son-han-phoi-pha',
+    name: 'Kho Phoi PhA',
+    kind: 'PHOI',
+    workshopId: 2n,
+  };
   const vatTuTp = { id: 2n, code: 'vat-tu-tp', name: 'Vat tu TP' };
   const thanhPham = { id: 3n, code: 'thanh-pham', name: 'Thanh pham' };
   // Kho phụ (2026-09-03) - xác nhận routing giờ so theo GIA ĐÌNH, không còn map cứng theo đúng 1
@@ -132,7 +153,7 @@ describe('WarehouseTransfersService', () => {
 
     prisma.warehouse.findUnique.mockImplementation(
       ({ where }: { where: { id?: bigint; code?: string } }) => {
-        const all = [phoiSonHan, vatTuTp, thanhPham, vatTuTp2, openingBalance];
+        const all = [phoiSonHan, vatTuTp, thanhPham, vatTuTp2, openingBalance, hanPA, phoiPHA];
         if (where.id !== undefined)
           return Promise.resolve(all.find((w) => w.id === where.id) ?? null);
         return Promise.resolve(all.find((w) => w.code === where.code) ?? null);
@@ -188,6 +209,40 @@ describe('WarehouseTransfersService', () => {
         ),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    it('Đợt 7: kho Phôi chuyển sang kho Hàn CÙNG XƯỞNG được (đá cắt); Hàn -> Phôi và Phôi -> Hàn xưởng khác vẫn chặn', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
+      prisma.warehouseTransfer.create.mockResolvedValue(
+        transferRow({ toWarehouseId: 6n, toWarehouse: hanPA }),
+      );
+      await expect(
+        service.create(
+          { ...dto, fromWarehouseId: '1', toWarehouseId: '6' },
+          'phoi-son-han',
+          'user-1',
+          'idem-key-1',
+        ),
+      ).resolves.toBeDefined();
+      expect(prisma.warehouseTransfer.create).toHaveBeenCalledTimes(1);
+
+      await expect(
+        service.create(
+          { ...dto, fromWarehouseId: '6', toWarehouseId: '1' },
+          null,
+          'user-1',
+          'idem-key-2',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.create(
+          { ...dto, fromWarehouseId: '7', toWarehouseId: '6' },
+          null,
+          'user-1',
+          'idem-key-3',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.warehouseTransfer.create).toHaveBeenCalledTimes(1);
     });
 
     it('2026-09-15: rejects khi kho đích là kho ẢO (OPENING_BALANCE) - phát hiện qua live-test, không phải kho vật lý', async () => {

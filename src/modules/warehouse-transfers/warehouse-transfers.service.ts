@@ -15,6 +15,7 @@ import {
   StockLedgerRefType,
   TransferStatus,
   Warehouse,
+  WarehouseKind,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
@@ -220,7 +221,14 @@ export class WarehouseTransfersService {
     // họ chỉ nhận vật tư qua mua hàng/nhập kho. Chặn cứng ở đây vì assertWarehouseScope() chỉ xét
     // kho NGUỒN, không có gì cản 1 request hợp lệ khác (vd vat-tu-tp gửi ngược) chọn phoi-son-han
     // làm đích qua thẳng API.
-    if (warehouseFamilyOf(toWarehouse.code) === 'phoi-son-han') {
+    // Đợt 7 (anh Nhân 07/11): ngoại lệ DUY NHẤT - kho Phôi chuyển sang kho Hàn CÙNG XƯỞNG (đá cắt mua về kho Phôi, Hàn
+    // dùng một phần).
+    const phoiToHanSameWorkshop =
+      fromWarehouse.kind === WarehouseKind.PHOI &&
+      toWarehouse.kind === WarehouseKind.HAN &&
+      fromWarehouse.workshopId != null &&
+      fromWarehouse.workshopId === toWarehouse.workshopId;
+    if (warehouseFamilyOf(toWarehouse.code) === 'phoi-son-han' && !phoiToHanSameWorkshop) {
       throw new BadRequestException(
         `Không được chuyển kho tự do tới "${toWarehouse.name}" - kho Phôi Sơn Hàn chỉ nhận vật tư qua mua hàng/nhập kho`,
       );
