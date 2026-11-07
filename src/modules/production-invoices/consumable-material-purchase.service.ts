@@ -16,6 +16,7 @@ import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal
 import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { ConsumableMaterialPurchaseResultDto } from './dto/consumable-material-purchase-result.dto';
 import { purchaseBuyQtyWithWaste } from '../../common/utils/purchase-waste.util';
 
@@ -183,6 +184,18 @@ export class ConsumableMaterialPurchaseService {
         receiveWarehouseByMaterial.set(materialIdStr, chosenWarehouseCode);
       }
     }
+    // Đợt 7 (chia 9 kho): vật tư Hàn (dây hàn, CO2, tán rút...) của lệnh xưởng Phước An tồn/giữ chỗ/nhập ở kho Hàn Phước
+    // An - kho thật khác kho mặc định thì cũng ghi vào receiveWarehouseCode.
+    const realWarehouseByMaterial = new Map<string, { id: bigint; code: string }>();
+    const resolver = new WorkshopWarehouseResolver(this.prisma);
+    for (const materialIdStr of requiredByMaterial.keys()) {
+      const material = materialById.get(materialIdStr)!;
+      const real = await resolver.resolveForPi(material.warehouse!, piBigId);
+      realWarehouseByMaterial.set(materialIdStr, { id: real.id, code: real.code });
+      if (real.id !== material.warehouse!.id && !receiveWarehouseByMaterial.has(materialIdStr)) {
+        receiveWarehouseByMaterial.set(materialIdStr, real.code);
+      }
+    }
 
     // Gộp CẢ PI vào 1 PurchaseProposal duy nhất, bất kể vật tư thuộc kho nào - quyết định nghiệp
     // vụ 2026-08-24 ("Khác kho vẫn gộp chung luôn, Thống nhất là theo 1 PI"): trước đây mỗi vật tư
@@ -212,7 +225,7 @@ export class ConsumableMaterialPurchaseService {
       for (const materialId of orderedMaterialIds) {
         const materialIdStr = materialId.toString();
         const material = materialById.get(materialIdStr)!;
-        const warehouseId = material.warehouse!.id;
+        const warehouseId = realWarehouseByMaterial.get(materialIdStr)!.id;
         // Tồn kho tách theo QUY CÁCH (2026-10-23, nệm): mỗi (vật tư, quy cách) là 1 bucket tồn + 1 dòng giữ chỗ + 1
         // dòng mua RIÊNG - tồn của quy cách này không che nhu cầu của quy cách kia. Vật tư không có quy cách riêng chỉ
         // có khoá '' nên ra đúng 1 bucket như trước. Sắp theo quy cách để khoá stock_quant luôn theo thứ tự cố định
@@ -279,7 +292,7 @@ export class ConsumableMaterialPurchaseService {
             required,
             actualStock,
             buyQty: material.purchaseRoundUp === true ? Math.ceil(buyQtyRaw) : buyQtyRaw,
-            warehouseCode: material.warehouse!.code,
+            warehouseCode: realWarehouseByMaterial.get(materialIdStr)!.code,
             receiveWarehouseCode: receiveWarehouseByMaterial.get(materialIdStr) ?? null,
           });
           // Giữ chỗ ĐÚNG phần tồn đã dùng để che phủ demand - PI khác tính sau sẽ thấy phần này qua

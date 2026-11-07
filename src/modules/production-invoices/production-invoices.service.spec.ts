@@ -59,6 +59,8 @@ describe('ProductionInvoicesService', () => {
     workshop: { findUnique: jest.Mock };
     steelIssue: { count: jest.Mock };
     materialYieldIssue: { count: jest.Mock };
+    stockReservation: { count: jest.Mock };
+    purchaseProposalItem: { count: jest.Mock };
     productionInvoiceItemStage: { upsert: jest.Mock; findFirst: jest.Mock };
     mfgProduct: { findUnique: jest.Mock };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
@@ -186,6 +188,8 @@ describe('ProductionInvoicesService', () => {
       },
       steelIssue: { count: jest.fn().mockResolvedValue(0) },
       materialYieldIssue: { count: jest.fn().mockResolvedValue(0) },
+      stockReservation: { count: jest.fn().mockResolvedValue(0) },
+      purchaseProposalItem: { count: jest.fn().mockResolvedValue(0) },
       productionInvoiceItemStage: {
         upsert: jest.fn(),
         findFirst: jest.fn().mockResolvedValue(null),
@@ -3138,6 +3142,29 @@ describe('ProductionInvoicesService', () => {
       );
       expect(prisma.materialYieldIssue.count).toHaveBeenCalledWith({
         where: { productionOrder: { productionInvoiceItemId: { in: [20n, 21n] } } },
+      });
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('Đợt 7: lệnh đã giữ chỗ / đang mua vật tư Phôi-Hàn ở kho xưởng hiện tại -> 409 tạm chặn, không ghi', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      prisma.stockReservation.count.mockResolvedValue(1);
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(
+        /tạm thời chưa đổi xưởng được/,
+      );
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+
+      prisma.stockReservation.count.mockResolvedValue(0);
+      prisma.purchaseProposalItem.count.mockResolvedValue(2);
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(
+        /tạm thời chưa đổi xưởng được/,
+      );
+      const [countArg] = prisma.purchaseProposalItem.count.mock.calls[0] as [
+        { where: Record<string, unknown> },
+      ];
+      expect(countArg.where).toMatchObject({
+        status: { not: 'PURCHASED' },
+        material: { warehouse: { kind: { in: ['PHOI', 'HAN'] } } },
       });
       expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
     });

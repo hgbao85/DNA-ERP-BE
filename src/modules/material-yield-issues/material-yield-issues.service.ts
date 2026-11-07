@@ -37,6 +37,7 @@ import { RealtimeService } from '../../realtime/realtime.service';
 import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { CreateMaterialYieldIssueDto } from './dto/create-material-yield-issue.dto';
 import { ListMaterialYieldIssuesQueryDto } from './dto/list-material-yield-issues-query.dto';
 import { MaterialYieldIssuePlanItemResponseDto } from './dto/material-yield-issue-plan-item-response.dto';
@@ -50,11 +51,12 @@ const MATERIAL_YIELD_ISSUE_INCLUDE = {
         select: {
           salesOrder: { select: { orderCode: true } },
           productionInvoice: { select: { code: true } },
+          productionInvoiceId: true,
         },
       },
     },
   },
-  material: true,
+  material: { include: { warehouse: true } },
 } satisfies Prisma.MaterialYieldIssueInclude;
 
 type MaterialYieldIssueRow = Prisma.MaterialYieldIssueGetPayload<{
@@ -177,8 +179,17 @@ export class MaterialYieldIssuesService {
         `Vật tư ${material.name} chưa được gán kho (Material.warehouseId) - báo Admin cấu hình trước khi xuất`,
       );
     }
-    const materialWarehouseId = material.warehouseId;
-    this.assertWarehouseScope(warehouseScope, material.warehouse.code);
+    // Đợt 7 (chia 9 kho): vật tư Phôi của lệnh xưởng Phước An xuất từ kho Phôi Phước An.
+    const orderPi = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
+      where: { id: order.productionInvoiceItemId },
+      select: { productionInvoiceId: true },
+    });
+    const realWarehouse = await new WorkshopWarehouseResolver(this.prisma).resolveForPi(
+      material.warehouse,
+      orderPi.productionInvoiceId,
+    );
+    const materialWarehouseId = realWarehouse.id;
+    this.assertWarehouseScope(warehouseScope, realWarehouse.code);
 
     // Khoá advisory theo (order, material) - đọc-rồi-ghi (plannedQty/sumIssued) không transaction/
     // lock sẽ có khe TOCTOU khi 2 người cùng xuất gần đồng thời, cùng idiom
@@ -305,9 +316,13 @@ export class MaterialYieldIssuesService {
     const productionWarehouse = await db.warehouse.findUniqueOrThrow({
       where: { code: PRODUCTION_WAREHOUSE_CODE },
     });
+    const fromWarehouse = await new WorkshopWarehouseResolver(db).resolveForPi(
+      issue.material.warehouse ?? { id: issue.material.warehouseId, code: '' },
+      issue.productionOrder.productionInvoiceItem.productionInvoiceId,
+    );
     await this.stockLedgerService.postEntry(
       {
-        fromWarehouseId: issue.material.warehouseId,
+        fromWarehouseId: fromWarehouse.id,
         toWarehouseId: productionWarehouse.id,
         materialId: issue.materialId,
         qty: issue.issuedQty.toNumber(),

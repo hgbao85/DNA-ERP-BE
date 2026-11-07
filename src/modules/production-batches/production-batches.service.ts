@@ -35,10 +35,10 @@ import {
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
-import { isFamilyScope } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { CreatePieceStepBatchDto } from './dto/create-piece-step-batch.dto';
@@ -107,14 +107,9 @@ export type PieceStepBundleRow = Prisma.PieceStepBundleGetPayload<{
   include: typeof PIECE_STEP_BUNDLE_INCLUDE;
 }>;
 
-/// Kho vật lý MẶC ĐỊNH liên quan đến đoạn sắt tồn (đoạn Phôi cắt ra nhập vào đây, thủ kho tự
-/// đếm/tự nhập qua POST /stock-ledger/adjust - xem docs/quy-doi-doan-phoi.md, KHÔNG tự động từ
-/// CuttingProposal). Đoạn sắt (segmentSpecId) KHÔNG phải Material nên không có warehouseId để tra
-/// động như MaterialIssuesService/PackagingIssuesService (2026-09-03) - thay vào đó dùng chính
-/// warehouseScope của người báo sản lượng (PHOI/HAN, mỗi tài khoản chỉ gắn đúng 1 kho phoi-son-han
-/// cụ thể) làm kho nguồn, chỉ fallback về kho gốc khi caller không có scope (PRODUCTION_MANAGER/
-/// BOSS/ADMIN báo hộ, hoặc dữ liệu cũ chưa gán warehouseScope).
-const STEEL_WAREHOUSE_CODE = 'phoi-son-han';
+/// Kho của đoạn sắt tồn (đoạn Phôi cắt ra, thủ kho tự đếm/tự nhập qua POST /stock-ledger/adjust - xem
+/// docs/quy-doi-doan-phoi.md). Đoạn sắt không phải Material nên không có warehouseId - từ Đợt 7 lấy kho Phôi của XƯỞNG
+/// LÀM LỆNH (phoiWarehouseCodeOfOrder), trước đó theo scope người báo.
 /// Kho ảo cố định (protected-warehouse-codes.constant.ts) - cùng điểm đến dùng ở
 /// MaterialIssuesService/CuttingProposalsService cho mọi luồng "tiêu hao tại xưởng".
 const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
@@ -182,13 +177,10 @@ export class ProductionBatchesService {
   ): Promise<ProductionBatchResponseDto> {
     this.assertConsumableStage(dto.stage);
     this.assertMfgRoleMatchesStage(callerMfgRole, dto.stage);
-    // Kho phoi-son-han CỤ THỂ để trừ tồn đoạn sắt - lấy từ chính scope của người báo (mỗi tài
-    // khoản PHOI/HAN chỉ gắn đúng 1 kho), fallback về kho gốc nếu không có scope (quản lý/tổng báo
-    // hộ). Không dùng warehouseScope thẳng nếu nó KHÔNG thuộc gia đình phoi-son-han (dữ liệu bất
-    // thường) - vẫn fallback an toàn về kho gốc thay vì trừ nhầm kho khác.
-    const sourceWarehouseCode = isFamilyScope(warehouseScope, 'phoi-son-han')
-      ? warehouseScope!
-      : STEEL_WAREHOUSE_CODE;
+    // Đợt 7 (chia 9 kho, user chốt 07/11): đoạn sắt/mảnh ghi ở kho Phôi của XƯỞNG LÀM LỆNH, không theo scope người báo
+    // (tài khoản tổ/QLSX đều gắn kho gốc). Lệnh chưa chọn xưởng -> kho gốc như trước.
+    void warehouseScope;
+    const sourceWarehouseCode = await this.phoiWarehouseCodeOfOrder(BigInt(productionOrderId));
 
     if (idempotencyKey) {
       const existing = await this.prisma.productionBatch.findUnique({
@@ -422,6 +414,18 @@ export class ProductionBatchesService {
    * recordProductionBatch() chỉ nhận batch đang OPEN) - mỗi batch.id chỉ gọi postSegmentConsumeEntries()
    * ĐÚNG 1 LẦN trong vòng đời, khớp giả định của idempotencyKey đó.
    */
+  /** Đợt 7: kho Phôi của xưởng làm lệnh (đoạn sắt/mảnh của lệnh Phước An ở kho Phôi Phước An). */
+  private async phoiWarehouseCodeOfOrder(productionOrderId: bigint): Promise<string> {
+    const order = await this.prisma.productionOrder.findUnique({
+      where: { id: productionOrderId },
+      select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+    });
+    const w = await new WorkshopWarehouseResolver(this.prisma).phoiWarehouseOfPi(
+      order?.productionInvoiceItem.productionInvoiceId ?? null,
+    );
+    return w.code;
+  }
+
   async finishProductionBatch(
     id: string,
     reportedById: string,
@@ -443,10 +447,9 @@ export class ProductionBatchesService {
     if (batch.reportedQty <= 0) {
       throw new BadRequestException(`Chưa có gì để gửi KCS`);
     }
-    // Cùng idiom create() - kho phoi-son-han cụ thể theo scope người gửi, fallback kho gốc.
-    const sourceWarehouseCode = isFamilyScope(warehouseScope, 'phoi-son-han')
-      ? warehouseScope!
-      : STEEL_WAREHOUSE_CODE;
+    // Cùng idiom create() - kho Phôi của xưởng làm lệnh (Đợt 7).
+    void warehouseScope;
+    const sourceWarehouseCode = await this.phoiWarehouseCodeOfOrder(batch.productionOrderId);
 
     const updated = await this.prisma.$transaction(
       async (tx) => {

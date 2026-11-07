@@ -36,6 +36,7 @@ import {
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { isFamilyScope } from '../../common/utils/warehouse-family.util';
+import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
@@ -104,6 +105,8 @@ export interface PreparedSteelIssue {
   barLengthMm: number;
   barCount: number;
   isPostCutover: boolean;
+  /** Đợt 7 (chia 9 kho): kho Phôi của xưởng làm lệnh - sắt PHẢI xuất từ đúng kho này. */
+  warehouse: { id: bigint; code: string };
 }
 type SteelIssueDetail = Prisma.SteelIssueGetPayload<{ include: typeof STEEL_ISSUE_DETAIL_INCLUDE }>;
 type BaseInputs = {
@@ -345,6 +348,7 @@ export class SteelIssuesService {
     }
 
     const prepared = await this.prepareIssue(productionInvoiceId, dto);
+    this.assertWarehouseScope(prepared, warehouseScope);
     const created = await this.prisma.$transaction(
       (tx) => this.createInTx(tx, prepared, issuedById, idempotencyKey),
       { timeout: 15_000 },
@@ -379,13 +383,37 @@ export class SteelIssuesService {
     // luôn được set cùng lúc chuyển status) - coi như "trước cutover" nếu có, an toàn hơn (không
     // trừ tồn lần 2) là sai theo chiều ngược lại.
     const isPostCutover = (approvedAt ?? new Date(0)) >= STEEL_ISSUE_RESERVATION_CUTOVER;
+    const material = await this.prisma.material.findUnique({
+      where: { id: materialId },
+      select: {
+        code: true,
+        warehouse: { select: { id: true, code: true, kind: true, workshopId: true } },
+      },
+    });
+    if (!material?.warehouse) {
+      throw new BadRequestException(`Vật tư ${material?.code ?? materialId} chưa được gán kho`);
+    }
+    const warehouse = await new WorkshopWarehouseResolver(this.prisma).resolveForPi(
+      material.warehouse,
+      invoice.id,
+    );
     return {
       productionInvoiceId: invoice.id,
       materialId,
       barLengthMm: dto.barLengthMm,
       barCount: dto.barCount,
       isPostCutover,
+      warehouse: { id: warehouse.id, code: warehouse.code },
     };
+  }
+
+  /** Đợt 7: thủ kho chỉ xuất sắt ở đúng kho Phôi của xưởng làm lệnh (trước đây cả họ phoi-son-han). null = tổng kho. */
+  assertWarehouseScope(p: PreparedSteelIssue, warehouseScope: string | null): void {
+    if (warehouseScope && warehouseScope !== p.warehouse.code) {
+      throw new ForbiddenException(
+        `Bạn phụ trách kho '${warehouseScope}', sắt của lệnh này xuất từ kho '${p.warehouse.code}'`,
+      );
+    }
   }
 
   /** Phần ghi TRONG transaction (caller mở transaction) - không gửi thông báo, xem afterCreate(). */
@@ -419,6 +447,7 @@ export class SteelIssuesService {
         barCount: p.barCount,
         steelIssueId: issue.id,
         issuedById,
+        expectedWarehouseId: p.warehouse.id,
       });
     }
     return issue;
@@ -457,6 +486,7 @@ export class SteelIssuesService {
       barCount: number;
       steelIssueId: bigint;
       issuedById: string;
+      expectedWarehouseId: bigint;
     },
   ): Promise<void> {
     const { warehouseId } = await this.stockReservationsService.drainPool(tx, {
@@ -464,6 +494,13 @@ export class SteelIssuesService {
       materialId: input.materialId,
       qty: input.barCount,
     });
+    // Đợt 7: giữ chỗ phải nằm đúng kho Phôi của xưởng làm lệnh - lệch nghĩa là giữ chỗ cũ trước khi chia kho chưa được
+    // chuyển (prisma/split-warehouses.ts báo các lệnh này). Chặn thay vì lặng lẽ trừ tồn kho xưởng khác.
+    if (warehouseId !== input.expectedWarehouseId) {
+      throw new ConflictException(
+        `Giữ chỗ sắt của lệnh đang nằm ở kho khác kho Phôi của xưởng làm lệnh - báo Admin chuyển giữ chỗ trước khi xuất`,
+      );
+    }
 
     // Chặn tồn âm cục bộ (lỗ #2, mục 13.4) - không sửa StockLedgerService.postEntry() dùng chung
     // (nhiều luồng khác hợp lệ phải cho âm, vd kho ảo SUPPLIER) - chặn ngay tại đây, cùng khoá.
@@ -2750,7 +2787,11 @@ export class SteelIssuesService {
     const [materials, reservations] = await Promise.all([
       this.prisma.material.findMany({
         where: { id: { in: materialIds } },
-        select: { id: true, warehouseId: true },
+        select: {
+          id: true,
+          warehouseId: true,
+          warehouse: { select: { id: true, code: true, kind: true, workshopId: true } },
+        },
       }),
       this.prisma.stockReservation.findMany({
         where: { productionInvoiceId, materialId: { in: materialIds }, status: 'ACTIVE' },
@@ -2758,6 +2799,13 @@ export class SteelIssuesService {
       }),
     ]);
 
+    // Đợt 7: tồn vật lý đọc ở kho Phôi của xưởng làm lệnh (không ở kho mặc định của vật tư).
+    const resolver = new WorkshopWarehouseResolver(this.prisma);
+    for (const m of materials) {
+      if (m.warehouse) {
+        m.warehouseId = (await resolver.resolveForPi(m.warehouse, productionInvoiceId)).id;
+      }
+    }
     const warehouseIdByMaterial = new Map(materials.map((m) => [m.id.toString(), m.warehouseId]));
 
     const remainingByMaterial = new Map<string, number>();

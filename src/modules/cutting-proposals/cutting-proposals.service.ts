@@ -66,6 +66,7 @@ import {
 import { bestWasteAcrossStockLengths } from './best-fill.util';
 import type { StockLengthsByMaterial } from '../../common/validators/stock-lengths-by-material.validator';
 import { frameDeadlineOf } from '../../common/utils/frame-deadline.util';
+import { WarehouseLike, WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import {
   checkMergeRules,
   maxGapDays,
@@ -2111,7 +2112,11 @@ export class CuttingProposalsService {
 
     // materialId -> kho đã khai cho chính vật tư đó (Material.warehouseId) - nguồn xác thực duy
     // nhất cho "vật tư này tồn/nhập ở kho nào", KHÔNG còn 1 hằng số dùng chung cho cả phương án.
-    const warehouseByMaterialId = new Map<bigint, { warehouseId: bigint; warehouseCode: string }>();
+    const warehouseByMaterialId = new Map<
+      bigint,
+      { warehouseId: bigint; warehouseCode: string; receiveWarehouseCode: string | null }
+    >();
+    const baseWarehouseByMaterialId = new Map<bigint, WarehouseLike | null>();
     if (buyableLines.length > 0) {
       const materials = await this.prisma.material.findMany({
         where: { id: { in: [...new Set(buyableLines.map((l) => l.materialId))] } },
@@ -2119,10 +2124,21 @@ export class CuttingProposalsService {
           id: true,
           code: true,
           warehouseId: true,
-          warehouse: { select: { code: true } },
+          warehouse: { select: { id: true, code: true, kind: true, workshopId: true } },
         },
       });
       for (const m of materials) {
+        baseWarehouseByMaterialId.set(
+          m.id,
+          m.warehouseId && m.warehouse
+            ? {
+                id: m.warehouseId,
+                code: m.warehouse.code,
+                kind: m.warehouse.kind,
+                workshopId: m.warehouse.workshopId,
+              }
+            : null,
+        );
         if (!m.warehouseId || !m.warehouse) {
           throw new BadRequestException(
             `Vật tư ${m.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi duyệt phương án cắt`,
@@ -2131,6 +2147,7 @@ export class CuttingProposalsService {
         warehouseByMaterialId.set(m.id, {
           warehouseId: m.warehouseId,
           warehouseCode: m.warehouse.code,
+          receiveWarehouseCode: null,
         });
       }
     }
@@ -2138,6 +2155,24 @@ export class CuttingProposalsService {
     // Tính 1 LẦN, dùng lại cả cho cổng chặn L7 dưới đây LẪN bước gộp PurchaseProposal trong
     // transaction (xem resolveTargetProductionInvoiceId) - tránh 2 câu SELECT giống hệt nhau.
     const targetProductionInvoiceId = await this.resolveTargetProductionInvoiceId(proposal);
+
+    // Đợt 7 (chia 9 kho): sắt của lệnh xưởng Phước An tồn/giữ chỗ/nhập ở kho Phôi Phước An, không ở kho mặc định của vật tư.
+    // Kho khác kho mặc định thì ghi vào receiveWarehouseCode của dòng mua để Nhập kho/Vật tư cần về đi đúng kho.
+    if (warehouseByMaterialId.size > 0) {
+      const resolver = new WorkshopWarehouseResolver(this.prisma);
+      for (const [materialId, wh] of warehouseByMaterialId) {
+        const base = baseWarehouseByMaterialId.get(materialId);
+        if (!base) continue;
+        const real = await resolver.resolveForPi(base, targetProductionInvoiceId);
+        if (real.id !== wh.warehouseId) {
+          warehouseByMaterialId.set(materialId, {
+            warehouseId: real.id,
+            warehouseCode: real.code,
+            receiveWarehouseCode: real.code,
+          });
+        }
+      }
+    }
 
     // L7 (2026-08-26): chặn CẢ đường duyệt thủ công này - autoApproveBlockReason() chỉ đứng gác
     // nhánh tự-duyệt (xem docstring hàm đó), không phải constraint DB. Không lặp lại logic, gọi
@@ -2248,6 +2283,7 @@ export class CuttingProposalsService {
             buyQty: number;
             actualStock: number;
             stockLengthMm: number | null;
+            receiveWarehouseCode?: string;
           }[] = [];
           // Khoá theo THỨ TỰ materialId tăng dần, không theo thứ tự dòng trong phương án: 2 phương
           // án gộp chạm cùng 2 loại sắt theo thứ tự ngược nhau sẽ khoá chéo và deadlock. Thứ tự
@@ -2256,7 +2292,9 @@ export class CuttingProposalsService {
             a.materialId < b.materialId ? -1 : a.materialId > b.materialId ? 1 : 0,
           );
           for (const line of orderedLines) {
-            const { warehouseId } = warehouseByMaterialId.get(line.materialId)!;
+            const { warehouseId, receiveWarehouseCode } = warehouseByMaterialId.get(
+              line.materialId,
+            )!;
             // Khoá dòng stock_quant liên quan trong lúc tính "tồn khả dụng" - chặn 2 phương án
             // cắt cùng vật tư được duyệt gần như đồng thời cùng đọc thấy 1 số dư (giống pattern
             // WarehouseTransfersService.createTransfer()). Khoá này CHỈ có tác dụng vì bút toán
@@ -2302,6 +2340,8 @@ export class CuttingProposalsService {
               buyQty,
               actualStock: onHand,
               stockLengthMm: line.bestStockLengthMm,
+              // Chỉ ghi khi khác kho mặc định (Đợt 7: lệnh xưởng Phước An).
+              ...(receiveWarehouseCode ? { receiveWarehouseCode } : {}),
             });
             // L1 (2026-08-26): chốt phần đóng góp của CHÍNH dòng này để bước gộp bên dưới tính lại
             // TOÀN PHẦN được (Σ buyBars của mọi phương án còn hiệu lực) thay vì đoán cộng-hay-thay.
@@ -2409,6 +2449,9 @@ export class CuttingProposalsService {
                     buyQty: planned,
                     actualStock: it.actualStock,
                     stockLengthMm: it.stockLengthMm,
+                    ...(it.receiveWarehouseCode
+                      ? { receiveWarehouseCode: it.receiveWarehouseCode }
+                      : {}),
                     ...(isCovered
                       ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
                       : {}),
@@ -2429,6 +2472,9 @@ export class CuttingProposalsService {
                     buyQty: planned,
                     actualStock: it.actualStock,
                     stockLengthMm: it.stockLengthMm,
+                    ...(it.receiveWarehouseCode
+                      ? { receiveWarehouseCode: it.receiveWarehouseCode }
+                      : {}),
                     status: isCovered
                       ? PurchaseProposalStatus.PURCHASED
                       : PurchaseProposalStatus.NEW,
@@ -2448,6 +2494,9 @@ export class CuttingProposalsService {
                     buyQty: planned,
                     actualStock: it.actualStock,
                     stockLengthMm: it.stockLengthMm,
+                    ...(it.receiveWarehouseCode
+                      ? { receiveWarehouseCode: it.receiveWarehouseCode }
+                      : {}),
                     status: PurchaseProposalStatus.NEW,
                   },
                 });
