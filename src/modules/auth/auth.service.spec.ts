@@ -489,6 +489,46 @@ describe('AuthService', () => {
     });
   });
 
+  describe('switchWarehouse (Đợt 7 - 1 người giữ nhiều kho)', () => {
+    const keeper = () =>
+      buildUser({
+        warehouseScope: 'phoi-son-han',
+        warehouseScopes: ['phoi-son-han', 'phoi-son-han-han-pa'],
+      });
+
+    it('đổi sang kho trong danh sách: ghi kho đang làm, thu hồi refresh cũ, cấp token mang kho mới', async () => {
+      usersService.findAuthProfileById.mockResolvedValue(keeper() as never);
+      const result = await authService.switchWarehouse('user-1', 'phoi-son-han-han-pa', 'old-rt');
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { warehouseScope: 'phoi-son-han-han-pa' },
+      });
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ revokedAt: expect.any(Date) }) }),
+      );
+      const [payload] = jwtService.signAsync.mock.calls[0] as [{ warehouseScope: string }];
+      expect(payload.warehouseScope).toBe('phoi-son-han-han-pa');
+      expect(result.accessToken).toBe('signed.access.token');
+    });
+
+    it('kho không được giao -> 403, không đổi gì', async () => {
+      usersService.findAuthProfileById.mockResolvedValue(keeper() as never);
+      await expect(
+        authService.switchWarehouse('user-1', 'phoi-son-han-son-pa', undefined),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('tài khoản chỉ 1 kho (danh sách rỗng) -> 403', async () => {
+      usersService.findAuthProfileById.mockResolvedValue(
+        buildUser({ warehouseScope: 'phoi-son-han', warehouseScopes: [] }) as never,
+      );
+      await expect(
+        authService.switchWarehouse('user-1', 'phoi-son-han', undefined),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
   describe('refresh', () => {
     it('rotates a valid refresh token: revokes the old one and issues a new pair', async () => {
       prisma.refreshToken.findUnique.mockResolvedValue({

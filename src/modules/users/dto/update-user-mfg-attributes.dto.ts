@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
 import { MfgRole } from '../../../generated/prisma/client';
 
 export class UpdateUserMfgAttributesDto {
@@ -12,6 +12,16 @@ export class UpdateUserMfgAttributesDto {
   @IsOptional()
   @IsString()
   warehouseScope?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Đợt 7: các kho tài khoản được đổi qua lại (gồm cả kho đang làm). [] = chỉ 1 kho warehouseScope',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  warehouseScopes?: string[];
 
   @ApiPropertyOptional()
   @IsOptional()

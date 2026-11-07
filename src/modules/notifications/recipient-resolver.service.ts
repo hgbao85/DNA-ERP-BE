@@ -63,7 +63,13 @@ export class RecipientResolverService {
                   { warehouseScope: { startsWith: `${code}-` } },
                 ]),
               }
-            : { warehouseScope: { in: criteria.warehouseIds } }),
+            : {
+                // Đợt 7: người giữ nhiều kho nhận thông báo của mọi kho mình giữ, không chỉ kho đang làm.
+                OR: [
+                  { warehouseScope: { in: criteria.warehouseIds } },
+                  { warehouseScopes: { hasSome: criteria.warehouseIds } },
+                ],
+              }),
           ...(criteria.warehouseScopeRoles?.length
             ? { roles: { some: { role: { name: { in: criteria.warehouseScopeRoles } } } } }
             : {}),

@@ -91,6 +91,9 @@ model User {
   /// guards (@RequireMfgRole/@RequireWarehouseScope) layered on top of PermissionsGuard.
   mfgRole            MfgRole?
   warehouseScope     String?
+  /// Đợt 7 (9 kho): các kho tài khoản được đổi qua lại (1 người giữ 2 kho, vd chị Kiều Linh kho Phôi + kho Hàn Phú An).
+  /// `warehouseScope` là kho ĐANG LÀM (nằm trong danh sách). Rỗng = chỉ đúng 1 kho `warehouseScope`.
+  warehouseScopes    String[]  @default([])
   isPurchaser        Boolean   @default(false)
   isProductPlanner   Boolean   @default(false)
   isSale             Boolean   @default(false)

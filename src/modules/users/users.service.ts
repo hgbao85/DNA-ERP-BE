@@ -192,6 +192,24 @@ export class UsersService {
         : MFG_FLOOR_WAREHOUSE_SCOPE
       : dto.warehouseScope;
 
+    // Đợt 7: danh sách kho đổi qua lại - luôn gồm kho đang làm; mã kho phải có thật. Không gửi = giữ nguyên.
+    let warehouseScopes: string[] | undefined;
+    if (dto.warehouseScopes !== undefined) {
+      const active = warehouseScope ?? current.warehouseScope;
+      const list = [...new Set([...(active ? [active] : []), ...dto.warehouseScopes])].filter(
+        Boolean,
+      );
+      if (list.length > 0) {
+        const found = await this.prisma.warehouse.count({
+          where: { code: { in: list }, isVirtual: false, deletedAt: null },
+        });
+        if (found !== list.length) {
+          throw new BadRequestException('Danh sách kho có mã kho không tồn tại');
+        }
+      }
+      warehouseScopes = list.length > 1 ? list : [];
+    }
+
     if (dto.isPurchaser === false && current.isPurchaser) {
       await this.assertNoBuyerMaterials(id, 'bỏ chức năng Mua hàng');
     }
@@ -202,6 +220,7 @@ export class UsersService {
         data: {
           mfgRole: dto.mfgRole,
           warehouseScope,
+          warehouseScopes,
           isPurchaser: dto.isPurchaser,
           isProductPlanner: dto.isProductPlanner,
           isSale: dto.isSale,
@@ -381,6 +400,7 @@ export class UsersService {
       roles: user.roles.map((r) => r.role.name),
       mfgRole: user.mfgRole,
       warehouseScope: user.warehouseScope,
+      warehouseScopes: user.warehouseScopes ?? [],
       isPurchaser: user.isPurchaser,
       isProductPlanner: user.isProductPlanner,
       isSale: user.isSale,

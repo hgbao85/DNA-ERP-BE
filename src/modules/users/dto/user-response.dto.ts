@@ -15,6 +15,8 @@ export class UserResponseDto {
   @Expose() @ApiProperty({ type: [String] }) roles!: string[];
   @Expose() @ApiPropertyOptional({ enum: MfgRole, nullable: true }) mfgRole!: MfgRole | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) warehouseScope!: string | null;
+  /** Đợt 7: các kho được đổi qua lại (gồm kho đang làm); [] = chỉ 1 kho. */
+  @Expose() @ApiPropertyOptional({ type: [String] }) warehouseScopes!: string[];
   @Expose() @ApiProperty() isPurchaser!: boolean;
   @Expose() @ApiProperty() isProductPlanner!: boolean;
   @Expose() @ApiProperty() isSale!: boolean;

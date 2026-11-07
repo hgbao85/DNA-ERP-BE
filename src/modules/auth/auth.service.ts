@@ -255,6 +255,37 @@ export class AuthService {
     });
   }
 
+  /**
+   * Đợt 7 (9 kho): người giữ nhiều kho đổi "kho đang làm" không phải đăng xuất. Chỉ đổi sang kho trong danh sách
+   * User.warehouseScopes; ghi lại warehouseScope rồi cấp cặp token mới (phạm vi kho nằm trong access token). Refresh token
+   * cũ của phiên này (nếu gửi lên) bị thu hồi.
+   */
+  async switchWarehouse(
+    userId: string,
+    warehouseCode: string,
+    currentRefreshToken: string | undefined,
+    ip?: string,
+  ): Promise<AuthTokensDto> {
+    const user = await this.usersService.findAuthProfileById(userId);
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+    if (!user.warehouseScopes.includes(warehouseCode)) {
+      throw new ForbiddenException(`Tài khoản không được giao kho '${warehouseCode}'`);
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { warehouseScope: warehouseCode } });
+      if (currentRefreshToken) {
+        await tx.refreshToken.updateMany({
+          where: { userId, tokenHash: this.hashToken(currentRefreshToken), revokedAt: null },
+          data: { revokedAt: new Date(), revokedByIp: ip },
+        });
+      }
+      const issued = await this.issueTokenPair({ ...user, warehouseScope: warehouseCode }, ip, tx);
+      return { accessToken: issued.accessToken, refreshToken: issued.refreshToken };
+    });
+  }
+
   async changePassword(userId: string, dto: ChangePasswordDto): Promise<void> {
     const user = await this.usersService.findAuthProfileById(userId);
     if (!user) {

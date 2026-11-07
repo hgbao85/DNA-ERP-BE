@@ -3,7 +3,7 @@ import { RecipientResolverService } from './recipient-resolver.service';
 describe('RecipientResolverService - warehouseScopeRoles', () => {
   const makeService = (rows: Record<string, { id: string }[]>) => {
     const findMany = jest.fn((args: { where: Record<string, unknown> }) => {
-      const key = 'warehouseScope' in args.where ? 'warehouse' : 'other';
+      const key = 'warehouseScope' in args.where || 'OR' in args.where ? 'warehouse' : 'other';
       return Promise.resolve(rows[key] ?? []);
     });
     const service = new RecipientResolverService({ user: { findMany } } as never);
@@ -15,7 +15,10 @@ describe('RecipientResolverService - warehouseScopeRoles', () => {
     const ids = await service.resolve({ warehouseIds: ['VTTP'] });
     expect(ids).toEqual(['u1']);
     const where = findMany.mock.calls[0][0].where;
-    expect(where).toMatchObject({ warehouseScope: { in: ['VTTP'] } });
+    // Đợt 7: kho đang làm HOẶC nằm trong danh sách kho người đó giữ.
+    expect(where).toMatchObject({
+      OR: [{ warehouseScope: { in: ['VTTP'] } }, { warehouseScopes: { hasSome: ['VTTP'] } }],
+    });
     expect(where).not.toHaveProperty('roles');
   });
 
@@ -27,7 +30,7 @@ describe('RecipientResolverService - warehouseScopeRoles', () => {
     });
     expect(ids).toEqual(['thu-kho']);
     expect(findMany.mock.calls[0][0].where).toMatchObject({
-      warehouseScope: { in: ['VTTP'] },
+      OR: [{ warehouseScope: { in: ['VTTP'] } }, { warehouseScopes: { hasSome: ['VTTP'] } }],
       roles: { some: { role: { name: { in: ['WAREHOUSE_STAFF'] } } } },
     });
   });

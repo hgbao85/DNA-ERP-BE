@@ -12,6 +12,7 @@ import { LoginDto } from './dto/login.dto';
 import { PinSetupDto } from './dto/pin-setup.dto';
 import { PinStatusDto } from './dto/pin-status.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { SwitchWarehouseDto } from './dto/switch-warehouse.dto';
 
 @ApiTags('Auth')
 @Controller({ path: 'auth', version: '1' })
@@ -76,6 +77,18 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser('id') userId: string): Promise<UserResponseDto> {
     return this.usersService.findOne(userId);
+  }
+
+  // Đợt 7 (9 kho): người giữ nhiều kho đổi "kho đang làm", nhận cặp token mới mang phạm vi kho mới.
+  @ApiBearerAuth()
+  @Post('switch-warehouse')
+  @HttpCode(HttpStatus.OK)
+  switchWarehouse(
+    @CurrentUser('id') userId: string,
+    @Body() dto: SwitchWarehouseDto,
+    @Ip() ip: string,
+  ): Promise<AuthTokensDto> {
+    return this.authService.switchWarehouse(userId, dto.warehouseCode, dto.refreshToken, ip);
   }
 
   // Self-service only - a user changes their own password, verified against the
