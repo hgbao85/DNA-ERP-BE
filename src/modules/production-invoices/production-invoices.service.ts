@@ -18,7 +18,9 @@ import {
   ProductionInvoiceStatus,
   ProductionOrderFloorStage,
   SolverMachine,
+  PurchaseProposalStatus,
   TransferStatus,
+  WarehouseKind,
   Workshop,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
@@ -1218,7 +1220,10 @@ export class ProductionInvoicesService {
 
   /** Đã xuất sắt cho PI hoặc xuất vật tư cho xưởng (theo production order của các dòng) -> 409. `client` = prisma hoặc tx. */
   private async assertNoMaterialIssued(
-    client: Pick<PrismaServiceType, 'steelIssue' | 'materialYieldIssue'>,
+    client: Pick<
+      PrismaServiceType,
+      'steelIssue' | 'materialYieldIssue' | 'stockReservation' | 'purchaseProposalItem'
+    >,
     piId: bigint,
     itemIds: bigint[],
     displayCode: string,
@@ -1233,6 +1238,28 @@ export class ProductionInvoicesService {
     if (yieldIssues > 0) {
       throw new ConflictException(
         `Lệnh ${displayCode} đã xuất vật tư cho xưởng - không đổi xưởng được`,
+      );
+    }
+    // Đợt 7 (chia 9 kho, user chốt 07/11 - tạm thời): lệnh đã giữ chỗ hoặc đã có dòng mua vật tư Phôi/Hàn ở kho của
+    // xưởng cũ thì CHƯA cho đổi xưởng (chưa có bước tự chuyển giữ chỗ/kho nhận sang xưởng mới).
+    const boundKinds = [WarehouseKind.PHOI, WarehouseKind.HAN];
+    const reserved = await client.stockReservation.count({
+      where: {
+        productionInvoiceId: piId,
+        status: 'ACTIVE',
+        warehouse: { kind: { in: boundKinds } },
+      },
+    });
+    const buying = await client.purchaseProposalItem.count({
+      where: {
+        proposal: { productionInvoiceId: piId },
+        status: { not: PurchaseProposalStatus.PURCHASED },
+        material: { warehouse: { kind: { in: boundKinds } } },
+      },
+    });
+    if (reserved > 0 || buying > 0) {
+      throw new ConflictException(
+        `Lệnh ${displayCode} đã giữ chỗ hoặc đang mua sắt/vật tư Phôi-Hàn ở kho của xưởng hiện tại - tạm thời chưa đổi xưởng được, báo IT hỗ trợ`,
       );
     }
   }

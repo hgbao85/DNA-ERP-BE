@@ -14,6 +14,9 @@ export interface RecipientCriteria {
   mfgRoles?: MfgRole[];
   /** `User.warehouseScope` - báo đúng kho liên quan (vd theo `Material.warehouseId`). */
   warehouseIds?: string[];
+  /** true = mỗi mã trong `warehouseIds` là GỐC của 1 nhóm kho (vd 'phoi-son-han' gồm cả 'phoi-son-han-han-pa'...) - báo mọi kho
+   *  trong nhóm. Đợt 7: chia 9 kho thì thủ kho Hàn/Sơn/Phước An gắn mã kho riêng, thông báo "cho cả xưởng" phải tới họ. */
+  warehouseFamilies?: boolean;
   /** Nếu có: nhóm `warehouseIds` CHỈ gồm user thuộc kho đó VÀ có 1 trong các role này (tránh báo cho Mua
    *  hàng/tổ sản xuất chỉ vì họ cũng có `warehouseScope`). */
   warehouseScopeRoles?: string[];
@@ -143,6 +146,7 @@ const floorStageRecipients = (): RecipientCriteria => ({
     BUSINESS_ROLES.KCS_STAFF,
   ],
   warehouseIds: ['phoi-son-han', 'vat-tu-tp', 'thanh-pham'],
+  warehouseFamilies: true,
   warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
   warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
   excludeRoles: [BUSINESS_ROLES.PURCHASER],
@@ -966,6 +970,7 @@ const notificationTypeDefinitions = {
     recipients: (p: PiDeadlineChangedNotificationParams): RecipientCriteria => ({
       roles: p.roles,
       warehouseIds: p.warehouseIds,
+      warehouseFamilies: true,
       warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
       warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
       // Mua hàng giữ cả role WAREHOUSE_STAFF: chỉ báo họ khi chính mốc mua vật tư đổi.

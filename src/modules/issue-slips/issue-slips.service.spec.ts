@@ -21,7 +21,12 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
-  let steel: { prepareIssue: jest.Mock; createInTx: jest.Mock; afterCreate: jest.Mock };
+  let steel: {
+    prepareIssue: jest.Mock;
+    createInTx: jest.Mock;
+    afterCreate: jest.Mock;
+    assertWarehouseScope: jest.Mock;
+  };
   let consumable: { prepareIssue: jest.Mock; createInTx: jest.Mock; afterCreate: jest.Mock };
   let ledger: { postEntry: jest.Mock };
   let reservations: { getAvailableQty: jest.Mock };
@@ -107,10 +112,12 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
             barLengthMm: dto.barLengthMm,
             barCount: dto.barCount,
             isPostCutover: true,
+            warehouse: { id: 6n, code: 'phoi-son-han' },
           }),
       ),
       createInTx: jest.fn().mockResolvedValue({ id: 301n }),
       afterCreate: jest.fn(),
+      assertWarehouseScope: jest.fn(),
     };
     consumable = {
       prepareIssue: jest.fn((orderId: string, dto: { materialId: string }) =>

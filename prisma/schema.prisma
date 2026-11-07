@@ -753,13 +753,19 @@ model WeavingPoint {
 /// Không có endpoint DELETE cho các code trong PROTECTED_WAREHOUSE_CODES
 /// (src/common/constants/protected-warehouse-codes.constant.ts).
 model Warehouse {
-  id        BigInt    @id @default(autoincrement())
-  code      String    @unique
-  name      String
-  isVirtual Boolean   @default(false)
-  note      String?
-  isActive  Boolean   @default(true)
-  deletedAt DateTime?
+  id         BigInt         @id @default(autoincrement())
+  code       String         @unique
+  name       String
+  isVirtual  Boolean        @default(false)
+  note       String?
+  isActive   Boolean        @default(true)
+  deletedAt  DateTime?
+  /// Loại kho (Đợt 7 - chia 9 kho, bản v8 12.4). NULL = kho ảo / kho chưa phân loại.
+  kind       WarehouseKind?
+  /// Xưởng sở hữu kho (chỉ kho Phôi/Hàn gắn xưởng: vật tư Phôi/Hàn của lệnh xưởng nào thì nhập, giữ chỗ, xuất ở kho cùng
+  /// loại của xưởng đó - xem src/modules/stock/workshop-warehouse.util.ts). NULL = kho dùng chung mọi xưởng.
+  workshopId BigInt?
+  workshop   Workshop?      @relation(fields: [workshopId], references: [id])
 
   fromStockLedgerEntries        StockLedger[]                  @relation("StockLedgerFromWarehouse")
   toStockLedgerEntries          StockLedger[]                  @relation("StockLedgerToWarehouse")
@@ -772,7 +778,17 @@ model Warehouse {
   officeSupplies                OfficeSupply[]
   issueSlips                    IssueSlip[]
 
+  @@unique([workshopId, kind])
   @@map("warehouses")
+}
+
+/// Loại kho vật lý (Đợt 7). PHOI/HAN có kho riêng từng xưởng; SON (gộp Dây - gỗ), PHU_KIEN, THANH_PHAM dùng chung.
+enum WarehouseKind {
+  PHOI
+  HAN
+  SON
+  PHU_KIEN
+  THANH_PHAM
 }
 
 /// Khách hàng dùng chung nội địa lẫn xuất khẩu (hợp nhất với mfg_export_customers cũ).
@@ -1801,6 +1817,7 @@ model Workshop {
   paintWorkshop          Workshop?               @relation("WorkshopPaint", fields: [paintWorkshopId], references: [id])
   paintsFor              Workshop[]              @relation("WorkshopPaint")
   productionInvoiceItems ProductionInvoiceItem[]
+  warehouses             Warehouse[]
 
   @@map("workshops")
 }
@@ -2766,6 +2783,8 @@ enum StockLedgerRefType {
   /// Dòng "Dùng chung" của phiếu xuất XK (Đợt 6, bản v8 4.9) - không theo lệnh nào, chỉ lấy từ tồn chưa giữ cho lệnh nào.
   /// refId = IssueSlipLine.id. Nguồn Material.warehouseId -> đích kho ảo PRODUCTION.
   ISSUE_SLIP_SHARED
+  /// Chuyển tồn từ kho chung cũ sang kho mới lúc chia 9 kho (Đợt 7, prisma/split-warehouses.ts). refId = Material.id.
+  WAREHOUSE_SPLIT
 }
 
 enum TransferStatus {

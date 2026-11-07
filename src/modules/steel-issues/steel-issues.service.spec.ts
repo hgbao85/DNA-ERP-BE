@@ -42,7 +42,7 @@ describe('SteelIssuesService', () => {
     productionOrder: { findMany: jest.Mock; findFirst: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
-    material: { findMany: jest.Mock; findUniqueOrThrow: jest.Mock };
+    material: { findMany: jest.Mock; findUniqueOrThrow: jest.Mock; findUnique: jest.Mock };
     cuttingProposalLine: { findFirst: jest.Mock; findMany: jest.Mock };
     cutBundle: {
       create: jest.Mock;
@@ -173,7 +173,15 @@ describe('SteelIssuesService', () => {
       },
       pieceBom: { findMany: jest.fn().mockResolvedValue([pieceBomRow]) },
       bomPiece: { findMany: jest.fn().mockResolvedValue([]) },
-      material: { findMany: jest.fn().mockResolvedValue([]), findUniqueOrThrow: jest.fn() },
+      material: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findUniqueOrThrow: jest.fn(),
+        // Đợt 7: prepareIssue() đọc kho mặc định của vật tư để đổi theo xưởng - kho chưa phân loại thì giữ nguyên.
+        findUnique: jest.fn().mockResolvedValue({
+          code: 'ST-18',
+          warehouse: { id: 800n, code: 'phoi-son-han', kind: null, workshopId: null },
+        }),
+      },
       // Mặc định approvedAt TRƯỚC STEEL_ISSUE_RESERVATION_CUTOVER (2026-08-18) - đa số test
       // không nói riêng về B4 Đợt 2, giữ đúng hành vi "nhánh cũ" (không đụng
       // stock_reservations/stock_quant/warehouse). Test nào cần nhánh MỚI tự override.
@@ -420,16 +428,28 @@ describe('SteelIssuesService', () => {
       ).resolves.toBeDefined();
     });
 
-    it('2026-09-03: cho phép caller thuộc kho phoi-son-han PHỤ (trước đây chỉ đúng literal kho gốc mới qua được)', async () => {
+    it('Đợt 7: thủ kho đúng kho Phôi của lệnh xuất được', async () => {
       prisma.steelIssue.create.mockResolvedValue(issue);
       await expect(
         service.create(
           '1',
           { materialId: '30', barLengthMm: 6000, barCount: 20 },
           'user-1',
-          'phoi-son-han-2',
+          'phoi-son-han',
         ),
       ).resolves.toBeDefined();
+    });
+
+    it('Đợt 7: thủ kho kho khác cùng nhóm Phôi-Hàn-Sơn (vd kho Hàn, kho Phôi xưởng khác) KHÔNG xuất được sắt của lệnh', async () => {
+      await expect(
+        service.create(
+          '1',
+          { materialId: '30', barLengthMm: 6000, barCount: 20 },
+          'user-1',
+          'phoi-son-han-han-pa',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.steelIssue.create).not.toHaveBeenCalled();
     });
 
     it('cho phép chọn đúng 1 trong nhiều loại sắt đang dùng trong PI', async () => {
@@ -613,22 +633,15 @@ describe('SteelIssuesService', () => {
       );
     });
 
-    it('drainPool trả warehouseId khác (nhiều SKU, kho khác nhau về lý thuyết) - postEntry dùng ĐÚNG kho đó', async () => {
+    it('Đợt 7: giữ chỗ nằm ở kho khác kho Phôi của xưởng làm lệnh -> 409, không ghi StockLedger', async () => {
       setPostCutover();
       stockReservationsService.drainPool.mockResolvedValue({ warehouseId: 801n });
       prisma.steelIssue.create.mockResolvedValue(issue);
 
-      await service.create(
-        '1',
-        { materialId: '30', barLengthMm: 6000, barCount: 8 },
-        'user-1',
-        null,
-      );
-
-      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
-        expect.objectContaining({ fromWarehouseId: 801n }),
-        expect.anything(),
-      );
+      await expect(
+        service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 8 }, 'user-1', null),
+      ).rejects.toThrow(ConflictException);
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
 
     // drainPool() ném lỗi (không đủ giữ chỗ trong CẢ pool) - create() phải để lỗi đó nổi lên

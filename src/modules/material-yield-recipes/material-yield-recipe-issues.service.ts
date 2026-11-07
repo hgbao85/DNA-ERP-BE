@@ -26,6 +26,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { CreateMaterialYieldRecipeIssueDto } from './dto/create-material-yield-recipe-issue.dto';
 import { ListMaterialYieldRecipeIssuesQueryDto } from './dto/list-material-yield-recipe-issues-query.dto';
 import { MaterialYieldRecipeIssueResponseDto } from './dto/material-yield-recipe-issue-response.dto';
@@ -92,8 +93,13 @@ export class MaterialYieldRecipeIssuesService {
         `Vật tư ${inputMaterial.name} chưa được gán kho (Material.warehouseId) - báo Admin cấu hình trước khi xuất`,
       );
     }
-    const materialWarehouseId = inputMaterial.warehouseId;
-    this.assertWarehouseScope(warehouseScope, inputMaterial.warehouse.code);
+    // Đợt 7 (chia 9 kho): vật tư Phôi của lệnh xưởng Phước An xuất từ kho Phôi Phước An.
+    const realWarehouse = await new WorkshopWarehouseResolver(this.prisma).resolveForPi(
+      inputMaterial.warehouse,
+      piId,
+    );
+    const materialWarehouseId = realWarehouse.id;
+    this.assertWarehouseScope(warehouseScope, realWarehouse.code);
 
     const created = await this.prisma.$transaction(
       async (tx) => {
@@ -157,7 +163,15 @@ export class MaterialYieldRecipeIssuesService {
     });
     await this.stockLedgerService.postEntry(
       {
-        fromWarehouseId: issue.recipe.inputMaterial.warehouseId!,
+        fromWarehouseId: (
+          await new WorkshopWarehouseResolver(db).resolveForPi(
+            issue.recipe.inputMaterial.warehouse ?? {
+              id: issue.recipe.inputMaterial.warehouseId!,
+              code: '',
+            },
+            issue.productionInvoiceId,
+          )
+        ).id,
         toWarehouseId: productionWarehouse.id,
         materialId: issue.recipe.inputMaterialId,
         qty: issue.issuedQty.toNumber(),

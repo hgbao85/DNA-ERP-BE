@@ -28,7 +28,7 @@ describe('ProductionBatchesService', () => {
     };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
     floorReport: { create: jest.Mock; findUnique: jest.Mock };
-    productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
+    productionInvoiceItem: { findUniqueOrThrow: jest.Mock; findFirst: jest.Mock };
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
     pieceBom: { findMany: jest.Mock };
     pieceMaterialYield: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
@@ -54,7 +54,7 @@ describe('ProductionBatchesService', () => {
     materialYieldStepBundle: { findMany: jest.Mock };
     stockLedger: { findMany: jest.Mock };
     warehouseTransferPieceItem: { findMany: jest.Mock };
-    warehouse: { findUniqueOrThrow: jest.Mock };
+    warehouse: { findUniqueOrThrow: jest.Mock; findUnique: jest.Mock; findFirst: jest.Mock };
     $queryRaw: jest.Mock;
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
@@ -83,7 +83,7 @@ describe('ProductionBatchesService', () => {
     needsSon: true,
   };
   const steelWarehouse = { id: 90n, code: 'phoi-son-han' };
-  const steelWarehouse2 = { id: 95n, code: 'phoi-son-han-2' };
+  const steelWarehouse2 = { id: 95n, code: 'phoi-son-han-phoi-pha' };
   const productionWarehouse = { id: 91n, code: 'PRODUCTION' };
 
   const batchRow = {
@@ -129,6 +129,8 @@ describe('ProductionBatchesService', () => {
       },
       productionInvoiceItem: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceId: 500n }),
+        // Đợt 7: xưởng của lệnh - mặc định chưa chọn xưởng (đoạn sắt trừ ở kho Phôi gốc).
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       bomPiece: {
         findUnique: jest.fn().mockResolvedValue(bomPieceRow),
@@ -180,11 +182,13 @@ describe('ProductionBatchesService', () => {
             Promise.resolve(
               code === 'phoi-son-han'
                 ? steelWarehouse
-                : code === 'phoi-son-han-2'
+                : code === steelWarehouse2.code
                   ? steelWarehouse2
                   : productionWarehouse,
             ),
           ),
+        findUnique: jest.fn().mockResolvedValue(steelWarehouse),
+        findFirst: jest.fn().mockResolvedValue(steelWarehouse2),
       },
       // assertItemPiHasActiveFloorLocked() (vá race TOCTOU, 2026-09-03) - FOR UPDATE lên
       // production_orders ngay dòng đầu transaction create(). Mặc định ACTIVE, đa số test case
@@ -466,14 +470,19 @@ describe('ProductionBatchesService', () => {
       );
     });
 
-    it('2026-09-03: người báo scoped ở kho phoi-son-han PHỤ thì trừ tồn đúng kho phụ đó, không còn hardcode về kho gốc', async () => {
+    it('Đợt 7: lệnh làm ở xưởng Phước An thì trừ đoạn sắt ở kho Phôi Phước An (theo xưởng của lệnh, không theo người báo)', async () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
       prisma.pieceBom.findMany.mockResolvedValue([
         { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
       ]);
+      prisma.productionInvoiceItem.findFirst.mockResolvedValue({ workshopId: 2n });
 
-      await service.create('1', dto, 'user-han', null, 'phoi-son-han-2');
+      await service.create('1', dto, 'user-han', null, 'phoi-son-han');
 
+      const [findArg] = prisma.warehouse.findFirst.mock.calls[0] as [
+        { where: { kind: string; workshopId: bigint } },
+      ];
+      expect(findArg.where).toMatchObject({ kind: 'PHOI', workshopId: 2n });
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({ fromWarehouseId: steelWarehouse2.id }),
         prisma,

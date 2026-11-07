@@ -12,6 +12,7 @@ import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal
 import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { MaterialYieldRecipesService } from '../material-yield-recipes/material-yield-recipes.service';
 import { MaterialYieldRecipePurchaseResultDto } from './dto/material-yield-recipe-purchase-result.dto';
 import { purchaseBuyQtyWithWaste } from '../../common/utils/purchase-waste.util';
@@ -86,7 +87,12 @@ export class MaterialYieldRecipePurchaseService {
 
     // materialId đã khai Kho cho từng dòng - kiểm trước khi mở transaction (bất biến, không cần
     // nằm trong khoá), cùng idiom PieceMaterialYieldPurchaseService/ConsumableMaterialPurchaseService.
-    const warehouseByMaterial = new Map<string, { warehouseId: bigint; warehouseCode: string }>();
+    const warehouseByMaterial = new Map<
+      string,
+      { warehouseId: bigint; warehouseCode: string; receiveWarehouseCode: string | null }
+    >();
+    // Đợt 7 (chia 9 kho): vật tư Phôi của lệnh xưởng Phước An tồn/giữ chỗ/nhập ở kho Phôi Phước An.
+    const resolver = new WorkshopWarehouseResolver(this.prisma);
     for (const materialIdStr of neededByMaterial.keys()) {
       const material = materialById.get(materialIdStr);
       if (!material?.warehouse) {
@@ -94,9 +100,11 @@ export class MaterialYieldRecipePurchaseService {
           `Vật tư ${material?.code ?? materialIdStr} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi tính đề xuất mua`,
         );
       }
+      const real = await resolver.resolveForPi(material.warehouse, piBigId);
       warehouseByMaterial.set(materialIdStr, {
-        warehouseId: material.warehouse.id,
-        warehouseCode: material.warehouse.code,
+        warehouseId: real.id,
+        warehouseCode: real.code,
+        receiveWarehouseCode: real.id !== material.warehouse.id ? real.code : null,
       });
     }
 
@@ -104,6 +112,12 @@ export class MaterialYieldRecipePurchaseService {
     // CuttingProposalsService/ConsumableMaterialPurchaseService/PieceMaterialYieldPurchaseService -
     // để 1 PI có nhiều nguồn đề xuất mua (sắt/vật tư tiêu hao/pat/vật tư thành phẩm) đều gộp lại
     // thành đúng 1 PurchaseProposal, không vỡ thành nhiều bản rời rạc.
+    // Chỉ ghi kho nhận khi khác kho mặc định (Đợt 7) - giữ nguyên dữ liệu ghi của mọi lệnh Phú An.
+    const receiveWarehouseOf = (materialIdStr: string) => {
+      const code = warehouseByMaterial.get(materialIdStr)?.receiveWarehouseCode;
+      return code ? { receiveWarehouseCode: code } : {};
+    };
+
     const orderedMaterialIds = [...neededByMaterial.keys()].sort();
 
     const computed: {
@@ -183,6 +197,7 @@ export class MaterialYieldRecipePurchaseService {
                 materialId: c.materialId,
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
+                ...receiveWarehouseOf(c.materialIdStr),
                 status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: c.buyQty === 0 ? new Date() : undefined,
               })),
@@ -215,6 +230,7 @@ export class MaterialYieldRecipePurchaseService {
                   materialId: c.materialId,
                   buyQty: shortfall,
                   actualStock: c.actualStock,
+                  ...receiveWarehouseOf(c.materialIdStr),
                 },
               });
             }
@@ -228,6 +244,7 @@ export class MaterialYieldRecipePurchaseService {
               data: {
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
+                ...receiveWarehouseOf(c.materialIdStr),
                 ...(nextStatus ? { status: nextStatus, purchasedAt: new Date() } : {}),
               },
             });
@@ -238,6 +255,7 @@ export class MaterialYieldRecipePurchaseService {
                 materialId: c.materialId,
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
+                ...receiveWarehouseOf(c.materialIdStr),
                 status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: c.buyQty === 0 ? new Date() : undefined,
               },

@@ -137,6 +137,8 @@ export class WarehousesService {
       isVirtual: warehouse.isVirtual,
       note: warehouse.note,
       isActive: warehouse.isActive,
+      kind: warehouse.kind ?? null,
+      workshopId: warehouse.workshopId?.toString() ?? null,
     });
   }
 }

@@ -17,6 +17,7 @@ import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-grou
 import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { isFamilyScope } from '../../common/utils/warehouse-family.util';
+import { WarehouseLike, WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import {
@@ -150,7 +151,9 @@ export class IssueSlipsService {
 
     // Kiểm lại từng dòng (trạng thái lệnh/định mức có thể đã đổi từ lúc in phiếu) - đọc ngoài transaction như luồng cũ.
     const prepared: PreparedLine[] = [];
-    for (const line of slip.lines) prepared.push(await this.prepareLine(line, scope));
+    const slipWarehouse = { id: slip.warehouseId, code: slip.warehouse.code };
+    for (const line of slip.lines)
+      prepared.push(await this.prepareLine(line, scope, slipWarehouse));
     // Thứ tự ghi cố định theo vật tư rồi dòng - 2 phiếu chạm cùng vật tư khoá cùng thứ tự, không khoá chéo.
     const order = [...prepared].sort((a, b) => {
       const ma = this.materialOf(a);
@@ -287,10 +290,11 @@ export class IssueSlipsService {
         barLengthMm: line.barLengthMm,
         barCount: line.qty,
       });
+      this.steelIssues.assertWarehouseScope(prepared, scope);
       return {
         dto: line,
         materialId,
-        warehouseId: await this.materialWarehouseId(materialId),
+        warehouseId: prepared.warehouse.id,
         productionInvoiceId: prepared.productionInvoiceId,
         productionOrderId: null,
       };
@@ -312,7 +316,7 @@ export class IssueSlipsService {
         productionOrderId: prepared.order.id,
       };
     }
-    const material = await this.loadSharedMaterial(materialId, scope);
+    const material = await this.loadSharedMaterial(materialId, scope, null);
     return {
       dto: line,
       materialId,
@@ -325,6 +329,7 @@ export class IssueSlipsService {
   private async prepareLine(
     line: SlipRow['lines'][number],
     scope: string | null,
+    slipWarehouse: WarehouseLike,
   ): Promise<PreparedLine> {
     const qty = line.qty.toNumber();
     if (line.kind === IssueSlipLineKind.STEEL) {
@@ -334,6 +339,7 @@ export class IssueSlipsService {
         barLengthMm: line.barLengthMm!,
         barCount: qty,
       });
+      this.steelIssues.assertWarehouseScope(prepared, scope);
       return { lineId: line.id, kind: 'STEEL', prepared };
     }
     if (line.kind === IssueSlipLineKind.CONSUMABLE) {
@@ -344,7 +350,7 @@ export class IssueSlipsService {
       );
       return { lineId: line.id, kind: 'CONSUMABLE', prepared };
     }
-    const material = await this.loadSharedMaterial(line.materialId, scope);
+    const material = await this.loadSharedMaterial(line.materialId, scope, slipWarehouse);
     return {
       lineId: line.id,
       kind: 'SHARED',
@@ -404,13 +410,21 @@ export class IssueSlipsService {
     );
   }
 
-  private async loadSharedMaterial(materialId: bigint, scope: string | null) {
+  /**
+   * Dòng "Dùng chung" lấy ở kho CÙNG LOẠI với kho mặc định của vật tư, thuộc xưởng của thủ kho (Đợt 7: thủ kho Hàn Phước An
+   * lấy dây hàn ở kho mình). Lúc xác nhận dùng đúng kho đã ghi trên phiếu (`slipWarehouseId`), không suy lại.
+   */
+  private async loadSharedMaterial(
+    materialId: bigint,
+    scope: string | null,
+    slipWarehouse: WarehouseLike | null,
+  ) {
     const m = await this.prisma.material.findUnique({
       where: { id: materialId },
       select: {
         code: true,
         warehouseId: true,
-        warehouse: { select: { code: true } },
+        warehouse: { select: { id: true, code: true, kind: true, workshopId: true } },
         materialGroup: { select: { systemKey: true } },
       },
     });
@@ -421,23 +435,21 @@ export class IssueSlipsService {
     if (m.materialGroup?.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR) {
       throw new BadRequestException(`Sắt (${m.code}) xuất theo lệnh, không xuất dùng chung`);
     }
-    if (scope && m.warehouse.code !== scope) {
-      throw new ForbiddenException(
-        `Bạn không phụ trách kho ${m.warehouse.code} của vật tư ${m.code}`,
-      );
+    const real =
+      slipWarehouse ??
+      (await new WorkshopWarehouseResolver(this.prisma).sameKindAs(
+        {
+          id: m.warehouseId,
+          code: m.warehouse.code,
+          kind: m.warehouse.kind,
+          workshopId: m.warehouse.workshopId,
+        },
+        scope,
+      ));
+    if (scope && real.code !== scope) {
+      throw new ForbiddenException(`Bạn không phụ trách kho ${real.code} của vật tư ${m.code}`);
     }
-    return { warehouseId: m.warehouseId };
-  }
-
-  private async materialWarehouseId(materialId: bigint): Promise<bigint> {
-    const m = await this.prisma.material.findUnique({
-      where: { id: materialId },
-      select: { code: true, warehouseId: true },
-    });
-    if (!m?.warehouseId) {
-      throw new BadRequestException(`Vật tư ${m?.code ?? materialId} chưa được gán kho`);
-    }
-    return m.warehouseId;
+    return { warehouseId: real.id };
   }
 
   private assertSteelScope(scope: string | null): void {
@@ -452,10 +464,9 @@ export class IssueSlipsService {
     }
   }
 
-  /** Kho của phiếu thuộc phạm vi thủ kho: đúng kho, hoặc cùng họ phoi-son-han (sắt xuất từ kho chung của họ). */
+  /** Kho của phiếu thuộc phạm vi thủ kho: đúng kho (Đợt 7: mỗi kho Phôi/Hàn/Sơn có thủ kho riêng, không còn xem chung cả họ). */
   private inScope(warehouseCode: string, scope: string): boolean {
-    if (warehouseCode === scope) return true;
-    return isFamilyScope(scope, STEEL_FAMILY) && isFamilyScope(warehouseCode, STEEL_FAMILY);
+    return warehouseCode === scope;
   }
 
   private assertDraft(slip: SlipRow): void {

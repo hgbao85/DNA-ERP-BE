@@ -56,7 +56,14 @@ export class RecipientResolverService {
         where: {
           isActive: true,
           deletedAt: null,
-          warehouseScope: { in: criteria.warehouseIds },
+          ...(criteria.warehouseFamilies
+            ? {
+                OR: criteria.warehouseIds.flatMap((code) => [
+                  { warehouseScope: code },
+                  { warehouseScope: { startsWith: `${code}-` } },
+                ]),
+              }
+            : { warehouseScope: { in: criteria.warehouseIds } }),
           ...(criteria.warehouseScopeRoles?.length
             ? { roles: { some: { role: { name: { in: criteria.warehouseScopeRoles } } } } }
             : {}),

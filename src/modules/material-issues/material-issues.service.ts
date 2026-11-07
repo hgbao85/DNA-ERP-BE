@@ -35,6 +35,7 @@ import { RealtimeService } from '../../realtime/realtime.service';
 import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { CreateMaterialIssueDto } from './dto/create-material-issue.dto';
 import { ListMaterialIssuesQueryDto } from './dto/list-material-issues-query.dto';
 import { MaterialIssuePlanItemResponseDto } from './dto/material-issue-plan-item-response.dto';
@@ -48,11 +49,12 @@ const MATERIAL_ISSUE_INCLUDE = {
         select: {
           salesOrder: { select: { orderCode: true } },
           productionInvoice: { select: { code: true } },
+          productionInvoiceId: true,
         },
       },
     },
   },
-  material: true,
+  material: { include: { warehouse: true } },
 } satisfies Prisma.MaterialIssueInclude;
 
 export type MaterialIssueRow = Prisma.MaterialIssueGetPayload<{
@@ -190,7 +192,15 @@ export class MaterialIssuesService {
     const order = await this.findOrderOrThrow(productionOrderId);
     await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'xuất vật tư');
     const materialBigId = parseBigIntId(dto.materialId);
-    const warehouse = await this.findMaterialWarehouseOrThrow(materialBigId);
+    // Đợt 7 (chia 9 kho): vật tư Hàn của lệnh xưởng Phước An xuất từ kho Hàn Phước An.
+    const piItem = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
+      where: { id: order.productionInvoiceItemId },
+      select: { productionInvoiceId: true },
+    });
+    const warehouse = await this.findMaterialWarehouseOrThrow(
+      materialBigId,
+      piItem.productionInvoiceId,
+    );
     // Gate theo ĐÚNG instance kho vật lý của vật tư này (không chỉ cùng gia đình vat-tu-tp) - Thủ
     // kho của vat-tu-tp-2 không được xuất vật tư đang thật sự nằm ở kho vat-tu-tp gốc và ngược lại.
     this.assertWarehouseScope(warehouseScope, warehouse.code);
@@ -482,9 +492,14 @@ export class MaterialIssuesService {
     const toWarehouse = await db.warehouse.findUniqueOrThrow({
       where: { code: PRODUCTION_WAREHOUSE_CODE },
     });
+    // Đợt 7: trừ ở kho thật theo xưởng của lệnh, cùng kho prepareIssue() đã kiểm tồn.
+    const fromWarehouse = await new WorkshopWarehouseResolver(db).resolveForPi(
+      issue.material.warehouse ?? { id: issue.material.warehouseId, code: '' },
+      issue.productionOrder.productionInvoiceItem.productionInvoiceId,
+    );
     await this.stockLedgerService.postEntry(
       {
-        fromWarehouseId: issue.material.warehouseId,
+        fromWarehouseId: fromWarehouse.id,
         toWarehouseId: toWarehouse.id,
         materialId: issue.materialId,
         qty: issue.issuedQty.toNumber(),
@@ -593,10 +608,17 @@ export class MaterialIssuesService {
   /** Kho vật lý CỤ THỂ của vật tư này, đọc từ Material.warehouseId (mirror
    *  CuttingProposalsService.approve()) - 400 rõ ràng nếu Admin chưa cấu hình Kho cho vật tư đó,
    *  thay vì âm thầm rơi vào 1 kho mặc định sai. */
-  private async findMaterialWarehouseOrThrow(id: bigint): Promise<{ id: bigint; code: string }> {
+  private async findMaterialWarehouseOrThrow(
+    id: bigint,
+    productionInvoiceId: bigint | null,
+  ): Promise<{ id: bigint; code: string }> {
     const material = await this.prisma.material.findUnique({
       where: { id },
-      select: { code: true, warehouseId: true, warehouse: { select: { id: true, code: true } } },
+      select: {
+        code: true,
+        warehouseId: true,
+        warehouse: { select: { id: true, code: true, kind: true, workshopId: true } },
+      },
     });
     if (!material) {
       throw new NotFoundException(`Material ${id} not found`);
@@ -606,7 +628,11 @@ export class MaterialIssuesService {
         `Vật tư ${material.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi xuất`,
       );
     }
-    return material.warehouse;
+    const real = await new WorkshopWarehouseResolver(this.prisma).resolveForPi(
+      material.warehouse,
+      productionInvoiceId,
+    );
+    return { id: real.id, code: real.code };
   }
 
   private async findOneOrThrow(id: string): Promise<MaterialIssueRow> {
