@@ -14,6 +14,11 @@ export const PROTECTED_WAREHOUSE_CODES = [
   'thanh-pham',
   'vat-tu-tp',
   'phoi-son-han',
+  // Đợt 7 - 4 kho chia từ kho chung Phôi-Sơn-Hàn (migration 20261107090000), mã cố định mà code dùng tới
+  'phoi-son-han-han-pa',
+  'phoi-son-han-son-pa',
+  'phoi-son-han-phoi-pha',
+  'phoi-son-han-han-pha',
   // Ảo (4) - điểm đến/đi cho stock_ledger, không có tồn vật lý
   'SUPPLIER',
   'PRODUCTION',
