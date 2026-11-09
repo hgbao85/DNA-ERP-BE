@@ -412,6 +412,18 @@ describe('DailyJobsService', () => {
       expect(DailyJobsService.productionDigest(b)).toMatchObject({ notStarted: 1, dueSoon: 1 });
       expect(DailyJobsService.productionDigest(b)!.lines).toContain('chưa bấm Bắt đầu');
     });
+
+    it('tin sáng sản xuất hiện số LSX (displayCode) thay mã PI; chưa có LSX thì giữ mã PI', () => {
+      const withLsx = boardOf([
+        row('1', [cell('PHOI', 'DUE_SOON', 0)], { floorStage: 'PENDING', displayCode: 'MY-313' }),
+      ]);
+      const lines = DailyJobsService.productionDigest(withLsx)!.lines;
+      expect(lines).toContain('MY-313 · SKU-1');
+      expect(lines).not.toContain('PI-2026-001');
+
+      const noLsx = boardOf([row('1', [cell('PHOI', 'DUE_SOON', 0)], { floorStage: 'PENDING' })]);
+      expect(DailyJobsService.productionDigest(noLsx)!.lines).toContain('PI-2026-001 · SKU-1');
+    });
   });
 
   // Phần A – Đợt 3 (YC10): M2/M4 + sản lượng ngày gộp vào tin sáng.

@@ -73,12 +73,16 @@ export interface MaterialsDueRow {
   supplierName: string | null;
   /** Số đơn đặt hàng "seq/year" (vd "52/2026"), null = chưa vào đơn. */
   supplierOrderCode: string | null;
+  /** Id đơn đặt hàng NCC (đơn chưa huỷ) - FE mở thẳng dòng ở màn Nhập kho; null = chưa vào đơn. */
+  supplierOrderId?: string | null;
   /** Người mua phụ trách (`Material.buyerId`) + tên hiển thị "firstName lastName". */
   buyerId: string | null;
   buyerName: string | null;
   /** Kho nhận thật: `receiveWarehouseCode ?? Material.warehouse.code` (như receiveItem / Bảng mốc). */
   warehouseCode: string | null;
   warehouseName: string | null;
+  /** Lệnh gộp 2+ SKU dùng chung dòng mua: "Hàng về chia trước cho <LSX>, rồi <LSX>" (thứ tự ưu tiên khi xuất); 1 SKU = null. */
+  priorityNote?: string | null;
 }
 
 /** Đếm trên tập đã lọc theo phạm vi người xem (người mua / kho), TRƯỚC bộ lọc view - để hiện số trên các nút lọc. */
@@ -103,6 +107,8 @@ export interface MaterialsDueResponse {
   canChooseScope: boolean;
   /** Mã kho bị khoá theo (thủ kho có warehouseScope, không phải người mua / KHSX / QLSX / Sếp / Admin); null = không khoá. */
   warehouseScope: string | null;
+  /** Tên kho của `warehouseScope` (hiện ở mọi tab, kể cả khi tab rỗng); null = không khoá hoặc không tìm thấy. */
+  warehouseScopeName: string | null;
   counts: MaterialsDueCounts;
   /** Đã lọc theo view; xếp: OVERDUE → DEADLINE_TODAY → IN_WINDOW → UPCOMING → NO_DEADLINE, rồi hạn chót, về từ, tên vật tư. */
   rows: MaterialsDueRow[];

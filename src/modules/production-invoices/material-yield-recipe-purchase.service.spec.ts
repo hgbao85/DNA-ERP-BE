@@ -383,4 +383,168 @@ describe('MaterialYieldRecipePurchaseService', () => {
 
     await expect(service.computeAndUpsertProposals('999')).rejects.toThrow(NotFoundException);
   });
+  // Tính lại khi nhu cầu GIẢM (anh Nhân chốt 07/11): ranh giới là "Giám đốc đã ký" (PURCHASING).
+  describe('tính lại khi nhu cầu giảm (chưa ký / đã ký)', () => {
+    const mockLookups = () => {
+      const withMaterial = prisma as unknown as { material?: Record<string, jest.Mock> };
+      withMaterial.material = {
+        ...withMaterial.material,
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ code: 'NHOM-01', unit: 'cây', buyerId: 'u-buyer' }),
+      };
+      prisma.productionInvoice.findUnique.mockResolvedValue({ id: 1n, code: 'PI-2026-009' });
+    };
+
+    it('dòng NEW có orderQty 12, cần mua tính lại 7 - bỏ orderQty (về null) và báo người mua nhập lại', async () => {
+      mockLookups();
+      prisma.purchaseProposal.findFirst.mockResolvedValue({
+        id: 900n,
+        status: PurchaseProposalStatus.NEW,
+        items: [
+          {
+            id: 950n,
+            materialId: 80n,
+            status: PurchaseProposalStatus.NEW,
+            buyQty: decimal(10),
+            orderQty: decimal(12),
+            receivedQty: decimal(0),
+          },
+        ],
+      });
+
+      await service.computeAndUpsertProposals('1');
+
+      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
+        where: { id: 950n },
+        data: expect.objectContaining({ buyQty: 7, orderQty: null }) as unknown,
+      });
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PURCHASE_ORDER_QTY_RESET',
+        expect.objectContaining({
+          dedupeKey: 'PURCHASE_ORDER_QTY_RESET:1:80',
+          params: expect.objectContaining({
+            oldOrderQty: 12,
+            newBuyQty: 7,
+            slipPrinted: false,
+            buyerIds: ['u-buyer'],
+          }) as unknown,
+        }),
+      );
+    });
+
+    it('dòng SUBMITTED (phiếu đã in) giảm - báo kèm cờ phiếu cần in lại', async () => {
+      mockLookups();
+      prisma.purchaseProposal.findFirst.mockResolvedValue({
+        id: 900n,
+        status: PurchaseProposalStatus.SUBMITTED,
+        items: [
+          {
+            id: 950n,
+            materialId: 80n,
+            status: PurchaseProposalStatus.SUBMITTED,
+            buyQty: decimal(10),
+            orderQty: decimal(12),
+            receivedQty: decimal(0),
+          },
+        ],
+      });
+
+      await service.computeAndUpsertProposals('1');
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PURCHASE_ORDER_QTY_RESET',
+        expect.objectContaining({
+          params: expect.objectContaining({ slipPrinted: true }) as unknown,
+        }),
+      );
+    });
+
+    it('nhu cầu TĂNG - giữ orderQty, không báo reset', async () => {
+      mockLookups();
+      prisma.purchaseProposal.findFirst.mockResolvedValue({
+        id: 900n,
+        status: PurchaseProposalStatus.NEW,
+        items: [
+          {
+            id: 950n,
+            materialId: 80n,
+            status: PurchaseProposalStatus.NEW,
+            buyQty: decimal(1),
+            orderQty: decimal(12),
+            receivedQty: decimal(0),
+          },
+        ],
+      });
+
+      await service.computeAndUpsertProposals('1');
+
+      const data = (
+        prisma.purchaseProposalItem.update.mock.calls[0] as [{ data: Record<string, unknown> }]
+      )[0].data;
+      expect(data).not.toHaveProperty('orderQty');
+      expect(notificationsService.emit).not.toHaveBeenCalledWith(
+        'PURCHASE_ORDER_QTY_RESET',
+        expect.anything(),
+      );
+    });
+
+    it('dòng PURCHASING (đã ký): KHÔNG ghi đè buyQty/orderQty/status, nhu cầu giảm dưới số ký thì báo PURCHASE_DEMAND_DROPPED', async () => {
+      mockLookups();
+      prisma.purchaseProposal.findFirst.mockResolvedValue({
+        id: 900n,
+        status: PurchaseProposalStatus.PURCHASING,
+        items: [
+          {
+            id: 950n,
+            materialId: 80n,
+            status: PurchaseProposalStatus.PURCHASING,
+            buyQty: decimal(10),
+            orderQty: decimal(12),
+            receivedQty: decimal(0),
+          },
+        ],
+      });
+
+      await service.computeAndUpsertProposals('1');
+
+      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+      expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PURCHASE_DEMAND_DROPPED',
+        expect.objectContaining({
+          params: expect.objectContaining({ neededQty: 7, signedQty: 12 }) as unknown,
+        }),
+      );
+    });
+
+    it('dòng PURCHASING + nhu cầu tăng: phần thêm vào dòng NEW mới, dòng đã ký giữ nguyên', async () => {
+      mockLookups();
+      prisma.purchaseProposal.findFirst.mockResolvedValue({
+        id: 900n,
+        status: PurchaseProposalStatus.PURCHASING,
+        items: [
+          {
+            id: 950n,
+            materialId: 80n,
+            status: PurchaseProposalStatus.PURCHASING,
+            buyQty: decimal(3),
+            orderQty: null,
+            receivedQty: decimal(0),
+          },
+        ],
+      });
+
+      await service.computeAndUpsertProposals('1');
+
+      expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+      expect(prisma.purchaseProposalItem.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          proposalId: 900n,
+          materialId: 80n,
+          buyQty: 7 - 3,
+        }) as unknown,
+      });
+    });
+  });
 });

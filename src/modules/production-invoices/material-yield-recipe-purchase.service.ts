@@ -16,6 +16,14 @@ import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { MaterialYieldRecipesService } from '../material-yield-recipes/material-yield-recipes.service';
 import { MaterialYieldRecipePurchaseResultDto } from './dto/material-yield-recipe-purchase-result.dto';
 import { purchaseBuyQtyWithWaste } from '../../common/utils/purchase-waste.util';
+import {
+  PurchaseRecomputeEvent,
+  emitPurchaseRecomputeNotifications,
+  eventFromPlan,
+  planPurchaseRecompute,
+  sortItemsById,
+  toRecomputeItem,
+} from '../../common/utils/purchase-recompute.util';
 
 /**
  * Tính nhu cầu mua nguyên liệu ĐẦU VÀO (vd thanh nhôm) cho "vật tư thành phẩm KHÔNG gắn piece" (vd
@@ -129,6 +137,7 @@ export class MaterialYieldRecipePurchaseService {
 
     let proposal!: { id: bigint; status: PurchaseProposalStatus };
 
+    const recomputeEvents: PurchaseRecomputeEvent[] = [];
     await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `purchase-proposal-merge:${piBigId}`);
 
@@ -206,61 +215,47 @@ export class MaterialYieldRecipePurchaseService {
           include: { items: true },
         });
       } else {
-        // Ưu tiên dòng CHƯA đóng hồ sơ nếu 1 material lỡ có 2 dòng - cùng idiom 3 service kia.
-        const itemByMaterial = new Map<string, (typeof found.items)[number]>();
-        for (const it of found.items) {
+        // Gom MỌI dòng của cùng vật tư; `planPurchaseRecompute` quyết định ghi dòng nào (anh Nhân 07/11): dòng ĐÃ ký
+        // (PURCHASING) giữ nguyên, dòng chưa ký bỏ orderQty khi nhu cầu giảm, dòng PURCHASED chỉ tách phần thiếu.
+        const itemsByMaterial = new Map<string, (typeof found.items)[number][]>();
+        for (const it of sortItemsById(found.items)) {
           const key = it.materialId.toString();
-          const current = itemByMaterial.get(key);
-          if (
-            !current ||
-            (current.status === PurchaseProposalStatus.PURCHASED &&
-              it.status !== PurchaseProposalStatus.PURCHASED)
-          ) {
-            itemByMaterial.set(key, it);
-          }
+          const list = itemsByMaterial.get(key);
+          if (list) list.push(it);
+          else itemsByMaterial.set(key, [it]);
         }
         for (const c of computed) {
-          const existingItem = itemByMaterial.get(c.materialIdStr);
-          if (existingItem?.status === PurchaseProposalStatus.PURCHASED) {
-            const shortfall = c.buyQty - existingItem.receivedQty.toNumber();
-            if (shortfall > 0) {
-              await tx.purchaseProposalItem.create({
-                data: {
-                  proposalId: found.id,
-                  materialId: c.materialId,
-                  buyQty: shortfall,
-                  actualStock: c.actualStock,
-                  ...receiveWarehouseOf(c.materialIdStr),
-                },
-              });
-            }
-          } else if (existingItem) {
-            const nextStatus =
-              existingItem.status === PurchaseProposalStatus.NEW && c.buyQty === 0
-                ? PurchaseProposalStatus.PURCHASED
-                : undefined;
+          const group = itemsByMaterial.get(c.materialIdStr) ?? [];
+          const plan = planPurchaseRecompute(group.map(toRecomputeItem), c.buyQty);
+          if (plan.update) {
             await tx.purchaseProposalItem.update({
-              where: { id: existingItem.id },
+              where: { id: plan.update.itemId },
               data: {
-                buyQty: c.buyQty,
+                buyQty: plan.update.buyQty,
                 actualStock: c.actualStock,
                 ...receiveWarehouseOf(c.materialIdStr),
-                ...(nextStatus ? { status: nextStatus, purchasedAt: new Date() } : {}),
+                ...(plan.update.clearOrderQty ? { orderQty: null } : {}),
+                ...(plan.update.toPurchased
+                  ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
+                  : {}),
               },
             });
-          } else {
+          }
+          if (plan.create) {
             await tx.purchaseProposalItem.create({
               data: {
                 proposalId: found.id,
                 materialId: c.materialId,
-                buyQty: c.buyQty,
+                buyQty: plan.create.buyQty,
                 actualStock: c.actualStock,
                 ...receiveWarehouseOf(c.materialIdStr),
-                status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
-                purchasedAt: c.buyQty === 0 ? new Date() : undefined,
+                status: plan.create.toPurchased ? PurchaseProposalStatus.PURCHASED : undefined,
+                purchasedAt: plan.create.toPurchased ? new Date() : undefined,
               },
             });
           }
+          const ev = eventFromPlan(c.materialId, plan);
+          if (ev) recomputeEvents.push(ev);
         }
       }
 
@@ -292,6 +287,12 @@ export class MaterialYieldRecipePurchaseService {
       );
     }
 
+    await emitPurchaseRecomputeNotifications(
+      this.prisma,
+      this.notifications,
+      piBigId,
+      recomputeEvents,
+    );
     if (proposal) {
       await notifyPurchaseProposalCreated(this.prisma, this.notifications, proposal.id);
     }

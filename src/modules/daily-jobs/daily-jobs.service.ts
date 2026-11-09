@@ -462,7 +462,8 @@ export class DailyJobsService implements OnModuleInit, OnModuleDestroy {
       const parts = bad.map((m) => `${m.label} ${lateText(m.daysLeft!)}`);
       if (packWaiting) parts.unshift('chưa bắt đầu Đóng gói');
       if (waiting) parts.unshift('chưa bấm Bắt đầu');
-      lines.push(`${row.piCode} · ${row.skuCode}: ${parts.join(', ')}`);
+      // Mã lệnh hiển thị (số LSX, `loadLenhDisplayCodes` ở Bảng mốc) - rơi về mã PI khi chưa có LSX.
+      lines.push(`${row.displayCode || row.piCode} · ${row.skuCode}: ${parts.join(', ')}`);
     }
     lines.push(...lowOutput.map((a) => a.message));
     if (late + dueSoon + notStarted + packagingNotStarted + lowOutput.length === 0) return null;

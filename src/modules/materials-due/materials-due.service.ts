@@ -14,6 +14,7 @@ import {
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { daysBetween } from '../milestone-board/milestone-board.rules';
 import { effectiveOrderQty } from '../purchase-proposals/purchase-order-qty.util';
+import { ranksBefore } from '../stock/sku-priority.util';
 import type { MaterialsDueQueryDto } from './dto/materials-due-query.dto';
 import type {
   MaterialsDueCounts,
@@ -89,6 +90,9 @@ export class MaterialsDueService {
     }
     const { rows, n, today } = await this.loadAll(now, true);
     const viewer = this.viewerScope(user, query.scope);
+    const warehouseScopeName = viewer.warehouseScope
+      ? await this.warehouseNameOf(viewer.warehouseScope)
+      : null;
     const scoped = this.applyScope(rows, viewer);
 
     const counts: MaterialsDueCounts = {
@@ -132,6 +136,7 @@ export class MaterialsDueService {
       scope: viewer.scope,
       canChooseScope: viewer.canChooseScope,
       warehouseScope: viewer.warehouseScope,
+      warehouseScopeName,
       counts,
       rows: filtered,
     };
@@ -252,7 +257,13 @@ export class MaterialsDueService {
           },
         },
         supplierOrder: {
-          select: { seq: true, year: true, status: true, supplier: { select: { name: true } } },
+          select: {
+            id: true,
+            seq: true,
+            year: true,
+            status: true,
+            supplier: { select: { name: true } },
+          },
         },
         quotes: {
           where: { isChosen: true },
@@ -352,6 +363,14 @@ export class MaterialsDueService {
             a.skuCode.localeCompare(b.skuCode),
         );
 
+      const priorityNote = buildPriorityNote(
+        users.map((it) => ({
+          lenhCode: it.lsxCode?.trim() || lenhOfPi,
+          deadline: purchaseDeadlineOf(it, group),
+          itemId: it.id,
+        })),
+      );
+
       const deadline = skus[0].deadline; // đã xếp: hạn sớm nhất đứng đầu, null cuối
       const earliestArrival = deadline ? addDays(deadline, -n) : null;
       const daysLeft = deadline ? daysBetween(today, deadline) : null;
@@ -407,10 +426,12 @@ export class MaterialsDueService {
             ? (quote.supplier?.name ?? quote.supplierName)
             : null,
         supplierOrderCode: order ? `${order.seq}/${order.year}` : null,
+        supplierOrderId: order ? String(order.id) : null,
         buyerId: l.material.buyerId ?? null,
         buyerName: buyer ? `${buyer.firstName} ${buyer.lastName}`.trim() : null,
         warehouseCode: whCode,
         warehouseName: whName,
+        priorityNote,
       });
     }
 
@@ -424,6 +445,12 @@ export class MaterialsDueService {
     return rows;
   }
 
+  /** Tên kho của phạm vi thủ kho - lấy thẳng từ bảng kho, không phụ thuộc dòng đang hiện (tab Hôm nay/Quá hạn có thể rỗng). */
+  private async warehouseNameOf(code: string): Promise<string | null> {
+    const wh = await this.prisma.warehouse.findFirst({ where: { code }, select: { name: true } });
+    return wh?.name ?? null;
+  }
+
   /** Tên kho cho các kho ghi đè (`receiveWarehouseCode`) - 1 truy vấn cho cả danh sách, bỏ qua khi không có dòng nào ghi đè. */
   private async loadOverrideWarehouses(codes: (string | null)[]): Promise<Map<string, string>> {
     const uniq = [...new Set(codes.filter((c): c is string => !!c))];
@@ -434,6 +461,20 @@ export class MaterialsDueService {
     });
     return new Map(whs.map((w) => [w.code, w.name]));
   }
+}
+
+/**
+ * Lệnh gộp 2+ SKU dùng chung 1 lần mua: câu ghi thứ tự SKU được chia hàng trước khi hàng về - đúng thứ tự `ranksBefore` của
+ * bước xuất (hạn vật tư sớm hơn trước, bằng hạn thì dòng vào lệnh trước, chưa có hạn cuối). Dùng số LSX, không dùng mã PI.
+ * Lệnh 1 SKU: null.
+ */
+export function buildPriorityNote(
+  users: { lenhCode: string; deadline: Date | null; itemId: bigint }[],
+): string | null {
+  if (users.length < 2) return null;
+  const sorted = [...users].sort((a, b) => (ranksBefore(a, b) ? -1 : ranksBefore(b, a) ? 1 : 0));
+  const codes = sorted.map((u) => u.lenhCode);
+  return `Hàng về chia trước cho ${codes[0]}, rồi ${codes.slice(1).join(', rồi ')}`;
 }
 
 /** Dòng "cần về hôm nay" cho badge / tin sáng: quá hạn, hạn chót hôm nay, hoặc trong khoảng được về. */

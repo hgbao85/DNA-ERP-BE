@@ -209,6 +209,20 @@ export interface PurchaseOverReceivedParams {
   buyerIds: string[];
 }
 
+/** Nhu cầu 1 vật tư giảm làm số cần mua tính lại thấp hơn số người mua đã nhập - phần mềm bỏ số người mua nhập, người mua nhập lại. */
+export interface PurchaseOrderQtyResetParams {
+  piCode: string;
+  materialCode: string;
+  unit?: string;
+  /** Số mua người mua đã nhập (bị bỏ). */
+  oldOrderQty: number;
+  /** Số cần mua mới tính. */
+  newBuyQty: number;
+  /** Dòng đang "đã gửi chờ ký" (phiếu đã in): phiếu cần in lại. */
+  slipPrinted: boolean;
+  buyerIds: string[];
+}
+
 /** Nhu cầu 1 vật tư của lệnh tính lại GIẢM xuống dưới số đã có phiếu Giám đốc ký (anh Nhân chốt 07/11, câu 2b). */
 export interface PurchaseDemandDroppedParams {
   piCode: string;
@@ -912,6 +926,21 @@ const notificationTypeDefinitions = {
         ? { userIds: p.buyerIds, roles: [BUSINESS_ROLES.BOSS] }
         : { roles: [BUSINESS_ROLES.PURCHASER, BUSINESS_ROLES.BOSS] },
   } satisfies NotificationTypeDef<PurchaseDemandDroppedParams>,
+
+  /** Nhu cầu 1 vật tư giảm khi dòng mua CHƯA có Giám đốc ký (anh Nhân chốt 07/11): phần mềm bỏ số người mua đã tăng, quay về số
+   *  mới tính và báo người mua nhập lại. Dòng đã in phiếu (chờ ký) thì phiếu cần in lại. Chưa gán người mua thì báo mọi Mua hàng. */
+  PURCHASE_ORDER_QTY_RESET: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PURCHASE_PROPOSAL',
+    title: (p: PurchaseOrderQtyResetParams) =>
+      `Số cần mua ${p.materialCode} giảm còn ${p.newBuyQty}${p.unit ? ` ${p.unit}` : ''} - nhập lại số mua${p.slipPrinted ? ' - phiếu đã in, cần in lại' : ''}`,
+    message: (p: PurchaseOrderQtyResetParams) =>
+      `${p.piCode}: số mua bạn nhập trước đó (${p.oldOrderQty}) đã được bỏ vì nhu cầu giảm.${p.slipPrinted ? ' Phiếu đã in cần in lại.' : ''}`,
+    link: () => ({ module: 'purchasing', page: 'don-dat-hang' }),
+    recipients: (p: PurchaseOrderQtyResetParams) =>
+      p.buyerIds.length > 0 ? { userIds: p.buyerIds } : { roles: [BUSINESS_ROLES.PURCHASER] },
+  } satisfies NotificationTypeDef<PurchaseOrderQtyResetParams>,
 
   // ─── Phase 3b, nhóm 7.5-i "Sắt → Phôi → KCS" (xem changelog 2026-09-25 mục 19) ─────────────
   /** Kho xuất sắt cho PI - Phôi vào xác nhận đã nhận. Tự đóng khi Phôi `receive()`.
