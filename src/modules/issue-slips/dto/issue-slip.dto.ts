@@ -29,6 +29,13 @@ export class IssueSlipLineDto {
   @IsString()
   materialId?: string;
 
+  @ApiPropertyOptional({
+    description: 'MATERIAL_YIELD_RECIPE: công thức (cùng productionInvoiceId)',
+  })
+  @IsOptional()
+  @IsString()
+  recipeId?: string;
+
   @ApiPropertyOptional({ description: 'WEAVING_PIECE / WEAVING_MATERIAL: mảnh' })
   @IsOptional()
   @IsString()

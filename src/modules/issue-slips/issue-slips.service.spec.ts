@@ -31,6 +31,9 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
   let ledger: { postEntry: jest.Mock };
   let reservations: { getAvailableQty: jest.Mock };
   let weaving: Record<string, jest.Mock>;
+  let packaging: Record<string, jest.Mock>;
+  let yieldIssues: Record<string, jest.Mock>;
+  let recipeIssues: Record<string, jest.Mock>;
 
   const steelLine = (o: Record<string, unknown> = {}) => ({
     id: 11n,
@@ -178,6 +181,44 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       createMaterialIssueInTx: jest.fn().mockResolvedValue({ id: 600n }),
       getWovenMaterialLinesByPiece: jest.fn().mockResolvedValue(new Map()),
     };
+    packaging = {
+      prepareIssue: jest.fn((orderId: string, dto: { materialId: string }) =>
+        Promise.resolve({
+          order: { id: BigInt(orderId) },
+          materialBigId: BigInt(dto.materialId),
+          sourceWarehouse: { id: 900n, code: 'vat-tu-tp' },
+          dto,
+        }),
+      ),
+      createInTx: jest.fn().mockResolvedValue({ id: 701n }),
+      afterCreate: jest.fn(),
+    };
+    yieldIssues = {
+      prepareIssue: jest.fn((orderId: string, dto: { materialId: string }) =>
+        Promise.resolve({
+          order: { id: BigInt(orderId) },
+          materialBigId: BigInt(dto.materialId),
+          materialName: 'Sắt la',
+          warehouse: { id: 6n, code: 'phoi-son-han' },
+          dto,
+        }),
+      ),
+      createInTx: jest.fn().mockResolvedValue({ id: 702n }),
+      afterCreate: jest.fn(),
+    };
+    recipeIssues = {
+      prepareIssue: jest.fn((piId: string, dto: { recipeId: string; issuedQty: number }) =>
+        Promise.resolve({
+          piId: BigInt(piId),
+          recipeBigId: BigInt(dto.recipeId),
+          inputMaterial: { id: 44n, name: 'Thanh nhôm' },
+          warehouse: { id: 6n, code: 'phoi-son-han' },
+          issuedQty: dto.issuedQty,
+        }),
+      ),
+      createInTx: jest.fn().mockResolvedValue({ id: 703n }),
+      afterCreate: jest.fn(),
+    };
     service = new IssueSlipsService(
       prisma as unknown as PrismaServiceType,
       steel as unknown as SteelIssuesService,
@@ -187,6 +228,9 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       { publishEntityChanged: jest.fn() } as unknown as RealtimeService,
       weaving as never,
       { emit: jest.fn(), resolve: jest.fn() } as never,
+      packaging as never,
+      yieldIssues as never,
+      recipeIssues as never,
     );
   });
 
@@ -791,6 +835,121 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
           sku: 'GP-1',
         }),
       ]);
+    });
+  });
+
+  // 09/11/2026: xuất đóng gói và xuất vật tư TP cho Phôi cũng đi phiếu XK có ảnh ký (route xuất thẳng đã gỡ).
+  describe('dòng đóng gói / vật tư TP', () => {
+    it('tạo phiếu: kiểm từng dòng bằng lõi của từng luồng, ghi recipeId + vật tư đầu vào cho dòng công thức', async () => {
+      await service.create(
+        {
+          lines: [
+            {
+              kind: IssueSlipLineKind.MATERIAL_YIELD,
+              materialId: '33',
+              productionOrderId: '70',
+              qty: 4,
+            },
+            {
+              kind: IssueSlipLineKind.MATERIAL_YIELD_RECIPE,
+              productionInvoiceId: '500',
+              recipeId: '9',
+              qty: 2,
+            },
+          ],
+        },
+        'u',
+        'phoi-son-han',
+      );
+      expect(yieldIssues.prepareIssue).toHaveBeenCalledWith(
+        '70',
+        { materialId: '33', issuedQty: 4 },
+        'phoi-son-han',
+      );
+      expect(recipeIssues.prepareIssue).toHaveBeenCalledWith(
+        '500',
+        { recipeId: '9', issuedQty: 2 },
+        'phoi-son-han',
+      );
+      const data = (
+        prisma.issueSlip.create.mock.calls[0] as [{ data: { lines: { create: unknown[] } } }]
+      )[0].data;
+      expect(data.lines.create).toEqual([
+        expect.objectContaining({
+          kind: 'MATERIAL_YIELD',
+          materialId: 33n,
+          productionOrderId: 70n,
+        }),
+        expect.objectContaining({
+          kind: 'MATERIAL_YIELD_RECIPE',
+          materialId: 44n,
+          recipeId: 9n,
+          productionInvoiceId: 500n,
+        }),
+      ]);
+    });
+
+    it('xác nhận: ghi trong transaction qua createInTx, gắn id lần xuất vào dòng, báo sau commit', async () => {
+      prisma.issueSlip.findUnique.mockResolvedValue(
+        slip({
+          warehouseId: 900n,
+          warehouse: { code: 'vat-tu-tp', name: 'Kho Phụ kiện' },
+          lines: [
+            consLine({
+              id: 31n,
+              kind: IssueSlipLineKind.PACKAGING,
+              materialId: 20n,
+              productionOrderId: 70n,
+              stage: null,
+            }),
+          ],
+        }),
+      );
+      await service.confirm('9', ['u1'], 'u-pk', 'vat-tu-tp', 'k-p');
+      expect(packaging.prepareIssue).toHaveBeenCalledWith(
+        '70',
+        expect.objectContaining({ materialId: '20', issuedQty: 5 }),
+        'vat-tu-tp',
+      );
+      expect(packaging.createInTx).toHaveBeenCalledWith(
+        prisma,
+        expect.anything(),
+        'u-pk',
+        'issue-slip:9:line:31',
+      );
+      expect(prisma.issueSlipLine.update).toHaveBeenCalledWith({
+        where: { id: 31n },
+        data: { packagingIssueId: 701n },
+      });
+      expect(packaging.afterCreate).toHaveBeenCalledWith({ id: 701n }, 'u-pk');
+    });
+
+    it('xác nhận dòng công thức: kiểm lại theo lệnh + công thức', async () => {
+      prisma.issueSlip.findUnique.mockResolvedValue(
+        slip({
+          lines: [
+            steelLine({
+              id: 32n,
+              kind: IssueSlipLineKind.MATERIAL_YIELD_RECIPE,
+              materialId: 44n,
+              recipeId: 9n,
+              barLengthMm: null,
+              qty: dec(2),
+            }),
+          ],
+        }),
+      );
+      await service.confirm('9', ['u1'], 'u', 'phoi-son-han', 'k-r');
+      expect(recipeIssues.prepareIssue).toHaveBeenCalledWith(
+        '500',
+        { recipeId: '9', issuedQty: 2 },
+        'phoi-son-han',
+      );
+      expect(prisma.issueSlipLine.update).toHaveBeenCalledWith({
+        where: { id: 32n },
+        data: { materialYieldRecipeIssueId: 703n },
+      });
+      expect(recipeIssues.afterCreate).toHaveBeenCalled();
     });
   });
 });

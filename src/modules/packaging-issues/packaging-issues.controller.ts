@@ -1,23 +1,11 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Get,
-  Headers,
-  Param,
-  Post,
-  Query,
-} from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { CreatePackagingIssueDto } from './dto/create-packaging-issue.dto';
 import { PackagingIssuesService } from './packaging-issues.service';
 
 const VIEW = { module: PERMISSION_MODULES.PACKAGING_ISSUE, action: PermissionAction.VIEW };
-const CREATE = { module: PERMISSION_MODULES.PACKAGING_ISSUE, action: PermissionAction.CREATE };
 
 @ApiTags('Packaging Issues')
 @ApiBearerAuth()
@@ -27,23 +15,7 @@ export class PackagingIssuesController {
 
   // ─── Thủ kho vật tư-TP - xuất vật tư đóng gói cho kho thành phẩm ────────────
 
-  @Post('production-orders/:id/packaging-issues')
-  @RequirePermissions(CREATE)
-  create(
-    @Param('id') id: string,
-    @Body() dto: CreatePackagingIssueDto,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('warehouseScope') warehouseScope: string | null,
-    @Headers('Idempotency-Key') idempotencyKey: string | undefined,
-  ) {
-    // Vấn đề #11 audit 26/08 - trước đây header này chỉ tuỳ chọn dù service đã hỗ trợ dedupe theo
-    // key, nên 1 request gửi lặp (mất mạng rồi gửi lại...) mà thiếu header vẫn tạo 2 bản ghi riêng
-    // biệt. FE đã gửi kèm ở mọi lần gọi thật (xem withIdempotencyKey() trong packaging-issues-api.ts).
-    if (!idempotencyKey) {
-      throw new BadRequestException('Header Idempotency-Key là bắt buộc');
-    }
-    return this.packagingIssuesService.create(id, dto, userId, warehouseScope, idempotencyKey);
-  }
+  // POST xuất thẳng (trừ tồn ngay, không phiếu) ĐÃ GỠ 09/11/2026 - xuất đi phiếu XK có ảnh ký (IssueSlipsService, dòng PACKAGING).
 
   /** Gộp nhiều PO 1 lần - WarehouseXuatPage liệt kê mọi PO đang hoạt động cùng lúc, cùng mẫu
    *  GET /warehouse-transfers/piece-transfer-plan. */

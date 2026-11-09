@@ -59,7 +59,7 @@ const MATERIAL_YIELD_ISSUE_INCLUDE = {
   material: { include: { warehouse: true } },
 } satisfies Prisma.MaterialYieldIssueInclude;
 
-type MaterialYieldIssueRow = Prisma.MaterialYieldIssueGetPayload<{
+export type MaterialYieldIssueRow = Prisma.MaterialYieldIssueGetPayload<{
   include: typeof MATERIAL_YIELD_ISSUE_INCLUDE;
 }>;
 
@@ -81,6 +81,15 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  * State machine chỉ ISSUED -> RECEIVED (không qua AWAITING_QC/QC_PASSED như SteelIssue) - KCS xảy
  * ra ở bước "Chốt & gửi KCS" (ProductionBatchesService.create(), đã có từ trước), không phải ở đây.
  */
+export interface PreparedMaterialYieldIssue {
+  order: ProductionOrder;
+  materialBigId: bigint;
+  materialName: string;
+  /** Kho thật (đã đổi theo xưởng của lệnh). */
+  warehouse: { id: bigint; code: string };
+  dto: CreateMaterialYieldIssueDto;
+}
+
 @Injectable()
 export class MaterialYieldIssuesService {
   private readonly logger = new Logger(MaterialYieldIssuesService.name);
@@ -164,6 +173,20 @@ export class MaterialYieldIssuesService {
       }
     }
 
+    const prepared = await this.prepareIssue(productionOrderId, dto, warehouseScope);
+    const created = await this.prisma.$transaction((tx) =>
+      this.createInTx(tx, prepared, issuedById, idempotencyKey),
+    );
+    await this.afterCreate(created, issuedById);
+    return this.toResponseDto(created);
+  }
+
+  /** Kiểm ngoài transaction - dùng chung cho phiếu XK (IssueSlipsService, 09/11/2026). */
+  async prepareIssue(
+    productionOrderId: string,
+    dto: CreateMaterialYieldIssueDto,
+    warehouseScope: string | null,
+  ): Promise<PreparedMaterialYieldIssue> {
     const order = await this.findOrderOrThrow(productionOrderId);
     await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'xuất vật tư');
     const materialBigId = parseBigIntId(dto.materialId);
@@ -188,13 +211,30 @@ export class MaterialYieldIssuesService {
       material.warehouse,
       orderPi.productionInvoiceId,
     );
-    const materialWarehouseId = realWarehouse.id;
     this.assertWarehouseScope(warehouseScope, realWarehouse.code);
+    return {
+      order,
+      materialBigId,
+      materialName: material.name,
+      warehouse: { id: realWarehouse.id, code: realWarehouse.code },
+      dto,
+    };
+  }
 
-    // Khoá advisory theo (order, material) - đọc-rồi-ghi (plannedQty/sumIssued) không transaction/
-    // lock sẽ có khe TOCTOU khi 2 người cùng xuất gần đồng thời, cùng idiom
-    // MaterialIssuesService.create() (lockBusinessKey ở đó).
-    const created = await this.prisma.$transaction(async (tx) => {
+  /** Ghi 1 lần xuất TRONG transaction của người gọi. */
+  async createInTx(
+    tx: PrismaTx,
+    p: PreparedMaterialYieldIssue,
+    issuedById: string,
+    idempotencyKey?: string,
+  ): Promise<MaterialYieldIssueRow> {
+    const { order, materialBigId, dto } = p;
+    const material = { name: p.materialName };
+    const materialWarehouseId = p.warehouse.id;
+    {
+      // Khoá advisory theo (order, material) - đọc-rồi-ghi (plannedQty/sumIssued) không transaction/
+      // lock sẽ có khe TOCTOU khi 2 người cùng xuất gần đồng thời, cùng idiom
+      // MaterialIssuesService.create() (lockBusinessKey ở đó).
       await lockBusinessKey(tx, `material-yield-issue:${order.id}:${materialBigId}`);
       await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, 'xuất vật tư');
 
@@ -286,8 +326,11 @@ export class MaterialYieldIssuesService {
       });
 
       return issue;
-    });
+    }
+  }
 
+  /** Sau commit: báo Phôi nhận, nhật ký, realtime. */
+  async afterCreate(created: MaterialYieldIssueRow, issuedById: string): Promise<void> {
     await this.notifyMaterialYieldIssueToPhoi(
       created,
       created.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
@@ -297,13 +340,12 @@ export class MaterialYieldIssuesService {
       tableName: 'MaterialYieldIssue',
       recordId: created.id,
       newValue: {
-        productionOrderId: productionOrderId,
-        materialId: dto.materialId,
-        issuedQty: dto.issuedQty,
+        productionOrderId: created.productionOrderId.toString(),
+        materialId: created.materialId.toString(),
+        issuedQty: created.issuedQty,
       },
     });
     this.publishRealtime('MATERIAL_YIELD_ISSUE', created.id, 'CREATED', issuedById);
-    return this.toResponseDto(created);
   }
 
   private async postLedgerEntry(
