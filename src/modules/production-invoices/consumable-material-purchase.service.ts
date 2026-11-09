@@ -19,6 +19,14 @@ import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { ConsumableMaterialPurchaseResultDto } from './dto/consumable-material-purchase-result.dto';
 import { purchaseBuyQtyWithWaste } from '../../common/utils/purchase-waste.util';
+import {
+  PurchaseRecomputeEvent,
+  emitPurchaseRecomputeNotifications,
+  eventFromPlan,
+  planPurchaseRecompute,
+  sortItemsById,
+  toRecomputeItem,
+} from '../../common/utils/purchase-recompute.util';
 
 /**
  * Tính nhu cầu mua "vật tư tiêu hao phẳng" cho 1 PI - gộp cả 3 nguồn định mức không có khái
@@ -210,6 +218,7 @@ export class ConsumableMaterialPurchaseService {
     // vật tư theo thứ tự ngược nhau sẽ khoá chéo và deadlock, cùng idiom CuttingProposalsService.
     const orderedMaterialIds = [...materialIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
+    const recomputeEvents: PurchaseRecomputeEvent[] = [];
     const results = await this.prisma.$transaction(async (tx) => {
       const computed: {
         materialId: bigint;
@@ -351,91 +360,68 @@ export class ConsumableMaterialPurchaseService {
           include: { items: true },
         });
       } else {
-        // Ưu tiên dòng CHƯA đóng hồ sơ (status khác PURCHASED) nếu 1 material lỡ có 2 dòng (dòng cũ
-        // đã PURCHASED + dòng mới tách ra cho phần thiếu, xem nhánh dưới) - nếu không, lượt tính lại
-        // kế tiếp có thể chọn nhầm dòng đã đóng làm "dòng đang mở" và tách thêm dòng thiếu trùng lặp.
-        // Khoá theo (vật tư, quy cách): nệm khác quy cách giữa các SKU là các dòng mua RIÊNG (2026-10-23).
+        // Gom MỌI dòng của cùng khoá (vật tư, quy cách) - dòng đã ký (PURCHASING), chưa ký, PURCHASED cùng tồn tại được
+        // (vd dòng đã ký + dòng NEW cho phần thêm). `planPurchaseRecompute` quyết định ghi dòng nào (anh Nhân 07/11):
+        // dòng ĐÃ ký giữ nguyên, dòng chưa ký bỏ orderQty khi nhu cầu giảm. Khoá theo (vật tư, quy cách): nệm khác quy cách
+        // giữa các SKU là các dòng mua RIÊNG (2026-10-23).
         const itemKey = (materialId: bigint | string, spec: string | null) =>
           `${materialId}|${spec?.trim() ?? ''}`;
-        const itemByMaterial = new Map<string, (typeof proposal.items)[number]>();
-        for (const it of proposal.items) {
+        const itemsByKey = new Map<string, (typeof proposal.items)[number][]>();
+        for (const it of sortItemsById(proposal.items)) {
           const key = itemKey(it.materialId, it.spec);
-          const current = itemByMaterial.get(key);
-          if (
-            !current ||
-            (current.status === PurchaseProposalStatus.PURCHASED &&
-              it.status !== PurchaseProposalStatus.PURCHASED)
-          ) {
-            itemByMaterial.set(key, it);
-          }
+          const list = itemsByKey.get(key);
+          if (list) list.push(it);
+          else itemsByKey.set(key, [it]);
         }
         const computedKeys = new Set(computed.map((c) => itemKey(c.materialIdStr, c.spec)));
         const claimedItemIds = new Set<bigint>();
         for (const c of computed) {
-          let existingItem = itemByMaterial.get(itemKey(c.materialIdStr, c.spec));
-          if (!existingItem) {
+          let group = itemsByKey.get(itemKey(c.materialIdStr, c.spec)) ?? [];
+          if (group.length === 0) {
             // Quy cách của dòng định mức vừa đổi (vd Admin sửa/nạp lại định mức): tái dùng dòng còn mở của cùng
             // vật tư mà quy cách cũ không còn ở lượt tính này, thay vì để lại dòng cũ với số lượng lỗi thời.
-            existingItem = proposal.items.find(
+            const reuse = proposal.items.find(
               (it) =>
                 it.materialId === c.materialId &&
                 it.status !== PurchaseProposalStatus.PURCHASED &&
                 !computedKeys.has(itemKey(it.materialId, it.spec)) &&
                 !claimedItemIds.has(it.id),
             );
+            if (reuse) group = [reuse];
           }
-          if (existingItem) claimedItemIds.add(existingItem.id);
-          if (existingItem?.status === PurchaseProposalStatus.PURCHASED) {
-            // Dòng đã đóng hồ sơ (nhận đủ hàng) - KHÔNG ghi đè buyQty lên nó (2026-08-26, lỗ #6 "ghi
-            // đè buyQty của item PURCHASED làm thiếu hụt biến mất khỏi hàng đợi vĩnh viễn"). Nếu
-            // buyQty vừa tính vẫn cao hơn receivedQty đã chốt, phần chênh lệch là nhu cầu mua THẬT -
-            // tách thành dòng NEW riêng để đi lại từ đầu quy trình báo giá, thay vì âm thầm sửa số
-            // trên hồ sơ đã đóng (không ai còn thấy nó trong hàng đợi vì activeOnly loại PURCHASED).
-            const shortfall = c.buyQty - existingItem.receivedQty.toNumber();
-            if (shortfall > 0) {
-              await tx.purchaseProposalItem.create({
-                data: {
-                  proposalId: proposal.id,
-                  materialId: c.materialId,
-                  spec: c.spec,
-                  buyQty: shortfall,
-                  actualStock: c.actualStock,
-                  receiveWarehouseCode: c.receiveWarehouseCode,
-                },
-              });
-            }
-          } else if (existingItem) {
-            // Chỉ ghi đè status khi dòng đó CHƯA ai động vào (còn NEW) - không tự ý huỷ tiến độ
-            // báo giá đang dở của người mua nếu lượt tính lại này đổi buyQty của 1 dòng đã QUOTING
-            // trở đi (cùng idiom CuttingProposalsService.approve()).
-            const nextStatus =
-              existingItem.status === PurchaseProposalStatus.NEW && c.buyQty === 0
-                ? PurchaseProposalStatus.PURCHASED
-                : undefined;
+          for (const it of group) claimedItemIds.add(it.id);
+          const plan = planPurchaseRecompute(group.map(toRecomputeItem), c.buyQty);
+          if (plan.update) {
             await tx.purchaseProposalItem.update({
-              where: { id: existingItem.id },
+              where: { id: plan.update.itemId },
               data: {
                 spec: c.spec,
-                buyQty: c.buyQty,
+                buyQty: plan.update.buyQty,
                 actualStock: c.actualStock,
                 receiveWarehouseCode: c.receiveWarehouseCode,
-                ...(nextStatus ? { status: nextStatus, purchasedAt: new Date() } : {}),
+                ...(plan.update.clearOrderQty ? { orderQty: null } : {}),
+                ...(plan.update.toPurchased
+                  ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
+                  : {}),
               },
             });
-          } else {
+          }
+          if (plan.create) {
             await tx.purchaseProposalItem.create({
               data: {
                 proposalId: proposal.id,
                 materialId: c.materialId,
                 spec: c.spec,
-                buyQty: c.buyQty,
+                buyQty: plan.create.buyQty,
                 actualStock: c.actualStock,
                 receiveWarehouseCode: c.receiveWarehouseCode,
-                status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
-                purchasedAt: c.buyQty === 0 ? new Date() : undefined,
+                status: plan.create.toPurchased ? PurchaseProposalStatus.PURCHASED : undefined,
+                purchasedAt: plan.create.toPurchased ? new Date() : undefined,
               },
             });
           }
+          const ev = eventFromPlan(c.materialId, plan);
+          if (ev) recomputeEvents.push(ev);
         }
       }
 
@@ -459,6 +445,12 @@ export class ConsumableMaterialPurchaseService {
       );
     });
 
+    await emitPurchaseRecomputeNotifications(
+      this.prisma,
+      this.notifications,
+      piBigId,
+      recomputeEvents,
+    );
     const proposalId = results[0]?.purchaseProposalId;
     if (proposalId) {
       await notifyPurchaseProposalCreated(this.prisma, this.notifications, BigInt(proposalId));

@@ -16,6 +16,14 @@ import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { PieceMaterialYieldPurchaseResultDto } from './dto/piece-material-yield-purchase-result.dto';
 import { purchaseBuyQtyWithWaste } from '../../common/utils/purchase-waste.util';
+import {
+  PurchaseRecomputeEvent,
+  emitPurchaseRecomputeNotifications,
+  eventFromPlan,
+  planPurchaseRecompute,
+  sortItemsById,
+  toRecomputeItem,
+} from '../../common/utils/purchase-recompute.util';
 
 /**
  * Tính nhu cầu mua nguyên liệu cho "vật tư thành phẩm" (piece có PieceMaterialYield - vd chân
@@ -197,6 +205,7 @@ export class PieceMaterialYieldPurchaseService {
 
     let proposal!: { id: bigint; status: PurchaseProposalStatus };
 
+    const recomputeEvents: PurchaseRecomputeEvent[] = [];
     await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `purchase-proposal-merge:${piBigId}`);
 
@@ -284,71 +293,47 @@ export class PieceMaterialYieldPurchaseService {
           include: { items: true },
         });
       } else {
-        // Ưu tiên dòng CHƯA đóng hồ sơ (status khác PURCHASED) nếu 1 material lỡ có 2 dòng (dòng cũ
-        // đã PURCHASED + dòng mới tách ra cho phần thiếu, xem nhánh dưới) - nếu không, lượt tính lại
-        // kế tiếp có thể chọn nhầm dòng đã đóng làm "dòng đang mở" và tách thêm dòng thiếu trùng lặp.
-        const itemByMaterial = new Map<string, (typeof found.items)[number]>();
-        for (const it of found.items) {
+        // Gom MỌI dòng của cùng vật tư; `planPurchaseRecompute` quyết định ghi dòng nào (anh Nhân 07/11): dòng ĐÃ ký
+        // (PURCHASING) giữ nguyên, dòng chưa ký bỏ orderQty khi nhu cầu giảm, dòng PURCHASED chỉ tách phần thiếu.
+        const itemsByMaterial = new Map<string, (typeof found.items)[number][]>();
+        for (const it of sortItemsById(found.items)) {
           const key = it.materialId.toString();
-          const current = itemByMaterial.get(key);
-          if (
-            !current ||
-            (current.status === PurchaseProposalStatus.PURCHASED &&
-              it.status !== PurchaseProposalStatus.PURCHASED)
-          ) {
-            itemByMaterial.set(key, it);
-          }
+          const list = itemsByMaterial.get(key);
+          if (list) list.push(it);
+          else itemsByMaterial.set(key, [it]);
         }
         for (const c of computed) {
-          const existingItem = itemByMaterial.get(c.materialIdStr);
-          if (existingItem?.status === PurchaseProposalStatus.PURCHASED) {
-            // Dòng đã đóng hồ sơ (nhận đủ hàng) - KHÔNG ghi đè buyQty lên nó (2026-08-26, lỗ #6 "ghi
-            // đè buyQty của item PURCHASED làm thiếu hụt biến mất khỏi hàng đợi vĩnh viễn"): tính lại
-            // nhu cầu cho cả PI mỗi khi thêm 1 SKU được duyệt có thể phát hiện nhu cầu MỚI cao hơn
-            // phần đã mua/nhận cho SKU trước. Nếu buyQty vừa tính vẫn cao hơn receivedQty đã chốt,
-            // phần chênh lệch là nhu cầu mua THẬT - tách thành dòng NEW riêng để đi lại từ đầu quy
-            // trình báo giá, thay vì âm thầm sửa số trên hồ sơ đã đóng (không ai còn thấy nó trong
-            // hàng đợi vì activeOnly loại PURCHASED).
-            const shortfall = c.buyQty - existingItem.receivedQty.toNumber();
-            if (shortfall > 0) {
-              await tx.purchaseProposalItem.create({
-                data: {
-                  proposalId: found.id,
-                  materialId: c.materialId,
-                  buyQty: shortfall,
-                  actualStock: c.actualStock,
-                  ...receiveWarehouseOf(c.materialIdStr),
-                },
-              });
-            }
-          } else if (existingItem) {
-            // Chỉ ghi đè status khi dòng đó còn NEW - cùng idiom CuttingProposalsService.approve().
-            const nextStatus =
-              existingItem.status === PurchaseProposalStatus.NEW && c.buyQty === 0
-                ? PurchaseProposalStatus.PURCHASED
-                : undefined;
+          const group = itemsByMaterial.get(c.materialIdStr) ?? [];
+          const plan = planPurchaseRecompute(group.map(toRecomputeItem), c.buyQty);
+          if (plan.update) {
             await tx.purchaseProposalItem.update({
-              where: { id: existingItem.id },
+              where: { id: plan.update.itemId },
               data: {
-                buyQty: c.buyQty,
+                buyQty: plan.update.buyQty,
                 actualStock: c.actualStock,
                 ...receiveWarehouseOf(c.materialIdStr),
-                ...(nextStatus ? { status: nextStatus, purchasedAt: new Date() } : {}),
+                ...(plan.update.clearOrderQty ? { orderQty: null } : {}),
+                ...(plan.update.toPurchased
+                  ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
+                  : {}),
               },
             });
-          } else {
+          }
+          if (plan.create) {
             await tx.purchaseProposalItem.create({
               data: {
                 proposalId: found.id,
                 materialId: c.materialId,
-                buyQty: c.buyQty,
+                buyQty: plan.create.buyQty,
                 actualStock: c.actualStock,
                 ...receiveWarehouseOf(c.materialIdStr),
-                status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
-                purchasedAt: c.buyQty === 0 ? new Date() : undefined,
+                status: plan.create.toPurchased ? PurchaseProposalStatus.PURCHASED : undefined,
+                purchasedAt: plan.create.toPurchased ? new Date() : undefined,
               },
             });
           }
+          const ev = eventFromPlan(c.materialId, plan);
+          if (ev) recomputeEvents.push(ev);
         }
       }
 
@@ -379,6 +364,12 @@ export class PieceMaterialYieldPurchaseService {
       );
     }
 
+    await emitPurchaseRecomputeNotifications(
+      this.prisma,
+      this.notifications,
+      piBigId,
+      recomputeEvents,
+    );
     if (proposal) {
       await notifyPurchaseProposalCreated(this.prisma, this.notifications, proposal.id);
     }

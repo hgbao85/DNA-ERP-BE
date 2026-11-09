@@ -2503,6 +2503,7 @@ describe('CuttingProposalsService', () => {
         materialId: bigint;
         status: PurchaseProposalStatus;
         buyQty: number;
+        orderQty?: number | null;
         receivedQty: number;
       }[],
     ) => {
@@ -2516,6 +2517,7 @@ describe('CuttingProposalsService', () => {
                   materialId: i.materialId,
                   status: i.status,
                   buyQty: { toNumber: () => i.buyQty },
+                  orderQty: i.orderQty == null ? null : { toNumber: () => i.orderQty as number },
                   receivedQty: { toNumber: () => i.receivedQty },
                 }))
               : [{ status: 'NEW' }],
@@ -2696,9 +2698,9 @@ describe('CuttingProposalsService', () => {
       });
     });
 
-    // Ranh giới planned-order / firmed-order: dòng đã QUOTING (người mua đang đi lấy báo giá) là
+    // Ranh giới planned-order / firmed-order (anh Nhân 07/11): dòng Giám đốc ĐÃ KÝ (PURCHASING) là
     // NGUỒN CUNG ĐÃ CHỐT - không được sửa số dưới chân họ, chỉ phần CHÊNH mới thành đơn kế hoạch.
-    it('L1: phần đã CHỐT (QUOTING) được trừ khỏi nhu cầu - chỉ tách dòng kế hoạch cho phần chênh', async () => {
+    it('L1: phần đã KÝ (PURCHASING) được trừ khỏi nhu cầu - chỉ tách dòng kế hoạch cho phần chênh', async () => {
       prisma.cuttingProposal.findUnique.mockResolvedValue({
         id: 2n,
         productionOrderId: 1n,
@@ -2720,18 +2722,18 @@ describe('CuttingProposalsService', () => {
         productionInvoiceItem: { productionInvoiceId: 50n },
       });
       mockGrossLines([{ materialId: 30n, buyBars: 30 }]);
-      // 20 cây đã đi vào quy trình báo giá - coi là nguồn cung đã có.
+      // 20 cây đã được Giám đốc ký - coi là nguồn cung đã có.
       mockExistingPurchaseItems([
-        { materialId: 30n, status: PurchaseProposalStatus.QUOTING, buyQty: 20, receivedQty: 0 },
+        { materialId: 30n, status: PurchaseProposalStatus.PURCHASING, buyQty: 20, receivedQty: 0 },
       ]);
       prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
         id: 900n,
-        items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.QUOTING }],
+        items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.PURCHASING }],
       });
 
       await service.approve('2', 'user-1');
 
-      // Dòng QUOTING KHÔNG bị đụng tới...
+      // Dòng PURCHASING KHÔNG bị đụng tới...
       expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
       // ...và phần chênh 30−20=10 thành dòng kế hoạch MỚI, mang theo đúng cỡ cây.
       expect(prisma.purchaseProposalItem.create).toHaveBeenCalledWith({
@@ -2742,6 +2744,213 @@ describe('CuttingProposalsService', () => {
           stockLengthMm: 5900,
           status: PurchaseProposalStatus.NEW,
         }) as unknown,
+      });
+    });
+
+    // Anh Nhân chốt 07/11: ranh giới "đã ký" - dòng QUOTING/SUBMITTED là CHƯA ký nên ghi đè được; nhu cầu giảm thì bỏ
+    // số mua người mua đã tăng (orderQty) và báo nhập lại; nhu cầu tụt dưới số đã ký thì báo Giám đốc + người mua.
+    describe('tính lại khi nhu cầu giảm (anh Nhân 07/11)', () => {
+      const setupApprove = async (opts: {
+        gross: number;
+        existing: {
+          status: PurchaseProposalStatus;
+          buyQty: number;
+          orderQty?: number | null;
+          receivedQty?: number;
+        }[];
+        proposalItems: {
+          id: bigint;
+          status: PurchaseProposalStatus;
+          buyQty: number;
+          orderQty?: number | null;
+        }[];
+      }) => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue({
+          id: 2n,
+          productionOrderId: 1n,
+          status: CuttingProposalStatus.DRAFT,
+          lines: [
+            { id: 77n, materialId: 30n, feasible: true, totalBars: 8, bestStockLengthMm: 5900 },
+          ],
+        });
+        prisma.cuttingProposal.update.mockResolvedValue({
+          id: 2n,
+          productionOrderId: 1n,
+          status: CuttingProposalStatus.APPROVED,
+          ...productionOrderRelation(),
+        });
+        prisma.material.findMany.mockResolvedValue([
+          { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+        ]);
+        (prisma.material as unknown as { findUnique: jest.Mock }).findUnique = jest
+          .fn()
+          .mockResolvedValue({ code: 'SAT-30', unit: 'cây', buyerId: 'u-buyer' });
+        prisma.productionInvoice.findUnique.mockResolvedValue({ id: 50n, code: 'PI-2026-009' });
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
+          productionInvoiceItem: { productionInvoiceId: 50n },
+        });
+        mockGrossLines([{ materialId: 30n, buyBars: opts.gross }]);
+        mockExistingPurchaseItems(
+          opts.existing.map((e) => ({ materialId: 30n, receivedQty: 0, ...e })),
+        );
+        prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+          id: 900n,
+          items: opts.proposalItems.map((i) => ({
+            ...i,
+            materialId: 30n,
+            buyQty: mockDecimal(i.buyQty),
+            orderQty: i.orderQty == null ? null : mockDecimal(i.orderQty),
+          })),
+        });
+        await service.approve('2', 'user-1');
+      };
+
+      it('lỗi (a): dòng NEW buyQty 100/orderQty 110, nhu cầu tính lại 50 - orderQty về null và báo người mua nhập lại', async () => {
+        await setupApprove({
+          gross: 50,
+          existing: [{ status: PurchaseProposalStatus.NEW, buyQty: 100, orderQty: 110 }],
+          proposalItems: [
+            { id: 5000n, status: PurchaseProposalStatus.NEW, buyQty: 100, orderQty: 110 },
+          ],
+        });
+
+        expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
+          where: { id: 5000n },
+          data: expect.objectContaining({ buyQty: 50, orderQty: null }) as unknown,
+        });
+        expect(notificationsService.emit).toHaveBeenCalledWith(
+          'PURCHASE_ORDER_QTY_RESET',
+          expect.objectContaining({
+            dedupeKey: 'PURCHASE_ORDER_QTY_RESET:50:30',
+            params: expect.objectContaining({
+              piCode: 'PI-2026-009',
+              materialCode: 'SAT-30',
+              oldOrderQty: 110,
+              newBuyQty: 50,
+              slipPrinted: false,
+              buyerIds: ['u-buyer'],
+            }) as unknown,
+          }),
+        );
+      });
+
+      it('dòng QUOTING (chưa ký) nhận phần kế hoạch, không còn bị coi là đã chốt', async () => {
+        await setupApprove({
+          gross: 30,
+          existing: [{ status: PurchaseProposalStatus.QUOTING, buyQty: 40 }],
+          proposalItems: [{ id: 5000n, status: PurchaseProposalStatus.QUOTING, buyQty: 40 }],
+        });
+
+        expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
+          where: { id: 5000n },
+          data: expect.objectContaining({ buyQty: 30 }) as unknown,
+        });
+        expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
+      });
+
+      it('dòng SUBMITTED (phiếu đã in) giảm - báo kèm cờ phiếu cần in lại', async () => {
+        await setupApprove({
+          gross: 50,
+          existing: [{ status: PurchaseProposalStatus.SUBMITTED, buyQty: 100, orderQty: 110 }],
+          proposalItems: [
+            { id: 5000n, status: PurchaseProposalStatus.SUBMITTED, buyQty: 100, orderQty: 110 },
+          ],
+        });
+
+        expect(notificationsService.emit).toHaveBeenCalledWith(
+          'PURCHASE_ORDER_QTY_RESET',
+          expect.objectContaining({
+            params: expect.objectContaining({ slipPrinted: true }) as unknown,
+          }),
+        );
+      });
+
+      it('nhu cầu TĂNG - giữ orderQty và không báo reset', async () => {
+        await setupApprove({
+          gross: 130,
+          existing: [{ status: PurchaseProposalStatus.NEW, buyQty: 100, orderQty: 110 }],
+          proposalItems: [
+            { id: 5000n, status: PurchaseProposalStatus.NEW, buyQty: 100, orderQty: 110 },
+          ],
+        });
+
+        const data = (
+          prisma.purchaseProposalItem.update.mock.calls[0] as [{ data: Record<string, unknown> }]
+        )[0].data;
+        expect(data.buyQty).toBe(130);
+        expect(data).not.toHaveProperty('orderQty');
+        expect(notificationsService.emit).not.toHaveBeenCalledWith(
+          'PURCHASE_ORDER_QTY_RESET',
+          expect.anything(),
+        );
+      });
+
+      it('nhu cầu 40 dưới số đã ký 100 (PURCHASING): không sửa dòng nào, báo PURCHASE_DEMAND_DROPPED', async () => {
+        await setupApprove({
+          gross: 40,
+          existing: [{ status: PurchaseProposalStatus.PURCHASING, buyQty: 100, orderQty: 110 }],
+          proposalItems: [
+            { id: 5000n, status: PurchaseProposalStatus.PURCHASING, buyQty: 100, orderQty: 110 },
+          ],
+        });
+
+        expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+        expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
+        expect(notificationsService.emit).toHaveBeenCalledWith(
+          'PURCHASE_DEMAND_DROPPED',
+          expect.objectContaining({
+            params: expect.objectContaining({ neededQty: 40, signedQty: 110 }) as unknown,
+          }),
+        );
+      });
+
+      it('người mua làm tròn lên lúc ký (cần 100, ký mua 110), nhu cầu vẫn 100: KHÔNG báo nhu cầu giảm', async () => {
+        await setupApprove({
+          gross: 100,
+          existing: [{ status: PurchaseProposalStatus.PURCHASING, buyQty: 100, orderQty: 110 }],
+          proposalItems: [
+            { id: 5000n, status: PurchaseProposalStatus.PURCHASING, buyQty: 100, orderQty: 110 },
+          ],
+        });
+
+        expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+        expect(notificationsService.emit).not.toHaveBeenCalledWith(
+          'PURCHASE_DEMAND_DROPPED',
+          expect.anything(),
+        );
+      });
+
+      it('chỉ còn dòng đã nhận đủ (PURCHASED) nhận vượt: KHÔNG báo nhu cầu giảm', async () => {
+        await setupApprove({
+          gross: 40,
+          existing: [{ status: PurchaseProposalStatus.PURCHASED, buyQty: 40, receivedQty: 45 }],
+          proposalItems: [{ id: 5000n, status: PurchaseProposalStatus.PURCHASED, buyQty: 40 }],
+        });
+
+        expect(notificationsService.emit).not.toHaveBeenCalledWith(
+          'PURCHASE_DEMAND_DROPPED',
+          expect.anything(),
+        );
+      });
+
+      it('nhiều dòng chưa ký cùng vật tư: phần kế hoạch trừ số của dòng chưa ký còn lại, không đếm đúp', async () => {
+        await setupApprove({
+          gross: 120,
+          existing: [
+            { status: PurchaseProposalStatus.QUOTING, buyQty: 100 },
+            { status: PurchaseProposalStatus.NEW, buyQty: 20 },
+          ],
+          proposalItems: [
+            { id: 5000n, status: PurchaseProposalStatus.QUOTING, buyQty: 100 },
+            { id: 5001n, status: PurchaseProposalStatus.NEW, buyQty: 20 },
+          ],
+        });
+
+        expect(prisma.purchaseProposalItem.update).toHaveBeenCalledTimes(1);
+        expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
+          where: { id: 5000n },
+          data: expect.objectContaining({ buyQty: 100 }) as unknown,
+        });
       });
     });
 

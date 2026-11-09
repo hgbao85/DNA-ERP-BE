@@ -193,6 +193,48 @@ describe('NotificationsService', () => {
       expect(arg.data.link.params?.focus).toBe('PI_CODE:PI-2026-031');
     });
 
+    it('Câu 8 (Sản xuất): QC_FAILED với piCode PI- hiện số LSX ở tiêu đề; loại ngoài danh sách không tra PI', async () => {
+      const withPi = prisma as unknown as Record<string, unknown>;
+      withPi.productionInvoice = {
+        findUnique: jest.fn().mockResolvedValue({ id: 9n }),
+        findMany: jest.fn().mockResolvedValue([{ id: 9n, code: 'PI-2026-044' }]),
+      };
+      withPi.productionInvoiceItem = { findMany: jest.fn().mockResolvedValue([]) };
+
+      // Chưa có số LSX nào -> rơi về mã PI: tiêu đề giữ nguyên mã PI.
+      await service.emit('QC_FAILED', {
+        entityId: '5',
+        params: { piCode: 'PI-2026-044', failedQty: 3, senderRole: 'PHOI' },
+      });
+      const [fallback] = prisma.notification.create.mock.calls[0] as [{ data: { title: string } }];
+      expect(fallback.data.title).toBe('PI-2026-044: KCS chấm lỗi 3');
+
+      // Có số LSX: tiêu đề hiện số LSX, link vẫn giữ PI.
+      (withPi.productionInvoiceItem as { findMany: jest.Mock }).findMany = jest
+        .fn()
+        .mockResolvedValue([{ productionInvoiceId: 9n, lsxCode: 'MY-412' }]);
+      prisma.notification.create.mockClear();
+      await service.emit('QC_FAILED', {
+        entityId: '5',
+        params: { piCode: 'PI-2026-044', failedQty: 3, senderRole: 'PHOI' },
+      });
+      const [withLsx] = prisma.notification.create.mock.calls[0] as [{ data: { title: string } }];
+      expect(withLsx.data.title).toBe('MY-412: KCS chấm lỗi 3');
+
+      // Loại không nằm trong danh sách: không tra PI, tiêu đề theo params cũ.
+      (withPi.productionInvoice as { findUnique: jest.Mock }).findUnique.mockClear();
+      prisma.notification.create.mockClear();
+      await service.emit('CUTTING_PROPOSAL_AUTO_APPROVED', {
+        entityId: '1',
+        params: { poNumber: 'PO-1', proposalId: '1', piCode: 'PI-2026-044' },
+      });
+      expect(
+        (withPi.productionInvoice as { findUnique: jest.Mock }).findUnique,
+      ).not.toHaveBeenCalled();
+      const [other] = prisma.notification.create.mock.calls[0] as [{ data: { title: string } }];
+      expect(other.data.title).toBe('Đề xuất cắt sắt cho PO-1 đã tính xong và tự động duyệt');
+    });
+
     it('loại actorId khỏi người nhận (không báo cho chính người vừa thao tác)', async () => {
       await service.emit('CUTTING_PROPOSAL_AUTO_APPROVED', {
         entityId: '1',

@@ -41,6 +41,7 @@ interface LineOpts {
   stockLengthMm?: number | null;
   spec?: string | null;
   supplierOrder?: {
+    id?: number;
     seq: number;
     year: number;
     status: string;
@@ -69,7 +70,7 @@ const line = (o: LineOpts = {}) => ({
     warehouse:
       o.warehouse === undefined ? { code: 'phoi-son-han', name: 'Kho Phôi Sơn Hàn' } : o.warehouse,
   },
-  supplierOrder: o.supplierOrder ?? null,
+  supplierOrder: o.supplierOrder ? { id: 900n, ...o.supplierOrder } : null,
   quotes: o.quotes ?? [],
 });
 
@@ -108,7 +109,7 @@ describe('MaterialsDueService (Phần A – Đợt 4, YC6)', () => {
     purchaseProposalItem: { findMany: jest.Mock };
     productionInvoiceItem: { findMany: jest.Mock };
     productionInvoice: { findMany: jest.Mock };
-    warehouse: { findMany: jest.Mock };
+    warehouse: { findMany: jest.Mock; findFirst: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
   };
   let lines: ReturnType<typeof line>[];
@@ -139,7 +140,10 @@ describe('MaterialsDueService (Phần A – Đợt 4, YC6)', () => {
       productionInvoice: {
         findMany: jest.fn().mockResolvedValue([{ id: 7n, code: 'PI-2026-007' }]),
       },
-      warehouse: { findMany: jest.fn().mockResolvedValue([]) },
+      warehouse: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue({ name: 'Kho Vật tư TP' }),
+      },
       systemConfig: { findUnique: jest.fn().mockResolvedValue({ materialEarliestArrivalDays: 4 }) },
     };
     service = new MaterialsDueService(prisma as never);
@@ -226,6 +230,40 @@ describe('MaterialsDueService (Phần A – Đợt 4, YC6)', () => {
         ['MY-313', 'A', plus(2)],
         ['MY-314', 'B', plus(6)],
       ]);
+    });
+
+    it('lệnh gộp 2 SKU: priorityNote theo thứ tự ranksBefore (hạn sớm trước), dùng số LSX; 1 SKU thì null', async () => {
+      lines = [line()];
+      items = [
+        item({ id: 1, lsx: 'MY-9404', sku: 'B', materialDeadline: plus(6) }),
+        item({ id: 2, lsx: 'MY-9403', sku: 'A', materialDeadline: plus(2) }),
+      ];
+      expect((await all()).rows[0].priorityNote).toBe(
+        'Hàng về chia trước cho MY-9403, rồi MY-9404',
+      );
+
+      items = [item({ id: 1, lsx: 'MY-9404', sku: 'B', materialDeadline: plus(6) })];
+      expect((await all()).rows[0].priorityNote).toBeNull();
+    });
+
+    it('priorityNote: bằng hạn thì dòng vào lệnh trước (id nhỏ), chưa có hạn xếp cuối', async () => {
+      lines = [line()];
+      items = [
+        item({ id: 3, lsx: 'C', sku: 'C', materialDeadline: null }),
+        item({ id: 2, lsx: 'B', sku: 'B', materialDeadline: plus(3) }),
+        item({ id: 1, lsx: 'A', sku: 'A', materialDeadline: plus(3) }),
+      ];
+      expect((await all()).rows[0].priorityNote).toBe('Hàng về chia trước cho A, rồi B, rồi C');
+    });
+
+    it('supplierOrderId có khi dòng đã vào đơn NCC chưa huỷ', async () => {
+      lines = [
+        line({
+          supplierOrder: { seq: 1, year: 2026, status: 'APPROVED', supplier: { name: 'X' } },
+        }),
+      ];
+      items = [item({ materialDeadline: plus(2) })];
+      expect((await all()).rows[0].supplierOrderId).toBe('900');
     });
 
     it('lenhCode của SKU = số LSX của dòng, chưa có thì mã lệnh hiển thị của PI (không phải mã PI khi đã có LSX)', async () => {
@@ -543,7 +581,12 @@ describe('MaterialsDueService (Phần A – Đợt 4, YC6)', () => {
         { view: 'all' },
         NOW,
       );
-      expect(r).toMatchObject({ scope: 'all', canChooseScope: false, warehouseScope: 'vat-tu-tp' });
+      expect(r).toMatchObject({
+        scope: 'all',
+        canChooseScope: false,
+        warehouseScope: 'vat-tu-tp',
+        warehouseScopeName: 'Kho Vật tư TP',
+      });
       expect(r.rows.map((x) => x.lineId).sort()).toEqual(['2', '3']);
     });
 

@@ -69,8 +69,8 @@ export class NotificationsService {
    * lỗi tính toán tiêu chí người nhận (log + bỏ qua) - GHI CHÚ: lỗi ghi DB (create/update) vẫn ném
    * ra bình thường để caller tự quyết định best-effort (try/catch) hay để vỡ transaction.
    */
-  /** Các loại thông báo Mua hàng / Kho (người B) đổi mã PI -> số LSX khi hiển thị. Thông báo bên Kế hoạch/Sản xuất do người A tự
-   *  đổi theo cách riêng - không đụng. */
+  /** Các loại thông báo đổi mã PI -> số LSX (mã lệnh) khi hiển thị, cho cả Mua hàng/Kho lẫn Kế hoạch/Sản xuất. Chỉ đổi khi
+   *  `params.piCode` bắt đầu "PI-". Link + data giữ mã PI (focus=PI_CODE:... phải đúng mã PI). */
   private static readonly LENH_CODE_TYPES: ReadonlySet<string> = new Set([
     'PURCHASE_PROPOSAL_CREATED',
     'PURCHASE_PROPOSAL_READY_TO_RECEIVE',
@@ -84,6 +84,20 @@ export class NotificationsService {
     'MATERIAL_YIELD_ISSUE_TO_PHOI',
     'MATERIAL_YIELD_RECIPE_ISSUE_TO_PHOI',
     'PACKAGING_ISSUE_CREATED',
+    'PI_PRODUCTION_ORDER_FAILED',
+    'FLOOR_STAGE_COMPLETE',
+    'PI_ITEM_DEADLINE_CHANGED',
+    'PRODUCTION_ORDER_FLOOR_FINISHED',
+    'MATERIAL_YIELD_STEP_BUNDLE_TO_KCS',
+    'CUT_BUNDLE_TO_KCS',
+    'BATCH_TO_KCS',
+    'QC_FAILED',
+    'QC_PASSED',
+    // WAREHOUSE_TRANSFER_* không có trong set: tham số là `code` (mã phiếu CK), không có piCode.
+    'TRANSFER_CHECK_DEFECT_FOUND',
+    'PI_ITEM_PACKAGING_COMPLETE',
+    'DELIVERY_AT_RISK',
+    'PURCHASE_ORDER_QTY_RESET',
   ]);
 
   private async withLenhCode<T extends object>(

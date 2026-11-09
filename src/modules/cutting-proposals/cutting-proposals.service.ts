@@ -35,6 +35,15 @@ import { RealtimeService } from '../../realtime/realtime.service';
 import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
 import { NotificationType } from '../notifications/notification-types';
 import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
+import { effectiveOrderQty } from '../purchase-proposals/purchase-order-qty.util';
+import {
+  PurchaseRecomputeEvent,
+  emitPurchaseRecomputeNotifications,
+  isUnsignedStatus,
+  planUnsignedWrite,
+  sortItemsById,
+  toRecomputeItem,
+} from '../../common/utils/purchase-recompute.util';
 import {
   CuttingProposalDisplayStatus,
   CuttingProposalInvoiceReadinessDto,
@@ -2203,6 +2212,9 @@ export class CuttingProposalsService {
     // set bên trong nhánh "existingProposal"/"created" của khối gộp PurchaseProposal, đọc lại ở
     // notifyPurchaseProposalCreated() (best-effort, ngoài transaction).
     let purchaseProposalIdForNotify: bigint | undefined;
+    // Sự kiện báo người mua sau commit (anh Nhân 07/11): bỏ số mua khi nhu cầu giảm / nhu cầu giảm dưới số đã ký.
+    const recomputeEvents: PurchaseRecomputeEvent[] = [];
+    let recomputePiId: bigint | null = null;
 
     const updated = await this.prisma.$transaction(
       async (tx) => {
@@ -2420,6 +2432,18 @@ export class CuttingProposalsService {
             : null;
           const plannedQtyOf = (materialId: bigint, fallback: number) =>
             netByMaterial?.get(materialId)?.planned ?? fallback;
+          // Nhu cầu tụt xuống dưới số ĐÃ KÝ (PURCHASING) / đã nhận (PURCHASED): không sửa dòng đã ký, báo người mua + Giám đốc.
+          recomputePiId = targetProductionInvoiceId ?? null;
+          if (netByMaterial) {
+            for (const [materialId, n] of netByMaterial) {
+              if (n.gross < n.firmed && n.alertDemandDropped) {
+                recomputeEvents.push({
+                  materialId,
+                  demandDropped: { neededQty: n.gross, signedQty: n.firmed },
+                });
+              }
+            }
+          }
 
           if (existingProposal) {
             // Đề xuất chung đã có sẵn (do VTTP/tiêu hao tạo trước, hoặc từ 1 lượt "Tính lại" cắt
@@ -2432,9 +2456,19 @@ export class CuttingProposalsService {
               // ĐƠN ĐÃ CHỐT (QUOTING trở đi - người mua đang báo giá/đã đặt tiền, TUYỆT ĐỐI không
               // sửa). `planned` đã trừ sẵn phần đã chốt (xem computeNetRequirementByMaterial), nên
               // ở đây chỉ còn việc ghi nó vào đúng dòng kế hoạch. Mỗi vật tư tối đa 1 dòng NEW.
-              const plannedLine = existingProposal.items.find(
-                (x) => x.materialId === it.materialId && x.status === PurchaseProposalStatus.NEW,
+              // Dòng CHƯA ký (NEW/QUOTING/SUBMITTED/REJECTED) nhận phần kế hoạch; dòng ĐÃ ký (PURCHASING)/PURCHASED không đụng.
+              const unsignedLines = sortItemsById(existingProposal.items).filter(
+                (x) => x.materialId === it.materialId && isUnsignedStatus(x.status),
               );
+              const plannedLine = unsignedLines[0];
+              // Có nhiều dòng chưa ký cùng vật tư (vd dòng đang báo giá + dòng NEW tách thêm): ghi phần kế hoạch vào dòng đầu,
+              // trừ số thực mua của các dòng chưa ký còn lại để tổng không bị đếm đúp. Các dòng còn lại giữ nguyên.
+              const otherUnsignedQty = unsignedLines
+                .slice(1)
+                .reduce(
+                  (sum, x) => sum + effectiveOrderQty(x.buyQty.toNumber(), x.orderQty?.toNumber()),
+                  0,
+                );
               const anyLine = existingProposal.items.find((x) => x.materialId === it.materialId);
 
               // L3 (2026-08-26): stockLengthMm PHẢI đi kèm mọi đường ghi - thiếu thì dòng sắt của
@@ -2442,11 +2476,22 @@ export class CuttingProposalsService {
               // thẳng it.stockLengthMm vì approve() đã chặn từ trước (findConflictingStockLengthReason,
               // L7) mọi ca 2 SKU cùng loại sắt chốt 2 cỡ cây khác nhau.
               if (plannedLine) {
-                const isCovered = planned === 0;
+                const linePlanned = Math.max(0, planned - otherUnsignedQty);
+                // Nhu cầu giảm mà người mua đã tăng số mua: bỏ orderQty, báo nhập lại (anh Nhân 07/11).
+                const write = planUnsignedWrite(toRecomputeItem(plannedLine), linePlanned);
+                if (write.orderQtyReset) {
+                  recomputeEvents.push({
+                    materialId: it.materialId,
+                    orderQtyReset: write.orderQtyReset,
+                  });
+                }
+                const isCovered =
+                  linePlanned === 0 && plannedLine.status === PurchaseProposalStatus.NEW;
                 await tx.purchaseProposalItem.update({
                   where: { id: plannedLine.id },
                   data: {
-                    buyQty: planned,
+                    buyQty: linePlanned,
+                    ...(write.clearOrderQty ? { orderQty: null } : {}),
                     actualStock: it.actualStock,
                     stockLengthMm: it.stockLengthMm,
                     ...(it.receiveWarehouseCode
@@ -2577,6 +2622,15 @@ export class CuttingProposalsService {
       { timeout: 15_000 },
     );
 
+    if (recomputePiId != null && recomputeEvents.length > 0) {
+      await emitPurchaseRecomputeNotifications(
+        this.prisma,
+        this.notifications,
+        recomputePiId,
+        recomputeEvents,
+        actorUserId,
+      );
+    }
     if (purchaseProposalIdForNotify != null) {
       await notifyPurchaseProposalCreated(
         this.prisma,
@@ -3067,12 +3121,14 @@ export class CuttingProposalsService {
    * từ nguồn gốc thì không còn gì để đoán: chạy lại bao nhiêu lần cũng ra một số (idempotent - yêu
    * cầu bắt buộc của mọi lần chạy MRP), và luôn truy được "35 cây gồm 20 của A + 15 của B".
    *
-   * "ĐÃ CHỐT" = mọi dòng KHÁC trạng thái NEW. Đây là ranh giới planned-order / firmed-order kinh
-   * điển: dòng NEW chưa ai động vào nên được phép ghi đè tự do, còn từ QUOTING trở đi người mua đã
-   * đi lấy báo giá / Sếp đã duyệt NCC / tiền đã đi - sửa số dưới chân họ là sai. Nên phần đã chốt
-   * được coi là NGUỒN CUNG ĐÃ CÓ và chỉ phần chênh mới thành đơn kế hoạch mới.
+   * "ĐÃ CHỐT" = dòng Giám đốc ĐÃ KÝ: PURCHASING (sau "Sếp đã duyệt") và PURCHASED (anh Nhân chốt
+   * 07/11; trước đó là mọi trạng thái khác NEW, gồm cả QUOTING/SUBMITTED). Đây là ranh giới
+   * planned-order / firmed-order kinh điển: dòng CHƯA ký (NEW/QUOTING/SUBMITTED/REJECTED) được ghi
+   * đè số kế hoạch (người mua nhập lại số mua nếu nhu cầu giảm), còn dòng đã ký tiền đã đi - sửa số
+   * dưới chân họ là sai. Nên phần đã ký được coi là NGUỒN CUNG ĐÃ CÓ và chỉ phần chênh mới thành
+   * đơn kế hoạch mới.
    *   - PURCHASED dùng `receivedQty` (hàng đã thật sự về kho, có thể lệch buyQty trong dung sai)
-   *   - các trạng thái chốt khác dùng `buyQty` (đã đặt, đang trên đường về)
+   *   - PURCHASING dùng số thực mua `effectiveOrderQty` (đã đặt, đang trên đường về)
    *
    * Soi MỌI đề xuất mua của PI (không chỉ đề xuất đang mở): 1 đề xuất đã đóng hoàn toàn
    * (PURCHASED) vẫn là hàng đã mua thật, bỏ qua nó sẽ mua lại lần 2 đúng số đã mua khi PI phát sinh
@@ -3082,8 +3138,13 @@ export class CuttingProposalsService {
     tx: PrismaTx,
     productionInvoiceId: bigint,
     materialIds: bigint[],
-  ): Promise<Map<bigint, { gross: number; firmed: number; planned: number }>> {
-    const result = new Map<bigint, { gross: number; firmed: number; planned: number }>();
+  ): Promise<
+    Map<bigint, { gross: number; firmed: number; planned: number; alertDemandDropped: boolean }>
+  > {
+    const result = new Map<
+      bigint,
+      { gross: number; firmed: number; planned: number; alertDemandDropped: boolean }
+    >();
     if (materialIds.length === 0) return result;
     const uniqueMaterialIds = [...new Set(materialIds)];
 
@@ -3111,7 +3172,13 @@ export class CuttingProposalsService {
           materialId: { in: uniqueMaterialIds },
           proposal: { productionInvoiceId },
         },
-        select: { materialId: true, status: true, buyQty: true, receivedQty: true },
+        select: {
+          materialId: true,
+          status: true,
+          buyQty: true,
+          orderQty: true,
+          receivedQty: true,
+        },
       }),
     ]);
 
@@ -3142,18 +3209,24 @@ export class CuttingProposalsService {
         .filter((l) => l.materialId === materialId)
         .reduce((sum, l) => sum + (l.buyBars ?? 0), 0);
       const firmed = purchaseItems
-        .filter((p) => p.materialId === materialId && p.status !== PurchaseProposalStatus.NEW)
+        .filter(
+          (p) =>
+            p.materialId === materialId &&
+            (p.status === PurchaseProposalStatus.PURCHASING ||
+              p.status === PurchaseProposalStatus.PURCHASED),
+        )
         .reduce(
           (sum, p) =>
             sum +
             (p.status === PurchaseProposalStatus.PURCHASED
               ? p.receivedQty.toNumber()
-              : p.buyQty.toNumber()),
+              : effectiveOrderQty(p.buyQty.toNumber(), p.orderQty?.toNumber())),
           0,
         );
       const planned = Math.max(0, gross - firmed);
-      // Nhu cầu tụt xuống dưới phần ĐÃ CHỐT (vd định mức/số lượng SKU bị sửa giảm sau khi Mua hàng
-      // đã đặt) - KHÔNG tự sửa dòng đã chốt (tiền đã đi), cũng KHÔNG im lặng bỏ qua. Đây đúng là
+      // Nhu cầu tụt xuống dưới phần ĐÃ KÝ (vd định mức/số lượng SKU bị sửa giảm sau khi Mua hàng
+      // đã đặt) - KHÔNG tự sửa dòng đã ký (tiền đã đi), cũng KHÔNG im lặng bỏ qua: ghi log ở đây và
+      // approve() báo người mua + Giám đốc sau commit (notifyPurchaseDemandDropped). Đây đúng là
       // "exception message" của MRP: hệ thống không tự quyết được, phải để người xử lý.
       if (gross < firmed) {
         this.logger.warn(
@@ -3161,7 +3234,21 @@ export class CuttingProposalsService {
             `- dư ${firmed - gross} cây. KHÔNG tự sửa dòng đã chốt (báo giá/đơn đã đi), Mua hàng cần xem lại.`,
         );
       }
-      result.set(materialId, { gross, firmed, planned });
+      // Báo "nhu cầu giảm dưới số đã ký" (approve()) chỉ khi: (1) còn dòng đã ký CHƯA về đủ (PURCHASING) - người mua còn
+      // việc để xử lý; chỉ còn dòng PURCHASED nhận vượt (cho phép, xem over-receipt) thì không báo; và (2) nhu cầu thấp hơn
+      // số CẦN MUA lúc ký (buyQty), không phải số thực mua - người mua làm tròn lên (cần 58, mua 60) thì không phải nhu cầu
+      // giảm. `firmed` (số thực mua) vẫn dùng để tính phần còn phải mua thêm.
+      const signedLines = purchaseItems.filter(
+        (p) =>
+          p.materialId === materialId &&
+          (p.status === PurchaseProposalStatus.PURCHASING ||
+            p.status === PurchaseProposalStatus.PURCHASED),
+      );
+      const signedNeed = signedLines.reduce((sum, p) => sum + p.buyQty.toNumber(), 0);
+      const alertDemandDropped =
+        signedLines.some((p) => p.status === PurchaseProposalStatus.PURCHASING) &&
+        gross < signedNeed;
+      result.set(materialId, { gross, firmed, planned, alertDemandDropped });
     }
     return result;
   }
