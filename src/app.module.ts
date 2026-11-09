@@ -28,6 +28,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { SystemConfigModule } from './modules/system-config/system-config.module';
 import { DataHealthModule } from './modules/data-health/data-health.module';
 import { MilestoneBoardModule } from './modules/milestone-board/milestone-board.module';
+import { PieceSyncBoardModule } from './modules/piece-sync-board/piece-sync-board.module';
 import { DailyJobsModule } from './modules/daily-jobs/daily-jobs.module';
 import { MaterialGroupsModule } from './modules/material-groups/material-groups.module';
 import { SuppliersModule } from './modules/suppliers/suppliers.module';
@@ -111,6 +112,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     SystemConfigModule,
     DataHealthModule,
     MilestoneBoardModule,
+    PieceSyncBoardModule,
     DailyJobsModule,
     MaterialGroupsModule,
     SuppliersModule,
