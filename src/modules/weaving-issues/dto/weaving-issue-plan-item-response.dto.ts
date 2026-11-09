@@ -15,11 +15,13 @@ export class WeavingIssuePlanItemResponseDto {
   @Expose() @ApiProperty() issuedQty!: number;
   /** totalQty - issuedQty. Cap dùng bởi WeavingIssuesService.create(). */
   @Expose() @ApiProperty() remainingToIssue!: number;
-  /** min(remainingToIssue, số mảnh THỰC TẾ đã nhận về kho vật tư-TP qua Phân phối nội bộ - đúng
-   *  SKU/PO/PI này - trừ đã xuất) - 2026-09-12. Cap THẬT dùng để chặn ở create() (khác
-   *  remainingToIssue chỉ là kế hoạch định mức, không phản ánh kho đã có hàng thật hay chưa). Xem
-   *  WeavingIssuesService.sumReceivedForPiece. */
+  /** Số mảnh đang nằm trên phiếu xuất đan chờ ký (chưa trừ). */
+  @Expose() @ApiProperty() onDraftQty!: number;
+  /** Trần thật để lập phiếu xuất đan (09/11/2026): min(định mức còn lại, mảnh đã qua KCS công đoạn cuối còn ở kho giữ mảnh) - đã
+   *  trừ phần trên phiếu chờ ký. Cùng công thức chặn ở WeavingIssuesService.assertPieceCapInTx(). */
   @Expose() @ApiProperty() canIssueQty!: number;
+  /** Kho đang giữ mảnh (nơi xuất đan) - thường kho Sơn. null = xưởng chưa có kho tương ứng. */
+  @Expose() @ApiProperty({ nullable: true, type: String }) sourceWarehouseCode!: string | null;
   @Expose()
   @ApiProperty({ type: [WeavingAllocationItemResponseDto] })
   allocations!: WeavingAllocationItemResponseDto[];

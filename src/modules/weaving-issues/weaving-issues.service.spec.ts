@@ -33,7 +33,13 @@ describe('WeavingIssuesService', () => {
       aggregate: jest.Mock;
     };
     productionOrder: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
-    productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
+    productionInvoiceItem: {
+      findUniqueOrThrow: jest.Mock;
+      findUnique: jest.Mock;
+      findFirst: jest.Mock;
+    };
+    productionBatch: { aggregate: jest.Mock; findMany: jest.Mock };
+    issueSlipLine: { aggregate: jest.Mock; findMany: jest.Mock };
     piece: { findUnique: jest.Mock };
     weavingPoint: { findUnique: jest.Mock; findMany: jest.Mock };
     bomPiece: { findUnique: jest.Mock; findMany: jest.Mock };
@@ -41,8 +47,13 @@ describe('WeavingIssuesService', () => {
     pieceMaterialItem: { findMany: jest.Mock };
     bomOption: { findMany: jest.Mock };
     material: { findUnique: jest.Mock };
-    warehouse: { findUniqueOrThrow: jest.Mock; findMany: jest.Mock };
-    weavingIssueMaterial: { create: jest.Mock };
+    warehouse: {
+      findUniqueOrThrow: jest.Mock;
+      findMany: jest.Mock;
+      findFirst: jest.Mock;
+      findUnique: jest.Mock;
+    };
+    weavingIssueMaterial: { create: jest.Mock; findMany: jest.Mock };
     stockQuant: { findMany: jest.Mock };
     warehouseTransferPieceItem: { findMany: jest.Mock; aggregate: jest.Mock };
     $executeRaw: jest.Mock;
@@ -124,6 +135,17 @@ describe('WeavingIssuesService', () => {
       },
       productionInvoiceItem: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceId: 500n }),
+        findUnique: jest.fn().mockResolvedValue({ productionInvoiceId: 500n }),
+        // Xưởng của lệnh (WorkshopWarehouseResolver) - mặc định chưa gắn xưởng.
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      productionBatch: {
+        aggregate: jest.fn().mockResolvedValue({ _sum: { reportedQty: null } }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      issueSlipLine: {
+        aggregate: jest.fn().mockResolvedValue({ _sum: { qty: null } }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       piece: { findUnique: jest.fn().mockResolvedValue(piece) },
       weavingPoint: {
@@ -147,15 +169,20 @@ describe('WeavingIssuesService', () => {
       warehouse: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 999n, code: 'PRODUCTION' }),
         findMany: jest.fn().mockResolvedValue([{ code: 'thanh-pham' }]),
+        // Kho giữ mảnh (Sơn) - mặc định có 1 kho Sơn.
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ id: 70n, code: 'phoi-son-han-son-pa', kind: 'SON', workshopId: 1n }),
+        findUnique: jest.fn().mockResolvedValue(null),
       },
-      weavingIssueMaterial: { create: jest.fn() },
+      weavingIssueMaterial: { create: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
       // Số mảnh đã CONFIRMED từ Phân phối nội bộ (2026-09-12, sumReceivedForPiece/receivedByPiece)
       // - create() mặc định dư dả (không chặn test case cũ không quan tâm ràng buộc mới này);
       // getIssuePlan()/getIssuePlanBatch() mặc định rỗng (canIssueQty=0), test case riêng tự override.
       warehouseTransferPieceItem: {
         findMany: jest.fn().mockResolvedValue([]),
-        aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: 1_000_000 } }),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { quantity: null } }),
       },
       $executeRaw: jest.fn().mockResolvedValue(0),
       $queryRaw: jest.fn().mockResolvedValue([]),
@@ -182,365 +209,314 @@ describe('WeavingIssuesService', () => {
     );
   });
 
-  describe('create', () => {
-    it('happy path - tạo đợt xuất đan mới', async () => {
+  // Xuất đan 2 phiếu (anh Nhân 09/11/2026): phiếu mảnh từ kho giữ mảnh (kho Sơn) + phiếu vật tư kèm từ kho Phụ kiện. Ghi thật
+  // nằm ở IssueSlipsService (cấp số, ảnh ký) - ở đây test phần kiểm và ghi trong transaction.
+  describe('xuất đan 2 phiếu', () => {
+    const sonWarehouse = { id: 70n, code: 'phoi-son-han-son-pa', kind: 'SON', workshopId: 1n };
+    const prepared = () =>
+      ({
+        order: order as never,
+        pieceId: 20n,
+        pieceName: 'Mảnh Đan',
+        weavingPointId: 40n,
+        qty: 10,
+        plannedQty: 40,
+        finalStage: 'SON' as never,
+        warehouse: { id: 70n, code: 'phoi-son-han-son-pa' },
+      }) satisfies Parameters<WeavingIssuesService['assertPieceCapInTx']>[1];
+
+    beforeEach(() => {
+      prisma.bomPiece.findUnique.mockResolvedValue({
+        ...bomPieceRow,
+        needsHan: true,
+        needsSon: true,
+      });
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue({ productionInvoiceId: 500n });
+      prisma.productionInvoiceItem.findFirst.mockResolvedValue({ workshopId: 1n });
+      prisma.warehouse.findFirst.mockResolvedValue(sonWarehouse);
+    });
+
+    describe('prepareWeavingPiece', () => {
+      it('mảnh cần sơn: xuất từ kho Sơn, định mức = qtyPerUnit × SL lệnh', async () => {
+        const p = await service.prepareWeavingPiece('1', '20', 40n, 10, 'phoi-son-han-son-pa');
+        expect(p.warehouse).toEqual({ id: 70n, code: 'phoi-son-han-son-pa' });
+        expect(p.plannedQty).toBe(40);
+        expect(p.finalStage).toBe('SON');
+      });
+
+      it('thủ kho khác kho giữ mảnh (vd kho Phụ kiện) bị chặn', async () => {
+        await expect(service.prepareWeavingPiece('1', '20', 40n, 10, 'vat-tu-tp')).rejects.toThrow(
+          ForbiddenException,
+        );
+      });
+
+      it('mảnh không đan trong định mức của lệnh -> 400', async () => {
+        prisma.bomPiece.findUnique.mockResolvedValue({
+          ...bomPieceRow,
+          isWoven: false,
+          needsHan: true,
+          needsSon: true,
+        });
+        await expect(service.prepareWeavingPiece('1', '20', 40n, 10, null)).rejects.toThrow(
+          BadRequestException,
+        );
+      });
+
+      it('mảnh không có trong định mức -> 404', async () => {
+        prisma.bomPiece.findUnique.mockResolvedValue(null);
+        await expect(service.prepareWeavingPiece('1', '20', 40n, 10, null)).rejects.toThrow(
+          NotFoundException,
+        );
+      });
+
+      it('số mảnh không nguyên / điểm đan ngừng hoạt động -> 400', async () => {
+        await expect(service.prepareWeavingPiece('1', '20', 40n, 1.5, null)).rejects.toThrow(
+          BadRequestException,
+        );
+        prisma.weavingPoint.findUnique.mockResolvedValue({ ...weavingPoint, isActive: false });
+        await expect(service.prepareWeavingPiece('1', '20', 40n, 10, null)).rejects.toThrow(
+          BadRequestException,
+        );
+      });
+
+      it('QLSX chưa bấm "Bắt đầu" cho PI -> 409', async () => {
+        prisma.productionOrder.findFirst.mockResolvedValue(null);
+        await expect(service.prepareWeavingPiece('1', '20', 40n, 10, null)).rejects.toThrow(
+          ConflictException,
+        );
+      });
+    });
+
+    describe('assertPieceCapInTx', () => {
+      beforeEach(() => {
+        // Đã qua KCS Sơn 30 mảnh, chưa xuất, chưa có phiếu nào.
+        prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 30 } });
+      });
+
+      it('đủ định mức và đủ mảnh ở kho -> qua, có khoá advisory', async () => {
+        await expect(
+          service.assertPieceCapInTx(prisma as never, prepared(), null),
+        ).resolves.toBeUndefined();
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
+        const rawCall = prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray;
+        expect(rawCall.join('')).toContain('pg_advisory_xact_lock');
+        expect(prisma.productionBatch.aggregate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+            where: expect.objectContaining({ stage: 'SON', status: 'QC_DONE' }),
+          }),
+        );
+      });
+
+      it('vượt định mức (đã xuất 35 / 40) -> 400', async () => {
+        prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: 35 } });
+        prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 100 } });
+        await expect(service.assertPieceCapInTx(prisma as never, prepared(), null)).rejects.toThrow(
+          /vượt định mức còn lại 5/,
+        );
+      });
+
+      it('vượt số mảnh đã qua KCS còn ở kho -> 400', async () => {
+        prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 8 } });
+        await expect(service.assertPieceCapInTx(prisma as never, prepared(), null)).rejects.toThrow(
+          /vượt số mảnh đã qua KCS còn ở kho phoi-son-han-son-pa \(còn 8\)/,
+        );
+      });
+
+      it('mảnh trên phiếu chờ ký khác + phiếu đã xuất cùng trừ vào phần ở kho', async () => {
+        // 30 qua KCS: 12 trên phiếu chờ ký khác, 10 trên phiếu đã xuất -> còn 8 < 10.
+        prisma.issueSlipLine.aggregate
+          .mockResolvedValueOnce({ _sum: { qty: { toNumber: () => 12 } } })
+          .mockResolvedValueOnce({ _sum: { qty: { toNumber: () => 10 } } });
+        await expect(service.assertPieceCapInTx(prisma as never, prepared(), 9n)).rejects.toThrow(
+          /còn 8/,
+        );
+        expect(prisma.issueSlipLine.aggregate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+            where: expect.objectContaining({
+              kind: 'WEAVING_PIECE',
+              slip: { status: 'DRAFT', id: { not: 9n } },
+            }),
+          }),
+        );
+      });
+
+      it('mảnh đã chuyển sang kho Phụ kiện theo luồng cũ không tính là còn ở kho Sơn', async () => {
+        prisma.warehouseTransferPieceItem.aggregate.mockResolvedValue({ _sum: { quantity: 25 } });
+        await expect(service.assertPieceCapInTx(prisma as never, prepared(), null)).rejects.toThrow(
+          /còn 5/,
+        );
+      });
+    });
+
+    it('createPieceIssueInTx: tạo WeavingIssue + trừ tồn mảnh kho Sơn -> PRODUCTION', async () => {
       prisma.weavingIssue.create.mockResolvedValue(issueRow);
-
-      const result = await service.create(
-        '1',
-        { pieceId: '20', weavingPointId: '40', qty: 10 },
+      await service.createPieceIssueInTx(
+        prisma as never,
+        prepared(),
         'user-1',
-        null,
+        'issue-slip:9:line:1',
       );
-
       expect(prisma.weavingIssue.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
           data: expect.objectContaining({
             productionOrderId: 1n,
             pieceId: 20n,
             weavingPointId: 40n,
             qty: 10,
+            idempotencyKey: 'issue-slip:9:line:1',
           }),
         }),
       );
-      expect(result.id).toBe('100');
-    });
-
-    it('2026-09-12: chặn xuất vượt số mảnh THỰC TẾ đã nhận từ Phân phối nội bộ (kho chưa nhận đủ), dù định mức còn cho phép nhiều hơn', async () => {
-      // plannedQty = qtyPerUnit(4) × quantity(10) = 40 -> định mức thừa sức cho qty=10, nhưng kho
-      // vật tư-TP mới CONFIRMED nhận 6 mảnh - phải chặn theo số thật này, không phải định mức.
-      prisma.warehouseTransferPieceItem.aggregate.mockResolvedValue({ _sum: { quantity: 6 } });
-
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
-      ).rejects.toThrow(BadRequestException);
-      expect(prisma.weavingIssue.create).not.toHaveBeenCalled();
-    });
-
-    it('2026-09-12: cho phép xuất đúng bằng số đã nhận thật (biên) - và tính đúng aggregate theo (productionOrderId, pieceId) CONFIRMED', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-      prisma.warehouseTransferPieceItem.aggregate.mockResolvedValue({ _sum: { quantity: 10 } });
-
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
-      ).resolves.toBeDefined();
-
-      expect(prisma.warehouseTransferPieceItem.aggregate).toHaveBeenCalledWith({
-        where: {
-          productionOrderId: 1n,
-          pieceId: 20n,
-          // Đợt 7: phiếu Hàn Phước An -> Sơn Phú An (nội bộ nhóm Phôi-Hàn-Sơn) không tính là "đã nhận".
-          transfer: {
-            status: 'CONFIRMED',
-            toWarehouse: { NOT: { code: { startsWith: 'phoi-son-han' } } },
-          },
-        },
-        _sum: { quantity: true },
-      });
-    });
-
-    it('YC11: vật tư mang kèm đan bị chặn khi phần dư sau khi chừa cho SKU sớm hơn trong lệnh gộp không đủ', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-      prisma.material.findUnique.mockResolvedValue({ id: 60n, code: 'DAY-2LY', warehouseId: 900n });
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 50 } }]);
-      stockReservationsService.getAvailableQty.mockResolvedValue(20);
-      (loadSkuPriorityHoldback as jest.Mock).mockResolvedValueOnce({
-        qty: 8,
-        holders: [
-          {
-            productionOrderId: '2',
-            lenhCode: 'MY-313',
-            deadline: new Date('2026-11-10T00:00:00+07:00'),
-            qty: 8,
-          },
-        ],
-      });
-
-      const err = await service
-        .create(
-          '1',
-          {
-            pieceId: '20',
-            weavingPointId: '40',
-            qty: 10,
-            materials: [{ materialId: '60', qty: 15 }],
-          },
-          'user-1',
-          null,
-        )
-        .catch((e: Error) => e);
-      expect(err).toBeInstanceOf(ConflictException);
-      expect((err as Error).message).toContain('đang chừa 8 cho lệnh MY-313');
-      expect((err as Error).message).toContain('chỉ còn xuất được 12');
-      expect(prisma.weavingIssueMaterial.create).not.toHaveBeenCalled();
-    });
-
-    it('2026-09-11: có materials mang kèm - trừ tồn thật (FOR UPDATE + getAvailableQty + postEntry TRONG transaction), tạo dòng WeavingIssueMaterial', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-      prisma.material.findUnique.mockResolvedValue({ id: 60n, code: 'DAY-2LY', warehouseId: 900n });
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 50 } }]);
-      stockReservationsService.getAvailableQty.mockResolvedValue(45);
-
-      await service.create(
-        '1',
-        {
-          pieceId: '20',
-          weavingPointId: '40',
-          qty: 10,
-          materials: [{ materialId: '60', qty: 15 }],
-        },
-        'user-1',
-        null,
-      );
-
-      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
-        expect.anything(),
-        900n,
-        60n,
-        50,
-        undefined,
-        500n, // PI đang xuất - chỉ trừ giữ chỗ của PI KHÁC
-      );
-      expect(prisma.weavingIssueMaterial.create).toHaveBeenCalledWith({
-        data: { weavingIssueId: 100n, materialId: 60n, qty: 15 },
-      });
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({
-          fromWarehouseId: 900n,
+          fromWarehouseId: 70n,
           toWarehouseId: 999n,
-          materialId: 60n,
-          qty: 15,
-          refType: 'WEAVING_ISSUE_MATERIAL',
+          pieceId: 20n,
+          qty: 10,
+          refType: 'WEAVING_ISSUE',
           refId: '100',
         }),
         expect.anything(),
       );
-      // 2026-09-23: ConsumableMaterialPurchaseService giờ giữ chỗ (StockReservation) phần tồn dùng
-      // để che phủ demand cho Dây/Đinh/Nút nhựa (PieceMaterialItem) - phải "trả nợ" giữ chỗ đó khi
-      // thủ kho thực xuất kèm mảnh, cùng lý do/cùng idiom MaterialIssuesService.create().
-      expect(stockReservationsService.drainPoolBestEffort).toHaveBeenCalledWith(expect.anything(), {
+    });
+
+    describe('vật tư kèm (phiếu 2)', () => {
+      beforeEach(() => {
+        prisma.materialGroup.findMany.mockResolvedValue([{ id: 7n, systemKey: 'WIRE' }]);
+        prisma.pieceMaterialItem.findMany.mockResolvedValue([
+          {
+            bomRevisionId: 5n,
+            pieceId: 20n,
+            materialId: 60n,
+            qtyPerPiece: { toNumber: () => 1.5 },
+            includeInWeaving: false,
+            material: {
+              code: 'DAY-2LY',
+              name: 'Dây 2 ly',
+              spec: null,
+              unit: 'kg',
+              materialGroupId: 7n,
+              warehouseId: 900n,
+            },
+          },
+        ]);
+        prisma.material.findUnique.mockResolvedValue({
+          code: 'DAY-2LY',
+          warehouseId: 900n,
+          warehouse: { code: 'vat-tu-tp' },
+        });
+      });
+
+      it('prepareWeavingMaterial: vật tư đúng danh sách đi kèm, đúng kho Phụ kiện', async () => {
+        const p = await service.prepareWeavingMaterial('1', '20', '60', 40n, 15, 'vat-tu-tp');
+        expect(p).toEqual(
+          expect.objectContaining({
+            materialId: 60n,
+            warehouseId: 900n,
+            productionInvoiceId: 500n,
+            qty: 15,
+          }),
+        );
+      });
+
+      it('prepareWeavingMaterial: vật tư không đi kèm mảnh này -> 400; kho khác -> 403', async () => {
+        await expect(
+          service.prepareWeavingMaterial('1', '20', '61', 40n, 15, null),
+        ).rejects.toThrow(BadRequestException);
+        await expect(
+          service.prepareWeavingMaterial('1', '20', '60', 40n, 15, 'phoi-son-han-son-pa'),
+        ).rejects.toThrow(ForbiddenException);
+      });
+
+      const preparedMaterial = () => ({
+        order: order as never,
         productionInvoiceId: 500n,
+        pieceId: 20n,
+        weavingPointId: 40n,
         materialId: 60n,
+        materialCode: 'DAY-2LY',
+        warehouseId: 900n,
         qty: 15,
       });
-    });
 
-    it('2026-10-27: giữ chỗ của CHÍNH PI (giữ toàn bộ định mức Dây/Đinh) không chặn việc mang kèm của chính PI đó - getAvailableQty tự loại giữ chỗ của PI này qua ownProductionInvoiceId (thay cho cộng-lại ownPiRemaining của 2026-10-05)', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-      prisma.material.findUnique.mockResolvedValue({ id: 60n, code: 'DAY-001', warehouseId: 900n });
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 240 } }]);
-      // Tồn 240, toàn bộ đang bị giữ bởi chính PI này -> ngoài PI này còn lại 240
-      stockReservationsService.getAvailableQty.mockResolvedValue(240);
+      it('createMaterialIssueInTx: trừ tồn thật, ghi WeavingIssueMaterial theo lệnh/mảnh/điểm đan, trả giữ chỗ', async () => {
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 50 } }]);
+        stockReservationsService.getAvailableQty.mockResolvedValue(45);
+        prisma.weavingIssueMaterial.create.mockResolvedValue({ id: 300n });
 
-      await service.create(
-        '1',
-        {
-          pieceId: '20',
-          weavingPointId: '40',
-          qty: 10,
-          materials: [{ materialId: '60', qty: 60 }],
-        },
-        'user-1',
-        null,
-      );
+        await service.createMaterialIssueInTx(prisma as never, preparedMaterial(), 'user-1', 'k-1');
 
-      expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
-        expect.anything(),
-        900n,
-        60n,
-        240,
-        undefined,
-        500n,
-      );
-      expect(prisma.weavingIssueMaterial.create).toHaveBeenCalled();
-      expect(stockLedgerService.postEntry).toHaveBeenCalled();
-    });
-
-    it('2026-09-11: tồn khả dụng không đủ cho vật tư mang kèm - ConflictException, không tạo WeavingIssueMaterial/ghi sổ', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-      prisma.material.findUnique.mockResolvedValue({ id: 60n, code: 'DAY-2LY', warehouseId: 900n });
-      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 5 } }]);
-      stockReservationsService.getAvailableQty.mockResolvedValue(5);
-
-      await expect(
-        service.create(
-          '1',
-          {
-            pieceId: '20',
-            weavingPointId: '40',
-            qty: 10,
-            materials: [{ materialId: '60', qty: 15 }],
+        expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
+          expect.anything(),
+          900n,
+          60n,
+          50,
+          undefined,
+          500n,
+        );
+        expect(prisma.weavingIssueMaterial.create).toHaveBeenCalledWith({
+          data: {
+            productionOrderId: 1n,
+            pieceId: 20n,
+            weavingPointId: 40n,
+            materialId: 60n,
+            qty: 15,
           },
-          'user-1',
-          null,
-        ),
-      ).rejects.toThrow(ConflictException);
-
-      expect(prisma.weavingIssueMaterial.create).not.toHaveBeenCalled();
-      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
-    });
-
-    it('2026-09-11: materialId trùng lặp trong danh sách mang kèm - BadRequestException, không mở transaction', async () => {
-      await expect(
-        service.create(
-          '1',
+        });
+        expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+          expect.objectContaining({
+            fromWarehouseId: 900n,
+            toWarehouseId: 999n,
+            materialId: 60n,
+            qty: 15,
+            refType: 'WEAVING_ISSUE_MATERIAL',
+            refId: '300',
+            idempotencyKey: 'k-1',
+          }),
+          expect.anything(),
+        );
+        expect(stockReservationsService.drainPoolBestEffort).toHaveBeenCalledWith(
+          expect.anything(),
           {
-            pieceId: '20',
-            weavingPointId: '40',
-            qty: 10,
-            materials: [
-              { materialId: '60', qty: 5 },
-              { materialId: '60', qty: 3 },
-            ],
+            productionInvoiceId: 500n,
+            materialId: 60n,
+            qty: 15,
           },
-          'user-1',
-          null,
-        ),
-      ).rejects.toThrow(BadRequestException);
-      expect(prisma.weavingIssue.create).not.toHaveBeenCalled();
-    });
+        );
+      });
 
-    it('2026-09-11: dòng qty<=0 bị lọc bỏ, không tạo WeavingIssueMaterial/gọi tồn kho', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
+      it('createMaterialIssueInTx: tồn khả dụng thiếu -> 409, không ghi', async () => {
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 10 } }]);
+        stockReservationsService.getAvailableQty.mockResolvedValue(10);
+        await expect(
+          service.createMaterialIssueInTx(prisma as never, preparedMaterial(), 'user-1', 'k-1'),
+        ).rejects.toThrow(ConflictException);
+        expect(prisma.weavingIssueMaterial.create).not.toHaveBeenCalled();
+      });
 
-      await service.create(
-        '1',
-        { pieceId: '20', weavingPointId: '40', qty: 10, materials: [{ materialId: '60', qty: 0 }] },
-        'user-1',
-        null,
-      );
-
-      expect(prisma.material.findUnique).not.toHaveBeenCalled();
-      expect(prisma.weavingIssueMaterial.create).not.toHaveBeenCalled();
-    });
-
-    it('idempotency short-circuit - trả về đợt cũ, không tạo mới', async () => {
-      prisma.weavingIssue.findUnique.mockResolvedValue(issueRow);
-
-      const result = await service.create(
-        '1',
-        { pieceId: '20', weavingPointId: '40', qty: 10 },
-        'user-1',
-        null,
-        'idem-key-1',
-      );
-
-      expect(prisma.weavingIssue.create).not.toHaveBeenCalled();
-      expect(result.id).toBe('100');
-    });
-
-    it('chặn caller bị giới hạn ở kho khác kho vật tư-TP', async () => {
-      await expect(
-        service.create(
-          '1',
-          { pieceId: '20', weavingPointId: '40', qty: 10 },
-          'user-1',
-          'thanh-pham',
-        ),
-      ).rejects.toThrow(ForbiddenException);
-      expect(prisma.weavingIssue.create).not.toHaveBeenCalled();
-    });
-
-    it('cho phép caller không có warehouseScope (tổng kho)', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
-      ).resolves.toBeDefined();
-    });
-
-    it('2026-09-03: cho phép caller thuộc kho vat-tu-tp PHỤ (trước đây chỉ đúng literal kho gốc mới qua được, bất đối xứng với nhánh receive() đã vá 08/31)', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-      await expect(
-        service.create(
-          '1',
-          { pieceId: '20', weavingPointId: '40', qty: 10 },
-          'user-1',
-          'vat-tu-tp-2',
-        ),
-      ).resolves.toBeDefined();
-    });
-
-    it('ném NotFoundException khi production order không tồn tại', async () => {
-      prisma.productionOrder.findUnique.mockResolvedValue(null);
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('ném NotFoundException khi mảnh không tồn tại', async () => {
-      prisma.piece.findUnique.mockResolvedValue(null);
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('ném BadRequestException khi mảnh không thuộc công đoạn Đan (isWoven=false trên BomPiece của revision này)', async () => {
-      prisma.bomPiece.findUnique.mockResolvedValue({ ...bomPieceRow, isWoven: false });
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('ném NotFoundException khi điểm đan không tồn tại', async () => {
-      prisma.weavingPoint.findUnique.mockResolvedValue(null);
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('ném BadRequestException khi điểm đan đã ngừng hoạt động', async () => {
-      prisma.weavingPoint.findUnique.mockResolvedValue({ ...weavingPoint, isActive: false });
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('ném NotFoundException khi mảnh không thuộc BOM của lệnh sản xuất này', async () => {
-      prisma.bomPiece.findUnique.mockResolvedValue(null);
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('ném BadRequestException khi vượt quá số lượng còn có thể xuất', async () => {
-      // plannedQty = 40, chưa xuất gì -> remaining = 40
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 41 }, 'user-1', null),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('cho phép xuất đúng bằng remaining (biên)', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 40 }, 'user-1', null),
-      ).resolves.toBeDefined();
-    });
-
-    it('cộng dồn đã xuất từ MỌI điểm đan khác khi tính remaining', async () => {
-      // đã xuất 35 (tổng mọi điểm đan) -> remaining = 40 - 35 = 5
-      prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: 35 } });
-
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '41', qty: 6 }, 'user-1', null),
-      ).rejects.toThrow(BadRequestException);
-
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '41', qty: 5 }, 'user-1', null),
-      ).resolves.toBeDefined();
-    });
-
-    it('khoá advisory theo (order, piece) TRONG transaction trước khi đọc remaining (H4 fix - chặn race đọc-rồi-ghi)', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-
-      await service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null);
-
-      expect(prisma.$transaction).toHaveBeenCalled();
-      expect(prisma.$executeRaw).toHaveBeenCalled();
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
-      const rawCall = prisma.$executeRaw.mock.calls[0][0] as TemplateStringsArray;
-      expect(rawCall.join('')).toContain('pg_advisory_xact_lock');
+      it('createMaterialIssueInTx: YC11 chừa phần SKU sớm hơn -> 409', async () => {
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 20 } }]);
+        stockReservationsService.getAvailableQty.mockResolvedValue(20);
+        (loadSkuPriorityHoldback as jest.Mock).mockResolvedValueOnce({
+          qty: 8,
+          holders: [
+            {
+              productionOrderId: '2',
+              lenhCode: 'MY-313',
+              deadline: new Date('2026-11-10T00:00:00+07:00'),
+              qty: 8,
+            },
+          ],
+        });
+        const err = await service
+          .createMaterialIssueInTx(prisma as never, preparedMaterial(), 'user-1', 'k-1')
+          .catch((e: Error) => e);
+        expect(err).toBeInstanceOf(ConflictException);
+        expect(prisma.weavingIssueMaterial.create).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -689,19 +665,6 @@ describe('WeavingIssuesService', () => {
   });
 
   describe('create/receive - QLSX "Bắt đầu" gate (assertItemPiHasActiveFloor, 2026-08-31)', () => {
-    it('create: ném ConflictException khi PI của order chưa có SKU nào ACTIVE', async () => {
-      prisma.productionOrder.findFirst.mockResolvedValue(null);
-
-      await expect(
-        service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null),
-      ).rejects.toThrow(ConflictException);
-      expect(prisma.productionInvoiceItem.findUniqueOrThrow).toHaveBeenCalledWith({
-        where: { id: 21n },
-        select: { productionInvoiceId: true },
-      });
-      expect(prisma.weavingIssue.create).not.toHaveBeenCalled();
-    });
-
     it('receive: ném ConflictException khi PI của order chưa có SKU nào ACTIVE', async () => {
       prisma.productionOrder.findFirst.mockResolvedValue(null);
 
@@ -713,15 +676,10 @@ describe('WeavingIssuesService', () => {
   });
 
   describe('notify WEAVING_ISSUE_TO_POINT (nhóm 7.5-iv, xuất/nhận đan)', () => {
-    it('create(): emit() với entityId/dedupeKey ghép + outstandingQty tính lại SAU transaction (thấy cả lần xuất vừa tạo)', async () => {
-      prisma.weavingIssue.create.mockResolvedValue(issueRow);
-      // Gọi 1 (trong tx, cho remaining): issuedSoFar = 0. Gọi 2 (ngoài tx, recompute outstanding
-      // SAU KHI đã commit): đã thấy dòng vừa tạo -> 10.
-      prisma.weavingIssue.aggregate
-        .mockResolvedValueOnce({ _sum: { qty: 0 } })
-        .mockResolvedValueOnce({ _sum: { qty: 10 } });
+    it('afterPieceIssue(): emit() với entityId/dedupeKey ghép + outstandingQty tính lại SAU commit (thấy cả lần xuất vừa tạo)', async () => {
+      prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: 10 } });
 
-      await service.create('1', { pieceId: '20', weavingPointId: '40', qty: 10 }, 'user-1', null);
+      await service.afterPieceIssue(issueRow as never, 'user-1');
 
       expect(notificationsService.emit).toHaveBeenCalledWith(
         'WEAVING_ISSUE_TO_POINT',
@@ -739,20 +697,6 @@ describe('WeavingIssuesService', () => {
           }),
         }),
       );
-    });
-
-    it('create(): idempotency short-circuit - KHÔNG emit lại', async () => {
-      prisma.weavingIssue.findUnique.mockResolvedValue(issueRow);
-
-      await service.create(
-        '1',
-        { pieceId: '20', weavingPointId: '40', qty: 10 },
-        'user-1',
-        null,
-        'idem-key-1',
-      );
-
-      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     it('receive(): resolve() khi outstanding tại điểm đan về ĐÚNG 0 sau khi nhận', async () => {
@@ -819,20 +763,38 @@ describe('WeavingIssuesService', () => {
       expect(result[0].allocations).toHaveLength(0);
     });
 
-    it('2026-09-12: canIssueQty = min(remainingToIssue định mức, đã nhận thật - đã xuất) - kho chưa nhận đủ thì bị chặn ở số thật, không phải định mức', async () => {
-      // plannedQty=40 (định mức thừa), nhưng kho vật tư-TP mới CONFIRMED nhận 15, đã xuất đan 5
-      // rồi -> canIssueQty phải = 15 - 5 = 10, KHÔNG phải remainingToIssue = 40 - 5 = 35.
-      prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
-      prisma.weavingIssue.findMany.mockResolvedValue([
-        { pieceId: 20n, weavingPointId: 40n, qty: 5, weavingPoint, materials: [] },
+    it('09/11/2026: canIssueQty = min(định mức còn lại, mảnh qua KCS Sơn còn ở kho Sơn) - trừ cả phiếu chờ ký', async () => {
+      // Định mức 40; Sơn QC_DONE 15; đã xuất 5 qua phiếu, 3 đang trên phiếu chờ ký -> còn ở kho 15-5-3 = 7.
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { ...bomPieceRow, needsHan: true, needsSon: true, piece },
       ]);
-      prisma.warehouseTransferPieceItem.findMany.mockResolvedValue([
-        { pieceId: 20n, quantity: 15 },
+      prisma.weavingIssue.findMany.mockResolvedValue([
+        { productionOrderId: 1n, pieceId: 20n, weavingPointId: 40n, qty: 5, weavingPoint },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { productionOrderId: 1n, pieceId: 20n, stage: 'SON', reportedQty: 15 },
+        { productionOrderId: 1n, pieceId: 20n, stage: 'HAN', reportedQty: 30 },
+      ]);
+      prisma.issueSlipLine.findMany.mockResolvedValue([
+        {
+          productionOrderId: 1n,
+          pieceId: 20n,
+          qty: { toNumber: () => 5 },
+          slip: { status: 'ISSUED' },
+        },
+        {
+          productionOrderId: 1n,
+          pieceId: 20n,
+          qty: { toNumber: () => 3 },
+          slip: { status: 'DRAFT' },
+        },
       ]);
 
       const result = await service.getIssuePlan('1');
       expect(result[0].remainingToIssue).toBe(35);
-      expect(result[0].canIssueQty).toBe(10);
+      expect(result[0].onDraftQty).toBe(3);
+      expect(result[0].canIssueQty).toBe(7);
+      expect(result[0].sourceWarehouseCode).toBe('phoi-son-han-son-pa');
     });
 
     it('2026-09-12: canIssueQty không âm khi đã xuất vượt số đã nhận (dữ liệu lịch sử/race hiếm)', async () => {
@@ -852,11 +814,11 @@ describe('WeavingIssuesService', () => {
       const pointB = { id: 41n, code: 'DIEM-B', fullName: 'Điểm đan B', isActive: true };
       prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
       prisma.weavingIssue.findMany.mockResolvedValue([
-        { pieceId: 20n, weavingPointId: 40n, qty: 15, weavingPoint },
-        { pieceId: 20n, weavingPointId: 41n, qty: 20, weavingPoint: pointB },
+        { productionOrderId: 1n, pieceId: 20n, weavingPointId: 40n, qty: 15, weavingPoint },
+        { productionOrderId: 1n, pieceId: 20n, weavingPointId: 41n, qty: 20, weavingPoint: pointB },
       ]);
       prisma.weavingReceipt.findMany.mockResolvedValue([
-        { pieceId: 20n, weavingPointId: 40n, qty: 5, weavingPoint },
+        { productionOrderId: 1n, pieceId: 20n, weavingPointId: 40n, qty: 5, weavingPoint },
       ]);
 
       const result = await service.getIssuePlan('1');
@@ -1033,22 +995,11 @@ describe('WeavingIssuesService', () => {
       prisma.stockQuant.findMany.mockResolvedValue([
         { warehouseId: 900n, materialId: 60n, qty: { toNumber: () => 120 } },
       ]);
-      // 2 lần xuất đan (2 điểm đan khác nhau) cho cùng mảnh - issuedQty phải CỘNG DỒN cả 2.
-      prisma.weavingIssue.findMany.mockResolvedValue([
-        {
-          pieceId: 20n,
-          weavingPointId: 40n,
-          qty: 5,
-          weavingPoint,
-          materials: [{ materialId: 60n, qty: { toNumber: () => 15 } }],
-        },
-        {
-          pieceId: 20n,
-          weavingPointId: 41n,
-          qty: 5,
-          weavingPoint: { id: 41n, code: 'DIEM-B', fullName: 'Điểm đan B', isActive: true },
-          materials: [{ materialId: 60n, qty: { toNumber: () => 9 } }],
-        },
+      // 2 lần cấp kèm (2 điểm đan khác nhau) cho cùng mảnh - issuedQty phải CỘNG DỒN cả 2; dòng của lệnh khác không tính.
+      prisma.weavingIssueMaterial.findMany.mockResolvedValue([
+        { productionOrderId: 1n, pieceId: 20n, materialId: 60n, qty: { toNumber: () => 15 } },
+        { productionOrderId: 1n, pieceId: 20n, materialId: 60n, qty: { toNumber: () => 9 } },
+        { productionOrderId: 2n, pieceId: 20n, materialId: 60n, qty: { toNumber: () => 100 } },
       ]);
 
       const result = await service.getIssuePlan('1');
@@ -1109,6 +1060,7 @@ describe('WeavingIssuesService', () => {
 
     it('getIssuePlan: chỉ trả dây lệnh đã chọn, vẫn trả đinh', async () => {
       prisma.productionOrder.findUnique.mockResolvedValue({ ...order, wireMaterialId: 61n });
+      prisma.productionOrder.findMany.mockResolvedValue([{ ...order, wireMaterialId: 61n }]);
 
       const [item] = await service.getIssuePlan('1');
 
@@ -1140,24 +1092,17 @@ describe('WeavingIssuesService', () => {
       expect(prisma.bomOption.findMany).toHaveBeenCalledTimes(1);
     });
 
-    it('create: từ chối mang kèm dây không thuộc loại đã chọn cho lệnh (400), không tạo phiếu xuất', async () => {
+    it('prepareWeavingMaterial: từ chối cấp kèm dây không thuộc loại đã chọn cho lệnh (400)', async () => {
       prisma.productionOrder.findUnique.mockResolvedValue({ ...order, wireMaterialId: 61n });
-      prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: null } });
+      prisma.bomPiece.findUnique.mockResolvedValue({
+        ...bomPieceRow,
+        needsHan: true,
+        needsSon: true,
+      });
 
       await expect(
-        service.create(
-          '1',
-          {
-            pieceId: '20',
-            weavingPointId: '40',
-            qty: 1,
-            materials: [{ materialId: '60', qty: 3 }],
-          },
-          'user-1',
-          'vat-tu-tp',
-        ),
+        service.prepareWeavingMaterial('1', '20', '60', 40n, 3, 'vat-tu-tp'),
       ).rejects.toThrow(/không thuộc màu dây\/vải nệm đã chọn/);
-      expect(prisma.weavingIssue.create).not.toHaveBeenCalled();
     });
   });
 
@@ -1217,24 +1162,27 @@ describe('WeavingIssuesService', () => {
       const order2 = { ...order, id: 2n, poNumber: 'PO-32-1', quantity: 5 };
       prisma.productionOrder.findMany.mockResolvedValue([order, order2]);
       prisma.bomPiece.findMany.mockResolvedValue([{ ...bomPieceRow, piece }]);
-      // Order 1: đã nhận 15, đã xuất 5 -> canIssueQty = 10.
-      // Order 2: đã nhận 100 (nhiều hơn hẳn), đã xuất 0 -> canIssueQty phải = 20 (bị chặn bởi
-      // remainingToIssue = totalQty(20) - issuedQty(0), KHÔNG phải 100) - nếu code lỡ gộp nhầm
-      // theo pieceId toàn cục, order 1 sẽ ăn ké số 100 của order 2 và trả sai canIssueQty=35.
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { ...bomPieceRow, needsHan: true, needsSon: true, piece },
+      ]);
+      // Order 1: qua KCS Sơn 15, đã xuất 5 qua phiếu -> canIssueQty = 10.
+      // Order 2: qua KCS Sơn 100, chưa xuất -> canIssueQty = 20 (bị chặn bởi định mức 20) - nếu code
+      // lỡ gộp nhầm theo pieceId toàn cục, order 1 sẽ ăn ké số 100 của order 2.
       prisma.weavingIssue.findMany.mockResolvedValue([
+        { productionOrderId: 1n, pieceId: 20n, weavingPointId: 40n, qty: 5, weavingPoint },
+      ]);
+      prisma.weavingReceipt.findMany.mockResolvedValue([]);
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { productionOrderId: 1n, pieceId: 20n, stage: 'SON', reportedQty: 15 },
+        { productionOrderId: 2n, pieceId: 20n, stage: 'SON', reportedQty: 100 },
+      ]);
+      prisma.issueSlipLine.findMany.mockResolvedValue([
         {
           productionOrderId: 1n,
           pieceId: 20n,
-          weavingPointId: 40n,
-          qty: 5,
-          weavingPoint,
-          materials: [],
+          qty: { toNumber: () => 5 },
+          slip: { status: 'ISSUED' },
         },
-      ]);
-      prisma.weavingReceipt.findMany.mockResolvedValue([]);
-      prisma.warehouseTransferPieceItem.findMany.mockResolvedValue([
-        { productionOrderId: 1n, pieceId: 20n, quantity: 15 },
-        { productionOrderId: 2n, pieceId: 20n, quantity: 100 },
       ]);
 
       const result = await service.getIssuePlanBatch(['1', '2']);

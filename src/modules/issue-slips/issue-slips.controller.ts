@@ -42,6 +42,13 @@ export class IssueSlipsController {
     return this.slips.findAll(query, scope);
   }
 
+  /** Vật tư cần cấp kèm đan theo từng phiếu mảnh còn thiếu (kho Phụ kiện lập phiếu vật tư kèm). Đặt TRƯỚC ':id'. */
+  @Get('weaving-material-demand')
+  @RequirePermissions(VIEW)
+  weavingMaterialDemand(@CurrentUser('warehouseScope') scope: string | null) {
+    return this.slips.getWeavingMaterialDemand(scope);
+  }
+
   @Get(':id')
   @RequirePermissions(VIEW)
   findOne(@Param('id') id: string) {

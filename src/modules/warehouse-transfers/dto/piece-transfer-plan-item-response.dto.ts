@@ -23,6 +23,8 @@ export class PieceTransferPlanItemResponseDto {
   @Expose() @ApiProperty() transferredQty!: number;
   /** max(0, readyQty - transferredQty) - số gợi ý khi tạo phiếu, không ép cứng. */
   @Expose() @ApiProperty() suggestedQty!: number;
+  /** Kho Thành phẩm QLSX đã chọn cho SKU này (ProductionInvoiceItem.warehouseCode) - đích của phiếu chuyển mảnh không đan. */
+  @Expose() @ApiProperty({ nullable: true, type: String }) finishedWarehouseCode!: string | null;
 
   constructor(partial: Partial<PieceTransferPlanItemResponseDto>) {
     Object.assign(this, partial);
