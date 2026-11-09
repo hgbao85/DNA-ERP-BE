@@ -5,14 +5,31 @@ import { DeadlineChangesPort } from './deadline-changes.port';
 import { DEADLINE_FIELDS, DeadlineEntryCheck, DeadlineEntryInput } from './deadline-changes.types';
 import {
   DeadlinePlanExcelService,
+  columnLetter,
   dayToExcelDate,
   expectedShiftFormula,
   parseDateCell,
   planFileStamp,
 } from './deadline-plan-excel.service';
 
-const COL = { lenh: 1, sku: 2, status: 6, first: 7, itemId: 19, json: 20 };
+// v3 (06/11): bố cục theo file Kế hoạch cắt sắt của KHSX.
+const COL = {
+  lenh: 1,
+  po: 2,
+  sku: 3,
+  skuName: 4,
+  qty: 5,
+  cont: 6,
+  cushion: 7,
+  workshop: 8,
+  status: 9,
+  first: 10,
+  itemId: 22,
+  json: 23,
+};
 const colOf = (key: string) => COL.first + DEADLINE_FIELDS.findIndex((f) => f.key === key);
+/** Chữ cột của mốc `key` - công thức trong test không phụ thuộc vị trí cột. */
+const L = (key: string) => columnLetter(colOf(key));
 
 const d = (s: string) => new Date(`${s}T00:00:00+07:00`);
 
@@ -26,8 +43,10 @@ function makeItem(over: Record<string, any> = {}) {
     materialDeadline: d('2026-11-10'),
     finishedMaterialDeadline: d('2026-12-01'),
     deliveryDeadline: d('2026-12-20'),
-    mfgProduct: { factoryCode: 'J55', name: 'Ghế J55' },
+    mfgProduct: { factoryCode: 'J55', name: 'Ghế J55', loadCont: 200 },
     workshop: { name: 'Xưởng 1' },
+    salesOrder: { orderCode: 'FSD2026092900068' },
+    cushionMaterial: { name: 'Nệm cream white' },
     stages: [
       { stageType: 'PHOI_START', deadline: d('2026-11-11') },
       { stageType: 'FRAME_PHOI', deadline: d('2026-11-12') },
@@ -116,10 +135,40 @@ describe('DeadlinePlanExcelService - xuất', () => {
     const ws = wb.getWorksheet('Kế hoạch')!;
     expect(ws.views[0]).toMatchObject({ state: 'frozen', ySplit: 1 });
     expect(ws.getRow(1).values).toEqual(
-      expect.arrayContaining(['Mã lệnh', 'SKU', 'Phôi', 'Mua VT còn lại', 'Hạn giao (chỉ xem)']),
+      expect.arrayContaining([
+        'Lệnh SX',
+        'Số PO',
+        'Mã IEA',
+        'Tên SKU',
+        'SL',
+        'Số cont',
+        'Nệm',
+        'Xưởng',
+        'Trạng thái',
+        'Phôi xong',
+        'Xuất đan xong (Khung)',
+        'Nhập kho (Nhập đan)',
+        'NK đủ vật tư đóng gói (Mua VT còn lại)',
+        'Đóng gói xong',
+        'Hạn giao (chỉ xem)',
+      ]),
     );
-    expect(ws.getCell(1, colOf('stage.FRAME_PHOI')).value).toBe('Phôi');
+    // Thứ tự cột theo file KHSX: Lệnh SX, Số PO, Mã IEA, Tên SKU, SL, Số cont, Nệm, Xưởng, Trạng thái, rồi 11 mốc.
+    expect(ws.getCell(1, COL.po).value).toBe('Số PO');
+    expect(ws.getCell(1, COL.cont).value).toBe('Số cont');
+    expect(ws.getCell(1, COL.status).value).toBe('Trạng thái');
+    expect(ws.getCell(1, colOf('materialDeadline')).value).toBe('Mua VT khung & đan');
+    expect(ws.getCell(1, colOf('stage.FRAME_PHOI')).value).toBe('Phôi xong');
+    expect(ws.getCell(1, colOf('stage.PACKAGING')).value).toBe('Đóng gói xong');
+    expect(ws.getCell(1, COL.itemId - 1).value).toBe('Hạn giao (chỉ xem)');
     expect(ws.getCell(2, COL.lenh).value).toBe('MY-313');
+    expect(ws.getCell(2, COL.po).value).toBe('FSD2026092900068');
+    expect(ws.getCell(2, COL.sku).value).toBe('J55');
+    expect(ws.getCell(2, COL.skuName).value).toBe('Ghế J55');
+    expect(ws.getCell(2, COL.qty).value).toBe(50);
+    expect(ws.getCell(2, COL.cont).value).toBe(0.25); // 50 ÷ load cont 200
+    expect(ws.getCell(2, COL.cushion).value).toBe('Nệm cream white');
+    expect(ws.getCell(2, COL.workshop).value).toBe('Xưởng 1');
     expect(ws.getCell(2, COL.status).value).toBe('Đã duyệt, chưa cắt – sửa cần Sếp duyệt lại');
     expect(ws.getColumn(COL.itemId).hidden).toBe(true);
     expect(ws.getColumn(COL.json).hidden).toBe(true);
@@ -134,7 +183,7 @@ describe('DeadlinePlanExcelService - xuất', () => {
     expect(marker.state).toBe('hidden');
     expect(JSON.parse(String(marker.getCell('A1').value))).toMatchObject({
       kind: 'dna-erp-deadline-plan',
-      v: 2,
+      v: 3,
     });
     // Sheet "Hướng dẫn" nằm sau "Kế hoạch", trước "_dna".
     expect(wb.worksheets.map((w) => w.name)).toEqual(['Kế hoạch', 'Hướng dẫn', '_dna']);
@@ -161,11 +210,11 @@ describe('DeadlinePlanExcelService - xuất', () => {
     const ws = wb.getWorksheet('Kế hoạch')!;
     const f = (r: number, key: string) => (ws.getCell(r, colOf(key)).value as any)?.formula;
     expect(f(2, 'stage.PHOI_START')).toBeUndefined(); // mốc sản xuất đầu tiên: giá trị thường
-    expect(f(2, 'stage.FRAME_PHOI')).toBe('H2-2');
-    expect(f(2, 'stage.FRAME_SON')).toBe('I2+5'); // Hàn trống → lấy Phôi (11-09) → Sơn 11-14
-    expect(f(2, 'stage.FRAME')).toBe('K2+1');
-    expect(f(2, 'stage.PACKAGING_START')).toBe('N2+1'); // bỏ qua Mua VT còn lại (không phải mốc sản xuất)
-    expect(f(2, 'stage.PACKAGING')).toBe('P2+1');
+    expect(f(2, 'stage.FRAME_PHOI')).toBe(`${L('stage.PHOI_START')}2-2`);
+    expect(f(2, 'stage.FRAME_SON')).toBe(`${L('stage.FRAME_PHOI')}2+5`); // Hàn trống → lấy Phôi (11-09) → Sơn 11-14
+    expect(f(2, 'stage.FRAME')).toBe(`${L('stage.FRAME_SON')}2+1`);
+    expect(f(2, 'stage.PACKAGING_START')).toBe(`${L('stage.TRANSFER_CHECK')}2+1`); // bỏ qua Mua VT còn lại (không phải mốc sản xuất)
+    expect(f(2, 'stage.PACKAGING')).toBe(`${L('stage.PACKAGING_START')}2+1`);
     expect(f(2, 'materialDeadline')).toBeUndefined();
     expect(f(2, 'finishedMaterialDeadline')).toBeUndefined();
     expect(f(2, 'stage.FRAME_HAN')).toBeUndefined();
@@ -181,7 +230,7 @@ describe('DeadlinePlanExcelService - xuất', () => {
 
   it('expectedShiftFormula: gap 0 ra "+0"; khoá không phải mốc sản xuất ra null', () => {
     const v: any = { 'stage.PHOI_START': '2026-11-11', 'stage.FRAME_PHOI': '2026-11-11' };
-    expect(expectedShiftFormula(v, 'stage.FRAME_PHOI', 5)).toBe('H5+0');
+    expect(expectedShiftFormula(v, 'stage.FRAME_PHOI', 5)).toBe(`${L('stage.PHOI_START')}5+0`);
     expect(expectedShiftFormula(v, 'materialDeadline', 5)).toBeNull();
     expect(expectedShiftFormula(v, 'stage.PHOI_START', 5)).toBeNull();
     expect(expectedShiftFormula(v, 'stage.FRAME_HAN', 5)).toBeNull();
@@ -407,11 +456,11 @@ describe('DeadlinePlanExcelService - xem trước', () => {
       const edited = await editWorkbook(buffer, (ws) => {
         // Dòng 2: KHSX tự viết công thức (I2+9 thay vì I2+1) → lấy kết quả làm ô gõ (Hàn 11-21, +8 ngày).
         ws.getCell(2, colOf('stage.FRAME_HAN')).value = {
-          formula: 'I2+9',
+          formula: `${L('stage.FRAME_PHOI')}2+9`,
           result: dayToExcelDate('2026-11-21'),
         } as any;
         // Dòng 3: công thức không kết quả.
-        ws.getCell(3, colOf('stage.FRAME_HAN')).value = { formula: 'I3+9' };
+        ws.getCell(3, colOf('stage.FRAME_HAN')).value = { formula: `${L('stage.FRAME_PHOI')}3+9` };
       });
       const res = await service.preview(edited, 'a.xlsx');
       const sent = port.previewEntries.mock.calls[0][0];
@@ -420,7 +469,7 @@ describe('DeadlinePlanExcelService - xem trước', () => {
       expect(sent[0].newValues['stage.FRAME_SON']).toBe('2026-11-22');
       const err = res.rows.find((r) => r.rowNumber === 3)!;
       expect(err.kind).toBe('ERROR');
-      expect(err.errors).toEqual(['ô Hàn có công thức không ra ngày – gõ ngày vào ô']);
+      expect(err.errors).toEqual(['ô Hàn xong có công thức không ra ngày – gõ ngày vào ô']);
     });
 
     it('công thức đúng chữ nhưng tham chiếu SAI dòng (dán từ dòng khác) → coi là ô gõ, không tự dời', async () => {
@@ -428,7 +477,7 @@ describe('DeadlinePlanExcelService - xem trước', () => {
       const { buffer } = await service.exportPlan('all');
       const edited = await editWorkbook(buffer, (ws) => {
         ws.getCell(3, colOf('stage.FRAME_HAN')).value = {
-          formula: 'I2+1',
+          formula: `${L('stage.FRAME_PHOI')}2+1`,
           result: dayToExcelDate('2026-11-13'),
         } as any;
       });
@@ -442,7 +491,7 @@ describe('DeadlinePlanExcelService - xem trước', () => {
       const edited = await editWorkbook(buffer, (ws) => {
         ws.getCell(2, colOf('stage.PHOI_START')).value = dayToExcelDate('2026-11-14');
         ws.getCell(2, colOf('stage.FRAME_PHOI')).value = {
-          formula: '$h$2 + 1',
+          formula: `$${L('stage.PHOI_START').toLowerCase()}$2 + 1`,
           result: dayToExcelDate('2026-11-12'),
         } as any;
       });
@@ -460,17 +509,17 @@ describe('DeadlinePlanExcelService - xem trước', () => {
         ws.getCell(2, colOf('stage.PHOI_START')).value = dayToExcelDate('2026-11-14');
         // Phôi (I2) = H2+1 là bản gốc chia sẻ; Hàn (J2) và Sơn (K2) là bản con.
         ws.getCell(2, colOf('stage.FRAME_PHOI')).value = {
-          formula: 'H2+1',
+          formula: `${L('stage.PHOI_START')}2+1`,
           shareType: 'shared',
-          ref: 'I2:K2',
+          ref: `${L('stage.FRAME_PHOI')}2:${L('stage.FRAME_SON')}2`,
           result: dayToExcelDate('2026-11-12'),
         } as any;
         ws.getCell(2, colOf('stage.FRAME_HAN')).value = {
-          sharedFormula: 'I2',
+          sharedFormula: `${L('stage.FRAME_PHOI')}2`,
           result: dayToExcelDate('2026-11-13'),
         } as any;
         ws.getCell(2, colOf('stage.FRAME_SON')).value = {
-          sharedFormula: 'I2',
+          sharedFormula: `${L('stage.FRAME_PHOI')}2`,
           result: dayToExcelDate('2026-11-14'),
         } as any;
       });
@@ -482,26 +531,36 @@ describe('DeadlinePlanExcelService - xem trước', () => {
       expect(nv['stage.FRAME_SON']).toBe('2026-11-17');
     });
 
-    it('file marker v1 (không công thức) vẫn đọc được và không tự dời', async () => {
+    it('file mẫu cũ v1 / v2 (cột kiểu cũ) → 400 báo tải file mới, không đọc lệch cột', async () => {
       const { service, port } = setup([makeItem()]);
       const { buffer } = await service.exportPlan('all');
-      const v1 = await editWorkbook(buffer, (ws, wb) => {
-        wb.getWorksheet('_dna')!.getCell('A1').value = JSON.stringify({
-          kind: 'dna-erp-deadline-plan',
-          v: 1,
+      for (const v of [1, 2]) {
+        const old = await editWorkbook(buffer, (_ws, wb) => {
+          wb.getWorksheet('_dna')!.getCell('A1').value = JSON.stringify({
+            kind: 'dna-erp-deadline-plan',
+            v,
+          });
         });
-        // File v1: mọi ô mốc là giá trị thường.
-        for (const f of DEADLINE_FIELDS) {
-          const cell = ws.getCell(2, colOf(f.key));
-          const v: any = cell.value;
-          if (v && typeof v === 'object' && 'formula' in v) cell.value = v.result;
-        }
-        ws.getCell(2, colOf('stage.FRAME_PHOI')).value = dayToExcelDate('2026-11-20');
-      });
-      await service.preview(v1, 'v1.xlsx');
-      expect(port.previewEntries.mock.calls[0][0][0].newValues).toEqual({
-        'stage.FRAME_PHOI': '2026-11-20',
-      });
+        await expect(service.preview(old, 'cu.xlsx')).rejects.toThrow('File kế hoạch mẫu cũ');
+      }
+      expect(port.previewEntries).not.toHaveBeenCalled();
+    });
+
+    it('SKU chưa có load cont / không gắn đơn / không nệm → ô Số cont, Số PO, Nệm để trống', async () => {
+      const { service } = setup([
+        makeItem({
+          mfgProduct: { factoryCode: 'J55', name: 'Ghế J55', loadCont: null },
+          salesOrder: null,
+          cushionMaterial: null,
+        }),
+      ]);
+      const { buffer } = await service.exportPlan('all');
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(buffer as any);
+      const ws = wb.getWorksheet('Kế hoạch')!;
+      expect(ws.getCell(2, COL.cont).value).toBeNull();
+      expect(ws.getCell(2, COL.po).value ?? '').toBe('');
+      expect(ws.getCell(2, COL.cushion).value ?? '').toBe('');
     });
   });
 
@@ -529,7 +588,7 @@ describe('DeadlinePlanExcelService - xem trước', () => {
     });
     const res = await service.preview(edited, 'e.xlsx');
     expect(res.counts.error).toBe(1);
-    expect(res.rows[0].errors).toEqual(["ô Phôi không phải ngày hợp lệ: 'abc'"]);
+    expect(res.rows[0].errors).toEqual(["ô Phôi xong không phải ngày hợp lệ: 'abc'"]);
     expect(port.previewEntries).not.toHaveBeenCalled();
   });
 
