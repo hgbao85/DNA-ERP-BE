@@ -7,8 +7,9 @@
  * `getUTC*`). Excel không có múi giờ nên số serial chính là "ngày lịch" - ghi/đọc theo UTC thì ngày không bao giờ lệch dù máy chạy
  * ở TZ nào (khác với vnDayStart = 00:00 giờ VN = 17:00 UTC hôm trước, sẽ lệch 1 ngày nếu ghi thẳng).
  *
- * BỐ CỤC: sheet "Kế hoạch" (dòng 1 tiêu đề, đóng băng) · A Mã lệnh · B SKU · C Tên SKU · D SL · E Xưởng · F Trạng thái · G..Q 11 mốc
- * theo DEADLINE_FIELDS · R Hạn giao (chỉ xem) · S (ẨN) mã dòng · T (ẨN) JSON giá trị mốc lúc xuất. Sheet ẨN "_dna" giữ dấu file.
+ * BỐ CỤC (v3, 06/11 - xếp theo file "Kế hoạch cắt sắt" KHSX đang dùng): sheet "Kế hoạch" (dòng 1 tiêu đề, đóng băng) · A Lệnh SX · B Số PO
+ * · C Mã IEA · D Tên SKU · E SL · F Số cont · G Nệm · H Xưởng · I Trạng thái · J..T 11 mốc theo DEADLINE_FIELDS (tiêu đề theo tên KHSX gọi,
+ * `EXCEL_FIELD_HEADER`) · U Hạn giao (chỉ xem) · V (ẨN) mã dòng · W (ẨN) JSON giá trị mốc lúc xuất. Sheet ẨN "_dna" giữ dấu file.
  * Sheet được khoá (không mật khẩu): chỉ ô mốc của dòng sửa được là mở khoá; dòng đang chờ Sếp duyệt lại khoá hết.
  * Ô mốc để TRỐNG = giữ nguyên; ô ĐỔI = khác giá trị lúc xuất (cột T).
  *
@@ -18,6 +19,7 @@
  */
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import ExcelJS from 'exceljs';
+import { contEquivalent } from '../../../common/utils/container-load.util';
 import { loadLenhDisplayCodes } from '../../../common/utils/lenh-code.util';
 import { VN_OFFSET_MS, vnDayKey } from '../../../common/utils/floor-stats.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../../prisma/prisma.service';
@@ -35,7 +37,6 @@ import {
 import {
   AUTO_SHIFT_KEYS,
   daysBetween,
-  fieldLabel,
   resolveAutoShift,
   valuesOfItem,
 } from './deadline-values.util';
@@ -43,21 +44,28 @@ import {
 export const PLAN_SHEET_NAME = 'Kế hoạch';
 export const MARKER_SHEET_NAME = '_dna';
 export const MARKER_KIND = 'dna-erp-deadline-plan';
-/** Phần A – Đợt 9 phần 2: v2 = có công thức mốc tự dời. Đọc chấp nhận v1 (không công thức → không tự dời) và v2. */
-export const MARKER_VERSION = 2;
-const MARKER_VERSIONS_ACCEPTED = [1, 2];
+/**
+ * Phần A – Đợt 9 phần 2: v2 = có công thức mốc tự dời. v3 (06/11) = đổi vị trí cột theo file KHSX → file v1/v2 đọc theo cột mới sẽ lệch
+ * nên KHÔNG nhận nữa (báo tải file mới, `OLD_MARKER_VERSIONS`).
+ */
+export const MARKER_VERSION = 3;
+const MARKER_VERSIONS_ACCEPTED = [3];
+const OLD_MARKER_VERSIONS = [1, 2];
 export const GUIDE_SHEET_NAME = 'Hướng dẫn';
 export const MAX_PLAN_ROWS = 2000;
 export const MAX_PLAN_FILE_BYTES = 2 * 1024 * 1024;
 
 /** Vị trí cột (1-based). Cột mốc = COL_FIRST_DEADLINE + chỉ số trong DEADLINE_FIELDS. */
 const COL_LENH = 1;
-const COL_SKU = 2;
-const COL_SKU_NAME = 3;
-const COL_QTY = 4;
-const COL_WORKSHOP = 5;
-const COL_STATUS = 6;
-const COL_FIRST_DEADLINE = 7;
+const COL_PO = 2;
+const COL_SKU = 3;
+const COL_SKU_NAME = 4;
+const COL_QTY = 5;
+const COL_CONT = 6;
+const COL_CUSHION = 7;
+const COL_WORKSHOP = 8;
+const COL_STATUS = 9;
+const COL_FIRST_DEADLINE = 10;
 const COL_DELIVERY = COL_FIRST_DEADLINE + DEADLINE_FIELDS.length;
 const COL_ITEM_ID = COL_DELIVERY + 1;
 const COL_EXPORTED_JSON = COL_DELIVERY + 2;
@@ -65,6 +73,25 @@ const COL_EXPORTED_JSON = COL_DELIVERY + 2;
 const STATUS_DRAFT = 'Chưa duyệt';
 const STATUS_APPROVED = 'Đã duyệt, chưa cắt – sửa cần Sếp duyệt lại';
 const STATUS_PENDING = 'Đang chờ Sếp duyệt lại – không sửa được';
+
+/**
+ * Tiêu đề cột mốc trong file = tên KHSX quen gọi ở file "Kế hoạch cắt sắt", trong ngoặc là tên trên phần mềm khi khác (người dùng giải thích
+ * 06/11: xuất đan = giao khung đã sơn + dây, đinh, vật tư đan cho bên đan; "hàng trần" = hàng không đan, sơn xong nhập kho đóng gói).
+ * Chỉ dùng cho file Excel (tiêu đề + câu lỗi theo ô); màn hình / bản xem trước vẫn dùng `fieldLabel`.
+ */
+export const EXCEL_FIELD_HEADER: Record<DeadlineFieldKey, string> = {
+  materialDeadline: 'Mua VT khung & đan',
+  'stage.PHOI_START': 'Bắt đầu Phôi',
+  'stage.FRAME_PHOI': 'Phôi xong',
+  'stage.FRAME_HAN': 'Hàn xong',
+  'stage.FRAME_SON': 'Sơn xong',
+  'stage.FRAME': 'Xuất đan xong (Khung)',
+  'stage.WEAVING': 'Nhập kho (Nhập đan)',
+  'stage.TRANSFER_CHECK': 'Chuyền kiểm',
+  finishedMaterialDeadline: 'NK đủ vật tư đóng gói (Mua VT còn lại)',
+  'stage.PACKAGING_START': 'Bắt đầu đóng gói',
+  'stage.PACKAGING': 'Đóng gói xong',
+};
 
 const DATE_FORMAT = 'dd/mm/yyyy';
 const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -250,8 +277,10 @@ export class DeadlinePlanExcelService {
         materialDeadline: true,
         finishedMaterialDeadline: true,
         deliveryDeadline: true,
-        mfgProduct: { select: { factoryCode: true, name: true } },
+        mfgProduct: { select: { factoryCode: true, name: true, loadCont: true } },
         workshop: { select: { name: true } },
+        salesOrder: { select: { orderCode: true } },
+        cushionMaterial: { select: { name: true } },
         stages: { select: { stageType: true, deadline: true } },
         productionInvoice: { select: { deadline: true } },
       },
@@ -282,11 +311,14 @@ export class DeadlinePlanExcelService {
     const ws = wb.addWorksheet(PLAN_SHEET_NAME, { views: [{ state: 'frozen', ySplit: 1 }] });
     ws.columns = [
       { width: 16 },
+      { width: 24 }, // Số PO (PO khách dài, vd FSD2026092900068)
       { width: 18 },
-      { width: 34 },
+      { width: 30 },
+      { width: 7 },
       { width: 8 },
-      { width: 16 },
-      { width: 38 },
+      { width: 18 },
+      { width: 17 }, // Xưởng ("Xưởng Phước An")
+      { width: 34 },
       ...DEADLINE_FIELDS.map(() => ({ width: 14 })),
       { width: 14 },
       { width: 10, hidden: true },
@@ -294,21 +326,25 @@ export class DeadlinePlanExcelService {
     ];
 
     const header = ws.getRow(1);
-    header.getCell(COL_LENH).value = 'Mã lệnh';
-    header.getCell(COL_SKU).value = 'SKU';
+    header.getCell(COL_LENH).value = 'Lệnh SX';
+    header.getCell(COL_PO).value = 'Số PO';
+    header.getCell(COL_SKU).value = 'Mã IEA';
     header.getCell(COL_SKU_NAME).value = 'Tên SKU';
     header.getCell(COL_QTY).value = 'SL';
+    header.getCell(COL_CONT).value = 'Số cont';
+    header.getCell(COL_CUSHION).value = 'Nệm';
     header.getCell(COL_WORKSHOP).value = 'Xưởng';
     header.getCell(COL_STATUS).value = 'Trạng thái';
     DEADLINE_FIELDS.forEach((f, i) => {
-      header.getCell(COL_FIRST_DEADLINE + i).value = f.label;
+      header.getCell(COL_FIRST_DEADLINE + i).value = EXCEL_FIELD_HEADER[f.key];
     });
     header.getCell(COL_DELIVERY).value = 'Hạn giao (chỉ xem)';
     header.getCell(COL_ITEM_ID).value = 'Mã dòng';
     header.getCell(COL_EXPORTED_JSON).value = 'Giá trị lúc xuất';
     header.font = { bold: true };
     header.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-    header.height = 32;
+    // Tiêu đề dài nhất ("NK đủ vật tư đóng gói (Mua VT còn lại)") xuống 3 dòng ở cột rộng 14.
+    header.height = 48;
     header.eachCell((c) => {
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
     });
@@ -322,9 +358,14 @@ export class DeadlinePlanExcelService {
           ? STATUS_APPROVED
           : STATUS_DRAFT;
       row.getCell(COL_LENH).value = lenh;
+      row.getCell(COL_PO).value = it.salesOrder?.orderCode ?? '';
       row.getCell(COL_SKU).value = it.mfgProduct.factoryCode;
       row.getCell(COL_SKU_NAME).value = it.mfgProduct.name;
       row.getCell(COL_QTY).value = it.quantity;
+      // Số cont quy đổi = SL ÷ load cont của SKU (Đợt 1), 2 số lẻ như file KHSX (1,3 · 1,6); SKU chưa có load cont thì để trống.
+      const cont = contEquivalent(it.quantity, it.mfgProduct.loadCont);
+      row.getCell(COL_CONT).value = cont === null ? null : Math.round(cont * 100) / 100;
+      row.getCell(COL_CUSHION).value = it.cushionMaterial?.name ?? '';
       row.getCell(COL_WORKSHOP).value = it.workshop?.name ?? '';
       row.getCell(COL_STATUS).value = status;
       DEADLINE_FIELDS.forEach((f, i) => {
@@ -385,12 +426,14 @@ export class DeadlinePlanExcelService {
     const lines = [
       'Cách sửa file kế hoạch',
       'File chỉ có lệnh CHƯA bắt đầu sản xuất (chưa cắt phôi). Lệnh đã bắt đầu cắt không sửa mốc được nữa.',
-      'Sửa 1 mốc sản xuất (Bắt đầu Phôi … Đóng gói) thì các mốc sản xuất sau nó tự dời cùng số ngày. Mua VT và Hạn giao không tự dời.',
+      'Chỉ sửa được các ô ngày tô vàng. Cột Lệnh SX, Số PO, Mã IEA, Tên SKU, SL, Số cont, Nệm, Xưởng, Hạn giao chỉ để xem.',
+      'Tên cột ngày theo cách gọi của Kế hoạch, trong ngoặc là tên trên phần mềm: Xuất đan xong (Khung) = ngày giao khung đã sơn cùng dây, đinh, vật tư đan cho bên đan; Nhập kho (Nhập đan) = ngày hàng đan về nhập kho, hàng trần (không đan) là ngày sơn xong nhập kho; NK đủ vật tư đóng gói (Mua VT còn lại) = ngày vật tư đóng gói về đủ.',
+      'Sửa 1 mốc sản xuất (Bắt đầu Phôi … Đóng gói xong) thì các mốc sản xuất sau nó tự dời cùng số ngày. 2 cột Mua VT (Mua VT khung & đan, NK đủ vật tư đóng gói) và Hạn giao không tự dời.',
       'Muốn giữ 1 mốc phía sau không dời: gõ lại đúng ngày cũ vào ô đó.',
-      'Ô để trống = giữ nguyên mốc cũ (không xoá mốc qua file).',
+      'Ô để trống = giữ nguyên mốc cũ (không xoá mốc qua file). Ngày có nửa ngày (vd cộng 1,5) thì phần mềm lấy đúng ngày đang hiện trong ô.',
       'Mốc sau sớm hơn mốc trước (vd Hàn trước Phôi, Đóng gói sau Hạn giao) thì dòng đó không lưu được – sửa lại cho đúng thứ tự.',
       "Dòng 'Chưa duyệt' lưu ngay khi Xác nhận; dòng 'Đã duyệt, chưa cắt' sửa xong phải chờ Sếp duyệt lại; dòng 'Đang chờ Sếp duyệt lại' không sửa được.",
-      'Không thêm / xoá dòng, không sửa cột Mã lệnh / SKU. File để lâu thì tải file mới.',
+      'Không thêm / xoá dòng, không đổi chỗ cột. File để lâu thì tải file mới.',
     ];
     lines.forEach((text, i) => {
       const c = g.getCell(i + 1, 1);
@@ -513,8 +556,10 @@ export class DeadlinePlanExcelService {
           const pf = parseDateCell(r.cells[i]);
           if (pf.kind === 'ok') explicit[f.key] = pf.day;
           else if (pf.kind === 'empty')
-            errors.push(`ô ${fieldLabel(f.key)} có công thức không ra ngày – gõ ngày vào ô`);
-          else errors.push(`ô ${fieldLabel(f.key)} không phải ngày hợp lệ: '${pf.raw}'`);
+            errors.push(
+              `ô ${EXCEL_FIELD_HEADER[f.key]} có công thức không ra ngày – gõ ngày vào ô`,
+            );
+          else errors.push(`ô ${EXCEL_FIELD_HEADER[f.key]} không phải ngày hợp lệ: '${pf.raw}'`);
           return;
         }
         const parsed = parseDateCell(r.cells[i]);
@@ -524,7 +569,7 @@ export class DeadlinePlanExcelService {
           return;
         }
         if (parsed.kind === 'bad') {
-          errors.push(`ô ${fieldLabel(f.key)} không phải ngày hợp lệ: '${parsed.raw}'`);
+          errors.push(`ô ${EXCEL_FIELD_HEADER[f.key]} không phải ngày hợp lệ: '${parsed.raw}'`);
           return;
         }
         explicit[f.key] = parsed.day;
@@ -606,20 +651,19 @@ export class DeadlinePlanExcelService {
     const err = new BadRequestException('Không phải file kế hoạch tải từ hệ thống');
     const sheet = wb.getWorksheet(MARKER_SHEET_NAME);
     if (!sheet) throw err;
+    let parsed: { kind?: unknown; v?: unknown };
     try {
-      const parsed = JSON.parse(cellText(sheet.getCell('A1').value)) as {
-        kind?: unknown;
-        v?: unknown;
-      };
-      if (
-        parsed.kind !== MARKER_KIND ||
-        typeof parsed.v !== 'number' ||
-        !MARKER_VERSIONS_ACCEPTED.includes(parsed.v)
-      )
-        throw err;
+      parsed = JSON.parse(cellText(sheet.getCell('A1').value)) as typeof parsed;
     } catch {
       throw err;
     }
+    if (!parsed || parsed.kind !== MARKER_KIND || typeof parsed.v !== 'number') throw err;
+    if (OLD_MARKER_VERSIONS.includes(parsed.v)) {
+      throw new BadRequestException(
+        'File kế hoạch mẫu cũ (trước khi đổi cột theo file Kế hoạch cắt sắt) – hãy tải file kế hoạch mới rồi sửa lại',
+      );
+    }
+    if (!MARKER_VERSIONS_ACCEPTED.includes(parsed.v)) throw err;
   }
 
   /** Giá trị mốc lúc xuất từ cột ẩn; null nếu hỏng / thiếu khoá. */

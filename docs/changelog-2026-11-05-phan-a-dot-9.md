@@ -4,7 +4,8 @@ Nhánh `dot-9-sua-ke-hoach` ở 2 worktree: BE `D:\DNA-ERP-BE-dot9` (cắt từ 
 (cắt từ `origin/demo` `136a1a3`). **Phần 1 (theo phương án IT đề xuất cho 4 câu chờ Sếp) commit trên nhánh + gộp `--no-ff` vào `main` / `demo`
 05/11, sau Đợt 5d phần 2 của người B (chưa push).** Phần 2 = đổi theo câu trả lời của Sếp + file Excel mẫu (mục 3). Plan: `docs/ke-hoach-phan-a-12-yeu-cau-2026-11-04.md` mục 5, **5b**; bản yêu cầu v8 YC2
 (2.1–2.4). 4 câu xin Sếp chốt: `docs/cau-hoi-sep-dot-9-sua-ke-hoach-2026-11-05.docx` - phần 1 code theo phương án IT đề xuất (mục 3).
-**Sếp trả lời 06/11 → phần 2 (mục 9): code xong ở nhánh, CHƯA commit.** Phần 1 đã push 05/11 (Render 17:01, Vercel kiểm 06/11).
+**Sếp trả lời 06/11 → phần 2 (mục 9): đã commit + gộp + push 06/11.** Phần 1 đã push 05/11 (Render 17:01, Vercel kiểm 06/11).
+**Phần 3 (mục 10, 06/11): cột file Excel xếp theo file "Kế hoạch cắt sắt" của KHSX - code xong ở nhánh, CHƯA commit.**
 
 ## Mục lục
 - 1. Đã làm (BE, FE)
@@ -16,6 +17,7 @@ Nhánh `dot-9-sua-ke-hoach` ở 2 worktree: BE `D:\DNA-ERP-BE-dot9` (cắt từ 
 - 7. Danh sách file để commit
 - 8. Môi trường thử
 - 9. Phần 2 (06/11): đổi theo câu trả lời của Sếp
+- 10. Phần 3 (06/11): cột file Excel theo file "Kế hoạch cắt sắt" của KHSX (chưa commit)
 
 ---
 
@@ -210,3 +212,43 @@ deadline-plan-excel.service.ts + spec}`, `production-invoices.service.ts` + spec
 **FE**: `src/services/deadline-changes-api.ts`, `src/modules/pages/ProductionPlan/{deadlineRules.ts (mới), deadlineRules.test.ts (mới), deadlineChange.ts,
 deadlineChange.test.ts, LenhSXPage.tsx, DeadlinePlanImportModal.tsx}`, `src/modules/pages/Boss/{DuyetDoiMocPage.tsx, duyetDoiMoc.ts, duyetDoiMoc.test.ts}`,
 `src/modules/pages/Guide/content/{productionPlan,boss}.ts`. **Không commit:** `next-env.d.ts`, `tsconfig.tsbuildinfo`.
+
+## 10. Phần 3 (06/11): cột file Excel theo file "Kế hoạch cắt sắt" của KHSX (chưa commit)
+
+**Vì sao:** người dùng gửi file kế hoạch KHSX đang dùng (KH MEYING T10/T11, GOPLUS T11 - phân tích ở `changelog-2026-11-04-phan-a-12-yeu-cau.md`
+mục 30) và chốt "cứ làm theo thế cho KHSX dễ dùng": xếp tên + thứ tự cột giống file KH, thêm Số PO, Số cont, Nệm. Người dùng giải thích nghĩa cột:
+**xuất đan** = giao khung sắt đã sơn + dây + đinh + vật tư đan (nút…) cho bên đan (Phôi xong gồm cắt, tán, uốn, dập… → Hàn → Sơn → xuất đan);
+**hàng trần** = hàng không đan, sơn xong là nhập kho đóng gói → cột "SƠN XONG (hàng trần) NHẬP KHO" / GOPLUS "NHẬP KHO" = mốc Nhập đan.
+
+**Đã làm (BE `deadline-plan-excel.service.ts` + spec, FE `Guide/content/productionPlan.ts`):**
+- Bố cục v3: A Lệnh SX · B **Số PO** (`SalesOrder.orderCode` của dòng) · C Mã IEA · D Tên SKU · E SL · F **Số cont** (`contEquivalent(SL, loadCont)`
+  của Đợt 1, làm tròn 2 số lẻ như file KH "1,3"; SKU chưa có load cont để trống) · G **Nệm** (`cushionMaterial.name`) · H Xưởng · I Trạng thái ·
+  J..T 11 mốc · U Hạn giao · V, W (ẩn) mã dòng + giá trị lúc xuất. Rộng cột PO 24, Xưởng 17 (xem PDF thật thấy "PA10-GPLT-…", "Xưởng Phước An" bị cắt).
+- Tiêu đề cột mốc theo tên KHSX gọi, trong ngoặc tên trên phần mềm (`EXCEL_FIELD_HEADER`): Mua VT khung & đan · Bắt đầu Phôi · Phôi xong · Hàn
+  xong · Sơn xong · **Xuất đan xong (Khung)** · **Nhập kho (Nhập đan)** · Chuyền kiểm · **NK đủ vật tư đóng gói (Mua VT còn lại)** · Bắt đầu đóng
+  gói · Đóng gói xong. Câu lỗi theo ô Excel dùng tên này ("ô Phôi xong không phải ngày hợp lệ"); bản xem trước / màn hình vẫn tên phần mềm
+  (`fieldLabel`). Dòng tiêu đề cao 48 (tên dài nhất xuống 3 dòng).
+- **Dấu file v3**, KHÔNG nhận v1/v2 nữa (cột đổi chỗ, đọc file cũ theo cột mới sẽ lệch): tải lên file cũ → 400 "File kế hoạch mẫu cũ (trước khi
+  đổi cột theo file Kế hoạch cắt sắt) – hãy tải file kế hoạch mới rồi sửa lại". Bỏ test "v1 vẫn đọc được", thêm test v1/v2 bị từ chối.
+- Sheet "Hướng dẫn": thêm dòng cột chỉ xem, dòng giải nghĩa 3 cột đổi tên, câu "ngày có nửa ngày (cộng 1,5) thì lấy đúng ngày đang hiện trong ô"
+  (đọc số serial đã `Math.floor` từ trước - đúng thứ KHSX thấy). Hướng dẫn FE: thêm câu về thứ tự / tên cột + lỗi thường gặp "File kế hoạch mẫu cũ".
+- **Không đổi:** luật tự dời (2 cột Mua VT không tự dời - Sếp chọn ở Q9-1, dù file KH của KHSX cho "NK đủ VT đóng gói" = xuất đan + 6 tự dời theo),
+  định dạng ngày `dd/mm/yyyy` (file KH đang hiện `mm-dd-yy` do Excel máy KHSX; ngày dán từ file KH sang vẫn đúng vì Excel chép giá trị ngày).
+
+**Không thêm (ERP chưa có dữ liệu):** SKU của khách / ITEM NO (ô "tên SKU" của dòng đơn hàng Sales chỉ chép tên mã IEA, không phải mã khách -
+DB dev + các DB thử đều vậy), "ĐI" (thị trường), ghi chú, khối ký tên của bản in "Kế hoạch cắt sắt tháng".
+
+**Kiểm tra:** jest `deadline-changes/` 5 suite 79 test đạt (spec viết công thức theo chữ cột tính từ vị trí, không cố định "H2/I2"); `tsc --noEmit`
+chỉ còn 2 lỗi cũ ở `prisma/seed-real-products.ts`, `prisma/seed-ghe-j55-full-bom.ts` (có sẵn trên main, không liên quan); eslint 2 file sạch; `nest
+build` đạt. FE `tsc --noEmit`, eslint `productionPlan.ts`, vitest Guide 16 test đạt. **Thử thật** (BE 3038 nhánh này + DB `dna_erp_dot9`, tài khoản
+demo `khsx`): tải file → 19 dòng đúng 23 cột, Số PO / Số cont (173 ÷ 80 = 2,16; 50 → 0,53) đúng; mở bằng **Excel thật**: ô mốc mở khoá, ô Lệnh SX
+khoá; sửa Phôi xong MY-9301 +2 → Hàn xong … Đóng gói xong cùng +2 ngay trong Excel, NK đủ vật tư đóng gói giữ 23/11; lưu → tải lên xem trước: 1 "Ghi
+ngay" (Phôi + 7 mốc "(tự dời)"), 18 không đổi, 0 lỗi; tải lên file v2 tải hôm trước → 400 đúng câu "mẫu cũ". Chỉ xem trước, không Xác nhận (DB không
+đổi). File Word hướng dẫn test: thêm R9.14, TC9.23, TC9.24 (19 trang, đã xem bản PDF).
+
+**Còn treo:** (1) khi deploy, ai đang giữ file kế hoạch tải trước đó phải tải lại (đã có câu báo); (2) số LSX: file KH dùng **1 số LSX cho nhiều SKU**
+(MEYING LSX324 = I41-A + I42-A, GOPLUS LSX182 = 3 SKU J55) trong khi ERP chốt 04/11 "mỗi dòng SKU 1 số LSX riêng, không trùng" (Đợt 2) - đã báo
+người dùng, chưa đổi; (3) SKU của khách nếu KHSX cần thì phải thêm ô nhập ở Đơn hàng (việc của Sales, chưa làm).
+
+**File:** BE `src/modules/production-invoices/deadline-changes/deadline-plan-excel.service.ts` + `.spec.ts`, `docs/changelog-2026-11-05-phan-a-dot-9.md`;
+FE `src/modules/pages/Guide/content/productionPlan.ts`. **Không commit:** FE `next-env.d.ts`, `tsconfig.tsbuildinfo`.
