@@ -510,6 +510,48 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       expect(okItem?.materials[0].standaloneMinBars).toBeGreaterThan(0);
     });
 
+    it('hạn giao: ưu tiên hạn giao của DÒNG SKU, không có thì của đơn, cả hai null thì null; xếp dự phòng theo hạn giao', async () => {
+      // Cả 3 SKU chưa có hạn khung (materialDeadline null, không có stage) -> deadline null.
+      const base = { materialDeadline: null, mfgProductId: 3n };
+      const dong = mkItem({
+        ...base,
+        id: 1n,
+        mfgProduct: { factoryCode: 'A-DONG', name: 'a' },
+        salesOrderItem: { deliveryDate: new Date('2026-12-28') },
+        salesOrder: { orderCode: 'PO-1', deliveryDate: new Date('2027-01-30') },
+      });
+      const don = mkItem({
+        ...base,
+        id: 2n,
+        mfgProduct: { factoryCode: 'B-DON', name: 'b' },
+        salesOrderItem: { deliveryDate: null },
+        salesOrder: { orderCode: 'PO-2', deliveryDate: new Date('2026-12-01') },
+      });
+      const khong = mkItem({
+        ...base,
+        id: 3n,
+        mfgProduct: { factoryCode: 'C-KHONG', name: 'c' },
+        salesOrderItem: null,
+        salesOrder: { orderCode: 'PO-3', deliveryDate: null },
+      });
+      build({
+        productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([khong, dong, don]) },
+        bomRevision: { findMany: jest.fn().mockResolvedValue([{ id: 5n, mfgProductId: 3n }]) },
+        pieceBom: { findMany: jest.fn().mockResolvedValue([]) },
+        bomPiece: { findMany: jest.fn().mockResolvedValue([]) },
+        material: { findMany: jest.fn().mockResolvedValue([]) },
+      });
+
+      const res = await service.getBatchCandidates();
+      const byCode = (c: string) => res.items.find((i) => i.mfgProductCode === c);
+      expect(byCode('A-DONG')?.deadline).toBeNull();
+      expect(byCode('A-DONG')?.deliveryDate).toEqual(new Date('2026-12-28'));
+      expect(byCode('B-DON')?.deliveryDate).toEqual(new Date('2026-12-01'));
+      expect(byCode('C-KHONG')?.deliveryDate).toBeNull();
+      // Dự phòng khi xếp: hạn giao gần nhất lên trước, không có gì thì cuối.
+      expect(res.items.map((i) => i.mfgProductCode)).toEqual(['B-DON', 'A-DONG', 'C-KHONG']);
+    });
+
     // Luật gộp (2026-10-24): mốc cần sắt cách nhau ≤ solverMergeWindowDays, ≤ solverMergeMaxSkus SKU. 2 SKU của
     // twoSkuSharingMaterial có mốc 20/08 (id 1) và 28/08 (id 2) - cách 8 ngày - và đều có chip đỏ khi cắt riêng.
     const withWindow = (days: number, maxSkus = 5) => ({

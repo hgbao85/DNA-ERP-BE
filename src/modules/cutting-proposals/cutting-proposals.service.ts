@@ -1748,6 +1748,7 @@ export class CuttingProposalsService {
         salesOrderCode: item.salesOrder?.orderCode ?? null,
         productionInvoiceCode: item.productionInvoice?.code ?? null,
         deadline: frameDeadlineOf(item),
+        deliveryDate: item.salesOrderItem?.deliveryDate ?? item.salesOrder?.deliveryDate ?? null,
         prodApprovalStatus: item.prodApprovalStatus,
         rejectReason: item.rejectReason,
         hasActiveBom: !itemsWithoutBom.has(item.id),
@@ -1842,10 +1843,13 @@ export class CuttingProposalsService {
         const oa = a.materials.some((m) => m.overThreshold) ? 0 : 1;
         const ob = b.materials.some((m) => m.overThreshold) ? 0 : 1;
         if (oa !== ob) return oa - ob;
-        if (a.deadline === null && b.deadline === null) return 0;
-        if (a.deadline === null) return 1;
-        if (b.deadline === null) return -1;
-        return a.deadline.getTime() - b.deadline.getTime();
+        // Không có hạn khung thì xếp theo hạn giao (dự phòng) - đơn gấp chưa có lệnh vẫn lên trước.
+        const da = a.deadline ?? a.deliveryDate;
+        const db = b.deadline ?? b.deliveryDate;
+        if (da === null && db === null) return 0;
+        if (da === null) return 1;
+        if (db === null) return -1;
+        return da.getTime() - db.getTime();
       }),
       recommendedItemIds: [...recommended],
       solverTimeoutSeconds: this.configService.get('solver.timeoutSeconds', { infer: true }),
@@ -1970,6 +1974,8 @@ export class CuttingProposalsService {
       include: {
         mfgProduct: true,
         salesOrder: true,
+        // Hạn giao của DÒNG đơn hàng (ưu tiên hơn hạn giao cả đơn) - hiện ở cột Hạn khi SKU chưa có hạn khung.
+        salesOrderItem: { select: { deliveryDate: true } },
         stages: true,
         productionInvoice: { include: { salesOrder: true } },
         // Loại dây/nệm Sales chọn - chỉ để HIỂN THỊ phân biệt 2 dòng cùng SKU khác dây (không ảnh
