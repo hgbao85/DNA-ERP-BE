@@ -97,6 +97,9 @@ export class CuttingBatchCandidateDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) salesOrderCode!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productionInvoiceCode!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) deadline!: Date | null;
+  /// Hạn giao hàng: của DÒNG SKU trong đơn (SalesOrderItem.deliveryDate), không có thì của cả đơn (SalesOrder.deliveryDate). `deadline`
+  /// (hạn khung) null khi SKU chưa có lệnh - FE dùng trường này để KHSX vẫn thấy đơn nào gấp. null = cả hai đều chưa có.
+  @Expose() @ApiPropertyOptional({ nullable: true }) deliveryDate!: Date | null;
   @Expose()
   @ApiPropertyOptional({ enum: ProdApprovalStatus, nullable: true })
   prodApprovalStatus!: ProdApprovalStatus | null;
