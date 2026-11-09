@@ -49,7 +49,7 @@ const PACKAGING_ISSUE_INCLUDE = {
   material: true,
 } satisfies Prisma.PackagingIssueInclude;
 
-type PackagingIssueRow = Prisma.PackagingIssueGetPayload<{
+export type PackagingIssueRow = Prisma.PackagingIssueGetPayload<{
   include: typeof PACKAGING_ISSUE_INCLUDE;
 }>;
 
@@ -76,6 +76,13 @@ const PACKAGING_DEST_WAREHOUSE_CODE = 'thanh-pham';
  * (khác KhoNhapDanPage/XacNhanVatTuPage) - ghi StockLedger ngay lúc tạo, giống MaterialIssue ghi
  * ngay khi xuất (vật tư đóng gói cũng chưa bị trừ tồn ở bước nào trước đó).
  */
+export interface PreparedPackagingIssue {
+  order: ProductionOrder;
+  materialBigId: bigint;
+  sourceWarehouse: { id: bigint; code: string };
+  dto: CreatePackagingIssueDto;
+}
+
 @Injectable()
 export class PackagingIssuesService {
   private readonly logger = new Logger(PackagingIssuesService.name);
@@ -140,6 +147,21 @@ export class PackagingIssuesService {
       }
     }
 
+    const prepared = await this.prepareIssue(productionOrderId, dto, warehouseScope);
+    const created = await this.prisma.$transaction((tx) =>
+      this.createInTx(tx, prepared, issuedById, idempotencyKey),
+    );
+    await this.afterCreate(created, issuedById);
+    return this.toResponseDto(created);
+  }
+
+  /** Kiểm ngoài transaction (lệnh, QLSX đã "Bắt đầu", kho của vật tư, phạm vi thủ kho) - dùng chung cho phiếu XK
+   *  (IssueSlipsService, 09/11/2026: xuất đóng gói đi phiếu có ảnh ký). */
+  async prepareIssue(
+    productionOrderId: string,
+    dto: CreatePackagingIssueDto,
+    warehouseScope: string | null,
+  ): Promise<PreparedPackagingIssue> {
     const order = await this.findOrderOrThrow(productionOrderId);
     await assertItemPiHasActiveFloor(
       this.prisma,
@@ -151,10 +173,20 @@ export class PackagingIssuesService {
     // Gate theo ĐÚNG instance kho vật lý của vật tư này (không chỉ cùng gia đình vat-tu-tp) - Thủ
     // kho của vat-tu-tp-2 không được xuất vật tư đang thật sự nằm ở kho vat-tu-tp gốc và ngược lại.
     this.assertWarehouseScope(warehouseScope, sourceWarehouse.code);
+    return { order, materialBigId, sourceWarehouse, dto };
+  }
 
-    // Khoá advisory (H3 fix, cùng lý do H2 ở MaterialIssuesService) - không có dòng có sẵn để
-    // FOR UPDATE cho lần xuất đầu tiên của 1 khoá (order, material) - xem lockBusinessKey().
-    const created = await this.prisma.$transaction(async (tx) => {
+  /** Ghi 1 lần xuất TRONG transaction của người gọi: khoá, định mức, Chuyền kiểm, tồn khả dụng, YC11, bút toán. */
+  async createInTx(
+    tx: PrismaTx,
+    p: PreparedPackagingIssue,
+    issuedById: string,
+    idempotencyKey?: string,
+  ): Promise<PackagingIssueRow> {
+    const { order, materialBigId, sourceWarehouse, dto } = p;
+    {
+      // Khoá advisory (H3 fix, cùng lý do H2 ở MaterialIssuesService) - không có dòng có sẵn để
+      // FOR UPDATE cho lần xuất đầu tiên của 1 khoá (order, material) - xem lockBusinessKey().
       await lockBusinessKey(tx, `packaging-issue:${order.id}:${materialBigId}`);
       await assertItemPiHasActiveFloorLocked(
         tx,
@@ -272,14 +304,16 @@ export class PackagingIssuesService {
       });
 
       return issue;
-    });
+    }
+  }
 
+  /** Sau commit: thông báo + realtime. */
+  async afterCreate(created: PackagingIssueRow, issuedById: string): Promise<void> {
     await this.notifyPackagingIssueCreated(
       created,
       created.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
     );
     this.publishRealtime('PACKAGING_ISSUE', created.id, 'CREATED', issuedById);
-    return this.toResponseDto(created);
   }
 
   /** "Cần xuất bao nhiêu" theo (PO, vật tư), gộp nhiều PO 1 lần - WarehouseXuatPage cần liệt kê

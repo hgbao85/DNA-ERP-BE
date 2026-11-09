@@ -4290,6 +4290,12 @@ enum IssueSlipLineKind {
   WEAVING_PIECE
   /// Phiếu 2 xuất đan: dây, gỗ, đinh, nút cấp kèm từ kho Phụ kiện cho cùng điểm đan.
   WEAVING_MATERIAL
+  /// Vật tư đóng gói theo SKU (PackagingIssue) - 09/11/2026.
+  PACKAGING
+  /// Vật tư TP cho Phôi theo SKU (MaterialYieldIssue, vd sắt la cắt pat) - 09/11/2026.
+  MATERIAL_YIELD
+  /// Vật tư TP cho Phôi theo công thức của lệnh (MaterialYieldRecipeIssue, vd thanh nhôm -> chân nhôm) - 09/11/2026.
+  MATERIAL_YIELD_RECIPE
 }
 
 /// Phiếu xuất kho XK-yymmdd-NNN (Đợt 6, bản v8 YC4 4.1-4.4, 4.9): 1 phiếu = 1 kho, nhiều dòng. Hai bước: tạo phiếu (cấp số, in,
@@ -4331,28 +4337,33 @@ model IssueSlip {
 }
 
 model IssueSlipLine {
-  id                     BigInt            @id @default(autoincrement())
-  slipId                 BigInt
-  kind                   IssueSlipLineKind
+  id                         BigInt            @id @default(autoincrement())
+  slipId                     BigInt
+  kind                       IssueSlipLineKind
   /// Null cho dòng mảnh (WEAVING_PIECE).
-  materialId             BigInt?
+  materialId                 BigInt?
   /// WEAVING_PIECE / WEAVING_MATERIAL: mảnh.
-  pieceId                BigInt?
+  pieceId                    BigInt?
   /// STEEL: lệnh (PI). CONSUMABLE: null (lấy qua productionOrderId).
-  productionInvoiceId    BigInt?
+  productionInvoiceId        BigInt?
   /// CONSUMABLE: SKU (lệnh SX).
-  productionOrderId      BigInt?
+  productionOrderId          BigInt?
   /// CONSUMABLE: công đoạn HAN/SON.
-  stage                  MfgStage?
+  stage                      MfgStage?
   /// STEEL: chiều dài cây.
-  barLengthMm            Int?
-  qty                    Decimal           @db.Decimal(14, 4)
-  note                   String?
+  barLengthMm                Int?
+  qty                        Decimal           @db.Decimal(14, 4)
+  note                       String?
   /// Gắn khi xác nhận xuất.
-  steelIssueId           BigInt?           @unique
-  materialIssueId        BigInt?           @unique
-  weavingIssueId         BigInt?           @unique
-  weavingIssueMaterialId BigInt?           @unique
+  steelIssueId               BigInt?           @unique
+  materialIssueId            BigInt?           @unique
+  weavingIssueId             BigInt?           @unique
+  weavingIssueMaterialId     BigInt?           @unique
+  /// MATERIAL_YIELD_RECIPE: công thức (materialId = vật tư đầu vào của công thức).
+  recipeId                   BigInt?
+  packagingIssueId           BigInt?           @unique
+  materialYieldIssueId       BigInt?           @unique
+  materialYieldRecipeIssueId BigInt?           @unique
 
   slip     IssueSlip @relation(fields: [slipId], references: [id])
   material Material? @relation(fields: [materialId], references: [id])

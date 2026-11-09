@@ -38,7 +38,19 @@ const ISSUE_INCLUDE = {
   productionInvoice: { select: { code: true } },
   recipe: { include: { inputMaterial: { include: { warehouse: true } } } },
 } satisfies Prisma.MaterialYieldRecipeIssueInclude;
-type IssueRow = Prisma.MaterialYieldRecipeIssueGetPayload<{ include: typeof ISSUE_INCLUDE }>;
+export type MaterialYieldRecipeIssueRow = Prisma.MaterialYieldRecipeIssueGetPayload<{
+  include: typeof ISSUE_INCLUDE;
+}>;
+type IssueRow = MaterialYieldRecipeIssueRow;
+
+/** Lần xuất theo công thức đã kiểm (ngoài transaction). */
+export interface PreparedMaterialYieldRecipeIssue {
+  piId: bigint;
+  recipeBigId: bigint;
+  inputMaterial: { id: bigint; name: string };
+  warehouse: { id: bigint; code: string };
+  issuedQty: number;
+}
 
 const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
 
@@ -83,6 +95,22 @@ export class MaterialYieldRecipeIssuesService {
       }
     }
 
+    const prepared = await this.prepareIssue(productionInvoiceId, dto, warehouseScope);
+    const created = await this.prisma.$transaction(
+      (tx) => this.createInTx(tx, prepared, issuedById, idempotencyKey),
+      { timeout: 20000 },
+    );
+    this.logger.log(`recipe issue ${created.id} đã commit cùng ledger consume`);
+    await this.afterCreate(created, issuedById);
+    return this.toResponseDto(created);
+  }
+
+  /** Kiểm ngoài transaction - dùng chung cho phiếu XK (IssueSlipsService, 09/11/2026). */
+  async prepareIssue(
+    productionInvoiceId: string,
+    dto: CreateMaterialYieldRecipeIssueDto,
+    warehouseScope: string | null,
+  ): Promise<PreparedMaterialYieldRecipeIssue> {
     const piId = parseBigIntId(productionInvoiceId);
     await assertPiHasActiveFloor(this.prisma, piId, 'xuất vật tư');
     const recipe = await this.materialYieldRecipesService.findOneRowOrThrow(dto.recipeId);
@@ -98,11 +126,28 @@ export class MaterialYieldRecipeIssuesService {
       inputMaterial.warehouse,
       piId,
     );
-    const materialWarehouseId = realWarehouse.id;
     this.assertWarehouseScope(warehouseScope, realWarehouse.code);
+    return {
+      piId,
+      recipeBigId,
+      inputMaterial: { id: inputMaterial.id, name: inputMaterial.name },
+      warehouse: { id: realWarehouse.id, code: realWarehouse.code },
+      issuedQty: dto.issuedQty,
+    };
+  }
 
-    const created = await this.prisma.$transaction(
-      async (tx) => {
+  /** Ghi 1 lần xuất TRONG transaction của người gọi. */
+  async createInTx(
+    tx: PrismaTx,
+    p: PreparedMaterialYieldRecipeIssue,
+    issuedById: string,
+    idempotencyKey?: string,
+  ): Promise<MaterialYieldRecipeIssueRow> {
+    const { piId, recipeBigId, inputMaterial } = p;
+    const materialWarehouseId = p.warehouse.id;
+    const dto = { issuedQty: p.issuedQty };
+    {
+      {
         await lockBusinessKey(tx, `material-yield-recipe-issue:${piId}:${recipeBigId}`);
         await assertPiHasActiveFloorLocked(tx, piId, 'xuất vật tư');
 
@@ -133,23 +178,24 @@ export class MaterialYieldRecipeIssuesService {
           `recipe issue ${issue.id} (pi ${piId}, recipe ${recipeBigId}, qty ${dto.issuedQty}) ghi ledger, chờ commit`,
         );
         return issue;
-      },
-      { timeout: 20000 },
-    );
-    this.logger.log(`recipe issue ${created.id} đã commit cùng ledger consume`);
+      }
+    }
+  }
+
+  /** Sau commit: nhật ký + báo Phôi nhận. */
+  async afterCreate(created: MaterialYieldRecipeIssueRow, issuedById: string): Promise<void> {
+    void issuedById;
     await auditEvent(this.prisma, this.cls, this.logger, {
       action: AuditAction.CREATE,
       tableName: 'MaterialYieldRecipeIssue',
       recordId: created.id,
       newValue: {
-        productionInvoiceId: piId.toString(),
-        recipeId: recipeBigId.toString(),
-        issuedQty: dto.issuedQty,
+        productionInvoiceId: created.productionInvoiceId.toString(),
+        recipeId: created.recipeId.toString(),
+        issuedQty: created.issuedQty,
       },
     });
     await this.notifyIssuedToPhoi(created);
-
-    return this.toResponseDto(created);
   }
 
   private async postLedgerEntry(

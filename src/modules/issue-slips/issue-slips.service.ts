@@ -30,6 +30,21 @@ import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
+  PackagingIssueRow,
+  PackagingIssuesService,
+  PreparedPackagingIssue,
+} from '../packaging-issues/packaging-issues.service';
+import {
+  MaterialYieldIssueRow,
+  MaterialYieldIssuesService,
+  PreparedMaterialYieldIssue,
+} from '../material-yield-issues/material-yield-issues.service';
+import {
+  MaterialYieldRecipeIssueRow,
+  MaterialYieldRecipeIssuesService,
+  PreparedMaterialYieldRecipeIssue,
+} from '../material-yield-recipes/material-yield-recipe-issues.service';
+import {
   PreparedWeavingMaterial,
   PreparedWeavingPiece,
   WeavingIssueRow,
@@ -76,7 +91,10 @@ type PreparedLine =
   | { lineId: bigint; kind: 'CONSUMABLE'; prepared: PreparedMaterialIssue }
   | { lineId: bigint; kind: 'SHARED'; materialId: bigint; warehouseId: bigint; qty: number }
   | { lineId: bigint; kind: 'WEAVING_PIECE'; prepared: PreparedWeavingPiece }
-  | { lineId: bigint; kind: 'WEAVING_MATERIAL'; prepared: PreparedWeavingMaterial };
+  | { lineId: bigint; kind: 'WEAVING_MATERIAL'; prepared: PreparedWeavingMaterial }
+  | { lineId: bigint; kind: 'PACKAGING'; prepared: PreparedPackagingIssue }
+  | { lineId: bigint; kind: 'MATERIAL_YIELD'; prepared: PreparedMaterialYieldIssue }
+  | { lineId: bigint; kind: 'MATERIAL_YIELD_RECIPE'; prepared: PreparedMaterialYieldRecipeIssue };
 
 /** Dòng phiếu sau khi kiểm (lúc tạo phiếu) - kèm kho thật của dòng để bắt "mỗi phiếu chỉ 1 kho". */
 interface CheckedLine {
@@ -86,6 +104,7 @@ interface CheckedLine {
   warehouseId: bigint;
   productionInvoiceId: bigint | null;
   productionOrderId: bigint | null;
+  recipeId?: bigint | null;
   /** Dòng mảnh xuất đan - kiểm trần trong transaction tạo phiếu. */
   weavingPiece?: PreparedWeavingPiece;
 }
@@ -122,6 +141,9 @@ export class IssueSlipsService {
     private readonly realtime: RealtimeService,
     private readonly weaving: WeavingIssuesService,
     private readonly notifications: NotificationsService,
+    private readonly packaging: PackagingIssuesService,
+    private readonly materialYield: MaterialYieldIssuesService,
+    private readonly materialYieldRecipe: MaterialYieldRecipeIssuesService,
   ) {}
 
   async create(dto: CreateIssueSlipDto, userId: string, scope: string | null) {
@@ -157,6 +179,7 @@ export class IssueSlipsService {
                 kind: c.dto.kind,
                 materialId: c.materialId,
                 pieceId: c.pieceId,
+                recipeId: c.recipeId ?? null,
                 productionInvoiceId: c.productionInvoiceId,
                 productionOrderId: c.productionOrderId,
                 stage: c.dto.kind === IssueSlipLineKind.CONSUMABLE ? c.dto.stage : null,
@@ -549,8 +572,38 @@ export class IssueSlipsService {
         const steel: SteelIssueRow[] = [];
         const consumables: MaterialIssueRow[] = [];
         const weavingPieces: WeavingIssueRow[] = [];
+        const packagings: PackagingIssueRow[] = [];
+        const yields: MaterialYieldIssueRow[] = [];
+        const recipeIssues: MaterialYieldRecipeIssueRow[] = [];
         for (const p of order) {
           const key = `issue-slip:${slip.id}:line:${p.lineId}`;
+          if (p.kind === 'PACKAGING') {
+            const issue = await this.packaging.createInTx(tx, p.prepared, userId, key);
+            await tx.issueSlipLine.update({
+              where: { id: p.lineId },
+              data: { packagingIssueId: issue.id },
+            });
+            packagings.push(issue);
+            continue;
+          }
+          if (p.kind === 'MATERIAL_YIELD') {
+            const issue = await this.materialYield.createInTx(tx, p.prepared, userId, key);
+            await tx.issueSlipLine.update({
+              where: { id: p.lineId },
+              data: { materialYieldIssueId: issue.id },
+            });
+            yields.push(issue);
+            continue;
+          }
+          if (p.kind === 'MATERIAL_YIELD_RECIPE') {
+            const issue = await this.materialYieldRecipe.createInTx(tx, p.prepared, userId, key);
+            await tx.issueSlipLine.update({
+              where: { id: p.lineId },
+              data: { materialYieldRecipeIssueId: issue.id },
+            });
+            recipeIssues.push(issue);
+            continue;
+          }
           if (p.kind === 'WEAVING_PIECE') {
             await this.weaving.assertPieceCapInTx(tx, p.prepared, slip.id);
             const issue = await this.weaving.createPieceIssueInTx(tx, p.prepared, userId, key);
@@ -597,7 +650,7 @@ export class IssueSlipsService {
             confirmKey: idempotencyKey,
           },
         });
-        return { steel, consumables, weavingPieces };
+        return { steel, consumables, weavingPieces, packagings, yields, recipeIssues };
       },
       { timeout: 60_000 },
     );
@@ -605,6 +658,10 @@ export class IssueSlipsService {
     for (const issue of done.steel) await this.steelIssues.afterCreate(issue, userId);
     for (const issue of done.consumables) await this.materialIssues.afterCreate(issue, userId);
     for (const issue of done.weavingPieces) await this.weaving.afterPieceIssue(issue, userId);
+    for (const issue of done.packagings) await this.packaging.afterCreate(issue, userId);
+    for (const issue of done.yields) await this.materialYield.afterCreate(issue, userId);
+    for (const issue of done.recipeIssues)
+      await this.materialYieldRecipe.afterCreate(issue, userId);
     if (slip.weavingPointId) this.publishWeaving(slip.id, userId);
     this.publish(slip.id, 'UPDATED', userId);
     return this.findOne(id);
@@ -700,7 +757,62 @@ export class IssueSlipsService {
         weavingPiece: prepared,
       };
     }
+    if (line.kind === IssueSlipLineKind.MATERIAL_YIELD_RECIPE) {
+      if (!line.productionInvoiceId || !line.recipeId) {
+        throw new BadRequestException('Dòng vật tư TP theo công thức cần lệnh và công thức');
+      }
+      const prepared = await this.materialYieldRecipe.prepareIssue(
+        line.productionInvoiceId,
+        { recipeId: line.recipeId, issuedQty: line.qty },
+        scope,
+      );
+      return {
+        dto: line,
+        materialId: prepared.inputMaterial.id,
+        pieceId: null,
+        warehouseId: prepared.warehouse.id,
+        productionInvoiceId: prepared.piId,
+        productionOrderId: null,
+        recipeId: prepared.recipeBigId,
+      };
+    }
     if (!line.materialId) throw new BadRequestException('Dòng phiếu xuất cần vật tư');
+    if (line.kind === IssueSlipLineKind.PACKAGING) {
+      if (!line.productionOrderId) {
+        throw new BadRequestException('Dòng vật tư đóng gói cần SKU (lệnh sản xuất)');
+      }
+      const prepared = await this.packaging.prepareIssue(
+        line.productionOrderId,
+        { materialId: line.materialId, issuedQty: line.qty, note: line.note?.trim() || undefined },
+        scope,
+      );
+      return {
+        dto: line,
+        materialId: prepared.materialBigId,
+        pieceId: null,
+        warehouseId: prepared.sourceWarehouse.id,
+        productionInvoiceId: null,
+        productionOrderId: prepared.order.id,
+      };
+    }
+    if (line.kind === IssueSlipLineKind.MATERIAL_YIELD) {
+      if (!line.productionOrderId) {
+        throw new BadRequestException('Dòng vật tư TP cần SKU (lệnh sản xuất)');
+      }
+      const prepared = await this.materialYield.prepareIssue(
+        line.productionOrderId,
+        { materialId: line.materialId, issuedQty: line.qty },
+        scope,
+      );
+      return {
+        dto: line,
+        materialId: prepared.materialBigId,
+        pieceId: null,
+        warehouseId: prepared.warehouse.id,
+        productionInvoiceId: null,
+        productionOrderId: prepared.order.id,
+      };
+    }
     if (line.kind === IssueSlipLineKind.WEAVING_MATERIAL) {
       if (!line.productionOrderId || !line.pieceId) {
         throw new BadRequestException('Dòng vật tư kèm đan cần SKU (lệnh sản xuất) và mảnh');
@@ -797,7 +909,31 @@ export class IssueSlipsService {
       }
       return { lineId: line.id, kind: 'WEAVING_PIECE', prepared };
     }
+    if (line.kind === IssueSlipLineKind.MATERIAL_YIELD_RECIPE) {
+      const prepared = await this.materialYieldRecipe.prepareIssue(
+        line.productionInvoiceId!.toString(),
+        { recipeId: line.recipeId!.toString(), issuedQty: qty },
+        scope,
+      );
+      return { lineId: line.id, kind: 'MATERIAL_YIELD_RECIPE', prepared };
+    }
     const materialId = line.materialId!;
+    if (line.kind === IssueSlipLineKind.PACKAGING) {
+      const prepared = await this.packaging.prepareIssue(
+        line.productionOrderId!.toString(),
+        { materialId: materialId.toString(), issuedQty: qty, note: line.note ?? undefined },
+        scope,
+      );
+      return { lineId: line.id, kind: 'PACKAGING', prepared };
+    }
+    if (line.kind === IssueSlipLineKind.MATERIAL_YIELD) {
+      const prepared = await this.materialYield.prepareIssue(
+        line.productionOrderId!.toString(),
+        { materialId: materialId.toString(), issuedQty: qty },
+        scope,
+      );
+      return { lineId: line.id, kind: 'MATERIAL_YIELD', prepared };
+    }
     if (line.kind === IssueSlipLineKind.WEAVING_MATERIAL) {
       const prepared = await this.weaving.prepareWeavingMaterial(
         line.productionOrderId!.toString(),
@@ -975,6 +1111,10 @@ export class IssueSlipsService {
     if (p.kind === 'STEEL') return `m:${pad(p.prepared.materialId)}`;
     if (p.kind === 'CONSUMABLE') return `m:${pad(p.prepared.materialBigId)}`;
     if (p.kind === 'WEAVING_MATERIAL') return `m:${pad(p.prepared.materialId)}`;
+    if (p.kind === 'PACKAGING' || p.kind === 'MATERIAL_YIELD') {
+      return `m:${pad(p.prepared.materialBigId)}`;
+    }
+    if (p.kind === 'MATERIAL_YIELD_RECIPE') return `m:${pad(p.prepared.inputMaterial.id)}`;
     return `m:${pad(p.materialId)}`;
   }
 
@@ -1079,6 +1219,7 @@ export class IssueSlipsService {
                 : (l.material?.unit ?? ''),
           pieceId: l.pieceId?.toString() ?? null,
           pieceName: l.piece?.name ?? null,
+          recipeId: l.recipeId?.toString() ?? null,
           productionInvoiceId:
             l.productionInvoiceId?.toString() ?? order?.productionInvoiceId ?? null,
           productionOrderId: l.productionOrderId?.toString() ?? null,
