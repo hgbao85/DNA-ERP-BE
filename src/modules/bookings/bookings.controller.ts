@@ -16,6 +16,7 @@ import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.cons
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { BookingsService } from './bookings.service';
+import { BookingShipmentsService } from './booking-shipments.service';
 import { CancelBookingDto } from './dto/cancel-booking.dto';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { BookingCandidatesQueryDto, BookingQueryDto } from './dto/booking-query.dto';
@@ -33,7 +34,10 @@ const UPDATE = { module: PERMISSION_MODULES.SALES_ORDER, action: PermissionActio
 @ApiBearerAuth()
 @Controller({ path: 'bookings', version: '1' })
 export class BookingsController {
-  constructor(private readonly bookingsService: BookingsService) {}
+  constructor(
+    private readonly bookingsService: BookingsService,
+    private readonly shipments: BookingShipmentsService,
+  ) {}
 
   @Get()
   @RequirePermissions(VIEW)
@@ -77,15 +81,20 @@ export class BookingsController {
   @HttpCode(HttpStatus.OK)
   @RequirePermissions(UPDATE)
   @RequireRole(BUSINESS_ROLES.SALES_STAFF, DEFAULT_ROLES.ADMIN)
-  confirm(@Param('id') id: string) {
-    return this.bookingsService.confirm(id);
+  async confirm(@Param('id') id: string) {
+    const result = await this.bookingsService.confirm(id);
+    // Đợt 10b (người B): báo thủ kho thành phẩm của kho gom hàng có cont cần đóng.
+    await this.shipments.notifyToShip(BigInt(result.id));
+    return result;
   }
 
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions(UPDATE)
   @RequireRole(BUSINESS_ROLES.SALES_STAFF, DEFAULT_ROLES.ADMIN)
-  cancel(@Param('id') id: string, @Body() dto: CancelBookingDto) {
-    return this.bookingsService.cancel(id, dto);
+  async cancel(@Param('id') id: string, @Body() dto: CancelBookingDto) {
+    const result = await this.bookingsService.cancel(id, dto);
+    await this.shipments.onCancelled(BigInt(result.id));
+    return result;
   }
 }

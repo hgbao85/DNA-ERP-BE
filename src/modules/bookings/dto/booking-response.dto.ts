@@ -154,6 +154,10 @@ export class BookingResponseDto {
   @Expose() @ApiProperty() createdAt!: Date;
   @Expose() @ApiProperty() updatedAt!: Date;
   @Expose() @ApiPropertyOptional({ nullable: true }) confirmedAt!: Date | null;
+  /** Đợt 10b: kho thành phẩm xác nhận đã xuất. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) shippedAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) shipSlipCode!: string | null;
+  @Expose() @ApiProperty({ type: [String] }) shipSlipUrls!: string[];
   @Expose() @ApiPropertyOptional({ nullable: true }) cancelledAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) cancelReason!: string | null;
   @Expose()

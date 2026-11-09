@@ -472,6 +472,29 @@ export interface PiTimelineReplanNotificationParams {
 }
 
 // Phần A – Đợt 10a (YC5): booking sắp đến hạn (lấy cont / CUT OFF) mà chưa đủ hàng. `entityId` = bookingId.
+/** Đợt 10b (người B): booking Sales đã xác nhận -> kho thành phẩm gom hàng, đóng cont, xác nhận xuất. */
+export interface BookingToShipNotificationParams {
+  bookingId: string;
+  bookingNo: string;
+  customerName: string;
+  warehouseCode: string;
+  totalQty: number;
+  /** dd/MM/yyyy hoặc '-' */
+  pickupDate: string;
+  cutOff: string;
+}
+
+/** Đợt 10b: kho thành phẩm đã xác nhận xuất 1 booking. */
+export interface BookingShippedNotificationParams {
+  bookingId: string;
+  bookingNo: string;
+  customerName: string;
+  shippedQty: number;
+  bookedQty: number;
+  /** Người tạo booking (Sales). */
+  createdById: string;
+}
+
 export interface BookingShortNotificationParams {
   bookingId: string;
   bookingNo: string;
@@ -1547,6 +1570,49 @@ const notificationTypeDefinitions = {
       roles: [BUSINESS_ROLES.PRODUCTION_PLANNER],
     }),
   } satisfies NotificationTypeDef<PiTimelineReplanNotificationParams>,
+  // ─── Người B – Đợt 10b (YC5 5.5-5.7): kho thành phẩm xuất hàng theo booking ─────────────────────────────────────────────
+  /** Sales xác nhận booking -> thủ kho thành phẩm của kho gom hàng biết có cont cần đóng. Tự đóng khi kho xác nhận xuất / booking huỷ. */
+  BOOKING_TO_SHIP: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'BOOKING',
+    title: (p: BookingToShipNotificationParams) =>
+      `Booking ${p.bookingNo} (${p.customerName}): ${p.totalQty} bộ cần đóng cont`,
+    message: (p: BookingToShipNotificationParams) =>
+      `Lấy cont ${p.pickupDate} · CUT OFF ${p.cutOff}. Gom hàng về kho, đóng cont xong thì in phiếu xuất, cho ký và xác nhận ở "Xuất theo đơn hàng".`,
+    link: (p: BookingToShipNotificationParams) => ({
+      module: 'inbound_warehouse',
+      page: 'xuat-kho',
+      params: { focus: `BOOKING:${p.bookingId}` },
+    }),
+    recipients: (p: BookingToShipNotificationParams): RecipientCriteria => ({
+      warehouseIds: [p.warehouseCode],
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<BookingToShipNotificationParams>,
+
+  /** Kho thành phẩm xác nhận đã xuất booking -> báo Sales tạo booking (số thực xuất, phần chưa xuất về lại "còn lại" của đơn). */
+  BOOKING_SHIPPED: {
+    category: 'RESULT',
+    severity: 'SUCCESS',
+    entityType: 'BOOKING',
+    title: (p: BookingShippedNotificationParams) =>
+      `Booking ${p.bookingNo} (${p.customerName}) đã xuất ${p.shippedQty}/${p.bookedQty} bộ`,
+    message: (p: BookingShippedNotificationParams) =>
+      p.shippedQty < p.bookedQty
+        ? `Thiếu ${p.bookedQty - p.shippedQty} bộ so với booking - phần này quay về "còn lại" của đơn, xếp vào booking sau.`
+        : 'Đã xuất đủ số đã xếp.',
+    link: (p: BookingShippedNotificationParams) => ({
+      module: 'sales',
+      page: 'bookings',
+      params: { focus: `BOOKING:${p.bookingId}` },
+    }),
+    recipients: (p: BookingShippedNotificationParams): RecipientCriteria => ({
+      userIds: [p.createdById],
+    }),
+  } satisfies NotificationTypeDef<BookingShippedNotificationParams>,
+
   // ─── Phần A – Đợt 10a (YC5 5.8): booking sắp đến hạn mà chưa đủ hàng ─────────────────────────────────────────────────────
   /** Booking có ngày hạn (lấy cont / CUT OFF) ≤ ngày mai mà "chưa đủ hàng" (= đã đóng gói − đã xuất). 1 thông báo mở/booking
    *  (dedupeKey theo booking), `BookingAlertsService` gửi lại khi sang ngày mới và tự đóng khi đủ hàng / booking huỷ / đã xuất. */

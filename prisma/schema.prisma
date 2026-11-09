@@ -1459,6 +1459,14 @@ model Booking {
   cancelledAt   DateTime?
   cancelledById String?
   cancelReason  String?
+  /// Đợt 10b (người B, 5.5-5.7): thủ kho thành phẩm của `warehouseCode` xác nhận đã xuất (đóng cont xong) -> SHIPPED. Phiếu xuất
+  /// XK in trước khi xác nhận (`shipSlipCode` giữ qua ReservedSlipCode), ảnh phiếu ký bắt buộc (khoá cứng chứng từ, 4.1).
+  shippedAt     DateTime?
+  shippedById   String?
+  shipSlipCode  String?       @unique
+  shipSlipUrls  String[]      @default([])
+  /// Idempotency-Key của lần xác nhận xuất - bấm lại không cộng 2 lần.
+  shipKey       String?       @unique
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
