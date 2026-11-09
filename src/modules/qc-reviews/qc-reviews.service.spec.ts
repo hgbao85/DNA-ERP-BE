@@ -52,6 +52,7 @@ describe('QcReviewsService', () => {
     findOneRowOrThrow: jest.Mock;
     findOnePieceStepBundleRowOrThrow: jest.Mock;
     autoFinalizePieceOutputIfLastStepComplete: jest.Mock;
+    postPieceOutputIfFinal: jest.Mock;
   };
   let materialYieldRecipeProductionService: {
     findOneBundleRowOrThrow: jest.Mock;
@@ -227,6 +228,7 @@ describe('QcReviewsService', () => {
       findOneRowOrThrow: jest.fn().mockResolvedValue(awaitingBatch),
       findOnePieceStepBundleRowOrThrow: jest.fn().mockResolvedValue(awaitingBundle),
       autoFinalizePieceOutputIfLastStepComplete: jest.fn().mockResolvedValue(undefined),
+      postPieceOutputIfFinal: jest.fn().mockResolvedValue(undefined),
     };
     cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
     notificationsService = {

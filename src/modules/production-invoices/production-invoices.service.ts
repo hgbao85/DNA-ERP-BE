@@ -103,6 +103,7 @@ import {
   valuesOfItem,
 } from './deadline-changes/deadline-values.util';
 import { ItemDeadlineWriter } from './item-deadline-writer.service';
+import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
 
 type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
   include: {
@@ -2621,7 +2622,7 @@ export class ProductionInvoicesService {
         by: ['pieceId'],
         where: {
           productionOrderId: productionOrder.id,
-          transfer: { status: TransferStatus.CONFIRMED },
+          transfer: { status: TransferStatus.CONFIRMED, ...PIECE_TRANSFER_LEAVES_FRAME },
         },
         _sum: { quantity: true },
       }),
@@ -2691,7 +2692,7 @@ export class ProductionInvoicesService {
         by: ['pieceId', 'productionOrderId'],
         where: {
           productionOrderId: { in: orderIds },
-          transfer: { status: TransferStatus.CONFIRMED },
+          transfer: { status: TransferStatus.CONFIRMED, ...PIECE_TRANSFER_LEAVES_FRAME },
         },
         _sum: { quantity: true },
       }),
@@ -2784,7 +2785,7 @@ export class ProductionInvoicesService {
               where: {
                 productionOrderId: productionOrder.id,
                 pieceId: pieceBigId,
-                transfer: { status: TransferStatus.CONFIRMED },
+                transfer: { status: TransferStatus.CONFIRMED, ...PIECE_TRANSFER_LEAVES_FRAME },
               },
               _sum: { quantity: true },
             })

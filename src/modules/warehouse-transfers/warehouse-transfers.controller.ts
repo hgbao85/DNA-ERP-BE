@@ -68,7 +68,11 @@ export class WarehouseTransfersController {
   // Đặt TRƯỚC @Get(':id') - "piece-transfer-plan" phải khớp route cố định này, không rơi vào :id.
   @Get('piece-transfer-plan')
   @RequirePermissions(VIEW)
-  getPieceTransferPlan(@Query('productionOrderIds') productionOrderIds?: string) {
+  getPieceTransferPlan(
+    @Query('productionOrderIds') productionOrderIds?: string,
+    /** Đợt 7: 'TO_PAINT' = chặng Hàn Phước An -> Sơn Phú An; bỏ trống = chuyển ra kho Phụ kiện/Thành phẩm. */
+    @Query('leg') leg?: string,
+  ) {
     if (!productionOrderIds) {
       throw new BadRequestException(
         'Query productionOrderIds là bắt buộc (phân tách bởi dấu phẩy)',
@@ -78,7 +82,11 @@ export class WarehouseTransfersController {
       .split(',')
       .map((id) => id.trim())
       .filter((id) => id.length > 0);
-    return this.warehouseTransfersService.getPieceTransferPlan(ids);
+    return this.warehouseTransfersService.getPieceTransferPlan(
+      ids,
+      undefined,
+      leg === 'TO_PAINT' ? 'TO_PAINT' : 'OUT',
+    );
   }
 
   @Get()

@@ -1789,6 +1789,11 @@ describe('ProductionBatchesService', () => {
   // QcReviewsService.reviewPieceStep() ngay trong transaction duyệt. Xem doc comment method.
   describe('autoFinalizePieceOutputIfLastStepComplete', () => {
     const yieldRowTwoSteps = { processSteps: ['CAT', 'DUC_LO'] };
+    // Đợt 7: ghi mảnh vào kho tách riêng (postPieceOutputIfFinal có test riêng) - ở đây chỉ xác nhận có gọi.
+    beforeEach(() => {
+      prisma.productionBatch.create.mockResolvedValue({ id: 777n });
+      jest.spyOn(service, 'postPieceOutputIfFinal').mockResolvedValue(undefined);
+    });
 
     // 2026-10-03: piece có 2 dòng Tự tính (khác material), mỗi dòng khai processSteps riêng - "bước
     // cuối của piece" là bước cuối trong HỢP của cả 2 dòng (CAT, UON, DUC_LO -> cuối cùng DUC_LO
@@ -2057,6 +2062,86 @@ describe('ProductionBatchesService', () => {
       expect(result['1'].materialYieldItems).toEqual([
         expect.objectContaining({ materialCode: 'CHAN-NHOM-01', plannedQty: 40 }),
       ]);
+    });
+  });
+
+  describe('postPieceOutputIfFinal - ghi mảnh vào kho của công đoạn cuối (Đợt 7)', () => {
+    const PA = 1n;
+    const PHA = 2n;
+    const khoPhoiPA = { id: 90n, code: 'phoi-son-han', kind: 'PHOI', workshopId: PA };
+    const khoHanPA = { id: 92n, code: 'phoi-son-han-han-pa', kind: 'HAN', workshopId: PA };
+    const khoSonPA = { id: 93n, code: 'phoi-son-han-son-pa', kind: 'SON', workshopId: PA };
+    const khoPhoiPHA = { id: 95n, code: 'phoi-son-han-phoi-pha', kind: 'PHOI', workshopId: PHA };
+    const khoHanPHA = { id: 96n, code: 'phoi-son-han-han-pha', kind: 'HAN', workshopId: PHA };
+    const all = [khoPhoiPA, khoHanPA, khoSonPA, khoPhoiPHA, khoHanPHA];
+
+    const setup = (needsHan: boolean, needsSon: boolean, workshopId: bigint) => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order);
+      prisma.bomPiece.findUnique.mockResolvedValue({ needsHan, needsSon });
+      prisma.productionInvoiceItem.findFirst.mockResolvedValue({ workshopId });
+      prisma.warehouse.findFirst.mockImplementation(
+        ({ where }: { where: { kind: string; workshopId?: bigint } }) =>
+          Promise.resolve(
+            all.find(
+              (w) =>
+                w.kind === where.kind &&
+                (where.workshopId === undefined || w.workshopId === where.workshopId),
+            ) ?? null,
+          ),
+      );
+      prisma.warehouse.findUniqueOrThrow.mockResolvedValue(productionWarehouse);
+    };
+    const run = (stage: MfgStage, qty = 15) =>
+      service.postPieceOutputIfFinal(
+        prisma as unknown as PrismaTx,
+        { id: 800n, productionOrderId: 1n, pieceId: 40n, stage, qty },
+        'user-kcs',
+      );
+    const postedTo = () =>
+      (stockLedgerService.postEntry.mock.calls as [{ toWarehouseId: bigint; qty: number }][]).map(
+        ([e]) => [e.toWarehouseId, e.qty],
+      );
+
+    it('mảnh cần hàn + sơn ở Phú An: chỉ KCS Sơn đạt mới ghi, vào kho Sơn; KCS Hàn không ghi', async () => {
+      setup(true, true, PA);
+      await run(MfgStage.HAN);
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      await run(MfgStage.SON);
+      expect(postedTo()).toEqual([[khoSonPA.id, 15]]);
+      const [entry] = stockLedgerService.postEntry.mock.calls[0] as [Record<string, unknown>];
+      expect(entry).toMatchObject({
+        fromWarehouseId: productionWarehouse.id,
+        pieceId: 40n,
+        refType: StockLedgerRefType.FRAME_OUTPUT,
+        refId: '800',
+        idempotencyKey: 'piece-output:800',
+      });
+    });
+
+    it('mảnh cần hàn + sơn ở Phước An (không có kho Sơn): ghi vào kho Hàn Phước An lúc KCS Hàn đạt; KCS Sơn không ghi thêm', async () => {
+      setup(true, true, PHA);
+      await run(MfgStage.HAN);
+      expect(postedTo()).toEqual([[khoHanPHA.id, 15]]);
+      stockLedgerService.postEntry.mockClear();
+      await run(MfgStage.SON);
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('mảnh chỉ cần hàn -> kho Hàn của xưởng; vật tư thành phẩm (không hàn/sơn) -> kho Phôi của xưởng', async () => {
+      setup(true, false, PHA);
+      await run(MfgStage.HAN);
+      setup(false, false, PA);
+      await run(MfgStage.PHOI, 4);
+      expect(postedTo()).toEqual([
+        [khoHanPHA.id, 15],
+        [khoPhoiPA.id, 4],
+      ]);
+    });
+
+    it('số đạt = 0 -> không ghi', async () => {
+      setup(true, false, PA);
+      await run(MfgStage.HAN, 0);
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
   });
 });

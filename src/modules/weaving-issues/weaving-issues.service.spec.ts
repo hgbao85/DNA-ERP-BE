@@ -227,7 +227,15 @@ describe('WeavingIssuesService', () => {
       ).resolves.toBeDefined();
 
       expect(prisma.warehouseTransferPieceItem.aggregate).toHaveBeenCalledWith({
-        where: { productionOrderId: 1n, pieceId: 20n, transfer: { status: 'CONFIRMED' } },
+        where: {
+          productionOrderId: 1n,
+          pieceId: 20n,
+          // Đợt 7: phiếu Hàn Phước An -> Sơn Phú An (nội bộ nhóm Phôi-Hàn-Sơn) không tính là "đã nhận".
+          transfer: {
+            status: 'CONFIRMED',
+            toWarehouse: { NOT: { code: { startsWith: 'phoi-son-han' } } },
+          },
+        },
         _sum: { quantity: true },
       });
     });

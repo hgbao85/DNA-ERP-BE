@@ -49,6 +49,7 @@ import { WeavingPieceMaterialLineResponseDto } from './dto/weaving-piece-materia
 import { WeavingPointAssignmentResponseDto } from './dto/weaving-point-assignment-response.dto';
 import { WeavingPointGroupResponseDto } from './dto/weaving-point-group-response.dto';
 import { WeavingReceiptResponseDto } from './dto/weaving-receipt-response.dto';
+import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
 
 // Mã đơn Sales gốc (hiển thị cột "PO" cho người dùng) - xem toIssueResponseDto/toReceiptResponseDto.
 const PRODUCTION_ORDER_WITH_SALES_CODE = {
@@ -1210,7 +1211,11 @@ export class WeavingIssuesService {
     pieceId: bigint,
   ): Promise<number> {
     const result = await tx.warehouseTransferPieceItem.aggregate({
-      where: { productionOrderId, pieceId, transfer: { status: TransferStatus.CONFIRMED } },
+      where: {
+        productionOrderId,
+        pieceId,
+        transfer: { status: TransferStatus.CONFIRMED, ...PIECE_TRANSFER_LEAVES_FRAME },
+      },
       _sum: { quantity: true },
     });
     return result._sum.quantity ?? 0;

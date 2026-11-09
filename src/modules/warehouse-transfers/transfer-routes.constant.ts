@@ -17,6 +17,17 @@ export const FAMILY_ROUTES: Record<string, string> = {
   'vat-tu-tp': 'thanh-pham',
 };
 
+/**
+ * Đợt 7 (user chốt 09/11): mảnh Phước An hàn xong chuyển sang kho Sơn Phú An bằng phiếu chuyển kho - phiếu NỘI BỘ trong nhóm
+ * Phôi-Hàn-Sơn. Mọi chỗ đếm "mảnh đã chuyển / đã nhận" để đi đan, chuyền kiểm, đóng gói chỉ được tính phiếu chuyển RA KHỎI nhóm
+ * này (lọc Prisma dưới đây), nếu không mảnh Phước An bị đếm 2 lần.
+ */
+export const PIECE_TRANSFER_LEAVES_FRAME = {
+  toWarehouse: { NOT: { code: { startsWith: 'phoi-son-han' } } },
+} as const;
+/** Phiếu chuyển mảnh vào kho Sơn (chặng Hàn Phước An -> Sơn Phú An). */
+export const PIECE_TRANSFER_TO_PAINT = { toWarehouse: { kind: 'SON' as const } } as const;
+
 export function isValidTransferRoute(fromCode: string, toCode: string): boolean {
   const fromFamily = warehouseFamilyOf(fromCode);
   const toFamily = warehouseFamilyOf(toCode);

@@ -34,7 +34,11 @@ import { WarehouseTransferDetailResponseDto } from './dto/warehouse-transfer-det
 import { WarehouseTransferItemResponseDto } from './dto/warehouse-transfer-item-response.dto';
 import { WarehouseTransferPieceItemResponseDto } from './dto/warehouse-transfer-piece-item-response.dto';
 import { WarehouseTransferResponseDto } from './dto/warehouse-transfer-response.dto';
-import { isValidTransferRoute } from './transfer-routes.constant';
+import {
+  isValidTransferRoute,
+  PIECE_TRANSFER_LEAVES_FRAME,
+  PIECE_TRANSFER_TO_PAINT,
+} from './transfer-routes.constant';
 import { RealtimeService } from '../../realtime/realtime.service';
 
 const ACTOR_NAME_SELECT = { select: { firstName: true, lastName: true } };
@@ -418,7 +422,13 @@ export class WarehouseTransfersService {
 
     this.assertWarehouseScope(warehouseScope, fromWarehouse.code, 'tạo phiếu chuyển kho từ');
 
-    if (!isValidTransferRoute(fromWarehouse.code, toWarehouse.code)) {
+    // Đợt 7: mảnh Phước An hàn xong -> kho Sơn Phú An (kho Hàn chuyển sang kho Sơn của XƯỞNG KHÁC, có phiếu ký). Trong cùng xưởng
+    // không lập phiếu (user chốt 09/11) - nên Hàn -> Sơn cùng xưởng không phải 1 tuyến hợp lệ.
+    const toPaint =
+      fromWarehouse.kind === WarehouseKind.HAN &&
+      toWarehouse.kind === WarehouseKind.SON &&
+      fromWarehouse.workshopId !== toWarehouse.workshopId;
+    if (!toPaint && !isValidTransferRoute(fromWarehouse.code, toWarehouse.code)) {
       throw new BadRequestException(
         `Không được chuyển trực tiếp từ "${fromWarehouse.name}" sang "${toWarehouse.name}" - chỉ được chuyển đúng 1 bước theo chuỗi Phôi sơn hàn → Vật tư thành phẩm → Thành phẩm`,
       );
@@ -441,7 +451,7 @@ export class WarehouseTransfersService {
       await lockBusinessKey(tx, `warehouse-transfer-code:${year}`);
       const code = await this.nextTransferCode(tx, year);
 
-      const plan = await this.getPieceTransferPlan(orderIds, tx);
+      const plan = await this.getPieceTransferPlan(orderIds, tx, toPaint ? 'TO_PAINT' : 'OUT');
       const planByKey = new Map(plan.map((p) => [`${p.productionOrderId}:${p.pieceId}`, p]));
 
       const rows: {
@@ -511,6 +521,9 @@ export class WarehouseTransfersService {
   async getPieceTransferPlan(
     productionOrderIds: string[],
     client: PrismaServiceType | PrismaTx = this.prisma,
+    /** 'OUT' (mặc định): chuyển ra kho Phụ kiện/Thành phẩm sau công đoạn cuối. 'TO_PAINT' (Đợt 7): mảnh cần sơn của xưởng không có
+     *  kho Sơn (Phước An) - hàn xong (HAN QC_DONE) chuyển sang kho Sơn Phú An. */
+    leg: 'OUT' | 'TO_PAINT' = 'OUT',
   ): Promise<PieceTransferPlanItemResponseDto[]> {
     if (productionOrderIds.length === 0) {
       throw new BadRequestException('Phải truyền ít nhất 1 productionOrderId');
@@ -544,7 +557,10 @@ export class WarehouseTransfersService {
       client.warehouseTransferPieceItem.findMany({
         where: {
           productionOrderId: { in: orderBigIds },
-          transfer: { status: { in: [TransferStatus.PENDING, TransferStatus.CONFIRMED] } },
+          transfer: {
+            status: { in: [TransferStatus.PENDING, TransferStatus.CONFIRMED] },
+            ...(leg === 'TO_PAINT' ? PIECE_TRANSFER_TO_PAINT : PIECE_TRANSFER_LEAVES_FRAME),
+          },
         },
         select: { productionOrderId: true, pieceId: true, quantity: true },
       }),
@@ -577,10 +593,19 @@ export class WarehouseTransfersService {
         // needsHan=false, needsSon=true là tổ hợp không hợp lệ về nghiệp vụ (Sơn phải sau Hàn) -
         // bỏ qua, xem bảng mục 7.1.
         if (!bp.needsHan && bp.needsSon) continue;
+        // Chặng Hàn -> Sơn chỉ có ý nghĩa với mảnh cần CẢ hàn lẫn sơn.
+        if (leg === 'TO_PAINT' && !(bp.needsHan && bp.needsSon)) continue;
 
         // needsHan=false ("vật tư thành phẩm") → PHOI (Phôi tự báo cắt xong, không qua Hàn/Sơn).
         // needsHan=true → SON nếu needsSon, không thì HAN. Xem comment đầu hàm.
-        const finalStage = !bp.needsHan ? MfgStage.PHOI : bp.needsSon ? MfgStage.SON : MfgStage.HAN;
+        const finalStage =
+          leg === 'TO_PAINT'
+            ? MfgStage.HAN
+            : !bp.needsHan
+              ? MfgStage.PHOI
+              : bp.needsSon
+                ? MfgStage.SON
+                : MfgStage.HAN;
         const readyQty = batchQtyByKey.get(`${order.id}:${bp.pieceId}:${finalStage}`) ?? 0;
         const transferredQty = transferredByKey.get(`${order.id}:${bp.pieceId}`) ?? 0;
         const suggestedQty = Math.max(0, readyQty - transferredQty);

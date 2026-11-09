@@ -120,6 +120,43 @@ export class WorkshopWarehouseResolver {
     return this.db.warehouse.findUnique({ where: { id }, select: WAREHOUSE_SELECT });
   }
 
+  /**
+   * Kho của 1 LOẠI cho 1 xưởng: Phôi/Hàn lấy kho riêng của xưởng (xưởng null = xưởng của kho gốc 'phoi-son-han', tức Phú An);
+   * Sơn/Phụ kiện/Thành phẩm dùng chung - lấy kho đầu tiên cùng loại. null = không có kho loại đó cho xưởng (vd Phước An không có
+   * kho Sơn).
+   */
+  async kindWarehouseOf(
+    kind: WarehouseKind,
+    workshopId: bigint | null,
+  ): Promise<WarehouseLike | null> {
+    if (isWorkshopBoundKind(kind)) {
+      let ws = workshopId;
+      if (ws == null) {
+        const root = await this.db.warehouse.findUnique({
+          where: { code: 'phoi-son-han' },
+          select: WAREHOUSE_SELECT,
+        });
+        ws = root?.workshopId ?? null;
+      }
+      return ws == null ? null : this.findKindOf(kind, ws);
+    }
+    return this.db.warehouse.findFirst({
+      where: { kind, deletedAt: null, isActive: true },
+      orderBy: { id: 'asc' },
+      select: WAREHOUSE_SELECT,
+    });
+  }
+
+  /** Xưởng có kho Sơn riêng không (Phú An có, Phước An sơn ở Phú An). */
+  async workshopHasPaint(workshopId: bigint | null): Promise<boolean> {
+    if (workshopId == null) return true;
+    const w = await this.db.warehouse.findFirst({
+      where: { kind: WarehouseKind.SON, workshopId, deletedAt: null },
+      select: { id: true },
+    });
+    return w != null;
+  }
+
   /** Kho Phôi của 1 xưởng (Đợt 8 của người A dùng để trừ tồn sắt khi tính số cây cần mua; phôi/mảnh của lệnh ghi ở đây). */
   async phoiWarehouseOf(workshopId: bigint): Promise<WarehouseLike> {
     const w = await this.findKindOf(WarehouseKind.PHOI, workshopId);

@@ -57,6 +57,20 @@ describe('WarehouseTransfersService', () => {
     kind: 'HAN',
     workshopId: 1n,
   };
+  const hanPHA = {
+    id: 8n,
+    code: 'phoi-son-han-han-pha',
+    name: 'Kho Han PhA',
+    kind: 'HAN',
+    workshopId: 2n,
+  };
+  const sonPA = {
+    id: 9n,
+    code: 'phoi-son-han-son-pa',
+    name: 'Kho Son PA',
+    kind: 'SON',
+    workshopId: 1n,
+  };
   const phoiPHA = {
     id: 7n,
     code: 'phoi-son-han-phoi-pha',
@@ -153,7 +167,17 @@ describe('WarehouseTransfersService', () => {
 
     prisma.warehouse.findUnique.mockImplementation(
       ({ where }: { where: { id?: bigint; code?: string } }) => {
-        const all = [phoiSonHan, vatTuTp, thanhPham, vatTuTp2, openingBalance, hanPA, phoiPHA];
+        const all = [
+          phoiSonHan,
+          vatTuTp,
+          thanhPham,
+          vatTuTp2,
+          openingBalance,
+          hanPA,
+          phoiPHA,
+          hanPHA,
+          sonPA,
+        ];
         if (where.id !== undefined)
           return Promise.resolve(all.find((w) => w.id === where.id) ?? null);
         return Promise.resolve(all.find((w) => w.code === where.code) ?? null);
@@ -882,7 +906,11 @@ describe('WarehouseTransfersService', () => {
         expect.objectContaining({
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
           where: expect.objectContaining({
-            transfer: { status: { in: [TransferStatus.PENDING, TransferStatus.CONFIRMED] } },
+            transfer: {
+              status: { in: [TransferStatus.PENDING, TransferStatus.CONFIRMED] },
+              // Đợt 7: chỉ tính phiếu chuyển RA KHỎI nhóm Phôi-Hàn-Sơn.
+              toWarehouse: { NOT: { code: { startsWith: 'phoi-son-han' } } },
+            },
           }),
         }),
       );
@@ -977,6 +1005,51 @@ describe('WarehouseTransfersService', () => {
         { params: { itemCount: number } },
       ];
       expect(emitArg.params.itemCount).toBe(1);
+    });
+
+    it('Đợt 7: kho Hàn Phước An chuyển mảnh cần sơn sang kho Sơn Phú An - tính theo số KCS Hàn, chỉ trừ phiếu đã vào kho Sơn', async () => {
+      prisma.bomPiece.findMany.mockResolvedValue([
+        {
+          bomRevisionId: 80n,
+          pieceId: 30n,
+          needsHan: true,
+          needsSon: true,
+          piece: { code: 'M-01', name: 'Manh 01' },
+        },
+      ]);
+      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
+
+      await service.createPieceTransfer(
+        { ...pieceDto, fromWarehouseId: '8', toWarehouseId: '9' },
+        'phoi-son-han-han-pha',
+        'user-1',
+        'idem-key-1',
+      );
+
+      expect(prisma.warehouseTransfer.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          data: expect.objectContaining({
+            pieceItems: { create: [expect.objectContaining({ quantity: 20 })] },
+          }),
+        }),
+      );
+      const [planArg] = prisma.warehouseTransferPieceItem.findMany.mock.calls[0] as [
+        { where: { transfer: Record<string, unknown> } },
+      ];
+      expect(planArg.where.transfer.toWarehouse).toEqual({ kind: 'SON' });
+    });
+
+    it('Đợt 7: kho Hàn chuyển sang kho Sơn CÙNG xưởng -> 400 (trong cùng xưởng không lập phiếu)', async () => {
+      await expect(
+        service.createPieceTransfer(
+          { ...pieceDto, fromWarehouseId: '6', toWarehouseId: '9' },
+          null,
+          'user-1',
+          'idem-key-1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
     });
 
     it('rejects with 400 when nothing is ready to transfer', async () => {

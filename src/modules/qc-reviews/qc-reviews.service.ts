@@ -515,6 +515,18 @@ export class QcReviewsService {
           `Production batch ${productionBatchId} đã bị 1 request khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
         );
       }
+      // Đợt 7 (người B): KCS đạt ở công đoạn cuối của mảnh -> ghi mảnh vào kho của công đoạn đó.
+      await this.productionBatchesService.postPieceOutputIfFinal(
+        tx,
+        {
+          id: batch.id,
+          productionOrderId: batch.productionOrderId,
+          pieceId: batch.pieceId,
+          stage: batch.stage,
+          qty: passedQty,
+        },
+        reviewedById,
+      );
 
       return tx.qcReview.create({
         data: {

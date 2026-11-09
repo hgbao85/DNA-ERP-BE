@@ -17,6 +17,7 @@ import {
   ProductionBatchStatus,
   ProductionOrder,
   StockLedgerRefType,
+  WarehouseKind,
   TransferStatus,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
@@ -61,6 +62,7 @@ import { ProductionBatchPlanItemResponseDto } from './dto/production-batch-plan-
 import { ProductionBatchPlanResponseDto } from './dto/production-batch-plan-response.dto';
 import { ProductionBatchResponseDto } from './dto/production-batch-response.dto';
 import { SubmitPieceStepDto } from './dto/submit-piece-step.dto';
+import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
 
 /** Gộp 3 thứ cần cho mỗi piece có PieceMaterialYield ở stage=PHOI trong 1 lần tra bảng
  *  piece_material_yield (thay vì 3 hàm rời nhân round-trip DB): tồn nguyên liệu thô, công đoạn đã
@@ -691,6 +693,81 @@ export class ProductionBatchesService {
    * postSegmentConsumeEntries() KHÔNG cần gọi ở đây - đã xác nhận luôn no-op cho mảnh dùng
    * PieceMaterialYield (không có PieceBom), xem method đó.
    */
+  /**
+   * Đợt 7 (user chốt 09/11): ghi MẢNH vào kho khi KCS đạt ở công đoạn cuối của mảnh (trước đây mảnh không vào kho nào ở khâu sản
+   * xuất - chỉ phiếu chuyển sang Phụ kiện ghi sổ, kho nguồn bị âm). Hàn và Sơn báo song song nên KHÔNG ghi mảnh chuyển từng công
+   * đoạn trong cùng xưởng (không phiếu giấy) - chỉ ghi 1 lần vào kho của công đoạn cuối:
+   *   - cần sơn -> kho Sơn; chỉ cần hàn -> kho Hàn của xưởng; không hàn/sơn (vật tư thành phẩm) -> kho Phôi của xưởng.
+   *   - xưởng không có kho Sơn (Phước An) mà mảnh cần sơn: ghi vào kho Hàn của xưởng lúc KCS Hàn đạt; thủ kho lập phiếu chuyển
+   *     Hàn Phước An -> Sơn Phú An (getPieceTransferPlan leg 'TO_PAINT'); KCS Sơn sau đó KHÔNG ghi thêm.
+   * Gọi TRONG transaction duyệt KCS, ngay sau khi batch thành QC_DONE. Idempotent theo batch. Không đổi bất kỳ cách đếm nào hiện có
+   * (các màn đếm mảnh theo lô QC_DONE / phiếu chuyển, không đọc tồn mảnh).
+   */
+  async postPieceOutputIfFinal(
+    tx: PrismaTx,
+    batch: { id: bigint; productionOrderId: bigint; pieceId: bigint; stage: MfgStage; qty: number },
+    createdById: string,
+  ): Promise<void> {
+    if (batch.qty <= 0) return;
+    const order = await tx.productionOrder.findUnique({
+      where: { id: batch.productionOrderId },
+      select: {
+        bomRevisionId: true,
+        productionInvoiceItem: { select: { productionInvoiceId: true } },
+      },
+    });
+    if (!order) return;
+    const bp = await tx.bomPiece.findUnique({
+      where: {
+        bomRevisionId_pieceId: { bomRevisionId: order.bomRevisionId, pieceId: batch.pieceId },
+      },
+      select: { needsHan: true, needsSon: true },
+    });
+    if (!bp || (!bp.needsHan && bp.needsSon)) return;
+    const resolver = new WorkshopWarehouseResolver(tx);
+    const workshopId = await resolver.workshopIdOfPi(
+      order.productionInvoiceItem.productionInvoiceId,
+    );
+    let creditStage: MfgStage = !bp.needsHan
+      ? MfgStage.PHOI
+      : bp.needsSon
+        ? MfgStage.SON
+        : MfgStage.HAN;
+    if (creditStage === MfgStage.SON && !(await resolver.workshopHasPaint(workshopId))) {
+      creditStage = MfgStage.HAN;
+    }
+    if (batch.stage !== creditStage) return;
+    const kind =
+      creditStage === MfgStage.PHOI
+        ? WarehouseKind.PHOI
+        : creditStage === MfgStage.HAN
+          ? WarehouseKind.HAN
+          : WarehouseKind.SON;
+    const target = await resolver.kindWarehouseOf(kind, workshopId);
+    if (!target) {
+      this.logger.warn(
+        `Không có kho ${kind} cho xưởng ${workshopId ?? '-'} - bỏ qua ghi mảnh batch ${batch.id}`,
+      );
+      return;
+    }
+    const production = await tx.warehouse.findUniqueOrThrow({
+      where: { code: PRODUCTION_WAREHOUSE_CODE },
+    });
+    await this.stockLedgerService.postEntry(
+      {
+        fromWarehouseId: production.id,
+        toWarehouseId: target.id,
+        pieceId: batch.pieceId,
+        qty: batch.qty,
+        refType: StockLedgerRefType.FRAME_OUTPUT,
+        refId: batch.id.toString(),
+        createdById,
+        idempotencyKey: `piece-output:${batch.id}`,
+      },
+      tx,
+    );
+  }
+
   async autoFinalizePieceOutputIfLastStepComplete(
     tx: PrismaTx,
     bomRevisionId: bigint,
@@ -732,7 +809,7 @@ export class ProductionBatchesService {
     const delta = totalPassed - alreadyFinalized;
     if (delta <= 0) return;
 
-    await tx.productionBatch.create({
+    const finalized = await tx.productionBatch.create({
       data: {
         stage: MfgStage.PHOI,
         productionOrderId,
@@ -742,6 +819,12 @@ export class ProductionBatchesService {
         status: ProductionBatchStatus.QC_DONE,
       },
     });
+    // Đợt 7: mảnh PHOI-cuối (vật tư thành phẩm) vào kho Phôi của xưởng.
+    await this.postPieceOutputIfFinal(
+      tx,
+      { id: finalized.id, productionOrderId, pieceId, stage: MfgStage.PHOI, qty: delta },
+      reportedById,
+    );
   }
 
   /** Phôi xem lại bundle CỦA CHÍNH order này (mọi status) - dùng để hiện trạng thái "chờ KCS/đã
@@ -1554,7 +1637,10 @@ export class ProductionBatchesService {
       db.warehouseTransferPieceItem.findMany({
         where: {
           pieceId: { in: pieceIds },
-          transfer: { status: { in: [TransferStatus.PENDING, TransferStatus.CONFIRMED] } },
+          transfer: {
+            status: { in: [TransferStatus.PENDING, TransferStatus.CONFIRMED] },
+            ...PIECE_TRANSFER_LEAVES_FRAME,
+          },
         },
         select: { pieceId: true, quantity: true },
       }),
