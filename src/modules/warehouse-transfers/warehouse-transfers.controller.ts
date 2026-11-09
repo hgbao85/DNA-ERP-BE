@@ -13,6 +13,7 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { ConfirmWarehouseTransferDto } from './dto/confirm-warehouse-transfer.dto';
 import { CreatePieceWarehouseTransferDto } from './dto/create-piece-warehouse-transfer.dto';
 import { CreateWarehouseTransferDto } from './dto/create-warehouse-transfer.dto';
 import { ListWarehouseTransfersQueryDto } from './dto/list-warehouse-transfers-query.dto';
@@ -104,15 +105,17 @@ export class WarehouseTransfersController {
     return this.warehouseTransfersService.findOne(id, warehouseScope);
   }
 
-  // Kho đích xác nhận - ghi N bút toán stock_ledger, giải phóng reservation.
+  // Kho đích xác nhận: ảnh phiếu đã ký bắt buộc + số thực nhận từng dòng (v8 4.1/4.7) - ghi bút toán theo số thực nhận,
+  // giải phóng giữ chỗ.
   @Post(':id/confirm')
   @RequirePermissions(APPROVE)
   confirm(
     @Param('id') id: string,
+    @Body() dto: ConfirmWarehouseTransferDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('warehouseScope') warehouseScope: string | null,
   ) {
-    return this.warehouseTransfersService.confirm(id, userId, warehouseScope);
+    return this.warehouseTransfersService.confirm(id, dto, userId, warehouseScope);
   }
 
   // Kho đích từ chối - không đụng tồn kho, chỉ giải phóng reservation.

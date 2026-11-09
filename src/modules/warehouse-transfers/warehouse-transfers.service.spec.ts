@@ -33,7 +33,9 @@ describe('WarehouseTransfersService', () => {
       createMany: jest.Mock;
       updateMany: jest.Mock;
     };
-    warehouseTransferPieceItem: { findMany: jest.Mock };
+    warehouseTransferPieceItem: { findMany: jest.Mock; update: jest.Mock };
+    warehouseTransferItem: { update: jest.Mock };
+    workshop: { findUnique: jest.Mock };
     productionOrder: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     productionBatch: { findMany: jest.Mock };
@@ -136,7 +138,14 @@ describe('WarehouseTransfersService', () => {
         createMany: jest.fn(),
         updateMany: jest.fn(),
       },
-      warehouseTransferPieceItem: { findMany: jest.fn().mockResolvedValue([]) },
+      warehouseTransferPieceItem: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
+      warehouseTransferItem: { update: jest.fn() },
+      // Mã xưởng cho số phiếu CK-<mã kho giao>-NNN.
+      workshop: {
+        findUnique: jest.fn(({ where }: { where: { id: bigint } }) =>
+          Promise.resolve({ code: where.id === 2n ? 'PHUOC_AN' : 'PHU_AN' }),
+        ),
+      },
       productionOrder: { findMany: jest.fn().mockResolvedValue([]) },
       bomPiece: { findMany: jest.fn().mockResolvedValue([]) },
       productionBatch: { findMany: jest.fn().mockResolvedValue([]) },
@@ -560,37 +569,142 @@ describe('WarehouseTransfersService', () => {
       expect(result.id).toBe('50');
     });
 
-    it('numbers the transfer code sequentially per year, based on the existing count', async () => {
+    it('v8 4.8: số phiếu CK-<mã kho giao>-NNN, đếm liên tục theo kho giao', async () => {
       prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
       prisma.warehouseTransfer.count.mockResolvedValue(4);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
       await service.create(dto, null, 'user-1', 'idem-key-1');
 
-      const currentYear = new Date().getFullYear();
+      expect(prisma.warehouseTransfer.count).toHaveBeenCalledWith({
+        where: { code: { startsWith: 'CK-PA.PHOI-' } },
+      });
       expect(prisma.warehouseTransfer.create).toHaveBeenCalledWith(
         expect.objectContaining({
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
-          data: expect.objectContaining({ code: `CK-${currentYear}-005` }),
+          data: expect.objectContaining({ code: 'CK-PA.PHOI-005' }),
         }),
       );
     });
   });
 
   describe('confirm', () => {
+    const SIGNED = { signedSlipUrls: ['https://example.com/ck-ky.jpg'] };
+
+    it('v8 4.1: không có ảnh phiếu đã ký -> 400, không ghi gì', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      await expect(
+        service.confirm('50', { signedSlipUrls: [' '] }, 'user-1', 'vat-tu-tp'),
+      ).rejects.toThrow('Cần ảnh phiếu chuyển kho');
+      expect(prisma.warehouseTransfer.updateMany).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('v8 4.7: nhận thiếu -> dòng giữ số gửi ở sentQty, quantity = thực nhận, sổ kho chỉ ghi số thực nhận; lưu ảnh', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      stockLedgerService.postEntry.mockResolvedValue({ id: '999' });
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
+        transferRow({ status: TransferStatus.CONFIRMED }),
+      );
+
+      await service.confirm(
+        '50',
+        { ...SIGNED, items: [{ id: '500', receivedQty: 20 }] },
+        'user-1',
+        'vat-tu-tp',
+      );
+
+      expect(prisma.warehouseTransferItem.update).toHaveBeenCalledWith({
+        where: { id: 500n },
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+        data: { quantity: 20, sentQty: expect.anything() },
+      });
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ materialId: 10n, qty: 20 }),
+        prisma,
+      );
+      expect(prisma.warehouseTransfer.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          data: expect.objectContaining({ signedSlipUrls: ['https://example.com/ck-ky.jpg'] }),
+        }),
+      );
+    });
+
+    it('v8 4.7: thực nhận lớn hơn số gửi -> 400; nhận 0 cả phiếu -> 400 (phải Từ chối)', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      await expect(
+        service.confirm(
+          '50',
+          { ...SIGNED, items: [{ id: '500', receivedQty: 31 }] },
+          'user-1',
+          null,
+        ),
+      ).rejects.toThrow('lớn hơn số gửi 30');
+      await expect(
+        service.confirm(
+          '50',
+          { ...SIGNED, items: [{ id: '500', receivedQty: 0 }] },
+          'user-1',
+          null,
+        ),
+      ).rejects.toThrow('Từ chối');
+      expect(prisma.warehouseTransfer.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('v8 4.7: mảnh nhận thiếu -> quantity mảnh = thực nhận (phần thiếu quay lại kế hoạch chuyển để lập phiếu bù)', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(
+        transferRow({
+          items: [],
+          pieceItems: [
+            {
+              id: 700n,
+              productionOrderId: 900n,
+              pieceId: 30n,
+              quantity: 12,
+              note: null,
+              piece: { code: 'M-01', name: 'Manh 01' },
+            },
+          ],
+        }),
+      );
+      stockLedgerService.postEntry.mockResolvedValue({ id: '999' });
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
+        transferRow({ status: TransferStatus.CONFIRMED }),
+      );
+
+      await service.confirm(
+        '50',
+        { ...SIGNED, pieceItems: [{ id: '700', receivedQty: 9 }] },
+        'user-1',
+        'vat-tu-tp',
+      );
+
+      expect(prisma.warehouseTransferPieceItem.update).toHaveBeenCalledWith({
+        where: { id: 700n },
+        data: { quantity: 9, sentQty: 12 },
+      });
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ pieceId: 30n, qty: 9 }),
+        prisma,
+      );
+    });
+
     it('rejects with 409 when the transfer is not PENDING', async () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(
         transferRow({ status: TransferStatus.CONFIRMED }),
       );
 
-      await expect(service.confirm('50', 'user-1', null)).rejects.toThrow(ConflictException);
+      await expect(service.confirm('50', SIGNED, 'user-1', null)).rejects.toThrow(
+        ConflictException,
+      );
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
 
     it('rejects when the caller is not scoped to the destination warehouse', async () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
 
-      await expect(service.confirm('50', 'user-1', 'phoi-son-han')).rejects.toThrow(
+      await expect(service.confirm('50', SIGNED, 'user-1', 'phoi-son-han')).rejects.toThrow(
         ForbiddenException,
       );
     });
@@ -602,7 +716,7 @@ describe('WarehouseTransfersService', () => {
         transferRow({ status: TransferStatus.CONFIRMED, confirmedAt: new Date() }),
       );
 
-      await service.confirm('50', 'user-1', 'vat-tu-tp');
+      await service.confirm('50', SIGNED, 'user-1', 'vat-tu-tp');
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
@@ -641,7 +755,7 @@ describe('WarehouseTransfersService', () => {
         transferRow({ status: TransferStatus.CONFIRMED, confirmedAt: new Date() }),
       );
 
-      await service.confirm('50', 'user-1', 'vat-tu-tp');
+      await service.confirm('50', SIGNED, 'user-1', 'vat-tu-tp');
 
       expect(realtimeStub.publishEntityChanged).toHaveBeenCalledTimes(1);
       expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith({
@@ -656,7 +770,9 @@ describe('WarehouseTransfersService', () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
       stockLedgerService.postEntry.mockRejectedValue(new Error('ledger down'));
 
-      await expect(service.confirm('50', 'user-1', 'vat-tu-tp')).rejects.toThrow('ledger down');
+      await expect(service.confirm('50', SIGNED, 'user-1', 'vat-tu-tp')).rejects.toThrow(
+        'ledger down',
+      );
       expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalled();
     });
 
@@ -667,7 +783,7 @@ describe('WarehouseTransfersService', () => {
         transferRow({ status: TransferStatus.CONFIRMED }),
       );
 
-      await service.confirm('50', 'user-1', 'vat-tu-tp');
+      await service.confirm('50', SIGNED, 'user-1', 'vat-tu-tp');
 
       expect(notificationsService.resolve).toHaveBeenCalledWith({
         entityType: 'WAREHOUSE_TRANSFER',
@@ -695,7 +811,7 @@ describe('WarehouseTransfersService', () => {
       );
       prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(transferRow());
 
-      await service.confirm('50', 'user-1', null);
+      await service.confirm('50', SIGNED, 'user-1', null);
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
       expect(prisma.warehouseTransferReservation.updateMany).toHaveBeenCalled();
@@ -733,7 +849,7 @@ describe('WarehouseTransfersService', () => {
         transferRow({ status: TransferStatus.CONFIRMED, confirmedAt: new Date() }),
       );
 
-      const result = await service.confirm('50', 'user-1', 'vat-tu-tp');
+      const result = await service.confirm('50', SIGNED, 'user-1', 'vat-tu-tp');
 
       // Chỉ dòng có materialId được ghi vào ledger - dòng free-text không đụng tồn kho chút nào.
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
@@ -771,7 +887,7 @@ describe('WarehouseTransfersService', () => {
         transferRow({ status: TransferStatus.CONFIRMED }),
       );
 
-      await service.confirm('50', 'user-1', 'vat-tu-tp');
+      await service.confirm('50', SIGNED, 'user-1', 'vat-tu-tp');
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -791,7 +907,9 @@ describe('WarehouseTransfersService', () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
       prisma.warehouseTransfer.updateMany.mockResolvedValue({ count: 0 });
 
-      await expect(service.confirm('50', 'user-1', 'vat-tu-tp')).rejects.toThrow(ConflictException);
+      await expect(service.confirm('50', SIGNED, 'user-1', 'vat-tu-tp')).rejects.toThrow(
+        ConflictException,
+      );
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
       expect(prisma.warehouseTransferReservation.updateMany).not.toHaveBeenCalled();
     });
@@ -1160,7 +1278,7 @@ describe('WarehouseTransfersService', () => {
       expect(lockKeys).toEqual([
         'piece-transfer:900',
         'piece-transfer:901',
-        `warehouse-transfer-code:${new Date().getFullYear()}`,
+        'warehouse-transfer-code:CK-PA.PHOI-',
       ]);
       // Khoá phải chạy TRƯỚC khi đọc plan (productionOrder.findMany) - không chỉ trước khi ghi.
       const lockCallOrder = prisma.$executeRaw.mock.invocationCallOrder[0];

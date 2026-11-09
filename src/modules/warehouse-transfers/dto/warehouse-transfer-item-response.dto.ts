@@ -10,7 +10,10 @@ export class WarehouseTransferItemResponseDto {
   /// 09/09/2026, không có Material để join) và vật tư chưa khai báo quy cách.
   @Expose() @ApiPropertyOptional({ nullable: true }) materialSpec!: string | null;
   @Expose() @ApiProperty() unit!: string;
+  /** Chờ nhận: số gửi. Đã nhận: số thực nhận (v8 4.7). */
   @Expose() @ApiProperty() quantity!: number;
+  /** Số kho giao gửi khi thực nhận ít hơn; null = nhận đủ. */
+  @Expose() @ApiPropertyOptional({ nullable: true, type: Number }) sentQty!: number | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) note!: string | null;
 
   constructor(partial: Partial<WarehouseTransferItemResponseDto>) {
