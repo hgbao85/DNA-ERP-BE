@@ -169,6 +169,30 @@ describe('NotificationsService', () => {
       });
     });
 
+    it('Câu 8: thông báo Mua hàng/Kho hiện số LSX ở tiêu đề, link vẫn giữ mã PI; loại khác không đổi', async () => {
+      const withPi = prisma as unknown as Record<string, unknown>;
+      withPi.productionInvoice = { findUnique: jest.fn().mockResolvedValue({ id: 7n }) };
+      withPi.productionInvoiceItem = {
+        findMany: jest.fn().mockResolvedValue([
+          { productionInvoiceId: 7n, lsxCode: 'MY-313' },
+          { productionInvoiceId: 7n, lsxCode: 'MY-314' },
+        ]),
+      };
+      (withPi.productionInvoice as { findMany?: jest.Mock }).findMany = jest
+        .fn()
+        .mockResolvedValue([{ id: 7n, code: 'PI-2026-031' }]);
+
+      await service.emit('PURCHASE_PROPOSAL_APPROVED', {
+        entityId: '1',
+        params: { piCode: 'PI-2026-031', count: 2 },
+      });
+      const [arg] = prisma.notification.create.mock.calls[0] as [
+        { data: { title: string; link: { params?: { focus?: string } } } },
+      ];
+      expect(arg.data.title).toBe('MY-313 + MY-314: đề xuất mua đã có Sếp duyệt');
+      expect(arg.data.link.params?.focus).toBe('PI_CODE:PI-2026-031');
+    });
+
     it('loại actorId khỏi người nhận (không báo cho chính người vừa thao tác)', async () => {
       await service.emit('CUTTING_PROPOSAL_AUTO_APPROVED', {
         entityId: '1',

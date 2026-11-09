@@ -322,9 +322,9 @@ export class PurchaseProposalsService {
    *  đường `toResponseDto()` đã dùng (cuttingProposal->productionOrder->PI, fallback
    *  row.productionInvoice) thay vì tự dựng lại logic resolve khác đi. */
   private async resolvePiCodeFor(proposalId: bigint): Promise<string> {
-    // Thông báo hiện mã lệnh hiển thị (số LSX) - cùng mã Mua hàng thấy trên màn hình (2026-11-05).
+    // Truyền MÃ PI thật: link focus=PI_CODE:... cần mã PI; NotificationsService tự đổi sang số LSX khi hiển thị (07/11).
     const dto = await this.findOne(proposalId.toString()).catch(() => null);
-    return dto?.lenhCode ?? dto?.piCode ?? `#${proposalId}`;
+    return dto?.piCode ?? `#${proposalId}`;
   }
 
   /**

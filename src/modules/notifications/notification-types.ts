@@ -209,6 +209,18 @@ export interface PurchaseOverReceivedParams {
   buyerIds: string[];
 }
 
+/** Nhu cầu 1 vật tư của lệnh tính lại GIẢM xuống dưới số đã có phiếu Giám đốc ký (anh Nhân chốt 07/11, câu 2b). */
+export interface PurchaseDemandDroppedParams {
+  piCode: string;
+  materialCode: string;
+  unit?: string;
+  /** Nhu cầu mới sau khi tính lại. */
+  neededQty: number;
+  /** Số đã chốt mua (phiếu đã ký). */
+  signedQty: number;
+  buyerIds: string[];
+}
+
 /** Trạng thái xưởng của 1 lệnh sản xuất (ProductionOrder.floorStage) - QLSX Bắt đầu/Tạm dừng/Tiếp tục/Kết thúc. */
 export interface FloorStageNotificationParams {
   piCode: string;
@@ -859,6 +871,24 @@ const notificationTypeDefinitions = {
     recipients: (p: PurchaseOverReceivedParams) =>
       p.buyerIds.length > 0 ? { userIds: p.buyerIds } : { roles: [BUSINESS_ROLES.PURCHASER] },
   } satisfies NotificationTypeDef<PurchaseOverReceivedParams>,
+
+  /** Tính lại làm nhu cầu 1 vật tư giảm dưới số đã có phiếu Giám đốc ký (anh Nhân chốt 07/11): phần mềm không tự sửa vì đơn
+   *  có thể đã gửi NCC - báo người mua phụ trách + Giám đốc; người mua tự quyết làm phiếu thay thế hoặc nhận đủ (dư vào tồn tự
+   *  do). Người A gọi `notifyPurchaseDemandDropped()` từ phần tính lại. Chưa gán người mua thì báo mọi Mua hàng. */
+  PURCHASE_DEMAND_DROPPED: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PURCHASE_PROPOSAL',
+    title: (p: PurchaseDemandDroppedParams) =>
+      `${p.piCode}: ${p.materialCode} chỉ còn cần ${p.neededQty}${p.unit ? ` ${p.unit}` : ''}, đã ký mua ${p.signedQty}`,
+    message: () =>
+      'Phiếu đã có Giám đốc ký nên phần mềm không tự sửa. Nhà cung cấp chưa giao thì làm phiếu thay thế; đã giao hoặc giữ đơn thì nhận đủ - phần dư vào tồn tự do.',
+    link: () => ({ module: 'purchasing', page: 'don-dat-hang' }),
+    recipients: (p: PurchaseDemandDroppedParams) =>
+      p.buyerIds.length > 0
+        ? { userIds: p.buyerIds, roles: [BUSINESS_ROLES.BOSS] }
+        : { roles: [BUSINESS_ROLES.PURCHASER, BUSINESS_ROLES.BOSS] },
+  } satisfies NotificationTypeDef<PurchaseDemandDroppedParams>,
 
   // ─── Phase 3b, nhóm 7.5-i "Sắt → Phôi → KCS" (xem changelog 2026-09-25 mục 19) ─────────────
   /** Kho xuất sắt cho PI - Phôi vào xác nhận đã nhận. Tự đóng khi Phôi `receive()`.

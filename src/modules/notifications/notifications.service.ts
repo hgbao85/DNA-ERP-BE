@@ -8,6 +8,7 @@ import {
 import { PaginationMetaDto, Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
+import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { AnnouncementResponseDto } from './dto/announcement-response.dto';
 import { CreateNotificationDto } from './dto/create-notification.dto';
@@ -68,6 +69,50 @@ export class NotificationsService {
    * lỗi tính toán tiêu chí người nhận (log + bỏ qua) - GHI CHÚ: lỗi ghi DB (create/update) vẫn ném
    * ra bình thường để caller tự quyết định best-effort (try/catch) hay để vỡ transaction.
    */
+  /** Các loại thông báo Mua hàng / Kho (người B) đổi mã PI -> số LSX khi hiển thị. Thông báo bên Kế hoạch/Sản xuất do người A tự
+   *  đổi theo cách riêng - không đụng. */
+  private static readonly LENH_CODE_TYPES: ReadonlySet<string> = new Set([
+    'PURCHASE_PROPOSAL_CREATED',
+    'PURCHASE_PROPOSAL_READY_TO_RECEIVE',
+    'PURCHASE_PROPOSAL_APPROVED',
+    'PURCHASE_PROPOSAL_ITEM_RECEIVED',
+    'PURCHASE_PROPOSAL_PURCHASED',
+    'PURCHASE_DEMAND_DROPPED',
+    'STEEL_ISSUE_TO_PHOI',
+    'STEEL_ISSUE_RECEIVED_MISMATCH',
+    'MATERIAL_ISSUE_TO_TEAM',
+    'MATERIAL_YIELD_ISSUE_TO_PHOI',
+    'MATERIAL_YIELD_RECIPE_ISSUE_TO_PHOI',
+    'PACKAGING_ISSUE_CREATED',
+  ]);
+
+  private async withLenhCode<T extends object>(
+    type: string,
+    params: T,
+    client: PrismaServiceType | PrismaTx,
+  ): Promise<T> {
+    const piCode = (params as { piCode?: unknown }).piCode;
+    if (
+      !NotificationsService.LENH_CODE_TYPES.has(type) ||
+      typeof piCode !== 'string' ||
+      !piCode.startsWith('PI-')
+    ) {
+      return params;
+    }
+    try {
+      const pi = await client.productionInvoice.findUnique({
+        where: { code: piCode },
+        select: { id: true },
+      });
+      if (!pi) return params;
+      const shown = (await loadLenhDisplayCodes(client, [pi.id])).get(pi.id.toString());
+      return shown && shown !== piCode ? { ...params, piCode: shown } : params;
+    } catch (e) {
+      this.logger.warn(`withLenhCode(${type}): ${(e as Error).message} - giữ mã PI`);
+      return params;
+    }
+  }
+
   async emit(type: NotificationType, options: EmitNotificationOptions = {}): Promise<void> {
     const def = NOTIFICATION_TYPES[type];
     if (!def) {
@@ -90,8 +135,11 @@ export class NotificationsService {
       return;
     }
 
-    const title = def.title(params);
-    const message = def.message(params);
+    // Câu 8 (người B, 07/11): thông báo Mua hàng/Kho hiện SỐ LSX thay mã PI ở tiêu đề/nội dung. Link + data giữ mã PI
+    // (focus=PI_CODE:... phải đúng mã PI mới mở được dòng).
+    const shown = await this.withLenhCode(type, params, client);
+    const title = def.title(shown);
+    const message = def.message(shown);
     const link = def.link ? def.link(params) : null;
     const dedupeKey = options.dedupeKey ?? null;
 

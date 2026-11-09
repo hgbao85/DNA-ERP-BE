@@ -66,3 +66,48 @@ export async function notifyPurchaseProposalCreated(
     );
   }
 }
+
+/**
+ * Câu 3 với người A (anh Nhân chốt 07/11, câu 2b): phần TÍNH LẠI đề xuất mua (người A) gọi hàm này khi nhu cầu 1 vật tư của lệnh
+ * giảm XUỐNG DƯỚI số đã có phiếu Giám đốc ký (`gross < firmed` trong CuttingProposalsService.computeNetRequirementByMaterial và
+ * các luồng tính lại vật tư khác). Không sửa gì - chỉ báo người mua phụ trách vật tư + Giám đốc. Gọi SAU khi transaction tính lại
+ * đã commit (best-effort, lỗi chỉ ghi log). Cùng (lệnh, vật tư) gộp vào 1 thông báo (dedupe), cập nhật số mới mỗi lần tính lại.
+ */
+export async function notifyPurchaseDemandDropped(
+  prisma: PrismaServiceType,
+  notifications: NotificationsService,
+  input: { productionInvoiceId: bigint; materialId: bigint; neededQty: number; signedQty: number },
+  actorUserId?: string | null,
+): Promise<void> {
+  if (input.neededQty >= input.signedQty) return;
+  try {
+    const [pi, material] = await Promise.all([
+      prisma.productionInvoice.findUnique({
+        where: { id: input.productionInvoiceId },
+        select: { code: true },
+      }),
+      prisma.material.findUnique({
+        where: { id: input.materialId },
+        select: { code: true, unit: true, buyerId: true },
+      }),
+    ]);
+    if (!pi || !material) return;
+    await notifications.emit('PURCHASE_DEMAND_DROPPED', {
+      entityId: input.productionInvoiceId.toString(),
+      actorId: actorUserId ?? undefined,
+      dedupeKey: `PURCHASE_DEMAND_DROPPED:${input.productionInvoiceId}:${input.materialId}`,
+      params: {
+        piCode: pi.code,
+        materialCode: material.code,
+        unit: material.unit ?? undefined,
+        neededQty: input.neededQty,
+        signedQty: input.signedQty,
+        buyerIds: material.buyerId ? [material.buyerId] : [],
+      },
+    });
+  } catch (error) {
+    logger.error(
+      `Failed to notify demand drop (PI ${input.productionInvoiceId}, material ${input.materialId}): ${(error as Error).message}`,
+    );
+  }
+}
