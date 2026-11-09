@@ -14,12 +14,10 @@ import { PERMISSION_MODULES } from '../../common/constants/permission-modules.co
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { CreateWeavingIssueDto } from './dto/create-weaving-issue.dto';
 import { CreateWeavingReceiptDto } from './dto/create-weaving-receipt.dto';
 import { WeavingIssuesService } from './weaving-issues.service';
 
 const VIEW = { module: PERMISSION_MODULES.WEAVING_ISSUE, action: PermissionAction.VIEW };
-const CREATE = { module: PERMISSION_MODULES.WEAVING_ISSUE, action: PermissionAction.CREATE };
 const UPDATE = { module: PERMISSION_MODULES.WEAVING_ISSUE, action: PermissionAction.UPDATE };
 
 @ApiTags('Weaving Issues')
@@ -30,17 +28,8 @@ export class WeavingIssuesController {
 
   // ─── Thủ kho vật tư-TP - xuất/nhận hàng đan ─────────────────────────────────
 
-  @Post('production-orders/:id/weaving-issues')
-  @RequirePermissions(CREATE)
-  create(
-    @Param('id') id: string,
-    @Body() dto: CreateWeavingIssueDto,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('warehouseScope') warehouseScope: string | null,
-    @Headers('Idempotency-Key') idempotencyKey: string | undefined,
-  ) {
-    return this.weavingIssuesService.create(id, dto, userId, warehouseScope, idempotencyKey);
-  }
+  // POST production-orders/:id/weaving-issues (xuất đan 1 lần, trừ ngay) ĐÃ GỠ 09/11/2026 - xuất đan đi 2 phiếu XK có ảnh ký
+  // (IssueSlipsService, dòng WEAVING_PIECE / WEAVING_MATERIAL), không còn đường xuất nào thiếu ảnh.
 
   @Get('production-orders/:id/weaving-issues')
   @RequirePermissions(VIEW)

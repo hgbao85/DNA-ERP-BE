@@ -809,6 +809,25 @@ describe('WarehouseTransfersService', () => {
     const manhPiece = { pieceId: 30n, piece: { code: 'M-01', name: 'Manh 01' } };
     const vatTuPiece = { pieceId: 31n, piece: { code: 'V-01', name: 'Vat tu 01' } };
 
+    it('09/11: mảnh cần đan không vào kế hoạch chuyển kho (xuất đan thẳng từ kho Sơn); có kho TP của SKU', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([
+        {
+          ...order,
+          productionInvoiceItem: { ...order.productionInvoiceItem, warehouseCode: 'thanh-pham-2' },
+        },
+      ]);
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { ...manhPiece, bomRevisionId: 80n, needsHan: true, needsSon: true, isWoven: true },
+        { ...vatTuPiece, bomRevisionId: 80n, needsHan: true, needsSon: true, isWoven: false },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([]);
+
+      const result = await service.getPieceTransferPlan(['900']);
+
+      expect(result.map((r) => r.pieceId)).toEqual(['31']);
+      expect(result[0].finishedWarehouseCode).toBe('thanh-pham-2');
+    });
+
     it('sums ProductionBatch QC_DONE at the final stage (SON when needsSon) for needsHan=true pieces', async () => {
       prisma.productionOrder.findMany.mockResolvedValue([order]);
       prisma.bomPiece.findMany.mockResolvedValue([
@@ -929,9 +948,10 @@ describe('WarehouseTransfersService', () => {
   });
 
   describe('createPieceTransfer', () => {
+    // Anh Nhân 09/11/2026: mảnh không đan chuyển kho Phôi/Hàn/Sơn -> kho Thành phẩm của lệnh.
     const pieceDto = {
       fromWarehouseId: '1',
-      toWarehouseId: '2',
+      toWarehouseId: '3',
       pieceItems: [{ productionOrderId: '900', pieceId: '30', quantity: 50 }],
     };
 
@@ -966,15 +986,25 @@ describe('WarehouseTransfersService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('rejects a route not in TRANSFER_ROUTES', async () => {
+    it('rejects a route not in TRANSFER_ROUTES (09/11: mảnh không còn đi kho Phụ kiện)', async () => {
       await expect(
         service.createPieceTransfer(
-          { ...pieceDto, fromWarehouseId: '1', toWarehouseId: '3' },
+          { ...pieceDto, fromWarehouseId: '1', toWarehouseId: '2' },
           null,
           'user-1',
           'idem-key-1',
         ),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('09/11: SKU đã chọn kho Thành phẩm khác -> 400 (phiếu phải về đúng kho TP của lệnh)', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([
+        { poNumber: 'PO-31-1', productionInvoiceItem: { warehouseCode: 'thanh-pham-2' } },
+      ]);
+      await expect(
+        service.createPieceTransfer(pieceDto, 'phoi-son-han', 'user-1', 'idem-key-1'),
+      ).rejects.toThrow(/giao về kho thanh-pham-2/);
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
     });
 
     it('clamps requested quantity down to the piece transfer plan suggestedQty (20 ready, 50 requested)', async () => {
@@ -1134,7 +1164,8 @@ describe('WarehouseTransfersService', () => {
       ]);
       // Khoá phải chạy TRƯỚC khi đọc plan (productionOrder.findMany) - không chỉ trước khi ghi.
       const lockCallOrder = prisma.$executeRaw.mock.invocationCallOrder[0];
-      const planReadCallOrder = prisma.productionOrder.findMany.mock.invocationCallOrder[0];
+      // Lần đọc lệnh CUỐI là đọc kế hoạch (lần đầu - ngoài transaction - chỉ đọc kho Thành phẩm của SKU, 09/11).
+      const planReadCallOrder = prisma.productionOrder.findMany.mock.invocationCallOrder.at(-1)!;
       expect(lockCallOrder).toBeLessThan(planReadCallOrder);
     });
   });

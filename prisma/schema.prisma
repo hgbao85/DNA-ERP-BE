@@ -746,8 +746,10 @@ model WeavingPoint {
   isActive        Boolean   @default(true)
   deletedAt       DateTime?
 
-  weavingIssues   WeavingIssue[]
-  weavingReceipts WeavingReceipt[]
+  weavingIssues         WeavingIssue[]
+  weavingReceipts       WeavingReceipt[]
+  weavingIssueMaterials WeavingIssueMaterial[]
+  issueSlips            IssueSlip[]
 
   @@map("weaving_points")
 }
@@ -899,6 +901,8 @@ model Piece {
   transferCheckResults        TransferCheckResult[]
   weavingIssues               WeavingIssue[]
   weavingReceipts             WeavingReceipt[]
+  weavingIssueMaterials       WeavingIssueMaterial[]
+  issueSlipLines              IssueSlipLine[]
   productionBatches           ProductionBatch[]
   pieceStepBatches            PieceStepBatch[]
   pieceStepBundles            PieceStepBundle[]
@@ -2027,6 +2031,7 @@ model ProductionOrder {
   cuttingPlanCoverage         CuttingPlanCoverage?
   weavingIssues               WeavingIssue[]
   weavingReceipts             WeavingReceipt[]
+  weavingIssueMaterials       WeavingIssueMaterial[]
   materialIssues              MaterialIssue[]
   materialYieldIssues         MaterialYieldIssue[]
   packagingIssues             PackagingIssue[]
@@ -2796,6 +2801,8 @@ enum StockLedgerRefType {
   ISSUE_SLIP_SHARED
   /// Chuyển tồn từ kho chung cũ sang kho mới lúc chia 9 kho (Đợt 7, prisma/split-warehouses.ts). refId = Material.id.
   WAREHOUSE_SPLIT
+  /// Mảnh rời kho (Sơn/Hàn/Phôi) đi điểm đan theo phiếu xuất đan (09/11/2026). refId = WeavingIssue.id. Đích: kho ảo PRODUCTION.
+  WEAVING_ISSUE
 }
 
 enum TransferStatus {
@@ -3679,15 +3686,25 @@ model WeavingIssue {
 /// dưới), KHÔNG mirror WeavingIssue. 1 dòng / 1 material / 1 lần xuất đan - không cộng dồn vào
 /// dòng cũ nếu xuất đan cùng mảnh nhiều lần (mỗi lần là 1 WeavingIssue riêng).
 model WeavingIssueMaterial {
-  id             BigInt  @id @default(autoincrement())
-  weavingIssueId BigInt
-  materialId     BigInt
-  qty            Decimal @db.Decimal(14, 4)
+  id                BigInt  @id @default(autoincrement())
+  /// Dòng cũ (trước 09/11/2026) xuất cùng lần với mảnh. Từ khi xuất đan 2 phiếu (anh Nhân 09/11): vật tư đi phiếu riêng của kho
+  /// Phụ kiện, không gắn lần xuất mảnh nào - null.
+  weavingIssueId    BigInt?
+  /// Lệnh / mảnh / điểm đan mà vật tư đi kèm (ghi thẳng, không suy qua weavingIssue).
+  productionOrderId BigInt
+  pieceId           BigInt
+  weavingPointId    BigInt
+  materialId        BigInt
+  qty               Decimal @db.Decimal(14, 4)
 
-  weavingIssue WeavingIssue @relation(fields: [weavingIssueId], references: [id])
-  material     Material     @relation(fields: [materialId], references: [id])
+  weavingIssue    WeavingIssue?   @relation(fields: [weavingIssueId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  piece           Piece           @relation(fields: [pieceId], references: [id])
+  weavingPoint    WeavingPoint    @relation(fields: [weavingPointId], references: [id])
+  material        Material        @relation(fields: [materialId], references: [id])
 
   @@unique([weavingIssueId, materialId])
+  @@index([productionOrderId, materialId])
   @@map("weaving_issue_materials")
 }
 
@@ -4261,6 +4278,10 @@ enum IssueSlipLineKind {
   CONSUMABLE
   /// "Dùng chung" (4.9): không theo lệnh, chỉ từ tồn chưa giữ.
   SHARED
+  /// Phiếu 1 xuất đan (anh Nhân 09/11): mảnh theo lệnh SX, từ kho giữ mảnh (Sơn) ra điểm đan.
+  WEAVING_PIECE
+  /// Phiếu 2 xuất đan: dây, gỗ, đinh, nút cấp kèm từ kho Phụ kiện cho cùng điểm đan.
+  WEAVING_MATERIAL
 }
 
 /// Phiếu xuất kho XK-yymmdd-NNN (Đợt 6, bản v8 YC4 4.1-4.4, 4.9): 1 phiếu = 1 kho, nhiều dòng. Hai bước: tạo phiếu (cấp số, in,
@@ -4284,37 +4305,50 @@ model IssueSlip {
   cancelReason   String?
   /// Idempotency-Key của lần "Xác nhận xuất".
   confirmKey     String?         @unique
+  /// Phiếu xuất đan (mảnh hoặc vật tư kèm): điểm đan nhận hàng.
+  weavingPointId BigInt?
+  /// Phiếu 2 (vật tư kèm) -> phiếu 1 (mảnh) cùng chuyến.
+  pairedSlipId   BigInt?
 
-  warehouse Warehouse       @relation(fields: [warehouseId], references: [id])
-  createdBy User            @relation("IssueSlipCreatedBy", fields: [createdById], references: [id])
-  issuedBy  User?           @relation("IssueSlipIssuedBy", fields: [issuedById], references: [id])
-  lines     IssueSlipLine[]
+  warehouse    Warehouse       @relation(fields: [warehouseId], references: [id])
+  createdBy    User            @relation("IssueSlipCreatedBy", fields: [createdById], references: [id])
+  issuedBy     User?           @relation("IssueSlipIssuedBy", fields: [issuedById], references: [id])
+  weavingPoint WeavingPoint?   @relation(fields: [weavingPointId], references: [id])
+  pairedSlip   IssueSlip?      @relation("IssueSlipPair", fields: [pairedSlipId], references: [id])
+  pairedBy     IssueSlip[]     @relation("IssueSlipPair")
+  lines        IssueSlipLine[]
 
   @@index([status, warehouseId])
   @@map("issue_slips")
 }
 
 model IssueSlipLine {
-  id                  BigInt            @id @default(autoincrement())
-  slipId              BigInt
-  kind                IssueSlipLineKind
-  materialId          BigInt
+  id                     BigInt            @id @default(autoincrement())
+  slipId                 BigInt
+  kind                   IssueSlipLineKind
+  /// Null cho dòng mảnh (WEAVING_PIECE).
+  materialId             BigInt?
+  /// WEAVING_PIECE / WEAVING_MATERIAL: mảnh.
+  pieceId                BigInt?
   /// STEEL: lệnh (PI). CONSUMABLE: null (lấy qua productionOrderId).
-  productionInvoiceId BigInt?
+  productionInvoiceId    BigInt?
   /// CONSUMABLE: SKU (lệnh SX).
-  productionOrderId   BigInt?
+  productionOrderId      BigInt?
   /// CONSUMABLE: công đoạn HAN/SON.
-  stage               MfgStage?
+  stage                  MfgStage?
   /// STEEL: chiều dài cây.
-  barLengthMm         Int?
-  qty                 Decimal           @db.Decimal(14, 4)
-  note                String?
+  barLengthMm            Int?
+  qty                    Decimal           @db.Decimal(14, 4)
+  note                   String?
   /// Gắn khi xác nhận xuất.
-  steelIssueId        BigInt?           @unique
-  materialIssueId     BigInt?           @unique
+  steelIssueId           BigInt?           @unique
+  materialIssueId        BigInt?           @unique
+  weavingIssueId         BigInt?           @unique
+  weavingIssueMaterialId BigInt?           @unique
 
   slip     IssueSlip @relation(fields: [slipId], references: [id])
-  material Material  @relation(fields: [materialId], references: [id])
+  material Material? @relation(fields: [materialId], references: [id])
+  piece    Piece?    @relation(fields: [pieceId], references: [id])
 
   @@index([slipId])
   @@map("issue_slip_lines")

@@ -430,11 +430,31 @@ export class WarehouseTransfersService {
       fromWarehouse.workshopId !== toWarehouse.workshopId;
     if (!toPaint && !isValidTransferRoute(fromWarehouse.code, toWarehouse.code)) {
       throw new BadRequestException(
-        `Không được chuyển trực tiếp từ "${fromWarehouse.name}" sang "${toWarehouse.name}" - chỉ được chuyển đúng 1 bước theo chuỗi Phôi sơn hàn → Vật tư thành phẩm → Thành phẩm`,
+        `Không được chuyển mảnh từ "${fromWarehouse.name}" sang "${toWarehouse.name}" - mảnh không đan chuyển từ kho Phôi/Hàn/Sơn sang kho Thành phẩm của lệnh (mảnh cần đan lập phiếu xuất đan)`,
       );
     }
 
     const orderIds = [...new Set(dto.pieceItems.map((i) => i.productionOrderId))];
+    if (!toPaint) {
+      // Kho Thành phẩm của lệnh (anh Nhân 09/11): QLSX đã chọn kho cho từng SKU - phiếu phải về đúng kho đó.
+      const items = await this.prisma.productionOrder.findMany({
+        where: { id: { in: orderIds.map((id) => parseBigIntId(id)) } },
+        select: {
+          poNumber: true,
+          productionInvoiceItem: { select: { warehouseCode: true } },
+        },
+      });
+      const wrong = items.find(
+        (o) =>
+          o.productionInvoiceItem.warehouseCode &&
+          o.productionInvoiceItem.warehouseCode !== toWarehouse.code,
+      );
+      if (wrong) {
+        throw new BadRequestException(
+          `SKU ${wrong.poNumber} giao về kho ${wrong.productionInvoiceItem.warehouseCode}, không phải "${toWarehouse.name}" - chọn đúng kho Thành phẩm của lệnh`,
+        );
+      }
+    }
 
     // Piece không có StockQuant để FOR UPDATE - khoá advisory theo từng productionOrderId (sort
     // tăng dần trước khi khoá, tránh deadlock khi 2 request chạm nhiều order chung theo thứ tự
@@ -533,7 +553,9 @@ export class WarehouseTransfersService {
       where: { id: { in: orderBigIds } },
       include: {
         mfgProduct: true,
-        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
+        productionInvoiceItem: {
+          select: { warehouseCode: true, salesOrder: { select: { orderCode: true } } },
+        },
       },
     });
     if (orders.length !== orderBigIds.length) {
@@ -595,6 +617,8 @@ export class WarehouseTransfersService {
         if (!bp.needsHan && bp.needsSon) continue;
         // Chặng Hàn -> Sơn chỉ có ý nghĩa với mảnh cần CẢ hàn lẫn sơn.
         if (leg === 'TO_PAINT' && !(bp.needsHan && bp.needsSon)) continue;
+        // Mảnh cần đan không chuyển kho - xuất đan thẳng từ kho giữ mảnh bằng phiếu XK (anh Nhân 09/11/2026).
+        if (leg === 'OUT' && bp.isWoven) continue;
 
         // needsHan=false ("vật tư thành phẩm") → PHOI (Phôi tự báo cắt xong, không qua Hàn/Sơn).
         // needsHan=true → SON nếu needsSon, không thì HAN. Xem comment đầu hàm.
@@ -623,6 +647,7 @@ export class WarehouseTransfersService {
             readyQty,
             transferredQty,
             suggestedQty,
+            finishedWarehouseCode: order.productionInvoiceItem.warehouseCode ?? null,
           }),
         );
       }

@@ -391,6 +391,14 @@ export interface WeavingIssueNotificationParams {
   outstandingQty: number;
 }
 
+/** Phiếu mảnh xuất đan vừa lập (anh Nhân 09/11/2026): kho giữ dây, gỗ, đinh, nút (kho Phụ kiện) lập phiếu vật tư kèm cho cùng
+ *  điểm đan. `warehouseCodes` = kho của các vật tư cần cấp (người nhận), không hiển thị. */
+export interface WeavingMaterialsNeededParams {
+  slipCode: string;
+  weavingPointName: string;
+  pieceSummary: string;
+}
+
 /** "Kiểm tra dữ liệu" (2026-10-28, DataHealthService) - lần chạy có dòng bất thường MỚI. */
 export interface DataHealthNotificationParams {
   /** Tổng dòng mới trong ngày (cộng dồn các lần chạy gộp vào cùng thông báo). */
@@ -1425,6 +1433,21 @@ const notificationTypeDefinitions = {
       warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
     }),
   } satisfies NotificationTypeDef<WeavingIssueNotificationParams & { warehouseCodes: string[] }>,
+  /** Tự đóng khi vật tư kèm của phiếu mảnh đã nằm đủ trên phiếu vật tư, hoặc phiếu mảnh bị huỷ (IssueSlipsService). */
+  WEAVING_MATERIALS_NEEDED: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'ISSUE_SLIP',
+    title: (p: WeavingMaterialsNeededParams) =>
+      `Cấp vật tư kèm đan cho ${p.weavingPointName} (phiếu ${p.slipCode})`,
+    message: (p: WeavingMaterialsNeededParams) => `Mảnh: ${p.pieceSummary}.`,
+    link: () => ({ module: 'inbound_warehouse', page: 'xuat-dan' }),
+    recipients: (p: WeavingMaterialsNeededParams & { warehouseCodes: string[] }) => ({
+      warehouseIds: p.warehouseCodes,
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<WeavingMaterialsNeededParams & { warehouseCodes: string[] }>,
   // Chỉ Admin, mức WARNING (Sếp không nhận - quy ước 9.3). 1 thông báo/ngày (dedupeKey theo ngày, xem DataHealthService.notify),
   // tự đóng khi không còn dòng bất thường nào mở. Link tới khối "Kiểm tra dữ liệu" ở trang Admin "Tình trạng hệ thống".
   DATA_HEALTH_NEW_FINDINGS: {

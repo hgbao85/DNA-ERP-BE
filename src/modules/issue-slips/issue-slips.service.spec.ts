@@ -30,6 +30,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
   let consumable: { prepareIssue: jest.Mock; createInTx: jest.Mock; afterCreate: jest.Mock };
   let ledger: { postEntry: jest.Mock };
   let reservations: { getAvailableQty: jest.Mock };
+  let weaving: Record<string, jest.Mock>;
 
   const steelLine = (o: Record<string, unknown> = {}) => ({
     id: 11n,
@@ -138,6 +139,45 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
     };
     ledger = { postEntry: jest.fn() };
     reservations = { getAvailableQty: jest.fn().mockResolvedValue(100) };
+    weaving = {
+      prepareWeavingPiece: jest.fn(
+        (orderId: string, pieceId: string, weavingPointId: bigint, qty: number) =>
+          Promise.resolve({
+            order: { id: BigInt(orderId), productionInvoiceItemId: 21n },
+            pieceId: BigInt(pieceId),
+            pieceName: 'Mảnh Đan',
+            weavingPointId,
+            qty,
+            plannedQty: 40,
+            finalStage: 'SON',
+            warehouse: { id: 8n, code: 'phoi-son-han-son-pa' },
+          }),
+      ),
+      assertPieceCapInTx: jest.fn().mockResolvedValue(undefined),
+      createPieceIssueInTx: jest.fn().mockResolvedValue({ id: 500n }),
+      afterPieceIssue: jest.fn().mockResolvedValue(undefined),
+      prepareWeavingMaterial: jest.fn(
+        (
+          orderId: string,
+          pieceId: string,
+          materialId: string,
+          weavingPointId: bigint,
+          qty: number,
+        ) =>
+          Promise.resolve({
+            order: { id: BigInt(orderId) },
+            productionInvoiceId: 500n,
+            pieceId: BigInt(pieceId),
+            weavingPointId,
+            materialId: BigInt(materialId),
+            materialCode: 'DAY-2LY',
+            warehouseId: 900n,
+            qty,
+          }),
+      ),
+      createMaterialIssueInTx: jest.fn().mockResolvedValue({ id: 600n }),
+      getWovenMaterialLinesByPiece: jest.fn().mockResolvedValue(new Map()),
+    };
     service = new IssueSlipsService(
       prisma as unknown as PrismaServiceType,
       steel as unknown as SteelIssuesService,
@@ -145,6 +185,8 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       ledger as unknown as StockLedgerService,
       reservations as unknown as StockReservationsService,
       { publishEntityChanged: jest.fn() } as unknown as RealtimeService,
+      weaving as never,
+      { emit: jest.fn(), resolve: jest.fn() } as never,
     );
   });
 
@@ -400,6 +442,355 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       });
       prisma.issueSlip.findUnique.mockResolvedValue(slip({ status: IssueSlipStatus.ISSUED }));
       await expect(service.cancel('9', 'x y z', 'kho-1', null)).rejects.toThrow('đã xuất');
+    });
+  });
+
+  // Anh Nhân 09/11/2026: xuất đan 2 phiếu - phiếu mảnh (kho Sơn) + phiếu vật tư kèm (kho Phụ kiện) cùng điểm đan.
+  describe('phiếu xuất đan', () => {
+    const pieceLine = (o: Record<string, unknown> = {}) => ({
+      id: 21n,
+      kind: IssueSlipLineKind.WEAVING_PIECE,
+      materialId: null,
+      pieceId: 20n,
+      productionInvoiceId: null,
+      productionOrderId: 70n,
+      stage: null,
+      barLengthMm: null,
+      qty: dec(10),
+      note: null,
+      material: null,
+      piece: { code: 'M-DAN', name: 'Mảnh Đan' },
+      ...o,
+    });
+    const materialLine = (o: Record<string, unknown> = {}) => ({
+      ...pieceLine(),
+      id: 22n,
+      kind: IssueSlipLineKind.WEAVING_MATERIAL,
+      materialId: 60n,
+      qty: dec(15),
+      material: { code: 'DAY-2LY', name: 'Dây 2 ly', unit: 'kg' },
+      ...o,
+    });
+    const pieceSlip = (o: Record<string, unknown> = {}) =>
+      slip({
+        warehouseId: 8n,
+        warehouse: { code: 'phoi-son-han-son-pa', name: 'Kho Sơn Phú An' },
+        weavingPointId: 40n,
+        weavingPoint: { code: 'DIEM-A', fullName: 'Điểm đan A' },
+        pairedSlipId: null,
+        pairedSlip: null,
+        createdById: 'u-son',
+        lines: [pieceLine()],
+        pairedBy: [],
+        ...o,
+      });
+
+    beforeEach(() => {
+      prisma.weavingPoint = {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 40n, code: 'DIEM-A', fullName: 'Điểm đan A' }),
+      };
+      prisma.issueSlip.findUnique.mockResolvedValue(pieceSlip());
+    });
+
+    it('phiếu mảnh: cần điểm đan; kiểm trần trong transaction cấp số; người nhận = điểm đan; báo kho vật tư kèm', async () => {
+      await expect(
+        service.create(
+          {
+            lines: [
+              {
+                kind: IssueSlipLineKind.WEAVING_PIECE,
+                productionOrderId: '70',
+                pieceId: '20',
+                qty: 10,
+              },
+            ],
+          },
+          'u-son',
+          'phoi-son-han-son-pa',
+        ),
+      ).rejects.toThrow('cần chọn điểm đan');
+
+      weaving.getWovenMaterialLinesByPiece.mockResolvedValue(new Map());
+      await service.create(
+        {
+          weavingPointId: '40',
+          lines: [
+            {
+              kind: IssueSlipLineKind.WEAVING_PIECE,
+              productionOrderId: '70',
+              pieceId: '20',
+              qty: 10,
+            },
+          ],
+        },
+        'u-son',
+        'phoi-son-han-son-pa',
+      );
+      expect(weaving.prepareWeavingPiece).toHaveBeenCalledWith(
+        '70',
+        '20',
+        40n,
+        10,
+        'phoi-son-han-son-pa',
+      );
+      expect(weaving.assertPieceCapInTx).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ qty: 10 }),
+        null,
+      );
+      const data = (
+        prisma.issueSlip.create.mock.calls[0] as [{ data: { lines: { create: unknown[] } } }]
+      )[0].data;
+      expect(data).toEqual(
+        expect.objectContaining({
+          warehouseId: 8n,
+          weavingPointId: 40n,
+          pairedSlipId: null,
+          recipientName: 'Điểm đan A',
+        }),
+      );
+      expect(data.lines.create).toEqual([
+        expect.objectContaining({
+          kind: 'WEAVING_PIECE',
+          materialId: null,
+          pieceId: 20n,
+          productionOrderId: 70n,
+        }),
+      ]);
+      expect(weaving.createPieceIssueInTx).not.toHaveBeenCalled();
+    });
+
+    it('không trộn dòng xuất đan với sắt/tiêu hao; vật tư kèm cần phiếu mảnh cùng chuyến và đúng mảnh trên phiếu đó', async () => {
+      await expect(
+        service.create(
+          {
+            weavingPointId: '40',
+            lines: [
+              {
+                kind: IssueSlipLineKind.WEAVING_PIECE,
+                productionOrderId: '70',
+                pieceId: '20',
+                qty: 10,
+              },
+              { kind: IssueSlipLineKind.SHARED, materialId: '5', qty: 1 },
+            ],
+          },
+          'u',
+          null,
+        ),
+      ).rejects.toThrow('không trộn');
+      await expect(
+        service.create(
+          {
+            lines: [
+              {
+                kind: IssueSlipLineKind.WEAVING_MATERIAL,
+                materialId: '60',
+                productionOrderId: '70',
+                pieceId: '20',
+                qty: 15,
+              },
+            ],
+          },
+          'u',
+          'vat-tu-tp',
+        ),
+      ).rejects.toThrow('phiếu mảnh đi cùng chuyến');
+      await expect(
+        service.create(
+          {
+            pairedSlipId: '9',
+            lines: [
+              {
+                kind: IssueSlipLineKind.WEAVING_MATERIAL,
+                materialId: '60',
+                productionOrderId: '70',
+                pieceId: '99',
+                qty: 15,
+              },
+            ],
+          },
+          'u',
+          'vat-tu-tp',
+        ),
+      ).rejects.toThrow('theo đúng mảnh');
+      prisma.issueSlip.findUnique.mockResolvedValue(
+        pieceSlip({ status: IssueSlipStatus.CANCELLED }),
+      );
+      await expect(
+        service.create(
+          {
+            pairedSlipId: '9',
+            lines: [
+              {
+                kind: IssueSlipLineKind.WEAVING_MATERIAL,
+                materialId: '60',
+                productionOrderId: '70',
+                pieceId: '20',
+                qty: 15,
+              },
+            ],
+          },
+          'u',
+          'vat-tu-tp',
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('phiếu vật tư kèm: lấy điểm đan của phiếu mảnh, ghi pairedSlipId', async () => {
+      weaving.getWovenMaterialLinesByPiece.mockResolvedValue(new Map());
+      await service.create(
+        {
+          pairedSlipId: '9',
+          lines: [
+            {
+              kind: IssueSlipLineKind.WEAVING_MATERIAL,
+              materialId: '60',
+              productionOrderId: '70',
+              pieceId: '20',
+              qty: 15,
+            },
+          ],
+        },
+        'u-pk',
+        'vat-tu-tp',
+      );
+      expect(weaving.prepareWeavingMaterial).toHaveBeenCalledWith(
+        '70',
+        '20',
+        '60',
+        40n,
+        15,
+        'vat-tu-tp',
+      );
+      expect((prisma.issueSlip.create.mock.calls[0] as [{ data: unknown }])[0].data).toEqual(
+        expect.objectContaining({ warehouseId: 900n, weavingPointId: 40n, pairedSlipId: 9n }),
+      );
+    });
+
+    it('xác nhận phiếu mảnh: kiểm lại trần (không đếm chính phiếu này), ghi WeavingIssue, gắn vào dòng; báo sau commit', async () => {
+      await service.confirm('9', ['u1'], 'u-son', 'phoi-son-han-son-pa', 'key-1');
+      expect(weaving.assertPieceCapInTx).toHaveBeenCalledWith(prisma, expect.anything(), 9n);
+      expect(weaving.createPieceIssueInTx).toHaveBeenCalledWith(
+        prisma,
+        expect.anything(),
+        'u-son',
+        'issue-slip:9:line:21',
+      );
+      expect(prisma.issueSlipLine.update).toHaveBeenCalledWith({
+        where: { id: 21n },
+        data: { weavingIssueId: 500n },
+      });
+      expect(weaving.afterPieceIssue).toHaveBeenCalledWith({ id: 500n }, 'u-son');
+    });
+
+    it('xác nhận phiếu vật tư kèm: ghi WeavingIssueMaterial qua lõi xuất đan; phiếu mảnh đã huỷ thì chặn', async () => {
+      prisma.issueSlip.findUnique.mockResolvedValue(
+        pieceSlip({
+          warehouseId: 900n,
+          warehouse: { code: 'vat-tu-tp', name: 'Kho Phụ kiện' },
+          pairedSlipId: 5n,
+          pairedSlip: { id: 5n, code: 'XK-261109-001', status: IssueSlipStatus.ISSUED },
+          lines: [materialLine()],
+        }),
+      );
+      await service.confirm('9', ['u1'], 'u-pk', 'vat-tu-tp', 'key-2');
+      expect(weaving.createMaterialIssueInTx).toHaveBeenCalledWith(
+        prisma,
+        expect.anything(),
+        'u-pk',
+        'issue-slip:9:line:22',
+      );
+      expect(prisma.issueSlipLine.update).toHaveBeenCalledWith({
+        where: { id: 22n },
+        data: { weavingIssueMaterialId: 600n },
+      });
+
+      prisma.issueSlip.findUnique.mockResolvedValue(
+        pieceSlip({
+          pairedSlipId: 5n,
+          pairedSlip: { id: 5n, code: 'XK-261109-001', status: IssueSlipStatus.CANCELLED },
+          lines: [materialLine()],
+        }),
+      );
+      await expect(service.confirm('9', ['u1'], 'u-pk', 'vat-tu-tp', 'key-3')).rejects.toThrow(
+        'đã huỷ',
+      );
+    });
+
+    it('vật tư cần cấp kèm = định mức/mảnh × số mảnh − đã trên phiếu vật tư cùng chuyến; chỉ vật tư kho mình', async () => {
+      prisma.issueSlip.findMany.mockResolvedValue([
+        pieceSlip({
+          status: IssueSlipStatus.DRAFT,
+          pairedBy: [
+            {
+              code: 'XK-261109-002',
+              status: IssueSlipStatus.DRAFT,
+              lines: [{ productionOrderId: 70n, pieceId: 20n, materialId: 60n, qty: dec(5) }],
+            },
+          ],
+        }),
+      ]);
+      prisma.productionOrder.findMany.mockResolvedValue([
+        {
+          id: 70n,
+          bomRevisionId: 3n,
+          wireMaterialId: null,
+          cushionMaterialId: null,
+          poNumber: 'PO-1',
+          mfgProduct: { factoryCode: 'GP-1' },
+          productionInvoiceItem: {
+            lsxCode: 'MY-313',
+            productionInvoiceId: 500n,
+            productionInvoice: { code: 'PI-1' },
+          },
+        },
+      ]);
+      prisma.bomOption = { findMany: jest.fn().mockResolvedValue([]) };
+      const line = (materialId: string, code: string, qtyPerPiece: number) => ({
+        materialId,
+        materialCode: code,
+        materialName: code,
+        materialSpec: null,
+        materialUnit: 'kg',
+        qtyPerPiece,
+        issuedQty: 0,
+        onHandQty: 100,
+      });
+      weaving.getWovenMaterialLinesByPiece.mockResolvedValue(
+        new Map([
+          [
+            '3:20',
+            {
+              wire: [line('60', 'DAY', 1.5)],
+              nail: [line('61', 'DINH', 4)],
+              plasticButton: [],
+              finishedComponent: [],
+            },
+          ],
+        ]),
+      );
+      prisma.material.findMany = jest.fn().mockResolvedValue([
+        { id: 60n, warehouse: { code: 'vat-tu-tp' } },
+        { id: 61n, warehouse: { code: 'kho-khac' } },
+      ]);
+
+      const [d] = await service.getWeavingMaterialDemand('vat-tu-tp');
+      expect(d.slipCode).toBe('XK-261106-001');
+      expect(d.weavingPointName).toBe('Điểm đan A');
+      expect(d.lines).toEqual([
+        expect.objectContaining({
+          materialCode: 'DAY',
+          pieceQty: 10,
+          demandQty: 15,
+          coveredQty: 5,
+          remainingQty: 10,
+          lenhCode: 'MY-313',
+          sku: 'GP-1',
+        }),
+      ]);
     });
   });
 });

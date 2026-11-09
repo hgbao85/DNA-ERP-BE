@@ -24,16 +24,22 @@ export class IssueSlipLineDto {
   @IsEnum(IssueSlipLineKind)
   kind!: IssueSlipLineKind;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ description: 'Bắt buộc, trừ dòng mảnh xuất đan (WEAVING_PIECE)' })
+  @IsOptional()
   @IsString()
-  materialId!: string;
+  materialId?: string;
+
+  @ApiPropertyOptional({ description: 'WEAVING_PIECE / WEAVING_MATERIAL: mảnh' })
+  @IsOptional()
+  @IsString()
+  pieceId?: string;
 
   @ApiPropertyOptional({ description: 'STEEL: lệnh (PI)' })
   @IsOptional()
   @IsString()
   productionInvoiceId?: string;
 
-  @ApiPropertyOptional({ description: 'CONSUMABLE: SKU (lệnh sản xuất)' })
+  @ApiPropertyOptional({ description: 'CONSUMABLE / WEAVING_*: SKU (lệnh sản xuất)' })
   @IsOptional()
   @IsString()
   productionOrderId?: string;
@@ -82,6 +88,18 @@ export class CreateIssueSlipDto {
   @IsString()
   @MaxLength(1000)
   note?: string;
+
+  @ApiPropertyOptional({ description: 'Phiếu mảnh xuất đan (WEAVING_PIECE): điểm đan nhận' })
+  @IsOptional()
+  @IsString()
+  weavingPointId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Phiếu vật tư kèm đan (WEAVING_MATERIAL): phiếu mảnh cùng chuyến',
+  })
+  @IsOptional()
+  @IsString()
+  pairedSlipId?: string;
 }
 
 /** "Xác nhận xuất" (bước 2): ảnh phiếu đã ký bắt buộc (khoá cứng, V4-1). */
