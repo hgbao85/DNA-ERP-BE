@@ -26,6 +26,7 @@ import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { ConfirmWarehouseTransferDto } from './dto/confirm-warehouse-transfer.dto';
 import { CreatePieceWarehouseTransferDto } from './dto/create-piece-warehouse-transfer.dto';
 import { CreateWarehouseTransferDto } from './dto/create-warehouse-transfer.dto';
 import { ListWarehouseTransfersQueryDto } from './dto/list-warehouse-transfers-query.dto';
@@ -38,6 +39,7 @@ import {
   isValidTransferRoute,
   PIECE_TRANSFER_LEAVES_FRAME,
   PIECE_TRANSFER_TO_PAINT,
+  transferWarehouseShortCode,
 } from './transfer-routes.constant';
 import { RealtimeService } from '../../realtime/realtime.service';
 
@@ -55,7 +57,14 @@ const TRANSFER_INCLUDE = {
     include: {
       productionOrder: {
         include: {
-          productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
+          productionInvoiceItem: {
+            select: {
+              lsxCode: true,
+              productionInvoice: { select: { code: true } },
+              salesOrder: { select: { orderCode: true } },
+            },
+          },
+          mfgProduct: { select: { factoryCode: true } },
         },
       },
       piece: true,
@@ -248,9 +257,7 @@ export class WarehouseTransfersService {
       // hại (2 thủ kho tạo phiếu cùng lúc) thành lỗi giả phải tự bấm lại. Khoá theo năm (cùng phạm
       // vi với prefix `CK-{year}-`) serialize đúng phần đếm+tạo, cùng idiom lockBusinessKey() đã
       // dùng ở createPieceTransfer() - tự nhả khi transaction này commit/rollback.
-      const year = new Date().getFullYear();
-      await lockBusinessKey(tx, `warehouse-transfer-code:${year}`);
-      const code = await this.nextTransferCode(tx, year);
+      const code = await this.nextTransferCode(tx, fromWarehouse);
 
       const clampedItems: {
         materialId: bigint;
@@ -465,11 +472,8 @@ export class WarehouseTransfersService {
         await lockBusinessKey(tx, `piece-transfer:${orderId}`);
       }
 
-      // Cùng khoá/sequence mã phiếu với create() (chung prefix CK-{year}-) - xem comment ở đó
-      // (15/09/2026, race live-test xác nhận đếm ngoài transaction gây 409 giả khi tạo đồng thời).
-      const year = new Date().getFullYear();
-      await lockBusinessKey(tx, `warehouse-transfer-code:${year}`);
-      const code = await this.nextTransferCode(tx, year);
+      // Cùng khoá/dãy số với create() (CK-<mã kho giao>-NNN) - xem nextTransferCode().
+      const code = await this.nextTransferCode(tx, fromWarehouse);
 
       const plan = await this.getPieceTransferPlan(orderIds, tx, toPaint ? 'TO_PAINT' : 'OUT');
       const planByKey = new Map(plan.map((p) => [`${p.productionOrderId}:${p.pieceId}`, p]));
@@ -698,13 +702,14 @@ export class WarehouseTransfersService {
 
   async confirm(
     id: string,
+    dto: ConfirmWarehouseTransferDto,
     userId: string,
     warehouseScope: string | null,
   ): Promise<WarehouseTransferResponseDto> {
     const transfer = await this.findOneOrThrow(id);
     if (transfer.status !== TransferStatus.PENDING) {
       throw new ConflictException(
-        `Phiếu chuyển kho ${id} đang ở trạng thái ${transfer.status} - chỉ PENDING mới xác nhận được`,
+        `Phiếu chuyển kho ${transfer.code} đang ở trạng thái ${transfer.status} - chỉ phiếu chờ nhận mới xác nhận được`,
       );
     }
     // Kho đích xác nhận.
@@ -713,6 +718,12 @@ export class WarehouseTransfersService {
       transfer.toWarehouse.code,
       'xác nhận phiếu chuyển kho tới',
     );
+    // v8 4.1/4.2: khoá cứng - không có ảnh phiếu đã ký thì không nhận được.
+    const urls = [...new Set((dto.signedSlipUrls ?? []).map((u) => u.trim()).filter(Boolean))];
+    if (urls.length === 0) {
+      throw new BadRequestException('Cần ảnh phiếu chuyển kho đã có chữ ký');
+    }
+    const received = this.resolveReceived(transfer, dto);
 
     // Toàn bộ đọc-status -> ghi-ledger -> update-status nằm chung 1 transaction. updateMany guard
     // theo (id, status:PENDING) chạy TRƯỚC, cùng pattern SkusService.approve(): UPDATE khoá hàng
@@ -723,7 +734,12 @@ export class WarehouseTransfersService {
     const confirmed = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.warehouseTransfer.updateMany({
         where: { id: transfer.id, status: TransferStatus.PENDING },
-        data: { status: TransferStatus.CONFIRMED, confirmedAt: new Date(), confirmedById: userId },
+        data: {
+          status: TransferStatus.CONFIRMED,
+          confirmedAt: new Date(),
+          confirmedById: userId,
+          signedSlipUrls: urls,
+        },
       });
       if (count === 0) {
         throw new ConflictException(
@@ -738,12 +754,21 @@ export class WarehouseTransfersService {
         // materialId bắt buộc từ 09/09/2026 (DTO không còn cho tạo dòng "ghi tự do") - guard này
         // giờ chỉ còn là an toàn cho dữ liệu CŨ đã tạo trước ngày đó (cột DB vẫn nullable).
         if (!item.materialId) continue;
+        // v8 4.7: tồn kho nhận chỉ cộng số THỰC NHẬN; phần thiếu ở lại kho giao (kho giao lập phiếu bù).
+        const qty = received.items.get(item.id.toString()) ?? item.quantity.toNumber();
+        if (qty < item.quantity.toNumber()) {
+          await tx.warehouseTransferItem.update({
+            where: { id: item.id },
+            data: { quantity: qty, sentQty: item.quantity },
+          });
+        }
+        if (qty <= 0) continue;
         await this.stockLedgerService.postEntry(
           {
             fromWarehouseId: transfer.fromWarehouseId,
             toWarehouseId: transfer.toWarehouseId,
             materialId: item.materialId,
-            qty: item.quantity.toNumber(),
+            qty,
             refType: StockLedgerRefType.WAREHOUSE_TRANSFER,
             refId: transfer.id.toString(),
             createdById: userId,
@@ -755,12 +780,22 @@ export class WarehouseTransfersService {
         );
       }
       for (const pieceItem of transfer.pieceItems) {
+        // Mảnh: quantity giảm về số thực nhận -> mọi chỗ đếm "đã chuyển" (kế hoạch chuyển, xuất đan, chuyền kiểm) tự theo
+        // thực nhận, phần thiếu lại hiện ở kế hoạch để lập phiếu bù.
+        const qty = received.pieceItems.get(pieceItem.id.toString()) ?? pieceItem.quantity;
+        if (qty < pieceItem.quantity) {
+          await tx.warehouseTransferPieceItem.update({
+            where: { id: pieceItem.id },
+            data: { quantity: qty, sentQty: pieceItem.quantity },
+          });
+        }
+        if (qty <= 0) continue;
         await this.stockLedgerService.postEntry(
           {
             fromWarehouseId: transfer.fromWarehouseId,
             toWarehouseId: transfer.toWarehouseId,
             pieceId: pieceItem.pieceId,
-            qty: pieceItem.quantity,
+            qty,
             refType: StockLedgerRefType.WAREHOUSE_TRANSFER,
             refId: transfer.id.toString(),
             createdById: userId,
@@ -895,12 +930,68 @@ export class WarehouseTransfersService {
    * liệu nhờ unique constraint trên `code` chặn ghi trùng, nhưng request thua cuộc nhận thẳng lỗi
    * 409 thay vì tự chờ rồi lấy đúng số tiếp theo.
    */
-  private async nextTransferCode(tx: PrismaTx, year: number): Promise<string> {
-    const prefix = `CK-${year}-`;
+  private async nextTransferCode(tx: PrismaTx, fromWarehouse: Warehouse): Promise<string> {
+    // v8 4.8 (09/11/2026): CK-<mã kho giao>-NNN, đếm liên tục theo từng kho giao (không theo năm). Khoá theo mã kho giao rồi
+    // mới đếm - 2 phiếu cùng kho giao tạo đồng thời không ra trùng số (sự cố 15/09/2026 với cách đếm cũ ngoài khoá).
+    const workshop = fromWarehouse.workshopId
+      ? await tx.workshop.findUnique({
+          where: { id: fromWarehouse.workshopId },
+          select: { code: true },
+        })
+      : null;
+    const prefix = `CK-${transferWarehouseShortCode({ ...fromWarehouse, workshopCode: workshop?.code ?? null })}-`;
+    await lockBusinessKey(tx, `warehouse-transfer-code:${prefix}`);
     const count = await tx.warehouseTransfer.count({
       where: { code: { startsWith: prefix } },
     });
     return `${prefix}${String(count + 1).padStart(3, '0')}`;
+  }
+
+  /**
+   * Số thực nhận từng dòng (v8 4.7): không gửi dòng nào = nhận đủ. Không được nhận quá số gửi; nhận 0 cả phiếu thì dùng
+   * "Từ chối" thay vì xác nhận.
+   */
+  private resolveReceived(
+    transfer: WarehouseTransferWithRefs,
+    dto: ConfirmWarehouseTransferDto,
+  ): { items: Map<string, number>; pieceItems: Map<string, number> } {
+    const items = new Map<string, number>();
+    const pieceItems = new Map<string, number>();
+    for (const r of dto.items ?? []) {
+      const line = transfer.items.find((i) => i.id.toString() === r.id);
+      if (!line) throw new BadRequestException(`Dòng ${r.id} không thuộc phiếu ${transfer.code}`);
+      if (r.receivedQty > line.quantity.toNumber()) {
+        throw new BadRequestException(
+          `${line.materialName}: thực nhận ${r.receivedQty} lớn hơn số gửi ${line.quantity.toNumber()}`,
+        );
+      }
+      items.set(r.id, r.receivedQty);
+    }
+    for (const r of dto.pieceItems ?? []) {
+      const line = transfer.pieceItems.find((i) => i.id.toString() === r.id);
+      if (!line) throw new BadRequestException(`Dòng ${r.id} không thuộc phiếu ${transfer.code}`);
+      if (!Number.isInteger(r.receivedQty)) {
+        throw new BadRequestException(`${line.piece.name}: số mảnh thực nhận phải là số nguyên`);
+      }
+      if (r.receivedQty > line.quantity) {
+        throw new BadRequestException(
+          `${line.piece.name}: thực nhận ${r.receivedQty} lớn hơn số gửi ${line.quantity}`,
+        );
+      }
+      pieceItems.set(r.id, r.receivedQty);
+    }
+    const total =
+      transfer.items.reduce(
+        (s, i) => s + (items.get(i.id.toString()) ?? i.quantity.toNumber()),
+        0,
+      ) +
+      transfer.pieceItems.reduce((s, i) => s + (pieceItems.get(i.id.toString()) ?? i.quantity), 0);
+    if (total <= 0) {
+      throw new BadRequestException(
+        'Không nhận được dòng nào - bấm "Từ chối" phiếu và ghi lý do thay vì xác nhận',
+      );
+    }
+    return { items, pieceItems };
   }
 
   private toResponseDto(row: WarehouseTransferWithRefs): WarehouseTransferResponseDto {
@@ -932,6 +1023,7 @@ export class WarehouseTransfersService {
       rejectedByName: row.rejectedBy
         ? `${row.rejectedBy.firstName} ${row.rejectedBy.lastName}`.trim()
         : null,
+      signedSlipUrls: row.signedSlipUrls,
     });
   }
 
@@ -948,6 +1040,7 @@ export class WarehouseTransfersService {
             materialSpec: item.spec || (item.material?.spec ?? null),
             unit: item.unit,
             quantity: item.quantity.toNumber(),
+            sentQty: item.sentQty?.toNumber() ?? null,
             note: item.note,
           }),
       ),
@@ -963,6 +1056,12 @@ export class WarehouseTransfersService {
             pieceCode: item.piece.code,
             pieceName: item.piece.name,
             quantity: item.quantity,
+            sentQty: item.sentQty,
+            lenhCode:
+              item.productionOrder.productionInvoiceItem.lsxCode?.trim() ||
+              item.productionOrder.productionInvoiceItem.productionInvoice?.code ||
+              null,
+            sku: item.productionOrder.mfgProduct.factoryCode,
             note: item.note,
           }),
       ),

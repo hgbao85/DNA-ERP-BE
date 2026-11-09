@@ -3035,6 +3035,8 @@ model WarehouseTransfer {
   /// không có cột nào để dedupe theo Idempotency-Key, khác material-issues/packaging-issues/
   /// steel-issues đã có. Nullable + unique, cùng idiom MaterialIssue.idempotencyKey.
   idempotencyKey  String?        @unique
+  /// Ảnh phiếu chuyển kho đã ký (v8 4.1/4.2) - bắt buộc ≥ 1 khi kho nhận xác nhận (09/11/2026). Phiếu cũ trước đó: rỗng.
+  signedSlipUrls  String[]       @default([])
 
   fromWarehouse Warehouse                      @relation("WarehouseTransferFromWarehouse", fields: [fromWarehouseId], references: [id])
   toWarehouse   Warehouse                      @relation("WarehouseTransferToWarehouse", fields: [toWarehouseId], references: [id])
@@ -3053,7 +3055,7 @@ model WarehouseTransfer {
 
 /// Dòng vật tư trong 1 phiếu chuyển kho.
 model WarehouseTransferItem {
-  id           BigInt  @id @default(autoincrement())
+  id           BigInt   @id @default(autoincrement())
   transferId   BigInt
   /// Nullable chỉ vì lý do lịch sử (dòng "ghi tự do" tạo trước 09/09/2026, kế thừa hạn chế của
   /// mock cũ) - DTO tạo mới đã bắt buộc materialId từ 09/09/2026 (audit toàn diện, mục Trung bình
@@ -3063,10 +3065,13 @@ model WarehouseTransferItem {
   materialName String
   unit         String
   /// Đã clamp theo tồn khả dụng (stock_quant trừ reservation ACTIVE) tại thời điểm tạo phiếu.
-  quantity     Decimal @db.Decimal(16, 4)
+  /// 09/11/2026 (v8 4.7): lúc chờ = số kho giao gửi; sau xác nhận = số kho nhận THỰC NHẬN (tồn chỉ cộng số này).
+  quantity     Decimal  @db.Decimal(16, 4)
+  /// Số kho giao gửi, chỉ ghi khi thực nhận ít hơn (null = nhận đủ). Phần thiếu ở lại kho giao, lập phiếu bù.
+  sentQty      Decimal? @db.Decimal(16, 4)
   note         String?
   /// Quy cách của dòng vật tư lấy ra khỏi kho ('' = không quy cách) - nệm có nhiều quy cách cùng 1 vật tư.
-  spec         String  @default("")
+  spec         String   @default("")
 
   transfer WarehouseTransfer @relation(fields: [transferId], references: [id])
   material Material?         @relation(fields: [materialId], references: [id])
@@ -3089,7 +3094,10 @@ model WarehouseTransferPieceItem {
   pieceId           BigInt
   /// Đã clamp theo GetPieceTransferPlan (đã qua KCS trừ đã chuyển trước đó) tại thời điểm tạo
   /// phiếu - piece không có StockQuant làm nguồn khả dụng như vật tư nên clamp theo kế hoạch.
+  /// Cùng ý nghĩa WarehouseTransferItem.quantity: sau xác nhận = số thực nhận - mọi chỗ đếm "đã chuyển" tự theo thực nhận.
   quantity          Int
+  /// Số kho giao gửi khi thực nhận ít hơn (null = nhận đủ).
+  sentQty           Int?
   note              String?
 
   transfer        WarehouseTransfer @relation(fields: [transferId], references: [id])

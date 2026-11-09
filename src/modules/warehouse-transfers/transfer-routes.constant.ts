@@ -29,6 +29,28 @@ export const PIECE_TRANSFER_LEAVES_FRAME = {
 /** Phiếu chuyển mảnh vào kho Sơn (chặng Hàn Phước An -> Sơn Phú An). */
 export const PIECE_TRANSFER_TO_PAINT = { toWarehouse: { kind: 'SON' as const } } as const;
 
+/** Mã xưởng trong số phiếu (anh/IT chốt 09/11/2026): Phú An = PA, Phước An = PHA. */
+const WORKSHOP_SHORT: Record<string, string> = { PHU_AN: 'PA', PHUOC_AN: 'PHA' };
+const KIND_SHORT: Record<string, string> = { PHOI: 'PHOI', HAN: 'HAN', SON: 'SON', PHU_KIEN: 'PK' };
+
+/**
+ * Mã kho giao trong số phiếu chuyển kho CK-<mã>-NNN (v8 4.8, ví dụ CK-PA.PHOI-001): PA.PHOI, PA.HAN, PA.SON, PA.PK,
+ * PA.TP1/TP2/TP3 (số lấy theo tên kho), PHA.PHOI, PHA.HAN. Kho chưa phân loại dùng mã kho viết hoa.
+ */
+export function transferWarehouseShortCode(w: {
+  code: string;
+  name: string;
+  kind: string | null;
+  workshopCode: string | null;
+}): string {
+  const ws = (w.workshopCode && WORKSHOP_SHORT[w.workshopCode]) || 'PA';
+  if (w.kind === 'THANH_PHAM') return `PA.TP${/(\d+)/.exec(w.name)?.[1] ?? '1'}`;
+  if (w.kind && KIND_SHORT[w.kind]) {
+    return w.kind === 'PHU_KIEN' ? `PA.${KIND_SHORT[w.kind]}` : `${ws}.${KIND_SHORT[w.kind]}`;
+  }
+  return w.code.toUpperCase();
+}
+
 export function isValidTransferRoute(fromCode: string, toCode: string): boolean {
   const fromFamily = warehouseFamilyOf(fromCode);
   const toFamily = warehouseFamilyOf(toCode);

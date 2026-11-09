@@ -17,6 +17,8 @@ export class WarehouseTransferResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) rejectionReason!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) note!: string | null;
   @Expose() @ApiProperty() createdAt!: Date;
+  /** Ảnh phiếu chuyển kho đã ký (bắt buộc khi xác nhận nhận, từ 09/11/2026). */
+  @Expose() @ApiProperty({ type: [String] }) signedSlipUrls!: string[];
   @Expose() @ApiPropertyOptional({ nullable: true }) confirmedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) rejectedAt!: Date | null;
   /** Vấn đề #7 audit 26/08 - trước đây phải tra AuditLog riêng mới biết ai tạo/xác nhận/từ chối.
