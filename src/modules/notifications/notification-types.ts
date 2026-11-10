@@ -493,6 +493,17 @@ export interface PiTimelineReplanNotificationParams {
   lines: string[];
 }
 
+// Phần A: QLSX đổi xưởng lệnh đã có phương án cắt APPROVED -> báo KHSX kiểm lại. `entityId` = piId.
+export interface PiCuttingRecheckNotificationParams {
+  piCode: string;
+  /** Mã lệnh hiển thị (số LSX nối " + ", chưa có thì mã PI). */
+  displayCode: string;
+  /** Xưởng cũ (null = chưa có xưởng). */
+  fromWorkshop: string | null;
+  /** Xưởng mới. */
+  toWorkshop: string;
+}
+
 // Phần A – Đợt 10a (YC5): booking sắp đến hạn (lấy cont / CUT OFF) mà chưa đủ hàng. `entityId` = bookingId.
 /** Đợt 10b (người B): booking Sales đã xác nhận -> kho thành phẩm gom hàng, đóng cont, xác nhận xuất. */
 export interface BookingToShipNotificationParams {
@@ -1622,6 +1633,24 @@ const notificationTypeDefinitions = {
       roles: [BUSINESS_ROLES.PRODUCTION_PLANNER],
     }),
   } satisfies NotificationTypeDef<PiTimelineReplanNotificationParams>,
+  /** QLSX đổi xưởng lệnh đã có phương án cắt APPROVED -> KHSX xem lại phương án rồi bấm "Đã kiểm". Tự đóng khi KHSX bấm "Đã kiểm". */
+  PI_CUTTING_RECHECK_REQUIRED: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PiCuttingRecheckNotificationParams) =>
+      `${p.displayCode}: đổi xưởng → cần kiểm lại phương án cắt`,
+    message: (p: PiCuttingRecheckNotificationParams) =>
+      `QLSX đổi xưởng ${p.fromWorkshop ?? '(chưa có)'} → ${p.toWorkshop}. Vào Tối ưu cắt sắt xem lại phương án cắt rồi bấm "Đã kiểm" - chưa bấm thì kho chưa được chuyển / xuất sắt cho lệnh này.`,
+    link: (p: PiCuttingRecheckNotificationParams) => ({
+      module: 'production_plan',
+      page: 'gom-cat',
+      params: { focus: `PI_CODE:${p.piCode}` },
+    }),
+    recipients: () => ({
+      roles: [BUSINESS_ROLES.PRODUCTION_PLANNER],
+    }),
+  } satisfies NotificationTypeDef<PiCuttingRecheckNotificationParams>,
   // ─── Người B – Đợt 10b (YC5 5.5-5.7): kho thành phẩm xuất hàng theo booking ─────────────────────────────────────────────
   /** Sales xác nhận booking -> thủ kho thành phẩm của kho gom hàng biết có cont cần đóng. Tự đóng khi kho xác nhận xuất / booking huỷ. */
   BOOKING_TO_SHIP: {

@@ -118,6 +118,7 @@ model User {
   piQlsxItems                       ProductionInvoiceItem[]     @relation("PIItemQlsxBy")
   piDecidedItems                    ProductionInvoiceItem[]     @relation("PIItemDecidedBy")
   piMerged                          ProductionInvoice[]         @relation("PIMergedBy")
+  piCuttingRechecks                 ProductionInvoice[]         @relation("PiCuttingRechecked")
   cuttingProposalsRequested         CuttingProposal[]           @relation("CuttingProposalRequestedBy")
   cuttingProposalsApproved          CuttingProposal[]           @relation("CuttingProposalApprovedBy")
   transferCheckResults              TransferCheckResult[]       @relation("TransferCheckCheckedBy")
@@ -1704,11 +1705,18 @@ model ProductionInvoice {
   /// Không cần Sếp duyệt riêng (khác 2 trục hao hụt/chiều dài ở trên): đây thuần là ngân sách
   /// THỜI GIAN TÍNH TOÁN, không đổi kết quả cắt hay chi phí sắt, nên KHSX tự set và chạy luôn.
   solverTimeLimitSecondsOverride Int?
+  // Phần A - cờ "cần kiểm lại phương án cắt" khi QLSX đổi xưởng lệnh đã có phương án cắt APPROVED (anh Nhân chốt 10/11).
+  // KHSX bấm "Đã kiểm" thì tắt cờ (không tự tính lại/duyệt phương án mới). Người B đọc cờ này để chặn chuyển/xuất sắt.
+  cuttingRecheckRequired         Boolean                 @default(false)
+  cuttingRecheckRequiredAt       DateTime?
+  cuttingRecheckedAt             DateTime?
+  cuttingRecheckedById           String?
   createdAt                      DateTime                @default(now())
   updatedAt                      DateTime                @updatedAt
 
   salesOrder                SalesOrder?                @relation(fields: [salesOrderId], references: [id])
   mergedBy                  User?                      @relation("PIMergedBy", fields: [mergedById], references: [id])
+  cuttingRecheckedBy        User?                      @relation("PiCuttingRechecked", fields: [cuttingRecheckedById], references: [id])
   items                     ProductionInvoiceItem[]
   planForms                 PlanForm[]
   cuttingProposals          CuttingProposal[]

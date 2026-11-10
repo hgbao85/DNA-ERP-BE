@@ -82,6 +82,14 @@ export class ProductionInvoiceResponseDto {
    */
   @Expose() @ApiPropertyOptional() hasMaterialIssue?: boolean;
   /**
+   * Phần A: true = QLSX đã đổi xưởng sau khi lệnh có phương án cắt APPROVED, KHSX chưa bấm "Đã kiểm" (người B chặn chuyển/xuất sắt
+   * theo cờ này). `cuttingRecheckedByName` chỉ có ở findAll/findOne (nơi nạp quan hệ), nơi khác null.
+   */
+  @Expose() @ApiProperty() cuttingRecheckRequired!: boolean;
+  @Expose() @ApiProperty({ nullable: true }) cuttingRecheckRequiredAt!: Date | null;
+  @Expose() @ApiProperty({ nullable: true }) cuttingRecheckedAt!: Date | null;
+  @Expose() @ApiProperty({ nullable: true }) cuttingRecheckedByName!: string | null;
+  /**
    * Phần A – Đợt 9 (YC2): kết quả lần "Sửa thời hạn" vừa lưu - dòng ghi thẳng, lô chờ Sếp duyệt lại (dòng đã duyệt), dòng bị bỏ.
    * Chỉ route PATCH :id/items-deadlines trả; nơi khác để undefined.
    */
