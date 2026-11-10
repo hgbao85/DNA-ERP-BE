@@ -43,6 +43,7 @@ import {
 } from './transfer-routes.constant';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { WorkshopMovePart, WorkshopMoveService } from './workshop-move.service';
+import { lenhDisplayCode } from '../../common/utils/lenh-code.util';
 import { CUTTING_RECHECK_MESSAGE } from './cutting-recheck.util';
 
 const ACTOR_NAME_SELECT = { select: { firstName: true, lastName: true } };
@@ -55,6 +56,10 @@ const TRANSFER_INCLUDE = {
   // quy cách khi nhận hàng chuyển kho, không chỉ tên. Dòng "ghi tự do" cũ (materialId null,
   // trước 09/09/2026) không có Material để join -> materialSpec null.
   items: { include: { material: { select: { spec: true } } } },
+  // Phiếu chuyển hàng của lệnh đổi xưởng (10/11/2026): số lệnh để in ô "Lệnh sản xuất" / cột LSX.
+  productionInvoice: {
+    select: { code: true, items: { select: { lsxCode: true }, orderBy: { id: 'asc' as const } } },
+  },
   pieceItems: {
     include: {
       productionOrder: {
@@ -1156,6 +1161,9 @@ export class WarehouseTransfersService {
         : null,
       signedSlipUrls: row.signedSlipUrls,
       productionInvoiceId: row.productionInvoiceId?.toString() ?? null,
+      lenhCode: row.productionInvoice
+        ? lenhDisplayCode(row.productionInvoice, row.productionInvoice.items)
+        : null,
     });
   }
 
