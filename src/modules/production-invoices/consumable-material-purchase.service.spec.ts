@@ -1,3 +1,4 @@
+import { PURCHASE_TX_OPTIONS } from './purchase-tx-options';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import {
   AccessoryItemKind,
@@ -241,6 +242,8 @@ describe('ConsumableMaterialPurchaseService', () => {
 
       // 2 mảnh/SKU × 20 SKU: DAY-01 ×3 = 120, DINH-01 ×4 = 160; DAY-02 (không chọn) KHÔNG xuất hiện.
       expect(requiredOf(result)).toEqual({ 'DAY-01': 120, 'DINH-01': 160 });
+      // 10/11/2026: transaction phải dùng giới hạn 30 s (mặc định 5 s quá giờ trên DB ở xa -> mất trắng dòng mua ngoài sắt).
+      expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), PURCHASE_TX_OPTIONS);
     });
 
     it('2 lệnh cùng SKU/revision khác dây trong cùng PI: mỗi lệnh cộng đúng loại dây của nó', async () => {

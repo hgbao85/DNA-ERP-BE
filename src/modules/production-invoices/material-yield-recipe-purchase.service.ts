@@ -24,6 +24,7 @@ import {
   sortItemsById,
   toRecomputeItem,
 } from '../../common/utils/purchase-recompute.util';
+import { PURCHASE_TX_OPTIONS } from './purchase-tx-options';
 
 /**
  * Tính nhu cầu mua nguyên liệu ĐẦU VÀO (vd thanh nhôm) cho "vật tư thành phẩm KHÔNG gắn piece" (vd
@@ -265,7 +266,7 @@ export class MaterialYieldRecipePurchaseService {
         include: { items: true },
       });
       proposal = found;
-    });
+    }, PURCHASE_TX_OPTIONS);
 
     const results: MaterialYieldRecipePurchaseResultDto[] = [];
     for (const c of computed) {

@@ -24,6 +24,7 @@ import {
   sortItemsById,
   toRecomputeItem,
 } from '../../common/utils/purchase-recompute.util';
+import { PURCHASE_TX_OPTIONS } from './purchase-tx-options';
 
 /**
  * Tính nhu cầu mua nguyên liệu cho "vật tư thành phẩm" (piece có PieceMaterialYield - vd chân
@@ -343,7 +344,7 @@ export class PieceMaterialYieldPurchaseService {
         include: { items: true },
       });
       proposal = found;
-    });
+    }, PURCHASE_TX_OPTIONS);
 
     for (const c of computed) {
       const acc = barsNeededByMaterial.get(c.materialIdStr)!;

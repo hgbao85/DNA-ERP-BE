@@ -27,6 +27,7 @@ import {
   sortItemsById,
   toRecomputeItem,
 } from '../../common/utils/purchase-recompute.util';
+import { PURCHASE_TX_OPTIONS } from './purchase-tx-options';
 
 /**
  * Tính nhu cầu mua "vật tư tiêu hao phẳng" cho 1 PI - gộp cả 3 nguồn định mức không có khái
@@ -443,7 +444,7 @@ export class ConsumableMaterialPurchaseService {
             purchaseProposalStatus: proposal.status,
           }),
       );
-    });
+    }, PURCHASE_TX_OPTIONS);
 
     await emitPurchaseRecomputeNotifications(
       this.prisma,
