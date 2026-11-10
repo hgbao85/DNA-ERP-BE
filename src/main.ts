@@ -6,6 +6,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { validationExceptionFactory } from './common/pipes/validation-exception.factory';
 import { AppConfig } from './config/configuration';
 import { RealtimeIoAdapter } from './realtime/realtime-io.adapter';
 
@@ -41,6 +42,8 @@ async function bootstrap(): Promise<void> {
       forbidNonWhitelisted: true,
       transform: true,
       transformOptions: { enableImplicitConversion: true },
+      // Câu lỗi validate mặc định của class-validator là tiếng Anh - đổi sang tiếng Việt cho người dùng.
+      exceptionFactory: validationExceptionFactory,
     }),
   );
 

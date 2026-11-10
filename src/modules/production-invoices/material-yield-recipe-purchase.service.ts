@@ -51,7 +51,7 @@ export class MaterialYieldRecipePurchaseService {
     const piBigId = parseBigIntId(productionInvoiceId);
     const pi = await this.prisma.productionInvoice.findUnique({ where: { id: piBigId } });
     if (!pi) {
-      throw new NotFoundException(`Production invoice ${productionInvoiceId} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh sản xuất ${productionInvoiceId}`);
     }
 
     const demand = await this.materialYieldRecipesService.getProductionDemand(productionInvoiceId);

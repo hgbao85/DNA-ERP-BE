@@ -295,7 +295,7 @@ export class OfficeSuppliesService {
   private assertWarehouseScope(warehouseScope: string | null, expectedWarehouseCode: string): void {
     if (warehouseScope && warehouseScope !== expectedWarehouseCode) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được thao tác vật tư văn phòng của kho '${expectedWarehouseCode}'`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không được thao tác vật tư văn phòng của kho '${expectedWarehouseCode}'`,
       );
     }
   }
@@ -318,7 +318,7 @@ export class OfficeSuppliesService {
       include: OFFICE_SUPPLY_INCLUDE,
     });
     if (!supply || (supply.deletedAt && !options?.allowDeleted)) {
-      throw new NotFoundException(`Office supply ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy văn phòng phẩm ${id}`);
     }
     return supply;
   }

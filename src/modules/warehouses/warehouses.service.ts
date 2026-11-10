@@ -33,7 +33,7 @@ export class WarehousesService {
   async create(dto: CreateWarehouseDto): Promise<WarehouseResponseDto> {
     const existing = await this.prisma.warehouse.findUnique({ where: { code: dto.code } });
     if (existing) {
-      throw new ConflictException(`Warehouse "${dto.code}" already exists`);
+      throw new ConflictException(`Kho "${dto.code}" đã tồn tại`);
     }
 
     const warehouse = await this.prisma.warehouse.create({
@@ -74,14 +74,12 @@ export class WarehousesService {
     const current = await this.findOneOrThrow(id);
 
     if (dto.code && dto.code !== current.code && isProtected(current.code)) {
-      throw new ForbiddenException(
-        `Warehouse "${current.code}" is protected and cannot be renamed`,
-      );
+      throw new ForbiddenException(`Kho "${current.code}" là kho hệ thống, không thể đổi tên`);
     }
     if (dto.code && dto.code !== current.code) {
       const existing = await this.prisma.warehouse.findUnique({ where: { code: dto.code } });
       if (existing) {
-        throw new ConflictException(`Warehouse "${dto.code}" already exists`);
+        throw new ConflictException(`Kho "${dto.code}" đã tồn tại`);
       }
     }
 
@@ -102,9 +100,7 @@ export class WarehousesService {
     const current = await this.findOneOrThrow(id);
 
     if (isProtected(current.code)) {
-      throw new ForbiddenException(
-        `Warehouse "${current.code}" is protected and cannot be deleted`,
-      );
+      throw new ForbiddenException(`Kho "${current.code}" là kho hệ thống, không thể xoá`);
     }
 
     // Xoá kèm mọi tài khoản đang gắn warehouseScope đúng kho này (Thủ kho được tự động tạo lúc
@@ -124,7 +120,7 @@ export class WarehousesService {
     const bigId = parseBigIntId(id);
     const warehouse = await this.prisma.warehouse.findUnique({ where: { id: bigId } });
     if (!warehouse) {
-      throw new NotFoundException(`Warehouse ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy kho ${id}`);
     }
     return warehouse;
   }

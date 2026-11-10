@@ -339,7 +339,7 @@ export class ProductionInvoicesService {
         where: { id: salesOrderBigId },
       });
       if (!salesOrder) {
-        throw new NotFoundException(`Sales order ${dto.salesOrderId} not found`);
+        throw new NotFoundException(`Không tìm thấy đơn hàng ${dto.salesOrderId}`);
       }
     }
 
@@ -418,7 +418,7 @@ export class ProductionInvoicesService {
       include: PROPOSAL_STATUS_INCLUDE,
     });
     if (!pi) {
-      throw new NotFoundException(`Production invoice ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh sản xuất ${id}`);
     }
     return await this.toResponseDtoWithProposalStatus(pi);
   }
@@ -709,7 +709,7 @@ export class ProductionInvoicesService {
     const overrideEvidence = await this.buildOverrideEvidence([itemId], solver, proposal.id);
     const item = await this.prisma.productionInvoiceItem.findUnique({ where: { id: bigId } });
     if (!item) {
-      throw new NotFoundException(`Production invoice item ${itemId} not found`);
+      throw new NotFoundException(`Không tìm thấy SKU ${itemId}`);
     }
     if (item.productionInvoiceId !== null) {
       throw new ConflictException(
@@ -772,7 +772,7 @@ export class ProductionInvoicesService {
     const mfgProductBigId = parseBigIntId(dto.mfgProductId);
     const product = await this.prisma.mfgProduct.findUnique({ where: { id: mfgProductBigId } });
     if (!product) {
-      throw new NotFoundException(`Product ${dto.mfgProductId} not found`);
+      throw new NotFoundException(`Không tìm thấy sản phẩm ${dto.mfgProductId}`);
     }
 
     const item = await this.prisma.productionInvoiceItem.create({
@@ -1392,7 +1392,7 @@ export class ProductionInvoicesService {
     });
     if (count === 0) {
       throw new ConflictException(
-        `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc gửi QLSX - không ghi đè`,
+        `SKU ${item.id} đã được xử lý bởi 1 yêu cầu khác trong lúc gửi QLSX - không ghi đè`,
       );
     }
     // Đã tự lưu mốc -> đọc lại để phản hồi có đủ mốc mới.
@@ -1446,7 +1446,7 @@ export class ProductionInvoicesService {
     });
     if (count === 0) {
       throw new ConflictException(
-        `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc gửi Sếp - không ghi đè`,
+        `SKU ${item.id} đã được xử lý bởi 1 yêu cầu khác trong lúc gửi Sếp - không ghi đè`,
       );
     }
     await this.auditItemApprovalTransition(item, { ...item, ...data });
@@ -1951,7 +1951,7 @@ export class ProductionInvoicesService {
     });
     if (count === 0) {
       throw new ConflictException(
-        `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc Sếp duyệt - không ghi đè`,
+        `SKU ${item.id} đã được xử lý bởi 1 yêu cầu khác trong lúc Sếp duyệt - không ghi đè`,
       );
     }
     const updated = { ...item, ...data };
@@ -2149,7 +2149,7 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     if (item.prodApprovalStatus !== ProdApprovalStatus.APPROVED) {
       throw new ConflictException(
-        `Item ${item.id} đang ở trạng thái ${item.prodApprovalStatus ?? 'chưa gửi'} - chỉ item đã APPROVED mới cần tạo lại lệnh sản xuất`,
+        `SKU ${item.id} đang ở trạng thái ${item.prodApprovalStatus ?? 'chưa gửi'} - chỉ SKU đã APPROVED mới cần tạo lại lệnh sản xuất`,
       );
     }
     const existingOrder = await this.prisma.productionOrder.findUnique({
@@ -2169,7 +2169,7 @@ export class ProductionInvoicesService {
         return this.toItemResponseDto(item);
       }
       throw new ConflictException(
-        `Item ${item.id} đã có lệnh sản xuất (PO ${existingOrder.poNumber}) - không cần tạo lại`,
+        `SKU ${item.id} đã có lệnh sản xuất (PO ${existingOrder.poNumber}) - không cần tạo lại`,
       );
     }
     let pinnedRevisionId: bigint | undefined;
@@ -2245,7 +2245,7 @@ export class ProductionInvoicesService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc QLSX từ chối - không ghi đè`,
+          `SKU ${item.id} đã được xử lý bởi 1 yêu cầu khác trong lúc QLSX từ chối - không ghi đè`,
         );
       }
       const remaining = await tx.productionInvoiceItem.count({
@@ -2314,7 +2314,7 @@ export class ProductionInvoicesService {
     }
 
     // updateMany lọc kèm đúng trạng thái kỳ vọng + so count, thay vì vòng lặp update() không điều
-    // kiện: chặn race với 1 request khác vừa ghi đè status của 1/nhiều item này đúng lúc request
+    // kiện: chặn race với 1 yêu cầu khác vừa ghi đè status của 1/nhiều item này đúng lúc request
     // này đang chạy (VD sendBatchToBoss() gửi tiếp 1 item sang Sếp), tránh xoá PI mà kéo nhầm 1
     // item không còn ở WAITING_QLSX ra theo.
     const itemIds = pi.items.map((item) => item.id);
@@ -2345,7 +2345,7 @@ export class ProductionInvoicesService {
       });
       if (count !== itemIds.length) {
         throw new ConflictException(
-          `${pi.code} đã bị 1 request khác xử lý một phần trong lúc QLSX từ chối cả phiếu - không ghi đè`,
+          `${pi.code} đã bị 1 yêu cầu khác xử lý một phần trong lúc QLSX từ chối cả phiếu - không ghi đè`,
         );
       }
       await this.cuttingProposalsService.releaseForInvoice(tx, pi.id);
@@ -2402,7 +2402,7 @@ export class ProductionInvoicesService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Item ${item.id} đã được xử lý bởi 1 request khác trong lúc Sếp từ chối - không ghi đè`,
+          `SKU ${item.id} đã được xử lý bởi 1 yêu cầu khác trong lúc Sếp từ chối - không ghi đè`,
         );
       }
       const remaining = await tx.productionInvoiceItem.count({
@@ -2497,7 +2497,7 @@ export class ProductionInvoicesService {
       });
       if (count !== itemIds.length) {
         throw new ConflictException(
-          `${pi.code} đã bị 1 request khác xử lý (duyệt/từ chối) một phần trong lúc Sếp duyệt cả cụm - không ghi đè`,
+          `${pi.code} đã bị 1 yêu cầu khác xử lý (duyệt/từ chối) một phần trong lúc Sếp duyệt cả cụm - không ghi đè`,
         );
       }
     });
@@ -2637,7 +2637,7 @@ export class ProductionInvoicesService {
       });
       if (count !== itemIds.length) {
         throw new ConflictException(
-          `${pi.code} đã bị 1 request khác xử lý (duyệt/từ chối) một phần trong lúc Sếp từ chối cả cụm - không ghi đè`,
+          `${pi.code} đã bị 1 yêu cầu khác xử lý (duyệt/từ chối) một phần trong lúc Sếp từ chối cả cụm - không ghi đè`,
         );
       }
       await this.cuttingProposalsService.releaseForInvoice(tx, pi.id);
@@ -2856,7 +2856,7 @@ export class ProductionInvoicesService {
     });
     if (!bomPiece) {
       throw new NotFoundException(
-        `Mảnh ${dto.pieceId} không thuộc định mức (BOM) của item ${itemId}`,
+        `Mảnh ${dto.pieceId} không thuộc định mức (BOM) của SKU ${itemId}`,
       );
     }
 
@@ -2984,7 +2984,7 @@ export class ProductionInvoicesService {
       include: { transferCheckResult: true },
     });
     if (!existing) {
-      throw new NotFoundException(`Lỗi kiểm chuyển kho ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lỗi kiểm chuyển kho ${id}`);
     }
     if (
       existing.transferCheckResult.checkedById !== actorUserId &&
@@ -3095,7 +3095,7 @@ export class ProductionInvoicesService {
     const packedSoFar = await this.sumPacked(item.id);
     if (packedSoFar + dto.boxesPacked > productionOrder.quantity) {
       throw new BadRequestException(
-        `Số thùng đóng (${dto.boxesPacked}) vượt quá số còn có thể đóng cho item ${itemId} ` +
+        `Số thùng đóng (${dto.boxesPacked}) vượt quá số còn có thể đóng cho SKU ${itemId} ` +
           `(tổng ${productionOrder.quantity}, đã đóng ${packedSoFar}, còn ${productionOrder.quantity - packedSoFar})`,
       );
     }
@@ -3138,7 +3138,7 @@ export class ProductionInvoicesService {
     });
     if (!productionOrder) {
       throw new ConflictException(
-        `Item ${itemId} chưa có ProductionOrder (chưa được Sếp duyệt) - chưa có mảnh nào để kiểm`,
+        `SKU ${itemId} chưa có lệnh xưởng (chưa được Sếp duyệt) - chưa có mảnh nào để kiểm`,
       );
     }
     return productionOrder;
@@ -3166,7 +3166,7 @@ export class ProductionInvoicesService {
       },
     });
     if (!pi) {
-      throw new NotFoundException(`Production invoice ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh sản xuất ${id}`);
     }
     return pi;
   }
@@ -3186,7 +3186,7 @@ export class ProductionInvoicesService {
       },
     });
     if (!item || item.productionInvoiceId !== piId) {
-      throw new NotFoundException(`Production invoice item ${id} not found on PI ${piId}`);
+      throw new NotFoundException(`Không tìm thấy SKU ${id} trong lệnh ${piId}`);
     }
     return item;
   }
@@ -3195,7 +3195,7 @@ export class ProductionInvoicesService {
   private assertNoApprovalOrRejected(item: PIItemWithRefs): void {
     if (item.prodApprovalStatus && item.prodApprovalStatus !== ProdApprovalStatus.REJECTED) {
       throw new ConflictException(
-        `Item ${item.id} đang ở trạng thái ${item.prodApprovalStatus}, không thể gửi lại QLSX`,
+        `SKU ${item.id} đang ở trạng thái ${item.prodApprovalStatus}, không thể gửi lại QLSX`,
       );
     }
   }
@@ -3218,7 +3218,7 @@ export class ProductionInvoicesService {
   private assertItemStatus(item: PIItemWithRefs, expected: ProdApprovalStatus): void {
     if (item.prodApprovalStatus !== expected) {
       throw new ConflictException(
-        `Item ${item.id} phải ở trạng thái ${expected} (đang là ${item.prodApprovalStatus ?? 'chưa gửi'})`,
+        `SKU ${item.id} phải ở trạng thái ${expected} (đang là ${item.prodApprovalStatus ?? 'chưa gửi'})`,
       );
     }
   }

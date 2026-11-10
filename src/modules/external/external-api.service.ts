@@ -101,7 +101,7 @@ export class ExternalApiService {
       return (await this.getBreaker.fire(url, config)) as T;
     } catch (error) {
       this.logger.error(`External call to ${url} failed: ${(error as Error).message}`);
-      throw new ServiceUnavailableException(`External service unavailable: ${url}`);
+      throw new ServiceUnavailableException(`Dịch vụ bên ngoài không phản hồi: ${url}`);
     }
   }
 
@@ -134,7 +134,7 @@ export class ExternalApiService {
         throw error;
       }
       this.logger.error(`External call to ${url} failed: ${(error as Error).message}`);
-      throw new ServiceUnavailableException(`External service unavailable: ${url}`);
+      throw new ServiceUnavailableException(`Dịch vụ bên ngoài không phản hồi: ${url}`);
     }
   }
 

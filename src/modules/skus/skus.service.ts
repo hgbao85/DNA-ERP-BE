@@ -207,7 +207,7 @@ export class SkusService {
     const mfgProductBigId = parseBigIntId(dto.mfgProductId);
     const product = await this.prisma.mfgProduct.findUnique({ where: { id: mfgProductBigId } });
     if (!product) {
-      throw new NotFoundException(`Product ${dto.mfgProductId} not found`);
+      throw new NotFoundException(`Không tìm thấy sản phẩm ${dto.mfgProductId}`);
     }
 
     // SKU độc lập với Sales Order: salesOrderId chỉ được gắn khi FE thật sự truyền lên (không
@@ -223,7 +223,7 @@ export class SkusService {
         include: { customer: true },
       });
       if (!salesOrder) {
-        throw new NotFoundException(`Sales order ${dto.salesOrderId} not found`);
+        throw new NotFoundException(`Không tìm thấy đơn hàng ${dto.salesOrderId}`);
       }
       customerName = customerName ?? salesOrder.customer.name;
       productionInvoiceId = await this.resolveProductionInvoice(
@@ -337,7 +337,7 @@ export class SkusService {
     const pf = await this.findOneOrThrow(id);
     if (pf.status !== PlanFormStatus.IN_PROGRESS) {
       throw new ConflictException(
-        `Plan form ${pf.id} đang ở trạng thái ${pf.status} - chỉ có thể sửa khi đang làm định mức (chưa gửi Sếp duyệt)`,
+        `Phiếu kế hoạch ${pf.id} đang ở trạng thái ${pf.status} - chỉ có thể sửa khi đang làm định mức (chưa gửi Sếp duyệt)`,
       );
     }
 
@@ -895,7 +895,7 @@ export class SkusService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Plan form ${pf.id} đã được xử lý bởi 1 request khác trong lúc chờ duyệt - không ghi đè`,
+          `Phiếu kế hoạch ${pf.id} đã được xử lý bởi 1 yêu cầu khác trong lúc chờ duyệt - không ghi đè`,
         );
       }
 
@@ -1011,7 +1011,7 @@ export class SkusService {
     }
     if (!actorRoles.includes(DEFAULT_ROLES.ADMIN)) {
       throw new ConflictException(
-        `Plan form ${pf.id} đã có BomRevision ở trạng thái ${revision.status} - không thể sửa định mức sau khi đã duyệt (chỉ Admin mới ghi đè được)`,
+        `Phiếu kế hoạch ${pf.id} đã có bản định mức ở trạng thái ${revision.status} - không thể sửa định mức sau khi đã duyệt (chỉ Admin mới ghi đè được)`,
       );
     }
     return { id: revision.id, isAdminOverride: true };
@@ -1108,7 +1108,7 @@ export class SkusService {
     const byId = new Map(materials.map((m) => [m.id.toString(), m]));
     for (const ref of refs) {
       if (!byId.has(ref.id.toString())) {
-        throw new NotFoundException(`Material ${ref.display} not found`);
+        throw new NotFoundException(`Không tìm thấy vật tư ${ref.display}`);
       }
     }
     return byId;
@@ -1187,7 +1187,7 @@ export class SkusService {
     const accepted = Array.isArray(expected) ? expected : [expected];
     if (!material.detailKind || !accepted.includes(material.detailKind)) {
       throw new BadRequestException(
-        `Material "${material.code}" chưa được phân loại đúng cho ${groupLabel} - vào Admin > Vật tư gán Phân loại = ${groupLabel} cho vật tư này trước`,
+        `Vật tư "${material.code}" chưa được phân loại đúng cho ${groupLabel} - vào Admin > Vật tư gán Phân loại = ${groupLabel} cho vật tư này trước`,
       );
     }
   }
@@ -1204,7 +1204,7 @@ export class SkusService {
       await tx.material.update({ where: { id: material.id }, data: { materialGroupId } });
     } else if (material.materialGroupId !== materialGroupId) {
       throw new BadRequestException(
-        `Material "${material.code}" đã thuộc nhóm vật tư khác - không thể dùng cho nhóm ${groupLabel} này`,
+        `Vật tư "${material.code}" đã thuộc nhóm vật tư khác - không thể dùng cho nhóm ${groupLabel} này`,
       );
     }
   }
@@ -1245,7 +1245,7 @@ export class SkusService {
       await tx.material.update({ where: { id: material.id }, data: { steelSubGroup: expected } });
     } else if (current !== expected) {
       throw new BadRequestException(
-        `Material "${material.code}" đã thuộc nhóm con Sắt khác - không thể dùng cho ${label}. Vào Admin > Vật tư kiểm tra lại "Nhóm con Sắt" của vật tư này.`,
+        `Vật tư "${material.code}" đã thuộc nhóm con Sắt khác - không thể dùng cho ${label}. Vào Admin > Vật tư kiểm tra lại "Nhóm con Sắt" của vật tư này.`,
       );
     }
   }
@@ -2084,7 +2084,7 @@ export class SkusService {
       include: PLAN_FORM_INCLUDE,
     });
     if (!pf) {
-      throw new NotFoundException(`Plan form ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phiếu kế hoạch ${id}`);
     }
     return pf;
   }
@@ -2092,7 +2092,7 @@ export class SkusService {
   private assertStatus(pf: PlanFormWithRefs, expected: PlanFormStatus): void {
     if (pf.status !== expected) {
       throw new ConflictException(
-        `Plan form ${pf.id} phải ở trạng thái ${expected} (đang là ${pf.status})`,
+        `Phiếu kế hoạch ${pf.id} phải ở trạng thái ${expected} (đang là ${pf.status})`,
       );
     }
   }

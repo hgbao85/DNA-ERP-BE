@@ -438,7 +438,7 @@ export class ProductionBatchesService {
     this.assertMfgRoleMatchesStage(callerMfgRole, batch.stage);
     if (batch.status !== ProductionBatchStatus.OPEN) {
       throw new ConflictException(
-        `Batch ${id} đang ở trạng thái ${batch.status} - chỉ OPEN mới gửi KCS được`,
+        `Đợt ${id} đang ở trạng thái ${batch.status} - chỉ OPEN mới gửi KCS được`,
       );
     }
     await assertItemPiHasActiveFloor(
@@ -475,7 +475,7 @@ export class ProductionBatchesService {
         });
         if (count === 0) {
           throw new ConflictException(
-            `Batch ${id} đã bị 1 request khác xử lý trong lúc gửi KCS - không ghi đè`,
+            `Đợt ${id} đã bị 1 yêu cầu khác xử lý trong lúc gửi KCS - không ghi đè`,
           );
         }
         const locked = await tx.productionBatch.findUniqueOrThrow({
@@ -671,7 +671,7 @@ export class ProductionBatchesService {
       include: PIECE_STEP_BUNDLE_INCLUDE,
     });
     if (!bundle) {
-      throw new NotFoundException(`Đợt gửi KCS ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy đợt gửi KCS ${id}`);
     }
     return bundle;
   }
@@ -1740,7 +1740,7 @@ export class ProductionBatchesService {
       stage === MfgStage.PHOI ? MfgRole.PHOI : stage === MfgStage.HAN ? MfgRole.HAN : MfgRole.SON;
     if (mfgRole !== expected) {
       throw new ForbiddenException(
-        `Caller có mfgRole '${mfgRole}', không được báo sản lượng công đoạn ${stage}`,
+        `Tài khoản có mfgRole '${mfgRole}', không được báo sản lượng công đoạn ${stage}`,
       );
     }
   }
@@ -1865,7 +1865,7 @@ export class ProductionBatchesService {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
     if (!order) {
-      throw new NotFoundException(`Production order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     return order;
   }
@@ -1884,7 +1884,7 @@ export class ProductionBatchesService {
       },
     });
     if (!order) {
-      throw new NotFoundException(`Production order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     return order;
   }
@@ -1896,7 +1896,7 @@ export class ProductionBatchesService {
       include: PRODUCTION_BATCH_INCLUDE,
     });
     if (!batch) {
-      throw new NotFoundException(`Production batch ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy đợt sản xuất ${id}`);
     }
     return batch;
   }

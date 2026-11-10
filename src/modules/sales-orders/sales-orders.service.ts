@@ -119,7 +119,7 @@ export class SalesOrdersService {
     const customerBigId = parseBigIntId(dto.customerId);
     const customer = await this.prisma.customer.findUnique({ where: { id: customerBigId } });
     if (!customer) {
-      throw new NotFoundException(`Customer ${dto.customerId} not found`);
+      throw new NotFoundException(`Không tìm thấy khách hàng ${dto.customerId}`);
     }
     await this.assertProductsExist(dto.items);
     await this.assertOptionChoices(dto.items);
@@ -448,7 +448,7 @@ export class SalesOrdersService {
       });
       if (linked) {
         throw new ConflictException(
-          `Sản phẩm ${item.mfgProduct.factoryCode} của đơn hàng ${order.id} đã ghim vào lệnh sản xuất (PI item ${linked.id}) - không thể tự sửa số lượng, liên hệ KHSX để xử lý qua quy trình khác`,
+          `Sản phẩm ${item.mfgProduct.factoryCode} của đơn hàng ${order.id} đã ghim vào lệnh sản xuất (dòng PI ${linked.id}) - không thể tự sửa số lượng, liên hệ KHSX để xử lý qua quy trình khác`,
         );
       }
     }
@@ -561,7 +561,7 @@ export class SalesOrdersService {
       include: { customer: true, items: { include: ITEM_INCLUDE } },
     });
     if (!order) {
-      throw new NotFoundException(`Sales order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy đơn hàng ${id}`);
     }
     return order;
   }
@@ -576,7 +576,7 @@ export class SalesOrdersService {
       include: ITEM_INCLUDE,
     });
     if (!item || item.salesOrderId !== salesOrderId) {
-      throw new NotFoundException(`Sales order item ${id} not found on order ${salesOrderId}`);
+      throw new NotFoundException(`Không tìm thấy dòng ${id} của đơn hàng ${salesOrderId}`);
     }
     return item;
   }
@@ -586,7 +586,7 @@ export class SalesOrdersService {
       const bigId = parseBigIntId(it.mfgProductId);
       const product = await this.prisma.mfgProduct.findUnique({ where: { id: bigId } });
       if (!product) {
-        throw new NotFoundException(`Product ${it.mfgProductId} not found`);
+        throw new NotFoundException(`Không tìm thấy sản phẩm ${it.mfgProductId}`);
       }
     }
   }

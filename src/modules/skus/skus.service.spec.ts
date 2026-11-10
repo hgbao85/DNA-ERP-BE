@@ -1968,7 +1968,7 @@ describe('SkusService', () => {
     it('rolls back the whole approve (never touches PlanForm.status) when activating the BOM revision fails midway', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
-      // Ví dụ lỗi giữa chừng: 1 request khác vừa activate xong đúng lúc này, draft không còn
+      // Ví dụ lỗi giữa chừng: 1 yêu cầu khác vừa activate xong đúng lúc này, draft không còn
       // ở trạng thái DRAFT nữa - activateInTransaction() (chạy trong cùng transaction) throw.
       bomRevisionsService.activateInTransaction.mockRejectedValue(
         new ConflictException('bom_revision không còn DRAFT'),

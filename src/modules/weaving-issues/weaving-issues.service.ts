@@ -1280,7 +1280,7 @@ export class WeavingIssuesService {
     const matches = warehouseFamilyOf(warehouseScope) === warehouseFamilyOf(expectedWarehouseCode);
     if (warehouseScope && !matches) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được ${action} từ kho '${expectedWarehouseCode}'`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không được ${action} từ kho '${expectedWarehouseCode}'`,
       );
     }
   }
@@ -1330,7 +1330,7 @@ export class WeavingIssuesService {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
     if (!order) {
-      throw new NotFoundException(`Production order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     return order;
   }
@@ -1338,7 +1338,7 @@ export class WeavingIssuesService {
   private async findPieceOrThrow(id: bigint): Promise<Piece> {
     const piece = await this.prisma.piece.findUnique({ where: { id } });
     if (!piece) {
-      throw new NotFoundException(`Piece ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy mảnh ${id}`);
     }
     return piece;
   }
@@ -1346,7 +1346,7 @@ export class WeavingIssuesService {
   private async findWeavingPointOrThrow(id: bigint): Promise<WeavingPoint> {
     const weavingPoint = await this.prisma.weavingPoint.findUnique({ where: { id } });
     if (!weavingPoint) {
-      throw new NotFoundException(`Weaving point ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy điểm đan ${id}`);
     }
     return weavingPoint;
   }
@@ -1358,7 +1358,7 @@ export class WeavingIssuesService {
       include: WEAVING_ISSUE_INCLUDE,
     });
     if (!issue) {
-      throw new NotFoundException(`Weaving issue ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phiếu xuất đan ${id}`);
     }
     return issue;
   }
@@ -1370,7 +1370,7 @@ export class WeavingIssuesService {
       include: WEAVING_RECEIPT_INCLUDE,
     });
     if (!receipt) {
-      throw new NotFoundException(`Weaving receipt ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phiếu nhập đan ${id}`);
     }
     return receipt;
   }

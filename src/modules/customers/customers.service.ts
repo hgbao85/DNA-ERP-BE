@@ -91,7 +91,7 @@ export class CustomersService {
     const bigId = parseBigIntId(id);
     const customer = await this.prisma.customer.findUnique({ where: { id: bigId } });
     if (!customer) {
-      throw new NotFoundException(`Customer ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy khách hàng ${id}`);
     }
     return customer;
   }

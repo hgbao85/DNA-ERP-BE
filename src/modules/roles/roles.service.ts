@@ -21,7 +21,7 @@ export class RolesService {
   async create(dto: CreateRoleDto): Promise<RoleResponseDto> {
     const existing = await this.prisma.role.findUnique({ where: { name: dto.name } });
     if (existing) {
-      throw new ConflictException(`Role ${dto.name} already exists`);
+      throw new ConflictException(`Vai trò ${dto.name} đã tồn tại`);
     }
 
     const role = await this.prisma.$transaction(async (tx) => {
@@ -66,7 +66,7 @@ export class RolesService {
   async findOne(id: string): Promise<RoleResponseDto> {
     const role = await this.findRawById(id);
     if (!role) {
-      throw new NotFoundException(`Role ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy vai trò ${id}`);
     }
     return this.toResponseDto(role);
   }
@@ -111,14 +111,14 @@ export class RolesService {
   private async findOneOrThrow(id: string) {
     const role = await this.findRawById(id);
     if (!role) {
-      throw new NotFoundException(`Role ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy vai trò ${id}`);
     }
     return role;
   }
 
   private toResponseDto(role: RoleWithPermissions): RoleResponseDto {
     if (!role) {
-      throw new NotFoundException('Role not found');
+      throw new NotFoundException('Không tìm thấy vai trò');
     }
     return new RoleResponseDto({
       id: role.id,

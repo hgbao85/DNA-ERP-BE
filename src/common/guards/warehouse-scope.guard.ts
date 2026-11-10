@@ -32,7 +32,7 @@ export class WarehouseScopeGuard implements CanActivate {
 
     if (resourceScope !== undefined && resourceScope !== callerScope) {
       throw new ForbiddenException(
-        `Caller is scoped to warehouse '${callerScope}', which does not match this resource`,
+        `Tài khoản đang làm việc ở kho '${callerScope}', không được thao tác dữ liệu của kho khác`,
       );
     }
 

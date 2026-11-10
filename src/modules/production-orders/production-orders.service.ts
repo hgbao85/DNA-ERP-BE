@@ -256,7 +256,7 @@ export class ProductionOrdersService {
       include: SALES_ORDER_CODE_INCLUDE,
     });
     if (!order) {
-      throw new NotFoundException(`Production order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     const activeRevisionByProduct = await this.fetchActiveBomRevisionIds([order.mfgProductId]);
     return this.toResponseDto(order, activeRevisionByProduct);
@@ -332,7 +332,7 @@ export class ProductionOrdersService {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
     if (!order) {
-      throw new NotFoundException(`Production order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     const updated = await this.prisma.productionOrder.update({
       where: { id: bigId },
@@ -366,7 +366,7 @@ export class ProductionOrdersService {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
     if (!order) {
-      throw new NotFoundException(`Production order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     const updated = await this.prisma.productionOrder.update({
       where: { id: bigId },
@@ -390,7 +390,7 @@ export class ProductionOrdersService {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
     if (!order) {
-      throw new NotFoundException(`Production order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     const updated = await this.prisma.productionOrder.update({
       where: { id: bigId },
@@ -533,7 +533,7 @@ export class ProductionOrdersService {
       },
     });
     if (!order) {
-      throw new NotFoundException(`Production order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     if (order.status !== 'RELEASED') {
       throw new ConflictException(

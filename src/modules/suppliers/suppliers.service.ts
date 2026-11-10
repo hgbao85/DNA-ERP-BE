@@ -69,7 +69,7 @@ export class SuppliersService {
     const bigId = parseBigIntId(id);
     const supplier = await this.prisma.supplier.findUnique({ where: { id: bigId } });
     if (!supplier) {
-      throw new NotFoundException(`Supplier ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy nhà cung cấp ${id}`);
     }
     return supplier;
   }

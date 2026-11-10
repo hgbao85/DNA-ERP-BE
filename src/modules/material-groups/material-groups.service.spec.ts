@@ -73,7 +73,7 @@ describe('MaterialGroupsService', () => {
       prisma.materialGroup.create.mockRejectedValue(p2002);
 
       await expect(service.create({ name: 'Nhua', codePrefix: 'NEW' } as any)).rejects.toThrow(
-        new ConflictException('Material group "Nhua" already exists'),
+        new ConflictException('Nhóm vật tư "Nhua" đã tồn tại'),
       );
     });
 

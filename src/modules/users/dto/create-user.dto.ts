@@ -14,7 +14,7 @@ export class CreateUserDto {
   @IsString()
   @MinLength(3)
   @Matches(/^[a-zA-Z0-9_.-]+$/, {
-    message: 'username may only contain letters, numbers, dot, underscore and hyphen',
+    message: 'Tên đăng nhập chỉ gồm chữ, số, dấu chấm, gạch dưới và gạch ngang',
   })
   username!: string;
 

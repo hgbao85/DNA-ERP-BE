@@ -159,7 +159,7 @@ export class QcReviewsService {
     const issue = await this.steelIssuesService.findOneRowOrThrow(steelIssueId);
     if (issue.status !== SteelIssueStatus.AWAITING_QC) {
       throw new ConflictException(
-        `Steel issue ${steelIssueId} đang ở trạng thái ${issue.status} - chỉ AWAITING_QC mới duyệt KCS được`,
+        `Phiếu xuất sắt ${steelIssueId} đang ở trạng thái ${issue.status} - chỉ AWAITING_QC mới duyệt KCS được`,
       );
     }
     await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'duyệt KCS');
@@ -215,7 +215,7 @@ export class QcReviewsService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Steel issue ${steelIssueId} đã bị 1 request khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
+          `Phiếu xuất sắt ${steelIssueId} đã bị 1 yêu cầu khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
         );
       }
 
@@ -266,7 +266,7 @@ export class QcReviewsService {
       include: { steelIssue: true },
     });
     if (!bundle) {
-      throw new NotFoundException(`Đợt cắt ${cutBundleId} not found`);
+      throw new NotFoundException(`Không tìm thấy đợt cắt ${cutBundleId}`);
     }
     if (bundle.status !== CutBundleStatus.AWAITING_QC) {
       throw new ConflictException(
@@ -320,7 +320,7 @@ export class QcReviewsService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Đợt cắt ${cutBundleId} đã bị 1 request khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
+          `Đợt cắt ${cutBundleId} đã bị 1 yêu cầu khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
         );
       }
 
@@ -391,7 +391,7 @@ export class QcReviewsService {
       include: { material: true },
     });
     if (!bundle) {
-      throw new NotFoundException(`Đợt gửi KCS ${stepBundleId} not found`);
+      throw new NotFoundException(`Không tìm thấy đợt gửi KCS ${stepBundleId}`);
     }
     if (bundle.status !== StepBundleStatus.AWAITING_QC) {
       throw new ConflictException(
@@ -445,7 +445,7 @@ export class QcReviewsService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Đợt gửi KCS ${stepBundleId} đã bị 1 request khác duyệt trong lúc đang xử lý - không ghi đè`,
+          `Đợt gửi KCS ${stepBundleId} đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý - không ghi đè`,
         );
       }
 
@@ -489,14 +489,14 @@ export class QcReviewsService {
     const batch = await this.productionBatchesService.findOneRowOrThrow(productionBatchId);
     if (batch.status !== ProductionBatchStatus.AWAITING_QC) {
       throw new ConflictException(
-        `Production batch ${productionBatchId} đang ở trạng thái ${batch.status} - chỉ AWAITING_QC mới duyệt KCS được`,
+        `Đợt sản xuất ${productionBatchId} đang ở trạng thái ${batch.status} - chỉ AWAITING_QC mới duyệt KCS được`,
       );
     }
     await assertOrderPiHasActiveFloor(this.prisma, batch.productionOrderId, 'duyệt KCS');
 
     if (dto.failedQty > batch.reportedQty) {
       throw new BadRequestException(
-        `failedQty (${dto.failedQty}) không được vượt số lượng đã báo (${batch.reportedQty})`,
+        `Số không đạt (${dto.failedQty}) không được vượt số lượng đã báo (${batch.reportedQty})`,
       );
     }
     const passedQty = batch.reportedQty - dto.failedQty;
@@ -512,7 +512,7 @@ export class QcReviewsService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Production batch ${productionBatchId} đã bị 1 request khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
+          `Đợt sản xuất ${productionBatchId} đã bị 1 yêu cầu khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
         );
       }
       // Đợt 7 (người B): KCS đạt ở công đoạn cuối của mảnh -> ghi mảnh vào kho của công đoạn đó.
@@ -584,7 +584,7 @@ export class QcReviewsService {
 
     if (dto.failedQty > bundle.qty) {
       throw new BadRequestException(
-        `failedQty (${dto.failedQty}) không được vượt số lượng đã gửi (${bundle.qty})`,
+        `Số không đạt (${dto.failedQty}) không được vượt số lượng đã gửi (${bundle.qty})`,
       );
     }
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
@@ -600,7 +600,7 @@ export class QcReviewsService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Đợt gửi KCS ${pieceStepBundleId} đã bị 1 request khác duyệt trong lúc đang xử lý - không ghi đè`,
+          `Đợt gửi KCS ${pieceStepBundleId} đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý - không ghi đè`,
         );
       }
 
@@ -659,7 +659,7 @@ export class QcReviewsService {
 
     if (dto.failedQty > bundle.qty) {
       throw new BadRequestException(
-        `failedQty (${dto.failedQty}) không được vượt số lượng đã gửi (${bundle.qty})`,
+        `Số không đạt (${dto.failedQty}) không được vượt số lượng đã gửi (${bundle.qty})`,
       );
     }
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
@@ -671,7 +671,7 @@ export class QcReviewsService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Đợt gửi KCS ${materialYieldStepBundleId} đã bị 1 request khác duyệt trong lúc đang xử lý - không ghi đè`,
+          `Đợt gửi KCS ${materialYieldStepBundleId} đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý - không ghi đè`,
         );
       }
 
@@ -739,7 +739,7 @@ export class QcReviewsService {
     const bigId = parseBigIntId(id);
     const existing = await this.prisma.qcReview.findUnique({ where: { id: bigId } });
     if (!existing) {
-      throw new NotFoundException(`QC review ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phiếu KCS ${id}`);
     }
     if (existing.reviewedById !== actorUserId && !actorRoles.includes(DEFAULT_ROLES.ADMIN)) {
       throw new ForbiddenException('Chỉ người đã chấm review này hoặc Admin mới sửa được ảnh');

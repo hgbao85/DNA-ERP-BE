@@ -10,7 +10,7 @@ import { AppConfig } from '../../config/configuration';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { NetworkAccessService } from '../../common/network/network-access.service';
 import { UsersService } from '../users/users.service';
-import { AuthService } from './auth.service';
+import { AuthService, INVALID_CREDENTIALS } from './auth.service';
 
 describe('AuthService', () => {
   let authService: AuthService;
@@ -192,7 +192,7 @@ describe('AuthService', () => {
       prisma.user.update.mockResolvedValue({ failedLoginCount: 1 });
       await expect(
         authService.login({ username: 'phoi.a', password: 'wrong-pin' }),
-      ).rejects.toThrow('Invalid credentials');
+      ).rejects.toThrow(INVALID_CREDENTIALS);
     });
 
     it('sai lần thứ 5: khoá tạm 15 phút và đếm lại từ 0', async () => {
@@ -410,7 +410,7 @@ describe('AuthService', () => {
 
       await expect(
         authService.login({ username: 'phoi.a', password: 'sai-pin' }, '8.8.8.8'),
-      ).rejects.toThrow('Invalid credentials');
+      ).rejects.toThrow(INVALID_CREDENTIALS);
       expect(network.assertAccountAllowed).not.toHaveBeenCalled();
     });
 

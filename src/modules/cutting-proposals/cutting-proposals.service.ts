@@ -459,7 +459,7 @@ export class CuttingProposalsService {
       select: { code: true, isMerged: true },
     });
     if (!pi) {
-      throw new NotFoundException(`Production invoice ${productionInvoiceId} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh sản xuất ${productionInvoiceId}`);
     }
     if (!pi.isMerged) {
       throw new ConflictException(
@@ -706,7 +706,7 @@ export class CuttingProposalsService {
       where: { id: bigId },
       select: { id: true, status: true, productionOrderId: true, productionInvoiceId: true },
     });
-    if (!proposal) throw new NotFoundException(`Cutting proposal ${id} not found`);
+    if (!proposal) throw new NotFoundException(`Không tìm thấy phương án cắt ${id}`);
     if (proposal.productionOrderId != null || proposal.productionInvoiceId != null) {
       throw new ConflictException(
         'Phương án này đã được dùng cho một lệnh sản xuất - không xoá ở đây được',
@@ -906,7 +906,7 @@ export class CuttingProposalsService {
       include: { items: true },
     });
     if (!proposal) {
-      throw new NotFoundException(`Cutting proposal ${cuttingProposalId} not found`);
+      throw new NotFoundException(`Không tìm thấy phương án cắt ${cuttingProposalId}`);
     }
     if (proposal.items.length === 0) {
       throw new ConflictException(
@@ -1035,7 +1035,7 @@ export class CuttingProposalsService {
       include: { items: true, lines: true },
     });
     if (!proposal) {
-      throw new NotFoundException(`Cutting proposal ${cuttingProposalId} not found`);
+      throw new NotFoundException(`Không tìm thấy phương án cắt ${cuttingProposalId}`);
     }
     const reason = await this.invoiceReadinessReason(proposal, invoiceId);
     if (reason) {
@@ -1202,7 +1202,7 @@ export class CuttingProposalsService {
       include: DETAIL_INCLUDE,
     });
     if (!proposal) {
-      throw new NotFoundException(`Cutting proposal ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phương án cắt ${id}`);
     }
     // Ngưỡng hao hụt THƯỜNG của hệ thống - cần để chỉ ra dòng nào chỉ đạt được nhờ ngưỡng đặc cách
     // của đợt (xem usedWasteOverride). KHÔNG đọc được từ chính dòng: `maxWastePctThreshold` lưu
@@ -2084,11 +2084,11 @@ export class CuttingProposalsService {
       include: { lines: true, items: true },
     });
     if (!proposal) {
-      throw new NotFoundException(`Cutting proposal ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phương án cắt ${id}`);
     }
     if (proposal.status !== CuttingProposalStatus.DRAFT) {
       throw new ConflictException(
-        `Cutting proposal ${id} ở trạng thái ${proposal.status} - chỉ DRAFT mới duyệt được`,
+        `Phương án cắt ${id} ở trạng thái ${proposal.status} - chỉ DRAFT mới duyệt được`,
       );
     }
     // Cùng quy tắc với autoApproveBlockReason()/computeDisplayStatus() (2026-10-06, E2E): có loại sắt
@@ -2232,11 +2232,11 @@ export class CuttingProposalsService {
         SELECT "status" FROM "cutting_proposals" WHERE "id" = ${bigId} FOR UPDATE
       `;
         if (!locked) {
-          throw new NotFoundException(`Cutting proposal ${id} not found`);
+          throw new NotFoundException(`Không tìm thấy phương án cắt ${id}`);
         }
         if (locked.status !== CuttingProposalStatus.DRAFT) {
           throw new ConflictException(
-            `Cutting proposal ${id} ở trạng thái ${locked.status} - chỉ DRAFT mới duyệt được`,
+            `Phương án cắt ${id} ở trạng thái ${locked.status} - chỉ DRAFT mới duyệt được`,
           );
         }
 
@@ -4061,7 +4061,7 @@ export class CuttingProposalsService {
 
     if (pieceBoms.length === 0) {
       throw new NotFoundException(
-        `BomRevision ${bomRevisionId} không có dòng định mức mảnh nào để tính đề xuất`,
+        `Bản định mức ${bomRevisionId} không có dòng định mức mảnh nào để tính đề xuất`,
       );
     }
 

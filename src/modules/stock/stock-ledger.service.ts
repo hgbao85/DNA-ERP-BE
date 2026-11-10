@@ -645,7 +645,7 @@ export class StockLedgerService {
     const touchesScope = warehouses.some((w) => w.code === warehouseScope);
     if (!touchesScope) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không liên quan tới bút toán này`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không liên quan tới bút toán này`,
       );
     }
   }
