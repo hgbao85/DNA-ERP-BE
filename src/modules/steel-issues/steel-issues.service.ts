@@ -8,6 +8,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  CUTTING_RECHECK_MESSAGE,
+  isCuttingRecheckPending,
+} from '../warehouse-transfers/cutting-recheck.util';
+import {
   AuditAction,
   CutBundleStatus,
   CuttingProposalStatus,
@@ -372,6 +376,10 @@ export class SteelIssuesService {
     const materialId = parseBigIntId(dto.materialId);
     const orders = await this.findOrdersForInvoice(invoice.id);
     this.assertOrdersHaveActiveFloor(orders, invoice.id);
+    // Đổi xưởng (anh Nhân 10/11/2026): KHSX chưa bấm "Đã kiểm" phương án cắt thì chưa xuất sắt.
+    if (await isCuttingRecheckPending(this.prisma, invoice.id)) {
+      throw new ConflictException(CUTTING_RECHECK_MESSAGE);
+    }
     await this.assertMaterialUsedInInvoice(orders, materialId, invoice.id);
     const poIds = orders.map((o) => o.id);
     const { approvedAt } = await this.assertMaterialInApprovedProposal(

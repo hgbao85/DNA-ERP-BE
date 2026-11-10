@@ -14,6 +14,8 @@ export class WarehouseTransferItemResponseDto {
   @Expose() @ApiProperty() quantity!: number;
   /** Số kho giao gửi khi thực nhận ít hơn; null = nhận đủ. */
   @Expose() @ApiPropertyOptional({ nullable: true, type: Number }) sentQty!: number | null;
+  /** Chiều dài cây (sắt) - phiếu chuyển hàng của lệnh đổi xưởng; 0 = không chia theo chiều dài. */
+  @Expose() @ApiProperty() stockLengthMm!: number;
   @Expose() @ApiPropertyOptional({ nullable: true }) note!: string | null;
 
   constructor(partial: Partial<WarehouseTransferItemResponseDto>) {

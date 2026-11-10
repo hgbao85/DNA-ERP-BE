@@ -18,9 +18,7 @@ import {
   ProductionInvoiceStatus,
   ProductionOrderFloorStage,
   SolverMachine,
-  PurchaseProposalStatus,
   TransferStatus,
-  WarehouseKind,
   Workshop,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
@@ -76,6 +74,7 @@ import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
 import { PackagingResponseDto } from './dto/packaging-response.dto';
 import { ProductionInvoiceItemResponseDto } from './dto/production-invoice-item-response.dto';
 import { ProductionInvoiceResponseDto } from './dto/production-invoice-response.dto';
+import { CuttingRecheckPendingResponseDto } from './dto/cutting-recheck-pending-response.dto';
 import { RecordPackagingDto } from './dto/record-packaging.dto';
 import { toContainerLoadDto } from '../../common/dto/container-load.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
@@ -104,6 +103,7 @@ import {
 } from './deadline-changes/deadline-values.util';
 import { ItemDeadlineWriter } from './item-deadline-writer.service';
 import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
+import { WorkshopMoveService } from '../warehouse-transfers/workshop-move.service';
 
 type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
   include: {
@@ -141,6 +141,8 @@ type PIItemWithRefs = Prisma.ProductionInvoiceItemGetPayload<{
 const PROPOSAL_STATUS_INCLUDE = {
   salesOrder: true,
   cuttingProposals: { orderBy: { requestedAt: 'desc' as const }, take: 1 },
+  // Phần A: tên người bấm "Đã kiểm" phương án cắt (chỉ trường tên).
+  cuttingRecheckedBy: { select: { firstName: true, lastName: true } },
   // Phần A – Đợt 2: cờ "đã xuất vật tư" (hasMaterialIssue) - đếm cùng truy vấn, không thêm truy vấn theo từng PI.
   _count: { select: { steelIssues: true } },
   items: {
@@ -192,6 +194,8 @@ export class ProductionInvoicesService {
     // Phần A – Đợt 9 (YC2)
     private readonly deadlineWriter: ItemDeadlineWriter,
     private readonly deadlineChanges: DeadlineChangesService,
+    // Người B (10/11/2026): phần kho/mua khi đổi xưởng.
+    private readonly workshopMove: WorkshopMoveService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -1165,7 +1169,8 @@ export class ProductionInvoicesService {
     const ids = pi.items.map((it) => it.id);
     await this.assertNoMaterialIssued(this.prisma, pi.id, ids, displayCode);
 
-    await this.prisma.$transaction(async (tx) => {
+    let cuttingRecheckFlagged = false;
+    const notifyWorkshopMove = await this.prisma.$transaction(async (tx) => {
       await this.assertNoMaterialIssued(tx, pi.id, ids, displayCode);
       const { count } = await tx.productionInvoiceItem.updateMany({
         where: {
@@ -1181,7 +1186,33 @@ export class ProductionInvoicesService {
           `Lệnh ${displayCode} đã có thay đổi khác trong lúc đổi xưởng - tải lại trang rồi thử lại`,
         );
       }
+      // Phần A: lệnh đã có phương án cắt APPROVED (neo PI - đợt gộp - hoặc neo SKU) -> bật cờ "cần kiểm lại"; đã bật thì giữ bật,
+      // cập nhật lại thời điểm. Không tự tính lại / duyệt phương án mới.
+      const approvedProposals = await tx.cuttingProposal.count({
+        where: {
+          status: CuttingProposalStatus.APPROVED,
+          OR: [
+            { productionInvoiceId: pi.id },
+            { productionOrder: { productionInvoiceItem: { productionInvoiceId: pi.id } } },
+          ],
+        },
+      });
+      if (approvedProposals > 0) {
+        await tx.productionInvoice.update({
+          where: { id: pi.id },
+          data: {
+            cuttingRecheckRequired: true,
+            cuttingRecheckRequiredAt: new Date(),
+            cuttingRecheckedAt: null,
+            cuttingRecheckedById: null,
+          },
+        });
+        cuttingRecheckFlagged = true;
+      }
+      // Người B (10/11/2026): đổi nơi nhận dòng mua chưa về sang kho xưởng mới, cùng lần lưu; thông báo gửi sau commit.
+      return this.workshopMove.afterWorkshopChanged(tx, pi.id, workshop.id, actorUserId);
     });
+    await notifyWorkshopMove();
 
     for (const it of pi.items) {
       await auditEvent(this.prisma, this.cls, this.logger, {
@@ -1215,6 +1246,85 @@ export class ProductionInvoicesService {
         `Failed to create PI_WORKSHOP_CHANGED notification (PI ${pi.id}): ${(error as Error).message}`,
       );
     }
+    if (cuttingRecheckFlagged) {
+      try {
+        await this.notifications.emit('PI_CUTTING_RECHECK_REQUIRED', {
+          entityId: pi.id.toString(),
+          actorId: actorUserId,
+          params: {
+            piCode: pi.code,
+            displayCode,
+            fromWorkshop: pi.items.find((it) => it.workshop)?.workshop?.name ?? null,
+            toWorkshop: workshop.name,
+          },
+        });
+      } catch (error) {
+        this.logger.error(
+          `Failed to create PI_CUTTING_RECHECK_REQUIRED notification (PI ${pi.id}): ${(error as Error).message}`,
+        );
+      }
+    }
+    this.publishRealtime('PRODUCTION_INVOICE', pi.id, 'UPDATED', actorUserId);
+    return this.findOne(piId);
+  }
+
+  /** Phần A: danh sách lệnh đang bật cờ "cần kiểm lại phương án cắt", mới bật nhất trước. */
+  async listCuttingRecheckPending(): Promise<CuttingRecheckPendingResponseDto[]> {
+    const rows = await this.prisma.productionInvoice.findMany({
+      where: { cuttingRecheckRequired: true },
+      orderBy: { cuttingRecheckRequiredAt: 'desc' },
+      include: { items: { include: { workshop: true } } },
+    });
+    return rows.map(
+      (pi) =>
+        new CuttingRecheckPendingResponseDto({
+          productionInvoiceId: pi.id.toString(),
+          piCode: pi.code,
+          displayCode: lenhDisplayCode(pi, pi.items),
+          workshopName: pi.items.find((it) => it.workshop)?.workshop?.name ?? null,
+          requiredAt: (pi.cuttingRecheckRequiredAt ?? pi.updatedAt).toISOString(),
+        }),
+    );
+  }
+
+  /** Phần A: KHSX bấm "Đã kiểm" -> tắt cờ, ghi ai/lúc nào. Không tính lại / duyệt phương án mới. */
+  async confirmCuttingRecheck(
+    piId: string,
+    actorUserId: string,
+  ): Promise<ProductionInvoiceResponseDto> {
+    const pi = await this.findOneOrThrow(piId);
+    const displayCode = lenhDisplayCode(pi, pi.items);
+    const { count } = await this.prisma.productionInvoice.updateMany({
+      where: { id: pi.id, cuttingRecheckRequired: true },
+      data: {
+        cuttingRecheckRequired: false,
+        cuttingRecheckedAt: new Date(),
+        cuttingRecheckedById: actorUserId,
+      },
+    });
+    if (count === 0) {
+      throw new ConflictException(
+        `Lệnh ${displayCode} không có phương án cắt cần kiểm lại (có thể người khác vừa bấm Đã kiểm)`,
+      );
+    }
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.UPDATE,
+      tableName: 'ProductionInvoice',
+      recordId: pi.id,
+      oldValue: { cuttingRecheckRequired: true },
+      newValue: { cuttingRecheckRequired: false, cuttingRecheckedById: actorUserId },
+    });
+    try {
+      await this.notifications.resolve({
+        entityType: 'PRODUCTION_INVOICE',
+        entityId: pi.id.toString(),
+        types: ['PI_CUTTING_RECHECK_REQUIRED'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve PI_CUTTING_RECHECK_REQUIRED (PI ${pi.id}): ${(error as Error).message}`,
+      );
+    }
     this.publishRealtime('PRODUCTION_INVOICE', pi.id, 'UPDATED', actorUserId);
     return this.findOne(piId);
   }
@@ -1241,28 +1351,8 @@ export class ProductionInvoicesService {
         `Lệnh ${displayCode} đã xuất vật tư cho xưởng - không đổi xưởng được`,
       );
     }
-    // Đợt 7 (chia 9 kho, user chốt 07/11 - tạm thời): lệnh đã giữ chỗ hoặc đã có dòng mua vật tư Phôi/Hàn ở kho của
-    // xưởng cũ thì CHƯA cho đổi xưởng (chưa có bước tự chuyển giữ chỗ/kho nhận sang xưởng mới).
-    const boundKinds = [WarehouseKind.PHOI, WarehouseKind.HAN];
-    const reserved = await client.stockReservation.count({
-      where: {
-        productionInvoiceId: piId,
-        status: 'ACTIVE',
-        warehouse: { kind: { in: boundKinds } },
-      },
-    });
-    const buying = await client.purchaseProposalItem.count({
-      where: {
-        proposal: { productionInvoiceId: piId },
-        status: { not: PurchaseProposalStatus.PURCHASED },
-        material: { warehouse: { kind: { in: boundKinds } } },
-      },
-    });
-    if (reserved > 0 || buying > 0) {
-      throw new ConflictException(
-        `Lệnh ${displayCode} đã giữ chỗ hoặc đang mua sắt/vật tư Phôi-Hàn ở kho của xưởng hiện tại - tạm thời chưa đổi xưởng được, báo IT hỗ trợ`,
-      );
-    }
+    // Chặn tạm Đợt 7 (lệnh đã giữ chỗ / đang mua ở kho xưởng cũ) ĐÃ GỠ 10/11/2026 - đổi xưởng nay tự đổi nơi nhận dòng mua chưa về
+    // và thủ kho xưởng cũ lập phiếu chuyển hàng đang giữ (WorkshopMoveService, người B).
   }
 
   /** KHSX gửi 1 SKU cho QLSX xử lý - mirror sendItemToQlsx() mock. */
@@ -3144,6 +3234,9 @@ export class ProductionInvoicesService {
     pi: PIWithProposalStatus,
   ): Promise<ProductionInvoiceResponseDto> {
     const dto = this.toResponseDto(pi);
+    dto.cuttingRecheckedByName = pi.cuttingRecheckedBy
+      ? `${pi.cuttingRecheckedBy.lastName} ${pi.cuttingRecheckedBy.firstName}`.trim()
+      : null;
     // Phần A – Đợt 2: đã xuất sắt cho PI hoặc xuất vật tư cho xưởng ở production order của dòng nào -> khoá đổi xưởng.
     dto.hasMaterialIssue =
       (pi._count?.steelIssues ?? 0) > 0 ||
@@ -3226,6 +3319,10 @@ export class ProductionInvoicesService {
       solverMachine: pi.solverMachine,
       solverOverrideReason: pi.solverOverrideReason,
       solverTimeLimitSecondsOverride: pi.solverTimeLimitSecondsOverride ?? null,
+      cuttingRecheckRequired: pi.cuttingRecheckRequired,
+      cuttingRecheckRequiredAt: pi.cuttingRecheckRequiredAt,
+      cuttingRecheckedAt: pi.cuttingRecheckedAt,
+      cuttingRecheckedByName: null,
       solverStockLengthsByMaterial:
         (pi.solverStockLengthsByMaterial as Record<string, number> | null) ?? null,
       solverOverrideEvidence: pi.solverOverrideEvidence as {

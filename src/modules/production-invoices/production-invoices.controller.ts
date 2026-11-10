@@ -251,6 +251,22 @@ export class ProductionInvoicesController {
     return this.productionInvoicesService.changeWorkshop(id, dto.workshopId, dto.reason, userId);
   }
 
+  /** Phần A: danh sách lệnh đang cần kiểm lại phương án cắt (đổi xưởng sau khi phương án đã duyệt). 2 segment để không bị ':id' nuốt. */
+  @Get('cutting-recheck/pending')
+  @RequirePermissions(VIEW)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER, DEFAULT_ROLES.ADMIN, BUSINESS_ROLES.BOSS)
+  listCuttingRecheckPending() {
+    return this.productionInvoicesService.listCuttingRecheckPending();
+  }
+
+  /** Phần A: KHSX bấm "Đã kiểm" phương án cắt sau khi QLSX đổi xưởng - tắt cờ, không tự tính lại. */
+  @Post(':id/cutting-recheck/confirm')
+  @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER, DEFAULT_ROLES.ADMIN)
+  confirmCuttingRecheck(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.productionInvoicesService.confirmCuttingRecheck(id, userId);
+  }
+
   @Post(':id/items/:itemId/reject-by-qlsx')
   @RequirePermissions(APPROVE)
   @RequireMfgRole(MfgRole.PRODUCTION_MANAGER)

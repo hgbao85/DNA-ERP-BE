@@ -42,6 +42,8 @@ import {
   transferWarehouseShortCode,
 } from './transfer-routes.constant';
 import { RealtimeService } from '../../realtime/realtime.service';
+import { WorkshopMovePart, WorkshopMoveService } from './workshop-move.service';
+import { CUTTING_RECHECK_MESSAGE } from './cutting-recheck.util';
 
 const ACTOR_NAME_SELECT = { select: { firstName: true, lastName: true } };
 
@@ -97,6 +99,7 @@ export class WarehouseTransfersService {
     private readonly stockReservationsService: StockReservationsService,
     private readonly notifications: NotificationsService,
     private readonly realtime: RealtimeService,
+    private readonly workshopMove: WorkshopMoveService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -775,6 +778,8 @@ export class WarehouseTransfersService {
             idempotencyKey: `warehouse-transfer:${transfer.id}:item:${item.id}`,
             // Lấy ĐÚNG bucket quy cách đã chọn lúc tạo phiếu ('' = không quy cách) - nệm.
             spec: item.spec,
+            // Phiếu chuyển hàng của lệnh đổi xưởng: đúng chiều dài cây (sắt). Phiếu thường = 0.
+            stockLengthMm: item.stockLengthMm,
           },
           tx,
         );
@@ -810,6 +815,27 @@ export class WarehouseTransfersService {
         data: { status: ReservationStatus.RELEASED },
       });
 
+      // Phiếu chuyển hàng của lệnh đổi xưởng (10/11/2026, Sang dặn): giữ chỗ của lệnh chuyển theo sang kho mới, đúng số thực nhận
+      // - số "Cần" ở Xuất sắt và sắt giữ cho lệnh vẫn khớp. Phần thiếu vẫn giữ ở kho cũ, kho cũ lập phiếu bù.
+      if (transfer.productionInvoiceId) {
+        await this.workshopMove.moveReservationsInTx(
+          tx,
+          {
+            productionInvoiceId: transfer.productionInvoiceId,
+            fromWarehouseId: transfer.fromWarehouseId,
+            toWarehouseId: transfer.toWarehouseId,
+          },
+          transfer.items
+            .filter((i) => i.materialId)
+            .map((i) => ({
+              materialId: i.materialId!,
+              stockLengthMm: i.stockLengthMm,
+              spec: i.spec,
+              qty: received.items.get(i.id.toString()) ?? i.quantity.toNumber(),
+            })),
+        );
+      }
+
       return tx.warehouseTransfer.findUniqueOrThrow({
         where: { id: transfer.id },
         include: TRANSFER_INCLUDE,
@@ -817,6 +843,12 @@ export class WarehouseTransfersService {
     });
 
     await this.resolveTransferCreated(confirmed.id);
+    if (confirmed.productionInvoiceId) {
+      await this.resolveWorkshopMoveIfDone(
+        confirmed.productionInvoiceId,
+        confirmed.fromWarehouseId,
+      );
+    }
     this.publishTransferChanged(confirmed.id, 'CONFIRMED', userId);
     return this.toResponseDto(confirmed);
   }
@@ -930,6 +962,105 @@ export class WarehouseTransfersService {
    * liệu nhờ unique constraint trên `code` chặn ghi trùng, nhưng request thua cuộc nhận thẳng lỗi
    * 409 thay vì tự chờ rồi lấy đúng số tiếp theo.
    */
+  /** Hàng của lệnh đổi xưởng còn phải chuyển (theo kho của thủ kho; tổng kho thấy hết). */
+  async getWorkshopMovePlans(warehouseScope: string | null) {
+    return this.workshopMove.getPlans(this.prisma, { fromWarehouseCode: warehouseScope });
+  }
+
+  /**
+   * Lập phiếu chuyển hàng của lệnh đổi xưởng (10/11/2026): mọi dòng đang giữ cho lệnh ở kho cũ (vật tư + chiều dài cây + quy
+   * cách) thuộc 1 phần (sắt / vật tư khác), trừ phần đã nằm trên phiếu chờ nhận, sang kho cùng loại của xưởng mới. Phần sắt
+   * chặn khi KHSX chưa kiểm lại phương án cắt; vật tư khác chuyển ngay (anh Nhân 10/11).
+   */
+  async createWorkshopMove(
+    productionInvoiceId: string,
+    fromWarehouseId: string,
+    part: WorkshopMovePart,
+    warehouseScope: string | null,
+    userId: string,
+    idempotencyKey?: string,
+  ): Promise<WarehouseTransferResponseDto> {
+    if (idempotencyKey) {
+      const existing = await this.prisma.warehouseTransfer.findUnique({
+        where: { idempotencyKey },
+        include: TRANSFER_INCLUDE,
+      });
+      if (existing) return this.toResponseDto(existing);
+    }
+    const piId = parseBigIntId(productionInvoiceId);
+    const fromWarehouse = await this.findWarehouseOrThrow(parseBigIntId(fromWarehouseId));
+    this.assertWarehouseScope(warehouseScope, fromWarehouse.code, 'tạo phiếu chuyển kho từ');
+
+    const transfer = await this.prisma.$transaction(
+      async (tx) => {
+        await lockBusinessKey(tx, `workshop-move:${piId}:${fromWarehouse.id}`);
+        const [plan] = await this.workshopMove.getPlans(tx, {
+          productionInvoiceId: piId,
+          fromWarehouseCode: fromWarehouse.code,
+          part,
+        });
+        if (!plan) {
+          throw new BadRequestException(
+            `Lệnh không còn ${part === 'STEEL' ? 'sắt' : 'vật tư'} giữ ở "${fromWarehouse.name}" cần chuyển sang xưởng mới (hoặc đã nằm trên phiếu chờ nhận)`,
+          );
+        }
+        if (plan.recheckPending) throw new ConflictException(CUTTING_RECHECK_MESSAGE);
+        const code = await this.nextTransferCode(tx, fromWarehouse);
+        return tx.warehouseTransfer.create({
+          data: {
+            code,
+            fromWarehouseId: fromWarehouse.id,
+            toWarehouseId: parseBigIntId(plan.toWarehouseId),
+            productionInvoiceId: piId,
+            note: `Chuyển ${part === 'STEEL' ? 'sắt' : 'vật tư'} của lệnh ${plan.lenhCode} (đổi xưởng) sang ${plan.toWarehouseName}`,
+            createdById: userId,
+            idempotencyKey,
+            items: {
+              create: plan.lines.map((l) => ({
+                materialId: parseBigIntId(l.materialId),
+                materialName: l.materialName,
+                unit: l.unit,
+                quantity: l.qty,
+                spec: l.spec,
+                stockLengthMm: l.stockLengthMm,
+              })),
+            },
+          },
+          include: TRANSFER_INCLUDE,
+        });
+      },
+      { timeout: 20_000 },
+    );
+    await this.notifyTransferCreated(transfer);
+    this.publishTransferChanged(transfer.id, 'CREATED', transfer.createdById);
+    return this.toResponseDto(transfer);
+  }
+
+  /** Đã chuyển hết hàng của lệnh khỏi kho cũ -> tắt thông báo "cần chuyển hàng". */
+  private async resolveWorkshopMoveIfDone(piId: bigint, fromWarehouseId: bigint): Promise<void> {
+    try {
+      const plans = await this.workshopMove.getPlans(this.prisma, { productionInvoiceId: piId });
+      const reservedLeft = await this.prisma.stockReservation.count({
+        where: {
+          productionInvoiceId: piId,
+          warehouseId: fromWarehouseId,
+          status: ReservationStatus.ACTIVE,
+        },
+      });
+      if (reservedLeft > 0 && plans.some((p) => p.fromWarehouseId === fromWarehouseId.toString()))
+        return;
+      await this.notifications.resolve({
+        entityType: 'PRODUCTION_INVOICE',
+        entityId: `${piId}:${fromWarehouseId}`,
+        types: ['WORKSHOP_MOVE_NEEDED'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Không tắt được thông báo chuyển hàng đổi xưởng: ${(error as Error).message}`,
+      );
+    }
+  }
+
   private async nextTransferCode(tx: PrismaTx, fromWarehouse: Warehouse): Promise<string> {
     // v8 4.8 (09/11/2026): CK-<mã kho giao>-NNN, đếm liên tục theo từng kho giao (không theo năm). Khoá theo mã kho giao rồi
     // mới đếm - 2 phiếu cùng kho giao tạo đồng thời không ra trùng số (sự cố 15/09/2026 với cách đếm cũ ngoài khoá).
@@ -1024,6 +1155,7 @@ export class WarehouseTransfersService {
         ? `${row.rejectedBy.firstName} ${row.rejectedBy.lastName}`.trim()
         : null,
       signedSlipUrls: row.signedSlipUrls,
+      productionInvoiceId: row.productionInvoiceId?.toString() ?? null,
     });
   }
 
@@ -1041,6 +1173,7 @@ export class WarehouseTransfersService {
             unit: item.unit,
             quantity: item.quantity.toNumber(),
             sentQty: item.sentQty?.toNumber() ?? null,
+            stockLengthMm: item.stockLengthMm,
             note: item.note,
           }),
       ),

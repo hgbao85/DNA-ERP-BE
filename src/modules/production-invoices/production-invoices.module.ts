@@ -1,3 +1,4 @@
+import { WarehouseTransfersModule } from '../warehouse-transfers/warehouse-transfers.module';
 import { Module } from '@nestjs/common';
 import { CuttingProposalsModule } from '../cutting-proposals/cutting-proposals.module';
 import { MaterialYieldRecipesModule } from '../material-yield-recipes/material-yield-recipes.module';
@@ -29,6 +30,7 @@ import { ProductionInvoicesService } from './production-invoices.service';
     StockModule,
     NotificationsModule,
     WorkshopsModule, // Phần A – Đợt 2
+    WarehouseTransfersModule, // Người B – đổi xưởng (10/11/2026)
   ],
   // Phần A – Đợt 9 (YC2): lõi đổi mốc + Excel kế hoạch
   controllers: [ProductionInvoicesController, DeadlineChangesController, DeadlinePlanController],

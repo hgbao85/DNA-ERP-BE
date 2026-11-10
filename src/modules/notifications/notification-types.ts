@@ -399,6 +399,23 @@ export interface WeavingMaterialsNeededParams {
   pieceSummary: string;
 }
 
+/** Đổi xưởng (10/11/2026): dòng mua chưa về đổi kho nhận sang kho xưởng mới - người mua báo nhà cung cấp. */
+export interface PurchaseReceiveWarehouseChangedParams {
+  lenhCode: string;
+  count: number;
+  /** "VT-001 → Kho Phôi Phước An, ..." */
+  summary: string;
+  buyerIds: string[];
+}
+
+/** Đổi xưởng (10/11/2026): hàng đang giữ cho lệnh ở kho xưởng cũ cần lập phiếu chuyển sang kho xưởng mới. */
+export interface WorkshopMoveNeededParams {
+  lenhCode: string;
+  fromWarehouseName: string;
+  toWarehouseName: string;
+  count: number;
+}
+
 /** "Kiểm tra dữ liệu" (2026-10-28, DataHealthService) - lần chạy có dòng bất thường MỚI. */
 export interface DataHealthNotificationParams {
   /** Tổng dòng mới trong ngày (cộng dồn các lần chạy gộp vào cùng thông báo). */
@@ -491,6 +508,17 @@ export interface PiTimelineReplanNotificationParams {
   workshopName: string;
   /** Mỗi SKU 1 câu, vd "J55: Phôi cần 8 ngày ở Xưởng Phước An (mốc đang đặt theo Xưởng Phú An 2 ngày)". */
   lines: string[];
+}
+
+// Phần A: QLSX đổi xưởng lệnh đã có phương án cắt APPROVED -> báo KHSX kiểm lại. `entityId` = piId.
+export interface PiCuttingRecheckNotificationParams {
+  piCode: string;
+  /** Mã lệnh hiển thị (số LSX nối " + ", chưa có thì mã PI). */
+  displayCode: string;
+  /** Xưởng cũ (null = chưa có xưởng). */
+  fromWorkshop: string | null;
+  /** Xưởng mới. */
+  toWorkshop: string;
 }
 
 // Phần A – Đợt 10a (YC5): booking sắp đến hạn (lấy cont / CUT OFF) mà chưa đủ hàng. `entityId` = bookingId.
@@ -1433,6 +1461,33 @@ const notificationTypeDefinitions = {
       warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
     }),
   } satisfies NotificationTypeDef<WeavingIssueNotificationParams & { warehouseCodes: string[] }>,
+  PURCHASE_RECEIVE_WAREHOUSE_CHANGED: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PurchaseReceiveWarehouseChangedParams) =>
+      `Lệnh ${p.lenhCode} đổi xưởng: ${p.count} dòng mua chưa về đổi nơi nhận - báo nhà cung cấp`,
+    message: (p: PurchaseReceiveWarehouseChangedParams) => p.summary,
+    link: () => ({ module: 'purchasing', page: 'don-dat-hang' }),
+    recipients: (p: PurchaseReceiveWarehouseChangedParams) =>
+      p.buyerIds.length > 0 ? { userIds: p.buyerIds } : { roles: [BUSINESS_ROLES.PURCHASER] },
+  } satisfies NotificationTypeDef<PurchaseReceiveWarehouseChangedParams>,
+  /** Tự đóng khi kho cũ không còn hàng giữ cho lệnh (WarehouseTransfersService.resolveWorkshopMoveIfDone). */
+  WORKSHOP_MOVE_NEEDED: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: WorkshopMoveNeededParams) =>
+      `Lệnh ${p.lenhCode} đổi xưởng: chuyển ${p.count} dòng hàng đang giữ sang ${p.toWarehouseName}`,
+    message: (p: WorkshopMoveNeededParams) =>
+      `Từ ${p.fromWarehouseName}. Chờ KHSX bấm "Đã kiểm" phương án cắt rồi lập phiếu chuyển ở "Xuất theo đơn hàng".`,
+    link: () => ({ module: 'inbound_warehouse', page: 'xuat-kho' }),
+    recipients: (p: WorkshopMoveNeededParams & { warehouseCodes: string[] }) => ({
+      warehouseIds: p.warehouseCodes,
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<WorkshopMoveNeededParams & { warehouseCodes: string[] }>,
   /** Tự đóng khi vật tư kèm của phiếu mảnh đã nằm đủ trên phiếu vật tư, hoặc phiếu mảnh bị huỷ (IssueSlipsService). */
   WEAVING_MATERIALS_NEEDED: {
     category: 'ACTION_REQUIRED',
@@ -1622,6 +1677,24 @@ const notificationTypeDefinitions = {
       roles: [BUSINESS_ROLES.PRODUCTION_PLANNER],
     }),
   } satisfies NotificationTypeDef<PiTimelineReplanNotificationParams>,
+  /** QLSX đổi xưởng lệnh đã có phương án cắt APPROVED -> KHSX xem lại phương án rồi bấm "Đã kiểm". Tự đóng khi KHSX bấm "Đã kiểm". */
+  PI_CUTTING_RECHECK_REQUIRED: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PiCuttingRecheckNotificationParams) =>
+      `${p.displayCode}: đổi xưởng → cần kiểm lại phương án cắt`,
+    message: (p: PiCuttingRecheckNotificationParams) =>
+      `QLSX đổi xưởng ${p.fromWorkshop ?? '(chưa có)'} → ${p.toWorkshop}. Vào Tối ưu cắt sắt xem lại phương án cắt rồi bấm "Đã kiểm" - chưa bấm thì kho chưa được chuyển / xuất sắt cho lệnh này.`,
+    link: (p: PiCuttingRecheckNotificationParams) => ({
+      module: 'production_plan',
+      page: 'gom-cat',
+      params: { focus: `PI_CODE:${p.piCode}` },
+    }),
+    recipients: () => ({
+      roles: [BUSINESS_ROLES.PRODUCTION_PLANNER],
+    }),
+  } satisfies NotificationTypeDef<PiCuttingRecheckNotificationParams>,
   // ─── Người B – Đợt 10b (YC5 5.5-5.7): kho thành phẩm xuất hàng theo booking ─────────────────────────────────────────────
   /** Sales xác nhận booking -> thủ kho thành phẩm của kho gom hàng biết có cont cần đóng. Tự đóng khi kho xác nhận xuất / booking huỷ. */
   BOOKING_TO_SHIP: {

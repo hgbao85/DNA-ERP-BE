@@ -118,6 +118,7 @@ model User {
   piQlsxItems                       ProductionInvoiceItem[]     @relation("PIItemQlsxBy")
   piDecidedItems                    ProductionInvoiceItem[]     @relation("PIItemDecidedBy")
   piMerged                          ProductionInvoice[]         @relation("PIMergedBy")
+  piCuttingRechecks                 ProductionInvoice[]         @relation("PiCuttingRechecked")
   cuttingProposalsRequested         CuttingProposal[]           @relation("CuttingProposalRequestedBy")
   cuttingProposalsApproved          CuttingProposal[]           @relation("CuttingProposalApprovedBy")
   transferCheckResults              TransferCheckResult[]       @relation("TransferCheckCheckedBy")
@@ -1704,11 +1705,18 @@ model ProductionInvoice {
   /// Không cần Sếp duyệt riêng (khác 2 trục hao hụt/chiều dài ở trên): đây thuần là ngân sách
   /// THỜI GIAN TÍNH TOÁN, không đổi kết quả cắt hay chi phí sắt, nên KHSX tự set và chạy luôn.
   solverTimeLimitSecondsOverride Int?
+  // Phần A - cờ "cần kiểm lại phương án cắt" khi QLSX đổi xưởng lệnh đã có phương án cắt APPROVED (anh Nhân chốt 10/11).
+  // KHSX bấm "Đã kiểm" thì tắt cờ (không tự tính lại/duyệt phương án mới). Người B đọc cờ này để chặn chuyển/xuất sắt.
+  cuttingRecheckRequired         Boolean                 @default(false)
+  cuttingRecheckRequiredAt       DateTime?
+  cuttingRecheckedAt             DateTime?
+  cuttingRecheckedById           String?
   createdAt                      DateTime                @default(now())
   updatedAt                      DateTime                @updatedAt
 
   salesOrder                SalesOrder?                @relation(fields: [salesOrderId], references: [id])
   mergedBy                  User?                      @relation("PIMergedBy", fields: [mergedById], references: [id])
+  cuttingRecheckedBy        User?                      @relation("PiCuttingRechecked", fields: [cuttingRecheckedById], references: [id])
   items                     ProductionInvoiceItem[]
   planForms                 PlanForm[]
   cuttingProposals          CuttingProposal[]
@@ -1722,6 +1730,7 @@ model ProductionInvoice {
   materialYieldRecipeIssues MaterialYieldRecipeIssue[]
   floorQueueEntries         FloorQueueEntry[]
   floorReports              FloorReport[]
+  warehouseTransfers        WarehouseTransfer[]
 
   @@index([salesOrderId])
   @@map("production_invoices")
@@ -3011,42 +3020,46 @@ model StockReservation {
 /// PENDING -> CONFIRMED|REJECTED, không quay lại. confirm() là nơi duy nhất ghi StockLedger
 /// cho luồng transfer (qua StockLedgerService.postEntry(), ref_type=WAREHOUSE_TRANSFER).
 model WarehouseTransfer {
-  id              BigInt         @id @default(autoincrement())
-  code            String         @unique
-  fromWarehouseId BigInt
-  toWarehouseId   BigInt
-  status          TransferStatus @default(PENDING)
+  id                  BigInt         @id @default(autoincrement())
+  code                String         @unique
+  fromWarehouseId     BigInt
+  toWarehouseId       BigInt
+  status              TransferStatus @default(PENDING)
   /// Chuẩn hoá từ pi_code (string) hiện tại ở mock.
-  planFormId      BigInt?
-  rejectionReason String?
-  note            String?
-  createdAt       DateTime       @default(now())
-  confirmedAt     DateTime?
-  rejectedAt      DateTime?
+  planFormId          BigInt?
+  rejectionReason     String?
+  note                String?
+  createdAt           DateTime       @default(now())
+  confirmedAt         DateTime?
+  rejectedAt          DateTime?
   /// Vấn đề #7 audit 26/08/2026 - trước đây phiếu không tự lưu ai tạo/xác nhận/từ chối, chỉ tra
   /// được qua AuditLog riêng (không phải ai cũng biết tìm ở đâu). Nullable, không backfill dữ liệu
   /// cũ (chưa từng ghi actor) - cùng idiom PurchaseProposalItem.approvalFileUrl (migration
   /// 20260827040000). createdById để trống ở service cũ (create() chưa nhận userId) - null với
   /// mọi phiếu tạo trước đợt sửa này, có giá trị từ đây trở đi.
-  createdById     String?
-  confirmedById   String?
-  rejectedById    String?
+  createdById         String?
+  confirmedById       String?
+  rejectedById        String?
   /// Vấn đề #11 audit 26/08/2026 (phần còn thiếu) - create()/createPieceTransfer() trước đây
   /// không có cột nào để dedupe theo Idempotency-Key, khác material-issues/packaging-issues/
   /// steel-issues đã có. Nullable + unique, cùng idiom MaterialIssue.idempotencyKey.
-  idempotencyKey  String?        @unique
+  idempotencyKey      String?        @unique
   /// Ảnh phiếu chuyển kho đã ký (v8 4.1/4.2) - bắt buộc ≥ 1 khi kho nhận xác nhận (09/11/2026). Phiếu cũ trước đó: rỗng.
-  signedSlipUrls  String[]       @default([])
+  signedSlipUrls      String[]       @default([])
+  /// Phiếu chuyển hàng của lệnh đổi xưởng (10/11/2026): hàng đang giữ cho lệnh ở kho Phôi/Hàn xưởng cũ sang kho cùng loại của
+  /// xưởng mới. Kho nhận xác nhận thì giữ chỗ của lệnh chuyển theo số thực nhận. Null = phiếu thường.
+  productionInvoiceId BigInt?
 
-  fromWarehouse Warehouse                      @relation("WarehouseTransferFromWarehouse", fields: [fromWarehouseId], references: [id])
-  toWarehouse   Warehouse                      @relation("WarehouseTransferToWarehouse", fields: [toWarehouseId], references: [id])
-  planForm      PlanForm?                      @relation(fields: [planFormId], references: [id])
-  createdBy     User?                          @relation("WarehouseTransferCreatedBy", fields: [createdById], references: [id])
-  confirmedBy   User?                          @relation("WarehouseTransferConfirmedBy", fields: [confirmedById], references: [id])
-  rejectedBy    User?                          @relation("WarehouseTransferRejectedBy", fields: [rejectedById], references: [id])
-  items         WarehouseTransferItem[]
-  pieceItems    WarehouseTransferPieceItem[]
-  reservations  WarehouseTransferReservation[]
+  productionInvoice ProductionInvoice?             @relation(fields: [productionInvoiceId], references: [id])
+  fromWarehouse     Warehouse                      @relation("WarehouseTransferFromWarehouse", fields: [fromWarehouseId], references: [id])
+  toWarehouse       Warehouse                      @relation("WarehouseTransferToWarehouse", fields: [toWarehouseId], references: [id])
+  planForm          PlanForm?                      @relation(fields: [planFormId], references: [id])
+  createdBy         User?                          @relation("WarehouseTransferCreatedBy", fields: [createdById], references: [id])
+  confirmedBy       User?                          @relation("WarehouseTransferConfirmedBy", fields: [confirmedById], references: [id])
+  rejectedBy        User?                          @relation("WarehouseTransferRejectedBy", fields: [rejectedById], references: [id])
+  items             WarehouseTransferItem[]
+  pieceItems        WarehouseTransferPieceItem[]
+  reservations      WarehouseTransferReservation[]
 
   @@index([status])
   @@index([toWarehouseId, status])
@@ -3055,23 +3068,25 @@ model WarehouseTransfer {
 
 /// Dòng vật tư trong 1 phiếu chuyển kho.
 model WarehouseTransferItem {
-  id           BigInt   @id @default(autoincrement())
-  transferId   BigInt
+  id            BigInt   @id @default(autoincrement())
+  transferId    BigInt
   /// Nullable chỉ vì lý do lịch sử (dòng "ghi tự do" tạo trước 09/09/2026, kế thừa hạn chế của
   /// mock cũ) - DTO tạo mới đã bắt buộc materialId từ 09/09/2026 (audit toàn diện, mục Trung bình
   /// "phiếu ghi tự do"). confirm() vẫn giữ guard bỏ qua dòng null cho dữ liệu cũ, không ghi được
   /// StockLedger cho các dòng đó.
-  materialId   BigInt?
-  materialName String
-  unit         String
+  materialId    BigInt?
+  materialName  String
+  unit          String
   /// Đã clamp theo tồn khả dụng (stock_quant trừ reservation ACTIVE) tại thời điểm tạo phiếu.
   /// 09/11/2026 (v8 4.7): lúc chờ = số kho giao gửi; sau xác nhận = số kho nhận THỰC NHẬN (tồn chỉ cộng số này).
-  quantity     Decimal  @db.Decimal(16, 4)
+  quantity      Decimal  @db.Decimal(16, 4)
   /// Số kho giao gửi, chỉ ghi khi thực nhận ít hơn (null = nhận đủ). Phần thiếu ở lại kho giao, lập phiếu bù.
-  sentQty      Decimal? @db.Decimal(16, 4)
-  note         String?
+  sentQty       Decimal? @db.Decimal(16, 4)
+  /// Chiều dài cây (sắt) của dòng - phiếu chuyển hàng của lệnh đổi xưởng; phiếu thường = 0 (không chia theo chiều dài).
+  stockLengthMm Int      @default(0)
+  note          String?
   /// Quy cách của dòng vật tư lấy ra khỏi kho ('' = không quy cách) - nệm có nhiều quy cách cùng 1 vật tư.
-  spec         String   @default("")
+  spec          String   @default("")
 
   transfer WarehouseTransfer @relation(fields: [transferId], references: [id])
   material Material?         @relation(fields: [materialId], references: [id])
