@@ -1,6 +1,6 @@
 # Changelog 2026-11-10 — Sửa 2 lỗi phát hiện khi kiểm thử E2E trên trình duyệt
 
-> Trạng thái (10/11): **đã commit** (BE `main`, FE `demo`), **chưa push**. Đã kiểm lại trên trình duyệt với DB local
+> Trạng thái (10/11): **đã commit + push 10/11** (BE `main`, FE `demo`). Đã kiểm lại trên trình duyệt với DB local
 > (bản clone production). Production cần đồng bộ quyền sau khi deploy BE (mục 2).
 
 ## Mục lục

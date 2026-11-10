@@ -220,6 +220,80 @@ nhận, còn thiếu, lệnh SX, NCC, người mua · badge = quá hạn + hôm 
   sidebar dùng chung** → chỉ thêm 1 mục, báo người dùng.
 - Test: khoảng ngày, lọc 3 chế độ, phạm vi người mua/kho, ẩn khi nhận đủ, badge, nội dung tin sáng.
 
+### 4b. Đợt 4 – thiết kế bản 2 (05/11, rà lại code sau khi Đợt 3 + 5a–5c đã vào `main` `e95b28c`)
+
+**Rà code - khác bản 1:**
+- Bảng mốc (`milestone-board.service.ts`, của A) ĐÃ tính theo từng dòng SKU đã duyệt: dòng mua còn thiếu ở 2 mốc mua (`missing.MUA_VT_KHUNG`
+  / `MUA_VT_CON_LAI`: id dòng mua, vật tư + chiều dài cây/quy cách, đơn vị, người mua `Material.buyerId`, kho nhận `receiveWarehouseCode ??
+  Material.warehouse`), gán dây/nệm riêng của SKU đúng như màn mua (`own` / `siblings`). Tin sáng `MORNING_MATERIALS_DIGEST` ("Vật tư cần
+  về: N phải về hôm nay, M đã trễ", mỗi người mua / mỗi kho 1 tin) dựng từ đó, link "Theo dõi mua hàng". → Đợt 4 dùng lại đúng logic
+  gán dòng mua ↔ dòng SKU này, KHÔNG viết thứ 3.
+- Nhưng Bảng mốc chấm "đủ" theo `buyQty` (cần mua) còn dòng mua chỉ đóng (`PURCHASED`) khi nhận ≥ **số mua** = `effectiveOrderQty(buyQty,
+  orderQty)` của B (5a). Bảng mốc tải dòng qua `proposal.productionInvoiceId` (đề xuất từ phương án cắt cũng ghim PI -
+  `resolveTargetProductionInvoiceId`), chỉ dòng SKU đã duyệt + có lệnh sản xuất.
+- NCC có sẵn: `PurchaseProposalItem.supplierOrder.supplier.name` (đơn đặt hàng 5b/5c) hoặc báo giá `isChosen`; chưa có thì "chưa đặt".
+- Badge (`work-queue`) bị gọi 30–120 s/người → phải tính nhẹ (không dựng cả Bảng mốc), có nhớ tạm.
+- "về từ" ở form Sửa thời hạn = hạn − 4 viết cứng (`LenhSXPage.tsx`).
+- Điểm ghép ②: hàm chung đã có là `purchaseDeadlineOf` (`frame-deadline.util.ts`) - không cần hàm mới. Dự phòng của Đợt 3 đưa vào đây:
+  M1 = materialDeadline ?? (Bắt đầu Phôi − 1) ?? Khung ?? hạn PI; M3 = finishedMaterialDeadline ?? (Bắt đầu đóng gói − 7) ?? Đóng gói ??
+  hạn PI. `frameDeadlineOf` (xếp cắt, luật gộp) KHÔNG đổi. Đổi hàm chung → "Theo dõi mua hàng" của B đổi theo (chỉ lệnh cũ chưa lưu M1/M3).
+
+**Thiết kế:**
+- Đơn vị dòng = **1 dòng mua** (số lượng chung - chia theo SKU là 5d của B), kèm danh sách **SKU dùng nó, mỗi SKU 1 hạn riêng** (YC11 11.1):
+  "MY-313 hạn 10/11 · MY-314 hạn 12/11". Hạn chót của dòng = hạn SKU gấp nhất CÒN CHẠY; ngày được về từ = hạn chót − `materialEarliestArrivalDays`.
+- Dòng có mặt khi: trạng thái chưa đóng (NEW / QUOTING / SUBMITTED / PURCHASING - gồm cả dòng chưa đặt NCC), PI chưa huỷ, còn ít nhất 1
+  SKU chưa Kết thúc. Còn thiếu = số mua − đã nhận. **Đã nhận đủ số CẦN, chỉ còn chờ phần mua dư** → vẫn hiện, ghi "còn chờ mua dư", không
+  đỏ, không tính badge (sản xuất không bị chặn). Nhận đủ số mua → dòng đóng → tự biến mất.
+- Lọc: **Quá hạn** (hạn chót < hôm nay) · **Hôm nay** (xem câu hỏi Q4-1) · **Theo ngày** (chọn ngày D) · **Tất cả**; xếp theo ngày được về
+  từ; dòng chưa có hạn xếp cuối "Chưa có hạn". Cột: được về từ – hạn chót, vật tư, số mua (cần / mua dư), đã nhận, còn thiếu, lệnh (LSX
+  từng SKU + hạn), NCC, người mua, kho nhận.
+- Ai thấy: người mua mặc định "Vật tư của tôi" + chuyển "Tất cả"; thủ kho = kho mình (`warehouseScope`); KHSX, Sếp, Admin xem tất cả.
+- Cấu hình `SystemConfig.materialEarliestArrivalDays Int @default(4)` (0–30, Admin) + `planning-params`; FE "về từ" đọc số này.
+- BE module mới `materials-due` (A): `MaterialsDueService.list(user, view, date)` + `countDueNow(user)` (badge, nhớ tạm 60 s cho cả bảng
+  rồi lọc theo người); `GET /materials-due?view=overdue|today|date|all&date=&scope=mine|all`. Quyền: `PURCHASE_PROPOSAL:VIEW` (Mua hàng,
+  Kho, KHSX, Sếp đã có - kiểm lại seed khi làm).
+- Badge: `work-queue` thêm `materialsDueNow` cho PURCHASER (vật tư mình) và WAREHOUSE_STAFF (kho mình) - **file dùng chung với B**, chỉ thêm 1 khối.
+- Tin sáng: `MORNING_MATERIALS_DIGEST` lấy số từ `MaterialsDueService` (cùng định nghĩa Quá hạn / Hôm nay với màn), link sang màn mới, giữ
+  người nhận + dedupe. Tiêu đề "Vật tư cần về: X quá hạn · Y hôm nay".
+- FE: `VatTuCanVePage.tsx` (bảng + thẻ điện thoại), mục sidebar "Vật tư cần về" ở Mua hàng (`PurchasingApp.tsx`), Kho (`InboundWarehouseApp.tsx`)
+  - **sidebar dùng chung với B** - và (Q4-3) KHSX; ô Cấu hình; bài Hướng dẫn Mua hàng + Kho.
+- Chia thợ: BE (schema + migration + config + util + module + work-queue + daily-jobs + test) · FE (màn + sidebar + config + hướng dẫn +
+  test); Opus viết hợp đồng `MaterialsDueRow` trước. Nhánh `dot-4-vat-tu-can-ve` cắt từ `main` `e95b28c` / `demo` `ebd83f5`; DB riêng
+  `dna_erp_dot4` (bản sao `dna_erp_full`) + dữ liệu thử `PA4-` có đề xuất mua (sắt, sơn, dây, nệm, thùng; 1 lệnh gộp 2 SKU; 1 dòng mua dư;
+  1 dòng đã có đơn NCC).
+
+**Tự đánh giá:**
+- V5-1 (cao) Badge gọi dày → nhớ tạm 60 s + truy vấn theo chỉ mục `status`; không dựng Bảng mốc. Thử với 500 dòng mua.
+- V5-2 (cao) "Còn thiếu" theo số mua khác "đã về đủ" của Bảng mốc (theo cần mua) → tách "còn chờ mua dư" (không đỏ) để 2 màn không nói
+  ngược nhau về việc sản xuất có bị chặn.
+- V5-3 (vừa) Đổi `purchaseDeadlineOf` đụng màn của B → chỉ ảnh hưởng lệnh cũ chưa lưu M1/M3; báo B + test hồi quy "Theo dõi mua hàng".
+- V5-4 (vừa) Lệnh gộp dùng chung dòng mua: chưa có số theo SKU → hiện số chung + hạn từng SKU; ghi rõ chờ 5d.
+- V5-5 (vừa) Dòng mua thuộc SKU đã Kết thúc (dư) → ẩn, như `itemDeadlineOf`.
+- V5-6 (thấp) "Đóng phần thiếu" (7.13 của B) chưa có → khi B làm, dòng đóng phần thiếu tự ra khỏi danh sách nếu B đặt trạng thái đóng.
+
+### 4c. Đợt 4 – chốt theo câu trả lời của Sếp (05/11, file `TRA_LOI_DOT_4_VAT_TU_CAN_VE_IT_05-11-2026.docx`)
+
+| Câu | Sếp chọn | Thiết kế chốt (thay chỗ tương ứng ở 4b) |
+|---|---|---|
+| 1 "Hôm nay" | **A + C** | Lọc Hôm nay = mọi dòng có về từ ≤ hôm nay ≤ hạn chót; ngày hạn chót ghi nổi bật **"HẠN CHÓT HÔM NAY"** (đỏ). Tới hạn chót chưa về đủ → ĐỎ + thông báo mới `MATERIALS_DEADLINE_ALERT` (CRITICAL → tự thêm Sếp = vai trò BOSS, tài khoản Sếp; người dùng xác nhận) cho **KHSX**, ngoài tin sáng người mua + thủ kho. |
+| 2 Lệnh gộp | A | 1 dòng mua + từng SKU kèm hạn riêng, hạn chót dòng = hạn SKU sớm nhất (như 4b). |
+| 3 Mua dư | **B** + ý kiến | Theo dõi theo **SỐ CHỐT MUA** = `effectiveOrderQty(buyQty, orderQty)`: chưa về đủ số chốt mua là còn thiếu, đỏ + tính badge như dòng khác. **Bỏ** ngoại lệ "còn chờ mua dư" của 4b (V5-2 không còn). |
+| 4 KHSX | A | Mục "Vật tư cần về" ở menu Kế hoạch SX, cùng danh sách, chỉ xem, không badge. |
+
+- Trạng thái dòng (BE tính): `OVERDUE` (hạn < hôm nay) · `DEADLINE_TODAY` · `IN_WINDOW` (về từ ≤ hôm nay < hạn) · `UPCOMING` · `NO_DEADLINE`. Lọc: Quá
+  hạn = OVERDUE; Hôm nay = DEADLINE_TODAY + IN_WINDOW; Theo ngày D = về từ ≤ D ≤ hạn; Tất cả. Badge = OVERDUE + DEADLINE_TODAY + IN_WINDOW
+  (người mua theo vật tư của mình, thủ kho theo kho; người vừa mua vừa thủ kho tính theo người mua).
+- Tin sáng `MORNING_MATERIALS_DIGEST` (người mua + thủ kho) dựng từ `MaterialsDueService` (bỏ phần dựng từ Bảng mốc): "Vật tư cần về: X quá hạn,
+  Y hạn chót hôm nay, Z trong hạn về", câu theo **mã lệnh (LSX)**, link màn mới. `MATERIALS_DEADLINE_ALERT`: 1 tin/ngày từ 07:00 khi toàn hệ thống
+  có dòng quá hạn / hạn chót hôm nay; tự đóng trong ngày khi hàng về hết; tin hôm trước đóng khi gửi tin mới.
+- Bảng mốc giữ nguyên cách chấm "đủ" theo cần mua (sản xuất có bị chặn không) - khác nghĩa với màn mới (theo số chốt mua); ghi trong Hướng dẫn.
+- Dự phòng hạn vật tư (V4-3) vào `purchaseDeadlineOf`: M1 = materialDeadline ?? (Bắt đầu Phôi − 1) ?? Khung ?? hạn PI; M3 = finishedMaterialDeadline ??
+  (Bắt đầu đóng gói − 7) ?? Đóng gói ?? hạn PI. Hàm gán dòng mua ↔ SKU tách thành `purchase-line-sku.util.ts` dùng chung với Bảng mốc.
+- Hợp đồng: BE `src/modules/materials-due/materials-due.types.ts`, FE `src/services/materials-due-api.ts`. Nhánh `dot-4-vat-tu-can-ve`
+  (worktree `D:\DNA-ERP-BE-dot4` từ `main` `e95b28c`, `D:\DNA-ERP-dot4` từ `demo` `ebd83f5`), DB `dna_erp_dot4` (bản sao `dna_erp_full`), dữ liệu thử
+  `.claude/tools/huong-dan-test-phan-a/pa4-seed.sql` (5 lệnh PA4-PI-A..E = MY-9401..9406, ngày tính theo ngày chạy, 3 người mua demo
+  muapsh / muavttp / muatp). Cổng chạy thử BE 3037 / FE 3137.
+
 ## 5. Đợt 9 – Sửa kế hoạch + Excel (YC2) · nhánh `dot-9-sua-ke-hoach` (sau Đợt 3)
 
 **v8:** KHSX sửa mốc ở mọi giai đoạn trước Kết thúc · Excel tải xuống (lệnh đang chạy, 1 dòng/SKU) và tải lên (bảng cũ → mới, báo dòng
@@ -252,6 +326,78 @@ không có thư viện Excel.
   mốc" (đọc audit qua `GET /production-invoices/items/:itemId/deadline-history` có tên người sửa).
 - Test: luật ghi theo trạng thái, 1 yêu cầu chờ/dòng, Hạn giao bị loại, Sếp duyệt/từ chối, luật gộp lúc duyệt, preview lỗi từng dòng,
   commit idempotent, quyền vai trò; FE: đọc/ghi Excel (vòng xuất → đọc lại khớp).
+
+### 5b. Đợt 9 – thiết kế bản 2 (05/11, rà lại code ở `main` `59f828c` = đã có Đợt 3, 4, 5d)
+
+**Rà code - khác / thêm so với bản 1:**
+- 2 route sửa mốc: `PATCH /production-invoices/:id/items-deadlines` (cả PI, 1 giao dịch, kèm `deadline` của PI) và `PATCH :id/items/:itemId`
+  (1 SKU) - KHÔNG kiểm trạng thái, ghi cả `deliveryDeadline`; quyền `PRODUCTION_INVOICE:UPDATE` có ở KHSX **và WAREHOUSE_STAFF** (thủ kho
+  TP được cấp để gọi transfer-check / packaging); Sếp, QLSX không có UPDATE. FE chỉ gọi route cả PI từ `LenhSXPage` (form "Sửa thời hạn"),
+  danh sách chỉ hiện PI `PLANNING`.
+- Ghi mốc: `applyItemDeadlines` (item + upsert `production_invoice_item_stages`); lệnh gộp: `assertMergedPiDeadlineRule` (luật gộp ≤ N
+  ngày); sau khi ghi: `auditAndNotifyDeadlineChange` = audit `ProductionInvoiceItem` (old/new theo trường) + `PI_ITEM_DEADLINE_CHANGED` tới
+  Mua hàng (mốc vật tư), tổ Phôi/Hàn/Sơn (mốc công đoạn), thủ kho (Nhập đan / Chuyền kiểm / Đóng gói), Sales (hạn giao), luôn thêm QLSX
+  (Đợt 3). → Đợt 9 DÙNG LẠI đúng 3 hàm này khi áp mốc (sửa thẳng và khi Sếp duyệt), không viết lại.
+- Mọi nơi đọc mốc đều đọc trực tiếp giá trị đã lưu (Bảng mốc, Năng lực, Vật tư cần về, chia hàng nhận theo phiếu của B, xếp cắt, giữ chỗ)
+  → áp mốc mới xong là các màn tự đổi; trong lúc chờ Sếp duyệt mọi màn vẫn chạy theo mốc cũ (đúng v8).
+- Lịch sử: audit đã ghi nhưng không có màn xem (`GET /audit-logs` cần quyền AUDIT_LOG). Thứ tự mốc: luật có sẵn ở `MILESTONE_ORDER`
+  (data-health, Đợt 3) - dùng lại thứ tự đó cho cảnh báo.
+- Sếp: BossApp "Tổng hợp chờ duyệt" có 2 nút lọc (SKU mới / Lệnh SX) + badge `bossSkuApproval + bossProductionApproval` → thêm nút thứ 3.
+- Excel: FE có `xlsx` 0.18.5 (bản npm cuối, có lỗi bảo mật khi ĐỌC file lạ - CVE-2023-30533 / CVE-2024-22363); BE có `exceljs` (Đợt 5c).
+  → **Cả xuất và đọc file làm ở BE bằng `exceljs`** (khoá ô không được sửa, ẩn cột mã dòng, định dạng ngày), không đọc Excel ở FE.
+
+**Thiết kế:**
+- **Luật ghi (1 hàm `planDeadlineChanges`):** dòng SKU chưa `APPROVED` (chưa gửi, chờ QLSX, chờ Sếp, bị trả) → ghi thẳng như hiện nay.
+  Dòng `APPROVED` → không ghi mốc, tạo yêu cầu trong 1 **lô chờ Sếp duyệt lại**; `deliveryDeadline` / hạn PI của dòng đã duyệt bị bỏ qua (2.4).
+  Dòng có lệnh Kết thúc (`floorStage FINISHED`) hoặc PI huỷ → lỗi. Dòng đang có yêu cầu chờ → lỗi "đang chờ Sếp duyệt lại" (KHSX Huỷ yêu
+  cầu rồi sửa lại). Luật gộp chạy lúc tạo yêu cầu (trên giá trị dự kiến) và lúc Sếp duyệt. 1 lần bấm Lưu / 1 lần Xác nhận Excel = 1 lô.
+- **DB:** enum `DeadlineChangeSource { MANUAL, EXCEL }`, `DeadlineChangeStatus { PENDING, APPROVED, REJECTED, CANCELLED }`;
+  `DeadlineChangeBatch { id, source, status, requestedById, requestedAt, decidedById?, decidedAt?, decisionNote?, note? }`;
+  `DeadlineChangeRequest { id, batchId, productionInvoiceItemId, oldValues Json, newValues Json }` (khoá: `materialDeadline`,
+  `finishedMaterialDeadline`, `stage.<TYPE>` → 'YYYY-MM-DD'); chỉ mục `(productionInvoiceItemId, status)`; "mỗi dòng ≤ 1 yêu cầu PENDING" kiểm
+  trong giao dịch + khoá nghiệp vụ theo dòng.
+- **Sếp duyệt:** `GET /deadline-change-batches?status=` (Sếp, KHSX xem của mình), `POST /:id/approve` (kiểm giá trị hiện tại vẫn = `oldValues`,
+  lệch → 409 "mốc đã đổi từ lúc gửi"; áp bằng `applyItemDeadlines` + luật gộp trong 1 giao dịch; rồi audit + `PI_ITEM_DEADLINE_CHANGED` như
+  sửa thẳng, ghi rõ "Sếp đã duyệt"), `POST /:id/reject` (bắt buộc lý do, giữ mốc cũ), `POST /:id/cancel` (KHSX huỷ lô của mình khi còn PENDING).
+  Duyệt / từ chối **cả lô** (v8). Thông báo mới: `DEADLINE_CHANGE_PENDING` (ACTION_REQUIRED → Sếp, tự đóng khi lô đã quyết) và
+  `DEADLINE_CHANGE_DECIDED` (RESULT → KHSX người gửi: đã duyệt / từ chối + lý do). Badge Sếp `bossDeadlineChange` (số lô PENDING) cộng vào "Tổng
+  hợp chờ duyệt".
+- **Chỉ KHSX:** `@RequireRole(PRODUCTION_PLANNER, ADMIN)` cho 2 route sửa mốc + các route Excel + tạo / huỷ lô (đụng hành vi có sẵn: thủ kho
+  đang có UPDATE - đã kiểm FE kho không gọi 2 route này). Duyệt / từ chối: `@RequireRole(BOSS)`.
+- **Excel (BE, exceljs):** `GET /production-invoices/deadline-plan.xlsx` - mọi dòng SKU của PI chưa huỷ có lệnh chưa Kết thúc (kể cả chưa
+  duyệt), 1 dòng / SKU, cột: Mã lệnh (LSX) · SKU · Tên · SL · Xưởng · Trạng thái ("Chưa duyệt" / "Đã duyệt – sửa cần Sếp duyệt lại" / "Đang chờ
+  Sếp duyệt lại – không sửa được") · M1 Mua VT khung · Bắt đầu Phôi · Phôi · Hàn · Sơn · Khung · Nhập đan · Chuyền kiểm · M3 Mua VT còn lại ·
+  Bắt đầu đóng gói · Đóng gói · Hạn giao (khoá) · cột ẩn: mã dòng + giá trị mốc lúc xuất. Chỉ ô ngày mở khoá, ngày dd/mm/yyyy.
+  `POST .../deadline-plan/preview` (tải file lên) → so ô với **giá trị lúc xuất** (ô không sửa = không đổi; ô trống = giữ nguyên, không xoá
+  mốc qua Excel) → trả từng dòng đổi: cũ → mới, sửa thẳng / chờ Sếp, lỗi (mã dòng lạ, ngày sai, lệnh Kết thúc, đang chờ duyệt, luật gộp, **mốc
+  đã bị đổi sau lúc tải file** = hiện tại ≠ lúc xuất) và cảnh báo (thứ tự mốc ngược theo `MILESTONE_ORDER`). `POST .../deadline-plan/commit`
+  (gửi lại đúng danh sách đổi đã xem, Idempotency-Key; BE kiểm lại hết) → ghi thẳng phần chưa duyệt + tạo 1 lô EXCEL cho phần đã duyệt. Có lỗi
+  ở dòng nào thì dòng đó bị bỏ, các dòng khác vẫn xác nhận được (bảng ghi rõ).
+- **Lịch sử:** `GET /production-invoices/items/:itemId/deadline-history` (KHSX, QLSX, Sếp) đọc audit + các lô của dòng: lúc nào, ai, mốc nào cũ →
+  mới, sửa thẳng / Sếp duyệt / từ chối.
+- **FE:** `LenhSXPage` thêm bộ lọc **"Đang chạy"** (PI có SKU đã duyệt chưa Kết thúc) để mở "Sửa thời hạn"; form: dòng đã duyệt có dải
+  "Lệnh đã Sếp duyệt – lưu sẽ gửi Sếp duyệt lại", hạn giao chỉ xem, dòng đang chờ có nhãn "Chờ Sếp duyệt lại" + nút Huỷ yêu cầu, nút "Lịch sử
+  đổi mốc"; nút **Tải Excel kế hoạch / Tải lên Excel** (KHSX) + hộp xem trước (bảng cũ → mới, lỗi đỏ, cảnh báo vàng, Xác nhận). Sếp: nút lọc
+  "Đổi mốc lệnh SX" ở "Tổng hợp chờ duyệt" (màn mới `DuyetDoiMocPage`: mỗi lô = nguồn, người gửi, lúc gửi, bảng lệnh / SKU / mốc cũ → mới, Duyệt /
+  Từ chối + lý do). Bảng mốc / Tổng hợp lệnh SX: nhãn "Đang chờ Sếp duyệt đổi mốc" trên dòng SKU.
+- Chia thợ: BE (schema + migration + service lô + Excel + route + thông báo + badge + test) · FE (form + bộ lọc + Excel UI + màn Sếp + lịch sử +
+  nhãn + test); Opus viết hợp đồng trước. Nhánh `dot-9-sua-ke-hoach` từ `main` `59f828c` / `demo` `136a1a3`; DB `dna_erp_dot9` (bản sao
+  `dna_erp_dot4` + migration 5d) + dữ liệu thử `PA9-`.
+
+**Tự đánh giá:**
+- V9-1 (cao) File Excel cũ ghi đè mốc mới hơn → so với giá trị LÚC XUẤT (cột ẩn), ô KHSX không sửa không bao giờ ghi; ô sửa mà mốc hiện tại đã
+  khác lúc xuất → lỗi dòng, bắt tải file mới.
+- V9-2 (cao) Sếp duyệt muộn, mốc đã bị đổi bởi đường khác → kiểm `oldValues` = hiện tại lúc duyệt, lệch thì 409. Mỗi dòng ≤ 1 yêu cầu chờ + chỉ
+  KHSX sửa → hiếm.
+- V9-3 (vừa) Đổi quyền: thủ kho mất khả năng gọi 2 route sửa mốc (chưa có màn nào của kho gọi) → kiểm lại bằng grep FE + test quyền.
+- V9-4 (vừa) Lệnh có dòng đã duyệt + dòng chưa duyệt trong 1 lần Lưu → tách: phần chưa duyệt ghi ngay, phần đã duyệt vào lô; báo rõ trên màn
+  ("đã lưu 2 SKU, 1 SKU chờ Sếp duyệt lại").
+- V9-5 (vừa) Luật gộp: lệnh gộp có 1 SKU chờ duyệt + 1 SKU sửa thẳng → kiểm luật trên giá trị "sau khi duyệt" lúc tạo, và kiểm lại lúc duyệt.
+- V9-6 (thấp) `xlsx` FE có lỗi bảo mật khi đọc → không dùng ở FE cho tải lên; file lớn: giới hạn 2 MB / 2.000 dòng.
+- V9-7 (thấp) Dời 1 mốc có tự dời mốc sau không, thứ tự ngược chặn hay cảnh báo → hỏi Sếp (Q9-1, Q9-2); mặc định chỉ đổi ô đã sửa + cảnh báo.
+- **Sếp trả lời 06/11 (phần 2 - changelog Đợt 9 mục 9):** Q9-1 = B mốc sản xuất sau tự dời cùng số ngày (Mua VT, hạn giao không dời; Excel dùng
+  công thức để KHSX thấy ngay và BE nhận ra ô gõ) · Q9-2 = B thứ tự ngược chặn lưu (cả dòng sửa thẳng) · Q9-3 = ý kiến khác: lệnh đã bắt đầu sản
+  xuất (`floorStage` ≠ PENDING) KHÔNG sửa mốc ở mọi đường, Excel chỉ lệnh chưa cắt - thu hẹp v8 2.1 "mọi giai đoạn trước Kết thúc" · Q9-4 = B.
 
 ## 6. Đợt 8 – Sắt cắt bằng phần mềm (7.12, 7.14, 7.15, 7.17) · nhánh `dot-8-sat` (sau Đợt 2)
 
@@ -287,6 +433,26 @@ ghi lịch sử, báo Mua hàng.
 - Test: 2 lần tính (đạt/không đạt từng lần), số mua dùng `purchaseTotalBars`, đề xuất cũ tương thích, chiều dài chuẩn + lịch sử +
   thông báo, đếm đặc cách, gợi ý (chạy với bộ dữ liệu `test/solver-real-data-new`).
 
+**Cập nhật 07/11 (Bảo trả lời file "gửi Bảo Đợt 9 và Phần A còn lại", kèm câu anh Nhân chốt 07/11 - changelog 12-yeu-cau mục 31):**
+- **Lưỡi máy TỰ ĐỘNG thật = 3 mm** (không phải 2,5 đang cài), laser 1 mm → bảng cắt Phôi máy tự động cũng 3 mm. Đổi ở Cấu hình (Admin) ô "Lưỡi
+  cắt (mm)" của MC Tự động (`solverMctdBladeWidthMm`) - không cần code; mặc định schema 2,5 sửa thành 3 khi làm Đợt 8. Máy tự động: 2 lần tính
+  (mua 3 mm / bảng cắt lưỡi thật) trùng nhau; chỉ laser khác.
+- **Mua sắt luôn theo lưỡi 3 mm, không nhân 1%, mua đúng theo sơ đồ cắt**; sắt mua dư so với bảng cắt **vào tồn tự do**, lệnh khác dùng, lần
+  tính sau tự trừ (anh Nhân 07/11 - khớp thiết kế).
+- **Chỗ ghi số mua (Bảo đề xuất, chưa chốt với A):** B chỉ đọc `PurchaseProposalItem.buyQty` của dòng sắt (+ `stockLengthMm`), không đọc
+  `CuttingProposalLine.buyBars`; nhận hàng giữ chỗ cho PI tới đúng `buyQty`. Đề xuất: `buyQty` = số cây bảng cắt cần, số mua theo 3 mm ghi
+  vào `orderQty` (không đổi schema, phần dư tự vào tồn chưa giữ). **Vướng:** `orderQty` hiện là số người mua tự tăng, và việc sửa câu 3 (dưới)
+  lại xoá `orderQty` khi tính lại → phải phân biệt số hệ thống ghi với số người mua tăng. Chốt trong buổi 30 phút với B (câu 4).
+  Giữ 2 quy ước của B: mỗi vật tư + cỡ cây chỉ 1 dòng NEW; không sửa dòng đã chốt.
+- **Đổi chiều dài chuẩn** (anh Nhân 07/11): đề xuất mua chưa có Giám đốc ký → tính lại theo chiều dài mới + báo người mua; phiếu đã ký giữ
+  chiều dài cũ, hàng về dùng như cây cũ trong kho. (Thêm vào thiết kế "đổi → thông báo Mua hàng".)
+- **Xưởng → kho Phôi (điểm ghép ③):** B làm xong **12/11/2026** (ngày chuyển 9 kho + kiểm kê, anh Nhân chốt; sớm hơn dự kiến ~06/01/2027):
+  thêm cột "kho Phôi" vào bảng xưởng, tạo kho Phôi Phước An, 1 hàm "xưởng → kho Phôi" (B báo tên hàm). Phú An → kho Phôi Phú An (tách từ
+  `phoi-son-han` thành Phôi / Hàn / Sơn); Phước An → kho Phôi Phước An (mới; tồn Phước An chưa có trong phần mềm, kiểm kê + nhập 12/11).
+- **Không làm màn thêm xưởng** (anh Nhân 07/11: ít khi thêm, IT thêm tay; xưởng mới = 1 kho Phôi + 1 kho Hàn riêng, Sơn / phụ kiện / thành
+  phẩm dùng kho chung ở Phú An).
+- **Vẫn chờ:** câu 2.4 (xưởng dự kiến lúc tính cắt) của anh Nhân.
+
 ## 7. Đợt 10a – Booking / Lịch xuất hàng (YC5, phần Sales) · nhánh `dot-10a-booking` (sau Đợt 1, 2)
 
 **v8:** 5.1 ô theo bảng booking anh Nhân gửi · 5.2 chọn hàng theo lệnh SX từng SKU, kèm mã PO khách · 5.3 xếp cả hàng chưa xong, tới
@@ -319,7 +485,7 @@ ngày lấy cont / CUT OFF chưa đủ thì cảnh báo · 5.4 thường 1 booki
 | ② | Đợt 3–4 | `materialNeedDateOf(item, group)` | chia hàng theo SKU (5d) |
 | ③ | Đợt 7 của B | (B đưa) xưởng → kho Phôi | Đợt 8 xuất sắt |
 | ④ | Đợt 10a | `Booking`, `BookingLine` | 10b xác nhận xuất, trừ tồn |
-| ⑤ (mới, review mục 16 điểm 8) | trước Đợt 5 của B | — | 3 luồng tính số mua + giữ chỗ nằm trong `production-invoices` (A); B sửa số mua/đơn gộp/giữ chỗ theo SKU → thống nhất: A không đổi chữ ký 3 hàm tính mua trong lúc B làm 5a–5d. **Cập nhật 04/11:** B đã làm 5a bằng cột riêng `PurchaseProposalItem.orderQty` (số mua = max(buyQty, orderQty)) nên lần tính lại không ghi đè số B tăng; còn hở: tính lại làm buyQty GIẢM thì mua dư tăng lặng lẽ → đề xuất lần tính lại xoá `orderQty` của dòng bị đổi + báo người mua (cần B đồng ý, code ở phía A) |
+| ⑤ (mới, review mục 16 điểm 8) | trước Đợt 5 của B | — | 3 luồng tính số mua + giữ chỗ nằm trong `production-invoices` (A); B sửa số mua/đơn gộp/giữ chỗ theo SKU → thống nhất: A không đổi chữ ký 3 hàm tính mua trong lúc B làm 5a–5d. **Cập nhật 04/11:** B đã làm 5a bằng cột riêng `PurchaseProposalItem.orderQty` (số mua = max(buyQty, orderQty)) nên lần tính lại không ghi đè số B tăng; còn hở: tính lại làm buyQty GIẢM thì mua dư tăng lặng lẽ → đề xuất lần tính lại xoá `orderQty` của dòng bị đổi + báo người mua (cần B đồng ý, code ở phía A). **07/11: B đồng ý (A sửa ở phần tính lại), anh Nhân chốt cho MỌI vật tư:** phiếu chưa có Giám đốc ký → bỏ số người mua đã tăng, quay về số mới, báo người mua; phiếu đã ký → gọi 1 hàm B viết sẵn (báo người mua + Giám đốc, người mua tự quyết phiếu thay thế / nhận đủ, dư vào tồn tự do). B đã kiểm lỗi có thật (orderQty 110 giữ nguyên khi buyQty tính lại còn 50). |
 
 ## 9. Thứ tự và ước lượng (phần A)
 
@@ -337,6 +503,8 @@ Danh sách câu hỏi ban đầu:
 
 1. **Đợt 2 – LSX trùng cho 2 SKU?** Sổ xưởng có "I41+42 LSX 323" (1 số cho 2 SKU). Plan theo v8 "không trùng": mỗi dòng SKU 1 số riêng.
    Nếu xưởng vẫn đánh chung 1 số cho 2 SKU của cùng lệnh gộp thì nới: cho trùng trong cùng 1 PI.
+   **06/11:** file kế hoạch KHSX dùng 1 số LSX cho nhiều mã là thường ngày (LSX324, LSX182, LSX317, 319, 320, 323…) → đã hỏi lại anh Nhân
+   (changelog 12-yeu-cau mục 30), chờ trả lời.
 2. **Đợt 8 – xưởng chưa biết lúc tính cắt** (V2-3 ở mục 12): chọn "xưởng dự kiến" khi tính + tính lại nếu QLSX đổi xưởng?
 3. **Đợt 3 – khoảng ngày Nhập đan / Chuyền kiểm** khi chỉ có 1 ngày mốc: tính X ngày kết thúc ở ngày đó (plan) hay dồn cả lệnh vào 1 ngày?
 4. **Đợt 3 – giờ chốt cuối ngày** 18:00; Phôi "làm được trong ngày" ước tính theo tỷ lệ đoạn cắt.

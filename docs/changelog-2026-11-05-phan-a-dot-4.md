@@ -1,7 +1,7 @@
 # Changelog – Phần A, Đợt 4: màn "Vật tư cần về" (YC6) – 05/11/2026
 
 Nhánh `dot-4-vat-tu-can-ve` ở 2 worktree: BE `D:\DNA-ERP-BE-dot4` (cắt từ `main` `e95b28c` = `origin/main`), FE `D:\DNA-ERP-dot4`
-(cắt từ `demo` `ebd83f5` = `origin/demo`). **Commit trên nhánh + gộp `--no-ff` vào `main` / `demo` 05/11, sau Đợt 5d phần 1 của người B (chưa push).** Plan: `docs/ke-hoach-phan-a-12-yeu-cau-2026-11-04.md` mục 4, 4b, **4c**
+(cắt từ `demo` `ebd83f5` = `origin/demo`). **Commit trên nhánh + gộp `--no-ff` vào `main` / `demo` + push 05/11 (Render 14:35, Vercel 14:37), sau Đợt 5d phần 1 của người B.** Plan: `docs/ke-hoach-phan-a-12-yeu-cau-2026-11-04.md` mục 4, 4b, **4c**
 (4c thắng 4b chỗ nào khác); bản yêu cầu v8 YC6 6.1–6.4 + YC11 11.1. Câu trả lời của Sếp: file
 `TRA_LOI_DOT_4_VAT_TU_CAN_VE_IT_05-11-2026.docx` (trả lời `docs/cau-hoi-sep-dot-4-vat-tu-can-ve-2026-11-05-v2.docx`).
 

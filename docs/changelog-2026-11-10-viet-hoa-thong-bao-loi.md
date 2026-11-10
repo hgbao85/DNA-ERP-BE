@@ -1,6 +1,6 @@
 # Changelog 2026-11-10 — Việt hoá mọi thông báo lỗi người dùng nhìn thấy (BE + FE)
 
-> Trạng thái (10/11): **đã commit** (BE `main`, FE `demo`), **chưa push**. Đã thấy trên trình duyệt ở buổi kiểm thử E2E
+> Trạng thái (10/11): **đã commit + push 10/11** (BE `main`, FE `demo`). Đã thấy trên trình duyệt ở buổi kiểm thử E2E
 > cùng ngày: đăng nhập sai (văn phòng) và sai PIN (công nhân) đều hiện câu tiếng Việt; lỗi tải file hiện câu tiếng Việt.
 
 ## Mục lục

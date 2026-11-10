@@ -17,7 +17,7 @@ Nhánh `dot-9-sua-ke-hoach` ở 2 worktree: BE `D:\DNA-ERP-BE-dot9` (cắt từ 
 - 7. Danh sách file để commit
 - 8. Môi trường thử
 - 9. Phần 2 (06/11): đổi theo câu trả lời của Sếp
-- 10. Phần 3 (06/11): cột file Excel theo file "Kế hoạch cắt sắt" của KHSX (chưa commit)
+- 10. Phần 3 (06/11): cột file Excel theo file "Kế hoạch cắt sắt" của KHSX (đã commit `8981f8e` / FE `c4cbaf9`, gộp `main` `94f4a9d` / `demo` `eb445aa` 09/11)
 
 ---
 
@@ -213,7 +213,7 @@ deadline-plan-excel.service.ts + spec}`, `production-invoices.service.ts` + spec
 deadlineChange.test.ts, LenhSXPage.tsx, DeadlinePlanImportModal.tsx}`, `src/modules/pages/Boss/{DuyetDoiMocPage.tsx, duyetDoiMoc.ts, duyetDoiMoc.test.ts}`,
 `src/modules/pages/Guide/content/{productionPlan,boss}.ts`. **Không commit:** `next-env.d.ts`, `tsconfig.tsbuildinfo`.
 
-## 10. Phần 3 (06/11): cột file Excel theo file "Kế hoạch cắt sắt" của KHSX (chưa commit)
+## 10. Phần 3 (06/11): cột file Excel theo file "Kế hoạch cắt sắt" của KHSX (đã commit `8981f8e` / FE `c4cbaf9`, gộp `main` `94f4a9d` / `demo` `eb445aa` 09/11)
 
 **Vì sao:** người dùng gửi file kế hoạch KHSX đang dùng (KH MEYING T10/T11, GOPLUS T11 - phân tích ở `changelog-2026-11-04-phan-a-12-yeu-cau.md`
 mục 30) và chốt "cứ làm theo thế cho KHSX dễ dùng": xếp tên + thứ tự cột giống file KH, thêm Số PO, Số cont, Nệm. Người dùng giải thích nghĩa cột:
