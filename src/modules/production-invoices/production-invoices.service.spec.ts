@@ -2662,6 +2662,49 @@ describe('ProductionInvoicesService', () => {
       expect(productionOrdersService.createFromApproval).not.toHaveBeenCalled();
     });
 
+    it('PO đã có + phương án đã APPROVED -> chạy lại 3 nguồn mua ngoài sắt (tạo bù dòng mua), không tạo lệnh mới', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'APPROVED' }),
+      );
+      prisma.productionOrder.findUnique.mockResolvedValue({ id: 5n, poNumber: 'PO-5' });
+      cuttingProposalsService.findPreSolvedForInvoice.mockResolvedValue({
+        id: 1000n,
+        status: 'APPROVED',
+      });
+
+      await service.retryProductionOrder('7', '20', 'admin-1');
+
+      expect(pieceMaterialYieldPurchaseService.computeAndUpsertProposals).toHaveBeenCalledWith('7');
+      expect(consumableMaterialPurchaseService.computeAndUpsertProposals).toHaveBeenCalledWith('7');
+      expect(materialYieldRecipePurchaseService.computeAndUpsertProposals).toHaveBeenCalledWith(
+        '7',
+      );
+      expect(cuttingProposalsService.approve).not.toHaveBeenCalled();
+      expect(productionOrdersService.createFromApproval).not.toHaveBeenCalled();
+    });
+
+    it('tạo bù dòng mua mà 1 nguồn vẫn lỗi -> báo 409 nêu nguồn lỗi (không im lặng như đường tự động)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'APPROVED' }),
+      );
+      prisma.productionOrder.findUnique.mockResolvedValue({ id: 5n, poNumber: 'PO-5' });
+      cuttingProposalsService.findPreSolvedForInvoice.mockResolvedValue({
+        id: 1000n,
+        status: 'APPROVED',
+      });
+      consumableMaterialPurchaseService.computeAndUpsertProposals.mockRejectedValueOnce(
+        new Error('Transaction already closed'),
+      );
+
+      await expect(service.retryProductionOrder('7', '20', 'admin-1')).rejects.toThrow(
+        /vật tư tiêu hao: Transaction already closed/,
+      );
+      // 2 nguồn còn lại vẫn chạy
+      expect(materialYieldRecipePurchaseService.computeAndUpsertProposals).toHaveBeenCalled();
+    });
+
     it('CHẶN (409) nếu ProductionOrder đã tồn tại - không cần tạo lại', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(

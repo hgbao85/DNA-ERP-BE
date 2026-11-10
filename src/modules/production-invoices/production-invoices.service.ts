@@ -2070,13 +2070,20 @@ export class ProductionInvoicesService {
    * án có sẵn). Best-effort, tách try/catch riêng để lỗi nguồn này không che nguồn kia. `context`
    * chỉ để ghi log ("PI item 12" / "merged PI 3").
    */
-  private async computeNonSteelPurchaseProposals(piId: bigint, context: string): Promise<void> {
+  private async computeNonSteelPurchaseProposals(
+    piId: bigint,
+    context: string,
+    opts: { rethrow?: boolean } = {},
+  ): Promise<void> {
+    // Admin bấm "Tạo lại dòng mua ngoài sắt" (opts.rethrow) cần biết nguồn nào vẫn lỗi; đường tự động sau khi Sếp duyệt vẫn chỉ log.
+    const failed: string[] = [];
     // Tính lại nhu cầu mua nguyên liệu "vật tư thành phẩm" (PieceMaterialYield, vd thanh nhôm/tấm
     // sắt lá) cho CẢ PI mỗi khi có thêm 1 SKU được duyệt, không phải nút bấm riêng (không có màn
     // hình riêng, xem changelog 2026-08-22 mục 15).
     try {
       await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(piId.toString());
     } catch (error) {
+      failed.push(`vật tư thành phẩm theo mảnh: ${(error as Error).message}`);
       this.logger.error(
         `Auto piece-material-yield-purchase trigger failed for ${context}: ${(error as Error).message}`,
       );
@@ -2088,6 +2095,7 @@ export class ProductionInvoicesService {
     try {
       await this.consumableMaterialPurchaseService.computeAndUpsertProposals(piId.toString());
     } catch (error) {
+      failed.push(`vật tư tiêu hao: ${(error as Error).message}`);
       this.logger.error(
         `Auto consumable-material-purchase trigger failed for ${context}: ${(error as Error).message}`,
       );
@@ -2099,8 +2107,14 @@ export class ProductionInvoicesService {
     try {
       await this.materialYieldRecipePurchaseService.computeAndUpsertProposals(piId.toString());
     } catch (error) {
+      failed.push(`vật tư thành phẩm không gắn mảnh: ${(error as Error).message}`);
       this.logger.error(
         `Auto material-yield-recipe-purchase trigger failed for ${context}: ${(error as Error).message}`,
+      );
+    }
+    if (opts.rethrow && failed.length > 0) {
+      throw new ConflictException(
+        `Tạo dòng mua ngoài sắt cho ${context} chưa xong (${failed.join('; ')}) - bấm thử lại sau`,
       );
     }
   }
@@ -2166,6 +2180,12 @@ export class ProductionInvoicesService {
         await this.resolvePiNotifications('PRODUCTION_INVOICE_ITEM', item.id, [
           'PI_PRODUCTION_ORDER_FAILED',
         ]);
+        return this.toItemResponseDto(item);
+      }
+      // 10/11/2026: phương án đã duyệt mà bước tạo dòng mua ngoài sắt từng lỗi (vd transaction quá giờ) thì không còn đường
+      // nào tạo bù - chạy lại 3 nguồn (tự idempotent: chỉ tính lại, không tạo dòng trùng, kể cả khi đã có dòng đã ký).
+      if (preSolved?.status === CuttingProposalStatus.APPROVED) {
+        await this.computeNonSteelPurchaseProposals(pi.id, `PI item ${item.id}`, { rethrow: true });
         return this.toItemResponseDto(item);
       }
       throw new ConflictException(
