@@ -1,11 +1,20 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { SuppliersService } from './suppliers.service';
 
 describe('SuppliersService', () => {
   let service: SuppliersService;
   let prisma: {
-    supplier: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock; delete: jest.Mock };
+    supplier: {
+      findMany: jest.Mock;
+      findUnique: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+      delete: jest.Mock;
+    };
   };
 
   const existingSupplier = {
@@ -21,6 +30,7 @@ describe('SuppliersService', () => {
   beforeEach(() => {
     prisma = {
       supplier: {
+        findMany: jest.fn().mockResolvedValue([]),
         findUnique: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
@@ -31,13 +41,67 @@ describe('SuppliersService', () => {
   });
 
   describe('create', () => {
-    it('creates a supplier - no name-uniqueness constraint, 2 suppliers may share a name', async () => {
+    it('creates a supplier and checks duplicate names among non-deleted rows', async () => {
       prisma.supplier.create.mockResolvedValue(existingSupplier);
 
       const result = await service.create({ name: 'NCC Sat Thanh Cong' });
 
       expect(result.id).toBe('1');
-      expect(prisma.supplier.findUnique).not.toHaveBeenCalled();
+      expect(prisma.supplier.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { deletedAt: null } }) as unknown,
+      );
+    });
+
+    it('passes isActive through when given (test tay 09/11 điểm 21)', async () => {
+      prisma.supplier.create.mockResolvedValue(existingSupplier);
+
+      await service.create({ name: 'A', isActive: false });
+
+      expect(prisma.supplier.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ isActive: false }) as unknown,
+      });
+    });
+
+    it('rejects a duplicate name ignoring case and extra spaces with 409 (điểm 20)', async () => {
+      prisma.supplier.findMany.mockResolvedValue([{ name: 'Thép Kim Phát' }]);
+
+      const p = service.create({ name: '  thép   KIM phát ' });
+
+      await expect(p).rejects.toThrow(ConflictException);
+      await expect(p).rejects.toThrow(
+        'Đã có nhà cung cấp tên "thép KIM phát" - kiểm tra lại, không tạo trùng',
+      );
+      expect(prisma.supplier.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('update name', () => {
+    it('excludes the supplier itself when checking duplicates', async () => {
+      prisma.supplier.findUnique.mockResolvedValue(existingSupplier);
+      prisma.supplier.update.mockResolvedValue(existingSupplier);
+
+      await service.update('1', { name: 'NCC Sat Thanh Cong' });
+
+      expect(prisma.supplier.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { deletedAt: null, id: { not: 1n } } }),
+      );
+    });
+
+    it('rejects renaming to another supplier name with 409', async () => {
+      prisma.supplier.findUnique.mockResolvedValue(existingSupplier);
+      prisma.supplier.findMany.mockResolvedValue([{ name: 'Khac' }]);
+
+      await expect(service.update('1', { name: 'khac' })).rejects.toThrow(ConflictException);
+      expect(prisma.supplier.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('name DTO validation (điểm 19)', () => {
+    it('trims the name and rejects a blank-only name with the Vietnamese message', async () => {
+      const dto = plainToInstance(CreateSupplierDto, { name: '   ' });
+      expect(dto.name).toBe('');
+      const errors = await validate(dto);
+      expect(errors[0].constraints?.isNotEmpty).toBe('Tên nhà cung cấp không được để trống');
     });
   });
 

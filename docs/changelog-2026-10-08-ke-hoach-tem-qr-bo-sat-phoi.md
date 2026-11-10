@@ -1,6 +1,6 @@
 # Changelog 2026-10-08 — Kế hoạch tem QR cho bó sắt Phôi (chống khai khống số đoạn cắt)
 
-> Trạng thái: **MỤC 57.7 (2026-10-20): SEED PRODUCTION ĐÃ CHẠY sau khi người dùng push "Fix QLSX" — QLSX (`PRODUCTION_MANAGER`) 26 → 28 quyền (+`QC_REVIEW:VIEW`, +`MATERIAL_GROUP:VIEW`), gỡ 0, không tạo admin mới; có sao lưu trước.** **MỤC 57 (2026-10-20): ĐÃ fetch + pull nhánh mới nhất (BE main đã mới nhất; FE demo → 3704086, gộp xung đột Hướng dẫn: giữ 4 bài có ảnh của nhánh mới, bổ sung nội dung mới vào, giữ thêm bài "luồng 6 bước" + bài tab Công nhân) và ĐÃ STAGE phần QR/QLSX ở cả 2 repo (BE 28 file, FE 43 file) — CHƯA commit, người dùng tự commit; file không thuộc phần này để ngoài stage (57.3).** **MỤC 49–56 (2026-10-19→20): đổi "Đảo" → "Hủy", UI/UX QLSX đợt 1 + đợt 2, viết lại chữ màn công nhân, bổ sung Hướng dẫn sử dụng — chi tiết từng mục bên dưới.** **MỤC 48 (2026-10-19): ĐÃ LÀM giai đoạn A — thẻ PI của tổ có thanh 3 ngăn (Đạt/Chờ KCS/Chưa gửi), % theo công đoạn, dòng "Còn thiếu N loại sắt (M chưa nhận sắt) · K đợt chờ"; ngăn "còn thiếu gì" (Còn thiếu / Tất cả / Bất thường, chọn SKU, < 900px toàn màn hình, Esc/focus) qua API mới `GET /floor/queue/:stage/detail/:piId`; hỏi lại khi "Chuyển PI tiếp" lúc còn thiếu (nút an toàn mặc định); BE 457 + FE 207 test, live-test PI-040; chưa commit; C chưa làm.** **MỤC 47 (2026-10-19): ĐÃ LÀM giai đoạn B — % tổ Phôi = Cắt + công đoạn phụ + mảnh Phôi, cùng số ở thẻ PI "Sản lượng xưởng" và "Tổng hợp lệnh SX" (PI-040: 17% cả 2 nơi), bảng Phôi tách cột Chưa gửi/Chờ KCS/Đạt/Lỗi/Còn thiếu, sửa nhãn "Đã báo" Hàn/Sơn, QLSX nhận realtime KCS (+ `QC_REVIEW:VIEW`, production phải seed lại); BE 538 + FE 201 test; chưa commit; A/C chưa làm.** **MỤC 46 (2026-10-19): REVIEW đối chiếu changelog ↔ code (chỉ đọc) — mục 21–39 đã commit (PR #42 QR-QLSX), 40–42 chưa commit; giai đoạn B mục 45 đang dở (BE có `openQty`/`awaitingQcQty` chưa test, `computeProgress` chưa đổi, `floor-progress.util.ts` chết, FE chưa đọc); còn nguyên: nhãn `passedQty` "Đã báo", hết phiên → `/login`, lỗi 500 tiếng Anh; LỖI MỚI: QLSX không nhận realtime KCS (thiếu `QC_REVIEW:VIEW`) nên tab Báo cáo không tự tải lại.** **MỤC 45 (2026-10-16): PLAN màn điều hành QLSX cho Phôi/Hàn/Sơn — B thống nhất số + sửa nhãn sai, A thẻ PI tổ + ngăn "còn thiếu gì" + hỏi lại khi chuyển PI sớm, C Hướng dẫn cắt chỉ xem; ~4,5–6 ngày; chờ chốt 4 câu ở 45.9, chưa sửa code.** **MỤC 44 (2026-10-16): rà UX QLSX ~6/10 (đã đính chính nguyên nhân 30% vs 17%).** **MỤC 43 (2026-10-16): người dùng hỏi màn "Lệnh sản xuất" (PI + chiều dài thanh sắt) của tổ Phôi/Hàn/Sơn có bị xoá không — KHÔNG xoá, vẫn có cho tài khoản thống kê cũ; QLSX chưa có màn này (3 màn đã có chế độ chỉ-xem); QLSX thiếu quyền `QC_REVIEW:VIEW`; chờ người dùng chọn, chưa sửa code.** **MỤC 42 (2026-10-16): PLAYWRIGHT thử điện thoại công nhân (Pixel 7 · iPhone 14 · Android yếu CPU×4/3G, mở bằng http://IP Wi-Fi): 14 bài × 3 máy, lần cuối 41/42 qua (1 trang trắng đơn lẻ không tái hiện), đột biến "gửi lại cùng khoá" bị bắt; phát hiện: phiên hết hạn đưa công nhân sang /login ERP, lỗi 500 hiện tiếng Anh; chưa commit.** **MỤC 41 (2026-10-16): THỬ TẢI phần QR bằng script mới `test/load/floor-load.mjs` (`npm run load:floor`) — 24 công nhân ảo báo cùng lúc trên bản sao DB: số khớp từng người, gửi lại cùng khoá chỉ ghi 1 lần, đảo + gửi KCS lúc đang báo không lỗi/treo, cả xưởng 1 IP không chạm giới hạn; MỘT cảnh báo: 24 người đăng nhập cùng phút từ 1 IP → 8 vào ngay, 16 bị chặn, ~125 giây mới vào hết (giữ nguyên giới hạn 8/phút theo quyết định cũ — chưa đổi); điện thoại thật/pilot chưa làm; chưa commit.** **MỤC 40 (2026-10-15): QA phần QR — BE test đơn vị 1700 → 1828, độ phủ `modules/floor` 66,9% → 89,5%, thêm ma trận quyền 29 route + khoá giới hạn 8 lần/phút, kiểm tra đột biến 30/30 bị bắt, build sạch kiểu Vercel (`npm ci` + `next build`) qua; còn hổng: chưa có test tích hợp DB thật / Playwright cho luồng QR; chưa commit.** **MỤC 39 (2026-10-15): màn "Báo cáo" — ô chọn tháng/năm đổi từ `<select>` sang lịch nổi (`MonthYearPicker`), sửa nút ◀ ▶ (bị bóp còn 6px bởi CSS toàn cục + bị tách khỏi ô ngày); chỉ FE, chưa commit; FE 169 test, thử thật trên trình duyệt.** **MỤC 38 (2026-10-15): SEED PRODUCTION ĐÃ CHẠY (có sao lưu trước + kiểm lại: quyền `FLOOR_REPORT` và vai trò `FLOOR_WORKER` đã có, không gỡ quyền nào, không tạo admin mới); còn đặt `TRUST_PROXY_HOPS`, đo IP, `floorPublicUrl`, IP xưởng, đổi mật khẩu DB.** **MỤC 38 (cùng ngày): CHUẨN BỊ COMMIT/DEPLOY — đã cập nhật `package-lock.json` của FE (thiếu 3 gói `qrcode`, `jsqr`, `@types/qrcode` nên `npm ci` trên Vercel sẽ lỗi); ghi lại việc cần làm ở Render/Vercel và các file không nên commit; CHƯA commit, CHƯA deploy (người dùng: deploy sau khi ổn thỏa ở local).** **MỤC 37 (2026-10-15): GỠ BỎ hẳn icon và nút quét QR trong app công nhân theo yêu cầu người dùng (công nhân chỉ quét tem bằng app camera của điện thoại); xoá `QrScanner.tsx`, `qrToken.*`, đèn pin/rung/bíp; FE 169 test; chưa commit.** **MỤC 36 (2026-10-15): ĐÃ LÀM 3 điểm UI màn báo (ô nhập lên trên nếp gập, xác nhận MỌI lần lưu, "Sản lượng của tôi" theo kỳ/ngày) + màn "Báo cáo sản lượng đạt KCS" cho QLSX (ngày/tháng/năm/khoảng, lọc tổ + từng công nhân, biểu đồ, Excel; mốc = ngày KCS duyệt giờ VN) + công nhân xem số đạt/lỗi của CHÍNH mình (`/floor/my-stats`, id từ token); BE 1692 + FE 174 test, đối chiếu SQL 8/8 khớp, axe 0 vi phạm; sửa lỗi làm tròn "100%" khi còn lỗi; chưa commit; chưa thử phần mới trên điện thoại thật.** **MỤC 35 (2026-10-15): nhận xét UI màn báo (~7.5/10) + đề xuất màn báo cáo — ĐÃ LÀM ở mục 36.** **MỤC 33.6 (2026-10-15): SỬA lỗi nút "Lưu" báo "Có lỗi, thử lại" khi công nhân mở app qua `http://IP` (không HTTPS) — `crypto.randomUUID` chỉ có ở HTTPS/localhost; thay bằng `newUuid()` có phương án dự phòng + test chốt chặn; FE 130 test, đã chạy lại luồng Lưu thật; chưa commit; điện thoại cần tải lại trang. 33.5: máy dev khởi động lại, IP đổi thành <IP máy dev 3>, đã dựng lại.** **MỤC 34 (2026-10-14): ĐỔI luồng đăng nhập công nhân theo phản hồi bước 0 — bỏ nút "Lần đầu đăng nhập?", nhập tên là BE báo đã có PIN hay chưa (chỉ nhập PIN / đặt PIN + nhập lại), endpoint mới `/auth/pin-status` chống dò tài khoản; BE 1652 + FE 126 test, axe 0 vi phạm; chưa commit; giới hạn đăng nhập 8/phút/IP: ĐÃ QUYẾT giữ nguyên (2026-10-15, mỗi công nhân 1 điện thoại + 1 tài khoản).** **MỤC 33 (2026-10-14): bước 0 — người dùng tự đóng vai công nhân thử ở mạng văn phòng (IPv4 công cộng <IP công cộng văn phòng, đo 14/10>, không IPv6, nghi bị NAT); ĐÃ DỰNG môi trường thử qua Wi-Fi local (cấu hình tạm liệt kê ở 33.1, chờ hoàn nguyên); bỏ việc thử đèn pin/rung/bíp trên máy thật.** **MỤC 32 (2026-10-14): ĐÃ LÀM giai đoạn 1 cải thiện UX màn công nhân (nhận sắt ô trống + hỏi khi lệch, tương phản/cỡ chữ riêng cho /floor, đèn pin/rung/bíp + gợi ý ở bộ quét, lỗi mạng rõ ràng, truy cập; axe 0 vi phạm cả sáng/tối; FE 126 test); chỉ FE, chưa commit; còn bước 0, GĐ2–4.** **MỤC 31 (2026-10-14): KẾ HOẠCH cải thiện UI/UX (tự chấm 7/10 → mục tiêu ≥ 8.5): bước 0 đo bằng thử thật + audit truy cập, GĐ1 làm nhanh, GĐ2 hàng chờ gửi lại + tự huỷ lần báo, GĐ3 QLSX, GĐ4 cắt cửa; CHƯA LÀM, chờ chốt 4 quyết định (31.5).** **MỤC 30 (2026-10-14): ĐÃ SỬA 2 điểm ở 29.4 ("Mở lại PI vừa chuyển" + tab Công nhân gọn ở màn hẹp), test thêm quét camera/nhận sắt giao diện/tổ Sơn và chạy thử IMAGE DOCKER production trên DB sạch (18/18); chưa commit.** **MỤC 29 (2026-10-14): ĐÃ TEST LOCAL TOÀN DIỆN (API ~230 kiểm tra, mô phỏng proxy Render, DB sạch, giao diện 3 vai) — không có lỗi code; còn quét camera thật + Render thật; chưa commit.** **MỤC 28 (2026-10-13, bổ sung 28.6 ngày 2026-10-14): ĐÃ CODE giới hạn mạng công ty cho công nhân (Sếp chốt "công nhân thôi, ai có chức năng quét mã"): danh sách IP ở Cấu hình hệ thống, chặn đăng nhập/đặt PIN/gia hạn phiên/mọi request; đã live-test, chưa commit. Production (Render) BẮT BUỘC đặt TRUST_PROXY_HOPS — đã khai trong `render.yaml`, số lớp phải kiểm bằng thực tế (28.6).** **MỤC 27 (2026-10-13): địa chỉ ERP in lên tem QR là cấu hình ở màn Admin (QLSX chỉ xem); GHI NHẬN yêu cầu mới của Sếp "chỉ đăng nhập được từ mạng công ty" (27.4, chưa làm, cần chốt thiết kế).** **MỤC 26 (2026-10-13): ĐÃ CODE 3 việc còn thiếu của plan — nhắc QLSX (đủ số / đợt chờ quá 4 giờ), công đoạn phụ tách đợt theo công nhân, thẻ chờ gửi KCS hiện "đã báo/cần" + cảnh báo vượt (kể cả sắt vào–đoạn ra); đã live-test, chưa commit. Phần code theo plan v10 coi như đủ; còn thử thật ở xưởng + ẩn màn cũ.** **MỤC 25 (2026-10-13): ĐÃ CODE công nhân tự đặt PIN ở lần đăng nhập đầu (QLSX không biết PIN) + khoá tạm 15 phút sau 5 lần nhập sai; đã live-test, chưa commit.** **MỤC 24 (2026-10-13): ĐÃ CODE màn chung QLSX "Sản lượng xưởng" (kiểm + Gửi KCS + đảo lần báo, hàng đợi PI + "Chuyển PI tiếp", máy + in tem QR, tài khoản công nhân) + review UI/UX với danh sách đề xuất cải thiện (24.4); đã thử trên trình duyệt, chưa commit. Cả 4 phần kế hoạch v10 đã có code; còn thử thật + các cải thiện ở 24.4.** **MỤC 23 (2026-10-13): ĐÃ CODE màn quét trên điện thoại (FE, trang `/floor?ws=<mã máy>`) — đăng nhập PIN, nút quét QR trong app (23.4), báo cắt/công đoạn/mảnh, nhận sắt, bù lỗi, "Sản lượng của tôi"; đã thử trên trình duyệt cỡ điện thoại, chưa commit. Còn màn chung QLSX.** **MỤC 22 (2026-10-13): ĐÃ CODE phần máy chủ (BE) cho QR — điểm làm việc + mã QR, tài khoản công nhân (PIN), hàng đợi PI theo tổ + "Chuyển PI tiếp", API màn quét (báo cắt/công đoạn/mảnh, nhận sắt, "Sản lượng của tôi"), QLSX kiểm + "Gửi KCS" + đảo lần báo có lý do, mỗi công nhân 1 đợt riêng; đã live-test bằng API, chưa commit. giao diện: màn quét đã làm ở mục 23, màn chung QLSX chưa.** **MỤC 21 (2026-10-13): ĐÃ CODE phần nền trước QR — lưu người báo (`floor_reports`), chống lưu trùng (Idempotency-Key), nhận sắt có số cây thực nhận + báo lệch, cảnh báo sắt vào–đoạn ra; đã live-test, chưa commit. Phần QR vẫn chỉ là kế hoạch.** **MỤC 20 (2026-10-12): đánh giá plan v10 ~7/10 (mục 20.2), đề xuất bản tinh gọn B (chờ chốt); mục 20.4–20.5: account công nhân để sau này tính công (nhân sự làm sau), giờ chỉ màn "Sản lượng của tôi" + đợt theo người.** **MỤC 15 (2026-10-12) ĐỔI HƯỚNG theo Sếp — QR dán tại máy, công nhân tự báo, QLSX gửi KCS; thay mục 6–14.** Phần QR: **BE (mục 22), màn quét FE (mục 23), màn chung QLSX (mục 24) đều đã code; chưa thử xưởng thật** (phần nền đã code, mục 21); 6 lỗi giao diện phát hiện khi live-test **ĐÃ SỬA (mục 12, FE)**. Mục 1-5 là bản đầu (tem cho bó ĐOẠN đầu ra). **Mục 6 (cùng ngày) ĐỔI
+> Trạng thái: **MỤC 64 (2026-11-06): ĐÃ LÀM ý 2 của anh Nhân - "Đồng bộ Phôi – Hàn" tính theo ĐỦ CÔNG ĐOẠN (cắt + uốn/dập/tán/nhấn… của dòng định mức), mỗi công đoạn chỉ đếm đoạn ĐẠT KCS (đề xuất IT, câu 1.4 chờ anh Nhân - đổi bằng 1 hằng), thêm cột "Chưa qua KCS" và "nghẽn ở <công đoạn>"; BE jest 33/33, nest build OK, FE vitest 415/415; chạy thử trên `dna_erp_dongbo` (đã migrate lên bản mới + kịch bản KCS công đoạn phụ) khớp tính tay; file Word trình Sếp dựng lại; chưa commit. Mức 2 (chọn mảnh) vẫn chờ 6 câu.** **MỤC 63 (2026-11-04): anh Nhân chốt đồng bộ ĐÚNG THEO MẢNH (Phôi chọn mảnh trước khi báo, bỏ ước tính) + đoạn phải qua ĐỦ công đoạn mới tính (thay "chỉ Cắt" của mục 61) - mới review, chờ chốt 5 câu, chưa sửa code.** **MỤC 62 (2026-11-04): ĐÃ pull FE `demo` → 43ab760 (fast-forward, gộp tay 3 file trùng, 0 xung đột), giữ nguyên mọi thay đổi chưa commit; FE tsc 0, vitest 280/280.** **MỤC 61 (2026-11-04): "Đồng bộ Phôi – Hàn" ĐỔI SANG CHỈ TÍNH THEO CẮT (đủ đoạn đã cắt đạt, bỏ dập/tán/uốn) — BE + FE + Hướng dẫn + file Word trình Sếp dựng lại; BE jest 28/28, nest build OK, FE vitest 18/18; chạy thử lại trên `dna_erp_dongbo` khớp tính tay; chưa commit.** **MỤC 59 (2026-11-04): ĐÃ LÀM mức 1 "Đồng bộ Phôi – Hàn" (ước tính) — BE `GET /piece-sync-board` + tab mới trong "Tổng hợp lệnh SX" + cột "Thực có" màn Hàn + bài Hướng dẫn; 5 thợ song song, Opus review; BE jest module 28/28, nest build OK, FE vitest 279/279; ĐÃ chạy thử trên DB riêng `dna_erp_dongbo` (59.1, kịch bản tự dựng - production 26/10 chưa có lệnh SX); chưa commit.** **MỤC 57.7 (2026-10-20): SEED PRODUCTION ĐÃ CHẠY sau khi người dùng push "Fix QLSX" — QLSX (`PRODUCTION_MANAGER`) 26 → 28 quyền (+`QC_REVIEW:VIEW`, +`MATERIAL_GROUP:VIEW`), gỡ 0, không tạo admin mới; có sao lưu trước.** **MỤC 57 (2026-10-20): ĐÃ fetch + pull nhánh mới nhất (BE main đã mới nhất; FE demo → 3704086, gộp xung đột Hướng dẫn: giữ 4 bài có ảnh của nhánh mới, bổ sung nội dung mới vào, giữ thêm bài "luồng 6 bước" + bài tab Công nhân) và ĐÃ STAGE phần QR/QLSX ở cả 2 repo (BE 28 file, FE 43 file) — CHƯA commit, người dùng tự commit; file không thuộc phần này để ngoài stage (57.3).** **MỤC 49–56 (2026-10-19→20): đổi "Đảo" → "Hủy", UI/UX QLSX đợt 1 + đợt 2, viết lại chữ màn công nhân, bổ sung Hướng dẫn sử dụng — chi tiết từng mục bên dưới.** **MỤC 48 (2026-10-19): ĐÃ LÀM giai đoạn A — thẻ PI của tổ có thanh 3 ngăn (Đạt/Chờ KCS/Chưa gửi), % theo công đoạn, dòng "Còn thiếu N loại sắt (M chưa nhận sắt) · K đợt chờ"; ngăn "còn thiếu gì" (Còn thiếu / Tất cả / Bất thường, chọn SKU, < 900px toàn màn hình, Esc/focus) qua API mới `GET /floor/queue/:stage/detail/:piId`; hỏi lại khi "Chuyển PI tiếp" lúc còn thiếu (nút an toàn mặc định); BE 457 + FE 207 test, live-test PI-040; chưa commit; C chưa làm.** **MỤC 47 (2026-10-19): ĐÃ LÀM giai đoạn B — % tổ Phôi = Cắt + công đoạn phụ + mảnh Phôi, cùng số ở thẻ PI "Sản lượng xưởng" và "Tổng hợp lệnh SX" (PI-040: 17% cả 2 nơi), bảng Phôi tách cột Chưa gửi/Chờ KCS/Đạt/Lỗi/Còn thiếu, sửa nhãn "Đã báo" Hàn/Sơn, QLSX nhận realtime KCS (+ `QC_REVIEW:VIEW`, production phải seed lại); BE 538 + FE 201 test; chưa commit; A/C chưa làm.** **MỤC 46 (2026-10-19): REVIEW đối chiếu changelog ↔ code (chỉ đọc) — mục 21–39 đã commit (PR #42 QR-QLSX), 40–42 chưa commit; giai đoạn B mục 45 đang dở (BE có `openQty`/`awaitingQcQty` chưa test, `computeProgress` chưa đổi, `floor-progress.util.ts` chết, FE chưa đọc); còn nguyên: nhãn `passedQty` "Đã báo", hết phiên → `/login`, lỗi 500 tiếng Anh; LỖI MỚI: QLSX không nhận realtime KCS (thiếu `QC_REVIEW:VIEW`) nên tab Báo cáo không tự tải lại.** **MỤC 45 (2026-10-16): PLAN màn điều hành QLSX cho Phôi/Hàn/Sơn — B thống nhất số + sửa nhãn sai, A thẻ PI tổ + ngăn "còn thiếu gì" + hỏi lại khi chuyển PI sớm, C Hướng dẫn cắt chỉ xem; ~4,5–6 ngày; chờ chốt 4 câu ở 45.9, chưa sửa code.** **MỤC 44 (2026-10-16): rà UX QLSX ~6/10 (đã đính chính nguyên nhân 30% vs 17%).** **MỤC 43 (2026-10-16): người dùng hỏi màn "Lệnh sản xuất" (PI + chiều dài thanh sắt) của tổ Phôi/Hàn/Sơn có bị xoá không — KHÔNG xoá, vẫn có cho tài khoản thống kê cũ; QLSX chưa có màn này (3 màn đã có chế độ chỉ-xem); QLSX thiếu quyền `QC_REVIEW:VIEW`; chờ người dùng chọn, chưa sửa code.** **MỤC 42 (2026-10-16): PLAYWRIGHT thử điện thoại công nhân (Pixel 7 · iPhone 14 · Android yếu CPU×4/3G, mở bằng http://IP Wi-Fi): 14 bài × 3 máy, lần cuối 41/42 qua (1 trang trắng đơn lẻ không tái hiện), đột biến "gửi lại cùng khoá" bị bắt; phát hiện: phiên hết hạn đưa công nhân sang /login ERP, lỗi 500 hiện tiếng Anh; chưa commit.** **MỤC 41 (2026-10-16): THỬ TẢI phần QR bằng script mới `test/load/floor-load.mjs` (`npm run load:floor`) — 24 công nhân ảo báo cùng lúc trên bản sao DB: số khớp từng người, gửi lại cùng khoá chỉ ghi 1 lần, đảo + gửi KCS lúc đang báo không lỗi/treo, cả xưởng 1 IP không chạm giới hạn; MỘT cảnh báo: 24 người đăng nhập cùng phút từ 1 IP → 8 vào ngay, 16 bị chặn, ~125 giây mới vào hết (giữ nguyên giới hạn 8/phút theo quyết định cũ — chưa đổi); điện thoại thật/pilot chưa làm; chưa commit.** **MỤC 40 (2026-10-15): QA phần QR — BE test đơn vị 1700 → 1828, độ phủ `modules/floor` 66,9% → 89,5%, thêm ma trận quyền 29 route + khoá giới hạn 8 lần/phút, kiểm tra đột biến 30/30 bị bắt, build sạch kiểu Vercel (`npm ci` + `next build`) qua; còn hổng: chưa có test tích hợp DB thật / Playwright cho luồng QR; chưa commit.** **MỤC 39 (2026-10-15): màn "Báo cáo" — ô chọn tháng/năm đổi từ `<select>` sang lịch nổi (`MonthYearPicker`), sửa nút ◀ ▶ (bị bóp còn 6px bởi CSS toàn cục + bị tách khỏi ô ngày); chỉ FE, chưa commit; FE 169 test, thử thật trên trình duyệt.** **MỤC 38 (2026-10-15): SEED PRODUCTION ĐÃ CHẠY (có sao lưu trước + kiểm lại: quyền `FLOOR_REPORT` và vai trò `FLOOR_WORKER` đã có, không gỡ quyền nào, không tạo admin mới); còn đặt `TRUST_PROXY_HOPS`, đo IP, `floorPublicUrl`, IP xưởng, đổi mật khẩu DB.** **MỤC 38 (cùng ngày): CHUẨN BỊ COMMIT/DEPLOY — đã cập nhật `package-lock.json` của FE (thiếu 3 gói `qrcode`, `jsqr`, `@types/qrcode` nên `npm ci` trên Vercel sẽ lỗi); ghi lại việc cần làm ở Render/Vercel và các file không nên commit; CHƯA commit, CHƯA deploy (người dùng: deploy sau khi ổn thỏa ở local).** **MỤC 37 (2026-10-15): GỠ BỎ hẳn icon và nút quét QR trong app công nhân theo yêu cầu người dùng (công nhân chỉ quét tem bằng app camera của điện thoại); xoá `QrScanner.tsx`, `qrToken.*`, đèn pin/rung/bíp; FE 169 test; chưa commit.** **MỤC 36 (2026-10-15): ĐÃ LÀM 3 điểm UI màn báo (ô nhập lên trên nếp gập, xác nhận MỌI lần lưu, "Sản lượng của tôi" theo kỳ/ngày) + màn "Báo cáo sản lượng đạt KCS" cho QLSX (ngày/tháng/năm/khoảng, lọc tổ + từng công nhân, biểu đồ, Excel; mốc = ngày KCS duyệt giờ VN) + công nhân xem số đạt/lỗi của CHÍNH mình (`/floor/my-stats`, id từ token); BE 1692 + FE 174 test, đối chiếu SQL 8/8 khớp, axe 0 vi phạm; sửa lỗi làm tròn "100%" khi còn lỗi; chưa commit; chưa thử phần mới trên điện thoại thật.** **MỤC 35 (2026-10-15): nhận xét UI màn báo (~7.5/10) + đề xuất màn báo cáo — ĐÃ LÀM ở mục 36.** **MỤC 33.6 (2026-10-15): SỬA lỗi nút "Lưu" báo "Có lỗi, thử lại" khi công nhân mở app qua `http://IP` (không HTTPS) — `crypto.randomUUID` chỉ có ở HTTPS/localhost; thay bằng `newUuid()` có phương án dự phòng + test chốt chặn; FE 130 test, đã chạy lại luồng Lưu thật; chưa commit; điện thoại cần tải lại trang. 33.5: máy dev khởi động lại, IP đổi thành <IP máy dev 3>, đã dựng lại.** **MỤC 34 (2026-10-14): ĐỔI luồng đăng nhập công nhân theo phản hồi bước 0 — bỏ nút "Lần đầu đăng nhập?", nhập tên là BE báo đã có PIN hay chưa (chỉ nhập PIN / đặt PIN + nhập lại), endpoint mới `/auth/pin-status` chống dò tài khoản; BE 1652 + FE 126 test, axe 0 vi phạm; chưa commit; giới hạn đăng nhập 8/phút/IP: ĐÃ QUYẾT giữ nguyên (2026-10-15, mỗi công nhân 1 điện thoại + 1 tài khoản).** **MỤC 33 (2026-10-14): bước 0 — người dùng tự đóng vai công nhân thử ở mạng văn phòng (IPv4 công cộng <IP công cộng văn phòng, đo 14/10>, không IPv6, nghi bị NAT); ĐÃ DỰNG môi trường thử qua Wi-Fi local (cấu hình tạm liệt kê ở 33.1, chờ hoàn nguyên); bỏ việc thử đèn pin/rung/bíp trên máy thật.** **MỤC 32 (2026-10-14): ĐÃ LÀM giai đoạn 1 cải thiện UX màn công nhân (nhận sắt ô trống + hỏi khi lệch, tương phản/cỡ chữ riêng cho /floor, đèn pin/rung/bíp + gợi ý ở bộ quét, lỗi mạng rõ ràng, truy cập; axe 0 vi phạm cả sáng/tối; FE 126 test); chỉ FE, chưa commit; còn bước 0, GĐ2–4.** **MỤC 31 (2026-10-14): KẾ HOẠCH cải thiện UI/UX (tự chấm 7/10 → mục tiêu ≥ 8.5): bước 0 đo bằng thử thật + audit truy cập, GĐ1 làm nhanh, GĐ2 hàng chờ gửi lại + tự huỷ lần báo, GĐ3 QLSX, GĐ4 cắt cửa; CHƯA LÀM, chờ chốt 4 quyết định (31.5).** **MỤC 30 (2026-10-14): ĐÃ SỬA 2 điểm ở 29.4 ("Mở lại PI vừa chuyển" + tab Công nhân gọn ở màn hẹp), test thêm quét camera/nhận sắt giao diện/tổ Sơn và chạy thử IMAGE DOCKER production trên DB sạch (18/18); chưa commit.** **MỤC 29 (2026-10-14): ĐÃ TEST LOCAL TOÀN DIỆN (API ~230 kiểm tra, mô phỏng proxy Render, DB sạch, giao diện 3 vai) — không có lỗi code; còn quét camera thật + Render thật; chưa commit.** **MỤC 28 (2026-10-13, bổ sung 28.6 ngày 2026-10-14): ĐÃ CODE giới hạn mạng công ty cho công nhân (Sếp chốt "công nhân thôi, ai có chức năng quét mã"): danh sách IP ở Cấu hình hệ thống, chặn đăng nhập/đặt PIN/gia hạn phiên/mọi request; đã live-test, chưa commit. Production (Render) BẮT BUỘC đặt TRUST_PROXY_HOPS — đã khai trong `render.yaml`, số lớp phải kiểm bằng thực tế (28.6).** **MỤC 27 (2026-10-13): địa chỉ ERP in lên tem QR là cấu hình ở màn Admin (QLSX chỉ xem); GHI NHẬN yêu cầu mới của Sếp "chỉ đăng nhập được từ mạng công ty" (27.4, chưa làm, cần chốt thiết kế).** **MỤC 26 (2026-10-13): ĐÃ CODE 3 việc còn thiếu của plan — nhắc QLSX (đủ số / đợt chờ quá 4 giờ), công đoạn phụ tách đợt theo công nhân, thẻ chờ gửi KCS hiện "đã báo/cần" + cảnh báo vượt (kể cả sắt vào–đoạn ra); đã live-test, chưa commit. Phần code theo plan v10 coi như đủ; còn thử thật ở xưởng + ẩn màn cũ.** **MỤC 25 (2026-10-13): ĐÃ CODE công nhân tự đặt PIN ở lần đăng nhập đầu (QLSX không biết PIN) + khoá tạm 15 phút sau 5 lần nhập sai; đã live-test, chưa commit.** **MỤC 24 (2026-10-13): ĐÃ CODE màn chung QLSX "Sản lượng xưởng" (kiểm + Gửi KCS + đảo lần báo, hàng đợi PI + "Chuyển PI tiếp", máy + in tem QR, tài khoản công nhân) + review UI/UX với danh sách đề xuất cải thiện (24.4); đã thử trên trình duyệt, chưa commit. Cả 4 phần kế hoạch v10 đã có code; còn thử thật + các cải thiện ở 24.4.** **MỤC 23 (2026-10-13): ĐÃ CODE màn quét trên điện thoại (FE, trang `/floor?ws=<mã máy>`) — đăng nhập PIN, nút quét QR trong app (23.4), báo cắt/công đoạn/mảnh, nhận sắt, bù lỗi, "Sản lượng của tôi"; đã thử trên trình duyệt cỡ điện thoại, chưa commit. Còn màn chung QLSX.** **MỤC 22 (2026-10-13): ĐÃ CODE phần máy chủ (BE) cho QR — điểm làm việc + mã QR, tài khoản công nhân (PIN), hàng đợi PI theo tổ + "Chuyển PI tiếp", API màn quét (báo cắt/công đoạn/mảnh, nhận sắt, "Sản lượng của tôi"), QLSX kiểm + "Gửi KCS" + đảo lần báo có lý do, mỗi công nhân 1 đợt riêng; đã live-test bằng API, chưa commit. giao diện: màn quét đã làm ở mục 23, màn chung QLSX chưa.** **MỤC 21 (2026-10-13): ĐÃ CODE phần nền trước QR — lưu người báo (`floor_reports`), chống lưu trùng (Idempotency-Key), nhận sắt có số cây thực nhận + báo lệch, cảnh báo sắt vào–đoạn ra; đã live-test, chưa commit. Phần QR vẫn chỉ là kế hoạch.** **MỤC 20 (2026-10-12): đánh giá plan v10 ~7/10 (mục 20.2), đề xuất bản tinh gọn B (chờ chốt); mục 20.4–20.5: account công nhân để sau này tính công (nhân sự làm sau), giờ chỉ màn "Sản lượng của tôi" + đợt theo người.** **MỤC 15 (2026-10-12) ĐỔI HƯỚNG theo Sếp — QR dán tại máy, công nhân tự báo, QLSX gửi KCS; thay mục 6–14.** Phần QR: **BE (mục 22), màn quét FE (mục 23), màn chung QLSX (mục 24) đều đã code; chưa thử xưởng thật** (phần nền đã code, mục 21); 6 lỗi giao diện phát hiện khi live-test **ĐÃ SỬA (mục 12, FE)**. Mục 1-5 là bản đầu (tem cho bó ĐOẠN đầu ra). **Mục 6 (cùng ngày) ĐỔI
 > đề xuất chính** sang tem cho bó CÂY NGUYÊN theo kiểu cắt, sau khi đọc thêm FE + DNA-DEXUAT — mục 2-4 chỉ còn là
 > lịch sử / phương án phụ. **Mục 10 (2026-10-09): đã live-test toàn chuỗi, CHỐT đề xuất "QR theo kiểu cắt trên Hướng dẫn cắt" (thay mục 6–9), còn chờ Sếp chốt 3 việc ở 10.3.** Mục 8–9: lịch sử. Mục 7 đính chính mục 6: xưởng chỉ dùng máy laser, không cắt theo bó.
 
@@ -879,6 +879,38 @@ Người dùng xác nhận BE đặt ở **Render** (FE ở Vercel `https://erpd
 - **Kiểm tra:** `nest build` không lỗi, jest các thư mục auth + common + system-config 126/126, eslint sạch, FE `tsc` + eslint sạch. Chưa thử trên Render thật (cần deploy).
 - **Còn treo:** số lớp proxy thật trên Render (đo ở bước trên); IP xưởng Tây Sơn có cố định không (28.5); chưa commit (BE + FE).
 
+### 28.7. Kiểm IP mạng: văn phòng Quy Nhơn đã đo, xưởng Tây Sơn CHƯA đo (2026-10-30) — chỉ kiểm tra, không sửa code
+Người dùng hỏi: công ty dùng IP động thì giới hạn mạng thế nào; IP tĩnh/động, local/public. Người dùng đang ở văn phòng Quy Nhơn,
+còn công nhân quét mã ở xưởng Tây Sơn.
+- **Chỉ IP public có tác dụng.** IP local (`192.168.x.x`, router cấp) BE trên Render không thấy, tĩnh hay động đều không ảnh hưởng.
+  FE gọi thẳng BE (không có rewrite qua Vercel), nên BE thấy đúng IP public của mạng công nhân đang dùng.
+- **Đo từ máy ở văn phòng Quy Nhơn:** máy `<máy văn phòng>` → router `<router văn phòng>` → modem `<modem văn phòng>` (2 lớp NAT) → Viettel
+  `<IP nhà mạng>` → IP public `<IP công cộng văn phòng, đo 30–31/10>`. RDAP: dải `<dải IP nhà mạng>` VIETTEL-VN, ghi chú "dải IP cho dịch vụ ADSL" (gói thông thường)
+  → nhiều khả năng IP ĐỘNG; mới đo 1 lần nên chưa khẳng định. Không thấy dấu hiệu CGNAT (bước sau modem là IP public của Viettel).
+  Không ra Internet bằng IPv6; tên miền BE `dna-erp-be.onrender.com` chỉ có bản ghi A (IPv4) → hiện chưa vướng giới hạn "IPv6 không
+  nhận dải" (28.4).
+- **Đo lại 31/10 09:18 (người dùng hỏi Wi-Fi đang dùng là IP tĩnh hay động):** vẫn `<IP công cộng văn phòng, đo 30–31/10>` (3 trang đo khớp nhau). Lần này máy
+  `<máy văn phòng 2>` nối Wi-Fi "<Wi-Fi văn phòng 2>" thẳng vào modem `<modem văn phòng>`, chặng sau vẫn Viettel `<IP nhà mạng>` → các Wi-Fi văn phòng
+  chung 1 modem, chung 1 IP public. RDAP vẫn ghi "dải IP cho dịch vụ ADSL"; giữ nguyên ~1 ngày chưa chứng minh được là tĩnh.
+  **Người dùng cho biết thêm:** phần mềm chấm công (Wise Eye, máy chủ TAPusher `<máy chủ chấm công>` cùng dải mạng văn phòng) đang cấu hình theo
+  IP này. Đây là bằng chứng mạnh hơn nhãn RDAP (nhãn chỉ là tên chung của cả dải `/16`): nếu máy chấm công ở các nơi gửi về
+  `<IP công cộng văn phòng, đo 30–31/10>` và chạy ổn lâu ngày, không ai phải sửa IP, thì IP văn phòng **thực tế là tĩnh** → đánh giá đổi từ "nhiều khả năng động"
+  sang "nhiều khả năng tĩnh", chờ người lắp Wise Eye / hợp đồng Viettel xác nhận. Lưu ý: Wise Eye chỉ cần IP cố định ở đầu MÁY CHỦ (văn
+  phòng); máy chấm công ở xưởng là bên gửi đi nên đường xưởng có thể vẫn động → KHÔNG suy ra được IP xưởng Tây Sơn từ chuyện này. Người
+  lắp Wise Eye ở Phú An có thể biết đường mạng xưởng (nhà mạng, có IP tĩnh không).
+  Kết luận không đổi: IP văn phòng không ảnh hưởng việc quét mã (Admin/nhân viên văn phòng không bị giới hạn mạng); chỉ IP xưởng Tây Sơn quan trọng.
+- **Production đang TẮT giới hạn:** DB local (dựng từ backup production 26/10) có `floorAllowedIps = []`, `floorPublicUrl = NULL`.
+- **IP văn phòng KHÔNG dùng được cho xưởng:** Tây Sơn là đường mạng khác, IP public khác; phải đo tại xưởng (trang "what is my ip"
+  trên điện thoại nối Wi-Fi xưởng, hoặc Admin đăng nhập từ Wi-Fi xưởng bấm "Thêm IP hiện tại của tôi" - `GET /system-config/my-ip`
+  cần quyền `SYSTEM_CONFIG:VIEW`). Đo nhiều ngày / sau khi khởi động lại modem để biết tĩnh hay động; xem IP WAN trên modem để loại CGNAT.
+- **Nếu IP động:** IP đổi (modem khởi động lại, mất điện, nhà mạng tự đổi) → cả xưởng bị 403 ngay; Admin không bị chặn nên sửa được
+  bằng "Thêm IP hiện tại của tôi" từ Wi-Fi xưởng. Hướng xử lý theo thứ tự: (1) xin IP tĩnh nhà mạng cho đường xưởng; (2) tên miền
+  động (DDNS) - CẦN SỬA CODE vì danh sách hiện chỉ nhận IP/dải; (3) khai cả dải (vd `/16`) chỉ dùng tạm vì cho qua mọi khách cùng
+  nhà mạng; (4) sửa tay khi đổi, hoặc giữ danh sách rỗng như hiện nay.
+- **Còn treo:** chưa đo IP xưởng Tây Sơn; chưa biết Phú An / Phước An có chung đường mạng không (khác đường thì mỗi nơi 1 dòng);
+  chưa sửa code. Người dùng chốt (30/10): **đo IP xưởng trước**, có kết quả mới chọn IP tĩnh hay DDNS (DDNS = BE tra tên miền
+  định kỳ, ~5 file; không cứu được CGNAT).
+
 ## 29. Test local toàn diện trước khi lên Render (2026-10-14) — KHÔNG phát hiện lỗi code; ĐÃ COMMIT 2026-10-15 (QR-QLSX, xem mục 46.1)
 Người dùng yêu cầu "test ở local trước, kỹ càng". Không sửa code ở mục này; chỉ chạy test và ghi kết quả.
 
@@ -1170,6 +1202,7 @@ Chọn kỳ **Ngày / Tháng / Năm / Khoảng** (◀ ▶ lùi/tiến, không ti
 - **Ngày KCS duyệt vs ngày công nhân làm** (35.4-1) vẫn là câu hỏi mở nếu sau này tính công theo ngày làm.
 - Không có màn cho BOSS/ADMIN trên FE (BE đã cho phép gọi `/floor/stats`; tab chỉ hiện ở menu QLSX).
 - Luật "Advisor (Opus 5.5)" theo yêu cầu người dùng đã thêm vào `CLAUDE.md` của BE; bản `D:\DNA-ERP\CLAUDE.md` bị hệ thống chặn quyền sửa nên chưa có. Chưa commit.
+  - **Cập nhật 2026-10-30 — ĐÃ THAY luật Advisor bằng quy trình nhóm agent** (người dùng duyệt diff, nói "go"). Người dùng muốn mọi task chạy theo: Opus (phiên chính) review + lên plan → chia việc cho thợ Sonnet/Haiku chạy song song → Opus review lại; Opus đã là phiên chính nên luật "hỏi advisor Opus" thành thừa. Đã ghi: `~/.claude/CLAUDE.md` (quy trình, áp dụng mọi dự án, gồm cả FE nên không cần sửa `D:\DNA-ERP\CLAUDE.md`), `~/.claude/agents/implementer-sonnet.md` (`model: sonnet`) và `~/.claude/agents/helper-haiku.md` (`model: haiku`), mỗi file kèm luật cứng vì thợ không thấy cuộc trò chuyện/memory (không commit, không deploy, FE không prettier, BE `nest build`, không ghi changelog...). `CLAUDE.md` BE: bỏ mục Advisor, thêm dòng "chỉ phiên chính ghi changelog" (tránh hai thợ song song cùng ghi một file changelog) + trỏ sang `~/.claude/CLAUDE.md`. Kiểm tra: 3 file trong `~/.claude` khớp từng byte với bản nháp đã duyệt. CHƯA thử: giao một task thật để xem Opus có chia việc đúng quy trình; app có thể cần phiên mới mới nhận 2 thợ. Không thêm `"model": "opus"` vào `settings.json` (người dùng chọn ở ô model).
 
 ## 37. GỠ BỎ icon và nút quét QR trong app công nhân (2026-10-15) — FE, ĐÃ COMMIT 2026-10-15 (QR-QLSX, xem mục 46.1)
 Người dùng: *"nếu thế thì icon QR trong web đâu cần thiết đâu"* → chọn *"bỏ hẳn icon và nút quét trong app"* (hai hướng đã nêu: bỏ hẳn, hoặc chỉ ẩn khi chưa có HTTPS).
@@ -1912,3 +1945,351 @@ production trong chat. Địa chỉ chỉ truyền qua biến môi trường c�
 **Chưa làm / lưu ý:** chưa đăng nhập web production bằng tài khoản QLSX để xem tận mắt (quyền mới tự có trong ≤ 15 phút qua refresh token, hoặc đăng xuất/đăng
 nhập lại). Chưa kiểm Render đã build xong bản mới. Địa chỉ DB (kèm mật khẩu) đã nằm trong lịch sử chat — nên đổi mật khẩu/khoá DB ở Prisma Console rồi cập nhật
 `DATABASE_URL` trên Render (việc "đổi mật khẩu DB" cũng đang treo từ mục 38).
+
+## 58. Rà "đồng bộ mảnh" Phôi → Hàn cho QLSX + review định mức mảnh (2026-11-04) — CHỈ RÀ; mức 1 ĐÃ LÀM ở mục 59
+
+**Câu hỏi:** người dùng gửi bảng Excel của xưởng (lệnh × mảnh: SL mảnh cần, Phôi đã đồng bộ (mảnh), % đồng bộ, đã hàn luỹ kế, hàn
+trong ngày, còn chưa hàn, phôi chưa đồng bộ) và hỏi QLSX trong hệ thống có kiểm soát đồng bộ chưa; nếu làm thì làm thế nào khi Phôi còn
+dập, tán…; đồng bộ có phải theo mảnh không; review luôn định mức mảnh.
+
+**Hệ thống đã có:** đồng bộ TRONG từng tổ — Hàn/Sơn: "Đồng bộ: N bộ" = mảnh ít nhất, lệch thì đỏ + "cần hàn thêm" (`core.tsx:134,552`);
+chi tiết lệnh QLSX có bất thường "chưa đồng bộ thành bộ" (`piDetailModel.ts:137`); Đóng gói bị chặn theo số bộ qua Chuyền kiểm
+(`packaging-issues.service.ts:445`). **Chưa có:** "Phôi đã đồng bộ (mảnh)" — Phôi chỉ theo dõi theo đoạn × công đoạn (`getPhoiProgress`,
+`getStepProgress`), không quy ra mảnh; không có cột so Phôi với Hàn; cột "thực có" bên Hàn đã gỡ khi chuyển dữ liệu thật
+(`core.tsx:874`). Hàn trong ngày tính được từ `floor_reports.createdAt` + `floor_report_lines.pieceId`.
+
+**Đối chiếu sổ TK phôi thật (`Downloads\36. GHẾ J55 GOPLUS MỚI.xlsx` LSX 125, `I3 MEYING MỚI LSX 315.xlsx` LSX 311):** sổ ghi theo
+TỪNG DÒNG mảnh × đoạn (TÊN BỘ PHẬN = mảnh; mỗi dòng: tên sắt kèm công đoạn "(2D,U)", "(1T) NHẤN", "GẤP", "TRƠN"; kích thước; số đoạn/mảnh;
+số ghế/bộ; máy LS/TĐ; SL đã cắt theo ngày sáng/chiều; J55 thêm "SL cần dập", "% đã dập"). Khớp 1-1 với `PieceBom` (mảnh, SegmentSpec,
+qtyPerPiece, processSteps) + `BomPiece.qtyPerUnit`. KHÁC biệt quyết định: xưởng ghi số cắt theo dòng MẢNH (Tay trái 436: 2000 ngày 25/9;
+Tay phải 436: 2000 ngày 27/9), còn ERP Phôi báo theo ĐOẠN × SKU (`CutPatternSegment.segmentSpecId` + `CutBundle.productionOrderId`), không
+biết đoạn 436 đã cắt là của Tay trái hay Tay phải. Cùng 1 cỡ đoạn dùng cho nhiều mảnh là chuyện THƯỜNG (436 tay trái/phải; 365 chân bàn,
+mặt bàn, kỷ; 595 V16 hai dòng khác công đoạn trong cùng mảnh).
+
+**Định mức mảnh — kết luận review:** model đủ để tính đồng bộ theo mảnh, không phải sửa cấu trúc. Ghi nhận: (1) công đoạn chỉ lưu CÓ/KHÔNG,
+không lưu số lần (1T/2T, 2D) — đủ cho đồng bộ (đếm đoạn, không đếm thao tác); (2) sổ có "GẤP" (V15 1774,4 mê ngồi) — enum không có, nhập
+là Uốn; (3) CHỐT và PAT bỏ khỏi bài toán cắt theo quyết định cũ — đồng bộ theo mảnh cũng bỏ chốt, PAT lấy từ báo mảnh vật tư thành phẩm
+(`ProductionBatch` PHOI) nếu có định mức `PieceMaterialYield`; (4) ngoài phạm vi: xưởng chọn máy LS/TĐ theo TỪNG ĐOẠN (H10-20 438 LS, 447
+TĐ), ERP chọn theo loại sắt.
+
+**Cách làm đề xuất (2 mức):**
+- *Mức 1 — ước tính từ dữ liệu đang có, không đổi cách báo của Phôi:* với mỗi dòng định mức (mảnh, cỡ đoạn, công đoạn) lấy số đoạn "xong"
+  = min qua Cắt + mọi công đoạn dòng đó cần của (đã báo − lỗi) ở `getPhoiProgress`/`getStepProgress` theo SKU; cỡ đoạn dùng chung nhiều
+  mảnh thì chia theo nguyên tắc ĐỦ BỘ TRƯỚC (số bộ k lớn nhất sao cho mọi công đoạn T của cỡ s: k × Σ(số đoạn/mảnh × mảnh/bộ của các dòng
+  cần T) ≤ đoạn xong T), phần dư chia theo thứ tự mảnh trong định mức; mảnh đồng bộ = min qua các dòng của mảnh ⌊đoạn chia / số đoạn/mảnh⌋.
+  Dùng min giữa các công đoạn là ước tính lạc quan (hệ thống không biết 600 đoạn đã dập có trùng 500 đoạn đã tán không). Hiển thị là
+  "ước tính", chỉ cảnh báo, không chặn Hàn (giữ quyết định cũ `han-son-no-phoi-stock-check-by-design`).
+- *Mức 2 — đúng như sổ TK phôi:* Phôi báo cắt/công đoạn theo DÒNG MẢNH (thêm `pieceId` vào `CutPatternSegment`/`StepBatchSegment`,
+  màn báo liệt kê mảnh – đoạn thay vì đoạn), hoặc giữ báo theo đoạn nhưng cho TK phôi/QLSX chỉnh lại phân bổ cho mảnh (như YC8 cho thủ
+  kho). Số lúc đó khớp sổ, đổi lại công nhân phải chọn mảnh mỗi lần báo.
+- Màn: thêm bảng "Đồng bộ Phôi – Hàn" trong "Tổng hợp lệnh SX" (lệnh × SKU × mảnh, đủ 8 cột của Excel: cần, Phôi đồng bộ, %, hàn luỹ kế,
+  hàn hôm nay, còn chưa hàn = đồng bộ − hàn, phôi chưa đồng bộ = cần − đồng bộ) + khôi phục cột "thực có" bên Hàn = Phôi đồng bộ − đã hàn.
+  BE: 1 hàm tính mới dùng lại `loadPhoiInputs` (đã tải theo lô nhiều PI) + `ProductionBatch` HAN + `FloorReport` theo ngày; 1 endpoint.
+- Thứ tự: làm mức 1 trước (chỉ đọc dữ liệu có sẵn, ~2–3 ngày BE+FE), thu phản hồi QLSX/TK phôi, mới quyết mức 2.
+
+**Cần hỏi (1 câu, ngoài ra IT tự chọn mặc định):** QLSX/TK phôi có chấp nhận số "Phôi đồng bộ" là ước tính chia tự động (mức 1) hay cần đúng
+sổ theo dòng mảnh (mức 2 — công nhân phải chọn mảnh khi báo)?
+
+**Kiểm tra:** đọc code BE (`floor-progress.util.ts`, `steel-issues.service.ts` 1795–2192, `warehouse-transfers.service.ts` 503–598, schema
+`PieceBom`/`CutBundle`/`StepBatch`/`FloorReport*`) + FE (`core.tsx`, `piDetailModel.ts`, `QlsxPiDetail.tsx`, `SpecSteelPage.tsx`); đọc 2
+file Excel bằng openpyxl (bản sao ở scratchpad). DB dev đang tắt — chưa đối chiếu định mức đã nhập trong ERP.
+**Chưa làm:** ~~chưa sửa code~~ -> mức 1 ĐÃ LÀM ở mục 59 (2026-11-04); mức 2 chưa làm; chưa hỏi anh Nhân; chưa commit.
+
+## 59. ĐÃ LÀM mức 1 "Đồng bộ Phôi – Hàn" (ước tính) (2026-11-04) — 2 repo, chưa commit; ĐÃ chạy thử trên DB riêng (59.1)
+
+**Vì sao:** người dùng chốt làm mức 1 của mục 58 (ước tính từ dữ liệu đang có, Phôi vẫn báo theo đoạn), yêu cầu chia nhiều thợ song song,
+Opus chỉ tổng hợp + review.
+
+**Cách chia việc:** Opus viết trước 3 file khung (hợp đồng dữ liệu) rồi giao 5 thợ cùng lúc, không ai chung file:
+- Khung (Opus): BE `src/modules/piece-sync-board/piece-sync.util.ts` (kiểu đầu vào/ra của thuật toán), `piece-sync-board.types.ts`
+  (khuôn trả về API); FE `src/services/piece-sync-board-api.ts` (bản sao khuôn + `getPieceSyncBoard`).
+- A (Sonnet): thân `computePieceSync` + `piece-sync.util.spec.ts` (11 ca).
+- B (Sonnet): `piece-sync-board.service.ts` / `.controller.ts` / `.module.ts` + 2 spec, đăng ký ở `src/app.module.ts`.
+- C (Sonnet): FE `Manufacturing/PieceSyncView.tsx`, `pieceSyncModel.ts` + test, nút thứ 3 ở `ThongKePagePlan.tsx`.
+- D (Sonnet): FE `components/sanxuat/core.tsx` + `hanThucCo.ts` + test (cột "Thực có" màn Hàn).
+- E (Haiku): bài Hướng dẫn `mfg-dong-bo-phoi-han` trong `Guide/content/productionPlan.ts`.
+
+**Đã làm:**
+- **BE `GET /api/v1/piece-sync-board`** (tuỳ chọn `?productionInvoiceIds=1,2`): quyền `PRODUCTION_BATCH:VIEW` — CỐ Ý, vì KHSX, QLSX, Phôi,
+  Hàn, Sơn, KCS đều đã có nên KHÔNG phải chạy lại seed quyền trên production. Chọn dòng y hệt Bảng mốc (duyệt, lệnh chưa Kết thúc,
+  PI chưa huỷ, đơn bán còn hiệu lực). Nguồn: `getPhoiProgressBatch` (Cắt + công đoạn phụ theo SKU), `getBatchPlanBatch` HAN (đã hàn =
+  đạt + chờ KCS + chưa gửi, cùng số "Đã báo" màn Hàn) và PHOI (mảnh có Sắt tự tính, vd PAT), `floor_reports` kind PIECE stage HAN tạo
+  hôm nay giờ VN, bỏ lần báo đã bị huỷ (Hàn hôm nay); mỗi nguồn lỗi riêng → `failedSources`, không sập bảng. Đợt cắt cũ chưa gắn SKU
+  ở PI nhiều SKU → `unassignedPhoiPiIds`, không cộng.
+- **Thuật toán** (`computePieceSync`, hàm thuần): mỗi dòng định mức phải qua Cắt + công đoạn phụ của dòng; mỗi (cỡ đoạn, công đoạn)
+  chia đoạn ĐẠT (đã báo − lỗi KCS) cho các dòng cần nó theo ĐỦ BỘ TRƯỚC, phần dư theo thứ tự dòng, mỗi lần đủ 1 mảnh; đoạn dùng được
+  của dòng = nhỏ nhất qua các công đoạn; mảnh đồng bộ = nhỏ nhất qua các dòng ⌊đoạn ÷ đoạn/mảnh⌋, chặn trần số mảnh cần, mảnh có Sắt
+  tự tính bị chặn thêm bởi số mảnh Phôi tự báo. Khớp thiết kế cũ `D:\DNA-ERP\docs\logic-dong-bo-va-no-dinh-muc.md` (min + floor).
+- **FE tab "Đồng bộ Phôi – Hàn"** trong "Tổng hợp lệnh SX" (`?view=dong-bo`): nhóm PI → SKU, dòng đầu nhóm "Phôi đủ bộ X bộ (nghẽn:
+  mảnh) · Hàn đủ bộ Y bộ"; 8 cột như Excel của xưởng; bộ lọc Phôi chưa đủ / Hàn vượt Phôi / Còn phôi chờ hàn; tìm bỏ dấu; bấm mảnh xổ
+  từng loại sắt (dài, đoạn/mảnh, công đoạn, đoạn dùng được, làm được, dòng thiếu nhất + nghẽn ở công đoạn nào); màn hẹp dạng thẻ;
+  tự tải lại theo realtime (gom 5 giây).
+- **Màn Hàn:** cột "Thực có" = Phôi đồng bộ − đã hàn (lỗi/không có quyền → "—", màn chạy như cũ), phần xổ "Đoạn sắt cấu thành 1 mảnh"
+  dùng lại UI có sẵn từ bản mock. Chỉ hiển thị, KHÔNG chặn Hàn báo (giữ quyết định cũ). Sơn không đổi.
+- **Hướng dẫn sử dụng:** bài mới ngay sau "Bảng mốc".
+
+**Review của Opus (đọc diff thật, đã tự sửa):**
+1. B chỉ đưa mảnh qua Hàn vào phép chia → mảnh không qua Hàn dùng chung cỡ đoạn bị bỏ khỏi phép chia, mảnh qua Hàn được tính dư. Sửa:
+   chia cho MỌI mảnh của định mức, chỉ mảnh `needsHan` lên bảng; thêm 2 test.
+2. D: cột "Thực có" (mảnh) đã trừ phần đã hàn nhưng phần xổ lại hiện đoạn luỹ kế → dòng "Đủ ráp" lệch cột. Sửa: đoạn còn trong tay =
+   đoạn đã chia − đã hàn × đoạn/mảnh (không âm), sửa chữ phụ; thêm 1 test.
+3. C: khoá React của bảng sắt theo cỡ đoạn → trùng khi 1 mảnh có 2 dòng cùng cỡ khác công đoạn (V16 595); ghi chú "đợt cắt cũ" in id
+   PI thay vì mã PI; dòng bấm-xổ không đi được bằng bàn phím. Đã sửa cả 3.
+- A, E đạt nguyên trạng.
+
+**Kiểm tra (Opus chạy lại):** BE `npx tsc --noEmit` chỉ còn 2 lỗi có sẵn ở `prisma/seed-ghe-j55-full-bom.ts:152`,
+`prisma/seed-real-products.ts:150`; `npx eslint src/modules/piece-sync-board src/app.module.ts` sạch; `npx nest build` OK; jest module mới
+3 suite 28/28; jest toàn bộ 2182 qua, 1 hỏng = ca giới hạn thời gian của bộ giải `optimize-material.spec.ts` (I5 V15, chạy lúc máy đang
+build song song) — chạy riêng: 14/14 qua (lỗi do máy bận, không liên quan module mới). FE `npx tsc --noEmit` sạch; eslint 9 file 0 lỗi (5 cảnh báo có từ trước); `npx vitest run`
+30 file 279/279 (thêm 17 test). Git status trước/sau: chỉ đúng các file kể trên.
+
+**Chưa làm / còn treo:**
+- ~~CHƯA chạy thử trên dữ liệu thật~~ -> ĐÃ chạy thử trên DB riêng ở 59.1 (production chưa có lệnh SX nên dùng kịch bản tự dựng); còn phải xem trên dữ liệu xưởng thật khi production có lệnh.
+- ~~Cú pháp lọc `reversedBy: { is: null }` chưa chạy với Postgres thật~~ -> ĐÃ đúng trên Postgres 16 (59.1: lần báo 5 rồi huỷ không bị tính).
+- Mức 2 (Phôi báo theo dòng mảnh) chưa làm; vẫn chờ câu hỏi "ước tính có đủ không" của mục 58.
+- Chưa commit (người dùng tự commit), chưa deploy.
+
+### 59.1. Chạy thử trên DB riêng + 3 sửa giao diện phát hiện khi chạy (2026-11-04)
+
+**Dữ liệu:** DB dev `dna_erp` hiện gần rỗng (16 SKU, 54 tài khoản, 0 PI / 0 định mức mảnh - KHÁC ghi chú 28/10 "dna_erp = backup
+production"; không rõ ai/khi nào đổi, KHÔNG đụng vào). Bản sạch production `backups/local_dna_erp_20261028_prod-sach-truoc-e2e.dump`
+cũng 0 lệnh SX (production 26/10 mới có danh mục). Nên: tạo DB RIÊNG `dna_erp_dongbo` trong container `dna-erp-be-postgres-1`, khôi
+phục bản sạch đó (`prisma migrate deploy`: không thiếu migration), `seed:demo` (tài khoản demo), rồi dựng kịch bản bằng script
+scratchpad `dongbo-seed.ts`: 1 PI 2 SKU theo sổ I3 LSX 311 - Khung tựa / Tay trái / Tay phải dùng chung đoạn 436, 486, 2 dòng V16 595
+khác công đoạn, Mê ngồi dùng chung đoạn 135 với 1 mảnh KHÔNG qua Hàn, 5 đoạn KCS lỗi, 1 đợt cắt cũ chưa gắn SKU; Hàn đạt / chờ KCS /
+chưa gửi, báo hôm nay 20 + 1 lần 5 rồi huỷ. Định mức tạo ở DRAFT rồi mới ACTIVE (trigger DB chặn thêm dòng vào bản ACTIVE).
+Chạy: BE `node dist/main` cổng 3031 + FE `next dev` cổng 3130 trỏ `dna_erp_dongbo` (thêm cấu hình `be-3031-dongbo`, `fe-3130-dongbo`
+vào `.claude/launch.json`).
+
+**API thật** (script `dongbo-api-check.mjs`, đăng nhập demo): khớp số tính tay ở mọi mảnh - Khung tựa 75 (nghẽn 438 Uốn), Tay trái 81
+/ Tay phải 80 (phần dư đoạn dùng chung vào Tay trái), Mê ngồi 83 (xác nhận sửa của Opus ở mục 59: logic cũ ra 100), Chân bàn 100/100
+mảnh; Hàn hôm nay 20 (lần báo đã huỷ không tính), KCS lỗi được trừ, mảnh không qua Hàn không lên bảng, PI có đợt chưa gắn SKU được báo;
+quyền: QLSX 200, tổ Hàn 200 (lọc theo PI), Sales 403, id sai 400. (1 dòng script báo lệch là do số dự kiến của Opus sai đơn vị: Chân
+bàn cần 100 MẢNH = 50 bộ × 2, Phôi cắt 150 đoạn → đủ 100.)
+
+**Giao diện (trình duyệt pane, 1024 px + điện thoại 375 px):** tab mới, nhóm, 8 cột, % màu, nhãn "Hàn vượt Phôi", bộ lọc (Hàn vượt Phôi
+→ chỉ còn Tay trái), ghi chú mã PI, điện thoại dạng thẻ không tràn ngang (đo `scrollWidth`). Đã sửa 3 chỗ:
+1. Dòng đầu nhóm ghi "(nghẽn: …)" cả khi SKU đã đủ bộ → chỉ ghi khi số bộ Phôi < số bộ của lệnh.
+2. Phần xổ chi tiết sắt lấy bề rộng theo cửa sổ (`100vw − 80px`) nên ở màn vừa, cột "Làm được / thiếu nhất · nghẽn ở" bị đẩy khuất bên
+   phải → đo bề rộng nhìn thấy của khung bảng (ResizeObserver) và đặt đúng bằng nó.
+3. Màn Hàn khi đang NHẬP sản lượng dùng `LineListBoard` / `LineDetailCard` (thẻ mảnh), KHÔNG dùng bảng có cột "Thực có" - brief cho
+   thợ D sai chỗ nên tổ Hàn không thấy số. Thêm dòng "Phôi sẵn để hàn: N cái (ước tính)" ở thẻ mảnh và màn nhập 1 mảnh (màn nhập ghi thêm
+   "thiếu nhất: <loại sắt> <dài> mm" khi còn thiếu); chỉ nhắc, ô nhập không bị chặn. Đã thấy đúng 5 / 0 / 80 / 33 và "thiếu nhất:
+   SAT-002 … 438 mm" bằng tài khoản demo Hàn.
+- Lỗi console `useCallback is not defined` chỉ xuất hiện ở bản dịch trung gian giữa 2 lần sửa (Fast Refresh); tải lại trang sạch.
+
+**Kiểm tra lại:** FE `tsc` sạch, eslint 0 lỗi, `vitest` 279/279. BE không đổi sau mục 59 (log BE 3031 không có lỗi).
+**Còn treo:** DB `dna_erp_dongbo` + 2 server thử (3031, 3130) vẫn để đó cho người dùng xem (tài khoản demo); xoá DB khi không cần:
+`docker exec dna-erp-be-postgres-1 psql -U erp_user -d postgres -c "drop database dna_erp_dongbo"`. Chưa commit.
+
+### 59.2. File Word trình Sếp: `docs/trinh-bay-dong-bo-phoi-han-2026-11-04.docx` (2026-11-04)
+
+Theo yêu cầu người dùng ("gọn, chi tiết, không nói code, nói cách nó work để trình bày cho Sếp"). 3 trang A4 dọc, Arial, 4 ảnh chụp
+từ lần chạy thử 59.1 (ghi rõ "dữ liệu thử"): 1. Để làm gì; 2. Cách tính "Phôi đã đồng bộ" 3 bước + bảng ví dụ Khung tựa (75/100, nghẽn
+đoạn 438 Uốn) + đoạn dùng chung chia "đủ bộ trước" + vì sao là ước tính; 3. Ý nghĩa 7 cột + dòng đầu lệnh + nhãn "Hàn vượt Phôi";
+4. Xem ở đâu (QLSX/KHSX/Sếp, chi tiết sắt, màn Hàn) kèm ảnh; 5. Nguyên tắc (không chặn Hàn, tự cập nhật, Phôi phải báo đủ công đoạn);
+6. Đã kiểm tra; 7. Cần Sếp chốt (ước tính hay báo theo từng mảnh - ô đánh dấu). **Đã dựng lại theo "chỉ Cắt" ở mục 61 (ghi đè cùng tên file).** Dựng bằng script scratchpad `word-sep/build.py` (lấy
+styles của file vòng 4, thêm ảnh), kiểm tra bằng Word xuất PDF xem từng trang (bản đầu 4 trang có nửa trang trắng do ảnh lớn → thu nhỏ
+ảnh, còn 3 trang). Lưu ý: lần xuất PDF đầu để lại 1 Word chạy ẩn không mở file (`/Automation`, PID 21872) - không tắt được an toàn
+(nối COM trả về Word đang mở của người dùng), người dùng tự End task. Chưa commit.
+
+## 60. Rà định mức mảnh đã nhập trên DB production (2026-11-04) — CHỈ ĐỌC, chưa sửa dữ liệu
+
+**Vì sao:** người dùng đưa URL DB production (Prisma Postgres) để kiểm định mức mảnh đã nhập đủ chưa (nền cho "Đồng bộ Phôi – Hàn").
+URL là bí mật - KHÔNG ghi ở đây/memory. Kết nối đặt `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY` (xác nhận
+`transaction_read_only = on`), chỉ SELECT. Host pooled báo "Failed to connect to upstream database"; host trực tiếp (cùng tài khoản) vào
+được. Script scratchpad `bom-review/dump-bom.mjs`, `dump-extra.mjs`, `analyze.py`. Đối chiếu với sổ "Bảng theo dõi sắt thành phẩm" của
+xưởng trong `Downloads\Data test solve\` (I3 MEYING LSX 315, I5 MEYING LSX 316, J55 GOPLUS LSX 133/137-145/180, I41+42 LSX 323).
+
+**Tổng quan:** 16 SKU, 16 phiếu SKU **đều IN_PROGRESS**, 16 bản định mức **đều DRAFT** (chưa SKU nào được KHSX/Sếp duyệt → chưa
+tạo được lệnh SX); 76 mảnh, 261 dòng đoạn sắt, 0 sắt tự tính, 472 dòng vật tư khác; 0 lệnh SX / đợt cắt / báo sản lượng. Mọi mảnh có
+số mảnh/bộ ≥ 1, mọi dòng có chiều dài, số đoạn ≥ 1, toàn bộ là sắt nhóm "Phần mềm"; Cắt luôn được ghi trong công đoạn.
+
+**Đúng với sổ:** J55.C4/C3 GP (ghế, cả V18 40 mm - khớp LSX 133/137-145; LSX 125 cũ ghi 60); I3 MY: Tựa, Chân bàn, Mặt bàn, Kỷ
+bàn; I5 MY: Tựa đơn, Chân bàn. Phi 4/phi 6 (cắt) và PAT/pat kính/pat ke/pat chân sofa nhập là VẬT TƯ THÀNH PHẨM (không phải đoạn sắt) -
+nhất quán.
+
+**Lệch so với sổ (cần NV định mức / KHSX xác nhận bản nào đúng):**
+- I3 MY + I5 MY, Tay trái/Tay phải: V15 **438** (sổ 436), H10-20 **488** (sổ 486), V10 **441 chỉ cắt** (sổ 437 có Uốn; LSX 311 ghi
+  440), chốt V15 40 **×2** (LSX 315/316 ×1, LSX 311 ×2).
+- I3 MY Mê, I5 MY Mê đơn / Mê đôi: ERP nhập kiểu **1 cây gấp** (V15 1774,4 / 2625,2 mm, chỉ Cắt - giống LSX 311), sổ LSX 315/316 là
+  **đoạn rời** 445 ×2 (2 dập) + 415 ×2 (đơn) / 840 ×2 (đôi). Hai cách cắt khác nhau → số cây mua và đồng bộ khác nhau.
+- I5 MY: Tựa đôi V10 420 thiếu Uốn; Hông bàn V15 145 ×2 ghi Dập (sổ không dập), V10 **110** (sổ 120).
+- I41A MY: Mê 1317,2 và 1490,8 thiếu Tán/Dập (sổ 1T+1D), 580 ghi **Dập** (sổ 2 Tán); Tựa bé/lớn 1052,2 thiếu Tán (và Dập ở 1 dòng),
+  565/345/645 dùng **V16** (SAT-020; sổ V15), V10 55 ×**4** ở Tựa lớn (sổ ×3); Bàn 1490,8 thiếu Tán, **thiếu hẳn 2 dòng phi 10** (130 ×4,
+  192 ×4 - không có cả ở vật tư khác).
+- I42A MY: Tựa 1052,2 thiếu Tán; Mê 1490,8 thiếu Tán + Dập, 565: ERP 1 dập + 1 tán + 1 trơn (sổ 2 dập + 1 trơn).
+- Không có sổ để so: J55 bàn (T4/T6/T8 GP/MY), J55B.C3/C4 MY, I3 GP, I55 VD.
+
+**Ảnh hưởng tới "Đồng bộ Phôi – Hàn":** ~~dòng thiếu công đoạn thì đoạn được tính xong ngay khi cắt (bỏ qua tán/dập) → số đồng bộ cao hơn
+thật~~ (hết ảnh hưởng: từ mục 61 đồng bộ chỉ tính theo Cắt; thiếu công đoạn vẫn làm sai phần báo công đoạn phụ của Phôi); Chân sofa (I41A ×12, I42A ×16) không có đoạn sắt (đầu vào là pat chân sofa - vật tư thành phẩm) → bảng hiện "—"; vật tư thành phẩm
+(phi 4/6, pat) chưa được tính vào đồng bộ. Đoạn giống hệt giữa Tay trái/Tay phải có ở mọi SKU ghế (và vài cặp khác: I3 MY 365 chân bàn
+– mặt bàn / kỷ; I5 MY 135 mê đơn – đôi, 438 tựa đơn – đôi; I41A 1490,8 bàn – mê, 1052,2 tựa bé – lớn; I42A 565 tán mê – tựa) → còn chờ
+câu hỏi "dùng thay nhau được không" (mục 58); sửa đủ công đoạn thì một số cặp tự tách ra.
+
+**Chưa làm:** không sửa dữ liệu production (chỉ đọc); ~~chưa gửi danh sách cho NV định mức~~ → đã soạn file gửi (mục 64.1); chưa commit.
+
+## 61. "Đồng bộ Phôi – Hàn" đổi sang CHỈ TÍNH THEO CẮT (2026-11-04) — 2 repo, chưa commit; đã chạy thử lại trên DB riêng
+
+**Vì sao:** người dùng: "nhất thiết đồng bộ công đoạn tán, dập, uốn làm gì đâu, chỉ cần quan tâm đủ mảnh là được" → chốt **"Đổi sang
+chỉ Cắt"**. Đồng bộ = mảnh đã có đủ đoạn ĐÃ CẮT ĐẠT (cắt − KCS lỗi), không chờ dập/tán/uốn/nhấn. Hệ quả phụ: lỗi thiếu công đoạn trong
+định mức (mục 60) không còn làm sai số đồng bộ.
+
+**Đã làm (2 thợ `implementer-sonnet` song song, BE / FE không chung file; Opus review):**
+- BE `piece-sync-board.service.ts`: đoạn đạt chỉ lấy từ `segments` (cắt) của `getPhoiProgressBatch`, khoá `${segmentSpecId}:CAT`; bỏ cộng
+  `steps`; luôn truyền `processSteps: []` cho `computePieceSync` (hàm thuần giữ nguyên khả năng xét công đoạn phụ, ghi chú ở đầu
+  `piece-sync.util.ts`). Hợp đồng `PieceSyncLine`: bỏ `steps`/`limitingStep`, thêm `materialSpec` (quy cách sắt). Test service: ca
+  "chỉ Cắt (công đoạn phụ không cộng), trừ lỗi, không âm, đúng SKU; processSteps luôn []" + sửa các ca cũ.
+- FE: `piece-sync-board-api.ts` khớp hợp đồng mới; `PieceSyncView.tsx` bỏ cột "Công đoạn", cột "Đoạn đã cắt (đạt)", nhãn "thiếu nhất"
+  (bỏ "nghẽn ở <công đoạn>"), loại sắt hiện `mã · tên (quy cách)`, dòng giải thích mới; `hanThucCo.ts` + `core.tsx`: màn Hàn ghi
+  "thiếu nhất: <tên sắt> <quy cách> · <dài> mm"; bài Hướng dẫn `mfg-dong-bo-phoi-han` viết lại theo Cắt.
+- Dữ liệu thử `dna_erp_dongbo` (dựng ở 59.1): chỉnh số cắt để vẫn có ca thiếu khi bỏ công đoạn phụ — đoạn 438 cắt 150, 436 cắt 171,
+  135 cắt 250.
+- File Word trình Sếp dựng lại theo Cắt (bảng ví dụ: 425 cắt 100 · 438 ×2 cắt 150 · 447 cắt 105 lỗi 5 → 75 mảnh; đoạn dùng chung 171 →
+  86/85; bỏ mọi chữ "nghẽn ở công đoạn"; nguyên tắc ghi rõ "đoạn đã cắt nhưng chưa dập/uốn vẫn được tính"), 4 ảnh chụp lại, 3 trang, đã xuất PDF xem từng trang. File gốc lúc đầu bị Word chạy ẩn PID 21872 (59.2) khoá nên lưu
+  tạm bản `-v2`; người dùng tắt xong thì đã **ghi đè `docs/trinh-bay-dong-bo-phoi-han-2026-11-04.docx`** và xoá bản `-v2`.
+
+**Review:** đọc code thật của thợ BE (service dòng 188–277) và FE (các chỗ đổi nhãn/cột); khớp quyết định. Không có sửa thêm.
+
+**Kiểm tra:** BE jest `src/modules/piece-sync-board` 28/28, `tsc` chỉ còn 2 lỗi seed có từ trước, `nest build` OK, eslint module sạch.
+FE `tsc` 0 lỗi, eslint các file đổi 0 lỗi (2 cảnh báo cũ ở `core.tsx:986` từ 31/08), vitest 18/18 (2 file liên quan). Chạy thật BE 3031
+(bản build mới) + FE 3130: API khớp tính tay — Khung tựa 75 (thiếu nhất 438), Tay trái 86 (Hàn 90 → "Hàn vượt Phôi"), Tay phải 85,
+Mê ngồi 83, Chân bàn 100/100; dòng đoạn không còn trường công đoạn; quyền QLSX/Hàn 200, Sales 403, id sai 400. Giao diện QLSX + màn Hàn
+(danh sách mảnh "Phôi sẵn để hàn", trang nhập 1 mảnh "thiếu nhất: Sắt hộp 6zem 10x20 · 438 mm") đúng số.
+
+**Chưa làm:** mức 2 (Phôi báo theo mảnh) chưa làm; chưa commit.
+
+## 62. Pull nhánh FE `demo` mới nhất, giữ nguyên thay đổi chưa commit (2026-11-04)
+
+**Vì sao:** người dùng: "pull nhánh FE mới nhất". Quy ước không commit/stash → không `git pull` thẳng được vì 3 file trùng.
+
+**Nhánh mới:** `demo` d263e05 → **43ab760** (fast-forward, `origin/demo` 0/0): `ae700e2` "fix-dmct" (ohey 31/10) + `43ab760` "Đợt 0 – 12
+yêu cầu: nhãn 'Vải nệm' + Hướng dẫn công thức hao hụt mới" (ohey 04/11 11:15) — 12 file (đổi chữ "Nệm" → "Vải nệm" ở nhiều màn +
+Hướng dẫn, `SpecDetailQuotaPage.tsx` +62/−17).
+
+**Cách làm:** 3 file vừa đổi ở nhánh vừa đang sửa ở máy (`Guide/content/manufacturing.ts`, `Guide/content/productionPlan.ts`,
+`Manufacturing/ThongKePagePlan.tsx`): sao lưu bản máy + bản gốc + bản nhánh vào scratchpad `fe-pull/`, gộp 3 chiều bằng `git merge-file`
+(0 xung đột - phía nhánh chỉ đổi chữ "Vải nệm"), trả 3 file về HEAD, `git merge --ff-only origin/demo`, đặt lại bản đã gộp. Kiểm lại:
+phần sửa ở máy giữ nguyên (`productionPlan.ts` +31, `ThongKePagePlan.tsx` +5/−1 như trước; `manufacturing.ts` chỉ khác xuống dòng),
+chữ mới của nhánh đã có. Các file sửa/chưa theo dõi khác (của phiên khác: `.env.example` xoá, `CuttingSolvePanel.tsx`,
+`GomDotCatPage.tsx`, `e2e/…`) không bị nhánh đụng tới, để nguyên.
+
+**Kiểm tra:** FE `tsc` 0 lỗi, `vitest` 280/280 (30 file), eslint các file nhánh đổi + màn đồng bộ 0 lỗi (4 cảnh báo cũ 07–09/2026).
+**Chưa làm:** chưa commit; BE không pull (người dùng chỉ hỏi FE).
+
+## 63. anh Nhân trả lời file Word "Đồng bộ Phôi – Hàn" (2026-11-04) — REVIEW; ý 2 (đủ công đoạn) ĐÃ LÀM ở mục 64, ý 1 (chọn mảnh) chưa làm
+
+**Nguồn:** `Downloads\TRA_LOI_DONG_BO_PHOI_HAN_IT_04-11-2026.docx` (bản `docs/trinh-bay-dong-bo-phoi-han-2026-11-04.docx` có điền trả lời,
+ký "anh Nhân, 04/11/2026"). Hai ý chốt:
+1. **Mục 7 → chọn "Cần đúng như sổ TK phôi":** khi nhập bằng mã QR, công nhân Phôi BẮT BUỘC chọn mảnh trước rồi mới nhập số đoạn; không
+   chia ước tính nữa (= mức 2 của mục 58).
+2. **Ý kiến khác:** 1 đoạn phải qua ĐỦ các công đoạn của nó theo định mức (cắt, dập, tán, uốn, nhấn…) mới tính là 1 đoạn thành phẩm và mới
+   vào đồng bộ - KHÔNG tính theo số đã cắt (sửa mục 2 Bước 1 và mục 5 của file Word). → **Thay quyết định "chỉ tính theo Cắt" của mục 61.**
+
+**Đối chiếu code:**
+- Ý 2 làm nhanh: hàm thuần `computePieceSync` vẫn giữ phần xét công đoạn phụ (min các công đoạn, trừ KCS lỗi) - chỉ cần service truyền lại
+  `processSteps` của định mức + số đạt từng công đoạn (như trước mục 61), FE trả lại cột "Công đoạn" và nhãn "nghẽn ở <công đoạn>".
+- Ý 1 là việc lớn (mức 2): `FloorReportLine` đã có cột `pieceId` (hiện chỉ dùng cho báo mảnh), nhưng các bảng cộng dồn tiến độ chỉ theo
+  ĐOẠN: `CutPatternSegment` (unique bó × cỡ đoạn), `StepBatchSegment` (unique đợt công đoạn × cỡ đoạn), `QcReviewSegment` (KCS chấm lỗi,
+  unique lần chấm × cỡ đoạn). Phải thêm chiều mảnh vào 3 bảng này + DTO báo cắt/công đoạn + màn quét QR (chọn mảnh → hiện các dòng đoạn
+  của mảnh đó) + màn KCS chấm lỗi + tiến độ Phôi (`getPhoiProgressBatch`) + bảng đồng bộ (bỏ phép chia "đủ bộ trước" khi đã biết mảnh).
+  Số tổng theo đoạn (cân đối sắt vào – đoạn ra, Bảng mốc) vẫn cộng được từ các dòng mảnh.
+- Có 2 đường báo: màn quét QR (`floor-scan.service` → `recordCutBatch`/`recordStepBatch`) và màn cũ "Lệnh sản xuất" của tài khoản thống kê
+  Phôi (`LenhSanXuatPhoi.tsx` → `POST steel-issues/:id/cut-batches`, `production-invoices/:id/step-batches`).
+
+**Cần hỏi / chốt trước khi làm:**
+1. "Chọn mảnh trước" áp cho cả báo CÔNG ĐOẠN PHỤ (dập, tán, uốn, nhấn…)? - Đề xuất: CÓ. Ý 2 tính đồng bộ theo đủ công đoạn, công đoạn phụ
+   không gắn mảnh thì đoạn dùng chung (vd 436 tay trái/tay phải) lại phải chia ước tính.
+2. Màn cũ "Lệnh sản xuất" (không qua QR) cũng bắt chọn mảnh, hay khoá báo cắt ở màn cũ? - Đề xuất: bắt chọn mảnh ở cả 2 đường, để không
+   có số "không biết của mảnh nào".
+3. KCS chấm lỗi theo từng dòng mảnh × đoạn của đợt? - Đề xuất: CÓ (đợt báo đã gắn mảnh thì chấm theo dòng của đợt).
+4. Lần báo cũ chưa gắn mảnh (nếu có lúc bật): không tính, hiện "chưa gắn mảnh" như đợt chưa gắn SKU - đề xuất. (Bản production 26/10 chưa
+   có lệnh SX nào chạy qua Phôi.)
+5. (Người dùng hỏi thêm: công đoạn phụ cũng qua KCS - ĐÚNG: `QcReview.stepBundleId` = đợt gửi KCS theo công đoạn phụ, KCS chấm lỗi
+   riêng từng công đoạn; tiến độ Phôi trả `done` = đã báo (gồm chưa gửi + chờ KCS), `failed` = KCS chấm lỗi, `awaiting` = chờ KCS.)
+   "Đoạn thành phẩm" tính từ lúc nào: (a) đã báo − lỗi (như mức 1 trước mục 61, có cả chờ KCS) hay (b) chỉ khi ĐẠT KCS ở công đoạn cuối
+   của đoạn (đúng chữ "thành phẩm", khớp v8 4.7 "chuyển mảnh chỉ số đạt KCS", nhưng bảng trễ hơn xưởng)? - Đề xuất (b) + hiện thêm cột
+   "chờ KCS".
+
+**Rủi ro:** ý 2 phụ thuộc định mức đúng công đoạn - mục 60 còn nhiều dòng thiếu/thừa Tán, Dập (I41A, I42A, I5…) và cả 16 SKU còn nháp →
+NV định mức phải sửa trước khi chạy thật (thiếu công đoạn → đoạn tính xong quá sớm; thừa → không bao giờ xong). Công nhân báo nhiều lần
+hơn: 1 cây cắt ra đoạn của nhiều mảnh thì báo mỗi mảnh 1 lần (anh Nhân đã chấp nhận "mất công hơn"). Lợi thêm: phiếu chuyển mảnh Phôi →
+Hàn của người B (Đợt 7, "chỉ số đạt KCS") có số theo mảnh thật.
+
+**Ước lượng:** ý 2 ≈ 0,5 ngày; ý 1 ≈ 4–6 ngày (schema + 2 đường báo + KCS + tiến độ + bảng đồng bộ + test + chạy thử). File Word cần sửa
+lại mục 2, 5, 7 theo cách tính mới sau khi làm.
+
+**File gửi anh Nhân (cùng ngày):** `docs/cau-hoi-xac-nhan-anh-nhan-2026-11-04.docx` (2 trang, Arial, khuôn file vòng 4; xuất PDF kiểm từng
+trang) - Phần 1: 6 câu đồng bộ (5 câu trên + câu 1.5 "đoạn giống hệt nhau mà công nhân chọn nhầm mảnh → QLSX chuyển số đoạn giữa 2
+mảnh", kèm lưu ý định mức phải đúng công đoạn); Phần 2: 5 điểm 12 yêu cầu IT đang làm theo mặc định (load cont chia số thùng/bộ, khoảng
+ngày Nhập đan/Chuyền kiểm, giờ chấm cảnh báo chậm, xưởng dự kiến khi tính cắt, bỏ số mua đã chốt khi nhu cầu giảm). Mỗi câu có đề xuất +
+ô Đồng ý / Khác.
+
+**Chưa làm:** ~~chưa sửa code~~ ý 2 đã làm (mục 64); ý 1 chờ anh Nhân trả lời file trên (đến 06/11 chưa có).
+
+## 64. ĐÃ LÀM ý 2 của anh Nhân: "Đồng bộ Phôi – Hàn" theo ĐỦ CÔNG ĐOẠN + chỉ đếm đạt KCS (2026-11-06) — 2 repo, đã commit + gộp 09/11 (BE `f75abc2`, FE `dbc165d`, chưa push)
+
+**Vì sao:** anh Nhân (mục 63, ý 2): 1 đoạn phải qua đủ công đoạn theo định mức mới vào đồng bộ → thay "chỉ Cắt" của mục 61. Người dùng
+06/11: "Làm đủ công đoạn" → "làm ngay" (cách đếm mỗi công đoạn theo đề xuất IT ở câu 1.4 file `docs/cau-hoi-xac-nhan-anh-nhan-2026-11-04.docx`:
+chỉ đoạn ĐÃ ĐẠT KCS; anh Nhân chưa trả lời file này). Mức 2 (chọn mảnh, ý 1) để từ từ: chờ 6 câu + đụng phiếu chuyển mảnh Đợt 7 của người B.
+
+**Hợp đồng (Opus viết trước):** BE `piece-sync-board.types.ts` + bản chép FE `src/services/piece-sync-board-api.ts`:
+- `PIECE_SYNC_COUNT_MODE: 'PASSED_QC' | 'REPORTED' = 'PASSED_QC'` - PASSED_QC = đã báo − KCS lỗi − chưa gửi KCS − đang chờ KCS; REPORTED = đã
+  báo − KCS lỗi (cách mục 59). Anh Nhân chọn khác thì đổi 1 hằng ở 2 bên.
+- `PieceSyncLine` thêm `steps` (Cắt + công đoạn phụ, đúng thứ tự `PROCESS_STEPS`), `limitingStep` ("nghẽn ở"); `PieceSyncRow` thêm
+  `phoiPendingQcQty` = đồng bộ(đếm REPORTED) − đồng bộ(PASSED_QC), cột "Chưa qua KCS". FE chép kiểu `ProcessStep` từ `types/sku`.
+
+**Đã làm (2 thợ `implementer-sonnet` song song, không chung file; Opus review):**
+- BE `piece-sync-board.service.ts`: 2 bảng đoạn `reported` / `passed` khoá `${cỡ đoạn}:${công đoạn}` từ `segments` (Cắt) + `steps[]` (công
+  đoạn phụ) của `getPhoiProgressBatch` (`openQty`, `awaitingQcQty` có sẵn từng SKU); `processSteps` = `PieceBom.processSteps` thật; chạy
+  `computePieceSync` theo mode + 1 lần theo REPORTED để ra `phoiPendingQcQty`; mảnh Sắt tự tính đếm `passedQty` ở PASSED_QC; công đoạn phụ
+  của đợt cũ chưa gắn SKU cũng vào `unassignedPhoiPiIds`. Hàm thuần `computePieceSync` không đổi logic (đã hỗ trợ công đoạn phụ từ mục 59),
+  chỉ sửa chú thích. Spec service: thêm 5 ca (loại chờ / chưa gửi KCS, pending, 2 dòng cùng cỡ khác công đoạn, công đoạn phụ chưa gắn SKU, 2
+  lần chạy bằng nhau → pending 0), sửa các ca "chỉ Cắt".
+- FE `PieceSyncView.tsx` + `pieceSyncModel.ts`: cột "Chưa qua KCS" (null → "—", 0 mờ, tooltip; cả dạng thẻ điện thoại); phần xổ sắt có lại
+  cột "Công đoạn" ("Cắt → Uốn → Dập"), cột "Đoạn đủ công đoạn (đạt)", dòng thiếu nhất "thiếu nhất · nghẽn ở <công đoạn>", khoá React gồm
+  công đoạn; dòng giải thích theo mode (`syncExplainText`). Màn Hàn (`hanThucCo.ts`, `core.tsx` `ThucCoNote`): "thiếu nhất: <sắt> · <dài> mm ·
+  nghẽn ở <công đoạn>". Bài Hướng dẫn `mfg-dong-bo-phoi-han` viết lại.
+- **Opus sửa thêm:** import kiểu `ProcessStep` sai chỗ trong hợp đồng FE (thợ FE phát hiện); tiêu đề bảng chính cho xuống 2 dòng (`thWrap`,
+  `minWidth` 960 → 740) - đo ở 1024 px: bảng 1063 px trong khung 756 px (đã cuộn ngang cả trước khi thêm cột) → nay vừa đúng 756 px.
+
+**Chạy thử (DB riêng `dna_erp_dongbo`, dựng 04/11 mục 59.1):** sao lưu `backups/dna_erp_dongbo_truoc-migrate-2026-11-06.dump` → `prisma
+migrate deploy` lên đủ migration hiện tại (Đợt 1–9, 5a–5e) → kịch bản KCS công đoạn phụ (script scratchpad `dongbo2/kcs-steps.sql`, chỉ chạy
+trên DB này): mọi đợt công đoạn phụ thành đợt gửi KCS ĐẠT, tách Uốn 438 (120 đạt + 30 chờ KCS), Uốn 486 (160 đạt + 21 chưa gửi), Dập 135 (200
+đạt + 50 chờ KCS), KCS lỗi 10 đoạn Tán 436. Cấu hình `be-3031-dongbo` / `fe-3130-dongbo` thêm lại vào `.claude/launch.json` (BE đọc
+`DATABASE_URL` của `.env` rồi đổi tên DB).
+- API thật (`dongbo2/api-check.mjs`, tài khoản demo QLSX): **khớp tính tay cả 5 mảnh** - Khung tựa 60/100 (chưa qua KCS 15, nghẽn 438 Uốn),
+  Tay trái 80 (1, nghẽn 486 Uốn; Tán 436 trừ lỗi 10), Tay phải 80 (0), Mê ngồi 67 (16, nghẽn 135 Dập), Chân bàn 100/100; PI vẫn báo đợt cắt
+  cũ chưa gắn SKU.
+- Trình duyệt (FE 3130): QLSX tab "Đồng bộ Phôi – Hàn" 1024 px (bảng vừa khung sau khi sửa tiêu đề), phần xổ Khung tựa "Cắt → Uốn → Dập ·
+  thiếu nhất · nghẽn ở Uốn", điện thoại 375 px dạng thẻ không tràn (`scrollWidth` = chiều rộng cửa sổ); tài khoản Hàn: thẻ mảnh "Phôi sẵn
+  để hàn" 0 / 0 / 80 / 17, màn nhập Mê ngồi "thiếu nhất: Sắt vuông 6zem 12 · 135 mm · nghẽn ở Dập", ô nhập không bị chặn. Console: chỉ 1 lỗi
+  từ đoạn mã đo của công cụ thử, không phải của app.
+
+**Kiểm tra:** BE `npx jest src/modules/piece-sync-board` **33/33**, `nest build` OK, `tsc` chỉ 2 lỗi seed cũ, eslint module sạch. FE `tsc`
+sạch, `vitest` **39 file / 415 test xanh**, eslint file đổi 0 lỗi (2 cảnh báo cũ ở `core.tsx`).
+
+**File Word trình Sếp** `docs/trinh-bay-dong-bo-phoi-han-2026-11-04.docx` **ghi đè cùng tên** (bản cũ sao ở scratchpad `word-sep/trinh-bay-
+truoc-du-cong-doan.docx`): 4 trang, ngày 06/11; mục 2 cách tính đủ công đoạn + đạt KCS (bảng Khung tựa 80 / 60 / 100 → 60, kẹt ở Uốn; 30 đoạn
+chờ KCS = "Chưa qua KCS" 15), mục 3 thêm cột, mục 4 chụp lại 4 ảnh, mục 5 thêm "định mức phải ghi đúng công đoạn", mục 7 "Đã chốt và còn
+chờ" (đủ công đoạn: đã làm · chọn mảnh: chưa làm, chờ 6 câu · câu 1.4: đang theo đề xuất IT). Dựng bằng `word-sep/build_du_cong_doan.py`, xuất
+PDF xem 4 trang.
+
+**Chưa làm / còn treo:**
+- Mức 2 (Phôi chọn mảnh trước khi báo): chờ anh Nhân 6 câu (1.1–1.6) + thống nhất với người B (phiếu chuyển mảnh Đợt 7).
+- Định mức trên hệ thống thật còn lệch công đoạn (mục 60) - với cách tính mới, dòng thiếu công đoạn tính xong sớm, dòng thừa không bao giờ xong;
+  ~~chưa gửi danh sách cho nhân viên định mức~~ → đã soạn file (64.1), chờ người dùng gửi + nhân viên định mức sửa.
+- ~~Chưa commit (cả phần mục 59–64).~~ → 09/11 đã commit + gộp (changelog phần A mục 40). DB `dna_erp_dongbo` + 2 server 3031 / 3130 để lại cho người dùng xem.
+
+### 64.1. File gửi nhân viên định mức: định mức lệch sổ xưởng (2026-11-06)
+
+Người dùng: "Soạn danh sách". File **`docs/dinh-muc-lech-so-xuong-2026-11-06.docx`** (2 trang, lời thường, không tên code; KHÔNG commit - có dữ liệu
+nội bộ), dựng bằng `.claude/tools/huong-dan-test-phan-a/build_dinh_muc_lech.py` (khuôn Arial của file hỏi anh Nhân), xuất PDF xem từng trang.
+- Nguồn: kết quả rà mục 60 (định mức production đọc 04/11, chỉ đọc) + bảng `bom-review/analysis.txt` ở scratchpad (tên mảnh, công đoạn từng
+  dòng) + tên sắt từ danh mục (SAT-019 = vuông 15, SAT-002 = hộp 10x20, SAT-004 = vuông 10, SAT-020 = vuông 16, SAT-024 = phi 10).
+- Nội dung: 1. Vì sao cần sửa (đồng bộ tính theo đủ công đoạn; sai dài / số đoạn / loại sắt → sai tính cắt + số cây mua; cả 16 SKU còn bản
+  nháp nên sửa thẳng được) · 2. Đã khớp sổ · 3. Bảng **18 dòng cần kiểm** theo SKU · mảnh (ERP đang ghi / sổ xưởng ghi / ô "Sửa theo sổ" -
+  "ERP đúng"), nhấn mạnh dòng 5 (mê I3 / I5: 1 cây gấp hay đoạn rời - ảnh hưởng số cây mua) · 4. SKU chưa có sổ để so (J55 bàn, J55B, I3 GP,
+  I55 VD) - nhờ tự kiểm 4 điểm · 5. Ghi chú (Tay trái / Tay phải dùng đoạn giống nhau là bình thường; chân sofa chưa có dòng sắt).
+- Lưu ý: số liệu là của ngày 04/11 - file ghi rõ "dòng nào đã sửa sau ngày đó thì bỏ qua". Không đọc lại production (URL production là bí mật,
+  không lưu).

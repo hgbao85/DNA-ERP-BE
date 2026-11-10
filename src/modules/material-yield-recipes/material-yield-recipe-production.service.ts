@@ -99,10 +99,12 @@ export class MaterialYieldRecipeProductionService {
     }
     const orderedSteps = sortProcessSteps(recipe.processSteps);
     if (orderedSteps.length === 0) {
-      throw new BadRequestException(`Recipe ${dto.recipeId} chưa khai công đoạn nào theo định mức`);
+      throw new BadRequestException(
+        `Công thức ${dto.recipeId} chưa khai công đoạn nào theo định mức`,
+      );
     }
     if (!orderedSteps.includes(dto.step)) {
-      throw new BadRequestException(`Recipe ${dto.recipeId} không có công đoạn '${dto.step}'`);
+      throw new BadRequestException(`Công thức ${dto.recipeId} không có công đoạn '${dto.step}'`);
     }
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -161,7 +163,7 @@ export class MaterialYieldRecipeProductionService {
       const qty = pending.reduce((s, b) => s + b.qty, 0);
       if (qty <= 0) {
         throw new BadRequestException(
-          `Recipe ${dto.recipeId} chưa có gì mới để gửi KCS ở công đoạn '${dto.step}'`,
+          `Công thức ${dto.recipeId} chưa có gì mới để gửi KCS ở công đoạn '${dto.step}'`,
         );
       }
 
@@ -254,7 +256,7 @@ export class MaterialYieldRecipeProductionService {
       include: BUNDLE_INCLUDE,
     });
     if (!bundle) {
-      throw new NotFoundException(`Đợt gửi KCS ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy đợt gửi KCS ${id}`);
     }
     return bundle;
   }
@@ -281,7 +283,7 @@ export class MaterialYieldRecipeProductionService {
     const outputMaterial = bundle.recipe.outputMaterial;
     if (!outputMaterial.warehouseId) {
       throw new BadRequestException(
-        `Vật tư ${outputMaterial.name} chưa được gán kho (Material.warehouseId) - báo Admin cấu hình trước khi duyệt KCS công đoạn cuối`,
+        `Vật tư ${outputMaterial.name} chưa được gán kho - báo Admin cấu hình trước khi duyệt KCS công đoạn cuối`,
       );
     }
     const productionWarehouse = await tx.warehouse.findUniqueOrThrow({
@@ -305,7 +307,9 @@ export class MaterialYieldRecipeProductionService {
   private assertMfgRoleIsPhoi(mfgRole: string | null): void {
     if (!mfgRole) return;
     if (mfgRole !== 'PHOI') {
-      throw new ForbiddenException(`Caller có mfgRole '${mfgRole}', không được báo công đoạn Phôi`);
+      throw new ForbiddenException(
+        `Bạn có vai trò xưởng '${mfgRole}', không được báo công đoạn Phôi`,
+      );
     }
   }
 

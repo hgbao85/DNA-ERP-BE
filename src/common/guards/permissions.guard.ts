@@ -26,8 +26,9 @@ export class PermissionsGuard implements CanActivate {
     );
 
     if (missing.length > 0) {
+      const codes = missing.map((p) => `${p.module}:${p.action}`).join(', ');
       throw new ForbiddenException(
-        `Missing required permission(s): ${missing.map((p) => `${p.module}:${p.action}`).join(', ')}`,
+        `Tài khoản chưa được cấp quyền: ${codes}. Nhờ quản trị hệ thống cấp quyền.`,
       );
     }
 

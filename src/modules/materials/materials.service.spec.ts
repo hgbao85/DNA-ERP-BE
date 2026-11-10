@@ -126,7 +126,7 @@ describe('MaterialsService', () => {
 
       await expect(
         service.create({ code: 'SAT-01', name: 'Trung code', unit: 'kg' } as any),
-      ).rejects.toThrow(new ConflictException('Material "SAT-01" already exists'));
+      ).rejects.toThrow(new ConflictException('Vật tư "SAT-01" đã tồn tại'));
     });
 
     it('auto-generates a code when none is given (no group -> fallback prefix VT)', async () => {

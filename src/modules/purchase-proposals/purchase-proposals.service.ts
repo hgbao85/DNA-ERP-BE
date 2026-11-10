@@ -560,7 +560,7 @@ export class PurchaseProposalsService {
     const bigItemId = parseBigIntId(itemId);
     const item = proposal.items.find((it) => it.id === bigItemId);
     if (!item) {
-      throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
+      throw new NotFoundException(`Không tìm thấy dòng ${itemId} trong đề xuất mua ${id}`);
     }
     if (item.approvedById !== actorUserId && !this.isPrivilegedActor(actorRoles)) {
       throw new ForbiddenException('Chỉ người đã duyệt file này hoặc Admin/Sếp mới sửa được');
@@ -613,7 +613,7 @@ export class PurchaseProposalsService {
     const bigItemId = parseBigIntId(itemId);
     const item = proposal.items.find((it) => it.id === bigItemId);
     if (!item) {
-      throw new NotFoundException(`Item ${itemId} not found on purchase proposal ${id}`);
+      throw new NotFoundException(`Không tìm thấy dòng ${itemId} trong đề xuất mua ${id}`);
     }
     const buyerId = item.material.buyerId;
     if (!this.isPrivilegedActor(actorRoles) && buyerId && buyerId !== actorUserId) {
@@ -965,7 +965,7 @@ export class PurchaseProposalsService {
   private assertWarehouseScope(warehouseScope: string | null, targetWarehouseCode: string): void {
     if (warehouseScope && warehouseScope !== targetWarehouseCode) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được nhận hàng vào kho '${targetWarehouseCode}'`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không được nhận hàng vào kho '${targetWarehouseCode}'`,
       );
     }
   }
@@ -1011,7 +1011,7 @@ export class PurchaseProposalsService {
       include: DETAIL_INCLUDE,
     });
     if (!proposal) {
-      throw new NotFoundException(`Purchase proposal ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy đề xuất mua ${id}`);
     }
     return proposal;
   }

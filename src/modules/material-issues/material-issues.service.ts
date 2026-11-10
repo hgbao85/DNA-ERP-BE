@@ -347,7 +347,7 @@ export class MaterialIssuesService {
     const issue = await this.findOneOrThrow(id);
     if (issue.status !== MaterialIssueStatus.ISSUED) {
       throw new ConflictException(
-        `Material issue ${id} đang ở trạng thái ${issue.status} - chỉ ISSUED mới xác nhận nhận được`,
+        `Phiếu xuất vật tư ${id} đang ở trạng thái ${issue.status} - chỉ ISSUED mới xác nhận nhận được`,
       );
     }
     this.assertMfgRoleMatchesStage(callerMfgRole, issue.stage);
@@ -380,7 +380,7 @@ export class MaterialIssuesService {
     });
     if (count === 0) {
       throw new ConflictException(
-        `Material issue ${id} đã được xác nhận nhận bởi 1 request khác trong lúc xử lý - không ghi đè`,
+        `Phiếu xuất vật tư ${id} đã được xác nhận nhận bởi 1 yêu cầu khác trong lúc xử lý - không ghi đè`,
       );
     }
 
@@ -519,7 +519,7 @@ export class MaterialIssuesService {
   private assertWarehouseScope(warehouseScope: string | null, expectedWarehouseCode: string): void {
     if (warehouseScope && warehouseScope !== expectedWarehouseCode) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được xuất vật tư tiêu hao từ kho '${expectedWarehouseCode}'`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không được xuất vật tư tiêu hao từ kho '${expectedWarehouseCode}'`,
       );
     }
   }
@@ -532,7 +532,7 @@ export class MaterialIssuesService {
     const expected = stage === MfgStage.HAN ? MfgRole.HAN : MfgRole.SON;
     if (mfgRole !== expected) {
       throw new ForbiddenException(
-        `Caller có mfgRole '${mfgRole}', không được xác nhận nhận vật tư của công đoạn ${stage}`,
+        `Bạn có vai trò xưởng '${mfgRole}', không được xác nhận nhận vật tư của công đoạn ${stage}`,
       );
     }
   }
@@ -600,7 +600,7 @@ export class MaterialIssuesService {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
     if (!order) {
-      throw new NotFoundException(`Production order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     return order;
   }
@@ -621,7 +621,7 @@ export class MaterialIssuesService {
       },
     });
     if (!material) {
-      throw new NotFoundException(`Material ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy vật tư ${id}`);
     }
     if (!material.warehouseId || !material.warehouse) {
       throw new BadRequestException(
@@ -642,7 +642,7 @@ export class MaterialIssuesService {
       include: MATERIAL_ISSUE_INCLUDE,
     });
     if (!issue) {
-      throw new NotFoundException(`Material issue ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phiếu xuất vật tư ${id}`);
     }
     return issue;
   }

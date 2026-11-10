@@ -30,7 +30,7 @@ export class SystemConfigService {
   async getCuttingDefaults(): Promise<CuttingDefaultsResponseDto> {
     const config = await this.prisma.systemConfig.findUnique({ where: { id: SINGLETON_ID } });
     if (!config) {
-      throw new NotFoundException('System config has not been seeded');
+      throw new NotFoundException('Cấu hình hệ thống chưa được khởi tạo');
     }
     return new CuttingDefaultsResponseDto({
       solverMaxWastePercentage: config.solverMaxWastePercentage.toNumber(),
@@ -70,7 +70,7 @@ export class SystemConfigService {
   ): Promise<CuttingDefaultsResponseDto> {
     const existing = await this.prisma.systemConfig.findUnique({ where: { id: SINGLETON_ID } });
     if (!existing) {
-      throw new NotFoundException('System config has not been seeded');
+      throw new NotFoundException('Cấu hình hệ thống chưa được khởi tạo');
     }
     const previous = existing.solverMaxWastePercentage.toNumber();
     if (previous === dto.solverMaxWastePercentage) {
@@ -124,7 +124,7 @@ export class SystemConfigService {
   async getPlanningParams(): Promise<PlanningParamsDto> {
     const config = await this.prisma.systemConfig.findUnique({ where: { id: SINGLETON_ID } });
     if (!config) {
-      throw new NotFoundException('System config has not been seeded');
+      throw new NotFoundException('Cấu hình hệ thống chưa được khởi tạo');
     }
     return new PlanningParamsDto({
       containerVolumeM3: config.containerVolumeM3.toNumber(),
@@ -184,7 +184,7 @@ export class SystemConfigService {
   async findOne(): Promise<SystemConfigResponseDto> {
     const config = await this.prisma.systemConfig.findUnique({ where: { id: SINGLETON_ID } });
     if (!config) {
-      throw new NotFoundException('System config has not been seeded');
+      throw new NotFoundException('Cấu hình hệ thống chưa được khởi tạo');
     }
     return new SystemConfigResponseDto({
       ...config,
@@ -202,7 +202,7 @@ export class SystemConfigService {
   async update(dto: UpdateSystemConfigDto): Promise<SystemConfigResponseDto> {
     const existing = await this.prisma.systemConfig.findUnique({ where: { id: SINGLETON_ID } });
     if (!existing) {
-      throw new NotFoundException('System config has not been seeded');
+      throw new NotFoundException('Cấu hình hệ thống chưa được khởi tạo');
     }
 
     // floorPublicUrl chuẩn hoá về scheme://host[:port] (dán cả /login cũng được; rỗng = xoá). Không gửi field = giữ nguyên.

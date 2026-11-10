@@ -119,11 +119,11 @@ export class SegmentSpecsService {
       include: { materialGroup: true },
     });
     if (!material) {
-      throw new NotFoundException(`Material ${materialId} not found`);
+      throw new NotFoundException(`Không tìm thấy vật tư ${materialId}`);
     }
     if (material.materialGroup?.systemKey !== MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR) {
       throw new BadRequestException(
-        `Material "${material.code}" phải thuộc nhóm vật tư Sắt (systemKey=STEEL_BAR) để tạo segment spec`,
+        `Vật tư "${material.code}" phải thuộc nhóm vật tư Sắt (systemKey=STEEL_BAR) để tạo cỡ đoạn`,
       );
     }
     // 2026-10-01: SegmentSpec là đoạn cắt qua solver bin-packing - chỉ nhóm con SOFTWARE (Phần
@@ -131,7 +131,7 @@ export class SegmentSpecsService {
     // VTTP (FINISHED_COMPONENT) dùng MaterialYieldRecipe - cả 2 không có SegmentSpec.
     if ((material.steelSubGroup ?? SteelSubGroup.SOFTWARE) !== SteelSubGroup.SOFTWARE) {
       throw new BadRequestException(
-        `Material "${material.code}" thuộc nhóm con Tự tính/Vật tư thành phẩm - không dùng SegmentSpec (chỉ nhóm con Phần mềm mới cắt qua solver)`,
+        `Vật tư "${material.code}" thuộc nhóm con Tự tính/Vật tư thành phẩm - không dùng cỡ đoạn (chỉ nhóm con Phần mềm mới cắt qua bộ giải)`,
       );
     }
   }
@@ -145,9 +145,7 @@ export class SegmentSpecsService {
       where: { materialId_cutLengthMm: { materialId, cutLengthMm } },
     });
     if (existing && existing.id !== excludeId) {
-      throw new ConflictException(
-        `Segment spec for material ${materialId} @ ${cutLengthMm}mm already exists`,
-      );
+      throw new ConflictException(`Cỡ đoạn ${cutLengthMm}mm của vật tư ${materialId} đã tồn tại`);
     }
   }
 
@@ -165,7 +163,7 @@ export class SegmentSpecsService {
     const hit = pieceBom ?? partBom;
     if (hit) {
       throw new ConflictException(
-        `Segment spec ${segmentSpecId} đang được BOM revision ${hit.bomRevisionId} (status=${hit.bomRevision.status}) tham chiếu - chỉ revision DRAFT còn dùng spec này mới được sửa, tạo spec mới nếu cần đổi số liệu`,
+        `Cỡ đoạn ${segmentSpecId} đang được bản định mức ${hit.bomRevisionId} (trạng thái ${hit.bomRevision.status}) dùng - chỉ sửa được khi bản định mức còn nháp (DRAFT), cần đổi số liệu thì tạo cỡ đoạn mới`,
       );
     }
   }
@@ -177,7 +175,7 @@ export class SegmentSpecsService {
       include: { material: true },
     });
     if (!spec) {
-      throw new NotFoundException(`Segment spec ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy cỡ đoạn ${id}`);
     }
     return spec;
   }

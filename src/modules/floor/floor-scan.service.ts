@@ -172,7 +172,7 @@ export class FloorScanService {
     const toDate = to ? new Date(to) : new Date();
     const fromDate = from ? new Date(from) : new Date(toDate.getTime() - 7 * 24 * 3600 * 1000);
     if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
-      throw new BadRequestException('from/to phải là ngày hợp lệ (ISO)');
+      throw new BadRequestException('Từ ngày/đến ngày phải là ngày hợp lệ (YYYY-MM-DD)');
     }
     const rows = await this.prisma.floorReport.findMany({
       where: {

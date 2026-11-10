@@ -356,7 +356,7 @@ export class FloorAdminService {
       where: { name: BUSINESS_ROLES.FLOOR_WORKER },
     });
     if (!role) {
-      throw new ConflictException('Chưa có role FLOOR_WORKER - chạy seed (npm run seed) trước');
+      throw new ConflictException('Chưa có vai trò FLOOR_WORKER - chạy seed (npm run seed) trước');
     }
     const username = dto.username.trim().toLowerCase();
     const existing = await this.prisma.user.findUnique({ where: { username } });

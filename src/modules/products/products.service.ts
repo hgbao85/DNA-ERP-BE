@@ -89,7 +89,7 @@ export class ProductsService {
     });
     if (activeVariantCount > 0) {
       throw new ConflictException(
-        `Product ${id} still has ${activeVariantCount} active variant(s) and cannot be deleted`,
+        `Sản phẩm ${id} còn ${activeVariantCount} biến thể đang hoạt động nên không thể xoá`,
       );
     }
 
@@ -266,7 +266,7 @@ export class ProductsService {
     const bigId = parseBigIntId(id);
     const product = await this.prisma.mfgProduct.findUnique({ where: { id: bigId } });
     if (!product) {
-      throw new NotFoundException(`Product ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy sản phẩm ${id}`);
     }
     return product;
   }
@@ -276,7 +276,7 @@ export class ProductsService {
     const idBigId = parseBigIntId(id);
     const variant = await this.prisma.productVariant.findUnique({ where: { id: idBigId } });
     if (!variant || variant.mfgProductId !== productBigId) {
-      throw new NotFoundException(`Variant ${id} not found on product ${productId}`);
+      throw new NotFoundException(`Không tìm thấy biến thể ${id} của sản phẩm ${productId}`);
     }
     return variant;
   }
@@ -286,7 +286,7 @@ export class ProductsService {
     const idBigId = parseBigIntId(id);
     const piece = await this.prisma.piece.findUnique({ where: { id: idBigId } });
     if (!piece || piece.mfgProductId !== productBigId) {
-      throw new NotFoundException(`Piece ${id} not found on product ${productId}`);
+      throw new NotFoundException(`Không tìm thấy mảnh ${id} của sản phẩm ${productId}`);
     }
     return piece;
   }
@@ -296,7 +296,7 @@ export class ProductsService {
     const idBigId = parseBigIntId(id);
     const part = await this.prisma.part.findUnique({ where: { id: idBigId } });
     if (!part || part.mfgProductId !== productBigId) {
-      throw new NotFoundException(`Part ${id} not found on product ${productId}`);
+      throw new NotFoundException(`Không tìm thấy chi tiết ${id} của sản phẩm ${productId}`);
     }
     return part;
   }
@@ -310,7 +310,7 @@ export class ProductsService {
       where: { mfgProductId_code: { mfgProductId, code } },
     });
     if (existing && existing.id !== excludeId) {
-      throw new ConflictException(`Piece "${code}" already exists on this product`);
+      throw new ConflictException(`Mảnh "${code}" đã tồn tại trong sản phẩm này`);
     }
   }
 
@@ -323,7 +323,7 @@ export class ProductsService {
       where: { mfgProductId_code: { mfgProductId, code } },
     });
     if (existing && existing.id !== excludeId) {
-      throw new ConflictException(`Part "${code}" already exists on this product`);
+      throw new ConflictException(`Chi tiết "${code}" đã tồn tại trong sản phẩm này`);
     }
   }
 

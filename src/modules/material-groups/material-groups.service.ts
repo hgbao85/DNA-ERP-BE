@@ -32,7 +32,7 @@ export class MaterialGroupsService {
   async create(dto: CreateMaterialGroupDto): Promise<MaterialGroupResponseDto> {
     const existingName = await this.prisma.materialGroup.findUnique({ where: { name: dto.name } });
     if (existingName) {
-      throw new ConflictException(`Material group "${dto.name}" already exists`);
+      throw new ConflictException(`Nhóm vật tư "${dto.name}" đã tồn tại`);
     }
     const existingPrefix = await this.prisma.materialGroup.findUnique({
       where: { codePrefix: dto.codePrefix },
@@ -58,7 +58,7 @@ export class MaterialGroupsService {
         if (target.includes('codePrefix')) {
           throw new ConflictException(`Tiền tố mã "${dto.codePrefix}" đã dùng cho nhóm khác`);
         }
-        throw new ConflictException(`Material group "${dto.name}" already exists`);
+        throw new ConflictException(`Nhóm vật tư "${dto.name}" đã tồn tại`);
       }
       throw e;
     }
@@ -95,7 +95,7 @@ export class MaterialGroupsService {
     if (dto.name) {
       const existing = await this.prisma.materialGroup.findUnique({ where: { name: dto.name } });
       if (existing && existing.id !== bigId) {
-        throw new ConflictException(`Material group "${dto.name}" already exists`);
+        throw new ConflictException(`Nhóm vật tư "${dto.name}" đã tồn tại`);
       }
     }
     if (dto.codePrefix) {
@@ -129,7 +129,7 @@ export class MaterialGroupsService {
     const bigId = parseBigIntId(id);
     const group = await this.prisma.materialGroup.findUnique({ where: { id: bigId } });
     if (!group) {
-      throw new NotFoundException(`Material group ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy nhóm vật tư ${id}`);
     }
     return group;
   }

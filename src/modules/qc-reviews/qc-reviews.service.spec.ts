@@ -180,7 +180,7 @@ describe('QcReviewsService', () => {
       },
       // updateMany mặc định count:1 (Nghiêm trọng #5, đính chính audit độc lập 09/09 - updateMany+
       // count guard chống 2 request duyệt KCS trùng cho cùng đợt) - test race-guard tự override
-      // count:0 để mô phỏng đợt đã bị 1 request khác xử lý trước, cùng idiom
+      // count:0 để mô phỏng đợt đã bị 1 yêu cầu khác xử lý trước, cùng idiom
       // ProductionInvoicesService.approveItem().
       steelIssue: {
         update: jest.fn(),
@@ -348,7 +348,7 @@ describe('QcReviewsService', () => {
     // Nghiêm trọng #5 (đính chính audit độc lập 09/09): trước đây update() vô điều kiện - 2 request
     // duyệt gần đồng thời (double-click, mạng chập chờn tự gửi lại) cho cùng đợt đều pass check
     // status (snapshot đọc NGOÀI transaction), đều tạo QcReview trùng.
-    it('CHẶN (409, rollback) khi đợt đã bị 1 request khác duyệt trong lúc đang xử lý', async () => {
+    it('CHẶN (409, rollback) khi đợt đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý', async () => {
       prisma.steelIssue.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(service.review('100', { segments: [] }, 'user-kcs')).rejects.toThrow(
@@ -483,7 +483,7 @@ describe('QcReviewsService', () => {
     });
 
     // Nghiêm trọng #5 (đính chính audit độc lập 09/09) - cùng lý do/cùng fix mục 'review' ở trên.
-    it('CHẶN (409, rollback) khi đợt cắt đã bị 1 request khác duyệt trong lúc đang xử lý', async () => {
+    it('CHẶN (409, rollback) khi đợt cắt đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý', async () => {
       prisma.cutBundle.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(service.reviewCutBundle('1', { segments: [] }, 'user-kcs')).rejects.toThrow(
@@ -589,7 +589,7 @@ describe('QcReviewsService', () => {
     });
 
     // Nghiêm trọng #5 (đính chính audit độc lập 09/09) - cùng lý do/cùng fix mục 'review' ở trên.
-    it('CHẶN (409, rollback) khi đợt gửi KCS đã bị 1 request khác duyệt trong lúc đang xử lý', async () => {
+    it('CHẶN (409, rollback) khi đợt gửi KCS đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý', async () => {
       prisma.stepBundle.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(service.reviewStepBundle('800', { segments: [] }, 'user-kcs')).rejects.toThrow(
@@ -727,7 +727,7 @@ describe('QcReviewsService', () => {
     // Nghiêm trọng #5 (đính chính audit độc lập 09/09): đặc biệt quan trọng ở đây vì reportedQty bị
     // GHI ĐÈ (không cộng dồn) - 2 request duyệt trùng không chặn sẽ làm sản lượng đã chốt SAI LỆCH
     // THẬT, không chỉ lost-update audit trail.
-    it('CHẶN (409, rollback) khi batch đã bị 1 request khác duyệt trong lúc đang xử lý - không ghi đè sai reportedQty', async () => {
+    it('CHẶN (409, rollback) khi batch đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý - không ghi đè sai reportedQty', async () => {
       prisma.productionBatch.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(
@@ -815,7 +815,7 @@ describe('QcReviewsService', () => {
     // duyệt gần đồng thời cho cùng bundle đều pass check status (snapshot đọc NGOÀI transaction),
     // đều tạo QcReview -> autoFinalizePieceOutputIfLastStepComplete() cộng TRÙNG failedQty vào sản
     // lượng đã chốt. updateMany+count guard chặn request thua ngay khi vào transaction.
-    it('CHẶN (409, rollback) nếu bundle đã bị 1 request khác duyệt trong lúc đang xử lý - không cộng trùng failedQty vào sản lượng', async () => {
+    it('CHẶN (409, rollback) nếu bundle đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý - không cộng trùng failedQty vào sản lượng', async () => {
       prisma.pieceStepBundle.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(service.reviewPieceStep('800', { failedQty: 5 }, 'user-kcs')).rejects.toThrow(
@@ -897,7 +897,7 @@ describe('QcReviewsService', () => {
     // Nghiêm trọng (cùng idiom reviewPieceStep/reviewProductionBatch): 2 request duyệt gần đồng
     // thời đều đọc status AWAITING_QC (snapshot ngoài transaction) - updateMany+count guard chặn
     // request thua ngay trong transaction, không để gọi finalize 2 lần cho cùng bundle.
-    it('CHẶN (409, rollback) nếu bundle đã bị 1 request khác duyệt trong lúc đang xử lý', async () => {
+    it('CHẶN (409, rollback) nếu bundle đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý', async () => {
       prisma.materialYieldStepBundle.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(

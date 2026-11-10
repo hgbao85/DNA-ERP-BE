@@ -1,6 +1,6 @@
 # Changelog 2026-11-04 — Phần A, Đợt 10a: Booking / Lịch xuất hàng (YC5, phần Sales)
 
-> Trạng thái (05/11): **ĐÃ CODE + kiểm tra + chạy thử thật, CHƯA commit** (người dùng tự commit). Nhánh `dot-10a-booking`, worktree BE
+> Trạng thái (05/11): **ĐÃ CODE + kiểm tra + chạy thử thật; 05/11 đã commit `0e3b21b` + gộp vào `main` `4d95d04`, FE `67bfc8b` → `demo` `b7efc8c`, đã push 05/11 09:52 (BE) – 09:55 (FE)** (changelog phần A mục 10). Nhánh `dot-10a-booking`, worktree BE
 > `D:\DNA-ERP-BE-dot10a` (cắt từ `main` `376534c` - đã có Đợt 1, 2, 5c), FE `D:\DNA-ERP-dot10a` (cắt từ `demo` `6774431`). DB dev riêng
 > `dna_erp_dot10a`. Plan: `docs/ke-hoach-phan-a-12-yeu-cau-2026-11-04.md` mục 7, 8 (điểm ghép ④), 12 (V2-6, V4-20). Nghiệp vụ: v8 YC5
 > 5.1–5.8 + ảnh "bảng thông tin booking" anh Nhân gửi.

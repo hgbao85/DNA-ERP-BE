@@ -8,7 +8,7 @@ import { BadRequestException } from '@nestjs/common';
  */
 export function parseBigIntId(raw: string): bigint {
   if (!/^\d+$/.test(raw)) {
-    throw new BadRequestException(`Invalid id: ${raw}`);
+    throw new BadRequestException(`Mã (id) không hợp lệ: ${raw}`);
   }
   return BigInt(raw);
 }

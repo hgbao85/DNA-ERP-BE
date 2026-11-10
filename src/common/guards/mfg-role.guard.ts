@@ -23,7 +23,9 @@ export class MfgRoleGuard implements CanActivate {
     const mfgRole = request.user?.mfgRole;
 
     if (!mfgRole || !required.includes(mfgRole as MfgRole)) {
-      throw new ForbiddenException(`Requires mfgRole to be one of: ${required.join(', ')}`);
+      throw new ForbiddenException(
+        `Tài khoản không thuộc tổ được làm việc này (cần tổ: ${required.join(', ')})`,
+      );
     }
 
     return true;

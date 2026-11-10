@@ -1,6 +1,6 @@
 # Changelog – Phần A, Đợt 3: Mốc, năng lực 1,3 cont/ngày, cảnh báo (YC10) – 04–05/11/2026
 
-Nhánh `dot-3-moc-nang-luc` ở 2 worktree: BE `D:\DNA-ERP-BE-dot3` (cắt từ `origin/main` `376534c` - đã có Đợt 1, 2, 5a, 5b, 5c), FE
+Nhánh `dot-3-moc-nang-luc` (**05/11 đã commit `a4331d8` + gộp vào `main` `f3c3d50`, FE `798a82f` → `demo` `c9d6588`, đã push 05/11 09:52 (BE) – 09:55 (FE)** - changelog phần A mục 10) ở 2 worktree: BE `D:\DNA-ERP-BE-dot3` (cắt từ `origin/main` `376534c` - đã có Đợt 1, 2, 5a, 5b, 5c), FE
 `D:\DNA-ERP-dot3` (cắt từ `origin/demo` `6774431`). 05/11 đã fetch lại: `main`/`demo` không có commit mới hơn nên không phải gộp.
 Upstream của nhánh đã gỡ (không vô tình push lên main/demo). **Chưa commit** (người dùng tự commit / nhờ phiên gốc gộp).
 Plan: `docs/ke-hoach-phan-a-12-yeu-cau-2026-11-04.md` mục 3 + vòng 4 (V4-3..V4-5, V4-11..V4-16, V4-20 thắng nội dung cũ); bản yêu cầu v8

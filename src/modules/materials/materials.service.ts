@@ -87,7 +87,7 @@ export class MaterialsService {
 
     const existing = await this.prisma.material.findUnique({ where: { code } });
     if (existing) {
-      throw new ConflictException(`Material "${code}" already exists`);
+      throw new ConflictException(`Vật tư "${code}" đã tồn tại`);
     }
 
     // Trung bình, audit toàn diện 09/09/2026: findUnique() ở trên chỉ chặn được trường hợp thường -
@@ -117,7 +117,7 @@ export class MaterialsService {
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        throw new ConflictException(`Material "${code}" already exists`);
+        throw new ConflictException(`Vật tư "${code}" đã tồn tại`);
       }
       throw e;
     }
@@ -303,7 +303,7 @@ export class MaterialsService {
     if (trimmedCode) {
       const existing = await this.prisma.material.findUnique({ where: { code: trimmedCode } });
       if (existing && existing.id !== bigId) {
-        throw new ConflictException(`Material "${trimmedCode}" already exists`);
+        throw new ConflictException(`Vật tư "${trimmedCode}" đã tồn tại`);
       }
     }
 
@@ -516,7 +516,7 @@ export class MaterialsService {
     });
     if (existing) {
       throw new ConflictException(
-        `Supplier ${dto.supplierId} is already linked to material ${materialId}`,
+        `Nhà cung cấp ${dto.supplierId} đã được gán cho vật tư ${materialId}`,
       );
     }
 
@@ -578,7 +578,7 @@ export class MaterialsService {
     });
     if (!link || link.materialId !== materialBigId) {
       throw new NotFoundException(
-        `Material-supplier link ${id} not found on material ${materialId}`,
+        `Không tìm thấy liên kết nhà cung cấp ${id} của vật tư ${materialId}`,
       );
     }
     return link;
@@ -638,7 +638,7 @@ export class MaterialsService {
       include: MATERIAL_RELATIONS_INCLUDE,
     });
     if (!material) {
-      throw new NotFoundException(`Material ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy vật tư ${id}`);
     }
     return material;
   }

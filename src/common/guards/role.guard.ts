@@ -23,7 +23,9 @@ export class RoleGuard implements CanActivate {
     const userRoles = request.user?.roles ?? [];
 
     if (!required.some((role) => userRoles.includes(role))) {
-      throw new ForbiddenException(`Requires role to be one of: ${required.join(', ')}`);
+      throw new ForbiddenException(
+        `Tài khoản không có vai trò được làm việc này (cần: ${required.join(', ')})`,
+      );
     }
 
     return true;

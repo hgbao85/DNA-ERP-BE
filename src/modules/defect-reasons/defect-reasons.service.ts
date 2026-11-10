@@ -84,7 +84,7 @@ export class DefectReasonsService {
     const bigId = parseBigIntId(id);
     const reason = await this.prisma.defectReason.findUnique({ where: { id: bigId } });
     if (!reason) {
-      throw new NotFoundException(`Defect reason ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lý do lỗi ${id}`);
     }
     return reason;
   }

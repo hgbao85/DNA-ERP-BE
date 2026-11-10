@@ -651,6 +651,14 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.DEFECT_REASON,
       actions: [PermissionAction.VIEW, PermissionAction.CREATE],
     },
+    // Vá lỗ quyền phát hiện lúc kiểm thử E2E (2026-11-10, cùng tiền lệ các mục trên): MfgApp hiện
+    // thanh "lệnh đang tạm dừng" (FloorStoppedBanner, gọi GET /production-orders) cho cả KCS nhưng
+    // KCS_STAFF chưa có PRODUCTION_ORDER:VIEW -> 403 bị nuốt, KCS không bao giờ biết lệnh nào QLSX
+    // đang tạm dừng. Chỉ VIEW - Bắt đầu/Tạm dừng/Kết thúc lệnh vẫn là việc của QLSX.
+    {
+      module: PERMISSION_MODULES.PRODUCTION_ORDER,
+      actions: [PermissionAction.VIEW],
+    },
   ],
   // --- Phase 8 (Mua hàng) ---
   // Mua hàng: xác nhận "Sếp đã duyệt" kèm file phiếu ký tay + theo dõi nhận hàng trên đề xuất mua.

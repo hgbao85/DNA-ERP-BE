@@ -18,7 +18,7 @@ export class WeavingPointsService {
   async create(dto: CreateWeavingPointDto): Promise<WeavingPointResponseDto> {
     const existing = await this.prisma.weavingPoint.findUnique({ where: { code: dto.code } });
     if (existing) {
-      throw new ConflictException(`Weaving point "${dto.code}" already exists`);
+      throw new ConflictException(`Điểm đan "${dto.code}" đã tồn tại`);
     }
 
     const point = await this.prisma.weavingPoint.create({
@@ -71,7 +71,7 @@ export class WeavingPointsService {
     if (dto.code) {
       const existing = await this.prisma.weavingPoint.findUnique({ where: { code: dto.code } });
       if (existing && existing.id !== bigId) {
-        throw new ConflictException(`Weaving point "${dto.code}" already exists`);
+        throw new ConflictException(`Điểm đan "${dto.code}" đã tồn tại`);
       }
     }
 
@@ -103,7 +103,7 @@ export class WeavingPointsService {
     const bigId = parseBigIntId(id);
     const point = await this.prisma.weavingPoint.findUnique({ where: { id: bigId } });
     if (!point) {
-      throw new NotFoundException(`Weaving point ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy điểm đan ${id}`);
     }
     return point;
   }

@@ -46,7 +46,7 @@ export class MaterialYieldRecipesService {
     });
     if (existing) {
       throw new ConflictException(
-        `Vật tư "${outputMaterial.code}" đã có định mức sản xuất (MaterialYieldRecipe) - mỗi vật tư ra chỉ có đúng 1 recipe`,
+        `Vật tư "${outputMaterial.code}" đã có công thức quy đổi - mỗi vật tư ra chỉ có đúng 1 công thức`,
       );
     }
 
@@ -226,7 +226,7 @@ export class MaterialYieldRecipesService {
       include: RECIPE_INCLUDE,
     });
     if (!recipe) {
-      throw new NotFoundException(`Material yield recipe ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy công thức quy đổi vật tư ${id}`);
     }
     return recipe;
   }
@@ -234,7 +234,7 @@ export class MaterialYieldRecipesService {
   private async findMaterialOrThrow(id: bigint) {
     const material = await this.prisma.material.findUnique({ where: { id } });
     if (!material) {
-      throw new NotFoundException(`Material ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy vật tư ${id}`);
     }
     return material;
   }
@@ -248,14 +248,14 @@ export class MaterialYieldRecipesService {
       include: { materialGroup: true },
     });
     if (!material) {
-      throw new NotFoundException(`Material ${materialId} not found`);
+      throw new NotFoundException(`Không tìm thấy vật tư ${materialId}`);
     }
     if (
       material.materialGroup?.systemKey !== MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR ||
       material.steelSubGroup !== SteelSubGroup.FINISHED_COMPONENT
     ) {
       throw new BadRequestException(
-        `Material "${material.code}" phải thuộc nhóm Sắt, nhóm con Vật tư thành phẩm (FINISHED_COMPONENT) để gán làm vật tư ra của 1 recipe`,
+        `Vật tư "${material.code}" phải thuộc nhóm Sắt, nhóm con Vật tư thành phẩm (FINISHED_COMPONENT) để gán làm vật tư ra của công thức quy đổi`,
       );
     }
     return material;

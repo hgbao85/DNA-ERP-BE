@@ -1511,7 +1511,7 @@ describe('ProductionInvoicesService', () => {
 
     // Medium fix "race điều kiện chuỗi duyệt/từ chối PI item" - 2 request gần như đồng thời đều
     // pass check in-memory (assertNoApprovalOrRejected) rồi cùng update, ghi đè lẫn nhau trong
-    // audit trail. updateMany+count guard chặn: count=0 nghĩa là 1 request khác đã đổi status
+    // audit trail. updateMany+count guard chặn: count=0 nghĩa là 1 yêu cầu khác đã đổi status
     // của dòng này TRƯỚC khi request này kịp ghi.
     it('rejects with ConflictException when another request already moved the item away from NULL/REJECTED (race guard)', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
@@ -2571,9 +2571,9 @@ describe('ProductionInvoicesService', () => {
     });
 
     // (Đính chính 2026-08-29, audit độc lập 28/08 mục Nghiêm trọng #3) trước đây vòng lặp update()
-    // KHÔNG ĐIỀU KIỆN theo id không chặn được 1 request khác ghi status khác đúng lúc đang chạy -
+    // KHÔNG ĐIỀU KIỆN theo id không chặn được 1 yêu cầu khác ghi status khác đúng lúc đang chạy -
     // xoá PI kéo nhầm SKU không còn ở WAITING_QLSX ra theo, không ai kiểm soát được.
-    it('CHẶN (409, rollback) nếu 1 item đã bị 1 request khác ghi đè status trong lúc QLSX từ chối cả phiếu', async () => {
+    it('CHẶN (409, rollback) nếu 1 item đã bị 1 yêu cầu khác ghi đè status trong lúc QLSX từ chối cả phiếu', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(
         pi({
           items: [

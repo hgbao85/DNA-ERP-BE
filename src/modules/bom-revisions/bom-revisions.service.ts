@@ -96,7 +96,7 @@ export class BomRevisionsService {
     const productBigId = parseBigIntId(productId);
     const product = await this.prisma.mfgProduct.findUnique({ where: { id: productBigId } });
     if (!product) {
-      throw new NotFoundException(`Product ${productId} not found`);
+      throw new NotFoundException(`Không tìm thấy sản phẩm ${productId}`);
     }
 
     const last = await this.prisma.bomRevision.findFirst({
@@ -161,16 +161,16 @@ export class BomRevisionsService {
     const bigId = parseBigIntId(id);
     const revision = await tx.bomRevision.findUnique({ where: { id: bigId } });
     if (!revision) {
-      throw new NotFoundException(`Bom revision ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy bản định mức ${id}`);
     }
     if (revision.status !== BomRevisionStatus.DRAFT) {
       throw new ConflictException(
-        `Only a DRAFT revision can be activated (bom_revision ${id} is ${revision.status})`,
+        `Chỉ kích hoạt được bản định mức ở trạng thái DRAFT (bản ${id} đang ở trạng thái ${revision.status})`,
       );
     }
     if (revision.sourcePlanFormId === null) {
       throw new ConflictException(
-        `Bom revision ${id} has no source plan form - it cannot be activated directly (must be edited and approved through the SKU quota flow)`,
+        `Bản định mức ${id} không có phiếu kế hoạch nguồn - không kích hoạt trực tiếp được (phải sửa và duyệt qua luồng định mức SKU)`,
       );
     }
     const sourcePlanForm = await tx.planForm.findUnique({
@@ -178,7 +178,7 @@ export class BomRevisionsService {
     });
     if (!sourcePlanForm || sourcePlanForm.status !== PlanFormStatus.WAITING_BOSS_APPROVAL) {
       throw new ConflictException(
-        `Bom revision ${id}'s source plan form must be WAITING_BOSS_APPROVAL to activate (is ${sourcePlanForm?.status ?? 'missing'})`,
+        `Phiếu kế hoạch nguồn của bản định mức ${id} phải ở trạng thái WAITING_BOSS_APPROVAL mới kích hoạt được (đang là ${sourcePlanForm?.status ?? 'không có'})`,
       );
     }
 
@@ -197,7 +197,7 @@ export class BomRevisionsService {
     const revision = await this.findOneOrThrow(id);
     if (revision.status !== BomRevisionStatus.DRAFT) {
       throw new ConflictException(
-        `Only a DRAFT revision can be deleted (bom_revision ${id} is ${revision.status})`,
+        `Chỉ xoá được bản định mức ở trạng thái DRAFT (bản ${id} đang ở trạng thái ${revision.status})`,
       );
     }
     await this.prisma.bomRevision.delete({ where: { id: revision.id } });
@@ -215,16 +215,16 @@ export class BomRevisionsService {
     const pieceBigId = parseBigIntId(dto.pieceId);
     const piece = await this.prisma.piece.findUnique({ where: { id: pieceBigId } });
     if (!piece) {
-      throw new NotFoundException(`Piece ${dto.pieceId} not found`);
+      throw new NotFoundException(`Không tìm thấy mảnh ${dto.pieceId}`);
     }
-    this.assertSameProduct(piece.mfgProductId, revision.mfgProductId, 'Piece', dto.pieceId);
+    this.assertSameProduct(piece.mfgProductId, revision.mfgProductId, 'Mảnh', dto.pieceId);
 
     const existing = await this.prisma.bomPiece.findUnique({
       where: { bomRevisionId_pieceId: { bomRevisionId: revision.id, pieceId: pieceBigId } },
     });
     if (existing) {
       throw new ConflictException(
-        `Piece ${dto.pieceId} already has a bom_piece row on this revision`,
+        `Mảnh ${dto.pieceId} đã có dòng số lượng mảnh trên bản định mức này`,
       );
     }
 
@@ -296,15 +296,17 @@ export class BomRevisionsService {
     const partBigId = parseBigIntId(dto.partId);
     const part = await this.prisma.part.findUnique({ where: { id: partBigId } });
     if (!part) {
-      throw new NotFoundException(`Part ${dto.partId} not found`);
+      throw new NotFoundException(`Không tìm thấy chi tiết ${dto.partId}`);
     }
-    this.assertSameProduct(part.mfgProductId, revision.mfgProductId, 'Part', dto.partId);
+    this.assertSameProduct(part.mfgProductId, revision.mfgProductId, 'Chi tiết', dto.partId);
 
     const existing = await this.prisma.bomPart.findUnique({
       where: { bomRevisionId_partId: { bomRevisionId: revision.id, partId: partBigId } },
     });
     if (existing) {
-      throw new ConflictException(`Part ${dto.partId} already has a bom_part row on this revision`);
+      throw new ConflictException(
+        `Chi tiết ${dto.partId} đã có dòng định mức trên bản định mức này`,
+      );
     }
 
     const row = await this.prisma.bomPart.create({
@@ -372,16 +374,16 @@ export class BomRevisionsService {
     const pieceBigId = parseBigIntId(dto.pieceId);
     const piece = await this.prisma.piece.findUnique({ where: { id: pieceBigId } });
     if (!piece) {
-      throw new NotFoundException(`Piece ${dto.pieceId} not found`);
+      throw new NotFoundException(`Không tìm thấy mảnh ${dto.pieceId}`);
     }
-    this.assertSameProduct(piece.mfgProductId, revision.mfgProductId, 'Piece', dto.pieceId);
+    this.assertSameProduct(piece.mfgProductId, revision.mfgProductId, 'Mảnh', dto.pieceId);
 
     const segmentSpecBigId = parseBigIntId(dto.segmentSpecId);
     const segmentSpec = await this.prisma.segmentSpec.findUnique({
       where: { id: segmentSpecBigId },
     });
     if (!segmentSpec) {
-      throw new NotFoundException(`Segment spec ${dto.segmentSpecId} not found`);
+      throw new NotFoundException(`Không tìm thấy cỡ đoạn ${dto.segmentSpecId}`);
     }
 
     const existing = await this.prisma.pieceBom.findUnique({
@@ -398,7 +400,7 @@ export class BomRevisionsService {
     });
     if (existing) {
       throw new ConflictException(
-        `piece_bom row for piece ${dto.pieceId} + segment spec ${dto.segmentSpecId} already exists on this revision`,
+        `Mảnh ${dto.pieceId} với cỡ đoạn ${dto.segmentSpecId} đã có dòng định mức trên bản định mức này`,
       );
     }
 
@@ -480,15 +482,15 @@ export class BomRevisionsService {
     const pieceBigId = parseBigIntId(dto.pieceId);
     const piece = await this.prisma.piece.findUnique({ where: { id: pieceBigId } });
     if (!piece) {
-      throw new NotFoundException(`Piece ${dto.pieceId} not found`);
+      throw new NotFoundException(`Không tìm thấy mảnh ${dto.pieceId}`);
     }
-    this.assertSameProduct(piece.mfgProductId, revision.mfgProductId, 'Piece', dto.pieceId);
+    this.assertSameProduct(piece.mfgProductId, revision.mfgProductId, 'Mảnh', dto.pieceId);
     await this.assertPieceHasBomPiece(revision.id, pieceBigId, dto.pieceId);
 
     const materialBigId = parseBigIntId(dto.materialId);
     const material = await this.prisma.material.findUnique({ where: { id: materialBigId } });
     if (!material) {
-      throw new NotFoundException(`Material ${dto.materialId} not found`);
+      throw new NotFoundException(`Không tìm thấy vật tư ${dto.materialId}`);
     }
     // 2026-10-01: PieceMaterialYield là cơ chế "tỷ lệ cắt cố định" của nhóm con Tự tính (SELF_CALC,
     // vd sắt lá -> Pat) - chặn gán nhầm vật tư nhóm con Phần mềm (đi solver/CuttingProposal, dùng
@@ -499,7 +501,7 @@ export class BomRevisionsService {
       (await this.isSoftwareSteel(material.materialGroupId, material.steelSubGroup))
     ) {
       throw new BadRequestException(
-        `Material "${material.code}" thuộc nhóm con Phần mềm - phải dùng PieceBom/SegmentSpec (cắt qua solver), không dùng PieceMaterialYield`,
+        `Vật tư "${material.code}" thuộc nhóm con Phần mềm - phải dùng PieceBom/SegmentSpec (cắt qua solver), không dùng PieceMaterialYield`,
       );
     }
 
@@ -516,7 +518,7 @@ export class BomRevisionsService {
     });
     if (existing) {
       throw new ConflictException(
-        `Piece ${dto.pieceId} already has a piece_material_yield row for material ${dto.materialId} on this revision`,
+        `Mảnh ${dto.pieceId} đã có dòng định mức vật tư ${dto.materialId} trên bản định mức này`,
       );
     }
 
@@ -601,16 +603,16 @@ export class BomRevisionsService {
     const partBigId = parseBigIntId(dto.partId);
     const part = await this.prisma.part.findUnique({ where: { id: partBigId } });
     if (!part) {
-      throw new NotFoundException(`Part ${dto.partId} not found`);
+      throw new NotFoundException(`Không tìm thấy chi tiết ${dto.partId}`);
     }
-    this.assertSameProduct(part.mfgProductId, revision.mfgProductId, 'Part', dto.partId);
+    this.assertSameProduct(part.mfgProductId, revision.mfgProductId, 'Chi tiết', dto.partId);
 
     const segmentSpecBigId = parseBigIntId(dto.segmentSpecId);
     const segmentSpec = await this.prisma.segmentSpec.findUnique({
       where: { id: segmentSpecBigId },
     });
     if (!segmentSpec) {
-      throw new NotFoundException(`Segment spec ${dto.segmentSpecId} not found`);
+      throw new NotFoundException(`Không tìm thấy cỡ đoạn ${dto.segmentSpecId}`);
     }
 
     const existing = await this.prisma.partBom.findUnique({
@@ -624,7 +626,7 @@ export class BomRevisionsService {
     });
     if (existing) {
       throw new ConflictException(
-        `part_bom row for part ${dto.partId} + segment spec ${dto.segmentSpecId} already exists on this revision`,
+        `Chi tiết ${dto.partId} với cỡ đoạn ${dto.segmentSpecId} đã có dòng định mức trên bản định mức này`,
       );
     }
 
@@ -723,7 +725,7 @@ export class BomRevisionsService {
     });
     if (existing) {
       throw new ConflictException(
-        `consumable_bom row for stage ${dto.stage} + material ${dto.materialId} already exists on this revision`,
+        `Công đoạn ${dto.stage} với vật tư ${dto.materialId} đã có dòng định mức vật tư tiêu hao trên bản định mức này`,
       );
     }
 
@@ -817,7 +819,7 @@ export class BomRevisionsService {
     });
     if (existing) {
       throw new ConflictException(
-        `bom_accessory_items row for material ${dto.materialId} already exists on this revision`,
+        `Vật tư ${dto.materialId} đã có dòng phụ kiện trên bản định mức này`,
       );
     }
 
@@ -885,7 +887,7 @@ export class BomRevisionsService {
     const bigId = parseBigIntId(id);
     const revision = await this.prisma.bomRevision.findUnique({ where: { id: bigId } });
     if (!revision) {
-      throw new NotFoundException(`Bom revision ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy bản định mức ${id}`);
     }
     return revision;
   }
@@ -893,7 +895,7 @@ export class BomRevisionsService {
   private assertDraft(revision: BomRevision): void {
     if (revision.status !== BomRevisionStatus.DRAFT) {
       throw new ConflictException(
-        `Cannot modify line items on bom_revision ${revision.id} - status is ${revision.status}, only DRAFT is editable`,
+        `Không sửa được dòng định mức của bản ${revision.id} - đang ở trạng thái ${revision.status}, chỉ bản DRAFT mới sửa được`,
       );
     }
   }
@@ -916,7 +918,7 @@ export class BomRevisionsService {
     }
     if (!actorRoles.includes(DEFAULT_ROLES.ADMIN)) {
       throw new ConflictException(
-        `Cannot modify line items on bom_revision ${revision.id} - status is ${revision.status}, only DRAFT is editable (chỉ Admin mới ghi đè được bản đã duyệt)`,
+        `Không sửa được dòng định mức của bản ${revision.id} - đang ở trạng thái ${revision.status}, chỉ bản DRAFT mới sửa được (chỉ Admin mới ghi đè được bản đã duyệt)`,
       );
     }
     return true;
@@ -976,12 +978,12 @@ export class BomRevisionsService {
       include: { materialGroup: true },
     });
     if (!material) {
-      throw new NotFoundException(`Material ${materialId} not found`);
+      throw new NotFoundException(`Không tìm thấy vật tư ${materialId}`);
     }
     const systemKey = material.materialGroup?.systemKey;
     if (!systemKey || !allowed.includes(systemKey as MaterialGroupSystemKey)) {
       throw new BadRequestException(
-        `Material "${material.code}" phải thuộc nhóm vật tư hệ thống [${allowed.join(', ')}] cho ${label} (đang thuộc nhóm systemKey=${systemKey ?? 'null'})`,
+        `Vật tư "${material.code}" phải thuộc nhóm vật tư hệ thống [${allowed.join(', ')}] cho ${label} (đang thuộc nhóm systemKey=${systemKey ?? 'null'})`,
       );
     }
     return { code: material.code, detailKind: material.detailKind, systemKey };
@@ -997,7 +999,7 @@ export class BomRevisionsService {
     const accepted = Array.isArray(expected) ? expected : [expected];
     if (!material.detailKind || !accepted.includes(material.detailKind)) {
       throw new BadRequestException(
-        `Material "${material.code}" chưa được phân loại đúng cho ${label} - vào Admin > Vật tư gán Phân loại = ${accepted.join(' hoặc ')} cho vật tư này trước`,
+        `Vật tư "${material.code}" chưa được phân loại đúng cho ${label} - vào Admin > Vật tư gán Phân loại = ${accepted.join(' hoặc ')} cho vật tư này trước`,
       );
     }
   }
@@ -1010,7 +1012,7 @@ export class BomRevisionsService {
   ): void {
     if (entityMfgProductId !== revisionMfgProductId) {
       throw new BadRequestException(
-        `${entityLabel} ${entityId} belongs to a different product than this bom_revision`,
+        `${entityLabel} ${entityId} thuộc sản phẩm khác với bản định mức này`,
       );
     }
   }
@@ -1022,7 +1024,7 @@ export class BomRevisionsService {
       include: { piece: true },
     });
     if (!row || row.bomRevisionId !== revisionId) {
-      throw new NotFoundException(`bom_piece ${id} not found on this revision`);
+      throw new NotFoundException(`Không tìm thấy dòng số lượng mảnh ${id} trên bản định mức này`);
     }
     return row;
   }
@@ -1034,7 +1036,9 @@ export class BomRevisionsService {
       include: { part: true },
     });
     if (!row || row.bomRevisionId !== revisionId) {
-      throw new NotFoundException(`bom_part ${id} not found on this revision`);
+      throw new NotFoundException(
+        `Không tìm thấy dòng định mức chi tiết ${id} trên bản định mức này`,
+      );
     }
     return row;
   }
@@ -1046,7 +1050,7 @@ export class BomRevisionsService {
       include: { piece: true, segmentSpec: { include: { material: true } } },
     });
     if (!row || row.bomRevisionId !== revisionId) {
-      throw new NotFoundException(`piece_bom ${id} not found on this revision`);
+      throw new NotFoundException(`Không tìm thấy dòng định mức mảnh ${id} trên bản định mức này`);
     }
     return row;
   }
@@ -1071,7 +1075,7 @@ export class BomRevisionsService {
     });
     if (!bomPiece) {
       throw new BadRequestException(
-        `Piece ${pieceIdLabel} chưa có bom_piece trên revision này - khai SL mảnh/SKU trước khi gắn định mức nguyên liệu`,
+        `Mảnh ${pieceIdLabel} chưa có dòng số lượng mảnh trên bản định mức này - khai SL mảnh/SKU trước khi gắn định mức nguyên liệu`,
       );
     }
   }
@@ -1086,7 +1090,9 @@ export class BomRevisionsService {
       include: { piece: true, material: true },
     });
     if (!row || row.bomRevisionId !== revisionId) {
-      throw new NotFoundException(`piece_material_yield ${id} not found on this revision`);
+      throw new NotFoundException(
+        `Không tìm thấy dòng định mức vật tư của mảnh ${id} trên bản định mức này`,
+      );
     }
     return row;
   }
@@ -1098,7 +1104,9 @@ export class BomRevisionsService {
       include: { part: true, segmentSpec: { include: { material: true } } },
     });
     if (!row || row.bomRevisionId !== revisionId) {
-      throw new NotFoundException(`part_bom ${id} not found on this revision`);
+      throw new NotFoundException(
+        `Không tìm thấy dòng định mức chi tiết ${id} trên bản định mức này`,
+      );
     }
     return row;
   }
@@ -1113,7 +1121,9 @@ export class BomRevisionsService {
       include: { material: true },
     });
     if (!row || row.bomRevisionId !== revisionId) {
-      throw new NotFoundException(`consumable_bom ${id} not found on this revision`);
+      throw new NotFoundException(
+        `Không tìm thấy dòng định mức vật tư tiêu hao ${id} trên bản định mức này`,
+      );
     }
     return row;
   }
@@ -1128,7 +1138,7 @@ export class BomRevisionsService {
       include: { material: true },
     });
     if (!row || row.bomRevisionId !== revisionId) {
-      throw new NotFoundException(`bom_accessory_items ${id} not found on this revision`);
+      throw new NotFoundException(`Không tìm thấy dòng phụ kiện ${id} trên bản định mức này`);
     }
     return row;
   }

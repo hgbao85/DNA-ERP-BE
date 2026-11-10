@@ -460,7 +460,7 @@ export class PackagingIssuesService {
       select: { code: true, warehouseId: true, warehouse: { select: { id: true, code: true } } },
     });
     if (!material) {
-      throw new NotFoundException(`Material ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy vật tư ${id}`);
     }
     if (!material.warehouseId || !material.warehouse) {
       throw new BadRequestException(
@@ -476,7 +476,7 @@ export class PackagingIssuesService {
   private assertWarehouseScope(warehouseScope: string | null, expectedWarehouseCode: string): void {
     if (warehouseScope && warehouseScope !== expectedWarehouseCode) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được xuất vật tư đóng gói từ kho '${expectedWarehouseCode}'`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không được xuất vật tư đóng gói từ kho '${expectedWarehouseCode}'`,
       );
     }
   }
@@ -561,7 +561,7 @@ export class PackagingIssuesService {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
     if (!order) {
-      throw new NotFoundException(`Production order ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     return order;
   }

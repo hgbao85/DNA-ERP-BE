@@ -334,7 +334,7 @@ export class SteelIssuesService {
     // sự thuộc "phía Phôi", 2026-09-03 mở rộng cho cả kho phoi-son-han PHỤ (isFamilyScope).
     if (warehouseScope && !isFamilyScope(warehouseScope, 'phoi-son-han')) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được xuất sắt kho '${STEEL_WAREHOUSE_CODE}'`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không được xuất sắt kho '${STEEL_WAREHOUSE_CODE}'`,
       );
     }
 
@@ -720,7 +720,7 @@ export class SteelIssuesService {
     const issue = await this.findOneOrThrow(id);
     if (issue.status !== SteelIssueStatus.ISSUED) {
       throw new ConflictException(
-        `Steel issue ${id} đang ở trạng thái ${issue.status} - chỉ ISSUED mới xác nhận nhận được`,
+        `Phiếu xuất sắt ${id} đang ở trạng thái ${issue.status} - chỉ ISSUED mới xác nhận nhận được`,
       );
     }
     await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'xác nhận nhận sắt');
@@ -789,7 +789,7 @@ export class SteelIssuesService {
     // (2026-09-05) định giải quyết nhưng bỏ sót trường hợp lô chỉ có 1 đợt cắt.
     if (issue.status === SteelIssueStatus.ISSUED) {
       throw new ConflictException(
-        `Steel issue ${id} chưa được xác nhận nhận - xác nhận ở "Xác nhận nhận sắt" trước khi nhập đợt cắt`,
+        `Phiếu xuất sắt ${id} chưa được xác nhận nhận - xác nhận ở "Xác nhận nhận sắt" trước khi nhập đợt cắt`,
       );
     }
     await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'nhập đợt cắt');
@@ -1085,7 +1085,7 @@ export class SteelIssuesService {
         batches: { include: { segments: { include: { segmentSpec: true } } } },
       },
     });
-    if (!sb) throw new NotFoundException(`Đợt gửi KCS ${stepBundleId} not found`);
+    if (!sb) throw new NotFoundException(`Không tìm thấy đợt gửi KCS ${stepBundleId}`);
     if (!reassign && sb.productionOrderId !== null) {
       throw new ConflictException(
         `Đợt ${stepBundleId} đã gắn SKU - chỉ ADMIN sửa được (reassign-order)`,
@@ -1544,7 +1544,7 @@ export class SteelIssuesService {
       },
     });
     if (!bundle) {
-      throw new NotFoundException(`Đợt cắt ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy đợt cắt ${id}`);
     }
     return bundle;
   }
@@ -2948,7 +2948,7 @@ export class SteelIssuesService {
     const bigId = parseBigIntId(id);
     const invoice = await this.prisma.productionInvoice.findUnique({ where: { id: bigId } });
     if (!invoice) {
-      throw new NotFoundException(`Production invoice ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh sản xuất ${id}`);
     }
     return invoice;
   }
@@ -2990,7 +2990,7 @@ export class SteelIssuesService {
       include: STEEL_ISSUE_INCLUDE,
     });
     if (!issue) {
-      throw new NotFoundException(`Steel issue ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phiếu xuất sắt ${id}`);
     }
     return issue;
   }
@@ -3002,7 +3002,7 @@ export class SteelIssuesService {
       include: STEEL_ISSUE_DETAIL_INCLUDE,
     });
     if (!issue) {
-      throw new NotFoundException(`Steel issue ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phiếu xuất sắt ${id}`);
     }
     return issue;
   }

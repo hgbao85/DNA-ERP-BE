@@ -751,7 +751,7 @@ export class WarehouseTransfersService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Phiếu chuyển kho ${id} đã được xử lý bởi 1 request khác trong lúc xác nhận - không ghi đè`,
+          `Phiếu chuyển kho ${id} đã được xử lý bởi 1 yêu cầu khác trong lúc xác nhận - không ghi đè`,
         );
       }
 
@@ -890,7 +890,7 @@ export class WarehouseTransfersService {
       });
       if (count === 0) {
         throw new ConflictException(
-          `Phiếu chuyển kho ${id} đã được xử lý bởi 1 request khác trong lúc từ chối - không ghi đè`,
+          `Phiếu chuyển kho ${id} đã được xử lý bởi 1 yêu cầu khác trong lúc từ chối - không ghi đè`,
         );
       }
 
@@ -914,7 +914,7 @@ export class WarehouseTransfersService {
   private async findWarehouseOrThrow(id: bigint): Promise<Warehouse> {
     const warehouse = await this.prisma.warehouse.findUnique({ where: { id } });
     if (!warehouse) {
-      throw new NotFoundException(`Warehouse ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy kho ${id}`);
     }
     return warehouse;
   }
@@ -926,7 +926,7 @@ export class WarehouseTransfersService {
       include: TRANSFER_INCLUDE,
     });
     if (!transfer) {
-      throw new NotFoundException(`Warehouse transfer ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phiếu chuyển kho ${id}`);
     }
     return transfer;
   }
@@ -939,7 +939,7 @@ export class WarehouseTransfersService {
   ): void {
     if (warehouseScope && warehouseScope !== requiredCode) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được ${actionLabel} kho '${requiredCode}'`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không được ${actionLabel} kho '${requiredCode}'`,
       );
     }
   }
@@ -954,7 +954,7 @@ export class WarehouseTransfersService {
       warehouseScope !== transfer.toWarehouse.code
     ) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không liên quan tới phiếu chuyển kho này`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không liên quan tới phiếu chuyển kho này`,
       );
     }
   }

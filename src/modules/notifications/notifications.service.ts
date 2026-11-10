@@ -528,7 +528,7 @@ export class NotificationsService {
     // Không phân biệt "không tồn tại" với "không phải người nhận" - tránh lộ rằng 1 thông báo có
     // tồn tại nhưng gửi cho người khác.
     if (!recipient) {
-      throw new NotFoundException(`Notification ${notificationId} not found`);
+      throw new NotFoundException(`Không tìm thấy thông báo ${notificationId}`);
     }
     return recipient;
   }

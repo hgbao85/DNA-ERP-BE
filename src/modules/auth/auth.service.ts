@@ -28,6 +28,7 @@ const REFRESH_TOKEN_BYTES = 64;
 
 /** FE đọc message này để chuyển sang màn "đặt PIN lần đầu" (xem FloorScanApp). */
 export const PIN_SETUP_REQUIRED = 'PIN_SETUP_REQUIRED';
+export const INVALID_CREDENTIALS = 'Tên đăng nhập hoặc mật khẩu không đúng';
 
 type TxClient = Pick<PrismaServiceType, 'refreshToken'>;
 
@@ -65,7 +66,7 @@ export class AuthService {
   async login(dto: LoginDto, ip?: string): Promise<AuthTokensDto> {
     const user = await this.usersService.findAuthProfileByUsername(dto.username);
     if (!user || !user.isActive) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
 
     // Tài khoản công nhân xưởng (PIN 6 số): chưa có PIN -> đặt lần đầu; sai 5 lần -> khoá tạm.
@@ -94,7 +95,7 @@ export class AuthService {
           );
         }
       }
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
     if (isFloorWorker && (user.failedLoginCount > 0 || user.lockedUntil)) {
       await this.prisma.user.update({
@@ -207,7 +208,7 @@ export class AuthService {
     const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
 
     if (!stored) {
-      throw new UnauthorizedException('Invalid or expired refresh token');
+      throw new UnauthorizedException('Phiên đăng nhập đã hết hạn. Đăng nhập lại.');
     }
 
     // Reuse detection: a token that was already rotated (revokedAt set BY the rotation itself -
@@ -224,16 +225,16 @@ export class AuthService {
       this.logger.warn(
         `Refresh token reuse detected for user ${stored.userId} (tokenId ${stored.id}) - revoked ${count} live token(s)`,
       );
-      throw new UnauthorizedException('Invalid or expired refresh token');
+      throw new UnauthorizedException('Phiên đăng nhập đã hết hạn. Đăng nhập lại.');
     }
 
     if (stored.revokedAt || stored.expiresAt < new Date()) {
-      throw new UnauthorizedException('Invalid or expired refresh token');
+      throw new UnauthorizedException('Phiên đăng nhập đã hết hạn. Đăng nhập lại.');
     }
 
     const user = await this.usersService.findAuthProfileById(stored.userId);
     if (!user || !user.isActive) {
-      throw new UnauthorizedException('Invalid or expired refresh token');
+      throw new UnauthorizedException('Phiên đăng nhập đã hết hạn. Đăng nhập lại.');
     }
     // Công nhân ra khỏi mạng công ty thì không gia hạn phiên (không thu hồi token - về lại mạng công ty dùng tiếp được).
     if (this.isNetworkRestricted(user))
@@ -268,7 +269,7 @@ export class AuthService {
   ): Promise<AuthTokensDto> {
     const user = await this.usersService.findAuthProfileById(userId);
     if (!user || !user.isActive) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Tài khoản không còn hoạt động. Đăng nhập lại.');
     }
     if (!user.warehouseScopes.includes(warehouseCode)) {
       throw new ForbiddenException(`Tài khoản không được giao kho '${warehouseCode}'`);
@@ -289,12 +290,12 @@ export class AuthService {
   async changePassword(userId: string, dto: ChangePasswordDto): Promise<void> {
     const user = await this.usersService.findAuthProfileById(userId);
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Tài khoản không còn hoạt động. Đăng nhập lại.');
     }
 
     const passwordMatches = await argon2.verify(user.password, dto.currentPassword);
     if (!passwordMatches) {
-      throw new UnauthorizedException('Current password is incorrect');
+      throw new UnauthorizedException('Mật khẩu hiện tại không đúng');
     }
 
     const hashedPassword = await argon2.hash(dto.newPassword);

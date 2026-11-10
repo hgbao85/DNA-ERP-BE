@@ -53,9 +53,9 @@ export class UsersService {
       where: { OR: [{ email: dto.email }, { username: dto.username }] },
     });
     if (existing) {
-      const field = existing.email === dto.email ? 'Email' : 'Username';
+      const field = existing.email === dto.email ? 'Email' : 'Tên đăng nhập';
       const value = existing.email === dto.email ? dto.email : dto.username;
-      throw new ConflictException(`${field} ${value} is already in use`);
+      throw new ConflictException(`${field} ${value} đã được dùng`);
     }
 
     const hashedPassword = await argon2.hash(dto.password);
@@ -117,7 +117,7 @@ export class UsersService {
   async findOne(id: string): Promise<UserResponseDto> {
     const user = await this.findRawById(id);
     if (!user) {
-      throw new NotFoundException(`User ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy tài khoản ${id}`);
     }
     return this.toResponseDto(user);
   }
@@ -130,10 +130,10 @@ export class UsersService {
     // the FE hides these controls too, but the BE never trusts that.
     if (id === currentUserId) {
       if (dto.roleIds !== undefined) {
-        throw new ForbiddenException('You cannot change your own roles');
+        throw new ForbiddenException('Bạn không thể tự đổi vai trò của mình');
       }
       if (dto.isActive === false) {
-        throw new ForbiddenException('You cannot deactivate your own account');
+        throw new ForbiddenException('Bạn không thể tự vô hiệu hoá tài khoản của mình');
       }
     }
 
@@ -249,7 +249,7 @@ export class UsersService {
           const target = managedRoles.find((role) => role.name === targetName);
           if (!target) {
             throw new Error(
-              `Business role "${targetName}" is missing - run the seed to create it.`,
+              `Thiếu vai trò nghiệp vụ "${targetName}" - chạy seed để tạo vai trò này.`,
             );
           }
           await tx.userRole.create({ data: { userId: id, roleId: target.id } });
@@ -283,7 +283,7 @@ export class UsersService {
 
   async remove(id: string, currentUserId: string): Promise<void> {
     if (id === currentUserId) {
-      throw new ForbiddenException('You cannot delete your own account');
+      throw new ForbiddenException('Bạn không thể tự xoá tài khoản của mình');
     }
     await this.findOneOrThrow(id);
     await this.assertNoBuyerMaterials(id, 'xoá tài khoản');
@@ -326,7 +326,7 @@ export class UsersService {
     await this.findOneOrThrow(id);
     const target = await this.prisma.user.findUnique({ where: { id: dto.toUserId } });
     if (!target) {
-      throw new NotFoundException(`User ${dto.toUserId} not found`);
+      throw new NotFoundException(`Không tìm thấy tài khoản ${dto.toUserId}`);
     }
     if (!target.isActive || !target.isPurchaser) {
       throw new BadRequestException(
@@ -379,14 +379,14 @@ export class UsersService {
   private async findOneOrThrow(id: string) {
     const user = await this.findRawById(id);
     if (!user) {
-      throw new NotFoundException(`User ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy tài khoản ${id}`);
     }
     return user;
   }
 
   private toResponseDto(user: UserWithRoles): UserResponseDto {
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw new NotFoundException('Không tìm thấy tài khoản');
     }
     return new UserResponseDto({
       id: user.id,

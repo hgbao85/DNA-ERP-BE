@@ -118,7 +118,7 @@ export class MaterialYieldRecipeIssuesService {
     const inputMaterial = recipe.inputMaterial;
     if (!inputMaterial.warehouse || !inputMaterial.warehouseId) {
       throw new BadRequestException(
-        `Vật tư ${inputMaterial.name} chưa được gán kho (Material.warehouseId) - báo Admin cấu hình trước khi xuất`,
+        `Vật tư ${inputMaterial.name} chưa được gán kho - báo Admin cấu hình trước khi xuất`,
       );
     }
     // Đợt 7 (chia 9 kho): vật tư Phôi của lệnh xưởng Phước An xuất từ kho Phôi Phước An.
@@ -239,7 +239,7 @@ export class MaterialYieldRecipeIssuesService {
     const issue = await this.findOneOrThrow(id);
     if (issue.status !== MaterialYieldIssueStatus.ISSUED) {
       throw new ConflictException(
-        `Material yield recipe issue ${id} đang ở trạng thái ${issue.status} - chỉ ISSUED mới xác nhận nhận được`,
+        `Phiếu xuất của công thức quy đổi ${id} đang ở trạng thái ${issue.status} - chỉ ISSUED mới xác nhận nhận được`,
       );
     }
     this.assertMfgRoleIsPhoi(callerMfgRole);
@@ -264,7 +264,7 @@ export class MaterialYieldRecipeIssuesService {
     });
     if (count === 0) {
       throw new ConflictException(
-        `Material yield recipe issue ${id} đã được xác nhận nhận bởi 1 request khác trong lúc xử lý - không ghi đè`,
+        `Phiếu xuất của công thức quy đổi ${id} đã được xác nhận nhận bởi 1 yêu cầu khác trong lúc xử lý - không ghi đè`,
       );
     }
 
@@ -364,7 +364,7 @@ export class MaterialYieldRecipeIssuesService {
   private assertWarehouseScope(warehouseScope: string | null, materialWarehouseCode: string): void {
     if (warehouseScope && warehouseScope !== materialWarehouseCode) {
       throw new ForbiddenException(
-        `Caller bị giới hạn ở kho '${warehouseScope}', không được xuất vật tư từ kho '${materialWarehouseCode}'`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không được xuất vật tư từ kho '${materialWarehouseCode}'`,
       );
     }
   }
@@ -373,7 +373,7 @@ export class MaterialYieldRecipeIssuesService {
     if (!mfgRole) return;
     if (mfgRole !== 'PHOI') {
       throw new ForbiddenException(
-        `Caller có mfgRole '${mfgRole}', không được xác nhận nhận vật tư thành phẩm (chỉ Phôi)`,
+        `Bạn có vai trò xưởng '${mfgRole}', không được xác nhận nhận vật tư thành phẩm (chỉ Phôi)`,
       );
     }
   }
@@ -385,7 +385,7 @@ export class MaterialYieldRecipeIssuesService {
       include: ISSUE_INCLUDE,
     });
     if (!issue) {
-      throw new NotFoundException(`Material yield recipe issue ${id} not found`);
+      throw new NotFoundException(`Không tìm thấy phiếu xuất của công thức quy đổi ${id}`);
     }
     return issue;
   }

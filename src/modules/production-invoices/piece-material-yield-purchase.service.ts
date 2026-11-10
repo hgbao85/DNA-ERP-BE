@@ -52,7 +52,7 @@ export class PieceMaterialYieldPurchaseService {
     const piBigId = parseBigIntId(productionInvoiceId);
     const pi = await this.prisma.productionInvoice.findUnique({ where: { id: piBigId } });
     if (!pi) {
-      throw new NotFoundException(`Production invoice ${productionInvoiceId} not found`);
+      throw new NotFoundException(`Không tìm thấy lệnh sản xuất ${productionInvoiceId}`);
     }
 
     // Mọi ProductionOrder (1 SKU/PO đã duyệt) thuộc PI này - 1 PI có thể có nhiều SKU/nhiều PO
