@@ -18,9 +18,7 @@ import {
   ProductionInvoiceStatus,
   ProductionOrderFloorStage,
   SolverMachine,
-  PurchaseProposalStatus,
   TransferStatus,
-  WarehouseKind,
   Workshop,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
@@ -105,6 +103,7 @@ import {
 } from './deadline-changes/deadline-values.util';
 import { ItemDeadlineWriter } from './item-deadline-writer.service';
 import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
+import { WorkshopMoveService } from '../warehouse-transfers/workshop-move.service';
 
 type PIWithRefs = Prisma.ProductionInvoiceGetPayload<{
   include: {
@@ -195,6 +194,8 @@ export class ProductionInvoicesService {
     // Phần A – Đợt 9 (YC2)
     private readonly deadlineWriter: ItemDeadlineWriter,
     private readonly deadlineChanges: DeadlineChangesService,
+    // Người B (10/11/2026): phần kho/mua khi đổi xưởng.
+    private readonly workshopMove: WorkshopMoveService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -1169,7 +1170,7 @@ export class ProductionInvoicesService {
     await this.assertNoMaterialIssued(this.prisma, pi.id, ids, displayCode);
 
     let cuttingRecheckFlagged = false;
-    await this.prisma.$transaction(async (tx) => {
+    const notifyWorkshopMove = await this.prisma.$transaction(async (tx) => {
       await this.assertNoMaterialIssued(tx, pi.id, ids, displayCode);
       const { count } = await tx.productionInvoiceItem.updateMany({
         where: {
@@ -1208,7 +1209,10 @@ export class ProductionInvoicesService {
         });
         cuttingRecheckFlagged = true;
       }
+      // Người B (10/11/2026): đổi nơi nhận dòng mua chưa về sang kho xưởng mới, cùng lần lưu; thông báo gửi sau commit.
+      return this.workshopMove.afterWorkshopChanged(tx, pi.id, workshop.id, actorUserId);
     });
+    await notifyWorkshopMove();
 
     for (const it of pi.items) {
       await auditEvent(this.prisma, this.cls, this.logger, {
@@ -1347,28 +1351,8 @@ export class ProductionInvoicesService {
         `Lệnh ${displayCode} đã xuất vật tư cho xưởng - không đổi xưởng được`,
       );
     }
-    // Đợt 7 (chia 9 kho, user chốt 07/11 - tạm thời): lệnh đã giữ chỗ hoặc đã có dòng mua vật tư Phôi/Hàn ở kho của
-    // xưởng cũ thì CHƯA cho đổi xưởng (chưa có bước tự chuyển giữ chỗ/kho nhận sang xưởng mới).
-    const boundKinds = [WarehouseKind.PHOI, WarehouseKind.HAN];
-    const reserved = await client.stockReservation.count({
-      where: {
-        productionInvoiceId: piId,
-        status: 'ACTIVE',
-        warehouse: { kind: { in: boundKinds } },
-      },
-    });
-    const buying = await client.purchaseProposalItem.count({
-      where: {
-        proposal: { productionInvoiceId: piId },
-        status: { not: PurchaseProposalStatus.PURCHASED },
-        material: { warehouse: { kind: { in: boundKinds } } },
-      },
-    });
-    if (reserved > 0 || buying > 0) {
-      throw new ConflictException(
-        `Lệnh ${displayCode} đã giữ chỗ hoặc đang mua sắt/vật tư Phôi-Hàn ở kho của xưởng hiện tại - tạm thời chưa đổi xưởng được, báo IT hỗ trợ`,
-      );
-    }
+    // Chặn tạm Đợt 7 (lệnh đã giữ chỗ / đang mua ở kho xưởng cũ) ĐÃ GỠ 10/11/2026 - đổi xưởng nay tự đổi nơi nhận dòng mua chưa về
+    // và thủ kho xưởng cũ lập phiếu chuyển hàng đang giữ (WorkshopMoveService, người B).
   }
 
   /** KHSX gửi 1 SKU cho QLSX xử lý - mirror sendItemToQlsx() mock. */

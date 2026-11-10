@@ -105,6 +105,7 @@ describe('ProductionInvoicesService', () => {
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
   let cloudinaryService: { deleteByUrl: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
+  let workshopMove: { afterWorkshopChanged: jest.Mock };
   let deadlineChanges: {
     previewEntries: jest.Mock;
     saveEntries: jest.Mock;
@@ -295,6 +296,7 @@ describe('ProductionInvoicesService', () => {
     materialYieldRecipePurchaseService = {
       computeAndUpsertProposals: jest.fn().mockResolvedValue([]),
     };
+    workshopMove = { afterWorkshopChanged: jest.fn().mockResolvedValue(() => Promise.resolve()) };
     deadlineChanges = {
       previewEntries: jest.fn().mockResolvedValue([]),
       saveEntries: jest.fn().mockResolvedValue({ applied: [], batch: null, skipped: [] }),
@@ -325,6 +327,7 @@ describe('ProductionInvoicesService', () => {
         notificationsService as unknown as NotificationsService,
       ),
       deadlineChanges as unknown as DeadlineChangesService,
+      workshopMove as never,
     );
   });
 
@@ -3197,27 +3200,29 @@ describe('ProductionInvoicesService', () => {
       expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
     });
 
-    it('Đợt 7: lệnh đã giữ chỗ / đang mua vật tư Phôi-Hàn ở kho xưởng hiện tại -> 409 tạm chặn, không ghi', async () => {
+    it('10/11: lệnh đã giữ chỗ / đang mua ở kho xưởng cũ vẫn đổi được - gọi phần kho/mua TRONG transaction, thông báo sau commit', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
-      prisma.stockReservation.count.mockResolvedValue(1);
-      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(
-        /tạm thời chưa đổi xưởng được/,
-      );
-      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
-
-      prisma.stockReservation.count.mockResolvedValue(0);
+      prisma.stockReservation.count.mockResolvedValue(3);
       prisma.purchaseProposalItem.count.mockResolvedValue(2);
-      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow(
-        /tạm thời chưa đổi xưởng được/,
+      const notify = jest.fn().mockResolvedValue(undefined);
+      workshopMove.afterWorkshopChanged.mockResolvedValue(notify);
+
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).resolves.toBeDefined();
+      expect(workshopMove.afterWorkshopChanged).toHaveBeenCalledWith(prisma, 7n, 4n, 'u');
+      expect(prisma.productionInvoiceItem.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        workshopMove.afterWorkshopChanged.mock.invocationCallOrder[0],
       );
-      const [countArg] = prisma.purchaseProposalItem.count.mock.calls[0] as [
-        { where: Record<string, unknown> },
-      ];
-      expect(countArg.where).toMatchObject({
-        status: { not: 'PURCHASED' },
-        material: { warehouse: { kind: { in: ['PHOI', 'HAN'] } } },
-      });
-      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
+
+    it('10/11: phần kho/mua lỗi -> cả việc đổi xưởng lỗi (không gửi thông báo)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      workshopMove.afterWorkshopChanged.mockRejectedValue(new Error('kho lỗi'));
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow('kho lỗi');
+      expect(notificationsService.emit).not.toHaveBeenCalledWith(
+        'PI_WORKSHOP_CHANGED',
+        expect.anything(),
+      );
     });
 
     it('xuất sắt chen vào giữa lúc đổi (kiểm lại TRONG transaction) -> 409, không ghi', async () => {

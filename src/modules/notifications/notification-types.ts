@@ -399,6 +399,23 @@ export interface WeavingMaterialsNeededParams {
   pieceSummary: string;
 }
 
+/** Đổi xưởng (10/11/2026): dòng mua chưa về đổi kho nhận sang kho xưởng mới - người mua báo nhà cung cấp. */
+export interface PurchaseReceiveWarehouseChangedParams {
+  lenhCode: string;
+  count: number;
+  /** "VT-001 → Kho Phôi Phước An, ..." */
+  summary: string;
+  buyerIds: string[];
+}
+
+/** Đổi xưởng (10/11/2026): hàng đang giữ cho lệnh ở kho xưởng cũ cần lập phiếu chuyển sang kho xưởng mới. */
+export interface WorkshopMoveNeededParams {
+  lenhCode: string;
+  fromWarehouseName: string;
+  toWarehouseName: string;
+  count: number;
+}
+
 /** "Kiểm tra dữ liệu" (2026-10-28, DataHealthService) - lần chạy có dòng bất thường MỚI. */
 export interface DataHealthNotificationParams {
   /** Tổng dòng mới trong ngày (cộng dồn các lần chạy gộp vào cùng thông báo). */
@@ -1444,6 +1461,33 @@ const notificationTypeDefinitions = {
       warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
     }),
   } satisfies NotificationTypeDef<WeavingIssueNotificationParams & { warehouseCodes: string[] }>,
+  PURCHASE_RECEIVE_WAREHOUSE_CHANGED: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PurchaseReceiveWarehouseChangedParams) =>
+      `Lệnh ${p.lenhCode} đổi xưởng: ${p.count} dòng mua chưa về đổi nơi nhận - báo nhà cung cấp`,
+    message: (p: PurchaseReceiveWarehouseChangedParams) => p.summary,
+    link: () => ({ module: 'purchasing', page: 'don-dat-hang' }),
+    recipients: (p: PurchaseReceiveWarehouseChangedParams) =>
+      p.buyerIds.length > 0 ? { userIds: p.buyerIds } : { roles: [BUSINESS_ROLES.PURCHASER] },
+  } satisfies NotificationTypeDef<PurchaseReceiveWarehouseChangedParams>,
+  /** Tự đóng khi kho cũ không còn hàng giữ cho lệnh (WarehouseTransfersService.resolveWorkshopMoveIfDone). */
+  WORKSHOP_MOVE_NEEDED: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: WorkshopMoveNeededParams) =>
+      `Lệnh ${p.lenhCode} đổi xưởng: chuyển ${p.count} dòng hàng đang giữ sang ${p.toWarehouseName}`,
+    message: (p: WorkshopMoveNeededParams) =>
+      `Từ ${p.fromWarehouseName}. Chờ KHSX bấm "Đã kiểm" phương án cắt rồi lập phiếu chuyển ở "Xuất theo đơn hàng".`,
+    link: () => ({ module: 'inbound_warehouse', page: 'xuat-kho' }),
+    recipients: (p: WorkshopMoveNeededParams & { warehouseCodes: string[] }) => ({
+      warehouseIds: p.warehouseCodes,
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<WorkshopMoveNeededParams & { warehouseCodes: string[] }>,
   /** Tự đóng khi vật tư kèm của phiếu mảnh đã nằm đủ trên phiếu vật tư, hoặc phiếu mảnh bị huỷ (IssueSlipsService). */
   WEAVING_MATERIALS_NEEDED: {
     category: 'ACTION_REQUIRED',

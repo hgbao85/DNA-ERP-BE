@@ -14,6 +14,7 @@ import { PERMISSION_MODULES } from '../../common/constants/permission-modules.co
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { ConfirmWarehouseTransferDto } from './dto/confirm-warehouse-transfer.dto';
+import { CreateWorkshopMoveDto } from './dto/create-workshop-move.dto';
 import { CreatePieceWarehouseTransferDto } from './dto/create-piece-warehouse-transfer.dto';
 import { CreateWarehouseTransferDto } from './dto/create-warehouse-transfer.dto';
 import { ListWarehouseTransfersQueryDto } from './dto/list-warehouse-transfers-query.dto';
@@ -60,6 +61,32 @@ export class WarehouseTransfersController {
     }
     return this.warehouseTransfersService.createPieceTransfer(
       dto,
+      warehouseScope,
+      userId,
+      idempotencyKey,
+    );
+  }
+
+  /** Hàng của lệnh đổi xưởng còn nằm ở kho Phôi/Hàn xưởng cũ cần chuyển (10/11/2026). Đặt TRƯỚC @Get(':id'). */
+  @Get('workshop-moves')
+  @RequirePermissions(VIEW)
+  getWorkshopMovePlans(@CurrentUser('warehouseScope') warehouseScope: string | null) {
+    return this.warehouseTransfersService.getWorkshopMovePlans(warehouseScope);
+  }
+
+  /** Lập phiếu chuyển hàng của lệnh đổi xưởng từ 1 kho cũ sang kho cùng loại của xưởng mới. */
+  @Post('workshop-moves')
+  @RequirePermissions(CREATE)
+  createWorkshopMove(
+    @Body() dto: CreateWorkshopMoveDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+    @Headers('Idempotency-Key') idempotencyKey: string | undefined,
+  ) {
+    return this.warehouseTransfersService.createWorkshopMove(
+      dto.productionInvoiceId,
+      dto.fromWarehouseId,
+      dto.part,
       warehouseScope,
       userId,
       idempotencyKey,

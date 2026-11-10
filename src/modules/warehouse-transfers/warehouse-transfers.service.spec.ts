@@ -18,6 +18,7 @@ describe('WarehouseTransfersService', () => {
   let stockLedgerService: { postEntry: jest.Mock };
   let stockReservationsService: { getAvailableQty: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
+  let workshopMove: { moveReservationsInTx: jest.Mock; getPlans: jest.Mock };
   let prisma: {
     warehouse: { findUnique: jest.Mock };
     warehouseTransfer: {
@@ -166,12 +167,14 @@ describe('WarehouseTransfersService', () => {
       resolve: jest.fn().mockResolvedValue(undefined),
     };
     realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    workshopMove = { moveReservationsInTx: jest.fn(), getPlans: jest.fn().mockResolvedValue([]) };
     service = new WarehouseTransfersService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
       stockReservationsService as unknown as StockReservationsService,
       notificationsService as unknown as NotificationsService,
       realtimeStub as unknown as RealtimeService,
+      workshopMove as never,
     );
 
     prisma.warehouse.findUnique.mockImplementation(
