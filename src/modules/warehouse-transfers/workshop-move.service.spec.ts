@@ -131,6 +131,52 @@ describe('WorkshopMoveService', () => {
     );
   });
 
+  it('afterWorkshopChanged: kho cũ có cả Sắt lẫn Vật tư khác -> 1 thông báo cho kho đó, đếm đủ dòng 2 nhóm (tổng duyệt 11/11)', async () => {
+    prisma.purchaseProposalItem.findMany.mockResolvedValue([]);
+    const plan = (part: 'STEEL' | 'OTHER', lines: number, recheckPending: boolean) => ({
+      productionInvoiceId: '500',
+      part,
+      lenhCode: 'PBD-1',
+      fromWarehouseId: '1',
+      fromWarehouseCode: 'phoi-son-han',
+      fromWarehouseName: 'Kho Phôi Phú An',
+      toWarehouseId: '7',
+      toWarehouseCode: 'phoi-son-han-phoi-pha',
+      toWarehouseName: 'Kho Phôi Phước An',
+      recheckPending,
+      lines: Array.from({ length: lines }, (_, i) => ({
+        materialId: String(i),
+        materialCode: 'X',
+        materialName: 'X',
+        unit: 'cây',
+        stockLengthMm: 0,
+        spec: '',
+        qty: 1,
+      })),
+    });
+    jest
+      .spyOn(service, 'getPlans')
+      .mockResolvedValue([plan('STEEL', 2, true), plan('OTHER', 1, false)]);
+    const notify = await service.afterWorkshopChanged(prisma as never, 500n, 20n, 'qlsx');
+    await notify();
+    const calls = (notifications.emit.mock.calls as unknown[][]).filter(
+      (c) => c[0] === 'WORKSHOP_MOVE_NEEDED',
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toEqual(
+      expect.objectContaining({
+        dedupeKey: 'WORKSHOP_MOVE_NEEDED:500:1',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+        params: expect.objectContaining({
+          count: 3,
+          steelCount: 2,
+          otherCount: 1,
+          steelWaiting: true,
+        }),
+      }),
+    );
+  });
+
   it('afterWorkshopChanged: đổi về xưởng có kho mặc định của vật tư -> bỏ ghi đè (null)', async () => {
     prisma.purchaseProposalItem.findMany.mockResolvedValue([
       {

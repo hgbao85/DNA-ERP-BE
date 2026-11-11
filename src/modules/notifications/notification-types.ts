@@ -414,6 +414,11 @@ export interface WorkshopMoveNeededParams {
   fromWarehouseName: string;
   toWarehouseName: string;
   count: number;
+  /** Số dòng sắt / vật tư khác (11/11/2026) - thiếu ở thông báo cũ thì coi như 0. */
+  steelCount?: number;
+  otherCount?: number;
+  /** Phần sắt đang chờ KHSX "Đã kiểm" phương án cắt. */
+  steelWaiting?: boolean;
 }
 
 /** "Kiểm tra dữ liệu" (2026-10-28, DataHealthService) - lần chạy có dòng bất thường MỚI. */
@@ -1479,8 +1484,19 @@ const notificationTypeDefinitions = {
     entityType: 'PRODUCTION_INVOICE',
     title: (p: WorkshopMoveNeededParams) =>
       `Lệnh ${p.lenhCode} đổi xưởng: chuyển ${p.count} dòng hàng đang giữ sang ${p.toWarehouseName}`,
-    message: (p: WorkshopMoveNeededParams) =>
-      `Từ ${p.fromWarehouseName}. Chờ KHSX bấm "Đã kiểm" phương án cắt rồi lập phiếu chuyển ở "Xuất theo đơn hàng".`,
+    message: (p: WorkshopMoveNeededParams) => {
+      const parts: string[] = [`Từ ${p.fromWarehouseName}.`];
+      if (p.otherCount)
+        parts.push(`Vật tư khác (${p.otherCount} dòng): lập phiếu chuyển được ngay.`);
+      if (p.steelCount)
+        parts.push(
+          p.steelWaiting
+            ? `Sắt (${p.steelCount} dòng): chờ KHSX bấm "Đã kiểm" phương án cắt rồi mới lập phiếu.`
+            : `Sắt (${p.steelCount} dòng): lập phiếu chuyển được ngay.`,
+        );
+      parts.push('Lập phiếu ở "Xuất theo đơn hàng".');
+      return parts.join(' ');
+    },
     link: () => ({ module: 'inbound_warehouse', page: 'xuat-kho' }),
     recipients: (p: WorkshopMoveNeededParams & { warehouseCodes: string[] }) => ({
       warehouseIds: p.warehouseCodes,

@@ -158,17 +158,27 @@ export class WorkshopMoveService {
             },
           });
         }
-        for (const p of plans) {
+        // 1 thông báo / kho cũ (dedupeKey theo kho): trước 11/11 mỗi phần Sắt / Vật tư khác gửi 1 cái cùng dedupeKey nên cái
+        // sau bị bỏ - thủ kho chỉ thấy số dòng của 1 phần, và lời nhắn luôn ghi "chờ Đã kiểm" kể cả phần lập được ngay.
+        const byFrom = new Map<string, WorkshopMovePlan[]>();
+        for (const p of plans)
+          byFrom.set(p.fromWarehouseId, [...(byFrom.get(p.fromWarehouseId) ?? []), p]);
+        for (const [fromWarehouseId, group] of byFrom) {
+          const steel = group.find((p) => p.part === 'STEEL');
+          const other = group.find((p) => p.part === 'OTHER');
           await this.notifications.emit('WORKSHOP_MOVE_NEEDED', {
-            entityId: `${piKey}:${p.fromWarehouseId}`,
+            entityId: `${piKey}:${fromWarehouseId}`,
             actorId: actorUserId,
-            dedupeKey: `WORKSHOP_MOVE_NEEDED:${piKey}:${p.fromWarehouseId}`,
+            dedupeKey: `WORKSHOP_MOVE_NEEDED:${piKey}:${fromWarehouseId}`,
             params: {
               lenhCode,
-              fromWarehouseName: p.fromWarehouseName,
-              toWarehouseName: p.toWarehouseName,
-              count: p.lines.length,
-              warehouseCodes: [p.fromWarehouseCode],
+              fromWarehouseName: group[0].fromWarehouseName,
+              toWarehouseName: group[0].toWarehouseName,
+              count: group.reduce((n, p) => n + p.lines.length, 0),
+              steelCount: steel?.lines.length ?? 0,
+              otherCount: other?.lines.length ?? 0,
+              steelWaiting: steel?.recheckPending ?? false,
+              warehouseCodes: [group[0].fromWarehouseCode],
             },
           });
         }
@@ -288,7 +298,8 @@ export class WorkshopMoveService {
           materialId: r.materialId.toString(),
           materialCode: r.material.code,
           materialName: r.material.name,
-          unit: r.material.unit,
+          // Sắt theo cây (có chiều dài cây) đếm bằng cây, không theo đơn vị gốc của vật tư (vd 'Mm') - cùng cách phiếu xuất sắt.
+          unit: r.stockLengthMm > 0 ? 'cây' : r.material.unit,
           stockLengthMm: r.stockLengthMm,
           spec: r.spec,
           qty: round4(left),

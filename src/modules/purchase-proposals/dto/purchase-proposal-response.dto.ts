@@ -30,6 +30,8 @@ export class PurchaseReceiptLogResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) receiptId!: string | null;
   /// Tổng của cả phiếu (đơn gộp: lần nhận của dòng này chỉ là 1 phần chia).
   @Expose() @ApiPropertyOptional({ nullable: true }) receiptTotalQty!: number | null;
+  /// Số phiếu nhập NK-yymmdd-NNN của phiếu chứa lần nhận này (11/11/2026 - hiện ở "Lịch sử nhận hàng").
+  @Expose() @ApiPropertyOptional({ nullable: true, type: String }) receiptCode!: string | null;
   @Expose() @ApiProperty() allocationAdjusted!: boolean;
   /// 4 ô chứng từ của phiếu (YC4): (1) phiếu giao NCC, (2) phiếu đề xuất Giám đốc ký, (3) phiếu nhập kho, (4) phiếu cân xe.
   @Expose() @ApiProperty() supplierSlipUrls!: string[];

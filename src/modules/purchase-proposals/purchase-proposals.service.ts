@@ -135,6 +135,7 @@ const ITEM_INCLUDE = {
       receivedBy: true,
       receipt: {
         select: {
+          code: true,
           receivedQty: true,
           allocationAdjusted: true,
           overQty: true,
@@ -1250,6 +1251,7 @@ export class PurchaseProposalsService {
             receivedAt: r.receivedAt,
             receiptId: r.receiptId?.toString() ?? null,
             receiptTotalQty: r.receipt?.receivedQty.toNumber() ?? null,
+            receiptCode: r.receipt?.code ?? null,
             allocationAdjusted: r.receipt?.allocationAdjusted ?? false,
             supplierSlipUrls: r.receipt?.supplierSlipUrls ?? [],
             approvalFileUrls: r.receipt?.approvalFileUrls ?? [],
