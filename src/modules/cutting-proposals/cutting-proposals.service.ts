@@ -1776,6 +1776,7 @@ export class CuttingProposalsService {
               materialId: material.id.toString(),
               materialCode: material.code,
               materialName: material.name,
+              materialSpec: material.spec?.trim() || null,
               standaloneWastePct: wastePct,
               stockLengthMm: stockLengths.length === 1 ? stockLengths[0] : null,
               standaloneMinBars: this.minBarsFor(demand, stockLengths, trimMm, kerfMm),
@@ -2049,7 +2050,7 @@ export class CuttingProposalsService {
     // đủ bất kể byMaterial rỗng hay không - KHÔNG được thêm lại early-return này.
     const materials = await this.prisma.material.findMany({
       where: { id: { in: [...byMaterial.keys()] } },
-      select: { id: true, code: true, name: true },
+      select: { id: true, code: true, name: true, spec: true },
     });
 
     return { items, byMaterial, materials, config, itemsWithoutBom };
@@ -4516,6 +4517,7 @@ export class CuttingProposalsService {
         materialId: line.materialId.toString(),
         materialCode: line.material.code,
         materialName: line.material.name,
+        materialSpec: line.material.spec?.trim() || null,
         unit: line.material.unit,
         feasible: line.feasible,
         bestStockLengthMm: line.bestStockLengthMm,

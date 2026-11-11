@@ -15,6 +15,7 @@ export class CandidateMaterialDto {
   @Expose() @ApiProperty() materialId!: string;
   @Expose() @ApiProperty() materialCode!: string;
   @Expose() @ApiProperty() materialName!: string;
+  @Expose() @ApiProperty({ type: String, nullable: true }) materialSpec!: string | null;
   /// Hao hụt khi CHỈ SKU này cắt loại sắt này. Ý nghĩa phụ thuộc `verified`/`verifiedLengthSource`:
   ///  - verified=false: cận dưới LÝ TƯỞNG (best-fill.util.ts, giả định nguồn đoạn vô hạn) - hiển
   ///    thị kèm dấu "≥", thực tế có thể cao hơn.

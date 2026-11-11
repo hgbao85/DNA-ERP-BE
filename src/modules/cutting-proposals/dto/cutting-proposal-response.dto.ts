@@ -98,6 +98,7 @@ export class CuttingProposalLineResponseDto {
   @Expose() @ApiProperty() materialId!: string;
   @Expose() @ApiProperty() materialCode!: string;
   @Expose() @ApiProperty() materialName!: string;
+  @Expose() @ApiProperty({ type: String, nullable: true }) materialSpec!: string | null;
   @Expose() @ApiProperty() unit!: string;
   @Expose() @ApiProperty() feasible!: boolean;
   @Expose() @ApiPropertyOptional({ nullable: true }) bestStockLengthMm!: number | null;

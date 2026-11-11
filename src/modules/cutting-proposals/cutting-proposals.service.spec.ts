@@ -4343,4 +4343,33 @@ describe('CuttingProposalsService', () => {
       });
     });
   });
+
+  describe('materialSpec ở dòng phương án (toDetailResponseDto)', () => {
+    type Internals = {
+      toResponseDto: (p: unknown) => unknown;
+      toDetailResponseDto: (p: unknown, w: number) => { lines: { materialSpec: string | null }[] };
+    };
+    const run = (spec: string | null) => {
+      const internals = service as unknown as Internals;
+      jest.spyOn(internals, 'toResponseDto').mockReturnValue({});
+      const line = {
+        materialId: 1n,
+        material: { code: 'SAT-025', name: 'Sắt phi 6zem', unit: 'kg', spec },
+        feasible: true,
+        patterns: [],
+      };
+      const dto = internals.toDetailResponseDto({ lines: [line] }, 10);
+      return dto.lines[0].materialSpec;
+    };
+
+    it('trả quy cách của vật tư, đã cắt khoảng trắng', () => {
+      expect(run(' Ø19 ')).toBe('Ø19');
+    });
+
+    it('trả null khi quy cách rỗng / toàn khoảng trắng / null', () => {
+      expect(run('   ')).toBeNull();
+      expect(run('')).toBeNull();
+      expect(run(null)).toBeNull();
+    });
+  });
 });
