@@ -55,7 +55,7 @@ const TRANSFER_INCLUDE = {
   // giống màn "Nhập kho" (PurchaseProposalItemResponseDto.materialSpec), để Thủ kho đối chiếu đúng
   // quy cách khi nhận hàng chuyển kho, không chỉ tên. Dòng "ghi tự do" cũ (materialId null,
   // trước 09/09/2026) không có Material để join -> materialSpec null.
-  items: { include: { material: { select: { spec: true } } } },
+  items: { include: { material: { select: { spec: true, code: true } } } },
   // Phiếu chuyển hàng của lệnh đổi xưởng (10/11/2026): số lệnh để in ô "Lệnh sản xuất" / cột LSX.
   productionInvoice: {
     select: { code: true, items: { select: { lsxCode: true }, orderBy: { id: 'asc' as const } } },
@@ -1175,10 +1175,12 @@ export class WarehouseTransfersService {
           new WarehouseTransferItemResponseDto({
             id: item.id.toString(),
             materialId: item.materialId?.toString() ?? null,
+            materialCode: item.material?.code ?? null,
             materialName: item.materialName,
             // Nệm: quy cách đã chọn khi tạo phiếu thay cho Material.spec.
             materialSpec: item.spec || (item.material?.spec ?? null),
-            unit: item.unit,
+            // Dòng sắt có chiều dài cây (phiếu chuyển hàng đổi xưởng) đếm bằng cây - phiếu lập trước 11/11 còn lưu đơn vị gốc ('Mm').
+            unit: item.stockLengthMm > 0 ? 'cây' : item.unit,
             quantity: item.quantity.toNumber(),
             sentQty: item.sentQty?.toNumber() ?? null,
             stockLengthMm: item.stockLengthMm,

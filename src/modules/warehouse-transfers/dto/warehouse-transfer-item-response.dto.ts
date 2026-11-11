@@ -5,6 +5,8 @@ import { Exclude, Expose } from 'class-transformer';
 export class WarehouseTransferItemResponseDto {
   @Expose() @ApiProperty() id!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) materialId!: string | null;
+  /** Mã vật tư (in cột "Mã vật tư" trên phiếu chuyển) - null cho dòng "ghi tự do" cũ. */
+  @Expose() @ApiPropertyOptional({ nullable: true, type: String }) materialCode!: string | null;
   @Expose() @ApiProperty() materialName!: string;
   /// Quy cách vật tư (Material.spec) - null cho dòng "ghi tự do" cũ (materialId null, trước
   /// 09/09/2026, không có Material để join) và vật tư chưa khai báo quy cách.
