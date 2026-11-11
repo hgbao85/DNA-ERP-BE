@@ -2083,7 +2083,7 @@ export class ProductionInvoicesService {
     try {
       await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(piId.toString());
     } catch (error) {
-      failed.push(`vật tư thành phẩm theo mảnh: ${(error as Error).message}`);
+      failed.push('pat/vật tư thành phẩm theo mảnh');
       this.logger.error(
         `Auto piece-material-yield-purchase trigger failed for ${context}: ${(error as Error).message}`,
       );
@@ -2095,7 +2095,7 @@ export class ProductionInvoicesService {
     try {
       await this.consumableMaterialPurchaseService.computeAndUpsertProposals(piId.toString());
     } catch (error) {
-      failed.push(`vật tư tiêu hao: ${(error as Error).message}`);
+      failed.push('vật tư tiêu hao');
       this.logger.error(
         `Auto consumable-material-purchase trigger failed for ${context}: ${(error as Error).message}`,
       );
@@ -2107,14 +2107,15 @@ export class ProductionInvoicesService {
     try {
       await this.materialYieldRecipePurchaseService.computeAndUpsertProposals(piId.toString());
     } catch (error) {
-      failed.push(`vật tư thành phẩm không gắn mảnh: ${(error as Error).message}`);
+      failed.push('chân nhôm/vật tư thành phẩm không gắn mảnh');
       this.logger.error(
         `Auto material-yield-recipe-purchase trigger failed for ${context}: ${(error as Error).message}`,
       );
     }
+    // Chỉ nêu tên nguồn: câu lỗi gốc (thường tiếng Anh, lộ chi tiết DB) đã nằm trong log ở trên.
     if (opts.rethrow && failed.length > 0) {
       throw new ConflictException(
-        `Tạo dòng mua ngoài sắt cho ${context} chưa xong (${failed.join('; ')}) - bấm thử lại sau`,
+        `Tạo dòng mua ngoài sắt chưa xong ở: ${failed.join('; ')}. Phần đã xong vẫn được giữ - bấm thử lại sau`,
       );
     }
   }
@@ -2150,9 +2151,10 @@ export class ProductionInvoicesService {
    * UI hiển thị đã duyệt). FE phát hiện ca này qua `prodApprovalStatus=APPROVED && productionOrderId
    * =null` (xem ProductionInvoiceItemResponseDto.productionOrderId).
    *
-   * Chỉ chạy được khi item ĐÃ APPROVED và CHƯA có ProductionOrder nào -
-   * `ProductionOrder.productionInvoiceItemId` là `@unique` nên gọi lại khi đã có lệnh sẽ tự vi phạm
-   * constraint; chặn tường minh ở đây để trả lỗi rõ ràng thay vì lỗi DB thô.
+   * Chỉ chạy khi item ĐÃ APPROVED. Chưa có ProductionOrder thì tạo lệnh. Đã có lệnh thì không tạo lại
+   * (`ProductionOrder.productionInvoiceItemId` là `@unique`) mà tính lại 3 nguồn mua ngoài sắt của cả PI
+   * - FE gọi qua nút "Tạo lại dòng mua ngoài sắt" (Admin > Lệnh sản xuất). Nguồn nào còn lỗi thì 409 nêu
+   * tên nguồn và giữ thông báo lỗi; PI đã huỷ thì 409, không tính.
    */
   async retryProductionOrder(
     piId: string,
@@ -2174,23 +2176,20 @@ export class ProductionInvoicesService {
     // - đường phục hồi là duyệt lại phương án đó, không giải lại.
     const preSolved = await this.cuttingProposalsService.findPreSolvedForInvoice(pi.id);
     if (existingOrder) {
+      if (pi.status === ProductionInvoiceStatus.CANCELLED) {
+        throw new ConflictException(`${pi.code} đã huỷ - không tính lại đề xuất mua`);
+      }
       if (preSolved?.status === CuttingProposalStatus.DRAFT) {
         await this.cuttingProposalsService.approve(preSolved.id.toString(), actorUserId);
-        await this.computeNonSteelPurchaseProposals(pi.id, `PI item ${item.id}`);
-        await this.resolvePiNotifications('PRODUCTION_INVOICE_ITEM', item.id, [
-          'PI_PRODUCTION_ORDER_FAILED',
-        ]);
-        return this.toItemResponseDto(item);
       }
-      // 10/11/2026: phương án đã duyệt mà bước tạo dòng mua ngoài sắt từng lỗi (vd transaction quá giờ) thì không còn đường
-      // nào tạo bù - chạy lại 3 nguồn (tự idempotent: chỉ tính lại, không tạo dòng trùng, kể cả khi đã có dòng đã ký).
-      if (preSolved?.status === CuttingProposalStatus.APPROVED) {
-        await this.computeNonSteelPurchaseProposals(pi.id, `PI item ${item.id}`, { rethrow: true });
-        return this.toItemResponseDto(item);
-      }
-      throw new ConflictException(
-        `SKU ${item.id} đã có lệnh sản xuất (PO ${existingOrder.poNumber}) - không cần tạo lại`,
-      );
+      // 10/11/2026: bước tạo dòng mua ngoài sắt sau khi Sếp duyệt có thể đã lỗi (vd transaction quá giờ) hoặc chưa từng chạy
+      // (máy chủ khởi động lại khi phương án cắt đường cũ đang tính) - chạy lại 3 nguồn cho mọi trạng thái phương án, kể cả
+      // khi không có phương án tính trước. Tự idempotent: chỉ tính lại, không tạo dòng trùng, không đụng dòng đã ký.
+      await this.computeNonSteelPurchaseProposals(pi.id, `PI item ${item.id}`, { rethrow: true });
+      await this.resolvePiNotifications('PRODUCTION_INVOICE_ITEM', item.id, [
+        'PI_PRODUCTION_ORDER_FAILED',
+      ]);
+      return this.toItemResponseDto(item);
     }
     let pinnedRevisionId: bigint | undefined;
     if (preSolved?.status === CuttingProposalStatus.DRAFT) {

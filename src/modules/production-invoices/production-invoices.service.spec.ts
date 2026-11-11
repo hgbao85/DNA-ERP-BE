@@ -2698,24 +2698,32 @@ describe('ProductionInvoicesService', () => {
         new Error('Transaction already closed'),
       );
 
-      await expect(service.retryProductionOrder('7', '20', 'admin-1')).rejects.toThrow(
-        /vật tư tiêu hao: Transaction already closed/,
-      );
+      const err: unknown = await service
+        .retryProductionOrder('7', '20', 'admin-1')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      // Nêu tên nguồn lỗi, không chép câu lỗi gốc (đã có trong log)
+      expect((err as ConflictException).message).toMatch(/vật tư tiêu hao/);
+      expect((err as ConflictException).message).not.toContain('Transaction already closed');
       // 2 nguồn còn lại vẫn chạy
       expect(materialYieldRecipePurchaseService.computeAndUpsertProposals).toHaveBeenCalled();
+      expect(notificationsService.resolve).not.toHaveBeenCalled();
     });
 
-    it('CHẶN (409) nếu ProductionOrder đã tồn tại - không cần tạo lại', async () => {
+    it('ProductionOrder đã tồn tại, không có phương án tính trước (đường cũ) -> không tạo lại lệnh, chỉ tính lại 3 nguồn mua ngoài sắt', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(
         piItem({ prodApprovalStatus: 'APPROVED' }),
       );
       prisma.productionOrder.findUnique.mockResolvedValue({ id: 5n, poNumber: 'PO-5' });
 
-      await expect(service.retryProductionOrder('7', '20', 'admin-1')).rejects.toThrow(
-        ConflictException,
-      );
+      await expect(service.retryProductionOrder('7', '20', 'admin-1')).resolves.toBeDefined();
       expect(productionOrdersService.createFromApproval).not.toHaveBeenCalled();
+      expect(pieceMaterialYieldPurchaseService.computeAndUpsertProposals).toHaveBeenCalledWith('7');
+      expect(consumableMaterialPurchaseService.computeAndUpsertProposals).toHaveBeenCalledWith('7');
+      expect(materialYieldRecipePurchaseService.computeAndUpsertProposals).toHaveBeenCalledWith(
+        '7',
+      );
     });
   });
 
