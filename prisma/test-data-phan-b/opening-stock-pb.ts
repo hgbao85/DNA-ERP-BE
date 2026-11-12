@@ -27,6 +27,16 @@ const ROWS: [string, string, number][] = [
   ['SAT-009', 'phoi-son-han', 30], // Bánh đá cắt
 ];
 
+/**
+ * `--bo-sung`: nạp thêm lần 2 (11/11/2026) - lệnh PI 79 của bên Kế hoạch (cùng DB dev) đã giữ hết đinh/dây tồn đầu kỳ ở kho
+ * Phụ kiện. Khoá riêng 'PB-OPEN-2:...' nên chạy lại không cộng trùng; vẫn refId 'PB-OPEN' để reset-pb.ts trả ngược như lần 1.
+ */
+const ROWS_BO_SUNG: [string, string, number][] = [
+  ['DAY-010', 'vat-tu-tp', 50],
+  ['DINH-001', 'vat-tu-tp', 300],
+];
+const BO_SUNG = process.argv.includes('--bo-sung');
+
 async function main() {
   const app = await NestFactory.createApplicationContext(AppModule, { logger: ['error', 'warn'] });
   try {
@@ -37,7 +47,7 @@ async function main() {
     const opening = await prisma.warehouse.findUniqueOrThrow({
       where: { code: 'OPENING_BALANCE' },
     });
-    for (const [code, whCode, qty] of ROWS) {
+    for (const [code, whCode, qty] of BO_SUNG ? ROWS_BO_SUNG : ROWS) {
       const m = await prisma.material.findUniqueOrThrow({
         where: { code },
         include: { warehouse: true },
@@ -54,9 +64,11 @@ async function main() {
           qty,
           refType: StockLedgerRefType.ADJUST,
           refId: 'PB-OPEN',
-          note: 'Tồn đầu kỳ dữ liệu thử PB (12/11)',
+          note: BO_SUNG
+            ? 'Tồn đầu kỳ dữ liệu thử PB (12/11) - nạp bổ sung'
+            : 'Tồn đầu kỳ dữ liệu thử PB (12/11)',
           createdById: admin.id,
-          idempotencyKey: `PB-OPEN:${code}:${whCode}`,
+          idempotencyKey: `${BO_SUNG ? 'PB-OPEN-2' : 'PB-OPEN'}:${code}:${whCode}`,
         });
       });
       const q = await prisma.stockQuant.findFirst({
