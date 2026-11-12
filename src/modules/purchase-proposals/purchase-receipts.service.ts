@@ -120,7 +120,7 @@ export class PurchaseReceiptsService {
     const overFileUrls = cleanUrls(dto.overFileUrls);
     const missing: string[] = [];
     if (supplierSlipUrls.length === 0) missing.push('phiếu giao hàng của NCC');
-    if (receiptSlipUrls.length === 0) missing.push('phiếu nhập kho nhà máy');
+    if (receiptSlipUrls.length === 0) missing.push('phiếu nhập kho nhà máy đã ký');
     const approvalFileUrls = this.approvalFilesOf(lines, cleanUrls(dto.approvalFileUrls));
     if (approvalFileUrls.length === 0) missing.push('phiếu đề xuất Giám đốc ký');
     if (isSteelLine(first) && weighSlipUrls.length === 0) {

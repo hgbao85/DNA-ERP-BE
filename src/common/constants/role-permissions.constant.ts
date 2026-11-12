@@ -674,9 +674,9 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // ở tầng FE, BE vẫn cho Mua hàng tự duyệt nếu gọi thẳng API (D.h4-purchaser-approve, sửa
   // 2026-08-11).
   //
-  // SUPPLIER: ALL - vừa quản lý entity Supplier (suppliers.controller.ts) vừa quản lý các route
-  // lồng POST/GET/PATCH/DELETE .../materials/:id/suppliers. Giữ nguyên sau 2026-08-27 dù màn
-  // "Vật tư – NCC" của Mua hàng đã gỡ: Admin › Nhà cung cấp vẫn dùng, và endpoint vẫn sống.
+  // SUPPLIER: VIEW/CREATE/UPDATE (12/11/2026, trước là ALL) - quản lý entity Supplier (suppliers.controller.ts) và các
+  // route lồng .../materials/:id/suppliers (màn "Vật tư – NCC" đã gỡ 2026-08-27, route còn sống). Người mua tự thêm/sửa NCC
+  // ở Mua hàng > Nhà cung cấp; xoá NCC chỉ Admin.
   // MATERIAL: chỉ VIEW (KHÔNG UPDATE) - giữ UPDATE sẽ vô tình cho phép PURCHASER gọi
   // PATCH /materials/:id (sửa vật tư gốc) dù UI không có chỗ nào dùng tới.
   [BUSINESS_ROLES.PURCHASER]: [
@@ -684,7 +684,12 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PURCHASE_PROPOSAL,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
-    { module: PERMISSION_MODULES.SUPPLIER, actions: 'ALL' },
+    // 12/11/2026 (anh Nhân): người mua tự thêm/sửa NCC (màn Mua hàng > Nhà cung cấp), CHỈ Admin xoá. DELETE bỏ khỏi
+    // đây; DB đã seed 'ALL' từ trước nên DELETE /suppliers/:id còn chặn thêm bằng @RequireRole(ADMIN).
+    {
+      module: PERMISSION_MODULES.SUPPLIER,
+      actions: [PermissionAction.VIEW, PermissionAction.CREATE, PermissionAction.UPDATE],
+    },
     { module: PERMISSION_MODULES.MATERIAL, actions: [PermissionAction.VIEW] },
   ],
   // Quản lý vật tư (2026-09-28) - tài khoản chuyên biệt CHỈ dùng màn Admin > Danh mục hệ thống >

@@ -57,8 +57,9 @@ type OrderRow = Prisma.SupplierOrderGetPayload<{ include: typeof ORDER_INCLUDE }
  * (52/2026). Giám đốc ký phiếu theo đơn, người mua tải phiếu lên ở đúng đơn đó ("Sếp đã duyệt"),
  * các dòng trong đơn mới chuyển PURCHASING để Kho nhận hàng.
  *
- * Số đơn không bao giờ cấp lại: đơn huỷ giữ số (CANCELLED) vì số có thể đã nằm trên giấy tờ gửi
- * NCC. Bộ đếm ở SupplierOrderCounter, tăng nguyên tử trong khoá theo (NCC, năm).
+ * Số đơn: đơn huỷ khi CHƯA TỪNG có phiếu Giám đốc ký thì số được cấp lại cho đơn kế tiếp của cùng NCC (12/11/2026,
+ * anh Nhân - không nhảy cóc); đơn đã ký rồi Thay phiếu mới huỷ thì giữ số. Bộ đếm ở SupplierOrderCounter, cấp số trong
+ * khoá theo (NCC, năm) - xem allocateSeq().
  */
 @Injectable()
 export class SupplierOrdersService {
@@ -139,15 +140,9 @@ export class SupplierOrdersService {
       for (const pid of proposalIds) {
         await lockBusinessKey(tx, `purchase-proposal-mutate:${pid}`);
       }
-      const [counter] = await tx.$queryRaw<{ lastSeq: number }[]>`
-        INSERT INTO "supplier_order_counters" ("supplierId", "year", "lastSeq", "updatedAt")
-        VALUES (${supplierId}, ${year}, 1, NOW())
-        ON CONFLICT ("supplierId", "year")
-        DO UPDATE SET "lastSeq" = "supplier_order_counters"."lastSeq" + 1, "updatedAt" = NOW()
-        RETURNING "lastSeq"
-      `;
+      const seq = await this.allocateSeq(tx, supplierId, year);
       const order = await tx.supplierOrder.create({
-        data: { supplierId, year, seq: counter.lastSeq, createdById: actorUserId },
+        data: { supplierId, year, seq, createdById: actorUserId },
       });
       const { count } = await tx.purchaseProposalItem.updateMany({
         where: {
@@ -176,7 +171,10 @@ export class SupplierOrdersService {
     return this.toDto(result, await this.lenhCodesOf([result]));
   }
 
-  /** Gỡ 1 dòng khỏi đơn CHƯA duyệt (bản v8 mục 7.5). Đơn rỗng thì tự huỷ, số đơn giữ nguyên. */
+  /**
+   * Gỡ 1 dòng khỏi đơn CHƯA duyệt (bản v8 mục 7.5). Đơn rỗng thì tự huỷ - như Huỷ đơn: đơn chưa từng có phiếu ký
+   * thì số đơn được cấp lại cho đơn kế tiếp của cùng NCC (12/11/2026, xem allocateSeq).
+   */
   async removeItem(
     id: string,
     itemId: string,
@@ -225,7 +223,11 @@ export class SupplierOrdersService {
     return this.findOne(id);
   }
 
-  /** Huỷ đơn CHƯA duyệt: các dòng quay về chờ gom đơn; số đơn giữ nguyên, không cấp lại. */
+  /**
+   * Huỷ đơn CHƯA duyệt: các dòng quay về chờ gom đơn. Đơn chưa từng có phiếu Giám đốc ký (revision = 0) thì số đơn
+   * được cấp lại cho đơn kế tiếp của cùng NCC (12/11/2026, anh Nhân - không nhảy cóc); đơn đã ký rồi "Thay phiếu"
+   * mới huỷ thì giữ số (số đó đã nằm trên phiếu Giám đốc ký). Xem allocateSeq.
+   */
   async cancel(
     id: string,
     reason: string,
@@ -583,17 +585,24 @@ export class SupplierOrdersService {
         _max: { seq: true },
       }),
     ]);
-    const lastBy = new Map(counters.map((c) => [c.supplierId.toString(), c.lastSeq]));
+    const counterBy = new Map(counters.map((c) => [c.supplierId.toString(), c]));
     const maxBy = new Map(maxIssued.map((m) => [m.supplierId.toString(), m._max.seq ?? 0]));
-    return suppliers.map(
-      (s) =>
-        new SupplierOrderCounterDto({
+    return Promise.all(
+      suppliers.map(async (s) => {
+        const c = counterBy.get(s.id.toString());
+        const lastSeq = c?.lastSeq ?? 0;
+        const reused = maxBy.has(s.id.toString())
+          ? await this.findReusableSeq(this.prisma, s.id, year, c?.reuseFromSeq ?? 0)
+          : null;
+        return new SupplierOrderCounterDto({
           supplierId: s.id.toString(),
           supplierName: s.name,
           year,
-          lastSeq: lastBy.get(s.id.toString()) ?? 0,
+          lastSeq,
           maxIssuedSeq: maxBy.get(s.id.toString()) ?? 0,
-        }),
+          nextSeq: reused ?? lastSeq + 1,
+        });
+      }),
     );
   }
 
@@ -622,10 +631,11 @@ export class SupplierOrdersService {
       const prev = await tx.supplierOrderCounter.findUnique({
         where: { supplierId_year: { supplierId, year } },
       });
+      // Số từ mốc nạp trở xuống có thể đã dùng ngoài hệ thống - không cấp lại số đơn huỷ trong khoảng đó.
       await tx.supplierOrderCounter.upsert({
         where: { supplierId_year: { supplierId, year } },
-        create: { supplierId, year, lastSeq },
-        update: { lastSeq },
+        create: { supplierId, year, lastSeq, reuseFromSeq: lastSeq },
+        update: { lastSeq, reuseFromSeq: lastSeq },
       });
       return prev?.lastSeq ?? 0;
     });
@@ -639,6 +649,49 @@ export class SupplierOrdersService {
     });
     const [row] = (await this.listCounters(year)).filter((c) => c.supplierId === supplierIdRaw);
     return row;
+  }
+
+  /**
+   * Cấp số cho đơn mới của 1 NCC trong 1 năm (12/11/2026, anh Nhân điểm 10 - không nhảy cóc): ưu tiên số NHỎ NHẤT của
+   * đơn đã huỷ khi chưa từng có phiếu Giám đốc ký (revision = 0) mà chưa đơn nào khác (chưa huỷ) đang dùng, và lớn hơn
+   * mốc Admin nạp (reuseFromSeq); không có thì lastSeq + 1. Khoá cùng key với setCounter() để 2 đơn tạo cùng lúc không
+   * lấy trùng 1 số trả lại (partial unique index supplier_orders_active_seq_key là chốt chặn cuối).
+   */
+  private async allocateSeq(tx: PrismaTx, supplierId: bigint, year: number): Promise<number> {
+    await lockBusinessKey(tx, `supplier-order-counter:${supplierId}:${year}`);
+    const counter = await tx.supplierOrderCounter.findUnique({
+      where: { supplierId_year: { supplierId, year } },
+    });
+    const reused = await this.findReusableSeq(tx, supplierId, year, counter?.reuseFromSeq ?? 0);
+    if (reused !== null) return reused;
+    const next = (counter?.lastSeq ?? 0) + 1;
+    await tx.supplierOrderCounter.upsert({
+      where: { supplierId_year: { supplierId, year } },
+      create: { supplierId, year, lastSeq: next },
+      update: { lastSeq: next },
+    });
+    return next;
+  }
+
+  /** Số đơn huỷ nhỏ nhất cấp lại được (xem allocateSeq), không có thì null. */
+  private async findReusableSeq(
+    db: Pick<PrismaTx, '$queryRaw'>,
+    supplierId: bigint,
+    year: number,
+    reuseFromSeq: number,
+  ): Promise<number | null> {
+    const [row] = await db.$queryRaw<{ seq: number | null }[]>`
+      SELECT min(c."seq")::int AS "seq"
+      FROM "supplier_orders" c
+      WHERE c."supplierId" = ${supplierId} AND c."year" = ${year}
+        AND c."status" = 'CANCELLED' AND c."revision" = 0 AND c."seq" > ${reuseFromSeq}
+        AND NOT EXISTS (
+          SELECT 1 FROM "supplier_orders" a
+          WHERE a."supplierId" = c."supplierId" AND a."year" = c."year" AND a."seq" = c."seq"
+            AND a."status" <> 'CANCELLED'
+        )
+    `;
+    return row?.seq ?? null;
   }
 
   // Khoá + tái kiểm DRAFT trong transaction - đơn có thể vừa được duyệt/huỷ ở tab khác.

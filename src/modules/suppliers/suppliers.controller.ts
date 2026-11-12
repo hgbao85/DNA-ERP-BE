@@ -15,6 +15,8 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { RequireRole } from '../../common/decorators/require-role.decorator';
+import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
 import { SuppliersService } from './suppliers.service';
@@ -49,9 +51,12 @@ export class SuppliersController {
     return this.suppliersService.update(id, dto);
   }
 
+  // 12/11/2026 (anh Nhân): người mua tự thêm/sửa NCC nhưng CHỈ Admin xoá - chặn theo vai trò (không chỉ quyền
+  // SUPPLIER:DELETE) để quyền đã seed sẵn cho Mua hàng trên DB không mở được route này.
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions({ module: PERMISSION_MODULES.SUPPLIER, action: PermissionAction.DELETE })
+  @RequireRole(DEFAULT_ROLES.ADMIN)
   remove(@Param('id') id: string) {
     return this.suppliersService.remove(id);
   }

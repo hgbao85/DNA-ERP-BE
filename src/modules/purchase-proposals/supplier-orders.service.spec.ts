@@ -103,8 +103,11 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
         aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }),
         groupBy: jest.fn().mockResolvedValue([]),
       },
+      // Bộ đếm đang ở 52 (đơn tiếp theo 53), chưa có mốc Admin nạp.
       supplierOrderCounter: {
-        findUnique: jest.fn().mockResolvedValue(null),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ supplierId: 7n, year: 2026, lastSeq: 52, reuseFromSeq: 0 }),
         findMany: jest.fn().mockResolvedValue([]),
         upsert: jest.fn(),
       },
@@ -119,7 +122,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       },
       // recomputeProposalStatus() sau THAY PHIẾU: đọc status mọi dòng rồi ghi rollup lên đề xuất.
       purchaseProposal: { update: jest.fn() },
-      // Mặc định: bộ đếm trả số tiếp theo 53; khoá dòng đơn trả DRAFT.
+      // Mặc định: không có số đơn huỷ nào để cấp lại (seq không có); khoá dòng đơn trả DRAFT.
       $queryRaw: jest.fn().mockResolvedValue([{ lastSeq: 53, status: SupplierOrderStatus.DRAFT }]),
       $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
@@ -153,6 +156,58 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       });
       expect(res).toMatchObject({ code: '53/2026', supplierName: 'Kim Phát' });
       expect(res.items[0].orderCode).toBe('MY-313');
+      expect(prisma.supplierOrderCounter.upsert).toHaveBeenCalledWith({
+        where: { supplierId_year: { supplierId: 7n, year: vnYear() } },
+        create: { supplierId: 7n, year: vnYear(), lastSeq: 53 },
+        update: { lastSeq: 53 },
+      });
+    });
+
+    describe('cấp lại số đơn huỷ (12/11/2026, anh Nhân - không nhảy cóc)', () => {
+      it('có số đơn huỷ chưa từng ký thì đơn mới lấy lại số đó, bộ đếm không tăng', async () => {
+        prisma.$queryRaw.mockResolvedValueOnce([{ seq: 50 }]);
+
+        const res = await service.create({ supplierId: '7', itemIds: ['400'] }, 'buyer-1', [
+          'PURCHASER',
+        ]);
+
+        expect(prisma.supplierOrder.create).toHaveBeenCalledWith({
+          data: { supplierId: 7n, year: vnYear(), seq: 50, createdById: 'buyer-1' },
+        });
+        expect(prisma.supplierOrderCounter.upsert).not.toHaveBeenCalled();
+        expect(res.code).toBeDefined();
+      });
+
+      it('chỉ tìm đơn CANCELLED revision 0, chưa có đơn khác dùng số, lớn hơn mốc Admin nạp', async () => {
+        prisma.supplierOrderCounter.findUnique.mockResolvedValueOnce({
+          supplierId: 7n,
+          year: 2026,
+          lastSeq: 60,
+          reuseFromSeq: 52,
+        });
+
+        await service.create({ supplierId: '7', itemIds: ['400'] }, 'buyer-1', ['PURCHASER']);
+
+        const call = prisma.$queryRaw.mock.calls.find((c: unknown[]) =>
+          (c[0] as string[]).join('?').includes('"revision" = 0'),
+        ) as unknown[];
+        const sql = (call[0] as string[]).join('?');
+        expect(sql).toContain(`c."status" = 'CANCELLED'`);
+        expect(sql).toContain(`a."status" <> 'CANCELLED'`);
+        expect(call.slice(1)).toEqual([7n, vnYear(), 52]);
+        // Không có số trả lại -> lastSeq + 1.
+        expect(prisma.supplierOrder.create).toHaveBeenCalledWith({
+          data: { supplierId: 7n, year: vnYear(), seq: 61, createdById: 'buyer-1' },
+        });
+      });
+
+      it('NCC chưa có bộ đếm: đơn đầu tiên số 1', async () => {
+        prisma.supplierOrderCounter.findUnique.mockResolvedValueOnce(null);
+        await service.create({ supplierId: '7', itemIds: ['400'] }, 'buyer-1', ['PURCHASER']);
+        expect(prisma.supplierOrder.create).toHaveBeenCalledWith({
+          data: { supplierId: 7n, year: vnYear(), seq: 1, createdById: 'buyer-1' },
+        });
+      });
     });
 
     it('bắt buộc NCC tồn tại và còn hợp tác', async () => {
@@ -300,8 +355,8 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
 
       expect(prisma.supplierOrderCounter.upsert).toHaveBeenCalledWith({
         where: { supplierId_year: { supplierId: 7n, year: 2026 } },
-        create: { supplierId: 7n, year: 2026, lastSeq: 52 },
-        update: { lastSeq: 52 },
+        create: { supplierId: 7n, year: 2026, lastSeq: 52, reuseFromSeq: 52 },
+        update: { lastSeq: 52, reuseFromSeq: 52 },
       });
       expect(res).toMatchObject({ supplierName: 'Kim Phát', lastSeq: 52 });
     });
