@@ -160,6 +160,11 @@ describe('ProductionInvoicesService.retryProductionOrder - mua ngoài sắt', ()
         pendingByItem: jest.fn().mockResolvedValue(new Map()),
       } as unknown as DeadlineChangesService,
       { afterWorkshopChanged: jest.fn() } as never,
+      {
+        getScope: jest
+          .fn()
+          .mockResolvedValue({ workshopId: null, workshopName: null, visibleWorkshopIds: null }),
+      } as never,
     );
   });
 

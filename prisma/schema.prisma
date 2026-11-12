@@ -94,6 +94,10 @@ model User {
   /// Đợt 7 (9 kho): các kho tài khoản được đổi qua lại (1 người giữ 2 kho, vd chị Kiều Linh kho Phôi + kho Hàn Phú An).
   /// `warehouseScope` là kho ĐANG LÀM (nằm trong danh sách). Rỗng = chỉ đúng 1 kho `warehouseScope`.
   warehouseScopes    String[]  @default([])
+  /// Xưởng phụ trách (2026-11-12): QLSX gắn xưởng chỉ xem/thao tác lệnh của xưởng đó (+ xem lệnh xưởng khác sơn nhờ ở xưởng
+  /// này). NULL = không giới hạn (KHSX, Sếp, Admin, QLSX chưa gắn xưởng). Xem WorkshopScopeService.
+  workshopId         BigInt?
+  workshop           Workshop? @relation("UserWorkshop", fields: [workshopId], references: [id], onDelete: SetNull)
   isPurchaser        Boolean   @default(false)
   isProductPlanner   Boolean   @default(false)
   isSale             Boolean   @default(false)
@@ -173,6 +177,7 @@ model User {
 
   @@index([deletedAt])
   @@index([warehouseScope])
+  @@index([workshopId])
   @@map("users")
 }
 
@@ -1842,6 +1847,7 @@ model Workshop {
   paintsFor              Workshop[]              @relation("WorkshopPaint")
   productionInvoiceItems ProductionInvoiceItem[]
   warehouses             Warehouse[]
+  managers               User[]                  @relation("UserWorkshop")
 
   @@map("workshops")
 }

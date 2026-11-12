@@ -81,6 +81,8 @@ export class ProductionInvoiceResponseDto {
    * nơi khác để undefined.
    */
   @Expose() @ApiPropertyOptional() hasMaterialIssue?: boolean;
+  /** QLSX theo xưởng: false = chỉ xem (vd lệnh Phước An ở QLSX Phú An); người không giới hạn luôn true. */
+  @Expose() @ApiProperty() canManage!: boolean;
   /**
    * Phần A: true = QLSX đã đổi xưởng sau khi lệnh có phương án cắt APPROVED, KHSX chưa bấm "Đã kiểm" (người B chặn chuyển/xuất sắt
    * theo cờ này). `cuttingRecheckedByName` chỉ có ở findAll/findOne (nơi nạp quan hệ), nơi khác null.

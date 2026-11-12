@@ -1,8 +1,24 @@
 import { Prisma } from '../../generated/prisma/client';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { MilestoneBoardService } from './milestone-board.service';
 
 const d = (day: string) => new Date(`${day}T00:00:00.000Z`);
 const dec = (n: number) => new Prisma.Decimal(n);
+
+/** WorkshopScopeService thật, chỉ giả lập bảng users: 'qlsx-pa' = Phước An (id 2), 'qlsx-phu' = Phú An (id 1, sơn cho Phước An). */
+const makeScope = () => {
+  const users: Record<string, unknown> = {
+    'qlsx-pa': { workshopId: 2n, workshop: { name: 'Xưởng Phước An', paintsFor: [] } },
+    'qlsx-phu': { workshopId: 1n, workshop: { name: 'Xưởng Phú An', paintsFor: [{ id: 2n }] } },
+  };
+  return new WorkshopScopeService({
+    user: {
+      findUnique: jest.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(users[where.id] ?? null),
+      ),
+    },
+  } as never);
+};
 
 describe('MilestoneBoardService', () => {
   // 09:00 sáng 29/10 giờ VN.
@@ -139,6 +155,7 @@ describe('MilestoneBoardService', () => {
       batches as never,
       weaving as never,
       invoices as never,
+      makeScope(),
     );
   });
 
@@ -416,6 +433,38 @@ describe('MilestoneBoardService', () => {
       prisma.deadlineChangeRequest.findMany.mockRejectedValue(new Error('db'));
       const { rows } = await service.getBoard(NOW);
       expect(rows[0].pendingDeadlineChange).toBe(false);
+    });
+  });
+
+  describe('QLSX theo xưởng (2026-11-12)', () => {
+    const whereOf = () =>
+      (
+        prisma.productionInvoiceItem.findMany.mock.calls[0] as [{ where: Record<string, unknown> }]
+      )[0].where;
+
+    it('QLSX Phước An: where có phạm vi XEM (xưởng mình + SKU chưa có xưởng); Phước An không sơn nhờ nên không thấy lệnh xưởng khác', async () => {
+      await service.getBoard(NOW, 'qlsx-pa');
+
+      expect(whereOf().AND).toEqual([{ OR: [{ workshopId: null }, { workshopId: { in: [2n] } }] }]);
+    });
+
+    it('QLSX Phú An: thấy thêm lệnh Phước An (sơn nhờ)', async () => {
+      await service.getBoard(NOW, 'qlsx-phu');
+
+      expect(whereOf().AND).toEqual([
+        { OR: [{ workshopId: null }, { workshopId: { in: [1n, 2n] } }] },
+      ]);
+    });
+
+    it('không có userId (tin sáng) hoặc user chưa gắn xưởng: không lọc', async () => {
+      await service.getBoard(NOW);
+      await service.getBoard(NOW, 'khsx');
+
+      for (const call of prisma.productionInvoiceItem.findMany.mock.calls as [
+        { where: Record<string, unknown> },
+      ][]) {
+        expect(call[0].where).not.toHaveProperty('AND');
+      }
     });
   });
 });

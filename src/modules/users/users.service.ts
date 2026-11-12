@@ -27,6 +27,7 @@ import { UserResponseDto } from './dto/user-response.dto';
 
 const userWithRolesInclude = {
   roles: { include: { role: true } },
+  workshop: { select: { name: true } },
 } as const;
 
 const authProfileInclude = {
@@ -214,10 +215,29 @@ export class UsersService {
       await this.assertNoBuyerMaterials(id, 'bỏ chức năng Mua hàng');
     }
 
+    // Xưởng chỉ có nghĩa với QLSX; đổi mfgRole khỏi QLSX thì bỏ gắn xưởng để không còn phạm vi "mồ côi".
+    let workshopId: bigint | null | undefined;
+    if (dto.workshopId !== undefined && dto.workshopId !== null) {
+      if (effectiveMfgRole !== 'PRODUCTION_MANAGER') {
+        throw new BadRequestException('Chỉ tài khoản QLSX mới được gắn xưởng');
+      }
+      workshopId = BigInt(dto.workshopId);
+      const workshop = await this.prisma.workshop.findFirst({
+        where: { id: workshopId, isActive: true },
+        select: { id: true },
+      });
+      if (!workshop) throw new BadRequestException('Xưởng không tồn tại hoặc đã ngừng dùng');
+    } else if (dto.workshopId === null) {
+      workshopId = null;
+    } else if (effectiveMfgRole !== 'PRODUCTION_MANAGER' && current.workshopId != null) {
+      workshopId = null;
+    }
+
     const user = await this.prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id },
         data: {
+          workshopId,
           mfgRole: dto.mfgRole,
           warehouseScope,
           warehouseScopes,
@@ -405,6 +425,8 @@ export class UsersService {
       isProductPlanner: user.isProductPlanner,
       isSale: user.isSale,
       isMaterialsManager: user.isMaterialsManager,
+      workshopId: user.workshopId != null ? user.workshopId.toString() : null,
+      workshopName: user.workshop?.name ?? null,
     });
   }
 }

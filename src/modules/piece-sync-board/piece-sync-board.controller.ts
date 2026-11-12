@@ -2,6 +2,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PieceSyncBoardService } from './piece-sync-board.service';
@@ -26,13 +27,16 @@ export class PieceSyncBoardController {
     module: PERMISSION_MODULES.PRODUCTION_BATCH,
     action: PermissionAction.VIEW,
   })
-  getBoard(@Query('productionInvoiceIds') productionInvoiceIds?: string) {
+  getBoard(
+    @CurrentUser('id') userId: string,
+    @Query('productionInvoiceIds') productionInvoiceIds?: string,
+  ) {
     const ids = productionInvoiceIds
       ?.split(',')
       .map((s) => s.trim())
       .filter(Boolean);
     // parseBigIntId ném 400 khi id không phải số; service nhận lại chuỗi.
     ids?.forEach((id) => parseBigIntId(id));
-    return this.pieceSyncBoardService.getBoard(ids);
+    return this.pieceSyncBoardService.getBoard(ids, undefined, userId);
   }
 }

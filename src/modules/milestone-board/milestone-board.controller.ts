@@ -2,6 +2,7 @@ import { Controller, Get } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { MilestoneBoardService } from './milestone-board.service';
 
@@ -20,7 +21,7 @@ export class MilestoneBoardController {
     module: PERMISSION_MODULES.PRODUCTION_INVOICE,
     action: PermissionAction.VIEW,
   })
-  getBoard() {
-    return this.milestoneBoardService.getBoard();
+  getBoard(@CurrentUser('id') userId: string) {
+    return this.milestoneBoardService.getBoard(new Date(), userId);
   }
 }

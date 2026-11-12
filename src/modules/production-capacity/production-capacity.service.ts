@@ -6,6 +6,7 @@ import {
   ProductionOrderFloorStage,
 } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { vnDayKey } from '../../common/utils/floor-stats.util';
 import {
@@ -26,6 +27,8 @@ import type {
   CapacityCheckItemInput,
   CapacityCheckResult,
   CapacityMissingLoadCont,
+  CapacityRow,
+  CapacityWarning,
 } from './production-capacity.types';
 
 const SYSTEM_CONFIG_ID = 1;
@@ -67,7 +70,35 @@ type ItemRow = Prisma.ProductionInvoiceItemGetPayload<{ select: typeof ITEM_SELE
  */
 @Injectable()
 export class ProductionCapacityService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly workshopScope: WorkshopScopeService,
+  ) {}
+
+  /**
+   * QLSX gắn xưởng (2026-11-12) chỉ thấy khối xưởng mình + các khối kho đóng gói dùng chung (Nhập đan/Chuyền kiểm/Đóng gói).
+   * Lọc SAU khi gom cont (không lọc dòng đầu vào) vì khối kho dùng chung phải cộng đủ lệnh của mọi xưởng. Khối Sơn của xưởng
+   * sơn nhờ (vd Phú An khi xem từ Phước An) thuộc xưởng khác nên không hiện. Trả null = không giới hạn.
+   */
+  private async visibleWorkshopCode(
+    userId: string | undefined,
+  ): Promise<string | null | undefined> {
+    const scope = await this.workshopScope.getScope(userId);
+    if (scope.workshopId == null) return undefined;
+    const ws = await this.prisma.workshop.findUnique({
+      where: { id: scope.workshopId },
+      select: { code: true },
+    });
+    // Không tra được mã xưởng: chỉ còn khối kho dùng chung (an toàn hơn là lộ khối xưởng khác).
+    return ws?.code ?? null;
+  }
+
+  private static keepGroup(
+    ownCode: string | null,
+    g: Pick<CapacityRow, 'groupKind' | 'groupCode'>,
+  ): boolean {
+    return g.groupKind === 'WAREHOUSE' || (ownCode != null && g.groupCode === ownCode);
+  }
 
   /** Tham số năng lực Admin cấu hình (SystemConfig). */
   async loadParams(): Promise<TimelineParams> {
@@ -192,7 +223,12 @@ export class ProductionCapacityService {
   // ─── getBoard / check (hàm thuần gom cont: production-capacity.rules.ts) ─────────────────────────────────────────
 
   /** GET /production-capacity?from&to (mặc định hôm nay + 13 ngày, tối đa 62 ngày). */
-  async getBoard(from?: string, to?: string, now: Date = new Date()): Promise<CapacityBoard> {
+  async getBoard(
+    from?: string,
+    to?: string,
+    now: Date = new Date(),
+    userId?: string,
+  ): Promise<CapacityBoard> {
     const start = from ?? vnDayKey(now);
     if (!isDayKey(start))
       throw new BadRequestException('Ngày bắt đầu (from) phải dạng YYYY-MM-DD hợp lệ');
@@ -207,7 +243,19 @@ export class ProductionCapacityService {
     const params = await this.loadParams();
     const { items, missingLoadCont } = await this.loadCapacityItems();
     const ranges = items.flatMap((it) => stageRangesOf(it, params));
-    const { rows, warnings } = aggregateCapacity(ranges, start, end, params);
+    const agg = aggregateCapacity(ranges, start, end, params);
+    let rows: CapacityRow[] = agg.rows;
+    let warnings: CapacityWarning[] = agg.warnings;
+    let missing = missingLoadCont;
+    const own = await this.visibleWorkshopCode(userId);
+    if (own !== undefined) {
+      rows = rows.filter((r) => ProductionCapacityService.keepGroup(own, r));
+      warnings = warnings.filter((w) => ProductionCapacityService.keepGroup(own, w));
+      const ownItemIds = new Set(
+        items.filter((it) => it.workshop?.code === own).map((it) => it.itemId),
+      );
+      missing = missingLoadCont.filter((m) => ownItemIds.has(m.itemId));
+    }
     return {
       from: start,
       to: end,
@@ -215,12 +263,12 @@ export class ProductionCapacityService {
       daysPerContPhuocAn: params.daysPerContPhuocAn,
       rows,
       warnings,
-      missingLoadCont,
+      missingLoadCont: missing,
     };
   }
 
   /** POST /production-capacity/check - thử mốc/xưởng/kho chưa lưu, chỉ trả cảnh báo dính tới dòng đang thử. */
-  async check(inputs: CapacityCheckItemInput[]): Promise<CapacityCheckResult> {
+  async check(inputs: CapacityCheckItemInput[], userId?: string): Promise<CapacityCheckResult> {
     if (inputs.length === 0 || inputs.length > MAX_CHECK_ITEMS) {
       throw new BadRequestException(`Gửi từ 1 đến ${MAX_CHECK_ITEMS} dòng để kiểm tra`);
     }
@@ -329,8 +377,13 @@ export class ProductionCapacityService {
       if (diffDays(r.to, to) < 0) to = r.to;
     }
     const { warnings } = aggregateCapacity(allRanges, from, to, params);
+    const own = await this.visibleWorkshopCode(userId);
     return {
-      warnings: warnings.filter((w) => w.itemIds.some((id) => byId.has(id))),
+      warnings: warnings.filter(
+        (w) =>
+          w.itemIds.some((id) => byId.has(id)) &&
+          (own === undefined || ProductionCapacityService.keepGroup(own, w)),
+      ),
       missingLoadCont,
     };
   }

@@ -143,11 +143,24 @@ export class NotificationsService {
         : baseCriteria;
     const excludeUserIds = def.notifyActor || !options.actorId ? [] : [options.actorId];
 
-    const recipientIds = await this.recipientResolver.resolve(criteria, excludeUserIds, options.tx);
-    if (recipientIds.length === 0) {
+    const matchedIds = await this.recipientResolver.resolve(criteria, excludeUserIds, options.tx);
+    if (matchedIds.length === 0) {
       this.logger.warn(`emit(${type}): không có người nhận nào khớp tiêu chí - bỏ qua.`);
       return;
     }
+    // QLSX theo xưởng (2026-11-12): bỏ QLSX đã gắn xưởng khác khỏi thông báo về lệnh. Lỗi tra xưởng thì giữ nguyên người nhận
+    // (báo dư còn hơn nuốt mất thông báo).
+    let recipientIds = matchedIds;
+    try {
+      recipientIds = await this.recipientResolver.dropQlsxOfOtherWorkshops(
+        matchedIds,
+        { entityType: def.entityType, entityId: options.entityId, params },
+        options.tx,
+      );
+    } catch (e) {
+      this.logger.warn(`emit(${type}): lọc QLSX theo xưởng lỗi - ${(e as Error).message}`);
+    }
+    if (recipientIds.length === 0) return;
 
     // Câu 8 (người B, 07/11): thông báo Mua hàng/Kho hiện SỐ LSX thay mã PI ở tiêu đề/nội dung. Link + data giữ mã PI
     // (focus=PI_CODE:... phải đúng mã PI mới mở được dòng).

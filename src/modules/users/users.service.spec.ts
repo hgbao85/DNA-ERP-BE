@@ -16,8 +16,9 @@ describe('UsersService', () => {
       delete: jest.Mock;
     };
     material: { count: jest.Mock; findMany: jest.Mock; updateMany: jest.Mock };
-    role: { count: jest.Mock };
-    userRole: { deleteMany: jest.Mock; createMany: jest.Mock };
+    role: { count: jest.Mock; findMany: jest.Mock };
+    workshop: { findFirst: jest.Mock };
+    userRole: { deleteMany: jest.Mock; createMany: jest.Mock; create: jest.Mock };
     refreshToken: { updateMany: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -38,8 +39,9 @@ describe('UsersService', () => {
         findMany: jest.fn(),
         updateMany: jest.fn(),
       },
-      role: { count: jest.fn() },
-      userRole: { deleteMany: jest.fn(), createMany: jest.fn() },
+      role: { count: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+      workshop: { findFirst: jest.fn() },
+      userRole: { deleteMany: jest.fn(), createMany: jest.fn(), create: jest.fn() },
       refreshToken: { updateMany: jest.fn() },
       // Run the callback synchronously against the same mock, mirroring auth.service.spec.
       $transaction: jest.fn((callback: (tx: unknown) => unknown) => callback(prisma)),
@@ -133,6 +135,82 @@ describe('UsersService', () => {
         expect.objectContaining({
           data: expect.objectContaining({ warehouseScope: 'phoi-son-han' }),
         }),
+      );
+    });
+  });
+
+  describe('findOne - workshop (GET /auth/me dùng chung)', () => {
+    it('trả workshopId (string) + workshopName', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u1',
+        username: 'qlsx',
+        roles: [],
+        workshopId: 2n,
+        workshop: { name: 'Xưởng Phước An' },
+      });
+      const res = await usersService.findOne('u1');
+      expect(res.workshopId).toBe('2');
+      expect(res.workshopName).toBe('Xưởng Phước An');
+    });
+
+    it('chưa gắn xưởng -> null', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u1',
+        roles: [],
+        workshopId: null,
+        workshop: null,
+      });
+      const res = await usersService.findOne('u1');
+      expect(res.workshopId).toBeNull();
+      expect(res.workshopName).toBeNull();
+    });
+  });
+
+  // QLSX theo xưởng (2026-11-12): workshopId chỉ hợp lệ với mfgRole PRODUCTION_MANAGER.
+  describe('updateMfgAttributes - workshopId', () => {
+    const qlsx = { id: 'user-1', mfgRole: 'PRODUCTION_MANAGER', workshopId: null };
+
+    beforeEach(() => {
+      prisma.user.findUnique.mockResolvedValue(qlsx);
+      prisma.user.findUniqueOrThrow.mockResolvedValue({ ...qlsx, roles: [] });
+      prisma.workshop.findFirst.mockResolvedValue({ id: 1n });
+    });
+
+    it('đặt workshopId cho QLSX', async () => {
+      await usersService.updateMfgAttributes('user-1', { workshopId: '1' });
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ workshopId: 1n }) }),
+      );
+    });
+
+    it('user không phải QLSX mà đặt workshopId -> 400', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 'user-1', mfgRole: 'PHOI' });
+      await expect(usersService.updateMfgAttributes('user-1', { workshopId: '1' })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('xưởng không tồn tại -> 400', async () => {
+      prisma.workshop.findFirst.mockResolvedValue(null);
+      await expect(
+        usersService.updateMfgAttributes('user-1', { workshopId: '99' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('workshopId null = bỏ gắn xưởng', async () => {
+      await usersService.updateMfgAttributes('user-1', { workshopId: null });
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ workshopId: null }) }),
+      );
+    });
+
+    it('đổi mfgRole khỏi QLSX thì tự bỏ gắn xưởng', async () => {
+      prisma.user.findUnique.mockResolvedValue({ ...qlsx, workshopId: 1n });
+      prisma.role.findMany.mockResolvedValue([{ id: 'r1', name: 'KCS_STAFF' }]);
+      await usersService.updateMfgAttributes('user-1', { mfgRole: 'KCS' });
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ workshopId: null }) }),
       );
     });
   });

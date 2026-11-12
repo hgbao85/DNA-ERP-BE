@@ -27,7 +27,7 @@ import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
 import { RecordPackagingDto } from './dto/record-packaging.dto';
 import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { RejectItemDto } from './dto/reject-item.dto';
-import { SendBatchDto, SendBatchToBossDto } from './dto/send-batch.dto';
+import { SendBatchDto, SendBatchToBossDto, SendToQlsxDto } from './dto/send-batch.dto';
 import { SendToBossDto } from './dto/send-to-boss.dto';
 import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
 import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
@@ -87,14 +87,14 @@ export class ProductionInvoicesController {
 
   @Get()
   @RequirePermissions(VIEW)
-  findAll(@Query() query: PaginationQueryDto) {
-    return this.productionInvoicesService.findAll(query);
+  findAll(@Query() query: PaginationQueryDto, @CurrentUser('id') userId: string) {
+    return this.productionInvoicesService.findAll(query, userId);
   }
 
   @Get(':id')
   @RequirePermissions(VIEW)
-  findOne(@Param('id') id: string) {
-    return this.productionInvoicesService.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.productionInvoicesService.findOne(id, userId);
   }
 
   @Patch(':id')
@@ -179,9 +179,10 @@ export class ProductionInvoicesController {
   sendItemToQlsx(
     @Param('id') id: string,
     @Param('itemId') itemId: string,
+    @Body() dto: SendToQlsxDto,
     @CurrentUser('id') userId: string,
   ) {
-    return this.productionInvoicesService.sendItemToQlsx(id, itemId, userId);
+    return this.productionInvoicesService.sendItemToQlsx(id, itemId, userId, dto.workshopId);
   }
 
   /** Gửi CẢ phiếu (mọi SKU chưa gửi / bị QLSX trả lại) trong 1 lần - cùng quyền với route lẻ ở
@@ -195,7 +196,7 @@ export class ProductionInvoicesController {
     @Body() dto: SendBatchDto,
     @CurrentUser('id') userId: string,
   ) {
-    return this.productionInvoicesService.sendBatchToQlsx(id, userId, dto.itemIds);
+    return this.productionInvoicesService.sendBatchToQlsx(id, userId, dto.itemIds, dto.workshopId);
   }
 
   // ─── QLSX (mfgRole = PRODUCTION_MANAGER) ────────────────────────────────────

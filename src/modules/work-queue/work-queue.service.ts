@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { PENDING_APPROVAL_STATUSES } from '../purchase-proposals/purchase-proposals.service';
@@ -41,6 +42,7 @@ export class WorkQueueService {
     private readonly salesOrdersService: SalesOrdersService,
     // Phần A – Đợt 4 (YC6)
     private readonly materialsDueService: MaterialsDueService,
+    private readonly workshopScope: WorkshopScopeService,
   ) {}
 
   async getWorkQueue(user: {
@@ -61,7 +63,7 @@ export class WorkQueueService {
     };
 
     if (has(BUSINESS_ROLES.PRODUCTION_MANAGER)) {
-      set('qlsxProductionQueue', this.countQlsxProductionQueue());
+      set('qlsxProductionQueue', this.countQlsxProductionQueue(user.id));
     }
     if (has(BUSINESS_ROLES.BOSS)) {
       set(
@@ -137,10 +139,22 @@ export class WorkQueueService {
     return new WorkQueueResponseDto({ counts });
   }
 
-  /** PI item WAITING_QLSX + đề xuất cắt sắt cần QLSX xử lý tay (xem lệch #1 ở doc comment lớp). */
-  private async countQlsxProductionQueue(): Promise<number> {
+  /**
+   * PI item WAITING_QLSX + đề xuất cắt sắt cần QLSX xử lý tay (xem lệch #1 ở doc comment lớp).
+   * QLSX gắn xưởng (2026-11-12) chỉ đếm lệnh trong phạm vi THAO TÁC (xưởng mình + SKU chưa có xưởng): lệnh xưởng khác mình
+   * không bấm được nên không được hiện số đỏ. Đề xuất cắt sắt tính TRƯỚC PI chưa gắn lệnh/xưởng nào nên vẫn đếm chung.
+   */
+  private async countQlsxProductionQueue(userId: string | undefined): Promise<number> {
+    const scope = await this.workshopScope.getScope(userId);
     const [waitingQlsx, needsAction] = await Promise.all([
-      this.prisma.productionInvoiceItem.count({ where: { prodApprovalStatus: 'WAITING_QLSX' } }),
+      this.prisma.productionInvoiceItem.count({
+        where: {
+          prodApprovalStatus: 'WAITING_QLSX',
+          ...(scope.workshopId != null
+            ? { OR: [{ workshopId: null }, { workshopId: scope.workshopId }] }
+            : {}),
+        },
+      }),
       this.cuttingProposalsService.countNeedsAction(),
     ]);
     return waitingQlsx + needsAction;

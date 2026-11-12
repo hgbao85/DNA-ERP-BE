@@ -19,6 +19,7 @@ import { MfgRoleGuard } from './common/guards/mfg-role.guard';
 import { RoleGuard } from './common/guards/role.guard';
 import { WarehouseScopeGuard } from './common/guards/warehouse-scope.guard';
 import { PrismaModule } from './prisma/prisma.module';
+import { WorkshopScopeModule } from './common/workshop-scope/workshop-scope.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { RolesModule } from './modules/roles/roles.module';
@@ -103,6 +104,7 @@ import { RealtimeModule } from './realtime/realtime.module';
       }),
     }),
     PrismaModule,
+    WorkshopScopeModule,
     AuthModule,
     UsersModule,
     RolesModule,

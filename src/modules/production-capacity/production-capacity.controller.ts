@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CapacityCheckDto } from './dto/capacity-check.dto';
 import { CapacityQueryDto } from './dto/capacity-query.dto';
@@ -22,8 +23,8 @@ export class ProductionCapacityController {
     module: PERMISSION_MODULES.PRODUCTION_INVOICE,
     action: PermissionAction.VIEW,
   })
-  getBoard(@Query() query: CapacityQueryDto) {
-    return this.capacity.getBoard(query.from, query.to);
+  getBoard(@Query() query: CapacityQueryDto, @CurrentUser('id') userId: string) {
+    return this.capacity.getBoard(query.from, query.to, undefined, userId);
   }
 
   @Post('check')
@@ -32,7 +33,7 @@ export class ProductionCapacityController {
     module: PERMISSION_MODULES.PRODUCTION_INVOICE,
     action: PermissionAction.VIEW,
   })
-  check(@Body() dto: CapacityCheckDto) {
-    return this.capacity.check(dto.items);
+  check(@Body() dto: CapacityCheckDto, @CurrentUser('id') userId: string) {
+    return this.capacity.check(dto.items, userId);
   }
 }

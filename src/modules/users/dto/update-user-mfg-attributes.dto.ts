@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsNumberString, IsOptional, IsString } from 'class-validator';
 import { MfgRole } from '../../../generated/prisma/client';
 
 export class UpdateUserMfgAttributesDto {
@@ -42,4 +42,13 @@ export class UpdateUserMfgAttributesDto {
   @IsOptional()
   @IsBoolean()
   isMaterialsManager?: boolean;
+
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    description: 'Xưởng của QLSX (chỉ mfgRole PRODUCTION_MANAGER); null = bỏ gắn xưởng',
+  })
+  @IsOptional()
+  @IsNumberString()
+  workshopId?: string | null;
 }

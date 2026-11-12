@@ -1,5 +1,21 @@
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { WorkQueueService } from './work-queue.service';
+
+/** WorkshopScopeService thật, chỉ giả lập bảng users: 'qlsx-pa' = Phước An (id 2), 'qlsx-phu' = Phú An (id 1, sơn cho Phước An). */
+const makeScope = () => {
+  const users: Record<string, unknown> = {
+    'qlsx-pa': { workshopId: 2n, workshop: { name: 'Xưởng Phước An', paintsFor: [] } },
+    'qlsx-phu': { workshopId: 1n, workshop: { name: 'Xưởng Phú An', paintsFor: [{ id: 2n }] } },
+  };
+  return new WorkshopScopeService({
+    user: {
+      findUnique: jest.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(users[where.id] ?? null),
+      ),
+    },
+  } as never);
+};
 
 describe('WorkQueueService', () => {
   let service: WorkQueueService;
@@ -44,6 +60,7 @@ describe('WorkQueueService', () => {
       cuttingProposalsService as never,
       salesOrdersService as never,
       materialsDueService as never,
+      makeScope(),
     );
   });
 
@@ -318,6 +335,62 @@ describe('WorkQueueService', () => {
       });
       expect(result.counts).not.toHaveProperty('bossDeadlineChange');
       expect(prisma.deadlineChangeBatch.count).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('QLSX theo xưởng (2026-11-12)', () => {
+    it('QLSX gắn xưởng: chỉ đếm lệnh chờ của xưởng mình + SKU chưa có xưởng', async () => {
+      prisma.productionInvoiceItem.count.mockResolvedValue(2);
+      cuttingProposalsService.countNeedsAction.mockResolvedValue(1);
+
+      const result = await service.getWorkQueue({
+        id: 'qlsx-pa',
+        roles: ['PRODUCTION_MANAGER'],
+        warehouseScope: null,
+      });
+
+      expect(result.counts.qlsxProductionQueue).toBe(3);
+      expect(prisma.productionInvoiceItem.count).toHaveBeenCalledWith({
+        where: {
+          prodApprovalStatus: 'WAITING_QLSX',
+          OR: [{ workshopId: null }, { workshopId: 2n }],
+        },
+      });
+    });
+
+    it('QLSX Phú An: không đếm lệnh Phước An (chỉ xem) - lọc theo xưởng của chính mình', async () => {
+      await service.getWorkQueue({
+        id: 'qlsx-phu',
+        roles: ['PRODUCTION_MANAGER'],
+        warehouseScope: null,
+      });
+
+      expect(prisma.productionInvoiceItem.count).toHaveBeenCalledWith({
+        where: {
+          prodApprovalStatus: 'WAITING_QLSX',
+          OR: [{ workshopId: null }, { workshopId: 1n }],
+        },
+      });
+    });
+
+    it('QLSX chưa gắn xưởng: đếm như cũ, không lọc', async () => {
+      await service.getWorkQueue({
+        id: 'qlsx-chua-gan',
+        roles: ['PRODUCTION_MANAGER'],
+        warehouseScope: null,
+      });
+
+      expect(prisma.productionInvoiceItem.count).toHaveBeenCalledWith({
+        where: { prodApprovalStatus: 'WAITING_QLSX' },
+      });
+    });
+
+    it('Sếp / KHSX không bị lọc theo xưởng (số đỏ của Sếp vẫn đếm mọi lệnh)', async () => {
+      await service.getWorkQueue({ id: 'qlsx-pa', roles: ['BOSS'], warehouseScope: null });
+
+      expect(prisma.productionInvoiceItem.count).toHaveBeenCalledWith({
+        where: { prodApprovalStatus: 'WAITING_BOSS' },
+      });
     });
   });
 });

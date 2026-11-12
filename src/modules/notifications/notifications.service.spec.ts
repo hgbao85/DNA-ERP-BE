@@ -69,7 +69,7 @@ describe('NotificationsService', () => {
       groupBy: jest.Mock;
     };
   };
-  let recipientResolver: { resolve: jest.Mock };
+  let recipientResolver: { resolve: jest.Mock; dropQlsxOfOtherWorkshops: jest.Mock };
 
   const notification = {
     id: 'notif-1',
@@ -124,7 +124,11 @@ describe('NotificationsService', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       },
     };
-    recipientResolver = { resolve: jest.fn().mockResolvedValue(['user-1', 'user-2']) };
+    recipientResolver = {
+      resolve: jest.fn().mockResolvedValue(['user-1', 'user-2']),
+      // Mặc định không lọc theo xưởng - test riêng ở dưới.
+      dropQlsxOfOtherWorkshops: jest.fn((ids: string[]) => Promise.resolve(ids)),
+    };
     realtime = {
       publishNotificationCreated: jest.fn(),
       publishNotificationChanged: jest.fn(),
@@ -138,6 +142,54 @@ describe('NotificationsService', () => {
   });
 
   describe('emit', () => {
+    describe('QLSX theo xưởng (2026-11-12)', () => {
+      const emitOnce = () =>
+        service.emit('CUTTING_PROPOSAL_AUTO_APPROVED', {
+          entityId: '1',
+          params: { poNumber: 'PO-1', proposalId: '1' },
+        });
+
+      it('truyền entityType/entityId/params của sự kiện cho bộ lọc và chỉ gửi cho người còn lại', async () => {
+        recipientResolver.dropQlsxOfOtherWorkshops.mockResolvedValue(['user-1']);
+
+        await emitOnce();
+
+        expect(recipientResolver.dropQlsxOfOtherWorkshops).toHaveBeenCalledWith(
+          ['user-1', 'user-2'],
+          {
+            entityType: 'CUTTING_PROPOSAL',
+            entityId: '1',
+            params: { poNumber: 'PO-1', proposalId: '1' },
+          },
+          undefined,
+        );
+        expect(prisma.notificationRecipient.createMany).toHaveBeenCalledWith({
+          data: [{ notificationId: notification.id, userId: 'user-1' }],
+        });
+      });
+
+      it('lọc hết người nhận thì không tạo thông báo', async () => {
+        recipientResolver.dropQlsxOfOtherWorkshops.mockResolvedValue([]);
+
+        await emitOnce();
+
+        expect(prisma.notification.create).not.toHaveBeenCalled();
+      });
+
+      it('lọc theo xưởng lỗi thì giữ nguyên người nhận (báo dư còn hơn mất thông báo)', async () => {
+        recipientResolver.dropQlsxOfOtherWorkshops.mockRejectedValue(new Error('db'));
+
+        await emitOnce();
+
+        expect(prisma.notificationRecipient.createMany).toHaveBeenCalledWith({
+          data: [
+            { notificationId: notification.id, userId: 'user-1' },
+            { notificationId: notification.id, userId: 'user-2' },
+          ],
+        });
+      });
+    });
+
     it('resolves recipients theo tiêu chí của type, tạo Notification rồi fan-out NotificationRecipient', async () => {
       await service.emit('CUTTING_PROPOSAL_AUTO_APPROVED', {
         entityId: '1',

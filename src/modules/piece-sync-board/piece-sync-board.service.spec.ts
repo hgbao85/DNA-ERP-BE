@@ -1,4 +1,5 @@
 import { Prisma } from '../../generated/prisma/client';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PieceSyncBoardService } from './piece-sync-board.service';
 import { computePieceSync } from './piece-sync.util';
 
@@ -10,6 +11,21 @@ const dec = (n: number) => new Prisma.Decimal(n);
 // Lấy đối số `where` của lần gọi findMany thứ n (mock trả any nên gói lại 1 chỗ cho eslint).
 const whereOf = (mock: jest.Mock, n = 0) =>
   (mock.mock.calls[n] as [{ where: Record<string, unknown> }])[0].where;
+
+/** WorkshopScopeService thật, chỉ giả lập bảng users: 'qlsx-pa' = Phước An (id 2), 'qlsx-phu' = Phú An (id 1, sơn cho Phước An). */
+const makeScope = () => {
+  const users: Record<string, unknown> = {
+    'qlsx-pa': { workshopId: 2n, workshop: { name: 'Xưởng Phước An', paintsFor: [] } },
+    'qlsx-phu': { workshopId: 1n, workshop: { name: 'Xưởng Phú An', paintsFor: [{ id: 2n }] } },
+  };
+  return new WorkshopScopeService({
+    user: {
+      findUnique: jest.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(users[where.id] ?? null),
+      ),
+    },
+  } as never);
+};
 
 describe('PieceSyncBoardService', () => {
   // 09:00 sáng 04/11 giờ VN.
@@ -148,7 +164,12 @@ describe('PieceSyncBoardService', () => {
         }),
       ),
     };
-    service = new PieceSyncBoardService(prisma as never, steelIssues as never, batches as never);
+    service = new PieceSyncBoardService(
+      prisma as never,
+      steelIssues as never,
+      batches as never,
+      makeScope(),
+    );
   });
 
   it('không có dòng -> bảng rỗng, không gọi nguồn tiến độ', async () => {
@@ -531,5 +552,31 @@ describe('PieceSyncBoardService', () => {
     steelIssues.getPhoiProgressBatch.mockResolvedValue({ '7': [], '8': [] });
     const board = await service.getBoard(undefined, NOW);
     expect(board.rows.map((r) => r.productionOrderId)).toEqual(['10', '20', '30']);
+  });
+
+  describe('QLSX theo xưởng (2026-11-12)', () => {
+    const whereOf = () =>
+      (
+        prisma.productionInvoiceItem.findMany.mock.calls[0] as [{ where: Record<string, unknown> }]
+      )[0].where;
+
+    it('QLSX Phước An: chỉ lấy lệnh trong phạm vi XEM', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([]);
+      await service.getBoard(undefined, NOW, 'qlsx-pa');
+
+      expect(whereOf().AND).toEqual([{ OR: [{ workshopId: null }, { workshopId: { in: [2n] } }] }]);
+    });
+
+    it('QLSX Phú An: thêm lệnh Phước An; user chưa gắn xưởng: không lọc', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([]);
+      await service.getBoard(undefined, NOW, 'qlsx-phu');
+      expect(whereOf().AND).toEqual([
+        { OR: [{ workshopId: null }, { workshopId: { in: [1n, 2n] } }] },
+      ]);
+
+      prisma.productionInvoiceItem.findMany.mockClear();
+      await service.getBoard(undefined, NOW, 'khsx');
+      expect(whereOf()).not.toHaveProperty('AND');
+    });
   });
 });

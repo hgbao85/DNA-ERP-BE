@@ -6,6 +6,7 @@ import {
   ProductionOrderFloorStage,
 } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { vnDayKey } from '../../common/utils/floor-stats.util';
 import { purchaseDeadlineOf, purchaseGroupOf } from '../../common/utils/frame-deadline.util';
@@ -116,10 +117,13 @@ export class MilestoneBoardService {
     private readonly productionBatches: ProductionBatchesService,
     private readonly weavingIssues: WeavingIssuesService,
     private readonly productionInvoices: ProductionInvoicesService,
+    private readonly workshopScope: WorkshopScopeService,
   ) {}
 
-  async getBoard(now: Date = new Date()): Promise<MilestoneBoard> {
+  /** `userId`: QLSX gắn xưởng chỉ thấy lệnh trong phạm vi XEM; không truyền (tin sáng) = toàn bộ. */
+  async getBoard(now: Date = new Date(), userId?: string): Promise<MilestoneBoard> {
     const today = vnDayKey(now);
+    const scopeWhere = this.workshopScope.itemWhere(await this.workshopScope.getScope(userId));
     const items = await this.prisma.productionInvoiceItem.findMany({
       where: {
         prodApprovalStatus: 'APPROVED',
@@ -129,6 +133,8 @@ export class MilestoneBoardService {
         // báo trễ và gửi cảnh báo CRITICAL cho Sếp về lệnh không còn tồn tại.
         productionInvoice: { status: { not: ProductionInvoiceStatus.CANCELLED } },
         OR: [{ salesOrderId: null }, { salesOrder: { isActive: true, deletedAt: null } }],
+        // AND riêng vì scopeWhere cũng là 1 OR (xưởng của SKU).
+        ...(scopeWhere ? { AND: [scopeWhere] } : {}),
       },
       select: {
         id: true,

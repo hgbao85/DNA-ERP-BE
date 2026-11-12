@@ -4,6 +4,7 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import {
@@ -46,24 +47,24 @@ export class ProductionOrdersController {
   @Post(':id/floor-start')
   @RequirePermissions(UPDATE)
   @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER)
-  startFloor(@Param('id') id: string) {
-    return this.productionOrdersService.startFloor(id);
+  startFloor(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.productionOrdersService.startFloor(id, userId);
   }
 
   /** QLSX bấm "Tạm dừng" - bất kỳ trạng thái nào -> PAUSED, xem ProductionOrdersService.pauseFloor(). */
   @Post(':id/floor-pause')
   @RequirePermissions(UPDATE)
   @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER)
-  pauseFloor(@Param('id') id: string) {
-    return this.productionOrdersService.pauseFloor(id);
+  pauseFloor(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.productionOrdersService.pauseFloor(id, userId);
   }
 
   /** QLSX bấm "Kết thúc" - bất kỳ trạng thái nào -> FINISHED, không kiểm tra tiến độ. */
   @Post(':id/floor-finish')
   @RequirePermissions(UPDATE)
   @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER)
-  finishFloor(@Param('id') id: string) {
-    return this.productionOrdersService.finishFloor(id);
+  finishFloor(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.productionOrdersService.finishFloor(id, userId);
   }
 
   /**
@@ -74,7 +75,7 @@ export class ProductionOrdersController {
   @Post(':id/resync-bom')
   @RequirePermissions(UPDATE)
   @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER)
-  resyncBom(@Param('id') id: string, @Body() dto: ResyncBomDto) {
-    return this.productionOrdersService.resyncBom(id, dto);
+  resyncBom(@Param('id') id: string, @Body() dto: ResyncBomDto, @CurrentUser('id') userId: string) {
+    return this.productionOrdersService.resyncBom(id, dto, userId);
   }
 }

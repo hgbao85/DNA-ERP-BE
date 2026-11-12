@@ -108,6 +108,9 @@ export class ProductionInvoiceItemResponseDto {
   @Expose() @ApiPropertyOptional({ type: [ItemStageDto] }) stages!: ItemStageDto[];
   /** Phần A – Đợt 2: số LSX nhà máy của dòng (vd MY-313), null = chưa nhập (lệnh cũ / KHSX chưa điền). */
   @Expose() @ApiPropertyOptional({ nullable: true }) lsxCode!: string | null;
+  /** QLSX theo xưởng: xưởng của SKU (null = SKU cũ chưa có xưởng). */
+  @Expose() @ApiPropertyOptional({ type: String, nullable: true }) workshopId!: string | null;
+  @Expose() @ApiPropertyOptional({ type: String, nullable: true }) workshopName!: string | null;
   /** Phần A – Đợt 2: xưởng cơ khí QLSX chọn lúc gửi Sếp (đi cùng vòng đời warehouseCode), null = chưa chọn. */
   @Expose()
   @ApiPropertyOptional({ type: ItemWorkshopDto, nullable: true })

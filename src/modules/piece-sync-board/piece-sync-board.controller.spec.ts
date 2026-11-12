@@ -8,17 +8,17 @@ describe('PieceSyncBoardController', () => {
   beforeEach(() => getBoard.mockClear());
 
   it('tách productionInvoiceIds theo dấu phẩy', async () => {
-    await controller.getBoard('7, 8,');
-    expect(getBoard).toHaveBeenCalledWith(['7', '8']);
+    await controller.getBoard('u1', '7, 8,');
+    expect(getBoard).toHaveBeenCalledWith(['7', '8'], undefined, 'u1');
   });
 
   it('không truyền query -> getBoard(undefined)', async () => {
-    await controller.getBoard(undefined);
-    expect(getBoard).toHaveBeenCalledWith(undefined);
+    await controller.getBoard('u1', undefined);
+    expect(getBoard).toHaveBeenCalledWith(undefined, undefined, 'u1');
   });
 
   it('id không phải số -> 400, không gọi service', () => {
-    expect(() => controller.getBoard('7,abc')).toThrow(BadRequestException);
+    expect(() => controller.getBoard('u1', '7,abc')).toThrow(BadRequestException);
     expect(getBoard).not.toHaveBeenCalled();
   });
 });

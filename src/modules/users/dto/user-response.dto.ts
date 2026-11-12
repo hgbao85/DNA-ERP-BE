@@ -21,6 +21,9 @@ export class UserResponseDto {
   @Expose() @ApiProperty() isProductPlanner!: boolean;
   @Expose() @ApiProperty() isSale!: boolean;
   @Expose() @ApiProperty() isMaterialsManager!: boolean;
+  /** Xưởng của tài khoản QLSX (QLSX theo xưởng); null = không giới hạn xưởng. */
+  @Expose() @ApiProperty({ type: String, nullable: true }) workshopId!: string | null;
+  @Expose() @ApiProperty({ type: String, nullable: true }) workshopName!: string | null;
 
   constructor(partial: Partial<UserResponseDto>) {
     Object.assign(this, partial);

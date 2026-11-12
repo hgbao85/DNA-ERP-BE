@@ -6,6 +6,7 @@ import {
   ProductionOrderFloorStage,
 } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { vnDayKey, vnDayStart } from '../../common/utils/floor-stats.util';
 import { percentOf } from '../floor/floor-progress.util';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
@@ -47,10 +48,17 @@ export class PieceSyncBoardService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly steelIssues: SteelIssuesService,
     private readonly productionBatches: ProductionBatchesService,
+    private readonly workshopScope: WorkshopScopeService,
   ) {}
 
-  async getBoard(productionInvoiceIds?: string[], now: Date = new Date()): Promise<PieceSyncBoard> {
+  /** `userId`: QLSX gắn xưởng chỉ thấy lệnh trong phạm vi XEM (cùng luật Bảng mốc). */
+  async getBoard(
+    productionInvoiceIds?: string[],
+    now: Date = new Date(),
+    userId?: string,
+  ): Promise<PieceSyncBoard> {
     const today = vnDayKey(now);
+    const scopeWhere = this.workshopScope.itemWhere(await this.workshopScope.getScope(userId));
     const items = await this.prisma.productionInvoiceItem.findMany({
       where: {
         // Cùng điều kiện với Bảng mốc: dòng đã duyệt, lệnh chưa Kết thúc, PI chưa huỷ, đơn bán còn hiệu lực.
@@ -61,6 +69,7 @@ export class PieceSyncBoardService {
         productionOrder: { is: { floorStage: { not: ProductionOrderFloorStage.FINISHED } } },
         productionInvoice: { status: { not: ProductionInvoiceStatus.CANCELLED } },
         OR: [{ salesOrderId: null }, { salesOrder: { isActive: true, deletedAt: null } }],
+        ...(scopeWhere ? { AND: [scopeWhere] } : {}),
       },
       select: {
         id: true,

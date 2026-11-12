@@ -16,6 +16,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ProductionOrderResponseDto } from './dto/production-order-response.dto';
@@ -65,7 +66,20 @@ export class ProductionOrdersService {
     private readonly cls: ClsService<AppClsStore>,
     private readonly notifications: NotificationsService,
     private readonly stockReservationsService: StockReservationsService,
+    private readonly workshopScope: WorkshopScopeService,
   ) {}
+
+  /**
+   * Cổng xưởng theo phạm vi QLSX (2026-11-12): chỉ QLSX của xưởng chứa lệnh mới Bắt đầu/Tạm dừng/Kết thúc/
+   * nạp lại định mức. Xưởng lấy ở SKU của lệnh (null = lệnh cũ chưa có xưởng -> ai cũng thao tác như trước).
+   */
+  private async assertCanManageOrder(
+    userId: string | undefined,
+    workshopId: bigint | null | undefined,
+  ): Promise<void> {
+    const scope = await this.workshopScope.getScope(userId);
+    this.workshopScope.assertCanManage(scope, [workshopId], 'lệnh sản xuất này');
+  }
 
   /**
    * Kiểm sớm trước khi ProductionInvoicesService.approveItem() ghi bất kỳ gì - để thiếu BOM
@@ -328,12 +342,16 @@ export class ProductionOrdersService {
    * set lần đầu (lúc còn PENDING) - "Tiếp tục" sau khi tạm dừng không ghi đè lại mốc bắt đầu gốc.
    * Cho phép gọi lại dù đã ACTIVE (idempotent, không throw) - tránh lỗi vặt nếu bấm 2 lần/2 tab.
    */
-  async startFloor(id: string): Promise<ProductionOrderResponseDto> {
+  async startFloor(id: string, userId?: string): Promise<ProductionOrderResponseDto> {
     const bigId = parseBigIntId(id);
-    const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
+    const order = await this.prisma.productionOrder.findUnique({
+      where: { id: bigId },
+      include: { productionInvoiceItem: { select: { workshopId: true } } },
+    });
     if (!order) {
       throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
+    await this.assertCanManageOrder(userId, order.productionInvoiceItem?.workshopId);
     const updated = await this.prisma.productionOrder.update({
       where: { id: bigId },
       data:
@@ -362,12 +380,16 @@ export class ProductionOrdersService {
    * ACTIVE) sẽ chặn mọi thao tác ghi trên xưởng cho tới khi bấm lại "Bắt đầu"/"Tiếp tục" (cùng
    * route floor-start, xem controller). Bấm tự do như finishFloor(), không kiểm tra tiến độ.
    */
-  async pauseFloor(id: string): Promise<ProductionOrderResponseDto> {
+  async pauseFloor(id: string, userId?: string): Promise<ProductionOrderResponseDto> {
     const bigId = parseBigIntId(id);
-    const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
+    const order = await this.prisma.productionOrder.findUnique({
+      where: { id: bigId },
+      include: { productionInvoiceItem: { select: { workshopId: true } } },
+    });
     if (!order) {
       throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
+    await this.assertCanManageOrder(userId, order.productionInvoiceItem?.workshopId);
     const updated = await this.prisma.productionOrder.update({
       where: { id: bigId },
       data: { floorStage: 'PAUSED' },
@@ -386,12 +408,16 @@ export class ProductionOrdersService {
    * Đóng gói (quyết định nghiệp vụ 2026-08-31: QLSX toàn quyền, bấm tự do). Idempotent cùng lý do
    * startFloor().
    */
-  async finishFloor(id: string): Promise<ProductionOrderResponseDto> {
+  async finishFloor(id: string, userId?: string): Promise<ProductionOrderResponseDto> {
     const bigId = parseBigIntId(id);
-    const order = await this.prisma.productionOrder.findUnique({ where: { id: bigId } });
+    const order = await this.prisma.productionOrder.findUnique({
+      where: { id: bigId },
+      include: { productionInvoiceItem: { select: { workshopId: true } } },
+    });
     if (!order) {
       throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
+    await this.assertCanManageOrder(userId, order.productionInvoiceItem?.workshopId);
     const updated = await this.prisma.productionOrder.update({
       where: { id: bigId },
       data:
@@ -519,7 +545,11 @@ export class ProductionOrdersService {
    * Ghi audit TAY (ProductionOrder không nằm trong AUDITED_MODELS - dòng nghiệp vụ đổi liên tục
    * theo vòng đời, xem audit-log.extension.ts) để lại bomRevisionId cũ/mới + lý do KHSX/QLSX gõ.
    */
-  async resyncBom(id: string, dto: ResyncBomDto): Promise<ProductionOrderResponseDto> {
+  async resyncBom(
+    id: string,
+    dto: ResyncBomDto,
+    userId?: string,
+  ): Promise<ProductionOrderResponseDto> {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({
       where: { id: bigId },
@@ -528,6 +558,7 @@ export class ProductionOrdersService {
           select: {
             ...SALES_ORDER_CODE_INCLUDE.productionInvoiceItem.select,
             productionInvoiceId: true,
+            workshopId: true,
           },
         },
       },
@@ -535,6 +566,7 @@ export class ProductionOrdersService {
     if (!order) {
       throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
+    await this.assertCanManageOrder(userId, order.productionInvoiceItem.workshopId);
     if (order.status !== 'RELEASED') {
       throw new ConflictException(
         `Lệnh sản xuất ${id} đang ở trạng thái ${order.status} - chỉ nạp lại định mức được khi còn RELEASED`,

@@ -17,6 +17,20 @@ export class SendBatchDto {
   @ArrayMinSize(1)
   @IsString({ each: true })
   itemIds?: string[];
+
+  /** QLSX theo xưởng: xưởng KHSX chọn cho các SKU gửi đi. Thiếu = giữ như cũ (FE cũ còn chạy lúc deploy lệch). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  workshopId?: string;
+}
+
+/** Body route lẻ send-to-qlsx: chỉ có xưởng (tuỳ chọn). */
+export class SendToQlsxDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  workshopId?: string;
 }
 
 /** send-to-boss-batch: kèm kho thành phẩm dùng CHUNG cho mọi SKU trong lần gửi này. */

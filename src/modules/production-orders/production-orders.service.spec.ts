@@ -1,11 +1,27 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BomRevisionStatus, CuttingProposalStatus } from '../../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { ProductionOrdersService } from './production-orders.service';
+
+/** WorkshopScopeService thật, chỉ giả lập bảng users: 'qlsx-pa' = Phước An (id 2), 'qlsx-phu' = Phú An (id 1, sơn cho Phước An). */
+const makeScope = () => {
+  const users: Record<string, unknown> = {
+    'qlsx-pa': { workshopId: 2n, workshop: { name: 'Xưởng Phước An', paintsFor: [] } },
+    'qlsx-phu': { workshopId: 1n, workshop: { name: 'Xưởng Phú An', paintsFor: [{ id: 2n }] } },
+  };
+  return new WorkshopScopeService({
+    user: {
+      findUnique: jest.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(users[where.id] ?? null),
+      ),
+    },
+  } as never);
+};
 
 describe('ProductionOrdersService', () => {
   let service: ProductionOrdersService;
@@ -79,6 +95,7 @@ describe('ProductionOrdersService', () => {
       cls as unknown as ClsService<AppClsStore>,
       notifications as unknown as NotificationsService,
       stockReservationsService as unknown as StockReservationsService,
+      makeScope(),
     );
     // Mặc định không có bản ACTIVE nào khớp -> bomOutOfDate=false, không phá các test không quan
     // tâm field này - test riêng của bomOutOfDate tự override lại mock này.
@@ -719,6 +736,72 @@ describe('ProductionOrdersService', () => {
       prisma.productionOrder.findUnique.mockResolvedValue(null);
 
       await expect(service.resyncBom('999', dto)).rejects.toThrow(NotFoundException);
+      expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // QLSX theo xưởng (2026-11-12): cổng xưởng chặn lệnh của xưởng khác.
+  describe('cổng xưởng - QLSX chỉ thao tác lệnh của xưởng mình', () => {
+    const phuAnOrder = (overrides: Record<string, unknown> = {}) =>
+      order({
+        productionInvoiceItem: { ...order().productionInvoiceItem, workshopId: 1n },
+        ...overrides,
+      });
+    const phuocAnOrder = (overrides: Record<string, unknown> = {}) =>
+      order({
+        productionInvoiceItem: { ...order().productionInvoiceItem, workshopId: 2n },
+        ...overrides,
+      });
+
+    it.each(['startFloor', 'pauseFloor', 'finishFloor'] as const)(
+      '%s: QLSX Phước An bấm lệnh Phú An -> 403, không ghi gì',
+      async (fn) => {
+        prisma.productionOrder.findUnique.mockResolvedValue(phuAnOrder());
+
+        await expect(service[fn]('9', 'qlsx-pa')).rejects.toThrow(ForbiddenException);
+        expect(prisma.productionOrder.update).not.toHaveBeenCalled();
+      },
+    );
+
+    it('QLSX Phú An cũng không bấm được lệnh Phước An (chỉ xem vì sơn nhờ)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(phuocAnOrder());
+
+      await expect(service.startFloor('9', 'qlsx-phu')).rejects.toThrow(ForbiddenException);
+    });
+
+    it('QLSX Phước An bấm lệnh Phước An -> được', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(phuocAnOrder());
+      prisma.productionOrder.update.mockResolvedValue(phuocAnOrder({ floorStage: 'ACTIVE' }));
+
+      const result = await service.startFloor('9', 'qlsx-pa');
+
+      expect(result.floorStage).toBe('ACTIVE');
+    });
+
+    it('lệnh chưa có xưởng (dữ liệu cũ): QLSX có xưởng vẫn thao tác được', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order());
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'PAUSED' }));
+
+      await expect(service.pauseFloor('9', 'qlsx-pa')).resolves.toMatchObject({
+        floorStage: 'PAUSED',
+      });
+    });
+
+    it('user không giới hạn (không truyền userId / không gắn xưởng): thao tác mọi lệnh như cũ', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(phuAnOrder());
+      prisma.productionOrder.update.mockResolvedValue(phuAnOrder({ floorStage: 'ACTIVE' }));
+
+      await expect(service.startFloor('9')).resolves.toBeDefined();
+      await expect(service.startFloor('9', 'khsx-khong-gan-xuong')).resolves.toBeDefined();
+    });
+
+    it('resyncBom: QLSX Phước An nạp lại định mức lệnh Phú An -> 403 trước khi kiểm điều kiện khác', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(phuAnOrder());
+
+      await expect(
+        service.resyncBom('9', { reason: 'Định mức sửa lại' }, 'qlsx-pa'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.cuttingProposal.findFirst).not.toHaveBeenCalled();
       expect(prisma.productionOrder.update).not.toHaveBeenCalled();
     });
   });

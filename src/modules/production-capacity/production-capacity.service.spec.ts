@@ -1,8 +1,24 @@
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { ProductionCapacityService } from './production-capacity.service';
 
 const d = (day: string) => new Date(`${day}T00:00:00.000Z`);
+
+/** WorkshopScopeService thật, chỉ giả lập bảng users: 'qlsx-pa' = Phước An (id 2), 'qlsx-phu' = Phú An (id 1, sơn cho Phước An). */
+const makeScope = () => {
+  const users: Record<string, unknown> = {
+    'qlsx-pa': { workshopId: 2n, workshop: { name: 'Xưởng Phước An', paintsFor: [] } },
+    'qlsx-phu': { workshopId: 1n, workshop: { name: 'Xưởng Phú An', paintsFor: [{ id: 2n }] } },
+  };
+  return new WorkshopScopeService({
+    user: {
+      findUnique: jest.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(users[where.id] ?? null),
+      ),
+    },
+  } as never);
+};
 
 describe('ProductionCapacityService', () => {
   // 09:00 sáng 10/11 giờ VN.
@@ -11,7 +27,7 @@ describe('ProductionCapacityService', () => {
     systemConfig: { findUnique: jest.Mock };
     productionInvoiceItem: { findMany: jest.Mock };
     productionInvoice: { findMany: jest.Mock };
-    workshop: { findMany: jest.Mock };
+    workshop: { findMany: jest.Mock; findUnique: jest.Mock };
   };
   let service: ProductionCapacityService;
 
@@ -50,9 +66,15 @@ describe('ProductionCapacityService', () => {
       productionInvoice: {
         findMany: jest.fn().mockResolvedValue([{ id: 7n, code: 'PI-7', lsxCode: 'MY-313' }]),
       },
-      workshop: { findMany: jest.fn().mockResolvedValue([]) },
+      workshop: {
+        findMany: jest.fn().mockResolvedValue([]),
+        // QLSX mẫu: Phước An (id 2) -> PHUOC_AN, Phú An (id 1) -> PHU_AN.
+        findUnique: jest.fn(({ where }: { where: { id: bigint } }) =>
+          Promise.resolve({ code: where.id === 2n ? 'PHUOC_AN' : 'PHU_AN' }),
+        ),
+      },
     };
-    service = new ProductionCapacityService(prisma as never);
+    service = new ProductionCapacityService(prisma as never, makeScope());
   });
 
   describe('getBoard', () => {
@@ -276,6 +298,47 @@ describe('ProductionCapacityService', () => {
       const res = await service.check([{ itemId: '1' }]);
       expect(res.warnings).toEqual([]);
       expect(res.missingLoadCont.map((m) => m.itemId)).toEqual(['1']);
+    });
+  });
+
+  describe('QLSX theo xưởng (2026-11-12): chỉ khối xưởng mình + kho đóng gói dùng chung', () => {
+    const PHUOC_AN = { ...PHU_AN, code: 'PHUOC_AN', name: 'Xưởng Phước An', paintWorkshop: null };
+    const groups = (rows: { groupKind: string; groupCode: string }[]) => [
+      ...new Set(rows.map((r) => `${r.groupKind}:${r.groupCode}`)),
+    ];
+
+    beforeEach(() => {
+      // 1 lệnh Phú An + 1 lệnh Phước An, cả hai có đóng gói ở cùng kho; mỗi dòng 80 cont trong 1 ngày để ra khối rõ ràng.
+      const stages = { FRAME_PHOI: '2026-11-12', FRAME_HAN: '2026-11-12', PACKAGING: '2026-11-12' };
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        row(1n, stages, { warehouseCode: 'TP', warehouseName: 'Kho TP' }),
+        row(2n, stages, { workshop: PHUOC_AN, warehouseCode: 'TP', warehouseName: 'Kho TP' }),
+      ]);
+    });
+
+    it('QLSX Phước An: chỉ khối Phước An + khối kho; không thấy khối Phú An', async () => {
+      const board = await service.getBoard('2026-11-12', '2026-11-12', NOW, 'qlsx-pa');
+
+      const g = groups(board.rows);
+      expect(g).toContain('WORKSHOP:PHUOC_AN');
+      expect(g).toContain('WAREHOUSE:TP');
+      expect(g).not.toContain('WORKSHOP:PHU_AN');
+    });
+
+    it('khối kho dùng chung vẫn cộng đủ lệnh của mọi xưởng (lọc sau khi gom cont)', async () => {
+      const all = await service.getBoard('2026-11-12', '2026-11-12', NOW);
+      const scoped = await service.getBoard('2026-11-12', '2026-11-12', NOW, 'qlsx-pa');
+
+      const wh = (b: typeof all) => b.rows.filter((r) => r.groupKind === 'WAREHOUSE');
+      expect(wh(scoped)).toEqual(wh(all));
+    });
+
+    it('user không giới hạn: thấy mọi khối', async () => {
+      const board = await service.getBoard('2026-11-12', '2026-11-12', NOW, 'khsx');
+
+      expect(groups(board.rows)).toEqual(
+        expect.arrayContaining(['WORKSHOP:PHU_AN', 'WORKSHOP:PHUOC_AN', 'WAREHOUSE:TP']),
+      );
     });
   });
 });
