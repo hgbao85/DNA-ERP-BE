@@ -4372,4 +4372,70 @@ describe('CuttingProposalsService', () => {
       expect(run(null)).toBeNull();
     });
   });
+
+  describe('bản nhớ ngắn của loadBatchContext (4 hàm đọc màn Tối ưu cắt sắt)', () => {
+    // Mặc định beforeEach: productionInvoiceItem.findMany trả [] -> ctx = null sau đúng 1 truy vấn,
+    // đủ để đếm số lần đọc DB mà không cần dựng đủ dữ liệu.
+    const reads = () => prisma.productionInvoiceItem.findMany.mock.calls.length;
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('(a) gọi đồng thời nhiều hàm đọc chỉ đọc DB 1 lần', async () => {
+      await Promise.all([
+        service.getBatchSuggestions(),
+        service.getBatchCandidates(),
+        service.getBatchCandidates(null, null, true),
+        service.previewBatch({ productionInvoiceItemIds: [] }),
+      ]);
+      expect(reads()).toBe(1);
+    });
+
+    it('(b) quá TTL thì đọc lại, chưa quá thì dùng bản nhớ', async () => {
+      jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+      jest.setSystemTime(new Date('2026-11-01T00:00:00Z'));
+      await service.getBatchSuggestions();
+      jest.advanceTimersByTime(2_900);
+      await service.getBatchSuggestions();
+      expect(reads()).toBe(1);
+      jest.advanceTimersByTime(200);
+      await service.getBatchSuggestions();
+      expect(reads()).toBe(2);
+    });
+
+    it('(c) sau thao tác ghi đi qua helper phát realtime thì đọc lại', async () => {
+      await service.getBatchSuggestions();
+      expect(reads()).toBe(1);
+      (
+        service as unknown as {
+          publishRealtime: (e: string, id: bigint, a: string, u: string | null) => void;
+        }
+      ).publishRealtime('CUTTING_PROPOSAL', 1n, 'FINISHED', null);
+      await service.getBatchSuggestions();
+      expect(reads()).toBe(2);
+    });
+
+    it('(c2) lần đọc ĐANG CHẠY dở bị xoá thì không được dùng lại sau đó', async () => {
+      let release!: (v: unknown[]) => void;
+      prisma.productionInvoiceItem.findMany.mockImplementationOnce(
+        () => new Promise((resolve) => (release = resolve as (v: unknown[]) => void)),
+      );
+      const stale = service.getBatchSuggestions();
+      (service as unknown as { invalidateBatchContext: () => void }).invalidateBatchContext();
+      await service.getBatchSuggestions(); // đọc mới, không chờ lần dở dang
+      expect(reads()).toBe(2);
+      release([]);
+      await stale;
+      await service.getBatchSuggestions(); // vẫn dùng bản nhớ của lần đọc MỚI
+      expect(reads()).toBe(2);
+    });
+
+    it('(d) lỗi không bị nhớ: lần sau đọc lại', async () => {
+      prisma.productionInvoiceItem.findMany.mockRejectedValueOnce(new Error('db down'));
+      await expect(service.getBatchSuggestions()).rejects.toThrow('db down');
+      await expect(service.getBatchSuggestions()).resolves.toEqual([]);
+      expect(reads()).toBe(2);
+    });
+  });
 });

@@ -4286,6 +4286,18 @@ model ReservedSlipCode {
   @@map("reserved_slip_codes")
 }
 
+/// Kết quả xác minh "hao hụt khi cắt riêng" bằng bộ giải thật (màn Tối ưu cắt sắt), nhớ qua lần BE khởi động lại/ngủ. `key` = sha256 của
+/// khoá bài toán (mọi tham số gửi bộ giải) + số phiên bản (EXACT_CHECK_CACHE_VERSION) nên cùng key = cùng đáp án; `result` = đúng object
+/// verifyExactStandaloneWaste trả. Bản ghi quá 7 ngày bị bỏ qua và dọn dần khi ghi (không có cron).
+model CuttingExactCheck {
+  key       String   @id
+  result    Json
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("cutting_exact_checks")
+}
+
 enum IssueSlipStatus {
   /// Đã cấp số, đã in, chờ người nhận ký và thủ kho tải ảnh - CHƯA trừ tồn.
   DRAFT

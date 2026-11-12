@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
 import { AppConfig } from '../../config/configuration';
 import {
   BomRevisionStatus,
@@ -91,48 +92,59 @@ const SYSTEM_CONFIG_ID = 1;
  * changelog 2026-09-24 mục 19) - gọi solver THẬT thay vì best-fill.util.ts ước tính, để chip
  * không còn "xanh" (đạt) trong khi solve thật lại auto-scan sang cây khác.
  *
- * Số cỡ đoạn KHÁC NHAU tối đa của 1 loại sắt để còn ĐÁNG gọi solver xác minh - vượt số này thì
- * sinh kiểu cắt nổ tổ hợp, đo thật SAT-HOP-10X20 (7 cỡ) mất tới ~300s dù solver đã tự giới hạn
- * nội bộ (MAX_SIZES_PER_BAR). 2-4 cỡ luôn đo được <0.1s; không có mốc trung gian đã đo nên chọn
- * an toàn ngay dưới ca chậm - loại nào vượt số này RƠI VỀ ước tính cũ (verified=false), không
- * chặn trang tải.
- */
-const EXACT_CHECK_MAX_SIZES = 5;
-/** Timeout HTTP cho MỖI lần gọi xác minh - lưới an toàn ĐỘC LẬP với số cỡ đoạn (demand lớn dù ít
- *  cỡ vẫn có thể chậm bất ngờ). Hết giờ thì rơi về ước tính cũ, KHÔNG chặn trang. */
-const EXACT_CHECK_TIMEOUT_MS = 8_000;
-/** time_limit_seconds gửi cho solver mỗi lần xác minh - nhỏ vì chỉ 1 loại sắt, muốn solver TỰ bỏ
- *  cuộc nhanh nếu ca này khó bất thường, không đợi hết EXACT_CHECK_TIMEOUT_MS mới bị HTTP ngắt. */
-const EXACT_CHECK_SOLVER_TIME_LIMIT_SEC = 5;
-/** Số lần gọi solver xác minh chạy song song tối đa - tránh dội hàng chục request cùng lúc vào
- *  solver khi bảng có nhiều SKU (mỗi SKU vài loại sắt). */
-const EXACT_CHECK_CONCURRENCY = 6;
-/** Ngân sách thời gian CHUNG cho CẢ đợt xác minh (không phải mỗi lần gọi) - bảng có bất thường
- *  nhiều SKU/loại sắt cần xác minh thì sau mốc này KHÔNG bắn thêm request mới, phần còn lại rơi
- *  về ước tính cũ - trang KHÔNG BAO GIỜ treo chờ xác minh dù dữ liệu tăng đột biến. */
-const EXACT_CHECK_BATCH_BUDGET_MS = 12_000;
-/**
- * Lượt KIỂM BÙ (2026-10-24, `deepVerify`): FE gọi lại NỀN ngay sau lần tải trang cho các chip chưa kịp xác minh (người dùng:
- * "chip chưa kiểm hiện xám, kiểm bù ca chậm không chặn trang"). Đo 2026-10-24 (DB test, 78 bài): SAT-PHI-6 30 mm ×120 + 60 mm ×240
- * cần 7,7 s ở 5 s → rơi về ước tính "≥0,17%" XANH trong khi cây 6m tốt nhất 19,67 % - bỏ sót cảnh báo. Loại 7–10 cỡ đoạn giải
- * được trong ~16–30 s. Mặc định bộ giải chỉ 1 luồng (SOLVER_TS_WORKERS=1) nên các lần gọi XẾP HÀNG - ngân sách tính cả hàng đợi.
+ * Lượt tải bảng thường (getBatchCandidates) KHÔNG gọi solver nữa (2026-11-12: đo trên máy 0,1 CPU, 28 SKU/106 ô, lượt thường mất
+ * 20 s mà chỉ xác minh được 1/106 ô) - chỉ điền ô đã có kết quả nhớ (RAM/DB), còn lại giữ ước tính (verified=false). Mọi việc giải
+ * dồn sang lượt KIỂM BÙ nền (`deepVerify`): FE gọi ngay sau khi bảng hiện, ô chưa kiểm hiện xám rồi tự cập nhật.
+ *
+ * Lượt KIỂM BÙ: xác minh cả loại tới 12 cỡ đoạn. Đo 2026-10-24 (DB test, 78 bài): SAT-PHI-6 30 mm ×120 + 60 mm ×240 cần 7,7 s -
+ * ngưỡng ngắn rơi về ước tính "≥0,17%" XANH trong khi cây 6m tốt nhất 19,67 % - bỏ sót cảnh báo. Loại 7–10 cỡ đoạn giải được trong
+ * ~16–30 s; SAT-HOP-10X20 (7 cỡ) từng mất tới ~300 s vì sinh kiểu cắt nổ tổ hợp nên vẫn phải có trần số cỡ.
+ * Mặc định bộ giải chỉ 1 luồng (SOLVER_TS_WORKERS=1) nên các lần gọi XẾP HÀNG - ngân sách tính cả hàng đợi.
  */
 const EXACT_CHECK_DEEP_MAX_SIZES = 12;
+/** Timeout HTTP tối đa cho MỖI lần gọi xác minh; thực tế còn bị cắt theo phần còn lại của ngân sách cả lượt (xem remainingCallMs). */
 const EXACT_CHECK_DEEP_TIMEOUT_MS = 75_000;
 /** 30 s/bài: SAT-PHI-6 GHE-J55 ×20 cần ~16 s (ngưỡng 1 % vô nghiệm rồi mới tìm "tốt nhất có thể") - 15 s chưa đủ (đo 2026-10-24). */
 const EXACT_CHECK_DEEP_SOLVER_TIME_LIMIT_SEC = 30;
+/** Ngân sách CẢ lượt kiểm bù, kể cả bài đang chạy (không chỉ việc nhận bài mới) - phải nhỏ hơn timeout 150 s của FE, nếu không FE bỏ cả kết quả
+ *  (đo 2026-11-12: bài đang chạy vẫn được chờ tới 75 s sau mốc 120 s nên cả lượt mất 151 s). */
 const EXACT_CHECK_DEEP_BATCH_BUDGET_MS = 120_000;
+/** Timeout tối thiểu cho 1 lần gọi solver - còn ít hơn thì không gọi (bài nhỏ cũng cần vài giây, gọi ngắn hơn chỉ tốn công rồi rớt). */
+const EXACT_CHECK_MIN_CALL_MS = 3_000;
 /**
  * Nhớ kết quả xác minh QUA các lần tải trang, theo ĐÚNG mọi tham số dựng body gửi solver (loại sắt, nhu cầu, chiều dài, ngưỡng,
  * dư, tề, lưỡi, máy) - cùng khoá = cùng bài toán = cùng câu trả lời, nên lượt kiểm bù không giải lại các chip đã có, và lần mở
- * trang sau ra ngay. Chỉ nhớ kết quả THÀNH CÔNG (null = không kịp/lỗi thì lần sau thử lại). Hết hạn sau 30 phút, tối đa 3.000 khoá.
+ * trang sau ra ngay. Chỉ nhớ kết quả THÀNH CÔNG (null = không kịp/lỗi thì lần sau thử lại). Lớp nhanh trong RAM: hết hạn sau 30 phút,
+ * tối đa 3.000 khoá; mất khi BE khởi động lại nên có thêm lớp DB (bảng cutting_exact_checks, xem EXACT_CHECK_DB_TTL_MS).
  */
 const EXACT_CHECK_CACHE_TTL_MS = 30 * 60_000;
+/** Tăng số này khi đổi bộ giải/cách tính kết quả xác minh: khoá DB có băm kèm số phiên bản nên mọi kết quả cũ tự bị bỏ qua. */
+const EXACT_CHECK_CACHE_VERSION = 1;
+/** TTL bản ghi DB: khoá đã gồm MỌI tham số bài toán nên kết quả không đổi theo thời gian - TTL chỉ để bảng không phình mãi. */
+const EXACT_CHECK_DB_TTL_MS = 7 * 24 * 60 * 60_000;
+/** Dọn bản ghi quá hạn tối đa mỗi chừng này (kèm lần ghi), khỏi thêm cron. */
+const EXACT_CHECK_DB_CLEANUP_INTERVAL_MS = 6 * 60 * 60_000;
 /** Khối "Đợt đang chọn" (getBatchFixOptions): tổng ngân sách 1 lần gọi + trần mỗi lượt solver phụ (đặt cây riêng / đơn gấp). */
 const FIX_OPTIONS_BUDGET_MS = 60_000;
 const FIX_OPTIONS_SOLVER_TIME_LIMIT_SEC = 15;
 const FIX_OPTIONS_SOLVER_TIMEOUT_MS = 40_000;
 const EXACT_CHECK_CACHE_MAX = 3_000;
+/**
+ * Màn "Tối ưu cắt sắt" khi mở gọi gần như cùng lúc 4-5 API đọc, mỗi API đều nạp lại cùng một bộ dữ liệu nền (loadBatchContext, ~6 truy
+ * vấn). Máy chủ yếu CPU: gọi chồng nhau thì mỗi request tốn 200-450 ms dù lần lượt chỉ 10-60 ms. Nên các lần gọi trong khoảng ngắn dùng
+ * CHUNG một lần đọc. TTL ngắn vì thay đổi từ module khác (duyệt SKU/định mức, cấu hình) không có sự kiện phía server để xoá bản nhớ -
+ * chỉ chịu trễ tối đa ngần này; thao tác ghi của chính service này thì xoá ngay (invalidateBatchContext).
+ */
+const BATCH_CONTEXT_CACHE_TTL_MS = 3_000;
+
+/** Kết quả xác minh 1 ô (verifyExactStandaloneWaste) - cũng là đúng object lưu ở cột `result` của cutting_exact_checks. */
+interface ExactCheckResult {
+  wastePct: number;
+  bars: number;
+  stockLengthMm: number;
+  overThreshold: boolean;
+  lengthSource: 'fixed' | 'scan';
+}
 
 interface SolverBomRow {
   part: string;
@@ -179,6 +191,8 @@ interface SolverProposeResponse {
     /// (chưa chứng minh được là vô nghiệm) - KHÁC hẳn infeasible THẬT (đã chứng minh vô nghiệm). Xem
     /// solver-ts/optimize-one-material.ts.
     timed_out?: boolean;
+    /// CHỈ có ở dòng feasible=true: số chiều dài cây bị hết time_limit_seconds khi giải - > 0 nghĩa là kết quả CHƯA chắc tối ưu.
+    timeout_count?: number;
     /// CHỈ có ở dòng feasible=false, và chỉ khi có giá trị (không phải mọi ca infeasible đều có -
     /// xem best_achievable ở solver-ts). "Tốt nhất có thể" nếu chấp nhận nới ngưỡng.
     best_achievable?: { length: number; waste_pct: number; bars: number } | null;
@@ -357,6 +371,8 @@ export class CuttingProposalsService {
     action: RealtimeEntityAction,
     actorId: string | null,
   ): void {
+    // Dữ liệu vừa đổi -> bản nhớ gộp đợt không còn đúng, lần đọc sau phải đọc tươi.
+    this.invalidateBatchContext();
     this.realtime.publishEntityChanged({ entity, entityId, action, actorId });
   }
 
@@ -413,6 +429,7 @@ export class CuttingProposalsService {
       },
       include: LIST_INCLUDE,
     });
+    this.invalidateBatchContext();
 
     void this.enqueueSolverRun(
       proposal.id,
@@ -489,6 +506,7 @@ export class CuttingProposalsService {
       },
       include: LIST_INCLUDE,
     });
+    this.invalidateBatchContext();
 
     void this.enqueueSolverRun(
       proposal.id,
@@ -678,6 +696,7 @@ export class CuttingProposalsService {
       });
     });
 
+    this.invalidateBatchContext();
     void this.enqueueSolverRun(
       created.id,
       () => this.buildBatchJob(created.id),
@@ -729,6 +748,7 @@ export class CuttingProposalsService {
         data: { status: CuttingProposalStatus.SUPERSEDED },
       });
     });
+    this.invalidateBatchContext();
   }
 
   /**
@@ -1006,6 +1026,8 @@ export class CuttingProposalsService {
         data: { status: CuttingProposalStatus.SUPERSEDED },
       });
     }
+    // tx do caller giữ, chưa commit: xoá ở đây chỉ làm bản nhớ cũ không sống thêm; TTL ngắn lo phần còn lại.
+    this.invalidateBatchContext();
   }
 
   /** Phương án tính-trước của 1 PI (null với PI theo luồng cũ) - ProductionInvoicesService dùng để
@@ -1083,6 +1105,7 @@ export class CuttingProposalsService {
       },
       data: { status: CuttingProposalStatus.SUPERSEDED, productionInvoiceId: null },
     });
+    this.invalidateBatchContext();
   }
 
   /** Báo đích danh người bấm Tính khi lượt tính trước-PI xong: dùng được -> CUTTING_SOLVE_DONE,
@@ -1263,7 +1286,7 @@ export class CuttingProposalsService {
     chosenStockLengths?: StockLengthsByMaterial | null,
     chosenMachine?: SolverMachine | null,
   ): Promise<CuttingBatchSuggestionDto[]> {
-    const ctx = await this.loadBatchContext();
+    const ctx = await this.loadBatchContextCached();
     if (ctx === null) return [];
     const { byMaterial, materials, config } = ctx;
     const defaultStockLengths = config.solverStockLengths as number[];
@@ -1366,8 +1389,10 @@ export class CuttingProposalsService {
    */
   async getBatchFixOptions(dto: PreviewCuttingBatchDto): Promise<CuttingBatchFixOptionsDto> {
     const started = Date.now();
-    const overBudget = () => Date.now() - started > FIX_OPTIONS_BUDGET_MS;
-    const ctx = await this.loadBatchContext();
+    // Phần ngân sách còn lại: MỖI lần gọi solver bị cắt theo số này (bài đang chạy cũng không được chờ quá ngân sách cả lượt).
+    const remainingMs = () => FIX_OPTIONS_BUDGET_MS - (Date.now() - started);
+    const overBudget = () => remainingMs() < EXACT_CHECK_MIN_CALL_MS;
+    const ctx = await this.loadBatchContextCached();
     const config =
       ctx?.config ??
       (await this.prisma.systemConfig.findUniqueOrThrow({ where: { id: SYSTEM_CONFIG_ID } }));
@@ -1428,8 +1453,8 @@ export class CuttingProposalsService {
         kerfMm,
         machineParams.body,
       );
-      const cached = this.exactCheckCache.get(key);
-      if (cached && Date.now() - cached.at < EXACT_CHECK_CACHE_TTL_MS) return cached.value;
+      const known = (await this.lookupExactChecks([key])).get(key);
+      if (known) return known;
       if (overBudget() || demand.size > EXACT_CHECK_DEEP_MAX_SIZES) return null;
       const v = await this.verifyExactStandaloneWaste(
         materialId,
@@ -1440,9 +1465,13 @@ export class CuttingProposalsService {
         trimMm,
         kerfMm,
         machineParams.body,
-        true,
+        Math.min(EXACT_CHECK_DEEP_TIMEOUT_MS, remainingMs()),
       );
-      if (v) this.rememberExactCheck(key, v);
+      // Chỉ lưu DB kết quả giải trọn (không hết giờ) - xem `complete` ở verifyExactStandaloneWaste.
+      if (v) {
+        const { complete, ...value } = v;
+        this.rememberExactCheck(key, value, complete);
+      }
       return v;
     };
     const selDated = selected
@@ -1552,19 +1581,25 @@ export class CuttingProposalsService {
         }
         // (2) không gộp: chế độ Bình thường tự đặt cây riêng
         if (config.solverAllowCustomLength && !overBudget()) {
-          const p = await this.solveSingleForFix(materialId, demand, stockLengths, {
-            ...machineParams.body,
-            trim_start: trimMm,
-            blade_width: kerfMm,
-            max_waste_percentage: thresholdPct,
-            max_surplus: config.solverMaxSurplus,
-            auto_scan: true,
-            stop_on_first: true,
-            min_length: config.solverMinLengthMm,
-            max_length: config.solverMaxLengthMm,
-            length_step: config.solverLengthStepMm,
-            time_limit_seconds: FIX_OPTIONS_SOLVER_TIME_LIMIT_SEC,
-          });
+          const p = await this.solveSingleForFix(
+            materialId,
+            demand,
+            stockLengths,
+            {
+              ...machineParams.body,
+              trim_start: trimMm,
+              blade_width: kerfMm,
+              max_waste_percentage: thresholdPct,
+              max_surplus: config.solverMaxSurplus,
+              auto_scan: true,
+              stop_on_first: true,
+              min_length: config.solverMinLengthMm,
+              max_length: config.solverMaxLengthMm,
+              length_step: config.solverLengthStepMm,
+              time_limit_seconds: FIX_OPTIONS_SOLVER_TIME_LIMIT_SEC,
+            },
+            Math.min(FIX_OPTIONS_SOLVER_TIMEOUT_MS, remainingMs()),
+          );
           if (
             p?.feasible &&
             p.best_stock_length != null &&
@@ -1579,15 +1614,21 @@ export class CuttingProposalsService {
         } else if (config.solverAllowCustomLength) incomplete = true;
         // (3) đơn gấp: vẫn mua cây chuẩn, không trần hao hụt
         if (!overBudget()) {
-          const p = await this.solveSingleForFix(materialId, demand, stockLengths, {
-            ...machineParams.body,
-            trim_start: trimMm,
-            blade_width: kerfMm,
-            max_waste_percentage: 100,
-            max_surplus: config.solverMaxSurplus,
-            auto_scan: false,
-            time_limit_seconds: FIX_OPTIONS_SOLVER_TIME_LIMIT_SEC,
-          });
+          const p = await this.solveSingleForFix(
+            materialId,
+            demand,
+            stockLengths,
+            {
+              ...machineParams.body,
+              trim_start: trimMm,
+              blade_width: kerfMm,
+              max_waste_percentage: 100,
+              max_surplus: config.solverMaxSurplus,
+              auto_scan: false,
+              time_limit_seconds: FIX_OPTIONS_SOLVER_TIME_LIMIT_SEC,
+            },
+            Math.min(FIX_OPTIONS_SOLVER_TIMEOUT_MS, remainingMs()),
+          );
           if (p?.feasible) {
             row.urgent = new CuttingBatchFixResultDto({
               wastePct: p.waste_percentage ?? 0,
@@ -1635,6 +1676,8 @@ export class CuttingProposalsService {
     demand: Map<number, number>,
     stockLengths: number[],
     body: Record<string, unknown>,
+    /** Timeout HTTP của lần gọi - caller đã cắt theo phần còn lại của ngân sách (không nằm trong khoá nhớ vì không đổi kết quả). */
+    timeoutMs: number = FIX_OPTIONS_SOLVER_TIMEOUT_MS,
   ): Promise<SolverProposeResponse['purchase_plan'][number] | null> {
     const key = `fix|${JSON.stringify([materialId.toString(), [...demand.entries()], stockLengths, body])}`;
     const hit = this.fixSolveCache.get(key);
@@ -1654,7 +1697,7 @@ export class CuttingProposalsService {
           stock_lengths: stockLengths.join(' '),
           ...body,
         },
-        FIX_OPTIONS_SOLVER_TIMEOUT_MS,
+        timeoutMs,
       );
       const item = res?.purchase_plan?.[0] ?? null;
       if (item) {
@@ -1687,10 +1730,10 @@ export class CuttingProposalsService {
   async getBatchCandidates(
     chosenStockLengths?: StockLengthsByMaterial | null,
     chosenMachine?: SolverMachine | null,
-    /** true = lượt KIỂM BÙ (xem EXACT_CHECK_DEEP_*): xác minh cả loại tới 12 cỡ đoạn, cho mỗi bài lâu hơn. */
+    /** true = lượt KIỂM BÙ nền (xem EXACT_CHECK_DEEP_*): mới là lượt gọi solver; lượt thường chỉ điền ô đã có kết quả nhớ. */
     deepVerify = false,
   ): Promise<CuttingBatchCandidateListDto> {
-    const ctx = await this.loadBatchContext();
+    const ctx = await this.loadBatchContextCached();
     if (ctx === null) {
       // Không có SKU nào để gộp - vẫn trả 2 mốc thời gian để FE dựng gợi ý/giới hạn ô nhập nhất
       // quán, không phải xử lý riêng ca "danh sách rỗng" (2026-09-23).
@@ -1783,8 +1826,8 @@ export class CuttingProposalsService {
               standaloneMinBars: this.minBarsFor(demand, stockLengths, trimMm, kerfMm),
               thresholdPct,
               overThreshold: wastePct > thresholdPct,
-              // Ước tính trước - verifyExactStandaloneWasteBatch() ghi đè thành true nếu xác
-              // minh được bằng solver thật trước khi hàm này trả về.
+              // Ước tính trước - verifyExactStandaloneWasteBatch() ghi đè thành true nếu đã có kết
+              // quả xác minh nhớ (RAM/DB) hoặc (lượt kiểm bù) giải được bằng solver thật.
               verified: false,
               verifiedLengthSource: null,
               // Các SKU KHÁC cũng dùng loại sắt này - chính là danh sách "gộp được với ai".
@@ -1792,10 +1835,8 @@ export class CuttingProposalsService {
                 .filter((e) => e.item.id !== item.id)
                 .map((e) => e.item.mfgProduct.factoryCode),
             });
-            if (
-              demand.size > 0 &&
-              demand.size <= (deepVerify ? EXACT_CHECK_DEEP_MAX_SIZES : EXACT_CHECK_MAX_SIZES)
-            ) {
+            // Lượt thường cũng tra nhớ tới 12 cỡ: ô đã được kiểm bù trước đó phải hiện xanh/đỏ ngay.
+            if (demand.size > 0 && demand.size <= EXACT_CHECK_DEEP_MAX_SIZES) {
               verifyTargets.push({ dto, materialId, demand, stockLengths, thresholdPct });
             }
             return dto;
@@ -1866,7 +1907,7 @@ export class CuttingProposalsService {
    */
   async previewBatch(dto: PreviewCuttingBatchDto): Promise<CuttingBatchPreviewDto> {
     const selectedIds = new Set(dto.productionInvoiceItemIds.map((id) => parseBigIntId(id)));
-    const ctx = await this.loadBatchContext();
+    const ctx = await this.loadBatchContextCached();
     if (ctx === null) {
       return new CuttingBatchPreviewDto({ lines: [], totalBarsSaved: 0, daysCutEarly: null });
     }
@@ -1932,10 +1973,37 @@ export class CuttingProposalsService {
   }
 
   /**
-   * Nạp dữ liệu nền dùng chung cho cả 3 endpoint gộp đợt cắt. Trả null khi không có SKU nào đang
-   * chờ duyệt (khỏi bắn tiếp 4 truy vấn vô ích).
+   * Bản nhớ ngắn của loadBatchContextFresh CHỈ cho 4 hàm đọc (getBatchSuggestions/FixOptions/Candidates, previewBatch): gọi đồng thời chờ chung
+   * 1 promise, xong giữ tới BATCH_CONTEXT_CACHE_TTL_MS. Bản nhớ được đăng ký NGAY khi bắt đầu đọc (không đợi đọc xong) nên
+   * invalidateBatchContext() xoá được cả lần đọc đang chạy dở - đọc bắt đầu trước lúc xoá không bao giờ được dùng lại sau đó. Lỗi
+   * thì không nhớ. Kết quả dùng chung nên 4 hàm đọc KHÔNG được sửa tại chỗ ctx (chỉ sort/ghi trên bản sao).
    */
-  private async loadBatchContext() {
+  private cachedBatchContext: {
+    at: number;
+    promise: ReturnType<CuttingProposalsService['loadBatchContextFresh']>;
+  } | null = null;
+
+  private loadBatchContextCached() {
+    const hit = this.cachedBatchContext;
+    if (hit && Date.now() - hit.at < BATCH_CONTEXT_CACHE_TTL_MS) return hit.promise;
+    const entry = { at: Date.now(), promise: this.loadBatchContextFresh() };
+    this.cachedBatchContext = entry;
+    entry.promise.catch(() => {
+      if (this.cachedBatchContext === entry) this.cachedBatchContext = null;
+    });
+    return entry.promise;
+  }
+
+  /** Gọi sau mọi thao tác ghi của service (và khi phát realtime) để lần đọc kế tiếp không dùng bản nhớ cũ. */
+  private invalidateBatchContext(): void {
+    this.cachedBatchContext = null;
+  }
+
+  /**
+   * Nạp dữ liệu nền dùng chung cho cả 3 endpoint gộp đợt cắt. Trả null khi không có SKU nào đang
+   * chờ duyệt (khỏi bắn tiếp 4 truy vấn vô ích). Luôn đọc tươi - hàm đọc dùng loadBatchContextCached().
+   */
+  private async loadBatchContextFresh() {
     const items = await this.prisma.productionInvoiceItem.findMany({
       where: {
         AND: [
@@ -2648,6 +2716,8 @@ export class CuttingProposalsService {
       );
     }
 
+    // Duyệt đã commit (giữ chỗ tồn, đề xuất mua...) -> bản nhớ gộp đợt phải đọc lại.
+    this.invalidateBatchContext();
     return this.toResponseDto(updated);
   }
 
@@ -3554,18 +3624,20 @@ export class CuttingProposalsService {
   }
 
   /** Kết quả xác minh chip đã có, giữ qua các lần tải trang - xem EXACT_CHECK_CACHE_TTL_MS. */
-  private readonly exactCheckCache = new Map<
-    string,
-    {
-      at: number;
-      value: Awaited<ReturnType<CuttingProposalsService['verifyExactStandaloneWaste']>>;
-    }
-  >();
+  private readonly exactCheckCache = new Map<string, { at: number; value: ExactCheckResult }>();
 
-  private rememberExactCheck(
-    key: string,
-    value: Awaited<ReturnType<CuttingProposalsService['verifyExactStandaloneWaste']>>,
-  ): void {
+  /** Mốc lần dọn bản ghi DB quá hạn gần nhất (xem persistExactCheck). */
+  private lastExactCheckCleanupAt = 0;
+
+  /** Khoá DB = băm sha256 (khoá thật dài, chứa cả body máy) + số phiên bản bộ giải: đổi EXACT_CHECK_CACHE_VERSION là bỏ hết kết quả cũ. */
+  private exactCheckDbKey(key: string): string {
+    return createHash('sha256').update(`${EXACT_CHECK_CACHE_VERSION}|${key}`).digest('hex');
+  }
+
+  /**
+   * Chỉ nhớ trong RAM; `persist` = true thì ghi nền thêm xuống DB (kết quả vừa giải xong). Nạp từ DB lên RAM thì truyền false.
+   */
+  private rememberExactCheck(key: string, value: ExactCheckResult, persist = true): void {
     this.exactCheckCache.delete(key);
     this.exactCheckCache.set(key, { at: Date.now(), value });
     // Map giữ thứ tự chèn -> khoá đầu là khoá cũ nhất.
@@ -3574,13 +3646,86 @@ export class CuttingProposalsService {
       if (oldest === undefined) break;
       this.exactCheckCache.delete(oldest);
     }
+    if (persist) void this.persistExactCheck(key, value);
   }
 
   /**
-   * Xác minh CHÍNH XÁC "hao hụt khi cắt riêng" cho từng dòng đủ điều kiện (2026-09-24, mục 19) -
-   * gọi song song có giới hạn (EXACT_CHECK_CONCURRENCY) và tự dừng nhận việc mới khi hết
-   * EXACT_CHECK_BATCH_BUDGET_MS, để bảng nhiều SKU/loại sắt KHÔNG BAO GIỜ treo chờ xác minh - phần
-   * chưa kịp gọi rơi về ước tính cũ (verified vẫn false, không lỗi gì cả).
+   * Ghi kết quả xác minh THÀNH CÔNG xuống DB để sống qua lần khởi động lại/ngủ của BE (Render free ngủ sau 15 phút). Lỗi chỉ log -
+   * mất bản nhớ DB thì lần sau giải lại, không được làm hỏng request. Tiện thể dọn bản ghi quá hạn, tối đa 1 lần/EXACT_CHECK_DB_CLEANUP_INTERVAL_MS.
+   */
+  private async persistExactCheck(key: string, value: ExactCheckResult): Promise<void> {
+    try {
+      const dbKey = this.exactCheckDbKey(key);
+      const result = value as unknown as Prisma.InputJsonObject;
+      await this.prisma.cuttingExactCheck.upsert({
+        where: { key: dbKey },
+        create: { key: dbKey, result },
+        update: { result, createdAt: new Date() },
+      });
+      if (Date.now() - this.lastExactCheckCleanupAt > EXACT_CHECK_DB_CLEANUP_INTERVAL_MS) {
+        this.lastExactCheckCleanupAt = Date.now();
+        await this.prisma.cuttingExactCheck.deleteMany({
+          where: { createdAt: { lt: new Date(Date.now() - EXACT_CHECK_DB_TTL_MS) } },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Không ghi được kết quả xác minh vào DB: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Tra kết quả xác minh đã nhớ cho nhiều khoá: RAM trước, khoá thiếu thì tra DB MỘT truy vấn cho cả lượt (có thì nạp lên RAM).
+   * Dùng chung cho getBatchCandidates (cả 2 lượt) và getBatchFixOptions. Khoá không có trong kết quả = chưa từng giải. Lỗi DB chỉ log,
+   * coi như chưa có.
+   */
+  private async lookupExactChecks(keys: string[]): Promise<Map<string, ExactCheckResult>> {
+    const found = new Map<string, ExactCheckResult>();
+    const missing: string[] = [];
+    const now = Date.now();
+    for (const key of new Set(keys)) {
+      const cached = this.exactCheckCache.get(key);
+      if (cached && now - cached.at < EXACT_CHECK_CACHE_TTL_MS) found.set(key, cached.value);
+      else missing.push(key);
+    }
+    if (missing.length === 0) return found;
+    try {
+      const keyByDbKey = new Map(missing.map((k) => [this.exactCheckDbKey(k), k]));
+      const rows = await this.prisma.cuttingExactCheck.findMany({
+        where: {
+          key: { in: [...keyByDbKey.keys()] },
+          createdAt: { gt: new Date(now - EXACT_CHECK_DB_TTL_MS) },
+        },
+        select: { key: true, result: true },
+      });
+      for (const row of rows) {
+        const key = keyByDbKey.get(row.key);
+        const value = row.result as unknown as Partial<ExactCheckResult> | null;
+        // Phòng bản ghi sai dạng (đổi cấu trúc kết quả mà quên tăng EXACT_CHECK_CACHE_VERSION) - bỏ qua, để giải lại.
+        if (!key || !value || typeof value.wastePct !== 'number' || typeof value.bars !== 'number')
+          continue;
+        found.set(key, value as ExactCheckResult);
+        this.rememberExactCheck(key, value as ExactCheckResult, false);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Không đọc được kết quả xác minh từ DB: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return found;
+  }
+
+  /**
+   * Điền kết quả xác minh vào từng dòng đủ điều kiện (2026-09-24, mục 19).
+   *
+   * Lượt thường (deep=false): CHỈ tra nhớ RAM/DB (lookupExactChecks) rồi điền ô nào đã có - KHÔNG gọi solver, bảng trả ngay; ô chưa có
+   * giữ ước tính (verified=false).
+   *
+   * Lượt kiểm bù (deep=true): ô chưa có thì giải bằng solver, theo thứ tự: ô ước tính CHƯA vượt ngưỡng trước (ước tính là cận dưới - đã
+   * vượt thì chắc chắn vượt, giải chỉ để ra số chính xác; còn chưa vượt thì mới cần biết có "xanh giả" không), trong mỗi nhóm thì ít cỡ
+   * đoạn trước (bài nhỏ nhanh, được nhiều ô hơn trong ngân sách). Mỗi lần gọi bị cắt timeout theo phần còn lại của EXACT_CHECK_DEEP_BATCH_BUDGET_MS
+   * và hết ngân sách thì không gọi nữa - cả lượt trả về trong khoảng ngân sách, kịp trước timeout của FE.
    *
    * GHI ĐÈ TRỰC TIẾP lên `target.dto` (cùng tham chiếu object đã đưa vào response) - không trả
    * về gì, gọi nơi phải tự sort lại sau khi hàm này resolve (standaloneWastePct có thể đã đổi).
@@ -3599,38 +3744,57 @@ export class CuttingProposalsService {
     machineBody: MachineSolverParams['body'],
     deep = false,
   ): Promise<void> {
-    const deadline =
-      Date.now() + (deep ? EXACT_CHECK_DEEP_BATCH_BUDGET_MS : EXACT_CHECK_BATCH_BUDGET_MS);
+    const deadline = Date.now() + EXACT_CHECK_DEEP_BATCH_BUDGET_MS;
+    const keyed = targets.map((target) => ({
+      target,
+      key: this.exactCheckKey(
+        target.materialId,
+        target.demand,
+        target.stockLengths,
+        target.thresholdPct,
+        maxSurplus,
+        trimMm,
+        kerfMm,
+        machineBody,
+      ),
+    }));
+    const apply = (target: (typeof targets)[number], result: ExactCheckResult) => {
+      target.dto.standaloneWastePct = result.wastePct;
+      target.dto.standaloneMinBars = result.bars;
+      target.dto.stockLengthMm = result.stockLengthMm;
+      target.dto.overThreshold = result.overThreshold;
+      target.dto.verifiedLengthSource = result.lengthSource;
+      target.dto.verified = true;
+    };
+    const known = await this.lookupExactChecks(keyed.map((k) => k.key));
+    const todo: typeof keyed = [];
+    for (const k of keyed) {
+      const hit = known.get(k.key);
+      if (hit) apply(k.target, hit);
+      else todo.push(k);
+    }
+    if (!deep || todo.length === 0) return;
+
+    // Sort ổn định: chưa vượt ngưỡng (ước tính) trước, rồi ít cỡ đoạn trước.
+    todo.sort(
+      (a, b) =>
+        Number(a.target.dto.overThreshold) - Number(b.target.dto.overThreshold) ||
+        a.target.demand.size - b.target.demand.size,
+    );
     // Nhớ tạm theo ĐÚNG tham số dựng body gửi solver, CHỈ trong 1 lần gọi hàm này (1 lần tải trang):
     // cùng 1 loại sắt với cùng nhu cầu thường lặp ở nhiều SKU (đo 2026-10-21: [30×120, 60×240] lặp 11 SKU,
     // chiếm 73/79 s giải tuần tự) - cùng khoá = cùng body = cùng câu trả lời, nên giải 1 lần, mọi dòng
     // dùng chung. Lưu cả promise đang chạy để lời gọi trùng ĐỒNG THỜI cũng chờ chung, không bắn thêm.
-    // Không giữ qua các lần tải trang: nhu cầu/tồn kho có thể đổi giữa 2 lần, và trang vốn tính lại mỗi lần.
-    const memo = new Map<
-      string,
-      ReturnType<CuttingProposalsService['verifyExactStandaloneWaste']>
-    >();
+    const memo = new Map<string, Promise<ExactCheckResult | null>>();
     let cursor = 0;
     const worker = async () => {
-      while (cursor < targets.length) {
-        const target = targets[cursor++];
-        if (Date.now() > deadline) continue; // hết ngân sách chung - bỏ qua, giữ verified=false
-        const key = this.exactCheckKey(
-          target.materialId,
-          target.demand,
-          target.stockLengths,
-          target.thresholdPct,
-          maxSurplus,
-          trimMm,
-          kerfMm,
-          machineBody,
-        );
-        const cached = this.exactCheckCache.get(key);
-        let pending =
-          cached && Date.now() - cached.at < EXACT_CHECK_CACHE_TTL_MS
-            ? Promise.resolve(cached.value)
-            : memo.get(key);
+      while (cursor < todo.length) {
+        const { target, key } = todo[cursor++];
+        let pending = memo.get(key);
         if (!pending) {
+          // Timeout cắt theo ngân sách còn lại: bài đang chạy cũng không được chờ quá mốc deadline.
+          const timeoutMs = Math.min(EXACT_CHECK_DEEP_TIMEOUT_MS, deadline - Date.now());
+          if (timeoutMs < EXACT_CHECK_MIN_CALL_MS) continue; // hết ngân sách chung - bỏ qua, giữ verified=false
           pending = this.verifyExactStandaloneWaste(
             target.materialId,
             target.demand,
@@ -3640,31 +3804,30 @@ export class CuttingProposalsService {
             trimMm,
             kerfMm,
             machineBody,
-            deep,
-          );
+            timeoutMs,
+          ).then((r) => {
+            // Chỉ lưu DB kết quả giải trọn (không hết giờ) - xem `complete` ở verifyExactStandaloneWaste.
+            if (r) {
+              const { complete, ...value } = r;
+              this.rememberExactCheck(key, value, complete);
+            }
+            return r;
+          });
           memo.set(key, pending);
         }
         const result = await pending;
         if (result === null) continue; // không xác minh được - giữ nguyên ước tính cũ
-        if (!cached) this.rememberExactCheck(key, result);
-        target.dto.standaloneWastePct = result.wastePct;
-        target.dto.standaloneMinBars = result.bars;
-        target.dto.stockLengthMm = result.stockLengthMm;
-        target.dto.overThreshold = result.overThreshold;
-        target.dto.verifiedLengthSource = result.lengthSource;
-        target.dto.verified = true;
+        apply(target, result);
       }
     };
     await Promise.all(
-      // Lượt kiểm bù: song song ĐÚNG bằng số luồng bộ giải (mặc định 1) - gửi 6 bài cùng lúc vào 1 luồng thì bài cuối hàng chờ
-      // quá EXACT_CHECK_DEEP_TIMEOUT_MS rồi bị bỏ (đo 2026-10-24: 4 bài 0,1–16 s vẫn "chưa kiểm" vì xếp hàng).
+      // Song song ĐÚNG bằng số luồng bộ giải (mặc định 1) - gửi nhiều bài cùng lúc vào 1 luồng thì bài cuối hàng chờ
+      // quá timeout rồi bị bỏ (đo 2026-10-24: 4 bài 0,1–16 s vẫn "chưa kiểm" vì xếp hàng).
       Array.from(
         {
           length: Math.min(
-            deep
-              ? Math.max(1, this.configService.get('solver.ts.workers', { infer: true }) ?? 1)
-              : EXACT_CHECK_CONCURRENCY,
-            targets.length,
+            Math.max(1, this.configService.get('solver.ts.workers', { infer: true }) ?? 1),
+            todo.length,
           ),
         },
         worker,
@@ -3697,14 +3860,9 @@ export class CuttingProposalsService {
     trimMm: number,
     kerfMm: number,
     machineBody: MachineSolverParams['body'],
-    deep = false,
-  ): Promise<{
-    wastePct: number;
-    bars: number;
-    stockLengthMm: number;
-    overThreshold: boolean;
-    lengthSource: 'fixed' | 'scan';
-  } | null> {
+    /** Timeout HTTP của lần gọi - caller đã cắt theo phần còn lại của ngân sách cả lượt. */
+    timeoutMs: number = EXACT_CHECK_DEEP_TIMEOUT_MS,
+  ): Promise<(ExactCheckResult & { complete: boolean }) | null> {
     const bom: SolverBomRow[] = [...demand.entries()].map(([size, qty]) => ({
       part: '',
       qty_per_set: 1,
@@ -3727,11 +3885,13 @@ export class CuttingProposalsService {
           max_waste_percentage: thresholdPct,
           max_surplus: maxSurplus,
           auto_scan: false,
-          time_limit_seconds: deep
-            ? EXACT_CHECK_DEEP_SOLVER_TIME_LIMIT_SEC
-            : EXACT_CHECK_SOLVER_TIME_LIMIT_SEC,
+          // Còn ít thời gian thì bảo solver tự dừng sớm hơn timeout HTTP (trả "tốt nhất đang có" thay vì bị ngắt giữa chừng).
+          time_limit_seconds: Math.min(
+            EXACT_CHECK_DEEP_SOLVER_TIME_LIMIT_SEC,
+            Math.max(1, Math.floor(timeoutMs / 1000) - 2),
+          ),
         },
-        deep ? EXACT_CHECK_DEEP_TIMEOUT_MS : EXACT_CHECK_TIMEOUT_MS,
+        timeoutMs,
       );
     } catch {
       // Lỗi mạng/timeout/solver quá tải - KHÔNG được để 1 loại sắt xác minh hỏng làm sập cả
@@ -3753,6 +3913,8 @@ export class CuttingProposalsService {
         overThreshold: item.over_threshold ?? false,
         // "fixed" = ĐÃ cắt được ở đúng stockLengths, mọi cây đều ≤ ngưỡng/cây (bộ lọc pattern).
         lengthSource: 'fixed' as const,
+        // Có chiều dài bị hết giờ (timeout bị cắt theo ngân sách còn lại) -> số có thể chưa tối ưu: dùng cho lượt này, KHÔNG lưu DB.
+        complete: (item.timeout_count ?? 0) === 0,
       };
     }
     if (item.best_achievable) {
@@ -3778,6 +3940,7 @@ export class CuttingProposalsService {
         // sánh trực tiếp ngay phía trên).
         overThreshold: true,
         lengthSource: 'scan' as const,
+        complete: !item.timed_out,
       };
     }
     return null;
