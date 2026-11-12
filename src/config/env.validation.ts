@@ -33,6 +33,9 @@ export const envValidationSchema = Joi.object({
   THROTTLE_TTL: Joi.number().default(60),
   THROTTLE_LIMIT: Joi.number().default(100),
 
+  // Header Server-Timing (đo thời gian total/db/solver). Đặt false để tắt.
+  SERVER_TIMING_ENABLED: Joi.boolean().default(true),
+
   LOG_LEVEL: Joi.string()
     .valid('fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent')
     .default('info'),

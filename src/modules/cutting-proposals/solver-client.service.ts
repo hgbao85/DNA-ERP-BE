@@ -1,11 +1,15 @@
 import {
   Injectable,
   Logger,
+  Optional,
   OnModuleDestroy,
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { performance } from 'node:perf_hooks';
+import { ClsService } from 'nestjs-cls';
+import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { AppConfig } from '../../config/configuration';
 import { ExternalApiHttpError } from '../external/external-api.service';
 import { SolverWorkerHost } from './solver-ts/solver-worker-host';
@@ -31,7 +35,11 @@ export class SolverClientService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SolverClientService.name);
   private host: SolverWorkerHost | null = null;
 
-  constructor(private readonly configService: ConfigService<AppConfig, true>) {}
+  constructor(
+    private readonly configService: ConfigService<AppConfig, true>,
+    // Optional: chỉ để cộng số đo vào Server-Timing; thiếu (vd test dựng tay) thì bỏ qua.
+    @Optional() private readonly cls?: ClsService<AppClsStore>,
+  ) {}
 
   onModuleInit(): void {
     const ts = this.tsConfig();
@@ -69,6 +77,20 @@ export class SolverClientService implements OnModuleInit, OnModuleDestroy {
    * gồm cả thời gian chờ hàng đợi worker + chạy.
    */
   async propose<T>(body: unknown, timeoutMs: number): Promise<T> {
+    const timing = this.cls?.isActive() ? this.cls.get('timing') : undefined;
+    const measuredAt = performance.now();
+    try {
+      return await this.proposeInner<T>(body, timeoutMs);
+    } finally {
+      // Đo cả khi lỗi/hết giờ: thời gian chờ + chạy bộ giải vẫn là thời gian request đã tốn.
+      if (timing) {
+        timing.solverMs += performance.now() - measuredAt;
+        timing.solverCount += 1;
+      }
+    }
+  }
+
+  private async proposeInner<T>(body: unknown, timeoutMs: number): Promise<T> {
     if (!this.host) this.host = this.createWorkerHost();
     const startedAt = Date.now();
     let res: ProposeResponse;

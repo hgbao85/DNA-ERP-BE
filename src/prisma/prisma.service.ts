@@ -4,6 +4,7 @@ import { PrismaClient } from '../generated/prisma/client';
 import { AppClsStore } from '../common/interfaces/cls-store.interface';
 import { withAuditLog } from './extensions/audit-log.extension';
 import { withSoftDelete } from './extensions/soft-delete.extension';
+import { withQueryTiming } from './extensions/query-timing.extension';
 
 /**
  * Extension order matters: audit-log is applied first (inner layer), soft-delete
@@ -11,11 +12,17 @@ import { withSoftDelete } from './extensions/soft-delete.extension';
  * `update` on a tracked model, that rewritten call re-enters the chain and is
  * picked up exactly once by audit-log's `update` hook - avoiding double logging
  * that would happen if the layers were reversed.
+ *
+ * query-timing là lớp TRONG CÙNG (áp đầu tiên): chỉ đo rồi gọi tiếp, không đổi args/kết quả nên không ảnh
+ * hưởng hành vi 2 lớp kia, và mỗi truy vấn thật xuống DB (kể cả cái do soft-delete viết lại) chỉ bị đếm 1 lần.
  */
 export function createExtendedPrismaClient(cls: ClsService<AppClsStore>) {
   const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
   const client = new PrismaClient({ adapter });
-  return client.$extends(withAuditLog(cls)).$extends(withSoftDelete());
+  return client
+    .$extends(withQueryTiming(cls))
+    .$extends(withAuditLog(cls))
+    .$extends(withSoftDelete());
 }
 
 export type PrismaServiceType = ReturnType<typeof createExtendedPrismaClient>;

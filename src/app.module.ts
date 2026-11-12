@@ -9,6 +9,7 @@ import configuration, { AppConfig } from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
 import { createPinoLoggerOptions } from './logger/pino-logger.config';
 import { resolveCorrelationId } from './common/utils/correlation-id.util';
+import { ServerTimingMiddleware } from './common/middleware/server-timing.middleware';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
@@ -165,6 +166,6 @@ import { RealtimeModule } from './realtime/realtime.module';
 })
 export class AppModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(ClsMiddleware, CorrelationIdMiddleware).forRoutes('*');
+    consumer.apply(ClsMiddleware, ServerTimingMiddleware, CorrelationIdMiddleware).forRoutes('*');
   }
 }
