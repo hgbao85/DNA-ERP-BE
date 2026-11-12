@@ -275,7 +275,7 @@ describe('PurchaseReceiptsService', () => {
           null,
         ),
       ).rejects.toThrow(
-        'Thiếu ảnh chứng từ: phiếu giao hàng của NCC, phiếu nhập kho nhà máy, phiếu đề xuất Giám đốc ký, phiếu cân xe (bắt buộc với sắt).',
+        'Thiếu ảnh chứng từ: phiếu giao hàng của NCC, phiếu nhập kho nhà máy đã ký, phiếu đề xuất Giám đốc ký, phiếu cân xe (bắt buộc với sắt).',
       );
       expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
     });

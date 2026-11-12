@@ -29,7 +29,10 @@ export class CreateSupplierOrderDto {
 }
 
 export class CancelSupplierOrderDto {
-  @ApiProperty({ description: 'Lý do huỷ - số đơn vẫn giữ, không cấp lại' })
+  @ApiProperty({
+    description:
+      'Lý do huỷ - đơn chưa từng có phiếu Giám đốc ký thì số đơn được cấp lại cho đơn kế tiếp của cùng NCC',
+  })
   @IsString()
   @MinLength(1)
   @MaxLength(500)
@@ -137,10 +140,12 @@ export class SupplierOrderCounterDto {
   @Expose() @ApiProperty() supplierId!: string;
   @Expose() @ApiProperty() supplierName!: string;
   @Expose() @ApiProperty() year!: number;
-  /// Số đơn cuối cùng (đã nạp hoặc đã cấp) - đơn tiếp theo = lastSeq + 1.
+  /// Số đơn cuối cùng (đã nạp hoặc đã cấp) - đơn tiếp theo = lastSeq + 1, trừ khi có số đơn huỷ được cấp lại (nextSeq).
   @Expose() @ApiProperty() lastSeq!: number;
   /// Số lớn nhất hệ thống đã thực sự cấp cho 1 đơn - không được nạp lastSeq thấp hơn số này.
   @Expose() @ApiProperty() maxIssuedSeq!: number;
+  /// Số đơn tạo tiếp theo sẽ nhận: số của đơn huỷ chưa từng ký được cấp lại trước (12/11/2026), không có thì lastSeq + 1.
+  @Expose() @ApiProperty() nextSeq!: number;
 
   constructor(partial: Partial<SupplierOrderCounterDto>) {
     Object.assign(this, partial);

@@ -694,6 +694,10 @@ model Supplier {
   name      String
   phone     String?
   address   String?
+  /// Mã số thuế + người liên hệ (12/11/2026, anh Nhân: danh sách NCC trên hệ thống là "sheet quản lý NCC", người mua tự
+  /// thêm/sửa, chỉ Admin xoá).
+  taxCode     String?
+  contactName String?
   isActive  Boolean   @default(true)
   deletedAt DateTime?
   createdAt DateTime  @default(now())
@@ -2569,7 +2573,10 @@ model SupplierOrder {
   items      PurchaseProposalItem[]
   receipts   PurchaseReceipt[]
 
-  @@unique([supplierId, year, seq])
+  /// Unique (supplierId, year, seq) CHỈ cho đơn chưa huỷ: partial unique index viết tay trong migration
+  /// (supplier_orders_active_seq_key ... WHERE status <> 'CANCELLED') - Prisma không khai báo được index có
+  /// điều kiện. 12/11/2026 (anh Nhân): đơn huỷ khi CHƯA TỪNG có phiếu Giám đốc ký (revision = 0) trả số lại,
+  /// đơn kế tiếp của cùng NCC lấy lại số đó (không nhảy cóc) - nên nhiều đơn CANCELLED có thể trùng số.
   @@index([status])
   @@map("supplier_orders")
 }
@@ -2581,6 +2588,9 @@ model SupplierOrderCounter {
   supplierId BigInt
   year       Int
   lastSeq    Int      @default(0)
+  /// Mốc Admin nạp gần nhất ("số đơn cuối cùng đã dùng ngoài hệ thống"): số của đơn huỷ chỉ được cấp lại khi
+  /// LỚN HƠN mốc này - số từ mốc trở xuống có thể đã dùng ngoài hệ thống (12/11/2026).
+  reuseFromSeq Int    @default(0)
   updatedAt  DateTime @updatedAt
 
   supplier Supplier @relation(fields: [supplierId], references: [id])

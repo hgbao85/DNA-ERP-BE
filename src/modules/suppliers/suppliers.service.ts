@@ -12,7 +12,7 @@ import { UpdateSupplierDto } from './dto/update-supplier.dto';
 /**
  * Tên NCC không được trùng (không phân biệt hoa thường, đã trim, gộp khoảng trắng) vì số đơn
  * đặt hàng cấp theo từng NCC - 2 bản trùng sẽ có 2 dãy số riêng (test tay 09/11 điểm 20).
- * Kiểm ở service, không có unique ở DB. `remove()` is a real hard delete (as originally built) - soft-delete for
+ * Kiểm ở service, không có unique ở DB. 12/11/2026 (anh Nhân): người mua tự thêm/sửa NCC, CHỈ Admin xoá (xem controller). `remove()` is a real hard delete (as originally built) - soft-delete for
  * this model is pending, see CONTRIBUTING.md "0. Ưu tiên". `isActive` is a separate,
  * independent flag.
  */
@@ -23,7 +23,14 @@ export class SuppliersService {
   async create(dto: CreateSupplierDto): Promise<SupplierResponseDto> {
     await this.assertNameNotDuplicate(dto.name);
     const supplier = await this.prisma.supplier.create({
-      data: { name: dto.name, phone: dto.phone, address: dto.address, isActive: dto.isActive },
+      data: {
+        name: dto.name,
+        phone: dto.phone,
+        address: dto.address,
+        taxCode: dto.taxCode,
+        contactName: dto.contactName,
+        isActive: dto.isActive,
+      },
     });
     return this.toResponseDto(supplier);
   }
@@ -57,7 +64,14 @@ export class SuppliersService {
 
     const supplier = await this.prisma.supplier.update({
       where: { id: bigId },
-      data: { name: dto.name, phone: dto.phone, address: dto.address, isActive: dto.isActive },
+      data: {
+        name: dto.name,
+        phone: dto.phone,
+        address: dto.address,
+        taxCode: dto.taxCode,
+        contactName: dto.contactName,
+        isActive: dto.isActive,
+      },
     });
     return this.toResponseDto(supplier);
   }
@@ -101,6 +115,8 @@ export class SuppliersService {
       name: supplier.name,
       phone: supplier.phone,
       address: supplier.address,
+      taxCode: supplier.taxCode,
+      contactName: supplier.contactName,
       isActive: supplier.isActive,
       createdAt: supplier.createdAt,
       updatedAt: supplier.updatedAt,

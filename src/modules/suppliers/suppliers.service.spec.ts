@@ -62,6 +62,25 @@ describe('SuppliersService', () => {
       });
     });
 
+    it('lưu mã số thuế + người liên hệ và trả về (12/11/2026)', async () => {
+      prisma.supplier.create.mockResolvedValue({
+        ...existingSupplier,
+        taxCode: '0312345678',
+        contactName: 'Chị Lan',
+      });
+
+      const res = await service.create({
+        name: 'A',
+        taxCode: '0312345678',
+        contactName: 'Chị Lan',
+      });
+
+      expect(prisma.supplier.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ taxCode: '0312345678', contactName: 'Chị Lan' }) as unknown,
+      });
+      expect(res).toMatchObject({ taxCode: '0312345678', contactName: 'Chị Lan' });
+    });
+
     it('rejects a duplicate name ignoring case and extra spaces with 409 (điểm 20)', async () => {
       prisma.supplier.findMany.mockResolvedValue([{ name: 'Thép Kim Phát' }]);
 
