@@ -88,6 +88,21 @@ describe('UpdateSystemConfigDto - máy cắt', () => {
     expect(await errorsOn({ solverMctdTrimStartMm: 1.5 })).toContain('solverMctdTrimStartMm');
   });
 
+  it('solverLengthStepMm phải là bội 50, báo lỗi tiếng Việt nhắc "bội 50"', async () => {
+    for (const bad of [10, 25, 60]) {
+      const errors = await validate(
+        plainToInstance(UpdateSystemConfigDto, { ...base, solverLengthStepMm: bad }),
+      );
+      const own = errors.find((e) => e.property === 'solverLengthStepMm');
+      expect(own).toBeDefined();
+      expect(Object.values(own?.constraints ?? {}).join(' | ')).toContain('bội 50');
+    }
+    for (const good of [50, 100, 1000]) {
+      expect(await errorsOn({ solverLengthStepMm: good })).toEqual([]);
+    }
+    expect(await errorsOn({})).toEqual([]);
+  });
+
   // Phần A – Đợt 3 (YC10)
   it('capacityContPerDay 0,1-20, tối đa 2 số lẻ', async () => {
     expect(await errorsOn({ capacityContPerDay: 1.3 })).toEqual([]);

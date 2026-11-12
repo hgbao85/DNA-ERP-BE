@@ -170,7 +170,7 @@ describe('optimizeOneMaterial (các nhánh điều khiển, optimizeMaterial gi�
     expect(r.reason).toContain('Không chiều dài nào cắt được loại này');
   });
 
-  it('auto_scan: quét dải từ max(min_len, đoạn dài nhất + tề) theo bước, chọn %thấp nhất rồi ít cây nhất', () => {
+  it('auto_scan: quét dải bội 50 từ max(min_len, đoạn dài nhất + tề) làm tròn lên, chọn %thấp nhất rồi ít cây nhất', () => {
     const r = optimizeOneMaterial(highs, [3000, 500], [10, 10], [6000], 10, 1, 1.0, {
       autoScan: true,
       minLen: 1000,
@@ -178,22 +178,22 @@ describe('optimizeOneMaterial (các nhánh điều khiển, optimizeMaterial gi�
       step: 100,
       optimizeMaterialImpl: fake((L) => {
         if (L === 6000) return infeasible; // chiều dài chuẩn không đạt -> mới vét cạn
-        if (L === 3110) return ok(3110, 20, 0.8);
-        if (L === 3610) return ok(3610, 15, 0.8); // cùng %, ít cây hơn -> thắng
-        return L === 4110 ? ok(4110, 9, 0.9) : infeasible;
+        if (L === 3150) return ok(3150, 20, 0.8);
+        if (L === 3650) return ok(3650, 15, 0.8); // cùng %, ít cây hơn -> thắng
+        return L === 4150 ? ok(4150, 9, 0.9) : infeasible;
       }),
     });
-    // bắt đầu từ max(1000, ceil(3000 + 10)) = 3010, bước 100, tới 4110 (≤ 4200)
+    // bắt đầu từ làm tròn lên bội 50 của max(1000, 3000 + 10) = 3050, bước 100, tới 4150 (≤ 4200)
     expect(calls.map((c) => c.L)).toEqual([
       6000,
-      ...Array.from({ length: 12 }, (_, i) => 3010 + 100 * i),
+      ...Array.from({ length: 12 }, (_, i) => 3050 + 100 * i),
     ]);
     expect(r.feasible).toBe(true);
     if (!r.feasible) return;
     expect(r.source).toBe('scan');
-    expect(r.best_length).toBe(3610);
+    expect(r.best_length).toBe(3650);
     expect(r.total_bars).toBe(15);
-    expect(r.scan_optimal).toEqual({ length: 3610, bars: 15, waste_pct: 0.8 });
+    expect(r.scan_optimal).toEqual({ length: 3650, bars: 15, waste_pct: 0.8 });
     expect(r.scan_stopped_early).toBe(false);
     expect(r.fixed_evals).toEqual([]);
   });
@@ -241,12 +241,13 @@ describe('optimizeOneMaterial (các nhánh điều khiển, optimizeMaterial gi�
       optimizeMaterialImpl: fake(() => timedOut),
     });
     // 6000 chuẩn: 20 s, ×3, ×6 (như Python) + đúng MAX_SCAN_TIMEOUT_STREAK chiều dài dò rồi dừng.
-    expect(calls.map((c) => c.L)).toEqual([6000, 6000, 6000, 5000, 5010, 5020]);
+    // Bước cấu hình 10 bị nâng lên 50.
+    expect(calls.map((c) => c.L)).toEqual([6000, 6000, 6000, 5000, 5050, 5100]);
     expect(MAX_SCAN_TIMEOUT_STREAK).toBe(3);
     expect(r).toMatchObject({
       feasible: false,
       timed_out: true,
-      timeout_lengths: [6000, 5000, 5010, 5020],
+      timeout_lengths: [6000, 5000, 5050, 5100],
     });
     if (r.feasible) return;
     expect(r.reason).toContain('đã dừng dò sớm');
@@ -256,12 +257,12 @@ describe('optimizeOneMaterial (các nhánh điều khiển, optimizeMaterial gi�
     const r = optimizeOneMaterial(highs, [500], [10], [6000], 10, 1, 1.0, {
       autoScan: true,
       minLen: 5000,
-      maxLen: 5100,
-      step: 10,
-      optimizeMaterialImpl: fake((L) => (L === 6000 || L === 5020 ? infeasible : timedOut)),
+      maxLen: 5500,
+      step: 50,
+      optimizeMaterialImpl: fake((L) => (L === 6000 || L === 5100 ? infeasible : timedOut)),
     });
-    // 5000, 5010 hết giờ (2), 5020 vô nghiệm -> về 0; 5030..5050 hết giờ (3) -> dừng trước 5060.
-    expect(calls.map((c) => c.L)).toEqual([6000, 5000, 5010, 5020, 5030, 5040, 5050]);
+    // 5000, 5050 hết giờ (2), 5100 vô nghiệm -> về 0; 5150..5250 hết giờ (3) -> dừng trước 5300.
+    expect(calls.map((c) => c.L)).toEqual([6000, 5000, 5050, 5100, 5150, 5200, 5250]);
     expect(r).toMatchObject({ feasible: false, timed_out: true });
   });
 
@@ -269,19 +270,122 @@ describe('optimizeOneMaterial (các nhánh điều khiển, optimizeMaterial gi�
     const r = optimizeOneMaterial(highs, [500], [10], [6000], 10, 1, 1.0, {
       autoScan: true,
       minLen: 5000,
-      maxLen: 5100,
-      step: 10,
+      maxLen: 5500,
+      step: 50,
       optimizeMaterialImpl: fake((L) =>
-        L === 6000 ? infeasible : L === 5010 ? ok(5010, 3, 0.5) : timedOut,
+        L === 6000 ? infeasible : L === 5050 ? ok(5050, 3, 0.5) : timedOut,
       ),
     });
-    expect(calls).toHaveLength(1 + 11); // 6000 + 5000..5100
+    expect(calls).toHaveLength(1 + 11); // 6000 + 5000..5500
     expect(r).toMatchObject({
       feasible: true,
-      best_length: 5010,
+      best_length: 5050,
       source: 'scan',
       timeout_count: 10,
     });
+  });
+});
+
+describe('dò chiều dài chỉ thử bội 50 mm (optimizeMaterial giả)', () => {
+  const highs = {} as Highs;
+  let calls: number[];
+  const fakeAll =
+    (answer: (L: number) => MaterialResult): OptimizeMaterialFn =>
+    (_h, _s, _d, stock) => {
+      calls.push(stock[0]);
+      return answer(stock[0]);
+    };
+  const range = (from: number, to: number, step: number) =>
+    Array.from({ length: Math.floor((to - from) / step) + 1 }, (_, i) => from + step * i);
+  beforeEach(() => {
+    calls = [];
+  });
+
+  it('sizes [5350], trim 10, step 10 -> thử 5400, 5450, ..., 6000 (không có 5360)', () => {
+    optimizeOneMaterial(highs, [5350], [10], [6000], 10, 1, 1.0, {
+      autoScan: true,
+      minLen: 5000,
+      maxLen: 6000,
+      step: 10,
+      optimizeMaterialImpl: fakeAll(() => infeasible),
+    });
+    // 6000 cuối: lần giải bestAchievable ở chiều dài chuẩn khi dò hết mà không đạt
+    expect(calls).toEqual([6000, ...range(5400, 6000, 50), 6000]);
+    expect(calls).not.toContain(5360);
+  });
+
+  it('step 60 được nâng lên bội 50 gần nhất phía trên (100) -> 5400, 5500, ..., 6000', () => {
+    optimizeOneMaterial(highs, [5350], [10], [6000], 10, 1, 1.0, {
+      autoScan: true,
+      minLen: 5000,
+      maxLen: 6000,
+      step: 60,
+      optimizeMaterialImpl: fakeAll(() => infeasible),
+    });
+    expect(calls).toEqual([6000, ...range(5400, 6000, 100), 6000]);
+  });
+
+  it('max 6020 -> chiều dài lớn nhất thử là 6000', () => {
+    optimizeOneMaterial(highs, [5350], [10], [6000], 10, 1, 1.0, {
+      autoScan: true,
+      minLen: 5000,
+      maxLen: 6020,
+      step: 10,
+      optimizeMaterialImpl: fakeAll(() => infeasible),
+    });
+    expect(Math.max(...calls.slice(1))).toBe(6000);
+    expect(calls.slice(1).every((L) => L % 50 === 0)).toBe(true);
+  });
+
+  it('min 5010 với đoạn ngắn -> chiều dài đầu tiên là 5050', () => {
+    optimizeOneMaterial(highs, [500], [10], [6000], 10, 1, 1.0, {
+      autoScan: true,
+      minLen: 5010,
+      maxLen: 5200,
+      step: 10,
+      optimizeMaterialImpl: fakeAll(() => infeasible),
+    });
+    expect(calls[1]).toBe(5050);
+    expect(calls.slice(1)).toEqual([5050, 5100, 5150, 5200, 6000]);
+  });
+
+  it('best_length và scan_optimal là L bội 50 đã thử; bars/waste lấy từ lần giải ở đúng L đó', () => {
+    const r = optimizeOneMaterial(highs, [5350], [10], [6000], 10, 1, 1.0, {
+      autoScan: true,
+      minLen: 5000,
+      maxLen: 6000,
+      step: 10,
+      optimizeMaterialImpl: fakeAll((L) => {
+        if (L === 5400) return ok(5400, 12, 0.9);
+        if (L === 5450) return ok(5450, 11, 0.4);
+        return infeasible;
+      }),
+    });
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
+    expect(r.best_length).toBe(5450);
+    expect(r.best_length % 50).toBe(0);
+    expect(r.total_bars).toBe(11);
+    expect(r.waste_pct).toBe(0.4);
+    expect(r.scan_optimal).toEqual({ length: 5450, bars: 11, waste_pct: 0.4 });
+  });
+
+  it('stopOnFirst dừng ở L bội 50 đầu tiên đạt ngưỡng', () => {
+    const r = optimizeOneMaterial(highs, [5350], [10], [6000], 10, 1, 1.0, {
+      autoScan: true,
+      stopOnFirst: true,
+      minLen: 5000,
+      maxLen: 6000,
+      step: 10,
+      optimizeMaterialImpl: fakeAll((L) =>
+        L === 6000 ? infeasible : ok(L, 3, L >= 5450 ? 0.5 : 1.4),
+      ),
+    });
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
+    expect(r.best_length).toBe(5450);
+    expect(r.scan_stopped_early).toBe(true);
+    expect(calls).toEqual([6000, 5400, 5450]);
   });
 });
 
@@ -354,10 +458,10 @@ describe('optimizeOneMaterial (HiGHS thật)', () => {
   // Cấu hình A = SystemConfig mặc định của ERP: dò 5000-6000 bước 10, dừng ở chiều dài đầu tiên đạt, 20 s.
   it.each([
     ['FI10', [192, 90], [280, 280], 5000, 16, 207, 3],
-    ['FI4', [60], [840], 5140, 10, null, null],
-    ['FI6', [60], [2240], 5080, 27, null, 1],
+    ['FI4', [60], [840], 5150, 10, null, null],
+    ['FI6', [60], [2240], 5100, 27, null, 1],
   ])(
-    'I5 %s cấu hình A (dò 5000-6000 bước 10, 20 s): đúng phương án OR-Tools, timeout_count=0',
+    'I5 %s cấu hình A (dò 5000-6000 bước 10 nâng lên 50, 20 s): đúng phương án OR-Tools, timeout_count=0',
     (_m, sizes, demands, length, bars, wasteMm, surplus) => {
       const r = optimizeOneMaterial(highs, sizes, demands, [6000], 10, 1, 1.0, {
         timeLimitSec: 20,

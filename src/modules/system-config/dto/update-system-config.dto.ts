@@ -6,6 +6,7 @@ import {
   ArrayUnique,
   IsArray,
   IsBoolean,
+  IsDivisibleBy,
   IsEnum,
   IsInt,
   IsNumber,
@@ -148,7 +149,8 @@ export class UpdateSystemConfigDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsInt()
-  @Min(1)
+  @Min(50, { message: 'Bước dò chiều dài phải từ 50 mm trở lên và là bội 50 (cây tròn 5 cm)' })
+  @IsDivisibleBy(50, { message: 'Bước dò chiều dài phải là bội 50 mm (cây tròn 5 cm)' })
   solverLengthStepMm?: number;
 
   @ApiPropertyOptional()

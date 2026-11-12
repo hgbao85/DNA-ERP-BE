@@ -73,6 +73,7 @@ import {
   PreviewCuttingBatchDto,
 } from './dto/cutting-batch-candidate.dto';
 import { bestWasteAcrossStockLengths } from './best-fill.util';
+import { resolveMaterialStockLengths } from './solver-ts/stock-length-grid';
 import type { StockLengthsByMaterial } from '../../common/validators/stock-lengths-by-material.validator';
 import { frameDeadlineOf } from '../../common/utils/frame-deadline.util';
 import { WarehouseLike, WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
@@ -4043,8 +4044,7 @@ export class CuttingProposalsService {
     chosen: StockLengthsByMaterial | null | undefined,
     defaults: number[],
   ): number[] {
-    const mm = chosen?.[materialId.toString()];
-    return mm != null && mm > 0 ? [mm] : defaults;
+    return resolveMaterialStockLengths(chosen?.[materialId.toString()], defaults);
   }
 
   private async buildBomRows(bomRevisionId: bigint): Promise<{

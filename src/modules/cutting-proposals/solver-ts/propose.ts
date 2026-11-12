@@ -6,6 +6,7 @@ import { BundleOptions, getHighs, normalizeBundleFactors } from './highs-solver'
 import { MCTD_MAX_SIZES_PER_PATTERN } from './optimize-material';
 import { optimizeOneMaterial } from './optimize-one-material';
 import { roundHalfEven } from './patterns';
+import { roundUpToStockGrid } from './stock-length-grid';
 import {
   CuttingPattern,
   LengthEval,
@@ -233,7 +234,7 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
     const key = normalizeMaterialKey(g.material);
     const gMaxWaste = maxWastePctByMaterial[key] ?? maxWastePct;
     resolvedMaxWaste[g.material] = gMaxWaste;
-    const gStock = stockLengthsByMaterial[key] ?? stockLengths;
+    const gStock = stockLengthsByMaterial[key]?.map(roundUpToStockGrid) ?? stockLengths;
     resolvedStock[g.material] = gStock;
 
     const t0 = performance.now();

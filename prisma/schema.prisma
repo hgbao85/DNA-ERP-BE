@@ -369,7 +369,7 @@ model SystemConfig {
   solverMaxSurplus         Int     @default(10)
   solverMinLengthMm        Int     @default(5000)
   solverMaxLengthMm        Int     @default(6000)
-  solverLengthStepMm       Int     @default(10)
+  solverLengthStepMm       Int     @default(50)
   /// time_limit_seconds GỬI CHO solver mỗi lần giải - KHÔNG phải timeout HTTP client (xem
   /// SOLVER_TIMEOUT_SECONDS trong env). Số lần giải = số loại sắt x (1 + N lần vét cạn), có
   /// thể lên tới hàng trăm lần - để thấp (docs/PHAN_TICH_HE_THONG_CatSat.md khuyến nghị 8-30s

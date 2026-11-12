@@ -5,6 +5,11 @@
  */
 import { BundleOptions, Highs } from './highs-solver';
 import { optimizeMaterial } from './optimize-material';
+import {
+  roundDownToStockGrid,
+  roundUpToStockGrid,
+  STOCK_LENGTH_GRID_MM,
+} from './stock-length-grid';
 import { LengthEval, MaterialResultOk, OneMaterialResult } from './types';
 
 export const FIXED_RETRY_FACTORS = [3, 6];
@@ -238,10 +243,15 @@ export function optimizeOneMaterial(
       opts.bundle,
     );
   } else {
-    const start = Math.max(Math.trunc(minLen), Math.ceil(Math.max(...sizes) + trim));
+    // Chỉ thử chiều dài bội 5 cm trong [min, max]; bước cấu hình làm tròn lên bội 5 cm (tối thiểu 5 cm).
+    const start = roundUpToStockGrid(
+      Math.max(Math.trunc(minLen), Math.ceil(Math.max(...sizes) + trim)),
+    );
+    const gridStep = Math.max(STOCK_LENGTH_GRID_MM, roundUpToStockGrid(Math.trunc(step)));
+    const gridMax = roundDownToStockGrid(Math.trunc(maxLen));
     let timeoutStreak = 0;
     let scanAbandoned = false;
-    for (let L = start; L <= Math.trunc(maxLen); L += Math.trunc(step)) {
+    for (let L = start; L <= gridMax; L += gridStep) {
       if (!scanOpt && timeoutStreak >= MAX_SCAN_TIMEOUT_STREAK) {
         scanAbandoned = true;
         break;

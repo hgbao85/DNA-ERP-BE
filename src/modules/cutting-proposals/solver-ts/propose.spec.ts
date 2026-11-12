@@ -192,6 +192,36 @@ describe('propose (hợp đồng api_de_xuat_propose)', () => {
     expect(r2.status === 'success' && r2.input_echo.stock_lengths).toEqual([5850, 6000]);
   });
 
+  it('chiều dài riêng từng loại sắt lẻ 5360 -> giải trên cây đã tròn 5400; loại khác vẫn dùng stock_lengths', async () => {
+    const res = await propose({
+      num_sets: 10,
+      bom: [
+        {
+          part: 'ngang',
+          qty_per_set: 16,
+          material: 'A',
+          spec: '',
+          cut_length: 497,
+          qty_per_part: 1,
+        },
+        { part: 'dọc', qty_per_set: 32, material: 'C', spec: '', cut_length: 355, qty_per_part: 1 },
+      ],
+      stock_lengths: '6000',
+      stock_lengths_by_material: { A: [5360] },
+      max_waste_percentage: 100,
+      trim_start: 10,
+      blade_width: 1.0,
+      auto_scan: false,
+      time_limit_seconds: 30,
+    });
+    expect(res.status).toBe('success');
+    if (res.status !== 'success') return;
+    const a = res.purchase_plan.find((p) => p.material === 'A');
+    const c = res.purchase_plan.find((p) => p.material === 'C');
+    expect(a).toMatchObject({ feasible: true, best_stock_length: 5400 });
+    expect(c).toMatchObject({ feasible: true, best_stock_length: 6000 });
+  });
+
   it("machine mặc định 'laser', echo đủ trường máy; machine lạ -> INVALID_INPUT", async () => {
     const r = await propose({
       bom: bom.slice(0, 2),
