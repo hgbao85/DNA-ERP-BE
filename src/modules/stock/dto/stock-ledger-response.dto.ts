@@ -65,6 +65,8 @@ export class StockLedgerResponseDto {
   @Expose() @ApiProperty() stockLengthMm!: number;
   /// Quy cách của hàng (nệm: "Đôi 870x450x50"), '' = không quy cách - cùng 1 vật tư khác quy cách là 2 lô tồn RIÊNG.
   @Expose() @ApiProperty() spec!: string;
+  /// Bộ công đoạn của đoạn ('' = trơn, vd "UON,DAP") - cùng cỡ đoạn khác bộ công đoạn là 2 mã đoạn / 2 dòng tồn RIÊNG (13/11/2026).
+  @Expose() @ApiProperty() segmentSteps!: string;
 
   constructor(partial: Partial<StockLedgerResponseDto>) {
     Object.assign(this, partial);

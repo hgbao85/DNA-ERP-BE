@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MaterialYieldRecipesModule } from '../material-yield-recipes/material-yield-recipes.module';
 import { ProductionBatchesModule } from '../production-batches/production-batches.module';
+import { SegmentStockModule } from '../segment-stock/segment-stock.module';
 import { SteelIssuesModule } from '../steel-issues/steel-issues.module';
 import { UploadsModule } from '../uploads/uploads.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -14,6 +15,7 @@ import { QcReviewsService } from './qc-reviews.service';
     MaterialYieldRecipesModule,
     UploadsModule,
     NotificationsModule,
+    SegmentStockModule,
   ],
   controllers: [QcReviewsController],
   providers: [QcReviewsService],

@@ -8,6 +8,7 @@ import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchStatus, SteelIssueStatus } from '../../generated/prisma/client';
 import { MaterialYieldRecipeProductionService } from '../material-yield-recipes/material-yield-recipe-production.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
+import { SegmentProductionService } from '../segment-stock/segment-production.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -60,6 +61,7 @@ describe('QcReviewsService', () => {
   };
   let cloudinaryService: { deleteByUrl: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
+  let segmentProductionService: { recomputeAfterQc: jest.Mock };
 
   const awaitingIssue = {
     id: 100n,
@@ -240,6 +242,7 @@ describe('QcReviewsService', () => {
       finalizeRecipeOutputIfLastStepComplete: jest.fn().mockResolvedValue(undefined),
     };
     realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    segmentProductionService = { recomputeAfterQc: jest.fn().mockResolvedValue(undefined) };
     service = new QcReviewsService(
       prisma as unknown as PrismaServiceType,
       steelIssuesService as unknown as SteelIssuesService,
@@ -248,6 +251,7 @@ describe('QcReviewsService', () => {
       cloudinaryService as unknown as CloudinaryService,
       notificationsService as unknown as NotificationsService,
       realtimeStub as unknown as RealtimeService,
+      segmentProductionService as unknown as SegmentProductionService,
     );
   });
 
@@ -1016,6 +1020,73 @@ describe('QcReviewsService', () => {
         service.updatePhoto('999', { photoUrl: null }, 'user-admin', ['ADMIN']),
       ).rejects.toThrow(NotFoundException);
       expect(prisma.qcReview.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('móc tồn đoạn theo lệnh sau KCS', () => {
+    it('review(): gọi recomputeAfterQc với PI của phiếu và reason QC_STEEL_ISSUE', async () => {
+      await service.review('100', { segments: [] }, 'user-kcs');
+
+      expect(segmentProductionService.recomputeAfterQc).toHaveBeenCalledTimes(1);
+      expect(segmentProductionService.recomputeAfterQc).toHaveBeenCalledWith(
+        900n,
+        'user-kcs',
+        'QC_STEEL_ISSUE:100',
+      );
+    });
+
+    it('reviewCutBundle(): gọi recomputeAfterQc với PI của lô cha và reason QC_CUT_BUNDLE', async () => {
+      prisma.cutBundle.findUnique.mockResolvedValue({
+        id: 1n,
+        steelIssueId: 100n,
+        status: 'AWAITING_QC',
+        steelIssue: { productionInvoiceId: 901n, materialId: 30n },
+      });
+      prisma.qcReview.create.mockResolvedValue({ ...qcReview, cutBundleId: 1n });
+
+      await service.reviewCutBundle('1', { segments: [] }, 'user-kcs');
+
+      expect(segmentProductionService.recomputeAfterQc).toHaveBeenCalledWith(
+        901n,
+        'user-kcs',
+        'QC_CUT_BUNDLE:1',
+      );
+    });
+
+    it('reviewStepBundle(): gọi recomputeAfterQc với PI của đợt và reason QC_STEP_BUNDLE', async () => {
+      prisma.stepBundle.findUnique.mockResolvedValue({
+        id: 800n,
+        productionInvoiceId: 902n,
+        materialId: 30n,
+        step: 'UON',
+        status: 'AWAITING_QC',
+        material: { code: 'SAT-30', name: 'Sắt hộp', spec: '25x50' },
+      });
+      prisma.qcReview.create.mockResolvedValue({
+        ...qcReview,
+        cutBundleId: null,
+        stepBundleId: 800n,
+      });
+
+      await service.reviewStepBundle('800', { segments: [] }, 'user-kcs');
+
+      expect(segmentProductionService.recomputeAfterQc).toHaveBeenCalledWith(
+        902n,
+        'user-kcs',
+        'QC_STEP_BUNDLE:800',
+      );
+    });
+
+    it('KCS bị từ chối (sai trạng thái) thì KHÔNG gọi recomputeAfterQc', async () => {
+      steelIssuesService.findOneRowOrThrow.mockResolvedValue({
+        ...awaitingIssue,
+        status: SteelIssueStatus.QC_PASSED,
+      });
+
+      await expect(service.review('100', { segments: [] }, 'user-kcs')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(segmentProductionService.recomputeAfterQc).not.toHaveBeenCalled();
     });
   });
 });

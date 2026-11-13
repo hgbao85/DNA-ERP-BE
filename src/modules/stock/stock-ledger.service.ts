@@ -9,6 +9,7 @@ import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { TRON_SEGMENT_STEPS, isNormalizedSegmentSteps } from '../../common/utils/segment-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
@@ -66,6 +67,11 @@ export interface PostStockEntryInput {
    *  giữ nguyên hành vi cũ cho mọi caller không phải nệm. Là chiều thứ 3 của bucket tồn kho, xem migration
    *  20261023120000_stock_spec_dimension. */
   spec?: string;
+  /** Bộ công đoạn phụ của ĐOẠN (mã đoạn = cỡ đoạn + bộ công đoạn, '' = trơn) - CHỈ có ý nghĩa khi segmentSpecId set (CHECK DB
+   *  stock_ledger_segment_steps_chk). Truyền đúng dạng lưu của normalizeSegmentSteps() (src/common/utils/segment-code.util.ts).
+   *  Bỏ trống = trơn, giữ nguyên hành vi cũ cho mọi caller hiện có (SEGMENT_CONSUME...). Xem migration
+   *  20261113180000_segment_stock_by_order. */
+  segmentSteps?: string;
 }
 
 /**
@@ -118,6 +124,13 @@ export class StockLedgerService {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty phải lớn hơn 0');
     }
+    const segmentSteps = input.segmentSteps ?? TRON_SEGMENT_STEPS;
+    if (segmentSteps !== TRON_SEGMENT_STEPS && input.segmentSpecId === undefined) {
+      throw new BadRequestException('segmentSteps chỉ dùng cho bút toán đoạn (segmentSpecId)');
+    }
+    if (!isNormalizedSegmentSteps(segmentSteps)) {
+      throw new BadRequestException(`Bộ công đoạn '${segmentSteps}' không đúng dạng mã đoạn`);
+    }
 
     const data: Prisma.StockLedgerCreateInput = {
       fromWarehouse: { connect: { id: input.fromWarehouseId } },
@@ -136,6 +149,7 @@ export class StockLedgerService {
       idempotencyKey: input.idempotencyKey,
       stockLengthMm: input.stockLengthMm ?? 0,
       spec: input.spec?.trim() ?? '',
+      segmentSteps,
     };
 
     if (input.idempotencyKey) {
@@ -525,6 +539,8 @@ export class StockLedgerService {
     const materialYieldIssueIds = idsOf(StockLedgerRefType.MATERIAL_YIELD_CONSUME);
     const weavingIssueMaterialIds = idsOf(StockLedgerRefType.WEAVING_ISSUE_MATERIAL);
     const steelIssueIds = idsOf(StockLedgerRefType.STEEL_ISSUE);
+    // Phía cộng tồn đoạn (13/11/2026): refId là CHÍNH id lệnh.
+    const segmentProduceInvoiceIds = idsOf(StockLedgerRefType.SEGMENT_PRODUCE);
 
     const productionOrderPiSelect = {
       productionOrder: {
@@ -541,6 +557,7 @@ export class StockLedgerService {
       materialYieldIssues,
       weavingIssueMaterials,
       steelIssues,
+      segmentProduceInvoices,
     ] = await Promise.all([
       materialIssueIds.length
         ? this.prisma.materialIssue.findMany({
@@ -576,6 +593,12 @@ export class StockLedgerService {
         ? this.prisma.steelIssue.findMany({
             where: { id: { in: steelIssueIds.map((id) => parseBigIntId(id)) } },
             select: { id: true, productionInvoice: { select: { code: true } } },
+          })
+        : Promise.resolve([]),
+      segmentProduceInvoiceIds.length
+        ? this.prisma.productionInvoice.findMany({
+            where: { id: { in: segmentProduceInvoiceIds.map((id) => parseBigIntId(id)) } },
+            select: { id: true, code: true },
           })
         : Promise.resolve([]),
     ]);
@@ -625,6 +648,9 @@ export class StockLedgerService {
     }
     for (const s of steelIssues) {
       putIfPresent(StockLedgerRefType.STEEL_ISSUE, s.id, s.productionInvoice?.code);
+    }
+    for (const pi of segmentProduceInvoices) {
+      putIfPresent(StockLedgerRefType.SEGMENT_PRODUCE, pi.id, pi.code);
     }
     return map;
   }
@@ -690,6 +716,7 @@ export class StockLedgerService {
       segmentSpecLabel: row.segmentSpec
         ? `${row.segmentSpec.material.code} @ ${Number(row.segmentSpec.cutLengthMm)}mm`
         : null,
+      segmentSteps: row.segmentSteps,
       pieceId: row.pieceId?.toString() ?? null,
       pieceCode: row.piece?.code ?? null,
       productVariantId: row.productVariantId?.toString() ?? null,

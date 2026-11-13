@@ -36,6 +36,10 @@ export const envValidationSchema = Joi.object({
   // Header Server-Timing (đo thời gian total/db/solver). Đặt false để tắt.
   SERVER_TIMING_ENABLED: Joi.boolean().default(true),
 
+  // Tồn đoạn kho Phôi theo lệnh (13/11/2026): true = sau KCS tự ghi đoạn đủ công đoạn vào kho Phôi, giữ cho lệnh, phần vượt vào
+  // cột dư. Mặc định TẮT cho tới khi phía trừ (Hàn/Sơn trừ phần giữ của lệnh) xong - xem src/modules/segment-stock/.
+  SEGMENT_STOCK_ENABLED: Joi.boolean().default(false),
+
   LOG_LEVEL: Joi.string()
     .valid('fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent')
     .default('info'),

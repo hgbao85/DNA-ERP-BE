@@ -86,6 +86,7 @@ export class StockQuantService {
       productVariantLabel: row.productVariant?.description ?? row.productVariant?.colorCode ?? null,
       stockLengthMm: row.stockLengthMm,
       spec: row.spec,
+      segmentSteps: row.segmentSteps,
       qty,
       availableQty,
       updatedAt: row.updatedAt,

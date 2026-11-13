@@ -49,6 +49,7 @@ import { ProductionInvoicesModule } from './modules/production-invoices/producti
 import { ProductionOrdersModule } from './modules/production-orders/production-orders.module';
 import { CuttingProposalsModule } from './modules/cutting-proposals/cutting-proposals.module';
 import { StockModule } from './modules/stock/stock.module';
+import { SegmentStockModule } from './modules/segment-stock/segment-stock.module';
 import { WarehouseTransfersModule } from './modules/warehouse-transfers/warehouse-transfers.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { PurchaseProposalsModule } from './modules/purchase-proposals/purchase-proposals.module';
@@ -134,6 +135,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     ProductionOrdersModule,
     CuttingProposalsModule,
     StockModule,
+    SegmentStockModule,
     WarehouseTransfersModule,
     UploadsModule,
     PurchaseProposalsModule,

@@ -27,6 +27,7 @@ import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { MaterialYieldRecipeProductionService } from '../material-yield-recipes/material-yield-recipe-production.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
+import { SegmentProductionService } from '../segment-stock/segment-production.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -66,6 +67,7 @@ export class QcReviewsService {
     private readonly cloudinaryService: CloudinaryService,
     private readonly notifications: NotificationsService,
     private readonly realtime: RealtimeService,
+    private readonly segmentProductionService: SegmentProductionService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). `parentId` (2026-10-17,
@@ -238,6 +240,13 @@ export class QcReviewsService {
       });
     });
 
+    // Tồn đoạn theo lệnh (13/11/2026): SAU khi KCS đã commit; lỗi chỉ log, không làm hỏng KCS.
+    await this.segmentProductionService.recomputeAfterQc(
+      issue.productionInvoiceId,
+      reviewedById,
+      `QC_STEEL_ISSUE:${issue.id}`,
+    );
+
     this.publishRealtime(created.id, 'QC_RECORDED', reviewedById);
     return this.toResponseDto(created);
   }
@@ -360,6 +369,12 @@ export class QcReviewsService {
       BUSINESS_ROLES.PHOI_STAFF,
     );
 
+    await this.segmentProductionService.recomputeAfterQc(
+      bundle.steelIssue.productionInvoiceId,
+      reviewedById,
+      `QC_CUT_BUNDLE:${bundle.id}`,
+    );
+
     this.publishRealtime(cutBundleId, 'QC_RECORDED', reviewedById);
     return this.toResponseDto(created);
   }
@@ -467,6 +482,12 @@ export class QcReviewsService {
         include: QC_REVIEW_INCLUDE,
       });
     });
+
+    await this.segmentProductionService.recomputeAfterQc(
+      bundle.productionInvoiceId,
+      reviewedById,
+      `QC_STEP_BUNDLE:${bundle.id}`,
+    );
 
     this.publishRealtime(stepBundleId, 'QC_RECORDED', reviewedById);
     return this.toResponseDto(created);

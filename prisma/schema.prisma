@@ -789,6 +789,8 @@ model Warehouse {
   toWarehouseTransfers          WarehouseTransfer[]            @relation("WarehouseTransferToWarehouse")
   warehouseTransferReservations WarehouseTransferReservation[]
   stockReservations             StockReservation[]
+  segmentReservations           SegmentReservation[]
+  segmentProductions            SegmentProduction[]
   materials                     Material[]
   officeSupplies                OfficeSupply[]
   issueSlips                    IssueSlip[]
@@ -964,6 +966,8 @@ model SegmentSpec {
   cutPatternSegments             CutPatternSegment[]
   stepBatchSegments              StepBatchSegment[]
   floorReportLines               FloorReportLine[]
+  segmentReservations            SegmentReservation[]
+  segmentProductions             SegmentProduction[]
 
   @@unique([materialId, cutLengthMm])
   @@map("segment_spec")
@@ -1740,6 +1744,8 @@ model ProductionInvoice {
   floorQueueEntries         FloorQueueEntry[]
   floorReports              FloorReport[]
   warehouseTransfers        WarehouseTransfer[]
+  segmentReservations       SegmentReservation[]
+  segmentProductions        SegmentProduction[]
 
   @@index([salesOrderId])
   @@map("production_invoices")
@@ -2831,6 +2837,9 @@ enum StockLedgerRefType {
   WAREHOUSE_SPLIT
   /// Mảnh rời kho (Sơn/Hàn/Phôi) đi điểm đan theo phiếu xuất đan (09/11/2026). refId = WeavingIssue.id. Đích: kho ảo PRODUCTION.
   WEAVING_ISSUE
+  /// Đoạn đủ công đoạn + KCS đạt của một lệnh vào kho Phôi của xưởng làm lệnh (13/11/2026, tồn đoạn theo lệnh - phía cộng).
+  /// Nguồn kho ảo PRODUCTION -> đích kho Phôi; tính lại giảm thì ghi chiều ngược lại. refId = ProductionInvoice.id.
+  SEGMENT_PRODUCE
 }
 
 enum TransferStatus {
@@ -2910,6 +2919,10 @@ model StockLedger {
   /// Quy cách của hàng (nệm: "Đôi 870x450x50"...) - '' = không có quy cách riêng. Chiều thứ 3 của bucket tồn kho
   /// (kho, vật tư, độ dài, quy cách), xem migration 20261023120000_stock_spec_dimension.
   spec             String             @default("")
+  /// Bộ công đoạn phụ của ĐOẠN (13/11/2026, tồn đoạn theo mã đoạn): '' = trơn (chỉ cắt), còn lại là các công đoạn phụ theo thứ
+  /// tự nghiệp vụ, nối bằng dấu phẩy (vd "DAP", "UON,DAP,TAN") - xem src/common/utils/segment-code.util.ts. Mã đoạn = (segmentSpecId,
+  /// segmentSteps). CHECK stock_ledger_segment_steps_chk: chỉ khác '' khi segmentSpecId có giá trị.
+  segmentSteps     String             @default("")
 
   fromWarehouse  Warehouse       @relation("StockLedgerFromWarehouse", fields: [fromWarehouseId], references: [id])
   toWarehouse    Warehouse       @relation("StockLedgerToWarehouse", fields: [toWarehouseId], references: [id])
@@ -2930,6 +2943,7 @@ model StockLedger {
   @@index([fromWarehouseId, materialId, stockLengthMm])
   @@index([toWarehouseId, materialId, stockLengthMm])
   @@index([toWarehouseId, materialId, spec])
+  @@index([toWarehouseId, segmentSpecId, segmentSteps])
   @@map("stock_ledger")
 }
 
@@ -2953,6 +2967,9 @@ model StockQuant {
   /// Cùng ý nghĩa StockLedger.spec - unique "1 dòng số dư mỗi (kho, hàng, độ dài, quy cách)" là index riêng
   /// stock_quant_wh_mat_len_spec_key tạo bằng raw SQL (index có điều kiện, Prisma không khai báo được).
   spec             String   @default("")
+  /// Cùng ý nghĩa StockLedger.segmentSteps - unique "1 dòng số dư mỗi (kho, cỡ đoạn, bộ công đoạn)" là index riêng
+  /// stock_quant_wh_seg_steps_key tạo bằng raw SQL (thay stock_quant_warehouseId_segmentSpecId_key, 13/11/2026).
+  segmentSteps     String   @default("")
 
   warehouse      Warehouse       @relation(fields: [warehouseId], references: [id])
   material       Material?       @relation(fields: [materialId], references: [id])
@@ -2961,6 +2978,95 @@ model StockQuant {
   productVariant ProductVariant? @relation(fields: [productVariantId], references: [id])
 
   @@map("stock_quant")
+}
+
+/// Giữ ĐOẠN theo lệnh (13/11/2026, anh Nhân: "quản đoạn theo TỪNG LỆNH"). Đoạn đủ công đoạn + KCS đạt của lệnh nào giữ cho lệnh
+/// đó trong kho Phôi của xưởng làm lệnh, theo mã đoạn (cỡ đoạn + bộ công đoạn). Tồn trong kho (stock_quant) trừ phần CÒN GIỮ của
+/// mọi lệnh = cột "dư" chung của xưởng, chia cho lệnh sau. KHÁC StockReservation (chỉ vật tư): bảng riêng vì khoá và cách tiêu
+/// thụ khác hẳn (theo mã đoạn, không có pool / hạn SKU). Không làm đổi tồn vật lý. Đọc / ghi chỉ qua SegmentStockService.
+model SegmentReservation {
+  id                  BigInt   @id @default(autoincrement())
+  /// Kho Phôi của xưởng làm lệnh (WorkshopWarehouseResolver.phoiWarehouseOfPi).
+  warehouseId         BigInt
+  productionInvoiceId BigInt
+  segmentSpecId       BigInt
+  /// Cùng ý nghĩa StockLedger.segmentSteps ('' = trơn).
+  segmentSteps        String   @default("")
+  /// Tổng đoạn đã giữ cho lệnh: phía cộng (đoạn của chính lệnh, trần = số cần) + phần dư chia sang. Không giảm khi lệnh dùng.
+  reservedQty         Decimal  @default(0) @db.Decimal(16, 4)
+  /// Đoạn lệnh đã dùng (Hàn / Sơn báo - phía trừ). Còn giữ = reservedQty - consumedQty (CHECK 0 <= consumed <= reserved).
+  consumedQty         Decimal  @default(0) @db.Decimal(16, 4)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  warehouse         Warehouse                @relation(fields: [warehouseId], references: [id])
+  productionInvoice ProductionInvoice        @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
+  segmentSpec       SegmentSpec              @relation(fields: [segmentSpecId], references: [id])
+  logs              SegmentReservationLog[]
+
+  @@unique([warehouseId, productionInvoiceId, segmentSpecId, segmentSteps])
+  @@index([warehouseId, segmentSpecId, segmentSteps])
+  @@index([productionInvoiceId])
+  @@map("segment_reservations")
+}
+
+/// Phía cộng đã ghi bao nhiêu đoạn cho lệnh theo mã đoạn (13/11/2026): heldQty đã đưa vào giữ cho lệnh, surplusQty đã đưa vào
+/// cột "dư" của xưởng. Mỗi lần tính lại (sau KCS, sau Admin đổi SKU đợt) so số ĐÍCH với bảng này rồi chỉ ghi PHẦN CHÊNH vào sổ kho,
+/// nên KCS chấm lại / tính lại nhiều lần không cộng đôi. warehouseId = kho đã ghi (đổi xưởng thì phía chuyển đoạn cập nhật).
+model SegmentProduction {
+  id                  BigInt   @id @default(autoincrement())
+  productionInvoiceId BigInt
+  segmentSpecId       BigInt
+  segmentSteps        String   @default("")
+  warehouseId         BigInt
+  heldQty             Decimal  @default(0) @db.Decimal(16, 4)
+  surplusQty          Decimal  @default(0) @db.Decimal(16, 4)
+  updatedAt           DateTime @updatedAt
+
+  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
+  segmentSpec       SegmentSpec       @relation(fields: [segmentSpecId], references: [id])
+  warehouse         Warehouse         @relation(fields: [warehouseId], references: [id])
+
+  @@unique([productionInvoiceId, segmentSpecId, segmentSteps])
+  @@index([warehouseId])
+  @@map("segment_productions")
+}
+
+/// Loại thay đổi của giữ đoạn theo lệnh (nhật ký SegmentReservationLog).
+enum SegmentReservationLogKind {
+  /// Phía cộng: đoạn của chính lệnh vào giữ (âm khi tính lại giảm).
+  PRODUCE
+  /// Phần dư của xưởng chia sang lệnh này ("chia dư cho lệnh sau").
+  SURPLUS_IN
+  /// Lệnh dùng đoạn (Hàn / Sơn báo - phía trừ).
+  CONSUME
+  /// Nhả phần còn giữ về dư (lệnh kết thúc / huỷ).
+  RELEASE
+  /// Chuyển giữ đoạn sang kho xưởng khác (đổi xưởng).
+  TRANSFER
+  /// Điều chỉnh tay khi kiểm kê.
+  ADJUST
+}
+
+/// Nhật ký giữ đoạn theo lệnh (13/11/2026) - truy được phần dư nào chia cho lệnh nào, lệnh dùng bao nhiêu, nhả lúc nào. Chỉ thêm,
+/// không sửa / xoá. qty là số đoạn của lần thay đổi, kind nói tăng hay giảm: PRODUCE có dấu (âm khi tính lại giảm), các kind
+/// còn lại luôn dương (SURPLUS_IN / TRANSFER vào tăng phần giữ; CONSUME / RELEASE giảm phần còn giữ; ADJUST có dấu).
+model SegmentReservationLog {
+  id            BigInt                    @id @default(autoincrement())
+  reservationId BigInt
+  kind          SegmentReservationLogKind
+  qty           Decimal                   @db.Decimal(16, 4)
+  /// Nguồn (vd 'QC_REVIEW', 'PRODUCTION_BATCH', 'SEGMENT_RECOMPUTE') - không FK cứng, cùng idiom StockLedger.refId.
+  refType       String?
+  refId         String?
+  note          String?
+  createdById   String?
+  createdAt     DateTime                  @default(now())
+
+  reservation SegmentReservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+
+  @@index([reservationId, createdAt])
+  @@map("segment_reservation_logs")
 }
 
 /// Giữ chỗ tồn kho ("đã hứa cho ai đó, chưa lấy đi") - tách khái niệm ĐẶT GIỮ khỏi TIÊU HAO, xem
