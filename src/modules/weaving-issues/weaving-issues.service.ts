@@ -474,6 +474,30 @@ export class WeavingIssuesService {
     };
   }
 
+  /** Tồn khả dụng lúc LẬP phiếu vật tư kèm đan (13/11/2026, RPK.2): cùng cách tính với createMaterialIssueInTx() nhưng không
+   *  khoá - trước đây chỉ kiểm lúc xác nhận nên phiếu vẫn lập được khi kho = 0. */
+  async assertMaterialStockForSlip(tx: PrismaTx, p: PreparedWeavingMaterial): Promise<void> {
+    const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+      SELECT "qty" FROM "stock_quant"
+      WHERE "warehouseId" = ${p.warehouseId} AND "materialId" = ${p.materialId}
+        AND "stockLengthMm" = 0 AND "spec" = ''
+    `;
+    const onHand = stockRow?.qty.toNumber() ?? 0;
+    const availableQty = await this.stockReservationsService.getAvailableQty(
+      tx,
+      p.warehouseId,
+      p.materialId,
+      onHand,
+      undefined,
+      p.productionInvoiceId,
+    );
+    if (p.qty > availableQty) {
+      throw new ConflictException(
+        `Tồn kho khả dụng của ${p.materialCode} (${round4(availableQty)}) không đủ cấp kèm ${p.qty}`,
+      );
+    }
+  }
+
   /** Ghi 1 dòng vật tư của phiếu 2 lúc xác nhận - giữ các chốt tồn cũ: FOR UPDATE, tồn khả dụng (trừ giữ chỗ PI khác), ưu tiên
    *  SKU sớm (YC11), rồi trả giữ chỗ đề xuất mua. */
   async createMaterialIssueInTx(
