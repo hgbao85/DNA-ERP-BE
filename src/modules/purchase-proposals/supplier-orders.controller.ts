@@ -54,8 +54,12 @@ export class SupplierOrdersController {
 
   @Get(':id')
   @RequirePermissions(VIEW)
-  findOne(@Param('id') id: string) {
-    return this.supplierOrdersService.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.supplierOrdersService.findOne(id, { userId, roles });
   }
 
   @Post()
@@ -93,8 +97,12 @@ export class SupplierOrdersController {
   /** File phiếu đề xuất .xlsx theo mẫu (base64 trong envelope JSON). */
   @Get(':id/print')
   @RequirePermissions(VIEW)
-  print(@Param('id') id: string) {
-    return this.supplierOrdersService.print(id);
+  print(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    return this.supplierOrdersService.print(id, userId, roles);
   }
 
   /** "THAY PHIẾU" - đơn đã ký về chờ duyệt để gỡ dòng / sửa số mua, in phiếu mới cùng số. */

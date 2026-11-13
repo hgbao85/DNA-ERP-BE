@@ -21,7 +21,11 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { RealtimeService } from '../../realtime/realtime.service';
-import { PENDING_APPROVAL_STATUSES, PurchaseProposalsService } from './purchase-proposals.service';
+import {
+  PENDING_APPROVAL_STATUSES,
+  PreparedBossApprove,
+  PurchaseProposalsService,
+} from './purchase-proposals.service';
 import { effectiveOrderQty } from './purchase-order-qty.util';
 import { supplierOrderCode, vnYear } from './supplier-order-code.util';
 import { recomputeProposalStatus } from './purchase-proposal-status.util';
@@ -61,6 +65,9 @@ type OrderRow = Prisma.SupplierOrderGetPayload<{ include: typeof ORDER_INCLUDE }
  * anh Nhân - không nhảy cóc); đơn đã ký rồi Thay phiếu mới huỷ thì giữ số. Bộ đếm ở SupplierOrderCounter, cấp số trong
  * khoá theo (NCC, năm) - xem allocateSeq().
  */
+/** Đơn gộp nhiều lệnh có thể chạm nhiều đề xuất - nới thời hạn transaction mặc định 5 s. */
+const APPROVE_TX_OPTIONS = { maxWait: 10_000, timeout: 30_000 };
+
 @Injectable()
 export class SupplierOrdersService {
   constructor(
@@ -89,8 +96,17 @@ export class SupplierOrdersService {
     return rows.map((r) => this.toDto(r, codes));
   }
 
-  async findOne(id: string): Promise<SupplierOrderResponseDto> {
+  /**
+   * `actor` có thì kiểm người xem: người mua chỉ xem đơn mình tạo, Sếp/Admin xem hết (cùng luật danh sách - 13/11/2026,
+   * trước đây ai có quyền xem đề xuất mua, kể cả thủ kho, đều xem/in được đơn của người khác nếu biết id). Gọi nội bộ sau
+   * khi ghi thì không truyền.
+   */
+  async findOne(
+    id: string,
+    actor?: { userId: string; roles: string[] },
+  ): Promise<SupplierOrderResponseDto> {
     const order = await this.findOrThrow(id);
+    if (actor) this.assertOwner(order, actor.userId, actor.roles);
     return this.toDto(order, await this.lenhCodesOf([order]));
   }
 
@@ -267,8 +283,8 @@ export class SupplierOrdersService {
 
   /**
    * "Sếp đã duyệt" theo đơn: người mua tải phiếu Giám đốc đã ký cho ĐÚNG đơn này, các dòng của đơn
-   * sang PURCHASING (dùng lại PurchaseProposalsService.bossApprove() theo từng đề xuất chứa dòng
-   * - audit, thông báo Kho, realtime giữ nguyên như trước).
+   * sang PURCHASING (dùng 3 bước prepare/apply/finish của PurchaseProposalsService.bossApprove() theo từng đề xuất chứa
+   * dòng - phần ghi DB trong 1 transaction cùng việc đổi đơn; audit, thông báo Kho, realtime sau commit như trước).
    */
   async approve(
     id: string,
@@ -287,26 +303,39 @@ export class SupplierOrdersService {
       if (!PENDING_APPROVAL_STATUSES.includes(it.status)) continue;
       byProposal.set(it.proposalId, [...(byProposal.get(it.proposalId) ?? []), it.id]);
     }
+    // 13/11/2026: duyệt mọi đề xuất của đơn + chuyển đơn sang APPROVED trong CÙNG 1 transaction. Trước đây mỗi đề xuất 1
+    // transaction riêng rồi mới đổi đơn - lỗi giữa chừng thì có dòng đã "Đang mua" trong khi đơn vẫn nháp.
+    const prepared: PreparedBossApprove[] = [];
     for (const [proposalId, itemIds] of byProposal) {
-      await this.purchaseProposalsService.bossApprove(
-        proposalId.toString(),
-        actorUserId,
-        actorRoles,
-        { approvalFileUrl },
-        itemIds,
+      prepared.push(
+        await this.purchaseProposalsService.prepareBossApprove(
+          proposalId.toString(),
+          actorUserId,
+          actorRoles,
+          itemIds,
+        ),
       );
     }
-    const { count } = await this.prisma.supplierOrder.updateMany({
-      where: { id: order.id, status: SupplierOrderStatus.DRAFT },
-      data: {
-        status: SupplierOrderStatus.APPROVED,
-        approvalFileUrl,
-        approvedAt: new Date(),
-        approvedById: actorUserId,
-      },
-    });
-    if (count !== 1) {
-      throw new ConflictException('Đơn vừa bị thao tác khác đổi trạng thái - tải lại trang');
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockDraft(tx, order.id);
+      for (const p of prepared) {
+        await this.purchaseProposalsService.applyBossApproveTx(tx, p, actorUserId, approvalFileUrl);
+      }
+      const { count } = await tx.supplierOrder.updateMany({
+        where: { id: order.id, status: SupplierOrderStatus.DRAFT },
+        data: {
+          status: SupplierOrderStatus.APPROVED,
+          approvalFileUrl,
+          approvedAt: new Date(),
+          approvedById: actorUserId,
+        },
+      });
+      if (count !== 1) {
+        throw new ConflictException('Đơn vừa bị thao tác khác đổi trạng thái - tải lại trang');
+      }
+    }, APPROVE_TX_OPTIONS);
+    for (const p of prepared) {
+      await this.purchaseProposalsService.finishBossApprove(p, actorUserId, approvalFileUrl);
     }
     await this.audit(AuditAction.UPDATE, order, null, {
       event: 'supplier-order-approved',
@@ -504,6 +533,10 @@ export class SupplierOrdersService {
       reason: trimmed,
       items: result,
     });
+    // Đề xuất đủ hàng nhờ đóng phần thiếu (không sinh dòng mới) thì cũng báo "đủ hàng" như khi nhận hàng (13/11/2026).
+    for (const pid of proposalIds) {
+      await this.purchaseProposalsService.notifyIfFullyPurchased(pid, actorUserId);
+    }
     this.publish(proposalIds, actorUserId);
     return this.findOne(id);
   }
@@ -512,8 +545,13 @@ export class SupplierOrdersService {
    * File phiếu đề xuất (.xlsx, theo mẫu PHIEU_DE_XUAT_MAU_TRONG_IEA) của 1 đơn - trả base64 vì mọi
    * phản hồi đều bọc trong envelope JSON (ResponseInterceptor), FE tự giải mã rồi tải xuống.
    */
-  async print(id: string): Promise<{ fileName: string; base64: string }> {
+  async print(
+    id: string,
+    actorUserId: string,
+    actorRoles: string[],
+  ): Promise<{ fileName: string; base64: string }> {
     const order = await this.findOrThrow(id);
+    this.assertOwner(order, actorUserId, actorRoles);
     if (order.status === SupplierOrderStatus.CANCELLED) {
       throw new ConflictException('Đơn đã huỷ - không in phiếu');
     }

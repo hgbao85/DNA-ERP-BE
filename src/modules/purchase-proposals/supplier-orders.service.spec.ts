@@ -44,7 +44,12 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
   };
-  let proposals: { bossApprove: jest.Mock };
+  let proposals: {
+    prepareBossApprove: jest.Mock;
+    applyBossApproveTx: jest.Mock;
+    finishBossApprove: jest.Mock;
+    notifyIfFullyPurchased: jest.Mock;
+  };
 
   const supplier = { id: 7n, name: 'Kim Phát', isActive: true, deletedAt: null };
   const pendingItem = (overrides: Record<string, unknown> = {}) => ({
@@ -127,7 +132,16 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
-    proposals = { bossApprove: jest.fn().mockResolvedValue({}) };
+    proposals = {
+      prepareBossApprove: jest
+        .fn()
+        .mockImplementation((pid: string, _a: string, _r: string[], itemIds: bigint[]) =>
+          Promise.resolve({ pid, itemIds }),
+        ),
+      applyBossApproveTx: jest.fn().mockResolvedValue(undefined),
+      finishBossApprove: jest.fn().mockResolvedValue({}),
+      notifyIfFullyPurchased: jest.fn().mockResolvedValue(undefined),
+    };
     const cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     service = new SupplierOrdersService(
       prisma as unknown as PrismaServiceType,
@@ -255,7 +269,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
   });
 
   describe('approve', () => {
-    it('duyệt đúng các dòng của đơn qua bossApprove() theo từng đề xuất, rồi đánh dấu đơn APPROVED', async () => {
+    it('duyệt đúng các dòng của đơn theo từng đề xuất, ghi chung 1 transaction rồi mới thông báo (13/11/2026)', async () => {
       prisma.supplierOrder.findUnique.mockResolvedValue(
         order({
           items: [
@@ -268,20 +282,26 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
 
       await service.approve('90', 'https://file/ky.pdf', 'buyer-1', ['PURCHASER']);
 
-      expect(proposals.bossApprove).toHaveBeenCalledWith(
+      expect(proposals.prepareBossApprove).toHaveBeenCalledWith(
         '300',
         'buyer-1',
         ['PURCHASER'],
-        { approvalFileUrl: 'https://file/ky.pdf' },
         [400n, 402n],
       );
-      expect(proposals.bossApprove).toHaveBeenCalledWith(
+      expect(proposals.prepareBossApprove).toHaveBeenCalledWith(
         '301',
         'buyer-1',
         ['PURCHASER'],
-        { approvalFileUrl: 'https://file/ky.pdf' },
         [401n],
       );
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(proposals.applyBossApproveTx).toHaveBeenCalledWith(
+        prisma,
+        { pid: '300', itemIds: [400n, 402n] },
+        'buyer-1',
+        'https://file/ky.pdf',
+      );
+      expect(proposals.applyBossApproveTx).toHaveBeenCalledTimes(2);
       expect(prisma.supplierOrder.updateMany).toHaveBeenCalledWith({
         where: { id: 90n, status: SupplierOrderStatus.DRAFT },
         data: expect.objectContaining({
@@ -289,6 +309,27 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
           approvalFileUrl: 'https://file/ky.pdf',
         }) as unknown,
       });
+      expect(proposals.finishBossApprove).toHaveBeenCalledTimes(2);
+    });
+
+    it('lỗi khi ghi 1 đề xuất: không đổi đơn, không gửi thông báo nào (cả đơn rollback)', async () => {
+      prisma.supplierOrder.findUnique.mockResolvedValue(
+        order({
+          items: [
+            pendingItem({ id: 400n, proposalId: 300n }),
+            pendingItem({ id: 401n, proposalId: 301n }),
+          ],
+        }),
+      );
+      proposals.applyBossApproveTx
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new ConflictException('race'));
+
+      await expect(
+        service.approve('90', 'https://file/ky.pdf', 'buyer-1', ['PURCHASER']),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.supplierOrder.updateMany).not.toHaveBeenCalled();
+      expect(proposals.finishBossApprove).not.toHaveBeenCalled();
     });
 
     it('không duyệt lại đơn đã duyệt hoặc đã huỷ; người mua khác không duyệt hộ được', async () => {
@@ -302,7 +343,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       await expect(service.approve('90', 'https://f', 'buyer-2', ['PURCHASER'])).rejects.toThrow(
         ForbiddenException,
       );
-      expect(proposals.bossApprove).not.toHaveBeenCalled();
+      expect(proposals.prepareBossApprove).not.toHaveBeenCalled();
     });
   });
 
@@ -552,6 +593,8 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
         data: expect.objectContaining({ shortClosedQty: 10 }) as unknown,
       });
       expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
+      // 13/11/2026: đề xuất đủ hàng nhờ đóng phần thiếu cũng phải báo "đủ hàng" (kiểm sau commit theo từng đề xuất).
+      expect(proposals.notifyIfFullyPurchased).toHaveBeenCalledWith(300n, 'buyer-1');
     });
 
     it('chỉ đóng được đơn đã có phiếu ký, dòng của chính đơn, dòng còn chờ nhận; người mua khác không đóng hộ', async () => {
@@ -582,7 +625,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
 
   describe('print', () => {
     it('trả file .xlsx (base64) đặt tên theo NCC + số đơn', async () => {
-      const res = await service.print('90');
+      const res = await service.print('90', 'buyer-1', ['PURCHASER']);
 
       expect(res.fileName).toBe('phieu-de-xuat-Kim Phát-53-2026.xlsx');
       expect(Buffer.from(res.base64, 'base64').subarray(0, 2).toString()).toBe('PK');
@@ -592,7 +635,30 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       prisma.supplierOrder.findUnique.mockResolvedValueOnce(
         order({ status: SupplierOrderStatus.CANCELLED }),
       );
-      await expect(service.print('90')).rejects.toThrow(ConflictException);
+      await expect(service.print('90', 'buyer-1', ['PURCHASER'])).rejects.toThrow(
+        ConflictException,
+      );
+    });
+  });
+
+  describe('xem / in đơn của người khác (13/11/2026)', () => {
+    it('người mua khác và thủ kho không xem, không in được đơn không phải mình tạo', async () => {
+      await expect(service.print('90', 'buyer-2', ['PURCHASER'])).rejects.toThrow(
+        ForbiddenException,
+      );
+      await expect(
+        service.findOne('90', { userId: 'kho-1', roles: ['WAREHOUSE'] }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('người tạo đơn và Giám đốc/Admin xem, in được', async () => {
+      await expect(
+        service.findOne('90', { userId: 'buyer-1', roles: ['PURCHASER'] }),
+      ).resolves.toBeDefined();
+      await expect(
+        service.findOne('90', { userId: 'boss-1', roles: ['BOSS'] }),
+      ).resolves.toBeDefined();
+      await expect(service.print('90', 'admin-1', ['ADMIN'])).resolves.toBeDefined();
     });
   });
 });

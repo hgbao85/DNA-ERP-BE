@@ -28,6 +28,7 @@ describe('ConsumableMaterialPurchaseService', () => {
     bomAccessoryItem: { findMany: jest.Mock };
     bomOption: { findMany: jest.Mock };
     material: { findMany: jest.Mock };
+    warehouse: { findMany: jest.Mock };
     purchaseProposal: {
       findFirst: jest.Mock;
       findUnique: jest.Mock;
@@ -93,6 +94,8 @@ describe('ConsumableMaterialPurchaseService', () => {
       // Tick loại dây/nệm của định mức - mặc định SKU không tick gì (không lọc dòng nào).
       bomOption: { findMany: jest.fn().mockResolvedValue([]) },
       material: { findMany: jest.fn().mockResolvedValue([day]) },
+      // Kho thành phẩm QLSX chọn (13/11/2026) - tra id theo mã để đọc tồn/giữ chỗ đúng kho đó; mặc định không có.
+      warehouse: { findMany: jest.fn().mockResolvedValue([]) },
       purchaseProposal: {
         findFirst: jest.fn().mockResolvedValue(null),
         // notifyPurchaseProposalCreated() (best-effort, NGOÀI transaction) đọc lại proposal sau khi
@@ -321,6 +324,7 @@ describe('ConsumableMaterialPurchaseService', () => {
               spec: null,
               buyQty: 120,
               actualStock: 0,
+              appliedWastePct: 0,
               receiveWarehouseCode: null,
               status: undefined,
               purchasedAt: undefined,
@@ -548,8 +552,15 @@ describe('ConsumableMaterialPurchaseService', () => {
         productionInvoiceItem: { warehouseCode: 'thanh-pham-1788485485362' }, // "Kho thành phẩm 2"
       },
     ]);
+    prisma.warehouse.findMany.mockResolvedValue([{ id: 95n, code: 'thanh-pham-1788485485362' }]);
 
     await service.computeAndUpsertProposals('1');
+
+    // 13/11/2026: tồn + giữ chỗ đọc ở ĐÚNG kho thành phẩm QLSX chọn (95n), không phải kho mặc định thanh-pham (93n).
+    expect(stockReservationsService.reserveOrAdjust).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ warehouseId: 95n, materialId: baoBi.id }),
+    );
 
     expect(prisma.purchaseProposal.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -631,7 +642,13 @@ describe('ConsumableMaterialPurchaseService', () => {
     expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
     expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
       where: { id: 950n },
-      data: { spec: null, buyQty: 120, actualStock: 0, receiveWarehouseCode: null },
+      data: {
+        spec: null,
+        buyQty: 120,
+        actualStock: 0,
+        appliedWastePct: 0,
+        receiveWarehouseCode: null,
+      },
     });
     expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
     expect(result[0].purchaseProposalId).toBe('900');
@@ -654,6 +671,7 @@ describe('ConsumableMaterialPurchaseService', () => {
         spec: null,
         buyQty: 120,
         actualStock: 0,
+        appliedWastePct: 0,
         receiveWarehouseCode: null,
         status: undefined,
         purchasedAt: undefined,

@@ -2452,6 +2452,9 @@ model PurchaseProposalItem {
   /// kiểm tra vật tư) - không tính lại theo thời gian thực (giống buyQty, là số chốt).
   actualStock             Decimal  @default(0) @db.Decimal(14, 4)
   buyQty                  Decimal  @db.Decimal(14, 4)
+  /// % hao hụt khi mua ĐÃ DÙNG lúc tính buyQty (13/11/2026) - cột "Hao hụt" ở Lệnh mua vật tư hiện số này thay vì % hiện tại
+  /// của vật tư (đổi % mà lệnh chưa tính lại thì 2 số lệch). null = dòng cũ / sắt theo phương án cắt.
+  appliedWastePct Decimal? @db.Decimal(6, 3)
   /// "Số mua" người mua chốt (2026-11-04, YC7 mục 7.2): chỉ được TĂNG so với buyQty ("cần mua",
   /// hệ thống tính) để tròn số tối thiểu NCC bán, Giám đốc duyệt bằng chữ ký trên phiếu. null =
   /// mua đúng buyQty. Tách cột riêng thay vì sửa thẳng buyQty vì các lượt tính lại đề xuất ghi đè

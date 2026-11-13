@@ -192,7 +192,7 @@ describe('PieceMaterialYieldPurchaseService', () => {
         sourceType: PurchaseProposalSource.PIECE_MATERIAL_YIELD,
         productionInvoiceId: 1n,
         warehouseCode: 'kho-nhom',
-        items: { create: [{ materialId: 80n, buyQty: 7, actualStock: 0 }] },
+        items: { create: [{ materialId: 80n, buyQty: 7, actualStock: 0, appliedWastePct: 0 }] },
       },
       include: { items: true },
     });
@@ -390,7 +390,7 @@ describe('PieceMaterialYieldPurchaseService', () => {
     expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
     expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
       where: { id: 950n },
-      data: { buyQty: 7, actualStock: 0 },
+      data: { buyQty: 7, actualStock: 0, appliedWastePct: 0 },
     });
     expect(result[0].purchaseProposalId).toBe('900');
   });
@@ -418,7 +418,7 @@ describe('PieceMaterialYieldPurchaseService', () => {
 
     expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
     expect(prisma.purchaseProposalItem.create).toHaveBeenCalledWith({
-      data: { proposalId: 900n, materialId: 80n, buyQty: 4, actualStock: 0 },
+      data: { proposalId: 900n, materialId: 80n, buyQty: 4, actualStock: 0, appliedWastePct: 0 },
     });
   });
 

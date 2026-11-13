@@ -12,7 +12,9 @@ const EPS = 1e-9;
 /**
  * Tính lại số mua khi nhu cầu 1 vật tư đổi (anh Nhân chốt 07/11, áp cho MỌI vật tư): ranh giới là "Giám đốc đã ký".
  *  - CHƯA ký = NEW / QUOTING / SUBMITTED / REJECTED: số mua người mua đã tăng (orderQty) bị bỏ khi nhu cầu GIẢM, quay về số mới
- *    tính và báo người mua nhập lại (dòng SUBMITTED là phiếu đã in -> phiếu cần in lại). Nhu cầu TĂNG thì giữ orderQty.
+ *    tính và báo người mua nhập lại (dòng đã nằm trong đơn đặt hàng - hoặc SUBMITTED dữ liệu cũ - là phiếu đã in -> phiếu cần
+ *    in lại). Nhu cầu TĂNG thì giữ orderQty. Số mới = 0 thì dòng tự đóng "đủ tồn" VÀ rời khỏi đơn nháp (caller ghi
+ *    supplierOrderId = null) - để lại trong đơn thì đơn không huỷ/gỡ được và phiếu in ra dòng 0 (13/11/2026).
  *  - ĐÃ ký = PURCHASING (sau "Sếp đã duyệt"): KHÔNG sửa số nào trên dòng; nhu cầu mới thấp hơn số đã ký thì báo người mua + Giám đốc.
  *  - PURCHASED: giữ cách xử lý cũ - chỉ tách dòng NEW cho phần thiếu so với hàng đã nhận.
  * Hàm thuần (không đụng DB) để test được; các service gọi rồi tự ghi DB trong transaction và gửi thông báo SAU commit.
@@ -23,6 +25,9 @@ export interface PurchaseRecomputeItem {
   buyQty: number;
   orderQty: number | null;
   receivedQty: number;
+  /** Dòng đang nằm trong 1 đơn đặt hàng (chưa ký thì là đơn nháp - phiếu có thể đã in). 13/11/2026: luồng đơn đặt hàng không
+   *  còn đặt SUBMITTED nên "phiếu đã in" phải suy từ đây, nếu không cảnh báo "cần in lại" không bao giờ hiện. */
+  inSupplierOrder?: boolean;
 }
 
 export interface PurchaseRecomputePlan {
@@ -58,6 +63,7 @@ export function toRecomputeItem(it: {
   buyQty?: NumLike | null;
   orderQty?: NumLike | null;
   receivedQty?: NumLike | null;
+  supplierOrderId?: bigint | null;
 }): PurchaseRecomputeItem {
   return {
     id: it.id,
@@ -66,6 +72,7 @@ export function toRecomputeItem(it: {
     buyQty: it.buyQty == null ? 0 : num(it.buyQty),
     orderQty: it.orderQty == null ? null : num(it.orderQty),
     receivedQty: it.receivedQty == null ? 0 : num(it.receivedQty),
+    inSupplierOrder: it.supplierOrderId != null,
   };
 }
 
@@ -99,7 +106,8 @@ export function planUnsignedWrite(
             itemId: target.id,
             oldOrderQty: target.orderQty as number,
             newBuyQty: need,
-            slipPrinted: target.status === PurchaseProposalStatus.SUBMITTED,
+            slipPrinted:
+              target.status === PurchaseProposalStatus.SUBMITTED || target.inSupplierOrder === true,
           }
         : null,
   };

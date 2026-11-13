@@ -197,8 +197,25 @@ export class ConsumableMaterialPurchaseService {
     // An - kho thật khác kho mặc định thì cũng ghi vào receiveWarehouseCode.
     const realWarehouseByMaterial = new Map<string, { id: bigint; code: string }>();
     const resolver = new WorkshopWarehouseResolver(this.prisma);
+    // 13/11/2026: vật tư đóng gói nhận về kho thành phẩm QLSX chọn (receiveWarehouseCode ở trên) thì tồn + giữ chỗ cũng
+    // phải đọc ở ĐÚNG kho đó - trước đây vẫn đọc kho thành phẩm mặc định nên hàng dư đã về "Kho thành phẩm 2" không được
+    // trừ ở lần tính sau (mua lặp).
+    const chosenTpCodes = [...new Set(receiveWarehouseByMaterial.values())];
+    const chosenTpByCode = new Map(
+      (
+        await this.prisma.warehouse.findMany({
+          where: { code: { in: chosenTpCodes } },
+          select: { id: true, code: true },
+        })
+      ).map((w) => [w.code, w]),
+    );
     for (const materialIdStr of requiredByMaterial.keys()) {
       const material = materialById.get(materialIdStr)!;
+      const chosenTp = chosenTpByCode.get(receiveWarehouseByMaterial.get(materialIdStr) ?? '');
+      if (chosenTp) {
+        realWarehouseByMaterial.set(materialIdStr, { id: chosenTp.id, code: chosenTp.code });
+        continue;
+      }
       const real = await resolver.resolveForPi(material.warehouse!, piBigId);
       realWarehouseByMaterial.set(materialIdStr, { id: real.id, code: real.code });
       if (real.id !== material.warehouse!.id && !receiveWarehouseByMaterial.has(materialIdStr)) {
@@ -229,6 +246,7 @@ export class ConsumableMaterialPurchaseService {
         required: number;
         actualStock: number;
         buyQty: number;
+        appliedWastePct: number;
         warehouseCode: string;
         receiveWarehouseCode: string | null;
       }[] = [];
@@ -302,6 +320,7 @@ export class ConsumableMaterialPurchaseService {
             required,
             actualStock,
             buyQty: material.purchaseRoundUp === true ? Math.ceil(buyQtyRaw) : buyQtyRaw,
+            appliedWastePct: wastePct,
             warehouseCode: realWarehouseByMaterial.get(materialIdStr)!.code,
             receiveWarehouseCode: receiveWarehouseByMaterial.get(materialIdStr) ?? null,
           });
@@ -352,6 +371,7 @@ export class ConsumableMaterialPurchaseService {
                 spec: c.spec,
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
+                appliedWastePct: c.appliedWastePct,
                 receiveWarehouseCode: c.receiveWarehouseCode,
                 status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: c.buyQty === 0 ? new Date() : undefined,
@@ -399,10 +419,16 @@ export class ConsumableMaterialPurchaseService {
                 spec: c.spec,
                 buyQty: plan.update.buyQty,
                 actualStock: c.actualStock,
+                appliedWastePct: c.appliedWastePct,
                 receiveWarehouseCode: c.receiveWarehouseCode,
                 ...(plan.update.clearOrderQty ? { orderQty: null } : {}),
+                // Đủ tồn: đóng dòng và rời khỏi đơn đặt hàng nháp nếu đang nằm trong đơn (13/11/2026).
                 ...(plan.update.toPurchased
-                  ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
+                  ? {
+                      status: PurchaseProposalStatus.PURCHASED,
+                      purchasedAt: new Date(),
+                      supplierOrderId: null,
+                    }
                   : {}),
               },
             });
@@ -415,6 +441,7 @@ export class ConsumableMaterialPurchaseService {
                 spec: c.spec,
                 buyQty: plan.create.buyQty,
                 actualStock: c.actualStock,
+                appliedWastePct: c.appliedWastePct,
                 receiveWarehouseCode: c.receiveWarehouseCode,
                 status: plan.create.toPurchased ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: plan.create.toPurchased ? new Date() : undefined,

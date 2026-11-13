@@ -47,6 +47,19 @@ describe('planPurchaseRecompute', () => {
     expect(plan.orderQtyReset?.slipPrinted).toBe(true);
   });
 
+  it('dòng NEW nằm trong đơn đặt hàng nháp giảm: phiếu coi như đã in -> slipPrinted (13/11/2026)', () => {
+    const plan = planPurchaseRecompute(
+      [{ ...item(1, S.NEW, 100, 110), inSupplierOrder: true }],
+      50,
+    );
+    expect(plan.orderQtyReset?.slipPrinted).toBe(true);
+  });
+
+  it('toRecomputeItem: có supplierOrderId thì inSupplierOrder = true', () => {
+    expect(toRecomputeItem({ id: 1n, supplierOrderId: 9n }).inSupplierOrder).toBe(true);
+    expect(toRecomputeItem({ id: 1n, supplierOrderId: null }).inSupplierOrder).toBe(false);
+  });
+
   it('nhu cầu TĂNG: giữ orderQty, không báo', () => {
     const plan = planPurchaseRecompute([item(1, S.NEW, 100, 110)], 130);
     expect(plan.update).toEqual({
@@ -196,6 +209,13 @@ describe('eventFromPlan / toRecomputeItem', () => {
       orderQty: null,
       receivedQty: { toNumber: () => 1 },
     });
-    expect(r).toEqual({ id: 1n, status: S.NEW, buyQty: 4.5, orderQty: null, receivedQty: 1 });
+    expect(r).toEqual({
+      id: 1n,
+      status: S.NEW,
+      buyQty: 4.5,
+      orderQty: null,
+      receivedQty: 1,
+      inSupplierOrder: false,
+    });
   });
 });

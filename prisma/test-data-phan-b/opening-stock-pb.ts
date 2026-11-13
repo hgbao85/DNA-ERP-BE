@@ -36,6 +36,11 @@ const ROWS_BO_SUNG: [string, string, number][] = [
   ['DINH-001', 'vat-tu-tp', 300],
 ];
 const BO_SUNG = process.argv.includes('--bo-sung');
+/** `--bo-sung --lan 3`: nạp bổ sung lần thứ n (mỗi lần 1 khoá chống trùng riêng PB-OPEN-<n>) - 13/11/2026 lệnh PI 79 tính lại
+ *  đã giữ hết phần nạp lần 2. Không ghi --lan thì là lần 2 như trước. */
+const lanIdx = process.argv.indexOf('--lan');
+const LAN = lanIdx >= 0 ? Number(process.argv[lanIdx + 1]) : 2;
+if (!Number.isInteger(LAN) || LAN < 2) throw new Error('--lan phải là số nguyên >= 2');
 
 async function main() {
   const app = await NestFactory.createApplicationContext(AppModule, { logger: ['error', 'warn'] });
@@ -68,7 +73,7 @@ async function main() {
             ? 'Tồn đầu kỳ dữ liệu thử PB (12/11) - nạp bổ sung'
             : 'Tồn đầu kỳ dữ liệu thử PB (12/11)',
           createdById: admin.id,
-          idempotencyKey: `${BO_SUNG ? 'PB-OPEN-2' : 'PB-OPEN'}:${code}:${whCode}`,
+          idempotencyKey: `${BO_SUNG ? `PB-OPEN-${LAN}` : 'PB-OPEN'}:${code}:${whCode}`,
         });
       });
       const q = await prisma.stockQuant.findFirst({

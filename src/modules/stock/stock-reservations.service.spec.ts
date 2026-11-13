@@ -178,6 +178,7 @@ describe('StockReservationsService', () => {
     it('đã có dòng - cập nhật quantity sang giá trị mới (KHÔNG cộng dồn như creditPool)', async () => {
       prisma.stockReservation.findUnique.mockResolvedValue({
         id: 900n,
+        warehouseId: 800n,
         quantity: decimal(50),
         consumedQty: decimal(0),
       });
@@ -197,9 +198,32 @@ describe('StockReservationsService', () => {
       expect(prisma.stockReservation.create).not.toHaveBeenCalled();
     });
 
+    it('lần tính sau đọc tồn ở kho khác, chưa tiêu gì: chuyển dòng giữ chỗ sang kho mới (13/11/2026)', async () => {
+      prisma.stockReservation.findUnique.mockResolvedValue({
+        id: 900n,
+        warehouseId: 801n,
+        quantity: decimal(50),
+        consumedQty: decimal(0),
+      });
+
+      await service.reserveOrAdjust(prisma as unknown as PrismaTx, {
+        warehouseId: 800n,
+        materialId: 30n,
+        qty: 50,
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '7',
+      });
+
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { quantity: 50, warehouseId: 800n },
+      });
+    });
+
     it('KHÔNG BAO GIỜ đặt quantity thấp hơn consumedQty đã tiêu (demand giảm xuống dưới phần đã xuất thật)', async () => {
       prisma.stockReservation.findUnique.mockResolvedValue({
         id: 900n,
+        warehouseId: 800n,
         quantity: decimal(50),
         consumedQty: decimal(30), // đã xuất thật 30
       });
@@ -221,6 +245,7 @@ describe('StockReservationsService', () => {
     it('quantity không đổi - không gọi update() thừa', async () => {
       prisma.stockReservation.findUnique.mockResolvedValue({
         id: 900n,
+        warehouseId: 800n,
         quantity: decimal(50),
         consumedQty: decimal(0),
       });
