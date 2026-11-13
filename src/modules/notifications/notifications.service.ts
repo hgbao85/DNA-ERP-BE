@@ -99,6 +99,13 @@ export class NotificationsService {
     'PI_ITEM_PACKAGING_COMPLETE',
     'DELIVERY_AT_RISK',
     'PURCHASE_ORDER_QTY_RESET',
+    // 13/11/2026 (sót sau tổng duyệt 11/11): các loại dưới cũng đưa mã PI vào tiêu đề / nội dung.
+    'PRODUCTION_ORDER_FLOOR_STARTED',
+    'PRODUCTION_ORDER_FLOOR_PAUSED',
+    'PRODUCTION_ORDER_FLOOR_RESUMED',
+    'PI_WORKSHOP_CHANGED',
+    'PI_TIMELINE_NEEDS_REPLAN',
+    'PI_CUTTING_RECHECK_REQUIRED',
   ]);
 
   private async withLenhCode<T extends object>(

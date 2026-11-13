@@ -10,6 +10,8 @@ export class MaterialYieldIssuePlanItemResponseDto {
   @Expose() @ApiProperty() materialId!: string;
   @Expose() @ApiProperty() materialCode!: string;
   @Expose() @ApiProperty() materialName!: string;
+  /** ĐVT của vật tư (13/11/2026 - phiếu xuất đang lập trước để trống cột ĐVT). */
+  @Expose() @ApiProperty() unit!: string;
   /** Σ ceil(plannedQty(piece) × qtyPerPiece / piecesPerBar) qua mọi PieceMaterialYield dùng
    *  material này trong revision - cùng công thức PieceMaterialYieldPurchaseService dùng để tính
    *  đề xuất mua, chỉ khác đơn vị đích (đây tính "cần xuất kho", không phải "cần mua thêm"). */

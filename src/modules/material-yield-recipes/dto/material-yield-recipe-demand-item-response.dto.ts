@@ -20,6 +20,8 @@ export class MaterialYieldRecipeDemandItemResponseDto {
   @Expose() @ApiProperty() inputMaterialId!: string;
   @Expose() @ApiProperty() inputMaterialCode!: string;
   @Expose() @ApiProperty() inputMaterialName!: string;
+  /** ĐVT của nguyên liệu vào (13/11/2026 - phiếu xuất đang lập trước để trống cột ĐVT). */
+  @Expose() @ApiProperty() inputMaterialUnit!: string;
   /** ceil(shortfallOutputQty / piecesPerBar) - số đơn vị inputMaterial cần xuất để bù đủ. */
   @Expose() @ApiProperty() requiredInputQty!: number;
 
