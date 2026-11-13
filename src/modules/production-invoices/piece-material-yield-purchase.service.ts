@@ -202,6 +202,7 @@ export class PieceMaterialYieldPurchaseService {
       materialIdStr: string;
       actualStock: number;
       buyQty: number;
+      appliedWastePct: number;
     }[] = [];
 
     let proposal!: { id: bigint; status: PurchaseProposalStatus };
@@ -255,7 +256,13 @@ export class PieceMaterialYieldPurchaseService {
         // này), chỉ false mới giữ thập phân - ngược chiều với ConsumableMaterialPurchaseService.
         const buyQty =
           materialForWaste.purchaseRoundUp === false ? buyQtyRaw : Math.ceil(buyQtyRaw);
-        computed.push({ materialId, materialIdStr, actualStock, buyQty });
+        computed.push({
+          materialId,
+          materialIdStr,
+          actualStock,
+          buyQty,
+          appliedWastePct: wastePct,
+        });
         await this.stockReservationsService.reserveOrAdjust(tx, {
           warehouseId,
           materialId,
@@ -285,6 +292,7 @@ export class PieceMaterialYieldPurchaseService {
                 materialId: c.materialId,
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
+                appliedWastePct: c.appliedWastePct,
                 ...receiveWarehouseOf(c.materialIdStr),
                 status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: c.buyQty === 0 ? new Date() : undefined,
@@ -312,10 +320,16 @@ export class PieceMaterialYieldPurchaseService {
               data: {
                 buyQty: plan.update.buyQty,
                 actualStock: c.actualStock,
+                appliedWastePct: c.appliedWastePct,
                 ...receiveWarehouseOf(c.materialIdStr),
                 ...(plan.update.clearOrderQty ? { orderQty: null } : {}),
+                // Đủ tồn: đóng dòng và rời khỏi đơn đặt hàng nháp nếu đang nằm trong đơn (13/11/2026).
                 ...(plan.update.toPurchased
-                  ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
+                  ? {
+                      status: PurchaseProposalStatus.PURCHASED,
+                      purchasedAt: new Date(),
+                      supplierOrderId: null,
+                    }
                   : {}),
               },
             });
@@ -327,6 +341,7 @@ export class PieceMaterialYieldPurchaseService {
                 materialId: c.materialId,
                 buyQty: plan.create.buyQty,
                 actualStock: c.actualStock,
+                appliedWastePct: c.appliedWastePct,
                 ...receiveWarehouseOf(c.materialIdStr),
                 status: plan.create.toPurchased ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: plan.create.toPurchased ? new Date() : undefined,

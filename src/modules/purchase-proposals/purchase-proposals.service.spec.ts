@@ -44,6 +44,8 @@ describe('PurchaseProposalsService', () => {
       count: jest.Mock;
     };
     purchaseReceiptLog: { create: jest.Mock };
+    supplierOrder: { updateMany: jest.Mock; count: jest.Mock };
+    purchaseReceipt: { count: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock; findUnique: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     auditLog: { create: jest.Mock };
@@ -184,6 +186,12 @@ describe('PurchaseProposalsService', () => {
       // Lịch sử từng lần nhận hàng (2026-10-16) - receiveItem() ghi 1 dòng mỗi lần gọi, trong cùng
       // transaction ngay sau postEntry(). Test không soi dữ liệu trả về nên stub rỗng là đủ.
       purchaseReceiptLog: { create: jest.fn() },
+      // updateApprovalFile() (13/11/2026): đổi file cho cả đơn + đếm chỗ còn dùng file cũ trước khi xoá trên Cloudinary.
+      supplierOrder: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      purchaseReceipt: { count: jest.fn().mockResolvedValue(0) },
       // findUniqueOrThrow: tra kho ảo SUPPLIER trong receiveItem(). findUnique (2026-09-04): tra
       // kho GHI ĐÈ khi item.receiveWarehouseCode có giá trị (vật tư đóng gói) - mặc định null vì
       // hầu hết test không dùng nhánh này (item() factory mặc định receiveWarehouseCode=null).
@@ -711,6 +719,37 @@ describe('PurchaseProposalsService', () => {
         service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE }),
       ).rejects.toThrow(ForbiddenException);
       expect(prisma.purchaseProposalItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    // 13/11/2026: duyệt theo đơn - quyền đã kiểm theo người tạo đơn ở SupplierOrdersService; dòng đã chuyển sang người
+    // mua khác sau khi tạo đơn vẫn phải được duyệt cùng đơn, không bị bỏ qua (kẹt ở chờ duyệt trong đơn đã ký).
+    it('duyệt theo đơn (onlyItemIds): duyệt cả dòng đã chuyển sang người mua khác', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({
+          items: [
+            item({ id: 400n, material: material({ buyerId: 'user-1' }) }),
+            item({ id: 401n, material: material({ buyerId: 'user-2' }) }),
+          ],
+        }),
+      );
+
+      await service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE }, [
+        400n,
+        401n,
+      ]);
+
+      expect(approvedItemIds()).toEqual([400n, 401n]);
+    });
+
+    it('duyệt theo đơn: người tạo đơn không còn phụ trách vật tư nào vẫn duyệt được đơn của mình', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ id: 400n, material: material({ buyerId: 'user-2' }) })] }),
+      );
+
+      await expect(
+        service.bossApprove('300', 'user-1', ['PURCHASER'], { approvalFileUrl: FILE }, [400n]),
+      ).resolves.toBeDefined();
+      expect(approvedItemIds()).toEqual([400n]);
     });
 
     it('cho phép BOSS duyệt hộ MỌI dòng của bất kỳ ai (isPrivilegedActor)', async () => {
@@ -1947,8 +1986,10 @@ describe('PurchaseProposalsService', () => {
       prisma.purchaseProposal.findUnique
         .mockResolvedValueOnce(fullProposal) // #1: findDetailOrThrow() đầu hàm receiveItem()
         .mockResolvedValueOnce(fullProposal) // #2: resolvePiCodeFor() -> findOne() -> findDetailOrThrow()
-        // #3: refetch riêng SAU transaction để biết rollup vừa lên PURCHASED chưa (best-effort).
-        .mockResolvedValueOnce({ status: PurchaseProposalStatus.PURCHASED });
+        // #3: notifyIfFullyPurchased() refetch SAU transaction để biết rollup vừa lên PURCHASED chưa (best-effort).
+        .mockResolvedValueOnce({ status: PurchaseProposalStatus.PURCHASED, _count: { items: 1 } })
+        // #4: notifyIfFullyPurchased() -> resolvePiCodeFor() -> findOne() -> findDetailOrThrow()
+        .mockResolvedValueOnce(fullProposal);
       prisma.purchaseProposalItem.update.mockResolvedValue(
         item({
           buyQty: decimal(8),
@@ -2103,6 +2144,71 @@ describe('PurchaseProposalsService', () => {
       );
 
       expect(prisma.purchaseProposalItem.update).toHaveBeenCalled();
+    });
+
+    describe('dòng thuộc đơn đặt hàng (13/11/2026)', () => {
+      it('đổi file cho cả đơn: đơn + mọi dòng của đơn đang dùng file cũ', async () => {
+        prisma.purchaseProposal.findUnique.mockResolvedValue(
+          proposal({
+            items: [item({ id: 400n, approvalFileUrl: OLD_FILE, supplierOrderId: 90n })],
+          }),
+        );
+        prisma.purchaseProposalItem.update.mockResolvedValue(
+          item({ id: 400n, approvalFileUrl: NEW_FILE, supplierOrderId: 90n }),
+        );
+
+        await service.updateApprovalFile(
+          '300',
+          '400',
+          { approvalFileUrl: NEW_FILE },
+          'user-admin',
+          ['ADMIN'],
+        );
+
+        expect(prisma.supplierOrder.updateMany).toHaveBeenCalledWith({
+          where: { id: 90n, approvalFileUrl: OLD_FILE },
+          data: { approvalFileUrl: NEW_FILE },
+        });
+        expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
+          where: { supplierOrderId: 90n, approvalFileUrl: OLD_FILE },
+          data: { approvalFileUrl: NEW_FILE },
+        });
+      });
+
+      it('không cho xoá file phiếu ký của dòng thuộc đơn', async () => {
+        prisma.purchaseProposal.findUnique.mockResolvedValue(
+          proposal({
+            items: [item({ id: 400n, approvalFileUrl: OLD_FILE, supplierOrderId: 90n })],
+          }),
+        );
+
+        await expect(
+          service.updateApprovalFile('300', '400', { approvalFileUrl: null }, 'user-admin', [
+            'ADMIN',
+          ]),
+        ).rejects.toThrow(BadRequestException);
+        expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+        expect(cloudinaryService.deleteByUrl).not.toHaveBeenCalled();
+      });
+    });
+
+    it('KHÔNG xoá file cũ trên Cloudinary khi phiếu nhập đã lưu file đó làm chứng từ', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ id: 400n, approvalFileUrl: OLD_FILE })] }),
+      );
+      prisma.purchaseProposalItem.update.mockResolvedValue(
+        item({ id: 400n, approvalFileUrl: NEW_FILE }),
+      );
+      prisma.purchaseReceipt.count.mockResolvedValueOnce(1);
+
+      await service.updateApprovalFile('300', '400', { approvalFileUrl: NEW_FILE }, 'user-admin', [
+        'ADMIN',
+      ]);
+
+      expect(prisma.purchaseReceipt.count).toHaveBeenCalledWith({
+        where: { approvalFileUrls: { has: OLD_FILE } },
+      });
+      expect(cloudinaryService.deleteByUrl).not.toHaveBeenCalled();
     });
 
     it('ném ForbiddenException nếu KHÔNG phải người đã duyệt file này và KHÔNG phải Admin/Sếp', async () => {

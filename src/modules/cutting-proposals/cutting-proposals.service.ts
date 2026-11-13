@@ -2573,8 +2573,13 @@ export class CuttingProposalsService {
                     ...(it.receiveWarehouseCode
                       ? { receiveWarehouseCode: it.receiveWarehouseCode }
                       : {}),
+                    // Đủ tồn: đóng dòng và rời khỏi đơn đặt hàng nháp nếu đang nằm trong đơn (13/11/2026).
                     ...(isCovered
-                      ? { status: PurchaseProposalStatus.PURCHASED, purchasedAt: new Date() }
+                      ? {
+                          status: PurchaseProposalStatus.PURCHASED,
+                          purchasedAt: new Date(),
+                          supplierOrderId: null,
+                        }
                       : {}),
                   },
                 });

@@ -58,6 +58,7 @@ export class PurchaseProposalItemResponseDto {
   /// đặt, nhất là vật tư trùng tên khác kích cỡ (2026-09-15).
   @Expose() @ApiPropertyOptional({ nullable: true }) materialSpec!: string | null;
   @Expose() @ApiProperty() unit!: string;
+  /// 13/11/2026: ưu tiên % ĐÃ DÙNG lúc tính dòng này (PurchaseProposalItem.appliedWastePct); dòng cũ chưa lưu thì như dưới.
   /// % dự trù hao hụt khi mua (Material.purchaseWastePercentage) - LIVE theo Material HIỆN TẠI,
   /// KHÔNG snapshot lúc tạo dòng. Đã được cộng vào
   /// `buyQty` dưới đây ngay lúc tính đề xuất (2026-10-08, xem Consumable/PieceMaterialYield/

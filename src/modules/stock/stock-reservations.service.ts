@@ -141,8 +141,14 @@ export class StockReservationsService {
     }
     const floor = existing.consumedQty.toNumber();
     const nextQty = Math.max(input.qty, floor);
-    if (nextQty !== existing.quantity.toNumber()) {
-      await tx.stockReservation.update({ where: { id: existing.id }, data: { quantity: nextQty } });
+    // Khoá giữ chỗ không gồm kho - lần tính sau đọc tồn ở kho khác (13/11/2026: vật tư đóng gói nay đọc ở kho thành phẩm
+    // QLSX chọn thay vì kho mặc định) thì chuyển dòng giữ chỗ sang kho mới, miễn chưa tiêu gì ở kho cũ.
+    const moveWarehouse = existing.warehouseId !== input.warehouseId && floor === 0;
+    if (nextQty !== existing.quantity.toNumber() || moveWarehouse) {
+      await tx.stockReservation.update({
+        where: { id: existing.id },
+        data: { quantity: nextQty, ...(moveWarehouse ? { warehouseId: input.warehouseId } : {}) },
+      });
     }
   }
 

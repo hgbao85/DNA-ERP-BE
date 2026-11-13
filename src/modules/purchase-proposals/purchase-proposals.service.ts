@@ -159,6 +159,12 @@ const DETAIL_INCLUDE = {
 
 type PurchaseProposalRow = Prisma.PurchaseProposalGetPayload<{ include: typeof LIST_INCLUDE }>;
 type PurchaseProposalDetail = Prisma.PurchaseProposalGetPayload<{ include: typeof DETAIL_INCLUDE }>;
+
+/** Kết quả bước chuẩn bị "Sếp đã duyệt" (prepareBossApprove) - đề xuất + các dòng sẽ chuyển PURCHASING. */
+export interface PreparedBossApprove {
+  proposal: PurchaseProposalDetail;
+  items: PurchaseProposalDetail['items'];
+}
 type PurchaseProposalItemRow = Prisma.PurchaseProposalItemGetPayload<{
   include: typeof ITEM_INCLUDE;
 }>;
@@ -437,49 +443,86 @@ export class PurchaseProposalsService {
     actorUserId: string,
     actorRoles: string[],
     dto: BossApprovePurchaseProposalDto,
-    // 2026-11-04 (bản v8 mục 4.10): duyệt THEO ĐƠN ĐẶT HÀNG NCC - SupplierOrdersService.approve()
-    // truyền đúng các dòng của 1 đơn, chỉ các dòng đó chuyển PURCHASING. Không truyền = mọi dòng
-    // chờ duyệt của actor (hành vi cũ; route theo cả đề xuất đã gỡ khỏi controller).
+    // 2026-11-04 (bản v8 mục 4.10): duyệt THEO ĐƠN ĐẶT HÀNG NCC - truyền đúng các dòng của 1 đơn, chỉ các dòng đó chuyển
+    // PURCHASING. Không truyền = mọi dòng chờ duyệt của actor (hành vi cũ; route theo cả đề xuất đã gỡ khỏi controller).
+    // 13/11/2026: SupplierOrdersService.approve() không gọi hàm này nữa mà gọi 3 bước bên dưới để duyệt mọi đề xuất của
+    // đơn + chuyển đơn sang APPROVED trong CÙNG 1 transaction.
     onlyItemIds?: bigint[],
   ): Promise<PurchaseProposalResponseDto> {
+    const prepared = await this.prepareBossApprove(id, actorUserId, actorRoles, onlyItemIds);
+    await this.prisma.$transaction((tx) =>
+      this.applyBossApproveTx(tx, prepared, actorUserId, dto.approvalFileUrl),
+    );
+    return this.finishBossApprove(prepared, actorUserId, dto.approvalFileUrl);
+  }
+
+  /** Bước 1 của bossApprove: đọc đề xuất, kiểm quyền, chọn các dòng sẽ duyệt (ngoài transaction). */
+  async prepareBossApprove(
+    id: string,
+    actorUserId: string,
+    actorRoles: string[],
+    onlyItemIds?: bigint[],
+  ): Promise<PreparedBossApprove> {
     const proposal = await this.findDetailOrThrow(id);
-    this.assertActorMayHandle(proposal, actorUserId, actorRoles);
-    const isPrivileged = this.isPrivilegedActor(actorRoles);
-    const myPendingItems = proposal.items.filter(
+    // Duyệt theo đơn đặt hàng (onlyItemIds): quyền đã kiểm theo NGƯỜI TẠO ĐƠN ở SupplierOrdersService.approve(), nên duyệt
+    // đủ mọi dòng của đơn kể cả dòng đã chuyển sang người mua khác sau khi tạo đơn (13/11/2026). Trước đây lọc theo
+    // material.buyerId hiện tại -> dòng đó bị bỏ qua im lặng, đơn vẫn lên "đã ký" còn dòng kẹt ở chờ duyệt: kho không nhận
+    // được, người mua không gỡ được.
+    const byOrder = onlyItemIds !== undefined;
+    if (!byOrder) this.assertActorMayHandle(proposal, actorUserId, actorRoles);
+    const isPrivileged = byOrder || this.isPrivilegedActor(actorRoles);
+    const items = proposal.items.filter(
       (item) =>
         PENDING_APPROVAL_STATUSES.includes(item.status) &&
         (!onlyItemIds || onlyItemIds.includes(item.id)) &&
         (isPrivileged || !item.material.buyerId || item.material.buyerId === actorUserId),
     );
-    if (myPendingItems.length === 0) {
+    if (items.length === 0) {
       throw new BadRequestException('Không có vật tư nào của bạn đang chờ duyệt trong đề xuất này');
     }
+    return { proposal, items };
+  }
 
-    await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
-      // Re-check status BÊN TRONG transaction (D.p12-item-status-race, 2026-08-26): myPendingItems
-      // lọc từ snapshot đọc NGOÀI transaction, có thể đã bị thao tác khác đổi trạng thái giữa lúc
-      // đọc và lúc khoá kịp giữ. Điều kiện status trong where + so khớp count là chốt chặn cuối.
-      const { count } = await tx.purchaseProposalItem.updateMany({
-        where: {
-          id: { in: myPendingItems.map((i) => i.id) },
-          status: { in: PENDING_APPROVAL_STATUSES },
-        },
-        data: {
-          status: PurchaseProposalStatus.PURCHASING,
-          approvedAt: new Date(),
-          approvedById: actorUserId,
-          approvalFileUrl: dto.approvalFileUrl,
-        },
-      });
-      if (count !== myPendingItems.length) {
-        throw new ConflictException(
-          'Một số vật tư vừa bị thay đổi trạng thái bởi thao tác khác - tải lại trang để xem tình trạng mới nhất',
-        );
-      }
-      await recomputeProposalStatus(tx, proposal.id);
+  /** Bước 2 của bossApprove: ghi trong transaction của caller (đơn đặt hàng gộp nhiều đề xuất dùng chung 1 transaction). */
+  async applyBossApproveTx(
+    tx: PrismaTx,
+    prepared: PreparedBossApprove,
+    actorUserId: string,
+    approvalFileUrl: string,
+  ): Promise<void> {
+    const { proposal, items } = prepared;
+    await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
+    // Re-check status BÊN TRONG transaction (D.p12-item-status-race, 2026-08-26): danh sách dòng lọc từ snapshot đọc NGOÀI
+    // transaction, có thể đã bị thao tác khác đổi trạng thái giữa lúc đọc và lúc khoá kịp giữ. Điều kiện status trong
+    // where + so khớp count là chốt chặn cuối.
+    const { count } = await tx.purchaseProposalItem.updateMany({
+      where: {
+        id: { in: items.map((i) => i.id) },
+        status: { in: PENDING_APPROVAL_STATUSES },
+      },
+      data: {
+        status: PurchaseProposalStatus.PURCHASING,
+        approvedAt: new Date(),
+        approvedById: actorUserId,
+        approvalFileUrl,
+      },
     });
+    if (count !== items.length) {
+      throw new ConflictException(
+        'Một số vật tư vừa bị thay đổi trạng thái bởi thao tác khác - tải lại trang để xem tình trạng mới nhất',
+      );
+    }
+    await recomputeProposalStatus(tx, proposal.id);
+  }
 
+  /** Bước 3 của bossApprove, SAU commit: audit, thông báo, realtime. */
+  async finishBossApprove(
+    prepared: PreparedBossApprove,
+    actorUserId: string,
+    approvalFileUrl: string,
+  ): Promise<PurchaseProposalResponseDto> {
+    const { proposal, items: myPendingItems } = prepared;
+    const id = proposal.id.toString();
     // BẮT BUỘC ghi tay: mọi chuyển trạng thái item đều qua updateMany, mà updateMany KHÔNG được
     // extension audit tự ghi (audit-log.extension.ts). Thiếu dòng này thì không còn dấu vết nào
     // về việc AI đã đẩy lô hàng này sang mua - phần đó trước đây do approve() của Sếp ghi.
@@ -488,7 +531,7 @@ export class PurchaseProposalsService {
       proposalId: proposal.id,
       newValue: {
         event: 'boss-approve',
-        approvalFileUrl: dto.approvalFileUrl,
+        approvalFileUrl,
         items: myPendingItems.map((item) => ({
           itemId: item.id.toString(),
           materialCode: item.material.code,
@@ -571,10 +614,31 @@ export class PurchaseProposalsService {
     // trị tường minh (null/string), khác Prisma vốn coi undefined = "đừng đụng field này".
     const newUrl = dto.approvalFileUrl ?? null;
 
-    const updated = await this.prisma.purchaseProposalItem.update({
-      where: { id: bigItemId },
-      data: { approvalFileUrl: newUrl },
-      include: ITEM_INCLUDE,
+    // 13/11/2026: từ khi duyệt theo đơn đặt hàng, 1 file phiếu ký dùng chung cho đơn + mọi dòng của đơn, và Nhập kho tự
+    // lấy file của ĐƠN làm chứng từ (3). Đổi riêng 1 dòng (rồi xoá file cũ trên Cloudinary) làm đơn và các dòng khác trỏ
+    // vào link chết -> dòng thuộc đơn: đổi cho cả đơn, không cho xoá (phiếu ký là chứng từ bắt buộc khi nhận hàng).
+    const orderId = item.supplierOrderId;
+    if (orderId && newUrl === null) {
+      throw new BadRequestException(
+        'Dòng này thuộc đơn đặt hàng - phiếu Giám đốc ký là chứng từ khi nhận hàng nên chỉ đổi được file, không xoá',
+      );
+    }
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (orderId && oldUrl) {
+        await tx.supplierOrder.updateMany({
+          where: { id: orderId, approvalFileUrl: oldUrl },
+          data: { approvalFileUrl: newUrl },
+        });
+        await tx.purchaseProposalItem.updateMany({
+          where: { supplierOrderId: orderId, approvalFileUrl: oldUrl },
+          data: { approvalFileUrl: newUrl },
+        });
+      }
+      return tx.purchaseProposalItem.update({
+        where: { id: bigItemId },
+        data: { approvalFileUrl: newUrl },
+        include: ITEM_INCLUDE,
+      });
     });
 
     await this.auditProposalDecision({
@@ -584,12 +648,24 @@ export class PurchaseProposalsService {
       newValue: { itemId: itemId, approvalFileUrl: newUrl },
     });
 
-    if (oldUrl && oldUrl !== newUrl) {
+    // Chỉ xoá file cũ trên Cloudinary khi không còn chỗ nào trỏ tới: đơn, dòng khác, hoặc phiếu nhập đã lưu file đó làm
+    // chứng từ (3) - phiếu nhập là lịch sử, không được làm chết link của nó.
+    if (oldUrl && oldUrl !== newUrl && !(await this.isApprovalFileReferenced(oldUrl))) {
       await this.cloudinaryService.deleteByUrl(oldUrl, 'raw');
       await this.cloudinaryService.deleteByUrl(oldUrl, 'image');
     }
 
     return this.toItemResponseDto(updated);
+  }
+
+  /** File phiếu ký còn được đơn đặt hàng, dòng mua hay phiếu nhập nào dùng không (xem updateApprovalFile). */
+  private async isApprovalFileReferenced(url: string): Promise<boolean> {
+    const [items, orders, receipts] = await Promise.all([
+      this.prisma.purchaseProposalItem.count({ where: { approvalFileUrl: url } }),
+      this.prisma.supplierOrder.count({ where: { approvalFileUrl: url } }),
+      this.prisma.purchaseReceipt.count({ where: { approvalFileUrls: { has: url } } }),
+    ]);
+    return items + orders + receipts > 0;
   }
 
   /**
@@ -929,21 +1005,30 @@ export class PurchaseProposalsService {
       userId,
     );
     if (saved.status === PurchaseProposalStatus.PURCHASED) {
-      const refreshed = await this.prisma.purchaseProposal.findUnique({
-        where: { id: proposal.id },
-        select: { status: true },
-      });
-      if (refreshed?.status === PurchaseProposalStatus.PURCHASED) {
-        await this.resolveReadyToReceive(proposal.id);
-        await this.notifyPurchaseProposal(
-          'PURCHASE_PROPOSAL_PURCHASED',
-          proposal.id,
-          { piCode, count: proposal.items.length },
-          userId,
-        );
-      }
+      await this.notifyIfFullyPurchased(proposal.id, userId);
     }
     this.publishProposalChanged(proposal.id, 'RECEIVED', userId);
+  }
+
+  /**
+   * Cả đề xuất đã đủ hàng (rollup PURCHASED) thì đóng "hàng mua sắp về" và báo "đủ hàng" cho QLSX + Mua hàng. Gọi sau
+   * commit từ luồng nhận hàng và từ "Đóng phần thiếu" (13/11/2026 - trước đây chỉ luồng nhận hàng báo, đề xuất đủ nhờ
+   * Đóng phần thiếu thì không ai được báo).
+   */
+  async notifyIfFullyPurchased(proposalId: bigint, actorUserId: string): Promise<void> {
+    const refreshed = await this.prisma.purchaseProposal.findUnique({
+      where: { id: proposalId },
+      select: { status: true, _count: { select: { items: true } } },
+    });
+    if (refreshed?.status !== PurchaseProposalStatus.PURCHASED) return;
+    const piCode = await this.resolvePiCodeFor(proposalId);
+    await this.resolveReadyToReceive(proposalId);
+    await this.notifyPurchaseProposal(
+      'PURCHASE_PROPOSAL_PURCHASED',
+      proposalId,
+      { piCode, count: refreshed._count.items },
+      actorUserId,
+    );
   }
 
   /** Dòng đã đổi sau 1 lần nhận - trả cho FE (cùng mapping với danh sách). */
@@ -1195,7 +1280,11 @@ export class PurchaseProposalsService {
       // Nệm: quy cách riêng của dòng mua (theo SKU, PurchaseProposalItem.spec) thay cho Material.spec.
       materialSpec: item.spec ?? item.material.spec ?? null,
       unit: item.material.unit,
-      purchaseWastePercentage: item.material.purchaseWastePercentage?.toNumber() ?? null,
+      // % đã dùng lúc tính (13/11/2026); dòng cũ chưa có thì lấy % hiện tại của vật tư như trước.
+      purchaseWastePercentage:
+        item.appliedWastePct?.toNumber() ??
+        item.material.purchaseWastePercentage?.toNumber() ??
+        null,
       // Đợt 5d: nhận sắt bắt buộc thêm ảnh phiếu cân xe (bản v8 4.6).
       isSteel: item.material.materialGroup?.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR,
       // Kho nhận hàng THẬT của riêng dòng này - ưu tiên item.receiveWarehouseCode (vật tư đóng
