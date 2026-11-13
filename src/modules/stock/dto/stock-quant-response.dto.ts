@@ -21,6 +21,9 @@ export class StockQuantResponseDto {
   @Expose() @ApiProperty() stockLengthMm!: number;
   /** Quy cách (nệm), '' = không quy cách - cùng vật tư khác quy cách là các dòng tồn RIÊNG (unique index kho+vật tư+độ dài+quy cách). */
   @Expose() @ApiProperty() spec!: string;
+  /** Bộ công đoạn của đoạn ('' = trơn) - cùng cỡ đoạn khác bộ công đoạn là các dòng tồn RIÊNG (unique index kho+cỡ đoạn+bộ công đoạn,
+   *  13/11/2026). Nhãn segmentSpecLabel giữ nguyên khuôn cũ "{mã} @ {n}mm" cho màn đang đọc nó. */
+  @Expose() @ApiProperty() segmentSteps!: string;
   @Expose() @ApiProperty() qty!: number;
   /** Vấn đề #13 audit 26/08 - `qty` (tồn thực tế) trừ phần đang bị giữ chỗ (cắt sắt/chuyển kho
    *  nội bộ ACTIVE), qua ĐÚNG MỘT hàm StockReservationsService.getAvailableQty() dùng chung với

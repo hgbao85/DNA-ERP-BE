@@ -4,6 +4,7 @@ import { PrismaServiceType } from '../../prisma/prisma.service';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BomRevisionStatus, CuttingProposalStatus } from '../../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
+import { SegmentStockService } from '../segment-stock/segment-stock.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { ProductionOrdersService } from './production-orders.service';
@@ -38,10 +39,13 @@ describe('ProductionOrdersService', () => {
     };
     cuttingProposal: { findFirst: jest.Mock };
     auditLog: { create: jest.Mock };
+    $transaction: jest.Mock;
   };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
   let notifications: { emit: jest.Mock; resolve: jest.Mock };
   let stockReservationsService: { releaseByProductionInvoice: jest.Mock };
+  let segmentStockService: { releaseOrderHoldings: jest.Mock };
+  const tx = { tag: 'tx' };
 
   const activeRevision = { id: 5n, mfgProductId: 2n, status: BomRevisionStatus.ACTIVE };
   const order = (overrides: Record<string, unknown> = {}) => ({
@@ -80,6 +84,7 @@ describe('ProductionOrdersService', () => {
       },
       cuttingProposal: { findFirst: jest.fn() },
       auditLog: { create: jest.fn() },
+      $transaction: jest.fn((cb: (t: unknown) => unknown) => cb(tx)),
     };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     notifications = {
@@ -87,6 +92,9 @@ describe('ProductionOrdersService', () => {
       resolve: jest.fn().mockResolvedValue(undefined),
     };
     stockReservationsService = { releaseByProductionInvoice: jest.fn().mockResolvedValue(0) };
+    segmentStockService = {
+      releaseOrderHoldings: jest.fn().mockResolvedValue({ releasedQty: 0, reservationCount: 0 }),
+    };
     // Mặc định mọi lệnh của PI đã Kết thúc (count chưa-xong = 0) - test riêng của nhả giữ chỗ tự override.
     prisma.productionOrder.count.mockResolvedValue(0);
     prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue({ productionInvoiceId: 500n });
@@ -96,6 +104,7 @@ describe('ProductionOrdersService', () => {
       notifications as unknown as NotificationsService,
       stockReservationsService as unknown as StockReservationsService,
       makeScope(),
+      segmentStockService as unknown as SegmentStockService,
     );
     // Mặc định không có bản ACTIVE nào khớp -> bomOutOfDate=false, không phá các test không quan
     // tâm field này - test riêng của bomOutOfDate tự override lại mock này.
@@ -536,6 +545,55 @@ describe('ProductionOrdersService', () => {
       const result = await service.finishFloor('9');
 
       expect(result.floorStage).toBe('FINISHED');
+    });
+
+    // 13/11/2026: giữ đoạn kho Phôi theo lệnh cũng nhả về dư khi lệnh kết thúc.
+    it('mọi lệnh của PI đã Kết thúc -> nhả giữ đoạn đúng PI (trong 1 transaction)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+
+      await service.finishFloor('9');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(segmentStockService.releaseOrderHoldings).toHaveBeenCalledWith(tx, {
+        productionInvoiceId: 500n,
+        actorId: null,
+        reason: 'PI_FINISHED',
+      });
+    });
+
+    it('PI còn lệnh chưa Kết thúc -> CHƯA nhả giữ đoạn', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+      prisma.productionOrder.count.mockResolvedValue(1);
+
+      await service.finishFloor('9');
+
+      expect(segmentStockService.releaseOrderHoldings).not.toHaveBeenCalled();
+    });
+
+    it('nhả giữ đoạn lỗi -> vẫn Kết thúc và vẫn nhả giữ chỗ vật tư', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+      segmentStockService.releaseOrderHoldings.mockRejectedValue(new Error('db down'));
+
+      const result = await service.finishFloor('9');
+
+      expect(result.floorStage).toBe('FINISHED');
+      expect(stockReservationsService.releaseByProductionInvoice).toHaveBeenCalledWith(
+        prisma,
+        500n,
+      );
+    });
+
+    it('nhả giữ chỗ vật tư lỗi -> vẫn nhả giữ đoạn', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+      stockReservationsService.releaseByProductionInvoice.mockRejectedValue(new Error('db down'));
+
+      await service.finishFloor('9');
+
+      expect(segmentStockService.releaseOrderHoldings).toHaveBeenCalledTimes(1);
     });
 
     it('Tạm dừng/Bắt đầu KHÔNG nhả giữ chỗ (chỉ Kết thúc)', async () => {

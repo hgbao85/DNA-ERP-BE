@@ -18,6 +18,7 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { SegmentStockService } from '../segment-stock/segment-stock.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ProductionOrderResponseDto } from './dto/production-order-response.dto';
 import { ResyncBomDto } from './dto/resync-bom.dto';
@@ -67,6 +68,7 @@ export class ProductionOrdersService {
     private readonly notifications: NotificationsService,
     private readonly stockReservationsService: StockReservationsService,
     private readonly workshopScope: WorkshopScopeService,
+    private readonly segmentStockService: SegmentStockService,
   ) {}
 
   /**
@@ -448,12 +450,13 @@ export class ProductionOrdersService {
    * Best-effort - lỗi chỉ log, không được làm hỏng việc Kết thúc đã ghi (cùng recordFloorChange).
    */
   private async releaseReservationsIfPiFinished(productionInvoiceItemId: bigint): Promise<void> {
+    let piId: bigint | null;
     try {
       const item = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
         where: { id: productionInvoiceItemId },
         select: { productionInvoiceId: true },
       });
-      const piId = item.productionInvoiceId;
+      piId = item.productionInvoiceId;
       if (piId == null) return;
       const unfinished = await this.prisma.productionOrder.count({
         where: {
@@ -462,10 +465,33 @@ export class ProductionOrdersService {
         },
       });
       if (unfinished > 0) return;
+    } catch (error) {
+      this.logger.error(
+        `Failed to release reservations after finishing PI of item ${productionInvoiceItemId}: ${(error as Error).message}`,
+      );
+      return;
+    }
+    try {
       await this.stockReservationsService.releaseByProductionInvoice(this.prisma, piId);
     } catch (error) {
       this.logger.error(
         `Failed to release reservations after finishing PI of item ${productionInvoiceItemId}: ${(error as Error).message}`,
+      );
+    }
+    // 13/11/2026: nhả luôn giữ ĐOẠN kho Phôi của lệnh về cột dư (không có dòng giữ thì không làm gì, nên không cần kiểm công tắc).
+    // try/catch riêng - lỗi giữ đoạn không làm hỏng việc nhả giữ chỗ vật tư ở trên và ngược lại.
+    try {
+      const actorId = this.cls.isActive() ? (this.cls.get('userId') ?? null) : null;
+      await this.prisma.$transaction((tx) =>
+        this.segmentStockService.releaseOrderHoldings(tx, {
+          productionInvoiceId: piId,
+          actorId,
+          reason: 'PI_FINISHED',
+        }),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to release segment holdings after finishing PI of item ${productionInvoiceItemId}: ${(error as Error).message}`,
       );
     }
   }

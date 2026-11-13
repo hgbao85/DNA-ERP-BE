@@ -14,6 +14,7 @@ import { ConsumableMaterialPurchaseService } from '../../src/modules/production-
 import { ProductionOrdersService } from '../../src/modules/production-orders/production-orders.service';
 import { MaterialIssuesService } from '../../src/modules/material-issues/material-issues.service';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service';
+import { SegmentStockService } from '../../src/modules/segment-stock/segment-stock.service';
 import { StockLedgerService } from '../../src/modules/stock/stock-ledger.service';
 import { StockReservationsService } from '../../src/modules/stock/stock-reservations.service';
 import { PrismaModule } from '../../src/prisma/prisma.module';
@@ -126,6 +127,8 @@ describe('Giữ chỗ tồn kho vật tư tiêu hao theo PI (integration, real P
         StockReservationsService,
         { provide: NotificationsService, useValue: { emit: jest.fn(), resolve: jest.fn() } },
         { provide: RealtimeService, useValue: { publishEntityChanged: jest.fn() } },
+        // Nhả giữ đoạn khi lệnh kết thúc (13/11/2026) - không liên quan giữ chỗ vật tư tiêu hao ở đây.
+        { provide: SegmentStockService, useValue: { releaseOrderHoldings: jest.fn() } },
       ],
     }).compile();
 
