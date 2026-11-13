@@ -10,6 +10,8 @@ export class MaterialIssuePlanItemResponseDto {
   @Expose() @ApiProperty() materialId!: string;
   @Expose() @ApiProperty() materialCode!: string;
   @Expose() @ApiProperty() materialName!: string;
+  /** ĐVT của vật tư (13/11/2026 - phiếu xuất đang lập trước để trống cột ĐVT). */
+  @Expose() @ApiProperty() unit!: string;
   /** ConsumableBom.qtyPerUnit × ProductionOrder.quantity. */
   @Expose() @ApiProperty() requiredQty!: number;
   /** Σ MaterialIssue.issuedQty cho đúng (productionOrder, stage, material) này. */

@@ -206,6 +206,7 @@ export class MaterialYieldRecipesService {
           inputMaterialId: recipe.inputMaterialId.toString(),
           inputMaterialCode: recipe.inputMaterial.code,
           inputMaterialName: recipe.inputMaterial.name,
+          inputMaterialUnit: recipe.inputMaterial.unit,
           requiredInputQty: Math.ceil(shortfallOutputQty / recipe.piecesPerBar),
         }),
       );

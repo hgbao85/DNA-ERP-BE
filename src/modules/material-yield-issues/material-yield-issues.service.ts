@@ -471,7 +471,10 @@ export class MaterialYieldIssuesService {
       issuedByMaterial.set(key, (issuedByMaterial.get(key) ?? 0) + i.issuedQty.toNumber());
     }
 
-    const requiredByMaterial = new Map<string, { code: string; name: string; required: number }>();
+    const requiredByMaterial = new Map<
+      string,
+      { code: string; name: string; unit: string; required: number }
+    >();
     for (const y of yieldRows) {
       const qtyPerUnit = qtyPerUnitByPiece.get(y.pieceId.toString());
       if (qtyPerUnit == null) continue;
@@ -481,6 +484,7 @@ export class MaterialYieldIssuesService {
       const acc = requiredByMaterial.get(key) ?? {
         code: y.material.code,
         name: y.material.name,
+        unit: y.material.unit,
         required: 0,
       };
       acc.required += neededMaterial;
@@ -493,6 +497,7 @@ export class MaterialYieldIssuesService {
         materialId,
         materialCode: v.code,
         materialName: v.name,
+        unit: v.unit,
         requiredQty: v.required,
         issuedQty,
         remainingToIssue: v.required - issuedQty,

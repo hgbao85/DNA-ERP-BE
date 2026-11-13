@@ -426,6 +426,7 @@ export class MaterialIssuesService {
         materialId: cb.materialId.toString(),
         materialCode: cb.material.code,
         materialName: cb.material.name,
+        unit: cb.material.unit,
         requiredQty,
         issuedQty,
         remainingToIssue: requiredQty - issuedQty,
