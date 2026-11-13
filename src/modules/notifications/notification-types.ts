@@ -814,6 +814,26 @@ const notificationTypeDefinitions = {
     recipients: () => ({ roles: [DEFAULT_ROLES.ADMIN] }),
   } satisfies NotificationTypeDef<PiNotificationParams>,
 
+  /** Bước tự tạo dòng mua NGOÀI SẮT sau khi Giám đốc duyệt bị lỗi ở 1-3 khối (pat / vật tư tiêu hao / chân nhôm) - đề xuất
+   *  số 2 của Sang (13/11/2026). Trước đây chỉ ghi log máy chủ, IT phải chạy SQL tim-lenh-thieu-dong-mua-ngoai-sat.sql mới
+   *  biết. CHỈ báo Admin (người bấm được "Tạo lại dòng mua ngoài sắt" ở Admin > Module nghiệp vụ > Lệnh sản xuất). WARNING
+   *  (không CRITICAL) để không tự thêm Sếp - sự cố kỹ thuật, Admin tự khắc phục được. 1 thông báo/PI (dedupe), tự đóng khi
+   *  lần tính lại sau chạy đủ 3 khối. `count` = số khối lỗi, `errorMessage` = tên các khối. */
+  NON_STEEL_PURCHASE_FAILED: {
+    category: 'ALERT',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PiNotificationParams) => `${p.piCode}: thiếu dòng mua ngoài sắt`,
+    message: (p: PiNotificationParams) =>
+      `Tự tạo dòng mua chưa xong ở: ${p.errorMessage ?? 'không rõ'}. Vào Lệnh sản xuất, bấm "Tạo lại" ở dòng lệnh này.`,
+    link: () => ({
+      module: 'admin',
+      page: 'business-data',
+      params: { tab: 'production-invoices' },
+    }),
+    recipients: () => ({ roles: [DEFAULT_ROLES.ADMIN] }),
+  } satisfies NotificationTypeDef<PiNotificationParams>,
+
   // ─── 7.4 Đề xuất mua hàng (Phase 3a, 2026-09-26) ───────────────────────────────────────────
 
   /** 1 trong 3 nguồn (cắt sắt/PieceMaterialYield/tiêu hao) vừa tìm-hoặc-tạo xong `PurchaseProposal`

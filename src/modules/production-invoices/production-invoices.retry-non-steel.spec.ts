@@ -209,6 +209,63 @@ describe('ProductionInvoicesService.retryProductionOrder - mua ngoài sắt', ()
     );
   });
 
+  // Đề xuất số 2 của Sang (13/11/2026): đường TỰ ĐỘNG (sau khi Sếp duyệt) lỗi thì báo Admin; chạy đủ 3 bước thì đóng.
+  describe('báo Admin khi tạo dòng mua ngoài sắt lỗi', () => {
+    type Compute = (piId: bigint, context: string, opts?: { rethrow?: boolean }) => Promise<void>;
+    const compute = (): Compute =>
+      (
+        service as unknown as { computeNonSteelPurchaseProposals: Compute }
+      ).computeNonSteelPurchaseProposals.bind(service);
+
+    it.each(steps)(
+      'đường tự động, bước %s lỗi: báo Admin 1 thông báo/PI, nêu tên bước, không ném lỗi',
+      async (_n, getMock, nameRe) => {
+        prisma.productionInvoice.findUnique.mockResolvedValue({ code: 'PI-7' });
+        getMock().mockRejectedValue(new Error('boom-secret-raw'));
+
+        await expect(compute()(7n, 'PI item 20')).resolves.toBeUndefined();
+
+        expect(notificationsService.emit).toHaveBeenCalledWith(
+          'NON_STEEL_PURCHASE_FAILED',
+          expect.objectContaining({
+            entityId: '7',
+            dedupeKey: 'NON_STEEL_PURCHASE_FAILED:7',
+            params: expect.objectContaining({ piCode: 'PI-7', count: 1 }) as unknown,
+          }),
+        );
+        const call = notificationsService.emit.mock.calls.find(
+          (c: unknown[]) => c[0] === 'NON_STEEL_PURCHASE_FAILED',
+        ) as [string, { params: { errorMessage: string } }];
+        expect(call[1].params.errorMessage).toMatch(nameRe);
+        expect(call[1].params.errorMessage).not.toContain('boom-secret-raw');
+        expect(notificationsService.resolve).not.toHaveBeenCalled();
+      },
+    );
+
+    it('chạy đủ 3 bước: đóng thông báo cũ, không báo gì', async () => {
+      await compute()(7n, 'PI item 20');
+
+      expect(notificationsService.resolve).toHaveBeenCalledWith({
+        entityType: 'PRODUCTION_INVOICE',
+        entityId: '7',
+        types: ['NON_STEEL_PURCHASE_FAILED'],
+      });
+      expect(notificationsService.emit).not.toHaveBeenCalledWith(
+        'NON_STEEL_PURCHASE_FAILED',
+        expect.anything(),
+      );
+    });
+
+    it('Admin bấm "Tạo lại" mà vẫn lỗi: không gửi thêm thông báo (lỗi đã hiện trên màn hình)', async () => {
+      consumableSvc.computeAndUpsertProposals.mockRejectedValue(new Error('x'));
+      await expect(compute()(7n, 'retry', { rethrow: true })).rejects.toThrow(ConflictException);
+      expect(notificationsService.emit).not.toHaveBeenCalledWith(
+        'NON_STEEL_PURCHASE_FAILED',
+        expect.anything(),
+      );
+    });
+  });
+
   describe('AC4 (phương án còn DRAFT)', () => {
     it.each(steps)(
       'một bước lỗi (%s): vẫn duyệt phương án, ném 409 nêu tên bước, không đóng thông báo',

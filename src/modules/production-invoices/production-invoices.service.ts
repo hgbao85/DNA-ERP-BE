@@ -2233,6 +2233,21 @@ export class ProductionInvoicesService {
         `Auto material-yield-recipe-purchase trigger failed for ${context}: ${(error as Error).message}`,
       );
     }
+    // Đề xuất số 2 của Sang (13/11/2026): đường tự động lỗi thì báo Admin (trước đây chỉ log); chạy đủ 3 khối thì đóng thông
+    // báo cũ (kể cả khi Admin bấm "Tạo lại" thành công). Admin bấm "Tạo lại" mà vẫn lỗi thì đã thấy lỗi ngay trên màn hình.
+    if (failed.length === 0) {
+      await this.resolvePiNotifications('PRODUCTION_INVOICE', piId, ['NON_STEEL_PURCHASE_FAILED']);
+    } else if (!opts.rethrow) {
+      const pi = await this.prisma.productionInvoice
+        .findUnique({ where: { id: piId }, select: { code: true } })
+        .catch(() => null);
+      await this.notifyPi(
+        'NON_STEEL_PURCHASE_FAILED',
+        piId,
+        { piCode: pi?.code ?? `#${piId}`, count: failed.length, errorMessage: failed.join('; ') },
+        `NON_STEEL_PURCHASE_FAILED:${piId}`,
+      );
+    }
     // Chỉ nêu tên nguồn: câu lỗi gốc (thường tiếng Anh, lộ chi tiết DB) đã nằm trong log ở trên.
     if (opts.rethrow && failed.length > 0) {
       throw new ConflictException(
