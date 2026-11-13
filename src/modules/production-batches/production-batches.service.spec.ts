@@ -470,6 +470,54 @@ describe('ProductionBatchesService', () => {
       );
     });
 
+    // 13/11/2026: 1 mảnh có 2 dòng định mức CÙNG cỡ đoạn khác công đoạn (vd 460 mm có Dập + 460 mm trơn) - trước đây dòng thứ
+    // 2 đụng khoá chống trùng (đợt, cỡ đoạn) nên bị bỏ, trừ thiếu đoạn.
+    it('2 dòng định mức cùng cỡ đoạn khác công đoạn: gộp lại, trừ đủ trong 1 bút toán', async () => {
+      prisma.productionBatch.create.mockResolvedValue(batchRow);
+      prisma.pieceBom.findMany.mockResolvedValue([
+        {
+          id: 1n,
+          bomRevisionId: 5n,
+          pieceId: 40n,
+          segmentSpecId: 60n,
+          qtyPerPiece: 2,
+          processSteps: ['CAT', 'DAP'],
+        },
+        {
+          id: 2n,
+          bomRevisionId: 5n,
+          pieceId: 40n,
+          segmentSpecId: 60n,
+          qtyPerPiece: 1,
+          processSteps: ['CAT'],
+        },
+        {
+          id: 3n,
+          bomRevisionId: 5n,
+          pieceId: 40n,
+          segmentSpecId: 61n,
+          qtyPerPiece: 4,
+          processSteps: ['CAT'],
+        },
+      ]);
+
+      await service.create('1', dto, 'user-han', null, null);
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(2);
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          segmentSpecId: 60n,
+          qty: 60, // (2 + 1) × reportedQty(20)
+          idempotencyKey: 'production-batch-segment-consume:700:60',
+        }),
+        prisma,
+      );
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ segmentSpecId: 61n, qty: 80 }),
+        prisma,
+      );
+    });
+
     it('Đợt 7: lệnh làm ở xưởng Phước An thì trừ đoạn sắt ở kho Phôi Phước An (theo xưởng của lệnh, không theo người báo)', async () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
       prisma.pieceBom.findMany.mockResolvedValue([
