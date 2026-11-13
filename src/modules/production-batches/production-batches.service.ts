@@ -939,7 +939,21 @@ export class ProductionBatchesService {
         db.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
       ]);
 
+      // 13/11/2026: từ 19/10 1 mảnh được có NHIỀU dòng định mức cùng cỡ đoạn khác công đoạn (vd "460 mm có Dập" + "460 mm
+      // trơn" - processSteps nằm trong khoá duy nhất PieceBom). Khoá chống trùng bút toán theo (đợt, cỡ đoạn) nên trước đây dòng
+      // thứ 2 bị coi là trùng và KHÔNG được trừ -> gộp số đoạn theo cỡ đoạn trước khi ghi.
+      const qtyPerPieceBySpec = new Map<string, { segmentSpecId: bigint; qtyPerPiece: number }>();
       for (const pb of pieceBoms) {
+        const key = pb.segmentSpecId.toString();
+        const cur = qtyPerPieceBySpec.get(key);
+        if (cur) cur.qtyPerPiece += pb.qtyPerPiece;
+        else
+          qtyPerPieceBySpec.set(key, {
+            segmentSpecId: pb.segmentSpecId,
+            qtyPerPiece: pb.qtyPerPiece,
+          });
+      }
+      for (const pb of qtyPerPieceBySpec.values()) {
         await this.stockLedgerService.postEntry(
           {
             fromWarehouseId: fromWarehouse.id,
