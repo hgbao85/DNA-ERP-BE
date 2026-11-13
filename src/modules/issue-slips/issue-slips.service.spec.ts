@@ -179,6 +179,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
           }),
       ),
       createMaterialIssueInTx: jest.fn().mockResolvedValue({ id: 600n }),
+      assertMaterialStockForSlip: jest.fn().mockResolvedValue(undefined),
       getWovenMaterialLinesByPiece: jest.fn().mockResolvedValue(new Map()),
     };
     packaging = {
@@ -191,6 +192,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
         }),
       ),
       createInTx: jest.fn().mockResolvedValue({ id: 701n }),
+      assertStockForSlip: jest.fn().mockResolvedValue(undefined),
       afterCreate: jest.fn(),
     };
     yieldIssues = {
@@ -887,6 +889,24 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
           productionInvoiceId: 500n,
         }),
       ]);
+    });
+
+    it('lập phiếu đóng gói: kiểm tồn khả dụng ngay lúc lập; thiếu tồn thì không cấp số, không tạo phiếu (RPK.2, 13/11/2026)', async () => {
+      const dto = {
+        lines: [
+          { kind: IssueSlipLineKind.PACKAGING, materialId: '20', productionOrderId: '70', qty: 8 },
+        ],
+      };
+      await service.create(dto, 'u', 'thanh-pham');
+      expect(packaging.assertStockForSlip).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ dto: expect.objectContaining({ issuedQty: 8 }) as unknown }),
+      );
+
+      prisma.issueSlip.create.mockClear();
+      packaging.assertStockForSlip.mockRejectedValueOnce(new ConflictException('thiếu tồn'));
+      await expect(service.create(dto, 'u', 'thanh-pham')).rejects.toThrow(ConflictException);
+      expect(prisma.issueSlip.create).not.toHaveBeenCalled();
     });
 
     it('xác nhận: ghi trong transaction qua createInTx, gắn id lần xuất vào dòng, báo sau commit', async () => {

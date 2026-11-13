@@ -107,6 +107,9 @@ interface CheckedLine {
   recipeId?: bigint | null;
   /** Dòng mảnh xuất đan - kiểm trần trong transaction tạo phiếu. */
   weavingPiece?: PreparedWeavingPiece;
+  /** Dòng đóng gói / vật tư kèm đan - kiểm tồn khả dụng ngay lúc lập phiếu (RPK.2, 13/11/2026). */
+  packaging?: PreparedPackagingIssue;
+  weavingMaterial?: PreparedWeavingMaterial;
 }
 
 /** Phiếu xuất đan: điểm đan + (phiếu vật tư) phiếu mảnh cùng chuyến. */
@@ -163,6 +166,10 @@ export class IssueSlipsService {
         // Phiếu mảnh xuất đan: chặn vượt định mức / số mảnh còn ở kho ngay lúc cấp số (tính cả phiếu chờ ký khác).
         for (const c of checked) {
           if (c.weavingPiece) await this.weaving.assertPieceCapInTx(tx, c.weavingPiece, null);
+          // RPK.2: đóng gói + vật tư kèm đan kiểm tồn cả lúc lập (trước đây chỉ lúc xác nhận - lập được phiếu khi kho = 0).
+          if (c.packaging) await this.packaging.assertStockForSlip(tx, c.packaging);
+          if (c.weavingMaterial)
+            await this.weaving.assertMaterialStockForSlip(tx, c.weavingMaterial);
         }
         const code = await allocateSlipCode(tx, 'XK');
         const slip = await tx.issueSlip.create({
@@ -793,6 +800,7 @@ export class IssueSlipsService {
         warehouseId: prepared.sourceWarehouse.id,
         productionInvoiceId: null,
         productionOrderId: prepared.order.id,
+        packaging: prepared,
       };
     }
     if (line.kind === IssueSlipLineKind.MATERIAL_YIELD) {
@@ -832,6 +840,7 @@ export class IssueSlipsService {
         warehouseId: prepared.warehouseId,
         productionInvoiceId: null,
         productionOrderId: prepared.order.id,
+        weavingMaterial: prepared,
       };
     }
     const materialId = parseBigIntId(line.materialId);

@@ -176,6 +176,40 @@ export class PackagingIssuesService {
     return { order, materialBigId, sourceWarehouse, dto };
   }
 
+  /**
+   * Tồn khả dụng lúc LẬP phiếu XK (13/11/2026, quy tắc RPK.2 "kiểm tồn cả lúc lập và lúc xác nhận"): trước đây chỉ kiểm lúc xác
+   * nhận nên phiếu vẫn lập được khi kho = 0. Cùng cách tính với createInTx() (tồn trừ giữ chỗ của PI khác) nhưng không khoá.
+   */
+  async assertStockForSlip(tx: PrismaTx, p: PreparedPackagingIssue): Promise<void> {
+    const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+      SELECT "qty" FROM "stock_quant"
+      WHERE "warehouseId" = ${p.sourceWarehouse.id} AND "materialId" = ${p.materialBigId}
+    `;
+    const onHand = stockRow?.qty.toNumber() ?? 0;
+    const piItem = await tx.productionInvoiceItem.findUniqueOrThrow({
+      where: { id: p.order.productionInvoiceItemId },
+      select: { productionInvoiceId: true },
+    });
+    const availableQty = await this.stockReservationsService.getAvailableQty(
+      tx,
+      p.sourceWarehouse.id,
+      p.materialBigId,
+      onHand,
+      undefined,
+      piItem.productionInvoiceId!,
+    );
+    if (p.dto.issuedQty > availableQty) {
+      throw new ConflictException(
+        `Tồn kho khả dụng (${availableQty}) không đủ xuất ${p.dto.issuedQty} cho vật tư ${await this.materialLabel(tx, p.materialBigId)} - kiểm tra lại tồn kho thực tế trước khi lập phiếu`,
+      );
+    }
+  }
+
+  private async materialLabel(tx: PrismaTx, materialId: bigint): Promise<string> {
+    const m = await tx.material.findUnique({ where: { id: materialId }, select: { code: true } });
+    return m?.code ?? materialId.toString();
+  }
+
   /** Ghi 1 lần xuất TRONG transaction của người gọi: khoá, định mức, Chuyền kiểm, tồn khả dụng, YC11, bút toán. */
   async createInTx(
     tx: PrismaTx,
@@ -254,7 +288,7 @@ export class PackagingIssuesService {
       );
       if (dto.issuedQty > availableQty) {
         throw new ConflictException(
-          `Tồn kho khả dụng (${availableQty}) không đủ xuất ${dto.issuedQty} cho vật tư ${dto.materialId} - kiểm tra lại tồn kho thực tế trước khi xuất`,
+          `Tồn kho khả dụng (${availableQty}) không đủ xuất ${dto.issuedQty} cho vật tư ${await this.materialLabel(tx, materialBigId)} - kiểm tra lại tồn kho thực tế trước khi xuất`,
         );
       }
       // YC11: chừa phần SKU cần sớm hơn trong cùng lệnh gộp còn cần - xem sku-priority.util.ts.
