@@ -33,6 +33,7 @@ const row = (over: Record<string, unknown> = {}) => ({
 describe('SegmentOveragesService', () => {
   let prisma: Record<string, Record<string, jest.Mock>>;
   let service: SegmentOveragesService;
+  let notifications: { resolve: jest.Mock };
   const cls = { isActive: () => false, get: jest.fn(), getId: jest.fn() };
 
   const scoped = { workshopId: 1n, workshopName: 'Phước An', visibleWorkshopIds: [1n] };
@@ -49,6 +50,7 @@ describe('SegmentOveragesService', () => {
             row({ resolvedAt: new Date(), resolvedById: 'u2', resolveReason: 'Đã đếm lại' }),
           ),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        count: jest.fn().mockResolvedValue(0),
       },
       productionInvoice: {
         findMany: jest.fn().mockResolvedValue([{ id: 79n, code: 'PI-2026-079' }]),
@@ -66,7 +68,13 @@ describe('SegmentOveragesService', () => {
     };
     const workshopScope = new WorkshopScopeService(prisma as never);
     jest.spyOn(workshopScope, 'getScope').mockResolvedValue(unscoped);
-    service = new SegmentOveragesService(prisma as never, cls as never, workshopScope);
+    notifications = { resolve: jest.fn().mockResolvedValue(undefined) };
+    service = new SegmentOveragesService(
+      prisma as never,
+      cls as never,
+      workshopScope,
+      notifications as never,
+    );
   });
 
   const whereOf = (): unknown =>
@@ -100,9 +108,16 @@ describe('SegmentOveragesService', () => {
 
   it('đóng dòng: ghi lý do có điều kiện chưa đóng + nhật ký', async () => {
     prisma.segmentOverage.findUnique.mockResolvedValue({
+      productionBatchId: 300n,
       productionInvoice: { items: [{ workshopId: 1n }] },
     });
     const out = await service.resolve('7', 'Đã đếm lại', 'u2');
+    // Đợt 300 hết dòng mở -> đóng thông báo báo vượt của đợt.
+    expect(notifications.resolve).toHaveBeenCalledWith({
+      entityType: 'PRODUCTION_BATCH',
+      entityId: '300',
+      types: ['SEGMENT_OVERAGE_REPORTED'],
+    });
     expect(prisma.segmentOverage.updateMany).toHaveBeenCalledWith({
       where: { id: 7n, resolvedAt: null },
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -113,6 +128,16 @@ describe('SegmentOveragesService', () => {
       data: expect.objectContaining({ tableName: 'SegmentOverage', recordId: '7' }),
     });
     expect(out.resolvedByName).toBe('Lý Quản');
+  });
+
+  it('đợt còn dòng chưa đóng -> giữ thông báo', async () => {
+    prisma.segmentOverage.findUnique.mockResolvedValue({
+      productionBatchId: 300n,
+      productionInvoice: { items: [] },
+    });
+    prisma.segmentOverage.count.mockResolvedValue(1);
+    await service.resolve('7', 'Đã đếm lại', 'u2');
+    expect(notifications.resolve).not.toHaveBeenCalled();
   });
 
   it('đóng dòng đã đóng → 409, không ghi nhật ký', async () => {

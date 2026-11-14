@@ -71,6 +71,16 @@ export interface NotificationTypeDef<P> {
   notifyActor?: boolean;
 }
 
+/** Báo vượt tồn đoạn của 1 đợt Hàn / Sơn (SEGMENT_OVERAGE_REPORTED). */
+export interface SegmentOverageNotificationParams {
+  piCode: string;
+  pieceCode: string;
+  stageLabel: string;
+  shortageQty: number;
+  extraQty: number;
+  rework: boolean;
+}
+
 /** Params cho type cắt sắt duy nhất còn lại - chỉ
  *  CuttingProposalsService.notifyProductionManagers() gọi tới. `entityId` truyền riêng ở lệnh gọi
  *  emit() (không phải field render). */
@@ -1221,6 +1231,26 @@ const notificationTypeDefinitions = {
     }),
     recipients: () => ({ roles: [BUSINESS_ROLES.KCS_STAFF] }),
   } satisfies NotificationTypeDef<QcSubmittedNotificationParams>,
+
+  /** Hàn / Sơn báo vượt tồn đoạn (13/11/2026, anh Nhân trả lời ý 2 ngày 14/11: có báo vượt thì hệ thống báo QLSX). 1 thông báo
+   *  / đợt báo (dedupeKey theo đợt). QLSX gắn xưởng khác tự bị bỏ (piCode trong params). Tự đóng khi QLSX đóng hết dòng sổ của đợt
+   *  (SegmentOveragesService.resolve). */
+  SEGMENT_OVERAGE_REPORTED: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_BATCH',
+    title: (p: SegmentOverageNotificationParams) =>
+      `${p.piCode}: ${p.stageLabel} báo vượt đoạn (${p.pieceCode})`,
+    message: (p: SegmentOverageNotificationParams) =>
+      [
+        p.shortageQty > 0 ? `thiếu ${p.shortageQty} đoạn` : null,
+        p.extraQty > 0 ? `${p.rework ? 'làm lại' : 'vượt lệnh'} lấy thêm ${p.extraQty} đoạn` : null,
+      ]
+        .filter(Boolean)
+        .join(', ') + ' - vào Sổ báo vượt đoạn kiểm tra rồi đóng dòng (ghi lý do).',
+    link: () => ({ module: 'production', page: 'so-bao-vuot-doan' }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
+  } satisfies NotificationTypeDef<SegmentOverageNotificationParams>,
 
   /** KCS chấm có lỗi (failedQty > 0) - báo tổ gửi (Phôi/Hàn/Sơn tuỳ nguồn) + QLSX. Không tự đóng
    *  (RESULT, không có hành động tiếp theo nào khoá bởi type này).

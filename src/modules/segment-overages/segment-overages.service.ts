@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { AuditAction, Prisma, PrismaClient } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
@@ -8,6 +8,7 @@ import { segmentCodeLabel } from '../../common/utils/segment-code.util';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ListSegmentOveragesQueryDto, SegmentOverageResponseDto } from './dto/segment-overage.dto';
 
 const OVERAGE_INCLUDE = {
@@ -27,10 +28,13 @@ const userName = (u: { firstName: string; lastName: string; username: string } |
  */
 @Injectable()
 export class SegmentOveragesService {
+  private readonly logger = new Logger(SegmentOveragesService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly cls: ClsService<AppClsStore>,
     private readonly workshopScope: WorkshopScopeService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async findAll(
@@ -58,7 +62,10 @@ export class SegmentOveragesService {
     const bigId = parseBigIntId(id);
     const row = await this.prisma.segmentOverage.findUnique({
       where: { id: bigId },
-      select: { productionInvoice: { select: { items: { select: { workshopId: true } } } } },
+      select: {
+        productionBatchId: true,
+        productionInvoice: { select: { items: { select: { workshopId: true } } } },
+      },
     });
     if (!row) throw new NotFoundException(`Không tìm thấy dòng báo vượt ${id}`);
     this.workshopScope.assertCanManage(
@@ -79,11 +86,31 @@ export class SegmentOveragesService {
       oldValue: { resolvedAt: null },
       newValue: { event: 'segment-overage-resolved', reason },
     });
+    await this.resolveNotificationIfDone(row.productionBatchId);
     const fresh = await this.prisma.segmentOverage.findUniqueOrThrow({
       where: { id: bigId },
       include: OVERAGE_INCLUDE,
     });
     return (await this.toDtos([fresh]))[0];
+  }
+
+  /** Đợt không còn dòng sổ nào mở -> đóng thông báo SEGMENT_OVERAGE_REPORTED của đợt. Best-effort: lỗi chỉ log. */
+  private async resolveNotificationIfDone(productionBatchId: bigint): Promise<void> {
+    try {
+      const open = await this.prisma.segmentOverage.count({
+        where: { productionBatchId, resolvedAt: null },
+      });
+      if (open > 0) return;
+      await this.notifications.resolve({
+        entityType: 'PRODUCTION_BATCH',
+        entityId: productionBatchId.toString(),
+        types: ['SEGMENT_OVERAGE_REPORTED'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Không đóng được thông báo báo vượt đoạn (đợt ${productionBatchId}): ${(error as Error).message}`,
+      );
+    }
   }
 
   private async toDtos(rows: OverageRow[]): Promise<SegmentOverageResponseDto[]> {
