@@ -162,6 +162,48 @@ export class ProductionBatchesService {
     });
   }
 
+  /**
+   * Báo QLSX khi đợt Hàn / Sơn vừa ghi sổ báo vượt đoạn (anh Nhân 14/11). Gọi SAU khi transaction trừ đoạn commit; dedupeKey theo
+   * đợt nên gọi lại (Lưu đợt trùng / Gửi KCS) chỉ cập nhật 1 thông báo. Công tắc tắt hoặc đợt không có dòng chưa đóng -> không gửi.
+   * Best-effort: lỗi chỉ log.
+   */
+  private async notifySegmentOverages(batchId: bigint, actorId: string | null): Promise<void> {
+    if (!isSegmentStockEnabled()) return;
+    try {
+      const rows = await this.prisma.segmentOverage.findMany({
+        where: { productionBatchId: batchId, resolvedAt: null },
+        select: {
+          stage: true,
+          shortageQty: true,
+          extraQty: true,
+          extraKind: true,
+          productionInvoice: { select: { code: true } },
+          productionBatch: { select: { piece: { select: { code: true } } } },
+        },
+      });
+      if (rows.length === 0) return;
+      const sum = (f: (r: (typeof rows)[number]) => number) =>
+        Math.round(rows.reduce((n, r) => n + f(r), 0) * 1e4) / 1e4;
+      await this.notifications.emit('SEGMENT_OVERAGE_REPORTED', {
+        entityId: batchId.toString(),
+        actorId: actorId ?? undefined,
+        dedupeKey: `SEGMENT_OVERAGE_REPORTED:${batchId}`,
+        params: {
+          piCode: rows[0].productionInvoice.code,
+          pieceCode: rows[0].productionBatch.piece.code,
+          stageLabel: rows[0].stage === MfgStage.SON ? 'Sơn' : 'Hàn',
+          shortageQty: sum((r) => Number(r.shortageQty)),
+          extraQty: sum((r) => Number(r.extraQty)),
+          rework: rows.some((r) => r.extraKind === SegmentOverageKind.REWORK),
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create SEGMENT_OVERAGE_REPORTED notification (batch ${batchId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
   /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
    *  17.2/19.2 changelog notification). */
   private async notifyBatchToKcs(entityId: bigint, params: Record<string, unknown>): Promise<void> {
@@ -201,6 +243,7 @@ export class ProductionBatchesService {
           reportedById,
           sourceWarehouseCode,
         );
+        await this.notifySegmentOverages(existing.id, reportedById);
         return this.toResponseDto(existing);
       }
     }
@@ -246,6 +289,7 @@ export class ProductionBatchesService {
       { timeout: 20_000 },
     );
 
+    await this.notifySegmentOverages(created.id, reportedById);
     return this.toResponseDto(created);
   }
 
@@ -497,6 +541,7 @@ export class ProductionBatchesService {
       },
       { timeout: 20_000 },
     );
+    await this.notifySegmentOverages(updated.id, reportedById);
     await this.notifyBatchToKcs(updated.id, {
       piCode: updated.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
       stage: updated.stage,

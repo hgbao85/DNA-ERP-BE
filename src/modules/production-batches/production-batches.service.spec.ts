@@ -439,10 +439,14 @@ describe('ProductionBatchesService', () => {
   describe('trừ tồn đoạn theo lệnh (bật SEGMENT_STOCK_ENABLED)', () => {
     const dto = { stage: MfgStage.HAN, pieceId: '40', reportedQty: 20 };
     const env = process.env.SEGMENT_STOCK_ENABLED;
-    let overage: { findUnique: jest.Mock; create: jest.Mock };
+    let overage: { findUnique: jest.Mock; create: jest.Mock; findMany: jest.Mock };
     beforeEach(() => {
       process.env.SEGMENT_STOCK_ENABLED = 'true';
-      overage = { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn() };
+      overage = {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      };
       Object.assign(prisma, {
         segmentOverage: overage,
         qcReview: { aggregate: jest.fn().mockResolvedValue({ _sum: { failedQty: 0 } }) },
@@ -500,6 +504,16 @@ describe('ProductionBatchesService', () => {
 
     it('thiếu đoạn: KHÔNG chặn, ghi sổ báo vượt phần thiếu', async () => {
       prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
+      overage.findMany.mockResolvedValue([
+        {
+          stage: MfgStage.HAN,
+          shortageQty: 15,
+          extraQty: 0,
+          extraKind: null,
+          productionInvoice: { code: 'PI-2026-500' },
+          productionBatch: { piece: { code: 'M40' } },
+        },
+      ]);
       segmentStock.consumeForOrder.mockResolvedValue({
         takenQty: 5,
         fromHeldQty: 5,
@@ -519,6 +533,15 @@ describe('ProductionBatchesService', () => {
           extraKind: null,
         }) as unknown,
       });
+      // Sau commit: báo QLSX (1 thông báo / đợt).
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'SEGMENT_OVERAGE_REPORTED',
+        expect.objectContaining({
+          entityId: '700',
+          dedupeKey: 'SEGMENT_OVERAGE_REPORTED:700',
+          params: expect.objectContaining({ piCode: 'PI-2026-500', shortageQty: 15 }) as unknown,
+        }),
+      );
     });
 
     it('báo vượt số lượng tổng của lệnh: ghi số lấy thêm; đã có KCS lỗi trước thì là làm lại (REWORK)', async () => {

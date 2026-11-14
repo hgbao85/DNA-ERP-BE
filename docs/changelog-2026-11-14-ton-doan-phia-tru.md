@@ -49,3 +49,11 @@ công tắc tắt thì Hàn / Sơn trừ đoạn y như cũ, đổi xưởng kh�
 
 1. Chạy `legacy-conversion` xem thử trên production, đối chiếu sổ thủ kho Phôi, rồi bật công tắc và chạy thật.
 2. Chạy song song 3–5 ngày với sổ thủ kho Phôi.
+
+## Bổ sung 14/11 chiều - anh Nhân trả lời ý 2 (sổ báo vượt)
+
+- Thông báo mới `SEGMENT_OVERAGE_REPORTED` (ACTION_REQUIRED, WARNING) cho QLSX khi đợt Hàn / Sơn ghi sổ báo vượt: gửi SAU khi
+  transaction trừ đoạn commit, 1 thông báo / đợt (dedupeKey theo đợt), QLSX xưởng khác tự bị bỏ (piCode), tiêu đề hiện số LSX.
+  Bấm vào mở tab "Sổ báo vượt đoạn". Tự đóng khi QLSX đóng hết dòng của đợt.
+- KHSX: tab "Sổ báo vượt đoạn" chỉ xem (Giám đốc đã có ở MfgApp).
+- Ý 3 (cộng dần sau mỗi lần KCS đạt) khớp code đã có. Ý 1 (mã đoạn) Sang đang đề xuất lại với anh Nhân.

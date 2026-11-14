@@ -94,6 +94,7 @@ export class NotificationsService {
     'BATCH_TO_KCS',
     'QC_FAILED',
     'QC_PASSED',
+    'SEGMENT_OVERAGE_REPORTED',
     // WAREHOUSE_TRANSFER_* không có trong set: tham số là `code` (mã phiếu CK), không có piCode.
     'TRANSFER_CHECK_DEFECT_FOUND',
     'PI_ITEM_PACKAGING_COMPLETE',
