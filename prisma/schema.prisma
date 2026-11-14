@@ -146,6 +146,8 @@ model User {
   floorQueueQueued                  FloorQueueEntry[]           @relation("FloorQueueQueuedBy")
   floorQueueStarted                 FloorQueueEntry[]           @relation("FloorQueueStartedBy")
   floorQueueEnded                   FloorQueueEntry[]           @relation("FloorQueueEndedBy")
+  cutAllocationLogsCreated          CutAllocationLog[]          @relation("CutAllocationLogCreatedBy")
+  cutAllocationsUpdated             CutAllocation[]             @relation("CutAllocationUpdatedBy")
   qcReviewsReviewed                 QcReview[]                  @relation("QcReviewReviewedBy")
   weavingIssuesIssued               WeavingIssue[]              @relation("WeavingIssueIssuedBy")
   weavingReceiptsReceived           WeavingReceipt[]            @relation("WeavingReceiptReceivedBy")
@@ -344,6 +346,13 @@ enum SolverMachine {
   tu_dong
 }
 
+/// Lớp máy của 1 nhóm cây trong kiểu cắt (13/11/2026, Sếp chốt câu 7): TU_DONG = cây không lỗ hoặc chỉ khoan/tán;
+/// LASER = cây có >= 1 đoạn dập (lỗ ô van), không cắt máy tự động. Xem cutting-proposals/pattern-machine-class.util.ts.
+enum CutMachineClass {
+  TU_DONG
+  LASER
+}
+
 /// Singleton row (id is pinned to 1 by a CHECK constraint, see
 /// prisma/migrations/.../migration.sql) holding company-wide configuration.
 /// Seeded once; there is intentionally no "create" endpoint.
@@ -372,8 +381,9 @@ model SystemConfig {
   /// Material.maxCuttingWastePercentage - field đó ghi đè giá trị này cho đúng vật tư).
   solverMaxWastePercentage Decimal @default(1.0) @db.Decimal(6, 3)
   solverMaxSurplus         Int     @default(10)
-  solverMinLengthMm        Int     @default(5000)
-  solverMaxLengthMm        Int     @default(6000)
+  /// Dải dò cây đặt riêng. 13/11/2026 (Sếp góp ý 12/11): 4000..6500 (trước 5000..6000), dò từ cây chuẩn ra 2 phía.
+  solverMinLengthMm        Int     @default(4000)
+  solverMaxLengthMm        Int     @default(6500)
   solverLengthStepMm       Int     @default(50)
   /// time_limit_seconds GỬI CHO solver mỗi lần giải - KHÔNG phải timeout HTTP client (xem
   /// SOLVER_TIMEOUT_SECONDS trong env). Số lần giải = số loại sắt x (1 + N lần vét cạn), có
@@ -393,29 +403,50 @@ model SystemConfig {
   /// Máy cắt MẶC ĐỊNH toàn hệ thống (2026-10-23): đợt nào KHSX không chọn máy riêng
   /// (ProductionInvoice.solverMachine = null) thì theo giá trị này. Mặc định laser vì đó ĐÚNG hành vi
   /// đã chạy tới trước khi có cột này - đổi default sẽ âm thầm đổi cách cắt mọi đợt hiện có.
-  solverMachine            SolverMachine @default(laser)
+  solverMachine                  SolverMachine @default(laser)
   /// Lưỡi cắt (mm) và tề đầu (mm) của MC TỰ ĐỘNG - cặp RIÊNG, tách khỏi solverBladeWidthMm/
   /// solverTrimStartMm (2 cột đó vẫn là của MC Laser). Mặc định theo app cat_sat_iea: lưỡi 2,5 mm, tề
   /// đầu 0. Admin chỉnh được qua PUT /system-config. Chỉ có tác dụng khi máy = tu_dong.
-  solverMctdBladeWidthMm   Decimal       @default(2.5) @db.Decimal(6, 1)
-  solverMctdTrimStartMm    Int           @default(0)
+  /// 13/11/2026 (Sếp góp ý 12/11): tề đầu MC Tự động luôn 10 mm -> mặc định 10 (trước 0).
+  solverMctdBladeWidthMm         Decimal       @default(2.5) @db.Decimal(6, 1)
+  solverMctdTrimStartMm          Int           @default(10)
   /// Các hệ số bó của MC Tự động (số cây/bó), vd [14,16,18,20] - mặc định như app cat_sat_iea. Chỉ dùng
   /// khi máy = tu_dong; mảng số nguyên > 1. Cây còn lại không đủ bó thì cắt tay (xem
   /// solverMaxManualCuts).
-  solverBundleFactors      Json          @default("[14,16,18,20]")
+  solverBundleFactors            Json          @default("[14,16,18,20]")
   /// Tổng số cây cắt tay (hệ số 1) tối đa trong 1 loại sắt khi dùng MC Tự động (mặc định 5 như app cũ).
-  solverMaxManualCuts      Int           @default(5)
+  solverMaxManualCuts            Int           @default(5)
   /// Số cỡ đoạn tối đa trên 1 kiểu cắt khi dùng MC Tự động (mặc định 5: máy MCTĐ chỉ nhập được 5 cỡ).
-  solverMaxSizesPerPattern Int           @default(5)
-  /// LUẬT GỘP (Sếp Nhân 2026-10-24: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại", "không được gộp 2 lệnh cách nhau quá xa",
+  solverMaxSizesPerPattern       Int           @default(5)
+  /// Số cỡ đoạn tối đa trên 1 cây THEO XƯỞNG (13/11/2026, Sếp góp ý 12/11: "Phước An tối đa 2 cỡ đoạn/cây; không đạt ≤1% thì
+  /// thêm cỡ, ghi lý do"). Khoá = Workshop.code (PHU_AN / PHUOC_AN), giá trị = số nguyên 1..10. Xưởng không có khoá = không có luật
+  /// riêng (theo máy như cũ). Bộ giải thử mức này trước, không đạt ngưỡng thì nới dần (xem CuttingProposalLine.sizesRelaxNote).
+  /// Áp cho cả 2 máy; chỉ có tác dụng khi lượt tính biết xưởng (KHSX chọn xưởng trước khi Tính, hoặc lệnh đã có xưởng).
+  solverMaxSizesPerBarByWorkshop Json          @default("{\"PHUOC_AN\":2}")
+  /// Máy cắt BẮT BUỘC theo xưởng (13/11/2026, quy tắc chia sắt 07/11: "Phước An - toàn bộ cắt máy tự động"). Khoá = Workshop.code,
+  /// giá trị = "laser" | "tu_dong". Xưởng có khoá thì lượt tính của xưởng đó luôn dùng máy này (đè lựa chọn của KHSX); không có khoá =
+  /// KHSX chọn như cũ.
+  solverMachineByWorkshop        Json          @default("{\"PHUOC_AN\":\"tu_dong\"}")
+  /// Số cây/bó cho phép của MC Tự động THEO QUY CÁCH (13/11/2026, quy tắc chia sắt 07/11 mục 4). Khoá = mã quy cách viết hoa:
+  /// V<cạnh> (sắt vuông), H<a>-<b> (sắt hộp), FI<đường kính> (sắt phi) - vd {"V10":[60,64,…],"H10-20":[24,28,…],"FI19":[14,16,…]}.
+  /// Bảng có dữ liệu: loại sắt có quy cách trong bảng dùng đúng các hệ số đó; quy cách NGOÀI bảng thì KHÔNG TÍNH ĐƯỢC với MC Tự động
+  /// (Sếp chốt 13/11, câu 3: "chặn lại - hệ thống báo KHSX hỏi số cây/bó, có số rồi mới tính") - Admin thêm quy cách vào bảng rồi tính
+  /// lại. Bảng rỗng {} = dùng solverBundleFactors chung cho mọi quy cách như trước.
+  solverBundleFactorsBySpec      Json          @default("{\"V10\":[60,64,68,72,76,80,84,88,100],\"V12\":[36,39,42,44,45,48,56,60,64],\"V15\":[21,24,30,33,36,39,42],\"V16\":[14,16,18,20,24,27,30],\"V18\":[14,16,18,20,24,27,30],\"V20\":[14,16,18,20,24,27,30],\"V50\":[2,3,4],\"H10-20\":[24,28,32,36,40,50],\"H13-26\":[15,18,21,24,32],\"H15-35\":[12,15,18],\"H25-50\":[6,8],\"FI10\":[52,56,60,64,68],\"FI19\":[14,16,18,20,22],\"FI21\":[14,16,18,20]}")
+  /// MC Laser: nhát cắt cuối phải ra 1 đoạn DÀI HƠN số này (mm), tính cả phần cùi (13/11/2026, Sếp chốt câu 11: "máy laze có quy
+  /// tắc nhát cắt cuối phải ra 1 đoạn dài hơn 10 cm (tính cả phần cùi hao hụt)"). Kiểu cắt laze chỉ hợp lệ khi đoạn dài nhất trên cây
+  /// + cùi > số này (đoạn đó để cuối, công nhân cắt tay). 0 = tắt. Chỉ áp cho MC Laser.
+  solverLaserMinTailMm           Int           @default(100)
+  /// LUẬT GỘP (Sếp 2026-10-24: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại", "không được gộp 2 lệnh cách nhau quá xa",
   /// "sẽ kiểm soát lúc lên kế hoạch"): trong 1 đợt tính / 1 lệnh gộp, MỐC CẦN SẮT của các SKU (frameDeadlineOf: hạn mua hàng, không có
   /// thì hạn khung) cách nhau tối đa chừng này ngày - LUẬT CỨNG ở cutting-batch-solve, merge và lưu hạn lệnh gộp; gợi ý gộp cũng chỉ
   /// chọn trong giới hạn này. SKU chưa có mốc không bị chặn. Admin chỉnh. KHUNG TÍNH CẢ NGÀY ĐẦU ("ngày 1 gộp được ngày 3, ngày 1 ko
   /// được gộp với ngày 4"): 3 = chênh tối đa 2 ngày (merge-rules.util maxGapDays).
-  solverMergeWindowDays    Int           @default(3)
-  /// Trần số SKU trong 1 đợt tính / 1 lệnh gộp (2026-10-24, Sếp Nhân: "bắt buộc chỉ được gộp tối đa 2 lệnh") - luật cứng như
+  /// 13/11/2026 (Sếp trả lời 12/11): khung = 5, tức 2 mốc cách nhau tối đa 4 ngày (ngày 10 gộp được ngày 14).
+  solverMergeWindowDays          Int           @default(5)
+  /// Trần số SKU trong 1 đợt tính / 1 lệnh gộp (2026-10-24, Sếp: "bắt buộc chỉ được gộp tối đa 2 lệnh") - luật cứng như
   /// solverMergeWindowDays. Admin chỉnh.
-  solverMergeMaxSkus       Int           @default(2)
+  solverMergeMaxSkus             Int           @default(2)
 
   /// Dung sai giao THỪA cho phép khi Thủ kho nhận hàng mua về, tính theo % của buyQty (xem
   /// PurchaseProposalsService.receiveItem). Trong dung sai -> ghi ĐÚNG số thực nhận, kể cả khi
@@ -1746,6 +1777,8 @@ model ProductionInvoice {
   floorQueueEntries         FloorQueueEntry[]
   floorReports              FloorReport[]
   warehouseTransfers        WarehouseTransfer[]
+  cutAllocations            CutAllocation[]
+  cutAllocationLogs         CutAllocationLog[]
   segmentReservations       SegmentReservation[]
   segmentOverages           SegmentOverage[]
   segmentProductions        SegmentProduction[]
@@ -1861,6 +1894,10 @@ model Workshop {
   productionInvoiceItems ProductionInvoiceItem[]
   warehouses             Warehouse[]
   managers               User[]                  @relation("UserWorkshop")
+  workstations           Workstation[]
+  cutAllocations         CutAllocation[]
+  cutAllocationLogs      CutAllocationLog[]
+  floorQueueEntries      FloorQueueEntry[]
 
   @@map("workshops")
 }
@@ -2138,6 +2175,7 @@ model CuttingProposal {
   purchaseProposals PurchaseProposal[]
   coverage          CuttingPlanCoverage[]
   items             CuttingProposalItem[]
+  cutAllocations    CutAllocation[]
 
   @@index([productionOrderId, status])
   @@index([productionInvoiceId, status])
@@ -2261,6 +2299,10 @@ model CuttingProposalLine {
   /// này bị vứt bỏ hoàn toàn (không lưu) - FE chỉ hiện được "Không khả thi" trơ trọi, không nói
   /// được vì sao. Null khi feasible=true.
   reason               String?
+  /// Ghi chú NỚI SỐ CỠ ĐOẠN/CÂY (13/11/2026): xưởng có luật "tối đa N cỡ/cây" (SystemConfig.solverMaxSizesPerBarByWorkshop) mà mức
+  /// N không đạt ngưỡng hao hụt nên bộ giải phải nới lên - vd "Xưởng Phước An tối đa 2 cỡ/cây: không đạt ≤1% nên nới lên 3 cỡ".
+  /// Null khi không có luật xưởng hoặc đạt ngay ở mức của xưởng. KHÁC `reason` (chỉ có khi feasible=false).
+  sizesRelaxNote       String?
   /// Chỉ có khi feasible=false NHƯNG solver vẫn tính được "tốt nhất có thể" (vd {length:6000,
   /// waste_pct:2.4,bars:5}) - cho biết nới ngưỡng lên bao nhiêu thì đạt. KHÁC timedOut=true (chưa
   /// kết luận được gì cả) - 2 ca này KHÔNG được gộp chung một nhãn hiển thị, xem changelog
@@ -2298,6 +2340,8 @@ model CuttingProposalLine {
   /// trong cutting-proposals.service.ts) - "scan" giờ CÓ CHẢY tới Mua hàng
   /// (PurchaseProposalItem.stockLengthMm) nên không còn là con số ảo như lần trước, và cờ này là
   /// cách duy nhất để người xem phân biệt "cây chuẩn" với "cây phải đặt riêng theo đúng NCC".
+  /// 13/11/2026: thêm "stock" = chiều dài KHÔNG chuẩn nhưng đang có tồn ở kho Phôi (được thử cùng cây chuẩn, ít hao hụt nhất thì
+  /// chọn) - bộ giải vẫn trả "fixed", BE đổi thành "stock" lúc lưu.
   lengthSource         String?
   /// Máy cắt ĐÃ DÙNG để giải loại sắt này (2026-10-23) - chụp lại từ `purchase_plan[].machine`, không suy
   /// lại từ cấu hình lúc hiển thị vì SystemConfig/đợt có thể đổi sau khi phương án được tính. null với
@@ -2336,9 +2380,10 @@ model CuttingProposalPattern {
   /// {"16": 3, "14": 1, "1": 2}; barCount = Σ hệ số × số bó. null với MC Laser.
   bundles       Json?
 
-  line       CuttingProposalLine             @relation(fields: [lineId], references: [id])
-  segments   CuttingProposalPatternSegment[]
-  cutBundles CutBundle[]
+  line           CuttingProposalLine             @relation(fields: [lineId], references: [id])
+  segments       CuttingProposalPatternSegment[]
+  cutBundles     CutBundle[]
+  cutAllocations CutAllocation[]
 
   @@index([lineId])
   @@map("cutting_proposal_patterns")
@@ -3671,7 +3716,8 @@ model FloorReportLine {
 /// Loại điểm làm việc có dán mã QR (2026-10-13, QR tại máy - changelog-2026-10-08-ke-hoach-tem-qr-bo-sat-phoi.md
 /// mục 15/17/19/22). Quyết định cách màn quét hỏi gì và báo vào đâu.
 enum WorkstationKind {
-  /// Máy cắt laser (Phôi) - báo SỐ ĐOẠN đã cắt theo cỡ (SteelIssuesService.recordCutBatch).
+  /// Máy cắt (Phôi) - báo SỐ ĐOẠN đã cắt theo cỡ (SteelIssuesService.recordCutBatch). Trước 13/11/2026 chỉ có máy laser; từ
+  /// 13/11 loại máy ở Workstation.cutMachineType (laser / tu_dong).
   CUT
   /// Máy/điểm công đoạn phụ của Phôi (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ) - `processStep` bắt buộc
   /// (SteelIssuesService.recordStepBatch).
@@ -3686,23 +3732,122 @@ enum WorkstationKind {
 /// đang chạy của tổ lấy từ FloorQueueEntry). `qrToken` ngẫu nhiên, khó đoán - mã QR là link
 /// `<FE>/?m=floor&ws=<qrToken>`; đổi mã (mất/bị chụp) = sinh token mới, tem cũ hết hiệu lực.
 model Workstation {
-  id          BigInt          @id @default(autoincrement())
-  code        String          @unique
-  name        String
+  id             BigInt          @id @default(autoincrement())
+  code           String          @unique
+  name           String
   /// Tổ sở hữu điểm này - chỉ công nhân cùng tổ (User.mfgRole) báo được qua mã của nó.
-  stage       MfgStage
-  kind        WorkstationKind
+  stage          MfgStage
+  kind           WorkstationKind
   /// Chỉ cho kind = STEP (công đoạn phụ, khác CAT). NULL ở mọi kind khác.
-  processStep ProcessStep?
-  qrToken     String          @unique
-  isActive    Boolean         @default(true)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  processStep    ProcessStep?
+  qrToken        String          @unique
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  /// Xưởng đặt máy (13/11/2026, nền "chia sắt cho máy cắt": Phú An 4 laze + 1 tự động, Phước An máy tự động). NULL = chưa khai.
+  /// Hiện chỉ dùng cho máy cắt (kind CUT); màn quét QR chưa lọc theo xưởng (giai đoạn 2 QLSX theo xưởng).
+  workshopId     BigInt?
+  /// Loại máy cắt - CHỈ kind CUT và BẮT BUỘC với CUT (CHECK workstations_cut_type_chk). Máy CUT có từ trước 13/11 là máy laser
+  /// (doc cũ của WorkstationKind.CUT) nên migration gán laser.
+  cutMachineType SolverMachine?
 
-  floorReports FloorReport[]
+  workshop              Workshop?          @relation(fields: [workshopId], references: [id])
+  floorReports          FloorReport[]
+  cutAllocations        CutAllocation[]
+  cutAllocationLogsFrom CutAllocationLog[] @relation("CutAllocationLogFrom")
+  cutAllocationLogsTo   CutAllocationLog[] @relation("CutAllocationLogTo")
 
   @@index([stage])
+  @@index([workshopId])
   @@map("workstations")
+}
+
+/// Bảng "Chia máy cắt" của QLSX xưởng (13/11/2026, đợt B1 - quy tắc chia sắt 07/11 mục 1–2, Sếp chốt 13/11 câu 8: hệ thống tự chia,
+/// QLSX xưởng chỉnh linh hoạt). Mỗi dòng = một phần số cây của 1 nhóm máy (machineClass) trong 1 kiểu cắt của phương án APPROVED,
+/// giao cho 1 máy cắt của xưởng. CHỈ LÀ KẾ HOẠCH cho tổ Phôi: không đổi luồng quét QR, không đổi hàng đợi tổ (FloorQueueEntry).
+/// Dòng trỏ tới phương án đã bị tính lại (không còn APPROVED), lệnh đã xong Phôi, hoặc máy không còn là máy cắt đang dùng của xưởng
+/// là dòng CŨ: không hiện, bị xoá ở lần "Chia" kế tiếp.
+model CutAllocation {
+  id                  BigInt          @id @default(autoincrement())
+  workshopId          BigInt
+  /// Máy cắt (Workstation kind CUT) của đúng xưởng workshopId.
+  workstationId       BigInt
+  productionInvoiceId BigInt
+  cuttingProposalId   BigInt
+  patternId           BigInt
+  machineClass        CutMachineClass
+  barCount            Int
+  /// Đoạn dập trên MỖI cây của nhóm (chỉ LASER), chụp lúc chia: [{ cutLengthMm, countPerBar }]. null với TU_DONG.
+  punchedSegments     Json?
+  /// Thứ tự cắt trên máy (nhỏ cắt trước).
+  seq                 Int
+  /// true = QLSX đã sửa tay (đổi máy, số cây, tách, xếp lại): "Chia lại" giữ nguyên dòng này.
+  isManual            Boolean         @default(false)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  updatedById         String?
+
+  workshop          Workshop               @relation(fields: [workshopId], references: [id])
+  workstation       Workstation            @relation(fields: [workstationId], references: [id])
+  productionInvoice ProductionInvoice      @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
+  cuttingProposal   CuttingProposal        @relation(fields: [cuttingProposalId], references: [id], onDelete: Cascade)
+  pattern           CuttingProposalPattern @relation(fields: [patternId], references: [id], onDelete: Cascade)
+  updatedBy         User?                  @relation("CutAllocationUpdatedBy", fields: [updatedById], references: [id])
+  logs              CutAllocationLog[]
+
+  @@index([workshopId, workstationId, seq])
+  @@index([productionInvoiceId])
+  @@index([cuttingProposalId])
+  @@index([patternId])
+  @@map("cut_allocations")
+}
+
+/// Nhật ký thao tác SỬA TAY bảng "Chia máy cắt" (14/11/2026, Sếp chốt câu 6 + 10): thêm ("Chia luôn"), tách, đổi máy, đổi số cây, xoá.
+/// KHÔNG ghi việc hệ thống tự chia (auto) và xếp lại thứ tự. Giữ lại cả khi dòng chia bị xoá (cutAllocationId SetNull).
+model CutAllocationLog {
+  id                  BigInt                     @id @default(autoincrement())
+  workshopId          BigInt
+  productionInvoiceId BigInt
+  cutAllocationId     BigInt?
+  patternId           BigInt?
+  action              CutAllocationLogAction
+  fromWorkstationId   BigInt?
+  toWorkstationId     BigInt?
+  /// Số cây của thao tác (cây tách / cây thêm / cây của dòng bị xoá / số cây mới khi đổi số cây).
+  barCount            Int
+  previousBarCount    Int?
+  /// Dòng theo bó (máy tự động) - đổi máy phải có lý do Máy hư.
+  isBundle            Boolean                    @default(false)
+  reason              CutAllocationChangeReason?
+  note                String?
+  createdById         String?
+  createdAt           DateTime                   @default(now())
+
+  workshop          Workshop          @relation(fields: [workshopId], references: [id])
+  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
+  cutAllocation     CutAllocation?    @relation(fields: [cutAllocationId], references: [id], onDelete: SetNull)
+  fromWorkstation   Workstation?      @relation("CutAllocationLogFrom", fields: [fromWorkstationId], references: [id])
+  toWorkstation     Workstation?      @relation("CutAllocationLogTo", fields: [toWorkstationId], references: [id])
+  createdBy         User?             @relation("CutAllocationLogCreatedBy", fields: [createdById], references: [id])
+
+  @@index([workshopId, createdAt])
+  @@index([productionInvoiceId])
+  @@map("cut_allocation_logs")
+}
+
+enum CutAllocationLogAction {
+  ADD
+  SPLIT
+  MOVE
+  BARS
+  REMOVE
+  /// Máy rảnh tự kéo lệnh kế tiếp (đợt C3, 14/11/2026) - createdById null (hệ thống).
+  AUTO_PULL
+}
+
+enum CutAllocationChangeReason {
+  MACHINE_BROKEN
+  OTHER
 }
 
 enum FloorQueueStatus {
@@ -3720,23 +3865,29 @@ model FloorQueueEntry {
   id                  BigInt           @id @default(autoincrement())
   stage               MfgStage
   productionInvoiceId BigInt
-  /// Thứ tự trong hàng đợi của tổ (nhỏ chạy trước) - chỉ có nghĩa với QUEUED.
+  /// Xưởng của hàng đợi (14/11/2026): mỗi xưởng một hàng đợi cho mỗi tổ. Phôi/Hàn = xưởng của PI; Sơn = nơi sơn
+  /// (Workshop.paintWorkshopId nếu có). PI chưa có xưởng = xưởng mặc định. NULL chỉ khi hệ thống không có xưởng nào.
+  workshopId          BigInt?
+  /// Thứ tự trong hàng đợi của (tổ, xưởng) (nhỏ chạy trước) - chỉ có nghĩa với QUEUED.
   position            Int
   status              FloorQueueStatus @default(QUEUED)
   queuedAt            DateTime         @default(now())
-  queuedById          String
+  /// null = hệ thống tự thêm (máy cắt rảnh kéo lệnh, đợt C3).
+  queuedById          String?
   startedAt           DateTime?
   startedById         String?
   endedAt             DateTime?
   endedById           String?
 
   productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id])
-  queuedBy          User              @relation("FloorQueueQueuedBy", fields: [queuedById], references: [id])
+  workshop          Workshop?         @relation(fields: [workshopId], references: [id])
+  queuedBy          User?             @relation("FloorQueueQueuedBy", fields: [queuedById], references: [id])
   startedBy         User?             @relation("FloorQueueStartedBy", fields: [startedById], references: [id])
   endedBy           User?             @relation("FloorQueueEndedBy", fields: [endedById], references: [id])
 
   @@unique([stage, productionInvoiceId])
   @@index([stage, status, position])
+  @@index([stage, workshopId, status, position])
   @@map("floor_queue_entries")
 }
 

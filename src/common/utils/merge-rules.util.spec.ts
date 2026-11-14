@@ -26,6 +26,14 @@ describe('merge-rules.util', () => {
     expect(day4.reason).toContain('chênh tối đa 2 ngày');
   });
 
+  it('khung 5 ngày (mặc định từ 13/11/2026): ngày 10 gộp được ngày 14, KHÔNG gộp được ngày 15', () => {
+    const cfg5 = { windowDays: 5, maxSkus: 5 };
+    expect(checkMergeRules([item('A', '2026-11-10'), item('B', '2026-11-14')], cfg5).ok).toBe(true);
+    const day15 = checkMergeRules([item('A', '2026-11-10'), item('B', '2026-11-15')], cfg5);
+    expect(day15).toMatchObject({ ok: false, spanDays: 5 });
+    expect(day15.reason).toContain('chênh tối đa 4 ngày');
+  });
+
   it('vi phạm thì nêu SKU sớm nhất/muộn nhất', () => {
     const r = checkMergeRules(
       [item('A', '2026-11-12'), item('C', '2026-11-13'), item('B', '2026-11-16')],

@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { NetworkAccessService } from '../../common/network/network-access.service';
 import { normalizeLsxPrefixes } from '../../common/utils/lenh-code.util';
 import { isPrivateOrLoopbackIp, normalizeAllowedIps } from '../../common/utils/ip-allowlist.util';
@@ -7,6 +7,12 @@ import { normalizePublicUrl } from '../../common/utils/public-url.util';
 import { type SystemConfig } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  STEEL_SPEC_KEY_REGEX,
+  normalizeSpecKey,
+  parseBundleFactorsBySpec,
+  parseMachineByWorkshop,
+} from '../cutting-proposals/steel-spec-key.util';
 import { PlanningParamsDto } from './dto/planning-params.dto';
 import { SystemConfigResponseDto } from './dto/system-config-response.dto';
 import { CuttingDefaultsResponseDto, UpdateMaxWasteDto } from './dto/update-max-waste.dto';
@@ -41,6 +47,21 @@ export class SystemConfigService {
     });
   }
 
+  /**
+   * Json -> Record<mã xưởng, số cỡ đoạn/cây>; chỉ giữ cặp hợp lệ (giá trị số nguyên 1-10), sai dạng
+   * -> {}.
+   */
+  private sizesByWorkshopOf(raw: unknown): Record<string, number> {
+    const out: Record<string, number> = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    for (const [code, value] of Object.entries(raw)) {
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 10) {
+        out[code] = value;
+      }
+    }
+    return out;
+  }
+
   /** Thông số máy cắt KHSX được XEM (chỉ đọc) - Decimal đổi ra number, Json ra mảng số. */
   private cuttingParams(config: SystemConfig) {
     return {
@@ -53,6 +74,10 @@ export class SystemConfigService {
       solverBundleFactors: config.solverBundleFactors as number[],
       solverMaxManualCuts: config.solverMaxManualCuts,
       solverMaxSizesPerPattern: config.solverMaxSizesPerPattern,
+      solverLaserMinTailMm: config.solverLaserMinTailMm,
+      solverMaxSizesPerBarByWorkshop: this.sizesByWorkshopOf(config.solverMaxSizesPerBarByWorkshop),
+      solverMachineByWorkshop: parseMachineByWorkshop(config.solverMachineByWorkshop),
+      solverBundleFactorsBySpec: parseBundleFactorsBySpec(config.solverBundleFactorsBySpec),
       solverMergeWindowDays: config.solverMergeWindowDays,
       solverMergeMaxSkus: config.solverMergeMaxSkus,
     };
@@ -192,6 +217,9 @@ export class SystemConfigService {
       solverBladeWidthMm: config.solverBladeWidthMm.toNumber(),
       solverMctdBladeWidthMm: config.solverMctdBladeWidthMm.toNumber(),
       solverBundleFactors: config.solverBundleFactors as number[],
+      solverMaxSizesPerBarByWorkshop: this.sizesByWorkshopOf(config.solverMaxSizesPerBarByWorkshop),
+      solverMachineByWorkshop: parseMachineByWorkshop(config.solverMachineByWorkshop),
+      solverBundleFactorsBySpec: parseBundleFactorsBySpec(config.solverBundleFactorsBySpec),
       solverMaxWastePercentage: config.solverMaxWastePercentage.toNumber(),
       purchaseOverReceiptTolerancePercent: config.purchaseOverReceiptTolerancePercent.toNumber(),
       containerVolumeM3: config.containerVolumeM3.toNumber(),
@@ -208,6 +236,65 @@ export class SystemConfigService {
     // floorPublicUrl chuẩn hoá về scheme://host[:port] (dán cả /login cũng được; rỗng = xoá). Không gửi field = giữ nguyên.
     // floorAllowedIps: chuẩn hoá từng dòng (IP/CIDR hợp lệ, bỏ trùng); rỗng = tắt giới hạn. Không gửi field = giữ nguyên.
     const data: typeof dto = { ...dto };
+    // 13/11/2026: dải dò chiều dài - min không được lớn hơn max (tính cả khi chỉ gửi 1 trong 2 so
+    // với giá trị đang lưu).
+    const minLen = dto.solverMinLengthMm ?? existing.solverMinLengthMm;
+    const maxLen = dto.solverMaxLengthMm ?? existing.solverMaxLengthMm;
+    if (minLen > maxLen) {
+      throw new BadRequestException(
+        `Dải chiều dài cây dò sai: tối thiểu ${minLen} mm lớn hơn tối đa ${maxLen} mm`,
+      );
+    }
+    // 13/11/2026: bảng số cây/bó theo quy cách - lưu khoá dạng chuẩn hoá (viết hoa, bỏ khoảng
+    // trắng).
+    if (dto.solverBundleFactorsBySpec !== undefined) {
+      const normalized: Record<string, number[]> = {};
+      for (const [key, factors] of Object.entries(dto.solverBundleFactorsBySpec)) {
+        const k = normalizeSpecKey(key);
+        if (!STEEL_SPEC_KEY_REGEX.test(k)) {
+          throw new BadRequestException(
+            `Mã quy cách "${key}" không hợp lệ (dạng V20, H13-26, FI19)`,
+          );
+        }
+        normalized[k] = factors;
+      }
+      data.solverBundleFactorsBySpec = normalized;
+    }
+    // 13/11/2026: khoá máy theo xưởng - khoá phải là mã xưởng đang có (Workshop.code).
+    if (dto.solverMachineByWorkshop !== undefined) {
+      const codes = Object.keys(dto.solverMachineByWorkshop);
+      if (codes.length > 0) {
+        const found = await this.prisma.workshop.findMany({
+          where: { code: { in: codes } },
+          select: { code: true },
+        });
+        const known = new Set(found.map((w) => w.code));
+        const unknown = codes.filter((c) => !known.has(c));
+        if (unknown.length > 0) {
+          throw new BadRequestException(
+            `Không có xưởng với mã: ${unknown.join(', ')} (máy cắt bắt buộc phải khai theo mã xưởng đang có)`,
+          );
+        }
+      }
+    }
+    // 13/11/2026: luật xưởng "tối đa N cỡ đoạn/cây" - khoá phải là mã xưởng đang có
+    // (Workshop.code).
+    if (dto.solverMaxSizesPerBarByWorkshop !== undefined) {
+      const codes = Object.keys(dto.solverMaxSizesPerBarByWorkshop);
+      if (codes.length > 0) {
+        const found = await this.prisma.workshop.findMany({
+          where: { code: { in: codes } },
+          select: { code: true },
+        });
+        const known = new Set(found.map((w) => w.code));
+        const unknown = codes.filter((c) => !known.has(c));
+        if (unknown.length > 0) {
+          throw new BadRequestException(
+            `Không có xưởng với mã: ${unknown.join(', ')} (luật số cỡ đoạn/cây phải khai theo mã xưởng đang có)`,
+          );
+        }
+      }
+    }
     // Phần A – Đợt 2: tiền tố số LSX - in hoa, bỏ trùng/rỗng.
     if (dto.lsxPrefixes !== undefined) data.lsxPrefixes = normalizeLsxPrefixes(dto.lsxPrefixes);
     if (dto.floorPublicUrl !== undefined)
@@ -236,6 +323,11 @@ export class SystemConfigService {
       solverBladeWidthMm: updated.solverBladeWidthMm.toNumber(),
       solverMctdBladeWidthMm: updated.solverMctdBladeWidthMm.toNumber(),
       solverBundleFactors: updated.solverBundleFactors as number[],
+      solverMaxSizesPerBarByWorkshop: this.sizesByWorkshopOf(
+        updated.solverMaxSizesPerBarByWorkshop,
+      ),
+      solverMachineByWorkshop: parseMachineByWorkshop(updated.solverMachineByWorkshop),
+      solverBundleFactorsBySpec: parseBundleFactorsBySpec(updated.solverBundleFactorsBySpec),
       solverMaxWastePercentage: updated.solverMaxWastePercentage.toNumber(),
       purchaseOverReceiptTolerancePercent: updated.purchaseOverReceiptTolerancePercent.toNumber(),
       containerVolumeM3: updated.containerVolumeM3.toNumber(),

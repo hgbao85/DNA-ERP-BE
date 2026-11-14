@@ -46,6 +46,25 @@ export class CuttingDefaultsResponseDto {
   @ApiProperty({ type: [Number] }) solverBundleFactors!: number[];
   @ApiProperty() solverMaxManualCuts!: number;
   @ApiProperty() solverMaxSizesPerPattern!: number;
+  /// Luật laze (13/11/2026): đoạn cuối cây (cắt từng cây) phải dài hơn số mm này, tính cả cùi; 0 =
+  /// tắt.
+  @ApiProperty() solverLaserMinTailMm!: number;
+  /// Luật xưởng "tối đa N cỡ đoạn/cây" (13/11/2026): khoá = Workshop.code, giá trị 1-10.
+  @ApiProperty({ type: 'object', additionalProperties: { type: 'number' } })
+  solverMaxSizesPerBarByWorkshop!: Record<string, number>;
+  /// Máy cắt bắt buộc theo xưởng (13/11/2026): khoá = Workshop.code, giá trị laser | tu_dong.
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: { type: 'string', enum: ['laser', 'tu_dong'] },
+  })
+  solverMachineByWorkshop!: Record<string, 'laser' | 'tu_dong'>;
+  /// Số cây/bó MC Tự động theo quy cách (V20, H13-26, FI19...); {} = dùng solverBundleFactors
+  /// chung.
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: { type: 'array', items: { type: 'number' } },
+  })
+  solverBundleFactorsBySpec!: Record<string, number[]>;
   @ApiProperty() solverMergeWindowDays!: number;
   @ApiProperty() solverMergeMaxSkus!: number;
   @ApiPropertyOptional({ nullable: true }) previous!: number | null;

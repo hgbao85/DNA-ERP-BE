@@ -45,6 +45,11 @@ const MATRIX: Record<string, Rule> = {
   'GET my-stats': { action: VIEW },
   // báo cáo toàn xưởng: QLSX + Giám đốc + Admin (chỉ đọc); công nhân không gọi được
   'GET stats': { action: VIEW, roles: [QLSX, BUSINESS_ROLES.BOSS, DEFAULT_ROLES.ADMIN] },
+  // đo năng suất máy cắt (C4a, 14/11/2026): cùng quyền với stats, chỉ đọc
+  'GET stats/cut-machines': {
+    action: VIEW,
+    roles: [QLSX, BUSINESS_ROLES.BOSS, DEFAULT_ROLES.ADMIN],
+  },
   // QLSX
   'GET summary': qlsx(VIEW),
   'GET settings': qlsx(VIEW),
@@ -65,6 +70,15 @@ const MATRIX: Record<string, Rule> = {
   'POST queue/:stage/reopen': qlsx(UPDATE),
   'GET queue/:stage/detail/:productionInvoiceId': qlsx(VIEW),
   'DELETE queue/:id': qlsx(DELETE),
+  // chia máy cắt (B1, 13/11/2026)
+  'GET cut-allocation': qlsx(VIEW),
+  'GET cut-allocation/log': qlsx(VIEW), // nhật ký điều chuyển (C, 14/11/2026)
+  'POST cut-allocation/auto': qlsx(CREATE),
+  'POST cut-allocation/add': qlsx(CREATE),
+  'POST cut-allocation/reorder': qlsx(UPDATE),
+  'PATCH cut-allocation/:id': qlsx(UPDATE),
+  'POST cut-allocation/:id/split': qlsx(CREATE),
+  'DELETE cut-allocation/:id': qlsx(DELETE),
   'GET review': qlsx(VIEW),
   'POST review/cut-bundles/:id/send-kcs': qlsx(APPROVE),
   'POST review/production-batches/:id/send-kcs': qlsx(APPROVE),

@@ -44,7 +44,7 @@ describe('solveTwoStage', () => {
       timeLimitSec: 60,
       strategy,
       cutCostS,
-      stockS: scale(STOCK),
+      stockS: scale(STOCK) - scale(TRIM),
     };
   }
 
@@ -122,7 +122,7 @@ describe('solveTwoStage', () => {
       timeLimitSec: 20,
       strategy: 'byN',
       cutCostS,
-      stockS: scale(STOCK),
+      stockS: scale(STOCK) - scale(TRIM),
     };
     const r = solveTwoStage(highs, inp);
     expect(r.strategy).toBe('byN');
@@ -149,7 +149,7 @@ describe('solveTwoStage', () => {
       timeLimitSec: 10,
       strategy: 'byN',
       cutCostS: [scale(2994) + scale(KERF)],
-      stockS: scale(STOCK),
+      stockS: scale(STOCK) - scale(TRIM),
     });
     expect(r.strategy).toBe('byN');
     expect(r.y).toBeNull();
@@ -247,7 +247,7 @@ describe('greedyStart', () => {
     // 1 cỡ 1000 mm, ngưỡng 20 % -> chỉ còn kiểu cắt 5 đoạn/cây (5005/6000). Cần 100 đoạn = 20 cây.
     const bundleInput = (maxManualBars: number, maxSurplus = 10): TwoStageInput => {
       const { rows } = generatePatterns([1000], [100], STOCK, TRIM, KERF, { maxWasteRatio: 0.2 });
-      expect(rows).toEqual([{ counts: [5], used: 50000, waste: 9950 }]);
+      expect(rows).toEqual([{ counts: [5], used: 50000, waste: 9850 }]);
       return {
         patterns: rows.map((r) => ({ counts: r.counts, waste: r.waste })),
         demands: [100],
@@ -268,7 +268,7 @@ describe('greedyStart', () => {
         { pattern: 0, factor: 1 },
       ]);
       expect(r.y).toEqual([1, 0, 4]);
-      expect(r.stage1.objective).toBe(9950 * 20);
+      expect(r.stage1.objective).toBe(9850 * 20); // cùi 985 mm/cây (không gồm tề đầu) × 20 cây
     });
 
     it('cắt tay ≤ 3 -> vô nghiệm đã chứng minh (không phải hết giờ)', () => {
@@ -349,7 +349,7 @@ describe('solveTwoStage - MC Tự động đường thu hẹp', () => {
       timeLimitSec: 30,
       strategy: 'byN',
       cutCostS,
-      stockS: scale(STOCK),
+      stockS: scale(STOCK) - scale(TRIM),
       bundle: { factors: FACTORS, maxManualBars: 5, narrowMinPatterns: 1, ...bundleExtra },
     };
   }
@@ -443,7 +443,7 @@ describe('solveTwoStage - MC Tự động đường thu hẹp', () => {
       timeLimitSec: 10,
       strategy: 'byN',
       cutCostS: [scale(2994) + scale(1)],
-      stockS: scale(STOCK),
+      stockS: scale(STOCK) - scale(10),
       bundle: { factors: FACTORS, maxManualBars: 5, narrowMinPatterns: 1 },
     });
     expect(r.y).toBeNull();
@@ -463,7 +463,7 @@ describe('solveTwoStage - MC Tự động đường thu hẹp', () => {
       minTotalBars: 0,
       timeLimitSec: 20,
       cutCostS: [scale(1000) + scale(1)],
-      stockS: scale(STOCK),
+      stockS: scale(STOCK) - scale(10),
       bundle: { factors: [14, 16], maxManualBars: 0, narrowMinPatterns: 1 },
     });
     expect(r.y).toBeNull();

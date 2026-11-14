@@ -16,7 +16,9 @@
  * Công thức bám ĐÚNG solver (cat_sat/de_xuat_logic.py):
  *   usable     = stock − trim                       (dòng ~226)
  *   total_used = Σ (len_i + kerf) · x_i  ≤ usable    (dòng 240-242)
- *   waste      = stock − total_used                  (dòng 274-278: kerf tính là "sắt đã dùng")
+ * waste = usable − total_used (CHỈ CÙI, 13/11/2026: tề đầu, lưỡi cắt, đoạn dư không tính;
+ *                                                     trước đó là stock − total_used gồm tề đầu)
+ *   % hao hụt  = waste / stock (mẫu số là chiều dài cây mua, không phải phần dùng được)
  * Lệch công thức ở đây là con số hiện cho KHSX lệch khỏi con số solver trả về sau đó.
  */
 
@@ -26,7 +28,10 @@ export interface BestFillResult {
   stockLengthMm: number;
   /** Tổng "sắt đã dùng" (đoạn + lưỡi cắt) lớn nhất nhét được vào 1 cây, mm. */
   bestUsedMm: number;
-  /** stockLengthMm − bestUsedMm: phần thừa mỗi cây ở phương án lấp đầy nhất, mm. */
+  /**
+   * (stockLengthMm − tề đầu) − bestUsedMm: cùi mỗi cây ở phương án lấp đầy nhất, mm (không gồm tề
+   * đầu).
+   */
   minWastePerBarMm: number;
   /** minWastePerBarMm / stockLengthMm × 100, làm tròn 3 chữ số thập phân. */
   minWastePct: number;
@@ -80,7 +85,7 @@ export function minWasteForStockLength(
 ): BestFillResult {
   const usable = stockLengthMm - trimMm;
   const bestUsedMm = bestFill(sizesMm, usable, kerfMm);
-  const minWastePerBarMm = stockLengthMm - bestUsedMm;
+  const minWastePerBarMm = Math.max(0, usable - bestUsedMm);
   return {
     stockLengthMm,
     bestUsedMm,

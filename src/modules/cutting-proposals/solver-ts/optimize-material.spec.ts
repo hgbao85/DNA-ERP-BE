@@ -11,7 +11,7 @@ describe('optimizeMaterial', () => {
   const TRIM = 10;
   const KERF = 1;
 
-  it('ca tham chiếu h10-20 (2 cỡ): 325 cây, 0,353 %, dư 16 - trùng OR-Tools', () => {
+  it('ca tham chiếu h10-20 (2 cỡ): 325 cây, 0,1864 % (chỉ cùi), dư 16', () => {
     const r = optimizeMaterial(highs, [497, 355], [1600, 3200], [6000], TRIM, KERF, {
       maxWasteRatio: 0.01,
       timeLimit: 30,
@@ -20,10 +20,13 @@ describe('optimizeMaterial', () => {
     expect(r.feasible).toBe(true);
     if (!r.feasible) return;
     expect(r.total_bars).toBe(325);
-    expect(r.waste_pct).toBeCloseTo(0.353026, 6);
+    // 13/11/2026: hao hụt chỉ tính cùi. Cùng phương án 325 cây, dư 16: cũ 6884 mm = 3250 (tề 325
+    // cây × 10) + 3634 (cùi)
+    // = 0,353 %; nay chỉ còn 3634 mm = 0,1864 %.
+    expect(r.waste_pct).toBeCloseTo(0.186359, 5);
     expect(r.total_surplus_pieces).toBe(16);
     expect(r.total_purchased_mm).toBe(1_950_000);
-    expect(r.total_waste_mm).toBe(6884);
+    expect(r.total_waste_mm).toBe(3634);
     // Như Python: cờ = cap đã dùng để sinh pattern (4) dù 2 cỡ < cap nên cap không có tác dụng.
     expect(r.limited_sizes_per_bar).toBe(4);
     expect(r.patterns_truncated).toBe(false);
@@ -57,7 +60,7 @@ describe('optimizeMaterial', () => {
     if (!r.feasible) return;
     expect(r.bars_by_length).toEqual({ '4000': 2, '6000': 2 });
     expect(r.total_bars).toBe(4);
-    expect(r.total_waste_mm).toBe(40); // 4 cây × tề 10
+    expect(r.total_waste_mm).toBe(0); // vừa khít: cùi 0 (tề 10 mm × 4 cây không còn tính hao hụt, cũ = 40)
   });
 
   it('allowMix=false: chấm từng chiều dài riêng, chọn chiều dài ít hao hụt nhất', () => {
@@ -89,6 +92,34 @@ describe('optimizeMaterial', () => {
     expect(MAX_SIZES_PER_BAR).toBe(4);
   });
 
+  it('luật xưởng hardMaxSizesPerBar: trần CỨNG - liệt kê ra 0 kiểu thì vô nghiệm, KHÔNG tự bỏ giới hạn như cap 4 của laser (13/11/2026)', () => {
+    // Cùng ca 5 cỡ phải đủ 5 cỡ trên 1 cây mới đạt 1 %: mặc định laser sinh lại không giới hạn;
+    // trần cứng 4 thì báo vô nghiệm.
+    const sizes = [1200, 1197, 1196, 1196, 1196];
+    const r = optimizeMaterial(highs, sizes, [1, 1, 1, 1, 1], [6000], TRIM, KERF, {
+      maxWasteRatio: 0.01,
+      timeLimit: 30,
+      maxSurplus: 0,
+      hardMaxSizesPerBar: 4,
+    });
+    expect(r.feasible).toBe(false);
+    if (r.feasible) return;
+    expect(r.reason).toContain('luật xưởng: tối đa 4 cỡ');
+  });
+
+  it('luật xưởng hardMaxSizesPerBar = 2: mọi kiểu cắt ≤ 2 cỡ, limited_sizes_per_bar = 2', () => {
+    const r = optimizeMaterial(highs, [1000, 800, 600], [30, 30, 30], [6000], TRIM, KERF, {
+      maxWasteRatio: 0.05,
+      timeLimit: 30,
+      maxSurplus: 10,
+      hardMaxSizesPerBar: 2,
+    });
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
+    expect(r.limited_sizes_per_bar).toBe(2);
+    for (const row of r.plan) expect(row.counts.filter((c) => c > 0).length).toBeLessThanOrEqual(2);
+  });
+
   it('hồi quy dữ liệu thật (proposal 2, loại 4): 4 cỡ nhu cầu lớn, không cắt kín -> 6000 vẫn khả thi, byN = direct', () => {
     // byN từng trả "vô nghiệm" vì danh sách N ứng viên (695..699) không chứa N tối ưu 701 -> optimize_one_material
     // đi vét cạn và chọn 5790 mm, lệch DEXUAT (6000 mm × 701 cây, 0,9399 %).
@@ -109,7 +140,8 @@ describe('optimizeMaterial', () => {
     expect(byN.feasible && direct.feasible).toBe(true);
     if (!byN.feasible || !direct.feasible) return;
     expect(byN.total_bars).toBe(701);
-    expect(byN.waste_pct).toBeCloseTo(0.9399, 3);
+    // 0,9399 % cũ gồm tề 701 × 10 mm (0,1667 %); chỉ tính cùi còn 0,7733 %.
+    expect(byN.waste_pct).toBeCloseTo(0.7733, 3);
     expect(byN.total_waste_mm).toBe(direct.total_waste_mm);
     expect(byN.total_surplus_pieces).toBe(direct.total_surplus_pieces);
     expect(byN.stats.stage1_by_n?.some((s) => s.N === 0)).toBe(true); // đã quay về direct
@@ -129,8 +161,9 @@ describe('optimizeMaterial', () => {
     expect(r.feasible).toBe(true);
     if (!r.feasible) return;
     expect(r.total_bars).toBe(1794);
-    expect(r.waste_pct).toBeCloseTo(0.1667, 4);
-    expect(r.total_waste_mm).toBe(17940);
+    // 0,1667 % / 17940 mm cũ = đúng 1794 cây × tề 10 mm (cùi 0); chỉ tính cùi -> 0.
+    expect(r.waste_pct).toBeCloseTo(0, 4);
+    expect(r.total_waste_mm).toBe(0);
     expect(r.total_surplus_pieces).toBeLessThanOrEqual(14);
     expect(r.stats.stage1_status).toBe('optimal_by_bound');
     expect(r.stats.stage1_by_n?.[0]).toMatchObject({ N: 1794, via: 'rounding' });

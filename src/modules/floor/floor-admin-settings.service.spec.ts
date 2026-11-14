@@ -1,6 +1,7 @@
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { FloorAdminService } from './floor-admin.service';
 
 /** QLSX chỉ ĐỌC địa chỉ ERP dùng cho tem; Admin đặt ở Cấu hình hệ thống (test ghi ở system-config.service.spec). */
@@ -14,6 +15,7 @@ describe('FloorAdminService.getSettings', () => {
       prisma as unknown as PrismaServiceType,
       {} as SteelIssuesService,
       {} as ProductionBatchesService,
+      {} as WorkshopScopeService,
     );
   });
 

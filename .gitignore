@@ -32,3 +32,10 @@ src/generated/
 
 # db backups - contains real data, never commit
 backups/
+
+# Cấu hình/trạng thái agent cục bộ - không đưa lên repo công khai
+.loopwright/
+.agents/
+.codex/
+.junie/
+.claude/

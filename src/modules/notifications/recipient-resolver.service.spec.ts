@@ -187,6 +187,32 @@ describe('RecipientResolverService - dropQlsxOfOtherWorkshops', () => {
     });
   });
 
+  it('thông báo về máy cắt: params.workshopId (chuỗi số) là xưởng - QLSX xưởng khác không nhận, không tra lệnh', async () => {
+    const { service, prisma } = makeService({});
+
+    const ids = await service.dropQlsxOfOtherWorkshops(ALL, {
+      entityType: 'WORKSTATION',
+      entityId: '12',
+      params: { workshopId: '2', machineName: 'Máy 1' },
+    });
+
+    expect(ids).toEqual(['qlsx-pa', 'qlsx-chua-gan', 'thu-kho']);
+    expect(prisma.productionInvoice.findUnique).not.toHaveBeenCalled();
+    expect(prisma.productionInvoiceItem.findMany).not.toHaveBeenCalled();
+  });
+
+  it('params.workshopId không phải chuỗi số: bỏ qua, giữ nguyên người nhận', async () => {
+    const { service } = makeService({});
+
+    const ids = await service.dropQlsxOfOtherWorkshops(ALL, {
+      entityType: 'WORKSTATION',
+      entityId: '12',
+      params: { workshopId: 'abc' },
+    });
+
+    expect(ids).toEqual(ALL);
+  });
+
   it('không gắn được với lệnh nào (vd bản tin buổi sáng): giữ nguyên mọi người nhận', async () => {
     const { service } = makeService({});
 

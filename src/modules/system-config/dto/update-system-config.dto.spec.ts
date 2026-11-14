@@ -74,6 +74,62 @@ describe('UpdateSystemConfigDto - máy cắt', () => {
     expect(await errorsOn({ solverMaxSizesPerPattern: 11 })).toContain('solverMaxSizesPerPattern');
   });
 
+  it('solverLaserMinTailMm 0-1000, số nguyên', async () => {
+    expect(await errorsOn({ solverLaserMinTailMm: 0 })).toEqual([]);
+    expect(await errorsOn({ solverLaserMinTailMm: 100 })).toEqual([]);
+    expect(await errorsOn({ solverLaserMinTailMm: 1000 })).toEqual([]);
+    expect(await errorsOn({ solverLaserMinTailMm: -1 })).toContain('solverLaserMinTailMm');
+    expect(await errorsOn({ solverLaserMinTailMm: 1001 })).toContain('solverLaserMinTailMm');
+    expect(await errorsOn({ solverLaserMinTailMm: 10.5 })).toContain('solverLaserMinTailMm');
+  });
+
+  it('solverMaxSizesPerBarByWorkshop: object { mã xưởng: số nguyên 1-10 }, {} hợp lệ (bỏ hết luật)', async () => {
+    const prop = 'solverMaxSizesPerBarByWorkshop';
+    expect(await errorsOn({ [prop]: { PHUOC_AN: 2 } })).toEqual([]);
+    expect(await errorsOn({ [prop]: { PHUOC_AN: 1, PHU_AN: 10 } })).toEqual([]);
+    expect(await errorsOn({ [prop]: {} })).toEqual([]);
+    expect(await errorsOn({ [prop]: { PHUOC_AN: 0 } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { PHUOC_AN: 11 } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { PHUOC_AN: 2.5 } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { PHUOC_AN: '2' } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { '': 2 } })).toContain(prop);
+    expect(await errorsOn({ [prop]: [2] })).toContain(prop);
+    expect(await errorsOn({ [prop]: 'PHUOC_AN=2' })).toContain(prop);
+    expect(await errorsOn({ [prop]: null })).toEqual([]); // IsOptional bỏ qua null/undefined
+  });
+
+  it('solverMachineByWorkshop: object { mã xưởng: laser | tu_dong }, {} hợp lệ', async () => {
+    const prop = 'solverMachineByWorkshop';
+    expect(await errorsOn({ [prop]: { PHUOC_AN: 'tu_dong' } })).toEqual([]);
+    expect(await errorsOn({ [prop]: { PHUOC_AN: 'tu_dong', PHU_AN: 'laser' } })).toEqual([]);
+    expect(await errorsOn({ [prop]: {} })).toEqual([]);
+    expect(await errorsOn({ [prop]: { PHUOC_AN: 'plasma' } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { PHUOC_AN: 2 } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { '': 'laser' } })).toContain(prop);
+    expect(await errorsOn({ [prop]: ['laser'] })).toContain(prop);
+    expect(await errorsOn({ [prop]: 'laser' })).toContain(prop);
+  });
+
+  it('solverBundleFactorsBySpec: khoá V/H/FI, mảng 1-12 số nguyên 2-500 không trùng, {} hợp lệ', async () => {
+    const prop = 'solverBundleFactorsBySpec';
+    expect(await errorsOn({ [prop]: { V10: [60, 64], 'H13-26': [20], FI19: [30] } })).toEqual([]);
+    expect(await errorsOn({ [prop]: { v10: [60], ' h10-20 ': [20] } })).toEqual([]); // viết thường/khoảng trắng được chuẩn hoá
+    expect(await errorsOn({ [prop]: { 'FI12.5': [30] } })).toEqual([]);
+    expect(await errorsOn({ [prop]: {} })).toEqual([]);
+    expect(await errorsOn({ [prop]: { VUONG10: [60] } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { H10: [60] } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { V10: [] } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { V10: [1] } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { V10: [501] } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { V10: [60, 60] } })).toContain(prop);
+    expect(await errorsOn({ [prop]: { V10: [60.5] } })).toContain(prop);
+    expect(
+      await errorsOn({ [prop]: { V10: Array.from({ length: 13 }, (_, i) => i + 2) } }),
+    ).toContain(prop);
+    expect(await errorsOn({ [prop]: { V10: 60 } })).toContain(prop);
+    expect(await errorsOn({ [prop]: [60] })).toContain(prop);
+  });
+
   it('lưỡi MC Tự động 0-10 mm (cho số lẻ), tề đầu 0-100 mm (số nguyên)', async () => {
     expect(await errorsOn({ solverMctdBladeWidthMm: 0 })).toEqual([]);
     expect(await errorsOn({ solverMctdBladeWidthMm: 10 })).toEqual([]);

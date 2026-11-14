@@ -118,4 +118,21 @@ describe('SolverOverrideDto', () => {
       expect(await errorsOn({ [KEY]: { '5': 5850 } })).toEqual([]);
     });
   });
+
+  describe('workshopId (xưởng của lượt tính, 13/11/2026)', () => {
+    it('bỏ trống thì hợp lệ - FE cũ lúc deploy lệch vẫn tính được', async () => {
+      expect(await errorsOn({})).toEqual([]);
+    });
+
+    it('nhận chuỗi số nguyên dương', async () => {
+      expect(await errorsOn({ workshopId: '3' })).toEqual([]);
+      expect(await errorsOn({ workshopId: '120' })).toEqual([]);
+    });
+
+    it('từ chối giá trị không phải chuỗi số nguyên dương', async () => {
+      for (const bad of ['0', '-1', '1.5', 'abc', '', '03', 3]) {
+        expect(await errorsOn({ workshopId: bad })).toContain('workshopId');
+      }
+    });
+  });
 });

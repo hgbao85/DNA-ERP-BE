@@ -18,8 +18,92 @@ import {
   MaxLength,
   Min,
   MinLength,
+  Validate,
+  ValidatorConstraint,
+  type ValidatorConstraintInterface,
 } from 'class-validator';
 import { SolverMachine } from '../../../generated/prisma/client';
+import {
+  STEEL_SPEC_KEY_REGEX,
+  normalizeSpecKey,
+} from '../../cutting-proposals/steel-spec-key.util';
+
+/**
+ * `solverMaxSizesPerBarByWorkshop`: object thường, khoá = chuỗi không rỗng (mã xưởng), giá trị số
+ * nguyên 1-10; {} hợp lệ.
+ */
+@ValidatorConstraint({ name: 'sizesPerBarByWorkshop', async: false })
+export class SizesPerBarByWorkshopConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+    return Object.entries(value).every(
+      ([code, n]) =>
+        code.trim() !== '' && typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 10,
+    );
+  }
+
+  defaultMessage(): string {
+    return 'solverMaxSizesPerBarByWorkshop phải là object { "<mã xưởng>": số nguyên 1-10 }, khoá không được rỗng';
+  }
+}
+
+/**
+ * `solverMachineByWorkshop`: object thường, khoá = chuỗi không rỗng (mã xưởng), giá trị 'laser' |
+ * 'tu_dong'; {} hợp lệ.
+ */
+@ValidatorConstraint({ name: 'machineByWorkshop', async: false })
+export class MachineByWorkshopConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+    return Object.entries(value).every(
+      ([code, m]) => code.trim() !== '' && (m === 'laser' || m === 'tu_dong'),
+    );
+  }
+
+  defaultMessage(): string {
+    return 'solverMachineByWorkshop phải là object { "<mã xưởng>": "laser" | "tu_dong" }, khoá không được rỗng';
+  }
+}
+
+/**
+ * `solverBundleFactorsBySpec`: object thường; khoá (sau khi viết hoa/bỏ khoảng trắng) là V<cạnh> |
+ * H<a>-<b> | FI<đường kính>;
+ * giá trị là mảng 1..12 số nguyên trong [2, 500], không trùng; {} hợp lệ.
+ */
+@ValidatorConstraint({ name: 'bundleFactorsBySpec', async: false })
+export class BundleFactorsBySpecConstraint implements ValidatorConstraintInterface {
+  private problem(value: unknown): string | null {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return 'solverBundleFactorsBySpec phải là object { "<mã quy cách>": [số cây/bó...] }';
+    }
+    const seen = new Set<string>();
+    for (const [rawKey, arr] of Object.entries(value)) {
+      const key = normalizeSpecKey(rawKey);
+      if (!STEEL_SPEC_KEY_REGEX.test(key)) {
+        return `Mã quy cách "${rawKey}" không hợp lệ (dạng V20, H13-26, FI19)`;
+      }
+      if (seen.has(key)) return `Mã quy cách "${key}" bị khai trùng`;
+      seen.add(key);
+      if (!Array.isArray(arr) || arr.length < 1 || arr.length > 12) {
+        return `Quy cách ${key}: số cây/bó phải là mảng 1-12 số nguyên`;
+      }
+      if (!arr.every((n) => typeof n === 'number' && Number.isInteger(n) && n >= 2 && n <= 500)) {
+        return `Quy cách ${key}: số cây/bó phải là số nguyên từ 2 đến 500`;
+      }
+      if (new Set(arr).size !== arr.length)
+        return `Quy cách ${key}: số cây/bó không được trùng nhau`;
+    }
+    return null;
+  }
+
+  validate(value: unknown): boolean {
+    return this.problem(value) === null;
+  }
+
+  defaultMessage(args?: { value?: unknown }): string {
+    return this.problem(args?.value) ?? 'solverBundleFactorsBySpec không hợp lệ';
+  }
+}
 
 export class UpdateSystemConfigDto {
   @ApiProperty()
@@ -134,13 +218,21 @@ export class UpdateSystemConfigDto {
   @Min(0)
   solverMaxSurplus?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    example: 4000,
+    description:
+      'Chiều dài cây NHỎ NHẤT bộ giải được dò (mm), mặc định 4000; phải ≤ solverMaxLengthMm. Dò từ cây chuẩn ra 2 phía, lấy chiều dài gần cây chuẩn nhất đạt ngưỡng.',
+  })
   @IsOptional()
   @IsInt()
   @Min(100)
   solverMinLengthMm?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    example: 6500,
+    description:
+      'Chiều dài cây LỚN NHẤT bộ giải được dò (mm), mặc định 6500; phải ≥ solverMinLengthMm.',
+  })
   @IsOptional()
   @IsInt()
   @Min(100)
@@ -192,9 +284,10 @@ export class UpdateSystemConfigDto {
   solverMctdBladeWidthMm?: number;
 
   @ApiPropertyOptional({
-    example: 0,
+    example: 10,
     description:
-      'Tề đầu (mm) của MC Tự động - cặp riêng, tách khỏi solverTrimStartMm (MC Laser). 0-100.',
+      'Tề đầu (mm) của MC Tự động - cặp riêng, tách khỏi solverTrimStartMm (MC Laser). 0-100, mặc định 10. ' +
+      'Từ 13/11/2026 tề đầu KHÔNG tính vào hao hụt (chỉ cùi - khúc thừa cuối cây - mới tính).',
   })
   @IsOptional()
   @IsInt()
@@ -242,10 +335,58 @@ export class UpdateSystemConfigDto {
   solverMaxSizesPerPattern?: number;
 
   @ApiPropertyOptional({
-    example: 3,
+    example: 100,
+    description:
+      'Luật máy laze (13/11/2026): nhát cắt cuối phải ra 1 đoạn DÀI HƠN số mm này (tính cả phần cùi hao hụt); chỉ áp cho kiểu cắt từng cây. 0 = tắt. 0-1000.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1000)
+  solverLaserMinTailMm?: number;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: { type: 'number' },
+    example: { PHUOC_AN: 2 },
+    description:
+      'Luật xưởng "tối đa N cỡ đoạn trên 1 cây": khoá = mã xưởng (Workshop.code), giá trị số nguyên 1-10. Bộ giải thử N cỡ trước, không đạt ' +
+      'ngưỡng hao hụt mới nới N+1, N+2... tới giới hạn của máy. {} = bỏ hết luật; xưởng không có khoá = không có luật riêng. Không gửi field = giữ nguyên.',
+  })
+  @IsOptional()
+  @Validate(SizesPerBarByWorkshopConstraint)
+  solverMaxSizesPerBarByWorkshop?: Record<string, number>;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: { type: 'string', enum: ['laser', 'tu_dong'] },
+    example: { PHUOC_AN: 'tu_dong' },
+    description:
+      'Máy cắt BẮT BUỘC theo xưởng: khoá = mã xưởng (Workshop.code), giá trị laser | tu_dong. Xưởng có khoá thì mọi lượt tính của xưởng đó ' +
+      'dùng máy này, đè lựa chọn của KHSX. {} = không khoá xưởng nào. Không gửi field = giữ nguyên.',
+  })
+  @IsOptional()
+  @Validate(MachineByWorkshopConstraint)
+  solverMachineByWorkshop?: Record<string, 'laser' | 'tu_dong'>;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: { type: 'array', items: { type: 'number' } },
+    example: { V10: [60, 64, 68], 'H10-20': [20, 24] },
+    description:
+      'Số cây/bó cho phép của MC Tự động THEO QUY CÁCH: khoá = V<cạnh> | H<a>-<b> (a ≤ b) | FI<đường kính> (viết hoa), giá trị = mảng 1-12 ' +
+      'số nguyên 2-500. Quy cách không có trong bảng thì không cắt MC Tự động (tính từng cây theo thông số MC Laser). {} = dùng hệ số bó chung ' +
+      'cho mọi quy cách. Không gửi field = giữ nguyên.',
+  })
+  @IsOptional()
+  @Validate(BundleFactorsBySpecConstraint)
+  solverBundleFactorsBySpec?: Record<string, number[]>;
+
+  @ApiPropertyOptional({
+    example: 5,
     description:
       'Luật gộp: mốc cần sắt (hạn Mua VT khung & đan, không có thì hạn khung) của các SKU trong 1 đợt tính / 1 lệnh gộp nằm trong khung ' +
-      'chừng này ngày TÍNH CẢ NGÀY ĐẦU (3 = ngày 1 gộp được ngày 3, không gộp với ngày 4) - chặn khi tính phương án, gộp lệnh ' +
+      'chừng này ngày TÍNH CẢ NGÀY ĐẦU (mặc định 5 = ngày 10 gộp được ngày 14, không gộp với ngày 15) - chặn khi tính phương án, gộp lệnh ' +
       'và lưu hạn lệnh gộp. 1 = chỉ gộp SKU cùng ngày. 1-365.',
   })
   @IsOptional()

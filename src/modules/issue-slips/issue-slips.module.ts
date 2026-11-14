@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { FloorModule } from '../floor/floor.module';
 import { MaterialIssuesModule } from '../material-issues/material-issues.module';
 import { SteelIssuesModule } from '../steel-issues/steel-issues.module';
 import { StockModule } from '../stock/stock.module';
@@ -20,6 +21,7 @@ import { IssueSlipsService } from './issue-slips.service';
     PackagingIssuesModule,
     MaterialYieldIssuesModule,
     MaterialYieldRecipesModule,
+    FloorModule,
   ],
   controllers: [IssueSlipsController],
   providers: [IssueSlipsService],

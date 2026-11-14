@@ -20,14 +20,25 @@ import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorat
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import type { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
-import { EnqueuePiDto, ReorderQueueDto } from './dto/floor-queue.dto';
-import { FloorStatsQueryDto, MyStatsQueryDto } from './dto/floor-stats.dto';
 import {
-  FloorQueueQueryDto,
-  FloorReviewQueryDto,
-  ScanContextQueryDto,
-  SendStepGroupDto,
-} from './dto/floor-review.dto';
+  AddCutAllocationDto,
+  AutoCutAllocationDto,
+  CutAllocationLogQueryDto,
+  CutAllocationQueryDto,
+  ReorderCutAllocationDto,
+  SplitCutAllocationDto,
+  UpdateCutAllocationDto,
+} from './dto/cut-allocation.dto';
+import {
+  EnqueuePiDto,
+  QueueCandidatesQueryDto,
+  QueueListQueryDto,
+  QueueWorkshopDto,
+  ReorderQueueDto,
+} from './dto/floor-queue.dto';
+import { CutMachineStatsQueryDto } from './dto/cut-machine-stats.dto';
+import { FloorStatsQueryDto, MyStatsQueryDto } from './dto/floor-stats.dto';
+import { FloorReviewQueryDto, ScanContextQueryDto, SendStepGroupDto } from './dto/floor-review.dto';
 import {
   MyOutputQueryDto,
   ReverseFloorReportDto,
@@ -41,6 +52,8 @@ import {
   UpdateFloorWorkerDto,
 } from './dto/floor-worker.dto';
 import { CreateWorkstationDto, UpdateWorkstationDto } from './dto/workstation.dto';
+import { CutAllocationService } from './cut-allocation.service';
+import { CutMachineStatsService } from './cut-machine-stats.service';
 import { FloorAdminService } from './floor-admin.service';
 import { FloorReviewService } from './floor-review.service';
 import { FloorRealtimeInterceptor } from './floor-realtime.interceptor';
@@ -74,6 +87,8 @@ export class FloorController {
     private readonly scan: FloorScanService,
     private readonly review: FloorReviewService,
     private readonly statsService: FloorStatsService,
+    private readonly cutAllocation: CutAllocationService,
+    private readonly cutMachineStats: CutMachineStatsService,
   ) {}
 
   // ─── Công nhân: quét mã tại máy ──────────────────────────────────────────────
@@ -129,6 +144,21 @@ export class FloorController {
   @RequireRole(QLSX, BUSINESS_ROLES.BOSS, DEFAULT_ROLES.ADMIN)
   stats(@Query() query: FloorStatsQueryDto) {
     return this.statsService.getStats(query);
+  }
+
+  /**
+   * Đo năng suất máy cắt (đợt C4a, 14/11/2026): số đo từ giờ công nhân báo qua QR ở máy cắt, để IT
+   * gửi Sếp chốt luật nửa ca. Chỉ ĐỌC;
+   * cùng quyền với `stats`, xưởng theo tài khoản (người không gắn xưởng phải truyền workshopId).
+   */
+  @Get('stats/cut-machines')
+  @RequirePermissions(perm(PermissionAction.VIEW))
+  @RequireRole(QLSX, BUSINESS_ROLES.BOSS, DEFAULT_ROLES.ADMIN)
+  cutMachineStatsReport(
+    @Query() query: CutMachineStatsQueryDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.cutMachineStats.getStats(userId, query);
   }
 
   /**
@@ -230,15 +260,15 @@ export class FloorController {
   @Get('queue')
   @RequirePermissions(perm(PermissionAction.VIEW))
   @RequireRole(QLSX)
-  listQueue(@Query() query: FloorQueueQueryDto) {
-    return this.admin.listQueue(query.stage);
+  listQueue(@Query() query: QueueListQueryDto, @CurrentUser('id') userId: string) {
+    return this.admin.listQueue(userId, query.stage, query.workshopId);
   }
 
   @Get('queue/candidates')
   @RequirePermissions(perm(PermissionAction.VIEW))
   @RequireRole(QLSX)
-  queueCandidates(@Query() query: FloorReviewQueryDto) {
-    return this.admin.queueCandidates(query.stage);
+  queueCandidates(@Query() query: QueueCandidatesQueryDto, @CurrentUser('id') userId: string) {
+    return this.admin.queueCandidates(userId, query.stage, query.workshopId);
   }
 
   @Post('queue')
@@ -251,24 +281,39 @@ export class FloorController {
   @Post('queue/:stage/reorder')
   @RequirePermissions(perm(PermissionAction.UPDATE))
   @RequireRole(QLSX)
-  reorder(@Param('stage') stage: string, @Body() dto: ReorderQueueDto) {
-    return this.admin.reorder(parseStage(stage), dto.entryIds);
+  reorder(
+    @Param('stage') stage: string,
+    @Body() dto: ReorderQueueDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.admin.reorder(userId, parseStage(stage), dto.entryIds, dto.workshopId);
   }
 
-  /** "Chuyển PI tiếp" (tổ chưa chạy PI nào thì bắt đầu PI đầu hàng). */
+  /**
+   * "Chuyển PI tiếp" của 1 (tổ, xưởng) (hàng đợi chưa chạy PI nào thì bắt đầu PI đầu hàng). Người
+   * không gắn xưởng phải truyền workshopId.
+   */
   @Post('queue/:stage/advance')
   @RequirePermissions(perm(PermissionAction.UPDATE))
   @RequireRole(QLSX)
-  advance(@Param('stage') stage: string, @CurrentUser('id') userId: string) {
-    return this.admin.advance(parseStage(stage), userId);
+  advance(
+    @Param('stage') stage: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto?: QueueWorkshopDto,
+  ) {
+    return this.admin.advance(parseStage(stage), userId, dto?.workshopId);
   }
 
   /** Hoàn tác "Chuyển PI tiếp" nhầm - chỉ khi PI đang chạy chưa có lần báo nào (xem FloorAdminService.reopenLast). */
   @Post('queue/:stage/reopen')
   @RequirePermissions(perm(PermissionAction.UPDATE))
   @RequireRole(QLSX)
-  reopen(@Param('stage') stage: string) {
-    return this.admin.reopenLast(parseStage(stage));
+  reopen(
+    @Param('stage') stage: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto?: QueueWorkshopDto,
+  ) {
+    return this.admin.reopenLast(userId, parseStage(stage), dto?.workshopId);
   }
 
   /** Ngăn "còn thiếu gì" của thẻ PI (mục 45.4): tiến độ tổ + dữ liệu gốc (phoi-progress / batch-plan theo SKU). */
@@ -285,8 +330,80 @@ export class FloorController {
   @Delete('queue/:id')
   @RequirePermissions(perm(PermissionAction.DELETE))
   @RequireRole(QLSX)
-  removeEntry(@Param('id') id: string) {
-    return this.admin.removeEntry(id);
+  removeEntry(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.admin.removeEntry(userId, id);
+  }
+
+  // ─── QLSX: chia máy cắt (đợt B1, 13/11/2026) ────────────────────────────────
+  // Chỉ là bảng kế hoạch - không đổi luồng quét QR / hàng đợi tổ. Xưởng lấy theo tài khoản
+  // (WorkshopScopeService).
+
+  @Get('cut-allocation')
+  @RequirePermissions(perm(PermissionAction.VIEW))
+  @RequireRole(QLSX)
+  cutAllocationBoard(@Query() query: CutAllocationQueryDto, @CurrentUser('id') userId: string) {
+    return this.cutAllocation.getBoard(userId, query.workshopId);
+  }
+
+  /**
+   * Nhật ký điều chuyển (Sếp chốt 14/11, câu 6 + 10): cùng quyền và phạm vi xưởng với bảng; mặc
+   * định 30 ngày gần nhất.
+   */
+  @Get('cut-allocation/log')
+  @RequirePermissions(perm(PermissionAction.VIEW))
+  @RequireRole(QLSX)
+  cutAllocationLog(@Query() query: CutAllocationLogQueryDto, @CurrentUser('id') userId: string) {
+    return this.cutAllocation.getLog(userId, query);
+  }
+
+  @Post('cut-allocation/auto')
+  @RequirePermissions(perm(PermissionAction.CREATE))
+  @RequireRole(QLSX)
+  cutAllocationAuto(@Body() dto: AutoCutAllocationDto, @CurrentUser('id') userId: string) {
+    return this.cutAllocation.auto(userId, dto);
+  }
+
+  @Post('cut-allocation/add')
+  @RequirePermissions(perm(PermissionAction.CREATE))
+  @RequireRole(QLSX)
+  cutAllocationAdd(@Body() dto: AddCutAllocationDto, @CurrentUser('id') userId: string) {
+    return this.cutAllocation.add(userId, dto);
+  }
+
+  @Post('cut-allocation/reorder')
+  @RequirePermissions(perm(PermissionAction.UPDATE))
+  @RequireRole(QLSX)
+  cutAllocationReorder(@Body() dto: ReorderCutAllocationDto, @CurrentUser('id') userId: string) {
+    return this.cutAllocation.reorder(userId, dto);
+  }
+
+  @Patch('cut-allocation/:id')
+  @RequirePermissions(perm(PermissionAction.UPDATE))
+  @RequireRole(QLSX)
+  cutAllocationUpdate(
+    @Param('id') id: string,
+    @Body() dto: UpdateCutAllocationDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.cutAllocation.update(userId, id, dto);
+  }
+
+  @Post('cut-allocation/:id/split')
+  @RequirePermissions(perm(PermissionAction.CREATE))
+  @RequireRole(QLSX)
+  cutAllocationSplit(
+    @Param('id') id: string,
+    @Body() dto: SplitCutAllocationDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.cutAllocation.split(userId, id, dto);
+  }
+
+  @Delete('cut-allocation/:id')
+  @RequirePermissions(perm(PermissionAction.DELETE))
+  @RequireRole(QLSX)
+  cutAllocationRemove(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.cutAllocation.remove(userId, id);
   }
 
   // ─── QLSX: kiểm + gửi KCS + đảo lần báo ─────────────────────────────────────

@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   Max,
   Min,
   MinLength,
@@ -103,4 +104,16 @@ export class SolverOverrideDto {
   @Min(1)
   @Max(3600)
   solverTimeLimitSecondsOverride?: number;
+
+  @ApiPropertyOptional({
+    example: '1',
+    description:
+      'Xưởng KHSX chọn cho lượt tính (Workshop.id, chuỗi số nguyên dương) - chọn TRƯỚC khi bấm Tính; ' +
+      'lệnh sản xuất tạo từ lượt tính mang sẵn xưởng này và xưởng quyết định luật "tối đa N cỡ đoạn/cây" ' +
+      '(SystemConfig.solverMaxSizesPerBarByWorkshop). Bỏ trống = vẫn tính được, không áp luật số cỡ theo xưởng.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[1-9]\d{0,17}$/, { message: 'workshopId phải là số nguyên dương (id xưởng)' })
+  workshopId?: string;
 }

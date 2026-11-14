@@ -34,6 +34,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
   let packaging: Record<string, jest.Mock>;
   let yieldIssues: Record<string, jest.Mock>;
   let recipeIssues: Record<string, jest.Mock>;
+  let floorAlerts: { requestEvaluate: jest.Mock };
 
   const steelLine = (o: Record<string, unknown> = {}) => ({
     id: 11n,
@@ -221,6 +222,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       createInTx: jest.fn().mockResolvedValue({ id: 703n }),
       afterCreate: jest.fn(),
     };
+    floorAlerts = { requestEvaluate: jest.fn() };
     service = new IssueSlipsService(
       prisma as unknown as PrismaServiceType,
       steel as unknown as SteelIssuesService,
@@ -233,6 +235,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       packaging as never,
       yieldIssues as never,
       recipeIssues as never,
+      floorAlerts as never,
     );
   });
 
@@ -408,6 +411,40 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       expect(consumable.afterCreate).toHaveBeenCalledWith({ id: 401n }, 'kho-1');
     });
 
+    describe('quét nhắc việc sớm sau khi xuất sắt', () => {
+      it('phiếu có dòng sắt: gọi requestEvaluate({ urgent: true }) sau khi commit', async () => {
+        await service.confirm('9', ['u'], 'kho-1', null, 'k-steel');
+        expect(floorAlerts.requestEvaluate).toHaveBeenCalledTimes(1);
+        expect(floorAlerts.requestEvaluate).toHaveBeenCalledWith({ urgent: true });
+        // Gọi sau commit: transaction đã chạy xong trước đó.
+        expect(prisma.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+          floorAlerts.requestEvaluate.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('phiếu không có dòng sắt: không gọi', async () => {
+        prisma.issueSlip.findUnique.mockResolvedValue(slip({ lines: [consLine()] }));
+        await service.confirm('9', ['u'], 'kho-1', null, 'k-cons');
+        expect(floorAlerts.requestEvaluate).not.toHaveBeenCalled();
+      });
+
+      it('phiếu bị từ chối (lỗi trước khi commit): không gọi', async () => {
+        prisma.$queryRaw.mockResolvedValueOnce([{ status: IssueSlipStatus.CANCELLED }]);
+        await expect(service.confirm('9', ['u'], 'kho-1', null, 'k')).rejects.toThrow(
+          ConflictException,
+        );
+        expect(floorAlerts.requestEvaluate).not.toHaveBeenCalled();
+      });
+
+      it('requestEvaluate ném lỗi: xác nhận phiếu vẫn trả kết quả', async () => {
+        floorAlerts.requestEvaluate.mockImplementation(() => {
+          throw new Error('boom');
+        });
+        await expect(service.confirm('9', ['u'], 'kho-1', null, 'k-throw')).resolves.toBeDefined();
+        expect(steel.afterCreate).toHaveBeenCalled();
+      });
+    });
+
     it('không có ảnh phiếu ký -> 400, không ghi gì (khoá cứng)', async () => {
       await expect(service.confirm('9', ['  '], 'kho-1', null, 'k')).rejects.toThrow(
         BadRequestException,
@@ -491,7 +528,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
     });
   });
 
-  // Anh Nhân 09/11/2026: xuất đan 2 phiếu - phiếu mảnh (kho Sơn) + phiếu vật tư kèm (kho Phụ kiện) cùng điểm đan.
+  // Xuất đan 2 phiếu - phiếu mảnh (kho Sơn) + phiếu vật tư kèm (kho Phụ kiện) cùng điểm đan.
   describe('phiếu xuất đan', () => {
     const pieceLine = (o: Record<string, unknown> = {}) => ({
       id: 21n,
@@ -840,7 +877,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
     });
   });
 
-  // 09/11/2026: xuất đóng gói và xuất vật tư TP cho Phôi cũng đi phiếu XK có ảnh ký (route xuất thẳng đã gỡ).
+  // Xuất đóng gói và xuất vật tư TP cho Phôi cũng đi phiếu XK có ảnh ký (route xuất thẳng đã gỡ).
   describe('dòng đóng gói / vật tư TP', () => {
     it('tạo phiếu: kiểm từng dòng bằng lõi của từng luồng, ghi recipeId + vật tư đầu vào cho dòng công thức', async () => {
       await service.create(
@@ -891,7 +928,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       ]);
     });
 
-    it('lập phiếu đóng gói: kiểm tồn khả dụng ngay lúc lập; thiếu tồn thì không cấp số, không tạo phiếu (RPK.2, 13/11/2026)', async () => {
+    it('lập phiếu đóng gói: kiểm tồn khả dụng ngay lúc lập; thiếu tồn thì không cấp số, không tạo phiếu (RPK.2)', async () => {
       const dto = {
         lines: [
           { kind: IssueSlipLineKind.PACKAGING, materialId: '20', productionOrderId: '70', qty: 8 },

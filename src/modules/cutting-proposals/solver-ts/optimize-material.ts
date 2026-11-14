@@ -36,6 +36,20 @@ export interface OptimizeMaterialOptions {
   maxSizesPerBar?: number;
   /** CHỈ ĐỂ TEST đối chiếu app cũ (cho thiếu trong maxSurplus) - xem TwoStageInput.allowShortage */
   allowShortage?: boolean;
+  /**
+   * Luật xưởng "tối đa N cỡ/cây" (13/11/2026): trần CỨNG N cỡ trên mỗi kiểu cắt cho CẢ 2 máy - liệt
+   * kê ra 0 kiểu thì báo
+   * vô nghiệm, KHÔNG tự bỏ giới hạn (khác MC Laser mặc định: cap 4 rồi bỏ). Thang mức nới do
+   * optimizeOneMaterial điều khiển.
+   */
+  hardMaxSizesPerBar?: number;
+  /**
+   * Luật laze "nhát cắt cuối" (13/11/2026, Sếp câu 11): mỗi kiểu cắt phải có (đoạn dài nhất trên
+   * cây + cùi) > số này (mm).
+   * Chỉ cho cắt từng cây (không có `bundle`); thiếu / ≤ 0 = không áp. Áp ở MỌI đường sinh kiểu cắt
+   * (kể cả thang ENUM_RATIO_LADDER).
+   */
+  laserMinTailMm?: number;
 }
 
 /**
@@ -46,6 +60,14 @@ export const ENUM_RATIO_LADDER = [0.5, 0.2, 0.1, 0.05, 0.03, 0.02, 0.015, 0.01, 
 
 /** Số cỡ tối đa trên 1 kiểu cắt của máy MC Tự động (cat_sat/optimization_logic.py: lọc `<= 5`). */
 export const MCTD_MAX_SIZES_PER_PATTERN = 5;
+
+/** Câu lý do khi luật laze "nhát cắt cuối" làm hết kiểu cắt hợp lệ (13/11/2026). */
+export function laserTailReason(minTailMm: number): string {
+  return (
+    `Máy laze cần nhát cắt cuối ra đoạn dài hơn ${fmtG(minTailMm)} mm (gồm cùi): các đoạn quá ngắn, ` +
+    `không xếp được kiểu cắt đạt ngưỡng hao hụt.`
+  );
+}
 
 function rssMb(): number {
   return process.memoryUsage().rss / 1024 / 1024;
@@ -75,6 +97,11 @@ export function optimizeMaterial(
   const bundle = opts.bundle;
   const machine: MachineKind = bundle ? 'tu_dong' : 'laser';
   const mctdCap = bundle ? (opts.maxSizesPerBar ?? MCTD_MAX_SIZES_PER_PATTERN) : null;
+  // Luật nhát cắt cuối chỉ cho cắt từng cây: có bó thì bỏ qua dù được truyền.
+  const minTail =
+    !bundle && opts.laserMinTailMm !== undefined && opts.laserMinTailMm > 0
+      ? opts.laserMinTailMm
+      : 0;
 
   // Chế độ KHÔNG trộn: đánh giá từng chiều dài đơn, chọn cái tốt nhất
   if (!allowMix && stockLengths.length > 1) {
@@ -90,6 +117,8 @@ export function optimizeMaterial(
         bundle,
         maxSizesPerBar: opts.maxSizesPerBar,
         allowShortage: opts.allowShortage,
+        hardMaxSizesPerBar: opts.hardMaxSizesPerBar,
+        laserMinTailMm: opts.laserMinTailMm,
       });
       if (!r.feasible) continue;
       const key: [number, number] = [Math.round(r.waste_pct * 1e4) / 1e4, r.total_purchased_mm];
@@ -119,7 +148,10 @@ export function optimizeMaterial(
   let enumRatioUsed: number | null = null;
   type AllPat = { S: number; S_s: number; counts: number[]; waste: number };
   let allPatterns: AllPat[] = [];
-  const capPlan: Array<number | null> = mctdCap !== null ? [mctdCap] : [MAX_SIZES_PER_BAR, null];
+  const hardCap =
+    opts.hardMaxSizesPerBar != null ? Math.max(1, Math.trunc(opts.hardMaxSizesPerBar)) : null;
+  const capPlan: Array<number | null> =
+    hardCap !== null ? [hardCap] : mctdCap !== null ? [mctdCap] : [MAX_SIZES_PER_BAR, null];
   for (const cap of capPlan) {
     allPatterns = [];
     patternsComplete = true;
@@ -129,6 +161,7 @@ export function optimizeMaterial(
           maxWasteRatio: ratio,
           timeLimitSec: enumBudget,
           maxSizesPerBar: cap,
+          ...(minTail > 0 ? { minLastCutMm: minTail } : {}),
         });
       const tGen = performance.now();
       const first = gen(maxWasteRatio);
@@ -174,14 +207,29 @@ export function optimizeMaterial(
           `Hãy tăng thời gian chạy hoặc tách bớt cỡ đoạn.`,
       };
     }
+    // Luật nhát cắt cuối là thủ phạm? (bỏ luật mà có kiểu cắt thì đúng) -> nói rõ để người dùng
+    // không đi nới % vô ích.
+    if (minTail > 0) {
+      const withoutRule = stockLengths.some(
+        (S) =>
+          generatePatterns(cutLengths, demands, S, trim, kerf, {
+            maxWasteRatio,
+            timeLimitSec: enumBudget,
+            maxSizesPerBar: hardCap,
+          }).rows.length > 0,
+      );
+      if (withoutRule) return { feasible: false, reason: laserTailReason(minTail) };
+    }
     return {
       feasible: false,
       reason:
         `Không có cách cắt nào ≤ ${(maxWasteRatio * 100).toFixed(1)}% hao hụt/cây ` +
         `với các chiều dài đã cho` +
-        (mctdCap !== null && n > mctdCap
-          ? ` (MC Tự động: tối đa ${mctdCap} cỡ mỗi kiểu cắt)`
-          : '') +
+        (hardCap !== null && n > hardCap
+          ? ` (luật xưởng: tối đa ${hardCap} cỡ mỗi kiểu cắt)`
+          : mctdCap !== null && n > mctdCap
+            ? ` (MC Tự động: tối đa ${mctdCap} cỡ mỗi kiểu cắt)`
+            : '') +
         `. Hãy tăng % hoặc bật Tự dò chiều dài.`,
     };
   }
@@ -234,8 +282,11 @@ export function optimizeMaterial(
     timeLimitSec: timeLimit,
     strategy,
     cutCostS: cutLengths.map((c) => scale(c) + kerfS),
-    // 'byN' chỉ áp dụng khi mọi pattern cùng một chiều dài cây.
-    stockS: stockLengths.length === 1 ? scale(stockLengths[0]) : undefined,
+    // 'byN' chỉ áp dụng khi mọi pattern cùng một chiều dài cây. Truyền PHẦN DÙNG ĐƯỢC (cây − tề
+    // đầu): hao hụt của pattern
+    // giờ chỉ là cùi = usable − đoạn − lưỡi nên đồng nhất thức Σ cùi = usable·N − nhu cầu − dư phải
+    // dùng usable (13/11/2026).
+    stockS: stockLengths.length === 1 ? scale(stockLengths[0]) - scale(trim) : undefined,
     warmStart,
     bundle,
     allowShortage: opts.allowShortage,
@@ -339,7 +390,7 @@ export function optimizeMaterial(
       total_bundles: totalBundles,
       manual_bars: manualBars,
       total_cuts: totalBundles + manualBars,
-      max_sizes_per_pattern: mctdCap ?? MCTD_MAX_SIZES_PER_PATTERN,
+      max_sizes_per_pattern: hardCap ?? mctdCap ?? MCTD_MAX_SIZES_PER_PATTERN,
     };
   }
   let totalUsedS = 0;
@@ -368,7 +419,7 @@ export function optimizeMaterial(
     waste_pct: totalPurchasedS ? (totalLeftoverS / totalPurchasedS) * 100 : 0,
     plan,
     patterns_truncated: !patternsComplete,
-    limited_sizes_per_bar: limitedSizesUsed ? (mctdCap ?? MAX_SIZES_PER_BAR) : null,
+    limited_sizes_per_bar: limitedSizesUsed ? (hardCap ?? mctdCap ?? MAX_SIZES_PER_BAR) : null,
     machine,
     ...(bundleSummary ? { bundle_summary: bundleSummary } : {}),
     stats,
