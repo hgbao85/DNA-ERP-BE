@@ -695,18 +695,18 @@ model OfficeSupplyLedgerEntry {
 }
 
 model Supplier {
-  id        BigInt    @id @default(autoincrement())
-  name      String
-  phone     String?
-  address   String?
+  id          BigInt    @id @default(autoincrement())
+  name        String
+  phone       String?
+  address     String?
   /// Mã số thuế + người liên hệ (12/11/2026, anh Nhân: danh sách NCC trên hệ thống là "sheet quản lý NCC", người mua tự
   /// thêm/sửa, chỉ Admin xoá).
   taxCode     String?
   contactName String?
-  isActive  Boolean   @default(true)
-  deletedAt DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   materialSuppliers      MaterialSupplier[]
   purchaseProposalQuotes PurchaseProposalQuote[]
@@ -790,6 +790,7 @@ model Warehouse {
   warehouseTransferReservations WarehouseTransferReservation[]
   stockReservations             StockReservation[]
   segmentReservations           SegmentReservation[]
+  segmentOverages               SegmentOverage[]
   segmentProductions            SegmentProduction[]
   materials                     Material[]
   officeSupplies                OfficeSupply[]
@@ -967,6 +968,7 @@ model SegmentSpec {
   stepBatchSegments              StepBatchSegment[]
   floorReportLines               FloorReportLine[]
   segmentReservations            SegmentReservation[]
+  segmentOverages                SegmentOverage[]
   segmentProductions             SegmentProduction[]
 
   @@unique([materialId, cutLengthMm])
@@ -1745,6 +1747,7 @@ model ProductionInvoice {
   floorReports              FloorReport[]
   warehouseTransfers        WarehouseTransfer[]
   segmentReservations       SegmentReservation[]
+  segmentOverages           SegmentOverage[]
   segmentProductions        SegmentProduction[]
 
   @@index([salesOrderId])
@@ -2460,7 +2463,7 @@ model PurchaseProposalItem {
   buyQty                  Decimal  @db.Decimal(14, 4)
   /// % hao hụt khi mua ĐÃ DÙNG lúc tính buyQty (13/11/2026) - cột "Hao hụt" ở Lệnh mua vật tư hiện số này thay vì % hiện tại
   /// của vật tư (đổi % mà lệnh chưa tính lại thì 2 số lệch). null = dòng cũ / sắt theo phương án cắt.
-  appliedWastePct Decimal? @db.Decimal(6, 3)
+  appliedWastePct         Decimal? @db.Decimal(6, 3)
   /// "Số mua" người mua chốt (2026-11-04, YC7 mục 7.2): chỉ được TĂNG so với buyQty ("cần mua",
   /// hệ thống tính) để tròn số tối thiểu NCC bán, Giám đốc duyệt bằng chữ ký trên phiếu. null =
   /// mua đúng buyQty. Tách cột riêng thay vì sửa thẳng buyQty vì các lượt tính lại đề xuất ghi đè
@@ -2600,13 +2603,13 @@ model SupplierOrder {
 /// nạp số cuối năm 2026 của từng NCC từ sổ của phòng mua trước khi dùng (bản v8 mục 4.13, V4-8);
 /// không được hạ thấp hơn số lớn nhất hệ thống đã cấp.
 model SupplierOrderCounter {
-  supplierId BigInt
-  year       Int
-  lastSeq    Int      @default(0)
+  supplierId   BigInt
+  year         Int
+  lastSeq      Int      @default(0)
   /// Mốc Admin nạp gần nhất ("số đơn cuối cùng đã dùng ngoài hệ thống"): số của đơn huỷ chỉ được cấp lại khi
   /// LỚN HƠN mốc này - số từ mốc trở xuống có thể đã dùng ngoài hệ thống (12/11/2026).
-  reuseFromSeq Int    @default(0)
-  updatedAt  DateTime @updatedAt
+  reuseFromSeq Int      @default(0)
+  updatedAt    DateTime @updatedAt
 
   supplier Supplier @relation(fields: [supplierId], references: [id])
 
@@ -2999,9 +3002,9 @@ model SegmentReservation {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  warehouse         Warehouse                @relation(fields: [warehouseId], references: [id])
-  productionInvoice ProductionInvoice        @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
-  segmentSpec       SegmentSpec              @relation(fields: [segmentSpecId], references: [id])
+  warehouse         Warehouse               @relation(fields: [warehouseId], references: [id])
+  productionInvoice ProductionInvoice       @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
+  segmentSpec       SegmentSpec             @relation(fields: [segmentSpecId], references: [id])
   logs              SegmentReservationLog[]
 
   @@unique([warehouseId, productionInvoiceId, segmentSpecId, segmentSteps])
@@ -3033,6 +3036,55 @@ model SegmentProduction {
 }
 
 /// Loại thay đổi của giữ đoạn theo lệnh (nhật ký SegmentReservationLog).
+/// Sổ báo vượt tồn đoạn (13/11/2026, anh Nhân: Hàn / Sơn báo vượt KHÔNG chặn, hệ thống lưu lại để xử lý sau; Hàn lấy thêm khi
+/// làm lại thì lưu số lấy thêm; QLSX đóng từng dòng có lý do + nhật ký). 1 dòng = 1 đợt báo (ProductionBatch) × 1 mã đoạn, ghi lúc
+/// trừ đoạn (Gửi KCS) khi: thiếu đoạn (shortageQty > 0 - phần KHÔNG trừ được vì tồn không âm) và / hoặc đợt làm số mảnh của
+/// (lệnh SX, mảnh, công đoạn) vượt số lượng tổng của lệnh (extraQty > 0, extraKind: báo vượt / làm lại sau KCS lỗi).
+model SegmentOverage {
+  id                  BigInt              @id @default(autoincrement())
+  productionInvoiceId BigInt
+  productionOrderId   BigInt
+  productionBatchId   BigInt
+  pieceId             BigInt
+  stage               MfgStage
+  warehouseId         BigInt
+  segmentSpecId       BigInt
+  segmentSteps        String              @default("")
+  /// Số đoạn đợt này cần (định mức mảnh × số mảnh báo).
+  neededQty           Decimal             @db.Decimal(16, 4)
+  /// Số đoạn đã trừ được (phần giữ của lệnh + chia dư).
+  takenQty            Decimal             @db.Decimal(16, 4)
+  /// Phần thiếu, không trừ (tồn không âm) - kho Phôi chưa có đủ đoạn đã KCS cho lệnh.
+  shortageQty         Decimal             @default(0) @db.Decimal(16, 4)
+  /// Số mảnh đợt này làm vượt số lượng tổng của lệnh (cho mảnh + công đoạn này).
+  overPieces          Int                 @default(0)
+  /// Số đoạn ứng với overPieces (= overPieces × định mức) - "số lấy thêm".
+  extraQty            Decimal             @default(0) @db.Decimal(16, 4)
+  extraKind           SegmentOverageKind?
+  reportedById        String?
+  createdAt           DateTime            @default(now())
+  /// QLSX đóng dòng (bắt buộc lý do).
+  resolvedAt          DateTime?
+  resolvedById        String?
+  resolveReason       String?
+
+  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
+  productionBatch   ProductionBatch   @relation(fields: [productionBatchId], references: [id], onDelete: Cascade)
+  warehouse         Warehouse         @relation(fields: [warehouseId], references: [id])
+  segmentSpec       SegmentSpec       @relation(fields: [segmentSpecId], references: [id])
+
+  @@unique([productionBatchId, segmentSpecId, segmentSteps])
+  @@index([productionInvoiceId])
+  @@index([resolvedAt])
+  @@map("segment_overages")
+}
+
+/// Loại vượt định mức lệnh của 1 đợt báo: báo vượt thường / làm lại sau KCS lỗi (lấy thêm sắt).
+enum SegmentOverageKind {
+  OVER_REPORT
+  REWORK
+}
+
 enum SegmentReservationLogKind {
   /// Phía cộng: đoạn của chính lệnh vào giữ (âm khi tính lại giảm).
   PRODUCE
@@ -4085,6 +4137,7 @@ model ProductionBatch {
   reworkBatches   ProductionBatch[] @relation("ProductionBatchRework")
   qcReviews       QcReview[]
   floorReports    FloorReport[]
+  segmentOverages SegmentOverage[]
 
   @@index([productionOrderId, pieceId])
   @@index([stage, status])

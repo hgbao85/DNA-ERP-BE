@@ -118,3 +118,22 @@ export interface ReleaseOrderHoldingsResult {
   /** Số dòng giữ đoạn có nhả. */
   reservationCount: number;
 }
+
+export interface TransferOrderHoldingsInput {
+  productionInvoiceId: bigint;
+  /** Kho Phôi của xưởng mới. */
+  toWarehouseId: bigint;
+  /** Mã tham chiếu bút toán chuyển (vd id lệnh). */
+  refId: string;
+  note?: string | null;
+  actorId?: string | null;
+}
+
+export interface TransferOrderHoldingsResult {
+  /** Tổng số đoạn đã chuyển sang kho mới (ghi sổ kho + giữ cho lệnh ở kho mới). */
+  movedQty: number;
+  /** Phần còn giữ nhưng kho cũ không đủ tồn thật (dữ liệu cũ) - nhả, không chuyển. */
+  droppedQty: number;
+  /** Số dòng giữ đoạn ở kho cũ có chuyển / nhả. */
+  reservationCount: number;
+}

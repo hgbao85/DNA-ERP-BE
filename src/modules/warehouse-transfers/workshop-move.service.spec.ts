@@ -44,6 +44,7 @@ describe('WorkshopMoveService', () => {
 
   let prisma: Record<string, Record<string, jest.Mock>>;
   let notifications: { emit: jest.Mock; resolve: jest.Mock };
+  let segmentStock: { transferOrderHoldings: jest.Mock };
   let service: WorkshopMoveService;
 
   beforeEach(() => {
@@ -83,9 +84,15 @@ describe('WorkshopMoveService', () => {
       warehouseTransferItem: { findMany: jest.fn().mockResolvedValue([]) },
     };
     notifications = { emit: jest.fn().mockResolvedValue(undefined), resolve: jest.fn() };
+    segmentStock = {
+      transferOrderHoldings: jest
+        .fn()
+        .mockResolvedValue({ movedQty: 0, droppedQty: 0, reservationCount: 0 }),
+    };
     service = new WorkshopMoveService(
       prisma as unknown as PrismaServiceType,
       notifications as never,
+      segmentStock as never,
     );
   });
 
@@ -129,6 +136,33 @@ describe('WorkshopMoveService', () => {
         params: expect.objectContaining({ count: 2, buyerIds: ['b1', 'b2'] }),
       }),
     );
+  });
+
+  describe('tồn đoạn theo lệnh (13/11/2026)', () => {
+    const env = process.env.SEGMENT_STOCK_ENABLED;
+    afterEach(() => {
+      if (env === undefined) delete process.env.SEGMENT_STOCK_ENABLED;
+      else process.env.SEGMENT_STOCK_ENABLED = env;
+    });
+
+    it('bật công tắc: chuyển đoạn còn giữ của lệnh sang kho Phôi xưởng mới trong transaction đổi xưởng', async () => {
+      process.env.SEGMENT_STOCK_ENABLED = 'true';
+      await service.afterWorkshopChanged(prisma as never, 500n, 20n, 'qlsx');
+      expect(segmentStock.transferOrderHoldings).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          productionInvoiceId: 500n,
+          toWarehouseId: phoiPHA.id,
+          actorId: 'qlsx',
+        }),
+      );
+    });
+
+    it('tắt công tắc: không đụng tồn đoạn', async () => {
+      process.env.SEGMENT_STOCK_ENABLED = 'false';
+      await service.afterWorkshopChanged(prisma as never, 500n, 20n, 'qlsx');
+      expect(segmentStock.transferOrderHoldings).not.toHaveBeenCalled();
+    });
   });
 
   it('afterWorkshopChanged: kho cũ có cả Sắt lẫn Vật tư khác -> 1 thông báo cho kho đó, đếm đủ dòng 2 nhóm (tổng duyệt 11/11)', async () => {

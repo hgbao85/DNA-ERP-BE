@@ -16,6 +16,7 @@ import {
   ProcessStep,
   ProductionBatchStatus,
   ProductionOrder,
+  SegmentOverageKind,
   StockLedgerRefType,
   WarehouseKind,
   TransferStatus,
@@ -40,6 +41,9 @@ import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma
 import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
+import { SegmentStockService } from '../segment-stock/segment-stock.service';
+import { isSegmentStockEnabled } from '../segment-stock/segment-stock.config';
+import { normalizeSegmentSteps, segmentCodeKey } from '../../common/utils/segment-code.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { CreatePieceStepBatchDto } from './dto/create-piece-step-batch.dto';
@@ -139,6 +143,7 @@ export class ProductionBatchesService {
     private readonly materialYieldIssuesService: MaterialYieldIssuesService,
     private readonly notifications: NotificationsService,
     private readonly realtime: RealtimeService,
+    private readonly segmentStock: SegmentStockService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -939,6 +944,23 @@ export class ProductionBatchesService {
         db.warehouse.findUniqueOrThrow({ where: { code: PRODUCTION_WAREHOUSE_CODE } }),
       ]);
 
+      // Tồn đoạn theo lệnh (13/11/2026, bật bằng SEGMENT_STOCK_ENABLED): trừ theo MÃ ĐOẠN (cỡ + bộ công đoạn) từ phần giữ
+      // của lệnh rồi tới dư; thiếu thì KHÔNG chặn, ghi sổ báo vượt. Tắt công tắc thì giữ cách trừ cũ bên dưới.
+      if (isSegmentStockEnabled()) {
+        const run = (t: PrismaTx) =>
+          this.consumeSegmentsByCode(
+            t,
+            batch,
+            pieceBoms,
+            bomPiece?.qtyPerUnit ?? null,
+            fromWarehouse.id,
+            reportedById,
+          );
+        if (tx) await run(tx);
+        else await this.prisma.$transaction(run, { timeout: 20_000 });
+        return;
+      }
+
       // 13/11/2026: từ 19/10 1 mảnh được có NHIỀU dòng định mức cùng cỡ đoạn khác công đoạn (vd "460 mm có Dập" + "460 mm
       // trơn" - processSteps nằm trong khoá duy nhất PieceBom). Khoá chống trùng bút toán theo (đợt, cỡ đoạn) nên trước đây dòng
       // thứ 2 bị coi là trùng và KHÔNG được trừ -> gộp số đoạn theo cỡ đoạn trước khi ghi.
@@ -978,6 +1000,214 @@ export class ProductionBatchesService {
     // tồn lúc xuất, recordCutBatch() báo cắt không đụng StockLedger nguyên liệu nữa). Hàm cũ
     // postMaterialYieldConsumeEntry() đã bị XOÁ - giữ lại sẽ trừ tồn 2 LẦN cho cùng 1 lượng vật lý
     // (đã xác nhận stock_ledger chưa có dòng MATERIAL_YIELD_CONSUME nào trong DB thật trước khi xoá).
+  }
+
+  /**
+   * Phía trừ tồn đoạn theo lệnh (13/11/2026, anh Nhân - lựa chọn D + 11 câu). Mỗi MÃ ĐOẠN (cỡ đoạn + bộ công đoạn đã chuẩn hoá) của
+   * mảnh: SegmentStockService.consumeForOrder lấy phần giữ của lệnh, thiếu thì lấy dư, còn thiếu trả shortageQty (KHÔNG ghi sổ kho -
+   * tồn không âm). Hàn / Sơn KHÔNG bị chặn (câu 2, 7): ghi 1 dòng sổ báo vượt (segment_overages) khi
+   *  - thiếu đoạn (shortageQty > 0), và / hoặc
+   *  - đợt này làm số mảnh vượt số lượng tổng của lệnh SX cho (mảnh, công đoạn) - "số lấy thêm" (extraQty); trước đó đã có KCS
+   *    chấm lỗi cho mảnh / công đoạn này thì coi là làm lại (REWORK, câu 6), không thì báo vượt (OVER_REPORT).
+   * Chống ghi đôi khi gọi lại cùng đợt: bút toán có idempotencyKey; đợt đã có dòng sổ báo vượt cho mã đoạn thì bỏ qua (lần đầu
+   * không trừ được gì thì không có bút toán để nhận ra trùng).
+   */
+  private async consumeSegmentsByCode(
+    tx: PrismaTx,
+    batch: {
+      id: bigint;
+      pieceId: bigint;
+      reportedQty: number;
+      stage: MfgStage;
+      productionOrderId?: bigint;
+    },
+    pieceBoms: { segmentSpecId: bigint; qtyPerPiece: number; processSteps: readonly string[] }[],
+    qtyPerUnit: number | null,
+    warehouseId: bigint,
+    reportedById: string,
+    opts: { recordOverage?: boolean } = {},
+  ): Promise<{ takenQty: number; shortageQty: number }> {
+    const recordOverage = opts.recordOverage ?? true;
+    const total = { takenQty: 0, shortageQty: 0 };
+    const row = await tx.productionBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+      select: {
+        productionOrderId: true,
+        reworkOfId: true,
+        productionOrder: {
+          select: {
+            quantity: true,
+            productionInvoiceItem: { select: { productionInvoiceId: true } },
+          },
+        },
+      },
+    });
+    const productionInvoiceId = row.productionOrder.productionInvoiceItem.productionInvoiceId;
+    if (!productionInvoiceId) return total;
+
+    // Số mảnh đợt này làm vượt số lượng tổng của lệnh (cho mảnh + công đoạn này).
+    const plannedPieces = (qtyPerUnit ?? 0) * row.productionOrder.quantity;
+    const siblings = await tx.productionBatch.findMany({
+      where: {
+        productionOrderId: row.productionOrderId,
+        pieceId: batch.pieceId,
+        stage: batch.stage,
+        status: { not: ProductionBatchStatus.OPEN },
+        id: { lte: batch.id },
+      },
+      select: { id: true, reportedQty: true },
+    });
+    const cumulative = siblings.reduce((s, b) => s + b.reportedQty, 0);
+    const before = cumulative - batch.reportedQty;
+    const overPieces =
+      plannedPieces > 0
+        ? Math.max(0, cumulative - plannedPieces) - Math.max(0, before - plannedPieces)
+        : 0;
+    let extraKind: SegmentOverageKind | null = null;
+    if (overPieces > 0) {
+      const failed = await tx.qcReview.aggregate({
+        where: {
+          productionBatchId: { in: siblings.filter((b) => b.id !== batch.id).map((b) => b.id) },
+        },
+        _sum: { failedQty: true },
+      });
+      extraKind =
+        row.reworkOfId != null || (failed._sum.failedQty ?? 0) > 0
+          ? SegmentOverageKind.REWORK
+          : SegmentOverageKind.OVER_REPORT;
+    }
+
+    // Gộp theo mã đoạn: 2 dòng định mức cùng cỡ + cùng bộ công đoạn (sau chuẩn hoá) cộng số đoạn / mảnh.
+    const byCode = new Map<
+      string,
+      { segmentSpecId: bigint; segmentSteps: string; qtyPerPiece: number }
+    >();
+    for (const pb of pieceBoms) {
+      const segmentSteps = normalizeSegmentSteps(pb.processSteps);
+      const key = segmentCodeKey(pb.segmentSpecId, segmentSteps);
+      const cur = byCode.get(key);
+      if (cur) cur.qtyPerPiece += pb.qtyPerPiece;
+      else
+        byCode.set(key, {
+          segmentSpecId: pb.segmentSpecId,
+          segmentSteps,
+          qtyPerPiece: pb.qtyPerPiece,
+        });
+    }
+
+    for (const code of byCode.values()) {
+      const seen = await tx.segmentOverage.findUnique({
+        where: {
+          productionBatchId_segmentSpecId_segmentSteps: {
+            productionBatchId: batch.id,
+            segmentSpecId: code.segmentSpecId,
+            segmentSteps: code.segmentSteps,
+          },
+        },
+        select: { id: true },
+      });
+      if (seen) continue;
+      const neededQty = code.qtyPerPiece * batch.reportedQty;
+      const result = await this.segmentStock.consumeForOrder(tx, {
+        warehouseId,
+        productionInvoiceId,
+        segmentSpecId: code.segmentSpecId,
+        segmentSteps: code.segmentSteps,
+        qty: neededQty,
+        refId: batch.id.toString(),
+        idempotencyKey: `production-batch-segment-consume:${batch.id}:${code.segmentSpecId}:${code.segmentSteps}`,
+        actorId: reportedById,
+        note: `Báo sản lượng ${batch.stage} đợt ${batch.id}`,
+      });
+      if (result.duplicate) continue;
+      total.takenQty += result.takenQty;
+      total.shortageQty += result.shortageQty;
+      const extraQty = overPieces * code.qtyPerPiece;
+      if (!recordOverage || (result.shortageQty <= 0 && extraQty <= 0)) continue;
+      await tx.segmentOverage.create({
+        data: {
+          productionInvoiceId,
+          productionOrderId: row.productionOrderId,
+          productionBatchId: batch.id,
+          pieceId: batch.pieceId,
+          stage: batch.stage,
+          warehouseId,
+          segmentSpecId: code.segmentSpecId,
+          segmentSteps: code.segmentSteps,
+          neededQty,
+          takenQty: result.takenQty,
+          shortageQty: result.shortageQty,
+          overPieces: Math.max(0, overPieces),
+          extraQty,
+          extraKind: extraQty > 0 ? extraKind : null,
+          reportedById,
+        },
+      });
+    }
+    return total;
+  }
+
+  /**
+   * Chuyển đổi dữ liệu tồn đoạn cũ (anh Nhân 13/11 câu 10, SegmentLegacyConversionService): trừ lại theo MÃ ĐOẠN phần đoạn 1 đợt
+   * Hàn / Sơn cũ đã trừ theo cách cũ (vào dòng trơn). Không ghi sổ báo vượt (thiếu của dữ liệu cũ trả về để báo cáo). Đợt không
+   * dùng đoạn sắt (không có PieceBom) hoặc không phải công đoạn trừ đoạn của mảnh thì trả 0.
+   */
+  async replayLegacySegmentConsume(
+    tx: PrismaTx,
+    batchId: bigint,
+    actorId: string,
+  ): Promise<{
+    productionInvoiceId: bigint | null;
+    neededQty: number;
+    takenQty: number;
+    shortageQty: number;
+  }> {
+    const batch = await tx.productionBatch.findUniqueOrThrow({
+      where: { id: batchId },
+      select: {
+        id: true,
+        pieceId: true,
+        reportedQty: true,
+        stage: true,
+        reportedById: true,
+        productionOrder: {
+          select: {
+            id: true,
+            bomRevisionId: true,
+            productionInvoiceItem: { select: { productionInvoiceId: true } },
+          },
+        },
+      },
+    });
+    const productionInvoiceId = batch.productionOrder.productionInvoiceItem.productionInvoiceId;
+    const empty = { productionInvoiceId, neededQty: 0, takenQty: 0, shortageQty: 0 };
+    const bomRevisionId = batch.productionOrder.bomRevisionId;
+    const pieceBoms = await tx.pieceBom.findMany({
+      where: { bomRevisionId, pieceId: batch.pieceId },
+    });
+    if (pieceBoms.length === 0 || !productionInvoiceId) return empty;
+    const bomPiece = await tx.bomPiece.findUnique({
+      where: { bomRevisionId_pieceId: { bomRevisionId, pieceId: batch.pieceId } },
+    });
+    const consumeStage = bomPiece?.needsHan
+      ? MfgStage.HAN
+      : bomPiece?.needsSon
+        ? MfgStage.SON
+        : batch.stage;
+    if (batch.stage !== consumeStage) return empty;
+    const code = await this.phoiWarehouseCodeOfOrder(batch.productionOrder.id);
+    const wh = await tx.warehouse.findUniqueOrThrow({ where: { code }, select: { id: true } });
+    const neededQty = pieceBoms.reduce((n, pb) => n + pb.qtyPerPiece, 0) * batch.reportedQty;
+    const r = await this.consumeSegmentsByCode(
+      tx,
+      batch,
+      pieceBoms,
+      bomPiece?.qtyPerUnit ?? null,
+      wh.id,
+      batch.reportedById ?? actorId,
+      { recordOverage: false },
+    );
+    return { productionInvoiceId, neededQty, ...r };
   }
 
   async findAllForOrder(
