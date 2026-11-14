@@ -16,6 +16,7 @@ import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { PieceMaterialYieldPurchaseResultDto } from './dto/piece-material-yield-purchase-result.dto';
 import { purchaseBuyQtyWithWaste } from '../../common/utils/purchase-waste.util';
+import { findOpenProposalForRecompute } from '../../common/utils/purchase-proposal-lock.util';
 import {
   PurchaseRecomputeEvent,
   emitPurchaseRecomputeNotifications,
@@ -210,19 +211,14 @@ export class PieceMaterialYieldPurchaseService {
     const recomputeEvents: PurchaseRecomputeEvent[] = [];
     await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `purchase-proposal-merge:${piBigId}`);
+      // Rà soát 14/11 MH3: khoá đề xuất còn mở bằng CÙNG khoá với bước Giám đốc ký đơn, ở ĐẦU transaction (trước khoá
+      // stock_quant / giữ chỗ - cùng thứ tự với luồng nhận hàng), xem findOpenProposalForRecompute().
+      let found = await findOpenProposalForRecompute(tx, piBigId);
 
       for (const materialIdStr of orderedMaterialIds) {
         const materialId = BigInt(materialIdStr);
         const acc = barsNeededByMaterial.get(materialIdStr)!;
         const { warehouseId } = warehouseByMaterial.get(materialIdStr)!;
-        // Co giữ chỗ của CHÍNH lượt tính TRƯỚC ĐÓ về đúng phần đã tiêu TRƯỚC khi tính available -
-        // cùng lý do/cùng fix ConsumableMaterialPurchaseService (xem doc comment
-        // StockReservationsService.shrinkToFloor()).
-        await this.stockReservationsService.shrinkToFloor(tx, {
-          refType: StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
-          refId: piBigId.toString(),
-          materialId,
-        });
         const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
           SELECT "qty" FROM "stock_quant"
           WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
@@ -234,6 +230,15 @@ export class PieceMaterialYieldPurchaseService {
         // viễn chỉ nên có bucket 0, nhưng cộng dồn mọi dòng trả về để đúng bất kể vi phạm giả định
         // đó có xảy ra hay không.
         const actualStock = Math.floor(locked.reduce((sum, r) => sum + r.qty.toNumber(), 0));
+        // Co giữ chỗ của CHÍNH PI (dòng của nguồn + dòng "của cả lệnh") về phần đã tiêu, SAU khoá stock_quant - cùng lý
+        // do/cùng fix ConsumableMaterialPurchaseService (rà soát 14/11 MH1, xem releaseOwnHoldsForRecompute()).
+        const own = await this.stockReservationsService.releaseOwnHoldsForRecompute(tx, {
+          refType: StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
+          refId: piBigId.toString(),
+          productionInvoiceId: piBigId,
+          materialId,
+          warehouseId,
+        });
         // 2026-09-23 - cùng vá race đã áp dụng ở ConsumableMaterialPurchaseService: buyQty tính
         // theo tồn KHẢ DỤNG (trừ phần PI/luồng khác đã giữ chỗ), actualStock vẫn là tồn vật lý thật
         // để hiển thị/audit, không đổi ý nghĩa.
@@ -243,13 +248,17 @@ export class PieceMaterialYieldPurchaseService {
           materialId,
           actualStock,
         );
-        const consumeQty = Math.min(acc.bars, available);
+        const consumeQty = Math.min(Math.max(0, acc.bars - own.ownConsumedQty), available);
         // % hao hụt khi mua (Material.purchaseWastePercentage) - 2026-11-04 (V3-3) đệm trên TOÀN BỘ
         // nhu cầu rồi mới trừ tồn khả dụng, cùng công thức ConsumableMaterialPurchaseService. Đơn vị ở đây
         // MẶC ĐỊNH là cây/tấm NGUYÊN (Int) nên ceil lại sau khi nhân - không mua lẻ cây/tấm.
         const materialForWaste = yields.find((y) => y.materialId === materialId)!.material;
         const wastePct = materialForWaste.purchaseWastePercentage?.toNumber() ?? 0;
-        const buyQtyRaw = purchaseBuyQtyWithWaste(acc.bars, available, wastePct);
+        const buyQtyRaw = purchaseBuyQtyWithWaste(
+          acc.bars,
+          available + own.ownConsumedQty,
+          wastePct,
+        );
         // 2026-10-10: ngoại lệ cho vật tư mua theo tấm LẺ (vd Tấm sắt la, xem docs/
         // LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026.md 08/10 05:11) - Admin ép giữ thập phân qua
         // Material.purchaseRoundUp=false. Tri-state: null/true đều ceil (mặc định gốc của luồng
@@ -266,20 +275,14 @@ export class PieceMaterialYieldPurchaseService {
         await this.stockReservationsService.reserveOrAdjust(tx, {
           warehouseId,
           materialId,
-          qty: consumeQty,
+          qty: own.sourceConsumedQty + consumeQty,
           refType: StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
           refId: piBigId.toString(),
           productionInvoiceId: piBigId,
         });
       }
 
-      // Tìm đề xuất "còn mở" (khác PURCHASED) - không còn lọc NEW (2026-08-25, cùng lý do đã sửa ở
-      // CuttingProposalsService.approve()/ConsumableMaterialPurchaseService).
-      let found = await tx.purchaseProposal.findFirst({
-        where: { productionInvoiceId: piBigId, status: { not: PurchaseProposalStatus.PURCHASED } },
-        include: { items: true },
-      });
-
+      // Đề xuất "còn mở" (khác PURCHASED, không lọc NEW - 2026-08-25) đã tìm + khoá ở đầu transaction (`found`).
       if (!found) {
         const firstMaterialIdStr = computed[0].materialIdStr;
         found = await tx.purchaseProposal.create({

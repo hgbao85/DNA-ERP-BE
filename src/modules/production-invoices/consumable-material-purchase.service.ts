@@ -19,6 +19,7 @@ import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { ConsumableMaterialPurchaseResultDto } from './dto/consumable-material-purchase-result.dto';
 import { purchaseBuyQtyWithWaste } from '../../common/utils/purchase-waste.util';
+import { findOpenProposalForRecompute } from '../../common/utils/purchase-proposal-lock.util';
 import {
   PurchaseRecomputeEvent,
   emitPurchaseRecomputeNotifications,
@@ -238,6 +239,13 @@ export class ConsumableMaterialPurchaseService {
 
     const recomputeEvents: PurchaseRecomputeEvent[] = [];
     const results = await this.prisma.$transaction(async (tx) => {
+      // Khoá theo PI (KHÔNG theo sourceType) - từ 2026-08-25, cả 3 nguồn (sắt/PieceMaterialYield/tiêu hao) tìm-hoặc-tạo vào
+      // ĐÚNG 1 PurchaseProposal chung cho cả PI (dùng CHUNG khoá "purchase-proposal-merge:<piId>" để 3 nguồn không cùng
+      // miss-tìm rồi cùng tạo trùng), rồi khoá đề xuất tìm được bằng CÙNG khoá với bước Giám đốc ký đơn (rà soát 14/11
+      // MH3). Lấy cả 2 khoá ở ĐẦU transaction, TRƯỚC khoá stock_quant / giữ chỗ bên dưới: luồng nhận hàng khoá đề xuất rồi
+      // mới khoá stock_quant, lấy ngược thứ tự là khoá chéo.
+      await lockBusinessKey(tx, `purchase-proposal-merge:${piBigId}`);
+      let proposal = await findOpenProposalForRecompute(tx, piBigId);
       const computed: {
         materialId: bigint;
         materialIdStr: string;
@@ -265,16 +273,6 @@ export class ConsumableMaterialPurchaseService {
           ).entries(),
         ].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
         for (const [specKey, required] of specEntries) {
-          // Co giữ chỗ của CHÍNH lượt tính TRƯỚC ĐÓ (refId=piBigId ổn định qua mọi lần gọi lại, khác
-          // CUTTING_PROPOSAL) về đúng phần đã tiêu TRƯỚC khi tính available - nếu không, phần CHƯA
-          // tiêu của chính nó bị getAvailableQty() trừ nhầm vào chính nó (xem doc comment
-          // StockReservationsService.shrinkToFloor()).
-          await this.stockReservationsService.shrinkToFloor(tx, {
-            refType: StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
-            refId: piBigId.toString(),
-            materialId,
-            spec: specKey,
-          });
           const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
             SELECT "qty" FROM "stock_quant"
             WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${materialId}
@@ -288,6 +286,18 @@ export class ConsumableMaterialPurchaseService {
           // hao phẳng vĩnh viễn chỉ nên có bucket 0, nhưng KHÔNG giả định chỉ có đúng 1 dòng - cộng
           // dồn mọi dòng trả về để đúng bất kể vi phạm giả định đó có xảy ra hay không.
           const actualStock = locked.reduce((sum, r) => sum + r.qty.toNumber(), 0);
+          // Co giữ chỗ của CHÍNH PI (dòng của nguồn này + dòng "của cả lệnh" tạo khi hàng về) về phần đã tiêu TRƯỚC khi
+          // tính available - SAU khoá stock_quant (cùng thứ tự khoá với luồng xuất). Rà soát 14/11 MH1: trước đây chỉ co
+          // dòng của nguồn, hàng đã nhận nằm ở dòng "của cả lệnh" bị trừ như lệnh khác giữ -> mua lại phần đã nhận. Xem
+          // StockReservationsService.releaseOwnHoldsForRecompute().
+          const own = await this.stockReservationsService.releaseOwnHoldsForRecompute(tx, {
+            refType: StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
+            refId: piBigId.toString(),
+            productionInvoiceId: piBigId,
+            materialId,
+            warehouseId,
+            spec: specKey,
+          });
           // 2026-09-23 (vá race "2 PI cùng tính đề xuất gần nhau, cùng thấy 1 tồn đủ, cả 2 cùng
           // buyQty=0 dù tồn thật chỉ đủ cho 1 PI"): buyQty/consumeQty giờ tính theo tồn KHẢ DỤNG
           // (onHand trừ phần PI/luồng khác đã giữ chỗ - CUTTING_PROPOSAL, chuyển kho nội bộ, hoặc
@@ -303,13 +313,18 @@ export class ConsumableMaterialPurchaseService {
             undefined,
             specKey,
           );
-          const consumeQty = Math.min(required, available);
+          // Phần đã xuất cho PI này (ownConsumedQty) đã đáp ứng 1 phần nhu cầu - chỉ còn giữ chỗ / mua cho phần còn lại.
+          const consumeQty = Math.min(Math.max(0, required - own.ownConsumedQty), available);
           // % hao hụt khi mua (Material.purchaseWastePercentage, vd bao bì rách/lỗi lúc vận chuyển).
           // 2026-11-04 (V3-3): đệm trên TOÀN BỘ nhu cầu rồi mới trừ tồn khả dụng, xem
           // purchaseBuyQtyWithWaste. KHÔNG đụng required/consumeQty/reserveOrAdjust (giữ chỗ tồn kho
           // tính theo nhu cầu THẬT). null/0 -> buyQty = nhu cầu − tồn như trước.
           const wastePct = material.purchaseWastePercentage?.toNumber() ?? 0;
-          const buyQtyRaw = purchaseBuyQtyWithWaste(required, available, wastePct);
+          const buyQtyRaw = purchaseBuyQtyWithWaste(
+            required,
+            available + own.ownConsumedQty,
+            wastePct,
+          );
           // 2026-10-10: mặc định luồng này GIỮ thập phân (vd kg sơn/dây) - CHỈ ceil lên nguyên khi
           // Admin chủ động ép qua Material.purchaseRoundUp=true (vd Đinh/Vis/Nút - không mua được
           // số lẻ). Tri-state: null/false đều giữ thập phân, chỉ true mới ceil - xem schema.prisma.
@@ -327,10 +342,11 @@ export class ConsumableMaterialPurchaseService {
           // Giữ chỗ ĐÚNG phần tồn đã dùng để che phủ demand - PI khác tính sau sẽ thấy phần này qua
           // getAvailableQty(), không đọc trùng actualStock nữa (xem doc comment enum refType).
           // consumeQty=0 là hợp lệ (đưa giữ chỗ cũ về 0 nếu demand giảm xuống 0 giữa 2 lần tính lại).
+          // Số giữ chỗ gồm cả phần dòng này đã tiêu (sàn) - reserveOrAdjust không cho xuống dưới sàn.
           await this.stockReservationsService.reserveOrAdjust(tx, {
             warehouseId,
             materialId,
-            qty: consumeQty,
+            qty: own.sourceConsumedQty + consumeQty,
             refType: StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
             refId: piBigId.toString(),
             productionInvoiceId: piBigId,
@@ -339,26 +355,9 @@ export class ConsumableMaterialPurchaseService {
         }
       }
 
-      // Khoá theo PI (KHÔNG theo sourceType) - từ 2026-08-25, cả 3 nguồn (sắt/PieceMaterialYield/
-      // tiêu hao) tìm-hoặc-tạo vào ĐÚNG 1 PurchaseProposal chung cho cả PI thay vì mỗi nguồn 1
-      // dòng riêng (xem CuttingProposalsService.approve(), PieceMaterialYieldPurchaseService -
-      // dùng CHUNG khoá "purchase-proposal-merge:<piId>" để 3 nguồn không cùng miss-tìm rồi cùng
-      // tạo trùng). Vì thế findFirst bên dưới KHÔNG còn lọc theo sourceType nữa - proposal.
-      // sourceType giờ chỉ còn ý nghĩa "nguồn đầu tiên tạo ra nó", không mô tả đủ nội dung nếu đề
-      // xuất đã được gộp thêm từ nguồn khác.
-      await lockBusinessKey(tx, `purchase-proposal-merge:${piBigId}`);
-      // Tìm đề xuất "còn mở" (khác PURCHASED) - không còn lọc NEW (2026-08-25, cùng lý do đã sửa ở
-      // CuttingProposalsService.approve(): rollup rời NEW sớm hơn hẳn khi state machine chuyển
-      // xuống cấp item, lọc cứng NEW sẽ khiến nguồn này không gộp được vào đề xuất sắt đã có ai
-      // bắt đầu xử lý).
-      let proposal = await tx.purchaseProposal.findFirst({
-        where: {
-          productionInvoiceId: piBigId,
-          status: { not: PurchaseProposalStatus.PURCHASED },
-        },
-        include: { items: true },
-      });
-
+      // Đề xuất "còn mở" của PI đã tìm + khoá ở ĐẦU transaction (`proposal`, xem trên). Không lọc theo sourceType - proposal.
+      // sourceType chỉ còn ý nghĩa "nguồn đầu tiên tạo ra nó", không mô tả đủ nội dung nếu đề xuất đã được gộp thêm từ nguồn
+      // khác; không lọc NEW (2026-08-25: rollup rời NEW sớm hơn hẳn khi state machine chuyển xuống cấp item).
       if (!proposal) {
         proposal = await tx.purchaseProposal.create({
           data: {

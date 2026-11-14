@@ -16,7 +16,7 @@ const EPS = 1e-9;
  *    in lại). Nhu cầu TĂNG thì giữ orderQty. Số mới = 0 thì dòng tự đóng "đủ tồn" VÀ rời khỏi đơn nháp (caller ghi
  *    supplierOrderId = null) - để lại trong đơn thì đơn không huỷ/gỡ được và phiếu in ra dòng 0 (13/11/2026).
  *  - ĐÃ ký = PURCHASING (sau "Sếp đã duyệt"): KHÔNG sửa số nào trên dòng; nhu cầu mới thấp hơn số đã ký thì báo người mua + Giám đốc.
- *  - PURCHASED: giữ cách xử lý cũ - chỉ tách dòng NEW cho phần thiếu so với hàng đã nhận.
+ *  - PURCHASED: chỉ tách dòng NEW cho phần còn thiếu (số mới đã trừ hàng đã nhận, rà soát 14/11 MH2).
  * Hàm thuần (không đụng DB) để test được; các service gọi rồi tự ghi DB trong transaction và gửi thông báo SAU commit.
  */
 export interface PurchaseRecomputeItem {
@@ -120,7 +120,8 @@ export function isUnsignedStatus(status: PurchaseProposalStatus): boolean {
 
 /**
  * @param items mọi dòng hiện có của 1 khoá (PI, vật tư, quy cách) - theo thứ tự ưu tiên chọn dòng ghi.
- * @param newBuyQty số cần mua vừa tính (nhu cầu×(1+%) − tồn khả dụng, tồn đã gồm hàng đã nhận của chính PI).
+ * @param newBuyQty số cần mua vừa tính: nhu cầu×(1+%) − (tồn khả dụng + phần đã xuất cho chính PI); tồn khả dụng đã gồm hàng
+ *   đã nhận còn trong kho của chính PI (rà soát 14/11 MH1).
  */
 export function planPurchaseRecompute(
   items: PurchaseRecomputeItem[],
@@ -134,17 +135,17 @@ export function planPurchaseRecompute(
   };
   const signed = items.filter((i) => i.status === PurchaseProposalStatus.PURCHASING);
   const unsigned = items.filter((i) => UNSIGNED.has(i.status));
-  const purchased = items.filter((i) => i.status === PurchaseProposalStatus.PURCHASED);
 
   if (items.length === 0) {
     plan.create = { buyQty: newBuyQty, toPurchased: newBuyQty === 0 };
     return plan;
   }
 
-  // Chỉ còn dòng đã đóng hồ sơ: tách dòng NEW cho phần thiếu (luật cũ, lỗ #6 ngày 2026-08-26).
+  // Chỉ còn dòng đã đóng hồ sơ: tách dòng NEW cho phần còn thiếu (luật cũ, lỗ #6 ngày 2026-08-26). Rà soát 14/11 MH2: số mới
+  // ĐÃ trừ hàng đã nhận (còn trong kho hoặc đã xuất cho chính PI, xem releaseOwnHoldsForRecompute) nên thiếu bao nhiêu
+  // mua bấy nhiêu - trước đây trừ thêm receivedQty của dòng ĐẦU lần nữa (mua thiếu) và bỏ quên các dòng đóng sau.
   if (signed.length === 0 && unsigned.length === 0) {
-    const shortfall = newBuyQty - purchased[0].receivedQty;
-    if (shortfall > 0) plan.create = { buyQty: shortfall, toPurchased: false };
+    if (newBuyQty > 0) plan.create = { buyQty: newBuyQty, toPurchased: false };
     return plan;
   }
 

@@ -336,49 +336,43 @@ describe('Giữ chỗ tồn kho vật tư tiêu hao theo PI (integration, real P
     ).rejects.toThrow();
   });
 
-  // LỖI ĐÃ BIẾT, ưu tiên thấp (chưa sửa, 2026-10-27): ConsumableMaterialPurchaseService tính `required` là TỔNG
-  // định mức của PI chứ không trừ phần ĐÃ xuất, nên nếu tính lại SAU khi xuất 20/100 sẽ thấy "cần 100, tồn 80" ->
-  // mua thừa 20 và chỉ giữ chỗ còn 60 thay vì 80. Luồng thường chỉ tính 1 LẦN ngay sau khi Sếp duyệt PI (lúc chưa
-  // xuất gì) nên hiếm gặp; đường tính lại duy nhất đã thấy là retryProductionOrder() (Admin cứu SKU kẹt).
-  // Test chạy ĐÚNG hành vi mong muốn nên đang fail - `it.failing` giữ suite xanh; khi sửa xong đổi lại thành `it`
-  // (Jest sẽ báo lỗi nếu test này bắt đầu pass mà vẫn còn `.failing`).
-  it.failing(
-    'tính lại đề xuất mua SAU KHI PI A đã xuất 20/100: không mua thừa, phần còn lại (80) vẫn được giữ đủ cho PI A',
-    async () => {
-      const materialId = await makeMaterial('R2', 100);
-      const a = await makePi('R2-A', materialId, 10, 10); // cần 100, tồn 100
-      const b = await makePi('R2-B', materialId, 10, 10);
+  // Lỗi biết từ 2026-10-27 (required là TỔNG định mức, không trừ phần ĐÃ xuất -> tính lại sau khi xuất 20/100 mua thừa 20 và
+  // chỉ giữ 60). ĐÃ SỬA 14/11/2026 cùng nhóm A rà soát (MH1): releaseOwnHoldsForRecompute() trả phần đã tiêu của chính PI,
+  // 3 nguồn mua coi là "đã có" - xem docs/changelog-2026-11-14-nhom-a-tinh-lai-mua.md.
+  it('tính lại đề xuất mua SAU KHI PI A đã xuất 20/100: không mua thừa, phần còn lại (80) vẫn được giữ đủ cho PI A', async () => {
+    const materialId = await makeMaterial('R2', 100);
+    const a = await makePi('R2-A', materialId, 10, 10); // cần 100, tồn 100
+    const b = await makePi('R2-B', materialId, 10, 10);
 
-      await purchase.computeAndUpsertProposals(a.piId.toString());
-      expect(await remainingReserved(materialId, a.piId)).toBe(100);
-      expect(await buyQtyOf(materialId, a.piId)).toBe(0);
+    await purchase.computeAndUpsertProposals(a.piId.toString());
+    expect(await remainingReserved(materialId, a.piId)).toBe(100);
+    expect(await buyQtyOf(materialId, a.piId)).toBe(0);
 
-      await issues.create(
-        a.orderId.toString(),
-        { stage: MfgStage.SON, materialId: materialId.toString(), issuedQty: 20 },
+    await issues.create(
+      a.orderId.toString(),
+      { stage: MfgStage.SON, materialId: materialId.toString(), issuedQty: 20 },
+      userId,
+      null,
+    ); // tồn còn 80, đã tiêu 20
+
+    await purchase.computeAndUpsertProposals(a.piId.toString()); // tính lại
+    console.log(
+      '[R2] sau tính lại: giữ còn',
+      await remainingReserved(materialId, a.piId),
+      'buyQty',
+      await buyQtyOf(materialId, a.piId),
+    );
+    expect(await buyQtyOf(materialId, a.piId)).toBe(0); // còn cần 80, tồn 80
+    expect(await remainingReserved(materialId, a.piId)).toBe(80);
+    await expect(
+      issues.create(
+        b.orderId.toString(),
+        { stage: MfgStage.SON, materialId: materialId.toString(), issuedQty: 1 },
         userId,
         null,
-      ); // tồn còn 80, đã tiêu 20
-
-      await purchase.computeAndUpsertProposals(a.piId.toString()); // tính lại
-      console.log(
-        '[R2] sau tính lại: giữ còn',
-        await remainingReserved(materialId, a.piId),
-        'buyQty',
-        await buyQtyOf(materialId, a.piId),
-      );
-      expect(await buyQtyOf(materialId, a.piId)).toBe(0); // còn cần 80, tồn 80
-      expect(await remainingReserved(materialId, a.piId)).toBe(80);
-      await expect(
-        issues.create(
-          b.orderId.toString(),
-          { stage: MfgStage.SON, materialId: materialId.toString(), issuedQty: 1 },
-          userId,
-          null,
-        ),
-      ).rejects.toThrow(); // 80 còn lại đã giữ cho PI A
-    },
-  );
+      ),
+    ).rejects.toThrow(); // 80 còn lại đã giữ cho PI A
+  });
   // 2026-10-28 (review sau commit dbfd2ea): phần giữ chỗ còn dư của PI đã xong (mua cộng % hao hụt, nhận vượt, xưởng
   // dùng ít hơn định mức) phải được nhả khi QLSX bấm "Kết thúc" (finishFloor), nếu không nó chặn oan PI khác.
   it('PI A đã Kết thúc còn dư 5 giữ chỗ loại CONSUMABLE (kho còn ít lúc tính, nhận vượt) -> sau khi Kết thúc PI A nhả phần dư, PI B xuất được 5 kg tồn thật', async () => {

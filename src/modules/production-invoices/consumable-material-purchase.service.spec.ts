@@ -16,7 +16,7 @@ describe('ConsumableMaterialPurchaseService', () => {
   let stockReservationsService: {
     getAvailableQty: jest.Mock;
     reserveOrAdjust: jest.Mock;
-    shrinkToFloor: jest.Mock;
+    releaseOwnHoldsForRecompute: jest.Mock;
   };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
   let prisma: {
@@ -142,12 +142,14 @@ describe('ConsumableMaterialPurchaseService', () => {
     };
     // 2026-09-23: buyQty giờ tính theo tồn KHẢ DỤNG (getAvailableQty), không đọc thẳng actualStock -
     // mặc định trả về ĐÚNG actualStock truyền vào (không giữ chỗ nào khác) để mọi test buyQty=
-    // required-actualStock có sẵn không phải sửa; reserveOrAdjust/shrinkToFloor no-op mặc định, test
+    // required-actualStock có sẵn không phải sửa; reserveOrAdjust/releaseOwnHoldsForRecompute no-op mặc định, test
     // riêng cho race condition tự override.
     stockReservationsService = {
       getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
       reserveOrAdjust: jest.fn().mockResolvedValue(undefined),
-      shrinkToFloor: jest.fn().mockResolvedValue(undefined),
+      releaseOwnHoldsForRecompute: jest
+        .fn()
+        .mockResolvedValue({ ownConsumedQty: 0, sourceConsumedQty: 0 }),
     };
     notificationsService = {
       emit: jest.fn().mockResolvedValue(undefined),
@@ -719,15 +721,73 @@ describe('ConsumableMaterialPurchaseService', () => {
     });
   });
 
-  it('co giữ chỗ của chính lượt tính TRƯỚC ĐÓ về floor (shrinkToFloor) TRƯỚC khi tính available - tránh tự xung đột với chính mình qua các lần tính lại', async () => {
+  it('co giữ chỗ của CHÍNH PI (dòng của nguồn + dòng "của cả lệnh") về phần đã tiêu TRƯỚC khi tính available, đúng kho đang tính', async () => {
     await service.computeAndUpsertProposals('1');
 
-    expect(stockReservationsService.shrinkToFloor).toHaveBeenCalledWith(expect.anything(), {
-      refType: 'CONSUMABLE_MATERIAL_PURCHASE',
-      refId: '1',
-      materialId: day.id,
-      spec: '',
+    expect(stockReservationsService.releaseOwnHoldsForRecompute).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '1',
+        productionInvoiceId: 1n,
+        materialId: day.id,
+        warehouseId: day.warehouse.id,
+        spec: '',
+      },
+    );
+    const releaseOrder =
+      stockReservationsService.releaseOwnHoldsForRecompute.mock.invocationCallOrder[0];
+    const availableOrder = stockReservationsService.getAvailableQty.mock.invocationCallOrder[0];
+    expect(releaseOrder).toBeLessThan(availableOrder);
+  });
+
+  // Rà soát 14/11 MH1: ví dụ cần 100, đã nhận 60, nhu cầu tăng lên 120 - phải mua thêm 20 (60 + 60 đã có), không phải 80.
+  it('MH1: hàng đã nhận (nay nằm lại trong tồn khả dụng sau khi co dòng "của cả lệnh") được trừ - nhu cầu 120, đã nhận 60 -> mua 60', async () => {
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(60));
+    stockReservationsService.getAvailableQty.mockResolvedValue(60);
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ required: 120, buyQty: 60 });
+    expect(stockReservationsService.reserveOrAdjust).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ qty: 60, refType: 'CONSUMABLE_MATERIAL_PURCHASE' }),
+    );
+  });
+
+  it('MH1: phần ĐÃ XUẤT cho chính PI tính là đã có - nhu cầu 120, đã xuất 50, còn 10 trong kho -> mua 60, giữ 10 + sàn đã tiêu', async () => {
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(10));
+    stockReservationsService.getAvailableQty.mockResolvedValue(10);
+    stockReservationsService.releaseOwnHoldsForRecompute.mockResolvedValue({
+      ownConsumedQty: 50,
+      sourceConsumedQty: 30,
     });
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ required: 120, buyQty: 60 });
+    expect(stockReservationsService.reserveOrAdjust).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ qty: 40 }), // sàn đã tiêu của dòng nguồn 30 + giữ thêm 10 còn trong kho
+    );
+  });
+
+  it('MH3: khoá đề xuất còn mở bằng khoá ký đơn (purchase-proposal-mutate) TRƯỚC khi khoá stock_quant', async () => {
+    prisma.purchaseProposal.findFirst.mockResolvedValue({
+      id: 900n,
+      status: PurchaseProposalStatus.NEW,
+      items: [],
+    });
+
+    await service.computeAndUpsertProposals('1');
+
+    const lockCalls = prisma.$executeRaw.mock.calls.map(
+      (c: unknown[]) => (c as [unknown, string])[1],
+    );
+    expect(lockCalls).toEqual(['purchase-proposal-merge:1', 'purchase-proposal-mutate:900']);
+    const mutateOrder = prisma.$executeRaw.mock.invocationCallOrder[1];
+    const quantOrder = prisma.$queryRaw.mock.invocationCallOrder[0];
+    expect(mutateOrder).toBeLessThan(quantOrder);
   });
 
   it('ném BadRequestException khi material chưa được cấu hình Kho', async () => {

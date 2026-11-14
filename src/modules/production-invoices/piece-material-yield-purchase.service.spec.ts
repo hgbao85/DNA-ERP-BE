@@ -11,7 +11,7 @@ describe('PieceMaterialYieldPurchaseService', () => {
   let stockReservationsService: {
     getAvailableQty: jest.Mock;
     reserveOrAdjust: jest.Mock;
-    shrinkToFloor: jest.Mock;
+    releaseOwnHoldsForRecompute: jest.Mock;
   };
   let prisma: {
     productionInvoice: { findUnique: jest.Mock };
@@ -128,7 +128,9 @@ describe('PieceMaterialYieldPurchaseService', () => {
     stockReservationsService = {
       getAvailableQty: jest.fn((_tx, _wh, _mat, onHand: number) => Promise.resolve(onHand)),
       reserveOrAdjust: jest.fn().mockResolvedValue(undefined),
-      shrinkToFloor: jest.fn().mockResolvedValue(undefined),
+      releaseOwnHoldsForRecompute: jest
+        .fn()
+        .mockResolvedValue({ ownConsumedQty: 0, sourceConsumedQty: 0 }),
     };
     notificationsService = {
       emit: jest.fn().mockResolvedValue(undefined),
@@ -412,6 +414,11 @@ describe('PieceMaterialYieldPurchaseService', () => {
         },
       ],
     });
+    // Rà soát 14/11 MH2: số mới đã trừ hàng đã nhận - ở đây 3 đã nhận đã xuất cho PI (đã tiêu 3).
+    stockReservationsService.releaseOwnHoldsForRecompute.mockResolvedValue({
+      ownConsumedQty: 3,
+      sourceConsumedQty: 0,
+    });
     productionBatchesService.getReadyPoolQty.mockResolvedValue(new Map([['40', 20]])); // buyQty tính lại = 7
 
     await service.computeAndUpsertProposals('1');
@@ -435,6 +442,11 @@ describe('PieceMaterialYieldPurchaseService', () => {
         },
       ],
     });
+    // Rà soát 14/11 MH2: số mới đã trừ hàng đã nhận - ở đây 10 đã nhận đã xuất cho PI (đã tiêu 10).
+    stockReservationsService.releaseOwnHoldsForRecompute.mockResolvedValue({
+      ownConsumedQty: 10,
+      sourceConsumedQty: 0,
+    });
     productionBatchesService.getReadyPoolQty.mockResolvedValue(new Map([['40', 20]])); // buyQty tính lại = 7
 
     await service.computeAndUpsertProposals('1');
@@ -455,12 +467,13 @@ describe('PieceMaterialYieldPurchaseService', () => {
   it('findFirst gộp theo PI, còn mở (khác PURCHASED) - không lọc theo sourceType/materialId/NEW riêng', async () => {
     await service.computeAndUpsertProposals('1');
 
+    // Rà soát 14/11 MH3: tìm id trước, khoá purchase-proposal-mutate rồi mới đọc lại dòng (findOpenProposalForRecompute).
     expect(prisma.purchaseProposal.findFirst).toHaveBeenCalledWith({
       where: {
         productionInvoiceId: 1n,
         status: { not: PurchaseProposalStatus.PURCHASED },
       },
-      include: { items: true },
+      select: { id: true },
     });
   });
 
@@ -585,14 +598,19 @@ describe('PieceMaterialYieldPurchaseService', () => {
     });
   });
 
-  it('co giữ chỗ của chính lượt tính TRƯỚC ĐÓ về floor (shrinkToFloor) TRƯỚC khi tính available', async () => {
+  it('co giữ chỗ của CHÍNH PI (dòng của nguồn + dòng "của cả lệnh") về phần đã tiêu, đúng kho đang tính (rà soát 14/11 MH1)', async () => {
     await service.computeAndUpsertProposals('1');
 
-    expect(stockReservationsService.shrinkToFloor).toHaveBeenCalledWith(expect.anything(), {
-      refType: 'PIECE_MATERIAL_YIELD_PURCHASE',
-      refId: '1',
-      materialId: thanhNhom.id,
-    });
+    expect(stockReservationsService.releaseOwnHoldsForRecompute).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        refType: 'PIECE_MATERIAL_YIELD_PURCHASE',
+        refId: '1',
+        productionInvoiceId: 1n,
+        materialId: thanhNhom.id,
+        warehouseId: thanhNhom.warehouse.id,
+      },
+    );
   });
 
   it('ném BadRequestException khi material chưa được cấu hình Kho', async () => {
