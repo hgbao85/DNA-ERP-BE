@@ -153,25 +153,71 @@ export class StockReservationsService {
   }
 
   /**
-   * Co 1 dòng giữ chỗ ỔN ĐỊNH (xem reserveOrAdjust) VỀ ĐÚNG phần đã tiêu (consumedQty) TRƯỚC khi
-   * tính lại available của chính lượt tính đang chạy (2026-09-23) - nếu không, phần CHƯA tiêu của
-   * chính lượt giữ chỗ TRƯỚC ĐÓ (do refId ổn định, không đổi qua các lần gọi lại) sẽ bị
-   * getAvailableQty() trừ NHẦM vào chính nó, khiến available bị đánh giá thấp dần mỗi lần tính lại
-   * dù tồn kho thật không đổi (tự xung đột với chính mình - khác CUTTING_PROPOSAL luôn release() 1
-   * refId CŨ trước khi 1 refId MỚI tính available, xem CuttingProposalsService.approve()). No-op
-   * nếu chưa từng giữ chỗ gì (chưa có dòng nào).
+   * Chuẩn bị TÍNH LẠI 1 nguồn mua ngoài sắt của 1 PI (rà soát 14/11/2026, lỗi MH1) - thay cho shrinkToFloor() cũ (2026-09-23,
+   * chỉ co dòng của nguồn). Co VỀ phần đã tiêu cả 2 loại dòng giữ chỗ của CHÍNH PI cho (vật tư, quy cách):
+   *  - dòng của chính nguồn (refType/refId ổn định qua mọi lần tính lại): không co thì phần CHƯA tiêu của lượt tính TRƯỚC bị
+   *    getAvailableQty() trừ nhầm vào chính nó, available tụt dần mỗi lần tính lại dù tồn không đổi;
+   *  - dòng "của cả lệnh" PRODUCTION_INVOICE mà creditPool() tạo khi hàng mua về lúc nguồn chưa giữ chỗ gì (lần tính đầu
+   *    chưa có tồn). Trước đây dòng này KHÔNG được co, getAvailableQty() trừ nó như hàng lệnh khác đang giữ -> lần tính
+   *    sau mua thêm đúng phần đã nhận. Chỉ co dòng nằm ở ĐÚNG kho đang tính (`warehouseId`); dòng ở kho khác (sau đổi
+   *    xưởng) để nguyên - thuộc thiết kế giữ chỗ theo kho (nhóm B), không đụng ở đây.
+   * Sau bước này hàng đã nhận còn trong kho nằm lại trong tồn khả dụng, caller giữ chỗ lại vào dòng của nguồn.
+   *
+   * Trả về phần ĐÃ TIÊU (xưởng đã xuất cho PI này) của các dòng trên, MỌI kho: `ownConsumedQty` để caller coi là "đã có"
+   * khi trừ nhu cầu (nhu cầu là tổng cả PI nên phải trừ cả phần đã xuất, nếu không lần tính sau mua lại hàng đã xuất);
+   * `sourceConsumedQty` là sàn của dòng nguồn khi giữ chỗ lại. consumedQty chỉ ghi được khi lúc xuất có giữ chỗ để rút
+   * (drainPoolBestEffort) - xuất không qua giữ chỗ thì không đếm được, lệch về phía mua thêm như trước, không mua thiếu.
+   *
+   * Caller PHẢI khoá stock_quant FOR UPDATE TRƯỚC khi gọi (cùng thứ tự khoá với luồng xuất vật tư: stock_quant rồi mới tới
+   * dòng giữ chỗ) - hàm này khoá FOR UPDATE các dòng giữ chỗ nó đọc rồi mới co, để không đè lên consumedQty vừa tăng.
    */
-  async shrinkToFloor(
+  async releaseOwnHoldsForRecompute(
     tx: PrismaTx,
-    input: { refType: StockReservationRefType; refId: string; materialId: bigint; spec?: string },
-  ): Promise<void> {
-    const idempotencyKey = reservationKey(input.refType, input.refId, input.materialId, input.spec);
-    const existing = await tx.stockReservation.findUnique({ where: { idempotencyKey } });
-    if (!existing) return;
-    const floor = existing.consumedQty.toNumber();
-    if (floor !== existing.quantity.toNumber()) {
-      await tx.stockReservation.update({ where: { id: existing.id }, data: { quantity: floor } });
+    input: {
+      refType: StockReservationRefType;
+      refId: string;
+      productionInvoiceId: bigint;
+      materialId: bigint;
+      warehouseId: bigint;
+      spec?: string;
+    },
+  ): Promise<{ ownConsumedQty: number; sourceConsumedQty: number }> {
+    const spec = input.spec?.trim() ?? '';
+    const rows = await tx.$queryRaw<
+      {
+        id: bigint;
+        refType: string;
+        refId: string;
+        warehouseId: bigint;
+        quantity: Prisma.Decimal;
+        consumedQty: Prisma.Decimal;
+      }[]
+    >`
+      SELECT "id", "refType"::text AS "refType", "refId", "warehouseId", "quantity", "consumedQty"
+      FROM "stock_reservations"
+      WHERE "productionInvoiceId" = ${input.productionInvoiceId}
+        AND "materialId" = ${input.materialId}
+        AND "spec" = ${spec}
+        AND "status" = 'ACTIVE'
+        AND (("refType"::text = ${input.refType} AND "refId" = ${input.refId})
+             OR "refType"::text = ${StockReservationRefType.PRODUCTION_INVOICE})
+      ORDER BY "id"
+      FOR UPDATE
+    `;
+    let ownConsumedQty = 0;
+    let sourceConsumedQty = 0;
+    for (const r of rows) {
+      const consumed = r.consumedQty.toNumber();
+      ownConsumedQty += consumed;
+      const isSource = r.refType === input.refType && r.refId === input.refId;
+      if (isSource) sourceConsumedQty += consumed;
+      const shrink = isSource || r.warehouseId === input.warehouseId;
+      if (shrink && r.quantity.toNumber() !== consumed) {
+        await tx.stockReservation.update({ where: { id: r.id }, data: { quantity: consumed } });
+      }
     }
+    const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
+    return { ownConsumedQty: round4(ownConsumedQty), sourceConsumedQty: round4(sourceConsumedQty) };
   }
 
   /**

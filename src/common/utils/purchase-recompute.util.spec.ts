@@ -164,17 +164,31 @@ describe('planPurchaseRecompute', () => {
     });
   });
 
-  describe('dòng PURCHASED (giữ như cũ)', () => {
-    it('chỉ có dòng PURCHASED: tách dòng NEW cho phần thiếu so với đã nhận', () => {
-      const plan = planPurchaseRecompute([item(1, S.PURCHASED, 100, null, 100)], 130);
+  describe('dòng PURCHASED', () => {
+    // Rà soát 14/11 MH2: số mới truyền vào ĐÃ trừ hàng đã nhận (còn trong kho hoặc đã xuất cho PI) - không trừ receivedQty lần nữa.
+    it('chỉ có dòng PURCHASED: nhu cầu 100 -> 130, đã nhận đủ 100 -> số mới 30 -> tách dòng NEW 30', () => {
+      const plan = planPurchaseRecompute([item(1, S.PURCHASED, 100, null, 100)], 30);
       expect(plan.create).toEqual({ buyQty: 30, toPurchased: false });
       expect(plan.update).toBeNull();
     });
 
-    it('chỉ có dòng PURCHASED, không thiếu: không làm gì', () => {
-      const plan = planPurchaseRecompute([item(1, S.PURCHASED, 100, null, 100)], 90);
+    it('chỉ có dòng PURCHASED, không thiếu (số mới 0): không làm gì', () => {
+      const plan = planPurchaseRecompute([item(1, S.PURCHASED, 100, null, 100)], 0);
       expect(plan.create).toBeNull();
       expect(plan.update).toBeNull();
+    });
+
+    it('số mới đã trừ hàng đã nhận: KHÔNG trừ receivedQty lần nữa (trước đây 30 − 100 -> không mua, thiếu 30)', () => {
+      const plan = planPurchaseRecompute([item(1, S.PURCHASED, 100, null, 100)], 30);
+      expect(plan.create?.buyQty).toBe(30);
+    });
+
+    it('2 dòng đã đóng (đóng thiếu + đặt lại): mua đúng số còn thiếu, không mua trùng phần dòng sau đã nhận', () => {
+      const plan = planPurchaseRecompute(
+        [item(1, S.PURCHASED, 100, null, 60), item(2, S.PURCHASED, 40, null, 40)],
+        10,
+      );
+      expect(plan.create).toEqual({ buyQty: 10, toPurchased: false });
     });
 
     it('có cả PURCHASED và NEW: ghi số mới vào dòng NEW', () => {

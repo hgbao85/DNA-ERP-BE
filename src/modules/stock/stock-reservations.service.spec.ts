@@ -262,48 +262,80 @@ describe('StockReservationsService', () => {
     });
   });
 
-  describe('shrinkToFloor (2026-09-23) - co giữ chỗ ỔN ĐỊNH về đúng phần đã tiêu TRƯỚC khi tính lại available', () => {
-    it('chưa có dòng nào - no-op', async () => {
-      await service.shrinkToFloor(prisma as unknown as PrismaTx, {
-        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
-        refId: '7',
-        materialId: 30n,
-      });
+  describe('releaseOwnHoldsForRecompute (rà soát 14/11 MH1) - co giữ chỗ của CHÍNH PI trước khi tính lại 1 nguồn mua', () => {
+    const input = {
+      refType: 'CONSUMABLE_MATERIAL_PURCHASE' as const,
+      refId: '7',
+      productionInvoiceId: 7n,
+      materialId: 30n,
+      warehouseId: 800n,
+    };
+    const row = (
+      id: bigint,
+      refType: string,
+      refId: string,
+      warehouseId: bigint,
+      quantity: number,
+      consumedQty: number,
+    ) => ({
+      id,
+      refType,
+      refId,
+      warehouseId,
+      quantity: decimal(quantity),
+      consumedQty: decimal(consumedQty),
+    });
 
+    it('chưa có dòng nào - no-op, đã tiêu = 0', async () => {
+      const result = await service.releaseOwnHoldsForRecompute(
+        prisma as unknown as PrismaTx,
+        input,
+      );
+
+      expect(result).toEqual({ ownConsumedQty: 0, sourceConsumedQty: 0 });
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
     });
 
-    it('có dòng, còn phần CHƯA tiêu - co quantity về đúng consumedQty', async () => {
-      prisma.stockReservation.findUnique.mockResolvedValue({
-        id: 900n,
-        quantity: decimal(50),
-        consumedQty: decimal(15),
-      });
+    it('co CẢ dòng của nguồn lẫn dòng "của cả lệnh" (hàng mua về) cùng kho về phần đã tiêu, trả tổng đã tiêu', async () => {
+      prisma.$queryRaw.mockResolvedValue([
+        row(900n, 'CONSUMABLE_MATERIAL_PURCHASE', '7', 800n, 50, 15),
+        row(901n, 'PRODUCTION_INVOICE', '7', 800n, 60, 5),
+      ]);
 
-      await service.shrinkToFloor(prisma as unknown as PrismaTx, {
-        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
-        refId: '7',
-        materialId: 30n,
-      });
+      const result = await service.releaseOwnHoldsForRecompute(
+        prisma as unknown as PrismaTx,
+        input,
+      );
 
       expect(prisma.stockReservation.update).toHaveBeenCalledWith({
         where: { id: 900n },
         data: { quantity: 15 },
       });
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 901n },
+        data: { quantity: 5 },
+      });
+      expect(result).toEqual({ ownConsumedQty: 20, sourceConsumedQty: 15 });
     });
 
-    it('đã ở floor rồi (mọi thứ đã tiêu hết) - không gọi update() thừa', async () => {
-      prisma.stockReservation.findUnique.mockResolvedValue({
-        id: 900n,
-        quantity: decimal(15),
-        consumedQty: decimal(15),
-      });
+    it('dòng "của cả lệnh" ở KHO KHÁC (sau đổi xưởng) giữ nguyên, nhưng phần đã tiêu của nó vẫn tính là đã có', async () => {
+      prisma.$queryRaw.mockResolvedValue([row(901n, 'PRODUCTION_INVOICE', '7', 801n, 60, 10)]);
 
-      await service.shrinkToFloor(prisma as unknown as PrismaTx, {
-        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
-        refId: '7',
-        materialId: 30n,
-      });
+      const result = await service.releaseOwnHoldsForRecompute(
+        prisma as unknown as PrismaTx,
+        input,
+      );
+
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+      expect(result).toEqual({ ownConsumedQty: 10, sourceConsumedQty: 0 });
+    });
+
+    it('đã ở floor rồi - không gọi update() thừa', async () => {
+      prisma.$queryRaw.mockResolvedValue([
+        row(900n, 'CONSUMABLE_MATERIAL_PURCHASE', '7', 800n, 15, 15),
+      ]);
+
+      await service.releaseOwnHoldsForRecompute(prisma as unknown as PrismaTx, input);
 
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
     });
