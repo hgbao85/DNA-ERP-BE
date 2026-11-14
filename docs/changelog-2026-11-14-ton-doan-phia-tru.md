@@ -57,3 +57,25 @@ công tắc tắt thì Hàn / Sơn trừ đoạn y như cũ, đổi xưởng kh�
   Bấm vào mở tab "Sổ báo vượt đoạn". Tự đóng khi QLSX đóng hết dòng của đợt.
 - KHSX: tab "Sổ báo vượt đoạn" chỉ xem (Giám đốc đã có ở MfgApp).
 - Ý 3 (cộng dần sau mỗi lần KCS đạt) khớp code đã có. Ý 1 (mã đoạn) Sang đang đề xuất lại với anh Nhân.
+
+## Thử bật công tắc trên bản sao DB local (14/11)
+
+Bản sao DB dev (pg_dump → Postgres 17 trong docker, cổng 5433) + BE build riêng cổng 3011 với `SEGMENT_STOCK_ENABLED=true`; DB dev
+chung KHÔNG bị ghi. Đã xoá bản sao sau khi thử. Đạt:
+
+1. Chuyển đổi dữ liệu cũ chạy THẬT: 6 ô âm kho Phôi về 0 (đối ứng sang kho ảo), 2 lệnh PB, 3 đợt Hàn cũ trừ lại theo mã đoạn (thiếu
+   180 - dữ liệu thử chưa có KCS Phôi); khớp lượt xem thử.
+2. Kiểm kê đoạn: 0 → 15 (800 mm Dập), 0 → 30 (400 mm trơn) vào cột Dư; tiếng Việt trong ghi chú lưu đúng.
+3. Hàn báo 10 mảnh PB-B (PBG-1): trừ tách đúng mã đoạn (Dập / trơn) từ Dư, không vượt lệnh nên không ghi sổ.
+4. Hàn báo thêm 15 (vượt lệnh 20): 2 dòng sổ (thiếu 10 + 20, vượt 5 mảnh, lấy thêm 5 + 10, OVER_REPORT); tồn không âm; thông báo
+   QLSX tiêu đề số LSX.
+5. QLSX đóng dòng: dòng 1 xong thông báo còn mở; đóng lại → 409; đóng hết → thông báo tự đóng; nhật ký đủ. Đóng qua giao diện OK.
+6. Lệnh khác (PBA-1) chỉ lấy được Dư, KHÔNG lấy phần PBG đang giữ (12 đoạn còn nguyên).
+7. Đổi xưởng PBG sang Phước An: 12 đoạn đang giữ chuyển sang Kho Phôi Phước An (bút toán chuyển kho + TRANSFER ±12); Hàn báo tiếp trừ
+   đúng phần giữ ở Phước An (12 → 2).
+8. Gửi trùng cùng Idempotency-Key: cùng đợt, không trừ / ghi sổ thêm, 1 thông báo. Sơn báo mảnh cần cả Hàn + Sơn: không trừ đoạn.
+
+Lỗi tìm được (đã sửa FE): màn Kho phôi hiện kho ảo "Cân đối tồn kho" (OPENING_BALANCE) thành 1 kho số âm sau khi kiểm kê / chuyển
+đổi - nay bỏ mọi kho ảo.
+
+Chưa thử ở đây (phần của Sang, Sang đã thử bản sao hôm 13/11): phía cộng từ KCS Phôi thật, nhả giữ khi QLSX Kết thúc lệnh.
