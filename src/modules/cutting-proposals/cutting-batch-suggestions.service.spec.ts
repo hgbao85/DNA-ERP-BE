@@ -66,7 +66,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     // Máy cắt (2026-10-23): mặc định MC Laser; cặp lưỡi/tề + tham số bó của MC Tự động.
     solverMachine: 'laser',
     solverMctdBladeWidthMm: mockDecimal(2.5),
-    solverMctdTrimStartMm: 0,
+    solverMctdTrimStartMm: 10, // 13/11/2026: MC Tự động tề đầu 10 mm (trước 0)
     solverBundleFactors: [14, 16, 18, 20],
     solverMaxManualCuts: 5,
     solverMaxSizesPerPattern: 5,
@@ -220,9 +220,9 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     // Mốc neo là đơn VƯỢT ngưỡng gấp nhất (J55), không phải đơn gấp nhất nói chung.
     expect(s.anchor.salesOrderCode).toBe('PO-3');
     expect(s.levels).toHaveLength(2);
-    expect(s.levels[0].minWastePct).toBeCloseTo(1.883, 3);
+    expect(s.levels[0].minWastePct).toBeCloseTo(1.717, 3);
     expect(s.levels[0].meetsThreshold).toBe(false);
-    expect(s.levels[1].minWastePct).toBeCloseTo(0.533, 3);
+    expect(s.levels[1].minWastePct).toBeCloseTo(0.367, 3);
     expect(s.levels[1].meetsThreshold).toBe(true);
     // Lợi ích THẬT: cắt riêng 3 cây (J55) + 2 cây (Ghế) = 5; cắt chung 4 cây -> bớt 1 cây.
     expect(s.levels[1].barsSeparate).toBe(5);
@@ -273,7 +273,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
 
     const [s] = await service.getBatchSuggestions();
     const last = s.levels[s.levels.length - 1];
-    expect(last.minWastePct).toBeCloseTo(0.533, 3); // % vẫn cải thiện mạnh
+    expect(last.minWastePct).toBeCloseTo(0.367, 3); // % vẫn cải thiện mạnh
     expect(last.barsSavedVsSeparate).toBe(0); // nhưng không bớt được cây nào
   });
 
@@ -327,7 +327,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
     const [s] = await service.getBatchSuggestions();
     expect(s.outcome).toBe('UNFIXABLE_BY_MERGE');
     expect(s.levels).toHaveLength(1);
-    expect(s.levels[0].minWastePct).toBeCloseTo(6.533, 3);
+    expect(s.levels[0].minWastePct).toBeCloseTo(6.367, 3);
     expect(s.levels[0].daysCutEarly).toBeNull(); // 1 đơn thì không có chuyện cắt sớm
   });
 
@@ -505,7 +505,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       expect(res.items).toHaveLength(2);
       const okItem = res.items.find((i) => i.mfgProductCode === 'SKU-OK');
       expect(okItem?.materials[0].overThreshold).toBe(false);
-      expect(okItem?.materials[0].standaloneWastePct).toBeCloseTo(0.85, 2);
+      expect(okItem?.materials[0].standaloneWastePct).toBeCloseTo(0.683, 2);
       // SKU vượt ngưỡng phải xếp lên đầu, kể cả khi hạn của nó không phải gần nhất.
       expect(res.items[0].mfgProductCode).toBe('J55');
       expect(res.items[0].materials[0].overThreshold).toBe(true);
@@ -774,7 +774,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       expect(line?.contributingSkus.sort()).toEqual(['GHE', 'J55']);
       expect(line?.barsSeparate).toBe(5);
       expect(line?.minBars).toBe(4);
-      expect(line?.minWastePct).toBeCloseTo(0.533, 3);
+      expect(line?.minWastePct).toBeCloseTo(0.367, 3);
     });
 
     it('chọn 1 SKU thì không có gì để gộp - dòng chỉ có 1 SKU đóng góp, bớt 0 cây', async () => {
@@ -782,7 +782,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       const res = await service.previewBatch({ productionInvoiceItemIds: ['1'] });
       expect(res.totalBarsSaved).toBe(0);
       expect(res.lines[0].contributingSkus).toEqual(['J55']);
-      expect(res.lines[0].minWastePct).toBeCloseTo(1.883, 3);
+      expect(res.lines[0].minWastePct).toBeCloseTo(1.717, 3);
       expect(res.daysCutEarly).toBeNull(); // 1 đơn thì không có chuyện cắt sớm
     });
 
@@ -809,8 +809,9 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       expect(chipChon?.stockLengthMm).toBe(5850);
       expect(chipChon?.standaloneWastePct).not.toBeCloseTo(chipMac!.standaloneWastePct, 3);
       // 840mm trên cây 5850: tề đầu 10 -> dùng được 5840, cắt 6 đoạn hết 6×(840+1)=5046, dôi 794.
-      // Hao hụt tính trên CẢ CÂY và tính cả phần tề đầu: (10+794)/5850 = 13,744%.
-      expect(chipChon?.standaloneWastePct).toBeCloseTo(13.744, 2);
+      // Hao hụt tính trên CẢ CÂY và CHỈ tính cùi (13/11/2026, tề đầu không tính): 794/5850 =
+      // 13,573%.
+      expect(chipChon?.standaloneWastePct).toBeCloseTo(13.573, 2);
       expect(chipChon?.overThreshold).toBe(true);
     });
 
@@ -855,7 +856,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       });
       const line = res.lines.find((l) => l.materialCode === 'STL-VUONG-20X20');
       expect(line?.stockLengthMm).toBe(6000); // vẫn là cây chuẩn, không bị khoá lạ kéo theo
-      expect(line?.minWastePct).toBeCloseTo(0.533, 3); // y hệt test "2 SKU -> bớt 1 cây" ở trên
+      expect(line?.minWastePct).toBeCloseTo(0.367, 3); // y hệt test "2 SKU -> bớt 1 cây" ở trên
     });
 
     /**
@@ -941,7 +942,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
 
         const normal = await service.getBatchCandidates();
         expect(normal.items[0].materials[0].verified).toBe(false);
-        expect(normal.items[0].materials[0].standaloneWastePct).toBeCloseTo(1.883, 2);
+        expect(normal.items[0].materials[0].standaloneWastePct).toBeCloseTo(1.717, 2);
         expect(postMock).not.toHaveBeenCalled();
 
         const failed = await deepCandidates();
@@ -975,7 +976,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
         expect(postMock).toHaveBeenCalledWith(
           expect.objectContaining({
             machine: 'tu_dong',
-            trim_start: 0,
+            trim_start: 10,
             blade_width: 2.5,
             bundle_factors: [14, 16, 18, 20],
             max_manual_cuts: 5,
@@ -1178,7 +1179,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
         const res = await deepCandidates();
         const m = res.items[0].materials[0];
         expect(m.verified).toBe(false);
-        expect(m.standaloneWastePct).toBeCloseTo(1.883, 2); // y hệt ước tính best-fill.util.ts cũ
+        expect(m.standaloneWastePct).toBeCloseTo(1.717, 2); // cùi/cây mua, tề đầu không tính (13/11/2026)
       });
 
       const okResult = {

@@ -8,7 +8,12 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { MfgStage, ProcessStep, WorkstationKind } from '../../../generated/prisma/client';
+import {
+  MfgStage,
+  ProcessStep,
+  SolverMachine,
+  WorkstationKind,
+} from '../../../generated/prisma/client';
 
 /** QLSX thêm 1 máy / điểm làm việc dán mã QR (2026-10-13). Ràng buộc kind–stage–processStep kiểm ở
  *  service (+ CHECK DB workstations_step_chk / workstations_stage_chk). */
@@ -38,9 +43,32 @@ export class CreateWorkstationDto {
   @IsOptional()
   @IsEnum(ProcessStep)
   processStep?: ProcessStep;
+
+  @ApiPropertyOptional({
+    description:
+      'Xưởng đặt máy (id xưởng đang hoạt động, chuỗi số nguyên dương). Bỏ trống = chưa khai.',
+    example: '1',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[1-9]\d*$/, { message: 'Mã xưởng phải là số nguyên dương' })
+  workshopId?: string;
+
+  @ApiPropertyOptional({
+    enum: SolverMachine,
+    enumName: 'SolverMachine',
+    description:
+      'Loại máy cắt (chỉ cho máy cắt): laser = MC Laser, tu_dong = MC Tự động. Bỏ trống = laser.',
+  })
+  @IsOptional()
+  @IsEnum(SolverMachine)
+  cutMachineType?: SolverMachine;
 }
 
-/** Chỉ đổi tên / bật-tắt - đổi tổ hay loại máy thì tạo điểm mới (lần báo cũ vẫn trỏ về điểm cũ). */
+/**
+ * Đổi tên / bật-tắt / xưởng / loại máy cắt - đổi tổ hay loại điểm thì tạo điểm mới (lần báo cũ vẫn
+ * trỏ về điểm cũ).
+ */
 export class UpdateWorkstationDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -53,4 +81,23 @@ export class UpdateWorkstationDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Đổi xưởng đặt máy; null = bỏ xưởng (chưa khai).',
+    example: '1',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[1-9]\d*$/, { message: 'Mã xưởng phải là số nguyên dương' })
+  workshopId?: string | null;
+
+  @ApiPropertyOptional({
+    enum: SolverMachine,
+    enumName: 'SolverMachine',
+    description: 'Đổi loại máy cắt (chỉ máy cắt): laser | tu_dong.',
+  })
+  @IsOptional()
+  @IsEnum(SolverMachine)
+  cutMachineType?: SolverMachine;
 }

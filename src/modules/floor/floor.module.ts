@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ProductionBatchesModule } from '../production-batches/production-batches.module';
 import { SteelIssuesModule } from '../steel-issues/steel-issues.module';
+import { CutAllocationService } from './cut-allocation.service';
+import { CutMachineStatsService } from './cut-machine-stats.service';
 import { FloorAdminService } from './floor-admin.service';
 import { FloorAlertsService } from './floor-alerts.service';
 import { FloorController } from './floor.controller';
@@ -10,17 +12,21 @@ import { FloorReviewService } from './floor-review.service';
 import { FloorScanService } from './floor-scan.service';
 import { FloorStatsService } from './floor-stats.service';
 
-/** QR tại máy (2026-10-13) - xem FloorController. */
+/** QR tại máy - xem FloorController. */
 @Module({
   imports: [SteelIssuesModule, ProductionBatchesModule, NotificationsModule],
   controllers: [FloorController],
   providers: [
     FloorAdminService,
+    CutAllocationService,
+    CutMachineStatsService,
     FloorScanService,
     FloorReviewService,
     FloorStatsService,
     FloorRealtimeInterceptor,
     FloorAlertsService,
   ],
+  // IssueSlipsModule gọi requestEvaluate sau khi thủ kho xuất sắt.
+  exports: [FloorAlertsService],
 })
 export class FloorModule {}

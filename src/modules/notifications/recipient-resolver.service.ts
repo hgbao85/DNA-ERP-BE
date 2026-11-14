@@ -175,6 +175,10 @@ export class RecipientResolverService {
     // Ưu tiên mã PI / số PO trong params: đáng tin hơn entityId vì có type gắn entityType PI nhưng truyền id dòng SKU, còn type
     // kho/KCS/đề xuất mua thì entityId không phải lệnh.
     const params = ref.params ?? {};
+    // Thông báo về MÁY (không có lệnh): params.workshopId (chuỗi số) = xưởng của máy.
+    if (typeof params.workshopId === 'string' && /^\d+$/.test(params.workshopId)) {
+      return new Set([BigInt(params.workshopId)]);
+    }
     if (typeof params.piCode === 'string') {
       const pi = await client.productionInvoice.findUnique({
         where: { code: params.piCode },

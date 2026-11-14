@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalStatus, PurchaseProposalStatus } from '../../generated/prisma/client';
 import { AppConfig } from '../../config/configuration';
@@ -52,7 +53,12 @@ describe('CuttingProposalsService', () => {
     material: { findMany: jest.Mock };
     productionInvoiceItem: { findMany: jest.Mock };
     bomRevision: { findMany: jest.Mock };
-    warehouse: { findUniqueOrThrow: jest.Mock };
+    warehouse: { findUniqueOrThrow: jest.Mock; findMany: jest.Mock };
+    // Xưởng + tồn kho Phôi (13/11/2026): luật số cỡ theo xưởng và chiều dài đang có tồn.
+    workshop: { findUnique: jest.Mock };
+    stockQuant: { findMany: jest.Mock };
+    stockReservation: { findMany: jest.Mock };
+    warehouseTransferReservation: { findMany: jest.Mock };
     $queryRaw: jest.Mock;
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
@@ -120,12 +126,20 @@ describe('CuttingProposalsService', () => {
     // Máy cắt (2026-10-23): mặc định công ty = MC Laser; cặp lưỡi/tề + tham số bó của MC Tự động.
     solverMachine: 'laser',
     solverMctdBladeWidthMm: mockDecimal(2.5),
-    solverMctdTrimStartMm: 0,
+    solverMctdTrimStartMm: 10, // 13/11/2026: MC Tự động tề đầu 10 mm (trước 0)
     solverBundleFactors: [14, 16, 18, 20],
     solverMaxManualCuts: 5,
     solverMaxSizesPerPattern: 5,
-    // Luật gộp (2026-10-24): mốc cần sắt ≤ 3 ngày, ≤ 5 SKU mỗi đợt.
-    solverMergeWindowDays: 3,
+    solverLaserMinTailMm: 100,
+    // Luật gộp: khung 5 ngày tính cả 2 đầu = 2 mốc cách nhau tối đa 4 ngày (13/11/2026, trước 3), ≤
+    // 5 SKU mỗi đợt.
+    solverMergeWindowDays: 5,
+    // Luật xưởng "tối đa N cỡ đoạn/cây" theo Workshop.code (13/11/2026).
+    solverMaxSizesPerBarByWorkshop: { PHUOC_AN: 2 },
+    // Máy bắt buộc theo xưởng + số cây/bó theo quy cách (13/11/2026): mặc định spec để trống, từng
+    // test tự bật.
+    solverMachineByWorkshop: {},
+    solverBundleFactorsBySpec: {},
     solverMergeMaxSkus: 5,
   };
   const pieceBomRow = {
@@ -225,7 +239,14 @@ describe('CuttingProposalsService', () => {
         findUniqueOrThrow: jest.fn(({ where }: { where: { code: string } }) =>
           Promise.resolve(where.code === 'PRODUCTION' ? { id: 900n } : { id: 800n }),
         ),
+        // Kho Phôi đang hoạt động của 2 xưởng (đọc chiều dài tồn) - mặc định không có kho nào =
+        // không có chiều dài tồn.
+        findMany: jest.fn().mockResolvedValue([]),
       },
+      workshop: { findUnique: jest.fn().mockResolvedValue(null) },
+      stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
+      stockReservation: { findMany: jest.fn().mockResolvedValue([]) },
+      warehouseTransferReservation: { findMany: jest.fn().mockResolvedValue([]) },
       // Phân nhánh theo câu SQL - xem ghi chú ở stockQty/lockedProposalStatus phía trên.
       $queryRaw: jest.fn((strings: TemplateStringsArray) => {
         const sql = Array.isArray(strings) ? strings.join('') : String(strings);
@@ -1603,7 +1624,7 @@ describe('CuttingProposalsService', () => {
         expect(body).toEqual(
           expect.objectContaining({
             machine: 'tu_dong',
-            trim_start: 0, // solverMctdTrimStartMm, KHÔNG phải solverTrimStartMm (10)
+            trim_start: 10, // solverMctdTrimStartMm (13/11/2026: 10 mm)
             blade_width: 2.5, // solverMctdBladeWidthMm, KHÔNG phải solverBladeWidthMm (1)
             bundle_factors: [14, 16, 18, 20],
             max_manual_cuts: 5,
@@ -1823,6 +1844,465 @@ describe('CuttingProposalsService', () => {
       expect(prisma.cuttingProposalPatternSegment.create).toHaveBeenCalledTimes(1);
       expect(prisma.cuttingProposalPatternSegment.create).toHaveBeenCalledWith({
         data: { patternId: 500n, segmentSpecId: 100n, countPerBar: 9 },
+      });
+    });
+  });
+
+  describe('xưởng + chiều dài tồn kho trong lượt tính chính thức (13/11/2026)', () => {
+    type PrivateParts = {
+      runSolverAndSave: (
+        p: bigint,
+        buildJob: () => Promise<unknown>,
+        requestedById?: string,
+      ) => Promise<void>;
+      buildOrderJob: (o: bigint) => Promise<unknown>;
+      exactCheckDbKey: (key: string) => string;
+    };
+    const invoke = () => {
+      const priv = service as unknown as PrivateParts;
+      return priv.runSolverAndSave(2n, () => priv.buildOrderJob(1n));
+    };
+    const sentBody = () =>
+      (solverClient.propose.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    const lineData = (i = 0) =>
+      (
+        prisma.cuttingProposalLine.create.mock.calls[i] as unknown as [
+          { data: Record<string, unknown> },
+        ]
+      )[0].data;
+    const okLine = (over: Record<string, unknown> = {}) => ({
+      material: '200',
+      feasible: true,
+      best_stock_length: 6000,
+      total_bars: 10,
+      length_source: 'fixed',
+      cutting_patterns: [],
+      ...over,
+    });
+    const respond = (...lines: Record<string, unknown>[]) =>
+      solverClient.propose.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 10,
+          total_waste_mm: 0,
+          waste_percentage: 0,
+          any_over_threshold: false,
+        },
+        purchase_plan: lines,
+      });
+    /** Lệnh SX có xưởng (và tuỳ chọn chiều dài KHSX đã gõ / cờ cho đặt cây riêng). */
+    const orderIn = (
+      workshopId: bigint | null,
+      productionInvoice: Record<string, unknown> | null = null,
+    ) => ({
+      ...productionOrder,
+      productionInvoiceItem: {
+        salesOrder: { orderCode: 'PO-31' },
+        workshopId,
+        productionInvoice,
+      },
+    });
+    const workshop = (code: string, name: string) =>
+      prisma.workshop.findUnique.mockResolvedValue({ id: 3n, code, name });
+    const quant = (warehouseId: bigint, stockLengthMm: number, qty: number, materialId = 200n) => ({
+      warehouseId,
+      materialId,
+      stockLengthMm,
+      spec: '',
+      qty: mockDecimal(qty),
+    });
+    const reservation = (stockLengthMm: number, quantity: number, consumedQty: number) => ({
+      warehouseId: 11n,
+      materialId: 200n,
+      stockLengthMm,
+      spec: '',
+      quantity: mockDecimal(quantity),
+      consumedQty: mockDecimal(consumedQty),
+    });
+
+    beforeEach(() => {
+      prisma.cuttingProposalLine.create.mockResolvedValue({ id: 50n });
+    });
+
+    it('EXACT_CHECK_CACHE_VERSION = 3: khoá DB kết quả kiểm nhanh đổi so với phiên bản 2 (luật laze đoạn cuối)', () => {
+      const priv = service as unknown as PrivateParts;
+      const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+      expect(priv.exactCheckDbKey('k')).toBe(sha('3|k'));
+      expect(priv.exactCheckDbKey('k')).not.toBe(sha('2|k'));
+    });
+
+    it('mọi lượt tính chính thức gửi laser_min_tail_mm đúng cấu hình (cả MC Laser lẫn MC Tự động)', async () => {
+      prisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
+        ...systemConfig,
+        solverLaserMinTailMm: 120,
+      });
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
+      respond(okLine());
+      await invoke();
+      expect(sentBody()).toEqual(
+        expect.objectContaining({ machine: 'laser', laser_min_tail_mm: 120 }),
+      );
+
+      solverClient.propose.mockClear();
+      prisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
+        ...systemConfig,
+        solverMachine: 'tu_dong',
+        solverLaserMinTailMm: 0,
+      });
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
+      respond(okLine({ machine: 'tu_dong' }));
+      await invoke();
+      expect(sentBody()).toEqual(
+        expect.objectContaining({ machine: 'tu_dong', laser_min_tail_mm: 0 }),
+      );
+    });
+
+    describe('luật số cỡ theo xưởng', () => {
+      it('xưởng có mức N -> gửi max_sizes_per_bar_start = N; tâm dò = chiều dài chuẩn đầu tiên', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
+        workshop('PHUOC_AN', 'Phước An');
+        respond(okLine());
+
+        await invoke();
+
+        expect(sentBody()).toEqual(
+          expect.objectContaining({ max_sizes_per_bar_start: 2, scan_center_length: 5850 }),
+        );
+      });
+
+      it('xưởng không có mức trong cấu hình / không có xưởng -> KHÔNG gửi max_sizes_per_bar_start', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
+        workshop('AN_DUONG', 'An Dương');
+        respond(okLine());
+        await invoke();
+        expect(sentBody()).not.toHaveProperty('max_sizes_per_bar_start');
+
+        solverClient.propose.mockClear();
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
+        respond(okLine());
+        await invoke();
+        expect(sentBody()).not.toHaveProperty('max_sizes_per_bar_start');
+      });
+
+      it('giá trị cấu hình không hợp lệ (0, 11, 2.5, chuỗi, null) bị bỏ qua', async () => {
+        for (const bad of [0, 11, 2.5, '2', null]) {
+          solverClient.propose.mockClear();
+          prisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
+            ...systemConfig,
+            solverMaxSizesPerBarByWorkshop: { PHUOC_AN: bad },
+          });
+          prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
+          workshop('PHUOC_AN', 'Phước An');
+          respond(okLine());
+          await invoke();
+          expect(sentBody()).not.toHaveProperty('max_sizes_per_bar_start');
+        }
+      });
+
+      it('lưu sizesRelaxNote khi phải nới số cỡ; không nới thì null; limit null = bỏ giới hạn', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
+        workshop('PHUOC_AN', 'Phước An');
+        respond(
+          okLine({ sizes_per_bar_start: 2, sizes_per_bar_limit: 3, max_waste_pct_threshold: 1 }),
+          okLine({ material: '201', sizes_per_bar_start: 2, sizes_per_bar_limit: 2 }),
+          okLine({
+            material: '202',
+            sizes_per_bar_start: 2,
+            sizes_per_bar_limit: null,
+            max_waste_pct_threshold: 1,
+          }),
+          okLine({ material: '203' }),
+        );
+
+        await invoke();
+
+        expect(lineData(0).sizesRelaxNote).toBe(
+          'Xưởng Phước An tối đa 2 cỡ đoạn/cây: không đạt ngưỡng 1% nên nới lên 3 cỡ',
+        );
+        expect(lineData(1).sizesRelaxNote).toBeNull();
+        expect(lineData(2).sizesRelaxNote).toBe(
+          'Xưởng Phước An tối đa 2 cỡ đoạn/cây: không đạt ngưỡng 1% nên bỏ giới hạn số cỡ',
+        );
+        expect(lineData(3).sizesRelaxNote).toBeNull();
+      });
+
+      it('tên xưởng đã có chữ "Xưởng" thì không lặp "Xưởng Xưởng"', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
+        workshop('PHUOC_AN', 'Xưởng Phước An');
+        respond(okLine({ sizes_per_bar_start: 2, sizes_per_bar_limit: 3 }));
+
+        await invoke();
+
+        expect(lineData(0).sizesRelaxNote).toMatch(/^Xưởng Phước An tối đa 2 cỡ/);
+      });
+
+      it('toDetailResponseDto trả sizesRelaxNote (null nếu không có)', () => {
+        type Internals = {
+          toResponseDto: (p: unknown) => unknown;
+          toDetailResponseDto: (
+            p: unknown,
+            w: number,
+          ) => { lines: { sizesRelaxNote: string | null }[] };
+        };
+        const internals = service as unknown as Internals;
+        jest.spyOn(internals, 'toResponseDto').mockReturnValue({});
+        const base = {
+          materialId: 1n,
+          material: { code: 'SAT-1', name: 'Sắt', unit: 'kg', spec: null },
+          feasible: true,
+          patterns: [],
+        };
+        const dto = internals.toDetailResponseDto(
+          {
+            lines: [
+              { ...base, sizesRelaxNote: 'ghi chú' },
+              { ...base, sizesRelaxNote: undefined },
+            ],
+          },
+          1,
+        );
+        expect(dto.lines[0].sizesRelaxNote).toBe('ghi chú');
+        expect(dto.lines[1].sizesRelaxNote).toBeNull();
+      });
+    });
+
+    describe('máy bắt buộc theo xưởng (13/11/2026)', () => {
+      const withConfig = (over: Record<string, unknown>) =>
+        prisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({ ...systemConfig, ...over });
+
+      it('xưởng bị khoá tu_dong: KHSX chọn laser vẫn gửi machine tu_dong + thông số MC Tự động', async () => {
+        withConfig({ solverMachineByWorkshop: { PHUOC_AN: 'tu_dong' } });
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(
+          orderIn(3n, { solverMachine: 'laser' }),
+        );
+        workshop('PHUOC_AN', 'Phước An');
+        respond(okLine({ machine: 'tu_dong' }));
+
+        await invoke();
+
+        expect(sentBody()).toEqual(
+          expect.objectContaining({
+            machine: 'tu_dong',
+            trim_start: 10,
+            blade_width: 2.5,
+            bundle_factors: [14, 16, 18, 20],
+          }),
+        );
+        expect(lineData(0).machine).toBe('tu_dong');
+      });
+
+      it('xưởng không có khoá: giữ lựa chọn của KHSX (laser) và máy mặc định công ty', async () => {
+        withConfig({ solverMachineByWorkshop: { PHUOC_AN: 'tu_dong' } });
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(
+          orderIn(3n, { solverMachine: 'laser' }),
+        );
+        workshop('AN_DUONG', 'An Dương');
+        respond(okLine());
+        await invoke();
+        expect(sentBody()).toEqual(expect.objectContaining({ machine: 'laser' }));
+
+        solverClient.propose.mockClear();
+        withConfig({ solverMachineByWorkshop: { PHUOC_AN: 'tu_dong' }, solverMachine: 'tu_dong' });
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
+        respond(okLine());
+        await invoke();
+        expect(sentBody()).toEqual(expect.objectContaining({ machine: 'tu_dong' }));
+      });
+
+      it('xưởng bị khoá laser đè cả lựa chọn tu_dong của đợt', async () => {
+        withConfig({ solverMachineByWorkshop: { PHU_AN: 'laser' } });
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(
+          orderIn(3n, { solverMachine: 'tu_dong' }),
+        );
+        workshop('PHU_AN', 'Phú An');
+        respond(okLine());
+
+        await invoke();
+
+        expect(sentBody()).toEqual(expect.objectContaining({ machine: 'laser', trim_start: 10 }));
+        expect(sentBody()).not.toHaveProperty('bundle_factors');
+      });
+    });
+
+    describe('số cây/bó theo quy cách cho MC Tự động (13/11/2026)', () => {
+      const tuDong = {
+        solverMachine: 'tu_dong',
+        solverBundleFactorsBySpec: { V20: [14, 16], 'H13-26': [15, 18] },
+      };
+      const withConfig = (over: Record<string, unknown>) =>
+        prisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({ ...systemConfig, ...over });
+      const material = (name: string, spec: string | null) =>
+        prisma.material.findMany.mockResolvedValueOnce([{ id: 200n, name, spec }]);
+
+      it('quy cách có trong bảng -> bundle_factors_by_material[khoá] = hệ số của quy cách (không còn fallback_*)', async () => {
+        withConfig(tuDong);
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
+        material('Sắt vuông 6zem', '20');
+        respond(okLine({ machine: 'tu_dong' }));
+
+        await invoke();
+
+        expect(sentBody()).toEqual(
+          expect.objectContaining({
+            machine: 'tu_dong',
+            bundle_factors_by_material: { '200': [14, 16] },
+          }),
+        );
+        expect(sentBody()).not.toHaveProperty('fallback_trim_start');
+        expect(sentBody()).not.toHaveProperty('fallback_blade_width');
+        expect(lineData(0)).not.toHaveProperty('machineNote');
+      });
+
+      const failMessage = () => {
+        const calls = prisma.cuttingProposal.update.mock.calls as unknown as [
+          { data: { status?: unknown; errorMessage?: string } },
+        ][];
+        return calls.find((c) => c[0].data.status === 'FAILED')?.[0].data.errorMessage;
+      };
+
+      it('quy cách ngoài bảng (phòng hờ lúc chạy) -> lượt tính THẤT BẠI với câu hướng dẫn, KHÔNG gọi bộ giải', async () => {
+        withConfig(tuDong);
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
+        material('Sắt vuông 7zem', '50');
+
+        await invoke();
+
+        expect(solverClient.propose).not.toHaveBeenCalled();
+        expect(prisma.cuttingProposalLine.create).not.toHaveBeenCalled();
+        expect(failMessage()).toBe(
+          'Quy cách V50 (Sắt vuông 7zem · 50) chưa có trong bảng số cây/bó của MC Tự động. Hỏi Sếp số cây/bó rồi nhờ Admin thêm vào Cấu hình hệ thống › Máy cắt, sau đó tính lại.',
+        );
+      });
+
+      it('không suy được mã quy cách -> câu lỗi dùng "Tên · Quy cách"', async () => {
+        withConfig(tuDong);
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
+        material('Thép tấm lạ', '3mm');
+
+        await invoke();
+
+        expect(solverClient.propose).not.toHaveBeenCalled();
+        expect(failMessage()).toContain('Quy cách Thép tấm lạ · 3mm chưa có trong bảng');
+      });
+
+      it('bảng rỗng -> KHÔNG gửi bundle_factors_by_material (dùng hệ số chung như cũ), không tra vật tư', async () => {
+        withConfig({ solverMachine: 'tu_dong', solverBundleFactorsBySpec: {} });
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
+        respond(okLine({ machine: 'tu_dong' }));
+
+        await invoke();
+
+        const body = sentBody();
+        expect(body).not.toHaveProperty('bundle_factors_by_material');
+        expect(body).not.toHaveProperty('fallback_trim_start');
+        expect(body.bundle_factors).toEqual([14, 16, 18, 20]);
+      });
+
+      it('MC Laser (kể cả bảng có dữ liệu) -> không gửi bundle_factors_by_material', async () => {
+        withConfig({ solverMachine: 'laser', solverBundleFactorsBySpec: { V20: [14] } });
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
+        respond(okLine());
+
+        await invoke();
+
+        expect(sentBody()).not.toHaveProperty('bundle_factors_by_material');
+      });
+    });
+
+    describe('chiều dài đang có tồn ở kho Phôi', () => {
+      beforeEach(() => {
+        prisma.warehouse.findMany.mockResolvedValue([{ id: 11n }, { id: 12n }]);
+      });
+
+      it('gửi [chuẩn..., tồn...] cho loại KHSX không gõ: chỉ lấy bội 50, trong dải, khác chuẩn, còn ≥ 1 cây chưa giữ chỗ', async () => {
+        prisma.stockQuant.findMany.mockResolvedValue([
+          quant(11n, 5950, 4), // hợp lệ
+          quant(12n, 5950, 1), // cùng chiều dài ở kho khác: gộp, không lặp
+          quant(11n, 5900, 2), // bị giữ chỗ hết
+          quant(12n, 5925, 9), // không bội 50
+          quant(12n, 6000, 9), // chiều dài chuẩn
+          quant(12n, 4500, 9), // ngoài dải 5000..6000
+          quant(12n, 5500, 0.5), // chưa đủ 1 cây
+          quant(11n, 5800, 3), // 3 cây, giữ chỗ 3 - đã lấy 1 -> còn 1: hợp lệ
+        ]);
+        prisma.stockReservation.findMany.mockResolvedValue([
+          reservation(5900, 2, 0),
+          reservation(5800, 3, 1),
+        ]);
+        respond(okLine());
+
+        await invoke();
+
+        expect(sentBody().stock_lengths_by_material).toEqual({ '200': [5850, 6000, 5800, 5950] });
+        // Truy vấn gộp: đúng 1 lần mỗi bảng dù có nhiều chiều dài.
+        expect(prisma.stockQuant.findMany).toHaveBeenCalledTimes(1);
+        expect(prisma.stockReservation.findMany).toHaveBeenCalledTimes(1);
+      });
+
+      it('loại KHSX đã tự gõ chiều dài: giữ đúng chiều dài đã gõ, KHÔNG đọc tồn cho loại đó', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(
+          orderIn(null, { solverStockLengthsByMaterial: { '200': 5900 } }),
+        );
+        prisma.stockQuant.findMany.mockResolvedValue([quant(11n, 5950, 4)]);
+        respond(okLine());
+
+        await invoke();
+
+        expect(sentBody().stock_lengths_by_material).toEqual({ '200': 5900 });
+        expect(prisma.warehouse.findMany).not.toHaveBeenCalled();
+      });
+
+      it('không có chiều dài tồn hợp lệ -> không gửi stock_lengths_by_material (như cũ)', async () => {
+        prisma.stockQuant.findMany.mockResolvedValue([quant(11n, 6000, 4)]);
+        respond(okLine());
+
+        await invoke();
+
+        expect(sentBody()).not.toHaveProperty('stock_lengths_by_material');
+      });
+
+      it('chế độ không cho đặt cây riêng (auto_scan=false) vẫn thử chiều dài tồn - đó là hàng có sẵn', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(
+          orderIn(null, { solverAllowCustomLength: false }),
+        );
+        prisma.stockQuant.findMany.mockResolvedValue([quant(11n, 5950, 4)]);
+        respond(okLine());
+
+        await invoke();
+
+        expect(sentBody().auto_scan).toBe(false);
+        expect(sentBody().stock_lengths_by_material).toEqual({ '200': [5850, 6000, 5950] });
+      });
+
+      it('lengthSource = "stock" khi chiều dài tốt nhất là chiều dài tồn đã gửi; chuẩn vẫn "fixed", scan vẫn "scan"', async () => {
+        prisma.stockQuant.findMany.mockResolvedValue([quant(11n, 5950, 4)]);
+        respond(
+          okLine({ best_stock_length: 5950 }), // trong danh sách tồn đã gửi
+          okLine({ material: '201', best_stock_length: 5950 }), // loại này KHÔNG gửi chiều dài tồn
+          okLine({ material: '202', best_stock_length: 6000 }), // chiều dài chuẩn
+          okLine({ material: '203', best_stock_length: 5900, length_source: 'scan' }),
+        );
+
+        await invoke();
+
+        expect(lineData(0).lengthSource).toBe('stock');
+        expect(lineData(1).lengthSource).toBe('fixed');
+        expect(lineData(2).lengthSource).toBe('fixed');
+        expect(lineData(3).lengthSource).toBe('scan');
+      });
+
+      it('đọc tồn lỗi KHÔNG làm hỏng lượt tính: cảnh báo rồi tính như không có chiều dài tồn', async () => {
+        const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+        prisma.warehouse.findMany.mockRejectedValue(new Error('db sập'));
+        respond(okLine());
+
+        await invoke();
+
+        expect(solverClient.propose).toHaveBeenCalledTimes(1);
+        expect(sentBody()).not.toHaveProperty('stock_lengths_by_material');
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('chiều dài tồn kho'));
+        expect(lineData(0).lengthSource).toBe('fixed');
+        warn.mockRestore();
       });
     });
   });
@@ -3658,6 +4138,149 @@ describe('CuttingProposalsService', () => {
         expect(calls[2][0].data.solverOptions).toBeUndefined();
       });
 
+      it('workshopId đi vào solverOptions sau khi kiểm xưởng tồn tại + đang hoạt động; thiếu workshopId vẫn tính như cũ', async () => {
+        prisma.workshop.findUnique.mockResolvedValue({ id: 3n, isActive: true });
+        await service.requestForBatch(
+          { productionInvoiceItemIds: ['20'], workshopId: '3' },
+          'user-khsx',
+        );
+        expect(prisma.cuttingProposal.create).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ solverOptions: { workshopId: '3' } }) as unknown,
+          }),
+        );
+
+        prisma.workshop.findUnique.mockClear();
+        await service.requestForBatch({ productionInvoiceItemIds: ['20'] }, 'user-khsx');
+        expect(prisma.workshop.findUnique).not.toHaveBeenCalled();
+        const calls = prisma.cuttingProposal.create.mock.calls as unknown as [
+          { data: { solverOptions?: unknown } },
+        ][];
+        expect(calls[1][0].data.solverOptions).toBeUndefined();
+      });
+
+      describe('chặn quy cách ngoài bảng số cây/bó của MC Tự động (13/11/2026)', () => {
+        const table = { V20: [14, 16] };
+        const tuDongConfig = (over: Record<string, unknown> = {}) =>
+          prisma.systemConfig.findUniqueOrThrow.mockResolvedValue({
+            ...systemConfig,
+            solverMachine: 'tu_dong',
+            solverBundleFactorsBySpec: table,
+            ...over,
+          });
+        const usedMaterials = (...mats: { id: bigint; name: string; spec: string }[]) => {
+          prisma.pieceBom.findMany.mockResolvedValue(
+            mats.map((m) => ({ segmentSpec: { materialId: m.id } })),
+          );
+          prisma.material.findMany.mockResolvedValue(mats);
+        };
+
+        it('máy hiệu lực tu_dong + có quy cách ngoài bảng -> 400 liệt kê từng quy cách, không tạo lượt tính', async () => {
+          tuDongConfig();
+          usedMaterials(
+            { id: 200n, name: 'Sắt vuông 6zem', spec: '20' },
+            { id: 201n, name: 'Sắt vuông 6zem', spec: '25' },
+            { id: 202n, name: 'Sắt hộp 7zem', spec: '20x40' },
+          );
+
+          const call = service.requestForBatch(dto, 'user-khsx');
+
+          await expect(call).rejects.toThrow(BadRequestException);
+          await expect(call).rejects.toThrow(
+            'Quy cách V25 (Sắt vuông 6zem · 25), H20-40 (Sắt hộp 7zem · 20x40) chưa có trong bảng số cây/bó của MC Tự động. Hỏi Sếp số cây/bó rồi nhờ Admin thêm vào Cấu hình hệ thống › Máy cắt, sau đó tính lại.',
+          );
+          expect(prisma.cuttingProposal.create).not.toHaveBeenCalled();
+        });
+
+        it('mọi quy cách đều có trong bảng -> tính bình thường', async () => {
+          tuDongConfig();
+          usedMaterials({ id: 200n, name: 'Sắt vuông 6zem', spec: '20' });
+          await service.requestForBatch(dto, 'user-khsx');
+          expect(prisma.cuttingProposal.create).toHaveBeenCalled();
+        });
+
+        it('MC Laser (mặc định công ty hoặc KHSX chọn) -> không chặn', async () => {
+          tuDongConfig({ solverMachine: 'laser' });
+          usedMaterials({ id: 201n, name: 'Sắt vuông 6zem', spec: '25' });
+          await service.requestForBatch(dto, 'user-khsx');
+          expect(prisma.cuttingProposal.create).toHaveBeenCalledTimes(1);
+          expect(prisma.material.findMany).not.toHaveBeenCalled();
+        });
+
+        it('KHSX chọn MC Tự động cho đợt (mặc định công ty là laser) -> chặn', async () => {
+          tuDongConfig({ solverMachine: 'laser' });
+          usedMaterials({ id: 201n, name: 'Sắt vuông 6zem', spec: '25' });
+          await expect(
+            service.requestForBatch(
+              { productionInvoiceItemIds: ['20'], solverMachine: 'tu_dong' } as never,
+              'user-khsx',
+            ),
+          ).rejects.toThrow(/V25/);
+        });
+
+        it('xưởng bị khoá laser đè lựa chọn tu_dong -> không chặn; xưởng khoá tu_dong -> chặn dù KHSX chọn laser', async () => {
+          tuDongConfig({ solverMachineByWorkshop: { PHU_AN: 'laser', PHUOC_AN: 'tu_dong' } });
+          usedMaterials({ id: 201n, name: 'Sắt vuông 6zem', spec: '25' });
+          prisma.workshop.findUnique.mockResolvedValueOnce({
+            id: 3n,
+            code: 'PHU_AN',
+            isActive: true,
+          });
+          await service.requestForBatch(
+            {
+              productionInvoiceItemIds: ['20'],
+              workshopId: '3',
+              solverMachine: 'tu_dong',
+            } as never,
+            'user-khsx',
+          );
+          expect(prisma.cuttingProposal.create).toHaveBeenCalledTimes(1);
+
+          prisma.workshop.findUnique.mockResolvedValueOnce({
+            id: 4n,
+            code: 'PHUOC_AN',
+            isActive: true,
+          });
+          await expect(
+            service.requestForBatch(
+              {
+                productionInvoiceItemIds: ['20'],
+                workshopId: '4',
+                solverMachine: 'laser',
+              } as never,
+              'user-khsx',
+            ),
+          ).rejects.toThrow(/V25/);
+        });
+
+        it('bảng rỗng -> không chặn, không tra vật tư', async () => {
+          tuDongConfig({ solverBundleFactorsBySpec: {} });
+          usedMaterials({ id: 201n, name: 'Sắt vuông 6zem', spec: '25' });
+          await service.requestForBatch(dto, 'user-khsx');
+          expect(prisma.cuttingProposal.create).toHaveBeenCalled();
+          expect(prisma.material.findMany).not.toHaveBeenCalled();
+        });
+      });
+
+      it('CHẶN (400, tiếng Việt) khi xưởng không tồn tại hoặc đã ngừng hoạt động - không tạo lượt tính', async () => {
+        prisma.workshop.findUnique.mockResolvedValueOnce(null);
+        await expect(
+          service.requestForBatch(
+            { productionInvoiceItemIds: ['20'], workshopId: '99' },
+            'user-khsx',
+          ),
+        ).rejects.toThrow(BadRequestException);
+
+        prisma.workshop.findUnique.mockResolvedValueOnce({ id: 3n, isActive: false });
+        await expect(
+          service.requestForBatch(
+            { productionInvoiceItemIds: ['20'], workshopId: '3' },
+            'user-khsx',
+          ),
+        ).rejects.toThrow(/không tồn tại hoặc đã ngừng hoạt động/);
+        expect(prisma.cuttingProposal.create).not.toHaveBeenCalled();
+      });
+
       it('GIỮ lượt cũ dùng được (DRAFT) để KHSX so sánh/có đường lui; chỉ dọn lượt lỗi và lượt vô nghiệm', async () => {
         const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000);
         prisma.cuttingProposal.findMany.mockResolvedValue([
@@ -4340,6 +4963,117 @@ describe('CuttingProposalsService', () => {
         expect(result[1].invoiceReadiness?.reason).toMatch(/không có cách cắt nào/);
         // Phương án tính trước: DRAFT là bình thường (chờ tạo PI), không phải "đã có phương án khác".
         expect(result[0].displayStatus).toBe('OK');
+      });
+
+      it('KHÔNG truy vấn định mức để phân loại máy (chỉ findOne mới làm)', async () => {
+        currentUnchanged();
+        prisma.cuttingProposal.findMany.mockResolvedValue([{ ...proposalRow(), lines: [] }]);
+        prisma.pieceBom.findMany.mockClear();
+        prisma.bomPiece.findMany.mockClear();
+
+        await service.getBatchSolves();
+
+        expect(prisma.pieceBom.findMany).not.toHaveBeenCalled();
+        expect(prisma.bomPiece.findMany).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('findOne - chia cây theo loại máy (13/11/2026)', () => {
+      const line = {
+        materialId: 7n,
+        material: { code: 'SAT-1', name: 'Sắt V', unit: 'cây', spec: null },
+        feasible: true,
+        patterns: [
+          {
+            id: 100n,
+            patternIndex: 0,
+            barCount: 15,
+            wastePerBarMm: null,
+            bundles: null,
+            segments: [
+              { segmentSpecId: 1n, segmentSpec: { cutLengthMm: mockDecimal(425) }, countPerBar: 2 },
+            ],
+          },
+        ],
+      };
+      const withWorkshop = (workshopId: bigint | null) =>
+        proposalRow({
+          items: [
+            snap({
+              quantity: 1, // 1 bộ cho dễ đếm
+              productionInvoiceItem: {
+                workshopId,
+                mfgProduct: { factoryCode: 'SKU-1', name: 'Ghế test' },
+                salesOrder: { orderCode: 'PO-31' },
+              },
+            }),
+          ],
+          lines: [line],
+        });
+      // 3 đoạn 425 cần dập (1 mảnh/bộ × 3 đoạn/mảnh × 1 bộ).
+      const punchedBom = () => {
+        prisma.pieceBom.findMany.mockResolvedValue([
+          {
+            bomRevisionId: 5n,
+            pieceId: 10n,
+            qtyPerPiece: 3,
+            processSteps: ['DAP'],
+            segmentSpec: { materialId: 7n, cutLengthMm: mockDecimal(425) },
+          },
+        ]);
+        prisma.bomPiece.findMany.mockResolvedValue([
+          { bomRevisionId: 5n, pieceId: 10n, qtyPerUnit: 1 },
+        ]);
+      };
+
+      it('trả machineGroups + machineContext đúng cho phương án có định mức Dập', async () => {
+        punchedBom();
+        prisma.cuttingProposal.findUnique.mockResolvedValue(withWorkshop(3n));
+        prisma.workshop.findUnique.mockResolvedValue({ id: 3n, code: 'PHU_AN', name: 'Phú An' });
+
+        const dto = await service.findOne('70');
+
+        expect(dto.machineContext).toEqual({
+          workshopId: '3',
+          workshopName: 'Phú An',
+          laserAllowed: true,
+        });
+        const groups = dto.lines![0].patterns[0].machineGroups!;
+        expect(groups.map((g) => [g.machineClass, g.bars])).toEqual([
+          ['LASER', 1],
+          ['LASER', 1],
+          ['TU_DONG', 13],
+        ]);
+      });
+
+      it('xưởng bị khoá máy tự động: laserAllowed = false', async () => {
+        punchedBom();
+        prisma.cuttingProposal.findUnique.mockResolvedValue(withWorkshop(4n));
+        prisma.workshop.findUnique.mockResolvedValue({
+          id: 4n,
+          code: 'PHUOC_AN',
+          name: 'Phước An',
+        });
+        prisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
+          ...systemConfig,
+          solverMachineByWorkshop: { PHUOC_AN: 'tu_dong' },
+        });
+
+        const dto = await service.findOne('70');
+
+        expect(dto.machineContext).toMatchObject({ workshopName: 'Phước An', laserAllowed: false });
+      });
+
+      it('lỗi khi nạp định mức: vẫn trả phương án, không có machineGroups', async () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue(withWorkshop(3n));
+        prisma.pieceBom.findMany.mockRejectedValue(new Error('db down'));
+
+        const dto = await service.findOne('70');
+
+        expect(dto.id).toBe('70');
+        expect(dto.lines).toHaveLength(1);
+        expect(dto.machineContext).toBeNull();
+        expect(dto.lines![0].patterns[0].machineGroups).toBeNull();
       });
     });
   });

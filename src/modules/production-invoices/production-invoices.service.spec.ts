@@ -63,7 +63,7 @@ describe('ProductionInvoicesService', () => {
       delete: jest.Mock;
       updateMany: jest.Mock;
     };
-    cuttingProposal: { count: jest.Mock };
+    cuttingProposal: { count: jest.Mock; findFirst: jest.Mock };
     productionInvoiceItem: {
       create: jest.Mock;
       update: jest.Mock;
@@ -191,8 +191,13 @@ describe('ProductionInvoicesService', () => {
         delete: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
-      // Phần A: đếm phương án cắt APPROVED khi đổi xưởng - mặc định 0 (không bật cờ).
-      cuttingProposal: { count: jest.fn().mockResolvedValue(0) },
+      // Phần A: đếm phương án cắt đã tính xong (DRAFT/APPROVED) khi đổi xưởng - mặc định 0 (không
+      // bật cờ).
+      // findFirst: phương án gắn PI để khoá xưởng lúc gửi QLSX (13/11/2026) - mặc định không có.
+      cuttingProposal: {
+        count: jest.fn().mockResolvedValue(0),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       productionInvoiceItem: {
         create: jest.fn(),
         update: jest.fn(),
@@ -3202,15 +3207,17 @@ describe('ProductionInvoicesService', () => {
       expect(result.displayCode).toBe('MY-313 + MY-314');
     });
 
-    it('có phương án cắt APPROVED -> bật cờ cần kiểm lại + emit PI_CUTTING_RECHECK_REQUIRED', async () => {
+    it('có phương án cắt đã tính xong (chờ duyệt hoặc đã duyệt) -> bật cờ cần kiểm lại + emit PI_CUTTING_RECHECK_REQUIRED', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
       prisma.cuttingProposal.count.mockResolvedValue(1);
 
       await service.changeWorkshop('7', '4', 'Phú An quá tải', 'user-qlsx');
 
       /* eslint-disable @typescript-eslint/no-unsafe-assignment -- jest matcher typing */
+      // 13/11/2026: không còn chỉ APPROVED - DRAFT (đã tính, chờ Sếp duyệt) cũng bật cờ;
+      // FAILED/SUPERSEDED/CALCULATING thì không.
       expect(prisma.cuttingProposal.count).toHaveBeenCalledWith({
-        where: expect.objectContaining({ status: 'APPROVED' }),
+        where: expect.objectContaining({ status: { in: ['DRAFT', 'APPROVED'] } }),
       });
       expect(prisma.productionInvoice.update).toHaveBeenCalledWith({
         where: { id: 7n },
@@ -3234,7 +3241,21 @@ describe('ProductionInvoicesService', () => {
       });
     });
 
-    it('chưa có phương án cắt APPROVED -> KHÔNG bật cờ, KHÔNG emit PI_CUTTING_RECHECK_REQUIRED', async () => {
+    it('lệnh CHƯA duyệt (WAITING_QLSX) có phương án DRAFT đổi xưởng -> vẫn bật cờ', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        sentPi([{ prodApprovalStatus: 'WAITING_QLSX' }, { prodApprovalStatus: 'WAITING_QLSX' }]),
+      );
+      prisma.cuttingProposal.count.mockResolvedValue(1);
+
+      await service.changeWorkshop('7', '4', 'lý do', 'user-qlsx');
+
+      expect(prisma.productionInvoice.update).toHaveBeenCalledWith({
+        where: { id: 7n },
+        data: expect.objectContaining({ cuttingRecheckRequired: true }) as unknown,
+      });
+    });
+
+    it('chưa có phương án cắt đã tính xong -> KHÔNG bật cờ, KHÔNG emit PI_CUTTING_RECHECK_REQUIRED', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
       prisma.cuttingProposal.count.mockResolvedValue(0);
 
@@ -3587,6 +3608,327 @@ describe('ProductionInvoicesService', () => {
           service.sendBatchToBoss('7', 'tp', 'Kho', undefined, 'u'),
         ).resolves.toBeDefined();
       });
+    });
+  });
+
+  // ─── 13/11/2026: xưởng chọn trước khi tính, khoá xưởng lúc gửi QLSX, cờ kiểm lại + chặn Sếp
+  // duyệt ───
+  describe('xưởng đi theo phương án cắt (13/11/2026)', () => {
+    describe('lệnh tạo ra mang sẵn xưởng của phương án', () => {
+      const mergeCandidate = (id: bigint) => ({
+        ...piItem({ id }),
+        productionInvoice: { id: 7n, code: 'PI-7', isMerged: false, deadline: null },
+      });
+      beforeEach(() => {
+        prisma.productionInvoice.create.mockResolvedValue({ id: 50n });
+        prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
+        prisma.productionInvoice.findUnique.mockResolvedValue(
+          pi({ id: 50n, code: 'PI-50', isMerged: true, salesOrderId: null, salesOrder: null }),
+        );
+        prisma.productionInvoiceItem.findMany.mockResolvedValue([
+          mergeCandidate(20n),
+          mergeCandidate(21n),
+        ]);
+      });
+      const movedData = () =>
+        (
+          (prisma.productionInvoiceItem.updateMany.mock.calls as unknown[][])[0][0] as {
+            data: Record<string, unknown>;
+          }
+        ).data;
+
+      it('mergeItems: solverOptions.workshopId có thật + đang hoạt động -> mọi dòng mang xưởng đó', async () => {
+        cuttingProposalsService.assertReadyForInvoice.mockResolvedValueOnce({
+          id: 1000n,
+          solverOptions: { workshopId: '3' },
+        });
+
+        await service.mergeItems(
+          { productionInvoiceItemIds: ['20', '21'], cuttingProposalId: '1000' },
+          'user-khsx',
+        );
+
+        expect(prisma.workshop.findUnique).toHaveBeenCalledWith({ where: { id: 3n } });
+        expect(movedData().workshopId).toBe(3n);
+      });
+
+      it('mergeItems: xưởng đã ngừng dùng / không tồn tại / phương án cũ không có xưởng -> workshopId null như cũ', async () => {
+        cuttingProposalsService.assertReadyForInvoice.mockResolvedValueOnce({
+          id: 1000n,
+          solverOptions: { workshopId: '3' },
+        });
+        prisma.workshop.findUnique.mockResolvedValueOnce({ ...workshopPA, isActive: false });
+        await service.mergeItems(
+          { productionInvoiceItemIds: ['20', '21'], cuttingProposalId: '1000' },
+          'user-khsx',
+        );
+        expect(movedData().workshopId).toBeNull();
+
+        prisma.productionInvoiceItem.updateMany.mockClear();
+        cuttingProposalsService.assertReadyForInvoice.mockResolvedValueOnce({
+          id: 1000n,
+          solverOptions: { workshopId: '99' },
+        });
+        prisma.workshop.findUnique.mockResolvedValueOnce(null);
+        await service.mergeItems(
+          { productionInvoiceItemIds: ['20', '21'], cuttingProposalId: '1000' },
+          'user-khsx',
+        );
+        expect(movedData().workshopId).toBeNull();
+
+        prisma.productionInvoiceItem.updateMany.mockClear();
+        prisma.workshop.findUnique.mockClear();
+        await service.mergeItems(
+          { productionInvoiceItemIds: ['20', '21'], cuttingProposalId: '1000' },
+          'user-khsx',
+        );
+        expect(movedData().workshopId).toBeNull();
+        expect(prisma.workshop.findUnique).not.toHaveBeenCalled();
+      });
+
+      it('claimSolo: dòng mang sẵn xưởng của phương án', async () => {
+        cuttingProposalsService.assertReadyForInvoice.mockResolvedValueOnce({
+          id: 1000n,
+          solverOptions: { workshopId: '3' },
+        });
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue({
+          id: 20n,
+          productionInvoiceId: null,
+          salesOrderId: 1n,
+          deliveryDeadline: null,
+        });
+        prisma.productionInvoice.create.mockResolvedValue({ id: 60n });
+        prisma.productionInvoiceItem.update.mockResolvedValue({});
+        prisma.productionInvoice.findUnique.mockResolvedValue(
+          pi({ id: 60n, code: 'PI-60', isMerged: false }),
+        );
+
+        await service.claimSolo('20', { cuttingProposalId: '1000' });
+
+        const updated = (prisma.productionInvoiceItem.update.mock.calls as unknown[][])[0][0] as {
+          data: { workshopId: bigint | null };
+        };
+        expect(updated.data.workshopId).toBe(3n);
+      });
+    });
+
+    describe('gửi QLSX khoá xưởng theo phương án', () => {
+      beforeEach(() => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(
+          pi({ items: [piItem({ id: 20n, lsxCode: 'MY-1' })] }),
+        );
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+          piItem({ id: 20n, lsxCode: 'MY-1' }),
+        );
+        // Phương án đã tính cho xưởng Phú An (id 3)
+        prisma.cuttingProposal.findFirst.mockResolvedValue({ solverOptions: { workshopId: '3' } });
+        prisma.workshop.findUnique.mockImplementation(({ where }: { where: { id: bigint } }) =>
+          Promise.resolve(where.id === 4n ? workshopMY : workshopPA),
+        );
+      });
+
+      it('sendItemToQlsx gửi xưởng KHÁC xưởng đã tính -> 400 nêu tên xưởng, không ghi gì', async () => {
+        await expect(service.sendItemToQlsx('7', '20', 'khsx', '4')).rejects.toThrow(
+          new BadRequestException(
+            'Lệnh MY-1 đã tính phương án cắt cho Phú An. Muốn làm ở xưởng khác: tính lại ở "Tối ưu cắt sắt" với xưởng mới, hoặc gửi đúng xưởng rồi để QLSX chuyển xưởng.',
+          ),
+        );
+        expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+        // Chỉ xét phương án đã tính xong, chưa huỷ
+        expect(prisma.cuttingProposal.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { productionInvoiceId: 7n, status: { in: ['DRAFT', 'APPROVED'] } },
+          }),
+        );
+      });
+
+      it('sendBatchToQlsx gửi xưởng KHÁC xưởng đã tính -> 400', async () => {
+        await expect(service.sendBatchToQlsx('7', 'khsx', undefined, '4')).rejects.toThrow(
+          /đã tính phương án cắt cho Phú An/,
+        );
+        expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+      });
+
+      it('gửi đúng xưởng đã tính -> qua; thiếu workshopId -> giữ xưởng sẵn có của dòng (không đụng workshopId)', async () => {
+        await service.sendItemToQlsx('7', '20', 'khsx', '3');
+        expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ workshopId: 3n }) as unknown,
+          }),
+        );
+
+        prisma.productionInvoiceItem.updateMany.mockClear();
+        await service.sendBatchToQlsx('7', 'khsx');
+        const call = (prisma.productionInvoiceItem.updateMany.mock.calls as unknown[][])[0][0] as {
+          data: Record<string, unknown>;
+        };
+        expect('workshopId' in call.data).toBe(false);
+      });
+
+      it('lệnh cũ (phương án không ghi xưởng) -> giữ hành vi cũ, gửi xưởng nào cũng được', async () => {
+        prisma.cuttingProposal.findFirst.mockResolvedValue({ solverOptions: {} });
+        await expect(service.sendItemToQlsx('7', '20', 'khsx', '4')).resolves.toBeDefined();
+        prisma.cuttingProposal.findFirst.mockResolvedValue(null);
+        await expect(service.sendBatchToQlsx('7', 'khsx', undefined, '4')).resolves.toBeDefined();
+      });
+    });
+
+    describe('QLSX đổi xưởng lúc gửi Sếp -> bật cờ kiểm lại phương án cắt', () => {
+      const heldAtPA = (over: Record<string, unknown> = {}) =>
+        piItem({
+          id: 20n,
+          prodApprovalStatus: 'WAITING_QLSX',
+          workshopId: 3n,
+          workshop: workshopPA,
+          ...over,
+        });
+      beforeEach(() => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi({ items: [heldAtPA()] }));
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(heldAtPA());
+        prisma.workshop.findUnique.mockResolvedValue(workshopMY);
+        prisma.cuttingProposal.count.mockResolvedValue(1); // có phương án DRAFT chưa duyệt
+      });
+      const flagged = () =>
+        notificationsService.emit.mock.calls.some(
+          (c: unknown[]) => c[0] === 'PI_CUTTING_RECHECK_REQUIRED',
+        );
+
+      it('sendItemToBoss đổi sang xưởng khác xưởng đang giữ -> bật cờ + emit PI_CUTTING_RECHECK_REQUIRED', async () => {
+        await service.sendItemToBoss('7', '20', 'tp', 'Kho', '4', 'user-qlsx');
+
+        expect(prisma.productionInvoice.update).toHaveBeenCalledWith({
+          where: { id: 7n },
+          data: expect.objectContaining({ cuttingRecheckRequired: true }) as unknown,
+        });
+        expect(notificationsService.emit).toHaveBeenCalledWith('PI_CUTTING_RECHECK_REQUIRED', {
+          entityId: '7',
+          actorId: 'user-qlsx',
+          params: {
+            piCode: 'PI-7',
+            displayCode: 'MY-313',
+            fromWorkshop: 'Phú An',
+            toWorkshop: 'Mỹ Yến',
+          },
+        });
+      });
+
+      it('sendBatchToBoss đổi xưởng -> bật cờ; giữ nguyên xưởng -> KHÔNG bật', async () => {
+        await service.sendBatchToBoss('7', 'tp', 'Kho', '4', 'user-qlsx');
+        expect(prisma.productionInvoice.update).toHaveBeenCalledTimes(1);
+        expect(flagged()).toBe(true);
+
+        prisma.productionInvoice.update.mockClear();
+        notificationsService.emit.mockClear();
+        prisma.workshop.findUnique.mockResolvedValue(workshopPA);
+        await service.sendBatchToBoss('7', 'tp', 'Kho', '3', 'user-qlsx');
+        expect(prisma.productionInvoice.update).not.toHaveBeenCalled();
+        expect(flagged()).toBe(false);
+      });
+
+      it('đổi xưởng nhưng lệnh chưa có phương án cắt đã tính -> không bật cờ; dòng chưa có xưởng (lệnh cũ) cũng không bật', async () => {
+        prisma.cuttingProposal.count.mockResolvedValue(0);
+        await service.sendItemToBoss('7', '20', 'tp', 'Kho', '4', 'user-qlsx');
+        expect(prisma.productionInvoice.update).not.toHaveBeenCalled();
+
+        prisma.cuttingProposal.count.mockResolvedValue(1);
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+          heldAtPA({ workshopId: null, workshop: null }),
+        );
+        await service.sendItemToBoss('7', '20', 'tp', 'Kho', '4', 'user-qlsx');
+        expect(prisma.productionInvoice.update).not.toHaveBeenCalled();
+      });
+
+      it('lỗi khi bật cờ không làm hỏng việc gửi Sếp (best-effort)', async () => {
+        prisma.cuttingProposal.count.mockRejectedValue(new Error('db'));
+        await expect(
+          service.sendItemToBoss('7', '20', 'tp', 'Kho', '4', 'user-qlsx'),
+        ).resolves.toBeDefined();
+      });
+    });
+
+    describe('Sếp không duyệt được lệnh đang có cờ kiểm lại', () => {
+      const RECHECK_MSG =
+        'vừa đổi xưởng - chờ KHSX kiểm lại phương án cắt (bấm "Đã kiểm" ở Tối ưu cắt sắt) rồi mới duyệt được.';
+
+      it('approveItem: cờ bật -> 409 trước mọi tác dụng phụ (không ghi, không tạo lệnh SX, không giữ chỗ/đề xuất mua)', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(
+          pi({
+            cuttingRecheckRequired: true,
+            items: [piItem({ prodApprovalStatus: 'WAITING_BOSS', lsxCode: 'MY-313' })],
+          }),
+        );
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+          piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+        );
+
+        await expect(service.approveItem('7', '20', 'user-boss')).rejects.toThrow(
+          new ConflictException(`Lệnh MY-313 ${RECHECK_MSG}`),
+        );
+        expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+        expect(productionOrdersService.createFromApproval).not.toHaveBeenCalled();
+        expect(cuttingProposalsService.assertReadyForApproval).not.toHaveBeenCalled();
+        expect(cuttingProposalsService.approve).not.toHaveBeenCalled();
+        expect(cuttingProposalsService.requestForOrder).not.toHaveBeenCalled();
+      });
+
+      it('approveItem: sau khi KHSX bấm "Đã kiểm" (cờ tắt) -> duyệt được', async () => {
+        prisma.productionInvoice.findUnique.mockResolvedValue(
+          pi({ cuttingRecheckRequired: false }),
+        );
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+          piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+        );
+        prisma.productionInvoiceItem.count.mockResolvedValue(1);
+
+        const result = await service.approveItem('7', '20', 'user-boss');
+        expect(result.prodApprovalStatus).toBe('APPROVED');
+      });
+
+      it('approveBatch: cờ bật -> 409, không ghi gì; cờ tắt -> duyệt được', async () => {
+        const mergedPi = (flag: boolean) =>
+          pi({
+            id: 50n,
+            code: 'PI-50',
+            isMerged: true,
+            salesOrderId: null,
+            salesOrder: null,
+            cuttingRecheckRequired: flag,
+            items: [
+              piItem({ id: 20n, lsxCode: 'MY-313', prodApprovalStatus: 'WAITING_BOSS' }),
+              piItem({ id: 21n, lsxCode: 'MY-314', prodApprovalStatus: 'WAITING_BOSS' }),
+            ],
+          });
+        prisma.productionInvoice.findUnique.mockResolvedValue(mergedPi(true));
+
+        await expect(service.approveBatch('50', 'user-boss')).rejects.toThrow(
+          new ConflictException(`Lệnh MY-313 + MY-314 ${RECHECK_MSG}`),
+        );
+        expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+        expect(cuttingProposalsService.findPreSolvedForInvoice).not.toHaveBeenCalled();
+        expect(productionOrdersService.createFromApproval).not.toHaveBeenCalled();
+
+        prisma.productionInvoice.findUnique.mockResolvedValue(mergedPi(false));
+        prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 2 });
+        await expect(service.approveBatch('50', 'user-boss')).resolves.toBeDefined();
+      });
+    });
+
+    it('listCuttingRecheckPending không lọc theo trạng thái duyệt: lệnh chưa duyệt có cờ vẫn hiện', async () => {
+      prisma.productionInvoice.findMany.mockResolvedValue([
+        pi({
+          cuttingRecheckRequired: true,
+          cuttingRecheckRequiredAt: new Date('2026-11-13T01:00:00Z'),
+          items: [piItem({ prodApprovalStatus: 'WAITING_BOSS', workshop: workshopMY })],
+        }),
+      ]);
+
+      const rows = await service.listCuttingRecheckPending();
+
+      expect(prisma.productionInvoice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { cuttingRecheckRequired: true } }),
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].workshopName).toBe('Mỹ Yến');
     });
   });
 

@@ -614,6 +614,159 @@ export class ProductionInvoicesService {
     }
   }
 
+  /**
+   * Đọc `workshopId` trong solverOptions của phương án (chuỗi số id). Không hợp lệ/không có ->
+   * null.
+   */
+  private proposalWorkshopIdOf(solverOptions: unknown): bigint | null {
+    if (!solverOptions || typeof solverOptions !== 'object') return null;
+    const raw = (solverOptions as { workshopId?: unknown }).workshopId;
+    if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+    const text = String(raw).trim();
+    return /^\d+$/.test(text) ? BigInt(text) : null;
+  }
+
+  /**
+   * 13/11/2026: xưởng mà phương án cắt đã được tính cho (solverOptions.workshopId) - chỉ trả khi
+   * xưởng còn tồn tại + đang hoạt động,
+   * để lệnh tạo ra mang sẵn xưởng đó. Không có / xưởng đã ngừng -> null (giữ như cũ: chưa gán
+   * xưởng).
+   */
+  private async resolveProposalWorkshopId(solverOptions: unknown): Promise<bigint | null> {
+    const id = this.proposalWorkshopIdOf(solverOptions);
+    if (id === null) return null;
+    const workshop = await this.prisma.workshop.findUnique({ where: { id } });
+    return workshop?.isActive ? workshop.id : null;
+  }
+
+  /**
+   * 13/11/2026: lệnh có phương án cắt (đã tính xong, chưa huỷ) được tính cho một xưởng -> gửi QLSX
+   * phải đúng xưởng đó (400).
+   * Lệnh cũ (phương án không ghi xưởng) hoặc DTO không gửi xưởng: không chặn. Gửi đúng xưởng dòng
+   * lệnh ĐANG GIỮ cũng không chặn:
+   * QLSX đã chuyển lệnh sang xưởng khác (cờ kiểm lại đã bật) rồi trả về KHSX thì KHSX phải gửi lại
+   * được, không bị kẹt.
+   */
+  private async assertSendWorkshopMatchesProposal(
+    pi: PIWithRefs,
+    workshopId: string | undefined,
+  ): Promise<void> {
+    if (!workshopId || workshopId.trim() === '') return;
+    const sendId = parseBigIntId(workshopId);
+    if (pi.items.some((it) => it.workshopId !== null && it.workshopId === sendId)) return;
+    const proposal = await this.prisma.cuttingProposal.findFirst({
+      where: {
+        productionInvoiceId: pi.id,
+        status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.APPROVED] },
+      },
+      orderBy: { requestedAt: 'desc' },
+      select: { solverOptions: true },
+    });
+    const proposalWorkshopId = this.proposalWorkshopIdOf(proposal?.solverOptions);
+    if (proposalWorkshopId === null || proposalWorkshopId === parseBigIntId(workshopId)) return;
+    const proposalWorkshop = await this.prisma.workshop.findUnique({
+      where: { id: proposalWorkshopId },
+    });
+    throw new BadRequestException(
+      `Lệnh ${lenhDisplayCode(pi, pi.items)} đã tính phương án cắt cho ${
+        proposalWorkshop?.name ?? `xưởng ${proposalWorkshopId}`
+      }. Muốn làm ở xưởng khác: tính lại ở "Tối ưu cắt sắt" với xưởng mới, hoặc gửi đúng xưởng rồi để QLSX chuyển xưởng.`,
+    );
+  }
+
+  /**
+   * 13/11/2026: đổi xưởng của lệnh (QLSX "Chuyển xưởng" hoặc đổi lúc gửi Sếp) -> nếu lệnh có BẤT KỲ
+   * phương án cắt đã tính xong chưa huỷ
+   * (DRAFT = chờ duyệt, APPROVED = đã duyệt; không tính CALCULATING/FAILED/SUPERSEDED; neo PI - đợt
+   * gộp - hoặc neo SKU) thì bật cờ
+   * "cần kiểm lại phương án cắt"; đã bật thì giữ bật, cập nhật lại thời điểm. Trả true nếu đã bật
+   * cờ. `client` = prisma hoặc tx.
+   */
+  private async flagCuttingRecheckOnWorkshopChange(
+    client: Pick<PrismaServiceType, 'cuttingProposal' | 'productionInvoice'>,
+    piId: bigint,
+  ): Promise<boolean> {
+    const proposals = await client.cuttingProposal.count({
+      where: {
+        status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.APPROVED] },
+        OR: [
+          { productionInvoiceId: piId },
+          { productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } } },
+        ],
+      },
+    });
+    if (proposals === 0) return false;
+    await client.productionInvoice.update({
+      where: { id: piId },
+      data: {
+        cuttingRecheckRequired: true,
+        cuttingRecheckRequiredAt: new Date(),
+        cuttingRecheckedAt: null,
+        cuttingRecheckedById: null,
+      },
+    });
+    return true;
+  }
+
+  /** Thông báo "cần kiểm lại phương án cắt" cho KHSX - best-effort (lỗi chỉ log). */
+  private async emitCuttingRecheckRequired(
+    pi: PIWithRefs,
+    fromWorkshop: string | null,
+    toWorkshop: string,
+    actorUserId: string,
+  ): Promise<void> {
+    try {
+      await this.notifications.emit('PI_CUTTING_RECHECK_REQUIRED', {
+        entityId: pi.id.toString(),
+        actorId: actorUserId,
+        params: {
+          piCode: pi.code,
+          displayCode: lenhDisplayCode(pi, pi.items),
+          fromWorkshop,
+          toWorkshop,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create PI_CUTTING_RECHECK_REQUIRED notification (PI ${pi.id}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Sau khi QLSX gửi Sếp mà đổi xưởng: bật cờ (nếu có phương án đã tính) + báo KHSX. Best-effort -
+   * lỗi chỉ log, không chặn việc gửi.
+   */
+  private async flagRecheckAfterSendToBoss(
+    pi: PIWithRefs,
+    items: PIItemWithRefs[],
+    newWorkshop: Workshop,
+    actorUserId: string,
+  ): Promise<void> {
+    try {
+      const flagged = await this.flagCuttingRecheckOnWorkshopChange(this.prisma, pi.id);
+      if (!flagged) return;
+      const from = items.find((it) => it.workshop && it.workshopId !== newWorkshop.id)?.workshop;
+      await this.emitCuttingRecheckRequired(pi, from?.name ?? null, newWorkshop.name, actorUserId);
+    } catch (error) {
+      this.logger.error(
+        `Failed to flag cutting recheck after send-to-boss (PI ${pi.id}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Sếp không duyệt được lệnh đang có cờ "cần kiểm lại phương án cắt" (409) - kiểm TRƯỚC mọi tác
+   * dụng phụ.
+   */
+  private assertNoCuttingRecheckPending(pi: PIWithRefs): void {
+    if (pi.cuttingRecheckRequired) {
+      throw new ConflictException(
+        `Lệnh ${lenhDisplayCode(pi, pi.items)} vừa đổi xưởng - chờ KHSX kiểm lại phương án cắt (bấm "Đã kiểm" ở Tối ưu cắt sắt) rồi mới duyệt được.`,
+      );
+    }
+  }
+
   async mergeItems(
     dto: MergeProductionInvoiceDto,
     actorUserId: string,
@@ -645,6 +798,7 @@ export class ProductionInvoicesService {
       solver,
       proposal.id,
     );
+    const proposalWorkshopId = await this.resolveProposalWorkshopId(proposal.solverOptions);
 
     const mergedId = await this.prisma.$transaction(async (tx) => {
       const items = await tx.productionInvoiceItem.findMany({
@@ -657,7 +811,8 @@ export class ProductionInvoicesService {
           `Không tìm thấy SKU: ${ids.filter((id) => !found.has(id)).join(', ')}`,
         );
       }
-      // LUẬT GỘP (2026-10-24, Sếp Nhân: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại") - kiểm lại dù cutting-batch-solve đã
+      // LUẬT GỘP (2026-10-24, Sếp: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại";
+      // 13/11/2026: khung 5 ngày) - kiểm lại dù cutting-batch-solve đã
       // chặn: hạn SKU có thể bị sửa giữa lúc tính và lúc gộp. Xem merge-rules.util.
       const mergeCfg = await tx.systemConfig.findUniqueOrThrow({
         where: { id: SYSTEM_CONFIG_ID },
@@ -740,7 +895,9 @@ export class ProductionInvoicesService {
           requestedById: null,
           warehouseCode: null,
           warehouseName: null,
-          workshopId: null, // Phần A – Đợt 2 (lsxCode GIỮ - số LSX đi theo dòng SKU)
+          // Phần A – Đợt 2 (lsxCode GIỮ - số LSX đi theo dòng SKU). 13/11/2026: phương án đã tính
+          // cho một xưởng thì lệnh mang sẵn xưởng đó.
+          workshopId: proposalWorkshopId,
           qlsxAt: null,
           qlsxById: null,
           decidedAt: null,
@@ -779,6 +936,7 @@ export class ProductionInvoicesService {
     };
     solver.solverMachine ??= proposal.usedMachine ?? undefined;
     const overrideEvidence = await this.buildOverrideEvidence([itemId], solver, proposal.id);
+    const proposalWorkshopId = await this.resolveProposalWorkshopId(proposal.solverOptions);
     const item = await this.prisma.productionInvoiceItem.findUnique({ where: { id: bigId } });
     if (!item) {
       throw new NotFoundException(`Không tìm thấy SKU ${itemId}`);
@@ -820,7 +978,7 @@ export class ProductionInvoicesService {
           requestedById: null,
           warehouseCode: null,
           warehouseName: null,
-          workshopId: null, // Phần A – Đợt 2 (lsxCode GIỮ)
+          workshopId: proposalWorkshopId, // Phần A – Đợt 2 (lsxCode GIỮ); 13/11/2026: mang sẵn xưởng của phương án đã tính
           qlsxAt: null,
           qlsxById: null,
           decidedAt: null,
@@ -1265,29 +1423,9 @@ export class ProductionInvoicesService {
           `Lệnh ${displayCode} đã có thay đổi khác trong lúc đổi xưởng - tải lại trang rồi thử lại`,
         );
       }
-      // Phần A: lệnh đã có phương án cắt APPROVED (neo PI - đợt gộp - hoặc neo SKU) -> bật cờ "cần kiểm lại"; đã bật thì giữ bật,
-      // cập nhật lại thời điểm. Không tự tính lại / duyệt phương án mới.
-      const approvedProposals = await tx.cuttingProposal.count({
-        where: {
-          status: CuttingProposalStatus.APPROVED,
-          OR: [
-            { productionInvoiceId: pi.id },
-            { productionOrder: { productionInvoiceItem: { productionInvoiceId: pi.id } } },
-          ],
-        },
-      });
-      if (approvedProposals > 0) {
-        await tx.productionInvoice.update({
-          where: { id: pi.id },
-          data: {
-            cuttingRecheckRequired: true,
-            cuttingRecheckRequiredAt: new Date(),
-            cuttingRecheckedAt: null,
-            cuttingRecheckedById: null,
-          },
-        });
-        cuttingRecheckFlagged = true;
-      }
+      // Phần A (13/11/2026: kể cả lệnh CHƯA duyệt): lệnh có phương án cắt đã tính xong chưa huỷ ->
+      // bật cờ "cần kiểm lại". Không tự tính lại.
+      cuttingRecheckFlagged = await this.flagCuttingRecheckOnWorkshopChange(tx, pi.id);
       // Người B (10/11/2026): đổi nơi nhận dòng mua chưa về sang kho xưởng mới, cùng lần lưu; thông báo gửi sau commit.
       return this.workshopMove.afterWorkshopChanged(tx, pi.id, workshop.id, actorUserId);
     });
@@ -1326,22 +1464,12 @@ export class ProductionInvoicesService {
       );
     }
     if (cuttingRecheckFlagged) {
-      try {
-        await this.notifications.emit('PI_CUTTING_RECHECK_REQUIRED', {
-          entityId: pi.id.toString(),
-          actorId: actorUserId,
-          params: {
-            piCode: pi.code,
-            displayCode,
-            fromWorkshop: pi.items.find((it) => it.workshop)?.workshop?.name ?? null,
-            toWorkshop: workshop.name,
-          },
-        });
-      } catch (error) {
-        this.logger.error(
-          `Failed to create PI_CUTTING_RECHECK_REQUIRED notification (PI ${pi.id}): ${(error as Error).message}`,
-        );
-      }
+      await this.emitCuttingRecheckRequired(
+        pi,
+        pi.items.find((it) => it.workshop)?.workshop?.name ?? null,
+        workshop.name,
+        actorUserId,
+      );
     }
     // Đổi lúc còn chờ QLSX: phát lại "lệnh chờ QLSX" để QLSX xưởng MỚI nhận (đóng bản cũ trước vì dedupeKey trùng).
     const waitingQlsx = pi.items.filter(
@@ -1461,6 +1589,9 @@ export class ProductionInvoicesService {
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertNoApprovalOrRejected(item);
+    // 13/11/2026: phương án cắt đã tính cho xưởng nào thì chỉ gửi đúng xưởng đó (xưởng khác ->
+    // 400).
+    await this.assertSendWorkshopMatchesProposal(pi, workshopId);
     // QLSX theo xưởng: KHSX chọn xưởng lúc gửi; thiếu thì giữ như cũ (FE cũ còn chạy trong lúc deploy lệch).
     const chosen = workshopId?.trim()
       ? await this.resolveWorkshopForSend(pi, [item.id], workshopId)
@@ -1559,6 +1690,11 @@ export class ProductionInvoicesService {
       );
     }
     await this.auditItemApprovalTransition(item, { ...item, ...data });
+    // 13/11/2026: QLSX đổi xưởng so với xưởng đang giữ của dòng (kể cả lệnh chưa duyệt) -> bật cờ
+    // kiểm lại phương án cắt.
+    if (item.workshopId !== null && item.workshopId !== workshop.id) {
+      await this.flagRecheckAfterSendToBoss(pi, [item], workshop, actorUserId);
+    }
     // Phần A – Đợt 3 (V4-5): xưởng QLSX chọn làm số ngày khác xưởng đã dùng để đề xuất mốc -> báo KHSX đặt lại mốc.
     await this.notifyTimelineReplanIfNeeded(pi, [item], workshop, actorUserId);
     // Item vừa rời WAITING_QLSX - nếu KHÔNG còn item nào khác của PI này ở đó, đóng thông báo
@@ -1872,6 +2008,9 @@ export class ProductionInvoicesService {
           .join(', ')} - nhập ở ô 'Số LSX' rồi gửi lại`,
       );
     }
+    // 13/11/2026: phương án cắt đã tính cho xưởng nào thì chỉ gửi đúng xưởng đó (xưởng khác ->
+    // 400).
+    await this.assertSendWorkshopMatchesProposal(pi, workshopId);
     // QLSX theo xưởng: KHSX chọn xưởng cho cả lần gửi; thiếu thì giữ như cũ.
     const chosen = workshopId?.trim()
       ? await this.resolveWorkshopForSend(
@@ -1976,6 +2115,10 @@ export class ProductionInvoicesService {
         qlsxById: actorUserId,
       });
     }
+    // 13/11/2026: QLSX đổi xưởng so với xưởng đang giữ của dòng -> bật cờ kiểm lại phương án cắt.
+    if (targets.some((it) => it.workshopId !== null && it.workshopId !== workshop.id)) {
+      await this.flagRecheckAfterSendToBoss(pi, targets, workshop, actorUserId);
+    }
     // Phần A – Đợt 3 (V4-5): báo KHSX nếu xưởng chọn làm số ngày khác xưởng đã dùng để đề xuất mốc.
     await this.notifyTimelineReplanIfNeeded(pi, targets, workshop, actorUserId);
     const targetIds = new Set(targets.map((it) => it.id.toString()));
@@ -2027,6 +2170,9 @@ export class ProductionInvoicesService {
     }
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_BOSS);
+    // 13/11/2026: lệnh vừa đổi xưởng - chờ KHSX "Đã kiểm" phương án cắt rồi mới duyệt (kiểm trước
+    // mọi tác dụng phụ).
+    this.assertNoCuttingRecheckPending(pi);
 
     // Luồng "Solve trước → tạo PI" (2026-09-30): PI này đã có phương án cắt tính sẵn -> Sếp duyệt
     // ĐÚNG số đó, không chạy solver lại. Kiểm phương án còn đúng (chưa lỗi thời) + vật tư đã có Kho
@@ -2605,6 +2751,9 @@ export class ProductionInvoicesService {
     for (const item of pi.items) {
       this.assertItemStatus(item, ProdApprovalStatus.WAITING_BOSS);
     }
+    // 13/11/2026: lệnh vừa đổi xưởng - chờ KHSX "Đã kiểm" phương án cắt rồi mới duyệt (kiểm trước
+    // mọi tác dụng phụ).
+    this.assertNoCuttingRecheckPending(pi);
     // Luồng "Solve trước → tạo PI" (2026-09-30) - xem approveItem(): có phương án tính sẵn thì kiểm
     // nó còn đúng (thay cho kiểm BOM từng SKU) và duyệt ĐÚNG số đó, không chạy solver lại.
     const preSolved = await this.cuttingProposalsService.findPreSolvedForInvoice(pi.id);

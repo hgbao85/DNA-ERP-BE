@@ -8,6 +8,10 @@ import { bestFill, bestWasteAcrossStockLengths, minWasteForStockLength } from '.
  *
  * Cấu hình chuẩn hiện tại: cây 6000mm (NCC chỉ bán cỡ này), tề đầu 10mm, lưỡi cắt 1mm
  * -> dùng được 5990mm.
+ *
+ * 13/11/2026: hao hụt CHỈ tính cùi (tề đầu không tính) nên mọi số bên dưới thấp hơn bản cũ đúng
+ * 10mm
+ * (tề đầu); mẫu số % vẫn là chiều dài cây 6000.
  */
 const STOCK = 6000;
 const TRIM = 10;
@@ -50,50 +54,50 @@ describe('bestFill', () => {
 describe('minWasteForStockLength - đối chiếu số đo tay từ BOM thật', () => {
   const waste = (sizes: number[]) => minWasteForStockLength(sizes, STOCK, TRIM, KERF);
 
-  it('bàn J55, sắt vuông 20x20 chỉ có 1 cỡ 840mm -> 1,88% (KHÔNG đạt ngưỡng 1%)', () => {
+  it('bàn J55, sắt vuông 20x20 chỉ có 1 cỡ 840mm -> 1,72% (KHÔNG đạt ngưỡng 1%)', () => {
     // 7 x (840+1) = 5887 <= 5990; đoạn thứ 8 cần thêm 841 nhưng chỉ còn 103.
     const r = waste([840]);
     expect(r.bestUsedMm).toBe(5887);
-    expect(r.minWastePerBarMm).toBe(113);
-    expect(r.minWastePct).toBeCloseTo(1.883, 3);
+    expect(r.minWastePerBarMm).toBe(103); // 5990 − 5887 (cũ 113 gồm tề 10)
+    expect(r.minWastePct).toBeCloseTo(1.717, 3);
   });
 
-  it('gộp thêm đoạn 460mm của Ghế tình yêu (cùng 20x20) -> 0,53%, đạt ngưỡng', () => {
+  it('gộp thêm đoạn 460mm của Ghế tình yêu (cùng 20x20) -> 0,37%, đạt ngưỡng', () => {
     // 840x6 + 460x2 = 5960 sắt + 8 lưỡi = 5968 <= 5990.
     const r = waste([840, 460]);
     expect(r.bestUsedMm).toBe(5968);
-    expect(r.minWastePerBarMm).toBe(32);
-    expect(r.minWastePct).toBeCloseTo(0.533, 3);
+    expect(r.minWastePerBarMm).toBe(22);
+    expect(r.minWastePct).toBeCloseTo(0.367, 3);
   });
 
-  it('nếu 840mm và 930mm cùng tiết diện (chuẩn hoá tiết diện) -> 0,38%', () => {
+  it('nếu 840mm và 930mm cùng tiết diện (chuẩn hoá tiết diện) -> 0,22%', () => {
     // 840x6 + 930x1 = 5970 sắt + 7 lưỡi = 5977 <= 5990.
     const r = waste([840, 930]);
     expect(r.bestUsedMm).toBe(5977);
-    expect(r.minWastePerBarMm).toBe(23);
-    expect(r.minWastePct).toBeCloseTo(0.383, 3);
+    expect(r.minWastePerBarMm).toBe(13);
+    expect(r.minWastePct).toBeCloseTo(0.217, 3);
   });
 
-  it('bàn J55, sắt vuông 50x50 chỉ có 1 cỡ 660mm -> 0,85%, tự nó đã đạt ngưỡng', () => {
+  it('bàn J55, sắt vuông 50x50 chỉ có 1 cỡ 660mm -> 0,68%, tự nó đã đạt ngưỡng', () => {
     // 9 x 661 = 5949 <= 5990.
     const r = waste([660]);
-    expect(r.minWastePerBarMm).toBe(51);
-    expect(r.minWastePct).toBeCloseTo(0.85, 3);
+    expect(r.minWastePerBarMm).toBe(41);
+    expect(r.minWastePct).toBeCloseTo(0.683, 3);
   });
 
-  it('nới 840 -> 854mm giảm hao hụt 7,5 lần mà vẫn 7 đoạn/cây', () => {
+  it('nới 840 -> 854mm giảm hao hụt rất mạnh mà vẫn 7 đoạn/cây', () => {
     // 7 x 855 = 5985 <= 5990.
     const r = waste([854]);
-    expect(r.minWastePerBarMm).toBe(15);
-    expect(r.minWastePct).toBeCloseTo(0.25, 3);
+    expect(r.minWastePerBarMm).toBe(5);
+    expect(r.minWastePct).toBeCloseTo(0.083, 3);
   });
 
-  it('VÁCH ĐỨNG: 855mm tràn 2mm -> rớt xuống 6 đoạn/cây, hao hụt vọt lên 14,4%', () => {
+  it('VÁCH ĐỨNG: 855mm tràn 2mm -> rớt xuống 6 đoạn/cây, hao hụt vọt lên 14,2%', () => {
     // 7 x 856 = 5992 > 5990 -> chỉ còn 6 x 856 = 5136.
     const r = waste([855]);
     expect(r.bestUsedMm).toBe(5136);
-    expect(r.minWastePerBarMm).toBe(864);
-    expect(r.minWastePct).toBeCloseTo(14.4, 3);
+    expect(r.minWastePerBarMm).toBe(854);
+    expect(r.minWastePct).toBeCloseTo(14.233, 3);
   });
 
   it('gộp KHÔNG BAO GIỜ làm hao hụt xấu đi (tính đơn điệu - nền tảng của cả tính năng)', () => {
@@ -115,11 +119,11 @@ describe('bestWasteAcrossStockLengths', () => {
     const r = bestWasteAcrossStockLengths([660], [6000, 5850], TRIM, KERF);
     // 5850: usable 5840 -> 8 x 661 = 5288, thừa 562 (9,61%). 6000 tốt hơn nhiều.
     expect(r?.stockLengthMm).toBe(6000);
-    expect(r?.minWastePerBarMm).toBe(51);
+    expect(r?.minWastePerBarMm).toBe(41);
   });
 
   it('cấu hình 1 chiều dài duy nhất (thực tế hiện nay) vẫn chạy đúng', () => {
     const r = bestWasteAcrossStockLengths([840], [6000], TRIM, KERF);
-    expect(r?.minWastePct).toBeCloseTo(1.883, 3);
+    expect(r?.minWastePct).toBeCloseTo(1.717, 3);
   });
 });

@@ -10,7 +10,9 @@ import { ProdItemStageType } from '../../generated/prisma/client';
  * bị tính như đang ở mốc sớm nhất -> báo vi phạm oan. SKU chưa có mốc riêng: bỏ qua (không chặn - không biết thì không kết luận).
  *
  * KHUNG N NGÀY TÍNH CẢ NGÀY ĐẦU (Sếp Nhân 2026-10-24: "ngày 1 gộp được ngày 3, ngày 1 ko được gộp với ngày 4", "bắt buộc chỉ được gộp
- * tối đa 2 lệnh"): windowDays = 3 nghĩa là mốc sớm nhất và muộn nhất CHÊNH tối đa 2 ngày (windowDays − 1).
+ * tối đa 2 lệnh"): windowDays nghĩa là mốc sớm nhất và muộn nhất CHÊNH tối đa windowDays − 1 ngày.
+ * 13/11/2026: Sếp nâng khung mặc định từ 3 lên 5 ngày - mốc ngày 10 gộp được ngày 14 (chênh 4),
+ * không gộp được ngày 15 (chênh 5).
  */
 /** Chênh lệch tối đa (ngày) giữa mốc sớm nhất và muộn nhất với khung `windowDays` ngày tính cả ngày đầu. */
 export function maxGapDays(windowDays: number): number {

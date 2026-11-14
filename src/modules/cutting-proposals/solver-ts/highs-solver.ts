@@ -49,7 +49,11 @@ export interface TwoStageInput {
   strategy?: Strategy;
   /** (l_k + kerf) đã scale — cần cho 'byN' */
   cutCostS?: number[];
-  /** chiều dài cây đã scale, CHỈ khi mọi pattern cùng một chiều dài — cần cho 'byN' */
+  /**
+   * PHẦN DÙNG ĐƯỢC của cây (chiều dài − tề đầu) đã scale, CHỈ khi mọi pattern cùng một chiều dài —
+   * cần cho 'byN'.
+   * Vì waste của pattern chỉ là cùi (13/11/2026): Σ waste·y = stockS·N − nhu cầu − sắt dư.
+   */
   stockS?: number;
   /** nạp nghiệm tham lam (greedyStart) làm điểm xuất phát cho model gốc ở tầng 1 */
   warmStart?: boolean;

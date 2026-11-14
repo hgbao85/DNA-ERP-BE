@@ -143,7 +143,7 @@ describe('SolverWorkerHost (worker THẬT: solver.worker.ts + HiGHS)', () => {
       );
       expect(res.status).toBe('success');
       if (res.status !== 'success') return;
-      expect(res.summary).toMatchObject({ total_bars_all: 325, waste_percentage: 0.353 });
+      expect(res.summary).toMatchObject({ total_bars_all: 325, waste_percentage: 0.1864 });
       const bad = await host.run({ num_sets: 0, bom: [{}] }, 10_000);
       expect(bad).toMatchObject({ status: 'error', code: 'INVALID_INPUT', http_status: 400 });
     } finally {

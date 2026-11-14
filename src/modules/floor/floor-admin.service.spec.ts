@@ -1,9 +1,18 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { FloorAdminService } from './floor-admin.service';
+
+const PHU_AN = 1n;
+const PHUOC_AN = 2n;
 
 describe('FloorAdminService', () => {
   let tx: {
@@ -14,6 +23,8 @@ describe('FloorAdminService', () => {
       findMany: jest.Mock;
       findUnique: jest.Mock;
       update: jest.Mock;
+      create: jest.Mock;
+      aggregate: jest.Mock;
     };
     floorReport: { count: jest.Mock };
   };
@@ -24,9 +35,13 @@ describe('FloorAdminService', () => {
       findMany: jest.Mock;
       update: jest.Mock;
     };
-    floorQueueEntry: { findMany: jest.Mock };
+    workshop: { findUnique: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
+    warehouse: { findUnique: jest.Mock };
+    productionInvoiceItem: { findMany: jest.Mock };
+    user: { findUnique: jest.Mock };
+    floorQueueEntry: { findMany: jest.Mock; delete: jest.Mock; findUnique: jest.Mock };
     floorReport: { count: jest.Mock };
-    productionInvoice: { findUnique: jest.Mock };
+    productionInvoice: { findUnique: jest.Mock; findMany: jest.Mock };
     productionOrder: { findMany: jest.Mock; count: jest.Mock };
     productionBatch: { groupBy: jest.Mock };
     $transaction: jest.Mock;
@@ -53,6 +68,8 @@ describe('FloorAdminService', () => {
         findMany: jest.fn(),
         findUnique: jest.fn(),
         update: jest.fn(),
+        create: jest.fn(),
+        aggregate: jest.fn().mockResolvedValue({ _max: { position: null } }),
       },
       floorReport: { count: jest.fn().mockResolvedValue(0) },
     };
@@ -79,9 +96,22 @@ describe('FloorAdminService', () => {
           ...Object.fromEntries(Object.entries(args.data).filter(([, v]) => v !== undefined)),
         })),
       },
-      floorQueueEntry: { findMany: jest.fn().mockResolvedValue([]) },
+      workshop: {
+        findUnique: jest.fn().mockResolvedValue({ id: 5n, isActive: true }),
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue({ id: PHU_AN }),
+      },
+      // Kho gốc 'phoi-son-han' thuộc Phú An -> xưởng mặc định của PI chưa có xưởng.
+      warehouse: { findUnique: jest.fn().mockResolvedValue({ workshopId: PHU_AN }) },
+      productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([]) },
+      user: { findUnique: jest.fn().mockResolvedValue({ workshopId: null, workshop: null }) },
+      floorQueueEntry: {
+        findMany: jest.fn().mockResolvedValue([]),
+        delete: jest.fn(),
+        findUnique: jest.fn(),
+      },
       floorReport: { count: jest.fn().mockResolvedValue(0) },
-      productionInvoice: { findUnique: jest.fn() },
+      productionInvoice: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       productionOrder: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn() },
       productionBatch: { groupBy: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
@@ -92,8 +122,16 @@ describe('FloorAdminService', () => {
       prisma as unknown as PrismaServiceType,
       steelIssues as unknown as SteelIssuesService,
       productionBatches as unknown as ProductionBatchesService,
+      new WorkshopScopeService(prisma as unknown as PrismaServiceType),
     );
   });
+
+  /** QLSX gắn xưởng `id` (Phước An có paintWorkshop = Phú An). */
+  const scopedTo = (id: bigint, name: string, paintsFor: bigint[] = []) =>
+    prisma.user.findUnique.mockResolvedValue({
+      workshopId: id,
+      workshop: { name, paintsFor: paintsFor.map((x) => ({ id: x })) },
+    });
 
   describe('createWorkstation', () => {
     it('máy cắt/công đoạn phụ/nhận sắt chỉ thuộc tổ Phôi; STEP phải có công đoạn khác Cắt', async () => {
@@ -126,6 +164,60 @@ describe('FloorAdminService', () => {
       expect(w.code).toBe('LASER-01');
       expect(w.processStep).toBeNull();
       expect(w.qrToken).toMatch(/^[A-Za-z0-9_-]{24}$/);
+    });
+
+    it('máy cắt: thiếu loại -> mặc định laser; gửi tu_dong -> giữ tu_dong; có xưởng -> ghi xưởng', async () => {
+      const def = await service.createWorkstation({
+        code: 'C1',
+        name: 'x',
+        stage: 'PHOI',
+        kind: 'CUT',
+      });
+      expect(def.cutMachineType).toBe('laser');
+      expect(def.workshopId).toBeNull();
+      const auto = await service.createWorkstation({
+        code: 'C2',
+        name: 'x',
+        stage: 'PHOI',
+        kind: 'CUT',
+        cutMachineType: 'tu_dong',
+        workshopId: '5',
+      });
+      expect(auto.cutMachineType).toBe('tu_dong');
+      const data = (prisma.workstation.create.mock.calls as unknown[][])[1][0] as {
+        data: { workshopId: bigint };
+      };
+      expect(data.data.workshopId).toBe(5n);
+    });
+
+    it('máy không phải máy cắt: gửi loại máy cắt -> 400; ghi cutMachineType = null', async () => {
+      await expect(
+        service.createWorkstation({
+          code: 'U1',
+          name: 'x',
+          stage: 'PHOI',
+          kind: 'STEP',
+          processStep: 'UON',
+          cutMachineType: 'laser',
+        }),
+      ).rejects.toThrow(/máy cắt/);
+      expect(prisma.workstation.create).not.toHaveBeenCalled();
+      const ok = await service.createWorkstation({
+        code: 'P1',
+        name: 'x',
+        stage: 'HAN',
+        kind: 'PIECE',
+      });
+      expect(ok.cutMachineType).toBeNull();
+    });
+
+    it('xưởng không tồn tại hoặc đã ngừng -> 400, không tạo máy', async () => {
+      const dto = { code: 'C3', name: 'x', stage: 'PHOI', kind: 'CUT', workshopId: '5' } as const;
+      prisma.workshop.findUnique.mockResolvedValueOnce(null);
+      await expect(service.createWorkstation(dto)).rejects.toThrow(/không tồn tại/);
+      prisma.workshop.findUnique.mockResolvedValueOnce({ id: 5n, isActive: false });
+      await expect(service.createWorkstation(dto)).rejects.toThrow(/ngừng hoạt động/);
+      expect(prisma.workstation.create).not.toHaveBeenCalled();
     });
 
     it('tổ Đan không dùng mã QR (kể cả loại mảnh); khu nhận sắt chỉ của Phôi', async () => {
@@ -177,7 +269,79 @@ describe('FloorAdminService', () => {
       await service.listWorkstations();
       expect(prisma.workstation.findMany).toHaveBeenCalledWith({
         orderBy: [{ stage: 'asc' }, { code: 'asc' }],
+        include: { workshop: { select: { name: true } } },
       });
+    });
+
+    it('danh sách trả tên xưởng + loại máy cắt (null khi chưa gán)', async () => {
+      prisma.workstation.findMany.mockResolvedValueOnce([
+        {
+          id: 1n,
+          code: 'C1',
+          name: 'x',
+          stage: 'PHOI',
+          kind: 'CUT',
+          processStep: null,
+          qrToken: 't',
+          isActive: true,
+          createdAt: new Date(),
+          workshopId: 5n,
+          cutMachineType: 'tu_dong',
+          workshop: { name: 'Phước An' },
+        },
+        {
+          id: 2n,
+          code: 'P1',
+          name: 'y',
+          stage: 'HAN',
+          kind: 'PIECE',
+          processStep: null,
+          qrToken: 't2',
+          isActive: true,
+          createdAt: new Date(),
+          workshopId: null,
+          cutMachineType: null,
+          workshop: null,
+        },
+      ]);
+      const rows = await service.listWorkstations();
+      expect(rows[0]).toMatchObject({
+        workshopId: '5',
+        workshopName: 'Phước An',
+        cutMachineType: 'tu_dong',
+      });
+      expect(rows[1]).toMatchObject({ workshopId: null, workshopName: null, cutMachineType: null });
+    });
+
+    it('sửa: đổi loại máy cắt, đổi/bỏ xưởng', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({ id: 1n, kind: 'CUT' });
+      await service.updateWorkstation('1', { cutMachineType: 'tu_dong', workshopId: '5' });
+      const first = (prisma.workstation.update.mock.calls as unknown[][]).at(-1)![0] as {
+        data: { cutMachineType: string; workshopId: bigint };
+      };
+      expect(first.data).toMatchObject({ cutMachineType: 'tu_dong', workshopId: 5n });
+      await service.updateWorkstation('1', { workshopId: null });
+      const last = (prisma.workstation.update.mock.calls as unknown[][]).at(-1)![0] as {
+        data: { workshopId: unknown };
+      };
+      expect(last.data.workshopId).toBeNull();
+      await service.updateWorkstation('1', { name: 'chỉ đổi tên' });
+      const keep = (prisma.workstation.update.mock.calls as unknown[][]).at(-1)![0] as {
+        data: { workshopId: unknown };
+      };
+      expect(keep.data.workshopId).toBeUndefined(); // không gửi = giữ nguyên
+    });
+
+    it('sửa: đổi loại máy cắt trên máy không phải CUT -> 400; xưởng ngừng -> 400', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({ id: 1n, kind: 'STEP' });
+      await expect(service.updateWorkstation('1', { cutMachineType: 'laser' })).rejects.toThrow(
+        BadRequestException,
+      );
+      prisma.workshop.findUnique.mockResolvedValueOnce({ id: 5n, isActive: false });
+      await expect(service.updateWorkstation('1', { workshopId: '5' })).rejects.toThrow(
+        /ngừng hoạt động/,
+      );
+      expect(prisma.workstation.update).not.toHaveBeenCalled();
     });
 
     it('sửa: tên được cắt khoảng trắng, bật/tắt máy; id không tồn tại -> 404, không sửa', async () => {
@@ -185,6 +349,7 @@ describe('FloorAdminService', () => {
       expect(prisma.workstation.update).toHaveBeenCalledWith({
         where: { id: 1n },
         data: { name: 'Máy laser mới', isActive: false },
+        include: { workshop: { select: { name: true } } },
       });
       expect(w).toMatchObject({ name: 'Máy laser mới', isActive: false });
 
@@ -221,7 +386,7 @@ describe('FloorAdminService', () => {
         .mockResolvedValueOnce({ id: 1n, status: 'RUNNING' })
         .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
 
-      await service.advance('PHOI', 'qlsx-1');
+      await service.advance('PHOI', 'qlsx-1', '1');
 
       expect(tx.floorQueueEntry.update).toHaveBeenNthCalledWith(1, {
         where: { id: 1n },
@@ -235,7 +400,106 @@ describe('FloorAdminService', () => {
 
     it('hàng đợi trống -> 409', async () => {
       tx.floorQueueEntry.findFirst.mockResolvedValue(null);
-      await expect(service.advance('HAN', 'q')).rejects.toThrow(ConflictException);
+      await expect(service.advance('HAN', 'q', '1')).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('autoCompletePhoi (xong Phôi tự tính, Sếp chốt 14/11 câu 8)', () => {
+    const phoi = (status: string) => ({ id: 1n, stage: 'PHOI', workshopId: 2n, status });
+    const lockedKey = () => JSON.stringify((tx.$executeRaw.mock.calls as unknown[][])[0] ?? []);
+
+    it('dòng RUNNING -> DONE (endedById null), PI đầu hàng đợi của đúng xưởng -> RUNNING', async () => {
+      prisma.floorQueueEntry.findUnique.mockResolvedValue(phoi('RUNNING'));
+      tx.floorQueueEntry.findUnique.mockResolvedValue(phoi('RUNNING'));
+      tx.floorQueueEntry.findFirst.mockResolvedValue({
+        id: 7n,
+        productionInvoice: { code: 'PI-77' },
+      });
+
+      const r = await service.autoCompletePhoi(1n);
+
+      expect(r).toEqual({ closed: true, nextPiCode: 'PI-77' });
+      expect(lockedKey()).toContain('floor-queue:PHOI:2');
+      expect(tx.floorQueueEntry.update).toHaveBeenNthCalledWith(1, {
+        where: { id: 1n },
+        data: expect.objectContaining({ status: 'DONE', endedById: null }) as unknown,
+      });
+      expect(tx.floorQueueEntry.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { stage: 'PHOI', workshopId: 2n, status: 'QUEUED' },
+        }) as unknown,
+      );
+      expect(tx.floorQueueEntry.update).toHaveBeenNthCalledWith(2, {
+        where: { id: 7n },
+        data: expect.objectContaining({ status: 'RUNNING', startedById: null }) as unknown,
+      });
+    });
+
+    it('RUNNING nhưng hàng đợi không còn PI chờ -> chỉ đóng', async () => {
+      prisma.floorQueueEntry.findUnique.mockResolvedValue(phoi('RUNNING'));
+      tx.floorQueueEntry.findUnique.mockResolvedValue(phoi('RUNNING'));
+      tx.floorQueueEntry.findFirst.mockResolvedValue(null);
+      expect(await service.autoCompletePhoi(1n)).toEqual({ closed: true, nextPiCode: null });
+      expect(tx.floorQueueEntry.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('dòng QUEUED -> DONE, không kéo PI khác lên chạy', async () => {
+      prisma.floorQueueEntry.findUnique.mockResolvedValue(phoi('QUEUED'));
+      tx.floorQueueEntry.findUnique.mockResolvedValue(phoi('QUEUED'));
+      expect(await service.autoCompletePhoi(1n)).toEqual({ closed: true, nextPiCode: null });
+      expect(tx.floorQueueEntry.update).toHaveBeenCalledTimes(1);
+      expect(tx.floorQueueEntry.update).toHaveBeenCalledWith({
+        where: { id: 1n },
+        data: expect.objectContaining({ status: 'DONE', endedById: null }) as unknown,
+      });
+      expect(tx.floorQueueEntry.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('gọi lại khi đã DONE (hoặc dòng không còn) -> không làm gì', async () => {
+      prisma.floorQueueEntry.findUnique.mockResolvedValue(phoi('RUNNING'));
+      tx.floorQueueEntry.findUnique.mockResolvedValue(phoi('DONE'));
+      expect(await service.autoCompletePhoi(1n)).toEqual({ closed: false, nextPiCode: null });
+      expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
+    });
+
+    it('tổ không phải Phôi -> không mở transaction', async () => {
+      prisma.floorQueueEntry.findUnique.mockResolvedValue({ ...phoi('RUNNING'), stage: 'HAN' });
+      expect(await service.autoCompletePhoi(1n)).toEqual({ closed: false, nextPiCode: null });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ensurePhoiQueued (máy cắt rảnh tự kéo lệnh, đợt C3)', () => {
+    beforeEach(() => {
+      prisma.productionInvoice.findUnique.mockResolvedValue({ code: 'PI-77' });
+    });
+
+    it('lệnh chưa có dòng hàng đợi Phôi -> thêm QUEUED cuối hàng, queuedById null', async () => {
+      tx.floorQueueEntry.findUnique.mockResolvedValue(null);
+      tx.floorQueueEntry.aggregate.mockResolvedValue({ _max: { position: 4 } });
+
+      const added = await service.ensurePhoiQueued([77n, 77n]);
+
+      expect(added).toEqual(['PI-77']);
+      expect(tx.floorQueueEntry.create).toHaveBeenCalledTimes(1);
+      expect(tx.floorQueueEntry.create).toHaveBeenCalledWith({
+        data: {
+          stage: 'PHOI',
+          productionInvoiceId: 77n,
+          workshopId: PHU_AN,
+          position: 5,
+          queuedById: null,
+        },
+      });
+      expect(JSON.stringify((tx.$executeRaw.mock.calls as unknown[][])[0] ?? [])).toContain(
+        `floor-queue:PHOI:${PHU_AN}`,
+      );
+    });
+
+    it('đã có dòng (bất kỳ trạng thái) -> bỏ qua', async () => {
+      tx.floorQueueEntry.findUnique.mockResolvedValue({ id: 3n });
+      expect(await service.ensurePhoiQueued([77n])).toEqual([]);
+      expect(tx.floorQueueEntry.create).not.toHaveBeenCalled();
     });
   });
 
@@ -252,7 +516,7 @@ describe('FloorAdminService', () => {
         .mockResolvedValueOnce(entry(2n, 'PI-B')); // đang RUNNING
       tx.floorReport.count.mockResolvedValue(0);
 
-      await service.reopenLast('PHOI');
+      await service.reopenLast('q', 'PHOI', '1');
 
       expect(tx.floorQueueEntry.findFirst).toHaveBeenNthCalledWith(
         1,
@@ -279,7 +543,7 @@ describe('FloorAdminService', () => {
         .mockResolvedValueOnce(entry(1n, 'PI-A'))
         .mockResolvedValueOnce(null);
 
-      await service.reopenLast('HAN');
+      await service.reopenLast('q', 'HAN', '1');
 
       expect(tx.floorReport.count).not.toHaveBeenCalled();
       expect(tx.floorQueueEntry.update).toHaveBeenCalledTimes(1);
@@ -295,7 +559,7 @@ describe('FloorAdminService', () => {
         .mockResolvedValueOnce(entry(2n, 'PI-B'));
       tx.floorReport.count.mockResolvedValue(3);
 
-      const err = await service.reopenLast('PHOI').catch((e: unknown) => e);
+      const err = await service.reopenLast('q', 'PHOI', '1').catch((e: unknown) => e);
 
       expect(err).toBeInstanceOf(ConflictException);
       expect((err as Error).message).toContain('PI-B đã có 3 lần báo');
@@ -305,7 +569,7 @@ describe('FloorAdminService', () => {
 
     it('chưa chuyển PI nào -> 409', async () => {
       tx.floorQueueEntry.findFirst.mockResolvedValueOnce(null);
-      await expect(service.reopenLast('SON')).rejects.toThrow(ConflictException);
+      await expect(service.reopenLast('q', 'SON', '1')).rejects.toThrow(ConflictException);
       expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
     });
   });
@@ -328,6 +592,237 @@ describe('FloorAdminService', () => {
       tx.floorQueueEntry.findUnique.mockResolvedValue({ id: 1n, status: 'QUEUED' });
       await expect(service.enqueue('PHOI', '45', 'q')).rejects.toThrow('đã có trong hàng đợi');
     });
+
+    it('dòng mới mang xưởng của PI; vị trí = max trong CÙNG (tổ, xưởng) + 1; khoá theo (tổ, xưởng)', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        { productionInvoiceId: 45n, workshopId: PHUOC_AN },
+      ]);
+      tx.floorQueueEntry.findUnique.mockResolvedValue(null);
+      tx.floorQueueEntry.aggregate.mockResolvedValue({ _max: { position: 4 } });
+
+      await service.enqueue('PHOI', '45', 'q');
+
+      expect(tx.floorQueueEntry.aggregate).toHaveBeenCalledWith({
+        where: { stage: 'PHOI', workshopId: PHUOC_AN },
+        _max: { position: true },
+      });
+      expect(tx.floorQueueEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          stage: 'PHOI',
+          productionInvoiceId: 45n,
+          workshopId: PHUOC_AN,
+          position: 5,
+        }) as unknown,
+      });
+      expect(tx.$executeRaw).toHaveBeenCalled();
+    });
+
+    it('Sơn của Phước An vào hàng đợi Phú An (nơi sơn)', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        { productionInvoiceId: 45n, workshopId: PHUOC_AN },
+      ]);
+      prisma.workshop.findMany.mockResolvedValue([{ id: PHUOC_AN, paintWorkshopId: PHU_AN }]);
+      tx.floorQueueEntry.findUnique.mockResolvedValue(null);
+
+      await service.enqueue('SON', '45', 'q');
+
+      expect(tx.floorQueueEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ stage: 'SON', workshopId: PHU_AN }) as unknown,
+      });
+    });
+
+    it('PI chưa có xưởng -> xưởng mặc định (xưởng của kho phoi-son-han)', async () => {
+      tx.floorQueueEntry.findUnique.mockResolvedValue(null);
+      await service.enqueue('HAN', '45', 'q');
+      expect(tx.floorQueueEntry.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ workshopId: PHU_AN }) as unknown,
+      });
+    });
+
+    it('QLSX gắn xưởng khác xưởng hàng đợi của PI -> 403, không ghi', async () => {
+      scopedTo(PHU_AN, 'Phú An');
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        { productionInvoiceId: 45n, workshopId: PHUOC_AN },
+      ]);
+      await expect(service.enqueue('PHOI', '45', 'q')).rejects.toThrow(ForbiddenException);
+      expect(tx.floorQueueEntry.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('hàng đợi theo xưởng (đợt C1)', () => {
+    it('advance: chỉ tác động hàng đợi của đúng xưởng (khoá + truy vấn theo xưởng)', async () => {
+      tx.floorQueueEntry.findFirst
+        .mockResolvedValueOnce({ id: 1n, status: 'RUNNING' })
+        .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
+
+      await service.advance('PHOI', 'q', '2');
+
+      expect(tx.floorQueueEntry.findFirst).toHaveBeenNthCalledWith(1, {
+        where: { stage: 'PHOI', workshopId: PHUOC_AN, status: 'RUNNING' },
+      });
+      expect(tx.floorQueueEntry.findFirst).toHaveBeenNthCalledWith(2, {
+        where: { stage: 'PHOI', workshopId: PHUOC_AN, status: 'QUEUED' },
+        orderBy: { position: 'asc' },
+      });
+    });
+
+    it('người không gắn xưởng thiếu workshopId -> 400 "Chọn xưởng" (advance và reopen), không mở transaction', async () => {
+      await expect(service.advance('PHOI', 'q')).rejects.toThrow(
+        new BadRequestException('Chọn xưởng'),
+      );
+      await expect(service.reopenLast('q', 'PHOI')).rejects.toThrow(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('QLSX gắn xưởng: mặc định xưởng mình; gọi xưởng khác -> 403', async () => {
+      scopedTo(PHU_AN, 'Phú An');
+      tx.floorQueueEntry.findFirst.mockResolvedValue(null);
+      await expect(service.advance('PHOI', 'q')).rejects.toThrow(ConflictException); // hàng đợi trống = đã chạy vào xưởng mình
+      expect(tx.floorQueueEntry.findFirst).toHaveBeenCalledWith({
+        where: { stage: 'PHOI', workshopId: PHU_AN, status: 'RUNNING' },
+      });
+      await expect(service.advance('PHOI', 'q', '2')).rejects.toThrow(ForbiddenException);
+      await expect(service.reopenLast('q', 'PHOI', '2')).rejects.toThrow(ForbiddenException);
+    });
+
+    it('listQueue: QLSX gắn xưởng luôn lọc xưởng mình, truyền xưởng khác -> 403; không gắn xưởng không truyền = mọi xưởng', async () => {
+      scopedTo(PHUOC_AN, 'Phước An');
+      await service.listQueue('q', 'PHOI');
+      expect(prisma.floorQueueEntry.findMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          where: { stage: 'PHOI', workshopId: PHUOC_AN },
+        }) as unknown,
+      );
+      await expect(service.listQueue('q', 'PHOI', '1')).rejects.toThrow(ForbiddenException);
+
+      prisma.user.findUnique.mockResolvedValue({ workshopId: null, workshop: null });
+      await service.listQueue('q', 'PHOI');
+      expect(prisma.floorQueueEntry.findMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({ where: { stage: 'PHOI' } }) as unknown,
+      );
+      await service.listQueue('q', 'PHOI', '2');
+      expect(prisma.floorQueueEntry.findMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({ where: { stage: 'PHOI', workshopId: 2n } }) as unknown,
+      );
+    });
+
+    it('dòng trả về có workshopId + workshopName', async () => {
+      prisma.floorQueueEntry.findMany.mockResolvedValue([
+        {
+          id: 1n,
+          stage: 'PHOI',
+          status: 'QUEUED',
+          productionInvoiceId: 45n,
+          workshopId: PHUOC_AN,
+          workshop: { id: PHUOC_AN, name: 'Phước An' },
+          position: 1,
+          queuedAt: new Date(),
+          startedAt: null,
+          endedAt: null,
+          productionInvoice: { id: 45n, code: 'PI-45' },
+          startedBy: null,
+          endedBy: null,
+        },
+      ]);
+      const [e] = await service.listQueue('q', 'PHOI');
+      expect(e).toMatchObject({ workshopId: '2', workshopName: 'Phước An' });
+    });
+
+    it('reorder: các dòng khác xưởng -> 400; QLSX xưởng khác -> 403; so khớp đúng QUEUED của (tổ, xưởng)', async () => {
+      prisma.floorQueueEntry.findMany.mockResolvedValue([
+        { id: 3n, stage: 'PHOI', workshopId: PHU_AN },
+        { id: 2n, stage: 'PHOI', workshopId: PHUOC_AN },
+      ]);
+      await expect(service.reorder('q', 'PHOI', ['3', '2'])).rejects.toThrow(BadRequestException);
+
+      const phuocAnRows = [
+        { id: 3n, stage: 'PHOI', workshopId: PHUOC_AN },
+        { id: 2n, stage: 'PHOI', workshopId: PHUOC_AN },
+      ];
+      prisma.floorQueueEntry.findMany.mockResolvedValue(phuocAnRows);
+      scopedTo(PHU_AN, 'Phú An');
+      await expect(service.reorder('q', 'PHOI', ['3', '2'])).rejects.toThrow(ForbiddenException);
+
+      prisma.user.findUnique.mockResolvedValue({ workshopId: null, workshop: null });
+      prisma.floorQueueEntry.findMany.mockResolvedValueOnce(phuocAnRows);
+      prisma.floorQueueEntry.findMany.mockResolvedValue([]);
+      tx.floorQueueEntry.findMany.mockResolvedValue([
+        { id: 2n, position: 7 },
+        { id: 3n, position: 8 },
+      ]);
+      await service.reorder('q', 'PHOI', ['3', '2']);
+      expect(tx.floorQueueEntry.findMany).toHaveBeenCalledWith({
+        where: { stage: 'PHOI', workshopId: PHUOC_AN, status: 'QUEUED' },
+        select: { id: true, position: true },
+      });
+    });
+
+    it('removeEntry: kiểm phạm vi theo xưởng của dòng', async () => {
+      prisma.floorQueueEntry.findUnique.mockResolvedValue({
+        id: 3n,
+        stage: 'HAN',
+        status: 'QUEUED',
+        workshopId: PHUOC_AN,
+      });
+      scopedTo(PHU_AN, 'Phú An');
+      await expect(service.removeEntry('q', '3')).rejects.toThrow(ForbiddenException);
+      expect(prisma.floorQueueEntry.delete).not.toHaveBeenCalled();
+
+      scopedTo(PHUOC_AN, 'Phước An');
+      await service.removeEntry('q', '3');
+      expect(prisma.floorQueueEntry.delete).toHaveBeenCalledWith({ where: { id: 3n } });
+    });
+
+    describe('queueCandidates', () => {
+      const pi = (id: bigint, code: string) => ({
+        id,
+        code,
+        deadline: null,
+        items: [{ productionOrder: { floorStage: 'ACTIVE' } }],
+      });
+
+      beforeEach(() => {
+        prisma.productionInvoice.findMany.mockResolvedValue([pi(10n, 'PI-A'), pi(11n, 'PI-B')]);
+        prisma.productionInvoiceItem.findMany.mockResolvedValue([
+          { productionInvoiceId: 10n, workshopId: PHUOC_AN },
+          { productionInvoiceId: 11n, workshopId: PHU_AN },
+        ]);
+        prisma.workshop.findMany.mockImplementation(
+          ({ where }: { where: { id: { in: bigint[] } } }) =>
+            Promise.resolve(
+              where.id.in.map((id) => ({
+                id,
+                name: id === PHU_AN ? 'Phú An' : 'Phước An',
+                paintWorkshopId: id === PHUOC_AN ? PHU_AN : null,
+              })),
+            ),
+        );
+      });
+
+      it('không gắn xưởng + không truyền xưởng: mọi PI, kèm xưởng hàng đợi', async () => {
+        const rows = await service.queueCandidates('q', 'PHOI');
+        expect(rows.map((r) => [r.code, r.workshopId, r.workshopName])).toEqual([
+          ['PI-A', '2', 'Phước An'],
+          ['PI-B', '1', 'Phú An'],
+        ]);
+      });
+
+      it('lọc theo xưởng; QLSX gắn xưởng lấy xưởng mình, truyền xưởng khác -> 403', async () => {
+        const phuoc = await service.queueCandidates('q', 'PHOI', '2');
+        expect(phuoc.map((r) => r.code)).toEqual(['PI-A']);
+
+        scopedTo(PHU_AN, 'Phú An');
+        const mine = await service.queueCandidates('q', 'PHOI');
+        expect(mine.map((r) => r.code)).toEqual(['PI-B']);
+        await expect(service.queueCandidates('q', 'PHOI', '2')).rejects.toThrow(ForbiddenException);
+      });
+
+      it('tổ Sơn: PI của Phước An thuộc hàng đợi Phú An', async () => {
+        const son = await service.queueCandidates('q', 'SON', '1');
+        expect(son.map((r) => r.code)).toEqual(['PI-A', 'PI-B']);
+        expect(son.every((r) => r.workshopId === '1')).toBe(true);
+      });
+    });
   });
 
   it('reorder: danh sách gửi lên khác tập PI đang chờ -> 409 (người khác vừa sửa)', async () => {
@@ -335,8 +830,21 @@ describe('FloorAdminService', () => {
       { id: 2n, position: 2 },
       { id: 3n, position: 3 },
     ]);
-    await expect(service.reorder('PHOI', ['3'])).rejects.toThrow(ConflictException);
-    await service.reorder('PHOI', ['3', '2']);
+    prisma.floorQueueEntry.findMany.mockResolvedValue([
+      { id: 3n, stage: 'PHOI', workshopId: PHU_AN },
+      { id: 2n, stage: 'PHOI', workshopId: PHU_AN },
+    ]);
+    await expect(service.reorder('q', 'PHOI', ['3', '2', '9'])).rejects.toThrow(ConflictException);
+    prisma.floorQueueEntry.findMany.mockResolvedValue([
+      { id: 3n, stage: 'PHOI', workshopId: PHU_AN },
+    ]);
+    await expect(service.reorder('q', 'PHOI', ['3'])).rejects.toThrow(ConflictException);
+    prisma.floorQueueEntry.findMany.mockResolvedValueOnce([
+      { id: 3n, stage: 'PHOI', workshopId: PHU_AN },
+      { id: 2n, stage: 'PHOI', workshopId: PHU_AN },
+    ]);
+    prisma.floorQueueEntry.findMany.mockResolvedValue([]);
+    await service.reorder('q', 'PHOI', ['3', '2']);
     expect(tx.floorQueueEntry.update).toHaveBeenCalledWith({
       where: { id: 3n },
       data: { position: 2 },
@@ -354,6 +862,8 @@ describe('FloorAdminService', () => {
       startedAt: new Date(),
       endedAt: null,
       productionInvoice: { id: 45n, code: 'PI-45' },
+      workshopId: PHU_AN,
+      workshop: { id: PHU_AN, name: 'Phú An' },
       startedBy: null,
       endedBy: null,
     });
@@ -373,7 +883,7 @@ describe('FloorAdminService', () => {
         ],
       });
 
-      const [e] = await service.listQueue('PHOI');
+      const [e] = await service.listQueue('q', 'PHOI');
 
       expect(e.progress).toMatchObject({
         required: 120,
@@ -403,7 +913,7 @@ describe('FloorAdminService', () => {
         ],
       });
 
-      const [e] = await service.listQueue('PHOI');
+      const [e] = await service.listQueue('q', 'PHOI');
 
       expect(e.progress).toMatchObject({
         required: 250,
@@ -424,7 +934,7 @@ describe('FloorAdminService', () => {
       prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
       steelIssues.getPhoiProgressBatch.mockResolvedValue({});
 
-      const [e] = await service.listQueue('PHOI');
+      const [e] = await service.listQueue('q', 'PHOI');
 
       expect(e.progress).toBeNull();
     });
@@ -441,7 +951,7 @@ describe('FloorAdminService', () => {
         },
       });
 
-      const [e] = await service.listQueue('PHOI');
+      const [e] = await service.listQueue('q', 'PHOI');
 
       expect(productionBatches.getBatchPlanBatch).toHaveBeenCalledWith(['41'], 'PHOI');
       expect(e.progress!.breakdown).toEqual([
@@ -460,7 +970,7 @@ describe('FloorAdminService', () => {
         },
       });
 
-      const [e] = await service.listQueue('HAN');
+      const [e] = await service.listQueue('q', 'HAN');
 
       expect(steelIssues.getPhoiProgressBatch).not.toHaveBeenCalled();
       expect(e.progress).toMatchObject({
@@ -481,7 +991,7 @@ describe('FloorAdminService', () => {
         '41': { items: [{ plannedQty: 1000, passedQty: 999, awaitingQcQty: 0, openQty: 0 }] },
       });
 
-      const [e] = await service.listQueue('HAN');
+      const [e] = await service.listQueue('q', 'HAN');
 
       expect(e.progress).toMatchObject({ percent: 99, complete: false });
     });
@@ -503,11 +1013,11 @@ describe('FloorAdminService', () => {
       steelIssues.getPhoiProgressBatch.mockResolvedValue({ 45: [] });
 
       prisma.floorReport.count.mockResolvedValue(0);
-      let list = await service.listQueue('PHOI');
+      let list = await service.listQueue('q', 'PHOI');
       expect(list.filter((e) => e.canReopen).map((e) => e.id)).toEqual(['3']);
 
       prisma.floorReport.count.mockResolvedValue(2);
-      list = await service.listQueue('PHOI');
+      list = await service.listQueue('q', 'PHOI');
       expect(list.some((e) => e.canReopen)).toBe(false);
     });
 
@@ -515,7 +1025,7 @@ describe('FloorAdminService', () => {
       prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
       steelIssues.getPhoiProgressBatch.mockRejectedValue(new Error('boom'));
 
-      const [e] = await service.listQueue('PHOI');
+      const [e] = await service.listQueue('q', 'PHOI');
 
       expect(e.progress).toBeNull();
     });

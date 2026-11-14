@@ -310,6 +310,54 @@ export interface FloorStageCompleteParams {
   piCode: string;
 }
 
+/** Lệnh xong Phôi do hệ thống tự tính. */
+export interface FloorPhoiDoneParams {
+  piCode: string;
+  /**
+   * Mã lệnh được kéo lên chạy thay (hàng đợi Phôi của xưởng); null/thiếu = hàng đợi hết lệnh chờ.
+   */
+  nextPiCode?: string | null;
+}
+
+/** Máy cắt sắp hết / đã hết việc được chia. */
+export interface CutMachineWorkParams {
+  /** Id xưởng của máy (chuỗi số) - để QLSX xưởng khác không nhận (recipient-resolver). */
+  workshopId: string;
+  workshopName: string;
+  machineName: string;
+  /** Số cây ước còn lại (LOW); 0 khi IDLE. */
+  barsLeft: number;
+  /**
+   * Công tắc máy rảnh tự kéo lệnh (CUT_AUTO_PULL) đang bật - đổi lời nhắc IDLE. Thiếu ở thông báo
+   * cũ = false.
+   */
+  autoPull?: boolean;
+}
+
+/** Máy cắt rảnh tự kéo lệnh kế tiếp. */
+export interface CutOrderPulledParams {
+  piCode: string;
+  /** Id xưởng (chuỗi số) - để QLSX xưởng khác không nhận (recipient-resolver). */
+  workshopId: string;
+  workshopName: string;
+  /** Các máy rảnh đã nhận việc, nối bằng ", ". */
+  machineNames: string;
+  /** Vd "Sắt hộp 6zem 10x20: 12 cây (Laze 2 Phú An 12); …". */
+  summary: string;
+  /** Lệnh còn sắt trong kho chưa xuất xuống Phôi (đã báo thủ kho). */
+  steelPending: boolean;
+}
+
+/** Lệnh vừa được máy rảnh kéo mà sắt còn trong kho: báo thủ kho xuất xuống Phôi. */
+export interface CutPullSteelToIssueParams {
+  piCode: string;
+  workshopId: string;
+  /** Vd "Sắt hộp 6zem 10x20: còn 12 cây"; nhiều loại nối "; ". */
+  lines: string;
+  /** Mã kho còn giữ sắt của lệnh - báo đúng thủ kho. */
+  warehouseCodes: string[];
+}
+
 /** Có đợt công nhân đã báo nhưng QLSX chưa gửi KCS quá lâu (2026-10-13). */
 export interface FloorBatchStaleParams {
   stage: 'PHOI' | 'HAN' | 'SON';
@@ -1069,6 +1117,94 @@ const notificationTypeDefinitions = {
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
   } satisfies NotificationTypeDef<FloorStageCompleteParams>,
 
+  /** Lệnh xong Phôi - HỆ THỐNG TỰ TÍNH (mọi dòng tổ Phôi đã KCS đạt đủ), tự đóng dòng hàng đợi Phôi
+   * và kéo lệnh kế lên chạy (14/11,
+   *  câu 8). Chỉ báo tin - không cần ai bấm. Thay cho nhắc FLOOR_STAGE_COMPLETE ở tổ Phôi. */
+  FLOOR_PHOI_DONE: {
+    category: 'INFO',
+    severity: 'INFO',
+    entityType: 'FLOOR_QUEUE_ENTRY',
+    title: (p: FloorPhoiDoneParams) => `Lệnh ${p.piCode} đã xong Phôi`,
+    message: (p: FloorPhoiDoneParams) =>
+      `Hệ thống tự tính: mọi đoạn của ${p.piCode} đã đủ công đoạn và KCS đạt.` +
+      (p.nextPiCode
+        ? ` Lệnh tiếp theo ${p.nextPiCode} đã được chạy ở tổ Phôi.`
+        : ' Hàng đợi tổ Phôi không còn lệnh chờ.'),
+    link: () => ({ module: 'production', page: 'san-luong-xuong' }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
+  } satisfies NotificationTypeDef<FloorPhoiDoneParams>,
+
+  /** Máy cắt còn khoảng 20 cây việc được chia (ước từ số đoạn đã báo) -> KHSX / QLSX xưởng chuẩn bị
+   * việc tiếp. Tự đóng khi máy
+   *  được chia thêm việc hoặc hết việc (FloorAlertsService.checkCutMachines). */
+  CUT_MACHINE_LOW_WORK: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'WORKSTATION',
+    title: (p: CutMachineWorkParams) => `Máy ${p.machineName} còn khoảng ${p.barsLeft} cây việc`,
+    message: (p: CutMachineWorkParams) =>
+      `Máy ${p.machineName} (${p.workshopName}) sắp cắt hết việc được chia - chuẩn bị chia việc tiếp.`,
+    link: () => ({ module: 'production', page: 'san-luong-xuong' }),
+    recipients: () => ({
+      roles: [BUSINESS_ROLES.PRODUCTION_PLANNER, BUSINESS_ROLES.PRODUCTION_MANAGER],
+    }),
+  } satisfies NotificationTypeDef<CutMachineWorkParams>,
+
+  /** Máy cắt đã cắt đủ số cây được chia (máy rảnh, câu 2). Tự đóng khi máy có việc mới. Công tắc tự
+   * kéo lệnh (CUT_AUTO_PULL) đang
+   * bật mà máy vẫn rảnh nghĩa là không còn lệnh đủ sắt + đã Bắt đầu + máy cắt được (`autoPull` =
+   * true đổi lời nhắc).
+   */
+  CUT_MACHINE_IDLE: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'WORKSTATION',
+    title: (p: CutMachineWorkParams) => `Máy ${p.machineName} đã cắt hết việc được chia`,
+    message: (p: CutMachineWorkParams) =>
+      p.autoPull
+        ? `Máy ${p.machineName} (${p.workshopName}) đã cắt đủ số cây được chia và hiện không còn lệnh nào đủ sắt, đã Bắt đầu, máy cắt được để hệ thống tự kéo - xem các lệnh đang chờ sắt / chưa Bắt đầu / chờ KHSX kiểm lại phương án cắt, hoặc chia tay cho máy.`
+        : `Máy ${p.machineName} (${p.workshopName}) đã cắt đủ số cây được chia - chia thêm việc cho máy.`,
+    link: () => ({ module: 'production', page: 'san-luong-xuong' }),
+    recipients: () => ({
+      roles: [BUSINESS_ROLES.PRODUCTION_PLANNER, BUSINESS_ROLES.PRODUCTION_MANAGER],
+    }),
+  } satisfies NotificationTypeDef<CutMachineWorkParams>,
+
+  /** Máy cắt rảnh đã TỰ kéo lệnh kế tiếp và chia việc -> KHSX + QLSX xưởng biết; QLSX chỉnh lại ở
+   * Chia máy cắt. Chỉ báo tin. */
+  CUT_ORDER_PULLED: {
+    category: 'INFO',
+    severity: 'INFO',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: CutOrderPulledParams) => `Máy rảnh kéo lệnh ${p.piCode}: ${p.machineNames}`,
+    message: (p: CutOrderPulledParams) =>
+      `${p.summary}.` +
+      (p.steelPending ? ' Sắt còn trong kho - đã báo thủ kho xuất xuống Phôi.' : '') +
+      ' Hệ thống tự chia, QLSX chỉnh lại được ở Chia máy cắt.',
+    link: () => ({ module: 'production', page: 'san-luong-xuong' }),
+    recipients: () => ({
+      roles: [BUSINESS_ROLES.PRODUCTION_PLANNER, BUSINESS_ROLES.PRODUCTION_MANAGER],
+    }),
+  } satisfies NotificationTypeDef<CutOrderPulledParams>,
+
+  /** Lệnh vừa được máy rảnh kéo lên cắt mà sắt còn trong kho -> thủ kho xuất xuống Phôi ngay. Tự
+   * đóng khi đã xuất đủ
+   *  (FloorAlertsService, theo CutAllocationService.steelGapsByPi). */
+  CUT_PULL_STEEL_TO_ISSUE: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: CutPullSteelToIssueParams) => `Xuất sắt lệnh ${p.piCode} xuống Phôi ngay`,
+    message: (p: CutPullSteelToIssueParams) =>
+      `Máy cắt rảnh vừa kéo lệnh này lên cắt. Chưa xuất: ${p.lines}.`,
+    link: () => ({ module: 'inbound_warehouse', page: 'xuat-sat' }),
+    recipients: (p: CutPullSteelToIssueParams) => ({
+      warehouseIds: p.warehouseCodes,
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<CutPullSteelToIssueParams>,
+
   /** Có đợt chờ gửi KCS quá lâu -> QLSX gửi KCS hoặc xử lý. ACTION_REQUIRED, mỗi tổ 1 thông báo, tự đóng khi hết đợt quá hạn. */
   FLOOR_BATCH_STALE: {
     category: 'ACTION_REQUIRED',
@@ -1751,7 +1887,7 @@ const notificationTypeDefinitions = {
     title: (p: PiCuttingRecheckNotificationParams) =>
       `${p.displayCode}: đổi xưởng → cần kiểm lại phương án cắt`,
     message: (p: PiCuttingRecheckNotificationParams) =>
-      `QLSX đổi xưởng ${p.fromWorkshop ?? '(chưa có)'} → ${p.toWorkshop}. Vào Tối ưu cắt sắt xem lại phương án cắt rồi bấm "Đã kiểm" - chưa bấm thì kho chưa được chuyển / xuất sắt cho lệnh này.`,
+      `QLSX đổi xưởng ${p.fromWorkshop ?? '(chưa có)'} → ${p.toWorkshop}. Vào Tối ưu cắt sắt xem lại phương án cắt rồi bấm "Đã kiểm" - chưa bấm thì Sếp chưa duyệt được và kho chưa được chuyển / xuất sắt cho lệnh này.`,
     link: (p: PiCuttingRecheckNotificationParams) => ({
       module: 'production_plan',
       page: 'gom-cat',

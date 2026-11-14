@@ -35,6 +35,35 @@ export class SystemConfigResponseDto {
   @Expose() @ApiProperty({ type: [Number] }) solverBundleFactors!: number[];
   @Expose() @ApiProperty() solverMaxManualCuts!: number;
   @Expose() @ApiProperty() solverMaxSizesPerPattern!: number;
+  /**
+   * Luật laze (13/11/2026): đoạn cuối cây (cắt từng cây) phải dài hơn số mm này, tính cả cùi; 0 =
+   * tắt.
+   */
+  @Expose() @ApiProperty() solverLaserMinTailMm!: number;
+  /**
+   * Luật xưởng "tối đa N cỡ đoạn/cây": khoá = mã xưởng (Workshop.code), giá trị 1-10; xưởng không
+   * có khoá = không có luật riêng.
+   */
+  @Expose()
+  @ApiProperty({ type: 'object', additionalProperties: { type: 'number' } })
+  solverMaxSizesPerBarByWorkshop!: Record<string, number>;
+  /** Máy cắt bắt buộc theo xưởng: khoá = mã xưởng (Workshop.code), giá trị laser | tu_dong. */
+  @Expose()
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: { type: 'string', enum: ['laser', 'tu_dong'] },
+  })
+  solverMachineByWorkshop!: Record<string, 'laser' | 'tu_dong'>;
+  /**
+   * Số cây/bó của MC Tự động theo quy cách (V20, H13-26, FI19...); {} = dùng solverBundleFactors
+   * chung.
+   */
+  @Expose()
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: { type: 'array', items: { type: 'number' } },
+  })
+  solverBundleFactorsBySpec!: Record<string, number[]>;
   /** Cửa sổ hạn giao (ngày) khi gợi ý gộp đơn giảm hao hụt - xem SystemConfig.solverMergeWindowDays. */
   @Expose() @ApiProperty() solverMergeWindowDays!: number;
   /** Trần số SKU mỗi đợt tính / lệnh gộp - xem SystemConfig.solverMergeMaxSkus. */

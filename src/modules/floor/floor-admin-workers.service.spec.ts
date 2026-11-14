@@ -5,6 +5,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { FloorAdminService } from './floor-admin.service';
 
 /** Đối số đầu tiên của lần gọi đầu tiên của một jest.Mock - có kiểu rõ ràng để assert không phải dùng `any`. */
@@ -64,6 +65,7 @@ describe('FloorAdminService - tài khoản công nhân', () => {
       prisma as unknown as PrismaServiceType,
       {} as SteelIssuesService,
       {} as ProductionBatchesService,
+      {} as WorkshopScopeService,
     );
   });
 

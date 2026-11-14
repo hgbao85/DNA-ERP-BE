@@ -6,7 +6,12 @@
  *  - mọi phép tính trên số nguyên đã nhân SCALING_FACTOR (= 10);
  *  - usable = stock − trim; mỗi đoạn tốn thêm kerf;
  *  - cận trên mỗi cỡ = min(usable // cl, demand) (bám nhu cầu thật, không chặn 30);
- *  - sum(x) ≥ 1;  total_used = đoạn + lưỡi ≤ usable;  total_used ≥ int(stock·(1 − max_waste));
+ *  - sum(x) ≥ 1;  total_used = đoạn + lưỡi ≤ usable;
+ * - HAO HỤT CHỈ TÍNH CÙI (13/11/2026): waste = usable − total_used (tề đầu, lưỡi, đoạn dư KHÔNG
+ *   tính) và
+ * waste ≤ max_waste·stock (tức total_used ≥ usable − max_waste·stock). Trước đây waste = stock −
+ * total_used gồm tề đầu
+ *    và trần là tề đầu + cùi ≤ max_waste·stock;
  *  - tối đa `maxSizesPerBar` cỡ khác nhau trên một cây (khi n > cap);
  *  - dừng ở SOLUTION_LIMIT pattern hoặc hết giờ → complete = false.
  */
@@ -35,7 +40,7 @@ export interface PatternRow {
   counts: number[];
   /** tổng mm đoạn hữu ích (đã scale) */
   used: number;
-  /** stock − used − kerf·Σcounts (đã scale) = tề đầu + khúc thừa */
+  /** usable − (đoạn + lưỡi) (đã scale) = chỉ khúc thừa cuối cây (cùi); KHÔNG gồm tề đầu */
   waste: number;
 }
 
@@ -44,6 +49,13 @@ export interface GeneratePatternsOptions {
   maxPatterns?: number;
   timeLimitSec?: number;
   maxSizesPerBar?: number | null;
+  /**
+   * Luật laze "nhát cắt cuối" (13/11/2026, Sếp câu 11): kiểu cắt chỉ hợp lệ khi (đoạn DÀI NHẤT trên
+   * cây + cùi) > số này (mm).
+   * Đoạn dài nhất để cuối, công nhân cắt tay phần (đoạn đó + cùi). Thiếu / ≤ 0 = không áp. Chỉ
+   * truyền cho cắt từng cây.
+   */
+  minLastCutMm?: number;
 }
 
 export interface GeneratePatternsResult {
@@ -72,8 +84,11 @@ export function generatePatterns(
   const n = cutsS.length;
   if (usableS <= 0 || n === 0) return { rows: [], complete: true };
 
-  // Giống Python: int(stock_s * (1 - max_waste_ratio)) — cùng phép toán double nên cùng kết quả.
-  const minUsed = Math.trunc(stockS * (1 - maxWasteRatio));
+  // Trần hao hụt = CÙI ≤ max_waste·stock (13/11/2026; trước: tề đầu + cùi, int(stock·(1 − ratio))).
+  // Cùi là số nguyên
+  // scale nên lấy floor của trần (+1e-6 để 0,01 × 60000 không rơi xuống 599).
+  const maxLeftoverS = Math.max(0, Math.floor(stockS * maxWasteRatio + 1e-6));
+  const minUsed = usableS - maxLeftoverS;
 
   const ub = new Array<number>(n);
   const cost = new Array<number>(n); // sắt tiêu tốn cho MỘT đoạn = đoạn + lưỡi
@@ -88,6 +103,12 @@ export function generatePatterns(
   const suffixMax = new Array<number>(n + 1).fill(0);
   for (let i = n - 1; i >= 0; i--) suffixMax[i] = suffixMax[i + 1] + ub[i] * cost[i];
 
+  // So sánh trên đơn vị đã scale (số nguyên): maxPiece + cùi > ngưỡng (nghiêm ngặt, đúng 100 mm
+  // KHÔNG đạt).
+  const minLastS =
+    opts.minLastCutMm !== undefined && Number.isFinite(opts.minLastCutMm) && opts.minLastCutMm > 0
+      ? scale(opts.minLastCutMm)
+      : 0;
   const useCap = cap !== null && n > cap;
   const rows: PatternRow[] = [];
   const counts = new Array<number>(n).fill(0);
@@ -109,8 +130,13 @@ export function generatePatterns(
           hitLimit = true;
           return;
         }
+        if (minLastS > 0) {
+          let longest = 0;
+          for (let k = 0; k < n; k++) if (counts[k] > 0 && cutsS[k] > longest) longest = cutsS[k];
+          if (longest + (usableS - used) <= minLastS) return;
+        }
         const usedPieces = used - pieces * kerfS;
-        rows.push({ counts: counts.slice(), used: usedPieces, waste: stockS - used });
+        rows.push({ counts: counts.slice(), used: usedPieces, waste: usableS - used });
       }
       return;
     }

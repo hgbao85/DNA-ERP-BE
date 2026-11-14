@@ -1,6 +1,7 @@
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { ClsModule } from 'nestjs-cls';
+import { WorkshopScopeService } from '../../src/common/workshop-scope/workshop-scope.service';
 import configuration from '../../src/config/configuration';
 import { envValidationSchema } from '../../src/config/env.validation';
 import {
@@ -129,6 +130,8 @@ describe('Giữ chỗ tồn kho vật tư tiêu hao theo PI (integration, real P
         { provide: RealtimeService, useValue: { publishEntityChanged: jest.fn() } },
         // Nhả giữ đoạn khi lệnh kết thúc (13/11/2026) - không liên quan giữ chỗ vật tư tiêu hao ở đây.
         { provide: SegmentStockService, useValue: { releaseOrderHoldings: jest.fn() } },
+        // ProductionOrdersService kiểm phạm vi xưởng của người thao tác (QLSX theo xưởng).
+        WorkshopScopeService,
       ],
     }).compile();
 

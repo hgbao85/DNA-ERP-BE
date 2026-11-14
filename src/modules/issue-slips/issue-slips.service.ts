@@ -29,6 +29,7 @@ import {
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { FloorAlertsService } from '../floor/floor-alerts.service';
 import {
   PackagingIssueRow,
   PackagingIssuesService,
@@ -107,7 +108,7 @@ interface CheckedLine {
   recipeId?: bigint | null;
   /** Dòng mảnh xuất đan - kiểm trần trong transaction tạo phiếu. */
   weavingPiece?: PreparedWeavingPiece;
-  /** Dòng đóng gói / vật tư kèm đan - kiểm tồn khả dụng ngay lúc lập phiếu (RPK.2, 13/11/2026). */
+  /** Dòng đóng gói / vật tư kèm đan - kiểm tồn khả dụng ngay lúc lập phiếu (RPK.2). */
   packaging?: PreparedPackagingIssue;
   weavingMaterial?: PreparedWeavingMaterial;
 }
@@ -123,13 +124,14 @@ const fullName = (u: { firstName: string; lastName: string } | null) =>
   u ? `${u.lastName} ${u.firstName}`.trim() : null;
 
 /**
- * Phiếu xuất kho XK-yymmdd-NNN (Đợt 6, bản v8 YC4 4.1-4.4, 4.8, 4.9). Đợt 1 gồm xuất sắt cho Phôi và xuất vật tư tiêu hao
+ * Phiếu xuất kho XK-yymmdd-NNN. Gồm xuất sắt cho Phôi và xuất vật tư tiêu hao
  * Hàn/Sơn, thêm dòng "Dùng chung" (không theo lệnh, chỉ lấy từ tồn chưa giữ).
  *
- * 2 bước: tạo phiếu (kiểm từng dòng, cấp số, CHƯA trừ tồn) -> in -> người nhận ký -> thủ kho tải ảnh phiếu đã ký và "Xác nhận
- * xuất" - lúc đó mới trừ tồn MỌI dòng trong 1 transaction (dùng lõi createInTx của SteelIssuesService/MaterialIssuesService, giữ
- * nguyên mọi chốt cũ: giữ chỗ, tồn khả dụng, định mức, ưu tiên SKU sớm YC11). Một dòng hỏng thì cả phiếu không xuất. Khoá cứng:
- * route xuất từng dòng cũ đã gỡ, không còn đường xuất nào thiếu ảnh (V4-1).
+ * 2 bước: tạo phiếu (kiểm từng dòng, cấp số, CHƯA trừ tồn) -> in -> người nhận ký -> thủ kho tải
+ * ảnh phiếu đã ký và "Xác nhận xuất" - lúc đó mới trừ tồn MỌI dòng trong 1 transaction (dùng lõi
+ * createInTx của SteelIssuesService/MaterialIssuesService, giữ nguyên mọi chốt cũ: giữ chỗ, tồn khả
+ * dụng, định mức, ưu tiên SKU sớm YC11). Một dòng hỏng thì cả phiếu không xuất. Khoá cứng: route
+ * xuất từng dòng cũ đã gỡ, không còn đường xuất nào thiếu ảnh (V4-1).
  */
 @Injectable()
 export class IssueSlipsService {
@@ -147,6 +149,7 @@ export class IssueSlipsService {
     private readonly packaging: PackagingIssuesService,
     private readonly materialYield: MaterialYieldIssuesService,
     private readonly materialYieldRecipe: MaterialYieldRecipeIssuesService,
+    private readonly floorAlerts: FloorAlertsService,
   ) {}
 
   async create(dto: CreateIssueSlipDto, userId: string, scope: string | null) {
@@ -163,10 +166,12 @@ export class IssueSlipsService {
 
     const slipId = await this.prisma.$transaction(
       async (tx) => {
-        // Phiếu mảnh xuất đan: chặn vượt định mức / số mảnh còn ở kho ngay lúc cấp số (tính cả phiếu chờ ký khác).
+        // Phiếu mảnh xuất đan: chặn vượt định mức / số mảnh còn ở kho ngay lúc cấp số (tính cả
+        // phiếu chờ ký khác).
         for (const c of checked) {
           if (c.weavingPiece) await this.weaving.assertPieceCapInTx(tx, c.weavingPiece, null);
-          // RPK.2: đóng gói + vật tư kèm đan kiểm tồn cả lúc lập (trước đây chỉ lúc xác nhận - lập được phiếu khi kho = 0).
+          // RPK.2: đóng gói + vật tư kèm đan kiểm tồn cả lúc lập (trước đây chỉ lúc xác nhận - lập
+          // được phiếu khi kho = 0).
           if (c.packaging) await this.packaging.assertStockForSlip(tx, c.packaging);
           if (c.weavingMaterial)
             await this.weaving.assertMaterialStockForSlip(tx, c.weavingMaterial);
@@ -210,8 +215,8 @@ export class IssueSlipsService {
   }
 
   /**
-   * Phiếu xuất đan (anh Nhân 09/11/2026): phiếu mảnh cần điểm đan; phiếu vật tư kèm cần phiếu mảnh cùng chuyến (lấy điểm đan
-   * của phiếu đó). Phiếu không có dòng xuất đan trả null.
+   * Phiếu xuất đan: phiếu mảnh cần điểm đan; phiếu vật tư kèm cần phiếu mảnh cùng chuyến (lấy điểm
+   * đan của phiếu đó). Phiếu không có dòng xuất đan trả null.
    */
   private async checkWeavingHeader(dto: CreateIssueSlipDto): Promise<WeavingHeader | null> {
     const kinds = new Set(dto.lines.map((l) => l.kind));
@@ -293,9 +298,10 @@ export class IssueSlipsService {
   }
 
   /**
-   * Vật tư cần cấp kèm đan (anh Nhân 09/11/2026: "phần mềm báo kho Phụ kiện số vật tư cần cấp kèm"): theo từng phiếu mảnh còn
-   * hiệu lực (chờ ký hoặc đã xuất, 90 ngày gần nhất) = định mức vật tư / mảnh × số mảnh trên phiếu − đã nằm trên phiếu vật tư
-   * cùng chuyến (chưa huỷ). Thủ kho chỉ thấy vật tư thuộc kho mình. Chỉ trả phiếu còn thiếu.
+   * Vật tư cần cấp kèm đan (phần mềm báo kho Phụ kiện số vật tư cần cấp kèm): theo từng phiếu mảnh
+   * còn hiệu lực (chờ ký hoặc đã xuất, 90 ngày gần nhất) = định mức vật tư / mảnh × số mảnh trên
+   * phiếu − đã nằm trên phiếu vật tư cùng chuyến (chưa huỷ). Thủ kho chỉ thấy vật tư thuộc kho
+   * mình. Chỉ trả phiếu còn thiếu.
    */
   async getWeavingMaterialDemand(scope: string | null) {
     const since = new Date(Date.now() - 90 * 24 * 3600 * 1000);
@@ -466,8 +472,8 @@ export class IssueSlipsService {
   }
 
   /**
-   * Báo kho giữ vật tư kèm (thường kho Phụ kiện) khi phiếu mảnh còn thiếu phiếu vật tư; tự đóng khi đã đủ hoặc phiếu mảnh huỷ.
-   * Best-effort sau commit - lỗi chỉ ghi log.
+   * Báo kho giữ vật tư kèm (thường kho Phụ kiện) khi phiếu mảnh còn thiếu phiếu vật tư; tự đóng khi
+   * đã đủ hoặc phiếu mảnh huỷ. Best-effort sau commit - lỗi chỉ ghi log.
    */
   private async syncWeavingMaterialNotice(pieceSlipId: bigint): Promise<void> {
     try {
@@ -530,7 +536,10 @@ export class IssueSlipsService {
     }
   }
 
-  /** Bước 2: ảnh phiếu đã ký -> trừ tồn mọi dòng trong 1 transaction. Gửi lại cùng Idempotency-Key trả kết quả cũ. */
+  /**
+   * Bước 2: ảnh phiếu đã ký -> trừ tồn mọi dòng trong 1 transaction. Gửi lại cùng Idempotency-Key
+   * trả kết quả cũ.
+   */
   async confirm(
     id: string,
     signedSlipUrls: string[],
@@ -548,7 +557,8 @@ export class IssueSlipsService {
       throw new BadRequestException('Cần ảnh phiếu xuất đã có chữ ký người nhận');
     }
 
-    // Kiểm lại từng dòng (trạng thái lệnh/định mức có thể đã đổi từ lúc in phiếu) - đọc ngoài transaction như luồng cũ.
+    // Kiểm lại từng dòng (trạng thái lệnh/định mức có thể đã đổi từ lúc in phiếu) - đọc ngoài
+    // transaction như luồng cũ.
     if (slip.pairedSlip?.status === IssueSlipStatus.CANCELLED) {
       throw new ConflictException(
         `Phiếu mảnh ${slip.pairedSlip.code} đi cùng chuyến đã huỷ - huỷ phiếu vật tư kèm này`,
@@ -558,7 +568,8 @@ export class IssueSlipsService {
     const slipWarehouse = { id: slip.warehouseId, code: slip.warehouse.code };
     for (const line of slip.lines)
       prepared.push(await this.prepareLine(line, scope, slipWarehouse, slip.weavingPointId));
-    // Thứ tự ghi cố định theo vật tư/mảnh rồi dòng - 2 phiếu chạm cùng hàng khoá cùng thứ tự, không khoá chéo.
+    // Thứ tự ghi cố định theo vật tư/mảnh rồi dòng - 2 phiếu chạm cùng hàng khoá cùng thứ tự, không
+    // khoá chéo.
     const order = [...prepared].sort((a, b) => {
       const ma = this.sortKeyOf(a);
       const mb = this.sortKeyOf(b);
@@ -671,7 +682,22 @@ export class IssueSlipsService {
       await this.materialYieldRecipe.afterCreate(issue, userId);
     if (slip.weavingPointId) this.publishWeaving(slip.id, userId);
     this.publish(slip.id, 'UPDATED', userId);
+    if (done.steel.length > 0) this.requestFloorAlertsCheck(slip.code);
     return this.findOne(id);
+  }
+
+  /**
+   * Phiếu có dòng sắt vừa xuất: nhờ FloorAlertsService quét sớm để tin "Xuất sắt ..." tự đóng
+   * ngay thay vì đợi lượt định kỳ. Là phần phụ: lỗi chỉ ghi log, không làm hỏng xác nhận phiếu.
+   */
+  private requestFloorAlertsCheck(slipCode: string): void {
+    try {
+      this.floorAlerts.requestEvaluate({ urgent: true });
+    } catch (error) {
+      this.logger.warn(
+        `Không yêu cầu được quét nhắc việc sau khi xuất sắt (phiếu ${slipCode}): ${(error as Error).message}`,
+      );
+    }
   }
 
   /** Huỷ phiếu CHƯA xuất (in sai, người nhận không nhận...). Số phiếu giữ nguyên, không cấp lại. */
@@ -725,7 +751,8 @@ export class IssueSlipsService {
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
-    // Thủ kho chỉ thấy phiếu kho mình (họ kho phoi-son-han thấy cả kho phụ cùng họ); tổng kho (null) thấy hết.
+    // Thủ kho chỉ thấy phiếu kho mình (họ kho phoi-son-han thấy cả kho phụ cùng họ); tổng kho
+    // (null) thấy hết.
     const visible = scope ? rows.filter((r) => this.inScope(r.warehouse.code, scope)) : rows;
     const codes = await this.lenhCodesOf(...visible);
     return visible.map((r) => this.toDto(r, codes));
@@ -983,8 +1010,8 @@ export class IssueSlipsService {
   }
 
   /**
-   * Dòng "Dùng chung" (4.9): không trừ định mức lệnh nào, chỉ lấy từ tồn CHƯA giữ cho lệnh nào - tồn khả dụng trừ MỌI giữ chỗ
-   * (không loại trừ PI nào, khác luồng xuất theo lệnh).
+   * Dòng "Dùng chung" (4.9): không trừ định mức lệnh nào, chỉ lấy từ tồn CHƯA giữ cho lệnh nào -
+   * tồn khả dụng trừ MỌI giữ chỗ (không loại trừ PI nào, khác luồng xuất theo lệnh).
    */
   private async issueShared(
     tx: PrismaTx,
@@ -1033,8 +1060,9 @@ export class IssueSlipsService {
   }
 
   /**
-   * Dòng "Dùng chung" lấy ở kho CÙNG LOẠI với kho mặc định của vật tư, thuộc xưởng của thủ kho (Đợt 7: thủ kho Hàn Phước An
-   * lấy dây hàn ở kho mình). Lúc xác nhận dùng đúng kho đã ghi trên phiếu (`slipWarehouseId`), không suy lại.
+   * Dòng "Dùng chung" lấy ở kho CÙNG LOẠI với kho mặc định của vật tư, thuộc xưởng của thủ kho (thủ
+   * kho Hàn Phước An lấy dây hàn ở kho mình). Lúc xác nhận dùng đúng kho đã ghi trên phiếu
+   * (`slipWarehouseId`), không suy lại.
    */
   private async loadSharedMaterial(
     materialId: bigint,
@@ -1057,8 +1085,9 @@ export class IssueSlipsService {
     if (m.materialGroup?.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR) {
       throw new BadRequestException(`Sắt (${m.code}) xuất theo lệnh, không xuất dùng chung`);
     }
-    // Đợt 7: thủ kho Phôi/Hàn/Sơn xuất "Dùng chung" từ CHÍNH kho mình (vd đá cắt kho mặc định kho Phôi, đã chuyển một phần
-    // sang kho Hàn bằng phiếu chuyển kho) - đủ hay không do bước xác nhận kiểm tồn khả dụng của kho đó.
+    // Thủ kho Phôi/Hàn/Sơn xuất "Dùng chung" từ CHÍNH kho mình (vd đá cắt kho mặc định kho Phôi, đã
+    // chuyển một phần sang kho Hàn bằng phiếu chuyển kho) - đủ hay không do bước xác nhận kiểm tồn
+    // khả dụng của kho đó.
     const scopeWarehouse =
       !slipWarehouse && scope && warehouseFamilyOf(scope) === STEEL_FAMILY
         ? await this.prisma.warehouse.findUnique({
@@ -1096,7 +1125,10 @@ export class IssueSlipsService {
     }
   }
 
-  /** Kho của phiếu thuộc phạm vi thủ kho: đúng kho (Đợt 7: mỗi kho Phôi/Hàn/Sơn có thủ kho riêng, không còn xem chung cả họ). */
+  /**
+   * Kho của phiếu thuộc phạm vi thủ kho: đúng kho (mỗi kho Phôi/Hàn/Sơn có thủ kho riêng, không còn
+   * xem chung cả họ).
+   */
   private inScope(warehouseCode: string, scope: string): boolean {
     return warehouseCode === scope;
   }

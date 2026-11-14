@@ -100,7 +100,8 @@ export class ItemDeadlineWriter {
 
   /**
    * LUẬT GỘP khi sửa hạn lệnh gộp (2026-10-24): không có chỗ này thì gộp xong kéo hạn 1 SKU ra xa là lách được luật "chỉ gom các lệnh
-   * cách nhau ≤ 3 ngày". Đọc lại trong CÙNG giao dịch (thấy giá trị vừa ghi) và ném lỗi để rollback.
+   * cách nhau ≤ 3 ngày" (13/11/2026: khung cấu hình, mặc định 5 ngày). Đọc lại trong CÙNG giao dịch
+   * (thấy giá trị vừa ghi) và ném lỗi để rollback.
    */
   async assertMergedPiDeadlineRule(tx: MergeTx, piId: bigint): Promise<void> {
     await this.checkMerge(tx, piId, new Map());

@@ -9,6 +9,7 @@ describe('SystemConfigService', () => {
   let prisma: {
     systemConfig: { findUnique: jest.Mock; update: jest.Mock };
     mfgProduct: { findMany: jest.Mock; update: jest.Mock };
+    workshop: { findMany: jest.Mock };
     $transaction: jest.Mock;
     user: { findUnique: jest.Mock };
   };
@@ -46,6 +47,10 @@ describe('SystemConfigService', () => {
     solverBundleFactors: [14, 16, 18, 20],
     solverMaxManualCuts: 5,
     solverMaxSizesPerPattern: 5,
+    solverLaserMinTailMm: 100,
+    solverMaxSizesPerBarByWorkshop: { PHUOC_AN: 2 },
+    solverMachineByWorkshop: { PHUOC_AN: 'tu_dong' },
+    solverBundleFactorsBySpec: { V10: [60, 64], 'H10-20': [20] },
     solverMergeWindowDays: 3,
     solverMergeMaxSkus: 5,
     purchaseOverReceiptTolerancePercent: mockDecimal(0),
@@ -63,6 +68,9 @@ describe('SystemConfigService', () => {
     prisma = {
       systemConfig: { findUnique: jest.fn(), update: jest.fn() },
       mfgProduct: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
+      workshop: {
+        findMany: jest.fn().mockResolvedValue([{ code: 'PHUOC_AN' }, { code: 'PHU_AN' }]),
+      },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
       user: {
         findUnique: jest
@@ -307,7 +315,185 @@ describe('SystemConfigService', () => {
       expect(result.solverBundleFactors).toEqual([10, 12]);
       expect(result.solverMaxSizesPerPattern).toBe(4);
     });
+
+    it('findOne + getCuttingDefaults trả solverLaserMinTailMm; update ghi giá trị mới (0 = tắt)', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      expect((await service.findOne()).solverLaserMinTailMm).toBe(100);
+      expect((await service.getCuttingDefaults()).solverLaserMinTailMm).toBe(100);
+      prisma.systemConfig.update.mockResolvedValue({ ...seededConfig, solverLaserMinTailMm: 0 });
+      const result = await service.update({ companyName: 'DNA Steel', solverLaserMinTailMm: 0 });
+      expect(prisma.systemConfig.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ solverLaserMinTailMm: 0 }) as unknown,
+        }),
+      );
+      expect(result.solverLaserMinTailMm).toBe(0);
+    });
   });
+  describe('máy bắt buộc theo xưởng + số cây/bó theo quy cách (13/11/2026)', () => {
+    it('findOne + getCuttingDefaults trả 2 trường mới; sai dạng -> {}', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      const one = await service.findOne();
+      expect(one.solverMachineByWorkshop).toEqual({ PHUOC_AN: 'tu_dong' });
+      expect(one.solverBundleFactorsBySpec).toEqual({ V10: [60, 64], 'H10-20': [20] });
+      const defaults = await service.getCuttingDefaults();
+      expect(defaults.solverMachineByWorkshop).toEqual({ PHUOC_AN: 'tu_dong' });
+      expect(defaults.solverBundleFactorsBySpec).toEqual({ V10: [60, 64], 'H10-20': [20] });
+      prisma.systemConfig.findUnique.mockResolvedValue({
+        ...seededConfig,
+        solverMachineByWorkshop: ['tu_dong'],
+        solverBundleFactorsBySpec: 'x',
+      });
+      const bad = await service.findOne();
+      expect(bad.solverMachineByWorkshop).toEqual({});
+      expect(bad.solverBundleFactorsBySpec).toEqual({});
+    });
+
+    it('update lưu khoá máy (mã xưởng có thật) và bảng bó với khoá đã chuẩn hoá viết hoa', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        solverMachineByWorkshop: { PHU_AN: 'laser' },
+        solverBundleFactorsBySpec: { FI19: [30, 36] },
+      });
+      const r = await service.update({
+        companyName: 'DNA Steel',
+        solverMachineByWorkshop: { PHU_AN: 'laser' },
+        solverBundleFactorsBySpec: { ' fi19 ': [30, 36] },
+      });
+      expect(prisma.systemConfig.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            solverMachineByWorkshop: { PHU_AN: 'laser' },
+            solverBundleFactorsBySpec: { FI19: [30, 36] },
+          }) as unknown,
+        }),
+      );
+      expect(r.solverMachineByWorkshop).toEqual({ PHU_AN: 'laser' });
+      expect(r.solverBundleFactorsBySpec).toEqual({ FI19: [30, 36] });
+    });
+
+    it('{} hợp lệ cho cả hai (không tra xưởng)', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.workshop.findMany.mockClear();
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        solverMachineByWorkshop: {},
+        solverBundleFactorsBySpec: {},
+      });
+      const r = await service.update({
+        companyName: 'DNA Steel',
+        solverMachineByWorkshop: {},
+        solverBundleFactorsBySpec: {},
+      });
+      expect(r.solverMachineByWorkshop).toEqual({});
+      expect(r.solverBundleFactorsBySpec).toEqual({});
+      expect(prisma.workshop.findMany).not.toHaveBeenCalled();
+    });
+
+    it('khoá máy theo mã xưởng không có -> 400 tiếng Việt, không ghi gì', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      await expect(
+        service.update({
+          companyName: 'DNA Steel',
+          solverMachineByWorkshop: { PHUOC_AN: 'tu_dong', XUONG_MA: 'laser' },
+        }),
+      ).rejects.toThrow('Không có xưởng với mã: XUONG_MA');
+      expect(prisma.systemConfig.update).not.toHaveBeenCalled();
+    });
+
+    it('khoá bảng bó sai dạng -> 400 nói rõ khoá nào sai', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      await expect(
+        service.update({
+          companyName: 'DNA Steel',
+          solverBundleFactorsBySpec: { VUONG20: [10] },
+        }),
+      ).rejects.toThrow('Mã quy cách "VUONG20" không hợp lệ');
+      expect(prisma.systemConfig.update).not.toHaveBeenCalled();
+    });
+  });
+  describe('luật số cỡ đoạn/cây theo xưởng + dải chiều dài (13/11/2026)', () => {
+    it('findOne + getCuttingDefaults trả solverMaxSizesPerBarByWorkshop (Json -> Record); sai dạng -> {}', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      expect((await service.findOne()).solverMaxSizesPerBarByWorkshop).toEqual({ PHUOC_AN: 2 });
+      expect((await service.getCuttingDefaults()).solverMaxSizesPerBarByWorkshop).toEqual({
+        PHUOC_AN: 2,
+      });
+      prisma.systemConfig.findUnique.mockResolvedValue({
+        ...seededConfig,
+        solverMaxSizesPerBarByWorkshop: [1, 2],
+      });
+      expect((await service.findOne()).solverMaxSizesPerBarByWorkshop).toEqual({});
+    });
+
+    it('update lưu luật xưởng (mã xưởng có thật) và trả lại; {} được phép (bỏ hết luật, không tra xưởng)', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        solverMaxSizesPerBarByWorkshop: { PHUOC_AN: 3, PHU_AN: 4 },
+      });
+      const r = await service.update({
+        companyName: 'DNA Steel',
+        solverMaxSizesPerBarByWorkshop: { PHUOC_AN: 3, PHU_AN: 4 },
+      });
+      expect(prisma.systemConfig.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            solverMaxSizesPerBarByWorkshop: { PHUOC_AN: 3, PHU_AN: 4 },
+          }) as unknown,
+        }),
+      );
+      expect(r.solverMaxSizesPerBarByWorkshop).toEqual({ PHUOC_AN: 3, PHU_AN: 4 });
+
+      prisma.workshop.findMany.mockClear();
+      prisma.systemConfig.update.mockResolvedValue({
+        ...seededConfig,
+        solverMaxSizesPerBarByWorkshop: {},
+      });
+      const empty = await service.update({
+        companyName: 'DNA Steel',
+        solverMaxSizesPerBarByWorkshop: {},
+      });
+      expect(empty.solverMaxSizesPerBarByWorkshop).toEqual({});
+      expect(prisma.workshop.findMany).not.toHaveBeenCalled();
+    });
+
+    it('mã xưởng không có trong bảng xưởng -> 400 tiếng Việt, không ghi gì', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig);
+      await expect(
+        service.update({
+          companyName: 'DNA Steel',
+          solverMaxSizesPerBarByWorkshop: { PHUOC_AN: 2, XUONG_MA: 2 },
+        }),
+      ).rejects.toThrow('Không có xưởng với mã: XUONG_MA');
+      expect(prisma.systemConfig.update).not.toHaveBeenCalled();
+    });
+
+    it('solverMinLengthMm > solverMaxLengthMm -> 400 (cả khi chỉ gửi 1 trong 2 so với giá trị đang lưu)', async () => {
+      prisma.systemConfig.findUnique.mockResolvedValue(seededConfig); // 100..6000
+      await expect(
+        service.update({
+          companyName: 'DNA Steel',
+          solverMinLengthMm: 7000,
+          solverMaxLengthMm: 6500,
+        }),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.update({ companyName: 'DNA Steel', solverMinLengthMm: 6500 }),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.systemConfig.update).not.toHaveBeenCalled();
+
+      prisma.systemConfig.update.mockResolvedValue(seededConfig);
+      await service.update({
+        companyName: 'DNA Steel',
+        solverMinLengthMm: 4000,
+        solverMaxLengthMm: 6500,
+      });
+      expect(prisma.systemConfig.update).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ─── KHSX tự đổi ngưỡng hao hụt mặc định (2026-09-30) ──────────────────────────────────────
   describe('Phần A – Đợt 1 (YC9): thể tích cont', () => {
     const product = (id: bigint, over: Record<string, unknown> = {}) => ({
@@ -486,6 +672,7 @@ describe('SystemConfigService', () => {
         solverBundleFactors: [14, 16, 18, 20],
         solverMaxManualCuts: 5,
         solverMaxSizesPerPattern: 5,
+        solverLaserMinTailMm: 100,
       });
     });
 

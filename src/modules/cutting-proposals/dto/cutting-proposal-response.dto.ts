@@ -30,6 +30,65 @@ export class CuttingProposalSegmentResponseDto {
   }
 }
 
+/** Loại máy của cây theo "Quy tắc chia sắt cho máy cắt" (13/11/2026, Sếp chốt lại câu 7): TU_DONG =
+ * cây không có
+ * đoạn dập (máy tự động); LASER = cây có từ 1 đoạn dập (lỗ ô van) trở lên - máy tự động không cắt
+ * cây có lỗ ô van.
+ */
+export type CuttingPatternMachineClass = 'TU_DONG' | 'LASER';
+
+@Exclude()
+export class CuttingPatternPunchedSegmentDto {
+  @Expose() @ApiProperty({ description: 'Chiều dài đoạn cần dập (mm)' }) cutLengthMm!: number;
+  @Expose()
+  @ApiProperty({ description: 'Số đoạn dập cùng chiều dài trên 1 cây' })
+  countPerBar!: number;
+
+  constructor(partial: Partial<CuttingPatternPunchedSegmentDto>) {
+    Object.assign(this, partial);
+  }
+}
+
+@Exclude()
+export class CuttingPatternMachineGroupDto {
+  @Expose()
+  @ApiProperty({ description: 'Số cây của kiểu cắt thuộc nhóm này (tổng các nhóm = barCount)' })
+  bars!: number;
+  @Expose()
+  @ApiProperty({
+    enum: ['TU_DONG', 'LASER'],
+    description: 'Loại máy của nhóm cây',
+  })
+  machineClass!: CuttingPatternMachineClass;
+  @Expose()
+  @ApiProperty({
+    type: [CuttingPatternPunchedSegmentDto],
+    description: 'Các đoạn dập trên cây (rỗng với TU_DONG)',
+  })
+  @Type(() => CuttingPatternPunchedSegmentDto)
+  punchedSegments!: CuttingPatternPunchedSegmentDto[];
+
+  constructor(partial: Partial<CuttingPatternMachineGroupDto>) {
+    Object.assign(this, partial);
+  }
+}
+
+/**
+ * Xưởng của phương án + có được dùng laze không (xưởng bị khoá máy tự động như Phước An thì false).
+ */
+@Exclude()
+export class CuttingProposalMachineContextDto {
+  @Expose() @ApiPropertyOptional({ nullable: true }) workshopId!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) workshopName!: string | null;
+  @Expose()
+  @ApiProperty({ description: 'false = xưởng không có máy laze (cấu hình khoá máy tự động)' })
+  laserAllowed!: boolean;
+
+  constructor(partial: Partial<CuttingProposalMachineContextDto>) {
+    Object.assign(this, partial);
+  }
+}
+
 @Exclude()
 export class CuttingProposalPatternResponseDto {
   /// Id thật của CuttingProposalPattern - dùng cho CompleteCuttingDto.bundles[].proposalPatternId
@@ -48,6 +107,13 @@ export class CuttingProposalPatternResponseDto {
   @ApiProperty({ type: [CuttingProposalSegmentResponseDto] })
   @Type(() => CuttingProposalSegmentResponseDto)
   segments!: CuttingProposalSegmentResponseDto[];
+  /// Chia cây của kiểu cắt theo loại máy (13/11/2026) - CHỈ có ở GET /cutting-proposals/:id.
+  /// null/thiếu =
+  /// chưa phân loại được (lỗi nạp định mức, hoặc đường khác không tính).
+  @Expose()
+  @ApiPropertyOptional({ type: [CuttingPatternMachineGroupDto], nullable: true })
+  @Type(() => CuttingPatternMachineGroupDto)
+  machineGroups?: CuttingPatternMachineGroupDto[] | null;
 
   constructor(partial: Partial<CuttingProposalPatternResponseDto>) {
     Object.assign(this, partial);
@@ -105,10 +171,18 @@ export class CuttingProposalLineResponseDto {
   /// "fixed" = chiều dài chuẩn (SystemConfig.solverStockLengths). "scan" = chiều dài ĐẶT RIÊNG,
   /// solver vét cạn ra vì không cỡ chuẩn nào đạt ngưỡng hao hụt (2026-08-26, Sếp mở lại auto_scan
   /// cho ca không gộp được nữa - xem CuttingProposalsService lịch sử tại nơi gọi solver). null =
-  /// dòng infeasible, hoặc phương án tính trước 2026-08-26.
+  /// dòng infeasible, hoặc phương án tính trước 2026-08-26. "stock" (13/11/2026) = chiều dài KHÔNG
+  /// chuẩn nhưng đang
+  /// có tồn ở kho Phôi - bộ giải thử cùng cây chuẩn và chọn vì ít hao hụt hơn; khi mua hàng coi như
+  /// cây có chiều dài
+  /// cụ thể (phần thiếu so với tồn mua đúng chiều dài đó).
   @Expose()
-  @ApiPropertyOptional({ nullable: true, enum: ['fixed', 'scan'] })
-  lengthSource!: 'fixed' | 'scan' | null;
+  @ApiPropertyOptional({ nullable: true, enum: ['fixed', 'scan', 'stock'] })
+  lengthSource!: 'fixed' | 'scan' | 'stock' | null;
+  /// Ghi chú khi xưởng có luật "tối đa N cỡ đoạn/cây" mà loại sắt này phải nới số cỡ (13/11/2026),
+  /// vd "Xưởng Phước An
+  /// tối đa 2 cỡ đoạn/cây: không đạt ngưỡng 1% nên nới lên 3 cỡ". null = không nới / không có luật.
+  @Expose() @ApiPropertyOptional({ nullable: true, type: String }) sizesRelaxNote!: string | null;
   /// Máy cắt ĐÃ DÙNG để giải dòng này (2026-10-23): 'laser' | 'tu_dong'. null với dòng không khả thi và với
   /// phương án tính trước khi có máy cắt (đều là MC Laser).
   @Expose()
@@ -120,7 +194,10 @@ export class CuttingProposalLineResponseDto {
   @Type(() => CuttingProposalBundleSummaryResponseDto)
   bundleSummary!: CuttingProposalBundleSummaryResponseDto | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) totalBars!: number | null;
+  /// Hao hụt CHỈ TÍNH CÙI (khúc thừa cuối cây) từ 13/11/2026 - tề đầu, lưỡi cắt, đoạn dư không
+  /// tính. Phương án cũ giữ số cũ.
   @Expose() @ApiPropertyOptional({ nullable: true }) totalWasteMm!: number | null;
+  /// % hao hụt = Σ cùi ÷ Σ chiều dài cây mua (13/11/2026).
   @Expose() @ApiPropertyOptional({ nullable: true }) wastePercentage!: number | null;
   @Expose()
   @ApiPropertyOptional({ type: [LengthComparisonEntryResponseDto], nullable: true })
@@ -265,6 +342,11 @@ export class CuttingProposalResponseDto {
   @ApiPropertyOptional({ type: [CuttingProposalPendingMaterialResponseDto], nullable: true })
   @Type(() => CuttingProposalPendingMaterialResponseDto)
   pendingMaterials?: CuttingProposalPendingMaterialResponseDto[] | null;
+  /// Xưởng + laze có được dùng không (13/11/2026) - CHỈ có ở findOne; null khi không tính được.
+  @Expose()
+  @ApiPropertyOptional({ type: CuttingProposalMachineContextDto, nullable: true })
+  @Type(() => CuttingProposalMachineContextDto)
+  machineContext?: CuttingProposalMachineContextDto | null;
 
   /// true = phương án tính TRƯỚC khi có PI (luồng "Solve trước → tạo PI", 2026-09-30) - có ảnh
   /// chụp đầu vào ở `items`. false với phương án neo PO/PI theo luồng cũ.

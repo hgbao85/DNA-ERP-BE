@@ -41,6 +41,58 @@ export interface ProposeRequest {
   max_manual_cuts?: number | string;
   /** số cỡ đoạn tối đa trên 1 kiểu cắt (máy MCTĐ chỉ nhập được 5); mặc định 5 */
   max_sizes_per_pattern?: number | string;
+  /**
+   * Tâm dò chiều dài đặt riêng (mm) - 13/11/2026, Sếp: "dò từ 6.000 ra hai phía (6.000 → 5.950 /
+   * 6.050 → 5.900 / 6.100…),
+   * lấy chiều dài đạt ngưỡng gần cây chuẩn nhất". Thiếu = chiều dài chuẩn đầu tiên của
+   * `stock_lengths`.
+   * Cùng khoảng cách thì thử chiều dài NGẮN hơn trước. Cũng dùng để phá hoà ở bước thử các chiều
+   * dài cố định
+   * (bằng % hao hụt thì lấy chiều dài gần tâm nhất, tức ưu tiên cây chuẩn).
+   */
+  scan_center_length?: number | string;
+  /**
+   * Luật xưởng "tối đa N cỡ đoạn/cây" (13/11/2026, Sếp: Phước An = 2; "không đạt ≤1% thì thêm cỡ,
+   * ghi lý do").
+   * THỨ TỰ (sửa 13/11/2026 theo quy tắc chia sắt 07/11: "tính sơ đồ theo cây 6.000; mỗi cây cố gắng
+   * tối đa 2 cỡ đoạn; 2 cỡ không
+   * đạt hao hụt dưới 1% thì được nhiều hơn, phải ghi chú"): ƯU TIÊN GIỮ CHIỀU DÀI CỐ ĐỊNH (cây
+   * chuẩn + chiều dài đang có tồn).
+   * Giai đoạn 1 - chỉ các chiều dài cố định, KHÔNG dò: thử trần N cỡ/cây, không đạt ngưỡng thì N+1,
+   * N+2… tới giới hạn của máy
+   * (laser: 4 rồi bỏ giới hạn; tu_dong: `max_sizes_per_pattern`). Mức đầu tiên đạt ngưỡng thì dừng.
+   * Giai đoạn 2 - chỉ khi giai đoạn 1 không mức nào đạt và `auto_scan` bật: dò chiều dài đặt riêng,
+   * lại theo thang N, N+1…
+   * Thiếu / null / ≥ giới hạn máy = hành vi cũ. Áp cho cả 2 máy.
+   */
+  max_sizes_per_bar_start?: number | string | null;
+  /**
+   * Hệ số bó RIÊNG từng loại sắt cho MC Tự động (13/11/2026, quy tắc chia sắt 07/11 mục 4: số
+   * cây/bó theo quy cách). Khoá = khoá
+   * loại sắt như `stock_lengths_by_material`. Giá trị là danh sách hệ số (mảng số hoặc chuỗi) ->
+   * loại sắt đó dùng các hệ số này thay
+   * `bundle_factors`; giá trị `null` -> quy cách ngoài bảng, KHÔNG cắt MC Tự động: loại sắt đó giải
+   * theo cắt TỪNG CÂY (như 'laser')
+   * với `fallback_trim_start` / `fallback_blade_width`, và dòng kết quả mang `machine: 'laser'`.
+   * Loại sắt không có khoá = dùng
+   * `bundle_factors` chung như cũ. Chỉ có tác dụng khi `machine = 'tu_dong'`.
+   */
+  bundle_factors_by_material?: Record<string, string | number | Array<number | string> | null>;
+  /**
+   * Tề đầu / lưỡi cắt (mm) cho loại sắt phải cắt từng cây khi `bundle_factors_by_material[khoá] =
+   * null`. Thiếu = 10 / 1,0.
+   */
+  fallback_trim_start?: number | string;
+  fallback_blade_width?: number | string;
+  /**
+   * MC Laser: nhát cắt cuối phải ra 1 đoạn DÀI HƠN số này (mm), tính cả phần cùi (13/11/2026, Sếp
+   * chốt câu 11). Kiểu cắt giải
+   * theo cắt từng cây (laser, hoặc loại sắt `bundle_factors_by_material = null`) chỉ hợp lệ khi
+   * `đoạn dài nhất trên cây + cùi >
+   * laser_min_tail_mm` (đoạn đó để cuối, công nhân cắt tay). Thiếu / 0 = không áp. Không áp cho cắt
+   * theo bó (MC Tự động).
+   */
+  laser_min_tail_mm?: number | string;
 }
 
 export type MachineKind = 'laser' | 'tu_dong';
@@ -104,6 +156,14 @@ export interface PurchasePlanItemFeasible {
   machine: MachineKind;
   /** chỉ khi machine = 'tu_dong' */
   bundle_summary?: BundleSummary;
+  /**
+   * Chỉ có khi request gửi `max_sizes_per_bar_start` còn hiệu lực (13/11/2026):
+   * `sizes_per_bar_start` = mức của xưởng,
+   * `sizes_per_bar_limit` = mức ĐÃ DÙNG để ra kết quả này (null = đã bỏ giới hạn). limit ≠ start
+   * nghĩa là đã phải nới.
+   */
+  sizes_per_bar_start?: number | null;
+  sizes_per_bar_limit?: number | null;
 }
 
 export interface PurchasePlanItemInfeasible {
@@ -287,6 +347,14 @@ export interface OneMaterialOk {
   scan_optimal: LengthEval | null;
   machine: MachineKind;
   bundle_summary?: BundleSummary;
+  /** số cỡ/cây đã áp ở lần giải được chọn (null = không giới hạn) */
+  limited_sizes_per_bar?: number | null;
+  /**
+   * luật xưởng số cỡ/cây (13/11/2026): chỉ có khi có luật còn hiệu lực - xem
+   * PurchasePlanItemFeasible
+   */
+  sizes_per_bar_start?: number | null;
+  sizes_per_bar_limit?: number | null;
   stats: SolveStats;
 }
 

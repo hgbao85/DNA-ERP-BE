@@ -127,6 +127,34 @@ function parseStockLengthsByMaterial(raw: unknown): Record<string, number[]> {
   return out;
 }
 
+/**
+ * `bundle_factors_by_material` (13/11/2026): khoá chuẩn hoá như stock_lengths_by_material. Giá trị
+ * null -> loại sắt cắt từng cây
+ * (Map giữ null); mảng/chuỗi -> hệ số đã khử trùng, sắp như bundle_factors. `invalid` = khoá có giá
+ * trị nhưng không còn hệ số > 1.
+ */
+function parseBundleFactorsByMaterial(raw: unknown): {
+  map: Map<string, number[] | null>;
+  invalid: string[];
+} {
+  const map = new Map<string, number[] | null>();
+  const invalid: string[] = [];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { map, invalid };
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (v === undefined) continue;
+    const key = normalizeMaterialKey(k);
+    if (!key) continue;
+    if (v === null) {
+      map.set(key, null);
+      continue;
+    }
+    const factors = normalizeBundleFactors(parseLengths(v));
+    if (!factors.length) invalid.push(key);
+    else map.set(key, factors);
+  }
+  return { map, invalid };
+}
+
 function round4(v: number): number {
   return Math.round(v * 1e4) / 1e4;
 }
@@ -214,6 +242,38 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
       : 0;
   const bundle: BundleOptions | undefined =
     machine === 'tu_dong' ? { factors: bundleFactors, maxManualBars: maxManualCuts } : undefined;
+  // Hệ số bó riêng từng loại sắt + thông số cắt từng cây cho loại sắt ngoài bảng (chỉ có tác dụng
+  // khi tu_dong).
+  const bundleByMaterial = parseBundleFactorsByMaterial(
+    machine === 'tu_dong' ? body.bundle_factors_by_material : undefined,
+  );
+  if (bundleByMaterial.invalid.length)
+    return err(
+      'INVALID_INPUT',
+      `bundle_factors_by_material: hệ số bó (cây/bó) phải có ít nhất một số nguyên > 1 (loại sắt: ${bundleByMaterial.invalid.join(', ')})`,
+    );
+  const fallbackTrimStart = Math.max(0, toFloat(body.fallback_trim_start ?? 10, 10));
+  const fallbackBladeWidth = Math.max(0, toFloat(body.fallback_blade_width ?? 1.0, 1.0));
+
+  // Tâm dò chiều dài (13/11/2026): thiếu/không hợp lệ -> chiều dài chuẩn đầu tiên của stock_lengths
+  // toàn cục.
+  const scanCenterRaw = toFloat(body.scan_center_length, 0);
+  const scanCenter = scanCenterRaw > 0 ? scanCenterRaw : stockLengths[0];
+  // Luật xưởng "tối đa N cỡ/cây": số nguyên ≥ 1; rỗng/null/không hợp lệ = không có luật.
+  const sizesStartRaw = body.max_sizes_per_bar_start;
+  const sizesStartNum =
+    sizesStartRaw === null || sizesStartRaw === undefined || str(sizesStartRaw).trim() === ''
+      ? NaN
+      : Number(sizesStartRaw);
+  const maxSizesPerBarStart =
+    Number.isFinite(sizesStartNum) && Math.trunc(sizesStartNum) >= 1
+      ? Math.trunc(sizesStartNum)
+      : null;
+
+  // Luật laze "nhát cắt cuối" (13/11/2026, Sếp câu 11): số không âm (mm); thiếu / 0 / rác = không
+  // áp.
+  const laserMinTailRaw = toFloat(body.laser_min_tail_mm, 0);
+  const laserMinTailMm = laserMinTailRaw > 0 ? laserMinTailRaw : 0;
 
   const groups = listMaterialGroups(bomRows, numSets);
   if (!groups.length) return err('INVALID_INPUT', 'Không tách được loại sắt nào từ BOM');
@@ -237,14 +297,32 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
     const gStock = stockLengthsByMaterial[key]?.map(roundUpToStockGrid) ?? stockLengths;
     resolvedStock[g.material] = gStock;
 
+    // Loại sắt có khoá: null = cắt từng cây (như laser, thông số fallback); mảng = hệ số bó riêng.
+    // Không khoá = chung.
+    // Hệ số riêng theo quy cách (quy tắc chia sắt 07/11: "chia theo bó, PHẦN LẺ không đủ bó thì cắt
+    // lẻ"): phần lẻ được phép tới
+    // (bó nhỏ nhất − 1) cây, không bị trần `max_manual_cuts` chung (5) - nếu không, quy cách bó lớn
+    // (vd V10: bó nhỏ nhất 60 cây) mà
+    // lệnh chỉ cần vài chục cây sẽ vô nghiệm hoặc bị ép mua dư cả bó.
+    const ownFactors = bundleByMaterial.map.get(key);
+    const cutEach = ownFactors === null;
+    const gBundle: BundleOptions | undefined = cutEach
+      ? undefined
+      : bundle && ownFactors
+        ? {
+            factors: ownFactors,
+            maxManualBars: Math.max(maxManualCuts, Math.min(...ownFactors) - 1),
+          }
+        : bundle;
+
     const t0 = performance.now();
     const res = optimizeOneMaterial(
       highs,
       g.sizes,
       g.demands,
       gStock,
-      trimStart,
-      bladeWidth,
+      cutEach ? fallbackTrimStart : trimStart,
+      cutEach ? fallbackBladeWidth : bladeWidth,
       gMaxWaste,
       {
         minLen,
@@ -254,7 +332,12 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
         maxSurplus,
         autoScan,
         stopOnFirst,
-        ...(bundle ? { bundle, maxSizesPerBar: maxSizesPerPattern } : {}),
+        scanCenter,
+        ...(maxSizesPerBarStart !== null ? { maxSizesPerBarStart } : {}),
+        ...(gBundle ? { bundle: gBundle, maxSizesPerBar: maxSizesPerPattern } : {}),
+        // Cắt từng cây (laser, hoặc loại sắt cutEach khi tu_dong) mới chịu luật nhát cắt cuối; cắt
+        // theo bó thì không.
+        ...(!gBundle && laserMinTailMm > 0 ? { laserMinTailMm } : {}),
       },
     );
     const solveSeconds = Math.round(((performance.now() - t0) / 1000) * 100) / 100;
@@ -314,6 +397,12 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
       optimal_custom_length: res.scan_optimal ? res.scan_optimal.length : null,
       machine: res.machine,
       ...(res.bundle_summary ? { bundle_summary: res.bundle_summary } : {}),
+      ...(res.sizes_per_bar_start !== undefined
+        ? {
+            sizes_per_bar_start: res.sizes_per_bar_start,
+            sizes_per_bar_limit: res.sizes_per_bar_limit ?? null,
+          }
+        : {}),
     });
     totalBarsAll += res.total_bars;
     totalPurchased += res.total_purchased_mm;

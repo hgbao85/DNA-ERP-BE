@@ -13,6 +13,7 @@ import {
   MfgStage,
   ProcessStep,
   Prisma,
+  SolverMachine,
   WorkstationKind,
 } from '../../generated/prisma/client';
 import { MFG_FLOOR_WAREHOUSE_SCOPE } from '../../common/constants/role-permissions.constant';
@@ -24,6 +25,10 @@ import {
   MaterialChoiceRefDto,
   toMaterialChoiceRef,
 } from '../../common/utils/material-choice-ref.util';
+import {
+  WorkshopScope,
+  WorkshopScopeService,
+} from '../../common/workshop-scope/workshop-scope.service';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
@@ -33,6 +38,11 @@ import {
   UpdateFloorWorkerDto,
 } from './dto/floor-worker.dto';
 import { CreateWorkstationDto, UpdateWorkstationDto } from './dto/workstation.dto';
+import {
+  queueLockKey,
+  queueWorkshopIdOfPi,
+  queueWorkshopIdsOfPis,
+} from './floor-queue-workshop.util';
 import {
   addBuckets,
   bucketLine,
@@ -47,6 +57,9 @@ import {
 function newQrToken(): string {
   return crypto.randomBytes(18).toString('base64url');
 }
+
+/** Nạp tên xưởng cùng lúc với máy (không N+1) - 13/11/2026. */
+const WORKSTATION_INCLUDE = { workshop: { select: { name: true } } } as const;
 
 const WORKER_SELECT = {
   id: true,
@@ -63,7 +76,21 @@ const WORKER_SELECT = {
 } as const;
 
 const QUEUE_INCLUDE = {
-  productionInvoice: { select: { id: true, code: true } },
+  productionInvoice: {
+    select: {
+      id: true,
+      code: true,
+      // Xưởng của CHÍNH lệnh (khác xưởng hàng đợi ở tổ Sơn: lệnh Phước An sơn ở Phú An) - FE ghi
+      // "Lệnh của Xưởng Phước An".
+      items: {
+        where: { workshopId: { not: null } },
+        orderBy: { id: 'asc' },
+        take: 1,
+        select: { workshop: { select: { name: true } } },
+      },
+    },
+  },
+  workshop: { select: { id: true, name: true } },
   startedBy: { select: { firstName: true, lastName: true } },
   endedBy: { select: { firstName: true, lastName: true } },
 } as const;
@@ -221,6 +248,7 @@ export class FloorAdminService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly steelIssues: SteelIssuesService,
     private readonly productionBatches: ProductionBatchesService,
+    private readonly workshopScope: WorkshopScopeService,
   ) {}
 
   // ─── Địa chỉ ERP dùng cho tem QR ────────────────────────────────────────────
@@ -242,12 +270,21 @@ export class FloorAdminService {
   async listWorkstations() {
     const rows = await this.prisma.workstation.findMany({
       orderBy: [{ stage: 'asc' }, { code: 'asc' }],
+      include: WORKSTATION_INCLUDE,
     });
     return rows.map((w) => this.toWorkstation(w));
   }
 
   async createWorkstation(dto: CreateWorkstationDto) {
     this.assertWorkstationShape(dto.stage, dto.kind, dto.processStep ?? null);
+    // 13/11/2026: máy cắt BẮT BUỘC có loại (CHECK DB) - thiếu thì mặc định laser; loại khác không
+    // được mang loại máy cắt.
+    if (dto.kind !== WorkstationKind.CUT && dto.cutMachineType) {
+      throw new BadRequestException('Chỉ máy cắt mới có loại máy cắt (MC Laser / MC Tự động)');
+    }
+    const cutMachineType =
+      dto.kind === WorkstationKind.CUT ? (dto.cutMachineType ?? SolverMachine.laser) : null;
+    const workshopId = dto.workshopId ? await this.assertWorkshopUsable(dto.workshopId) : null;
     const code = dto.code.trim().toUpperCase();
     try {
       const created = await this.prisma.workstation.create({
@@ -257,8 +294,11 @@ export class FloorAdminService {
           stage: dto.stage,
           kind: dto.kind,
           processStep: dto.kind === WorkstationKind.STEP ? dto.processStep : null,
+          cutMachineType,
+          workshopId,
           qrToken: newQrToken(),
         },
+        include: WORKSTATION_INCLUDE,
       });
       return this.toWorkstation(created);
     } catch (e) {
@@ -270,10 +310,24 @@ export class FloorAdminService {
   }
 
   async updateWorkstation(id: string, dto: UpdateWorkstationDto) {
-    await this.findWorkstationOrThrow(id);
+    const current = await this.findWorkstationOrThrow(id);
+    if (dto.cutMachineType !== undefined && current.kind !== WorkstationKind.CUT) {
+      throw new BadRequestException('Chỉ máy cắt mới đổi được loại máy cắt');
+    }
+    // workshopId: undefined = giữ nguyên, null = bỏ xưởng, chuỗi = đổi xưởng (phải đang hoạt động).
+    let workshopId: bigint | null | undefined;
+    if (dto.workshopId === null) workshopId = null;
+    else if (dto.workshopId !== undefined)
+      workshopId = await this.assertWorkshopUsable(dto.workshopId);
     const updated = await this.prisma.workstation.update({
       where: { id: parseBigIntId(id) },
-      data: { name: dto.name?.trim(), isActive: dto.isActive },
+      data: {
+        name: dto.name?.trim(),
+        isActive: dto.isActive,
+        cutMachineType: dto.cutMachineType,
+        workshopId,
+      },
+      include: WORKSTATION_INCLUDE,
     });
     return this.toWorkstation(updated);
   }
@@ -284,6 +338,7 @@ export class FloorAdminService {
     const updated = await this.prisma.workstation.update({
       where: { id: parseBigIntId(id) },
       data: { qrToken: newQrToken() },
+      include: WORKSTATION_INCLUDE,
     });
     return this.toWorkstation(updated);
   }
@@ -308,6 +363,19 @@ export class FloorAdminService {
     }
   }
 
+  /** Xưởng gán cho máy phải tồn tại và đang hoạt động; trả id số để ghi. */
+  private async assertWorkshopUsable(workshopId: string): Promise<bigint> {
+    const wid = parseBigIntId(workshopId);
+    const ws = await this.prisma.workshop.findUnique({
+      where: { id: wid },
+      select: { id: true, isActive: true },
+    });
+    if (!ws) throw new BadRequestException(`Xưởng ${workshopId} không tồn tại`);
+    if (!ws.isActive)
+      throw new BadRequestException('Xưởng này đã ngừng hoạt động, không gán máy vào được');
+    return wid;
+  }
+
   private async findWorkstationOrThrow(id: string) {
     const w = await this.prisma.workstation.findUnique({ where: { id: parseBigIntId(id) } });
     if (!w) throw new NotFoundException(`Điểm làm việc ${id} không tồn tại`);
@@ -324,6 +392,9 @@ export class FloorAdminService {
     qrToken: string;
     isActive: boolean;
     createdAt: Date;
+    workshopId?: bigint | null;
+    cutMachineType?: SolverMachine | null;
+    workshop?: { name: string } | null;
   }) {
     return {
       id: w.id.toString(),
@@ -335,6 +406,9 @@ export class FloorAdminService {
       qrToken: w.qrToken,
       isActive: w.isActive,
       createdAt: w.createdAt,
+      workshopId: w.workshopId != null ? w.workshopId.toString() : null,
+      workshopName: w.workshop?.name ?? null,
+      cutMachineType: w.cutMachineType ?? null,
     };
   }
 
@@ -510,14 +584,50 @@ export class FloorAdminService {
 
   // ─── Hàng đợi PI theo tổ (mục 19) ───────────────────────────────────────────
 
-  async listQueue(stage?: FloorWorkerStage) {
+  /**
+   * Chọn xưởng của request hàng đợi (đợt C1, 14/11/2026): QLSX gắn xưởng luôn chỉ làm việc với
+   * xưởng mình (truyền xưởng khác -> 403);
+   * người không gắn xưởng (KHSX/Sếp/Admin/QLSX chung) tuỳ chọn - hoặc bắt buộc (`required`) với
+   * thao tác ghi không chỉ ra được xưởng
+   * từ dòng nào (advance/reopen).
+   */
+  private resolveQueueWorkshop(
+    scope: WorkshopScope,
+    requested: string | undefined,
+    required: true,
+  ): bigint;
+  private resolveQueueWorkshop(
+    scope: WorkshopScope,
+    requested: string | undefined,
+    required: false,
+  ): bigint | null;
+  private resolveQueueWorkshop(
+    scope: WorkshopScope,
+    requested: string | undefined,
+    required: boolean,
+  ): bigint | null {
+    const asked = requested ? parseBigIntId(requested) : null;
+    if (scope.workshopId != null) {
+      this.workshopScope.assertCanManage(scope, [asked], 'hàng đợi này');
+      return scope.workshopId;
+    }
+    if (asked == null && required) throw new BadRequestException('Chọn xưởng');
+    return asked;
+  }
+
+  /** `workshopId` null/undefined = mọi xưởng. */
+  private async queueRows(stage?: FloorWorkerStage, workshopId?: bigint | null) {
     const rows = await this.prisma.floorQueueEntry.findMany({
-      where: stage ? { stage: stage as MfgStage } : undefined,
+      where: {
+        ...(stage ? { stage: stage as MfgStage } : {}),
+        ...(workshopId != null ? { workshopId } : {}),
+      },
       include: QUEUE_INCLUDE,
       orderBy: [{ stage: 'asc' }, { position: 'asc' }],
     });
     const activePiIds = await this.findPiIdsWithActiveFloor(rows.map((r) => r.productionInvoiceId));
-    // Tiến độ chỉ tính cho PI ĐANG CHẠY (mỗi tổ đúng 1) - để nhắc "đủ số, chuyển PI tiếp" (mục 19).
+    // Tiến độ chỉ tính cho PI ĐANG CHẠY (mỗi tổ mỗi xưởng đúng 1) - để nhắc "đủ số, chuyển PI tiếp"
+    // (mục 19).
     const progressById = new Map<string, FloorProgress | null>();
     await Promise.all(
       rows
@@ -530,11 +640,16 @@ export class FloorAdminService {
         ),
     );
     const reopenable = await this.findReopenableIds(rows);
-    // RUNNING trước, rồi QUEUED theo thứ tự, DONE mới nhất cuối cùng.
+    // RUNNING trước, rồi QUEUED theo thứ tự, DONE mới nhất cuối cùng; mỗi tổ gom theo xưởng.
     const rank = { RUNNING: 0, QUEUED: 1, DONE: 2 } as const;
     return rows
       .sort((a, b) => {
         if (a.stage !== b.stage) return a.stage.localeCompare(b.stage);
+        if (a.workshopId !== b.workshopId) {
+          if (a.workshopId == null) return 1;
+          if (b.workshopId == null) return -1;
+          return a.workshopId < b.workshopId ? -1 : 1;
+        }
         const r = rank[a.status] - rank[b.status];
         if (r !== 0) return r;
         if (a.status === FloorQueueStatus.DONE)
@@ -552,22 +667,36 @@ export class FloorAdminService {
   }
 
   /**
-   * Dòng DONE gần nhất của từng tổ mà "Mở lại PI vừa chuyển" làm được: tổ không có PI đang chạy, hoặc PI đang chạy
+   * `GET /floor/queue`: QLSX gắn xưởng chỉ thấy xưởng mình (truyền xưởng khác -> 403); người không
+   * gắn xưởng lọc theo `workshopId`
+   * nếu có, không có thì thấy mọi xưởng.
+   */
+  async listQueue(userId: string, stage?: FloorWorkerStage, workshopId?: string) {
+    const scope = await this.workshopScope.getScope(userId);
+    return this.queueRows(stage, this.resolveQueueWorkshop(scope, workshopId, false));
+  }
+
+  /**
+   * Dòng DONE gần nhất của từng (tổ, xưởng) mà "Mở lại PI vừa chuyển" làm được: hàng đợi không có
+   * PI đang chạy, hoặc PI đang chạy
    * CHƯA có lần báo nào của công nhân (trả nó về hàng đợi không làm mất việc ai đã báo). Cùng điều kiện với
    * `reopenLast` - FE chỉ bày nút khi bấm được.
    */
   private async findReopenableIds(rows: QueueRow[]): Promise<Set<string>> {
     const out = new Set<string>();
-    const stages = [...new Set(rows.map((r) => r.stage))];
+    const queues = [...new Set(rows.map((r) => `${r.stage}:${r.workshopId ?? ''}`))];
     await Promise.all(
-      stages.map(async (stage) => {
-        const inStage = rows.filter((r) => r.stage === stage);
-        const last = latestDone(inStage);
+      queues.map(async (key) => {
+        const inQueue = rows.filter((r) => `${r.stage}:${r.workshopId ?? ''}` === key);
+        const last = latestDone(inQueue);
         if (!last) return;
-        const running = inStage.find((r) => r.status === FloorQueueStatus.RUNNING);
+        const running = inQueue.find((r) => r.status === FloorQueueStatus.RUNNING);
         if (running) {
           const reports = await this.prisma.floorReport.count({
-            where: { productionInvoiceId: running.productionInvoiceId, workstation: { stage } },
+            where: {
+              productionInvoiceId: running.productionInvoiceId,
+              workstation: { stage: last.stage },
+            },
           });
           if (reports > 0) return;
         }
@@ -666,8 +795,16 @@ export class FloorAdminService {
     };
   }
 
-  /** PI đã có lệnh sản xuất, chưa nằm trong hàng đợi của tổ (kể cả đã xong) - ô chọn "Thêm PI vào hàng đợi". */
-  async queueCandidates(stage: FloorWorkerStage) {
+  /**
+   * PI đã có lệnh sản xuất, chưa nằm trong hàng đợi của tổ (kể cả đã xong) - ô chọn "Thêm PI vào
+   * hàng đợi". Chỉ PI có xưởng hàng
+   * đợi (của tổ đó) = xưởng đang xem: QLSX gắn xưởng lấy xưởng mình; người không gắn xưởng lọc theo
+   * `workshopId`, không truyền thì
+   * trả mọi PI. Mỗi PI kèm xưởng hàng đợi của nó.
+   */
+  async queueCandidates(userId: string, stage: FloorWorkerStage, workshopId?: string) {
+    const scope = await this.workshopScope.getScope(userId);
+    const ws = this.resolveQueueWorkshop(scope, workshopId, false);
     const rows = await this.prisma.productionInvoice.findMany({
       where: {
         floorQueueEntries: { none: { stage: stage as MfgStage } },
@@ -675,7 +812,9 @@ export class FloorAdminService {
         status: { not: 'CANCELLED' },
       },
       orderBy: { id: 'desc' },
-      take: 60,
+      // Lọc xưởng làm trong bộ nhớ (xưởng hàng đợi suy từ xưởng của PI + xưởng sơn nhờ) nên quét
+      // rộng hơn 60 khi có lọc.
+      take: ws != null ? 500 : 60,
       select: {
         id: true,
         code: true,
@@ -686,13 +825,38 @@ export class FloorAdminService {
         },
       },
     });
-    return rows.map((r) => ({
-      productionInvoiceId: r.id.toString(),
-      code: r.code,
-      deadline: r.deadline,
-      orderCount: r.items.length,
-      activeOrderCount: r.items.filter((i) => i.productionOrder?.floorStage === 'ACTIVE').length,
-    }));
+    const queueWs = await queueWorkshopIdsOfPis(
+      this.prisma,
+      stage,
+      rows.map((r) => r.id),
+    );
+    const picked = rows
+      .filter((r) => ws == null || queueWs.get(r.id.toString()) === ws)
+      .slice(0, 60);
+    const wsIds = [
+      ...new Set(picked.map((r) => queueWs.get(r.id.toString())).filter((x) => x != null)),
+    ];
+    const names = new Map(
+      (wsIds.length > 0
+        ? await this.prisma.workshop.findMany({
+            where: { id: { in: wsIds } },
+            select: { id: true, name: true },
+          })
+        : []
+      ).map((w) => [w.id.toString(), w.name]),
+    );
+    return picked.map((r) => {
+      const wId = queueWs.get(r.id.toString()) ?? null;
+      return {
+        productionInvoiceId: r.id.toString(),
+        code: r.code,
+        deadline: r.deadline,
+        orderCount: r.items.length,
+        activeOrderCount: r.items.filter((i) => i.productionOrder?.floorStage === 'ACTIVE').length,
+        workshopId: wId?.toString() ?? null,
+        workshopName: wId != null ? (names.get(wId.toString()) ?? null) : null,
+      };
+    });
   }
 
   async enqueue(stage: FloorWorkerStage, productionInvoiceId: string, actorId: string) {
@@ -708,8 +872,12 @@ export class FloorAdminService {
     if (orderCount === 0) {
       throw new BadRequestException(`${pi.code} chưa được Sếp duyệt (chưa có lệnh sản xuất nào)`);
     }
+    // Xưởng hàng đợi của PI ở tổ này (Sơn của xưởng nhờ sơn = nơi sơn); QLSX gắn xưởng khác -> 403.
+    const wsId = await queueWorkshopIdOfPi(this.prisma, stage, piId);
+    const scope = await this.workshopScope.getScope(actorId);
+    this.workshopScope.assertCanManage(scope, [wsId], `${pi.code} (hàng đợi tổ ${stage})`);
     await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `floor-queue:${stage}`);
+      await lockBusinessKey(tx, queueLockKey(stage, wsId));
       const dup = await tx.floorQueueEntry.findUnique({
         where: {
           stage_productionInvoiceId: { stage: stage as MfgStage, productionInvoiceId: piId },
@@ -723,27 +891,55 @@ export class FloorAdminService {
         );
       }
       const last = await tx.floorQueueEntry.aggregate({
-        where: { stage: stage as MfgStage },
+        where: { stage: stage as MfgStage, workshopId: wsId },
         _max: { position: true },
       });
       await tx.floorQueueEntry.create({
         data: {
           stage: stage as MfgStage,
           productionInvoiceId: piId,
+          workshopId: wsId,
           position: (last._max.position ?? 0) + 1,
           queuedById: actorId,
         },
       });
     });
-    return this.listQueue(stage);
+    return this.queueRows(stage, wsId);
   }
 
-  async reorder(stage: FloorWorkerStage, entryIds: string[]) {
+  /**
+   * Xếp lại các PI đang chờ của 1 (tổ, xưởng): mọi dòng phải cùng 1 xưởng (lấy từ dòng), đủ và đúng
+   * tập QUEUED của hàng đợi đó.
+   */
+  async reorder(userId: string, stage: FloorWorkerStage, entryIds: string[], workshopId?: string) {
     const ids = entryIds.map(parseBigIntId);
+    if (new Set(ids.map(String)).size !== ids.length) {
+      throw new BadRequestException('Danh sách PI bị trùng');
+    }
+    const entries = await this.prisma.floorQueueEntry.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, stage: true, workshopId: true },
+    });
+    if (entries.length !== ids.length) {
+      throw new ConflictException('Danh sách PI đang chờ đã thay đổi - tải lại rồi xếp lại');
+    }
+    if (entries.some((e) => e.stage !== (stage as MfgStage))) {
+      throw new BadRequestException(`Có dòng không thuộc hàng đợi tổ ${stage}`);
+    }
+    const wsIds = new Set(entries.map((e) => String(e.workshopId)));
+    if (wsIds.size !== 1) {
+      throw new BadRequestException('Các PI phải cùng một xưởng - mỗi xưởng có hàng đợi riêng');
+    }
+    const wsId = entries[0].workshopId;
+    if (workshopId && parseBigIntId(workshopId) !== wsId) {
+      throw new BadRequestException('Xưởng không khớp với các PI được xếp');
+    }
+    const scope = await this.workshopScope.getScope(userId);
+    this.workshopScope.assertCanManage(scope, [wsId], 'hàng đợi này');
     await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `floor-queue:${stage}`);
+      await lockBusinessKey(tx, queueLockKey(stage, wsId));
       const queued = await tx.floorQueueEntry.findMany({
-        where: { stage: stage as MfgStage, status: FloorQueueStatus.QUEUED },
+        where: { stage: stage as MfgStage, workshopId: wsId, status: FloorQueueStatus.QUEUED },
         select: { id: true, position: true },
       });
       const current = new Set(queued.map((q) => q.id.toString()));
@@ -755,40 +951,47 @@ export class FloorAdminService {
         await tx.floorQueueEntry.update({ where: { id }, data: { position: base + i } });
       }
     });
-    return this.listQueue(stage);
+    return this.queueRows(stage, wsId);
   }
 
   /** Bỏ 1 PI CHƯA chạy khỏi hàng đợi. PI đang chạy/đã xong không bỏ được (giữ lịch sử PI–tổ). */
-  async removeEntry(id: string) {
+  async removeEntry(userId: string, id: string) {
     const entry = await this.prisma.floorQueueEntry.findUnique({
       where: { id: parseBigIntId(id) },
     });
     if (!entry) throw new NotFoundException(`Không có dòng hàng đợi ${id}`);
+    const scope = await this.workshopScope.getScope(userId);
+    this.workshopScope.assertCanManage(scope, [entry.workshopId], 'hàng đợi này');
     if (entry.status !== FloorQueueStatus.QUEUED) {
       throw new ConflictException('Chỉ bỏ được PI đang chờ - PI đang chạy dùng "Chuyển PI tiếp"');
     }
     await this.prisma.floorQueueEntry.delete({ where: { id: entry.id } });
-    return this.listQueue(entry.stage as FloorWorkerStage);
+    return this.queueRows(entry.stage as FloorWorkerStage, entry.workshopId);
   }
 
   /**
-   * "Chuyển PI tiếp" - PI đang chạy của tổ -> DONE, PI đầu hàng đợi -> RUNNING (tổ chưa chạy PI nào thì chỉ bắt
-   * đầu PI đầu hàng). QLSX tự bấm, không tự chuyển khi đủ số: còn đợt chờ KCS/cắt bù (mục 19). PI đã DONE vẫn
-   * báo được qua mục "Bù lỗi" khi còn SKU đang chạy.
+   * "Chuyển PI tiếp" - PI đang chạy của (tổ, xưởng) -> DONE, PI đầu hàng đợi của đúng xưởng đó ->
+   * RUNNING (hàng đợi chưa chạy PI
+   * nào thì chỉ bắt đầu PI đầu hàng). QLSX tự bấm, không tự chuyển khi đủ số: còn đợt chờ KCS/cắt
+   * bù (mục 19). PI đã DONE vẫn
+   * báo được qua mục "Bù lỗi" khi còn SKU đang chạy. QLSX gắn xưởng mặc định xưởng mình; người
+   * không gắn xưởng phải chọn xưởng.
    */
-  async advance(stage: FloorWorkerStage, actorId: string) {
+  async advance(stage: FloorWorkerStage, actorId: string, workshopId?: string) {
+    const scope = await this.workshopScope.getScope(actorId);
+    const wsId = this.resolveQueueWorkshop(scope, workshopId, true);
     await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `floor-queue:${stage}`);
+      await lockBusinessKey(tx, queueLockKey(stage, wsId));
       const now = new Date();
       const running = await tx.floorQueueEntry.findFirst({
-        where: { stage: stage as MfgStage, status: FloorQueueStatus.RUNNING },
+        where: { stage: stage as MfgStage, workshopId: wsId, status: FloorQueueStatus.RUNNING },
       });
       const next = await tx.floorQueueEntry.findFirst({
-        where: { stage: stage as MfgStage, status: FloorQueueStatus.QUEUED },
+        where: { stage: stage as MfgStage, workshopId: wsId, status: FloorQueueStatus.QUEUED },
         orderBy: { position: 'asc' },
       });
       if (!running && !next) {
-        throw new ConflictException(`Tổ ${stage} chưa có PI nào trong hàng đợi`);
+        throw new ConflictException(`Tổ ${stage} chưa có PI nào trong hàng đợi của xưởng này`);
       }
       if (running) {
         await tx.floorQueueEntry.update({
@@ -803,26 +1006,29 @@ export class FloorAdminService {
         });
       }
     });
-    return this.listQueue(stage);
+    return this.queueRows(stage, wsId);
   }
 
   /**
-   * "Mở lại PI vừa chuyển" - hoàn tác 1 lần bấm "Chuyển PI tiếp" nhầm: PI đóng gần nhất của tổ chạy lại; PI đang chạy
+   * "Mở lại PI vừa chuyển" - hoàn tác 1 lần bấm "Chuyển PI tiếp" nhầm: PI đóng gần nhất của (tổ,
+   * xưởng) chạy lại; PI đang chạy
    * (nếu có) trở về hàng đợi, giữ nguyên vị trí nên vẫn đứng đầu hàng. CHỈ làm khi PI đang chạy CHƯA có lần báo nào của
    * công nhân tại tổ này - đã có người báo thì đó là lần chuyển có chủ đích, không kéo ngược (báo bù PI cũ đi qua mục
    * "Bù lỗi"). Số liệu không đổi: báo cáo gắn theo PI, hàng đợi chỉ quyết PI nào là mặc định ở màn quét.
    */
-  async reopenLast(stage: FloorWorkerStage) {
+  async reopenLast(userId: string, stage: FloorWorkerStage, workshopId?: string) {
+    const scope = await this.workshopScope.getScope(userId);
+    const wsId = this.resolveQueueWorkshop(scope, workshopId, true);
     await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `floor-queue:${stage}`);
+      await lockBusinessKey(tx, queueLockKey(stage, wsId));
       const last = await tx.floorQueueEntry.findFirst({
-        where: { stage: stage as MfgStage, status: FloorQueueStatus.DONE },
+        where: { stage: stage as MfgStage, workshopId: wsId, status: FloorQueueStatus.DONE },
         orderBy: [{ endedAt: 'desc' }, { id: 'desc' }],
         include: { productionInvoice: { select: { code: true } } },
       });
       if (!last) throw new ConflictException(`Tổ ${stage} chưa chuyển PI nào để mở lại`);
       const running = await tx.floorQueueEntry.findFirst({
-        where: { stage: stage as MfgStage, status: FloorQueueStatus.RUNNING },
+        where: { stage: stage as MfgStage, workshopId: wsId, status: FloorQueueStatus.RUNNING },
         include: { productionInvoice: { select: { code: true } } },
       });
       if (running) {
@@ -837,7 +1043,8 @@ export class FloorAdminService {
             `${running.productionInvoice.code} đã có ${reports} lần báo của công nhân nên không trả về hàng đợi được. Muốn báo tiếp vào ${last.productionInvoice.code} thì công nhân chọn PI này ở mục “Bù lỗi” trên màn quét.`,
           );
         }
-        // Trả PI đang chạy về hàng đợi TRƯỚC khi mở PI cũ: mỗi tổ đúng 1 dòng RUNNING (partial unique index).
+        // Trả PI đang chạy về hàng đợi TRƯỚC khi mở PI cũ: mỗi (tổ, xưởng) đúng 1 dòng RUNNING
+        // (partial unique index).
         await tx.floorQueueEntry.update({
           where: { id: running.id },
           data: { status: FloorQueueStatus.QUEUED, startedAt: null, startedById: null },
@@ -848,7 +1055,99 @@ export class FloorAdminService {
         data: { status: FloorQueueStatus.RUNNING, endedAt: null, endedById: null },
       });
     });
-    return this.listQueue(stage);
+    return this.queueRows(stage, wsId);
+  }
+
+  /**
+   * "Xong Phôi" TỰ TÍNH (Sếp chốt 14/11, câu 8): FloorAlertsService gọi khi mọi dòng tổ Phôi của PI
+   * đã KCS đạt đủ - không ai bấm.
+   * Dòng RUNNING -> DONE rồi PI đầu hàng đợi của đúng (Phôi, xưởng) -> RUNNING; dòng QUEUED -> DONE
+   * (chưa chạy tới nhưng đã đủ).
+   * Đọc lại trạng thái trong khoá của hàng đợi nên gọi lại / gọi chồng với "Chuyển PI tiếp" không
+   * làm gì thêm.
+   * Trả `closed` (có đóng không) và mã PI được kéo lên chạy (nếu có).
+   */
+  async autoCompletePhoi(entryId: bigint): Promise<{ closed: boolean; nextPiCode: string | null }> {
+    const first = await this.prisma.floorQueueEntry.findUnique({
+      where: { id: entryId },
+      select: { stage: true, workshopId: true },
+    });
+    if (!first || first.stage !== MfgStage.PHOI) return { closed: false, nextPiCode: null };
+    return this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, queueLockKey(MfgStage.PHOI, first.workshopId));
+      const entry = await tx.floorQueueEntry.findUnique({ where: { id: entryId } });
+      if (
+        !entry ||
+        (entry.status !== FloorQueueStatus.RUNNING && entry.status !== FloorQueueStatus.QUEUED)
+      ) {
+        return { closed: false, nextPiCode: null };
+      }
+      const now = new Date();
+      await tx.floorQueueEntry.update({
+        where: { id: entry.id },
+        data: { status: FloorQueueStatus.DONE, endedAt: now, endedById: null },
+      });
+      if (entry.status !== FloorQueueStatus.RUNNING) return { closed: true, nextPiCode: null };
+      const next = await tx.floorQueueEntry.findFirst({
+        where: {
+          stage: MfgStage.PHOI,
+          workshopId: entry.workshopId,
+          status: FloorQueueStatus.QUEUED,
+        },
+        orderBy: { position: 'asc' },
+        include: { productionInvoice: { select: { code: true } } },
+      });
+      if (!next) return { closed: true, nextPiCode: null };
+      await tx.floorQueueEntry.update({
+        where: { id: next.id },
+        data: { status: FloorQueueStatus.RUNNING, startedAt: now, startedById: null },
+      });
+      return { closed: true, nextPiCode: next.productionInvoice.code };
+    });
+  }
+
+  /**
+   * Máy cắt rảnh tự kéo lệnh (đợt C3): lệnh vừa được kéo mà CHƯA có dòng nào ở hàng đợi tổ Phôi thì
+   * hệ thống thêm QUEUED vào cuối
+   * hàng đợi Phôi của xưởng (queuedById null = hệ thống). Đã có dòng (bất kỳ trạng thái) thì bỏ
+   * qua. Trả mã PI vừa thêm.
+   */
+  async ensurePhoiQueued(piIds: bigint[]): Promise<string[]> {
+    const added: string[] = [];
+    for (const piId of new Set(piIds)) {
+      const pi = await this.prisma.productionInvoice.findUnique({
+        where: { id: piId },
+        select: { code: true },
+      });
+      if (!pi) continue;
+      const wsId = await queueWorkshopIdOfPi(this.prisma, MfgStage.PHOI, piId);
+      const queued = await this.prisma.$transaction(async (tx) => {
+        await lockBusinessKey(tx, queueLockKey(MfgStage.PHOI, wsId));
+        const dup = await tx.floorQueueEntry.findUnique({
+          where: {
+            stage_productionInvoiceId: { stage: MfgStage.PHOI, productionInvoiceId: piId },
+          },
+          select: { id: true },
+        });
+        if (dup) return false;
+        const last = await tx.floorQueueEntry.aggregate({
+          where: { stage: MfgStage.PHOI, workshopId: wsId },
+          _max: { position: true },
+        });
+        await tx.floorQueueEntry.create({
+          data: {
+            stage: MfgStage.PHOI,
+            productionInvoiceId: piId,
+            workshopId: wsId,
+            position: (last._max.position ?? 0) + 1,
+            queuedById: null,
+          },
+        });
+        return true;
+      });
+      if (queued) added.push(pi.code);
+    }
+    return added;
   }
 
   private async findPiIdsWithActiveFloor(piIds: bigint[]): Promise<Set<string>> {
@@ -874,6 +1173,14 @@ export class FloorAdminService {
       stage: r.stage,
       productionInvoiceId: r.productionInvoiceId.toString(),
       piCode: r.productionInvoice.code,
+      /** Xưởng của hàng đợi (14/11/2026): mỗi xưởng một hàng đợi cho mỗi tổ. */
+      workshopId: r.workshopId?.toString() ?? null,
+      workshopName: r.workshop?.name ?? null,
+      /**
+       * Xưởng của chính lệnh (null = lệnh chưa có xưởng); khác `workshopName` khi lệnh sơn nhờ ở
+       * xưởng khác.
+       */
+      piWorkshopName: r.productionInvoice.items?.[0]?.workshop?.name ?? null,
       position: r.position,
       status: r.status,
       queuedAt: r.queuedAt,
