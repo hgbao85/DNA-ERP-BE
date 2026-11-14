@@ -129,35 +129,50 @@ export class SegmentProductionService {
 
     return this.prisma.$transaction(
       async (tx) => {
-        await lockBusinessKey(tx, segmentProductionLockKey(productionInvoiceId));
-        // Đọc số liệu SAU khi khoá: 2 lượt KCS sát nhau - lượt chạy sau phải thấy số mới nhất.
-        const loaded = await this.loadProduction(tx, productionInvoiceId);
-        if (loaded.closed) {
+        const result = await this.recomputeInTx(tx, productionInvoiceId, opts);
+        if (!result) {
           throw new ConflictException(
             'Lệnh đã kết thúc - phần giữ đoạn đã nhả về dư, không tính lại được',
           );
         }
-        const current = await this.loadCurrent(tx, productionInvoiceId);
-        const wh = await new WorkshopWarehouseResolver(tx).phoiWarehouseOfPi(productionInvoiceId);
-        const sync = await this.segmentStockService.syncOrderProduction(tx, {
-          productionInvoiceId,
-          warehouseId: wh.id,
-          targets: this.toTargets(loaded.specs),
-          actorId: opts.actorId ?? null,
-          reason: opts.reason,
-        });
-        return {
-          productionInvoiceId,
-          dryRun: false,
-          closed: false,
-          warehouseId: wh.id,
-          specs: loaded.specs,
-          current,
-          changes: sync.changes,
-        };
+        return result;
       },
       { maxWait: 10_000, timeout: 30_000 },
     );
+  }
+
+  /**
+   * Ghi thật phía cộng cho 1 lệnh trong transaction của caller (khoá lệnh trước rồi đọc số). Lệnh đã kết thúc -> null, không ghi.
+   * Dùng bởi recomputeForPi và chuyển đổi dữ liệu cũ (SegmentLegacyConversionService - cả lượt chạy trong 1 transaction).
+   * KHÔNG kiểm công tắc - caller tự kiểm.
+   */
+  async recomputeInTx(
+    tx: PrismaTx,
+    productionInvoiceId: bigint,
+    opts: { actorId?: string | null; reason: string },
+  ): Promise<RecomputeSegmentStockResult | null> {
+    await lockBusinessKey(tx, segmentProductionLockKey(productionInvoiceId));
+    // Đọc số liệu SAU khi khoá: 2 lượt KCS sát nhau - lượt chạy sau phải thấy số mới nhất.
+    const loaded = await this.loadProduction(tx, productionInvoiceId);
+    if (loaded.closed) return null;
+    const current = await this.loadCurrent(tx, productionInvoiceId);
+    const wh = await new WorkshopWarehouseResolver(tx).phoiWarehouseOfPi(productionInvoiceId);
+    const sync = await this.segmentStockService.syncOrderProduction(tx, {
+      productionInvoiceId,
+      warehouseId: wh.id,
+      targets: this.toTargets(loaded.specs),
+      actorId: opts.actorId ?? null,
+      reason: opts.reason,
+    });
+    return {
+      productionInvoiceId,
+      dryRun: false,
+      closed: false,
+      warehouseId: wh.id,
+      specs: loaded.specs,
+      current,
+      changes: sync.changes,
+    };
   }
 
   /**

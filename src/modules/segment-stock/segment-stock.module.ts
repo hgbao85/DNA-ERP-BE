@@ -4,6 +4,8 @@ import { SegmentProductionController } from './segment-production.controller';
 import { SegmentProductionService } from './segment-production.service';
 import { SegmentStockController } from './segment-stock.controller';
 import { SegmentStockService } from './segment-stock.service';
+import { SegmentStocktakeController } from './segment-stocktake.controller';
+import { SegmentStocktakeService } from './segment-stocktake.service';
 
 /**
  * Tồn đoạn kho Phôi theo MÃ ĐOẠN và giữ đoạn theo LỆNH (13/11/2026, anh Nhân trả lời 11 câu tồn đoạn) - xem
@@ -15,8 +17,8 @@ import { SegmentStockService } from './segment-stock.service';
  */
 @Module({
   imports: [StockModule],
-  controllers: [SegmentStockController, SegmentProductionController],
-  providers: [SegmentStockService, SegmentProductionService],
+  controllers: [SegmentStockController, SegmentProductionController, SegmentStocktakeController],
+  providers: [SegmentStockService, SegmentProductionService, SegmentStocktakeService],
   exports: [SegmentStockService, SegmentProductionService],
 })
 export class SegmentStockModule {}

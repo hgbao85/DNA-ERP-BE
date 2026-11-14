@@ -9,6 +9,8 @@ import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
+import { SegmentStockService } from '../segment-stock/segment-stock.service';
+import { isSegmentStockEnabled } from '../segment-stock/segment-stock.config';
 import { isCuttingRecheckPending } from './cutting-recheck.util';
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 
@@ -72,6 +74,7 @@ export class WorkshopMoveService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly notifications: NotificationsService,
+    private readonly segmentStock: SegmentStockService,
   ) {}
 
   /**
@@ -130,6 +133,24 @@ export class WorkshopMoveService {
         materialCode: it.material.code,
         toCode: target.code,
       });
+    }
+
+    // Tồn đoạn theo lệnh (anh Nhân 13/11 câu 8): phần đoạn lệnh còn giữ ở kho Phôi xưởng cũ tự chuyển sang kho Phôi xưởng mới,
+    // không cần phiếu / thủ kho chỉnh tay. Công tắc tắt thì không làm gì.
+    if (isSegmentStockEnabled()) {
+      const toPhoi = await resolver.phoiWarehouseOf(toWorkshopId);
+      const moved = await this.segmentStock.transferOrderHoldings(tx, {
+        productionInvoiceId,
+        toWarehouseId: toPhoi.id,
+        refId: productionInvoiceId.toString(),
+        note: `Đổi xưởng: chuyển đoạn còn giữ của lệnh sang ${toPhoi.code}`,
+        actorId: actorUserId,
+      });
+      if (moved.droppedQty > 0) {
+        this.logger.warn(
+          `Đổi xưởng lệnh ${productionInvoiceId}: kho cũ thiếu tồn thật ${moved.droppedQty} đoạn so với phần giữ - đã nhả`,
+        );
+      }
     }
 
     const plans = await this.getPlans(tx, { productionInvoiceId });

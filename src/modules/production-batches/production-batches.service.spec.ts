@@ -11,6 +11,7 @@ import { StockLedgerService } from '../stock/stock-ledger.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ProductionBatchesService } from './production-batches.service';
 import { RealtimeService } from '../../realtime/realtime.service';
+import { SegmentStockService } from '../segment-stock/segment-stock.service';
 
 describe('ProductionBatchesService', () => {
   let service: ProductionBatchesService;
@@ -60,6 +61,7 @@ describe('ProductionBatchesService', () => {
     $transaction: jest.Mock;
   };
   let stockLedgerService: { postEntry: jest.Mock };
+  let segmentStock: { consumeForOrder: jest.Mock };
   let materialYieldIssuesService: { sumReceived: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
   let realtimeStub: { publishEntityChanged: jest.Mock; publishNotificationCreated: jest.Mock };
@@ -204,6 +206,7 @@ describe('ProductionBatchesService', () => {
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     stockLedgerService = { postEntry: jest.fn().mockResolvedValue({}) };
+    segmentStock = { consumeForOrder: jest.fn() };
     // Mặc định "đã nhận đủ" (100) - đa số test case không quan tâm ràng buộc mới "chưa nhận thì
     // chưa báo được" (2026-09-04), xem mục 'assertMaterialYieldReceived' bên dưới mới override 0.
     materialYieldIssuesService = { sumReceived: jest.fn().mockResolvedValue(100) };
@@ -218,6 +221,7 @@ describe('ProductionBatchesService', () => {
       materialYieldIssuesService as unknown as MaterialYieldIssuesService,
       notificationsService as unknown as NotificationsService,
       realtimeStub as unknown as RealtimeService,
+      segmentStock as unknown as SegmentStockService,
     );
   });
 
@@ -427,6 +431,138 @@ describe('ProductionBatchesService', () => {
         ConflictException,
       );
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // 13/11/2026: tồn đoạn theo lệnh (SEGMENT_STOCK_ENABLED) - trừ theo mã đoạn qua SegmentStockService, thiếu / vượt thì ghi sổ
+  // báo vượt, KHÔNG chặn.
+  describe('trừ tồn đoạn theo lệnh (bật SEGMENT_STOCK_ENABLED)', () => {
+    const dto = { stage: MfgStage.HAN, pieceId: '40', reportedQty: 20 };
+    const env = process.env.SEGMENT_STOCK_ENABLED;
+    let overage: { findUnique: jest.Mock; create: jest.Mock };
+    beforeEach(() => {
+      process.env.SEGMENT_STOCK_ENABLED = 'true';
+      overage = { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn() };
+      Object.assign(prisma, {
+        segmentOverage: overage,
+        qcReview: { aggregate: jest.fn().mockResolvedValue({ _sum: { failedQty: 0 } }) },
+      });
+      prisma.productionBatch.create.mockResolvedValue(batchRow);
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
+        productionOrderId: 1n,
+        productionOrder: { quantity: 10, productionInvoiceItem: { productionInvoiceId: 500n } },
+      });
+      // Định mức mảnh: 2 dòng 460 mm (Dập + trơn) + 1 dòng cỡ khác; bộ công đoạn lưu lộn thứ tự vẫn ra cùng mã.
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { segmentSpecId: 60n, qtyPerPiece: 2, processSteps: ['CAT', 'DAP'] },
+        { segmentSpecId: 60n, qtyPerPiece: 1, processSteps: ['CAT'] },
+        { segmentSpecId: 61n, qtyPerPiece: 1, processSteps: ['CAT'] },
+      ]);
+    });
+    afterEach(() => {
+      if (env === undefined) delete process.env.SEGMENT_STOCK_ENABLED;
+      else process.env.SEGMENT_STOCK_ENABLED = env;
+    });
+
+    it('trừ từng MÃ đoạn qua consumeForOrder (không ghi sổ kho kiểu cũ); đủ đoạn, không vượt thì không ghi sổ báo vượt', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
+      // Lệnh 10 bộ × 2 mảnh/bộ = 20 mảnh: đợt 20 không vượt.
+      segmentStock.consumeForOrder.mockImplementation((_tx: unknown, i: { qty: number }) =>
+        Promise.resolve({
+          takenQty: i.qty,
+          fromHeldQty: i.qty,
+          fromSurplusQty: 0,
+          shortageQty: 0,
+          duplicate: false,
+        }),
+      );
+
+      await service.create('1', dto, 'user-han', null, null);
+
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      expect(segmentStock.consumeForOrder).toHaveBeenCalledTimes(3);
+      expect(segmentStock.consumeForOrder).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          productionInvoiceId: 500n,
+          segmentSpecId: 60n,
+          segmentSteps: 'DAP',
+          qty: 40,
+          idempotencyKey: 'production-batch-segment-consume:700:60:DAP',
+        }),
+      );
+      expect(segmentStock.consumeForOrder).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ segmentSpecId: 60n, segmentSteps: '', qty: 20 }),
+      );
+      expect(overage.create).not.toHaveBeenCalled();
+    });
+
+    it('thiếu đoạn: KHÔNG chặn, ghi sổ báo vượt phần thiếu', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
+      segmentStock.consumeForOrder.mockResolvedValue({
+        takenQty: 5,
+        fromHeldQty: 5,
+        fromSurplusQty: 0,
+        shortageQty: 15,
+        duplicate: false,
+      });
+
+      await expect(service.create('1', dto, 'user-han', null, null)).resolves.toBeDefined();
+
+      expect(overage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          productionBatchId: 700n,
+          takenQty: 5,
+          shortageQty: 15,
+          extraQty: 0,
+          extraKind: null,
+        }) as unknown,
+      });
+    });
+
+    it('báo vượt số lượng tổng của lệnh: ghi số lấy thêm; đã có KCS lỗi trước thì là làm lại (REWORK)', async () => {
+      // Đã báo 15 trước, đợt này 20 -> tổng 35 / lệnh 20 mảnh -> vượt 15 mảnh.
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { id: 650n, reportedQty: 15 },
+        { id: 700n, reportedQty: 20 },
+      ]);
+      (
+        prisma as unknown as { qcReview: { aggregate: jest.Mock } }
+      ).qcReview.aggregate.mockResolvedValue({
+        _sum: { failedQty: 3 },
+      });
+      segmentStock.consumeForOrder.mockImplementation((_tx: unknown, i: { qty: number }) =>
+        Promise.resolve({
+          takenQty: i.qty,
+          fromHeldQty: 0,
+          fromSurplusQty: i.qty,
+          shortageQty: 0,
+          duplicate: false,
+        }),
+      );
+
+      await service.create('1', dto, 'user-han', null, null);
+
+      expect(overage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          segmentSpecId: 60n,
+          segmentSteps: 'DAP',
+          overPieces: 15,
+          extraQty: 30,
+          extraKind: 'REWORK',
+        }) as unknown,
+      });
+      expect(overage.create).toHaveBeenCalledTimes(3);
+    });
+
+    it('gọi lại cùng đợt: mã đoạn đã có dòng sổ báo vượt thì bỏ qua, không trừ lần 2', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
+      overage.findUnique.mockResolvedValue({ id: 1n });
+
+      await service.create('1', dto, 'user-han', null, null);
+
+      expect(segmentStock.consumeForOrder).not.toHaveBeenCalled();
     });
   });
 

@@ -28,6 +28,8 @@ import type {
   SegmentSyncChange,
   SyncOrderProductionInput,
   SyncOrderProductionResult,
+  TransferOrderHoldingsInput,
+  TransferOrderHoldingsResult,
 } from './segment-stock.types';
 
 /** Kho ảo sản xuất - cùng hằng PRODUCTION_WAREHOUSE_CODE ở material-issues.service.ts (đoạn từ đây vào kho Phôi / từ kho Phôi ra đây). */
@@ -539,6 +541,136 @@ export class SegmentStockService {
       reservationCount += 1;
     }
     return { releasedQty, reservationCount };
+  }
+
+  /**
+   * Đổi xưởng (anh Nhân 13/11/2026 câu 8: thủ kho không chỉnh tay - phần đã làm giữ nguyên, phần còn lại tính cho xưởng mới):
+   * chuyển phần đoạn lệnh CÒN GIỮ ở kho Phôi khác sang kho Phôi xưởng mới - bút toán WAREHOUSE_TRANSFER kho cũ → kho mới, giữ
+   * cho lệnh ở kho mới, nhật ký TRANSFER cả 2 dòng (kho cũ âm, kho mới dương). Phần đã dùng (consumedQty) ở lại kho cũ.
+   *  - Kho cũ không đủ tồn thật cho phần còn giữ (dữ liệu cũ âm): chỉ chuyển phần có, phần còn lại nhả (RELEASE) để kho cũ không
+   *    còn giữ ảo.
+   *  - SegmentProduction của lệnh đổi sang kho mới để phía cộng lần sau ghi vào kho mới. Cột dư (đoạn cắt vượt) KHÔNG chuyển: dư
+   *    là của chung xưởng cũ.
+   * Idempotent: chạy lại không còn dòng giữ nào ở kho khác nên không làm gì. Chạy TRONG transaction đổi xưởng.
+   */
+  async transferOrderHoldings(
+    tx: PrismaTx,
+    input: TransferOrderHoldingsInput,
+  ): Promise<TransferOrderHoldingsResult> {
+    const { productionInvoiceId, toWarehouseId } = input;
+    await tx.segmentProduction.updateMany({
+      where: { productionInvoiceId, warehouseId: { not: toWarehouseId } },
+      data: { warehouseId: toWarehouseId },
+    });
+    const rows = await tx.segmentReservation.findMany({
+      where: { productionInvoiceId, warehouseId: { not: toWarehouseId } },
+      select: {
+        id: true,
+        warehouseId: true,
+        segmentSpecId: true,
+        segmentSteps: true,
+        reservedQty: true,
+        consumedQty: true,
+      },
+    });
+    const open = rows
+      .filter((r) => r.reservedQty.toNumber() > r.consumedQty.toNumber())
+      .sort(compareCells);
+
+    let movedQty = 0;
+    let droppedQty = 0;
+    let reservationCount = 0;
+    for (const row of open) {
+      const from: CellRef = row;
+      const to: CellRef = { ...row, warehouseId: toWarehouseId };
+      // Khoá 2 ô theo thứ tự cố định (compareCells) - đổi xưởng 2 lệnh ngược chiều không khoá chéo.
+      const [first, second] = compareCells(from, to) <= 0 ? [from, to] : [to, from];
+      await lockBusinessKey(
+        tx,
+        segmentBucketLockKey(first.warehouseId, first.segmentSpecId, first.segmentSteps),
+      );
+      await lockBusinessKey(
+        tx,
+        segmentBucketLockKey(second.warehouseId, second.segmentSpecId, second.segmentSteps),
+      );
+      const fresh = await tx.segmentReservation.findUnique({
+        where: { id: row.id },
+        select: { reservedQty: true, consumedQty: true },
+      });
+      if (!fresh) continue;
+      const consumed = fresh.consumedQty.toNumber();
+      const remaining = round4(fresh.reservedQty.toNumber() - consumed);
+      if (remaining <= 0) continue;
+      const quant = await tx.stockQuant.findFirst({
+        where: {
+          warehouseId: from.warehouseId,
+          segmentSpecId: from.segmentSpecId,
+          segmentSteps: from.segmentSteps,
+        },
+        select: { qty: true },
+      });
+      const moved = round4(Math.min(remaining, Math.max(0, quant ? quant.qty.toNumber() : 0)));
+      const dropped = round4(remaining - moved);
+
+      await tx.segmentReservation.update({
+        where: { id: row.id },
+        data: { reservedQty: consumed },
+      });
+      if (moved > 0) {
+        await tx.segmentReservationLog.create({
+          data: {
+            reservationId: row.id,
+            kind: SegmentReservationLogKind.TRANSFER,
+            qty: -moved,
+            refType: 'WORKSHOP_CHANGE',
+            refId: input.refId,
+            note: input.note ?? null,
+            createdById: input.actorId ?? null,
+          },
+        });
+        await this.stockLedgerService.postEntry(
+          {
+            fromWarehouseId: from.warehouseId,
+            toWarehouseId,
+            segmentSpecId: from.segmentSpecId,
+            segmentSteps: from.segmentSteps,
+            qty: moved,
+            refType: StockLedgerRefType.WAREHOUSE_TRANSFER,
+            refId: input.refId,
+            note: input.note ?? 'Đổi xưởng: chuyển đoạn còn giữ của lệnh sang kho Phôi xưởng mới',
+            createdById: input.actorId ?? undefined,
+          },
+          tx,
+        );
+        await this.bumpReservation(tx, to, productionInvoiceId, { reserved: moved }, [
+          {
+            kind: SegmentReservationLogKind.TRANSFER,
+            qty: moved,
+            refType: 'WORKSHOP_CHANGE',
+            refId: input.refId,
+            note: input.note,
+            actorId: input.actorId,
+          },
+        ]);
+      }
+      if (dropped > 0) {
+        await tx.segmentReservationLog.create({
+          data: {
+            reservationId: row.id,
+            kind: SegmentReservationLogKind.RELEASE,
+            qty: dropped,
+            refType: 'WORKSHOP_CHANGE',
+            refId: input.refId,
+            note: 'Đổi xưởng: kho cũ không đủ tồn thật cho phần còn giữ - nhả phần thiếu',
+            createdById: input.actorId ?? null,
+          },
+        });
+      }
+      movedQty = round4(movedQty + moved);
+      droppedQty = round4(droppedQty + dropped);
+      reservationCount += 1;
+    }
+    return { movedQty, droppedQty, reservationCount };
   }
 
   // ---------------------------------------------------------------------------
