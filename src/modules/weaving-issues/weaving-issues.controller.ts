@@ -16,6 +16,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CreateWeavingReceiptDto } from './dto/create-weaving-receipt.dto';
 import { WeavingIssuesService } from './weaving-issues.service';
+import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 
 const VIEW = { module: PERMISSION_MODULES.WEAVING_ISSUE, action: PermissionAction.VIEW };
 const UPDATE = { module: PERMISSION_MODULES.WEAVING_ISSUE, action: PermissionAction.UPDATE };
@@ -82,6 +83,7 @@ export class WeavingIssuesController {
   }
 
   @Post('production-orders/:id/weaving-receipts')
+  @RequireAssignedWarehouse()
   @RequirePermissions(UPDATE)
   receive(
     @Param('id') id: string,

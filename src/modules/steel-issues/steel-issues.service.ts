@@ -385,11 +385,18 @@ export class SteelIssuesService {
     }
     await this.assertMaterialUsedInInvoice(orders, materialId, invoice.id);
     const poIds = orders.map((o) => o.id);
-    const { approvedAt } = await this.assertMaterialInApprovedProposal(
+    const { approvedAt, stockLengthsMm } = await this.assertMaterialInApprovedProposal(
       invoice.id,
       poIds,
       materialId,
     );
+    // Rà soát 14/11 XK4: cây xuất phải đúng chiều dài phương án đã duyệt (Phôi cắt theo phương án đó; tồn bị trừ ở đúng ô chiều dài
+    // xuất). Phương án cũ chưa lưu chiều dài (trước 26/08) thì không kiểm.
+    if (stockLengthsMm.length > 0 && !stockLengthsMm.includes(dto.barLengthMm)) {
+      throw new BadRequestException(
+        `Phương án cắt đã duyệt dùng cây dài ${stockLengthsMm.join(' / ')}mm - không xuất cây ${dto.barLengthMm}mm cho lệnh này`,
+      );
+    }
     // approvedAt null về lý thuyết không xảy ra (status đã lọc APPROVED ở query trên, field này
     // luôn được set cùng lúc chuyển status) - coi như "trước cutover" nếu có, an toàn hơn (không
     // trừ tồn lần 2) là sai theo chiều ngược lại.
@@ -2927,25 +2934,26 @@ export class SteelIssuesService {
     productionInvoiceId: bigint,
     productionOrderIds: bigint[],
     materialId: bigint,
-  ): Promise<{ approvedAt: Date | null }> {
-    const line = await this.prisma.cuttingProposalLine.findFirst({
-      where: {
-        materialId,
-        // `feasible: true` là BẮT BUỘC, không thừa: saveSuccess() tạo dòng cho MỌI vật tư solver
-        // trả về, kể cả loại nó báo không cắt được (feasible=false, không có pattern nào). Thiếu
-        // điều kiện này thì Phôi được phép xuất sắt cho đúng loại không có phương án cắt để làm
-        // theo - mà loại đó cũng bị approve() loại khỏi đề xuất mua nên còn chẳng có sắt để xuất.
-        feasible: true,
-        cuttingProposal: {
-          status: CuttingProposalStatus.APPROVED,
-          OR: [
-            { productionInvoiceId },
-            ...(productionOrderIds.length > 0
-              ? [{ productionOrderId: { in: productionOrderIds } }]
-              : []),
-          ],
-        },
+  ): Promise<{ approvedAt: Date | null; stockLengthsMm: number[] }> {
+    const where: Prisma.CuttingProposalLineWhereInput = {
+      materialId,
+      // `feasible: true` là BẮT BUỘC, không thừa: saveSuccess() tạo dòng cho MỌI vật tư solver
+      // trả về, kể cả loại nó báo không cắt được (feasible=false, không có pattern nào). Thiếu
+      // điều kiện này thì Phôi được phép xuất sắt cho đúng loại không có phương án cắt để làm
+      // theo - mà loại đó cũng bị approve() loại khỏi đề xuất mua nên còn chẳng có sắt để xuất.
+      feasible: true,
+      cuttingProposal: {
+        status: CuttingProposalStatus.APPROVED,
+        OR: [
+          { productionInvoiceId },
+          ...(productionOrderIds.length > 0
+            ? [{ productionOrderId: { in: productionOrderIds } }]
+            : []),
+        ],
       },
+    };
+    const line = await this.prisma.cuttingProposalLine.findFirst({
+      where,
       select: { cuttingProposal: { select: { approvedAt: true } } },
     });
     if (!line) {
@@ -2953,7 +2961,17 @@ export class SteelIssuesService {
         `Chưa có phương án cắt (CuttingProposal) đã duyệt và cắt được cho vật tư ${materialId} của PI ${productionInvoiceId} - chưa thể xuất sắt`,
       );
     }
-    return { approvedAt: line.cuttingProposal.approvedAt };
+    // 1 chiều dài cho mỗi (lệnh, loại sắt) - findConflictingStockLengthReason() chặn từ lúc duyệt; vẫn đọc tập để an toàn.
+    const lengths = await this.prisma.cuttingProposalLine.findMany({
+      where: { ...where, bestStockLengthMm: { not: null } },
+      select: { bestStockLengthMm: true },
+      distinct: ['bestStockLengthMm'],
+    });
+    const stockLengthsMm = lengths
+      .map((l) => l.bestStockLengthMm)
+      .filter((v): v is number => v != null)
+      .sort((a, b) => a - b);
+    return { approvedAt: line.cuttingProposal.approvedAt, stockLengthsMm };
   }
 
   private async findInvoiceOrThrow(id: string) {

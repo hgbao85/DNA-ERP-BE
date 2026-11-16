@@ -196,6 +196,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
           }),
       ),
       createMaterialIssueInTx: jest.fn().mockResolvedValue({ id: 600n }),
+      assertMaterialCapInTx: jest.fn().mockResolvedValue(undefined),
       assertMaterialStockForSlip: jest.fn().mockResolvedValue(undefined),
       getWovenMaterialLinesByPiece: jest.fn().mockResolvedValue(new Map()),
     };
@@ -425,6 +426,30 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       });
       expect(steel.afterCreate).toHaveBeenCalledWith({ id: 301n }, 'kho-1');
       expect(consumable.afterCreate).toHaveBeenCalledWith({ id: 401n }, 'kho-1');
+    });
+
+    it('rà soát 14/11 XK1: thủ kho kho khác xác nhận phiếu -> 403, không tra dòng, không ghi', async () => {
+      await expect(
+        service.confirm('9', ['u1'], 'kho-1', 'phoi-son-han-han-pa', 'key-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(consumable.prepareIssue).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rà soát 14/11 XK1: dòng nay tra ra kho khác kho in trên phiếu (lệnh đổi xưởng sau khi in) -> 409, không ghi', async () => {
+      consumable.prepareIssue.mockImplementationOnce(
+        (orderId: string, dto: { materialId: string }) =>
+          Promise.resolve({
+            order: { id: BigInt(orderId) },
+            materialBigId: BigInt(dto.materialId),
+            warehouse: { id: 66n, code: 'phoi-son-han-phoi-pha' },
+            dto,
+          }),
+      );
+      const err = await service.confirm('9', ['u1'], 'kho-1', null, 'key-1').catch((e: Error) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as Error).message).toContain('khác kho phoi-son-han của phiếu');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('rà soát 14/11 CK6: chụp xưởng các lệnh TRƯỚC khi tra kho, khoá dòng lệnh trong transaction; đổi xưởng chen giữa -> 409, không ghi', async () => {
@@ -823,6 +848,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
         expect.anything(),
         'u-pk',
         'issue-slip:9:line:22',
+        9n,
       );
       expect(prisma.issueSlipLine.update).toHaveBeenCalledWith({
         where: { id: 22n },
@@ -831,6 +857,8 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
 
       prisma.issueSlip.findUnique.mockResolvedValue(
         pieceSlip({
+          warehouseId: 900n,
+          warehouse: { code: 'vat-tu-tp', name: 'Kho Phụ kiện' },
           pairedSlipId: 5n,
           pairedSlip: { id: 5n, code: 'XK-261109-001', status: IssueSlipStatus.CANCELLED },
           lines: [materialLine()],

@@ -102,6 +102,8 @@ export interface PreparedWeavingMaterial {
   materialCode: string;
   warehouseId: bigint;
   qty: number;
+  /** Định mức vật tư kèm của (lệnh, mảnh): Σ định mức vật tư/mảnh × số mảnh/SP × số SP của lệnh (rà soát 14/11 XK2). */
+  plannedQty: number;
 }
 type WeavingReceiptRow = Prisma.WeavingReceiptGetPayload<{
   include: typeof WEAVING_RECEIPT_INCLUDE;
@@ -430,7 +432,8 @@ export class WeavingIssuesService {
     const all = lines
       ? [...lines.wire, ...lines.nail, ...lines.plasticButton, ...lines.finishedComponent]
       : [];
-    const line = all.find((l) => l.materialId === materialBigId.toString());
+    const matched = all.filter((l) => l.materialId === materialBigId.toString());
+    const line = matched[0];
     if (!line) {
       throw new BadRequestException(
         `Vật tư ${materialId} không nằm trong danh sách đi kèm khi đan của mảnh này trong định mức`,
@@ -471,7 +474,50 @@ export class WeavingIssuesService {
       materialCode: material.code,
       warehouseId: material.warehouseId,
       qty,
+      plannedQty: round4(
+        matched.reduce((sum, l) => sum + l.qtyPerPiece, 0) * bomPiece.qtyPerUnit * order.quantity,
+      ),
     };
+  }
+
+  /**
+   * Rà soát 14/11 XK2: chặn cấp kèm vượt định mức của (lệnh, mảnh, vật tư) - định mức − đã cấp (mọi lần) − đang trên phiếu chờ
+   * ký khác (`excludeSlipId` = phiếu đang xác nhận), cùng cách tính trần định mức của mảnh (pieceCaps()). Lúc xác nhận gọi SAU
+   * khi khoá FOR UPDATE dòng tồn của vật tư - mọi lần cấp kèm cùng vật tư nối đuôi nhau ở khoá đó, không cần khoá riêng (khoá
+   * riêng theo lệnh lấy trước khoá tồn sẽ khoá chéo khi 1 phiếu có 2 lệnh cùng vật tư).
+   */
+  async assertMaterialCapInTx(
+    tx: PrismaTx,
+    p: PreparedWeavingMaterial,
+    excludeSlipId: bigint | null,
+  ): Promise<void> {
+    const [issued, onDraft] = await Promise.all([
+      tx.weavingIssueMaterial.aggregate({
+        where: { productionOrderId: p.order.id, pieceId: p.pieceId, materialId: p.materialId },
+        _sum: { qty: true },
+      }),
+      tx.issueSlipLine.aggregate({
+        where: {
+          kind: IssueSlipLineKind.WEAVING_MATERIAL,
+          productionOrderId: p.order.id,
+          pieceId: p.pieceId,
+          materialId: p.materialId,
+          slip: {
+            status: IssueSlipStatus.DRAFT,
+            ...(excludeSlipId ? { id: { not: excludeSlipId } } : {}),
+          },
+        },
+        _sum: { qty: true },
+      }),
+    ]);
+    const issuedQty = issued._sum.qty?.toNumber() ?? 0;
+    const draftQty = onDraft._sum.qty?.toNumber() ?? 0;
+    const remaining = round4(p.plannedQty - issuedQty - draftQty);
+    if (p.qty > remaining) {
+      throw new BadRequestException(
+        `Vật tư ${p.materialCode}: cấp kèm ${p.qty} vượt định mức còn lại ${Math.max(0, remaining)} (định mức ${p.plannedQty}, đã cấp ${round4(issuedQty)}, đang trên phiếu chờ ký ${round4(draftQty)})`,
+      );
+    }
   }
 
   /** Tồn khả dụng lúc LẬP phiếu vật tư kèm đan (13/11/2026, RPK.2): cùng cách tính với createMaterialIssueInTx() nhưng không
@@ -505,6 +551,7 @@ export class WeavingIssuesService {
     p: PreparedWeavingMaterial,
     userId: string,
     idempotencyKey: string,
+    excludeSlipId: bigint | null = null,
   ): Promise<{ id: bigint }> {
     const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
       SELECT "qty" FROM "stock_quant"
@@ -512,6 +559,7 @@ export class WeavingIssuesService {
         AND "stockLengthMm" = 0 AND "spec" = ''
       FOR UPDATE
     `;
+    await this.assertMaterialCapInTx(tx, p, excludeSlipId);
     const onHand = stockRow?.qty.toNumber() ?? 0;
     const availableQty = await this.stockReservationsService.getAvailableQty(
       tx,

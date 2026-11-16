@@ -18,6 +18,7 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { BookingShipmentsService } from './booking-shipments.service';
 import { ReserveShipSlipCodeDto, ShipBookingDto } from './dto/ship-booking.dto';
+import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 
 const VIEW = { module: PERMISSION_MODULES.SALES_ORDER, action: PermissionAction.VIEW };
 const UPDATE = { module: PERMISSION_MODULES.SALES_ORDER, action: PermissionAction.UPDATE };
@@ -38,6 +39,7 @@ export class BookingShipmentsController {
 
   /** Giữ số phiếu XK để in trước khi xác nhận xuất. */
   @Post('slip-code')
+  @RequireAssignedWarehouse()
   @HttpCode(HttpStatus.OK)
   @RequirePermissions(UPDATE)
   @RequireRole(BUSINESS_ROLES.WAREHOUSE_STAFF, DEFAULT_ROLES.ADMIN)
@@ -47,6 +49,7 @@ export class BookingShipmentsController {
 
   /** Xác nhận đã xuất (đóng cont xong). Idempotency-Key bắt buộc. */
   @Post(':id/ship')
+  @RequireAssignedWarehouse()
   @HttpCode(HttpStatus.OK)
   @RequirePermissions(UPDATE)
   @RequireRole(BUSINESS_ROLES.WAREHOUSE_STAFF, DEFAULT_ROLES.ADMIN)

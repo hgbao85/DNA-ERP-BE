@@ -50,6 +50,8 @@ export interface PreparedMaterialYieldRecipeIssue {
   inputMaterial: { id: bigint; name: string };
   warehouse: { id: bigint; code: string };
   issuedQty: number;
+  /** Định mức nguyên liệu vào của công thức cho cả PI (rà soát 14/11 XK3) - xem plannedInputQtyForPi(). */
+  plannedQty: number;
 }
 
 const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
@@ -133,6 +135,11 @@ export class MaterialYieldRecipeIssuesService {
       inputMaterial: { id: inputMaterial.id, name: inputMaterial.name },
       warehouse: { id: realWarehouse.id, code: realWarehouse.code },
       issuedQty: dto.issuedQty,
+      plannedQty: await this.materialYieldRecipesService.plannedInputQtyForPi(
+        this.prisma,
+        piId,
+        recipe,
+      ),
     };
   }
 
@@ -150,6 +157,21 @@ export class MaterialYieldRecipeIssuesService {
       {
         await lockBusinessKey(tx, `material-yield-recipe-issue:${piId}:${recipeBigId}`);
         await assertPiHasActiveFloorLocked(tx, piId, 'xuất vật tư');
+
+        // Rà soát 14/11 XK3: chặn vượt định mức như các luồng tiêu hao / vật tư thành phẩm / đóng gói (dưới cùng khoá
+        // theo PI + công thức ở trên).
+        const issued = await tx.materialYieldRecipeIssue.aggregate({
+          where: { productionInvoiceId: piId, recipeId: recipeBigId },
+          _sum: { issuedQty: true },
+        });
+        const issuedSoFar = issued._sum.issuedQty?.toNumber() ?? 0;
+        const remaining = Math.round((p.plannedQty - issuedSoFar) * 10_000) / 10_000;
+        if (dto.issuedQty > remaining) {
+          throw new BadRequestException(
+            `Số lượng xuất (${dto.issuedQty}) vượt quá số lượng còn có thể xuất cho vật tư ${inputMaterial.name} ` +
+              `(định mức ${p.plannedQty}, đã xuất ${issuedSoFar}, còn ${Math.max(0, remaining)})`,
+          );
+        }
 
         const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
         SELECT "qty" FROM "stock_quant"

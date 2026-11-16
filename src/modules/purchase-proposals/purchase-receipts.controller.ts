@@ -11,6 +11,7 @@ import {
   RejectPurchaseReceiptDto,
 } from './dto/purchase-receipt.dto';
 import { PurchaseReceiptsService } from './purchase-receipts.service';
+import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 
 // Cùng quyền với route nhận hàng cũ - TÁCH khỏi PURCHASE_PROPOSAL:UPDATE (thủ kho không được chạm luồng mua).
 const RECEIVE = { module: PERMISSION_MODULES.PURCHASE_RECEIPT, action: PermissionAction.UPDATE };
@@ -46,6 +47,7 @@ export class PurchaseReceiptsController {
 
   /** "In phiếu nhập" (Đợt 6): giữ 1 số NK-yymmdd-NNN để in trước khi xác nhận nhập. `reuse` = số đã giữ trước đó (in lại). */
   @Post('slip-code')
+  @RequireAssignedWarehouse()
   @RequirePermissions(RECEIVE)
   reserveSlipCode(@CurrentUser('id') userId: string, @Body() body: { reuse?: string }) {
     return this.receipts.reserveSlipCode(
@@ -64,6 +66,7 @@ export class PurchaseReceiptsController {
   }
 
   @Post()
+  @RequireAssignedWarehouse()
   @RequirePermissions(RECEIVE)
   receive(
     @Body() dto: CreatePurchaseReceiptDto,
@@ -75,6 +78,7 @@ export class PurchaseReceiptsController {
   }
 
   @Post('reject')
+  @RequireAssignedWarehouse()
   @RequirePermissions(RECEIVE)
   reject(
     @Body() dto: RejectPurchaseReceiptDto,

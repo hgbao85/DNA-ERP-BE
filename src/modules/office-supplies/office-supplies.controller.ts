@@ -21,6 +21,7 @@ import { CreateOfficeSupplyDto } from './dto/create-office-supply.dto';
 import { ListOfficeSuppliesQueryDto } from './dto/list-office-supplies-query.dto';
 import { UpdateOfficeSupplyDto } from './dto/update-office-supply.dto';
 import { OfficeSuppliesService } from './office-supplies.service';
+import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 
 @ApiTags('Office Supplies')
 @ApiBearerAuth()
@@ -29,6 +30,7 @@ export class OfficeSuppliesController {
   constructor(private readonly officeSuppliesService: OfficeSuppliesService) {}
 
   @Post()
+  @RequireAssignedWarehouse()
   @RequirePermissions({ module: PERMISSION_MODULES.OFFICE_SUPPLY, action: PermissionAction.CREATE })
   create(
     @Body() dto: CreateOfficeSupplyDto,
@@ -63,6 +65,7 @@ export class OfficeSuppliesController {
   }
 
   @Patch(':id')
+  @RequireAssignedWarehouse()
   @RequirePermissions({ module: PERMISSION_MODULES.OFFICE_SUPPLY, action: PermissionAction.UPDATE })
   update(
     @Param('id') id: string,
@@ -73,6 +76,7 @@ export class OfficeSuppliesController {
   }
 
   @Post(':id/adjust')
+  @RequireAssignedWarehouse()
   @RequirePermissions({ module: PERMISSION_MODULES.OFFICE_SUPPLY, action: PermissionAction.UPDATE })
   adjustQuantity(
     @Param('id') id: string,
@@ -84,6 +88,7 @@ export class OfficeSuppliesController {
   }
 
   @Delete(':id')
+  @RequireAssignedWarehouse()
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions({ module: PERMISSION_MODULES.OFFICE_SUPPLY, action: PermissionAction.DELETE })
   remove(@Param('id') id: string, @CurrentUser('warehouseScope') warehouseScope: string | null) {

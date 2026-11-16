@@ -8,6 +8,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { SegmentStocktakeResult, SegmentStocktakeService } from './segment-stocktake.service';
+import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 
 export class SegmentStocktakeDto {
   @ApiProperty() @IsString() @Matches(/^\d+$/) warehouseId!: string;
@@ -32,6 +33,7 @@ export class SegmentStocktakeController {
   constructor(private readonly service: SegmentStocktakeService) {}
 
   @Post('stocktake')
+  @RequireAssignedWarehouse()
   @HttpCode(200)
   @RequirePermissions({ module: PERMISSION_MODULES.STOCK, action: PermissionAction.UPDATE })
   @ApiOperation({ summary: 'Kiểm kê 1 mã đoạn: nhập số đếm, ghi phần chênh (ADJUST)' })
