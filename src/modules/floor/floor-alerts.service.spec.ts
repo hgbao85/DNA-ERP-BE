@@ -756,6 +756,20 @@ describe('FloorAlertsService', () => {
       expect(runs()).toBe(1);
     });
 
+    it('FLOOR_ALERTS=off: cả yêu cầu thường lẫn urgent đều không chạy evaluate', async () => {
+      const old = process.env.FLOOR_ALERTS;
+      process.env.FLOOR_ALERTS = 'off';
+      try {
+        service.requestEvaluate();
+        service.requestEvaluate({ urgent: true });
+        await jest.advanceTimersByTimeAsync(DEBOUNCE + MIN_EVALUATE_GAP_MS * 2);
+        expect(runs()).toBe(0);
+      } finally {
+        if (old === undefined) delete process.env.FLOOR_ALERTS;
+        else process.env.FLOOR_ALERTS = old;
+      }
+    });
+
     it('yêu cầu liên tiếp chỉ chạy tối đa 1 lần / 30 giây, có đúng 1 lượt chạy bù cuối khoảng', async () => {
       service.requestEvaluate();
       await jest.advanceTimersByTimeAsync(DEBOUNCE);

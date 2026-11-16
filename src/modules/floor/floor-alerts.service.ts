@@ -102,9 +102,11 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
    * Gọi sau mỗi thao tác ghi của /floor/* (FloorRealtimeInterceptor) và khi có việc cần báo gấp -
    * gom lại, không chặn request. Thường: chạy tối đa 1 lần mỗi MIN_EVALUATE_GAP_MS, quá sớm thì
    * chạy bù cuối khoảng. `urgent`: vẫn gom 3 giây nhưng bỏ qua khoảng đó. Không bao giờ làm rơi yêu
-   * cầu.
+   * cầu. FLOOR_ALERTS=off tắt cả lượt do thao tác lẫn lượt gấp (đọc mỗi lần gọi), để công tắc tắt
+   * hẳn nhắc nền xưởng: không tự đóng lệnh Phôi, không kéo lệnh, không gửi thông báo.
    */
   requestEvaluate(opts?: { urgent?: boolean }): void {
+    if (process.env.FLOOR_ALERTS === 'off') return;
     if (opts?.urgent) this.urgentWaiting = true;
     if (this.debounce) return;
     this.debounce = setTimeout(() => {
