@@ -20,6 +20,7 @@ import { CreateWarehouseTransferDto } from './dto/create-warehouse-transfer.dto'
 import { ListWarehouseTransfersQueryDto } from './dto/list-warehouse-transfers-query.dto';
 import { RejectWarehouseTransferDto } from './dto/reject-warehouse-transfer.dto';
 import { WarehouseTransfersService } from './warehouse-transfers.service';
+import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 
 const VIEW = { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, action: PermissionAction.VIEW };
 const CREATE = { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, action: PermissionAction.CREATE };
@@ -32,6 +33,7 @@ export class WarehouseTransfersController {
   constructor(private readonly warehouseTransfersService: WarehouseTransfersService) {}
 
   @Post()
+  @RequireAssignedWarehouse()
   @RequirePermissions(CREATE)
   create(
     @Body() dto: CreateWarehouseTransferDto,
@@ -49,6 +51,7 @@ export class WarehouseTransfersController {
 
   // Piece-only (mảnh/vật tư thành phẩm) - tách khỏi create() (vật tư tiêu hao), mục 7.5.
   @Post('piece-transfer')
+  @RequireAssignedWarehouse()
   @RequirePermissions(CREATE)
   createPieceTransfer(
     @Body() dto: CreatePieceWarehouseTransferDto,
@@ -76,6 +79,7 @@ export class WarehouseTransfersController {
 
   /** Lập phiếu chuyển hàng của lệnh đổi xưởng từ 1 kho cũ sang kho cùng loại của xưởng mới. */
   @Post('workshop-moves')
+  @RequireAssignedWarehouse()
   @RequirePermissions(CREATE)
   createWorkshopMove(
     @Body() dto: CreateWorkshopMoveDto,
@@ -135,6 +139,7 @@ export class WarehouseTransfersController {
   // Kho đích xác nhận: ảnh phiếu đã ký bắt buộc + số thực nhận từng dòng (v8 4.1/4.7) - ghi bút toán theo số thực nhận,
   // giải phóng giữ chỗ.
   @Post(':id/confirm')
+  @RequireAssignedWarehouse()
   @RequirePermissions(APPROVE)
   confirm(
     @Param('id') id: string,
@@ -147,6 +152,7 @@ export class WarehouseTransfersController {
 
   // Kho đích từ chối - không đụng tồn kho, chỉ giải phóng reservation.
   @Post(':id/reject')
+  @RequireAssignedWarehouse()
   @RequirePermissions(APPROVE)
   reject(
     @Param('id') id: string,

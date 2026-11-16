@@ -20,6 +20,7 @@ import {
   ListIssueSlipsQueryDto,
 } from './dto/issue-slip.dto';
 import { IssueSlipsService } from './issue-slips.service';
+import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 
 // Cùng quyền với route xuất cũ (đã gỡ): thủ kho có MATERIAL_ISSUE CREATE+VIEW (và STEEL_ISSUE CREATE cho dòng sắt - kiểm phạm vi kho
 // trong service theo từng dòng).
@@ -57,6 +58,7 @@ export class IssueSlipsController {
 
   /** Bước 1: tạo phiếu, cấp số XK-yymmdd-NNN - chưa trừ tồn. */
   @Post()
+  @RequireAssignedWarehouse()
   @RequirePermissions(CREATE)
   create(
     @Body() dto: CreateIssueSlipDto,
@@ -68,6 +70,7 @@ export class IssueSlipsController {
 
   /** Bước 2: ảnh phiếu đã ký -> trừ tồn mọi dòng. Idempotency-Key bắt buộc. */
   @Post(':id/confirm')
+  @RequireAssignedWarehouse()
   @RequirePermissions(CREATE)
   confirm(
     @Param('id') id: string,
@@ -81,6 +84,7 @@ export class IssueSlipsController {
   }
 
   @Post(':id/cancel')
+  @RequireAssignedWarehouse()
   @RequirePermissions(CREATE)
   cancel(
     @Param('id') id: string,

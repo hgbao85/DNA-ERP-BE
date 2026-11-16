@@ -1,6 +1,7 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { WarehouseScopeGuard } from './warehouse-scope.guard';
+import { NO_ASSIGNED_WAREHOUSE_MESSAGE, WarehouseScopeGuard } from './warehouse-scope.guard';
+import { REQUIRE_ASSIGNED_WAREHOUSE_KEY } from '../decorators/require-assigned-warehouse.decorator';
 
 describe('WarehouseScopeGuard', () => {
   const buildContext = (
@@ -59,5 +60,34 @@ describe('WarehouseScopeGuard', () => {
     expect(() =>
       guard.canActivate(buildContext('kho-a', { params: { warehouseCode: 'kho-b' } })),
     ).toThrow(ForbiddenException);
+  });
+  describe('rà soát 14/11 XK1: @RequireAssignedWarehouse - route ghi của kho', () => {
+    const ctx = (roles: string[], warehouseScope: string | null): ExecutionContext =>
+      ({
+        switchToHttp: () => ({
+          getRequest: () => ({ user: { roles, warehouseScope }, params: {}, query: {} }),
+        }),
+        getHandler: () => jest.fn(),
+        getClass: () => jest.fn(),
+      }) as unknown as ExecutionContext;
+    const guard = new WarehouseScopeGuard({
+      getAllAndOverride: jest.fn((key: string) =>
+        key === REQUIRE_ASSIGNED_WAREHOUSE_KEY ? true : undefined,
+      ),
+    } as unknown as Reflector);
+
+    it('Nhân viên (người mua / KHSX / thủ kho chưa gán kho) để trống phạm vi -> 403', () => {
+      expect(() => guard.canActivate(ctx(['PURCHASER', 'WAREHOUSE_STAFF'], null))).toThrow(
+        NO_ASSIGNED_WAREHOUSE_MESSAGE,
+      );
+      expect(() => guard.canActivate(ctx(['WAREHOUSE_STAFF'], ''))).toThrow(ForbiddenException);
+    });
+
+    it('thủ kho đã gán kho, Admin, Giám đốc, vai trò khác không bị chặn', () => {
+      expect(guard.canActivate(ctx(['WAREHOUSE_STAFF'], 'vat-tu-tp'))).toBe(true);
+      expect(guard.canActivate(ctx(['ADMIN'], null))).toBe(true);
+      expect(guard.canActivate(ctx(['BOSS', 'WAREHOUSE_STAFF'], null))).toBe(true);
+      expect(guard.canActivate(ctx(['PRODUCTION_MANAGER'], null))).toBe(true);
+    });
   });
 });

@@ -178,8 +178,10 @@ export class IssueSlipsService {
           // RPK.2: đóng gói + vật tư kèm đan kiểm tồn cả lúc lập (trước đây chỉ lúc xác nhận - lập
           // được phiếu khi kho = 0).
           if (c.packaging) await this.packaging.assertStockForSlip(tx, c.packaging);
-          if (c.weavingMaterial)
+          if (c.weavingMaterial) {
+            await this.weaving.assertMaterialCapInTx(tx, c.weavingMaterial, null);
             await this.weaving.assertMaterialStockForSlip(tx, c.weavingMaterial);
+          }
         }
         const code = await allocateSlipCode(tx, 'XK');
         const slip = await tx.issueSlip.create({
@@ -557,6 +559,8 @@ export class IssueSlipsService {
       return this.toDto(slip, await this.lenhCodesOf(slip));
     }
     this.assertDraft(slip);
+    // Rà soát 14/11 XK1: thủ kho chỉ xác nhận phiếu của kho mình (trước đây chỉ huỷ phiếu mới kiểm).
+    this.assertSlipScope(slip, scope);
     const urls = cleanUrls(signedSlipUrls);
     if (urls.length === 0) {
       throw new BadRequestException('Cần ảnh phiếu xuất đã có chữ ký người nhận');
@@ -575,8 +579,11 @@ export class IssueSlipsService {
     // xưởng) rồi so lại - đổi xưởng chen giữa thì 409, không xuất ở kho xưởng cũ.
     const piIds = await this.piIdsOfLines(slip.lines);
     const workshopsAtPrepare = await workshopsOfPis(this.prisma, piIds);
-    for (const line of slip.lines)
-      prepared.push(await this.prepareLine(line, scope, slipWarehouse, slip.weavingPointId));
+    for (const line of slip.lines) {
+      const p = await this.prepareLine(line, scope, slipWarehouse, slip.weavingPointId);
+      this.assertLineInSlipWarehouse(p, slip);
+      prepared.push(p);
+    }
     // Thứ tự ghi cố định theo vật tư/mảnh rồi dòng - 2 phiếu chạm cùng hàng khoá cùng thứ tự, không
     // khoá chéo.
     const order = [...prepared].sort((a, b) => {
@@ -649,7 +656,13 @@ export class IssueSlipsService {
             continue;
           }
           if (p.kind === 'WEAVING_MATERIAL') {
-            const row = await this.weaving.createMaterialIssueInTx(tx, p.prepared, userId, key);
+            const row = await this.weaving.createMaterialIssueInTx(
+              tx,
+              p.prepared,
+              userId,
+              key,
+              slip.id,
+            );
             await tx.issueSlipLine.update({
               where: { id: p.lineId },
               data: { weavingIssueMaterialId: row.id },
@@ -954,11 +967,6 @@ export class IssueSlipsService {
         qty,
         scope,
       );
-      if (prepared.warehouse.id !== slipWarehouse.id) {
-        throw new ConflictException(
-          `Mảnh ${prepared.pieceName} nay thuộc kho ${prepared.warehouse.code}, khác kho của phiếu - huỷ phiếu và lập lại`,
-        );
-      }
       return { lineId: line.id, kind: 'WEAVING_PIECE', prepared };
     }
     if (line.kind === IssueSlipLineKind.MATERIAL_YIELD_RECIPE) {
@@ -1160,6 +1168,37 @@ export class IssueSlipsService {
       }
     }
     return [...ids].map((s) => BigInt(s));
+  }
+
+  /** Kho thật mà dòng sẽ trừ tồn - cùng trường checkLine() dùng lúc lập phiếu. */
+  private warehouseIdOfPrepared(p: PreparedLine): bigint {
+    switch (p.kind) {
+      case 'SHARED':
+        return p.warehouseId;
+      case 'WEAVING_MATERIAL':
+        return p.prepared.warehouseId;
+      case 'PACKAGING':
+        return p.prepared.sourceWarehouse.id;
+      default:
+        return p.prepared.warehouse.id;
+    }
+  }
+
+  /**
+   * Rà soát 14/11 XK1: lúc xác nhận, kho tra lại của mỗi dòng phải đúng kho in trên phiếu (người nhận ký phiếu của kho đó) -
+   * lệnh đổi xưởng / vật tư đổi kho sau khi in thì huỷ phiếu và lập lại, không trừ tồn ở kho khác.
+   */
+  private assertLineInSlipWarehouse(p: PreparedLine, slip: SlipRow): void {
+    if (this.warehouseIdOfPrepared(p) === slip.warehouseId) return;
+    const what =
+      p.kind === 'WEAVING_PIECE'
+        ? `Mảnh ${p.prepared.pieceName}`
+        : p.kind === 'MATERIAL_YIELD_RECIPE'
+          ? 'Nguyên liệu theo công thức'
+          : 'Vật tư';
+    throw new ConflictException(
+      `${what} trên phiếu ${slip.code} nay xuất từ kho khác kho ${slip.warehouse.code} của phiếu - huỷ phiếu và lập lại`,
+    );
   }
 
   private assertSlipScope(slip: SlipRow, scope: string | null): void {

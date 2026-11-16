@@ -526,6 +526,47 @@ describe('SteelIssuesService', () => {
     });
   });
 
+  describe('rà soát 14/11 XK4: chiều dài cây theo phương án đã duyệt', () => {
+    it('cây khác chiều dài phương án -> 400, không ghi', async () => {
+      prisma.cuttingProposalLine.findMany.mockResolvedValueOnce([{ bestStockLengthMm: 5900 }]);
+      const err = await service
+        .create('1', { materialId: '30', barLengthMm: 6000, barCount: 20 }, 'user-1', null)
+        .catch((e: Error) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toContain('5900mm');
+      expect(prisma.cuttingProposalLine.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest mock typing
+          where: expect.objectContaining({
+            materialId: 30n,
+            feasible: true,
+            bestStockLengthMm: { not: null },
+          }),
+        }),
+      );
+      expect(prisma.steelIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('đúng chiều dài phương án -> xuất được; phương án cũ chưa lưu chiều dài -> không kiểm', async () => {
+      prisma.steelIssue.create.mockResolvedValue(issue);
+      prisma.cuttingProposalLine.findMany.mockResolvedValueOnce([{ bestStockLengthMm: 6000 }]);
+      await service.create(
+        '1',
+        { materialId: '30', barLengthMm: 6000, barCount: 20 },
+        'user-1',
+        null,
+      );
+      prisma.cuttingProposalLine.findMany.mockResolvedValueOnce([]);
+      await service.create(
+        '1',
+        { materialId: '30', barLengthMm: 5000, barCount: 20 },
+        'user-1',
+        null,
+      );
+      expect(prisma.steelIssue.create).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('createInTx - rà soát 14/11 CK6: khoá dòng lệnh chung với đổi xưởng', () => {
     const prepared = {
       productionInvoiceId: 1n,

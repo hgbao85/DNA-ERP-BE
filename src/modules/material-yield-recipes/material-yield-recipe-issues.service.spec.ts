@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { PrismaServiceType } from '../../prisma/prisma.service';
@@ -92,5 +93,86 @@ describe('MaterialYieldRecipeIssuesService - thông báo', () => {
     notifications.resolve.mockRejectedValue(new Error('boom'));
 
     await expect(service.receive('5', {}, 'u1', 'PHOI')).resolves.toBeDefined();
+  });
+});
+
+/** Rà soát 14/11 XK3: xuất theo công thức chặn vượt định mức như các luồng tiêu hao / vật tư thành phẩm / đóng gói. */
+describe('MaterialYieldRecipeIssuesService - trần định mức (XK3)', () => {
+  const prepared = {
+    piId: 9n,
+    recipeBigId: 2n,
+    inputMaterial: { id: 77n, name: 'Thanh nhôm' },
+    warehouse: { id: 6n, code: 'phoi-son-han' },
+    issuedQty: 5,
+    plannedQty: 12,
+  };
+  let tx: {
+    $executeRaw: jest.Mock;
+    $queryRaw: jest.Mock;
+    materialYieldRecipeIssue: { aggregate: jest.Mock; create: jest.Mock };
+  };
+  let service: MaterialYieldRecipeIssuesService;
+
+  beforeEach(() => {
+    tx = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $queryRaw: jest
+        .fn()
+        // floor gate (FOR UPDATE lệnh) rồi dòng tồn.
+        .mockResolvedValueOnce([{ floorStage: 'ACTIVE' }])
+        .mockResolvedValueOnce([{ qty: { toNumber: () => 100 } }]),
+      materialYieldRecipeIssue: {
+        aggregate: jest.fn().mockResolvedValue({ _sum: { issuedQty: { toNumber: () => 8 } } }),
+        create: jest.fn(),
+      },
+    };
+    service = new MaterialYieldRecipeIssuesService(
+      {} as unknown as PrismaServiceType,
+      {} as unknown as StockLedgerService,
+      {} as unknown as MaterialYieldRecipesService,
+      {} as unknown as NotificationsService,
+      {} as unknown as ClsService<AppClsStore>,
+    );
+  });
+
+  it('xuất vượt định mức còn lại (định mức − đã xuất của PI + công thức) -> 400, không ghi', async () => {
+    const err = await service.createInTx(tx as never, prepared, 'u1').catch((e: Error) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err as Error).message).toContain('định mức 12, đã xuất 8, còn 4');
+    expect(tx.materialYieldRecipeIssue.aggregate).toHaveBeenCalledWith({
+      where: { productionInvoiceId: 9n, recipeId: 2n },
+      _sum: { issuedQty: true },
+    });
+    expect(tx.materialYieldRecipeIssue.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('MaterialYieldRecipesService.plannedInputQtyForPi (XK3)', () => {
+  it('⌈Σ vật tư ra theo định mức các SKU của PI ÷ số thanh ra/cây⌉, không trừ tồn vật tư ra', async () => {
+    const db = {
+      productionOrder: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 1n, bomRevisionId: 5n, quantity: 10 },
+          { id: 2n, bomRevisionId: 6n, quantity: 3 },
+        ]),
+      },
+      pieceMaterialItem: {
+        findMany: jest.fn().mockResolvedValue([
+          { bomRevisionId: 5n, pieceId: 20n, materialId: 88n, qtyPerPiece: { toNumber: () => 2 } },
+          { bomRevisionId: 6n, pieceId: 21n, materialId: 88n, qtyPerPiece: { toNumber: () => 1 } },
+        ]),
+      },
+      bomPiece: {
+        findMany: jest.fn().mockResolvedValue([
+          { bomRevisionId: 5n, pieceId: 20n, qtyPerUnit: 4 },
+          { bomRevisionId: 6n, pieceId: 21n, qtyPerUnit: 2 },
+        ]),
+      },
+    };
+    const recipes = new MaterialYieldRecipesService(db as unknown as PrismaServiceType);
+    // 2×4×10 + 1×2×3 = 86 chân nhôm, 4 chân/cây -> ⌈21.5⌉ = 22 cây.
+    await expect(
+      recipes.plannedInputQtyForPi(db as never, 9n, { outputMaterialId: 88n, piecesPerBar: 4 }),
+    ).resolves.toBe(22);
   });
 });

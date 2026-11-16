@@ -7,6 +7,7 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
 import { ListStockLedgerQueryDto } from './dto/list-stock-ledger-query.dto';
 import { StockLedgerService } from './stock-ledger.service';
+import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 
 const VIEW = { module: PERMISSION_MODULES.STOCK, action: PermissionAction.VIEW };
 const UPDATE = { module: PERMISSION_MODULES.STOCK, action: PermissionAction.UPDATE };
@@ -26,6 +27,7 @@ export class StockLedgerController {
   // Ngoại lệ duy nhất được ghi stock_ledger qua HTTP công khai - mọi bút toán khác đi qua
   // StockLedgerService.postEntry() nội bộ, gọi từ service nghiệp vụ tương ứng.
   @Post('adjust')
+  @RequireAssignedWarehouse()
   @RequirePermissions(UPDATE)
   adjust(
     @Body() dto: CreateStockAdjustmentDto,

@@ -8,7 +8,7 @@ import {
 import { Prisma, SteelSubGroup } from '../../generated/prisma/client';
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { CreateMaterialYieldRecipeDto } from './dto/create-material-yield-recipe.dto';
 import { MaterialYieldRecipeDemandItemResponseDto } from './dto/material-yield-recipe-demand-item-response.dto';
 import { MaterialYieldRecipeResponseDto } from './dto/material-yield-recipe-response.dto';
@@ -119,54 +119,17 @@ export class MaterialYieldRecipesService {
     productionInvoiceId: string,
   ): Promise<MaterialYieldRecipeDemandItemResponseDto[]> {
     const piId = parseBigIntId(productionInvoiceId);
-
-    const orders = await this.prisma.productionOrder.findMany({
-      where: { productionInvoiceItem: { productionInvoiceId: piId } },
-      select: { id: true, bomRevisionId: true, quantity: true },
-    });
-    if (orders.length === 0) return [];
-
     const recipes = await this.prisma.materialYieldRecipe.findMany({
       where: { isActive: true },
       include: RECIPE_INCLUDE,
     });
     if (recipes.length === 0) return [];
     const outputMaterialIds = recipes.map((r) => r.outputMaterialId);
-
-    const bomRevisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
-    const lines = await this.prisma.pieceMaterialItem.findMany({
-      where: {
-        bomRevisionId: { in: bomRevisionIds },
-        materialId: { in: outputMaterialIds },
-        includeInWeaving: true,
-      },
-    });
-    if (lines.length === 0) return [];
-
-    const bomPieces = await this.prisma.bomPiece.findMany({
-      where: { bomRevisionId: { in: bomRevisionIds } },
-    });
-    const qtyPerUnitByRevisionPiece = new Map(
-      bomPieces.map((bp) => [`${bp.bomRevisionId}:${bp.pieceId}`, bp.qtyPerUnit]),
+    const requiredByMaterial = await this.requiredOutputByMaterial(
+      this.prisma,
+      piId,
+      outputMaterialIds,
     );
-    const ordersByRevision = new Map<string, { quantity: number }[]>();
-    for (const o of orders) {
-      const key = o.bomRevisionId.toString();
-      const arr = ordersByRevision.get(key) ?? [];
-      arr.push({ quantity: o.quantity });
-      ordersByRevision.set(key, arr);
-    }
-
-    const requiredByMaterial = new Map<string, number>();
-    for (const line of lines) {
-      const qtyPerUnit = qtyPerUnitByRevisionPiece.get(`${line.bomRevisionId}:${line.pieceId}`);
-      if (qtyPerUnit == null) continue;
-      const ordersForRevision = ordersByRevision.get(line.bomRevisionId.toString()) ?? [];
-      const totalQtyPerUnit = qtyPerUnit * line.qtyPerPiece.toNumber();
-      const required = ordersForRevision.reduce((s, o) => s + totalQtyPerUnit * o.quantity, 0);
-      const key = line.materialId.toString();
-      requiredByMaterial.set(key, (requiredByMaterial.get(key) ?? 0) + required);
-    }
     if (requiredByMaterial.size === 0) return [];
 
     const stockRows = await this.prisma.stockQuant.findMany({
@@ -212,6 +175,71 @@ export class MaterialYieldRecipesService {
       );
     }
     return result;
+  }
+
+  /**
+   * Định mức nguyên liệu vào của 1 công thức cho cả PI (rà soát 14/11 XK3): ⌈Σ vật tư ra theo định mức các SKU của PI ÷ số
+   * thanh ra/cây⌉ - số GỘP, không trừ tồn vật tư ra như getProductionDemand() (tồn vật tư ra tăng dần khi Phôi gia công chính
+   * nguyên liệu đã xuất, trừ vào sẽ đếm 2 lần). Dùng làm trần xuất theo công thức.
+   */
+  async plannedInputQtyForPi(
+    db: PrismaServiceType | PrismaTx,
+    piId: bigint,
+    recipe: { outputMaterialId: bigint; piecesPerBar: number },
+  ): Promise<number> {
+    const required = await this.requiredOutputByMaterial(db, piId, [recipe.outputMaterialId]);
+    const output = required.get(recipe.outputMaterialId.toString()) ?? 0;
+    return recipe.piecesPerBar > 0 ? Math.ceil(output / recipe.piecesPerBar) : 0;
+  }
+
+  /** Σ vật tư ra (theo định mức, includeInWeaving) của mọi lệnh SX thuộc PI, theo vật tư. */
+  private async requiredOutputByMaterial(
+    db: PrismaServiceType | PrismaTx,
+    piId: bigint,
+    outputMaterialIds: bigint[],
+  ): Promise<Map<string, number>> {
+    const requiredByMaterial = new Map<string, number>();
+    if (outputMaterialIds.length === 0) return requiredByMaterial;
+    const orders = await db.productionOrder.findMany({
+      where: { productionInvoiceItem: { productionInvoiceId: piId } },
+      select: { id: true, bomRevisionId: true, quantity: true },
+    });
+    if (orders.length === 0) return requiredByMaterial;
+
+    const bomRevisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
+    const lines = await db.pieceMaterialItem.findMany({
+      where: {
+        bomRevisionId: { in: bomRevisionIds },
+        materialId: { in: outputMaterialIds },
+        includeInWeaving: true,
+      },
+    });
+    if (lines.length === 0) return requiredByMaterial;
+
+    const bomPieces = await db.bomPiece.findMany({
+      where: { bomRevisionId: { in: bomRevisionIds } },
+    });
+    const qtyPerUnitByRevisionPiece = new Map(
+      bomPieces.map((bp) => [`${bp.bomRevisionId}:${bp.pieceId}`, bp.qtyPerUnit]),
+    );
+    const ordersByRevision = new Map<string, { quantity: number }[]>();
+    for (const o of orders) {
+      const key = o.bomRevisionId.toString();
+      const arr = ordersByRevision.get(key) ?? [];
+      arr.push({ quantity: o.quantity });
+      ordersByRevision.set(key, arr);
+    }
+
+    for (const line of lines) {
+      const qtyPerUnit = qtyPerUnitByRevisionPiece.get(`${line.bomRevisionId}:${line.pieceId}`);
+      if (qtyPerUnit == null) continue;
+      const ordersForRevision = ordersByRevision.get(line.bomRevisionId.toString()) ?? [];
+      const totalQtyPerUnit = qtyPerUnit * line.qtyPerPiece.toNumber();
+      const required = ordersForRevision.reduce((s, o) => s + totalQtyPerUnit * o.quantity, 0);
+      const key = line.materialId.toString();
+      requiredByMaterial.set(key, (requiredByMaterial.get(key) ?? 0) + required);
+    }
+    return requiredByMaterial;
   }
 
   /** Dùng bởi MaterialYieldRecipeIssuesService/MaterialYieldRecipeProductionService - tránh query
