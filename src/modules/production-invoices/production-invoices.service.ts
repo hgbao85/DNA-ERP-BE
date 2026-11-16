@@ -105,6 +105,8 @@ import { ItemDeadlineWriter } from './item-deadline-writer.service';
 import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
 import { WorkshopMoveService } from '../warehouse-transfers/workshop-move.service';
 import { lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
+import { FloorQueueMove, moveOpenQueueEntriesToPiWorkshop } from '../floor/floor-queue-move.util';
+import type { PiWorkshopChangedQueueMove } from '../notifications/notification-types';
 import {
   WorkshopScope,
   WorkshopScopeService,
@@ -362,21 +364,35 @@ export class ProductionInvoicesService {
   }
 
   /**
-   * Gửi Sếp: QLSX có phạm vi không được tự đổi xưởng của SKU qua đường này (xưởng khác -> 400, phải dùng "Chuyển xưởng").
-   * Thiếu workshopId thì lấy đúng xưởng hiện tại của SKU (an toàn, vì bằng với xưởng đang giữ). Người không giới hạn: như cũ.
+   * Gửi Sếp (16/11/2026): MỌI QLSX (kể cả không gắn xưởng) không được đổi xưởng của SKU qua đường này - xưởng khác xưởng SKU đang
+   * giữ -> 400, việc đổi xưởng là của KHSX. SKU chưa có xưởng (dữ liệu cũ) thì vẫn chọn được. Thiếu workshopId thì lấy đúng
+   * xưởng hiện tại của SKU (an toàn, vì bằng với xưởng đang giữ).
    */
   private resolveWorkshopParamForBoss(
-    scope: WorkshopScope,
-    targets: { workshopId: bigint | null }[],
+    items: {
+      workshopId: bigint | null;
+      prodApprovalStatus: ProdApprovalStatus | null;
+      workshop?: { name: string } | null;
+    }[],
     workshopId: string | undefined,
   ): string | undefined {
-    if (scope.workshopId == null) return workshopId;
-    const held = targets.filter((it) => it.workshopId != null);
+    // Xét MỌI SKU đang hoạt động của lệnh (không chỉ SKU đang gửi): lệnh đã giữ xưởng thì SKU gửi sau cũng phải theo.
+    const held = items.filter(
+      (it) =>
+        it.workshopId != null &&
+        (it.prodApprovalStatus === ProdApprovalStatus.WAITING_QLSX ||
+          it.prodApprovalStatus === ProdApprovalStatus.WAITING_BOSS ||
+          it.prodApprovalStatus === ProdApprovalStatus.APPROVED),
+    );
     if (workshopId && workshopId.trim() !== '') {
       const sent = parseBigIntId(workshopId);
-      if (held.some((it) => it.workshopId !== sent)) {
+      const other = held.find((it) => it.workshopId !== sent);
+      if (other) {
+        const name = other.workshop?.name;
         throw new BadRequestException(
-          'Không đổi xưởng khi gửi Sếp - dùng nút "Chuyển xưởng" nếu muốn đẩy lệnh sang xưởng khác',
+          `Không đổi xưởng khi gửi Sếp - lệnh${
+            name ? ` đang ở ${name}` : ''
+          } (vừa có thay đổi thì tải lại trang); cần sang xưởng khác thì báo KHSX đổi xưởng`,
         );
       }
       return workshopId;
@@ -645,7 +661,7 @@ export class ProductionInvoicesService {
    * phải đúng xưởng đó (400).
    * Lệnh cũ (phương án không ghi xưởng) hoặc DTO không gửi xưởng: không chặn. Gửi đúng xưởng dòng
    * lệnh ĐANG GIỮ cũng không chặn:
-   * QLSX đã chuyển lệnh sang xưởng khác (cờ kiểm lại đã bật) rồi trả về KHSX thì KHSX phải gửi lại
+   * Lệnh đã đổi sang xưởng khác (cờ kiểm lại đã bật) rồi trả về KHSX thì KHSX phải gửi lại
    * được, không bị kẹt.
    */
   private async assertSendWorkshopMatchesProposal(
@@ -671,12 +687,12 @@ export class ProductionInvoicesService {
     throw new BadRequestException(
       `Lệnh ${lenhDisplayCode(pi, pi.items)} đã tính phương án cắt cho ${
         proposalWorkshop?.name ?? `xưởng ${proposalWorkshopId}`
-      }. Muốn làm ở xưởng khác: tính lại ở "Tối ưu cắt sắt" với xưởng mới, hoặc gửi đúng xưởng rồi để QLSX chuyển xưởng.`,
+      }. Muốn làm ở xưởng khác: tính lại ở "Tối ưu cắt sắt" với xưởng mới, hoặc gửi đúng xưởng rồi bấm "Đổi xưởng" ở lệnh.`,
     );
   }
 
   /**
-   * 13/11/2026: đổi xưởng của lệnh (QLSX "Chuyển xưởng" hoặc đổi lúc gửi Sếp) -> nếu lệnh có BẤT KỲ
+   * 13/11/2026: đổi xưởng của lệnh (KHSX bấm "Đổi xưởng"; QLSX chỉ chọn xưởng lúc gửi Sếp khi SKU chưa có) -> nếu lệnh có BẤT KỲ
    * phương án cắt đã tính xong chưa huỷ
    * (DRAFT = chờ duyệt, APPROVED = đã duyệt; không tính CALCULATING/FAILED/SUPERSEDED; neo PI - đợt
    * gộp - hoặc neo SKU) thì bật cờ
@@ -716,6 +732,18 @@ export class ProductionInvoicesService {
     toWorkshop: string,
     actorUserId: string,
   ): Promise<void> {
+    // Đổi xưởng nhiều lần: đóng bản còn mở trước để KHSX chỉ thấy 1 nhắc (như PI_SENT_TO_QLSX). Lỗi đóng chỉ log.
+    try {
+      await this.notifications.resolve({
+        entityType: 'PRODUCTION_INVOICE',
+        entityId: pi.id.toString(),
+        types: ['PI_CUTTING_RECHECK_REQUIRED'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve old PI_CUTTING_RECHECK_REQUIRED (PI ${pi.id}): ${(error as Error).message}`,
+      );
+    }
     try {
       await this.notifications.emit('PI_CUTTING_RECHECK_REQUIRED', {
         entityId: pi.id.toString(),
@@ -735,7 +763,7 @@ export class ProductionInvoicesService {
   }
 
   /**
-   * Sau khi QLSX gửi Sếp mà đổi xưởng: bật cờ (nếu có phương án đã tính) + báo KHSX. Best-effort -
+   * Sau khi gửi Sếp mà xưởng của dòng đổi: bật cờ (nếu có phương án đã tính) + báo KHSX. Best-effort -
    * lỗi chỉ log, không chặn việc gửi.
    */
   private async flagRecheckAfterSendToBoss(
@@ -1362,8 +1390,10 @@ export class ProductionInvoicesService {
   }
 
   /**
-   * Phần A – Đợt 2: QLSX đổi xưởng cơ khí của CẢ lệnh (PATCH :id/workshop) sau khi đã gửi Sếp/đã duyệt - chỉ được khi chưa xuất
-   * sắt / vật tư cho xưởng. Kiểm 2 lần (trước + trong transaction) để chống đua với xuất sắt.
+   * Phần A – Đợt 2: đổi xưởng cơ khí của CẢ lệnh (PATCH :id/workshop) khi lệnh chờ QLSX / đã gửi Sếp / đã duyệt - chỉ được khi
+   * chưa xuất sắt / vật tư cho xưởng. Kiểm 2 lần (trước + trong transaction) để chống đua với xuất sắt.
+   * 16/11/2026: người đổi là KHSX (hoặc Admin), QLSX không còn quyền (chặn ở controller). Dòng hàng đợi tổ Phôi/Hàn/Sơn còn mở
+   * của lệnh dời sang hàng đợi xưởng mới CÙNG transaction (moveOpenQueueEntriesToPiWorkshop).
    */
   async changeWorkshop(
     piId: string,
@@ -1375,7 +1405,8 @@ export class ProductionInvoicesService {
     if (pi.items.length === 0) {
       throw new ConflictException(`Lệnh ${pi.code} không còn SKU nào - không đổi xưởng được`);
     }
-    // QLSX chỉ chuyển được lệnh của chính xưởng mình (lệnh xưởng sơn nhờ chỉ xem) -> 403.
+    // Ai có gắn xưởng (vd KHSX phụ trách 1 xưởng) chỉ đổi được lệnh của chính xưởng mình (lệnh xưởng sơn nhờ chỉ xem) -> 403;
+    // KHSX / Admin không gắn xưởng thì không bị chặn.
     const scope = await this.assertCanManageItems(actorUserId, pi.items, 'lệnh này');
     const notSent = pi.items.find(
       (it) =>
@@ -1403,11 +1434,29 @@ export class ProductionInvoicesService {
     const ids = pi.items.map((it) => it.id);
     await this.assertNoMaterialIssued(this.prisma, pi.id, ids, displayCode);
 
+    // Các xưởng của lệnh lúc đọc: so với xưởng SAU khoá để bắt 2 lần đổi xưởng cùng lúc. So theo TẬP xưởng vì lockPisForIssue
+    // (workshopsOfPis) chỉ trả 1 xưởng, không theo thứ tự cố định - lệnh dữ liệu cũ lẫn 2 xưởng không được bị chặn nhầm
+    // (đổi xưởng chính là cách gom lệnh đó về 1 xưởng).
+    const workshopsAtRead = new Set(
+      pi.items.flatMap((it) => (it.workshopId != null ? [it.workshopId.toString()] : [])),
+    );
     let cuttingRecheckFlagged = false;
+    let queueMoves: FloorQueueMove[] = [];
     const notifyWorkshopMove = await this.prisma.$transaction(async (tx) => {
       // Rà soát 14/11 CK6 (người B): khoá dòng lệnh làm việc ĐẦU TIÊN - CÙNG khoá với xuất sắt / xác nhận phiếu XK
       // (lockPisForIssue). Lượt xuất đang chạy xong trước thì assertNoMaterialIssued() dưới thấy; chạy sau thì nó thấy xưởng mới.
-      await lockPisForIssue(tx, [pi.id]);
+      const locked = (await lockPisForIssue(tx, [pi.id])).get(pi.id.toString());
+      // Người khác vừa đổi xưởng xong trong lúc mình chờ khoá -> dừng, không đổi chồng lên (xưởng cũ trong thông báo / hàng đợi sẽ sai).
+      const changedMeanwhile =
+        locked != null &&
+        (locked.workshopId == null
+          ? workshopsAtRead.size > 0
+          : !workshopsAtRead.has(locked.workshopId.toString()));
+      if (changedMeanwhile) {
+        throw new ConflictException(
+          `Lệnh ${displayCode} vừa được đổi xưởng bởi người khác - tải lại trang rồi thử lại`,
+        );
+      }
       await this.assertNoMaterialIssued(tx, pi.id, ids, displayCode);
       const { count } = await tx.productionInvoiceItem.updateMany({
         where: {
@@ -1427,6 +1476,11 @@ export class ProductionInvoicesService {
           `Lệnh ${displayCode} đã có thay đổi khác trong lúc đổi xưởng - tải lại trang rồi thử lại`,
         );
       }
+      // 16/11/2026: dòng hàng đợi tổ còn mở (chờ / đang chạy) dời sang hàng đợi xưởng mới, cùng transaction. Thứ tự khoá ở đây:
+      // dòng lệnh (trên) -> khoá hàng đợi. Chiều ngược (enqueue giữ khoá hàng đợi rồi INSERT, khoá ngoại lấy KEY SHARE trên dòng
+      // lệnh) có tồn tại; vòng khoá chỉ xảy ra khi >= 3 giao dịch chồng nhau, Postgres huỷ 1 giao dịch (người dùng thử lại được),
+      // dữ liệu không hỏng - xem chú thích ở floor-queue-move.util.ts.
+      queueMoves = await moveOpenQueueEntriesToPiWorkshop(tx, pi.id);
       // Phần A (13/11/2026: kể cả lệnh CHƯA duyệt): lệnh có phương án cắt đã tính xong chưa huỷ ->
       // bật cờ "cần kiểm lại". Không tự tính lại.
       cuttingRecheckFlagged = await this.flagCuttingRecheckOnWorkshopChange(tx, pi.id);
@@ -1434,6 +1488,21 @@ export class ProductionInvoicesService {
       return this.workshopMove.afterWorkshopChanged(tx, pi.id, workshop.id, actorUserId);
     });
     await notifyWorkshopMove();
+    // Hàng đợi tổ đổi -> báo màn QLSX (kênh sàn xưởng) tự tải lại. Realtime là phần phụ: lỗi chỉ ghi log.
+    if (queueMoves.length > 0) {
+      try {
+        this.realtime.publishEntityChanged({
+          entity: 'FLOOR_REPORT',
+          entityId: pi.id.toString(),
+          action: 'UPDATED',
+          actorId: actorUserId,
+        });
+      } catch (error) {
+        this.logger.error(
+          `Publish floor realtime failed (PI ${pi.id}): ${(error as Error).message}`,
+        );
+      }
+    }
 
     for (const it of pi.items) {
       await auditEvent(this.prisma, this.cls, this.logger, {
@@ -1449,7 +1518,25 @@ export class ProductionInvoicesService {
     }
     // Phần A – Đợt 3 (V4-5): đổi sang xưởng làm số ngày khác -> báo KHSX đặt lại mốc.
     await this.notifyTimelineReplanIfNeeded(pi, pi.items, workshop, actorUserId);
+    // Tra tên xưởng lỗi chỉ làm thông báo thiếu phần hàng đợi, không được làm mất cả thông báo.
+    let queueMovesForNotice: PiWorkshopChangedQueueMove[] | undefined;
     try {
+      queueMovesForNotice = await this.describeQueueMoves(queueMoves);
+    } catch (error) {
+      this.logger.error(
+        `Failed to describe queue moves for PI_WORKSHOP_CHANGED (PI ${pi.id}): ${(error as Error).message}`,
+      );
+    }
+    try {
+      // Id xưởng liên quan (cũ + mới + hàng đợi dời) để RecipientResolver giữ QLSX xưởng cũ: thông báo phát sau commit, lúc đó
+      // mọi SKU đã ở xưởng mới nên tra theo piCode sẽ loại nhầm họ.
+      const workshopIdSet = new Set<string>([workshop.id.toString()]);
+      for (const it of pi.items)
+        if (it.workshopId != null) workshopIdSet.add(it.workshopId.toString());
+      for (const m of queueMoves) {
+        if (m.fromWorkshopId != null) workshopIdSet.add(m.fromWorkshopId.toString());
+        if (m.toWorkshopId != null) workshopIdSet.add(m.toWorkshopId.toString());
+      }
       await this.notifications.emit('PI_WORKSHOP_CHANGED', {
         entityId: pi.id.toString(),
         actorId: actorUserId,
@@ -1460,6 +1547,11 @@ export class ProductionInvoicesService {
           toWorkshop: workshop.name,
           reason,
           count: ids.length,
+          queueMoves: queueMovesForNotice,
+          workshopIds: [...workshopIdSet],
+          // "Tổng hợp lệnh SX" hiện lệnh khi có ÍT NHẤT 1 SKU đã duyệt; chưa SKU nào duyệt thì màn đó không có lệnh -> link
+          // thông báo trỏ tới màn lệnh SX / chờ duyệt.
+          approved: pi.items.some((it) => it.prodApprovalStatus === ProdApprovalStatus.APPROVED),
         },
       });
     } catch (error) {
@@ -1494,6 +1586,36 @@ export class ProductionInvoicesService {
     const result = await this.findOne(piId);
     result.canManage = this.workshopScope.canManage(scope, workshop.id);
     return result;
+  }
+
+  /** Đổi id xưởng của các dòng hàng đợi đã dời thành tên xưởng cho thông báo. */
+  private async describeQueueMoves(
+    moves: FloorQueueMove[],
+  ): Promise<PiWorkshopChangedQueueMove[] | undefined> {
+    if (moves.length === 0) return undefined;
+    const wsIds = [
+      ...new Set(
+        moves
+          .flatMap((m) => [m.fromWorkshopId, m.toWorkshopId])
+          .filter((v): v is bigint => v != null),
+      ),
+    ];
+    const rows =
+      wsIds.length > 0
+        ? await this.prisma.workshop.findMany({
+            where: { id: { in: wsIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+    const nameOf = new Map(rows.map((w) => [w.id.toString(), w.name]));
+    const label = (id: bigint | null): string | null =>
+      id == null ? null : (nameOf.get(id.toString()) ?? null);
+    return moves.map((m) => ({
+      stage: m.stage as PiWorkshopChangedQueueMove['stage'],
+      fromWorkshop: label(m.fromWorkshopId),
+      toWorkshop: label(m.toWorkshopId),
+      wasRunning: m.wasRunning,
+    }));
   }
 
   /** Phần A: danh sách lệnh đang bật cờ "cần kiểm lại phương án cắt", mới bật nhất trước. */
@@ -1667,13 +1789,13 @@ export class ProductionInvoicesService {
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_QLSX);
-    // QLSX xưởng này không gửi Sếp lệnh của xưởng khác (403); gửi lên xưởng khác xưởng hiện tại -> 400.
-    const scope = await this.assertCanManageItems(actorUserId, [item], 'lệnh này');
+    // QLSX xưởng này không gửi Sếp lệnh của xưởng khác (403); SKU đã có xưởng mà gửi xưởng khác -> 400 (đổi xưởng là việc của KHSX).
+    await this.assertCanManageItems(actorUserId, [item], 'lệnh này');
     // Phần A – Đợt 2: bắt buộc chọn xưởng cơ khí; 1 PI = 1 xưởng.
     const workshop = await this.resolveWorkshopForSend(
       pi,
       [item.id],
-      this.resolveWorkshopParamForBoss(scope, [item], workshopId),
+      this.resolveWorkshopParamForBoss(pi.items, workshopId),
     );
 
     const data = {
@@ -1685,21 +1807,24 @@ export class ProductionInvoicesService {
       qlsxById: actorUserId,
     };
     const { count } = await this.prisma.productionInvoiceItem.updateMany({
-      where: { id: item.id, prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX },
+      // workshopId = giá trị lúc đọc: KHSX vừa đổi xưởng chồng lên thì không ghi đè xưởng mới bằng xưởng cũ (null so null).
+      where: {
+        id: item.id,
+        prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX,
+        workshopId: item.workshopId,
+      },
       data,
     });
     if (count === 0) {
-      throw new ConflictException(
-        `SKU ${item.id} đã được xử lý bởi 1 yêu cầu khác trong lúc gửi Sếp - không ghi đè`,
-      );
+      throw new ConflictException(this.sendToBossConflictMessage(pi));
     }
     await this.auditItemApprovalTransition(item, { ...item, ...data });
-    // 13/11/2026: QLSX đổi xưởng so với xưởng đang giữ của dòng (kể cả lệnh chưa duyệt) -> bật cờ
-    // kiểm lại phương án cắt.
+    // 13/11/2026: SKU đang giữ xưởng mà gửi Sếp ở xưởng khác (kể cả lệnh chưa duyệt) -> bật cờ kiểm lại phương án cắt.
+    // Từ 16/11/2026 resolveWorkshopParamForBoss() đã chặn 400 trường hợp này nên nhánh dưới không còn chạy tới; giữ để phòng hờ.
     if (item.workshopId !== null && item.workshopId !== workshop.id) {
       await this.flagRecheckAfterSendToBoss(pi, [item], workshop, actorUserId);
     }
-    // Phần A – Đợt 3 (V4-5): xưởng QLSX chọn làm số ngày khác xưởng đã dùng để đề xuất mốc -> báo KHSX đặt lại mốc.
+    // Phần A – Đợt 3 (V4-5): xưởng được chọn làm số ngày khác xưởng đã dùng để đề xuất mốc -> báo KHSX đặt lại mốc.
     await this.notifyTimelineReplanIfNeeded(pi, [item], workshop, actorUserId);
     // Item vừa rời WAITING_QLSX - nếu KHÔNG còn item nào khác của PI này ở đó, đóng thông báo
     // "chờ QLSX" (mọi SKU trong hàng đợi đã được QLSX xử lý xong).
@@ -1722,6 +1847,10 @@ export class ProductionInvoicesService {
     );
     // Phần A – Đợt 2: đọc lại từ DB để khối `workshop` là xưởng MỚI (không spread {...item, ...data}).
     return this.toItemResponseDto(await this.findItemOrThrow(pi.id, itemId));
+  }
+
+  private sendToBossConflictMessage(pi: PIWithRefs): string {
+    return `Lệnh ${lenhDisplayCode(pi, pi.items)} vừa thay đổi (đổi xưởng hoặc đã được xử lý) trong lúc gửi Sếp - tải lại trang rồi thử lại`;
   }
 
   /**
@@ -1923,7 +2052,7 @@ export class ProductionInvoicesService {
   }
 
   /**
-   * V4-5: QLSX chọn / đổi xưởng mà số ngày X (Phôi = Hàn = Sơn) khác X của xưởng đã dùng để đề xuất mốc (xưởng cũ của dòng, chưa có
+   * V4-5: chọn / đổi xưởng (KHSX đổi; QLSX chỉ chọn lúc gửi Sếp khi SKU chưa có xưởng) mà số ngày X (Phôi = Hàn = Sơn) khác X của xưởng đã dùng để đề xuất mốc (xưởng cũ của dòng, chưa có
    * thì Phú An) -> gom các dòng lệch của PI thành 1 thông báo cho KHSX. Best-effort, KHÔNG chặn thao tác (lỗi chỉ log).
    */
   private async notifyTimelineReplanIfNeeded(
@@ -2088,25 +2217,34 @@ export class ProductionInvoicesService {
     if (targets.length === 0) {
       throw new ConflictException(`${pi.code} không còn SKU nào đang chờ QLSX xử lý`);
     }
-    const scope = await this.assertCanManageItems(actorUserId, targets, 'lệnh này');
+    await this.assertCanManageItems(actorUserId, targets, 'lệnh này');
     // Phần A – Đợt 2: xưởng cơ khí chung cho cả lần gửi; 1 PI = 1 xưởng.
     const workshop = await this.resolveWorkshopForSend(
       pi,
       targets.map((it) => it.id),
-      this.resolveWorkshopParamForBoss(scope, targets, workshopId),
+      this.resolveWorkshopParamForBoss(pi.items, workshopId),
     );
 
     const qlsxAt = new Date();
-    await this.prisma.productionInvoiceItem.updateMany({
-      where: { id: { in: targets.map((it) => it.id) } },
-      data: {
-        prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS,
-        warehouseCode,
-        warehouseName,
-        workshopId: workshop.id,
-        qlsxAt,
-        qlsxById: actorUserId,
-      },
+    // Cả lượt hoặc không gì cả: SKU nào đã đổi xưởng / đổi trạng thái từ lúc đọc thì huỷ hết (409), không ghi đè.
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.productionInvoiceItem.updateMany({
+        where: {
+          prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX,
+          OR: targets.map((t) => ({ id: t.id, workshopId: t.workshopId })),
+        },
+        data: {
+          prodApprovalStatus: ProdApprovalStatus.WAITING_BOSS,
+          warehouseCode,
+          warehouseName,
+          workshopId: workshop.id,
+          qlsxAt,
+          qlsxById: actorUserId,
+        },
+      });
+      if (count !== targets.length) {
+        throw new ConflictException(this.sendToBossConflictMessage(pi));
+      }
     });
     for (const item of targets) {
       await this.auditItemApprovalTransition(item, {
@@ -2119,7 +2257,8 @@ export class ProductionInvoicesService {
         qlsxById: actorUserId,
       });
     }
-    // 13/11/2026: QLSX đổi xưởng so với xưởng đang giữ của dòng -> bật cờ kiểm lại phương án cắt.
+    // 13/11/2026: SKU đang giữ xưởng mà gửi Sếp ở xưởng khác -> bật cờ kiểm lại phương án cắt. Từ 16/11/2026
+    // resolveWorkshopParamForBoss() đã chặn 400 trường hợp này nên nhánh dưới không còn chạy tới; giữ để phòng hờ.
     if (targets.some((it) => it.workshopId !== null && it.workshopId !== workshop.id)) {
       await this.flagRecheckAfterSendToBoss(pi, targets, workshop, actorUserId);
     }

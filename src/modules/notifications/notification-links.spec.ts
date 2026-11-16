@@ -135,3 +135,105 @@ describe('NOTIFICATION_TYPES - PURCHASE_PROPOSAL_READY_TO_RECEIVE (P1 mục 31)'
     });
   });
 });
+
+describe('NOTIFICATION_TYPES - PI_WORKSHOP_CHANGED (16/11/2026)', () => {
+  const def = NOTIFICATION_TYPES.PI_WORKSHOP_CHANGED;
+  const base = {
+    piCode: 'PI-7',
+    displayCode: 'MY-313',
+    fromWorkshop: 'Phú An',
+    toWorkshop: 'Mỹ Yến',
+    reason: 'Phú An quá tải',
+    count: 2,
+  };
+
+  it('không có hàng đợi dời: câu trung lập, không nhắc hàng đợi', () => {
+    expect(def.message(base)).toBe('Lệnh PI-7 (2 SKU) đã đổi xưởng cơ khí. Lý do: Phú An quá tải.');
+    expect(def.message({ ...base, queueMoves: [] })).toBe(def.message(base));
+  });
+
+  it('có hàng đợi dời: nêu tổ + xưởng mới; dòng đang chạy thì nhắc QLSX xưởng cũ bấm "Bắt đầu lệnh đầu hàng đợi"', () => {
+    const msg = def.message({
+      ...base,
+      queueMoves: [
+        { stage: 'HAN', fromWorkshop: 'Phú An', toWorkshop: 'Mỹ Yến', wasRunning: false },
+        { stage: 'PHOI', fromWorkshop: 'Phú An', toWorkshop: 'Mỹ Yến', wasRunning: true },
+      ],
+    });
+    expect(msg).toBe(
+      'Lệnh PI-7 (2 SKU) đã đổi xưởng cơ khí. Lý do: Phú An quá tải. ' +
+        'Hàng đợi tổ Phôi, Hàn đã chuyển sang cuối hàng đợi Mỹ Yến. ' +
+        'Tổ Phôi ở Phú An không còn lệnh đang chạy: QLSX Phú An bấm "Bắt đầu lệnh đầu hàng đợi" nếu hàng đợi còn lệnh chờ.',
+    );
+  });
+
+  it('Sơn sang xưởng khác (nơi sơn nhờ): gom theo xưởng đích', () => {
+    const msg = def.message({
+      ...base,
+      queueMoves: [
+        { stage: 'PHOI', fromWorkshop: 'Phú An', toWorkshop: 'Phước An', wasRunning: false },
+        { stage: 'SON', fromWorkshop: 'Phú An', toWorkshop: 'Phú An 2', wasRunning: false },
+      ],
+    });
+    expect(msg).toContain('Hàng đợi tổ Phôi đã chuyển sang cuối hàng đợi Phước An.');
+    expect(msg).toContain('Hàng đợi tổ Sơn đã chuyển sang cuối hàng đợi Phú An 2.');
+  });
+
+  it('người nhận gồm Sếp, KHSX và QLSX', () => {
+    expect(def.recipients(base).roles).toEqual([
+      'BOSS',
+      'PRODUCTION_PLANNER',
+      'PRODUCTION_MANAGER',
+    ]);
+  });
+
+  it('nhắc việc kiểm lại phương án cắt / đặt lại mốc vẫn tới người bấm (KHSX tự đổi xưởng)', () => {
+    expect(NOTIFICATION_TYPES.PI_CUTTING_RECHECK_REQUIRED.notifyActor).toBe(true);
+    expect(NOTIFICATION_TYPES.PI_TIMELINE_NEEDS_REPLAN.notifyActor).toBe(true);
+  });
+
+  it('lý do đã có dấu chấm cuối thì không thành ".."', () => {
+    expect(def.message({ ...base, reason: 'Phú An quá tải. ' })).toBe(
+      'Lệnh PI-7 (2 SKU) đã đổi xưởng cơ khí. Lý do: Phú An quá tải.',
+    );
+  });
+
+  it('QLSX mở được link: đích là màn hàng đợi "Sản lượng xưởng" của phân hệ Sản xuất', () => {
+    const link = def.link?.(base) as { alternatives?: unknown[] } | undefined;
+    expect(link?.alternatives).toContainEqual({
+      module: 'production',
+      page: 'san-luong-xuong',
+    });
+  });
+
+  it('KHSX vẫn mở được "Tổng hợp lệnh SX" của phân hệ Kế hoạch, focus đúng lệnh (đích đứng trước đích của QLSX)', () => {
+    const link = def.link?.(base) as
+      { module?: string; alternatives?: { module: string }[] } | undefined;
+    expect(link?.module).toBe('boss');
+    expect(link?.alternatives?.[0]).toEqual({
+      module: 'production_plan',
+      page: 'thongke',
+      params: { focus: 'PI_CODE:PI-7' },
+    });
+  });
+
+  it('thông báo cũ không có approved, hoặc approved = true: link như cũ (Tổng hợp lệnh SX theo mã lệnh)', () => {
+    for (const p of [base, { ...base, approved: true }]) {
+      const link = def.link?.(p) as { module?: string; page?: string; params?: unknown };
+      expect(link.module).toBe('boss');
+      expect(link.page).toBe('thong-ke');
+      expect(link.params).toEqual({ focus: 'PI_CODE:PI-7' });
+    }
+  });
+
+  it('lệnh CHƯA duyệt hết (approved = false): link tới màn chờ duyệt, thay thế là màn lệnh SX của KHSX / QLSX', () => {
+    expect(def.link?.({ ...base, approved: false })).toEqual({
+      module: 'boss',
+      page: 'cho-duyet',
+      alternatives: [
+        { module: 'production_plan', page: 'lenh-sx' },
+        { module: 'production', page: 'lenh-sx' },
+      ],
+    });
+  });
+});

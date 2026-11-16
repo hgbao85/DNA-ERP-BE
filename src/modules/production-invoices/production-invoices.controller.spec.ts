@@ -27,14 +27,17 @@ describe('ProductionInvoicesController (Phần A – Đợt 2)', () => {
     ]);
   });
 
-  it('PATCH :id/workshop - APPROVE + mfgRole PRODUCTION_MANAGER (giống send-to-boss)', () => {
+  // 16/11/2026: đổi xưởng là việc của KHSX (+ Admin); QLSX (mfgRole) mất quyền, send-to-boss vẫn của QLSX.
+  it('PATCH :id/workshop - UPDATE + (KHSX hoặc ADMIN), KHÔNG còn mfgRole QLSX', () => {
     expect(meta(PERMISSIONS_KEY, proto.changeWorkshop)).toEqual([
-      { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.APPROVE },
+      { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.UPDATE },
     ]);
-    expect(meta(MFG_ROLE_KEY, proto.changeWorkshop)).toEqual([MfgRole.PRODUCTION_MANAGER]);
-    expect(meta(MFG_ROLE_KEY, proto.sendItemToBoss)).toEqual(
-      meta(MFG_ROLE_KEY, proto.changeWorkshop),
-    );
+    expect(meta(ROLE_KEY, proto.changeWorkshop)).toEqual([
+      BUSINESS_ROLES.PRODUCTION_PLANNER,
+      DEFAULT_ROLES.ADMIN,
+    ]);
+    expect(meta(MFG_ROLE_KEY, proto.changeWorkshop)).toBeUndefined();
+    expect(meta(MFG_ROLE_KEY, proto.sendItemToBoss)).toEqual([MfgRole.PRODUCTION_MANAGER]);
   });
 
   describe('truyền tham số xuống service', () => {

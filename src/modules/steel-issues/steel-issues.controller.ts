@@ -2,8 +2,8 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
-  Headers,
   Param,
   Post,
   Query,
@@ -15,6 +15,10 @@ import {
   PermissionAction,
   ProcessStep,
 } from '../../generated/prisma/client';
+import {
+  LEGACY_CUT_REPORT_CLOSED_MESSAGE,
+  LEGACY_STEEL_RECEIVE_CLOSED_MESSAGE,
+} from '../../common/constants/legacy-floor-report.constant';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -22,14 +26,9 @@ import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
-import { ReceiveSteelIssueDto } from './dto/receive-steel-issue.dto';
-import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
 import { ListStepBundlesQueryDto } from './dto/list-step-bundles-query.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
-import { RecordStepBatchDto } from './dto/record-step-batch.dto';
-import { SubmitStepBundleDto } from './dto/submit-step-bundle.dto';
 import { AssignProductionOrderDto } from './dto/assign-production-order.dto';
-import { UndoCutBatchDto } from './dto/undo-cut-batch.dto';
 import { SteelIssuesService } from './steel-issues.service';
 
 const VIEW = { module: PERMISSION_MODULES.STEEL_ISSUE, action: PermissionAction.VIEW };
@@ -159,31 +158,24 @@ export class SteelIssuesController {
 
   // ─── Tổ Phôi (mfgRole = PHOI) - nhận sắt, báo cắt xong ───────────────────────
 
+  // ĐÓNG 16/11/2026 (đợt 1, bỏ màn thống kê tổ): luôn từ chối, ném TRƯỚC khi gọi service. Service vẫn dùng cho đường QR.
   @Post('steel-issues/:id/receive')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  receive(
-    @Param('id') id: string,
-    @Body() dto: ReceiveSteelIssueDto,
-    @CurrentUser('id') userId: string,
-  ) {
-    return this.steelIssuesService.receive(id, userId, dto.receivedBarCount);
+  receive() {
+    throw new ForbiddenException(LEGACY_STEEL_RECEIVE_CLOSED_MESSAGE);
   }
 
   /**
    * Nhập 1 đợt cắt (cộng dồn) - KHÔNG đổi trạng thái. Thay `complete-cutting` cũ (2026-08-22):
    * route đó vừa nhận số liệu chép-từ-pattern vừa chuyển sang chờ KCS trong cùng 1 lần bấm.
    */
+  // ĐÓNG 16/11/2026 (đợt 1, bỏ màn thống kê tổ): luôn từ chối, ném TRƯỚC khi gọi service. Service vẫn dùng cho đường QR.
   @Post('steel-issues/:id/cut-batches')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  recordCutBatch(
-    @Param('id') id: string,
-    @Body() dto: RecordCutBatchDto,
-    @CurrentUser('id') userId: string,
-    @Headers('idempotency-key') idempotencyKey: string | undefined,
-  ) {
-    return this.steelIssuesService.recordCutBatch(id, dto, userId, idempotencyKey);
+  recordCutBatch() {
+    throw new ForbiddenException(LEGACY_CUT_REPORT_CLOSED_MESSAGE);
   }
 
   // ─── Đợt cắt là đơn vị mang trạng thái (2026-09-05) ─────────────────────────
@@ -202,11 +194,12 @@ export class SteelIssuesController {
 
   /** "Báo cắt xong" cho ĐÚNG đợt cắt này - các đợt khác của cùng lô vẫn cắt tiếp bình thường. KHÔNG
    *  còn chờ công đoạn phụ (Uốn/Dập/...) xong (2026-09-07, xem doc comment service). */
+  // ĐÓNG 16/11/2026 (đợt 1, bỏ màn thống kê tổ): luôn từ chối, ném TRƯỚC khi gọi service. Service vẫn dùng cho đường QR.
   @Post('cut-bundles/:id/finish')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  finishCutBundle(@Param('id') id: string) {
-    return this.steelIssuesService.finishCutBundle(id);
+  finishCutBundle() {
+    throw new ForbiddenException(LEGACY_CUT_REPORT_CLOSED_MESSAGE);
   }
 
   /** Gán SKU cho đợt cắt CŨ chưa có SKU (PI nhiều SKU) - xem AssignProductionOrderDto. */
@@ -258,15 +251,12 @@ export class SteelIssuesController {
   }
 
   /** Hoàn tác ĐÚNG lần "Lưu đợt cắt" gần nhất (2026-09-07) - xem doc comment service. */
+  // ĐÓNG 16/11/2026 (đợt 1, bỏ màn thống kê tổ): luôn từ chối, ném TRƯỚC khi gọi service. Service vẫn dùng cho đường QR.
   @Post('cut-bundles/:id/undo-last-batch')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  undoLastCutBatch(
-    @Param('id') id: string,
-    @Body() dto: UndoCutBatchDto,
-    @CurrentUser('id') userId: string,
-  ) {
-    return this.steelIssuesService.undoLastCutBatch(id, dto.segments, userId);
+  undoLastCutBatch() {
+    throw new ForbiddenException(LEGACY_CUT_REPORT_CLOSED_MESSAGE);
   }
 
   // ─── Công đoạn phụ (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ) - scope PI + loại sắt (2026-09-07 lần 2) ──
@@ -275,35 +265,22 @@ export class SteelIssuesController {
 
   /** Nhập 1 đợt "đã gia công" cho công đoạn chi tiết SAU Cắt (cộng dồn) CHO CẢ PI + loại sắt - mirror
    *  cut-batches, không đổi trạng thái. Xem RecordStepBatchDto. */
+  // ĐÓNG 16/11/2026 (đợt 1, bỏ màn thống kê tổ): luôn từ chối, ném TRƯỚC khi gọi service. Service vẫn dùng cho đường QR.
   @Post('production-invoices/:id/step-batches')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  recordStepBatch(
-    @Param('id') id: string,
-    @Body() dto: RecordStepBatchDto,
-    @CurrentUser('id') userId: string,
-    @Headers('idempotency-key') idempotencyKey: string | undefined,
-  ) {
-    return this.steelIssuesService.recordStepBatch(id, dto, userId, idempotencyKey);
+  recordStepBatch() {
+    throw new ForbiddenException(LEGACY_CUT_REPORT_CLOSED_MESSAGE);
   }
 
   /** Phôi gom mọi StepBatch chưa gửi của (productionInvoiceId, materialId, step) thành 1 đợt gửi
    *  KCS - KCS duyệt qua POST step-bundles/:id/qc-review (qc-reviews.controller.ts). */
+  // ĐÓNG 16/11/2026 (đợt 1, bỏ màn thống kê tổ): luôn từ chối, ném TRƯỚC khi gọi service. Service vẫn dùng cho đường QR.
   @Post('production-invoices/:id/step-bundles')
   @RequirePermissions(UPDATE)
   @RequireMfgRole(MfgRole.PHOI)
-  submitStepBundle(
-    @Param('id') id: string,
-    @Body() dto: SubmitStepBundleDto,
-    @CurrentUser('id') userId: string,
-  ) {
-    return this.steelIssuesService.submitStepBundle(
-      id,
-      dto.materialId,
-      dto.step,
-      userId,
-      dto.productionOrderId,
-    );
+  submitStepBundle() {
+    throw new ForbiddenException(LEGACY_CUT_REPORT_CLOSED_MESSAGE);
   }
 
   /** Lịch sử mọi StepBundle của 1 PI (mọi loại sắt/công đoạn) - màn Phôi xem thuần, không thao

@@ -301,6 +301,40 @@ describe('NotificationsService', () => {
       );
     });
 
+    it('type có notifyActor (PI_CUTTING_RECHECK_REQUIRED): người bấm được giữ - excludeUserIds rỗng', async () => {
+      await service.emit('PI_CUTTING_RECHECK_REQUIRED', {
+        entityId: '7',
+        actorId: 'user-1',
+        params: {
+          piCode: 'PI-7',
+          displayCode: 'MY-313',
+          fromWorkshop: 'Phú An',
+          toWorkshop: 'Mỹ Yến',
+        },
+      });
+
+      expect(recipientResolver.resolve).toHaveBeenCalledTimes(1);
+      expect((recipientResolver.resolve.mock.calls[0] as unknown[])[1]).toEqual([]);
+    });
+
+    it('type không có notifyActor (PI_WORKSHOP_CHANGED): người bấm bị loại - excludeUserIds = [actorId]', async () => {
+      await service.emit('PI_WORKSHOP_CHANGED', {
+        entityId: '7',
+        actorId: 'user-1',
+        params: {
+          piCode: 'PI-7',
+          displayCode: 'MY-313',
+          fromWorkshop: 'Phú An',
+          toWorkshop: 'Mỹ Yến',
+          reason: 'lý do',
+          count: 2,
+        },
+      });
+
+      expect(recipientResolver.resolve).toHaveBeenCalledTimes(1);
+      expect((recipientResolver.resolve.mock.calls[0] as unknown[])[1]).toEqual(['user-1']);
+    });
+
     it('CRITICAL tự thêm role BOSS vào tiêu chí người nhận', async () => {
       await service.emit(TEST_CRITICAL_TYPE as never, {
         entityId: '1',

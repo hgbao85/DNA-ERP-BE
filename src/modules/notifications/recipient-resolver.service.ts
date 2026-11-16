@@ -179,6 +179,15 @@ export class RecipientResolverService {
     if (typeof params.workshopId === 'string' && /^\d+$/.test(params.workshopId)) {
       return new Set([BigInt(params.workshopId)]);
     }
+    // Thông báo phát SAU khi đổi xưởng (PI_WORKSHOP_CHANGED): lúc đó mọi SKU đã ở xưởng mới nên tra theo piCode sẽ loại nhầm
+    // QLSX xưởng cũ -> người phát truyền sẵn params.workshopIds (xưởng cũ + mới + xưởng hàng đợi đã dời).
+    if (
+      Array.isArray(params.workshopIds) &&
+      params.workshopIds.length > 0 &&
+      params.workshopIds.every((v) => typeof v === 'string' && /^\d+$/.test(v))
+    ) {
+      return new Set((params.workshopIds as string[]).map((v) => BigInt(v)));
+    }
     if (typeof params.piCode === 'string') {
       const pi = await client.productionInvoice.findUnique({
         where: { code: params.piCode },

@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsString, MaxLength, MinLength } from 'class-validator';
 
-/** Phần A – Đợt 2: QLSX đổi xưởng cơ khí của cả lệnh - bắt buộc nêu lý do (đưa vào thông báo + audit). */
+/** Phần A – Đợt 2: Đổi xưởng cơ khí (KHSX hoặc Admin) của cả lệnh - bắt buộc nêu lý do (đưa vào thông báo + audit). */
 export class ChangeWorkshopDto {
   @ApiProperty()
   @IsString()

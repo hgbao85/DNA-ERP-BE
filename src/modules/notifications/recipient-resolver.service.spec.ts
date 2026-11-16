@@ -145,6 +145,36 @@ describe('RecipientResolverService - dropQlsxOfOtherWorkshops', () => {
     });
   });
 
+  it('params.workshopIds (PI_WORKSHOP_CHANGED phát sau commit): giữ QLSX các xưởng trong danh sách, bỏ xưởng ngoài danh sách, không tra piCode', async () => {
+    const { service, prisma } = makeService({
+      scoped: [
+        { id: 'qlsx-a', workshopId: 1n },
+        { id: 'qlsx-b', workshopId: 2n },
+        { id: 'qlsx-c', workshopId: 3n },
+      ],
+      piByCode: { id: 7n },
+      itemWorkshops: [2n],
+    });
+
+    const ids = await service.dropQlsxOfOtherWorkshops(['qlsx-a', 'qlsx-b', 'qlsx-c', 'thu-kho'], {
+      params: { piCode: 'PI-7', workshopIds: ['1', '2'] },
+    });
+
+    expect(ids).toEqual(['qlsx-a', 'qlsx-b', 'thu-kho']);
+    expect(prisma.productionInvoice.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('workshopIds rỗng hoặc không phải chuỗi số -> bỏ qua, tra theo piCode như cũ', async () => {
+    for (const workshopIds of [[], ['x'], [1]]) {
+      const { service, prisma } = makeService({ piByCode: { id: 7n }, itemWorkshops: [PHUOC_AN] });
+      const ids = await service.dropQlsxOfOtherWorkshops(ALL, {
+        params: { piCode: 'PI-7', workshopIds },
+      });
+      expect(ids).toEqual(['qlsx-pa', 'qlsx-chua-gan', 'thu-kho']);
+      expect(prisma.productionInvoice.findUnique).toHaveBeenCalled();
+    }
+  });
+
   it('QLSX Phú An (xưởng sơn nhờ) cũng không nhận thông báo lệnh Phước An', async () => {
     const { service } = makeService({ piByCode: { id: 7n }, itemWorkshops: [PHUOC_AN] });
 

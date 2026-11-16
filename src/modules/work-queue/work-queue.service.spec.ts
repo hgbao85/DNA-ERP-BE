@@ -27,6 +27,8 @@ describe('WorkQueueService', () => {
     purchaseProposalItem: { count: jest.Mock };
     warehouseTransfer: { count: jest.Mock };
     steelIssue: { count: jest.Mock };
+    materialYieldIssue: { count: jest.Mock };
+    materialYieldRecipeIssue: { count: jest.Mock };
     cutBundle: { count: jest.Mock };
     stepBundle: { count: jest.Mock };
     pieceStepBundle: { count: jest.Mock };
@@ -46,6 +48,8 @@ describe('WorkQueueService', () => {
       purchaseProposalItem: { count: jest.fn().mockResolvedValue(0) },
       warehouseTransfer: { count: jest.fn().mockResolvedValue(0) },
       steelIssue: { count: jest.fn().mockResolvedValue(0) },
+      materialYieldIssue: { count: jest.fn().mockResolvedValue(0) },
+      materialYieldRecipeIssue: { count: jest.fn().mockResolvedValue(0) },
       cutBundle: { count: jest.fn().mockResolvedValue(0) },
       stepBundle: { count: jest.fn().mockResolvedValue(0) },
       pieceStepBundle: { count: jest.fn().mockResolvedValue(0) },
@@ -217,13 +221,19 @@ describe('WorkQueueService', () => {
     });
   });
 
-  it('Phôi (PHOI_STAFF) - đếm steel issue ISSUED chưa nhận', async () => {
-    prisma.steelIssue.count.mockResolvedValue(4);
+  it('Phôi (PHOI_STAFF) - đếm Sắt La + thanh nhôm ISSUED chờ nhận, KHÔNG đếm sắt cây', async () => {
+    prisma.steelIssue.count.mockResolvedValue(9);
+    prisma.materialYieldIssue.count.mockResolvedValue(3);
+    prisma.materialYieldRecipeIssue.count.mockResolvedValue(1);
 
     const result = await service.getWorkQueue({ roles: ['PHOI_STAFF'], warehouseScope: null });
 
     expect(result.counts.phoiSteelReceiving).toBe(4);
-    expect(prisma.steelIssue.count).toHaveBeenCalledWith({ where: { status: 'ISSUED' } });
+    expect(prisma.materialYieldIssue.count).toHaveBeenCalledWith({ where: { status: 'ISSUED' } });
+    expect(prisma.materialYieldRecipeIssue.count).toHaveBeenCalledWith({
+      where: { status: 'ISSUED' },
+    });
+    expect(prisma.steelIssue.count).not.toHaveBeenCalled();
   });
 
   it('KCS (KCS_STAFF) - gộp CutBundle+StepBundle+PieceStepBundle+ProductionBatch(PHOI) vào kcsPhoi, tách riêng kcsHan/kcsSon theo stage', async () => {

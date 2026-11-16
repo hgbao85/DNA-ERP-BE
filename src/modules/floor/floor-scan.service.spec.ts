@@ -41,6 +41,19 @@ const running = {
 /** Đối số đầu tiên của lần gọi đầu tiên của một jest.Mock - có kiểu rõ ràng để assert không phải dùng `any`. */
 const firstArg = <T = unknown>(mock: jest.Mock): T => (mock.mock.calls as unknown[][])[0][0] as T;
 
+/** Dòng PI mà mock `productionInvoiceItem.findMany` trả (mỗi test có thể đổi). */
+let piItemRows: { productionInvoiceId: bigint; workshopId: bigint | null }[] = [];
+const filterPiItems = (args: {
+  where: { productionInvoiceId: { in: bigint[] }; workshopId?: { not: null } };
+}) =>
+  Promise.resolve(
+    piItemRows.filter(
+      (r) =>
+        args.where.productionInvoiceId.in.includes(r.productionInvoiceId) &&
+        (args.where.workshopId?.not !== null || r.workshopId !== null),
+    ),
+  );
+
 describe('FloorScanService', () => {
   let prisma: {
     workstation: { findUnique: jest.Mock };
@@ -50,7 +63,8 @@ describe('FloorScanService', () => {
     productionOrder: { findMany: jest.Mock; findFirst: jest.Mock };
     productionInvoice: { findUniqueOrThrow: jest.Mock };
     productionBatch: { groupBy: jest.Mock };
-    steelIssue: { findMany: jest.Mock; groupBy: jest.Mock };
+    steelIssue: { findMany: jest.Mock; groupBy: jest.Mock; findUnique: jest.Mock };
+    productionInvoiceItem: { findMany: jest.Mock };
     floorReport: { findMany: jest.Mock };
   };
   let steelIssues: {
@@ -72,6 +86,8 @@ describe('FloorScanService', () => {
   };
 
   beforeEach(() => {
+    // Mặc định: PI 45 thuộc xưởng Phú An (id 1) - trùng xưởng mặc định của máy chưa gắn xưởng.
+    piItemRows = [{ productionInvoiceId: 45n, workshopId: 1n }];
     prisma = {
       workstation: { findUnique: jest.fn().mockResolvedValue(laser) },
       floorQueueEntry: { findMany: jest.fn().mockResolvedValue([running]) },
@@ -83,7 +99,13 @@ describe('FloorScanService', () => {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 45n, code: 'PI-45' }),
       },
       productionBatch: { groupBy: jest.fn().mockResolvedValue([]) },
-      steelIssue: { findMany: jest.fn(), groupBy: jest.fn().mockResolvedValue([]) },
+      steelIssue: {
+        findMany: jest.fn(),
+        groupBy: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn().mockResolvedValue({ productionInvoiceId: 45n }),
+      },
+      // Mock tôn trọng điều kiện lọc (PI trong danh sách, có xưởng) để bắt lỗi truy vấn sai PI.
+      productionInvoiceItem: { findMany: jest.fn().mockImplementation(filterPiItems) },
       floorReport: { findMany: jest.fn().mockResolvedValue([]) },
     };
     steelIssues = {
@@ -546,6 +568,63 @@ describe('FloorScanService', () => {
       expect(res).toEqual({ id: '43', status: 'RECEIVED' });
     });
 
+    it('lô sắt của xưởng khác xưởng của máy -> 409, không nhận', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({
+        ...laser,
+        kind: 'STEEL_RECEIVE',
+        workshopId: 2n,
+      });
+      await expect(service.receiveSteel('tok', worker('PHOI'), '43', 11)).rejects.toThrow(
+        new ConflictException(
+          'Lô sắt này của xưởng khác. Lô của xưởng nào thì nhận bằng mã "Khu nhận sắt" của xưởng đó; nhầm thì báo thủ kho.',
+        ),
+      );
+      expect(steelIssues.receive).not.toHaveBeenCalled();
+    });
+
+    it('PI chưa có xưởng: máy chưa gắn xưởng nhận được; máy xưởng khác mặc định bị 409', async () => {
+      piItemRows = [{ productionInvoiceId: 45n, workshopId: null }];
+      steelIssues.receive.mockResolvedValue({ id: '43' });
+      prisma.workstation.findUnique.mockResolvedValue({ ...laser, kind: 'STEEL_RECEIVE' });
+      await service.receiveSteel('tok', worker('PHOI'), '43', 11);
+      expect(steelIssues.receive).toHaveBeenCalledTimes(1);
+
+      prisma.workstation.findUnique.mockResolvedValue({
+        ...laser,
+        kind: 'STEEL_RECEIVE',
+        workshopId: 2n,
+      });
+      await expect(service.receiveSteel('tok', worker('PHOI'), '43', 11)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(steelIssues.receive).toHaveBeenCalledTimes(1);
+    });
+
+    it('lô sắt không tồn tại: không ném 409, để steelIssues.receive báo như cũ', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({
+        ...laser,
+        kind: 'STEEL_RECEIVE',
+        workshopId: 2n,
+      });
+      prisma.steelIssue.findUnique.mockResolvedValue(null);
+      steelIssues.receive.mockRejectedValue(new NotFoundException('Không tìm thấy lần giao sắt'));
+      await expect(service.receiveSteel('tok', worker('PHOI'), '999', 11)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(steelIssues.receive).toHaveBeenCalledWith('999', 'cn-1', 11);
+    });
+
+    it('máy gắn đúng xưởng của lô sắt -> nhận như cũ', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({
+        ...laser,
+        kind: 'STEEL_RECEIVE',
+        workshopId: 1n,
+      });
+      steelIssues.receive.mockResolvedValue({ id: '43' });
+      await service.receiveSteel('tok', worker('PHOI'), '43', 11);
+      expect(steelIssues.receive).toHaveBeenCalledWith('43', 'cn-1', 11);
+    });
+
     it('tổ khác quét mã khu nhận sắt của Phôi -> 403, không nhận', async () => {
       prisma.workstation.findUnique.mockResolvedValue({ ...laser, kind: 'STEEL_RECEIVE' });
       await expect(service.receiveSteel('tok', worker('HAN'), '43', 11)).rejects.toThrow(
@@ -631,6 +710,57 @@ describe('FloorScanService', () => {
         productionInvoice: { items: { some: { productionOrder: { floorStage: 'ACTIVE' } } } },
       });
       expect(prisma.floorQueueEntry.findMany).not.toHaveBeenCalled();
+    });
+
+    describe('mã khu nhận sắt - tách theo xưởng', () => {
+      const issueOf = (id: bigint, piId: bigint) => ({
+        id,
+        barCount: 10,
+        barLengthMm: '6000',
+        issuedAt: new Date('2026-10-15T01:00:00Z'),
+        productionInvoice: { id: piId, code: `PI-${piId}` },
+        material: { code: 'S7', name: 'Sắt 7' },
+        issuedBy: null,
+      });
+      const ids = (res: unknown) =>
+        (res as { steelToReceive: { steelIssueId: string }[] }).steelToReceive.map(
+          (s) => s.steelIssueId,
+        );
+
+      beforeEach(() => {
+        prisma.steelIssue.findMany.mockResolvedValue([issueOf(43n, 45n), issueOf(44n, 46n)]);
+        piItemRows = [
+          { productionInvoiceId: 45n, workshopId: 1n },
+          { productionInvoiceId: 46n, workshopId: 2n },
+        ];
+      });
+
+      it('máy gắn Phước An: chỉ thấy sắt của PI Phước An', async () => {
+        prisma.workstation.findUnique.mockResolvedValue({
+          ...laser,
+          kind: 'STEEL_RECEIVE',
+          workshopId: 2n,
+        });
+        expect(ids(await service.getContext('tok', worker('PHOI')))).toEqual(['44']);
+      });
+
+      it('máy chưa gắn xưởng: tính theo xưởng mặc định (Phú An)', async () => {
+        prisma.workstation.findUnique.mockResolvedValue({ ...laser, kind: 'STEEL_RECEIVE' });
+        expect(ids(await service.getContext('tok', worker('PHOI')))).toEqual(['43']);
+      });
+
+      it('PI chưa có xưởng: máy chưa gắn xưởng thấy lô; máy xưởng khác mặc định không thấy', async () => {
+        piItemRows = [{ productionInvoiceId: 45n, workshopId: null }];
+        prisma.steelIssue.findMany.mockResolvedValue([issueOf(43n, 45n)]);
+        prisma.workstation.findUnique.mockResolvedValue({ ...laser, kind: 'STEEL_RECEIVE' });
+        expect(ids(await service.getContext('tok', worker('PHOI')))).toEqual(['43']);
+        prisma.workstation.findUnique.mockResolvedValue({
+          ...laser,
+          kind: 'STEEL_RECEIVE',
+          workshopId: 2n,
+        });
+        expect(ids(await service.getContext('tok', worker('PHOI')))).toEqual([]);
+      });
     });
 
     it('tổ chưa chạy PI nào và không chọn PI -> pi: null (màn "chờ QLSX chuyển PI")', async () => {
