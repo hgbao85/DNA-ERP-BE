@@ -20,6 +20,7 @@ import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SegmentStockService } from '../segment-stock/segment-stock.service';
+import { SegmentProductionService } from '../segment-stock/segment-production.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ProductionOrderResponseDto } from './dto/production-order-response.dto';
 import { ResyncBomDto } from './dto/resync-bom.dto';
@@ -70,6 +71,7 @@ export class ProductionOrdersService {
     private readonly stockReservationsService: StockReservationsService,
     private readonly workshopScope: WorkshopScopeService,
     private readonly segmentStockService: SegmentStockService,
+    private readonly segmentProductionService: SegmentProductionService,
   ) {}
 
   /**
@@ -373,6 +375,9 @@ export class ProductionOrdersService {
         where: { id: piId, status: ProductionInvoiceStatus.DONE },
         data: { status: ProductionInvoiceStatus.PRODUCING },
       });
+      // Rà soát 14/11 TĐ4: lúc Kết thúc phần giữ đoạn của lệnh đã nhả về dư - mở lại thì tính lại phía cộng để giữ lại từ dư (nếu
+      // lệnh khác chưa lấy). Công tắc tồn đoạn tắt thì không làm gì; lỗi chỉ ghi log, không chặn mở lại lệnh.
+      await this.segmentProductionService.recomputeAfterQc(piId, userId ?? null, 'PI_REOPENED');
     }
     const dto = this.toResponseDto(
       updated,

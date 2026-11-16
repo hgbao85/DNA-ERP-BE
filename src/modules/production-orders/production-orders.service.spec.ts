@@ -5,6 +5,7 @@ import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BomRevisionStatus, CuttingProposalStatus } from '../../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SegmentStockService } from '../segment-stock/segment-stock.service';
+import { SegmentProductionService } from '../segment-stock/segment-production.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { ProductionOrdersService } from './production-orders.service';
@@ -46,6 +47,7 @@ describe('ProductionOrdersService', () => {
   let notifications: { emit: jest.Mock; resolve: jest.Mock };
   let stockReservationsService: { releaseByProductionInvoice: jest.Mock };
   let segmentStockService: { releaseOrderHoldings: jest.Mock };
+  let segmentProductionService: { recomputeAfterQc: jest.Mock };
   const tx = { tag: 'tx' };
 
   const activeRevision = { id: 5n, mfgProductId: 2n, status: BomRevisionStatus.ACTIVE };
@@ -97,6 +99,7 @@ describe('ProductionOrdersService', () => {
     segmentStockService = {
       releaseOrderHoldings: jest.fn().mockResolvedValue({ releasedQty: 0, reservationCount: 0 }),
     };
+    segmentProductionService = { recomputeAfterQc: jest.fn().mockResolvedValue(undefined) };
     // Mặc định mọi lệnh của PI đã Kết thúc (count chưa-xong = 0) - test riêng của nhả giữ chỗ tự override.
     prisma.productionOrder.count.mockResolvedValue(0);
     prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue({ productionInvoiceId: 500n });
@@ -107,6 +110,7 @@ describe('ProductionOrdersService', () => {
       stockReservationsService as unknown as StockReservationsService,
       makeScope(),
       segmentStockService as unknown as SegmentStockService,
+      segmentProductionService as unknown as SegmentProductionService,
     );
     // Mặc định không có bản ACTIVE nào khớp -> bomOutOfDate=false, không phá các test không quan
     // tâm field này - test riêng của bomOutOfDate tự override lại mock này.
@@ -433,6 +437,12 @@ describe('ProductionOrdersService', () => {
         where: { id: 500n, status: 'DONE' },
         data: { status: 'PRODUCING' },
       });
+      // Rà soát 14/11 TĐ4: tính lại phía cộng tồn đoạn để giữ lại phần đã nhả lúc Kết thúc.
+      expect(segmentProductionService.recomputeAfterQc).toHaveBeenCalledWith(
+        500n,
+        null,
+        'PI_REOPENED',
+      );
     });
 
     it('bắt đầu lệnh chưa từng Kết thúc -> KHÔNG đụng trạng thái PI', async () => {
@@ -442,6 +452,7 @@ describe('ProductionOrdersService', () => {
       await service.startFloor('9');
 
       expect(prisma.productionInvoice.updateMany).not.toHaveBeenCalled();
+      expect(segmentProductionService.recomputeAfterQc).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when the order does not exist', async () => {

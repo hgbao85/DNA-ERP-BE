@@ -4,7 +4,10 @@ import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { segmentCodeLabel } from '../../common/utils/segment-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
-import { isSegmentStockEnabled } from '../segment-stock/segment-stock.config';
+import {
+  isSegmentStockEnabled,
+  SEGMENT_LEGACY_CONVERSION_LOCK,
+} from '../segment-stock/segment-stock.config';
 import { SegmentProductionService } from '../segment-stock/segment-production.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { ProductionBatchesService } from './production-batches.service';
@@ -96,7 +99,9 @@ export class SegmentLegacyConversionService {
     tx: PrismaTx,
     opts: { dryRun: boolean; actorId: string },
   ): Promise<LegacyConversionReport> {
-    await lockBusinessKey(tx, 'segment-legacy-conversion');
+    // Độc quyền: phía trừ tồn đoạn (ProductionBatchesService.consumeSegmentsByCode) giữ bản dùng chung của cùng khoá nên Hàn / Sơn
+    // gửi KCS trong lúc chuyển đổi phải chờ chuyển đổi xong (rà soát 14/11 TĐ5 - trước đây phía trừ không lấy khoá này).
+    await lockBusinessKey(tx, SEGMENT_LEGACY_CONVERSION_LOCK);
     const [reservations, productions] = await Promise.all([
       tx.segmentReservation.count(),
       tx.segmentProduction.count(),

@@ -16,3 +16,11 @@ import type { PrismaTx } from '../../prisma/prisma.service';
 export async function lockBusinessKey(tx: PrismaTx, key: string): Promise<void> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)`;
 }
+
+/**
+ * Bản DÙNG CHUNG (shared) của lockBusinessKey: nhiều transaction cùng giữ được, chỉ chờ khi có transaction giữ bản độc quyền
+ * (lockBusinessKey) của cùng khoá. Cùng phép băm nên cùng không gian khoá với lockBusinessKey.
+ */
+export async function lockBusinessKeyShared(tx: PrismaTx, key: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtext(${key})::bigint)`;
+}

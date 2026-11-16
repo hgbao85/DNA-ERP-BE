@@ -47,8 +47,17 @@ công tắc tắt thì Hàn / Sơn trừ đoạn y như cũ, đổi xưởng kh�
 
 ## Trước khi bật `SEGMENT_STOCK_ENABLED`
 
-1. Chạy `legacy-conversion` xem thử trên production, đối chiếu sổ thủ kho Phôi, rồi bật công tắc và chạy thật.
-2. Chạy song song 3–5 ngày với sổ thủ kho Phôi.
+> **Đính chính 16/11 (rà soát 14/11 TĐ5):** không "chuyển đổi trước rồi mới bật" được - chạy thật bị chặn khi công tắc tắt. Ngược
+> lại, đã bật mà có 1 đợt Hàn / Sơn gửi KCS hoặc 1 lần KCS ghi dữ liệu theo lệnh thì chuyển đổi bị từ chối (chỉ chạy khi bảng giữ
+> đoạn / phía cộng còn trống). Thứ tự đúng (anh chọn 16/11 - giữ code, làm theo quy trình) ở dưới.
+
+1. Chạy `legacy-conversion` **xem thử** (`dryRun: true`, chạy được khi công tắc tắt) trên production, đối chiếu sổ thủ kho Phôi.
+2. Chọn lúc xưởng không báo Phôi / Hàn / Sơn và không có KCS (vd ngoài giờ). Bật `SEGMENT_STOCK_ENABLED=true` (đổi env + khởi động
+   lại server) rồi chạy `legacy-conversion` **thật** NGAY sau khi server lên.
+   - Trong lúc chuyển đổi chạy, Hàn / Sơn bấm Gửi KCS sẽ tự chờ (khoá chuyển đổi, sửa 16/11) - không làm lệch tồn.
+   - Nếu chuyển đổi báo "Đã có dữ liệu tồn đoạn theo lệnh": đã có người báo chen vào khoảng giữa bật và chạy - tắt công tắc, dọn
+     dữ liệu tồn đoạn theo lệnh vừa sinh (bảng giữ đoạn / phía cộng / nhật ký) rồi làm lại bước 2.
+3. Chạy song song 3–5 ngày với sổ thủ kho Phôi.
 
 ## Bổ sung 14/11 chiều - anh Nhân trả lời ý 2 (sổ báo vượt)
 

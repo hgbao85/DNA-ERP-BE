@@ -294,7 +294,10 @@ export class SegmentStockService {
       if (lWanted >= 0) {
         l = lWanted;
       } else {
-        l = Math.max(lWanted, -Math.max(0, q), round4(x - a), round4(x - p.s0));
+        // Rà soát 14/11 TĐ1: tổng của lệnh GIẢM thì không bao giờ nhập thêm đoạn. Trước đây khi phần giữ tăng (x > 0) mà dư dùng
+        // được a không đủ, chặn "x - a" đẩy l lên DƯƠNG -> ghi SEGMENT_PRODUCE nhập đoạn không có thật. Nay l <= 0; phần giữ
+        // không đủ dư để tăng thì kẹp ở dòng dưới (x <= l + a), phần chưa ghi được trả ở unapplied.
+        l = Math.min(0, Math.max(lWanted, -Math.max(0, q), round4(x - a), round4(x - p.s0)));
       }
       x = round4(Math.min(x, round4(l + a)));
       l = round4(l);
@@ -485,8 +488,8 @@ export class SegmentStockService {
   }
 
   /**
-   * Lệnh kết thúc: nhả mọi phần còn giữ về dư chung (reservedQty = consumedQty, nhật ký RELEASE). Idempotent. KHÔNG đụng
-   * SegmentProduction và KHÔNG ghi sổ kho - đoạn vẫn nằm trong kho, tự thành dư.
+   * Lệnh kết thúc: nhả mọi phần còn giữ về dư chung (reservedQty = consumedQty, nhật ký RELEASE). Idempotent. KHÔNG ghi sổ kho -
+   * đoạn vẫn nằm trong kho, tự thành dư. SegmentProduction của lệnh chuyển phần vừa nhả từ giữ sang dư (rà soát 14/11 TĐ4).
    */
   async releaseOrderHoldings(
     tx: PrismaTx,
@@ -537,6 +540,37 @@ export class SegmentStockService {
           createdById: input.actorId ?? null,
         },
       });
+      // Rà soát 14/11 TĐ4: phần vừa nhả chuyển từ "giữ" sang "dư" của lệnh trong SegmentProduction (tổng không đổi -> không ghi
+      // sổ). Trước đây SegmentProduction vẫn ghi phần giữ cũ: QLSX mở lại lệnh thì tính lại thấy đích = số cũ, không giữ lại được
+      // gì. Nay tính lại sau khi mở (ProductionOrdersService.startFloor) thấy phần giữ thiếu và lấy lại từ dư nếu còn.
+      const production = await tx.segmentProduction.findUnique({
+        where: {
+          productionInvoiceId_segmentSpecId_segmentSteps: {
+            productionInvoiceId: input.productionInvoiceId,
+            segmentSpecId: row.segmentSpecId,
+            segmentSteps: row.segmentSteps,
+          },
+        },
+        select: { heldQty: true, surplusQty: true },
+      });
+      if (production) {
+        const moved = round4(Math.min(remaining, production.heldQty.toNumber()));
+        if (moved > 0) {
+          await tx.segmentProduction.update({
+            where: {
+              productionInvoiceId_segmentSpecId_segmentSteps: {
+                productionInvoiceId: input.productionInvoiceId,
+                segmentSpecId: row.segmentSpecId,
+                segmentSteps: row.segmentSteps,
+              },
+            },
+            data: {
+              heldQty: round4(production.heldQty.toNumber() - moved),
+              surplusQty: round4(production.surplusQty.toNumber() + moved),
+            },
+          });
+        }
+      }
       releasedQty = round4(releasedQty + remaining);
       reservationCount += 1;
     }

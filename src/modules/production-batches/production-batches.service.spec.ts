@@ -579,6 +579,89 @@ describe('ProductionBatchesService', () => {
       expect(overage.create).toHaveBeenCalledTimes(3);
     });
 
+    it('rà soát 14/11 TĐ2: trừ (khoá ô) theo thứ tự mã đoạn cố định, không theo thứ tự định mức trả về', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { segmentSpecId: 61n, qtyPerPiece: 1, processSteps: ['CAT'] },
+        { segmentSpecId: 60n, qtyPerPiece: 2, processSteps: ['CAT', 'DAP'] },
+        { segmentSpecId: 60n, qtyPerPiece: 1, processSteps: ['CAT'] },
+      ]);
+      segmentStock.consumeForOrder.mockImplementation((_tx: unknown, i: { qty: number }) =>
+        Promise.resolve({
+          takenQty: i.qty,
+          fromHeldQty: i.qty,
+          fromSurplusQty: 0,
+          shortageQty: 0,
+          duplicate: false,
+        }),
+      );
+
+      await service.create('1', dto, 'user-han', null, null);
+
+      const order = (
+        segmentStock.consumeForOrder.mock.calls as [
+          unknown,
+          { segmentSpecId: bigint; segmentSteps: string },
+        ][]
+      ).map(([, i]) => `${i.segmentSpecId}|${i.segmentSteps}`);
+      expect(order).toEqual(['60|', '60|DAP', '61|']);
+    });
+
+    it('rà soát 14/11 TĐ3: cộng dồn mọi đợt đã gửi KCS (theo thứ tự gửi, không theo id) - đợt id lớn gửi trước vẫn được tính', async () => {
+      // Kế hoạch 20 mảnh. Đợt 900 (id lớn hơn) đã gửi trước 12, đợt 700 (đợt này) 20 -> tổng 32, vượt 12.
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { id: 900n, reportedQty: 12 },
+        { id: 700n, reportedQty: 20 },
+      ]);
+      segmentStock.consumeForOrder.mockImplementation((_tx: unknown, i: { qty: number }) =>
+        Promise.resolve({
+          takenQty: i.qty,
+          fromHeldQty: i.qty,
+          fromSurplusQty: 0,
+          shortageQty: 0,
+          duplicate: false,
+        }),
+      );
+
+      await service.create('1', dto, 'user-han', null, null);
+
+      expect(prisma.productionBatch.findMany).toHaveBeenCalledWith({
+        where: {
+          productionOrderId: 1n,
+          pieceId: 40n,
+          stage: MfgStage.HAN,
+          status: { not: 'OPEN' },
+        },
+        select: { id: true, reportedQty: true },
+      });
+      expect(overage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ overPieces: 12, extraKind: 'OVER_REPORT' }) as unknown,
+      });
+    });
+
+    it('rà soát 14/11 TĐ5: phía trừ giữ khoá chuyển đổi dữ liệu cũ (dùng chung) rồi mới tới khoá đợt', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
+      segmentStock.consumeForOrder.mockImplementation((_tx: unknown, i: { qty: number }) =>
+        Promise.resolve({
+          takenQty: i.qty,
+          fromHeldQty: i.qty,
+          fromSurplusQty: 0,
+          shortageQty: 0,
+          duplicate: false,
+        }),
+      );
+
+      await service.create('1', dto, 'user-han', null, null);
+
+      const locks = (prisma.$executeRaw.mock.calls as [TemplateStringsArray, string][]).map(
+        ([sql, key]) => `${sql.join('?').includes('_shared') ? 'shared' : 'excl'}:${key}`,
+      );
+      expect(locks).toEqual([
+        'shared:segment-legacy-conversion',
+        'excl:production-batch-open:1:40:HAN',
+      ]);
+    });
+
     it('gọi lại cùng đợt: mã đoạn đã có dòng sổ báo vượt thì bỏ qua, không trừ lần 2', async () => {
       prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
       overage.findUnique.mockResolvedValue({ id: 1n });
@@ -1175,6 +1258,34 @@ describe('ProductionBatchesService', () => {
       const lockCallOrder = prisma.$executeRaw.mock.invocationCallOrder[0];
       const updateManyCallOrder = prisma.productionBatch.updateMany.mock.invocationCallOrder[0];
       expect(lockCallOrder).toBeLessThan(updateManyCallOrder);
+    });
+
+    it('rà soát 14/11 TĐ5: bật tồn đoạn thì Gửi KCS giữ khoá chuyển đổi (dùng chung) TRƯỚC khoá đợt - không khoá chéo với lượt chuyển đổi', async () => {
+      const env = process.env.SEGMENT_STOCK_ENABLED;
+      process.env.SEGMENT_STOCK_ENABLED = 'true';
+      try {
+        prisma.productionBatch.findUnique.mockResolvedValue({
+          ...batchRow,
+          status: 'OPEN',
+          reportedQty: 8,
+        });
+        prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
+          ...batchRow,
+          status: 'AWAITING_QC',
+          reportedQty: 8,
+        });
+        prisma.pieceBom.findMany.mockResolvedValue([]);
+
+        await service.finishProductionBatch('700', 'user-han', null, null);
+
+        const [first, second] = prisma.$executeRaw.mock.calls as [TemplateStringsArray, string][];
+        expect(first[0].join('?')).toContain('pg_advisory_xact_lock_shared');
+        expect(first[1]).toBe('segment-legacy-conversion');
+        expect(second[1]).toMatch(/^production-batch-open:/);
+      } finally {
+        if (env === undefined) delete process.env.SEGMENT_STOCK_ENABLED;
+        else process.env.SEGMENT_STOCK_ENABLED = env;
+      }
     });
   });
 
