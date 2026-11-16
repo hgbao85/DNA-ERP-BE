@@ -3004,6 +3004,19 @@ describe('CuttingProposalsService', () => {
           ),
       );
     };
+    /**
+     * Đề xuất mua còn mở của PI (MH3, 16/11/2026): approve() tìm qua findOpenProposalForRecompute() -
+     * lần 1 chỉ lấy id, khoá `purchase-proposal-mutate:<id>`, lần 2 đọc lại kèm dòng SAU khoá.
+     * `beforeLock` = kết quả lần 1 (mặc định chỉ có id).
+     */
+    const mockOpenPurchaseProposal = (
+      afterLock: { id: bigint; [key: string]: unknown },
+      beforeLock: unknown = { id: afterLock.id },
+    ) => {
+      prisma.purchaseProposal.findFirst
+        .mockResolvedValueOnce(beforeLock)
+        .mockResolvedValueOnce(afterLock);
+    };
 
     // Cổng chặn "chưa chạy backfill" - buyBars=null nghĩa là dữ liệu duyệt trước 2026-08-27 chưa
     // được lấp. Cộng 0 sẽ làm nhu cầu gộp tính THIẾU rồi ghi đè dòng kế hoạch bằng số hụt - tái
@@ -3032,7 +3045,7 @@ describe('CuttingProposalsService', () => {
         { materialId: 30n, buyBars: null as unknown as number },
         { materialId: 30n, buyBars: 8 },
       ]);
-      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+      mockOpenPurchaseProposal({
         id: 900n,
         items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.NEW }],
       });
@@ -3072,7 +3085,7 @@ describe('CuttingProposalsService', () => {
       mockExistingPurchaseItems([
         { materialId: 30n, status: PurchaseProposalStatus.NEW, buyQty: 20, receivedQty: 0 },
       ]);
-      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+      mockOpenPurchaseProposal({
         id: 900n,
         items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.NEW }],
       });
@@ -3114,7 +3127,7 @@ describe('CuttingProposalsService', () => {
       mockExistingPurchaseItems([
         { materialId: 30n, status: PurchaseProposalStatus.NEW, buyQty: 20, receivedQty: 0 },
       ]);
-      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+      mockOpenPurchaseProposal({
         id: 900n,
         cuttingProposalId: 77n,
         items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.NEW }],
@@ -3162,7 +3175,7 @@ describe('CuttingProposalsService', () => {
       mockExistingPurchaseItems([
         { materialId: 30n, status: PurchaseProposalStatus.NEW, buyQty: 35, receivedQty: 0 },
       ]);
-      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+      mockOpenPurchaseProposal({
         id: 900n,
         cuttingProposalId: 88n,
         items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.NEW }],
@@ -3206,7 +3219,7 @@ describe('CuttingProposalsService', () => {
       mockExistingPurchaseItems([
         { materialId: 30n, status: PurchaseProposalStatus.PURCHASING, buyQty: 20, receivedQty: 0 },
       ]);
-      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+      mockOpenPurchaseProposal({
         id: 900n,
         items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.PURCHASING }],
       });
@@ -3224,6 +3237,119 @@ describe('CuttingProposalsService', () => {
           stockLengthMm: 5900,
           status: PurchaseProposalStatus.NEW,
         }) as unknown,
+      });
+    });
+
+    // MH3 (rà soát 14/11/2026): lượt duyệt khoá đề xuất mua bằng khoá ký đơn ở ĐẦU transaction rồi
+    // ghi theo dòng đọc lại SAU khoá - không đè số lên dòng Giám đốc vừa ký.
+    describe('MH3: khoá đề xuất mua trước khoá tồn', () => {
+      const setupPiApprove = () => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue({
+          id: 2n,
+          productionOrderId: 1n,
+          status: CuttingProposalStatus.DRAFT,
+          lines: [
+            { id: 77n, materialId: 30n, feasible: true, totalBars: 8, bestStockLengthMm: 5900 },
+          ],
+        });
+        prisma.cuttingProposal.update.mockResolvedValue({
+          id: 2n,
+          productionOrderId: 1n,
+          status: CuttingProposalStatus.APPROVED,
+          ...productionOrderRelation(),
+        });
+        prisma.material.findMany.mockResolvedValue([
+          { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+        ]);
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce({
+          productionInvoiceItem: { productionInvoiceId: 50n },
+        });
+        mockGrossLines([{ materialId: 30n, buyBars: 30 }]);
+      };
+
+      it('khoá merge rồi mutate trước khoá dòng phương án và stock_quant, ghi theo dòng đọc sau khoá', async () => {
+        setupPiApprove();
+        // Giám đốc vừa ký dòng 5000 (20 cây) ngay trước khi lượt duyệt lấy được khoá.
+        mockExistingPurchaseItems([
+          {
+            materialId: 30n,
+            status: PurchaseProposalStatus.PURCHASING,
+            buyQty: 20,
+            receivedQty: 0,
+          },
+        ]);
+        mockOpenPurchaseProposal(
+          {
+            id: 900n,
+            status: PurchaseProposalStatus.PURCHASING,
+            items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.PURCHASING }],
+          },
+          // Ảnh đọc TRƯỚC khoá, dòng còn NEW: ghi theo ảnh này là đè số lên dòng vừa ký (lỗi MH3).
+          { id: 900n, items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.NEW }] },
+        );
+
+        await service.approve('2', 'user-1');
+
+        const lockKeys = (prisma.$executeRaw.mock.calls as unknown[][]).map((c) => c[1]);
+        expect(lockKeys).toEqual(['purchase-proposal-merge:50', 'purchase-proposal-mutate:900']);
+        const mutateOrder = prisma.$executeRaw.mock.invocationCallOrder[1];
+        const sqlOrder = (table: string) => {
+          const calls = prisma.$queryRaw.mock.calls as [TemplateStringsArray][];
+          const i = calls.findIndex(([s]) => Array.isArray(s) && s.join('').includes(table));
+          return prisma.$queryRaw.mock.invocationCallOrder[i];
+        };
+        expect(mutateOrder).toBeLessThan(sqlOrder('"cutting_proposals"'));
+        expect(mutateOrder).toBeLessThan(sqlOrder('"stock_quant"'));
+        // Dòng đã ký giữ nguyên; phần chênh 30 − 20 = 10 thành dòng kế hoạch mới.
+        expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
+        expect(prisma.purchaseProposalItem.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            proposalId: 900n,
+            materialId: 30n,
+            buyQty: 10,
+            status: PurchaseProposalStatus.NEW,
+          }) as unknown,
+        });
+      });
+
+      it('đề xuất vừa đóng hẳn trước khi kịp khoá - tạo đề xuất mới, không ghi vào đề xuất đã đóng', async () => {
+        setupPiApprove();
+        // Dòng cuối của đề xuất #900 vừa nhận đủ 20 cây -> #900 thành PURCHASED.
+        mockExistingPurchaseItems([
+          {
+            materialId: 30n,
+            status: PurchaseProposalStatus.PURCHASED,
+            buyQty: 20,
+            receivedQty: 20,
+          },
+        ]);
+        mockOpenPurchaseProposal({
+          id: 900n,
+          status: PurchaseProposalStatus.PURCHASED,
+          items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.PURCHASED }],
+        });
+        prisma.purchaseProposal.create.mockResolvedValueOnce({ id: 901n });
+
+        await service.approve('2', 'user-1');
+
+        expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            productionInvoiceId: 50n,
+            items: {
+              create: [
+                expect.objectContaining({
+                  materialId: 30n,
+                  buyQty: 10,
+                  status: PurchaseProposalStatus.NEW,
+                }),
+              ],
+            },
+          }) as unknown,
+        });
+        expect(prisma.purchaseProposalItem.create).not.toHaveBeenCalled();
+        expect(prisma.purchaseProposal.update).not.toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: 900n } }),
+        );
       });
     });
 
@@ -3273,7 +3399,7 @@ describe('CuttingProposalsService', () => {
         mockExistingPurchaseItems(
           opts.existing.map((e) => ({ materialId: 30n, receivedQty: 0, ...e })),
         );
-        prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+        mockOpenPurchaseProposal({
           id: 900n,
           items: opts.proposalItems.map((i) => ({
             ...i,
@@ -3466,7 +3592,7 @@ describe('CuttingProposalsService', () => {
       mockExistingPurchaseItems([
         { materialId: 30n, status: PurchaseProposalStatus.NEW, buyQty: 20, receivedQty: 0 },
       ]);
-      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+      mockOpenPurchaseProposal({
         id: 900n,
         items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.NEW }],
       });
@@ -3504,7 +3630,7 @@ describe('CuttingProposalsService', () => {
       mockGrossLines([{ materialId: 40n, buyBars: 6 }]);
       mockExistingPurchaseItems([]);
       // Đề xuất #900 đã có sẵn (do vật tư khác của cùng PI tạo ra), nhưng KHÔNG có dòng nào cho 40n.
-      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({ id: 900n, items: [] });
+      mockOpenPurchaseProposal({ id: 900n, items: [] });
 
       await service.approve('2', 'user-1');
 
@@ -3544,7 +3670,7 @@ describe('CuttingProposalsService', () => {
       mockExistingPurchaseItems([
         { materialId: 30n, status: PurchaseProposalStatus.PURCHASED, buyQty: 5, receivedQty: 5 },
       ]);
-      prisma.purchaseProposal.findFirst.mockResolvedValueOnce({
+      mockOpenPurchaseProposal({
         id: 900n,
         items: [{ id: 5000n, materialId: 30n, status: PurchaseProposalStatus.PURCHASED }],
       });

@@ -23,6 +23,7 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { findOpenProposalForRecompute } from '../../common/utils/purchase-proposal-lock.util';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -2527,6 +2528,18 @@ export class CuttingProposalsService {
 
     const updated = await this.prisma.$transaction(
       async (tx) => {
+        // MH3 (rà soát 14/11/2026): khoá đề xuất mua của PI TRƯỚC mọi khoá khác của lượt duyệt.
+        // Bước gộp dòng mua sắt ở dưới ghi đè số của dòng chưa ký, nên phải giữ khoá ký đơn
+        // `purchase-proposal-mutate:<đề xuất>` (chung với Giám đốc ký, đơn đặt hàng, nhận hàng, đóng
+        // phần thiếu) từ lúc đọc tới lúc ghi. Trước đây chỉ có khoá merge, lấy SAU khoá stock_quant;
+        // thêm mutate ở chỗ đó sẽ khoá chéo với nhận hàng (nhận hàng: mutate → stock_quant). Thứ tự
+        // chung với 3 nguồn mua ngoài sắt: merge → mutate → stock_quant → giữ chỗ. Lấy ngay đầu
+        // transaction nên 2 lượt duyệt cùng PI xếp hàng từ đầu, không khoá dòng phương án của nhau.
+        const existingProposal =
+          buyableLines.length > 0 && targetProductionInvoiceId
+            ? await this.lockOpenPurchaseProposal(tx, targetProductionInvoiceId)
+            : null;
+
         // Khoá chính dòng phương án rồi ĐỌC LẠI trạng thái: kiểm tra DRAFT ở trên nằm ngoài
         // transaction nên là đọc-rồi-ghi kinh điển - 2 request duyệt cùng lúc đều thấy DRAFT, đều đi
         // tiếp, tạo 2 PurchaseProposal cho cùng một nhu cầu và trừ kho 2 lần. Từ đây mọi lượt duyệt
@@ -2696,37 +2709,13 @@ export class CuttingProposalsService {
             buyableLines[0].materialId,
           )!.warehouseCode;
 
-          // Gộp vào ĐÚNG 1 PurchaseProposal/PI (2026-08-25, chốt lại yêu cầu thực tế "Sếp/PM"):
-          // chờ đề xuất sắt xong rồi mới tính VTTP/tiêu hao (đã có sẵn từ 2026-08-24, xem
-          // ProductionInvoicesService onComplete) - giờ đi xa hơn, để cả 3 nguồn CÙNG GHI vào 1
-          // bản ghi PurchaseProposal duy nhất thay vì mỗi nguồn tự tạo riêng, Mua hàng chỉ thấy
-          // ĐÚNG 1 form cho cả PI. Khoá theo PI (không phải theo CuttingProposal) để 3 nguồn không
-          // cùng lúc miss-tìm rồi cùng tạo trùng (race, xem ConsumableMaterialPurchaseService/
-          // PieceMaterialYieldPurchaseService dùng CHUNG khoá này).
-          //
-          // targetProductionInvoiceId đã tính SẴN ở ngoài transaction (dùng chung với cổng chặn
-          // L7 phía trên) - không query lại productionOrder ở đây nữa.
-          if (targetProductionInvoiceId) {
-            await lockBusinessKey(tx, `purchase-proposal-merge:${targetProductionInvoiceId}`);
-          }
-
-          // Tìm đề xuất "còn mở" (mọi trạng thái trừ PURCHASED) chứ không chỉ NEW (2026-08-25,
-          // sửa cùng lúc với chuyển state machine xuống cấp item) - với item-level status, rollup
-          // của proposal rời NEW ngay khi có 1 dòng bất kỳ được acknowledge/báo giá, SỚM hơn hẳn
-          // trước đây (đúng mục tiêu "duyệt riêng từng người") - nếu vẫn lọc cứng theo NEW, VTTP/
-          // tiêu hao sẽ không tìm thấy đề xuất sắt vừa tạo nữa ngay khi có người bắt đầu xử lý nó,
-          // tự tạo đề xuất THỨ 2 tách rời, phá đúng cơ chế "1 PI = 1 form" (bug tiềm ẩn phát hiện
-          // qua rà soát code khi thiết kế tính năng duyệt riêng, chưa từng biểu hiện ra ngoài vì
-          // trước đây chưa ai kịp acknowledge trước khi cả 3 nguồn tính xong trong cùng 1 lượt).
-          const existingProposal = targetProductionInvoiceId
-            ? await tx.purchaseProposal.findFirst({
-                where: {
-                  productionInvoiceId: targetProductionInvoiceId,
-                  status: { not: PurchaseProposalStatus.PURCHASED },
-                },
-                include: { items: true },
-              })
-            : null;
+          // Gộp vào ĐÚNG 1 PurchaseProposal/PI (2026-08-25, chốt lại yêu cầu thực tế "Sếp/PM"): cả 3
+          // nguồn (sắt, VTTP, tiêu hao) CÙNG GHI vào 1 đề xuất duy nhất, Mua hàng chỉ thấy ĐÚNG 1 form
+          // cho cả PI. `existingProposal` đã tìm + khoá ở ĐẦU transaction (MH3, xem trên), dưới khoá
+          // merge theo PI dùng CHUNG với 3 nguồn mua ngoài sắt để không nguồn nào cùng lúc miss-tìm rồi
+          // tạo trùng. Đề xuất "còn mở" = mọi trạng thái trừ PURCHASED, không chỉ NEW: rollup rời NEW
+          // ngay khi 1 dòng được báo giá, lọc cứng NEW thì nguồn sau không thấy đề xuất vừa tạo và tự
+          // tạo đề xuất thứ 2, phá "1 PI = 1 form".
 
           // L1 (2026-08-26): NHU CẦU RÒNG - tính lại TOÀN PHẦN thay vì sửa buyQty tại chỗ.
           // Xem computeNetRequirementByMaterial() cho công thức + lý do. null khi phương án không
@@ -2957,6 +2946,20 @@ export class CuttingProposalsService {
     // Duyệt đã commit (giữ chỗ tồn, đề xuất mua...) -> bản nhớ gộp đợt phải đọc lại.
     this.invalidateBatchContext();
     return this.toResponseDto(updated);
+  }
+
+  /**
+   * MH3 (rà soát 14/11/2026): khoá đề xuất mua của 1 PI cho bước gộp dòng mua sắt của approve() -
+   * khoá merge `purchase-proposal-merge:<pi>` rồi findOpenProposalForRecompute() (khoá
+   * `purchase-proposal-mutate:<đề xuất>`, đọc lại dòng SAU khoá). approve() gọi ở ĐẦU transaction,
+   * trước khoá dòng phương án và stock_quant. Trả null khi PI chưa có đề xuất còn mở, kể cả khi đề
+   * xuất vừa đóng hẳn (dòng cuối vừa nhận đủ) giữa lúc tìm và lúc khoá: caller tạo đề xuất mới như khi
+   * không tìm thấy, không ghi dòng mới vào đề xuất đã đóng.
+   */
+  private async lockOpenPurchaseProposal(tx: PrismaTx, productionInvoiceId: bigint) {
+    await lockBusinessKey(tx, `purchase-proposal-merge:${productionInvoiceId}`);
+    const open = await findOpenProposalForRecompute(tx, productionInvoiceId);
+    return open && open.status !== PurchaseProposalStatus.PURCHASED ? open : null;
   }
 
   /**
