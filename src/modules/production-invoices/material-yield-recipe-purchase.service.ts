@@ -173,7 +173,7 @@ export class MaterialYieldRecipePurchaseService {
           actualStock,
         );
         const consumeQty = Math.min(
-          Math.max(0, acc.requiredInputQty - own.ownConsumedQty),
+          Math.max(0, acc.requiredInputQty - own.ownConsumedQty - own.inTransitQty),
           available,
         );
         // % hao hụt khi mua (Material.purchaseWastePercentage) - 2026-11-04 (V3-3) đệm trên TOÀN BỘ
@@ -183,7 +183,7 @@ export class MaterialYieldRecipePurchaseService {
         const wastePct = materialForWaste.purchaseWastePercentage?.toNumber() ?? 0;
         const buyQtyRaw = purchaseBuyQtyWithWaste(
           acc.requiredInputQty,
-          available + own.ownConsumedQty,
+          available + own.ownConsumedQty + own.inTransitQty,
           wastePct,
         );
         // 2026-10-10: ngoại lệ cho vật tư mua theo tấm LẺ (vd Tấm sắt la, xem docs/

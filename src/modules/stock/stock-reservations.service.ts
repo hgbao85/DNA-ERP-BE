@@ -23,18 +23,45 @@ export interface ReserveInput {
   spec?: string;
 }
 
+/**
+ * Giữ chỗ theo kho (rà soát 14/11 nhóm B, 16/11/2026): 4 loại dòng này TÍNH LẠI / CỘNG THÊM nhiều lần trên cùng refId nên
+ * khoá có thêm đuôi `:wh:{warehouseId}` - cùng 1 lệnh có hàng ở 2 kho (sau đổi xưởng) thì có 2 dòng, mỗi kho 1 dòng. Dòng
+ * CUTTING_PROPOSAL (sắt) mỗi lần duyệt đã có refId mới và chỉ đổi kho qua phiếu chuyển - giữ khoá cũ. Migration
+ * 20261116120000 nối đuôi cho dòng cũ.
+ */
+const WAREHOUSE_KEYED_REF_TYPES: ReadonlySet<StockReservationRefType> = new Set([
+  StockReservationRefType.CONSUMABLE_MATERIAL_PURCHASE,
+  StockReservationRefType.PIECE_MATERIAL_YIELD_PURCHASE,
+  StockReservationRefType.MATERIAL_YIELD_RECIPE_PURCHASE,
+  StockReservationRefType.PRODUCTION_INVOICE,
+]);
+
 /** Khoá idempotency của giữ chỗ - quy cách rỗng GIỮ NGUYÊN dạng cũ (dòng cũ không đổi); có quy cách thì thêm đuôi
- *  để cùng (nguồn, vật tư) giữ được NHIỀU dòng, mỗi quy cách 1 dòng (nệm). */
+ *  để cùng (nguồn, vật tư) giữ được NHIỀU dòng, mỗi quy cách 1 dòng (nệm). 4 loại dòng ở WAREHOUSE_KEYED_REF_TYPES thêm
+ *  đuôi kho. */
 function reservationKey(
   refType: StockReservationRefType,
   refId: string,
   materialId: bigint,
-  spec?: string,
+  spec: string | undefined,
+  warehouseId: bigint,
 ): string {
   const base = `${refType}:${refId}:material:${materialId}`;
   const s = spec?.trim();
-  return s ? `${base}:spec:${s}` : base;
+  const withSpec = s ? `${base}:spec:${s}` : base;
+  return WAREHOUSE_KEYED_REF_TYPES.has(refType) ? `${withSpec}:wh:${warehouseId}` : withSpec;
 }
+
+const WAREHOUSE_SUFFIX = /:wh:\d+$/;
+
+/** Khoá của cùng dòng khi dòng sang kho khác (nhận phiếu chuyển). Khoá không có đuôi kho (sắt, dòng tách không khoá) giữ nguyên. */
+export function reservationKeyAtWarehouse(key: string | null, warehouseId: bigint): string | null {
+  if (!key || !WAREHOUSE_SUFFIX.test(key)) return key;
+  return key.replace(WAREHOUSE_SUFFIX, `:wh:${warehouseId}`);
+}
+
+/** Kho gắn theo xưởng - hàng của lệnh nằm ở loại kho này của xưởng khác sẽ được chuyển sang bằng phiếu chuyển của lệnh. */
+const WORKSHOP_BOUND_KINDS: readonly string[] = ['PHOI', 'HAN'];
 
 interface PoolRow {
   id: bigint;
@@ -86,7 +113,13 @@ export class StockReservationsService {
 
     // Idempotent theo (refType, refId, materialId, quy cách) - 1 nguồn chỉ giữ chỗ đúng 1 dòng cho 1 (vật tư,
     // quy cách), gọi lại (retry mất mạng, double-click) trả về dòng đã tạo thay vì cộng dồn sai.
-    const idempotencyKey = reservationKey(input.refType, input.refId, input.materialId, input.spec);
+    const idempotencyKey = reservationKey(
+      input.refType,
+      input.refId,
+      input.materialId,
+      input.spec,
+      input.warehouseId,
+    );
     const existing = await db.stockReservation.findUnique({ where: { idempotencyKey } });
     if (existing) {
       return { id: existing.id, quantity: existing.quantity };
@@ -131,7 +164,16 @@ export class StockReservationsService {
       spec?: string;
     },
   ): Promise<void> {
-    const idempotencyKey = reservationKey(input.refType, input.refId, input.materialId, input.spec);
+    // Khoá có kho (B1): mỗi kho 1 dòng. Rà soát 14/11 CK2: trước đây khoá không gồm kho, lần tính ở kho khác thì CHUYỂN dòng
+    // sang kho mới dù hàng vẫn nằm ở kho cũ (sau đổi xưởng) - nay dòng ở kho cũ để nguyên (releaseOwnHoldsForRecompute quyết
+    // định co hay tính "đang chuyển tới"), lần tính ghi dòng của kho đang tính.
+    const idempotencyKey = reservationKey(
+      input.refType,
+      input.refId,
+      input.materialId,
+      input.spec,
+      input.warehouseId,
+    );
     const existing = await tx.stockReservation.findUnique({ where: { idempotencyKey } });
     if (!existing) {
       if (input.qty > 0) {
@@ -141,32 +183,35 @@ export class StockReservationsService {
     }
     const floor = existing.consumedQty.toNumber();
     const nextQty = Math.max(input.qty, floor);
-    // Khoá giữ chỗ không gồm kho - lần tính sau đọc tồn ở kho khác (13/11/2026: vật tư đóng gói nay đọc ở kho thành phẩm
-    // QLSX chọn thay vì kho mặc định) thì chuyển dòng giữ chỗ sang kho mới, miễn chưa tiêu gì ở kho cũ.
-    const moveWarehouse = existing.warehouseId !== input.warehouseId && floor === 0;
-    if (nextQty !== existing.quantity.toNumber() || moveWarehouse) {
+    // Dòng cùng khoá đã nhả (PI xong rồi tính lại) mà lần này cần giữ thêm thì mở lại - không tạo trùng khoá được.
+    const reactivate = existing.status === ReservationStatus.RELEASED && input.qty > floor;
+    if (nextQty !== existing.quantity.toNumber() || reactivate) {
       await tx.stockReservation.update({
         where: { id: existing.id },
-        data: { quantity: nextQty, ...(moveWarehouse ? { warehouseId: input.warehouseId } : {}) },
+        data: {
+          quantity: nextQty,
+          ...(reactivate ? { status: ReservationStatus.ACTIVE, releasedAt: null } : {}),
+        },
       });
     }
   }
 
   /**
-   * Chuẩn bị TÍNH LẠI 1 nguồn mua ngoài sắt của 1 PI (rà soát 14/11/2026, lỗi MH1) - thay cho shrinkToFloor() cũ (2026-09-23,
-   * chỉ co dòng của nguồn). Co VỀ phần đã tiêu cả 2 loại dòng giữ chỗ của CHÍNH PI cho (vật tư, quy cách):
-   *  - dòng của chính nguồn (refType/refId ổn định qua mọi lần tính lại): không co thì phần CHƯA tiêu của lượt tính TRƯỚC bị
-   *    getAvailableQty() trừ nhầm vào chính nó, available tụt dần mỗi lần tính lại dù tồn không đổi;
-   *  - dòng "của cả lệnh" PRODUCTION_INVOICE mà creditPool() tạo khi hàng mua về lúc nguồn chưa giữ chỗ gì (lần tính đầu
-   *    chưa có tồn). Trước đây dòng này KHÔNG được co, getAvailableQty() trừ nó như hàng lệnh khác đang giữ -> lần tính
-   *    sau mua thêm đúng phần đã nhận. Chỉ co dòng nằm ở ĐÚNG kho đang tính (`warehouseId`); dòng ở kho khác (sau đổi
-   *    xưởng) để nguyên - thuộc thiết kế giữ chỗ theo kho (nhóm B), không đụng ở đây.
-   * Sau bước này hàng đã nhận còn trong kho nằm lại trong tồn khả dụng, caller giữ chỗ lại vào dòng của nguồn.
+   * Chuẩn bị TÍNH LẠI 1 nguồn mua ngoài sắt của 1 PI ở kho `warehouseId` (rà soát 14/11/2026 MH1; nhóm B 16/11). Đọc + khoá
+   * FOR UPDATE mọi dòng giữ chỗ ACTIVE của CHÍNH PI cho (vật tư, quy cách): dòng của nguồn (refType/refId, mỗi kho 1 dòng) và
+   * dòng "của cả lệnh" PRODUCTION_INVOICE (creditPool tạo khi hàng mua về). Theo kho của từng dòng:
+   *  - ở ĐÚNG kho đang tính: co về phần đã tiêu - hàng đã nhận còn trong kho trở lại tồn khả dụng, caller giữ chỗ lại vào dòng
+   *    của nguồn ở kho này (không co thì getAvailableQty() trừ nhầm phần của chính PI, lần tính sau mua thêm);
+   *  - ở kho Phôi/Hàn CÙNG LOẠI của xưởng khác (lệnh vừa đổi xưởng, rà soát CK2): để nguyên - hàng thật nằm ở đó, sẽ sang kho
+   *    này bằng phiếu chuyển của lệnh (WorkshopMoveService.getPlans). Phần còn giữ trả về `inTransitQty` để caller coi là
+   *    "đã có" - không mua lại hàng đang nằm ở kho xưởng cũ;
+   *  - dòng của nguồn ở kho khác còn lại (vd đóng gói đổi kho thành phẩm): không có phiếu nào chuyển sang - co về phần đã tiêu
+   *    như trước (hàng ở kho đó trở lại tồn khả dụng của kho đó). Dòng "của cả lệnh" ở kho đó để nguyên như trước.
    *
-   * Trả về phần ĐÃ TIÊU (xưởng đã xuất cho PI này) của các dòng trên, MỌI kho: `ownConsumedQty` để caller coi là "đã có"
-   * khi trừ nhu cầu (nhu cầu là tổng cả PI nên phải trừ cả phần đã xuất, nếu không lần tính sau mua lại hàng đã xuất);
-   * `sourceConsumedQty` là sàn của dòng nguồn khi giữ chỗ lại. consumedQty chỉ ghi được khi lúc xuất có giữ chỗ để rút
-   * (drainPoolBestEffort) - xuất không qua giữ chỗ thì không đếm được, lệch về phía mua thêm như trước, không mua thiếu.
+   * `ownConsumedQty`: phần ĐÃ TIÊU (xưởng đã xuất cho PI) của mọi dòng trên, mọi kho - "đã có" khi trừ nhu cầu (nhu cầu là
+   * tổng cả PI). `sourceConsumedQty`: phần đã tiêu của dòng nguồn Ở KHO ĐANG TÍNH - sàn khi giữ chỗ lại dòng đó. consumedQty
+   * chỉ ghi được khi lúc xuất có giữ chỗ để rút (drainPoolBestEffort) - xuất không qua giữ chỗ thì không đếm được, lệch về
+   * phía mua thêm như trước, không mua thiếu.
    *
    * Caller PHẢI khoá stock_quant FOR UPDATE TRƯỚC khi gọi (cùng thứ tự khoá với luồng xuất vật tư: stock_quant rồi mới tới
    * dòng giữ chỗ) - hàm này khoá FOR UPDATE các dòng giữ chỗ nó đọc rồi mới co, để không đè lên consumedQty vừa tăng.
@@ -181,7 +226,7 @@ export class StockReservationsService {
       warehouseId: bigint;
       spec?: string;
     },
-  ): Promise<{ ownConsumedQty: number; sourceConsumedQty: number }> {
+  ): Promise<{ ownConsumedQty: number; sourceConsumedQty: number; inTransitQty: number }> {
     const spec = input.spec?.trim() ?? '';
     const rows = await tx.$queryRaw<
       {
@@ -204,20 +249,44 @@ export class StockReservationsService {
       ORDER BY "id"
       FOR UPDATE
     `;
+    const warehouses = await tx.warehouse.findMany({
+      where: { id: { in: [...new Set([input.warehouseId, ...rows.map((r) => r.warehouseId)])] } },
+      select: { id: true, kind: true, workshopId: true },
+    });
+    const whById = new Map(warehouses.map((w) => [w.id.toString(), w]));
+    const here = whById.get(input.warehouseId.toString());
+    const isInTransit = (warehouseId: bigint): boolean => {
+      const w = whById.get(warehouseId.toString());
+      return (
+        !!w?.kind &&
+        w.kind === here?.kind &&
+        WORKSHOP_BOUND_KINDS.includes(w.kind) &&
+        w.workshopId !== here.workshopId
+      );
+    };
     let ownConsumedQty = 0;
     let sourceConsumedQty = 0;
+    let inTransitQty = 0;
     for (const r of rows) {
       const consumed = r.consumedQty.toNumber();
       ownConsumedQty += consumed;
       const isSource = r.refType === input.refType && r.refId === input.refId;
-      if (isSource) sourceConsumedQty += consumed;
-      const shrink = isSource || r.warehouseId === input.warehouseId;
-      if (shrink && r.quantity.toNumber() !== consumed) {
+      const atHere = r.warehouseId === input.warehouseId;
+      if (isSource && atHere) sourceConsumedQty += consumed;
+      if (!atHere && isInTransit(r.warehouseId)) {
+        inTransitQty += Math.max(0, r.quantity.toNumber() - consumed);
+        continue;
+      }
+      if ((atHere || isSource) && r.quantity.toNumber() !== consumed) {
         await tx.stockReservation.update({ where: { id: r.id }, data: { quantity: consumed } });
       }
     }
     const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
-    return { ownConsumedQty: round4(ownConsumedQty), sourceConsumedQty: round4(sourceConsumedQty) };
+    return {
+      ownConsumedQty: round4(ownConsumedQty),
+      sourceConsumedQty: round4(sourceConsumedQty),
+      inTransitQty: round4(inTransitQty),
+    };
   }
 
   /**
@@ -238,10 +307,18 @@ export class StockReservationsService {
     tx: PrismaTx,
     productionInvoiceId: bigint,
     materialId: bigint,
-    spec = '',
+    spec: string | undefined,
+    /** Chỉ dòng ở kho này (giữ chỗ theo kho, nhóm B 16/11/2026). */
+    warehouseId: bigint,
   ): Promise<PoolRow[]> {
     const rows = await tx.stockReservation.findMany({
-      where: { productionInvoiceId, materialId, spec, status: ReservationStatus.ACTIVE },
+      where: {
+        productionInvoiceId,
+        materialId,
+        spec: spec ?? '',
+        warehouseId,
+        status: ReservationStatus.ACTIVE,
+      },
       select: {
         id: true,
         refType: true,
@@ -320,17 +397,38 @@ export class StockReservationsService {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty cộng thêm giữ chỗ phải lớn hơn 0');
     }
+    // Rà soát 14/11 CK1 (nhóm B 16/11): chỉ cộng vào dòng của pool Ở ĐÚNG KHO NHẬN - trước đây cộng vào dòng đầu của pool bất
+    // kể kho, lệnh vừa đổi xưởng nhận hàng ở kho mới thì giữ chỗ lại nằm ở kho cũ (không có hàng).
     const pool = await this.loadPool(
       tx,
       input.productionInvoiceId,
       input.materialId,
       input.spec?.trim(),
+      input.warehouseId,
     );
-    // Pool rỗng - approve() chưa từng giữ chỗ gì cho (PI, vật tư) này (buyQty = 100% nhu cầu ngay
-    // từ đầu, mọi dòng nguồn có thể cũng đã bị releaseByRef() supersede/huỷ hết) - tạo 1 dòng
-    // "thuộc về cả PI" thay vì thuộc về 1 cuttingProposalId cụ thể (case hiếm, PI chắc chắn còn
-    // sống vì receiveItem() chỉ chạy được khi PurchaseProposal đang PURCHASING).
+    // Kho nhận chưa có dòng nào của lệnh (approve() chưa giữ chỗ gì ở kho này - buyQty = 100% nhu cầu, phương án bị huỷ, hoặc
+    // lệnh vừa đổi xưởng) - tạo 1 dòng "thuộc về cả PI" ở kho này (khoá có đuôi kho). Dòng cùng khoá đã nhả (PI xong rồi vẫn
+    // nhận tiếp) thì mở lại thay vì tạo trùng khoá.
     if (pool.length === 0) {
+      const idempotencyKey = reservationKey(
+        StockReservationRefType.PRODUCTION_INVOICE,
+        input.productionInvoiceId.toString(),
+        input.materialId,
+        input.spec,
+        input.warehouseId,
+      );
+      const released = await tx.stockReservation.findUnique({ where: { idempotencyKey } });
+      if (released) {
+        await tx.stockReservation.update({
+          where: { id: released.id },
+          data: {
+            quantity: released.consumedQty.toNumber() + input.qty,
+            status: ReservationStatus.ACTIVE,
+            releasedAt: null,
+          },
+        });
+        return;
+      }
       await tx.stockReservation.create({
         data: {
           warehouseId: input.warehouseId,
@@ -339,12 +437,7 @@ export class StockReservationsService {
           quantity: input.qty,
           refType: StockReservationRefType.PRODUCTION_INVOICE,
           refId: input.productionInvoiceId.toString(),
-          idempotencyKey: reservationKey(
-            StockReservationRefType.PRODUCTION_INVOICE,
-            input.productionInvoiceId.toString(),
-            input.materialId,
-            input.spec,
-          ),
+          idempotencyKey,
           stockLengthMm: input.stockLengthMm ?? 0,
           spec: input.spec?.trim() ?? '',
         },
@@ -352,7 +445,7 @@ export class StockReservationsService {
       return;
     }
     // Credit vào dòng ưu tiên CAO NHẤT (hạn gần nhất, xem loadPool) - KHÔNG quan trọng dòng nào
-    // cụ thể nhận credit vì drainPool() sau này rút theo TỔNG của cả pool, không theo từng dòng
+    // cụ thể nhận credit vì drainPool() sau này rút theo TỔNG của pool ở kho đó, không theo từng dòng
     // riêng; chọn 1 quy tắc xác định (thay vì tuỳ tiện) chỉ để dễ audit/debug khi cần soi dữ liệu.
     const target = pool[0];
     await tx.$queryRaw`SELECT "id" FROM "stock_reservations" WHERE "id" = ${target.id} FOR UPDATE`;
@@ -381,7 +474,14 @@ export class StockReservationsService {
    */
   async drainPool(
     tx: PrismaTx,
-    input: { productionInvoiceId: bigint; materialId: bigint; qty: number; spec?: string },
+    input: {
+      productionInvoiceId: bigint;
+      materialId: bigint;
+      qty: number;
+      spec?: string;
+      /** Kho đang trừ tồn - chỉ rút dòng ở kho này (rà soát 14/11 CK3, nhóm B 16/11). */
+      warehouseId: bigint;
+    },
   ): Promise<{ warehouseId: bigint }> {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty xuất phải lớn hơn 0');
@@ -391,10 +491,13 @@ export class StockReservationsService {
       input.productionInvoiceId,
       input.materialId,
       input.spec?.trim(),
+      input.warehouseId,
     );
     if (pool.length === 0) {
+      const elsewhere = await this.heldElsewhereMessage(tx, input);
       throw new ConflictException(
-        `Không tìm thấy giữ chỗ tồn kho cho vật tư ${input.materialId} của PI ${input.productionInvoiceId} - chưa từng giữ chỗ (tồn + hàng mua chưa đủ), hoặc mọi phương án cắt liên quan đã bị supersede/huỷ`,
+        elsewhere ??
+          `Không tìm thấy giữ chỗ tồn kho cho vật tư ${input.materialId} của PI ${input.productionInvoiceId} - chưa từng giữ chỗ (tồn + hàng mua chưa đủ), hoặc mọi phương án cắt liên quan đã bị supersede/huỷ`,
       );
     }
 
@@ -420,8 +523,10 @@ export class StockReservationsService {
     // Chặn xuất thừa - CHẶN CỨNG, KHÔNG dung sai (Sếp chốt 2026-08-18, mục 13.7 changelog, giữ
     // nguyên khi chuyển sang pool - tổng cả pool vẫn phải đủ, không riêng từng dòng).
     if (input.qty > totalRemaining) {
+      const elsewhere = await this.heldElsewhereMessage(tx, input);
       throw new BadRequestException(
-        `Xuất ${input.qty} cây vượt quá phần đã giữ chỗ còn lại (${totalRemaining} cây) cho vật tư ${input.materialId} của PI ${input.productionInvoiceId} - không đủ hứa`,
+        `Xuất ${input.qty} cây vượt quá phần đã giữ chỗ còn lại (${totalRemaining} cây) cho vật tư ${input.materialId} của PI ${input.productionInvoiceId} - không đủ hứa` +
+          (elsewhere ? `. ${elsewhere}` : ''),
       );
     }
     let remainingToConsume = input.qty;
@@ -438,7 +543,38 @@ export class StockReservationsService {
       });
       remainingToConsume -= take;
     }
-    return { warehouseId: lockedRows[0].warehouseId };
+    return { warehouseId: input.warehouseId };
+  }
+
+  /** Lệnh còn giữ hàng ở kho khác kho đang xuất (vd kho Phôi xưởng cũ sau đổi xưởng) - câu báo cho thủ kho; null nếu không có. */
+  private async heldElsewhereMessage(
+    tx: PrismaTx,
+    input: { productionInvoiceId: bigint; materialId: bigint; spec?: string; warehouseId: bigint },
+  ): Promise<string | null> {
+    const rows = await tx.stockReservation.findMany({
+      where: {
+        productionInvoiceId: input.productionInvoiceId,
+        materialId: input.materialId,
+        spec: input.spec?.trim() ?? '',
+        status: ReservationStatus.ACTIVE,
+        warehouseId: { not: input.warehouseId },
+      },
+      select: {
+        quantity: true,
+        consumedQty: true,
+        warehouse: { select: { code: true, name: true } },
+      },
+    });
+    const byWarehouse = new Map<string, number>();
+    for (const r of rows) {
+      const left = r.quantity.toNumber() - r.consumedQty.toNumber();
+      if (left <= 0) continue;
+      const name = r.warehouse.name || r.warehouse.code;
+      byWarehouse.set(name, (byWarehouse.get(name) ?? 0) + left);
+    }
+    if (byWarehouse.size === 0) return null;
+    const list = [...byWarehouse].map(([name, qty]) => `${Math.round(qty * 1e4) / 1e4} ở ${name}`);
+    return `Lệnh còn giữ ${list.join(', ')} - cần phiếu chuyển hàng của lệnh sang kho này trước khi xuất`;
   }
 
   /**
@@ -459,7 +595,14 @@ export class StockReservationsService {
    */
   async drainPoolBestEffort(
     tx: PrismaTx,
-    input: { productionInvoiceId: bigint; materialId: bigint; qty: number; spec?: string },
+    input: {
+      productionInvoiceId: bigint;
+      materialId: bigint;
+      qty: number;
+      spec?: string;
+      /** Kho vừa trừ tồn - chỉ trả nợ giữ chỗ ở kho này (rà soát 14/11 XK6, nhóm B 16/11). */
+      warehouseId: bigint;
+    },
   ): Promise<void> {
     if (!(input.qty > 0)) return;
     const pool = await this.loadPool(
@@ -467,6 +610,7 @@ export class StockReservationsService {
       input.productionInvoiceId,
       input.materialId,
       input.spec?.trim(),
+      input.warehouseId,
     );
     if (pool.length === 0) return;
 

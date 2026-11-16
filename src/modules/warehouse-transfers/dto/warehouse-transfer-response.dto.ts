@@ -24,6 +24,9 @@ export class WarehouseTransferResponseDto {
     string | null;
   /** Số lệnh hiển thị của productionInvoiceId (số LSX, chưa có thì mã PI). */
   @Expose() @ApiPropertyOptional({ nullable: true, type: String }) lenhCode!: string | null;
+  /** Phiếu chuyển hàng của lệnh chờ nhận mà lệnh đã đổi xưởng tiếp - kho đích không còn thuộc xưởng của lệnh (anh Nhân 16/11):
+   *  thủ kho kho gửi huỷ phiếu hoặc đổi nơi nhận; kho đích vẫn nhận được nếu hàng đã tới. */
+  @Expose() @ApiProperty() destinationOutdated!: boolean;
   @Expose() @ApiPropertyOptional({ nullable: true }) confirmedAt!: Date | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) rejectedAt!: Date | null;
   /** Vấn đề #7 audit 26/08 - trước đây phải tra AuditLog riêng mới biết ai tạo/xác nhận/từ chối.

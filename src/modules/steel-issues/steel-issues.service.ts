@@ -516,18 +516,15 @@ export class SteelIssuesService {
       expectedWarehouseId: bigint;
     },
   ): Promise<void> {
+    // Rà soát 14/11 CK3 (nhóm B 16/11): chỉ rút giữ chỗ ở ĐÚNG kho Phôi của xưởng làm lệnh (kho trừ tồn). Trước đây rút cả
+    // pool rồi so kho của dòng đầu - lệnh có giữ chỗ ở 2 kho (đổi xưởng, hàng mua về kho mới) bị báo lỗi oan. Còn giữ ở kho
+    // xưởng khác thì drainPool báo rõ cần phiếu chuyển hàng của lệnh.
     const { warehouseId } = await this.stockReservationsService.drainPool(tx, {
       productionInvoiceId: input.productionInvoiceId,
       materialId: input.materialId,
       qty: input.barCount,
+      warehouseId: input.expectedWarehouseId,
     });
-    // Đợt 7: giữ chỗ phải nằm đúng kho Phôi của xưởng làm lệnh - lệch nghĩa là giữ chỗ cũ trước khi chia kho chưa được
-    // chuyển (prisma/split-warehouses.ts báo các lệnh này). Chặn thay vì lặng lẽ trừ tồn kho xưởng khác.
-    if (warehouseId !== input.expectedWarehouseId) {
-      throw new ConflictException(
-        `Giữ chỗ sắt của lệnh đang nằm ở kho khác kho Phôi của xưởng làm lệnh - báo Admin chuyển giữ chỗ trước khi xuất`,
-      );
-    }
 
     // Chặn tồn âm cục bộ (lỗ #2, mục 13.4) - không sửa StockLedgerService.postEntry() dùng chung
     // (nhiều luồng khác hợp lệ phải cho âm, vd kho ảo SUPPLIER) - chặn ngay tại đây, cùng khoá.

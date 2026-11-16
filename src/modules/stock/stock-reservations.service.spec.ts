@@ -28,6 +28,7 @@ describe('StockReservationsService', () => {
     };
     cuttingProposal: { findMany: jest.Mock };
     warehouseTransferReservation: { findMany: jest.Mock };
+    warehouse: { findMany: jest.Mock };
     $queryRaw: jest.Mock;
   };
 
@@ -44,6 +45,7 @@ describe('StockReservationsService', () => {
       // mọi test pool có 0-1 dòng.
       cuttingProposal: { findMany: jest.fn().mockResolvedValue([]) },
       warehouseTransferReservation: { findMany: jest.fn().mockResolvedValue([]) },
+      warehouse: { findMany: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn().mockResolvedValue([]),
     };
     service = new StockReservationsService(prisma as unknown as PrismaServiceType);
@@ -198,13 +200,8 @@ describe('StockReservationsService', () => {
       expect(prisma.stockReservation.create).not.toHaveBeenCalled();
     });
 
-    it('lần tính sau đọc tồn ở kho khác, chưa tiêu gì: chuyển dòng giữ chỗ sang kho mới (13/11/2026)', async () => {
-      prisma.stockReservation.findUnique.mockResolvedValue({
-        id: 900n,
-        warehouseId: 801n,
-        quantity: decimal(50),
-        consumedQty: decimal(0),
-      });
+    it('rà soát 14/11 CK2: khoá có kho - lần tính ở kho khác KHÔNG chuyển dòng cũ, tạo dòng riêng ở kho đang tính', async () => {
+      prisma.stockReservation.create.mockResolvedValue({ id: 2n, quantity: decimal(50) });
 
       await service.reserveOrAdjust(prisma as unknown as PrismaTx, {
         warehouseId: 800n,
@@ -214,10 +211,41 @@ describe('StockReservationsService', () => {
         refId: '7',
       });
 
+      expect(prisma.stockReservation.findUnique).toHaveBeenCalledWith({
+        where: { idempotencyKey: 'CONSUMABLE_MATERIAL_PURCHASE:7:material:30:wh:800' },
+      });
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          warehouseId: 800n,
+          quantity: 50,
+          idempotencyKey: 'CONSUMABLE_MATERIAL_PURCHASE:7:material:30:wh:800',
+        }) as unknown,
+      });
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+    });
+
+    it('dòng cùng khoá đã nhả (PI xong rồi tính lại) mà cần giữ thêm - mở lại thay vì tạo trùng khoá', async () => {
+      prisma.stockReservation.findUnique.mockResolvedValue({
+        id: 900n,
+        warehouseId: 800n,
+        status: 'RELEASED',
+        quantity: decimal(20),
+        consumedQty: decimal(20),
+      });
+
+      await service.reserveOrAdjust(prisma as unknown as PrismaTx, {
+        warehouseId: 800n,
+        materialId: 30n,
+        qty: 25,
+        refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+        refId: '7',
+      });
+
       expect(prisma.stockReservation.update).toHaveBeenCalledWith({
         where: { id: 900n },
-        data: { quantity: 50, warehouseId: 800n },
+        data: { quantity: 25, status: 'ACTIVE', releasedAt: null },
       });
+      expect(prisma.stockReservation.create).not.toHaveBeenCalled();
     });
 
     it('KHÔNG BAO GIỜ đặt quantity thấp hơn consumedQty đã tiêu (demand giảm xuống dưới phần đã xuất thật)', async () => {
@@ -292,7 +320,7 @@ describe('StockReservationsService', () => {
         input,
       );
 
-      expect(result).toEqual({ ownConsumedQty: 0, sourceConsumedQty: 0 });
+      expect(result).toEqual({ ownConsumedQty: 0, sourceConsumedQty: 0, inTransitQty: 0 });
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
     });
 
@@ -315,7 +343,7 @@ describe('StockReservationsService', () => {
         where: { id: 901n },
         data: { quantity: 5 },
       });
-      expect(result).toEqual({ ownConsumedQty: 20, sourceConsumedQty: 15 });
+      expect(result).toEqual({ ownConsumedQty: 20, sourceConsumedQty: 15, inTransitQty: 0 });
     });
 
     it('dòng "của cả lệnh" ở KHO KHÁC (sau đổi xưởng) giữ nguyên, nhưng phần đã tiêu của nó vẫn tính là đã có', async () => {
@@ -327,7 +355,49 @@ describe('StockReservationsService', () => {
       );
 
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
-      expect(result).toEqual({ ownConsumedQty: 10, sourceConsumedQty: 0 });
+      expect(result).toEqual({ ownConsumedQty: 10, sourceConsumedQty: 0, inTransitQty: 0 });
+    });
+
+    it('rà soát 14/11 CK2: hàng của PI giữ ở kho Phôi CÙNG LOẠI xưởng khác (lệnh vừa đổi xưởng) để nguyên, trả về là "đang chuyển tới"', async () => {
+      prisma.warehouse.findMany.mockResolvedValue([
+        { id: 800n, kind: 'PHOI', workshopId: 2n },
+        { id: 801n, kind: 'PHOI', workshopId: 1n },
+      ]);
+      prisma.$queryRaw.mockResolvedValue([
+        row(900n, 'CONSUMABLE_MATERIAL_PURCHASE', '7', 801n, 50, 10),
+        row(901n, 'PRODUCTION_INVOICE', '7', 801n, 20, 0),
+      ]);
+
+      const result = await service.releaseOwnHoldsForRecompute(
+        prisma as unknown as PrismaTx,
+        input,
+      );
+
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+      expect(result).toEqual({ ownConsumedQty: 10, sourceConsumedQty: 0, inTransitQty: 60 });
+    });
+
+    it('dòng của nguồn ở kho khác KHÔNG phải Phôi/Hàn cùng loại (vd đổi kho thành phẩm): co về đã tiêu như trước, không tính đang chuyển', async () => {
+      prisma.warehouse.findMany.mockResolvedValue([
+        { id: 800n, kind: 'THANH_PHAM', workshopId: null },
+        { id: 802n, kind: 'THANH_PHAM', workshopId: null },
+      ]);
+      prisma.$queryRaw.mockResolvedValue([
+        row(900n, 'CONSUMABLE_MATERIAL_PURCHASE', '7', 802n, 40, 5),
+        row(901n, 'PRODUCTION_INVOICE', '7', 802n, 20, 0),
+      ]);
+
+      const result = await service.releaseOwnHoldsForRecompute(
+        prisma as unknown as PrismaTx,
+        input,
+      );
+
+      expect(prisma.stockReservation.update).toHaveBeenCalledTimes(1);
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 900n },
+        data: { quantity: 5 },
+      });
+      expect(result).toEqual({ ownConsumedQty: 5, sourceConsumedQty: 0, inTransitQty: 0 });
     });
 
     it('đã ở floor rồi - không gọi update() thừa', async () => {
@@ -594,7 +664,7 @@ describe('StockReservationsService', () => {
           quantity: 5,
           refType: 'PRODUCTION_INVOICE',
           refId: '50',
-          idempotencyKey: 'PRODUCTION_INVOICE:50:material:30',
+          idempotencyKey: 'PRODUCTION_INVOICE:50:material:30:wh:800',
           stockLengthMm: 0,
           spec: '',
         },
@@ -637,9 +707,55 @@ describe('StockReservationsService', () => {
       expect(prisma.stockReservation.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           spec: 'Đôi 870x450x50',
-          idempotencyKey: 'PRODUCTION_INVOICE:50:material:30:spec:Đôi 870x450x50',
+          idempotencyKey: 'PRODUCTION_INVOICE:50:material:30:spec:Đôi 870x450x50:wh:800',
         }) as unknown,
       });
+    });
+
+    it('rà soát 14/11 CK1: chỉ cộng vào dòng ở ĐÚNG kho nhận (lọc pool theo kho)', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([]);
+
+      await service.creditPool(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        warehouseId: 801n,
+        qty: 5,
+      });
+
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ warehouseId: 801n }) as unknown,
+        }),
+      );
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          warehouseId: 801n,
+          idempotencyKey: 'PRODUCTION_INVOICE:50:material:30:wh:801',
+        }) as unknown,
+      });
+    });
+
+    it('kho nhận đã có dòng "của cả lệnh" bị nhả (PI xong rồi vẫn nhận) - mở lại dòng đó, không tạo trùng khoá', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([]);
+      prisma.stockReservation.findUnique.mockResolvedValue({
+        id: 950n,
+        status: 'RELEASED',
+        quantity: decimal(12),
+        consumedQty: decimal(10),
+      });
+
+      await service.creditPool(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        warehouseId: 800n,
+        qty: 5,
+      });
+
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 950n },
+        data: { quantity: 15, status: 'ACTIVE', releasedAt: null },
+      });
+      expect(prisma.stockReservation.create).not.toHaveBeenCalled();
     });
 
     it('ném BadRequestException nếu qty <= 0', async () => {
@@ -700,6 +816,7 @@ describe('StockReservationsService', () => {
         productionInvoiceId: 50n,
         materialId: 30n,
         qty: 5,
+        warehouseId: 800n,
       });
 
       expect(result.warehouseId).toBe(800n);
@@ -741,6 +858,7 @@ describe('StockReservationsService', () => {
         productionInvoiceId: 50n,
         materialId: 30n,
         qty: 8, // 3 (hết dòng 901) + 5 (lấy thêm từ dòng 900)
+        warehouseId: 800n,
       });
 
       expect(result.warehouseId).toBe(800n);
@@ -762,6 +880,7 @@ describe('StockReservationsService', () => {
           productionInvoiceId: 50n,
           materialId: 30n,
           qty: 5,
+          warehouseId: 800n,
         }),
       ).rejects.toThrow(ConflictException);
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
@@ -778,7 +897,7 @@ describe('StockReservationsService', () => {
           consumedQty: decimal(0),
         },
       ];
-      prisma.stockReservation.findMany.mockResolvedValue(rows);
+      prisma.stockReservation.findMany.mockResolvedValueOnce(rows); // lần 2 (giữ ở kho khác) mặc định rỗng
       mockRowLocks(rows);
 
       await expect(
@@ -786,6 +905,7 @@ describe('StockReservationsService', () => {
           productionInvoiceId: 50n,
           materialId: 30n,
           qty: 6,
+          warehouseId: 800n,
         }),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
@@ -797,8 +917,37 @@ describe('StockReservationsService', () => {
           productionInvoiceId: 50n,
           materialId: 30n,
           qty: 0,
+          warehouseId: 800n,
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rà soát 14/11 CK3: chỉ rút pool ở kho đang xuất; kho này không có mà còn giữ ở kho khác thì báo cần phiếu chuyển', async () => {
+      prisma.stockReservation.findMany
+        .mockResolvedValueOnce([]) // pool ở kho 800
+        .mockResolvedValueOnce([
+          {
+            quantity: decimal(8),
+            consumedQty: decimal(0),
+            warehouse: { code: 'phoi-son-han-phoi-pa', name: 'Kho Phôi Phú An' },
+          },
+        ]);
+
+      await expect(
+        service.drainPool(prisma as unknown as PrismaTx, {
+          productionInvoiceId: 50n,
+          materialId: 30n,
+          qty: 5,
+          warehouseId: 800n,
+        }),
+      ).rejects.toThrow('Lệnh còn giữ 8 ở Kho Phôi Phú An - cần phiếu chuyển hàng của lệnh');
+      expect(prisma.stockReservation.findMany).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          where: expect.objectContaining({ warehouseId: 800n }) as unknown,
+        }),
+      );
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
     });
   });
 
@@ -824,6 +973,7 @@ describe('StockReservationsService', () => {
           productionInvoiceId: 50n,
           materialId: 30n,
           qty: 5,
+          warehouseId: 800n,
         }),
       ).resolves.toBeUndefined();
       expect(prisma.stockReservation.update).not.toHaveBeenCalled();
@@ -847,6 +997,7 @@ describe('StockReservationsService', () => {
         productionInvoiceId: 50n,
         materialId: 30n,
         qty: 5,
+        warehouseId: 800n,
       });
 
       expect(prisma.stockReservation.update).toHaveBeenCalledWith({
@@ -874,6 +1025,7 @@ describe('StockReservationsService', () => {
           productionInvoiceId: 50n,
           materialId: 30n,
           qty: 8, // vượt quá 5 còn giữ - vẫn không throw
+          warehouseId: 800n,
         }),
       ).resolves.toBeUndefined();
 
@@ -888,6 +1040,7 @@ describe('StockReservationsService', () => {
         productionInvoiceId: 50n,
         materialId: 30n,
         qty: 0,
+        warehouseId: 800n,
       });
 
       expect(prisma.stockReservation.findMany).not.toHaveBeenCalled();

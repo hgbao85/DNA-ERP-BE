@@ -248,7 +248,10 @@ export class PieceMaterialYieldPurchaseService {
           materialId,
           actualStock,
         );
-        const consumeQty = Math.min(Math.max(0, acc.bars - own.ownConsumedQty), available);
+        const consumeQty = Math.min(
+          Math.max(0, acc.bars - own.ownConsumedQty - own.inTransitQty),
+          available,
+        );
         // % hao hụt khi mua (Material.purchaseWastePercentage) - 2026-11-04 (V3-3) đệm trên TOÀN BỘ
         // nhu cầu rồi mới trừ tồn khả dụng, cùng công thức ConsumableMaterialPurchaseService. Đơn vị ở đây
         // MẶC ĐỊNH là cây/tấm NGUYÊN (Int) nên ceil lại sau khi nhân - không mua lẻ cây/tấm.
@@ -256,7 +259,7 @@ export class PieceMaterialYieldPurchaseService {
         const wastePct = materialForWaste.purchaseWastePercentage?.toNumber() ?? 0;
         const buyQtyRaw = purchaseBuyQtyWithWaste(
           acc.bars,
-          available + own.ownConsumedQty,
+          available + own.ownConsumedQty + own.inTransitQty,
           wastePct,
         );
         // 2026-10-10: ngoại lệ cho vật tư mua theo tấm LẺ (vd Tấm sắt la, xem docs/

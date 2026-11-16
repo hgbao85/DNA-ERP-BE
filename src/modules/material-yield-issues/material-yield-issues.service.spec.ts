@@ -418,6 +418,7 @@ describe('MaterialYieldIssuesService', () => {
         productionInvoiceId: 500n,
         materialId: 80n,
         qty: 5,
+        warehouseId: 5n,
       });
     });
   });

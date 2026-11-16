@@ -78,6 +78,7 @@ describe('WorkshopMoveService', () => {
       },
       stockReservation: {
         findMany: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
         create: jest.fn(),
       },
@@ -378,6 +379,88 @@ describe('WorkshopMoveService', () => {
         stockLengthMm: 6000,
         productionInvoiceId: 500n,
       }),
+    });
+  });
+
+  describe('giữ chỗ theo kho (nhóm B 16/11): dòng có đuôi kho trong khoá đổi đuôi khi sang kho mới', () => {
+    const keyed = (o: Record<string, unknown> = {}) => ({
+      id: 3n,
+      quantity: dec(20),
+      consumedQty: dec(0),
+      materialId: 40n,
+      refType: 'CONSUMABLE_MATERIAL_PURCHASE',
+      refId: '500',
+      productionInvoiceId: 500n,
+      note: null,
+      createdById: null,
+      stockLengthMm: 0,
+      spec: '',
+      idempotencyKey: 'CONSUMABLE_MATERIAL_PURCHASE:500:material:40:wh:1',
+      ...o,
+    });
+
+    it('nhận đủ, kho mới chưa có dòng cùng nguồn: chuyển nguyên dòng và đổi khoá sang kho mới', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([keyed()]);
+      await service.moveReservationsInTx(
+        prisma as never,
+        { productionInvoiceId: 500n, fromWarehouseId: 1n, toWarehouseId: 7n },
+        [{ materialId: 40n, stockLengthMm: 0, spec: '', qty: 20 }],
+      );
+      expect(prisma.stockReservation.findUnique).toHaveBeenCalledWith({
+        where: { idempotencyKey: 'CONSUMABLE_MATERIAL_PURCHASE:500:material:40:wh:7' },
+      });
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 3n },
+        data: {
+          warehouseId: 7n,
+          idempotencyKey: 'CONSUMABLE_MATERIAL_PURCHASE:500:material:40:wh:7',
+        },
+      });
+    });
+
+    it('kho mới đã có dòng cùng nguồn (vd hàng mua về kho mới trước): cộng vào dòng đó, co dòng ở kho cũ', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([keyed()]);
+      prisma.stockReservation.findUnique.mockResolvedValue({
+        id: 9n,
+        status: 'ACTIVE',
+        quantity: dec(5),
+        consumedQty: dec(0),
+      });
+      await service.moveReservationsInTx(
+        prisma as never,
+        { productionInvoiceId: 500n, fromWarehouseId: 1n, toWarehouseId: 7n },
+        [{ materialId: 40n, stockLengthMm: 0, spec: '', qty: 12 }],
+      );
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 9n },
+        data: { quantity: 17, status: 'ACTIVE', releasedAt: null },
+      });
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 3n },
+        data: { quantity: 8 },
+      });
+      expect(prisma.stockReservation.create).not.toHaveBeenCalled();
+    });
+
+    it('nhận 1 phần, kho mới chưa có dòng: tách phần nhận sang dòng mới mang khoá kho mới', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([keyed()]);
+      await service.moveReservationsInTx(
+        prisma as never,
+        { productionInvoiceId: 500n, fromWarehouseId: 1n, toWarehouseId: 7n },
+        [{ materialId: 40n, stockLengthMm: 0, spec: '', qty: 15 }],
+      );
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 3n },
+        data: { quantity: 5 },
+      });
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+        data: expect.objectContaining({
+          warehouseId: 7n,
+          quantity: 15,
+          idempotencyKey: 'CONSUMABLE_MATERIAL_PURCHASE:500:material:40:wh:7',
+        }),
+      });
     });
   });
 });

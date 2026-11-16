@@ -116,7 +116,7 @@ describe('MaterialYieldRecipePurchaseService', () => {
       reserveOrAdjust: jest.fn().mockResolvedValue(undefined),
       releaseOwnHoldsForRecompute: jest
         .fn()
-        .mockResolvedValue({ ownConsumedQty: 0, sourceConsumedQty: 0 }),
+        .mockResolvedValue({ ownConsumedQty: 0, sourceConsumedQty: 0, inTransitQty: 0 }),
     };
     notificationsService = {
       emit: jest.fn().mockResolvedValue(undefined),
@@ -333,6 +333,7 @@ describe('MaterialYieldRecipePurchaseService', () => {
     stockReservationsService.releaseOwnHoldsForRecompute.mockResolvedValue({
       ownConsumedQty: 3,
       sourceConsumedQty: 0,
+      inTransitQty: 0,
     });
 
     await service.computeAndUpsertProposals('1'); // buyQty tính lại = 7

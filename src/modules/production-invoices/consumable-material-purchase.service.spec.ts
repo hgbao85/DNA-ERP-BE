@@ -149,7 +149,7 @@ describe('ConsumableMaterialPurchaseService', () => {
       reserveOrAdjust: jest.fn().mockResolvedValue(undefined),
       releaseOwnHoldsForRecompute: jest
         .fn()
-        .mockResolvedValue({ ownConsumedQty: 0, sourceConsumedQty: 0 }),
+        .mockResolvedValue({ ownConsumedQty: 0, sourceConsumedQty: 0, inTransitQty: 0 }),
     };
     notificationsService = {
       emit: jest.fn().mockResolvedValue(undefined),
@@ -761,6 +761,7 @@ describe('ConsumableMaterialPurchaseService', () => {
     stockReservationsService.releaseOwnHoldsForRecompute.mockResolvedValue({
       ownConsumedQty: 50,
       sourceConsumedQty: 30,
+      inTransitQty: 0,
     });
 
     const result = await service.computeAndUpsertProposals('1');
@@ -769,6 +770,24 @@ describe('ConsumableMaterialPurchaseService', () => {
     expect(stockReservationsService.reserveOrAdjust).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ qty: 40 }), // sàn đã tiêu của dòng nguồn 30 + giữ thêm 10 còn trong kho
+    );
+  });
+
+  it('rà soát 14/11 CK2: hàng của PI còn giữ ở kho Phôi/Hàn xưởng cũ (đang chuyển tới) tính là đã có - nhu cầu 120, kho mới 0, kho cũ giữ 80 -> mua 40', async () => {
+    prisma.$queryRaw.mockResolvedValue(await qtyRow(0));
+    stockReservationsService.getAvailableQty.mockResolvedValue(0);
+    stockReservationsService.releaseOwnHoldsForRecompute.mockResolvedValue({
+      ownConsumedQty: 0,
+      sourceConsumedQty: 0,
+      inTransitQty: 80,
+    });
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    expect(result[0]).toMatchObject({ required: 120, buyQty: 40 });
+    expect(stockReservationsService.reserveOrAdjust).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ qty: 0 }), // kho mới chưa có gì để giữ; 80 vẫn giữ ở kho cũ chờ phiếu chuyển
     );
   });
 

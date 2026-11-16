@@ -9,6 +9,7 @@ import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
+import { reservationKeyAtWarehouse } from '../stock/stock-reservations.service';
 import { SegmentStockService } from '../segment-stock/segment-stock.service';
 import { isSegmentStockEnabled } from '../segment-stock/segment-stock.config';
 import { isCuttingRecheckPending } from './cutting-recheck.util';
@@ -179,36 +180,69 @@ export class WorkshopMoveService {
             },
           });
         }
-        // 1 thông báo / kho cũ (dedupeKey theo kho): trước 11/11 mỗi phần Sắt / Vật tư khác gửi 1 cái cùng dedupeKey nên cái
-        // sau bị bỏ - thủ kho chỉ thấy số dòng của 1 phần, và lời nhắn luôn ghi "chờ Đã kiểm" kể cả phần lập được ngay.
-        const byFrom = new Map<string, WorkshopMovePlan[]>();
-        for (const p of plans)
-          byFrom.set(p.fromWarehouseId, [...(byFrom.get(p.fromWarehouseId) ?? []), p]);
-        for (const [fromWarehouseId, group] of byFrom) {
-          const steel = group.find((p) => p.part === 'STEEL');
-          const other = group.find((p) => p.part === 'OTHER');
-          await this.notifications.emit('WORKSHOP_MOVE_NEEDED', {
-            entityId: `${piKey}:${fromWarehouseId}`,
-            actorId: actorUserId,
-            dedupeKey: `WORKSHOP_MOVE_NEEDED:${piKey}:${fromWarehouseId}`,
-            params: {
-              lenhCode,
-              fromWarehouseName: group[0].fromWarehouseName,
-              toWarehouseName: group[0].toWarehouseName,
-              count: group.reduce((n, p) => n + p.lines.length, 0),
-              steelCount: steel?.lines.length ?? 0,
-              otherCount: other?.lines.length ?? 0,
-              steelWaiting: steel?.recheckPending ?? false,
-              warehouseCodes: [group[0].fromWarehouseCode],
-            },
-          });
-        }
+        await this.emitMovesNeeded(plans, lenhCode, actorUserId);
       } catch (error) {
         this.logger.error(
           `Không gửi được thông báo đổi xưởng (lệnh ${piKey}): ${(error as Error).message}`,
         );
       }
     };
+  }
+
+  /**
+   * Nhắc thủ kho kho đang giữ hàng của lệnh mà kho đó không thuộc xưởng hiện tại của lệnh lập phiếu chuyển (anh Nhân 16/11 câu 1):
+   * (c) kho đích vừa nhận phiếu chuyển của lần đổi xưởng trước mà lệnh đã đổi xưởng tiếp; (a) kho gửi vừa huỷ phiếu mà lệnh
+   * đã sang xưởng thứ 3. Chỉ kho `fromWarehouseId` (bỏ trống = mọi kho). Best-effort, gọi sau commit.
+   *
+   * Gửi KHÔNG kèm người thao tác: người vừa bấm nhận / huỷ chính là thủ kho cần được nhắc, mà hệ thống thông báo bỏ người thao
+   * tác khỏi danh sách nhận (thử sống 16/11 - kèm actor thì không ai nhận được lời nhắc).
+   */
+  async notifyMovesNeeded(productionInvoiceId: bigint, fromWarehouseId?: bigint): Promise<void> {
+    try {
+      const plans = (await this.getPlans(this.prisma, { productionInvoiceId })).filter(
+        (p) => fromWarehouseId == null || p.fromWarehouseId === fromWarehouseId.toString(),
+      );
+      if (plans.length === 0) return;
+      await this.emitMovesNeeded(plans, plans[0].lenhCode, null);
+    } catch (error) {
+      this.logger.error(
+        `Không gửi được nhắc chuyển hàng đổi xưởng (lệnh ${productionInvoiceId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * 1 thông báo / kho cũ (dedupeKey theo kho): trước 11/11 mỗi phần Sắt / Vật tư khác gửi 1 cái cùng dedupeKey nên cái sau bị
+   * bỏ - thủ kho chỉ thấy số dòng của 1 phần, và lời nhắn luôn ghi "chờ Đã kiểm" kể cả phần lập được ngay.
+   */
+  private async emitMovesNeeded(
+    plans: WorkshopMovePlan[],
+    lenhCode: string,
+    actorUserId: string | null,
+  ): Promise<void> {
+    const byFrom = new Map<string, WorkshopMovePlan[]>();
+    for (const p of plans)
+      byFrom.set(p.fromWarehouseId, [...(byFrom.get(p.fromWarehouseId) ?? []), p]);
+    for (const [fromWarehouseId, group] of byFrom) {
+      const piKey = group[0].productionInvoiceId;
+      const steel = group.find((p) => p.part === 'STEEL');
+      const other = group.find((p) => p.part === 'OTHER');
+      await this.notifications.emit('WORKSHOP_MOVE_NEEDED', {
+        entityId: `${piKey}:${fromWarehouseId}`,
+        actorId: actorUserId,
+        dedupeKey: `WORKSHOP_MOVE_NEEDED:${piKey}:${fromWarehouseId}`,
+        params: {
+          lenhCode,
+          fromWarehouseName: group[0].fromWarehouseName,
+          toWarehouseName: group[0].toWarehouseName,
+          count: group.reduce((n, p) => n + p.lines.length, 0),
+          steelCount: steel?.lines.length ?? 0,
+          otherCount: other?.lines.length ?? 0,
+          steelWaiting: steel?.recheckPending ?? false,
+          warehouseCodes: [group[0].fromWarehouseCode],
+        },
+      });
+    }
   }
 
   /**
@@ -371,10 +405,42 @@ export class WorkshopMoveService {
         const free = r.quantity.toNumber() - r.consumedQty.toNumber();
         if (free <= 0) continue;
         const take = Math.min(free, left);
+        // Giữ chỗ theo kho (nhóm B 16/11/2026): dòng có đuôi kho trong khoá (vật tư mua ngoài sắt, dòng "của cả lệnh") sang kho
+        // mới phải mang khoá của kho mới - không thì lần tính lại / nhận hàng sau ở kho mới không thấy dòng này và giữ chỗ 2 lần.
+        // Kho mới đã có dòng cùng nguồn (vd hàng mua về kho mới trước) thì cộng vào dòng đó.
+        const targetKey = reservationKeyAtWarehouse(r.idempotencyKey, t.toWarehouseId);
+        if (targetKey && targetKey !== r.idempotencyKey) {
+          const target = await tx.stockReservation.findUnique({
+            where: { idempotencyKey: targetKey },
+          });
+          if (target) {
+            const base =
+              target.status === ReservationStatus.ACTIVE
+                ? target.quantity.toNumber()
+                : target.consumedQty.toNumber();
+            await tx.stockReservation.update({
+              where: { id: target.id },
+              data: {
+                quantity: round4(base + take),
+                status: ReservationStatus.ACTIVE,
+                releasedAt: null,
+              },
+            });
+            await tx.stockReservation.update({
+              where: { id: r.id },
+              data: { quantity: round4(r.quantity.toNumber() - take) },
+            });
+            left = round4(left - take);
+            continue;
+          }
+        }
         if (take >= free && r.consumedQty.toNumber() === 0) {
           await tx.stockReservation.update({
             where: { id: r.id },
-            data: { warehouseId: t.toWarehouseId },
+            data: {
+              warehouseId: t.toWarehouseId,
+              ...(targetKey !== r.idempotencyKey ? { idempotencyKey: targetKey } : {}),
+            },
           });
         } else {
           await tx.stockReservation.update({
@@ -393,6 +459,8 @@ export class WorkshopMoveService {
               createdById: r.createdById,
               stockLengthMm: r.stockLengthMm,
               spec: r.spec,
+              // Dòng tách của sắt (khoá không có đuôi kho) giữ không khoá như trước; dòng có đuôi kho mang khoá kho mới.
+              idempotencyKey: targetKey !== r.idempotencyKey ? targetKey : null,
             },
           });
         }

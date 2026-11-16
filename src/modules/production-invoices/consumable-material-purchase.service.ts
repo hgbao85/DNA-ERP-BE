@@ -313,8 +313,12 @@ export class ConsumableMaterialPurchaseService {
             undefined,
             specKey,
           );
-          // Phần đã xuất cho PI này (ownConsumedQty) đã đáp ứng 1 phần nhu cầu - chỉ còn giữ chỗ / mua cho phần còn lại.
-          const consumeQty = Math.min(Math.max(0, required - own.ownConsumedQty), available);
+          // Phần đã xuất cho PI này (ownConsumedQty) và hàng của PI còn ở kho Phôi/Hàn xưởng cũ sẽ chuyển sang (inTransitQty,
+          // rà soát 14/11 CK2) đã đáp ứng 1 phần nhu cầu - chỉ còn giữ chỗ / mua cho phần còn lại.
+          const consumeQty = Math.min(
+            Math.max(0, required - own.ownConsumedQty - own.inTransitQty),
+            available,
+          );
           // % hao hụt khi mua (Material.purchaseWastePercentage, vd bao bì rách/lỗi lúc vận chuyển).
           // 2026-11-04 (V3-3): đệm trên TOÀN BỘ nhu cầu rồi mới trừ tồn khả dụng, xem
           // purchaseBuyQtyWithWaste. KHÔNG đụng required/consumeQty/reserveOrAdjust (giữ chỗ tồn kho
@@ -322,7 +326,7 @@ export class ConsumableMaterialPurchaseService {
           const wastePct = material.purchaseWastePercentage?.toNumber() ?? 0;
           const buyQtyRaw = purchaseBuyQtyWithWaste(
             required,
-            available + own.ownConsumedQty,
+            available + own.ownConsumedQty + own.inTransitQty,
             wastePct,
           );
           // 2026-10-10: mặc định luồng này GIỮ thập phân (vd kg sơn/dây) - CHỈ ceil lên nguyên khi

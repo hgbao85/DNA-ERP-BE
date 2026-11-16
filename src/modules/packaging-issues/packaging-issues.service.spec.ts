@@ -254,6 +254,7 @@ describe('PackagingIssuesService', () => {
         productionInvoiceId: 500n,
         materialId: 30n,
         qty: 5,
+        warehouseId: 2n,
       });
     });
 

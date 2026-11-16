@@ -45,6 +45,9 @@ import { RealtimeService } from '../../realtime/realtime.service';
 import { WorkshopMovePart, WorkshopMoveService } from './workshop-move.service';
 import { lenhDisplayCode } from '../../common/utils/lenh-code.util';
 import { CUTTING_RECHECK_MESSAGE } from './cutting-recheck.util';
+import { lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
+import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
+import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 
 const ACTOR_NAME_SELECT = { select: { firstName: true, lastName: true } };
 
@@ -58,7 +61,10 @@ const TRANSFER_INCLUDE = {
   items: { include: { material: { select: { spec: true, code: true } } } },
   // Phiếu chuyển hàng của lệnh đổi xưởng (10/11/2026): số lệnh để in ô "Lệnh sản xuất" / cột LSX.
   productionInvoice: {
-    select: { code: true, items: { select: { lsxCode: true }, orderBy: { id: 'asc' as const } } },
+    select: {
+      code: true,
+      items: { select: { lsxCode: true, workshopId: true }, orderBy: { id: 'asc' as const } },
+    },
   },
   pieceItems: {
     include: {
@@ -110,7 +116,7 @@ export class WarehouseTransfersService {
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
   private publishTransferChanged(
     transferId: bigint,
-    action: 'CREATED' | 'CONFIRMED' | 'REJECTED',
+    action: 'CREATED' | 'CONFIRMED' | 'REJECTED' | 'UPDATED',
     actorId: string | null,
   ): void {
     this.realtime.publishEntityChanged({
@@ -506,9 +512,40 @@ export class WarehouseTransfersService {
         }
       }
 
+      // Rà soát 14/11 "mảnh sang Sơn" (nhóm B 16/11): ngoài số đã qua KCS (kế hoạch trên), số chuyển không vượt tồn mảnh thật ở
+      // kho gửi trừ phiếu chuyển mảnh chờ nhận khác - tồn mảnh ghi từ 09/11 (KCS công đoạn cuối ghi vào kho). Khoá dòng tồn theo
+      // mảnh, thứ tự tăng dần.
+      const stockLeft = new Map<string, number>();
+      for (const pieceId of [...new Set(rows.map((r) => r.pieceId))].sort((a, b) =>
+        a < b ? -1 : 1,
+      )) {
+        const quants = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+          SELECT "qty" FROM "stock_quant"
+          WHERE "warehouseId" = ${fromWarehouseId} AND "pieceId" = ${pieceId}
+          FOR UPDATE
+        `;
+        const pending = await tx.warehouseTransferPieceItem.aggregate({
+          where: {
+            pieceId,
+            transfer: { status: TransferStatus.PENDING, fromWarehouseId },
+          },
+          _sum: { quantity: true },
+        });
+        stockLeft.set(
+          pieceId.toString(),
+          quants.reduce((s, q) => s + q.qty.toNumber(), 0) - (pending._sum.quantity ?? 0),
+        );
+      }
+      for (const r of rows) {
+        const left = Math.max(0, Math.floor(stockLeft.get(r.pieceId.toString()) ?? 0));
+        r.quantity = Math.min(r.quantity, left);
+        stockLeft.set(r.pieceId.toString(), left - r.quantity);
+      }
+      rows.splice(0, rows.length, ...rows.filter((r) => r.quantity > 0));
+
       if (rows.length === 0) {
         throw new BadRequestException(
-          'Không có mảnh nào đủ số lượng đã qua KCS (trừ phần đã ở trong phiếu khác) để tạo phiếu chuyển kho',
+          `Không có mảnh nào đủ số lượng đã qua KCS và còn tồn ở "${fromWarehouse.name}" (trừ phần đã ở trong phiếu khác) để tạo phiếu chuyển kho`,
         );
       }
 
@@ -755,6 +792,10 @@ export class WarehouseTransfersService {
         );
       }
 
+      // Rà soát 14/11 CK4 + mảnh sang Sơn (nhóm B 16/11, anh Nhân chốt): kho gửi phải còn đủ tồn thật cho số nhận - thiếu thì
+      // chặn để kiểm tra, không cho nhận thiếu. Khoá stock_quant kho gửi trước khi ghi sổ.
+      await this.assertSourceStockInTx(tx, transfer, received);
+
       // idempotencyKey theo (transferId, itemId) khiến việc gọi lại confirm() sau khi 1 item giữa
       // chừng lỗi trở nên an toàn - các item đã post thành công trả về đúng dòng cũ, không tạo
       // trùng bút toán (StockLedgerService.postEntry tự resolve-or-return theo key này).
@@ -853,6 +894,11 @@ export class WarehouseTransfersService {
         confirmed.productionInvoiceId,
         confirmed.fromWarehouseId,
       );
+      // (c) anh Nhân 16/11 câu 1: hàng đã nhập kho đích mà lệnh đã đổi xưởng tiếp - nhắc thủ kho kho đích lập phiếu chuyển tiếp.
+      await this.workshopMove.notifyMovesNeeded(
+        confirmed.productionInvoiceId,
+        confirmed.toWarehouseId,
+      );
     }
     this.publishTransferChanged(confirmed.id, 'CONFIRMED', userId);
     return this.toResponseDto(confirmed);
@@ -909,6 +955,312 @@ export class WarehouseTransfersService {
     await this.notifyTransferRejected(rejected, rejectionReason);
     this.publishTransferChanged(rejected.id, 'REJECTED', userId);
     return this.toResponseDto(rejected);
+  }
+
+  /**
+   * (a) anh Nhân 16/11 câu 1: phiếu chuyển hàng của lệnh chưa nhận mà hàng chưa rời kho (hoặc xe quay về) - THỦ KHO KHO GỬI huỷ
+   * phiếu. Hàng và giữ chỗ vẫn ở kho gửi, không ghi sổ gì. Lệnh đã sang xưởng khác thì "Hàng cần chuyển do đổi xưởng" hiện lại
+   * để lập phiếu mới. Ghi như từ chối (status REJECTED, lý do ghi rõ "Kho gửi huỷ").
+   */
+  async cancelBySender(
+    id: string,
+    reason: string,
+    warehouseScope: string | null,
+    userId: string,
+  ): Promise<WarehouseTransferResponseDto> {
+    const transfer = await this.findOneOrThrow(id);
+    this.assertPendingWorkshopMove(transfer);
+    this.assertWarehouseScope(warehouseScope, transfer.fromWarehouse.code, 'huỷ phiếu chuyển từ');
+    const rejectionReason = `Kho gửi huỷ phiếu: ${reason.trim()}`;
+    const cancelled = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.warehouseTransfer.updateMany({
+        where: { id: transfer.id, status: TransferStatus.PENDING },
+        data: {
+          status: TransferStatus.REJECTED,
+          rejectionReason,
+          rejectedAt: new Date(),
+          rejectedById: userId,
+        },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Phiếu chuyển kho ${transfer.code} vừa được xử lý ở nơi khác - tải lại trang`,
+        );
+      }
+      await tx.warehouseTransferReservation.updateMany({
+        where: { transferId: transfer.id, status: ReservationStatus.ACTIVE },
+        data: { status: ReservationStatus.RELEASED },
+      });
+      return tx.warehouseTransfer.findUniqueOrThrow({
+        where: { id: transfer.id },
+        include: TRANSFER_INCLUDE,
+      });
+    });
+    await this.resolveTransferCreated(cancelled.id);
+    await this.workshopMove.notifyMovesNeeded(
+      cancelled.productionInvoiceId!,
+      cancelled.fromWarehouseId,
+    );
+    this.publishTransferChanged(cancelled.id, 'REJECTED', userId);
+    return this.toResponseDto(cancelled);
+  }
+
+  /**
+   * (b) anh Nhân 16/11 câu 1: hàng đang trên đường, chở thẳng tới xưởng mới - THỦ KHO KHO GỬI đổi nơi nhận của phiếu sang kho
+   * cùng loại của xưởng hiện tại của lệnh. Chỉ khi kho đích không còn thuộc xưởng của lệnh; lệnh về lại đúng xưởng của kho
+   * gửi thì phải huỷ phiếu (a). Phần sắt vẫn chờ KHSX "Đã kiểm" phương án cắt như lúc lập phiếu. Khoá dòng lệnh (chung với
+   * đổi xưởng) rồi đọc xưởng hiện tại sau khoá.
+   */
+  async changeDestination(
+    id: string,
+    warehouseScope: string | null,
+    userId: string,
+  ): Promise<WarehouseTransferResponseDto> {
+    const transfer = await this.findOneOrThrow(id);
+    this.assertPendingWorkshopMove(transfer);
+    this.assertWarehouseScope(
+      warehouseScope,
+      transfer.fromWarehouse.code,
+      'đổi nơi nhận phiếu chuyển từ',
+    );
+    const piId = transfer.productionInvoiceId!;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const locked = (await lockPisForIssue(tx, [piId])).get(piId.toString());
+      const workshopId = locked?.workshopId ?? null;
+      if (workshopId == null || transfer.toWarehouse.workshopId === workshopId) {
+        throw new BadRequestException(
+          `Nơi nhận "${transfer.toWarehouse.name}" vẫn đúng xưởng của lệnh - không cần đổi`,
+        );
+      }
+      const target = transfer.toWarehouse.kind
+        ? await new WorkshopWarehouseResolver(tx).kindWarehouseOf(
+            transfer.toWarehouse.kind,
+            workshopId,
+          )
+        : null;
+      if (!target) {
+        throw new BadRequestException(
+          `Xưởng hiện tại của lệnh chưa có kho cùng loại với "${transfer.toWarehouse.name}" - báo Admin`,
+        );
+      }
+      if (target.id === transfer.fromWarehouseId) {
+        throw new BadRequestException(
+          `Lệnh đã về lại xưởng của "${transfer.fromWarehouse.name}" - hàng chưa rời kho / xe quay về thì huỷ phiếu`,
+        );
+      }
+      const hasSteel = await tx.warehouseTransferItem.count({
+        where: {
+          transferId: transfer.id,
+          material: { materialGroup: { systemKey: MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR } },
+        },
+      });
+      if (hasSteel > 0 && locked?.cuttingRecheckRequired) {
+        throw new ConflictException(CUTTING_RECHECK_MESSAGE);
+      }
+      const targetRow = await tx.warehouse.findUniqueOrThrow({ where: { id: target.id } });
+      const { count } = await tx.warehouseTransfer.updateMany({
+        where: {
+          id: transfer.id,
+          status: TransferStatus.PENDING,
+          toWarehouseId: transfer.toWarehouseId,
+        },
+        data: {
+          toWarehouseId: target.id,
+          note: [
+            transfer.note,
+            `Đổi nơi nhận từ ${transfer.toWarehouse.name} sang ${targetRow.name} (lệnh đổi xưởng)`,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+        },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Phiếu chuyển kho ${transfer.code} vừa được xử lý ở nơi khác - tải lại trang`,
+        );
+      }
+      return tx.warehouseTransfer.findUniqueOrThrow({
+        where: { id: transfer.id },
+        include: TRANSFER_INCLUDE,
+      });
+    });
+    await this.resolveTransferCreated(updated.id);
+    await this.notifyTransferCreated(updated);
+    this.publishTransferChanged(updated.id, 'UPDATED', userId);
+    return this.toResponseDto(updated);
+  }
+
+  /** Cảnh báo lúc đổi xưởng (anh Nhân 16/11): phiếu chuyển hàng của lệnh còn chờ nhận. */
+  async findPendingWorkshopMoves(productionInvoiceId: string) {
+    const rows = await this.prisma.warehouseTransfer.findMany({
+      where: {
+        productionInvoiceId: parseBigIntId(productionInvoiceId),
+        status: TransferStatus.PENDING,
+      },
+      select: {
+        id: true,
+        code: true,
+        createdAt: true,
+        fromWarehouse: { select: { name: true } },
+        toWarehouse: { select: { name: true } },
+      },
+      orderBy: { id: 'asc' },
+    });
+    return rows.map((r) => ({
+      id: r.id.toString(),
+      code: r.code,
+      createdAt: r.createdAt,
+      fromWarehouseName: r.fromWarehouse.name,
+      toWarehouseName: r.toWarehouse.name,
+    }));
+  }
+
+  private assertPendingWorkshopMove(transfer: WarehouseTransferWithRefs): void {
+    if (!transfer.productionInvoiceId) {
+      throw new BadRequestException(
+        `Phiếu ${transfer.code} không phải phiếu chuyển hàng của lệnh đổi xưởng`,
+      );
+    }
+    if (transfer.status !== TransferStatus.PENDING) {
+      throw new ConflictException(`Phiếu ${transfer.code} không còn chờ nhận`);
+    }
+  }
+
+  /** Lập phiếu chuyển hàng của lệnh: tồn thật kho gửi − phiếu chuyển chờ nhận khác (mọi lệnh) phải đủ từng dòng. */
+  private async assertWorkshopMoveStockInTx(
+    tx: PrismaTx,
+    fromWarehouse: Warehouse,
+    lines: {
+      materialId: string;
+      materialName: string;
+      stockLengthMm: number;
+      spec: string;
+      qty: number;
+    }[],
+  ): Promise<void> {
+    const sorted = [...lines].sort((a, b) =>
+      `${a.materialId.padStart(20, '0')}:${a.stockLengthMm}:${a.spec}` <
+      `${b.materialId.padStart(20, '0')}:${b.stockLengthMm}:${b.spec}`
+        ? -1
+        : 1,
+    );
+    const short: string[] = [];
+    for (const l of sorted) {
+      const materialId = parseBigIntId(l.materialId);
+      const rows = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+        SELECT "qty" FROM "stock_quant"
+        WHERE "warehouseId" = ${fromWarehouse.id} AND "materialId" = ${materialId}
+          AND "stockLengthMm" = ${l.stockLengthMm} AND "spec" = ${l.spec}
+        FOR UPDATE
+      `;
+      const onHand = rows.reduce((s, r) => s + r.qty.toNumber(), 0);
+      const pending = await tx.warehouseTransferItem.aggregate({
+        where: {
+          materialId,
+          stockLengthMm: l.stockLengthMm,
+          spec: l.spec,
+          transfer: { status: TransferStatus.PENDING, fromWarehouseId: fromWarehouse.id },
+        },
+        _sum: { quantity: true },
+      });
+      const free = onHand - (pending._sum.quantity?.toNumber() ?? 0);
+      if (free + 1e-9 < l.qty) {
+        short.push(
+          `${l.materialName}${l.stockLengthMm ? ` (cây ${l.stockLengthMm}mm)` : ''}${l.spec ? ` (${l.spec})` : ''}: cần ${l.qty}, kho còn ${Math.max(0, Math.round(free * 1e4) / 1e4)}`,
+        );
+      }
+    }
+    if (short.length > 0) {
+      throw new ConflictException(
+        `Tồn thật ở "${fromWarehouse.name}" không đủ hàng đang giữ cho lệnh - kiểm tra lại tồn kho trước khi lập phiếu: ${short.join('; ')}`,
+      );
+    }
+  }
+
+  /**
+   * Kho gửi còn đủ tồn thật cho số nhận từng dòng (vật tư theo chiều dài + quy cách, mảnh theo mảnh) - khoá FOR UPDATE các dòng
+   * stock_quant theo thứ tự cố định rồi mới so. Thiếu thì 409 kèm số còn thật (anh Nhân 16/11: không cho nhận thiếu).
+   */
+  private async assertSourceStockInTx(
+    tx: PrismaTx,
+    transfer: WarehouseTransferWithRefs,
+    received: { items: Map<string, number>; pieceItems: Map<string, number> },
+  ): Promise<void> {
+    const need = new Map<
+      string,
+      {
+        materialId: bigint | null;
+        pieceId: bigint | null;
+        stockLengthMm: number;
+        spec: string;
+        qty: number;
+        label: string;
+      }
+    >();
+    const add = (
+      key: string,
+      row: {
+        materialId: bigint | null;
+        pieceId: bigint | null;
+        stockLengthMm: number;
+        spec: string;
+        label: string;
+      },
+      qty: number,
+    ) => {
+      if (qty <= 0) return;
+      const cur = need.get(key);
+      if (cur) cur.qty += qty;
+      else need.set(key, { ...row, qty });
+    };
+    for (const item of transfer.items) {
+      if (!item.materialId) continue;
+      add(
+        `m:${String(item.materialId).padStart(20, '0')}:${item.stockLengthMm}:${item.spec}`,
+        {
+          materialId: item.materialId,
+          pieceId: null,
+          stockLengthMm: item.stockLengthMm,
+          spec: item.spec,
+          label: item.materialName ?? `vật tư ${item.materialId}`,
+        },
+        received.items.get(item.id.toString()) ?? item.quantity.toNumber(),
+      );
+    }
+    for (const p of transfer.pieceItems) {
+      add(
+        `p:${String(p.pieceId).padStart(20, '0')}`,
+        {
+          materialId: null,
+          pieceId: p.pieceId,
+          stockLengthMm: 0,
+          spec: '',
+          label: p.piece?.name ?? `mảnh ${p.pieceId}`,
+        },
+        received.pieceItems.get(p.id.toString()) ?? p.quantity,
+      );
+    }
+    for (const key of [...need.keys()].sort()) {
+      const n = need.get(key)!;
+      const rows = n.materialId
+        ? await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+            SELECT "qty" FROM "stock_quant"
+            WHERE "warehouseId" = ${transfer.fromWarehouseId} AND "materialId" = ${n.materialId}
+              AND "stockLengthMm" = ${n.stockLengthMm} AND "spec" = ${n.spec}
+            FOR UPDATE
+          `
+        : await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+            SELECT "qty" FROM "stock_quant"
+            WHERE "warehouseId" = ${transfer.fromWarehouseId} AND "pieceId" = ${n.pieceId}
+            FOR UPDATE
+          `;
+      const onHand = rows.reduce((s, r) => s + r.qty.toNumber(), 0);
+      if (onHand + 1e-9 < n.qty) {
+        throw new ConflictException(
+          `Kho gửi "${transfer.fromWarehouse.name}" chỉ còn ${Math.max(0, Math.round(onHand * 1e4) / 1e4)} ${n.label}${n.stockLengthMm ? ` (cây ${n.stockLengthMm}mm)` : ''}${n.spec ? ` (${n.spec})` : ''}, phiếu ${transfer.code} ghi ${n.qty} - kiểm tra lại tồn kho gửi trước khi nhận, không nhận thiếu được`,
+        );
+      }
+    }
   }
 
   private async findWarehouseOrThrow(id: bigint): Promise<Warehouse> {
@@ -1010,6 +1362,9 @@ export class WarehouseTransfersService {
           );
         }
         if (plan.recheckPending) throw new ConflictException(CUTTING_RECHECK_MESSAGE);
+        // Rà soát 14/11 CK4 (nhóm B 16/11): số chuyển từng dòng = phần còn giữ cho lệnh ở kho gửi, nhưng giữ chỗ không bảo đảm
+        // tồn thật (sửa tồn tay, dữ liệu cũ) - kho gửi phải còn đủ tồn thật sau khi trừ mọi phiếu chuyển đang chờ nhận khác.
+        await this.assertWorkshopMoveStockInTx(tx, fromWarehouse, plan.lines);
         const code = await this.nextTransferCode(tx, fromWarehouse);
         return tx.warehouseTransfer.create({
           data: {
@@ -1164,7 +1519,15 @@ export class WarehouseTransfersService {
       lenhCode: row.productionInvoice
         ? lenhDisplayCode(row.productionInvoice, row.productionInvoice.items)
         : null,
+      destinationOutdated: this.isDestinationOutdated(row),
     });
+  }
+
+  /** Phiếu chuyển hàng của lệnh đang chờ nhận mà kho đích không còn thuộc xưởng hiện tại của lệnh (lệnh đổi xưởng tiếp). */
+  private isDestinationOutdated(row: WarehouseTransferWithRefs): boolean {
+    if (row.status !== TransferStatus.PENDING || !row.productionInvoice) return false;
+    const workshopId = row.productionInvoice.items.find((i) => i.workshopId != null)?.workshopId;
+    return workshopId != null && row.toWarehouse.workshopId !== workshopId;
   }
 
   private toDetailResponseDto(row: WarehouseTransferWithRefs): WarehouseTransferDetailResponseDto {
