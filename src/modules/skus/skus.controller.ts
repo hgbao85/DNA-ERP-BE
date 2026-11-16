@@ -76,6 +76,14 @@ export class SkusController {
     return this.skusService.findOne(id);
   }
 
+  // Lịch sử duyệt SKU (16/11/2026, xem sku-history.ts) - quyền xem SKU, không cần AUDIT_LOG như
+  // GET /audit-logs, để KHSX/Spec/Sếp cùng thấy.
+  @Get(':id/history')
+  @RequirePermissions(VIEW)
+  getHistory(@Param('id') id: string) {
+    return this.skusService.getHistory(id);
+  }
+
   // Sửa tên/mã SKU + khách hàng (KHSX) - CỐ Ý dùng CREATE, không dùng UPDATE: UPDATE trên SKU
   // module này riêng cho manh-quota/detail-quota (nhập định mức, việc của 4 account chuyên
   // trách - xem ghi chú PRODUCTION_PLANNER ở role-permissions.constant.ts), KHSX không có

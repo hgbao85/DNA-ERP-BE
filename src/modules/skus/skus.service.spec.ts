@@ -26,14 +26,15 @@ const SYSTEM_GROUP_IDS = {
 
 /** Đọc `{ data }` từ 1 lệnh gọi `prisma.auditLog.create.mock.calls[n]` không qua `any` - jest.Mock
  *  không giữ type tham số thật của hàm giả lập, nên tự khai type tối thiểu cần dùng ở test dưới. */
-function auditLogCreateData(call: unknown[]): {
+interface AuditLogCreateData {
   tableName: string;
   recordId: string;
   oldValue: Record<string, unknown>;
-} {
-  return (
-    call[0] as { data: { tableName: string; recordId: string; oldValue: Record<string, unknown> } }
-  ).data;
+  newValue: Record<string, unknown>;
+}
+
+function auditLogCreateData(call: unknown): AuditLogCreateData {
+  return (call as [{ data: AuditLogCreateData }])[0].data;
 }
 
 describe('SkusService', () => {
@@ -79,7 +80,8 @@ describe('SkusService', () => {
     pieceMaterialYield: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     consumableBom: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     bomAccessoryItem: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
-    auditLog: { create: jest.Mock };
+    auditLog: { create: jest.Mock; findMany: jest.Mock };
+    user: { findMany: jest.Mock };
     $transaction: jest.Mock;
     $executeRawUnsafe: jest.Mock;
   };
@@ -208,7 +210,8 @@ describe('SkusService', () => {
         createMany: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      auditLog: { create: jest.fn() },
+      auditLog: { create: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+      user: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
       $executeRawUnsafe: jest.fn(),
     };
@@ -1151,13 +1154,18 @@ describe('SkusService', () => {
       expect(prisma.planForm.update).not.toHaveBeenCalled();
       // Không spam KHSX "cần duyệt lại" cho 1 SKU đã xong việc.
       expect(notificationsService.emit).not.toHaveBeenCalled();
-      // AuditLog tay - bom_piece/piece_bom không nằm trong AUDITED_MODELS tự động.
-      expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+      // AuditLog tay - bom_piece/piece_bom không nằm trong AUDITED_MODELS tự động - rồi 1 dòng lịch
+      // sử duyệt SKU "Admin ghi đè" (xem sku-history.ts).
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
       const auditArgs = auditLogCreateData(prisma.auditLog.create.mock.calls[0]);
       expect(auditArgs.tableName).toBe('PlanForm');
       expect(auditArgs.recordId).toBe('5');
       expect(auditArgs.oldValue.adminOverrideOnApprovedSku).toBe(true);
       expect(auditArgs.oldValue.quotaType).toBe('manh');
+      const historyArgs = auditLogCreateData(prisma.auditLog.create.mock.calls[1]);
+      expect(historyArgs.tableName).toBe('SkuHistory');
+      expect(historyArgs.recordId).toBe('5');
+      expect(historyArgs.newValue).toEqual({ event: 'sku.admin_override', note: 'Định mức mảnh' });
     });
 
     it('updateDetailQuota: ADMIN ghi đè được trên 1 SKU đã APPROVED, không báo KHSX', async () => {
@@ -1188,10 +1196,14 @@ describe('SkusService', () => {
       );
       expect(prisma.planFormDetailReview.upsert).not.toHaveBeenCalled();
       expect(notificationsService.emit).not.toHaveBeenCalled();
-      expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
       expect(auditLogCreateData(prisma.auditLog.create.mock.calls[0]).oldValue.quotaType).toBe(
         'detail',
       );
+      expect(auditLogCreateData(prisma.auditLog.create.mock.calls[1]).newValue).toEqual({
+        event: 'sku.admin_override',
+        note: 'Định mức chi tiết',
+      });
     });
   });
 
@@ -2066,6 +2078,128 @@ describe('SkusService', () => {
           data: expect.objectContaining({ bossRejectReason: 'Sai quy cách sơn' }) as unknown,
         }),
       );
+    });
+  });
+
+  describe('lịch sử duyệt SKU (SkuHistory, 16/11/2026)', () => {
+    const historyWrites = () =>
+      prisma.auditLog.create.mock.calls
+        .map((c) => auditLogCreateData(c))
+        .filter((d) => d.tableName === 'SkuHistory');
+
+    it('KHSX từ chối nhánh mảnh: ghi 1 dòng kèm lý do', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm());
+
+      await service.reviewManhQuota('5', { status: 'REJECTED', reason: 'Thiếu Đinh' } as never);
+
+      expect(historyWrites()).toEqual([
+        expect.objectContaining({
+          recordId: '5',
+          newValue: { event: 'sku.parts_section_rejected', note: 'Định mức mảnh — Thiếu Đinh' },
+        }),
+      ]);
+    });
+
+    it('KHSX xác nhận nhánh cuối: ghi "xác nhận" rồi "gửi Sếp duyệt"', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({
+          manhReviews: [{ group: 'SAT', status: 'APPROVED' }],
+          detailForwardedAt: new Date(),
+        }),
+      );
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+
+      await service.approveParts('5');
+
+      expect(historyWrites().map((d) => d.newValue.event)).toEqual([
+        'sku.parts_approved',
+        'sku.sent_for_boss_approval',
+      ]);
+    });
+
+    it('Sếp duyệt ghi 1 dòng; gọi lại cùng idempotency key không ghi thêm', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      prisma.bomRevision.findFirst.mockResolvedValue(null);
+      prisma.planForm.updateMany.mockResolvedValue({ count: 1 });
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'APPROVED' }));
+      await service.approve('5', 'key-1');
+      expect(historyWrites().map((d) => d.newValue.event)).toEqual(['sku.boss_approved']);
+
+      prisma.auditLog.create.mockClear();
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ status: 'APPROVED', bossApproveIdempotencyKey: 'key-1' }),
+      );
+      await service.approve('5', 'key-1');
+      expect(historyWrites()).toEqual([]);
+    });
+
+    it('Sếp từ chối ghi kèm lý do', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.rejectByBoss('5', 'Sai quy cách sơn');
+
+      expect(historyWrites()).toEqual([
+        expect.objectContaining({
+          newValue: { event: 'sku.boss_rejected', note: 'Sai quy cách sơn' },
+        }),
+      ]);
+    });
+
+    it('lỗi ghi lịch sử không làm hỏng thao tác chính', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.auditLog.create.mockRejectedValue(new Error('db down'));
+
+      await expect(service.rejectByBoss('5')).resolves.toMatchObject({ status: 'IN_PROGRESS' });
+    });
+
+    it('getHistory: chỉ đọc SkuHistory của đúng SKU, cũ trước, kèm tên người thực hiện', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm());
+      prisma.auditLog.findMany.mockResolvedValue([
+        {
+          id: 'a1',
+          userId: 'u-1',
+          newValue: { event: 'sku.created', note: 'SKU-01' },
+          createdAt: new Date('2026-11-16T01:00:00.000Z'),
+        },
+        {
+          id: 'a2',
+          userId: null,
+          newValue: { event: 'sku.boss_approved', note: null },
+          createdAt: new Date('2026-11-16T02:00:00.000Z'),
+        },
+      ]);
+      prisma.user.findMany.mockResolvedValue([
+        { id: 'u-1', firstName: 'Nhàn', lastName: 'Trần', username: 'nhan' },
+      ]);
+
+      const history = await service.getHistory('5');
+
+      expect(prisma.auditLog.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tableName: 'SkuHistory', recordId: '5' },
+          orderBy: { createdAt: 'asc' },
+        }),
+      );
+      expect(history).toEqual([
+        {
+          id: 'a1',
+          event: 'sku.created',
+          note: 'SKU-01',
+          actorId: 'u-1',
+          actorName: 'Trần Nhàn',
+          at: '2026-11-16T01:00:00.000Z',
+        },
+        {
+          id: 'a2',
+          event: 'sku.boss_approved',
+          note: null,
+          actorId: null,
+          actorName: 'Hệ thống',
+          at: '2026-11-16T02:00:00.000Z',
+        },
+      ]);
     });
   });
 
