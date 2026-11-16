@@ -30,6 +30,7 @@ describe('ProductionOrdersService', () => {
     bomRevision: { findFirst: jest.Mock; findMany: jest.Mock };
     bomOption: { findMany: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
+    productionInvoice: { updateMany: jest.Mock };
     productionOrder: {
       create: jest.Mock;
       update: jest.Mock;
@@ -75,6 +76,7 @@ describe('ProductionOrdersService', () => {
       // Mặc định bản định mức không có tick dây/nệm nào - test riêng tự override.
       bomOption: { findMany: jest.fn().mockResolvedValue([]) },
       productionInvoiceItem: { findUniqueOrThrow: jest.fn() },
+      productionInvoice: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       productionOrder: {
         create: jest.fn(),
         update: jest.fn(),
@@ -421,6 +423,27 @@ describe('ProductionOrdersService', () => {
       expect(updateDataArg()).not.toHaveProperty('status');
     });
 
+    it('mở lại lệnh đã Kết thúc -> trả PI DONE về PRODUCING (16/11/2026)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+
+      await service.startFloor('9');
+
+      expect(prisma.productionInvoice.updateMany).toHaveBeenCalledWith({
+        where: { id: 500n, status: 'DONE' },
+        data: { status: 'PRODUCING' },
+      });
+    });
+
+    it('bắt đầu lệnh chưa từng Kết thúc -> KHÔNG đụng trạng thái PI', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'PAUSED' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+
+      await service.startFloor('9');
+
+      expect(prisma.productionInvoice.updateMany).not.toHaveBeenCalled();
+    });
+
     it('throws NotFoundException when the order does not exist', async () => {
       prisma.productionOrder.findUnique.mockResolvedValue(null);
 
@@ -535,6 +558,32 @@ describe('ProductionOrdersService', () => {
       await service.finishFloor('9');
 
       expect(stockReservationsService.releaseByProductionInvoice).not.toHaveBeenCalled();
+      expect(prisma.productionInvoice.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('mọi lệnh của PI đã Kết thúc -> PI PRODUCING chuyển DONE (16/11/2026)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+
+      await service.finishFloor('9');
+
+      expect(prisma.productionInvoice.updateMany).toHaveBeenCalledWith({
+        where: { id: 500n, status: 'PRODUCING' },
+        data: { status: 'DONE' },
+      });
+    });
+
+    it('ghi PI DONE lỗi -> vẫn nhả giữ chỗ (best-effort, chỉ log)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+      prisma.productionInvoice.updateMany.mockRejectedValue(new Error('db down'));
+
+      await service.finishFloor('9');
+
+      expect(stockReservationsService.releaseByProductionInvoice).toHaveBeenCalledWith(
+        prisma,
+        500n,
+      );
     });
 
     it('nhả giữ chỗ lỗi -> vẫn Kết thúc bình thường (best-effort, chỉ log)', async () => {

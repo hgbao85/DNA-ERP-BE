@@ -3223,7 +3223,7 @@ export class CuttingProposalsService {
       };
       const response = await callSolver(requestBody);
 
-      await this.saveSuccess(
+      const saved = await this.saveSuccess(
         proposalId,
         requestBody,
         response,
@@ -3240,6 +3240,8 @@ export class CuttingProposalsService {
           thresholdPct: requestBody.max_waste_percentage,
         },
       );
+      // Đã bị thay thế trong lúc tính: không báo, không tự duyệt.
+      if (!saved) return;
 
       if (preInvoice) {
         // Không tự duyệt: phương án nằm DRAFT chờ KHSX tạo lệnh sản xuất từ nó. Báo đích danh người
@@ -4697,7 +4699,7 @@ export class CuttingProposalsService {
       workshopName?: string | null;
       thresholdPct?: number | null;
     } = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     // Suy 2 cờ tổng hợp TỪ response gốc trước khi lưu - lý do tồn tại xem comment schema.prisma
     // (hasInfeasibleLine/hasOverThreshold): để màn Cắt sắt lọc/đếm được BẰNG SQL khi poll định kỳ,
     // không phải kéo lines[] về rồi lọc ở code (xem changelog 2026-08-15 mục 15 - đợt 2 sẽ dùng).
@@ -4709,10 +4711,13 @@ export class CuttingProposalsService {
           (defaultWastePct != null && (item.waste_percentage ?? 0) > defaultWastePct)),
     );
 
-    await this.prisma.$transaction(
+    // Chỉ ghi kết quả khi phương án VẪN đang CALCULATING: trong lúc chờ bộ giải, nó có thể đã bị
+    // SUPERSEDED (requestForBatch bỏ bản "kẹt", releaseForInvoice...). Ghi DRAFT vô điều kiện sẽ
+    // làm phương án đã huỷ sống lại.
+    const saved = await this.prisma.$transaction(
       async (tx) => {
-        await tx.cuttingProposal.update({
-          where: { id: proposalId },
+        const claimed = await tx.cuttingProposal.updateMany({
+          where: { id: proposalId, status: CuttingProposalStatus.CALCULATING },
           data: {
             status: CuttingProposalStatus.DRAFT,
             requestParams: requestBody as Prisma.InputJsonValue,
@@ -4726,6 +4731,7 @@ export class CuttingProposalsService {
             hasOverThreshold,
           },
         });
+        if (claimed.count === 0) return false;
 
         for (const item of response.purchase_plan) {
           const line = await tx.cuttingProposalLine.create({
@@ -4800,21 +4806,31 @@ export class CuttingProposalsService {
             }
           }
         }
+        return true;
       },
       { timeout: 30_000 },
     );
+    if (!saved) {
+      this.logger.warn(
+        `Phương án cắt ${proposalId} không còn CALCULATING khi bộ giải xong (đã bị thay thế) - bỏ kết quả`,
+      );
+      return false;
+    }
     this.publishRealtime('CUTTING_PROPOSAL', proposalId, 'FINISHED', null);
+    return true;
   }
 
   private async saveFailure(proposalId: bigint, error: unknown): Promise<void> {
-    await this.prisma.cuttingProposal.update({
-      where: { id: proposalId },
+    // Cùng lý do saveSuccess(): không đè FAILED lên phương án đã bị thay thế.
+    const { count } = await this.prisma.cuttingProposal.updateMany({
+      where: { id: proposalId, status: CuttingProposalStatus.CALCULATING },
       data: {
         status: CuttingProposalStatus.FAILED,
         errorMessage: this.extractErrorMessage(error),
         completedAt: new Date(),
       },
     });
+    if (count === 0) return;
     this.publishRealtime('CUTTING_PROPOSAL', proposalId, 'FINISHED', null);
   }
 

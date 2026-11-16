@@ -50,6 +50,28 @@ describe('UsersService', () => {
     usersService = new UsersService(prisma as unknown as PrismaServiceType);
   });
 
+  // 16/11/2026: role xoá mềm không xoá dòng UserRole - phải tự loại khi nạp quyền vào token.
+  describe('findAuthProfile* bỏ role đã xoá mềm', () => {
+    const expectFiltersDeletedRoles = () => {
+      const args = (prisma.user.findUnique.mock.calls[0] as unknown[])[0] as {
+        include: { roles: { where: unknown } };
+      };
+      expect(args.include.roles.where).toEqual({ role: { deletedAt: null } });
+    };
+
+    it('theo username', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      await usersService.findAuthProfileByUsername('a');
+      expectFiltersDeletedRoles();
+    });
+
+    it('theo id (lúc refresh token)', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      await usersService.findAuthProfileById('u1');
+      expectFiltersDeletedRoles();
+    });
+  });
+
   describe('resetPassword', () => {
     // Timeout riêng 15s (2026-10-17) - argon2 cố ý băm chậm/tốn CPU (chống dò mật khẩu hàng loạt),
     // dưới tải CPU cao của cả bộ test (1700+ test chạy song song) có thể vượt timeout mặc định 5s

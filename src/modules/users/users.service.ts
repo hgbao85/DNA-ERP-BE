@@ -25,13 +25,19 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserMfgAttributesDto } from './dto/update-user-mfg-attributes.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 
+// Role xoá mềm (soft-delete.extension) KHÔNG xoá dòng UserRole, và extension không lọc include
+// lồng nhau -> phải tự loại role có deletedAt, nếu không role đã xoá vẫn hiện trên user và vẫn
+// được nạp quyền vào token.
+const activeRoleLink = { role: { deletedAt: null } } as const;
+
 const userWithRolesInclude = {
-  roles: { include: { role: true } },
+  roles: { where: activeRoleLink, include: { role: true } },
   workshop: { select: { name: true } },
 } as const;
 
 const authProfileInclude = {
   roles: {
+    where: activeRoleLink,
     include: {
       role: {
         include: { permissions: { include: { permission: true } } },
