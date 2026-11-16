@@ -14,6 +14,14 @@ export class AuditLogService {
       tableName: query.tableName,
       recordId: query.recordId,
       userId: query.userId,
+      action: query.action,
+      createdAt:
+        query.from || query.to
+          ? {
+              gte: query.from ? new Date(query.from) : undefined,
+              lte: query.to ? new Date(query.to) : undefined,
+            }
+          : undefined,
     };
 
     return paginate(

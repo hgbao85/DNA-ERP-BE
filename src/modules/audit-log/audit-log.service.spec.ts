@@ -42,9 +42,52 @@ describe('AuditLogService', () => {
 
       expect(prisma.auditLog.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { tableName: undefined, recordId: undefined, userId: undefined },
+          where: {
+            tableName: undefined,
+            recordId: undefined,
+            userId: undefined,
+            action: undefined,
+            createdAt: undefined,
+          },
         }),
       );
+    });
+
+    it('filters by action and an inclusive createdAt range', async () => {
+      await service.findAll({
+        page: 1,
+        limit: 20,
+        sortOrder: SortOrder.DESC,
+        action: 'UPDATE',
+        from: '2026-11-01T00:00:00.000Z',
+        to: '2026-11-16T23:59:59.999Z',
+      } as any);
+
+      const where = (
+        prisma.auditLog.findMany.mock.calls[0] as [{ where: Record<string, unknown> }]
+      )[0].where;
+      expect(where.action).toBe('UPDATE');
+      expect(where.createdAt).toEqual({
+        gte: new Date('2026-11-01T00:00:00.000Z'),
+        lte: new Date('2026-11-16T23:59:59.999Z'),
+      });
+    });
+
+    it('supports an open-ended range (only from)', async () => {
+      await service.findAll({
+        page: 1,
+        limit: 20,
+        sortOrder: SortOrder.DESC,
+        from: '2026-11-01T00:00:00.000Z',
+      } as any);
+
+      const where = (
+        prisma.auditLog.findMany.mock.calls[0] as [{ where: Record<string, unknown> }]
+      )[0].where;
+      expect(where.createdAt).toEqual({
+        gte: new Date('2026-11-01T00:00:00.000Z'),
+        lte: undefined,
+      });
     });
   });
 

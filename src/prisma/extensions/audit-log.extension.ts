@@ -77,6 +77,9 @@ const AUDITED_MODELS = new Set([
   // phương án cắt về sau nên phải truy được ai đổi, từ bao nhiêu sang bao nhiêu. Singleton 1 dòng,
   // đổi hiếm nên không lo nhiễu.
   'SystemConfig',
+  // 16/11/2026: danh mục "Công thức vật tư thành phẩm" (Admin) - trước chỉ có nhật ký mock ở FE, nay
+  // trang Admin "Nhật ký hoạt động" đọc bảng audit_logs thật nên phải để BE tự ghi như mọi danh mục khác.
+  'MaterialYieldRecipe',
 ]);
 
 /** Minimal shape needed to dynamically call `client[modelKey].findFirst(...)` by model name. */
