@@ -39,6 +39,8 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
+import { auditEvent } from '../../common/utils/audit-event.util';
+import { SKU_HISTORY_TABLE, SkuHistoryEntryDto, SkuHistoryEvent } from './sku-history';
 import { BomRevisionsService } from '../bom-revisions/bom-revisions.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -193,6 +195,52 @@ export class SkusService {
     };
   }
 
+  /** Ghi 1 bước vào lịch sử duyệt SKU (xem sku-history.ts). Gọi SAU KHI thao tác chính đã ghi xong;
+   *  best-effort - lỗi ghi lịch sử chỉ log, không làm hỏng thao tác của người dùng. */
+  private async recordHistory(
+    planFormId: bigint | string,
+    event: SkuHistoryEvent,
+    note?: string | null,
+  ): Promise<void> {
+    await auditEvent(this.prisma, this.cls, this.logger, {
+      action: AuditAction.CREATE,
+      tableName: SKU_HISTORY_TABLE,
+      recordId: planFormId,
+      newValue: { event, note: note?.trim() || null },
+    });
+  }
+
+  /** Lịch sử duyệt của 1 SKU, cũ trước (đúng thứ tự timeline FE), kèm tên người thực hiện. */
+  async getHistory(id: string): Promise<SkuHistoryEntryDto[]> {
+    const pf = await this.findOneOrThrow(id);
+    const rows = await this.prisma.auditLog.findMany({
+      where: { tableName: SKU_HISTORY_TABLE, recordId: pf.id.toString() },
+      orderBy: { createdAt: 'asc' },
+      take: 500,
+    });
+    const userIds = [...new Set(rows.map((r) => r.userId).filter((u): u is string => !!u))];
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, firstName: true, lastName: true, username: true },
+        })
+      : [];
+    const nameOf = new Map(
+      users.map((u) => [u.id, `${u.lastName} ${u.firstName}`.trim() || u.username]),
+    );
+    return rows.map((r) => {
+      const value = (r.newValue ?? {}) as { event?: unknown; note?: unknown };
+      return {
+        id: r.id,
+        event: typeof value.event === 'string' ? value.event : 'unknown',
+        note: typeof value.note === 'string' ? value.note : null,
+        actorId: r.userId,
+        actorName: r.userId ? (nameOf.get(r.userId) ?? 'Không rõ') : 'Hệ thống',
+        at: r.createdAt.toISOString(),
+      };
+    });
+  }
+
   async create(dto: CreateSkuDto, actorUserId: string): Promise<SkuResponseDto> {
     // FE upload ảnh ngay trước khi gọi create - tạo thất bại thì ảnh đó thành mồ côi, dọn luôn.
     try {
@@ -245,6 +293,7 @@ export class SkusService {
       },
       include: PLAN_FORM_INCLUDE,
     });
+    await this.recordHistory(created.id, 'sku.created', created.mfgProduct.factoryCode);
     // origin='PRODUCTION_CONFIRM' (tạo nội bộ khi Sếp duyệt PI item, ẩn khỏi mọi màn KHSX - xem
     // doc comment PlanForm.origin) KHÔNG đi qua nhánh này (createPlanForm() không set origin) nên
     // guard dưới đây hiện không bao giờ đúng - giữ lại phòng thủ nếu sau này có API khác tái dùng
@@ -355,6 +404,7 @@ export class SkusService {
       data: { customerName: dto.customerName },
       include: PLAN_FORM_INCLUDE,
     });
+    await this.recordHistory(updated.id, 'sku.updated', updated.mfgProduct.factoryCode);
     return this.toResponseDtoWithQuota(updated);
   }
 
@@ -515,7 +565,9 @@ export class SkusService {
     await Promise.all(orphanedPhotoUrls.map((url) => this.cloudinaryService.deleteByUrl(url)));
     if (revision.isAdminOverride) {
       await this.writeAdminOverrideAudit(pf.id, 'manh', beforeManhData, dto);
+      await this.recordHistory(pf.id, 'sku.admin_override', 'Định mức mảnh');
     } else {
+      await this.recordHistory(pf.id, 'sku.manh_submitted', `${dto.pieces?.length ?? 0} mảnh`);
       // Nộp (kể cả nộp lại) đóng cả 2 việc chờ Spec: "SKU mới cần nhập" (lần đầu) và "bị KHSX trả
       // lại" (nộp lại sau reject) - cả 2 resolve() đều an toàn gọi thừa (idempotent, không match
       // thì không làm gì). Rồi báo KHSX vào review.
@@ -546,6 +598,13 @@ export class SkusService {
       },
       update: { status: dto.status, reason: dto.reason, reviewedAt: new Date() },
     });
+    await this.recordHistory(
+      bigId,
+      dto.status === ReviewDecision.REJECTED
+        ? 'sku.parts_section_rejected'
+        : 'sku.parts_section_approved',
+      dto.reason ? `Định mức mảnh — ${dto.reason}` : 'Định mức mảnh',
+    );
     // KHSX vừa ra quyết định (duyệt HAY từ chối đều tính) - việc "cần review" đã xong.
     await this.resolveSkuNotifications(bigId, ['SKU_MANH_QUOTA_SUBMITTED']);
     if (dto.status === ReviewDecision.REJECTED) {
@@ -706,7 +765,13 @@ export class SkusService {
     );
     if (revision.isAdminOverride) {
       await this.writeAdminOverrideAudit(pf.id, 'detail', beforeDetailQuota, dto);
+      await this.recordHistory(pf.id, 'sku.admin_override', 'Định mức chi tiết');
     } else {
+      await this.recordHistory(
+        pf.id,
+        'sku.detail_submitted',
+        `${dto.detailLines?.length ?? 0} vật tư (Sơn/Phụ kiện/Bao bì)`,
+      );
       await this.resolveSkuNotifications(pf.id, [
         'SKU_NEEDS_DETAIL_QUOTA',
         'SKU_DETAIL_QUOTA_REJECTED',
@@ -794,6 +859,13 @@ export class SkusService {
       },
       update: { status: dto.status, reason: dto.reason, reviewedAt: new Date() },
     });
+    await this.recordHistory(
+      bigId,
+      dto.status === ReviewDecision.REJECTED
+        ? 'sku.detail_section_rejected'
+        : 'sku.detail_section_approved',
+      dto.reason ? `Định mức chi tiết — ${dto.reason}` : 'Định mức chi tiết',
+    );
     await this.resolveSkuNotifications(bigId, ['SKU_DETAIL_QUOTA_SUBMITTED']);
     if (dto.status === ReviewDecision.REJECTED) {
       await this.notifySku(
@@ -844,7 +916,12 @@ export class SkusService {
       },
       include: PLAN_FORM_INCLUDE,
     });
+    await this.recordHistory(
+      pf.id,
+      track === 'manh' ? 'sku.parts_approved' : 'sku.detail_approved',
+    );
     if (justCompleted) {
+      await this.recordHistory(pf.id, 'sku.sent_for_boss_approval');
       await this.notifySku('SKU_SENT_TO_BOSS', pf.id, this.skuParams(updated), actorUserId);
     }
     return this.toResponseDtoWithQuota(updated);
@@ -902,6 +979,7 @@ export class SkusService {
       return tx.planForm.findUniqueOrThrow({ where: { id: pf.id }, include: PLAN_FORM_INCLUDE });
     });
 
+    await this.recordHistory(pf.id, 'sku.boss_approved');
     await this.resolveSkuNotifications(pf.id, ['SKU_SENT_TO_BOSS']);
     await this.notifySku('SKU_APPROVED', pf.id, this.skuParams(updated), actorUserId);
     return this.toResponseDtoWithQuota(updated);
@@ -940,6 +1018,7 @@ export class SkusService {
         include: PLAN_FORM_INCLUDE,
       });
     });
+    await this.recordHistory(pf.id, 'sku.boss_rejected', reason);
     await this.resolveSkuNotifications(pf.id, ['SKU_SENT_TO_BOSS']);
     await this.notifySku(
       'SKU_REJECTED_BY_BOSS',
