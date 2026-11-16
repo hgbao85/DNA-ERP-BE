@@ -130,7 +130,7 @@ describe('PieceMaterialYieldPurchaseService', () => {
       reserveOrAdjust: jest.fn().mockResolvedValue(undefined),
       releaseOwnHoldsForRecompute: jest
         .fn()
-        .mockResolvedValue({ ownConsumedQty: 0, sourceConsumedQty: 0 }),
+        .mockResolvedValue({ ownConsumedQty: 0, sourceConsumedQty: 0, inTransitQty: 0 }),
     };
     notificationsService = {
       emit: jest.fn().mockResolvedValue(undefined),
@@ -418,6 +418,7 @@ describe('PieceMaterialYieldPurchaseService', () => {
     stockReservationsService.releaseOwnHoldsForRecompute.mockResolvedValue({
       ownConsumedQty: 3,
       sourceConsumedQty: 0,
+      inTransitQty: 0,
     });
     productionBatchesService.getReadyPoolQty.mockResolvedValue(new Map([['40', 20]])); // buyQty tính lại = 7
 
@@ -446,6 +447,7 @@ describe('PieceMaterialYieldPurchaseService', () => {
     stockReservationsService.releaseOwnHoldsForRecompute.mockResolvedValue({
       ownConsumedQty: 10,
       sourceConsumedQty: 0,
+      inTransitQty: 0,
     });
     productionBatchesService.getReadyPoolQty.mockResolvedValue(new Map([['40', 20]])); // buyQty tính lại = 7
 

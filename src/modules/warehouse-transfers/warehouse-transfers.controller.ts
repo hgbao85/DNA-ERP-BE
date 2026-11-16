@@ -19,12 +19,14 @@ import { CreatePieceWarehouseTransferDto } from './dto/create-piece-warehouse-tr
 import { CreateWarehouseTransferDto } from './dto/create-warehouse-transfer.dto';
 import { ListWarehouseTransfersQueryDto } from './dto/list-warehouse-transfers-query.dto';
 import { RejectWarehouseTransferDto } from './dto/reject-warehouse-transfer.dto';
+import { CancelWarehouseTransferDto } from './dto/cancel-warehouse-transfer.dto';
 import { WarehouseTransfersService } from './warehouse-transfers.service';
 import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 
 const VIEW = { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, action: PermissionAction.VIEW };
 const CREATE = { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, action: PermissionAction.CREATE };
 const APPROVE = { module: PERMISSION_MODULES.WAREHOUSE_TRANSFER, action: PermissionAction.APPROVE };
+const PI_VIEW = { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.VIEW };
 
 @ApiTags('Warehouse Transfers')
 @ApiBearerAuth()
@@ -97,6 +99,19 @@ export class WarehouseTransfersController {
     );
   }
 
+  /**
+   * Cảnh báo lúc đổi xưởng (anh Nhân 16/11): phiếu chuyển hàng của lệnh còn chờ nhận. Người đổi xưởng (KHSX / QLSX) không có quyền
+   * xem phiếu chuyển kho nên dùng quyền xem lệnh sản xuất. Đặt TRƯỚC @Get(':id').
+   */
+  @Get('workshop-moves/pending')
+  @RequirePermissions(PI_VIEW)
+  findPendingWorkshopMoves(@Query('productionInvoiceId') productionInvoiceId?: string) {
+    if (!productionInvoiceId) {
+      throw new BadRequestException('Query productionInvoiceId là bắt buộc');
+    }
+    return this.warehouseTransfersService.findPendingWorkshopMoves(productionInvoiceId);
+  }
+
   // Đặt TRƯỚC @Get(':id') - "piece-transfer-plan" phải khớp route cố định này, không rơi vào :id.
   @Get('piece-transfer-plan')
   @RequirePermissions(VIEW)
@@ -161,5 +176,30 @@ export class WarehouseTransfersController {
     @CurrentUser('warehouseScope') warehouseScope: string | null,
   ) {
     return this.warehouseTransfersService.reject(id, dto.rejectionReason, warehouseScope, userId);
+  }
+
+  /** (a) Kho GỬI huỷ phiếu chuyển hàng của lệnh chưa nhận - hàng chưa rời kho / xe quay về (anh Nhân 16/11 câu 1). */
+  @Post(':id/cancel')
+  @RequireAssignedWarehouse()
+  @RequirePermissions(CREATE)
+  cancel(
+    @Param('id') id: string,
+    @Body() dto: CancelWarehouseTransferDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.warehouseTransfersService.cancelBySender(id, dto.reason, warehouseScope, userId);
+  }
+
+  /** (b) Kho GỬI đổi nơi nhận sang kho cùng loại của xưởng hiện tại của lệnh - hàng đang trên đường tới xưởng mới. */
+  @Post(':id/change-destination')
+  @RequireAssignedWarehouse()
+  @RequirePermissions(CREATE)
+  changeDestination(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.warehouseTransfersService.changeDestination(id, warehouseScope, userId);
   }
 }

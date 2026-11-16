@@ -335,6 +335,7 @@ export class PackagingIssuesService {
         productionInvoiceId: piItem.productionInvoiceId!,
         materialId: materialBigId,
         qty: dto.issuedQty,
+        warehouseId: sourceWarehouse.id,
       });
 
       return issue;

@@ -677,6 +677,7 @@ describe('SteelIssuesService', () => {
         productionInvoiceId: 1n,
         materialId: 30n,
         qty: 12,
+        warehouseId: 800n, // rà soát 14/11 CK3: chỉ rút giữ chỗ ở kho Phôi của xưởng làm lệnh
       });
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         {
@@ -727,14 +728,22 @@ describe('SteelIssuesService', () => {
       );
     });
 
-    it('Đợt 7: giữ chỗ nằm ở kho khác kho Phôi của xưởng làm lệnh -> 409, không ghi StockLedger', async () => {
+    it('rà soát 14/11 CK3: giữ chỗ ở kho Phôi xưởng khác không rút được - drainPool (lọc theo kho Phôi của lệnh) báo cần phiếu chuyển, không ghi StockLedger', async () => {
       setPostCutover();
-      stockReservationsService.drainPool.mockResolvedValue({ warehouseId: 801n });
+      stockReservationsService.drainPool.mockRejectedValue(
+        new ConflictException(
+          'Lệnh còn giữ 8 ở Kho Phôi Phú An - cần phiếu chuyển hàng của lệnh sang kho này trước khi xuất',
+        ),
+      );
       prisma.steelIssue.create.mockResolvedValue(issue);
 
       await expect(
         service.create('1', { materialId: '30', barLengthMm: 6000, barCount: 8 }, 'user-1', null),
-      ).rejects.toThrow(ConflictException);
+      ).rejects.toThrow('cần phiếu chuyển hàng của lệnh');
+      expect(stockReservationsService.drainPool).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ warehouseId: 800n }),
+      );
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
 

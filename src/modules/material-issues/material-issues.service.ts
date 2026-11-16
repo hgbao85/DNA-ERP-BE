@@ -323,6 +323,7 @@ export class MaterialIssuesService {
         productionInvoiceId: piItem.productionInvoiceId!,
         materialId: materialBigId,
         qty: dto.issuedQty,
+        warehouseId: warehouse.id,
       });
 
       return issue;

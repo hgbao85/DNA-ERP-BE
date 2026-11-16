@@ -616,6 +616,7 @@ export class WeavingIssuesService {
       productionInvoiceId: p.productionInvoiceId,
       materialId: p.materialId,
       qty: p.qty,
+      warehouseId: p.warehouseId,
     });
     return { id: row.id };
   }

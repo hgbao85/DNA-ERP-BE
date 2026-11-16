@@ -530,6 +530,7 @@ describe('WeavingIssuesService', () => {
             productionInvoiceId: 500n,
             materialId: 60n,
             qty: 15,
+            warehouseId: 900n,
           },
         );
       });

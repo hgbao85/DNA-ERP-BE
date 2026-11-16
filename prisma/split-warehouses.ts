@@ -269,6 +269,14 @@ async function main() {
             where: { warehouseId: root.id, materialId: p.id, status: 'ACTIVE' },
             data: { warehouseId: target.id },
           });
+          // Giữ chỗ theo kho (16/11/2026): dòng có đuôi `:wh:{kho}` trong khoá phải đổi đuôi theo kho mới - xem
+          // reservationKey() ở stock-reservations.service.ts.
+          await tx.$executeRaw`
+            UPDATE "stock_reservations"
+            SET "idempotencyKey" = regexp_replace("idempotencyKey", ':wh:[0-9]+$', ${`:wh:${target.id}`})
+            WHERE "warehouseId" = ${target.id} AND "materialId" = ${p.id} AND "status" = 'ACTIVE'
+              AND "idempotencyKey" ~ ':wh:[0-9]+$'
+          `;
           await tx.material.update({ where: { id: p.id }, data: { warehouseId: target.id } });
         }
         for (const p of retired) {
