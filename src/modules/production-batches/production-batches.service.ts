@@ -23,7 +23,7 @@ import {
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
-import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { lockBusinessKey, lockBusinessKeyShared } from '../../common/utils/advisory-lock.util';
 import {
   FloorReportContext,
   findFloorReportByKey,
@@ -42,8 +42,15 @@ import { MaterialYieldIssuesService } from '../material-yield-issues/material-yi
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { SegmentStockService } from '../segment-stock/segment-stock.service';
-import { isSegmentStockEnabled } from '../segment-stock/segment-stock.config';
-import { normalizeSegmentSteps, segmentCodeKey } from '../../common/utils/segment-code.util';
+import {
+  isSegmentStockEnabled,
+  SEGMENT_LEGACY_CONVERSION_LOCK,
+} from '../segment-stock/segment-stock.config';
+import {
+  compareSegmentCodes,
+  normalizeSegmentSteps,
+  segmentCodeKey,
+} from '../../common/utils/segment-code.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { CreatePieceStepBatchDto } from './dto/create-piece-step-batch.dto';
@@ -514,6 +521,10 @@ export class ProductionBatchesService {
         // (postSegmentConsumeEntries bên dưới đã trừ tồn theo số CŨ, thấp hơn). Khoá CÙNG key với
         // recordProductionBatch() để 2 thao tác tự loại trừ lẫn nhau, rồi updateMany lọc kèm status
         // OPEN + so count - cùng idiom mọi race-guard khác trong session này.
+        // Rà soát 14/11 TĐ5: khoá chuyển đổi tồn đoạn (dùng chung) TRƯỚC khoá đợt - cùng thứ tự với phía trừ bên trong, để lượt
+        // chuyển đổi (độc quyền) và Gửi KCS không khoá chéo nhau. Tắt công tắc thì phía trừ theo lệnh không chạy, không cần khoá.
+        if (isSegmentStockEnabled())
+          await lockBusinessKeyShared(tx, SEGMENT_LEGACY_CONVERSION_LOCK);
         await lockBusinessKey(
           tx,
           `production-batch-open:${batch.productionOrderId}:${batch.pieceId}:${batch.stage}`,
@@ -1074,6 +1085,9 @@ export class ProductionBatchesService {
   ): Promise<{ takenQty: number; shortageQty: number }> {
     const recordOverage = opts.recordOverage ?? true;
     const total = { takenQty: 0, shortageQty: 0 };
+    // Rà soát 14/11 TĐ5: chờ lượt chuyển đổi dữ liệu cũ (giữ độc quyền) chạy xong - trước đây phía trừ không lấy khoá này, Hàn / Sơn
+    // gửi KCS đúng lúc chuyển đổi đang chạy làm lệch tồn ô.
+    await lockBusinessKeyShared(tx, SEGMENT_LEGACY_CONVERSION_LOCK);
     const row = await tx.productionBatch.findUniqueOrThrow({
       where: { id: batch.id },
       select: {
@@ -1091,6 +1105,13 @@ export class ProductionBatchesService {
     if (!productionInvoiceId) return total;
 
     // Số mảnh đợt này làm vượt số lượng tổng của lệnh (cho mảnh + công đoạn này).
+    // Rà soát 14/11 TĐ3: cộng dồn theo THỨ TỰ GỬI KCS, không theo id - trước đây lấy đợt id <= đợt này nên gửi đợt id lớn trước thì
+    // mỗi đợt chỉ thấy chính nó (kế hoạch 10, 2 đợt 8: không ghi vượt). Khoá đợt của (lệnh, mảnh, công đoạn) - cùng khoá Gửi KCS /
+    // Lưu đợt đang giữ (gọi lại trong cùng transaction không chờ) - nên mọi đợt khác đã rời OPEN lúc đọc là đợt gửi TRƯỚC đợt này.
+    await lockBusinessKey(
+      tx,
+      `production-batch-open:${row.productionOrderId}:${batch.pieceId}:${batch.stage}`,
+    );
     const plannedPieces = (qtyPerUnit ?? 0) * row.productionOrder.quantity;
     const siblings = await tx.productionBatch.findMany({
       where: {
@@ -1098,7 +1119,6 @@ export class ProductionBatchesService {
         pieceId: batch.pieceId,
         stage: batch.stage,
         status: { not: ProductionBatchStatus.OPEN },
-        id: { lte: batch.id },
       },
       select: { id: true, reportedQty: true },
     });
@@ -1140,7 +1160,10 @@ export class ProductionBatchesService {
         });
     }
 
-    for (const code of byCode.values()) {
+    // Rà soát 14/11 TĐ2: khoá ô theo thứ tự mã đoạn cố định (cùng thứ tự phía cộng SegmentStockService.syncOrderProduction) -
+    // trước đây theo thứ tự pieceBom.findMany trả về, 2 lượt trừ / trừ với cộng có thể khoá chéo.
+    const codes = [...byCode.values()].sort(compareSegmentCodes);
+    for (const code of codes) {
       const seen = await tx.segmentOverage.findUnique({
         where: {
           productionBatchId_segmentSpecId_segmentSteps: {

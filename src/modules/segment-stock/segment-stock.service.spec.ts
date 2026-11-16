@@ -89,6 +89,8 @@ function makeEnv() {
         ),
       ),
       upsert: jest.fn(() => Promise.resolve({})),
+      findUnique: jest.fn((): Promise<unknown> => Promise.resolve(null)),
+      update: jest.fn(() => Promise.resolve({})),
     },
     warehouse: { findUniqueOrThrow: jest.fn(() => Promise.resolve({ id: PRODUCTION_WH })) },
     stockLedger: {
@@ -252,6 +254,26 @@ describe('SegmentStockService', () => {
         unappliedSurplusQty: -7,
       });
       expect(env.ledger.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('rà soát 14/11 TĐ1: tổng của lệnh giảm mà phần giữ tăng, dư dùng được 0 -> KHÔNG nhập đoạn ảo, giữ không đổi', async () => {
+      const env = makeEnv();
+      env.state.q = 8;
+      // Lệnh khác đã lấy hết 8 đoạn dư của lệnh này -> dư dùng được của ô = 0.
+      env.state.reservations = [{ productionInvoiceId: 200n, reserved: 8, consumed: 0 }];
+      env.state.productions = [
+        { segmentSpecId: SPEC, segmentSteps: '', warehouseId: WH, heldQty: 0, surplusQty: 8 },
+      ];
+      // Đích mới: giữ 5, dư 0 (tổng 8 -> 5, giảm 3).
+      const result = await run(env, [target(5, 0)]);
+
+      expect(env.ledger.postEntry).not.toHaveBeenCalled();
+      expect(result.changes[0]).toMatchObject({
+        after: { heldQty: 0, surplusQty: 8 },
+        ledgerQty: 0,
+        unappliedHeldQty: 5,
+        unappliedSurplusQty: -8,
+      });
     });
 
     it('(e) tồn cũ âm: tăng thì vẫn ghi đủ; giảm thì không ghi sổ (L = 0)', async () => {
@@ -589,6 +611,45 @@ describe('SegmentStockService', () => {
       });
       expect(env.ledger.postEntry).not.toHaveBeenCalled();
       expect(env.txMock.segmentProduction.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rà soát 14/11 TĐ4: phần vừa nhả chuyển từ giữ sang dư trong SegmentProduction (tổng không đổi), để mở lại lệnh giữ lại được', async () => {
+      const env = makeEnv();
+      env.txMock.segmentReservation.findMany.mockResolvedValue([
+        {
+          id: 3n,
+          warehouseId: WH,
+          segmentSpecId: SPEC,
+          segmentSteps: '',
+          reservedQty: dec(10),
+          consumedQty: dec(4),
+        },
+      ] as never);
+      env.txMock.segmentReservation.findUnique.mockResolvedValueOnce({
+        reservedQty: dec(10),
+        consumedQty: dec(4),
+      } as never);
+      env.txMock.segmentProduction.findUnique.mockResolvedValueOnce({
+        heldQty: dec(10),
+        surplusQty: dec(2),
+      });
+
+      await env.service.releaseOrderHoldings(env.tx, {
+        productionInvoiceId: PI,
+        reason: 'PI_FINISHED',
+      });
+
+      expect(env.txMock.segmentProduction.update).toHaveBeenCalledWith({
+        where: {
+          productionInvoiceId_segmentSpecId_segmentSteps: {
+            productionInvoiceId: PI,
+            segmentSpecId: SPEC,
+            segmentSteps: '',
+          },
+        },
+        data: { heldQty: 4, surplusQty: 8 },
+      });
+      expect(env.ledger.postEntry).not.toHaveBeenCalled();
     });
 
     it('idempotent: gọi lại khi mọi dòng đã nhả -> không làm gì', async () => {

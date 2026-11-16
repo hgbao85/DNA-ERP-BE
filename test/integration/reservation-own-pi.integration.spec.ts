@@ -16,6 +16,7 @@ import { ProductionOrdersService } from '../../src/modules/production-orders/pro
 import { MaterialIssuesService } from '../../src/modules/material-issues/material-issues.service';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service';
 import { SegmentStockService } from '../../src/modules/segment-stock/segment-stock.service';
+import { SegmentProductionService } from '../../src/modules/segment-stock/segment-production.service';
 import { StockLedgerService } from '../../src/modules/stock/stock-ledger.service';
 import { StockReservationsService } from '../../src/modules/stock/stock-reservations.service';
 import { PrismaModule } from '../../src/prisma/prisma.module';
@@ -130,6 +131,7 @@ describe('Giữ chỗ tồn kho vật tư tiêu hao theo PI (integration, real P
         { provide: RealtimeService, useValue: { publishEntityChanged: jest.fn() } },
         // Nhả giữ đoạn khi lệnh kết thúc (13/11/2026) - không liên quan giữ chỗ vật tư tiêu hao ở đây.
         { provide: SegmentStockService, useValue: { releaseOrderHoldings: jest.fn() } },
+        { provide: SegmentProductionService, useValue: { recomputeAfterQc: jest.fn() } },
         // ProductionOrdersService kiểm phạm vi xưởng của người thao tác (QLSX theo xưởng).
         WorkshopScopeService,
       ],
