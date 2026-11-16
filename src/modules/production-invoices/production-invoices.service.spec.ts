@@ -2387,6 +2387,29 @@ describe('ProductionInvoicesService', () => {
   });
 
   describe('approveItem', () => {
+    it('đếm SKU chưa duyệt gồm cả dòng prodApprovalStatus NULL - không lên PRODUCING sớm (16/11/2026)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_BOSS' }),
+      );
+      prisma.productionInvoiceItem.update.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'APPROVED' }),
+      );
+      prisma.productionInvoiceItem.count.mockResolvedValue(1); // còn 1 SKU chưa gửi (NULL)
+
+      await service.approveItem('7', '20', 'user-boss');
+
+      expect(prisma.productionInvoiceItem.count).toHaveBeenCalledWith({
+        where: {
+          productionInvoiceId: 7n,
+          OR: [{ prodApprovalStatus: { not: 'APPROVED' } }, { prodApprovalStatus: null }],
+        },
+      });
+      expect(prisma.productionInvoice.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: 'PRODUCING' } }),
+      );
+    });
+
     it('flips PI to PRODUCING when this was the last item', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi());
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(

@@ -7,6 +7,7 @@ import {
   CuttingProposalStatus,
   Prisma,
   PrismaClient,
+  ProductionInvoiceStatus,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -348,7 +349,9 @@ export class ProductionOrdersService {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({
       where: { id: bigId },
-      include: { productionInvoiceItem: { select: { workshopId: true } } },
+      include: {
+        productionInvoiceItem: { select: { workshopId: true, productionInvoiceId: true } },
+      },
     });
     if (!order) {
       throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
@@ -362,6 +365,15 @@ export class ProductionOrdersService {
           : { floorStage: 'ACTIVE' },
       include: SALES_ORDER_CODE_INCLUDE,
     });
+    // Mở lại lệnh đã Kết thúc -> PI không còn "xong hết": trả DONE về PRODUCING
+    // (xem releaseReservationsIfPiFinished()).
+    const piId = order.productionInvoiceItem?.productionInvoiceId;
+    if (order.floorStage === 'FINISHED' && piId != null) {
+      await this.prisma.productionInvoice.updateMany({
+        where: { id: piId, status: ProductionInvoiceStatus.DONE },
+        data: { status: ProductionInvoiceStatus.PRODUCING },
+      });
+    }
     const dto = this.toResponseDto(
       updated,
       await this.fetchActiveBomRevisionIds([updated.mfgProductId]),
@@ -470,6 +482,19 @@ export class ProductionOrdersService {
         `Failed to release reservations after finishing PI of item ${productionInvoiceItemId}: ${(error as Error).message}`,
       );
       return;
+    }
+    // 16/11/2026: trước đây PI không bao giờ được ghi DONE (kẹt mãi PRODUCING). Chỉ đổi khi đang
+    // PRODUCING - không đè PLANNING/CANCELLED; idempotent khi 2 lệnh Kết thúc cùng lúc. try/catch
+    // riêng - lỗi ở đây không được chặn việc nhả giữ chỗ bên dưới.
+    try {
+      await this.prisma.productionInvoice.updateMany({
+        where: { id: piId, status: ProductionInvoiceStatus.PRODUCING },
+        data: { status: ProductionInvoiceStatus.DONE },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to mark PI ${piId} DONE after finishing item ${productionInvoiceItemId}: ${(error as Error).message}`,
+      );
     }
     try {
       await this.stockReservationsService.releaseByProductionInvoice(this.prisma, piId);
