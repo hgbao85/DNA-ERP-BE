@@ -2272,10 +2272,15 @@ export class ProductionInvoicesService {
       }
     }
 
+    // prodApprovalStatus nullable: `{ not: APPROVED }` một mình dịch ra SQL `<>` và bỏ sót NULL
+    // (SKU chưa gửi QLSX) -> PI lên PRODUCING sớm. Phải gộp thêm nhánh IS NULL.
     const remaining = await this.prisma.productionInvoiceItem.count({
       where: {
         productionInvoiceId: pi.id,
-        prodApprovalStatus: { not: ProdApprovalStatus.APPROVED },
+        OR: [
+          { prodApprovalStatus: { not: ProdApprovalStatus.APPROVED } },
+          { prodApprovalStatus: null },
+        ],
       },
     });
     if (remaining === 0) {

@@ -150,6 +150,12 @@ describe('CuttingProposalsService', () => {
     segmentSpec: { materialId: 200n, cutLengthMm: mockDecimal(660) },
   };
 
+  // Mọi lần ghi cuttingProposal (update + updateMany có điều kiện của saveSuccess/saveFailure).
+  const proposalWrites = (): unknown[] => [
+    ...(prisma.cuttingProposal.update.mock.calls as unknown[]),
+    ...(prisma.cuttingProposal.updateMany.mock.calls as unknown[]),
+  ];
+
   beforeEach(() => {
     stockQty = 0; // mặc định "hết tồn" - test nào cần tồn > 0 tự gán lại
     lockedProposalStatus = CuttingProposalStatus.DRAFT;
@@ -169,7 +175,9 @@ describe('CuttingProposalsService', () => {
         count: jest.fn().mockResolvedValue(0),
         create: jest.fn(),
         update: jest.fn(),
-        updateMany: jest.fn(),
+        // saveSuccess()/saveFailure() ghi có điều kiện status=CALCULATING (16/11/2026) - mặc định
+        // "vẫn đang CALCULATING" (count 1). Test nào cần ca đã bị thay thế tự override count 0.
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       // findMany mặc định [] - phục vụ 2 chỗ đọc: findConflictingStockLengthReason (L7, trả về sớm
       // ngay bước đầu) và computeNetRequirementByMaterial (L1, nhu cầu gộp = 0 nên `planned` rơi về
@@ -537,10 +545,10 @@ describe('CuttingProposalsService', () => {
       expect(bodySent).not.toHaveProperty('max_waste_percentage_by_material');
       // calls[0] = ghi requestParams SỚM trước khi gọi solver (2026-09-22, xem
       // runSolverAndSave) - kết quả cuối cùng giờ là calls[1], không phải calls[0] nữa.
-      const updateCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
+      const updateCall = prisma.cuttingProposal.updateMany.mock.calls[0] as unknown as [
         { where: { id: bigint }; data: { status: CuttingProposalStatus } },
       ];
-      expect(updateCall[0].where).toEqual({ id: 2n });
+      expect(updateCall[0].where).toEqual({ id: 2n, status: CuttingProposalStatus.CALCULATING });
       expect(updateCall[0].data.status).toBe(CuttingProposalStatus.DRAFT);
 
       const lineCall = prisma.cuttingProposalLine.create.mock.calls[0] as unknown as [
@@ -689,6 +697,56 @@ describe('CuttingProposalsService', () => {
       expect((lineData(2) as { lengthSource?: unknown }).lengthSource).toBeNull();
     });
 
+    it('phương án bị thay thế (SUPERSEDED) trong lúc chờ bộ giải -> KHÔNG hồi sinh DRAFT, không lưu dòng, không tự duyệt (16/11/2026)', async () => {
+      solverClient.propose.mockResolvedValue({
+        status: 'success',
+        summary: {
+          total_bars_all: 8,
+          total_waste_mm: 100,
+          waste_percentage: 1,
+          any_over_threshold: false,
+        },
+        purchase_plan: [{ material: '200', feasible: true, total_bars: 8, cutting_patterns: [] }],
+      });
+      // updateMany có điều kiện status=CALCULATING không khớp dòng nào = đã bị thay thế.
+      prisma.cuttingProposal.updateMany.mockResolvedValue({ count: 0 });
+
+      await invoke(2n, 1n, 'user-boss');
+
+      expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 2n, status: CuttingProposalStatus.CALCULATING },
+          data: expect.objectContaining({ status: CuttingProposalStatus.DRAFT }) as unknown,
+        }),
+      );
+      expect(prisma.cuttingProposalLine.create).not.toHaveBeenCalled();
+      expect(prisma.cuttingProposal.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: CuttingProposalStatus.APPROVED }) as unknown,
+        }),
+      );
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+    });
+
+    it('solver lỗi khi phương án đã bị thay thế -> KHÔNG đè FAILED (16/11/2026)', async () => {
+      solverClient.propose.mockRejectedValue(new Error('solver sập'));
+      prisma.cuttingProposal.updateMany.mockResolvedValue({ count: 0 });
+
+      await invoke(2n, 1n);
+
+      expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 2n, status: CuttingProposalStatus.CALCULATING },
+          data: expect.objectContaining({ status: CuttingProposalStatus.FAILED }) as unknown,
+        }),
+      );
+      expect(prisma.cuttingProposal.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: CuttingProposalStatus.FAILED }) as unknown,
+        }),
+      );
+    });
+
     it('tự động duyệt ngay sau khi tính thành công - không cần gọi approve() riêng (Sếp chốt 2026-08-15)', async () => {
       solverClient.propose.mockResolvedValue({
         status: 'success',
@@ -775,12 +833,12 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n);
 
-      const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
+      const updateCalls = proposalWrites() as unknown as [
         { data: { status?: CuttingProposalStatus } },
       ][];
       const draftCall = updateCalls.find((c) => c[0].data.status === CuttingProposalStatus.DRAFT);
       expect(draftCall).toBeDefined();
-      expect(prisma.cuttingProposal.update).not.toHaveBeenCalledWith(
+      expect(prisma.cuttingProposal.updateMany).not.toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ status: CuttingProposalStatus.FAILED }) as unknown,
         }),
@@ -815,7 +873,7 @@ describe('CuttingProposalsService', () => {
       await invoke(2n, 1n, 'user-boss');
 
       // Kết quả tính vẫn được lưu DRAFT bình thường - chặn duyệt KHÁC với đánh hỏng lần tính.
-      const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
+      const updateCalls = proposalWrites() as unknown as [
         { data: { status?: CuttingProposalStatus } },
       ][];
       expect(
@@ -861,7 +919,7 @@ describe('CuttingProposalsService', () => {
 
       await invoke(2n, 1n, 'user-boss');
 
-      const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
+      const updateCalls = proposalWrites() as unknown as [
         { data: { status?: CuttingProposalStatus } },
       ][];
       expect(
@@ -1111,7 +1169,7 @@ describe('CuttingProposalsService', () => {
       expect(body).not.toHaveProperty('max_waste_percentage_by_material');
       // Lưu ĐÚNG kết quả lần gọi duy nhất, không có khái niệm "kết quả lần 2". calls[0] = ghi
       // requestParams SỚM trước khi gọi solver (2026-09-22) - kết quả cuối là calls[1].
-      const updateCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
+      const updateCall = prisma.cuttingProposal.updateMany.mock.calls[0] as unknown as [
         { data: { wastePercentage: number } },
       ];
       expect(updateCall[0].data.wastePercentage).toBe(9.61);
@@ -1349,7 +1407,7 @@ describe('CuttingProposalsService', () => {
       expect(solverClient.propose).toHaveBeenCalledTimes(1);
       // Dòng infeasible vẫn được lưu (không đánh cả phương án thành FAILED) - và
       // autoApproveBlockReason() sẽ chặn tự duyệt, báo QLSX đi gộp đợt cắt.
-      const updateCalls = prisma.cuttingProposal.update.mock.calls as unknown as [
+      const updateCalls = proposalWrites() as unknown as [
         { data: { status?: CuttingProposalStatus } },
       ][];
       expect(
@@ -1418,10 +1476,10 @@ describe('CuttingProposalsService', () => {
 
       // calls[0] = ghi requestParams SỚM trước khi gọi solver (2026-09-22) - lỗi từ solver
       // (catch) ghi ở calls[1].
-      const failCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
+      const failCall = prisma.cuttingProposal.updateMany.mock.calls[0] as unknown as [
         { where: { id: bigint }; data: { status: CuttingProposalStatus; errorMessage: string } },
       ];
-      expect(failCall[0].where).toEqual({ id: 2n });
+      expect(failCall[0].where).toEqual({ id: 2n, status: CuttingProposalStatus.CALCULATING });
       expect(failCall[0].data.status).toBe(CuttingProposalStatus.FAILED);
       expect(failCall[0].data.errorMessage).toContain('sắt vuông 20x20');
       expect(prisma.cuttingProposalLine.create).not.toHaveBeenCalled();
@@ -1773,7 +1831,7 @@ describe('CuttingProposalsService', () => {
 
       // calls[0] = ghi requestParams SỚM trước khi gọi solver (2026-09-22) - kết quả cuối là
       // calls[1].
-      const proposalUpdateCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
+      const proposalUpdateCall = prisma.cuttingProposal.updateMany.mock.calls[0] as unknown as [
         { data: { hasInfeasibleLine?: boolean; hasOverThreshold?: boolean } },
       ];
       expect(proposalUpdateCall[0].data.hasInfeasibleLine).toBe(true);
@@ -1808,7 +1866,7 @@ describe('CuttingProposalsService', () => {
 
       // calls[0] = ghi requestParams SỚM trước khi gọi solver (2026-09-22) - kết quả cuối là
       // calls[1].
-      const proposalUpdateCall = prisma.cuttingProposal.update.mock.calls[1] as unknown as [
+      const proposalUpdateCall = prisma.cuttingProposal.updateMany.mock.calls[0] as unknown as [
         { data: { hasInfeasibleLine?: boolean; hasOverThreshold?: boolean } },
       ];
       expect(proposalUpdateCall[0].data.hasInfeasibleLine).toBe(false);
@@ -2154,7 +2212,7 @@ describe('CuttingProposalsService', () => {
       });
 
       const failMessage = () => {
-        const calls = prisma.cuttingProposal.update.mock.calls as unknown as [
+        const calls = proposalWrites() as unknown as [
           { data: { status?: unknown; errorMessage?: string } },
         ][];
         return calls.find((c) => c[0].data.status === 'FAILED')?.[0].data.errorMessage;
@@ -4876,9 +4934,7 @@ describe('CuttingProposalsService', () => {
 
         await run();
 
-        const calls = prisma.cuttingProposal.update.mock.calls as unknown as [
-          { data: { hasOverThreshold?: boolean } },
-        ][];
+        const calls = proposalWrites() as unknown as [{ data: { hasOverThreshold?: boolean } }][];
         expect(calls.some((c) => c[0].data.hasOverThreshold === true)).toBe(true);
       });
 
@@ -4888,9 +4944,7 @@ describe('CuttingProposalsService', () => {
 
         await run();
 
-        const calls = prisma.cuttingProposal.update.mock.calls as unknown as [
-          { data: { hasOverThreshold?: boolean } },
-        ][];
+        const calls = proposalWrites() as unknown as [{ data: { hasOverThreshold?: boolean } }][];
         expect(calls.some((c) => c[0].data.hasOverThreshold === true)).toBe(false);
       });
 
@@ -4900,7 +4954,7 @@ describe('CuttingProposalsService', () => {
 
         await run();
 
-        expect(prisma.cuttingProposal.update).toHaveBeenCalledWith(
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({
             data: expect.objectContaining({ status: CuttingProposalStatus.DRAFT }) as unknown,
           }),
@@ -4964,7 +5018,7 @@ describe('CuttingProposalsService', () => {
 
         await run();
 
-        expect(prisma.cuttingProposal.update).toHaveBeenCalledWith(
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({
             data: expect.objectContaining({ status: CuttingProposalStatus.FAILED }) as unknown,
           }),
