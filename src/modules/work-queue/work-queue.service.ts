@@ -106,7 +106,15 @@ export class WorkQueueService {
       set('warehousePurchaseReceiving', this.countWarehousePurchaseReceiving(user.warehouseScope));
     }
     if (has(BUSINESS_ROLES.PHOI_STAFF)) {
-      set('phoiSteelReceiving', this.prisma.steelIssue.count({ where: { status: 'ISSUED' } }));
+      // Sắt cây nhận bằng QR "Khu nhận sắt" (đợt 1, 16/11/2026) nên không đếm; màn "Xác nhận nhận sắt" của
+      // tài khoản thống kê còn Sắt La (MaterialYieldIssue) + thanh nhôm (MaterialYieldRecipeIssue) chờ nhận.
+      set(
+        'phoiSteelReceiving',
+        Promise.all([
+          this.prisma.materialYieldIssue.count({ where: { status: 'ISSUED' } }),
+          this.prisma.materialYieldRecipeIssue.count({ where: { status: 'ISSUED' } }),
+        ]).then(([yieldIssues, recipeIssues]) => yieldIssues + recipeIssues),
+      );
     }
     if (has(BUSINESS_ROLES.KCS_STAFF)) {
       const kcs = this.countKcs();

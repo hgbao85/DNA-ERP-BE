@@ -67,7 +67,7 @@ export class ScanReceiveSteelDto {
   @ApiPropertyOptional({ description: 'Số cây đếm được - bỏ trống = đủ số kho xuất' })
   @IsOptional()
   @IsInt()
-  @Min(0)
+  @Min(1, { message: 'Số cây nhận phải từ 1 trở lên. Không nhận được cây nào thì báo thủ kho.' })
   receivedBarCount?: number;
 }
 

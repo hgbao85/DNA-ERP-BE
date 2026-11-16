@@ -19,6 +19,7 @@ import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purc
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 import { lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
+import { moveOpenQueueEntriesToPiWorkshop } from '../floor/floor-queue-move.util';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { ItemDeadlineWriter } from './item-deadline-writer.service';
 import { DeadlineChangesService } from './deadline-changes/deadline-changes.service';
@@ -36,6 +37,12 @@ jest.mock('../../common/utils/pi-workshop-lock.util', () => ({
   lockPisForIssue: jest.fn(() => Promise.resolve(new Map())),
   workshopsOfPis: jest.fn(() => Promise.resolve(new Map())),
   assertWorkshopUnchanged: jest.fn(),
+}));
+
+// 16/11/2026: dời hàng đợi tổ khi đổi xưởng - mock để các test cũ không cần giả lập floorQueueEntry; hành vi thật có spec riêng
+// (floor-queue-move.util.spec.ts), ở đây chỉ kiểm changeWorkshop gọi đúng trong transaction và đưa kết quả vào thông báo.
+jest.mock('../floor/floor-queue-move.util', () => ({
+  moveOpenQueueEntriesToPiWorkshop: jest.fn(() => Promise.resolve([])),
 }));
 
 const ACTOR = { id: 'khsx-1', roles: ['PRODUCTION_PLANNER'] };
@@ -87,7 +94,7 @@ describe('ProductionInvoicesService', () => {
       count: jest.Mock;
     };
     // Phần A – Đợt 2
-    workshop: { findUnique: jest.Mock };
+    workshop: { findUnique: jest.Mock; findMany: jest.Mock };
     steelIssue: { count: jest.Mock };
     materialYieldIssue: { count: jest.Mock };
     stockReservation: { count: jest.Mock };
@@ -133,6 +140,7 @@ describe('ProductionInvoicesService', () => {
   let materialYieldRecipePurchaseService: { computeAndUpsertProposals: jest.Mock };
   let cls: { isActive: jest.Mock; get: jest.Mock; getId: jest.Mock };
   let cloudinaryService: { deleteByUrl: jest.Mock };
+  let realtimeStub: { publishEntityChanged: jest.Mock; publishNotificationCreated: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
   let workshopMove: { afterWorkshopChanged: jest.Mock };
   // Service phạm vi thật (logic canView/canManage/itemWhere), chỉ giả getScope để không đọc DB.
@@ -228,6 +236,7 @@ describe('ProductionInvoicesService', () => {
         findUnique: jest
           .fn()
           .mockResolvedValue({ id: 3n, code: 'PA', name: 'Phú An', isActive: true }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       steelIssue: { count: jest.fn().mockResolvedValue(0) },
       materialYieldIssue: { count: jest.fn().mockResolvedValue(0) },
@@ -347,7 +356,7 @@ describe('ProductionInvoicesService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
-    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new ProductionInvoicesService(
       prisma as unknown as PrismaServiceType,
       productionOrdersService as unknown as ProductionOrdersService,
@@ -1652,7 +1661,13 @@ describe('ProductionInvoicesService', () => {
       await service.sendBatchToBoss('7', 'thanh-pham', 'Kho thành phẩm', '3', 'user-qlsx');
 
       expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [20n, 21n] } },
+        where: {
+          prodApprovalStatus: 'WAITING_QLSX',
+          OR: [
+            { id: 20n, workshopId: null },
+            { id: 21n, workshopId: null },
+          ],
+        },
         data: expect.objectContaining({
           prodApprovalStatus: 'WAITING_BOSS',
           warehouseCode: 'thanh-pham',
@@ -1662,6 +1677,34 @@ describe('ProductionInvoicesService', () => {
         }) as unknown,
       });
       expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('đổi xưởng / xử lý chồng (updateMany ghi thiếu dòng) -> 409 cả lượt, không audit, không thông báo', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({
+          items: [
+            piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }),
+            piItem({ id: 21n, prodApprovalStatus: 'WAITING_QLSX' }),
+          ],
+        }),
+      );
+      // tx RIÊNG (không phải prisma): giữ bất biến "ghi trong transaction, đếm thiếu thì huỷ cả lượt" - gỡ $transaction thì test đỏ.
+      const txUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementationOnce((cb: (tx: unknown) => unknown) =>
+        Promise.resolve(cb({ productionInvoiceItem: { updateMany: txUpdateMany } })),
+      );
+
+      const err: unknown = await service
+        .sendBatchToBoss('7', 'thanh-pham', 'Kho thành phẩm', '3', 'user-qlsx')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as Error).message).toMatch(
+        /Lệnh .* vừa thay đổi \(đổi xưởng hoặc đã được xử lý\) trong lúc gửi Sếp - tải lại trang rồi thử lại/,
+      );
+      expect(txUpdateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     it('ném ConflictException khi không SKU nào đang chờ QLSX', async () => {
@@ -1715,7 +1758,7 @@ describe('ProductionInvoicesService', () => {
       expect(result.warehouseCode).toBe('thanh-pham-2');
       expect(result.workshop).toEqual({ id: '3', code: 'PA', name: 'Phú An' });
       expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
-        where: { id: 20n, prodApprovalStatus: 'WAITING_QLSX' },
+        where: { id: 20n, prodApprovalStatus: 'WAITING_QLSX', workshopId: null },
         data: expect.objectContaining({ workshopId: 3n }) as unknown,
       });
       /* eslint-disable @typescript-eslint/no-unsafe-assignment -- jest matcher typing */
@@ -1737,6 +1780,29 @@ describe('ProductionInvoicesService', () => {
       await expect(
         service.sendItemToBoss('7', '20', 'thanh-pham-2', 'Kho Thành phẩm 2', '3', 'user-qlsx'),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('KHSX vừa đổi xưởng chồng lúc gửi Sếp (updateMany count 0) -> 409 nêu mã lệnh, không audit, không thông báo', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+        piItem({ prodApprovalStatus: 'WAITING_QLSX', workshopId: 3n, workshop: workshopPA }),
+      );
+      prisma.workshop.findUnique.mockResolvedValue(workshopPA);
+      prisma.productionInvoiceItem.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.sendItemToBoss('7', '20', 'tp', 'Kho', '3', 'user-qlsx'),
+      ).rejects.toThrow(
+        /Lệnh .* vừa thay đổi \(đổi xưởng hoặc đã được xử lý\) trong lúc gửi Sếp - tải lại trang rồi thử lại/,
+      );
+      // So workshopId lúc đọc (3n) để không ghi đè xưởng mới.
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 20n, prodApprovalStatus: 'WAITING_QLSX', workshopId: 3n },
+        }),
+      );
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
   });
 
@@ -2108,11 +2174,11 @@ describe('ProductionInvoicesService', () => {
 
       prisma.productionInvoice.findUnique.mockResolvedValue(sent(phuAn));
       prisma.workshop.findUnique.mockResolvedValue(phuocAn);
-      await service.changeWorkshop('7', '5', 'Phú An quá tải', 'user-qlsx');
+      await service.changeWorkshop('7', '5', 'Phú An quá tải', 'user-khsx');
       expect(replanEmits()).toHaveLength(1);
       expect(replanEmits()[0][1]).toMatchObject({
         entityId: '7',
-        actorId: 'user-qlsx',
+        actorId: 'user-khsx',
         params: {
           workshopName: 'Xưởng Phước An',
           lines: [
@@ -2124,7 +2190,7 @@ describe('ProductionInvoicesService', () => {
       notificationsService.emit.mockClear();
       prisma.productionInvoice.findUnique.mockResolvedValue(sent(phuocAn));
       prisma.workshop.findUnique.mockResolvedValue(phuAn);
-      await service.changeWorkshop('7', '3', 'Đổi lại', 'user-qlsx');
+      await service.changeWorkshop('7', '3', 'Đổi lại', 'user-khsx');
       expect(replanEmits()).toHaveLength(1);
     });
 
@@ -2151,7 +2217,7 @@ describe('ProductionInvoicesService', () => {
         name: 'Mỹ Yến',
       });
 
-      await service.changeWorkshop('7', '9', 'lý do', 'user-qlsx');
+      await service.changeWorkshop('7', '9', 'lý do', 'user-khsx');
 
       expect(replanEmits()).toHaveLength(0);
     });
@@ -3129,7 +3195,7 @@ describe('ProductionInvoicesService', () => {
       expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
     });
 
-    it('dòng KHÁC của PI đã WAITING_BOSS/APPROVED ở xưởng khác -> 409 nêu tên xưởng đó', async () => {
+    it('dòng KHÁC của PI đã WAITING_BOSS/APPROVED ở xưởng khác -> 400 nêu tên xưởng đang giữ', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(
         waitingQlsxPi([
           piItem({
@@ -3144,13 +3210,52 @@ describe('ProductionInvoicesService', () => {
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(
         piItem({ id: 20n, prodApprovalStatus: 'WAITING_QLSX' }),
       );
+      // 16/11: luật QLSX xét cả lệnh nên 400 "không đổi xưởng" chặn trước 409 "cùng 1 xưởng" (giữ làm phòng hờ trong service).
       await expect(service.sendItemToBoss('7', '20', 'tp', 'Kho', '3', 'u')).rejects.toThrow(
-        'Lệnh MY-313 + MY-314 đã có SKU gửi Sếp ở Mỹ Yến - mọi SKU của một lệnh phải cùng 1 xưởng',
+        /lệnh đang ở Mỹ Yến \(vừa có thay đổi thì tải lại trang\); cần sang xưởng khác thì báo KHSX đổi xưởng/,
       );
       await expect(service.sendBatchToBoss('7', 'tp', 'Kho', '3', 'u')).rejects.toThrow(
-        ConflictException,
+        BadRequestException,
       );
       expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('B2: SKU1 chờ QLSX ở xưởng A + SKU2 chờ QLSX chưa có xưởng: gửi riêng SKU2 với xưởng B -> 400 nêu xưởng A; với A -> qua', async () => {
+      const sku1 = piItem({
+        id: 20n,
+        prodApprovalStatus: 'WAITING_QLSX',
+        workshopId: 3n,
+        workshop: workshopPA,
+      });
+      const sku2 = piItem({ id: 21n, prodApprovalStatus: 'WAITING_QLSX' });
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ items: [sku1, sku2] }));
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(sku2);
+      prisma.workshop.findUnique.mockResolvedValue(workshopMY);
+
+      await expect(service.sendItemToBoss('7', '21', 'tp', 'Kho', '4', 'u')).rejects.toThrow(
+        'Không đổi xưởng khi gửi Sếp - lệnh đang ở Phú An (vừa có thay đổi thì tải lại trang); cần sang xưởng khác thì báo KHSX đổi xưởng',
+      );
+      await expect(service.sendBatchToBoss('7', 'tp', 'Kho', '4', 'u', ['21'])).rejects.toThrow(
+        /lệnh đang ở Phú An/,
+      );
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+
+      prisma.workshop.findUnique.mockResolvedValue(workshopPA);
+      await expect(service.sendItemToBoss('7', '21', 'tp', 'Kho', '3', 'u')).resolves.toBeDefined();
+    });
+
+    it('B2: thiếu tên xưởng của dòng đang giữ -> câu lỗi bỏ phần tên', async () => {
+      const sku1 = piItem({
+        id: 20n,
+        prodApprovalStatus: 'WAITING_QLSX',
+        workshopId: 3n,
+        workshop: null,
+      });
+      prisma.productionInvoice.findUnique.mockResolvedValue(pi({ items: [sku1] }));
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue(sku1);
+      await expect(service.sendItemToBoss('7', '20', 'tp', 'Kho', '4', 'u')).rejects.toThrow(
+        'Không đổi xưởng khi gửi Sếp - lệnh (vừa có thay đổi thì tải lại trang); cần sang xưởng khác thì báo KHSX đổi xưởng',
+      );
     });
 
     it('dòng khác đã ở CÙNG xưởng -> gửi được', async () => {
@@ -3166,7 +3271,7 @@ describe('ProductionInvoicesService', () => {
       );
       await expect(service.sendBatchToBoss('7', 'tp', 'Kho', '3', 'u')).resolves.toBeDefined();
       expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [20n] } },
+        where: { prodApprovalStatus: 'WAITING_QLSX', OR: [{ id: 20n, workshopId: null }] },
         data: expect.objectContaining({ workshopId: 3n }) as unknown,
       });
     });
@@ -3208,7 +3313,7 @@ describe('ProductionInvoicesService', () => {
         sentPi([{}, { prodApprovalStatus: 'APPROVED' }]),
       );
 
-      const result = await service.changeWorkshop('7', '4', 'Phú An quá tải', 'user-qlsx');
+      const result = await service.changeWorkshop('7', '4', 'Phú An quá tải', 'user-khsx');
 
       // Rà soát 14/11 CK6: khoá dòng lệnh (chung với xuất sắt / phiếu XK) TRƯỚC khi ghi đổi xưởng.
       expect(lockPisForIssue).toHaveBeenCalledWith(expect.anything(), [7n]);
@@ -3234,7 +3339,7 @@ describe('ProductionInvoicesService', () => {
       /* eslint-enable @typescript-eslint/no-unsafe-assignment */
       expect(notificationsService.emit).toHaveBeenCalledWith('PI_WORKSHOP_CHANGED', {
         entityId: '7',
-        actorId: 'user-qlsx',
+        actorId: 'user-khsx',
         params: {
           piCode: 'PI-7',
           displayCode: 'MY-313 + MY-314',
@@ -3242,16 +3347,203 @@ describe('ProductionInvoicesService', () => {
           toWorkshop: 'Mỹ Yến',
           reason: 'Phú An quá tải',
           count: 2,
+          workshopIds: ['4', '3'],
+          // 1 SKU đã duyệt là đủ để lệnh hiện ở "Tổng hợp lệnh SX".
+          approved: true,
         },
       });
       expect(result.displayCode).toBe('MY-313 + MY-314');
+    });
+
+    it('16/11: dời hàng đợi tổ TRONG transaction (sau khoá lệnh + ghi xưởng) và đưa queueMoves (tên xưởng) vào PI_WORKSHOP_CHANGED', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      prisma.workshop.findMany.mockResolvedValue([
+        { id: 3n, name: 'Phú An' },
+        { id: 4n, name: 'Mỹ Yến' },
+      ]);
+      (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mockResolvedValueOnce([
+        { stage: 'PHOI', fromWorkshopId: 3n, toWorkshopId: 4n, wasRunning: true },
+        { stage: 'HAN', fromWorkshopId: 3n, toWorkshopId: 4n, wasRunning: false },
+      ]);
+
+      await service.changeWorkshop('7', '4', 'Phú An quá tải', 'user-khsx');
+
+      expect(moveOpenQueueEntriesToPiWorkshop).toHaveBeenCalledWith(prisma, 7n);
+      const moveOrder = (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mock.invocationCallOrder;
+      expect((lockPisForIssue as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+        moveOrder[moveOrder.length - 1],
+      );
+      expect(prisma.productionInvoiceItem.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        moveOrder[moveOrder.length - 1],
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith('PI_WORKSHOP_CHANGED', {
+        entityId: '7',
+        actorId: 'user-khsx',
+        params: {
+          piCode: 'PI-7',
+          displayCode: 'MY-313 + MY-314',
+          fromWorkshop: 'Phú An',
+          toWorkshop: 'Mỹ Yến',
+          reason: 'Phú An quá tải',
+          count: 2,
+          queueMoves: [
+            { stage: 'PHOI', fromWorkshop: 'Phú An', toWorkshop: 'Mỹ Yến', wasRunning: true },
+            { stage: 'HAN', fromWorkshop: 'Phú An', toWorkshop: 'Mỹ Yến', wasRunning: false },
+          ],
+          // xưởng mới + xưởng cũ của SKU + xưởng của hàng đợi (bỏ trùng)
+          workshopIds: ['4', '3'],
+          approved: false,
+        },
+      });
+      // Có dòng dời -> báo màn QLSX (kênh sàn xưởng) tải lại.
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith({
+        entity: 'FLOOR_REPORT',
+        entityId: '7',
+        action: 'UPDATED',
+        actorId: 'user-khsx',
+      });
+    });
+
+    it('16/11: workshopIds gồm cả xưởng nơi sơn của dòng Sơn dời (khác xưởng cũ / mới)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mockResolvedValueOnce([
+        { stage: 'SON', fromWorkshopId: 9n, toWorkshopId: 8n, wasRunning: false },
+      ]);
+      await service.changeWorkshop('7', '4', 'lý do', 'user-khsx');
+      const call = notificationsService.emit.mock.calls.find(
+        (c: unknown[]) => c[0] === 'PI_WORKSHOP_CHANGED',
+      ) as [string, { params: { workshopIds: string[] } }];
+      expect([...call[1].params.workshopIds].sort()).toEqual(['3', '4', '8', '9']);
+    });
+
+    it('16/11: không có dòng hàng đợi nào dời -> KHÔNG phát realtime sàn xưởng', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      await service.changeWorkshop('7', '4', 'lý do', 'user-khsx');
+      expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalledWith(
+        expect.objectContaining({ entity: 'FLOOR_REPORT' }),
+      );
+    });
+
+    it('16/11: 2 lần đổi xưởng cùng lúc - xưởng sau khoá khác lúc đọc -> 409, không ghi, không dời hàng đợi', async () => {
+      (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mockClear();
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      (lockPisForIssue as jest.Mock).mockResolvedValueOnce(
+        new Map([['7', { workshopId: 5n, cuttingRecheckRequired: false }]]),
+      );
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'user-khsx')).rejects.toThrow(
+        'Lệnh MY-313 + MY-314 vừa được đổi xưởng bởi người khác - tải lại trang rồi thử lại',
+      );
+      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+      expect(moveOpenQueueEntriesToPiWorkshop).not.toHaveBeenCalled();
+      expect(notificationsService.emit).not.toHaveBeenCalledWith(
+        'PI_WORKSHOP_CHANGED',
+        expect.anything(),
+      );
+    });
+
+    it('16/11: lệnh dữ liệu cũ lẫn 2 xưởng - xưởng sau khoá là 1 trong các xưởng lúc đọc -> không chặn nhầm', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi([{}, { workshopId: 5n }]));
+      (lockPisForIssue as jest.Mock).mockResolvedValueOnce(
+        new Map([['7', { workshopId: 3n, cuttingRecheckRequired: false }]]),
+      );
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'user-khsx')).resolves.toBeDefined();
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalled();
+    });
+
+    it('16/11: xưởng sau khoá trùng lúc đọc -> đổi bình thường', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      (lockPisForIssue as jest.Mock).mockResolvedValueOnce(
+        new Map([['7', { workshopId: 3n, cuttingRecheckRequired: false }]]),
+      );
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'user-khsx')).resolves.toBeDefined();
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalled();
+    });
+
+    it('B4: tra tên xưởng của hàng đợi lỗi -> ghi log, VẪN emit PI_WORKSHOP_CHANGED (không queueMoves, workshopIds đủ)', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mockResolvedValueOnce([
+        { stage: 'PHOI', fromWorkshopId: 3n, toWorkshopId: 4n, wasRunning: true },
+      ]);
+      prisma.workshop.findMany.mockRejectedValueOnce(new Error('tra tên lỗi'));
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'user-khsx')).resolves.toBeDefined();
+      const call = notificationsService.emit.mock.calls.find(
+        (c: unknown[]) => c[0] === 'PI_WORKSHOP_CHANGED',
+      ) as [string, { params: { queueMoves?: unknown; workshopIds: string[] } }];
+      expect(call).toBeDefined();
+      expect(call[1].params.queueMoves).toBeUndefined();
+      expect([...call[1].params.workshopIds].sort()).toEqual(['3', '4']);
+    });
+
+    it('B5: approved = true khi có ÍT NHẤT 1 SKU đã APPROVED (lệnh hiện ở Tổng hợp lệnh SX); false khi chưa SKU nào duyệt', async () => {
+      const approvedOf = async (items: Record<string, unknown>[]) => {
+        notificationsService.emit.mockClear();
+        prisma.productionInvoice.findUnique.mockResolvedValue(sentPi(items));
+        await service.changeWorkshop('7', '4', 'lý do', 'user-khsx');
+        const call = notificationsService.emit.mock.calls.find(
+          (c: unknown[]) => c[0] === 'PI_WORKSHOP_CHANGED',
+        ) as [string, { params: { approved: boolean } }];
+        return call[1].params.approved;
+      };
+      expect(
+        await approvedOf([{ prodApprovalStatus: 'APPROVED' }, { prodApprovalStatus: 'APPROVED' }]),
+      ).toBe(true);
+      // Duyệt một phần: lệnh đã hiện ở "Tổng hợp lệnh SX" (và có thể đã vào hàng đợi) -> giữ link cũ.
+      expect(
+        await approvedOf([
+          { prodApprovalStatus: 'APPROVED' },
+          { prodApprovalStatus: 'WAITING_BOSS' },
+        ]),
+      ).toBe(true);
+      expect(
+        await approvedOf([
+          { prodApprovalStatus: 'WAITING_QLSX' },
+          { prodApprovalStatus: 'WAITING_BOSS' },
+        ]),
+      ).toBe(false);
+    });
+
+    it('B6: đóng bản PI_CUTTING_RECHECK_REQUIRED còn mở TRƯỚC khi phát bản mới; đóng lỗi chỉ log, vẫn phát', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      prisma.cuttingProposal.count.mockResolvedValue(1);
+      await service.changeWorkshop('7', '4', 'lý do', 'user-khsx');
+      expect(notificationsService.resolve).toHaveBeenCalledWith({
+        entityType: 'PRODUCTION_INVOICE',
+        entityId: '7',
+        types: ['PI_CUTTING_RECHECK_REQUIRED'],
+      });
+      const resolveOrder = notificationsService.resolve.mock.invocationCallOrder[0];
+      const emitIdx = notificationsService.emit.mock.calls.findIndex(
+        (c: unknown[]) => c[0] === 'PI_CUTTING_RECHECK_REQUIRED',
+      );
+      expect(emitIdx).toBeGreaterThanOrEqual(0);
+      expect(resolveOrder).toBeLessThan(
+        notificationsService.emit.mock.invocationCallOrder[emitIdx],
+      );
+
+      notificationsService.emit.mockClear();
+      notificationsService.resolve.mockRejectedValueOnce(new Error('đóng lỗi'));
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'user-khsx')).resolves.toBeDefined();
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PI_CUTTING_RECHECK_REQUIRED',
+        expect.anything(),
+      );
+    });
+
+    it('16/11: hàng đợi dời lỗi -> cả việc đổi xưởng lỗi, không thông báo', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
+      (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mockRejectedValueOnce(new Error('queue lỗi'));
+      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow('queue lỗi');
+      expect(notificationsService.emit).not.toHaveBeenCalledWith(
+        'PI_WORKSHOP_CHANGED',
+        expect.anything(),
+      );
     });
 
     it('có phương án cắt đã tính xong (chờ duyệt hoặc đã duyệt) -> bật cờ cần kiểm lại + emit PI_CUTTING_RECHECK_REQUIRED', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
       prisma.cuttingProposal.count.mockResolvedValue(1);
 
-      await service.changeWorkshop('7', '4', 'Phú An quá tải', 'user-qlsx');
+      await service.changeWorkshop('7', '4', 'Phú An quá tải', 'user-khsx');
 
       /* eslint-disable @typescript-eslint/no-unsafe-assignment -- jest matcher typing */
       // 13/11/2026: không còn chỉ APPROVED - DRAFT (đã tính, chờ Sếp duyệt) cũng bật cờ;
@@ -3271,7 +3563,7 @@ describe('ProductionInvoicesService', () => {
       /* eslint-enable @typescript-eslint/no-unsafe-assignment */
       expect(notificationsService.emit).toHaveBeenCalledWith('PI_CUTTING_RECHECK_REQUIRED', {
         entityId: '7',
-        actorId: 'user-qlsx',
+        actorId: 'user-khsx',
         params: {
           piCode: 'PI-7',
           displayCode: 'MY-313 + MY-314',
@@ -3287,7 +3579,7 @@ describe('ProductionInvoicesService', () => {
       );
       prisma.cuttingProposal.count.mockResolvedValue(1);
 
-      await service.changeWorkshop('7', '4', 'lý do', 'user-qlsx');
+      await service.changeWorkshop('7', '4', 'lý do', 'user-khsx');
 
       expect(prisma.productionInvoice.update).toHaveBeenCalledWith({
         where: { id: 7n },
@@ -3299,7 +3591,7 @@ describe('ProductionInvoicesService', () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
       prisma.cuttingProposal.count.mockResolvedValue(0);
 
-      await service.changeWorkshop('7', '4', 'lý do', 'user-qlsx');
+      await service.changeWorkshop('7', '4', 'lý do', 'user-khsx');
 
       expect(prisma.productionInvoice.update).not.toHaveBeenCalled();
       expect(
@@ -3404,7 +3696,7 @@ describe('ProductionInvoicesService', () => {
       );
     });
 
-    it('QLSX Phú An chuyển lệnh của Phước An (xưởng sơn nhờ, chỉ xem) -> 403, không ghi', async () => {
+    it('KHSX gắn Phú An đổi xưởng lệnh của Phước An (xưởng sơn nhờ, chỉ xem) -> 403, không ghi', async () => {
       getScopeMock.mockResolvedValue(SCOPE_PHU_AN);
       prisma.productionInvoice.findUnique.mockResolvedValue(
         sentPi([{ workshopId: 2n }, { workshopId: 2n }]),
@@ -3415,7 +3707,7 @@ describe('ProductionInvoicesService', () => {
       expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
     });
 
-    it('QLSX Phước An chuyển lệnh của chính xưởng mình -> được, canManage false vì lệnh đã sang xưởng khác', async () => {
+    it('KHSX gắn Phước An đổi xưởng lệnh của chính xưởng mình -> được, canManage false vì lệnh đã sang xưởng khác', async () => {
       getScopeMock.mockResolvedValue(SCOPE_PHUOC_AN);
       prisma.productionInvoice.findUnique.mockResolvedValue(
         sentPi([{ workshopId: 2n }, { workshopId: 2n }]),
@@ -3635,9 +3927,9 @@ describe('ProductionInvoicesService', () => {
         });
       });
 
-      it('gửi workshopId khác xưởng hiện tại của SKU -> 400 "Chuyển xưởng"', async () => {
+      it('gửi workshopId khác xưởng hiện tại của SKU -> 400 "báo KHSX đổi xưởng"', async () => {
         await expect(service.sendBatchToBoss('7', 'tp', 'Kho', '1', 'u')).rejects.toThrow(
-          /Chuyển xưởng/,
+          /báo KHSX đổi xưởng/,
         );
         expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
       });
@@ -3770,7 +4062,7 @@ describe('ProductionInvoicesService', () => {
       it('sendItemToQlsx gửi xưởng KHÁC xưởng đã tính -> 400 nêu tên xưởng, không ghi gì', async () => {
         await expect(service.sendItemToQlsx('7', '20', 'khsx', '4')).rejects.toThrow(
           new BadRequestException(
-            'Lệnh MY-1 đã tính phương án cắt cho Phú An. Muốn làm ở xưởng khác: tính lại ở "Tối ưu cắt sắt" với xưởng mới, hoặc gửi đúng xưởng rồi để QLSX chuyển xưởng.',
+            'Lệnh MY-1 đã tính phương án cắt cho Phú An. Muốn làm ở xưởng khác: tính lại ở "Tối ưu cắt sắt" với xưởng mới, hoặc gửi đúng xưởng rồi bấm "Đổi xưởng" ở lệnh.',
           ),
         );
         expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
@@ -3813,7 +4105,7 @@ describe('ProductionInvoicesService', () => {
       });
     });
 
-    describe('QLSX đổi xưởng lúc gửi Sếp -> bật cờ kiểm lại phương án cắt', () => {
+    describe('QLSX gửi Sếp không đổi xưởng (16/11/2026)', () => {
       const heldAtPA = (over: Record<string, unknown> = {}) =>
         piItem({
           id: 20n,
@@ -3833,56 +4125,50 @@ describe('ProductionInvoicesService', () => {
           (c: unknown[]) => c[0] === 'PI_CUTTING_RECHECK_REQUIRED',
         );
 
-      it('sendItemToBoss đổi sang xưởng khác xưởng đang giữ -> bật cờ + emit PI_CUTTING_RECHECK_REQUIRED', async () => {
-        await service.sendItemToBoss('7', '20', 'tp', 'Kho', '4', 'user-qlsx');
+      // 16/11/2026: QLSX (kể cả không gắn xưởng) không đổi xưởng lúc gửi Sếp nữa -> đổi xưởng là việc của KHSX, nên đường gửi Sếp
+      // không còn bật cờ kiểm lại với dòng đã có xưởng (trước đây test này kỳ vọng bật cờ + emit).
+      const BOSS_WORKSHOP_MSG =
+        'Không đổi xưởng khi gửi Sếp - lệnh đang ở Phú An (vừa có thay đổi thì tải lại trang); cần sang xưởng khác thì báo KHSX đổi xưởng';
 
-        expect(prisma.productionInvoice.update).toHaveBeenCalledWith({
-          where: { id: 7n },
-          data: expect.objectContaining({ cuttingRecheckRequired: true }) as unknown,
-        });
-        expect(notificationsService.emit).toHaveBeenCalledWith('PI_CUTTING_RECHECK_REQUIRED', {
-          entityId: '7',
-          actorId: 'user-qlsx',
-          params: {
-            piCode: 'PI-7',
-            displayCode: 'MY-313',
-            fromWorkshop: 'Phú An',
-            toWorkshop: 'Mỹ Yến',
-          },
-        });
-      });
-
-      it('sendBatchToBoss đổi xưởng -> bật cờ; giữ nguyên xưởng -> KHÔNG bật', async () => {
-        await service.sendBatchToBoss('7', 'tp', 'Kho', '4', 'user-qlsx');
-        expect(prisma.productionInvoice.update).toHaveBeenCalledTimes(1);
-        expect(flagged()).toBe(true);
-
-        prisma.productionInvoice.update.mockClear();
-        notificationsService.emit.mockClear();
-        prisma.workshop.findUnique.mockResolvedValue(workshopPA);
-        await service.sendBatchToBoss('7', 'tp', 'Kho', '3', 'user-qlsx');
+      it('sendItemToBoss gửi xưởng khác xưởng đang giữ (QLSX không gắn xưởng) -> 400, không ghi, không bật cờ', async () => {
+        await expect(
+          service.sendItemToBoss('7', '20', 'tp', 'Kho', '4', 'user-qlsx'),
+        ).rejects.toThrow(new BadRequestException(BOSS_WORKSHOP_MSG));
+        expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
         expect(prisma.productionInvoice.update).not.toHaveBeenCalled();
         expect(flagged()).toBe(false);
       });
 
-      it('đổi xưởng nhưng lệnh chưa có phương án cắt đã tính -> không bật cờ; dòng chưa có xưởng (lệnh cũ) cũng không bật', async () => {
-        prisma.cuttingProposal.count.mockResolvedValue(0);
-        await service.sendItemToBoss('7', '20', 'tp', 'Kho', '4', 'user-qlsx');
-        expect(prisma.productionInvoice.update).not.toHaveBeenCalled();
-
-        prisma.cuttingProposal.count.mockResolvedValue(1);
-        prisma.productionInvoiceItem.findUnique.mockResolvedValue(
-          heldAtPA({ workshopId: null, workshop: null }),
+      it('sendBatchToBoss gửi xưởng khác -> 400; gửi đúng xưởng đang giữ hoặc thiếu -> qua, không bật cờ', async () => {
+        await expect(service.sendBatchToBoss('7', 'tp', 'Kho', '4', 'user-qlsx')).rejects.toThrow(
+          new BadRequestException(BOSS_WORKSHOP_MSG),
         );
-        await service.sendItemToBoss('7', '20', 'tp', 'Kho', '4', 'user-qlsx');
+        expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
+
+        prisma.workshop.findUnique.mockResolvedValue(workshopPA);
+        await expect(
+          service.sendBatchToBoss('7', 'tp', 'Kho', '3', 'user-qlsx'),
+        ).resolves.toBeDefined();
+        await expect(
+          service.sendBatchToBoss('7', 'tp', 'Kho', undefined, 'user-qlsx'),
+        ).resolves.toBeDefined();
         expect(prisma.productionInvoice.update).not.toHaveBeenCalled();
+        expect(flagged()).toBe(false);
       });
 
-      it('lỗi khi bật cờ không làm hỏng việc gửi Sếp (best-effort)', async () => {
-        prisma.cuttingProposal.count.mockRejectedValue(new Error('db'));
+      it('dòng chưa có xưởng (dữ liệu cũ) -> QLSX không gắn xưởng vẫn chọn được xưởng, không bật cờ', async () => {
+        const noWorkshop = heldAtPA({ workshopId: null, workshop: null });
+        prisma.productionInvoice.findUnique.mockResolvedValue(pi({ items: [noWorkshop] }));
+        prisma.productionInvoiceItem.findUnique.mockResolvedValue(noWorkshop);
         await expect(
           service.sendItemToBoss('7', '20', 'tp', 'Kho', '4', 'user-qlsx'),
         ).resolves.toBeDefined();
+        expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ workshopId: 4n }) as unknown,
+          }),
+        );
+        expect(prisma.productionInvoice.update).not.toHaveBeenCalled();
       });
     });
 

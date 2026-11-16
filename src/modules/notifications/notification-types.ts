@@ -548,7 +548,7 @@ export interface DeliveryAtRiskNotificationParams {
   total: number;
 }
 
-// Phần A – Đợt 2: QLSX đổi xưởng cơ khí của 1 lệnh (PI_WORKSHOP_CHANGED). `entityId` = piId.
+// Phần A – Đợt 2: KHSX (hoặc Admin, từ 16/11/2026) đổi xưởng cơ khí của 1 lệnh (PI_WORKSHOP_CHANGED). `entityId` = piId.
 export interface PiWorkshopChangedNotificationParams {
   piCode: string;
   /** Mã lệnh hiển thị (số LSX nối " + ", chưa có thì mã PI) - lenh-code.util.ts. */
@@ -559,21 +559,87 @@ export interface PiWorkshopChangedNotificationParams {
   reason: string;
   /** Số dòng SKU được đổi. */
   count: number;
+  /** Dòng hàng đợi tổ Phôi/Hàn/Sơn còn mở đã dời theo sang xưởng mới (16/11/2026); trống / thiếu = không có dòng nào. */
+  queueMoves?: PiWorkshopChangedQueueMove[];
+  /** Id xưởng (chuỗi số) liên quan: xưởng cũ + mới + xưởng của hàng đợi đã dời. RecipientResolver dùng để giữ QLSX xưởng cũ
+   *  (thông báo phát SAU commit nên tra theo piCode chỉ thấy xưởng mới). */
+  workshopIds?: string[];
+  /** true khi lệnh có ÍT NHẤT 1 SKU đã duyệt lúc đổi xưởng ("Tổng hợp lệnh SX" hiện lệnh từ SKU đã duyệt đầu tiên); false = chưa
+   *  SKU nào duyệt, mọi SKU còn chờ QLSX / chờ Sếp (link tới màn lệnh SX / chờ duyệt). Thiếu = như true. */
+  approved?: boolean;
 }
 
-// Phần A – Đợt 3 (YC10, V4-5): QLSX chọn/đổi xưởng khác xưởng KHSX đã dùng để đề xuất mốc (chưa có xưởng = dự kiến Phú An) mà số
-// ngày Phôi/Hàn/Sơn khác đi -> báo KHSX đặt lại mốc. `entityId` = piId.
+/** 1 dòng hàng đợi đã dời khi đổi xưởng (tên xưởng, không phải id). */
+export interface PiWorkshopChangedQueueMove {
+  stage: 'PHOI' | 'HAN' | 'SON';
+  fromWorkshop: string | null;
+  toWorkshop: string | null;
+  /** Dòng đang chạy (RUNNING) ở hàng đợi cũ trước khi dời. */
+  wasRunning: boolean;
+}
+
+const QUEUE_STAGE_ORDER: PiWorkshopChangedQueueMove['stage'][] = ['PHOI', 'HAN', 'SON'];
+const QUEUE_STAGE_LABEL: Record<PiWorkshopChangedQueueMove['stage'], string> = {
+  PHOI: 'Phôi',
+  HAN: 'Hàn',
+  SON: 'Sơn',
+};
+
+/** Gom các dòng theo tên xưởng (giữ thứ tự gặp đầu tiên) rồi nối nhãn tổ theo thứ tự Phôi, Hàn, Sơn. */
+function groupStagesByWorkshop(
+  moves: PiWorkshopChangedQueueMove[],
+  workshopOf: (m: PiWorkshopChangedQueueMove) => string | null,
+): { workshop: string; stages: string }[] {
+  const groups = new Map<string, Set<PiWorkshopChangedQueueMove['stage']>>();
+  for (const m of moves) {
+    const name = workshopOf(m) ?? '(chưa có xưởng)';
+    const set = groups.get(name) ?? new Set();
+    set.add(m.stage);
+    groups.set(name, set);
+  }
+  return [...groups.entries()].map(([workshop, set]) => ({
+    workshop,
+    stages: QUEUE_STAGE_ORDER.filter((s) => set.has(s))
+      .map((s) => QUEUE_STAGE_LABEL[s])
+      .join(', '),
+  }));
+}
+
+/** Câu thông báo đổi xưởng (trung lập: người bấm là KHSX hoặc Admin). */
+export function buildPiWorkshopChangedMessage(p: PiWorkshopChangedNotificationParams): string {
+  // Lý do người dùng gõ có thể đã có dấu chấm cuối -> bỏ để không thành "..".
+  const reason = p.reason.trim().replace(/[.!?…]+$/u, '');
+  const parts = [`Lệnh ${p.piCode} (${p.count} SKU) đã đổi xưởng cơ khí. Lý do: ${reason}.`];
+  const moves = p.queueMoves ?? [];
+  if (moves.length > 0) {
+    for (const g of groupStagesByWorkshop(moves, (m) => m.toWorkshop)) {
+      parts.push(`Hàng đợi tổ ${g.stages} đã chuyển sang cuối hàng đợi ${g.workshop}.`);
+    }
+    for (const g of groupStagesByWorkshop(
+      moves.filter((m) => m.wasRunning),
+      (m) => m.fromWorkshop,
+    )) {
+      parts.push(
+        `Tổ ${g.stages} ở ${g.workshop} không còn lệnh đang chạy: QLSX ${g.workshop} bấm "Bắt đầu lệnh đầu hàng đợi" nếu hàng đợi còn lệnh chờ.`,
+      );
+    }
+  }
+  return parts.join(' ');
+}
+
+// Phần A – Đợt 3 (YC10, V4-5): xưởng được chọn/đổi (KHSX đổi xưởng; QLSX chỉ chọn lúc gửi Sếp khi SKU chưa có xưởng) khác xưởng
+// KHSX đã dùng để đề xuất mốc (chưa có xưởng = dự kiến Phú An) mà số ngày Phôi/Hàn/Sơn khác đi -> báo KHSX đặt lại mốc. `entityId` = piId.
 export interface PiTimelineReplanNotificationParams {
   piCode: string;
   /** Mã lệnh hiển thị (số LSX nối " + ", chưa có thì mã PI). */
   displayCode: string;
-  /** Xưởng QLSX vừa chọn / đổi sang. */
+  /** Xưởng vừa chọn / đổi sang. */
   workshopName: string;
   /** Mỗi SKU 1 câu, vd "J55: Phôi cần 8 ngày ở Xưởng Phước An (mốc đang đặt theo Xưởng Phú An 2 ngày)". */
   lines: string[];
 }
 
-// Phần A: QLSX đổi xưởng lệnh đã có phương án cắt APPROVED -> báo KHSX kiểm lại. `entityId` = piId.
+// Phần A: đổi xưởng lệnh đã có phương án cắt APPROVED -> báo KHSX kiểm lại. `entityId` = piId.
 export interface PiCuttingRecheckNotificationParams {
   piCode: string;
   /** Mã lệnh hiển thị (số LSX nối " + ", chưa có thì mã PI). */
@@ -1070,10 +1136,13 @@ const notificationTypeDefinitions = {
    *  ca "2 role khác tab" đã né ở PI_APPROVED_BY_BOSS (mục 16.2)/QC_FAILED (giữ nguyên không link,
    *  xem dưới). */
   STEEL_ISSUE_TO_PHOI: {
-    category: 'ACTION_REQUIRED',
+    // Từ 16/11/2026 (đợt 1, bỏ màn thống kê tổ): sắt cây chỉ nhận bằng QR "Khu nhận sắt", tài khoản
+    // thống kê không còn việc phải làm nên chỉ là tin để biết (cơ chế tự đóng khi nhận giữ nguyên).
+    category: 'INFO',
     severity: 'INFO',
     entityType: 'STEEL_ISSUE',
-    title: (p: SteelIssueNotificationParams) => `${p.piCode}: sắt đã xuất - vào xác nhận nhận`,
+    title: (p: SteelIssueNotificationParams) =>
+      `${p.piCode}: sắt đã xuất - công nhân nhận bằng mã QR "Khu nhận sắt" của xưởng`,
     message: (p: SteelIssueNotificationParams) => `${p.materialCode}: ${p.barCount} cây.`,
     link: () => ({ module: 'production', page: 'phoi-xac-nhan-nhan-sat' }),
     recipients: () => ({ roles: [BUSINESS_ROLES.PHOI_STAFF] }),
@@ -1400,7 +1469,9 @@ const notificationTypeDefinitions = {
     severity: 'WARNING',
     entityType: 'QC_REVIEW',
     title: (p: QcResultNotificationParams) => `${p.piCode}: KCS chấm lỗi ${p.failedQty}`,
-    message: () => 'Kiểm tra lại, sửa hoặc báo bù đủ bằng đợt mới.',
+    // Áp cho mọi đợt gửi KCS (Phôi / Hàn / Sơn): tài khoản thống kê không còn tự báo bù, trừ Vật tư TP.
+    message: () =>
+      'Công nhân báo bù bằng quét mã QR, QLSX kiểm rồi gửi KCS; Vật tư TP thì báo bù ở Lệnh sản xuất.',
     recipients: (p: QcResultNotificationParams) => ({
       roles: [p.senderRole, BUSINESS_ROLES.PRODUCTION_MANAGER],
     }),
@@ -1835,37 +1906,59 @@ const notificationTypeDefinitions = {
     }),
   } satisfies NotificationTypeDef<DeliveryAtRiskNotificationParams>,
 
-  // ─── Phần A – Đợt 2 (YC12 12.3/12.5): QLSX đổi xưởng cơ khí của lệnh đã gửi Sếp / đã duyệt ──────────────────────────────
-  /** QLSX đổi xưởng (`ProductionInvoicesService.changeWorkshop`) - chỉ khi lệnh chưa xuất sắt/vật tư. Báo Sếp (v8 12.5) + KHSX
-   *  (lập kế hoạch theo xưởng). Link "Tổng hợp lệnh SX" theo lệnh: `boss` đứng đầu (Sếp mở được mọi phân hệ), KHSX rơi xuống
-   *  phân hệ của mình. Người đổi (QLSX) bị loại qua actorId lúc emit. */
+  // ─── Phần A – Đợt 2 (YC12 12.3/12.5): đổi xưởng cơ khí của lệnh chờ QLSX / đã gửi Sếp / đã duyệt ───────────────────────
+  /** KHSX (hoặc Admin) đổi xưởng (`ProductionInvoicesService.changeWorkshop`, từ 16/11/2026) - chỉ khi lệnh chưa xuất sắt/vật tư.
+   *  Báo Sếp (v8 12.5) + KHSX (lập kế hoạch theo xưởng) + QLSX (hàng đợi tổ đổi theo). Link "Tổng hợp lệnh SX" theo lệnh: `boss`
+   *  đứng đầu (Sếp mở được mọi phân hệ), KHSX / QLSX rơi xuống phân hệ của mình. Người đổi bị loại qua actorId lúc emit. */
   PI_WORKSHOP_CHANGED: {
     category: 'INFO',
     severity: 'WARNING',
     entityType: 'PRODUCTION_INVOICE',
     title: (p: PiWorkshopChangedNotificationParams) =>
       `${p.displayCode}: đổi xưởng ${p.fromWorkshop ?? '(chưa có)'} → ${p.toWorkshop}`,
-    message: (p: PiWorkshopChangedNotificationParams) =>
-      `QLSX đổi xưởng cơ khí của lệnh ${p.piCode} (${p.count} SKU). Lý do: ${p.reason}`,
-    link: (p: PiWorkshopChangedNotificationParams) => ({
-      module: 'boss',
-      page: 'thong-ke',
-      params: { focus: `PI_CODE:${p.piCode}` },
-      alternatives: [
-        { module: 'production_plan', page: 'thongke', params: { focus: `PI_CODE:${p.piCode}` } },
-      ],
-    }),
+    message: buildPiWorkshopChangedMessage,
+    link: (p: PiWorkshopChangedNotificationParams) =>
+      p.approved === false
+        ? // Lệnh chưa duyệt hết: "Tổng hợp lệnh SX" không hiện -> tới màn chờ duyệt / lệnh SX (FE gắn focus theo entityId).
+          {
+            module: 'boss',
+            page: 'cho-duyet',
+            alternatives: [
+              { module: 'production_plan', page: 'lenh-sx' },
+              { module: 'production', page: 'lenh-sx' },
+            ],
+          }
+        : {
+            module: 'boss',
+            page: 'thong-ke',
+            params: { focus: `PI_CODE:${p.piCode}` },
+            alternatives: [
+              {
+                module: 'production_plan',
+                page: 'thongke',
+                params: { focus: `PI_CODE:${p.piCode}` },
+              },
+              // QLSX: việc của QLSX nằm ở màn hàng đợi "Sản lượng xưởng" (không còn thấy lệnh ở "Tổng hợp lệnh SX" vì lọc theo xưởng).
+              { module: 'production', page: 'san-luong-xuong' },
+            ],
+          },
     recipients: () => ({
-      roles: [BUSINESS_ROLES.BOSS, BUSINESS_ROLES.PRODUCTION_PLANNER],
+      roles: [
+        BUSINESS_ROLES.BOSS,
+        BUSINESS_ROLES.PRODUCTION_PLANNER,
+        BUSINESS_ROLES.PRODUCTION_MANAGER,
+      ],
     }),
   } satisfies NotificationTypeDef<PiWorkshopChangedNotificationParams>,
 
   // ─── Phần A – Đợt 3 (YC10, V4-5): xưởng QLSX chọn khác xưởng dùng để đề xuất mốc ────────────────────────────────────────
-  /** QLSX gửi Sếp / đổi xưởng mà số ngày Phôi-Hàn-Sơn theo xưởng mới khác số ngày đang đặt -> KHSX mở "Sửa thời hạn" đặt lại.
-   *  Chỉ báo, không chặn (năng lực chỉ để cảnh báo - v8 10.12). */
+  /** Đổi xưởng (KHSX bấm; QLSX chỉ chọn xưởng lúc gửi Sếp khi SKU chưa có xưởng) mà số ngày Phôi-Hàn-Sơn theo xưởng mới khác số
+   *  ngày đang đặt -> KHSX mở "Sửa thời hạn" đặt lại. Chỉ báo, không chặn (năng lực chỉ để cảnh báo - v8 10.12).
+   *  `notifyActor`: KHSX tự đổi xưởng vẫn phải nhận nhắc việc này (mặc định người bấm bị loại khỏi người nhận). */
   PI_TIMELINE_NEEDS_REPLAN: {
     category: 'INFO',
     severity: 'WARNING',
+    notifyActor: true,
     entityType: 'PRODUCTION_INVOICE',
     title: (p: PiTimelineReplanNotificationParams) =>
       `${p.displayCode}: đặt lại mốc theo ${p.workshopName}`,
@@ -1879,15 +1972,17 @@ const notificationTypeDefinitions = {
       roles: [BUSINESS_ROLES.PRODUCTION_PLANNER],
     }),
   } satisfies NotificationTypeDef<PiTimelineReplanNotificationParams>,
-  /** QLSX đổi xưởng lệnh đã có phương án cắt APPROVED -> KHSX xem lại phương án rồi bấm "Đã kiểm". Tự đóng khi KHSX bấm "Đã kiểm". */
+  /** Đổi xưởng lệnh đã có phương án cắt APPROVED -> KHSX xem lại phương án rồi bấm "Đã kiểm". Tự đóng khi KHSX bấm "Đã kiểm".
+   *  `notifyActor`: KHSX tự đổi xưởng vẫn phải nhận nhắc việc này (mặc định người bấm bị loại khỏi người nhận). */
   PI_CUTTING_RECHECK_REQUIRED: {
     category: 'ACTION_REQUIRED',
     severity: 'WARNING',
+    notifyActor: true,
     entityType: 'PRODUCTION_INVOICE',
     title: (p: PiCuttingRecheckNotificationParams) =>
       `${p.displayCode}: đổi xưởng → cần kiểm lại phương án cắt`,
     message: (p: PiCuttingRecheckNotificationParams) =>
-      `QLSX đổi xưởng ${p.fromWorkshop ?? '(chưa có)'} → ${p.toWorkshop}. Vào Tối ưu cắt sắt xem lại phương án cắt rồi bấm "Đã kiểm" - chưa bấm thì Sếp chưa duyệt được và kho chưa được chuyển / xuất sắt cho lệnh này.`,
+      `Lệnh đổi xưởng ${p.fromWorkshop ?? '(chưa có)'} → ${p.toWorkshop}. Vào Tối ưu cắt sắt xem lại phương án cắt rồi bấm "Đã kiểm" - chưa bấm thì Sếp chưa duyệt được và kho chưa được chuyển / xuất sắt cho lệnh này.`,
     link: (p: PiCuttingRecheckNotificationParams) => ({
       module: 'production_plan',
       page: 'gom-cat',

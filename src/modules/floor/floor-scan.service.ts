@@ -24,7 +24,11 @@ import { ProductionBatchesService } from '../production-batches/production-batch
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CutAllocationService, type CutMachineWork } from './cut-allocation.service';
 import { ScanReportDto } from './dto/floor-scan.dto';
-import { workstationQueueWorkshopId } from './floor-queue-workshop.util';
+import {
+  queueWorkshopIdOfPi,
+  queueWorkshopIdsOfPis,
+  workstationQueueWorkshopId,
+} from './floor-queue-workshop.util';
 
 const STAGE_LABEL: Record<string, string> = { PHOI: 'Phôi', HAN: 'Hàn', SON: 'Sơn' };
 
@@ -55,7 +59,7 @@ export class FloorScanService {
     const workstation = this.toWorkstation(ws);
 
     if (ws.kind === WorkstationKind.STEEL_RECEIVE) {
-      return { workstation, steelToReceive: await this.listSteelToReceive() };
+      return { workstation, steelToReceive: await this.listSteelToReceive(ws.workshopId) };
     }
 
     // Máy cắt: kèm việc chia cho máy này (đợt C0) + ước tiến độ (C2) - có trong MỌI trường hợp, kể
@@ -185,6 +189,24 @@ export class FloorScanService {
     const ws = await this.resolveWorkstation(qrToken, user);
     if (ws.kind !== WorkstationKind.STEEL_RECEIVE) {
       throw new BadRequestException('Mã này không phải mã khu nhận sắt');
+    }
+    // Lô sắt của xưởng khác thì không nhận ở mã của xưởng này (hàng đợi đã tách theo xưởng).
+    const issue = await this.prisma.steelIssue.findUnique({
+      where: { id: parseBigIntId(steelIssueId) },
+      select: { productionInvoiceId: true },
+    });
+    if (issue) {
+      const machineWorkshopId = await workstationQueueWorkshopId(this.prisma, ws.workshopId);
+      const piWorkshopId = await queueWorkshopIdOfPi(
+        this.prisma,
+        MfgStage.PHOI,
+        issue.productionInvoiceId,
+      );
+      if (piWorkshopId !== machineWorkshopId) {
+        throw new ConflictException(
+          'Lô sắt này của xưởng khác. Lô của xưởng nào thì nhận bằng mã "Khu nhận sắt" của xưởng đó; nhầm thì báo thủ kho.',
+        );
+      }
     }
     return this.steelIssues.receive(steelIssueId, user.id, receivedBarCount);
   }
@@ -570,7 +592,7 @@ export class FloorScanService {
   }
 
   /** Đợt kho đã xuất, chưa ai nhận, của PI có SKU đang chạy (receive() cũng chặn PI chưa "Bắt đầu"). */
-  private async listSteelToReceive() {
+  private async listSteelToReceive(machineWorkshopId: bigint | null) {
     const rows = await this.prisma.steelIssue.findMany({
       where: {
         status: SteelIssueStatus.ISSUED,
@@ -591,7 +613,15 @@ export class FloorScanService {
         issuedBy: { select: { firstName: true, lastName: true, username: true } },
       },
     });
-    return rows.map((r) => ({
+    // Chỉ lô của xưởng máy đang quét (xưởng của PI theo tổ Phôi; máy chưa gắn xưởng = xưởng mặc định).
+    const machineWorkshopOf = await workstationQueueWorkshopId(this.prisma, machineWorkshopId);
+    const piWorkshopOf = await queueWorkshopIdsOfPis(this.prisma, MfgStage.PHOI, [
+      ...new Set(rows.map((r) => r.productionInvoice.id)),
+    ]);
+    const ofMachine = rows.filter(
+      (r) => piWorkshopOf.get(r.productionInvoice.id.toString()) === machineWorkshopOf,
+    );
+    return ofMachine.map((r) => ({
       steelIssueId: r.id.toString(),
       productionInvoiceId: r.productionInvoice.id.toString(),
       piCode: r.productionInvoice.code,

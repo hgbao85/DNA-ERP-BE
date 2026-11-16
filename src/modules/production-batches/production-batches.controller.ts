@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Headers,
   Param,
@@ -10,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
+import { LEGACY_HAN_SON_REPORT_CLOSED_MESSAGE } from '../../common/constants/legacy-floor-report.constant';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -27,6 +29,16 @@ import { ProductionBatchesService } from './production-batches.service';
 
 const VIEW = { module: PERMISSION_MODULES.PRODUCTION_BATCH, action: PermissionAction.VIEW };
 const CREATE = { module: PERMISSION_MODULES.PRODUCTION_BATCH, action: PermissionAction.CREATE };
+
+/**
+ * ĐÓNG 16/11/2026 (đợt 1, bỏ màn thống kê tổ): Hàn / Sơn báo sản lượng bằng QR tại máy (gọi thẳng
+ * service, không qua controller). Phôi vẫn dùng 3 route báo / gửi KCS ở đây cho tab Vật tư TP.
+ */
+function rejectHanSon(mfgRole: string | null): void {
+  if (mfgRole === MfgRole.HAN || mfgRole === MfgRole.SON) {
+    throw new ForbiddenException(LEGACY_HAN_SON_REPORT_CLOSED_MESSAGE);
+  }
+}
 
 @ApiTags('Production Batches')
 @ApiBearerAuth()
@@ -49,6 +61,7 @@ export class ProductionBatchesController {
     @CurrentUser('warehouseScope') warehouseScope: string | null,
     @Headers('Idempotency-Key') idempotencyKey: string | undefined,
   ) {
+    rejectHanSon(mfgRole);
     return this.productionBatchesService.create(
       id,
       dto,
@@ -81,6 +94,7 @@ export class ProductionBatchesController {
     @CurrentUser('mfgRole') mfgRole: string | null,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
   ) {
+    rejectHanSon(mfgRole);
     return this.productionBatchesService.recordProductionBatch(
       id,
       dto,
@@ -101,6 +115,7 @@ export class ProductionBatchesController {
     @CurrentUser('mfgRole') mfgRole: string | null,
     @CurrentUser('warehouseScope') warehouseScope: string | null,
   ) {
+    rejectHanSon(mfgRole);
     return this.productionBatchesService.finishProductionBatch(id, userId, mfgRole, warehouseScope);
   }
 
