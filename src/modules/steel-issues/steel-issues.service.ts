@@ -31,6 +31,7 @@ import {
   assertPiHasActiveFloorLocked,
 } from '../../common/utils/floor-gate.util';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { assertWorkshopUnchanged, lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
 import {
   FloorReportContext,
   findFloorReportByKey,
@@ -111,6 +112,8 @@ export interface PreparedSteelIssue {
   isPostCutover: boolean;
   /** Đợt 7 (chia 9 kho): kho Phôi của xưởng làm lệnh - sắt PHẢI xuất từ đúng kho này. */
   warehouse: { id: bigint; code: string };
+  /** Xưởng của lệnh lúc tra `warehouse` - createInTx() so lại SAU khoá dòng lệnh (rà soát 14/11 CK6). */
+  workshopId: bigint | null;
 }
 type SteelIssueDetail = Prisma.SteelIssueGetPayload<{ include: typeof STEEL_ISSUE_DETAIL_INCLUDE }>;
 type BaseInputs = {
@@ -401,10 +404,8 @@ export class SteelIssuesService {
     if (!material?.warehouse) {
       throw new BadRequestException(`Vật tư ${material?.code ?? materialId} chưa được gán kho`);
     }
-    const warehouse = await new WorkshopWarehouseResolver(this.prisma).resolveForPi(
-      material.warehouse,
-      invoice.id,
-    );
+    const resolver = new WorkshopWarehouseResolver(this.prisma);
+    const warehouse = await resolver.resolveForPi(material.warehouse, invoice.id);
     return {
       productionInvoiceId: invoice.id,
       materialId,
@@ -412,6 +413,8 @@ export class SteelIssuesService {
       barCount: dto.barCount,
       isPostCutover,
       warehouse: { id: warehouse.id, code: warehouse.code },
+      // Cùng resolver (đã nhớ xưởng lúc tra kho ở trên) - đúng xưởng đã dùng để ra `warehouse`.
+      workshopId: await resolver.workshopIdOfPi(invoice.id),
     };
   }
 
@@ -431,6 +434,15 @@ export class SteelIssuesService {
     issuedById: string,
     idempotencyKey?: string,
   ): Promise<SteelIssueRow> {
+    // Rà soát 14/11 CK6: khoá dòng lệnh (chung với đổi xưởng) TRƯỚC mọi khoá khác, rồi kiểm lại SAU khoá - đổi xưởng commit giữa
+    // lúc prepareIssue() tra kho và lúc ghi thì không còn xuất ở kho xưởng cũ, không lách cờ "cần kiểm lại phương án cắt".
+    const locked = (await lockPisForIssue(tx, [p.productionInvoiceId])).get(
+      p.productionInvoiceId.toString(),
+    );
+    if (locked?.cuttingRecheckRequired) {
+      throw new ConflictException(CUTTING_RECHECK_MESSAGE);
+    }
+    assertWorkshopUnchanged(locked, p.workshopId);
     await assertPiHasActiveFloorLocked(tx, p.productionInvoiceId, 'xuất sắt');
 
     const issue = await tx.steelIssue.create({

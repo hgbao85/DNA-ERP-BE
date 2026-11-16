@@ -104,6 +104,7 @@ import {
 import { ItemDeadlineWriter } from './item-deadline-writer.service';
 import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
 import { WorkshopMoveService } from '../warehouse-transfers/workshop-move.service';
+import { lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
 import {
   WorkshopScope,
   WorkshopScopeService,
@@ -1404,6 +1405,9 @@ export class ProductionInvoicesService {
 
     let cuttingRecheckFlagged = false;
     const notifyWorkshopMove = await this.prisma.$transaction(async (tx) => {
+      // Rà soát 14/11 CK6 (người B): khoá dòng lệnh làm việc ĐẦU TIÊN - CÙNG khoá với xuất sắt / xác nhận phiếu XK
+      // (lockPisForIssue). Lượt xuất đang chạy xong trước thì assertNoMaterialIssued() dưới thấy; chạy sau thì nó thấy xưởng mới.
+      await lockPisForIssue(tx, [pi.id]);
       await this.assertNoMaterialIssued(tx, pi.id, ids, displayCode);
       const { count } = await tx.productionInvoiceItem.updateMany({
         where: {

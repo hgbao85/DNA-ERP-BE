@@ -4,7 +4,8 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaServiceType } from '../../prisma/prisma.service';
+import { PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { assertWorkshopUnchanged, lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
 import {
   CutBundleStatus,
   FloorReportKind,
@@ -17,6 +18,17 @@ import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SteelIssuesService } from './steel-issues.service';
 import { RealtimeService } from '../../realtime/realtime.service';
+
+// Rà soát 14/11 CK6: khoá dòng lệnh chung với đổi xưởng (pi-workshop-lock.util) - mock ở đây để không xen vào thứ tự $queryRaw
+// của các test cũ; hành vi khoá + so xưởng có test riêng (pi-workshop-lock.util.spec.ts và các ca "CK6" dưới).
+jest.mock('../../common/utils/pi-workshop-lock.util', () => ({
+  ...jest.requireActual<typeof import('../../common/utils/pi-workshop-lock.util')>(
+    '../../common/utils/pi-workshop-lock.util',
+  ),
+  lockPisForIssue: jest.fn(() => Promise.resolve(new Map())),
+  workshopsOfPis: jest.fn(() => Promise.resolve(new Map())),
+  assertWorkshopUnchanged: jest.fn(),
+}));
 
 // Prisma trả Decimal cho cutLengthMm/solverBladeWidthMm (vd Decimal(7,1) = 452.7). Service gọi
 // cả .toNumber() lẫn .toString() nên mock phải có đủ 2, không dùng number trần.
@@ -80,6 +92,7 @@ describe('SteelIssuesService', () => {
     stockReservation: { update: jest.Mock; findMany: jest.Mock };
     stockQuant: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
+    productionInvoiceItem: { findFirst: jest.Mock };
     $queryRaw: jest.Mock;
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
@@ -275,6 +288,8 @@ describe('SteelIssuesService', () => {
       stockReservation: { update: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
       warehouse: { findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 950n }) },
+      // Xưởng của lệnh lúc tra kho (rà soát 14/11 CK6, PreparedSteelIssue.workshopId) - mặc định chưa chọn xưởng.
+      productionInvoiceItem: { findFirst: jest.fn().mockResolvedValue(null) },
       // 2026-09-03: assertPiHasActiveFloorLocked() (vá race TOCTOU) giờ cũng dùng $queryRaw
       // (FOR UPDATE lên production_orders) ngay dòng đầu transaction create() - phải phân nhánh
       // theo nội dung câu SQL, không còn chỉ có 1 loại câu raw duy nhất như trước.
@@ -508,6 +523,44 @@ describe('SteelIssuesService', () => {
           where: expect.objectContaining({ feasible: true }),
         }),
       );
+    });
+  });
+
+  describe('createInTx - rà soát 14/11 CK6: khoá dòng lệnh chung với đổi xưởng', () => {
+    const prepared = {
+      productionInvoiceId: 1n,
+      materialId: 30n,
+      barLengthMm: 6000,
+      barCount: 2,
+      isPostCutover: false,
+      warehouse: { id: 800n, code: 'phoi-son-han' },
+      workshopId: 5n,
+    };
+
+    it('cờ "cần kiểm lại phương án cắt" vừa bật (đọc SAU khoá) -> 409, không ghi', async () => {
+      (lockPisForIssue as jest.Mock).mockResolvedValueOnce(
+        new Map([['1', { workshopId: 5n, cuttingRecheckRequired: true }]]),
+      );
+
+      await expect(
+        service.createInTx(prisma as unknown as PrismaTx, prepared, 'user-1'),
+      ).rejects.toThrow(ConflictException);
+      expect(lockPisForIssue).toHaveBeenCalledWith(expect.anything(), [1n]);
+      expect(prisma.steelIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('so xưởng SAU khoá với xưởng lúc tra kho; đổi xưởng chen giữa -> 409, không ghi', async () => {
+      const locked = { workshopId: 6n, cuttingRecheckRequired: false };
+      (lockPisForIssue as jest.Mock).mockResolvedValueOnce(new Map([['1', locked]]));
+      (assertWorkshopUnchanged as jest.Mock).mockImplementationOnce(() => {
+        throw new ConflictException('đổi xưởng');
+      });
+
+      await expect(
+        service.createInTx(prisma as unknown as PrismaTx, prepared, 'user-1'),
+      ).rejects.toThrow(ConflictException);
+      expect(assertWorkshopUnchanged).toHaveBeenCalledWith(locked, 5n);
+      expect(prisma.steelIssue.create).not.toHaveBeenCalled();
     });
   });
 
