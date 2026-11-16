@@ -18,6 +18,7 @@ import { ConsumableMaterialPurchaseService } from './consumable-material-purchas
 import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
+import { lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { ItemDeadlineWriter } from './item-deadline-writer.service';
 import { DeadlineChangesService } from './deadline-changes/deadline-changes.service';
@@ -25,6 +26,17 @@ import {
   WorkshopScope,
   WorkshopScopeService,
 } from '../../common/workshop-scope/workshop-scope.service';
+
+// Rà soát 14/11 CK6: khoá dòng lệnh chung với đổi xưởng (pi-workshop-lock.util) - mock ở đây để không xen vào thứ tự $queryRaw
+// của các test cũ; hành vi khoá + so xưởng có test riêng (pi-workshop-lock.util.spec.ts và các ca "CK6" dưới).
+jest.mock('../../common/utils/pi-workshop-lock.util', () => ({
+  ...jest.requireActual<typeof import('../../common/utils/pi-workshop-lock.util')>(
+    '../../common/utils/pi-workshop-lock.util',
+  ),
+  lockPisForIssue: jest.fn(() => Promise.resolve(new Map())),
+  workshopsOfPis: jest.fn(() => Promise.resolve(new Map())),
+  assertWorkshopUnchanged: jest.fn(),
+}));
 
 const ACTOR = { id: 'khsx-1', roles: ['PRODUCTION_PLANNER'] };
 
@@ -3175,6 +3187,11 @@ describe('ProductionInvoicesService', () => {
 
       const result = await service.changeWorkshop('7', '4', 'Phú An quá tải', 'user-qlsx');
 
+      // Rà soát 14/11 CK6: khoá dòng lệnh (chung với xuất sắt / phiếu XK) TRƯỚC khi ghi đổi xưởng.
+      expect(lockPisForIssue).toHaveBeenCalledWith(expect.anything(), [7n]);
+      expect((lockPisForIssue as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.productionInvoiceItem.updateMany.mock.invocationCallOrder[0],
+      );
       expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
         where: {
           id: { in: [20n, 21n] },

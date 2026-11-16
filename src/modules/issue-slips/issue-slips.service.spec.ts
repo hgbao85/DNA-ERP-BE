@@ -12,6 +12,22 @@ import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { IssueSlipsService } from './issue-slips.service';
+import {
+  assertWorkshopUnchanged,
+  lockPisForIssue,
+  workshopsOfPis,
+} from '../../common/utils/pi-workshop-lock.util';
+
+// Rà soát 14/11 CK6: khoá dòng lệnh chung với đổi xưởng (pi-workshop-lock.util) - mock ở đây để không xen vào thứ tự $queryRaw
+// của các test cũ; hành vi khoá + so xưởng có test riêng (pi-workshop-lock.util.spec.ts và các ca "CK6" dưới).
+jest.mock('../../common/utils/pi-workshop-lock.util', () => ({
+  ...jest.requireActual<typeof import('../../common/utils/pi-workshop-lock.util')>(
+    '../../common/utils/pi-workshop-lock.util',
+  ),
+  lockPisForIssue: jest.fn(() => Promise.resolve(new Map())),
+  workshopsOfPis: jest.fn(() => Promise.resolve(new Map())),
+  assertWorkshopUnchanged: jest.fn(),
+}));
 
 const dec = (n: number) => new Prisma.Decimal(n);
 
@@ -409,6 +425,28 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       });
       expect(steel.afterCreate).toHaveBeenCalledWith({ id: 301n }, 'kho-1');
       expect(consumable.afterCreate).toHaveBeenCalledWith({ id: 401n }, 'kho-1');
+    });
+
+    it('rà soát 14/11 CK6: chụp xưởng các lệnh TRƯỚC khi tra kho, khoá dòng lệnh trong transaction; đổi xưởng chen giữa -> 409, không ghi', async () => {
+      (workshopsOfPis as jest.Mock).mockResolvedValueOnce(new Map([['500', 1n]]));
+      const locked = { workshopId: 2n, cuttingRecheckRequired: false };
+      (lockPisForIssue as jest.Mock).mockResolvedValueOnce(new Map([['500', locked]]));
+      (assertWorkshopUnchanged as jest.Mock).mockImplementationOnce(() => {
+        throw new ConflictException('đổi xưởng');
+      });
+
+      await expect(service.confirm('9', ['u'], 'kho-1', null, 'k-ck6')).rejects.toThrow(
+        ConflictException,
+      );
+
+      const piIds = (lockPisForIssue as jest.Mock).mock.calls[0] as [unknown, bigint[]];
+      expect(piIds[1]).toContain(500n);
+      expect((workshopsOfPis as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+        steel.prepareIssue.mock.invocationCallOrder[0],
+      );
+      expect(assertWorkshopUnchanged).toHaveBeenCalledWith(locked, 1n);
+      expect(steel.createInTx).not.toHaveBeenCalled();
+      expect(prisma.issueSlip.update).not.toHaveBeenCalled();
     });
 
     describe('quét nhắc việc sớm sau khi xuất sắt', () => {

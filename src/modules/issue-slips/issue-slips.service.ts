@@ -58,6 +58,11 @@ import {
 } from '../steel-issues/steel-issues.service';
 import { CreateIssueSlipDto, IssueSlipLineDto, ListIssueSlipsQueryDto } from './dto/issue-slip.dto';
 import { allocateSlipCode } from './slip-code.util';
+import {
+  assertWorkshopUnchanged,
+  lockPisForIssue,
+  workshopsOfPis,
+} from '../../common/utils/pi-workshop-lock.util';
 
 const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
 const STEEL_FAMILY = 'phoi-son-han';
@@ -566,6 +571,10 @@ export class IssueSlipsService {
     }
     const prepared: PreparedLine[] = [];
     const slipWarehouse = { id: slip.warehouseId, code: slip.warehouse.code };
+    // Rà soát 14/11 CK6: chụp xưởng của các lệnh TRƯỚC khi tra kho từng dòng; trong transaction khoá dòng lệnh (chung với đổi
+    // xưởng) rồi so lại - đổi xưởng chen giữa thì 409, không xuất ở kho xưởng cũ.
+    const piIds = await this.piIdsOfLines(slip.lines);
+    const workshopsAtPrepare = await workshopsOfPis(this.prisma, piIds);
     for (const line of slip.lines)
       prepared.push(await this.prepareLine(line, scope, slipWarehouse, slip.weavingPointId));
     // Thứ tự ghi cố định theo vật tư/mảnh rồi dòng - 2 phiếu chạm cùng hàng khoá cùng thứ tự, không
@@ -585,6 +594,13 @@ export class IssueSlipsService {
         if (row?.status !== IssueSlipStatus.DRAFT) {
           throw new ConflictException(
             `Phiếu ${slip.code} vừa được xuất hoặc huỷ ở nơi khác - tải lại trang`,
+          );
+        }
+        const lockedPis = await lockPisForIssue(tx, piIds);
+        for (const id of piIds) {
+          assertWorkshopUnchanged(
+            lockedPis.get(id.toString()),
+            workshopsAtPrepare.get(id.toString()) ?? null,
           );
         }
         const steel: SteelIssueRow[] = [];
@@ -1117,6 +1133,33 @@ export class IssueSlipsService {
     if (scope && !isFamilyScope(scope, STEEL_FAMILY)) {
       throw new ForbiddenException(`Bạn phụ trách kho '${scope}', không xuất sắt được`);
     }
+  }
+
+  /** Các lệnh (PI) mà dòng phiếu xuất cho: dòng sắt / công thức ghi thẳng PI, dòng theo lệnh SX suy qua SKU. Dòng dùng chung không có. */
+  private async piIdsOfLines(
+    lines: { productionInvoiceId: bigint | null; productionOrderId: bigint | null }[],
+  ): Promise<bigint[]> {
+    const ids = new Set<string>();
+    for (const l of lines)
+      if (l.productionInvoiceId != null) ids.add(l.productionInvoiceId.toString());
+    const orderIds = [
+      ...new Set(
+        lines
+          .filter((l) => l.productionOrderId != null)
+          .map((l) => l.productionOrderId!.toString()),
+      ),
+    ].map((s) => BigInt(s));
+    if (orderIds.length > 0) {
+      const orders = await this.prisma.productionOrder.findMany({
+        where: { id: { in: orderIds } },
+        select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+      });
+      for (const o of orders) {
+        const pi = o.productionInvoiceItem.productionInvoiceId;
+        if (pi != null) ids.add(pi.toString());
+      }
+    }
+    return [...ids].map((s) => BigInt(s));
   }
 
   private assertSlipScope(slip: SlipRow, scope: string | null): void {
