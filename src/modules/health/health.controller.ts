@@ -7,7 +7,7 @@ import { PrismaHealthIndicator } from './prisma-health.indicator';
 
 @ApiTags('Health')
 @Controller('health')
-@SkipThrottle()
+@SkipThrottle({ default: true, perIp: true })
 export class HealthController {
   constructor(
     private readonly health: HealthCheckService,

@@ -1,11 +1,17 @@
 import { ClassSerializerInterceptor, MiddlewareConsumer, Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { ClsModule, ClsMiddleware } from 'nestjs-cls';
 import { Request } from 'express';
 import configuration, { AppConfig } from './config/configuration';
+import {
+  accountThrottleTracker,
+  PER_IP_THROTTLER,
+  throttleIp,
+} from './common/throttle/throttle-tracker.util';
 import { envValidationSchema } from './config/env.validation';
 import { createPinoLoggerOptions } from './logger/pino-logger.config';
 import { resolveCorrelationId } from './common/utils/correlation-id.util';
@@ -96,14 +102,36 @@ import { RealtimeModule } from './realtime/realtime.module';
     }),
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService<AppConfig, true>) => ({
-        throttlers: [
-          {
-            ttl: configService.get('throttle.ttl', { infer: true }) * 1000,
-            limit: configService.get('throttle.limit', { infer: true }),
-          },
-        ],
-      }),
+      useFactory: (configService: ConfigService<AppConfig, true>) => {
+        // B3 17/11: đếm theo NGƯỜI (cả nhà máy chung 1 IP) + 1 trần chung theo IP - xem throttle-tracker.util.ts.
+        const ttl = configService.get('throttle.ttl', { infer: true }) * 1000;
+        const jwt = new JwtService();
+        const secret = configService.get('jwt.accessSecret', { infer: true });
+        const verifyAccessToken = (token: string): string | null => {
+          try {
+            const payload = jwt.verify<{ sub?: unknown }>(token, { secret });
+            return typeof payload.sub === 'string' ? payload.sub : null;
+          } catch {
+            return null;
+          }
+        };
+        return {
+          throttlers: [
+            {
+              name: 'default',
+              ttl,
+              limit: configService.get('throttle.limit', { infer: true }),
+              getTracker: (req) => accountThrottleTracker(req, verifyAccessToken),
+            },
+            {
+              name: PER_IP_THROTTLER,
+              ttl,
+              limit: configService.get('throttle.ipLimit', { infer: true }),
+              getTracker: (req) => throttleIp(req),
+            },
+          ],
+        };
+      },
     }),
     PrismaModule,
     WorkshopScopeModule,

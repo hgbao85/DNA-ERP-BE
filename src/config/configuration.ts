@@ -16,6 +16,8 @@ export interface AppConfig {
   throttle: {
     ttl: number;
     limit: number;
+    /** Trần chung theo IP (cả nhà máy chung 1 IP) - B3 17/11. Bộ đếm `limit` ở trên giờ đếm theo người. */
+    ipLimit: number;
   };
   logLevel: string;
   /** Bật header `Server-Timing` (đo total/db/solver mỗi request). Mặc định bật. */
@@ -69,6 +71,7 @@ export default (): AppConfig => ({
   throttle: {
     ttl: parseInt(process.env.THROTTLE_TTL ?? '60', 10),
     limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
+    ipLimit: parseInt(process.env.THROTTLE_IP_LIMIT ?? '3000', 10),
   },
   logLevel: process.env.LOG_LEVEL ?? 'info',
   serverTiming: {
