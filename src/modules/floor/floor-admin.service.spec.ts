@@ -44,6 +44,8 @@ describe('FloorAdminService', () => {
     productionInvoice: { findUnique: jest.Mock; findMany: jest.Mock };
     productionOrder: { findMany: jest.Mock; count: jest.Mock };
     productionBatch: { groupBy: jest.Mock };
+    cutBundle: { count: jest.Mock };
+    stepBatch: { findMany: jest.Mock };
     $transaction: jest.Mock;
   };
   let steelIssues: { getPhoiProgressBatch: jest.Mock };
@@ -114,6 +116,8 @@ describe('FloorAdminService', () => {
       productionInvoice: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       productionOrder: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn() },
       productionBatch: { groupBy: jest.fn().mockResolvedValue([]) },
+      cutBundle: { count: jest.fn().mockResolvedValue(0) },
+      stepBatch: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
     };
     steelIssues = { getPhoiProgressBatch: jest.fn().mockResolvedValue({ 45: [] }) };
@@ -1028,6 +1032,29 @@ describe('FloorAdminService', () => {
       const [e] = await service.listQueue('q', 'PHOI');
 
       expect(e.progress).toBeNull();
+    });
+  });
+
+  describe('summary (số đỏ menu "Sản lượng xưởng")', () => {
+    it('nhóm công đoạn phụ tách theo người báo (reportedById) như danh sách thẻ, giữ các khoá cũ', async () => {
+      prisma.cutBundle.count.mockResolvedValue(1);
+      prisma.stepBatch.findMany.mockResolvedValue([{ id: 1n }, { id: 2n }]);
+
+      const r = await service.summary();
+
+      expect(prisma.stepBatch.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { stepBundleId: null },
+          distinct: [
+            'productionInvoiceId',
+            'materialId',
+            'step',
+            'productionOrderId',
+            'reportedById',
+          ],
+        }),
+      );
+      expect(r.PHOI.open).toBe(3);
     });
   });
 

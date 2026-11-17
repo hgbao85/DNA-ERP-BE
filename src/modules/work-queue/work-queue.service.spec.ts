@@ -32,6 +32,7 @@ describe('WorkQueueService', () => {
     cutBundle: { count: jest.Mock };
     stepBundle: { count: jest.Mock };
     pieceStepBundle: { count: jest.Mock };
+    materialYieldStepBundle: { count: jest.Mock };
     productionBatch: { count: jest.Mock };
     deadlineChangeBatch: { count: jest.Mock }; // Phần A – Đợt 9
   };
@@ -53,6 +54,7 @@ describe('WorkQueueService', () => {
       cutBundle: { count: jest.fn().mockResolvedValue(0) },
       stepBundle: { count: jest.fn().mockResolvedValue(0) },
       pieceStepBundle: { count: jest.fn().mockResolvedValue(0) },
+      materialYieldStepBundle: { count: jest.fn().mockResolvedValue(0) },
       productionBatch: { count: jest.fn().mockResolvedValue(0) },
       deadlineChangeBatch: { count: jest.fn().mockResolvedValue(0) },
     };
@@ -236,10 +238,11 @@ describe('WorkQueueService', () => {
     expect(prisma.steelIssue.count).not.toHaveBeenCalled();
   });
 
-  it('KCS (KCS_STAFF) - gộp CutBundle+StepBundle+PieceStepBundle+ProductionBatch(PHOI) vào kcsPhoi, tách riêng kcsHan/kcsSon theo stage', async () => {
+  it('KCS (KCS_STAFF) - gộp CutBundle+StepBundle+PieceStepBundle+MaterialYieldStepBundle+ProductionBatch(PHOI) vào kcsPhoi, tách riêng kcsHan/kcsSon theo stage', async () => {
     prisma.cutBundle.count.mockResolvedValue(1);
     prisma.stepBundle.count.mockResolvedValue(1);
     prisma.pieceStepBundle.count.mockResolvedValue(1);
+    prisma.materialYieldStepBundle.count.mockResolvedValue(3);
     prisma.productionBatch.count.mockImplementation(({ where }: { where: { stage: string } }) => {
       if (where.stage === 'PHOI') return Promise.resolve(2);
       if (where.stage === 'HAN') return Promise.resolve(5);
@@ -249,7 +252,10 @@ describe('WorkQueueService', () => {
 
     const result = await service.getWorkQueue({ roles: ['KCS_STAFF'], warehouseScope: null });
 
-    expect(result.counts.kcsPhoi).toBe(5); // 1+1+1+2
+    expect(result.counts.kcsPhoi).toBe(8); // 1+1+1+3+2
+    expect(prisma.materialYieldStepBundle.count).toHaveBeenCalledWith({
+      where: { status: 'AWAITING_QC' },
+    });
     expect(result.counts.kcsHan).toBe(5);
     expect(result.counts.kcsSon).toBe(6);
   });
