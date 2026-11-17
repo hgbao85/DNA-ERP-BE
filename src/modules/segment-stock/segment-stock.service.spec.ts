@@ -32,6 +32,14 @@ function makeEnv() {
       surplusQty: number;
     }[],
     ledgerDup: false,
+    /** C4: dư của lệnh còn ở kho Phôi cũ sau đổi xưởng. */
+    leftovers: [] as {
+      id: bigint;
+      warehouseId: bigint;
+      segmentSpecId: bigint;
+      segmentSteps: string;
+      surplusQty: number;
+    }[],
   };
   const tx = {
     $executeRaw: jest.fn((_s: TemplateStringsArray, key: string) => {
@@ -92,6 +100,19 @@ function makeEnv() {
       findUnique: jest.fn((): Promise<unknown> => Promise.resolve(null)),
       update: jest.fn(() => Promise.resolve({})),
     },
+    segmentProductionLeftover: {
+      findMany: jest.fn(() =>
+        Promise.resolve(
+          state.leftovers.map((l) => ({
+            ...l,
+            productionInvoiceId: PI,
+            surplusQty: dec(l.surplusQty),
+          })),
+        ),
+      ),
+      update: jest.fn(() => Promise.resolve({})),
+      delete: jest.fn(() => Promise.resolve({})),
+    },
     warehouse: { findUniqueOrThrow: jest.fn(() => Promise.resolve({ id: PRODUCTION_WH })) },
     stockLedger: {
       findUnique: jest.fn(() => Promise.resolve(state.ledgerDup ? { id: 1n } : null)),
@@ -106,6 +127,7 @@ function makeEnv() {
     segmentSpec: { findMany: jest.fn() },
     productionInvoice: { findUnique: jest.fn() },
     segmentProduction: { findMany: jest.fn() },
+    segmentProductionLeftover: { findMany: jest.fn(() => Promise.resolve([])) },
     segmentReservationLog: { findMany: jest.fn() },
   };
   const service = new SegmentStockService(
@@ -131,6 +153,80 @@ describe('SegmentStockService', () => {
         actorId: 'u1',
         reason: 'QC_CUT_BUNDLE:12',
       });
+
+    describe('C4 17/11: dư ở kho Phôi cũ sau đổi xưởng', () => {
+      const OLD_WH = 7n;
+      const setup = () => {
+        const env = makeEnv();
+        // Dòng chính đã trỏ kho mới (WH), dư 0; 7 đoạn dư ở lại kho cũ.
+        env.state.productions = [
+          { segmentSpecId: SPEC, segmentSteps: '', warehouseId: WH, heldQty: 20, surplusQty: 0 },
+        ];
+        env.state.leftovers = [
+          { id: 9n, warehouseId: OLD_WH, segmentSpecId: SPEC, segmentSteps: '', surplusQty: 7 },
+        ];
+        env.state.q = 7;
+        return env;
+      };
+
+      it('tổng dư giảm 7 -> 4: trừ 3 ở KHO CŨ (không đụng kho mới), dòng kho cũ còn 4', async () => {
+        const env = setup();
+        const result = await run(env, [target(20, 4)]);
+
+        expect(env.ledger.postEntry).toHaveBeenCalledTimes(1);
+        expect(env.ledger.postEntry).toHaveBeenCalledWith(
+          expect.objectContaining({
+            fromWarehouseId: OLD_WH,
+            toWarehouseId: PRODUCTION_WH,
+            qty: 3,
+            refType: StockLedgerRefType.SEGMENT_PRODUCE,
+          }),
+          env.tx,
+        );
+        expect(env.tx.segmentProductionLeftover.update).toHaveBeenCalledWith({
+          where: { id: 9n },
+          data: { surplusQty: 4 },
+        });
+        // Dòng chính (kho mới) không có thay đổi: đích dư của nó = 4 - 4 giữ ở kho cũ = 0.
+        expect(result.changes).toHaveLength(1);
+        expect(result.changes[0]).toMatchObject({ warehouseId: OLD_WH, ledgerQty: -3 });
+      });
+
+      it('tổng dư giảm về 0: trừ hết ở kho cũ, xoá dòng kho cũ', async () => {
+        const env = setup();
+        await run(env, [target(20, 0)]);
+        expect(env.tx.segmentProductionLeftover.delete).toHaveBeenCalledWith({ where: { id: 9n } });
+      });
+
+      it('tổng dư tăng 7 -> 10: dòng kho cũ giữ nguyên 7, phần tăng 3 vào kho MỚI', async () => {
+        const env = setup();
+        env.state.q = 0;
+        const result = await run(env, [target(20, 10)]);
+
+        expect(env.tx.segmentProductionLeftover.update).not.toHaveBeenCalled();
+        expect(env.ledger.postEntry).toHaveBeenCalledTimes(1);
+        expect(env.ledger.postEntry).toHaveBeenCalledWith(
+          expect.objectContaining({ fromWarehouseId: PRODUCTION_WH, toWarehouseId: WH, qty: 3 }),
+          env.tx,
+        );
+        expect(result.changes[0]).toMatchObject({
+          warehouseId: WH,
+          target: { heldQty: 20, surplusQty: 3 },
+          after: { heldQty: 20, surplusQty: 3 },
+        });
+      });
+
+      it('khoá trước mọi ô (kho cũ + kho mới) theo thứ tự cố định trước khi đọc tồn', async () => {
+        const env = setup();
+        await run(env, [target(20, 4)]);
+        const firstRead = env.calls.indexOf('read');
+        expect(env.calls.slice(0, firstRead)).toEqual([
+          'lock:segment-stock:7:5:',
+          'lock:segment-stock:10:5:',
+          'lock:segment-stock:7:5:',
+        ]);
+      });
+    });
 
     it('(a) mới: giữ 20 + dư 5, tồn trống -> ghi sổ 25, giữ +20, after (20, 5)', async () => {
       const env = makeEnv();

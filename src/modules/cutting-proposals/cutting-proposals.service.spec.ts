@@ -2460,6 +2460,33 @@ describe('CuttingProposalsService', () => {
       expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
     });
 
+    it('C1 16/11: SKU khác cùng PI vừa chốt cỡ cây khác đúng lúc này (lần kiểm ngoài chưa thấy, kiểm lại dưới khoá PI thấy) -> 409, không ghi gì', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [{ materialId: 30n, feasible: true, totalBars: 20, bestStockLengthMm: 6200 }],
+      });
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+      ]);
+      prisma.productionOrder.findUniqueOrThrow.mockResolvedValue({
+        productionInvoiceItem: { productionInvoiceId: 50n },
+      });
+      prisma.cuttingProposalLine.findMany
+        // lần kiểm ngoài transaction: chưa SKU nào khác chốt
+        .mockResolvedValueOnce([{ materialId: 30n, bestStockLengthMm: 6200 }])
+        .mockResolvedValueOnce([])
+        // kiểm lại dưới khoá PI: SKU kia vừa commit 5900mm
+        .mockResolvedValueOnce([{ materialId: 30n, bestStockLengthMm: 6200 }])
+        .mockResolvedValueOnce([{ materialId: 30n, bestStockLengthMm: 5900 }]);
+
+      await expect(service.approve('2', 'user-1')).rejects.toThrow(/chốt cây dài/);
+      expect(prisma.$executeRaw).toHaveBeenCalled(); // đã lấy khoá PI
+      expect(prisma.cuttingProposal.update).not.toHaveBeenCalled();
+      expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+    });
+
     it('supersedes sibling proposals and marks this one APPROVED', async () => {
       prisma.cuttingProposal.findUnique.mockResolvedValue({
         id: 2n,
@@ -2942,6 +2969,10 @@ describe('CuttingProposalsService', () => {
       expect(stockQuantCalls.length).toBeGreaterThan(0);
       for (const [, ...values] of stockQuantCalls) {
         expect(values).toContain(5900);
+      }
+      // C2 16/11: chỉ đọc ô quy cách rỗng (1 dòng duy nhất), không lấy bừa 1 trong nhiều dòng khác quy cách.
+      for (const [strings] of stockQuantCalls) {
+        expect(strings.join('')).toContain(`"spec" = ''`);
       }
       expect(stockReservationsService.getAvailableQty).toHaveBeenCalledWith(
         expect.anything(),

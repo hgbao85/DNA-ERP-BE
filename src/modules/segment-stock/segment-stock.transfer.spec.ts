@@ -16,6 +16,10 @@ function makeEnv(opts: {
   consumed: number;
   oldQty: number | null;
   destRow?: boolean;
+  /** Dư của dòng phía cộng (SegmentProduction) đang ở kho cũ. */
+  surplus?: number;
+  /** Dòng dư đã để lại ở KHO MỚI từ lần đổi xưởng trước (đổi về lại). */
+  backLeftover?: number;
 }) {
   const res = {
     id: 1n,
@@ -30,7 +34,29 @@ function makeEnv(opts: {
       locks.push(key);
       return Promise.resolve(1);
     }),
-    segmentProduction: { updateMany: jest.fn(() => Promise.resolve({ count: 1 })) },
+    segmentProduction: {
+      findMany: jest.fn(() =>
+        Promise.resolve([
+          {
+            id: 3n,
+            productionInvoiceId: PI,
+            segmentSpecId: SPEC,
+            segmentSteps: 'DAP',
+            warehouseId: OLD,
+            heldQty: dec(30),
+            surplusQty: dec(opts.surplus ?? 0),
+          },
+        ]),
+      ),
+      update: jest.fn(() => Promise.resolve({})),
+    },
+    segmentProductionLeftover: {
+      upsert: jest.fn(() => Promise.resolve({})),
+      findUnique: jest.fn(() =>
+        Promise.resolve(opts.backLeftover ? { id: 8n, surplusQty: dec(opts.backLeftover) } : null),
+      ),
+      delete: jest.fn(() => Promise.resolve({})),
+    },
     segmentReservation: {
       findMany: jest.fn(() =>
         Promise.resolve([
@@ -76,10 +102,11 @@ describe('SegmentStockService.transferOrderHoldings', () => {
     const { tx, ledger, run, locks } = makeEnv({ reserved: 30, consumed: 12, oldQty: 25 });
     const out = await run();
     expect(out).toEqual({ movedQty: 18, droppedQty: 0, reservationCount: 1 });
-    expect(tx.segmentProduction.updateMany).toHaveBeenCalledWith({
-      where: { productionInvoiceId: PI, warehouseId: { not: NEW } },
-      data: { warehouseId: NEW },
+    expect(tx.segmentProduction.update).toHaveBeenCalledWith({
+      where: { id: 3n },
+      data: { warehouseId: NEW, surplusQty: 0 },
     });
+    expect(tx.segmentProductionLeftover.upsert).not.toHaveBeenCalled(); // không có dư
     // Rà soát 14/11 TĐ6: khoá lệnh (cùng khoá "tính lại") trước, rồi 2 ô theo thứ tự kho.
     expect(locks).toEqual([
       'segment-production:100',
@@ -141,5 +168,45 @@ describe('SegmentStockService.transferOrderHoldings', () => {
     const { ledger, run } = makeEnv({ reserved: 10, consumed: 10, oldQty: 30 });
     expect(await run()).toEqual({ movedQty: 0, droppedQty: 0, reservationCount: 0 });
     expect(ledger.postEntry).not.toHaveBeenCalled();
+  });
+
+  it('C4 17/11: dư 7 của lệnh ở lại kho cũ -> ghi vào dòng dư kho cũ, dòng chính sang kho mới với dư 0; không chuyển sổ phần dư', async () => {
+    const { tx, ledger, run } = makeEnv({ reserved: 30, consumed: 12, oldQty: 25, surplus: 7 });
+    await run();
+    expect(tx.segmentProductionLeftover.upsert).toHaveBeenCalledWith({
+      where: {
+        productionInvoiceId_segmentSpecId_segmentSteps_warehouseId: {
+          productionInvoiceId: PI,
+          segmentSpecId: SPEC,
+          segmentSteps: 'DAP',
+          warehouseId: OLD,
+        },
+      },
+      create: expect.objectContaining({ warehouseId: OLD, surplusQty: 7 }),
+      update: { surplusQty: { increment: 7 } },
+    });
+    expect(tx.segmentProduction.update).toHaveBeenCalledWith({
+      where: { id: 3n },
+      data: { warehouseId: NEW, surplusQty: 0 },
+    });
+    // Sổ kho chỉ chuyển phần còn giữ (18), không chuyển dư.
+    expect(ledger.postEntry).toHaveBeenCalledTimes(1);
+    expect(ledger.postEntry).toHaveBeenCalledWith(expect.objectContaining({ qty: 18 }), tx);
+  });
+
+  it('C4 17/11: đổi về lại kho đã từng làm - dư để lại ở kho đó gộp ngược vào dòng chính, xoá dòng dư', async () => {
+    const { tx, run } = makeEnv({
+      reserved: 30,
+      consumed: 30,
+      oldQty: 25,
+      surplus: 0,
+      backLeftover: 5,
+    });
+    await run();
+    expect(tx.segmentProductionLeftover.delete).toHaveBeenCalledWith({ where: { id: 8n } });
+    expect(tx.segmentProduction.update).toHaveBeenCalledWith({
+      where: { id: 3n },
+      data: { warehouseId: NEW, surplusQty: 5 },
+    });
   });
 });

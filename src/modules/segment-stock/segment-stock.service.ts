@@ -281,6 +281,81 @@ export class SegmentStockService {
     const changes: SegmentSyncChange[] = [];
     let productionWarehouse: bigint | null = null;
 
+    // C4 (17/11): dư của lệnh còn ở kho Phôi CŨ (đổi xưởng). Tổng dư GIẢM thì trừ ở kho cũ trước (đúng nơi đoạn đang nằm), phần
+    // dư còn ở kho cũ được trừ khỏi đích dư của dòng chính - dòng chính (kho mới) chỉ giữ phần dư ngoài phần đó.
+    const leftovers = await tx.segmentProductionLeftover.findMany({
+      where: { productionInvoiceId },
+    });
+    if (leftovers.length > 0) {
+      // Khoá trước MỌI ô sắp đụng (kho cũ + kho của dòng chính) theo cùng 1 thứ tự cố định - không khoá chéo với lượt khác.
+      // Khoá advisory trong transaction lấy lại được nhiều lần nên lockAndReadCell bên dưới không tự chờ mình.
+      const cells = [...leftovers, ...plan].sort(compareCells);
+      for (const c of cells) {
+        await lockBusinessKey(
+          tx,
+          segmentBucketLockKey(c.warehouseId, c.segmentSpecId, c.segmentSteps),
+        );
+      }
+      const keptByKey = new Map<string, number>();
+      for (const lo of [...leftovers].sort(compareCells)) {
+        const key = segmentCodeKey(lo.segmentSpecId, lo.segmentSteps);
+        const targetSurplus = targetByKey.get(key)?.s ?? 0;
+        const keptSoFar = keptByKey.get(key) ?? 0;
+        const f0 = lo.surplusQty.toNumber();
+        // Phần dư kho cũ còn được giữ = phần đích dư chưa được các dòng kho cũ trước đó "chiếm".
+        const wantKeep = round4(Math.max(0, Math.min(f0, targetSurplus - keptSoFar)));
+        let applied = 0;
+        if (f0 - wantKeep > EPS) {
+          const { state } = await this.lockAndReadCell(tx, lo);
+          applied = round4(Math.min(f0 - wantKeep, state.surplus, Math.max(0, state.q)));
+          if (applied > EPS) {
+            productionWarehouse ??= await this.productionWarehouseId(tx);
+            await this.stockLedgerService.postEntry(
+              {
+                fromWarehouseId: lo.warehouseId,
+                toWarehouseId: productionWarehouse,
+                segmentSpecId: lo.segmentSpecId,
+                segmentSteps: lo.segmentSteps,
+                qty: applied,
+                refType: StockLedgerRefType.SEGMENT_PRODUCE,
+                refId: productionInvoiceId.toString(),
+                createdById: input.actorId ?? undefined,
+                note: `Phía cộng tồn đoạn (${input.reason}): dư ở kho Phôi cũ (sau đổi xưởng) -${applied}`,
+              },
+              tx,
+            );
+          }
+        }
+        const f2 = round4(f0 - applied);
+        keptByKey.set(key, round4(keptSoFar + f2));
+        if (applied > EPS) {
+          if (f2 > EPS) {
+            await tx.segmentProductionLeftover.update({
+              where: { id: lo.id },
+              data: { surplusQty: f2 },
+            });
+          } else {
+            await tx.segmentProductionLeftover.delete({ where: { id: lo.id } });
+          }
+          changes.push({
+            warehouseId: lo.warehouseId,
+            segmentSpecId: lo.segmentSpecId,
+            segmentSteps: lo.segmentSteps,
+            before: { heldQty: 0, surplusQty: f0 },
+            target: { heldQty: 0, surplusQty: wantKeep },
+            after: { heldQty: 0, surplusQty: f2 },
+            ledgerQty: -applied,
+            unappliedHeldQty: 0,
+            unappliedSurplusQty: round4(wantKeep - f2),
+          });
+        }
+      }
+      for (const p of plan) {
+        const kept = keptByKey.get(segmentCodeKey(p.segmentSpecId, p.segmentSteps)) ?? 0;
+        p.s1 = round4(Math.max(0, p.s1 - kept));
+      }
+    }
+
     for (const p of plan) {
       if (Math.abs(p.h1 - p.h0) < EPS && Math.abs(p.s1 - p.s0) < EPS) continue;
       const cell: CellRef = p;
@@ -599,10 +674,56 @@ export class SegmentStockService {
     // Rà soát 14/11 TĐ6: khoá lệnh trước mọi khoá ô (cùng thứ tự "tính lại") - không thì lượt tính lại đọc dòng trước khi đổi xưởng
     // ghi warehouseId cũ đè lại.
     await lockBusinessKey(tx, segmentProductionLockKey(productionInvoiceId));
-    await tx.segmentProduction.updateMany({
-      where: { productionInvoiceId, warehouseId: { not: toWarehouseId } },
-      data: { warehouseId: toWarehouseId },
-    });
+    // C4 (17/11): dòng phía cộng trỏ sang kho mới nhưng phần DƯ ở lại kho cũ -> tách vào SegmentProductionLeftover (đúng kho
+    // cũ), dòng chính về dư 0. Đổi về lại đúng kho đã từng làm: phần dư để lại ở kho đó gộp ngược vào dòng chính.
+    const productions = await tx.segmentProduction.findMany({ where: { productionInvoiceId } });
+    for (const p of productions) {
+      let surplus = p.surplusQty.toNumber();
+      const moving = p.warehouseId !== toWarehouseId;
+      if (moving && surplus > EPS) {
+        await tx.segmentProductionLeftover.upsert({
+          where: {
+            productionInvoiceId_segmentSpecId_segmentSteps_warehouseId: {
+              productionInvoiceId,
+              segmentSpecId: p.segmentSpecId,
+              segmentSteps: p.segmentSteps,
+              warehouseId: p.warehouseId,
+            },
+          },
+          create: {
+            productionInvoiceId,
+            segmentSpecId: p.segmentSpecId,
+            segmentSteps: p.segmentSteps,
+            warehouseId: p.warehouseId,
+            surplusQty: surplus,
+          },
+          update: { surplusQty: { increment: surplus } },
+        });
+        surplus = 0;
+      }
+      const back = moving
+        ? await tx.segmentProductionLeftover.findUnique({
+            where: {
+              productionInvoiceId_segmentSpecId_segmentSteps_warehouseId: {
+                productionInvoiceId,
+                segmentSpecId: p.segmentSpecId,
+                segmentSteps: p.segmentSteps,
+                warehouseId: toWarehouseId,
+              },
+            },
+          })
+        : null;
+      if (back) {
+        surplus = round4(surplus + back.surplusQty.toNumber());
+        await tx.segmentProductionLeftover.delete({ where: { id: back.id } });
+      }
+      if (moving) {
+        await tx.segmentProduction.update({
+          where: { id: p.id },
+          data: { warehouseId: toWarehouseId, surplusQty: surplus },
+        });
+      }
+    }
     const rows = await tx.segmentReservation.findMany({
       where: { productionInvoiceId, warehouseId: { not: toWarehouseId } },
       select: {
@@ -868,9 +989,11 @@ export class SegmentStockService {
     if (!invoice) {
       throw new NotFoundException(`Không tìm thấy lệnh sản xuất ${productionInvoiceId}`);
     }
-    const [reservations, productions, logs] = await Promise.all([
+    const [reservations, productions, leftovers, logs] = await Promise.all([
       this.prisma.segmentReservation.findMany({ where: { productionInvoiceId } }),
       this.prisma.segmentProduction.findMany({ where: { productionInvoiceId } }),
+      // C4: phần dư ở kho Phôi cũ sau đổi xưởng - hiện ở đúng ô kho cũ.
+      this.prisma.segmentProductionLeftover.findMany({ where: { productionInvoiceId } }),
       this.prisma.segmentReservationLog.findMany({
         where: { reservation: { productionInvoiceId } },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -914,6 +1037,9 @@ export class SegmentStockService {
       const row = rowOf(p);
       row.producedHeld += p.heldQty.toNumber();
       row.producedSurplus += p.surplusQty.toNumber();
+    }
+    for (const lo of leftovers) {
+      rowOf(lo).producedSurplus += lo.surplusQty.toNumber();
     }
 
     const rowList = [...byKey.values()];
