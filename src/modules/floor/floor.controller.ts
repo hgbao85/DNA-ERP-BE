@@ -142,8 +142,8 @@ export class FloorController {
   @Get('stats')
   @RequirePermissions(perm(PermissionAction.VIEW))
   @RequireRole(QLSX, BUSINESS_ROLES.BOSS, DEFAULT_ROLES.ADMIN)
-  stats(@Query() query: FloorStatsQueryDto) {
-    return this.statsService.getStats(query);
+  stats(@Query() query: FloorStatsQueryDto, @CurrentUser('id') userId: string) {
+    return this.statsService.getStats(query, userId);
   }
 
   /**
@@ -193,29 +193,33 @@ export class FloorController {
   @Get('workstations')
   @RequirePermissions(perm(PermissionAction.VIEW))
   @RequireRole(QLSX)
-  listWorkstations() {
-    return this.admin.listWorkstations();
+  listWorkstations(@CurrentUser('id') userId: string) {
+    return this.admin.listWorkstations(userId);
   }
 
   @Post('workstations')
   @RequirePermissions(perm(PermissionAction.CREATE))
   @RequireRole(QLSX)
-  createWorkstation(@Body() dto: CreateWorkstationDto) {
-    return this.admin.createWorkstation(dto);
+  createWorkstation(@Body() dto: CreateWorkstationDto, @CurrentUser('id') userId: string) {
+    return this.admin.createWorkstation(dto, userId);
   }
 
   @Patch('workstations/:id')
   @RequirePermissions(perm(PermissionAction.UPDATE))
   @RequireRole(QLSX)
-  updateWorkstation(@Param('id') id: string, @Body() dto: UpdateWorkstationDto) {
-    return this.admin.updateWorkstation(id, dto);
+  updateWorkstation(
+    @Param('id') id: string,
+    @Body() dto: UpdateWorkstationDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.admin.updateWorkstation(id, dto, userId);
   }
 
   @Post('workstations/:id/regenerate-token')
   @RequirePermissions(perm(PermissionAction.UPDATE))
   @RequireRole(QLSX)
-  regenerateToken(@Param('id') id: string) {
-    return this.admin.regenerateWorkstationToken(id);
+  regenerateToken(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.admin.regenerateWorkstationToken(id, userId);
   }
 
   // ─── QLSX: tài khoản công nhân ──────────────────────────────────────────────
@@ -223,36 +227,40 @@ export class FloorController {
   @Get('workers')
   @RequirePermissions(perm(PermissionAction.VIEW))
   @RequireRole(QLSX)
-  listWorkers() {
-    return this.admin.listWorkers();
+  listWorkers(@CurrentUser('id') userId: string) {
+    return this.admin.listWorkers(userId);
   }
 
   @Post('workers')
   @RequirePermissions(perm(PermissionAction.CREATE))
   @RequireRole(QLSX)
-  createWorker(@Body() dto: CreateFloorWorkerDto) {
-    return this.admin.createWorker(dto);
+  createWorker(@Body() dto: CreateFloorWorkerDto, @CurrentUser('id') userId: string) {
+    return this.admin.createWorker(dto, userId);
   }
 
   @Patch('workers/:id')
   @RequirePermissions(perm(PermissionAction.UPDATE))
   @RequireRole(QLSX)
-  updateWorker(@Param('id') id: string, @Body() dto: UpdateFloorWorkerDto) {
-    return this.admin.updateWorker(id, dto);
+  updateWorker(
+    @Param('id') id: string,
+    @Body() dto: UpdateFloorWorkerDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.admin.updateWorker(id, dto, userId);
   }
 
   @Post('workers/:id/reset-pin')
   @RequirePermissions(perm(PermissionAction.UPDATE))
   @RequireRole(QLSX)
-  resetWorkerPin(@Param('id') id: string) {
-    return this.admin.resetWorkerPin(id);
+  resetWorkerPin(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.admin.resetWorkerPin(id, userId);
   }
 
   @Post('workers/:id/unlock')
   @RequirePermissions(perm(PermissionAction.UPDATE))
   @RequireRole(QLSX)
-  unlockWorker(@Param('id') id: string) {
-    return this.admin.unlockWorker(id);
+  unlockWorker(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.admin.unlockWorker(id, userId);
   }
 
   // ─── QLSX: hàng đợi PI theo tổ ──────────────────────────────────────────────

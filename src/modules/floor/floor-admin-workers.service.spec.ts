@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { MFG_FLOOR_WAREHOUSE_SCOPE } from '../../common/constants/role-permissions.constant';
 import { Prisma } from '../../generated/prisma/client';
@@ -65,7 +65,7 @@ describe('FloorAdminService - tài khoản công nhân', () => {
       prisma as unknown as PrismaServiceType,
       {} as SteelIssuesService,
       {} as ProductionBatchesService,
-      {} as WorkshopScopeService,
+      new WorkshopScopeService(prisma as unknown as PrismaServiceType),
     );
   });
 
@@ -237,7 +237,7 @@ describe('FloorAdminService - tài khoản công nhân', () => {
           deletedAt: null,
           roles: { some: { role: { name: BUSINESS_ROLES.FLOOR_WORKER } } },
         },
-        select: { id: true },
+        select: { id: true, workshopId: true },
       });
       expect(prisma.$transaction).not.toHaveBeenCalled();
       expect(prisma.user.update).not.toHaveBeenCalled();
@@ -245,4 +245,62 @@ describe('FloorAdminService - tài khoản công nhân', () => {
       expect(tx.refreshToken.updateMany).not.toHaveBeenCalled();
     },
   );
+
+  describe('X4 16/11: công nhân theo xưởng của QLSX', () => {
+    const scopedTo = (workshopId: bigint) =>
+      prisma.user.findUnique.mockImplementation((a: { where: { id?: string } }) =>
+        Promise.resolve(
+          a.where.id === 'qlsx-1'
+            ? { workshopId, workshop: { name: `Xưởng ${workshopId}`, paintsFor: [] } }
+            : null,
+        ),
+      );
+
+    it('danh sách: chỉ công nhân xưởng mình + chưa khai xưởng', async () => {
+      scopedTo(1n);
+      await service.listWorkers('qlsx-1');
+      expect(prisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- matcher của jest
+          where: expect.objectContaining({ OR: [{ workshopId: 1n }, { workshopId: null }] }),
+        }),
+      );
+    });
+
+    it('tạo: công nhân mới thuộc xưởng của QLSX; QLSX không gắn xưởng -> không xưởng như cũ', async () => {
+      scopedTo(1n);
+      await service.createWorker(
+        { username: 'phoi.b', firstName: 'B', lastName: 'C', stage: 'PHOI' },
+        'qlsx-1',
+      );
+      expect(firstCall(prisma.user.create).data.workshopId).toBe(1n);
+      prisma.user.create.mockClear();
+      await service.createWorker({
+        username: 'phoi.c',
+        firstName: 'B',
+        lastName: 'C',
+        stage: 'PHOI',
+      });
+      expect(firstCall(prisma.user.create).data.workshopId).toBeNull();
+    });
+
+    it.each([
+      ['sửa', (s: FloorAdminService) => s.updateWorker('u1', { isActive: false }, 'qlsx-1')],
+      ['đặt lại PIN', (s: FloorAdminService) => s.resetWorkerPin('u1', 'qlsx-1')],
+      ['mở khoá', (s: FloorAdminService) => s.unlockWorker('u1', 'qlsx-1')],
+    ])('%s công nhân xưởng khác -> 403, không ghi gì', async (_l, call) => {
+      scopedTo(1n);
+      prisma.user.findFirst.mockResolvedValue({ id: 'u1', workshopId: 2n });
+      await expect(call(service)).rejects.toThrow(ForbiddenException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('công nhân chưa khai xưởng: QLSX gắn xưởng vẫn mở khoá được', async () => {
+      scopedTo(1n);
+      prisma.user.findFirst.mockResolvedValue({ id: 'u1', workshopId: null });
+      await service.unlockWorker('u1', 'qlsx-1');
+      expect(prisma.user.update).toHaveBeenCalled();
+    });
+  });
 });

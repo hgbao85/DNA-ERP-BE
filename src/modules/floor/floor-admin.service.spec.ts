@@ -272,6 +272,7 @@ describe('FloorAdminService', () => {
     it('danh sách xếp theo tổ rồi mã máy', async () => {
       await service.listWorkstations();
       expect(prisma.workstation.findMany).toHaveBeenCalledWith({
+        where: {},
         orderBy: [{ stage: 'asc' }, { code: 'asc' }],
         include: { workshop: { select: { name: true } } },
       });
@@ -381,6 +382,63 @@ describe('FloorAdminService', () => {
       prisma.workstation.findUnique.mockResolvedValue(null);
       await expect(service.regenerateWorkstationToken('9')).rejects.toThrow(NotFoundException);
       expect(prisma.workstation.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('X4 16/11: máy theo xưởng của QLSX', () => {
+    const scopedTo = (workshopId: bigint) =>
+      prisma.user.findUnique.mockResolvedValue({
+        workshopId,
+        workshop: { name: `Xưởng ${workshopId}`, paintsFor: [] },
+      });
+
+    it('danh sách: QLSX gắn xưởng chỉ thấy máy xưởng mình + máy chưa khai xưởng', async () => {
+      scopedTo(1n);
+      await service.listWorkstations('qlsx-1');
+      expect(prisma.workstation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { OR: [{ workshopId: 1n }, { workshopId: null }] } }),
+      );
+    });
+
+    it('tạo: không chọn xưởng -> gán xưởng mình; chọn xưởng khác -> 403, không tạo', async () => {
+      scopedTo(1n);
+      const dto = { code: 'L9', name: 'x', stage: 'PHOI', kind: 'CUT' } as const;
+      await service.createWorkstation(dto, 'qlsx-1');
+      expect(prisma.workstation.create).toHaveBeenCalledWith(
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- matcher của jest
+        expect.objectContaining({ data: expect.objectContaining({ workshopId: 1n }) }),
+      );
+      prisma.workstation.create.mockClear();
+      await expect(
+        service.createWorkstation({ ...dto, workshopId: '5' }, 'qlsx-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.workstation.create).not.toHaveBeenCalled();
+    });
+
+    it('sửa / đổi mã QR máy của xưởng khác -> 403; bỏ xưởng của máy -> 403; không ghi gì', async () => {
+      scopedTo(1n);
+      prisma.workstation.findUnique.mockResolvedValue({ id: 1n, kind: 'CUT', workshopId: 2n });
+      await expect(service.updateWorkstation('1', { name: 'x' }, 'qlsx-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      await expect(service.regenerateWorkstationToken('1', 'qlsx-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      prisma.workstation.findUnique.mockResolvedValue({ id: 1n, kind: 'CUT', workshopId: 1n });
+      await expect(service.updateWorkstation('1', { workshopId: null }, 'qlsx-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      await expect(service.updateWorkstation('1', { workshopId: '5' }, 'qlsx-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(prisma.workstation.update).not.toHaveBeenCalled();
+    });
+
+    it('máy xưởng mình hoặc chưa khai xưởng: sửa được', async () => {
+      scopedTo(1n);
+      prisma.workstation.findUnique.mockResolvedValue({ id: 1n, kind: 'CUT', workshopId: null });
+      await service.updateWorkstation('1', { name: 'x' }, 'qlsx-1');
+      expect(prisma.workstation.update).toHaveBeenCalled();
     });
   });
 
