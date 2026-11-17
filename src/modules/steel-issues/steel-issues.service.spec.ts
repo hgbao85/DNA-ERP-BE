@@ -2289,6 +2289,41 @@ describe('SteelIssuesService', () => {
       expect(prisma.stepBatch.create).not.toHaveBeenCalled();
     });
 
+    // 17/11/2026: câu lỗi nói nhãn tiếng Việt (không in mã UON) và nói rõ việc phải làm.
+    it('báo vượt số đã cắt: câu lỗi có "Uốn" (không có "UON") và bảo báo cắt thêm đúng số đoạn', async () => {
+      prisma.stepBatchSegment.findMany.mockResolvedValue([{ segmentSpecId: 30n, qty: 8 }]);
+      const call = service.recordStepBatch(
+        '1',
+        { ...dto, segments: [{ segmentSpecId: '30', qty: 5 }] },
+        'user-1',
+      );
+      await expect(call).rejects.toThrow(
+        /đã báo Uốn 8 đoạn \(kể cả đoạn KCS chấm lỗi\) - không thể báo thêm 5/,
+      );
+      await expect(call).rejects.toThrow(/báo cắt thêm 5 đoạn 745mm/);
+      await expect(call).rejects.not.toThrow(/UON/);
+    });
+
+    it('báo vượt số đã cắt một phần: chỉ bảo cắt thêm PHẦN VƯỢT (đã cắt 8, đã báo 6, báo thêm 5 -> cắt thêm 3)', async () => {
+      prisma.stepBatchSegment.findMany.mockResolvedValue([{ segmentSpecId: 30n, qty: 6 }]);
+      const call = service.recordStepBatch(
+        '1',
+        { ...dto, segments: [{ segmentSpecId: '30', qty: 5 }] },
+        'user-1',
+      );
+      await expect(call).rejects.toThrow(
+        /đã báo Uốn 6 đoạn \(kể cả đoạn KCS chấm lỗi\) - không thể báo thêm 5/,
+      );
+      await expect(call).rejects.toThrow(/báo cắt thêm 3 đoạn 745mm/);
+    });
+
+    it('công đoạn không thuộc danh sách / cỡ không cần công đoạn: câu lỗi dùng nhãn tiếng Việt', async () => {
+      prisma.pieceBom.findMany.mockResolvedValue([pieceBomRow]); // chỉ có CAT
+      const call = service.recordStepBatch('1', dto, 'user-1');
+      await expect(call).rejects.toThrow(/Công đoạn Uốn không thuộc/);
+      await expect(call).rejects.not.toThrow(/UON/);
+    });
+
     it('ném BadRequestException nếu cỡ đoạn không thuộc loại sắt này (lọc theo materialId)', async () => {
       prisma.segmentSpec.findMany.mockResolvedValue([]); // materialId filter loại bỏ hết
 
@@ -2832,7 +2867,7 @@ describe('SteelIssuesService.assertStepsWithinCutAfterReduceInTx (X3 16/11)', ()
       service.assertStepsWithinCutAfterReduceInTx(tx as never, 53n, [
         { segmentSpecId: 52n, qty: 3 },
       ]),
-    ).rejects.toThrow(/450mm.*còn 7.*8 đoạn đã báo UON/);
+    ).rejects.toThrow(/450mm.*còn 7.*8 đoạn đã báo Uốn/);
   });
 
   it('đợt chưa gắn SKU ở PI nhiều SKU -> không thuộc SKU nào, không kiểm; số trừ 0 -> không đọc gì', async () => {

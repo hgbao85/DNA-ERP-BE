@@ -22,6 +22,12 @@ import {
   assertOrderPiHasActiveFloor,
   assertPiHasActiveFloor,
 } from '../../common/utils/floor-gate.util';
+import { processStepLabel } from '../../common/constants/process-steps.constant';
+
+/** Tên loại sắt kèm quy cách (vd 'Sắt vuông 6zem 15') - 1 lệnh có nhiều 'Sắt vuông 6zem' khác quy cách (17/11/2026). */
+const materialLabel = (
+  m: { name?: string | null; spec?: string | null } | null | undefined,
+): string | undefined => [m?.name, m?.spec?.trim()].filter(Boolean).join(' ') || undefined;
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -117,10 +123,13 @@ export class QcReviewsService {
     piCode: string,
     failedQty: number,
     senderRole: string,
+    extra?: { detail: string; todo: string },
   ): Promise<void> {
     try {
       if (failedQty > 0) {
-        await this.notifications.emit('QC_FAILED', { params: { piCode, failedQty, senderRole } });
+        await this.notifications.emit('QC_FAILED', {
+          params: { piCode, failedQty, senderRole, ...extra },
+        });
       } else {
         await this.notifications.emit('QC_PASSED', { params: { piCode } });
       }
@@ -131,12 +140,37 @@ export class QcReviewsService {
     }
   }
 
+  /**
+   * 17/11/2026: nội dung tin QC_FAILED của đợt Phôi (cắt / công đoạn phụ), viết cho QLSX (người nhận thật; công nhân
+   * không có hộp thông báo). Gom theo cỡ đoạn; bỏ dòng lỗi 0.
+   */
+  private buildFailureText(
+    step: string,
+    materialName: string | null | undefined,
+    failedBySize: { mm: string; qty: number }[],
+  ): { detail: string; todo: string } {
+    const byMm = new Map<string, number>();
+    for (const f of failedBySize) {
+      if (f.qty > 0) byMm.set(f.mm, (byMm.get(f.mm) ?? 0) + f.qty);
+    }
+    const parts = [...byMm].map(([mm, qty]) => `${qty} đoạn ${mm}mm`);
+    const list = parts.join(', ');
+    const label = processStepLabel(step);
+    const detail = `${label}${materialName ? ` ${materialName}` : ''}: ${list} lỗi`;
+    const todo =
+      step === 'CAT'
+        ? `Báo công nhân cắt lại ${list} rồi quét mã máy cắt báo cắt bù; kiểm rồi gửi KCS`
+        : `Báo công nhân làm bù ${list}: nếu không còn đoạn đã cắt dư thì cắt thêm số đó ở máy cắt trước, rồi báo ${label} bù; kiểm rồi gửi KCS`;
+    return { detail, todo };
+  }
+
   /** Như notifyQcResult nhưng tự đọc mã PI (cần mã PI thật để giới hạn QLSX đúng xưởng). Chạy SAU khi
    *  lượt chấm đã commit nên lỗi đọc mã PI chỉ ghi log và bỏ tin, không làm KCS nhận lỗi. */
   private async notifyQcResultForPi(
     productionInvoiceId: bigint,
     failedQty: number,
     senderRole: string,
+    extra?: { detail: string; todo: string },
   ): Promise<void> {
     let piCode: string;
     try {
@@ -151,7 +185,7 @@ export class QcReviewsService {
       );
       return;
     }
-    await this.notifyQcResult(piCode, failedQty, senderRole);
+    await this.notifyQcResult(piCode, failedQty, senderRole, extra);
   }
 
   private mfgStageToSenderRole(stage: MfgStage): string {
@@ -305,7 +339,7 @@ export class QcReviewsService {
     const bundleBigId = parseBigIntId(cutBundleId);
     const bundle = await this.prisma.cutBundle.findUnique({
       where: { id: bundleBigId },
-      include: { steelIssue: true },
+      include: { steelIssue: { include: { material: true } } },
     });
     if (!bundle) {
       throw new NotFoundException(`Không tìm thấy đợt cắt ${cutBundleId}`);
@@ -332,11 +366,13 @@ export class QcReviewsService {
     );
 
     let totalFailed = 0;
+    const failedBySize: { mm: string; qty: number }[] = [];
     for (const seg of dto.segments) {
       const spec = specById.get(parseBigIntId(seg.segmentSpecId).toString());
       if (!spec) {
         throw new NotFoundException(`Cỡ đoạn ${seg.segmentSpecId} không tồn tại`);
       }
+      failedBySize.push({ mm: spec.cutLengthMm.toString(), qty: seg.failedQty });
       if (spec.materialId !== bundle.steelIssue.materialId) {
         throw new BadRequestException(
           `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt cắt này`,
@@ -400,6 +436,7 @@ export class QcReviewsService {
       invoice?.code ?? `#${bundle.steelIssue.productionInvoiceId}`,
       totalFailed,
       BUSINESS_ROLES.PHOI_STAFF,
+      this.buildFailureText('CAT', materialLabel(bundle.steelIssue.material), failedBySize),
     );
 
     await this.segmentProductionService.recomputeAfterQc(
@@ -463,11 +500,13 @@ export class QcReviewsService {
     );
 
     let totalFailed = 0;
+    const failedBySize: { mm: string; qty: number }[] = [];
     for (const seg of dto.segments) {
       const spec = specById.get(parseBigIntId(seg.segmentSpecId).toString());
       if (!spec) {
         throw new NotFoundException(`Cỡ đoạn ${seg.segmentSpecId} không tồn tại`);
       }
+      failedBySize.push({ mm: spec.cutLengthMm.toString(), qty: seg.failedQty });
       if (spec.materialId !== bundle.materialId) {
         throw new BadRequestException(
           `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt gửi KCS này`,
@@ -527,6 +566,7 @@ export class QcReviewsService {
       bundle.productionInvoiceId,
       totalFailed,
       BUSINESS_ROLES.PHOI_STAFF,
+      this.buildFailureText(bundle.step, materialLabel(bundle.material), failedBySize),
     );
 
     this.publishRealtime(stepBundleId, 'QC_RECORDED', reviewedById);

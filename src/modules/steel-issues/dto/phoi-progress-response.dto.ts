@@ -39,8 +39,8 @@ export class PhoiProgressSegmentDto {
    *  BẤT BIẾN theo lỗi KCS - đây là việc ĐÃ XẢY RA rồi, không rút lại được (2026-08-24, sửa lỗi
    *  ERP: bản trước trừ thẳng lỗi vào đây làm mâu thuẫn với lịch sử đợt cắt đã báo). */
   @Expose() @ApiProperty() done!: number;
-  /** Σ (failedQty - resolvedQty) của mọi QcReviewSegment thuộc cỡ này trong cả PI - số đoạn ĐANG
-   *  thực sự lỗi (KCS đã chấm, chưa duyệt lại xác nhận đạt). "Còn lại" = required - (done - failed). */
+  /** Σ failedQty (lỗi KCS cộng dồn, không còn resolvedQty) của mọi QcReviewSegment thuộc cỡ này trong cả PI.
+   *  "Còn lại" = required - (done - failed). */
   @Expose() @ApiProperty() failed!: number;
   /** Phần của `done` CHƯA gửi KCS (2026-10-16, thống nhất số 3 màn QLSX). `done` = openQty + awaitingQcQty + đã chấm. */
   @Expose() @ApiProperty() openQty: number = 0;

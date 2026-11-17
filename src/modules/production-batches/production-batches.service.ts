@@ -74,6 +74,7 @@ import { ProductionBatchPlanResponseDto } from './dto/production-batch-plan-resp
 import { ProductionBatchResponseDto } from './dto/production-batch-response.dto';
 import { SubmitPieceStepDto } from './dto/submit-piece-step.dto';
 import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
+import { processStepLabel } from '../../common/constants/process-steps.constant';
 
 /** Gộp 3 thứ cần cho mỗi piece có PieceMaterialYield ở stage=PHOI trong 1 lần tra bảng
  *  piece_material_yield (thay vì 3 hàm rời nhân round-trip DB): tồn nguyên liệu thô, công đoạn đã
@@ -637,7 +638,7 @@ export class ProductionBatchesService {
     }
     if (!orderedSteps.includes(dto.step)) {
       throw new BadRequestException(
-        `Mảnh ${dto.pieceId} không có công đoạn '${dto.step}' theo định mức`,
+        `Mảnh ${dto.pieceId} không có công đoạn ${processStepLabel(dto.step)} theo định mức`,
       );
     }
     const created = await this.prisma.$transaction(async (tx) => {
@@ -700,7 +701,7 @@ export class ProductionBatchesService {
       const qty = pending.reduce((s, b) => s + b.qty, 0);
       if (qty <= 0) {
         throw new BadRequestException(
-          `Mảnh ${dto.pieceId} chưa có gì mới để gửi KCS ở công đoạn '${dto.step}'`,
+          `Mảnh ${dto.pieceId} chưa có gì mới để gửi KCS ở công đoạn ${processStepLabel(dto.step)}`,
         );
       }
 
@@ -1406,6 +1407,7 @@ export class ProductionBatchesService {
         pieceId: key,
         pieceCode: bp.piece.code,
         pieceName: bp.piece.name,
+        qtyPerUnit: bp.qtyPerUnit,
         plannedQty,
         awaitingQcQty: awaitingByPiece.get(key) ?? 0,
         passedQty: passedByPiece.get(key) ?? 0,
@@ -1706,6 +1708,7 @@ export class ProductionBatchesService {
           pieceId: pieceKey,
           pieceCode: bp.piece.code,
           pieceName: bp.piece.name,
+          qtyPerUnit: bp.qtyPerUnit,
           plannedQty,
           awaitingQcQty: awaitingByOrderPiece.get(orderPieceKey) ?? 0,
           passedQty: passedByOrderPiece.get(orderPieceKey) ?? 0,

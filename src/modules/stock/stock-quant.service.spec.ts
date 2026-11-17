@@ -1,5 +1,10 @@
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockQuantService } from './stock-quant.service';
+import { StockReservationsService } from './stock-reservations.service';
+
+// Khoá map giữ chỗ (17/11/2026: tách theo chiều dài cây; không truyền chiều dài = giữ chỗ chuyển kho).
+const key = (spec: string, len?: number) =>
+  StockReservationsService.reservedKey(1n, 10n, spec, len);
 
 describe('StockQuantService', () => {
   let service: StockQuantService;
@@ -15,6 +20,7 @@ describe('StockQuantService', () => {
     productVariantId: null,
     qty: { toNumber: () => 42.5 },
     spec: '',
+    stockLengthMm: 0,
     updatedAt: new Date('2026-08-05T00:00:00Z'),
     warehouse: { id: 1n, code: 'vat-tu-tp' },
     material: { id: 10n, code: 'SAT-25' },
@@ -69,7 +75,7 @@ describe('StockQuantService', () => {
 
   it('subtracts active reservations from onHand for rows with a materialId (Vấn đề #13)', async () => {
     prisma.stockQuant.findMany.mockResolvedValue([quantRow()]);
-    stockReservationsService.getReservedQtyMap.mockResolvedValue(new Map([['1:10:', 32.5]]));
+    stockReservationsService.getReservedQtyMap.mockResolvedValue(new Map([[key('', 0), 32.5]]));
 
     const result = await service.findAll({ warehouseId: '1' });
 
@@ -89,8 +95,8 @@ describe('StockQuantService', () => {
     ]);
     stockReservationsService.getReservedQtyMap.mockResolvedValue(
       new Map([
-        ['1:10:A', 2.5],
-        ['1:10:B', 100],
+        [key('A', 0), 2.5],
+        [key('B', 0), 100],
       ]),
     );
 
@@ -98,6 +104,41 @@ describe('StockQuantService', () => {
 
     expect(stockReservationsService.getReservedQtyMap).toHaveBeenCalledTimes(1);
     expect(result.map((r) => r.availableQty)).toEqual([40, 0, 42.5]);
+  });
+
+  // 17/11/2026 (lỗi C3): trước đây chỉ trừ giữ chỗ ở ô chiều dài 0 nên sắt giữ hết cho lệnh vẫn hiện khả dụng = tồn.
+  it('C3: sắt ô 6000 trừ giữ chỗ cắt sắt CÙNG ô 6000; giữ chỗ ô 0 không trừ vào ô 6000', async () => {
+    prisma.stockQuant.findMany.mockResolvedValue([
+      quantRow({ id: 1n, stockLengthMm: 6000, qty: { toNumber: () => 842 } }),
+      quantRow({ id: 2n, stockLengthMm: 0, qty: { toNumber: () => 10 } }),
+    ]);
+    stockReservationsService.getReservedQtyMap.mockResolvedValue(
+      new Map([
+        [key('', 6000), 842],
+        [key('', 0), 4],
+      ]),
+    );
+
+    const result = await service.findAll({});
+
+    expect(result.map((x) => x.availableQty)).toEqual([0, 6]);
+  });
+
+  it('C3: giữ chỗ chuyển kho (không có chiều dài) vẫn trừ vào mọi ô chiều dài', async () => {
+    prisma.stockQuant.findMany.mockResolvedValue([
+      quantRow({ id: 1n, stockLengthMm: 6000, qty: { toNumber: () => 100 } }),
+      quantRow({ id: 2n, stockLengthMm: 0, qty: { toNumber: () => 50 } }),
+    ]);
+    stockReservationsService.getReservedQtyMap.mockResolvedValue(
+      new Map([
+        [key('', 6000), 30],
+        [key(''), 5],
+      ]),
+    );
+
+    const result = await service.findAll({});
+
+    expect(result.map((x) => x.availableQty)).toEqual([65, 45]);
   });
 
   it('K5: thủ kho chỉ đọc tồn cả họ kho mình; tổng kho (null) không lọc', async () => {

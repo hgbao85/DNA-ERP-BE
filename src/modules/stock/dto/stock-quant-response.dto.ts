@@ -27,7 +27,8 @@ export class StockQuantResponseDto {
   @Expose() @ApiProperty() qty!: number;
   /** Vấn đề #13 audit 26/08 - `qty` (tồn thực tế) trừ phần đang bị giữ chỗ (cắt sắt/chuyển kho
    *  nội bộ ACTIVE), qua ĐÚNG MỘT hàm StockReservationsService.getAvailableQty() dùng chung với
-   *  màn Xuất sắt - xem stock-quant.service.ts. Luôn === qty với dòng không có materialId
+   *  màn Xuất sắt - xem stock-quant.service.ts. Từ 17/11/2026 giữ chỗ cắt sắt được trừ đúng ô chiều dài
+   *  của dòng (stockLengthMm), giữ chỗ chuyển kho (không có chiều dài) trừ vào mọi ô cùng kho/vật tư/quy cách. Luôn === qty với dòng không có materialId
    *  (segmentSpec/piece/productVariant) vì reservation chỉ khoá theo materialId. */
   @Expose() @ApiProperty() availableQty!: number;
   @Expose() @ApiProperty() updatedAt!: Date;

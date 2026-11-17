@@ -757,9 +757,13 @@ export class StockReservationsService {
   }
 
   /**
-   * K5 16/11 - getReservedQty() cho NHIỀU ô (kho, vật tư, quy cách) bằng 2 câu truy vấn, thay vì 2 câu mỗi ô (GET /stock-quant gọi
-   * từng dòng = N+1). Cùng điều kiện getReservedQty(tx=undefined, stockLengthMm=undefined -> ô 0, không loại PI nào). Khoá Map:
-   * reservedKey(warehouseId, materialId, spec).
+   * K5 16/11 - getReservedQty() cho NHIỀU ô (kho, vật tư, quy cách, chiều dài cây) bằng 2 câu truy vấn, thay vì 2 câu mỗi ô
+   * (GET /stock-quant gọi từng dòng = N+1). Không loại PI nào.
+   *
+   * 17/11/2026 (lỗi C3 "khả dụng sắt"): giữ chỗ cắt sắt (StockReservation) tách theo CHIỀU DÀI CÂY như getReservedQty() khi
+   * caller truyền stockLengthMm - trước đây chỉ lấy ô 0 nên sắt giữ ở ô 6000 / 5450... không bao giờ bị trừ. Giữ chỗ chuyển kho
+   * (WarehouseTransferReservation) không có chiều dài -> khoá riêng, trừ vào MỌI ô chiều dài (đúng getReservedQty()).
+   * Đọc bằng reservedFor(map, kho, vật tư, quy cách, chiều dài).
    */
   async getReservedQtyMap(
     cells: Array<{ warehouseId: bigint; materialId: bigint }>,
@@ -774,12 +778,12 @@ export class StockReservationsService {
           warehouseId: { in: warehouseIds },
           materialId: { in: materialIds },
           status: ReservationStatus.ACTIVE,
-          stockLengthMm: 0,
         },
         select: {
           warehouseId: true,
           materialId: true,
           spec: true,
+          stockLengthMm: true,
           quantity: true,
           consumedQty: true,
         },
@@ -793,31 +797,55 @@ export class StockReservationsService {
         select: { warehouseId: true, materialId: true, spec: true, quantity: true },
       }),
     ]);
-    const add = (w: bigint, m: bigint, spec: string, qty: number) => {
-      const k = StockReservationsService.reservedKey(w, m, spec);
-      out.set(k, (out.get(k) ?? 0) + qty);
-    };
+    const add = (k: string, qty: number) => out.set(k, (out.get(k) ?? 0) + qty);
     for (const r of stockReservations) {
       add(
-        r.warehouseId,
-        r.materialId,
-        r.spec,
+        StockReservationsService.reservedKey(r.warehouseId, r.materialId, r.spec, r.stockLengthMm),
         Math.max(0, r.quantity.toNumber() - r.consumedQty.toNumber()),
       );
     }
     for (const r of transferReservations) {
-      if (r.materialId) add(r.warehouseId, r.materialId, r.spec, r.quantity.toNumber());
+      if (r.materialId) {
+        add(
+          StockReservationsService.reservedKey(r.warehouseId, r.materialId, r.spec),
+          r.quantity.toNumber(),
+        );
+      }
     }
     for (const [k, v] of out) out.set(k, Math.round(v * 1e4) / 1e4 + 0);
     return out;
   }
 
+  /**
+   * Khoá Map của getReservedQtyMap(). Có stockLengthMm = giữ chỗ cắt sắt của đúng ô chiều dài đó; KHÔNG truyền = giữ chỗ chuyển
+   * kho (không có chiều dài, áp cho mọi ô).
+   */
   static reservedKey(
     warehouseId: bigint,
     materialId: bigint,
     spec: string | null | undefined,
+    stockLengthMm?: number,
   ): string {
-    return `${warehouseId}:${materialId}:${spec?.trim() ?? ''}`;
+    const base = `${warehouseId}:${materialId}:${spec?.trim() ?? ''}`;
+    return stockLengthMm === undefined ? `${base}:chuyen-kho` : `${base}:${stockLengthMm}`;
+  }
+
+  /** Phần đang giữ của 1 dòng tồn (kho, vật tư, quy cách, chiều dài cây) từ map của getReservedQtyMap(): giữ chỗ cắt sắt cùng
+   *  ô chiều dài + giữ chỗ chuyển kho (mọi ô) - cùng phép cộng của getReservedQty(). */
+  static reservedFor(
+    reserved: Map<string, number>,
+    warehouseId: bigint,
+    materialId: bigint,
+    spec: string | null | undefined,
+    stockLengthMm: number,
+  ): number {
+    const fromStock =
+      reserved.get(
+        StockReservationsService.reservedKey(warehouseId, materialId, spec, stockLengthMm),
+      ) ?? 0;
+    const fromTransfer =
+      reserved.get(StockReservationsService.reservedKey(warehouseId, materialId, spec)) ?? 0;
+    return Math.round((fromStock + fromTransfer) * 1e4) / 1e4 + 0;
   }
 
   /**

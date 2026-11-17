@@ -816,7 +816,11 @@ describe('FloorScanService', () => {
                   cutLengthMm: 500,
                   required: 20,
                   done: 5,
-                  byOrder: [{ productionOrderId: '41', required: 20, done: 5 }],
+                  failed: 0,
+                  reportedQty: 5,
+                  byOrder: [
+                    { productionOrderId: '41', required: 20, done: 5, failed: 0, reportedQty: 5 },
+                  ],
                 },
               ],
             },
@@ -845,6 +849,99 @@ describe('FloorScanService', () => {
 
       expect(steelIssues.getStepProgress).toHaveBeenCalledWith('45', 'DAP');
       expect(steelIssues.getPhoiProgress).not.toHaveBeenCalled();
+    });
+
+    describe('số được tính = đã báo - lỗi KCS (17/11/2026)', () => {
+      type SegmentOut = {
+        required: number;
+        done: number;
+        byOrder: Record<string, unknown>[];
+      };
+      const segOf = (required: number, done: number, failed?: number) => [
+        {
+          materialId: '7',
+          materialCode: 'S7',
+          materialName: 'Sắt 7',
+          segments: [
+            {
+              segmentSpecId: '63',
+              cutLengthMm: 471,
+              required,
+              done,
+              ...(failed === undefined ? {} : { failed }),
+              byOrder: [
+                {
+                  productionOrderId: '41',
+                  required,
+                  done,
+                  ...(failed === undefined ? {} : { failed }),
+                },
+              ],
+            },
+          ],
+        },
+      ];
+      const segmentOf = async () => {
+        const res = (await service.getContext('tok', worker('PHOI'))) as unknown as {
+          pi: { materials: { segments: SegmentOut[] }[] };
+        };
+        return res.pi.materials[0].segments[0];
+      };
+      beforeEach(() => {
+        prisma.productionOrder.findMany.mockResolvedValue([order]);
+        prisma.steelIssue.groupBy.mockResolvedValue([{ materialId: 7n }]);
+      });
+
+      it('AC1: đã báo 1180, KCS lỗi 12 -> done 1168, failed 12, reportedQty 1180 (segment lẫn byOrder)', async () => {
+        steelIssues.getPhoiProgress.mockResolvedValue(segOf(1180, 1180, 12));
+        const sg = await segmentOf();
+        expect(sg).toMatchObject({ required: 1180, done: 1168, failed: 12, reportedQty: 1180 });
+        expect(sg.byOrder[0]).toEqual({
+          productionOrderId: '41',
+          required: 1180,
+          done: 1168,
+          failed: 12,
+          reportedQty: 1180,
+        });
+      });
+
+      it('AC2: đã báo 1192 (gồm 12 cắt bù), lỗi 12 -> done 1180 (không vượt)', async () => {
+        steelIssues.getPhoiProgress.mockResolvedValue(segOf(1180, 1192, 12));
+        const sg = await segmentOf();
+        expect(sg).toMatchObject({ done: 1180, failed: 12, reportedQty: 1192 });
+        expect(sg.byOrder[0].done).toBe(1180);
+      });
+
+      it('AC3: báo vượt thật (1200, lỗi 12, cần 1180) -> done 1188 (vẫn lớn hơn cần 8)', async () => {
+        steelIssues.getPhoiProgress.mockResolvedValue(segOf(1180, 1200, 12));
+        const sg = await segmentOf();
+        expect(sg.done).toBe(1188);
+        expect(sg.done - sg.required).toBe(8);
+      });
+
+      it('AC4: máy công đoạn phụ (Uốn): đã báo 1180, lỗi 5 -> done 1175, failed 5', async () => {
+        prisma.workstation.findUnique.mockResolvedValue({
+          ...laser,
+          kind: 'STEP',
+          processStep: 'UON',
+        });
+        steelIssues.getStepProgress.mockResolvedValue(segOf(1180, 1180, 5));
+        const sg = await segmentOf();
+        expect(sg).toMatchObject({ done: 1175, failed: 5, reportedQty: 1180 });
+        expect(sg.byOrder[0]).toMatchObject({ done: 1175, failed: 5 });
+      });
+
+      it('AC5: dữ liệu thiếu failed -> done = số thô, failed 0, không NaN', async () => {
+        steelIssues.getPhoiProgress.mockResolvedValue(segOf(20, 5));
+        const sg = await segmentOf();
+        expect(sg).toMatchObject({ done: 5, failed: 0, reportedQty: 5 });
+        expect(sg.byOrder[0]).toMatchObject({ done: 5, failed: 0, reportedQty: 5 });
+      });
+
+      it('lỗi lớn hơn đã báo -> done kẹp về 0, không âm', async () => {
+        steelIssues.getPhoiProgress.mockResolvedValue(segOf(20, 3, 5));
+        expect((await segmentOf()).done).toBe(0);
+      });
     });
 
     it('máy PIECE (Hàn): kế hoạch mảnh cộng thêm số đã báo ở đợt chưa gửi KCS (openQty), mảnh chưa báo = 0', async () => {

@@ -389,7 +389,11 @@ describe('QcReviewsService', () => {
       id: 1n,
       steelIssueId: 100n,
       status: 'AWAITING_QC',
-      steelIssue: { productionInvoiceId: 900n, materialId: 30n },
+      steelIssue: {
+        productionInvoiceId: 900n,
+        materialId: 30n,
+        material: { code: 'SAT-30', name: 'Sắt phi 10' },
+      },
     };
     const bundleQcReview = { ...qcReview, cutBundleId: 1n };
 
@@ -457,7 +461,13 @@ describe('QcReviewsService', () => {
       expect(notificationsService.emit).toHaveBeenCalledWith(
         'QC_FAILED',
         expect.objectContaining({
-          params: { piCode: 'PI-2026-900', failedQty: 2, senderRole: 'PHOI_STAFF' },
+          params: {
+            piCode: 'PI-2026-900',
+            failedQty: 2,
+            senderRole: 'PHOI_STAFF',
+            detail: 'Cắt Sắt phi 10: 2 đoạn 745mm lỗi',
+            todo: 'Báo công nhân cắt lại 2 đoạn 745mm rồi quét mã máy cắt báo cắt bù; kiểm rồi gửi KCS',
+          },
         }),
       );
       expect(notificationsService.emit).not.toHaveBeenCalledWith('QC_PASSED', expect.anything());
@@ -957,6 +967,8 @@ describe('QcReviewsService', () => {
       updateMany: () => jest.Mock;
       /** Hàm tự đọc mã PI theo productionInvoiceId của đợt (pat lấy từ include sẵn có). */
       looksUpPi: boolean;
+      /** Trường thêm trong params QC_FAILED (17/11/2026: đợt Phôi có detail + todo; loại khác giữ nguyên). */
+      extraParams?: { detail: string; todo: string };
     };
     const cases: Case[] = [
       {
@@ -985,6 +997,10 @@ describe('QcReviewsService', () => {
           ),
         updateMany: () => prisma.stepBundle.updateMany,
         looksUpPi: true,
+        extraParams: {
+          detail: 'Uốn Sắt hộp 25x50: 2 đoạn 745mm lỗi', // tên loại sắt kèm quy cách (17/11/2026)
+          todo: 'Báo công nhân làm bù 2 đoạn 745mm: nếu không còn đoạn đã cắt dư thì cắt thêm số đó ở máy cắt trước, rồi báo Uốn bù; kiểm rồi gửi KCS',
+        },
       },
       {
         name: 'reviewPieceStep',
@@ -1024,7 +1040,7 @@ describe('QcReviewsService', () => {
         await c.run(2);
 
         expect(notificationsService.emit).toHaveBeenCalledWith('QC_FAILED', {
-          params: { piCode: c.piCode, failedQty: 2, senderRole: 'PHOI_STAFF' },
+          params: { piCode: c.piCode, failedQty: 2, senderRole: 'PHOI_STAFF', ...c.extraParams },
         });
         expect(notificationsService.emit).not.toHaveBeenCalledWith('QC_PASSED', expect.anything());
       });

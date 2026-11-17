@@ -34,6 +34,7 @@ import { MaterialYieldStepBundleResponseDto } from './dto/material-yield-step-bu
 import { SubmitMaterialYieldStepDto } from './dto/submit-material-yield-step.dto';
 import { MaterialYieldRecipeIssuesService } from './material-yield-recipe-issues.service';
 import { MaterialYieldRecipesService } from './material-yield-recipes.service';
+import { processStepLabel } from '../../common/constants/process-steps.constant';
 
 const BUNDLE_INCLUDE = {
   productionInvoice: { select: { code: true } },
@@ -104,7 +105,9 @@ export class MaterialYieldRecipeProductionService {
       );
     }
     if (!orderedSteps.includes(dto.step)) {
-      throw new BadRequestException(`Công thức ${dto.recipeId} không có công đoạn '${dto.step}'`);
+      throw new BadRequestException(
+        `Công thức ${dto.recipeId} không có công đoạn ${processStepLabel(dto.step)}`,
+      );
     }
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -163,7 +166,7 @@ export class MaterialYieldRecipeProductionService {
       const qty = pending.reduce((s, b) => s + b.qty, 0);
       if (qty <= 0) {
         throw new BadRequestException(
-          `Công thức ${dto.recipeId} chưa có gì mới để gửi KCS ở công đoạn '${dto.step}'`,
+          `Công thức ${dto.recipeId} chưa có gì mới để gửi KCS ở công đoạn ${processStepLabel(dto.step)}`,
         );
       }
 

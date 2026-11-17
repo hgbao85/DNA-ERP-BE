@@ -189,7 +189,7 @@ describe('FloorReviewService.listOpen / sendStepGroup', () => {
     const r = await service.listOpen('PHOI');
 
     expect(r.cutBundles[0].progress).toEqual([
-      { cutLengthMm: 441, qty: 4, required: 60, done: 78, over: 18 },
+      { cutLengthMm: 441, qty: 4, required: 60, done: 78, over: 18, failed: 0, reportedQty: 78 },
     ]);
     expect(r.cutBundles[0].steelBalance).toEqual(
       expect.objectContaining({ receivedBarCount: 11, overMm: 4240 }),
@@ -215,10 +215,121 @@ describe('FloorReviewService.listOpen / sendStepGroup', () => {
     const r = await service.listOpen('PHOI');
 
     expect(r.cutBundles[0].progress).toEqual([
-      { cutLengthMm: 441, qty: 4, required: 100, done: 120, over: 20 },
+      { cutLengthMm: 441, qty: 4, required: 100, done: 120, over: 20, failed: 0, reportedQty: 120 },
     ]);
     // không có lần báo nào trong sổ -> tuổi tính từ lúc mở đợt
     expect(r.cutBundles[0].waitingSince).toEqual(at('2026-10-13T01:00:00Z'));
+  });
+
+  describe('17/11 số được tính = đã báo - lỗi KCS (báo bù không bị coi là vượt)', () => {
+    const item = (o: { required: number; done: number; failed?: number }, pi = o) => ({
+      materialId: '7',
+      steelBalance: null,
+      segments: [
+        {
+          segmentSpecId: '63',
+          required: pi.required,
+          done: pi.done,
+          ...(pi.failed === undefined ? {} : { failed: pi.failed }),
+          byOrder: [{ productionOrderId: '41', ...o }],
+        },
+      ],
+    });
+    const cutBundle = (orderId: bigint | null) => ({
+      id: 52n,
+      productionOrderId: orderId,
+      createdAt: at('2026-10-13T01:00:00Z'),
+      openedBy: user('An'),
+      segments: [{ segmentSpecId: 63n, qty: 4, segmentSpec: spec(441) }],
+      steelIssue: { material, productionInvoice: pi },
+      productionOrder: orderId ? order : null,
+      floorReports: [],
+    });
+    const cutProgress = async () => (await service.listOpen('PHOI')).cutBundles[0].progress;
+
+    beforeEach(() => {
+      prisma.cutBundle.findMany.mockResolvedValue([cutBundle(41n)]);
+    });
+
+    it('AC2: đã báo 1192, lỗi 12, cần 1180 -> done 1180, over 0', async () => {
+      steelIssues.getPhoiProgress.mockResolvedValue([
+        item({ required: 1180, done: 1192, failed: 12 }),
+      ]);
+      expect(await cutProgress()).toEqual([
+        {
+          cutLengthMm: 441,
+          qty: 4,
+          required: 1180,
+          done: 1180,
+          over: 0,
+          failed: 12,
+          reportedQty: 1192,
+        },
+      ]);
+    });
+
+    it('AC3: báo vượt thật (1200, lỗi 12, cần 1180) -> done 1188, over 8', async () => {
+      steelIssues.getPhoiProgress.mockResolvedValue([
+        item({ required: 1180, done: 1200, failed: 12 }),
+      ]);
+      expect(await cutProgress()).toEqual([
+        {
+          cutLengthMm: 441,
+          qty: 4,
+          required: 1180,
+          done: 1188,
+          over: 8,
+          failed: 12,
+          reportedQty: 1200,
+        },
+      ]);
+    });
+
+    it('AC4: nhóm công đoạn phụ (Uốn): đã báo 1185, lỗi 5, cần 1180 -> over 0', async () => {
+      prisma.stepBatch.findMany.mockResolvedValue([
+        stepBatch(1, 'cn-an', 'An', 5, '2026-10-13T01:00:00Z'),
+      ]);
+      steelIssues.getStepProgress.mockResolvedValue([
+        item({ required: 1180, done: 1185, failed: 5 }),
+      ]);
+      const r = await service.listOpen('PHOI');
+      expect(r.stepGroups[0].progress).toEqual([
+        {
+          cutLengthMm: 441,
+          qty: 5,
+          required: 1180,
+          done: 1180,
+          over: 0,
+          failed: 5,
+          reportedQty: 1185,
+        },
+      ]);
+    });
+
+    it('AC5: thiếu failed -> done = số thô, failed 0, không NaN', async () => {
+      steelIssues.getPhoiProgress.mockResolvedValue([item({ required: 60, done: 70 })]);
+      expect(await cutProgress()).toEqual([
+        { cutLengthMm: 441, qty: 4, required: 60, done: 70, over: 10, failed: 0, reportedQty: 70 },
+      ]);
+    });
+
+    it('AC6: đợt cũ không gắn SKU -> số cả PI trừ lỗi cả PI', async () => {
+      prisma.cutBundle.findMany.mockResolvedValue([cutBundle(null)]);
+      steelIssues.getPhoiProgress.mockResolvedValue([
+        item({ required: 60, done: 60, failed: 1 }, { required: 100, done: 112, failed: 12 }),
+      ]);
+      expect(await cutProgress()).toEqual([
+        {
+          cutLengthMm: 441,
+          qty: 4,
+          required: 100,
+          done: 100,
+          over: 0,
+          failed: 12,
+          reportedQty: 112,
+        },
+      ]);
+    });
   });
 
   it('lấy tiến độ lỗi -> danh sách đợt VẪN trả về, chỉ không có số cần (required = 0, steelBalance null)', async () => {
@@ -240,7 +351,7 @@ describe('FloorReviewService.listOpen / sendStepGroup', () => {
 
     expect(r.cutBundles).toHaveLength(1);
     expect(r.cutBundles[0].progress).toEqual([
-      { cutLengthMm: 441, qty: 4, required: 0, done: 0, over: 0 },
+      { cutLengthMm: 441, qty: 4, required: 0, done: 0, over: 0, failed: 0, reportedQty: 0 },
     ]);
     expect(r.cutBundles[0].steelBalance).toBeNull();
   });

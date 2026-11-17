@@ -1,3 +1,4 @@
+import { instanceToPlain } from 'class-transformer';
 import {
   BadRequestException,
   ConflictException,
@@ -1416,6 +1417,16 @@ describe('ProductionBatchesService', () => {
       expect(result['1'].items).toHaveLength(1);
       expect(result['1'].items[0].pieceId).toBe('40');
       expect(result['1'].items[0].plannedQty).toBe(bomPieceRow.qtyPerUnit * order.quantity);
+      expect(result['1'].items[0].qtyPerUnit).toBe(bomPieceRow.qtyPerUnit);
+    });
+
+    it('getBatchPlan trả qtyPerUnit và có trong JSON sau serialize (lỗi B, 17/11/2026)', async () => {
+      const result = await service.getBatchPlan('1', MfgStage.HAN);
+
+      expect(result.items[0].qtyPerUnit).toBe(bomPieceRow.qtyPerUnit);
+      expect(result.items[0].plannedQty).toBe(result.items[0].qtyPerUnit * order.quantity);
+      const plain = instanceToPlain(result.items[0]);
+      expect(plain.qtyPerUnit).toBe(bomPieceRow.qtyPerUnit);
     });
 
     it('2 order khác nhau CÙNG bomRevisionId - dùng chung 1 query bomPiece nhưng KHÔNG lẫn awaiting/passed qty của nhau', async () => {
