@@ -191,18 +191,29 @@ describe('ProductionOrdersService', () => {
         salesOrderId: 31n,
         salesOrder: { orderCode: 'PO-31' },
       });
-      prisma.productionOrder.count.mockResolvedValue(1); // 1 SKU của đơn này đã có PO trước đó
-      prisma.productionOrder.create.mockResolvedValue(order({ poNumber: 'PO-31-2' }));
+      const txOrder = {
+        // 1 SKU của đơn này đã có PO trước đó
+        findMany: jest.fn().mockResolvedValue([{ poNumber: 'PO-31-1' }]),
+        create: jest.fn().mockResolvedValue(order({ poNumber: 'PO-31-2' })),
+      };
+      const lockTx = { productionOrder: txOrder, $executeRaw: jest.fn() };
+      prisma.$transaction.mockImplementationOnce((cb: (t: unknown) => unknown) => cb(lockTx));
 
       const result = await service.createFromApproval(20n, 2n, 60);
 
       expect(prisma.bomRevision.findFirst).toHaveBeenCalledWith({
         where: { mfgProductId: 2n, status: BomRevisionStatus.ACTIVE },
       });
-      expect(prisma.productionOrder.count).toHaveBeenCalledWith({
+      // L1 16/11: khoá theo đơn bán TRƯỚC khi đọc số đã cấp.
+      expect(lockTx.$executeRaw).toHaveBeenCalled();
+      expect(lockTx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        txOrder.findMany.mock.invocationCallOrder[0],
+      );
+      expect(txOrder.findMany).toHaveBeenCalledWith({
         where: { productionInvoiceItem: { salesOrderId: 31n } },
+        select: { poNumber: true },
       });
-      expect(prisma.productionOrder.create).toHaveBeenCalledWith({
+      expect(txOrder.create).toHaveBeenCalledWith({
         data: {
           poNumber: 'PO-31-2',
           productionInvoiceItemId: 20n,
@@ -216,6 +227,29 @@ describe('ProductionOrdersService', () => {
       expect(result.quantity).toBe(60);
     });
 
+    it('L1 16/11: số thứ tự = số lớn nhất đã cấp + 1, không phải số lệnh đếm được + 1 (lệnh giữa bị xoá)', async () => {
+      prisma.bomRevision.findFirst.mockResolvedValue(activeRevision);
+      prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue({
+        salesOrderId: 31n,
+        salesOrder: { orderCode: 'PO-31' },
+      });
+      // Còn -1 và -3 (-2 đã bị xoá): đếm +1 cũ ra -3 -> trùng; đúng phải là -4.
+      const txOrder = {
+        findMany: jest.fn().mockResolvedValue([{ poNumber: 'PO-31-1' }, { poNumber: 'PO-31-3' }]),
+        create: jest.fn().mockResolvedValue(order({ poNumber: 'PO-31-4' })),
+      };
+      prisma.$transaction.mockImplementationOnce((cb: (t: unknown) => unknown) =>
+        cb({ productionOrder: txOrder, $executeRaw: jest.fn() }),
+      );
+
+      await service.createFromApproval(20n, 2n, 60);
+
+      expect(txOrder.create).toHaveBeenCalledWith({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+        data: expect.objectContaining({ poNumber: 'PO-31-4' }),
+      });
+    });
+
     it('falls back to "NB-{itemId}" when the item has no sales order', async () => {
       prisma.bomRevision.findFirst.mockResolvedValue(activeRevision);
       prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue({
@@ -226,7 +260,7 @@ describe('ProductionOrdersService', () => {
 
       await service.createFromApproval(20n, 2n, 60);
 
-      expect(prisma.productionOrder.count).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
       expect(prisma.productionOrder.create).toHaveBeenCalledWith({
         data: {
           poNumber: 'NB-20',

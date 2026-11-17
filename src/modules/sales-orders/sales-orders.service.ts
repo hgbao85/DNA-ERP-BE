@@ -402,17 +402,27 @@ export class SalesOrdersService {
     await this.assertProductsExist([dto]);
     await this.assertOptionChoices([dto]);
 
-    const item = await this.prisma.salesOrderItem.create({
-      data: {
-        salesOrderId: order.id,
-        mfgProductId: parseBigIntId(dto.mfgProductId),
-        skuName: dto.skuName,
-        totalQty: dto.totalQty,
-        deliveryDate: dto.deliveryDate ? new Date(dto.deliveryDate) : undefined,
-        wireMaterialId: dto.wireMaterialId ? parseBigIntId(dto.wireMaterialId) : undefined,
-        cushionMaterialId: dto.cushionMaterialId ? parseBigIntId(dto.cushionMaterialId) : undefined,
-      },
-      include: ITEM_INCLUDE,
+    // L6 16/11: dòng thêm sau cũng phải có dòng sản xuất (chưa gom) như dòng tạo cùng đơn - trước đây chỉ tạo dòng đơn nên
+    // dòng này không bao giờ hiện ở "Tối ưu cắt sắt", không xuống sản xuất được.
+    const item = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.salesOrderItem.create({
+        data: {
+          salesOrderId: order.id,
+          mfgProductId: parseBigIntId(dto.mfgProductId),
+          skuName: dto.skuName,
+          totalQty: dto.totalQty,
+          deliveryDate: dto.deliveryDate ? new Date(dto.deliveryDate) : undefined,
+          wireMaterialId: dto.wireMaterialId ? parseBigIntId(dto.wireMaterialId) : undefined,
+          cushionMaterialId: dto.cushionMaterialId
+            ? parseBigIntId(dto.cushionMaterialId)
+            : undefined,
+        },
+        include: ITEM_INCLUDE,
+      });
+      await tx.productionInvoiceItem.create({
+        data: this.productionInvoiceItemData(order.id, created),
+      });
+      return created;
     });
     await this.recomputeDeliveryDate(order.id);
     this.publishRealtime(item.salesOrderId, 'UPDATED');
@@ -433,12 +443,16 @@ export class SalesOrdersService {
     // qua CẢ item.salesOrderId (PI gộp, ghim thẳng) LẪN productionInvoice.salesOrderId (PI
     // thường tạo qua resolveProductionInvoice() - xem skus.service.ts, không set field trên item)
     // vì tuỳ đường tạo mà field nào có giá trị.
-    if (dto.totalQty !== undefined && dto.totalQty !== item.totalQty) {
+    const qtyChanged = dto.totalQty !== undefined && dto.totalQty !== item.totalQty;
+    if (qtyChanged) {
       // PI item đã nối đúng dòng này (salesOrderItemId) thì chỉ item đó tính; PI item cũ chưa nối
       // dòng nào (salesOrderItemId null) giữ cách dò cũ theo (đơn, sản phẩm).
+      // L6 16/11: chỉ chặn khi KHSX ĐÃ gom vào lệnh (productionInvoiceId khác null). Dòng sản xuất tạo sẵn lúc lưu đơn
+      // (chưa gom) luôn có, nên chặn theo "có dòng" như trước làm Sales không bao giờ sửa được số lượng.
       const linked = await this.prisma.productionInvoiceItem.findFirst({
         where: {
           mfgProductId: item.mfgProductId,
+          productionInvoiceId: { not: null },
           OR: [
             { salesOrderItemId: item.id },
             { salesOrderItemId: null, salesOrderId: order.id },
@@ -479,17 +493,37 @@ export class SalesOrdersService {
     const cushionMaterialId = dto.cushionMaterialId
       ? parseBigIntId(dto.cushionMaterialId)
       : undefined;
-    const updated = await this.prisma.salesOrderItem.update({
-      where: { id: item.id },
-      data: {
-        skuName: dto.skuName,
-        totalQty: dto.totalQty,
-        status: dto.status,
-        deliveryDate: dto.deliveryDate ? new Date(dto.deliveryDate) : undefined,
-        wireMaterialId,
-        cushionMaterialId,
-      },
-      include: ITEM_INCLUDE,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.salesOrderItem.update({
+        where: { id: item.id },
+        data: {
+          skuName: dto.skuName,
+          totalQty: dto.totalQty,
+          status: dto.status,
+          deliveryDate: dto.deliveryDate ? new Date(dto.deliveryDate) : undefined,
+          wireMaterialId,
+          cushionMaterialId,
+        },
+        include: ITEM_INCLUDE,
+      });
+      if (qtyChanged) {
+        // L6 16/11: dòng sản xuất chưa gom đi theo số mới (khi gom, KHSX lấy quantity từ đây).
+        await tx.productionInvoiceItem.updateMany({
+          where: { salesOrderItemId: item.id, productionInvoiceId: null },
+          data: { quantity: dto.totalQty },
+        });
+        // KHSX vừa gom dòng này trong lúc Sales sửa -> huỷ cả lần sửa, không để đơn và lệnh lệch số.
+        const pinned = await tx.productionInvoiceItem.findFirst({
+          where: { salesOrderItemId: item.id, productionInvoiceId: { not: null } },
+          select: { id: true },
+        });
+        if (pinned) {
+          throw new ConflictException(
+            `Dòng ${item.mfgProduct.factoryCode} vừa được KHSX gom vào lệnh sản xuất - không thể sửa số lượng nữa`,
+          );
+        }
+      }
+      return row;
     });
     if (choiceChanged) {
       // Giữ bản sao ở dòng lệnh sản xuất (chưa duyệt) khớp với dòng đơn - lệnh chốt từ đó khi duyệt.
@@ -514,18 +548,33 @@ export class SalesOrdersService {
    */
   private async createProductionInvoiceItems(order: SalesOrderWithItems): Promise<void> {
     await this.prisma.productionInvoiceItem.createMany({
-      data: order.items.map((it) => ({
-        productionInvoiceId: null,
-        mfgProductId: it.mfgProductId,
-        salesOrderId: order.id,
-        // Nối đúng dòng đơn - 2 dòng cùng SKU khác dây/nệm không còn bị lẫn (xem schema).
-        salesOrderItemId: it.id,
-        wireMaterialId: it.wireMaterialId,
-        cushionMaterialId: it.cushionMaterialId,
-        quantity: it.totalQty,
-        deliveryDeadline: it.deliveryDate,
-      })),
+      data: order.items.map((it) => this.productionInvoiceItemData(order.id, it)),
     });
+  }
+
+  /** Dòng sản xuất "chưa gom" cho 1 dòng đơn - dùng chung lúc tạo đơn và lúc thêm dòng (addItem). */
+  private productionInvoiceItemData(
+    salesOrderId: bigint,
+    it: {
+      id: bigint;
+      mfgProductId: bigint;
+      wireMaterialId: bigint | null;
+      cushionMaterialId: bigint | null;
+      totalQty: number;
+      deliveryDate: Date | null;
+    },
+  ) {
+    return {
+      productionInvoiceId: null,
+      mfgProductId: it.mfgProductId,
+      salesOrderId,
+      // Nối đúng dòng đơn - 2 dòng cùng SKU khác dây/nệm không còn bị lẫn (xem schema).
+      salesOrderItemId: it.id,
+      wireMaterialId: it.wireMaterialId,
+      cushionMaterialId: it.cushionMaterialId,
+      quantity: it.totalQty,
+      deliveryDeadline: it.deliveryDate,
+    };
   }
 
   /**
