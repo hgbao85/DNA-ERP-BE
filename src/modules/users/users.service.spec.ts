@@ -7,6 +7,8 @@ import { PrismaServiceType } from '../../prisma/prisma.service';
 import { UsersService } from './users.service';
 
 describe('UsersService', () => {
+  // B1 16/11: service nay nhận người thao tác - test cũ chạy dưới quyền ADMIN (không hạn chế).
+  const ADMIN = { id: 'admin', roles: ['ADMIN'], permissions: [] as string[] };
   let usersService: UsersService;
   let prisma: {
     user: {
@@ -79,7 +81,7 @@ describe('UsersService', () => {
     it('hashes the new password, stores it, and revokes the user live refresh tokens', async () => {
       prisma.user.findUnique.mockResolvedValue(existingUser);
 
-      await usersService.resetPassword('user-1', { newPassword });
+      await usersService.resetPassword('user-1', { newPassword }, ADMIN);
 
       // Password is written to the target user...
       expect(prisma.user.update).toHaveBeenCalledWith(
@@ -107,9 +109,9 @@ describe('UsersService', () => {
     it('throws NotFound and writes nothing when the user does not exist', async () => {
       prisma.user.findUnique.mockResolvedValue(null);
 
-      await expect(usersService.resetPassword('missing-user', { newPassword })).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        usersService.resetPassword('missing-user', { newPassword }, ADMIN),
+      ).rejects.toThrow(NotFoundException);
 
       expect(prisma.user.update).not.toHaveBeenCalled();
       expect(prisma.refreshToken.updateMany).not.toHaveBeenCalled();
@@ -130,7 +132,7 @@ describe('UsersService', () => {
     });
 
     it('tin warehouseScope caller gửi nếu thuộc đúng gia đình phoi-son-han (kho PHỤ)', async () => {
-      await usersService.updateMfgAttributes('user-1', { warehouseScope: 'phoi-son-han-2' });
+      await usersService.updateMfgAttributes('user-1', { warehouseScope: 'phoi-son-han-2' }, ADMIN);
 
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -141,7 +143,7 @@ describe('UsersService', () => {
     });
 
     it('fallback về kho gốc nếu caller không gửi warehouseScope nào', async () => {
-      await usersService.updateMfgAttributes('user-1', {});
+      await usersService.updateMfgAttributes('user-1', {}, ADMIN);
 
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -151,7 +153,7 @@ describe('UsersService', () => {
     });
 
     it('fallback về kho gốc nếu caller gửi warehouseScope KHÔNG thuộc gia đình phoi-son-han (dữ liệu bất thường, không tin mù quáng)', async () => {
-      await usersService.updateMfgAttributes('user-1', { warehouseScope: 'vat-tu-tp' });
+      await usersService.updateMfgAttributes('user-1', { warehouseScope: 'vat-tu-tp' }, ADMIN);
 
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -199,7 +201,7 @@ describe('UsersService', () => {
     });
 
     it('đặt workshopId cho QLSX', async () => {
-      await usersService.updateMfgAttributes('user-1', { workshopId: '1' });
+      await usersService.updateMfgAttributes('user-1', { workshopId: '1' }, ADMIN);
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ workshopId: 1n }) }),
       );
@@ -207,21 +209,21 @@ describe('UsersService', () => {
 
     it('user không phải QLSX mà đặt workshopId -> 400', async () => {
       prisma.user.findUnique.mockResolvedValue({ id: 'user-1', mfgRole: 'PHOI' });
-      await expect(usersService.updateMfgAttributes('user-1', { workshopId: '1' })).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        usersService.updateMfgAttributes('user-1', { workshopId: '1' }, ADMIN),
+      ).rejects.toThrow(BadRequestException);
       expect(prisma.user.update).not.toHaveBeenCalled();
     });
 
     it('xưởng không tồn tại -> 400', async () => {
       prisma.workshop.findFirst.mockResolvedValue(null);
       await expect(
-        usersService.updateMfgAttributes('user-1', { workshopId: '99' }),
+        usersService.updateMfgAttributes('user-1', { workshopId: '99' }, ADMIN),
       ).rejects.toThrow(BadRequestException);
     });
 
     it('workshopId null = bỏ gắn xưởng', async () => {
-      await usersService.updateMfgAttributes('user-1', { workshopId: null });
+      await usersService.updateMfgAttributes('user-1', { workshopId: null }, ADMIN);
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ workshopId: null }) }),
       );
@@ -230,7 +232,7 @@ describe('UsersService', () => {
     it('đổi mfgRole khỏi QLSX thì tự bỏ gắn xưởng', async () => {
       prisma.user.findUnique.mockResolvedValue({ ...qlsx, workshopId: 1n });
       prisma.role.findMany.mockResolvedValue([{ id: 'r1', name: 'KCS_STAFF' }]);
-      await usersService.updateMfgAttributes('user-1', { mfgRole: 'KCS' });
+      await usersService.updateMfgAttributes('user-1', { mfgRole: 'KCS' }, ADMIN);
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ workshopId: null }) }),
       );
@@ -307,7 +309,7 @@ describe('UsersService', () => {
       });
 
       it('khoá tài khoản', async () => {
-        await expect(usersService.update('old', { isActive: false }, 'admin')).rejects.toThrow(
+        await expect(usersService.update('old', { isActive: false }, ADMIN)).rejects.toThrow(
           /3 vật tư/,
         );
         expect(prisma.user.update).not.toHaveBeenCalled();
@@ -316,26 +318,26 @@ describe('UsersService', () => {
       it('bỏ role PURCHASER', async () => {
         prisma.role.count.mockResolvedValue(0);
         await expect(
-          usersService.update('old', { roleIds: ['r-warehouse'] }, 'admin'),
+          usersService.update('old', { roleIds: ['r-warehouse'] }, ADMIN),
         ).rejects.toThrow(BadRequestException);
         expect(prisma.user.update).not.toHaveBeenCalled();
       });
 
       it('bỏ cờ isPurchaser', async () => {
         await expect(
-          usersService.updateMfgAttributes('old', { isPurchaser: false }),
+          usersService.updateMfgAttributes('old', { isPurchaser: false }, ADMIN),
         ).rejects.toThrow(BadRequestException);
         expect(prisma.user.update).not.toHaveBeenCalled();
       });
 
       it('xoá tài khoản', async () => {
-        await expect(usersService.remove('old', 'admin')).rejects.toThrow(BadRequestException);
+        await expect(usersService.remove('old', ADMIN)).rejects.toThrow(BadRequestException);
         expect(prisma.user.delete).not.toHaveBeenCalled();
       });
 
       it('vẫn cho sửa khi giữ nguyên Mua hàng', async () => {
         prisma.role.count.mockResolvedValue(1);
-        await usersService.update('old', { firstName: 'A', roleIds: ['r-purchaser'] }, 'admin');
+        await usersService.update('old', { firstName: 'A', roleIds: ['r-purchaser'] }, ADMIN);
         expect(prisma.user.update).toHaveBeenCalled();
       });
     });
@@ -344,8 +346,81 @@ describe('UsersService', () => {
       prisma.user.findUnique.mockResolvedValue(purchaser);
       prisma.user.findUniqueOrThrow.mockResolvedValue(purchaser);
       prisma.material.count.mockResolvedValue(0);
-      await usersService.update('old', { isActive: false }, 'admin');
+      await usersService.update('old', { isActive: false }, ADMIN);
       expect(prisma.user.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('B1 16/11 - người không phải ADMIN không leo thang quyền', () => {
+    // Người quản lý tài khoản (vai trò khác ADMIN được cấp USER:UPDATE) - có quyền SKU:VIEW + USER:UPDATE.
+    const MANAGER = { id: 'mgr', roles: ['HR'], permissions: ['SKU:VIEW', 'USER:UPDATE'] };
+    const adminUser = {
+      ...existingUser,
+      id: 'adm-2',
+      roles: [{ roleId: 'r-admin', role: { name: 'ADMIN' } }],
+    };
+    const staffUser = {
+      ...existingUser,
+      isActive: true,
+      roles: [{ roleId: 'r-old', role: { name: 'OLD_ROLE' } }],
+    };
+
+    it('không đặt lại mật khẩu / sửa / xoá được tài khoản ADMIN', async () => {
+      prisma.user.findUnique.mockResolvedValue(adminUser);
+      await expect(usersService.resetPassword('adm-2', { newPassword }, MANAGER)).rejects.toThrow(
+        'đặt lại mật khẩu quản trị viên',
+      );
+      await expect(usersService.update('adm-2', { firstName: 'X' }, MANAGER)).rejects.toThrow(
+        'sửa tài khoản quản trị viên',
+      );
+      await expect(usersService.updateMfgAttributes('adm-2', {}, MANAGER)).rejects.toThrow(
+        'sửa tài khoản quản trị viên',
+      );
+      await expect(usersService.remove('adm-2', MANAGER)).rejects.toThrow(
+        'xoá tài khoản quản trị viên',
+      );
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(prisma.user.delete).not.toHaveBeenCalled();
+    });
+
+    it('không gán được vai trò ADMIN', async () => {
+      prisma.user.findUnique.mockResolvedValue(staffUser);
+      prisma.role.findMany.mockResolvedValue([{ name: 'ADMIN', permissions: [] }]);
+      await expect(
+        usersService.update('user-1', { roleIds: ['r-old', 'r-admin'] }, MANAGER),
+      ).rejects.toThrow('Chỉ quản trị viên (ADMIN)');
+      expect(prisma.userRole.createMany).not.toHaveBeenCalled();
+    });
+
+    it('không gán được vai trò có quyền mình không có; chỉ xét vai trò THÊM mới', async () => {
+      prisma.user.findUnique.mockResolvedValue(staffUser);
+      prisma.role.findMany.mockResolvedValue([
+        { name: 'KHO', permissions: [{ permission: { module: 'STOCK', action: 'UPDATE' } }] },
+      ]);
+      await expect(
+        usersService.update('user-1', { roleIds: ['r-old', 'r-kho'] }, MANAGER),
+      ).rejects.toThrow('thiếu STOCK:UPDATE');
+      expect(prisma.role.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: { in: ['r-kho'] } } }),
+      );
+    });
+
+    it('giữ nguyên vai trò đang có (dù mình không có quyền của nó) vẫn lưu được', async () => {
+      prisma.user.findUnique.mockResolvedValue(staffUser);
+      prisma.user.findUniqueOrThrow.mockResolvedValue(staffUser);
+      await usersService.update('user-1', { firstName: 'B', roleIds: ['r-old'] }, MANAGER);
+      expect(prisma.role.findMany).not.toHaveBeenCalled();
+      expect(prisma.user.update).toHaveBeenCalled();
+    });
+
+    it('vai trò mới chỉ gồm quyền mình có -> được', async () => {
+      prisma.user.findUnique.mockResolvedValue(staffUser);
+      prisma.user.findUniqueOrThrow.mockResolvedValue(staffUser);
+      prisma.role.findMany.mockResolvedValue([
+        { name: 'XEM', permissions: [{ permission: { module: 'SKU', action: 'VIEW' } }] },
+      ]);
+      await usersService.update('user-1', { roleIds: ['r-old', 'r-xem'] }, MANAGER);
+      expect(prisma.userRole.createMany).toHaveBeenCalled();
     });
   });
 });

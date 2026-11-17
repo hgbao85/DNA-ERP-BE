@@ -17,6 +17,7 @@ import { MATERIAL_CODE_FALLBACK_PREFIX } from '../../common/constants/material-g
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
@@ -283,7 +284,7 @@ export class MaterialsService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
+      sortOrderBy(query, ['id', 'code', 'name', 'createdAt', 'updatedAt'], { id: query.sortOrder }),
     );
 
     return { data: result.data.map((m) => this.toResponseDto(m)), meta: result.meta };

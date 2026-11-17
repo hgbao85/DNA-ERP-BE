@@ -11,6 +11,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { uniqueTargetOf } from '../../common/filters/all-exceptions.filter';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateMaterialGroupDto } from './dto/create-material-group.dto';
 import { MaterialGroupResponseDto } from './dto/material-group-response.dto';
@@ -77,7 +78,7 @@ export class MaterialGroupsService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
+      sortOrderBy(query, ['id', 'name'], { id: query.sortOrder }),
     );
 
     return { data: result.data.map((group) => this.toResponseDto(group)), meta: result.meta };

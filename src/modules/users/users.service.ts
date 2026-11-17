@@ -16,7 +16,14 @@ import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { isFamilyScope } from '../../common/utils/warehouse-family.util';
+import {
+  PrivilegeActor,
+  assertCanGrantPermissions,
+  assertNotAdminRoleUnlessAdmin,
+  isAdminActor,
+} from '../../common/utils/privilege-guard.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -55,7 +62,7 @@ export type AuthUserProfile = NonNullable<
 export class UsersService {
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
 
-  async create(dto: CreateUserDto): Promise<UserResponseDto> {
+  async create(dto: CreateUserDto, actor: PrivilegeActor): Promise<UserResponseDto> {
     const existing = await this.prisma.user.findFirst({
       where: { OR: [{ email: dto.email }, { username: dto.username }] },
     });
@@ -64,6 +71,9 @@ export class UsersService {
       const value = existing.email === dto.email ? dto.email : dto.username;
       throw new ConflictException(`${field} ${value} đã được dùng`);
     }
+
+    // B1 16/11: không gán được vai trò ADMIN / vai trò có quyền mình không có.
+    await this.assertCanAssignRoles(actor, dto.roleIds ?? [], 'tạo tài khoản với vai trò này');
 
     const hashedPassword = await argon2.hash(dto.password);
 
@@ -115,7 +125,11 @@ export class UsersService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { createdAt: query.sortOrder },
+      sortOrderBy(
+        query,
+        ['id', 'username', 'email', 'firstName', 'lastName', 'createdAt', 'updatedAt'],
+        { createdAt: query.sortOrder },
+      ),
     );
 
     return { data: result.data.map((user) => this.toResponseDto(user)), meta: result.meta };
@@ -129,8 +143,20 @@ export class UsersService {
     return this.toResponseDto(user);
   }
 
-  async update(id: string, dto: UpdateUserDto, currentUserId: string): Promise<UserResponseDto> {
+  async update(id: string, dto: UpdateUserDto, actor: PrivilegeActor): Promise<UserResponseDto> {
+    const currentUserId = actor.id;
     const current = await this.findOneOrThrow(id);
+    // B1 16/11: không phải ADMIN thì không sửa tài khoản ADMIN (kể cả gỡ vai trò ADMIN), và chỉ THÊM được vai trò mà mọi
+    // quyền của nó mình đều có (vai trò đang có của người đó giữ nguyên được - FE luôn gửi cả danh sách).
+    this.assertTargetNotAdmin(actor, current, 'sửa tài khoản quản trị viên');
+    if (dto.roleIds !== undefined) {
+      const had = new Set(current.roles.map((r) => r.roleId));
+      await this.assertCanAssignRoles(
+        actor,
+        dto.roleIds.filter((r) => !had.has(r)),
+        'gán vai trò này',
+      );
+    }
 
     // Self-protection: an admin must not be able to lock themselves out or strip their own
     // roles (would leave the system potentially un-administerable). Enforced server-side -
@@ -182,8 +208,13 @@ export class UsersService {
     return this.toResponseDto(user);
   }
 
-  async updateMfgAttributes(id: string, dto: UpdateUserMfgAttributesDto): Promise<UserResponseDto> {
+  async updateMfgAttributes(
+    id: string,
+    dto: UpdateUserMfgAttributesDto,
+    actor: PrivilegeActor,
+  ): Promise<UserResponseDto> {
     const current = await this.findOneOrThrow(id);
+    this.assertTargetNotAdmin(actor, current, 'sửa tài khoản quản trị viên');
 
     // Floor roles (Phôi/Hàn/Sơn/KCS) chỉ tồn tại trong gia đình kho phoi-son-han - trước
     // 2026-09-03 ép cứng về đúng 1 literal 'phoi-son-han' bất kể caller gửi gì, khiến không công
@@ -288,8 +319,10 @@ export class UsersService {
     return this.toResponseDto(user);
   }
 
-  async resetPassword(id: string, dto: ResetPasswordDto): Promise<void> {
-    await this.findOneOrThrow(id);
+  async resetPassword(id: string, dto: ResetPasswordDto, actor: PrivilegeActor): Promise<void> {
+    const target = await this.findOneOrThrow(id);
+    // B1 16/11: đặt lại mật khẩu ADMIN = chiếm tài khoản ADMIN.
+    this.assertTargetNotAdmin(actor, target, 'đặt lại mật khẩu quản trị viên');
 
     const hashedPassword = await argon2.hash(dto.newPassword);
 
@@ -307,11 +340,12 @@ export class UsersService {
     });
   }
 
-  async remove(id: string, currentUserId: string): Promise<void> {
-    if (id === currentUserId) {
+  async remove(id: string, actor: PrivilegeActor): Promise<void> {
+    if (id === actor.id) {
       throw new ForbiddenException('Bạn không thể tự xoá tài khoản của mình');
     }
-    await this.findOneOrThrow(id);
+    const target = await this.findOneOrThrow(id);
+    this.assertTargetNotAdmin(actor, target, 'xoá tài khoản quản trị viên');
     await this.assertNoBuyerMaterials(id, 'xoá tài khoản');
     // Soft delete: the Prisma extension rewrites this into an UPDATE setting deletedAt.
     await this.prisma.user.delete({ where: { id } });
@@ -376,6 +410,44 @@ export class UsersService {
           'Dùng "Chuyển giao vật tư" ở Admin > Người dùng để giao cho nhân viên mua hàng khác trước.',
       );
     }
+  }
+
+  /** B1 16/11 - xem privilege-guard.util. */
+  private async assertCanAssignRoles(
+    actor: PrivilegeActor,
+    roleIds: string[],
+    what: string,
+  ): Promise<void> {
+    if (isAdminActor(actor) || roleIds.length === 0) return;
+    const roles = await this.prisma.role.findMany({
+      where: { id: { in: roleIds } },
+      select: { name: true, permissions: { select: { permission: true } } },
+    });
+    assertNotAdminRoleUnlessAdmin(
+      actor,
+      roles.map((r) => r.name),
+      what,
+    );
+    assertCanGrantPermissions(
+      actor,
+      roles.flatMap((r) =>
+        r.permissions.map((p) => `${p.permission.module}:${p.permission.action}`),
+      ),
+      what,
+    );
+  }
+
+  private assertTargetNotAdmin(
+    actor: PrivilegeActor,
+    target: NonNullable<UserWithRoles>,
+    what: string,
+  ): void {
+    if (isAdminActor(actor)) return;
+    assertNotAdminRoleUnlessAdmin(
+      actor,
+      target.roles.map((r) => r.role.name),
+      what,
+    );
   }
 
   private hasRole(user: NonNullable<UserWithRoles>, roleName: string): boolean {

@@ -16,6 +16,7 @@ import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
@@ -270,7 +271,7 @@ export class ProductionOrdersService {
       },
       query,
       undefined,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
+      sortOrderBy(query, ['id', 'poNumber', 'createdAt'], { id: query.sortOrder }),
     );
 
     const activeRevisionByProduct = await this.fetchActiveBomRevisionIds(

@@ -22,6 +22,7 @@ import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { CreateSalesOrderItemDto } from './dto/create-sales-order-item.dto';
@@ -208,7 +209,9 @@ export class SalesOrdersService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
+      sortOrderBy(query, ['id', 'code', 'orderCode', 'createdAt', 'updatedAt'], {
+        id: query.sortOrder,
+      }),
     );
 
     // Đính chính audit toàn diện 10/09 (disable nút Xoá khi biết trước sẽ bị chặn): 1 query gộp

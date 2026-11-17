@@ -4,6 +4,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateDefectReasonDto } from './dto/create-defect-reason.dto';
 import { DefectReasonResponseDto } from './dto/defect-reason-response.dto';
@@ -44,7 +45,7 @@ export class DefectReasonsService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
+      sortOrderBy(query, ['id'], { id: query.sortOrder }),
     );
 
     return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };

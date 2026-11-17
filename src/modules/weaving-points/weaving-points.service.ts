@@ -4,6 +4,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateWeavingPointDto } from './dto/create-weaving-point.dto';
 import { UpdateWeavingPointDto } from './dto/update-weaving-point.dto';
@@ -54,7 +55,7 @@ export class WeavingPointsService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
+      sortOrderBy(query, ['id', 'code'], { id: query.sortOrder }),
     );
 
     return { data: result.data.map((p) => this.toResponseDto(p)), meta: result.meta };

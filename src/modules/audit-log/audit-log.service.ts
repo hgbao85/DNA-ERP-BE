@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { AuditLog, Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { QueryAuditLogDto } from './dto/query-audit-log.dto';
 
@@ -28,7 +29,9 @@ export class AuditLogService {
       this.prisma.auditLog,
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { createdAt: query.sortOrder },
+      sortOrderBy(query, ['id', 'createdAt', 'tableName', 'action'], {
+        createdAt: query.sortOrder,
+      }),
     );
   }
 }

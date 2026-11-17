@@ -30,6 +30,9 @@ describe('UsersService (integration, real Postgres)', () => {
     prisma = moduleRef.get(PRISMA_SERVICE);
   });
 
+  // B1 16/11: service nhận người thao tác; id khác target để qua chặn tự xoá.
+  const ADMIN = { id: 'another-admin-id', roles: ['ADMIN'], permissions: [] as string[] };
+
   afterAll(async () => {
     await prisma.$disconnect();
   });
@@ -38,13 +41,16 @@ describe('UsersService (integration, real Postgres)', () => {
     const email = `integration-${Date.now()}@dna-erp.local`;
     const username = `integration-${Date.now()}`;
 
-    const created = await usersService.create({
-      username,
-      email,
-      password: 'IntegrationTest123!',
-      firstName: 'Integration',
-      lastName: 'Test',
-    });
+    const created = await usersService.create(
+      {
+        username,
+        email,
+        password: 'IntegrationTest123!',
+        firstName: 'Integration',
+        lastName: 'Test',
+      },
+      ADMIN,
+    );
 
     expect(created.id).toEqual(expect.any(String));
     expect(created.email).toBe(email);
@@ -59,16 +65,19 @@ describe('UsersService (integration, real Postgres)', () => {
     const email = `integration-delete-${Date.now()}@dna-erp.local`;
     const username = `integration-delete-${Date.now()}`;
 
-    const created = await usersService.create({
-      username,
-      email,
-      password: 'IntegrationTest123!',
-      firstName: 'ToDelete',
-      lastName: 'User',
-    });
+    const created = await usersService.create(
+      {
+        username,
+        email,
+        password: 'IntegrationTest123!',
+        firstName: 'ToDelete',
+        lastName: 'User',
+      },
+      ADMIN,
+    );
 
     // second arg = the acting user's id; must differ from the target to pass the self-delete guard
-    await usersService.remove(created.id, 'another-admin-id');
+    await usersService.remove(created.id, ADMIN);
 
     await expect(usersService.findOne(created.id)).rejects.toThrow();
 

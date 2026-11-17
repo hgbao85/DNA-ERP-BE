@@ -21,6 +21,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -736,7 +737,7 @@ export class WarehouseTransfersService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { createdAt: query.sortOrder },
+      sortOrderBy(query, ['id', 'code', 'createdAt'], { createdAt: query.sortOrder }),
     );
 
     return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };

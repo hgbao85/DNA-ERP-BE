@@ -15,6 +15,8 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { RolesService } from './roles.service';
@@ -33,8 +35,8 @@ export class RolesController {
 
   @Post()
   @RequirePermissions({ module: PERMISSION_MODULES.ROLE, action: PermissionAction.CREATE })
-  create(@Body() dto: CreateRoleDto) {
-    return this.rolesService.create(dto);
+  create(@Body() dto: CreateRoleDto, @CurrentUser() actor: AuthenticatedUser) {
+    return this.rolesService.create(dto, actor);
   }
 
   @Get()
@@ -51,14 +53,18 @@ export class RolesController {
 
   @Patch(':id')
   @RequirePermissions({ module: PERMISSION_MODULES.ROLE, action: PermissionAction.UPDATE })
-  update(@Param('id') id: string, @Body() dto: UpdateRoleDto) {
-    return this.rolesService.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateRoleDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.rolesService.update(id, dto, actor);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions({ module: PERMISSION_MODULES.ROLE, action: PermissionAction.DELETE })
-  remove(@Param('id') id: string) {
-    return this.rolesService.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser) {
+    return this.rolesService.remove(id, actor);
   }
 }

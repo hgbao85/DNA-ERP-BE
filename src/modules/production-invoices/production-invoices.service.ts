@@ -41,6 +41,7 @@ import {
   TimelineParams,
 } from '../../common/utils/timeline-suggest.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { auditEvent } from '../../common/utils/audit-event.util';
 import {
   isValidLsxCode,
@@ -477,7 +478,7 @@ export class ProductionInvoicesService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
+      sortOrderBy(query, ['id', 'code', 'createdAt', 'updatedAt'], { id: query.sortOrder }),
     );
     return {
       data: await Promise.all(
