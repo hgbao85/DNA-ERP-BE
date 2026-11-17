@@ -351,6 +351,60 @@ describe('SalesOrdersService', () => {
       const result = await service.update('10', { note: 'x' });
       expect(result.deleteBlockedReason).toContain('gộp vào Phiếu sản xuất');
     });
+
+    describe('K6 16/11 - sửa đơn kèm nhiều dòng trong 1 transaction', () => {
+      const line = (id: bigint) => ({
+        id,
+        salesOrderId: 10n,
+        mfgProductId: 2n,
+        totalQty: 10,
+        mfgProduct: product,
+      });
+
+      it('ghi mọi dòng rồi mới ghi đơn, tất cả trong 1 transaction', async () => {
+        prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+        prisma.salesOrderItem.findUnique.mockImplementation(
+          ({ where }: { where: { id: bigint } }) => Promise.resolve(line(where.id)),
+        );
+        prisma.productionInvoiceItem.findFirst.mockResolvedValue(null);
+        prisma.salesOrderItem.update.mockImplementation(({ where }: { where: { id: bigint } }) =>
+          Promise.resolve(line(where.id)),
+        );
+        prisma.salesOrder.update.mockResolvedValue(orderWithItems());
+
+        await service.update('10', {
+          note: 'x',
+          items: [
+            { id: '5', totalQty: 20 },
+            { id: '6', skuName: 'B' },
+          ],
+        });
+
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+        expect(prisma.salesOrderItem.update).toHaveBeenCalledTimes(2);
+        expect(prisma.salesOrder.update).toHaveBeenCalledTimes(1);
+      });
+
+      it('1 dòng lỗi (đã ghim lệnh) -> ném lỗi, không ghi dòng sau cũng không ghi đơn (transaction huỷ cả)', async () => {
+        prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+        prisma.salesOrderItem.findUnique.mockImplementation(
+          ({ where }: { where: { id: bigint } }) => Promise.resolve(line(where.id)),
+        );
+        prisma.productionInvoiceItem.findFirst.mockResolvedValue({ id: 77n });
+
+        await expect(
+          service.update('10', {
+            note: 'x',
+            items: [
+              { id: '5', totalQty: 20 },
+              { id: '6', skuName: 'B' },
+            ],
+          }),
+        ).rejects.toThrow(ConflictException);
+        expect(prisma.salesOrderItem.update).not.toHaveBeenCalled();
+        expect(prisma.salesOrder.update).not.toHaveBeenCalled();
+      });
+    });
   });
 
   describe('findOne', () => {

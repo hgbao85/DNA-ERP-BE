@@ -591,6 +591,23 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
     });
   });
 
+  describe('K5 16/11 - đọc phiếu theo kho được giao', () => {
+    it('danh sách: thủ kho lọc đúng kho mình ngay trong câu truy vấn (không lấy 200 phiếu mọi kho rồi mới lọc)', async () => {
+      await service.findAll({}, 'phoi-son-han-son-pa');
+      await service.findAll({}, null);
+      const where = (i: number) =>
+        (prisma.issueSlip.findMany.mock.calls[i] as [{ where: Record<string, unknown> }])[0].where;
+      expect(where(0).warehouse).toEqual({ code: 'phoi-son-han-son-pa' });
+      expect(where(1).warehouse).toBeUndefined();
+    });
+
+    it('xem 1 phiếu: kho khác -> 403; đúng kho / tổng kho -> được', async () => {
+      await expect(service.findOne('9', 'vat-tu-tp')).rejects.toThrow(ForbiddenException);
+      await expect(service.findOne('9', 'phoi-son-han')).resolves.toBeDefined();
+      await expect(service.findOne('9', null)).resolves.toBeDefined();
+    });
+  });
+
   // Xuất đan 2 phiếu - phiếu mảnh (kho Sơn) + phiếu vật tư kèm (kho Phụ kiện) cùng điểm đan.
   describe('phiếu xuất đan', () => {
     const pieceLine = (o: Record<string, unknown> = {}) => ({

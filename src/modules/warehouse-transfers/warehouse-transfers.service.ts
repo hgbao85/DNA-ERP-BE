@@ -1438,10 +1438,19 @@ export class WarehouseTransfersService {
       : null;
     const prefix = `CK-${transferWarehouseShortCode({ ...fromWarehouse, workshopCode: workshop?.code ?? null })}-`;
     await lockBusinessKey(tx, `warehouse-transfer-code:${prefix}`);
-    const count = await tx.warehouseTransfer.count({
+    // K6 16/11: số tiếp theo = số LỚN NHẤT đang có + 1, chỉ tính mã đúng dạng <prefix><chữ số>. Trước đây ĐẾM mọi mã bắt đầu
+    // bằng prefix: kho có mã ngắn dạng tiền tố của kho khác (vd mã kho tự do "ABC" và "ABC-X" -> CK-ABC- và CK-ABC-X-) đếm lẫn
+    // phiếu của nhau, ra số nhảy cóc hoặc trùng (code @unique -> lỗi tạo phiếu).
+    const rows = await tx.warehouseTransfer.findMany({
       where: { code: { startsWith: prefix } },
+      select: { code: true },
     });
-    return `${prefix}${String(count + 1).padStart(3, '0')}`;
+    let max = 0;
+    for (const { code } of rows) {
+      const rest = code.slice(prefix.length);
+      if (/^\d+$/.test(rest)) max = Math.max(max, Number(rest));
+    }
+    return `${prefix}${String(max + 1).padStart(3, '0')}`;
   }
 
   /**

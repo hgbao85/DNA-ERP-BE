@@ -40,7 +40,7 @@ describe('PackagingIssuesService', () => {
     bomAccessoryItem: { findFirst: jest.Mock; findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     transferCheckResult: { groupBy: jest.Mock };
-    warehouse: { findUniqueOrThrow: jest.Mock };
+    warehouse: { findUniqueOrThrow: jest.Mock; findUnique: jest.Mock };
     $executeRaw: jest.Mock;
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
@@ -84,6 +84,13 @@ describe('PackagingIssuesService', () => {
   const vatTuTp = { id: 2n, code: 'vat-tu-tp', name: 'Kho Vật tư thành phẩm' };
   const thanhPham = { id: 6n, code: 'thanh-pham', name: 'Kho Thành phẩm' };
   const thanhPham2 = { id: 7n, code: 'thanh-pham-2', name: 'Kho thành phẩm 2' };
+  const production = { id: 99n, code: 'PRODUCTION', name: 'Sản xuất (ảo)' };
+  const whByCode: Record<string, unknown> = {
+    'vat-tu-tp': vatTuTp,
+    'thanh-pham': thanhPham,
+    'thanh-pham-2': thanhPham2,
+    PRODUCTION: production,
+  };
 
   const issueRow = {
     id: 100n,
@@ -150,6 +157,9 @@ describe('PackagingIssuesService', () => {
         ]),
       },
       warehouse: {
+        findUnique: jest.fn(({ where }: { where: { code: string } }) =>
+          Promise.resolve(whByCode[where.code] ?? null),
+        ),
         findUniqueOrThrow: jest
           .fn()
           .mockImplementation(({ where }: { where: { code: string } }) =>
@@ -158,7 +168,9 @@ describe('PackagingIssuesService', () => {
                 ? vatTuTp
                 : where.code === 'thanh-pham-2'
                   ? thanhPham2
-                  : thanhPham,
+                  : where.code === 'PRODUCTION'
+                    ? production
+                    : thanhPham,
             ),
           ),
       },
@@ -472,6 +484,79 @@ describe('PackagingIssuesService', () => {
         undefined,
         500n, // PI đang xuất - chỉ trừ giữ chỗ của PI KHÁC
       );
+    });
+
+    describe('K6 16/11 - kho nguồn vật tư đóng gói theo kho thành phẩm của lệnh', () => {
+      const materialAtTp = {
+        ...material,
+        warehouseId: 6n,
+        warehouse: { id: 6n, code: 'thanh-pham' },
+      };
+      const withPiWarehouse = (code: string) => {
+        prisma.material.findUnique.mockResolvedValue(materialAtTp);
+        prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue({
+          productionInvoiceId: 500n,
+          warehouseCode: code,
+        });
+        prisma.packagingIssue.create.mockResolvedValue({
+          ...issueRow,
+          material: materialAtTp,
+          productionOrder: {
+            ...order,
+            productionInvoiceItem: { ...order.productionInvoiceItem, warehouseCode: code },
+          },
+        });
+      };
+
+      it('lệnh ở kho thành phẩm 2: đọc tồn + giữ chỗ + ghi sổ từ kho 2, thủ kho kho 2 xuất được', async () => {
+        withPiWarehouse('thanh-pham-2');
+
+        await service.create('1', dto, 'user-1', 'thanh-pham-2');
+
+        expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+          expect.objectContaining({ fromWarehouseId: 7n, toWarehouseId: 99n }),
+          expect.anything(),
+        );
+        expect(stockReservationsService.drainPoolBestEffort).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ warehouseId: 7n }),
+        );
+      });
+
+      it('lệnh ở kho thành phẩm 2: thủ kho kho gốc bị chặn', async () => {
+        withPiWarehouse('thanh-pham-2');
+        await expect(service.create('1', dto, 'user-1', 'thanh-pham')).rejects.toThrow(
+          ForbiddenException,
+        );
+      });
+
+      it('lệnh ở kho thành phẩm gốc: nguồn = đích -> ghi sang kho ảo Sản xuất, không còn lỗi from == to', async () => {
+        withPiWarehouse('thanh-pham');
+
+        await service.create('1', dto, 'user-1', 'thanh-pham');
+
+        expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+          expect.objectContaining({ fromWarehouseId: 6n, toWarehouseId: 99n }),
+          expect.anything(),
+        );
+      });
+
+      it('getBulkPlan trả mã kho thật (kho thành phẩm của lệnh) để FE lọc đúng thủ kho', async () => {
+        prisma.productionOrder.findMany.mockResolvedValue([
+          {
+            ...order,
+            productionInvoiceItem: {
+              ...order.productionInvoiceItem,
+              warehouseCode: 'thanh-pham-2',
+            },
+          },
+        ]);
+        prisma.bomAccessoryItem.findMany.mockResolvedValue([
+          { ...accessoryRow, material: materialAtTp },
+        ]);
+        const result = await service.getBulkPlan(['1']);
+        expect(result[0].materialWarehouseCode).toBe('thanh-pham-2');
+      });
     });
   });
 
