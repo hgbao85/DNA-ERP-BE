@@ -488,6 +488,25 @@ describe('QcReviewsService', () => {
       expect(prisma.cutPatternSegment.groupBy).toHaveBeenCalledWith(
         expect.objectContaining({ where: { cutBundleId: 1n } }),
       );
+      // Chấm vượt -> không ghi kết quả KCS (transaction huỷ cả bước đổi trạng thái).
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+    });
+
+    it('X1 16/11: số đã cắt đọc TRONG transaction, SAU bước giữ dòng đợt (updateMany có điều kiện AWAITING_QC)', async () => {
+      prisma.cutPatternSegment.groupBy.mockResolvedValue([
+        { segmentSpecId: 30n, _sum: { qty: 8 } },
+      ]);
+
+      await service.reviewCutBundle(
+        '1',
+        { segments: [{ segmentSpecId: '30', failedQty: 2 }] },
+        'user-kcs',
+      );
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(prisma.cutBundle.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.cutPatternSegment.groupBy.mock.invocationCallOrder[0],
+      );
     });
 
     it('ném ConflictException nếu bundle không ở AWAITING_QC', async () => {
