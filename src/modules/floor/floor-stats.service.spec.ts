@@ -1,6 +1,7 @@
 // `jest.Mock#mock.calls` và `where` truyền cho Prisma được jest gõ `any` -> chạm no-unsafe-*; cùng lý do auth.service.spec.ts.
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
 import { BadRequestException } from '@nestjs/common';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { FloorStatsService } from './floor-stats.service';
 
@@ -11,7 +12,10 @@ describe('FloorStatsService.getStats', () => {
     cutPatternSegment: { findMany: jest.Mock };
     stepBatchSegment: { findMany: jest.Mock };
     productionBatch: { findMany: jest.Mock };
+    productionInvoiceItem: { findMany: jest.Mock };
+    workshop: { findMany: jest.Mock; findFirst: jest.Mock };
   };
+  let scope: { getScope: jest.Mock };
   let service: FloorStatsService;
 
   // KCS duyệt lúc 00:30 sáng 15/10 giờ VN = 17:30 UTC ngày 14/10 - phải rơi vào ngày 15, không phải 14.
@@ -93,8 +97,21 @@ describe('FloorStatsService.getStats', () => {
       cutPatternSegment: { findMany: jest.fn().mockResolvedValue([]) },
       stepBatchSegment: { findMany: jest.fn().mockResolvedValue([]) },
       productionBatch: { findMany: jest.fn().mockResolvedValue([]) },
+      productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([]) },
+      workshop: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
-    service = new FloorStatsService(prisma as unknown as PrismaServiceType);
+    scope = {
+      getScope: jest
+        .fn()
+        .mockResolvedValue({ workshopId: null, workshopName: null, visibleWorkshopIds: null }),
+    };
+    service = new FloorStatsService(
+      prisma as unknown as PrismaServiceType,
+      scope as unknown as WorkshopScopeService,
+    );
   });
 
   describe('đạt / lỗi theo từng nhánh', () => {
@@ -504,6 +521,81 @@ describe('FloorStatsService.getStats', () => {
           failed: 3,
         },
       ]);
+    });
+  });
+
+  describe('X4 16/11: người gắn xưởng chỉ thấy số của PI thuộc xưởng mình ở tổ đó', () => {
+    // PI 45 của xưởng 2 (sơn nhờ xưởng 1), PI 46 của xưởng 1. Người xem gắn xưởng 1.
+    const onPi = <T extends object>(row: T, pi: bigint, key: 'productionBatch' | 'cutBundle') =>
+      key === 'productionBatch'
+        ? {
+            ...row,
+            productionBatch: {
+              ...(row as { productionBatch: object }).productionBatch,
+              productionOrder: { productionInvoiceItem: { productionInvoiceId: pi } },
+            },
+          }
+        : {
+            ...row,
+            cutBundle: {
+              ...(row as { cutBundle: object }).cutBundle,
+              steelIssue: { productionInvoiceId: pi },
+            },
+          };
+
+    beforeEach(() => {
+      scope.getScope.mockResolvedValue({
+        workshopId: 1n,
+        workshopName: 'Xưởng Phú An',
+        visibleWorkshopIds: [1n, 2n],
+      });
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        { productionInvoiceId: 45n, workshopId: 2n },
+        { productionInvoiceId: 46n, workshopId: 1n },
+      ]);
+      prisma.workshop.findMany.mockResolvedValue([
+        { id: 1n, paintWorkshopId: null },
+        { id: 2n, paintWorkshopId: 1n },
+      ]);
+    });
+
+    it('đã duyệt: Hàn của xưởng khác bị bỏ, Sơn nhờ xưởng mình sơn vẫn thấy, cắt của xưởng khác bị bỏ', async () => {
+      reviews({
+        cut: [
+          onPi(cutReview(T_1510_1000_VN, an, [{ id: 1, mm: '185', qty: 20 }]), 45n, 'cutBundle'),
+        ],
+        batch: [
+          onPi(batchReview(T_1510_1000_VN, 'HAN', 40, 0, 'Mê ngồi'), 45n, 'productionBatch'),
+          onPi(batchReview(T_1510_1000_VN, 'HAN', 7, 0, 'Tay'), 46n, 'productionBatch'),
+          onPi(batchReview(T_1510_1000_VN, 'SON', 25, 0, 'Mê ngồi', binh), 45n, 'productionBatch'),
+        ],
+      });
+      const r = await service.getStats({ from: '2026-10-15', to: '2026-10-15' }, 'qlsx-1');
+      expect(scope.getScope).toHaveBeenCalledWith('qlsx-1');
+      expect(r.rows.map((x) => `${x.op}:${x.label}:${x.passed}`)).toEqual([
+        'HAN:Tay:7',
+        'SON:Mê ngồi:25',
+      ]);
+    });
+
+    it('đang chờ cũng lọc theo xưởng', async () => {
+      const none = { reportedById: null, reportedBy: null };
+      const po = (pi: bigint) => ({
+        productionOrder: { productionInvoiceItem: { productionInvoiceId: pi } },
+      });
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { stage: 'HAN', status: 'OPEN', reportedQty: 5, ...none, ...po(45n) },
+        { stage: 'HAN', status: 'OPEN', reportedQty: 3, ...none, ...po(46n) },
+      ]);
+      const r = await service.getStats({ from: '2026-10-15', to: '2026-10-15' }, 'qlsx-1');
+      expect(r.pending).toEqual([
+        { op: 'HAN', workerId: null, workerName: null, notSent: 3, awaitingQc: 0 },
+      ]);
+    });
+
+    it('getMyStats (công nhân) không lọc theo xưởng - số của chính mình', async () => {
+      await service.getMyStats('u-an', { from: '2026-10-15', to: '2026-10-15' });
+      expect(scope.getScope).toHaveBeenCalledWith(undefined);
     });
   });
 });

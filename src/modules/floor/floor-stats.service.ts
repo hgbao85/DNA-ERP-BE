@@ -14,8 +14,10 @@ import {
   vnDayKey,
   vnDayStart,
 } from '../../common/utils/floor-stats.util';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { FloorStatsQueryDto } from './dto/floor-stats.dto';
+import { filterByQueueWorkshop } from './floor-queue-workshop.util';
 
 /**
  * Loại việc trong báo cáo. Đoạn sắt đi qua nhiều công đoạn (Cắt -> Uốn -> ...) nên MỖI công đoạn là một dòng riêng -
@@ -69,6 +71,11 @@ const USER_NAME = { select: { firstName: true, lastName: true, username: true } 
 type NamedUser = { firstName: string; lastName: string; username: string } | null;
 const fullName = (u: NamedUser) => (u ? `${u.lastName} ${u.firstName}`.trim() || u.username : null);
 
+/** PI của lô mảnh - để lọc theo xưởng hàng đợi (X4 16/11). */
+const BATCH_PI = {
+  select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+} as const;
+
 const SEG_SPEC = { select: { cutLengthMm: true, material: { select: { name: true } } } } as const;
 type SegSpec = { cutLengthMm: { toString(): string }; material: { name: string } };
 const specLabel = (s: SegSpec) => `${s.cutLengthMm.toString()}mm · ${s.material.name}`;
@@ -88,9 +95,17 @@ const specLabel = (s: SegSpec) => `${s.cutLengthMm.toString()}mm · ${s.material
  */
 @Injectable()
 export class FloorStatsService {
-  constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
+  constructor(
+    @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
+    private readonly workshopScope: WorkshopScopeService,
+  ) {}
 
-  async getStats(q: FloorStatsQueryDto) {
+  /**
+   * `userId` (QLSX/BOSS/ADMIN xem toàn xưởng): X4 16/11 - người gắn xưởng chỉ thấy số của PI thuộc xưởng
+   * mình ở tổ đó (cùng quy tắc hàng đợi: Sơn theo xưởng sơn); không gắn xưởng thấy tất cả như cũ.
+   */
+  async getStats(q: FloorStatsQueryDto, userId?: string) {
+    const workshopId = (await this.workshopScope.getScope(userId)).workshopId;
     const groupBy: StatsGroupBy = q.groupBy ?? 'day';
     const to = q.to ?? vnDayKey(new Date());
     const from = q.from ?? `${to.slice(0, 8)}01`;
@@ -114,7 +129,7 @@ export class FloorStatsService {
     const wantSteel = !q.stage || q.stage === 'PHOI'; // cắt + công đoạn phụ chỉ của tổ Phôi
     const stages: MfgStage[] = q.stage ? [q.stage] : [MfgStage.PHOI, MfgStage.HAN, MfgStage.SON];
 
-    const [cutReviews, stepReviews, batchReviews, pendingRows] = await Promise.all([
+    const [allCutReviews, allStepReviews, allBatchReviews, pendingRows] = await Promise.all([
       wantSteel
         ? this.prisma.qcReview.findMany({
             where: {
@@ -129,6 +144,7 @@ export class FloorStatsService {
                 select: {
                   openedById: true,
                   openedBy: USER_NAME,
+                  steelIssue: { select: { productionInvoiceId: true } },
                   segments: { select: { segmentSpecId: true, qty: true, segmentSpec: SEG_SPEC } },
                 },
               },
@@ -148,6 +164,7 @@ export class FloorStatsService {
               stepBundle: {
                 select: {
                   step: true,
+                  productionInvoiceId: true,
                   reportedById: true,
                   reportedBy: USER_NAME,
                   batches: {
@@ -181,11 +198,34 @@ export class FloorStatsService {
               reportedById: true,
               reportedBy: USER_NAME,
               piece: { select: { name: true } },
+              productionOrder: BATCH_PI,
             },
           },
         },
       }),
-      this.loadPending(stages, wantSteel, workerId),
+      this.loadPending(stages, wantSteel, workerId, workshopId),
+    ]);
+    const [cutReviews, stepReviews, batchReviews] = await Promise.all([
+      filterByQueueWorkshop(
+        this.prisma,
+        workshopId,
+        MfgStage.PHOI,
+        allCutReviews,
+        (r) => r.cutBundle?.steelIssue.productionInvoiceId,
+      ),
+      filterByQueueWorkshop(
+        this.prisma,
+        workshopId,
+        MfgStage.PHOI,
+        allStepReviews,
+        (r) => r.stepBundle?.productionInvoiceId,
+      ),
+      this.filterBatchesByWorkshop(
+        workshopId,
+        allBatchReviews,
+        (r) => r.productionBatch?.stage,
+        (r) => r.productionBatch?.productionOrder.productionInvoiceItem.productionInvoiceId,
+      ),
     ]);
 
     const rows = new Map<string, FloorStatRow>();
@@ -299,13 +339,37 @@ export class FloorStatsService {
     };
   }
 
+  /** Lô mảnh lọc theo xưởng hàng đợi của TỪNG tổ (Hàn/Sơn có thể khác xưởng - Sơn theo xưởng sơn). */
+  private async filterBatchesByWorkshop<T>(
+    workshopId: bigint | null,
+    rows: T[],
+    stageOf: (row: T) => MfgStage | undefined,
+    piIdOf: (row: T) => bigint | null | undefined,
+  ): Promise<T[]> {
+    if (workshopId == null) return rows;
+    const byStage = new Map<MfgStage, T[]>();
+    for (const r of rows) {
+      const st = stageOf(r);
+      if (!st) continue;
+      byStage.set(st, [...(byStage.get(st) ?? []), r]);
+    }
+    const kept = new Set<T>();
+    for (const [st, list] of byStage) {
+      for (const r of await filterByQueueWorkshop(this.prisma, workshopId, st, list, piIdOf)) {
+        kept.add(r);
+      }
+    }
+    return rows.filter((r) => kept.has(r));
+  }
+
   /** Số đã báo mà KCS CHƯA duyệt, theo loại việc (tính đến bây giờ, không theo kỳ). */
   private async loadPending(
     stages: MfgStage[],
     wantSteel: boolean,
     workerId: string | undefined,
+    workshopId: bigint | null = null,
   ): Promise<FloorStatPending[]> {
-    const [cut, step, batches] = await Promise.all([
+    const [allCut, allStep, allBatches] = await Promise.all([
       wantSteel
         ? this.prisma.cutPatternSegment.findMany({
             where: {
@@ -316,7 +380,14 @@ export class FloorStatsService {
             },
             select: {
               qty: true,
-              cutBundle: { select: { status: true, openedById: true, openedBy: USER_NAME } },
+              cutBundle: {
+                select: {
+                  status: true,
+                  openedById: true,
+                  openedBy: USER_NAME,
+                  steelIssue: { select: { productionInvoiceId: true } },
+                },
+              },
             },
           })
         : [],
@@ -336,6 +407,7 @@ export class FloorStatsService {
               stepBatch: {
                 select: {
                   step: true,
+                  productionInvoiceId: true,
                   stepBundleId: true,
                   reportedById: true,
                   reportedBy: USER_NAME,
@@ -356,8 +428,31 @@ export class FloorStatsService {
           reportedQty: true,
           reportedById: true,
           reportedBy: USER_NAME,
+          productionOrder: BATCH_PI,
         },
       }),
+    ]);
+    const [cut, step, batches] = await Promise.all([
+      filterByQueueWorkshop(
+        this.prisma,
+        workshopId,
+        MfgStage.PHOI,
+        allCut,
+        (s) => s.cutBundle.steelIssue.productionInvoiceId,
+      ),
+      filterByQueueWorkshop(
+        this.prisma,
+        workshopId,
+        MfgStage.PHOI,
+        allStep,
+        (s) => s.stepBatch.productionInvoiceId,
+      ),
+      this.filterBatchesByWorkshop(
+        workshopId,
+        allBatches,
+        (b) => b.stage,
+        (b) => b.productionOrder.productionInvoiceItem.productionInvoiceId,
+      ),
     ]);
 
     const acc = new Map<string, FloorStatPending>();

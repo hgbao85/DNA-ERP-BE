@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
@@ -64,6 +65,7 @@ const WORKSTATION_INCLUDE = { workshop: { select: { name: true } } } as const;
 
 const WORKER_SELECT = {
   id: true,
+  workshopId: true,
   username: true,
   firstName: true,
   lastName: true,
@@ -268,16 +270,23 @@ export class FloorAdminService {
 
   // ─── Điểm làm việc (máy) + mã QR ────────────────────────────────────────────
 
-  async listWorkstations() {
+  /**
+   * X4 16/11: QLSX gắn xưởng chỉ thấy/sửa máy của xưởng mình + máy chưa khai xưởng (NULL); tạo máy mới
+   * luôn gán xưởng mình. Người không gắn xưởng như cũ.
+   */
+  async listWorkstations(userId?: string) {
+    const scope = await this.workshopScope.getScope(userId);
     const rows = await this.prisma.workstation.findMany({
+      where: this.ownOrUnassigned(scope),
       orderBy: [{ stage: 'asc' }, { code: 'asc' }],
       include: WORKSTATION_INCLUDE,
     });
     return rows.map((w) => this.toWorkstation(w));
   }
 
-  async createWorkstation(dto: CreateWorkstationDto) {
+  async createWorkstation(dto: CreateWorkstationDto, userId?: string) {
     this.assertWorkstationShape(dto.stage, dto.kind, dto.processStep ?? null);
+    const scope = await this.workshopScope.getScope(userId);
     // 13/11/2026: máy cắt BẮT BUỘC có loại (CHECK DB) - thiếu thì mặc định laser; loại khác không
     // được mang loại máy cắt.
     if (dto.kind !== WorkstationKind.CUT && dto.cutMachineType) {
@@ -285,7 +294,9 @@ export class FloorAdminService {
     }
     const cutMachineType =
       dto.kind === WorkstationKind.CUT ? (dto.cutMachineType ?? SolverMachine.laser) : null;
-    const workshopId = dto.workshopId ? await this.assertWorkshopUsable(dto.workshopId) : null;
+    const asked = dto.workshopId ? await this.assertWorkshopUsable(dto.workshopId) : null;
+    this.workshopScope.assertCanManage(scope, [asked], 'xưởng chọn cho máy');
+    const workshopId = asked ?? scope.workshopId;
     const code = dto.code.trim().toUpperCase();
     try {
       const created = await this.prisma.workstation.create({
@@ -310,16 +321,26 @@ export class FloorAdminService {
     }
   }
 
-  async updateWorkstation(id: string, dto: UpdateWorkstationDto) {
+  async updateWorkstation(id: string, dto: UpdateWorkstationDto, userId?: string) {
     const current = await this.findWorkstationOrThrow(id);
+    const scope = await this.workshopScope.getScope(userId);
+    this.workshopScope.assertCanManage(scope, [current.workshopId], 'máy này');
     if (dto.cutMachineType !== undefined && current.kind !== WorkstationKind.CUT) {
       throw new BadRequestException('Chỉ máy cắt mới đổi được loại máy cắt');
     }
     // workshopId: undefined = giữ nguyên, null = bỏ xưởng, chuỗi = đổi xưởng (phải đang hoạt động).
     let workshopId: bigint | null | undefined;
-    if (dto.workshopId === null) workshopId = null;
-    else if (dto.workshopId !== undefined)
+    if (dto.workshopId === null) {
+      if (scope.workshopId != null) {
+        throw new ForbiddenException(
+          'QLSX gắn xưởng không bỏ xưởng của máy được - nhờ người phụ trách chung đổi',
+        );
+      }
+      workshopId = null;
+    } else if (dto.workshopId !== undefined) {
       workshopId = await this.assertWorkshopUsable(dto.workshopId);
+      this.workshopScope.assertCanManage(scope, [workshopId], 'xưởng chọn cho máy');
+    }
     const updated = await this.prisma.workstation.update({
       where: { id: parseBigIntId(id) },
       data: {
@@ -334,8 +355,13 @@ export class FloorAdminService {
   }
 
   /** Đổi mã QR (tem mất / bị chụp lại mang đi chỗ khác) - tem cũ quét ra "mã không còn dùng". */
-  async regenerateWorkstationToken(id: string) {
-    await this.findWorkstationOrThrow(id);
+  async regenerateWorkstationToken(id: string, userId?: string) {
+    const current = await this.findWorkstationOrThrow(id);
+    this.workshopScope.assertCanManage(
+      await this.workshopScope.getScope(userId),
+      [current.workshopId],
+      'máy này',
+    );
     const updated = await this.prisma.workstation.update({
       where: { id: parseBigIntId(id) },
       data: { qrToken: newQrToken() },
@@ -375,6 +401,13 @@ export class FloorAdminService {
     if (!ws.isActive)
       throw new BadRequestException('Xưởng này đã ngừng hoạt động, không gán máy vào được');
     return wid;
+  }
+
+  /** Lọc máy/công nhân: QLSX gắn xưởng -> của xưởng mình + chưa khai xưởng; không gắn -> tất cả. */
+  private ownOrUnassigned(scope: WorkshopScope) {
+    return scope.workshopId != null
+      ? { OR: [{ workshopId: scope.workshopId }, { workshopId: null }] }
+      : {};
   }
 
   private async findWorkstationOrThrow(id: string) {
@@ -417,16 +450,23 @@ export class FloorAdminService {
   // User thường, role FLOOR_WORKER, tổ = mfgRole, cùng warehouseScope 'phoi-son-han' như tài khoản thống kê
   // cũ (finishProductionBatch trừ tồn đoạn theo scope). QLSX chỉ sửa được tài khoản mang role này.
 
-  async listWorkers() {
+  /** X4 16/11: cùng quy tắc xưởng như máy - xem listWorkstations. */
+  async listWorkers(userId?: string) {
+    const scope = await this.workshopScope.getScope(userId);
     const rows = await this.prisma.user.findMany({
-      where: { deletedAt: null, roles: { some: { role: { name: BUSINESS_ROLES.FLOOR_WORKER } } } },
+      where: {
+        ...this.ownOrUnassigned(scope),
+        deletedAt: null,
+        roles: { some: { role: { name: BUSINESS_ROLES.FLOOR_WORKER } } },
+      },
       orderBy: [{ mfgRole: 'asc' }, { username: 'asc' }],
       select: WORKER_SELECT,
     });
     return rows.map((u) => this.toWorker(u));
   }
 
-  async createWorker(dto: CreateFloorWorkerDto) {
+  async createWorker(dto: CreateFloorWorkerDto, userId?: string) {
+    const scope = await this.workshopScope.getScope(userId);
     const role = await this.prisma.role.findUnique({
       where: { name: BUSINESS_ROLES.FLOOR_WORKER },
     });
@@ -449,6 +489,8 @@ export class FloorAdminService {
           firstName: dto.firstName.trim(),
           lastName: dto.lastName.trim(),
           mfgRole: dto.stage as MfgRole,
+          // X4: công nhân QLSX gắn xưởng tạo thuộc xưởng đó (quét QR cũng theo xưởng này).
+          workshopId: scope.workshopId,
           warehouseScope: MFG_FLOOR_WAREHOUSE_SCOPE,
           pinPending: true,
           pinClaimExpiresAt: new Date(Date.now() + PIN_CLAIM_HOURS * 3_600_000),
@@ -465,8 +507,8 @@ export class FloorAdminService {
     }
   }
 
-  async updateWorker(id: string, dto: UpdateFloorWorkerDto) {
-    await this.findWorkerOrThrow(id);
+  async updateWorker(id: string, dto: UpdateFloorWorkerDto, userId?: string) {
+    await this.findWorkerOrThrow(id, userId);
     const updated = await this.prisma.$transaction(async (tx) => {
       const u = await tx.user.update({
         where: { id },
@@ -494,8 +536,8 @@ export class FloorAdminService {
    * "Cho đặt lại PIN" (quên PIN / nghi bị lộ): xoá PIN cũ (đổi sang hash ngẫu nhiên), tài khoản về trạng thái chờ đặt PIN trong
    * PIN_CLAIM_HOURS giờ, mở khoá, đăng xuất mọi máy. Công nhân tự đặt PIN mới ở lần đăng nhập kế - QLSX không biết PIN.
    */
-  async resetWorkerPin(id: string) {
-    await this.findWorkerOrThrow(id);
+  async resetWorkerPin(id: string, userId?: string) {
+    await this.findWorkerOrThrow(id, userId);
     const password = await argon2.hash(crypto.randomBytes(32).toString('hex'));
     const updated = await this.prisma.$transaction(async (tx) => {
       const u = await tx.user.update({
@@ -519,8 +561,8 @@ export class FloorAdminService {
   }
 
   /** Mở khoá sớm tài khoản đang bị khoá tạm do nhập sai PIN quá 5 lần. */
-  async unlockWorker(id: string) {
-    await this.findWorkerOrThrow(id);
+  async unlockWorker(id: string, userId?: string) {
+    await this.findWorkerOrThrow(id, userId);
     const updated = await this.prisma.user.update({
       where: { id },
       data: { failedLoginCount: 0, lockedUntil: null },
@@ -529,16 +571,24 @@ export class FloorAdminService {
     return this.toWorker(updated);
   }
 
-  private async findWorkerOrThrow(id: string) {
+  /** Có `actorId` thì kiểm thêm công nhân thuộc xưởng người thao tác (hoặc chưa khai xưởng). */
+  private async findWorkerOrThrow(id: string, actorId?: string) {
     const u = await this.prisma.user.findFirst({
       where: {
         id,
         deletedAt: null,
         roles: { some: { role: { name: BUSINESS_ROLES.FLOOR_WORKER } } },
       },
-      select: { id: true },
+      select: { id: true, workshopId: true },
     });
     if (!u) throw new NotFoundException(`Không có tài khoản công nhân ${id}`);
+    if (actorId) {
+      this.workshopScope.assertCanManage(
+        await this.workshopScope.getScope(actorId),
+        [u.workshopId],
+        'công nhân này',
+      );
+    }
     return u;
   }
 
