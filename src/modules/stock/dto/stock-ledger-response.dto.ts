@@ -67,6 +67,8 @@ export class StockLedgerResponseDto {
   @Expose() @ApiProperty() spec!: string;
   /// Bộ công đoạn của đoạn ('' = trơn, vd "UON,DAP") - cùng cỡ đoạn khác bộ công đoạn là 2 mã đoạn / 2 dòng tồn RIÊNG (13/11/2026).
   @Expose() @ApiProperty() segmentSteps!: string;
+  /// Chỉ có ở phản hồi "Sửa nhanh tồn kho" (K3 17/11): tồn mới thấp hơn phần đang giữ cho lệnh - vẫn ghi, kèm câu báo cho thủ kho.
+  @Expose() @ApiPropertyOptional({ nullable: true }) reservationWarning?: string | null;
 
   constructor(partial: Partial<StockLedgerResponseDto>) {
     Object.assign(this, partial);
