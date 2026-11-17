@@ -1,6 +1,12 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { MFG_FLOOR_WAREHOUSE_SCOPE } from '../../common/constants/role-permissions.constant';
 import { Prisma } from '../../generated/prisma/client';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
@@ -13,6 +19,7 @@ describe('FloorReviewService.reverse', () => {
     floorReport: { create: jest.Mock };
     cutPatternSegment: {
       findUnique: jest.Mock;
+      findMany: jest.Mock;
       update: jest.Mock;
       delete: jest.Mock;
       count: jest.Mock;
@@ -28,6 +35,7 @@ describe('FloorReviewService.reverse', () => {
     $transaction: jest.Mock;
   };
   let service: FloorReviewService;
+  let steelIssues: { assertStepsWithinCutAfterReduceInTx: jest.Mock };
 
   const cutReport = {
     id: 11n,
@@ -49,6 +57,7 @@ describe('FloorReviewService.reverse', () => {
       floorReport: { create: jest.fn() },
       cutPatternSegment: {
         findUnique: jest.fn().mockResolvedValue({ id: 900n, qty: 5 }),
+        findMany: jest.fn().mockResolvedValue([{ id: 900n, segmentSpecId: 52n, qty: 5 }]),
         update: jest.fn(),
         delete: jest.fn(),
         count: jest.fn().mockResolvedValue(1),
@@ -67,11 +76,35 @@ describe('FloorReviewService.reverse', () => {
       productionBatch: { findUnique: jest.fn() },
       $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
     };
+    steelIssues = { assertStepsWithinCutAfterReduceInTx: jest.fn().mockResolvedValue(undefined) };
     service = new FloorReviewService(
       prisma as unknown as PrismaServiceType,
-      {} as SteelIssuesService,
+      steelIssues as unknown as SteelIssuesService,
       {} as ProductionBatchesService,
+      {
+        getScope: jest
+          .fn()
+          .mockResolvedValue({ workshopId: null, workshopName: null, visibleWorkshopIds: null }),
+      } as unknown as WorkshopScopeService,
     );
+  });
+
+  it('X3 16/11: CUT kiểm Uốn/Dập ≤ số cắt còn lại TRƯỚC khi ghi đảo, với đúng số sẽ trừ', async () => {
+    await service.reverse('11', 'đếm lại', 'qlsx-1');
+    expect(steelIssues.assertStepsWithinCutAfterReduceInTx).toHaveBeenCalledWith(tx, 53n, [
+      { segmentSpecId: 52n, qty: 3 },
+    ]);
+    const checkOrder = steelIssues.assertStepsWithinCutAfterReduceInTx.mock.invocationCallOrder[0];
+    expect(checkOrder).toBeLessThan(tx.floorReport.create.mock.invocationCallOrder[0]);
+  });
+
+  it('X3 16/11: hủy làm Uốn/Dập vượt số cắt -> lỗi, không ghi đảo, không trừ', async () => {
+    steelIssues.assertStepsWithinCutAfterReduceInTx.mockRejectedValue(
+      new BadRequestException('vượt'),
+    );
+    await expect(service.reverse('11', 'đếm lại', 'qlsx-1')).rejects.toThrow(BadRequestException);
+    expect(tx.floorReport.create).not.toHaveBeenCalled();
+    expect(tx.cutPatternSegment.update).not.toHaveBeenCalled();
   });
 
   it('CUT: ghi dòng đảo (âm, có lý do, cùng máy + PI) rồi trừ đúng số của lần đó', async () => {
@@ -310,13 +343,38 @@ describe('FloorReviewService.reverse', () => {
 });
 
 describe('FloorReviewService - gửi KCS', () => {
-  let prisma: { productionBatch: { findUnique: jest.Mock } };
+  let prisma: {
+    productionBatch: { findUnique: jest.Mock };
+    cutBundle: { findUnique: jest.Mock };
+    floorReport: { findUnique: jest.Mock };
+    user: { findUnique: jest.Mock };
+    productionInvoiceItem: { findMany: jest.Mock };
+    warehouse: { findUnique: jest.Mock };
+    workshop: { findFirst: jest.Mock; findMany: jest.Mock };
+  };
   let steelIssues: { finishCutBundle: jest.Mock; submitStepBundle: jest.Mock };
   let productionBatches: { finishProductionBatch: jest.Mock };
   let service: FloorReviewService;
 
   beforeEach(() => {
-    prisma = { productionBatch: { findUnique: jest.fn() } };
+    prisma = {
+      productionBatch: { findUnique: jest.fn() },
+      cutBundle: {
+        findUnique: jest.fn().mockResolvedValue({ steelIssue: { productionInvoiceId: 45n } }),
+      },
+      floorReport: { findUnique: jest.fn() },
+      // Mặc định: QLSX không gắn xưởng (thấy/thao tác mọi xưởng như cũ).
+      user: { findUnique: jest.fn().mockResolvedValue({ workshopId: null, workshop: null }) },
+      // PI 45 thuộc xưởng 2.
+      productionInvoiceItem: {
+        findMany: jest.fn().mockResolvedValue([{ productionInvoiceId: 45n, workshopId: 2n }]),
+      },
+      warehouse: { findUnique: jest.fn().mockResolvedValue(null) },
+      workshop: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
     steelIssues = {
       finishCutBundle: jest.fn().mockResolvedValue({ id: '52' }),
       submitStepBundle: jest.fn().mockResolvedValue({ id: '8' }),
@@ -326,23 +384,66 @@ describe('FloorReviewService - gửi KCS', () => {
       prisma as unknown as PrismaServiceType,
       steelIssues as unknown as SteelIssuesService,
       productionBatches as unknown as ProductionBatchesService,
+      new WorkshopScopeService(prisma as unknown as PrismaServiceType),
     );
   });
 
+  const scopedTo = (workshopId: bigint) =>
+    prisma.user.findUnique.mockResolvedValue({
+      workshopId,
+      workshop: { name: `Xưởng ${workshopId}`, paintsFor: [] },
+    });
+
+  it('X4 16/11: QLSX xưởng khác không gửi KCS được đợt cắt / nhóm công đoạn / lô mảnh, không hủy được lần báo', async () => {
+    scopedTo(1n);
+    await expect(service.sendCutBundle('52', 'qlsx-1')).rejects.toThrow(ForbiddenException);
+    await expect(
+      service.sendStepGroup(
+        { productionInvoiceId: '45', materialId: '7', step: 'UON', productionOrderId: '41' },
+        'qlsx-1',
+      ),
+    ).rejects.toThrow(ForbiddenException);
+    prisma.productionBatch.findUnique.mockResolvedValue({
+      stage: 'HAN',
+      productionOrder: { productionInvoiceItem: { productionInvoiceId: 45n } },
+    });
+    await expect(service.sendProductionBatch('106', 'qlsx-1')).rejects.toThrow(ForbiddenException);
+    prisma.floorReport.findUnique.mockResolvedValue({
+      id: 11n,
+      kind: 'CUT',
+      reversalOfId: null,
+      reversedBy: null,
+      cutBundleId: 53n,
+      productionInvoiceId: 45n,
+      lines: [],
+    });
+    await expect(service.reverse('11', 'x', 'qlsx-1')).rejects.toThrow(ForbiddenException);
+    expect(steelIssues.finishCutBundle).not.toHaveBeenCalled();
+    expect(steelIssues.submitStepBundle).not.toHaveBeenCalled();
+    expect(productionBatches.finishProductionBatch).not.toHaveBeenCalled();
+  });
+
+  it('X4 16/11: QLSX đúng xưởng của PI gửi KCS bình thường', async () => {
+    scopedTo(2n);
+    await expect(service.sendCutBundle('52', 'qlsx-1')).resolves.toEqual({ id: '52' });
+  });
+
   it('đợt cắt: chuyển thẳng cho finishCutBundle (luật "Gửi KCS" vẫn nằm ở một nơi)', async () => {
-    await expect(service.sendCutBundle('52')).resolves.toEqual({ id: '52' });
+    await expect(service.sendCutBundle('52', 'qlsx-1')).resolves.toEqual({ id: '52' });
     expect(steelIssues.finishCutBundle).toHaveBeenCalledWith('52');
   });
 
   it('lô mảnh: tổ của chính đợt làm "vai" người gửi, kho trừ tồn là kho xưởng', async () => {
-    prisma.productionBatch.findUnique.mockResolvedValue({ stage: 'HAN' });
+    prisma.productionBatch.findUnique.mockResolvedValue({
+      stage: 'HAN',
+      productionOrder: { productionInvoiceItem: { productionInvoiceId: 45n } },
+    });
 
     await service.sendProductionBatch('106', 'qlsx-1');
 
-    expect(prisma.productionBatch.findUnique).toHaveBeenCalledWith({
-      where: { id: 106n },
-      select: { stage: true },
-    });
+    expect(prisma.productionBatch.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 106n } }),
+    );
     expect(productionBatches.finishProductionBatch).toHaveBeenCalledWith(
       '106',
       'qlsx-1',

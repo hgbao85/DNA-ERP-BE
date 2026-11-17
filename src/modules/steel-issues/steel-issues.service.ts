@@ -1287,6 +1287,16 @@ export class SteelIssuesService {
       const currentSegments = await tx.cutPatternSegment.findMany({
         where: { cutBundleId: bundle.id },
       });
+      // X3 16/11: trừ số cắt không được làm Uốn/Dập... đã báo vượt số cắt còn lại của SKU.
+      await this.assertStepsWithinCutAfterReduceInTx(
+        tx,
+        bundle.id,
+        segments.map((seg) => {
+          const specId = parseBigIntId(seg.segmentSpecId);
+          const row = currentSegments.find((s) => s.segmentSpecId === specId);
+          return { segmentSpecId: specId, qty: Math.min(seg.qty, row?.qty ?? 0) };
+        }),
+      );
       // Ghi dòng ĐẢO vào sổ TRƯỚC khi trừ (2026-10-12) - sổ không xoá gì, "Hoàn tác" chỉ là 1 lần báo âm
       // trỏ về lần báo gần nhất chưa bị đảo của đợt này. Ghi trước vì nếu đợt bị xoá hẳn bên dưới (hết
       // đoạn), FK cutBundleId của sổ tự về NULL - dòng sổ vẫn còn.
@@ -2562,7 +2572,7 @@ export class SteelIssuesService {
    * PI nhiều SKU: đợt cũ không biết của SKU nào nên KHÔNG tính cho SKU nào (không chia bừa).
    */
   private skuScope(
-    piOrders: OrderForBom[],
+    piOrders: readonly unknown[],
     orderId: bigint,
   ): { OR: { productionOrderId: bigint | null }[] } {
     return {
@@ -2571,6 +2581,93 @@ export class SteelIssuesService {
         ...(piOrders.length === 1 ? [{ productionOrderId: null }] : []),
       ],
     };
+  }
+
+  /**
+   * X3 (danh sách lỗi 16/11): trước khi TRỪ số cắt của 1 đợt (QLSX hủy 1 lần báo cắt, hoàn tác), kiểm số đã báo công
+   * đoạn phụ (Uốn/Dập/...) của cùng SKU không vượt số cắt còn lại - đúng bất biến recordStepBatch() giữ khi báo thêm.
+   * Trước đây hủy báo cắt không kiểm gì nên Uốn/Dập đã báo có thể cao hơn số đã cắt.
+   *
+   * Gọi TRONG transaction, sau khi đã khoá dòng cut_bundles. Khoá thêm step-batch của MỌI công đoạn (cùng khoá
+   * recordStepBatch, theo thứ tự cố định) rồi mới đọc: 1 lần báo công đoạn hay 1 lần hủy báo cắt khác của cùng SKU
+   * chạy cùng lúc phải chờ, sau đó đọc được số mới.
+   */
+  async assertStepsWithinCutAfterReduceInTx(
+    tx: PrismaTx,
+    cutBundleId: bigint,
+    reduce: { segmentSpecId: bigint; qty: number }[],
+  ): Promise<void> {
+    const reduceBySpec = new Map<string, number>();
+    for (const r of reduce) {
+      if (r.qty <= 0) continue;
+      const k = r.segmentSpecId.toString();
+      reduceBySpec.set(k, (reduceBySpec.get(k) ?? 0) + r.qty);
+    }
+    if (reduceBySpec.size === 0) return;
+    const bundle = await tx.cutBundle.findUnique({
+      where: { id: cutBundleId },
+      select: {
+        productionOrderId: true,
+        steelIssue: { select: { productionInvoiceId: true, materialId: true } },
+      },
+    });
+    if (!bundle) return;
+    const { productionInvoiceId: piId, materialId } = bundle.steelIssue;
+    const piOrders = await tx.productionOrder.findMany({
+      where: { productionInvoiceItem: { productionInvoiceId: piId } },
+      select: { id: true },
+    });
+    // Đợt chưa gắn SKU ở PI nhiều SKU không tính cho SKU nào (skuScope) - trừ nó không đổi số cắt của SKU nào.
+    const orderId = bundle.productionOrderId ?? (piOrders.length === 1 ? piOrders[0].id : null);
+    if (orderId == null) return;
+
+    for (const step of Object.values(ProcessStep)) {
+      if (step === ProcessStep.CAT) continue;
+      await lockBusinessKey(tx, `step-batch:${piId}:${materialId}:${step}:${orderId}`);
+    }
+    const ofSku = this.skuScope(piOrders, orderId);
+    const specIds = [...reduceBySpec.keys()].map((k) => BigInt(k));
+    const [catRows, stepRows, specs] = await Promise.all([
+      tx.cutPatternSegment.findMany({
+        where: {
+          segmentSpecId: { in: specIds },
+          cutBundle: { steelIssue: { productionInvoiceId: piId, materialId }, ...ofSku },
+        },
+        select: { segmentSpecId: true, qty: true },
+      }),
+      tx.stepBatchSegment.findMany({
+        where: {
+          segmentSpecId: { in: specIds },
+          stepBatch: { productionInvoiceId: piId, materialId, ...ofSku },
+        },
+        select: { segmentSpecId: true, qty: true, stepBatch: { select: { step: true } } },
+      }),
+      tx.segmentSpec.findMany({
+        where: { id: { in: specIds } },
+        select: { id: true, cutLengthMm: true },
+      }),
+    ]);
+    for (const [specKey, minus] of reduceBySpec) {
+      const catAfter =
+        catRows
+          .filter((r) => r.segmentSpecId.toString() === specKey)
+          .reduce((t, r) => t + r.qty, 0) - minus;
+      const byStep = new Map<ProcessStep, number>();
+      for (const r of stepRows) {
+        if (r.segmentSpecId.toString() !== specKey) continue;
+        byStep.set(r.stepBatch.step, (byStep.get(r.stepBatch.step) ?? 0) + r.qty);
+      }
+      for (const [step, done] of byStep) {
+        if (done > catAfter) {
+          const mm =
+            specs.find((s) => s.id.toString() === specKey)?.cutLengthMm.toString() ?? specKey;
+          throw new BadRequestException(
+            `Hủy số cắt này làm cỡ ${mm}mm của SKU chỉ còn ${Math.max(catAfter, 0)} đoạn đã cắt, ít hơn ` +
+              `${done} đoạn đã báo ${step} - hủy lần báo ${step} trước rồi hủy lần báo cắt`,
+          );
+        }
+      }
+    }
   }
 
   /** Tập segmentSpecId hợp lệ để khai công đoạn `step` cho 1 PI - mirror findBomSegmentSpecIds()

@@ -2771,3 +2771,85 @@ describe('SteelIssuesService', () => {
     });
   });
 });
+
+describe('SteelIssuesService.assertStepsWithinCutAfterReduceInTx (X3 16/11)', () => {
+  const make = () => {
+    const tx = {
+      $executeRaw: jest.fn(),
+      cutBundle: {
+        findUnique: jest.fn().mockResolvedValue({
+          productionOrderId: 41n,
+          steelIssue: { productionInvoiceId: 45n, materialId: 7n },
+        }),
+      },
+      productionOrder: { findMany: jest.fn().mockResolvedValue([{ id: 41n }, { id: 42n }]) },
+      // SKU 41 đã cắt 10 đoạn cỡ 52 (2 đợt), đã Uốn 8, Dập 5.
+      cutPatternSegment: {
+        findMany: jest.fn().mockResolvedValue([
+          { segmentSpecId: 52n, qty: 6 },
+          { segmentSpecId: 52n, qty: 4 },
+        ]),
+      },
+      stepBatchSegment: {
+        findMany: jest.fn().mockResolvedValue([
+          { segmentSpecId: 52n, qty: 8, stepBatch: { step: 'UON' } },
+          { segmentSpecId: 52n, qty: 5, stepBatch: { step: 'DAP' } },
+        ]),
+      },
+      segmentSpec: { findMany: jest.fn().mockResolvedValue([{ id: 52n, cutLengthMm: 450 }]) },
+    };
+    const service = new SteelIssuesService(
+      {} as unknown as PrismaServiceType,
+      {} as unknown as StockLedgerService,
+      {} as unknown as StockReservationsService,
+      {} as unknown as NotificationsService,
+      {} as unknown as RealtimeService,
+    );
+    return { tx, service };
+  };
+
+  it('trừ 2 (còn 8 ≥ Uốn 8, Dập 5) -> cho qua; khoá step-batch mọi công đoạn trừ Cắt, đúng SKU', async () => {
+    const { tx, service } = make();
+    await expect(
+      service.assertStepsWithinCutAfterReduceInTx(tx as never, 53n, [
+        { segmentSpecId: 52n, qty: 2 },
+      ]),
+    ).resolves.toBeUndefined();
+    const lockCount = Object.values(ProcessStep).filter((s) => s !== ProcessStep.CAT).length;
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(lockCount);
+    expect(tx.cutPatternSegment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          cutBundle: expect.objectContaining({ OR: [{ productionOrderId: 41n }] }) as unknown,
+        }) as unknown,
+      }),
+    );
+  });
+
+  it('trừ 3 (còn 7 < Uốn 8) -> 400, nêu cỡ đoạn và công đoạn', async () => {
+    const { tx, service } = make();
+    await expect(
+      service.assertStepsWithinCutAfterReduceInTx(tx as never, 53n, [
+        { segmentSpecId: 52n, qty: 3 },
+      ]),
+    ).rejects.toThrow(/450mm.*còn 7.*8 đoạn đã báo UON/);
+  });
+
+  it('đợt chưa gắn SKU ở PI nhiều SKU -> không thuộc SKU nào, không kiểm; số trừ 0 -> không đọc gì', async () => {
+    const { tx, service } = make();
+    tx.cutBundle.findUnique.mockResolvedValue({
+      productionOrderId: null,
+      steelIssue: { productionInvoiceId: 45n, materialId: 7n },
+    });
+    await service.assertStepsWithinCutAfterReduceInTx(tx as never, 53n, [
+      { segmentSpecId: 52n, qty: 9 },
+    ]);
+    expect(tx.stepBatchSegment.findMany).not.toHaveBeenCalled();
+
+    const fresh = make();
+    await fresh.service.assertStepsWithinCutAfterReduceInTx(fresh.tx as never, 53n, [
+      { segmentSpecId: 52n, qty: 0 },
+    ]);
+    expect(fresh.tx.cutBundle.findUnique).not.toHaveBeenCalled();
+  });
+});

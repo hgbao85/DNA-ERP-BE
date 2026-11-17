@@ -39,6 +39,7 @@ import {
 } from './dto/floor-worker.dto';
 import { CreateWorkstationDto, UpdateWorkstationDto } from './dto/workstation.dto';
 import {
+  filterByQueueWorkshop,
   queueLockKey,
   queueWorkshopIdOfPi,
   queueWorkshopIdsOfPis,
@@ -773,7 +774,10 @@ export class FloorAdminService {
   }
 
   /** Số đợt đang chờ QLSX gửi KCS theo tổ - chấm số trên menu "Sản lượng xưởng". */
-  async summary() {
+  async summary(userId?: string) {
+    // X4 16/11: QLSX gắn xưởng chỉ đếm đợt của xưởng mình - khớp danh sách FloorReviewService.listOpen().
+    const scope = await this.workshopScope.getScope(userId);
+    if (scope.workshopId != null) return this.summaryForWorkshop(scope.workshopId);
     const [cut, stepBatches, pieces] = await Promise.all([
       this.prisma.cutBundle.count({ where: { status: 'CUTTING' } }),
       this.prisma.stepBatch.findMany({
@@ -798,6 +802,72 @@ export class FloorAdminService {
       PHOI: { open: cut + stepBatches.length + pieceBy(MfgStage.PHOI) },
       HAN: { open: pieceBy(MfgStage.HAN) },
       SON: { open: pieceBy(MfgStage.SON) },
+    };
+  }
+
+  /** summary() cho QLSX gắn 1 xưởng: lọc theo xưởng hàng đợi của PI ở từng tổ (filterByQueueWorkshop). */
+  private async summaryForWorkshop(workshopId: bigint) {
+    const [cutRows, stepRows, pieceRows] = await Promise.all([
+      this.prisma.cutBundle.findMany({
+        where: { status: 'CUTTING' },
+        select: { steelIssue: { select: { productionInvoiceId: true } } },
+      }),
+      this.prisma.stepBatch.findMany({
+        where: { stepBundleId: null },
+        distinct: [
+          'productionInvoiceId',
+          'materialId',
+          'step',
+          'productionOrderId',
+          'reportedById',
+        ],
+        select: { productionInvoiceId: true },
+      }),
+      this.prisma.productionBatch.findMany({
+        where: { status: 'OPEN' },
+        select: {
+          stage: true,
+          productionOrder: {
+            select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+          },
+        },
+      }),
+    ]);
+    const piOfPiece = (r: (typeof pieceRows)[number]) =>
+      r.productionOrder.productionInvoiceItem.productionInvoiceId;
+    const count = async (stage: MfgStage) =>
+      (
+        await filterByQueueWorkshop(
+          this.prisma,
+          workshopId,
+          stage,
+          pieceRows.filter((r) => r.stage === stage),
+          piOfPiece,
+        )
+      ).length;
+    const [cut, steps, phoiPieces, han, son] = await Promise.all([
+      filterByQueueWorkshop(
+        this.prisma,
+        workshopId,
+        MfgStage.PHOI,
+        cutRows,
+        (r) => r.steelIssue.productionInvoiceId,
+      ),
+      filterByQueueWorkshop(
+        this.prisma,
+        workshopId,
+        MfgStage.PHOI,
+        stepRows,
+        (r) => r.productionInvoiceId,
+      ),
+      count(MfgStage.PHOI),
+      count(MfgStage.HAN),
+      count(MfgStage.SON),
+    ]);
+    return {
+      PHOI: { open: cut.length + steps.length + phoiPieces },
+      HAN: { open: han },
+      SON: { open: son },
     };
   }
 

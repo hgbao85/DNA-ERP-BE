@@ -1,3 +1,4 @@
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
@@ -67,6 +68,11 @@ describe('FloorReviewService.listOpen / sendStepGroup', () => {
       prisma as unknown as PrismaServiceType,
       steelIssues as unknown as SteelIssuesService,
       productionBatches as unknown as ProductionBatchesService,
+      {
+        getScope: jest
+          .fn()
+          .mockResolvedValue({ workshopId: null, workshopName: null, visibleWorkshopIds: null }),
+      } as unknown as WorkshopScopeService,
     );
   });
 
@@ -109,6 +115,40 @@ describe('FloorReviewService.listOpen / sendStepGroup', () => {
       { cutLengthMm: 441, qty: 3 },
     ]);
     expect(r.stepGroups.find((g) => g.workerId === null)!.workerName).toBeNull();
+  });
+
+  it('X4 16/11: QLSX gắn xưởng chỉ thấy nhóm công đoạn của PI thuộc xưởng mình', async () => {
+    const other = {
+      ...stepBatch(2, 'cn-binh', 'Binh', 3, '2026-10-13T01:30:00Z'),
+      productionInvoiceId: 46n,
+    };
+    prisma.stepBatch.findMany.mockResolvedValue([
+      stepBatch(1, 'cn-an', 'An', 5, '2026-10-13T01:00:00Z'),
+      other,
+    ]);
+    const scoped = new FloorReviewService(
+      {
+        ...prisma,
+        // PI 45 ở xưởng 1, PI 46 ở xưởng 2.
+        productionInvoiceItem: {
+          findMany: jest.fn().mockResolvedValue([
+            { productionInvoiceId: 45n, workshopId: 1n },
+            { productionInvoiceId: 46n, workshopId: 2n },
+          ]),
+        },
+      } as unknown as PrismaServiceType,
+      steelIssues as unknown as SteelIssuesService,
+      productionBatches as unknown as ProductionBatchesService,
+      {
+        getScope: jest
+          .fn()
+          .mockResolvedValue({ workshopId: 1n, workshopName: 'Xưởng 1', visibleWorkshopIds: [1n] }),
+      } as unknown as WorkshopScopeService,
+    );
+
+    const r = await scoped.listOpen('PHOI', undefined, 'qlsx-xuong-1');
+
+    expect(r.stepGroups.map((g) => g.workerId)).toEqual(['cn-an']);
   });
 
   it('"chờ bao lâu" tính từ lần báo CÒN HIỆU LỰC đầu tiên - bỏ lần đã bị đảo', async () => {

@@ -106,6 +106,33 @@ export async function queueWorkshopIdOfPi(
   return map.get(productionInvoiceId.toString()) ?? null;
 }
 
+/**
+ * X4 (danh sách lỗi 16/11): QLSX gắn xưởng chỉ thấy các đợt chờ gửi KCS của PI có xưởng hàng đợi (ở tổ đó) = xưởng
+ * mình - cùng quy tắc hàng đợi tổ, nên tổ Sơn thấy cả lệnh của xưởng nhờ sơn. `workshopId` null (người không
+ * gắn xưởng) = không lọc; PI không suy ra được xưởng nào (chưa có xưởng nào) thì ai cũng thấy.
+ */
+export async function filterByQueueWorkshop<T>(
+  db: Db,
+  workshopId: bigint | null,
+  stage: MfgStage,
+  rows: T[],
+  /** PI của dòng; null (dòng không gắn PI) = không lọc dòng đó. */
+  piIdOf: (row: T) => bigint | null | undefined,
+): Promise<T[]> {
+  if (workshopId == null || rows.length === 0) return rows;
+  const piIds = new Map<string, bigint>();
+  for (const r of rows) {
+    const id = piIdOf(r);
+    if (id != null) piIds.set(id.toString(), id);
+  }
+  const wsOf = await queueWorkshopIdsOfPis(db, stage, [...piIds.values()]);
+  return rows.filter((r) => {
+    const id = piIdOf(r);
+    const ws = id != null ? wsOf.get(id.toString()) : null;
+    return ws == null || ws === workshopId;
+  });
+}
+
 /** Khoá advisory của 1 hàng đợi (tổ, xưởng). */
 export function queueLockKey(stage: string, workshopId: bigint | null): string {
   return `floor-queue:${stage}:${workshopId ?? 'none'}`;
