@@ -122,6 +122,20 @@ export class StockReservationsService {
     );
     const existing = await db.stockReservation.findUnique({ where: { idempotencyKey } });
     if (existing) {
+      // K2 (danh sách lỗi 16/11): dòng cùng khoá đã nhả (phương án bị thay / lệnh đã xong rồi duyệt lại) trước đây được trả về
+      // như đang giữ - caller tưởng đã giữ chỗ nhưng getAvailableQty() không trừ dòng RELEASED, PI khác lấy mất hàng. Mở lại
+      // (cùng cách reserveOrAdjust / creditPool), không bao giờ thấp hơn phần đã tiêu.
+      if (existing.status === ReservationStatus.RELEASED) {
+        const reopened = await db.stockReservation.update({
+          where: { id: existing.id },
+          data: {
+            quantity: Math.max(input.qty, existing.consumedQty.toNumber()),
+            status: ReservationStatus.ACTIVE,
+            releasedAt: null,
+          },
+        });
+        return { id: reopened.id, quantity: reopened.quantity };
+      }
       return { id: existing.id, quantity: existing.quantity };
     }
 
@@ -675,6 +689,32 @@ export class StockReservationsService {
     /** Quy cách của bucket đang tính available ('' / bỏ trống = không quy cách) - phải khớp đúng bucket của `onHand`. */
     spec?: string,
   ): Promise<number> {
+    const reserved = await this.getReservedQty(
+      tx,
+      warehouseId,
+      materialId,
+      stockLengthMm,
+      ownProductionInvoiceId,
+      spec,
+    );
+    // Rà soát 14/11 XK5: làm tròn 4 số lẻ - trừ nhiều số thực ra lẻ sát dưới (0,3 - 0,1 = 0,19999999999999998) chặn oan khi so với
+    // số xuất.
+    return Math.max(0, Math.round((onHand - reserved) * 1e4) / 1e4 + 0);
+  }
+
+  /**
+   * Tổng phần CÒN GIỮ của 1 ô tồn (kho, vật tư, chiều dài, quy cách) - cộng CẢ HAI bảng giữ chỗ. getAvailableQty() = onHand trừ số
+   * này; tách riêng (K3 16/11) để "Sửa nhanh tồn kho" báo được tồn mới thấp hơn phần đang giữ bao nhiêu (getAvailableQty kẹp về 0
+   * nên không cho biết thiếu bao nhiêu). Vẫn là ĐÚNG MỘT chỗ cộng 2 bảng - xem docstring getAvailableQty().
+   */
+  async getReservedQty(
+    tx: PrismaTx | undefined,
+    warehouseId: bigint,
+    materialId: bigint,
+    stockLengthMm?: number,
+    ownProductionInvoiceId?: bigint,
+    spec?: string,
+  ): Promise<number> {
     const db = tx ?? this.prisma;
     const [stockReservations, transferReservations] = await Promise.all([
       db.stockReservation.findMany({
@@ -713,12 +753,7 @@ export class StockReservationsService {
       (sum, r) => sum + r.quantity.toNumber(),
       0,
     );
-    // Rà soát 14/11 XK5: làm tròn 4 số lẻ - trừ nhiều số thực ra lẻ sát dưới (0,3 - 0,1 = 0,19999999999999998) chặn oan khi so với
-    // số xuất.
-    return Math.max(
-      0,
-      Math.round((onHand - reservedFromStock - reservedFromTransfer) * 1e4) / 1e4 + 0,
-    );
+    return Math.round((reservedFromStock + reservedFromTransfer) * 1e4) / 1e4 + 0;
   }
 
   /**

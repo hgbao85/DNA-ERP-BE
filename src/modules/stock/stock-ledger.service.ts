@@ -8,6 +8,7 @@ import {
 import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { StockReservationsService } from './stock-reservations.service';
 import { paginate } from '../../common/utils/paginate.util';
 import { TRON_SEGMENT_STEPS, isNormalizedSegmentSteps } from '../../common/utils/segment-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -87,6 +88,7 @@ export class StockLedgerService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly realtime: RealtimeService,
+    private readonly reservations: StockReservationsService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -204,7 +206,18 @@ export class StockLedgerService {
   ): Promise<StockLedgerResponseDto> {
     const fromWarehouseId = parseBigIntId(dto.fromWarehouseId);
     const toWarehouseId = parseBigIntId(dto.toWarehouseId);
-    await this.assertAdjustLegs(warehouseScope, fromWarehouseId, toWarehouseId);
+    const realWarehouseId = await this.assertAdjustLegs(
+      warehouseScope,
+      fromWarehouseId,
+      toWarehouseId,
+    );
+    // Gọi lại cùng Idempotency-Key (mất mạng, bấm 2 lần) trả bút toán đã ghi - trước khi kiểm âm bên dưới, vì tồn đã đổi theo
+    // chính bút toán đó nên kiểm lại sẽ báo âm oan.
+    const replay = await this.prisma.stockLedger.findUnique({
+      where: { idempotencyKey },
+      include: LEDGER_INCLUDE,
+    });
+    if (replay) return this.toResponseDto(replay);
 
     const input = {
       fromWarehouseId,
@@ -225,8 +238,18 @@ export class StockLedgerService {
       idempotencyKey,
     };
 
+    // K3 (danh sách lỗi 16/11): trước đây không gửi expectedCurrentQty thì ghi thẳng - không khoá, không chặn âm. Nay mọi lần
+    // sửa đều trong transaction, khoá đúng ô tồn sẽ ghi ở kho thật (lockAdjustBucket) và chặn tồn âm; expectedCurrentQty (nếu
+    // có) vẫn so như cũ. Hạ tồn xuống dưới phần đang giữ cho lệnh vẫn cho (số đếm thực tế là đúng - anh chốt 17/11), kèm cảnh
+    // báo reservationWarning để thủ kho báo người mua / KHSX.
     if (dto.expectedCurrentQty === undefined) {
-      return this.postEntry(input);
+      const { entry, warning } = await this.prisma.$transaction((tx) =>
+        this.postAdjustLockedInTx(tx, input, realWarehouseId),
+      );
+      if (input.materialId !== undefined) {
+        this.publishRealtime('STOCK', input.materialId, 'ADJUSTED', userId);
+      }
+      return Object.assign(entry, { reservationWarning: warning });
     }
 
     // Optimistic lock cho UI "sửa nhanh tồn kho" (MfgWarehousesPage/MaterialsPage) - client nhập
@@ -283,10 +306,77 @@ export class StockLedgerService {
           `Tồn kho hiện tại đã đổi (đang là ${currentQty}, bạn thấy ${dto.expectedCurrentQty}) - tải lại trang và thử lại`,
         );
       }
-      return this.postEntry(input, tx);
+      return this.postAdjustLockedInTx(tx, input, realWarehouseId);
     });
     this.publishRealtime('STOCK', materialId, 'ADJUSTED', userId);
-    return adjusted;
+    return Object.assign(adjusted.entry, { reservationWarning: adjusted.warning });
+  }
+
+  /**
+   * K3 16/11: khoá FOR UPDATE đúng ô tồn mà bút toán sửa sẽ ghi ở kho thật (cùng ô postEntry ghi: chiều dài/quy cách/bộ công
+   * đoạn mặc định), chặn tồn âm khi giảm, rồi ghi. Vật tư: tồn mới thấp hơn phần đang giữ cho lệnh thì vẫn ghi nhưng trả cảnh báo.
+   */
+  private async postAdjustLockedInTx(
+    tx: PrismaTx,
+    input: PostStockEntryInput,
+    realWarehouseId: bigint,
+  ): Promise<{ entry: StockLedgerResponseDto; warning: string | null }> {
+    const stockLengthMm = input.stockLengthMm ?? 0;
+    const spec = input.spec?.trim() ?? '';
+    const segmentSteps = input.segmentSteps ?? '';
+    const rows =
+      input.materialId !== undefined
+        ? await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+            SELECT "qty" FROM "stock_quant"
+            WHERE "warehouseId" = ${realWarehouseId} AND "materialId" = ${input.materialId}
+              AND "stockLengthMm" = ${stockLengthMm} AND "spec" = ${spec}
+            FOR UPDATE
+          `
+        : input.pieceId !== undefined
+          ? await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+              SELECT "qty" FROM "stock_quant"
+              WHERE "warehouseId" = ${realWarehouseId} AND "pieceId" = ${input.pieceId}
+              FOR UPDATE
+            `
+          : input.productVariantId !== undefined
+            ? await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+                SELECT "qty" FROM "stock_quant"
+                WHERE "warehouseId" = ${realWarehouseId} AND "productVariantId" = ${input.productVariantId}
+                FOR UPDATE
+              `
+            : input.segmentSpecId !== undefined
+              ? await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+                  SELECT "qty" FROM "stock_quant"
+                  WHERE "warehouseId" = ${realWarehouseId} AND "segmentSpecId" = ${input.segmentSpecId}
+                    AND "segmentSteps" = ${segmentSteps}
+                  FOR UPDATE
+                `
+              : [];
+    const onHand = rows.reduce((sum, r) => sum + r.qty.toNumber(), 0);
+    const decreases = input.fromWarehouseId === realWarehouseId;
+    const after = Math.round((decreases ? onHand - input.qty : onHand + input.qty) * 1e4) / 1e4 + 0;
+    if (after < 0) {
+      throw new BadRequestException(
+        `Tồn hiện có ${Math.round(onHand * 1e4) / 1e4} - không giảm ${input.qty} được (tồn sẽ âm). Tải lại số tồn rồi sửa lại`,
+      );
+    }
+    let warning: string | null = null;
+    if (decreases && input.materialId !== undefined) {
+      const reserved = await this.reservations.getReservedQty(
+        tx,
+        realWarehouseId,
+        input.materialId,
+        stockLengthMm,
+        undefined,
+        spec,
+      );
+      if (after < reserved) {
+        warning =
+          `Tồn mới ${after} thấp hơn phần đang giữ cho lệnh / phiếu chuyển (${reserved}) - thiếu ` +
+          `${Math.round((reserved - after) * 1e4) / 1e4}, lệnh xuất sau sẽ bị chặn. Báo người mua / KHSX để mua bù hoặc điều chỉnh.`;
+      }
+    }
+    return { entry: await this.postEntry(input, tx), warning };
   }
 
   async findAll(query: ListStockLedgerQueryDto): Promise<Paginated<StockLedgerResponseDto>> {
@@ -665,7 +755,7 @@ export class StockLedgerService {
     warehouseScope: string | null,
     fromWarehouseId: bigint,
     toWarehouseId: bigint,
-  ): Promise<void> {
+  ): Promise<bigint> {
     const warehouses = await this.prisma.warehouse.findMany({
       where: { id: { in: [fromWarehouseId, toWarehouseId] } },
       select: { id: true, code: true, name: true, isVirtual: true },
@@ -681,6 +771,7 @@ export class StockLedgerService {
         `Bạn bị giới hạn ở kho '${warehouseScope}', không sửa tồn kho '${real[0].name}' được`,
       );
     }
+    return real[0].id;
   }
 
   private assertExactlyOneGoodsLeg(

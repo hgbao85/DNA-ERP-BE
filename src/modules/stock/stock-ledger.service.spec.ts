@@ -2,10 +2,12 @@ import { BadRequestException, ConflictException, ForbiddenException } from '@nes
 import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from './stock-ledger.service';
+import { StockReservationsService } from './stock-reservations.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 
 describe('StockLedgerService', () => {
   let service: StockLedgerService;
+  let reservations: { getReservedQty: jest.Mock };
   let prisma: {
     stockLedger: {
       findUnique: jest.Mock;
@@ -74,9 +76,11 @@ describe('StockLedgerService', () => {
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
     const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    reservations = { getReservedQty: jest.fn().mockResolvedValue(0) };
     service = new StockLedgerService(
       prisma as unknown as PrismaServiceType,
       realtimeStub as unknown as RealtimeService,
+      reservations as unknown as StockReservationsService,
     );
   });
 
@@ -307,7 +311,7 @@ describe('StockLedgerService', () => {
     // trước đó (client-side). Không khoá thì 2 người cùng thấy tồn=100 sửa gần như đồng thời cộng
     // dồn sai. expectedCurrentQty là optimistic-lock: FOR UPDATE stock_quant rồi so với tồn THẬT.
     describe('optimistic lock (expectedCurrentQty)', () => {
-      it('không truyền expectedCurrentQty - giữ nguyên hành vi cũ, không mở transaction/khoá gì thêm', async () => {
+      it('K3 16/11: không truyền expectedCurrentQty vẫn mở transaction và khoá đúng ô tồn ở kho thật', async () => {
         prisma.stockLedger.findUnique.mockResolvedValue(null);
         prisma.stockLedger.create.mockResolvedValue(ledgerRow());
 
@@ -318,8 +322,14 @@ describe('StockLedgerService', () => {
           null,
         );
 
-        expect(prisma.$transaction).not.toHaveBeenCalled();
-        expect(prisma.$queryRaw).not.toHaveBeenCalled();
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+        const sql = (
+          (prisma.$queryRaw.mock.calls as unknown[][])[0][0] as TemplateStringsArray
+        ).join('?');
+        expect(sql).toContain('FOR UPDATE');
+        expect(sql).toContain('"stockLengthMm" = ?');
+        expect(sql).toContain('"spec" = ?');
+        expect((prisma.$queryRaw.mock.calls as unknown[][])[0].slice(1)).toEqual([2n, 10n, 0, '']);
         expect(prisma.stockLedger.create).toHaveBeenCalled();
       });
 
@@ -410,6 +420,94 @@ describe('StockLedgerService', () => {
 
         expect(prisma.$queryRaw).toHaveBeenCalled();
         expect(prisma.stockLedger.create).toHaveBeenCalled();
+      });
+    });
+
+    describe('K3 16/11 - chặn âm + báo giữ chỗ', () => {
+      // Giảm: kho thật (2) -> kho ảo (1).
+      const down = (qty: number, extra: Record<string, unknown> = {}) =>
+        service.adjust(
+          {
+            fromWarehouseId: '2',
+            toWarehouseId: '1',
+            materialId: '10',
+            qty,
+            note: 'kiểm kê',
+            ...extra,
+          },
+          'idem-k3',
+          'user-1',
+          null,
+        );
+
+      beforeEach(() => {
+        prisma.stockLedger.findUnique.mockResolvedValue(null);
+        prisma.stockLedger.create.mockResolvedValue(ledgerRow());
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 25 } }]);
+      });
+
+      it('giảm làm tồn âm -> 400, không ghi sổ (kể cả không gửi expectedCurrentQty)', async () => {
+        await expect(down(30)).rejects.toThrow(/tồn sẽ âm/);
+        expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+      });
+
+      it('giảm đúng bằng tồn -> được (về 0)', async () => {
+        const res = await down(25);
+        expect(prisma.stockLedger.create).toHaveBeenCalled();
+        expect(res.reservationWarning).toBeNull();
+      });
+
+      it('tồn mới thấp hơn phần đang giữ cho lệnh -> vẫn ghi, trả cảnh báo nói rõ thiếu bao nhiêu', async () => {
+        reservations.getReservedQty.mockResolvedValue(15);
+        const res = await down(15, { expectedCurrentQty: 25 });
+        expect(prisma.stockLedger.create).toHaveBeenCalled();
+        expect(reservations.getReservedQty).toHaveBeenCalledWith(
+          expect.anything(),
+          2n,
+          10n,
+          0,
+          undefined,
+          '',
+        );
+        expect(res.reservationWarning).toMatch(
+          /Tồn mới 10 thấp hơn phần đang giữ .*\(15\) - thiếu 5/,
+        );
+      });
+
+      it('tăng tồn thì không kiểm âm / giữ chỗ', async () => {
+        prisma.$queryRaw.mockResolvedValue([]);
+        const res = await service.adjust(
+          { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5, note: 'nhập bù' },
+          'idem-k3-up',
+          'user-1',
+          null,
+        );
+        expect(reservations.getReservedQty).not.toHaveBeenCalled();
+        expect(res.reservationWarning).toBeNull();
+      });
+
+      it('gọi lại cùng Idempotency-Key -> trả bút toán cũ, không kiểm âm lại (tồn đã trừ theo chính bút toán đó)', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValue(ledgerRow({ idempotencyKey: 'idem-k3' }));
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 0 } }]);
+        await expect(down(25)).resolves.toBeDefined();
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+        expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+      });
+
+      it('chân mảnh (pieceId): khoá theo pieceId ở kho thật, vẫn chặn âm', async () => {
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 2 } }]);
+        await expect(
+          service.adjust(
+            { fromWarehouseId: '2', toWarehouseId: '1', pieceId: '77', qty: 3, note: 'x' },
+            'idem-k3-p',
+            'user-1',
+            null,
+          ),
+        ).rejects.toThrow(/tồn sẽ âm/);
+        const sql = (
+          (prisma.$queryRaw.mock.calls as unknown[][])[0][0] as TemplateStringsArray
+        ).join('?');
+        expect(sql).toContain('"pieceId" = ?');
       });
     });
   });

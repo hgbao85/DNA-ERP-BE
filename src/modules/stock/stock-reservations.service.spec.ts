@@ -133,8 +133,41 @@ describe('StockReservationsService', () => {
       );
 
       expect(prisma.stockReservation.create).not.toHaveBeenCalled();
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
       expect(result.id).toBe(1n);
       expect(result.quantity.toNumber()).toBe(5);
+    });
+
+    it('K2 16/11: dòng cùng khoá đã nhả -> mở lại ACTIVE với số mới (không thấp hơn phần đã tiêu), không trả dòng nhả như đang giữ', async () => {
+      prisma.stockReservation.findUnique.mockResolvedValue({
+        id: 1n,
+        quantity: decimal(5),
+        consumedQty: decimal(2),
+        status: 'RELEASED',
+      });
+      prisma.stockReservation.update.mockResolvedValue({ id: 1n, quantity: decimal(8) });
+
+      const result = await service.reserve(
+        { warehouseId: 800n, materialId: 30n, qty: 8, refType: 'CUTTING_PROPOSAL', refId: '22' },
+        prisma as unknown as PrismaTx,
+      );
+
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 1n },
+        data: { quantity: 8, status: 'ACTIVE', releasedAt: null },
+      });
+      expect(prisma.stockReservation.create).not.toHaveBeenCalled();
+      expect(result.quantity.toNumber()).toBe(8);
+
+      // Số mới thấp hơn phần đã tiêu -> giữ đúng phần đã tiêu.
+      prisma.stockReservation.update.mockClear();
+      await service.reserve(
+        { warehouseId: 800n, materialId: 30n, qty: 1, refType: 'CUTTING_PROPOSAL', refId: '22' },
+        prisma as unknown as PrismaTx,
+      );
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ quantity: 2 }) as unknown }),
+      );
     });
 
     it('ném BadRequestException nếu qty <= 0', async () => {
