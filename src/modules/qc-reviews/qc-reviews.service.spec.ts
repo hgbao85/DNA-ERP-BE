@@ -138,7 +138,10 @@ describe('QcReviewsService', () => {
     qty: 10,
     status: 'AWAITING_QC',
     submittedById: 'user-phoi',
-    productionOrder: { bomRevisionId: 5n },
+    productionOrder: {
+      bomRevisionId: 5n,
+      productionInvoiceItem: { productionInvoice: { code: 'PI-2026-800' } },
+    },
   };
 
   const bundleQcReview = {
@@ -923,6 +926,149 @@ describe('QcReviewsService', () => {
         actorId: 'user-kcs',
         parentId: 900n,
       });
+    });
+  });
+
+  // Lỗi sót: KCS chấm công đoạn phụ sắt / pat theo công đoạn / chân nhôm phải phát tin kết quả
+  // (QC_FAILED / QC_PASSED) như đợt cắt và lô mảnh - RecipientResolver cần mã PI thật để chọn QLSX.
+  describe('phát tin kết quả KCS (công đoạn phụ sắt, pat, chân nhôm)', () => {
+    type Case = {
+      name: string;
+      piCode: string;
+      setup: () => void;
+      run: (failed: number) => Promise<unknown>;
+      updateMany: () => jest.Mock;
+      /** Hàm tự đọc mã PI theo productionInvoiceId của đợt (pat lấy từ include sẵn có). */
+      looksUpPi: boolean;
+    };
+    const cases: Case[] = [
+      {
+        name: 'reviewStepBundle',
+        piCode: 'PI-2026-900',
+        setup: () => {
+          prisma.stepBundle.findUnique.mockResolvedValue({
+            id: 800n,
+            productionInvoiceId: 900n,
+            materialId: 30n,
+            step: 'UON',
+            status: 'AWAITING_QC',
+            material: { code: 'SAT-30', name: 'Sắt hộp', spec: '25x50' },
+          });
+          prisma.stepBatchSegment.groupBy.mockResolvedValue([
+            { segmentSpecId: 30n, _sum: { qty: 8 } },
+          ]);
+          prisma.segmentSpec.findMany.mockResolvedValue([segmentSpecRow]);
+          prisma.qcReview.create.mockResolvedValue({ ...qcReview, stepBundleId: 800n });
+        },
+        run: (failed) =>
+          service.reviewStepBundle(
+            '800',
+            { segments: failed > 0 ? [{ segmentSpecId: '30', failedQty: failed }] : [] },
+            'user-kcs',
+          ),
+        updateMany: () => prisma.stepBundle.updateMany,
+        looksUpPi: true,
+      },
+      {
+        name: 'reviewPieceStep',
+        piCode: 'PI-2026-800',
+        setup: () => {
+          prisma.qcReview.create.mockResolvedValue(bundleQcReview);
+        },
+        run: (failed) => service.reviewPieceStep('800', { failedQty: failed }, 'user-kcs'),
+        updateMany: () => prisma.pieceStepBundle.updateMany,
+        looksUpPi: false,
+      },
+      {
+        name: 'reviewMaterialYieldStep',
+        piCode: 'PI-2026-900',
+        setup: () => {
+          materialYieldRecipeProductionService.findOneBundleRowOrThrow.mockResolvedValue({
+            id: 850n,
+            productionInvoiceId: 900n,
+            qty: 10,
+            status: 'AWAITING_QC',
+          });
+          prisma.qcReview.create.mockResolvedValue({
+            ...bundleQcReview,
+            materialYieldStepBundleId: 850n,
+          });
+        },
+        run: (failed) => service.reviewMaterialYieldStep('850', { failedQty: failed }, 'user-kcs'),
+        updateMany: () => prisma.materialYieldStepBundle.updateMany,
+        looksUpPi: true,
+      },
+    ];
+
+    describe.each(cases)('$name', (c) => {
+      beforeEach(() => c.setup());
+
+      it('có lỗi - emit QC_FAILED với mã PI thật, failedQty, senderRole PHOI_STAFF', async () => {
+        await c.run(2);
+
+        expect(notificationsService.emit).toHaveBeenCalledWith('QC_FAILED', {
+          params: { piCode: c.piCode, failedQty: 2, senderRole: 'PHOI_STAFF' },
+        });
+        expect(notificationsService.emit).not.toHaveBeenCalledWith('QC_PASSED', expect.anything());
+      });
+
+      it('0 lỗi - emit QC_PASSED với mã PI thật', async () => {
+        await c.run(0);
+
+        expect(notificationsService.emit).toHaveBeenCalledWith('QC_PASSED', {
+          params: { piCode: c.piCode },
+        });
+        expect(notificationsService.emit).not.toHaveBeenCalledWith('QC_FAILED', expect.anything());
+      });
+
+      it('transaction ném 409 (đợt vừa bị duyệt) - KHÔNG emit', async () => {
+        c.updateMany().mockResolvedValue({ count: 0 });
+
+        await expect(c.run(0)).rejects.toThrow(ConflictException);
+        expect(notificationsService.emit).not.toHaveBeenCalled();
+      });
+
+      it('emit ném lỗi - hàm review vẫn trả kết quả bình thường', async () => {
+        notificationsService.emit.mockRejectedValue(new Error('boom'));
+
+        await expect(c.run(0)).resolves.toBeDefined();
+      });
+
+      it('phát tin SAU khi transaction chấm đã xong (không phát bên trong)', async () => {
+        let committed = false;
+        const seen: boolean[] = [];
+        prisma.$transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => {
+          const r = await cb(prisma);
+          committed = true;
+          return r;
+        });
+        notificationsService.emit.mockImplementation(() => {
+          seen.push(committed);
+          return Promise.resolve();
+        });
+
+        await c.run(2);
+
+        expect(seen).toEqual([true]);
+      });
+
+      if (c.looksUpPi) {
+        it('đọc mã PI theo đúng PI của đợt', async () => {
+          await c.run(0);
+
+          expect(prisma.productionInvoice.findUnique).toHaveBeenCalledWith({
+            where: { id: 900n },
+            select: { code: true },
+          });
+        });
+
+        it('đọc mã PI ném lỗi (sau commit) - review vẫn trả kết quả, không phát tin', async () => {
+          prisma.productionInvoice.findUnique.mockRejectedValue(new Error('db down'));
+
+          await expect(c.run(2)).resolves.toBeDefined();
+          expect(notificationsService.emit).not.toHaveBeenCalled();
+        });
+      }
     });
   });
 

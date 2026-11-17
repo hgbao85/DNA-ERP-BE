@@ -778,7 +778,13 @@ export class FloorAdminService {
       this.prisma.cutBundle.count({ where: { status: 'CUTTING' } }),
       this.prisma.stepBatch.findMany({
         where: { stepBundleId: null },
-        distinct: ['productionInvoiceId', 'materialId', 'step', 'productionOrderId'],
+        distinct: [
+          'productionInvoiceId',
+          'materialId',
+          'step',
+          'productionOrderId',
+          'reportedById',
+        ],
         select: { id: true },
       }),
       this.prisma.productionBatch.groupBy({
