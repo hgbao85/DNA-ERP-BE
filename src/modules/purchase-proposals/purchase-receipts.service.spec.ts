@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
-import { Prisma, PurchaseProposalStatus } from '../../generated/prisma/client';
+import { Prisma, PurchaseProposalStatus, SupplierOrderStatus } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PurchaseProposalsService, ReceiveLine } from './purchase-proposals.service';
@@ -19,6 +19,7 @@ function line(o: {
   materialId?: bigint;
   supplierOrderId?: bigint | null;
   orderApprovalFile?: string | null;
+  orderStatus?: SupplierOrderStatus;
   groupKey?: string;
 }): ReceiveLine {
   const supplierOrderId = o.supplierOrderId === undefined ? 50n : o.supplierOrderId;
@@ -38,6 +39,7 @@ function line(o: {
                 o.orderApprovalFile === undefined ? 'https://cdn/ky.pdf' : o.orderApprovalFile,
               seq: 52,
               year: 2026,
+              status: o.orderStatus ?? SupplierOrderStatus.APPROVED,
               supplier: { name: 'Kim Phát' },
             },
       status: o.status ?? PurchaseProposalStatus.PURCHASING,
@@ -105,7 +107,10 @@ describe('PurchaseReceiptsService', () => {
         findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
       },
-      $queryRaw: jest.fn().mockResolvedValue([{ lastSeq: 4 }]),
+      // lastSeq: cấp số NK; status/seq/year: K4 tái kiểm đơn đặt hàng trong transaction.
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValue([{ lastSeq: 4, status: 'APPROVED', seq: 52, year: 2026 }]),
       warehouse: { findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 700n }) },
       $executeRaw: jest.fn().mockResolvedValue(0),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
@@ -624,6 +629,69 @@ describe('PurchaseReceiptsService', () => {
           }) as unknown,
         }),
       );
+    });
+  });
+
+  describe('K4 16/11 - đơn đặt hàng đang thay phiếu / đã huỷ', () => {
+    const base = { itemIds: ['1'], unitRateQty: 5, deliveredQty: 5, ...docs };
+
+    it('đơn về DRAFT (thay phiếu) mà dòng còn "Đang mua" -> xem trước và nhận đều 409, không ghi gì', async () => {
+      proposals.loadReceiveLines.mockResolvedValue([
+        line({ itemId: 1n, buyQty: 10, receivedQty: 3, orderStatus: SupplierOrderStatus.DRAFT }),
+      ]);
+      await expect(service.preview({ itemIds: ['1'], qty: 5 }, null)).rejects.toThrow(
+        /đang thay phiếu/,
+      );
+      await expect(service.receive(base, 'kho-1', 'key-1', null)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(proposals.applyItemReceipt).not.toHaveBeenCalled();
+    });
+
+    it('đơn đã huỷ -> 409 nói rõ đã huỷ', async () => {
+      proposals.loadReceiveLines.mockResolvedValue([
+        line({ itemId: 1n, buyQty: 10, orderStatus: SupplierOrderStatus.CANCELLED }),
+      ]);
+      await expect(service.receive(base, 'kho-1', 'key-1', null)).rejects.toThrow(/đã huỷ/);
+    });
+
+    it('đọc lúc đầu còn đã duyệt nhưng sau khoá đơn vừa thay phiếu -> 409, không ghi nhận dòng nào', async () => {
+      const lines = [line({ itemId: 1n, buyQty: 10 })];
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      prisma.$queryRaw.mockResolvedValueOnce([{ status: 'DRAFT', seq: 52, year: 2026 }]);
+      await expect(service.receive(base, 'kho-1', 'key-1', null)).rejects.toThrow(
+        /đang thay phiếu/,
+      );
+      expect(proposals.applyItemReceipt).not.toHaveBeenCalled();
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+    });
+
+    it('dòng cũ không có đơn đặt hàng vẫn nhận được (không kiểm đơn)', async () => {
+      const lines = [line({ itemId: 1n, buyQty: 10, supplierOrderId: null })];
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      await service.receive(
+        { ...base, approvalFileUrls: ['https://cdn/tay.pdf'] },
+        'kho-1',
+        'key-1',
+        null,
+      );
+      expect(proposals.applyItemReceipt).toHaveBeenCalledTimes(1);
+    });
+
+    it('Từ chối nhận vẫn làm được khi đơn đang thay phiếu (hàng NCC giao tới vẫn phải trả lại được)', async () => {
+      proposals.loadReceiveLines.mockResolvedValue([
+        line({ itemId: 1n, buyQty: 10, orderStatus: SupplierOrderStatus.DRAFT }),
+      ]);
+      const res = await service.reject(
+        { itemIds: ['1'], deliveredQty: 5, reason: 'Sai hàng', fileUrls: ['https://cdn/x.jpg'] },
+        'kho-1',
+        'key-r',
+        null,
+      );
+      expect(res.status).toBe('REJECTED');
     });
   });
 });

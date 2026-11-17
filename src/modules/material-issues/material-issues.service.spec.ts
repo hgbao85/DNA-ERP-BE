@@ -434,6 +434,8 @@ describe('MaterialIssuesService', () => {
         .map(([strings]) => strings as TemplateStringsArray)
         .find((strings) => strings.join('').includes('stock_quant'))!;
       expect(rawCall.join('')).toContain('FOR UPDATE');
+      // K1 (16/11): chỉ đọc ô độ dài 0 / quy cách rỗng - cùng ô ghi sổ.
+      expect(rawCall.join('')).toContain(`"stockLengthMm" = 0 AND "spec" = ''`);
       expect(rawCall.join('')).toContain('stock_quant');
     });
 
