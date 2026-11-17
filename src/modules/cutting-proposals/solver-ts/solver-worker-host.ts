@@ -18,6 +18,9 @@
  * hàng, bài còn đang chờ mà hết giờ thì bị gỡ khỏi hàng đợi và từ chối ngay - caller không bao giờ
  * chờ lâu hơn số đã khai, giống SolverClientService nhánh http (timeout HTTP client). Quan trọng cho
  * verifyExactStandaloneWaste (trần 8 s) xếp sau một lượt giải chính (tới 300 s).
+ *
+ * Ưu tiên (C3, danh sách lỗi 16/11): bài 'low' (lượt chỉ-đọc của màn gom đợt: "cách sửa", "xác minh sâu") luôn xếp SAU mọi bài
+ * 'normal' đang chờ - bài 'normal' mới vào chen lên trước bài 'low' đang chờ đầu tiên. Bài đang CHẠY không bị ngắt.
  */
 import { Logger } from '@nestjs/common';
 import * as path from 'node:path';
@@ -61,10 +64,13 @@ export class SolverWorkerMemoryError extends Error {
   }
 }
 
+export type SolverJobPriority = 'normal' | 'low';
+
 interface Job {
   id: number;
   body: unknown;
   timeoutMs: number;
+  priority: SolverJobPriority;
   timer: NodeJS.Timeout;
   resolve: (r: ProposeResponse) => void;
   reject: (e: Error) => void;
@@ -121,18 +127,26 @@ export class SolverWorkerHost {
     };
   }
 
-  run(body: unknown, timeoutMs: number): Promise<ProposeResponse> {
+  run(
+    body: unknown,
+    timeoutMs: number,
+    priority: SolverJobPriority = 'normal',
+  ): Promise<ProposeResponse> {
     if (this.closed) return Promise.reject(new SolverWorkerCrashError('host đã đóng'));
     return new Promise<ProposeResponse>((resolve, reject) => {
       const job: Job = {
         id: this.nextId++,
         body,
         timeoutMs,
+        priority,
         timer: setTimeout(() => this.onTimeout(job), Math.max(0, timeoutMs)),
         resolve,
         reject,
       };
-      this.queue.push(job);
+      const firstLow =
+        priority === 'normal' ? this.queue.findIndex((j) => j.priority === 'low') : -1;
+      if (firstLow >= 0) this.queue.splice(firstLow, 0, job);
+      else this.queue.push(job);
       this.dispatch();
     });
   }

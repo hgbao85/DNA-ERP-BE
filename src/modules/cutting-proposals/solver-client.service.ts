@@ -12,7 +12,7 @@ import { ClsService } from 'nestjs-cls';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { AppConfig } from '../../config/configuration';
 import { ExternalApiHttpError } from '../external/external-api.service';
-import { SolverWorkerHost } from './solver-ts/solver-worker-host';
+import { SolverJobPriority, SolverWorkerHost } from './solver-ts/solver-worker-host';
 import { ProposeResponse } from './solver-ts/types';
 
 /**
@@ -74,13 +74,17 @@ export class SolverClientService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Gọi solver với body (xem solver-ts/types.ts `ProposeRequest`). `timeoutMs` là trần cho CẢ lần gọi,
-   * gồm cả thời gian chờ hàng đợi worker + chạy.
+   * gồm cả thời gian chờ hàng đợi worker + chạy. `priority: 'low'` cho lượt chỉ-đọc (xếp sau lượt giải chính thức - C3 16/11).
    */
-  async propose<T>(body: unknown, timeoutMs: number): Promise<T> {
+  async propose<T>(
+    body: unknown,
+    timeoutMs: number,
+    opts: { priority?: SolverJobPriority } = {},
+  ): Promise<T> {
     const timing = this.cls?.isActive() ? this.cls.get('timing') : undefined;
     const measuredAt = performance.now();
     try {
-      return await this.proposeInner<T>(body, timeoutMs);
+      return await this.proposeInner<T>(body, timeoutMs, opts.priority ?? 'normal');
     } finally {
       // Đo cả khi lỗi/hết giờ: thời gian chờ + chạy bộ giải vẫn là thời gian request đã tốn.
       if (timing) {
@@ -90,12 +94,16 @@ export class SolverClientService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async proposeInner<T>(body: unknown, timeoutMs: number): Promise<T> {
+  private async proposeInner<T>(
+    body: unknown,
+    timeoutMs: number,
+    priority: SolverJobPriority,
+  ): Promise<T> {
     if (!this.host) this.host = this.createWorkerHost();
     const startedAt = Date.now();
     let res: ProposeResponse;
     try {
-      res = await this.host.run(body, timeoutMs);
+      res = await this.host.run(body, timeoutMs, priority);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.logger.error(

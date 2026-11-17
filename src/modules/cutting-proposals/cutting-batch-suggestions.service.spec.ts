@@ -902,6 +902,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
             bom: [expect.objectContaining({ material: '200', cut_length: 840, qty_per_part: 400 })],
           }) as unknown,
           expect.any(Number),
+          { priority: 'low' }, // C3 16/11: lượt chỉ-đọc xếp sau lượt giải chính thức
         );
       });
 
@@ -983,6 +984,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
             max_sizes_per_pattern: 5,
           }) as unknown,
           expect.any(Number),
+          { priority: 'low' },
         );
       });
 

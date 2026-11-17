@@ -12,11 +12,15 @@ import { ProposeResponse } from './solver-ts/types';
 
 /** Host giả: trả/ném theo kịch bản, ghi lại body + timeout nhận được. */
 class FakeHost {
-  calls: Array<{ body: unknown; timeoutMs: number }> = [];
+  calls: Array<{ body: unknown; timeoutMs: number; priority?: string }> = [];
   closed = false;
   constructor(private readonly answer: (body: unknown) => Promise<ProposeResponse>) {}
-  run(body: unknown, timeoutMs: number): Promise<ProposeResponse> {
-    this.calls.push({ body, timeoutMs });
+  run(body: unknown, timeoutMs: number, priority?: string): Promise<ProposeResponse> {
+    this.calls.push({
+      body,
+      timeoutMs,
+      ...(priority && priority !== 'normal' ? { priority } : {}),
+    });
     return this.answer(body);
   }
   close(): Promise<void> {

@@ -823,6 +823,7 @@ model Warehouse {
   segmentReservations           SegmentReservation[]
   segmentOverages               SegmentOverage[]
   segmentProductions            SegmentProduction[]
+  segmentProductionLeftovers    SegmentProductionLeftover[]
   materials                     Material[]
   officeSupplies                OfficeSupply[]
   issueSlips                    IssueSlip[]
@@ -1001,6 +1002,7 @@ model SegmentSpec {
   segmentReservations            SegmentReservation[]
   segmentOverages                SegmentOverage[]
   segmentProductions             SegmentProduction[]
+  segmentProductionLeftovers     SegmentProductionLeftover[]
 
   @@unique([materialId, cutLengthMm])
   @@map("segment_spec")
@@ -1760,28 +1762,29 @@ model ProductionInvoice {
   createdAt                      DateTime                @default(now())
   updatedAt                      DateTime                @updatedAt
 
-  salesOrder                SalesOrder?                @relation(fields: [salesOrderId], references: [id])
-  mergedBy                  User?                      @relation("PIMergedBy", fields: [mergedById], references: [id])
-  cuttingRecheckedBy        User?                      @relation("PiCuttingRechecked", fields: [cuttingRecheckedById], references: [id])
-  items                     ProductionInvoiceItem[]
-  planForms                 PlanForm[]
-  cuttingProposals          CuttingProposal[]
-  steelIssues               SteelIssue[]
-  stepBatches               StepBatch[]
-  stepBundles               StepBundle[]
-  purchaseProposals         PurchaseProposal[]
-  stockReservations         StockReservation[]
-  materialYieldStepBatches  MaterialYieldStepBatch[]
-  materialYieldStepBundles  MaterialYieldStepBundle[]
-  materialYieldRecipeIssues MaterialYieldRecipeIssue[]
-  floorQueueEntries         FloorQueueEntry[]
-  floorReports              FloorReport[]
-  warehouseTransfers        WarehouseTransfer[]
-  cutAllocations            CutAllocation[]
-  cutAllocationLogs         CutAllocationLog[]
-  segmentReservations       SegmentReservation[]
-  segmentOverages           SegmentOverage[]
-  segmentProductions        SegmentProduction[]
+  salesOrder                 SalesOrder?                 @relation(fields: [salesOrderId], references: [id])
+  mergedBy                   User?                       @relation("PIMergedBy", fields: [mergedById], references: [id])
+  cuttingRecheckedBy         User?                       @relation("PiCuttingRechecked", fields: [cuttingRecheckedById], references: [id])
+  items                      ProductionInvoiceItem[]
+  planForms                  PlanForm[]
+  cuttingProposals           CuttingProposal[]
+  steelIssues                SteelIssue[]
+  stepBatches                StepBatch[]
+  stepBundles                StepBundle[]
+  purchaseProposals          PurchaseProposal[]
+  stockReservations          StockReservation[]
+  materialYieldStepBatches   MaterialYieldStepBatch[]
+  materialYieldStepBundles   MaterialYieldStepBundle[]
+  materialYieldRecipeIssues  MaterialYieldRecipeIssue[]
+  floorQueueEntries          FloorQueueEntry[]
+  floorReports               FloorReport[]
+  warehouseTransfers         WarehouseTransfer[]
+  cutAllocations             CutAllocation[]
+  cutAllocationLogs          CutAllocationLog[]
+  segmentReservations        SegmentReservation[]
+  segmentOverages            SegmentOverage[]
+  segmentProductions         SegmentProduction[]
+  segmentProductionLeftovers SegmentProductionLeftover[]
 
   @@index([salesOrderId])
   @@map("production_invoices")
@@ -3078,6 +3081,29 @@ model SegmentProduction {
   @@unique([productionInvoiceId, segmentSpecId, segmentSteps])
   @@index([warehouseId])
   @@map("segment_productions")
+}
+
+/// Phần DƯ đoạn của lệnh còn nằm ở kho Phôi CŨ sau khi đổi xưởng (C4, danh sách lỗi 16/11 - 17/11/2026). Đổi xưởng chỉ chuyển phần
+/// đoạn lệnh CÒN GIỮ sang kho mới; phần dư ở lại kho cũ (anh Nhân 13/11: "dư là của chung xưởng cũ") - nên tách khỏi
+/// SegmentProduction (dòng đó trỏ sang kho mới). Tổng dư của lệnh = SegmentProduction.surplusQty + Σ các dòng này. Tính lại phía
+/// cộng mà tổng dư GIẢM (vd KCS lỗi thêm) thì trừ ở đây (đúng kho cũ) trước, phần còn lại mới đi kho mới; dư TĂNG luôn vào kho mới.
+/// Đổi xưởng về lại đúng kho này thì gộp lại vào SegmentProduction và xoá dòng.
+model SegmentProductionLeftover {
+  id                  BigInt   @id @default(autoincrement())
+  productionInvoiceId BigInt
+  segmentSpecId       BigInt
+  segmentSteps        String   @default("")
+  warehouseId         BigInt
+  surplusQty          Decimal  @default(0) @db.Decimal(16, 4)
+  updatedAt           DateTime @updatedAt
+
+  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
+  segmentSpec       SegmentSpec       @relation(fields: [segmentSpecId], references: [id])
+  warehouse         Warehouse         @relation(fields: [warehouseId], references: [id])
+
+  @@unique([productionInvoiceId, segmentSpecId, segmentSteps, warehouseId])
+  @@index([warehouseId])
+  @@map("segment_production_leftovers")
 }
 
 /// Loại thay đổi của giữ đoạn theo lệnh (nhật ký SegmentReservationLog).

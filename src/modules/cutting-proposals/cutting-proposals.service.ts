@@ -1932,6 +1932,8 @@ export class CuttingProposalsService {
           ...body,
         },
         timeoutMs,
+        // C3 16/11: lượt chỉ-đọc (khối "cách sửa") xếp sau lượt giải chính thức.
+        { priority: 'low' },
       );
       const item = res?.purchase_plan?.[0] ?? null;
       if (item) {
@@ -2535,10 +2537,12 @@ export class CuttingProposalsService {
         // thêm mutate ở chỗ đó sẽ khoá chéo với nhận hàng (nhận hàng: mutate → stock_quant). Thứ tự
         // chung với 3 nguồn mua ngoài sắt: merge → mutate → stock_quant → giữ chỗ. Lấy ngay đầu
         // transaction nên 2 lượt duyệt cùng PI xếp hàng từ đầu, không khoá dòng phương án của nhau.
-        const existingProposal =
-          buyableLines.length > 0 && targetProductionInvoiceId
-            ? await this.lockOpenPurchaseProposal(tx, targetProductionInvoiceId)
-            : null;
+        // C1 (16/11): khoá theo PI LUÔN lấy khi có PI (kể cả phương án không có dòng mua) - 2 lượt duyệt 2 phương án khác nhau
+        // của cùng PI xếp hàng ở đây, để bước kiểm chiều dài cây dưới đây thấy lượt trước đã commit.
+        const piLockedProposal = targetProductionInvoiceId
+          ? await this.lockOpenPurchaseProposal(tx, targetProductionInvoiceId)
+          : null;
+        const existingProposal = buyableLines.length > 0 ? piLockedProposal : null;
 
         // Khoá chính dòng phương án rồi ĐỌC LẠI trạng thái: kiểm tra DRAFT ở trên nằm ngoài
         // transaction nên là đọc-rồi-ghi kinh điển - 2 request duyệt cùng lúc đều thấy DRAFT, đều đi
@@ -2553,6 +2557,18 @@ export class CuttingProposalsService {
         if (locked.status !== CuttingProposalStatus.DRAFT) {
           throw new ConflictException(
             `Phương án cắt ${id} ở trạng thái ${locked.status} - chỉ DRAFT mới duyệt được`,
+          );
+        }
+        // C1 (16/11): kiểm LẠI xung đột chiều dài cây dưới khoá PI - lần kiểm ở trên nằm ngoài transaction, 2 SKU cùng PI duyệt
+        // cùng lúc đều thấy "chưa ai chốt" rồi cùng chốt 2 cỡ cây khác nhau cho 1 loại sắt.
+        const lengthConflictInTx = await this.findConflictingStockLengthReason(
+          bigId,
+          targetProductionInvoiceId,
+          tx,
+        );
+        if (lengthConflictInTx) {
+          throw new ConflictException(
+            `Không duyệt được phương án cắt ${id}: ${lengthConflictInTx}`,
           );
         }
 
@@ -2640,10 +2656,13 @@ export class CuttingProposalsService {
             // stock_quant khác chiều dài (mua ở PI/thời điểm khác) - không lọc sẽ cộng lẫn tồn của
             // chiều dài KHÁC vào available, tính buyQty/consumeQty sai.
             const lineLengthMm = line.bestStockLengthMm ?? 0;
+            // C2 (16/11): stock_quant là 1 dòng/(kho, vật tư, chiều dài, QUY CÁCH) - chỉ đọc đúng ô quy cách rỗng (sắt không
+            // mang quy cách; xuất sắt / giữ chỗ cũng chỉ đi ô này). Trước đây không lọc quy cách mà lấy locked[0] - có hơn 1
+            // dòng thì lấy bừa 1 dòng.
             const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
             SELECT "qty" FROM "stock_quant"
             WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${line.materialId}
-              AND "stockLengthMm" = ${lineLengthMm}
+              AND "stockLengthMm" = ${lineLengthMm} AND "spec" = ''
             FOR UPDATE
           `;
             const onHand = Math.floor(locked[0]?.qty.toNumber() ?? 0);
@@ -3682,11 +3701,12 @@ export class CuttingProposalsService {
   private async findConflictingStockLengthReason(
     proposalId: bigint,
     targetProductionInvoiceId: bigint | null,
+    db: Pick<PrismaServiceType, 'cuttingProposalLine' | 'material'> = this.prisma,
   ): Promise<string | null> {
     // Không neo PI nào - không có "SKU khác cùng đợt" nào để đối chiếu.
     if (!targetProductionInvoiceId) return null;
 
-    const myLines = await this.prisma.cuttingProposalLine.findMany({
+    const myLines = await db.cuttingProposalLine.findMany({
       where: { cuttingProposalId: proposalId, bestStockLengthMm: { not: null } },
       select: { materialId: true, bestStockLengthMm: true },
     });
@@ -3696,7 +3716,7 @@ export class CuttingProposalsService {
     // còn APPROVED, neo vào CÙNG PI (trực tiếp hoặc qua PO thành viên) - đây là nguồn xác thực
     // duy nhất cho "SKU khác trong cùng PI đã chốt cây bao nhiêu". PurchaseProposalItem không dùng
     // được: dòng đó bị ghi đè khi "Tính lại" supersede, không còn giữ lịch sử từng SKU.
-    const siblingLines = await this.prisma.cuttingProposalLine.findMany({
+    const siblingLines = await db.cuttingProposalLine.findMany({
       where: {
         materialId: { in: [...new Set(myLines.map((l) => l.materialId))] },
         bestStockLengthMm: { not: null },
@@ -3729,7 +3749,7 @@ export class CuttingProposalsService {
     );
     if (conflictMaterialIds.size === 0) return null;
 
-    const materials = await this.prisma.material.findMany({
+    const materials = await db.material.findMany({
       where: { id: { in: [...conflictMaterialIds] } },
       select: { code: true },
     });
@@ -4224,6 +4244,8 @@ export class CuttingProposalsService {
           ),
         },
         timeoutMs,
+        // C3 16/11: chỉ gọi từ màn gom đợt (getBatchCandidates / getBatchFixOptions) - xếp sau lượt giải chính thức.
+        { priority: 'low' },
       );
     } catch {
       // Lỗi mạng/timeout/solver quá tải - KHÔNG được để 1 loại sắt xác minh hỏng làm sập cả

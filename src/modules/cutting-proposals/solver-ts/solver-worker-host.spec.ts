@@ -36,6 +36,20 @@ describe('SolverWorkerHost (worker giả)', () => {
     expect(order).toEqual(['1', '2']);
   });
 
+  it('C3 16/11: bài low (lượt chỉ-đọc) xếp sau bài normal vào sau; bài đang chạy không bị ngắt', async () => {
+    host = new SolverWorkerHost({ workerFile: FAKE, poolSize: 1 });
+    const order: string[] = [];
+    const running = host
+      .run({ mode: 'sleep', ms: 150 }, 5000, 'low')
+      .then(() => order.push('đang chạy'));
+    await new Promise((r) => setTimeout(r, 30));
+    const low1 = host.run({ mode: 'echo' }, 5000, 'low').then(() => order.push('low1'));
+    const low2 = host.run({ mode: 'echo' }, 5000, 'low').then(() => order.push('low2'));
+    const official = host.run({ mode: 'echo' }, 5000).then(() => order.push('chính thức'));
+    await Promise.all([running, low1, low2, official]);
+    expect(order).toEqual(['đang chạy', 'chính thức', 'low1', 'low2']);
+  });
+
   it('pool 2: hai bài chạy song song trên 2 worker khác nhau', async () => {
     host = new SolverWorkerHost({ workerFile: FAKE, poolSize: 2 });
     const [a, b] = (await Promise.all([
