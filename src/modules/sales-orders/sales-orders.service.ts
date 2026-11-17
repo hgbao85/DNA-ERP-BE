@@ -22,7 +22,7 @@ import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { CreateSalesOrderItemDto } from './dto/create-sales-order-item.dto';
 import { SalesOrderResponseDto } from './dto/sales-order-response.dto';
@@ -256,18 +256,23 @@ export class SalesOrdersService {
 
   async update(id: string, dto: UpdateSalesOrderDto): Promise<SalesOrderResponseDto> {
     const bigId = parseBigIntId(id);
-    await this.findOneOrThrow(id);
+    const order = await this.findOneOrThrow(id);
 
-    const updated = await this.prisma.salesOrder.update({
-      where: { id: bigId },
-      data: {
-        attachmentName: dto.attachmentName,
-        attachmentUrl: dto.attachmentUrl,
-        note: dto.note,
-        depositConfirmed: dto.depositConfirmed,
-        isActive: dto.isActive,
-      },
-      include: { customer: true, items: { include: ITEM_INCLUDE } },
+    // K6 16/11: thông tin đơn + mọi dòng sửa cùng lúc trong 1 transaction - trước đây FE patch từng dòng lần lượt, 1 dòng lỗi
+    // (vd đã ghim vào lệnh sản xuất) thì các dòng trước đã lưu, đơn sửa nửa vời.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      for (const it of dto.items ?? []) await this.updateItemInTx(tx, order, it.id, it);
+      return tx.salesOrder.update({
+        where: { id: bigId },
+        data: {
+          attachmentName: dto.attachmentName,
+          attachmentUrl: dto.attachmentUrl,
+          note: dto.note,
+          depositConfirmed: dto.depositConfirmed,
+          isActive: dto.isActive,
+        },
+        include: { customer: true, items: { include: ITEM_INCLUDE } },
+      });
     });
     this.publishRealtime(bigId, 'UPDATED');
     const mergedCount = await this.countMergedProductionInvoiceItems(bigId);
@@ -425,7 +430,19 @@ export class SalesOrdersService {
     dto: UpdateSalesOrderItemDto,
   ): Promise<SalesOrderItemResponseDto> {
     const order = await this.findOneOrThrow(salesOrderId);
-    const item = await this.findItemOrThrow(order.id, id);
+    const updated = await this.prisma.$transaction((tx) => this.updateItemInTx(tx, order, id, dto));
+    this.publishRealtime(updated.salesOrderId, 'UPDATED');
+    return this.toItemResponseDto(updated, await this.resolveItemStage(updated));
+  }
+
+  /** Kiểm + ghi 1 dòng trong transaction của caller (updateItem 1 dòng, update nhiều dòng - K6 16/11). */
+  private async updateItemInTx(
+    tx: PrismaTx,
+    order: { id: bigint; code: string },
+    id: string,
+    dto: UpdateSalesOrderItemDto,
+  ): Promise<SalesOrderItemWithProduct> {
+    const item = await this.findItemOrThrow(order.id, id, tx);
 
     // Medium fix: totalQty trước đây sửa được vô hạn định, kể cả sau khi đã ghim vào
     // ProductionInvoiceItem.quantity (chỉ ghim 1 lần lúc PI được tạo, không tự đồng bộ lại) -
@@ -436,7 +453,7 @@ export class SalesOrdersService {
     if (dto.totalQty !== undefined && dto.totalQty !== item.totalQty) {
       // PI item đã nối đúng dòng này (salesOrderItemId) thì chỉ item đó tính; PI item cũ chưa nối
       // dòng nào (salesOrderItemId null) giữ cách dò cũ theo (đơn, sản phẩm).
-      const linked = await this.prisma.productionInvoiceItem.findFirst({
+      const linked = await tx.productionInvoiceItem.findFirst({
         where: {
           mfgProductId: item.mfgProductId,
           OR: [
@@ -464,7 +481,7 @@ export class SalesOrdersService {
       ]);
       // Sếp đã duyệt lệnh sản xuất của dòng này thì lệnh đã chốt dây/nệm - đổi ở đây không còn tác
       // dụng (mua hàng/xuất đan đọc từ lệnh), nên chặn thay vì để đơn hàng và lệnh lệch nhau.
-      const approved = await this.prisma.productionInvoiceItem.findFirst({
+      const approved = await tx.productionInvoiceItem.findFirst({
         where: { salesOrderItemId: item.id, productionOrder: { isNot: null } },
         select: { id: true },
       });
@@ -479,7 +496,7 @@ export class SalesOrdersService {
     const cushionMaterialId = dto.cushionMaterialId
       ? parseBigIntId(dto.cushionMaterialId)
       : undefined;
-    const updated = await this.prisma.salesOrderItem.update({
+    const updated = await tx.salesOrderItem.update({
       where: { id: item.id },
       data: {
         skuName: dto.skuName,
@@ -493,14 +510,13 @@ export class SalesOrdersService {
     });
     if (choiceChanged) {
       // Giữ bản sao ở dòng lệnh sản xuất (chưa duyệt) khớp với dòng đơn - lệnh chốt từ đó khi duyệt.
-      await this.prisma.productionInvoiceItem.updateMany({
+      await tx.productionInvoiceItem.updateMany({
         where: { salesOrderItemId: item.id },
         data: { wireMaterialId, cushionMaterialId },
       });
     }
-    if (dto.deliveryDate) await this.recomputeDeliveryDate(order.id);
-    this.publishRealtime(updated.salesOrderId, 'UPDATED');
-    return this.toItemResponseDto(updated, await this.resolveItemStage(updated));
+    if (dto.deliveryDate) await this.recomputeDeliveryDate(order.id, tx);
+    return updated;
   }
 
   /**
@@ -569,9 +585,10 @@ export class SalesOrdersService {
   private async findItemOrThrow(
     salesOrderId: bigint,
     id: string,
+    db: PrismaServiceType | PrismaTx = this.prisma,
   ): Promise<SalesOrderItemWithProduct> {
     const idBigId = parseBigIntId(id);
-    const item = await this.prisma.salesOrderItem.findUnique({
+    const item = await db.salesOrderItem.findUnique({
       where: { id: idBigId },
       include: ITEM_INCLUDE,
     });
@@ -646,15 +663,18 @@ export class SalesOrdersService {
     return new Date(dates.sort().at(-1)!);
   }
 
-  private async recomputeDeliveryDate(salesOrderId: bigint): Promise<void> {
-    const items = await this.prisma.salesOrderItem.findMany({
+  private async recomputeDeliveryDate(
+    salesOrderId: bigint,
+    db: PrismaServiceType | PrismaTx = this.prisma,
+  ): Promise<void> {
+    const items = await db.salesOrderItem.findMany({
       where: { salesOrderId },
       select: { deliveryDate: true },
     });
     const dates = items.map((it) => it.deliveryDate).filter((d): d is Date => !!d);
     if (dates.length === 0) return;
     const deliveryDate = new Date(Math.max(...dates.map((d) => d.getTime())));
-    await this.prisma.salesOrder.update({ where: { id: salesOrderId }, data: { deliveryDate } });
+    await db.salesOrder.update({ where: { id: salesOrderId }, data: { deliveryDate } });
   }
 
   /**

@@ -52,8 +52,8 @@ export class IssueSlipsController {
 
   @Get(':id')
   @RequirePermissions(VIEW)
-  findOne(@Param('id') id: string) {
-    return this.slips.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser('warehouseScope') scope: string | null) {
+    return this.slips.findOne(id, scope);
   }
 
   /** Bước 1: tạo phiếu, cấp số XK-yymmdd-NNN - chưa trừ tồn. */

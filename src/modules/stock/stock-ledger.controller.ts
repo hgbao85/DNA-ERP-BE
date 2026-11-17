@@ -20,8 +20,11 @@ export class StockLedgerController {
 
   @Get()
   @RequirePermissions(VIEW)
-  findAll(@Query() query: ListStockLedgerQueryDto) {
-    return this.stockLedgerService.findAll(query);
+  findAll(
+    @Query() query: ListStockLedgerQueryDto,
+    @CurrentUser('warehouseScope') scope: string | null,
+  ) {
+    return this.stockLedgerService.findAll(query, scope);
   }
 
   // Ngoại lệ duy nhất được ghi stock_ledger qua HTTP công khai - mọi bút toán khác đi qua

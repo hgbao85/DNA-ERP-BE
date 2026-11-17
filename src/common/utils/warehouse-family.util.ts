@@ -16,3 +16,21 @@ export function warehouseFamilyOf(code: string | null | undefined): WarehouseFam
 export function isFamilyScope(code: string | null | undefined, family: WarehouseFamily): boolean {
   return warehouseFamilyOf(code) === family;
 }
+
+/**
+ * K5 16/11 - điều kiện Prisma lọc kho theo phạm vi thủ kho khi ĐỌC tồn / sổ kho: cả HỌ kho của scope (kho gốc + kho phụ
+ * '{họ}-...'), khớp cách màn "Tổng hợp kho" lọc theo groupKey. Không lọc đúng từng mã vì nhiều tài khoản tổ Hàn/Sơn/KCS mang
+ * scope 'phoi-son-han' mà tồn thật nằm ở các kho chia Đợt 7 (phoi-son-han-han-pa...). Scope không thuộc họ nào -> đúng mã đó.
+ * null (tổng kho / Giám đốc / Admin) -> undefined = không lọc.
+ */
+export function warehouseWhereForScope(
+  scope: string | null | undefined,
+):
+  | { code: string }
+  | { OR: Array<{ code: string } | { code: { startsWith: string } }> }
+  | undefined {
+  if (!scope) return undefined;
+  const family = warehouseFamilyOf(scope);
+  if (!family) return { code: scope };
+  return { OR: [{ code: family }, { code: { startsWith: `${family}-` } }] };
+}

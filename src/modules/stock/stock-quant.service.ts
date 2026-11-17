@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { warehouseWhereForScope } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ListStockQuantQueryDto } from './dto/list-stock-quant-query.dto';
 import { StockQuantResponseDto } from './dto/stock-quant-response.dto';
@@ -29,8 +30,13 @@ export class StockQuantService {
     private readonly stockReservationsService: StockReservationsService,
   ) {}
 
-  async findAll(query: ListStockQuantQueryDto): Promise<StockQuantResponseDto[]> {
+  async findAll(
+    query: ListStockQuantQueryDto,
+    scope: string | null = null,
+  ): Promise<StockQuantResponseDto[]> {
     const where: Prisma.StockQuantWhereInput = {
+      // K5 16/11: thủ kho chỉ đọc tồn họ kho mình (trước đây đọc được tồn mọi kho).
+      warehouse: warehouseWhereForScope(scope),
       warehouseId: query.warehouseId ? parseBigIntId(query.warehouseId) : undefined,
       materialId: query.materialId ? parseBigIntId(query.materialId) : undefined,
       segmentSpecId: query.segmentSpecId ? parseBigIntId(query.segmentSpecId) : undefined,
@@ -50,24 +56,37 @@ export class StockQuantService {
       orderBy: { id: 'asc' },
     });
 
-    return Promise.all(rows.map((r) => this.toResponseDto(r)));
+    // K5 16/11: phần đang giữ lấy 1 lần cho mọi dòng (trước đây 2 câu truy vấn MỖI dòng).
+    const reserved = await this.stockReservationsService.getReservedQtyMap(
+      rows.flatMap((r) =>
+        r.materialId ? [{ warehouseId: r.warehouseId, materialId: r.materialId }] : [],
+      ),
+    );
+    return rows.map((r) => this.toResponseDto(r, reserved));
   }
 
-  private async toResponseDto(row: StockQuantWithRefs): Promise<StockQuantResponseDto> {
+  private toResponseDto(
+    row: StockQuantWithRefs,
+    reserved: Map<string, number>,
+  ): StockQuantResponseDto {
     const qty = row.qty.toNumber();
     // Vấn đề #13 audit 26/08 - reservation (cắt sắt/chuyển kho nội bộ) chỉ khoá theo materialId
     // (xem schema StockReservation/WarehouseTransferReservation), nên dòng segmentSpec/piece/
     // productVariant KHÔNG có khái niệm "đã giữ chỗ" - available luôn === qty, không gọi
     // getAvailableQty() (hàm này bắt buộc materialId: bigint, không nhận null).
+    // Cùng công thức getAvailableQty(): chiều dài cây giữ nguyên hành vi cũ (trừ phần giữ ở ô 0), không loại PI nào.
     const availableQty = row.materialId
-      ? await this.stockReservationsService.getAvailableQty(
-          undefined,
-          row.warehouseId,
-          row.materialId,
-          qty,
-          undefined, // chiều dài cây: giữ nguyên hành vi cũ (xem getAvailableQty)
-          undefined,
-          row.spec,
+      ? Math.max(
+          0,
+          Math.round(
+            (qty -
+              (reserved.get(
+                StockReservationsService.reservedKey(row.warehouseId, row.materialId, row.spec),
+              ) ?? 0)) *
+              1e4,
+          ) /
+            1e4 +
+            0,
         )
       : qty;
     return new StockQuantResponseDto({

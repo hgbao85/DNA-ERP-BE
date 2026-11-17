@@ -757,6 +757,70 @@ export class StockReservationsService {
   }
 
   /**
+   * K5 16/11 - getReservedQty() cho NHIỀU ô (kho, vật tư, quy cách) bằng 2 câu truy vấn, thay vì 2 câu mỗi ô (GET /stock-quant gọi
+   * từng dòng = N+1). Cùng điều kiện getReservedQty(tx=undefined, stockLengthMm=undefined -> ô 0, không loại PI nào). Khoá Map:
+   * reservedKey(warehouseId, materialId, spec).
+   */
+  async getReservedQtyMap(
+    cells: Array<{ warehouseId: bigint; materialId: bigint }>,
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (cells.length === 0) return out;
+    const warehouseIds = [...new Set(cells.map((c) => c.warehouseId))];
+    const materialIds = [...new Set(cells.map((c) => c.materialId))];
+    const [stockReservations, transferReservations] = await Promise.all([
+      this.prisma.stockReservation.findMany({
+        where: {
+          warehouseId: { in: warehouseIds },
+          materialId: { in: materialIds },
+          status: ReservationStatus.ACTIVE,
+          stockLengthMm: 0,
+        },
+        select: {
+          warehouseId: true,
+          materialId: true,
+          spec: true,
+          quantity: true,
+          consumedQty: true,
+        },
+      }),
+      this.prisma.warehouseTransferReservation.findMany({
+        where: {
+          warehouseId: { in: warehouseIds },
+          materialId: { in: materialIds },
+          status: ReservationStatus.ACTIVE,
+        },
+        select: { warehouseId: true, materialId: true, spec: true, quantity: true },
+      }),
+    ]);
+    const add = (w: bigint, m: bigint, spec: string, qty: number) => {
+      const k = StockReservationsService.reservedKey(w, m, spec);
+      out.set(k, (out.get(k) ?? 0) + qty);
+    };
+    for (const r of stockReservations) {
+      add(
+        r.warehouseId,
+        r.materialId,
+        r.spec,
+        Math.max(0, r.quantity.toNumber() - r.consumedQty.toNumber()),
+      );
+    }
+    for (const r of transferReservations) {
+      if (r.materialId) add(r.warehouseId, r.materialId, r.spec, r.quantity.toNumber());
+    }
+    for (const [k, v] of out) out.set(k, Math.round(v * 1e4) / 1e4 + 0);
+    return out;
+  }
+
+  static reservedKey(
+    warehouseId: bigint,
+    materialId: bigint,
+    spec: string | null | undefined,
+  ): string {
+    return `${warehouseId}:${materialId}:${spec?.trim() ?? ''}`;
+  }
+
+  /**
    * B4 Đợt 3b (lỗ #4, mục 13.4 changelog) - giải phóng giữ chỗ khi nguồn sinh ra nó KHÔNG còn
    * hiệu lực (CuttingProposal bị supersede bởi 1 lượt duyệt khác cho cùng nhu cầu). RELEASED ở
    * đây mang ĐÚNG nghĩa "đã huỷ" - KHÁC "đã tiêu hết" (dòng tiêu hết vẫn ACTIVE, xem

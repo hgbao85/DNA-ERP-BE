@@ -10,6 +10,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { StockReservationsService } from './stock-reservations.service';
 import { paginate } from '../../common/utils/paginate.util';
+import { warehouseWhereForScope } from '../../common/utils/warehouse-family.util';
 import { TRON_SEGMENT_STEPS, isNormalizedSegmentSteps } from '../../common/utils/segment-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
@@ -379,8 +380,14 @@ export class StockLedgerService {
     return { entry: await this.postEntry(input, tx), warning };
   }
 
-  async findAll(query: ListStockLedgerQueryDto): Promise<Paginated<StockLedgerResponseDto>> {
+  async findAll(
+    query: ListStockLedgerQueryDto,
+    scope: string | null = null,
+  ): Promise<Paginated<StockLedgerResponseDto>> {
+    // K5 16/11: thủ kho chỉ đọc bút toán có 1 chân thuộc họ kho mình (trước đây đọc được sổ mọi kho).
+    const scopeWh = warehouseWhereForScope(scope);
     const where: Prisma.StockLedgerWhereInput = {
+      ...(scopeWh ? { AND: [{ OR: [{ fromWarehouse: scopeWh }, { toWarehouse: scopeWh }] }] } : {}),
       refType: query.refType,
       materialId: query.materialId ? parseBigIntId(query.materialId) : undefined,
       segmentSpecId: query.segmentSpecId ? parseBigIntId(query.segmentSpecId) : undefined,

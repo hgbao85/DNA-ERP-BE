@@ -758,6 +758,9 @@ export class IssueSlipsService {
   async findAll(query: ListIssueSlipsQueryDto, scope: string | null) {
     const rows = await this.prisma.issueSlip.findMany({
       where: {
+        // Thủ kho chỉ thấy phiếu kho mình (đúng mã kho, cùng inScope()); tổng kho (null) thấy hết. K5 16/11: lọc ngay trong câu
+        // truy vấn - trước đây lấy 200 phiếu mới nhất của MỌI kho rồi mới lọc, kho ít phiếu bị phiếu kho khác đẩy ra ngoài 200.
+        ...(scope ? { warehouse: { code: scope } } : {}),
         ...(query.status ? { status: query.status } : {}),
         ...(query.productionInvoiceId
           ? {
@@ -780,15 +783,15 @@ export class IssueSlipsService {
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
-    // Thủ kho chỉ thấy phiếu kho mình (họ kho phoi-son-han thấy cả kho phụ cùng họ); tổng kho
-    // (null) thấy hết.
-    const visible = scope ? rows.filter((r) => this.inScope(r.warehouse.code, scope)) : rows;
-    const codes = await this.lenhCodesOf(...visible);
-    return visible.map((r) => this.toDto(r, codes));
+    const codes = await this.lenhCodesOf(...rows);
+    return rows.map((r) => this.toDto(r, codes));
   }
 
-  async findOne(id: string) {
+  /** scope bỏ trống = gọi nội bộ sau khi đã kiểm phạm vi (create/confirm/cancel). */
+  async findOne(id: string, scope?: string | null) {
     const slip = await this.findRowOrThrow(id);
+    // K5 16/11: trước đây xem được phiếu kho khác qua id.
+    if (scope) this.assertSlipScope(slip, scope);
     return this.toDto(slip, await this.lenhCodesOf(slip));
   }
 

@@ -534,6 +534,22 @@ describe('StockLedgerService', () => {
       );
     });
 
+    it('K5 16/11: thủ kho chỉ đọc bút toán có 1 chân thuộc họ kho mình; tổng kho không lọc', async () => {
+      prisma.stockLedger.findMany.mockResolvedValue([]);
+      prisma.stockLedger.count.mockResolvedValue(0);
+      const q = { page: 1, limit: 20, sortOrder: 'desc' as never } as never;
+
+      await service.findAll(q, 'thanh-pham-1788485485362');
+      await service.findAll(q, null);
+
+      const where = (i: number) =>
+        (prisma.stockLedger.findMany.mock.calls[i] as [{ where: Record<string, unknown> }])[0]
+          .where;
+      const fam = { OR: [{ code: 'thanh-pham' }, { code: { startsWith: 'thanh-pham-' } }] };
+      expect(where(0).AND).toEqual([{ OR: [{ fromWarehouse: fam }, { toWarehouse: fam }] }]);
+      expect(where(1).AND).toBeUndefined();
+    });
+
     // 2026-09-12 (màn "Lịch sử kho"): tên/ĐVT vật tư, tên kho và chiều dài cây đã nằm sẵn trong
     // LEDGER_INCLUDE nhưng trước đây DTO không trả ra - màn lịch sử chỉ hiện được mã trần, không
     // biết "5" là 5 cây hay 5 kg, cũng không phân biệt được 2 lô cùng mã sắt khác chiều dài.

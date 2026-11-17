@@ -19,6 +19,7 @@ import {
   assertItemPiHasActiveFloorLocked,
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import {
   loadSkuPriorityHoldback,
   SiblingOrder,
@@ -44,6 +45,7 @@ const PACKAGING_ISSUE_INCLUDE = {
         select: {
           salesOrder: { select: { orderCode: true } },
           warehouseCode: true,
+          productionInvoiceId: true,
           productionInvoice: { select: { code: true } },
         },
       },
@@ -66,6 +68,23 @@ export type PackagingIssueRow = Prisma.PackagingIssueGetPayload<{
 /// PHỤ dạng 'thanh-pham-{n}') - trước đây hard-code literal này bất kể QLSX chọn kho nào, khiến
 /// hàng luôn "về" kho thành phẩm gốc dù QLSX đã chọn kho phụ khi gửi Sếp duyệt.
 const PACKAGING_DEST_WAREHOUSE_CODE = 'thanh-pham';
+/** K6 16/11: kho nguồn đã là chính kho thành phẩm của lệnh -> xuất = dùng hết, ghi sang kho ảo Sản xuất (như xuất tiêu hao). */
+const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
+
+/**
+ * K6 16/11 - mã kho thật đang giữ vật tư đóng gói của 1 lệnh. Vật tư khai ở họ kho thành phẩm được MUA VỀ đúng kho thành phẩm
+ * QLSX chọn cho lệnh (ConsumableMaterialPurchaseService ghi receiveWarehouseCode, giữ chỗ cũng ở đó), nên xuất cũng phải lấy từ
+ * kho đó. Trước đây luôn lấy Material.warehouseId: lệnh ở "Kho thành phẩm 2" đọc tồn sai kho (thủ kho kho 2 còn bị chặn quyền),
+ * lệnh ở kho thành phẩm gốc thì nguồn = đích -> lỗi "from == to" (đã gặp 07-08/10). Vật tư khai ở kho khác giữ nguyên.
+ */
+export function packagingSourceWarehouseCode(
+  materialWarehouseCode: string,
+  piWarehouseCode: string | null | undefined,
+): string {
+  return piWarehouseCode && warehouseFamilyOf(materialWarehouseCode) === 'thanh-pham'
+    ? piWarehouseCode
+    : materialWarehouseCode;
+}
 
 /**
  * Xuất vật tư đóng gói (2026-08-19, thay MOCK ở WarehouseXuatPage.tsx scope 'vat-tu-tp') - tem
@@ -172,7 +191,15 @@ export class PackagingIssuesService {
       'xuất vật tư đóng gói',
     );
     const materialBigId = parseBigIntId(dto.materialId);
-    const sourceWarehouse = await this.findMaterialWarehouseOrThrow(materialBigId);
+    const piItem = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
+      where: { id: order.productionInvoiceItemId },
+      select: { warehouseCode: true },
+    });
+    const sourceWarehouse = await this.resolveSourceWarehouse(
+      this.prisma,
+      materialBigId,
+      piItem.warehouseCode,
+    );
     // Gate theo ĐÚNG instance kho vật lý của vật tư này (không chỉ cùng gia đình vat-tu-tp) - Thủ
     // kho của vat-tu-tp-2 không được xuất vật tư đang thật sự nằm ở kho vat-tu-tp gốc và ngược lại.
     this.assertWarehouseScope(warehouseScope, sourceWarehouse.code);
@@ -370,7 +397,9 @@ export class PackagingIssuesService {
       where: { id: { in: orderBigIds } },
       include: {
         mfgProduct: true,
-        productionInvoiceItem: { select: { salesOrder: { select: { orderCode: true } } } },
+        productionInvoiceItem: {
+          select: { salesOrder: { select: { orderCode: true } }, warehouseCode: true },
+        },
       },
     });
 
@@ -447,7 +476,13 @@ export class PackagingIssuesService {
             materialCode: item.material.code,
             materialName: item.material.name,
             materialUnit: item.material.unit,
-            materialWarehouseCode: item.material.warehouse?.code ?? null,
+            // K6 16/11: kho thật sẽ xuất (kho thành phẩm của lệnh với vật tư họ thành phẩm) - FE lọc theo mã này cho thủ kho.
+            materialWarehouseCode: item.material.warehouse
+              ? packagingSourceWarehouseCode(
+                  item.material.warehouse.code,
+                  order.productionInvoiceItem.warehouseCode,
+                )
+              : null,
             requiredQty,
             issuedQty,
             // Trần thật là MIN(định mức BOM, đã qua Chuyền kiểm) - "Kế hoạch" (requiredQty) vẫn
@@ -467,22 +502,21 @@ export class PackagingIssuesService {
     tx?: PrismaTx,
   ): Promise<void> {
     const db = tx ?? this.prisma;
-    // fromWarehouseId đọc thẳng từ Material.warehouseId (đã include ở PACKAGING_ISSUE_INCLUDE) -
-    // không còn tra theo literal code. Chỉ chưa từng null ở đây vì create() đã chặn qua
-    // findMaterialWarehouseOrThrow() trước khi tạo bản ghi.
-    if (!issue.material.warehouseId) {
-      throw new BadRequestException(
-        `Vật tư ${issue.material.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi ghi sổ`,
-      );
-    }
-    const destWarehouseCode =
-      issue.productionOrder.productionInvoiceItem.warehouseCode ?? PACKAGING_DEST_WAREHOUSE_CODE;
-    const toWarehouse = await db.warehouse.findUniqueOrThrow({
+    // K6 16/11: cùng kho nguồn với lúc kiểm tồn (resolveSourceWarehouse) - không còn đọc thẳng Material.warehouseId.
+    const piWarehouseCode = issue.productionOrder.productionInvoiceItem.warehouseCode;
+    const source = await this.resolveSourceWarehouse(db, issue.materialId, piWarehouseCode);
+    const destWarehouseCode = piWarehouseCode ?? PACKAGING_DEST_WAREHOUSE_CODE;
+    let toWarehouse = await db.warehouse.findUniqueOrThrow({
       where: { code: destWarehouseCode },
     });
+    if (toWarehouse.id === source.id) {
+      toWarehouse = await db.warehouse.findUniqueOrThrow({
+        where: { code: PRODUCTION_WAREHOUSE_CODE },
+      });
+    }
     await this.stockLedgerService.postEntry(
       {
-        fromWarehouseId: issue.material.warehouseId,
+        fromWarehouseId: source.id,
         toWarehouseId: toWarehouse.id,
         materialId: issue.materialId,
         qty: issue.issuedQty.toNumber(),
@@ -497,8 +531,11 @@ export class PackagingIssuesService {
 
   /** Kho vật lý CỤ THỂ của vật tư này, đọc từ Material.warehouseId (mirror
    *  CuttingProposalsService.approve()) - 400 rõ ràng nếu Admin chưa cấu hình Kho cho vật tư đó. */
-  private async findMaterialWarehouseOrThrow(id: bigint): Promise<{ id: bigint; code: string }> {
-    const material = await this.prisma.material.findUnique({
+  private async findMaterialWarehouseOrThrow(
+    id: bigint,
+    client: PrismaServiceType | PrismaTx = this.prisma,
+  ): Promise<{ id: bigint; code: string }> {
+    const material = await client.material.findUnique({
       where: { id },
       select: { code: true, warehouseId: true, warehouse: { select: { id: true, code: true } } },
     });
@@ -511,6 +548,27 @@ export class PackagingIssuesService {
       );
     }
     return material.warehouse;
+  }
+
+  /** Kho thật để xuất vật tư đóng gói của lệnh - xem packagingSourceWarehouseCode(). */
+  private async resolveSourceWarehouse(
+    client: PrismaServiceType | PrismaTx,
+    materialId: bigint,
+    piWarehouseCode: string | null,
+  ): Promise<{ id: bigint; code: string }> {
+    const base = await this.findMaterialWarehouseOrThrow(materialId, client);
+    const code = packagingSourceWarehouseCode(base.code, piWarehouseCode);
+    if (code === base.code) return base;
+    const real = await client.warehouse.findUnique({
+      where: { code },
+      select: { id: true, code: true },
+    });
+    if (!real) {
+      throw new BadRequestException(
+        `Kho thành phẩm "${code}" (QLSX đã chọn cho lệnh) không còn tồn tại - báo Admin kiểm tra lại`,
+      );
+    }
+    return real;
   }
 
   /** null = tổng kho (BOSS/ADMIN) - không có gì để chặn, cùng idiom MaterialIssuesService/

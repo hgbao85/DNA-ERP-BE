@@ -136,7 +136,7 @@ describe('WarehouseTransfersService', () => {
         create: jest.fn(),
         findUnique: jest.fn(),
         findUniqueOrThrow: jest.fn(),
-        findMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -592,13 +592,19 @@ describe('WarehouseTransfersService', () => {
 
     it('v8 4.8: số phiếu CK-<mã kho giao>-NNN, đếm liên tục theo kho giao', async () => {
       prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
-      prisma.warehouseTransfer.count.mockResolvedValue(4);
+      // K6 16/11: lấy số lớn nhất của đúng dạng CK-PA.PHOI-<số>; mã của kho khác có cùng tiền tố (CK-PA.PHOI-X-...) bỏ qua.
+      prisma.warehouseTransfer.findMany.mockResolvedValue([
+        { code: 'CK-PA.PHOI-001' },
+        { code: 'CK-PA.PHOI-004' },
+        { code: 'CK-PA.PHOI-X-009' },
+      ]);
       prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
 
       await service.create(dto, null, 'user-1', 'idem-key-1');
 
-      expect(prisma.warehouseTransfer.count).toHaveBeenCalledWith({
+      expect(prisma.warehouseTransfer.findMany).toHaveBeenCalledWith({
         where: { code: { startsWith: 'CK-PA.PHOI-' } },
+        select: { code: true },
       });
       expect(prisma.warehouseTransfer.create).toHaveBeenCalledWith(
         expect.objectContaining({
