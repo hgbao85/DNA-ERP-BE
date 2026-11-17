@@ -35,6 +35,7 @@ describe('SalesOrdersService', () => {
     productionInvoiceItem: {
       findFirst: jest.Mock;
       findMany: jest.Mock;
+      create: jest.Mock;
       createMany: jest.Mock;
       updateMany: jest.Mock;
       count: jest.Mock;
@@ -117,6 +118,7 @@ describe('SalesOrdersService', () => {
         // 10/09: findAll() gộp check "đã gộp PI" qua 1 query findMany duy nhất cho cả trang -
         // mặc định chưa có order nào gộp PI (mảng rỗng), test nào cần mô phỏng đã gộp tự override.
         findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn(),
         createMany: jest.fn(),
         updateMany: jest.fn(),
         // Medium fix "chặn xoá đơn đã gộp PI" (remove()) - mặc định chưa gộp PI nào (0).
@@ -987,6 +989,7 @@ describe('SalesOrdersService', () => {
       expect(prisma.productionInvoiceItem.findFirst).toHaveBeenCalledWith({
         where: {
           mfgProductId: 2n,
+          productionInvoiceId: { not: null },
           OR: [
             { salesOrderItemId: 5n },
             { salesOrderItemId: null, salesOrderId: 10n },
@@ -996,7 +999,7 @@ describe('SalesOrdersService', () => {
       });
     });
 
-    it('cho phép sửa totalQty khi chưa ghim PI nào', async () => {
+    it('cho phép sửa totalQty khi chưa ghim PI nào; L6 16/11: dòng sản xuất chưa gom đi theo số mới', async () => {
       prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
       prisma.salesOrderItem.findUnique.mockResolvedValue(linkedItem);
       prisma.productionInvoiceItem.findFirst.mockResolvedValue(null);
@@ -1004,6 +1007,23 @@ describe('SalesOrdersService', () => {
 
       const result = await service.updateItem('10', '5', { totalQty: 20 });
       expect(result.totalQty).toBe(20);
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+        where: { salesOrderItemId: 5n, productionInvoiceId: null },
+        data: { quantity: 20 },
+      });
+    });
+
+    it('L6 16/11: KHSX gom dòng này đúng lúc Sales sửa số (đọc lại thấy đã gom) -> 409', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.salesOrderItem.findUnique.mockResolvedValue(linkedItem);
+      prisma.productionInvoiceItem.findFirst
+        .mockResolvedValueOnce(null) // lúc kiểm trước: chưa gom
+        .mockResolvedValueOnce({ id: 77n }); // đọc lại trong transaction: vừa gom
+      prisma.salesOrderItem.update.mockResolvedValue({ ...linkedItem, totalQty: 20 });
+
+      await expect(service.updateItem('10', '5', { totalQty: 20 })).rejects.toThrow(
+        /vừa được KHSX gom/,
+      );
     });
 
     it('vẫn cho sửa field KHÁC (vd status) dù đã ghim PI, miễn không đổi totalQty', async () => {
@@ -1017,6 +1037,45 @@ describe('SalesOrdersService', () => {
 
       await service.updateItem('10', '5', { status: SalesOrderItemStatus.DONG_GOI, totalQty: 10 });
       expect(prisma.salesOrderItem.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('addItem', () => {
+    it('L6 16/11: thêm dòng vào đơn có sẵn cũng tạo dòng sản xuất chưa gom (cùng transaction)', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.mfgProduct.findUnique.mockResolvedValue(product);
+      prisma.salesOrderItem.findMany.mockResolvedValue([]);
+      const deliveryDate = new Date('2026-12-20');
+      prisma.salesOrderItem.create.mockResolvedValue({
+        id: 6n,
+        salesOrderId: 10n,
+        mfgProductId: 2n,
+        totalQty: 15,
+        deliveryDate,
+        wireMaterialId: null,
+        cushionMaterialId: null,
+        mfgProduct: product,
+      });
+
+      await service.addItem('10', {
+        mfgProductId: '2',
+        totalQty: 15,
+        deliveryDate: '2026-12-20',
+      });
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(prisma.productionInvoiceItem.create).toHaveBeenCalledWith({
+        data: {
+          productionInvoiceId: null,
+          mfgProductId: 2n,
+          salesOrderId: 10n,
+          salesOrderItemId: 6n,
+          wireMaterialId: null,
+          cushionMaterialId: null,
+          quantity: 15,
+          deliveryDeadline: deliveryDate,
+        },
+      });
     });
   });
 });

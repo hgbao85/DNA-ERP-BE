@@ -28,6 +28,7 @@ import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
 import { assertPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { checkMergeRules, skuLabel } from '../../common/utils/merge-rules.util';
 import { vnDayKey } from '../../common/utils/floor-stats.util';
@@ -2156,15 +2157,28 @@ export class ProductionInvoicesService {
     await this.autofillSuggestedDeadlines(pi, targets);
 
     const requestedAt = new Date();
-    await this.prisma.productionInvoiceItem.updateMany({
-      where: { id: { in: targets.map((it) => it.id) } },
-      data: {
-        prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX,
-        requestedAt,
-        requestedById: actorUserId,
-        rejectReason: null,
-        ...(chosen ? { workshopId: chosen.id } : {}),
-      },
+    // L2 16/11: chỉ ghi dòng VẪN đang ở trạng thái gửi được (chưa gửi / bị trả lại) và còn trong PI này - 1 yêu cầu
+    // khác vừa gửi/duyệt/từ chối dòng nào trong lúc này thì huỷ cả lượt (409), không kéo ngược trạng thái của nó.
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.productionInvoiceItem.updateMany({
+        where: {
+          id: { in: targets.map((it) => it.id) },
+          productionInvoiceId: pi.id,
+          OR: [{ prodApprovalStatus: null }, { prodApprovalStatus: ProdApprovalStatus.REJECTED }],
+        },
+        data: {
+          prodApprovalStatus: ProdApprovalStatus.WAITING_QLSX,
+          requestedAt,
+          requestedById: actorUserId,
+          rejectReason: null,
+          ...(chosen ? { workshopId: chosen.id } : {}),
+        },
+      });
+      if (count !== targets.length) {
+        throw new ConflictException(
+          `Lệnh ${lenhDisplayCode(pi, pi.items)} vừa được xử lý bởi 1 yêu cầu khác trong lúc gửi QLSX - tải lại trang rồi thử lại`,
+        );
+      }
     });
     // updateMany() không trả từng dòng - dựng "after" từ "before" đã có, cùng cách approveBatch().
     for (const item of targets) {
@@ -2677,6 +2691,7 @@ export class ProductionInvoicesService {
     actorUserId: string,
   ): Promise<ProductionInvoiceItemResponseDto> {
     const pi = await this.findOneOrThrow(piId);
+    this.assertNotMergedForSingleReject(pi, 'rejectBatchByQlsx');
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_QLSX);
     await this.assertCanManageItems(actorUserId, [item], 'lệnh này');
@@ -2836,6 +2851,7 @@ export class ProductionInvoicesService {
     actorUserId: string,
   ): Promise<ProductionInvoiceItemResponseDto> {
     const pi = await this.findOneOrThrow(piId);
+    this.assertNotMergedForSingleReject(pi, 'rejectBatch');
     const item = await this.findItemOrThrow(pi.id, itemId);
     this.assertItemStatus(item, ProdApprovalStatus.WAITING_BOSS);
 
@@ -3116,6 +3132,18 @@ export class ProductionInvoicesService {
     return { movedItemIds: pi.items.map((i) => i.id.toString()) };
   }
 
+  /**
+   * L3 16/11: PI gộp từ chối CẢ CỤM (cùng lý do không duyệt lẻ được - xem approveItem): rút 1 SKU ra thì phương án cắt chung
+   * của PI vẫn tính cả SKU đó, các SKU còn lại sai số cây. FE vốn chỉ gọi route cả cụm cho PI gộp; chặn route lẻ cho khớp.
+   */
+  private assertNotMergedForSingleReject(pi: PIWithRefs, batchMethod: string): void {
+    if (pi.isMerged) {
+      throw new ConflictException(
+        `${pi.code} là đợt gộp - phải từ chối CẢ CỤM một lần (cả nhóm nằm chung một cây sắt, không rút lẻ 1 SKU được), xem ${batchMethod}`,
+      );
+    }
+  }
+
   private async assertMergedPi(piId: string): Promise<PIWithRefs> {
     const pi = await this.findOneOrThrow(piId);
     if (!pi.isMerged) {
@@ -3316,47 +3344,52 @@ export class ProductionInvoicesService {
 
     // Chỉ được kiểm tối đa bằng số "Hiện có": mảnh có đan = đã nhập đan về, mảnh không đan = đã
     // nhập nội bộ (phiếu chuyển kho CONFIRMED).
-    const [received, checked] = await Promise.all([
-      bomPiece.isWoven
-        ? this.prisma.weavingReceipt
-            .aggregate({
-              where: { productionOrderId: productionOrder.id, pieceId: pieceBigId },
-              _sum: { qty: true },
-            })
-            .then((r) => r._sum.qty ?? 0)
-        : this.prisma.warehouseTransferPieceItem
-            .aggregate({
-              where: {
-                productionOrderId: productionOrder.id,
-                pieceId: pieceBigId,
-                transfer: { status: TransferStatus.CONFIRMED, ...PIECE_TRANSFER_LEAVES_FRAME },
-              },
-              _sum: { quantity: true },
-            })
-            .then((r) => r._sum.quantity ?? 0),
-      this.prisma.transferCheckResult.aggregate({
-        where: { productionInvoiceItemId: item.id, pieceId: pieceBigId },
-        _sum: { checkedQty: true },
-      }),
-    ]);
-    const available = received - (checked._sum.checkedQty ?? 0);
-    if (dto.checkedQty > available) {
-      throw new BadRequestException(
-        `Số lượng kiểm (${dto.checkedQty}) vượt quá số hiện có (${Math.max(0, available)}) - chỉ kiểm được phần đã nhập về kho`,
-      );
-    }
+    // L4 16/11: đọc tổng + ghi trong 1 transaction dưới khoá (SKU, mảnh) - 2 người báo cùng lúc không còn cùng thấy
+    // "còn đủ" rồi cùng ghi vượt số hiện có.
+    const created = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `transfer-check:${item.id}:${pieceBigId}`);
+      const [received, checked] = await Promise.all([
+        bomPiece.isWoven
+          ? tx.weavingReceipt
+              .aggregate({
+                where: { productionOrderId: productionOrder.id, pieceId: pieceBigId },
+                _sum: { qty: true },
+              })
+              .then((r) => r._sum.qty ?? 0)
+          : tx.warehouseTransferPieceItem
+              .aggregate({
+                where: {
+                  productionOrderId: productionOrder.id,
+                  pieceId: pieceBigId,
+                  transfer: { status: TransferStatus.CONFIRMED, ...PIECE_TRANSFER_LEAVES_FRAME },
+                },
+                _sum: { quantity: true },
+              })
+              .then((r) => r._sum.quantity ?? 0),
+        tx.transferCheckResult.aggregate({
+          where: { productionInvoiceItemId: item.id, pieceId: pieceBigId },
+          _sum: { checkedQty: true },
+        }),
+      ]);
+      const available = received - (checked._sum.checkedQty ?? 0);
+      if (dto.checkedQty > available) {
+        throw new BadRequestException(
+          `Số lượng kiểm (${dto.checkedQty}) vượt quá số hiện có (${Math.max(0, available)}) - chỉ kiểm được phần đã nhập về kho`,
+        );
+      }
 
-    const created = await this.prisma.transferCheckResult.create({
-      data: {
-        productionInvoiceItemId: item.id,
-        pieceId: pieceBigId,
-        checkedQty: dto.checkedQty,
-        note: dto.note,
-        checkedById: actorUserId,
-        defects: dto.defects?.length
-          ? { create: dto.defects.map((d) => ({ reason: d.reason, imageUrl: d.imageUrl })) }
-          : undefined,
-      },
+      return tx.transferCheckResult.create({
+        data: {
+          productionInvoiceItemId: item.id,
+          pieceId: pieceBigId,
+          checkedQty: dto.checkedQty,
+          note: dto.note,
+          checkedById: actorUserId,
+          defects: dto.defects?.length
+            ? { create: dto.defects.map((d) => ({ reason: d.reason, imageUrl: d.imageUrl })) }
+            : undefined,
+        },
+      });
     });
 
     const pieces = await this.listTransferCheckPieces(piId, itemId);
@@ -3546,21 +3579,25 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
     await assertPiHasActiveFloor(this.prisma, pi.id, 'ghi nhận đóng gói');
-    const packedSoFar = await this.sumPacked(item.id);
-    if (packedSoFar + dto.boxesPacked > productionOrder.quantity) {
-      throw new BadRequestException(
-        `Số thùng đóng (${dto.boxesPacked}) vượt quá số còn có thể đóng cho SKU ${itemId} ` +
-          `(tổng ${productionOrder.quantity}, đã đóng ${packedSoFar}, còn ${productionOrder.quantity - packedSoFar})`,
-      );
-    }
-
-    await this.prisma.packagingRecord.create({
-      data: {
-        productionInvoiceItemId: item.id,
-        boxesPacked: dto.boxesPacked,
-        note: dto.note,
-        packedById: actorUserId,
-      },
+    // L4 16/11: đọc "đã đóng" + ghi trong 1 transaction dưới khoá theo SKU - 2 lần báo cùng lúc không vượt trần.
+    const packedSoFar = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `packaging:${item.id}`);
+      const soFar = await this.sumPacked(item.id, tx);
+      if (soFar + dto.boxesPacked > productionOrder.quantity) {
+        throw new BadRequestException(
+          `Số thùng đóng (${dto.boxesPacked}) vượt quá số còn có thể đóng cho SKU ${itemId} ` +
+            `(tổng ${productionOrder.quantity}, đã đóng ${soFar}, còn ${productionOrder.quantity - soFar})`,
+        );
+      }
+      await tx.packagingRecord.create({
+        data: {
+          productionInvoiceItemId: item.id,
+          boxesPacked: dto.boxesPacked,
+          note: dto.note,
+          packedById: actorUserId,
+        },
+      });
+      return soFar;
     });
 
     // Chỉ báo khi vừa đóng ĐỦ (không phải mỗi lần ghi) VÀ item có gắn đơn hàng (SalesOrder không có
@@ -3578,8 +3615,11 @@ export class ProductionInvoicesService {
     return this.getPackaging(piId, itemId);
   }
 
-  private async sumPacked(productionInvoiceItemId: bigint): Promise<number> {
-    const result = await this.prisma.packagingRecord.aggregate({
+  private async sumPacked(
+    productionInvoiceItemId: bigint,
+    db: Pick<PrismaServiceType, 'packagingRecord'> = this.prisma,
+  ): Promise<number> {
+    const result = await db.packagingRecord.aggregate({
       where: { productionInvoiceItemId },
       _sum: { boxesPacked: true },
     });

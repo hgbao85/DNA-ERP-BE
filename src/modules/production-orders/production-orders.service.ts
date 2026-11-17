@@ -12,6 +12,7 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
@@ -142,19 +143,28 @@ export class ProductionOrdersService {
         cushionMaterialId: true,
       },
     });
-    const poNumber = await this.resolvePoNumber(productionInvoiceItemId, item);
-    return this.prisma.productionOrder.create({
-      data: {
-        poNumber,
-        productionInvoiceItemId,
-        mfgProductId,
-        bomRevisionId: activeRevision.id,
-        quantity,
-        // Chốt loại dây/nệm Sales đã chọn - từ đây mua hàng/xuất đan đọc từ lệnh, không đọc lại
-        // dòng đơn (xem BomOptionResolver). NULL = SKU không có tick lựa chọn.
-        wireMaterialId: item.wireMaterialId ?? null,
-        cushionMaterialId: item.cushionMaterialId ?? null,
-      },
+    const data = {
+      productionInvoiceItemId,
+      mfgProductId,
+      bomRevisionId: activeRevision.id,
+      quantity,
+      // Chốt loại dây/nệm Sales đã chọn - từ đây mua hàng/xuất đan đọc từ lệnh, không đọc lại
+      // dòng đơn (xem BomOptionResolver). NULL = SKU không có tick lựa chọn.
+      wireMaterialId: item.wireMaterialId ?? null,
+      cushionMaterialId: item.cushionMaterialId ?? null,
+    };
+    if (!item.salesOrderId || !item.salesOrder) {
+      return this.prisma.productionOrder.create({
+        data: { poNumber: `NB-${productionInvoiceItemId}`, ...data },
+      });
+    }
+    // L1 16/11: cấp số + tạo lệnh dưới khoá theo đơn bán - 2 SKU cùng đơn duyệt cùng lúc không còn
+    // cùng đếm ra 1 số (trùng poNumber -> tạo lệnh lỗi, dòng "Đã duyệt" mà không có lệnh).
+    const { salesOrderId, salesOrder } = item;
+    return this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `po-number:${salesOrderId}`);
+      const poNumber = await this.nextPoNumber(tx, salesOrderId, salesOrder.orderCode);
+      return tx.productionOrder.create({ data: { poNumber, ...data } });
     });
   }
 
@@ -229,22 +239,26 @@ export class ProductionOrdersService {
    * ProductionInvoiceItem.salesOrderId) -> "NB-{itemId}" ("Nội bộ") - itemId đã unique sẵn vì
    * ProductionOrder.productionInvoiceItemId là @unique (1-1).
    *
-   * Đếm trước khi tạo (không phải sau) để suy đúng "SKU thứ mấy" - chấp nhận rủi ro race hiếm
-   * (2 item CÙNG 1 đơn Sales được duyệt gần như đồng thời có thể tính trùng số thứ tự) do
-   * unique constraint trên poNumber tự chặn, ném lỗi rõ ràng thay vì âm thầm ghi trùng - đủ an
-   * toàn vì approveItem() vốn đã là thao tác bấm tay từng item một, không phải batch job.
+   * L1 16/11: số thứ tự = số lớn nhất đã cấp cho đơn này + 1 (không lấy số lệnh đếm được + 1 nữa: lệnh
+   * bị xoá ở giữa làm số đếm tụt và đụng số đã có). Gọi dưới khoá `po-number:{đơn}` (createFromApproval)
+   * nên 2 lần duyệt cùng lúc nối đuôi nhau. Unique trên poNumber vẫn là chốt chặn cuối.
    */
-  private async resolvePoNumber(
-    productionInvoiceItemId: bigint,
-    item: { salesOrderId: bigint | null; salesOrder: { orderCode: string } | null },
+  private async nextPoNumber(
+    tx: Pick<PrismaServiceType, 'productionOrder'>,
+    salesOrderId: bigint,
+    orderCode: string,
   ): Promise<string> {
-    if (!item.salesOrderId || !item.salesOrder) {
-      return `NB-${productionInvoiceItemId}`;
-    }
-    const existingCount = await this.prisma.productionOrder.count({
-      where: { productionInvoiceItem: { salesOrderId: item.salesOrderId } },
+    const existing = await tx.productionOrder.findMany({
+      where: { productionInvoiceItem: { salesOrderId } },
+      select: { poNumber: true },
     });
-    return `${item.salesOrder.orderCode}-${existingCount + 1}`;
+    const prefix = `${orderCode}-`;
+    let max = existing.length;
+    for (const { poNumber } of existing) {
+      const tail = poNumber.startsWith(prefix) ? poNumber.slice(prefix.length) : '';
+      if (/^\d+$/.test(tail)) max = Math.max(max, Number(tail));
+    }
+    return `${prefix}${max + 1}`;
   }
 
   async findAll(query: PaginationQueryDto): Promise<Paginated<ProductionOrderResponseDto>> {

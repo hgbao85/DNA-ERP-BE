@@ -1854,29 +1854,48 @@ describe('SkusService', () => {
     });
   });
 
+  /**
+   * L5 16/11: xác nhận nhánh = updateMany có điều kiện IN_PROGRESS, đọc lại 2 mốc mới nhất (select), rồi trả dòng (đủ 2 nhánh
+   * thì update status). `row` là dòng DB sau thao tác; 2 mốc đọc lại suy từ row (WAITING_BOSS_APPROVAL = đủ cả 2).
+   */
+  const mockAfterForward = (row: ReturnType<typeof planForm>) => {
+    const both = row.status === 'WAITING_BOSS_APPROVAL';
+    prisma.planForm.findUniqueOrThrow.mockImplementation((args: { select?: unknown }) =>
+      Promise.resolve(
+        args.select
+          ? {
+              manhForwardedAt: both ? new Date() : row.manhForwardedAt,
+              detailForwardedAt: both ? new Date() : row.detailForwardedAt,
+            }
+          : row,
+      ),
+    );
+    prisma.planForm.update.mockResolvedValue(row);
+  };
+
   describe('approveParts', () => {
     it('rejects when the (single) manh group SAT is not approved yet', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ manhReviews: [] }));
 
       await expect(service.approveParts('5')).rejects.toThrow(ConflictException);
-      expect(prisma.planForm.update).not.toHaveBeenCalled();
+      expect(prisma.planForm.updateMany).not.toHaveBeenCalled();
     });
 
     it('sets manhForwardedAt but keeps IN_PROGRESS when detail has not been forwarded yet (2 nhánh độc lập)', async () => {
       prisma.planForm.findUnique.mockResolvedValue(
         planForm({ manhReviews: [{ group: 'SAT', status: 'APPROVED' }] }),
       );
-      prisma.planForm.update.mockResolvedValue(
-        planForm({ status: 'IN_PROGRESS', manhForwardedAt: new Date() }),
-      );
+      mockAfterForward(planForm({ status: 'IN_PROGRESS', manhForwardedAt: new Date() }));
 
       const result = await service.approveParts('5');
 
       expect(result.status).toBe('IN_PROGRESS');
       expect(result.manhForwardedAt).not.toBeNull();
-      expect(prisma.planForm.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { manhForwardedAt: expect.any(Date) as Date } }),
-      );
+      expect(prisma.planForm.updateMany).toHaveBeenCalledWith({
+        where: { id: 5n, status: 'IN_PROGRESS' },
+        data: { manhForwardedAt: expect.any(Date) as Date },
+      });
+      expect(prisma.planForm.update).not.toHaveBeenCalled();
     });
 
     it('advances straight to WAITING_BOSS_APPROVAL when the detail track had already been forwarded earlier (thứ tự ngược: chi tiết trước, mảnh sau)', async () => {
@@ -1886,16 +1905,45 @@ describe('SkusService', () => {
           detailForwardedAt: new Date(),
         }),
       );
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      mockAfterForward(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
 
       const result = await service.approveParts('5');
 
       expect(result.status).toBe('WAITING_BOSS_APPROVAL');
       expect(prisma.planForm.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: { manhForwardedAt: expect.any(Date) as Date, status: 'WAITING_BOSS_APPROVAL' },
-        }),
+        expect.objectContaining({ data: { status: 'WAITING_BOSS_APPROVAL' } }),
       );
+    });
+
+    it('L5 16/11: SKU đã gửi Sếp / đã duyệt -> 409, không bị kéo ngược về "Chờ Sếp duyệt"', async () => {
+      for (const status of ['WAITING_BOSS_APPROVAL', 'APPROVED']) {
+        prisma.planForm.findUnique.mockResolvedValue(
+          planForm({ status, manhReviews: [{ group: 'SAT', status: 'APPROVED' }] }),
+        );
+        await expect(service.approveParts('5')).rejects.toThrow(ConflictException);
+      }
+      expect(prisma.planForm.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('L5 16/11: dòng vừa bị yêu cầu khác đổi trạng thái (updateMany count 0) -> 409', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ manhReviews: [{ group: 'SAT', status: 'APPROVED' }] }),
+      );
+      prisma.planForm.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.approveParts('5')).rejects.toThrow(ConflictException);
+      expect(prisma.planForm.update).not.toHaveBeenCalled();
+    });
+
+    it('L5 16/11: mảnh và chi tiết xác nhận cùng lúc - bản đọc ban đầu thấy chi tiết TRỐNG nhưng đọc lại thấy đã có -> vẫn lên chờ Sếp', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ manhReviews: [{ group: 'SAT', status: 'APPROVED' }], detailForwardedAt: null }),
+      );
+      mockAfterForward(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+
+      const result = await service.approveParts('5');
+
+      expect(result.status).toBe('WAITING_BOSS_APPROVAL');
     });
   });
 
@@ -1906,24 +1954,23 @@ describe('SkusService', () => {
       );
 
       await expect(service.approveDetail('5')).rejects.toThrow(ConflictException);
-      expect(prisma.planForm.update).not.toHaveBeenCalled();
+      expect(prisma.planForm.updateMany).not.toHaveBeenCalled();
     });
 
     it('forwards the detail track even when manh has not been touched at all (order-independent - đây là hành vi chính cần thêm)', async () => {
       prisma.planForm.findUnique.mockResolvedValue(
         planForm({ manhReviews: [], detailReviews: [{ group: 'DAY_SON', status: 'APPROVED' }] }),
       );
-      prisma.planForm.update.mockResolvedValue(
-        planForm({ status: 'IN_PROGRESS', detailForwardedAt: new Date() }),
-      );
+      mockAfterForward(planForm({ status: 'IN_PROGRESS', detailForwardedAt: new Date() }));
 
       const result = await service.approveDetail('5');
 
       expect(result.status).toBe('IN_PROGRESS');
       expect(result.detailForwardedAt).not.toBeNull();
-      expect(prisma.planForm.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { detailForwardedAt: expect.any(Date) as Date } }),
-      );
+      expect(prisma.planForm.updateMany).toHaveBeenCalledWith({
+        where: { id: 5n, status: 'IN_PROGRESS' },
+        data: { detailForwardedAt: expect.any(Date) as Date },
+      });
     });
 
     it('advances straight to WAITING_BOSS_APPROVAL once BOTH tracks have been forwarded (bước QLSX đã bỏ) - thuận thứ tự: mảnh trước, chi tiết sau', async () => {
@@ -1933,17 +1980,40 @@ describe('SkusService', () => {
           detailReviews: [{ group: 'DAY_SON', status: 'APPROVED' }],
         }),
       );
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      mockAfterForward(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
 
       const result = await service.approveDetail('5');
 
       expect(result.status).toBe('WAITING_BOSS_APPROVAL');
       expect(prisma.planForm.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: { detailForwardedAt: expect.any(Date) as Date, status: 'WAITING_BOSS_APPROVAL' },
-        }),
+        expect.objectContaining({ data: { status: 'WAITING_BOSS_APPROVAL' } }),
       );
     });
+
+    it('L5 16/11: SKU đã duyệt -> 409', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(
+        planForm({ status: 'APPROVED', detailReviews: [{ group: 'DAY_SON', status: 'APPROVED' }] }),
+      );
+      await expect(service.approveDetail('5')).rejects.toThrow(ConflictException);
+      expect(prisma.planForm.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('L5 16/11: KHSX duyệt/từ chối nhánh chỉ khi SKU còn đang làm', () => {
+    it.each(['WAITING_BOSS_APPROVAL', 'APPROVED'])(
+      '%s -> 409, không ghi quyết định nhánh',
+      async (status) => {
+        prisma.planForm.findUnique.mockResolvedValue(planForm({ status }));
+        await expect(
+          service.reviewManhQuota('5', { status: 'REJECTED', reason: 'x' } as never),
+        ).rejects.toThrow(ConflictException);
+        await expect(
+          service.reviewDetailQuota('5', { status: 'REJECTED', reason: 'x' } as never),
+        ).rejects.toThrow(ConflictException);
+        expect(prisma.planFormManhReview.upsert).not.toHaveBeenCalled();
+        expect(prisma.planFormDetailReview.upsert).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('approve', () => {
@@ -2033,21 +2103,20 @@ describe('SkusService', () => {
           detailForwardedAt: new Date(),
         }),
       );
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       const result = await service.rejectByBoss('5');
 
       expect(result.status).toBe('IN_PROGRESS');
-      expect(prisma.planForm.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: {
-            status: 'IN_PROGRESS',
-            manhForwardedAt: null,
-            detailForwardedAt: null,
-            bossRejectReason: null,
-          },
-        }),
-      );
+      expect(prisma.planForm.updateMany).toHaveBeenCalledWith({
+        where: { id: 5n, status: 'WAITING_BOSS_APPROVAL' },
+        data: {
+          status: 'IN_PROGRESS',
+          manhForwardedAt: null,
+          detailForwardedAt: null,
+          bossRejectReason: null,
+        },
+      });
       expect(prisma.planFormManhReview.deleteMany).toHaveBeenCalledWith({
         where: { planFormId: 5n },
       });
@@ -2066,18 +2135,27 @@ describe('SkusService', () => {
           detailForwardedAt: new Date(),
         }),
       );
-      prisma.planForm.update.mockResolvedValue(
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(
         planForm({ status: 'IN_PROGRESS', bossRejectReason: 'Sai quy cách sơn' }),
       );
 
       const result = await service.rejectByBoss('5', 'Sai quy cách sơn');
 
       expect(result.bossRejectReason).toBe('Sai quy cách sơn');
-      expect(prisma.planForm.update).toHaveBeenCalledWith(
+      expect(prisma.planForm.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ bossRejectReason: 'Sai quy cách sơn' }) as unknown,
         }),
       );
+    });
+
+    it('L5 16/11: Sếp duyệt chạy cùng lúc đã đưa SKU khỏi chờ duyệt (count 0) -> 409, không xoá quyết định nhánh', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      prisma.planForm.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.rejectByBoss('5', 'x')).rejects.toThrow(ConflictException);
+      expect(prisma.planFormManhReview.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.planFormDetailReview.deleteMany).not.toHaveBeenCalled();
     });
   });
 
@@ -2107,7 +2185,7 @@ describe('SkusService', () => {
           detailForwardedAt: new Date(),
         }),
       );
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
+      mockAfterForward(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
 
       await service.approveParts('5');
 
@@ -2135,7 +2213,7 @@ describe('SkusService', () => {
 
     it('Sếp từ chối ghi kèm lý do', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       await service.rejectByBoss('5', 'Sai quy cách sơn');
 
@@ -2148,7 +2226,7 @@ describe('SkusService', () => {
 
     it('lỗi ghi lịch sử không làm hỏng thao tác chính', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'WAITING_BOSS_APPROVAL' }));
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.auditLog.create.mockRejectedValue(new Error('db down'));
 
       await expect(service.rejectByBoss('5')).resolves.toMatchObject({ status: 'IN_PROGRESS' });
@@ -2356,7 +2434,7 @@ describe('SkusService', () => {
       prisma.planForm.findUnique.mockResolvedValue(
         planForm({ manhReviews: [{ group: 'SAT', status: 'APPROVED' }] }),
       );
-      prisma.planForm.update.mockResolvedValue(planForm({ manhForwardedAt: new Date() }));
+      mockAfterForward(planForm({ manhForwardedAt: new Date() }));
 
       await service.approveParts('5', 'user-khsx');
 
@@ -2370,7 +2448,7 @@ describe('SkusService', () => {
           manhForwardedAt: new Date(), // nhánh mảnh đã forward từ trước
         }),
       );
-      prisma.planForm.update.mockResolvedValue(
+      mockAfterForward(
         planForm({
           status: 'WAITING_BOSS_APPROVAL',
           manhForwardedAt: new Date(),
@@ -2419,7 +2497,7 @@ describe('SkusService', () => {
       prisma.planForm.findUnique.mockResolvedValue(
         planForm({ status: 'WAITING_BOSS_APPROVAL', salesOrderId: 1n }),
       );
-      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.planForm.findUniqueOrThrow.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       await service.rejectByBoss('5', 'Sai quy cách sơn', 'user-boss');
 

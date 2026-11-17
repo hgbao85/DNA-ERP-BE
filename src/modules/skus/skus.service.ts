@@ -586,6 +586,8 @@ export class SkusService {
     actorUserId?: string,
   ): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
+    // L5 16/11: chỉ duyệt/từ chối nhánh khi SKU còn đang làm - SKU đã gửi Sếp/đã duyệt không bị đổi quyết định nhánh nữa.
+    this.assertStatus(pf, PlanFormStatus.IN_PROGRESS);
     const bigId = parseBigIntId(id);
     await this.prisma.planFormManhReview.upsert({
       where: { planFormId_group: { planFormId: bigId, group: ManhGroup.SAT } },
@@ -621,6 +623,8 @@ export class SkusService {
   /** KHSX xác nhận mảnh đã duyệt xong (nhánh độc lập với chi tiết - xem advanceForwardedTrack). */
   async approveParts(id: string, actorUserId?: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
+    // L5 16/11: SKU đã gửi Sếp / đã duyệt mà gọi lại thì trước đây bị kéo ngược về "Chờ Sếp duyệt".
+    this.assertStatus(pf, PlanFormStatus.IN_PROGRESS);
     this.assertAllApproved(pf.manhReviews, MANH_GROUPS, 'mảnh');
     return this.advanceForwardedTrack(pf, 'manh', actorUserId);
   }
@@ -847,6 +851,7 @@ export class SkusService {
     actorUserId?: string,
   ): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
+    this.assertStatus(pf, PlanFormStatus.IN_PROGRESS);
     const bigId = parseBigIntId(id);
     await this.prisma.planFormDetailReview.upsert({
       where: { planFormId_group: { planFormId: bigId, group: DetailGroup.DAY_SON } },
@@ -884,6 +889,7 @@ export class SkusService {
    *  QLSX duyệt cục bộ đã bị loại khỏi pipeline từ trước). */
   async approveDetail(id: string, actorUserId?: string): Promise<SkuResponseDto> {
     const pf = await this.findOneOrThrow(id);
+    this.assertStatus(pf, PlanFormStatus.IN_PROGRESS);
     this.assertAllApproved(pf.detailReviews, DETAIL_GROUPS, 'chi tiết');
     return this.advanceForwardedTrack(pf, 'detail', actorUserId);
   }
@@ -902,19 +908,37 @@ export class SkusService {
     actorUserId?: string,
   ): Promise<SkuResponseDto> {
     const now = new Date();
-    const manhForwardedAt = track === 'manh' ? now : pf.manhForwardedAt;
-    const detailForwardedAt = track === 'detail' ? now : pf.detailForwardedAt;
-    const bothForwarded = manhForwardedAt != null && detailForwardedAt != null;
-    const justCompleted =
-      bothForwarded && (pf.manhForwardedAt == null || pf.detailForwardedAt == null);
-
-    const updated = await this.prisma.planForm.update({
-      where: { id: pf.id },
-      data: {
-        ...(track === 'manh' ? { manhForwardedAt: now } : { detailForwardedAt: now }),
-        ...(bothForwarded ? { status: PlanFormStatus.WAITING_BOSS_APPROVAL } : {}),
-      },
-      include: PLAN_FORM_INCLUDE,
+    // L5 16/11: ghi mốc của nhánh này có điều kiện "còn IN_PROGRESS" (cũng khoá dòng tới hết transaction), rồi đọc LẠI cả 2
+    // mốc mới nhất. Trước đây tính "đủ 2 nhánh" theo bản đọc từ trước: xác nhận mảnh và chi tiết cùng lúc thì cả 2 đều
+    // thấy nhánh kia trống -> SKU kẹt IN_PROGRESS dù đã xong cả 2; gọi trên SKU đã duyệt thì bị kéo về chờ Sếp.
+    const { updated, justCompleted } = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.planForm.updateMany({
+        where: { id: pf.id, status: PlanFormStatus.IN_PROGRESS },
+        data: track === 'manh' ? { manhForwardedAt: now } : { detailForwardedAt: now },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Phiếu kế hoạch ${pf.id} đã được xử lý bởi 1 yêu cầu khác (không còn ở trạng thái đang làm) - tải lại trang`,
+        );
+      }
+      const fresh = await tx.planForm.findUniqueOrThrow({
+        where: { id: pf.id },
+        select: { manhForwardedAt: true, detailForwardedAt: true },
+      });
+      const both = fresh.manhForwardedAt != null && fresh.detailForwardedAt != null;
+      return {
+        justCompleted: both,
+        updated: both
+          ? await tx.planForm.update({
+              where: { id: pf.id },
+              data: { status: PlanFormStatus.WAITING_BOSS_APPROVAL },
+              include: PLAN_FORM_INCLUDE,
+            })
+          : await tx.planForm.findUniqueOrThrow({
+              where: { id: pf.id },
+              include: PLAN_FORM_INCLUDE,
+            }),
+      };
     });
     await this.recordHistory(
       pf.id,
@@ -1005,18 +1029,25 @@ export class SkusService {
     actorUserId?: string,
   ): Promise<SkuResponseDto> {
     const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.planFormManhReview.deleteMany({ where: { planFormId: pf.id } });
-      await tx.planFormDetailReview.deleteMany({ where: { planFormId: pf.id } });
-      return tx.planForm.update({
-        where: { id: pf.id },
+      // L5 16/11: chỉ rewind khi VẪN chờ Sếp duyệt - Sếp duyệt chạy cùng lúc đã kích hoạt định mức thì từ chối này 409,
+      // không đè SKU về IN_PROGRESS sau khi revision đã ACTIVE.
+      const { count } = await tx.planForm.updateMany({
+        where: { id: pf.id, status: PlanFormStatus.WAITING_BOSS_APPROVAL },
         data: {
           status: PlanFormStatus.IN_PROGRESS,
           manhForwardedAt: null,
           detailForwardedAt: null,
           bossRejectReason: reason ?? null,
         },
-        include: PLAN_FORM_INCLUDE,
       });
+      if (count === 0) {
+        throw new ConflictException(
+          `Phiếu kế hoạch ${pf.id} đã được xử lý bởi 1 yêu cầu khác trong lúc Sếp từ chối - không ghi đè`,
+        );
+      }
+      await tx.planFormManhReview.deleteMany({ where: { planFormId: pf.id } });
+      await tx.planFormDetailReview.deleteMany({ where: { planFormId: pf.id } });
+      return tx.planForm.findUniqueOrThrow({ where: { id: pf.id }, include: PLAN_FORM_INCLUDE });
     });
     await this.recordHistory(pf.id, 'sku.boss_rejected', reason);
     await this.resolveSkuNotifications(pf.id, ['SKU_SENT_TO_BOSS']);
