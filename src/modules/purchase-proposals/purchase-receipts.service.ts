@@ -10,11 +10,12 @@ import {
   Prisma,
   PurchaseProposalStatus,
   PurchaseReceiptStatus,
+  SupplierOrderStatus,
 } from '../../generated/prisma/client';
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
   CreatePurchaseReceiptDto,
@@ -85,7 +86,7 @@ export class PurchaseReceiptsService {
     dto: PreviewPurchaseReceiptDto,
     warehouseScope: string | null,
   ): Promise<PreviewLine[]> {
-    const lines = await this.loadGroup(dto.itemIds, warehouseScope);
+    const lines = await this.loadGroup(dto.itemIds, warehouseScope, true);
     return this.toPreview(lines, autoAllocate(lines.map(allocationLineOf), round4(dto.qty)));
   }
 
@@ -98,7 +99,7 @@ export class PurchaseReceiptsService {
     const existing = await this.findByKey(idempotencyKey);
     if (existing) return existing;
 
-    const lines = await this.loadGroup(dto.itemIds, warehouseScope);
+    const lines = await this.loadGroup(dto.itemIds, warehouseScope, true);
     const first = lines[0];
     const supplierUnitQty = dto.supplierUnitQty ?? 1;
     const total = round4(dto.unitRateQty * supplierUnitQty);
@@ -143,6 +144,9 @@ export class PurchaseReceiptsService {
             a < b ? -1 : a > b ? 1 : 0,
           );
           for (const id of proposalIds) await lockBusinessKey(tx, `purchase-proposal-mutate:${id}`);
+          // K4 (16/11): tái kiểm đơn đặt hàng SAU khoá - "Thay phiếu" (revise) cũng khoá cùng các khoá đề xuất trên rồi mới
+          // đưa đơn về DRAFT, nên tới đây trạng thái đơn là số mới nhất.
+          await this.assertOrderApprovedInTx(tx, first.item.supplierOrderId);
 
           // Tự chia theo số đã nhận MỚI NHẤT (sau khoá), không theo số đọc trước transaction.
           const fresh = await tx.purchaseProposalItem.findMany({
@@ -542,10 +546,23 @@ export class PurchaseReceiptsService {
   // ─── helpers ───────────────────────────────────────────────────────────────────────────────
 
   /** Đọc + kiểm các dòng của 1 phiếu: cùng đơn đặt hàng, cùng vật tư/quy cách/chiều dài cây, cùng kho, đang chờ nhận. */
-  private async loadGroup(rawIds: string[], warehouseScope: string | null): Promise<ReceiveLine[]> {
+  private async loadGroup(
+    rawIds: string[],
+    warehouseScope: string | null,
+    forReceive = false,
+  ): Promise<ReceiveLine[]> {
     const ids = [...new Set(rawIds)].map((id) => parseBigIntId(id));
     const lines = await this.proposals.loadReceiveLines(ids);
     const first = lines[0];
+    // K4 (danh sách lỗi 16/11): trước đây chỉ kiểm trạng thái dòng - đơn đã "Thay phiếu" (về DRAFT, chờ Giám đốc ký lại) mà còn
+    // dòng nhận dở (vẫn "Đang mua") thì vẫn nhận tiếp được theo phiếu cũ. Từ chối nhận vẫn cho, vì hàng NCC giao tới vẫn
+    // phải trả lại được.
+    const order = first?.item.supplierOrder;
+    if (forReceive && order && order.status !== SupplierOrderStatus.APPROVED) {
+      throw new ConflictException(
+        this.orderNotApprovedMessage(order.seq, order.year, order.status),
+      );
+    }
     for (const l of lines) {
       if (l.item.status !== PurchaseProposalStatus.PURCHASING) {
         throw new ConflictException(
@@ -575,6 +592,24 @@ export class PurchaseReceiptsService {
       );
     }
     return lines;
+  }
+
+  /** Khoá dòng đơn đặt hàng và tái kiểm đã duyệt (dòng cũ không có đơn thì bỏ qua). */
+  private async assertOrderApprovedInTx(tx: PrismaTx, orderId: bigint | null): Promise<void> {
+    if (orderId == null) return;
+    const [row] = await tx.$queryRaw<{ status: SupplierOrderStatus; seq: number; year: number }[]>`
+      SELECT "status", "seq", "year" FROM "supplier_orders" WHERE "id" = ${orderId} FOR UPDATE
+    `;
+    if (row && row.status !== SupplierOrderStatus.APPROVED) {
+      throw new ConflictException(this.orderNotApprovedMessage(row.seq, row.year, row.status));
+    }
+  }
+
+  private orderNotApprovedMessage(seq: number, year: number, status: SupplierOrderStatus): string {
+    const code = supplierOrderCode(seq, year);
+    return status === SupplierOrderStatus.CANCELLED
+      ? `Đơn đặt hàng ${code} đã huỷ - không nhận hàng theo đơn này được`
+      : `Đơn đặt hàng ${code} đang thay phiếu, chờ Giám đốc ký lại - nhận hàng sau khi người mua bấm "Sếp đã duyệt"`;
   }
 
   /** (2) Phiếu đề xuất Giám đốc ký: lấy từ đơn đặt hàng; dữ liệu cũ (trước đơn đặt hàng) lấy file gắn trên dòng; không có

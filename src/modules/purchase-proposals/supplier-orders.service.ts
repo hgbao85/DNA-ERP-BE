@@ -211,14 +211,20 @@ export class SupplierOrdersService {
         `Vật tư ${item.material.code} đã nhận hàng một phần - không gỡ khỏi đơn được`,
       );
     }
-    const emptied = order.items.length === 1;
-    await this.prisma.$transaction(async (tx) => {
+    // K4 (16/11): trước đây "đơn rỗng" tính từ danh sách đọc TRƯỚC transaction - 2 lần gỡ 2 dòng cuối chạy cùng lúc đều
+    // thấy còn 2 dòng nên không lần nào huỷ đơn, để lại đơn nháp rỗng. Nay đếm lại sau khoá đơn (lockDraft FOR UPDATE
+    // xếp hàng 2 lần gỡ), và chỉ gỡ khi dòng vẫn còn trong đơn.
+    const emptied = await this.prisma.$transaction(async (tx) => {
       await this.lockDraft(tx, order.id);
-      await tx.purchaseProposalItem.update({
-        where: { id: bigItemId },
+      const { count } = await tx.purchaseProposalItem.updateMany({
+        where: { id: bigItemId, supplierOrderId: order.id },
         data: { supplierOrderId: null },
       });
-      if (emptied) {
+      if (count !== 1) {
+        throw new ConflictException('Dòng này vừa được gỡ khỏi đơn ở nơi khác - tải lại trang');
+      }
+      const left = await tx.purchaseProposalItem.count({ where: { supplierOrderId: order.id } });
+      if (left === 0) {
         await tx.supplierOrder.update({
           where: { id: order.id },
           data: {
@@ -228,6 +234,7 @@ export class SupplierOrdersService {
           },
         });
       }
+      return left === 0;
     });
     await this.audit(AuditAction.UPDATE, order, null, {
       event: 'supplier-order-item-removed',

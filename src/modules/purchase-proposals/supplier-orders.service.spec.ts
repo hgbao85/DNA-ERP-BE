@@ -23,6 +23,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       findMany: jest.Mock;
       updateMany: jest.Mock;
       update: jest.Mock;
+      count: jest.Mock;
       create: jest.Mock;
     };
     supplierOrder: {
@@ -95,6 +96,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
         findMany: jest.fn().mockResolvedValue([pendingItem()]),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
         create: jest.fn((args: { data: { reorderOfItemId: bigint } }) =>
           Promise.resolve({ id: args.data.reorderOfItemId + 1000n }),
         ),
@@ -351,14 +353,44 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
     it('gỡ dòng cuối cùng thì đơn tự huỷ, số đơn giữ nguyên', async () => {
       await service.removeItem('90', '400', 'buyer-1', ['PURCHASER']);
 
-      expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
-        where: { id: 400n },
+      expect(prisma.purchaseProposalItem.updateMany).toHaveBeenCalledWith({
+        where: { id: 400n, supplierOrderId: 90n },
         data: { supplierOrderId: null },
       });
       expect(prisma.supplierOrder.update).toHaveBeenCalledWith({
         where: { id: 90n },
         data: expect.objectContaining({ status: SupplierOrderStatus.CANCELLED }) as unknown,
       });
+    });
+
+    it('K4 16/11: "đơn rỗng" đếm lại SAU khoá - còn dòng thì không huỷ', async () => {
+      prisma.purchaseProposalItem.count.mockResolvedValueOnce(1);
+      await service.removeItem('90', '400', 'buyer-1', ['PURCHASER']);
+      expect(prisma.supplierOrder.update).not.toHaveBeenCalled();
+    });
+
+    it('K4 16/11: 2 lần gỡ 2 dòng cuối chạy cùng lúc - lần sau đọc trước còn 2 dòng nhưng sau khoá còn 0 thì vẫn huỷ đơn', async () => {
+      prisma.supplierOrder.findUnique.mockResolvedValueOnce(
+        order({
+          items: [
+            pendingItem({ supplierOrderId: 90n }),
+            pendingItem({ id: 401n, supplierOrderId: 90n }),
+          ],
+        }),
+      );
+      await service.removeItem('90', '400', 'buyer-1', ['PURCHASER']);
+      expect(prisma.supplierOrder.update).toHaveBeenCalledWith({
+        where: { id: 90n },
+        data: expect.objectContaining({ status: SupplierOrderStatus.CANCELLED }) as unknown,
+      });
+    });
+
+    it('K4 16/11: dòng vừa bị gỡ ở nơi khác -> 409, không huỷ đơn', async () => {
+      prisma.purchaseProposalItem.updateMany.mockResolvedValueOnce({ count: 0 });
+      await expect(service.removeItem('90', '400', 'buyer-1', ['PURCHASER'])).rejects.toThrow(
+        ConflictException,
+      );
+      expect(prisma.supplierOrder.update).not.toHaveBeenCalled();
     });
 
     it('huỷ đơn: các dòng quay về chờ gom đơn', async () => {

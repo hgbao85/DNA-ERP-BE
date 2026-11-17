@@ -250,9 +250,12 @@ export class MaterialIssuesService {
       // xuất 1 vật tư (advisory lock ở trên chỉ khoá theo order+stage+material, không chặn được ca
       // này) - cùng idiom SteelIssuesService.consumeReservationAndDeduct(). Dùng getAvailableQty()
       // (không tự trừ tay) để không giành tồn với chuyển kho nội bộ đang giữ chỗ vật tư này.
+      // K1 (danh sách lỗi 16/11): ghi sổ luồng này luôn vào ô độ dài 0 / quy cách rỗng (postEntry mặc định), getAvailableQty
+      // cũng tính ô đó - chỉ đọc đúng ô này. Trước đây không lọc, vật tư có nhiều ô thì lấy 1 dòng bất kỳ.
       const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
         SELECT "qty" FROM "stock_quant"
         WHERE "warehouseId" = ${warehouse.id} AND "materialId" = ${materialBigId}
+          AND "stockLengthMm" = 0 AND "spec" = ''
         FOR UPDATE
       `;
       const onHand = stockRow?.qty.toNumber() ?? 0;

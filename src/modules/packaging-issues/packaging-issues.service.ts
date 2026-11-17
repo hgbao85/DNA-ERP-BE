@@ -184,9 +184,11 @@ export class PackagingIssuesService {
    * nhận nên phiếu vẫn lập được khi kho = 0. Cùng cách tính với createInTx() (tồn trừ giữ chỗ của PI khác) nhưng không khoá.
    */
   async assertStockForSlip(tx: PrismaTx, p: PreparedPackagingIssue): Promise<void> {
+    // K1 16/11: chỉ đọc ô độ dài 0 / quy cách rỗng - cùng ô ghi sổ, xem createInTx().
     const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
       SELECT "qty" FROM "stock_quant"
       WHERE "warehouseId" = ${p.sourceWarehouse.id} AND "materialId" = ${p.materialBigId}
+        AND "stockLengthMm" = 0 AND "spec" = ''
     `;
     const onHand = stockRow?.qty.toNumber() ?? 0;
     const piItem = await tx.productionInvoiceItem.findUniqueOrThrow({
@@ -268,9 +270,12 @@ export class PackagingIssuesService {
       // đây chỉ check định mức BOM, không đối chiếu tồn kho vật lý. FOR UPDATE chặn cả race giữa
       // 2 lệnh SX khác nhau cùng xuất 1 vật tư; getAvailableQty() để không giành tồn với chuyển
       // kho nội bộ đang giữ chỗ vật tư này.
+      // K1 (danh sách lỗi 16/11): ghi sổ luồng này luôn vào ô độ dài 0 / quy cách rỗng (postEntry mặc định), getAvailableQty
+      // cũng tính ô đó - chỉ đọc đúng ô này. Trước đây không lọc, vật tư có nhiều ô thì lấy 1 dòng bất kỳ.
       const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
         SELECT "qty" FROM "stock_quant"
         WHERE "warehouseId" = ${sourceWarehouse.id} AND "materialId" = ${materialBigId}
+          AND "stockLengthMm" = 0 AND "spec" = ''
         FOR UPDATE
       `;
       const onHand = stockRow?.qty.toNumber() ?? 0;
