@@ -235,21 +235,22 @@ export class WorkQueueService {
     });
   }
 
-  /** 4 bảng AWAITING_QC thật (xem lệch #3 ở doc comment lớp) - CutBundle/StepBundle/
-   *  PieceStepBundle đều là "Cắt/công đoạn phụ" của Phôi (tab kcs-phoi), ProductionBatch tách theo
+  /** 5 bảng AWAITING_QC thật (xem lệch #3 ở doc comment lớp) - CutBundle/StepBundle/
+   *  PieceStepBundle/MaterialYieldStepBundle (chân nhôm) đều là "Cắt/công đoạn phụ" của Phôi (tab kcs-phoi), ProductionBatch tách theo
    *  `stage` (PHOI/HAN/SON) cho đúng 3 tab riêng của màn KCS. */
   private async countKcs(): Promise<{ phoi: number; han: number; son: number }> {
-    const [cutBundle, stepBundle, pieceStepBundle, batchPhoi, batchHan, batchSon] =
+    const [cutBundle, stepBundle, pieceStepBundle, yieldStepBundle, batchPhoi, batchHan, batchSon] =
       await Promise.all([
         this.prisma.cutBundle.count({ where: { status: 'AWAITING_QC' } }),
         this.prisma.stepBundle.count({ where: { status: 'AWAITING_QC' } }),
         this.prisma.pieceStepBundle.count({ where: { status: 'AWAITING_QC' } }),
+        this.prisma.materialYieldStepBundle.count({ where: { status: 'AWAITING_QC' } }),
         this.prisma.productionBatch.count({ where: { stage: 'PHOI', status: 'AWAITING_QC' } }),
         this.prisma.productionBatch.count({ where: { stage: 'HAN', status: 'AWAITING_QC' } }),
         this.prisma.productionBatch.count({ where: { stage: 'SON', status: 'AWAITING_QC' } }),
       ]);
     return {
-      phoi: cutBundle + stepBundle + pieceStepBundle + batchPhoi,
+      phoi: cutBundle + stepBundle + pieceStepBundle + yieldStepBundle + batchPhoi,
       han: batchHan,
       son: batchSon,
     };

@@ -793,8 +793,7 @@ export class SteelIssuesService {
   ): Promise<CutBundleResponseDto> {
     // Gửi lại cùng khoá -> trả đợt đã cộng, không cộng lần 2 (2026-10-12, xem FloorReport).
     const replay = await this.replayFloorReport(idempotencyKey, FloorReportKind.CUT);
-    if (replay?.cutBundleId)
-      return this.toBundleResponseDto(await this.findBundleOrThrow(replay.cutBundleId.toString()));
+    if (replay) return this.replayCutReport(replay.cutBundleId);
     const issue = await this.findOneOrThrow(id);
     // CHỈ chặn khi CHƯA từng xác nhận nhận (ISSUED) - 1 lô có DUY NHẤT 1 đợt cắt thì ngay khi đợt
     // đó "Báo cắt xong", roll-up (syncIssueStatusFromBundles) đẩy issue.status lên
@@ -869,21 +868,8 @@ export class SteelIssuesService {
     // Mỗi công nhân 1 đợt riêng (2026-10-13, mục 20.5/22): chỉ cộng vào đợt CỦA CHÍNH người báo, để KCS
     // chấm đạt/lỗi biết của ai. Đợt cũ chưa có người mở (openedById NULL, tạo trước cột này) thì người
     // báo đầu tiên nhận luôn đợt đó - không bỏ dở số đã khai.
-    const openWhere = {
-      steelIssueId: issue.id,
-      status: CutBundleStatus.CUTTING,
-      productionOrderId: order.id,
-    };
-    const openBundle =
-      (await this.prisma.cutBundle.findFirst({
-        where: { ...openWhere, openedById: reportedById },
-        orderBy: { createdAt: 'desc' },
-      })) ??
-      (await this.prisma.cutBundle.findFirst({
-        where: { ...openWhere, openedById: null },
-        orderBy: { createdAt: 'desc' },
-      }));
-
+    // Việc chọn đợt đang mở làm TRONG transaction, sau khi khoá (xem bên dưới) - đọc ngoài transaction
+    // sẽ cộng nhầm vào đợt vừa được gửi KCS / vừa bị hủy hết bởi lời gọi khác chạy cùng lúc.
     const reportLines = dto.segments.map((seg) => ({
       segmentSpecId: parseBigIntId(seg.segmentSpecId),
       qty: seg.qty,
@@ -891,6 +877,20 @@ export class SteelIssuesService {
     let bundleId: bigint;
     try {
       bundleId = await this.prisma.$transaction(async (tx) => {
+        // Xếp hàng các lần báo của CÙNG người cho CÙNG lô + SKU, để không mở 2 đợt song song.
+        await lockBusinessKey(tx, `cut-report:${issue.id}:${order.id}:${reportedById}`);
+        // Khoá mọi đợt ứng viên (không LIMIT: LIMIT + FOR UPDATE có thể trả thiếu dòng khi Postgres
+        // kiểm lại dòng vừa bị đổi). Sau khi khoá, đợt vừa sang AWAITING_QC / vừa bị xoá tự bị loại.
+        const candidates = await tx.$queryRaw<{ id: bigint; openedById: string | null }[]>`
+          SELECT "id", "openedById", "createdAt" FROM "cut_bundles"
+          WHERE "steelIssueId" = ${issue.id}
+            AND "productionOrderId" = ${order.id}
+            AND "status" = 'CUTTING'::"CutBundleStatus"
+            AND ("openedById" = ${reportedById} OR "openedById" IS NULL)
+          ORDER BY ("openedById" IS NULL), "createdAt" DESC, "id" DESC
+          FOR UPDATE`;
+        // Đợt CỦA CHÍNH người báo (mới nhất) trước; không có thì đợt chưa có người mở (tạo trước cột này).
+        const openBundle = candidates.find((c) => c.openedById === reportedById) ?? candidates[0];
         if (openBundle) {
           if (!openBundle.openedById) {
             await tx.cutBundle.update({
@@ -962,15 +962,23 @@ export class SteelIssuesService {
     } catch (e) {
       if (isIdempotencyConflict(e)) {
         const raced = await this.replayFloorReport(idempotencyKey, FloorReportKind.CUT);
-        if (raced?.cutBundleId)
-          return this.toBundleResponseDto(
-            await this.findBundleOrThrow(raced.cutBundleId.toString()),
-          );
+        if (raced) return this.replayCutReport(raced.cutBundleId);
       }
       throw e;
     }
 
     return this.toBundleResponseDto(await this.findBundleOrThrow(bundleId.toString()));
+  }
+
+  /** Kết quả cho lần gửi lại cùng khoá của 1 lần báo cắt đã ghi. Đợt của lần báo đó đã bị xoá (QLSX hủy
+   *  hết số, FK sổ về NULL) thì báo rõ thay vì ghi lại lần 2 rồi vấp khoá trùng. */
+  private async replayCutReport(cutBundleId: bigint | null): Promise<CutBundleResponseDto> {
+    if (!cutBundleId) {
+      throw new ConflictException(
+        'Lần báo này đã ghi nhận trước đó và đã bị QLSX hủy - xem lý do ở "Sản lượng của tôi", cần thì báo lại',
+      );
+    }
+    return this.toBundleResponseDto(await this.findBundleOrThrow(cutBundleId.toString()));
   }
 
   /** Lần báo đã ghi với khoá này (null = chưa có). Khoá đã dùng cho loại báo khác -> 409. */
@@ -1265,6 +1273,20 @@ export class SteelIssuesService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      // Khoá dòng đợt cắt (như reverseCut): "Gửi KCS" chạy cùng lúc phải chờ, rồi ta thấy đúng trạng thái.
+      const [locked] = await tx.$queryRaw<{ status: CutBundleStatus }[]>`
+        SELECT "status" FROM "cut_bundles" WHERE "id" = ${bundle.id} FOR UPDATE`;
+      if (!locked) {
+        throw new ConflictException(`Đợt cắt ${bundleId} không còn - không hoàn tác được`);
+      }
+      if (locked.status !== CutBundleStatus.CUTTING) {
+        throw new ConflictException(
+          `Đợt cắt ${bundleId} đang ở trạng thái ${locked.status} - chỉ hoàn tác được khi đang cắt`,
+        );
+      }
+      const currentSegments = await tx.cutPatternSegment.findMany({
+        where: { cutBundleId: bundle.id },
+      });
       // Ghi dòng ĐẢO vào sổ TRƯỚC khi trừ (2026-10-12) - sổ không xoá gì, "Hoàn tác" chỉ là 1 lần báo âm
       // trỏ về lần báo gần nhất chưa bị đảo của đợt này. Ghi trước vì nếu đợt bị xoá hẳn bên dưới (hết
       // đoạn), FK cutBundleId của sổ tự về NULL - dòng sổ vẫn còn.
@@ -1290,7 +1312,7 @@ export class SteelIssuesService {
       });
       for (const seg of segments) {
         const specId = parseBigIntId(seg.segmentSpecId);
-        const row = bundle.segments.find((s) => s.segmentSpecId === specId);
+        const row = currentSegments.find((s) => s.segmentSpecId === specId);
         if (!row) continue; // Đã bị xoá/không còn khớp - bỏ qua an toàn, không chặn cả lượt hoàn tác.
         const newQty = row.qty - seg.qty;
         if (newQty <= 0) {
@@ -1332,7 +1354,7 @@ export class SteelIssuesService {
     const bundle = await this.findBundleOrThrow(bundleId);
     if (bundle.status !== CutBundleStatus.CUTTING) {
       throw new ConflictException(
-        `Đợt cắt ${bundleId} đang ở trạng thái ${bundle.status} - chỉ đợt đang cắt mới báo xong được`,
+        `Đợt cắt ${bundleId} đã được gửi KCS rồi (trạng thái ${bundle.status}) - tải lại trang`,
       );
     }
     await assertPiHasActiveFloor(
@@ -1341,9 +1363,28 @@ export class SteelIssuesService {
       'báo cắt xong',
     );
 
-    const updated = await this.prisma.cutBundle.update({
-      where: { id: bundle.id },
+    // Đổi trạng thái CÓ ĐIỀU KIỆN (đang CUTTING): 2 người gửi KCS cùng lúc hoặc đợt vừa bị hủy hết
+    // thì chỉ 1 lời gọi đổi được, lời gọi còn lại nhận 409 - không ghi đè completedAt, không báo lần 2.
+    const changed = await this.prisma.cutBundle.updateMany({
+      where: { id: bundle.id, status: CutBundleStatus.CUTTING },
       data: { status: CutBundleStatus.AWAITING_QC, completedAt: new Date() },
+    });
+    if (changed.count === 0) {
+      const now = await this.prisma.cutBundle.findUnique({
+        where: { id: bundle.id },
+        select: { status: true },
+      });
+      if (!now) {
+        throw new ConflictException(
+          `Đợt cắt ${bundleId} vừa bị hủy hết số - không còn gì để gửi KCS, tải lại trang`,
+        );
+      }
+      throw new ConflictException(
+        `Đợt cắt ${bundleId} vừa được gửi KCS (trạng thái ${now.status}) - tải lại trang`,
+      );
+    }
+    const updated = await this.prisma.cutBundle.findUniqueOrThrow({
+      where: { id: bundle.id },
       include: { segments: { include: { segmentSpec: true } }, ...BUNDLE_REPORTERS_INCLUDE },
     });
     await this.syncIssueStatusFromBundles(bundle.steelIssueId);

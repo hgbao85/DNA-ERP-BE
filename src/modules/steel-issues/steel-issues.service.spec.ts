@@ -60,6 +60,7 @@ describe('SteelIssuesService', () => {
       create: jest.Mock;
       aggregate: jest.Mock;
       findUnique: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
       findFirst: jest.Mock;
       findMany: jest.Mock;
       update: jest.Mock;
@@ -151,9 +152,15 @@ describe('SteelIssuesService', () => {
   // `approvedAt` của cuttingProposal SAU cutover (mặc định TRƯỚC cutover, không đụng tới cả
   // drainPool lẫn $queryRaw - xem default cuttingProposalLine.findFirst dưới).
   let physicalStockQty: number;
+  // Kết quả 2 câu SQL khoá đợt cắt trong transaction: danh sách đợt ứng viên của recordCutBatch
+  // (SELECT ... openedById ... FOR UPDATE) và trạng thái dòng đợt của undoLastCutBatch (null = đã bị xoá).
+  let openCutRows: { id: bigint; openedById: string | null }[];
+  let lockedCutStatus: CutBundleStatus | null;
 
   beforeEach(() => {
     physicalStockQty = 100;
+    openCutRows = [];
+    lockedCutStatus = CutBundleStatus.CUTTING;
     prisma = {
       steelIssue: {
         findUnique: jest.fn(),
@@ -206,6 +213,7 @@ describe('SteelIssuesService', () => {
       },
       cutBundle: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn(() => prisma.cutBundle.findUnique() as unknown),
         create: jest.fn().mockResolvedValue({
           id: 1n,
           steelIssueId: 100n,
@@ -293,11 +301,15 @@ describe('SteelIssuesService', () => {
       // 2026-09-03: assertPiHasActiveFloorLocked() (vá race TOCTOU) giờ cũng dùng $queryRaw
       // (FOR UPDATE lên production_orders) ngay dòng đầu transaction create() - phải phân nhánh
       // theo nội dung câu SQL, không còn chỉ có 1 loại câu raw duy nhất như trước.
-      $queryRaw: jest.fn((strings: TemplateStringsArray) =>
-        strings.join('').includes('production_orders')
-          ? Promise.resolve([{ floorStage: 'ACTIVE' }])
-          : Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }]),
-      ),
+      $queryRaw: jest.fn((strings: TemplateStringsArray) => {
+        const sql = strings.join('');
+        if (sql.includes('production_orders')) return Promise.resolve([{ floorStage: 'ACTIVE' }]);
+        if (sql.includes('cut_bundles') && sql.includes('openedById'))
+          return Promise.resolve(openCutRows);
+        if (sql.includes('cut_bundles'))
+          return Promise.resolve(lockedCutStatus ? [{ status: lockedCutStatus }] : []);
+        return Promise.resolve([{ qty: { toNumber: () => physicalStockQty } }]);
+      }),
       // lockBusinessKey() (Nghiêm trọng #6, đính chính audit độc lập 09/09 - khoá race
       // recordStepBatch()) dùng $executeRaw - no-op ở test, cùng idiom material-issues.spec.ts.
       $executeRaw: jest.fn().mockResolvedValue(0),
@@ -947,8 +959,7 @@ describe('SteelIssuesService', () => {
     // cùng 1 đợt (CutBundle) thay vì mỗi lần lưu tạo 1 đợt rời rạc - xem doc comment trên hàm.
     it('còn đợt đang CUTTING của lô → CỘNG DỒN vào đợt đó (upsert qty), KHÔNG tạo đợt mới', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
-      const openBundle = { id: 5n, steelIssueId: 100n, status: CutBundleStatus.CUTTING };
-      prisma.cutBundle.findFirst.mockResolvedValue(openBundle);
+      openCutRows = [{ id: 5n, openedById: 'user-1' }];
 
       await service.recordCutBatch(
         '100',
@@ -973,7 +984,7 @@ describe('SteelIssuesService', () => {
     // 2026-10-13 (QR tại máy, mục 22): mỗi công nhân 1 đợt riêng - KCS chấm đạt/lỗi theo đợt nên phải biết của ai.
     it('chỉ cộng vào đợt CUTTING của CHÍNH người báo; đợt mới ghi người mở + máy + PI vào sổ', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
-      prisma.cutBundle.findFirst.mockResolvedValue(null); // không có đợt của mình, không có đợt cũ vô chủ
+      openCutRows = []; // không có đợt của mình, không có đợt cũ vô chủ
 
       await service.recordCutBatch(
         '100',
@@ -983,17 +994,13 @@ describe('SteelIssuesService', () => {
         { workstationId: 9n },
       );
 
-      expect(prisma.cutBundle.findFirst).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          where: expect.objectContaining({ openedById: 'cn-2' }) as unknown,
-        }),
-      );
-      expect(prisma.cutBundle.findFirst).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          where: expect.objectContaining({ openedById: null }) as unknown,
-        }),
+      // Khoá advisory theo (lô, SKU, người báo) rồi khoá các đợt ứng viên bằng SQL thô.
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      expect(prisma.$queryRaw).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.stringContaining('FOR UPDATE')]),
+        100n,
+        1n,
+        'cn-2',
       );
       expect(prisma.cutBundle.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1011,9 +1018,7 @@ describe('SteelIssuesService', () => {
 
     it('đợt CŨ chưa có người mở (tạo trước cột openedById) → người báo đầu tiên nhận luôn đợt đó', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
-      prisma.cutBundle.findFirst
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 5n, status: CutBundleStatus.CUTTING, openedById: null });
+      openCutRows = [{ id: 5n, openedById: null }];
 
       await service.recordCutBatch(
         '100',
@@ -1030,7 +1035,7 @@ describe('SteelIssuesService', () => {
 
     it('không còn đợt nào đang mở (đợt trước đã Báo cắt xong) → TẠO đợt mới như bình thường', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
-      prisma.cutBundle.findFirst.mockResolvedValue(null); // đợt trước đã AWAITING_QC/QC_PASSED
+      openCutRows = []; // đợt trước đã AWAITING_QC/QC_PASSED (hoặc vừa bị xoá) - khoá xong không còn dòng nào
 
       await service.recordCutBatch(
         '100',
@@ -1100,7 +1105,7 @@ describe('SteelIssuesService', () => {
       expect(prisma.cutBundle.create).not.toHaveBeenCalled();
     });
 
-    it('chỉ gộp vào đợt đang CUTTING CỦA CÙNG SKU - tìm đợt mở lọc theo productionOrderId', async () => {
+    it('chỉ gộp vào đợt đang CUTTING CỦA CÙNG SKU - câu khoá đợt lọc theo productionOrderId', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
 
       await service.recordCutBatch(
@@ -1112,10 +1117,11 @@ describe('SteelIssuesService', () => {
         'user-1',
       );
 
-      expect(prisma.cutBundle.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ productionOrderId: 1n }) as unknown,
-        }),
+      expect(prisma.$queryRaw).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.stringContaining('"productionOrderId"')]),
+        100n,
+        1n,
+        'user-1',
       );
     });
 
@@ -1204,7 +1210,7 @@ describe('SteelIssuesService', () => {
 
     it('cộng dồn vào đợt đang mở cũng ghi sổ (mỗi lần lưu 1 dòng, không chỉ lần mở đợt)', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
-      prisma.cutBundle.findFirst.mockResolvedValue({ id: 7n, status: CutBundleStatus.CUTTING });
+      openCutRows = [{ id: 7n, openedById: 'cn-2' }];
 
       await service.recordCutBatch('100', cutDto, 'cn-2');
 
@@ -1231,6 +1237,40 @@ describe('SteelIssuesService', () => {
       expect(prisma.cutBundle.create).not.toHaveBeenCalled();
       expect(prisma.cutPatternSegment.upsert).not.toHaveBeenCalled();
       expect(prisma.floorReport.create).not.toHaveBeenCalled();
+    });
+
+    it('gửi lại CÙNG khoá sau khi QLSX đã hủy hết đợt (sổ không còn trỏ đợt): 409 câu rõ, không ghi lại', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+      prisma.floorReport.findUnique.mockResolvedValue({
+        id: 5n,
+        kind: FloorReportKind.CUT,
+        cutBundleId: null,
+      });
+
+      await expect(service.recordCutBatch('100', cutDto, 'cn-1', 'key-1')).rejects.toThrow(
+        /đã ghi nhận trước đó và đã bị QLSX hủy/,
+      );
+      expect(prisma.cutBundle.create).not.toHaveBeenCalled();
+      expect(prisma.cutPatternSegment.upsert).not.toHaveBeenCalled();
+      expect(prisma.floorReport.create).not.toHaveBeenCalled();
+    });
+
+    it('2 request cùng khoá, request thắng đã bị hủy hết đợt trước khi request thua đọc lại: 409 câu rõ', async () => {
+      prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
+      prisma.floorReport.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint', {
+          code: 'P2002',
+          clientVersion: 'test',
+          meta: { target: ['idempotencyKey'] },
+        }),
+      );
+      prisma.floorReport.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 6n, kind: FloorReportKind.CUT, cutBundleId: null });
+
+      await expect(service.recordCutBatch('100', cutDto, 'cn-1', 'key-race')).rejects.toThrow(
+        /đã ghi nhận trước đó và đã bị QLSX hủy/,
+      );
     });
 
     it('2 request cùng khoá chạy song song: request thua (P2002) trả kết quả của request thắng', async () => {
@@ -1268,8 +1308,11 @@ describe('SteelIssuesService', () => {
         id: 1n,
         status: CutBundleStatus.CUTTING,
         steelIssue: { productionInvoiceId: 7n },
-        segments: [{ id: 900n, segmentSpecId: 30n, qty: 8 }],
+        segments: [],
       });
+      prisma.cutPatternSegment.findMany.mockResolvedValue([
+        { id: 900n, segmentSpecId: 30n, qty: 8 },
+      ]);
       prisma.cutPatternSegment.count.mockResolvedValue(0);
       prisma.floorReport.findFirst.mockResolvedValue({ id: 41n });
 
@@ -1340,11 +1383,16 @@ describe('SteelIssuesService', () => {
       id: 1n,
       status: CutBundleStatus.CUTTING,
       steelIssue: { productionInvoiceId: 7n },
-      segments: [
-        { id: 900n, segmentSpecId: 30n, qty: 5 },
-        { id: 901n, segmentSpecId: 31n, qty: 2 },
-      ],
+      segments: [],
     };
+    const txSegments = [
+      { id: 900n, segmentSpecId: 30n, qty: 5 },
+      { id: 901n, segmentSpecId: 31n, qty: 2 },
+    ];
+    beforeEach(() => {
+      // Đọc đoạn của đợt làm BÊN TRONG transaction, sau khi khoá dòng.
+      prisma.cutPatternSegment.findMany.mockResolvedValue(txSegments);
+    });
 
     it('trừ đúng qty đã gửi cho từng segment (còn dư thì update, không xoá)', async () => {
       prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundleWithSegments);
@@ -1406,6 +1454,27 @@ describe('SteelIssuesService', () => {
         service.undoLastCutBatch('1', [{ segmentSpecId: '30', qty: 1 }], 'user-1'),
       ).rejects.toThrow(ConflictException);
       expect(prisma.cutPatternSegment.update).not.toHaveBeenCalled();
+    });
+
+    it('đợt vừa chuyển sang AWAITING_QC lúc chờ khoá -> 409, không trừ gì (đua với Gửi KCS)', async () => {
+      prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundleWithSegments); // đọc ngoài còn thấy CUTTING
+      lockedCutStatus = CutBundleStatus.AWAITING_QC;
+
+      await expect(
+        service.undoLastCutBatch('1', [{ segmentSpecId: '30', qty: 1 }], 'user-1'),
+      ).rejects.toThrow(/chỉ hoàn tác được khi đang cắt/);
+      expect(prisma.floorReport.create).not.toHaveBeenCalled();
+      expect(prisma.cutPatternSegment.update).not.toHaveBeenCalled();
+    });
+
+    it('đợt vừa bị xoá lúc chờ khoá -> 409 "không còn", không trừ gì', async () => {
+      prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundleWithSegments);
+      lockedCutStatus = null;
+
+      await expect(
+        service.undoLastCutBatch('1', [{ segmentSpecId: '30', qty: 1 }], 'user-1'),
+      ).rejects.toThrow(/không còn - không hoàn tác được/);
+      expect(prisma.floorReport.create).not.toHaveBeenCalled();
     });
 
     it('ném NotFoundException nếu đợt cắt không tồn tại', async () => {
@@ -2069,10 +2138,6 @@ describe('SteelIssuesService', () => {
     // Phase 3b, nhóm 7.5-i, changelog 2026-09-25 mục 19.
     it('emit CUT_BUNDLE_TO_KCS sau khi Phôi báo xong đợt cắt', async () => {
       prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundle);
-      prisma.cutBundle.update.mockResolvedValue({
-        ...cuttingBundle,
-        status: CutBundleStatus.AWAITING_QC,
-      });
       prisma.cutBundle.findMany.mockResolvedValue([
         { ...cuttingBundle, status: CutBundleStatus.AWAITING_QC },
       ]);
@@ -2087,10 +2152,6 @@ describe('SteelIssuesService', () => {
 
     it('CUTTING -> AWAITING_QC khi đã đủ mọi công đoạn bắt buộc, và ROLL-UP SteelIssue.status', async () => {
       prisma.cutBundle.findUnique.mockResolvedValue(cuttingBundle);
-      prisma.cutBundle.update.mockResolvedValue({
-        ...cuttingBundle,
-        status: CutBundleStatus.AWAITING_QC,
-      });
       // Roll-up: chỉ đúng 1 bundle của lô này, đang AWAITING_QC sau update -> issue phải thành
       // AWAITING_QC (xem syncIssueStatusFromBundles bên dưới đọc lại từ DB, không phải đọc biến
       // cục bộ - nên mock findMany trả bundle đã ở trạng thái mới).
@@ -2100,9 +2161,9 @@ describe('SteelIssuesService', () => {
 
       await service.finishCutBundle('1');
 
-      expect(prisma.cutBundle.update).toHaveBeenCalledWith(
+      expect(prisma.cutBundle.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 1n },
+          where: { id: 1n, status: CutBundleStatus.CUTTING },
           data: expect.objectContaining({ status: CutBundleStatus.AWAITING_QC }) as unknown,
         }),
       );
@@ -2117,16 +2178,12 @@ describe('SteelIssuesService', () => {
       prisma.pieceBom.findMany.mockResolvedValue([
         { ...pieceBomRow, processSteps: [ProcessStep.CAT, ProcessStep.UON] },
       ]);
-      prisma.cutBundle.update.mockResolvedValue({
-        ...cuttingBundle,
-        status: CutBundleStatus.AWAITING_QC,
-      });
       prisma.cutBundle.findMany.mockResolvedValue([
         { ...cuttingBundle, status: CutBundleStatus.AWAITING_QC },
       ]);
 
       await expect(service.finishCutBundle('1')).resolves.toBeDefined();
-      expect(prisma.cutBundle.update).toHaveBeenCalled();
+      expect(prisma.cutBundle.updateMany).toHaveBeenCalled();
     });
 
     it('ném ConflictException nếu đợt không còn ở trạng thái CUTTING', async () => {
@@ -2136,6 +2193,29 @@ describe('SteelIssuesService', () => {
       });
 
       await expect(service.finishCutBundle('1')).rejects.toThrow(ConflictException);
+    });
+
+    it('thua đua: đợt vừa được người khác gửi KCS -> 409, không thông báo lần 2', async () => {
+      prisma.cutBundle.findUnique
+        .mockResolvedValueOnce(cuttingBundle) // đọc đầu hàm: còn CUTTING
+        .mockResolvedValueOnce({ status: CutBundleStatus.AWAITING_QC }); // đọc lại sau khi updateMany = 0
+      prisma.cutBundle.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.finishCutBundle('1')).rejects.toThrow(
+        /vừa được gửi KCS \(trạng thái AWAITING_QC\)/,
+      );
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+      expect(prisma.steelIssue.update).not.toHaveBeenCalled();
+    });
+
+    it('thua đua: đợt vừa bị hủy hết số -> 409 "không còn gì để gửi KCS"', async () => {
+      prisma.cutBundle.findUnique.mockResolvedValueOnce(cuttingBundle).mockResolvedValueOnce(null);
+      prisma.cutBundle.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.finishCutBundle('1')).rejects.toThrow(
+        /vừa bị hủy hết số - không còn gì để gửi KCS/,
+      );
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     it('ném NotFoundException nếu đợt cắt không tồn tại', async () => {

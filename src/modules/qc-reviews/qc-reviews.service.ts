@@ -131,6 +131,29 @@ export class QcReviewsService {
     }
   }
 
+  /** Như notifyQcResult nhưng tự đọc mã PI (cần mã PI thật để giới hạn QLSX đúng xưởng). Chạy SAU khi
+   *  lượt chấm đã commit nên lỗi đọc mã PI chỉ ghi log và bỏ tin, không làm KCS nhận lỗi. */
+  private async notifyQcResultForPi(
+    productionInvoiceId: bigint,
+    failedQty: number,
+    senderRole: string,
+  ): Promise<void> {
+    let piCode: string;
+    try {
+      const pi = await this.prisma.productionInvoice.findUnique({
+        where: { id: productionInvoiceId },
+        select: { code: true },
+      });
+      piCode = pi?.code ?? `#${productionInvoiceId}`;
+    } catch (error) {
+      this.logger.error(
+        `Failed to read PI code for QC result notification (PI ${productionInvoiceId}): ${(error as Error).message}`,
+      );
+      return;
+    }
+    await this.notifyQcResult(piCode, failedQty, senderRole);
+  }
+
   private mfgStageToSenderRole(stage: MfgStage): string {
     switch (stage) {
       case MfgStage.PHOI:
@@ -489,6 +512,13 @@ export class QcReviewsService {
       `QC_STEP_BUNDLE:${bundle.id}`,
     );
 
+    // Sau khi transaction commit - best-effort (lỗi chỉ ghi log).
+    await this.notifyQcResultForPi(
+      bundle.productionInvoiceId,
+      totalFailed,
+      BUSINESS_ROLES.PHOI_STAFF,
+    );
+
     this.publishRealtime(stepBundleId, 'QC_RECORDED', reviewedById);
     return this.toResponseDto(created);
   }
@@ -649,6 +679,12 @@ export class QcReviewsService {
       return review;
     });
 
+    // Sau khi transaction commit. PieceStepBundle không có cột stage - màn KCS xếp vào Phôi.
+    await this.notifyQcResult(
+      bundle.productionOrder?.productionInvoiceItem?.productionInvoice?.code ?? `#${bundle.id}`,
+      dto.failedQty,
+      BUSINESS_ROLES.PHOI_STAFF,
+    );
     this.publishRealtime(pieceStepBundleId, 'QC_RECORDED', reviewedById, bundle.productionOrderId);
     return this.toResponseDto(created);
   }
@@ -735,6 +771,11 @@ export class QcReviewsService {
         `Failed to resolve MATERIAL_YIELD_STEP_BUNDLE_TO_KCS (bundle ${materialYieldStepBundleId}): ${(error as Error).message}`,
       );
     }
+    await this.notifyQcResultForPi(
+      bundle.productionInvoiceId,
+      dto.failedQty,
+      BUSINESS_ROLES.PHOI_STAFF,
+    );
     return this.toResponseDto(created);
   }
 
