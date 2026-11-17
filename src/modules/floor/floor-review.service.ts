@@ -17,11 +17,13 @@ import { MFG_FLOOR_WAREHOUSE_SCOPE } from '../../common/constants/role-permissio
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { writeFloorReport } from '../../common/utils/floor-report.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { PhoiProgressItemResponseDto } from '../steel-issues/dto/phoi-progress-response.dto';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { FloorWorkerStage } from './dto/floor-worker.dto';
+import { filterByQueueWorkshop, queueWorkshopIdOfPi } from './floor-queue-workshop.util';
 
 const USER_NAME = { select: { firstName: true, lastName: true, username: true } } as const;
 const fullName = (u: { firstName: string; lastName: string; username: string } | null) =>
@@ -54,11 +56,31 @@ export class FloorReviewService {
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly steelIssues: SteelIssuesService,
     private readonly productionBatches: ProductionBatchesService,
+    private readonly workshopScope: WorkshopScopeService,
   ) {}
 
-  async listOpen(stage: FloorWorkerStage, productionInvoiceId?: string) {
+  /**
+   * X4 (danh sách lỗi 16/11): QLSX gắn xưởng chỉ gửi KCS / hủy lần báo của PI có xưởng hàng đợi (ở tổ đó) = xưởng mình -
+   * cùng quy tắc hàng đợi tổ (Sơn của xưởng nhờ sơn thuộc xưởng sơn). Trước đây không kiểm gì.
+   */
+  private async assertManagesPi(
+    actorId: string,
+    stage: MfgStage,
+    productionInvoiceId: bigint | null | undefined,
+    what: string,
+  ): Promise<void> {
+    if (productionInvoiceId == null) return;
+    const scope = await this.workshopScope.getScope(actorId);
+    if (scope.workshopId == null) return;
+    const ws = await queueWorkshopIdOfPi(this.prisma, stage, productionInvoiceId);
+    this.workshopScope.assertCanManage(scope, [ws], what);
+  }
+
+  async listOpen(stage: FloorWorkerStage, productionInvoiceId?: string, userId?: string) {
     const piId = productionInvoiceId ? parseBigIntId(productionInvoiceId) : undefined;
-    const productionBatches = await this.prisma.productionBatch.findMany({
+    // X4 16/11: QLSX gắn xưởng chỉ thấy đợt của xưởng mình (người không gắn xưởng thấy hết như cũ).
+    const { workshopId } = await this.workshopScope.getScope(userId);
+    const allProductionBatches = await this.prisma.productionBatch.findMany({
       where: {
         stage: stage as MfgStage,
         status: ProductionBatchStatus.OPEN,
@@ -81,6 +103,13 @@ export class FloorReviewService {
         floorReports: { include: REPORT_INCLUDE, orderBy: { createdAt: 'asc' } },
       },
     });
+    const productionBatches = await filterByQueueWorkshop(
+      this.prisma,
+      workshopId,
+      stage as MfgStage,
+      allProductionBatches,
+      (b) => b.productionOrder.productionInvoiceItem.productionInvoice?.id,
+    );
     const piecePlans = await this.loadPiecePlans(stage, productionBatches);
     const pieceBatches = productionBatches.map((b) => {
       const reports = b.floorReports.filter((r) => !r.reversalOfId).map((r) => this.toReport(r));
@@ -108,7 +137,7 @@ export class FloorReviewService {
     });
     if (stage !== MfgStage.PHOI) return { cutBundles: [], stepGroups: [], pieceBatches };
 
-    const [cutBundles, stepBatches] = await Promise.all([
+    const [allCutBundles, allStepBatches] = await Promise.all([
       this.prisma.cutBundle.findMany({
         where: {
           status: CutBundleStatus.CUTTING,
@@ -145,6 +174,21 @@ export class FloorReviewService {
         },
       }),
     ]);
+
+    const cutBundles = await filterByQueueWorkshop(
+      this.prisma,
+      workshopId,
+      MfgStage.PHOI,
+      allCutBundles,
+      (b) => b.steelIssue.productionInvoice.id,
+    );
+    const stepBatches = await filterByQueueWorkshop(
+      this.prisma,
+      workshopId,
+      MfgStage.PHOI,
+      allStepBatches,
+      (sb) => sb.productionInvoiceId,
+    );
 
     // Số cần / đã làm theo PI (cắt) và theo (PI, công đoạn) - chỉ để hiển thị, lỗi thì thẻ không có số cần.
     const cutProgress = await this.loadPhoiProgress(
@@ -351,7 +395,17 @@ export class FloorReviewService {
 
   // ─── Gửi KCS (QLSX) ─────────────────────────────────────────────────────────
 
-  sendCutBundle(cutBundleId: string) {
+  async sendCutBundle(cutBundleId: string, actorId: string) {
+    const bundle = await this.prisma.cutBundle.findUnique({
+      where: { id: parseBigIntId(cutBundleId) },
+      select: { steelIssue: { select: { productionInvoiceId: true } } },
+    });
+    await this.assertManagesPi(
+      actorId,
+      MfgStage.PHOI,
+      bundle?.steelIssue.productionInvoiceId,
+      'đợt cắt này',
+    );
     return this.steelIssues.finishCutBundle(cutBundleId);
   }
 
@@ -360,9 +414,20 @@ export class FloorReviewService {
   async sendProductionBatch(productionBatchId: string, actorId: string) {
     const batch = await this.prisma.productionBatch.findUnique({
       where: { id: parseBigIntId(productionBatchId) },
-      select: { stage: true },
+      select: {
+        stage: true,
+        productionOrder: {
+          select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+        },
+      },
     });
     if (!batch) throw new NotFoundException(`Đợt ${productionBatchId} không tồn tại`);
+    await this.assertManagesPi(
+      actorId,
+      batch.stage,
+      batch.productionOrder.productionInvoiceItem.productionInvoiceId,
+      'đợt này',
+    );
     return this.productionBatches.finishProductionBatch(
       productionBatchId,
       actorId,
@@ -371,7 +436,7 @@ export class FloorReviewService {
     );
   }
 
-  sendStepGroup(
+  async sendStepGroup(
     dto: {
       productionInvoiceId: string;
       materialId: string;
@@ -382,6 +447,12 @@ export class FloorReviewService {
     },
     actorId: string,
   ) {
+    await this.assertManagesPi(
+      actorId,
+      MfgStage.PHOI,
+      parseBigIntId(dto.productionInvoiceId),
+      'nhóm công đoạn này',
+    );
     return this.steelIssues.submitStepBundle(
       dto.productionInvoiceId,
       dto.materialId,
@@ -408,6 +479,17 @@ export class FloorReviewService {
     if (report.reversalOfId)
       throw new BadRequestException('Đây là dòng ghi hủy - không hủy lại được');
     if (report.reversedBy) throw new ConflictException('Lần báo này đã bị hủy rồi');
+    // X4 16/11: chỉ QLSX của xưởng làm đợt đó hủy được. Báo mảnh lấy tổ của chính đợt (Sơn đi theo xưởng sơn).
+    const stage =
+      report.kind === FloorReportKind.PIECE && report.productionBatchId
+        ? ((
+            await this.prisma.productionBatch.findUnique({
+              where: { id: report.productionBatchId },
+              select: { stage: true },
+            })
+          )?.stage ?? MfgStage.PHOI)
+        : MfgStage.PHOI;
+    await this.assertManagesPi(actorId, stage, report.productionInvoiceId, 'lần báo này');
 
     const reversal = {
       kind: report.kind,
@@ -455,6 +537,17 @@ export class FloorReviewService {
       if (locked.status !== CutBundleStatus.CUTTING) {
         throw new ConflictException('Đợt cắt đã gửi KCS - không hủy được nữa');
       }
+      // X3 16/11: hủy số cắt không được làm Uốn/Dập... đã báo của SKU vượt số cắt còn lại.
+      const current = await tx.cutPatternSegment.findMany({ where: { cutBundleId } });
+      await this.steelIssues.assertStepsWithinCutAfterReduceInTx(
+        tx,
+        cutBundleId,
+        lines.flatMap((l) => {
+          if (!l.segmentSpecId) return [];
+          const row = current.find((s) => s.segmentSpecId === l.segmentSpecId);
+          return [{ segmentSpecId: l.segmentSpecId, qty: Math.min(l.qty, row?.qty ?? 0) }];
+        }),
+      );
       await writeFloorReport(tx, { ...reversal, cutBundleId });
       for (const l of lines) {
         if (!l.segmentSpecId) continue;

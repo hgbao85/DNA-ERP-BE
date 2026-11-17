@@ -188,6 +188,16 @@ export class QcReviewsService {
       );
     }
     await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'duyệt KCS');
+    // X2 (danh sách lỗi 16/11): lô đã có đợt cắt thì AWAITING_QC chỉ là trạng thái TỔNG HỢP từ các đợt
+    // (syncIssueStatusFromBundles). Chấm cả lô ở đây thêm 1 lượt lỗi lên đúng các đoạn đã/đang chấm theo
+    // đợt (tiến độ Phôi cộng mọi qcReviewSegment theo lô -> lỗi tính 2 lần) và đóng lô QC_PASSED trong
+    // khi đợt còn chờ. Route theo lô chỉ còn cho lô cũ chưa có đợt cắt nào (FE không còn gọi từ 05/09).
+    const bundleCount = await this.prisma.cutBundle.count({ where: { steelIssueId: issue.id } });
+    if (bundleCount > 0) {
+      throw new ConflictException(
+        `Phiếu xuất sắt ${steelIssueId} đã chia đợt cắt - chấm KCS theo từng đợt cắt, không chấm cả lô`,
+      );
+    }
 
     const specIds = dto.segments.map((s) => parseBigIntId(s.segmentSpecId));
     const [specs, cutInThisIssue] = await Promise.all([

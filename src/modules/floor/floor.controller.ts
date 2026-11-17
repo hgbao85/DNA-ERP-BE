@@ -175,8 +175,8 @@ export class FloorController {
   @Get('summary')
   @RequirePermissions(perm(PermissionAction.VIEW))
   @RequireRole(QLSX)
-  summary() {
-    return this.admin.summary();
+  summary(@CurrentUser('id') userId: string) {
+    return this.admin.summary(userId);
   }
 
   // ─── QLSX: xem địa chỉ ERP dùng cho tem (Admin đặt ở Cấu hình hệ thống) ───────
@@ -411,15 +411,15 @@ export class FloorController {
   @Get('review')
   @RequirePermissions(perm(PermissionAction.VIEW))
   @RequireRole(QLSX)
-  listOpen(@Query() query: FloorReviewQueryDto) {
-    return this.review.listOpen(query.stage, query.productionInvoiceId);
+  listOpen(@Query() query: FloorReviewQueryDto, @CurrentUser('id') userId: string) {
+    return this.review.listOpen(query.stage, query.productionInvoiceId, userId);
   }
 
   @Post('review/cut-bundles/:id/send-kcs')
   @RequirePermissions(perm(PermissionAction.APPROVE))
   @RequireRole(QLSX)
-  sendCutBundle(@Param('id') id: string) {
-    return this.review.sendCutBundle(id);
+  sendCutBundle(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.review.sendCutBundle(id, userId);
   }
 
   @Post('review/production-batches/:id/send-kcs')

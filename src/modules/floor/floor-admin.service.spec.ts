@@ -1056,6 +1056,40 @@ describe('FloorAdminService', () => {
       );
       expect(r.PHOI.open).toBe(3);
     });
+
+    it('X4 16/11: QLSX gắn xưởng chỉ đếm đợt của PI thuộc xưởng mình (khớp danh sách thẻ)', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        workshopId: 1n,
+        workshop: { name: 'Xưởng 1', paintsFor: [] },
+      });
+      // PI 45 ở xưởng 1, PI 46 ở xưởng 2.
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        { productionInvoiceId: 45n, workshopId: 1n },
+        { productionInvoiceId: 46n, workshopId: 2n },
+      ]);
+      (prisma.cutBundle as Record<string, jest.Mock>).findMany = jest
+        .fn()
+        .mockResolvedValue([
+          { steelIssue: { productionInvoiceId: 45n } },
+          { steelIssue: { productionInvoiceId: 46n } },
+        ]);
+      prisma.stepBatch.findMany.mockResolvedValue([
+        { productionInvoiceId: 46n },
+        { productionInvoiceId: 46n },
+      ]);
+      const piece = (stage: string, piId: bigint) => ({
+        stage,
+        productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } },
+      });
+      (prisma.productionBatch as Record<string, jest.Mock>).findMany = jest
+        .fn()
+        .mockResolvedValue([piece('HAN', 45n), piece('HAN', 46n), piece('SON', 45n)]);
+
+      const r = await service.summary('qlsx-xuong-1');
+
+      expect(r).toEqual({ PHOI: { open: 1 }, HAN: { open: 1 }, SON: { open: 1 } });
+      expect(prisma.cutBundle.count).not.toHaveBeenCalled();
+    });
   });
 
   describe('stageDetail (ngăn "còn thiếu gì", mục 45.4)', () => {

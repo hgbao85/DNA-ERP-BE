@@ -35,7 +35,12 @@ describe('QcReviewsService', () => {
     cutPatternSegment: { groupBy: jest.Mock };
     stepBatchSegment: { groupBy: jest.Mock };
     steelIssue: { update: jest.Mock; updateMany: jest.Mock; findUnique: jest.Mock };
-    cutBundle: { findUnique: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
+    cutBundle: {
+      findUnique: jest.Mock;
+      update: jest.Mock;
+      updateMany: jest.Mock;
+      count: jest.Mock;
+    };
     stepBundle: { findUnique: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
     productionBatch: { update: jest.Mock; updateMany: jest.Mock };
     pieceStepBundle: { update: jest.Mock; updateMany: jest.Mock };
@@ -196,6 +201,8 @@ describe('QcReviewsService', () => {
         findUnique: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        // Lô cũ chưa chia đợt cắt (route chấm theo lô chỉ còn cho trường hợp này - X2 16/11).
+        count: jest.fn().mockResolvedValue(0),
       },
       stepBundle: {
         findUnique: jest.fn(),
@@ -259,6 +266,16 @@ describe('QcReviewsService', () => {
   });
 
   describe('review', () => {
+    it('X2 16/11: lô đã chia đợt cắt -> 409, không ghi lượt chấm theo lô (tránh đếm lỗi 2 lần)', async () => {
+      prisma.cutBundle.count.mockResolvedValue(2);
+      await expect(service.review('100', { segments: [] }, 'user-kcs')).rejects.toThrow(
+        /chấm KCS theo từng đợt cắt/,
+      );
+      expect(prisma.steelIssue.updateMany).not.toHaveBeenCalled();
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+      expect(prisma.cutBundle.count).toHaveBeenCalledWith({ where: { steelIssueId: 100n } });
+    });
+
     it('duyệt ĐẠT hoàn toàn (segments=[]) - đóng QC_PASSED, failedQty tổng = 0', async () => {
       const result = await service.review('100', { segments: [] }, 'user-kcs');
 
