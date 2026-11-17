@@ -713,7 +713,12 @@ export class StockReservationsService {
       (sum, r) => sum + r.quantity.toNumber(),
       0,
     );
-    return Math.max(0, onHand - reservedFromStock - reservedFromTransfer);
+    // Rà soát 14/11 XK5: làm tròn 4 số lẻ - trừ nhiều số thực ra lẻ sát dưới (0,3 - 0,1 = 0,19999999999999998) chặn oan khi so với
+    // số xuất.
+    return Math.max(
+      0,
+      Math.round((onHand - reservedFromStock - reservedFromTransfer) * 1e4) / 1e4 + 0,
+    );
   }
 
   /**

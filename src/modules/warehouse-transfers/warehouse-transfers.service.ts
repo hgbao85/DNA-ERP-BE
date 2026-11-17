@@ -91,6 +91,12 @@ const TRANSFER_INCLUDE = {
   rejectedBy: ACTOR_NAME_SELECT,
 } satisfies Prisma.WarehouseTransferInclude;
 
+/**
+ * Rà soát 14/11 (lỗi thấp): transaction phiếu chuyển (tạo, chuyển mảnh, xác nhận, từ chối, huỷ, đổi nơi nhận) trước đây dùng mặc định
+ * 5 giây - phiếu nhiều dòng (khoá + kiểm tồn + ghi sổ từng dòng, DB pooled ở xa) có thể hết giờ. Cùng mức createWorkshopMove.
+ */
+const TRANSFER_TX_OPTIONS = { timeout: 20_000 } as const;
+
 type WarehouseTransferWithRefs = Prisma.WarehouseTransferGetPayload<{
   include: typeof TRANSFER_INCLUDE;
 }>;
@@ -403,7 +409,7 @@ export class WarehouseTransfersService {
       });
 
       return transfer;
-    });
+    }, TRANSFER_TX_OPTIONS);
 
     await this.notifyTransferCreated(created);
     this.publishTransferChanged(created.id, 'CREATED', created.createdById);
@@ -562,7 +568,7 @@ export class WarehouseTransfersService {
         },
         include: TRANSFER_INCLUDE,
       });
-    });
+    }, TRANSFER_TX_OPTIONS);
 
     await this.notifyTransferCreated(transfer);
     this.publishTransferChanged(transfer.id, 'CREATED', transfer.createdById);
@@ -886,7 +892,7 @@ export class WarehouseTransfersService {
         where: { id: transfer.id },
         include: TRANSFER_INCLUDE,
       });
-    });
+    }, TRANSFER_TX_OPTIONS);
 
     await this.resolveTransferCreated(confirmed.id);
     if (confirmed.productionInvoiceId) {
@@ -949,7 +955,7 @@ export class WarehouseTransfersService {
         where: { id: transfer.id },
         include: TRANSFER_INCLUDE,
       });
-    });
+    }, TRANSFER_TX_OPTIONS);
 
     await this.resolveTransferCreated(rejected.id);
     await this.notifyTransferRejected(rejected, rejectionReason);
@@ -995,7 +1001,7 @@ export class WarehouseTransfersService {
         where: { id: transfer.id },
         include: TRANSFER_INCLUDE,
       });
-    });
+    }, TRANSFER_TX_OPTIONS);
     await this.resolveTransferCreated(cancelled.id);
     await this.workshopMove.notifyMovesNeeded(
       cancelled.productionInvoiceId!,
@@ -1083,7 +1089,7 @@ export class WarehouseTransfersService {
         where: { id: transfer.id },
         include: TRANSFER_INCLUDE,
       });
-    });
+    }, TRANSFER_TX_OPTIONS);
     await this.resolveTransferCreated(updated.id);
     await this.notifyTransferCreated(updated);
     this.publishTransferChanged(updated.id, 'UPDATED', userId);

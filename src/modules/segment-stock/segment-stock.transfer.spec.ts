@@ -80,7 +80,12 @@ describe('SegmentStockService.transferOrderHoldings', () => {
       where: { productionInvoiceId: PI, warehouseId: { not: NEW } },
       data: { warehouseId: NEW },
     });
-    expect(locks).toHaveLength(2);
+    // Rà soát 14/11 TĐ6: khoá lệnh (cùng khoá "tính lại") trước, rồi 2 ô theo thứ tự kho.
+    expect(locks).toEqual([
+      'segment-production:100',
+      'segment-stock:10:5:DAP',
+      'segment-stock:20:5:DAP',
+    ]);
     expect(tx.segmentReservation.update).toHaveBeenCalledWith({
       where: { id: 1n },
       data: { reservedQty: 12 },

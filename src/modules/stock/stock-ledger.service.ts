@@ -204,7 +204,7 @@ export class StockLedgerService {
   ): Promise<StockLedgerResponseDto> {
     const fromWarehouseId = parseBigIntId(dto.fromWarehouseId);
     const toWarehouseId = parseBigIntId(dto.toWarehouseId);
-    await this.assertScopeTouchesWarehouses(warehouseScope, fromWarehouseId, toWarehouseId);
+    await this.assertAdjustLegs(warehouseScope, fromWarehouseId, toWarehouseId);
 
     const input = {
       fromWarehouseId,
@@ -655,23 +655,30 @@ export class StockLedgerService {
     return map;
   }
 
-  /** null = tổng kho (BOSS/ADMIN), thấy mọi kho - không có gì để chặn. Cùng pattern
-   *  WarehouseTransfersService.assertScopeTouchesTransfer() - caller bị giới hạn theo
-   *  warehouseScope phải chạm ít nhất 1 trong 2 chân kho của bút toán. */
-  private async assertScopeTouchesWarehouses(
+  /**
+   * "Sửa nhanh tồn kho" (rà soát 14/11 CK7): đúng 1 chân là kho THẬT (kho đang sửa) và chân kia là kho ẢO đối ứng (vd
+   * OPENING_BALANCE). Trước đây chỉ cần 1 chân thuộc phạm vi thủ kho - thủ kho gọi thẳng API chuyển được hàng từ kho thật khác về
+   * kho mình, bỏ qua phiếu chuyển / ảnh ký / xác nhận của kho kia. Chuyển giữa 2 kho thật phải đi phiếu chuyển kho.
+   * Thủ kho bị giới hạn phạm vi: kho thật phải là kho mình. null = tổng kho (Admin / Giám đốc).
+   */
+  private async assertAdjustLegs(
     warehouseScope: string | null,
     fromWarehouseId: bigint,
     toWarehouseId: bigint,
   ): Promise<void> {
-    if (!warehouseScope) return;
     const warehouses = await this.prisma.warehouse.findMany({
       where: { id: { in: [fromWarehouseId, toWarehouseId] } },
-      select: { id: true, code: true },
+      select: { id: true, code: true, name: true, isVirtual: true },
     });
-    const touchesScope = warehouses.some((w) => w.code === warehouseScope);
-    if (!touchesScope) {
+    const real = warehouses.filter((w) => !w.isVirtual);
+    if (warehouses.length !== 2 || real.length !== 1) {
+      throw new BadRequestException(
+        'Sửa nhanh tồn kho phải đối ứng 1 kho thật với 1 kho ảo (Cân đối tồn kho) - chuyển hàng giữa 2 kho thật thì lập phiếu chuyển kho',
+      );
+    }
+    if (warehouseScope && real[0].code !== warehouseScope) {
       throw new ForbiddenException(
-        `Bạn bị giới hạn ở kho '${warehouseScope}', không liên quan tới bút toán này`,
+        `Bạn bị giới hạn ở kho '${warehouseScope}', không sửa tồn kho '${real[0].name}' được`,
       );
     }
   }

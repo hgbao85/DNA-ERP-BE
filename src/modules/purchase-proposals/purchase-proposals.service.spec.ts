@@ -2010,6 +2010,12 @@ describe('PurchaseProposalsService', () => {
           params: expect.objectContaining({ piCode: 'PI-2026-014' }) as unknown,
         }),
       );
+      // Rà soát 14/11 MH4: đủ hàng thì "Kho từ chối nhận" của đề xuất cũng hết giá trị.
+      expect(notificationsService.resolve).toHaveBeenCalledWith({
+        entityType: 'PURCHASE_PROPOSAL',
+        entityId: '300',
+        types: ['PURCHASE_RECEIPT_REJECTED'],
+      });
     });
   });
 

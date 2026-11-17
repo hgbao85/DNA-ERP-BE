@@ -15,6 +15,9 @@ describe('SuppliersService', () => {
       update: jest.Mock;
       delete: jest.Mock;
     };
+    supplierOrder: { count: jest.Mock };
+    purchaseProposalQuote: { count: jest.Mock };
+    materialSupplier: { count: jest.Mock };
   };
 
   const existingSupplier = {
@@ -36,6 +39,9 @@ describe('SuppliersService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
+      supplierOrder: { count: jest.fn().mockResolvedValue(0) },
+      purchaseProposalQuote: { count: jest.fn().mockResolvedValue(0) },
+      materialSupplier: { count: jest.fn().mockResolvedValue(0) },
     };
     service = new SuppliersService(prisma as unknown as PrismaServiceType);
   });
@@ -140,6 +146,17 @@ describe('SuppliersService', () => {
 
       expect(prisma.supplier.delete).toHaveBeenCalledWith({ where: { id: 1n } });
       expect(prisma.supplier.update).not.toHaveBeenCalled();
+    });
+
+    it('rà soát 14/11: NCC đang có đơn / vật tư gắn kèm -> 409 nói rõ, không gọi delete', async () => {
+      prisma.supplier.findUnique.mockResolvedValue(existingSupplier);
+      prisma.supplierOrder.count.mockResolvedValue(2);
+      prisma.materialSupplier.count.mockResolvedValue(3);
+
+      await expect(service.remove('1')).rejects.toThrow(
+        'Nhà cung cấp "NCC Sat Thanh Cong" đang có 2 đơn đặt hàng, 3 vật tư đang gắn NCC này - không xoá được',
+      );
+      expect(prisma.supplier.delete).not.toHaveBeenCalled();
     });
 
     it('throws 404 when the supplier does not exist', async () => {

@@ -34,6 +34,9 @@ import { CreatePackagingIssueDto } from './dto/create-packaging-issue.dto';
 import { PackagingIssuePlanItemResponseDto } from './dto/packaging-issue-plan-item-response.dto';
 import { PackagingIssueResponseDto } from './dto/packaging-issue-response.dto';
 
+/** Rà soát 14/11 XK5: định mức × số lượng tính bằng số thực ra lẻ sát dưới (0,57 × 100 = 56,99999999999999) - làm tròn 4 số lẻ (Decimal(14,4)) trước khi so / hiển thị. */
+const round4 = (n: number): number => Math.round(n * 1e4) / 1e4 + 0;
+
 const PACKAGING_ISSUE_INCLUDE = {
   productionOrder: {
     include: {
@@ -229,9 +232,9 @@ export class PackagingIssuesService {
       );
 
       const item = await this.resolveAccessoryItem(tx, order.bomRevisionId, materialBigId);
-      const plannedQty = item.qtyPerUnit.toNumber() * order.quantity;
-      const issuedSoFar = await this.sumIssued(tx, order.id, materialBigId);
-      const remaining = plannedQty - issuedSoFar;
+      const plannedQty = round4(item.qtyPerUnit.toNumber() * order.quantity);
+      const issuedSoFar = round4(await this.sumIssued(tx, order.id, materialBigId));
+      const remaining = round4(plannedQty - issuedSoFar);
       if (dto.issuedQty > remaining) {
         throw new BadRequestException(
           `Số lượng xuất (${dto.issuedQty}) vượt quá số lượng còn có thể xuất cho vật tư ${dto.materialId} ` +
@@ -251,8 +254,8 @@ export class PackagingIssuesService {
         order.bomRevisionId,
         order.productionInvoiceItemId,
       );
-      const checkedCappedQty = item.qtyPerUnit.toNumber() * checkedUnits;
-      const remainingByCheck = checkedCappedQty - issuedSoFar;
+      const checkedCappedQty = round4(item.qtyPerUnit.toNumber() * checkedUnits);
+      const remainingByCheck = round4(checkedCappedQty - issuedSoFar);
       if (dto.issuedQty > remainingByCheck) {
         throw new ConflictException(
           `Chỉ ${checkedUnits}/${order.quantity} sản phẩm đã qua Chuyền kiểm (đã xuất ${issuedSoFar}, ` +
@@ -426,9 +429,9 @@ export class PackagingIssuesService {
       const checkedUnits = checkedUnitsByOrder.get(order.id.toString()) ?? 0;
       for (const item of items) {
         const key = `${order.id}:${item.materialId}`;
-        const requiredQty = item.qtyPerUnit.toNumber() * order.quantity;
-        const issuedQty = issuedByKey.get(key) ?? 0;
-        const checkedCappedQty = item.qtyPerUnit.toNumber() * checkedUnits;
+        const requiredQty = round4(item.qtyPerUnit.toNumber() * order.quantity);
+        const issuedQty = round4(issuedByKey.get(key) ?? 0);
+        const checkedCappedQty = round4(item.qtyPerUnit.toNumber() * checkedUnits);
         result.push(
           new PackagingIssuePlanItemResponseDto({
             productionOrderId: order.id.toString(),
@@ -445,7 +448,7 @@ export class PackagingIssuesService {
             // Trần thật là MIN(định mức BOM, đã qua Chuyền kiểm) - "Kế hoạch" (requiredQty) vẫn
             // giữ nguyên tổng nhu cầu BOM để thủ kho biết đích cuối, nhưng "Còn lại" phải phản ánh
             // đúng số HIỆN được phép xuất ngay bây giờ (2026-09-04, cùng gate với create()).
-            remainingToIssue: Math.min(requiredQty, checkedCappedQty) - issuedQty,
+            remainingToIssue: round4(Math.min(requiredQty, checkedCappedQty) - issuedQty),
           }),
         );
       }

@@ -311,6 +311,24 @@ export class PurchaseProposalsService {
     }
   }
 
+  /**
+   * Rà soát 14/11 MH4: "Kho từ chối nhận" (cần xử lý) trước đây không bao giờ đóng - người mua bị treo việc mãi. Đóng khi lần giao
+   * sau của đề xuất được nhận (người mua đã làm việc lại với NCC) hoặc đề xuất đã đủ hàng / đóng phần thiếu. Best-effort.
+   */
+  async resolveReceiptRejected(proposalId: bigint): Promise<void> {
+    try {
+      await this.notifications.resolve({
+        entityType: 'PURCHASE_PROPOSAL',
+        entityId: proposalId.toString(),
+        types: ['PURCHASE_RECEIPT_REJECTED'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve PURCHASE_RECEIPT_REJECTED (proposal ${proposalId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
   private async resolvePurchaseProposalCreated(proposalId: bigint): Promise<void> {
     try {
       await this.notifications.resolve({
@@ -1023,6 +1041,7 @@ export class PurchaseProposalsService {
     if (refreshed?.status !== PurchaseProposalStatus.PURCHASED) return;
     const piCode = await this.resolvePiCodeFor(proposalId);
     await this.resolveReadyToReceive(proposalId);
+    await this.resolveReceiptRejected(proposalId);
     await this.notifyPurchaseProposal(
       'PURCHASE_PROPOSAL_PURCHASED',
       proposalId,

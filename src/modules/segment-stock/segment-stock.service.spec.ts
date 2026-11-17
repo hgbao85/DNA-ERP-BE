@@ -587,8 +587,9 @@ describe('SegmentStockService', () => {
       });
 
       expect(result).toEqual({ releasedQty: 9, reservationCount: 2 });
-      // Khoá theo thứ tự mã đoạn (spec 5 trước spec 9).
+      // Rà soát 14/11 TĐ6: khoá lệnh trước, rồi các ô theo thứ tự mã đoạn (spec 5 trước spec 9).
       expect(env.calls.filter((c) => c.startsWith('lock:'))).toEqual([
+        'lock:segment-production:100',
         'lock:segment-stock:10:5:',
         'lock:segment-stock:10:9:',
       ]);
@@ -671,7 +672,10 @@ describe('SegmentStockService', () => {
       });
 
       expect(result).toEqual({ releasedQty: 0, reservationCount: 0 });
-      expect(env.txMock.$executeRaw).not.toHaveBeenCalled();
+      // Chỉ khoá lệnh (TĐ6), không khoá ô nào vì không còn gì để nhả.
+      expect(env.calls.filter((c) => c.startsWith('lock:'))).toEqual([
+        'lock:segment-production:100',
+      ]);
       expect(env.txMock.segmentReservation.update).not.toHaveBeenCalled();
       expect(env.txMock.segmentReservationLog.create).not.toHaveBeenCalled();
     });

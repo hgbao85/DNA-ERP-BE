@@ -229,6 +229,30 @@ describe('StockLedgerService', () => {
   });
 
   describe('adjust', () => {
+    // Rà soát 14/11 CK7: sửa tồn đối ứng kho ảo "Cân đối tồn kho" (OPENING_BALANCE) - chân 1 là kho ảo, chân 2 là kho thật.
+    beforeEach(() => {
+      prisma.warehouse.findMany.mockResolvedValue([
+        { id: 1n, code: 'OPENING_BALANCE', name: 'Cân đối tồn kho', isVirtual: true },
+        { ...toWh, isVirtual: false },
+      ]);
+    });
+
+    it('rà soát 14/11 CK7: 2 chân đều là kho thật -> 400 (phải lập phiếu chuyển kho), không ghi sổ', async () => {
+      prisma.warehouse.findMany.mockResolvedValue([
+        { ...fromWh, isVirtual: false },
+        { ...toWh, isVirtual: false },
+      ]);
+      await expect(
+        service.adjust(
+          { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5, note: 'x' },
+          'idem-ck7',
+          'user-1',
+          toWh.code,
+        ),
+      ).rejects.toThrow('lập phiếu chuyển kho');
+      expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+    });
+
     it('posts an ADJUST entry carrying the caller and the idempotency key through', async () => {
       prisma.stockLedger.findUnique.mockResolvedValue(null);
       prisma.stockLedger.create.mockResolvedValue(ledgerRow());
@@ -253,7 +277,7 @@ describe('StockLedgerService', () => {
       );
     });
 
-    it('allows a scoped caller whose warehouseScope matches one leg of the entry', async () => {
+    it('allows a scoped caller whose warehouseScope matches the real leg of the entry', async () => {
       prisma.stockLedger.findUnique.mockResolvedValue(null);
       prisma.stockLedger.create.mockResolvedValue(ledgerRow());
 

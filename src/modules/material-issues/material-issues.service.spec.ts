@@ -327,6 +327,17 @@ describe('MaterialIssuesService', () => {
       ).resolves.toBeDefined();
     });
 
+    it('rà soát 14/11 XK5: định mức lẻ 0,57 × 10 = 5,699999999999999 (số thực) - xuất đủ 5,7 vẫn được, không bị chặn oan', async () => {
+      prisma.consumableBom.findUnique.mockResolvedValue({
+        ...consumableBomRow,
+        qtyPerUnit: { toNumber: () => 0.57 },
+      });
+      prisma.materialIssue.create.mockResolvedValue(issueRow);
+      await expect(
+        service.create('1', { ...dto, issuedQty: 5.7 }, 'user-1', null),
+      ).resolves.toBeDefined();
+    });
+
     it('cộng dồn đã xuất từ các đợt trước khi tính remaining', async () => {
       // đã xuất 27 -> remaining = 30 - 27 = 3
       prisma.materialIssue.aggregate.mockResolvedValue({

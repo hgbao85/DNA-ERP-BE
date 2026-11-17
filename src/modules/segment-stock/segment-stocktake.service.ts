@@ -6,7 +6,8 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { StockLedgerRefType, WarehouseKind } from '../../generated/prisma/client';
-import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { lockBusinessKey, lockBusinessKeyShared } from '../../common/utils/advisory-lock.util';
+import { SEGMENT_LEGACY_CONVERSION_LOCK } from './segment-stock.config';
 import {
   isNormalizedSegmentSteps,
   segmentBucketLockKey,
@@ -91,6 +92,9 @@ export class SegmentStocktakeService {
 
     return this.prisma.$transaction(
       async (tx) => {
+        // Rà soát 14/11 TĐ8: chờ lượt chuyển đổi dữ liệu cũ (độc quyền) trước khoá ô - kiểm kê chen giữa lúc chuyển đổi đã đọc tồn
+        // cũ làm ô ra dư ảo.
+        await lockBusinessKeyShared(tx, SEGMENT_LEGACY_CONVERSION_LOCK);
         await lockBusinessKey(
           tx,
           segmentBucketLockKey(input.warehouseId, input.segmentSpecId, input.segmentSteps),

@@ -82,6 +82,7 @@ describe('PurchaseReceiptsService', () => {
     loadReceiveLines: jest.Mock;
     applyItemReceipt: jest.Mock;
     afterItemReceipt: jest.Mock;
+    resolveReceiptRejected: jest.Mock;
   };
   let notifications: { emit: jest.Mock };
 
@@ -115,6 +116,7 @@ describe('PurchaseReceiptsService', () => {
         Promise.resolve({ id: input.line.item.id }),
       ),
       afterItemReceipt: jest.fn().mockResolvedValue(undefined),
+      resolveReceiptRejected: jest.fn().mockResolvedValue(undefined),
     };
     notifications = { emit: jest.fn().mockResolvedValue(undefined) };
     service = new PurchaseReceiptsService(
@@ -421,12 +423,22 @@ describe('PurchaseReceiptsService', () => {
       const res = await service.receive(base, 'kho-1', 'key-nk', null);
       expect(res.code).toBe('NK-261106-001');
       expect(prisma.reservedSlipCode.updateMany).toHaveBeenCalledWith({
-        where: { code: 'NK-261106-001', kind: 'NK', usedAt: null },
+        where: { code: 'NK-261106-001', kind: 'NK', usedAt: null, createdById: 'kho-1' },
         data: { usedAt: expect.any(Date) as unknown },
       });
       expect(prisma.purchaseReceipt.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ code: 'NK-261106-001' }) as unknown,
       });
+    });
+
+    it('rà soát 14/11 MH4: nhận được hàng -> đóng "Kho từ chối nhận" của các đề xuất có dòng vừa nhận', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      await service.receive(base, 'kho-1', 'key-mh4', null);
+      const ids = new Set(lines.map((l) => l.proposal.id));
+      expect(proposals.resolveReceiptRejected).toHaveBeenCalledTimes(ids.size);
+      for (const id of ids) expect(proposals.resolveReceiptRejected).toHaveBeenCalledWith(id);
     });
 
     it('số NK chưa giữ hoặc đã dùng -> 400, không ghi phiếu', async () => {
@@ -437,6 +449,22 @@ describe('PurchaseReceiptsService', () => {
       await expect(service.receive(base, 'kho-1', 'key-nk', null)).rejects.toThrow('In phiếu nhập');
       expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
       expect(proposals.applyItemReceipt).not.toHaveBeenCalled();
+    });
+
+    it('rà soát 14/11: số NK do người khác in (giữ) -> 400 nói rõ, không ghi phiếu', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      prisma.reservedSlipCode.updateMany.mockResolvedValue({ count: 0 });
+      prisma.reservedSlipCode.findUnique.mockResolvedValue({
+        kind: 'NK',
+        usedAt: null,
+        createdById: 'kho-2',
+      });
+      await expect(service.receive(base, 'kho-1', 'key-nk', null)).rejects.toThrow(
+        'do người khác in',
+      );
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
     });
 
     it('"In phiếu nhập": cấp số NK mới; in lại cùng lần nhận thì dùng lại số chưa dùng của chính mình', async () => {
