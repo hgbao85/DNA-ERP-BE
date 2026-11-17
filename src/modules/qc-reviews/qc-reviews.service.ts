@@ -352,18 +352,8 @@ export class QcReviewsService {
     await assertPiHasActiveFloor(this.prisma, bundle.steelIssue.productionInvoiceId, 'duyệt KCS');
 
     const specIds = dto.segments.map((s) => parseBigIntId(s.segmentSpecId));
-    const [specs, cutInThisBundle] = await Promise.all([
-      this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } }),
-      this.prisma.cutPatternSegment.groupBy({
-        by: ['segmentSpecId'],
-        where: { cutBundleId: bundle.id },
-        _sum: { qty: true },
-      }),
-    ]);
+    const specs = await this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } });
     const specById = new Map(specs.map((sp) => [sp.id.toString(), sp]));
-    const doneBySpec = new Map(
-      cutInThisBundle.map((r) => [r.segmentSpecId.toString(), r._sum.qty ?? 0]),
-    );
 
     let totalFailed = 0;
     const failedBySize: { mm: string; qty: number }[] = [];
@@ -376,13 +366,6 @@ export class QcReviewsService {
       if (spec.materialId !== bundle.steelIssue.materialId) {
         throw new BadRequestException(
           `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt cắt này`,
-        );
-      }
-      const doneQty = doneBySpec.get(spec.id.toString()) ?? 0;
-      if (seg.failedQty > doneQty) {
-        throw new BadRequestException(
-          `Chấm lỗi ${seg.failedQty} đoạn ${spec.cutLengthMm.toString()}mm vượt số đã cắt ` +
-            `(${doneQty}) trong chính đợt cắt này`,
         );
       }
       totalFailed += seg.failedQty;
@@ -400,6 +383,27 @@ export class QcReviewsService {
         throw new ConflictException(
           `Đợt cắt ${cutBundleId} đã bị 1 yêu cầu khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
         );
+      }
+      // X1 16/11 (phần sót): đọc số đã cắt SAU khi đã giữ dòng đợt (updateMany trên khoá dòng tới hết transaction) - trước đây
+      // đọc ngoài transaction. Hiện chưa có đường nào đổi số đoạn của đợt đã chờ KCS (báo cắt / hủy / hoàn tác đều đòi
+      // CUTTING + FOR UPDATE), nên đây là chốt phòng thủ: không để chặn "chấm lỗi vượt số đã cắt" dựa vào luật ở module khác.
+      const cutInThisBundle = await tx.cutPatternSegment.groupBy({
+        by: ['segmentSpecId'],
+        where: { cutBundleId: bundle.id },
+        _sum: { qty: true },
+      });
+      const doneBySpec = new Map(
+        cutInThisBundle.map((r) => [r.segmentSpecId.toString(), r._sum.qty ?? 0]),
+      );
+      for (const seg of dto.segments) {
+        const spec = specById.get(parseBigIntId(seg.segmentSpecId).toString())!;
+        const doneQty = doneBySpec.get(spec.id.toString()) ?? 0;
+        if (seg.failedQty > doneQty) {
+          throw new BadRequestException(
+            `Chấm lỗi ${seg.failedQty} đoạn ${spec.cutLengthMm.toString()}mm vượt số đã cắt ` +
+              `(${doneQty}) trong chính đợt cắt này`,
+          );
+        }
       }
 
       return tx.qcReview.create({
