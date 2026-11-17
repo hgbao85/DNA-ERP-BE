@@ -11,6 +11,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { PROTECTED_WAREHOUSE_CODES } from '../../common/constants/protected-warehouse-codes.constant';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateWarehouseDto } from './dto/create-warehouse.dto';
 import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
@@ -59,7 +60,7 @@ export class WarehousesService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
+      sortOrderBy(query, ['id', 'code', 'name'], { id: query.sortOrder }),
     );
 
     return { data: result.data.map((w) => this.toResponseDto(w)), meta: result.meta };

@@ -10,6 +10,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { StockReservationsService } from './stock-reservations.service';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { warehouseWhereForScope } from '../../common/utils/warehouse-family.util';
 import { TRON_SEGMENT_STEPS, isNormalizedSegmentSteps } from '../../common/utils/segment-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -415,7 +416,7 @@ export class StockLedgerService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { createdAt: query.sortOrder },
+      sortOrderBy(query, ['id', 'createdAt'], { createdAt: query.sortOrder }),
     );
 
     const [transferCodeById, refStageByKey, poCodeByKey, piCodeByKey] = await Promise.all([

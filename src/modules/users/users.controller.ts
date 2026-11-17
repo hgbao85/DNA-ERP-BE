@@ -16,6 +16,7 @@ import { PERMISSION_MODULES } from '../../common/constants/permission-modules.co
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { TransferBuyerMaterialsDto } from './dto/transfer-buyer-materials.dto';
@@ -31,8 +32,8 @@ export class UsersController {
 
   @Post()
   @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.CREATE })
-  create(@Body() dto: CreateUserDto) {
-    return this.usersService.create(dto);
+  create(@Body() dto: CreateUserDto, @CurrentUser() actor: AuthenticatedUser) {
+    return this.usersService.create(dto, actor);
   }
 
   @Get()
@@ -66,15 +67,19 @@ export class UsersController {
   update(
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
-    @CurrentUser('id') currentUserId: string,
+    @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.usersService.update(id, dto, currentUserId);
+    return this.usersService.update(id, dto, actor);
   }
 
   @Patch(':id/mfg-attributes')
   @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.UPDATE })
-  updateMfgAttributes(@Param('id') id: string, @Body() dto: UpdateUserMfgAttributesDto) {
-    return this.usersService.updateMfgAttributes(id, dto);
+  updateMfgAttributes(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserMfgAttributesDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ) {
+    return this.usersService.updateMfgAttributes(id, dto, actor);
   }
 
   // Admin resets another user's password (forgot-password flow - the admin creates and
@@ -83,14 +88,18 @@ export class UsersController {
   @Patch(':id/reset-password')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.UPDATE })
-  resetPassword(@Param('id') id: string, @Body() dto: ResetPasswordDto): Promise<void> {
-    return this.usersService.resetPassword(id, dto);
+  resetPassword(
+    @Param('id') id: string,
+    @Body() dto: ResetPasswordDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<void> {
+    return this.usersService.resetPassword(id, dto, actor);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions({ module: PERMISSION_MODULES.USER, action: PermissionAction.DELETE })
-  remove(@Param('id') id: string, @CurrentUser('id') currentUserId: string) {
-    return this.usersService.remove(id, currentUserId);
+  remove(@Param('id') id: string, @CurrentUser() actor: AuthenticatedUser) {
+    return this.usersService.remove(id, actor);
   }
 }

@@ -29,6 +29,7 @@ import {
 } from '../../common/utils/frame-deadline.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { CloudinaryService } from '../uploads/cloudinary.service';
@@ -404,7 +405,7 @@ export class PurchaseProposalsService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { createdAt: query.sortOrder },
+      sortOrderBy(query, ['id', 'createdAt'], { createdAt: query.sortOrder }),
     );
     const dtos = result.data.map((p) => this.toDetailResponseDto(p));
     await this.attachLenhCodes(result.data, dtos);

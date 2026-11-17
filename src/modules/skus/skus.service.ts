@@ -37,6 +37,7 @@ import { ContainerLoadDto, toContainerLoadDto } from '../../common/dto/container
 import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { auditEvent } from '../../common/utils/audit-event.util';
@@ -318,7 +319,7 @@ export class SkusService {
       },
       query,
       undefined,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
+      sortOrderBy(query, ['id', 'createdAt', 'updatedAt'], { id: query.sortOrder }),
     );
     const quotas = await this.reconstructQuotaBatch(result.data);
     return {

@@ -11,6 +11,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
+import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CreateSegmentSpecDto } from './dto/create-segment-spec.dto';
 import { SegmentSpecResponseDto } from './dto/segment-spec-response.dto';
@@ -65,7 +66,7 @@ export class SegmentSpecsService {
       },
       query,
       where,
-      query.sortBy ? { [query.sortBy]: query.sortOrder } : { id: query.sortOrder },
+      sortOrderBy(query, ['id'], { id: query.sortOrder }),
     );
 
     return { data: result.data.map((s) => this.toResponseDto(s)), meta: result.meta };
