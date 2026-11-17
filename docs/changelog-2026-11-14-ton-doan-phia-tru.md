@@ -58,6 +58,10 @@ công tắc tắt thì Hàn / Sơn trừ đoạn y như cũ, đổi xưởng kh�
    - Nếu chuyển đổi báo "Đã có dữ liệu tồn đoạn theo lệnh": đã có người báo chen vào khoảng giữa bật và chạy - tắt công tắc, dọn
      dữ liệu tồn đoạn theo lệnh vừa sinh (bảng giữ đoạn / phía cộng / nhật ký) rồi làm lại bước 2.
 3. Chạy song song 3–5 ngày với sổ thủ kho Phôi.
+4. **Hạn chế đã biết (rà soát 16/11 TĐ7, anh chọn tạm chấp nhận 17/11):** đổi xưởng lệnh đã có đoạn cắt DƯ thì phần dư của lệnh
+   trong `SegmentProduction` bị ghi sang kho mới dù đoạn thật ở lại kho cũ (bảng chỉ 1 dòng / (lệnh, mã đoạn) với 1 kho). Nếu sau
+   đó KCS chấm lỗi làm giảm số của lệnh, phía cộng trừ nhầm ở kho mới và kho cũ còn dư ảo. Tránh đổi xưởng lệnh đã cắt dư cho
+   tới khi sửa (tách dòng `SegmentProduction` theo kho - cần migration).
 
 ## Bổ sung 14/11 chiều - anh Nhân trả lời ý 2 (sổ báo vượt)
 

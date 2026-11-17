@@ -6,7 +6,7 @@ import {
   ProductionOrderFloorStage,
   StepBundleStatus,
 } from '../../generated/prisma/client';
-import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { lockBusinessKey, lockBusinessKeyShared } from '../../common/utils/advisory-lock.util';
 import {
   compareSegmentCodes,
   normalizeSegmentSteps,
@@ -16,7 +16,7 @@ import {
 } from '../../common/utils/segment-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
-import { isSegmentStockEnabled } from './segment-stock.config';
+import { isSegmentStockEnabled, SEGMENT_LEGACY_CONVERSION_LOCK } from './segment-stock.config';
 import { SegmentStockService } from './segment-stock.service';
 import type { SegmentSyncChange, SegmentTarget } from './segment-stock.types';
 import { computeSegmentTargets, SegmentTargetVariant } from './segment-targets.util';
@@ -151,6 +151,9 @@ export class SegmentProductionService {
     productionInvoiceId: bigint,
     opts: { actorId?: string | null; reason: string },
   ): Promise<RecomputeSegmentStockResult | null> {
+    // Rà soát 14/11 TĐ8: chờ lượt chuyển đổi dữ liệu cũ (giữ độc quyền) - không thì tính lại chen giữa chuyển đổi bị đưa về 0. Lượt
+    // chuyển đổi gọi chính hàm này trong phiên đang giữ bản độc quyền nên không tự chờ mình.
+    await lockBusinessKeyShared(tx, SEGMENT_LEGACY_CONVERSION_LOCK);
     await lockBusinessKey(tx, segmentProductionLockKey(productionInvoiceId));
     // Đọc số liệu SAU khi khoá: 2 lượt KCS sát nhau - lượt chạy sau phải thấy số mới nhất.
     const loaded = await this.loadProduction(tx, productionInvoiceId);

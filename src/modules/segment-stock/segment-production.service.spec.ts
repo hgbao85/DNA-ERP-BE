@@ -193,6 +193,15 @@ describe('SegmentProductionService', () => {
     expect(r.changes).toEqual([]);
   });
 
+  it('rà soát 14/11 TĐ8: ghi thật giữ khoá chuyển đổi dữ liệu cũ (dùng chung) TRƯỚC khoá lệnh', async () => {
+    setData();
+    await service.recomputeForPi(900n, { actorId: 'u1', reason: 'QC_CUT_BUNDLE:1' });
+    const calls = prisma.$executeRaw.mock.calls as [TemplateStringsArray, string][];
+    expect(calls[0][0].join('?')).toContain('pg_advisory_xact_lock_shared');
+    expect(calls[0][1]).toBe('segment-legacy-conversion');
+    expect(calls[1][1]).toBe('segment-production:900');
+  });
+
   it('ghi thật: lệnh đã kết thúc (DONE) -> ConflictException, không gọi sync', async () => {
     setData({ invoice: { status: 'DONE' } });
     await expect(service.recomputeForPi(900n, { reason: 'x' })).rejects.toThrow(ConflictException);

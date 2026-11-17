@@ -170,14 +170,21 @@ export class PurchaseReceiptsService {
             : autoAlloc;
           const isAdjusted = !!dto.allocation && !sameAllocation(autoAlloc, finalAlloc);
 
-          // Số phiếu NK đã giữ lúc in (Đợt 6, 4.8) - mỗi số chỉ gắn 1 phiếu nhận.
+          // Số phiếu NK đã giữ lúc in (Đợt 6, 4.8) - mỗi số chỉ gắn 1 phiếu nhận, và chỉ người đã in (giữ số) mới dùng được (rà soát
+          // 14/11, lỗi thấp: trước đây ai cũng dùng được số người khác in, lệch dấu vết ai in / ai nhận).
           const { count: codeUsed } = await tx.reservedSlipCode.updateMany({
-            where: { code: slipCode, kind: 'NK', usedAt: null },
+            where: { code: slipCode, kind: 'NK', usedAt: null, createdById: userId },
             data: { usedAt: new Date() },
           });
           if (codeUsed !== 1) {
+            const held = await tx.reservedSlipCode.findUnique({
+              where: { code: slipCode },
+              select: { kind: true, usedAt: true, createdById: true },
+            });
             throw new BadRequestException(
-              `Số phiếu nhập ${slipCode} không hợp lệ hoặc đã dùng cho lần nhập khác - bấm "In phiếu nhập" để lấy số mới`,
+              held && held.kind === 'NK' && !held.usedAt && held.createdById !== userId
+                ? `Số phiếu nhập ${slipCode} do người khác in - bấm "In phiếu nhập" để lấy số của mình`
+                : `Số phiếu nhập ${slipCode} không hợp lệ hoặc đã dùng cho lần nhập khác - bấm "In phiếu nhập" để lấy số mới`,
             );
           }
 
@@ -269,6 +276,10 @@ export class PurchaseReceiptsService {
 
     for (const a of applied) {
       await this.proposals.afterItemReceipt(a.line, a.qty, a.saved, userId);
+    }
+    // Rà soát 14/11 MH4: lần giao này nhận được -> "Kho từ chối nhận" của lần giao trước (cùng đề xuất) hết giá trị.
+    for (const proposalId of new Set(lines.map((l) => l.proposal.id))) {
+      await this.proposals.resolveReceiptRejected(proposalId);
     }
     if (overQty > 0) {
       await this.notifyOverReceived(first, total, overQty, overReason!, receiptId, userId);

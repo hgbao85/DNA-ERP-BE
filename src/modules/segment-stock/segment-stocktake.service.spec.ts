@@ -68,6 +68,15 @@ describe('SegmentStocktakeService', () => {
     });
   });
 
+  it('rà soát 14/11 TĐ8: giữ khoá chuyển đổi dữ liệu cũ (dùng chung) trước khoá ô', async () => {
+    const { run, tx } = make();
+    await run();
+    const calls = tx.$executeRaw.mock.calls as [TemplateStringsArray, string][];
+    expect(calls[0][0].join('?')).toContain('pg_advisory_xact_lock_shared');
+    expect(calls[0][1]).toBe('segment-legacy-conversion');
+    expect(calls[1][1]).toMatch(/^segment-stock:/);
+  });
+
   it('đếm nhiều hơn ô chưa có tồn: cộng vào kho Phôi', async () => {
     const { run, ledger } = make({ qty: null });
     await run({ countedQty: 5, expectedCurrentQty: 0 });

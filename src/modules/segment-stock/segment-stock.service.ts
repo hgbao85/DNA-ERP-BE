@@ -7,6 +7,7 @@ import {
   segmentBucketLockKey,
   segmentCodeKey,
   segmentCodeLabel,
+  segmentProductionLockKey,
   segmentStepsLabel,
 } from '../../common/utils/segment-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -495,6 +496,9 @@ export class SegmentStockService {
     tx: PrismaTx,
     input: ReleaseOrderHoldingsInput,
   ): Promise<ReleaseOrderHoldingsResult> {
+    // Rà soát 14/11 TĐ6: khoá lệnh (cùng khoá "tính lại" SegmentProductionService.recomputeInTx giữ) TRƯỚC mọi khoá ô - không thì
+    // lượt tính lại đã đọc SegmentProduction cũ ghi đè phần vừa chuyển giữ -> dư, hoặc tạo dòng giữ mới sau khi đã nhả.
+    await lockBusinessKey(tx, segmentProductionLockKey(input.productionInvoiceId));
     const rows = await tx.segmentReservation.findMany({
       where: { productionInvoiceId: input.productionInvoiceId },
       select: {
@@ -592,6 +596,9 @@ export class SegmentStockService {
     input: TransferOrderHoldingsInput,
   ): Promise<TransferOrderHoldingsResult> {
     const { productionInvoiceId, toWarehouseId } = input;
+    // Rà soát 14/11 TĐ6: khoá lệnh trước mọi khoá ô (cùng thứ tự "tính lại") - không thì lượt tính lại đọc dòng trước khi đổi xưởng
+    // ghi warehouseId cũ đè lại.
+    await lockBusinessKey(tx, segmentProductionLockKey(productionInvoiceId));
     await tx.segmentProduction.updateMany({
       where: { productionInvoiceId, warehouseId: { not: toWarehouseId } },
       data: { warehouseId: toWarehouseId },

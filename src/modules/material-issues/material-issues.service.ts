@@ -42,6 +42,9 @@ import { MaterialIssuePlanItemResponseDto } from './dto/material-issue-plan-item
 import { MaterialIssueResponseDto } from './dto/material-issue-response.dto';
 import { ReceiveMaterialIssueDto } from './dto/receive-material-issue.dto';
 
+/** Rà soát 14/11 XK5: định mức × số lượng tính bằng số thực ra lẻ sát dưới (0,57 × 100 = 56,99999999999999) - làm tròn 4 số lẻ (Decimal(14,4)) trước khi so / hiển thị. */
+const round4 = (n: number): number => Math.round(n * 1e4) / 1e4 + 0;
+
 const MATERIAL_ISSUE_INCLUDE = {
   productionOrder: {
     include: {
@@ -232,7 +235,7 @@ export class MaterialIssuesService {
         order.quantity,
       );
       const issuedSoFar = await this.sumIssued(tx, order.id, dto.stage, materialBigId);
-      const remaining = plannedQty - issuedSoFar;
+      const remaining = round4(plannedQty - issuedSoFar);
       if (dto.issuedQty > remaining) {
         throw new BadRequestException(
           `Số lượng xuất (${dto.issuedQty}) vượt quá số lượng còn có thể xuất cho vật tư ${dto.materialId} ` +
@@ -420,8 +423,8 @@ export class MaterialIssuesService {
 
     return consumableBoms.map((cb) => {
       const key = `${cb.stage}:${cb.materialId}`;
-      const requiredQty = cb.qtyPerUnit.toNumber() * order.quantity;
-      const issuedQty = issuedByKey.get(key) ?? 0;
+      const requiredQty = round4(cb.qtyPerUnit.toNumber() * order.quantity);
+      const issuedQty = round4(issuedByKey.get(key) ?? 0);
       return new MaterialIssuePlanItemResponseDto({
         stage: cb.stage,
         materialId: cb.materialId.toString(),
@@ -430,7 +433,7 @@ export class MaterialIssuesService {
         unit: cb.material.unit,
         requiredQty,
         issuedQty,
-        remainingToIssue: requiredQty - issuedQty,
+        remainingToIssue: round4(requiredQty - issuedQty),
       });
     });
   }
@@ -562,7 +565,7 @@ export class MaterialIssuesService {
         `Vật tư ${materialId} không thuộc định mức tiêu hao (ConsumableBom) công đoạn ${stage} của lệnh sản xuất này`,
       );
     }
-    return bom.qtyPerUnit.toNumber() * orderQuantity;
+    return round4(bom.qtyPerUnit.toNumber() * orderQuantity);
   }
 
   /** Phần SKU khác trong cùng PI còn cần vật tư này - định mức tiêu hao mọi công đoạn − đã xuất mọi công đoạn (YC11). */
@@ -595,7 +598,7 @@ export class MaterialIssuesService {
       where: { productionOrderId, stage, materialId },
       _sum: { issuedQty: true },
     });
-    return result._sum.issuedQty?.toNumber() ?? 0;
+    return round4(result._sum.issuedQty?.toNumber() ?? 0);
   }
 
   private async findOrderOrThrow(id: string): Promise<ProductionOrder> {

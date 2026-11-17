@@ -78,7 +78,24 @@ export class SuppliersService {
 
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
-    await this.findOneOrThrow(id);
+    const supplier = await this.findOneOrThrow(id);
+    // Rà soát 14/11 (lỗi thấp): trước đây xoá thẳng, khoá ngoại chặn và người dùng chỉ thấy câu chung "bản ghi đang được dùng ở chỗ
+    // khác". Kiểm trước, báo rõ NCC đang có đơn / báo giá / vật tư gắn kèm và gợi ý ngừng dùng thay vì xoá.
+    const [orders, quotes, materials] = await Promise.all([
+      this.prisma.supplierOrder.count({ where: { supplierId: bigId } }),
+      this.prisma.purchaseProposalQuote.count({ where: { supplierId: bigId } }),
+      this.prisma.materialSupplier.count({ where: { supplierId: bigId } }),
+    ]);
+    const used = [
+      orders > 0 ? `${orders} đơn đặt hàng` : null,
+      quotes > 0 ? `${quotes} báo giá` : null,
+      materials > 0 ? `${materials} vật tư đang gắn NCC này` : null,
+    ].filter((s): s is string => s != null);
+    if (used.length > 0) {
+      throw new ConflictException(
+        `Nhà cung cấp "${supplier.name}" đang có ${used.join(', ')} - không xoá được. Tắt "Đang dùng" để ngừng chọn NCC này.`,
+      );
+    }
     await this.prisma.supplier.delete({ where: { id: bigId } });
   }
 
