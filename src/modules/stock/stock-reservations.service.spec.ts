@@ -1134,4 +1134,66 @@ describe('StockReservationsService', () => {
       expect(released).toBe(0);
     });
   });
+  // 17/11/2026 (lỗi C3 khả dụng sắt): getReservedQtyMap tách giữ chỗ cắt sắt theo chiều dài cây; giữ chỗ chuyển kho khoá riêng.
+  describe('getReservedQtyMap + reservedFor', () => {
+    it('gom 1 lần, tách theo (kho, vật tư, quy cách, chiều dài); trừ phần đã tiêu; chuyển kho cộng vào mọi ô', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([
+        {
+          warehouseId: 6n,
+          materialId: 30n,
+          spec: '',
+          stockLengthMm: 6000,
+          quantity: decimal(214),
+          consumedQty: decimal(14),
+        },
+        {
+          warehouseId: 6n,
+          materialId: 30n,
+          spec: '',
+          stockLengthMm: 6000,
+          quantity: decimal(100),
+          consumedQty: decimal(0),
+        },
+        {
+          warehouseId: 6n,
+          materialId: 30n,
+          spec: '',
+          stockLengthMm: 0,
+          quantity: decimal(4),
+          consumedQty: decimal(0),
+        },
+        {
+          warehouseId: 6n,
+          materialId: 30n,
+          spec: ' 20 ',
+          stockLengthMm: 5450,
+          quantity: decimal(29),
+          consumedQty: decimal(30),
+        },
+      ]);
+      prisma.warehouseTransferReservation.findMany.mockResolvedValue([
+        { warehouseId: 6n, materialId: 30n, spec: '', quantity: decimal(5) },
+      ]);
+
+      const map = await service.getReservedQtyMap([
+        { warehouseId: 6n, materialId: 30n },
+        { warehouseId: 6n, materialId: 30n },
+      ]);
+
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledTimes(1);
+      // KHÔNG còn lọc stockLengthMm: 0 (lỗi C3)
+      const firstCall = prisma.stockReservation.findMany.mock.calls[0] as [{ where: object }];
+      expect(firstCall[0].where).not.toHaveProperty('stockLengthMm');
+      expect(StockReservationsService.reservedFor(map, 6n, 30n, '', 6000)).toBe(305); // 200 + 100 + 5 chuyển kho
+      expect(StockReservationsService.reservedFor(map, 6n, 30n, '', 0)).toBe(9); // 4 + 5 chuyển kho
+      expect(StockReservationsService.reservedFor(map, 6n, 30n, '20', 5450)).toBe(0); // tiêu quá -> 0, quy cách trim
+      expect(StockReservationsService.reservedFor(map, 6n, 30n, '', 5850)).toBe(5); // ô không giữ: chỉ chuyển kho
+    });
+
+    it('không có ô nào -> không truy vấn, map rỗng', async () => {
+      const map = await service.getReservedQtyMap([]);
+      expect(map.size).toBe(0);
+      expect(prisma.stockReservation.findMany).not.toHaveBeenCalled();
+    });
+  });
 });

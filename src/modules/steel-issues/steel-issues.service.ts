@@ -45,6 +45,7 @@ import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { processStepLabel } from '../../common/constants/process-steps.constant';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
@@ -1134,12 +1135,14 @@ export class SteelIssuesService {
       order.bomRevisionId,
     );
     const qtyBySpec = new Map<string, number>();
+    const mmBySpec = new Map<string, string>(); // in số mm trong câu lỗi thay vì id cỡ đoạn (17/11/2026)
     for (const batch of sb.batches) {
       for (const seg of batch.segments) {
         const k = seg.segmentSpecId.toString();
+        mmBySpec.set(k, seg.segmentSpec.cutLengthMm.toString());
         if (!allowed.has(k)) {
           throw new BadRequestException(
-            `Cỡ đoạn ${seg.segmentSpec.cutLengthMm.toString()}mm không cần công đoạn ${sb.step} theo định mức của SKU đã chọn`,
+            `Cỡ đoạn ${seg.segmentSpec.cutLengthMm.toString()}mm không cần công đoạn ${processStepLabel(sb.step)} theo định mức của SKU đã chọn`,
           );
         }
         qtyBySpec.set(k, (qtyBySpec.get(k) ?? 0) + seg.qty);
@@ -1186,7 +1189,7 @@ export class SteelIssuesService {
       for (const [k, qty] of qtyBySpec) {
         if (sum(stepRows, k) + qty > sum(catRows, k)) {
           throw new BadRequestException(
-            `Gán đợt này cho SKU đã chọn sẽ làm số đã ${sb.step} vượt số đã cắt của SKU (cỡ đoạn ${k}) - gán các đợt Cắt của SKU trước`,
+            `Gán đợt này cho SKU đã chọn sẽ làm số đã ${processStepLabel(sb.step)} vượt số đã cắt của SKU (cỡ đoạn ${mmBySpec.has(k) ? `${mmBySpec.get(k)}mm` : k}) - gán các đợt Cắt của SKU trước`,
           );
         }
       }
@@ -1502,7 +1505,9 @@ export class SteelIssuesService {
         include: { segments: { include: { segmentSpec: true } } },
       });
       if (pending.length === 0 || pending.every((b) => b.segments.length === 0)) {
-        throw new BadRequestException(`Chưa có gì mới để gửi KCS ở công đoạn '${step}'`);
+        throw new BadRequestException(
+          `Chưa có gì mới để gửi KCS ở công đoạn ${processStepLabel(step)}`,
+        );
       }
 
       const stepBundle = await tx.stepBundle.create({
@@ -2379,7 +2384,7 @@ export class SteelIssuesService {
     const requiredSteps = await this.resolveRequiredSteps(invoice.id, materialBigId);
     if (!requiredSteps.includes(dto.step)) {
       throw new BadRequestException(
-        `Công đoạn ${dto.step} không thuộc danh sách công đoạn đã chọn sẵn của vật tư này`,
+        `Công đoạn ${processStepLabel(dto.step)} không thuộc danh sách công đoạn đã chọn sẵn của vật tư này`,
       );
     }
 
@@ -2403,7 +2408,7 @@ export class SteelIssuesService {
       }
       if (!allowedSpecIds.has(specKey)) {
         throw new BadRequestException(
-          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không cần công đoạn ${dto.step} theo định mức của SKU đã chọn`,
+          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không cần công đoạn ${processStepLabel(dto.step)} theo định mức của SKU đã chọn`,
         );
       }
     }
@@ -2469,7 +2474,10 @@ export class SteelIssuesService {
           if (stepDoneSoFar + seg.qty > catDone) {
             throw new BadRequestException(
               `Cỡ đoạn ${spec.cutLengthMm.toString()}mm: đã cắt ${catDone} đoạn (của SKU này), đã báo ` +
-                `${dto.step} ${stepDoneSoFar} đoạn - không thể báo thêm ${seg.qty} (vượt số đã cắt)`,
+                // "kể cả đoạn KCS chấm lỗi": màn quét hiện số đã trừ lỗi (17/11/2026), số ở đây là số đã báo thô.
+                `${processStepLabel(dto.step)} ${stepDoneSoFar} đoạn (kể cả đoạn KCS chấm lỗi) - không thể báo thêm ${seg.qty}. ` +
+                // Chỉ cần cắt thêm PHẦN VƯỢT số đã cắt (vd đã cắt 8, đã báo 6, báo thêm 5 -> cắt thêm 3), không phải cả số định báo.
+                `Muốn báo ${processStepLabel(dto.step)} bù thì báo cắt thêm ${stepDoneSoFar + seg.qty - catDone} đoạn ${spec.cutLengthMm.toString()}mm ở máy cắt trước.`,
             );
           }
         }
@@ -2663,7 +2671,7 @@ export class SteelIssuesService {
             specs.find((s) => s.id.toString() === specKey)?.cutLengthMm.toString() ?? specKey;
           throw new BadRequestException(
             `Hủy số cắt này làm cỡ ${mm}mm của SKU chỉ còn ${Math.max(catAfter, 0)} đoạn đã cắt, ít hơn ` +
-              `${done} đoạn đã báo ${step} - hủy lần báo ${step} trước rồi hủy lần báo cắt`,
+              `${done} đoạn đã báo ${processStepLabel(step)} - hủy lần báo ${processStepLabel(step)} trước rồi hủy lần báo cắt`,
           );
         }
       }

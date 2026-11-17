@@ -23,6 +23,7 @@ import { ProductionBatchesService } from '../production-batches/production-batch
 import { PhoiProgressItemResponseDto } from '../steel-issues/dto/phoi-progress-response.dto';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { FloorWorkerStage } from './dto/floor-worker.dto';
+import { goodQty } from './floor-progress.util';
 import { filterByQueueWorkshop, queueWorkshopIdOfPi } from './floor-queue-workshop.util';
 
 const USER_NAME = { select: { firstName: true, lastName: true, username: true } } as const;
@@ -272,7 +273,7 @@ export class FloorReviewService {
           createdAt: b.createdAt,
           waitingSince: this.waitingSince(reports, b.createdAt),
           segments: segs.map(({ cutLengthMm, qty }) => ({ cutLengthMm, qty })),
-          /** Mỗi cỡ: số cần / đã cắt của SKU (cả PI nếu đợt cũ không gắn SKU) + phần vượt. */
+          /** Mỗi cỡ: số cần / số được tính (đã báo trừ lỗi KCS, 17/11/2026) của SKU (cả PI nếu đợt cũ không gắn SKU) + phần vượt + lỗi + đã báo thô. */
           progress: this.segmentProgress(progressItem, b.productionOrderId, segs),
           /** Sắt vào – đoạn ra của LOẠI SẮT này cả PI (mục 21.1.4): đoạn báo vượt sắt đã nhận. null = chưa có số. */
           steelBalance: progressItem?.steelBalance ?? null,
@@ -316,13 +317,18 @@ export class FloorReviewService {
           ? p?.byOrder.find((b) => b.productionOrderId === String(orderId))
           : undefined;
       const required = o ? o.required : (p?.required ?? 0);
-      const done = o ? o.done : (p?.done ?? 0);
+      const reportedQty = o ? o.done : (p?.done ?? 0);
+      const failed = (o ? o.failed : p?.failed) ?? 0;
+      // 17/11/2026: số được tính = đã báo - lỗi KCS -> cắt bù đoạn lỗi không bị coi là vượt.
+      const done = goodQty({ done: reportedQty, failed });
       return {
         cutLengthMm: sg.cutLengthMm,
         qty: sg.qty,
         required,
         done,
         over: Math.max(0, done - required),
+        failed,
+        reportedQty,
       };
     });
   }

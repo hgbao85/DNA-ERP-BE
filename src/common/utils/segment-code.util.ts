@@ -1,4 +1,8 @@
-import { PROCESS_STEPS, ProcessStepValue } from '../constants/process-steps.constant';
+import {
+  PROCESS_STEPS,
+  PROCESS_STEP_LABEL,
+  ProcessStepValue,
+} from '../constants/process-steps.constant';
 
 /**
  * MÃ ĐOẠN (13/11/2026, tồn đoạn kho Phôi theo lệnh - anh Nhân câu 4: "tách theo mã đoạn"): mã đoạn = (cỡ đoạn, bộ công đoạn phụ).
@@ -23,16 +27,8 @@ export const SEGMENT_SUB_STEPS: readonly SegmentSubStep[] = PROCESS_STEPS.filter
 /** Mã đoạn trơn (chỉ cắt). */
 export const TRON_SEGMENT_STEPS = '';
 
-const STEP_LABEL: Record<ProcessStepValue, string> = {
-  CAT: 'Cắt',
-  UON: 'Uốn',
-  DAP: 'Dập',
-  DUC_LO: 'Đục lỗ',
-  TAN: 'Tán',
-  TOP_DAU: 'Tóp đầu',
-  XE: 'Xẻ',
-  NHAN: 'Nhấn',
-};
+/** Giữ tên cũ cho nơi khác import; nguồn nhãn nằm ở process-steps.constant.ts. */
+export const STEP_LABEL = PROCESS_STEP_LABEL;
 
 function isProcessStep(s: string): s is ProcessStepValue {
   return (PROCESS_STEPS as readonly string[]).includes(s);

@@ -24,6 +24,7 @@ import { ProductionBatchesService } from '../production-batches/production-batch
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CutAllocationService, type CutMachineWork } from './cut-allocation.service';
 import { ScanReportDto } from './dto/floor-scan.dto';
+import { goodQty } from './floor-progress.util';
 import {
   queueWorkshopIdOfPi,
   queueWorkshopIdsOfPis,
@@ -557,8 +558,10 @@ export class FloorScanService {
       return { ...base, piecePlans };
     }
 
-    // CUT/STEP: tiến độ theo loại sắt -> cỡ đoạn (byOrder cho biết cỡ nào thuộc SKU nào). Loại sắt chưa có lần
-    // giao nào đã nhận thì CUT chưa báo được (receivedBarCount 0) - FE hiện "chưa nhận sắt".
+    // CUT/STEP: tiến độ theo loại sắt -> cỡ đoạn (byOrder cho biết cỡ nào thuộc SKU nào).
+    // 17/11/2026: `done` trả về màn quét = SỐ ĐƯỢC TÍNH = max(0, đã báo - lỗi KCS) (giống Hàn / Sơn) để báo bù đoạn
+    // lỗi không bị coi là vượt; kèm `failed` (lỗi KCS) và `reportedQty` (số đã báo thô). API phoi-progress vẫn giữ done thô.
+    // Loại sắt chưa có lần giao nào đã nhận thì CUT chưa báo được (receivedBarCount 0) - FE hiện "chưa nhận sắt".
     const progress =
       ws.kind === WorkstationKind.CUT
         ? await this.steelIssues.getPhoiProgress(productionInvoiceId)
@@ -580,11 +583,15 @@ export class FloorScanService {
           segmentSpecId: s.segmentSpecId,
           cutLengthMm: s.cutLengthMm,
           required: s.required,
-          done: s.done,
+          done: goodQty({ done: s.done, failed: s.failed ?? 0 }),
+          failed: s.failed ?? 0,
+          reportedQty: s.done,
           byOrder: s.byOrder.map((b) => ({
             productionOrderId: b.productionOrderId,
             required: b.required,
-            done: b.done,
+            done: goodQty({ done: b.done, failed: b.failed ?? 0 }),
+            failed: b.failed ?? 0,
+            reportedQty: b.done,
           })),
         })),
       })),

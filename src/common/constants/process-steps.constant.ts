@@ -19,6 +19,23 @@ export const PROCESS_STEPS = [
 ] as const;
 export type ProcessStepValue = (typeof PROCESS_STEPS)[number];
 
+/** Nhãn tiếng Việt của từng công đoạn (17/11/2026: nâng từ segment-code.util.ts để câu lỗi / tin nhắn nói "Uốn" thay vì mã "UON"). */
+export const PROCESS_STEP_LABEL: Record<ProcessStepValue, string> = {
+  CAT: 'Cắt',
+  UON: 'Uốn',
+  DAP: 'Dập',
+  DUC_LO: 'Đục lỗ',
+  TAN: 'Tán',
+  TOP_DAU: 'Tóp đầu',
+  XE: 'Xẻ',
+  NHAN: 'Nhấn',
+};
+
+/** Nhãn của 1 mã công đoạn bất kỳ; mã lạ thì trả nguyên mã. */
+export function processStepLabel(step: string): string {
+  return (PROCESS_STEP_LABEL as Record<string, string>)[step] ?? step;
+}
+
 /** Sắp lại 1 mảng processSteps bất kỳ (có thể lộn xộn thứ tự lưu trong DB) theo đúng thứ tự
  *  nghiệp vụ ở trên - dùng trước khi tính "bước liền trước" cho logic chặn báo vượt tiến độ. */
 export function sortProcessSteps(steps: readonly ProcessStepValue[]): ProcessStepValue[] {

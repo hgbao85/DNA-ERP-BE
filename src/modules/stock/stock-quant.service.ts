@@ -74,15 +74,20 @@ export class StockQuantService {
     // (xem schema StockReservation/WarehouseTransferReservation), nên dòng segmentSpec/piece/
     // productVariant KHÔNG có khái niệm "đã giữ chỗ" - available luôn === qty, không gọi
     // getAvailableQty() (hàm này bắt buộc materialId: bigint, không nhận null).
-    // Cùng công thức getAvailableQty(): chiều dài cây giữ nguyên hành vi cũ (trừ phần giữ ở ô 0), không loại PI nào.
+    // Cùng công thức getAvailableQty(), không loại PI nào. 17/11/2026 (lỗi C3): trừ giữ chỗ cắt sắt của ĐÚNG ô chiều dài cây
+    // của dòng (row.stockLengthMm) + giữ chỗ chuyển kho - trước đây chỉ trừ ô 0 nên cột "Khả dụng" của sắt bằng tồn.
     const availableQty = row.materialId
       ? Math.max(
           0,
           Math.round(
             (qty -
-              (reserved.get(
-                StockReservationsService.reservedKey(row.warehouseId, row.materialId, row.spec),
-              ) ?? 0)) *
+              StockReservationsService.reservedFor(
+                reserved,
+                row.warehouseId,
+                row.materialId,
+                row.spec,
+                row.stockLengthMm,
+              )) *
               1e4,
           ) /
             1e4 +

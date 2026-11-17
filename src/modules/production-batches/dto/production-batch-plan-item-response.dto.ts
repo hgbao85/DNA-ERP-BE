@@ -13,6 +13,9 @@ export class ProductionBatchPlanItemResponseDto {
   @Expose() @ApiProperty() pieceId!: string;
   @Expose() @ApiProperty() pieceCode!: string;
   @Expose() @ApiProperty() pieceName!: string;
+  /** Số mảnh cho 1 bộ SKU (BomPiece.qtyPerUnit của bomRevision lệnh đang ghim, ≥ 1) - FE dùng để đổi số mảnh đã làm
+   *  sang số bộ (17/11/2026, lỗi B). Bất biến: plannedQty = qtyPerUnit × số lượng bộ của lệnh. */
+  @Expose() @ApiProperty() qtyPerUnit!: number;
   /** BomPiece.qtyPerUnit × ProductionOrder.quantity. */
   @Expose() @ApiProperty() plannedQty!: number;
   /** Σ ProductionBatch.reportedQty (status=AWAITING_QC) cho đúng (productionOrder, stage, mảnh). */

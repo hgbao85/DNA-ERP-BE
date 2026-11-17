@@ -384,6 +384,11 @@ export interface QcResultNotificationParams {
   failedQty: number;
   /** Role (`BUSINESS_ROLES`) của tổ gửi - Phôi cho đợt cắt, Hàn/Sơn cho đợt sản xuất. */
   senderRole: string;
+  /** 17/11/2026 (TUỲ CHỌN, chỉ đợt Phôi): lỗi cụ thể, vd "Cắt Sắt phi 10: 12 đoạn 471mm lỗi". Có thì thay phần
+   *  "KCS chấm lỗi N" ở tiêu đề. Thiếu (Hàn / Sơn / pat / vật tư TP) thì giữ câu cũ. */
+  detail?: string;
+  /** 17/11/2026 (TUỲ CHỌN): việc QLSX phải làm tiếp. Có thì thay câu chung ở nội dung tin. */
+  todo?: string;
 }
 
 /** Phase 3b, nhóm 7.5-ii "Xuất vật tư tiêu hao / vật tư thành phẩm / bao bì" (xem changelog
@@ -1468,9 +1473,14 @@ const notificationTypeDefinitions = {
     category: 'RESULT',
     severity: 'WARNING',
     entityType: 'QC_REVIEW',
-    title: (p: QcResultNotificationParams) => `${p.piCode}: KCS chấm lỗi ${p.failedQty}`,
+    title: (p: QcResultNotificationParams) =>
+      p.detail
+        ? `${p.piCode}: KCS chấm lỗi - ${p.detail}`
+        : `${p.piCode}: KCS chấm lỗi ${p.failedQty}`,
     // Áp cho mọi đợt gửi KCS (Phôi / Hàn / Sơn): tài khoản thống kê không còn tự báo bù, trừ Vật tư TP.
-    message: () =>
+    // 17/11/2026: đợt Phôi truyền todo (việc cụ thể cho QLSX); thiếu thì giữ câu chung cũ.
+    message: (p: QcResultNotificationParams) =>
+      p.todo ??
       'Công nhân báo bù bằng quét mã QR, QLSX kiểm rồi gửi KCS; Vật tư TP thì báo bù ở Lệnh sản xuất.',
     recipients: (p: QcResultNotificationParams) => ({
       roles: [p.senderRole, BUSINESS_ROLES.PRODUCTION_MANAGER],

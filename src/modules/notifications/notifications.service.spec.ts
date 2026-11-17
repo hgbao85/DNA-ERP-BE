@@ -245,6 +245,46 @@ describe('NotificationsService', () => {
       expect(arg.data.link.params?.focus).toBe('PI_CODE:PI-2026-031');
     });
 
+    it('17/11/2026: QC_FAILED có detail + todo thì tiêu đề / nội dung dùng chúng; thiếu thì giữ câu cũ', async () => {
+      const withPi = prisma as unknown as Record<string, unknown>;
+      withPi.productionInvoice = {
+        findUnique: jest.fn().mockResolvedValue({ id: 9n }),
+        findMany: jest.fn().mockResolvedValue([{ id: 9n, code: 'PI-2026-044' }]),
+      };
+      withPi.productionInvoiceItem = { findMany: jest.fn().mockResolvedValue([]) };
+
+      await service.emit('QC_FAILED', {
+        entityId: '5',
+        params: {
+          piCode: 'PI-2026-044',
+          failedQty: 5,
+          senderRole: 'PHOI',
+          detail: 'Uốn Sắt phi 10: 5 đoạn 355mm lỗi',
+          todo: 'Báo công nhân cắt thêm 5 đoạn 355mm ở máy cắt, rồi báo Uốn bù',
+        },
+      });
+      const [withText] = prisma.notification.create.mock.calls[0] as [
+        { data: { title: string; message: string } },
+      ];
+      expect(withText.data.title).toBe(
+        'PI-2026-044: KCS chấm lỗi - Uốn Sắt phi 10: 5 đoạn 355mm lỗi',
+      );
+      expect(withText.data.message).toBe(
+        'Báo công nhân cắt thêm 5 đoạn 355mm ở máy cắt, rồi báo Uốn bù',
+      );
+
+      prisma.notification.create.mockClear();
+      await service.emit('QC_FAILED', {
+        entityId: '5',
+        params: { piCode: 'PI-2026-044', failedQty: 3, senderRole: 'HAN' },
+      });
+      const [legacy] = prisma.notification.create.mock.calls[0] as [
+        { data: { title: string; message: string } },
+      ];
+      expect(legacy.data.title).toBe('PI-2026-044: KCS chấm lỗi 3');
+      expect(legacy.data.message).toContain('Công nhân báo bù bằng quét mã QR');
+    });
+
     it('Câu 8 (Sản xuất): QC_FAILED với piCode PI- hiện số LSX ở tiêu đề; loại ngoài danh sách không tra PI', async () => {
       const withPi = prisma as unknown as Record<string, unknown>;
       withPi.productionInvoice = {
