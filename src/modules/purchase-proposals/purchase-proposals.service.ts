@@ -38,6 +38,7 @@ import { RealtimeService } from '../../realtime/realtime.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { recomputeProposalStatus } from './purchase-proposal-status.util';
+import { notifyPurchaseProposalCreated } from './purchase-proposal-notify.util';
 import { BossApprovePurchaseProposalDto } from './dto/boss-approve-purchase-proposal.dto';
 import {
   PurchaseProposalItemResponseDto,
@@ -294,6 +295,32 @@ export class PurchaseProposalsService {
       this.logger.error(
         `Failed to create purchase-proposal notification (${type}, proposal ${proposalId}): ${(error as Error).message}`,
       );
+    }
+  }
+
+  /**
+   * MH5 (rà soát 14/11): sau "Thay phiếu" đơn NCC (dòng chưa nhận gì về chờ duyệt). Best-effort, gọi sau commit:
+   *  - đề xuất KHÔNG còn dòng nào "Đang mua" -> đóng "hàng mua sắp về - chờ nhận kho" (thủ kho không còn gì để nhận);
+   *  - mở lại "n vật tư cần mua" (PURCHASE_PROPOSAL_CREATED) cho người mua - các dòng cần xin ký lại.
+   */
+  async afterSupplierOrderRevised(proposalIds: bigint[], actorUserId: string): Promise<void> {
+    for (const proposalId of proposalIds) {
+      try {
+        const waiting = await this.prisma.purchaseProposalItem.count({
+          where: { proposalId, status: PurchaseProposalStatus.PURCHASING },
+        });
+        if (waiting === 0) await this.resolveReadyToReceive(proposalId);
+        await notifyPurchaseProposalCreated(
+          this.prisma,
+          this.notifications,
+          proposalId,
+          actorUserId,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Không cập nhật được thông báo sau thay phiếu (đề xuất ${proposalId}): ${(error as Error).message}`,
+        );
+      }
     }
   }
 

@@ -27,6 +27,7 @@ describe('WarehouseTransfersService', () => {
   };
   let prisma: {
     warehouse: { findUnique: jest.Mock };
+    material: { findMany: jest.Mock };
     warehouseTransfer: {
       create: jest.Mock;
       findUnique: jest.Mock;
@@ -132,6 +133,12 @@ describe('WarehouseTransfersService', () => {
   beforeEach(() => {
     prisma = {
       warehouse: { findUnique: jest.fn() },
+      // CK11 14/11: tên + đơn vị dòng phiếu lấy từ danh mục vật tư (mặc định: mọi id hỏi tới đều có, đơn vị 'kg').
+      material: {
+        findMany: jest.fn((args: { where: { id: { in: bigint[] } } }) =>
+          Promise.resolve(args.where.id.in.map((id) => ({ id, name: 'Sat 25', unit: 'kg' }))),
+        ),
+      },
       warehouseTransfer: {
         create: jest.fn(),
         findUnique: jest.fn(),
@@ -338,6 +345,27 @@ describe('WarehouseTransfersService', () => {
     it('rejects when the caller is scoped to a different warehouse than fromWarehouseId', async () => {
       await expect(service.create(dto, 'vat-tu-tp', 'user-1', 'idem-key-1')).rejects.toThrow(
         ForbiddenException,
+      );
+    });
+
+    it('CK11 14/11: tên + đơn vị dòng phiếu lấy từ danh mục vật tư, bỏ số client gửi', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 100 }, stockLengthMm: 0 }]);
+      prisma.warehouseTransfer.create.mockResolvedValue(transferRow());
+
+      await service.create(
+        { ...dto, items: [{ materialId: '10', materialName: 'Gõ sai', unit: 'tấn', quantity: 5 }] },
+        null,
+        'user-1',
+        'idem-key-ck11',
+      );
+
+      expect(prisma.warehouseTransfer.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+          data: expect.objectContaining({
+            items: { create: [expect.objectContaining({ materialName: 'Sat 25', unit: 'kg' })] },
+          }),
+        }),
       );
     });
 
@@ -1574,6 +1602,30 @@ describe('WarehouseTransfersService', () => {
   });
 
   describe('reject', () => {
+    it('CK12 14/11: kho nhận từ chối phiếu chuyển hàng của LỆNH -> nhắc lại "hàng cần chuyển" cho kho gửi', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
+        transferRow({
+          status: TransferStatus.REJECTED,
+          productionInvoiceId: 77n,
+          fromWarehouseId: 1n,
+        }),
+      );
+
+      await service.reject('50', 'sai hàng', 'vat-tu-tp', 'user-1');
+
+      expect(workshopMove.notifyMovesNeeded).toHaveBeenCalledWith(77n, 1n);
+    });
+
+    it('phiếu chuyển thường (không gắn lệnh) bị từ chối: không nhắc đổi xưởng', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue(
+        transferRow({ status: TransferStatus.REJECTED }),
+      );
+      await service.reject('50', 'sai hàng', 'vat-tu-tp', 'user-1');
+      expect(workshopMove.notifyMovesNeeded).not.toHaveBeenCalled();
+    });
+
     it('rejects with 409 when the transfer is not PENDING', async () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(
         transferRow({ status: TransferStatus.REJECTED }),

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
+import { IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 
 /** POST /stock-ledger/adjust - ngoại lệ duy nhất được ghi stock_ledger trực tiếp qua HTTP. */
 export class CreateStockAdjustmentDto {
@@ -31,8 +31,9 @@ export class CreateStockAdjustmentDto {
   @IsString()
   productVariantId?: string;
 
+  // CK10 (rà soát 14/11): tối đa 4 số lẻ; hàng đếm nguyên (mảnh, đoạn, sản phẩm, cây sắt) kiểm thêm ở StockLedgerService.adjust.
   @ApiProperty()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 4 }, { message: 'Số lượng tối đa 4 chữ số thập phân' })
   @Min(0.0001)
   qty!: number;
 
@@ -41,9 +42,10 @@ export class CreateStockAdjustmentDto {
    *  nhanh tồn kho" ở Admin > Vật tư, nơi chỉ hiện 1 số tổng, không phân biệt bucket). Có giá trị
    *  = điều chỉnh ĐÚNG bucket đó (dùng cho màn hình đã tách hiển thị theo từng chiều dài, vd
    *  MfgWarehousesPage.tsx "Quản lý kho") - optimistic-lock so khớp đúng 1 dòng, không cộng dồn. */
+  // CK10: chiều dài cây là số nguyên mm - trước đây số lẻ lọt xuống DB (cột Int) ra lỗi 500.
   @ApiPropertyOptional()
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
   stockLengthMm?: number;
 

@@ -1,11 +1,14 @@
 import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
-import { AuditAction, Prisma, PrismaClient } from '../../generated/prisma/client';
+import { AuditAction, MfgStage, Prisma, PrismaClient } from '../../generated/prisma/client';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { segmentCodeLabel } from '../../common/utils/segment-code.util';
-import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
+import {
+  WorkshopScope,
+  WorkshopScopeService,
+} from '../../common/workshop-scope/workshop-scope.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -24,7 +27,7 @@ const userName = (u: { firstName: string; lastName: string; username: string } |
 /**
  * Sổ báo vượt tồn đoạn (13/11/2026, anh Nhân câu 2, 6, 7, 9). Hàn / Sơn báo vượt không bị chặn; phía trừ
  * (ProductionBatchesService.consumeSegmentsByCode) ghi 1 dòng ở đây khi thiếu đoạn hoặc làm vượt số lượng lệnh / làm lại.
- * QLSX xem và đóng từng dòng (bắt buộc lý do, có nhật ký); KHSX xem. QLSX gắn xưởng chỉ thấy / đóng dòng của lệnh thuộc xưởng mình.
+ * QLSX xem và đóng từng dòng (bắt buộc lý do, có nhật ký); KHSX xem. QLSX gắn xưởng chỉ thấy / đóng dòng mà kho Phôi trên dòng thuộc xưởng mình (TĐ9, xem canHandle).
  */
 @Injectable()
 export class SegmentOveragesService {
@@ -42,13 +45,14 @@ export class SegmentOveragesService {
     userId: string,
   ): Promise<SegmentOverageResponseDto[]> {
     const status = query.status ?? 'open';
-    const itemWhere = this.workshopScope.itemWhere(await this.workshopScope.getScope(userId));
+    const scope = await this.workshopScope.getScope(userId);
     const where: Prisma.SegmentOverageWhereInput = {};
     if (status === 'open') where.resolvedAt = null;
     else if (status === 'resolved') where.resolvedAt = { not: null };
     if (query.productionInvoiceId)
       where.productionInvoiceId = parseBigIntId(query.productionInvoiceId);
-    if (itemWhere) where.productionInvoice = { items: { some: itemWhere } };
+    const handled = this.handledWhere(scope);
+    if (handled) where.AND = [handled];
     const rows = await this.prisma.segmentOverage.findMany({
       where,
       include: OVERAGE_INCLUDE,
@@ -64,15 +68,16 @@ export class SegmentOveragesService {
       where: { id: bigId },
       select: {
         productionBatchId: true,
-        productionInvoice: { select: { items: { select: { workshopId: true } } } },
+        stage: true,
+        warehouse: { select: { workshopId: true } },
       },
     });
     if (!row) throw new NotFoundException(`Không tìm thấy dòng báo vượt ${id}`);
-    this.workshopScope.assertCanManage(
-      await this.workshopScope.getScope(userId),
-      row.productionInvoice.items.map((i) => i.workshopId),
-      'dòng báo vượt này',
-    );
+    const scope = await this.workshopScope.getScope(userId);
+    if (!this.canHandle(scope, row.stage, row.warehouse.workshopId)) {
+      // Ném đúng câu lỗi "thuộc xưởng khác" chung của hệ thống.
+      this.workshopScope.assertCanManage(scope, [row.warehouse.workshopId], 'dòng báo vượt này');
+    }
     // Đóng có điều kiện: 2 người bấm cùng lúc thì người sau nhận 409, lý do của người trước không bị ghi đè.
     const { count } = await this.prisma.segmentOverage.updateMany({
       where: { id: bigId, resolvedAt: null },
@@ -92,6 +97,32 @@ export class SegmentOveragesService {
       include: OVERAGE_INCLUDE,
     });
     return (await this.toDtos([fresh]))[0];
+  }
+
+  /**
+   * TĐ9 (rà soát 14/11): xem và đóng dùng CÙNG 1 quy tắc - thấy được thì đóng được. Căn cứ là xưởng của KHO PHÔI ghi trên dòng
+   * (nơi đoạn thật sự bị lấy), không theo "lệnh có SKU thuộc xưởng nào" như trước (xem theo "có ít nhất 1 dòng của xưởng mình",
+   * đóng đòi "mọi dòng" -> lệnh trải 2 xưởng thì ai cũng thấy mà không ai đóng được). Dòng của tổ Sơn: xưởng đang sơn nhờ cho
+   * xưởng có kho đó cũng xử lý được (cùng quy tắc hàng đợi tổ Sơn). Kho chưa gắn xưởng: ai cũng được. QLSX không gắn xưởng: tất cả.
+   */
+  private canHandle(scope: WorkshopScope, stage: MfgStage, workshopId: bigint | null): boolean {
+    if (scope.workshopId == null || workshopId == null) return true;
+    if (workshopId === scope.workshopId) return true;
+    return stage === MfgStage.SON && (scope.visibleWorkshopIds ?? []).includes(workshopId);
+  }
+
+  private handledWhere(scope: WorkshopScope): Prisma.SegmentOverageWhereInput | null {
+    if (scope.workshopId == null) return null;
+    const paintsFor = (scope.visibleWorkshopIds ?? []).filter((w) => w !== scope.workshopId);
+    return {
+      OR: [
+        { warehouse: { workshopId: null } },
+        { warehouse: { workshopId: scope.workshopId } },
+        ...(paintsFor.length > 0
+          ? [{ stage: MfgStage.SON, warehouse: { workshopId: { in: paintsFor } } }]
+          : []),
+      ],
+    };
   }
 
   /** Đợt không còn dòng sổ nào mở -> đóng thông báo SEGMENT_OVERAGE_REPORTED của đợt. Best-effort: lỗi chỉ log. */

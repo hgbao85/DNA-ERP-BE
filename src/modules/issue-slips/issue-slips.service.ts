@@ -709,6 +709,11 @@ export class IssueSlipsService {
     for (const issue of done.yields) await this.materialYield.afterCreate(issue, userId);
     for (const issue of done.recipeIssues)
       await this.materialYieldRecipe.afterCreate(issue, userId);
+    // XK9 (rà soát 14/11): xuất theo công thức qua phiếu XK trước đây chỉ phát ISSUE_SLIP - màn Phôi nghe 'material-yield-recipes'
+    // (cùng sự kiện route xuất thẳng phát qua @RealtimeEntityOn) nên không tự tải lại.
+    for (const issue of done.recipeIssues) {
+      this.publishEntity('MATERIAL_YIELD_RECIPE', issue.id, 'CREATED', userId);
+    }
     if (slip.weavingPointId) this.publishWeaving(slip.id, userId);
     this.publish(slip.id, 'UPDATED', userId);
     if (done.steel.length > 0) this.requestFloorAlertsCheck(slip.code);
@@ -734,18 +739,25 @@ export class IssueSlipsService {
     const slip = await this.findRowOrThrow(id);
     this.assertDraft(slip);
     this.assertSlipScope(slip, scope);
-    const { count } = await this.prisma.issueSlip.updateMany({
-      where: { id: slip.id, status: IssueSlipStatus.DRAFT },
-      data: {
-        status: IssueSlipStatus.CANCELLED,
-        cancelledAt: new Date(),
-        cancelReason: reason.trim(),
-      },
-    });
-    if (count !== 1) {
-      throw new ConflictException(
-        `Phiếu ${slip.code} vừa được xuất hoặc huỷ ở nơi khác - tải lại trang`,
-      );
+    // XK8 (rà soát 14/11): update có điều kiện - IssueSlip nay trong danh sách audit-log nên nhật ký ghi được AI huỷ (bảng không
+    // có cột người huỷ); updateMany trước đây không được ghi.
+    try {
+      await this.prisma.issueSlip.update({
+        where: { id: slip.id, status: IssueSlipStatus.DRAFT },
+        data: {
+          status: IssueSlipStatus.CANCELLED,
+          cancelledAt: new Date(),
+          cancelReason: reason.trim(),
+        },
+      });
+    } catch (e) {
+      // Không còn dòng đúng trạng thái (P2025) = 1 yêu cầu khác vừa xử lý.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
+        throw new ConflictException(
+          `Phiếu ${slip.code} vừa được xuất hoặc huỷ ở nơi khác - tải lại trang`,
+        );
+      }
+      throw e;
     }
     this.publish(slip.id, 'UPDATED', userId);
     if (slip.weavingPointId) {
@@ -1373,6 +1385,19 @@ export class IssueSlipsService {
       });
     } catch (error) {
       this.logger.error(`Không phát realtime xuất đan (phiếu ${id}): ${(error as Error).message}`);
+    }
+  }
+
+  private publishEntity(
+    entity: 'MATERIAL_YIELD_RECIPE',
+    id: bigint,
+    action: 'CREATED',
+    actorId: string,
+  ): void {
+    try {
+      this.realtime.publishEntityChanged({ entity, entityId: id, action, actorId });
+    } catch (error) {
+      this.logger.error(`Không phát realtime ${entity} ${id}: ${(error as Error).message}`);
     }
   }
 

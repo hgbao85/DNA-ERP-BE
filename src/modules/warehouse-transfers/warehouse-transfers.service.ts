@@ -322,8 +322,25 @@ export class WarehouseTransfersService {
         }
       }
 
+      // CK11 (rà soát 14/11): tên + đơn vị ghi lên phiếu lấy từ danh mục vật tư, không lấy số client gửi (phiếu in từng có thể
+      // ghi "kg" trong khi sổ kho ghi theo đơn vị thật).
+      const catalog = new Map(
+        (
+          await tx.material.findMany({
+            where: {
+              id: { in: [...itemsByMaterial.values()].map((i) => parseBigIntId(i.materialId)) },
+            },
+            select: { id: true, name: true, unit: true },
+          })
+        ).map((m) => [m.id.toString(), m]),
+      );
+
       for (const item of itemsByMaterial.values()) {
         const materialId = parseBigIntId(item.materialId);
+        const catalogMaterial = catalog.get(materialId.toString());
+        if (!catalogMaterial) {
+          throw new NotFoundException(`Không tìm thấy vật tư ${item.materialId}`);
+        }
         // FOR UPDATE khoá TẤT CẢ dòng stock_quant liên quan (mọi bucket chiều dài) trong lúc tính
         // "tồn khả dụng" - chặn 2 phiếu tạo gần như đồng thời cùng đọc thấy 1 số dư rồi cùng đặt
         // cọc vượt quá tồn thật (oversell race mà unique constraint không bắt được, khác lớp race
@@ -370,8 +387,8 @@ export class WarehouseTransfersService {
         if (quantity > 0) {
           clampedItems.push({
             materialId,
-            materialName: item.materialName,
-            unit: item.unit,
+            materialName: catalogMaterial.name,
+            unit: catalogMaterial.unit,
             quantity,
             note: item.note,
             spec: item.spec,
@@ -960,6 +977,14 @@ export class WarehouseTransfersService {
 
     await this.resolveTransferCreated(rejected.id);
     await this.notifyTransferRejected(rejected, rejectionReason);
+    // CK12 (rà soát 14/11): phiếu chuyển hàng của LỆNH (đổi xưởng) bị kho nhận từ chối - hàng còn ở kho gửi; nhắc lại "Hàng cần
+    // chuyển do đổi xưởng" cho kho gửi như khi kho gửi tự huỷ phiếu (trước đây chỉ báo người lập phiếu).
+    if (rejected.productionInvoiceId) {
+      await this.workshopMove.notifyMovesNeeded(
+        rejected.productionInvoiceId,
+        rejected.fromWarehouseId,
+      );
+    }
     this.publishTransferChanged(rejected.id, 'REJECTED', userId);
     return this.toResponseDto(rejected);
   }
@@ -1467,6 +1492,10 @@ export class WarehouseTransfersService {
     for (const r of dto.items ?? []) {
       const line = transfer.items.find((i) => i.id.toString() === r.id);
       if (!line) throw new BadRequestException(`Dòng ${r.id} không thuộc phiếu ${transfer.code}`);
+      // CK10 (rà soát 14/11): dòng sắt theo cỡ cây đếm bằng CÂY - không nhận 9,5 cây.
+      if (line.stockLengthMm > 0 && !Number.isInteger(r.receivedQty)) {
+        throw new BadRequestException(`${line.materialName}: số cây thực nhận phải là số nguyên`);
+      }
       if (r.receivedQty > line.quantity.toNumber()) {
         throw new BadRequestException(
           `${line.materialName}: thực nhận ${r.receivedQty} lớn hơn số gửi ${line.quantity.toNumber()}`,

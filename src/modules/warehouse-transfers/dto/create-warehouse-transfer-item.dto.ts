@@ -22,7 +22,7 @@ export class CreateWarehouseTransferItemDto {
   unit!: string;
 
   @ApiProperty()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 4 }, { message: 'Số lượng tối đa 4 chữ số thập phân' })
   @Min(0.0001)
   quantity!: number;
 

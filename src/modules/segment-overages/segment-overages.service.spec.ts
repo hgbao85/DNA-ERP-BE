@@ -95,21 +95,50 @@ describe('SegmentOveragesService', () => {
     });
   });
 
-  it('QLSX gắn xưởng chỉ thấy lệnh có SKU thuộc xưởng mình', async () => {
+  it('TĐ9 14/11: QLSX gắn xưởng chỉ thấy dòng mà KHO PHÔI ghi trên dòng thuộc xưởng mình (cùng căn cứ với lúc đóng)', async () => {
     jest.spyOn(scopeOf(), 'getScope').mockResolvedValue(scoped);
     await service.findAll({ status: 'all', productionInvoiceId: '79' }, 'u2');
     expect(whereOf()).toEqual({
       productionInvoiceId: 79n,
-      productionInvoice: {
-        items: { some: { OR: [{ workshopId: null }, { workshopId: { in: [1n] } }] } },
-      },
+      AND: [{ OR: [{ warehouse: { workshopId: null } }, { warehouse: { workshopId: 1n } }] }],
     });
+  });
+
+  it('TĐ9 14/11: xưởng sơn nhờ cho xưởng 2 thấy + đóng được dòng tổ SƠN của kho xưởng 2, KHÔNG thấy/đóng dòng tổ Hàn', async () => {
+    jest
+      .spyOn(scopeOf(), 'getScope')
+      .mockResolvedValue({ workshopId: 1n, workshopName: 'Phú An', visibleWorkshopIds: [1n, 2n] });
+    await service.findAll({ status: 'open' }, 'u2');
+    expect(whereOf()).toEqual({
+      resolvedAt: null,
+      AND: [
+        {
+          OR: [
+            { warehouse: { workshopId: null } },
+            { warehouse: { workshopId: 1n } },
+            { stage: 'SON', warehouse: { workshopId: { in: [2n] } } },
+          ],
+        },
+      ],
+    });
+    prisma.segmentOverage.findUnique.mockResolvedValue({
+      productionBatchId: 300n,
+      stage: 'HAN',
+      warehouse: { workshopId: 2n },
+    });
+    await expect(service.resolve('7', 'x', 'u2')).rejects.toBeInstanceOf(ForbiddenException);
+    prisma.segmentOverage.findUnique.mockResolvedValue({
+      productionBatchId: 300n,
+      stage: 'SON',
+      warehouse: { workshopId: 2n },
+    });
+    await expect(service.resolve('7', 'x', 'u2')).resolves.toBeDefined();
   });
 
   it('đóng dòng: ghi lý do có điều kiện chưa đóng + nhật ký', async () => {
     prisma.segmentOverage.findUnique.mockResolvedValue({
       productionBatchId: 300n,
-      productionInvoice: { items: [{ workshopId: 1n }] },
+      warehouse: { workshopId: 1n },
     });
     const out = await service.resolve('7', 'Đã đếm lại', 'u2');
     // Đợt 300 hết dòng mở -> đóng thông báo báo vượt của đợt.
@@ -133,7 +162,7 @@ describe('SegmentOveragesService', () => {
   it('đợt còn dòng chưa đóng -> giữ thông báo', async () => {
     prisma.segmentOverage.findUnique.mockResolvedValue({
       productionBatchId: 300n,
-      productionInvoice: { items: [] },
+      warehouse: { workshopId: null },
     });
     prisma.segmentOverage.count.mockResolvedValue(1);
     await service.resolve('7', 'Đã đếm lại', 'u2');
@@ -141,7 +170,7 @@ describe('SegmentOveragesService', () => {
   });
 
   it('đóng dòng đã đóng → 409, không ghi nhật ký', async () => {
-    prisma.segmentOverage.findUnique.mockResolvedValue({ productionInvoice: { items: [] } });
+    prisma.segmentOverage.findUnique.mockResolvedValue({ warehouse: { workshopId: null } });
     prisma.segmentOverage.updateMany.mockResolvedValue({ count: 0 });
     await expect(service.resolve('7', 'Đã đếm lại', 'u2')).rejects.toBeInstanceOf(
       ConflictException,
@@ -149,10 +178,10 @@ describe('SegmentOveragesService', () => {
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
-  it('QLSX xưởng khác không đóng được', async () => {
+  it('QLSX xưởng khác (kho Phôi trên dòng thuộc xưởng 2) không đóng được', async () => {
     jest.spyOn(scopeOf(), 'getScope').mockResolvedValue(scoped);
     prisma.segmentOverage.findUnique.mockResolvedValue({
-      productionInvoice: { items: [{ workshopId: 2n }] },
+      warehouse: { workshopId: 2n },
     });
     await expect(service.resolve('7', 'Đã đếm lại', 'u2')).rejects.toBeInstanceOf(
       ForbiddenException,

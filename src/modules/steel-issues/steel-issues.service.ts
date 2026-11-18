@@ -742,17 +742,23 @@ export class SteelIssuesService {
     }
     await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'xác nhận nhận sắt');
     const receivedBarCount = receivedBarCountInput ?? issue.barCount;
-    const { count } = await this.prisma.steelIssue.updateMany({
-      where: { id: issue.id, status: SteelIssueStatus.ISSUED },
-      data: {
-        status: SteelIssueStatus.RECEIVED,
-        receivedBarCount,
-        receivedAt: new Date(),
-        receivedById,
-      },
-    });
-    if (count === 0) {
-      throw new ConflictException(`Đợt sắt ${id} vừa được người khác xác nhận nhận`);
+    // XK8 (rà soát 14/11): update có điều kiện - audit-log ghi được ai nhận / nhận bao nhiêu cây (updateMany không ghi).
+    try {
+      await this.prisma.steelIssue.update({
+        where: { id: issue.id, status: SteelIssueStatus.ISSUED },
+        data: {
+          status: SteelIssueStatus.RECEIVED,
+          receivedBarCount,
+          receivedAt: new Date(),
+          receivedById,
+        },
+      });
+    } catch (e) {
+      // Không còn dòng đúng trạng thái (P2025) = 1 yêu cầu khác vừa xử lý.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
+        throw new ConflictException(`Đợt sắt ${id} vừa được người khác xác nhận nhận`);
+      }
+      throw e;
     }
     const updated = await this.prisma.steelIssue.findUniqueOrThrow({
       where: { id: issue.id },

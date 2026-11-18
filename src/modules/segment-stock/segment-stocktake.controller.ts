@@ -1,7 +1,7 @@
 import { Body, Controller, HttpCode, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsNumber, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
+import { IsInt, IsNumber, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -15,7 +15,8 @@ export class SegmentStocktakeDto {
   @ApiProperty() @IsString() @Matches(/^\d+$/) segmentSpecId!: string;
   /** Bộ công đoạn ('' = trơn). */
   @ApiProperty() @IsString() @MaxLength(100) segmentSteps!: string;
-  @ApiProperty() @IsNumber({ maxDecimalPlaces: 4 }) @Min(0) countedQty!: number;
+  // TĐ10 (rà soát 14/11): đoạn đếm theo cái - số lẻ (2,5) làm ô tồn ra lẻ, phía trừ báo thiếu 0,5.
+  @ApiProperty() @IsInt() @Min(0) countedQty!: number;
   @ApiProperty() @IsNumber({ maxDecimalPlaces: 4 }) expectedCurrentQty!: number;
   @ApiProperty({ description: 'Ghi chú kiểm kê (bắt buộc)' })
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))

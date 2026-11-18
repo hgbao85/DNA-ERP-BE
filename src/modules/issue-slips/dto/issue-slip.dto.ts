@@ -62,8 +62,12 @@ export class IssueSlipLineDto {
   @Min(1)
   barLengthMm?: number;
 
-  @ApiProperty({ description: 'STEEL: số cây (nguyên). Khác: số lượng theo đơn vị vật tư.' })
-  @IsNumber()
+  // XK10 (rà soát 14/11): tối đa 4 số lẻ - cột Decimal(·,4); trước đây 0,00004 lưu thành 0 (phiếu không xác nhận được),
+  // 2,00005 kiểm theo số gửi nhưng lưu 2,0001.
+  @ApiProperty({
+    description: 'STEEL: số cây (nguyên). Khác: số lượng theo đơn vị vật tư (tối đa 4 số lẻ).',
+  })
+  @IsNumber({ maxDecimalPlaces: 4 }, { message: 'Số lượng tối đa 4 chữ số thập phân' })
   @IsPositive()
   qty!: number;
 

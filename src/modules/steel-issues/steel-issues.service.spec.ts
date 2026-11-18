@@ -815,7 +815,7 @@ describe('SteelIssuesService', () => {
 
       const result = await service.receive('100', 'user-2');
 
-      expect(prisma.steelIssue.updateMany).toHaveBeenCalledWith({
+      expect(prisma.steelIssue.update).toHaveBeenCalledWith({
         where: { id: 100n, status: SteelIssueStatus.ISSUED },
         data: expect.objectContaining({
           status: SteelIssueStatus.RECEIVED,
@@ -848,7 +848,7 @@ describe('SteelIssuesService', () => {
 
       await service.receive('100', 'user-2', 18);
 
-      expect(prisma.steelIssue.updateMany).toHaveBeenCalledWith(
+      expect(prisma.steelIssue.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ receivedBarCount: 18 }) as unknown,
         }),
@@ -868,7 +868,12 @@ describe('SteelIssuesService', () => {
 
     it('2 người bấm nhận cùng lúc: người sau nhận 409 (updateMany có điều kiện ISSUED)', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(issue);
-      prisma.steelIssue.updateMany.mockResolvedValue({ count: 0 });
+      prisma.steelIssue.update.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('not found', {
+          code: 'P2025',
+          clientVersion: 'test',
+        }),
+      );
 
       await expect(service.receive('100', 'user-2')).rejects.toThrow(ConflictException);
     });
@@ -900,7 +905,7 @@ describe('SteelIssuesService', () => {
       prisma.productionOrder.findFirst.mockResolvedValue(null);
 
       await expect(service.receive('100', 'user-2')).rejects.toThrow(ConflictException);
-      expect(prisma.steelIssue.updateMany).not.toHaveBeenCalled();
+      expect(prisma.steelIssue.update).not.toHaveBeenCalled();
     });
   });
 

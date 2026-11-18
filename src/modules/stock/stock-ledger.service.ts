@@ -14,6 +14,7 @@ import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { warehouseWhereForScope } from '../../common/utils/warehouse-family.util';
 import { TRON_SEGMENT_STEPS, isNormalizedSegmentSteps } from '../../common/utils/segment-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.contract';
 import { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
@@ -200,6 +201,29 @@ export class StockLedgerService {
     }
   }
 
+  /**
+   * CK10 (rà soát 14/11): hàng đếm nguyên - mảnh, mã đoạn, sản phẩm và sắt (theo cỡ cây hoặc thuộc nhóm Sắt) - không nhận số lẻ
+   * (sửa tồn mảnh 0,5 / 9,5 cây sắt). Vật tư khác (kg, mét...) vẫn được lẻ tới 4 số (DTO).
+   */
+  private async assertWholeCountQty(dto: CreateStockAdjustmentDto): Promise<void> {
+    if (Number.isInteger(dto.qty)) return;
+    let label: string | null = null;
+    if (dto.pieceId) label = 'mảnh';
+    else if (dto.segmentSpecId) label = 'đoạn';
+    else if (dto.productVariantId) label = 'sản phẩm';
+    else if ((dto.stockLengthMm ?? 0) > 0) label = 'cây sắt';
+    else if (dto.materialId) {
+      const m = await this.prisma.material.findUnique({
+        where: { id: parseBigIntId(dto.materialId) },
+        select: { materialGroup: { select: { systemKey: true } } },
+      });
+      if (m?.materialGroup?.systemKey === MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR) label = 'cây sắt';
+    }
+    if (label) {
+      throw new BadRequestException(`Số ${label} phải là số nguyên (nhận ${dto.qty})`);
+    }
+  }
+
   async adjust(
     dto: CreateStockAdjustmentDto,
     idempotencyKey: string,
@@ -213,6 +237,7 @@ export class StockLedgerService {
       fromWarehouseId,
       toWarehouseId,
     );
+    await this.assertWholeCountQty(dto);
     // Gọi lại cùng Idempotency-Key (mất mạng, bấm 2 lần) trả bút toán đã ghi - trước khi kiểm âm bên dưới, vì tồn đã đổi theo
     // chính bút toán đó nên kiểm lại sẽ báo âm oan.
     const replay = await this.prisma.stockLedger.findUnique({
