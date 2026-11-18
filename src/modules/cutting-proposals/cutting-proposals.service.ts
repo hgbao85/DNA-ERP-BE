@@ -23,6 +23,7 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { isIdempotencyConflict } from '../../common/utils/floor-report.util';
 import { findOpenProposalForRecompute } from '../../common/utils/purchase-proposal-lock.util';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
@@ -288,6 +289,18 @@ export interface MachineSolverParams {
   };
 }
 
+/** C5 16/11 - dữ liệu dùng chung cho invoiceReadinessReason() khi kiểm nhiều phương án một lượt. */
+type ReadinessContext = {
+  currentById: Map<bigint, { id: bigint; quantity: number; productionInvoiceId: bigint | null }>;
+  activeByProduct: Map<bigint, bigint>;
+};
+
+type BuiltBomRows = {
+  bomRows: SolverBomRow[];
+  segmentSpecLookup: Map<string, bigint>;
+  segmentNames: Map<string, string[]>;
+};
+
 const LIST_INCLUDE = {
   productionOrder: {
     include: {
@@ -439,6 +452,32 @@ export class CuttingProposalsService {
     return run;
   }
 
+  /**
+   * C5 16/11: tạo phương án theo Idempotency-Key. Kiểm "đã có" ở trên chỉ là đường nhanh - 2 lời gọi cùng khoá chạy đồng thời
+   * đều qua được kiểm đó rồi lời gọi sau vấp UNIQUE (P2002) thành lỗi 500. Nay lời gọi thua đọc lại phương án của lời gọi thắng
+   * và trả về như gọi lại (`replayed`), không chạy solver lần 2.
+   */
+  private async createProposalIdempotent(data: {
+    productionOrderId?: bigint;
+    productionInvoiceId?: bigint;
+    idempotencyKey?: string;
+    requestedById?: string;
+  }) {
+    try {
+      const proposal = await this.prisma.cuttingProposal.create({ data, include: LIST_INCLUDE });
+      return { proposal, replayed: false };
+    } catch (e) {
+      if (data.idempotencyKey && isIdempotencyConflict(e)) {
+        const existing = await this.prisma.cuttingProposal.findUnique({
+          where: { idempotencyKey: data.idempotencyKey },
+          include: LIST_INCLUDE,
+        });
+        if (existing) return { proposal: existing, replayed: true };
+      }
+      throw e;
+    }
+  }
+
   async requestForOrder(
     productionOrderId: bigint,
     options: {
@@ -461,14 +500,12 @@ export class CuttingProposalsService {
       }
     }
 
-    const proposal = await this.prisma.cuttingProposal.create({
-      data: {
-        productionOrderId,
-        idempotencyKey: options.idempotencyKey,
-        requestedById: options.requestedById,
-      },
-      include: LIST_INCLUDE,
+    const { proposal, replayed } = await this.createProposalIdempotent({
+      productionOrderId,
+      idempotencyKey: options.idempotencyKey,
+      requestedById: options.requestedById,
     });
+    if (replayed) return this.toResponseDto(proposal);
     this.invalidateBatchContext();
 
     void this.enqueueSolverRun(
@@ -538,14 +575,12 @@ export class CuttingProposalsService {
       }
     }
 
-    const proposal = await this.prisma.cuttingProposal.create({
-      data: {
-        productionInvoiceId,
-        idempotencyKey: options.idempotencyKey,
-        requestedById: options.requestedById,
-      },
-      include: LIST_INCLUDE,
+    const { proposal, replayed } = await this.createProposalIdempotent({
+      productionInvoiceId,
+      idempotencyKey: options.idempotencyKey,
+      requestedById: options.requestedById,
     });
+    if (replayed) return this.toResponseDto(proposal);
     this.invalidateBatchContext();
 
     void this.enqueueSolverRun(
@@ -890,6 +925,10 @@ export class CuttingProposalsService {
       orderBy: { requestedAt: 'desc' },
       take: 30,
     });
+    // C5 16/11: dòng lệnh + định mức ACTIVE của MỌI phương án DRAFT đọc 1 lần (trước đây 2 câu mỗi phương án).
+    const readinessCtx = await this.loadReadinessContext(
+      rows.filter((r) => r.status === CuttingProposalStatus.DRAFT).flatMap((r) => r.items),
+    );
     const result: CuttingProposalResponseDto[] = [];
     for (const row of rows) {
       const dto = this.toDetailResponseDto(row, config.solverMaxWastePercentage.toNumber());
@@ -898,7 +937,7 @@ export class CuttingProposalsService {
         dto.pendingMaterials = await this.buildPendingMaterials(row.requestParams);
       }
       if (row.status === CuttingProposalStatus.DRAFT) {
-        const reason = await this.invoiceReadinessReason(row, null);
+        const reason = await this.invoiceReadinessReason(row, null, readinessCtx);
         dto.invoiceReadiness = new CuttingProposalInvoiceReadinessDto({
           ready: reason === null,
           reason,
@@ -970,6 +1009,8 @@ export class CuttingProposalsService {
       }[];
     },
     expectedInvoiceId: bigint | null,
+    /** Đã tải sẵn cho nhiều phương án (getBatchSolves); bỏ trống thì tự tải cho riêng phương án này. */
+    preloaded?: ReadinessContext,
   ): Promise<string | null> {
     if (proposal.status === CuttingProposalStatus.CALCULATING) {
       return 'Phương án đang tính - chờ tính xong.';
@@ -990,19 +1031,8 @@ export class CuttingProposalsService {
     }
 
     const snapshot = proposal.items;
-    const current = await this.prisma.productionInvoiceItem.findMany({
-      where: { id: { in: snapshot.map((i) => i.productionInvoiceItemId) } },
-      select: { id: true, quantity: true, productionInvoiceId: true },
-    });
-    const currentById = new Map(current.map((c) => [c.id, c]));
-    const revisions = await this.prisma.bomRevision.findMany({
-      where: {
-        mfgProductId: { in: [...new Set(snapshot.map((i) => i.mfgProductId))] },
-        status: BomRevisionStatus.ACTIVE,
-      },
-      select: { id: true, mfgProductId: true },
-    });
-    const activeByProduct = new Map(revisions.map((r) => [r.mfgProductId, r.id]));
+    const { currentById, activeByProduct } =
+      preloaded ?? (await this.loadReadinessContext(snapshot));
     for (const snap of snapshot) {
       const cur = currentById.get(snap.productionInvoiceItemId);
       if (!cur) return 'Có SKU đã bị xoá kể từ lúc tính - tính lại.';
@@ -1017,6 +1047,30 @@ export class CuttingProposalsService {
       }
     }
     return null;
+  }
+
+  /** Dòng lệnh hiện tại + bản định mức ACTIVE cho tập ảnh chụp SKU - 2 câu cho bao nhiêu phương án cũng được (C5 16/11). */
+  private async loadReadinessContext(
+    snapshot: { productionInvoiceItemId: bigint; mfgProductId: bigint }[],
+  ): Promise<ReadinessContext> {
+    if (snapshot.length === 0) return { currentById: new Map(), activeByProduct: new Map() };
+    const [current, revisions] = await Promise.all([
+      this.prisma.productionInvoiceItem.findMany({
+        where: { id: { in: [...new Set(snapshot.map((i) => i.productionInvoiceItemId))] } },
+        select: { id: true, quantity: true, productionInvoiceId: true },
+      }),
+      this.prisma.bomRevision.findMany({
+        where: {
+          mfgProductId: { in: [...new Set(snapshot.map((i) => i.mfgProductId))] },
+          status: BomRevisionStatus.ACTIVE,
+        },
+        select: { id: true, mfgProductId: true },
+      }),
+    ]);
+    return {
+      currentById: new Map(current.map((c) => [c.id, c])),
+      activeByProduct: new Map(revisions.map((r) => [r.mfgProductId, r.id])),
+    };
   }
 
   /**
@@ -4438,8 +4492,10 @@ export class CuttingProposalsService {
     const demand = new Map<string, SolverBomRow>();
     const segmentSpecLookup = new Map<string, bigint>();
     const segmentNames = new Map<string, string[]>();
+    // C5 16/11: định mức của MỌI SKU đọc 1 lần (2 câu) thay vì 2 câu mỗi SKU.
+    const builtByRevision = await this.buildBomRowsMany(entries.map((e) => e.bomRevisionId));
     for (const { code, bomRevisionId, quantity } of entries) {
-      const built = await this.buildBomRows(bomRevisionId);
+      const built = builtByRevision.get(bomRevisionId)!;
       for (const [key, specId] of built.segmentSpecLookup) {
         segmentSpecLookup.set(key, specId);
       }
@@ -4590,19 +4646,39 @@ export class CuttingProposalsService {
     return resolveMaterialStockLengths(chosen?.[materialId.toString()], defaults);
   }
 
-  private async buildBomRows(bomRevisionId: bigint): Promise<{
-    bomRows: SolverBomRow[];
-    segmentSpecLookup: Map<string, bigint>;
-    segmentNames: Map<string, string[]>;
-  }> {
-    const [pieceBoms, bomPieces] = await Promise.all([
-      this.prisma.pieceBom.findMany({
-        where: { bomRevisionId },
-        include: { piece: true, segmentSpec: true },
-      }),
-      this.prisma.bomPiece.findMany({ where: { bomRevisionId } }),
-    ]);
+  private async buildBomRows(bomRevisionId: bigint): Promise<BuiltBomRows> {
+    return (await this.buildBomRowsMany([bomRevisionId])).get(bomRevisionId)!;
+  }
 
+  /** buildBomRows() cho nhiều bản định mức trong 2 câu truy vấn (C5 16/11). Bản nào không có dòng định mức -> 404 như cũ. */
+  private async buildBomRowsMany(bomRevisionIds: bigint[]): Promise<Map<bigint, BuiltBomRows>> {
+    const ids = [...new Set(bomRevisionIds)];
+    // 1 bản định mức: giữ đúng câu truy vấn cũ (bằng nhau), không cần chia theo bản.
+    const single = ids.length === 1;
+    const where = single ? { bomRevisionId: ids[0] } : { bomRevisionId: { in: ids } };
+    const [allPieceBoms, allBomPieces] = await Promise.all([
+      this.prisma.pieceBom.findMany({ where, include: { piece: true, segmentSpec: true } }),
+      this.prisma.bomPiece.findMany({ where }),
+    ]);
+    const out = new Map<bigint, BuiltBomRows>();
+    for (const id of ids) {
+      out.set(
+        id,
+        this.toBomRows(
+          id,
+          single ? allPieceBoms : allPieceBoms.filter((r) => r.bomRevisionId === id),
+          single ? allBomPieces : allBomPieces.filter((r) => r.bomRevisionId === id),
+        ),
+      );
+    }
+    return out;
+  }
+
+  private toBomRows(
+    bomRevisionId: bigint,
+    pieceBoms: Prisma.PieceBomGetPayload<{ include: { piece: true; segmentSpec: true } }>[],
+    bomPieces: { pieceId: bigint; qtyPerUnit: number }[],
+  ): BuiltBomRows {
     if (pieceBoms.length === 0) {
       throw new NotFoundException(
         `Bản định mức ${bomRevisionId} không có dòng định mức mảnh nào để tính đề xuất`,
@@ -4886,29 +4962,39 @@ export class CuttingProposalsService {
    * nhánh này, xem computeDisplayStatus() - loại trước ở WHERE cho rẻ hơn lọc hết trong JS).
    */
   async countNeedsAction(): Promise<number> {
-    const candidates = await this.prisma.cuttingProposal.findMany({
+    // C5 16/11: đếm thẳng bằng COUNT với điều kiện tương đương computeDisplayStatus() (list-level) = NEEDS_ACTION - trước đây
+    // tải MỌI phương án CALCULATING/DRAFT/FAILED (không giới hạn, tăng dần theo thời gian) rồi lọc trong JS. Đổi nhánh nào ở
+    // computeDisplayStatus() thì phải đổi theo ở đây (test so 2 cách trên cùng bộ dữ liệu).
+    const now = Date.now();
+    const timeoutSeconds = this.configService.get('solver.timeoutSeconds', { infer: true });
+    return this.prisma.cuttingProposal.count({
       where: {
-        status: {
-          in: [
-            CuttingProposalStatus.CALCULATING,
-            CuttingProposalStatus.DRAFT,
-            CuttingProposalStatus.FAILED,
-          ],
-        },
         // Lượt tính trước PI là việc của KHSX (thông báo riêng), không phải "việc chờ QLSX".
         NOT: { items: { some: {} } },
-      },
-      select: {
-        status: true,
-        hasInfeasibleLine: true,
-        hasOverThreshold: true,
-        completedAt: true,
-        errorMessage: true,
-        requestedAt: true,
+        OR: [
+          { status: CuttingProposalStatus.FAILED },
+          // Nghi treo: tính quá hạn gọi solver + biên an toàn.
+          {
+            status: CuttingProposalStatus.CALCULATING,
+            requestedAt: { lt: new Date(now - (timeoutSeconds + 60) * 1000) },
+          },
+          {
+            status: CuttingProposalStatus.DRAFT,
+            OR: [
+              { hasInfeasibleLine: true },
+              { hasOverThreshold: true },
+              // Hết cửa sổ tự-duyệt (chưa có completedAt = coi như đã quá cửa sổ).
+              { completedAt: null },
+              {
+                completedAt: {
+                  lte: new Date(now - CuttingProposalsService.FINALIZING_WINDOW_MS),
+                },
+              },
+            ],
+          },
+        ],
       },
     });
-    return candidates.filter((p) => this.computeDisplayStatus(p).displayStatus === 'NEEDS_ACTION')
-      .length;
   }
 
   /**

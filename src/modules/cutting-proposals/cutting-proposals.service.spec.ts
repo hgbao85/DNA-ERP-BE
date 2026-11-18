@@ -2,7 +2,11 @@ import { BadRequestException, ConflictException, Logger, NotFoundException } fro
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { CuttingProposalStatus, PurchaseProposalStatus } from '../../generated/prisma/client';
+import {
+  CuttingProposalStatus,
+  Prisma,
+  PurchaseProposalStatus,
+} from '../../generated/prisma/client';
 import { AppConfig } from '../../config/configuration';
 import { ExternalApiHttpError } from '../external/external-api.service';
 import { SolverClientService } from './solver-client.service';
@@ -331,6 +335,50 @@ describe('CuttingProposalsService', () => {
 
       expect(result.id).toBe('1');
       expect(prisma.cuttingProposal.create).not.toHaveBeenCalled();
+    });
+
+    it('C5 16/11: 2 lời gọi cùng khoá chạy đồng thời - lời gọi thua (P2002) trả phương án đã tạo, không chạy solver lần 2', async () => {
+      const existing = {
+        id: 9n,
+        productionOrderId: 1n,
+        status: CuttingProposalStatus.CALCULATING,
+        totalBarsAll: null,
+        totalWasteMm: null,
+        wastePercentage: null,
+        errorMessage: null,
+        requestedAt: new Date(),
+        completedAt: null,
+        approvedAt: null,
+        ...productionOrderRelation(),
+      };
+      // Kiểm "đã có" lúc đầu chưa thấy (lời gọi kia chưa commit), lúc đọc lại sau P2002 thì thấy.
+      prisma.cuttingProposal.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(existing);
+      prisma.cuttingProposal.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: 'test',
+          meta: { target: ['idempotencyKey'] },
+        }),
+      );
+
+      const result = await service.requestForOrder(1n, { idempotencyKey: 'dup-1' });
+
+      expect(result.id).toBe('9');
+      expect(solverClient.propose).not.toHaveBeenCalled();
+    });
+
+    it('C5 16/11: P2002 không phải do idempotencyKey -> vẫn ném lỗi', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue(null);
+      prisma.cuttingProposal.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: 'test',
+          meta: { target: ['otherField'] },
+        }),
+      );
+      await expect(service.requestForOrder(1n, { idempotencyKey: 'k' })).rejects.toThrow(
+        'Unique constraint failed',
+      );
     });
 
     it('creates a CALCULATING row and returns immediately without awaiting the solver call', async () => {
@@ -4172,8 +4220,15 @@ describe('CuttingProposalsService', () => {
           },
         ],
       });
-      prisma.bomPiece.findMany.mockResolvedValue([{ pieceId: 10n, qtyPerUnit: 4 }]);
-      prisma.pieceBom.findMany.mockResolvedValue([pieceBomRow]);
+      // C5 16/11: định mức nhiều SKU đọc 1 lần với bomRevisionId IN (...) - mock trả dòng theo từng bản định mức.
+      prisma.bomPiece.findMany.mockResolvedValue([
+        { bomRevisionId: 5n, pieceId: 10n, qtyPerUnit: 4 },
+        { bomRevisionId: 6n, pieceId: 10n, qtyPerUnit: 4 },
+      ]);
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { ...pieceBomRow, bomRevisionId: 5n },
+        { ...pieceBomRow, bomRevisionId: 6n },
+      ]);
     };
 
     it('cộng dồn cùng (loại sắt, cỡ đoạn) của các SKU khác nhau thành MỘT nhu cầu', async () => {
@@ -4190,6 +4245,11 @@ describe('CuttingProposalsService', () => {
       expect(job.numSets).toBe(1);
       expect(job.bomRows[0].qty_per_set).toBe(1);
       expect(job.label).toBe('PI-50');
+      // C5 16/11: hết N+1 - định mức của cả 2 SKU đọc trong ĐÚNG 1 lượt.
+      expect(prisma.pieceBom.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.pieceBom.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { bomRevisionId: { in: [5n, 6n] } } }),
+      );
     });
 
     it('giữ dấu vết SKU trong tên đoạn để đọc lại log/rawResponse còn lần ra được', async () => {
@@ -5176,6 +5236,23 @@ describe('CuttingProposalsService', () => {
         expect(result[0].displayStatus).toBe('OK');
       });
 
+      it('C5 16/11: nhiều phương án DRAFT - dòng lệnh + định mức ACTIVE đọc đúng 1 lượt cho tất cả', async () => {
+        currentUnchanged();
+        prisma.cuttingProposal.findMany.mockResolvedValue([
+          { ...proposalRow(), lines: [] },
+          { ...proposalRow({ id: 71n }), lines: [] },
+          { ...proposalRow({ id: 72n }), lines: [] },
+        ]);
+        prisma.productionInvoiceItem.findMany.mockClear();
+        prisma.bomRevision.findMany.mockClear();
+
+        const result = await service.getBatchSolves();
+
+        expect(result.every((r) => r.invoiceReadiness?.ready)).toBe(true);
+        expect(prisma.productionInvoiceItem.findMany).toHaveBeenCalledTimes(1);
+        expect(prisma.bomRevision.findMany).toHaveBeenCalledTimes(1);
+      });
+
       it('KHÔNG truy vấn định mức để phân loại máy (chỉ findOne mới làm)', async () => {
         currentUnchanged();
         prisma.cuttingProposal.findMany.mockResolvedValue([{ ...proposalRow(), lines: [] }]);
@@ -5381,6 +5458,41 @@ describe('CuttingProposalsService', () => {
       await expect(service.getBatchSuggestions()).rejects.toThrow('db down');
       await expect(service.getBatchSuggestions()).resolves.toEqual([]);
       expect(reads()).toBe(2);
+    });
+  });
+
+  describe('C5 16/11 - countNeedsAction đếm thẳng bằng COUNT', () => {
+    type DraftCond = {
+      hasInfeasibleLine?: boolean;
+      hasOverThreshold?: boolean;
+      completedAt?: { lte: Date } | null;
+    };
+    type Branch = { status?: string; requestedAt?: { lt: Date }; OR?: DraftCond[] };
+    type CountWhere = { NOT: unknown; OR: Branch[] };
+
+    it('dùng count (không tải hết danh sách), điều kiện tương đương computeDisplayStatus = NEEDS_ACTION', async () => {
+      prisma.cuttingProposal.count.mockResolvedValue(3);
+      prisma.cuttingProposal.findMany.mockClear();
+
+      await expect(service.countNeedsAction()).resolves.toBe(3);
+
+      expect(prisma.cuttingProposal.findMany).not.toHaveBeenCalled();
+      const { where } = (prisma.cuttingProposal.count.mock.calls[0] as [{ where: CountWhere }])[0];
+      expect(where.NOT).toEqual({ items: { some: {} } });
+      expect(where.OR).toContainEqual({ status: CuttingProposalStatus.FAILED });
+      const calc = where.OR.find((b) => b.status === CuttingProposalStatus.CALCULATING);
+      expect(calc?.requestedAt?.lt).toBeInstanceOf(Date);
+      const draft = where.OR.find((b) => b.status === CuttingProposalStatus.DRAFT);
+      expect(draft?.OR).toEqual(
+        expect.arrayContaining([
+          { hasInfeasibleLine: true },
+          { hasOverThreshold: true },
+          { completedAt: null },
+        ]),
+      );
+      // Cửa sổ tự-duyệt 60s: DRAFT vừa xong dưới 60s chưa tính là "cần xử lý".
+      const recent = draft?.OR?.find((c) => c.completedAt?.lte);
+      expect(Date.now() - recent!.completedAt!.lte.getTime()).toBeGreaterThanOrEqual(60_000 - 50);
     });
   });
 });
