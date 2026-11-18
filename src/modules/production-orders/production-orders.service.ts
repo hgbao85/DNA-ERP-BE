@@ -22,7 +22,6 @@ import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SegmentStockService } from '../segment-stock/segment-stock.service';
-import { SegmentProductionService } from '../segment-stock/segment-production.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ProductionOrderResponseDto } from './dto/production-order-response.dto';
 import { ResyncBomDto } from './dto/resync-bom.dto';
@@ -73,7 +72,6 @@ export class ProductionOrdersService {
     private readonly stockReservationsService: StockReservationsService,
     private readonly workshopScope: WorkshopScopeService,
     private readonly segmentStockService: SegmentStockService,
-    private readonly segmentProductionService: SegmentProductionService,
   ) {}
 
   /**
@@ -361,39 +359,38 @@ export class ProductionOrdersService {
    * RELEASED/IN_PROGRESS như cũ, mua vật tư/xuất sắt không phụ thuộc field này). floorStartedAt chỉ
    * set lần đầu (lúc còn PENDING) - "Tiếp tục" sau khi tạm dừng không ghi đè lại mốc bắt đầu gốc.
    * Cho phép gọi lại dù đã ACTIVE (idempotent, không throw) - tránh lỗi vặt nếu bấm 2 lần/2 tab.
+   *
+   * LS1 rà soát 18/11: lệnh đã FINISHED KHÔNG mở lại được (409) - khớp FE ("Kết thúc - không hoàn tác được", không có nút
+   * mở lại). Trước đây mở lại được qua API: PI DONE -> PRODUCING nhưng giữ chỗ vật tư / sắt đã nhả lúc Kết thúc
+   * (releaseReservationsIfPiFinished) không giữ lại được (giữ chỗ sắt chỉ sinh lúc duyệt phương án cắt) -> xuất sắt phần
+   * còn lại 409 vĩnh viễn. Ghi có điều kiện theo trạng thái đọc được + kiểm count: 2 tab bấm chéo nhau (vd 1 tab vừa Kết
+   * thúc) thì lượt sau 409 thay vì ghi đè.
    */
   async startFloor(id: string, userId?: string): Promise<ProductionOrderResponseDto> {
     const bigId = parseBigIntId(id);
     const order = await this.prisma.productionOrder.findUnique({
       where: { id: bigId },
-      include: {
-        productionInvoiceItem: { select: { workshopId: true, productionInvoiceId: true } },
-      },
+      include: { productionInvoiceItem: { select: { workshopId: true } } },
     });
     if (!order) {
       throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     await this.assertCanManageOrder(userId, order.productionInvoiceItem?.workshopId);
-    const updated = await this.prisma.productionOrder.update({
+    const { count } =
+      order.floorStage === 'PENDING'
+        ? await this.prisma.productionOrder.updateMany({
+            where: { id: bigId, floorStage: 'PENDING' },
+            data: { floorStage: 'ACTIVE', floorStartedAt: new Date() },
+          })
+        : await this.prisma.productionOrder.updateMany({
+            where: { id: bigId, floorStage: { in: ['PAUSED', 'ACTIVE'] } },
+            data: { floorStage: 'ACTIVE' },
+          });
+    if (count === 0) await this.throwFloorStageConflict(bigId, 'bắt đầu / tiếp tục');
+    const updated = await this.prisma.productionOrder.findUniqueOrThrow({
       where: { id: bigId },
-      data:
-        order.floorStage === 'PENDING'
-          ? { floorStage: 'ACTIVE', floorStartedAt: new Date() }
-          : { floorStage: 'ACTIVE' },
       include: SALES_ORDER_CODE_INCLUDE,
     });
-    // Mở lại lệnh đã Kết thúc -> PI không còn "xong hết": trả DONE về PRODUCING
-    // (xem releaseReservationsIfPiFinished()).
-    const piId = order.productionInvoiceItem?.productionInvoiceId;
-    if (order.floorStage === 'FINISHED' && piId != null) {
-      await this.prisma.productionInvoice.updateMany({
-        where: { id: piId, status: ProductionInvoiceStatus.DONE },
-        data: { status: ProductionInvoiceStatus.PRODUCING },
-      });
-      // Rà soát 14/11 TĐ4: lúc Kết thúc phần giữ đoạn của lệnh đã nhả về dư - mở lại thì tính lại phía cộng để giữ lại từ dư (nếu
-      // lệnh khác chưa lấy). Công tắc tồn đoạn tắt thì không làm gì; lỗi chỉ ghi log, không chặn mở lại lệnh.
-      await this.segmentProductionService.recomputeAfterQc(piId, userId ?? null, 'PI_REOPENED');
-    }
     const dto = this.toResponseDto(
       updated,
       await this.fetchActiveBomRevisionIds([updated.mfgProductId]),
@@ -412,7 +409,11 @@ export class ProductionOrdersService {
   /**
    * QLSX bấm "Tạm dừng" - đổi floorStage sang PAUSED, gate assertPiHasActiveFloor() (chỉ khớp
    * ACTIVE) sẽ chặn mọi thao tác ghi trên xưởng cho tới khi bấm lại "Bắt đầu"/"Tiếp tục" (cùng
-   * route floor-start, xem controller). Bấm tự do như finishFloor(), không kiểm tra tiến độ.
+   * route floor-start, xem controller). Không kiểm tra tiến độ.
+   *
+   * LS1 rà soát 18/11: CHỈ tạm dừng được lệnh đang làm (ACTIVE; gọi lại khi đã PAUSED thì thôi). Trước đây ghi không điều
+   * kiện - tab cũ bấm "Tạm dừng" lệnh vừa Kết thúc kéo FINISHED -> PAUSED rồi "Tiếp tục" -> ACTIVE, PI vẫn DONE và giữ chỗ
+   * đã nhả -> không xuất sắt được nữa.
    */
   async pauseFloor(id: string, userId?: string): Promise<ProductionOrderResponseDto> {
     const bigId = parseBigIntId(id);
@@ -424,9 +425,13 @@ export class ProductionOrdersService {
       throw new NotFoundException(`Không tìm thấy lệnh xưởng ${id}`);
     }
     await this.assertCanManageOrder(userId, order.productionInvoiceItem?.workshopId);
-    const updated = await this.prisma.productionOrder.update({
-      where: { id: bigId },
+    const { count } = await this.prisma.productionOrder.updateMany({
+      where: { id: bigId, floorStage: { in: ['ACTIVE', 'PAUSED'] } },
       data: { floorStage: 'PAUSED' },
+    });
+    if (count === 0) await this.throwFloorStageConflict(bigId, 'tạm dừng');
+    const updated = await this.prisma.productionOrder.findUniqueOrThrow({
+      where: { id: bigId },
       include: SALES_ORDER_CODE_INCLUDE,
     });
     const dto = this.toResponseDto(
@@ -435,6 +440,19 @@ export class ProductionOrdersService {
     );
     await this.recordFloorChange(order.floorStage, 'PAUSED', dto, 'PRODUCTION_ORDER_FLOOR_PAUSED');
     return dto;
+  }
+
+  /** Ghi trạng thái xưởng có điều kiện không khớp (count = 0) - đọc lại để báo đúng trạng thái hiện tại. */
+  private async throwFloorStageConflict(id: bigint, action: string): Promise<never> {
+    const current = await this.prisma.productionOrder.findUnique({
+      where: { id },
+      select: { floorStage: true },
+    });
+    throw new ConflictException(
+      current?.floorStage === 'FINISHED'
+        ? `Lệnh xưởng ${id} đã Kết thúc - không ${action} được nữa (Kết thúc không hoàn tác được)`
+        : `Lệnh xưởng ${id} đang ở trạng thái ${current?.floorStage ?? 'không rõ'} - không ${action} được. Tải lại trang.`,
+    );
   }
 
   /**
