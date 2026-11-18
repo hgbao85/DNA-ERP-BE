@@ -39,7 +39,12 @@ function auditLogCreateData(call: unknown): AuditLogCreateData {
 
 describe('SkusService', () => {
   let service: SkusService;
-  let bomRevisionsService: { create: jest.Mock; activateInTransaction: jest.Mock };
+  let bomRevisionsService: {
+    create: jest.Mock;
+    activateInTransaction: jest.Mock;
+    forkForAdminOverride: jest.Mock;
+    activateForAdminOverride: jest.Mock;
+  };
   let cloudinaryService: { deleteByUrl: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
   let prisma: {
@@ -215,7 +220,12 @@ describe('SkusService', () => {
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
       $executeRawUnsafe: jest.fn(),
     };
-    bomRevisionsService = { create: jest.fn(), activateInTransaction: jest.fn() };
+    bomRevisionsService = {
+      create: jest.fn(),
+      activateInTransaction: jest.fn(),
+      forkForAdminOverride: jest.fn().mockResolvedValue(11n),
+      activateForAdminOverride: jest.fn(),
+    };
     cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
     notificationsService = {
       emit: jest.fn().mockResolvedValue(undefined),
@@ -727,9 +737,12 @@ describe('SkusService', () => {
       prisma.material.findMany.mockResolvedValue([
         { id: 60n, code: 'DAY-2LY', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
       ]);
-      prisma.pieceMaterialItem.findMany.mockResolvedValue([
-        { photoUrl: 'https://res.cloudinary.com/demo/image/upload/v1/old.jpg' },
-      ]);
+      // Lần 1: ảnh cũ của bản đang ghi; lần 2 (sau commit): ảnh đó không còn dòng định mức nào dùng.
+      prisma.pieceMaterialItem.findMany
+        .mockResolvedValueOnce([
+          { photoUrl: 'https://res.cloudinary.com/demo/image/upload/v1/old.jpg' },
+        ])
+        .mockResolvedValueOnce([]);
       prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
 
       await service.updateManhQuota('5', {
@@ -755,6 +768,45 @@ describe('SkusService', () => {
       expect(cloudinaryService.deleteByUrl).toHaveBeenCalledWith(
         'https://res.cloudinary.com/demo/image/upload/v1/old.jpg',
       );
+    });
+
+    it('L7 16/11: KHÔNG xoá ảnh "mồ côi" nếu bản định mức khác (bản cũ lệnh đang ghim) vẫn dùng ảnh đó', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', code: 'MANH-TUA' }]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 60n, code: 'DAY-2LY', materialGroupId: SYSTEM_GROUP_IDS.WIRE },
+      ]);
+      const oldUrl = 'https://res.cloudinary.com/demo/image/upload/v1/old.jpg';
+      prisma.pieceMaterialItem.findMany
+        .mockResolvedValueOnce([{ photoUrl: oldUrl }])
+        .mockResolvedValueOnce([{ photoUrl: oldUrl }]);
+      prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+
+      await service.updateManhQuota('5', {
+        pieces: [
+          {
+            name: 'Manh tua',
+            qtyPerUnit: 2,
+            segments: [],
+            materialLines: [
+              {
+                group: 'WIRE',
+                materialId: '60',
+                qtyPerPiece: 3,
+                photoUrl: 'https://res.cloudinary.com/demo/image/upload/v1/new.jpg',
+              },
+            ],
+          },
+        ],
+        enteredBy: 'NV Day',
+      });
+
+      expect(prisma.pieceMaterialItem.findMany).toHaveBeenLastCalledWith({
+        where: { photoUrl: { in: [oldUrl] } },
+        select: { photoUrl: true },
+      });
+      expect(cloudinaryService.deleteByUrl).not.toHaveBeenCalled();
     });
 
     it('KHÔNG xoá ảnh khi dòng Dây gửi lại đúng photoUrl cũ (không đổi)', async () => {
@@ -1088,6 +1140,7 @@ describe('SkusService', () => {
 
   // Admin override (2026-10-15): sửa định mức của 1 SKU đã APPROVED (BomRevision ACTIVE) mà
   // không cần quay lại luồng duyệt KHSX/Sếp - xem SkusService.resolveNonDraftOrAdminOverride().
+  // L7 16/11: ghi lên bản sao MỚI (forkForAdminOverride -> 11n) rồi kích hoạt, KHÔNG sửa bản 10n lệnh đang ghim.
   describe('updateManhQuota / updateDetailQuota (admin override trên SKU đã APPROVED)', () => {
     it('updateManhQuota: rejects khi BomRevision đã ACTIVE và actor KHÔNG phải ADMIN', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED' }));
@@ -1099,6 +1152,7 @@ describe('SkusService', () => {
         ]),
       ).rejects.toThrow(ConflictException);
       expect(prisma.bomPiece.deleteMany).not.toHaveBeenCalled();
+      expect(bomRevisionsService.forkForAdminOverride).not.toHaveBeenCalled();
     });
 
     it('updateManhQuota: vẫn rejects khi KHÔNG truyền actorRoles (mặc định [])', async () => {
@@ -1110,7 +1164,7 @@ describe('SkusService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
-    it('updateManhQuota: ADMIN ghi đè được - mở escape hatch DB, không đụng PlanForm/review, ghi AuditLog tay, không báo KHSX', async () => {
+    it('updateManhQuota: ADMIN ghi đè được - ghi lên bản mới rồi kích hoạt, không đụng PlanForm/review, ghi AuditLog tay, không báo KHSX', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
       prisma.piece.findMany.mockResolvedValue([{ id: 20n, name: 'Manh tua', isWoven: false }]);
@@ -1137,12 +1191,18 @@ describe('SkusService', () => {
       );
 
       expect(result.status).toBe('APPROVED');
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      // Không còn mở escape hatch - ghi lên bản DRAFT mới.
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalledWith(
         `SET LOCAL "dna.bom_maintenance" = 'on'`,
       );
+      expect(bomRevisionsService.forkForAdminOverride).toHaveBeenCalledWith(prisma, 10n, 5n);
       expect(prisma.bomPiece.createMany).toHaveBeenCalledWith({
-        data: [expect.objectContaining({ bomRevisionId: 10n, pieceId: 20n, qtyPerUnit: 9 })],
+        data: [expect.objectContaining({ bomRevisionId: 11n, pieceId: 20n, qtyPerUnit: 9 })],
       });
+      expect(prisma.bomPiece.deleteMany).not.toHaveBeenCalledWith({
+        where: { bomRevisionId: 10n },
+      });
+      expect(bomRevisionsService.activateForAdminOverride).toHaveBeenCalledWith(prisma, 11n);
       // Nháp tạm lưu (nếu có) phải được dọn qua $executeRawUnsafe (KHÔNG qua planForm.update() -
       // xem comment updateManhQuota), tránh mồ côi vĩnh viễn hoặc "sống lại" đè dữ liệu mới hơn.
       expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
@@ -1162,6 +1222,8 @@ describe('SkusService', () => {
       expect(auditArgs.recordId).toBe('5');
       expect(auditArgs.oldValue.adminOverrideOnApprovedSku).toBe(true);
       expect(auditArgs.oldValue.quotaType).toBe('manh');
+      expect(auditArgs.oldValue.bomRevisionId).toBe('10');
+      expect(auditArgs.newValue.bomRevisionId).toBe('11');
       const historyArgs = auditLogCreateData(prisma.auditLog.create.mock.calls[1]);
       expect(historyArgs.tableName).toBe('SkuHistory');
       expect(historyArgs.recordId).toBe('5');
@@ -1187,9 +1249,15 @@ describe('SkusService', () => {
       );
 
       expect(result.status).toBe('APPROVED');
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalledWith(
         `SET LOCAL "dna.bom_maintenance" = 'on'`,
       );
+      expect(bomRevisionsService.forkForAdminOverride).toHaveBeenCalledWith(prisma, 10n, 5n);
+      const consumableDeletes = prisma.consumableBom.deleteMany.mock.calls as [
+        { where: { bomRevisionId: bigint } },
+      ][];
+      expect(consumableDeletes.some(([arg]) => arg.where.bomRevisionId === 10n)).toBe(false);
+      expect(bomRevisionsService.activateForAdminOverride).toHaveBeenCalledWith(prisma, 11n);
       expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
         expect.stringContaining('"detailDraft" = NULL'),
         5n,

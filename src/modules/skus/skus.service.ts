@@ -475,22 +475,26 @@ export class SkusService {
     // full-replace này - dọn best-effort SAU KHI transaction đã commit (xem cuối hàm), không
     // được để lỗi Cloudinary chặn việc ghi định mức chính.
     let orphanedPhotoUrls: string[] = [];
+    let overrideRevisionId: bigint | undefined;
 
     const updated = await this.prisma.$transaction(
       async (tx) => {
         if (!dto.pieces) {
           throw new BadRequestException('manh-quota yêu cầu field "pieces"');
         }
-        if (revision.isAdminOverride) {
-          // Mở escape hatch DB (migration 20260921030000_bom_line_items_immutable_when_published)
-          // TRONG ĐÚNG transaction này - nếu không, trigger assert_bom_revision_draft() vẫn chặn
-          // dù resolveDraftBomRevision() đã cho qua ở tầng service.
-          await tx.$executeRawUnsafe(`SET LOCAL "dna.bom_maintenance" = 'on'`);
-        }
-        await this.assertWireLinesAreTicked(tx, revision.id, dto.pieces, dto.wireOptions);
+        // L7 16/11: Admin ghi đè không sửa thẳng bản ACTIVE nữa - ghi lên 1 bản sao mới rồi kích hoạt (cuối transaction),
+        // lệnh đang chạy giữ bản cũ. Xem BomRevisionsService.forkForAdminOverride.
+        const targetRevisionId = revision.isAdminOverride
+          ? (overrideRevisionId = await this.bomRevisionsService.forkForAdminOverride(
+              tx,
+              revision.id,
+              pf.id,
+            ))
+          : revision.id;
+        await this.assertWireLinesAreTicked(tx, targetRevisionId, dto.pieces, dto.wireOptions);
         ({ orphanedPhotoUrls } = await this.replacePieces(
           tx,
-          revision.id,
+          targetRevisionId,
           pf.mfgProductId,
           dto.pieces,
         ));
@@ -498,7 +502,7 @@ export class SkusService {
         if (dto.wireOptions) {
           await this.replaceBomOptions(
             tx,
-            revision.id,
+            targetRevisionId,
             pf.mfgProductId,
             BomOptionKind.WIRE,
             dto.wireOptions,
@@ -527,6 +531,7 @@ export class SkusService {
             `UPDATE "plan_forms" SET "manhDraft" = NULL, "manhDraftSavedAt" = NULL, "manhDraftSavedBy" = NULL WHERE id = $1`,
             pf.id,
           );
+          await this.bomRevisionsService.activateForAdminOverride(tx, targetRevisionId);
           return tx.planForm.findUniqueOrThrow({
             where: { id: pf.id },
             include: PLAN_FORM_INCLUDE,
@@ -563,9 +568,28 @@ export class SkusService {
       },
       { timeout: QUOTA_TRANSACTION_TIMEOUT_MS },
     );
-    await Promise.all(orphanedPhotoUrls.map((url) => this.cloudinaryService.deleteByUrl(url)));
+    // Ảnh còn được dòng của bản định mức khác dùng thì KHÔNG xoá - ghi đè sao chép nguyên bản cũ (RETIRED, lệnh đang chạy
+    // vẫn đọc) nên ảnh "mất" khỏi bản mới vẫn là ảnh của bản cũ.
+    const stillUsed = orphanedPhotoUrls.length
+      ? new Set(
+          (
+            await this.prisma.pieceMaterialItem.findMany({
+              where: { photoUrl: { in: orphanedPhotoUrls } },
+              select: { photoUrl: true },
+            })
+          ).map((r) => r.photoUrl),
+        )
+      : new Set<string | null>();
+    await Promise.all(
+      orphanedPhotoUrls
+        .filter((url) => !stillUsed.has(url))
+        .map((url) => this.cloudinaryService.deleteByUrl(url)),
+    );
     if (revision.isAdminOverride) {
-      await this.writeAdminOverrideAudit(pf.id, 'manh', beforeManhData, dto);
+      await this.writeAdminOverrideAudit(pf.id, 'manh', beforeManhData, dto, {
+        from: revision.id,
+        to: overrideRevisionId,
+      });
       await this.recordHistory(pf.id, 'sku.admin_override', 'Định mức mảnh');
     } else {
       await this.recordHistory(pf.id, 'sku.manh_submitted', `${dto.pieces?.length ?? 0} mảnh`);
@@ -644,15 +668,21 @@ export class SkusService {
       ? (await this.toResponseDtoWithQuota(pf)).detailQuota
       : undefined;
     const enteredAt = new Date();
+    let overrideRevisionId: bigint | undefined;
 
     const updated = await this.prisma.$transaction(
       async (tx) => {
         if (!dto.detailLines) {
           throw new BadRequestException('detail-quota yêu cầu field "detailLines"');
         }
-        if (revision.isAdminOverride) {
-          await tx.$executeRawUnsafe(`SET LOCAL "dna.bom_maintenance" = 'on'`);
-        }
+        // L7 16/11: cùng cách với updateManhQuota - ghi đè lên bản sao mới, lệnh đang chạy giữ bản cũ.
+        const targetRevisionId = revision.isAdminOverride
+          ? (overrideRevisionId = await this.bomRevisionsService.forkForAdminOverride(
+              tx,
+              revision.id,
+              pf.id,
+            ))
+          : revision.id;
         const linesOf = (g: DetailLineGroup): QuotaMaterialLineDto[] =>
           dto
             .detailLines!.filter((l) => l.group === g)
@@ -668,13 +698,13 @@ export class SkusService {
         const otherGroupId = await this.resolveSystemGroupId(tx, MATERIAL_GROUP_SYSTEM_KEYS.OTHER);
         await this.assertCushionLinesAreTicked(
           tx,
-          revision.id,
+          targetRevisionId,
           linesOf('VAT_TU_PHU_KIEN'),
           dto.cushionOptions,
         );
         await this.replaceConsumableLines(
           tx,
-          revision.id,
+          targetRevisionId,
           MfgStage.SON,
           linesOf('DAY_SON'),
           otherGroupId,
@@ -683,7 +713,7 @@ export class SkusService {
         );
         await this.replaceAccessoryItems(
           tx,
-          revision.id,
+          targetRevisionId,
           otherGroupId,
           AccessoryItemKind.ACCESSORY,
           // Nệm vẫn là phụ kiện: dòng nệm (tick tự thêm) nằm ở nhóm Phụ kiện nên chấp nhận cả 2 phân loại.
@@ -693,7 +723,7 @@ export class SkusService {
         );
         await this.replaceAccessoryItems(
           tx,
-          revision.id,
+          targetRevisionId,
           otherGroupId,
           AccessoryItemKind.PACKAGING,
           MaterialDetailKind.PACKAGING,
@@ -704,7 +734,7 @@ export class SkusService {
         if (dto.cushionOptions) {
           await this.replaceBomOptions(
             tx,
-            revision.id,
+            targetRevisionId,
             pf.mfgProductId,
             BomOptionKind.CUSHION,
             dto.cushionOptions,
@@ -728,6 +758,7 @@ export class SkusService {
             `UPDATE "plan_forms" SET "detailDraft" = NULL, "detailDraftSavedAt" = NULL, "detailDraftSavedBy" = NULL WHERE id = $1`,
             pf.id,
           );
+          await this.bomRevisionsService.activateForAdminOverride(tx, targetRevisionId);
           return tx.planForm.findUniqueOrThrow({
             where: { id: pf.id },
             include: PLAN_FORM_INCLUDE,
@@ -769,7 +800,10 @@ export class SkusService {
       { timeout: QUOTA_TRANSACTION_TIMEOUT_MS },
     );
     if (revision.isAdminOverride) {
-      await this.writeAdminOverrideAudit(pf.id, 'detail', beforeDetailQuota, dto);
+      await this.writeAdminOverrideAudit(pf.id, 'detail', beforeDetailQuota, dto, {
+        from: revision.id,
+        to: overrideRevisionId,
+      });
       await this.recordHistory(pf.id, 'sku.admin_override', 'Định mức chi tiết');
     } else {
       await this.recordHistory(
@@ -1105,21 +1139,17 @@ export class SkusService {
    * nếu revision đã có nhưng không còn DRAFT (PlanForm đã qua Sếp duyệt cuối - xem doc comment
    * resolveDraftBomRevision), CHỈ role ADMIN mới được trả về chính revision đó để ghi tiếp; mọi
    * role khác vẫn bị chặn tuyệt đối như trước (không đổi hành vi cho KHSX/account chuyên trách).
-   * `isAdminOverride=true` báo cho updateManhQuota/updateDetailQuota biết phải: (1) mở escape
-   * hatch DB `SET LOCAL "dna.bom_maintenance" = 'on'` trong transaction ghi (nếu không, trigger
-   * `assert_bom_revision_draft()` - migration 20260921030000 - vẫn chặn dù qua được check này ở
-   * tầng service), (2) KHÔNG đụng PlanFormManhReview/DetailReview hay forward lại PlanForm - SKU
-   * vẫn APPROVED, không có vòng duyệt nào để "nộp lại", và (3) ghi AuditLog TAY thay cho luồng
-   * notify KHSX bình thường (xem writeAdminOverrideAudit).
+   * `isAdminOverride=true` báo cho updateManhQuota/updateDetailQuota biết phải: (1) ghi lên 1 bản
+   * định mức MỚI thay vì bản trả về ở đây (xem dưới), (2) KHÔNG đụng PlanFormManhReview/DetailReview
+   * hay forward lại PlanForm - SKU vẫn APPROVED, không có vòng duyệt nào để "nộp lại", và (3) ghi
+   * AuditLog TAY thay cho luồng notify KHSX bình thường (xem writeAdminOverrideAudit).
    *
-   * QUYẾT ĐỊNH 18/11/2026 (L7 danh sách lỗi 16/11, user chốt) - KHÔNG CHẤP NHẬN hành vi hiện tại, CHƯA SỬA:
-   * ghi đè đang sửa THẲNG bản ACTIVE mà mọi lệnh sản xuất của SKU đã ghim (ProductionOrder.bomRevisionId),
-   * nên lệnh ĐANG CHẠY đổi định mức ngay (số cây sắt, đoạn Phôi phải cắt, vật tư cần xuất, đề xuất mua tính
-   * lại theo số mới dù đã cắt / mua một phần theo số cũ). Yêu cầu: lệnh đang chạy GIỮ định mức cũ, chỉ lệnh
-   * duyệt SAU dùng định mức mới. Hướng làm khi sửa: ghi đè tạo bản định mức MỚI (sao chép bản ACTIVE rồi ghi
-   * lên bản mới) và kích hoạt nó (BomRevisionsService.activateInTransaction - bản cũ thành RETIRED nhưng lệnh
-   * đang ghim vẫn đọc được); KHÔNG ghi thẳng bản ACTIVE nữa, bỏ SET LOCAL "dna.bom_maintenance" ở luồng này.
-   * Kiểm lại: phương án cắt / giữ chỗ / đề xuất mua của lệnh cũ không bị tính lại theo bản mới.
+   * L7 danh sách lỗi 16/11 (user chốt 18/11, ĐÃ SỬA 18/11): trước đây ghi đè sửa THẲNG bản ACTIVE mà mọi
+   * lệnh sản xuất của SKU đã ghim (ProductionOrder.bomRevisionId) - lệnh ĐANG CHẠY đổi định mức ngay. Nay
+   * ghi đè sao chép bản ACTIVE sang bản mới, ghi lên bản mới rồi kích hoạt (BomRevisionsService.
+   * forkForAdminOverride + activateForAdminOverride, cùng 1 transaction ghi) - bản cũ RETIRED, lệnh đang
+   * ghim giữ số cũ; lệnh duyệt sau dùng số mới; lệnh chưa bắt đầu muốn theo số mới thì QLSX "Nạp lại định
+   * mức" (resyncBom). Không còn mở `dna.bom_maintenance` ở luồng này.
    */
   private resolveNonDraftOrAdminOverride(
     pf: PlanFormWithRefs,
@@ -1148,14 +1178,20 @@ export class SkusService {
     quotaType: 'manh' | 'detail',
     oldValue: unknown,
     newValue: unknown,
+    revisions: { from: bigint; to?: bigint },
   ): Promise<void> {
     const auditLogClient = this.prisma as unknown as Pick<PrismaClient, 'auditLog'>;
     await writeAuditLog(auditLogClient, this.cls, {
       action: AuditAction.UPDATE,
       tableName: 'PlanForm',
       recordId: planFormId.toString(),
-      oldValue: { quotaType, adminOverrideOnApprovedSku: true, data: oldValue },
-      newValue: { quotaType, data: newValue },
+      oldValue: {
+        quotaType,
+        adminOverrideOnApprovedSku: true,
+        bomRevisionId: revisions.from.toString(),
+        data: oldValue,
+      },
+      newValue: { quotaType, bomRevisionId: revisions.to?.toString() ?? null, data: newValue },
     });
   }
 

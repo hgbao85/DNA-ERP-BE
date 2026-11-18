@@ -12,7 +12,6 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { BomRevisionsService } from './bom-revisions.service';
 import { CreateBomAccessoryItemDto } from './dto/create-bom-accessory-item.dto';
@@ -82,17 +81,16 @@ export class BomRevisionsController {
     return this.bomRevisionsService.listBomPieces(bomRevisionId);
   }
 
-  // actorRoles: chỉ dùng khi bomRevision không còn DRAFT - cho phép Admin ghi đè 1 bản đã ACTIVE
-  // mà không cần qua lại luồng duyệt (xem BomRevisionsService.assertDraftOrAdminOverride()).
+  // Chỉ sửa được bản DRAFT. Admin muốn đổi định mức SKU đã duyệt thì sửa ở màn định mức SKU - luồng đó tạo bản
+  // định mức MỚI, lệnh đang chạy giữ bản cũ (L7 16/11, xem BomRevisionsService.forkForAdminOverride).
   @Patch(':bomRevisionId/bom-pieces/:id')
   @RequirePermissions(UPDATE)
   updateBomPiece(
     @Param('bomRevisionId') bomRevisionId: string,
     @Param('id') id: string,
     @Body() dto: UpdateBomPieceDto,
-    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.bomRevisionsService.updateBomPiece(bomRevisionId, id, dto, actorRoles);
+    return this.bomRevisionsService.updateBomPiece(bomRevisionId, id, dto);
   }
 
   @Delete(':bomRevisionId/bom-pieces/:id')
@@ -122,9 +120,8 @@ export class BomRevisionsController {
     @Param('bomRevisionId') bomRevisionId: string,
     @Param('id') id: string,
     @Body() dto: UpdateBomPartDto,
-    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.bomRevisionsService.updateBomPart(bomRevisionId, id, dto, actorRoles);
+    return this.bomRevisionsService.updateBomPart(bomRevisionId, id, dto);
   }
 
   @Delete(':bomRevisionId/bom-parts/:id')
@@ -154,9 +151,8 @@ export class BomRevisionsController {
     @Param('bomRevisionId') bomRevisionId: string,
     @Param('id') id: string,
     @Body() dto: UpdatePieceBomDto,
-    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.bomRevisionsService.updatePieceBom(bomRevisionId, id, dto, actorRoles);
+    return this.bomRevisionsService.updatePieceBom(bomRevisionId, id, dto);
   }
 
   @Delete(':bomRevisionId/piece-boms/:id')
@@ -189,9 +185,8 @@ export class BomRevisionsController {
     @Param('bomRevisionId') bomRevisionId: string,
     @Param('id') id: string,
     @Body() dto: UpdatePieceMaterialYieldDto,
-    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.bomRevisionsService.updatePieceMaterialYield(bomRevisionId, id, dto, actorRoles);
+    return this.bomRevisionsService.updatePieceMaterialYield(bomRevisionId, id, dto);
   }
 
   @Delete(':bomRevisionId/piece-material-yields/:id')
@@ -221,9 +216,8 @@ export class BomRevisionsController {
     @Param('bomRevisionId') bomRevisionId: string,
     @Param('id') id: string,
     @Body() dto: UpdatePartBomDto,
-    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.bomRevisionsService.updatePartBom(bomRevisionId, id, dto, actorRoles);
+    return this.bomRevisionsService.updatePartBom(bomRevisionId, id, dto);
   }
 
   @Delete(':bomRevisionId/part-boms/:id')
@@ -256,9 +250,8 @@ export class BomRevisionsController {
     @Param('bomRevisionId') bomRevisionId: string,
     @Param('id') id: string,
     @Body() dto: UpdateConsumableBomDto,
-    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.bomRevisionsService.updateConsumableBom(bomRevisionId, id, dto, actorRoles);
+    return this.bomRevisionsService.updateConsumableBom(bomRevisionId, id, dto);
   }
 
   @Delete(':bomRevisionId/consumable-boms/:id')
@@ -291,9 +284,8 @@ export class BomRevisionsController {
     @Param('bomRevisionId') bomRevisionId: string,
     @Param('id') id: string,
     @Body() dto: UpdateBomAccessoryItemDto,
-    @CurrentUser('roles') actorRoles: string[],
   ) {
-    return this.bomRevisionsService.updateBomAccessoryItem(bomRevisionId, id, dto, actorRoles);
+    return this.bomRevisionsService.updateBomAccessoryItem(bomRevisionId, id, dto);
   }
 
   @Delete(':bomRevisionId/accessory-items/:id')

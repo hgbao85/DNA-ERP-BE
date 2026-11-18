@@ -5,26 +5,6 @@ import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { BomRevisionsService } from './bom-revisions.service';
 
-/** Đọc `{ data }` từ 1 lệnh gọi `prisma.auditLog.create.mock.calls[n]` không qua `any` - jest.Mock
- *  không giữ type tham số thật của hàm giả lập, nên tự khai type tối thiểu cần dùng ở test dưới. */
-function auditLogCreateData(call: unknown[]): {
-  tableName: string;
-  recordId: string;
-  oldValue: Record<string, unknown>;
-  newValue: Record<string, unknown>;
-} {
-  return (
-    call[0] as {
-      data: {
-        tableName: string;
-        recordId: string;
-        oldValue: Record<string, unknown>;
-        newValue: Record<string, unknown>;
-      };
-    }
-  ).data;
-}
-
 describe('BomRevisionsService', () => {
   let service: BomRevisionsService;
   let prisma: {
@@ -32,6 +12,8 @@ describe('BomRevisionsService', () => {
     bomRevision: {
       findUnique: jest.Mock;
       findFirst: jest.Mock;
+      findUniqueOrThrow: jest.Mock;
+      findFirstOrThrow: jest.Mock;
       create: jest.Mock;
       updateMany: jest.Mock;
       update: jest.Mock;
@@ -58,6 +40,8 @@ describe('BomRevisionsService', () => {
     auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
     $executeRawUnsafe: jest.Mock;
+    $executeRaw: jest.Mock;
+    $queryRaw: jest.Mock;
   };
 
   const draftRevision = (overrides: Record<string, unknown> = {}) => ({
@@ -76,6 +60,8 @@ describe('BomRevisionsService', () => {
       bomRevision: {
         findUnique: jest.fn(),
         findFirst: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
+        findFirstOrThrow: jest.fn(),
         create: jest.fn(),
         updateMany: jest.fn(),
         update: jest.fn(),
@@ -100,11 +86,11 @@ describe('BomRevisionsService', () => {
         delete: jest.fn(),
       },
       auditLog: { create: jest.fn() },
-      // Admin-override path (withAdminOverride) chạy qua $transaction thật - mock chạy callback
-      // với chính `prisma` giả này làm `tx` (đủ dùng vì tx chỉ cần có cùng shape delegate), và
-      // $executeRawUnsafe (SET LOCAL escape hatch) chỉ cần no-op.
+      // $transaction chạy callback với chính `prisma` giả này làm `tx` (cùng shape delegate).
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
       $executeRawUnsafe: jest.fn(),
+      $executeRaw: jest.fn(),
+      $queryRaw: jest.fn(),
     };
     const cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     service = new BomRevisionsService(
@@ -185,6 +171,115 @@ describe('BomRevisionsService', () => {
         where: { mfgProductId: 2n, status: 'ACTIVE' },
         data: { status: 'RETIRED' },
       });
+    });
+  });
+
+  // L7 16/11: Admin ghi đè định mức SKU đã duyệt - sao chép bản ACTIVE sang bản mới, lệnh đang chạy giữ bản cũ.
+  describe('forkForAdminOverride / activateForAdminOverride', () => {
+    const TABLES = [
+      'bom_piece',
+      'bom_part',
+      'piece_bom',
+      'part_bom',
+      'piece_material_item',
+      'piece_material_yield',
+      'consumable_bom',
+      'bom_accessory_items',
+      'bom_option',
+    ];
+    const active = () => draftRevision({ status: 'ACTIVE', sourcePlanFormId: 5n, revNo: 3 });
+
+    it('khoá theo sản phẩm, chuyển sourcePlanFormId sang bản mới và sao chép đủ 9 bảng dòng con từ bản cũ', async () => {
+      prisma.bomRevision.findUnique.mockResolvedValue(active());
+      prisma.bomRevision.findUniqueOrThrow.mockResolvedValue(active());
+      prisma.bomRevision.findFirstOrThrow.mockResolvedValue(draftRevision({ revNo: 4 }));
+      prisma.bomRevision.create.mockResolvedValue(
+        draftRevision({ id: 11n, revNo: 5, sourcePlanFormId: 5n }),
+      );
+      prisma.$queryRaw.mockResolvedValue(
+        TABLES.flatMap((t) => [
+          { table_name: t, column_name: 'qtyPerUnit' },
+          { table_name: t, column_name: 'createdAt' },
+        ]),
+      );
+
+      const newId = await service.forkForAdminOverride(prisma as any, 10n, 5n);
+
+      expect(newId).toBe(11n);
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1); // pg_advisory_xact_lock
+      expect(prisma.bomRevision.update).toHaveBeenCalledWith({
+        where: { id: 10n },
+        data: { sourcePlanFormId: null },
+      });
+      expect(prisma.bomRevision.create).toHaveBeenCalledWith({
+        data: { mfgProductId: 2n, revNo: 5, sourcePlanFormId: 5n },
+      });
+      // nhả sourcePlanFormId ở bản cũ TRƯỚC khi tạo bản mới (@unique)
+      expect(prisma.bomRevision.update.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.bomRevision.create.mock.invocationCallOrder[0],
+      );
+      const copied = prisma.$executeRawUnsafe.mock.calls.map((c: unknown[]) => c[0] as string);
+      expect(copied).toHaveLength(TABLES.length);
+      TABLES.forEach((t, i) => {
+        expect(copied[i]).toBe(
+          `INSERT INTO "${t}" ("qtyPerUnit", "createdAt", "bomRevisionId") SELECT "qtyPerUnit", "createdAt", $1 FROM "${t}" WHERE "bomRevisionId" = $2 ORDER BY id`,
+        );
+        expect((prisma.$executeRawUnsafe.mock.calls[i] as unknown[]).slice(1)).toEqual([11n, 10n]);
+      });
+      // không mở escape hatch - bản cũ không bị ghi dòng con nào
+      expect(copied.some((q) => q.includes('bom_maintenance'))).toBe(false);
+    });
+
+    it('409 khi lần ghi đè khác vừa chuyển SKU sang bản mới (đọc lại sau khoá)', async () => {
+      prisma.bomRevision.findUnique.mockResolvedValue(active());
+      prisma.bomRevision.findUniqueOrThrow.mockResolvedValue(
+        draftRevision({ status: 'RETIRED', sourcePlanFormId: null }),
+      );
+
+      await expect(service.forkForAdminOverride(prisma as any, 10n, 5n)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(prisma.bomRevision.create).not.toHaveBeenCalled();
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+    });
+
+    it('409 khi bản SKU sở hữu đã RETIRED (SKU khác của sản phẩm đã có bản mới hơn đang dùng)', async () => {
+      const retired = draftRevision({ status: 'RETIRED', sourcePlanFormId: 5n });
+      prisma.bomRevision.findUnique.mockResolvedValue(retired);
+      prisma.bomRevision.findUniqueOrThrow.mockResolvedValue(retired);
+
+      await expect(service.forkForAdminOverride(prisma as any, 10n, 5n)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(prisma.bomRevision.update).not.toHaveBeenCalled();
+    });
+
+    it('activateForAdminOverride: kích hoạt bản DRAFT của phiếu đã APPROVED, bản ACTIVE cũ thành RETIRED', async () => {
+      prisma.bomRevision.findUniqueOrThrow.mockResolvedValue(
+        draftRevision({ id: 11n, sourcePlanFormId: 5n }),
+      );
+      prisma.planForm.findUnique.mockResolvedValue({ id: 5n, status: 'APPROVED' });
+      prisma.bomRevision.update.mockResolvedValue(draftRevision({ id: 11n, status: 'ACTIVE' }));
+
+      const result = await service.activateForAdminOverride(prisma as any, 11n);
+
+      expect(result.status).toBe('ACTIVE');
+      expect(prisma.bomRevision.updateMany).toHaveBeenCalledWith({
+        where: { mfgProductId: 2n, status: 'ACTIVE' },
+        data: { status: 'RETIRED' },
+      });
+    });
+
+    it('activateForAdminOverride: 409 khi phiếu kế hoạch chưa APPROVED (không dùng để vượt luồng Sếp duyệt)', async () => {
+      prisma.bomRevision.findUniqueOrThrow.mockResolvedValue(
+        draftRevision({ id: 11n, sourcePlanFormId: 5n }),
+      );
+      prisma.planForm.findUnique.mockResolvedValue({ id: 5n, status: 'WAITING_BOSS_APPROVAL' });
+
+      await expect(service.activateForAdminOverride(prisma as any, 11n)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(prisma.bomRevision.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -310,11 +405,9 @@ describe('BomRevisionsService', () => {
     });
   });
 
-  // Admin override (2026-10-15): sửa SỐ LƯỢNG trên 1 bản đã ACTIVE, không cần quay lại DRAFT/duyệt
-  // lại - xem BomRevisionsService.assertDraftOrAdminOverride()/withAdminOverride(). Chỉ update
-  // được cho phép, create/remove vẫn chặn tuyệt đối dù actorRoles có ADMIN hay không (các describe
-  // create*/remove* ở trên không truyền actorRoles nên luôn đi nhánh "không override").
-  describe('updateBomAccessoryItem (admin override trên bản đã ACTIVE)', () => {
+  // L7 16/11: route sửa từng dòng không còn cho Admin ghi đè bản đã duyệt - đổi định mức SKU đã duyệt đi qua màn định
+  // mức SKU (SkusService), luồng đó tạo bản MỚI để lệnh đang chạy giữ bản cũ (xem forkForAdminOverride).
+  describe('updateBomAccessoryItem (bản không còn DRAFT)', () => {
     const existingRow = () => ({
       id: 1n,
       bomRevisionId: 10n,
@@ -324,54 +417,15 @@ describe('BomRevisionsService', () => {
       material: { code: 'PK-01' },
     });
 
-    it('rejects khi revision không còn DRAFT và actor KHÔNG phải ADMIN', async () => {
-      prisma.bomRevision.findUnique.mockResolvedValue(draftRevision({ status: 'ACTIVE' }));
-      prisma.bomAccessoryItem.findUnique.mockResolvedValue(existingRow());
-
-      await expect(
-        service.updateBomAccessoryItem('10', '1', { qtyPerUnit: 9 }, ['PURCHASER']),
-      ).rejects.toThrow(ConflictException);
-      expect(prisma.bomAccessoryItem.update).not.toHaveBeenCalled();
-      expect(prisma.$transaction).not.toHaveBeenCalled();
-    });
-
-    it('vẫn rejects khi KHÔNG truyền actorRoles (mặc định [])', async () => {
+    it('rejects khi revision đã ACTIVE - kể cả Admin, không mở escape hatch DB', async () => {
       prisma.bomRevision.findUnique.mockResolvedValue(draftRevision({ status: 'ACTIVE' }));
       prisma.bomAccessoryItem.findUnique.mockResolvedValue(existingRow());
 
       await expect(service.updateBomAccessoryItem('10', '1', { qtyPerUnit: 9 })).rejects.toThrow(
         ConflictException,
       );
-    });
-
-    it('cho phép ADMIN sửa qua escape hatch DB + ghi AuditLog tay khi revision đã ACTIVE', async () => {
-      prisma.bomRevision.findUnique.mockResolvedValue(draftRevision({ status: 'ACTIVE' }));
-      prisma.bomAccessoryItem.findUnique.mockResolvedValue(existingRow());
-      prisma.bomAccessoryItem.update.mockResolvedValue({
-        ...existingRow(),
-        qtyPerUnit: { toNumber: () => 9 },
-      });
-
-      const result = await service.updateBomAccessoryItem('10', '1', { qtyPerUnit: 9 }, ['ADMIN']);
-
-      expect(result.qtyPerUnit).toBe(9);
-      // Phải mở escape hatch TRONG transaction, không update thẳng ngoài transaction.
-      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
-        `SET LOCAL "dna.bom_maintenance" = 'on'`,
-      );
-      expect(prisma.bomAccessoryItem.update).toHaveBeenCalledWith({
-        where: { id: 1n },
-        data: { qtyPerUnit: 9 },
-        include: { material: true },
-      });
-      // AuditLog tay - bomAccessoryItem không nằm trong AUDITED_MODELS tự động.
-      expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
-      const auditArgs = auditLogCreateData(prisma.auditLog.create.mock.calls[0]);
-      expect(auditArgs.tableName).toBe('BomAccessoryItem');
-      expect(auditArgs.recordId).toBe('1');
-      expect(auditArgs.oldValue.__adminOverrideOnActiveRevision).toBe(true);
-      expect(auditArgs.newValue.qtyPerUnit).toBe(9);
+      expect(prisma.bomAccessoryItem.update).not.toHaveBeenCalled();
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
     });
 
     it('vẫn update bình thường (không transaction/audit) khi revision còn DRAFT', async () => {
@@ -382,7 +436,7 @@ describe('BomRevisionsService', () => {
         qtyPerUnit: { toNumber: () => 9 },
       });
 
-      const result = await service.updateBomAccessoryItem('10', '1', { qtyPerUnit: 9 }, ['ADMIN']);
+      const result = await service.updateBomAccessoryItem('10', '1', { qtyPerUnit: 9 });
 
       expect(result.qtyPerUnit).toBe(9);
       expect(prisma.$transaction).not.toHaveBeenCalled();
