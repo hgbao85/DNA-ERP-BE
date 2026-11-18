@@ -5,6 +5,7 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { CuttingProposalsService } from '../cutting-proposals/cutting-proposals.service';
 import { PENDING_APPROVAL_STATUSES } from '../purchase-proposals/purchase-proposals.service';
 import { SalesOrdersService } from '../sales-orders/sales-orders.service';
+import { PaintTransferReminderService } from '../warehouse-transfers/paint-transfer-reminder.service';
 // Phần A – Đợt 4 (YC6): badge Vật tư cần về
 import { MaterialsDueService } from '../materials-due/materials-due.service';
 import { WorkQueueResponseDto } from './dto/work-queue-response.dto';
@@ -43,6 +44,8 @@ export class WorkQueueService {
     // Phần A – Đợt 4 (YC6)
     private readonly materialsDueService: MaterialsDueService,
     private readonly workshopScope: WorkshopScopeService,
+    // N1 (18/11/2026): số lệnh còn mảnh hàn xong chờ chuyển sang kho Sơn (thủ kho Hàn của xưởng không có kho Sơn).
+    private readonly paintReminder: PaintTransferReminderService,
   ) {}
 
   async getWorkQueue(user: {
@@ -64,6 +67,7 @@ export class WorkQueueService {
 
     if (has(BUSINESS_ROLES.PRODUCTION_MANAGER)) {
       set('qlsxProductionQueue', this.countQlsxProductionQueue(user.id));
+      set('qlsxAwaitingFinish', this.countQlsxAwaitingFinish(user.id));
     }
     if (has(BUSINESS_ROLES.BOSS)) {
       set(
@@ -104,6 +108,12 @@ export class WorkQueueService {
     if (has(BUSINESS_ROLES.WAREHOUSE_STAFF)) {
       set('warehouseTransferPending', this.countWarehouseTransferPending(user.warehouseScope));
       set('warehousePurchaseReceiving', this.countWarehousePurchaseReceiving(user.warehouseScope));
+      // Chỉ thủ kho gắn kho Hàn của xưởng không có kho Sơn mới có khoá này (kho khác: không đặt khoá, FE không hiện số).
+      tasks.push(
+        this.countWarehouseToPaintPending(user.warehouseScope).then((n) => {
+          if (n != null) counts.warehouseToPaintPending = n;
+        }),
+      );
     }
     if (has(BUSINESS_ROLES.PHOI_STAFF)) {
       // Sắt cây nhận bằng QR "Khu nhận sắt" (đợt 1, 16/11/2026) nên không đếm; màn "Xác nhận nhận sắt" của
@@ -166,6 +176,52 @@ export class WorkQueueService {
       this.cuttingProposalsService.countNeedsAction(),
     ]);
     return waitingQlsx + needsAction;
+  }
+
+  /**
+   * N1 (18/11/2026): số SKU đã đóng gói đủ (Σ boxesPacked >= số lượng) mà QLSX chưa bấm "Kết thúc" - tính từ dữ liệu, không đọc
+   * bảng tin, nên dữ liệu cũ trước deploy cũng có mặt. Phạm vi xưởng như countQlsxProductionQueue(): QLSX gắn xưởng chỉ đếm SKU
+   * xưởng mình + SKU chưa có xưởng; QLSX chung đếm hết. Bỏ SKU quantity 0, lệnh / SKU đã huỷ.
+   */
+  private async countQlsxAwaitingFinish(userId: string | undefined): Promise<number> {
+    const scope = await this.workshopScope.getScope(userId);
+    const candidates = await this.prisma.productionInvoiceItem.findMany({
+      where: {
+        quantity: { gt: 0 },
+        packagingRecords: { some: {} },
+        productionOrder: {
+          is: {
+            floorStage: { not: 'FINISHED' },
+            status: { not: 'CANCELLED' },
+          },
+        },
+        productionInvoice: { is: { status: { not: 'CANCELLED' } } },
+        ...(scope.workshopId != null
+          ? { OR: [{ workshopId: null }, { workshopId: scope.workshopId }] }
+          : {}),
+      },
+      select: { id: true, quantity: true },
+    });
+    if (candidates.length === 0) return 0;
+    const packed = await this.prisma.packagingRecord.groupBy({
+      by: ['productionInvoiceItemId'],
+      where: { productionInvoiceItemId: { in: candidates.map((c) => c.id) } },
+      _sum: { boxesPacked: true },
+    });
+    const packedById = new Map(
+      packed.map((p) => [p.productionInvoiceItemId.toString(), p._sum.boxesPacked ?? 0]),
+    );
+    return candidates.filter((c) => (packedById.get(c.id.toString()) ?? 0) >= c.quantity).length;
+  }
+
+  /** null = kho của người gọi không phải kho Hàn của xưởng không có kho Sơn (không có khoá). */
+  private async countWarehouseToPaintPending(
+    warehouseScope: string | null,
+  ): Promise<number | null> {
+    if (!warehouseScope) return null;
+    const n = await this.paintReminder.countPendingOrders(warehouseScope);
+    if (n > 0) return n;
+    return (await this.paintReminder.isPaintLegWeldWarehouse(warehouseScope)) ? 0 : null;
   }
 
   /** Định mức mảnh (SAT) + chi tiết (DAY_SON) đã nộp, đang chờ KHSX ra quyết định (status=null -

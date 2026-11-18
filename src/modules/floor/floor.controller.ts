@@ -30,6 +30,7 @@ import {
   UpdateCutAllocationDto,
 } from './dto/cut-allocation.dto';
 import {
+  AdvanceQueueDto,
   EnqueuePiDto,
   QueueCandidatesQueryDto,
   QueueListQueryDto,
@@ -52,6 +53,7 @@ import {
   UpdateFloorWorkerDto,
 } from './dto/floor-worker.dto';
 import { CreateWorkstationDto, UpdateWorkstationDto } from './dto/workstation.dto';
+import { CutAllocationFollowUpService } from './cut-allocation-follow-up.service';
 import { CutAllocationService } from './cut-allocation.service';
 import { CutMachineStatsService } from './cut-machine-stats.service';
 import { FloorAdminService } from './floor-admin.service';
@@ -88,6 +90,7 @@ export class FloorController {
     private readonly review: FloorReviewService,
     private readonly statsService: FloorStatsService,
     private readonly cutAllocation: CutAllocationService,
+    private readonly cutFollowUp: CutAllocationFollowUpService,
     private readonly cutMachineStats: CutMachineStatsService,
   ) {}
 
@@ -307,9 +310,9 @@ export class FloorController {
   advance(
     @Param('stage') stage: string,
     @CurrentUser('id') userId: string,
-    @Body() dto?: QueueWorkshopDto,
+    @Body() dto?: AdvanceQueueDto,
   ) {
-    return this.admin.advance(parseStage(stage), userId, dto?.workshopId);
+    return this.admin.advance(parseStage(stage), userId, dto?.workshopId, dto?.expectedRunningPiId);
   }
 
   /** Hoàn tác "Chuyển PI tiếp" nhầm - chỉ khi PI đang chạy chưa có lần báo nào (xem FloorAdminService.reopenLast). */
@@ -367,15 +370,27 @@ export class FloorController {
   @Post('cut-allocation/auto')
   @RequirePermissions(perm(PermissionAction.CREATE))
   @RequireRole(QLSX)
-  cutAllocationAuto(@Body() dto: AutoCutAllocationDto, @CurrentUser('id') userId: string) {
-    return this.cutAllocation.auto(userId, dto);
+  async cutAllocationAuto(@Body() dto: AutoCutAllocationDto, @CurrentUser('id') userId: string) {
+    const { board, allocated } = await this.cutAllocation.auto(userId, dto);
+    await this.cutFollowUp.afterAllocated({
+      workshopId: board.workshop.id,
+      orders: allocated,
+      source: 'MANUAL',
+    });
+    return board;
   }
 
   @Post('cut-allocation/add')
   @RequirePermissions(perm(PermissionAction.CREATE))
   @RequireRole(QLSX)
-  cutAllocationAdd(@Body() dto: AddCutAllocationDto, @CurrentUser('id') userId: string) {
-    return this.cutAllocation.add(userId, dto);
+  async cutAllocationAdd(@Body() dto: AddCutAllocationDto, @CurrentUser('id') userId: string) {
+    const { board, allocated } = await this.cutAllocation.add(userId, dto);
+    await this.cutFollowUp.afterAllocated({
+      workshopId: board.workshop.id,
+      orders: allocated,
+      source: 'MANUAL',
+    });
+    return board;
   }
 
   @Post('cut-allocation/reorder')

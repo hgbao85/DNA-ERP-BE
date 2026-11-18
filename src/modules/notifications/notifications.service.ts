@@ -101,6 +101,8 @@ export class NotificationsService {
     // WAREHOUSE_TRANSFER_* không có trong set: tham số là `code` (mã phiếu CK), không có piCode.
     'TRANSFER_CHECK_DEFECT_FOUND',
     'PI_ITEM_PACKAGING_COMPLETE',
+    'PI_ITEM_READY_TO_FINISH',
+    'PIECES_TO_PAINT_PENDING',
     'DELIVERY_AT_RISK',
     'PURCHASE_ORDER_QTY_RESET',
     // 13/11/2026 (sót sau tổng duyệt 11/11): các loại dưới cũng đưa mã PI vào tiêu đề / nội dung.
@@ -184,7 +186,7 @@ export class NotificationsService {
 
     if (dedupeKey) {
       const existing = await client.notification.findFirst({
-        where: { dedupeKey, recipients: { some: { resolvedAt: null } } },
+        where: { type, dedupeKey, recipients: { some: { resolvedAt: null } } },
         orderBy: { createdAt: 'desc' },
       });
       if (existing) {
@@ -270,6 +272,46 @@ export class NotificationsService {
         `Không phát được realtime cho notification ${notification.id}: ${(error as Error).message}`,
       );
     }
+  }
+
+  /**
+   * Cập nhật nội dung (tiêu đề / nội dung / link / data) của tin ĐANG MỞ theo (type, dedupeKey) mà KHÔNG đánh dấu chưa đọc
+   * lại, không thêm người nhận, không phát realtime (khác emit gộp: mergeIntoExisting). Dùng khi chỉ số đếm đổi (vd nhắc
+   * chờ lâu 4 -> 6 -> 2) và người đã đọc không cần bị gọi lại. Lọc theo CẢ type lẫn dedupeKey để loại tin khác nhau không
+   * dẫm nhau khi dùng chung dedupeKey. Trả false khi không có tin mở (người gọi tự quyết định emit mới).
+   */
+  async updateOpenContent(
+    type: NotificationType,
+    dedupeKey: string,
+    params: Record<string, unknown>,
+    tx?: PrismaTx,
+  ): Promise<boolean> {
+    const def = NOTIFICATION_TYPES[type];
+    if (!def) {
+      this.logger.error(
+        `updateOpenContent(): không tìm thấy NOTIFICATION_TYPES["${type}"] - bỏ qua.`,
+      );
+      return false;
+    }
+    const client = tx ?? this.prisma;
+    const existing = await client.notification.findFirst({
+      where: { type, dedupeKey, recipients: { some: { resolvedAt: null } } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    if (!existing) return false;
+    const shown = await this.withLenhCode(type, params, client);
+    const link = def.link ? def.link(params) : null;
+    await client.notification.update({
+      where: { id: existing.id },
+      data: {
+        title: def.title(shown),
+        message: def.message(shown),
+        link: (link ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+        data: (params as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+      },
+    });
+    return true;
   }
 
   /** Cập nhật 1 dòng Notification đã gộp (dedupe) - đẩy lại CHƯA đọc cho người nhận hiện có (sự

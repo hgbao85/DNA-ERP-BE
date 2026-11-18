@@ -21,7 +21,8 @@ describe('WorkQueueService', () => {
   let service: WorkQueueService;
   let prisma: {
     planForm: { count: jest.Mock };
-    productionInvoiceItem: { count: jest.Mock };
+    productionInvoiceItem: { count: jest.Mock; findMany: jest.Mock };
+    packagingRecord: { groupBy: jest.Mock };
     planFormManhReview: { count: jest.Mock };
     planFormDetailReview: { count: jest.Mock };
     purchaseProposalItem: { count: jest.Mock };
@@ -39,11 +40,16 @@ describe('WorkQueueService', () => {
   let cuttingProposalsService: { countNeedsAction: jest.Mock };
   let salesOrdersService: { countReadyToShip: jest.Mock };
   let materialsDueService: { countDueNow: jest.Mock }; // Phần A – Đợt 4
+  let paintReminder: { countPendingOrders: jest.Mock; isPaintLegWeldWarehouse: jest.Mock };
 
   beforeEach(() => {
     prisma = {
       planForm: { count: jest.fn().mockResolvedValue(0) },
-      productionInvoiceItem: { count: jest.fn().mockResolvedValue(0) },
+      productionInvoiceItem: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      packagingRecord: { groupBy: jest.fn().mockResolvedValue([]) },
       planFormManhReview: { count: jest.fn().mockResolvedValue(0) },
       planFormDetailReview: { count: jest.fn().mockResolvedValue(0) },
       purchaseProposalItem: { count: jest.fn().mockResolvedValue(0) },
@@ -61,12 +67,17 @@ describe('WorkQueueService', () => {
     cuttingProposalsService = { countNeedsAction: jest.fn().mockResolvedValue(0) };
     salesOrdersService = { countReadyToShip: jest.fn().mockResolvedValue(0) };
     materialsDueService = { countDueNow: jest.fn().mockResolvedValue(0) };
+    paintReminder = {
+      countPendingOrders: jest.fn().mockResolvedValue(0),
+      isPaintLegWeldWarehouse: jest.fn().mockResolvedValue(false),
+    };
     service = new WorkQueueService(
       prisma as unknown as PrismaServiceType,
       cuttingProposalsService as never,
       salesOrdersService as never,
       materialsDueService as never,
       makeScope(),
+      paintReminder as never,
     );
   });
 
@@ -351,6 +362,120 @@ describe('WorkQueueService', () => {
       });
       expect(result.counts).not.toHaveProperty('bossDeadlineChange');
       expect(prisma.deadlineChangeBatch.count).not.toHaveBeenCalled();
+    });
+  });
+
+  // N1 (18/11/2026): số đỏ "Tổng hợp lệnh SX" đếm SKU đã đóng gói đủ mà chưa Kết thúc.
+  describe('qlsxAwaitingFinish', () => {
+    const item = (id: bigint, quantity: number) => ({ id, quantity });
+    const packed = (id: bigint, sum: number | null) => ({
+      productionInvoiceItemId: id,
+      _sum: { boxesPacked: sum },
+    });
+
+    it('đếm SKU đủ (>=), bỏ SKU thiếu; quantity 0 và SKU FINISHED / đã huỷ bị loại ngay ở truy vấn', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        item(1n, 10),
+        item(2n, 10),
+        item(3n, 5),
+      ]);
+      prisma.packagingRecord.groupBy.mockResolvedValue([
+        packed(1n, 10), // đủ
+        packed(2n, 9), // thiếu
+        packed(3n, 5), // đủ
+      ]);
+
+      const result = await service.getWorkQueue({
+        roles: ['PRODUCTION_MANAGER'],
+        warehouseScope: null,
+      });
+
+      expect(result.counts.qlsxAwaitingFinish).toBe(2);
+      const [args] = prisma.productionInvoiceItem.findMany.mock.calls[0] as [
+        { where: Record<string, unknown> },
+      ];
+      const where = args.where;
+      expect(where.quantity).toEqual({ gt: 0 });
+      expect(where.productionOrder).toEqual({
+        is: { floorStage: { not: 'FINISHED' }, status: { not: 'CANCELLED' } },
+      });
+      expect(where.productionInvoice).toEqual({ is: { status: { not: 'CANCELLED' } } });
+      expect(where).not.toHaveProperty('OR');
+    });
+
+    it('không có SKU nào ứng viên -> 0, không gọi groupBy', async () => {
+      const result = await service.getWorkQueue({
+        roles: ['PRODUCTION_MANAGER'],
+        warehouseScope: null,
+      });
+
+      expect(result.counts.qlsxAwaitingFinish).toBe(0);
+      expect(prisma.packagingRecord.groupBy).not.toHaveBeenCalled();
+    });
+
+    it('QLSX gắn xưởng: chỉ đếm SKU xưởng mình + SKU chưa có xưởng', async () => {
+      await service.getWorkQueue({
+        id: 'qlsx-pa',
+        roles: ['PRODUCTION_MANAGER'],
+        warehouseScope: null,
+      });
+
+      const [args] = prisma.productionInvoiceItem.findMany.mock.calls[0] as [
+        { where: Record<string, unknown> },
+      ];
+      const where = args.where;
+      expect(where.OR).toEqual([{ workshopId: null }, { workshopId: 2n }]);
+    });
+
+    it('vai không phải QLSX: không có khoá', async () => {
+      const result = await service.getWorkQueue({ roles: ['BOSS'], warehouseScope: null });
+
+      expect(result.counts).not.toHaveProperty('qlsxAwaitingFinish');
+      expect(prisma.productionInvoiceItem.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('warehouseToPaintPending', () => {
+    it('thủ kho gắn kho Hàn của xưởng không có kho Sơn: = số lệnh còn mảnh chờ chuyển', async () => {
+      paintReminder.countPendingOrders.mockResolvedValue(2);
+
+      const result = await service.getWorkQueue({
+        roles: ['WAREHOUSE_STAFF'],
+        warehouseScope: 'han-pa',
+      });
+
+      expect(paintReminder.countPendingOrders).toHaveBeenCalledWith('han-pa');
+      expect(result.counts.warehouseToPaintPending).toBe(2);
+    });
+
+    it('kho Hàn đó nhưng chưa có lệnh nào chờ: khoá = 0', async () => {
+      paintReminder.isPaintLegWeldWarehouse.mockResolvedValue(true);
+
+      const result = await service.getWorkQueue({
+        roles: ['WAREHOUSE_STAFF'],
+        warehouseScope: 'han-pa',
+      });
+
+      expect(result.counts.warehouseToPaintPending).toBe(0);
+    });
+
+    it('kho khác (kho Hàn Phú An, kho Sơn...): không có khoá', async () => {
+      const result = await service.getWorkQueue({
+        roles: ['WAREHOUSE_STAFF'],
+        warehouseScope: 'phoi-son-han',
+      });
+
+      expect(result.counts).not.toHaveProperty('warehouseToPaintPending');
+    });
+
+    it('thủ kho tổng (không gắn kho): không có khoá, không tra', async () => {
+      const result = await service.getWorkQueue({
+        roles: ['WAREHOUSE_STAFF'],
+        warehouseScope: null,
+      });
+
+      expect(result.counts).not.toHaveProperty('warehouseToPaintPending');
+      expect(paintReminder.countPendingOrders).not.toHaveBeenCalled();
     });
   });
 

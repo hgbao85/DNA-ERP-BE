@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ProductionBatchesModule } from '../production-batches/production-batches.module';
 import { SteelIssuesModule } from '../steel-issues/steel-issues.module';
+import { WarehouseTransfersModule } from '../warehouse-transfers/warehouse-transfers.module';
+import { CutAllocationFollowUpService } from './cut-allocation-follow-up.service';
 import { CutAllocationService } from './cut-allocation.service';
 import { CutMachineStatsService } from './cut-machine-stats.service';
 import { FloorAdminService } from './floor-admin.service';
@@ -14,11 +16,17 @@ import { FloorStatsService } from './floor-stats.service';
 
 /** QR tại máy - xem FloorController. */
 @Module({
-  imports: [SteelIssuesModule, ProductionBatchesModule, NotificationsModule],
+  imports: [
+    SteelIssuesModule,
+    ProductionBatchesModule,
+    NotificationsModule,
+    WarehouseTransfersModule,
+  ],
   controllers: [FloorController],
   providers: [
     FloorAdminService,
     CutAllocationService,
+    CutAllocationFollowUpService,
     CutMachineStatsService,
     FloorScanService,
     FloorReviewService,

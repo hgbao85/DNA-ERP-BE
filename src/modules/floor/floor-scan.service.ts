@@ -339,8 +339,11 @@ export class FloorScanService {
       where: { qrToken },
       include: { workshop: { select: { name: true } } },
     });
-    if (!ws || !ws.isActive) {
+    if (!ws) {
       throw new NotFoundException('Mã QR không còn dùng - báo QLSX in lại tem');
+    }
+    if (!ws.isActive) {
+      throw new NotFoundException('Máy này đang tắt - báo QLSX bật lại máy ở “Máy & tem QR”');
     }
     // Chỉ công nhân CÙNG TỔ báo được qua mã của máy này (mfgRole = tổ).
     if (user.mfgRole !== ws.stage) {

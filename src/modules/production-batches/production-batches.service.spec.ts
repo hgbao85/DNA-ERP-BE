@@ -1554,6 +1554,71 @@ describe('ProductionBatchesService', () => {
 
   // 2026-09-04: tiến độ theo công đoạn (Cắt/Uốn/...) cho vật tư thành phẩm - mirror
   // getStepProgress() bên Sắt (SteelIssuesService) nhưng đơn vị = SỐ MẢNH, không theo cỡ đoạn.
+  describe('getBatchPlan/getBatchPlanBatch - failedQty (lỗi KCS cộng dồn, 18/11/2026)', () => {
+    const review = (orderId: bigint, pieceId: bigint, failedQty: number) => ({
+      failedQty,
+      productionBatch: { productionOrderId: orderId, pieceId },
+    });
+
+    it('đợt 10 mảnh KCS chấm lỗi 4 -> passedQty 6, failedQty 4', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { pieceId: 40n, status: 'QC_DONE', reportedQty: 6 },
+      ]);
+      prisma.qcReview.findMany.mockResolvedValue([review(1n, 40n, 4)]);
+
+      const result = await service.getBatchPlan('1', MfgStage.HAN);
+
+      expect(result.items[0]).toMatchObject({ passedQty: 6, failedQty: 4 });
+      expect(instanceToPlain(result.items[0]).failedQty).toBe(4);
+    });
+
+    it('thêm đợt bù 4 đạt -> passedQty 10, failedQty vẫn 4', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { pieceId: 40n, status: 'QC_DONE', reportedQty: 6 },
+        { pieceId: 40n, status: 'QC_DONE', reportedQty: 4 },
+      ]);
+      prisma.qcReview.findMany.mockResolvedValue([review(1n, 40n, 4), review(1n, 40n, 0)]);
+
+      const result = await service.getBatchPlan('1', MfgStage.HAN);
+
+      expect(result.items[0]).toMatchObject({ passedQty: 10, failedQty: 4 });
+    });
+
+    it('mảnh chưa có đợt chấm -> failedQty 0; truy vấn gộp đúng 1 lần, lọc QC_DONE theo lệnh + stage', async () => {
+      const result = await service.getBatchPlan('1', MfgStage.HAN);
+
+      expect(result.items[0].failedQty).toBe(0);
+      expect(prisma.qcReview.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.qcReview.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            productionBatch: {
+              productionOrderId: { in: [order.id] },
+              stage: MfgStage.HAN,
+              status: 'QC_DONE',
+            },
+          },
+        }),
+      );
+    });
+
+    it('getBatchPlanBatch: 2 lệnh không lẫn failedQty của nhau', async () => {
+      const order2 = { ...order, id: 2n, poNumber: 'PO-32-1', quantity: 5 };
+      prisma.productionOrder.findMany.mockResolvedValue([order, order2]);
+      prisma.qcReview.findMany.mockResolvedValue([
+        review(1n, 40n, 4),
+        review(1n, 40n, 1),
+        review(2n, 40n, 3),
+      ]);
+
+      const result = await service.getBatchPlanBatch(['1', '2'], MfgStage.HAN);
+
+      expect(result['1'].items[0].failedQty).toBe(5);
+      expect(result['2'].items[0].failedQty).toBe(3);
+      expect(prisma.qcReview.findMany).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('getBatchPlan/getBatchPlanBatch - stepProgress vật tư thành phẩm (2026-09-04)', () => {
     it('stage=HAN không có processSteps/stepProgress (luôn rỗng), KHÔNG query PieceStepBatch', async () => {
       const result = await service.getBatchPlan('1', MfgStage.HAN);
@@ -1645,6 +1710,33 @@ describe('ProductionBatchesService', () => {
         passedQty: 6,
         failedQty: 0,
       });
+    });
+
+    it('stage=PHOI, mảnh có khai công đoạn (vd pat Cắt -> Uốn): failedQty của mảnh = tổng lỗi KCS mọi công đoạn (18/11/2026)', async () => {
+      prisma.pieceMaterialYield.findMany.mockResolvedValue([
+        {
+          pieceId: 40n,
+          materialId: 80n,
+          piecesPerBar: 12,
+          processSteps: ['CAT', 'UON'],
+          qtyPerPiece: 1,
+        },
+      ]);
+      const stepReview = (step: string, failedQty: number) => ({
+        failedQty,
+        pieceStepBundle: { productionOrderId: 1n, pieceId: 40n, step },
+      });
+      // Cùng 1 hàm prisma cho 2 truy vấn: lỗi theo đợt mảnh (productionBatch) và lỗi theo công đoạn (pieceStepBundle).
+      prisma.qcReview.findMany.mockImplementation((args: { where: Record<string, unknown> }) =>
+        Promise.resolve(
+          'pieceStepBundle' in args.where ? [stepReview('CAT', 3), stepReview('UON', 2)] : [],
+        ),
+      );
+
+      const result = await service.getBatchPlan('1', MfgStage.PHOI);
+
+      expect(result.items[0].stepProgress.map((s) => s.failedQty)).toEqual([3, 2]);
+      expect(result.items[0].failedQty).toBe(5);
     });
 
     it('nhiều order CÙNG PI cùng bomRevisionId - doneQty theo bước KHÔNG lẫn giữa 2 order (getBatchPlanBatch)', async () => {

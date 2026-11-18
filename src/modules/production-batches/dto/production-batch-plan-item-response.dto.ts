@@ -23,6 +23,10 @@ export class ProductionBatchPlanItemResponseDto {
   /** Σ ProductionBatch.reportedQty (status=QC_DONE) - đã là passed-qty sau khi KCS duyệt, không
    *  phải qty gốc đã báo. */
   @Expose() @ApiProperty() passedQty!: number;
+  /** Σ QcReview.failedQty của các đợt đã KCS chấm (QC_DONE) cho đúng (lệnh, stage, mảnh) - số lỗi cộng dồn
+   *  lịch sử, bất biến (passedQty đã trừ lỗi, đợt bù là đợt mới nên không làm giảm số này). Mảnh Phôi có khai công đoạn
+   *  (processSteps) cộng thêm lỗi KCS của MỌI công đoạn (stepProgress[].failedQty). Mặc định 0. */
+  @Expose() @ApiProperty() failedQty: number = 0;
   /** Σ ProductionBatch.reportedQty (status=OPEN) - đã "Lưu đợt" nhưng CHƯA gửi KCS (2026-10-16, để 3 màn QLSX
    *  hiện cùng số: Đã báo = openQty + awaitingQcQty + passedQty). Mặc định 0. */
   @Expose() @ApiProperty() openQty: number = 0;

@@ -11,6 +11,8 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { StockReservationsService } from './stock-reservations.service';
 import { paginate } from '../../common/utils/paginate.util';
 import { sortOrderBy } from '../../common/utils/sort-order-by.util';
+import { lockBusinessKeyShared } from '../../common/utils/advisory-lock.util';
+import { SEGMENT_LEGACY_CONVERSION_LOCK } from '../segment-stock/segment-stock.config';
 import { warehouseWhereForScope } from '../../common/utils/warehouse-family.util';
 import { TRON_SEGMENT_STEPS, isNormalizedSegmentSteps } from '../../common/utils/segment-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -20,6 +22,13 @@ import { RealtimeEntity, RealtimeEntityAction } from '../../realtime/realtime.co
 import { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto';
 import { ListStockLedgerQueryDto } from './dto/list-stock-ledger-query.dto';
 import { StockLedgerResponseDto } from './dto/stock-ledger-response.dto';
+
+/**
+ * Câu chặn ghi tay tồn đoạn khi dữ liệu đoạn cũ chưa chuyển sang cách quản theo lệnh (kiểm kê đoạn và sửa tồn dùng chung). Đặt ở
+ * đây (SegmentStocktakeService nhập lại) để tránh import vòng.
+ */
+export const SEGMENT_STOCKTAKE_NOT_CONVERTED_MESSAGE =
+  'Chưa ghi kiểm kê đoạn được: dữ liệu đoạn cũ chưa được chuyển sang cách quản theo lệnh, số nhập bây giờ sẽ bị xoá khi chuyển. Báo IT chuyển đổi xong rồi nhập lại số đếm';
 
 type StockLedgerWithRefs = Prisma.StockLedgerGetPayload<{
   include: {
@@ -348,6 +357,18 @@ export class StockLedgerService {
     input: PostStockEntryInput,
     realWarehouseId: bigint,
   ): Promise<{ entry: StockLedgerResponseDto; warning: string | null }> {
+    if (input.segmentSpecId !== undefined) {
+      // Nhánh tồn đoạn: chặn giống kiểm kê đoạn - dữ liệu đoạn chưa chuyển đổi thì số sửa tay sẽ bị lượt chuyển đổi xoá. Đếm SAU
+      // khoá dùng chung chuyển đổi (cùng thứ tự với SegmentStocktakeService).
+      await lockBusinessKeyShared(tx, SEGMENT_LEGACY_CONVERSION_LOCK);
+      const [reservationCount, productionCount] = await Promise.all([
+        tx.segmentReservation.count(),
+        tx.segmentProduction.count(),
+      ]);
+      if (reservationCount + productionCount === 0) {
+        throw new ConflictException(SEGMENT_STOCKTAKE_NOT_CONVERTED_MESSAGE);
+      }
+    }
     const stockLengthMm = input.stockLengthMm ?? 0;
     const spec = input.spec?.trim() ?? '';
     const segmentSteps = input.segmentSteps ?? '';

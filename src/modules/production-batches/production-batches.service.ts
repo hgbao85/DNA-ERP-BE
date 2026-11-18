@@ -129,6 +129,22 @@ export type PieceStepBundleRow = Prisma.PieceStepBundleGetPayload<{
 const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
 
 /**
+ * Lỗi KCS cộng dồn của mảnh Phôi có khai công đoạn (vd pat: Cắt -> Dập), chấm theo PieceStepBundle chứ không qua
+ * ProductionBatch (đợt chốt tự sinh không có QcReview). Cộng MỌI công đoạn: mảnh hỏng ở công đoạn nào cũng là 1 mảnh phải
+ * làm lại (Cắt lỗi 3, Dập lỗi 2 -> thiếu đúng 5). `failedByStep` khoá `<lệnh>:<mảnh>:<công đoạn>`. 18/11/2026.
+ */
+function sumStepFailed(
+  failedByStep: Map<string, number>,
+  orderPieceKey: string,
+  processSteps: readonly string[],
+): number {
+  return processSteps.reduce(
+    (s, step) => s + (failedByStep.get(`${orderPieceKey}:${step}`) ?? 0),
+    0,
+  );
+}
+
+/**
  * Báo sản lượng Hàn/Sơn (M2, thay san-luong.service.ts mock - phần baoSanLuong()). Không cap
  * theo BOM lúc báo (mock không kiểm tra) - KCS mới là bước kiểm soát, xem
  * QcReviewsService.reviewProductionBatch(). Append-create, không state machine phức tạp: chỉ
@@ -1345,7 +1361,7 @@ export class ProductionBatchesService {
     this.assertConsumableStage(stage);
     const order = await this.findOrderWithProductOrThrow(productionOrderId);
 
-    const [bomPieces, batches] = await Promise.all([
+    const [bomPieces, batches, failedByOrderPiece] = await Promise.all([
       stage === MfgStage.PHOI
         ? this.findPhoiEligibleBomPieces(order.bomRevisionId)
         : this.prisma.bomPiece.findMany({
@@ -1356,6 +1372,7 @@ export class ProductionBatchesService {
         where: { productionOrderId: order.id, stage },
         select: { pieceId: true, status: true, reportedQty: true },
       }),
+      this.getFailedQtyByOrderPiece([order.id], stage),
     ]);
 
     const awaitingByPiece = new Map<string, number>();
@@ -1411,6 +1428,9 @@ export class ProductionBatchesService {
         plannedQty,
         awaitingQcQty: awaitingByPiece.get(key) ?? 0,
         passedQty: passedByPiece.get(key) ?? 0,
+        failedQty:
+          (failedByOrderPiece.get(`${order.id}:${key}`) ?? 0) +
+          sumStepFailed(stepBundleMaps.failed, `${order.id}:${key}`, processSteps),
         openQty: openByPiece.get(key) ?? 0,
         rawMaterialOnHand: extras?.rawMaterialOnHand ?? null,
         processSteps,
@@ -1653,29 +1673,39 @@ export class ProductionBatchesService {
         ? await this.getMaterialYieldPlanBatch(orders.map((o) => this.toMaterialYieldOrder(o)))
         : new Map<string, ProductionBatchMaterialYieldItemResponseDto[]>();
 
-    const [bomPiecesByRevision, extrasByRevision, batches, stepBatchDoneMap, stepBundleMaps] =
-      await Promise.all([
-        stage === MfgStage.PHOI
-          ? this.findPhoiEligibleBomPiecesBatch(revisionIds)
-          : this.findBomPiecesByStageBatch(revisionIds, stage),
-        stage === MfgStage.PHOI
-          ? this.getPieceMaterialYieldExtrasByPieceBatch(revisionIds)
-          : Promise.resolve(new Map<string, Map<string, PieceMaterialYieldExtras>>()),
-        this.prisma.productionBatch.findMany({
-          where: { productionOrderId: { in: orders.map((o) => o.id) }, stage },
-          select: { productionOrderId: true, pieceId: true, status: true, reportedQty: true },
-        }),
-        stage === MfgStage.PHOI
-          ? this.getStepBatchDoneMap(orders.map((o) => o.id))
-          : Promise.resolve(new Map<string, number>()),
-        stage === MfgStage.PHOI
-          ? this.getStepBundleMaps(orders.map((o) => o.id))
-          : Promise.resolve({
-              submitted: new Map<string, number>(),
-              passed: new Map<string, number>(),
-              failed: new Map<string, number>(),
-            }),
-      ]);
+    const [
+      bomPiecesByRevision,
+      extrasByRevision,
+      batches,
+      stepBatchDoneMap,
+      stepBundleMaps,
+      failedByOrderPiece,
+    ] = await Promise.all([
+      stage === MfgStage.PHOI
+        ? this.findPhoiEligibleBomPiecesBatch(revisionIds)
+        : this.findBomPiecesByStageBatch(revisionIds, stage),
+      stage === MfgStage.PHOI
+        ? this.getPieceMaterialYieldExtrasByPieceBatch(revisionIds)
+        : Promise.resolve(new Map<string, Map<string, PieceMaterialYieldExtras>>()),
+      this.prisma.productionBatch.findMany({
+        where: { productionOrderId: { in: orders.map((o) => o.id) }, stage },
+        select: { productionOrderId: true, pieceId: true, status: true, reportedQty: true },
+      }),
+      stage === MfgStage.PHOI
+        ? this.getStepBatchDoneMap(orders.map((o) => o.id))
+        : Promise.resolve(new Map<string, number>()),
+      stage === MfgStage.PHOI
+        ? this.getStepBundleMaps(orders.map((o) => o.id))
+        : Promise.resolve({
+            submitted: new Map<string, number>(),
+            passed: new Map<string, number>(),
+            failed: new Map<string, number>(),
+          }),
+      this.getFailedQtyByOrderPiece(
+        orders.map((o) => o.id),
+        stage,
+      ),
+    ]);
 
     const awaitingByOrderPiece = new Map<string, number>();
     const passedByOrderPiece = new Map<string, number>();
@@ -1712,6 +1742,9 @@ export class ProductionBatchesService {
           plannedQty,
           awaitingQcQty: awaitingByOrderPiece.get(orderPieceKey) ?? 0,
           passedQty: passedByOrderPiece.get(orderPieceKey) ?? 0,
+          failedQty:
+            (failedByOrderPiece.get(orderPieceKey) ?? 0) +
+            sumStepFailed(stepBundleMaps.failed, orderPieceKey, processSteps),
           openQty: openByOrderPiece.get(orderPieceKey) ?? 0,
           rawMaterialOnHand: extras?.rawMaterialOnHand ?? null,
           processSteps,
@@ -1740,6 +1773,35 @@ export class ProductionBatchesService {
       });
     }
     return result;
+  }
+
+  /** Σ QcReview.failedQty (lỗi KCS cộng dồn, bất biến) của các đợt ProductionBatch đã chấm (QC_DONE)
+   *  theo khoá `${orderId}:${pieceId}` - 1 truy vấn gộp, không N+1. Mỗi đợt chỉ được chấm 1 lần
+   *  (updateMany guard AWAITING_QC -> QC_DONE) nên không đếm lặp; đợt bù là đợt mới, tự có QcReview riêng. */
+  private async getFailedQtyByOrderPiece(
+    orderIds: bigint[],
+    stage: MfgStage,
+  ): Promise<Map<string, number>> {
+    const reviews = await this.prisma.qcReview.findMany({
+      where: {
+        productionBatch: {
+          productionOrderId: { in: orderIds },
+          stage,
+          status: ProductionBatchStatus.QC_DONE,
+        },
+      },
+      select: {
+        failedQty: true,
+        productionBatch: { select: { productionOrderId: true, pieceId: true } },
+      },
+    });
+    const map = new Map<string, number>();
+    for (const r of reviews) {
+      if (!r.productionBatch) continue;
+      const key = `${r.productionBatch.productionOrderId}:${r.productionBatch.pieceId}`;
+      map.set(key, (map.get(key) ?? 0) + r.failedQty);
+    }
+    return map;
   }
 
   /** Batch của stageNeedsFilter()+bomPiece.findMany() trong getBatchPlan(), nhóm theo revision -

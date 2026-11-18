@@ -1,7 +1,10 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
-import { StockLedgerService } from './stock-ledger.service';
+import {
+  SEGMENT_STOCKTAKE_NOT_CONVERTED_MESSAGE,
+  StockLedgerService,
+} from './stock-ledger.service';
 import { StockReservationsService } from './stock-reservations.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 
@@ -508,6 +511,58 @@ describe('StockLedgerService', () => {
           (prisma.$queryRaw.mock.calls as unknown[][])[0][0] as TemplateStringsArray
         ).join('?');
         expect(sql).toContain('"pieceId" = ?');
+      });
+    });
+
+    describe('P3 - chân đoạn (segmentSpecId): chặn khi dữ liệu đoạn chưa chuyển đổi', () => {
+      const segAdjust = () =>
+        service.adjust(
+          { fromWarehouseId: '1', toWarehouseId: '2', segmentSpecId: '11', qty: 3, note: 'x' },
+          'idem-seg',
+          'user-1',
+          null,
+        );
+      const setup = (reservations: number, productions: number) => {
+        const extra = {
+          $executeRaw: jest.fn().mockResolvedValue(1),
+          segmentReservation: { count: jest.fn().mockResolvedValue(reservations) },
+          segmentProduction: { count: jest.fn().mockResolvedValue(productions) },
+        };
+        Object.assign(prisma, extra);
+        prisma.stockLedger.findUnique.mockResolvedValue(null);
+        prisma.stockLedger.create.mockResolvedValue(ledgerRow());
+        prisma.$queryRaw.mockResolvedValue([]);
+        return extra;
+      };
+
+      it('2 bảng đoạn theo lệnh cùng trống -> 409 câu chuyển đổi, không ghi sổ', async () => {
+        setup(0, 0);
+        const err = await segAdjust().catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(ConflictException);
+        expect((err as ConflictException).message).toBe(SEGMENT_STOCKTAKE_NOT_CONVERTED_MESSAGE);
+        expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+      });
+
+      it('có dòng ở 1 trong 2 bảng -> ghi bình thường, đếm sau khoá dùng chung chuyển đổi', async () => {
+        const extra = setup(0, 1);
+        await segAdjust();
+        const calls = extra.$executeRaw.mock.calls as [TemplateStringsArray, string][];
+        expect(calls[0][0].join('?')).toContain('pg_advisory_xact_lock_shared');
+        expect(calls[0][1]).toBe('segment-legacy-conversion');
+        expect(prisma.stockLedger.create).toHaveBeenCalled();
+      });
+
+      it('chân vật tư (materialId) không bị chặn kể cả khi 2 bảng đoạn trống', async () => {
+        const extra = setup(0, 0);
+        prisma.$queryRaw.mockResolvedValue([]);
+        await service.adjust(
+          { fromWarehouseId: '1', toWarehouseId: '2', materialId: '10', qty: 5, note: 'x' },
+          'idem-mat',
+          'user-1',
+          null,
+        );
+        expect(extra.segmentReservation.count).not.toHaveBeenCalled();
+        expect(prisma.stockLedger.create).toHaveBeenCalled();
       });
     });
   });

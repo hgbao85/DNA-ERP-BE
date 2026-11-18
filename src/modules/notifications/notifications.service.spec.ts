@@ -417,6 +417,7 @@ describe('NotificationsService', () => {
       expect(prisma.notification.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
+            type: TEST_ACTION_TYPE,
             dedupeKey: `${TEST_ACTION_TYPE}:1`,
             recipients: { some: { resolvedAt: null } },
           },
@@ -434,6 +435,208 @@ describe('NotificationsService', () => {
       // user-2 khớp tiêu chí lần này nhưng chưa từng nhận -> fan-out bổ sung.
       expect(prisma.notificationRecipient.createMany).toHaveBeenCalledWith({
         data: [{ notificationId: 'notif-existing', userId: 'user-2' }],
+      });
+    });
+  });
+
+  describe('N1 (18/11/2026): loại tin mới + updateOpenContent', () => {
+    const mockLsx = (lsx: string) => {
+      const withPi = prisma as unknown as Record<string, unknown>;
+      withPi.productionInvoice = {
+        findUnique: jest.fn().mockResolvedValue({ id: 9n }),
+        findMany: jest.fn().mockResolvedValue([{ id: 9n, code: 'PI-2026-044' }]),
+      };
+      withPi.productionInvoiceItem = {
+        findMany: jest.fn().mockResolvedValue([{ productionInvoiceId: 9n, lsxCode: lsx }]),
+      };
+    };
+    const created = () =>
+      (
+        prisma.notification.create.mock.calls[0] as [
+          { data: { title: string; message: string; link: unknown } },
+        ]
+      )[0].data;
+
+    it('PI_ITEM_READY_TO_FINISH: tiêu đề hiện mã lệnh thay PI-, link mở thẳng SKU', async () => {
+      mockLsx('GP-176');
+      await service.emit('PI_ITEM_READY_TO_FINISH', {
+        entityId: '55',
+        dedupeKey: 'pi-item-ready-to-finish:55',
+        params: {
+          piCode: 'PI-2026-044',
+          piId: '9',
+          itemId: '55',
+          factoryCode: 'SKU-A',
+          quantity: 295,
+        },
+      });
+      const d = created();
+      expect(d.title).toBe('GP-176 · SKU-A: đã đóng gói đủ - bấm Kết thúc');
+      expect(d.message).toContain('Đã đóng gói đủ 295 bộ');
+      expect(d.link).toEqual({
+        module: 'production',
+        page: 'ke-hoach',
+        params: { pi: '9', focus: 'PRODUCTION_INVOICE_ITEM:55' },
+      });
+    });
+
+    it('PIECES_TO_PAINT_PENDING: tiêu đề hiện mã lệnh, nhận theo kho Hàn, link xuất kho', async () => {
+      mockLsx('GP-177');
+      await service.emit('PIECES_TO_PAINT_PENDING', {
+        entityId: '9',
+        dedupeKey: 'pieces-to-paint-pending:9',
+        params: {
+          piCode: 'PI-2026-044',
+          piId: '9',
+          pendingQty: 200,
+          weldWarehouseCodes: ['KHO-HAN-X'],
+          weldWarehouseName: 'Kho Hàn X',
+          paintWarehouseName: 'Kho Sơn Y',
+        },
+      });
+      const d = created();
+      expect(d.title).toBe('GP-177: 200 mảnh hàn xong chờ chuyển sang Kho Sơn Y');
+      expect(d.message).toContain('Kho Hàn X');
+      expect(d.link).toEqual({ module: 'inbound_warehouse', page: 'xuat-kho' });
+      expect(recipientResolver.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          warehouseIds: ['KHO-HAN-X'],
+          warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+          warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+        }),
+        [],
+        undefined,
+      );
+    });
+
+    it('CUT_PULL_STEEL_TO_ISSUE: MANUAL ra câu QLSX chia, AUTO_PULL giữ câu cũ', async () => {
+      const base = {
+        piCode: 'GP-1',
+        workshopId: '1',
+        lines: 'S: còn 3 cây',
+        warehouseCodes: ['K'],
+      };
+      await service.emit('CUT_PULL_STEEL_TO_ISSUE', {
+        entityId: '1',
+        params: { ...base, source: 'MANUAL' },
+      });
+      expect(created().message).toBe(
+        'QLSX vừa chia lệnh này cho máy cắt. Chưa xuất: S: còn 3 cây.',
+      );
+      prisma.notification.create.mockClear();
+      await service.emit('CUT_PULL_STEEL_TO_ISSUE', {
+        entityId: '1',
+        params: { ...base, source: 'AUTO_PULL' },
+      });
+      expect(created().message).toBe(
+        'Máy cắt rảnh vừa kéo lệnh này lên cắt. Chưa xuất: S: còn 3 cây.',
+      );
+      prisma.notification.create.mockClear();
+      await service.emit('CUT_PULL_STEEL_TO_ISSUE', {
+        entityId: '1',
+        params: { ...base, source: 'RECONCILE' },
+      });
+      expect(created().message).toBe(
+        'Lệnh này đã chia cho máy cắt mà sắt chưa xuống Phôi. Chưa xuất: S: còn 3 cây.',
+      );
+    });
+
+    it('FLOOR_BATCH_STALE: có workshopName thì tiêu đề có tên xưởng, không có thì giữ câu cũ', async () => {
+      await service.emit('FLOOR_BATCH_STALE', {
+        entityId: 'PHOI:2',
+        params: { stage: 'PHOI', count: 4, hours: 4, workshopId: '2', workshopName: 'Xưởng B' },
+      });
+      expect(created().title).toBe('Tổ Phôi · Xưởng B: 4 đợt chờ gửi KCS quá 4 giờ');
+      prisma.notification.create.mockClear();
+      await service.emit('FLOOR_BATCH_STALE', {
+        entityId: 'PHOI:none',
+        params: { stage: 'PHOI', count: 4, hours: 4 },
+      });
+      expect(created().title).toBe('Tổ Phôi: 4 đợt chờ gửi KCS quá 4 giờ');
+    });
+
+    it('FLOOR_STAGE_COMPLETE: nội dung dùng tên nút "Chuyển lệnh tiếp"', async () => {
+      await service.emit('FLOOR_STAGE_COMPLETE', {
+        entityId: '1',
+        params: { piCode: 'GP-1', stage: 'HAN' },
+      });
+      expect(created().message).toContain('“Chuyển lệnh tiếp”');
+    });
+
+    it('emit gộp chỉ khi cùng type VÀ dedupeKey (tin loại khác dùng chung dedupeKey không bị nuốt)', async () => {
+      await service.emit('FLOOR_BATCH_STALE', {
+        entityId: 'PHOI:2',
+        dedupeKey: 'dung-chung',
+        params: { stage: 'PHOI', count: 1, hours: 4 },
+      });
+      expect(prisma.notification.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ type: 'FLOOR_BATCH_STALE', dedupeKey: 'dung-chung' }),
+        }),
+      );
+    });
+
+    describe('updateOpenContent', () => {
+      const params = { stage: 'PHOI', count: 6, hours: 4, workshopName: 'Xưởng B' };
+
+      it('đổi title / message / data / link của tin đang mở, KHÔNG đặt lại chưa đọc, không realtime', async () => {
+        prisma.notification.findFirst.mockResolvedValue({ id: 'n-open' });
+
+        const ok = await service.updateOpenContent(
+          'FLOOR_BATCH_STALE',
+          'floor-batch-stale:PHOI:2',
+          params,
+        );
+
+        expect(ok).toBe(true);
+        expect(prisma.notification.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: {
+              type: 'FLOOR_BATCH_STALE',
+              dedupeKey: 'floor-batch-stale:PHOI:2',
+              recipients: { some: { resolvedAt: null } },
+            },
+          }),
+        );
+        expect(prisma.notification.update).toHaveBeenCalledWith({
+          where: { id: 'n-open' },
+          data: expect.objectContaining({
+            title: 'Tổ Phôi · Xưởng B: 6 đợt chờ gửi KCS quá 4 giờ',
+            message: expect.any(String),
+            link: { module: 'production', page: 'san-luong-xuong' },
+            data: params,
+          }),
+        });
+        expect(prisma.notificationRecipient.updateMany).not.toHaveBeenCalled();
+        expect(prisma.notificationRecipient.createMany).not.toHaveBeenCalled();
+        expect(realtime.publishNotificationCreated).not.toHaveBeenCalled();
+      });
+
+      it('không có tin mở thì trả false và không ghi gì', async () => {
+        const ok = await service.updateOpenContent('FLOOR_BATCH_STALE', 'khong-co', params);
+        expect(ok).toBe(false);
+        expect(prisma.notification.update).not.toHaveBeenCalled();
+      });
+
+      it('nhận loại tin do người gọi đưa (dùng lại cho loại khác) và dựng tiêu đề theo loại đó', async () => {
+        prisma.notification.findFirst.mockResolvedValue({ id: 'n-2' });
+        await service.updateOpenContent('CUT_PULL_STEEL_TO_ISSUE', 'cut-pull-steel:9', {
+          piCode: 'GP-9',
+          workshopId: '1',
+          lines: 'S: còn 1 cây',
+          warehouseCodes: ['K'],
+          source: 'MANUAL',
+        });
+        expect(prisma.notification.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({ type: 'CUT_PULL_STEEL_TO_ISSUE' }),
+          }),
+        );
+        expect(prisma.notification.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ title: 'Xuất sắt lệnh GP-9 xuống Phôi ngay' }),
+          }),
+        );
       });
     });
   });

@@ -1,15 +1,28 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { StockLedgerRefType } from '../../generated/prisma/client';
-import { SegmentStocktakeService } from './segment-stocktake.service';
+import {
+  SEGMENT_STOCKTAKE_NOT_CONVERTED_MESSAGE,
+  SegmentStocktakeService,
+} from './segment-stocktake.service';
 
 describe('SegmentStocktakeService', () => {
-  function make(opts: { qty?: number | null; kind?: string; code?: string } = {}) {
+  function make(
+    opts: {
+      qty?: number | null;
+      kind?: string;
+      code?: string;
+      reservations?: number;
+      productions?: number;
+    } = {},
+  ) {
     const tx = {
       $executeRaw: jest.fn().mockResolvedValue(1),
       stockQuant: {
         findFirst: jest.fn().mockResolvedValue(opts.qty === null ? null : { qty: opts.qty ?? 12 }),
       },
+      segmentProduction: { count: jest.fn().mockResolvedValue(opts.productions ?? 0) },
       segmentReservation: {
+        count: jest.fn().mockResolvedValue(opts.reservations ?? 1),
         findMany: jest.fn().mockResolvedValue([{ reservedQty: 10, consumedQty: 4 }]),
       },
     };
@@ -28,7 +41,12 @@ describe('SegmentStocktakeService', () => {
       $transaction: jest.fn((fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
     };
     const ledger = { postEntry: jest.fn().mockResolvedValue({}) };
-    const service = new SegmentStocktakeService(prisma as never, ledger as never);
+    const realtime = { publishEntityChanged: jest.fn() };
+    const service = new SegmentStocktakeService(
+      prisma as never,
+      ledger as never,
+      realtime as never,
+    );
     const run = (over: Record<string, unknown> = {}) =>
       service.stocktake({
         warehouseId: 1n,
@@ -41,7 +59,7 @@ describe('SegmentStocktakeService', () => {
         warehouseScope: 'phoi-pa',
         ...over,
       });
-    return { run, ledger, tx };
+    return { run, ledger, tx, realtime };
   }
 
   it('đếm ít hơn: ghi phần chênh ra "Cân đối tồn kho", khoá đúng ô, trả số còn giữ', async () => {
@@ -75,6 +93,48 @@ describe('SegmentStocktakeService', () => {
     expect(calls[0][0].join('?')).toContain('pg_advisory_xact_lock_shared');
     expect(calls[0][1]).toBe('segment-legacy-conversion');
     expect(calls[1][1]).toMatch(/^segment-stock:/);
+  });
+
+  it('P3: 2 bảng đoạn theo lệnh cùng trống (chưa chuyển đổi) thì 409, không ghi sổ, không phát realtime', async () => {
+    const { run, ledger, realtime } = make({ reservations: 0, productions: 0 });
+    const err = await run().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).message).toBe(SEGMENT_STOCKTAKE_NOT_CONVERTED_MESSAGE);
+    expect(ledger.postEntry).not.toHaveBeenCalled();
+    expect(realtime.publishEntityChanged).not.toHaveBeenCalled();
+  });
+
+  it('P3: chỉ cần 1 trong 2 bảng có dòng là ghi bình thường', async () => {
+    for (const o of [
+      { reservations: 1, productions: 0 },
+      { reservations: 0, productions: 1 },
+    ]) {
+      const { run, ledger } = make(o);
+      await run();
+      expect(ledger.postEntry).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('P3: phát realtime STOCK ADJUSTED đúng 1 lần khi có chênh, sau khi transaction trả về', async () => {
+    const { run, realtime, tx } = make();
+    const order: string[] = [];
+    realtime.publishEntityChanged.mockImplementation(() => order.push('publish'));
+    tx.segmentReservation.findMany.mockImplementation(() => {
+      order.push('tx');
+      return Promise.resolve([]);
+    });
+    await run();
+    expect(realtime.publishEntityChanged).toHaveBeenCalledTimes(1);
+    expect(realtime.publishEntityChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ entity: 'STOCK', action: 'ADJUSTED', actorId: 'tk' }),
+    );
+    expect(order).toEqual(['tx', 'publish']);
+  });
+
+  it('P3: đếm khớp tồn (chênh 0) thì không phát realtime', async () => {
+    const { run, realtime } = make();
+    await run({ countedQty: 12 });
+    expect(realtime.publishEntityChanged).not.toHaveBeenCalled();
   });
 
   it('đếm nhiều hơn ô chưa có tồn: cộng vào kho Phôi', async () => {

@@ -5391,7 +5391,7 @@ describe('ProductionInvoicesService', () => {
         expect(notificationsService.emit).not.toHaveBeenCalled();
       });
 
-      it('KHÔNG emit khi đóng ĐỦ nhưng item KHÔNG gắn đơn hàng nào (SalesOrder null)', async () => {
+      it('KHÔNG emit PI_ITEM_PACKAGING_COMPLETE khi đóng ĐỦ nhưng item KHÔNG gắn đơn hàng nào (SalesOrder null)', async () => {
         prisma.productionInvoice.findUnique.mockResolvedValue(pi());
         prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
         prisma.productionOrder.findUnique.mockResolvedValue(productionOrder);
@@ -5401,7 +5401,119 @@ describe('ProductionInvoicesService', () => {
 
         await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
 
-        expect(notificationsService.emit).not.toHaveBeenCalled();
+        expect(notificationsService.emit).not.toHaveBeenCalledWith(
+          'PI_ITEM_PACKAGING_COMPLETE',
+          expect.anything(),
+        );
+      });
+
+      // N1 (18/11/2026): nhắc QLSX bấm "Kết thúc" khi SKU vừa đóng đủ.
+      describe('PI_ITEM_READY_TO_FINISH', () => {
+        const readyParams = {
+          piCode: 'PI-7',
+          piId: '7',
+          itemId: '20',
+          factoryCode: mfgProduct.factoryCode,
+          productName: mfgProduct.name,
+          quantity: 10,
+        };
+
+        it('vừa đủ, item CÓ đơn bán -> emit cả tin Kết thúc lẫn tin đã đóng gói xong cho Kinh doanh', async () => {
+          prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+          prisma.productionInvoiceItem.findUnique.mockResolvedValue(
+            piItem({ salesOrderId: 1n, salesOrder: { orderCode: 'PO-31' } }),
+          );
+          prisma.productionOrder.findUnique.mockResolvedValue({
+            ...productionOrder,
+            floorStage: 'ACTIVE',
+          });
+          prisma.packagingRecord.aggregate
+            .mockResolvedValueOnce({ _sum: { boxesPacked: 8 } })
+            .mockResolvedValueOnce({ _sum: { boxesPacked: 10 } });
+          await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
+
+          expect(notificationsService.emit).toHaveBeenCalledWith('PI_ITEM_READY_TO_FINISH', {
+            entityId: '20',
+            dedupeKey: 'pi-item-ready-to-finish:20',
+            params: readyParams,
+          });
+          expect(notificationsService.emit).toHaveBeenCalledWith(
+            'PI_ITEM_PACKAGING_COMPLETE',
+            expect.anything(),
+          );
+        });
+
+        it('vừa đủ, item KHÔNG có đơn bán -> vẫn emit tin Kết thúc, không có tin Kinh doanh', async () => {
+          prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+          prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+          prisma.productionOrder.findUnique.mockResolvedValue({
+            ...productionOrder,
+            floorStage: 'ACTIVE',
+          });
+          prisma.packagingRecord.aggregate
+            .mockResolvedValueOnce({ _sum: { boxesPacked: 8 } })
+            .mockResolvedValueOnce({ _sum: { boxesPacked: 10 } });
+          await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
+
+          expect(notificationsService.emit).toHaveBeenCalledTimes(1);
+          expect(notificationsService.emit).toHaveBeenCalledWith(
+            'PI_ITEM_READY_TO_FINISH',
+            expect.objectContaining({ entityId: '20' }),
+          );
+        });
+
+        it('chưa đủ -> không emit tin Kết thúc', async () => {
+          prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+          prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+          prisma.productionOrder.findUnique.mockResolvedValue({
+            ...productionOrder,
+            floorStage: 'ACTIVE',
+          });
+          prisma.packagingRecord.aggregate
+            .mockResolvedValueOnce({ _sum: { boxesPacked: 4 } })
+            .mockResolvedValueOnce({ _sum: { boxesPacked: 6 } });
+          await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
+
+          expect(notificationsService.emit).not.toHaveBeenCalledWith(
+            'PI_ITEM_READY_TO_FINISH',
+            expect.anything(),
+          );
+        });
+
+        it('SKU đã Kết thúc (FINISHED) rồi mới đóng nốt -> không emit', async () => {
+          prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+          prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+          prisma.productionOrder.findUnique.mockResolvedValue({
+            ...productionOrder,
+            floorStage: 'FINISHED',
+          });
+          prisma.packagingRecord.aggregate
+            .mockResolvedValueOnce({ _sum: { boxesPacked: 8 } })
+            .mockResolvedValueOnce({ _sum: { boxesPacked: 10 } });
+          await service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho');
+
+          expect(notificationsService.emit).not.toHaveBeenCalledWith(
+            'PI_ITEM_READY_TO_FINISH',
+            expect.anything(),
+          );
+        });
+
+        it('emit lỗi -> chỉ ghi log, vẫn ghi đóng gói thành công', async () => {
+          prisma.productionInvoice.findUnique.mockResolvedValue(pi());
+          prisma.productionInvoiceItem.findUnique.mockResolvedValue(piItem());
+          prisma.productionOrder.findUnique.mockResolvedValue({
+            ...productionOrder,
+            floorStage: 'ACTIVE',
+          });
+          prisma.packagingRecord.aggregate
+            .mockResolvedValueOnce({ _sum: { boxesPacked: 8 } })
+            .mockResolvedValueOnce({ _sum: { boxesPacked: 10 } });
+          notificationsService.emit.mockRejectedValue(new Error('boom'));
+
+          await expect(
+            service.recordPackaging('7', '20', { boxesPacked: 2 }, 'user-kho'),
+          ).resolves.toMatchObject({ packedQty: 10 });
+        });
       });
 
       it('rejects khi vượt quá totalQty (không chặn theo readyQty/checkedQty của Chuyền kiểm)', async () => {

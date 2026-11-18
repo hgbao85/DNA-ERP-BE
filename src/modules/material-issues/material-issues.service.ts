@@ -80,9 +80,13 @@ export interface PreparedMaterialIssue {
 /// CuttingProposalsService.approve(), PRODUCTION_WAREHOUSE_CODE ở đó.
 const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
 
+/** P3: dòng đã RECEIVED (kho xuất là đã nhận) hoặc bị yêu cầu khác giành trước khi tổ bấm nhận. */
+const ALREADY_RECEIVED_MESSAGE =
+  'Vật tư hàn / sơn: kho xác nhận phiếu xuất có chữ ký người nhận là đã nhận, không cần xác nhận nữa';
+
 /**
  * Xuất vật tư tiêu hao Hàn/Sơn (M2, thay vat-tu-noi-bo.service.ts mock) - CO₂, dây hàn, bột sơn,
- * dung môi... KHÁC WIP (đoạn/khung): không qua KCS, chỉ ISSUED -> RECEIVED. Định mức nằm ở
+ * dung môi... KHÁC WIP (đoạn/khung): không qua KCS; từ 18/11/2026 kho xuất là đã nhận (ghi RECEIVED ngay lúc xuất). Định mức nằm ở
  * ConsumableBom (theo bomRevision của PO) - "còn xuất được bao nhiêu" = qtyPerUnit ×
  * order.quantity trừ SUM(MaterialIssue.issuedQty đã có), cùng idiom SteelIssuesService/
  * WeavingIssuesService.getIssuePlan().
@@ -117,27 +121,6 @@ export class MaterialIssuesService {
     actorId: string | null,
   ): void {
     this.realtime.publishEntityChanged({ entity, entityId, action, actorId });
-  }
-
-  /** Best-effort NGOÀI transaction - cùng lý do kỹ thuật đã ghi ở nhiều nơi khác (mục 15.2/16.2/
-   *  17.2/19.2 changelog notification). */
-  private async notifyMaterialIssueToTeam(issue: MaterialIssueRow, piCode: string): Promise<void> {
-    try {
-      await this.notifications.emit('MATERIAL_ISSUE_TO_TEAM', {
-        entityId: issue.id.toString(),
-        params: {
-          piCode,
-          materialCode: issue.material.code,
-          qty: issue.issuedQty.toNumber(),
-          unit: issue.material.unit,
-          stage: issue.stage,
-        },
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed to create MATERIAL_ISSUE_TO_TEAM notification (entity ${issue.id}): ${(error as Error).message}`,
-      );
-    }
   }
 
   private async resolveMaterialIssueToTeam(entityId: bigint): Promise<void> {
@@ -298,6 +281,9 @@ export class MaterialIssuesService {
         );
       }
 
+      // P3 (18/11/2026): kho xuất có chữ ký người nhận thì vật tư coi là đã nhận ngay - ghi RECEIVED, số nhận = số xuất, lúc nhận =
+      // lúc xuất (cùng 1 Date), không có người nhận riêng (receivedById trống).
+      const issuedAt = new Date();
       const issue = await tx.materialIssue.create({
         data: {
           stage: dto.stage,
@@ -305,6 +291,10 @@ export class MaterialIssuesService {
           materialId: materialBigId,
           issuedQty: dto.issuedQty,
           issuedById,
+          issuedAt,
+          status: MaterialIssueStatus.RECEIVED,
+          receivedQty: dto.issuedQty,
+          receivedAt: issuedAt,
           idempotencyKey,
         },
         include: MATERIAL_ISSUE_INCLUDE,
@@ -336,13 +326,10 @@ export class MaterialIssuesService {
     }
   }
 
-  /** Sau khi transaction đã commit: báo tổ nhận + realtime (best-effort). */
-  async afterCreate(created: MaterialIssueRow, issuedById: string): Promise<void> {
-    await this.notifyMaterialIssueToTeam(
-      created,
-      created.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
-    );
+  /** Sau khi transaction đã commit: realtime (best-effort). Không còn tin cho tổ Hàn / Sơn - kho xuất là đã nhận. */
+  afterCreate(created: MaterialIssueRow, issuedById: string): Promise<void> {
     this.publishRealtime('MATERIAL_ISSUE', created.id, 'CREATED', issuedById);
+    return Promise.resolve();
   }
 
   async receive(
@@ -353,9 +340,7 @@ export class MaterialIssuesService {
   ): Promise<MaterialIssueResponseDto> {
     const issue = await this.findOneOrThrow(id);
     if (issue.status !== MaterialIssueStatus.ISSUED) {
-      throw new ConflictException(
-        `Phiếu xuất vật tư ${id} đang ở trạng thái ${issue.status} - chỉ ISSUED mới xác nhận nhận được`,
-      );
+      throw new ConflictException(ALREADY_RECEIVED_MESSAGE);
     }
     this.assertMfgRoleMatchesStage(callerMfgRole, issue.stage);
     await assertItemPiHasActiveFloor(
@@ -391,9 +376,7 @@ export class MaterialIssuesService {
     } catch (e) {
       // Không còn dòng đúng trạng thái (P2025) = 1 yêu cầu khác vừa xử lý.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-        throw new ConflictException(
-          `Phiếu xuất vật tư ${id} đã được xác nhận nhận bởi 1 yêu cầu khác trong lúc xử lý - không ghi đè`,
-        );
+        throw new ConflictException(ALREADY_RECEIVED_MESSAGE);
       }
       throw e;
     }
