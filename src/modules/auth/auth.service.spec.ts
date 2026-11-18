@@ -539,15 +539,48 @@ describe('AuthService', () => {
       });
       usersService.findAuthProfileById.mockResolvedValue(buildUser() as never);
 
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+
       const result = await authService.refresh('some-refresh-token', '127.0.0.1');
 
       expect(result.accessToken).toBe('signed.access.token');
-      expect(prisma.refreshToken.update).toHaveBeenCalledWith(
+      // B5 17/11: thu hồi có điều kiện "chưa bị thu hồi".
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'old-token-id' },
+          where: { id: 'old-token-id', revokedAt: null },
           data: expect.objectContaining({ replacedByTokenId: 'refresh-token-1' }),
         }),
       );
+    });
+
+    it('B5 17/11: 2 lượt làm mới cùng lúc - lượt thua (token vừa bị lượt kia thu hồi, count 0) -> 401, không trả cặp token thứ 2', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        id: 'old-token-id',
+        userId: 'user-1',
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      usersService.findAuthProfileById.mockResolvedValue(buildUser() as never);
+      prisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(authService.refresh('some-refresh-token', '127.0.0.1')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('B5 17/11: token vừa được làm mới < 30 giây (tab khác) -> 401 nhưng KHÔNG thu hồi mọi phiên', async () => {
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        id: 'old-token-id',
+        userId: 'user-1',
+        revokedAt: new Date(Date.now() - 5_000),
+        replacedByTokenId: 'newer-token-id',
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+
+      await expect(authService.refresh('token-tab-kia-vua-doi')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(prisma.refreshToken.updateMany).not.toHaveBeenCalled();
     });
 
     it('rejects a token that does not exist', async () => {
@@ -585,7 +618,8 @@ describe('AuthService', () => {
       prisma.refreshToken.findUnique.mockResolvedValue({
         id: 'old-token-id',
         userId: 'user-1',
-        revokedAt: new Date(),
+        // Quá cửa sổ 30 giây "2 tab cùng làm mới" (B5 17/11) mới coi là token bị lộ.
+        revokedAt: new Date(Date.now() - 60_000),
         replacedByTokenId: 'newer-token-id',
         expiresAt: new Date(Date.now() + 60_000),
       });
