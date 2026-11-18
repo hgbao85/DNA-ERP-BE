@@ -1380,6 +1380,20 @@ enum ProductionInvoiceStatus {
   PLANNING
   PRODUCING
   DONE
+  /// KHOẢNG TRỐNG ĐÃ BIẾT - CHƯA LÀM (user chốt 18/11/2026: để sau, ghi lại tại đây để làm sau này):
+  /// chưa có route / service nào GHI trạng thái này - lệnh đã duyệt hiện KHÔNG huỷ được. Các màn đọc đã lọc sẵn
+  /// `status != CANCELLED` (bookings, materials-due, milestone-board, piece-sync-board, production-capacity...),
+  /// sửa mốc chặn PI huỷ (assertPiAllowsDeadlineEdit, DeadlineChangesService).
+  /// Khi làm "Huỷ lệnh" phải nhả / xử lý (mẫu: luồng Kết thúc lệnh ProductionOrdersService.releaseReservationsIfPiFinished):
+  ///  - giữ chỗ vật tư: StockReservationsService.releaseByProductionInvoice;
+  ///  - giữ đoạn kho Phôi: SegmentStockService.releaseOrderHoldings (đoạn về cột dư);
+  ///  - phương án cắt: CuttingProposalsService.releaseForInvoice (SUPERSEDED) + CuttingPlanCoverage;
+  ///  - đề xuất mua: dòng chưa ký (NEW/QUOTING/SUBMITTED) huỷ hoặc bỏ số; dòng đã ký / đã đặt NCC / đang về cần quyết nghiệp vụ;
+  ///  - hàng đợi xưởng (FloorQueueEntry), chia máy cắt (CutAllocation), phiếu chuyển của lệnh (WarehouseTransfer.productionInvoiceId)
+  ///    đang chờ, phiếu XK nháp, thông báo đang mở của lệnh;
+  ///  - ProductionOrder của lệnh (floorStage) + ProductionInvoiceItem (prodApprovalStatus) về trạng thái thống nhất.
+  /// Câu hỏi nghiệp vụ còn mở: hàng đã mua / đã cắt / đã sơn của lệnh huỷ thì đi đâu (về tồn chung? giữ cho lệnh khác?), ai được
+  /// huỷ (Sếp?), huỷ được tới giai đoạn nào.
   CANCELLED
 }
 
