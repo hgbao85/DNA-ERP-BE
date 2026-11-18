@@ -48,6 +48,19 @@ export class QueueWorkshopDto {
   workshopId?: string;
 }
 
+/**
+ * Body của advance ("Chuyển lệnh tiếp"): thêm expectedRunningPiId = id lệnh màn QLSX đang thấy là
+ * đang chạy. null = màn thấy tổ chưa chạy lệnh nào (BE vẫn chặn nếu đã có lệnh chạy); không gửi =
+ * không kiểm. Tách khỏi QueueWorkshopDto vì reopen không dùng trường này.
+ */
+export class AdvanceQueueDto extends QueueWorkshopDto {
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  @Matches(ID_PATTERN, { message: ID_MESSAGE })
+  expectedRunningPiId?: string | null;
+}
+
 export class EnqueuePiDto {
   @ApiProperty({ enum: FLOOR_WORKER_STAGES })
   @IsIn(FLOOR_WORKER_STAGES)

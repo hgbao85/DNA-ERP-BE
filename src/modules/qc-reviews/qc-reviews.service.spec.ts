@@ -12,7 +12,11 @@ import { SegmentProductionService } from '../segment-stock/segment-production.se
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PaintTransferReminderService } from '../warehouse-transfers/paint-transfer-reminder.service';
+import { queueWorkshopIdOfPi } from '../floor/floor-queue-workshop.util';
 import { QcReviewsService } from './qc-reviews.service';
+
+jest.mock('../floor/floor-queue-workshop.util', () => ({ queueWorkshopIdOfPi: jest.fn() }));
 import { RealtimeService } from '../../realtime/realtime.service';
 
 const decimal = (n: number) => ({ toNumber: () => n, toString: () => String(n) });
@@ -45,11 +49,12 @@ describe('QcReviewsService', () => {
     productionBatch: { update: jest.Mock; updateMany: jest.Mock };
     pieceStepBundle: { update: jest.Mock; updateMany: jest.Mock };
     materialYieldStepBundle: { updateMany: jest.Mock };
-    productionOrder: { findFirst: jest.Mock; findUniqueOrThrow: jest.Mock };
+    productionOrder: { findFirst: jest.Mock; findUniqueOrThrow: jest.Mock; findUnique: jest.Mock };
     productionInvoiceItem: { findUniqueOrThrow: jest.Mock };
     productionInvoice: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
+  let paintReminder: { refreshForOrder: jest.Mock };
   let steelIssuesService: {
     findOneRowOrThrow: jest.Mock;
     syncIssueStatusFromBundles: jest.Mock;
@@ -223,6 +228,9 @@ describe('QcReviewsService', () => {
       productionOrder: {
         findFirst: jest.fn().mockResolvedValue({ id: 9n }),
         findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceItemId: 20n }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ productionInvoiceItem: { productionInvoiceId: 30n } }),
       },
       productionInvoiceItem: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ productionInvoiceId: 900n }),
@@ -253,6 +261,8 @@ describe('QcReviewsService', () => {
     };
     realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     segmentProductionService = { recomputeAfterQc: jest.fn().mockResolvedValue(undefined) };
+    paintReminder = { refreshForOrder: jest.fn().mockResolvedValue(undefined) };
+    (queueWorkshopIdOfPi as jest.Mock).mockReset().mockResolvedValue(null);
     service = new QcReviewsService(
       prisma as unknown as PrismaServiceType,
       steelIssuesService as unknown as SteelIssuesService,
@@ -262,6 +272,7 @@ describe('QcReviewsService', () => {
       notificationsService as unknown as NotificationsService,
       realtimeStub as unknown as RealtimeService,
       segmentProductionService as unknown as SegmentProductionService,
+      paintReminder as unknown as PaintTransferReminderService,
     );
   });
 
@@ -721,6 +732,65 @@ describe('QcReviewsService', () => {
           params: { piCode: 'PI-2026-700', failedQty: 3, senderRole: 'SON_STAFF' },
         }),
       );
+    });
+
+    // N1 (18/11/2026): tin KCS lô Sơn đi theo xưởng nơi sơn; lô Hàn nhắc thủ kho chuyển mảnh sang Sơn.
+    it('lô SON của lệnh Phước An - QC_FAILED / QC_PASSED có params.workshopId = xưởng nơi sơn', async () => {
+      productionBatchesService.findOneRowOrThrow.mockResolvedValue({
+        ...awaitingBatch,
+        stage: 'SON',
+      });
+      (queueWorkshopIdOfPi as jest.Mock).mockResolvedValue(1n);
+
+      await service.reviewProductionBatch('700', { failedQty: 3 }, 'user-kcs');
+      await service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs');
+      const failedParams = { piCode: 'PI-2026-700', failedQty: 3, senderRole: 'SON_STAFF' };
+
+      expect(queueWorkshopIdOfPi).toHaveBeenCalledWith(prisma, 'SON', 30n);
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'QC_FAILED',
+        expect.objectContaining({ params: { ...failedParams, workshopId: '1' } }),
+      );
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'QC_PASSED',
+        expect.objectContaining({ params: { piCode: 'PI-2026-700', workshopId: '1' } }),
+      );
+      expect(paintReminder.refreshForOrder).not.toHaveBeenCalled();
+    });
+
+    it('lô SON - tra xưởng lỗi thì vẫn gửi tin như cũ (theo mã lệnh), lượt chấm không hỏng', async () => {
+      productionBatchesService.findOneRowOrThrow.mockResolvedValue({
+        ...awaitingBatch,
+        stage: 'SON',
+      });
+      (queueWorkshopIdOfPi as jest.Mock).mockRejectedValue(new Error('db down'));
+
+      const result = await service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs');
+
+      expect(result.id).toBe('501');
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'QC_PASSED',
+        expect.objectContaining({ params: { piCode: 'PI-2026-700' } }),
+      );
+    });
+
+    it('lô HAN - không có workshopId, gọi paintReminder.refreshForOrder(productionOrderId) sau commit', async () => {
+      await service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs');
+
+      expect(queueWorkshopIdOfPi).not.toHaveBeenCalled();
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'QC_PASSED',
+        expect.objectContaining({ params: { piCode: 'PI-2026-700' } }),
+      );
+      expect(paintReminder.refreshForOrder).toHaveBeenCalledWith('1');
+    });
+
+    it('lô HAN - refreshForOrder lỗi thì lượt chấm vẫn trả kết quả', async () => {
+      paintReminder.refreshForOrder.mockRejectedValue(new Error('boom'));
+
+      const result = await service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs');
+
+      expect(result.id).toBe('501');
     });
 
     it('có failedQty - reportedQty ghi đè = phần ĐẠT, KHÔNG tạo lô rework mới (2026-09-08: bỏ hẳn phân loại Sửa được/Phế, mirror reviewPieceStep)', async () => {

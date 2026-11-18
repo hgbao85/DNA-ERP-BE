@@ -5,6 +5,7 @@ import { SegmentStockModule } from '../segment-stock/segment-stock.module';
 import { SteelIssuesModule } from '../steel-issues/steel-issues.module';
 import { UploadsModule } from '../uploads/uploads.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { WarehouseTransfersModule } from '../warehouse-transfers/warehouse-transfers.module';
 import { QcReviewsController } from './qc-reviews.controller';
 import { QcReviewsService } from './qc-reviews.service';
 
@@ -16,6 +17,7 @@ import { QcReviewsService } from './qc-reviews.service';
     UploadsModule,
     NotificationsModule,
     SegmentStockModule,
+    WarehouseTransfersModule,
   ],
   controllers: [QcReviewsController],
   providers: [QcReviewsService],

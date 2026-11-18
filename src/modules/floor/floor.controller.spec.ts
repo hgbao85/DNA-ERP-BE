@@ -11,6 +11,9 @@ import {
   RequiredPermission,
 } from '../../common/decorators/require-permissions.decorator';
 import { ROLE_KEY } from '../../common/decorators/require-role.decorator';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { AdvanceQueueDto, QueueWorkshopDto } from './dto/floor-queue.dto';
 import { FloorController } from './floor.controller';
 
 /**
@@ -149,5 +152,89 @@ describe('FloorController - ma trận phân quyền', () => {
         expect({ key, mfg: rule.mfg }).toEqual({ key, mfg: undefined });
       }
     }
+  });
+});
+
+describe('FloorController - chia máy cắt + Chuyển lệnh tiếp', () => {
+  const board = { workshop: { id: '5' }, rows: [], warnings: [] };
+  const allocated = [{ productionInvoiceId: '100', piCode: 'PI-100', steelGaps: [] }];
+  let admin: { advance: jest.Mock };
+  let cutAllocation: { auto: jest.Mock; add: jest.Mock };
+  let followUp: { afterAllocated: jest.Mock };
+  let controller: FloorController;
+
+  beforeEach(() => {
+    admin = { advance: jest.fn().mockResolvedValue('queue') };
+    cutAllocation = {
+      auto: jest.fn().mockResolvedValue({ board, allocated }),
+      add: jest.fn().mockResolvedValue({ board, allocated }),
+    };
+    followUp = { afterAllocated: jest.fn().mockResolvedValue(undefined) };
+    controller = new FloorController(
+      admin as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      cutAllocation as never,
+      followUp as never,
+      {} as never,
+    );
+  });
+
+  it('auto: chia xong gọi follow-up (source MANUAL) rồi chỉ trả board', async () => {
+    const dto = { workshopId: '5', mode: 'append' } as never;
+    expect(await controller.cutAllocationAuto(dto, 'u1')).toBe(board);
+    expect(cutAllocation.auto).toHaveBeenCalledWith('u1', dto);
+    expect(followUp.afterAllocated).toHaveBeenCalledWith({
+      workshopId: '5',
+      orders: allocated,
+      source: 'MANUAL',
+    });
+  });
+
+  it('add: chia xong gọi follow-up (source MANUAL) rồi chỉ trả board (không có allocated)', async () => {
+    const dto = { workshopId: '5', productionInvoiceId: '100', materialId: '7' } as never;
+    const res = await controller.cutAllocationAdd(dto, 'u1');
+    expect(res).toBe(board);
+    expect(res).not.toHaveProperty('allocated');
+    expect(followUp.afterAllocated).toHaveBeenCalledWith({
+      workshopId: '5',
+      orders: allocated,
+      source: 'MANUAL',
+    });
+  });
+
+  it('chia lỗi (400 lệnh chưa Bắt đầu) -> không gọi follow-up', async () => {
+    cutAllocation.add.mockRejectedValue(new Error('chưa Bắt đầu'));
+    await expect(controller.cutAllocationAdd({} as never, 'u1')).rejects.toThrow('chưa Bắt đầu');
+    expect(followUp.afterAllocated).not.toHaveBeenCalled();
+  });
+
+  it('advance truyền expectedRunningPiId xuống service (null vẫn giữ là null, không gửi = undefined)', async () => {
+    await controller.advance('PHOI', 'u1', { workshopId: '5', expectedRunningPiId: '10' });
+    expect(admin.advance).toHaveBeenLastCalledWith('PHOI', 'u1', '5', '10');
+    await controller.advance('PHOI', 'u1', { workshopId: '5', expectedRunningPiId: null });
+    expect(admin.advance).toHaveBeenLastCalledWith('PHOI', 'u1', '5', null);
+    await controller.advance('HAN', 'u1', { workshopId: '5' });
+    expect(admin.advance).toHaveBeenLastCalledWith('HAN', 'u1', '5', undefined);
+  });
+});
+
+describe('AdvanceQueueDto (validate)', () => {
+  const check = async (body: unknown) => {
+    const dto = plainToInstance(AdvanceQueueDto, body);
+    return validate(dto, { whitelist: true, forbidNonWhitelisted: true });
+  };
+
+  it('nhận expectedRunningPiId dạng chuỗi số, null, hoặc không gửi', async () => {
+    expect(await check({ workshopId: '5', expectedRunningPiId: '10' })).toEqual([]);
+    expect(await check({ expectedRunningPiId: null })).toEqual([]);
+    expect(await check({})).toEqual([]);
+  });
+
+  it('chuỗi không phải số -> lỗi; reopen (QueueWorkshopDto) không nhận trường này', async () => {
+    expect(await check({ expectedRunningPiId: 'abc' })).not.toEqual([]);
+    const reopen = plainToInstance(QueueWorkshopDto, { expectedRunningPiId: '1' });
+    expect(await validate(reopen, { whitelist: true, forbidNonWhitelisted: true })).not.toEqual([]);
   });
 });

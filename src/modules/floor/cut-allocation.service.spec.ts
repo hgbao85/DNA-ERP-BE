@@ -32,6 +32,8 @@ describe('CutAllocationService', () => {
   let guardRow: (id: bigint) => Row | null;
   /** true = kiểu cắt của phương án là kiểu cắt THEO BÓ (pattern.bundles != null, máy tự động). */
   let bundleOn: boolean;
+  /** Lệnh SX ACTIVE mà truy vấn "đã Bắt đầu" thấy; mặc định lệnh 100 đã Bắt đầu. */
+  let activeOrders: Array<{ productionInvoiceItem: { productionInvoiceId: bigint } }>;
 
   const m = (key: string): Record<string, jest.Mock> => db[key] as Record<string, jest.Mock>;
 
@@ -73,6 +75,7 @@ describe('CutAllocationService', () => {
   beforeEach(() => {
     allocations = [];
     bundleOn = false;
+    activeOrders = [{ productionInvoiceItem: { productionInvoiceId: 100n } }];
     nextId = 1n;
     issued = 6;
     reserved = 4;
@@ -207,7 +210,8 @@ describe('CutAllocationService', () => {
           ]),
         ),
       },
-      productionOrder: { findMany: jest.fn().mockResolvedValue([]) },
+      productionOrder: { findMany: jest.fn(() => Promise.resolve(activeOrders)) },
+      productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([]) },
       cutAllocationLog: {
         create: jest.fn().mockResolvedValue({}),
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -370,6 +374,7 @@ describe('CutAllocationService', () => {
           materialId: '7',
           materialLabel: 'Sắt hộp · 25x50',
           bars: 3,
+          started: true,
         },
       ]);
       expect(board.waiting).toEqual([]);
@@ -402,8 +407,19 @@ describe('CutAllocationService', () => {
           availableBars: 5,
           shortBars: 5,
           heldElsewhereBars: 0,
+          started: true,
         },
       ]);
+    });
+
+    it('lệnh chưa có SKU ACTIVE (chưa Bắt đầu / chỉ Tạm dừng): started = false ở chưa chia và chờ sắt', async () => {
+      activeOrders = [];
+      const board = await service.getBoard('u1', '5');
+      expect(board.unallocated).toEqual([expect.objectContaining({ started: false })]);
+      issued = 1;
+      reserved = 1;
+      const waiting = await service.getBoard('u1', '5');
+      expect(waiting.waiting).toEqual([expect.objectContaining({ started: false })]);
     });
 
     it('sắt còn giữ ở kho xưởng khác (lệnh vừa đổi xưởng, chưa chuyển kho) không tính đủ sắt -> waiting', async () => {
@@ -663,7 +679,7 @@ describe('CutAllocationService', () => {
 
   describe('auto', () => {
     it('append: chia phần còn lại, cây dập vào máy laze, cây không dập vào máy tự động, xếp lại seq', async () => {
-      const board = await service.auto('u1', { workshopId: '5', mode: 'append' });
+      const { board } = await service.auto('u1', { workshopId: '5', mode: 'append' });
 
       expect(db.$transaction).toHaveBeenCalledTimes(1);
       expect(db.$executeRaw).toHaveBeenCalled(); // khoá advisory
@@ -701,7 +717,7 @@ describe('CutAllocationService', () => {
           punchedSegments: [{ cutLengthMm: 425, countPerBar: 2 }],
         }),
       ];
-      const board = await service.auto('u1', { workshopId: '5', mode: 'append' });
+      const { board } = await service.auto('u1', { workshopId: '5', mode: 'append' });
       expect(m('cutAllocation').createManyAndReturn).not.toHaveBeenCalled();
       expect(board.rows.reduce((s, r) => s + r.barCount, 0)).toBe(10);
       expect(board.unallocated).toEqual([]);
@@ -735,7 +751,7 @@ describe('CutAllocationService', () => {
 
     it('xoá dòng cũ (stale) trước khi chia', async () => {
       allocations = [baseAllocation({ workstationId: 99n, barCount: 4 })];
-      const board = await service.auto('u1', { workshopId: '5', mode: 'append' });
+      const { board } = await service.auto('u1', { workshopId: '5', mode: 'append' });
       expect(m('cutAllocation').deleteMany).toHaveBeenCalledWith({ where: { id: { in: [1n] } } });
       expect(board.staleCount).toBe(0);
     });
@@ -743,7 +759,7 @@ describe('CutAllocationService', () => {
     it('chưa đủ sắt: không tự chia', async () => {
       issued = 1;
       reserved = 1;
-      const board = await service.auto('u1', { workshopId: '5', mode: 'append' });
+      const { board } = await service.auto('u1', { workshopId: '5', mode: 'append' });
       expect(m('cutAllocation').createManyAndReturn).not.toHaveBeenCalled();
       expect(board.waiting).toHaveLength(1);
     });
@@ -753,6 +769,86 @@ describe('CutAllocationService', () => {
       await expect(service.auto('u1', { workshopId: '5', mode: 'append' })).rejects.toThrow(
         'Xưởng Phú An chưa khai máy cắt (Sản lượng xưởng › Máy & tem QR)',
       );
+    });
+
+    it('lệnh chưa Bắt đầu / chỉ Tạm dừng: không chia, cảnh báo có mã lệnh (ưu tiên số LSX)', async () => {
+      activeOrders = [];
+      m('productionInvoiceItem').findMany.mockResolvedValue([
+        { productionInvoiceId: 100n, lsxCode: 'GP-101' },
+      ]);
+      const { board, allocated } = await service.auto('u1', { workshopId: '5', mode: 'append' });
+      expect(m('cutAllocation').createManyAndReturn).not.toHaveBeenCalled();
+      expect(allocated).toEqual([]);
+      expect(board.warnings).toEqual([
+        'Chưa chia 1 lệnh chưa Bắt đầu: GP-101 - bấm Bắt đầu ở Tổng hợp lệnh SX rồi bấm “Chia phần còn lại”.',
+      ]);
+      expect(board.unallocated).toEqual([expect.objectContaining({ started: false })]);
+    });
+
+    it('lệnh chưa Bắt đầu mà chưa đủ sắt: không cảnh báo (chưa có gì để chia)', async () => {
+      activeOrders = [];
+      issued = 1;
+      reserved = 1;
+      const { board } = await service.auto('u1', { workshopId: '5', mode: 'append' });
+      expect(board.warnings).toEqual([]);
+    });
+
+    it('GET bảng: lệnh chưa Bắt đầu đủ sắt còn cây chưa chia thì warnings có câu nhắc (đúng 1 lần)', async () => {
+      activeOrders = [];
+      m('productionInvoiceItem').findMany.mockResolvedValue([
+        { productionInvoiceId: 100n, lsxCode: 'GP-101' },
+      ]);
+      const board = await service.getBoard('u1', '5');
+      expect(board.warnings).toEqual([
+        'Chưa chia 1 lệnh chưa Bắt đầu: GP-101 - bấm Bắt đầu ở Tổng hợp lệnh SX rồi bấm “Chia phần còn lại”.',
+      ]);
+    });
+
+    it('GET bảng: lệnh đã Bắt đầu hoặc chưa đủ sắt thì không có câu nhắc', async () => {
+      expect((await service.getBoard('u1', '5')).warnings).toEqual([]);
+      activeOrders = [];
+      issued = 1;
+      reserved = 1;
+      expect((await service.getBoard('u1', '5')).warnings).toEqual([]);
+    });
+
+    it('redo: dòng hệ thống của lệnh chưa Bắt đầu bị bỏ, không chia lại; dòng sửa tay giữ', async () => {
+      activeOrders = [];
+      allocations = [
+        baseAllocation({ workstationId: 2n, barCount: 3, seq: 1, isManual: true }),
+        baseAllocation({ workstationId: 2n, barCount: 4, seq: 2, isManual: false }),
+      ];
+      const { board } = await service.auto('u1', { workshopId: '5', mode: 'redo' });
+      expect(m('cutAllocation').deleteMany).toHaveBeenCalledWith({ where: { id: { in: [2n] } } });
+      expect(m('cutAllocation').createManyAndReturn).not.toHaveBeenCalled();
+      expect(board.rows.map((r) => r.barCount)).toEqual([3]);
+    });
+
+    it('allocated: đúng lệnh + loại sắt vừa tạo dòng, steelGaps từ loadSteelGaps trong tx', async () => {
+      issued = 6; // cần 10, đã xuất 6, còn giữ chỗ đủ -> thiếu 4
+      reserved = 4;
+      const { allocated } = await service.auto('u1', { workshopId: '5', mode: 'append' });
+      expect(allocated).toHaveLength(1);
+      expect(allocated[0]).toMatchObject({ productionInvoiceId: '100', piCode: 'PI-100' });
+      expect(allocated[0].steelGaps).toEqual([
+        expect.objectContaining({ materialId: '7', missingBars: 4, warehouseCodes: ['KHO-SAT'] }),
+      ]);
+    });
+
+    it('"Chia lại" không đổi gì (cùng số cây) -> allocated rỗng, không báo lại thủ kho', async () => {
+      allocations = [
+        baseAllocation({
+          workstationId: 1n,
+          machineClass: 'LASER',
+          barCount: 2,
+          seq: 1,
+          punchedSegments: [{ cutLengthMm: 425, countPerBar: 2 }],
+        }),
+        baseAllocation({ workstationId: 2n, barCount: 8, seq: 1 }),
+      ];
+      const { allocated } = await service.auto('u1', { workshopId: '5', mode: 'redo' });
+      expect(m('cutAllocation').createManyAndReturn).toHaveBeenCalled(); // dựng lại 10 cây
+      expect(allocated).toEqual([]);
     });
 
     it('xưởng khoá máy tự động: mọi cây vào máy tự động', async () => {
@@ -771,7 +867,7 @@ describe('CutAllocationService', () => {
     it('chia ngay (lệnh, loại sắt) dù chưa thấy đủ sắt', async () => {
       issued = 0;
       reserved = 0;
-      const board = await service.add('u1', {
+      const { board } = await service.add('u1', {
         workshopId: '5',
         productionInvoiceId: '100',
         materialId: '7',
@@ -789,6 +885,29 @@ describe('CutAllocationService', () => {
       expect(logs).toHaveLength(2);
       expect(logs.every((l) => l.action === 'ADD' && l.createdById === 'u1')).toBe(true);
       expect(logs.every((l) => l.isBundle === false && l.productionInvoiceId === 100n)).toBe(true);
+    });
+
+    it('lệnh chưa Bắt đầu -> 400 đúng câu (mã LSX), không ghi dòng, không xoá dòng cũ', async () => {
+      activeOrders = [];
+      allocations = [baseAllocation({ workstationId: 99n, barCount: 4 })]; // dòng cũ
+      m('productionInvoiceItem').findMany.mockResolvedValue([
+        { productionInvoiceId: 100n, lsxCode: 'GP-101' },
+      ]);
+      await expect(
+        service.add('u1', { workshopId: '5', productionInvoiceId: '100', materialId: '7' }),
+      ).rejects.toThrow(
+        'GP-101 chưa có SKU nào đang chạy ở xưởng này (chưa Bắt đầu hoặc đang Tạm dừng) - bấm Bắt đầu ở Tổng hợp lệnh SX rồi mới chia máy cắt',
+      );
+      expect(m('cutAllocation').createManyAndReturn).not.toHaveBeenCalled();
+      expect(m('cutAllocation').deleteMany).not.toHaveBeenCalled();
+      expect(m('cutAllocationLog').createMany).not.toHaveBeenCalled();
+    });
+
+    it('lệnh chưa có số LSX: câu lỗi dùng mã PI', async () => {
+      activeOrders = [];
+      await expect(
+        service.add('u1', { workshopId: '5', productionInvoiceId: '100', materialId: '7' }),
+      ).rejects.toThrow(/^PI-100 chưa có SKU nào đang chạy/);
     });
 
     it('cặp không có kiểu cắt nào của lệnh trong xưởng -> 400', async () => {
@@ -1526,6 +1645,19 @@ describe('CutAllocationService', () => {
       expect(await service.autoPull(5n, ['2'])).toBeNull();
       m('workshop').findUnique.mockResolvedValue(null);
       expect(await service.autoPull(5n, ['2'])).toBeNull();
+    });
+  });
+
+  describe('startedAllocationPiIds (đối soát hàng đợi Phôi)', () => {
+    it('chỉ lệnh có dòng chia còn hiệu lực VÀ đã Bắt đầu', async () => {
+      allocations = [baseAllocation({ workstationId: 2n, barCount: 3 })];
+      expect(await service.startedAllocationPiIds(5n)).toEqual([100n]);
+      activeOrders = [];
+      expect(await service.startedAllocationPiIds(5n)).toEqual([]);
+    });
+
+    it('không có dòng chia -> rỗng', async () => {
+      expect(await service.startedAllocationPiIds(5n)).toEqual([]);
     });
   });
 

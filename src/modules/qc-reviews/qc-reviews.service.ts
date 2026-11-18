@@ -37,6 +37,8 @@ import { SegmentProductionService } from '../segment-stock/segment-production.se
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { queueWorkshopIdOfPi } from '../floor/floor-queue-workshop.util';
+import { PaintTransferReminderService } from '../warehouse-transfers/paint-transfer-reminder.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { CreateQcReviewDto } from './dto/create-qc-review.dto';
 import { CreateSteelIssueQcReviewDto } from './dto/create-steel-issue-qc-review.dto';
@@ -74,6 +76,7 @@ export class QcReviewsService {
     private readonly notifications: NotificationsService,
     private readonly realtime: RealtimeService,
     private readonly segmentProductionService: SegmentProductionService,
+    private readonly paintReminder: PaintTransferReminderService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). `parentId` (2026-10-17,
@@ -124,14 +127,17 @@ export class QcReviewsService {
     failedQty: number,
     senderRole: string,
     extra?: { detail: string; todo: string },
+    /** Xưởng nơi làm (chỉ lô Sơn của lệnh Phước An: sơn ở Phú An) - người nhận lọc theo xưởng này thay vì mã lệnh. */
+    workshopId?: string,
   ): Promise<void> {
     try {
+      const ws = workshopId ? { workshopId } : {};
       if (failedQty > 0) {
         await this.notifications.emit('QC_FAILED', {
-          params: { piCode, failedQty, senderRole, ...extra },
+          params: { piCode, failedQty, senderRole, ...extra, ...ws },
         });
       } else {
-        await this.notifications.emit('QC_PASSED', { params: { piCode } });
+        await this.notifications.emit('QC_PASSED', { params: { piCode, ...ws } });
       }
     } catch (error) {
       this.logger.error(
@@ -162,6 +168,28 @@ export class QcReviewsService {
         ? `Báo công nhân cắt lại ${list} rồi quét mã máy cắt báo cắt bù; kiểm rồi gửi KCS`
         : `Báo công nhân làm bù ${list}: nếu không còn đoạn đã cắt dư thì cắt thêm số đó ở máy cắt trước, rồi báo ${label} bù; kiểm rồi gửi KCS`;
     return { detail, todo };
+  }
+
+  /**
+   * Xưởng nơi sơn của lô Sơn (lệnh Phước An sơn ở Phú An) để tin KCS đi đúng QLSX. Tra riêng theo productionOrderId vì
+   * include của ProductionBatch không có id lệnh. Lỗi chỉ ghi log, trả undefined (tin lọc theo mã lệnh như cũ).
+   */
+  private async paintWorkshopIdOfOrder(productionOrderId: bigint): Promise<string | undefined> {
+    try {
+      const order = await this.prisma.productionOrder.findUnique({
+        where: { id: productionOrderId },
+        select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+      });
+      const piId = order?.productionInvoiceItem?.productionInvoiceId;
+      if (piId == null) return undefined;
+      const ws = await queueWorkshopIdOfPi(this.prisma, MfgStage.SON, piId);
+      return ws == null ? undefined : ws.toString();
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve paint workshop (order ${productionOrderId}): ${(error as Error).message}`,
+      );
+      return undefined;
+    }
   }
 
   /** Như notifyQcResult nhưng tự đọc mã PI (cần mã PI thật để giới hạn QLSX đúng xưởng). Chạy SAU khi
@@ -651,7 +679,21 @@ export class QcReviewsService {
       batch.productionOrder?.productionInvoiceItem?.productionInvoice?.code ?? `#${batch.id}`,
       dto.failedQty,
       this.mfgStageToSenderRole(batch.stage),
+      undefined,
+      batch.stage === MfgStage.SON
+        ? await this.paintWorkshopIdOfOrder(batch.productionOrderId)
+        : undefined,
     );
+    // Nhắc thủ kho Hàn chuyển mảnh sang Sơn (lệnh của xưởng không có kho Sơn). Best-effort, không làm hỏng lượt chấm.
+    if (batch.stage === MfgStage.HAN) {
+      try {
+        await this.paintReminder.refreshForOrder(batch.productionOrderId.toString());
+      } catch (error) {
+        this.logger.error(
+          `Failed to refresh paint-transfer reminder (order ${batch.productionOrderId}): ${(error as Error).message}`,
+        );
+      }
+    }
     this.publishRealtime(created.id, 'QC_RECORDED', reviewedById, batch.productionOrderId);
 
     return this.toResponseDto(created);

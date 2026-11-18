@@ -356,6 +356,10 @@ export interface CutPullSteelToIssueParams {
   lines: string;
   /** Mã kho còn giữ sắt của lệnh - báo đúng thủ kho. */
   warehouseCodes: string[];
+  /** Nguồn kích hoạt: 'AUTO_PULL' = máy cắt rảnh tự kéo lệnh; 'MANUAL' = QLSX chia tay (Chia luôn / Chia phần còn lại);
+   *  'RECONCILE' = lượt nền đối soát thấy lệnh đã chia mà sắt chưa xuống Phôi, chưa có tin.
+   *  Thiếu = coi như AUTO_PULL (tin cũ, câu cũ). */
+  source?: 'AUTO_PULL' | 'MANUAL' | 'RECONCILE';
 }
 
 /** Có đợt công nhân đã báo nhưng QLSX chưa gửi KCS quá lâu (2026-10-13). */
@@ -365,6 +369,34 @@ export interface FloorBatchStaleParams {
   count: number;
   /** Ngưỡng (giờ). */
   hours: number;
+  /** Xưởng của hàng đợi (id, chuỗi số). Thiếu = không suy ra được xưởng. */
+  workshopId?: string;
+  /** Tên xưởng để hiện ở tiêu đề (mỗi tổ x xưởng 1 tin). */
+  workshopName?: string;
+}
+
+/** SKU đóng gói đủ, chờ QLSX bấm "Kết thúc" (N1, 18/11/2026). */
+export interface PiItemReadyToFinishParams {
+  piCode: string;
+  /** Id lệnh (chuỗi số) - cho link mở thẳng bảng SKU. */
+  piId: string;
+  /** Id SKU (chuỗi số) - cho focus PRODUCTION_INVOICE_ITEM:<id>. */
+  itemId: string;
+  factoryCode: string;
+  productName?: string;
+  quantity: number;
+}
+
+/** Lệnh của xưởng không có kho Sơn còn mảnh hàn xong (KCS đạt) chờ chuyển sang kho Sơn (N1, 18/11/2026). */
+export interface PiecesToPaintPendingParams {
+  piCode: string;
+  piId: string;
+  /** Tổng số mảnh còn chờ chuyển. */
+  pendingQty: number;
+  /** Mã kho Hàn của xưởng lệnh - người nhận = thủ kho các kho này. */
+  weldWarehouseCodes: string[];
+  weldWarehouseName: string;
+  paintWarehouseName: string;
 }
 
 const FLOOR_STAGE_LABEL = { PHOI: 'Phôi', HAN: 'Hàn', SON: 'Sơn' } as const;
@@ -1186,7 +1218,7 @@ const notificationTypeDefinitions = {
     title: (p: FloorStageCompleteParams) =>
       `Tổ ${FLOOR_STAGE_LABEL[p.stage]} đã báo đủ số của ${p.piCode}`,
     message: (p: FloorStageCompleteParams) =>
-      `Kiểm các đợt đang chờ rồi bấm “Chuyển PI tiếp” cho tổ ${FLOOR_STAGE_LABEL[p.stage]} (${p.piCode}).`,
+      `Kiểm các đợt đang chờ rồi bấm “Chuyển lệnh tiếp” cho tổ ${FLOOR_STAGE_LABEL[p.stage]} (${p.piCode}).`,
     link: () => ({ module: 'production', page: 'san-luong-xuong' }),
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
   } satisfies NotificationTypeDef<FloorStageCompleteParams>,
@@ -1270,7 +1302,11 @@ const notificationTypeDefinitions = {
     entityType: 'PRODUCTION_INVOICE',
     title: (p: CutPullSteelToIssueParams) => `Xuất sắt lệnh ${p.piCode} xuống Phôi ngay`,
     message: (p: CutPullSteelToIssueParams) =>
-      `Máy cắt rảnh vừa kéo lệnh này lên cắt. Chưa xuất: ${p.lines}.`,
+      p.source === 'MANUAL'
+        ? `QLSX vừa chia lệnh này cho máy cắt. Chưa xuất: ${p.lines}.`
+        : p.source === 'RECONCILE'
+          ? `Lệnh này đã chia cho máy cắt mà sắt chưa xuống Phôi. Chưa xuất: ${p.lines}.`
+          : `Máy cắt rảnh vừa kéo lệnh này lên cắt. Chưa xuất: ${p.lines}.`,
     link: () => ({ module: 'inbound_warehouse', page: 'xuat-sat' }),
     recipients: (p: CutPullSteelToIssueParams) => ({
       warehouseIds: p.warehouseCodes,
@@ -1285,7 +1321,7 @@ const notificationTypeDefinitions = {
     severity: 'WARNING',
     entityType: 'FLOOR_STAGE',
     title: (p: FloorBatchStaleParams) =>
-      `Tổ ${FLOOR_STAGE_LABEL[p.stage]}: ${p.count} đợt chờ gửi KCS quá ${p.hours} giờ`,
+      `Tổ ${FLOOR_STAGE_LABEL[p.stage]}${p.workshopName ? ` · ${p.workshopName}` : ''}: ${p.count} đợt chờ gửi KCS quá ${p.hours} giờ`,
     message: (p: FloorBatchStaleParams) =>
       `Công nhân đã báo nhưng chưa gửi KCS quá ${p.hours} giờ - kiểm và gửi KCS (hoặc hủy lần báo sai).`,
     link: () => ({ module: 'production', page: 'san-luong-xuong' }),
@@ -1641,6 +1677,44 @@ const notificationTypeDefinitions = {
     }),
     recipients: () => ({ roles: [BUSINESS_ROLES.SALES_STAFF] }),
   } satisfies NotificationTypeDef<PackagingCompleteNotificationParams>,
+
+  /** SKU đóng gói đủ số lượng - nhắc QLSX bấm "Kết thúc" (N1, 18/11/2026). ACTION_REQUIRED, tự đóng khi Kết thúc SKU
+   *  (entityType PRODUCTION_INVOICE_ITEM, entityId = id SKU). dedupeKey người gọi đưa: `pi-item-ready-to-finish:<id SKU>`.
+   *  Người nhận: vai QLSX, lọc xưởng theo mã lệnh (recipient-resolver). */
+  PI_ITEM_READY_TO_FINISH: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'PRODUCTION_INVOICE_ITEM',
+    title: (p: PiItemReadyToFinishParams) =>
+      `${p.piCode} · ${p.factoryCode}: đã đóng gói đủ - bấm Kết thúc`,
+    message: (p: PiItemReadyToFinishParams) =>
+      `Đã đóng gói đủ ${p.quantity} bộ. Bấm “Kết thúc” SKU này để nhả hàng còn giữ cho lệnh và ghi lệnh hoàn thành. Không hoàn tác được.`,
+    link: (p: PiItemReadyToFinishParams) => ({
+      module: 'production',
+      page: 'ke-hoach',
+      params: { pi: p.piId, focus: `PRODUCTION_INVOICE_ITEM:${p.itemId}` },
+    }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
+  } satisfies NotificationTypeDef<PiItemReadyToFinishParams>,
+
+  /** Mảnh hàn xong (KCS Hàn đạt) của lệnh Phước An (xưởng không có kho Sơn) chờ chuyển sang kho Sơn - nhắc thủ kho Hàn lập
+   *  phiếu ở "Xuất theo đơn hàng" (N1, 18/11/2026). ACTION_REQUIRED, entityType PRODUCTION_INVOICE, entityId = id lệnh.
+   *  dedupeKey người gọi đưa: `pieces-to-paint-pending:<id lệnh>`. Tự đóng khi đã lập đủ phiếu (người gọi resolve). */
+  PIECES_TO_PAINT_PENDING: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PiecesToPaintPendingParams) =>
+      `${p.piCode}: ${p.pendingQty} mảnh hàn xong chờ chuyển sang ${p.paintWarehouseName}`,
+    message: (p: PiecesToPaintPendingParams) =>
+      `Mảnh cần sơn đã qua KCS Hàn đang ở ${p.weldWarehouseName}. Lập phiếu chuyển ở “Xuất theo đơn hàng” khi xe chở sang. Tin tự đóng khi đã lập phiếu đủ.`,
+    link: () => ({ module: 'inbound_warehouse', page: 'xuat-kho' }),
+    recipients: (p: PiecesToPaintPendingParams) => ({
+      warehouseIds: p.weldWarehouseCodes,
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<PiecesToPaintPendingParams>,
 
   // ─── Cắt sắt (Phase 1, xem lịch sử ở changelog 2026-09-25/26) ──────────────────────────────
   /** Tính xong + tự duyệt ngay (Sếp chốt 2026-08-15: không cần QLSX bấm duyệt riêng).

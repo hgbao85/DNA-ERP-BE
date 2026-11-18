@@ -14,7 +14,13 @@ import {
   segmentCodeLabel,
 } from '../../common/utils/segment-code.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
-import { StockLedgerService } from '../stock/stock-ledger.service';
+import { RealtimeService } from '../../realtime/realtime.service';
+import {
+  SEGMENT_STOCKTAKE_NOT_CONVERTED_MESSAGE,
+  StockLedgerService,
+} from '../stock/stock-ledger.service';
+
+export { SEGMENT_STOCKTAKE_NOT_CONVERTED_MESSAGE };
 
 /** Kho ảo "Cân đối tồn kho" - đối ứng của mọi bút toán chỉnh tay / kiểm kê. */
 const ADJUST_WAREHOUSE_CODE = 'OPENING_BALANCE';
@@ -54,6 +60,7 @@ export class SegmentStocktakeService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedger: StockLedgerService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   async stocktake(input: SegmentStocktakeInput): Promise<SegmentStocktakeResult> {
@@ -90,11 +97,20 @@ export class SegmentStocktakeService {
       input.segmentSteps,
     );
 
-    return this.prisma.$transaction(
+    const result = await this.prisma.$transaction(
       async (tx) => {
         // Rà soát 14/11 TĐ8: chờ lượt chuyển đổi dữ liệu cũ (độc quyền) trước khoá ô - kiểm kê chen giữa lúc chuyển đổi đã đọc tồn
         // cũ làm ô ra dư ảo.
         await lockBusinessKeyShared(tx, SEGMENT_LEGACY_CONVERSION_LOCK);
+        // Chưa chuyển đổi (2 bảng tồn đoạn theo lệnh còn trống) thì lượt chuyển đổi sau sẽ xoá số đếm này về 0: chặn, không phụ
+        // thuộc biến môi trường. Đếm SAU khoá dùng chung nên hoặc chờ chuyển đổi xong (count > 0) hoặc bị chặn.
+        const [reservationCount, productionCount] = await Promise.all([
+          tx.segmentReservation.count(),
+          tx.segmentProduction.count(),
+        ]);
+        if (reservationCount + productionCount === 0) {
+          throw new ConflictException(SEGMENT_STOCKTAKE_NOT_CONVERTED_MESSAGE);
+        }
         await lockBusinessKey(
           tx,
           segmentBucketLockKey(input.warehouseId, input.segmentSpecId, input.segmentSteps),
@@ -146,5 +162,15 @@ export class SegmentStocktakeService {
       },
       { maxWait: 10_000, timeout: 20_000 },
     );
+    // Sau khi commit: máy khác đang mở màn tồn đoạn tự tải lại (chỉ khi có chênh).
+    if (result.deltaQty !== 0) {
+      this.realtime.publishEntityChanged({
+        entity: 'STOCK',
+        entityId: input.segmentSpecId,
+        action: 'ADJUSTED',
+        actorId: input.actorId,
+      });
+    }
+    return result;
   }
 }

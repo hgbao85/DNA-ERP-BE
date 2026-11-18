@@ -5,17 +5,25 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CutAllocationService } from './cut-allocation.service';
 import { CutSnapshotCache } from './cut-allocation-snapshot';
 import { FloorAdminService } from './floor-admin.service';
+import { PaintTransferReminderService } from '../warehouse-transfers/paint-transfer-reminder.service';
+import { CutAllocationFollowUpService } from './cut-allocation-follow-up.service';
 import { FloorAlertsService, MIN_EVALUATE_GAP_MS, STALE_HOURS } from './floor-alerts.service';
 
 describe('FloorAlertsService', () => {
   let prisma: {
     floorQueueEntry: { findMany: jest.Mock };
     notification: { findMany: jest.Mock; findFirst: jest.Mock };
-    cutBundle: { count: jest.Mock };
+    cutBundle: { findMany: jest.Mock };
     stepBatch: { findMany: jest.Mock };
-    productionBatch: { groupBy: jest.Mock };
+    productionBatch: { findMany: jest.Mock };
     workstation: { findMany: jest.Mock };
+    productionInvoiceItem: { findMany: jest.Mock };
+    warehouse: { findUnique: jest.Mock };
+    workshop: { findMany: jest.Mock; findFirst: jest.Mock };
+    productionInvoice: { findMany: jest.Mock };
   };
+  let followUp: { afterAllocated: jest.Mock; queueMissingPhoi: jest.Mock };
+  let paintReminder: { syncAll: jest.Mock };
   let admin: {
     computeProgress: jest.Mock;
     autoCompletePhoi: jest.Mock;
@@ -25,9 +33,10 @@ describe('FloorAlertsService', () => {
     machineProgressByWorkshop: jest.Mock;
     autoPull: jest.Mock;
     steelGapsByPi: jest.Mock;
+    startedAllocationPiIds: jest.Mock;
   };
   let realtime: { publishEntityChanged: jest.Mock };
-  let notifications: { emit: jest.Mock; resolve: jest.Mock };
+  let notifications: { emit: jest.Mock; resolve: jest.Mock; updateOpenContent: jest.Mock };
   let service: FloorAlertsService;
 
   const running = (id: bigint, stage: string, code: string, status = 'RUNNING') => ({
@@ -35,6 +44,7 @@ describe('FloorAlertsService', () => {
     stage,
     status,
     productionInvoiceId: 45n,
+    workshopId: 5n,
     productionInvoice: { code },
   });
   const progress = (complete: boolean) => ({
@@ -63,10 +73,35 @@ describe('FloorAlertsService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
       },
-      cutBundle: { count: jest.fn().mockResolvedValue(0) },
+      cutBundle: { findMany: jest.fn().mockResolvedValue([]) },
       stepBatch: { findMany: jest.fn().mockResolvedValue([]) },
-      productionBatch: { groupBy: jest.fn().mockResolvedValue([]) },
+      productionBatch: { findMany: jest.fn().mockResolvedValue([]) },
       workstation: { findMany: jest.fn().mockResolvedValue([]) },
+      // Lệnh 45 thuộc Phú An (5), lệnh 46 thuộc Phước An (6, sơn nhờ Phú An); lệnh khác: chưa có xưởng.
+      productionInvoiceItem: {
+        findMany: jest
+          .fn()
+          .mockImplementation(({ where }: { where: { productionInvoiceId: { in: bigint[] } } }) => {
+            const ws: Record<string, bigint> = { '45': 5n, '46': 6n };
+            return Promise.resolve(
+              where.productionInvoiceId.in
+                .filter((id) => ws[id.toString()] != null)
+                .map((id) => ({ productionInvoiceId: id, workshopId: ws[id.toString()] })),
+            );
+          }),
+      },
+      warehouse: { findUnique: jest.fn().mockResolvedValue(null) },
+      productionInvoice: { findMany: jest.fn().mockResolvedValue([]) },
+      workshop: {
+        findMany: jest.fn().mockImplementation(({ where }: { where: { id: { in: bigint[] } } }) => {
+          const all = [
+            { id: 5n, name: 'Phú An', paintWorkshopId: null },
+            { id: 6n, name: 'Phước An', paintWorkshopId: 5n },
+          ];
+          return Promise.resolve(all.filter((w) => where.id.in.includes(w.id)));
+        }),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     };
     admin = {
       computeProgress: jest.fn().mockResolvedValue(progress(false)),
@@ -77,11 +112,18 @@ describe('FloorAlertsService', () => {
       machineProgressByWorkshop: jest.fn().mockResolvedValue([]),
       autoPull: jest.fn().mockResolvedValue(null),
       steelGapsByPi: jest.fn().mockResolvedValue(new Map()),
+      startedAllocationPiIds: jest.fn().mockResolvedValue([]),
     };
+    followUp = {
+      afterAllocated: jest.fn().mockResolvedValue(undefined),
+      queueMissingPhoi: jest.fn().mockResolvedValue(undefined),
+    };
+    paintReminder = { syncAll: jest.fn().mockResolvedValue(undefined) };
     realtime = { publishEntityChanged: jest.fn() };
     notifications = {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
+      updateOpenContent: jest.fn().mockResolvedValue(true),
     };
     service = new FloorAlertsService(
       prisma as unknown as PrismaServiceType,
@@ -89,7 +131,19 @@ describe('FloorAlertsService', () => {
       notifications as unknown as NotificationsService,
       cutAllocation as unknown as CutAllocationService,
       realtime as unknown as RealtimeService,
+      followUp as unknown as CutAllocationFollowUpService,
+      paintReminder as unknown as PaintTransferReminderService,
     );
+  });
+
+  /** Dựng `n` đợt cắt Phôi quá hạn của lệnh `piId`. */
+  const staleCut = (n: number, piId = 45n) =>
+    prisma.cutBundle.findMany.mockResolvedValue(
+      Array.from({ length: n }, () => ({ steelIssue: { productionInvoiceId: piId } })),
+    );
+  const staleBatch = (stage: string, piId: bigint) => ({
+    stage,
+    productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } },
   });
 
   afterEach(() => {
@@ -106,7 +160,7 @@ describe('FloorAlertsService', () => {
       expect(notifications.emit).toHaveBeenCalledWith('FLOOR_STAGE_COMPLETE', {
         entityId: '7',
         dedupeKey: 'floor-stage-complete:7',
-        params: { stage: 'HAN', piCode: 'PI-45' },
+        params: { stage: 'HAN', piCode: 'PI-45', workshopId: '5' },
       });
     });
 
@@ -174,7 +228,7 @@ describe('FloorAlertsService', () => {
       expect(notifications.emit).toHaveBeenCalledWith('FLOOR_PHOI_DONE', {
         entityId: '7',
         dedupeKey: 'floor-phoi-done:7',
-        params: { piCode: 'PI-45', nextPiCode: 'PI-46' },
+        params: { piCode: 'PI-45', nextPiCode: 'PI-46', workshopId: '5' },
       });
       expect(notifications.emit).not.toHaveBeenCalledWith(
         'FLOOR_STAGE_COMPLETE',
@@ -411,13 +465,13 @@ describe('FloorAlertsService', () => {
 
     it('lỗi dựng tiến độ máy -> chỉ log, các bước khác (nhắc quá hạn KCS) vẫn chạy', async () => {
       cutAllocation.machineProgressByWorkshop.mockRejectedValue(new Error('boom'));
-      prisma.cutBundle.count.mockResolvedValue(1);
+      staleCut(1);
 
       await expect(service.evaluate()).resolves.toBeUndefined();
 
       expect(notifications.emit).toHaveBeenCalledWith(
         'FLOOR_BATCH_STALE',
-        expect.objectContaining({ entityId: 'PHOI' }),
+        expect.objectContaining({ entityId: 'PHOI:5' }),
       );
     });
   });
@@ -472,7 +526,11 @@ describe('FloorAlertsService', () => {
       await service.evaluate();
 
       expect(cutAllocation.autoPull).toHaveBeenCalledWith(5n, ['12', '13']);
-      expect(admin.ensurePhoiQueued).toHaveBeenCalledWith([45n]);
+      expect(followUp.afterAllocated).toHaveBeenCalledWith({
+        workshopId: '5',
+        orders: [{ productionInvoiceId: '45', piCode: 'PI-45', steelGaps: [] }],
+        source: 'AUTO_PULL',
+      });
       expect(notifications.emit).toHaveBeenCalledWith('CUT_ORDER_PULLED', {
         entityId: '45',
         dedupeKey: 'cut-order-pulled:45:900',
@@ -514,26 +572,23 @@ describe('FloorAlertsService', () => {
       });
     });
 
-    it('lệnh còn thiếu sắt xuất xuống Phôi -> báo thủ kho CUT_PULL_STEEL_TO_ISSUE (emit cùng dedupeKey để gộp/cập nhật)', async () => {
+    it('lệnh còn thiếu sắt -> giao follow-up (source AUTO_PULL) lo xếp hàng đợi Phôi + báo thủ kho; floor-alerts không tự emit tin xuất sắt', async () => {
       cutAllocation.machineProgressByWorkshop.mockResolvedValue([
         machine({ status: 'IDLE', barsLeft: 0 }),
       ]);
       cutAllocation.autoPull.mockResolvedValue(pulled([gap]));
-      // thông báo xuất sắt của lệnh còn mở từ lần kéo trước: vẫn phải emit để cập nhật nội dung.
-      prisma.notification.findFirst.mockResolvedValue({ id: 'old' });
 
       await service.evaluate();
 
-      expect(notifications.emit).toHaveBeenCalledWith('CUT_PULL_STEEL_TO_ISSUE', {
-        entityId: '45',
-        dedupeKey: 'cut-pull-steel:45',
-        params: {
-          piCode: 'PI-45',
-          workshopId: '5',
-          lines: 'Sắt hộp 6zem 10x20: còn 12 cây',
-          warehouseCodes: ['kho-sat', 'kho-sat-2'],
-        },
+      expect(followUp.afterAllocated).toHaveBeenCalledWith({
+        workshopId: '5',
+        orders: [{ productionInvoiceId: '45', piCode: 'PI-45', steelGaps: [gap] }],
+        source: 'AUTO_PULL',
       });
+      expect(notifications.emit).not.toHaveBeenCalledWith(
+        'CUT_PULL_STEEL_TO_ISSUE',
+        expect.anything(),
+      );
     });
 
     it('thiếu sắt -> CUT_ORDER_PULLED có steelPending = true', async () => {
@@ -591,29 +646,33 @@ describe('FloorAlertsService', () => {
         machine({ status: 'IDLE', barsLeft: 0 }),
       ]);
       cutAllocation.autoPull.mockRejectedValue(new Error('boom'));
-      prisma.cutBundle.count.mockResolvedValue(1);
+      staleCut(1);
 
       await expect(service.evaluate()).resolves.toBeUndefined();
 
       expect(notifications.emit).toHaveBeenCalledWith('CUT_MACHINE_IDLE', expect.anything());
       expect(notifications.emit).toHaveBeenCalledWith(
         'FLOOR_BATCH_STALE',
-        expect.objectContaining({ entityId: 'PHOI' }),
+        expect.objectContaining({ entityId: 'PHOI:5' }),
       );
       expect(realtime.publishEntityChanged).not.toHaveBeenCalled();
     });
 
-    it('thêm hàng đợi Phôi lỗi -> vẫn báo và phát realtime (dòng chia đã ghi)', async () => {
-      cutAllocation.machineProgressByWorkshop.mockResolvedValue([
-        machine({ status: 'IDLE', barsLeft: 0 }),
-      ]);
-      cutAllocation.autoPull.mockResolvedValue(pulled());
-      admin.ensurePhoiQueued.mockRejectedValue(new Error('boom'));
+    it('đối soát hàng đợi Phôi: mỗi xưởng gọi queueMissingPhoi(startedAllocationPiIds); lỗi không làm hỏng lượt', async () => {
+      cutAllocation.machineProgressByWorkshop.mockResolvedValue([machine({ status: 'BUSY' })]);
+      cutAllocation.startedAllocationPiIds.mockResolvedValue([45n]);
 
+      await service.evaluate();
+
+      expect(cutAllocation.startedAllocationPiIds).toHaveBeenCalledWith(
+        5n,
+        expect.any(CutSnapshotCache),
+      );
+      expect(followUp.queueMissingPhoi).toHaveBeenCalledWith([45n]);
+
+      followUp.queueMissingPhoi.mockRejectedValue(new Error('boom'));
       await expect(service.evaluate()).resolves.toBeUndefined();
-
-      expect(notifications.emit).toHaveBeenCalledWith('CUT_ORDER_PULLED', expect.anything());
-      expect(realtime.publishEntityChanged).toHaveBeenCalledTimes(1);
+      expect(paintReminder.syncAll).toHaveBeenCalledTimes(2);
     });
 
     describe('tự đóng nhắc xuất sắt của thủ kho', () => {
@@ -646,9 +705,9 @@ describe('FloorAlertsService', () => {
         );
       });
 
-      it('không có nhắc đang mở -> không truy vấn thiếu sắt', async () => {
+      it('không có nhắc đang mở -> bước đóng tin không truy vấn; chỉ đối soát tra 1 lần cho xưởng', async () => {
         await service.evaluate();
-        expect(cutAllocation.steelGapsByPi).not.toHaveBeenCalled();
+        expect(cutAllocation.steelGapsByPi).toHaveBeenCalledTimes(1);
       });
 
       it('tính thiếu sắt lỗi -> không đóng nhầm, evaluate không vỡ', async () => {
@@ -660,6 +719,162 @@ describe('FloorAlertsService', () => {
         expect(notifications.resolve).not.toHaveBeenCalledWith(
           expect.objectContaining({ entityType: 'PRODUCTION_INVOICE' }),
         );
+      });
+    });
+
+    describe('đối soát tin xuất sắt (RECONCILE)', () => {
+      const PULL = 'CUT_PULL_STEEL_TO_ISSUE';
+      const lines = 'Sắt hộp 6zem 10x20: còn 12 cây';
+      /** Lệnh 45 đang chạy (có SKU ACTIVE) ở xưởng 5, có dòng chia, còn thiếu sắt và còn kho giữ. */
+      const setup = (over: { started?: bigint[]; recheck?: boolean; gaps?: unknown[] } = {}) => {
+        cutAllocation.steelGapsByPi.mockResolvedValue(new Map([['45', over.gaps ?? [gap]]]));
+        cutAllocation.startedAllocationPiIds.mockResolvedValue(over.started ?? [45n]);
+        prisma.productionInvoice.findMany.mockResolvedValue([
+          { id: 45n, code: 'PI-45', cuttingRecheckRequired: over.recheck ?? false },
+        ]);
+      };
+      const openTin = (data: Record<string, unknown>) =>
+        prisma.notification.findFirst.mockImplementation((args: { where: { type: unknown } }) =>
+          Promise.resolve(args.where.type === PULL ? { data } : null),
+        );
+      const pullEmits = () =>
+        (notifications.emit.mock.calls as unknown[][]).filter((c) => c[0] === PULL);
+
+      it('chưa có tin mở -> phát tin mới, source RECONCILE, đủ loại sắt + kho', async () => {
+        setup();
+        await service.evaluate();
+        expect(prisma.notification.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: {
+              type: PULL,
+              dedupeKey: 'cut-pull-steel:45',
+              recipients: { some: { resolvedAt: null } },
+            },
+          }),
+        );
+        expect(notifications.emit).toHaveBeenCalledWith(PULL, {
+          entityId: '45',
+          dedupeKey: 'cut-pull-steel:45',
+          params: {
+            piCode: 'PI-45',
+            workshopId: '5',
+            lines,
+            warehouseCodes: ['kho-sat', 'kho-sat-2'],
+            source: 'RECONCILE',
+          },
+        });
+      });
+
+      it('đã có tin mở, nội dung y nguyên -> không phát, không cập nhật', async () => {
+        setup();
+        openTin({ lines, warehouseCodes: ['kho-sat', 'kho-sat-2'], source: 'MANUAL' });
+        await service.evaluate();
+        expect(pullEmits()).toEqual([]);
+        expect(notifications.updateOpenContent).not.toHaveBeenCalled();
+      });
+
+      it('lệnh cờ cuttingRecheckRequired -> không phát', async () => {
+        setup({ recheck: true });
+        await service.evaluate();
+        expect(pullEmits()).toEqual([]);
+      });
+
+      it('lệnh chưa chạy (không có SKU ACTIVE ở xưởng) -> không phát', async () => {
+        setup({ started: [] });
+        await service.evaluate();
+        expect(pullEmits()).toEqual([]);
+      });
+
+      it('thiếu sắt nhưng không kho nào còn giữ chỗ -> không phát', async () => {
+        setup({ gaps: [{ ...gap, warehouseCodes: [] }] });
+        await service.evaluate();
+        expect(pullEmits()).toEqual([]);
+        expect(prisma.productionInvoice.findMany).not.toHaveBeenCalled();
+      });
+
+      it('tin mở mà chỉ danh sách loại sắt đổi (kho cũ) -> updateOpenContent giữ nguồn cũ, không emit', async () => {
+        setup();
+        openTin({
+          lines: 'Sắt hộp 6zem 10x20: còn 20 cây',
+          warehouseCodes: ['kho-sat', 'kho-sat-2'],
+          source: 'MANUAL',
+        });
+        await service.evaluate();
+        expect(pullEmits()).toEqual([]);
+        expect(notifications.updateOpenContent).toHaveBeenCalledWith(PULL, 'cut-pull-steel:45', {
+          piCode: 'PI-45',
+          workshopId: '5',
+          lines,
+          warehouseCodes: ['kho-sat', 'kho-sat-2'],
+          source: 'MANUAL',
+        });
+      });
+
+      it('tin mở mà có kho mới chưa trong tin -> emit gộp để thêm người nhận', async () => {
+        setup();
+        openTin({ lines, warehouseCodes: ['kho-sat'], source: 'AUTO_PULL' });
+        await service.evaluate();
+        expect(notifications.emit).toHaveBeenCalledWith(
+          PULL,
+          expect.objectContaining({
+            entityId: '45',
+            dedupeKey: 'cut-pull-steel:45',
+            params: expect.objectContaining({
+              warehouseCodes: ['kho-sat', 'kho-sat-2'],
+            }) as unknown,
+          }),
+        );
+        expect(notifications.updateOpenContent).not.toHaveBeenCalled();
+      });
+
+      it('updateOpenContent trả false (tin vừa đóng) -> phát tin mới', async () => {
+        setup();
+        openTin({ lines: 'cũ', warehouseCodes: ['kho-sat', 'kho-sat-2'] });
+        notifications.updateOpenContent.mockResolvedValue(false);
+        await service.evaluate();
+        expect(pullEmits()).toHaveLength(1);
+      });
+
+      it('lệnh hết thiếu sắt -> vẫn đóng tin như cũ và không phát mới', async () => {
+        prisma.notification.findMany.mockImplementation((args: { where: { type: unknown } }) =>
+          Promise.resolve(
+            args.where.type === PULL ? [{ entityId: '45', data: { workshopId: '5' } }] : [],
+          ),
+        );
+        cutAllocation.steelGapsByPi.mockResolvedValue(new Map());
+        cutAllocation.startedAllocationPiIds.mockResolvedValue([45n]);
+        await service.evaluate();
+        expect(notifications.resolve).toHaveBeenCalledWith({
+          entityType: 'PRODUCTION_INVOICE',
+          entityId: '45',
+          types: [PULL],
+        });
+        expect(pullEmits()).toEqual([]);
+      });
+
+      it('xưởng lỗi thì chỉ log, evaluate không vỡ và các bước sau vẫn chạy', async () => {
+        cutAllocation.steelGapsByPi.mockRejectedValue(new Error('boom'));
+        await expect(service.evaluate()).resolves.toBeUndefined();
+        expect(paintReminder.syncAll).toHaveBeenCalledTimes(1);
+      });
+
+      it('lỗi emit 1 lệnh không cản lệnh khác', async () => {
+        cutAllocation.steelGapsByPi.mockResolvedValue(
+          new Map([
+            ['45', [gap]],
+            ['46', [gap]],
+          ]),
+        );
+        cutAllocation.startedAllocationPiIds.mockResolvedValue([45n, 46n]);
+        prisma.productionInvoice.findMany.mockResolvedValue([
+          { id: 45n, code: 'PI-45', cuttingRecheckRequired: false },
+          { id: 46n, code: 'PI-46', cuttingRecheckRequired: false },
+        ]);
+        notifications.emit.mockImplementation((type: string, o: { entityId: string }) =>
+          type === PULL && o.entityId === '45' ? Promise.reject(new Error('x')) : Promise.resolve(),
+        );
+        await service.evaluate();
+        expect(pullEmits()).toHaveLength(2);
       });
     });
 
@@ -681,33 +896,134 @@ describe('FloorAlertsService', () => {
     });
   });
 
-  describe('đợt chờ gửi KCS quá lâu', () => {
-    it('tổ có đợt quá hạn -> nhắc đúng tổ đó; tổ không có -> đóng nhắc cũ', async () => {
-      prisma.cutBundle.count.mockResolvedValue(2);
-      prisma.productionBatch.groupBy.mockResolvedValue([{ stage: 'HAN', _count: { _all: 1 } }]);
-      prisma.stepBatch.findMany.mockResolvedValue([{ id: 1n }]);
+  describe('đợt chờ gửi KCS quá lâu (theo xưởng)', () => {
+    const staleParams = (stage: string, count: number, ws: string, name: string) => ({
+      stage,
+      count,
+      hours: STALE_HOURS,
+      workshopId: ws,
+      workshopName: name,
+    });
+
+    it('AC3: 2 xưởng + Sơn nhờ -> 3 tin riêng, entityId <tổ>:<xưởng>', async () => {
+      prisma.cutBundle.findMany.mockResolvedValue([
+        { steelIssue: { productionInvoiceId: 45n } },
+        ...Array.from({ length: 4 }, () => ({ steelIssue: { productionInvoiceId: 46n } })),
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([staleBatch('SON', 46n)]);
 
       await service.evaluate();
 
-      // Phôi = 2 đợt cắt + 1 nhóm công đoạn phụ
       expect(notifications.emit).toHaveBeenCalledWith('FLOOR_BATCH_STALE', {
-        entityId: 'PHOI',
-        dedupeKey: 'floor-batch-stale:PHOI',
-        params: { stage: 'PHOI', count: 3, hours: STALE_HOURS },
+        entityId: 'PHOI:5',
+        dedupeKey: 'FLOOR_BATCH_STALE:PHOI:5',
+        params: staleParams('PHOI', 1, '5', 'Phú An'),
       });
+      expect(notifications.emit).toHaveBeenCalledWith('FLOOR_BATCH_STALE', {
+        entityId: 'PHOI:6',
+        dedupeKey: 'FLOOR_BATCH_STALE:PHOI:6',
+        params: staleParams('PHOI', 4, '6', 'Phước An'),
+      });
+      // lô Sơn của lệnh Phước An nằm ở xưởng nơi sơn = Phú An
+      expect(notifications.emit).toHaveBeenCalledWith('FLOOR_BATCH_STALE', {
+        entityId: 'SON:5',
+        dedupeKey: 'FLOOR_BATCH_STALE:SON:5',
+        params: staleParams('SON', 1, '5', 'Phú An'),
+      });
+      expect(notifications.emit).toHaveBeenCalledTimes(3);
+    });
+
+    it('đợt không suy ra được xưởng -> nhóm none, params không có workshopId', async () => {
+      staleCut(2, 999n);
+
+      await service.evaluate();
+
+      expect(notifications.emit).toHaveBeenCalledWith('FLOOR_BATCH_STALE', {
+        entityId: 'PHOI:none',
+        dedupeKey: 'FLOOR_BATCH_STALE:PHOI:none',
+        params: { stage: 'PHOI', count: 2, hours: STALE_HOURS },
+      });
+    });
+
+    it('công đoạn phụ (stepBatch) tính vào Phôi theo lệnh của nó', async () => {
+      prisma.stepBatch.findMany.mockResolvedValue([{ productionInvoiceId: 45n }]);
+
+      await service.evaluate();
+
       expect(notifications.emit).toHaveBeenCalledWith(
         'FLOOR_BATCH_STALE',
-        expect.objectContaining({ entityId: 'HAN' }),
+        expect.objectContaining({ entityId: 'PHOI:5' }),
       );
-      expect(notifications.emit).not.toHaveBeenCalledWith(
+    });
+
+    it('AC4: tin đang mở, số đổi -> updateOpenContent (không emit lại, giữ đã đọc)', async () => {
+      staleCut(6, 46n);
+      prisma.notification.findFirst.mockResolvedValue({
+        id: 'n1',
+        data: { count: 4, workshopName: 'Phước An' },
+      });
+
+      await service.evaluate();
+
+      expect(notifications.updateOpenContent).toHaveBeenCalledWith(
         'FLOOR_BATCH_STALE',
-        expect.objectContaining({ entityId: 'SON' }),
+        'FLOOR_BATCH_STALE:PHOI:6',
+        staleParams('PHOI', 6, '6', 'Phước An'),
       );
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('tin đang mở, số không đổi -> không làm gì', async () => {
+      staleCut(4, 46n);
+      prisma.notification.findFirst.mockResolvedValue({
+        id: 'n1',
+        data: { count: 4, workshopName: 'Phước An' },
+      });
+
+      await service.evaluate();
+
+      expect(notifications.updateOpenContent).not.toHaveBeenCalled();
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('updateOpenContent trả false (tin vừa đóng) -> phát tin mới', async () => {
+      staleCut(2, 45n);
+      prisma.notification.findFirst.mockResolvedValueOnce({ id: 'n1', data: { count: 1 } });
+      notifications.updateOpenContent.mockResolvedValue(false);
+
+      await service.evaluate();
+
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'FLOOR_BATCH_STALE',
+        expect.objectContaining({ entityId: 'PHOI:5' }),
+      );
+    });
+
+    it('AC4/AC5: hết đợt và tin kiểu cũ (entityId PHOI) -> resolve theo entityType + đúng type; nhóm còn thì giữ', async () => {
+      staleCut(1, 45n);
+      prisma.notification.findMany.mockImplementation((args: { where: { type: unknown } }) =>
+        Promise.resolve(
+          args.where.type === 'FLOOR_BATCH_STALE'
+            ? [{ entityId: 'PHOI' }, { entityId: 'PHOI:6' }, { entityId: 'PHOI:5' }]
+            : [],
+        ),
+      );
+
+      await service.evaluate();
+
       expect(notifications.resolve).toHaveBeenCalledWith({
         entityType: 'FLOOR_STAGE',
-        entityId: 'SON',
+        entityId: 'PHOI',
         types: ['FLOOR_BATCH_STALE'],
       });
+      expect(notifications.resolve).toHaveBeenCalledWith({
+        entityType: 'FLOOR_STAGE',
+        entityId: 'PHOI:6',
+        types: ['FLOOR_BATCH_STALE'],
+      });
+      expect(notifications.resolve).not.toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: 'PHOI:5' }),
+      );
     });
 
     it('ngưỡng tính theo lần báo CÒN HIỆU LỰC đầu tiên (bỏ lần đã bị đảo), mốc = bây giờ - STALE_HOURS', async () => {
@@ -715,7 +1031,7 @@ describe('FloorAlertsService', () => {
 
       await service.evaluate(now);
 
-      const where = (prisma.cutBundle.count.mock.calls as unknown[][])[0][0] as {
+      const where = (prisma.cutBundle.findMany.mock.calls as unknown[][])[0][0] as {
         where: { status: string; floorReports: { some: Record<string, unknown> } };
       };
       expect(where.where.status).toBe('CUTTING');
@@ -725,14 +1041,24 @@ describe('FloorAlertsService', () => {
         reversedBy: { is: null },
       });
     });
+  });
 
-    it('đã có nhắc quá hạn đang mở -> không phát lại', async () => {
-      prisma.cutBundle.count.mockResolvedValue(1);
-      prisma.notification.findFirst.mockResolvedValue({ id: 'n1' });
-
+  describe('nhắc chuyển mảnh Hàn -> Sơn', () => {
+    it('evaluate có bước paintTransfer: gọi paintReminder.syncAll', async () => {
       await service.evaluate();
+      expect(paintReminder.syncAll).toHaveBeenCalledTimes(1);
+    });
 
-      expect(notifications.emit).not.toHaveBeenCalled();
+    it('syncAll lỗi -> chỉ log, các bước khác vẫn chạy và evaluate không vỡ', async () => {
+      paintReminder.syncAll.mockRejectedValue(new Error('boom'));
+      staleCut(1);
+
+      await expect(service.evaluate()).resolves.toBeUndefined();
+
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'FLOOR_BATCH_STALE',
+        expect.objectContaining({ entityId: 'PHOI:5' }),
+      );
     });
   });
 
@@ -956,9 +1282,12 @@ describe('FloorAlertsService', () => {
       >;
       const gapCalls = cutAllocation.steelGapsByPi.mock.calls as Array<[bigint, CutSnapshotCache]>;
       expect(progressCalls).toHaveLength(2);
-      expect(gapCalls).toHaveLength(2);
+      // Mỗi lượt tra thiếu sắt 2 lần (đóng tin + đối soát), cùng 1 cache của lượt.
+      expect(gapCalls).toHaveLength(4);
       expect(gapCalls[0][1]).toBe(progressCalls[0][1]);
-      expect(gapCalls[1][1]).toBe(progressCalls[1][1]);
+      expect(gapCalls[1][1]).toBe(progressCalls[0][1]);
+      expect(gapCalls[2][1]).toBe(progressCalls[1][1]);
+      expect(gapCalls[3][1]).toBe(progressCalls[1][1]);
       expect(progressCalls[1][1]).not.toBe(progressCalls[0][1]);
     });
 

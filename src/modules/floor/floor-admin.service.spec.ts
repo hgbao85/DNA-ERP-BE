@@ -27,6 +27,9 @@ describe('FloorAdminService', () => {
       aggregate: jest.Mock;
     };
     floorReport: { count: jest.Mock };
+    workstation: { update: jest.Mock };
+    cutAllocation: { findMany: jest.Mock; deleteMany: jest.Mock };
+    cutAllocationLog: { createMany: jest.Mock };
   };
   let prisma: {
     workstation: {
@@ -74,6 +77,22 @@ describe('FloorAdminService', () => {
         aggregate: jest.fn().mockResolvedValue({ _max: { position: null } }),
       },
       floorReport: { count: jest.fn().mockResolvedValue(0) },
+      workstation: {
+        update: jest.fn((args: { data: Record<string, unknown> }) => ({
+          id: 1n,
+          code: 'LASER-01',
+          name: 'Máy laser 1',
+          stage: 'PHOI',
+          kind: 'CUT',
+          processStep: null,
+          qrToken: 'old-token-old-token-old-',
+          isActive: true,
+          createdAt: new Date(),
+          ...Object.fromEntries(Object.entries(args.data).filter(([, v]) => v !== undefined)),
+        })),
+      },
+      cutAllocation: { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn() },
+      cutAllocationLog: { createMany: jest.fn() },
     };
     prisma = {
       workstation: {
@@ -366,6 +385,153 @@ describe('FloorAdminService', () => {
       expect(prisma.workstation.update).not.toHaveBeenCalled();
     });
 
+    describe('máy cắt tắt / đổi xưởng: xoá dòng chia của máy cùng transaction', () => {
+      const cutRows = [
+        {
+          id: 11n,
+          workshopId: 5n,
+          workstationId: 1n,
+          productionInvoiceId: 100n,
+          patternId: 200n,
+          barCount: 4,
+          pattern: { bundles: null },
+        },
+        {
+          id: 12n,
+          workshopId: 5n,
+          workstationId: 1n,
+          productionInvoiceId: 101n,
+          patternId: 201n,
+          barCount: 2,
+          pattern: { bundles: { '16': 3 } },
+        },
+      ];
+      const lockedKeys = () => JSON.stringify(tx.$executeRaw.mock.calls);
+
+      beforeEach(() => {
+        prisma.workstation.findUnique.mockResolvedValue({
+          id: 1n,
+          kind: 'CUT',
+          isActive: true,
+          workshopId: 5n,
+        });
+        tx.cutAllocation.findMany.mockResolvedValue(cutRows);
+      });
+
+      it('tắt máy cắt: khoá xưởng, ghi nhật ký REMOVE từng dòng, xoá dòng, rồi tắt máy', async () => {
+        const w = await service.updateWorkstation('1', { isActive: false }, 'u1');
+        expect(lockedKeys()).toContain('cut-allocation:5');
+        expect(tx.cutAllocationLog.createMany).toHaveBeenCalledTimes(1);
+        const logs = (tx.cutAllocationLog.createMany.mock.calls[0] as [{ data: unknown[] }])[0]
+          .data;
+        expect(logs).toEqual([
+          expect.objectContaining({
+            action: 'REMOVE',
+            cutAllocationId: 11n,
+            fromWorkstationId: 1n,
+            barCount: 4,
+            isBundle: false,
+            note: 'Máy cắt bị tắt',
+            createdById: 'u1',
+          }),
+          expect.objectContaining({ cutAllocationId: 12n, isBundle: true, barCount: 2 }),
+        ]);
+        expect(tx.cutAllocation.deleteMany).toHaveBeenCalledWith({ where: { workstationId: 1n } });
+        expect(tx.workstation.update).toHaveBeenCalledTimes(1);
+        expect(prisma.workstation.update).not.toHaveBeenCalled();
+        expect(w.isActive).toBe(false);
+      });
+
+      it('đổi xưởng máy cắt: cũng xoá dòng chia, ghi lý do đổi xưởng', async () => {
+        await service.updateWorkstation('1', { workshopId: '7' }, 'u1');
+        expect(tx.cutAllocation.deleteMany).toHaveBeenCalledWith({ where: { workstationId: 1n } });
+        const logs = (tx.cutAllocationLog.createMany.mock.calls[0] as [{ data: unknown[] }])[0]
+          .data;
+        expect(logs[0]).toMatchObject({ note: 'Máy cắt đổi xưởng' });
+        expect(tx.workstation.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ workshopId: 7n }) as unknown }),
+        );
+      });
+
+      it('lỗi khi xoá dòng chia -> không tắt máy (cùng transaction)', async () => {
+        tx.cutAllocation.deleteMany.mockRejectedValue(new Error('db'));
+        await expect(service.updateWorkstation('1', { isActive: false }, 'u1')).rejects.toThrow(
+          'db',
+        );
+        expect(tx.workstation.update).not.toHaveBeenCalled();
+      });
+
+      it('chỉ đổi tên / bật máy / đổi xưởng về đúng xưởng cũ: không đụng dòng chia', async () => {
+        await service.updateWorkstation('1', { name: 'Tên mới' }, 'u1');
+        await service.updateWorkstation('1', { isActive: true }, 'u1');
+        await service.updateWorkstation('1', { workshopId: '5' }, 'u1');
+        expect(tx.cutAllocation.deleteMany).not.toHaveBeenCalled();
+        expect(prisma.workstation.update).toHaveBeenCalledTimes(3);
+      });
+
+      it('máy không phải máy cắt (STEP) tắt: không đụng dòng chia', async () => {
+        prisma.workstation.findUnique.mockResolvedValue({
+          id: 1n,
+          kind: 'STEP',
+          isActive: true,
+          workshopId: 5n,
+        });
+        await service.updateWorkstation('1', { isActive: false }, 'u1');
+        expect(tx.cutAllocation.deleteMany).not.toHaveBeenCalled();
+      });
+
+      it('tắt / đổi xưởng máy cắt: transaction dùng maxWait 10 giây, timeout 30 giây (như chỗ khác giữ khoá cut-allocation)', async () => {
+        await service.updateWorkstation('1', { isActive: false }, 'u1');
+        expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+          maxWait: 10_000,
+          timeout: 30_000,
+        });
+      });
+
+      it('bật lại máy cắt còn dòng chia: khoá xưởng, xoá dòng cũ, ghi nhật ký REMOVE kèm lý do', async () => {
+        prisma.workstation.findUnique.mockResolvedValue({
+          id: 1n,
+          kind: 'CUT',
+          isActive: false,
+          workshopId: 5n,
+        });
+        const w = await service.updateWorkstation('1', { isActive: true }, 'u1');
+        expect(lockedKeys()).toContain('cut-allocation:5');
+        expect(tx.cutAllocation.deleteMany).toHaveBeenCalledWith({ where: { workstationId: 1n } });
+        const logs = (tx.cutAllocationLog.createMany.mock.calls[0] as [{ data: unknown[] }])[0]
+          .data;
+        expect(logs).toHaveLength(2);
+        expect(logs[0]).toMatchObject({
+          action: 'REMOVE',
+          note: 'Dọn dòng cũ khi bật lại máy',
+          createdById: 'u1',
+        });
+        expect(tx.workstation.update).toHaveBeenCalledTimes(1);
+        expect(w.isActive).toBe(true);
+      });
+
+      it('bật lại máy cắt không có dòng chia: bật được, không ghi nhật ký', async () => {
+        prisma.workstation.findUnique.mockResolvedValue({
+          id: 1n,
+          kind: 'CUT',
+          isActive: false,
+          workshopId: 5n,
+        });
+        tx.cutAllocation.findMany.mockResolvedValue([]);
+        await service.updateWorkstation('1', { isActive: true }, 'u1');
+        expect(tx.cutAllocationLog.createMany).not.toHaveBeenCalled();
+        expect(tx.cutAllocation.deleteMany).not.toHaveBeenCalled();
+        expect(tx.workstation.update).toHaveBeenCalledTimes(1);
+      });
+
+      it('máy cắt không có dòng chia: vẫn tắt được, không ghi nhật ký', async () => {
+        tx.cutAllocation.findMany.mockResolvedValue([]);
+        await service.updateWorkstation('1', { isActive: false }, 'u1');
+        expect(tx.cutAllocationLog.createMany).not.toHaveBeenCalled();
+        expect(tx.workstation.update).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it('đổi mã QR: sinh token ngẫu nhiên mới (24 ký tự, khác token cũ) -> tem cũ hết dùng; id lạ -> 404', async () => {
       const w = await service.regenerateWorkstationToken('1');
       const data = (prisma.workstation.update.mock.calls as unknown[][])[0][0] as {
@@ -464,6 +630,80 @@ describe('FloorAdminService', () => {
       tx.floorQueueEntry.findFirst.mockResolvedValue(null);
       await expect(service.advance('HAN', 'q', '1')).rejects.toThrow(ConflictException);
     });
+
+    describe('expectedRunningPiId (màn QLSX cũ không đóng nhầm lệnh kế)', () => {
+      const MSG =
+        'Lệnh đang chạy của tổ Phôi đã đổi (hệ thống có thể vừa tự chuyển) - tải lại màn rồi xem lại';
+      const running = (piId: bigint) => ({ id: 1n, status: 'RUNNING', productionInvoiceId: piId });
+
+      it('khớp lệnh đang chạy -> chạy như cũ', async () => {
+        tx.floorQueueEntry.findFirst
+          .mockResolvedValueOnce(running(10n))
+          .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
+        await service.advance('PHOI', 'q', '1', '10');
+        expect(tx.floorQueueEntry.update).toHaveBeenCalledTimes(2);
+      });
+
+      it('khác lệnh đang chạy (hệ thống vừa tự chuyển) -> 409 đúng câu, không dòng nào đổi', async () => {
+        tx.floorQueueEntry.findFirst
+          .mockResolvedValueOnce(running(11n))
+          .mockResolvedValueOnce({ id: 3n, status: 'QUEUED' });
+        const call = service.advance('PHOI', 'q', '1', '10');
+        await expect(call).rejects.toThrow(ConflictException);
+        await expect(call).rejects.toThrow(MSG);
+        expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
+      });
+
+      it('câu 409 ghi đúng tên tổ Hàn / Sơn', async () => {
+        tx.floorQueueEntry.findFirst.mockResolvedValue(null);
+        await expect(service.advance('HAN', 'q', '1', '10')).rejects.toThrow(
+          /^Lệnh đang chạy của tổ Hàn đã đổi/,
+        );
+        await expect(service.advance('SON', 'q', '1', '10')).rejects.toThrow(
+          /^Lệnh đang chạy của tổ Sơn đã đổi/,
+        );
+      });
+
+      it('có truyền mà tổ không có lệnh RUNNING -> 409', async () => {
+        tx.floorQueueEntry.findFirst
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
+        await expect(service.advance('PHOI', 'q', '1', '10')).rejects.toThrow(MSG);
+        expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
+      });
+
+      it('null (màn thấy tổ chưa chạy lệnh nào) mà đã có lệnh chạy -> 409, không đóng nhầm', async () => {
+        tx.floorQueueEntry.findFirst
+          .mockResolvedValueOnce(running(10n))
+          .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
+        await expect(service.advance('PHOI', 'q', '1', null)).rejects.toThrow(MSG);
+        expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
+      });
+
+      it('null và đúng là chưa có lệnh chạy -> bắt đầu lệnh đầu hàng đợi', async () => {
+        tx.floorQueueEntry.findFirst
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
+        await service.advance('PHOI', 'q', '1', null);
+        expect(tx.floorQueueEntry.update).toHaveBeenCalledTimes(1);
+      });
+
+      it('việc so khớp nằm SAU khoá hàng đợi (lockBusinessKey) và trong transaction', async () => {
+        const order: string[] = [];
+        tx.$executeRaw.mockImplementation(() => {
+          order.push('lock');
+          return Promise.resolve(0);
+        });
+        tx.floorQueueEntry.findFirst.mockImplementation(() => {
+          order.push('read');
+          return Promise.resolve(running(11n));
+        });
+        await expect(service.advance('PHOI', 'q', '1', '10')).rejects.toThrow(ConflictException);
+        expect(order[0]).toBe('lock');
+        expect(order).toContain('read');
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 
   describe('autoCompletePhoi (xong Phôi tự tính, Sếp chốt 14/11 câu 8)', () => {
@@ -556,6 +796,25 @@ describe('FloorAdminService', () => {
       expect(JSON.stringify((tx.$executeRaw.mock.calls as unknown[][])[0] ?? [])).toContain(
         `floor-queue:PHOI:${PHU_AN}`,
       );
+    });
+
+    it('3 lệnh, lệnh giữa lỗi -> lệnh cuối vẫn được xếp, rồi ném lỗi tổng hợp', async () => {
+      prisma.productionInvoice.findUnique.mockImplementation(
+        ({ where }: { where: { id: bigint } }) => {
+          if (where.id === 2n) return Promise.reject(new Error('db'));
+          return Promise.resolve({ code: `PI-${where.id}` });
+        },
+      );
+      tx.floorQueueEntry.findUnique.mockResolvedValue(null);
+      tx.floorQueueEntry.aggregate.mockResolvedValue({ _max: { position: 0 } });
+
+      await expect(service.ensurePhoiQueued([1n, 2n, 3n])).rejects.toThrow('2');
+
+      expect(tx.floorQueueEntry.create).toHaveBeenCalledTimes(2);
+      const ids = (
+        tx.floorQueueEntry.create.mock.calls as [{ data: { productionInvoiceId: bigint } }][]
+      ).map((c) => c[0].data.productionInvoiceId);
+      expect(ids).toEqual([1n, 3n]);
     });
 
     it('đã có dòng (bất kỳ trạng thái) -> bỏ qua', async () => {
@@ -1041,6 +1300,40 @@ describe('FloorAdminService', () => {
         percent: 100,
         complete: true,
         missing: { lines: 0, materialsNotReceived: 0 },
+      });
+    });
+
+    it('Hàn: mảnh có failedQty (KCS chấm lỗi chưa bù) -> tiến độ / còn thiếu như cũ, chỉ thêm số Lỗi', async () => {
+      prisma.floorQueueEntry.findMany.mockResolvedValue([running('HAN')]);
+      prisma.productionOrder.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 41n }]);
+      // Cần 40, KCS chấm đợt 10 lỗi 4 (đạt 36), chưa bù.
+      productionBatches.getBatchPlanBatch.mockResolvedValue({
+        '41': {
+          items: [
+            {
+              pieceId: '73',
+              plannedQty: 40,
+              passedQty: 36,
+              failedQty: 4,
+              awaitingQcQty: 0,
+              openQty: 0,
+            },
+          ],
+        },
+      });
+
+      const [e] = await service.listQueue('q', 'HAN');
+
+      expect(e.progress).toMatchObject({
+        required: 40,
+        reported: 36,
+        passed: 36,
+        failed: 4,
+        percent: 90,
+        complete: false,
+        missing: { pieces: 1 },
       });
     });
 

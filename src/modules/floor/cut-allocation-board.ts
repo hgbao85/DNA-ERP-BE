@@ -165,7 +165,10 @@ function buildMachines(
 }
 
 /** Cặp (lệnh, loại sắt) chưa chia hết: đủ sắt thì vào "chưa chia", chưa đủ thì vào "chờ sắt". */
-function splitUnallocatedAndWaiting(snap: Snapshot): {
+function splitUnallocatedAndWaiting(
+  snap: Snapshot,
+  startedPiIds?: ReadonlySet<string>,
+): {
   unallocated: CutAllocationBoard['unallocated'];
   waiting: CutAllocationBoard['waiting'];
 } {
@@ -178,6 +181,8 @@ function splitUnallocatedAndWaiting(snap: Snapshot): {
   const unallocated: CutAllocationBoard['unallocated'] = [];
   const waiting: CutAllocationBoard['waiting'] = [];
   for (const order of snap.orders) {
+    // Không truyền tập lệnh đã Bắt đầu (đường đọc nền) = coi là đã Bắt đầu.
+    const started = startedPiIds ? startedPiIds.has(order.id.toString()) : true;
     const entries = [...snap.pairs]
       .filter(([k, p]) => k.startsWith(`${order.id}:`) && p.hasPatterns)
       .sort(([a], [b]) => (BigInt(a.split(':')[1]) < BigInt(b.split(':')[1]) ? -1 : 1));
@@ -190,6 +195,7 @@ function splitUnallocatedAndWaiting(snap: Snapshot): {
         piCode: order.code,
         materialId,
         materialLabel: label,
+        started,
       };
       if (isPairSufficient(snap, k)) {
         if (bars > 0) unallocated.push({ ...base, bars });
@@ -214,6 +220,7 @@ export function buildBoardData(
   info: Map<string, SegmentProcessInfo>,
   reported: ReportedSegments,
   extraWarnings: string[],
+  startedPiIds?: ReadonlySet<string>,
 ): CutAllocationBoard {
   const warnings = [...extraWarnings];
   if (snap.machines.length === 0) {
@@ -223,7 +230,7 @@ export function buildBoardData(
   }
   const rows = buildRows(snap, info);
   const machines = buildMachines(snap, rows, reported);
-  const { unallocated, waiting } = splitUnallocatedAndWaiting(snap);
+  const { unallocated, waiting } = splitUnallocatedAndWaiting(snap, startedPiIds);
   return {
     workshop: {
       id: snap.workshop.id.toString(),

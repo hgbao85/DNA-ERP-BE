@@ -339,9 +339,20 @@ describe('FloorScanService', () => {
     });
   });
 
-  it('mã không tồn tại / đã tắt -> 404 "Mã QR không còn dùng"', async () => {
+  it('mã không tồn tại (tem cũ sau khi đổi mã QR) -> 404 "Mã QR không còn dùng"', async () => {
+    prisma.workstation.findUnique.mockResolvedValue(null);
+    await expect(service.getContext('tok', worker('PHOI'))).rejects.toThrow(NotFoundException);
+    await expect(service.getContext('tok', worker('PHOI'))).rejects.toThrow(
+      'Mã QR không còn dùng - báo QLSX in lại tem',
+    );
+  });
+
+  it('máy đang tắt (isActive=false) -> 404 "Máy này đang tắt", không phải câu in lại tem', async () => {
     prisma.workstation.findUnique.mockResolvedValue({ ...laser, isActive: false });
     await expect(service.getContext('tok', worker('PHOI'))).rejects.toThrow(NotFoundException);
+    await expect(service.getContext('tok', worker('PHOI'))).rejects.toThrow(
+      'Máy này đang tắt - báo QLSX bật lại máy ở “Máy & tem QR”',
+    );
   });
 
   it('công nhân tổ khác quét mã máy Phôi -> 403', async () => {

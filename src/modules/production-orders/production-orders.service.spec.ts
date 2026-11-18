@@ -567,6 +567,30 @@ describe('ProductionOrdersService', () => {
       expect(data).toStrictEqual({ floorStage: 'FINISHED' });
     });
 
+    // N1 (18/11/2026): tin nhắc "đã đóng gói đủ - bấm Kết thúc" tự đóng khi Kết thúc đúng SKU đó.
+    it('Kết thúc -> resolve PI_ITEM_READY_TO_FINISH của đúng id SKU', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+
+      await service.finishFloor('9');
+
+      expect(notifications.resolve).toHaveBeenCalledWith({
+        entityType: 'PRODUCTION_INVOICE_ITEM',
+        entityId: '20',
+        types: ['PI_ITEM_READY_TO_FINISH'],
+      });
+    });
+
+    it('resolve tin lỗi -> vẫn Kết thúc được (best-effort, chỉ log)', async () => {
+      prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));
+      prisma.productionOrder.update.mockResolvedValue(order({ floorStage: 'FINISHED' }));
+      notifications.resolve.mockRejectedValue(new Error('db down'));
+
+      const result = await service.finishFloor('9');
+
+      expect(result.floorStage).toBe('FINISHED');
+    });
+
     it('throws NotFoundException when the order does not exist', async () => {
       prisma.productionOrder.findUnique.mockResolvedValue(null);
 

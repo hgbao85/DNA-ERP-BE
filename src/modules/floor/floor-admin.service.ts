@@ -4,11 +4,13 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
 import {
+  CutAllocationLogAction,
   FloorQueueStatus,
   MfgRole,
   MfgStage,
@@ -30,7 +32,7 @@ import {
   WorkshopScope,
   WorkshopScopeService,
 } from '../../common/workshop-scope/workshop-scope.service';
-import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import {
@@ -62,6 +64,9 @@ function newQrToken(): string {
 
 /** Nạp tên xưởng cùng lúc với máy (không N+1) - 13/11/2026. */
 const WORKSTATION_INCLUDE = { workshop: { select: { name: true } } } as const;
+
+/** Cùng mức với TX_OPTIONS của cut-allocation.service.ts: mọi chỗ giữ khoá `cut-allocation:<xưởng>` chờ lâu như nhau. */
+const CUT_LOCK_TX_OPTIONS = { maxWait: 10_000, timeout: 30_000 } as const;
 
 const WORKER_SELECT = {
   id: true,
@@ -97,6 +102,13 @@ const QUEUE_INCLUDE = {
   startedBy: { select: { firstName: true, lastName: true } },
   endedBy: { select: { firstName: true, lastName: true } },
 } as const;
+
+/** Tên tổ trong câu báo của "Chuyển lệnh tiếp". */
+const ADVANCE_STAGE_LABEL: Record<FloorWorkerStage, string> = {
+  PHOI: 'Phôi',
+  HAN: 'Hàn',
+  SON: 'Sơn',
+};
 
 type QueueRow = Prisma.FloorQueueEntryGetPayload<{ include: typeof QUEUE_INCLUDE }>;
 
@@ -184,11 +196,13 @@ function progressFrom({ phoi, plans }: StageData): FloorProgress {
 
   for (const plan of Object.values(plans)) {
     for (const it of plan.items) {
-      // Mảnh: `passedQty` đã là số ĐẠT sau KCS (lỗi đã bị trừ) → failed = 0 ở đây.
+      // Mảnh: `passedQty` đã là số ĐẠT sau KCS (lỗi đã bị trừ); `failedQty` = lỗi KCS cộng dồn (18/11/2026). Đã báo gồm cả lỗi,
+      // được tính = đã báo − lỗi nên tiến độ / còn thiếu không đổi; chỉ thêm số Lỗi cho khớp FE progressModel.pieceLine.
+      const failed = it.failedQty ?? 0;
       const short = add('PIECE', {
         required: it.plannedQty,
-        done: it.passedQty + it.awaitingQcQty + it.openQty,
-        failed: 0,
+        done: it.passedQty + failed + it.awaitingQcQty + it.openQty,
+        failed,
         open: it.openQty,
         awaiting: it.awaitingQcQty,
       });
@@ -247,6 +261,8 @@ function latestDone(rows: QueueRow[]): QueueRow | null {
  */
 @Injectable()
 export class FloorAdminService {
+  private readonly logger = new Logger(FloorAdminService.name);
+
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly steelIssues: SteelIssuesService,
@@ -341,17 +357,75 @@ export class FloorAdminService {
       workshopId = await this.assertWorkshopUsable(dto.workshopId);
       this.workshopScope.assertCanManage(scope, [workshopId], 'xưởng chọn cho máy');
     }
+    const data = {
+      name: dto.name?.trim(),
+      isActive: dto.isActive,
+      cutMachineType: dto.cutMachineType,
+      workshopId,
+    };
+    const machineId = parseBigIntId(id);
+    // Máy cắt tắt / đổi xưởng: phần việc đã chia cho máy bị xoá cùng lúc (về "Chưa chia"), vì máy
+    // tắt hay xưởng khác thì dòng chia không còn đúng chỗ.
+    const switchedOff = dto.isActive === false && current.isActive;
+    const movedWorkshop = workshopId !== undefined && workshopId !== current.workshopId;
+    // Bật lại máy cắt: lúc máy tắt các dòng chia còn sót là dòng cũ (máy rảnh có thể đã chia lại số cây đó
+    // cho máy khác) nên dọn khi bật lại.
+    const switchedOn = dto.isActive === true && !current.isActive;
+    if (current.kind === WorkstationKind.CUT && current.workshopId != null) {
+      if (switchedOff || movedWorkshop || switchedOn) {
+        const oldWorkshopId = current.workshopId;
+        const note = switchedOff
+          ? 'Máy cắt bị tắt'
+          : movedWorkshop
+            ? 'Máy cắt đổi xưởng'
+            : 'Dọn dòng cũ khi bật lại máy';
+        const updated = await this.prisma.$transaction(async (tx) => {
+          await lockBusinessKey(tx, `cut-allocation:${oldWorkshopId}`);
+          await this.dropMachineAllocations(tx, machineId, note, userId);
+          return tx.workstation.update({
+            where: { id: machineId },
+            data,
+            include: WORKSTATION_INCLUDE,
+          });
+        }, CUT_LOCK_TX_OPTIONS);
+        return this.toWorkstation(updated);
+      }
+    }
     const updated = await this.prisma.workstation.update({
-      where: { id: parseBigIntId(id) },
-      data: {
-        name: dto.name?.trim(),
-        isActive: dto.isActive,
-        cutMachineType: dto.cutMachineType,
-        workshopId,
-      },
+      where: { id: machineId },
+      data,
       include: WORKSTATION_INCLUDE,
     });
     return this.toWorkstation(updated);
+  }
+
+  /** Xoá mọi dòng chia của 1 máy cắt, mỗi dòng ghi 1 dòng nhật ký REMOVE kèm lý do. */
+  private async dropMachineAllocations(
+    tx: PrismaTx,
+    machineId: bigint,
+    note: string,
+    userId?: string,
+  ): Promise<void> {
+    const rows = await tx.cutAllocation.findMany({
+      where: { workstationId: machineId },
+      include: { pattern: { select: { bundles: true } } },
+    });
+    if (rows.length === 0) return;
+    await tx.cutAllocationLog.createMany({
+      data: rows.map((r) => ({
+        workshopId: r.workshopId,
+        productionInvoiceId: r.productionInvoiceId,
+        cutAllocationId: r.id,
+        patternId: r.patternId,
+        action: CutAllocationLogAction.REMOVE,
+        fromWorkstationId: r.workstationId,
+        barCount: r.barCount,
+        isBundle: r.pattern.bundles != null,
+        note,
+        createdById: userId ?? null,
+      })),
+    });
+    await tx.cutAllocation.deleteMany({ where: { workstationId: machineId } });
   }
 
   /** Đổi mã QR (tem mất / bị chụp lại mang đi chỗ khác) - tem cũ quét ra "mã không còn dùng". */
@@ -1103,7 +1177,12 @@ export class FloorAdminService {
    * báo được qua mục "Bù lỗi" khi còn SKU đang chạy. QLSX gắn xưởng mặc định xưởng mình; người
    * không gắn xưởng phải chọn xưởng.
    */
-  async advance(stage: FloorWorkerStage, actorId: string, workshopId?: string) {
+  async advance(
+    stage: FloorWorkerStage,
+    actorId: string,
+    workshopId?: string,
+    expectedRunningPiId?: string | null,
+  ) {
     const scope = await this.workshopScope.getScope(actorId);
     const wsId = this.resolveQueueWorkshop(scope, workshopId, true);
     await this.prisma.$transaction(async (tx) => {
@@ -1112,6 +1191,16 @@ export class FloorAdminService {
       const running = await tx.floorQueueEntry.findFirst({
         where: { stage: stage as MfgStage, workshopId: wsId, status: FloorQueueStatus.RUNNING },
       });
+      // So khớp SAU khoá (cùng khoá với autoCompletePhoi): màn QLSX cũ thì không đóng nhầm lệnh kế.
+      // undefined = không kiểm; null = màn thấy tổ chưa chạy lệnh nào (có lệnh chạy rồi thì chặn).
+      if (expectedRunningPiId !== undefined) {
+        const actual = running?.productionInvoiceId.toString() ?? null;
+        if (actual !== expectedRunningPiId) {
+          throw new ConflictException(
+            `Lệnh đang chạy của tổ ${ADVANCE_STAGE_LABEL[stage]} đã đổi (hệ thống có thể vừa tự chuyển) - tải lại màn rồi xem lại`,
+          );
+        }
+      }
       const next = await tx.floorQueueEntry.findFirst({
         where: { stage: stage as MfgStage, workshopId: wsId, status: FloorQueueStatus.QUEUED },
         orderBy: { position: 'asc' },
@@ -1240,40 +1329,57 @@ export class FloorAdminService {
    */
   async ensurePhoiQueued(piIds: bigint[]): Promise<string[]> {
     const added: string[] = [];
+    const failed: string[] = [];
     for (const piId of new Set(piIds)) {
-      const pi = await this.prisma.productionInvoice.findUnique({
-        where: { id: piId },
-        select: { code: true },
-      });
-      if (!pi) continue;
-      const wsId = await queueWorkshopIdOfPi(this.prisma, MfgStage.PHOI, piId);
-      const queued = await this.prisma.$transaction(async (tx) => {
-        await lockBusinessKey(tx, queueLockKey(MfgStage.PHOI, wsId));
-        const dup = await tx.floorQueueEntry.findUnique({
-          where: {
-            stage_productionInvoiceId: { stage: MfgStage.PHOI, productionInvoiceId: piId },
-          },
-          select: { id: true },
-        });
-        if (dup) return false;
-        const last = await tx.floorQueueEntry.aggregate({
-          where: { stage: MfgStage.PHOI, workshopId: wsId },
-          _max: { position: true },
-        });
-        await tx.floorQueueEntry.create({
-          data: {
-            stage: MfgStage.PHOI,
-            productionInvoiceId: piId,
-            workshopId: wsId,
-            position: (last._max.position ?? 0) + 1,
-            queuedById: null,
-          },
-        });
-        return true;
-      });
-      if (queued) added.push(pi.code);
+      // Lệnh nào lỗi thì ghi log rồi xếp tiếp lệnh sau - 1 lệnh lỗi không làm các lệnh còn lại mất chỗ trong hàng đợi.
+      try {
+        const code = await this.ensureOnePhoiQueued(piId);
+        if (code) added.push(code);
+      } catch (e) {
+        failed.push(piId.toString());
+        this.logger.error(`Queue PI ${piId} to Phôi failed: ${(e as Error).message}`);
+      }
+    }
+    // Vẫn ném lỗi tổng hợp như trước (người gọi bắt và ghi log), nhưng chỉ sau khi đã xếp hết các lệnh còn lại.
+    if (failed.length > 0) {
+      throw new Error(`Không xếp được lệnh ${failed.join(', ')} vào hàng đợi Phôi`);
     }
     return added;
+  }
+
+  /** Xếp 1 lệnh vào hàng đợi Phôi nếu chưa có dòng; trả mã PI khi vừa thêm. */
+  private async ensureOnePhoiQueued(piId: bigint): Promise<string | null> {
+    const pi = await this.prisma.productionInvoice.findUnique({
+      where: { id: piId },
+      select: { code: true },
+    });
+    if (!pi) return null;
+    const wsId = await queueWorkshopIdOfPi(this.prisma, MfgStage.PHOI, piId);
+    const queued = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, queueLockKey(MfgStage.PHOI, wsId));
+      const dup = await tx.floorQueueEntry.findUnique({
+        where: {
+          stage_productionInvoiceId: { stage: MfgStage.PHOI, productionInvoiceId: piId },
+        },
+        select: { id: true },
+      });
+      if (dup) return false;
+      const last = await tx.floorQueueEntry.aggregate({
+        where: { stage: MfgStage.PHOI, workshopId: wsId },
+        _max: { position: true },
+      });
+      await tx.floorQueueEntry.create({
+        data: {
+          stage: MfgStage.PHOI,
+          productionInvoiceId: piId,
+          workshopId: wsId,
+          position: (last._max.position ?? 0) + 1,
+          queuedById: null,
+        },
+      });
+      return true;
+    });
+    return queued ? pi.code : null;
   }
 
   private async findPiIdsWithActiveFloor(piIds: bigint[]): Promise<Set<string>> {

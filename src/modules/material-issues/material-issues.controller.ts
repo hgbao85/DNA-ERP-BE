@@ -43,7 +43,8 @@ export class MaterialIssuesController {
     return this.materialIssuesService.findOne(id);
   }
 
-  // ─── Tổ Hàn/Sơn (mfgRole = HAN|SON) - xem đợt chờ/đã nhận + xác nhận đã nhận ─
+  // ─── Tổ Hàn/Sơn (mfgRole = HAN|SON) - xem đợt đã nhận. Từ 18/11/2026 kho xuất là đã nhận (RECEIVED ngay lúc xuất);
+  // receive() chỉ còn xử lý dòng ISSUED sót lại từ trước deploy ─
 
   /** Flat, không cần biết productionOrderId - xem ListMaterialIssuesQueryDto. */
   @Get('material-issues')

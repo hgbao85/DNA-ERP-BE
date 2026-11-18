@@ -2,16 +2,31 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nest
 import { MfgStage } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
-import type { NotificationType } from '../notifications/notification-types';
+import {
+  NOTIFICATION_TYPES,
+  type FloorBatchStaleParams,
+  type NotificationType,
+} from '../notifications/notification-types';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PaintTransferReminderService } from '../warehouse-transfers/paint-transfer-reminder.service';
 import {
   CutAllocationService,
   type CutAutoPullResult,
   type CutMachineProgressInfo,
 } from './cut-allocation.service';
+import {
+  buildPullSteelParams,
+  CutAllocationFollowUpService,
+} from './cut-allocation-follow-up.service';
 import { CutSnapshotCache } from './cut-allocation-snapshot';
+import type { SteelGap } from './cut-allocation-types';
 import { FloorAdminService } from './floor-admin.service';
-import { FloorWorkerStage } from './dto/floor-worker.dto';
+import {
+  groupStaleByQueueWorkshop,
+  staleBucketKey,
+  type StaleBucket,
+  type StaleItem,
+} from './floor-stale.util';
 
 type CutMachineAlertType = 'CUT_MACHINE_LOW_WORK' | 'CUT_MACHINE_IDLE';
 const CUT_MACHINE_ALERT_TYPES: CutMachineAlertType[] = ['CUT_MACHINE_LOW_WORK', 'CUT_MACHINE_IDLE'];
@@ -35,7 +50,6 @@ const DEBOUNCE_MS = 3_000;
 export const MIN_EVALUATE_GAP_MS = 30_000;
 /** Lượt quét chậm hơn ngưỡng này thì log warn kèm thời gian từng bước. */
 const SLOW_EVALUATE_MS = 2_000;
-const STAGES: FloorWorkerStage[] = ['PHOI', 'HAN', 'SON'];
 
 /**
  * Công tắc máy rảnh tự kéo lệnh : đặt CUT_AUTO_PULL=off để tắt (như FLOOR_ALERTS, đọc mỗi lần để
@@ -81,6 +95,8 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
     private readonly notifications: NotificationsService,
     private readonly cutAllocation: CutAllocationService,
     private readonly realtime: RealtimeService,
+    private readonly followUp: CutAllocationFollowUpService,
+    private readonly paintReminder: PaintTransferReminderService,
   ) {}
 
   onModuleInit(): void {
@@ -165,6 +181,9 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
       await timed('stale', () => this.checkStale(now));
       await timed('cutMachines', () => this.checkCutMachines(cache));
       await timed('pullSteelIssued', () => this.checkPullSteelIssued(cache));
+      await timed('pullSteelReconcile', () => this.reconcilePullSteel(cache));
+      // Cuối cùng: lỗi bước này (đã tự bắt) không được cản các bước trên.
+      await timed('paintTransfer', () => this.syncPaintTransfer());
     } catch (e) {
       this.logger.error(`Floor alerts evaluate failed: ${(e as Error).message}`);
     } finally {
@@ -214,6 +233,7 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
           {
             stage: e.stage,
             piCode: e.productionInvoice.code,
+            ...(e.workshopId != null ? { workshopId: String(e.workshopId) } : {}),
           },
         );
       }
@@ -243,6 +263,7 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
    */
   private async checkPhoiDone(e: {
     id: bigint;
+    workshopId?: bigint | null;
     productionInvoiceId: bigint;
     productionInvoice: { code: string };
   }): Promise<void> {
@@ -258,6 +279,7 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
       await this.emitOnce('FLOOR_PHOI_DONE', `floor-phoi-done:${e.id}`, e.id.toString(), {
         piCode: e.productionInvoice.code,
         nextPiCode: r.nextPiCode,
+        ...(e.workshopId != null ? { workshopId: String(e.workshopId) } : {}),
       });
     } catch (err) {
       this.logger.error(
@@ -299,6 +321,17 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
           for (const m of progress) {
             seen.add(m.workstationId);
             await this.checkCutMachine(m);
+          }
+          // Đối soát dữ liệu cũ / lần follow-up bị lỗi: lệnh đã Bắt đầu có dòng chia mà thiếu dòng hàng
+          // đợi Phôi thì xếp vào cuối hàng đợi. Lỗi chỉ ghi log.
+          try {
+            await this.followUp.queueMissingPhoi(
+              await this.cutAllocation.startedAllocationPiIds(w.workshopId, cache),
+            );
+          } catch (e) {
+            this.logger.error(
+              `Reconcile Phôi queue (xưởng ${w.workshopId}) failed: ${(e as Error).message}`,
+            );
           }
         } catch (e) {
           allLoaded = false;
@@ -368,11 +401,16 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
     if (!result) return false;
     // Đã ghi dòng chia mới: snapshot đã dựng của xưởng này không còn đúng.
     cache.invalidate(workshopId);
-    try {
-      await this.admin.ensurePhoiQueued(result.orders.map((o) => BigInt(o.productionInvoiceId)));
-    } catch (e) {
-      this.logger.error(`Queue pulled orders to Phôi failed: ${(e as Error).message}`);
-    }
+    // Xếp hàng đợi Phôi + báo thủ kho xuất sắt (follow-up không bao giờ ném lỗi).
+    await this.followUp.afterAllocated({
+      workshopId: result.workshopId,
+      orders: result.orders.map((o) => ({
+        productionInvoiceId: o.productionInvoiceId,
+        piCode: o.piCode,
+        steelGaps: o.steelGaps,
+      })),
+      source: 'AUTO_PULL',
+    });
     for (const o of result.orders) {
       const machineNames = (
         o.idleMachineNames.length > 0 ? o.idleMachineNames : result.machines.map((m) => m.name)
@@ -396,29 +434,6 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
           steelPending: o.steelGaps.length > 0,
         },
       );
-      if (o.steelGaps.length > 0) {
-        // Gọi emit() thẳng (không emitOnce): thông báo cũ của lệnh còn mở thì emit cùng dedupeKey
-        // sẽ GỘP và cập nhật nội dung theo các loại sắt mới (mergeIntoExisting).
-        const dedupeKey = `cut-pull-steel:${o.productionInvoiceId}`;
-        try {
-          await this.notifications.emit('CUT_PULL_STEEL_TO_ISSUE', {
-            entityId: o.productionInvoiceId,
-            dedupeKey,
-            params: {
-              piCode: o.piCode,
-              workshopId: result.workshopId,
-              lines: o.steelGaps
-                .map((g) => `${g.materialLabel}: còn ${g.missingBars} cây`)
-                .join('; '),
-              warehouseCodes: [...new Set(o.steelGaps.flatMap((g) => g.warehouseCodes))],
-            },
-          });
-        } catch (e) {
-          this.logger.error(
-            `Failed to emit CUT_PULL_STEEL_TO_ISSUE (${dedupeKey}): ${(e as Error).message}`,
-          );
-        }
-      }
     }
     this.publishFloorChanged('cut-auto-pull');
     return true;
@@ -458,6 +473,105 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (e) {
       this.logger.error(`Pull-steel check failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Đối soát tin xuất sắt (chỉ chạy trong lượt nền, tức khi FLOOR_ALERTS bật): với mỗi xưởng có máy
+   * cắt, lệnh đã chia cho máy cắt, đang chạy (có SKU ACTIVE ở xưởng), không chờ KHSX kiểm lại phương
+   * án cắt, còn thiếu sắt mà có kho giữ chỗ thì phải có 1 tin mở cho thủ kho. Chưa có thì phát
+   * (source RECONCILE); có rồi mà thêm kho mới thì emit gộp (thêm người nhận); chỉ danh sách loại sắt
+   * đổi thì cập nhật nội dung, giữ trạng thái đã đọc. Phần đóng tin nằm ở checkPullSteelIssued. Lỗi
+   * từng xưởng / từng lệnh chỉ ghi log.
+   */
+  private async reconcilePullSteel(cache: CutSnapshotCache): Promise<void> {
+    try {
+      const machines = await this.prisma.workstation.findMany({
+        where: { kind: 'CUT', isActive: true, workshopId: { not: null } },
+        select: { workshopId: true },
+        distinct: ['workshopId'],
+      });
+      for (const w of machines) {
+        if (w.workshopId == null) continue;
+        try {
+          await this.reconcilePullSteelWorkshop(w.workshopId, cache);
+        } catch (e) {
+          this.logger.error(
+            `Pull-steel reconcile (xưởng ${w.workshopId}) failed: ${(e as Error).message}`,
+          );
+        }
+      }
+    } catch (e) {
+      this.logger.error(`Pull-steel reconcile failed: ${(e as Error).message}`);
+    }
+  }
+
+  private async reconcilePullSteelWorkshop(
+    workshopId: bigint,
+    cache: CutSnapshotCache,
+  ): Promise<void> {
+    const gapsByPi = await this.cutAllocation.steelGapsByPi(workshopId, cache);
+    const withKho = [...gapsByPi].filter(([, gaps]) =>
+      gaps.some((g) => g.warehouseCodes.length > 0),
+    );
+    if (withKho.length === 0) return;
+    const started = new Set(
+      (await this.cutAllocation.startedAllocationPiIds(workshopId, cache)).map(String),
+    );
+    const candidates = withKho.filter(([piId]) => started.has(piId));
+    if (candidates.length === 0) return;
+    const pis = await this.prisma.productionInvoice.findMany({
+      where: { id: { in: candidates.map(([piId]) => BigInt(piId)) } },
+      select: { id: true, code: true, cuttingRecheckRequired: true },
+    });
+    const byId = new Map(pis.map((p) => [p.id.toString(), p]));
+    for (const [piId, gaps] of candidates) {
+      const pi = byId.get(piId);
+      if (!pi || pi.cuttingRecheckRequired) continue;
+      try {
+        await this.reconcilePullSteelOrder(piId, pi.code, workshopId, gaps);
+      } catch (e) {
+        this.logger.error(`Pull-steel reconcile (lệnh ${piId}) failed: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  private async reconcilePullSteelOrder(
+    piId: string,
+    piCode: string,
+    workshopId: bigint,
+    gaps: SteelGap[],
+  ): Promise<void> {
+    const type = 'CUT_PULL_STEEL_TO_ISSUE';
+    const dedupeKey = `cut-pull-steel:${piId}`;
+    const base = { piCode, workshopId: String(workshopId), gaps };
+    const open = await this.prisma.notification.findFirst({
+      where: { type, dedupeKey, recipients: { some: { resolvedAt: null } } },
+      select: { data: true },
+    });
+    if (!open) {
+      const params = buildPullSteelParams({ ...base, source: 'RECONCILE' });
+      await this.notifications.emit(type, { entityId: piId, dedupeKey, params: { ...params } });
+      return;
+    }
+    // Tin đang mở: giữ nguồn cũ (câu chữ đã hiện cho người đọc), chỉ làm tươi danh sách / kho.
+    const shown =
+      (open.data as { lines?: unknown; warehouseCodes?: unknown; source?: unknown } | null) ?? {};
+    const src = shown.source;
+    const params = buildPullSteelParams({
+      ...base,
+      source: src === 'MANUAL' || src === 'AUTO_PULL' || src === 'RECONCILE' ? src : undefined,
+    });
+    const oldCodes = Array.isArray(shown.warehouseCodes) ? (shown.warehouseCodes as unknown[]) : [];
+    if (params.warehouseCodes.some((c) => !oldCodes.includes(c))) {
+      // Kho mới: emit gộp để thêm người nhận (thủ kho kho mới).
+      await this.notifications.emit(type, { entityId: piId, dedupeKey, params: { ...params } });
+      return;
+    }
+    if (shown.lines === params.lines) return;
+    const ok = await this.notifications.updateOpenContent(type, dedupeKey, { ...params });
+    if (!ok) {
+      await this.notifications.emit(type, { entityId: piId, dedupeKey, params: { ...params } });
     }
   }
 
@@ -521,35 +635,109 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private async checkStale(now: Date): Promise<void> {
-    const counts = await this.countStaleByStage(new Date(now.getTime() - STALE_HOURS * 3_600_000));
-    for (const stage of STAGES) {
-      if (counts[stage] > 0) {
-        await this.emitOnce('FLOOR_BATCH_STALE', `floor-batch-stale:${stage}`, stage, {
-          stage,
-          count: counts[stage],
-          hours: STALE_HOURS,
-        });
-      } else {
-        await this.notifications.resolve({
-          entityType: 'FLOOR_STAGE',
-          entityId: stage,
-          types: ['FLOOR_BATCH_STALE'],
-        });
-      }
+  /** Nhắc nền chuyển mảnh Hàn -> Sơn (xưởng không có kho Sơn). Lỗi chỉ ghi log. */
+  private async syncPaintTransfer(): Promise<void> {
+    try {
+      await this.paintReminder.syncAll();
+    } catch (e) {
+      this.logger.error(`Paint transfer reminders failed: ${(e as Error).message}`);
     }
   }
 
   /**
-   * Số đợt chưa gửi KCS mà lần báo CÒN HIỆU LỰC (chưa bị đảo) đầu tiên đã quá `threshold` - cùng
-   * cách tính "chờ x giờ" ở màn QLSX. Đợt cũ không có sổ báo không được tính.
+   * Đợt chờ gửi KCS quá STALE_HOURS giờ: mỗi (tổ, xưởng hàng đợi) 1 tin, người nhận là QLSX của xưởng
+   * đó (và QLSX chung) nhờ params.workshopId.
    */
-  async countStaleByStage(threshold: Date): Promise<Record<FloorWorkerStage, number>> {
+  private async checkStale(now: Date): Promise<void> {
+    const items = await this.listStaleItems(new Date(now.getTime() - STALE_HOURS * 3_600_000));
+    const buckets = await groupStaleByQueueWorkshop(this.prisma, items);
+    await this.syncStageWorkshopAlerts('FLOOR_BATCH_STALE', buckets);
+  }
+
+  /**
+   * Hàm dùng chung (P1 gọi lại với loại tin chờ lâu của KCS): mỗi nhóm count > 0 có đúng 1 tin
+   * entityId = '<tổ>:<id xưởng | none>', dedupeKey = '<type>:<khoá>'. Chưa có tin mở thì phát; có rồi
+   * mà số đổi thì cập nhật nội dung GIỮ trạng thái đã đọc (không nhắc lại); tin mở của loại này mà khoá
+   * không còn nhóm nào (hết đợt quá hạn, hoặc tin kiểu cũ entityId 'PHOI' / 'HAN' / 'SON') thì đóng.
+   */
+  protected async syncStageWorkshopAlerts(
+    type: Extract<NotificationType, 'FLOOR_BATCH_STALE'>,
+    buckets: StaleBucket[],
+  ): Promise<void> {
+    const wsIds = [
+      ...new Set(buckets.filter((b) => b.workshopId != null).map((b) => b.workshopId!)),
+    ];
+    const names = new Map<string, string>();
+    if (wsIds.length > 0) {
+      const rows = await this.prisma.workshop.findMany({
+        where: { id: { in: wsIds } },
+        select: { id: true, name: true },
+      });
+      for (const w of rows) names.set(w.id.toString(), w.name);
+    }
+    const active = new Set<string>();
+    for (const b of buckets) {
+      if (b.count <= 0) continue;
+      const key = staleBucketKey(b.stage, b.workshopId);
+      active.add(key);
+      const wsName = b.workshopId != null ? names.get(b.workshopId.toString()) : undefined;
+      const params: FloorBatchStaleParams = {
+        stage: b.stage,
+        count: b.count,
+        hours: STALE_HOURS,
+        // Dòng hàng đợi cũ không có xưởng (null) thì không thêm workshopId vào params.
+        ...(b.workshopId != null ? { workshopId: b.workshopId.toString() } : {}),
+        ...(wsName ? { workshopName: wsName } : {}),
+      };
+      const dedupeKey = `${type}:${key}`;
+      const open = await this.prisma.notification.findFirst({
+        where: { type, dedupeKey, recipients: { some: { resolvedAt: null } } },
+        select: { id: true, data: true },
+      });
+      if (!open) {
+        await this.emitOnce(type, dedupeKey, key, params as unknown as Record<string, unknown>);
+        continue;
+      }
+      const shown = (open.data as { count?: unknown; workshopName?: unknown } | null) ?? {};
+      if (shown.count === b.count && (shown.workshopName ?? undefined) === wsName) continue;
+      try {
+        const ok = await this.notifications.updateOpenContent(
+          type,
+          dedupeKey,
+          params as unknown as Record<string, unknown>,
+        );
+        if (!ok) {
+          await this.emitOnce(type, dedupeKey, key, params as unknown as Record<string, unknown>);
+        }
+      } catch (e) {
+        this.logger.error(`Failed to update ${type} (${dedupeKey}): ${(e as Error).message}`);
+      }
+    }
+    const openAll = await this.prisma.notification.findMany({
+      where: { type, recipients: { some: { resolvedAt: null } } },
+      select: { entityId: true },
+    });
+    const entityType = NOTIFICATION_TYPES[type].entityType;
+    for (const id of new Set(openAll.map((n) => n.entityId))) {
+      if (!id || active.has(id)) continue;
+      await this.notifications.resolve({ entityType, entityId: id, types: [type] });
+    }
+  }
+
+  /**
+   * Các đợt chưa gửi KCS mà lần báo CÒN HIỆU LỰC (chưa bị đảo) đầu tiên đã quá `threshold` - cùng
+   * cách tính "chờ x giờ" ở màn QLSX, kèm lệnh để gom theo xưởng. Đợt cũ không có sổ báo không được
+   * tính.
+   */
+  async listStaleItems(threshold: Date): Promise<StaleItem[]> {
     const old = {
       some: { createdAt: { lt: threshold }, reversalOfId: null, reversedBy: { is: null } },
     };
     const [cut, steps, pieces] = await Promise.all([
-      this.prisma.cutBundle.count({ where: { status: 'CUTTING', floorReports: old } }),
+      this.prisma.cutBundle.findMany({
+        where: { status: 'CUTTING', floorReports: old },
+        select: { steelIssue: { select: { productionInvoiceId: true } } },
+      }),
       this.prisma.stepBatch.findMany({
         where: { stepBundleId: null, floorReports: old },
         distinct: [
@@ -559,20 +747,33 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
           'productionOrderId',
           'reportedById',
         ],
-        select: { id: true },
+        select: { productionInvoiceId: true },
       }),
-      this.prisma.productionBatch.groupBy({
-        by: ['stage'],
+      this.prisma.productionBatch.findMany({
         where: { status: 'OPEN', floorReports: old },
-        _count: { _all: true },
+        select: {
+          stage: true,
+          productionOrder: {
+            select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+          },
+        },
       }),
     ]);
-    const piece = (s: MfgStage) => pieces.find((p) => p.stage === s)?._count._all ?? 0;
-    return {
-      PHOI: cut + steps.length + piece(MfgStage.PHOI),
-      HAN: piece(MfgStage.HAN),
-      SON: piece(MfgStage.SON),
-    };
+    const out: StaleItem[] = [];
+    for (const c of cut) {
+      out.push({ stage: 'PHOI', productionInvoiceId: c.steelIssue?.productionInvoiceId ?? null });
+    }
+    for (const s of steps)
+      out.push({ stage: 'PHOI', productionInvoiceId: s.productionInvoiceId ?? null });
+    for (const p of pieces) {
+      if (p.stage !== MfgStage.HAN && p.stage !== MfgStage.SON && p.stage !== MfgStage.PHOI)
+        continue;
+      out.push({
+        stage: p.stage,
+        productionInvoiceId: p.productionOrder?.productionInvoiceItem?.productionInvoiceId ?? null,
+      });
+    }
+    return out;
   }
 
   private async emitOnce(
@@ -590,7 +791,7 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
     params: Record<string, unknown>,
   ): Promise<void> {
     const existing = await this.prisma.notification.findFirst({
-      where: { dedupeKey, recipients: { some: { resolvedAt: null } } },
+      where: { type, dedupeKey, recipients: { some: { resolvedAt: null } } },
       select: { id: true },
     });
     if (existing) return;

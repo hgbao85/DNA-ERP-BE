@@ -25,8 +25,12 @@ jest.mock('../stock/sku-priority.util', () => ({
   loadSkuPriorityHoldback: jest.fn(() => Promise.resolve({ qty: 0, holders: [] })),
 }));
 
+const ALREADY_RECEIVED_TEXT =
+  'Vật tư hàn / sơn: kho xác nhận phiếu xuất có chữ ký người nhận là đã nhận, không cần xác nhận nữa';
+
 describe('MaterialIssuesService', () => {
   let service: MaterialIssuesService;
+  let realtimeStub: { publishEntityChanged: jest.Mock; publishNotificationCreated: jest.Mock };
   let stockLedgerService: { postEntry: jest.Mock };
   let stockReservationsService: { getAvailableQty: jest.Mock; drainPoolBestEffort: jest.Mock };
   let notificationsService: { emit: jest.Mock; resolve: jest.Mock };
@@ -157,7 +161,7 @@ describe('MaterialIssuesService', () => {
       emit: jest.fn().mockResolvedValue(undefined),
       resolve: jest.fn().mockResolvedValue(undefined),
     };
-    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     service = new MaterialIssuesService(
       prisma as unknown as PrismaServiceType,
       stockLedgerService as unknown as StockLedgerService,
@@ -183,9 +187,20 @@ describe('MaterialIssuesService', () => {
             productionOrderId: 1n,
             materialId: 30n,
             issuedQty: 5,
+            // P3: kho xuất là đã nhận.
+            status: MaterialIssueStatus.RECEIVED,
+            receivedQty: 5,
           }),
         }),
       );
+      const created = (
+        prisma.materialIssue.create.mock.calls[0] as [
+          { data: { issuedAt: Date; receivedAt: Date; receivedById?: string } },
+        ]
+      )[0].data;
+      expect(created.receivedAt).toBeInstanceOf(Date);
+      expect(created.receivedAt).toBe(created.issuedAt);
+      expect(created.receivedById).toBeUndefined();
       // ĐÍNH CHÍNH audit độc lập 28/08 (Nghiêm trọng): postEntry() giờ nhận `tx` (2 tham số) - phải
       // nằm TRONG CÙNG transaction đã khoá FOR UPDATE stock_quant, không còn gọi ngoài sau khi
       // transaction đã commit (khoá nhả trước khi stock_quant kịp đổi -> race giữa 2 lệnh SX khác
@@ -205,22 +220,21 @@ describe('MaterialIssuesService', () => {
       expect(result.id).toBe('100');
     });
 
-    // Phase 3b, nhóm 7.5-ii, changelog 2026-09-25 mục 22.
-    it('emit MATERIAL_ISSUE_TO_TEAM sau khi xuất - đúng piCode/materialCode/qty/unit/stage', async () => {
+    // P3 (18/11/2026): kho xuất là đã nhận - không còn tin cho tổ, vẫn phát realtime.
+    it('không emit MATERIAL_ISSUE_TO_TEAM sau khi xuất, vẫn phát realtime MATERIAL_ISSUE CREATED', async () => {
       prisma.materialIssue.create.mockResolvedValue(issueRow);
 
       await service.create('1', dto, 'user-1', null);
 
-      expect(notificationsService.emit).toHaveBeenCalledWith('MATERIAL_ISSUE_TO_TEAM', {
-        entityId: '100',
-        params: {
-          piCode: 'PI-31',
-          materialCode: 'CO2-25',
-          qty: 5,
-          unit: material.unit,
-          stage: MfgStage.HAN,
-        },
-      });
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity: 'MATERIAL_ISSUE',
+          entityId: 100n,
+          action: 'CREATED',
+          actorId: 'user-1',
+        }),
+      );
     });
 
     it('idempotency short-circuit - KHÔNG emit lại MATERIAL_ISSUE_TO_TEAM (chỉ notify đúng 1 lần lúc tạo thật)', async () => {
@@ -582,7 +596,10 @@ describe('MaterialIssuesService', () => {
         ...issueRow,
         status: MaterialIssueStatus.RECEIVED,
       });
-      await expect(service.receive('100', {}, 'user-2', null)).rejects.toThrow(ConflictException);
+      const err = await service.receive('100', {}, 'user-2', null).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).message).toBe(ALREADY_RECEIVED_TEXT);
+      expect(prisma.materialIssue.updateMany).not.toHaveBeenCalled();
     });
 
     // Trung bình, audit toàn diện 09/09/2026: trước đây update() ghi thẳng không kèm điều kiện
@@ -597,7 +614,9 @@ describe('MaterialIssuesService', () => {
         }),
       );
 
-      await expect(service.receive('100', {}, 'user-2', null)).rejects.toThrow(ConflictException);
+      await expect(service.receive('100', {}, 'user-2', null)).rejects.toThrow(
+        ALREADY_RECEIVED_TEXT,
+      );
       expect(prisma.materialIssue.findUniqueOrThrow).not.toHaveBeenCalled();
     });
 

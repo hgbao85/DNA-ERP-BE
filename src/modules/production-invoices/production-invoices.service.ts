@@ -301,6 +301,44 @@ export class ProductionInvoicesService {
   }
 
   /**
+   * N1 (18/11/2026): nhắc QLSX bấm "Kết thúc" khi SKU vừa đóng gói ĐỦ - phát dù SKU có hay không có đơn bán. Best-effort NGOÀI
+   * transaction, lỗi chỉ ghi log. Tự đóng ở ProductionOrdersService.finishFloor(). Người nhận QLSX lọc theo xưởng ở recipient-resolver.
+   */
+  private async notifyReadyToFinish(params: {
+    itemId: bigint;
+    piId: bigint;
+    productionOrderId: bigint;
+    piCode: string;
+    factoryCode: string;
+    productName: string;
+    quantity: number;
+  }): Promise<void> {
+    try {
+      const current = await this.prisma.productionOrder.findUnique({
+        where: { id: params.productionOrderId },
+        select: { floorStage: true },
+      });
+      if (!current || current.floorStage === 'FINISHED') return;
+      await this.notifications.emit('PI_ITEM_READY_TO_FINISH', {
+        entityId: params.itemId.toString(),
+        dedupeKey: `pi-item-ready-to-finish:${params.itemId}`,
+        params: {
+          piCode: params.piCode,
+          piId: params.piId.toString(),
+          itemId: params.itemId.toString(),
+          factoryCode: params.factoryCode,
+          productName: params.productName,
+          quantity: params.quantity,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to create PI_ITEM_READY_TO_FINISH notification (entity ${params.itemId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
    * ProductionInvoiceItem bị loại khỏi AUDITED_MODELS (dòng con đổi liên tục theo vòng đời PI cha
    * - xem audit-log.extension.ts) nên createItem/updateItem không để lại vết, nhưng riêng 5 bước
    * chuyển trạng thái duyệt sản xuất (sendItemToQlsx/sendItemToBoss/approveItem/rejectItemByQlsx/
@@ -3604,12 +3642,26 @@ export class ProductionInvoicesService {
     // Chỉ báo khi vừa đóng ĐỦ (không phải mỗi lần ghi) VÀ item có gắn đơn hàng (SalesOrder không có
     // cột "người phụ trách"/người tạo - báo cả role Sales, cùng lý do mục 15.2). Tự nhiên chỉ bắn
     // đúng 1 lần: gọi lại sau khi đã đủ luôn bị chặn 400 ở guard phía trên, không cần dedupe thêm.
-    if (packedSoFar + dto.boxesPacked === productionOrder.quantity && item.salesOrder) {
+    const justFull = packedSoFar + dto.boxesPacked === productionOrder.quantity;
+    if (justFull && item.salesOrder) {
       await this.notifyPackagingComplete(item.id, {
         piCode: pi.code,
         factoryCode: item.mfgProduct.factoryCode,
         productName: item.mfgProduct.name,
         salesOrderCode: item.salesOrder.orderCode,
+      });
+    }
+    // N1: nhắc QLSX bấm "Kết thúc" (có hoặc không có đơn bán). SKU đã Kết thúc trước khi đóng nốt thì không nhắc: đọc lại
+    // floorStage sau transaction (productionOrder ở trên đọc trước khi ghi).
+    if (justFull && productionOrder.quantity > 0) {
+      await this.notifyReadyToFinish({
+        itemId: item.id,
+        piId: pi.id,
+        productionOrderId: productionOrder.id,
+        piCode: pi.code,
+        factoryCode: item.mfgProduct.factoryCode,
+        productName: item.mfgProduct.name,
+        quantity: productionOrder.quantity,
       });
     }
 

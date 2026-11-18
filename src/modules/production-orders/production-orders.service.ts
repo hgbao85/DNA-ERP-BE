@@ -471,6 +471,19 @@ export class ProductionOrdersService {
       'PRODUCTION_ORDER_FLOOR_FINISHED',
     );
     await this.releaseReservationsIfPiFinished(updated.productionInvoiceItemId);
+    // N1 (18/11/2026): đóng tin nhắc "đã đóng gói đủ - bấm Kết thúc" của SKU này. Best-effort: lỗi chỉ ghi log. Mở lại SKU
+    // (startFloor) không phát lại tin.
+    try {
+      await this.notifications.resolve({
+        entityType: 'PRODUCTION_INVOICE_ITEM',
+        entityId: String(updated.productionInvoiceItemId),
+        types: ['PI_ITEM_READY_TO_FINISH'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to resolve PI_ITEM_READY_TO_FINISH (item ${updated.productionInvoiceItemId}): ${(error as Error).message}`,
+      );
+    }
     return dto;
   }
 

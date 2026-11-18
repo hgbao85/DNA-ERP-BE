@@ -15,6 +15,7 @@ import {
   WorkstationKind,
 } from '../../generated/prisma/client';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import {
   WorkshopScope,
@@ -52,8 +53,10 @@ import {
 } from './cut-allocation-snapshot';
 import { loadSteelGaps } from './cut-allocation-steel-gaps';
 import type {
+  AllocatedOrder,
   CutAllocationBoard,
   CutAllocationLogResult,
+  CutAllocationRunResult,
   CutAutoPullResult,
   CutMachineProgressInfo,
   CutMachineWork,
@@ -73,7 +76,9 @@ import {
 
 // Kiểu trả về là hợp đồng với FE; controller và các service khác vẫn import từ file này.
 export type {
+  AllocatedOrder,
   CutAllocationBoard,
+  CutAllocationRunResult,
   CutAllocationLogEntry,
   CutAllocationLogResult,
   CutAllocationRow,
@@ -88,6 +93,18 @@ export type {
 const TX_OPTIONS = { maxWait: 10_000, timeout: 30_000 };
 
 type LogBase = Omit<Prisma.CutAllocationLogUncheckedCreateInput, 'action' | 'barCount'>;
+
+/** Tổng cây theo cặp `${piId}:${materialId}` của các dòng chia. */
+function barsByPair(snap: Snapshot, rows: AllocationRecord[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of rows) {
+    const meta = snap.patterns.get(r.patternId.toString());
+    if (!meta) continue;
+    const k = `${meta.piId}:${meta.materialId}`;
+    out.set(k, (out.get(k) ?? 0) + r.barCount);
+  }
+  return out;
+}
 
 /** Chia máy cắt: bảng kế hoạch chia sắt cho máy cắt của QLSX xưởng. */
 @Injectable()
@@ -164,7 +181,61 @@ export class CutAllocationService {
     const snap = await loadSnapshotCached(db, workshop, cache);
     const info = await loadProcessInfo(db, snap, false);
     const reported = await loadReported(db, snap);
-    return buildBoardData(snap, info, reported, extraWarnings);
+    const started = await this.loadActivePiIds(
+      db,
+      workshop.id,
+      snap.orders.map((o) => o.id),
+    );
+    const board = buildBoardData(snap, info, reported, extraWarnings, started);
+    // Câu nhắc lệnh chưa Bắt đầu tính từ chính dữ liệu bảng nên route nào trả bảng cũng có (POST chia
+    // lẫn GET tải lại). Lượt quét nền (có cache) chỉ cần tiến độ máy, bỏ qua để khỏi tra thêm mã lệnh.
+    if (!cache) {
+      const skipped = await this.notStartedWarning(db, board);
+      if (skipped) board.warnings.push(skipped);
+    }
+    return board;
+  }
+
+  /**
+   * Lệnh "đã Bắt đầu" ở xưởng = có >= 1 SKU floorStage ACTIVE thuộc xưởng (chưa Bắt đầu hoặc Tạm
+   * dừng hết thì không). Không xét cờ cuttingRecheckRequired (khác loadStartedPis của máy rảnh).
+   */
+  private async loadActivePiIds(
+    db: PrismaTx,
+    workshopId: bigint,
+    piIds: bigint[],
+  ): Promise<Set<string>> {
+    if (piIds.length === 0) return new Set();
+    const active = await db.productionOrder.findMany({
+      where: {
+        floorStage: ProductionOrderFloorStage.ACTIVE,
+        productionInvoiceItem: { workshopId, productionInvoiceId: { in: piIds } },
+      },
+      select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+    });
+    return new Set(
+      active.flatMap((o) => {
+        const id = o.productionInvoiceItem.productionInvoiceId;
+        return id == null ? [] : [id.toString()];
+      }),
+    );
+  }
+
+  /**
+   * Lệnh có dòng chia còn hiệu lực VÀ đã Bắt đầu: nguồn cho lượt đối soát "lệnh đã chia mà chưa có
+   * dòng hàng đợi Phôi" (CutAllocationFollowUpService.queueMissingPhoi).
+   */
+  async startedAllocationPiIds(workshopId: bigint, cache?: CutSnapshotCache): Promise<bigint[]> {
+    const ws = await this.findWorkshopRef(workshopId);
+    if (!ws) return [];
+    const snap = await loadSnapshotCached(this.prisma, ws, cache);
+    const withRows = [...new Set(snap.valid.map((r) => r.productionInvoiceId.toString()))];
+    const active = await this.loadActivePiIds(
+      this.prisma,
+      workshopId,
+      withRows.map((id) => BigInt(id)),
+    );
+    return withRows.filter((id) => active.has(id)).map((id) => BigInt(id));
   }
 
   async getBoard(userId: string, workshopId?: string): Promise<CutAllocationBoard> {
@@ -253,39 +324,49 @@ export class CutAllocationService {
 
   // ─── Tự chia (auto) + chia thêm (add) ─────────────────────────────────────
 
-  async auto(userId: string, dto: AutoCutAllocationDto): Promise<CutAllocationBoard> {
+  async auto(userId: string, dto: AutoCutAllocationDto): Promise<CutAllocationRunResult> {
     const workshop = await this.resolveWorkshop(userId, dto.workshopId);
-    const warnings = await this.runPlan(userId, workshop, dto.mode, null);
-    return this.buildBoard(this.prisma, workshop, warnings);
+    const { warnings, allocated } = await this.runPlan(userId, workshop, dto.mode, null);
+    return { board: await this.buildBoard(this.prisma, workshop, warnings), allocated };
   }
 
-  async add(userId: string, dto: AddCutAllocationDto): Promise<CutAllocationBoard> {
+  async add(userId: string, dto: AddCutAllocationDto): Promise<CutAllocationRunResult> {
     const workshop = await this.resolveWorkshop(userId, dto.workshopId);
     const pairKey = `${parseBigIntId(dto.productionInvoiceId)}:${parseBigIntId(dto.materialId)}`;
-    const warnings = await this.runPlan(userId, workshop, 'append', pairKey);
-    return this.buildBoard(this.prisma, workshop, warnings);
+    const { warnings, allocated } = await this.runPlan(userId, workshop, 'append', pairKey);
+    return { board: await this.buildBoard(this.prisma, workshop, warnings), allocated };
   }
 
   /**
    * Chia trong 1 transaction (khoá theo xưởng). `onlyPair` = chia ngay đúng (lệnh, loại sắt) đó dù
-   * chưa thấy đủ sắt (khoá `${piId}:${materialId}`); null = mọi cặp đủ sắt. Trả về cảnh báo của lần
-   * chia.
+   * chưa thấy đủ sắt (khoá `${piId}:${materialId}`); null = mọi cặp đủ sắt. Chỉ chia lệnh đã Bắt đầu
+   * (có SKU ACTIVE ở xưởng). Trả về cảnh báo của lần chia và các lệnh vừa có thêm cây được chia
+   * (chỉ cặp có thêm cây so với trước lần chia: "Chia lại" không đổi gì thì không báo lại).
    */
   private async runPlan(
     userId: string,
     workshop: WorkshopRef,
     mode: 'append' | 'redo',
     onlyPair: string | null,
-  ): Promise<string[]> {
+  ): Promise<{ warnings: string[]; allocated: AllocatedOrder[] }> {
     return this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `cut-allocation:${workshop.id}`);
       const snap = await loadSnapshot(tx, workshop);
       this.assertPlannable(snap, workshop, onlyPair);
+      const started = await this.loadActivePiIds(
+        tx,
+        workshop.id,
+        snap.orders.map((o) => o.id),
+      );
+      if (onlyPair != null) await this.assertPairStarted(tx, snap, started, onlyPair);
+      const barsBefore = barsByPair(snap, snap.valid);
       const held = await this.dropOldRows(tx, snap, mode);
 
       const info = await loadProcessInfo(tx, snap, true);
       const { orders, unitMeta } = buildUnits(snap, info, held, (pairKey) =>
-        onlyPair ? pairKey === onlyPair : isPairSufficient(snap, pairKey),
+        onlyPair
+          ? pairKey === onlyPair
+          : started.has(pairKey.split(':')[0]) && isPairSufficient(snap, pairKey),
       );
       // Tải = số cây CÒN LẠI (ước): máy đã cắt hết dòng nhận việc mới trước máy còn dòng chưa cắt.
       const reported = await loadReported(tx, snap);
@@ -313,8 +394,71 @@ export class CutAllocationService {
         await this.logAddedRows(tx, userId, workshop, snap, created);
       }
       await this.resequence(tx, snap, info, [...held, ...created]);
-      return plan.warnings;
+      const warnings = [...plan.warnings];
+      const allocated = await this.collectAllocated(tx, snap, barsBefore, [...held, ...created]);
+      return { warnings, allocated };
     }, TX_OPTIONS);
+  }
+
+  /** "Chia luôn" lệnh chưa Bắt đầu (hoặc chỉ còn SKU Tạm dừng) -> 400, chưa ghi gì. */
+  private async assertPairStarted(
+    tx: PrismaTx,
+    snap: Snapshot,
+    started: Set<string>,
+    pairKey: string,
+  ): Promise<void> {
+    const piId = pairKey.split(':')[0];
+    if (started.has(piId)) return;
+    const code = (await loadLenhDisplayCodes(tx, [BigInt(piId)])).get(piId);
+    const label = code ?? snap.orders.find((o) => o.id.toString() === piId)?.code ?? piId;
+    throw new BadRequestException(
+      `${label} chưa có SKU nào đang chạy ở xưởng này (chưa Bắt đầu hoặc đang Tạm dừng) - bấm Bắt đầu ở Tổng hợp lệnh SX rồi mới chia máy cắt`,
+    );
+  }
+
+  /**
+   * Câu cảnh báo cho lệnh chưa Bắt đầu mà có cặp đủ sắt còn cây chưa chia (khối "Chưa chia" của bảng,
+   * started = false). null khi không có lệnh nào như vậy.
+   */
+  private async notStartedWarning(db: PrismaTx, board: CutAllocationBoard): Promise<string | null> {
+    const ids = [
+      ...new Set(board.unallocated.filter((u) => !u.started).map((u) => u.productionInvoiceId)),
+    ];
+    if (ids.length === 0) return null;
+    const codes = await loadLenhDisplayCodes(
+      db,
+      ids.map((id) => BigInt(id)),
+    );
+    const piCode = new Map(board.unallocated.map((u) => [u.productionInvoiceId, u.piCode]));
+    const names = ids.map((id) => codes.get(id) ?? piCode.get(id) ?? id);
+    return `Chưa chia ${ids.length} lệnh chưa Bắt đầu: ${names.join(', ')} - bấm Bắt đầu ở Tổng hợp lệnh SX rồi bấm “Chia phần còn lại”.`;
+  }
+
+  /** Lệnh có cặp (lệnh, loại sắt) được thêm cây so với trước lần chia, kèm sắt chưa xuất đủ. */
+  private async collectAllocated(
+    tx: PrismaTx,
+    snap: Snapshot,
+    barsBefore: Map<string, number>,
+    after: AllocationRecord[],
+  ): Promise<AllocatedOrder[]> {
+    const barsAfter = barsByPair(snap, after);
+    const grown = [...barsAfter].filter(([k, n]) => n > (barsBefore.get(k) ?? 0)).map(([k]) => k);
+    if (grown.length === 0) return [];
+    const gaps = await loadSteelGaps(tx, snap, grown);
+    const out: AllocatedOrder[] = [];
+    for (const order of snap.orders) {
+      const mine = grown.filter((k) => k.startsWith(`${order.id}:`));
+      if (mine.length === 0) continue;
+      out.push({
+        productionInvoiceId: order.id.toString(),
+        piCode: order.code,
+        steelGaps: mine.flatMap((k) => {
+          const g = gaps.get(k);
+          return g ? [g] : [];
+        }),
+      });
+    }
+    return out;
   }
 
   private assertPlannable(snap: Snapshot, workshop: WorkshopRef, onlyPair: string | null): void {

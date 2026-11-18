@@ -103,6 +103,8 @@ export interface CutAllocationBoard {
     materialId: string;
     materialLabel: string;
     bars: number;
+    /** false = lệnh chưa có SKU nào ACTIVE ở xưởng (chưa Bắt đầu / đang Tạm dừng): chưa chia được. */
+    started: boolean;
   }>;
   waiting: Array<{
     productionInvoiceId: string;
@@ -114,9 +116,26 @@ export interface CutAllocationBoard {
     shortBars: number;
     /** Cây đang giữ chỗ ở kho xưởng khác: không tính vào availableBars, phải chuyển kho trước. */
     heldElsewhereBars: number;
+    /** Như `unallocated[].started`: "Chia luôn" bị khoá khi false. */
+    started: boolean;
   }>;
   staleCount: number;
   warnings: string[];
+}
+
+/** Lệnh vừa có dòng chia mới (hoặc chia thêm cây) trong 1 lần chia tay, kèm sắt chưa xuất đủ. */
+export interface AllocatedOrder {
+  productionInvoiceId: string;
+  /** Mã PI (nơi hiển thị đổi sang mã lệnh qua LENH_CODE_TYPES / loadLenhDisplayCodes). */
+  piCode: string;
+  /** Chỉ các loại sắt vừa được chia thêm mà đã xuất < cần. Rỗng = không có gì để báo thủ kho. */
+  steelGaps: SteelGap[];
+}
+
+/** Kết quả auto() / add(): bảng mới + các lệnh vừa được chia (controller gọi follow-up, chỉ trả board). */
+export interface CutAllocationRunResult {
+  board: CutAllocationBoard;
+  allocated: AllocatedOrder[];
 }
 
 /** Việc của 1 máy cắt ở màn quét. */
