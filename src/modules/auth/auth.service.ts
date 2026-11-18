@@ -15,6 +15,7 @@ import { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { parseDurationMs } from '../../common/utils/duration.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { AuthUserProfile, UsersService } from '../users/users.service';
+import { derivePermissions, deriveRoleNames } from './auth-profile.util';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { isWeakPin, LOCK_MINUTES, MAX_FAILED_LOGINS } from '../../common/utils/pin.util';
 import { NetworkAccessService } from '../../common/network/network-access.service';
@@ -32,19 +33,13 @@ export const INVALID_CREDENTIALS = 'Tên đăng nhập hoặc mật khẩu khôn
 
 type TxClient = Pick<PrismaServiceType, 'refreshToken'>;
 
-function derivePermissions(user: AuthUserProfile): string[] {
-  const permissions = new Set<string>();
-  for (const userRole of user.roles) {
-    for (const rolePermission of userRole.role.permissions) {
-      permissions.add(`${rolePermission.permission.module}:${rolePermission.permission.action}`);
-    }
-  }
-  return [...permissions];
-}
-
-function deriveRoleNames(user: AuthUserProfile): string[] {
-  return user.roles.map((userRole) => userRole.role.name);
-}
+/**
+ * B5 (17/11): token vừa bị làm mới bởi 1 lượt khác trong khoảng này mà lại được gửi tiếp = 2 tab / 2 request cùng làm mới
+ * gần như đồng thời (cùng đọc 1 refresh token trong localStorage), KHÔNG phải token bị lộ - chỉ từ chối lượt này, không
+ * thu hồi mọi phiên. FE thấy tab kia đã lưu token mới thì dùng luôn (http.ts).
+ */
+export const REFRESH_REUSE_GRACE_MS = 30_000;
+const SESSION_EXPIRED = 'Phiên đăng nhập đã hết hạn. Đăng nhập lại.';
 
 @Injectable()
 export class AuthService {
@@ -218,6 +213,9 @@ export class AuthService {
     // every live token for this user so the thief's already-rotated session dies too, not just
     // reject this one request (OAuth Security BCP for refresh token rotation).
     if (stored.revokedAt && stored.replacedByTokenId) {
+      if (Date.now() - stored.revokedAt.getTime() < REFRESH_REUSE_GRACE_MS) {
+        throw new UnauthorizedException(SESSION_EXPIRED);
+      }
       const { count } = await this.prisma.refreshToken.updateMany({
         where: { userId: stored.userId, revokedAt: null },
         data: { revokedAt: new Date() },
@@ -242,16 +240,19 @@ export class AuthService {
 
     // Rotation: the old refresh token is revoked in the same transaction that
     // issues the new pair, so a crash mid-rotation can never leave two live tokens.
+    // B5 (17/11): thu hồi token cũ CÓ ĐIỀU KIỆN "chưa bị thu hồi" - 2 lượt làm mới cùng lúc trước đây đều qua kiểm tra ở trên
+    // rồi cùng cấp cặp token mới (1 refresh token đổi được 2 lần). Lượt thua: count 0 -> huỷ cả cặp vừa cấp (rollback), 401.
     return this.prisma.$transaction(async (tx) => {
       const issued = await this.issueTokenPair(user, ip, tx);
-      await tx.refreshToken.update({
-        where: { id: stored.id },
+      const { count } = await tx.refreshToken.updateMany({
+        where: { id: stored.id, revokedAt: null },
         data: {
           revokedAt: new Date(),
           revokedByIp: ip,
           replacedByTokenId: issued.refreshTokenId,
         },
       });
+      if (count === 0) throw new UnauthorizedException(SESSION_EXPIRED);
       return { accessToken: issued.accessToken, refreshToken: issued.refreshToken };
     });
   }
@@ -302,9 +303,10 @@ export class AuthService {
 
     // Revoke every live refresh token so a changed password (e.g. after a suspected
     // leak) actually logs the account out everywhere else, not just on this device.
-    // The current access token still works until it naturally expires (stateless JWT -
-    // see JwtStrategy.validate, which never re-checks the DB), which is an accepted
-    // trade-off already documented for account deletion/deactivation.
+    // The current access token still works until it naturally expires (stateless JWT). Since
+    // B5 (17/11) JwtStrategy re-checks the account against the DB (LiveAuthService, <= 30 s), so
+    // deactivation / deletion / role changes apply quickly; a password change alone does not
+    // invalidate an access token already issued.
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: userId }, data: { password: hashedPassword } });
       await tx.refreshToken.updateMany({
