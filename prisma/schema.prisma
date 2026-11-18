@@ -2142,7 +2142,7 @@ model CuttingProposal {
   totalBarsAll        Int?
   /// Decimal, không Int (2026-08-19) - tổng hao hụt cộng dồn từ các dòng lines[], mỗi dòng lại
   /// tính từ cutLengthMm (nay Decimal) nên kế thừa cùng độ chính xác thập phân, xem SegmentSpec.
-  totalWasteMm        Decimal?              @db.Decimal(8, 1)
+  totalWasteMm        Decimal?              @db.Decimal(12, 1)
   wastePercentage     Decimal?              @db.Decimal(6, 3)
   /// Tổng thời gian giải THẬT cộng dồn mọi loại sắt (giây, KHÔNG tính bung BOM/dựng response/
   /// network) - từ `summary.total_solve_seconds` phía solver (2026-09-22). Hiện ở mức tổng quan
@@ -2268,7 +2268,7 @@ model CuttingProposalLine {
   buyBars              Int?
   /// Decimal, không Int (2026-08-19) - kế thừa độ chính xác thập phân từ cutLengthMm, xem
   /// SegmentSpec.
-  totalWasteMm         Decimal?       @db.Decimal(7, 1)
+  totalWasteMm         Decimal?       @db.Decimal(12, 1)
   wastePercentage      Decimal?       @db.Decimal(6, 3)
   /// Thời gian giải THẬT của riêng loại sắt này (giây) - từ `purchase_plan[].solve_seconds`
   /// phía solver (2026-09-22, xem CuttingProposal.totalSolveSeconds cho tổng cả đợt). Có ở CẢ 2
