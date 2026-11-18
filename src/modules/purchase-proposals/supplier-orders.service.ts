@@ -379,7 +379,8 @@ export class SupplierOrdersService {
     const proposalIds = [...new Set(order.items.map((it) => it.proposalId))].sort((a, b) =>
       a < b ? -1 : a > b ? 1 : 0,
     );
-    await this.prisma.$transaction(async (tx) => {
+    // MH5 (rà soát 14/11): nhật ký ghi theo dòng ĐỌC LẠI sau khoá (dòng nào thực sự về chờ duyệt), không theo ảnh chụp trước khoá.
+    const reopenedIds = await this.prisma.$transaction(async (tx) => {
       for (const pid of proposalIds) {
         await lockBusinessKey(tx, `purchase-proposal-mutate:${pid}`);
       }
@@ -400,9 +401,17 @@ export class SupplierOrdersService {
       }
       // Chỉ dòng chưa nhận gì (receivedQty = 0, khoá trong cùng transaction) - Kho nhận xen giữa thì
       // dòng đó giữ "Đang mua".
-      await tx.purchaseProposalItem.updateMany({
+      const stillOpen = await tx.purchaseProposalItem.findMany({
         where: {
           id: { in: reopen.map((it) => it.id) },
+          status: PurchaseProposalStatus.PURCHASING,
+          receivedQty: 0,
+        },
+        select: { id: true },
+      });
+      await tx.purchaseProposalItem.updateMany({
+        where: {
+          id: { in: stillOpen.map((it) => it.id) },
           status: PurchaseProposalStatus.PURCHASING,
           receivedQty: 0,
         },
@@ -416,14 +425,18 @@ export class SupplierOrdersService {
       for (const pid of proposalIds) {
         await recomputeProposalStatus(tx, pid);
       }
+      return stillOpen.map((it) => it.id.toString());
     });
     await this.audit(AuditAction.UPDATE, order, null, {
       event: 'supplier-order-revised',
       revision: order.revision + 1,
       reason,
-      reopenedItemIds: reopen.map((it) => it.id.toString()),
+      reopenedItemIds: reopenedIds,
       oldApprovalFileUrl: order.approvalFileUrl,
     });
+    // MH5: đóng "hàng mua sắp về - chờ nhận kho" của đề xuất không còn dòng nào chờ nhận (thủ kho bấm nhận ra lỗi), mở lại
+    // "n vật tư cần mua" cho người mua (dòng vừa về chờ duyệt, cần xin ký lại).
+    await this.purchaseProposalsService.afterSupplierOrderRevised(proposalIds, actorUserId);
     this.publish(proposalIds, actorUserId);
     return this.findOne(id);
   }

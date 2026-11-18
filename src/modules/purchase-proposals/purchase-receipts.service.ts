@@ -96,7 +96,7 @@ export class PurchaseReceiptsService {
     idempotencyKey: string,
     warehouseScope: string | null,
   ): Promise<PurchaseReceiptResult> {
-    const existing = await this.findByKey(idempotencyKey);
+    const existing = await this.findByKey(idempotencyKey, userId);
     if (existing) return existing;
 
     const lines = await this.loadGroup(dto.itemIds, warehouseScope, true);
@@ -271,7 +271,7 @@ export class PurchaseReceiptsService {
     } catch (error) {
       // Cùng Idempotency-Key gửi 2 lần gần nhau: lần sau đụng unique idempotencyKey -> trả phiếu lần đầu đã ghi.
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const again = await this.findByKey(idempotencyKey);
+        const again = await this.findByKey(idempotencyKey, userId);
         if (again) return again;
       }
       throw error;
@@ -310,7 +310,7 @@ export class PurchaseReceiptsService {
     idempotencyKey: string,
     warehouseScope: string | null,
   ): Promise<PurchaseReceiptResult> {
-    const existing = await this.findByKey(idempotencyKey);
+    const existing = await this.findByKey(idempotencyKey, userId);
     if (existing) return existing;
 
     const lines = await this.loadGroup(dto.itemIds, warehouseScope);
@@ -318,31 +318,50 @@ export class PurchaseReceiptsService {
     const fileUrls = cleanUrls(dto.fileUrls);
     if (fileUrls.length === 0)
       throw new BadRequestException('Cần ít nhất 1 ảnh bằng chứng khi từ chối nhận');
-
-    const receipt = await this.prisma.purchaseReceipt.create({
-      data: {
-        supplierOrderId: first.item.supplierOrderId,
-        materialId: first.item.materialId,
-        warehouseCode: first.warehouseCode,
-        spec: first.item.spec ?? '',
-        stockLengthMm: first.item.stockLengthMm,
-        status: PurchaseReceiptStatus.REJECTED,
-        unitRateQty: dto.deliveredQty,
-        supplierUnitQty: 1,
-        deliveredQty: dto.deliveredQty,
-        receivedQty: 0,
-        supplierSlipUrls: [],
-        approvalFileUrls: [],
-        receiptSlipUrls: [],
-        weighSlipUrls: [],
-        rejectReason: dto.reason.trim(),
-        rejectFileUrls: fileUrls,
-        autoAllocation: [],
-        allocation: [],
-        idempotencyKey,
-        createdById: userId,
-      },
+    // MH8 (rà soát 14/11): đọc LẠI trạng thái dòng ngay trước khi ghi - dòng vừa được nhận đủ / đóng ở nơi khác thì không ghi
+    // phiếu từ chối cho dòng đó nữa.
+    const fresh = await this.prisma.purchaseProposalItem.findMany({
+      where: { id: { in: lines.map((l) => l.item.id) } },
+      select: { id: true, status: true },
     });
+    if (fresh.some((f) => f.status !== PurchaseProposalStatus.PURCHASING)) {
+      throw new ConflictException('Có dòng vừa được nhận đủ hoặc đóng ở nơi khác - tải lại trang');
+    }
+
+    let receipt: { id: bigint };
+    try {
+      receipt = await this.prisma.purchaseReceipt.create({
+        data: {
+          supplierOrderId: first.item.supplierOrderId,
+          materialId: first.item.materialId,
+          warehouseCode: first.warehouseCode,
+          spec: first.item.spec ?? '',
+          stockLengthMm: first.item.stockLengthMm,
+          status: PurchaseReceiptStatus.REJECTED,
+          unitRateQty: dto.deliveredQty,
+          supplierUnitQty: 1,
+          deliveredQty: dto.deliveredQty,
+          receivedQty: 0,
+          supplierSlipUrls: [],
+          approvalFileUrls: [],
+          receiptSlipUrls: [],
+          weighSlipUrls: [],
+          rejectReason: dto.reason.trim(),
+          rejectFileUrls: fileUrls,
+          autoAllocation: [],
+          allocation: [],
+          idempotencyKey,
+          createdById: userId,
+        },
+      });
+    } catch (error) {
+      // MH8: bấm đúp cùng Idempotency-Key - lần sau đụng unique, trả phiếu lần đầu thay vì lỗi 500 (giống nhận hàng).
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const again = await this.findByKey(idempotencyKey, userId);
+        if (again) return again;
+      }
+      throw error;
+    }
 
     const order = first.item.supplierOrder;
     try {
@@ -637,14 +656,19 @@ export class PurchaseReceiptsService {
       }
       seen.add(a.itemId);
     }
-    const sum = round4(input.reduce((s, a) => s + a.qty, 0));
-    if (sum !== total) {
-      throw new BadRequestException(`Tổng phân bổ (${sum}) phải bằng số thực nhận (${total})`);
-    }
-    return lines.map((l) => ({
+    // MH7 (rà soát 14/11): làm tròn TỪNG dòng trước rồi mới so tổng - trước đây so tổng của số chưa làm tròn (3.33333×2 +
+    // 3.33334 = 10 qua kiểm tra) nhưng ghi từng dòng đã làm tròn (tổng 9.9999), dòng có thể kẹt mãi ở "Đang mua".
+    const result = lines.map((l) => ({
       itemId: l.item.id.toString(),
       qty: round4(input.find((a) => a.itemId === l.item.id.toString())?.qty ?? 0),
     }));
+    const sum = round4(result.reduce((s, a) => s + a.qty, 0));
+    if (sum !== total) {
+      throw new BadRequestException(
+        `Tổng phân bổ (${sum}, mỗi dòng làm tròn 4 số lẻ) phải bằng số thực nhận (${total})`,
+      );
+    }
+    return result;
   }
 
   private toPreview(lines: ReceiveLine[], alloc: AllocationResult[]): PreviewLine[] {
@@ -664,9 +688,16 @@ export class PurchaseReceiptsService {
     });
   }
 
-  private async findByKey(idempotencyKey: string): Promise<PurchaseReceiptResult | null> {
+  /** MH8: khoá chống trùng thuộc NGƯỜI tạo - người khác gửi trùng khoá không được nhận lại phiếu của người kia. */
+  private async findByKey(
+    idempotencyKey: string,
+    userId: string,
+  ): Promise<PurchaseReceiptResult | null> {
     const r = await this.prisma.purchaseReceipt.findUnique({ where: { idempotencyKey } });
     if (!r) return null;
+    if (r.createdById !== userId) {
+      throw new ConflictException('Khoá chống trùng (Idempotency-Key) đã được dùng cho phiếu khác');
+    }
     const allocation = (r.allocation as unknown as AllocationResult[]) ?? [];
     let preview: PreviewLine[] = [];
     if (allocation.length > 0) {

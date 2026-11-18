@@ -376,19 +376,26 @@ export class MaterialIssuesService {
     // 2 lượt xác nhận nhận gần như đồng thời (double-click, mạng chập chờn tự gửi lại) tự serialize
     // qua khoá hàng của UPDATE trong Postgres: request thua chỉ thấy count=0, không còn ghi đè âm
     // thầm receivedQty/receivedAt/receivedById của lượt đã "thắng" (Trung bình, audit 09/09/2026).
-    const { count } = await this.prisma.materialIssue.updateMany({
-      where: { id: issue.id, status: MaterialIssueStatus.ISSUED },
-      data: {
-        status: MaterialIssueStatus.RECEIVED,
-        receivedQty,
-        receivedAt: new Date(),
-        receivedById,
-      },
-    });
-    if (count === 0) {
-      throw new ConflictException(
-        `Phiếu xuất vật tư ${id} đã được xác nhận nhận bởi 1 yêu cầu khác trong lúc xử lý - không ghi đè`,
-      );
+    // XK8 (rà soát 14/11): update (không phải updateMany) có điều kiện trạng thái - vẫn chặn 2 lượt cùng lúc, và extension
+    // audit-log ghi được ai nhận / nhận bao nhiêu (updateMany không được ghi nhật ký).
+    try {
+      await this.prisma.materialIssue.update({
+        where: { id: issue.id, status: MaterialIssueStatus.ISSUED },
+        data: {
+          status: MaterialIssueStatus.RECEIVED,
+          receivedQty,
+          receivedAt: new Date(),
+          receivedById,
+        },
+      });
+    } catch (e) {
+      // Không còn dòng đúng trạng thái (P2025) = 1 yêu cầu khác vừa xử lý.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
+        throw new ConflictException(
+          `Phiếu xuất vật tư ${id} đã được xác nhận nhận bởi 1 yêu cầu khác trong lúc xử lý - không ghi đè`,
+        );
+      }
+      throw e;
     }
 
     const updated = await this.prisma.materialIssue.findUniqueOrThrow({

@@ -18,7 +18,7 @@ export class ReceivedLineDto {
   id!: string;
 
   @ApiProperty({ description: 'Số thực nhận (≤ số gửi). Dòng không gửi = nhận đủ.' })
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 4 }, { message: 'Số lượng tối đa 4 chữ số thập phân' })
   @Min(0)
   receivedQty!: number;
 }

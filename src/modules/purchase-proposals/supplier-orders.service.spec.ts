@@ -50,6 +50,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
     applyBossApproveTx: jest.Mock;
     finishBossApprove: jest.Mock;
     notifyIfFullyPurchased: jest.Mock;
+    afterSupplierOrderRevised: jest.Mock;
   };
 
   const supplier = { id: 7n, name: 'Kim Phát', isActive: true, deletedAt: null };
@@ -143,6 +144,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       applyBossApproveTx: jest.fn().mockResolvedValue(undefined),
       finishBossApprove: jest.fn().mockResolvedValue({}),
       notifyIfFullyPurchased: jest.fn().mockResolvedValue(undefined),
+      afterSupplierOrderRevised: jest.fn().mockResolvedValue(undefined),
     };
     const cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     service = new SupplierOrdersService(
@@ -456,12 +458,20 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
           }),
         ]),
       );
+      // Lần đọc đầu = dòng vẫn chưa nhận gì sau khoá (MH5 14/11), các lần sau = trạng thái để tính lại đề xuất.
+      prisma.purchaseProposalItem.findMany.mockResolvedValueOnce([{ id: 400n }]);
       prisma.purchaseProposalItem.findMany.mockResolvedValue([
         { status: PurchaseProposalStatus.NEW },
         { status: PurchaseProposalStatus.PURCHASING },
       ]);
 
       await service.revise('90', 'Bỏ bớt 1 dòng', 'buyer-1', ['PURCHASER']);
+
+      // MH5 14/11: đóng "chờ nhận kho" / mở lại "cần mua" cho đề xuất của đơn.
+      expect(proposals.afterSupplierOrderRevised).toHaveBeenCalledWith(
+        [expect.any(BigInt)],
+        'buyer-1',
+      );
 
       expect(prisma.supplierOrder.updateMany).toHaveBeenCalledWith({
         where: { id: 90n, status: SupplierOrderStatus.APPROVED },

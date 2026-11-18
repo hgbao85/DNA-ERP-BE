@@ -32,6 +32,7 @@ jest.mock('../../common/utils/pi-workshop-lock.util', () => ({
 const dec = (n: number) => new Prisma.Decimal(n);
 
 describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () => {
+  let realtime: { publishEntityChanged: jest.Mock };
   let service: IssueSlipsService;
   let prisma: Record<string, Record<string, jest.Mock>> & {
     $queryRaw: jest.Mock;
@@ -99,6 +100,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
   });
 
   beforeEach(() => {
+    realtime = { publishEntityChanged: jest.fn() };
     prisma = {
       issueSlip: {
         create: jest.fn().mockResolvedValue({ id: 9n }),
@@ -246,7 +248,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       consumable as unknown as MaterialIssuesService,
       ledger as unknown as StockLedgerService,
       reservations as unknown as StockReservationsService,
-      { publishEntityChanged: jest.fn() } as unknown as RealtimeService,
+      realtime as unknown as RealtimeService,
       weaving as never,
       { emit: jest.fn(), resolve: jest.fn() } as never,
       packaging as never,
@@ -579,7 +581,7 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
   describe('cancel', () => {
     it('huỷ phiếu chưa xuất kèm lý do; phiếu đã xuất thì không huỷ được', async () => {
       await service.cancel('9', ' In sai ', 'kho-1', null);
-      expect(prisma.issueSlip.updateMany).toHaveBeenCalledWith({
+      expect(prisma.issueSlip.update).toHaveBeenCalledWith({
         where: { id: 9n, status: IssueSlipStatus.DRAFT },
         data: expect.objectContaining({
           status: IssueSlipStatus.CANCELLED,
@@ -1090,6 +1092,10 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
         data: { materialYieldRecipeIssueId: 703n },
       });
       expect(recipeIssues.afterCreate).toHaveBeenCalled();
+      // XK9 14/11: màn Phôi nghe 'material-yield-recipes' - phát kèm sự kiện công thức, không chỉ ISSUE_SLIP.
+      expect(realtime.publishEntityChanged).toHaveBeenCalledWith(
+        expect.objectContaining({ entity: 'MATERIAL_YIELD_RECIPE', action: 'CREATED' }),
+      );
     });
   });
 });

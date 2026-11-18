@@ -80,6 +80,8 @@ const AUDITED_MODELS = new Set([
   // 16/11/2026: danh mục "Công thức vật tư thành phẩm" (Admin) - trước chỉ có nhật ký mock ở FE, nay
   // trang Admin "Nhật ký hoạt động" đọc bảng audit_logs thật nên phải để BE tự ghi như mọi danh mục khác.
   'MaterialYieldRecipe',
+  // XK8 (rà soát 14/11, 18/11/2026): phiếu xuất XK - nhật ký ghi ai tạo / xuất / huỷ (bảng không có cột người huỷ).
+  'IssueSlip',
 ]);
 
 /** Minimal shape needed to dynamically call `client[modelKey].findFirst(...)` by model name. */
