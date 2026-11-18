@@ -67,6 +67,16 @@ const ITEM_INCLUDE = {
 } satisfies Prisma.ProductionInvoiceItemInclude;
 type LoadedItem = Prisma.ProductionInvoiceItemGetPayload<{ include: typeof ITEM_INCLUDE }>;
 
+/** Kết quả phần ghi trong transaction của saveEntries (saveEntriesInTx) - đưa vào finishSave() sau commit. */
+export interface DeadlineSaveOutcome {
+  checks: DeadlineEntryCheck[];
+  items: Map<string, LoadedItem>;
+  batchId: bigint | null;
+}
+
+/** Câu báo khi đụng index "1 yêu cầu chờ / dòng" (P2002) lúc tạo lô chờ duyệt. */
+export const DEADLINE_PENDING_CONFLICT = 'Có dòng đang chờ Sếp duyệt lại - tải lại rồi thử lại';
+
 const USER_SELECT = { id: true, firstName: true, lastName: true } as const;
 const BATCH_INCLUDE = {
   requestedBy: { select: USER_SELECT },
@@ -339,58 +349,11 @@ export class DeadlineChangesService implements DeadlineChangesPort {
       if (existing) return { applied: [], batch: await this.toBatchDto(existing), skipped: [] };
     }
 
-    let outcome: {
-      checks: DeadlineEntryCheck[];
-      items: Map<string, LoadedItem>;
-      batchId: bigint | null;
-    };
+    let outcome: DeadlineSaveOutcome;
     try {
-      outcome = await this.prisma.$transaction(async (tx) => {
-        await this.lockForEntries(tx, entries);
-        const { checks, items } = await this.evaluate(tx, entries);
-        const errors = checks.filter((c) => c.kind === 'ERROR');
-        if (opts.strict && errors.length > 0) {
-          throw new BadRequestException(
-            errors
-              .map((c) =>
-                `${c.lenhCode} · ${c.skuCode}: ${c.errors.join('; ')}`.replace(/^ · : /, ''),
-              )
-              .join('\n'),
-          );
-        }
-        for (const c of checks.filter((x) => x.kind === 'APPLY')) {
-          await this.writer.applyItemDeadlines(
-            tx,
-            BigInt(c.itemId),
-            this.writer.toWrite(pickChanged(c.changes).newValues),
-          );
-        }
-        const approval = checks.filter((c) => c.kind === 'NEEDS_APPROVAL');
-        let batchId: bigint | null = null;
-        if (approval.length > 0) {
-          const batch = await tx.deadlineChangeBatch.create({
-            data: {
-              source,
-              requestedById: actor.id,
-              note: opts.note,
-              idempotencyKey: opts.idempotencyKey,
-              requests: {
-                create: approval.map((c) => {
-                  const { oldValues, newValues } = pickChanged(c.changes);
-                  return {
-                    productionInvoiceItemId: BigInt(c.itemId),
-                    oldValues: oldValues,
-                    newValues: newValues,
-                  };
-                }),
-              },
-            },
-            select: { id: true },
-          });
-          batchId = batch.id;
-        }
-        return { checks, items, batchId };
-      });
+      outcome = await this.prisma.$transaction((tx) =>
+        this.saveEntriesInTx(tx, actor, entries, source, opts),
+      );
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         // Khoá chống gửi 2 lần (đua nhau) → trả lô đã có; còn lại là index "1 yêu cầu chờ / dòng" (hàng rào cuối).
@@ -398,11 +361,74 @@ export class DeadlineChangesService implements DeadlineChangesPort {
           const existing = await this.findBatchByKey(opts.idempotencyKey);
           if (existing) return { applied: [], batch: await this.toBatchDto(existing), skipped: [] };
         }
-        throw new ConflictException('Có dòng đang chờ Sếp duyệt lại - tải lại rồi thử lại');
+        throw new ConflictException(DEADLINE_PENDING_CONFLICT);
       }
       throw error;
     }
+    return this.finishSave(actor, outcome);
+  }
 
+  /**
+   * Phần GHI của saveEntries trong transaction của caller (khoá dòng + lệnh, kiểm, ghi thẳng / tạo lô chờ duyệt). L7 (danh sách lỗi
+   * 16/11, 18/11): ProductionInvoicesService.updateItemsDeadlines gọi cùng transaction với phần ghi dòng chưa duyệt - trước đây 2
+   * transaction riêng, lỗi giữa chừng để lại lưu nửa vời. Caller tự bắt P2002 (DEADLINE_PENDING_CONFLICT) và gọi finishSave() SAU commit.
+   */
+  async saveEntriesInTx(
+    tx: PrismaTx,
+    actor: DeadlineActor,
+    entries: DeadlineEntryInput[],
+    source: DeadlineChangeSource,
+    opts: { strict: boolean; note?: string; idempotencyKey?: string },
+  ): Promise<DeadlineSaveOutcome> {
+    await this.lockForEntries(tx, entries);
+    const { checks, items } = await this.evaluate(tx, entries);
+    const errors = checks.filter((c) => c.kind === 'ERROR');
+    if (opts.strict && errors.length > 0) {
+      throw new BadRequestException(
+        errors
+          .map((c) => `${c.lenhCode} · ${c.skuCode}: ${c.errors.join('; ')}`.replace(/^ · : /, ''))
+          .join('\n'),
+      );
+    }
+    for (const c of checks.filter((x) => x.kind === 'APPLY')) {
+      await this.writer.applyItemDeadlines(
+        tx,
+        BigInt(c.itemId),
+        this.writer.toWrite(pickChanged(c.changes).newValues),
+      );
+    }
+    const approval = checks.filter((c) => c.kind === 'NEEDS_APPROVAL');
+    let batchId: bigint | null = null;
+    if (approval.length > 0) {
+      const batch = await tx.deadlineChangeBatch.create({
+        data: {
+          source,
+          requestedById: actor.id,
+          note: opts.note,
+          idempotencyKey: opts.idempotencyKey,
+          requests: {
+            create: approval.map((c) => {
+              const { oldValues, newValues } = pickChanged(c.changes);
+              return {
+                productionInvoiceItemId: BigInt(c.itemId),
+                oldValues: oldValues,
+                newValues: newValues,
+              };
+            }),
+          },
+        },
+        select: { id: true },
+      });
+      batchId = batch.id;
+    }
+    return { checks, items, batchId };
+  }
+
+  /** Phần SAU commit của saveEntries: audit + thông báo (best-effort). */
+  async finishSave(
+    actor: DeadlineActor,
+    outcome: DeadlineSaveOutcome,
+  ): Promise<DeadlineSaveResult> {
     // Sau khi commit: audit + thông báo cho dòng ghi thẳng (best-effort, như đường cũ).
     const applied = outcome.checks.filter((c) => c.kind === 'APPLY');
     for (const c of applied) {
@@ -433,8 +459,9 @@ export class DeadlineChangesService implements DeadlineChangesPort {
     };
   }
 
-  /** Khoá nghiệp vụ theo dòng + theo lệnh (luật gộp xét cả lệnh), theo THỨ TỰ cố định để 2 giao dịch không khoá chéo nhau. */
-  private async lockForEntries(tx: PrismaTx, entries: DeadlineEntryInput[]): Promise<void> {
+  /** Khoá nghiệp vụ theo dòng + theo lệnh (luật gộp xét cả lệnh), theo THỨ TỰ cố định để 2 giao dịch không khoá chéo nhau.
+   *  Công khai (L7 18/11): updateItemsDeadlines khoá MỌI dòng của lần lưu ngay đầu transaction, trước khi ghi dòng nào. */
+  async lockForEntries(tx: PrismaTx, entries: DeadlineEntryInput[]): Promise<void> {
     const ids = [
       ...new Set(entries.filter((e) => /^\d+$/.test(e.itemId)).map((e) => BigInt(e.itemId))),
     ];

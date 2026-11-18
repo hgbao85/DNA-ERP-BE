@@ -87,7 +87,11 @@ import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto'
 import { UpdateTransferCheckDefectPhotoDto } from './dto/update-transfer-check-defect-photo.dto';
 import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
 // Phần A – Đợt 9 (YC2)
-import { DeadlineChangesService } from './deadline-changes/deadline-changes.service';
+import {
+  DEADLINE_PENDING_CONFLICT,
+  DeadlineChangesService,
+  DeadlineSaveOutcome,
+} from './deadline-changes/deadline-changes.service';
 import type { DeadlineActor } from './deadline-changes/deadline-changes.port';
 import { ORDER_VIOLATION_BLOCKS } from './deadline-changes/deadline-changes.types';
 import type {
@@ -1146,26 +1150,50 @@ export class ProductionInvoicesService {
       (i) => i.prodApprovalStatus === ProdApprovalStatus.APPROVED,
     );
 
-    await this.prisma.$transaction(async (tx) => {
-      if (dto.deadline && !hasApprovedItem) {
-        await tx.productionInvoice.update({
-          where: { id: pi.id },
-          data: { deadline: new Date(dto.deadline) },
-        });
+    // L7 (danh sách lỗi 16/11, 18/11): dòng chưa duyệt (ghi thẳng) và yêu cầu chờ Sếp của dòng đã duyệt nay cùng 1 transaction - trước
+    // đây yêu cầu chờ duyệt tạo ở transaction thứ 2 SAU khi dòng chưa duyệt đã commit, lỗi giữa chừng để lại lưu nửa vời. Khoá nghiệp
+    // vụ của MỌI dòng lấy ngay đầu (cùng thứ tự với saveEntries) để không khoá chéo với lượt sửa mốc khác.
+    let approvedOutcome: DeadlineSaveOutcome | null = null;
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await this.deadlineChanges.lockForEntries(
+          tx,
+          dto.items.map((e) => ({ itemId: e.itemId, newValues: {} })),
+        );
+        if (dto.deadline && !hasApprovedItem) {
+          await tx.productionInvoice.update({
+            where: { id: pi.id },
+            data: { deadline: new Date(dto.deadline) },
+          });
+        }
+        for (const { entry, before } of plain) {
+          await this.deadlineWriter.applyItemDeadlines(tx, before.id, entry);
+        }
+        if (pi.isMerged && plain.length > 0) {
+          await this.deadlineWriter.assertMergedPiDeadlineRule(tx, pi.id);
+        }
+        // Đợt 9 phần 2 (Q9-2): thứ tự mốc ngược ở dòng có đổi → 400, rollback cả lần (kể cả hạn PI).
+        await this.assertMilestoneOrderAfterWrite(
+          tx,
+          pi,
+          plain.map((p) => p.before),
+        );
+        if (approvedEntries.length > 0) {
+          approvedOutcome = await this.deadlineChanges.saveEntriesInTx(
+            tx,
+            actor,
+            approvedEntries,
+            'MANUAL',
+            { strict: true },
+          );
+        }
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(DEADLINE_PENDING_CONFLICT);
       }
-      for (const { entry, before } of plain) {
-        await this.deadlineWriter.applyItemDeadlines(tx, before.id, entry);
-      }
-      if (pi.isMerged && plain.length > 0) {
-        await this.deadlineWriter.assertMergedPiDeadlineRule(tx, pi.id);
-      }
-      // Đợt 9 phần 2 (Q9-2): thứ tự mốc ngược ở dòng có đổi → 400, rollback cả lần (kể cả hạn PI).
-      await this.assertMilestoneOrderAfterWrite(
-        tx,
-        pi,
-        plain.map((p) => p.before),
-      );
-    });
+      throw error;
+    }
 
     const applied: DeadlineEntryCheck[] = [];
     for (const { entry, before } of plain) {
@@ -1194,10 +1222,8 @@ export class ProductionInvoicesService {
     }
 
     let batch: DeadlineChangeBatchDto | null = null;
-    if (approvedEntries.length > 0) {
-      const saved = await this.deadlineChanges.saveEntries(actor, approvedEntries, 'MANUAL', {
-        strict: true,
-      });
+    if (approvedOutcome) {
+      const saved = await this.deadlineChanges.finishSave(actor, approvedOutcome);
       batch = saved.batch;
     }
     const out = await this.findOne(piId);

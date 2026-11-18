@@ -287,6 +287,41 @@ describe('PieceMaterialYieldPurchaseService', () => {
   // miếng sắt lá) - tỷ lệ LẮP RÁP cho Sản xuất, độc lập với piecesPerBar (tỷ lệ CẮT cho Mua hàng).
   // PHẢI nhân vào SAU khi trừ tồn (net), không phải nhân vào required/onHand riêng rẽ trước khi trừ
   // - nếu không sẽ lệch đơn vị giữa 2 số đó và ra kết quả sai.
+  it('L7 18/11: 2 lệnh ghim 2 bản định mức khác nhau CÙNG mảnh - mỗi phần tính theo định mức của CHÍNH bản đó, mảnh có sẵn không đếm 2 lần', async () => {
+    // Lệnh 10 ghim bản 5 (12 chân/cây), lệnh 11 ghim bản 6 (5 chân/cây). Có sẵn 20 chân.
+    prisma.productionOrder.findMany.mockResolvedValue([
+      { id: 10n, bomRevisionId: 5n, quantity: 100 },
+      { id: 11n, bomRevisionId: 6n, quantity: 50 },
+    ]);
+    prisma.bomPiece.findMany.mockResolvedValue([
+      { bomRevisionId: 5n, pieceId: chanNhom.id, qtyPerUnit: 1, needsHan: false },
+      { bomRevisionId: 6n, pieceId: chanNhom.id, qtyPerUnit: 1, needsHan: false },
+    ]);
+    prisma.pieceMaterialYield.findMany.mockResolvedValue([
+      {
+        bomRevisionId: 5n,
+        pieceId: chanNhom.id,
+        materialId: thanhNhom.id,
+        piecesPerBar: 12,
+        material: thanhNhom,
+      },
+      {
+        bomRevisionId: 6n,
+        pieceId: chanNhom.id,
+        materialId: thanhNhom.id,
+        piecesPerBar: 5,
+        material: thanhNhom,
+      },
+    ]);
+    productionBatchesService.getReadyPoolQty.mockResolvedValue(new Map([['40', 20]]));
+
+    const result = await service.computeAndUpsertProposals('1');
+
+    // Bản 5: 100 - 20 có sẵn = 80 -> ceil(80/12) = 7 cây; bản 6: 50 -> ceil(50/5) = 10 cây; tổng 17.
+    // Trước đây lấy định mức của bản gặp cuối (bản 6) cho cả 150 - 20 = 130 -> 26 cây.
+    expect(result[0]).toMatchObject({ requiredPieces: 150, onHandPieces: 20, barsNeeded: 17 });
+  });
+
   it('qtyPerPiece > 1 - nhân đúng chỗ (sau khi trừ tồn), không lệch đơn vị required/onHand', async () => {
     // required = qtyPerUnit(1) × quantity(100) = 100 piece (mảnh). onHand pool = 20 mảnh -> net =
     // 80 mảnh còn thiếu. qtyPerPiece = 3 -> cần cắt 80×3 = 240 miếng sắt lá. piecesPerBar = 12 ->

@@ -90,29 +90,44 @@ export class PieceMaterialYieldPurchaseService {
       else yieldsByRevisionPiece.set(key, [y]);
     }
 
-    // Gộp required theo pieceId across mọi order/SKU của PI (mỗi order tự tra bomPiece của đúng
-    // bomRevisionId nó ghim).
-    const requiredByPiece = new Map<string, number>();
+    // Gộp required theo (bản định mức, mảnh) across mọi order/SKU của PI (mỗi order tự tra bomPiece của đúng bomRevisionId nó
+    // ghim). L7 (danh sách lỗi 16/11, 18/11): trước đây gộp theo MẢNH rồi lấy định mức của bản định mức "gặp cuối" trong bomPieces -
+    // PI có 2 lệnh ghim 2 bản khác nhau cùng mảnh thì phần của lệnh kia quy sai số cây (bản cuối không khai định mức mảnh đó thì
+    // bỏ hẳn mảnh). Nay mỗi (bản, mảnh) tra định mức của CHÍNH bản đó.
+    const requiredByRevisionPiece = new Map<
+      string,
+      { revisionId: bigint; pieceKey: string; required: number }
+    >();
     for (const order of orders) {
       for (const bp of bomPieces) {
         if (bp.bomRevisionId !== order.bomRevisionId) continue;
-        const key = bp.pieceId.toString();
-        requiredByPiece.set(key, (requiredByPiece.get(key) ?? 0) + bp.qtyPerUnit * order.quantity);
+        const pieceKey = bp.pieceId.toString();
+        const key = `${bp.bomRevisionId}:${pieceKey}`;
+        const cur = requiredByRevisionPiece.get(key) ?? {
+          revisionId: bp.bomRevisionId,
+          pieceKey,
+          required: 0,
+        };
+        cur.required += bp.qtyPerUnit * order.quantity;
+        requiredByRevisionPiece.set(key, cur);
       }
     }
-    if (requiredByPiece.size === 0) {
+    if (requiredByRevisionPiece.size === 0) {
       return [];
     }
 
-    const pieceIds = [...requiredByPiece.keys()].map((k) => BigInt(k));
+    const pieceIds = [...new Set([...requiredByRevisionPiece.values()].map((g) => g.pieceKey))].map(
+      (k) => BigInt(k),
+    );
     const onHandPool = await this.productionBatchesService.getReadyPoolQty(pieceIds);
-
-    // 1 piece chỉ tra được yield qua ĐÚNG revision nó thuộc - lấy dòng bomPiece tương ứng để biết
-    // revisionId của từng piece (an toàn kể cả khi 2 order dùng revision khác nhau cho cùng piece).
-    const revisionByPiece = new Map<string, bigint>();
-    for (const bp of bomPieces) {
-      revisionByPiece.set(bp.pieceId.toString(), bp.bomRevisionId);
-    }
+    // Mảnh đã có (pool theo MẢNH, không theo bản định mức) chia lần lượt cho từng nhóm (bản, mảnh) theo thứ tự id bản - không đếm
+    // 1 mảnh có sẵn 2 lần khi mảnh đó có ở 2 bản.
+    const onHandLeft = new Map(
+      pieceIds.map((id) => [id.toString(), onHandPool.get(id.toString()) ?? 0]),
+    );
+    const groups = [...requiredByRevisionPiece.values()].sort((a, b) =>
+      a.revisionId < b.revisionId ? -1 : a.revisionId > b.revisionId ? 1 : 0,
+    );
 
     const results: PieceMaterialYieldPurchaseResultDto[] = [];
     // Gộp theo materialId - nhiều piece có thể dùng chung 1 material (dù hiện luôn 1-1
@@ -121,13 +136,13 @@ export class PieceMaterialYieldPurchaseService {
       string,
       { bars: number; requiredPieces: number; onHandPieces: number; piecesPerBar: number }
     >();
-    for (const [pieceKey, required] of requiredByPiece) {
-      const revisionId = revisionByPiece.get(pieceKey);
-      if (!revisionId) continue;
+    for (const { revisionId, pieceKey, required } of groups) {
       const yieldRows = yieldsByRevisionPiece.get(`${revisionId}:${pieceKey}`);
       if (!yieldRows?.length) continue; // Piece chưa khai định mức nguyên liệu - bỏ qua, không chặn PI.
 
-      const onHand = onHandPool.get(pieceKey) ?? 0;
+      const left = onHandLeft.get(pieceKey) ?? 0;
+      const onHand = Math.min(left, required);
+      onHandLeft.set(pieceKey, left - onHand);
       const net = Math.max(0, required - onHand);
       // net (piece/mảnh còn thiếu) áp dụng ĐẦY ĐỦ cho TỪNG dòng Tự tính của piece này - 1 piece có
       // 2 material Tự tính (vd Pat vừa cần Tấm sắt la vừa cần Sắt phi) nghĩa là CẢ HAI đều cần đủ
