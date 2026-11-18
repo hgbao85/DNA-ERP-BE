@@ -1111,6 +1111,15 @@ export class SkusService {
    * tầng service), (2) KHÔNG đụng PlanFormManhReview/DetailReview hay forward lại PlanForm - SKU
    * vẫn APPROVED, không có vòng duyệt nào để "nộp lại", và (3) ghi AuditLog TAY thay cho luồng
    * notify KHSX bình thường (xem writeAdminOverrideAudit).
+   *
+   * QUYẾT ĐỊNH 18/11/2026 (L7 danh sách lỗi 16/11, user chốt) - KHÔNG CHẤP NHẬN hành vi hiện tại, CHƯA SỬA:
+   * ghi đè đang sửa THẲNG bản ACTIVE mà mọi lệnh sản xuất của SKU đã ghim (ProductionOrder.bomRevisionId),
+   * nên lệnh ĐANG CHẠY đổi định mức ngay (số cây sắt, đoạn Phôi phải cắt, vật tư cần xuất, đề xuất mua tính
+   * lại theo số mới dù đã cắt / mua một phần theo số cũ). Yêu cầu: lệnh đang chạy GIỮ định mức cũ, chỉ lệnh
+   * duyệt SAU dùng định mức mới. Hướng làm khi sửa: ghi đè tạo bản định mức MỚI (sao chép bản ACTIVE rồi ghi
+   * lên bản mới) và kích hoạt nó (BomRevisionsService.activateInTransaction - bản cũ thành RETIRED nhưng lệnh
+   * đang ghim vẫn đọc được); KHÔNG ghi thẳng bản ACTIVE nữa, bỏ SET LOCAL "dna.bom_maintenance" ở luồng này.
+   * Kiểm lại: phương án cắt / giữ chỗ / đề xuất mua của lệnh cũ không bị tính lại theo bản mới.
    */
   private resolveNonDraftOrAdminOverride(
     pf: PlanFormWithRefs,
