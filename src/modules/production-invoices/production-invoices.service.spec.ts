@@ -151,6 +151,9 @@ describe('ProductionInvoicesService', () => {
     previewEntries: jest.Mock;
     saveEntries: jest.Mock;
     pendingByItem: jest.Mock;
+    lockForEntries: jest.Mock;
+    saveEntriesInTx: jest.Mock;
+    finishSave: jest.Mock;
   };
 
   const mfgProduct = { id: 2n, factoryCode: 'SKU-01', name: 'Ghe A' };
@@ -351,6 +354,10 @@ describe('ProductionInvoicesService', () => {
       previewEntries: jest.fn().mockResolvedValue([]),
       saveEntries: jest.fn().mockResolvedValue({ applied: [], batch: null, skipped: [] }),
       pendingByItem: jest.fn().mockResolvedValue(new Map()),
+      // L7 18/11: updateItemsDeadlines ghi yêu cầu chờ duyệt CÙNG transaction (saveEntriesInTx) rồi finishSave sau commit.
+      lockForEntries: jest.fn().mockResolvedValue(undefined),
+      saveEntriesInTx: jest.fn().mockResolvedValue({ checks: [], items: new Map(), batchId: null }),
+      finishSave: jest.fn().mockResolvedValue({ applied: [], batch: null, skipped: [] }),
     };
     cls = { isActive: jest.fn().mockReturnValue(false), get: jest.fn(), getId: jest.fn() };
     cloudinaryService = { deleteByUrl: jest.fn().mockResolvedValue(undefined) };
@@ -510,7 +517,7 @@ describe('ProductionInvoicesService', () => {
         pi({ items: [piItem({ id: 20n }), approvedItem(21n)] }),
       );
       deadlineChanges.previewEntries.mockResolvedValue([{ itemId: '21', errors: [] }]);
-      deadlineChanges.saveEntries.mockResolvedValue({
+      deadlineChanges.finishSave.mockResolvedValue({
         applied: [],
         batch: { id: '50' },
         skipped: [],
@@ -531,14 +538,41 @@ describe('ProductionInvoicesService', () => {
           deliveryDeadline: new Date('2026-12-01'),
         }) as unknown,
       });
-      expect(deadlineChanges.saveEntries).toHaveBeenCalledWith(
+      // L7 18/11: yêu cầu chờ duyệt ghi TRONG cùng giao dịch với dòng chưa duyệt (không còn transaction thứ 2).
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(deadlineChanges.saveEntries).not.toHaveBeenCalled();
+      expect(deadlineChanges.saveEntriesInTx).toHaveBeenCalledWith(
+        expect.anything(),
         ACTOR,
         [{ itemId: '21', newValues: { materialDeadline: '2026-11-11' } }],
         'MANUAL',
         { strict: true },
       );
+      // Khoá nghiệp vụ mọi dòng lấy TRƯỚC khi ghi dòng nào.
+      expect(deadlineChanges.lockForEntries.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.productionInvoiceItem.update.mock.invocationCallOrder[0],
+      );
       expect(result.deadlineSave?.batch).toEqual({ id: '50' });
       expect(result.deadlineSave?.applied.map((c) => c.itemId)).toEqual(['20']);
+    });
+
+    it('L7 18/11: tạo yêu cầu chờ duyệt lỗi -> lỗi cả lần (cùng giao dịch với dòng chưa duyệt), không gửi thông báo nào', async () => {
+      prisma.productionInvoice.findUnique.mockResolvedValue(
+        pi({ items: [piItem({ id: 20n }), approvedItem(21n)] }),
+      );
+      deadlineChanges.previewEntries.mockResolvedValue([{ itemId: '21', errors: [] }]);
+      deadlineChanges.saveEntriesInTx.mockRejectedValue(new Error('db lỗi giữa chừng'));
+      await expect(
+        updateItemsDeadlinesAs('7', {
+          items: [
+            { itemId: '20', materialDeadline: '2026-11-10' },
+            { itemId: '21', materialDeadline: '2026-11-11' },
+          ],
+        }),
+      ).rejects.toThrow('db lỗi giữa chừng');
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(deadlineChanges.finishSave).not.toHaveBeenCalled();
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     it('dòng đã duyệt có lỗi → 400 TRƯỚC khi ghi dòng chưa duyệt', async () => {
