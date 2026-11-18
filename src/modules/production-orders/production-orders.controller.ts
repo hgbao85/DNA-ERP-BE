@@ -51,7 +51,7 @@ export class ProductionOrdersController {
     return this.productionOrdersService.startFloor(id, userId);
   }
 
-  /** QLSX bấm "Tạm dừng" - bất kỳ trạng thái nào -> PAUSED, xem ProductionOrdersService.pauseFloor(). */
+  /** QLSX bấm "Tạm dừng" - chỉ từ ACTIVE (lệnh đã Kết thúc / chưa bắt đầu -> 409), xem ProductionOrdersService.pauseFloor(). */
   @Post(':id/floor-pause')
   @RequirePermissions(UPDATE)
   @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER)

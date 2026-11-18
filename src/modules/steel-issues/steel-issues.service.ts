@@ -256,7 +256,7 @@ export class SteelIssuesService {
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
   private publishRealtime(
     entityId: bigint | string,
-    action: 'CREATED' | 'RECEIVED',
+    action: 'CREATED' | 'RECEIVED' | 'PROGRESS',
     actorId: string | null,
     productionInvoiceId: bigint | string,
   ): void {
@@ -1415,6 +1415,13 @@ export class SteelIssuesService {
     await this.notifySteelIssue('CUT_BUNDLE_TO_KCS', updated.id, {
       piCode: invoice?.code ?? `#${bundle.steelIssue.productionInvoiceId}`,
     });
+    // PH1 rà soát 18/11: màn KCS (chỉ có quyền STEEL_ISSUE, không nhận topic 'floor' của màn QLSX) tự tải lại đợt vừa gửi.
+    this.publishRealtime(
+      bundle.steelIssueId,
+      'PROGRESS',
+      null,
+      bundle.steelIssue.productionInvoiceId,
+    );
 
     return this.toBundleResponseDto(updated);
   }
@@ -1536,6 +1543,13 @@ export class SteelIssuesService {
     const material = await this.prisma.material.findUniqueOrThrow({
       where: { id: materialBigId },
     });
+    // PH1 rà soát 18/11: báo màn KCS có đợt công đoạn phụ mới chờ chấm (cùng lý do finishCutBundle).
+    this.publishRealtime(
+      created.stepBundle.id,
+      'PROGRESS',
+      submittedById,
+      created.stepBundle.productionInvoiceId,
+    );
     return this.toStepBundleResponseDto(created.stepBundle, created.pending, material);
   }
 
