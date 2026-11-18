@@ -16,7 +16,7 @@ Người thao tác là **ADMIN** thì không bị hạn chế gì. Người thao
 - **Gán vai trò** (tạo / sửa tài khoản): không gán được ADMIN. Vai trò **thêm mới** phải chỉ gồm những quyền chính mình đang có. Vai trò người đó đã có thì giữ nguyên được, vì FE luôn gửi cả danh sách.
 - **Vai trò:** không tạo / sửa / xoá vai trò ADMIN, không đổi tên vai trò khác thành ADMIN. Quyền **thêm mới** vào vai trò phải là quyền mình có; quyền vai trò đã có thì giữ nguyên được.
 
-Quyền của người thao tác đọc từ access token, nên vai trò vừa bị gỡ quyền vẫn còn hiệu lực tới khi token hết hạn. Cách này giống mọi kiểm quyền khác trong hệ thống.
+Quyền của người thao tác lấy từ `request.user`. Từ B5 (`7f112fd`, 17/11), `JwtStrategy` đọc lại vai trò / quyền / tổ của tài khoản từ DB (`LiveAuthService`, mỗi tài khoản đọc lại tối đa 30 giây một lần), nên vai trò vừa bị gỡ quyền hết hiệu lực trong khoảng 30 giây, không còn đợi access token hết hạn. Cách này giống mọi kiểm quyền khác trong hệ thống.
 
 Chữ ký service đổi: `UsersService.create / update / updateMfgAttributes / resetPassword / remove` và `RolesService.create / update / remove` nhận thêm người thao tác (`AuthenticatedUser` từ `@CurrentUser()`).
 
