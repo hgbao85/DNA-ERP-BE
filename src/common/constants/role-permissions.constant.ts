@@ -380,11 +380,14 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       actions: [PermissionAction.VIEW],
     },
     // 2026-08-19: WarehouseXuatPage scope 'thanh-pham' nối sang sales-orders thật (danh sách đơn
-    // hàng cần xuất + POST .../ship) thay MOCK - thủ kho thành phẩm là người xuất hàng cho khách
-    // ngoài, cần VIEW (liệt kê đơn + số lượng còn phải xuất) và UPDATE (gọi shipItem). Không có
-    // CREATE/DELETE - tạo/sửa đơn hàng vẫn là việc của SALES_STAFF, thủ kho chỉ ghi nhận đã xuất.
-    // Không scope theo warehouseScope (SalesOrdersService.shipItem() không tự enforce) - cùng mức
-    // rộng đã chấp nhận ở PURCHASE_PROPOSAL:VIEW phía trên, chưa có nhu cầu chặt hơn.
+    // hàng cần xuất) - thủ kho thành phẩm là người xuất hàng cho khách ngoài, cần VIEW (liệt kê
+    // đơn + số lượng còn phải xuất). UPDATE giữ lại cho /booking-shipments (xuất hàng theo
+    // booking, route đó đòi SALES_ORDER:UPDATE) - KHÔNG được bỏ. Không có CREATE/DELETE.
+    // Từ 2026-11-19 (lỗi C1): các route ghi của /sales-orders (tạo/sửa/xoá đơn, thêm/sửa dòng)
+    // chặn theo VAI TRÒ (@RequireRole SALES_STAFF + ADMIN), nên UPDATE ở đây không còn cho
+    // WAREHOUSE_STAFF sửa đơn hàng bán. (POST .../ship của sales-orders đã gỡ ở đợt 10b.)
+    // Không scope theo warehouseScope - cùng mức rộng đã chấp nhận ở PURCHASE_PROPOSAL:VIEW
+    // phía trên, chưa có nhu cầu chặt hơn.
     {
       module: PERMISSION_MODULES.SALES_ORDER,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
