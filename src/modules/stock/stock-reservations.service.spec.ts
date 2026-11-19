@@ -608,71 +608,81 @@ describe('StockReservationsService', () => {
   });
 
   describe('creditPool (L5, 2026-08-26 - thay topUpFromReceipt)', () => {
-    it('pool có 1 dòng - cộng thẳng vào dòng đó, không cần tính hạn', async () => {
+    // MUA1 rà soát 18/11: hàng nhận về LUÔN vào dòng PRODUCTION_INVOICE - dòng phương án cắt bị nhả cả khi "Tính lại" rồi
+    // duyệt phương án mới, cộng vào đó thì mất luôn phần hàng vừa nhận (mua thiếu sắt).
+    it('MUA1: pool có dòng phương án + dòng PI - cộng vào dòng PI, không đụng dòng phương án', async () => {
       prisma.stockReservation.findMany.mockResolvedValue([
         {
           id: 900n,
           refType: 'CUTTING_PROPOSAL',
           refId: '22',
           warehouseId: 800n,
+          quantity: decimal(30),
+          consumedQty: decimal(0),
+          stockLengthMm: 6000,
+        },
+        {
+          id: 905n,
+          refType: 'PRODUCTION_INVOICE',
+          refId: '50',
+          warehouseId: 800n,
           quantity: decimal(10),
           consumedQty: decimal(0),
+          stockLengthMm: 6000,
         },
       ]);
+      prisma.cuttingProposal.findMany.mockResolvedValue([]);
 
       await service.creditPool(prisma as unknown as PrismaTx, {
         productionInvoiceId: 50n,
         materialId: 30n,
         warehouseId: 800n,
-        qty: 5,
+        qty: 70,
       });
 
-      expect(prisma.cuttingProposal.findMany).not.toHaveBeenCalled();
+      expect(prisma.stockReservation.update).toHaveBeenCalledTimes(1);
       expect(prisma.stockReservation.update).toHaveBeenCalledWith({
-        where: { id: 900n },
-        data: { quantity: { increment: 5 } },
+        where: { id: 905n },
+        data: { quantity: { increment: 70 } },
       });
       expect(prisma.stockReservation.create).not.toHaveBeenCalled();
     });
 
-    // ĐÂY là test xác nhận L5 đã sửa: 2 SKU (Ghế A duyệt trước hạn xa, Bàn B duyệt sau hạn gần)
-    // cùng dùng 1 loại sắt trong 1 PI - hàng mua về phải cộng vào dòng ưu tiên cao nhất (Bàn B,
-    // hạn gần hơn), KHÔNG phải dòng "duyệt sau cùng" hay "id lớn hơn" như cơ chế cũ
-    // (PurchaseProposal.cuttingProposalId bị ghi đè) từng làm.
-    it('pool có 2 dòng (2 SKU) - cộng vào dòng SKU có hạn GẦN HƠN, không phải dòng tạo sau', async () => {
+    it('MUA1: pool chỉ có dòng phương án - tạo dòng PI mới cùng ngăn chiều dài, KHÔNG cộng vào dòng phương án', async () => {
       prisma.stockReservation.findMany.mockResolvedValue([
         {
-          id: 900n, // Ghế A - duyệt trước, id nhỏ hơn, nhưng hạn XA hơn
+          id: 900n,
           refType: 'CUTTING_PROPOSAL',
-          refId: '10',
+          refId: '22',
           warehouseId: 800n,
-          quantity: decimal(20),
+          quantity: decimal(30),
           consumedQty: decimal(0),
-        },
-        {
-          id: 901n, // Bàn B - duyệt sau, id lớn hơn, hạn GẦN hơn -> phải được ưu tiên
-          refType: 'CUTTING_PROPOSAL',
-          refId: '11',
-          warehouseId: 800n,
-          quantity: decimal(15),
-          consumedQty: decimal(0),
+          stockLengthMm: 6000,
         },
       ]);
-      prisma.cuttingProposal.findMany.mockResolvedValue([
-        proposalWithDeadline(10n, new Date('2026-12-01')), // Ghế A - xa
-        proposalWithDeadline(11n, new Date('2026-09-01')), // Bàn B - gần hơn
-      ]);
+      prisma.cuttingProposal.findMany.mockResolvedValue([]);
+      prisma.stockReservation.findUnique.mockResolvedValue(null);
 
       await service.creditPool(prisma as unknown as PrismaTx, {
         productionInvoiceId: 50n,
         materialId: 30n,
         warehouseId: 800n,
-        qty: 5,
+        qty: 70,
       });
 
-      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
-        where: { id: 901n },
-        data: { quantity: { increment: 5 } },
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        data: {
+          warehouseId: 800n,
+          materialId: 30n,
+          productionInvoiceId: 50n,
+          quantity: 70,
+          refType: 'PRODUCTION_INVOICE',
+          refId: '50',
+          idempotencyKey: 'PRODUCTION_INVOICE:50:material:30:wh:800',
+          stockLengthMm: 6000,
+          spec: '',
+        },
       });
     });
 

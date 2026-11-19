@@ -282,9 +282,34 @@ describe('ProductionInvoicesService.retryProductionOrder - mua ngoài sắt', ()
         const msg = String((err as ConflictException).message);
         expect(msg).toMatch(nameRe);
         expect(msg).not.toContain('boom-secret-raw');
-        expect(notificationsService.resolve).not.toHaveBeenCalled();
+        // Không đóng thông báo lỗi tạo lệnh / mua ngoài sắt (bước mua còn lỗi). CS3 18/11: phương án cắt đã duyệt lại được
+        // nên CHỈ đóng cảnh báo "phương án cắt chưa duyệt".
+        expect(notificationsService.resolve).toHaveBeenCalledTimes(1);
+        expect(notificationsService.resolve).toHaveBeenCalledWith({
+          entityType: 'PRODUCTION_INVOICE',
+          entityId: '7',
+          types: ['PRESOLVED_CUTTING_APPROVE_FAILED'],
+        });
       },
     );
+  });
+
+  describe('CS3 18/11: duyệt phương án tính trước lỗi sau khi Sếp duyệt -> báo Admin', () => {
+    it('Sếp duyệt (finalizePreSolvedProposal) mà approve() lỗi -> phát PRESOLVED_CUTTING_APPROVE_FAILED, vẫn chạy mua ngoài sắt', async () => {
+      setup({ preSolved: { id: 1000n, status: 'DRAFT' } });
+      cuttingProposalsService.approve.mockRejectedValue(new Error('Transaction timeout'));
+
+      await (
+        service as unknown as {
+          finalizePreSolvedProposal: (pi: bigint, p: bigint, c: string, u: string) => Promise<void>;
+        }
+      ).finalizePreSolvedProposal(7n, 1000n, 'PI item 20', 'boss-1');
+
+      expect(notificationsService.emit).toHaveBeenCalledWith(
+        'PRESOLVED_CUTTING_APPROVE_FAILED',
+        expect.objectContaining({ entityId: '7' }),
+      );
+    });
   });
 
   describe('AC5 (PI đã huỷ)', () => {
