@@ -1162,6 +1162,59 @@ describe('SalesOrdersService', () => {
           deliveryDeadline: deliveryDate,
         },
       });
+      // Nhật ký dòng đơn 19/11: thêm dòng ghi 1 dòng CREATE trong cùng transaction
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          action: 'CREATE',
+          tableName: 'SalesOrderItem',
+          recordId: '6',
+          newValue: expect.objectContaining({ totalQty: 15, mfgProductId: '2' }) as unknown,
+        }) as unknown,
+      });
+    });
+  });
+
+  describe('nhật ký dòng đơn (19/11)', () => {
+    const base = {
+      id: 5n,
+      salesOrderId: 10n,
+      mfgProductId: 2n,
+      skuName: null,
+      totalQty: 10,
+      status: null,
+      deliveryDate: new Date('2026-12-20'),
+      wireMaterialId: null,
+      cushionMaterialId: null,
+      mfgProduct: product,
+    };
+
+    it('sửa số lượng -> ghi UPDATE kèm giá trị cũ / mới', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.salesOrderItem.findUnique.mockResolvedValue(base);
+      prisma.productionInvoiceItem.findFirst.mockResolvedValue(null);
+      prisma.salesOrderItem.update.mockResolvedValue({ ...base, totalQty: 12 });
+
+      await service.updateItem('10', '5', { totalQty: 12 });
+
+      expect(prisma.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          action: 'UPDATE',
+          tableName: 'SalesOrderItem',
+          recordId: '5',
+          oldValue: expect.objectContaining({ totalQty: 10 }) as unknown,
+          newValue: expect.objectContaining({ totalQty: 12 }) as unknown,
+        }) as unknown,
+      });
+    });
+
+    it('lưu mà không đổi gì -> không ghi nhật ký', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.salesOrderItem.findUnique.mockResolvedValue(base);
+      prisma.salesOrderItem.update.mockResolvedValue(base);
+
+      await service.updateItem('10', '5', {});
+
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
     });
   });
 });
